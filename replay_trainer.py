@@ -12,6 +12,13 @@ from Chan import CChan
 from ChanConfig import CChanConfig
 from Common.CEnum import AUTYPE, DATA_SRC, FX_TYPE, KL_TYPE
 from DataAPI.BaoStockAPI import CBaoStock
+from Math.BOLL import BollModel
+from Math.KDJ import KDJ
+from Math.MACD import CMACD
+from Math.RSI import RSI
+from Math.Demark import CDemarkEngine
+from Math.TrendLine import CTrendLine
+from Common.CEnum import TREND_LINE_SIDE
 
 
 def normalize_code(raw: str) -> str:
@@ -99,6 +106,15 @@ class ChanStepper:
         self._iter = None
         self.step_idx = -1
         self.code = ""
+        self.indicators = {
+            "macd": CMACD(),
+            "kdj": KDJ(),
+            "rsi": RSI(),
+            "boll": BollModel(),
+            "demark": CDemarkEngine(),
+        }
+        self.indicator_history = []
+        self.trend_lines = []
 
     def init(self, code: str, begin_date: str, end_date: Optional[str], autype: AUTYPE) -> None:
         cfg = CChanConfig(
@@ -122,6 +138,15 @@ class ChanStepper:
         )
         self._iter = self.chan.step_load()
         self.step_idx = -1
+        self.indicators = {
+            "macd": CMACD(),
+            "kdj": KDJ(),
+            "rsi": RSI(),
+            "boll": BollModel(),
+            "demark": CDemarkEngine(),
+        }
+        self.indicator_history = []
+        self.trend_lines = []
 
     def step(self) -> bool:
         if self._iter is None:
@@ -129,6 +154,58 @@ class ChanStepper:
         try:
             next(self._iter)
             self.step_idx += 1
+            # Update indicators
+            kl_list = self.chan[0]
+            latest_klu = kl_list.lst[-1].lst[-1]
+            h, l, c = float(latest_klu.high), float(latest_klu.low), float(latest_klu.close)
+            
+            macd_item = self.indicators["macd"].add(c)
+            kdj_item = self.indicators["kdj"].add(h, l, c)
+            rsi_val = self.indicators["rsi"].add(c)
+            boll_item = self.indicators["boll"].add(c)
+            demark_idx = self.indicators["demark"].update(latest_klu.idx, c, h, l)
+            
+            # Extract current demark points
+            demark_pts = []
+            for item in demark_idx.data:
+                demark_pts.append({
+                    "type": item["type"],
+                    "dir": "UP" if item["dir"].name == "UP" else "DOWN",
+                    "val": item["idx"],
+                    "x": item["idx_in_kl"] if "idx_in_kl" in item else latest_klu.idx # Fallback to current
+                })
+
+            self.indicator_history.append({
+                "x": latest_klu.idx,
+                "macd": {"dif": macd_item.DIF, "dea": macd_item.DEA, "macd": macd_item.macd},
+                "kdj": {"k": kdj_item.k, "d": kdj_item.d, "j": kdj_item.j},
+                "rsi": rsi_val,
+                "boll": {"mid": boll_item.MID, "up": boll_item.UP, "down": boll_item.DOWN},
+                "demark": demark_pts
+            })
+            
+            # Update TrendLines if we have enough Bi
+            self.trend_lines = []
+            if len(kl_list.bi_list) >= 3:
+                try:
+                    tl_outside = CTrendLine(kl_list.bi_list, side=TREND_LINE_SIDE.OUTSIDE)
+                    if tl_outside.line:
+                        self.trend_lines.append({
+                            "type": "OUTSIDE",
+                            "x0": tl_outside.line.p.x,
+                            "y0": tl_outside.line.p.y,
+                            "slope": tl_outside.line.slope
+                        })
+                    tl_inside = CTrendLine(kl_list.bi_list, side=TREND_LINE_SIDE.INSIDE)
+                    if tl_inside.line:
+                        self.trend_lines.append({
+                            "type": "INSIDE",
+                            "x0": tl_inside.line.p.x,
+                            "y0": tl_inside.line.p.y,
+                            "slope": tl_inside.line.slope
+                        })
+                except Exception:
+                    pass
             return True
         except StopIteration:
             return False
@@ -172,7 +249,7 @@ class AppState:
                 "finished": self.finished,
                 "message": "请先加载会话",
             }
-        chart = serialize_chan(self.stepper.chan)
+        chart = serialize_chan(self.stepper.chan, self.stepper.indicator_history, self.stepper.trend_lines)
         price: Optional[float] = None
         if len(chart.get("kline", [])) > 0:
             price = self.stepper.current_price()
@@ -196,7 +273,7 @@ class AppState:
         }
 
 
-def serialize_chan(chan: CChan) -> dict[str, Any]:
+def serialize_chan(chan: CChan, indicator_history: list, trend_lines: list) -> dict[str, Any]:
     kl_list = chan[0]
     klu_arr = []
     for klu in kl_list.klu_iter():
@@ -211,7 +288,10 @@ def serialize_chan(chan: CChan) -> dict[str, Any]:
                 "v": float(getattr(klu, "volume", getattr(klu, "vol", 0.0)) or 0.0),
             }
         )
-
+    
+    # BOLL, MACD, KDJ, RSI data from indicator_history
+    # We only need to return the indicators for the current visible k-lines (or all of them for now)
+    
     bi_arr = []
     for bi in kl_list.bi_list:
         bi_arr.append(
@@ -269,6 +349,8 @@ def serialize_chan(chan: CChan) -> dict[str, Any]:
         "seg": seg_arr,
         "bsp": bsp_arr,
         "fx_lines": fx_lines,
+        "indicators": indicator_history,
+        "trend_lines": trend_lines,
     }
 
 
@@ -448,6 +530,17 @@ HTML = """
         <button id="btnSell" disabled>卖出（全量）</button>
         <div class="muted">规则：单持仓、T+1、每步最多一笔</div>
         <div class="row" style="margin-top:8px;"><label>显示筹码</label><input id="chipEnabled" type="checkbox" checked /></div>
+        <div class="row"><label>技术指标</label>
+          <select id="indicatorType">
+            <option value="none">无</option>
+            <option value="boll">BOLL (主图)</option>
+            <option value="demark">Demark (主图)</option>
+            <option value="trendline">TrendLine (主图)</option>
+            <option value="macd">MACD (副图)</option>
+            <option value="kdj">KDJ (副图)</option>
+            <option value="rsi">RSI (副图)</option>
+          </select>
+        </div>
         <div class="muted">全历史累计；三角分布峰值=Close；价格步长=0.001</div>
       </div>
 
@@ -524,6 +617,10 @@ function applyThemeFromSelect() {
   document.documentElement.setAttribute("data-theme", t);
   if (lastPayload && lastPayload.ready && lastPayload.chart) draw(lastPayload.chart);
 }
+
+$("indicatorType").addEventListener("change", () => {
+  if (lastPayload && lastPayload.ready && lastPayload.chart) draw(lastPayload.chart);
+});
 
 function zoomViewAt(factor, anchorCanvasX) {
   if (!lastPayload || !lastPayload.ready || !viewReady) return;
@@ -779,6 +876,33 @@ function toScaler(chart, xMin, xMax) {
     if (k.l < yMin) yMin = k.l;
     if (k.h > yMax) yMax = k.h;
   }
+  
+  // If BOLL is selected, expand y range to include BOLL
+    const indType = $("indicatorType").value;
+    if (indType === "boll" && chart.indicators) {
+      const visibleInd = chart.indicators.filter(i => i.x >= xMin && i.x <= xMax);
+      for (const i of visibleInd) {
+        if (i.boll.up > yMax) yMax = i.boll.up;
+        if (i.boll.down < yMin) yMin = i.boll.down;
+      }
+    }
+    
+    // Expand for TrendLines
+    if (indType === "trendline" && chart.trend_lines) {
+      for (const tl of chart.trend_lines) {
+        const y_at_min = tl.y0 + tl.slope * (xMin - tl.x0);
+        const y_at_max = tl.y0 + tl.slope * (xMax - tl.x0);
+        if (isFinite(y_at_min)) {
+          if (y_at_min > yMax) yMax = y_at_min;
+          if (y_at_min < yMin) yMin = y_at_min;
+        }
+        if (isFinite(y_at_max)) {
+          if (y_at_max > yMax) yMax = y_at_max;
+          if (y_at_max < yMin) yMin = y_at_max;
+        }
+      }
+    }
+
   if (!isFinite(yMin) || !isFinite(yMax)) {
     yMin = 0;
     yMax = 1;
@@ -786,8 +910,12 @@ function toScaler(chart, xMin, xMax) {
 
   const xSpan = Math.max(1, xMax - xMin);
   const ySpan = Math.max(1e-6, yMax - yMin);
-  const plotBottomY = h - PAD_B;
-  const plotH = h - PAD_T - PAD_B;
+  
+  const showSubChart = ["macd", "kdj", "rsi"].includes(indType);
+  const subChartH = showSubChart ? (h - PAD_T - PAD_B) * 0.25 : 0;
+  
+  const plotBottomY = h - PAD_B - subChartH;
+  const plotH = h - PAD_T - PAD_B - subChartH;
   const plotW = w - PAD_L - PAD_R;
 
   return {
@@ -802,6 +930,8 @@ function toScaler(chart, xMin, xMax) {
     plotBottomY,
     plotH,
     plotW,
+    subChartH,
+    indType,
     x: (x) => PAD_L + ((x - xMin) / xSpan) * plotW,
     y: (y) => PAD_T + ((yMax - y) / ySpan) * plotH,
   };
@@ -812,7 +942,7 @@ function drawAxes(s) {
   const xLeft = PAD_L;
   const xRight = s.w - PAD_R;
 
-  // axes
+  // main axes
   ctx.strokeStyle = cssVar("--grid", "#e2e8f0");
   ctx.lineWidth = 1;
   ctx.beginPath();
@@ -821,13 +951,30 @@ function drawAxes(s) {
   ctx.lineTo(xRight, yBase);
   ctx.stroke();
 
-  // y labels
+  // main y labels
   ctx.fillStyle = cssVar("--muted", "#475569");
   ctx.font = "12px Consolas";
   ctx.fillText(s.yMax.toFixed(2), 4, PAD_T + 10);
   ctx.fillText(s.yMin.toFixed(2), 4, yBase);
+  
+  // sub chart axes
+  if (s.subChartH > 0) {
+    const subT = s.plotBottomY + 20;
+    const subB = s.h - PAD_B;
+    ctx.beginPath();
+    ctx.moveTo(xLeft, subT);
+    ctx.lineTo(xLeft, subB);
+    ctx.lineTo(xRight, subB);
+    ctx.stroke();
+    
+    // x ticks are on the sub chart bottom if it exists
+    drawXTicks(s, subB);
+  } else {
+    drawXTicks(s, yBase);
+  }
+}
 
-  // x ticks
+function drawXTicks(s, yPos) {
   const span = s.xMax - s.xMin;
   if (span <= 0) return;
   const tickCount = 10;
@@ -837,29 +984,23 @@ function drawAxes(s) {
     if (x < s.xMin || x > s.xMax) continue;
     tickXs.push(x);
   }
-  // de-dup
-  const uniq = [];
-  const set = new Set();
-  for (const x of tickXs) {
-    if (set.has(x)) continue;
-    set.add(x);
-    uniq.push(x);
-  }
+  const uniq = [...new Set(tickXs)];
 
   ctx.save();
   for (const x of uniq) {
     const xp = s.x(x);
     ctx.strokeStyle = cssVar("--grid", "#e2e8f0");
     ctx.beginPath();
-    ctx.moveTo(xp, yBase);
-    ctx.lineTo(xp, yBase + 4);
+    ctx.moveTo(xp, yPos);
+    ctx.lineTo(xp, yPos + 4);
     ctx.stroke();
 
     const t = s.xToTime[x];
     if (!t) continue;
     ctx.save();
-    ctx.translate(xp, yBase + 20);
+    ctx.translate(xp, yPos + 20);
     ctx.rotate(-Math.PI / 4);
+    ctx.fillStyle = cssVar("--muted", "#475569");
     ctx.fillText(t, 0, 0);
     ctx.restore();
   }
@@ -1221,6 +1362,158 @@ function drawTradeRays(s) {
   }
 }
 
+function drawIndicators(chart, s) {
+  if (!chart.indicators || chart.indicators.length === 0) return;
+  const ind = chart.indicators;
+  const visibleInd = ind.filter(i => i.x >= s.xMin && i.x <= s.xMax);
+  
+  if (s.indType === "boll") {
+    // Draw on main chart
+    ctx.save();
+    ctx.lineWidth = 1;
+    const drawBollLine = (key, color) => {
+      ctx.strokeStyle = color;
+      ctx.beginPath();
+      let first = true;
+      for (const i of visibleInd) {
+        const xp = s.x(i.x);
+        const yp = s.y(i.boll[key]);
+        if (first) ctx.moveTo(xp, yp);
+        else ctx.lineTo(xp, yp);
+        first = false;
+      }
+      ctx.stroke();
+    };
+    drawBollLine("mid", "#94a3b8");
+    drawBollLine("up", "#f59e0b");
+    drawBollLine("down", "#f59e0b");
+    ctx.restore();
+  } else if (s.indType === "demark") {
+    ctx.save();
+    ctx.font = "bold 12px Consolas";
+    ctx.textAlign = "center";
+    for (const i of visibleInd) {
+      if (!i.demark) continue;
+      for (const pt of i.demark) {
+        const xp = s.x(pt.x);
+        const up = pt.dir === "UP";
+        const yp = up ? s.y(s.visibleK.find(k => k.x === pt.x)?.h || 0) - 15 : s.y(s.visibleK.find(k => k.x === pt.x)?.l || 0) + 20;
+        ctx.fillStyle = up ? cssVar("--candleUp", "#ef4444") : cssVar("--candleDown", "#22c55e");
+        ctx.fillText(pt.val, xp, yp);
+      }
+    }
+    ctx.restore();
+  } else if (s.indType === "trendline") {
+    if (chart.trend_lines) {
+      ctx.save();
+      ctx.lineWidth = 2;
+      for (const tl of chart.trend_lines) {
+        const y_start = tl.y0 + tl.slope * (s.xMin - tl.x0);
+        const y_end = tl.y0 + tl.slope * (s.xMax - tl.x0);
+        ctx.strokeStyle = tl.type === "OUTSIDE" ? "#a855f7" : "#ec4899"; // Purple/Pink
+        ctx.setLineDash([5, 5]);
+        ctx.beginPath();
+        ctx.moveTo(s.x(s.xMin), s.y(y_start));
+        ctx.lineTo(s.x(s.xMax), s.y(y_end));
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+  } else if (["macd", "kdj", "rsi"].includes(s.indType)) {
+    // Draw on sub chart
+    const subT = s.plotBottomY + 20;
+    const subB = s.h - PAD_B;
+    const subH = subB - subT;
+    
+    let subYMin = Infinity, subYMax = -Infinity;
+    if (s.indType === "macd") {
+      for (const i of visibleInd) {
+        subYMin = Math.min(subYMin, i.macd.dif, i.macd.dea, i.macd.macd);
+        subYMax = Math.max(subYMax, i.macd.dif, i.macd.dea, i.macd.macd);
+      }
+    } else if (s.indType === "kdj") {
+      subYMin = 0; subYMax = 100;
+      for (const i of visibleInd) {
+        subYMin = Math.min(subYMin, i.kdj.k, i.kdj.d, i.kdj.j);
+        subYMax = Math.max(subYMax, i.kdj.k, i.kdj.d, i.kdj.j);
+      }
+    } else if (s.indType === "rsi") {
+      subYMin = 0; subYMax = 100;
+    }
+    
+    if (subYMin === subYMax) { subYMin -= 1; subYMax += 1; }
+    const subYSpan = subYMax - subYMin;
+    const subY = (val) => subB - ((val - subYMin) / subYSpan) * subH;
+    
+    ctx.save();
+    // Sub chart axes labels
+    ctx.fillStyle = cssVar("--muted", "#475569");
+    ctx.font = "10px Consolas";
+    ctx.fillText(subYMax.toFixed(2), 4, subT + 10);
+    ctx.fillText(subYMin.toFixed(2), 4, subB);
+    
+    const theme = document.documentElement.getAttribute("data-theme") || "light";
+    const lineMain = theme === "light" ? "#1e293b" : "#f8fafc";
+    
+    if (s.indType === "macd") {
+      // Draw MACD histogram
+      for (const i of visibleInd) {
+        const xp = s.x(i.x);
+        const yp = subY(i.macd.macd);
+        const y0 = subY(0);
+        ctx.fillStyle = i.macd.macd >= 0 ? cssVar("--candleUp", "#ef4444") : cssVar("--candleDown", "#22c55e");
+        ctx.fillRect(xp - 1, Math.min(yp, y0), 2, Math.abs(yp - y0));
+      }
+      // Draw DIF, DEA lines
+      const drawLine = (key, color) => {
+        ctx.strokeStyle = color;
+        ctx.beginPath();
+        let first = true;
+        for (const i of visibleInd) {
+          const xp = s.x(i.x);
+          const yp = subY(i.macd[key]);
+          if (first) ctx.moveTo(xp, yp);
+          else ctx.lineTo(xp, yp);
+          first = false;
+        }
+        ctx.stroke();
+      };
+      drawLine("dif", lineMain);
+      drawLine("dea", "#fbbf24");
+    } else if (s.indType === "kdj") {
+      const drawLine = (key, color) => {
+        ctx.strokeStyle = color;
+        ctx.beginPath();
+        let first = true;
+        for (const i of visibleInd) {
+          const xp = s.x(i.x);
+          const yp = subY(i.kdj[key]);
+          if (first) ctx.moveTo(xp, yp);
+          else ctx.lineTo(xp, yp);
+          first = false;
+        }
+        ctx.stroke();
+      };
+      drawLine("k", lineMain);
+      drawLine("d", "#fbbf24");
+      drawLine("j", "#f472b6");
+    } else if (s.indType === "rsi") {
+      ctx.strokeStyle = lineMain;
+      ctx.beginPath();
+      let first = true;
+      for (const i of visibleInd) {
+        const xp = s.x(i.x);
+        const yp = subY(i.rsi);
+        if (first) ctx.moveTo(xp, yp);
+        else ctx.lineTo(xp, yp);
+        first = false;
+      }
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+}
+
 function drawBsp(arr, s) {
   // draw bsp types below candles
   const groups = {};
@@ -1271,6 +1564,7 @@ function draw(chart) {
   drawTradeBands(s, chart);
   drawTradeRays(s);
   drawAxes(s);
+  drawIndicators(chart, s);
   drawCandles(chart, s);
   // 分型最细虚线 → 笔中等实线 → 线段最粗实线
   drawLines(chart.fx_lines || [], s, cssVar("--lineFx", "#06b6d4"), 1.1, true);
