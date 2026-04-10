@@ -106,6 +106,8 @@ class ChanStepper:
         self._iter = None
         self.step_idx = -1
         self.code = ""
+        # Full history K-lines (used by chip distribution).
+        self.kline_all: list[dict[str, Any]] = []
         self.indicators = {
             "macd": CMACD(),
             "kdj": KDJ(),
@@ -136,6 +138,28 @@ class ChanStepper:
             config=cfg,
             autype=autype,
         )
+        # Preload full history K-lines for chip distribution (full available history -> end_date).
+        # Keep it independent from step-based replay, so chips can use full past even at first step.
+        cfg_all = CChanConfig(
+            {
+                "bi_strict": True,
+                "trigger_step": False,
+                "skip_step": 0,
+                "print_warning": False,
+                "kl_data_check": True,
+            }
+        )
+        chip_begin_date = "1990-01-01"
+        chan_all = CChan(
+            code=self.code,
+            begin_time=chip_begin_date,
+            end_time=end_date,
+            data_src=DATA_SRC.BAO_STOCK,
+            lv_list=[KL_TYPE.K_DAY],
+            config=cfg_all,
+            autype=autype,
+        )
+        self.kline_all = serialize_klu_iter(chan_all[0].klu_iter())
         self._iter = self.chan.step_load()
         self.step_idx = -1
         self.indicators = {
@@ -249,7 +273,12 @@ class AppState:
                 "finished": self.finished,
                 "message": "请先加载会话",
             }
-        chart = serialize_chan(self.stepper.chan, self.stepper.indicator_history, self.stepper.trend_lines)
+        chart = serialize_chan(
+            self.stepper.chan,
+            self.stepper.indicator_history,
+            self.stepper.trend_lines,
+            kline_all=self.stepper.kline_all,
+        )
         price: Optional[float] = None
         if len(chart.get("kline", [])) > 0:
             price = self.stepper.current_price()
@@ -273,11 +302,10 @@ class AppState:
         }
 
 
-def serialize_chan(chan: CChan, indicator_history: list, trend_lines: list) -> dict[str, Any]:
-    kl_list = chan[0]
-    klu_arr = []
-    for klu in kl_list.klu_iter():
-        klu_arr.append(
+def serialize_klu_iter(klu_iter) -> list[dict[str, Any]]:
+    arr: list[dict[str, Any]] = []
+    for klu in klu_iter:
+        arr.append(
             {
                 "x": klu.idx,
                 "t": klu.time.to_str(),
@@ -288,6 +316,14 @@ def serialize_chan(chan: CChan, indicator_history: list, trend_lines: list) -> d
                 "v": float(getattr(klu, "volume", getattr(klu, "vol", 0.0)) or 0.0),
             }
         )
+    return arr
+
+
+def serialize_chan(
+    chan: CChan, indicator_history: list, trend_lines: list, *, kline_all: Optional[list[dict[str, Any]]] = None
+) -> dict[str, Any]:
+    kl_list = chan[0]
+    klu_arr = serialize_klu_iter(kl_list.klu_iter())
     
     # BOLL, MACD, KDJ, RSI data from indicator_history
     # We only need to return the indicators for the current visible k-lines (or all of them for now)
@@ -345,6 +381,7 @@ def serialize_chan(chan: CChan, indicator_history: list, trend_lines: list) -> d
 
     return {
         "kline": klu_arr,
+        "kline_all": kline_all or [],
         "bi": bi_arr,
         "seg": seg_arr,
         "bsp": bsp_arr,
@@ -530,6 +567,46 @@ HTML = """
         <button id="btnSell" disabled>卖出（全量）</button>
         <div class="muted">规则：单持仓、T+1、每步最多一笔</div>
         <div class="row" style="margin-top:8px;"><label>显示筹码</label><input id="chipEnabled" type="checkbox" checked /></div>
+        <div class="row"><label>拉伸强度</label>
+          <select id="chipStretchLevel">
+            <option value="1">1 (线性)</option>
+            <option value="2">2</option>
+            <option value="3">3</option>
+            <option value="4">4</option>
+            <option value="5" selected>5 (默认)</option>
+            <option value="6">6</option>
+            <option value="7">7</option>
+            <option value="8">8</option>
+            <option value="9">9</option>
+            <option value="10">10 (最强)</option>
+            <option value="11">11</option>
+            <option value="12">12</option>
+          </select>
+        </div>
+        <div class="row"><label>价格桶</label>
+          <select id="chipBucketStep">
+            <option value="0.0005">0.0005</option>
+            <option value="0.001" selected>0.001</option>
+            <option value="0.002">0.002</option>
+            <option value="0.003">0.003</option>
+            <option value="0.005">0.005</option>
+            <option value="0.008">0.008</option>
+            <option value="0.01">0.01</option>
+            <option value="0.02">0.02</option>
+            <option value="0.05">0.05</option>
+            <option value="0.1">0.1</option>
+          </select>
+        </div>
+        <div class="row"><label>副图槽位</label>
+          <select id="indicatorPanel">
+            <option value="0">0</option>
+            <option value="1">1</option>
+            <option value="2">2</option>
+            <option value="3">3</option>
+            <option value="4">4</option>
+            <option value="5">5</option>
+          </select>
+        </div>
         <div class="row"><label>技术指标</label>
           <select id="indicatorType">
             <option value="none">无</option>
@@ -541,7 +618,6 @@ HTML = """
             <option value="rsi">RSI (副图)</option>
           </select>
         </div>
-        <div class="muted">全历史累计；三角分布峰值=Close；价格步长=0.001</div>
       </div>
 
       <div class="card">
@@ -606,10 +682,58 @@ let sessionFinished = false;
 let crosshairEnabled = false;
 let crosshairX = null;
 let crosshairY = null;
+let selectedIndicatorPanel = 0;
+let indicatorSlots = { 0: "none", 1: "none", 2: "none", 3: "none", 4: "none", 5: "none" };
+const MAIN_INDICATORS = new Set(["none", "boll", "demark", "trendline"]);
+const SUB_INDICATORS = new Set(["none", "macd", "kdj", "rsi"]);
 
 function cssVar(name, fallback) {
   const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   return v || fallback;
+}
+
+function isMainIndicator(type) {
+  return MAIN_INDICATORS.has(type);
+}
+
+function isSubIndicator(type) {
+  return SUB_INDICATORS.has(type);
+}
+
+function getIndicatorConfig() {
+  const mainType = isMainIndicator(indicatorSlots[0]) ? indicatorSlots[0] : "none";
+  const subCharts = [];
+  for (let slot = 1; slot <= 5; slot++) {
+    const type = indicatorSlots[slot];
+    if (type && type !== "none" && isSubIndicator(type)) subCharts.push({ slot, type });
+  }
+  return { mainType, subCharts };
+}
+
+function getChipBucketStep() {
+  const v = Number($("chipBucketStep").value);
+  return Number.isFinite(v) && v > 0 ? v : 0.001;
+}
+
+function getChipStretchExponent() {
+  const level = Number($("chipStretchLevel").value || 5);
+  // level 1 -> 1.0(线性), level 10 -> 0.2(最强), keep extending smoothly.
+  const exp = 1.0 - 0.08 * (level - 1);
+  return Math.max(0.08, Math.min(1.0, exp));
+}
+
+function syncIndicatorControls() {
+  $("indicatorPanel").value = String(selectedIndicatorPanel);
+  const current = indicatorSlots[selectedIndicatorPanel] || "none";
+  $("indicatorType").value = current;
+  for (const option of $("indicatorType").options) {
+    const type = option.value;
+    if (type === "none") {
+      option.disabled = false;
+      continue;
+    }
+    option.disabled = selectedIndicatorPanel === 0 ? !isMainIndicator(type) : !isSubIndicator(type);
+  }
 }
 
 function applyThemeFromSelect() {
@@ -618,9 +742,31 @@ function applyThemeFromSelect() {
   if (lastPayload && lastPayload.ready && lastPayload.chart) draw(lastPayload.chart);
 }
 
-$("indicatorType").addEventListener("change", () => {
+$("indicatorPanel").addEventListener("change", () => {
+  selectedIndicatorPanel = Number($("indicatorPanel").value || 0);
+  syncIndicatorControls();
   if (lastPayload && lastPayload.ready && lastPayload.chart) draw(lastPayload.chart);
 });
+
+$("indicatorType").addEventListener("change", () => {
+  const value = $("indicatorType").value;
+  const ok = selectedIndicatorPanel === 0 ? isMainIndicator(value) : isSubIndicator(value);
+  indicatorSlots[selectedIndicatorPanel] = ok ? value : "none";
+  syncIndicatorControls();
+  if (lastPayload && lastPayload.ready && lastPayload.chart) draw(lastPayload.chart);
+});
+
+$("chipEnabled").addEventListener("change", () => {
+  if (lastPayload && lastPayload.ready && lastPayload.chart) draw(lastPayload.chart);
+});
+$("chipStretchLevel").addEventListener("change", () => {
+  if (lastPayload && lastPayload.ready && lastPayload.chart) draw(lastPayload.chart);
+});
+$("chipBucketStep").addEventListener("change", () => {
+  if (lastPayload && lastPayload.ready && lastPayload.chart) draw(lastPayload.chart);
+});
+
+syncIndicatorControls();
 
 function zoomViewAt(factor, anchorCanvasX) {
   if (!lastPayload || !lastPayload.ready || !viewReady) return;
@@ -756,8 +902,15 @@ window.addEventListener("mousemove", (e) => {
 canvas.addEventListener("mousemove", (e) => {
   if (!crosshairEnabled || !lastPayload || !lastPayload.ready) return;
   const rect = canvas.getBoundingClientRect();
-  crosshairX = e.clientX - rect.left;
-  crosshairY = e.clientY - rect.top;
+  const s = toScaler(lastPayload.chart, Math.max(allXMin, viewXMin), viewXMax);
+  const visibleKs = getVisibleKs(lastPayload.chart, s.xMin, s.xMax);
+  const rawX = e.clientX - rect.left;
+  const rawY = e.clientY - rect.top;
+  const clampedX = Math.max(PAD_L, Math.min(s.w - PAD_R, rawX));
+  const targetX = s.xMin + ((clampedX - PAD_L) / Math.max(1, s.plotW)) * (s.xMax - s.xMin);
+  const refK = nearestKByX(visibleKs, targetX);
+  crosshairX = refK ? s.x(refK.x) : clampedX;
+  crosshairY = Math.max(PAD_T, Math.min(s.contentBottom, rawY));
   draw(lastPayload.chart);
 });
 
@@ -776,6 +929,17 @@ canvas.addEventListener("dblclick", () => {
     crosshairY = null;
   }
   if (lastPayload && lastPayload.ready) draw(lastPayload.chart);
+});
+
+canvas.addEventListener("click", (e) => {
+  if (!lastPayload || !lastPayload.ready || !viewReady) return;
+  const rect = canvas.getBoundingClientRect();
+  const s = toScaler(lastPayload.chart, Math.max(allXMin, viewXMin), viewXMax);
+  const y = e.clientY - rect.top;
+  const panel = getPanelByY(s, y);
+  if (!panel) return;
+  selectedIndicatorPanel = panel.slot;
+  syncIndicatorControls();
 });
 
 window.addEventListener("keydown", (e) => {
@@ -816,11 +980,37 @@ window.addEventListener("keydown", (e) => {
     return;
   }
   if (e.code === "ArrowLeft") {
+    if (crosshairEnabled && crosshairX !== null) {
+      e.preventDefault();
+      const s = toScaler(lastPayload.chart, Math.max(allXMin, viewXMin), viewXMax);
+      const refK = getReferenceK(lastPayload.chart, s);
+      if (refK) {
+        const prev = nearestKByX(lastPayload.chart.kline.filter((k) => k.x < refK.x), refK.x - 1);
+        if (prev) {
+          crosshairX = s.x(prev.x);
+          draw(lastPayload.chart);
+        }
+      }
+      return;
+    }
     viewXMin = Math.max(allXMin, viewXMin - shift);
     viewXMax = viewXMin + span;
     userAdjustedView = true;
     draw(lastPayload.chart);
   } else if (e.code === "ArrowRight") {
+    if (crosshairEnabled && crosshairX !== null) {
+      e.preventDefault();
+      const s = toScaler(lastPayload.chart, Math.max(allXMin, viewXMin), viewXMax);
+      const refK = getReferenceK(lastPayload.chart, s);
+      if (refK) {
+        const next = nearestKByX(lastPayload.chart.kline.filter((k) => k.x > refK.x), refK.x + 1);
+        if (next) {
+          crosshairX = s.x(next.x);
+          draw(lastPayload.chart);
+        }
+      }
+      return;
+    }
     viewXMin = viewXMin + shift;
     viewXMax = viewXMax + shift;
     userAdjustedView = true;
@@ -844,6 +1034,7 @@ function setState(p) {
     setText("st_price", "-");
     setText("st_equity", "-");
     setText("st_total_pnl", "-");
+    setChipState("-", "-", "-", "-", "-");
     return;
   }
   const a = p.account;
@@ -858,6 +1049,45 @@ function setState(p) {
   setText("st_total_pnl", totalPnl.toFixed(2));
 }
 
+function getVisibleKs(chart, xMin, xMax) {
+  let visibleK = chart.kline.filter((k) => k.x >= xMin && k.x <= xMax);
+  if (visibleK.length === 0) visibleK = chart.kline;
+  return visibleK;
+}
+
+function nearestKByX(ks, targetX) {
+  if (!ks || ks.length === 0) return null;
+  return ks.reduce((best, cur) => {
+    return Math.abs(cur.x - targetX) < Math.abs(best.x - targetX) ? cur : best;
+  }, ks[0]);
+}
+
+function getChipBaseKs(chart) {
+  // Use full history K-lines for chip distribution.
+  // Accumulation cutoff is controlled by reference K (crosshair/latest), not by replay step.
+  return (chart.kline_all && chart.kline_all.length > 0) ? chart.kline_all : (chart.kline || []);
+}
+
+function getReferenceKByBounds(chart, xMin, xMax, w) {
+  const ksAll = getChipBaseKs(chart);
+  if (ksAll.length === 0) return null;
+  if (!crosshairEnabled || crosshairX === null) return ksAll[ksAll.length - 1];
+  const plotW = Math.max(1, w - PAD_L - PAD_R);
+  const clampedX = Math.max(PAD_L, Math.min(w - PAD_R, crosshairX));
+  const targetX = xMin + ((clampedX - PAD_L) / plotW) * (xMax - xMin);
+  const visibleKs = getVisibleKs(chart, xMin, xMax).filter((k) => k.x <= ksAll[ksAll.length - 1].x);
+  return nearestKByX(visibleKs.length > 0 ? visibleKs : ksAll, targetX) || ksAll[ksAll.length - 1];
+}
+
+function getReferenceK(chart, s) {
+  return getReferenceKByBounds(chart, s.xMin, s.xMax, s.w);
+}
+
+function getPanelByY(s, y) {
+  if (!s.subPanels || s.subPanels.length === 0) return null;
+  return s.subPanels.find((panel) => y >= panel.top && y <= panel.bottom) || null;
+}
+
 function toScaler(chart, xMin, xMax) {
   const w = canvas.clientWidth;
   const h = canvas.clientHeight;
@@ -867,8 +1097,7 @@ function toScaler(chart, xMin, xMax) {
     xToTime[k.x] = k.t;
   }
 
-  let visibleK = chart.kline.filter((k) => k.x >= xMin && k.x <= xMax);
-  if (visibleK.length === 0) visibleK = chart.kline;
+  let visibleK = getVisibleKs(chart, xMin, xMax);
 
   let yMin = Infinity;
   let yMax = -Infinity;
@@ -877,32 +1106,29 @@ function toScaler(chart, xMin, xMax) {
     if (k.h > yMax) yMax = k.h;
   }
   
-  // If BOLL is selected, expand y range to include BOLL
-    const indType = $("indicatorType").value;
-    if (indType === "boll" && chart.indicators) {
-      const visibleInd = chart.indicators.filter(i => i.x >= xMin && i.x <= xMax);
-      for (const i of visibleInd) {
-        if (i.boll.up > yMax) yMax = i.boll.up;
-        if (i.boll.down < yMin) yMin = i.boll.down;
+  const indicatorCfg = getIndicatorConfig();
+  const mainType = indicatorCfg.mainType;
+  const visibleInd = (chart.indicators || []).filter(i => i.x >= xMin && i.x <= xMax);
+  if (mainType === "boll") {
+    for (const i of visibleInd) {
+      if (i.boll.up > yMax) yMax = i.boll.up;
+      if (i.boll.down < yMin) yMin = i.boll.down;
+    }
+  }
+  if (mainType === "trendline" && chart.trend_lines) {
+    for (const tl of chart.trend_lines) {
+      const yAtMin = tl.y0 + tl.slope * (xMin - tl.x0);
+      const yAtMax = tl.y0 + tl.slope * (xMax - tl.x0);
+      if (isFinite(yAtMin)) {
+        if (yAtMin > yMax) yMax = yAtMin;
+        if (yAtMin < yMin) yMin = yAtMin;
+      }
+      if (isFinite(yAtMax)) {
+        if (yAtMax > yMax) yMax = yAtMax;
+        if (yAtMax < yMin) yMin = yAtMax;
       }
     }
-    
-    // Expand for TrendLines
-    if (indType === "trendline" && chart.trend_lines) {
-      for (const tl of chart.trend_lines) {
-        const y_at_min = tl.y0 + tl.slope * (xMin - tl.x0);
-        const y_at_max = tl.y0 + tl.slope * (xMax - tl.x0);
-        if (isFinite(y_at_min)) {
-          if (y_at_min > yMax) yMax = y_at_min;
-          if (y_at_min < yMin) yMin = y_at_min;
-        }
-        if (isFinite(y_at_max)) {
-          if (y_at_max > yMax) yMax = y_at_max;
-          if (y_at_max < yMin) yMin = y_at_max;
-        }
-      }
-    }
-
+  }
   if (!isFinite(yMin) || !isFinite(yMax)) {
     yMin = 0;
     yMax = 1;
@@ -910,16 +1136,42 @@ function toScaler(chart, xMin, xMax) {
 
   const xSpan = Math.max(1, xMax - xMin);
   const ySpan = Math.max(1e-6, yMax - yMin);
-  
-  const showSubChart = ["macd", "kdj", "rsi"].includes(indType);
-  const subChartH = showSubChart ? (h - PAD_T - PAD_B) * 0.25 : 0;
-  
-  const plotBottomY = h - PAD_B - subChartH;
-  const plotH = h - PAD_T - PAD_B - subChartH;
+
+  const totalChartH = h - PAD_T - PAD_B;
+  const subCharts = indicatorCfg.subCharts;
+  let subPanelGap = 18;
+  let subPanelH = 90;
+  const maxSubAreaH = totalChartH * 0.55;
+  const totalNeed = subCharts.length * (subPanelH + subPanelGap);
+  if (subCharts.length > 0 && totalNeed > maxSubAreaH) {
+    const scale = maxSubAreaH / totalNeed;
+    subPanelGap *= scale;
+    subPanelH *= scale;
+  }
+  const totalSubH = subCharts.length > 0 ? subCharts.length * (subPanelH + subPanelGap) : 0;
+  const plotBottomY = h - PAD_B - totalSubH;
+  const plotH = plotBottomY - PAD_T;
   const plotW = w - PAD_L - PAD_R;
+  const subPanels = [];
+  let panelTop = plotBottomY;
+  for (const subCfg of subCharts) {
+    panelTop += subPanelGap;
+    const top = panelTop;
+    const bottom = top + subPanelH;
+    subPanels.push({
+      slot: subCfg.slot,
+      type: subCfg.type,
+      top,
+      bottom,
+      height: subPanelH,
+    });
+    panelTop = bottom;
+  }
+  const contentBottom = subPanels.length > 0 ? subPanels[subPanels.length - 1].bottom : plotBottomY;
 
   return {
     visibleK,
+    visibleInd,
     xToTime,
     w,
     h,
@@ -930,8 +1182,9 @@ function toScaler(chart, xMin, xMax) {
     plotBottomY,
     plotH,
     plotW,
-    subChartH,
-    indType,
+    subPanels,
+    contentBottom,
+    mainType,
     x: (x) => PAD_L + ((x - xMin) / xSpan) * plotW,
     y: (y) => PAD_T + ((yMax - y) / ySpan) * plotH,
   };
@@ -957,18 +1210,18 @@ function drawAxes(s) {
   ctx.fillText(s.yMax.toFixed(2), 4, PAD_T + 10);
   ctx.fillText(s.yMin.toFixed(2), 4, yBase);
   
-  // sub chart axes
-  if (s.subChartH > 0) {
-    const subT = s.plotBottomY + 20;
-    const subB = s.h - PAD_B;
-    ctx.beginPath();
-    ctx.moveTo(xLeft, subT);
-    ctx.lineTo(xLeft, subB);
-    ctx.lineTo(xRight, subB);
-    ctx.stroke();
-    
-    // x ticks are on the sub chart bottom if it exists
-    drawXTicks(s, subB);
+  if (s.subPanels.length > 0) {
+    ctx.font = "10px Consolas";
+    for (const panel of s.subPanels) {
+      ctx.beginPath();
+      ctx.moveTo(xLeft, panel.top);
+      ctx.lineTo(xLeft, panel.bottom);
+      ctx.lineTo(xRight, panel.bottom);
+      ctx.stroke();
+      ctx.fillStyle = cssVar("--muted", "#475569");
+      ctx.fillText(`#${panel.slot} ${panel.type.toUpperCase()}`, xLeft + 6, panel.top + 12);
+    }
+    drawXTicks(s, s.contentBottom);
   } else {
     drawXTicks(s, yBase);
   }
@@ -1009,15 +1262,14 @@ function drawXTicks(s, yPos) {
 
 function drawCrosshair(s) {
   if (!crosshairEnabled || crosshairX === null || crosshairY === null) return;
-  const x = Math.max(PAD_L, Math.min(s.w - PAD_R, crosshairX));
-  const y = Math.max(PAD_T, Math.min(s.plotBottomY, crosshairY));
-  const xBar = s.xMin + ((x - PAD_L) / Math.max(1, s.plotW)) * (s.xMax - s.xMin);
-  const idx = Math.round(xBar);
-  const nearest = s.xToTime[idx] ? idx : Object.keys(s.xToTime).map(Number).reduce((best, cur) => {
-    return Math.abs(cur - idx) < Math.abs(best - idx) ? cur : best;
-  }, s.xMin);
-  const t = s.xToTime[nearest] || "-";
-  const price = s.yMax - ((y - PAD_T) / Math.max(1, s.plotH)) * (s.yMax - s.yMin);
+  const chart = lastPayload && lastPayload.chart ? lastPayload.chart : null;
+  if (!chart) return;
+  const refK = getReferenceK(chart, s);
+  if (!refK) return;
+  const x = s.x(refK.x);
+  const y = Math.max(PAD_T, Math.min(s.contentBottom, crosshairY));
+  const t = refK.t || "-";
+  const price = refK.c;
 
   ctx.save();
   ctx.strokeStyle = cssVar("--grid", "#64748b");
@@ -1025,7 +1277,7 @@ function drawCrosshair(s) {
   ctx.setLineDash([4, 4]);
   ctx.beginPath();
   ctx.moveTo(x, PAD_T);
-  ctx.lineTo(x, s.plotBottomY);
+  ctx.lineTo(x, s.contentBottom);
   ctx.moveTo(PAD_L, y);
   ctx.lineTo(s.w - PAD_R, y);
   ctx.stroke();
@@ -1065,22 +1317,20 @@ function drawGridLines(s) {
 
 function drawChips(chart, s) {
   if (!$("chipEnabled").checked) return;
-  const ks = chart.kline || [];
-  if (ks.length === 0) return;
-  const priceStep = 0.001;
-  const stepMul = 1000;
-  const xAtCursor = s.xMin + ((Math.max(PAD_L, Math.min(s.w - PAD_R, crosshairX ?? (s.w - PAD_R))) - PAD_L) / Math.max(1, s.plotW)) * (s.xMax - s.xMin);
-  const refIdx = (!crosshairEnabled || crosshairX === null)
-    ? ks.length - 1
-    : Math.max(
-        0,
-        ks.findIndex((k) => k.x >= xAtCursor) >= 0 ? ks.findIndex((k) => k.x >= xAtCursor) : ks.length - 1
-      );
-  const useKs = ks.slice(0, refIdx + 1);
+  const ksAll = getChipBaseKs(chart);
+  const refK0 = (chart.kline && chart.kline.length > 0) ? chart.kline[chart.kline.length - 1] : null;
+  const refK = getReferenceK(chart, s) || refK0 || (ksAll.length > 0 ? ksAll[ksAll.length - 1] : null);
+  const refText = (!crosshairEnabled || crosshairX === null) ? "最新" : `历史@${refK?.t || "-"}`;
+  if (ksAll.length === 0 || !refK) return;
+  const priceStep = getChipBucketStep();
+  const stepMul = 1 / priceStep;
+  // Cutoff by date/time (stable across different x indexing bases)
+  const refT = String(refK.t || "");
+  const useKs = refT ? ksAll.filter((k) => String(k.t || "") <= refT) : ksAll;
 
   let allMin = Infinity;
   let allMax = -Infinity;
-  for (const k of ks) {
+  for (const k of useKs) {
     if (k.l < allMin) allMin = k.l;
     if (k.h > allMax) allMax = k.h;
   }
@@ -1131,8 +1381,18 @@ function drawChips(chart, s) {
     }
   }
 
-  const maxV = Math.max(...arr);
-  if (maxV <= 0) return;
+  // Visual-only stretch (monotonic): keep all historical chips unchanged,
+  // only amplify contrast on rendering.
+  const stretchExp = getChipStretchExponent();
+  const stretchVol = (v) => Math.pow(Math.max(0, v), stretchExp);
+  let maxVVisible = 0;
+  for (let i = 0; i < tickCount; i++) {
+    const p = (minTick + i) / stepMul;
+    const v = stretchVol(arr[i]);
+    if (p < s.yMin || p > s.yMax) continue;
+    if (v > maxVVisible) maxVVisible = v;
+  }
+  if (maxVVisible <= 0) return;
   const chipW = Math.max(96, Math.min(220, s.plotW * 0.2));
   const xR = s.w - PAD_R - 2;
   const xL = xR - chipW;
@@ -1144,11 +1404,12 @@ function drawChips(chart, s) {
   ctx.fillStyle = bg;
   ctx.fillRect(xL, PAD_T, chipW, s.plotBottomY - PAD_T);
   for (let i = 0; i < tickCount; i++) {
-    const v = arr[i];
+    const vRaw = arr[i];
+    const v = stretchVol(vRaw);
     if (v <= 0) continue;
-    const len = (v / maxV) * chipW;
     const p = (minTick + i) / stepMul;
     if (p < s.yMin || p > s.yMax) continue;
+    const len = (v / maxVVisible) * chipW;
     const yTop = s.y(p + priceStep);
     const yBot = s.y(p);
     const h = Math.max(1, yBot - yTop);
@@ -1160,7 +1421,6 @@ function drawChips(chart, s) {
   ctx.strokeRect(xL, PAD_T, chipW, s.plotBottomY - PAD_T);
   ctx.fillStyle = cssVar("--legendText", "#0f172a");
   ctx.font = "12px Consolas";
-  const refText = (!crosshairEnabled || crosshairX === null) ? "最新" : `历史@${useKs[useKs.length - 1]?.t || "-"}`;
   ctx.fillText(`筹码(${refText})`, xL + 6, PAD_T + 14);
   ctx.restore();
 }
@@ -1364,31 +1624,94 @@ function drawTradeRays(s) {
 
 function drawIndicators(chart, s) {
   if (!chart.indicators || chart.indicators.length === 0) return;
-  const ind = chart.indicators;
-  const visibleInd = ind.filter(i => i.x >= s.xMin && i.x <= s.xMax);
-  
-  if (s.indType === "boll") {
-    // Draw on main chart
+  const visibleInd = s.visibleInd;
+  const theme = document.documentElement.getAttribute("data-theme") || "light";
+  const lineMain = theme === "light" ? "#1e293b" : "#f8fafc";
+
+  const drawPanelLine = (arr, getter, yFn, color) => {
+    ctx.strokeStyle = color;
+    ctx.beginPath();
+    let first = true;
+    for (const item of arr) {
+      const yVal = getter(item);
+      if (!Number.isFinite(yVal)) continue;
+      const xp = s.x(item.x);
+      const yp = yFn(yVal);
+      if (first) ctx.moveTo(xp, yp);
+      else ctx.lineTo(xp, yp);
+      first = false;
+    }
+    if (!first) ctx.stroke();
+  };
+
+  const getPanelRange = (type) => {
+    let min = Infinity;
+    let max = -Infinity;
+    if (type === "macd") {
+      for (const i of visibleInd) {
+        min = Math.min(min, i.macd.dif, i.macd.dea, i.macd.macd);
+        max = Math.max(max, i.macd.dif, i.macd.dea, i.macd.macd);
+      }
+    } else if (type === "kdj") {
+      min = 0;
+      max = 100;
+      for (const i of visibleInd) {
+        min = Math.min(min, i.kdj.k, i.kdj.d, i.kdj.j);
+        max = Math.max(max, i.kdj.k, i.kdj.d, i.kdj.j);
+      }
+    } else if (type === "rsi") {
+      min = 0;
+      max = 100;
+    }
+    if (!isFinite(min) || !isFinite(max)) {
+      min = 0;
+      max = 1;
+    }
+    if (min === max) {
+      min -= 1;
+      max += 1;
+    }
+    return [min, max];
+  };
+
+  const drawSubPanel = (panel) => {
+    const [subYMin, subYMax] = getPanelRange(panel.type);
+    const subYSpan = subYMax - subYMin;
+    const subY = (val) => panel.bottom - ((val - subYMin) / subYSpan) * panel.height;
+
     ctx.save();
-    ctx.lineWidth = 1;
-    const drawBollLine = (key, color) => {
-      ctx.strokeStyle = color;
-      ctx.beginPath();
-      let first = true;
+    ctx.fillStyle = cssVar("--muted", "#475569");
+    ctx.font = "10px Consolas";
+    ctx.fillText(subYMax.toFixed(2), 4, panel.top + 10);
+    ctx.fillText(subYMin.toFixed(2), 4, panel.bottom);
+    if (panel.type === "macd") {
       for (const i of visibleInd) {
         const xp = s.x(i.x);
-        const yp = s.y(i.boll[key]);
-        if (first) ctx.moveTo(xp, yp);
-        else ctx.lineTo(xp, yp);
-        first = false;
+        const yp = subY(i.macd.macd);
+        const y0 = subY(0);
+        ctx.fillStyle = i.macd.macd >= 0 ? cssVar("--candleUp", "#ef4444") : cssVar("--candleDown", "#22c55e");
+        ctx.fillRect(xp - 1, Math.min(yp, y0), 2, Math.abs(yp - y0));
       }
-      ctx.stroke();
-    };
-    drawBollLine("mid", "#94a3b8");
-    drawBollLine("up", "#f59e0b");
-    drawBollLine("down", "#f59e0b");
+      drawPanelLine(visibleInd, (i) => i.macd.dif, subY, lineMain);
+      drawPanelLine(visibleInd, (i) => i.macd.dea, subY, "#fbbf24");
+    } else if (panel.type === "kdj") {
+      drawPanelLine(visibleInd, (i) => i.kdj.k, subY, lineMain);
+      drawPanelLine(visibleInd, (i) => i.kdj.d, subY, "#fbbf24");
+      drawPanelLine(visibleInd, (i) => i.kdj.j, subY, "#f472b6");
+    } else if (panel.type === "rsi") {
+      drawPanelLine(visibleInd, (i) => i.rsi, subY, lineMain);
+    }
     ctx.restore();
-  } else if (s.indType === "demark") {
+  };
+
+  if (s.mainType === "boll") {
+    ctx.save();
+    ctx.lineWidth = 1;
+    drawPanelLine(visibleInd, (i) => i.boll.mid, s.y, "#94a3b8");
+    drawPanelLine(visibleInd, (i) => i.boll.up, s.y, "#f59e0b");
+    drawPanelLine(visibleInd, (i) => i.boll.down, s.y, "#f59e0b");
+    ctx.restore();
+  } else if (s.mainType === "demark") {
     ctx.save();
     ctx.font = "bold 12px Consolas";
     ctx.textAlign = "center";
@@ -1403,7 +1726,7 @@ function drawIndicators(chart, s) {
       }
     }
     ctx.restore();
-  } else if (s.indType === "trendline") {
+  } else if (s.mainType === "trendline") {
     if (chart.trend_lines) {
       ctx.save();
       ctx.lineWidth = 2;
@@ -1419,99 +1742,8 @@ function drawIndicators(chart, s) {
       }
       ctx.restore();
     }
-  } else if (["macd", "kdj", "rsi"].includes(s.indType)) {
-    // Draw on sub chart
-    const subT = s.plotBottomY + 20;
-    const subB = s.h - PAD_B;
-    const subH = subB - subT;
-    
-    let subYMin = Infinity, subYMax = -Infinity;
-    if (s.indType === "macd") {
-      for (const i of visibleInd) {
-        subYMin = Math.min(subYMin, i.macd.dif, i.macd.dea, i.macd.macd);
-        subYMax = Math.max(subYMax, i.macd.dif, i.macd.dea, i.macd.macd);
-      }
-    } else if (s.indType === "kdj") {
-      subYMin = 0; subYMax = 100;
-      for (const i of visibleInd) {
-        subYMin = Math.min(subYMin, i.kdj.k, i.kdj.d, i.kdj.j);
-        subYMax = Math.max(subYMax, i.kdj.k, i.kdj.d, i.kdj.j);
-      }
-    } else if (s.indType === "rsi") {
-      subYMin = 0; subYMax = 100;
-    }
-    
-    if (subYMin === subYMax) { subYMin -= 1; subYMax += 1; }
-    const subYSpan = subYMax - subYMin;
-    const subY = (val) => subB - ((val - subYMin) / subYSpan) * subH;
-    
-    ctx.save();
-    // Sub chart axes labels
-    ctx.fillStyle = cssVar("--muted", "#475569");
-    ctx.font = "10px Consolas";
-    ctx.fillText(subYMax.toFixed(2), 4, subT + 10);
-    ctx.fillText(subYMin.toFixed(2), 4, subB);
-    
-    const theme = document.documentElement.getAttribute("data-theme") || "light";
-    const lineMain = theme === "light" ? "#1e293b" : "#f8fafc";
-    
-    if (s.indType === "macd") {
-      // Draw MACD histogram
-      for (const i of visibleInd) {
-        const xp = s.x(i.x);
-        const yp = subY(i.macd.macd);
-        const y0 = subY(0);
-        ctx.fillStyle = i.macd.macd >= 0 ? cssVar("--candleUp", "#ef4444") : cssVar("--candleDown", "#22c55e");
-        ctx.fillRect(xp - 1, Math.min(yp, y0), 2, Math.abs(yp - y0));
-      }
-      // Draw DIF, DEA lines
-      const drawLine = (key, color) => {
-        ctx.strokeStyle = color;
-        ctx.beginPath();
-        let first = true;
-        for (const i of visibleInd) {
-          const xp = s.x(i.x);
-          const yp = subY(i.macd[key]);
-          if (first) ctx.moveTo(xp, yp);
-          else ctx.lineTo(xp, yp);
-          first = false;
-        }
-        ctx.stroke();
-      };
-      drawLine("dif", lineMain);
-      drawLine("dea", "#fbbf24");
-    } else if (s.indType === "kdj") {
-      const drawLine = (key, color) => {
-        ctx.strokeStyle = color;
-        ctx.beginPath();
-        let first = true;
-        for (const i of visibleInd) {
-          const xp = s.x(i.x);
-          const yp = subY(i.kdj[key]);
-          if (first) ctx.moveTo(xp, yp);
-          else ctx.lineTo(xp, yp);
-          first = false;
-        }
-        ctx.stroke();
-      };
-      drawLine("k", lineMain);
-      drawLine("d", "#fbbf24");
-      drawLine("j", "#f472b6");
-    } else if (s.indType === "rsi") {
-      ctx.strokeStyle = lineMain;
-      ctx.beginPath();
-      let first = true;
-      for (const i of visibleInd) {
-        const xp = s.x(i.x);
-        const yp = subY(i.rsi);
-        if (first) ctx.moveTo(xp, yp);
-        else ctx.lineTo(xp, yp);
-        first = false;
-      }
-      ctx.stroke();
-    }
-    ctx.restore();
   }
+  for (const panel of s.subPanels) drawSubPanel(panel);
 }
 
 function drawBsp(arr, s) {
@@ -1593,6 +1825,7 @@ function refreshUI(payload, options) {
   const afterStep = options && options.afterStep;
   lastPayload = payload;
   sessionFinished = !!payload.finished;
+  syncIndicatorControls();
   if (payload.ready && payload.chart && payload.chart.bsp) {
     for (const p of payload.chart.bsp) {
       const k = `${p.x}|${p.label}|${p.is_buy ? 1 : 0}`;
