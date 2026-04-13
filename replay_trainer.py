@@ -352,6 +352,32 @@ def serialize_chan(
             }
         )
 
+    bi_zs_arr = []
+    for zs in kl_list.zs_list:
+        bi_zs_arr.append(
+            {
+                "x1": zs.begin.idx,
+                "x2": zs.end.idx,
+                "low": float(zs.low),
+                "high": float(zs.high),
+                "is_sure": bool(zs.is_sure),
+                "is_one_bi_zs": bool(zs.is_one_bi_zs()),
+            }
+        )
+
+    seg_zs_arr = []
+    for zs in kl_list.segzs_list:
+        seg_zs_arr.append(
+            {
+                "x1": zs.begin.idx,
+                "x2": zs.end.idx,
+                "low": float(zs.low),
+                "high": float(zs.high),
+                "is_sure": bool(zs.is_sure),
+                "is_one_bi_zs": bool(zs.is_one_bi_zs()),
+            }
+        )
+
     bsp_arr = []
     for bsp in kl_list.bs_point_lst.bsp_iter():
         bsp_arr.append(
@@ -384,6 +410,8 @@ def serialize_chan(
         "kline_all": kline_all or [],
         "bi": bi_arr,
         "seg": seg_arr,
+        "bi_zs": bi_zs_arr,
+        "seg_zs": seg_zs_arr,
         "bsp": bsp_arr,
         "fx_lines": fx_lines,
         "indicators": indicator_history,
@@ -618,6 +646,8 @@ HTML = """
             <option value="rsi">RSI (副图)</option>
           </select>
         </div>
+        <div class="row"><label>显示笔中枢</label><input id="biZsEnabled" type="checkbox" checked /></div>
+        <div class="row"><label>显示段中枢</label><input id="segZsEnabled" type="checkbox" checked /></div>
       </div>
 
       <div class="card">
@@ -766,6 +796,12 @@ $("chipStretchLevel").addEventListener("change", () => {
   if (lastPayload && lastPayload.ready && lastPayload.chart) draw(lastPayload.chart);
 });
 $("chipBucketStep").addEventListener("change", () => {
+  if (lastPayload && lastPayload.ready && lastPayload.chart) draw(lastPayload.chart);
+});
+$("biZsEnabled").addEventListener("change", () => {
+  if (lastPayload && lastPayload.ready && lastPayload.chart) draw(lastPayload.chart);
+});
+$("segZsEnabled").addEventListener("change", () => {
   if (lastPayload && lastPayload.ready && lastPayload.chart) draw(lastPayload.chart);
 });
 
@@ -1796,6 +1832,29 @@ function drawBsp(arr, s) {
   }
 }
 
+function drawZsRects(arr, s, color, width) {
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  for (const zs of arr || []) {
+    const loX = Math.min(zs.x1, zs.x2);
+    const hiX = Math.max(zs.x1, zs.x2);
+    if (hiX < s.xMin || loX > s.xMax) continue;
+    const x1 = s.x(loX);
+    const x2 = s.x(hiX);
+    const yTop = s.y(zs.high);
+    const yBottom = s.y(zs.low);
+    const rectX = Math.min(x1, x2);
+    const rectY = Math.min(yTop, yBottom);
+    const rectW = Math.max(1, Math.abs(x2 - x1));
+    const rectH = Math.max(1, Math.abs(yBottom - yTop));
+    if (!zs.is_sure) ctx.setLineDash([6, 4]);
+    else ctx.setLineDash([]);
+    ctx.strokeRect(rectX, rectY, rectW, rectH);
+  }
+  ctx.restore();
+}
+
 function draw(chart) {
   const cw = canvas.clientWidth;
   const ch = canvas.clientHeight;
@@ -1815,6 +1874,12 @@ function draw(chart) {
   drawAxes(s);
   drawIndicators(chart, s);
   drawCandles(chart, s);
+  if ($("biZsEnabled") && $("biZsEnabled").checked) {
+    drawZsRects(chart.bi_zs || [], s, cssVar("--lineBi", "#f59e0b"), 1.8);
+  }
+  if ($("segZsEnabled") && $("segZsEnabled").checked) {
+    drawZsRects(chart.seg_zs || [], s, cssVar("--lineSeg", "#059669"), 2.4);
+  }
   // 分型最细虚线 → 笔中等实线 → 线段最粗实线
   drawLines(chart.fx_lines || [], s, cssVar("--lineFx", "#06b6d4"), 1.1, true);
   drawLines((chart.bi || []).filter((x) => x.is_sure), s, cssVar("--lineBi", "#f59e0b"), 3.1, false);
