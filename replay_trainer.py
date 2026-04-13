@@ -1,4 +1,4 @@
-import json
+﻿import json
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, Optional
@@ -259,12 +259,83 @@ class InitReq(BaseModel):
     autype: str = "qfq"
 
 
+class BackNReq(BaseModel):
+    n: int = 1
+
+
 class AppState:
     def __init__(self) -> None:
         self.stepper = ChanStepper()
         self.account = PaperAccount(initial_cash=10_000, cash=10_000)
         self.ready = False
         self.finished = False
+        self.session_params: Optional[dict[str, Any]] = None
+        self.trade_events: list[dict[str, Any]] = []
+
+    def _current_kline_x(self) -> Optional[int]:
+        if self.stepper.chan is None:
+            return None
+        kl_list = self.stepper.chan[0]
+        if len(kl_list.lst) == 0:
+            return None
+        return int(kl_list.lst[-1].lst[-1].idx)
+
+    def _build_trade_state(self) -> dict[str, Any]:
+        history: list[dict[str, Any]] = []
+        active: Optional[dict[str, Any]] = None
+        for event in self.trade_events:
+            if event.get("side") == "buy":
+                active = {
+                    "buyX": event.get("x"),
+                    "buyPrice": float(event.get("price", 0.0)),
+                    "shares": int(event.get("shares", 0)),
+                    "sellX": None,
+                    "sellPrice": None,
+                }
+            elif event.get("side") == "sell" and active is not None:
+                history.append(
+                    {
+                        "buyX": active.get("buyX"),
+                        "buyPrice": active.get("buyPrice"),
+                        "shares": active.get("shares"),
+                        "sellX": event.get("x"),
+                        "sellPrice": float(event.get("price", 0.0)),
+                    }
+                )
+                active = None
+        return {"history": history, "active": active}
+
+    def rebuild_to_step(self, target_step: int) -> None:
+        if self.session_params is None:
+            raise ValueError("当前无可重建会话")
+        params = self.session_params
+        self.stepper.init(
+            params["code"],
+            params["begin_date"],
+            params["end_date"],
+            params["autype"],
+        )
+        self.account.reset(params["initial_cash"])
+        self.ready = True
+        self.finished = False
+
+        if not self.stepper.step():
+            return
+        for _ in range(target_step):
+            if not self.stepper.step():
+                break
+
+        effective_step = max(0, self.stepper.step_idx)
+        self.trade_events = [e for e in self.trade_events if int(e.get("step_idx", -1)) <= effective_step]
+        self.account.reset(params["initial_cash"])
+        for event in self.trade_events:
+            side = event.get("side")
+            price = float(event.get("price", 0.0))
+            step_idx = int(event.get("step_idx", -1))
+            if side == "buy":
+                self.account.buy_with_all_cash(price, step_idx)
+            elif side == "sell":
+                self.account.sell_all(price, step_idx)
 
     def build_payload(self, stock_name: Optional[str] = None) -> dict[str, Any]:
         if not self.ready or self.stepper.chan is None:
@@ -299,6 +370,7 @@ class AppState:
                 "equity": round(self.account.equity(price or 0.0), 2),
                 "can_sell": bool(price is not None and self.account.can_sell(self.stepper.step_idx)),
             },
+            "trades": self._build_trade_state(),
         }
 
 
@@ -553,6 +625,23 @@ HTML = """
     .card.collapsed { opacity: 0.82; }
     .card.collapsed .cfg-editable { display: none; }
     .btnRow { display: flex; flex-wrap: wrap; gap: 6px; }
+    .stepNRow {
+      margin-top: 6px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .stepNRow input {
+      width: 76px;
+      padding: 4px 6px;
+      box-sizing: border-box;
+      font-family: Consolas, monospace;
+    }
+    .stepNRow .hint {
+      color: var(--muted);
+      font-size: 12px;
+    }
     .globalLoading {
       position: fixed;
       inset: 0;
@@ -669,6 +758,13 @@ HTML = """
         <div class="btnRow">
           <button id="btnStep" disabled>下一根K线</button>
           <button id="btnFinish" disabled>结束训练</button>
+        </div>
+        <div class="stepNRow">
+          <label for="stepN">N</label>
+          <input id="stepN" type="number" min="1" step="1" value="5" />
+          <button id="btnStepN" disabled>步进 N 根</button>
+          <button id="btnBackN" disabled>后退 N 根</button>
+          <span class="hint">遇到买卖点提示会自动中断等待确认</span>
         </div>
       </div>
 
@@ -865,6 +961,23 @@ function hideGlobalLoading() {
 function syncStepButtonState() {
   const disabled = !lastPayload || !lastPayload.ready || sessionFinished || stepInFlight || !!pendingBspPrompt;
   $("btnStep").disabled = disabled;
+  $("btnStepN").disabled = disabled;
+  $("btnBackN").disabled = !lastPayload || !lastPayload.ready || stepInFlight;
+}
+
+function getStepNValue() {
+  const el = $("stepN");
+  const v = Number(el ? el.value : 1);
+  const n = Number.isFinite(v) ? Math.floor(v) : 1;
+  const safeN = Math.max(1, n);
+  if (el && String(safeN) !== String(el.value)) el.value = String(safeN);
+  return safeN;
+}
+
+function syncTradesFromPayload(payload) {
+  if (!payload || !payload.trades) return;
+  tradeHistory = Array.isArray(payload.trades.history) ? payload.trades.history : [];
+  activeTrade = payload.trades.active || null;
 }
 
 function showBspPrompt(payload, lines, key) {
@@ -1535,7 +1648,10 @@ function drawCrosshair(s) {
   const bspTags = getBspAtX(chart, refK.x);
   const infoRows = [
     formatDateWithWeekday(t),
-    `O:${formatPriceText(refK.o)} H:${formatPriceText(refK.h)} L:${formatPriceText(refK.l)} C:${formatPriceText(refK.c)}`,
+    `Open:  ${formatPriceText(refK.o)}`,
+    `High:  ${formatPriceText(refK.h)}`,
+    `Low:   ${formatPriceText(refK.l)}`,
+    `Close: ${formatPriceText(refK.c)}`,
     bspTags.length > 0 ? `BSP:${bspTags.join(" | ")}` : "BSP:-",
   ];
 
@@ -1598,24 +1714,7 @@ function drawCrosshair(s) {
 }
 
 function drawGridLines(s) {
-  const grid = cssVar("--grid", "#e2e8f0");
-  ctx.save();
-  ctx.strokeStyle = grid;
-  ctx.globalAlpha = 0.45;
-  ctx.lineWidth = 1;
-  const yBase = s.plotBottomY;
-  const xLeft = PAD_L;
-  const xRight = s.w - PAD_R;
-  const steps = 5;
-  for (let i = 1; i < steps; i++) {
-    const t = i / steps;
-    const y = PAD_T + t * (yBase - PAD_T);
-    ctx.beginPath();
-    ctx.moveTo(xLeft, y);
-    ctx.lineTo(xRight, y);
-    ctx.stroke();
-  }
-  ctx.restore();
+  // Keep chart background clean: no horizontal grid lines.
 }
 
 function drawChips(chart, s) {
@@ -2050,7 +2149,7 @@ function drawIndicators(chart, s) {
 }
 
 function drawBsp(arr, s) {
-  // draw bsp types below candles
+  // draw bsp types and dashed guide lines per signal bar
   const groups = {};
   for (const p of arr || []) {
     if (p.x < s.xMin || p.x > s.xMax) continue;
@@ -2066,10 +2165,26 @@ function drawBsp(arr, s) {
   ctx.font = "bold 22px Consolas";
   const colBuy = cssVar("--bspBuy", "#dc2626");
   const colSell = cssVar("--bspSell", "#16a34a");
+  const byX = new Map((s.visibleK || []).map((k) => [k.x, k]));
 
   for (const x of xs) {
     const xp = s.x(x);
     const ps = groups[x];
+    const yTopText = bspBaseY - (Math.min(ps.length, 8) - 1) * lineH - 18;
+    const k = byX.get(x);
+    if (k) {
+      const anchorY = s.y(k.l);
+      const toY = Math.max(PAD_T + 2, Math.min(s.contentBottom - 2, yTopText));
+      ctx.save();
+      ctx.lineWidth = 1;
+      ctx.setLineDash([5, 4]);
+      ctx.strokeStyle = cssVar("--grid", "#94a3b8");
+      ctx.beginPath();
+      ctx.moveTo(xp, anchorY);
+      ctx.lineTo(xp, toY);
+      ctx.stroke();
+      ctx.restore();
+    }
     // stack labels (并列换行 -> vertical stacking)
     const maxLines = 8;
     for (let i = 0; i < Math.min(ps.length, maxLines); i++) {
@@ -2153,18 +2268,42 @@ async function api(path, body) {
   return data;
 }
 
+function detectBspPromptOnLastBar(payload) {
+  if (!payload || !payload.ready || !payload.chart || !payload.chart.kline || payload.chart.kline.length === 0) return false;
+  const lastX = payload.chart.kline[payload.chart.kline.length - 1].x;
+  const hits = (payload.chart.bsp || []).filter((p) => p.x === lastX);
+  if (hits.length <= 0) return false;
+  const lines = hits.map((p) => (p.is_buy ? "买点" : "卖点") + ":" + p.label).join("\\n");
+  const key = lastX + "|" + lines;
+  if (lastSeenBspKey.has(key)) return false;
+  lastSeenBspKey.add(key);
+  showBspPrompt(payload, lines, key);
+  setMsg(`出现买卖点 @${payload.time}\\n${lines}`);
+  return true;
+}
+
+async function stepOnce(logMessage) {
+  const prevStepIdx = lastPayload && Number.isFinite(lastPayload.step_idx) ? Number(lastPayload.step_idx) : null;
+  const payload = await api("/api/step");
+  if (logMessage) setMsg(payload.message || "步进成功");
+  refreshUI(payload, { afterStep: true });
+  const interrupted = detectBspPromptOnLastBar(payload);
+  const reachedEnd = prevStepIdx !== null && Number(payload.step_idx) === prevStepIdx;
+  return { payload, interrupted, reachedEnd };
+}
+
 function refreshUI(payload, options) {
   const afterStep = options && options.afterStep;
   lastPayload = payload;
   sessionFinished = !!payload.finished;
+  syncTradesFromPayload(payload);
   syncIndicatorControls();
   if (payload.ready && payload.chart && payload.chart.bsp) {
-    for (const p of payload.chart.bsp) {
-      const k = `${p.x}|${p.label}|${p.is_buy ? 1 : 0}`;
-      if (bspHistoryKey.has(k)) continue;
-      bspHistoryKey.add(k);
-      bspHistory.push(p);
-    }
+    bspHistory = payload.chart.bsp.slice();
+    bspHistoryKey = new Set(bspHistory.map((p) => `${p.x}|${p.label}|${p.is_buy ? 1 : 0}`));
+  } else {
+    bspHistory = [];
+    bspHistoryKey = new Set();
   }
   setState(payload);
   if (payload.ready) {
@@ -2192,6 +2331,12 @@ function refreshUI(payload, options) {
         }
       }
       if (afterStep) ensureLatestKVisible();
+      lastSeenBspKey = new Set(
+        [...lastSeenBspKey].filter((k) => {
+          const x = Number(String(k).split("|")[0]);
+          return Number.isFinite(x) && x <= allXMax;
+        })
+      );
       draw(payload.chart);
     }
   }
@@ -2245,25 +2390,51 @@ $("btnStep").onclick = async () => {
   syncStepButtonState();
   hideGlobalLoading();
   try {
-    const payload = await api("/api/step");
-    setMsg(payload.message || "步进成功");
-    refreshUI(payload, { afterStep: true });
-    // 先渲染最新K线，再提示“本根新增K线”上出现的买卖点
-    if (payload && payload.ready && payload.chart && payload.chart.kline && payload.chart.kline.length > 0) {
-      const lastX = payload.chart.kline[payload.chart.kline.length - 1].x;
-      const hits = (payload.chart.bsp || []).filter(p => p.x === lastX);
-      if (hits.length > 0) {
-        const lines = hits.map(p => (p.is_buy ? "买点" : "卖点") + ":" + p.label).join("\\n");
-        const key = lastX + "|" + lines;
-        if (!lastSeenBspKey.has(key)) {
-          lastSeenBspKey.add(key);
-          showBspPrompt(payload, lines, key);
-          setMsg(`出现买卖点 @${payload.time}\\n${lines}`);
-        }
-      }
-    }
+    await stepOnce(true);
   } catch (e) {
     setMsg("步进失败：" + e.message);
+  } finally {
+    stepInFlight = false;
+    syncStepButtonState();
+  }
+};
+
+$("btnStepN").onclick = async () => {
+  if ($("btnStepN").disabled || pendingBspPrompt || stepInFlight) return;
+  const n = getStepNValue();
+  let done = 0;
+  stepInFlight = true;
+  syncStepButtonState();
+  hideGlobalLoading();
+  try {
+    for (let i = 0; i < n; i++) {
+      const result = await stepOnce(false);
+      done += 1;
+      if (result.interrupted || result.reachedEnd) break;
+    }
+    setMsg(`步进 N 完成：N=${n}，实际执行=${done}`);
+  } catch (e) {
+    setMsg("步进 N 失败：" + e.message);
+  } finally {
+    stepInFlight = false;
+    syncStepButtonState();
+  }
+};
+
+$("btnBackN").onclick = async () => {
+  if ($("btnBackN").disabled || stepInFlight) return;
+  const n = getStepNValue();
+  stepInFlight = true;
+  syncStepButtonState();
+  hideGlobalLoading();
+  try {
+    clearBspPrompt();
+    const payload = await api("/api/back_n", { n });
+    lastSeenBspKey = new Set();
+    refreshUI(payload, { afterStep: true });
+    setMsg(payload.message || `后退 N 完成：N=${n}`);
+  } catch (e) {
+    setMsg("后退 N 失败：" + e.message);
   } finally {
     stepInFlight = false;
     syncStepButtonState();
@@ -2274,16 +2445,6 @@ $("btnBuy").onclick = async () => {
   try {
     const payload = await api("/api/buy");
     setMsg(payload.message || "买入成功");
-    if (payload && payload.ready && payload.chart && payload.chart.kline && payload.chart.kline.length > 0 && payload.price !== null) {
-      const buyX = payload.chart.kline[payload.chart.kline.length - 1].x;
-      activeTrade = {
-        buyX: buyX,
-        buyPrice: Number(payload.price),
-        shares: Number(payload.account.position || 0),
-        sellX: null,
-        sellPrice: null,
-      };
-    }
     refreshUI(payload);
   } catch (e) {
     setMsg("买入失败：" + e.message);
@@ -2294,19 +2455,6 @@ $("btnSell").onclick = async () => {
   try {
     const payload = await api("/api/sell");
     setMsg(payload.message || "卖出成功");
-    if (payload && payload.ready && payload.chart && payload.chart.kline.length > 0 && payload.price !== null) {
-      const lastX = payload.chart.kline[payload.chart.kline.length - 1].x;
-      if (activeTrade && activeTrade.buyX !== null) {
-        tradeHistory.push({
-          buyX: activeTrade.buyX,
-          buyPrice: activeTrade.buyPrice,
-          shares: activeTrade.shares || 0,
-          sellX: lastX,
-          sellPrice: Number(payload.price),
-        });
-      }
-    }
-    activeTrade = null;
     refreshUI(payload);
   } catch (e) {
     setMsg("卖出失败：" + e.message);
@@ -2477,6 +2625,14 @@ def api_init(req: InitReq):
         APP_STATE.account.reset(req.initial_cash)
         APP_STATE.ready = True
         APP_STATE.finished = False
+        APP_STATE.session_params = {
+            "code": code_norm,
+            "begin_date": req.begin_date,
+            "end_date": req.end_date,
+            "autype": autype,
+            "initial_cash": req.initial_cash,
+        }
+        APP_STATE.trade_events = []
         # init后先推进一根，确保前端有可视数据并可交互
         APP_STATE.stepper.step()
         return APP_STATE.build_payload(stock_name=APP_STOCK_NAME)
@@ -2507,7 +2663,17 @@ def api_buy():
         raise HTTPException(status_code=400, detail="当前会话已结束，请重新训练")
     try:
         price = APP_STATE.stepper.current_price()
-        detail = APP_STATE.account.buy_with_all_cash(price, APP_STATE.stepper.step_idx)
+        step_idx = APP_STATE.stepper.step_idx
+        detail = APP_STATE.account.buy_with_all_cash(price, step_idx)
+        APP_STATE.trade_events.append(
+            {
+                "side": "buy",
+                "step_idx": step_idx,
+                "x": APP_STATE._current_kline_x(),
+                "price": float(price),
+                "shares": int(detail.get("shares", 0)),
+            }
+        )
         payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME)
         payload["message"] = f"买入成功：{json.dumps(detail, ensure_ascii=False)}"
         return payload
@@ -2523,9 +2689,37 @@ def api_sell():
         raise HTTPException(status_code=400, detail="当前会话已结束，请重新训练")
     try:
         price = APP_STATE.stepper.current_price()
-        detail = APP_STATE.account.sell_all(price, APP_STATE.stepper.step_idx)
+        step_idx = APP_STATE.stepper.step_idx
+        detail = APP_STATE.account.sell_all(price, step_idx)
+        APP_STATE.trade_events.append(
+            {
+                "side": "sell",
+                "step_idx": step_idx,
+                "x": APP_STATE._current_kline_x(),
+                "price": float(price),
+                "shares": int(detail.get("shares", 0)),
+            }
+        )
         payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME)
         payload["message"] = f"卖出结果：{json.dumps(detail, ensure_ascii=False)}"
+        return payload
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.post("/api/back_n")
+def api_back_n(req: BackNReq):
+    if not APP_STATE.ready:
+        raise HTTPException(status_code=400, detail="请先初始化会话")
+    try:
+        n = int(req.n)
+        if n < 1:
+            raise ValueError("N 必须>=1")
+        cur = APP_STATE.stepper.step_idx
+        target = max(0, cur - n)
+        APP_STATE.rebuild_to_step(target)
+        payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME)
+        payload["message"] = f"自动重建回放：已后退 {cur - target} 根（目标 step={target}）"
         return payload
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -2554,6 +2748,8 @@ def api_reset():
     APP_STATE.account = PaperAccount(initial_cash=10_000, cash=10_000)
     APP_STATE.ready = False
     APP_STATE.finished = False
+    APP_STATE.session_params = None
+    APP_STATE.trade_events = []
     return APP_STATE.build_payload(stock_name=APP_STOCK_NAME)
 
 
