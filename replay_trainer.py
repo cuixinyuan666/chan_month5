@@ -590,6 +590,51 @@ HTML = """
       from { transform: rotate(0deg); }
       to { transform: rotate(360deg); }
     }
+    .bspPrompt {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: rgba(2, 6, 23, 0.45);
+      z-index: 10001;
+    }
+    .bspPrompt.show { display: flex; }
+    .bspPrompt .panel {
+      width: min(560px, calc(100vw - 24px));
+      border: 1px solid var(--legendBorder);
+      border-radius: 10px;
+      background: var(--legendBg);
+      color: var(--legendText);
+      box-shadow: 0 18px 42px rgba(2, 6, 23, 0.32);
+      padding: 16px;
+      box-sizing: border-box;
+    }
+    .bspPromptTitle {
+      font-size: 16px;
+      font-weight: 700;
+      margin-bottom: 8px;
+      color: #b91c1c;
+    }
+    .bspPromptBody {
+      white-space: pre-wrap;
+      line-height: 1.6;
+      margin-bottom: 10px;
+      font-family: Consolas, monospace;
+      font-size: 13px;
+    }
+    .bspPromptHint {
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 10px;
+    }
+    .bspPromptActions {
+      display: flex;
+      justify-content: flex-end;
+    }
+    .bspPromptActions button {
+      min-width: 120px;
+    }
   </style>
 </head>
 <body>
@@ -723,6 +768,16 @@ HTML = """
       <div id="globalLoadingText">正在加载会话，请稍候...</div>
     </div>
   </div>
+  <div id="bspPrompt" class="bspPrompt" aria-hidden="true">
+    <div class="panel">
+      <div class="bspPromptTitle">检测到当前K线出现买卖点</div>
+      <div id="bspPromptBody" class="bspPromptBody"></div>
+      <div class="bspPromptHint">只能按 Enter 或左键点击确认，确认前将禁止步进到下一根K线。</div>
+      <div class="bspPromptActions">
+        <button id="bspPromptConfirm" type="button">确认（Enter / 左键）</button>
+      </div>
+    </div>
+  </div>
 <script>
 const $ = (id) => document.getElementById(id);
 const msgList = $("msgList");
@@ -757,6 +812,8 @@ let lastSeenBspKey = new Set();
 let bspHistory = [];
 let bspHistoryKey = new Set();
 let sessionFinished = false;
+let stepInFlight = false;
+let pendingBspPrompt = null;
 let crosshairEnabled = false;
 let crosshairX = null;
 let crosshairY = null;
@@ -803,6 +860,33 @@ function setGlobalLoading(visible, text) {
 
 function hideGlobalLoading() {
   setGlobalLoading(false);
+}
+
+function syncStepButtonState() {
+  const disabled = !lastPayload || !lastPayload.ready || sessionFinished || stepInFlight || !!pendingBspPrompt;
+  $("btnStep").disabled = disabled;
+}
+
+function showBspPrompt(payload, lines, key) {
+  pendingBspPrompt = {
+    key,
+    time: payload && payload.time ? payload.time : "-",
+    lines
+  };
+  const body = $("bspPromptBody");
+  if (body) body.textContent = `Time: ${pendingBspPrompt.time}\n${pendingBspPrompt.lines}`;
+  const box = $("bspPrompt");
+  if (box) box.classList.add("show");
+  const btn = $("bspPromptConfirm");
+  if (btn) btn.focus();
+  syncStepButtonState();
+}
+
+function clearBspPrompt() {
+  pendingBspPrompt = null;
+  const box = $("bspPrompt");
+  if (box) box.classList.remove("show");
+  syncStepButtonState();
 }
 
 function formatDateWithWeekday(raw) {
@@ -1077,11 +1161,22 @@ canvas.addEventListener("click", (e) => {
 });
 
 window.addEventListener("keydown", (e) => {
+  if (pendingBspPrompt) {
+    if (e.code === "Enter") {
+      e.preventDefault();
+      clearBspPrompt();
+      return;
+    }
+    if (e.code === "Space") {
+      e.preventDefault();
+      return;
+    }
+  }
   const tag = (document.activeElement && document.activeElement.tagName) ? document.activeElement.tagName.toLowerCase() : "";
   if (tag === "input" || tag === "select" || tag === "textarea") return;
   if (e.code === "Space") {
     e.preventDefault();
-    if (!$("btnStep").disabled) $("btnStep").click();
+    if (!$("btnStep").disabled && !pendingBspPrompt && !stepInFlight) $("btnStep").click();
     return;
   }
   if (e.code === "PageUp") {
@@ -2100,7 +2195,7 @@ function refreshUI(payload, options) {
       draw(payload.chart);
     }
   }
-  $("btnStep").disabled = !payload.ready || sessionFinished;
+  syncStepButtonState();
   $("btnFinish").disabled = !payload.ready || sessionFinished;
   $("btnBuy").disabled = !payload.ready || sessionFinished || payload.price === null || payload.account.position > 0;
   $("btnSell").disabled = !payload.ready || sessionFinished || !payload.account.can_sell;
@@ -2134,6 +2229,8 @@ $("btnInit").onclick = async () => {
     bspHistoryKey = new Set();
     lastSeenBspKey = new Set();
     sessionFinished = false;
+    stepInFlight = false;
+    clearBspPrompt();
     refreshUI(payload);
   } catch (e) {
     setMsg("加载失败：" + e.message);
@@ -2143,6 +2240,9 @@ $("btnInit").onclick = async () => {
 };
 
 $("btnStep").onclick = async () => {
+  if ($("btnStep").disabled || pendingBspPrompt || stepInFlight) return;
+  stepInFlight = true;
+  syncStepButtonState();
   hideGlobalLoading();
   try {
     const payload = await api("/api/step");
@@ -2157,15 +2257,16 @@ $("btnStep").onclick = async () => {
         const key = lastX + "|" + lines;
         if (!lastSeenBspKey.has(key)) {
           lastSeenBspKey.add(key);
-          setTimeout(() => {
-            alert(`出现买卖点\\n${lines}`);
-            setMsg(`出现买卖点 @${payload.time}\\n${lines}`);
-          }, 0);
+          showBspPrompt(payload, lines, key);
+          setMsg(`出现买卖点 @${payload.time}\\n${lines}`);
         }
       }
     }
   } catch (e) {
     setMsg("步进失败：" + e.message);
+  } finally {
+    stepInFlight = false;
+    syncStepButtonState();
   }
 };
 
@@ -2281,9 +2382,11 @@ $("btnReset").onclick = async () => {
     lastSeenBspKey = new Set();
     lastPayload = null;
     sessionFinished = false;
+    stepInFlight = false;
     userAdjustedView = false;
     viewReady = false;
     viewYShiftRatio = 0;
+    clearBspPrompt();
     setState(payload);
     ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
     setMsg("已重置，可重新配置并加载会话。");
@@ -2301,6 +2404,25 @@ $("btnExit").onclick = () => {
 };
 
 $("theme").onchange = () => applyThemeFromSelect();
+if ($("bspPrompt")) {
+  $("bspPrompt").addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+  });
+}
+if ($("bspPromptConfirm")) {
+  $("bspPromptConfirm").addEventListener("keydown", (e) => {
+    if (e.code === "Space") e.preventDefault();
+  });
+  $("bspPromptConfirm").addEventListener("mousedown", (e) => {
+    if (e.button !== 0) {
+      e.preventDefault();
+      return;
+    }
+    e.preventDefault();
+    clearBspPrompt();
+  });
+}
 for (const id of ["chipEnabled"]) {
   $(id).onchange = () => {
     if (!lastPayload || !lastPayload.ready) return;
