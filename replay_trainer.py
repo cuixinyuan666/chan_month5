@@ -670,8 +670,11 @@ const PAD_B = 90;
 
 let isPanning = false;
 let panStartX = 0;
+let panStartY = 0;
 let panStartViewMin = 0;
 let panStartViewMax = 0;
+let panStartYShiftRatio = 0;
+let viewYShiftRatio = 0;
 
 let activeTrade = null;
 let tradeHistory = [];
@@ -873,8 +876,10 @@ canvas.addEventListener("mousedown", (e) => {
   if (!lastPayload || !lastPayload.ready || !viewReady) return;
   isPanning = true;
   panStartX = e.clientX;
+  panStartY = e.clientY;
   panStartViewMin = viewXMin;
   panStartViewMax = viewXMax;
+  panStartYShiftRatio = viewYShiftRatio;
 });
 window.addEventListener("mouseup", () => {
   isPanning = false;
@@ -884,6 +889,7 @@ window.addEventListener("mousemove", (e) => {
   const rect = canvas.getBoundingClientRect();
   if (e.clientY < rect.top || e.clientY > rect.bottom) return;
   const dx = e.clientX - panStartX;
+  const dy = e.clientY - panStartY;
   const span = panStartViewMax - panStartViewMin;
   const usableW = Math.max(1, canvas.clientWidth - PAD_L - PAD_R);
   const dxBars = Math.round((-dx / usableW) * span);
@@ -895,11 +901,16 @@ window.addEventListener("mousemove", (e) => {
   }
   viewXMin = newMin;
   viewXMax = newMax;
+  const s = toScaler(lastPayload.chart, Math.max(allXMin, viewXMin), viewXMax);
+  const plotH = Math.max(1, s.plotH);
+  viewYShiftRatio = panStartYShiftRatio + (dy / plotH);
+  viewYShiftRatio = Math.max(-3, Math.min(3, viewYShiftRatio));
   userAdjustedView = true;
   draw(lastPayload.chart);
 });
 
 canvas.addEventListener("mousemove", (e) => {
+  if (isPanning) return;
   if (!crosshairEnabled || !lastPayload || !lastPayload.ready) return;
   const rect = canvas.getBoundingClientRect();
   const s = toScaler(lastPayload.chart, Math.max(allXMin, viewXMin), viewXMax);
@@ -1132,6 +1143,12 @@ function toScaler(chart, xMin, xMax) {
   if (!isFinite(yMin) || !isFinite(yMax)) {
     yMin = 0;
     yMax = 1;
+  }
+  const baseYSpan = Math.max(1e-6, yMax - yMin);
+  if (viewYShiftRatio !== 0) {
+    const yOffset = baseYSpan * viewYShiftRatio;
+    yMin += yOffset;
+    yMax += yOffset;
   }
 
   const xSpan = Math.max(1, xMax - xMin);
@@ -1889,6 +1906,7 @@ $("btnInit").onclick = async () => {
     $("autype").disabled = true;
     userAdjustedView = false;
     viewReady = false;
+    viewYShiftRatio = 0;
     activeTrade = null;
     tradeHistory = [];
     bspHistory = [];
@@ -2038,6 +2056,9 @@ $("btnReset").onclick = async () => {
     lastSeenBspKey = new Set();
     lastPayload = null;
     sessionFinished = false;
+    userAdjustedView = false;
+    viewReady = false;
+    viewYShiftRatio = 0;
     setState(payload);
     ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
     setMsg("已重置，可重新配置并加载会话。");
