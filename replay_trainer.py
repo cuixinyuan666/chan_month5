@@ -255,14 +255,14 @@ class InitReq(BaseModel):
     code: str
     begin_date: str
     end_date: Optional[str] = None
-    initial_cash: float = 1_000_000
+    initial_cash: float = 10_000
     autype: str = "qfq"
 
 
 class AppState:
     def __init__(self) -> None:
         self.stepper = ChanStepper()
-        self.account = PaperAccount(initial_cash=1_000_000, cash=1_000_000)
+        self.account = PaperAccount(initial_cash=10_000, cash=10_000)
         self.ready = False
         self.finished = False
 
@@ -553,6 +553,43 @@ HTML = """
     .card.collapsed { opacity: 0.82; }
     .card.collapsed .cfg-editable { display: none; }
     .btnRow { display: flex; flex-wrap: wrap; gap: 6px; }
+    .globalLoading {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: rgba(15, 23, 42, 0.36);
+      backdrop-filter: blur(1px);
+      z-index: 9999;
+    }
+    .globalLoading.show { display: flex; }
+    .globalLoading .panel {
+      min-width: 260px;
+      padding: 18px 20px;
+      border-radius: 10px;
+      border: 1px solid var(--legendBorder);
+      background: var(--legendBg);
+      color: var(--legendText);
+      box-shadow: 0 14px 36px rgba(2, 6, 23, 0.26);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font: 14px Consolas, monospace;
+    }
+    .globalLoading .spinner {
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      border: 2px solid rgba(59, 130, 246, 0.22);
+      border-top-color: #2563eb;
+      animation: spin 0.8s linear infinite;
+      flex: 0 0 auto;
+    }
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
   </style>
 </head>
 <body>
@@ -570,7 +607,7 @@ HTML = """
         <div class="row cfg-editable"><label>代码</label><input id="code" value="600340" /></div>
         <div class="row cfg-editable"><label>开始日期</label><input id="begin" type="date" value="2018-01-01" /></div>
         <div class="row cfg-editable"><label>结束日期</label><input id="end" type="date" value="" placeholder="可空" /></div>
-        <div class="row cfg-editable"><label>初始资金</label><input id="cash" value="1000000" /></div>
+        <div class="row cfg-editable"><label>初始资金</label><input id="cash" value="10000" /></div>
         <div class="row cfg-editable">
           <label>复权</label>
           <select id="autype">
@@ -614,7 +651,7 @@ HTML = """
         <div class="row"><label>价格桶</label>
           <select id="chipBucketStep">
             <option value="0.0005">0.0005</option>
-            <option value="0.001" selected>0.001</option>
+            <option value="0.001">0.001</option>
             <option value="0.002">0.002</option>
             <option value="0.003">0.003</option>
             <option value="0.005">0.005</option>
@@ -622,7 +659,7 @@ HTML = """
             <option value="0.01">0.01</option>
             <option value="0.02">0.02</option>
             <option value="0.05">0.05</option>
-            <option value="0.1">0.1</option>
+            <option value="0.1" selected>0.1</option>
           </select>
         </div>
         <div class="row"><label>副图槽位</label>
@@ -680,6 +717,12 @@ HTML = """
       <canvas id="chart"></canvas>
     </div>
   </div>
+  <div id="globalLoading" class="globalLoading" aria-hidden="true">
+    <div class="panel">
+      <div class="spinner"></div>
+      <div id="globalLoadingText">正在加载会话，请稍候...</div>
+    </div>
+  </div>
 <script>
 const $ = (id) => document.getElementById(id);
 const msgList = $("msgList");
@@ -693,10 +736,12 @@ let viewXMax = 0;
 let viewReady = false;
 let userAdjustedView = false;
 
-const PAD_L = 55;
-const PAD_R = 10;
+const PAD_L = 64;
+const PAD_R = 64;
 const PAD_T = 10;
 const PAD_B = 90;
+const PRICE_AXIS_STEP = 0.5;
+const WEEKDAY_NAMES = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
 
 let isPanning = false;
 let panStartX = 0;
@@ -745,7 +790,49 @@ function getIndicatorConfig() {
 
 function getChipBucketStep() {
   const v = Number($("chipBucketStep").value);
-  return Number.isFinite(v) && v > 0 ? v : 0.001;
+  return Number.isFinite(v) && v > 0 ? v : 0.1;
+}
+
+function setGlobalLoading(visible, text) {
+  const overlay = $("globalLoading");
+  if (!overlay) return;
+  const txt = $("globalLoadingText");
+  if (txt && text) txt.textContent = text;
+  overlay.classList.toggle("show", !!visible);
+}
+
+function hideGlobalLoading() {
+  setGlobalLoading(false);
+}
+
+function formatDateWithWeekday(raw) {
+  const text = String(raw || "").trim();
+  if (!text) return "-";
+  const datePart = text.slice(0, 10);
+  const d = new Date(`${datePart}T00:00:00`);
+  if (!Number.isNaN(d.getTime())) return `${text} ${WEEKDAY_NAMES[d.getDay()]}`;
+  return text;
+}
+
+function formatPriceText(v, digits = 3) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "-";
+  const clean = Math.abs(n) < 1e-9 ? 0 : n;
+  return clean.toFixed(digits);
+}
+
+function getBspAtX(chart, xVal) {
+  const merged = [...(bspHistory || []), ...(((chart && chart.bsp) || []))];
+  const tags = [];
+  const seen = new Set();
+  for (const p of merged) {
+    if (!p || p.x !== xVal) continue;
+    const txt = `${p.is_buy ? "买点" : "卖点"}:${p.label}`;
+    if (seen.has(txt)) continue;
+    seen.add(txt);
+    tags.push(txt);
+  }
+  return tags;
 }
 
 function getChipStretchExponent() {
@@ -1240,6 +1327,7 @@ function toScaler(chart, xMin, xMax) {
     mainType,
     x: (x) => PAD_L + ((x - xMin) / xSpan) * plotW,
     y: (y) => PAD_T + ((yMax - y) / ySpan) * plotH,
+    yFromPx: (py) => yMax - ((py - PAD_T) / Math.max(1, plotH)) * ySpan,
   };
 }
 
@@ -1257,11 +1345,37 @@ function drawAxes(s) {
   ctx.lineTo(xRight, yBase);
   ctx.stroke();
 
-  // main y labels
+  // main y labels/ticks on both sides, fixed to 0.5 intervals
+  const tickStep = PRICE_AXIS_STEP;
+  const startTick = Math.ceil(s.yMin / tickStep);
+  const endTick = Math.floor(s.yMax / tickStep);
+  ctx.save();
+  ctx.strokeStyle = cssVar("--grid", "#e2e8f0");
   ctx.fillStyle = cssVar("--muted", "#475569");
   ctx.font = "12px Consolas";
-  ctx.fillText(s.yMax.toFixed(2), 4, PAD_T + 10);
-  ctx.fillText(s.yMin.toFixed(2), 4, yBase);
+  ctx.lineWidth = 1;
+  for (let t = startTick; t <= endTick; t++) {
+    const p = t * tickStep;
+    const y = s.y(p);
+    if (y < PAD_T || y > yBase) continue;
+    ctx.globalAlpha = 0.2;
+    ctx.beginPath();
+    ctx.moveTo(xLeft, y);
+    ctx.lineTo(xRight, y);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    ctx.beginPath();
+    ctx.moveTo(xLeft - 4, y);
+    ctx.lineTo(xLeft, y);
+    ctx.moveTo(xRight, y);
+    ctx.lineTo(xRight + 4, y);
+    ctx.stroke();
+    const txt = formatPriceText(p, 1);
+    ctx.fillText(txt, 4, y + 4);
+    const tw = ctx.measureText(txt).width;
+    ctx.fillText(txt, s.w - tw - 4, y + 4);
+  }
+  ctx.restore();
   
   if (s.subPanels.length > 0) {
     ctx.font = "10px Consolas";
@@ -1322,7 +1436,13 @@ function drawCrosshair(s) {
   const x = s.x(refK.x);
   const y = Math.max(PAD_T, Math.min(s.contentBottom, crosshairY));
   const t = refK.t || "-";
-  const price = refK.c;
+  const crossPrice = s.yFromPx(y);
+  const bspTags = getBspAtX(chart, refK.x);
+  const infoRows = [
+    formatDateWithWeekday(t),
+    `O:${formatPriceText(refK.o)} H:${formatPriceText(refK.h)} L:${formatPriceText(refK.l)} C:${formatPriceText(refK.c)}`,
+    bspTags.length > 0 ? `BSP:${bspTags.join(" | ")}` : "BSP:-",
+  ];
 
   ctx.save();
   ctx.strokeStyle = cssVar("--grid", "#64748b");
@@ -1335,15 +1455,50 @@ function drawCrosshair(s) {
   ctx.lineTo(s.w - PAD_R, y);
   ctx.stroke();
   ctx.setLineDash([]);
+
+  // Dynamic horizontal-line price label on both y-axes.
+  ctx.font = "12px Consolas";
+  const axisPrice = formatPriceText(crossPrice, 3);
+  const axisPad = 6;
+  const axisH = 18;
+  const axisW = ctx.measureText(axisPrice).width + axisPad * 2;
+  const axisY = y - axisH / 2;
+  const leftX = Math.max(2, PAD_L - axisW - 4);
+  const rightX = s.w - PAD_R + 4;
   ctx.fillStyle = cssVar("--legendBg", "rgba(255,255,255,0.92)");
   ctx.strokeStyle = cssVar("--legendBorder", "rgba(148,163,184,0.6)");
-  ctx.beginPath();
-  ctx.rect(x + 8, y - 30, 152, 26);
-  ctx.fill();
-  ctx.stroke();
+  ctx.fillRect(leftX, axisY, axisW, axisH);
+  ctx.strokeRect(leftX, axisY, axisW, axisH);
+  ctx.fillRect(rightX, axisY, axisW, axisH);
+  ctx.strokeRect(rightX, axisY, axisW, axisH);
   ctx.fillStyle = cssVar("--legendText", "#0f172a");
-  ctx.font = "12px Consolas";
-  ctx.fillText(`${t}  ${price.toFixed(3)}`, x + 14, y - 12);
+  ctx.fillText(axisPrice, leftX + axisPad, y + 4);
+  ctx.fillText(axisPrice, rightX + axisPad, y + 4);
+
+  // OHLC + date + weekday + BSP
+  let maxW = 0;
+  for (const row of infoRows) {
+    const w = ctx.measureText(row).width;
+    if (w > maxW) maxW = w;
+  }
+  const cardPad = 8;
+  const rowH = 16;
+  const boxW = Math.max(170, maxW + cardPad * 2);
+  const boxH = cardPad * 2 + rowH * infoRows.length;
+  let boxX = x + 12;
+  if (boxX + boxW > s.w - PAD_R - 4) boxX = x - boxW - 12;
+  boxX = Math.max(PAD_L + 4, Math.min(s.w - PAD_R - boxW - 4, boxX));
+  let boxY = y - boxH - 10;
+  boxY = Math.max(PAD_T + 4, Math.min(s.contentBottom - boxH - 4, boxY));
+
+  ctx.fillStyle = cssVar("--legendBg", "rgba(255,255,255,0.92)");
+  ctx.strokeStyle = cssVar("--legendBorder", "rgba(148,163,184,0.6)");
+  ctx.fillRect(boxX, boxY, boxW, boxH);
+  ctx.strokeRect(boxX, boxY, boxW, boxH);
+  ctx.fillStyle = cssVar("--legendText", "#0f172a");
+  for (let i = 0; i < infoRows.length; i++) {
+    ctx.fillText(infoRows[i], boxX + cardPad, boxY + cardPad + 12 + i * rowH);
+  }
   ctx.restore();
 }
 
@@ -1953,6 +2108,7 @@ function refreshUI(payload, options) {
 }
 
 $("btnInit").onclick = async () => {
+  setGlobalLoading(true, "正在加载会话，请稍候...");
   try {
     const payload = await api("/api/init", {
       code: $("code").value,
@@ -1981,10 +2137,13 @@ $("btnInit").onclick = async () => {
     refreshUI(payload);
   } catch (e) {
     setMsg("加载失败：" + e.message);
+  } finally {
+    hideGlobalLoading();
   }
 };
 
 $("btnStep").onclick = async () => {
+  hideGlobalLoading();
   try {
     const payload = await api("/api/step");
     setMsg(payload.message || "步进成功");
@@ -2105,6 +2264,7 @@ $("btnFinish").onclick = async () => {
 
 $("btnReset").onclick = async () => {
   try {
+    hideGlobalLoading();
     const payload = await api("/api/reset");
     $("btnInit").disabled = false;
     $("code").disabled = false;
@@ -2148,6 +2308,7 @@ for (const id of ["chipEnabled"]) {
   };
 }
 applyThemeFromSelect();
+hideGlobalLoading();
 </script>
 </body>
 </html>
@@ -2268,7 +2429,7 @@ def api_reset():
     global APP_STOCK_NAME
     APP_STOCK_NAME = None
     APP_STATE.stepper = ChanStepper()
-    APP_STATE.account = PaperAccount(initial_cash=1_000_000, cash=1_000_000)
+    APP_STATE.account = PaperAccount(initial_cash=10_000, cash=10_000)
     APP_STATE.ready = False
     APP_STATE.finished = False
     return APP_STATE.build_payload(stock_name=APP_STOCK_NAME)
@@ -2276,4 +2437,3 @@ def api_reset():
 
 if __name__ == "__main__":
     uvicorn.run(app, host="127.0.0.1", port=8000)
-
