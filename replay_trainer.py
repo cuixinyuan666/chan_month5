@@ -857,22 +857,77 @@ HTML = """
       top: 16px;
       left: 16px;
       width: 280px;
+      min-width: 220px;
+      min-height: 64px;
       background: rgba(255, 255, 255, 0.95);
-      border-radius: 12px;
+      border-radius: 14px;
       box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
-      padding: 16px;
+      padding: 0;
       z-index: 10002;
       border: 2px solid #e2e8f0;
       transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
       backdrop-filter: blur(8px);
+      overflow: hidden;
     }
     [data-theme="dark"] .tradeStatusOverlay { background: rgba(30, 41, 59, 0.95); border-color: #334155; }
-    .tradeStatusTitle { font-weight: bold; margin-bottom: 12px; font-size: 14px; text-align: center; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px; cursor: move; user-select: none; }
+    .tradeStatusTitleBar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 12px;
+      background: linear-gradient(135deg, rgba(37,99,235,0.18), rgba(14,165,233,0.08));
+      border-bottom: 1px solid #dbeafe;
+      cursor: move;
+      user-select: none;
+      gap: 8px;
+    }
+    .tradeStatusTitle {
+      font-weight: bold;
+      font-size: 14px;
+      letter-spacing: 0.5px;
+      color: #0f172a;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .tradeStatusDot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #22c55e, #16a34a);
+      box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.18);
+    }
+    .tradeStatusActions { display: flex; gap: 6px; }
+    .tradeStatusMiniBtn {
+      width: 24px;
+      height: 24px;
+      border-radius: 6px;
+      border: 1px solid rgba(148, 163, 184, 0.6);
+      background: rgba(255,255,255,0.75);
+      color: var(--text);
+      font-size: 12px;
+      padding: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .tradeStatusMiniBtn:hover { background: rgba(255,255,255,0.95); }
     .tradeStatusOverlay.dragging .tradeStatusTitle { opacity: 0.85; }
+    .tradeStatusBody { padding: 12px 14px 16px; }
     .tradeStatusGrid { display: grid; grid-template-columns: 1fr; gap: 6px; }
     .tsItem { display: flex; justify-content: space-between; font-family: Consolas, monospace; }
     .tsItem label { color: #64748b; font-size: 12px; }
     .tsItem span { font-weight: bold; }
+    .tradeStatusOverlay.minimized .tradeStatusBody { display: none; }
+    .tradeStatusResizeHandle {
+      position: absolute;
+      right: 0;
+      bottom: 0;
+      width: 18px;
+      height: 18px;
+      cursor: nwse-resize;
+      background: linear-gradient(135deg, transparent 45%, rgba(37,99,235,0.45) 45%, rgba(37,99,235,0.45) 55%, transparent 55%);
+    }
     .pnl-plus { color: #ef4444; }
     .pnl-minus { color: #22c55e; }
     .overlay-plus { border-color: #ef4444; background: rgba(254, 242, 242, 0.95); }
@@ -989,16 +1044,16 @@ HTML = """
       <div class="title">chan.py 复盘训练器 <span class="tip-icon" data-tip="Chan.py 缠论复盘交易系统">!</span></div>
       <div class="card" id="configCard">
         <div class="btnRow">
-          <button id="btnSettingsOpen">图表显示设置... <small>(P)</small></button>
+          <button id="btnSettingsOpen" data-tip="打开图表显示设置面板，可调整主题、指标与绘制项。">图表显示设置... <small>(P)</small></button>
         </div>
         <div class="row cfg-editable">
           <label>代码</label>
           <input id="code" value="600340" />
           <span class="tip-icon" data-tip="输入6位数字代码">!</span>
         </div>
-        <div class="row cfg-editable"><label>开始日期</label><input id="begin" type="date" value="2018-01-01" /></div>
-        <div class="row cfg-editable"><label>结束日期</label><input id="end" type="date" value="" placeholder="可空" /></div>
-        <div class="row cfg-editable"><label>初始资金</label><input id="cash" value="10000" /></div>
+        <div class="row cfg-editable"><label>开始日期</label><input id="begin" type="date" value="2018-01-01" /><span class="tip-icon" data-tip="复盘回放的起始日期。">!</span></div>
+        <div class="row cfg-editable"><label>结束日期</label><input id="end" type="date" value="" placeholder="可空" /><span class="tip-icon" data-tip="默认为空，表示截止当前日期。">!</span></div>
+        <div class="row cfg-editable"><label>初始资金</label><input id="cash" value="10000" /><span class="tip-icon" data-tip="模拟交易使用的初始资金，买入按钮会基于该资金全仓买入。">!</span></div>
         <div class="row cfg-editable">
           <label>复权</label>
           <select id="autype">
@@ -1006,30 +1061,31 @@ HTML = """
             <option value="hfq">后复权</option>
             <option value="none">不复权</option>
           </select>
+          <span class="tip-icon" data-tip="选择K线数据的复权方式。">!</span>
         </div>
         <div class="btnRow">
-          <button id="btnInit">加载会话 <small>(Ctrl+I)</small></button>
-          <button id="btnReset">重新训练 <small>(Ctrl+R)</small></button>
-          <button id="btnFinish" disabled>结束训练</button>
-          <button id="btnExit">退出</button>
-          <button id="btnStep" disabled>下一根K线 <small>(Space)</small></button>
+          <button id="btnInit" data-tip="根据当前代码、日期区间、初始资金加载复盘会话。首次加载历史数据可能较慢。">加载会话 <small>(Ctrl+I)</small></button>
+          <button id="btnReset" data-tip="清空当前会话并恢复到可重新配置的初始状态。">重新训练 <small>(Ctrl+R)</small></button>
+          <button id="btnFinish" data-tip="结束当前训练，并可选择导出本次交易总结文件。" disabled>结束训练</button>
+          <button id="btnExit" data-tip="尝试关闭当前页面。浏览器可能会拦截关闭操作。">退出</button>
+          <button id="btnStep" data-tip="步进到下一根K线。若当前K线命中买卖点，会先中断并等待确认。" disabled>下一根K线 <small>(Space)</small></button>
         </div>
         <div class="stepNRow">
           <label for="stepN">步进数量 N</label>
-          <span class="tip-icon" data-tip="遇到买卖点会自动中断等待确认">!</span>
+          <span class="tip-icon" data-tip="设置连续步进或回退时使用的根数。遇到买卖点会自动中断等待确认。">!</span>
           <input id="stepN" type="number" min="1" step="1" value="5" />
           <div class="btnRow" style="width:100%; margin-top:4px;">
-            <button id="btnStepN" disabled>步进 N 根 <small>(Ctrl+Alt+N)</small></button>
-            <button id="btnBackN" disabled>后退 N 根 <small>(Ctrl+Alt+M)</small></button>
+            <button id="btnStepN" data-tip="按步进数量 N 连续推进，若中途遇到买卖点则自动停止。" disabled>步进 N 根 <small>(Ctrl+Alt+N)</small></button>
+            <button id="btnBackN" data-tip="按步进数量 N 回退，会自动重建到更早的状态。" disabled>后退 N 根 <small>(Ctrl+Alt+M)</small></button>
           </div>
         </div>
-        <div class="btnRow" style="margin-top:6px;">
-          <button id="btnBuy" disabled>买入（全仓） <small>(PageUp)</small></button>
-          <button id="btnSell" disabled>卖出（全量） <small>(PageDown)</small></button>
-        </div>
-        <div class="row" style="margin-bottom:0;">
+        <div class="row" style="margin:6px 0 4px 0;">
           <span class="muted">交易规则</span>
-          <span class="tip-icon" data-tip="规则：单持仓、T+1、每步最多一笔">!</span>
+          <span class="tip-icon" data-tip="规则：单持仓、T+1、每步最多一笔。">!</span>
+        </div>
+        <div class="btnRow" style="margin-top:6px;">
+          <button id="btnBuy" data-tip="按当前收盘价使用全部可用现金买入，遵循单持仓和每步最多一笔规则。" disabled>买入（全仓） <small>(PageUp)</small></button>
+          <button id="btnSell" data-tip="按当前收盘价全部卖出，若受 T+1 约束则按钮不可用。" disabled>卖出（全量） <small>(PageDown)</small></button>
         </div>
       </div>
 
@@ -1106,18 +1162,27 @@ HTML = """
 
       <!-- 交易状态悬浮窗 -->
       <div id="tradeStatusOverlay" class="tradeStatusOverlay" style="display: none;">
-        <div class="tradeStatusTitle">当前持仓状态</div>
-        <div class="tradeStatusGrid">
-          <div class="tsItem"><label>持仓时间</label><span id="ts_hold_bars">-</span></div>
-          <div class="tsItem"><label>持仓股数</label><span id="ts_pos">-</span></div>
-          <div class="tsItem"><label>买入价格</label><span id="ts_buy_price">-</span></div>
-          <div class="tsItem"><label>当前价格</label><span id="ts_curr_price">-</span></div>
-          <div class="tsItem"><label>持仓盈亏</label><span id="ts_pnl">-</span></div>
-          <div class="tsItem"><label>盈亏比例</label><span id="ts_pnl_pct">-</span></div>
-          <div class="tsItem"><label>可用现金</label><span id="ts_cash">-</span></div>
-          <div class="tsItem"><label>总资产</label><span id="ts_equity">-</span></div>
-          <div class="tsItem"><label>总盈亏</label><span id="ts_total_pnl">-</span></div>
+        <div class="tradeStatusTitleBar">
+          <div class="tradeStatusTitle"><span class="tradeStatusDot"></span><span>当前持仓状态</span></div>
+          <div class="tradeStatusActions">
+            <button id="btnTradeStatusMin" class="tradeStatusMiniBtn" type="button">-</button>
+            <button id="btnTradeStatusMax" class="tradeStatusMiniBtn" type="button">+</button>
+          </div>
         </div>
+        <div class="tradeStatusBody">
+          <div class="tradeStatusGrid">
+            <div class="tsItem"><label>持仓时间</label><span id="ts_hold_bars">-</span></div>
+            <div class="tsItem"><label>持仓股数</label><span id="ts_pos">-</span></div>
+            <div class="tsItem"><label>买入价格</label><span id="ts_buy_price">-</span></div>
+            <div class="tsItem"><label>当前价格</label><span id="ts_curr_price">-</span></div>
+            <div class="tsItem"><label>持仓盈亏</label><span id="ts_pnl">-</span></div>
+            <div class="tsItem"><label>盈亏比例</label><span id="ts_pnl_pct">-</span></div>
+            <div class="tsItem"><label>可用现金</label><span id="ts_cash">-</span></div>
+            <div class="tsItem"><label>总资产</label><span id="ts_equity">-</span></div>
+            <div class="tsItem"><label>总盈亏</label><span id="ts_total_pnl">-</span></div>
+          </div>
+        </div>
+        <div class="tradeStatusResizeHandle"></div>
       </div>
 
       <button id="btnFullscreen" class="fullscreen-btn">
@@ -1183,6 +1248,7 @@ let pendingBspPrompt = null;
 let crosshairEnabled = false;
 let crosshairX = null;
 let crosshairY = null;
+let canvasHovered = false;
 let selectedIndicatorPanel = "main:0";
 const defaultMainSlots = { "0": "none", "1": "none", "2": "none", "3": "none", "4": "none", "5": "none" };
 const defaultSubSlots = { "1": "none", "2": "none", "3": "none", "4": "none", "5": "none" };
@@ -1232,11 +1298,22 @@ const DEFAULT_CHART_CONFIG = {
     buyCloseLineStyle: "solid",
     sellCloseLineStyle: "dashed"
   },
+  tradeStatus: {
+    titleFontSize: 14,
+    titleFontWeight: "bold",
+    titleColor: "#0f172a",
+    labelFontSize: 12,
+    labelFontWeight: "normal",
+    labelColor: "#64748b",
+    valueFontSize: 13,
+    valueFontWeight: "bold",
+    valueColor: "#0f172a"
+  },
   chip: { enabled: true, stretchLevel: 5, bucketStep: 0.1, color: "rgba(59,130,246,0.45)" },
   xAxis: { fontSize: 12, rotation: -45, fontWeight: "normal", interval: 10 },
   yAxis: { fontSize: 12, fontWeight: "normal", interval: 0.5 },
   toast: { fontSize: 16, fontWeight: "bold", speed: 3000 },
-  legend: { fontSize: 12 },
+  legend: { fontSize: 12, fontWeight: "normal", color: "#0f172a" },
   userRay: { color: "#f97316", width: 1.5, dash: [8, 4], fontSize: 12 }
 };
 
@@ -1321,6 +1398,10 @@ function closeSettings() {
   $("settingsModal").classList.remove("show");
 }
 
+function isSettingsOpen() {
+  return $("settingsModal").classList.contains("show");
+}
+
 function renderSettingsForm() {
   const container = $("settingsContent");
   container.innerHTML = "";
@@ -1353,8 +1434,8 @@ function renderSettingsForm() {
   };
 
   const buildLabelHtml = (item) => {
-    if (!item.tip) return item.label;
-    return `${item.label} <span class="tip-icon" data-tip="${item.tip.replaceAll('"', '&quot;')}">!</span>`;
+    const tipText = (item.tip || `${item.label}：用于调整该项在图表或浮窗中的显示效果。`).replaceAll('"', '&quot;');
+    return `${item.label} <span class="tip-icon" data-tip="${tipText}">!</span>`;
   };
 
   const sections = [
@@ -1573,9 +1654,35 @@ function renderSettingsForm() {
         { label: "持仓区间(买)背景", subKey: "rangeFillBuy", type: "color", tip: "用于买入后到卖出前整段背景色。" },
         { label: "持仓区间(卖)背景", subKey: "rangeFillSell", type: "color", tip: "用于已卖出历史交易区间整段背景色。" },
         { label: "盈利区间颜色", subKey: "profitBandColor", type: "color", tip: "用于买卖价之间的盈利区间填充色。" },
-        { label: "亏损区间颜色", subKey: "lossBandColor", type: "color", tip: "用于买卖价之间的亏损区间填充色。" },
-        { label: "盈亏数字(盈利)", subKey: "profitColor", type: "color" },
-        { label: "盈亏数字(亏损)", subKey: "lossColor", type: "color" }
+        { label: "亏损区间颜色", subKey: "lossBandColor", type: "color", tip: "用于买卖价之间的亏损区间填充色。" }
+      ]
+    },
+    {
+      title: "持仓浮窗字体",
+      key: "tradeStatus",
+      color: "#1d4ed8",
+      bgColor: "rgba(29, 78, 216, 0.08)",
+      items: [
+        { label: "标题大小", subKey: "titleFontSize", type: "number", min: 10, max: 28, tip: "控制持仓状态窗口标题栏文字大小。" },
+        { label: "标题粗细", subKey: "titleFontWeight", type: "select", options: [{ value: "normal", label: "常规" }, { value: "bold", label: "加粗" }], tip: "控制持仓状态窗口标题栏文字粗细。" },
+        { label: "标题颜色", subKey: "titleColor", type: "color", tip: "控制持仓状态窗口标题栏文字颜色。" },
+        { label: "名称大小", subKey: "labelFontSize", type: "number", min: 10, max: 24, tip: "控制持仓状态窗口左侧名称文字大小。" },
+        { label: "名称粗细", subKey: "labelFontWeight", type: "select", options: [{ value: "normal", label: "常规" }, { value: "bold", label: "加粗" }], tip: "控制持仓状态窗口左侧名称文字粗细。" },
+        { label: "名称颜色", subKey: "labelColor", type: "color", tip: "控制持仓状态窗口左侧名称文字颜色。" },
+        { label: "数值大小", subKey: "valueFontSize", type: "number", min: 10, max: 28, tip: "控制持仓状态窗口右侧数值文字大小。" },
+        { label: "数值粗细", subKey: "valueFontWeight", type: "select", options: [{ value: "normal", label: "常规" }, { value: "bold", label: "加粗" }], tip: "控制持仓状态窗口右侧数值文字粗细。" },
+        { label: "数值颜色", subKey: "valueColor", type: "color", tip: "控制持仓状态窗口右侧数值默认颜色。" }
+      ]
+    },
+    {
+      title: "图例说明",
+      key: "legend",
+      color: "#7c2d12",
+      bgColor: "rgba(124, 45, 18, 0.08)",
+      items: [
+        { label: "文字大小", subKey: "fontSize", type: "number", min: 8, max: 24, tip: "控制左上角图例说明文字大小。" },
+        { label: "文字粗细", subKey: "fontWeight", type: "select", options: [{ value: "normal", label: "常规" }, { value: "bold", label: "加粗" }], tip: "控制左上角图例说明文字粗细。" },
+        { label: "文字颜色", subKey: "color", type: "color", tip: "控制左上角图例说明文字颜色。" }
       ]
     },
     {
@@ -1755,27 +1862,29 @@ function saveSettings() {
 
 function initTooltips() {
   const tipContent = $("tipContent");
-  document.querySelectorAll(".tip-icon").forEach(icon => {
-    icon.onmouseenter = () => {
-      const text = icon.getAttribute("data-tip");
-      if (!text) return;
-      tipContent.textContent = text;
-      tipContent.style.display = "block";
+  const showTooltip = (target) => {
+    const text = target.getAttribute("data-tip");
+    if (!text) return;
+    tipContent.textContent = text;
+    tipContent.style.display = "block";
 
-      const rect = icon.getBoundingClientRect();
-      const tipRect = tipContent.getBoundingClientRect();
-      let top = rect.top + rect.height / 2 - tipRect.height / 2;
-      let left = rect.left + rect.width + 8;
-      if (left + tipRect.width > window.innerWidth) left = rect.left - tipRect.width - 8;
-      if (top + tipRect.height > window.innerHeight) top = window.innerHeight - tipRect.height - 8;
-      if (top < 0) top = 8;
-      if (left < 0) left = 8;
-      tipContent.style.top = `${top}px`;
-      tipContent.style.left = `${left}px`;
-    };
-    icon.onmouseleave = () => {
-      tipContent.style.display = "none";
-    };
+    const rect = target.getBoundingClientRect();
+    const tipRect = tipContent.getBoundingClientRect();
+    let top = rect.top + rect.height / 2 - tipRect.height / 2;
+    let left = rect.left + rect.width + 8;
+    if (left + tipRect.width > window.innerWidth) left = rect.left - tipRect.width - 8;
+    if (top + tipRect.height > window.innerHeight) top = window.innerHeight - tipRect.height - 8;
+    if (top < 0) top = 8;
+    if (left < 0) left = 8;
+    tipContent.style.top = `${top}px`;
+    tipContent.style.left = `${left}px`;
+  };
+  const hideTooltip = () => {
+    tipContent.style.display = "none";
+  };
+  document.querySelectorAll("[data-tip]").forEach(target => {
+    target.onmouseenter = () => showTooltip(target);
+    target.onmouseleave = hideTooltip;
   });
 }
 initTooltips();
@@ -1803,13 +1912,13 @@ $("settingsModal").addEventListener("click", (e) => {
 });
 
 // S for settings save + close
-$("settingsModal").addEventListener("keydown", (e) => {
-  const tag = (document.activeElement && document.activeElement.tagName) ? document.activeElement.tagName.toLowerCase() : "";
-  if (!e.ctrlKey && !e.altKey && !e.metaKey && e.code === "KeyS" && tag !== "input" && tag !== "textarea" && tag !== "select") {
+document.addEventListener("keydown", (e) => {
+  if (!isSettingsOpen()) return;
+  if (!e.ctrlKey && !e.altKey && !e.metaKey && e.code === "KeyS") {
     e.preventDefault();
     saveSettings();
   }
-});
+}, true);
 
 function cssVar(name, fallback) {
   const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -2095,6 +2204,15 @@ canvas.addEventListener(
     const rect = canvas.getBoundingClientRect();
     const mouseX = e.clientX - rect.left;
     const factor = e.deltaY > 0 ? 1 / 1.15 : 1.15;
+    if (e.ctrlKey) {
+      if (e.deltaY > 0) {
+        viewYZoomRatio /= 1.15;
+      } else {
+        viewYZoomRatio *= 1.15;
+      }
+      draw(lastPayload.chart);
+      return;
+    }
     zoomViewAt(factor, mouseX);
   },
   { passive: false }
@@ -2139,6 +2257,7 @@ window.addEventListener("mousemove", (e) => {
 });
 
 canvas.addEventListener("mousemove", (e) => {
+  canvasHovered = true;
   if (isPanning) return;
   if (!lastPayload || !lastPayload.ready) return;
   const rect = canvas.getBoundingClientRect();
@@ -2160,6 +2279,7 @@ canvas.addEventListener("mousemove", (e) => {
 });
 
 canvas.addEventListener("mouseleave", () => {
+  canvasHovered = false;
   crosshairX = null;
   crosshairY = null;
   if (lastPayload && lastPayload.ready) draw(lastPayload.chart);
@@ -2518,7 +2638,7 @@ window.addEventListener("mouseup", () => {
 const savedWidth = localStorage.getItem("chan_sidebar_width");
 if (savedWidth) leftPanel.style.width = savedWidth;
 
-const tradeOverlayState = { dragging: false, offsetX: 0, offsetY: 0 };
+const tradeOverlayState = { dragging: false, offsetX: 0, offsetY: 0, resizing: false, startW: 0, startH: 0, startX: 0, startY: 0, minimized: false, maximized: false, prevRect: null };
 function clampOverlayPosition(overlay, left, top) {
   const margin = 8;
   const maxLeft = Math.max(margin, window.innerWidth - overlay.offsetWidth - margin);
@@ -2538,18 +2658,38 @@ function applyTradeOverlayPosition(left, top) {
   overlay.style.right = "auto";
 }
 
+function saveTradeOverlayState() {
+  const overlay = $("tradeStatusOverlay");
+  if (!overlay) return;
+  localStorage.setItem("chan_trade_overlay_pos", JSON.stringify({
+    left: parseFloat(overlay.style.left) || 16,
+    top: parseFloat(overlay.style.top) || 16,
+    width: parseFloat(overlay.style.width) || overlay.offsetWidth || 280,
+    height: parseFloat(overlay.style.height) || overlay.offsetHeight || 0,
+    minimized: !!tradeOverlayState.minimized,
+    maximized: !!tradeOverlayState.maximized,
+  }));
+}
+
 function initTradeStatusDrag() {
   const overlay = $("tradeStatusOverlay");
-  const title = overlay ? overlay.querySelector(".tradeStatusTitle") : null;
-  if (!overlay || !title) return;
+  const titleBar = overlay ? overlay.querySelector(".tradeStatusTitleBar") : null;
+  const resizeHandle = overlay ? overlay.querySelector(".tradeStatusResizeHandle") : null;
+  if (!overlay || !titleBar || !resizeHandle) return;
   const saved = safeJsonParse(localStorage.getItem("chan_trade_overlay_pos"), null);
   if (saved && Number.isFinite(saved.left) && Number.isFinite(saved.top)) {
     applyTradeOverlayPosition(saved.left, saved.top);
+    if (Number.isFinite(saved.width)) overlay.style.width = `${saved.width}px`;
+    if (Number.isFinite(saved.height) && saved.height > 0) overlay.style.height = `${saved.height}px`;
+    tradeOverlayState.minimized = !!saved.minimized;
+    tradeOverlayState.maximized = !!saved.maximized;
+    overlay.classList.toggle("minimized", tradeOverlayState.minimized);
   } else {
     applyTradeOverlayPosition(16, 16);
   }
-  title.addEventListener("mousedown", (e) => {
+  titleBar.addEventListener("mousedown", (e) => {
     if (e.button !== 0) return;
+    if (e.target.closest("button")) return;
     tradeOverlayState.dragging = true;
     overlay.classList.add("dragging");
     const rect = overlay.getBoundingClientRect();
@@ -2558,20 +2698,68 @@ function initTradeStatusDrag() {
     e.preventDefault();
   });
   window.addEventListener("mousemove", (e) => {
-    if (!tradeOverlayState.dragging) return;
-    const left = e.clientX - tradeOverlayState.offsetX;
-    const top = e.clientY - tradeOverlayState.offsetY;
-    applyTradeOverlayPosition(left, top);
+    if (tradeOverlayState.dragging) {
+      const left = e.clientX - tradeOverlayState.offsetX;
+      const top = e.clientY - tradeOverlayState.offsetY;
+      applyTradeOverlayPosition(left, top);
+      return;
+    }
+    if (tradeOverlayState.resizing) {
+      const nextW = Math.max(220, tradeOverlayState.startW + (e.clientX - tradeOverlayState.startX));
+      const nextH = Math.max(64, tradeOverlayState.startH + (e.clientY - tradeOverlayState.startY));
+      overlay.style.width = `${nextW}px`;
+      overlay.style.height = `${nextH}px`;
+    }
   });
   window.addEventListener("mouseup", () => {
-    if (!tradeOverlayState.dragging) return;
-    tradeOverlayState.dragging = false;
-    overlay.classList.remove("dragging");
-    localStorage.setItem("chan_trade_overlay_pos", JSON.stringify({
-      left: parseFloat(overlay.style.left) || 16,
-      top: parseFloat(overlay.style.top) || 16,
-    }));
+    if (tradeOverlayState.dragging) {
+      tradeOverlayState.dragging = false;
+      overlay.classList.remove("dragging");
+      saveTradeOverlayState();
+    }
+    if (tradeOverlayState.resizing) {
+      tradeOverlayState.resizing = false;
+      saveTradeOverlayState();
+    }
   });
+  resizeHandle.addEventListener("mousedown", (e) => {
+    if (e.button !== 0) return;
+    tradeOverlayState.resizing = true;
+    tradeOverlayState.startW = overlay.offsetWidth;
+    tradeOverlayState.startH = overlay.offsetHeight;
+    tradeOverlayState.startX = e.clientX;
+    tradeOverlayState.startY = e.clientY;
+    e.preventDefault();
+    e.stopPropagation();
+  });
+  $("btnTradeStatusMin").onclick = () => {
+    tradeOverlayState.minimized = !tradeOverlayState.minimized;
+    overlay.classList.toggle("minimized", tradeOverlayState.minimized);
+    saveTradeOverlayState();
+  };
+  $("btnTradeStatusMax").onclick = () => {
+    if (!tradeOverlayState.maximized) {
+      tradeOverlayState.prevRect = {
+        left: parseFloat(overlay.style.left) || 16,
+        top: parseFloat(overlay.style.top) || 16,
+        width: overlay.offsetWidth,
+        height: overlay.offsetHeight,
+      };
+      overlay.style.left = "8px";
+      overlay.style.top = "8px";
+      overlay.style.width = `${Math.max(320, window.innerWidth - 16)}px`;
+      overlay.style.height = `${Math.max(90, window.innerHeight - 16)}px`;
+      tradeOverlayState.maximized = true;
+    } else {
+      const prev = tradeOverlayState.prevRect || { left: 16, top: 16, width: 280, height: overlay.offsetHeight };
+      overlay.style.left = `${prev.left}px`;
+      overlay.style.top = `${prev.top}px`;
+      overlay.style.width = `${prev.width}px`;
+      overlay.style.height = `${prev.height}px`;
+      tradeOverlayState.maximized = false;
+    }
+    saveTradeOverlayState();
+  };
 }
 initTradeStatusDrag();
 
@@ -2634,6 +2822,22 @@ function updateTradeStatusOverlay(payload) {
 
   overlay.style.display = "block";
   overlay.style.borderColor = pnl > 0 ? getCfgColor(chartConfig.trade.profitColor) : (pnl < 0 ? getCfgColor(chartConfig.trade.lossColor) : "#e2e8f0");
+  const titleEl = overlay.querySelector(".tradeStatusTitle");
+  if (titleEl) {
+    titleEl.style.fontSize = `${chartConfig.tradeStatus.titleFontSize}px`;
+    titleEl.style.fontWeight = chartConfig.tradeStatus.titleFontWeight;
+    titleEl.style.color = getCfgColor(chartConfig.tradeStatus.titleColor);
+  }
+  overlay.querySelectorAll(".tsItem label").forEach((el) => {
+    el.style.fontSize = `${chartConfig.tradeStatus.labelFontSize}px`;
+    el.style.fontWeight = chartConfig.tradeStatus.labelFontWeight;
+    el.style.color = getCfgColor(chartConfig.tradeStatus.labelColor);
+  });
+  overlay.querySelectorAll(".tsItem span").forEach((el) => {
+    el.style.fontSize = `${chartConfig.tradeStatus.valueFontSize}px`;
+    el.style.fontWeight = chartConfig.tradeStatus.valueFontWeight;
+    el.style.color = getCfgColor(chartConfig.tradeStatus.valueColor);
+  });
 
   setText("ts_hold_bars", `${holdBars} 根`);
   setText("ts_pos", `${a.position} 股`);
@@ -2687,6 +2891,59 @@ function showSettlement(tr, stockName) {
   `;
   
   modal.classList.add("show");
+}
+
+function buildTradeExportSummary(payload) {
+  let wins = 0;
+  let loss = 0;
+  let sumPnl = 0;
+  let peak = 0;
+  let curve = 0;
+  let maxDd = 0;
+  let bestTrade = null;
+  let worstTrade = null;
+  const rows = [];
+  rows.push("idx,buy_x,buy_price,sell_x,sell_price,shares,pnl,pnl_pct,hold_bars");
+  for (let i = 0; i < tradeHistory.length; i++) {
+    const tr = tradeHistory[i];
+    const shares = tr.shares || 0;
+    const pnl = (tr.sellPrice - tr.buyPrice) * shares;
+    const pnlPct = tr.buyPrice === 0 ? 0 : ((tr.sellPrice - tr.buyPrice) / tr.buyPrice) * 100;
+    const hold = Math.max(0, tr.sellX - tr.buyX);
+    if (pnl >= 0) wins += 1;
+    else loss += 1;
+    sumPnl += pnl;
+    curve += pnl;
+    if (curve > peak) peak = curve;
+    maxDd = Math.max(maxDd, peak - curve);
+    if (!bestTrade || pnl > bestTrade.pnl) bestTrade = { idx: i + 1, pnl };
+    if (!worstTrade || pnl < worstTrade.pnl) worstTrade = { idx: i + 1, pnl };
+    rows.push(`${i + 1},${tr.buyX},${tr.buyPrice.toFixed(4)},${tr.sellX},${tr.sellPrice.toFixed(4)},${shares},${pnl.toFixed(2)},${pnlPct.toFixed(2)},${hold}`);
+  }
+  const n = tradeHistory.length;
+  const winRate = n === 0 ? 0 : (wins / n) * 100;
+  const avgPnl = n === 0 ? 0 : sumPnl / n;
+  rows.unshift(`# 最差单笔,${worstTrade ? `${worstTrade.idx}:${worstTrade.pnl.toFixed(2)}` : "-"}`);
+  rows.unshift(`# 最佳单笔,${bestTrade ? `${bestTrade.idx}:${bestTrade.pnl.toFixed(2)}` : "-"}`);
+  rows.unshift(`# 最大回撤近似(按已平仓序列),${maxDd.toFixed(2)}`);
+  rows.unshift(`# 胜率,${winRate.toFixed(2)}%`);
+  rows.unshift(`# 平均每笔盈亏,${avgPnl.toFixed(2)}`);
+  rows.unshift(`# 总盈亏,${sumPnl.toFixed(2)}`);
+  rows.unshift(`# 亏损笔数,${loss}`);
+  rows.unshift(`# 盈利笔数,${wins}`);
+  rows.unshift(`# 交易笔数,${n}`);
+  rows.unshift(`# 标的,${payload.name || payload.code || "-"}`);
+  rows.unshift(`# 导出时间,${new Date().toISOString()}`);
+  return rows.join("\\n");
+}
+
+function downloadTradeExport(payload) {
+  const blob = new Blob([buildTradeExportSummary(payload)], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `chan_trades_${payload.code || "session"}_${Date.now()}.csv`;
+  a.click();
+  URL.revokeObjectURL(a.href);
 }
 
 $("btnSettlementClose").onclick = () => {
@@ -3032,8 +3289,9 @@ function drawChips(chart, s) {
   if (!chartConfig.chip.enabled) return;
   const ksAll = getChipBaseKs(chart);
   const refK0 = (chart.kline && chart.kline.length > 0) ? chart.kline[chart.kline.length - 1] : null;
-  const refK = getReferenceK(chart, s) || refK0 || (ksAll.length > 0 ? ksAll[ksAll.length - 1] : null);
-  const refText = (!crosshairEnabled || crosshairX === null) ? "最新" : `历史@${refK?.t || "-"}`;
+  const useLatest = !crosshairEnabled || crosshairX === null || !canvasHovered;
+  const refK = (useLatest ? refK0 : getReferenceK(chart, s)) || refK0 || (ksAll.length > 0 ? ksAll[ksAll.length - 1] : null);
+  const refText = useLatest ? "最新" : `历史@${refK?.t || "-"}`;
   if (ksAll.length === 0 || !refK) return;
   const priceStep = chartConfig.chip.bucketStep || 0.1;
   const stepMul = 1 / priceStep;
@@ -3204,7 +3462,7 @@ function drawLegend() {
   ];
   ctx.save();
   const fontSize = chartConfig.legend.fontSize;
-  ctx.font = `${fontSize}px Consolas`;
+  ctx.font = `${chartConfig.legend.fontWeight || "normal"} ${fontSize}px Consolas`;
   ctx.textBaseline = "middle";
   let maxW = 0;
   for (const L of lines) {
@@ -3235,7 +3493,7 @@ function drawLegend() {
     ctx.lineTo(xLine + 24, y);
     ctx.stroke();
     ctx.setLineDash([]);
-    ctx.fillStyle = cssVar("--legendText", "#0f172a");
+    ctx.fillStyle = getCfgColor(chartConfig.legend.color || cssVar("--legendText", "#0f172a"));
     ctx.fillText(L.label, xLine + 32, y);
     y += lh;
   }
@@ -3855,48 +4113,12 @@ $("btnSell").onclick = async () => {
 
 $("btnFinish").onclick = async () => {
   try {
+    if (!confirm("确定要结束当前训练吗？")) return;
     const payload = await api("/api/finish");
     refreshUI(payload);
     setMsg("训练已结束。");
     if (confirm("训练结束，是否下载训练结果？")) {
-      let wins = 0;
-      let loss = 0;
-      let sumPnl = 0;
-      let peak = 0;
-      let curve = 0;
-      let maxDd = 0;
-      const rows = [];
-      rows.push("idx,buy_x,buy_price,sell_x,sell_price,shares,pnl,pnl_pct,hold_bars");
-      for (let i = 0; i < tradeHistory.length; i++) {
-        const tr = tradeHistory[i];
-        const shares = tr.shares || 0;
-        const pnl = (tr.sellPrice - tr.buyPrice) * shares;
-        const pnlPct = tr.buyPrice === 0 ? 0 : ((tr.sellPrice - tr.buyPrice) / tr.buyPrice) * 100;
-        const hold = Math.max(0, tr.sellX - tr.buyX);
-        if (pnl >= 0) wins += 1;
-        else loss += 1;
-        sumPnl += pnl;
-        curve += pnl;
-        if (curve > peak) peak = curve;
-        const dd = peak - curve;
-        if (dd > maxDd) maxDd = dd;
-        rows.push(`${i + 1},${tr.buyX},${tr.buyPrice.toFixed(4)},${tr.sellX},${tr.sellPrice.toFixed(4)},${shares},${pnl.toFixed(2)},${pnlPct.toFixed(2)},${hold}`);
-      }
-      const n = tradeHistory.length;
-      const winRate = n === 0 ? 0 : (wins / n) * 100;
-      const avgPnl = n === 0 ? 0 : sumPnl / n;
-      rows.unshift(`# 胜率,${winRate.toFixed(2)}%`);
-      rows.unshift(`# 平均每笔盈亏,${avgPnl.toFixed(2)}`);
-      rows.unshift(`# 最大回撤近似(按已平仓序列),${maxDd.toFixed(2)}`);
-      rows.unshift(`# 交易笔数,${n}`);
-      rows.unshift(`# 标的,${payload.name || payload.code || "-"}`);
-      rows.unshift(`# 导出时间,${new Date().toISOString()}`);
-      const blob = new Blob([rows.join("\\n")], { type: "text/csv;charset=utf-8" });
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = `chan_trades_${payload.code || "session"}_${Date.now()}.csv`;
-      a.click();
-      URL.revokeObjectURL(a.href);
+      downloadTradeExport(payload);
     }
   } catch (e) {
     setMsg("结束失败：" + e.message);
@@ -3905,6 +4127,7 @@ $("btnFinish").onclick = async () => {
 
 $("btnReset").onclick = async () => {
   try {
+    if (!confirm("确定要重新训练吗？当前会话状态将被清空。")) return;
     hideGlobalLoading();
     const payload = await api("/api/reset");
     $("btnInit").disabled = false;
@@ -3937,6 +4160,7 @@ $("btnReset").onclick = async () => {
 };
 
 $("btnExit").onclick = () => {
+  if (!confirm("确定要退出当前页面吗？")) return;
   setMsg("正在尝试关闭页面...");
   window.close();
   setTimeout(() => {
@@ -4166,3 +4390,5 @@ def api_reset():
 
 if __name__ == "__main__":
     uvicorn.run(app, host="127.0.0.1", port=8000)
+
+
