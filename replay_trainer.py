@@ -601,10 +601,19 @@ HTML = """
       --chipBg: rgba(163,196,163,0.18);
       --chipEdge: rgba(37,99,235,0.72);
     }
-    body { margin: 0; font-family: Arial, sans-serif; background: var(--bg); color: var(--text); }
+    body { margin: 0; font-family: Arial, sans-serif; background: var(--bg); color: var(--text); overflow: hidden; }
     .wrap { display: flex; height: 100vh; flex-direction: row-reverse; }
-    .left { width: 360px; padding: 12px; border-right: none; border-left: 1px solid var(--border); box-sizing: border-box; overflow-y: auto; background: var(--panel); }
-    .right { flex: 1; padding: 8px; box-sizing: border-box; }
+    .left { width: 360px; padding: 12px; border-right: none; border-left: 1px solid var(--border); box-sizing: border-box; overflow-y: auto; background: var(--panel); position: relative; }
+    .resizer {
+      width: 4px;
+      cursor: col-resize;
+      background: var(--border);
+      height: 100%;
+      z-index: 10;
+      transition: background 0.2s;
+    }
+    .resizer:hover { background: #2563eb; }
+    .right { flex: 1; padding: 8px; box-sizing: border-box; min-width: 0; }
     .row { margin-bottom: 8px; }
     .row input[type="checkbox"] { width: auto; transform: scale(1.1); }
     label { display: inline-block; width: 110px; }
@@ -620,11 +629,58 @@ HTML = """
     table { border-collapse: collapse; width: 100%; }
     th, td { padding: 6px 6px; border-bottom: 1px solid var(--grid); font-size: 14px; }
     th { text-align: left; color: #2563eb; position: sticky; top: 0; background: var(--panel); z-index: 1; }
-    #msgList { max-height: 220px; overflow-y: auto; border: 1px solid var(--border); padding: 6px; }
-    .msgItem { font-family: Consolas, monospace; font-size: 13px; border-bottom: 1px dashed var(--grid); padding: 4px 0; white-space: pre-wrap;}
     .card.collapsed { opacity: 0.82; }
     .card.collapsed .cfg-editable { display: none; }
     .btnRow { display: flex; flex-wrap: wrap; gap: 6px; }
+
+    /* Toast 弹窗 */
+    #toastContainer {
+      position: fixed;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 11000;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      pointer-events: none;
+    }
+    .toast {
+      padding: 10px 20px;
+      background: var(--legendBg);
+      color: var(--legendText);
+      border: 1px solid var(--legendBorder);
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+      font-family: Consolas, monospace;
+      animation: toastFadeIn 0.3s forwards;
+      pointer-events: auto;
+      max-width: 80vw;
+      text-align: center;
+      transition: opacity 0.3s;
+    }
+    @keyframes toastFadeIn {
+      from { opacity: 0; transform: translateY(-20px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* 消息历史弹窗 */
+    .msgHistoryModal {
+      position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
+      background: rgba(2, 6, 23, 0.6); z-index: 10006;
+    }
+    .msgHistoryModal.show { display: flex; }
+    .msgHistoryModal .panel {
+      width: 600px; max-height: 80vh; background: var(--panel); padding: 20px; border-radius: 12px;
+      display: flex; flex-direction: column;
+    }
+    .msgHistoryList {
+      flex: 1; overflow-y: auto; border: 1px solid var(--border); margin: 10px 0; padding: 10px;
+      font-family: Consolas, monospace; font-size: 13px;
+    }
+    .msgHistoryItem { border-bottom: 1px dashed var(--grid); padding: 6px 0; }
+    .msgHistoryItem .time { color: #2563eb; margin-right: 10px; }
     .stepNRow {
       margin-top: 6px;
       display: flex;
@@ -724,19 +780,148 @@ HTML = """
     .bspPromptActions button {
       min-width: 120px;
     }
+    /* 交易状态悬浮窗 */
+    .tradeStatusOverlay {
+      position: fixed;
+      top: 20px;
+      right: 80px;
+      width: 240px;
+      background: rgba(255, 255, 255, 0.95);
+      border-radius: 12px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+      padding: 16px;
+      z-index: 1000;
+      border: 2px solid #e2e8f0;
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      backdrop-filter: blur(8px);
+    }
+    [data-theme="dark"] .tradeStatusOverlay { background: rgba(30, 41, 59, 0.95); border-color: #334155; }
+    .tradeStatusTitle { font-weight: bold; margin-bottom: 12px; font-size: 14px; text-align: center; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px; }
+    .tradeStatusGrid { display: grid; grid-template-columns: 1fr; gap: 8px; }
+    .tsItem { display: flex; justify-content: space-between; font-family: Consolas, monospace; }
+    .tsItem label { color: #64748b; font-size: 12px; }
+    .tsItem span { font-weight: bold; }
+    .pnl-plus { color: #ef4444; }
+    .pnl-minus { color: #22c55e; }
+    .overlay-plus { border-color: #ef4444; background: rgba(254, 242, 242, 0.95); }
+    .overlay-minus { border-color: #22c55e; background: rgba(240, 253, 244, 0.95); }
+    [data-theme="dark"] .overlay-plus { background: rgba(69, 10, 10, 0.95); }
+    [data-theme="dark"] .overlay-minus { background: rgba(5, 46, 22, 0.95); }
+
+    /* 结算弹窗 */
+    .settlementModal {
+      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+      background: rgba(0,0,0,0.5); display: none; align-items: center; justify-content: center; z-index: 10000;
+    }
+    .settlementModal.show { display: flex; }
+    .settlementModal .panel {
+      width: 480px; background: white; border-radius: 12px; padding: 24px;
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+    }
+    [data-theme="dark"] .settlementModal .panel { background: #1e293b; color: #f1f5f9; }
+    .settlementTitle { font-size: 20px; font-weight: bold; margin-bottom: 20px; text-align: center; border-bottom: 2px solid #e2e8f0; padding-bottom: 12px; }
+    .settlementBody { font-family: Consolas, monospace; line-height: 1.8; font-size: 14px; margin-bottom: 20px; }
+    .settlementActions { text-align: center; }
+    .settlementActions button { padding: 10px 40px; font-size: 16px; cursor: pointer; background: #3b82f6; color: white; border: none; border-radius: 6px; }
+
+    .settingsModal {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: rgba(2, 6, 23, 0.6);
+      z-index: 10005;
+    }
+    .settingsModal.show { display: flex; }
+    .settingsModal .panel {
+      width: min(640px, calc(100vw - 40px));
+      max-height: 85vh;
+      overflow-y: auto;
+      border: 1px solid var(--legendBorder);
+      border-radius: 12px;
+      background: var(--panel);
+      color: var(--text);
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.3);
+      padding: 24px;
+      box-sizing: border-box;
+    }
+    .settingsTitle {
+      font-size: 20px;
+      font-weight: bold;
+      margin-bottom: 20px;
+      padding-bottom: 10px;
+      border-bottom: 2px solid var(--border);
+      color: #2563eb;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .settingsSection {
+      margin-bottom: 20px;
+      padding: 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+    .settingsSectionTitle {
+      font-weight: bold;
+      margin-bottom: 12px;
+      color: var(--muted);
+      font-size: 14px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    .settingsGrid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+      gap: 12px;
+    }
+    .settingsItem {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .settingsItem label {
+      font-size: 13px;
+      width: auto;
+    }
+    .settingsItem input {
+      width: 100%;
+      box-sizing: border-box;
+    }
+    .settingsActions {
+      margin-top: 24px;
+      display: flex;
+      justify-content: flex-end;
+      gap: 12px;
+    }
+    .settingsActions button {
+      min-width: 100px;
+    }
   </style>
 </head>
 <body>
+  <div id="settingsModal" class="settingsModal" aria-hidden="true">
+    <div class="panel">
+      <div class="settingsTitle">
+        图表显示设置
+        <button id="btnSettingsClose" style="margin:0; padding:4px 8px;">&times;</button>
+      </div>
+      <div id="settingsContent">
+        <!-- Generated by JS -->
+      </div>
+      <div class="settingsActions">
+        <button id="btnSettingsReset">恢复默认</button>
+        <button id="btnSettingsSave">保存并应用</button>
+      </div>
+    </div>
+  </div>
   <div class="wrap">
     <div class="left">
       <div class="title">chan.py 复盘训练器（单文件 A1）</div>
       <div class="card" id="configCard">
-        <div class="row"><label>主题</label>
-          <select id="theme">
-            <option value="light">白色</option>
-            <option value="dark">黑色</option>
-            <option value="eye-care">护眼</option>
-          </select>
+        <div class="row">
+          <button id="btnSettingsOpen" style="width:100%; margin:0;">图表显示设置...</button>
         </div>
         <div class="row cfg-editable"><label>代码</label><input id="code" value="600340" /></div>
         <div class="row cfg-editable"><label>开始日期</label><input id="begin" type="date" value="2018-01-01" /></div>
@@ -843,19 +1028,36 @@ HTML = """
               <tr><td>持仓(股)</td><td id="st_pos">-</td></tr>
               <tr><td>平均成本</td><td id="st_cost">-</td></tr>
               <tr><td>当前价</td><td id="st_price">-</td></tr>
+              <tr><td>持仓盈亏</td><td id="st_pos_pnl">-</td></tr>
               <tr><td>总资产</td><td id="st_equity">-</td></tr>
               <tr><td>总盈亏</td><td id="st_total_pnl">-</td></tr>
             </tbody>
           </table>
         </div>
-      </div>
-      <div class="card">
-        <div class="title" style="margin:0 0 8px 0;">消息</div>
-        <div id="msgList"></div>
+        <div class="btnRow" style="margin-top:10px;">
+          <button id="btnMsgHistory" style="width:100%; margin:0;">查看消息历史记录</button>
+        </div>
       </div>
     </div>
+    <div class="resizer" id="resizer"></div>
     <div class="right">
       <canvas id="chart"></canvas>
+    </div>
+  </div>
+
+  <div id="toastContainer"></div>
+
+  <div id="msgHistoryModal" class="msgHistoryModal" aria-hidden="true">
+    <div class="panel">
+      <div class="settingsTitle">
+        消息历史记录
+        <button id="btnMsgHistoryClose" style="margin:0; padding:4px 8px;">&times;</button>
+      </div>
+      <div id="msgHistoryList" class="msgHistoryList"></div>
+      <div class="settingsActions">
+        <button id="btnMsgHistoryClear">清空记录</button>
+        <button id="btnMsgHistoryOk">确 认</button>
+      </div>
     </div>
   </div>
   <div id="globalLoading" class="globalLoading" aria-hidden="true">
@@ -866,11 +1068,33 @@ HTML = """
   </div>
   <div id="bspPrompt" class="bspPrompt" aria-hidden="true">
     <div class="panel">
-      <div class="bspPromptTitle">检测到当前K线出现买卖点</div>
+      <div id="bspPromptTitle" class="bspPromptTitle">检测到当前K线出现买卖点</div>
       <div id="bspPromptBody" class="bspPromptBody"></div>
       <div class="bspPromptHint">只能按 Enter 或左键点击确认，确认前将禁止步进到下一根K线。</div>
       <div class="bspPromptActions">
         <button id="bspPromptConfirm" type="button">确认（Enter / 左键）</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 交易状态悬浮窗 -->
+  <div id="tradeStatusOverlay" class="tradeStatusOverlay" style="display: none;">
+    <div class="tradeStatusTitle">当前持仓状态</div>
+    <div class="tradeStatusGrid">
+      <div class="tsItem"><label>持仓周期</label><span id="ts_hold_bars">-</span></div>
+      <div class="tsItem"><label>浮动盈亏</label><span id="ts_pnl">-</span></div>
+      <div class="tsItem"><label>盈亏比例</label><span id="ts_pnl_pct">-</span></div>
+      <div class="tsItem"><label>当前市值</label><span id="ts_value">-</span></div>
+    </div>
+  </div>
+
+  <!-- 交易结算弹窗 -->
+  <div id="settlementModal" class="settlementModal" aria-hidden="true">
+    <div class="panel">
+      <div id="settlementTitle" class="settlementTitle">交易结算</div>
+      <div id="settlementBody" class="settlementBody"></div>
+      <div class="settlementActions">
+        <button id="btnSettlementClose">确 认</button>
       </div>
     </div>
   </div>
@@ -886,6 +1110,7 @@ let viewXMin = 0;
 let viewXMax = 0;
 let viewReady = false;
 let userAdjustedView = false;
+let userRays = JSON.parse(localStorage.getItem("chan_user_rays") || "[]");
 
 const PAD_L = 64;
 const PAD_R = 64;
@@ -901,6 +1126,7 @@ let panStartViewMin = 0;
 let panStartViewMax = 0;
 let panStartYShiftRatio = 0;
 let viewYShiftRatio = 0;
+let viewYZoomRatio = 1.0;
 
 let activeTrade = null;
 let tradeHistory = [];
@@ -914,9 +1140,347 @@ let crosshairEnabled = false;
 let crosshairX = null;
 let crosshairY = null;
 let selectedIndicatorPanel = 0;
-let indicatorSlots = { 0: "none", 1: "none", 2: "none", 3: "none", 4: "none", 5: "none" };
+let indicatorSlots = JSON.parse(localStorage.getItem("chan_indicator_slots") || '{"0":"none","1":"none","2":"none","3":"none","4":"none","5":"none"}');
 const MAIN_INDICATORS = new Set(["none", "boll", "demark", "trendline"]);
 const SUB_INDICATORS = new Set(["none", "macd", "kdj", "rsi"]);
+
+const DEFAULT_CHART_CONFIG = {
+  theme: "light",
+  crosshair: { width: 5, color: "#000000", fontSize: 16 },
+  fx: { width: 1.1, color: "#06b6d4", dashed: true },
+  bi: { widthSure: 3.1, widthUnsure: 2.2, color: "#f59e0b" },
+  seg: { widthSure: 4.8, widthUnsure: 3.5, color: "#059669" },
+  biZs: { width: 1.8, color: "#f59e0b" },
+  segZs: { width: 2.4, color: "#059669" },
+  candle: { width: 1.4, upColor: "#ef4444", downColor: "#22c55e" },
+  bsp: { fontSize: 14, lineColor: "#94a3b8", lineWidth: 1, lineDash: [5, 4] },
+  trade: {
+    rangeWidth: 2,
+    buyColor: "#dc2626",
+    sellColor: "#16a34a",
+    rangeFillBuy: "rgba(239,68,68,0.15)",
+    rangeFillSell: "rgba(34,197,94,0.15)",
+    popupFontSize: 16,
+    markerFontSize: 14
+  },
+  xAxis: { fontSize: 12, rotation: -45, fontWeight: "normal", interval: 10 },
+  yAxis: { fontSize: 12, fontWeight: "normal", interval: 0.5 },
+  toast: { fontSize: 16, fontWeight: "bold", speed: 3000 },
+  legend: { fontSize: 12 }
+};
+
+function deepMerge(target, source) {
+  for (const key in source) {
+    if (source[key] && typeof source[key] === 'object' && !Array.isArray(source[key])) {
+      if (!target[key]) target[key] = {};
+      deepMerge(target[key], source[key]);
+    } else {
+      target[key] = source[key];
+    }
+  }
+  return target;
+}
+
+let savedChartConfig = JSON.parse(localStorage.getItem("chan_chart_config") || "{}");
+let chartConfig = deepMerge(JSON.parse(JSON.stringify(DEFAULT_CHART_CONFIG)), savedChartConfig);
+
+const DEFAULT_SESSION_CONFIG = {
+  code: "600340",
+  begin: "2018-01-01",
+  end: "",
+  cash: "10000",
+  autype: "qfq",
+  theme: "light",
+  chipEnabled: true,
+  chipStretchLevel: "5",
+  chipBucketStep: "0.1",
+  biZsEnabled: true,
+  segZsEnabled: true,
+  stepN: "5"
+};
+let sessionConfig = JSON.parse(localStorage.getItem("chan_session_config") || JSON.stringify(DEFAULT_SESSION_CONFIG));
+
+function saveSessionConfig() {
+  sessionConfig = {
+    code: $("code").value,
+    begin: $("begin").value,
+    end: $("end").value,
+    cash: $("cash").value,
+    autype: $("autype").value,
+    theme: chartConfig.theme,
+    chipEnabled: $("chipEnabled").checked,
+    chipStretchLevel: $("chipStretchLevel").value,
+    chipBucketStep: $("chipBucketStep").value,
+    biZsEnabled: $("biZsEnabled").checked,
+    segZsEnabled: $("segZsEnabled").checked,
+    stepN: $("stepN").value
+  };
+  localStorage.setItem("chan_session_config", JSON.stringify(sessionConfig));
+}
+
+function loadSessionConfig() {
+  if (sessionConfig.code !== undefined) $("code").value = sessionConfig.code;
+  if (sessionConfig.begin !== undefined) $("begin").value = sessionConfig.begin;
+  if (sessionConfig.end !== undefined) $("end").value = sessionConfig.end;
+  if (sessionConfig.cash !== undefined) $("cash").value = sessionConfig.cash;
+  if (sessionConfig.autype !== undefined) $("autype").value = sessionConfig.autype;
+  if (sessionConfig.theme !== undefined) {
+    chartConfig.theme = sessionConfig.theme;
+    applyThemeFromSelect();
+  }
+  if (sessionConfig.chipEnabled !== undefined) $("chipEnabled").checked = sessionConfig.chipEnabled;
+  if (sessionConfig.chipStretchLevel !== undefined) $("chipStretchLevel").value = sessionConfig.chipStretchLevel;
+  if (sessionConfig.chipBucketStep !== undefined) $("chipBucketStep").value = sessionConfig.chipBucketStep;
+  if (sessionConfig.biZsEnabled !== undefined) $("biZsEnabled").checked = sessionConfig.biZsEnabled;
+  if (sessionConfig.segZsEnabled !== undefined) $("segZsEnabled").checked = sessionConfig.segZsEnabled;
+  if (sessionConfig.stepN !== undefined) $("stepN").value = sessionConfig.stepN;
+}
+
+function getCfgColor(c) {
+  if (c && c.startsWith("--")) return cssVar(c, "#000");
+  return c;
+}
+
+function openSettings() {
+  renderSettingsForm();
+  $("settingsModal").classList.add("show");
+}
+
+function closeSettings() {
+  $("settingsModal").classList.remove("show");
+}
+
+function renderSettingsForm() {
+  const container = $("settingsContent");
+  container.innerHTML = "";
+
+  const sections = [
+    {
+      title: "系统主题",
+      key: "theme_section",
+      items: [
+        { label: "主题", subKey: "theme", type: "select", options: [
+          { value: "light", label: "白色" },
+          { value: "dark", label: "黑色" },
+          { value: "eye-care", label: "护眼" }
+        ]}
+      ]
+    },
+    {
+      title: "十字辅助线",
+      key: "crosshair",
+      items: [
+        { label: "粗细", subKey: "width", type: "number", min: 1, max: 10, step: 0.5 },
+        { label: "颜色", subKey: "color", type: "color" },
+        { label: "文字大小", subKey: "fontSize", type: "number", min: 10, max: 24 }
+      ]
+    },
+    {
+      title: "分型 (FX)",
+      key: "fx",
+      items: [
+        { label: "粗细", subKey: "width", type: "number", min: 0.1, max: 5, step: 0.1 },
+        { label: "颜色", subKey: "color", type: "color" }
+      ]
+    },
+    {
+      title: "笔 (Bi)",
+      key: "bi",
+      items: [
+        { label: "粗细(确定)", subKey: "widthSure", type: "number", min: 0.1, max: 8, step: 0.1 },
+        { label: "粗细(未完成)", subKey: "widthUnsure", type: "number", min: 0.1, max: 8, step: 0.1 },
+        { label: "颜色", subKey: "color", type: "color" }
+      ]
+    },
+    {
+      title: "线段 (Seg)",
+      key: "seg",
+      items: [
+        { label: "粗细(确定)", subKey: "widthSure", type: "number", min: 0.1, max: 10, step: 0.1 },
+        { label: "粗细(未完成)", subKey: "widthUnsure", type: "number", min: 0.1, max: 10, step: 0.1 },
+        { label: "颜色", subKey: "color", type: "color" }
+      ]
+    },
+    {
+      title: "中枢 (ZS)",
+      key: "biZs",
+      items: [
+        { label: "笔中枢粗细", subKey: "width", type: "number", min: 0.1, max: 5, step: 0.1 },
+        { label: "笔中枢颜色", subKey: "color", type: "color" }
+      ]
+    },
+    {
+      title: "线段中枢",
+      key: "segZs",
+      items: [
+        { label: "线段中枢粗细", subKey: "width", type: "number", min: 0.1, max: 5, step: 0.1 },
+        { label: "线段中枢颜色", subKey: "color", type: "color" }
+      ]
+    },
+    {
+      title: "K线与图例",
+      key: "candle",
+      items: [
+        { label: "K线描边粗细", subKey: "width", type: "number", min: 0.1, max: 5, step: 0.1 },
+        { label: "上涨颜色", subKey: "upColor", type: "color" },
+        { label: "下跌颜色", subKey: "downColor", type: "color" }
+      ]
+    },
+    {
+      title: "买卖点设置",
+      key: "bsp",
+      items: [
+        { label: "文字大小", subKey: "fontSize", type: "number", min: 8, max: 30 },
+        { label: "连线颜色", subKey: "lineColor", type: "color" },
+        { label: "连线粗细", subKey: "lineWidth", type: "number", min: 0.1, max: 5, step: 0.1 }
+      ]
+    },
+    {
+      title: "X 轴设置",
+      key: "xAxis",
+      items: [
+        { label: "文字大小", subKey: "fontSize", type: "number", min: 8, max: 24 },
+        { label: "文字方向(度)", subKey: "rotation", type: "number", min: -180, max: 180 },
+        { label: "文字粗细", subKey: "fontWeight", type: "select", options: [
+          { value: "normal", label: "常规" },
+          { value: "bold", label: "加粗" }
+        ]},
+        { label: "刻度间隔(K线)", subKey: "interval", type: "number", min: 1, max: 100 }
+      ]
+    },
+    {
+      title: "Y 轴设置",
+      key: "yAxis",
+      items: [
+        { label: "文字大小", subKey: "fontSize", type: "number", min: 8, max: 24 },
+        { label: "文字粗细", subKey: "fontWeight", type: "select", options: [
+          { value: "normal", label: "常规" },
+          { value: "bold", label: "加粗" }
+        ]},
+        { label: "刻度间隔(价格)", subKey: "interval", type: "number", min: 0.001, max: 100, step: 0.001 }
+      ]
+    },
+    {
+      title: "消息弹窗设置",
+      key: "toast",
+      items: [
+        { label: "文字大小", subKey: "fontSize", type: "number", min: 10, max: 30 },
+        { label: "文字粗细", subKey: "fontWeight", type: "select", options: [
+          { value: "normal", label: "常规" },
+          { value: "bold", label: "加粗" }
+        ]},
+        { label: "消失速度(ms)", subKey: "speed", type: "number", min: 500, max: 10000, step: 100 }
+      ]
+    },
+    {
+      title: "交易设置",
+      key: "trade",
+      items: [
+        { label: "买点颜色", subKey: "buyColor", type: "color" },
+        { label: "卖点颜色", subKey: "sellColor", type: "color" },
+        { label: "提示标记文字大小", subKey: "markerFontSize", type: "number", min: 8, max: 30 },
+        { label: "弹窗文字大小", subKey: "popupFontSize", type: "number", min: 10, max: 40 }
+      ]
+    },
+    {
+      title: "买卖区间设置",
+      key: "trade",
+      items: [
+        { label: "持仓区间颜色(买)", subKey: "rangeFillBuy", type: "text", placeholder: "rgba color" },
+        { label: "持仓区间颜色(卖)", subKey: "rangeFillSell", type: "text", placeholder: "rgba color" },
+        { label: "连线粗细", subKey: "rangeWidth", type: "number", min: 1, max: 10 }
+      ]
+    },
+    {
+      title: "全局字体",
+      key: "legend",
+      items: [
+        { label: "图例文字大小", subKey: "fontSize", type: "number", min: 8, max: 20 }
+      ]
+    }
+  ];
+
+  sections.forEach(sec => {
+    const div = document.createElement("div");
+    div.className = "settingsSection";
+    div.innerHTML = `<div class="settingsSectionTitle">${sec.title}</div>`;
+    const grid = document.createElement("div");
+    grid.className = "settingsGrid";
+    sec.items.forEach(item => {
+      let val;
+      if (sec.key === "theme_section") {
+        val = chartConfig.theme;
+      } else {
+        val = chartConfig[sec.key][item.subKey];
+      }
+      
+      const itemDiv = document.createElement("div");
+      itemDiv.className = "settingsItem";
+      
+      if (item.type === "select") {
+        let optionsHtml = item.options.map(o => `<option value="${o.value}" ${val === o.value ? "selected" : ""}>${o.label}</option>`).join("");
+        itemDiv.innerHTML = `
+          <label>${item.label}</label>
+          <select data-key="${sec.key}" data-subkey="${item.subKey}">${optionsHtml}</select>
+        `;
+      } else {
+        // Handle color conversion for rgba (since type=color doesn't support it)
+        let displayVal = val;
+        let type = item.type;
+        if (type === "color" && val.startsWith("rgba")) {
+           // Fallback to text for rgba
+           type = "text";
+        }
+        itemDiv.innerHTML = `
+          <label>${item.label}</label>
+          <input type="${type}" 
+                 value="${displayVal}" 
+                 step="${item.step || 1}" 
+                 placeholder="${item.placeholder || ""}"
+                 data-key="${sec.key}" 
+                 data-subkey="${item.subKey}">
+        `;
+      }
+      grid.appendChild(itemDiv);
+    });
+    div.appendChild(grid);
+    container.appendChild(div);
+  });
+}
+
+function saveSettings() {
+  const inputs = $("settingsContent").querySelectorAll("input, select");
+  inputs.forEach(input => {
+    const key = input.dataset.key;
+    const subkey = input.dataset.subkey;
+    
+    let val = input.value;
+    if (input.type === "number") val = parseFloat(val);
+    
+    if (key === "theme_section") {
+      chartConfig.theme = val;
+      applyThemeFromSelect();
+    } else if (key && subkey) {
+      if (!chartConfig[key]) chartConfig[key] = {};
+      chartConfig[key][subkey] = val;
+    }
+  });
+  localStorage.setItem("chan_chart_config", JSON.stringify(chartConfig));
+  closeSettings();
+  if (lastPayload && lastPayload.ready && lastPayload.chart) draw(lastPayload.chart);
+}
+
+function resetSettings() {
+  if (confirm("确定要恢复默认设置吗？")) {
+    chartConfig = JSON.parse(JSON.stringify(DEFAULT_CHART_CONFIG));
+    renderSettingsForm();
+  }
+}
+
+$("btnSettingsOpen").addEventListener("click", openSettings);
+$("btnSettingsClose").addEventListener("click", closeSettings);
+$("btnSettingsSave").addEventListener("click", saveSettings);
+$("btnSettingsReset").addEventListener("click", resetSettings);
 
 function cssVar(name, fallback) {
   const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -986,8 +1550,29 @@ function showBspPrompt(payload, lines, key) {
     time: payload && payload.time ? payload.time : "-",
     lines
   };
+  
+  const isBuy = lines.includes("买点");
+  const isSell = lines.includes("卖点");
+  const titleEl = $("bspPromptTitle");
+  if (titleEl) {
+    if (isBuy && !isSell) {
+      titleEl.textContent = "检测到当前K线出现买点";
+      titleEl.style.color = getCfgColor(chartConfig.trade.buyColor);
+    } else if (isSell && !isBuy) {
+      titleEl.textContent = "检测到当前K线出现卖点";
+      titleEl.style.color = getCfgColor(chartConfig.trade.sellColor);
+    } else {
+      titleEl.textContent = "检测到当前K线出现买卖点";
+      titleEl.style.color = "#b91c1c";
+    }
+  }
+
   const body = $("bspPromptBody");
-  if (body) body.textContent = `Time: ${pendingBspPrompt.time}\n${pendingBspPrompt.lines}`;
+  if (body) {
+    body.textContent = `Time: ${pendingBspPrompt.time}\n${pendingBspPrompt.lines}`;
+    body.style.fontSize = `${chartConfig.trade.popupFontSize}px`;
+  }
+  
   const box = $("bspPrompt");
   if (box) box.classList.add("show");
   const btn = $("bspPromptConfirm");
@@ -1054,7 +1639,7 @@ function syncIndicatorControls() {
 }
 
 function applyThemeFromSelect() {
-  const t = $("theme").value || "light";
+  const t = chartConfig.theme || "light";
   document.documentElement.setAttribute("data-theme", t);
   if (lastPayload && lastPayload.ready && lastPayload.chart) draw(lastPayload.chart);
 }
@@ -1069,24 +1654,22 @@ $("indicatorType").addEventListener("change", () => {
   const value = $("indicatorType").value;
   const ok = selectedIndicatorPanel === 0 ? isMainIndicator(value) : isSubIndicator(value);
   indicatorSlots[selectedIndicatorPanel] = ok ? value : "none";
+  localStorage.setItem("chan_indicator_slots", JSON.stringify(indicatorSlots));
   syncIndicatorControls();
   if (lastPayload && lastPayload.ready && lastPayload.chart) draw(lastPayload.chart);
 });
 
-$("chipEnabled").addEventListener("change", () => {
-  if (lastPayload && lastPayload.ready && lastPayload.chart) draw(lastPayload.chart);
-});
-$("chipStretchLevel").addEventListener("change", () => {
-  if (lastPayload && lastPayload.ready && lastPayload.chart) draw(lastPayload.chart);
-});
-$("chipBucketStep").addEventListener("change", () => {
-  if (lastPayload && lastPayload.ready && lastPayload.chart) draw(lastPayload.chart);
-});
-$("biZsEnabled").addEventListener("change", () => {
-  if (lastPayload && lastPayload.ready && lastPayload.chart) draw(lastPayload.chart);
-});
-$("segZsEnabled").addEventListener("change", () => {
-  if (lastPayload && lastPayload.ready && lastPayload.chart) draw(lastPayload.chart);
+const IDS_AFFECTING_CHART = ["chipEnabled", "chipStretchLevel", "chipBucketStep", "biZsEnabled", "segZsEnabled"];
+const IDS_SESSION_PARAMS = ["code", "begin", "end", "cash", "autype", "stepN"];
+[...IDS_AFFECTING_CHART, ...IDS_SESSION_PARAMS].forEach(id => {
+  const el = $(id);
+  if (!el) return;
+  el.addEventListener("change", () => {
+    saveSessionConfig();
+    if (IDS_AFFECTING_CHART.includes(id)) {
+      if (lastPayload && lastPayload.ready && lastPayload.chart) draw(lastPayload.chart);
+    }
+  });
 });
 
 syncIndicatorControls();
@@ -1231,7 +1814,7 @@ window.addEventListener("mousemove", (e) => {
 
 canvas.addEventListener("mousemove", (e) => {
   if (isPanning) return;
-  if (!crosshairEnabled || !lastPayload || !lastPayload.ready) return;
+  if (!lastPayload || !lastPayload.ready) return;
   const rect = canvas.getBoundingClientRect();
   const s = toScaler(lastPayload.chart, Math.max(allXMin, viewXMin), viewXMax);
   const visibleKs = getVisibleKs(lastPayload.chart, s.xMin, s.xMax);
@@ -1240,25 +1823,45 @@ canvas.addEventListener("mousemove", (e) => {
   const clampedX = Math.max(PAD_L, Math.min(s.w - PAD_R, rawX));
   const targetX = s.xMin + ((clampedX - PAD_L) / Math.max(1, s.plotW)) * (s.xMax - s.xMin);
   const refK = nearestKByX(visibleKs, targetX);
+  
+  // Always update mouse position for ray proximity
   crosshairX = refK ? s.x(refK.x) : clampedX;
   crosshairY = Math.max(PAD_T, Math.min(s.contentBottom, rawY));
+  
   draw(lastPayload.chart);
 });
 
 canvas.addEventListener("mouseleave", () => {
-  if (!crosshairEnabled) return;
   crosshairX = null;
   crosshairY = null;
   if (lastPayload && lastPayload.ready) draw(lastPayload.chart);
 });
 
 canvas.addEventListener("dblclick", () => {
+  if (crosshairX !== null && crosshairY !== null) {
+    const s = toScaler(lastPayload.chart, Math.max(allXMin, viewXMin), viewXMax);
+    const yp = crosshairY;
+    
+    // Check if we are deleting a ray
+    let removed = false;
+    userRays = userRays.filter(ray => {
+      const rayYp = s.y(ray.y);
+      if (Math.abs(rayYp - yp) < 8) {
+        removed = true;
+        return false;
+      }
+      return true;
+    });
+    
+    if (removed) {
+      localStorage.setItem("chan_user_rays", JSON.stringify(userRays));
+      draw(lastPayload.chart);
+      return;
+    }
+  }
+
   crosshairEnabled = !crosshairEnabled;
   canvas.style.cursor = crosshairEnabled ? "crosshair" : "default";
-  if (!crosshairEnabled) {
-    crosshairX = null;
-    crosshairY = null;
-  }
   if (lastPayload && lastPayload.ready) draw(lastPayload.chart);
 });
 
@@ -1285,8 +1888,84 @@ window.addEventListener("keydown", (e) => {
       return;
     }
   }
+  
+  if ($("settlementModal").classList.contains("show")) {
+    if (e.code === "Enter") {
+      e.preventDefault();
+      $("btnSettlementClose").click();
+      return;
+    }
+  }
+
   const tag = (document.activeElement && document.activeElement.tagName) ? document.activeElement.tagName.toLowerCase() : "";
   if (tag === "input" || tag === "select" || tag === "textarea") return;
+  
+  // Ctrl + Enter: Draw ray
+  if (e.ctrlKey && e.code === "Enter") {
+    if (crosshairEnabled && crosshairX !== null && crosshairY !== null) {
+      e.preventDefault();
+      const s = toScaler(lastPayload.chart, Math.max(allXMin, viewXMin), viewXMax);
+      const refK = getReferenceK(lastPayload.chart, s);
+      if (refK) {
+        const yVal = s.yFromPx(crosshairY);
+        userRays.push({ x: refK.x, y: yVal });
+        localStorage.setItem("chan_user_rays", JSON.stringify(userRays));
+        draw(lastPayload.chart);
+      }
+      return;
+    }
+  }
+
+  // Ctrl + Alt shortcuts
+  if (e.ctrlKey && e.altKey) {
+    if (e.code === "KeyN") {
+        e.preventDefault();
+        if (!$("btnStepN").disabled) $("btnStepN").click();
+        return;
+    }
+    if (e.code === "KeyM") {
+        e.preventDefault();
+        if (!$("btnBackN").disabled) $("btnBackN").click();
+        return;
+    }
+    if (e.code === "ArrowUp") {
+        e.preventDefault();
+        viewYZoomRatio *= 1.15;
+        draw(lastPayload.chart);
+        return;
+    }
+    if (e.code === "ArrowDown") {
+        e.preventDefault();
+        viewYZoomRatio /= 1.15;
+        draw(lastPayload.chart);
+        return;
+    }
+    if (e.code === "ArrowLeft") {
+        e.preventDefault();
+        zoomViewAt(1.15, canvas.clientWidth / 2);
+        return;
+    }
+    if (e.code === "ArrowRight") {
+        e.preventDefault();
+        zoomViewAt(1 / 1.15, canvas.clientWidth / 2);
+        return;
+    }
+  }
+
+  // Ctrl + ArrowUp/Down for crosshair Y adjustment
+  if (e.ctrlKey && (e.code === "ArrowUp" || e.code === "ArrowDown")) {
+    if (crosshairEnabled && crosshairY !== null) {
+      e.preventDefault();
+      const s = toScaler(lastPayload.chart, Math.max(allXMin, viewXMin), viewXMax);
+      const delta = e.code === "ArrowUp" ? -0.01 : 0.01;
+      const curPrice = s.yFromPx(crosshairY);
+      const newPrice = curPrice - delta; // Note: ArrowUp moves Y down in px -> moves price up.
+      crosshairY = s.y(newPrice);
+      draw(lastPayload.chart);
+      return;
+    }
+  }
+
   if (e.code === "Space") {
     e.preventDefault();
     if (!$("btnStep").disabled && !pendingBspPrompt && !stepInFlight) $("btnStep").click();
@@ -1330,6 +2009,7 @@ window.addEventListener("keydown", (e) => {
         const prev = nearestKByX(lastPayload.chart.kline.filter((k) => k.x < refK.x), refK.x - 1);
         if (prev) {
           crosshairX = s.x(prev.x);
+          crosshairY = s.y(prev.c); // Alignment to Close Price
           draw(lastPayload.chart);
         }
       }
@@ -1348,6 +2028,7 @@ window.addEventListener("keydown", (e) => {
         const next = nearestKByX(lastPayload.chart.kline.filter((k) => k.x > refK.x), refK.x + 1);
         if (next) {
           crosshairX = s.x(next.x);
+          crosshairY = s.y(next.c); // Alignment to Close Price
           draw(lastPayload.chart);
         }
       }
@@ -1360,13 +2041,91 @@ window.addEventListener("keydown", (e) => {
   }
 });
 
+let msgHistory = JSON.parse(localStorage.getItem("chan_msg_history") || "[]");
+
 function setMsg(text) {
   const t = new Date().toLocaleTimeString();
-  const div = document.createElement("div");
-  div.className = "msgItem";
-  div.textContent = `[${t}] ${text}`;
-  msgList.prepend(div);
+  const entry = { time: t, text: text };
+  msgHistory.push(entry);
+  if (msgHistory.length > 500) msgHistory.shift();
+  localStorage.setItem("chan_msg_history", JSON.stringify(msgHistory));
+  showToast(text);
 }
+
+function showToast(text) {
+  const container = $("toastContainer");
+  if (!container) return;
+  
+  const toast = document.createElement("div");
+  toast.className = "toast";
+  toast.textContent = text;
+  
+  // Apply settings
+  toast.style.fontSize = `${chartConfig.toast.fontSize}px`;
+  toast.style.fontWeight = chartConfig.toast.fontWeight;
+  
+  container.appendChild(toast);
+  
+  const speed = chartConfig.toast.speed || 3000;
+  setTimeout(() => {
+    toast.style.opacity = "0";
+    setTimeout(() => toast.remove(), 300);
+  }, speed);
+}
+
+function showMsgHistory() {
+  const list = $("msgHistoryList");
+  list.innerHTML = "";
+  msgHistory.slice().reverse().forEach(m => {
+    const item = document.createElement("div");
+    item.className = "msgHistoryItem";
+    item.innerHTML = `<span class="time">[${m.time}]</span><span class="text">${m.text}</span>`;
+    list.appendChild(item);
+  });
+  $("msgHistoryModal").classList.add("show");
+}
+
+$("btnMsgHistory").onclick = showMsgHistory;
+$("btnMsgHistoryClose").onclick = () => $("msgHistoryModal").classList.remove("show");
+$("btnMsgHistoryOk").onclick = () => $("msgHistoryModal").classList.remove("show");
+$("btnMsgHistoryClear").onclick = () => {
+  if (confirm("确定要清空所有消息历史记录吗？")) {
+    msgHistory = [];
+    localStorage.removeItem("chan_msg_history");
+    $("msgHistoryList").innerHTML = "";
+  }
+};
+
+// Sidebar Resizer
+const resizer = $("resizer");
+const leftPanel = document.querySelector(".left");
+let isResizing = false;
+
+resizer.addEventListener("mousedown", (e) => {
+  isResizing = true;
+  document.body.style.cursor = "col-resize";
+});
+
+window.addEventListener("mousemove", (e) => {
+  if (!isResizing) return;
+  const newWidth = window.innerWidth - e.clientX;
+  if (newWidth > 200 && newWidth < 800) {
+    leftPanel.style.width = `${newWidth}px`;
+    resizeCanvas();
+  }
+});
+
+window.addEventListener("mouseup", () => {
+  if (isResizing) {
+    isResizing = false;
+    document.body.style.cursor = "default";
+    localStorage.setItem("chan_sidebar_width", leftPanel.style.width);
+  }
+});
+
+// Restore sidebar width
+const savedWidth = localStorage.getItem("chan_sidebar_width");
+if (savedWidth) leftPanel.style.width = savedWidth;
 
 function setState(p) {
   if (!p.ready) {
@@ -1374,22 +2133,105 @@ function setState(p) {
     setText("st_pos", "-");
     setText("st_cost", "-");
     setText("st_price", "-");
+    setText("st_pos_pnl", "-");
     setText("st_equity", "-");
     setText("st_total_pnl", "-");
-    setChipState("-", "-", "-", "-", "-");
     return;
   }
   const a = p.account;
   const price = (p.price === null || p.price === undefined) ? null : Number(p.price);
   const totalPnl = a.equity - a.initial_cash;
+  const posPnl = a.position > 0 && price !== null ? (price - a.avg_cost) * a.position : 0;
 
   setText("st_cash", a.cash.toFixed(2));
   setText("st_pos", String(a.position));
   setText("st_cost", a.avg_cost.toFixed(4));
   setText("st_price", price === null ? "-" : price.toFixed(4));
+  
+  const posPnlEl = $("st_pos_pnl");
+  if (posPnlEl) {
+    posPnlEl.textContent = posPnl.toFixed(2);
+    posPnlEl.className = posPnl >= 0 ? "pnl-plus" : "pnl-minus";
+  }
+
   setText("st_equity", a.equity.toFixed(2));
-  setText("st_total_pnl", totalPnl.toFixed(2));
+  
+  const totalPnlEl = $("st_total_pnl");
+  if (totalPnlEl) {
+    totalPnlEl.textContent = totalPnl.toFixed(2);
+    totalPnlEl.className = totalPnl >= 0 ? "pnl-plus" : "pnl-minus";
+  }
 }
+
+function updateTradeStatusOverlay(payload) {
+  const overlay = $("tradeStatusOverlay");
+  if (!payload || !payload.ready || !payload.account || payload.account.position <= 0) {
+    overlay.style.display = "none";
+    return;
+  }
+
+  const a = payload.account;
+  const price = payload.price;
+  const buyX = activeTrade ? activeTrade.buyX : null;
+  const lastX = payload.chart.kline[payload.chart.kline.length - 1].x;
+  const holdBars = buyX !== null ? (lastX - buyX) : 0;
+  const pnl = (price - a.avg_cost) * a.position;
+  const pnlPct = (pnl / (a.avg_cost * a.position)) * 100;
+  const value = price * a.position;
+
+  overlay.style.display = "block";
+  overlay.className = `tradeStatusOverlay ${pnl >= 0 ? 'overlay-plus' : 'overlay-minus'}`;
+
+  setText("ts_hold_bars", `${holdBars} 根`);
+  
+  const pnlEl = $("ts_pnl");
+  pnlEl.textContent = pnl.toFixed(2);
+  pnlEl.className = pnl >= 0 ? "pnl-plus" : "pnl-minus";
+
+  const pnlPctEl = $("ts_pnl_pct");
+  pnlPctEl.textContent = `${pnlPct.toFixed(2)}%`;
+  pnlPctEl.className = pnl >= 0 ? "pnl-plus" : "pnl-minus";
+
+  setText("ts_value", value.toFixed(2));
+}
+
+function showSettlement(tr, stockName) {
+  const pnl = (tr.sellPrice - tr.buyPrice) * tr.shares;
+  const pnlPct = ((tr.sellPrice - tr.buyPrice) / tr.buyPrice) * 100;
+  const holdBars = tr.sellX - tr.buyX;
+  
+  // Estimate max favorable excursion and max adverse excursion if we have the data
+  // For now we just show basic info
+  
+  const modal = $("settlementModal");
+  const body = $("settlementBody");
+  const title = $("settlementTitle");
+  
+  title.textContent = pnl >= 0 ? "交易结算 - 盈利" : "交易结算 - 亏损";
+  title.style.color = pnl >= 0 ? "#ef4444" : "#22c55e";
+  
+  body.innerHTML = `
+    <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+      <div>标的: <b>${stockName || '-'}</b></div>
+      <div>持仓周期: <b>${holdBars} 根</b></div>
+      <div>买入价格: <b>${tr.buyPrice.toFixed(4)}</b></div>
+      <div>卖出价格: <b>${tr.sellPrice.toFixed(4)}</b></div>
+      <div>成交股数: <b>${tr.shares}</b></div>
+      <div style="grid-column: span 2; border-top: 1px dashed #ccc; padding-top: 8px; margin-top: 4px;"></div>
+      <div>盈亏金额: <b class="${pnl >= 0 ? 'pnl-plus' : 'pnl-minus'}">${pnl.toFixed(2)}</b></div>
+      <div>盈亏比例: <b class="${pnl >= 0 ? 'pnl-plus' : 'pnl-minus'}">${pnlPct.toFixed(2)}%</b></div>
+    </div>
+    <div style="margin-top: 16px; font-size: 12px; color: #64748b;">
+      * 最大上涨和回撤指标将在后续版本支持更精确的日内数据统计。
+    </div>
+  `;
+  
+  modal.classList.add("show");
+}
+
+$("btnSettlementClose").onclick = () => {
+  $("settlementModal").classList.remove("show");
+};
 
 function getVisibleKs(chart, xMin, xMax) {
   let visibleK = chart.kline.filter((k) => k.x >= xMin && k.x <= xMax);
@@ -1476,6 +2318,11 @@ function toScaler(chart, xMin, xMax) {
     yMax = 1;
   }
   const baseYSpan = Math.max(1e-6, yMax - yMin);
+  const midY = (yMax + yMin) / 2;
+  const zoomedSpan = baseYSpan / viewYZoomRatio;
+  yMin = midY - zoomedSpan / 2;
+  yMax = midY + zoomedSpan / 2;
+
   if (viewYShiftRatio !== 0) {
     const yOffset = baseYSpan * viewYShiftRatio;
     yMin += yOffset;
@@ -1553,14 +2400,14 @@ function drawAxes(s) {
   ctx.lineTo(xRight, yBase);
   ctx.stroke();
 
-  // main y labels/ticks on both sides, fixed to 0.5 intervals
-  const tickStep = PRICE_AXIS_STEP;
+  // main y labels/ticks on both sides
+  const tickStep = chartConfig.yAxis.interval || 0.5;
   const startTick = Math.ceil(s.yMin / tickStep);
   const endTick = Math.floor(s.yMax / tickStep);
   ctx.save();
   ctx.strokeStyle = cssVar("--grid", "#e2e8f0");
   ctx.fillStyle = cssVar("--muted", "#475569");
-  ctx.font = "12px Consolas";
+  ctx.font = `${chartConfig.yAxis.fontWeight || "normal"} ${chartConfig.yAxis.fontSize || 12}px Consolas`;
   ctx.lineWidth = 1;
   for (let t = startTick; t <= endTick; t++) {
     const p = t * tickStep;
@@ -1578,10 +2425,10 @@ function drawAxes(s) {
     ctx.moveTo(xRight, y);
     ctx.lineTo(xRight + 4, y);
     ctx.stroke();
-    const txt = formatPriceText(p, 1);
-    ctx.fillText(txt, 4, y + 4);
+    const txt = formatPriceText(p, 2);
+    ctx.fillText(txt, 4, y + (chartConfig.yAxis.fontSize / 2.5));
     const tw = ctx.measureText(txt).width;
-    ctx.fillText(txt, s.w - tw - 4, y + 4);
+    ctx.fillText(txt, s.w - tw - 4, y + (chartConfig.yAxis.fontSize / 2.5));
   }
   ctx.restore();
   
@@ -1605,16 +2452,16 @@ function drawAxes(s) {
 function drawXTicks(s, yPos) {
   const span = s.xMax - s.xMin;
   if (span <= 0) return;
-  const tickCount = 10;
+  const interval = chartConfig.xAxis.interval || 10;
   const tickXs = [];
-  for (let i = 0; i <= tickCount; i++) {
-    const x = Math.round(s.xMin + (span * i) / tickCount);
-    if (x < s.xMin || x > s.xMax) continue;
+  const startX = Math.ceil(s.xMin / interval) * interval;
+  for (let x = startX; x <= s.xMax; x += interval) {
     tickXs.push(x);
   }
   const uniq = [...new Set(tickXs)];
 
   ctx.save();
+  ctx.font = `${chartConfig.xAxis.fontWeight || "normal"} ${chartConfig.xAxis.fontSize || 12}px Consolas`;
   for (const x of uniq) {
     const xp = s.x(x);
     ctx.strokeStyle = cssVar("--grid", "#e2e8f0");
@@ -1627,7 +2474,8 @@ function drawXTicks(s, yPos) {
     if (!t) continue;
     ctx.save();
     ctx.translate(xp, yPos + 20);
-    ctx.rotate(-Math.PI / 4);
+    const rad = (chartConfig.xAxis.rotation || -45) * (Math.PI / 180);
+    ctx.rotate(rad);
     ctx.fillStyle = cssVar("--muted", "#475569");
     ctx.fillText(t, 0, 0);
     ctx.restore();
@@ -1656,8 +2504,8 @@ function drawCrosshair(s) {
   ];
 
   ctx.save();
-  ctx.strokeStyle = cssVar("--grid", "#64748b");
-  ctx.lineWidth = 1;
+  ctx.strokeStyle = getCfgColor(chartConfig.crosshair.color);
+  ctx.lineWidth = chartConfig.crosshair.width;
   ctx.setLineDash([4, 4]);
   ctx.beginPath();
   ctx.moveTo(x, PAD_T);
@@ -1668,33 +2516,35 @@ function drawCrosshair(s) {
   ctx.setLineDash([]);
 
   // Dynamic horizontal-line price label on both y-axes.
-  ctx.font = "12px Consolas";
+  const crossFontSize = chartConfig.crosshair.fontSize;
+  ctx.font = `bold ${crossFontSize}px Consolas`;
   const axisPrice = formatPriceText(crossPrice, 3);
-  const axisPad = 6;
-  const axisH = 18;
+  const axisPad = 8;
+  const axisH = crossFontSize + 10;
   const axisW = ctx.measureText(axisPrice).width + axisPad * 2;
   const axisY = y - axisH / 2;
   const leftX = Math.max(2, PAD_L - axisW - 4);
   const rightX = s.w - PAD_R + 4;
-  ctx.fillStyle = cssVar("--legendBg", "rgba(255,255,255,0.92)");
-  ctx.strokeStyle = cssVar("--legendBorder", "rgba(148,163,184,0.6)");
+  ctx.fillStyle = cssVar("--legendBg", "rgba(255,255,255,0.95)");
+  ctx.strokeStyle = getCfgColor(chartConfig.crosshair.color);
   ctx.fillRect(leftX, axisY, axisW, axisH);
   ctx.strokeRect(leftX, axisY, axisW, axisH);
   ctx.fillRect(rightX, axisY, axisW, axisH);
   ctx.strokeRect(rightX, axisY, axisW, axisH);
-  ctx.fillStyle = cssVar("--legendText", "#0f172a");
-  ctx.fillText(axisPrice, leftX + axisPad, y + 4);
-  ctx.fillText(axisPrice, rightX + axisPad, y + 4);
+  ctx.fillStyle = getCfgColor(chartConfig.crosshair.color);
+  ctx.fillText(axisPrice, leftX + axisPad, y + (crossFontSize / 2) - 2);
+  ctx.fillText(axisPrice, rightX + axisPad, y + (crossFontSize / 2) - 2);
 
   // OHLC + date + weekday + BSP
+  ctx.font = `bold ${crossFontSize}px Consolas`;
   let maxW = 0;
   for (const row of infoRows) {
     const w = ctx.measureText(row).width;
     if (w > maxW) maxW = w;
   }
-  const cardPad = 8;
-  const rowH = 16;
-  const boxW = Math.max(170, maxW + cardPad * 2);
+  const cardPad = 10;
+  const rowH = crossFontSize + 6;
+  const boxW = Math.max(170 + (crossFontSize - 12) * 10, maxW + cardPad * 2);
   const boxH = cardPad * 2 + rowH * infoRows.length;
   let boxX = x + 12;
   if (boxX + boxW > s.w - PAD_R - 4) boxX = x - boxW - 12;
@@ -1702,13 +2552,13 @@ function drawCrosshair(s) {
   let boxY = y - boxH - 10;
   boxY = Math.max(PAD_T + 4, Math.min(s.contentBottom - boxH - 4, boxY));
 
-  ctx.fillStyle = cssVar("--legendBg", "rgba(255,255,255,0.92)");
-  ctx.strokeStyle = cssVar("--legendBorder", "rgba(148,163,184,0.6)");
+  ctx.fillStyle = cssVar("--legendBg", "rgba(255,255,255,0.95)");
+  ctx.strokeStyle = getCfgColor(chartConfig.crosshair.color);
   ctx.fillRect(boxX, boxY, boxW, boxH);
   ctx.strokeRect(boxX, boxY, boxW, boxH);
-  ctx.fillStyle = cssVar("--legendText", "#0f172a");
+  ctx.fillStyle = getCfgColor(chartConfig.crosshair.color);
   for (let i = 0; i < infoRows.length; i++) {
-    ctx.fillText(infoRows[i], boxX + cardPad, boxY + cardPad + 12 + i * rowH);
+    ctx.fillText(infoRows[i], boxX + cardPad, boxY + cardPad + crossFontSize + i * rowH);
   }
   ctx.restore();
 }
@@ -1830,8 +2680,8 @@ function drawChips(chart, s) {
 function drawCandles(chart, s) {
   const ks = s.visibleK;
   const bodyW = Math.max(3, (s.plotW) / Math.max(42, ks.length * 1.28));
-  const upS = cssVar("--candleUp", "#ef4444");
-  const dnS = cssVar("--candleDown", "#22c55e");
+  const upS = getCfgColor(chartConfig.candle.upColor);
+  const dnS = getCfgColor(chartConfig.candle.downColor);
   const upF = cssVar("--candleUpFill", "rgba(239,68,68,0.12)");
   const dnF = cssVar("--candleDownFill", "rgba(34,197,94,0.75)");
   for (const k of ks) {
@@ -1843,7 +2693,7 @@ function drawCandles(chart, s) {
     const up = k.c >= k.o;
     ctx.strokeStyle = up ? upS : dnS;
     ctx.fillStyle = up ? upF : dnF;
-    ctx.lineWidth = 1.4;
+    ctx.lineWidth = chartConfig.candle.width;
 
     ctx.beginPath();
     ctx.moveTo(x, yh);
@@ -1885,21 +2735,22 @@ function drawLines(arr, s, color, width, dashed = false) {
 function drawLegend() {
   const pad = 8;
   const lines = [
-    { label: "分型连线", color: cssVar("--lineFx", "#06b6d4"), dashed: true, w: 1.1 },
-    { label: "笔(确定)", color: cssVar("--lineBi", "#f59e0b"), dashed: false, w: 3.1 },
-    { label: "笔(未完成)", color: cssVar("--lineBi", "#f59e0b"), dashed: true, w: 2.2 },
-    { label: "线段(确定)", color: cssVar("--lineSeg", "#059669"), dashed: false, w: 4.8 },
-    { label: "线段(未完成)", color: cssVar("--lineSeg", "#059669"), dashed: true, w: 3.5 },
+    { label: "分型连线", color: getCfgColor(chartConfig.fx.color), dashed: true, w: chartConfig.fx.width },
+    { label: "笔(确定)", color: getCfgColor(chartConfig.bi.color), dashed: false, w: chartConfig.bi.widthSure },
+    { label: "笔(未完成)", color: getCfgColor(chartConfig.bi.color), dashed: true, w: chartConfig.bi.widthUnsure },
+    { label: "线段(确定)", color: getCfgColor(chartConfig.seg.color), dashed: false, w: chartConfig.seg.widthSure },
+    { label: "线段(未完成)", color: getCfgColor(chartConfig.seg.color), dashed: true, w: chartConfig.seg.widthUnsure },
   ];
   ctx.save();
-  ctx.font = "12px Consolas";
+  const fontSize = chartConfig.legend.fontSize;
+  ctx.font = `${fontSize}px Consolas`;
   ctx.textBaseline = "middle";
   let maxW = 0;
   for (const L of lines) {
     const tw = ctx.measureText(L.label).width + 52;
     if (tw > maxW) maxW = tw;
   }
-  const lh = 18;
+  const lh = fontSize + 6;
   const boxH = pad * 2 + lines.length * lh;
   const boxW = maxW;
   const x0 = PAD_L + 4;
@@ -1933,8 +2784,8 @@ function drawLegend() {
 function drawTradeBands(s, chart) {
   if (!lastPayload || !lastPayload.ready) return;
   const lastX = chart.kline[chart.kline.length - 1].x;
-  const holdFillActive = cssVar("--holdFill", "rgba(59,130,246,0.14)");
-  const holdFillPast = cssVar("--holdFillPast", "rgba(99,102,241,0.12)");
+  const holdFillActive = getCfgColor(chartConfig.trade.rangeFillBuy);
+  const holdFillPast = getCfgColor(chartConfig.trade.rangeFillSell);
 
   const fillBand = (x1, x2, alphaMul, color) => {
     const lo = Math.min(x1, x2);
@@ -1963,15 +2814,15 @@ function drawTradeBands(s, chart) {
 
 function drawTradeMarkers(s, chart) {
   if (!lastPayload || !lastPayload.ready) return;
-  const buyC = cssVar("--markBuy", "#dc2626");
-  const sellC = cssVar("--markSell", "#16a34a");
+  const buyC = getCfgColor(chartConfig.trade.buyColor);
+  const sellC = getCfgColor(chartConfig.trade.sellColor);
 
   const mark = (xBar, color, tag) => {
     if (xBar < s.xMin || xBar > s.xMax) return;
     const xp = s.x(xBar);
     ctx.save();
     ctx.strokeStyle = color;
-    ctx.lineWidth = 2;
+    ctx.lineWidth = chartConfig.trade.rangeWidth;
     ctx.setLineDash([5, 4]);
     ctx.beginPath();
     ctx.moveTo(xp, PAD_T);
@@ -1979,7 +2830,7 @@ function drawTradeMarkers(s, chart) {
     ctx.stroke();
     ctx.setLineDash([]);
     ctx.fillStyle = color;
-    ctx.font = "bold 14px Consolas";
+    ctx.font = `bold ${chartConfig.trade.markerFontSize}px Consolas`;
     ctx.textAlign = "center";
     ctx.fillText(tag, xp, s.plotBottomY + 18);
     ctx.restore();
@@ -2002,7 +2853,7 @@ function drawTradeRays(s) {
     if (hi < s.xMin || lo > s.xMax) return;
     ctx.save();
     ctx.strokeStyle = color;
-    ctx.lineWidth = 2.0;
+    ctx.lineWidth = chartConfig.trade.rangeWidth;
     if (dashed) ctx.setLineDash([7, 5]);
     else ctx.setLineDash([]);
     ctx.beginPath();
@@ -2012,8 +2863,8 @@ function drawTradeRays(s) {
     ctx.restore();
   };
 
-  const rayBuy = cssVar("--rayBuy", "#f97316");
-  const raySell = cssVar("--raySell", "#14b8a6");
+  const rayBuy = getCfgColor(chartConfig.trade.buyColor);
+  const raySell = getCfgColor(chartConfig.trade.sellColor);
   for (const tr of tradeHistory) {
     drawRay(tr.buyX, tr.buyPrice, tr.sellX, rayBuy, false);
     drawRay(tr.sellX, tr.sellPrice, tr.buyX, raySell, true);
@@ -2161,10 +3012,10 @@ function drawBsp(arr, s) {
     .sort((a, b) => a - b);
 
   const bspBaseY = s.h - 10;
-  const lineH = 22;
-  ctx.font = "bold 22px Consolas";
-  const colBuy = cssVar("--bspBuy", "#dc2626");
-  const colSell = cssVar("--bspSell", "#16a34a");
+  const lineH = chartConfig.bsp.fontSize + 8;
+  ctx.font = `bold ${chartConfig.bsp.fontSize + 8}px Consolas`;
+  const colBuy = getCfgColor(chartConfig.trade.buyColor);
+  const colSell = getCfgColor(chartConfig.trade.sellColor);
   const byX = new Map((s.visibleK || []).map((k) => [k.x, k]));
 
   for (const x of xs) {
@@ -2176,9 +3027,9 @@ function drawBsp(arr, s) {
       const anchorY = s.y(k.l);
       const toY = Math.max(PAD_T + 2, Math.min(s.contentBottom - 2, yTopText));
       ctx.save();
-      ctx.lineWidth = 1;
-      ctx.setLineDash([5, 4]);
-      ctx.strokeStyle = cssVar("--grid", "#94a3b8");
+      ctx.lineWidth = chartConfig.bsp.lineWidth;
+      ctx.setLineDash(chartConfig.bsp.lineDash || [5, 4]);
+      ctx.strokeStyle = getCfgColor(chartConfig.bsp.lineColor);
       ctx.beginPath();
       ctx.moveTo(xp, anchorY);
       ctx.lineTo(xp, toY);
@@ -2187,6 +3038,7 @@ function drawBsp(arr, s) {
     }
     // stack labels (并列换行 -> vertical stacking)
     const maxLines = 8;
+    ctx.font = `bold ${chartConfig.bsp.fontSize}px Consolas`;
     for (let i = 0; i < Math.min(ps.length, maxLines); i++) {
       const p = ps[i];
       const c = p.is_buy ? colBuy : colSell;
@@ -2195,6 +3047,41 @@ function drawBsp(arr, s) {
       ctx.fillText(txt, xp - 10, bspBaseY - i * lineH);
     }
   }
+}
+
+function drawUserRays(s) {
+  if (!userRays || userRays.length === 0) return;
+  ctx.save();
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = "#f97316"; // Orange
+  ctx.setLineDash([8, 4]);
+  ctx.font = "12px Consolas";
+  for (const ray of userRays) {
+    const xp = s.x(ray.x);
+    const yp = s.y(ray.y);
+    const xEnd = s.w - PAD_R;
+    if (xp > xEnd) continue;
+    ctx.beginPath();
+    ctx.moveTo(xp, yp);
+    ctx.lineTo(xEnd, yp);
+    ctx.stroke();
+    
+    // Draw price at the end
+    ctx.fillStyle = "#f97316";
+    ctx.fillText(ray.y.toFixed(2), xEnd + 4, yp + 4);
+    
+    // label for deletion if crosshair or mouse is near
+    if (crosshairX !== null && crosshairY !== null) {
+      const cxp = crosshairX;
+      const cyp = crosshairY;
+      if (Math.abs(cyp - yp) < 8 && cxp >= xp - 10 && cxp <= xEnd + 10) {
+         ctx.fillStyle = "#ef4444";
+         ctx.font = "bold 12px sans-serif";
+         ctx.fillText("双击删除射线", xp + 5, yp - 5);
+      }
+    }
+  }
+  ctx.restore();
 }
 
 function drawZsRects(arr, s, color, width) {
@@ -2236,33 +3123,35 @@ function draw(chart) {
   drawChips(chart, s);
   drawTradeBands(s, chart);
   drawTradeRays(s);
+  drawUserRays(s);
   drawAxes(s);
   drawIndicators(chart, s);
   drawCandles(chart, s);
   if ($("biZsEnabled") && $("biZsEnabled").checked) {
-    drawZsRects(chart.bi_zs || [], s, cssVar("--lineBi", "#f59e0b"), 1.8);
+    drawZsRects(chart.bi_zs || [], s, getCfgColor(chartConfig.biZs.color), chartConfig.biZs.width);
   }
   if ($("segZsEnabled") && $("segZsEnabled").checked) {
-    drawZsRects(chart.seg_zs || [], s, cssVar("--lineSeg", "#059669"), 2.4);
+    drawZsRects(chart.seg_zs || [], s, getCfgColor(chartConfig.segZs.color), chartConfig.segZs.width);
   }
   // 分型最细虚线 → 笔中等实线 → 线段最粗实线
-  drawLines(chart.fx_lines || [], s, cssVar("--lineFx", "#06b6d4"), 1.1, true);
-  drawLines((chart.bi || []).filter((x) => x.is_sure), s, cssVar("--lineBi", "#f59e0b"), 3.1, false);
-  drawLines((chart.bi || []).filter((x) => !x.is_sure), s, cssVar("--lineBi", "#f59e0b"), 2.2, true);
-  drawLines((chart.seg || []).filter((x) => x.is_sure), s, cssVar("--lineSeg", "#059669"), 4.8, false);
-  drawLines((chart.seg || []).filter((x) => !x.is_sure), s, cssVar("--lineSeg", "#059669"), 3.5, true);
+  drawLines(chart.fx_lines || [], s, getCfgColor(chartConfig.fx.color), chartConfig.fx.width, true);
+  drawLines((chart.bi || []).filter((x) => x.is_sure), s, getCfgColor(chartConfig.bi.color), chartConfig.bi.widthSure, false);
+  drawLines((chart.bi || []).filter((x) => !x.is_sure), s, getCfgColor(chartConfig.bi.color), chartConfig.bi.widthUnsure, true);
+  drawLines((chart.seg || []).filter((x) => x.is_sure), s, getCfgColor(chartConfig.seg.color), chartConfig.seg.widthSure, false);
+  drawLines((chart.seg || []).filter((x) => !x.is_sure), s, getCfgColor(chartConfig.seg.color), chartConfig.seg.widthUnsure, true);
   drawBsp(bspHistory || [], s);
   drawTradeMarkers(s, chart);
   drawCrosshair(s);
   drawLegend();
 }
 
-async function api(path, body) {
-  const res = await fetch(path, {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify(body || {})
-  });
+async function api(path, body, method = "POST") {
+  const options = {
+    method,
+    headers: {"Content-Type": "application/json"}
+  };
+  if (body !== null && body !== undefined) options.body = JSON.stringify(body);
+  const res = await fetch(path, options);
   const data = await res.json();
   if (!res.ok) throw new Error(data.detail || JSON.stringify(data));
   return data;
@@ -2306,6 +3195,7 @@ function refreshUI(payload, options) {
     bspHistoryKey = new Set();
   }
   setState(payload);
+  updateTradeStatusOverlay(payload);
   if (payload.ready) {
     const ks = payload.chart && payload.chart.kline ? payload.chart.kline : [];
     if (ks.length > 0) {
@@ -2368,6 +3258,7 @@ $("btnInit").onclick = async () => {
     userAdjustedView = false;
     viewReady = false;
     viewYShiftRatio = 0;
+    viewYZoomRatio = 1.0;
     activeTrade = null;
     tradeHistory = [];
     bspHistory = [];
@@ -2456,6 +3347,12 @@ $("btnSell").onclick = async () => {
     const payload = await api("/api/sell");
     setMsg(payload.message || "卖出成功");
     refreshUI(payload);
+    
+    // Show settlement for the last completed trade
+    if (tradeHistory.length > 0) {
+      const lastTrade = tradeHistory[tradeHistory.length - 1];
+      showSettlement(lastTrade, payload.name || payload.code);
+    }
   } catch (e) {
     setMsg("卖出失败：" + e.message);
   }
@@ -2559,17 +3456,10 @@ if ($("bspPrompt")) {
   });
 }
 if ($("bspPromptConfirm")) {
-  $("bspPromptConfirm").addEventListener("keydown", (e) => {
-    if (e.code === "Space") e.preventDefault();
-  });
-  $("bspPromptConfirm").addEventListener("mousedown", (e) => {
-    if (e.button !== 0) {
-      e.preventDefault();
-      return;
-    }
+  $("bspPromptConfirm").onclick = (e) => {
     e.preventDefault();
     clearBspPrompt();
-  });
+  };
 }
 for (const id of ["chipEnabled"]) {
   $(id).onchange = () => {
@@ -2577,8 +3467,28 @@ for (const id of ["chipEnabled"]) {
     draw(lastPayload.chart);
   };
 }
-applyThemeFromSelect();
-hideGlobalLoading();
+
+(async () => {
+  loadSessionConfig();
+  applyThemeFromSelect();
+  hideGlobalLoading();
+  try {
+    const payload = await api("/api/state", null, "GET");
+    if (payload && payload.ready) {
+      document.title = `chan.py 复盘训练器 - ${(payload.name ? payload.name : payload.code)}`;
+      $("btnInit").disabled = true;
+      $("code").disabled = true;
+      $("begin").disabled = true;
+      $("end").disabled = true;
+      $("cash").disabled = true;
+      $("autype").disabled = true;
+      refreshUI(payload);
+      setMsg("已自动恢复上次会话。");
+    }
+  } catch (e) {
+    console.error("恢复会话失败:", e);
+  }
+})();
 </script>
 </body>
 </html>
