@@ -613,25 +613,82 @@ HTML = """
       transition: background 0.2s;
     }
     .resizer:hover { background: #2563eb; }
-    .right { flex: 1; padding: 8px; box-sizing: border-box; min-width: 0; }
-    .row { margin-bottom: 8px; }
-    .row input[type="checkbox"] { width: auto; transform: scale(1.1); }
-    label { display: inline-block; width: 110px; }
-    input, select { width: 210px; padding: 4px; background: var(--panel); color: var(--text); border: 1px solid var(--border); }
-    button { margin-right: 8px; margin-top: 6px; padding: 6px 10px; border: 1px solid var(--border); background: var(--btn); color: var(--btnText); cursor: pointer; }
+    .right { flex: 1; padding: 0; box-sizing: border-box; min-width: 0; position: relative; }
+    .row { margin-bottom: 8px; display: flex; align-items: center; }
+    .row input[type="checkbox"] { width: auto; transform: scale(1.1); margin-left: 8px; }
+    label { display: inline-block; width: 110px; font-size: 14px; }
+    input, select { flex: 1; padding: 4px; background: var(--panel); color: var(--text); border: 1px solid var(--border); min-width: 0; }
+    
+    .btnRow { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+    .btnRow button { width: 100%; margin: 0; padding: 8px; text-align: left; position: relative; }
+    
+    button { padding: 6px 10px; border: 1px solid var(--border); background: var(--btn); color: var(--btnText); cursor: pointer; border-radius: 4px; }
     button:disabled { opacity: 0.4; cursor: not-allowed; }
-    .title { font-size: 16px; margin: 4px 0 10px; color: #2563eb; }
-    .card { border: 1px solid var(--border); padding: 10px; margin-bottom: 12px; background: var(--panel); }
-    #chart { width: 100%; height: calc(100vh - 40px); background: var(--chartBg); border: 1px solid var(--border); }
+    button:hover:not(:disabled) { border-color: #2563eb; background: #eff6ff; color: #2563eb; }
+    
+    .title { font-size: 16px; margin: 4px 0 10px; color: #2563eb; font-weight: bold; }
+    .card { border: 1px solid var(--border); padding: 12px; margin-bottom: 12px; background: var(--panel); border-radius: 8px; }
+    #chart { width: 100%; height: 100%; background: var(--chartBg); display: block; }
     .muted { color: var(--muted); font-size: 12px; }
     .mono { font-family: Consolas, monospace; }
-    .stateScroll { max-height: 220px; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; }
-    table { border-collapse: collapse; width: 100%; }
-    th, td { padding: 6px 6px; border-bottom: 1px solid var(--grid); font-size: 14px; }
-    th { text-align: left; color: #2563eb; position: sticky; top: 0; background: var(--panel); z-index: 1; }
-    .card.collapsed { opacity: 0.82; }
-    .card.collapsed .cfg-editable { display: none; }
-    .btnRow { display: flex; flex-wrap: wrap; gap: 6px; }
+    
+    .account-grid { display: grid; grid-template-columns: 1fr; gap: 8px; }
+    .account-item { display: flex; justify-content: space-between; font-size: 14px; padding: 4px 0; border-bottom: 1px dashed var(--grid); }
+    .account-item label { width: auto; color: var(--muted); }
+    .account-item span { font-weight: bold; font-family: Consolas, monospace; }
+
+    /* Tooltip logic */
+    .tip-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 16px;
+      height: 16px;
+      background: #2563eb;
+      color: white;
+      border-radius: 50%;
+      font-size: 11px;
+      font-weight: bold;
+      margin-left: 6px;
+      cursor: help;
+      position: relative;
+    }
+    .tip-icon:hover::after {
+      content: attr(data-tip);
+      position: absolute;
+      left: 24px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: #1e293b;
+      color: white;
+      padding: 6px 10px;
+      border-radius: 4px;
+      font-size: 12px;
+      white-space: pre-wrap;
+      z-index: 1000;
+      width: 200px;
+      font-weight: normal;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.2);
+    }
+
+    /* Fullscreen button */
+    .fullscreen-btn {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      z-index: 100;
+      background: rgba(255,255,255,0.8);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 4px 8px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .fullscreen-btn:hover { background: #fff; border-color: #2563eb; }
+    :fullscreen .fullscreen-btn { display: none; }
+    :fullscreen #chart { height: 100vh; }
 
     /* Toast 弹窗 */
     #toastContainer {
@@ -681,6 +738,7 @@ HTML = """
     }
     .msgHistoryItem { border-bottom: 1px dashed var(--grid); padding: 6px 0; }
     .msgHistoryItem .time { color: #2563eb; margin-right: 10px; }
+    
     .stepNRow {
       margin-top: 6px;
       display: flex;
@@ -698,6 +756,15 @@ HTML = """
       color: var(--muted);
       font-size: 12px;
     }
+    .modal-overlay {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      z-index: 10000;
+    }
+    .modal-overlay > div {
+      pointer-events: auto;
+    }
     .globalLoading {
       position: fixed;
       inset: 0;
@@ -706,7 +773,7 @@ HTML = """
       justify-content: center;
       background: rgba(15, 23, 42, 0.36);
       backdrop-filter: blur(1px);
-      z-index: 9999;
+      z-index: 20000;
     }
     .globalLoading.show { display: flex; }
     .globalLoading .panel {
@@ -736,7 +803,7 @@ HTML = """
       to { transform: rotate(360deg); }
     }
     .bspPrompt {
-      position: fixed;
+      position: absolute;
       inset: 0;
       display: none;
       align-items: center;
@@ -899,31 +966,38 @@ HTML = """
       min-width: 100px;
     }
   </style>
+
 </head>
 <body>
-  <div id="settingsModal" class="settingsModal" aria-hidden="true">
-    <div class="panel">
-      <div class="settingsTitle">
-        图表显示设置
-        <button id="btnSettingsClose" style="margin:0; padding:4px 8px;">&times;</button>
-      </div>
-      <div id="settingsContent">
-        <!-- Generated by JS -->
-      </div>
-      <div class="settingsActions">
-        <button id="btnSettingsReset">恢复默认</button>
-        <button id="btnSettingsSave">保存并应用</button>
+  <div id="modalOverlay" class="modal-overlay">
+    <div id="settingsModal" class="settingsModal" aria-hidden="true">
+      <div class="panel">
+        <div class="settingsTitle">
+          图表显示设置
+          <button id="btnSettingsClose" style="margin:0; padding:4px 8px;">&times;</button>
+        </div>
+        <div id="settingsContent">
+          <!-- Generated by JS -->
+        </div>
+        <div class="settingsActions">
+          <button id="btnSettingsReset">恢复默认</button>
+          <button id="btnSettingsSave">保存并应用</button>
+        </div>
       </div>
     </div>
   </div>
   <div class="wrap">
     <div class="left">
-      <div class="title">chan.py 复盘训练器（单文件 A1）</div>
+      <div class="title">chan.py 复盘训练器 <span class="tip-icon" data-tip="Chan.py 缠论复盘交易系统">!</span></div>
       <div class="card" id="configCard">
-        <div class="row">
-          <button id="btnSettingsOpen" style="width:100%; margin:0;">图表显示设置...</button>
+        <div class="btnRow">
+          <button id="btnSettingsOpen">图表显示设置... <small>(P)</small></button>
         </div>
-        <div class="row cfg-editable"><label>代码</label><input id="code" value="600340" /></div>
+        <div class="row cfg-editable">
+          <label>代码</label>
+          <input id="code" value="600340" />
+          <span class="tip-icon" data-tip="输入6位数字代码">!</span>
+        </div>
         <div class="row cfg-editable"><label>开始日期</label><input id="begin" type="date" value="2018-01-01" /></div>
         <div class="row cfg-editable"><label>结束日期</label><input id="end" type="date" value="" placeholder="可空" /></div>
         <div class="row cfg-editable"><label>初始资金</label><input id="cash" value="10000" /></div>
@@ -936,69 +1010,46 @@ HTML = """
           </select>
         </div>
         <div class="btnRow">
-          <button id="btnInit">加载会话</button>
-          <button id="btnReset">重新训练</button>
+          <button id="btnInit">加载会话 <small>(Ctrl+I)</small></button>
+          <button id="btnReset">重新训练 <small>(Ctrl+R)</small></button>
           <button id="btnExit">退出</button>
         </div>
         <div class="btnRow">
-          <button id="btnStep" disabled>下一根K线</button>
+          <button id="btnStep" disabled>下一根K线 <small>(Space)</small></button>
           <button id="btnFinish" disabled>结束训练</button>
         </div>
         <div class="stepNRow">
-          <label for="stepN">N</label>
+          <label for="stepN">步进数量 N</label>
           <input id="stepN" type="number" min="1" step="1" value="5" />
-          <button id="btnStepN" disabled>步进 N 根</button>
-          <button id="btnBackN" disabled>后退 N 根</button>
-          <span class="hint">遇到买卖点提示会自动中断等待确认</span>
+          <div class="btnRow" style="width:100%; margin-top:4px;">
+            <button id="btnStepN" disabled>步进 N 根 <small>(Ctrl+Alt+N)</small></button>
+            <button id="btnBackN" disabled>后退 N 根 <small>(Ctrl+Alt+M)</small></button>
+          </div>
+          <span class="hint">遇到买卖点会自动中断等待确认</span>
         </div>
       </div>
 
       <div class="card" id="tradeCard">
-        <button id="btnBuy" disabled>买入（全仓）</button>
-        <button id="btnSell" disabled>卖出（全量）</button>
-        <div class="muted">规则：单持仓、T+1、每步最多一笔</div>
-        <div class="row" style="margin-top:8px;"><label>显示筹码</label><input id="chipEnabled" type="checkbox" checked /></div>
-        <div class="row"><label>拉伸强度</label>
-          <select id="chipStretchLevel">
-            <option value="1">1 (线性)</option>
-            <option value="2">2</option>
-            <option value="3">3</option>
-            <option value="4">4</option>
-            <option value="5" selected>5 (默认)</option>
-            <option value="6">6</option>
-            <option value="7">7</option>
-            <option value="8">8</option>
-            <option value="9">9</option>
-            <option value="10">10 (最强)</option>
-            <option value="11">11</option>
-            <option value="12">12</option>
-          </select>
+        <div class="btnRow">
+          <button id="btnBuy" disabled>买入（全仓） <small>(PageUp)</small></button>
+          <button id="btnSell" disabled>卖出（全量） <small>(PageDown)</small></button>
         </div>
-        <div class="row"><label>价格桶</label>
-          <select id="chipBucketStep">
-            <option value="0.0005">0.0005</option>
-            <option value="0.001">0.001</option>
-            <option value="0.002">0.002</option>
-            <option value="0.003">0.003</option>
-            <option value="0.005">0.005</option>
-            <option value="0.008">0.008</option>
-            <option value="0.01">0.01</option>
-            <option value="0.02">0.02</option>
-            <option value="0.05">0.05</option>
-            <option value="0.1" selected>0.1</option>
-          </select>
-        </div>
-        <div class="row"><label>副图槽位</label>
+        <div class="muted" style="margin-bottom:8px;">规则：单持仓、T+1、每步最多一笔</div>
+        
+        <div class="row">
+          <label>副图槽位</label>
           <select id="indicatorPanel">
-            <option value="0">0</option>
-            <option value="1">1</option>
-            <option value="2">2</option>
-            <option value="3">3</option>
-            <option value="4">4</option>
-            <option value="5">5</option>
+            <option value="0">0 (主图)</option>
+            <option value="1">1 (副图)</option>
+            <option value="2">2 (副图)</option>
+            <option value="3">3 (副图)</option>
+            <option value="4">4 (副图)</option>
+            <option value="5">5 (副图)</option>
           </select>
+          <span class="tip-icon" data-tip="选择一个槽位来配置下方的指标类型">!</span>
         </div>
-        <div class="row"><label>技术指标</label>
+        <div class="row">
+          <label>技术指标</label>
           <select id="indicatorType">
             <option value="none">无</option>
             <option value="boll">BOLL (主图)</option>
@@ -1009,95 +1060,75 @@ HTML = """
             <option value="rsi">RSI (副图)</option>
           </select>
         </div>
-        <div class="row"><label>显示笔中枢</label><input id="biZsEnabled" type="checkbox" checked /></div>
-        <div class="row"><label>显示段中枢</label><input id="segZsEnabled" type="checkbox" checked /></div>
       </div>
 
       <div class="card">
-        <div class="title" style="margin:0 0 8px 0;">状态</div>
-        <div class="stateScroll">
-          <table>
-            <thead>
-              <tr>
-                <th>项目</th>
-                <th>数值</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr><td>现金</td><td id="st_cash">-</td></tr>
-              <tr><td>持仓(股)</td><td id="st_pos">-</td></tr>
-              <tr><td>平均成本</td><td id="st_cost">-</td></tr>
-              <tr><td>当前价</td><td id="st_price">-</td></tr>
-              <tr><td>持仓盈亏</td><td id="st_pos_pnl">-</td></tr>
-              <tr><td>总资产</td><td id="st_equity">-</td></tr>
-              <tr><td>总盈亏</td><td id="st_total_pnl">-</td></tr>
-            </tbody>
-          </table>
+        <div class="title" style="margin:0 0 12px 0; display:flex; justify-content:space-between; align-items:center;">
+          账户状态
+          <button id="btnMsgHistory" style="padding:2px 6px; font-size:12px; width:auto;">历史记录</button>
         </div>
-        <div class="btnRow" style="margin-top:10px;">
-          <button id="btnMsgHistory" style="width:100%; margin:0;">查看消息历史记录</button>
+        <div class="account-grid">
+          <div class="account-item"><label>可用现金</label><span id="st_cash">-</span></div>
+          <div class="account-item"><label>持仓股数</label><span id="st_pos">-</span></div>
+          <div class="account-item"><label>买入均价</label><span id="st_cost">-</span></div>
+          <div class="account-item"><label>当前价格</label><span id="st_price">-</span></div>
+          <div class="account-item"><label>持仓盈亏</label><span id="st_pos_pnl">-</span></div>
+          <div class="account-item"><label>总资产</label><span id="st_equity">-</span></div>
+          <div class="account-item"><label>总盈亏</label><span id="st_total_pnl">-</span></div>
         </div>
       </div>
     </div>
     <div class="resizer" id="resizer"></div>
     <div class="right">
+      <button id="btnFullscreen" class="fullscreen-btn">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+        全屏显示 (F11)
+      </button>
       <canvas id="chart"></canvas>
+    </div>
+  </div>
+
+
+  <div id="toastContainer"></div>
+
+    <div id="msgHistoryModal" class="msgHistoryModal" aria-hidden="true">
+      <div class="panel">
+        <div class="settingsTitle">
+          消息历史记录
+          <button id="btnMsgHistoryClose" style="margin:0; padding:4px 8px;">&times;</button>
+        </div>
+        <div id="msgHistoryList" class="msgHistoryList"></div>
+        <div class="settingsActions">
+          <button id="btnMsgHistoryClear">清空记录</button>
+          <button id="btnMsgHistoryOk">确 认</button>
+        </div>
+      </div>
+    </div>
+    <div id="bspPrompt" class="bspPrompt" aria-hidden="true">
+      <div class="panel">
+        <div id="bspPromptTitle" class="bspPromptTitle">检测到当前K线出现买卖点</div>
+        <div id="bspPromptBody" class="bspPromptBody"></div>
+        <div class="bspPromptHint">只能按 Enter 或左键点击确认，确认前将禁止步进到下一根K线。</div>
+        <div class="bspPromptActions">
+          <button id="bspPromptConfirm" type="button">确认（Enter / 左键）</button>
+        </div>
+      </div>
+    </div>
+    <!-- 交易结算弹窗 -->
+    <div id="settlementModal" class="settlementModal" aria-hidden="true">
+      <div class="panel">
+        <div id="settlementTitle" class="settlementTitle">交易结算</div>
+        <div id="settlementBody" class="settlementBody"></div>
+        <div class="settlementActions">
+          <button id="btnSettlementClose">确 认</button>
+        </div>
+      </div>
     </div>
   </div>
 
   <div id="toastContainer"></div>
 
-  <div id="msgHistoryModal" class="msgHistoryModal" aria-hidden="true">
-    <div class="panel">
-      <div class="settingsTitle">
-        消息历史记录
-        <button id="btnMsgHistoryClose" style="margin:0; padding:4px 8px;">&times;</button>
-      </div>
-      <div id="msgHistoryList" class="msgHistoryList"></div>
-      <div class="settingsActions">
-        <button id="btnMsgHistoryClear">清空记录</button>
-        <button id="btnMsgHistoryOk">确 认</button>
-      </div>
-    </div>
-  </div>
   <div id="globalLoading" class="globalLoading" aria-hidden="true">
-    <div class="panel">
-      <div class="spinner"></div>
-      <div id="globalLoadingText">正在加载会话，请稍候...</div>
-    </div>
-  </div>
-  <div id="bspPrompt" class="bspPrompt" aria-hidden="true">
-    <div class="panel">
-      <div id="bspPromptTitle" class="bspPromptTitle">检测到当前K线出现买卖点</div>
-      <div id="bspPromptBody" class="bspPromptBody"></div>
-      <div class="bspPromptHint">只能按 Enter 或左键点击确认，确认前将禁止步进到下一根K线。</div>
-      <div class="bspPromptActions">
-        <button id="bspPromptConfirm" type="button">确认（Enter / 左键）</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- 交易状态悬浮窗 -->
-  <div id="tradeStatusOverlay" class="tradeStatusOverlay" style="display: none;">
-    <div class="tradeStatusTitle">当前持仓状态</div>
-    <div class="tradeStatusGrid">
-      <div class="tsItem"><label>持仓周期</label><span id="ts_hold_bars">-</span></div>
-      <div class="tsItem"><label>浮动盈亏</label><span id="ts_pnl">-</span></div>
-      <div class="tsItem"><label>盈亏比例</label><span id="ts_pnl_pct">-</span></div>
-      <div class="tsItem"><label>当前市值</label><span id="ts_value">-</span></div>
-    </div>
-  </div>
-
-  <!-- 交易结算弹窗 -->
-  <div id="settlementModal" class="settlementModal" aria-hidden="true">
-    <div class="panel">
-      <div id="settlementTitle" class="settlementTitle">交易结算</div>
-      <div id="settlementBody" class="settlementBody"></div>
-      <div class="settlementActions">
-        <button id="btnSettlementClose">确 认</button>
-      </div>
-    </div>
-  </div>
 <script>
 const $ = (id) => document.getElementById(id);
 const msgList = $("msgList");
@@ -1150,19 +1181,22 @@ const DEFAULT_CHART_CONFIG = {
   fx: { width: 1.1, color: "#06b6d4", dashed: true },
   bi: { widthSure: 3.1, widthUnsure: 2.2, color: "#f59e0b" },
   seg: { widthSure: 4.8, widthUnsure: 3.5, color: "#059669" },
-  biZs: { width: 1.8, color: "#f59e0b" },
-  segZs: { width: 2.4, color: "#059669" },
+  biZs: { width: 1.8, color: "#f59e0b", enabled: true },
+  segZs: { width: 2.4, color: "#059669", enabled: true },
   candle: { width: 1.4, upColor: "#ef4444", downColor: "#22c55e" },
   bsp: { fontSize: 14, lineColor: "#94a3b8", lineWidth: 1, lineDash: [5, 4] },
   trade: {
     rangeWidth: 2,
     buyColor: "#dc2626",
     sellColor: "#16a34a",
-    rangeFillBuy: "rgba(239,68,68,0.15)",
-    rangeFillSell: "rgba(34,197,94,0.15)",
+    rangeFillBuy: "#dc2626",
+    rangeFillSell: "#16a34a",
+    profitColor: "#ef4444",
+    lossColor: "#22c55e",
     popupFontSize: 16,
     markerFontSize: 14
   },
+  chip: { enabled: true, stretchLevel: 5, bucketStep: 0.1, color: "rgba(59,130,246,0.45)" },
   xAxis: { fontSize: 12, rotation: -45, fontWeight: "normal", interval: 10 },
   yAxis: { fontSize: 12, fontWeight: "normal", interval: 0.5 },
   toast: { fontSize: 16, fontWeight: "bold", speed: 3000 },
@@ -1208,11 +1242,11 @@ function saveSessionConfig() {
     cash: $("cash").value,
     autype: $("autype").value,
     theme: chartConfig.theme,
-    chipEnabled: $("chipEnabled").checked,
-    chipStretchLevel: $("chipStretchLevel").value,
-    chipBucketStep: $("chipBucketStep").value,
-    biZsEnabled: $("biZsEnabled").checked,
-    segZsEnabled: $("segZsEnabled").checked,
+    chipEnabled: chartConfig.chip.enabled,
+    chipStretchLevel: String(chartConfig.chip.stretchLevel),
+    chipBucketStep: String(chartConfig.chip.bucketStep),
+    biZsEnabled: chartConfig.biZs.enabled,
+    segZsEnabled: chartConfig.segZs.enabled,
     stepN: $("stepN").value
   };
   localStorage.setItem("chan_session_config", JSON.stringify(sessionConfig));
@@ -1228,11 +1262,7 @@ function loadSessionConfig() {
     chartConfig.theme = sessionConfig.theme;
     applyThemeFromSelect();
   }
-  if (sessionConfig.chipEnabled !== undefined) $("chipEnabled").checked = sessionConfig.chipEnabled;
-  if (sessionConfig.chipStretchLevel !== undefined) $("chipStretchLevel").value = sessionConfig.chipStretchLevel;
-  if (sessionConfig.chipBucketStep !== undefined) $("chipBucketStep").value = sessionConfig.chipBucketStep;
-  if (sessionConfig.biZsEnabled !== undefined) $("biZsEnabled").checked = sessionConfig.biZsEnabled;
-  if (sessionConfig.segZsEnabled !== undefined) $("segZsEnabled").checked = sessionConfig.segZsEnabled;
+  // No longer setting DOM for chip/biZs/segZs here as they are in chartConfig
   if (sessionConfig.stepN !== undefined) $("stepN").value = sessionConfig.stepN;
 }
 
@@ -1258,6 +1288,7 @@ function renderSettingsForm() {
     {
       title: "系统主题",
       key: "theme_section",
+      color: "#3b82f6",
       items: [
         { label: "主题", subKey: "theme", type: "select", options: [
           { value: "light", label: "白色" },
@@ -1269,6 +1300,7 @@ function renderSettingsForm() {
     {
       title: "十字辅助线",
       key: "crosshair",
+      color: "#64748b",
       items: [
         { label: "粗细", subKey: "width", type: "number", min: 1, max: 10, step: 0.5 },
         { label: "颜色", subKey: "color", type: "color" },
@@ -1276,59 +1308,70 @@ function renderSettingsForm() {
       ]
     },
     {
-      title: "分型 (FX)",
-      key: "fx",
-      items: [
-        { label: "粗细", subKey: "width", type: "number", min: 0.1, max: 5, step: 0.1 },
-        { label: "颜色", subKey: "color", type: "color" }
-      ]
-    },
-    {
-      title: "笔 (Bi)",
-      key: "bi",
-      items: [
-        { label: "粗细(确定)", subKey: "widthSure", type: "number", min: 0.1, max: 8, step: 0.1 },
-        { label: "粗细(未完成)", subKey: "widthUnsure", type: "number", min: 0.1, max: 8, step: 0.1 },
-        { label: "颜色", subKey: "color", type: "color" }
-      ]
-    },
-    {
-      title: "线段 (Seg)",
-      key: "seg",
-      items: [
-        { label: "粗细(确定)", subKey: "widthSure", type: "number", min: 0.1, max: 10, step: 0.1 },
-        { label: "粗细(未完成)", subKey: "widthUnsure", type: "number", min: 0.1, max: 10, step: 0.1 },
-        { label: "颜色", subKey: "color", type: "color" }
-      ]
-    },
-    {
-      title: "中枢 (ZS)",
-      key: "biZs",
-      items: [
-        { label: "笔中枢粗细", subKey: "width", type: "number", min: 0.1, max: 5, step: 0.1 },
-        { label: "笔中枢颜色", subKey: "color", type: "color" }
-      ]
-    },
-    {
-      title: "线段中枢",
-      key: "segZs",
-      items: [
-        { label: "线段中枢粗细", subKey: "width", type: "number", min: 0.1, max: 5, step: 0.1 },
-        { label: "线段中枢颜色", subKey: "color", type: "color" }
-      ]
-    },
-    {
-      title: "K线与图例",
+      title: "K线显示",
       key: "candle",
+      color: "#ef4444",
       items: [
-        { label: "K线描边粗细", subKey: "width", type: "number", min: 0.1, max: 5, step: 0.1 },
+        { label: "描边粗细", subKey: "width", type: "number", min: 0.1, max: 5, step: 0.1 },
         { label: "上涨颜色", subKey: "upColor", type: "color" },
         { label: "下跌颜色", subKey: "downColor", type: "color" }
       ]
     },
     {
-      title: "买卖点设置",
+      title: "筹码分布 (Chip)",
+      key: "chip",
+      color: "#3b82f6",
+      items: [
+        { label: "启用筹码", subKey: "enabled", type: "checkbox" },
+        { label: "拉伸强度", subKey: "stretchLevel", type: "number", min: 1, max: 20 },
+        { label: "价格桶(元)", subKey: "bucketStep", type: "number", min: 0.001, max: 1, step: 0.001 },
+        { label: "填充颜色", subKey: "color", type: "text" }
+      ]
+    },
+    {
+      title: "笔 (Bi) & 分型",
+      key: "bi",
+      color: "#f59e0b",
+      items: [
+        { label: "笔颜色", subKey: "color", type: "color" },
+        { label: "粗细(确定)", subKey: "widthSure", type: "number", min: 0.1, max: 8, step: 0.1 },
+        { label: "粗细(未完成)", subKey: "widthUnsure", type: "number", min: 0.1, max: 8, step: 0.1 }
+      ]
+    },
+    {
+      title: "线段 (Seg)",
+      key: "seg",
+      color: "#059669",
+      items: [
+        { label: "线段颜色", subKey: "color", type: "color" },
+        { label: "粗细(确定)", subKey: "widthSure", type: "number", min: 0.1, max: 10, step: 0.1 },
+        { label: "粗细(未完成)", subKey: "widthUnsure", type: "number", min: 0.1, max: 10, step: 0.1 }
+      ]
+    },
+    {
+      title: "中枢 (ZS)",
+      key: "biZs",
+      color: "#f59e0b",
+      items: [
+        { label: "启用笔中枢", subKey: "enabled", type: "checkbox" },
+        { label: "笔中枢颜色", subKey: "color", type: "color" },
+        { label: "笔中枢粗细", subKey: "width", type: "number", min: 0.1, max: 5, step: 0.1 }
+      ]
+    },
+    {
+      title: "线段中枢",
+      key: "segZs",
+      color: "#059669",
+      items: [
+        { label: "启用段中枢", subKey: "enabled", type: "checkbox" },
+        { label: "线段中枢颜色", subKey: "color", type: "color" },
+        { label: "线段中枢粗细", subKey: "width", type: "number", min: 0.1, max: 5, step: 0.1 }
+      ]
+    },
+    {
+      title: "买卖点 (BSP)",
       key: "bsp",
+      color: "#b91c1c",
       items: [
         { label: "文字大小", subKey: "fontSize", type: "number", min: 8, max: 30 },
         { label: "连线颜色", subKey: "lineColor", type: "color" },
@@ -1338,6 +1381,7 @@ function renderSettingsForm() {
     {
       title: "X 轴设置",
       key: "xAxis",
+      color: "#64748b",
       items: [
         { label: "文字大小", subKey: "fontSize", type: "number", min: 8, max: 24 },
         { label: "文字方向(度)", subKey: "rotation", type: "number", min: -180, max: 180 },
@@ -1351,6 +1395,7 @@ function renderSettingsForm() {
     {
       title: "Y 轴设置",
       key: "yAxis",
+      color: "#64748b",
       items: [
         { label: "文字大小", subKey: "fontSize", type: "number", min: 8, max: 24 },
         { label: "文字粗细", subKey: "fontWeight", type: "select", options: [
@@ -1361,8 +1406,22 @@ function renderSettingsForm() {
       ]
     },
     {
-      title: "消息弹窗设置",
+      title: "交易与盈亏颜色",
+      key: "trade",
+      color: "#2563eb",
+      items: [
+        { label: "买入颜色", subKey: "buyColor", type: "color" },
+        { label: "卖出颜色", subKey: "sellColor", type: "color" },
+        { label: "盈利颜色", subKey: "profitColor", type: "color" },
+        { label: "亏损颜色", subKey: "lossColor", type: "color" },
+        { label: "持仓区间(买)", subKey: "rangeFillBuy", type: "color" },
+        { label: "持仓区间(卖)", subKey: "rangeFillSell", type: "color" }
+      ]
+    },
+    {
+      title: "消息与通知",
       key: "toast",
+      color: "#1e293b",
       items: [
         { label: "文字大小", subKey: "fontSize", type: "number", min: 10, max: 30 },
         { label: "文字粗细", subKey: "fontWeight", type: "select", options: [
@@ -1371,39 +1430,14 @@ function renderSettingsForm() {
         ]},
         { label: "消失速度(ms)", subKey: "speed", type: "number", min: 500, max: 10000, step: 100 }
       ]
-    },
-    {
-      title: "交易设置",
-      key: "trade",
-      items: [
-        { label: "买点颜色", subKey: "buyColor", type: "color" },
-        { label: "卖点颜色", subKey: "sellColor", type: "color" },
-        { label: "提示标记文字大小", subKey: "markerFontSize", type: "number", min: 8, max: 30 },
-        { label: "弹窗文字大小", subKey: "popupFontSize", type: "number", min: 10, max: 40 }
-      ]
-    },
-    {
-      title: "买卖区间设置",
-      key: "trade",
-      items: [
-        { label: "持仓区间颜色(买)", subKey: "rangeFillBuy", type: "text", placeholder: "rgba color" },
-        { label: "持仓区间颜色(卖)", subKey: "rangeFillSell", type: "text", placeholder: "rgba color" },
-        { label: "连线粗细", subKey: "rangeWidth", type: "number", min: 1, max: 10 }
-      ]
-    },
-    {
-      title: "全局字体",
-      key: "legend",
-      items: [
-        { label: "图例文字大小", subKey: "fontSize", type: "number", min: 8, max: 20 }
-      ]
     }
   ];
 
   sections.forEach(sec => {
     const div = document.createElement("div");
     div.className = "settingsSection";
-    div.innerHTML = `<div class="settingsSectionTitle">${sec.title}</div>`;
+    div.style.borderLeft = `4px solid ${sec.color}`;
+    div.innerHTML = `<div class="settingsSectionTitle" style="color:${sec.color}">${sec.title}</div>`;
     const grid = document.createElement("div");
     grid.className = "settingsGrid";
     sec.items.forEach(item => {
@@ -1423,18 +1457,20 @@ function renderSettingsForm() {
           <label>${item.label}</label>
           <select data-key="${sec.key}" data-subkey="${item.subKey}">${optionsHtml}</select>
         `;
+      } else if (item.type === "checkbox") {
+        itemDiv.innerHTML = `
+          <label style="flex-direction:row; align-items:center; display:flex;">
+            <input type="checkbox" ${val ? "checked" : ""} 
+                   data-key="${sec.key}" data-subkey="${item.subKey}" 
+                   style="width:auto; margin-right:8px;">
+            ${item.label}
+          </label>
+        `;
       } else {
-        // Handle color conversion for rgba (since type=color doesn't support it)
-        let displayVal = val;
-        let type = item.type;
-        if (type === "color" && val.startsWith("rgba")) {
-           // Fallback to text for rgba
-           type = "text";
-        }
         itemDiv.innerHTML = `
           <label>${item.label}</label>
-          <input type="${type}" 
-                 value="${displayVal}" 
+          <input type="${item.type}" 
+                 value="${val}" 
                  step="${item.step || 1}" 
                  placeholder="${item.placeholder || ""}"
                  data-key="${sec.key}" 
@@ -1454,8 +1490,14 @@ function saveSettings() {
     const key = input.dataset.key;
     const subkey = input.dataset.subkey;
     
-    let val = input.value;
-    if (input.type === "number") val = parseFloat(val);
+    let val;
+    if (input.type === "checkbox") {
+      val = input.checked;
+    } else if (input.type === "number") {
+      val = parseFloat(input.value);
+    } else {
+      val = input.value;
+    }
     
     if (key === "theme_section") {
       chartConfig.theme = val;
@@ -1482,6 +1524,19 @@ $("btnSettingsClose").addEventListener("click", closeSettings);
 $("btnSettingsSave").addEventListener("click", saveSettings);
 $("btnSettingsReset").addEventListener("click", resetSettings);
 
+// Close on outside click
+$("settingsModal").addEventListener("click", (e) => {
+  if (e.target === $("settingsModal")) closeSettings();
+});
+
+// Ctrl+S for settings
+$("settingsModal").addEventListener("keydown", (e) => {
+  if (e.ctrlKey && e.code === "KeyS") {
+    e.preventDefault();
+    saveSettings();
+  }
+});
+
 function cssVar(name, fallback) {
   const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   return v || fallback;
@@ -1506,7 +1561,7 @@ function getIndicatorConfig() {
 }
 
 function getChipBucketStep() {
-  const v = Number($("chipBucketStep").value);
+  const v = Number(chartConfig.chip.bucketStep);
   return Number.isFinite(v) && v > 0 ? v : 0.1;
 }
 
@@ -1618,7 +1673,7 @@ function getBspAtX(chart, xVal) {
 }
 
 function getChipStretchExponent() {
-  const level = Number($("chipStretchLevel").value || 5);
+  const level = Number(chartConfig.chip.stretchLevel || 5);
   // level 1 -> 1.0(线性), level 10 -> 0.2(最强), keep extending smoothly.
   const exp = 1.0 - 0.08 * (level - 1);
   return Math.max(0.08, Math.min(1.0, exp));
@@ -1659,16 +1714,12 @@ $("indicatorType").addEventListener("change", () => {
   if (lastPayload && lastPayload.ready && lastPayload.chart) draw(lastPayload.chart);
 });
 
-const IDS_AFFECTING_CHART = ["chipEnabled", "chipStretchLevel", "chipBucketStep", "biZsEnabled", "segZsEnabled"];
 const IDS_SESSION_PARAMS = ["code", "begin", "end", "cash", "autype", "stepN"];
-[...IDS_AFFECTING_CHART, ...IDS_SESSION_PARAMS].forEach(id => {
+IDS_SESSION_PARAMS.forEach(id => {
   const el = $(id);
   if (!el) return;
   el.addEventListener("change", () => {
     saveSessionConfig();
-    if (IDS_AFFECTING_CHART.includes(id)) {
-      if (lastPayload && lastPayload.ready && lastPayload.chart) draw(lastPayload.chart);
-    }
   });
 });
 
@@ -1821,14 +1872,16 @@ canvas.addEventListener("mousemove", (e) => {
   const rawX = e.clientX - rect.left;
   const rawY = e.clientY - rect.top;
   const clampedX = Math.max(PAD_L, Math.min(s.w - PAD_R, rawX));
-  const targetX = s.xMin + ((clampedX - PAD_L) / Math.max(1, s.plotW)) * (s.xMax - s.xMin);
-  const refK = nearestKByX(visibleKs, targetX);
   
-  // Always update mouse position for ray proximity
-  crosshairX = refK ? s.x(refK.x) : clampedX;
-  crosshairY = Math.max(PAD_T, Math.min(s.contentBottom, rawY));
-  
-  draw(lastPayload.chart);
+  // Lock X if Ctrl is held
+   if (!e.ctrlKey) {
+     const targetX = s.xMin + ((clampedX - PAD_L) / Math.max(1, s.plotW)) * (s.xMax - s.xMin);
+     const refK = nearestKByX(visibleKs, targetX);
+     crosshairX = refK ? s.x(refK.x) : clampedX;
+   }
+    
+   crosshairY = Math.max(PAD_T, Math.min(s.contentBottom, rawY));
+   draw(lastPayload.chart);
 });
 
 canvas.addEventListener("mouseleave", () => {
@@ -1865,11 +1918,43 @@ canvas.addEventListener("dblclick", () => {
   if (lastPayload && lastPayload.ready) draw(lastPayload.chart);
 });
 
+ // Fullscreen logic
+const btnFullscreen = $("btnFullscreen");
+btnFullscreen.onclick = () => {
+  const rightPanel = document.querySelector(".right");
+  if (!document.fullscreenElement) {
+    rightPanel.requestFullscreen().catch(err => {
+      setMsg(`全屏失败: ${err.message}`);
+    });
+  } else {
+    document.exitFullscreen();
+  }
+};
+
+document.addEventListener("fullscreenchange", () => {
+  resizeCanvas();
+});
+
 canvas.addEventListener("click", (e) => {
   if (!lastPayload || !lastPayload.ready || !viewReady) return;
   const rect = canvas.getBoundingClientRect();
   const s = toScaler(lastPayload.chart, Math.max(allXMin, viewXMin), viewXMax);
   const y = e.clientY - rect.top;
+  const x = e.clientX - rect.left;
+
+  // Ctrl + Left Click: Horizontal Ray
+  if (e.ctrlKey) {
+    const refK = getReferenceK(lastPayload.chart, s);
+    if (refK) {
+      const yVal = s.yFromPx(y);
+      userRays.push({ x: refK.x, y: yVal });
+      localStorage.setItem("chan_user_rays", JSON.stringify(userRays));
+      setMsg(`已生成射线: ${yVal.toFixed(2)}`);
+      draw(lastPayload.chart);
+    }
+    return;
+  }
+
   const panel = getPanelByY(s, y);
   if (!panel) return;
   selectedIndicatorPanel = panel.slot;
@@ -1900,19 +1985,47 @@ window.addEventListener("keydown", (e) => {
   const tag = (document.activeElement && document.activeElement.tagName) ? document.activeElement.tagName.toLowerCase() : "";
   if (tag === "input" || tag === "select" || tag === "textarea") return;
   
-  // Ctrl + Enter: Draw ray
-  if (e.ctrlKey && e.code === "Enter") {
-    if (crosshairEnabled && crosshairX !== null && crosshairY !== null) {
+  // F11: Fullscreen
+  if (e.code === "F11") {
+    e.preventDefault();
+    $("btnFullscreen").click();
+    return;
+  }
+
+  // P: Open settings
+  if (e.code === "KeyP") {
+    e.preventDefault();
+    openSettings();
+    return;
+  }
+
+  // Ctrl shortcuts
+  if (e.ctrlKey) {
+    if (e.code === "KeyI") {
       e.preventDefault();
-      const s = toScaler(lastPayload.chart, Math.max(allXMin, viewXMin), viewXMax);
-      const refK = getReferenceK(lastPayload.chart, s);
-      if (refK) {
-        const yVal = s.yFromPx(crosshairY);
-        userRays.push({ x: refK.x, y: yVal });
-        localStorage.setItem("chan_user_rays", JSON.stringify(userRays));
-        draw(lastPayload.chart);
-      }
+      if (!$("btnInit").disabled) $("btnInit").click();
       return;
+    }
+    if (e.code === "KeyR") {
+      e.preventDefault();
+      if (!$("btnReset").disabled) $("btnReset").click();
+      return;
+    }
+    if (e.code === "Enter") {
+      // Ctrl + Enter: Draw ray (already handled by mousedown but adding here for crosshair)
+      if (crosshairEnabled && crosshairX !== null && crosshairY !== null) {
+        e.preventDefault();
+        const s = toScaler(lastPayload.chart, Math.max(allXMin, viewXMin), viewXMax);
+        const refK = getReferenceK(lastPayload.chart, s);
+        if (refK) {
+          const yVal = s.yFromPx(crosshairY);
+          userRays.push({ x: refK.x, y: yVal });
+          localStorage.setItem("chan_user_rays", JSON.stringify(userRays));
+          setMsg(`已生成射线: ${yVal.toFixed(2)}`);
+          draw(lastPayload.chart);
+        }
+        return;
+      }
     }
   }
 
@@ -2140,26 +2253,29 @@ function setState(p) {
   }
   const a = p.account;
   const price = (p.price === null || p.price === undefined) ? null : Number(p.price);
-  const totalPnl = a.equity - a.initial_cash;
-  const posPnl = a.position > 0 && price !== null ? (price - a.avg_cost) * a.position : 0;
+  
+  // Fix precision: very small P/L should be 0
+  const totalPnl = Math.abs(a.equity - a.initial_cash) < 0.005 ? 0 : (a.equity - a.initial_cash);
+  const posPnlRaw = a.position > 0 && price !== null ? (price - a.avg_cost) * a.position : 0;
+  const posPnl = Math.abs(posPnlRaw) < 0.005 ? 0 : posPnlRaw;
 
-  setText("st_cash", a.cash.toFixed(2));
-  setText("st_pos", String(a.position));
-  setText("st_cost", a.avg_cost.toFixed(4));
-  setText("st_price", price === null ? "-" : price.toFixed(4));
+  setText("st_cash", a.cash.toFixed(2) + " 元");
+  setText("st_pos", String(a.position) + " 股");
+  setText("st_cost", a.avg_cost === 0 ? "-" : a.avg_cost.toFixed(4) + " 元");
+  setText("st_price", price === null ? "-" : price.toFixed(4) + " 元");
   
   const posPnlEl = $("st_pos_pnl");
   if (posPnlEl) {
-    posPnlEl.textContent = posPnl.toFixed(2);
-    posPnlEl.className = posPnl >= 0 ? "pnl-plus" : "pnl-minus";
+    posPnlEl.textContent = (posPnl >= 0 ? "+" : "") + posPnl.toFixed(2) + " 元";
+    posPnlEl.style.color = posPnl > 0 ? getCfgColor(chartConfig.trade.profitColor) : (posPnl < 0 ? getCfgColor(chartConfig.trade.lossColor) : "inherit");
   }
 
-  setText("st_equity", a.equity.toFixed(2));
+  setText("st_equity", a.equity.toFixed(2) + " 元");
   
   const totalPnlEl = $("st_total_pnl");
   if (totalPnlEl) {
-    totalPnlEl.textContent = totalPnl.toFixed(2);
-    totalPnlEl.className = totalPnl >= 0 ? "pnl-plus" : "pnl-minus";
+    totalPnlEl.textContent = (totalPnl >= 0 ? "+" : "") + totalPnl.toFixed(2) + " 元";
+    totalPnlEl.style.color = totalPnl > 0 ? getCfgColor(chartConfig.trade.profitColor) : (totalPnl < 0 ? getCfgColor(chartConfig.trade.lossColor) : "inherit");
   }
 }
 
@@ -2175,24 +2291,24 @@ function updateTradeStatusOverlay(payload) {
   const buyX = activeTrade ? activeTrade.buyX : null;
   const lastX = payload.chart.kline[payload.chart.kline.length - 1].x;
   const holdBars = buyX !== null ? (lastX - buyX) : 0;
-  const pnl = (price - a.avg_cost) * a.position;
-  const pnlPct = (pnl / (a.avg_cost * a.position)) * 100;
-  const value = price * a.position;
+  const pnlRaw = (price - a.avg_cost) * a.position;
+  const pnl = Math.abs(pnlRaw) < 0.005 ? 0 : pnlRaw;
+  const pnlPct = (a.avg_cost > 0 && a.position > 0) ? (pnl / (a.avg_cost * a.position)) * 100 : 0;
 
   overlay.style.display = "block";
-  overlay.className = `tradeStatusOverlay ${pnl >= 0 ? 'overlay-plus' : 'overlay-minus'}`;
+  overlay.style.borderColor = pnl > 0 ? getCfgColor(chartConfig.trade.profitColor) : (pnl < 0 ? getCfgColor(chartConfig.trade.lossColor) : "#e2e8f0");
 
   setText("ts_hold_bars", `${holdBars} 根`);
+  setText("ts_buy_price", a.avg_cost.toFixed(4));
+  setText("ts_curr_price", price.toFixed(4));
   
   const pnlEl = $("ts_pnl");
-  pnlEl.textContent = pnl.toFixed(2);
-  pnlEl.className = pnl >= 0 ? "pnl-plus" : "pnl-minus";
+  pnlEl.textContent = (pnl >= 0 ? "+" : "") + pnl.toFixed(2);
+  pnlEl.style.color = pnl > 0 ? getCfgColor(chartConfig.trade.profitColor) : (pnl < 0 ? getCfgColor(chartConfig.trade.lossColor) : "inherit");
 
   const pnlPctEl = $("ts_pnl_pct");
-  pnlPctEl.textContent = `${pnlPct.toFixed(2)}%`;
-  pnlPctEl.className = pnl >= 0 ? "pnl-plus" : "pnl-minus";
-
-  setText("ts_value", value.toFixed(2));
+  pnlPctEl.textContent = `${(pnlPct >= 0 ? "+" : "") + pnlPct.toFixed(2)}%`;
+  pnlPctEl.style.color = pnl > 0 ? getCfgColor(chartConfig.trade.profitColor) : (pnl < 0 ? getCfgColor(chartConfig.trade.lossColor) : "inherit");
 }
 
 function showSettlement(tr, stockName) {
@@ -2568,13 +2684,13 @@ function drawGridLines(s) {
 }
 
 function drawChips(chart, s) {
-  if (!$("chipEnabled").checked) return;
+  if (!chartConfig.chip.enabled) return;
   const ksAll = getChipBaseKs(chart);
   const refK0 = (chart.kline && chart.kline.length > 0) ? chart.kline[chart.kline.length - 1] : null;
   const refK = getReferenceK(chart, s) || refK0 || (ksAll.length > 0 ? ksAll[ksAll.length - 1] : null);
   const refText = (!crosshairEnabled || crosshairX === null) ? "最新" : `历史@${refK?.t || "-"}`;
   if (ksAll.length === 0 || !refK) return;
-  const priceStep = getChipBucketStep();
+  const priceStep = chartConfig.chip.bucketStep || 0.1;
   const stepMul = 1 / priceStep;
   // Cutoff by date/time (stable across different x indexing bases)
   const refT = String(refK.t || "");
@@ -2648,7 +2764,7 @@ function drawChips(chart, s) {
   const chipW = Math.max(96, Math.min(220, s.plotW * 0.2));
   const xR = s.w - PAD_R - 2;
   const xL = xR - chipW;
-  const fill = cssVar("--chipFill", "rgba(59,130,246,0.45)");
+  const fill = getCfgColor(chartConfig.chip.color);
   const bg = cssVar("--chipBg", "rgba(148,163,184,0.12)");
   const edge = cssVar("--chipEdge", "rgba(59,130,246,0.75)");
 
@@ -2784,10 +2900,8 @@ function drawLegend() {
 function drawTradeBands(s, chart) {
   if (!lastPayload || !lastPayload.ready) return;
   const lastX = chart.kline[chart.kline.length - 1].x;
-  const holdFillActive = getCfgColor(chartConfig.trade.rangeFillBuy);
-  const holdFillPast = getCfgColor(chartConfig.trade.rangeFillSell);
-
-  const fillBand = (x1, x2, alphaMul, color) => {
+  
+  const fillBand = (x1, x2, buyPrice, sellPrice, alphaMul) => {
     const lo = Math.min(x1, x2);
     const hi = Math.max(x1, x2);
     if (hi < s.xMin || lo > s.xMax) return;
@@ -2795,6 +2909,19 @@ function drawTradeBands(s, chart) {
     const xb = s.x(hi);
     const top = PAD_T;
     const bot = s.plotBottomY;
+    
+    // Determine color based on profit/loss if prices are available
+    let color;
+    if (buyPrice !== null && sellPrice !== null) {
+      color = sellPrice >= buyPrice ? getCfgColor(chartConfig.trade.profitColor) : getCfgColor(chartConfig.trade.lossColor);
+    } else if (buyPrice !== null && sellPrice === null) {
+      // Active long trade: check current price vs buy price
+      const currPrice = lastPayload && lastPayload.price !== null ? lastPayload.price : buyPrice;
+      color = currPrice >= buyPrice ? getCfgColor(chartConfig.trade.profitColor) : getCfgColor(chartConfig.trade.lossColor);
+    } else {
+      color = getCfgColor(chartConfig.trade.rangeFillBuy);
+    }
+    
     ctx.save();
     ctx.fillStyle = color;
     ctx.globalAlpha = alphaMul;
@@ -2804,11 +2931,11 @@ function drawTradeBands(s, chart) {
 
   for (const tr of tradeHistory) {
     if (tr.buyX != null && tr.sellX != null) {
-      fillBand(tr.buyX, tr.sellX, 0.75, holdFillPast);
+      fillBand(tr.buyX, tr.sellX, tr.buyPrice, tr.sellPrice, 0.15);
     }
   }
   if (lastPayload.account.position > 0 && activeTrade && activeTrade.buyX != null) {
-    fillBand(activeTrade.buyX, lastX, 0.85, holdFillActive);
+    fillBand(activeTrade.buyX, lastX, activeTrade.buyPrice, lastPayload.price, 0.15);
   }
 }
 
@@ -3127,10 +3254,10 @@ function draw(chart) {
   drawAxes(s);
   drawIndicators(chart, s);
   drawCandles(chart, s);
-  if ($("biZsEnabled") && $("biZsEnabled").checked) {
+  if (chartConfig.biZs.enabled) {
     drawZsRects(chart.bi_zs || [], s, getCfgColor(chartConfig.biZs.color), chartConfig.biZs.width);
   }
-  if ($("segZsEnabled") && $("segZsEnabled").checked) {
+  if (chartConfig.segZs.enabled) {
     drawZsRects(chart.seg_zs || [], s, getCfgColor(chartConfig.segZs.color), chartConfig.segZs.width);
   }
   // 分型最细虚线 → 笔中等实线 → 线段最粗实线
@@ -3449,23 +3576,24 @@ $("btnExit").onclick = () => {
 };
 
 $("theme").onchange = () => applyThemeFromSelect();
-if ($("bspPrompt")) {
-  $("bspPrompt").addEventListener("click", (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-  });
-}
+
+// BSP Prompt Confirmation - Make it more robust
 if ($("bspPromptConfirm")) {
   $("bspPromptConfirm").onclick = (e) => {
     e.preventDefault();
+    e.stopPropagation();
     clearBspPrompt();
   };
 }
-for (const id of ["chipEnabled"]) {
-  $(id).onchange = () => {
-    if (!lastPayload || !lastPayload.ready) return;
-    draw(lastPayload.chart);
-  };
+// Remove the bspPrompt generic click interceptor to allow children to receive clicks properly
+if ($("bspPrompt")) {
+  // Use a listener that only intercepts clicks on the overlay itself, not the panel
+  $("bspPrompt").addEventListener("click", (e) => {
+    if (e.target === $("bspPrompt")) {
+       e.preventDefault();
+       e.stopPropagation();
+    }
+  });
 }
 
 (async () => {
