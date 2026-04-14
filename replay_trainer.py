@@ -854,21 +854,22 @@ HTML = """
     /* 交易状态悬浮窗 */
     .tradeStatusOverlay {
       position: fixed;
-      top: 20px;
-      right: 80px;
-      width: 240px;
+      top: 16px;
+      left: 16px;
+      width: 280px;
       background: rgba(255, 255, 255, 0.95);
       border-radius: 12px;
       box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
       padding: 16px;
-      z-index: 1000;
+      z-index: 10002;
       border: 2px solid #e2e8f0;
       transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
       backdrop-filter: blur(8px);
     }
     [data-theme="dark"] .tradeStatusOverlay { background: rgba(30, 41, 59, 0.95); border-color: #334155; }
-    .tradeStatusTitle { font-weight: bold; margin-bottom: 12px; font-size: 14px; text-align: center; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px; }
-    .tradeStatusGrid { display: grid; grid-template-columns: 1fr; gap: 8px; }
+    .tradeStatusTitle { font-weight: bold; margin-bottom: 12px; font-size: 14px; text-align: center; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px; cursor: move; user-select: none; }
+    .tradeStatusOverlay.dragging .tradeStatusTitle { opacity: 0.85; }
+    .tradeStatusGrid { display: grid; grid-template-columns: 1fr; gap: 6px; }
     .tsItem { display: flex; justify-content: space-between; font-family: Consolas, monospace; }
     .tsItem label { color: #64748b; font-size: 12px; }
     .tsItem span { font-weight: bold; }
@@ -1009,45 +1010,35 @@ HTML = """
         <div class="btnRow">
           <button id="btnInit">加载会话 <small>(Ctrl+I)</small></button>
           <button id="btnReset">重新训练 <small>(Ctrl+R)</small></button>
-          <button id="btnExit">退出</button>
-        </div>
-        <div class="btnRow">
-          <button id="btnStep" disabled>下一根K线 <small>(Space)</small></button>
           <button id="btnFinish" disabled>结束训练</button>
+          <button id="btnExit">退出</button>
+          <button id="btnStep" disabled>下一根K线 <small>(Space)</small></button>
         </div>
         <div class="stepNRow">
           <label for="stepN">步进数量 N</label>
+          <span class="tip-icon" data-tip="遇到买卖点会自动中断等待确认">!</span>
           <input id="stepN" type="number" min="1" step="1" value="5" />
           <div class="btnRow" style="width:100%; margin-top:4px;">
             <button id="btnStepN" disabled>步进 N 根 <small>(Ctrl+Alt+N)</small></button>
             <button id="btnBackN" disabled>后退 N 根 <small>(Ctrl+Alt+M)</small></button>
           </div>
-          <span class="hint">遇到买卖点会自动中断等待确认</span>
         </div>
-      </div>
-
-      <div class="card" id="tradeCard">
-        <div class="btnRow">
+        <div class="btnRow" style="margin-top:6px;">
           <button id="btnBuy" disabled>买入（全仓） <small>(PageUp)</small></button>
           <button id="btnSell" disabled>卖出（全量） <small>(PageDown)</small></button>
         </div>
-        <div class="muted" style="margin-bottom:8px;">规则：单持仓、T+1、每步最多一笔</div>
+        <div class="row" style="margin-bottom:0;">
+          <span class="muted">交易规则</span>
+          <span class="tip-icon" data-tip="规则：单持仓、T+1、每步最多一笔">!</span>
+        </div>
       </div>
 
       <div class="card">
         <div class="title" style="margin:0 0 12px 0; display:flex; justify-content:space-between; align-items:center;">
-          账户状态
+          历史记录
           <button id="btnMsgHistory" style="padding:2px 6px; font-size:12px; width:auto;">历史记录</button>
         </div>
-        <div class="account-grid">
-          <div class="account-item"><label>可用现金</label><span id="st_cash">-</span></div>
-          <div class="account-item"><label>持仓股数</label><span id="st_pos">-</span></div>
-          <div class="account-item"><label>买入均价</label><span id="st_cost">-</span></div>
-          <div class="account-item"><label>当前价格</label><span id="st_price">-</span></div>
-          <div class="account-item"><label>持仓盈亏</label><span id="st_pos_pnl">-</span></div>
-          <div class="account-item"><label>总资产</label><span id="st_equity">-</span></div>
-          <div class="account-item"><label>总盈亏</label><span id="st_total_pnl">-</span></div>
-        </div>
+        <div class="muted">账户状态信息已迁移到“当前持仓状态”浮窗（仅持仓时显示）。</div>
       </div>
     </div>
     <div class="resizer" id="resizer"></div>
@@ -1064,7 +1055,7 @@ HTML = """
             </div>
             <div class="settingsActions">
               <button id="btnSettingsReset">恢复默认</button>
-              <button id="btnSettingsSave">保存并应用</button>
+              <button id="btnSettingsSave">保存并应用 (S)</button>
             </div>
           </div>
         </div>
@@ -1118,10 +1109,14 @@ HTML = """
         <div class="tradeStatusTitle">当前持仓状态</div>
         <div class="tradeStatusGrid">
           <div class="tsItem"><label>持仓时间</label><span id="ts_hold_bars">-</span></div>
+          <div class="tsItem"><label>持仓股数</label><span id="ts_pos">-</span></div>
           <div class="tsItem"><label>买入价格</label><span id="ts_buy_price">-</span></div>
           <div class="tsItem"><label>当前价格</label><span id="ts_curr_price">-</span></div>
           <div class="tsItem"><label>持仓盈亏</label><span id="ts_pnl">-</span></div>
           <div class="tsItem"><label>盈亏比例</label><span id="ts_pnl_pct">-</span></div>
+          <div class="tsItem"><label>可用现金</label><span id="ts_cash">-</span></div>
+          <div class="tsItem"><label>总资产</label><span id="ts_equity">-</span></div>
+          <div class="tsItem"><label>总盈亏</label><span id="ts_total_pnl">-</span></div>
         </div>
       </div>
 
@@ -1136,6 +1131,22 @@ HTML = """
 const $ = (id) => document.getElementById(id);
 const canvas = $("chart");
 const ctx = canvas.getContext("2d");
+function safeJsonParse(raw, fallback) {
+  try {
+    if (raw === null || raw === undefined || raw === "") return fallback;
+    return JSON.parse(raw);
+  } catch (_) {
+    return fallback;
+  }
+}
+
+function ensureObject(v, fallback = {}) {
+  return v && typeof v === "object" && !Array.isArray(v) ? v : fallback;
+}
+
+function ensureArray(v, fallback = []) {
+  return Array.isArray(v) ? v : fallback;
+}
 let lastPayload = null;
 let allXMin = 0;
 let allXMax = 0;
@@ -1143,7 +1154,7 @@ let viewXMin = 0;
 let viewXMax = 0;
 let viewReady = false;
 let userAdjustedView = false;
-let userRays = JSON.parse(localStorage.getItem("chan_user_rays") || "[]");
+let userRays = ensureArray(safeJsonParse(localStorage.getItem("chan_user_rays"), []), []);
 
 const PAD_L = 64;
 const PAD_R = 64;
@@ -1172,8 +1183,24 @@ let pendingBspPrompt = null;
 let crosshairEnabled = false;
 let crosshairX = null;
 let crosshairY = null;
-let selectedIndicatorPanel = 0;
-let indicatorSlots = JSON.parse(localStorage.getItem("chan_indicator_slots") || '{"0":"none","1":"none","2":"none","3":"none","4":"none","5":"none"}');
+let selectedIndicatorPanel = "main:0";
+const defaultMainSlots = { "0": "none", "1": "none", "2": "none", "3": "none", "4": "none", "5": "none" };
+const defaultSubSlots = { "1": "none", "2": "none", "3": "none", "4": "none", "5": "none" };
+let indicatorMainSlots = ensureObject(safeJsonParse(localStorage.getItem("chan_indicator_main_slots"), null), null);
+let indicatorSubSlots = ensureObject(safeJsonParse(localStorage.getItem("chan_indicator_sub_slots"), null), null);
+if (!indicatorMainSlots || !indicatorSubSlots) {
+  const legacySlots = ensureObject(safeJsonParse(localStorage.getItem("chan_indicator_slots"), null), null);
+  indicatorMainSlots = { ...defaultMainSlots };
+  indicatorSubSlots = { ...defaultSubSlots };
+  if (legacySlots && typeof legacySlots === "object") {
+    indicatorMainSlots["0"] = legacySlots["0"] || "none";
+    for (let i = 1; i <= 5; i++) indicatorSubSlots[String(i)] = legacySlots[String(i)] || "none";
+  }
+}
+indicatorMainSlots = { ...defaultMainSlots, ...indicatorMainSlots };
+indicatorSubSlots = { ...defaultSubSlots, ...indicatorSubSlots };
+localStorage.setItem("chan_indicator_main_slots", JSON.stringify(indicatorMainSlots));
+localStorage.setItem("chan_indicator_sub_slots", JSON.stringify(indicatorSubSlots));
 const MAIN_INDICATORS = new Set(["none", "boll", "demark", "trendline"]);
 const SUB_INDICATORS = new Set(["none", "macd", "kdj", "rsi"]);
 
@@ -1186,17 +1213,24 @@ const DEFAULT_CHART_CONFIG = {
   biZs: { width: 1.8, color: "#f59e0b", enabled: true },
   segZs: { width: 2.4, color: "#059669", enabled: true },
   candle: { width: 1.4, upColor: "#ef4444", downColor: "#22c55e" },
-  bsp: { fontSize: 14, lineColor: "#94a3b8", lineWidth: 1, lineDash: [5, 4] },
+  bsp: { fontSize: 14, lineColor: "#94a3b8", lineWidth: 1, lineStyle: "dashed", lineDash: [5, 4] },
   trade: {
-    rangeWidth: 2,
     buyColor: "#dc2626",
     sellColor: "#16a34a",
     rangeFillBuy: "#dc2626",
     rangeFillSell: "#16a34a",
+    profitBandColor: "#f97316",
+    lossBandColor: "#0ea5e9",
     profitColor: "#ef4444",
     lossColor: "#22c55e",
     popupFontSize: 16,
-    markerFontSize: 14
+    markerFontSize: 14,
+    markerFontWeight: "bold",
+    markerLineWidth: 2,
+    markerLineStyle: "dashed",
+    closeLineWidth: 2,
+    buyCloseLineStyle: "solid",
+    sellCloseLineStyle: "dashed"
   },
   chip: { enabled: true, stretchLevel: 5, bucketStep: 0.1, color: "rgba(59,130,246,0.45)" },
   xAxis: { fontSize: 12, rotation: -45, fontWeight: "normal", interval: 10 },
@@ -1207,6 +1241,7 @@ const DEFAULT_CHART_CONFIG = {
 };
 
 function deepMerge(target, source) {
+  if (!source || typeof source !== "object" || Array.isArray(source)) return target;
   for (const key in source) {
     if (source[key] && typeof source[key] === 'object' && !Array.isArray(source[key])) {
       if (!target[key]) target[key] = {};
@@ -1218,7 +1253,7 @@ function deepMerge(target, source) {
   return target;
 }
 
-let savedChartConfig = JSON.parse(localStorage.getItem("chan_chart_config") || "{}");
+let savedChartConfig = ensureObject(safeJsonParse(localStorage.getItem("chan_chart_config"), {}), {});
 let chartConfig = deepMerge(JSON.parse(JSON.stringify(DEFAULT_CHART_CONFIG)), savedChartConfig);
 
 const DEFAULT_SESSION_CONFIG = {
@@ -1235,7 +1270,10 @@ const DEFAULT_SESSION_CONFIG = {
   segZsEnabled: true,
   stepN: "5"
 };
-let sessionConfig = JSON.parse(localStorage.getItem("chan_session_config") || JSON.stringify(DEFAULT_SESSION_CONFIG));
+let sessionConfig = ensureObject(
+  safeJsonParse(localStorage.getItem("chan_session_config"), JSON.parse(JSON.stringify(DEFAULT_SESSION_CONFIG))),
+  JSON.parse(JSON.stringify(DEFAULT_SESSION_CONFIG))
+);
 
 function saveSessionConfig() {
   sessionConfig = {
@@ -1287,6 +1325,38 @@ function renderSettingsForm() {
   const container = $("settingsContent");
   container.innerHTML = "";
 
+  const slotTip = [
+    "槽位规则：",
+    "1) 主图(0)=无 时，仅显示主图K线，不显示任何主图/副图指标。",
+    "2) 主图(1)-主图(5) 可叠加最多5个主图指标。",
+    "3) 副图(1)-副图(5) 可同时显示多个副图。",
+    "4) 主图和副图可同时开启。"
+  ].join("\\n");
+  const indicatorSlotOptions = [
+    { value: "main:0", label: "主图(0) 总开关" },
+    { value: "main:1", label: "主图(1)" },
+    { value: "main:2", label: "主图(2)" },
+    { value: "main:3", label: "主图(3)" },
+    { value: "main:4", label: "主图(4)" },
+    { value: "main:5", label: "主图(5)" },
+    { value: "sub:1", label: "副图(1)" },
+    { value: "sub:2", label: "副图(2)" },
+    { value: "sub:3", label: "副图(3)" },
+    { value: "sub:4", label: "副图(4)" },
+    { value: "sub:5", label: "副图(5)" },
+  ];
+
+  const getIndicatorTypeValue = () => {
+    const info = parseIndicatorPanel(selectedIndicatorPanel);
+    if (info.kind === "main") return indicatorMainSlots[String(info.slot)] || "none";
+    return indicatorSubSlots[String(info.slot)] || "none";
+  };
+
+  const buildLabelHtml = (item) => {
+    if (!item.tip) return item.label;
+    return `${item.label} <span class="tip-icon" data-tip="${item.tip.replaceAll('"', '&quot;')}">!</span>`;
+  };
+
   const sections = [
     {
       title: "系统主题",
@@ -1304,8 +1374,8 @@ function renderSettingsForm() {
     {
       title: "十字辅助线",
       key: "crosshair",
-      color: "#64748b",
-      bgColor: "rgba(100, 116, 139, 0.08)",
+      color: "#0f766e",
+      bgColor: "rgba(15, 118, 110, 0.08)",
       items: [
         { label: "粗细", subKey: "width", type: "number", min: 1, max: 10, step: 0.5 },
         { label: "颜色", subKey: "color", type: "color" },
@@ -1315,17 +1385,10 @@ function renderSettingsForm() {
     {
       title: "技术指标设置",
       key: "indicators",
-      color: "#8b5cf6",
-      bgColor: "rgba(139, 92, 246, 0.08)",
+      color: "#7c3aed",
+      bgColor: "rgba(124, 58, 237, 0.08)",
       items: [
-        { label: "配置槽位", subKey: "slot", type: "select", options: [
-          { value: "0", label: "0 (主图)" },
-          { value: "1", label: "1 (副图)" },
-          { value: "2", label: "2 (副图)" },
-          { value: "3", label: "3 (副图)" },
-          { value: "4", label: "4 (副图)" },
-          { value: "5", label: "5 (副图)" }
-        ]},
+        { label: "配置槽位", subKey: "slot", type: "select", options: indicatorSlotOptions, tip: slotTip },
         { label: "指标类型", subKey: "type", type: "select", options: [
           { value: "none", label: "无" },
           { value: "boll", label: "BOLL (主图)" },
@@ -1340,8 +1403,8 @@ function renderSettingsForm() {
     {
       title: "K线显示",
       key: "candle",
-      color: "#ef4444",
-      bgColor: "rgba(239, 68, 68, 0.08)",
+      color: "#dc2626",
+      bgColor: "rgba(220, 38, 38, 0.08)",
       items: [
         { label: "描边粗细", subKey: "width", type: "number", min: 0.1, max: 5, step: 0.1 },
         { label: "上涨颜色", subKey: "upColor", type: "color" },
@@ -1351,8 +1414,8 @@ function renderSettingsForm() {
     {
       title: "筹码分布 (Chip)",
       key: "chip",
-      color: "#3b82f6",
-      bgColor: "rgba(59, 130, 246, 0.08)",
+      color: "#0891b2",
+      bgColor: "rgba(8, 145, 178, 0.08)",
       items: [
         { label: "启用筹码", subKey: "enabled", type: "checkbox" },
         { label: "拉伸强度", subKey: "stretchLevel", type: "number", min: 1, max: 20 },
@@ -1363,8 +1426,8 @@ function renderSettingsForm() {
     {
       title: "笔 (Bi) & 分型",
       key: "bi",
-      color: "#f59e0b",
-      bgColor: "rgba(245, 158, 11, 0.08)",
+      color: "#d97706",
+      bgColor: "rgba(217, 119, 6, 0.08)",
       items: [
         { label: "笔颜色", subKey: "color", type: "color" },
         { label: "粗细(确定)", subKey: "widthSure", type: "number", min: 0.1, max: 8, step: 0.1 },
@@ -1375,7 +1438,7 @@ function renderSettingsForm() {
       title: "线段 (Seg)",
       key: "seg",
       color: "#059669",
-      bgColor: "rgba(5, 150, 105, 0.08)",
+      bgColor: "rgba(5, 150, 105, 0.1)",
       items: [
         { label: "线段颜色", subKey: "color", type: "color" },
         { label: "粗细(确定)", subKey: "widthSure", type: "number", min: 0.1, max: 10, step: 0.1 },
@@ -1385,8 +1448,8 @@ function renderSettingsForm() {
     {
       title: "中枢 (ZS)",
       key: "biZs",
-      color: "#f59e0b",
-      bgColor: "rgba(245, 158, 11, 0.08)",
+      color: "#ea580c",
+      bgColor: "rgba(234, 88, 12, 0.08)",
       items: [
         { label: "启用笔中枢", subKey: "enabled", type: "checkbox" },
         { label: "笔中枢颜色", subKey: "color", type: "color" },
@@ -1396,8 +1459,8 @@ function renderSettingsForm() {
     {
       title: "线段中枢",
       key: "segZs",
-      color: "#059669",
-      bgColor: "rgba(5, 150, 105, 0.08)",
+      color: "#0d9488",
+      bgColor: "rgba(13, 148, 136, 0.08)",
       items: [
         { label: "启用段中枢", subKey: "enabled", type: "checkbox" },
         { label: "线段中枢颜色", subKey: "color", type: "color" },
@@ -1407,19 +1470,24 @@ function renderSettingsForm() {
     {
       title: "买卖点 (BSP)",
       key: "bsp",
-      color: "#b91c1c",
-      bgColor: "rgba(185, 28, 28, 0.08)",
+      color: "#be123c",
+      bgColor: "rgba(190, 18, 60, 0.08)",
       items: [
         { label: "文字大小", subKey: "fontSize", type: "number", min: 8, max: 30 },
         { label: "连线颜色", subKey: "lineColor", type: "color" },
-        { label: "连线粗细", subKey: "lineWidth", type: "number", min: 0.1, max: 5, step: 0.1 }
+        { label: "连线粗细", subKey: "lineWidth", type: "number", min: 0.1, max: 5, step: 0.1 },
+        { label: "连线线型", subKey: "lineStyle", type: "select", options: [
+          { value: "dashed", label: "虚线" },
+          { value: "solid", label: "实线" },
+          { value: "dotted", label: "点线" }
+        ]}
       ]
     },
     {
       title: "自定义支撑压力线 (User Rays)",
       key: "userRay",
       color: "#f97316",
-      bgColor: "rgba(249, 115, 22, 0.08)",
+      bgColor: "rgba(249, 115, 22, 0.1)",
       items: [
         { label: "射线颜色", subKey: "color", type: "color" },
         { label: "粗细", subKey: "width", type: "number", min: 0.1, max: 8, step: 0.1 },
@@ -1430,8 +1498,8 @@ function renderSettingsForm() {
     {
       title: "X 轴设置",
       key: "xAxis",
-      color: "#64748b",
-      bgColor: "rgba(100, 116, 139, 0.08)",
+      color: "#475569",
+      bgColor: "rgba(71, 85, 105, 0.08)",
       items: [
         { label: "文字大小", subKey: "fontSize", type: "number", min: 8, max: 24 },
         { label: "文字方向(度)", subKey: "rotation", type: "number", min: -180, max: 180 },
@@ -1445,8 +1513,8 @@ function renderSettingsForm() {
     {
       title: "Y 轴设置",
       key: "yAxis",
-      color: "#64748b",
-      bgColor: "rgba(100, 116, 139, 0.08)",
+      color: "#334155",
+      bgColor: "rgba(51, 65, 85, 0.08)",
       items: [
         { label: "文字大小", subKey: "fontSize", type: "number", min: 8, max: 24 },
         { label: "文字粗细", subKey: "fontWeight", type: "select", options: [
@@ -1457,24 +1525,64 @@ function renderSettingsForm() {
       ]
     },
     {
-      title: "交易与盈亏颜色",
+      title: "买卖文字标记",
       key: "trade",
-      color: "#2563eb",
-      bgColor: "rgba(37, 99, 235, 0.08)",
+      color: "#be123c",
+      bgColor: "rgba(190, 18, 60, 0.08)",
       items: [
         { label: "买入颜色", subKey: "buyColor", type: "color" },
         { label: "卖出颜色", subKey: "sellColor", type: "color" },
-        { label: "盈利颜色", subKey: "profitColor", type: "color" },
-        { label: "亏损颜色", subKey: "lossColor", type: "color" },
-        { label: "持仓区间(买)", subKey: "rangeFillBuy", type: "color" },
-        { label: "持仓区间(卖)", subKey: "rangeFillSell", type: "color" }
+        { label: "文字大小", subKey: "markerFontSize", type: "number", min: 10, max: 32 },
+        { label: "文字粗细", subKey: "markerFontWeight", type: "select", options: [
+          { value: "normal", label: "常规" },
+          { value: "bold", label: "加粗" }
+        ]},
+        { label: "买卖竖线粗细", subKey: "markerLineWidth", type: "number", min: 0.5, max: 8, step: 0.1 },
+        { label: "买卖竖线线型", subKey: "markerLineStyle", type: "select", options: [
+          { value: "dashed", label: "虚线" },
+          { value: "solid", label: "实线" },
+          { value: "dotted", label: "点线" }
+        ]}
+      ]
+    },
+    {
+      title: "买卖收盘价指示线",
+      key: "trade",
+      color: "#0f766e",
+      bgColor: "rgba(15, 118, 110, 0.08)",
+      items: [
+        { label: "指示线粗细", subKey: "closeLineWidth", type: "number", min: 0.5, max: 8, step: 0.1 },
+        { label: "买入价线型", subKey: "buyCloseLineStyle", type: "select", options: [
+          { value: "solid", label: "实线" },
+          { value: "dashed", label: "虚线" },
+          { value: "dotted", label: "点线" }
+        ]},
+        { label: "卖出价线型", subKey: "sellCloseLineStyle", type: "select", options: [
+          { value: "dashed", label: "虚线" },
+          { value: "solid", label: "实线" },
+          { value: "dotted", label: "点线" }
+        ]}
+      ]
+    },
+    {
+      title: "持仓区间与盈亏区间",
+      key: "trade",
+      color: "#7c3aed",
+      bgColor: "rgba(124, 58, 237, 0.08)",
+      items: [
+        { label: "持仓区间(买)背景", subKey: "rangeFillBuy", type: "color", tip: "用于买入后到卖出前整段背景色。" },
+        { label: "持仓区间(卖)背景", subKey: "rangeFillSell", type: "color", tip: "用于已卖出历史交易区间整段背景色。" },
+        { label: "盈利区间颜色", subKey: "profitBandColor", type: "color", tip: "用于买卖价之间的盈利区间填充色。" },
+        { label: "亏损区间颜色", subKey: "lossBandColor", type: "color", tip: "用于买卖价之间的亏损区间填充色。" },
+        { label: "盈亏数字(盈利)", subKey: "profitColor", type: "color" },
+        { label: "盈亏数字(亏损)", subKey: "lossColor", type: "color" }
       ]
     },
     {
       title: "消息与通知",
       key: "toast",
       color: "#1e293b",
-      bgColor: "rgba(30, 41, 59, 0.08)",
+      bgColor: "rgba(30, 41, 59, 0.12)",
       items: [
         { label: "文字大小", subKey: "fontSize", type: "number", min: 10, max: 30 },
         { label: "文字粗细", subKey: "fontWeight", type: "select", options: [
@@ -1499,7 +1607,7 @@ function renderSettingsForm() {
         val = chartConfig.theme;
       } else if (sec.key === "indicators") {
         if (item.subKey === "slot") val = selectedIndicatorPanel;
-        else if (item.subKey === "type") val = indicatorSlots[selectedIndicatorPanel];
+        else if (item.subKey === "type") val = getIndicatorTypeValue();
       } else {
         val = chartConfig[sec.key][item.subKey];
       }
@@ -1521,35 +1629,37 @@ function renderSettingsForm() {
        if (item.type === "select") {
           let optionsHtml = item.options.map(o => `<option value="${o.value}" ${String(val) === String(o.value) ? "selected" : ""}>${o.label}</option>`).join("");
           itemDiv.innerHTML += `
-            <label>${item.label}</label>
+            <label>${buildLabelHtml(item)}</label>
             <select data-key="${sec.key}" data-subkey="${item.subKey}">${optionsHtml}</select>
           `;
         if (sec.key === "indicators") {
            const select = itemDiv.querySelector("select");
            if (item.subKey === "slot") {
              select.onchange = (e) => {
-                selectedIndicatorPanel = Number(e.target.value);
+                selectedIndicatorPanel = String(e.target.value);
                 const typeSelect = container.querySelector('select[data-subkey="type"]');
-                typeSelect.value = indicatorSlots[selectedIndicatorPanel] || "none";
+                typeSelect.value = getIndicatorTypeValue();
                 // Re-sync options based on current slot
+                const slotInfo = parseIndicatorPanel(selectedIndicatorPanel);
                 for (const option of typeSelect.options) {
                   const type = option.value;
                   if (type === "none") {
                     option.disabled = false;
                     continue;
                   }
-                  option.disabled = selectedIndicatorPanel === 0 ? !isMainIndicator(type) : !isSubIndicator(type);
+                  option.disabled = slotInfo.kind === "main" ? !isMainIndicator(type) : !isSubIndicator(type);
                 }
              };
            } else {
               // Sync type select options on render
+              const slotInfo = parseIndicatorPanel(selectedIndicatorPanel);
               for (const option of select.options) {
                   const type = option.value;
                   if (type === "none") {
                     option.disabled = false;
                     continue;
                   }
-                  option.disabled = selectedIndicatorPanel === 0 ? !isMainIndicator(type) : !isSubIndicator(type);
+                  option.disabled = slotInfo.kind === "main" ? !isMainIndicator(type) : !isSubIndicator(type);
               }
            }
         }
@@ -1564,11 +1674,12 @@ function renderSettingsForm() {
         `;
       } else if (item.type === "color") {
         // Use a better color indicator for colors
+        const safeVal = typeof val === "string" ? val : "#000000";
         itemDiv.innerHTML += `
-          <label>${item.label}</label>
+          <label>${buildLabelHtml(item)}</label>
           <div style="display:flex; align-items:center; gap:8px;">
-            <input type="color" value="${val.startsWith('#') ? val : '#000000'}" data-key="${sec.key}" data-subkey="${item.subKey}" style="width:40px; height:24px; padding:0; border:none; background:none; cursor:pointer;">
-            <input type="text" value="${val}" data-key="${sec.key}" data-subkey="${item.subKey}-text" style="flex:1; height:24px; padding:2px 4px; font-size:12px; font-family:monospace;">
+            <input type="color" value="${safeVal.startsWith('#') ? safeVal : '#000000'}" data-key="${sec.key}" data-subkey="${item.subKey}" style="width:40px; height:24px; padding:0; border:none; background:none; cursor:pointer;">
+            <input type="text" value="${safeVal}" data-key="${sec.key}" data-subkey="${item.subKey}-text" style="flex:1; height:24px; padding:2px 4px; font-size:12px; font-family:monospace;">
           </div>
         `;
         const colorInput = itemDiv.querySelector('input[type="color"]');
@@ -1583,7 +1694,7 @@ function renderSettingsForm() {
         let displayVal = val;
         if (item.subKey === "dash" && Array.isArray(val)) displayVal = val.join(", ");
         itemDiv.innerHTML += `
-          <label>${item.label}</label>
+          <label>${buildLabelHtml(item)}</label>
           <input type="${item.type}" 
                  value="${displayVal}" 
                  step="${item.step || 1}" 
@@ -1597,6 +1708,7 @@ function renderSettingsForm() {
     div.appendChild(grid);
     container.appendChild(div);
   });
+  initTooltips();
 }
 
 function saveSettings() {
@@ -1619,10 +1731,13 @@ function saveSettings() {
       chartConfig.theme = val;
       applyThemeFromSelect();
     } else if (key === "indicators") {
-      if (subkey === "slot") selectedIndicatorPanel = Number(val);
+      if (subkey === "slot") selectedIndicatorPanel = String(val);
       else if (subkey === "type") {
-        indicatorSlots[selectedIndicatorPanel] = val;
-        localStorage.setItem("chan_indicator_slots", JSON.stringify(indicatorSlots));
+        const slotInfo = parseIndicatorPanel(selectedIndicatorPanel);
+        if (slotInfo.kind === "main") indicatorMainSlots[String(slotInfo.slot)] = val;
+        else indicatorSubSlots[String(slotInfo.slot)] = val;
+        localStorage.setItem("chan_indicator_main_slots", JSON.stringify(indicatorMainSlots));
+        localStorage.setItem("chan_indicator_sub_slots", JSON.stringify(indicatorSubSlots));
       }
     } else if (key && subkey) {
       if (subkey === "dash" && typeof val === "string") {
@@ -1635,32 +1750,26 @@ function saveSettings() {
   });
   localStorage.setItem("chan_chart_config", JSON.stringify(chartConfig));
   closeSettings();
-  // Tooltip positioning logic
+  if (lastPayload && lastPayload.ready && lastPayload.chart) draw(lastPayload.chart);
+}
+
 function initTooltips() {
   const tipContent = $("tipContent");
   document.querySelectorAll(".tip-icon").forEach(icon => {
-    icon.onmouseenter = (e) => {
+    icon.onmouseenter = () => {
       const text = icon.getAttribute("data-tip");
       if (!text) return;
       tipContent.textContent = text;
       tipContent.style.display = "block";
-      
+
       const rect = icon.getBoundingClientRect();
       const tipRect = tipContent.getBoundingClientRect();
-      
       let top = rect.top + rect.height / 2 - tipRect.height / 2;
       let left = rect.left + rect.width + 8;
-      
-      // Auto-position if out of bounds
-      if (left + tipRect.width > window.innerWidth) {
-        left = rect.left - tipRect.width - 8;
-      }
-      if (top + tipRect.height > window.innerHeight) {
-        top = window.innerHeight - tipRect.height - 8;
-      }
+      if (left + tipRect.width > window.innerWidth) left = rect.left - tipRect.width - 8;
+      if (top + tipRect.height > window.innerHeight) top = window.innerHeight - tipRect.height - 8;
       if (top < 0) top = 8;
       if (left < 0) left = 8;
-      
       tipContent.style.top = `${top}px`;
       tipContent.style.left = `${left}px`;
     };
@@ -1670,12 +1779,15 @@ function initTooltips() {
   });
 }
 initTooltips();
-  if (lastPayload && lastPayload.ready && lastPayload.chart) draw(lastPayload.chart);
-}
 
 function resetSettings() {
   if (confirm("确定要恢复默认设置吗？")) {
     chartConfig = JSON.parse(JSON.stringify(DEFAULT_CHART_CONFIG));
+    indicatorMainSlots = { ...defaultMainSlots };
+    indicatorSubSlots = { ...defaultSubSlots };
+    selectedIndicatorPanel = "main:0";
+    localStorage.setItem("chan_indicator_main_slots", JSON.stringify(indicatorMainSlots));
+    localStorage.setItem("chan_indicator_sub_slots", JSON.stringify(indicatorSubSlots));
     renderSettingsForm();
   }
 }
@@ -1690,9 +1802,10 @@ $("settingsModal").addEventListener("click", (e) => {
   if (e.target === $("settingsModal")) closeSettings();
 });
 
-// Ctrl+S for settings
+// S for settings save + close
 $("settingsModal").addEventListener("keydown", (e) => {
-  if (e.ctrlKey && e.code === "KeyS") {
+  const tag = (document.activeElement && document.activeElement.tagName) ? document.activeElement.tagName.toLowerCase() : "";
+  if (!e.ctrlKey && !e.altKey && !e.metaKey && e.code === "KeyS" && tag !== "input" && tag !== "textarea" && tag !== "select") {
     e.preventDefault();
     saveSettings();
   }
@@ -1711,14 +1824,33 @@ function isSubIndicator(type) {
   return SUB_INDICATORS.has(type);
 }
 
+function parseIndicatorPanel(panelKey) {
+  const [kind, idx] = String(panelKey || "main:0").split(":");
+  const slot = Number(idx);
+  if ((kind !== "main" && kind !== "sub") || !Number.isFinite(slot)) return { kind: "main", slot: 0 };
+  return { kind, slot };
+}
+
+function getTradeLineDash(style) {
+  if (style === "solid") return [];
+  if (style === "dotted") return [2, 4];
+  return [7, 5];
+}
+
 function getIndicatorConfig() {
-  const mainType = isMainIndicator(indicatorSlots[0]) ? indicatorSlots[0] : "none";
+  const gateMain = indicatorMainSlots["0"] || "none";
+  if (gateMain === "none") return { mainTypes: [], subCharts: [] };
+  const mainTypes = [];
+  for (let slot = 0; slot <= 5; slot++) {
+    const type = indicatorMainSlots[String(slot)];
+    if (type && type !== "none" && isMainIndicator(type)) mainTypes.push({ slot, type });
+  }
   const subCharts = [];
   for (let slot = 1; slot <= 5; slot++) {
-    const type = indicatorSlots[slot];
+    const type = indicatorSubSlots[String(slot)];
     if (type && type !== "none" && isSubIndicator(type)) subCharts.push({ slot, type });
   }
-  return { mainType, subCharts };
+  return { mainTypes, subCharts };
 }
 
 function getChipBucketStep() {
@@ -1949,7 +2081,11 @@ function resizeCanvas() {
   ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
   if (lastPayload && lastPayload.ready) draw(lastPayload.chart);
 }
-window.addEventListener("resize", resizeCanvas);
+window.addEventListener("resize", () => {
+  resizeCanvas();
+  const overlay = $("tradeStatusOverlay");
+  if (overlay) applyTradeOverlayPosition(parseFloat(overlay.style.left) || 16, parseFloat(overlay.style.top) || 16);
+});
 setTimeout(resizeCanvas, 0);
 
 canvas.addEventListener(
@@ -2072,6 +2208,8 @@ btnFullscreen.onclick = () => {
 
 document.addEventListener("fullscreenchange", () => {
   resizeCanvas();
+  const overlay = $("tradeStatusOverlay");
+  if (overlay) applyTradeOverlayPosition(parseFloat(overlay.style.left) || 16, parseFloat(overlay.style.top) || 16);
 });
 
 canvas.addEventListener("click", (e) => {
@@ -2096,7 +2234,7 @@ canvas.addEventListener("click", (e) => {
 
   const panel = getPanelByY(s, y);
   if (!panel) return;
-  selectedIndicatorPanel = panel.slot;
+  selectedIndicatorPanel = `sub:${panel.slot}`;
   syncIndicatorControls();
 });
 
@@ -2293,9 +2431,10 @@ window.addEventListener("keydown", (e) => {
   }
 });
 
-let msgHistory = JSON.parse(localStorage.getItem("chan_msg_history") || "[]");
+let msgHistory = ensureArray(safeJsonParse(localStorage.getItem("chan_msg_history"), []), []);
 
 function setMsg(text) {
+  if (!Array.isArray(msgHistory)) msgHistory = [];
   const t = new Date().toLocaleTimeString();
   const entry = { time: t, text: text };
   msgHistory.push(entry);
@@ -2379,6 +2518,63 @@ window.addEventListener("mouseup", () => {
 const savedWidth = localStorage.getItem("chan_sidebar_width");
 if (savedWidth) leftPanel.style.width = savedWidth;
 
+const tradeOverlayState = { dragging: false, offsetX: 0, offsetY: 0 };
+function clampOverlayPosition(overlay, left, top) {
+  const margin = 8;
+  const maxLeft = Math.max(margin, window.innerWidth - overlay.offsetWidth - margin);
+  const maxTop = Math.max(margin, window.innerHeight - overlay.offsetHeight - margin);
+  return {
+    left: Math.max(margin, Math.min(maxLeft, left)),
+    top: Math.max(margin, Math.min(maxTop, top)),
+  };
+}
+
+function applyTradeOverlayPosition(left, top) {
+  const overlay = $("tradeStatusOverlay");
+  if (!overlay) return;
+  const pos = clampOverlayPosition(overlay, left, top);
+  overlay.style.left = `${pos.left}px`;
+  overlay.style.top = `${pos.top}px`;
+  overlay.style.right = "auto";
+}
+
+function initTradeStatusDrag() {
+  const overlay = $("tradeStatusOverlay");
+  const title = overlay ? overlay.querySelector(".tradeStatusTitle") : null;
+  if (!overlay || !title) return;
+  const saved = safeJsonParse(localStorage.getItem("chan_trade_overlay_pos"), null);
+  if (saved && Number.isFinite(saved.left) && Number.isFinite(saved.top)) {
+    applyTradeOverlayPosition(saved.left, saved.top);
+  } else {
+    applyTradeOverlayPosition(16, 16);
+  }
+  title.addEventListener("mousedown", (e) => {
+    if (e.button !== 0) return;
+    tradeOverlayState.dragging = true;
+    overlay.classList.add("dragging");
+    const rect = overlay.getBoundingClientRect();
+    tradeOverlayState.offsetX = e.clientX - rect.left;
+    tradeOverlayState.offsetY = e.clientY - rect.top;
+    e.preventDefault();
+  });
+  window.addEventListener("mousemove", (e) => {
+    if (!tradeOverlayState.dragging) return;
+    const left = e.clientX - tradeOverlayState.offsetX;
+    const top = e.clientY - tradeOverlayState.offsetY;
+    applyTradeOverlayPosition(left, top);
+  });
+  window.addEventListener("mouseup", () => {
+    if (!tradeOverlayState.dragging) return;
+    tradeOverlayState.dragging = false;
+    overlay.classList.remove("dragging");
+    localStorage.setItem("chan_trade_overlay_pos", JSON.stringify({
+      left: parseFloat(overlay.style.left) || 16,
+      top: parseFloat(overlay.style.top) || 16,
+    }));
+  });
+}
+initTradeStatusDrag();
+
 function setState(p) {
   if (!p.ready) {
     setText("st_cash", "-");
@@ -2433,11 +2629,14 @@ function updateTradeStatusOverlay(payload) {
   const pnlRaw = (price - a.avg_cost) * a.position;
   const pnl = Math.abs(pnlRaw) < 0.005 ? 0 : pnlRaw;
   const pnlPct = (a.avg_cost > 0 && a.position > 0) ? (pnl / (a.avg_cost * a.position)) * 100 : 0;
+  const totalPnlRaw = a.equity - a.initial_cash;
+  const totalPnl = Math.abs(totalPnlRaw) < 0.005 ? 0 : totalPnlRaw;
 
   overlay.style.display = "block";
   overlay.style.borderColor = pnl > 0 ? getCfgColor(chartConfig.trade.profitColor) : (pnl < 0 ? getCfgColor(chartConfig.trade.lossColor) : "#e2e8f0");
 
   setText("ts_hold_bars", `${holdBars} 根`);
+  setText("ts_pos", `${a.position} 股`);
   setText("ts_buy_price", a.avg_cost.toFixed(4));
   setText("ts_curr_price", price.toFixed(4));
   
@@ -2448,6 +2647,12 @@ function updateTradeStatusOverlay(payload) {
   const pnlPctEl = $("ts_pnl_pct");
   pnlPctEl.textContent = `${(pnlPct >= 0 ? "+" : "") + pnlPct.toFixed(2)}%`;
   pnlPctEl.style.color = pnl > 0 ? getCfgColor(chartConfig.trade.profitColor) : (pnl < 0 ? getCfgColor(chartConfig.trade.lossColor) : "inherit");
+
+  setText("ts_cash", `${a.cash.toFixed(2)} 元`);
+  setText("ts_equity", `${a.equity.toFixed(2)} 元`);
+  const totalPnlEl = $("ts_total_pnl");
+  totalPnlEl.textContent = `${totalPnl >= 0 ? "+" : ""}${totalPnl.toFixed(2)} 元`;
+  totalPnlEl.style.color = totalPnl > 0 ? getCfgColor(chartConfig.trade.profitColor) : (totalPnl < 0 ? getCfgColor(chartConfig.trade.lossColor) : "inherit");
 }
 
 function showSettlement(tr, stockName) {
@@ -2546,15 +2751,16 @@ function toScaler(chart, xMin, xMax) {
   }
   
   const indicatorCfg = getIndicatorConfig();
-  const mainType = indicatorCfg.mainType;
+  const mainTypes = indicatorCfg.mainTypes || [];
+  const mainTypeSet = new Set(mainTypes.map((m) => m.type));
   const visibleInd = (chart.indicators || []).filter(i => i.x >= xMin && i.x <= xMax);
-  if (mainType === "boll") {
+  if (mainTypeSet.has("boll")) {
     for (const i of visibleInd) {
       if (i.boll.up > yMax) yMax = i.boll.up;
       if (i.boll.down < yMin) yMin = i.boll.down;
     }
   }
-  if (mainType === "trendline" && chart.trend_lines) {
+  if (mainTypeSet.has("trendline") && chart.trend_lines) {
     for (const tl of chart.trend_lines) {
       const yAtMin = tl.y0 + tl.slope * (xMin - tl.x0);
       const yAtMax = tl.y0 + tl.slope * (xMax - tl.x0);
@@ -2634,7 +2840,7 @@ function toScaler(chart, xMin, xMax) {
     plotW,
     subPanels,
     contentBottom,
-    mainType,
+    mainTypes,
     x: (x) => PAD_L + ((x - xMin) / xSpan) * plotW,
     y: (y) => PAD_T + ((yMax - y) / ySpan) * plotH,
     yFromPx: (py) => yMax - ((py - PAD_T) / Math.max(1, plotH)) * ySpan,
@@ -3039,42 +3245,49 @@ function drawLegend() {
 function drawTradeBands(s, chart) {
   if (!lastPayload || !lastPayload.ready) return;
   const lastX = chart.kline[chart.kline.length - 1].x;
-  
-  const fillBand = (x1, x2, buyPrice, sellPrice, alphaMul) => {
+  const fillHoldBackground = (x1, x2, color, alphaMul) => {
+    if (x1 == null || x2 == null) return;
     const lo = Math.min(x1, x2);
     const hi = Math.max(x1, x2);
     if (hi < s.xMin || lo > s.xMax) return;
     const xa = s.x(lo);
     const xb = s.x(hi);
-    const top = PAD_T;
-    const bot = s.plotBottomY;
-    
-    // Determine color based on profit/loss if prices are available
-    let color;
-    if (buyPrice !== null && sellPrice !== null) {
-      color = sellPrice >= buyPrice ? getCfgColor(chartConfig.trade.profitColor) : getCfgColor(chartConfig.trade.lossColor);
-    } else if (buyPrice !== null && sellPrice === null) {
-      // Active long trade: check current price vs buy price
-      const currPrice = lastPayload && lastPayload.price !== null ? lastPayload.price : buyPrice;
-      color = currPrice >= buyPrice ? getCfgColor(chartConfig.trade.profitColor) : getCfgColor(chartConfig.trade.lossColor);
-    } else {
-      color = getCfgColor(chartConfig.trade.rangeFillBuy);
-    }
-    
     ctx.save();
     ctx.fillStyle = color;
     ctx.globalAlpha = alphaMul;
-    ctx.fillRect(Math.min(xa, xb), top, Math.abs(xb - xa), bot - top);
+    ctx.fillRect(Math.min(xa, xb), PAD_T, Math.abs(xb - xa), s.plotBottomY - PAD_T);
+    ctx.restore();
+  };
+
+  const fillPnlBand = (x1, x2, buyPrice, endPrice) => {
+    if (x1 == null || x2 == null || buyPrice == null || endPrice == null) return;
+    const lo = Math.min(x1, x2);
+    const hi = Math.max(x1, x2);
+    if (hi < s.xMin || lo > s.xMax) return;
+    const xa = s.x(lo);
+    const xb = s.x(hi);
+    const yBuy = s.y(buyPrice);
+    const yEnd = s.y(endPrice);
+    const top = Math.min(yBuy, yEnd);
+    const height = Math.max(1, Math.abs(yEnd - yBuy));
+    const isProfit = endPrice >= buyPrice;
+    const pnlColor = isProfit ? getCfgColor(chartConfig.trade.profitBandColor) : getCfgColor(chartConfig.trade.lossBandColor);
+    ctx.save();
+    ctx.fillStyle = pnlColor;
+    ctx.globalAlpha = 0.28;
+    ctx.fillRect(Math.min(xa, xb), top, Math.abs(xb - xa), height);
     ctx.restore();
   };
 
   for (const tr of tradeHistory) {
     if (tr.buyX != null && tr.sellX != null) {
-      fillBand(tr.buyX, tr.sellX, tr.buyPrice, tr.sellPrice, 0.15);
+      fillHoldBackground(tr.buyX, tr.sellX, getCfgColor(chartConfig.trade.rangeFillSell), 0.11);
+      fillPnlBand(tr.buyX, tr.sellX, tr.buyPrice, tr.sellPrice);
     }
   }
   if (lastPayload.account.position > 0 && activeTrade && activeTrade.buyX != null) {
-    fillBand(activeTrade.buyX, lastX, activeTrade.buyPrice, lastPayload.price, 0.15);
+    fillHoldBackground(activeTrade.buyX, lastX, getCfgColor(chartConfig.trade.rangeFillBuy), 0.11);
+    fillPnlBand(activeTrade.buyX, lastX, activeTrade.buyPrice, lastPayload.price);
   }
 }
 
@@ -3088,15 +3301,15 @@ function drawTradeMarkers(s, chart) {
     const xp = s.x(xBar);
     ctx.save();
     ctx.strokeStyle = color;
-    ctx.lineWidth = chartConfig.trade.rangeWidth;
-    ctx.setLineDash([5, 4]);
+    ctx.lineWidth = chartConfig.trade.markerLineWidth || 2;
+    ctx.setLineDash(getTradeLineDash(chartConfig.trade.markerLineStyle || "dashed"));
     ctx.beginPath();
     ctx.moveTo(xp, PAD_T);
     ctx.lineTo(xp, s.plotBottomY);
     ctx.stroke();
     ctx.setLineDash([]);
     ctx.fillStyle = color;
-    ctx.font = `bold ${chartConfig.trade.markerFontSize}px Consolas`;
+    ctx.font = `${chartConfig.trade.markerFontWeight || "bold"} ${chartConfig.trade.markerFontSize}px Consolas`;
     ctx.textAlign = "center";
     ctx.fillText(tag, xp, s.plotBottomY + 18);
     ctx.restore();
@@ -3112,16 +3325,15 @@ function drawTradeMarkers(s, chart) {
 }
 
 function drawTradeRays(s) {
-  const drawRay = (x1, y1, x2, color, dashed) => {
+  const drawRay = (x1, y1, x2, color, style) => {
     if (x1 == null || x2 == null || y1 == null) return;
     const lo = Math.min(x1, x2);
     const hi = Math.max(x1, x2);
     if (hi < s.xMin || lo > s.xMax) return;
     ctx.save();
     ctx.strokeStyle = color;
-    ctx.lineWidth = chartConfig.trade.rangeWidth;
-    if (dashed) ctx.setLineDash([7, 5]);
-    else ctx.setLineDash([]);
+    ctx.lineWidth = chartConfig.trade.closeLineWidth || 2;
+    ctx.setLineDash(getTradeLineDash(style || "solid"));
     ctx.beginPath();
     ctx.moveTo(s.x(x1), s.y(y1));
     ctx.lineTo(s.x(x2), s.y(y1));
@@ -3132,12 +3344,12 @@ function drawTradeRays(s) {
   const rayBuy = getCfgColor(chartConfig.trade.buyColor);
   const raySell = getCfgColor(chartConfig.trade.sellColor);
   for (const tr of tradeHistory) {
-    drawRay(tr.buyX, tr.buyPrice, tr.sellX, rayBuy, false);
-    drawRay(tr.sellX, tr.sellPrice, tr.buyX, raySell, true);
+    drawRay(tr.buyX, tr.buyPrice, tr.sellX, rayBuy, chartConfig.trade.buyCloseLineStyle || "solid");
+    drawRay(tr.sellX, tr.sellPrice, tr.buyX, raySell, chartConfig.trade.sellCloseLineStyle || "dashed");
   }
   if (activeTrade && activeTrade.buyX != null && activeTrade.buyPrice != null) {
     const rightTo = Math.max(s.xMax, activeTrade.buyX + 1);
-    drawRay(activeTrade.buyX, activeTrade.buyPrice, rightTo, rayBuy, false);
+    drawRay(activeTrade.buyX, activeTrade.buyPrice, rightTo, rayBuy, chartConfig.trade.buyCloseLineStyle || "solid");
   }
 }
 
@@ -3146,6 +3358,7 @@ function drawIndicators(chart, s) {
   const visibleInd = s.visibleInd;
   const theme = document.documentElement.getAttribute("data-theme") || "light";
   const lineMain = theme === "light" ? "#1e293b" : "#f8fafc";
+  const mainTypeSet = new Set((s.mainTypes || []).map((m) => m.type));
 
   const drawPanelLine = (arr, getter, yFn, color) => {
     ctx.strokeStyle = color;
@@ -3223,14 +3436,15 @@ function drawIndicators(chart, s) {
     ctx.restore();
   };
 
-  if (s.mainType === "boll") {
+  if (mainTypeSet.has("boll")) {
     ctx.save();
     ctx.lineWidth = 1;
     drawPanelLine(visibleInd, (i) => i.boll.mid, s.y, "#94a3b8");
     drawPanelLine(visibleInd, (i) => i.boll.up, s.y, "#f59e0b");
     drawPanelLine(visibleInd, (i) => i.boll.down, s.y, "#f59e0b");
     ctx.restore();
-  } else if (s.mainType === "demark") {
+  }
+  if (mainTypeSet.has("demark")) {
     ctx.save();
     ctx.font = "bold 12px Consolas";
     ctx.textAlign = "center";
@@ -3245,7 +3459,8 @@ function drawIndicators(chart, s) {
       }
     }
     ctx.restore();
-  } else if (s.mainType === "trendline") {
+  }
+  if (mainTypeSet.has("trendline")) {
     if (chart.trend_lines) {
       ctx.save();
       ctx.lineWidth = 2;
@@ -3294,7 +3509,8 @@ function drawBsp(arr, s) {
       const toY = Math.max(PAD_T + 2, Math.min(s.contentBottom - 2, yTopText));
       ctx.save();
       ctx.lineWidth = chartConfig.bsp.lineWidth;
-      ctx.setLineDash(chartConfig.bsp.lineDash || [5, 4]);
+      const bspDash = chartConfig.bsp.lineStyle ? getTradeLineDash(chartConfig.bsp.lineStyle) : (chartConfig.bsp.lineDash || [5, 4]);
+      ctx.setLineDash(bspDash);
       ctx.strokeStyle = getCfgColor(chartConfig.bsp.lineColor);
       ctx.beginPath();
       ctx.moveTo(xp, anchorY);
@@ -3504,7 +3720,14 @@ function refreshUI(payload, options) {
 }
 
 $("btnInit").onclick = async () => {
-  setGlobalLoading(true, "正在加载会话，请稍候...");
+  const initBtn = $("btnInit");
+  if (initBtn.disabled) return;
+  let initSucceeded = false;
+  const initBtnHtml = initBtn.innerHTML;
+  setGlobalLoading(true, "正在加载会话，首次加载历史数据可能需要约 30-40 秒，请稍候...");
+  setMsg("正在加载会话...");
+  initBtn.disabled = true;
+  initBtn.innerHTML = "加载中...";
   try {
     const payload = await api("/api/init", {
       code: $("code").value,
@@ -3513,9 +3736,11 @@ $("btnInit").onclick = async () => {
       initial_cash: Number($("cash").value),
       autype: $("autype").value
     });
+    initSucceeded = true;
     document.title = `chan.py 复盘训练器 - ${(payload.name ? payload.name : payload.code)}`;
     setMsg(`加载成功：${payload.name ? payload.name : payload.code}，请点击“下一根K线”。`);
-    $("btnInit").disabled = true;
+    initBtn.disabled = true;
+    initBtn.innerHTML = "已加载";
     $("code").disabled = true;
     $("begin").disabled = true;
     $("end").disabled = true;
@@ -3537,6 +3762,10 @@ $("btnInit").onclick = async () => {
   } catch (e) {
     setMsg("加载失败：" + e.message);
   } finally {
+    if (!initSucceeded) {
+      initBtn.disabled = false;
+      initBtn.innerHTML = initBtnHtml;
+    }
     hideGlobalLoading();
   }
 };
@@ -3679,6 +3908,7 @@ $("btnReset").onclick = async () => {
     hideGlobalLoading();
     const payload = await api("/api/reset");
     $("btnInit").disabled = false;
+    $("btnInit").innerHTML = '加载会话 <small>(Ctrl+I)</small>';
     $("code").disabled = false;
     $("begin").disabled = false;
     $("end").disabled = false;
@@ -3714,8 +3944,6 @@ $("btnExit").onclick = () => {
   }, 400);
 };
 
-$("theme").onchange = () => applyThemeFromSelect();
-
 // BSP Prompt Confirmation - Make it more robust
 const bspConfirm = (e) => {
   if (e) {
@@ -3725,10 +3953,20 @@ const bspConfirm = (e) => {
   clearBspPrompt();
 };
 if ($("bspPromptConfirm")) {
+  $("bspPromptConfirm").addEventListener("mousedown", (e) => {
+    if (e.button === 0) bspConfirm(e);
+  });
   $("bspPromptConfirm").addEventListener("click", bspConfirm);
 }
 if ($("bspPrompt")) {
-  $("bspPrompt").addEventListener("click", bspConfirm);
+  const panel = $("bspPrompt").querySelector(".panel");
+  if (panel) panel.addEventListener("click", (e) => e.stopPropagation());
+  $("bspPrompt").addEventListener("mousedown", (e) => {
+    if (e.button === 0 && e.target === $("bspPrompt")) bspConfirm(e);
+  });
+  $("bspPrompt").addEventListener("click", (e) => {
+    if (e.target === $("bspPrompt")) bspConfirm(e);
+  });
 }
 
 (async () => {
