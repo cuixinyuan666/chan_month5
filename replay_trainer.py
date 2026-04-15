@@ -271,6 +271,7 @@ class AppState:
         self.finished = False
         self.session_params: Optional[dict[str, Any]] = None
         self.trade_events: list[dict[str, Any]] = []
+        self.bsp_history: list[dict[str, Any]] = []
 
     def _current_kline_x(self) -> Optional[int]:
         if self.stepper.chan is None:
@@ -305,6 +306,56 @@ class AppState:
                 active = None
         return {"history": history, "active": active}
 
+    def _current_bsp_snapshot(self) -> list[dict[str, Any]]:
+        if self.stepper.chan is None:
+            return []
+        kl_list = self.stepper.chan[0]
+        snapshot: list[dict[str, Any]] = []
+        for bsp in kl_list.bs_point_lst.bsp_iter():
+            snapshot.append(
+                {
+                    "x": int(bsp.klu.idx),
+                    "is_buy": bool(bsp.is_buy),
+                    "label": bsp.type2str(),
+                }
+            )
+        return snapshot
+
+    @staticmethod
+    def _bsp_key(item: dict[str, Any]) -> str:
+        return f'{int(item["x"])}|{item["label"]}|{1 if item["is_buy"] else 0}'
+
+    def sync_bsp_history(self) -> None:
+        current_x = self._current_kline_x()
+        if current_x is None:
+            self.bsp_history = []
+            return
+
+        snapshot = self._current_bsp_snapshot()
+        current_keys = {self._bsp_key(item) for item in snapshot}
+
+        for item in self.bsp_history:
+            if item.get("status") is None and int(item.get("x", -1)) < current_x:
+                item["status"] = "correct" if item.get("key") in current_keys else "wrong"
+
+        existing_keys = {str(item.get("key")) for item in self.bsp_history}
+        for item in snapshot:
+            if int(item["x"]) != current_x:
+                continue
+            key = self._bsp_key(item)
+            if key in existing_keys:
+                continue
+            self.bsp_history.append(
+                {
+                    "key": key,
+                    "x": int(item["x"]),
+                    "is_buy": bool(item["is_buy"]),
+                    "label": item["label"],
+                    "status": None,
+                }
+            )
+            existing_keys.add(key)
+
     def rebuild_to_step(self, target_step: int) -> None:
         if self.session_params is None:
             raise ValueError("当前无可重建会话")
@@ -318,12 +369,15 @@ class AppState:
         self.account.reset(params["initial_cash"])
         self.ready = True
         self.finished = False
+        self.bsp_history = []
 
         if not self.stepper.step():
             return
+        self.sync_bsp_history()
         for _ in range(target_step):
             if not self.stepper.step():
                 break
+            self.sync_bsp_history()
 
         effective_step = max(0, self.stepper.step_idx)
         self.trade_events = [e for e in self.trade_events if int(e.get("step_idx", -1)) <= effective_step]
@@ -362,6 +416,7 @@ class AppState:
             "time": self.stepper.current_time(),
             "price": price,
             "chart": chart,
+            "bsp_history": self.bsp_history,
             "account": {
                 "initial_cash": round(self.account.initial_cash, 2),
                 "cash": round(self.account.cash, 2),
@@ -2660,12 +2715,12 @@ function formatPriceText(v, digits = 3) {
 }
 
 function getBspAtX(chart, xVal) {
-  const merged = [...(bspHistory || []), ...(((chart && chart.bsp) || []))];
   const tags = [];
   const seen = new Set();
-  for (const p of merged) {
+  for (const p of (bspHistory || [])) {
     if (!p || p.x !== xVal) continue;
-    const txt = `${p.is_buy ? "买点" : "卖点"}:${p.label}`;
+    const prefix = p.status === "correct" ? "✓" : (p.status === "wrong" ? "×" : "…");
+    const txt = `${prefix}${p.is_buy ? "买点" : "卖点"}:${p.label}`;
     if (seen.has(txt)) continue;
     seen.add(txt);
     tags.push(txt);
@@ -4348,7 +4403,6 @@ function drawIndicators(chart, s) {
 }
 
 function drawBsp(arr, s) {
-  // draw bsp types and dashed guide lines per signal bar
   const groups = {};
   for (const p of arr || []) {
     if (p.x < s.xMin || p.x > s.xMax) continue;
@@ -4359,21 +4413,26 @@ function drawBsp(arr, s) {
     .map((x) => Number(x))
     .sort((a, b) => a - b);
 
-  const bspBaseY = s.h - 10;
-  const lineH = chartConfig.bsp.fontSize + 8;
-  ctx.font = `bold ${chartConfig.bsp.fontSize + 8}px Consolas`;
+  const boxGap = 4;
+  const boxPadX = 8;
+  const boxPadY = 5;
+  const fontSize = chartConfig.bsp.fontSize;
+  const lineH = fontSize + boxPadY * 2;
+  const maxLines = 8;
   const colBuy = getCfgColor(chartConfig.trade.buyColor);
   const colSell = getCfgColor(chartConfig.trade.sellColor);
   const byX = new Map((s.visibleK || []).map((k) => [k.x, k]));
 
   for (const x of xs) {
     const xp = s.x(x);
-    const ps = groups[x];
-    const yTopText = bspBaseY - (Math.min(ps.length, 8) - 1) * lineH - 18;
+    const ps = groups[x].slice(0, maxLines);
+    const stackH = ps.length * lineH + Math.max(0, ps.length - 1) * boxGap;
+    const boxBottom = s.h - 8;
+    const stackTop = boxBottom - stackH;
     const k = byX.get(x);
     if (k) {
       const anchorY = s.y(k.l);
-      const toY = Math.max(PAD_T + 2, Math.min(s.contentBottom - 2, yTopText));
+      const toY = Math.max(PAD_T + 2, Math.min(s.h - PAD_B + 8, stackTop - 6));
       ctx.save();
       ctx.lineWidth = chartConfig.bsp.lineWidth;
       const bspDash = chartConfig.bsp.lineStyle ? getTradeLineDash(chartConfig.bsp.lineStyle) : (chartConfig.bsp.lineDash || [5, 4]);
@@ -4385,15 +4444,27 @@ function drawBsp(arr, s) {
       ctx.stroke();
       ctx.restore();
     }
-    // stack labels (并列换行 -> vertical stacking)
-    const maxLines = 8;
-    ctx.font = `bold ${chartConfig.bsp.fontSize}px Consolas`;
-    for (let i = 0; i < Math.min(ps.length, maxLines); i++) {
+    for (let i = 0; i < ps.length; i++) {
       const p = ps[i];
-      const c = p.is_buy ? colBuy : colSell;
-      ctx.fillStyle = c;
-      const txt = (p.is_buy ? "b" : "s") + p.label;
-      ctx.fillText(txt, xp - 10, bspBaseY - i * lineH);
+      const color = p.is_buy ? colBuy : colSell;
+      const prefix = p.status === "correct" ? "✓" : (p.status === "wrong" ? "×" : "·");
+      const txt = `${prefix}${p.is_buy ? "买" : "卖"} ${p.label}`;
+      ctx.save();
+      ctx.font = `bold ${fontSize}px Consolas`;
+      const textW = ctx.measureText(txt).width;
+      const rectW = textW + boxPadX * 2;
+      const rectX = xp - rectW / 2;
+      const rectY = boxBottom - (i + 1) * lineH - i * boxGap;
+      ctx.fillStyle = cssVar("--panel", "#ffffff");
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.5;
+      ctx.fillRect(rectX, rectY, rectW, lineH);
+      ctx.strokeRect(rectX, rectY, rectW, lineH);
+      ctx.fillStyle = color;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(txt, xp, rectY + lineH / 2);
+      ctx.restore();
     }
   }
 }
@@ -4536,8 +4607,8 @@ function refreshUI(payload, options) {
   sessionFinished = !!payload.finished;
   syncTradesFromPayload(payload);
   syncIndicatorControls();
-  if (payload.ready && payload.chart && payload.chart.bsp) {
-    bspHistory = payload.chart.bsp.slice();
+  if (payload.ready && Array.isArray(payload.bsp_history)) {
+    bspHistory = payload.bsp_history.slice();
     bspHistoryKey = new Set(bspHistory.map((p) => `${p.x}|${p.label}|${p.is_buy ? 1 : 0}`));
   } else {
     bspHistory = [];
@@ -4884,8 +4955,10 @@ def api_init(req: InitReq):
             "initial_cash": req.initial_cash,
         }
         APP_STATE.trade_events = []
+        APP_STATE.bsp_history = []
         # init后先推进一根，确保前端有可视数据并可交互
         APP_STATE.stepper.step()
+        APP_STATE.sync_bsp_history()
         return APP_STATE.build_payload(stock_name=APP_STOCK_NAME)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -4899,6 +4972,7 @@ def api_step():
         raise HTTPException(status_code=400, detail="当前会话已结束，请重新训练")
     try:
         ok = APP_STATE.stepper.step()
+        APP_STATE.sync_bsp_history()
         payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME)
         payload["message"] = "已到最后一根K线" if not ok else "步进成功"
         return payload
@@ -5001,6 +5075,7 @@ def api_reset():
     APP_STATE.finished = False
     APP_STATE.session_params = None
     APP_STATE.trade_events = []
+    APP_STATE.bsp_history = []
     return APP_STATE.build_payload(stock_name=APP_STOCK_NAME)
 
 
