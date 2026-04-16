@@ -118,16 +118,67 @@ class ChanStepper:
         self.indicator_history = []
         self.trend_lines = []
 
-    def init(self, code: str, begin_date: str, end_date: Optional[str], autype: AUTYPE) -> None:
-        cfg = CChanConfig(
-            {
-                "bi_strict": True,
-                "trigger_step": True,
-                "skip_step": 0,
-                "print_warning": False,
-                "kl_data_check": True,
-            }
-        )
+    def init(self, code: str, begin_date: str, end_date: Optional[str], autype: AUTYPE, chan_config: Optional[dict[str, Any]] = None) -> None:
+        cfg_dict = {
+            "bi_strict": True,
+            "bi_algo": "normal",
+            "bi_fx_check": "strict",
+            "gap_as_kl": False,
+            "bi_end_is_peak": True,
+            "bi_allow_sub_peak": True,
+            "seg_algo": "chan",
+            "left_seg_method": "peak",
+            "zs_combine": True,
+            "zs_combine_mode": "zs",
+            "one_bi_zs": False,
+            "zs_algo": "normal",
+            "trigger_step": True,
+            "skip_step": 0,
+            "kl_data_check": True,
+            "print_warning": False,
+            "print_err_time": False,
+            # BSP defaults
+            "divergence_rate": float("inf"),
+            "min_zs_cnt": 1,
+            "bsp1_only_multibi_zs": True,
+            "max_bs2_rate": 0.9999,
+            "macd_algo": "peak",
+            "bs1_peak": True,
+            "bs_type": "1,1p,2,2s,3a,3b",
+            "bsp2_follow_1": True,
+            "bsp3_follow_1": True,
+            "bsp3_peak": False,
+            "bsp2s_follow_2": False,
+            "max_bsp2s_lv": None,
+            "strict_bsp3": False,
+            "bsp3a_max_zs_cnt": 1,
+        }
+        if chan_config:
+            for k, v in chan_config.items():
+                if v is not None and v != "":
+                    if k in ["divergence_rate", "max_bs2_rate"]:
+                        try:
+                            cfg_dict[k] = float(v)
+                        except (ValueError, TypeError):
+                            if isinstance(v, str) and v.lower() == "inf":
+                                cfg_dict[k] = float("inf")
+                    elif k in ["min_zs_cnt", "bsp3a_max_zs_cnt", "boll_n", "rsi_cycle", "kdj_cycle", "skip_step"]:
+                        try:
+                            cfg_dict[k] = int(v)
+                        except (ValueError, TypeError):
+                            pass
+                    elif k == "macd" and isinstance(v, dict):
+                        macd_dict = cfg_dict.get("macd", {"fast": 12, "slow": 26, "signal": 9}).copy()
+                        for mk, mv in v.items():
+                            if mv is not None and mv != "":
+                                try:
+                                    macd_dict[mk] = int(mv)
+                                except (ValueError, TypeError):
+                                    pass
+                        cfg_dict["macd"] = macd_dict
+                    else:
+                        cfg_dict[k] = v
+        cfg = CChanConfig(cfg_dict)
         self.code = normalize_code(code)
         self.chan = CChan(
             code=self.code,
@@ -140,15 +191,9 @@ class ChanStepper:
         )
         # Preload full history K-lines for chip distribution (full available history -> end_date).
         # Keep it independent from step-based replay, so chips can use full past even at first step.
-        cfg_all = CChanConfig(
-            {
-                "bi_strict": True,
-                "trigger_step": False,
-                "skip_step": 0,
-                "print_warning": False,
-                "kl_data_check": True,
-            }
-        )
+        cfg_all_dict = cfg_dict.copy()
+        cfg_all_dict["trigger_step"] = False # Always False for chip calculation
+        cfg_all = CChanConfig(cfg_all_dict)
         chip_begin_date = "1990-01-01"
         chan_all = CChan(
             code=self.code,
@@ -257,6 +302,11 @@ class InitReq(BaseModel):
     end_date: Optional[str] = None
     initial_cash: float = 10_000
     autype: str = "qfq"
+    chan_config: Optional[dict[str, Any]] = None
+
+
+class ReconfigReq(BaseModel):
+    chan_config: dict[str, Any]
 
 
 class BackNReq(BaseModel):
@@ -365,8 +415,11 @@ class AppState:
             params["begin_date"],
             params["end_date"],
             params["autype"],
+            chan_config=params.get("chan_config"),
         )
-        self.account.reset(params["initial_cash"])
+        # Account reset is handled by the caller if needed (e.g. in reconfig)
+        # but for back_n it should stay consistent with history.
+        # However, rebuild_to_step is also used by back_n which needs to replay trades.
         self.ready = True
         self.finished = False
         self.bsp_history = []
@@ -386,10 +439,29 @@ class AppState:
             side = event.get("side")
             price = float(event.get("price", 0.0))
             step_idx = int(event.get("step_idx", -1))
-            if side == "buy":
-                self.account.buy_with_all_cash(price, step_idx)
-            elif side == "sell":
-                self.account.sell_all(price, step_idx)
+            try:
+                if side == "buy":
+                    self.account.buy_with_all_cash(price, step_idx)
+                elif side == "sell":
+                    self.account.sell_all(price, step_idx)
+            except Exception:
+                # Replay might fail if parameters changed drastically, but we try our best
+                pass
+
+    def reconfig(self, chan_config: dict[str, Any]) -> None:
+        if self.session_params is None:
+            raise ValueError("当前无可重配会话")
+        
+        # 1. Update session params
+        self.session_params["chan_config"] = chan_config
+        
+        # 2. Clear simulation data (trades and account)
+        self.trade_events = []
+        self.account.reset(self.session_params["initial_cash"])
+        
+        # 3. Rebuild to current step
+        target_step = self.stepper.step_idx
+        self.rebuild_to_step(target_step)
 
     def build_payload(self, stock_name: Optional[str] = None) -> dict[str, Any]:
         if not self.ready or self.stepper.chan is None:
@@ -707,6 +779,11 @@ HTML = r"""
       margin-left: 6px;
       cursor: help;
       position: relative;
+      user-select: none;
+    }
+    .tip-icon::before {
+      content: "i";
+      font-family: serif;
     }
     .tip-content {
       position: fixed;
@@ -1097,20 +1174,21 @@ HTML = r"""
 <body>
   <div class="wrap">
     <div class="left">
-      <div class="title">chan.py 复盘训练器 <span class="tip-icon" data-tip="Chan.py 缠论复盘交易系统">!</span></div>
+      <div class="title">chan.py 复盘训练器 <span class="tip-icon" data-tip="Chan.py 缠论复盘交易系统"></span></div>
       <div class="card" id="configCard">
         <div class="btnRow">
+          <button id="btnChanSettingsOpen" data-tip="打开缠论逻辑配置面板，可调整笔、线段、中枢等算法。">缠论配置... <small>(L)</small></button>
           <button id="btnSettingsOpen" data-tip="打开图表显示设置面板，可调整主题、指标与绘制项。">图表显示设置... <small>(P)</small></button>
           <button id="btnSystemSettingsOpen" data-tip="打开系统配置面板，可统一维护快捷键。">系统配置... <small>(Shift+P)</small></button>
         </div>
         <div class="row cfg-editable">
           <label>代码</label>
           <input id="code" value="600340" />
-          <span class="tip-icon" data-tip="输入6位数字代码">!</span>
+          <span class="tip-icon" data-tip="输入6位数字代码"></span>
         </div>
-        <div class="row cfg-editable"><label>开始日期</label><input id="begin" type="date" value="2018-01-01" /><span class="tip-icon" data-tip="复盘回放的起始日期。">!</span></div>
-        <div class="row cfg-editable"><label>结束日期</label><input id="end" type="date" value="" placeholder="可空" /><span class="tip-icon" data-tip="默认为空，表示截止当前日期。">!</span></div>
-        <div class="row cfg-editable"><label>初始资金</label><input id="cash" value="10000" /><span class="tip-icon" data-tip="模拟交易使用的初始资金，买入按钮会基于该资金全仓买入。">!</span></div>
+        <div class="row cfg-editable"><label>开始日期</label><input id="begin" type="date" value="2018-01-01" /><span class="tip-icon" data-tip="复盘回放的起始日期。"></span></div>
+        <div class="row cfg-editable"><label>结束日期</label><input id="end" type="date" value="" placeholder="可空" /><span class="tip-icon" data-tip="默认为空，表示截止当前日期。"></span></div>
+        <div class="row cfg-editable"><label>初始资金</label><input id="cash" value="10000" /><span class="tip-icon" data-tip="模拟交易使用的初始资金，买入按钮会基于该资金全仓买入。"></span></div>
         <div class="row cfg-editable">
           <label>复权</label>
           <select id="autype">
@@ -1118,7 +1196,7 @@ HTML = r"""
             <option value="hfq">后复权</option>
             <option value="none">不复权</option>
           </select>
-          <span class="tip-icon" data-tip="选择K线数据的复权方式。">!</span>
+          <span class="tip-icon" data-tip="选择K线数据的复权方式。"></span>
         </div>
         <div class="btnRow">
           <button id="btnInit" data-tip="根据当前代码、日期区间、初始资金加载复盘会话。首次加载历史数据可能较慢。">加载会话 <small>(Ctrl+I)</small></button>
@@ -1129,7 +1207,7 @@ HTML = r"""
         </div>
         <div class="stepNRow">
           <label for="stepN">步进数量 N</label>
-          <span id="tipStepN" class="tip-icon" data-tip="设置连续步进或回退时使用的根数。遇到买卖点会自动中断等待确认。">!</span>
+          <span id="tipStepN" class="tip-icon" data-tip="设置连续步进或回退时使用的根数。遇到买卖点会自动中断等待确认。"></span>
           <input id="stepN" type="number" min="1" step="1" value="5" />
           <div class="btnRow" style="width:100%; margin-top:4px;">
             <button id="btnStepN" data-tip="按步进数量 N 连续推进，若中途遇到买卖点则自动停止。" disabled>步进 N 根 <small>(Ctrl+Alt+N)</small></button>
@@ -1138,7 +1216,7 @@ HTML = r"""
         </div>
         <div class="row" style="margin:6px 0 4px 0;">
           <span class="muted">交易规则</span>
-          <span class="tip-icon" data-tip="规则：单持仓、T+1、每步最多一笔。">!</span>
+          <span class="tip-icon" data-tip="规则：单持仓、T+1、每步最多一笔。"></span>
         </div>
         <div class="btnRow" style="margin-top:6px;">
           <button id="btnBuy" data-tip="按当前收盘价使用全部可用现金买入，遵循单持仓和每步最多一笔规则。" disabled>买入（全仓） <small>(PageUp)</small></button>
@@ -1157,6 +1235,21 @@ HTML = r"""
     <div class="resizer" id="resizer"></div>
     <div class="right">
       <div id="modalOverlay" class="modal-overlay">
+        <div id="chanSettingsModal" class="settingsModal" aria-hidden="true">
+          <div class="panel">
+            <div class="settingsTitle">
+              缠论配置
+              <button id="btnChanSettingsClose" style="margin:0; padding:4px 8px;">&times;</button>
+            </div>
+            <div id="chanSettingsContent">
+              <!-- Generated by JS -->
+            </div>
+            <div class="settingsActions">
+              <button id="btnChanSettingsReset">恢复默认</button>
+              <button id="btnChanSettingsSave">保存并应用 (S)</button>
+            </div>
+          </div>
+        </div>
         <div id="settingsModal" class="settingsModal" aria-hidden="true">
           <div class="panel">
             <div class="settingsTitle">
@@ -1368,6 +1461,51 @@ storageSet("chan_indicator_sub_slots", JSON.stringify(indicatorSubSlots));
 const MAIN_INDICATORS = new Set(["none", "boll", "demark", "trendline"]);
 const SUB_INDICATORS = new Set(["none", "macd", "kdj", "rsi"]);
 
+const DEFAULT_CHAN_CONFIG = {
+  bi_strict: true,
+  bi_algo: "normal",
+  bi_fx_check: "strict",
+  gap_as_kl: false,
+  bi_end_is_peak: true,
+  bi_allow_sub_peak: true,
+  seg_algo: "chan",
+  left_seg_method: "peak",
+  zs_algo: "normal",
+  zs_combine: true,
+  zs_combine_mode: "zs",
+  one_bi_zs: false,
+  trigger_step: true,
+  skip_step: 0,
+  kl_data_check: true,
+  print_warning: false,
+  print_err_time: false,
+  mean_metrics: "",
+  trend_metrics: "",
+  macd: { fast: 12, slow: 26, signal: 9 },
+  cal_demark: false,
+  cal_rsi: false,
+  cal_kdj: false,
+  rsi_cycle: 14,
+  kdj_cycle: 9,
+  boll_n: 20,
+  // BSP General
+  divergence_rate: "inf",
+  min_zs_cnt: 1,
+  bsp1_only_multibi_zs: true,
+  max_bs2_rate: 0.9999,
+  macd_algo: "peak",
+  bs1_peak: true,
+  bs_type: "1,1p,2,2s,3a,3b",
+  bsp2_follow_1: true,
+  bsp3_follow_1: true,
+  bsp3_peak: false,
+  bsp2s_follow_2: false,
+  max_bsp2s_lv: "",
+  strict_bsp3: false,
+  bsp3a_max_zs_cnt: 1
+};
+let chanConfig = ensureObject(safeJsonParse(storageGet("chan_logic_config"), null), { ...DEFAULT_CHAN_CONFIG });
+
 const DEFAULT_CHART_CONFIG = {
   theme: "light",
   crosshair: { width: 5, color: "#000000", fontSize: 16 },
@@ -1451,6 +1589,7 @@ let sessionConfig = ensureObject(
 );
 
 const SHORTCUT_ACTIONS = [
+  { id: "openChanSettings", label: "打开缠论配置", description: "打开缠论逻辑配置面板。", defaults: ["l"], contexts: ["global"], buttonId: "btnChanSettingsOpen" },
   { id: "openChartSettings", label: "打开图表显示设置", description: "打开图表显示设置面板。", defaults: ["p"], contexts: ["global"], buttonId: "btnSettingsOpen" },
   { id: "openSystemSettings", label: "打开系统配置", description: "打开系统配置面板。", defaults: ["shift+p"], contexts: ["global"], buttonId: "btnSystemSettingsOpen" },
   { id: "toggleFullscreen", label: "切换全屏显示", description: "切换右侧图表区域全屏显示。", defaults: ["f11"], contexts: ["global"], buttonId: "btnFullscreen" },
@@ -1469,6 +1608,7 @@ const SHORTCUT_ACTIONS = [
   { id: "zoomXOut", label: "横向缩小", description: "缩小图表横轴缩放比例。", defaults: ["ctrl+alt+arrowright"], contexts: ["global"] },
   { id: "adjustCrosshairUp", label: "十字光标价格上移", description: "将十字光标对应价格向上微调。", defaults: ["ctrl+arrowup"], contexts: ["global"] },
   { id: "adjustCrosshairDown", label: "十字光标价格下移", description: "将十字光标对应价格向下微调。", defaults: ["ctrl+arrowdown"], contexts: ["global"] },
+  { id: "saveChanSettings", label: "保存缠论配置", description: "在缠论配置面板中保存并立即应用配置。", defaults: ["s"], contexts: ["chanSettings"], buttonId: "btnChanSettingsSave" },
   { id: "saveChartSettings", label: "保存图表显示设置", description: "在图表显示设置面板中保存并立即应用配置。", defaults: ["s"], contexts: ["chartSettings"], buttonId: "btnSettingsSave" },
   { id: "saveSystemSettings", label: "保存系统配置", description: "在系统配置面板中保存并立即应用快捷键设置。", defaults: ["s"], contexts: ["systemSettings"], buttonId: "btnSystemSettingsSave" },
   { id: "confirmBspPrompt", label: "确认买卖点提示", description: "确认当前买卖点提示并允许继续步进。", defaults: ["enter"], contexts: ["bspPrompt"], buttonId: "bspPromptConfirm" },
@@ -1736,6 +1876,7 @@ function setButtonShortcutLabel(button, baseLabel, actionId) {
 }
 
 function updateShortcutUI() {
+  setButtonShortcutLabel($("btnChanSettingsOpen"), "缠论配置...", "openChanSettings");
   setButtonShortcutLabel($("btnSettingsOpen"), "图表显示设置...", "openChartSettings");
   setButtonShortcutLabel($("btnSystemSettingsOpen"), "系统配置...", "openSystemSettings");
   if ($("btnInit").disabled && $("btnInit").textContent.includes("已加载")) {
@@ -1749,12 +1890,14 @@ function updateShortcutUI() {
   setButtonShortcutLabel($("btnBackN"), "后退 N 根", "stepBackwardN");
   setButtonShortcutLabel($("btnBuy"), "买入（全仓）", "buyAll");
   setButtonShortcutLabel($("btnSell"), "卖出（全量）", "sellAll");
+  $("btnChanSettingsSave").textContent = `保存并应用${getActionShortcutDisplay("saveChanSettings") ? ` (${getActionShortcutDisplay("saveChanSettings")})` : ""}`;
   $("btnSettingsSave").textContent = `保存并应用${getActionShortcutDisplay("saveChartSettings") ? ` (${getActionShortcutDisplay("saveChartSettings")})` : ""}`;
   $("btnSystemSettingsSave").textContent = `保存并应用${getActionShortcutDisplay("saveSystemSettings") ? ` (${getActionShortcutDisplay("saveSystemSettings")})` : ""}`;
   $("bspPromptConfirm").textContent = `确认（${getActionShortcutDisplay("confirmBspPrompt") || "Enter"} / 左键）`;
   $("btnSettlementClose").textContent = `确认${getActionShortcutDisplay("closeSettlement") ? `（${getActionShortcutDisplay("closeSettlement")}）` : ""}`;
   $("btnFullscreen").innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg> 全屏显示${getActionShortcutDisplay("toggleFullscreen") ? ` (${escapeHtmlAttr(getActionShortcutDisplay("toggleFullscreen"))})` : ""}`;
   $("btnFullscreen").setAttribute("data-tip", `切换图表区域全屏显示。快捷键：${getActionShortcutDisplay("toggleFullscreen") || "未设置"}。`);
+  $("btnChanSettingsOpen").setAttribute("data-tip", `打开缠论逻辑配置面板，可调整笔、线段、中枢等算法。快捷键：${getActionShortcutDisplay("openChanSettings") || "未设置"}。`);
   $("btnSettingsOpen").setAttribute("data-tip", `打开图表显示设置面板，可调整主题、指标与绘制项。快捷键：${getActionShortcutDisplay("openChartSettings") || "未设置"}。`);
   $("btnSystemSettingsOpen").setAttribute("data-tip", `打开系统配置面板，可统一维护快捷键。快捷键：${getActionShortcutDisplay("openSystemSettings") || "未设置"}。`);
   $("btnInit").setAttribute("data-tip", `根据当前代码、日期区间、初始资金加载复盘会话。首次加载历史数据可能较慢。快捷键：${getActionShortcutDisplay("initSession") || "未设置"}。`);
@@ -1772,6 +1915,7 @@ function getActiveShortcutContexts() {
   if (pendingBspPrompt) return ["bspPrompt"];
   if ($("settlementModal").classList.contains("show")) return ["settlement"];
   if (isSystemSettingsOpen()) return ["systemSettings"];
+  if (isChanSettingsOpen()) return ["chanSettings"];
   if (isSettingsOpen()) return ["chartSettings"];
   return ["global"];
 }
@@ -1836,6 +1980,276 @@ function loadSessionConfig() {
 function getCfgColor(c) {
   if (c && c.startsWith("--")) return cssVar(c, "#000");
   return c;
+}
+
+function openChanSettings() {
+  if (isSettingsOpen()) closeSettings();
+  if (isSystemSettingsOpen()) closeSystemSettings();
+  renderChanSettingsForm();
+  $("chanSettingsModal").classList.add("show");
+}
+
+function closeChanSettings() {
+  $("chanSettingsModal").classList.remove("show");
+}
+
+function isChanSettingsOpen() {
+  return $("chanSettingsModal").classList.contains("show");
+}
+
+function renderChanSettingsForm() {
+  const container = $("chanSettingsContent");
+  container.innerHTML = "";
+
+  const sections = [
+    {
+      title: "笔配置 (Bi)",
+      key: "bi",
+      color: "#d97706",
+      bgColor: "rgba(217, 119, 6, 0.08)",
+      items: [
+        { label: "笔是否严格", subKey: "bi_strict", type: "checkbox", tip: "是否使用严格笔定义。开启后分型间必须至少有一根独立K线。" },
+        { label: "笔算法", subKey: "bi_algo", type: "select", options: [
+          { value: "normal", label: "常规" },
+          { value: "fx", label: "分型" }
+        ], tip: "选择笔的生成算法。常规算法更符合标准缠论。" },
+        { label: "分型检查", subKey: "bi_fx_check", type: "select", options: [
+          { value: "strict", label: "严格" },
+          { value: "normal", label: "常规" }
+        ], tip: "分型成立的检查强度。严格模式要求更高。" },
+        { label: "缺口当K线", subKey: "gap_as_kl", type: "checkbox", tip: "是否将缺口视为一根K线。在某些品种中很有用。" },
+        { label: "笔终点是极值", subKey: "bi_end_is_peak", type: "checkbox", tip: "笔的结束点是否必须是区间内的最高/最低点。" },
+        { label: "允许次极值", subKey: "bi_allow_sub_peak", type: "checkbox", tip: "是否允许笔在次极值处结束。" }
+      ]
+    },
+    {
+      title: "线段配置 (Seg)",
+      key: "seg",
+      color: "#059669",
+      bgColor: "rgba(5, 150, 105, 0.1)",
+      items: [
+        { label: "线段算法", subKey: "seg_algo", type: "select", options: [
+          { value: "chan", label: "标准缠论" },
+          { value: "simple", label: "简单线段" }
+        ], tip: "选择线段的生成算法。" },
+        { label: "左端点方法", subKey: "left_seg_method", type: "select", options: [
+          { value: "peak", label: "极值" },
+          { value: "all", label: "所有" }
+        ], tip: "线段左端点确定的逻辑。" }
+      ]
+    },
+    {
+      title: "中枢配置 (ZS)",
+      key: "zs",
+      color: "#ea580c",
+      bgColor: "rgba(234, 88, 12, 0.08)",
+      items: [
+        { label: "中枢算法", subKey: "zs_algo", type: "select", options: [
+          { value: "normal", label: "常规" },
+          { value: "mac", label: "MAC算法" }
+        ], tip: "选择中枢的生成算法。" },
+        { label: "中枢合并", subKey: "zs_combine", type: "checkbox", tip: "是否自动合并重叠的中枢。" },
+        { label: "合并模式", subKey: "zs_combine_mode", type: "select", options: [
+          { value: "zs", label: "按中枢" },
+          { value: "peak", label: "按极值" }
+        ], tip: "中枢合并时的逻辑依据。" },
+        { label: "一笔中枢", subKey: "one_bi_zs", type: "checkbox", tip: "是否允许由单笔构成的中枢。" }
+      ]
+    },
+    {
+      title: "均线与指标配置 (Ind)",
+      key: "ind",
+      color: "#6366f1",
+      bgColor: "rgba(99, 102, 241, 0.08)",
+      items: [
+        { label: "均线周期", subKey: "mean_metrics", type: "text", placeholder: "如: 5, 10, 20", tip: "均线计算周期，逗号分隔。" },
+        { label: "趋势线周期", subKey: "trend_metrics", type: "text", placeholder: "如: 20, 60", tip: "趋势线计算周期，逗号分隔。" },
+        { label: "MACD 快线", subKey: "macd_fast", type: "number", tip: "MACD 快线周期（默认12）。" },
+        { label: "MACD 慢线", subKey: "macd_slow", type: "number", tip: "MACD 慢线周期（默认26）。" },
+        { label: "MACD 信号", subKey: "macd_signal", type: "number", tip: "MACD 信号周期（默认9）。" },
+        { label: "BOLL 周期", subKey: "boll_n", type: "number", tip: "布林带计算周期。" },
+        { label: "计算 Demark", subKey: "cal_demark", type: "checkbox", tip: "是否计算 Demark 指标。" },
+        { label: "计算 RSI", subKey: "cal_rsi", type: "checkbox", tip: "是否计算 RSI 指标。" },
+        { label: "RSI 周期", subKey: "rsi_cycle", type: "number", tip: "RSI 计算周期。" },
+        { label: "计算 KDJ", subKey: "cal_kdj", type: "checkbox", tip: "是否计算 KDJ 指标。" },
+        { label: "KDJ 周期", subKey: "kdj_cycle", type: "number", tip: "KDJ 计算周期。" }
+      ]
+    },
+    {
+      title: "买卖点配置 (BSP)",
+      key: "bsp",
+      color: "#be123c",
+      bgColor: "rgba(190, 18, 60, 0.08)",
+      items: [
+        { label: "背驰比率阈值", subKey: "divergence_rate", type: "text", tip: "判定背驰的阈值，默认 inf (不限制)。" },
+        { label: "最小中枢数量", subKey: "min_zs_cnt", type: "number", tip: "产生1类买卖点所需的最小中枢数量。" },
+        { label: "1类点需多笔中枢", subKey: "bsp1_only_multibi_zs", type: "checkbox", tip: "1类买卖点是否仅在由多笔构成的中枢后产生。" },
+        { label: "2类点最大回撤率", subKey: "max_bs2_rate", type: "number", tip: "2类买卖点允许的最大回撤比例 (0-1)。" },
+        { label: "MACD 比较算法", subKey: "macd_algo", type: "select", options: [
+          { value: "peak", label: "峰值 (Peak)" },
+          { value: "area", label: "面积 (Area)" },
+          { value: "full_area", label: "全面积" },
+          { value: "diff", label: "DIFF值" },
+          { value: "slope", label: "斜率 (Slope)" },
+          { value: "amp", label: "振幅 (Amp)" }
+        ], tip: "用于背驰比较的 MACD 数据提取算法。" },
+        { label: "1类点需顶底分型", subKey: "bs1_peak", type: "checkbox", tip: "1类点是否必须对应分型极值。" },
+        { label: "目标买卖点类型", subKey: "bs_type", type: "text", tip: "需要计算的买卖点类型，逗号分隔 (如 1, 2, 3a, 2s)。" },
+        { label: "2类点跟随1类", subKey: "bsp2_follow_1", type: "checkbox", tip: "2类买卖点是否必须紧跟在1类点之后。" },
+        { label: "3类点跟随1类", subKey: "bsp3_follow_1", type: "checkbox", tip: "3类买卖点是否必须跟在1类点之后。" },
+        { label: "3类点需顶底分型", subKey: "bsp3_peak", type: "checkbox", tip: "3类点是否必须对应分型极值。" },
+        { label: "类2s点跟随2类", subKey: "bsp2s_follow_2", type: "checkbox", tip: "类2s点是否必须紧跟在2类点之后。" },
+        { label: "类2s点最大级别", subKey: "max_bsp2s_lv", type: "text", tip: "允许产生类2s点的最大中枢级别。" },
+        { label: "严格3类点", subKey: "strict_bsp3", type: "checkbox", tip: "是否使用更严格的3类买卖点判定逻辑。" },
+        { label: "3a类点最大中枢数", subKey: "bsp3a_max_zs_cnt", type: "number", tip: "3a类点允许的最大中枢数量。" }
+      ]
+    },
+    {
+      title: "系统运行 (Sys)",
+      key: "sys",
+      color: "#334155",
+      bgColor: "rgba(51, 65, 85, 0.08)",
+      items: [
+        { label: "数据检查", subKey: "kl_data_check", type: "checkbox", tip: "是否在加载时检查K线数据的完整性。" },
+        { label: "打印警告", subKey: "print_warning", type: "checkbox", tip: "是否在控制台打印逻辑警告。" },
+        { label: "打印错误时间", subKey: "print_err_time", type: "checkbox", tip: "警告中是否包含时间信息。" },
+        { label: "步进触发", subKey: "trigger_step", type: "checkbox", tip: "回放模式的核心开关，必须保持开启。" }
+      ]
+    }
+  ];
+
+  const buildLabelHtml = (item) => {
+    const tipText = escapeHtmlAttr(item.tip || `${item.label}：用于调整缠论逻辑参数。`);
+    const tipIcon = `<svg class="tip-icon" data-tip="${tipText}" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; cursor:help; color:#3b82f6; margin-left:4px;"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>`;
+    return `${item.label}${tipIcon}`;
+  };
+
+  sections.forEach(sec => {
+    const section = document.createElement("div");
+    section.className = "settingsSection";
+    section.style.background = sec.bgColor;
+    section.innerHTML = `<div class="settingsSectionTitle" style="color:${sec.color}">${sec.title}</div>`;
+    
+    const grid = document.createElement("div");
+    grid.className = "settingsGrid";
+    
+    sec.items.forEach(item => {
+      const itemDiv = document.createElement("div");
+      itemDiv.className = "settingsItem";
+      const label = document.createElement("label");
+      label.innerHTML = buildLabelHtml(item);
+      
+      let input;
+      let val;
+      if (item.subKey === "macd_fast") val = (chanConfig.macd && chanConfig.macd.fast) || 12;
+      else if (item.subKey === "macd_slow") val = (chanConfig.macd && chanConfig.macd.slow) || 26;
+      else if (item.subKey === "macd_signal") val = (chanConfig.macd && chanConfig.macd.signal) || 9;
+      else val = chanConfig[item.subKey];
+
+      if (item.type === "select") {
+        input = document.createElement("select");
+        item.options.forEach(opt => {
+          const o = document.createElement("option");
+          o.value = opt.value;
+          o.textContent = opt.label;
+          if (String(opt.value) === String(val)) o.selected = true;
+          input.appendChild(o);
+        });
+      } else if (item.type === "checkbox") {
+        input = document.createElement("input");
+        input.type = "checkbox";
+        input.checked = !!val;
+        input.style.width = "auto";
+        itemDiv.style.flexDirection = "row";
+        itemDiv.style.alignItems = "center";
+        itemDiv.style.justifyContent = "space-between";
+      } else {
+        input = document.createElement("input");
+        input.type = item.type;
+        input.value = val !== undefined ? val : "";
+        if (item.type === "number") input.step = "any";
+        if (item.placeholder) input.placeholder = item.placeholder;
+      }
+      input.dataset.key = item.subKey;
+      itemDiv.appendChild(label);
+      itemDiv.appendChild(input);
+      grid.appendChild(itemDiv);
+    });
+    section.appendChild(grid);
+    container.appendChild(section);
+  });
+  initTooltips();
+}
+
+function saveChanSettings() {
+  const inputs = $("chanSettingsContent").querySelectorAll("input, select");
+  if (!chanConfig.macd) chanConfig.macd = { fast: 12, slow: 26, signal: 9 };
+  
+  inputs.forEach(input => {
+    const key = input.dataset.key;
+    if (input.type === "checkbox") {
+      chanConfig[key] = input.checked;
+    } else if (input.tagName === "SELECT") {
+      const val = input.value;
+      chanConfig[key] = (val === "true" ? true : (val === "false" ? false : val));
+    } else if (input.type === "number") {
+      const numVal = parseFloat(input.value);
+      if (key === "macd_fast") chanConfig.macd.fast = numVal;
+      else if (key === "macd_slow") chanConfig.macd.slow = numVal;
+      else if (key === "macd_signal") chanConfig.macd.signal = numVal;
+      else chanConfig[key] = numVal;
+    } else if (key === "mean_metrics" || key === "trend_metrics" || key === "bs_type") {
+      chanConfig[key] = input.value; // Store as string for easy editing
+    } else {
+      chanConfig[key] = input.value;
+    }
+  });
+  
+  // Create a deep copy for the final config to be sent to backend
+  const finalConfig = JSON.parse(JSON.stringify(chanConfig));
+  
+  // Post-process list fields
+  ["mean_metrics", "trend_metrics"].forEach(k => {
+    if (typeof finalConfig[k] === "string") {
+      finalConfig[k] = finalConfig[k].split(/[,，\s]+/).map(v => parseInt(v.trim())).filter(v => !isNaN(v));
+    }
+  });
+
+  storageSet("chan_logic_config", JSON.stringify(chanConfig));
+
+  // If session is already loaded, prompt for reconfig
+  if (lastPayload && lastPayload.ready) {
+    if (confirm("更改缠论配置将导致从第1根K线重新计算到当前位置，且之前的模拟持仓数据（若有）将被清除。是否继续并应用配置？")) {
+      setGlobalLoading(true, "正在重新计算缠论逻辑...");
+      api("/api/reconfig", { chan_config: finalConfig })
+        .then(payload => {
+          refreshUI(payload);
+          if (payload.bsp_history && payload.bsp_history.length > 0) {
+            payload.bsp_history.forEach(h => {
+              setMsg(`[重算] 发现${h.is_buy ? '买点' : '卖点'}: ${h.label} @K线:${h.x}`, true);
+            });
+          }
+          showToast(payload.message || "配置已更新，逻辑已重算。");
+          closeChanSettings();
+        })
+        .catch(e => {
+          showToast("配置应用失败：" + e.message);
+        })
+        .finally(() => {
+          hideGlobalLoading();
+        });
+    }
+  } else {
+    showToast("缠论配置已保存，将在加载会话时生效。");
+    closeChanSettings();
+  }
+}
+
+function resetChanSettings() {
+  if (confirm("确定要恢复默认缠论配置吗？")) {
+    chanConfig = { ...DEFAULT_CHAN_CONFIG };
+    renderChanSettingsForm();
+  }
 }
 
 function openSettings() {
@@ -2556,6 +2970,10 @@ function resetSystemSettings() {
   }
 }
 
+$("btnChanSettingsOpen").addEventListener("click", openChanSettings);
+$("btnChanSettingsClose").addEventListener("click", closeChanSettings);
+$("btnChanSettingsSave").addEventListener("click", saveChanSettings);
+$("btnChanSettingsReset").addEventListener("click", resetChanSettings);
 $("btnSettingsOpen").addEventListener("click", openSettings);
 $("btnSettingsClose").addEventListener("click", closeSettings);
 $("btnSettingsSave").addEventListener("click", saveSettings);
@@ -2566,6 +2984,10 @@ $("btnSystemSettingsSave").addEventListener("click", saveSystemSettingsFromForm)
 $("btnSystemSettingsReset").addEventListener("click", resetSystemSettings);
 
 // Close on outside click
+$("chanSettingsModal").addEventListener("click", (e) => {
+  if (e.target === $("chanSettingsModal")) closeChanSettings();
+});
+
 $("settingsModal").addEventListener("click", (e) => {
   if (e.target === $("settingsModal")) closeSettings();
 });
@@ -3217,14 +3639,14 @@ window.addEventListener("keydown", (e) => {
 
 let msgHistory = ensureArray(safeJsonParse(storageGet("chan_msg_history"), []), []);
 
-function setMsg(text) {
+function setMsg(text, quiet = false) {
   if (!Array.isArray(msgHistory)) msgHistory = [];
   const t = new Date().toLocaleTimeString();
   const entry = { time: t, text: text };
   msgHistory.push(entry);
   if (msgHistory.length > 500) msgHistory.shift();
   storageSet("chan_msg_history", JSON.stringify(msgHistory));
-  showToast(text);
+  if (!quiet) showToast(text);
 }
 
 function showToast(text) {
@@ -4667,18 +5089,26 @@ $("btnInit").onclick = async () => {
   initBtn.disabled = true;
   initBtn.innerHTML = "加载中...";
   try {
+    const processedConfig = JSON.parse(JSON.stringify(chanConfig));
+    ["mean_metrics", "trend_metrics"].forEach(k => {
+      if (typeof processedConfig[k] === "string") {
+        processedConfig[k] = processedConfig[k].split(/[,，\s]+/).map(v => parseInt(v.trim())).filter(v => !isNaN(v));
+      }
+    });
     const payload = await api("/api/init", {
       code: $("code").value,
       begin_date: $("begin").value,
       end_date: $("end").value || null,
       initial_cash: Number($("cash").value),
-      autype: $("autype").value
+      autype: $("autype").value,
+      chan_config: processedConfig
     });
     initSucceeded = true;
     document.title = `chan.py 复盘训练器 - ${(payload.name ? payload.name : payload.code)}`;
     setMsg(`加载成功：${payload.name ? payload.name : payload.code}，请点击“下一根K线”。`);
     initBtn.disabled = true;
     initBtn.innerHTML = "已加载";
+    // $("btnChanSettingsOpen").disabled = true;
     updateShortcutUI();
     $("code").disabled = true;
     $("begin").disabled = true;
@@ -4813,6 +5243,7 @@ $("btnReset").onclick = async () => {
     hideGlobalLoading();
     const payload = await api("/api/reset");
     $("btnInit").disabled = false;
+    $("btnChanSettingsOpen").disabled = false;
     updateShortcutUI();
     $("code").disabled = false;
     $("begin").disabled = false;
@@ -4889,6 +5320,7 @@ if ($("bspPrompt")) {
     if (payload && payload.ready) {
       document.title = `chan.py 复盘训练器 - ${(payload.name ? payload.name : payload.code)}`;
       $("btnInit").disabled = true;
+      // $("btnChanSettingsOpen").disabled = true;
       $("code").disabled = true;
       $("begin").disabled = true;
       $("end").disabled = true;
@@ -4943,7 +5375,7 @@ def api_init(req: InitReq):
         global APP_STOCK_NAME
         APP_STOCK_NAME = stock_name
 
-        APP_STATE.stepper.init(code_norm, req.begin_date, req.end_date, autype)
+        APP_STATE.stepper.init(code_norm, req.begin_date, req.end_date, autype, chan_config=req.chan_config)
         APP_STATE.account.reset(req.initial_cash)
         APP_STATE.ready = True
         APP_STATE.finished = False
@@ -4953,6 +5385,7 @@ def api_init(req: InitReq):
             "end_date": req.end_date,
             "autype": autype,
             "initial_cash": req.initial_cash,
+            "chan_config": req.chan_config,
         }
         APP_STATE.trade_events = []
         APP_STATE.bsp_history = []
@@ -4960,6 +5393,19 @@ def api_init(req: InitReq):
         APP_STATE.stepper.step()
         APP_STATE.sync_bsp_history()
         return APP_STATE.build_payload(stock_name=APP_STOCK_NAME)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.post("/api/reconfig")
+def api_reconfig(req: ReconfigReq):
+    if not APP_STATE.ready:
+        raise HTTPException(status_code=400, detail="请先初始化会话")
+    try:
+        APP_STATE.reconfig(req.chan_config)
+        payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME)
+        payload["message"] = "缠论配置更新成功，已按新逻辑重新计算并清除模拟持仓。"
+        return payload
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
