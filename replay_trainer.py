@@ -1441,25 +1441,43 @@ let crosshairX = null;
 let crosshairY = null;
 let canvasHovered = false;
 let selectedIndicatorPanel = "main:0";
-const defaultMainSlots = { "0": "none", "1": "none", "2": "none", "3": "none", "4": "none", "5": "none" };
-const defaultSubSlots = { "1": "none", "2": "none", "3": "none", "4": "none", "5": "none" };
 let indicatorMainSlots = ensureObject(safeJsonParse(storageGet("chan_indicator_main_slots"), null), null);
 let indicatorSubSlots = ensureObject(safeJsonParse(storageGet("chan_indicator_sub_slots"), null), null);
+
+const defaultMainSlots = { "0": "enabled", "1": [], "2": [], "3": [], "4": [], "5": [] };
+const defaultSubSlots = { "1": [], "2": [], "3": [], "4": [], "5": [] };
+
 if (!indicatorMainSlots || !indicatorSubSlots) {
-  const legacySlots = ensureObject(safeJsonParse(storageGet("chan_indicator_slots"), null), null);
   indicatorMainSlots = { ...defaultMainSlots };
   indicatorSubSlots = { ...defaultSubSlots };
-  if (legacySlots && typeof legacySlots === "object") {
-    indicatorMainSlots["0"] = legacySlots["0"] || "none";
-    for (let i = 1; i <= 5; i++) indicatorSubSlots[String(i)] = legacySlots[String(i)] || "none";
+}
+// Migration from string-based slots to arrays
+for (let i = 0; i <= 5; i++) {
+  let v = indicatorMainSlots[String(i)];
+  if (i === 0) {
+    if (v !== "none" && v !== "enabled") indicatorMainSlots["0"] = "enabled";
+  } else {
+    if (typeof v === "string") indicatorMainSlots[String(i)] = (v === "none" ? [] : [v]);
+    else if (!Array.isArray(v)) indicatorMainSlots[String(i)] = [];
   }
 }
-indicatorMainSlots = { ...defaultMainSlots, ...indicatorMainSlots };
-indicatorSubSlots = { ...defaultSubSlots, ...indicatorSubSlots };
+  // Ensure "0" is enabled if any slot has indicators
+for (let i = 1; i <= 5; i++) {
+  const list = indicatorMainSlots[String(i)];
+  if (Array.isArray(list) && list.length > 0) indicatorMainSlots["0"] = "enabled";
+}
+if (indicatorMainSlots["0"] === undefined) indicatorMainSlots["0"] = "enabled";
+
+for (let i = 1; i <= 5; i++) {
+  let v = indicatorSubSlots[String(i)];
+  if (typeof v === "string") indicatorSubSlots[String(i)] = (v === "none" ? [] : [v]);
+  else if (!Array.isArray(v)) indicatorSubSlots[String(i)] = [];
+}
+
 storageSet("chan_indicator_main_slots", JSON.stringify(indicatorMainSlots));
 storageSet("chan_indicator_sub_slots", JSON.stringify(indicatorSubSlots));
-const MAIN_INDICATORS = new Set(["none", "boll", "demark", "trendline"]);
-const SUB_INDICATORS = new Set(["none", "macd", "kdj", "rsi"]);
+const MAIN_INDICATORS = new Set(["boll", "demark", "trendline"]);
+const SUB_INDICATORS = new Set(["macd", "kdj", "rsi"]);
 
 const DEFAULT_CHAN_CONFIG = {
   bi_strict: true,
@@ -2286,10 +2304,10 @@ function renderSettingsForm() {
 
   const slotTip = [
     "槽位规则：",
-    "1) 主图(0)=无 时，仅显示主图K线，不显示任何主图/副图指标。",
-    "2) 主图(1)-主图(5) 可叠加最多5个主图指标。",
-    "3) 副图(1)-副图(5) 可同时显示多个副图。",
-    "4) 主图和副图可同时开启。"
+    "1) 主图(0) 总开关：关闭时隐藏所有主/副图指标。",
+    "2) 主图(1)-(5)：每个槽位可勾选多个指标叠加显示在主图。",
+    "3) 副图(1)-(5)：每个槽位可勾选多个指标，每个指标独立占用一个副图面板。",
+    "4) 更改配置后点击保存即可生效。"
   ].join("\n");
   const indicatorSlotOptions = [
     { value: "main:0", label: "主图(0) 总开关" },
@@ -2307,8 +2325,8 @@ function renderSettingsForm() {
 
   const getIndicatorTypeValue = () => {
     const info = parseIndicatorPanel(selectedIndicatorPanel);
-    if (info.kind === "main") return indicatorMainSlots[String(info.slot)] || "none";
-    return indicatorSubSlots[String(info.slot)] || "none";
+    if (info.kind === "main") return indicatorMainSlots[String(info.slot)];
+    return indicatorSubSlots[String(info.slot)];
   };
 
   const buildLabelHtml = (item) => {
@@ -2348,15 +2366,7 @@ function renderSettingsForm() {
       bgColor: "rgba(124, 58, 237, 0.08)",
       items: [
         { label: "配置槽位", subKey: "slot", type: "select", options: indicatorSlotOptions, tip: slotTip },
-        { label: "指标类型", subKey: "type", type: "select", options: [
-          { value: "none", label: "无" },
-          { value: "boll", label: "BOLL (主图)" },
-          { value: "demark", label: "Demark (主图)" },
-          { value: "trendline", label: "TrendLine (主图)" },
-          { value: "macd", label: "MACD (副图)" },
-          { value: "kdj", label: "KDJ (副图)" },
-          { value: "rsi", label: "RSI (副图)" }
-        ]}
+        { label: "指标选择", subKey: "type", type: "indicator_multi" }
       ]
     },
     {
@@ -2617,37 +2627,51 @@ function renderSettingsForm() {
             <label>${buildLabelHtml(item)}</label>
             <select data-key="${sec.key}" data-subkey="${item.subKey}">${optionsHtml}</select>
           `;
-        if (sec.key === "indicators") {
+        if (sec.key === "indicators" && item.subKey === "slot") {
            const select = itemDiv.querySelector("select");
-           if (item.subKey === "slot") {
-             select.onchange = (e) => {
-                selectedIndicatorPanel = String(e.target.value);
-                const typeSelect = container.querySelector('select[data-subkey="type"]');
-                typeSelect.value = getIndicatorTypeValue();
-                // Re-sync options based on current slot
-                const slotInfo = parseIndicatorPanel(selectedIndicatorPanel);
-                for (const option of typeSelect.options) {
-                  const type = option.value;
-                  if (type === "none") {
-                    option.disabled = false;
-                    continue;
-                  }
-                  option.disabled = slotInfo.kind === "main" ? !isMainIndicator(type) : !isSubIndicator(type);
-                }
-             };
-           } else {
-              // Sync type select options on render
-              const slotInfo = parseIndicatorPanel(selectedIndicatorPanel);
-              for (const option of select.options) {
-                  const type = option.value;
-                  if (type === "none") {
-                    option.disabled = false;
-                    continue;
-                  }
-                  option.disabled = slotInfo.kind === "main" ? !isMainIndicator(type) : !isSubIndicator(type);
-              }
-           }
+           select.onchange = (e) => {
+              selectedIndicatorPanel = String(e.target.value);
+              // Re-render the multi-select section for the new slot
+              renderSettingsForm();
+           };
         }
+      } else if (item.type === "indicator_multi") {
+          const info = parseIndicatorPanel(selectedIndicatorPanel);
+          let html = `<label>${buildLabelHtml(item)}</label>`;
+          if (info.kind === "main" && info.slot === 0) {
+            // Main Switch
+            const enabled = indicatorMainSlots["0"] !== "none";
+            html += `
+              <label style="flex-direction:row; align-items:center; display:flex; margin-top:8px;">
+                <input type="checkbox" ${enabled ? "checked" : ""} 
+                       class="indicator-main-switch"
+                       data-key="indicators" data-subkey="type"
+                       style="width:auto; margin-right:8px;">
+                启用技术指标显示 (总开关)
+              </label>
+            `;
+          } else {
+            // Regular slots
+            const currentList = Array.isArray(val) ? val : [];
+            const options = info.kind === "main" ? 
+              [{v:"boll",l:"BOLL"}, {v:"demark",l:"Demark"}, {v:"trendline",l:"TrendLine"}] :
+              [{v:"macd",l:"MACD"}, {v:"kdj",l:"KDJ"}, {v:"rsi",l:"RSI"}];
+            
+            html += `<div style="display:flex; flex-direction:column; gap:4px; margin-top:8px;">`;
+            options.forEach(opt => {
+              const checked = currentList.includes(opt.v);
+              html += `
+                <label style="flex-direction:row; align-items:center; display:flex;">
+                  <input type="checkbox" class="indicator-check" value="${opt.v}" ${checked ? "checked" : ""} 
+                         data-key="indicators" data-subkey="type"
+                         style="width:auto; margin-right:8px;">
+                  ${opt.l}
+                </label>
+              `;
+            });
+            html += `</div>`;
+          }
+          itemDiv.innerHTML += html;
       } else if (item.type === "checkbox") {
         itemDiv.innerHTML += `
           <label style="flex-direction:row; align-items:center; display:flex;">
@@ -2865,11 +2889,23 @@ function saveSettings() {
       chartConfig.theme = val;
       applyThemeFromSelect();
     } else if (key === "indicators") {
-      if (subkey === "slot") selectedIndicatorPanel = String(val);
-      else if (subkey === "type") {
-        const slotInfo = parseIndicatorPanel(selectedIndicatorPanel);
-        if (slotInfo.kind === "main") indicatorMainSlots[String(slotInfo.slot)] = val;
-        else indicatorSubSlots[String(slotInfo.slot)] = val;
+      if (subkey === "slot") {
+        selectedIndicatorPanel = String(val);
+      } else if (subkey === "type") {
+        // Only update if this element actually represents the current panel's type
+        const info = parseIndicatorPanel(selectedIndicatorPanel);
+        const isSwitch = input.classList.contains("indicator-main-switch");
+        const isCheck = input.classList.contains("indicator-check");
+        
+        if (info.kind === "main" && info.slot === 0 && isSwitch) {
+          indicatorMainSlots["0"] = input.checked ? "enabled" : "none";
+        } else if (isCheck) {
+          const checks = $("settingsContent").querySelectorAll(".indicator-check");
+          const selected = [];
+          checks.forEach(c => { if (c.checked) selected.push(c.value); });
+          if (info.kind === "main") indicatorMainSlots[String(info.slot)] = selected;
+          else indicatorSubSlots[String(info.slot)] = selected;
+        }
         storageSet("chan_indicator_main_slots", JSON.stringify(indicatorMainSlots));
         storageSet("chan_indicator_sub_slots", JSON.stringify(indicatorSubSlots));
       }
@@ -3023,17 +3059,31 @@ function getTradeLineDash(style) {
 }
 
 function getIndicatorConfig() {
-  const gateMain = indicatorMainSlots["0"] || "none";
+  const gateMain = (indicatorMainSlots && indicatorMainSlots["0"]) || "enabled";
   if (gateMain === "none") return { mainTypes: [], subCharts: [] };
+  
   const mainTypes = [];
-  for (let slot = 0; slot <= 5; slot++) {
-    const type = indicatorMainSlots[String(slot)];
-    if (type && type !== "none" && isMainIndicator(type)) mainTypes.push({ slot, type });
+  if (indicatorMainSlots) {
+    for (let slot = 1; slot <= 5; slot++) {
+      const list = indicatorMainSlots[String(slot)] || [];
+      for (const type of list) {
+        if (type && type !== "none" && isMainIndicator(type)) {
+          mainTypes.push({ slot, type });
+        }
+      }
+    }
   }
+  
   const subCharts = [];
-  for (let slot = 1; slot <= 5; slot++) {
-    const type = indicatorSubSlots[String(slot)];
-    if (type && type !== "none" && isSubIndicator(type)) subCharts.push({ slot, type });
+  if (indicatorSubSlots) {
+    for (let slot = 1; slot <= 5; slot++) {
+      const list = indicatorSubSlots[String(slot)] || [];
+      for (const type of list) {
+        if (type && type !== "none" && isSubIndicator(type)) {
+          subCharts.push({ slot, type });
+        }
+      }
+    }
   }
   return { mainTypes, subCharts };
 }
@@ -4698,8 +4748,10 @@ function drawTradeRays(s) {
 }
 
 function drawIndicators(chart, s) {
-  if (!chart.indicators || chart.indicators.length === 0) return;
-  const visibleInd = s.visibleInd;
+  if (!chart || !chart.indicators || chart.indicators.length === 0) return;
+  const visibleInd = s.visibleInd || [];
+  if (visibleInd.length === 0) return;
+  
   const theme = document.documentElement.getAttribute("data-theme") || "light";
   const lineMain = theme === "light" ? "#1e293b" : "#f8fafc";
   const mainTypeSet = new Set((s.mainTypes || []).map((m) => m.type));
@@ -4725,6 +4777,7 @@ function drawIndicators(chart, s) {
     let max = -Infinity;
     if (type === "macd") {
       for (const i of visibleInd) {
+        if (!i.macd) continue;
         min = Math.min(min, i.macd.dif, i.macd.dea, i.macd.macd);
         max = Math.max(max, i.macd.dif, i.macd.dea, i.macd.macd);
       }
@@ -4732,6 +4785,7 @@ function drawIndicators(chart, s) {
       min = 0;
       max = 100;
       for (const i of visibleInd) {
+        if (!i.kdj) continue;
         min = Math.min(min, i.kdj.k, i.kdj.d, i.kdj.j);
         max = Math.max(max, i.kdj.k, i.kdj.d, i.kdj.j);
       }
@@ -4762,18 +4816,19 @@ function drawIndicators(chart, s) {
     ctx.fillText(subYMin.toFixed(2), 4, panel.bottom);
     if (panel.type === "macd") {
       for (const i of visibleInd) {
+        if (!i.macd) continue;
         const xp = s.x(i.x);
         const yp = subY(i.macd.macd);
         const y0 = subY(0);
         ctx.fillStyle = i.macd.macd >= 0 ? cssVar("--candleUp", "#ef4444") : cssVar("--candleDown", "#22c55e");
         ctx.fillRect(xp - 1, Math.min(yp, y0), 2, Math.abs(yp - y0));
       }
-      drawPanelLine(visibleInd, (i) => i.macd.dif, subY, lineMain);
-      drawPanelLine(visibleInd, (i) => i.macd.dea, subY, "#fbbf24");
+      drawPanelLine(visibleInd, (i) => i.macd?.dif, subY, lineMain);
+      drawPanelLine(visibleInd, (i) => i.macd?.dea, subY, "#fbbf24");
     } else if (panel.type === "kdj") {
-      drawPanelLine(visibleInd, (i) => i.kdj.k, subY, lineMain);
-      drawPanelLine(visibleInd, (i) => i.kdj.d, subY, "#fbbf24");
-      drawPanelLine(visibleInd, (i) => i.kdj.j, subY, "#f472b6");
+      drawPanelLine(visibleInd, (i) => i.kdj?.k, subY, lineMain);
+      drawPanelLine(visibleInd, (i) => i.kdj?.d, subY, "#fbbf24");
+      drawPanelLine(visibleInd, (i) => i.kdj?.j, subY, "#f472b6");
     } else if (panel.type === "rsi") {
       drawPanelLine(visibleInd, (i) => i.rsi, subY, lineMain);
     }
@@ -4783,9 +4838,9 @@ function drawIndicators(chart, s) {
   if (mainTypeSet.has("boll")) {
     ctx.save();
     ctx.lineWidth = 1;
-    drawPanelLine(visibleInd, (i) => i.boll.mid, s.y, "#94a3b8");
-    drawPanelLine(visibleInd, (i) => i.boll.up, s.y, "#f59e0b");
-    drawPanelLine(visibleInd, (i) => i.boll.down, s.y, "#f59e0b");
+    drawPanelLine(visibleInd, (i) => i.boll?.mid, s.y, "#94a3b8");
+    drawPanelLine(visibleInd, (i) => i.boll?.up, s.y, "#f59e0b");
+    drawPanelLine(visibleInd, (i) => i.boll?.down, s.y, "#f59e0b");
     ctx.restore();
   }
   if (mainTypeSet.has("demark")) {
@@ -4821,7 +4876,7 @@ function drawIndicators(chart, s) {
       ctx.restore();
     }
   }
-  for (const panel of s.subPanels) drawSubPanel(panel);
+  for (const panel of s.subPanels || []) drawSubPanel(panel);
 }
 
 function drawBsp(arr, s) {
