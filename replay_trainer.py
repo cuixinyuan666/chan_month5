@@ -136,6 +136,7 @@ class ChanStepper:
         self._iter = None
         self.step_idx = -1
         self.code = ""
+        self.effective_cfg_dict: dict[str, Any] = {}
         # Full history K-lines (used by chip distribution).
         self.kline_all: list[dict[str, Any]] = []
         self.indicators = {
@@ -211,6 +212,7 @@ class ChanStepper:
                         cfg_dict["macd"] = macd_dict
                     else:
                         cfg_dict[k] = v
+        self.effective_cfg_dict = cfg_dict.copy()
         cfg = CChanConfig(cfg_dict)
         self.code = normalize_code(code)
         session_key = (self.code, begin_date, end_date, autype)
@@ -373,6 +375,121 @@ class AppState:
         self.session_params: Optional[dict[str, Any]] = None
         self.trade_events: list[dict[str, Any]] = []
         self.bsp_history: list[dict[str, Any]] = []
+        # trigger_step==False 全量预计算的买卖点（基于当前缠论配置）
+        self.bsp_all_snapshot: list[dict[str, Any]] = []
+        # 用于检测线段变向（不区分确定/不确定线段）
+        self._last_seg_dir: Optional[str] = None
+        # 判定步骤后台记录
+        self.bsp_judge_logs: list[dict[str, Any]] = []
+        # 本次 payload 是否需要弹窗提醒
+        self._judge_notice: bool = False
+
+    def _current_seg_dir(self) -> Optional[str]:
+        if self.stepper.chan is None:
+            return None
+        kl_list = self.stepper.chan[0]
+        if not getattr(kl_list, "seg_list", None):
+            return None
+        seg = kl_list.seg_list[-1]
+        try:
+            y1 = float(seg.start_bi.get_begin_val())
+            y2 = float(seg.end_bi.get_end_val())
+        except Exception:
+            return None
+        if y2 > y1:
+            return "UP"
+        if y2 < y1:
+            return "DOWN"
+        return None
+
+    def rebuild_bsp_all_snapshot(self) -> None:
+        """使用 trigger_step==False 一次性计算全量买卖点快照。"""
+        self.bsp_all_snapshot = []
+        self._judge_notice = False
+        if self.session_params is None:
+            return
+        if self.stepper._replay_klus_master is None:
+            return
+        cfg_dict = (self.stepper.effective_cfg_dict or {}).copy()
+        cfg_dict["trigger_step"] = False
+        cfg = CChanConfig(cfg_dict)
+        chan_all = ReplayChan(
+            code=self.stepper.code,
+            begin_time=self.session_params["begin_date"],
+            end_time=self.session_params["end_date"],
+            data_src=DATA_SRC.BAO_STOCK,
+            lv_list=[KL_TYPE.K_DAY],
+            config=cfg,
+            autype=self.session_params["autype"],
+            replay_klus_master=self.stepper._replay_klus_master,
+        )
+        # 强制全量加载一次，生成笔/线段/中枢/买卖点
+        for _ in chan_all.load(step=False):
+            pass
+        kl_list = chan_all[0]
+        for bsp in kl_list.bs_point_lst.bsp_iter():
+            item = {
+                "x": int(bsp.klu.idx),
+                "is_buy": bool(bsp.is_buy),
+                "label": bsp.type2str(),
+            }
+            item["key"] = self._bsp_key(item)
+            self.bsp_all_snapshot.append(item)
+
+    def _judge_bsp_against_all(self, *, reason: str) -> None:
+        """在当前步进位置，对照（全量预计算）与（步进触发快照）进行 ×/✓ 判定。"""
+        current_x = self._current_kline_x()
+        if current_x is None:
+            return
+        if not self.bsp_all_snapshot:
+            return
+        all_keys_upto = {str(it.get("key")) for it in self.bsp_all_snapshot if int(it.get("x", -1)) <= current_x}
+        # 只判定“已步进到的K线范围内”的历史买卖点，不影响未来K线
+        judged = 0
+        correct = 0
+        wrong = 0
+        for item in self.bsp_history:
+            x = int(item.get("x", -1))
+            if x < 0 or x > current_x:
+                continue
+            if item.get("status") is not None:
+                continue
+            judged += 1
+            if str(item.get("key")) in all_keys_upto:
+                item["status"] = "correct"
+                correct += 1
+            else:
+                item["status"] = "wrong"
+                wrong += 1
+
+        self._judge_notice = True
+        self.bsp_judge_logs.append(
+            {
+                "step_idx": int(self.stepper.step_idx),
+                "x": int(current_x),
+                "time": self.stepper.current_time() if self.stepper.chan is not None else "-",
+                "reason": reason,
+                "judged": judged,
+                "correct": correct,
+                "wrong": wrong,
+            }
+        )
+
+    def after_step_update(self) -> None:
+        """每次步进后调用：检测线段变向并触发判定。"""
+        self._judge_notice = False
+        cur_dir = self._current_seg_dir()
+        if self._last_seg_dir is None:
+            self._last_seg_dir = cur_dir
+            return
+        if cur_dir is None:
+            return
+        if cur_dir != self._last_seg_dir:
+            # 线段改变方向（上升↔下降），不区分线段是否确认
+            self._judge_bsp_against_all(reason=f"seg_turn:{self._last_seg_dir}->{cur_dir}")
+            self._last_seg_dir = cur_dir
+            return
+        self._last_seg_dir = cur_dir
 
     def _current_kline_x(self) -> Optional[int]:
         if self.stepper.chan is None:
@@ -427,10 +544,9 @@ class AppState:
         return f'{int(item["x"])}|{item["label"]}|{1 if item["is_buy"] else 0}'
 
     def sync_bsp_history(self) -> None:
-        """步进到下一根 K 后，对上一根上的待定 BSP 做存活判定。
+        """同步当前步进下的买卖点历史。
 
-        使用当前配置下 BSPointList 的全量快照：若该 x+类型+方向 仍存在于 bsp_iter 中则 ✓，
-        否则 ×（已被引擎移除或不再符合当前 bs_type 等约束）。与 BSPointList / CBS_Point 生命周期一致。
+        注意：×/✓ 判定不在这里做，而是在“线段变向”时对照（trigger_step==False 全量预计算）进行。
         """
         current_x = self._current_kline_x()
         if current_x is None:
@@ -438,11 +554,6 @@ class AppState:
             return
 
         snapshot = self._current_bsp_snapshot()
-        current_keys = {self._bsp_key(item) for item in snapshot}
-
-        for item in self.bsp_history:
-            if item.get("status") is None and int(item.get("x", -1)) < current_x:
-                item["status"] = "correct" if item.get("key") in current_keys else "wrong"
 
         existing_keys = {str(item.get("key")) for item in self.bsp_history}
         for item in snapshot:
@@ -479,6 +590,8 @@ class AppState:
         self.ready = True
         self.finished = False
         self.bsp_history = []
+        self._last_seg_dir = None
+        self._judge_notice = False
 
         if not self.stepper.step():
             return
@@ -545,6 +658,7 @@ class AppState:
             "price": price,
             "chart": chart,
             "bsp_history": self.bsp_history,
+            "judge_notice": bool(self._judge_notice),
             "account": {
                 "initial_cash": round(self.account.initial_cash, 2),
                 "cash": round(self.account.cash, 2),
@@ -3798,6 +3912,27 @@ function showToast(text) {
   }, speed);
 }
 
+function showJudgeToast() {
+  // 全红弹窗 + 后台(消息历史)记录
+  setMsg("买卖点判定", true);
+  const container = $("toastContainer");
+  if (!container) return;
+  const toast = document.createElement("div");
+  toast.className = "toast";
+  toast.textContent = "买卖点判定";
+  toast.style.background = "#dc2626";
+  toast.style.color = "#ffffff";
+  toast.style.border = "1px solid #dc2626";
+  toast.style.fontSize = `${chartConfig.toast.fontSize}px`;
+  toast.style.fontWeight = chartConfig.toast.fontWeight;
+  container.appendChild(toast);
+  const speed = chartConfig.toast.speed || 3000;
+  setTimeout(() => {
+    toast.style.opacity = "0";
+    setTimeout(() => toast.remove(), 300);
+  }, speed);
+}
+
 function showMsgHistory() {
   const list = $("msgHistoryList");
   list.innerHTML = "";
@@ -5171,6 +5306,9 @@ function refreshUI(payload, options) {
   }
   setState(payload);
   updateTradeStatusOverlay(payload);
+  if (payload && payload.judge_notice) {
+    showJudgeToast();
+  }
   if (payload.ready) {
     const ks = payload.chart && payload.chart.kline ? payload.chart.kline : [];
     if (ks.length > 0) {
@@ -5522,9 +5660,13 @@ def api_init(req: InitReq):
         }
         APP_STATE.trade_events = []
         APP_STATE.bsp_history = []
+        APP_STATE.bsp_judge_logs = []
+        APP_STATE._last_seg_dir = None
         # init后先推进一根，确保前端有可视数据并可交互
+        APP_STATE.rebuild_bsp_all_snapshot()
         APP_STATE.stepper.step()
         APP_STATE.sync_bsp_history()
+        APP_STATE.after_step_update()
         return APP_STATE.build_payload(stock_name=APP_STOCK_NAME)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -5536,6 +5678,7 @@ def api_reconfig(req: ReconfigReq):
         raise HTTPException(status_code=400, detail="请先初始化会话")
     try:
         APP_STATE.reconfig(req.chan_config)
+        APP_STATE.rebuild_bsp_all_snapshot()
         payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME)
         payload["message"] = "缠论配置更新成功，已按新逻辑重新计算并清除模拟持仓。"
         return payload
@@ -5552,6 +5695,7 @@ def api_step():
     try:
         ok = APP_STATE.stepper.step()
         APP_STATE.sync_bsp_history()
+        APP_STATE.after_step_update()
         payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME)
         payload["message"] = "已到最后一根K线" if not ok else "步进成功"
         return payload
