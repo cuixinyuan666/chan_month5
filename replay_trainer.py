@@ -1,4 +1,5 @@
-﻿import json
+﻿import copy
+import json
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, Optional
@@ -11,6 +12,8 @@ from pydantic import BaseModel
 from Chan import CChan
 from ChanConfig import CChanConfig
 from Common.CEnum import AUTYPE, DATA_SRC, FX_TYPE, KL_TYPE
+from Common.ChanException import CChanException, ErrCode
+from Common.CTime import CTime
 from DataAPI.BaoStockAPI import CBaoStock
 from Math.BOLL import BollModel
 from Math.KDJ import KDJ
@@ -19,6 +22,33 @@ from Math.RSI import RSI
 from Math.Demark import CDemarkEngine
 from Math.TrendLine import CTrendLine
 from Common.CEnum import TREND_LINE_SIDE
+
+
+class ReplayChan(CChan):
+    """使用会话内缓存的日线 K 线单元重建缠论计算，避免重复请求行情。
+
+    trigger_step 模式下每次 load() 从内存快照 deepcopy 后喂给 load_iterator，
+    笔/线段/中枢/买卖点均随 ChanConfig 重新计算；数据层与配置层解耦。
+    """
+
+    def __init__(self, *args: Any, replay_klus_master: Optional[list] = None, **kwargs: Any) -> None:
+        self._replay_klus_master: Optional[list] = replay_klus_master
+        super().__init__(*args, **kwargs)
+
+    def load(self, step: bool = False):
+        if self._replay_klus_master is None:
+            yield from super().load(step)
+            return
+        frozen = copy.deepcopy(self._replay_klus_master)
+        self.klu_cache = [None for _ in self.lv_list]
+        self.klu_last_t = [CTime(1980, 1, 1, 0, 0) for _ in self.lv_list]
+        self.add_lv_iter(0, iter(frozen))
+        yield from self.load_iterator(lv_idx=0, parent_klu=None, step=step)
+        if not step:
+            for lv in self.lv_list:
+                self.kl_datas[lv].cal_seg_and_zs()
+        if len(self[0]) == 0:
+            raise CChanException("最高级别没有获得任何数据", ErrCode.NO_DATA)
 
 
 def normalize_code(raw: str) -> str:
@@ -117,6 +147,9 @@ class ChanStepper:
         }
         self.indicator_history = []
         self.trend_lines = []
+        # 会话级行情缓存：同一股票代码与日期区间下只拉取一次，缠论/BSP 配置变更时仅重算结构。
+        self._data_session_key: Optional[tuple[Any, ...]] = None
+        self._replay_klus_master: Optional[list] = None
 
     def init(self, code: str, begin_date: str, end_date: Optional[str], autype: AUTYPE, chan_config: Optional[dict[str, Any]] = None) -> None:
         cfg_dict = {
@@ -180,7 +213,40 @@ class ChanStepper:
                         cfg_dict[k] = v
         cfg = CChanConfig(cfg_dict)
         self.code = normalize_code(code)
-        self.chan = CChan(
+        session_key = (self.code, begin_date, end_date, autype)
+        cache_hit = session_key == self._data_session_key and self._replay_klus_master is not None
+
+        if not cache_hit:
+            # 一次性拉取复盘区间内的完整日线，供后续任意缠论配置重放（避免 reconfig/back_n 重复请求）。
+            cfg_fetch = CChanConfig({**cfg_dict, "trigger_step": False})
+            fetch_chan = CChan(
+                code=self.code,
+                begin_time=begin_date,
+                end_time=end_date,
+                data_src=DATA_SRC.BAO_STOCK,
+                lv_list=[KL_TYPE.K_DAY],
+                config=cfg_fetch,
+                autype=autype,
+            )
+            self._replay_klus_master = copy.deepcopy(list(fetch_chan[0].klu_iter()))
+            self._data_session_key = session_key
+
+            cfg_all_dict = cfg_dict.copy()
+            cfg_all_dict["trigger_step"] = False  # Always False for chip calculation
+            cfg_all = CChanConfig(cfg_all_dict)
+            chip_begin_date = "1990-01-01"
+            chan_all = CChan(
+                code=self.code,
+                begin_time=chip_begin_date,
+                end_time=end_date,
+                data_src=DATA_SRC.BAO_STOCK,
+                lv_list=[KL_TYPE.K_DAY],
+                config=cfg_all,
+                autype=autype,
+            )
+            self.kline_all = serialize_klu_iter(chan_all[0].klu_iter())
+
+        self.chan = ReplayChan(
             code=self.code,
             begin_time=begin_date,
             end_time=end_date,
@@ -188,23 +254,8 @@ class ChanStepper:
             lv_list=[KL_TYPE.K_DAY],
             config=cfg,
             autype=autype,
+            replay_klus_master=self._replay_klus_master,
         )
-        # Preload full history K-lines for chip distribution (full available history -> end_date).
-        # Keep it independent from step-based replay, so chips can use full past even at first step.
-        cfg_all_dict = cfg_dict.copy()
-        cfg_all_dict["trigger_step"] = False # Always False for chip calculation
-        cfg_all = CChanConfig(cfg_all_dict)
-        chip_begin_date = "1990-01-01"
-        chan_all = CChan(
-            code=self.code,
-            begin_time=chip_begin_date,
-            end_time=end_date,
-            data_src=DATA_SRC.BAO_STOCK,
-            lv_list=[KL_TYPE.K_DAY],
-            config=cfg_all,
-            autype=autype,
-        )
-        self.kline_all = serialize_klu_iter(chan_all[0].klu_iter())
         self._iter = self.chan.step_load()
         self.step_idx = -1
         self.indicators = {
@@ -376,6 +427,11 @@ class AppState:
         return f'{int(item["x"])}|{item["label"]}|{1 if item["is_buy"] else 0}'
 
     def sync_bsp_history(self) -> None:
+        """步进到下一根 K 后，对上一根上的待定 BSP 做存活判定。
+
+        使用当前配置下 BSPointList 的全量快照：若该 x+类型+方向 仍存在于 bsp_iter 中则 ✓，
+        否则 ×（已被引擎移除或不再符合当前 bs_type 等约束）。与 BSPointList / CBS_Point 生命周期一致。
+        """
         current_x = self._current_kline_x()
         if current_x is None:
             self.bsp_history = []
@@ -1160,10 +1216,16 @@ HTML = r"""
       box-sizing: border-box;
     }
     .settingsActions {
-      margin-top: 24px;
+      margin-top: 16px;
       display: flex;
       justify-content: flex-end;
       gap: 12px;
+      position: sticky;
+      bottom: 0;
+      z-index: 2;
+      padding: 12px 0 4px;
+      border-top: 1px solid var(--border);
+      background: linear-gradient(to bottom, rgba(255,255,255,0), var(--panel) 24%);
     }
     .settingsActions button {
       min-width: 100px;
@@ -1440,35 +1502,33 @@ let crosshairEnabled = false;
 let crosshairX = null;
 let crosshairY = null;
 let canvasHovered = false;
-let selectedIndicatorPanel = "main:0";
+let selectedMainIndicatorSlot = Number(storageGet("chan_selected_main_indicator_slot") || "0");
+let selectedSubIndicatorSlot = Number(storageGet("chan_selected_sub_indicator_slot") || "0");
 let indicatorMainSlots = ensureObject(safeJsonParse(storageGet("chan_indicator_main_slots"), null), null);
 let indicatorSubSlots = ensureObject(safeJsonParse(storageGet("chan_indicator_sub_slots"), null), null);
 
-const defaultMainSlots = { "0": "enabled", "1": [], "2": [], "3": [], "4": [], "5": [] };
-const defaultSubSlots = { "1": [], "2": [], "3": [], "4": [], "5": [] };
+const defaultMainSlots = { "0": [], "1": [], "2": [], "3": [], "4": [], "5": [] };
+const defaultSubSlots = { "0": [], "1": [], "2": [], "3": [], "4": [], "5": [] };
 
 if (!indicatorMainSlots || !indicatorSubSlots) {
   indicatorMainSlots = { ...defaultMainSlots };
   indicatorSubSlots = { ...defaultSubSlots };
 }
-// Migration from string-based slots to arrays
-for (let i = 0; i <= 5; i++) {
-  let v = indicatorMainSlots[String(i)];
-  if (i === 0) {
-    if (v !== "none" && v !== "enabled") indicatorMainSlots["0"] = "enabled";
-  } else {
-    if (typeof v === "string") indicatorMainSlots[String(i)] = (v === "none" ? [] : [v]);
-    else if (!Array.isArray(v)) indicatorMainSlots[String(i)] = [];
-  }
+if (!Number.isFinite(selectedMainIndicatorSlot) || selectedMainIndicatorSlot < 0 || selectedMainIndicatorSlot > 5) {
+  selectedMainIndicatorSlot = 0;
 }
-  // Ensure "0" is enabled if any slot has indicators
-for (let i = 1; i <= 5; i++) {
-  const list = indicatorMainSlots[String(i)];
-  if (Array.isArray(list) && list.length > 0) indicatorMainSlots["0"] = "enabled";
+if (!Number.isFinite(selectedSubIndicatorSlot) || selectedSubIndicatorSlot < 0 || selectedSubIndicatorSlot > 5) {
+  selectedSubIndicatorSlot = 0;
 }
-if (indicatorMainSlots["0"] === undefined) indicatorMainSlots["0"] = "enabled";
+storageSet("chan_selected_main_indicator_slot", String(selectedMainIndicatorSlot));
+storageSet("chan_selected_sub_indicator_slot", String(selectedSubIndicatorSlot));
 
-for (let i = 1; i <= 5; i++) {
+// Migration from legacy string-based slots to arrays
+for (let i = 0; i <= 5; i++) {
+  const mainVal = indicatorMainSlots[String(i)];
+  if (typeof mainVal === "string") indicatorMainSlots[String(i)] = (mainVal === "none" || mainVal === "enabled" ? [] : [mainVal]);
+  else if (!Array.isArray(mainVal)) indicatorMainSlots[String(i)] = [];
+
   let v = indicatorSubSlots[String(i)];
   if (typeof v === "string") indicatorSubSlots[String(i)] = (v === "none" ? [] : [v]);
   else if (!Array.isArray(v)) indicatorSubSlots[String(i)] = [];
@@ -2244,7 +2304,7 @@ function saveChanSettings() {
           refreshUI(payload);
           if (payload.bsp_history && payload.bsp_history.length > 0) {
             payload.bsp_history.forEach(h => {
-              setMsg(`[重算] 发现${h.is_buy ? '买点' : '卖点'}: ${h.label} @K线:${h.x}`, true);
+              setMsg(`[重算] 发现 ${h.label} @K线:${h.x}`, true);
             });
           }
           showToast(payload.message || "配置已更新，逻辑已重算。");
@@ -2304,30 +2364,27 @@ function renderSettingsForm() {
 
   const slotTip = [
     "槽位规则：",
-    "1) 主图(0) 总开关：关闭时隐藏所有主/副图指标。",
-    "2) 主图(1)-(5)：每个槽位可勾选多个指标叠加显示在主图。",
-    "3) 副图(1)-(5)：每个槽位可勾选多个指标，每个指标独立占用一个副图面板。",
+    "1) 主图槽位(0-5)：0 表示主图不显示指标，1-5 为主图指标方案槽位。",
+    "2) 副图槽位(0-5)：0 表示不显示任何副图，1-5 为副图指标方案槽位。",
+    "3) 主图与副图槽位独立选择、独立保存。",
     "4) 更改配置后点击保存即可生效。"
   ].join("\n");
-  const indicatorSlotOptions = [
-    { value: "main:0", label: "主图(0) 总开关" },
-    { value: "main:1", label: "主图(1)" },
-    { value: "main:2", label: "主图(2)" },
-    { value: "main:3", label: "主图(3)" },
-    { value: "main:4", label: "主图(4)" },
-    { value: "main:5", label: "主图(5)" },
-    { value: "sub:1", label: "副图(1)" },
-    { value: "sub:2", label: "副图(2)" },
-    { value: "sub:3", label: "副图(3)" },
-    { value: "sub:4", label: "副图(4)" },
-    { value: "sub:5", label: "副图(5)" },
+  const mainSlotOptions = [
+    { value: "0", label: "主图(0) 不显示指标" },
+    { value: "1", label: "主图(1)" },
+    { value: "2", label: "主图(2)" },
+    { value: "3", label: "主图(3)" },
+    { value: "4", label: "主图(4)" },
+    { value: "5", label: "主图(5)" },
   ];
-
-  const getIndicatorTypeValue = () => {
-    const info = parseIndicatorPanel(selectedIndicatorPanel);
-    if (info.kind === "main") return indicatorMainSlots[String(info.slot)];
-    return indicatorSubSlots[String(info.slot)];
-  };
+  const subSlotOptions = [
+    { value: "0", label: "副图(0) 不显示副图" },
+    { value: "1", label: "副图(1)" },
+    { value: "2", label: "副图(2)" },
+    { value: "3", label: "副图(3)" },
+    { value: "4", label: "副图(4)" },
+    { value: "5", label: "副图(5)" },
+  ];
 
   const buildLabelHtml = (item) => {
     const tipText = String(item.tip || `${item.label}：用于调整该项在图表或浮窗中的显示效果。`).replace(/"/g, "&quot;");
@@ -2365,8 +2422,10 @@ function renderSettingsForm() {
       color: "#7c3aed",
       bgColor: "rgba(124, 58, 237, 0.08)",
       items: [
-        { label: "配置槽位", subKey: "slot", type: "select", options: indicatorSlotOptions, tip: slotTip },
-        { label: "指标选择", subKey: "type", type: "indicator_multi" }
+        { label: "主图配置槽位", subKey: "mainSlot", type: "select", options: mainSlotOptions, tip: slotTip },
+        { label: "主图指标选择", subKey: "mainType", type: "indicator_multi_main" },
+        { label: "副图配置槽位", subKey: "subSlot", type: "select", options: subSlotOptions, tip: slotTip },
+        { label: "副图指标选择", subKey: "subType", type: "indicator_multi_sub" }
       ]
     },
     {
@@ -2601,8 +2660,10 @@ function renderSettingsForm() {
       if (sec.key === "theme_section") {
         val = chartConfig.theme;
       } else if (sec.key === "indicators") {
-        if (item.subKey === "slot") val = selectedIndicatorPanel;
-        else if (item.subKey === "type") val = getIndicatorTypeValue();
+        if (item.subKey === "mainSlot") val = selectedMainIndicatorSlot;
+        else if (item.subKey === "subSlot") val = selectedSubIndicatorSlot;
+        else if (item.subKey === "mainType") val = indicatorMainSlots[String(selectedMainIndicatorSlot)] || [];
+        else if (item.subKey === "subType") val = indicatorSubSlots[String(selectedSubIndicatorSlot)] || [];
       } else {
         val = chartConfig[sec.key][item.subKey];
       }
@@ -2627,43 +2688,61 @@ function renderSettingsForm() {
             <label>${buildLabelHtml(item)}</label>
             <select data-key="${sec.key}" data-subkey="${item.subKey}">${optionsHtml}</select>
           `;
-        if (sec.key === "indicators" && item.subKey === "slot") {
+        if (sec.key === "indicators" && item.subKey === "mainSlot") {
            const select = itemDiv.querySelector("select");
            select.onchange = (e) => {
-              selectedIndicatorPanel = String(e.target.value);
-              // Re-render the multi-select section for the new slot
+              selectedMainIndicatorSlot = Number(e.target.value);
+              storageSet("chan_selected_main_indicator_slot", String(selectedMainIndicatorSlot));
+              renderSettingsForm();
+           };
+        } else if (sec.key === "indicators" && item.subKey === "subSlot") {
+           const select = itemDiv.querySelector("select");
+           select.onchange = (e) => {
+              selectedSubIndicatorSlot = Number(e.target.value);
+              storageSet("chan_selected_sub_indicator_slot", String(selectedSubIndicatorSlot));
               renderSettingsForm();
            };
         }
-      } else if (item.type === "indicator_multi") {
-          const info = parseIndicatorPanel(selectedIndicatorPanel);
+      } else if (item.type === "indicator_multi_main") {
           let html = `<label>${buildLabelHtml(item)}</label>`;
-          if (info.kind === "main" && info.slot === 0) {
-            // Main Switch
-            const enabled = indicatorMainSlots["0"] !== "none";
+          if (selectedMainIndicatorSlot === 0) {
             html += `
-              <label style="flex-direction:row; align-items:center; display:flex; margin-top:8px;">
-                <input type="checkbox" ${enabled ? "checked" : ""} 
-                       class="indicator-main-switch"
-                       data-key="indicators" data-subkey="type"
-                       style="width:auto; margin-right:8px;">
-                启用技术指标显示 (总开关)
-              </label>
+              <div class="muted" style="margin-top:8px;">当前主图槽位为 0，不显示主图指标。</div>
             `;
           } else {
-            // Regular slots
             const currentList = Array.isArray(val) ? val : [];
-            const options = info.kind === "main" ? 
-              [{v:"boll",l:"BOLL"}, {v:"demark",l:"Demark"}, {v:"trendline",l:"TrendLine"}] :
-              [{v:"macd",l:"MACD"}, {v:"kdj",l:"KDJ"}, {v:"rsi",l:"RSI"}];
-            
+            const options = [{v:"boll",l:"BOLL"}, {v:"demark",l:"Demark"}, {v:"trendline",l:"TrendLine"}];
             html += `<div style="display:flex; flex-direction:column; gap:4px; margin-top:8px;">`;
             options.forEach(opt => {
               const checked = currentList.includes(opt.v);
               html += `
                 <label style="flex-direction:row; align-items:center; display:flex;">
-                  <input type="checkbox" class="indicator-check" value="${opt.v}" ${checked ? "checked" : ""} 
-                         data-key="indicators" data-subkey="type"
+                  <input type="checkbox" class="indicator-check-main" value="${opt.v}" ${checked ? "checked" : ""} 
+                         data-key="indicators" data-subkey="mainType"
+                         style="width:auto; margin-right:8px;">
+                  ${opt.l}
+                </label>
+              `;
+            });
+            html += `</div>`;
+          }
+          itemDiv.innerHTML += html;
+      } else if (item.type === "indicator_multi_sub") {
+          let html = `<label>${buildLabelHtml(item)}</label>`;
+          if (selectedSubIndicatorSlot === 0) {
+            html += `
+              <div class="muted" style="margin-top:8px;">当前副图槽位为 0，不显示任何副图指标。</div>
+            `;
+          } else {
+            const currentList = Array.isArray(val) ? val : [];
+            const options = [{v:"macd",l:"MACD"}, {v:"kdj",l:"KDJ"}, {v:"rsi",l:"RSI"}];
+            html += `<div style="display:flex; flex-direction:column; gap:4px; margin-top:8px;">`;
+            options.forEach(opt => {
+              const checked = currentList.includes(opt.v);
+              html += `
+                <label style="flex-direction:row; align-items:center; display:flex;">
+                  <input type="checkbox" class="indicator-check-sub" value="${opt.v}" ${checked ? "checked" : ""} 
+                         data-key="indicators" data-subkey="subType"
                          style="width:auto; margin-right:8px;">
                   ${opt.l}
                 </label>
@@ -2889,26 +2968,27 @@ function saveSettings() {
       chartConfig.theme = val;
       applyThemeFromSelect();
     } else if (key === "indicators") {
-      if (subkey === "slot") {
-        selectedIndicatorPanel = String(val);
-      } else if (subkey === "type") {
-        // Only update if this element actually represents the current panel's type
-        const info = parseIndicatorPanel(selectedIndicatorPanel);
-        const isSwitch = input.classList.contains("indicator-main-switch");
-        const isCheck = input.classList.contains("indicator-check");
-        
-        if (info.kind === "main" && info.slot === 0 && isSwitch) {
-          indicatorMainSlots["0"] = input.checked ? "enabled" : "none";
-        } else if (isCheck) {
-          const checks = $("settingsContent").querySelectorAll(".indicator-check");
-          const selected = [];
-          checks.forEach(c => { if (c.checked) selected.push(c.value); });
-          if (info.kind === "main") indicatorMainSlots[String(info.slot)] = selected;
-          else indicatorSubSlots[String(info.slot)] = selected;
-        }
+      if (subkey === "mainSlot") {
+        selectedMainIndicatorSlot = Number(val);
+        storageSet("chan_selected_main_indicator_slot", String(selectedMainIndicatorSlot));
+      } else if (subkey === "subSlot") {
+        selectedSubIndicatorSlot = Number(val);
+        storageSet("chan_selected_sub_indicator_slot", String(selectedSubIndicatorSlot));
+      } else if (subkey === "mainType") {
+        const checks = $("settingsContent").querySelectorAll(".indicator-check-main");
+        const selected = [];
+        checks.forEach(c => { if (c.checked) selected.push(c.value); });
+        indicatorMainSlots[String(selectedMainIndicatorSlot)] = selected;
+      } else if (subkey === "subType") {
+        const checks = $("settingsContent").querySelectorAll(".indicator-check-sub");
+        const selected = [];
+        checks.forEach(c => { if (c.checked) selected.push(c.value); });
+        indicatorSubSlots[String(selectedSubIndicatorSlot)] = selected;
+      }
+      if (subkey === "mainType" || subkey === "subType" || subkey === "mainSlot" || subkey === "subSlot") {
         storageSet("chan_indicator_main_slots", JSON.stringify(indicatorMainSlots));
         storageSet("chan_indicator_sub_slots", JSON.stringify(indicatorSubSlots));
-      }
+      } 
     } else if (key && subkey) {
       if (subkey === "dash" && typeof val === "string") {
         const arr = val.split(",").map(n => parseFloat(n.trim())).filter(n => !isNaN(n));
@@ -2991,9 +3071,12 @@ function resetSettings() {
     chartConfig = JSON.parse(JSON.stringify(DEFAULT_CHART_CONFIG));
     indicatorMainSlots = { ...defaultMainSlots };
     indicatorSubSlots = { ...defaultSubSlots };
-    selectedIndicatorPanel = "main:0";
+    selectedMainIndicatorSlot = 0;
+    selectedSubIndicatorSlot = 0;
     storageSet("chan_indicator_main_slots", JSON.stringify(indicatorMainSlots));
     storageSet("chan_indicator_sub_slots", JSON.stringify(indicatorSubSlots));
+    storageSet("chan_selected_main_indicator_slot", "0");
+    storageSet("chan_selected_sub_indicator_slot", "0");
     renderSettingsForm();
   }
 }
@@ -3045,13 +3128,6 @@ function isSubIndicator(type) {
   return SUB_INDICATORS.has(type);
 }
 
-function parseIndicatorPanel(panelKey) {
-  const [kind, idx] = String(panelKey || "main:0").split(":");
-  const slot = Number(idx);
-  if ((kind !== "main" && kind !== "sub") || !Number.isFinite(slot)) return { kind: "main", slot: 0 };
-  return { kind, slot };
-}
-
 function getTradeLineDash(style) {
   if (style === "solid") return [];
   if (style === "dotted") return [2, 4];
@@ -3059,29 +3135,24 @@ function getTradeLineDash(style) {
 }
 
 function getIndicatorConfig() {
-  const gateMain = (indicatorMainSlots && indicatorMainSlots["0"]) || "enabled";
-  if (gateMain === "none") return { mainTypes: [], subCharts: [] };
-  
   const mainTypes = [];
-  if (indicatorMainSlots) {
-    for (let slot = 1; slot <= 5; slot++) {
-      const list = indicatorMainSlots[String(slot)] || [];
-      for (const type of list) {
-        if (type && type !== "none" && isMainIndicator(type)) {
-          mainTypes.push({ slot, type });
-        }
+  const mainSlot = Number(selectedMainIndicatorSlot);
+  if (indicatorMainSlots && Number.isFinite(mainSlot) && mainSlot >= 1 && mainSlot <= 5) {
+    const list = indicatorMainSlots[String(mainSlot)] || [];
+    for (const type of list) {
+      if (type && type !== "none" && isMainIndicator(type)) {
+        mainTypes.push({ slot: mainSlot, type });
       }
     }
   }
   
   const subCharts = [];
-  if (indicatorSubSlots) {
-    for (let slot = 1; slot <= 5; slot++) {
-      const list = indicatorSubSlots[String(slot)] || [];
-      for (const type of list) {
-        if (type && type !== "none" && isSubIndicator(type)) {
-          subCharts.push({ slot, type });
-        }
+  const subSlot = Number(selectedSubIndicatorSlot);
+  if (indicatorSubSlots && Number.isFinite(subSlot) && subSlot >= 1 && subSlot <= 5) {
+    const list = indicatorSubSlots[String(subSlot)] || [];
+    for (const type of list) {
+      if (type && type !== "none" && isSubIndicator(type)) {
+        subCharts.push({ slot: subSlot, type });
       }
     }
   }
@@ -3127,15 +3198,21 @@ function syncTradesFromPayload(payload) {
   activeTrade = payload.trades.active || null;
 }
 
-function showBspPrompt(payload, lines, key) {
+function showBspPrompt(payload, lines, key, hits) {
   pendingBspPrompt = {
     key,
     time: payload && payload.time ? payload.time : "-",
     lines
   };
   
-  const isBuy = lines.includes("买点");
-  const isSell = lines.includes("卖点");
+  let isBuy = false;
+  let isSell = false;
+  if (hits && hits.length) {
+    for (const h of hits) {
+      if (h.is_buy) isBuy = true;
+      else isSell = true;
+    }
+  }
   const titleEl = $("bspPromptTitle");
   if (titleEl) {
     if (isBuy && !isSell) {
@@ -3192,7 +3269,7 @@ function getBspAtX(chart, xVal) {
   for (const p of (bspHistory || [])) {
     if (!p || p.x !== xVal) continue;
     const prefix = p.status === "correct" ? "✓" : (p.status === "wrong" ? "×" : "…");
-    const txt = `${prefix}${p.is_buy ? "买点" : "卖点"}:${p.label}`;
+    const txt = `${prefix} ${p.label}`;
     if (seen.has(txt)) continue;
     seen.add(txt);
     tags.push(txt);
@@ -3480,7 +3557,8 @@ canvas.addEventListener("click", (e) => {
 
   const panel = getPanelByY(s, y);
   if (!panel) return;
-  selectedIndicatorPanel = `sub:${panel.slot}`;
+  selectedSubIndicatorSlot = Number(panel.slot);
+  storageSet("chan_selected_sub_indicator_slot", String(selectedSubIndicatorSlot));
   syncIndicatorControls();
 });
 
@@ -4925,7 +5003,7 @@ function drawBsp(arr, s) {
       const p = ps[i];
       const color = p.is_buy ? colBuy : colSell;
       const prefix = p.status === "correct" ? "✓" : (p.status === "wrong" ? "×" : "·");
-      const txt = `${prefix}${p.is_buy ? "买" : "卖"} ${p.label}`;
+      const txt = `${prefix} ${p.label}`;
       ctx.save();
       ctx.font = `bold ${fontSize}px Consolas`;
       const textW = ctx.measureText(txt).width;
@@ -5059,11 +5137,11 @@ function detectBspPromptOnLastBar(payload) {
   const lastX = payload.chart.kline[payload.chart.kline.length - 1].x;
   const hits = (payload.chart.bsp || []).filter((p) => p.x === lastX);
   if (hits.length <= 0) return false;
-  const lines = hits.map((p) => (p.is_buy ? "买点" : "卖点") + ":" + p.label).join("\n");
+  const lines = hits.map((p) => p.label).join("\n");
   const key = lastX + "|" + lines;
   if (lastSeenBspKey.has(key)) return false;
   lastSeenBspKey.add(key);
-  showBspPrompt(payload, lines, key);
+  showBspPrompt(payload, lines, key, hits);
   setMsg(`出现买卖点 @${payload.time}\n${lines}`);
   return true;
 }
