@@ -366,6 +366,14 @@ class BackNReq(BaseModel):
     n: int = 1
 
 
+class StepReq(BaseModel):
+    judge_mode: Optional[str] = None  # "auto" | "manual"
+
+
+class JudgeBspReq(BaseModel):
+    reason: str = "manual_check"
+
+
 class AppState:
     def __init__(self) -> None:
         self.stepper = ChanStepper()
@@ -383,6 +391,11 @@ class AppState:
         self.bsp_judge_logs: list[dict[str, Any]] = []
         # 本次 payload 是否需要弹窗提醒
         self._judge_notice: bool = False
+        # 最近一次判定统计（用于 payload 弹窗展示）
+        self._last_judge_stats: Optional[dict[str, Any]] = None
+        # 上次判定位置（用于弹窗展示区间）
+        self._last_judge_x: Optional[int] = None
+        self._last_judge_time: Optional[str] = None
 
     def _current_seg_dir(self) -> Optional[str]:
         if self.stepper.chan is None:
@@ -406,6 +419,9 @@ class AppState:
         """使用 trigger_step==False 一次性计算全量买卖点快照。"""
         self.bsp_all_snapshot = []
         self._judge_notice = False
+        self._last_judge_stats = None
+        self._last_judge_x = None
+        self._last_judge_time = None
         if self.session_params is None:
             return
         if self.stepper._replay_klus_master is None:
@@ -445,7 +461,7 @@ class AppState:
             return
         all_keys_upto = {str(it.get("key")) for it in self.bsp_all_snapshot if int(it.get("x", -1)) <= current_x}
         # 只判定“已步进到的K线范围内”的历史买卖点，不影响未来K线
-        judged = 0
+        pending_items: list[dict[str, Any]] = []
         correct = 0
         wrong = 0
         for item in self.bsp_history:
@@ -454,7 +470,10 @@ class AppState:
                 continue
             if item.get("status") is not None:
                 continue
-            judged += 1
+            pending_items.append(item)
+
+        judged = len(pending_items)
+        for item in pending_items:
             if str(item.get("key")) in all_keys_upto:
                 item["status"] = "correct"
                 correct += 1
@@ -462,22 +481,41 @@ class AppState:
                 item["status"] = "wrong"
                 wrong += 1
 
-        self._judge_notice = True
-        self.bsp_judge_logs.append(
-            {
-                "step_idx": int(self.stepper.step_idx),
-                "x": int(current_x),
-                "time": self.stepper.current_time() if self.stepper.chan is not None else "-",
-                "reason": reason,
-                "judged": judged,
-                "correct": correct,
-                "wrong": wrong,
-            }
-        )
+        rate = (correct / judged) if judged > 0 else None
+        cur_time = self.stepper.current_time() if self.stepper.chan is not None else "-"
+        interval = {
+            "from_x": self._last_judge_x,
+            "to_x": int(current_x),
+            "from_time": self._last_judge_time or "-",
+            "to_time": cur_time,
+        }
+        stats = {
+            "step_idx": int(self.stepper.step_idx),
+            "x": int(current_x),
+            "time": cur_time,
+            "reason": reason,
+            "appeared": judged,
+            "judged": judged,
+            "correct": correct,
+            "wrong": wrong,
+            "rate": rate,
+            "interval": interval,
+        }
+        # 自动模式（线段变向）仅在确实发生判定时提示；手动检查则始终提示
+        reason_s = str(reason or "")
+        is_manual = "manual" in reason_s.lower()
+        should_notice = judged > 0 or is_manual
+        self._judge_notice = bool(should_notice)
+        self._last_judge_stats = stats if should_notice else None
+        self.bsp_judge_logs.append(stats)
+        # 更新“上次判定”区间锚点（无论是否弹窗，均视为一次检查点）
+        self._last_judge_x = int(current_x)
+        self._last_judge_time = cur_time
 
     def after_step_update(self) -> None:
         """每次步进后调用：检测线段变向并触发判定。"""
         self._judge_notice = False
+        self._last_judge_stats = None
         cur_dir = self._current_seg_dir()
         if self._last_seg_dir is None:
             self._last_seg_dir = cur_dir
@@ -592,6 +630,9 @@ class AppState:
         self.bsp_history = []
         self._last_seg_dir = None
         self._judge_notice = False
+        self._last_judge_stats = None
+        self._last_judge_x = None
+        self._last_judge_time = None
 
         if not self.stepper.step():
             return
@@ -659,6 +700,7 @@ class AppState:
             "chart": chart,
             "bsp_history": self.bsp_history,
             "judge_notice": bool(self._judge_notice),
+            "judge_stats": self._last_judge_stats,
             "account": {
                 "initial_cash": round(self.account.initial_cash, 2),
                 "cash": round(self.account.cash, 2),
@@ -991,6 +1033,59 @@ HTML = r"""
     .fullscreen-btn:hover { background: #fff; border-color: #2563eb; }
     :fullscreen .fullscreen-btn { display: none; }
     :fullscreen #chart { height: 100vh; }
+
+    .judge-bsp-btn {
+      position: absolute;
+      top: 10px;
+      right: 160px;
+      z-index: 100;
+      background: rgba(255,255,255,0.88);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 4px 10px;
+      cursor: pointer;
+      display: none;
+      align-items: center;
+      gap: 4px;
+      white-space: nowrap;
+    }
+    .judge-bsp-btn:hover { background: #fff; border-color: #16a34a; }
+    .judge-bsp-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+    :fullscreen .judge-bsp-btn { display: none; }
+
+    .toolbox {
+      position: absolute;
+      top: 48px;
+      right: 10px;
+      z-index: 100;
+      background: rgba(255,255,255,0.92);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    :fullscreen .toolbox { display: none; }
+    .toolbox .label {
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .toolbox button {
+      padding: 4px 8px;
+      font-size: 12px;
+      width: auto;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: #fff;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .toolbox button.active {
+      border-color: #2563eb;
+      box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.12);
+    }
 
     /* Toast 弹窗 */
     #toastContainer {
@@ -1379,11 +1474,11 @@ HTML = r"""
           <button id="btnReset" data-tip="清空当前会话并恢复到可重新配置的初始状态。">重新训练 <small>(Ctrl+R)</small></button>
           <button id="btnFinish" data-tip="结束当前训练，并可选择导出本次交易总结文件。" disabled>结束训练</button>
           <button id="btnExit" data-tip="尝试关闭当前页面。浏览器可能会拦截关闭操作。">退出</button>
-          <button id="btnStep" data-tip="步进到下一根K线。若当前K线命中买卖点，会先中断并等待确认。" disabled>下一根K线 <small>(Space)</small></button>
+          <button id="btnStep" data-tip="步进到下一根K线。若当前K线命中买卖点，将以弹窗提示（自动消失）。" disabled>下一根K线 <small>(Space)</small></button>
         </div>
         <div class="stepNRow">
           <label for="stepN">步进数量 N</label>
-          <span id="tipStepN" class="tip-icon" data-tip="设置连续步进或回退时使用的根数。遇到买卖点会自动中断等待确认。"></span>
+          <span id="tipStepN" class="tip-icon" data-tip="设置连续步进或回退时使用的根数。遇到买卖点将以弹窗提示（自动消失）。"></span>
           <input id="stepN" type="number" min="1" step="1" value="5" />
           <div class="btnRow" style="width:100%; margin-top:4px;">
             <button id="btnStepN" data-tip="按步进数量 N 连续推进，若中途遇到买卖点则自动停止。" disabled>步进 N 根 <small>(Ctrl+Alt+N)</small></button>
@@ -1530,6 +1625,13 @@ HTML = r"""
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
         全屏显示 (F11)
       </button>
+      <button id="btnJudgeBsp" class="judge-bsp-btn" data-tip="手动检查买卖点（仅手动判定模式下可用）。" disabled>检查买卖点</button>
+      <div id="toolbox" class="toolbox">
+        <span class="label">工具箱</span>
+        <button id="toolNone" type="button" class="active" data-tip="当前不启用画线工具；点击图表仅用于选子图。">选择</button>
+        <button id="toolHorizontalRay" type="button" data-tip="生成水平射线：点击图表在当前价位生成一条水平射线。">水平射线</button>
+        <button id="toolBiRay" type="button" data-tip="笔端点射线：依次点击两个笔端点生成一条向右延伸的射线。">笔端点射线</button>
+      </div>
       <canvas id="chart"></canvas>
     </div>
   </div>
@@ -1587,6 +1689,9 @@ let viewXMax = 0;
 let viewReady = false;
 let userAdjustedView = false;
 let userRays = ensureArray(safeJsonParse(storageGet("chan_user_rays"), []), []);
+let userBiRays = ensureArray(safeJsonParse(storageGet("chan_user_bi_rays"), []), []);
+let pendingBiRayPts = [];
+let activeTool = storageGet("chan_active_tool") || "none"; // none | horizontalRay | biRay
 
 const PAD_L = 64;
 const PAD_R = 64;
@@ -1805,6 +1910,9 @@ const SHORTCUT_ACTIONS = [
   { id: "saveSystemSettings", label: "保存系统配置", description: "在系统配置面板中保存并立即应用快捷键设置。", defaults: ["s"], contexts: ["systemSettings"], buttonId: "btnSystemSettingsSave" },
   { id: "confirmBspPrompt", label: "确认买卖点提示", description: "确认当前买卖点提示并允许继续步进。", defaults: ["enter"], contexts: ["bspPrompt"], buttonId: "bspPromptConfirm" },
   { id: "closeSettlement", label: "关闭交易结算", description: "关闭当前交易结算弹窗。", defaults: ["enter"], contexts: ["settlement"], buttonId: "btnSettlementClose" },
+  { id: "setBspJudgeAuto", label: "买卖点判定：自动", description: "将买卖点 ×/✓ 判定方式切换为自动（线段变向时自动判定）。", defaults: ["z"], contexts: ["global"] },
+  { id: "setBspJudgeManual", label: "买卖点判定：手动", description: "将买卖点 ×/✓ 判定方式切换为手动（需点击按钮/快捷键手动检查）。", defaults: ["s"], contexts: ["global"] },
+  { id: "checkBspJudge", label: "检查买卖点（手动）", description: "在手动模式下触发一次买卖点 ×/✓ 判定检查。", defaults: ["j"], contexts: ["global"], buttonId: "btnJudgeBsp" },
 ];
 
 const SHORTCUT_ACTION_MAP = SHORTCUT_ACTIONS.reduce((acc, action) => {
@@ -1813,6 +1921,7 @@ const SHORTCUT_ACTION_MAP = SHORTCUT_ACTIONS.reduce((acc, action) => {
 }, {});
 
 const DEFAULT_SYSTEM_CONFIG = {
+  bspJudgeMode: "auto",
   shortcuts: SHORTCUT_ACTIONS.reduce((acc, action) => {
     acc[action.id] = action.defaults.slice();
     return acc;
@@ -2015,7 +2124,9 @@ function setActionShortcuts(actionId, parsedShortcuts) {
 }
 
 function normalizeSystemConfig() {
-  const normalized = { shortcuts: {} };
+  const normalized = { shortcuts: {}, bspJudgeMode: "auto" };
+  const rawMode = systemConfig && typeof systemConfig.bspJudgeMode === "string" ? systemConfig.bspJudgeMode : "auto";
+  normalized.bspJudgeMode = rawMode === "manual" ? "manual" : "auto";
   SHORTCUT_ACTIONS.forEach(action => {
     const hasOwn = systemConfig.shortcuts && Object.prototype.hasOwnProperty.call(systemConfig.shortcuts, action.id);
     const source = ensureArray(hasOwn ? systemConfig.shortcuts[action.id] : action.defaults, []);
@@ -2100,11 +2211,26 @@ function updateShortcutUI() {
   $("btnBuy").setAttribute("data-tip", `按当前收盘价使用全部可用现金买入，遵循单持仓和每步最多一笔规则。快捷键：${getActionShortcutDisplay("buyAll") || "未设置"}。`);
   $("btnSell").setAttribute("data-tip", `按当前收盘价全部卖出，若受 T+1 约束则按钮不可用。快捷键：${getActionShortcutDisplay("sellAll") || "未设置"}。`);
   $("tipStepN").setAttribute("data-tip", `设置连续步进或回退时使用的根数。步进快捷键：${getActionShortcutDisplay("stepForwardN") || "未设置"}；回退快捷键：${getActionShortcutDisplay("stepBackwardN") || "未设置"}。`);
+  if ($("btnJudgeBsp")) {
+    setButtonShortcutLabel($("btnJudgeBsp"), "检查买卖点", "checkBspJudge");
+    $("btnJudgeBsp").setAttribute("data-tip", `手动检查买卖点（仅手动判定模式下可用）。快捷键：${getActionShortcutDisplay("checkBspJudge") || "未设置"}。`);
+  }
   initTooltips();
 }
 
+function isBspJudgeManual() {
+  return systemConfig && systemConfig.bspJudgeMode === "manual";
+}
+
+function updateBspJudgeUI() {
+  const btn = $("btnJudgeBsp");
+  if (!btn) return;
+  const manual = isBspJudgeManual();
+  btn.style.display = manual ? "inline-flex" : "none";
+  btn.disabled = !manual || !lastPayload || !lastPayload.ready;
+}
+
 function getActiveShortcutContexts() {
-  if (pendingBspPrompt) return ["bspPrompt"];
   if ($("settlementModal").classList.contains("show")) return ["settlement"];
   if (isSystemSettingsOpen()) return ["systemSettings"];
   if (isChanSettingsOpen()) return ["chanSettings"];
@@ -2917,6 +3043,35 @@ function renderSystemSettingsForm() {
   const container = $("systemSettingsContent");
   container.innerHTML = "";
 
+  const bspSec = document.createElement("div");
+  bspSec.className = "settingsSection";
+  bspSec.style.background = "rgba(34, 197, 94, 0.08)";
+  bspSec.innerHTML = `<div class="settingsSectionTitle" style="color:#16a34a">买卖点判定</div>`;
+
+  const bspGrid = document.createElement("div");
+  bspGrid.className = "settingsGrid";
+
+  const bspItem = document.createElement("div");
+  bspItem.className = "settingsItem";
+  bspItem.style.gridColumn = "1 / -1";
+  bspItem.innerHTML = `<label>判定方式 <span class="tip-icon" data-tip="${escapeHtmlAttr("自动：线段变向时自动对照全量快照判定 ×/✓。手动：不自动判定，需要点击“检查买卖点”或按快捷键。由手动切回自动时，会自动补判当前尚未判定的买卖点，并记录。")}">!</span></label>`;
+
+  const bspSel = document.createElement("select");
+  bspSel.dataset.sysKey = "bspJudgeMode";
+  bspSel.innerHTML = `<option value="auto">自动</option><option value="manual">手动</option>`;
+  bspSel.value = isBspJudgeManual() ? "manual" : "auto";
+  bspItem.appendChild(bspSel);
+
+  const bspNote = document.createElement("div");
+  bspNote.className = "muted";
+  bspNote.style.fontSize = "12px";
+  bspNote.textContent = `默认快捷键：自动(${getActionShortcutDisplay("setBspJudgeAuto") || "未设置"})；手动(${getActionShortcutDisplay("setBspJudgeManual") || "未设置"})；检查(${getActionShortcutDisplay("checkBspJudge") || "未设置"})。`;
+  bspItem.appendChild(bspNote);
+
+  bspGrid.appendChild(bspItem);
+  bspSec.appendChild(bspGrid);
+  container.appendChild(bspSec);
+
   const section = document.createElement("div");
   section.className = "settingsSection";
   section.style.background = "rgba(14, 165, 233, 0.08)";
@@ -3118,6 +3273,24 @@ function saveSettings() {
 }
 
 function saveSystemSettingsFromForm() {
+  const modeSelect = $("systemSettingsContent").querySelector('select[data-sys-key="bspJudgeMode"]');
+  if (modeSelect) {
+    const prev = systemConfig.bspJudgeMode;
+    const next = String(modeSelect.value || "auto") === "manual" ? "manual" : "auto";
+    systemConfig.bspJudgeMode = next;
+    if (prev === "manual" && next === "auto" && lastPayload && lastPayload.ready) {
+      saveSystemConfig();
+      updateBspJudgeUI();
+      alert("买卖点判定方式切换：手动 → 自动。\n将自动补判当前尚未判定的买卖点，并记录到后台。");
+      setMsg("买卖点判定方式切换：手动 → 自动", true);
+      checkBspJudge("switch_manual_to_auto");
+    } else if (prev === "auto" && next === "manual") {
+      saveSystemConfig();
+      updateBspJudgeUI();
+      alert("买卖点判定方式切换：自动 → 手动。\n线段变向时将不再自动判定，需手动点击“检查买卖点”。");
+      setMsg("买卖点判定方式切换：自动 → 手动", true);
+    }
+  }
   const inputs = $("systemSettingsContent").querySelectorAll("input[data-action-id]");
   const nextShortcuts = {};
   const errors = [];
@@ -3146,6 +3319,7 @@ function saveSystemSettingsFromForm() {
   saveSystemConfig();
   closeSystemSettings();
   renderSystemSettingsForm();
+  updateBspJudgeUI();
 }
 
 function initTooltips() {
@@ -3179,6 +3353,7 @@ initTooltips();
 normalizeSystemConfig();
 rebuildShortcutRegistry();
 updateShortcutUI();
+updateBspJudgeUI();
 
 function resetSettings() {
   if (confirm("确定要恢复默认设置吗？")) {
@@ -3215,6 +3390,10 @@ $("btnSystemSettingsOpen").addEventListener("click", openSystemSettings);
 $("btnSystemSettingsClose").addEventListener("click", closeSystemSettings);
 $("btnSystemSettingsSave").addEventListener("click", saveSystemSettingsFromForm);
 $("btnSystemSettingsReset").addEventListener("click", resetSystemSettings);
+$("btnJudgeBsp").addEventListener("click", () => {
+  if (!isBspJudgeManual()) return;
+  checkBspJudge("manual_button");
+});
 
 // Close on outside click
 $("chanSettingsModal").addEventListener("click", (e) => {
@@ -3291,7 +3470,7 @@ function hideGlobalLoading() {
 }
 
 function syncStepButtonState() {
-  const disabled = !lastPayload || !lastPayload.ready || sessionFinished || stepInFlight || !!pendingBspPrompt;
+  const disabled = !lastPayload || !lastPayload.ready || sessionFinished || stepInFlight;
   $("btnStep").disabled = disabled;
   $("btnStepN").disabled = disabled;
   $("btnBackN").disabled = !lastPayload || !lastPayload.ready || stepInFlight;
@@ -3313,45 +3492,10 @@ function syncTradesFromPayload(payload) {
 }
 
 function showBspPrompt(payload, lines, key, hits) {
-  pendingBspPrompt = {
-    key,
-    time: payload && payload.time ? payload.time : "-",
-    lines
-  };
-  
-  let isBuy = false;
-  let isSell = false;
-  if (hits && hits.length) {
-    for (const h of hits) {
-      if (h.is_buy) isBuy = true;
-      else isSell = true;
-    }
-  }
-  const titleEl = $("bspPromptTitle");
-  if (titleEl) {
-    if (isBuy && !isSell) {
-      titleEl.textContent = "检测到当前K线出现买点";
-      titleEl.style.color = getCfgColor(chartConfig.trade.buyColor);
-    } else if (isSell && !isBuy) {
-      titleEl.textContent = "检测到当前K线出现卖点";
-      titleEl.style.color = getCfgColor(chartConfig.trade.sellColor);
-    } else {
-      titleEl.textContent = "检测到当前K线出现买卖点";
-      titleEl.style.color = "#b91c1c";
-    }
-  }
-
-  const body = $("bspPromptBody");
-  if (body) {
-    body.textContent = `Time: ${pendingBspPrompt.time}\n${pendingBspPrompt.lines}`;
-    body.style.fontSize = `${chartConfig.trade.popupFontSize}px`;
-  }
-  
-  const box = $("bspPrompt");
-  if (box) box.classList.add("show");
-  const btn = $("bspPromptConfirm");
-  if (btn) btn.focus();
-  syncStepButtonState();
+  const t = payload && payload.time ? payload.time : "-";
+  const text = `检测到当前K线出现买卖点\n时间：${t}\n${lines || ""}`.trim();
+  showToast(text);
+  setMsg(text, true);
 }
 
 function clearBspPrompt() {
@@ -3602,10 +3746,12 @@ canvas.addEventListener("mouseleave", () => {
   if (lastPayload && lastPayload.ready) draw(lastPayload.chart);
 });
 
-canvas.addEventListener("dblclick", () => {
+canvas.addEventListener("dblclick", (e) => {
   if (crosshairX !== null && crosshairY !== null) {
     const s = toScaler(lastPayload.chart, Math.max(allXMin, viewXMin), viewXMax);
-    const yp = crosshairY;
+    const rect = canvas.getBoundingClientRect();
+    const xp = (e && typeof e.clientX === "number") ? (e.clientX - rect.left) : crosshairX;
+    const yp = (e && typeof e.clientY === "number") ? (e.clientY - rect.top) : crosshairY;
     
     // Check if we are deleting a ray
     let removed = false;
@@ -3620,6 +3766,29 @@ canvas.addEventListener("dblclick", () => {
     
     if (removed) {
       storageSet("chan_user_rays", JSON.stringify(userRays));
+      draw(lastPayload.chart);
+      return;
+    }
+
+    // Check if we are deleting a Bi ray
+    let removedBi = false;
+    const xVal = xFromPx(s, xp);
+    userBiRays = userBiRays.filter(r => {
+      const x1 = Number(r.x1), y1 = Number(r.y1), x2 = Number(r.x2), y2 = Number(r.y2);
+      const dx = (x2 - x1);
+      if (!Number.isFinite(x1) || !Number.isFinite(y1) || !Number.isFinite(dx) || dx === 0) return true;
+      if (xVal < x1) return true;
+      const slope = (y2 - y1) / dx;
+      const yOn = y1 + slope * (xVal - x1);
+      const yPx = s.y(yOn);
+      if (Math.abs(yPx - yp) < 8) {
+        removedBi = true;
+        return false;
+      }
+      return true;
+    });
+    if (removedBi) {
+      storageSet("chan_user_bi_rays", JSON.stringify(userBiRays));
       draw(lastPayload.chart);
       return;
     }
@@ -3649,6 +3818,32 @@ document.addEventListener("fullscreenchange", () => {
   if (overlay) applyTradeOverlayPosition(parseFloat(overlay.style.left) || 16, parseFloat(overlay.style.top) || 16);
 });
 
+function updateToolboxUI() {
+  const ids = ["toolNone", "toolHorizontalRay", "toolBiRay"];
+  ids.forEach((id) => {
+    const el = $(id);
+    if (!el) return;
+    el.classList.remove("active");
+  });
+  if (activeTool === "horizontalRay" && $("toolHorizontalRay")) $("toolHorizontalRay").classList.add("active");
+  else if (activeTool === "biRay" && $("toolBiRay")) $("toolBiRay").classList.add("active");
+  else if ($("toolNone")) $("toolNone").classList.add("active");
+}
+
+function setActiveTool(next) {
+  const v = next === "horizontalRay" || next === "biRay" ? next : "none";
+  activeTool = v;
+  storageSet("chan_active_tool", v);
+  if (v !== "biRay") pendingBiRayPts = [];
+  updateToolboxUI();
+  if (lastPayload && lastPayload.ready) draw(lastPayload.chart);
+}
+
+if ($("toolNone")) $("toolNone").addEventListener("click", () => setActiveTool("none"));
+if ($("toolHorizontalRay")) $("toolHorizontalRay").addEventListener("click", () => setActiveTool("horizontalRay"));
+if ($("toolBiRay")) $("toolBiRay").addEventListener("click", () => setActiveTool("biRay"));
+updateToolboxUI();
+
 canvas.addEventListener("click", (e) => {
   if (!lastPayload || !lastPayload.ready || !viewReady) return;
   const rect = canvas.getBoundingClientRect();
@@ -3656,8 +3851,11 @@ canvas.addEventListener("click", (e) => {
   const y = e.clientY - rect.top;
   const x = e.clientX - rect.left;
 
-  // Ctrl + Left Click: Horizontal Ray
-  if (e.ctrlKey) {
+  const wantHorizontalRay = !!e.ctrlKey || activeTool === "horizontalRay";
+  const wantBiRay = !!e.shiftKey || activeTool === "biRay";
+
+  // Ctrl + Left Click (or toolbox): Horizontal Ray
+  if (wantHorizontalRay) {
     const refK = getReferenceK(lastPayload.chart, s);
     if (refK) {
       const yVal = s.yFromPx(y);
@@ -3666,6 +3864,33 @@ canvas.addEventListener("click", (e) => {
       setMsg(`已生成射线: ${yVal.toFixed(2)}`);
       draw(lastPayload.chart);
     }
+    return;
+  }
+
+  // Shift + Left Click (or toolbox): pick 2 Bi endpoints then draw a right ray
+  if (wantBiRay) {
+    const pt = getNearestBiEndpoint(lastPayload.chart, s, x, y, 12);
+    if (!pt) {
+      setMsg("未命中笔端点，请靠近笔(Bi)端点点击。");
+      return;
+    }
+    pendingBiRayPts.push(pt);
+    if (pendingBiRayPts.length === 1) {
+      setMsg("已选择端点1，请再选择端点2。");
+      draw(lastPayload.chart);
+      return;
+    }
+    const p1 = pendingBiRayPts[0];
+    const p2 = pendingBiRayPts[1];
+    pendingBiRayPts = [];
+    if (Number(p2.x) === Number(p1.x)) {
+      setMsg("两个端点 x 相同，无法生成射线。");
+      return;
+    }
+    userBiRays.push({ x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y });
+    storageSet("chan_user_bi_rays", JSON.stringify(userBiRays));
+    setMsg("已生成笔射线 →");
+    draw(lastPayload.chart);
     return;
   }
 
@@ -3696,7 +3921,7 @@ function executeShortcutAction(actionId) {
       $("btnReset").click();
       return true;
     case "nextBar":
-      if ($("btnStep").disabled || pendingBspPrompt || stepInFlight) return false;
+      if ($("btnStep").disabled || stepInFlight) return false;
       $("btnStep").click();
       return true;
     case "stepForwardN":
@@ -3768,12 +3993,33 @@ function executeShortcutAction(actionId) {
       saveSystemSettingsFromForm();
       return true;
     case "confirmBspPrompt":
-      if (!pendingBspPrompt) return false;
+      // 兼容旧逻辑：买卖点提示不再阻断步进，无需确认
       clearBspPrompt();
       return true;
     case "closeSettlement":
       if (!$("settlementModal").classList.contains("show")) return false;
       $("btnSettlementClose").click();
+      return true;
+    case "setBspJudgeAuto": {
+      const prev = systemConfig.bspJudgeMode;
+      systemConfig.bspJudgeMode = "auto";
+      saveSystemConfig();
+      updateBspJudgeUI();
+      alert("买卖点判定方式切换：手动 → 自动。\n将自动补判当前尚未判定的买卖点，并记录到后台。");
+      setMsg("买卖点判定方式切换：手动 → 自动", true);
+      if (prev === "manual") checkBspJudge("switch_manual_to_auto");
+      return true;
+    }
+    case "setBspJudgeManual":
+      systemConfig.bspJudgeMode = "manual";
+      saveSystemConfig();
+      updateBspJudgeUI();
+      alert("买卖点判定方式切换：自动 → 手动。\n线段变向时将不再自动判定，需手动点击“检查买卖点”。");
+      setMsg("买卖点判定方式切换：自动 → 手动", true);
+      return true;
+    case "checkBspJudge":
+      if (!isBspJudgeManual()) return false;
+      checkBspJudge("manual_shortcut");
       return true;
     default:
       return false;
@@ -3817,11 +4063,6 @@ window.addEventListener("keydown", (e) => {
       shortcutSequenceBuffer = [];
       return;
     }
-  }
-
-  if (pendingBspPrompt && eventToShortcutKeyToken(e) === "space") {
-    e.preventDefault();
-    return;
   }
 
   if (!viewReady || !lastPayload || !lastPayload.ready || contexts[0] !== "global") return;
@@ -3912,25 +4153,25 @@ function showToast(text) {
   }, speed);
 }
 
-function showJudgeToast() {
-  // 全红弹窗 + 后台(消息历史)记录
-  setMsg("买卖点判定", true);
-  const container = $("toastContainer");
-  if (!container) return;
-  const toast = document.createElement("div");
-  toast.className = "toast";
-  toast.textContent = "买卖点判定";
-  toast.style.background = "#dc2626";
-  toast.style.color = "#ffffff";
-  toast.style.border = "1px solid #dc2626";
-  toast.style.fontSize = `${chartConfig.toast.fontSize}px`;
-  toast.style.fontWeight = chartConfig.toast.fontWeight;
-  container.appendChild(toast);
-  const speed = chartConfig.toast.speed || 3000;
-  setTimeout(() => {
-    toast.style.opacity = "0";
-    setTimeout(() => toast.remove(), 300);
-  }, speed);
+function judgeStatsText(stats) {
+  if (!stats || typeof stats !== "object") return null;
+  const appeared = Number.isFinite(stats.appeared) ? stats.appeared : null;
+  const correct = Number.isFinite(stats.correct) ? stats.correct : null;
+  const rate = typeof stats.rate === "number" ? (stats.rate * 100) : null;
+  const reason = stats.reason ? String(stats.reason) : "-";
+  const time = stats.time ? String(stats.time) : "-";
+  const interval = stats.interval && typeof stats.interval === "object" ? stats.interval : null;
+  const fromTime = interval && interval.from_time ? String(interval.from_time) : "-";
+  const toTime = interval && interval.to_time ? String(interval.to_time) : time;
+  if (appeared === null || correct === null) return null;
+  const rateStr = rate === null ? "-" : `${rate.toFixed(2)}%`;
+  return `买卖点判定结果（自上次判定以来）\n区间：${fromTime} ~ ${toTime}\n本次时间：${time}\n出现：${appeared}\n正确：${correct}\n正确率：${rateStr}\n原因：${reason}`;
+}
+
+function showJudgeNotice(payload) {
+  const text = judgeStatsText(payload && payload.judge_stats ? payload.judge_stats : null) || "买卖点判定";
+  showToast(text);
+  setMsg(text, true);
 }
 
 function showMsgHistory() {
@@ -5194,6 +5435,94 @@ function drawUserRays(s) {
   ctx.restore();
 }
 
+function xFromPx(s, px) {
+  const xSpan = Math.max(1, s.xMax - s.xMin);
+  const plotW = Math.max(1, s.plotW);
+  const clamped = Math.max(PAD_L, Math.min(s.w - PAD_R, px));
+  return s.xMin + ((clamped - PAD_L) / plotW) * xSpan;
+}
+
+function getNearestBiEndpoint(chart, s, px, py, maxDistPx = 12) {
+  if (!chart || !Array.isArray(chart.bi)) return null;
+  const list = chart.bi || [];
+  let best = null;
+  let bestD2 = maxDistPx * maxDistPx;
+  const pushCandidate = (x, y) => {
+    const cx = s.x(x);
+    const cy = s.y(y);
+    const dx = cx - px;
+    const dy = cy - py;
+    const d2 = dx * dx + dy * dy;
+    if (d2 <= bestD2) {
+      bestD2 = d2;
+      best = { x, y };
+    }
+  };
+  for (const bi of list) {
+    if (bi == null) continue;
+    if (Number.isFinite(bi.x1) && Number.isFinite(bi.y1)) pushCandidate(bi.x1, bi.y1);
+    if (Number.isFinite(bi.x2) && Number.isFinite(bi.y2)) pushCandidate(bi.x2, bi.y2);
+  }
+  return best;
+}
+
+function drawUserBiRays(s, chart) {
+  if (!userBiRays || userBiRays.length === 0) return;
+  ctx.save();
+  ctx.lineWidth = chartConfig.userRay.width;
+  ctx.strokeStyle = getCfgColor(chartConfig.userRay.color);
+  ctx.setLineDash(chartConfig.userRay.dash || [8, 4]);
+  for (const r of userBiRays) {
+    const x1 = Number(r.x1), y1 = Number(r.y1), x2 = Number(r.x2), y2 = Number(r.y2);
+    if (!Number.isFinite(x1) || !Number.isFinite(y1) || !Number.isFinite(x2) || !Number.isFinite(y2)) continue;
+    const dx = (x2 - x1);
+    if (!Number.isFinite(dx) || dx === 0) continue;
+    const slope = (y2 - y1) / dx;
+    const xEnd = s.xMax;
+    const yEnd = y1 + slope * (xEnd - x1);
+    const p1x = s.x(x1);
+    const p1y = s.y(y1);
+    const p2x = s.x(xEnd);
+    const p2y = s.y(yEnd);
+    if (p1x > s.w - PAD_R) continue;
+    ctx.beginPath();
+    ctx.moveTo(p1x, p1y);
+    ctx.lineTo(p2x, p2y);
+    ctx.stroke();
+
+    if (crosshairX !== null && crosshairY !== null) {
+      const xVal = xFromPx(s, crosshairX);
+      if (xVal >= x1) {
+        const yVal = y1 + slope * (xVal - x1);
+        const yPx = s.y(yVal);
+        if (Math.abs(yPx - crosshairY) < 8) {
+          ctx.fillStyle = "#ef4444";
+          ctx.font = `bold ${chartConfig.userRay.fontSize}px sans-serif`;
+          ctx.fillText("双击删除射线", p1x + 5, yPx - 5);
+        }
+      }
+    }
+  }
+  ctx.restore();
+}
+
+function drawPendingBiEndpointCircle(s) {
+  if (!pendingBiRayPts || pendingBiRayPts.length !== 1) return;
+  const pt = pendingBiRayPts[0];
+  if (!pt || !Number.isFinite(pt.x) || !Number.isFinite(pt.y)) return;
+  const xp = s.x(pt.x);
+  const yp = s.y(pt.y);
+  if (!Number.isFinite(xp) || !Number.isFinite(yp)) return;
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(xp, yp, 10, 0, Math.PI * 2);
+  ctx.strokeStyle = "#2563eb";
+  ctx.lineWidth = 2;
+  ctx.setLineDash([]);
+  ctx.stroke();
+  ctx.restore();
+}
+
 function drawZsRects(arr, s, color, width) {
   ctx.save();
   ctx.strokeStyle = color;
@@ -5234,6 +5563,8 @@ function draw(chart) {
   drawTradeBands(s, chart);
   drawTradeRays(s);
   drawUserRays(s);
+  drawUserBiRays(s, chart);
+  drawPendingBiEndpointCircle(s);
   drawAxes(s);
   drawIndicators(chart, s);
   drawCandles(chart, s);
@@ -5267,6 +5598,12 @@ async function api(path, body, method = "POST") {
   return data;
 }
 
+async function checkBspJudge(reason) {
+  if (!lastPayload || !lastPayload.ready) return;
+  const payload = await api("/api/judge_bsp", { reason: reason || "manual_check" });
+  refreshUI(payload, { afterStep: false });
+}
+
 function detectBspPromptOnLastBar(payload) {
   if (!payload || !payload.ready || !payload.chart || !payload.chart.kline || payload.chart.kline.length === 0) return false;
   const lastX = payload.chart.kline[payload.chart.kline.length - 1].x;
@@ -5283,7 +5620,7 @@ function detectBspPromptOnLastBar(payload) {
 
 async function stepOnce(logMessage) {
   const prevStepIdx = lastPayload && Number.isFinite(lastPayload.step_idx) ? Number(lastPayload.step_idx) : null;
-  const payload = await api("/api/step");
+  const payload = await api("/api/step", { judge_mode: systemConfig.bspJudgeMode || "auto" });
   if (logMessage) setMsg(payload.message || "步进成功");
   refreshUI(payload, { afterStep: true });
   const interrupted = detectBspPromptOnLastBar(payload);
@@ -5307,7 +5644,7 @@ function refreshUI(payload, options) {
   setState(payload);
   updateTradeStatusOverlay(payload);
   if (payload && payload.judge_notice) {
-    showJudgeToast();
+    showJudgeNotice(payload);
   }
   if (payload.ready) {
     const ks = payload.chart && payload.chart.kline ? payload.chart.kline : [];
@@ -5348,6 +5685,7 @@ function refreshUI(payload, options) {
   $("btnBuy").disabled = !payload.ready || sessionFinished || payload.price === null || payload.account.position > 0;
   $("btnSell").disabled = !payload.ready || sessionFinished || !payload.account.can_sell;
   $("configCard").classList.toggle("collapsed", payload.ready);
+  updateBspJudgeUI();
 }
 
 $("btnInit").onclick = async () => {
@@ -5412,7 +5750,7 @@ $("btnInit").onclick = async () => {
 };
 
 $("btnStep").onclick = async () => {
-  if ($("btnStep").disabled || pendingBspPrompt || stepInFlight) return;
+  if ($("btnStep").disabled || stepInFlight) return;
   stepInFlight = true;
   syncStepButtonState();
   hideGlobalLoading();
@@ -5427,7 +5765,7 @@ $("btnStep").onclick = async () => {
 };
 
 $("btnStepN").onclick = async () => {
-  if ($("btnStepN").disabled || pendingBspPrompt || stepInFlight) return;
+  if ($("btnStepN").disabled || stepInFlight) return;
   const n = getStepNValue();
   let done = 0;
   stepInFlight = true;
@@ -5687,7 +6025,7 @@ def api_reconfig(req: ReconfigReq):
 
 
 @app.post("/api/step")
-def api_step():
+def api_step(req: StepReq):
     if not APP_STATE.ready:
         raise HTTPException(status_code=400, detail="请先初始化会话")
     if APP_STATE.finished:
@@ -5695,9 +6033,26 @@ def api_step():
     try:
         ok = APP_STATE.stepper.step()
         APP_STATE.sync_bsp_history()
-        APP_STATE.after_step_update()
+        mode = (req.judge_mode or "auto").lower().strip()
+        if mode != "manual":
+            APP_STATE.after_step_update()
         payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME)
         payload["message"] = "已到最后一根K线" if not ok else "步进成功"
+        return payload
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.post("/api/judge_bsp")
+def api_judge_bsp(req: JudgeBspReq):
+    if not APP_STATE.ready:
+        raise HTTPException(status_code=400, detail="请先初始化会话")
+    if APP_STATE.finished:
+        raise HTTPException(status_code=400, detail="当前会话已结束，请重新训练")
+    try:
+        APP_STATE._judge_bsp_against_all(reason=str(req.reason or "manual_check"))
+        payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME)
+        payload["message"] = "买卖点判定完成"
         return payload
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
