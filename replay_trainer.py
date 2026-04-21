@@ -9,19 +9,24 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
+from Bi.Bi import CBi
+from BuySellPoint.BSPointList import CBSPointList
 from Chan import CChan
 from ChanConfig import CChanConfig
-from Common.CEnum import AUTYPE, DATA_SRC, FX_TYPE, KL_TYPE
+from Common.CEnum import AUTYPE, BI_DIR, DATA_SRC, FX_TYPE, KL_TYPE, KLINE_DIR, SEG_TYPE, TREND_LINE_SIDE
 from Common.ChanException import CChanException, ErrCode
 from Common.CTime import CTime
 from DataAPI.BaoStockAPI import CBaoStock
+from KLine.KLine import CKLine
+from KLine.KLine_List import cal_seg, get_seglist_instance, update_zs_in_seg
 from Math.BOLL import BollModel
+from Math.Demark import CDemarkEngine
 from Math.KDJ import KDJ
 from Math.MACD import CMACD
 from Math.RSI import RSI
-from Math.Demark import CDemarkEngine
 from Math.TrendLine import CTrendLine
-from Common.CEnum import TREND_LINE_SIDE
+from Seg.Seg import CSeg
+from ZS.ZSList import CZSList
 
 
 class ReplayChan(CChan):
@@ -49,6 +54,523 @@ class ReplayChan(CChan):
                 self.kl_datas[lv].cal_seg_and_zs()
         if len(self[0]) == 0:
             raise CChanException("最高级别没有获得任何数据", ErrCode.NO_DATA)
+
+
+CHAN_ALGO_CLASSIC = "classic"
+CHAN_ALGO_NEW = "new"
+VISIBLE_BSP_LEVELS = ("bi", "seg", "segseg")
+LEVEL_ORDER = {level: idx for idx, level in enumerate(VISIBLE_BSP_LEVELS)}
+LEVEL_LABELS = {"bi": "笔", "seg": "段", "segseg": "2段"}
+JUDGE_TRIGGER_LEVELS = {"bi": "seg", "seg": "segseg", "segseg": "segsegseg"}
+
+
+def normalize_chan_algo(raw: Any) -> str:
+    text = str(raw or CHAN_ALGO_CLASSIC).strip().lower()
+    return CHAN_ALGO_NEW if text == CHAN_ALGO_NEW else CHAN_ALGO_CLASSIC
+
+
+class SimpleLineList(list):
+    """为本文件内自定义线结构提供和 CSegListComm 兼容的最小接口。"""
+
+    def exist_sure_seg(self) -> bool:
+        return any(bool(getattr(seg, "is_sure", False)) for seg in self)
+
+
+@dataclass
+class NewKElement:
+    item: Any
+    source_index: int
+    begin_x: int
+    end_x: int
+    high: float
+    low: float
+    high_klu: Any
+    low_klu: Any
+
+
+@dataclass
+class NewKPoint:
+    fx: FX_TYPE
+    x: int
+    y: float
+    source_index: int
+    source_item: Any
+    anchor_klu: Any
+
+
+@dataclass
+class ChanStructureBundle:
+    chan_algo: str
+    bi_list: Any
+    seg_list: Any
+    segseg_list: Any
+    segsegseg_list: Any
+    zs_list: Any
+    segzs_list: Any
+    segsegzs_list: Any
+    bs_point_lst: Any
+    seg_bs_point_lst: Any
+    segseg_bs_point_lst: Any
+    trend_lines: list[dict[str, Any]]
+    fx_lines: list[dict[str, Any]]
+
+
+class CombinedNewKBar:
+    def __init__(self, element: NewKElement, _dir: KLINE_DIR) -> None:
+        self.elements: list[NewKElement] = [element]
+        self.high = float(element.high)
+        self.low = float(element.low)
+        self.dir = _dir
+        self.fx = FX_TYPE.UNKNOWN
+
+    def try_add(self, element: NewKElement) -> KLINE_DIR:
+        _dir = test_combine_range(self.high, self.low, element.high, element.low)
+        if _dir == KLINE_DIR.COMBINE:
+            self.elements.append(element)
+            if self.dir == KLINE_DIR.UP:
+                if element.high != element.low or element.high != self.high:
+                    self.high = max(self.high, float(element.high))
+                    self.low = max(self.low, float(element.low))
+            elif self.dir == KLINE_DIR.DOWN:
+                if element.high != element.low or element.low != self.low:
+                    self.high = min(self.high, float(element.high))
+                    self.low = min(self.low, float(element.low))
+        return _dir
+
+    def update_fx(self, prev_bar: "CombinedNewKBar", next_bar: "CombinedNewKBar") -> None:
+        self.fx = FX_TYPE.UNKNOWN
+        if prev_bar.high < self.high and next_bar.high < self.high and prev_bar.low < self.low and next_bar.low < self.low:
+            self.fx = FX_TYPE.TOP
+        elif prev_bar.high > self.high and next_bar.high > self.high and prev_bar.low > self.low and next_bar.low > self.low:
+            self.fx = FX_TYPE.BOTTOM
+
+    def get_peak_element(self, *, is_high: bool) -> Optional[NewKElement]:
+        target = self.high if is_high else self.low
+        for element in reversed(self.elements):
+            value = element.high if is_high else element.low
+            if abs(float(value) - float(target)) <= 1e-9:
+                return element
+        return self.elements[-1] if self.elements else None
+
+
+def test_combine_range(high_a: float, low_a: float, high_b: float, low_b: float) -> KLINE_DIR:
+    if high_a >= high_b and low_a <= low_b:
+        return KLINE_DIR.COMBINE
+    if high_a <= high_b and low_a >= low_b:
+        return KLINE_DIR.COMBINE
+    if high_a > high_b and low_a > low_b:
+        return KLINE_DIR.DOWN
+    if high_a < high_b and low_a < low_b:
+        return KLINE_DIR.UP
+    raise CChanException("combine type unknown", ErrCode.COMBINER_ERR)
+
+
+def get_line_peak_klu(item: Any, *, is_high: bool):
+    if isinstance(item, CKLine):
+        return item.get_peak_klu(is_high=is_high)
+    if isinstance(item, CBi):
+        if is_high:
+            return item.get_end_klu() if item.is_up() else item.get_begin_klu()
+        return item.get_begin_klu() if item.is_up() else item.get_end_klu()
+    if isinstance(item, CSeg):
+        if is_high:
+            return item.get_end_klu() if item.is_up() else item.get_begin_klu()
+        return item.get_begin_klu() if item.is_up() else item.get_end_klu()
+    raise TypeError(f"unsupported line item: {type(item)!r}")
+
+
+def make_new_k_element(item: Any, source_index: int) -> NewKElement:
+    if isinstance(item, CKLine):
+        return NewKElement(
+            item=item,
+            source_index=source_index,
+            begin_x=int(item.lst[0].idx),
+            end_x=int(item.lst[-1].idx),
+            high=float(item.high),
+            low=float(item.low),
+            high_klu=item.get_peak_klu(is_high=True),
+            low_klu=item.get_peak_klu(is_high=False),
+        )
+    if isinstance(item, (CBi, CSeg)):
+        return NewKElement(
+            item=item,
+            source_index=source_index,
+            begin_x=int(item.get_begin_klu().idx),
+            end_x=int(item.get_end_klu().idx),
+            high=float(item._high()),
+            low=float(item._low()),
+            high_klu=get_line_peak_klu(item, is_high=True),
+            low_klu=get_line_peak_klu(item, is_high=False),
+        )
+    raise TypeError(f"unsupported new-k element source: {type(item)!r}")
+
+
+def build_combined_newk_bars(items: list[Any]) -> list[CombinedNewKBar]:
+    elements = [make_new_k_element(item, idx) for idx, item in enumerate(items)]
+    bars: list[CombinedNewKBar] = []
+    for element in elements:
+        if not bars:
+            bars.append(CombinedNewKBar(element, KLINE_DIR.UP))
+            continue
+        _dir = bars[-1].try_add(element)
+        if _dir != KLINE_DIR.COMBINE:
+            bars.append(CombinedNewKBar(element, _dir))
+            if len(bars) >= 3:
+                bars[-2].update_fx(bars[-3], bars[-1])
+    return bars
+
+
+def normalize_alternating_points(points: list[NewKPoint]) -> list[NewKPoint]:
+    normalized: list[NewKPoint] = []
+    for point in sorted(points, key=lambda item: (item.x, item.source_index)):
+        if not normalized:
+            normalized.append(point)
+            continue
+        last = normalized[-1]
+        if point.fx == last.fx:
+            if point.fx == FX_TYPE.TOP:
+                if point.y > last.y or (abs(point.y - last.y) <= 1e-9 and point.x >= last.x):
+                    normalized[-1] = point
+            elif point.fx == FX_TYPE.BOTTOM:
+                if point.y < last.y or (abs(point.y - last.y) <= 1e-9 and point.x >= last.x):
+                    normalized[-1] = point
+            continue
+        if point.x == last.x and abs(point.y - last.y) <= 1e-9:
+            continue
+        normalized.append(point)
+    return normalized
+
+
+def extract_new_fractal_points(items: list[Any]) -> list[NewKPoint]:
+    points: list[NewKPoint] = []
+    for bar in build_combined_newk_bars(items):
+        if bar.fx == FX_TYPE.TOP:
+            element = bar.get_peak_element(is_high=True)
+            if element is None:
+                continue
+            points.append(
+                NewKPoint(
+                    fx=FX_TYPE.TOP,
+                    x=int(element.high_klu.idx),
+                    y=float(element.high_klu.high),
+                    source_index=element.source_index,
+                    source_item=element.item,
+                    anchor_klu=element.high_klu,
+                )
+            )
+        elif bar.fx == FX_TYPE.BOTTOM:
+            element = bar.get_peak_element(is_high=False)
+            if element is None:
+                continue
+            points.append(
+                NewKPoint(
+                    fx=FX_TYPE.BOTTOM,
+                    x=int(element.low_klu.idx),
+                    y=float(element.low_klu.low),
+                    source_index=element.source_index,
+                    source_item=element.item,
+                    anchor_klu=element.low_klu,
+                )
+            )
+    return normalize_alternating_points(points)
+
+
+def link_line_chain(lines: list[Any]) -> None:
+    prev = None
+    for idx, line in enumerate(lines):
+        if isinstance(line, CSeg):
+            line.idx = idx
+        line.pre = prev
+        line.next = None
+        if prev is not None:
+            prev.next = line
+        prev = line
+
+
+def assign_line_seg_idx(source_lines: list[Any], seg_lines: list[Any]) -> None:
+    if len(seg_lines) == 0:
+        for line in source_lines:
+            line.set_seg_idx(0)
+        return
+    cur_seg = seg_lines[-1]
+    line_idx = len(source_lines) - 1
+    while line_idx >= 0:
+        line = source_lines[line_idx]
+        if line.idx > cur_seg.end_bi.idx:
+            line.set_seg_idx(cur_seg.idx + 1)
+            line_idx -= 1
+            continue
+        while line.idx < cur_seg.start_bi.idx and getattr(cur_seg, "pre", None) is not None:
+            cur_seg = cur_seg.pre
+        line.set_seg_idx(cur_seg.idx)
+        line_idx -= 1
+
+
+def resolve_boundary_line(source_lines: list[Any], point: NewKPoint, target_dir: BI_DIR):
+    cur = source_lines[point.source_index]
+    if cur.dir == target_dir:
+        return cur
+    if target_dir == BI_DIR.UP:
+        candidate_idx = point.source_index + 1 if point.fx == FX_TYPE.BOTTOM else point.source_index - 1
+    else:
+        candidate_idx = point.source_index + 1 if point.fx == FX_TYPE.TOP else point.source_index - 1
+    if 0 <= candidate_idx < len(source_lines):
+        candidate = source_lines[candidate_idx]
+        if candidate.dir == target_dir:
+            return candidate
+    return cur
+
+
+def build_new_bi_list(kl_list) -> list[CBi]:
+    source_klc = [klc for klc in kl_list.lst if klc.fx in (FX_TYPE.TOP, FX_TYPE.BOTTOM)]
+    points = extract_new_fractal_points(source_klc)
+    bi_list: list[CBi] = []
+    for start_point, end_point in zip(points, points[1:]):
+        if start_point.fx == end_point.fx:
+            continue
+        begin_klc = start_point.source_item
+        end_klc = end_point.source_item
+        if begin_klc.idx >= end_klc.idx:
+            continue
+        try:
+            bi_list.append(CBi(begin_klc, end_klc, idx=len(bi_list), is_sure=True))
+        except Exception:
+            continue
+    link_line_chain(bi_list)
+    return bi_list
+
+
+def build_new_seg_list(source_lines: list[Any], reason_tag: str) -> SimpleLineList:
+    points = extract_new_fractal_points(source_lines)
+    seg_lines = SimpleLineList()
+    for start_point, end_point in zip(points, points[1:]):
+        if start_point.fx == end_point.fx:
+            continue
+        target_dir = BI_DIR.UP if start_point.fx == FX_TYPE.BOTTOM else BI_DIR.DOWN
+        start_line = resolve_boundary_line(source_lines, start_point, target_dir)
+        end_line = resolve_boundary_line(source_lines, end_point, target_dir)
+        if start_line is None or end_line is None:
+            continue
+        if start_line.idx >= end_line.idx:
+            continue
+        if start_line.dir != target_dir or end_line.dir != target_dir:
+            continue
+        try:
+            seg_lines.append(CSeg(len(seg_lines), start_line, end_line, is_sure=True, seg_dir=target_dir, reason=reason_tag))
+        except Exception:
+            continue
+    link_line_chain(seg_lines)
+    for seg in seg_lines:
+        seg.update_bi_list(source_lines, seg.start_bi.idx, seg.end_bi.idx)
+    assign_line_seg_idx(source_lines, seg_lines)
+    return seg_lines
+
+
+def build_trend_lines_from_bi_list(bi_list: list[Any]) -> list[dict[str, Any]]:
+    trend_lines: list[dict[str, Any]] = []
+    if len(bi_list) < 3:
+        return trend_lines
+    try:
+        tl_outside = CTrendLine(bi_list, side=TREND_LINE_SIDE.OUTSIDE)
+        if tl_outside.line:
+            trend_lines.append(
+                {
+                    "type": "OUTSIDE",
+                    "x0": tl_outside.line.p.x,
+                    "y0": tl_outside.line.p.y,
+                    "slope": tl_outside.line.slope,
+                }
+            )
+        tl_inside = CTrendLine(bi_list, side=TREND_LINE_SIDE.INSIDE)
+        if tl_inside.line:
+            trend_lines.append(
+                {
+                    "type": "INSIDE",
+                    "x0": tl_inside.line.p.x,
+                    "y0": tl_inside.line.p.y,
+                    "slope": tl_inside.line.slope,
+                }
+            )
+    except Exception:
+        return []
+    return trend_lines
+
+
+def build_fx_lines(kl_list) -> list[dict[str, Any]]:
+    fx_points = []
+    for klc in kl_list.lst:
+        if klc.fx == FX_TYPE.TOP:
+            peak = max(klc.lst, key=lambda item: item.high)
+            fx_points.append({"type": "TOP", "x": int(peak.idx), "y": float(peak.high)})
+        elif klc.fx == FX_TYPE.BOTTOM:
+            trough = min(klc.lst, key=lambda item: item.low)
+            fx_points.append({"type": "BOTTOM", "x": int(trough.idx), "y": float(trough.low)})
+    fx_lines: list[dict[str, Any]] = []
+    last = None
+    for point in fx_points:
+        if last is not None and point["type"] != last["type"]:
+            fx_lines.append({"x1": last["x"], "y1": last["y"], "x2": point["x"], "y2": point["y"]})
+        last = point
+    return fx_lines
+
+
+def build_level_zs(base_lines: Any, upper_lines: Any, zs_conf) -> CZSList:
+    zs_list = CZSList(zs_config=zs_conf)
+    try:
+        zs_list.cal_bi_zs(base_lines, upper_lines)
+        update_zs_in_seg(base_lines, upper_lines, zs_list)
+    except Exception:
+        return CZSList(zs_config=zs_conf)
+    return zs_list
+
+
+def build_level_bsp(base_lines: Any, upper_lines: Any, bsp_conf) -> CBSPointList:
+    bsp_list = CBSPointList(bs_point_config=bsp_conf)
+    try:
+        bsp_list.cal(base_lines, upper_lines)
+    except Exception:
+        return CBSPointList(bs_point_config=bsp_conf)
+    return bsp_list
+
+
+def build_hidden_seg_layer(source_lines: Any, conf: CChanConfig):
+    hidden_seg_list = get_seglist_instance(seg_config=conf.seg_conf, lv=SEG_TYPE.SEG)
+    try:
+        cal_seg(source_lines, hidden_seg_list, -1)
+    except Exception:
+        return hidden_seg_list
+    return hidden_seg_list
+
+
+def build_classic_bundle(chan: CChan) -> ChanStructureBundle:
+    kl_list = chan[0]
+    conf = chan.conf
+    segsegseg_list = build_hidden_seg_layer(kl_list.segseg_list, conf)
+    segsegzs_list = build_level_zs(kl_list.segseg_list, segsegseg_list, conf.zs_conf)
+    segseg_bs_point_lst = build_level_bsp(kl_list.segseg_list, segsegseg_list, conf.seg_bs_point_conf)
+    return ChanStructureBundle(
+        chan_algo=CHAN_ALGO_CLASSIC,
+        bi_list=kl_list.bi_list,
+        seg_list=kl_list.seg_list,
+        segseg_list=kl_list.segseg_list,
+        segsegseg_list=segsegseg_list,
+        zs_list=kl_list.zs_list,
+        segzs_list=kl_list.segzs_list,
+        segsegzs_list=segsegzs_list,
+        bs_point_lst=kl_list.bs_point_lst,
+        seg_bs_point_lst=kl_list.seg_bs_point_lst,
+        segseg_bs_point_lst=segseg_bs_point_lst,
+        trend_lines=build_trend_lines_from_bi_list(list(kl_list.bi_list)),
+        fx_lines=build_fx_lines(kl_list),
+    )
+
+
+def build_new_bundle(chan: CChan) -> ChanStructureBundle:
+    kl_list = chan[0]
+    conf = chan.conf
+    # 新缠论：分型端点 -> 新K线 -> 新笔 -> 新段 -> 新2段；这里只复用包含处理/中枢/BSP引擎，不走原工程特征序列线段逻辑。
+    bi_list = build_new_bi_list(kl_list)
+    seg_list = build_new_seg_list(bi_list, "new_chan_seg")
+    segseg_list = build_new_seg_list(seg_list, "new_chan_segseg")
+    segsegseg_list = build_hidden_seg_layer(segseg_list, conf)
+    zs_list = build_level_zs(bi_list, seg_list, conf.zs_conf)
+    segzs_list = build_level_zs(seg_list, segseg_list, conf.zs_conf)
+    segsegzs_list = build_level_zs(segseg_list, segsegseg_list, conf.zs_conf)
+    bs_point_lst = build_level_bsp(bi_list, seg_list, conf.bs_point_conf)
+    seg_bs_point_lst = build_level_bsp(seg_list, segseg_list, conf.seg_bs_point_conf)
+    segseg_bs_point_lst = build_level_bsp(segseg_list, segsegseg_list, conf.seg_bs_point_conf)
+    return ChanStructureBundle(
+        chan_algo=CHAN_ALGO_NEW,
+        bi_list=bi_list,
+        seg_list=seg_list,
+        segseg_list=segseg_list,
+        segsegseg_list=segsegseg_list,
+        zs_list=zs_list,
+        segzs_list=segzs_list,
+        segsegzs_list=segsegzs_list,
+        bs_point_lst=bs_point_lst,
+        seg_bs_point_lst=seg_bs_point_lst,
+        segseg_bs_point_lst=segseg_bs_point_lst,
+        trend_lines=build_trend_lines_from_bi_list(bi_list),
+        fx_lines=build_fx_lines(kl_list),
+    )
+
+
+def build_structure_bundle(chan: CChan, chan_algo: str) -> ChanStructureBundle:
+    algo = normalize_chan_algo(chan_algo)
+    return build_new_bundle(chan) if algo == CHAN_ALGO_NEW else build_classic_bundle(chan)
+
+
+def get_bundle_line_list(bundle: ChanStructureBundle, level: str):
+    mapping = {
+        "bi": bundle.bi_list,
+        "seg": bundle.seg_list,
+        "segseg": bundle.segseg_list,
+        "segsegseg": bundle.segsegseg_list,
+    }
+    return mapping[level]
+
+
+def get_bundle_bsp_list(bundle: ChanStructureBundle, level: str):
+    mapping = {
+        "bi": bundle.bs_point_lst,
+        "seg": bundle.seg_bs_point_lst,
+        "segseg": bundle.segseg_bs_point_lst,
+    }
+    return mapping[level]
+
+
+def level_label(level: str) -> str:
+    return LEVEL_LABELS.get(level, level)
+
+
+def make_bsp_item(level: str, bsp) -> dict[str, Any]:
+    label = bsp.type2str()
+    display_label = f"{level_label(level)}{label}"
+    return {
+        "x": int(bsp.klu.idx),
+        "y": float(bsp.klu.low if bsp.is_buy else bsp.klu.high),
+        "is_buy": bool(bsp.is_buy),
+        "label": label,
+        "level": level,
+        "level_label": level_label(level),
+        "display_label": display_label,
+    }
+
+
+def serialize_line_collection(lines: Any) -> list[dict[str, Any]]:
+    arr = []
+    for line in lines:
+        arr.append(
+            {
+                "x1": int(line.get_begin_klu().idx),
+                "y1": float(line.get_begin_val()),
+                "x2": int(line.get_end_klu().idx),
+                "y2": float(line.get_end_val()),
+                "is_sure": bool(line.is_sure),
+            }
+        )
+    return arr
+
+
+def serialize_zs_collection(zs_list: Any) -> list[dict[str, Any]]:
+    arr = []
+    for zs in zs_list:
+        arr.append(
+            {
+                "x1": int(zs.begin.idx),
+                "x2": int(zs.end.idx),
+                "low": float(zs.low),
+                "high": float(zs.high),
+                "is_sure": bool(zs.is_sure),
+                "is_one_bi_zs": bool(zs.is_one_bi_zs()),
+            }
+        )
+    return arr
+
+
+def serialize_bsp_collection(level: str, bsp_list: Any) -> list[dict[str, Any]]:
+    return [make_bsp_item(level, bsp) for bsp in bsp_list.bsp_iter()]
 
 
 def normalize_code(raw: str) -> str:
@@ -136,6 +658,7 @@ class ChanStepper:
         self._iter = None
         self.step_idx = -1
         self.code = ""
+        self.chan_algo = CHAN_ALGO_CLASSIC
         self.effective_cfg_dict: dict[str, Any] = {}
         # Full history K-lines (used by chip distribution).
         self.kline_all: list[dict[str, Any]] = []
@@ -151,9 +674,28 @@ class ChanStepper:
         # 会话级行情缓存：同一股票代码与日期区间下只拉取一次，缠论/BSP 配置变更时仅重算结构。
         self._data_session_key: Optional[tuple[Any, ...]] = None
         self._replay_klus_master: Optional[list] = None
+        self.structure_bundle: Optional[ChanStructureBundle] = None
+        self._bundle_cache_step_idx: Optional[int] = None
+
+    def _cfg_without_chan_algo(self, cfg_dict: dict[str, Any]) -> dict[str, Any]:
+        return {k: v for k, v in cfg_dict.items() if k != "chan_algo"}
+
+    def get_structure_bundle(self, *, force: bool = False, chan: Optional[CChan] = None) -> ChanStructureBundle:
+        target_chan = chan or self.chan
+        if target_chan is None:
+            raise ValueError("会话未初始化")
+        if chan is None and not force and self.structure_bundle is not None and self._bundle_cache_step_idx == self.step_idx:
+            return self.structure_bundle
+        bundle = build_structure_bundle(target_chan, self.chan_algo)
+        if chan is None:
+            self.structure_bundle = bundle
+            self._bundle_cache_step_idx = self.step_idx
+            self.trend_lines = list(bundle.trend_lines)
+        return bundle
 
     def init(self, code: str, begin_date: str, end_date: Optional[str], autype: AUTYPE, chan_config: Optional[dict[str, Any]] = None) -> None:
         cfg_dict = {
+            "chan_algo": CHAN_ALGO_CLASSIC,
             "bi_strict": True,
             "bi_algo": "normal",
             "bi_fx_check": "strict",
@@ -210,21 +752,21 @@ class ChanStepper:
                                 except (ValueError, TypeError):
                                     pass
                         cfg_dict["macd"] = macd_dict
-                    elif k == "chan_algo":
-                      pass
                     else:
-                      cfg_dict[k] = v
+                        cfg_dict[k] = v
 
-
+        self.chan_algo = normalize_chan_algo(cfg_dict.get("chan_algo"))
+        cfg_dict["chan_algo"] = self.chan_algo
         self.effective_cfg_dict = cfg_dict.copy()
-        cfg = CChanConfig(cfg_dict)
+        chan_cfg_dict = self._cfg_without_chan_algo(cfg_dict)
+        cfg = CChanConfig(chan_cfg_dict)
         self.code = normalize_code(code)
         session_key = (self.code, begin_date, end_date, autype)
         cache_hit = session_key == self._data_session_key and self._replay_klus_master is not None
 
         if not cache_hit:
             # 一次性拉取复盘区间内的完整日线，供后续任意缠论配置重放（避免 reconfig/back_n 重复请求）。
-            cfg_fetch = CChanConfig({**cfg_dict, "trigger_step": False})
+            cfg_fetch = CChanConfig({**chan_cfg_dict, "trigger_step": False})
             fetch_chan = CChan(
                 code=self.code,
                 begin_time=begin_date,
@@ -237,7 +779,7 @@ class ChanStepper:
             self._replay_klus_master = copy.deepcopy(list(fetch_chan[0].klu_iter()))
             self._data_session_key = session_key
 
-            cfg_all_dict = cfg_dict.copy()
+            cfg_all_dict = chan_cfg_dict.copy()
             cfg_all_dict["trigger_step"] = False  # Always False for chip calculation
             cfg_all = CChanConfig(cfg_all_dict)
             chip_begin_date = "1990-01-01"
@@ -273,6 +815,8 @@ class ChanStepper:
         }
         self.indicator_history = []
         self.trend_lines = []
+        self.structure_bundle = None
+        self._bundle_cache_step_idx = None
 
     def step(self) -> bool:
         if self._iter is None:
@@ -280,6 +824,8 @@ class ChanStepper:
         try:
             next(self._iter)
             self.step_idx += 1
+            self.structure_bundle = None
+            self._bundle_cache_step_idx = None
             # Update indicators
             kl_list = self.chan[0]
             latest_klu = kl_list.lst[-1].lst[-1]
@@ -310,28 +856,8 @@ class ChanStepper:
                 "demark": demark_pts
             })
             
-            # Update TrendLines if we have enough Bi
-            self.trend_lines = []
-            if len(kl_list.bi_list) >= 3:
-                try:
-                    tl_outside = CTrendLine(kl_list.bi_list, side=TREND_LINE_SIDE.OUTSIDE)
-                    if tl_outside.line:
-                        self.trend_lines.append({
-                            "type": "OUTSIDE",
-                            "x0": tl_outside.line.p.x,
-                            "y0": tl_outside.line.p.y,
-                            "slope": tl_outside.line.slope
-                        })
-                    tl_inside = CTrendLine(kl_list.bi_list, side=TREND_LINE_SIDE.INSIDE)
-                    if tl_inside.line:
-                        self.trend_lines.append({
-                            "type": "INSIDE",
-                            "x0": tl_inside.line.p.x,
-                            "y0": tl_inside.line.p.y,
-                            "slope": tl_inside.line.slope
-                        })
-                except Exception:
-                    pass
+            # 新缠论/原缠论统一从 bundle 获取趋势线，避免前端与当前笔级别脱节。
+            self.get_structure_bundle(force=True)
             return True
         except StopIteration:
             return False
@@ -389,8 +915,8 @@ class AppState:
         self.bsp_history: list[dict[str, Any]] = []
         # trigger_step==False 全量预计算的买卖点（基于当前缠论配置）
         self.bsp_all_snapshot: list[dict[str, Any]] = []
-        # 用于检测线段变向（不区分确定/不确定线段）
-        self._last_seg_dir: Optional[str] = None
+        # 用于检测各级别变向（不区分确定/不确定）
+        self._last_level_dirs: dict[str, Optional[str]] = {level: None for level in set(JUDGE_TRIGGER_LEVELS.values())}
         # 判定步骤后台记录
         self.bsp_judge_logs: list[dict[str, Any]] = []
         # 本次 payload 是否需要弹窗提醒
@@ -401,16 +927,23 @@ class AppState:
         self._last_judge_x: Optional[int] = None
         self._last_judge_time: Optional[str] = None
 
-    def _current_seg_dir(self) -> Optional[str]:
+    def _reset_judge_state(self) -> None:
+        self._judge_notice = False
+        self._last_judge_stats = None
+        self._last_judge_x = None
+        self._last_judge_time = None
+
+    def _current_level_dir(self, level: str) -> Optional[str]:
         if self.stepper.chan is None:
             return None
-        kl_list = self.stepper.chan[0]
-        if not getattr(kl_list, "seg_list", None):
+        bundle = self.stepper.get_structure_bundle()
+        lines = get_bundle_line_list(bundle, level)
+        if not lines:
             return None
-        seg = kl_list.seg_list[-1]
+        line = lines[-1]
         try:
-            y1 = float(seg.start_bi.get_begin_val())
-            y2 = float(seg.end_bi.get_end_val())
+            y1 = float(line.get_begin_val())
+            y2 = float(line.get_end_val())
         except Exception:
             return None
         if y2 > y1:
@@ -422,17 +955,14 @@ class AppState:
     def rebuild_bsp_all_snapshot(self) -> None:
         """使用 trigger_step==False 一次性计算全量买卖点快照。"""
         self.bsp_all_snapshot = []
-        self._judge_notice = False
-        self._last_judge_stats = None
-        self._last_judge_x = None
-        self._last_judge_time = None
+        self._reset_judge_state()
         if self.session_params is None:
             return
         if self.stepper._replay_klus_master is None:
             return
         cfg_dict = (self.stepper.effective_cfg_dict or {}).copy()
         cfg_dict["trigger_step"] = False
-        cfg = CChanConfig(cfg_dict)
+        cfg = CChanConfig(self.stepper._cfg_without_chan_algo(cfg_dict))
         chan_all = ReplayChan(
             code=self.stepper.code,
             begin_time=self.session_params["begin_date"],
@@ -446,46 +976,68 @@ class AppState:
         # 强制全量加载一次，生成笔/线段/中枢/买卖点
         for _ in chan_all.load(step=False):
             pass
-        kl_list = chan_all[0]
-        for bsp in kl_list.bs_point_lst.bsp_iter():
-            item = {
-                "x": int(bsp.klu.idx),
-                "is_buy": bool(bsp.is_buy),
-                "label": bsp.type2str(),
-            }
-            item["key"] = self._bsp_key(item)
-            self.bsp_all_snapshot.append(item)
+        bundle = build_structure_bundle(chan_all, self.stepper.chan_algo)
+        snapshot: list[dict[str, Any]] = []
+        for level in VISIBLE_BSP_LEVELS:
+            bsp_list = get_bundle_bsp_list(bundle, level)
+            for bsp in bsp_list.bsp_iter():
+                item = make_bsp_item(level, bsp)
+                item["key"] = self._bsp_key(item)
+                snapshot.append(item)
+        self.bsp_all_snapshot = sorted(
+            snapshot,
+            key=lambda item: (int(item.get("x", -1)), LEVEL_ORDER.get(str(item.get("level")), 999), int(not bool(item.get("is_buy")))),
+        )
 
-    def _judge_bsp_against_all(self, *, reason: str) -> None:
+    def _judge_bsp_against_all(self, *, reason: str, levels: Optional[list[str]] = None) -> None:
         """在当前步进位置，对照（全量预计算）与（步进触发快照）进行 ×/✓ 判定。"""
         current_x = self._current_kline_x()
         if current_x is None:
             return
         if not self.bsp_all_snapshot:
             return
+        active_levels = [level for level in (levels or list(VISIBLE_BSP_LEVELS)) if level in VISIBLE_BSP_LEVELS]
+        if not active_levels:
+            return
         all_keys_upto = {str(it.get("key")) for it in self.bsp_all_snapshot if int(it.get("x", -1)) <= current_x}
-        # 只判定“已步进到的K线范围内”的历史买卖点，不影响未来K线
-        pending_items: list[dict[str, Any]] = []
-        correct = 0
-        wrong = 0
-        for item in self.bsp_history:
-            x = int(item.get("x", -1))
-            if x < 0 or x > current_x:
-                continue
-            if item.get("status") is not None:
-                continue
-            pending_items.append(item)
+        details: list[dict[str, Any]] = []
+        summary = {"appeared": 0, "judged": 0, "correct": 0, "wrong": 0}
+        for level in active_levels:
+            pending_items: list[dict[str, Any]] = []
+            correct = 0
+            wrong = 0
+            for item in self.bsp_history:
+                x = int(item.get("x", -1))
+                if str(item.get("level")) != level or x < 0 or x > current_x:
+                    continue
+                if item.get("status") is not None:
+                    continue
+                pending_items.append(item)
+            for item in pending_items:
+                if str(item.get("key")) in all_keys_upto:
+                    item["status"] = "correct"
+                    correct += 1
+                else:
+                    item["status"] = "wrong"
+                    wrong += 1
+            judged = len(pending_items)
+            summary["appeared"] += judged
+            summary["judged"] += judged
+            summary["correct"] += correct
+            summary["wrong"] += wrong
+            details.append(
+                {
+                    "level": level,
+                    "level_label": level_label(level),
+                    "appeared": judged,
+                    "judged": judged,
+                    "correct": correct,
+                    "wrong": wrong,
+                    "rate": (correct / judged) if judged > 0 else None,
+                }
+            )
 
-        judged = len(pending_items)
-        for item in pending_items:
-            if str(item.get("key")) in all_keys_upto:
-                item["status"] = "correct"
-                correct += 1
-            else:
-                item["status"] = "wrong"
-                wrong += 1
-
-        rate = (correct / judged) if judged > 0 else None
+        rate = (summary["correct"] / summary["judged"]) if summary["judged"] > 0 else None
         cur_time = self.stepper.current_time() if self.stepper.chan is not None else "-"
         interval = {
             "from_x": self._last_judge_x,
@@ -498,17 +1050,19 @@ class AppState:
             "x": int(current_x),
             "time": cur_time,
             "reason": reason,
-            "appeared": judged,
-            "judged": judged,
-            "correct": correct,
-            "wrong": wrong,
+            "appeared": summary["appeared"],
+            "judged": summary["judged"],
+            "correct": summary["correct"],
+            "wrong": summary["wrong"],
             "rate": rate,
             "interval": interval,
+            "summary": {**summary, "rate": rate},
+            "details": details,
         }
         # 自动模式（线段变向）仅在确实发生判定时提示；手动检查则始终提示
         reason_s = str(reason or "")
         is_manual = "manual" in reason_s.lower()
-        should_notice = judged > 0 or is_manual
+        should_notice = summary["judged"] > 0 or is_manual
         self._judge_notice = bool(should_notice)
         self._last_judge_stats = stats if should_notice else None
         self.bsp_judge_logs.append(stats)
@@ -517,21 +1071,26 @@ class AppState:
         self._last_judge_time = cur_time
 
     def after_step_update(self) -> None:
-        """每次步进后调用：检测线段变向并触发判定。"""
+        """每次步进后调用：检测上一级结构变向并触发三层买卖点判定。"""
         self._judge_notice = False
         self._last_judge_stats = None
-        cur_dir = self._current_seg_dir()
-        if self._last_seg_dir is None:
-            self._last_seg_dir = cur_dir
-            return
-        if cur_dir is None:
-            return
-        if cur_dir != self._last_seg_dir:
-            # 线段改变方向（上升↔下降），不区分线段是否确认
-            self._judge_bsp_against_all(reason=f"seg_turn:{self._last_seg_dir}->{cur_dir}")
-            self._last_seg_dir = cur_dir
-            return
-        self._last_seg_dir = cur_dir
+        triggered_levels: list[str] = []
+        reason_parts: list[str] = []
+        for level in VISIBLE_BSP_LEVELS:
+            trigger_level = JUDGE_TRIGGER_LEVELS[level]
+            cur_dir = self._current_level_dir(trigger_level)
+            last_dir = self._last_level_dirs.get(trigger_level)
+            if last_dir is None:
+                self._last_level_dirs[trigger_level] = cur_dir
+                continue
+            if cur_dir is None:
+                continue
+            if cur_dir != last_dir:
+                triggered_levels.append(level)
+                reason_parts.append(f"{level_label(level)}:{trigger_level}:{last_dir}->{cur_dir}")
+            self._last_level_dirs[trigger_level] = cur_dir
+        if triggered_levels:
+            self._judge_bsp_against_all(reason="; ".join(reason_parts), levels=triggered_levels)
 
     def _current_kline_x(self) -> Optional[int]:
         if self.stepper.chan is None:
@@ -569,26 +1128,22 @@ class AppState:
     def _current_bsp_snapshot(self) -> list[dict[str, Any]]:
         if self.stepper.chan is None:
             return []
-        kl_list = self.stepper.chan[0]
+        bundle = self.stepper.get_structure_bundle()
         snapshot: list[dict[str, Any]] = []
-        for bsp in kl_list.bs_point_lst.bsp_iter():
-            snapshot.append(
-                {
-                    "x": int(bsp.klu.idx),
-                    "is_buy": bool(bsp.is_buy),
-                    "label": bsp.type2str(),
-                }
-            )
-        return snapshot
+        for level in VISIBLE_BSP_LEVELS:
+            bsp_list = get_bundle_bsp_list(bundle, level)
+            for bsp in bsp_list.bsp_iter():
+                snapshot.append(make_bsp_item(level, bsp))
+        return sorted(snapshot, key=lambda item: (int(item["x"]), LEVEL_ORDER.get(item["level"], 999), int(not bool(item["is_buy"]))))
 
     @staticmethod
     def _bsp_key(item: dict[str, Any]) -> str:
-        return f'{int(item["x"])}|{item["label"]}|{1 if item["is_buy"] else 0}'
+        return f'{item["level"]}|{int(item["x"])}|{item["label"]}|{1 if item["is_buy"] else 0}'
 
     def sync_bsp_history(self) -> None:
         """同步当前步进下的买卖点历史。
 
-        注意：×/✓ 判定不在这里做，而是在“线段变向”时对照（trigger_step==False 全量预计算）进行。
+        注意：×/✓ 判定不在这里做，而是在“上一级结构变向”时对照全量快照进行。
         """
         current_x = self._current_kline_x()
         if current_x is None:
@@ -610,6 +1165,9 @@ class AppState:
                     "x": int(item["x"]),
                     "is_buy": bool(item["is_buy"]),
                     "label": item["label"],
+                    "level": item["level"],
+                    "level_label": item["level_label"],
+                    "display_label": item["display_label"],
                     "status": None,
                 }
             )
@@ -632,19 +1190,19 @@ class AppState:
         self.ready = True
         self.finished = False
         self.bsp_history = []
-        self._last_seg_dir = None
-        self._judge_notice = False
-        self._last_judge_stats = None
-        self._last_judge_x = None
-        self._last_judge_time = None
+        self._last_level_dirs = {level: None for level in set(JUDGE_TRIGGER_LEVELS.values())}
+        self._reset_judge_state()
+        self.rebuild_bsp_all_snapshot()
 
         if not self.stepper.step():
             return
         self.sync_bsp_history()
+        self.after_step_update()
         for _ in range(target_step):
             if not self.stepper.step():
                 break
             self.sync_bsp_history()
+            self.after_step_update()
 
         effective_step = max(0, self.stepper.step_idx)
         self.trade_events = [e for e in self.trade_events if int(e.get("step_idx", -1)) <= effective_step]
@@ -684,10 +1242,13 @@ class AppState:
                 "finished": self.finished,
                 "message": "请先加载会话",
             }
+        bundle = self.stepper.get_structure_bundle()
         chart = serialize_chan(
             self.stepper.chan,
             self.stepper.indicator_history,
             self.stepper.trend_lines,
+            chan_algo=self.stepper.chan_algo,
+            bundle=bundle,
             kline_all=self.stepper.kline_all,
         )
         price: Optional[float] = None
@@ -698,6 +1259,7 @@ class AppState:
             "finished": self.finished,
             "code": self.stepper.code,
             "name": stock_name,
+            "chan_algo": self.stepper.chan_algo,
             "step_idx": self.stepper.step_idx,
             "time": self.stepper.current_time(),
             "price": price,
@@ -735,102 +1297,47 @@ def serialize_klu_iter(klu_iter) -> list[dict[str, Any]]:
 
 
 def serialize_chan(
-    chan: CChan, indicator_history: list, trend_lines: list, *, kline_all: Optional[list[dict[str, Any]]] = None
+    chan: CChan,
+    indicator_history: list,
+    trend_lines: list,
+    *,
+    chan_algo: str = CHAN_ALGO_CLASSIC,
+    bundle: Optional[ChanStructureBundle] = None,
+    kline_all: Optional[list[dict[str, Any]]] = None,
 ) -> dict[str, Any]:
     kl_list = chan[0]
     klu_arr = serialize_klu_iter(kl_list.klu_iter())
-    
-    # BOLL, MACD, KDJ, RSI data from indicator_history
-    # We only need to return the indicators for the current visible k-lines (or all of them for now)
-    
-    bi_arr = []
-    for bi in kl_list.bi_list:
-        bi_arr.append(
-            {
-                "x1": bi.get_begin_klu().idx,
-                "y1": float(bi.get_begin_val()),
-                "x2": bi.get_end_klu().idx,
-                "y2": float(bi.get_end_val()),
-                "is_sure": bool(bi.is_sure),
-            }
-        )
-
-    seg_arr = []
-    for seg in kl_list.seg_list:
-        seg_arr.append(
-            {
-                "x1": seg.start_bi.get_begin_klu().idx,
-                "y1": float(seg.start_bi.get_begin_val()),
-                "x2": seg.end_bi.get_end_klu().idx,
-                "y2": float(seg.end_bi.get_end_val()),
-                "is_sure": bool(seg.is_sure),
-            }
-        )
-
-    bi_zs_arr = []
-    for zs in kl_list.zs_list:
-        bi_zs_arr.append(
-            {
-                "x1": zs.begin.idx,
-                "x2": zs.end.idx,
-                "low": float(zs.low),
-                "high": float(zs.high),
-                "is_sure": bool(zs.is_sure),
-                "is_one_bi_zs": bool(zs.is_one_bi_zs()),
-            }
-        )
-
-    seg_zs_arr = []
-    for zs in kl_list.segzs_list:
-        seg_zs_arr.append(
-            {
-                "x1": zs.begin.idx,
-                "x2": zs.end.idx,
-                "low": float(zs.low),
-                "high": float(zs.high),
-                "is_sure": bool(zs.is_sure),
-                "is_one_bi_zs": bool(zs.is_one_bi_zs()),
-            }
-        )
-
-    bsp_arr = []
-    for bsp in kl_list.bs_point_lst.bsp_iter():
-        bsp_arr.append(
-            {
-                "x": bsp.klu.idx,
-                "y": float(bsp.klu.low if bsp.is_buy else bsp.klu.high),
-                "is_buy": bool(bsp.is_buy),
-                "label": bsp.type2str(),
-            }
-        )
-
-    fx_points = []
-    for klc in kl_list.lst:
-        if klc.fx == FX_TYPE.TOP:
-            peak = max(klc.lst, key=lambda item: item.high)
-            fx_points.append({"type": "TOP", "x": peak.idx, "y": float(peak.high)})
-        elif klc.fx == FX_TYPE.BOTTOM:
-            trough = min(klc.lst, key=lambda item: item.low)
-            fx_points.append({"type": "BOTTOM", "x": trough.idx, "y": float(trough.low)})
-
-    fx_lines = []
-    last = None
-    for pt in fx_points:
-        if last is not None and pt["type"] != last["type"]:
-            fx_lines.append({"x1": last["x"], "y1": last["y"], "x2": pt["x"], "y2": pt["y"]})
-        last = pt
+    active_bundle = bundle or build_structure_bundle(chan, chan_algo)
+    bi_arr = serialize_line_collection(active_bundle.bi_list)
+    seg_arr = serialize_line_collection(active_bundle.seg_list)
+    segseg_arr = serialize_line_collection(active_bundle.segseg_list)
+    bi_zs_arr = serialize_zs_collection(active_bundle.zs_list)
+    seg_zs_arr = serialize_zs_collection(active_bundle.segzs_list)
+    segseg_zs_arr = serialize_zs_collection(active_bundle.segsegzs_list)
+    bsp_bi_arr = serialize_bsp_collection("bi", active_bundle.bs_point_lst)
+    bsp_seg_arr = serialize_bsp_collection("seg", active_bundle.seg_bs_point_lst)
+    bsp_segseg_arr = serialize_bsp_collection("segseg", active_bundle.segseg_bs_point_lst)
+    bsp_arr = sorted(
+        [*bsp_bi_arr, *bsp_seg_arr, *bsp_segseg_arr],
+        key=lambda item: (int(item["x"]), LEVEL_ORDER.get(str(item["level"]), 999), int(not bool(item["is_buy"]))),
+    )
 
     return {
         "kline": klu_arr,
         "kline_all": kline_all or [],
         "bi": bi_arr,
         "seg": seg_arr,
+        "segseg": segseg_arr,
         "bi_zs": bi_zs_arr,
         "seg_zs": seg_zs_arr,
+        "segseg_zs": segseg_zs_arr,
         "bsp": bsp_arr,
-        "fx_lines": fx_lines,
+        "bsp_bi": bsp_bi_arr,
+        "bsp_seg": bsp_seg_arr,
+        "bsp_segseg": bsp_segseg_arr,
+        "fx_lines": active_bundle.fx_lines,
         "indicators": indicator_history,
-        "trend_lines": trend_lines,
+        "trend_lines": active_bundle.trend_lines if active_bundle.trend_lines else trend_lines,
     }
 
 
@@ -1772,6 +2279,7 @@ const MAIN_INDICATORS = new Set(["boll", "demark", "trendline"]);
 const SUB_INDICATORS = new Set(["macd", "kdj", "rsi"]);
 
 const DEFAULT_CHAN_CONFIG = {
+  chan_algo: "classic",
   bi_strict: true,
   bi_algo: "normal",
   bi_fx_check: "strict",
@@ -1814,7 +2322,6 @@ const DEFAULT_CHAN_CONFIG = {
   strict_bsp3: false,
   bsp3a_max_zs_cnt: 1
 };
-let chanConfig = ensureObject(safeJsonParse(storageGet("chan_logic_config"), null), { ...DEFAULT_CHAN_CONFIG });
 
 const DEFAULT_CHART_CONFIG = {
   theme: "light",
@@ -1822,10 +2329,14 @@ const DEFAULT_CHART_CONFIG = {
   fx: { width: 1.1, color: "#06b6d4", dashed: true },
   bi: { widthSure: 3.1, widthUnsure: 2.2, color: "#f59e0b" },
   seg: { widthSure: 4.8, widthUnsure: 3.5, color: "#059669" },
+  segseg: { widthSure: 6.0, widthUnsure: 4.6, color: "#2563eb" },
   biZs: { width: 1.8, color: "#f59e0b", enabled: true },
   segZs: { width: 2.4, color: "#059669", enabled: true },
+  segsegZs: { width: 2.8, color: "#2563eb", enabled: true },
   candle: { width: 1.4, upColor: "#ef4444", downColor: "#22c55e" },
-  bsp: { fontSize: 14, lineColor: "#94a3b8", lineWidth: 1, lineStyle: "dashed", lineDash: [5, 4] },
+  bspBi: { fontSize: 14, lineColor: "#94a3b8", lineWidth: 1, lineStyle: "dashed", lineDash: [5, 4] },
+  bspSeg: { fontSize: 14, lineColor: "#64748b", lineWidth: 1.1, lineStyle: "dashed", lineDash: [5, 4] },
+  bspSegseg: { fontSize: 14, lineColor: "#475569", lineWidth: 1.2, lineStyle: "dashed", lineDash: [5, 4] },
   trade: {
     buyColor: "#dc2626",
     sellColor: "#16a34a",
@@ -1885,8 +2396,24 @@ function deepMerge(target, source) {
   return target;
 }
 
+let chanConfig = deepMerge(
+  JSON.parse(JSON.stringify(DEFAULT_CHAN_CONFIG)),
+  ensureObject(safeJsonParse(storageGet("chan_logic_config"), null), {})
+);
+
+function migrateChartConfig(cfg) {
+  const next = ensureObject(cfg, {});
+  if (next.bsp && !next.bspBi) next.bspBi = JSON.parse(JSON.stringify(next.bsp));
+  if (!next.segseg) next.segseg = {};
+  if (!next.segsegZs) next.segsegZs = {};
+  if (!next.bspBi) next.bspBi = {};
+  if (!next.bspSeg) next.bspSeg = {};
+  if (!next.bspSegseg) next.bspSegseg = {};
+  return next;
+}
+
 let savedChartConfig = ensureObject(safeJsonParse(storageGet("chan_chart_config"), {}), {});
-let chartConfig = deepMerge(JSON.parse(JSON.stringify(DEFAULT_CHART_CONFIG)), savedChartConfig);
+let chartConfig = deepMerge(JSON.parse(JSON.stringify(DEFAULT_CHART_CONFIG)), migrateChartConfig(savedChartConfig));
 
 const DEFAULT_SESSION_CONFIG = {
   code: "600340",
@@ -1900,6 +2427,7 @@ const DEFAULT_SESSION_CONFIG = {
   chipBucketStep: "0.1",
   biZsEnabled: true,
   segZsEnabled: true,
+  segsegZsEnabled: true,
   stepN: "5"
 };
 let sessionConfig = ensureObject(
@@ -1932,9 +2460,9 @@ const SHORTCUT_ACTIONS = [
   { id: "saveSystemSettings", label: "保存系统配置", description: "在系统配置面板中保存并立即应用快捷键设置。", defaults: ["s"], contexts: ["systemSettings"], buttonId: "btnSystemSettingsSave" },
   { id: "confirmBspPrompt", label: "确认买卖点提示", description: "确认当前买卖点提示并允许继续步进。", defaults: ["enter"], contexts: ["bspPrompt"], buttonId: "bspPromptConfirm" },
   { id: "closeSettlement", label: "关闭交易结算", description: "关闭当前交易结算弹窗。", defaults: ["enter"], contexts: ["settlement"], buttonId: "btnSettlementClose" },
-  { id: "setBspJudgeAuto", label: "买卖点判定：自动", description: "将买卖点 ×/✓ 判定方式切换为自动（线段变向时自动判定）。", defaults: ["z"], contexts: ["global"] },
-  { id: "setBspJudgeManual", label: "买卖点判定：手动", description: "将买卖点 ×/✓ 判定方式切换为手动（需点击按钮/快捷键手动检查）。", defaults: ["s"], contexts: ["global"] },
-  { id: "checkBspJudge", label: "检查买卖点（手动）", description: "在手动模式下触发一次买卖点 ×/✓ 判定检查。", defaults: ["j"], contexts: ["global"], buttonId: "btnJudgeBsp" },
+  { id: "setBspJudgeAuto", label: "买卖点判定：自动", description: "将笔/段/2段买卖点 ×/✓ 判定方式切换为自动（按上一级结构变向自动判定）。", defaults: ["z"], contexts: ["global"] },
+  { id: "setBspJudgeManual", label: "买卖点判定：手动", description: "将笔/段/2段买卖点 ×/✓ 判定方式切换为手动（需点击按钮/快捷键手动检查）。", defaults: ["s"], contexts: ["global"] },
+  { id: "checkBspJudge", label: "检查买卖点（手动）", description: "在手动模式下触发一次笔/段/2段买卖点 ×/✓ 判定检查。", defaults: ["j"], contexts: ["global"], buttonId: "btnJudgeBsp" },
 ];
 
 const SHORTCUT_ACTION_MAP = SHORTCUT_ACTIONS.reduce((acc, action) => {
@@ -2235,7 +2763,7 @@ function updateShortcutUI() {
   $("tipStepN").setAttribute("data-tip", `设置连续步进或回退时使用的根数。步进快捷键：${getActionShortcutDisplay("stepForwardN") || "未设置"}；回退快捷键：${getActionShortcutDisplay("stepBackwardN") || "未设置"}。`);
   if ($("btnJudgeBsp")) {
     setButtonShortcutLabel($("btnJudgeBsp"), "检查买卖点", "checkBspJudge");
-    $("btnJudgeBsp").setAttribute("data-tip", `手动检查买卖点（仅手动判定模式下可用）。快捷键：${getActionShortcutDisplay("checkBspJudge") || "未设置"}。`);
+    $("btnJudgeBsp").setAttribute("data-tip", `手动检查笔/段/2段买卖点（仅手动判定模式下可用）。快捷键：${getActionShortcutDisplay("checkBspJudge") || "未设置"}。`);
   }
   initTooltips();
 }
@@ -2298,6 +2826,7 @@ function saveSessionConfig() {
     chipBucketStep: String(chartConfig.chip.bucketStep),
     biZsEnabled: chartConfig.biZs.enabled,
     segZsEnabled: chartConfig.segZs.enabled,
+    segsegZsEnabled: chartConfig.segsegZs.enabled,
     stepN: $("stepN").value
   };
   storageSet("chan_session_config", JSON.stringify(sessionConfig));
@@ -2322,6 +2851,20 @@ function getCfgColor(c) {
   return c;
 }
 
+const BSP_LEVEL_CONFIG_KEY = { bi: "bspBi", seg: "bspSeg", segseg: "bspSegseg" };
+
+function getBspConfig(level) {
+  const key = BSP_LEVEL_CONFIG_KEY[level] || "bspBi";
+  return chartConfig[key] || chartConfig.bspBi || DEFAULT_CHART_CONFIG.bspBi;
+}
+
+function getBspDisplayLabel(p) {
+  if (!p) return "";
+  if (p.display_label) return String(p.display_label);
+  if (p.level_label && p.label) return `${p.level_label}${p.label}`;
+  return String(p.label || "");
+}
+
 function openChanSettings() {
   if (isSettingsOpen()) closeSettings();
   if (isSystemSettingsOpen()) closeSystemSettings();
@@ -2342,6 +2885,18 @@ function renderChanSettingsForm() {
   container.innerHTML = "";
 
   const sections = [
+    {
+      title: "主逻辑 (Algo)",
+      key: "algo",
+      color: "#2563eb",
+      bgColor: "rgba(37, 99, 235, 0.08)",
+      items: [
+        { label: "缠论主逻辑", subKey: "chan_algo", type: "select", options: [
+          { value: "classic", label: "原缠论" },
+          { value: "new", label: "新缠论" }
+        ], tip: "原缠论使用工程原有笔/段/2段逻辑；新缠论使用“新K线 -> 新笔 -> 新段 -> 新2段”的递推逻辑，但前端展示名称仍统一为笔/段/2段。" }
+      ]
+    },
     {
       title: "笔配置 (Bi)",
       key: "bi",
@@ -2559,14 +3114,14 @@ function saveChanSettings() {
 
   // If session is already loaded, prompt for reconfig
   if (lastPayload && lastPayload.ready) {
-    if (confirm("更改缠论配置将导致从第1根K线重新计算到当前位置，且之前的模拟持仓数据（若有）将被清除。是否继续并应用配置？")) {
+    if (confirmAndLog("更改缠论配置将导致从第1根K线重新计算到当前位置，且之前的模拟持仓数据（若有）将被清除。是否继续并应用配置？")) {
       setGlobalLoading(true, "正在重新计算缠论逻辑...");
       api("/api/reconfig", { chan_config: finalConfig })
         .then(payload => {
           refreshUI(payload);
           if (payload.bsp_history && payload.bsp_history.length > 0) {
             payload.bsp_history.forEach(h => {
-              setMsg(`[重算] 发现 ${h.label} @K线:${h.x}`, true);
+              setMsg(`[重算] 发现 ${h.display_label || h.label} @K线:${h.x}`, true);
             });
           }
           showToast(payload.message || "配置已更新，逻辑已重算。");
@@ -2586,8 +3141,8 @@ function saveChanSettings() {
 }
 
 function resetChanSettings() {
-  if (confirm("确定要恢复默认缠论配置吗？")) {
-    chanConfig = { ...DEFAULT_CHAN_CONFIG };
+  if (confirmAndLog("确定要恢复默认缠论配置吗？")) {
+    chanConfig = JSON.parse(JSON.stringify(DEFAULT_CHAN_CONFIG));
     renderChanSettingsForm();
   }
 }
@@ -2748,7 +3303,18 @@ function renderSettingsForm() {
       ]
     },
     {
-      title: "中枢 (ZS)",
+      title: "2段 (SegSeg)",
+      key: "segseg",
+      color: "#2563eb",
+      bgColor: "rgba(37, 99, 235, 0.1)",
+      items: [
+        { label: "2段颜色", subKey: "color", type: "color" },
+        { label: "粗细(确定)", subKey: "widthSure", type: "number", min: 0.1, max: 12, step: 0.1 },
+        { label: "粗细(未完成)", subKey: "widthUnsure", type: "number", min: 0.1, max: 12, step: 0.1 }
+      ]
+    },
+    {
+      title: "笔中枢",
       key: "biZs",
       color: "#ea580c",
       bgColor: "rgba(234, 88, 12, 0.08)",
@@ -2759,21 +3325,64 @@ function renderSettingsForm() {
       ]
     },
     {
-      title: "线段中枢",
+      title: "段中枢",
       key: "segZs",
       color: "#0d9488",
       bgColor: "rgba(13, 148, 136, 0.08)",
       items: [
         { label: "启用段中枢", subKey: "enabled", type: "checkbox" },
-        { label: "线段中枢颜色", subKey: "color", type: "color" },
-        { label: "线段中枢粗细", subKey: "width", type: "number", min: 0.1, max: 5, step: 0.1 }
+        { label: "段中枢颜色", subKey: "color", type: "color" },
+        { label: "段中枢粗细", subKey: "width", type: "number", min: 0.1, max: 5, step: 0.1 }
       ]
     },
     {
-      title: "买卖点 (BSP)",
-      key: "bsp",
+      title: "2段中枢",
+      key: "segsegZs",
+      color: "#1d4ed8",
+      bgColor: "rgba(29, 78, 216, 0.08)",
+      items: [
+        { label: "启用2段中枢", subKey: "enabled", type: "checkbox" },
+        { label: "2段中枢颜色", subKey: "color", type: "color" },
+        { label: "2段中枢粗细", subKey: "width", type: "number", min: 0.1, max: 5, step: 0.1 }
+      ]
+    },
+    {
+      title: "笔买卖点",
+      key: "bspBi",
       color: "#be123c",
       bgColor: "rgba(190, 18, 60, 0.08)",
+      items: [
+        { label: "文字大小", subKey: "fontSize", type: "number", min: 8, max: 30 },
+        { label: "连线颜色", subKey: "lineColor", type: "color" },
+        { label: "连线粗细", subKey: "lineWidth", type: "number", min: 0.1, max: 5, step: 0.1 },
+        { label: "连线线型", subKey: "lineStyle", type: "select", options: [
+          { value: "dashed", label: "虚线" },
+          { value: "solid", label: "实线" },
+          { value: "dotted", label: "点线" }
+        ]}
+      ]
+    },
+    {
+      title: "段买卖点",
+      key: "bspSeg",
+      color: "#9f1239",
+      bgColor: "rgba(159, 18, 57, 0.08)",
+      items: [
+        { label: "文字大小", subKey: "fontSize", type: "number", min: 8, max: 30 },
+        { label: "连线颜色", subKey: "lineColor", type: "color" },
+        { label: "连线粗细", subKey: "lineWidth", type: "number", min: 0.1, max: 5, step: 0.1 },
+        { label: "连线线型", subKey: "lineStyle", type: "select", options: [
+          { value: "dashed", label: "虚线" },
+          { value: "solid", label: "实线" },
+          { value: "dotted", label: "点线" }
+        ]}
+      ]
+    },
+    {
+      title: "2段买卖点",
+      key: "bspSegseg",
+      color: "#881337",
+      bgColor: "rgba(136, 19, 55, 0.08)",
       items: [
         { label: "文字大小", subKey: "fontSize", type: "number", min: 8, max: 30 },
         { label: "连线颜色", subKey: "lineColor", type: "color" },
@@ -2946,12 +3555,12 @@ function renderSettingsForm() {
       itemDiv.className = "settingsItem";
       
       // Add a line preview for sections with color/width
-      if (sec.key !== "theme_section" && sec.key !== "indicators" && sec.key !== "toast" && sec.key !== "xAxis" && sec.key !== "yAxis") {
+       if (sec.key !== "theme_section" && sec.key !== "indicators" && sec.key !== "toast" && sec.key !== "xAxis" && sec.key !== "yAxis") {
           const previewLine = document.createElement("div");
           previewLine.style.height = "2px";
           previewLine.style.width = "100%";
           previewLine.style.marginBottom = "4px";
-          const color = chartConfig[sec.key].color || chartConfig[sec.key].upColor || "#ccc";
+          const color = chartConfig[sec.key].color || chartConfig[sec.key].lineColor || chartConfig[sec.key].upColor || "#ccc";
           previewLine.style.background = getCfgColor(color);
           itemDiv.appendChild(previewLine);
        }
@@ -3088,7 +3697,7 @@ function renderSystemSettingsForm() {
   const bspItem = document.createElement("div");
   bspItem.className = "settingsItem";
   bspItem.style.gridColumn = "1 / -1";
-  bspItem.innerHTML = `<label>判定方式 <span class="tip-icon" data-tip="${escapeHtmlAttr("自动：线段变向时自动对照全量快照判定 ×/✓。手动：不自动判定，需要点击“检查买卖点”或按快捷键。由手动切回自动时，会自动补判当前尚未判定的买卖点，并记录。")}">!</span></label>`;
+  bspItem.innerHTML = `<label>判定方式 <span class="tip-icon" data-tip="${escapeHtmlAttr("自动：段/2段/隐藏更高层变向时，会分别对笔/段/2段买卖点自动判定 ×/✓。手动：不自动判定，需要点击“检查买卖点”或按快捷键。由手动切回自动时，会自动补判当前尚未判定的三层买卖点，并记录。")}">!</span></label>`;
 
   const bspSel = document.createElement("select");
   bspSel.dataset.sysKey = "bspJudgeMode";
@@ -3099,7 +3708,7 @@ function renderSystemSettingsForm() {
   const bspNote = document.createElement("div");
   bspNote.className = "muted";
   bspNote.style.fontSize = "12px";
-  bspNote.textContent = `默认快捷键：自动(${getActionShortcutDisplay("setBspJudgeAuto") || "未设置"})；手动(${getActionShortcutDisplay("setBspJudgeManual") || "未设置"})；检查(${getActionShortcutDisplay("checkBspJudge") || "未设置"})。`;
+  bspNote.textContent = `默认快捷键：自动(${getActionShortcutDisplay("setBspJudgeAuto") || "未设置"})；手动(${getActionShortcutDisplay("setBspJudgeManual") || "未设置"})；检查三层买卖点(${getActionShortcutDisplay("checkBspJudge") || "未设置"})。`;
   bspItem.appendChild(bspNote);
 
   bspGrid.appendChild(bspItem);
@@ -3315,14 +3924,12 @@ function saveSystemSettingsFromForm() {
     if (prev === "manual" && next === "auto" && lastPayload && lastPayload.ready) {
       saveSystemConfig();
       updateBspJudgeUI();
-      alert("买卖点判定方式切换：手动 → 自动。\n将自动补判当前尚未判定的买卖点，并记录到后台。");
-      setMsg("买卖点判定方式切换：手动 → 自动", true);
+      showAlertAndLog("买卖点判定方式切换：手动 → 自动。\n将自动补判当前尚未判定的笔/段/2段买卖点，并记录到后台。");
       checkBspJudge("switch_manual_to_auto");
     } else if (prev === "auto" && next === "manual") {
       saveSystemConfig();
       updateBspJudgeUI();
-      alert("买卖点判定方式切换：自动 → 手动。\n线段变向时将不再自动判定，需手动点击“检查买卖点”。");
-      setMsg("买卖点判定方式切换：自动 → 手动", true);
+      showAlertAndLog("买卖点判定方式切换：自动 → 手动。\n上一级结构变向时将不再自动判定，需手动点击“检查买卖点”。");
     }
   }
   const inputs = $("systemSettingsContent").querySelectorAll("input[data-action-id]");
@@ -3342,7 +3949,7 @@ function saveSystemSettingsFromForm() {
   });
 
   if (errors.length > 0) {
-    alert(`以下快捷键格式无法识别，请修改后再保存：\n${errors.join("\n")}`);
+    showAlertAndLog(`以下快捷键格式无法识别，请修改后再保存：\n${errors.join("\n")}`);
     return;
   }
 
@@ -3390,7 +3997,7 @@ updateShortcutUI();
 updateBspJudgeUI();
 
 function resetSettings() {
-  if (confirm("确定要恢复默认设置吗？")) {
+  if (confirmAndLog("确定要恢复默认设置吗？")) {
     chartConfig = JSON.parse(JSON.stringify(DEFAULT_CHART_CONFIG));
     indicatorMainSlots = { ...defaultMainSlots };
     indicatorSubSlots = { ...defaultSubSlots };
@@ -3405,7 +4012,7 @@ function resetSettings() {
 }
 
 function resetSystemSettings() {
-  if (confirm("确定要恢复默认快捷键配置吗？")) {
+  if (confirmAndLog("确定要恢复默认快捷键配置吗？")) {
     systemConfig = JSON.parse(JSON.stringify(DEFAULT_SYSTEM_CONFIG));
     saveSystemConfig();
     renderSystemSettingsForm();
@@ -3528,7 +4135,7 @@ function syncTradesFromPayload(payload) {
 function showBspPrompt(payload, lines, key, hits) {
   const t = payload && payload.time ? payload.time : "-";
   const text = `检测到当前K线出现买卖点\n时间：${t}\n${lines || ""}`.trim();
-  showToast(text);
+  showToast(text, { record: false });
   setMsg(text, true);
 }
 
@@ -3561,7 +4168,7 @@ function getBspAtX(chart, xVal) {
   for (const p of (bspHistory || [])) {
     if (!p || p.x !== xVal) continue;
     const prefix = p.status === "correct" ? "✓" : (p.status === "wrong" ? "×" : "…");
-    const txt = `${prefix} ${p.label}`;
+    const txt = `${prefix} ${getBspDisplayLabel(p)}`;
     if (seen.has(txt)) continue;
     seen.add(txt);
     tags.push(txt);
@@ -3981,7 +4588,7 @@ function persistUserBiRaysNow() {
 
 function maybeSaveUserBiRaysOnExit() {
   if (!userBiRaysDirty || !Array.isArray(userBiRays) || userBiRays.length <= 0) return;
-  const shouldSave = confirm("是否保存画线？");
+  const shouldSave = confirmAndLog("是否保存画线？");
   if (shouldSave) persistUserBiRaysNow();
 }
 
@@ -4197,8 +4804,7 @@ function executeShortcutAction(actionId) {
       systemConfig.bspJudgeMode = "auto";
       saveSystemConfig();
       updateBspJudgeUI();
-      alert("买卖点判定方式切换：手动 → 自动。\n将自动补判当前尚未判定的买卖点，并记录到后台。");
-      setMsg("买卖点判定方式切换：手动 → 自动", true);
+      showAlertAndLog("买卖点判定方式切换：手动 → 自动。\n将自动补判当前尚未判定的笔/段/2段买卖点，并记录到后台。");
       if (prev === "manual") checkBspJudge("switch_manual_to_auto");
       return true;
     }
@@ -4206,8 +4812,7 @@ function executeShortcutAction(actionId) {
       systemConfig.bspJudgeMode = "manual";
       saveSystemConfig();
       updateBspJudgeUI();
-      alert("买卖点判定方式切换：自动 → 手动。\n线段变向时将不再自动判定，需手动点击“检查买卖点”。");
-      setMsg("买卖点判定方式切换：自动 → 手动", true);
+      showAlertAndLog("买卖点判定方式切换：自动 → 手动。\n上一级结构变向时将不再自动判定，需手动点击“检查买卖点”。");
       return true;
     case "checkBspJudge":
       if (!isBspJudgeManual()) return false;
@@ -4314,17 +4919,25 @@ window.addEventListener("keydown", (e) => {
 
 let msgHistory = ensureArray(safeJsonParse(storageGet("chan_msg_history"), []), []);
 
-function setMsg(text, quiet = false) {
+function appendMsgHistory(text) {
+  const content = String(text || "").trim();
+  if (!content) return;
   if (!Array.isArray(msgHistory)) msgHistory = [];
   const t = new Date().toLocaleTimeString();
-  const entry = { time: t, text: text };
+  const entry = { time: t, text: content };
   msgHistory.push(entry);
   if (msgHistory.length > 500) msgHistory.shift();
   storageSet("chan_msg_history", JSON.stringify(msgHistory));
-  if (!quiet) showToast(text);
 }
 
-function showToast(text) {
+function setMsg(text, quiet = false) {
+  appendMsgHistory(text);
+  if (!quiet) showToast(text, { record: false });
+}
+
+function showToast(text, options = {}) {
+  const record = options && Object.prototype.hasOwnProperty.call(options, "record") ? !!options.record : true;
+  if (record) appendMsgHistory(text);
   const container = $("toastContainer");
   if (!container) return;
   
@@ -4345,24 +4958,48 @@ function showToast(text) {
   }, speed);
 }
 
+function showAlertAndLog(text) {
+  setMsg(text, true);
+  alert(text);
+}
+
+function confirmAndLog(text) {
+  setMsg(text, true);
+  return confirm(text);
+}
+
 function judgeStatsText(stats) {
   if (!stats || typeof stats !== "object") return null;
-  const appeared = Number.isFinite(stats.appeared) ? stats.appeared : null;
-  const correct = Number.isFinite(stats.correct) ? stats.correct : null;
-  const rate = typeof stats.rate === "number" ? (stats.rate * 100) : null;
   const reason = stats.reason ? String(stats.reason) : "-";
   const time = stats.time ? String(stats.time) : "-";
   const interval = stats.interval && typeof stats.interval === "object" ? stats.interval : null;
   const fromTime = interval && interval.from_time ? String(interval.from_time) : "-";
   const toTime = interval && interval.to_time ? String(interval.to_time) : time;
+  const summary = stats.summary && typeof stats.summary === "object" ? stats.summary : stats;
+  const details = Array.isArray(stats.details) ? stats.details : [];
+  const appeared = Number.isFinite(summary.appeared) ? summary.appeared : null;
+  const correct = Number.isFinite(summary.correct) ? summary.correct : null;
+  const rate = typeof summary.rate === "number" ? (summary.rate * 100) : null;
   if (appeared === null || correct === null) return null;
-  const rateStr = rate === null ? "-" : `${rate.toFixed(2)}%`;
-  return `买卖点判定结果（自上次判定以来）\n区间：${fromTime} ~ ${toTime}\n本次时间：${time}\n出现：${appeared}\n正确：${correct}\n正确率：${rateStr}\n原因：${reason}`;
+  const lines = [
+    "买卖点判定结果（自上次判定以来）",
+    `区间：${fromTime} ~ ${toTime}`,
+    `本次时间：${time}`,
+    `总出现：${appeared}`,
+    `总正确：${correct}`,
+    `总正确率：${rate === null ? "-" : `${rate.toFixed(2)}%`}`,
+    `原因：${reason}`,
+  ];
+  details.forEach((item) => {
+    const itemRate = typeof item.rate === "number" ? `${(item.rate * 100).toFixed(2)}%` : "-";
+    lines.push(`${item.level_label || item.level || "-"}：出现${item.appeared || 0}，正确${item.correct || 0}，正确率${itemRate}`);
+  });
+  return lines.join("\n");
 }
 
 function showJudgeNotice(payload) {
   const text = judgeStatsText(payload && payload.judge_stats ? payload.judge_stats : null) || "买卖点判定";
-  showToast(text);
+  showToast(text, { record: false });
   setMsg(text, true);
 }
 
@@ -4382,7 +5019,7 @@ $("btnMsgHistory").onclick = showMsgHistory;
 $("btnMsgHistoryClose").onclick = () => $("msgHistoryModal").classList.remove("show");
 $("btnMsgHistoryOk").onclick = () => $("msgHistoryModal").classList.remove("show");
 $("btnMsgHistoryClear").onclick = () => {
-  if (confirm("确定要清空所有消息历史记录吗？")) {
+  if (confirmAndLog("确定要清空所有消息历史记录吗？")) {
     msgHistory = [];
     storageRemove("chan_msg_history");
     $("msgHistoryList").innerHTML = "";
@@ -4679,6 +5316,10 @@ function showSettlement(tr, stockName) {
     </div>
   `;
   
+  setMsg(
+    `交易结算\n标的：${stockName || '-'}\n持仓周期：${holdBars} 根\n买入价格：${tr.buyPrice.toFixed(4)}\n卖出价格：${tr.sellPrice.toFixed(4)}\n成交股数：${tr.shares}\n盈亏金额：${pnl.toFixed(2)}\n盈亏比例：${pnlPct.toFixed(2)}%`,
+    true
+  );
   modal.classList.add("show");
 }
 
@@ -5286,8 +5927,10 @@ function drawLegend() {
     { label: "分型连线", color: getCfgColor(chartConfig.fx.color), dashed: true, w: chartConfig.fx.width },
     { label: "笔(确定)", color: getCfgColor(chartConfig.bi.color), dashed: false, w: chartConfig.bi.widthSure },
     { label: "笔(未完成)", color: getCfgColor(chartConfig.bi.color), dashed: true, w: chartConfig.bi.widthUnsure },
-    { label: "线段(确定)", color: getCfgColor(chartConfig.seg.color), dashed: false, w: chartConfig.seg.widthSure },
-    { label: "线段(未完成)", color: getCfgColor(chartConfig.seg.color), dashed: true, w: chartConfig.seg.widthUnsure },
+    { label: "段(确定)", color: getCfgColor(chartConfig.seg.color), dashed: false, w: chartConfig.seg.widthSure },
+    { label: "段(未完成)", color: getCfgColor(chartConfig.seg.color), dashed: true, w: chartConfig.seg.widthUnsure },
+    { label: "2段(确定)", color: getCfgColor(chartConfig.segseg.color), dashed: false, w: chartConfig.segseg.widthSure },
+    { label: "2段(未完成)", color: getCfgColor(chartConfig.segseg.color), dashed: true, w: chartConfig.segseg.widthUnsure },
   ];
   ctx.save();
   const fontSize = chartConfig.legend.fontSize;
@@ -5586,7 +6229,11 @@ function drawBsp(arr, s) {
   const boxGap = 4;
   const boxPadX = 8;
   const boxPadY = 5;
-  const fontSize = chartConfig.bsp.fontSize;
+  const fontSize = Math.max(
+    Number(chartConfig.bspBi && chartConfig.bspBi.fontSize) || 14,
+    Number(chartConfig.bspSeg && chartConfig.bspSeg.fontSize) || 14,
+    Number(chartConfig.bspSegseg && chartConfig.bspSegseg.fontSize) || 14,
+  );
   const lineH = fontSize + boxPadY * 2;
   const maxLines = 8;
   const colBuy = getCfgColor(chartConfig.trade.buyColor);
@@ -5595,36 +6242,42 @@ function drawBsp(arr, s) {
 
   for (const x of xs) {
     const xp = s.x(x);
-    const ps = groups[x].slice(0, maxLines);
-    const stackH = ps.length * lineH + Math.max(0, ps.length - 1) * boxGap;
+    const ps = groups[x]
+      .slice()
+      .sort((a, b) => {
+        const orderA = a.level === "bi" ? 0 : (a.level === "seg" ? 1 : 2);
+        const orderB = b.level === "bi" ? 0 : (b.level === "seg" ? 1 : 2);
+        return orderA - orderB;
+      })
+      .slice(0, maxLines);
     const boxBottom = s.h - 8;
-    const stackTop = boxBottom - stackH;
     const k = byX.get(x);
-    if (k) {
-      const anchorY = s.y(k.l);
-      const toY = Math.max(PAD_T + 2, Math.min(s.h - PAD_B + 8, stackTop - 6));
-      ctx.save();
-      ctx.lineWidth = chartConfig.bsp.lineWidth;
-      const bspDash = chartConfig.bsp.lineStyle ? getTradeLineDash(chartConfig.bsp.lineStyle) : (chartConfig.bsp.lineDash || [5, 4]);
-      ctx.setLineDash(bspDash);
-      ctx.strokeStyle = getCfgColor(chartConfig.bsp.lineColor);
-      ctx.beginPath();
-      ctx.moveTo(xp, anchorY);
-      ctx.lineTo(xp, toY);
-      ctx.stroke();
-      ctx.restore();
-    }
     for (let i = 0; i < ps.length; i++) {
       const p = ps[i];
+      const bspCfg = getBspConfig(p.level);
       const color = p.is_buy ? colBuy : colSell;
       const prefix = p.status === "correct" ? "✓" : (p.status === "wrong" ? "×" : "·");
-      const txt = `${prefix} ${p.label}`;
+      const txt = `${prefix} ${getBspDisplayLabel(p)}`;
       ctx.save();
-      ctx.font = `bold ${fontSize}px Consolas`;
+      ctx.font = `bold ${Number(bspCfg.fontSize || fontSize)}px Consolas`;
       const textW = ctx.measureText(txt).width;
       const rectW = textW + boxPadX * 2;
       const rectX = xp - rectW / 2;
       const rectY = boxBottom - (i + 1) * lineH - i * boxGap;
+      if (k) {
+        const anchorY = s.y(k.l);
+        const toY = Math.max(PAD_T + 2, Math.min(s.h - PAD_B + 8, rectY - 6));
+        ctx.save();
+        ctx.lineWidth = Number(bspCfg.lineWidth || 1);
+        const bspDash = bspCfg.lineStyle ? getTradeLineDash(bspCfg.lineStyle) : (bspCfg.lineDash || [5, 4]);
+        ctx.setLineDash(bspDash);
+        ctx.strokeStyle = getCfgColor(bspCfg.lineColor);
+        ctx.beginPath();
+        ctx.moveTo(xp, anchorY);
+        ctx.lineTo(xp, toY);
+        ctx.stroke();
+        ctx.restore();
+      }
       ctx.fillStyle = cssVar("--panel", "#ffffff");
       ctx.strokeStyle = color;
       ctx.lineWidth = 1.5;
@@ -5829,12 +6482,17 @@ function draw(chart) {
   if (chartConfig.segZs.enabled) {
     drawZsRects(chart.seg_zs || [], s, getCfgColor(chartConfig.segZs.color), chartConfig.segZs.width);
   }
-  // 分型最细虚线 → 笔中等实线 → 线段最粗实线
+  if (chartConfig.segsegZs.enabled) {
+    drawZsRects(chart.segseg_zs || [], s, getCfgColor(chartConfig.segsegZs.color), chartConfig.segsegZs.width);
+  }
+  // 分型最细虚线 → 笔中等实线 → 段更粗 → 2段最粗
   drawLines(chart.fx_lines || [], s, getCfgColor(chartConfig.fx.color), chartConfig.fx.width, true);
   drawLines((chart.bi || []).filter((x) => x.is_sure), s, getCfgColor(chartConfig.bi.color), chartConfig.bi.widthSure, false);
   drawLines((chart.bi || []).filter((x) => !x.is_sure), s, getCfgColor(chartConfig.bi.color), chartConfig.bi.widthUnsure, true);
   drawLines((chart.seg || []).filter((x) => x.is_sure), s, getCfgColor(chartConfig.seg.color), chartConfig.seg.widthSure, false);
   drawLines((chart.seg || []).filter((x) => !x.is_sure), s, getCfgColor(chartConfig.seg.color), chartConfig.seg.widthUnsure, true);
+  drawLines((chart.segseg || []).filter((x) => x.is_sure), s, getCfgColor(chartConfig.segseg.color), chartConfig.segseg.widthSure, false);
+  drawLines((chart.segseg || []).filter((x) => !x.is_sure), s, getCfgColor(chartConfig.segseg.color), chartConfig.segseg.widthUnsure, true);
   drawBsp(bspHistory || [], s);
   drawTradeMarkers(s, chart);
   drawCrosshair(s);
@@ -5864,8 +6522,8 @@ function detectBspPromptOnLastBar(payload) {
   const lastX = payload.chart.kline[payload.chart.kline.length - 1].x;
   const hits = (payload.chart.bsp || []).filter((p) => p.x === lastX);
   if (hits.length <= 0) return false;
-  const lines = hits.map((p) => p.label).join("\n");
-  const key = lastX + "|" + lines;
+  const lines = hits.map((p) => getBspDisplayLabel(p)).join("\n");
+  const key = lastX + "|" + hits.map((p) => `${p.level || "-"}:${getBspDisplayLabel(p)}`).join("|");
   if (lastSeenBspKey.has(key)) return false;
   lastSeenBspKey.add(key);
   showBspPrompt(payload, lines, key, hits);
@@ -5890,7 +6548,7 @@ function refreshUI(payload, options) {
   syncIndicatorControls();
   if (payload.ready && Array.isArray(payload.bsp_history)) {
     bspHistory = payload.bsp_history.slice();
-    bspHistoryKey = new Set(bspHistory.map((p) => `${p.x}|${p.label}|${p.is_buy ? 1 : 0}`));
+    bspHistoryKey = new Set(bspHistory.map((p) => p.key || `${p.level}|${p.x}|${p.label}|${p.is_buy ? 1 : 0}`));
   } else {
     bspHistory = [];
     bspHistoryKey = new Set();
@@ -6088,11 +6746,11 @@ $("btnSell").onclick = async () => {
 
 $("btnFinish").onclick = async () => {
   try {
-    if (!confirm("确定要结束当前训练吗？")) return;
+  if (!confirmAndLog("确定要结束当前训练吗？")) return;
     const payload = await api("/api/finish");
     refreshUI(payload);
     setMsg("训练已结束。");
-    if (confirm("训练结束，是否下载训练结果？")) {
+  if (confirmAndLog("训练结束，是否下载训练结果？")) {
       downloadTradeExport(payload);
     }
   } catch (e) {
@@ -6102,7 +6760,7 @@ $("btnFinish").onclick = async () => {
 
 $("btnReset").onclick = async () => {
   try {
-    if (!confirm("确定要重新训练吗？当前会话状态将被清空。")) return;
+  if (!confirmAndLog("确定要重新训练吗？当前会话状态将被清空。")) return;
     hideGlobalLoading();
     const payload = await api("/api/reset");
     $("btnInit").disabled = false;
@@ -6136,7 +6794,7 @@ $("btnReset").onclick = async () => {
 };
 
 $("btnExit").onclick = async () => {
-  if (!confirm("确定要退出并终止后台服务吗？")) return;
+  if (!confirmAndLog("确定要退出并终止后台服务吗？")) return;
   maybeSaveUserBiRaysOnExit();
   setMsg("正在尝试终止后台服务并关闭页面...");
   try {
@@ -6254,7 +6912,7 @@ def api_init(req: InitReq):
         APP_STATE.trade_events = []
         APP_STATE.bsp_history = []
         APP_STATE.bsp_judge_logs = []
-        APP_STATE._last_seg_dir = None
+        APP_STATE._last_level_dirs = {level: None for level in set(JUDGE_TRIGGER_LEVELS.values())}
         # init后先推进一根，确保前端有可视数据并可交互
         APP_STATE.rebuild_bsp_all_snapshot()
         APP_STATE.stepper.step()
@@ -6271,7 +6929,6 @@ def api_reconfig(req: ReconfigReq):
         raise HTTPException(status_code=400, detail="请先初始化会话")
     try:
         APP_STATE.reconfig(req.chan_config)
-        APP_STATE.rebuild_bsp_all_snapshot()
         payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME)
         payload["message"] = "缠论配置更新成功，已按新逻辑重新计算并清除模拟持仓。"
         return payload
@@ -6409,6 +7066,10 @@ def api_reset():
     APP_STATE.session_params = None
     APP_STATE.trade_events = []
     APP_STATE.bsp_history = []
+    APP_STATE.bsp_all_snapshot = []
+    APP_STATE.bsp_judge_logs = []
+    APP_STATE._last_level_dirs = {level: None for level in set(JUDGE_TRIGGER_LEVELS.values())}
+    APP_STATE._reset_judge_state()
     return APP_STATE.build_payload(stock_name=APP_STOCK_NAME)
 
 
