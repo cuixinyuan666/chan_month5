@@ -210,8 +210,12 @@ class ChanStepper:
                                 except (ValueError, TypeError):
                                     pass
                         cfg_dict["macd"] = macd_dict
+                    elif k == "chan_algo":
+                      pass
                     else:
-                        cfg_dict[k] = v
+                      cfg_dict[k] = v
+
+
         self.effective_cfg_dict = cfg_dict.copy()
         cfg = CChanConfig(cfg_dict)
         self.code = normalize_code(code)
@@ -952,7 +956,7 @@ HTML = r"""
       transition: background 0.2s;
     }
     .resizer:hover { background: #2563eb; }
-    .right { flex: 1; padding: 0; box-sizing: border-box; min-width: 0; position: relative; }
+    .right { flex: 1; padding: 0; box-sizing: border-box; min-width: 0; position: relative; display: flex; }
     .row { margin-bottom: 8px; display: flex; align-items: center; }
     .row input[type="checkbox"] { width: auto; transform: scale(1.1); margin-left: 8px; }
     label { display: inline-block; width: 110px; font-size: 14px; }
@@ -967,7 +971,7 @@ HTML = r"""
     
     .title { font-size: 16px; margin: 4px 0 10px; color: #2563eb; font-weight: bold; }
     .card { border: 1px solid var(--border); padding: 12px; margin-bottom: 12px; background: var(--panel); border-radius: 8px; }
-    #chart { width: 100%; height: 100%; background: var(--chartBg); display: block; }
+    #chart { width: 100%; height: 100%; background: var(--chartBg); display: block; flex: 1; min-width: 0; }
     .muted { color: var(--muted); font-size: 12px; }
     .mono { font-family: Consolas, monospace; }
     
@@ -1015,12 +1019,21 @@ HTML = r"""
       line-height: 1.5;
     }
 
-    /* Fullscreen button */
+    /* Chart tools panel (now integrated in left column) */
+    .chartToolsPanel {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel);
+      padding: 12px;
+      box-sizing: border-box;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    :fullscreen #chart { height: 100vh; }
     .fullscreen-btn {
-      position: absolute;
-      top: 10px;
-      right: 10px;
-      z-index: 100;
       background: rgba(255,255,255,0.8);
       border: 1px solid var(--border);
       border-radius: 4px;
@@ -1029,16 +1042,12 @@ HTML = r"""
       display: flex;
       align-items: center;
       gap: 4px;
+      width: 100%;
+      justify-content: center;
     }
     .fullscreen-btn:hover { background: #fff; border-color: #2563eb; }
-    :fullscreen .fullscreen-btn { display: none; }
-    :fullscreen #chart { height: 100vh; }
 
     .judge-bsp-btn {
-      position: absolute;
-      top: 10px;
-      right: 160px;
-      z-index: 100;
       background: rgba(255,255,255,0.88);
       border: 1px solid var(--border);
       border-radius: 4px;
@@ -1048,25 +1057,22 @@ HTML = r"""
       align-items: center;
       gap: 4px;
       white-space: nowrap;
+      width: 100%;
+      justify-content: center;
     }
     .judge-bsp-btn:hover { background: #fff; border-color: #16a34a; }
     .judge-bsp-btn:disabled { opacity: 0.55; cursor: not-allowed; }
-    :fullscreen .judge-bsp-btn { display: none; }
 
     .toolbox {
-      position: absolute;
-      top: 48px;
-      right: 10px;
-      z-index: 100;
       background: rgba(255,255,255,0.92);
       border: 1px solid var(--border);
       border-radius: 8px;
       padding: 8px;
       display: flex;
+      flex-direction: column;
       gap: 8px;
-      align-items: center;
+      align-items: stretch;
     }
-    :fullscreen .toolbox { display: none; }
     .toolbox .label {
       color: var(--muted);
       font-size: 12px;
@@ -1494,6 +1500,20 @@ HTML = r"""
           <button id="btnSell" data-tip="按当前收盘价全部卖出，若受 T+1 约束则按钮不可用。" disabled>卖出（全量） <small>(PageDown)</small></button>
         </div>
       </div>
+      <div id="chartToolsPanel" class="chartToolsPanel">
+        <button id="btnFullscreen" class="fullscreen-btn" data-tip="切换图表区域全屏显示。">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+          全屏显示 (F11)
+        </button>
+        <button id="btnJudgeBsp" class="judge-bsp-btn" data-tip="手动检查买卖点（仅手动判定模式下可用）。" disabled>检查买卖点</button>
+        <div id="toolbox" class="toolbox">
+          <span class="label">画线工具箱</span>
+          <button id="toolNone" type="button" class="active" data-tip="选择模式：可选中画线并使用“画线属性”进行编辑。">选择</button>
+          <button id="toolHorizontalRay" type="button" data-tip="生成水平射线：点击图表在当前价位生成一条水平射线。">水平射线</button>
+          <button id="toolBiRay" type="button" data-tip="笔端点射线：依次点击两个笔端点生成一条向右延伸的射线。再次点击可退出。">笔端点射线</button>
+          <button id="toolLineProps" type="button" data-tip="先使用“选择”并点击某条画线，再点此按钮编辑粗细/颜色/线型。">画线属性</button>
+        </div>
+      </div>
 
       <div class="card">
         <div class="title" style="margin:0 0 12px 0; display:flex; justify-content:space-between; align-items:center;">
@@ -1621,17 +1641,6 @@ HTML = r"""
         <div class="tradeStatusResizeHandle"></div>
       </div>
 
-      <button id="btnFullscreen" class="fullscreen-btn" data-tip="切换图表区域全屏显示。">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
-        全屏显示 (F11)
-      </button>
-      <button id="btnJudgeBsp" class="judge-bsp-btn" data-tip="手动检查买卖点（仅手动判定模式下可用）。" disabled>检查买卖点</button>
-      <div id="toolbox" class="toolbox">
-        <span class="label">工具箱</span>
-        <button id="toolNone" type="button" class="active" data-tip="当前不启用画线工具；点击图表仅用于选子图。">选择</button>
-        <button id="toolHorizontalRay" type="button" data-tip="生成水平射线：点击图表在当前价位生成一条水平射线。">水平射线</button>
-        <button id="toolBiRay" type="button" data-tip="笔端点射线：依次点击两个笔端点生成一条向右延伸的射线。">笔端点射线</button>
-      </div>
       <canvas id="chart"></canvas>
     </div>
   </div>
@@ -1690,8 +1699,12 @@ let viewReady = false;
 let userAdjustedView = false;
 let userRays = ensureArray(safeJsonParse(storageGet("chan_user_rays"), []), []);
 let userBiRays = ensureArray(safeJsonParse(storageGet("chan_user_bi_rays"), []), []);
+let userBiRaysDirty = false;
 let pendingBiRayPts = [];
 let activeTool = storageGet("chan_active_tool") || "none"; // none | horizontalRay | biRay
+let selectedDrawing = null; // { type: "ray"|"biRay", index: number }
+let chartClickMoved = false;
+let chartMouseDownPos = null;
 
 const PAD_L = 64;
 const PAD_R = 64;
@@ -1842,7 +1855,16 @@ const DEFAULT_CHART_CONFIG = {
     valueFontWeight: "bold",
     valueColor: "#0f172a"
   },
-  chip: { enabled: true, stretchLevel: 5, bucketStep: 0.1, color: "rgba(59,130,246,0.45)" },
+  chip: {
+    enabled: true,
+    stretchLevel: 5,
+    bucketStep: 0.1,
+    color: "rgba(59,130,246,0.45)",
+    peakRefMode: "latest_visible",
+    peakLineColor: "#2563eb",
+    peakLineWidth: 1.2,
+    peakLineStyle: "dashed"
+  },
   xAxis: { fontSize: 12, rotation: -45, fontWeight: "normal", interval: 10 },
   yAxis: { fontSize: 12, fontWeight: "normal", interval: 0.5 },
   toast: { fontSize: 16, fontWeight: "bold", speed: 3000 },
@@ -2688,7 +2710,19 @@ function renderSettingsForm() {
         { label: "启用筹码", subKey: "enabled", type: "checkbox" },
         { label: "拉伸强度", subKey: "stretchLevel", type: "number", min: 1, max: 20 },
         { label: "价格桶(元)", subKey: "bucketStep", type: "number", min: 0.001, max: 1, step: 0.001 },
-        { label: "填充颜色", subKey: "color", type: "color" }
+        { label: "填充颜色", subKey: "color", type: "color" },
+        { label: "筹码峰延长线参考", subKey: "peakRefMode", type: "select", options: [
+          { value: "latest_visible", label: "最新可见K线" },
+          { value: "seg_turn", label: "线段转折点" },
+          { value: "bi_turn", label: "笔转折点" }
+        ]},
+        { label: "筹码峰延长线颜色", subKey: "peakLineColor", type: "color" },
+        { label: "筹码峰延长线粗细", subKey: "peakLineWidth", type: "number", min: 0.1, max: 6, step: 0.1 },
+        { label: "筹码峰延长线线型", subKey: "peakLineStyle", type: "select", options: [
+          { value: "dashed", label: "虚线" },
+          { value: "solid", label: "实线" },
+          { value: "dotted", label: "点线" }
+        ]}
       ]
     },
     {
@@ -3691,9 +3725,14 @@ canvas.addEventListener("mousedown", (e) => {
 });
 window.addEventListener("mouseup", () => {
   isPanning = false;
+  chartMouseDownPos = null;
 });
 window.addEventListener("mousemove", (e) => {
   if (!isPanning) return;
+  if (chartMouseDownPos) {
+    const moved = Math.abs(e.clientX - chartMouseDownPos.x) + Math.abs(e.clientY - chartMouseDownPos.y);
+    if (moved >= 6) chartClickMoved = true;
+  }
   const rect = canvas.getBoundingClientRect();
   if (e.clientY < rect.top || e.clientY > rect.bottom) return;
   const dx = e.clientX - panStartX;
@@ -3788,7 +3827,8 @@ canvas.addEventListener("dblclick", (e) => {
       return true;
     });
     if (removedBi) {
-      storageSet("chan_user_bi_rays", JSON.stringify(userBiRays));
+      userBiRaysDirty = true;
+      if (selectedDrawing && selectedDrawing.type === "biRay") selectedDrawing = null;
       draw(lastPayload.chart);
       return;
     }
@@ -3835,17 +3875,160 @@ function setActiveTool(next) {
   activeTool = v;
   storageSet("chan_active_tool", v);
   if (v !== "biRay") pendingBiRayPts = [];
+  if (v !== "none") selectedDrawing = null;
   updateToolboxUI();
   if (lastPayload && lastPayload.ready) draw(lastPayload.chart);
 }
 
 if ($("toolNone")) $("toolNone").addEventListener("click", () => setActiveTool("none"));
-if ($("toolHorizontalRay")) $("toolHorizontalRay").addEventListener("click", () => setActiveTool("horizontalRay"));
-if ($("toolBiRay")) $("toolBiRay").addEventListener("click", () => setActiveTool("biRay"));
+if ($("toolHorizontalRay")) $("toolHorizontalRay").addEventListener("click", () => setActiveTool(activeTool === "horizontalRay" ? "none" : "horizontalRay"));
+if ($("toolBiRay")) $("toolBiRay").addEventListener("click", () => setActiveTool(activeTool === "biRay" ? "none" : "biRay"));
 updateToolboxUI();
+
+function getRayLineStyle(ray) {
+  return String(ray && ray.lineStyle ? ray.lineStyle : "dashed");
+}
+
+function getRayLineWidth(ray) {
+  const v = Number(ray && ray.lineWidth);
+  return Number.isFinite(v) && v > 0 ? v : chartConfig.userRay.width;
+}
+
+function getRayLineColor(ray) {
+  return getCfgColor(ray && ray.lineColor ? ray.lineColor : chartConfig.userRay.color);
+}
+
+function applyLinePropsToDrawing(target, props) {
+  if (!target) return false;
+  const list = target.type === "biRay" ? userBiRays : userRays;
+  if (!Array.isArray(list) || !Number.isInteger(target.index) || target.index < 0 || target.index >= list.length) return false;
+  const item = list[target.index];
+  item.lineColor = props.lineColor;
+  item.lineWidth = props.lineWidth;
+  item.lineStyle = props.lineStyle;
+  if (target.type === "biRay") {
+    userBiRaysDirty = true;
+  } else {
+    storageSet("chan_user_rays", JSON.stringify(userRays));
+  }
+  return true;
+}
+
+function pickDrawingAt(s, px, py) {
+  const threshold = 8;
+  for (let i = userRays.length - 1; i >= 0; i -= 1) {
+    const ray = userRays[i];
+    const yp = s.y(ray.y);
+    const xp = s.x(ray.x);
+    if (px >= xp - 10 && px <= s.w - PAD_R + 10 && Math.abs(py - yp) <= threshold) {
+      return { type: "ray", index: i };
+    }
+  }
+  const xVal = xFromPx(s, px);
+  for (let i = userBiRays.length - 1; i >= 0; i -= 1) {
+    const r = userBiRays[i];
+    const x1 = Number(r.x1), y1 = Number(r.y1), x2 = Number(r.x2), y2 = Number(r.y2);
+    const dx = x2 - x1;
+    if (!Number.isFinite(x1) || !Number.isFinite(y1) || !Number.isFinite(dx) || dx === 0) continue;
+    if (xVal < x1) continue;
+    const slope = (y2 - y1) / dx;
+    const yOn = y1 + slope * (xVal - x1);
+    const yPx = s.y(yOn);
+    if (Math.abs(yPx - py) <= threshold) return { type: "biRay", index: i };
+  }
+  return null;
+}
+
+function editSelectedLineProps() {
+  if (!selectedDrawing) {
+    setMsg("请先点击“选择”，并在图表上选中一条画线。");
+    return;
+  }
+  const list = selectedDrawing.type === "biRay" ? userBiRays : userRays;
+  const cur = list[selectedDrawing.index];
+  if (!cur) {
+    setMsg("当前选中画线不存在，请重新选择。");
+    selectedDrawing = null;
+    return;
+  }
+  const defaultColor = String(cur.lineColor || chartConfig.userRay.color || "#f97316");
+  const defaultWidth = String(getRayLineWidth(cur));
+  const defaultStyle = String(getRayLineStyle(cur));
+  const lineColor = prompt("请输入画线颜色（如 #ff0000 或 rgba(...)）", defaultColor);
+  if (lineColor === null) return;
+  const widthText = prompt("请输入画线粗细（正数）", defaultWidth);
+  if (widthText === null) return;
+  const lineWidth = Number(widthText);
+  if (!Number.isFinite(lineWidth) || lineWidth <= 0) {
+    setMsg("画线粗细无效，已取消。");
+    return;
+  }
+  const styleText = prompt("请输入线型：solid / dashed / dotted", defaultStyle);
+  if (styleText === null) return;
+  const style = ["solid", "dashed", "dotted"].includes(String(styleText).trim()) ? String(styleText).trim() : "dashed";
+  if (applyLinePropsToDrawing(selectedDrawing, { lineColor: String(lineColor).trim() || defaultColor, lineWidth, lineStyle: style })) {
+    setMsg("画线属性已更新。");
+    if (lastPayload && lastPayload.ready) draw(lastPayload.chart);
+  }
+}
+
+if ($("toolLineProps")) $("toolLineProps").addEventListener("click", editSelectedLineProps);
+
+function persistUserBiRaysNow() {
+  storageSet("chan_user_bi_rays", JSON.stringify(userBiRays));
+  userBiRaysDirty = false;
+}
+
+function maybeSaveUserBiRaysOnExit() {
+  if (!userBiRaysDirty || !Array.isArray(userBiRays) || userBiRays.length <= 0) return;
+  const shouldSave = confirm("是否保存画线？");
+  if (shouldSave) persistUserBiRaysNow();
+}
+
+window.addEventListener("beforeunload", () => {
+  maybeSaveUserBiRaysOnExit();
+});
+
+(() => {
+  const panel = $("chartToolsPanel");
+  if (!panel) return;
+  const handle = panel.querySelector(".drag-handle");
+  if (!handle) return;
+  let dragging = false;
+  let startX = 0;
+  let startY = 0;
+  let baseLeft = 0;
+  let baseTop = 0;
+  handle.addEventListener("mousedown", (e) => {
+    if (!panel.classList.contains("floating")) return;
+    dragging = true;
+    startX = e.clientX;
+    startY = e.clientY;
+    const rect = panel.getBoundingClientRect();
+    baseLeft = rect.left;
+    baseTop = rect.top;
+    e.preventDefault();
+  });
+  window.addEventListener("mousemove", (e) => {
+    if (!dragging) return;
+    panel.style.left = `${Math.max(8, baseLeft + (e.clientX - startX))}px`;
+    panel.style.top = `${Math.max(8, baseTop + (e.clientY - startY))}px`;
+    panel.style.right = "auto";
+  });
+  window.addEventListener("mouseup", () => {
+    dragging = false;
+  });
+})();
+
+canvas.addEventListener("mousedown", (e) => {
+  if (e.button !== 0) return;
+  chartClickMoved = false;
+  chartMouseDownPos = { x: e.clientX, y: e.clientY };
+});
 
 canvas.addEventListener("click", (e) => {
   if (!lastPayload || !lastPayload.ready || !viewReady) return;
+  if (chartClickMoved) return;
   const rect = canvas.getBoundingClientRect();
   const s = toScaler(lastPayload.chart, Math.max(allXMin, viewXMin), viewXMax);
   const y = e.clientY - rect.top;
@@ -3871,7 +4054,6 @@ canvas.addEventListener("click", (e) => {
   if (wantBiRay) {
     const pt = getNearestBiEndpoint(lastPayload.chart, s, x, y, 12);
     if (!pt) {
-      setMsg("未命中笔端点，请靠近笔(Bi)端点点击。");
       return;
     }
     pendingBiRayPts.push(pt);
@@ -3888,10 +4070,20 @@ canvas.addEventListener("click", (e) => {
       return;
     }
     userBiRays.push({ x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y });
-    storageSet("chan_user_bi_rays", JSON.stringify(userBiRays));
+    userBiRaysDirty = true;
     setMsg("已生成笔射线 →");
     draw(lastPayload.chart);
     return;
+  }
+
+  if (activeTool === "none") {
+    const picked = pickDrawingAt(s, x, y);
+    if (picked) {
+      selectedDrawing = picked;
+      setMsg(picked.type === "biRay" ? "已选中笔端点射线，可点击“画线属性”编辑。" : "已选中水平射线，可点击“画线属性”编辑。");
+      draw(lastPayload.chart);
+      return;
+    }
   }
 
   const panel = getPanelByY(s, y);
@@ -4269,10 +4461,17 @@ function initTradeStatusDrag() {
   const saved = safeJsonParse(storageGet("chan_trade_overlay_pos"), null);
   if (saved && Number.isFinite(saved.left) && Number.isFinite(saved.top)) {
     applyTradeOverlayPosition(saved.left, saved.top);
-    if (Number.isFinite(saved.width)) overlay.style.width = `${saved.width}px`;
-    if (Number.isFinite(saved.height) && saved.height > 0) overlay.style.height = `${saved.height}px`;
+    if (Number.isFinite(saved.width)) {
+      const safeWidth = Math.max(220, Math.min(window.innerWidth - 16, saved.width));
+      overlay.style.width = `${safeWidth}px`;
+    }
+    if (Number.isFinite(saved.height) && saved.height > 0) {
+      const safeHeight = Math.max(64, Math.min(window.innerHeight - 16, saved.height));
+      overlay.style.height = `${safeHeight}px`;
+    }
     tradeOverlayState.minimized = !!saved.minimized;
-    tradeOverlayState.maximized = !!saved.maximized;
+    // Do not auto-enter maximized mode on load, avoid covering the full page and blocking controls.
+    tradeOverlayState.maximized = false;
     overlay.classList.toggle("minimized", tradeOverlayState.minimized);
   } else {
     applyTradeOverlayPosition(16, 16);
@@ -4878,10 +5077,28 @@ function drawGridLines(s) {
 function drawChips(chart, s) {
   if (!chartConfig.chip.enabled) return;
   const ksAll = getChipBaseKs(chart);
-  const refK0 = (chart.kline && chart.kline.length > 0) ? chart.kline[chart.kline.length - 1] : null;
-  const useLatest = !crosshairEnabled || crosshairX === null || !canvasHovered;
-  const refK = (useLatest ? refK0 : getReferenceK(chart, s)) || refK0 || (ksAll.length > 0 ? ksAll[ksAll.length - 1] : null);
-  const refText = useLatest ? "最新" : `历史@${refK?.t || "-"}`;
+  const visibleKs = s.visibleK || [];
+  const latestVisibleK = visibleKs.length > 0 ? visibleKs[visibleKs.length - 1] : ((chart.kline && chart.kline.length > 0) ? chart.kline[chart.kline.length - 1] : null);
+  const crossRefK = (crosshairEnabled && crosshairX !== null && canvasHovered) ? getReferenceK(chart, s) : null;
+  const refMode = String(chartConfig.chip.peakRefMode || "latest_visible");
+  const getTurnRef = (type) => {
+    const arr = type === "seg" ? (chart.seg || []) : (chart.bi || []);
+    let best = null;
+    for (const l of arr) {
+      if (!l || !Number.isFinite(l.x2)) continue;
+      if (!latestVisibleK || l.x2 > latestVisibleK.x) continue;
+      if (!best || l.x2 > best.x) best = { x: l.x2 };
+    }
+    if (!best) return null;
+    return (chart.kline || []).find((k) => k.x === best.x) || null;
+  };
+  let refK = crossRefK;
+  if (!refK) {
+    if (refMode === "seg_turn") refK = getTurnRef("seg");
+    else if (refMode === "bi_turn") refK = getTurnRef("bi");
+    if (!refK) refK = latestVisibleK || (ksAll.length > 0 ? ksAll[ksAll.length - 1] : null);
+  }
+  const refText = `日期:${refK?.t || "-"}`;
   if (ksAll.length === 0 || !refK) return;
   const priceStep = chartConfig.chip.bucketStep || 0.1;
   const stepMul = 1 / priceStep;
@@ -4983,6 +5200,28 @@ function drawChips(chart, s) {
   ctx.fillStyle = cssVar("--legendText", "#0f172a");
   ctx.font = "12px Consolas";
   ctx.fillText(`筹码(${refText})`, xL + 6, PAD_T + 14);
+  const peaks = [];
+  for (let i = 1; i < tickCount - 1; i++) {
+    const cur = arr[i];
+    if (!(cur > arr[i - 1] && cur > arr[i + 1])) continue;
+    const p = (minTick + i) / stepMul;
+    if (p < s.yMin || p > s.yMax) continue;
+    peaks.push(p);
+  }
+  if (peaks.length > 0) {
+    ctx.save();
+    ctx.strokeStyle = getCfgColor(chartConfig.chip.peakLineColor || "#2563eb");
+    ctx.lineWidth = Number(chartConfig.chip.peakLineWidth || 1.2);
+    ctx.setLineDash(getTradeLineDash(chartConfig.chip.peakLineStyle || "dashed"));
+    for (const p of peaks) {
+      const yPx = s.y(p);
+      ctx.beginPath();
+      ctx.moveTo(xL, yPx);
+      ctx.lineTo(PAD_L, yPx);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
   ctx.restore();
 }
 
@@ -5403,23 +5642,31 @@ function drawBsp(arr, s) {
 function drawUserRays(s) {
   if (!userRays || userRays.length === 0) return;
   ctx.save();
-  ctx.lineWidth = chartConfig.userRay.width;
-  ctx.strokeStyle = getCfgColor(chartConfig.userRay.color);
-  ctx.setLineDash(chartConfig.userRay.dash || [8, 4]);
   ctx.font = `${chartConfig.userRay.fontSize}px Consolas`;
-  for (const ray of userRays) {
+  userRays.forEach((ray, idx) => {
+    ctx.lineWidth = getRayLineWidth(ray);
+    ctx.strokeStyle = getRayLineColor(ray);
+    ctx.setLineDash(getTradeLineDash(getRayLineStyle(ray)));
     const xp = s.x(ray.x);
     const yp = s.y(ray.y);
     const xEnd = s.w - PAD_R;
-    if (xp > xEnd) continue;
+    if (xp > xEnd) return;
     ctx.beginPath();
     ctx.moveTo(xp, yp);
     ctx.lineTo(xEnd, yp);
     ctx.stroke();
     
     // Draw price at the end
-    ctx.fillStyle = getCfgColor(chartConfig.userRay.color);
+    ctx.fillStyle = getRayLineColor(ray);
     ctx.fillText(ray.y.toFixed(2), xEnd + 4, yp + (chartConfig.userRay.fontSize / 3));
+    if (selectedDrawing && selectedDrawing.type === "ray" && selectedDrawing.index === idx) {
+      ctx.save();
+      ctx.setLineDash([]);
+      ctx.strokeStyle = "#2563eb";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(xp - 4, yp - 4, 8, 8);
+      ctx.restore();
+    }
     
     // label for deletion if crosshair or mouse is near
     if (crosshairX !== null && crosshairY !== null) {
@@ -5431,7 +5678,7 @@ function drawUserRays(s) {
          ctx.fillText("双击删除射线", xp + 5, yp - 5);
       }
     }
-  }
+  });
   ctx.restore();
 }
 
@@ -5469,14 +5716,14 @@ function getNearestBiEndpoint(chart, s, px, py, maxDistPx = 12) {
 function drawUserBiRays(s, chart) {
   if (!userBiRays || userBiRays.length === 0) return;
   ctx.save();
-  ctx.lineWidth = chartConfig.userRay.width;
-  ctx.strokeStyle = getCfgColor(chartConfig.userRay.color);
-  ctx.setLineDash(chartConfig.userRay.dash || [8, 4]);
-  for (const r of userBiRays) {
+  userBiRays.forEach((r, idx) => {
+    ctx.lineWidth = getRayLineWidth(r);
+    ctx.strokeStyle = getRayLineColor(r);
+    ctx.setLineDash(getTradeLineDash(getRayLineStyle(r)));
     const x1 = Number(r.x1), y1 = Number(r.y1), x2 = Number(r.x2), y2 = Number(r.y2);
-    if (!Number.isFinite(x1) || !Number.isFinite(y1) || !Number.isFinite(x2) || !Number.isFinite(y2)) continue;
+    if (!Number.isFinite(x1) || !Number.isFinite(y1) || !Number.isFinite(x2) || !Number.isFinite(y2)) return;
     const dx = (x2 - x1);
-    if (!Number.isFinite(dx) || dx === 0) continue;
+    if (!Number.isFinite(dx) || dx === 0) return;
     const slope = (y2 - y1) / dx;
     const xEnd = s.xMax;
     const yEnd = y1 + slope * (xEnd - x1);
@@ -5484,11 +5731,19 @@ function drawUserBiRays(s, chart) {
     const p1y = s.y(y1);
     const p2x = s.x(xEnd);
     const p2y = s.y(yEnd);
-    if (p1x > s.w - PAD_R) continue;
+    if (p1x > s.w - PAD_R) return;
     ctx.beginPath();
     ctx.moveTo(p1x, p1y);
     ctx.lineTo(p2x, p2y);
     ctx.stroke();
+    if (selectedDrawing && selectedDrawing.type === "biRay" && selectedDrawing.index === idx) {
+      ctx.save();
+      ctx.setLineDash([]);
+      ctx.strokeStyle = "#2563eb";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(p1x - 4, p1y - 4, 8, 8);
+      ctx.restore();
+    }
 
     if (crosshairX !== null && crosshairY !== null) {
       const xVal = xFromPx(s, crosshairX);
@@ -5502,7 +5757,7 @@ function drawUserBiRays(s, chart) {
         }
       }
     }
-  }
+  });
   ctx.restore();
 }
 
@@ -5614,7 +5869,6 @@ function detectBspPromptOnLastBar(payload) {
   if (lastSeenBspKey.has(key)) return false;
   lastSeenBspKey.add(key);
   showBspPrompt(payload, lines, key, hits);
-  setMsg(`出现买卖点 @${payload.time}\n${lines}`);
   return true;
 }
 
@@ -5623,7 +5877,7 @@ async function stepOnce(logMessage) {
   const payload = await api("/api/step", { judge_mode: systemConfig.bspJudgeMode || "auto" });
   if (logMessage) setMsg(payload.message || "步进成功");
   refreshUI(payload, { afterStep: true });
-  const interrupted = detectBspPromptOnLastBar(payload);
+  const interrupted = isBspJudgeManual() ? false : detectBspPromptOnLastBar(payload);
   const reachedEnd = prevStepIdx !== null && Number(payload.step_idx) === prevStepIdx;
   return { payload, interrupted, reachedEnd };
 }
@@ -5777,7 +6031,7 @@ $("btnStepN").onclick = async () => {
       done += 1;
       if (result.interrupted || result.reachedEnd) break;
     }
-    setMsg(`步进 N 完成：N=${n}，实际执行=${done}`);
+    setMsg(`步进N（${done}）根完成`);
   } catch (e) {
     setMsg("步进 N 失败：" + e.message);
   } finally {
@@ -5883,6 +6137,7 @@ $("btnReset").onclick = async () => {
 
 $("btnExit").onclick = async () => {
   if (!confirm("确定要退出并终止后台服务吗？")) return;
+  maybeSaveUserBiRaysOnExit();
   setMsg("正在尝试终止后台服务并关闭页面...");
   try {
     await fetch("/api/exit", { method: "POST" });
