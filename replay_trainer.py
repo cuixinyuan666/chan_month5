@@ -101,10 +101,12 @@ class NewKPoint:
 @dataclass
 class ChanStructureBundle:
     chan_algo: str
+    fract_list: Any
     bi_list: Any
     seg_list: Any
     segseg_list: Any
     segsegseg_list: Any
+    fractzs_list: Any
     zs_list: Any
     segzs_list: Any
     segsegzs_list: Any
@@ -241,6 +243,10 @@ def normalize_alternating_points(points: list[NewKPoint]) -> list[NewKPoint]:
     return normalized
 
 
+def empty_zs_list(zs_conf) -> CZSList:
+    return CZSList(zs_config=zs_conf)
+
+
 def extract_new_fractal_points(items: list[Any]) -> list[NewKPoint]:
     points: list[NewKPoint] = []
     for bar in build_combined_newk_bars(items):
@@ -321,10 +327,21 @@ def resolve_boundary_line(source_lines: list[Any], point: NewKPoint, target_dir:
     return cur
 
 
+def insert_gap_bridged_bi_pairs(pair_specs: list[tuple[Any, Any, str]]) -> list[tuple[Any, Any, str]]:
+    bridged: list[tuple[Any, Any, str]] = []
+    for begin_klc, end_klc, reason in pair_specs:
+        if bridged:
+            _, prev_end_klc, _ = bridged[-1]
+            if getattr(prev_end_klc, "idx", -1) < getattr(begin_klc, "idx", -1):
+                bridged.append((prev_end_klc, begin_klc, "new_chan_fract_gap_bridge"))
+        bridged.append((begin_klc, end_klc, reason))
+    return bridged
+
+
 def build_new_bi_list(kl_list) -> list[CBi]:
     source_klc = [klc for klc in kl_list.lst if klc.fx in (FX_TYPE.TOP, FX_TYPE.BOTTOM)]
     points = extract_new_fractal_points(source_klc)
-    bi_list: list[CBi] = []
+    pair_specs: list[tuple[Any, Any, str]] = []
     for start_point, end_point in zip(points, points[1:]):
         if start_point.fx == end_point.fx:
             continue
@@ -332,17 +349,56 @@ def build_new_bi_list(kl_list) -> list[CBi]:
         end_klc = end_point.source_item
         if begin_klc.idx >= end_klc.idx:
             continue
+        pair_specs.append((begin_klc, end_klc, "new_chan_fract"))
+    bi_list: list[CBi] = []
+    for begin_klc, end_klc, reason in insert_gap_bridged_bi_pairs(pair_specs):
         try:
-            bi_list.append(CBi(begin_klc, end_klc, idx=len(bi_list), is_sure=True))
+            bi = CBi(begin_klc, end_klc, idx=len(bi_list), is_sure=True)
+            bi.reason = reason
+            bi.is_gap_bridge = "gap_bridge" in reason
+            bi_list.append(bi)
         except Exception:
             continue
     link_line_chain(bi_list)
     return bi_list
 
 
+def build_gap_bridge_seg_spec(source_lines: list[Any], prev_end_line: Any, next_start_line: Any, reason_tag: str):
+    gap_start_idx = int(prev_end_line.idx) + 1
+    gap_end_idx = int(next_start_line.idx) - 1
+    if gap_start_idx > gap_end_idx:
+        return None
+    gap_candidates = list(source_lines[gap_start_idx:gap_end_idx + 1])
+    if not gap_candidates:
+        return None
+    bridge_dir = BI_DIR.UP if float(next_start_line.get_begin_val()) >= float(prev_end_line.get_end_val()) else BI_DIR.DOWN
+    matching = [line for line in gap_candidates if getattr(line, "dir", None) == bridge_dir]
+    if not matching:
+        matching = [gap_candidates[0]]
+        bridge_dir = matching[0].dir
+    bridge_start = matching[0]
+    bridge_end = matching[-1]
+    if getattr(bridge_start, "idx", -1) > getattr(bridge_end, "idx", -1):
+        return None
+    return bridge_start, bridge_end, bridge_dir, f"{reason_tag}_gap_bridge"
+
+
+def insert_gap_bridged_seg_specs(source_lines: list[Any], seg_specs: list[tuple[Any, Any, BI_DIR, str]], reason_tag: str):
+    bridged: list[tuple[Any, Any, BI_DIR, str]] = []
+    for start_line, end_line, target_dir, reason in seg_specs:
+        if bridged:
+            _, prev_end_line, _, _ = bridged[-1]
+            if int(prev_end_line.idx) + 1 <= int(start_line.idx) - 1:
+                bridge_spec = build_gap_bridge_seg_spec(source_lines, prev_end_line, start_line, reason_tag)
+                if bridge_spec is not None:
+                    bridged.append(bridge_spec)
+        bridged.append((start_line, end_line, target_dir, reason))
+    return bridged
+
+
 def build_new_seg_list(source_lines: list[Any], reason_tag: str) -> SimpleLineList:
     points = extract_new_fractal_points(source_lines)
-    seg_lines = SimpleLineList()
+    seg_specs: list[tuple[Any, Any, BI_DIR, str]] = []
     for start_point, end_point in zip(points, points[1:]):
         if start_point.fx == end_point.fx:
             continue
@@ -355,8 +411,15 @@ def build_new_seg_list(source_lines: list[Any], reason_tag: str) -> SimpleLineLi
             continue
         if start_line.dir != target_dir or end_line.dir != target_dir:
             continue
+        seg_specs.append((start_line, end_line, target_dir, reason_tag))
+    seg_lines = SimpleLineList()
+    for start_line, end_line, target_dir, reason in insert_gap_bridged_seg_specs(source_lines, seg_specs, reason_tag):
         try:
-            seg_lines.append(CSeg(len(seg_lines), start_line, end_line, is_sure=True, seg_dir=target_dir, reason=reason_tag))
+            seg = CSeg(len(seg_lines), start_line, end_line, is_sure=True, seg_dir=target_dir, reason=reason)
+            if "gap_bridge" in reason:
+                seg.is_sure = True
+                seg.is_gap_bridge = True
+            seg_lines.append(seg)
         except Exception:
             continue
     link_line_chain(seg_lines)
@@ -446,14 +509,18 @@ def build_classic_bundle(chan: CChan) -> ChanStructureBundle:
     kl_list = chan[0]
     conf = chan.conf
     segsegseg_list = build_hidden_seg_layer(kl_list.segseg_list, conf)
+    fract_list = SimpleLineList()
+    fractzs_list = empty_zs_list(conf.zs_conf)
     segsegzs_list = build_level_zs(kl_list.segseg_list, segsegseg_list, conf.zs_conf)
     segseg_bs_point_lst = build_level_bsp(kl_list.segseg_list, segsegseg_list, conf.seg_bs_point_conf)
     return ChanStructureBundle(
         chan_algo=CHAN_ALGO_CLASSIC,
+        fract_list=fract_list,
         bi_list=kl_list.bi_list,
         seg_list=kl_list.seg_list,
         segseg_list=kl_list.segseg_list,
         segsegseg_list=segsegseg_list,
+        fractzs_list=fractzs_list,
         zs_list=kl_list.zs_list,
         segzs_list=kl_list.segzs_list,
         segsegzs_list=segsegzs_list,
@@ -468,11 +535,13 @@ def build_classic_bundle(chan: CChan) -> ChanStructureBundle:
 def build_new_bundle(chan: CChan) -> ChanStructureBundle:
     kl_list = chan[0]
     conf = chan.conf
-    # 新缠论：分型端点 -> 新K线 -> 新笔 -> 新段 -> 新2段；这里只复用包含处理/中枢/BSP引擎，不走原工程特征序列线段逻辑。
-    bi_list = build_new_bi_list(kl_list)
+    # 新缠论：分型端点 -> 新K线 -> 分型 -> 笔 -> 段 -> 2段；额外再递推一层隐藏结构支撑 2段 中枢/BSP。
+    fract_list = build_new_bi_list(kl_list)
+    bi_list = build_new_seg_list(fract_list, "new_chan_bi")
     seg_list = build_new_seg_list(bi_list, "new_chan_seg")
     segseg_list = build_new_seg_list(seg_list, "new_chan_segseg")
-    segsegseg_list = build_hidden_seg_layer(segseg_list, conf)
+    segsegseg_list = build_new_seg_list(segseg_list, "new_chan_hidden_upper")
+    fractzs_list = build_level_zs(fract_list, bi_list, conf.zs_conf)
     zs_list = build_level_zs(bi_list, seg_list, conf.zs_conf)
     segzs_list = build_level_zs(seg_list, segseg_list, conf.zs_conf)
     segsegzs_list = build_level_zs(segseg_list, segsegseg_list, conf.zs_conf)
@@ -481,10 +550,12 @@ def build_new_bundle(chan: CChan) -> ChanStructureBundle:
     segseg_bs_point_lst = build_level_bsp(segseg_list, segsegseg_list, conf.seg_bs_point_conf)
     return ChanStructureBundle(
         chan_algo=CHAN_ALGO_NEW,
+        fract_list=fract_list,
         bi_list=bi_list,
         seg_list=seg_list,
         segseg_list=segseg_list,
         segsegseg_list=segsegseg_list,
+        fractzs_list=fractzs_list,
         zs_list=zs_list,
         segzs_list=segzs_list,
         segsegzs_list=segsegzs_list,
@@ -503,6 +574,7 @@ def build_structure_bundle(chan: CChan, chan_algo: str) -> ChanStructureBundle:
 
 def get_bundle_line_list(bundle: ChanStructureBundle, level: str):
     mapping = {
+        "fract": bundle.fract_list,
         "bi": bundle.bi_list,
         "seg": bundle.seg_list,
         "segseg": bundle.segseg_list,
@@ -1308,9 +1380,11 @@ def serialize_chan(
     kl_list = chan[0]
     klu_arr = serialize_klu_iter(kl_list.klu_iter())
     active_bundle = bundle or build_structure_bundle(chan, chan_algo)
+    fract_arr = serialize_line_collection(active_bundle.fract_list)
     bi_arr = serialize_line_collection(active_bundle.bi_list)
     seg_arr = serialize_line_collection(active_bundle.seg_list)
     segseg_arr = serialize_line_collection(active_bundle.segseg_list)
+    fract_zs_arr = serialize_zs_collection(active_bundle.fractzs_list)
     bi_zs_arr = serialize_zs_collection(active_bundle.zs_list)
     seg_zs_arr = serialize_zs_collection(active_bundle.segzs_list)
     segseg_zs_arr = serialize_zs_collection(active_bundle.segsegzs_list)
@@ -1325,9 +1399,11 @@ def serialize_chan(
     return {
         "kline": klu_arr,
         "kline_all": kline_all or [],
+        "fract": fract_arr,
         "bi": bi_arr,
         "seg": seg_arr,
         "segseg": segseg_arr,
+        "fract_zs": fract_zs_arr,
         "bi_zs": bi_zs_arr,
         "seg_zs": seg_zs_arr,
         "segseg_zs": segseg_zs_arr,
@@ -2327,9 +2403,11 @@ const DEFAULT_CHART_CONFIG = {
   theme: "light",
   crosshair: { width: 5, color: "#000000", fontSize: 16 },
   fx: { width: 1.1, color: "#06b6d4", dashed: true },
+  fract: { widthSure: 2.2, widthUnsure: 1.6, color: "#d97706" },
   bi: { widthSure: 3.1, widthUnsure: 2.2, color: "#f59e0b" },
   seg: { widthSure: 4.8, widthUnsure: 3.5, color: "#059669" },
   segseg: { widthSure: 6.0, widthUnsure: 4.6, color: "#2563eb" },
+  fractZs: { width: 1.4, color: "#b45309", enabled: true },
   biZs: { width: 1.8, color: "#f59e0b", enabled: true },
   segZs: { width: 2.4, color: "#059669", enabled: true },
   segsegZs: { width: 2.8, color: "#2563eb", enabled: true },
@@ -2404,7 +2482,9 @@ let chanConfig = deepMerge(
 function migrateChartConfig(cfg) {
   const next = ensureObject(cfg, {});
   if (next.bsp && !next.bspBi) next.bspBi = JSON.parse(JSON.stringify(next.bsp));
+  if (!next.fract) next.fract = {};
   if (!next.segseg) next.segseg = {};
+  if (!next.fractZs) next.fractZs = {};
   if (!next.segsegZs) next.segsegZs = {};
   if (!next.bspBi) next.bspBi = {};
   if (!next.bspSeg) next.bspSeg = {};
@@ -2425,6 +2505,7 @@ const DEFAULT_SESSION_CONFIG = {
   chipEnabled: true,
   chipStretchLevel: "5",
   chipBucketStep: "0.1",
+  fractZsEnabled: true,
   biZsEnabled: true,
   segZsEnabled: true,
   segsegZsEnabled: true,
@@ -2824,6 +2905,7 @@ function saveSessionConfig() {
     chipEnabled: chartConfig.chip.enabled,
     chipStretchLevel: String(chartConfig.chip.stretchLevel),
     chipBucketStep: String(chartConfig.chip.bucketStep),
+    fractZsEnabled: chartConfig.fractZs.enabled,
     biZsEnabled: chartConfig.biZs.enabled,
     segZsEnabled: chartConfig.segZs.enabled,
     segsegZsEnabled: chartConfig.segsegZs.enabled,
@@ -2894,7 +2976,7 @@ function renderChanSettingsForm() {
         { label: "缠论主逻辑", subKey: "chan_algo", type: "select", options: [
           { value: "classic", label: "原缠论" },
           { value: "new", label: "新缠论" }
-        ], tip: "原缠论使用工程原有笔/段/2段逻辑；新缠论使用“新K线 -> 新笔 -> 新段 -> 新2段”的递推逻辑，但前端展示名称仍统一为笔/段/2段。" }
+        ], tip: "原缠论使用工程原有笔/段/2段逻辑；新缠论使用“新K线 -> 分型 -> 笔 -> 段 -> 2段”的递推逻辑，前端展示名称固定为分型/笔/段/2段。" }
       ]
     },
     {
@@ -3257,6 +3339,16 @@ function renderSettingsForm() {
       ]
     },
     {
+      title: "分型辅助线",
+      key: "fx",
+      color: "#0891b2",
+      bgColor: "rgba(8, 145, 178, 0.08)",
+      items: [
+        { label: "辅助线颜色", subKey: "color", type: "color" },
+        { label: "辅助线粗细", subKey: "width", type: "number", min: 0.1, max: 5, step: 0.1 }
+      ]
+    },
+    {
       title: "筹码分布 (Chip)",
       key: "chip",
       color: "#0891b2",
@@ -3281,7 +3373,18 @@ function renderSettingsForm() {
       ]
     },
     {
-      title: "笔 (Bi) & 分型",
+      title: "分型",
+      key: "fract",
+      color: "#b45309",
+      bgColor: "rgba(180, 83, 9, 0.08)",
+      items: [
+        { label: "分型颜色", subKey: "color", type: "color" },
+        { label: "粗细(确定)", subKey: "widthSure", type: "number", min: 0.1, max: 8, step: 0.1 },
+        { label: "粗细(未完成)", subKey: "widthUnsure", type: "number", min: 0.1, max: 8, step: 0.1 }
+      ]
+    },
+    {
+      title: "笔",
       key: "bi",
       color: "#d97706",
       bgColor: "rgba(217, 119, 6, 0.08)",
@@ -3292,18 +3395,18 @@ function renderSettingsForm() {
       ]
     },
     {
-      title: "线段 (Seg)",
+      title: "段",
       key: "seg",
       color: "#059669",
       bgColor: "rgba(5, 150, 105, 0.1)",
       items: [
-        { label: "线段颜色", subKey: "color", type: "color" },
+        { label: "段颜色", subKey: "color", type: "color" },
         { label: "粗细(确定)", subKey: "widthSure", type: "number", min: 0.1, max: 10, step: 0.1 },
         { label: "粗细(未完成)", subKey: "widthUnsure", type: "number", min: 0.1, max: 10, step: 0.1 }
       ]
     },
     {
-      title: "2段 (SegSeg)",
+      title: "2段",
       key: "segseg",
       color: "#2563eb",
       bgColor: "rgba(37, 99, 235, 0.1)",
@@ -3311,6 +3414,17 @@ function renderSettingsForm() {
         { label: "2段颜色", subKey: "color", type: "color" },
         { label: "粗细(确定)", subKey: "widthSure", type: "number", min: 0.1, max: 12, step: 0.1 },
         { label: "粗细(未完成)", subKey: "widthUnsure", type: "number", min: 0.1, max: 12, step: 0.1 }
+      ]
+    },
+    {
+      title: "分型中枢",
+      key: "fractZs",
+      color: "#c2410c",
+      bgColor: "rgba(194, 65, 12, 0.08)",
+      items: [
+        { label: "启用分型中枢", subKey: "enabled", type: "checkbox" },
+        { label: "分型中枢颜色", subKey: "color", type: "color" },
+        { label: "分型中枢粗细", subKey: "width", type: "number", min: 0.1, max: 5, step: 0.1 }
       ]
     },
     {
@@ -5924,7 +6038,9 @@ function drawLines(arr, s, color, width, dashed = false) {
 function drawLegend() {
   const pad = 8;
   const lines = [
-    { label: "分型连线", color: getCfgColor(chartConfig.fx.color), dashed: true, w: chartConfig.fx.width },
+    { label: "分型辅助线", color: getCfgColor(chartConfig.fx.color), dashed: true, w: chartConfig.fx.width },
+    { label: "分型(确定)", color: getCfgColor(chartConfig.fract.color), dashed: false, w: chartConfig.fract.widthSure },
+    { label: "分型(未完成)", color: getCfgColor(chartConfig.fract.color), dashed: true, w: chartConfig.fract.widthUnsure },
     { label: "笔(确定)", color: getCfgColor(chartConfig.bi.color), dashed: false, w: chartConfig.bi.widthSure },
     { label: "笔(未完成)", color: getCfgColor(chartConfig.bi.color), dashed: true, w: chartConfig.bi.widthUnsure },
     { label: "段(确定)", color: getCfgColor(chartConfig.seg.color), dashed: false, w: chartConfig.seg.widthSure },
@@ -6476,6 +6592,9 @@ function draw(chart) {
   drawAxes(s);
   drawIndicators(chart, s);
   drawCandles(chart, s);
+  if (chartConfig.fractZs.enabled) {
+    drawZsRects(chart.fract_zs || [], s, getCfgColor(chartConfig.fractZs.color), chartConfig.fractZs.width);
+  }
   if (chartConfig.biZs.enabled) {
     drawZsRects(chart.bi_zs || [], s, getCfgColor(chartConfig.biZs.color), chartConfig.biZs.width);
   }
@@ -6485,8 +6604,10 @@ function draw(chart) {
   if (chartConfig.segsegZs.enabled) {
     drawZsRects(chart.segseg_zs || [], s, getCfgColor(chartConfig.segsegZs.color), chartConfig.segsegZs.width);
   }
-  // 分型最细虚线 → 笔中等实线 → 段更粗 → 2段最粗
+  // 分型辅助线最细虚线 → 分型 → 笔 → 段 → 2段
   drawLines(chart.fx_lines || [], s, getCfgColor(chartConfig.fx.color), chartConfig.fx.width, true);
+  drawLines((chart.fract || []).filter((x) => x.is_sure), s, getCfgColor(chartConfig.fract.color), chartConfig.fract.widthSure, false);
+  drawLines((chart.fract || []).filter((x) => !x.is_sure), s, getCfgColor(chartConfig.fract.color), chartConfig.fract.widthUnsure, true);
   drawLines((chart.bi || []).filter((x) => x.is_sure), s, getCfgColor(chartConfig.bi.color), chartConfig.bi.widthSure, false);
   drawLines((chart.bi || []).filter((x) => !x.is_sure), s, getCfgColor(chartConfig.bi.color), chartConfig.bi.widthUnsure, true);
   drawLines((chart.seg || []).filter((x) => x.is_sure), s, getCfgColor(chartConfig.seg.color), chartConfig.seg.widthSure, false);
