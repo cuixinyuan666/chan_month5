@@ -61,6 +61,7 @@ CHAN_ALGO_NEW = "new"
 VISIBLE_BSP_LEVELS = ("bi", "seg", "segseg")
 LEVEL_ORDER = {level: idx for idx, level in enumerate(VISIBLE_BSP_LEVELS)}
 LEVEL_LABELS = {"bi": "笔", "seg": "段", "segseg": "2段"}
+STRUCTURE_LEVEL_LABELS = {"fract": "分型", **LEVEL_LABELS}
 JUDGE_TRIGGER_LEVELS = {"bi": "seg", "seg": "segseg", "segseg": "segsegseg"}
 
 
@@ -115,6 +116,8 @@ class ChanStructureBundle:
     segseg_bs_point_lst: Any
     trend_lines: list[dict[str, Any]]
     fx_lines: list[dict[str, Any]]
+    rhythm_lines: list[dict[str, Any]]
+    rhythm_hits: list[dict[str, Any]]
 
 
 class CombinedNewKBar:
@@ -477,6 +480,236 @@ def build_fx_lines(kl_list) -> list[dict[str, Any]]:
     return fx_lines
 
 
+def reverse_bi_dir(direction: BI_DIR) -> BI_DIR:
+    return BI_DIR.DOWN if direction == BI_DIR.UP else BI_DIR.UP
+
+
+def structure_level_label(level: str) -> str:
+    return STRUCTURE_LEVEL_LABELS.get(level, level)
+
+
+def line_begin_x(line: Any) -> int:
+    return int(line.get_begin_klu().idx)
+
+
+def line_end_x(line: Any) -> int:
+    return int(line.get_end_klu().idx)
+
+
+def make_line_key(level: str, line: Any) -> str:
+    return f"{level}|{getattr(line, 'idx', -1)}|{line_begin_x(line)}|{line_end_x(line)}|{getattr(line, 'dir', '')}"
+
+
+def child_lines_within_parent(parent: Any, child_lines: list[Any]) -> list[Any]:
+    begin_x = line_begin_x(parent)
+    end_x = line_end_x(parent)
+    return sorted(
+        [
+            line for line in child_lines
+            if line_begin_x(line) >= begin_x and line_end_x(line) <= end_x
+        ],
+        key=lambda item: (line_begin_x(item), line_end_x(item), getattr(item, "idx", -1)),
+    )
+
+
+def build_alternating_child_sequence(child_lines: list[Any], parent_dir: BI_DIR) -> list[Any]:
+    if not child_lines:
+        return []
+    seq: list[Any] = []
+    expected = parent_dir
+    started = False
+    for child in child_lines:
+        child_dir = getattr(child, "dir", None)
+        if child_dir is None:
+            continue
+        if not started:
+            if child_dir != parent_dir:
+                continue
+            started = True
+        if child_dir != expected:
+            continue
+        seq.append(child)
+        expected = reverse_bi_dir(expected)
+    return seq
+
+
+def make_rhythm_display_label(round_current: int, round_ref: int) -> str:
+    return f"节奏线{round_current}" if round_current == round_ref else f"节奏线{round_current}_{round_ref}"
+
+
+def iter_klus(kl_list) -> list[Any]:
+    return [klu for klu in kl_list.klu_iter()]
+
+
+def find_1382_hit(klus: list[Any], *, start_x: int, direction: BI_DIR, threshold: float) -> Optional[dict[str, Any]]:
+    for klu in klus:
+        x = int(klu.idx)
+        if x <= start_x:
+            continue
+        if direction == BI_DIR.UP:
+            high = float(klu.high)
+            if high >= threshold:
+                return {
+                    "x": x,
+                    "y": high,
+                    "time": klu.time.to_str(),
+                    "price_field": "H",
+                    "price_value": high,
+                }
+        else:
+            low = float(klu.low)
+            if low <= threshold:
+                return {
+                    "x": x,
+                    "y": low,
+                    "time": klu.time.to_str(),
+                    "price_field": "L",
+                    "price_value": low,
+                }
+    return None
+
+
+def build_parent_rhythm_entries(
+    *,
+    level: str,
+    parent_level: str,
+    parent_line: Any,
+    child_lines: list[Any],
+    klus: list[Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    parent_dir = getattr(parent_line, "dir", None)
+    if parent_dir not in (BI_DIR.UP, BI_DIR.DOWN):
+        return [], []
+    seq = build_alternating_child_sequence(child_lines, parent_dir)
+    if len(seq) < 3:
+        return [], []
+
+    parent_begin_x = line_begin_x(parent_line)
+    parent_end_x = line_end_x(parent_line)
+    parent_key = make_line_key(parent_level, parent_line)
+    parent_label = structure_level_label(parent_level)
+    level_label_cn = structure_level_label(level)
+    a0 = float(parent_line.get_begin_val())
+    lines: list[dict[str, Any]] = []
+    hits: list[dict[str, Any]] = []
+    max_round = (len(seq) - 1) // 2
+
+    for round_current in range(1, max_round + 1):
+        d_line = seq[2 * round_current]
+        d_val = float(d_line.get_end_val())
+        for round_ref in range(1, round_current + 1):
+            b_line = seq[2 * (round_ref - 1)]
+            c_line = seq[2 * (round_ref - 1) + 1]
+            b_val = float(b_line.get_end_val())
+            c_val = float(c_line.get_end_val())
+            if parent_dir == BI_DIR.UP:
+                denom = b_val - a0
+                ratio = (b_val - c_val) / denom if abs(denom) > 1e-12 else None
+                rhythm_price = d_val - (d_val - a0) * ratio if ratio is not None else None
+                threshold = c_val + (b_val - c_val) * 1.382 if ratio is not None else None
+            else:
+                denom = a0 - b_val
+                ratio = (c_val - b_val) / denom if abs(denom) > 1e-12 else None
+                rhythm_price = d_val + (a0 - d_val) * ratio if ratio is not None else None
+                threshold = c_val - (c_val - b_val) * 1.382 if ratio is not None else None
+            if ratio is None or rhythm_price is None or threshold is None:
+                continue
+            if not (ratio >= 0 and abs(rhythm_price) < float("inf") and abs(threshold) < float("inf")):
+                continue
+            display_label = make_rhythm_display_label(round_current, round_ref)
+            color_group = f"rhythm{min(round_ref, 5)}"
+            lines.append(
+                {
+                    "key": f"{parent_key}|line|{round_current}|{round_ref}",
+                    "level": level,
+                    "parent_level": parent_level,
+                    "parent_key": parent_key,
+                    "parent_label": parent_label,
+                    "display_label": display_label,
+                    "round_current": round_current,
+                    "round_ref": round_ref,
+                    "color_group": color_group,
+                    "dir": "UP" if parent_dir == BI_DIR.UP else "DOWN",
+                    "x1": parent_begin_x,
+                    "y1": float(rhythm_price),
+                    "x2": parent_end_x,
+                    "y2": float(rhythm_price),
+                }
+            )
+            if round_ref != round_current:
+                continue
+            hit = find_1382_hit(klus, start_x=line_end_x(c_line), direction=parent_dir, threshold=float(threshold))
+            if hit is None:
+                continue
+            hit_key = f"{parent_key}|1382|{level}|{round_ref}"
+            hits.append(
+                {
+                    "key": hit_key,
+                    "x": int(hit["x"]),
+                    "y": float(hit["y"]),
+                    "level": level,
+                    "parent_level": parent_level,
+                    "parent_key": parent_key,
+                    "display_label": f"{level_label_cn}1382",
+                    "round_ref": round_ref,
+                    "color_group": color_group,
+                    "dir": "UP" if parent_dir == BI_DIR.UP else "DOWN",
+                    "threshold": float(threshold),
+                    "time": hit["time"],
+                    "detail": (
+                        f"{level_label_cn}1382\n"
+                        f"时间：{hit['time']}\n"
+                        f"父结构：{parent_label}\n"
+                        f"方向：{'上升' if parent_dir == BI_DIR.UP else '下降'}\n"
+                        f"轮次：第{round_ref}次回调\n"
+                        f"阈值价：{float(threshold):.3f}\n"
+                        f"触发价：{hit['price_field']}={float(hit['price_value']):.3f}"
+                    ),
+                }
+            )
+    return lines, hits
+
+
+def build_rhythm_structures(
+    *,
+    kl_list: Any,
+    fract_children: list[Any],
+    bi_children: list[Any],
+    seg_children: list[Any],
+    bi_parents: Any,
+    seg_parents: Any,
+    segseg_parents: Any,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    all_lines: list[dict[str, Any]] = []
+    all_hits: list[dict[str, Any]] = []
+    klus = iter_klus(kl_list)
+    mappings = [
+        ("fract", "bi", fract_children, list(bi_parents)),
+        ("bi", "seg", bi_children, list(seg_parents)),
+        ("seg", "segseg", seg_children, list(segseg_parents)),
+    ]
+    for level, parent_level, source_children, parents in mappings:
+        for parent_line in parents:
+            if parent_level in ("seg", "segseg"):
+                parent_children = list(getattr(parent_line, "bi_list", []) or child_lines_within_parent(parent_line, source_children))
+            else:
+                parent_children = child_lines_within_parent(parent_line, source_children)
+            lines, hits = build_parent_rhythm_entries(
+                level=level,
+                parent_level=parent_level,
+                parent_line=parent_line,
+                child_lines=parent_children,
+                klus=klus,
+            )
+            all_lines.extend(lines)
+            all_hits.extend(hits)
+    all_lines.sort(key=lambda item: (int(item["x1"]), int(item["round_ref"]), int(item["round_current"]), str(item["display_label"])))
+    dedup_hits: dict[str, dict[str, Any]] = {}
+    for item in sorted(all_hits, key=lambda entry: (int(entry["x"]), int(entry["round_ref"]), str(entry["level"]))):
+        dedup_hits[str(item["key"])] = item
+    return all_lines, list(dedup_hits.values())
+
+
 def build_level_zs(base_lines: Any, upper_lines: Any, zs_conf) -> CZSList:
     zs_list = CZSList(zs_config=zs_conf)
     try:
@@ -510,9 +743,19 @@ def build_classic_bundle(chan: CChan) -> ChanStructureBundle:
     conf = chan.conf
     segsegseg_list = build_hidden_seg_layer(kl_list.segseg_list, conf)
     fract_list = SimpleLineList()
+    rhythm_fract_children = build_new_bi_list(kl_list)
     fractzs_list = empty_zs_list(conf.zs_conf)
     segsegzs_list = build_level_zs(kl_list.segseg_list, segsegseg_list, conf.zs_conf)
     segseg_bs_point_lst = build_level_bsp(kl_list.segseg_list, segsegseg_list, conf.seg_bs_point_conf)
+    rhythm_lines, rhythm_hits = build_rhythm_structures(
+        kl_list=kl_list,
+        fract_children=rhythm_fract_children,
+        bi_children=list(kl_list.bi_list),
+        seg_children=list(kl_list.seg_list),
+        bi_parents=kl_list.bi_list,
+        seg_parents=kl_list.seg_list,
+        segseg_parents=kl_list.segseg_list,
+    )
     return ChanStructureBundle(
         chan_algo=CHAN_ALGO_CLASSIC,
         fract_list=fract_list,
@@ -529,6 +772,8 @@ def build_classic_bundle(chan: CChan) -> ChanStructureBundle:
         segseg_bs_point_lst=segseg_bs_point_lst,
         trend_lines=build_trend_lines_from_bi_list(list(kl_list.bi_list)),
         fx_lines=build_fx_lines(kl_list),
+        rhythm_lines=rhythm_lines,
+        rhythm_hits=rhythm_hits,
     )
 
 
@@ -548,6 +793,15 @@ def build_new_bundle(chan: CChan) -> ChanStructureBundle:
     bs_point_lst = build_level_bsp(bi_list, seg_list, conf.bs_point_conf)
     seg_bs_point_lst = build_level_bsp(seg_list, segseg_list, conf.seg_bs_point_conf)
     segseg_bs_point_lst = build_level_bsp(segseg_list, segsegseg_list, conf.seg_bs_point_conf)
+    rhythm_lines, rhythm_hits = build_rhythm_structures(
+        kl_list=kl_list,
+        fract_children=list(fract_list),
+        bi_children=list(bi_list),
+        seg_children=list(seg_list),
+        bi_parents=bi_list,
+        seg_parents=seg_list,
+        segseg_parents=segseg_list,
+    )
     return ChanStructureBundle(
         chan_algo=CHAN_ALGO_NEW,
         fract_list=fract_list,
@@ -564,6 +818,8 @@ def build_new_bundle(chan: CChan) -> ChanStructureBundle:
         segseg_bs_point_lst=segseg_bs_point_lst,
         trend_lines=build_trend_lines_from_bi_list(bi_list),
         fx_lines=build_fx_lines(kl_list),
+        rhythm_lines=rhythm_lines,
+        rhythm_hits=rhythm_hits,
     )
 
 
@@ -991,6 +1247,10 @@ class AppState:
         self._last_level_dirs: dict[str, Optional[str]] = {level: None for level in set(JUDGE_TRIGGER_LEVELS.values())}
         # 判定步骤后台记录
         self.bsp_judge_logs: list[dict[str, Any]] = []
+        # 1382 节奏命中历史与去重缓存
+        self.rhythm_hit_history: list[dict[str, Any]] = []
+        self.rhythm_hit_keys: set[str] = set()
+        self._rhythm_notice_hits: list[dict[str, Any]] = []
         # 本次 payload 是否需要弹窗提醒
         self._judge_notice: bool = False
         # 最近一次判定统计（用于 payload 弹窗展示）
@@ -1004,6 +1264,12 @@ class AppState:
         self._last_judge_stats = None
         self._last_judge_x = None
         self._last_judge_time = None
+        self._rhythm_notice_hits = []
+
+    def _reset_rhythm_history(self) -> None:
+        self.rhythm_hit_history = []
+        self.rhythm_hit_keys = set()
+        self._rhythm_notice_hits = []
 
     def _current_level_dir(self, level: str) -> Optional[str]:
         if self.stepper.chan is None:
@@ -1245,6 +1511,42 @@ class AppState:
             )
             existing_keys.add(key)
 
+    def sync_rhythm_history(self) -> None:
+        current_x = self._current_kline_x()
+        self._rhythm_notice_hits = []
+        if current_x is None or self.stepper.chan is None:
+            return
+        bundle = self.stepper.get_structure_bundle()
+        for item in bundle.rhythm_hits:
+            if int(item.get("x", -1)) != current_x:
+                continue
+            key = str(item.get("key") or "")
+            if not key or key in self.rhythm_hit_keys:
+                continue
+            history_item = {
+                "key": key,
+                "x": int(item["x"]),
+                "y": float(item["y"]),
+                "level": str(item["level"]),
+                "parent_level": str(item.get("parent_level", "")),
+                "parent_key": str(item.get("parent_key", "")),
+                "display_label": str(item.get("display_label", "")),
+                "round_ref": int(item.get("round_ref", 0)),
+                "detail": str(item.get("detail", "")),
+                "time": str(item.get("time", self.stepper.current_time())),
+            }
+            self.rhythm_hit_history.append(history_item)
+            self.rhythm_hit_keys.add(key)
+            self._rhythm_notice_hits.append(
+                {
+                    "key": key,
+                    "display_label": history_item["display_label"],
+                    "detail": history_item["detail"],
+                    "x": history_item["x"],
+                    "time": history_item["time"],
+                }
+            )
+
     def rebuild_to_step(self, target_step: int) -> None:
         if self.session_params is None:
             raise ValueError("当前无可重建会话")
@@ -1262,6 +1564,7 @@ class AppState:
         self.ready = True
         self.finished = False
         self.bsp_history = []
+        self._reset_rhythm_history()
         self._last_level_dirs = {level: None for level in set(JUDGE_TRIGGER_LEVELS.values())}
         self._reset_judge_state()
         self.rebuild_bsp_all_snapshot()
@@ -1269,11 +1572,13 @@ class AppState:
         if not self.stepper.step():
             return
         self.sync_bsp_history()
+        self.sync_rhythm_history()
         self.after_step_update()
         for _ in range(target_step):
             if not self.stepper.step():
                 break
             self.sync_bsp_history()
+            self.sync_rhythm_history()
             self.after_step_update()
 
         effective_step = max(0, self.stepper.step_idx)
@@ -1314,6 +1619,8 @@ class AppState:
                 "finished": self.finished,
                 "message": "请先加载会话",
             }
+        rhythm_notice_hits = list(self._rhythm_notice_hits)
+        self._rhythm_notice_hits = []
         bundle = self.stepper.get_structure_bundle()
         chart = serialize_chan(
             self.stepper.chan,
@@ -1337,6 +1644,7 @@ class AppState:
             "price": price,
             "chart": chart,
             "bsp_history": self.bsp_history,
+            "rhythm_notice_hits": rhythm_notice_hits,
             "judge_notice": bool(self._judge_notice),
             "judge_stats": self._last_judge_stats,
             "account": {
@@ -1411,6 +1719,8 @@ def serialize_chan(
         "bsp_bi": bsp_bi_arr,
         "bsp_seg": bsp_seg_arr,
         "bsp_segseg": bsp_segseg_arr,
+        "rhythm_lines": active_bundle.rhythm_lines,
+        "rhythm_hits": active_bundle.rhythm_hits,
         "fx_lines": active_bundle.fx_lines,
         "indicators": indicator_history,
         "trend_lines": active_bundle.trend_lines if active_bundle.trend_lines else trend_lines,
@@ -2317,6 +2627,7 @@ let crosshairEnabled = false;
 let crosshairX = null;
 let crosshairY = null;
 let canvasHovered = false;
+let signalHoverBoxes = [];
 let selectedMainIndicatorSlot = Number(storageGet("chan_selected_main_indicator_slot") || "0");
 let selectedSubIndicatorSlot = Number(storageGet("chan_selected_sub_indicator_slot") || "0");
 let indicatorMainSlots = ensureObject(safeJsonParse(storageGet("chan_indicator_main_slots"), null), null);
@@ -2415,6 +2726,28 @@ const DEFAULT_CHART_CONFIG = {
   bspBi: { fontSize: 14, lineColor: "#94a3b8", lineWidth: 1, lineStyle: "dashed", lineDash: [5, 4] },
   bspSeg: { fontSize: 14, lineColor: "#64748b", lineWidth: 1.1, lineStyle: "dashed", lineDash: [5, 4] },
   bspSegseg: { fontSize: 14, lineColor: "#475569", lineWidth: 1.2, lineStyle: "dashed", lineDash: [5, 4] },
+  rhythmLine: {
+    enabled: true,
+    fractToBiEnabled: true,
+    biToSegEnabled: true,
+    segToSegsegEnabled: true,
+    width: 1.2,
+    lineStyle: "dashed",
+    color1: "#9333ea",
+    color2: "#0f766e",
+    color3: "#2563eb",
+    color4: "#ea580c",
+    color5: "#be123c"
+  },
+  rhythmHit: {
+    fontSize: 14,
+    color: "#7c3aed",
+    lineColor: "#8b5cf6",
+    lineWidth: 1,
+    lineStyle: "dashed",
+    overflowLimit: 4,
+    overflowColor: "#7c3aed"
+  },
   trade: {
     buyColor: "#dc2626",
     sellColor: "#16a34a",
@@ -2489,6 +2822,8 @@ function migrateChartConfig(cfg) {
   if (!next.bspBi) next.bspBi = {};
   if (!next.bspSeg) next.bspSeg = {};
   if (!next.bspSegseg) next.bspSegseg = {};
+  if (!next.rhythmLine) next.rhythmLine = {};
+  if (!next.rhythmHit) next.rhythmHit = {};
   return next;
 }
 
@@ -2934,6 +3269,11 @@ function getCfgColor(c) {
 }
 
 const BSP_LEVEL_CONFIG_KEY = { bi: "bspBi", seg: "bspSeg", segseg: "bspSegseg" };
+const RHYTHM_LEVEL_ENABLED_KEY = {
+  fract: "fractToBiEnabled",
+  bi: "biToSegEnabled",
+  seg: "segToSegsegEnabled",
+};
 
 function getBspConfig(level) {
   const key = BSP_LEVEL_CONFIG_KEY[level] || "bspBi";
@@ -2945,6 +3285,20 @@ function getBspDisplayLabel(p) {
   if (p.display_label) return String(p.display_label);
   if (p.level_label && p.label) return `${p.level_label}${p.label}`;
   return String(p.label || "");
+}
+
+function isRhythmLevelEnabled(level) {
+  const cfg = chartConfig.rhythmLine || DEFAULT_CHART_CONFIG.rhythmLine;
+  const subKey = RHYTHM_LEVEL_ENABLED_KEY[level];
+  if (!subKey) return true;
+  return !!cfg[subKey];
+}
+
+function getRhythmLineColor(group) {
+  const cfg = chartConfig.rhythmLine || DEFAULT_CHART_CONFIG.rhythmLine;
+  const raw = String(group || "rhythm5").replace(/[^0-9]/g, "");
+  const idx = Math.min(5, Math.max(1, Number(raw || "5")));
+  return getCfgColor(cfg[`color${idx}`] || DEFAULT_CHART_CONFIG.rhythmLine[`color${idx}`]);
 }
 
 function openChanSettings() {
@@ -3417,6 +3771,29 @@ function renderSettingsForm() {
       ]
     },
     {
+      title: "节奏线",
+      key: "rhythmLine",
+      color: "#7c3aed",
+      bgColor: "rgba(124, 58, 237, 0.08)",
+      items: [
+        { label: "启用节奏线", subKey: "enabled", type: "checkbox", tip: "总开关，关闭后不绘制任何节奏线。" },
+        { label: "分型→笔", subKey: "fractToBiEnabled", type: "checkbox", tip: "是否绘制分型→笔层级的节奏线。" },
+        { label: "笔→段", subKey: "biToSegEnabled", type: "checkbox", tip: "是否绘制笔→段层级的节奏线。" },
+        { label: "段→2段", subKey: "segToSegsegEnabled", type: "checkbox", tip: "是否绘制段→2段层级的节奏线。" },
+        { label: "节奏线粗细", subKey: "width", type: "number", min: 0.1, max: 6, step: 0.1 },
+        { label: "节奏线线型", subKey: "lineStyle", type: "select", options: [
+          { value: "dashed", label: "虚线" },
+          { value: "solid", label: "实线" },
+          { value: "dotted", label: "点线" }
+        ]},
+        { label: "节奏线1颜色", subKey: "color1", type: "color" },
+        { label: "节奏线2颜色", subKey: "color2", type: "color" },
+        { label: "节奏线3颜色", subKey: "color3", type: "color" },
+        { label: "节奏线4颜色", subKey: "color4", type: "color" },
+        { label: "节奏线5颜色", subKey: "color5", type: "color" }
+      ]
+    },
+    {
       title: "分型中枢",
       key: "fractZs",
       color: "#c2410c",
@@ -3506,6 +3883,25 @@ function renderSettingsForm() {
           { value: "solid", label: "实线" },
           { value: "dotted", label: "点线" }
         ]}
+      ]
+    },
+    {
+      title: "1382提示",
+      key: "rhythmHit",
+      color: "#6d28d9",
+      bgColor: "rgba(109, 40, 217, 0.08)",
+      items: [
+        { label: "文字大小", subKey: "fontSize", type: "number", min: 8, max: 30 },
+        { label: "文字颜色", subKey: "color", type: "color" },
+        { label: "连线颜色", subKey: "lineColor", type: "color" },
+        { label: "连线粗细", subKey: "lineWidth", type: "number", min: 0.1, max: 5, step: 0.1 },
+        { label: "连线线型", subKey: "lineStyle", type: "select", options: [
+          { value: "dashed", label: "虚线" },
+          { value: "solid", label: "实线" },
+          { value: "dotted", label: "点线" }
+        ]},
+        { label: "同列显示上限", subKey: "overflowLimit", type: "number", min: 1, max: 10, step: 1 },
+        { label: "溢出提示颜色", subKey: "overflowColor", type: "color" }
       ]
     },
     {
@@ -4077,27 +4473,36 @@ function saveSystemSettingsFromForm() {
   updateBspJudgeUI();
 }
 
-function initTooltips() {
+function showFloatingTip(text, clientX, clientY) {
   const tipContent = $("tipContent");
+  if (!tipContent || !text) return;
+  tipContent.textContent = text;
+  tipContent.style.display = "block";
+  const tipRect = tipContent.getBoundingClientRect();
+  let top = clientY - tipRect.height / 2;
+  let left = clientX + 12;
+  if (left + tipRect.width > window.innerWidth) left = clientX - tipRect.width - 12;
+  if (top + tipRect.height > window.innerHeight) top = window.innerHeight - tipRect.height - 8;
+  if (top < 0) top = 8;
+  if (left < 0) left = 8;
+  tipContent.style.top = `${top}px`;
+  tipContent.style.left = `${left}px`;
+}
+
+function hideFloatingTip() {
+  const tipContent = $("tipContent");
+  if (tipContent) tipContent.style.display = "none";
+}
+
+function initTooltips() {
   const showTooltip = (target) => {
     const text = target.getAttribute("data-tip");
     if (!text) return;
-    tipContent.textContent = text;
-    tipContent.style.display = "block";
-
     const rect = target.getBoundingClientRect();
-    const tipRect = tipContent.getBoundingClientRect();
-    let top = rect.top + rect.height / 2 - tipRect.height / 2;
-    let left = rect.left + rect.width + 8;
-    if (left + tipRect.width > window.innerWidth) left = rect.left - tipRect.width - 8;
-    if (top + tipRect.height > window.innerHeight) top = window.innerHeight - tipRect.height - 8;
-    if (top < 0) top = 8;
-    if (left < 0) left = 8;
-    tipContent.style.top = `${top}px`;
-    tipContent.style.left = `${left}px`;
+    showFloatingTip(text, rect.left + rect.width, rect.top + rect.height / 2);
   };
   const hideTooltip = () => {
-    tipContent.style.display = "none";
+    hideFloatingTip();
   };
   document.querySelectorAll("[data-tip]").forEach(target => {
     target.onmouseenter = () => showTooltip(target);
@@ -4283,6 +4688,13 @@ function getBspAtX(chart, xVal) {
     if (!p || p.x !== xVal) continue;
     const prefix = p.status === "correct" ? "✓" : (p.status === "wrong" ? "×" : "…");
     const txt = `${prefix} ${getBspDisplayLabel(p)}`;
+    if (seen.has(txt)) continue;
+    seen.add(txt);
+    tags.push(txt);
+  }
+  for (const hit of (chart && chart.rhythm_hits) || []) {
+    if (!hit || hit.x !== xVal) continue;
+    const txt = String(hit.display_label || "1382");
     if (seen.has(txt)) continue;
     seen.add(txt);
     tags.push(txt);
@@ -4479,8 +4891,14 @@ window.addEventListener("mousemove", (e) => {
 
 canvas.addEventListener("mousemove", (e) => {
   canvasHovered = true;
-  if (isPanning) return;
-  if (!lastPayload || !lastPayload.ready) return;
+  if (isPanning) {
+    hideFloatingTip();
+    return;
+  }
+  if (!lastPayload || !lastPayload.ready) {
+    hideFloatingTip();
+    return;
+  }
   const rect = canvas.getBoundingClientRect();
   const s = toScaler(lastPayload.chart, Math.max(allXMin, viewXMin), viewXMax);
   const visibleKs = getVisibleKs(lastPayload.chart, s.xMin, s.xMax);
@@ -4494,8 +4912,14 @@ canvas.addEventListener("mousemove", (e) => {
      const refK = nearestKByX(visibleKs, targetX);
      crosshairX = refK ? s.x(refK.x) : clampedX;
    }
-    
+  
    crosshairY = Math.max(PAD_T, Math.min(s.contentBottom, rawY));
+   const hoveredSignal = (signalHoverBoxes || []).find((box) => rawX >= box.x1 && rawX <= box.x2 && rawY >= box.y1 && rawY <= box.y2);
+   if (hoveredSignal && hoveredSignal.text) {
+     showFloatingTip(hoveredSignal.text, e.clientX, e.clientY);
+   } else {
+     hideFloatingTip();
+   }
    draw(lastPayload.chart);
 });
 
@@ -4503,6 +4927,7 @@ canvas.addEventListener("mouseleave", () => {
   canvasHovered = false;
   crosshairX = null;
   crosshairY = null;
+  hideFloatingTip();
   if (lastPayload && lastPayload.ready) draw(lastPayload.chart);
 });
 
@@ -5117,6 +5542,16 @@ function showJudgeNotice(payload) {
   setMsg(text, true);
 }
 
+function showRhythmHitNotices(payload) {
+  const hits = payload && Array.isArray(payload.rhythm_notice_hits) ? payload.rhythm_notice_hits : [];
+  hits.forEach((hit) => {
+    const text = String(hit.detail || hit.display_label || "1382").trim();
+    if (!text) return;
+    showToast(text, { record: false });
+    setMsg(text, true);
+  });
+}
+
 function showMsgHistory() {
   const list = $("msgHistoryList");
   list.innerHTML = "";
@@ -5575,6 +6010,16 @@ function toScaler(chart, xMin, xMax) {
       }
     }
   }
+  if (chartConfig.rhythmLine && chartConfig.rhythmLine.enabled && chart.rhythm_lines) {
+    for (const rl of chart.rhythm_lines) {
+      if (!isRhythmLevelEnabled(rl.level)) continue;
+      if (!intersects(rl, xMin, xMax)) continue;
+      const yVal = Number(rl.y1);
+      if (!Number.isFinite(yVal)) continue;
+      if (yVal > yMax) yMax = yVal;
+      if (yVal < yMin) yMin = yVal;
+    }
+  }
   if (!isFinite(yMin) || !isFinite(yMax)) {
     yMin = 0;
     yMax = 1;
@@ -5762,7 +6207,7 @@ function drawCrosshair(s) {
     `High:  ${formatPriceText(refK.h)}`,
     `Low:   ${formatPriceText(refK.l)}`,
     `Close: ${formatPriceText(refK.c)}`,
-    bspTags.length > 0 ? `BSP:${bspTags.join(" | ")}` : "BSP:-",
+    bspTags.length > 0 ? `信号:${bspTags.join(" | ")}` : "信号:-",
   ];
 
   ctx.save();
@@ -6047,6 +6492,9 @@ function drawLegend() {
     { label: "段(未完成)", color: getCfgColor(chartConfig.seg.color), dashed: true, w: chartConfig.seg.widthUnsure },
     { label: "2段(确定)", color: getCfgColor(chartConfig.segseg.color), dashed: false, w: chartConfig.segseg.widthSure },
     { label: "2段(未完成)", color: getCfgColor(chartConfig.segseg.color), dashed: true, w: chartConfig.segseg.widthUnsure },
+    { label: "节奏线1", color: getRhythmLineColor("rhythm1"), dashed: chartConfig.rhythmLine.lineStyle !== "solid", w: chartConfig.rhythmLine.width },
+    { label: "节奏线2", color: getRhythmLineColor("rhythm2"), dashed: chartConfig.rhythmLine.lineStyle !== "solid", w: chartConfig.rhythmLine.width },
+    { label: "节奏线3", color: getRhythmLineColor("rhythm3"), dashed: chartConfig.rhythmLine.lineStyle !== "solid", w: chartConfig.rhythmLine.width },
   ];
   ctx.save();
   const fontSize = chartConfig.legend.fontSize;
@@ -6332,62 +6780,124 @@ function drawIndicators(chart, s) {
 }
 
 function drawBsp(arr, s) {
-  const groups = {};
-  for (const p of arr || []) {
-    if (p.x < s.xMin || p.x > s.xMax) continue;
-    if (!groups[p.x]) groups[p.x] = [];
-    groups[p.x].push(p);
-  }
-  const xs = Object.keys(groups)
-    .map((x) => Number(x))
-    .sort((a, b) => a - b);
+  return drawBottomSignals({ bsp: arr || [], rhythm: [] }, s);
+}
 
+function drawRhythmLines(arr, s) {
+  if (!chartConfig.rhythmLine || !chartConfig.rhythmLine.enabled) return;
+  ctx.save();
+  ctx.lineWidth = Number(chartConfig.rhythmLine.width || 1.2);
+  ctx.setLineDash(getTradeLineDash(chartConfig.rhythmLine.lineStyle || "dashed"));
+  for (const line of arr || []) {
+    if (!line || !isRhythmLevelEnabled(line.level)) continue;
+    if (!intersects(line, s.xMin, s.xMax)) continue;
+    ctx.strokeStyle = getRhythmLineColor(line.color_group);
+    ctx.beginPath();
+    ctx.moveTo(s.x(line.x1), s.y(line.y1));
+    ctx.lineTo(s.x(line.x2), s.y(line.y2));
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function buildBottomSignalGroups(chart, bspArr) {
+  const groups = {};
+  const push = (x, item) => {
+    if (!Number.isFinite(x)) return;
+    if (!groups[x]) groups[x] = [];
+    groups[x].push(item);
+  };
+  const colBuy = getCfgColor(chartConfig.trade.buyColor);
+  const colSell = getCfgColor(chartConfig.trade.sellColor);
+  for (const p of bspArr || []) {
+    if (!p || !Number.isFinite(p.x)) continue;
+    const bspCfg = getBspConfig(p.level);
+    const prefix = p.status === "correct" ? "✓" : (p.status === "wrong" ? "×" : "·");
+    const text = `${prefix} ${getBspDisplayLabel(p)}`;
+    push(Number(p.x), {
+      kind: "bsp",
+      priority: 20,
+      sortKey: p.level === "bi" ? 0 : (p.level === "seg" ? 1 : 2),
+      text,
+      tipText: text,
+      fontSize: Number(bspCfg.fontSize || 14),
+      textColor: p.is_buy ? colBuy : colSell,
+      borderColor: p.is_buy ? colBuy : colSell,
+      lineColor: getCfgColor(bspCfg.lineColor),
+      lineWidth: Number(bspCfg.lineWidth || 1),
+      lineStyle: bspCfg.lineStyle || "dashed",
+    });
+  }
+  for (const hit of (chart && chart.rhythm_hits) || []) {
+    if (!hit || !Number.isFinite(hit.x)) continue;
+    push(Number(hit.x), {
+      kind: "rhythm",
+      priority: 0,
+      sortKey: Number(hit.round_ref || 0),
+      text: String(hit.display_label || "1382"),
+      tipText: String(hit.detail || hit.display_label || "1382"),
+      fontSize: Number(chartConfig.rhythmHit.fontSize || 14),
+      textColor: getCfgColor(chartConfig.rhythmHit.color),
+      borderColor: getCfgColor(chartConfig.rhythmHit.color),
+      lineColor: getCfgColor(chartConfig.rhythmHit.lineColor),
+      lineWidth: Number(chartConfig.rhythmHit.lineWidth || 1),
+      lineStyle: chartConfig.rhythmHit.lineStyle || "dashed",
+    });
+  }
+  return groups;
+}
+
+function drawBottomSignals(chart, s) {
+  signalHoverBoxes = [];
+  const groups = buildBottomSignalGroups(chart, bspHistory || []);
+  const xs = Object.keys(groups).map((x) => Number(x)).filter((x) => x >= s.xMin && x <= s.xMax).sort((a, b) => a - b);
   const boxGap = 4;
   const boxPadX = 8;
   const boxPadY = 5;
-  const fontSize = Math.max(
-    Number(chartConfig.bspBi && chartConfig.bspBi.fontSize) || 14,
-    Number(chartConfig.bspSeg && chartConfig.bspSeg.fontSize) || 14,
-    Number(chartConfig.bspSegseg && chartConfig.bspSegseg.fontSize) || 14,
-  );
-  const lineH = fontSize + boxPadY * 2;
-  const maxLines = 8;
-  const colBuy = getCfgColor(chartConfig.trade.buyColor);
-  const colSell = getCfgColor(chartConfig.trade.sellColor);
+  const overflowLimit = Math.max(1, Number(chartConfig.rhythmHit.overflowLimit || 4));
   const byX = new Map((s.visibleK || []).map((k) => [k.x, k]));
 
   for (const x of xs) {
     const xp = s.x(x);
-    const ps = groups[x]
-      .slice()
-      .sort((a, b) => {
-        const orderA = a.level === "bi" ? 0 : (a.level === "seg" ? 1 : 2);
-        const orderB = b.level === "bi" ? 0 : (b.level === "seg" ? 1 : 2);
-        return orderA - orderB;
-      })
-      .slice(0, maxLines);
+    const items = (groups[x] || []).slice().sort((a, b) => (a.priority - b.priority) || (a.sortKey - b.sortKey) || String(a.text).localeCompare(String(b.text)));
+    const groupTip = items.map((item) => item.tipText || item.text).join("\n");
+    let renderItems = items.slice();
+    if (items.length > overflowLimit) {
+      renderItems = items.slice(0, Math.max(0, overflowLimit - 1));
+      renderItems.push({
+        kind: "overflow",
+        priority: 999,
+        sortKey: 999,
+        text: "!",
+        tipText: groupTip,
+        fontSize: Number(chartConfig.rhythmHit.fontSize || 14),
+        textColor: getCfgColor(chartConfig.rhythmHit.overflowColor || chartConfig.rhythmHit.color),
+        borderColor: getCfgColor(chartConfig.rhythmHit.overflowColor || chartConfig.rhythmHit.color),
+        lineColor: getCfgColor(chartConfig.rhythmHit.lineColor),
+        lineWidth: Number(chartConfig.rhythmHit.lineWidth || 1),
+        lineStyle: chartConfig.rhythmHit.lineStyle || "dashed",
+        hoverOnly: true,
+      });
+    }
+
     const boxBottom = s.h - 8;
     const k = byX.get(x);
-    for (let i = 0; i < ps.length; i++) {
-      const p = ps[i];
-      const bspCfg = getBspConfig(p.level);
-      const color = p.is_buy ? colBuy : colSell;
-      const prefix = p.status === "correct" ? "✓" : (p.status === "wrong" ? "×" : "·");
-      const txt = `${prefix} ${getBspDisplayLabel(p)}`;
+    let offsetY = 0;
+    for (const item of renderItems) {
       ctx.save();
-      ctx.font = `bold ${Number(bspCfg.fontSize || fontSize)}px Consolas`;
-      const textW = ctx.measureText(txt).width;
+      ctx.font = `bold ${item.fontSize}px Consolas`;
+      const textW = ctx.measureText(item.text).width;
+      const lineH = item.fontSize + boxPadY * 2;
       const rectW = textW + boxPadX * 2;
       const rectX = xp - rectW / 2;
-      const rectY = boxBottom - (i + 1) * lineH - i * boxGap;
+      const rectY = boxBottom - offsetY - lineH;
       if (k) {
         const anchorY = s.y(k.l);
         const toY = Math.max(PAD_T + 2, Math.min(s.h - PAD_B + 8, rectY - 6));
         ctx.save();
-        ctx.lineWidth = Number(bspCfg.lineWidth || 1);
-        const bspDash = bspCfg.lineStyle ? getTradeLineDash(bspCfg.lineStyle) : (bspCfg.lineDash || [5, 4]);
-        ctx.setLineDash(bspDash);
-        ctx.strokeStyle = getCfgColor(bspCfg.lineColor);
+        ctx.lineWidth = Number(item.lineWidth || 1);
+        ctx.setLineDash(getTradeLineDash(item.lineStyle || "dashed"));
+        ctx.strokeStyle = item.lineColor;
         ctx.beginPath();
         ctx.moveTo(xp, anchorY);
         ctx.lineTo(xp, toY);
@@ -6395,15 +6905,26 @@ function drawBsp(arr, s) {
         ctx.restore();
       }
       ctx.fillStyle = cssVar("--panel", "#ffffff");
-      ctx.strokeStyle = color;
+      ctx.strokeStyle = item.borderColor;
       ctx.lineWidth = 1.5;
       ctx.fillRect(rectX, rectY, rectW, lineH);
       ctx.strokeRect(rectX, rectY, rectW, lineH);
-      ctx.fillStyle = color;
+      ctx.fillStyle = item.textColor;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillText(txt, xp, rectY + lineH / 2);
+      ctx.fillText(item.text, xp, rectY + lineH / 2);
+      if (item.tipText) {
+        signalHoverBoxes.push({
+          x1: rectX,
+          y1: rectY,
+          x2: rectX + rectW,
+          y2: rectY + lineH,
+          text: item.tipText,
+          overflowOnly: !!item.hoverOnly,
+        });
+      }
       ctx.restore();
+      offsetY += lineH + boxGap;
     }
   }
 }
@@ -6574,6 +7095,7 @@ function draw(chart) {
   const cw = canvas.clientWidth;
   const ch = canvas.clientHeight;
   ctx.clearRect(0, 0, cw, ch);
+  signalHoverBoxes = [];
   ctx.fillStyle = cssVar("--chartBg", "#ffffff");
   ctx.fillRect(0, 0, cw, ch);
   if (!chart || !chart.kline || chart.kline.length === 0) return;
@@ -6586,9 +7108,6 @@ function draw(chart) {
   drawChips(chart, s);
   drawTradeBands(s, chart);
   drawTradeRays(s);
-  drawUserRays(s);
-  drawUserBiRays(s, chart);
-  drawPendingBiEndpointCircle(s);
   drawAxes(s);
   drawIndicators(chart, s);
   drawCandles(chart, s);
@@ -6614,7 +7133,11 @@ function draw(chart) {
   drawLines((chart.seg || []).filter((x) => !x.is_sure), s, getCfgColor(chartConfig.seg.color), chartConfig.seg.widthUnsure, true);
   drawLines((chart.segseg || []).filter((x) => x.is_sure), s, getCfgColor(chartConfig.segseg.color), chartConfig.segseg.widthSure, false);
   drawLines((chart.segseg || []).filter((x) => !x.is_sure), s, getCfgColor(chartConfig.segseg.color), chartConfig.segseg.widthUnsure, true);
-  drawBsp(bspHistory || [], s);
+  drawRhythmLines(chart.rhythm_lines || [], s);
+  drawBottomSignals(chart, s);
+  drawUserRays(s);
+  drawUserBiRays(s, chart);
+  drawPendingBiEndpointCircle(s);
   drawTradeMarkers(s, chart);
   drawCrosshair(s);
   drawLegend();
@@ -6676,6 +7199,9 @@ function refreshUI(payload, options) {
   }
   setState(payload);
   updateTradeStatusOverlay(payload);
+  if (payload && Array.isArray(payload.rhythm_notice_hits) && payload.rhythm_notice_hits.length > 0) {
+    showRhythmHitNotices(payload);
+  }
   if (payload && payload.judge_notice) {
     showJudgeNotice(payload);
   }
@@ -7032,12 +7558,15 @@ def api_init(req: InitReq):
         }
         APP_STATE.trade_events = []
         APP_STATE.bsp_history = []
+        APP_STATE._reset_rhythm_history()
         APP_STATE.bsp_judge_logs = []
         APP_STATE._last_level_dirs = {level: None for level in set(JUDGE_TRIGGER_LEVELS.values())}
         # init后先推进一根，确保前端有可视数据并可交互
         APP_STATE.rebuild_bsp_all_snapshot()
         APP_STATE.stepper.step()
         APP_STATE.sync_bsp_history()
+        APP_STATE.sync_rhythm_history()
+        APP_STATE._rhythm_notice_hits = []
         APP_STATE.after_step_update()
         return APP_STATE.build_payload(stock_name=APP_STOCK_NAME)
     except Exception as e:
@@ -7050,6 +7579,7 @@ def api_reconfig(req: ReconfigReq):
         raise HTTPException(status_code=400, detail="请先初始化会话")
     try:
         APP_STATE.reconfig(req.chan_config)
+        APP_STATE._rhythm_notice_hits = []
         payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME)
         payload["message"] = "缠论配置更新成功，已按新逻辑重新计算并清除模拟持仓。"
         return payload
@@ -7066,6 +7596,7 @@ def api_step(req: StepReq):
     try:
         ok = APP_STATE.stepper.step()
         APP_STATE.sync_bsp_history()
+        APP_STATE.sync_rhythm_history()
         mode = (req.judge_mode or "auto").lower().strip()
         if mode != "manual":
             APP_STATE.after_step_update()
@@ -7154,6 +7685,7 @@ def api_back_n(req: BackNReq):
         cur = APP_STATE.stepper.step_idx
         target = max(0, cur - n)
         APP_STATE.rebuild_to_step(target)
+        APP_STATE._rhythm_notice_hits = []
         payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME)
         payload["message"] = f"自动重建回放：已后退 {cur - target} 根（目标 step={target}）"
         return payload
@@ -7187,6 +7719,7 @@ def api_reset():
     APP_STATE.session_params = None
     APP_STATE.trade_events = []
     APP_STATE.bsp_history = []
+    APP_STATE._reset_rhythm_history()
     APP_STATE.bsp_all_snapshot = []
     APP_STATE.bsp_judge_logs = []
     APP_STATE._last_level_dirs = {level: None for level in set(JUDGE_TRIGGER_LEVELS.values())}
