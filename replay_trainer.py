@@ -62,6 +62,7 @@ VISIBLE_BSP_LEVELS = ("bi", "seg", "segseg")
 LEVEL_ORDER = {level: idx for idx, level in enumerate(VISIBLE_BSP_LEVELS)}
 LEVEL_LABELS = {"bi": "笔", "seg": "段", "segseg": "2段"}
 STRUCTURE_LEVEL_LABELS = {"fract": "分型", **LEVEL_LABELS}
+RHYTHM_LEVEL_LABELS = {"fract": "分型", "bi": "笔", "seg": "线段", "segseg": "二段"}
 JUDGE_TRIGGER_LEVELS = {"bi": "seg", "seg": "segseg", "segseg": "segsegseg"}
 
 
@@ -488,6 +489,10 @@ def structure_level_label(level: str) -> str:
     return STRUCTURE_LEVEL_LABELS.get(level, level)
 
 
+def rhythm_level_label(level: str) -> str:
+    return RHYTHM_LEVEL_LABELS.get(level, structure_level_label(level))
+
+
 def line_begin_x(line: Any) -> int:
     return int(line.get_begin_klu().idx)
 
@@ -541,7 +546,13 @@ def iter_klus(kl_list) -> list[Any]:
     return [klu for klu in kl_list.klu_iter()]
 
 
-def find_1382_hit(klus: list[Any], *, start_x: int, direction: BI_DIR, threshold: float) -> Optional[dict[str, Any]]:
+def format_rhythm_ratio(ratio: float) -> str:
+    text = f"{float(ratio):.3f}"
+    return text.rstrip("0").rstrip(".") if "." in text else text
+
+
+def find_1382_hits(klus: list[Any], *, start_x: int, direction: BI_DIR, threshold: float) -> list[dict[str, Any]]:
+    hits: list[dict[str, Any]] = []
     for klu in klus:
         x = int(klu.idx)
         if x <= start_x:
@@ -549,24 +560,28 @@ def find_1382_hit(klus: list[Any], *, start_x: int, direction: BI_DIR, threshold
         if direction == BI_DIR.UP:
             high = float(klu.high)
             if high >= threshold:
-                return {
-                    "x": x,
-                    "y": high,
-                    "time": klu.time.to_str(),
-                    "price_field": "H",
-                    "price_value": high,
-                }
+                hits.append(
+                    {
+                        "x": x,
+                        "y": high,
+                        "time": klu.time.to_str(),
+                        "price_field": "H",
+                        "price_value": high,
+                    }
+                )
         else:
             low = float(klu.low)
             if low <= threshold:
-                return {
-                    "x": x,
-                    "y": low,
-                    "time": klu.time.to_str(),
-                    "price_field": "L",
-                    "price_value": low,
-                }
-    return None
+                hits.append(
+                    {
+                        "x": x,
+                        "y": low,
+                        "time": klu.time.to_str(),
+                        "price_field": "L",
+                        "price_value": low,
+                    }
+                )
+    return hits
 
 
 def build_parent_rhythm_entries(
@@ -577,29 +592,44 @@ def build_parent_rhythm_entries(
     child_lines: list[Any],
     klus: list[Any],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Build rhythm lines for one parent structure.
+
+    The user-defined term "推进峰值端点" means the endpoint of the child line
+    that moves in the same direction as the parent structure:
+    - up parent: D / F / H ...
+    - down parent: mirrored low endpoints
+
+    For line k_j:
+    - j controls which historic retracement ratio is reused
+    - k controls which current retracement round is being projected
+    - x1 starts from the j-th same-direction peak endpoint
+    - x2 ends at the (k+1)-th same-direction peak endpoint
+    """
     parent_dir = getattr(parent_line, "dir", None)
     if parent_dir not in (BI_DIR.UP, BI_DIR.DOWN):
         return [], []
     seq = build_alternating_child_sequence(child_lines, parent_dir)
-    if len(seq) < 3:
+    if len(seq) < 5:
         return [], []
 
-    parent_begin_x = line_begin_x(parent_line)
-    parent_end_x = line_end_x(parent_line)
     parent_key = make_line_key(parent_level, parent_line)
-    parent_label = structure_level_label(parent_level)
-    level_label_cn = structure_level_label(level)
+    parent_label = rhythm_level_label(parent_level)
+    level_label_cn = rhythm_level_label(level)
     a0 = float(parent_line.get_begin_val())
     lines: list[dict[str, Any]] = []
     hits: list[dict[str, Any]] = []
-    max_round = (len(seq) - 1) // 2
+    max_round = max(0, (len(seq) - 3) // 2)
 
     for round_current in range(1, max_round + 1):
         d_line = seq[2 * round_current]
+        next_peak_line = seq[2 * (round_current + 1)]
         d_val = float(d_line.get_end_val())
+        threshold: Optional[float] = None
+        c_line_for_hit = None
         for round_ref in range(1, round_current + 1):
             b_line = seq[2 * (round_ref - 1)]
             c_line = seq[2 * (round_ref - 1) + 1]
+            start_peak_line = seq[2 * round_ref]
             b_val = float(b_line.get_end_val())
             c_val = float(c_line.get_end_val())
             if parent_dir == BI_DIR.UP:
@@ -616,8 +646,9 @@ def build_parent_rhythm_entries(
                 continue
             if not (ratio >= 0 and abs(rhythm_price) < float("inf") and abs(threshold) < float("inf")):
                 continue
-            display_label = make_rhythm_display_label(round_current, round_ref)
-            color_group = f"rhythm{min(round_ref, 5)}"
+            label_left = str(round_current) if round_current == round_ref else f"{round_current}_{round_ref}"
+            label_right = format_rhythm_ratio(ratio)
+            color_group = f"rhythm{round_ref}"
             lines.append(
                 {
                     "key": f"{parent_key}|line|{round_current}|{round_ref}",
@@ -625,23 +656,26 @@ def build_parent_rhythm_entries(
                     "parent_level": parent_level,
                     "parent_key": parent_key,
                     "parent_label": parent_label,
-                    "display_label": display_label,
+                    "display_label": make_rhythm_display_label(round_current, round_ref),
                     "round_current": round_current,
                     "round_ref": round_ref,
                     "color_group": color_group,
                     "dir": "UP" if parent_dir == BI_DIR.UP else "DOWN",
-                    "x1": parent_begin_x,
+                    "ratio": float(ratio),
+                    "label_left": label_left,
+                    "label_right": label_right,
+                    "x1": line_end_x(start_peak_line),
                     "y1": float(rhythm_price),
-                    "x2": parent_end_x,
+                    "x2": line_end_x(next_peak_line),
                     "y2": float(rhythm_price),
                 }
             )
-            if round_ref != round_current:
-                continue
-            hit = find_1382_hit(klus, start_x=line_end_x(c_line), direction=parent_dir, threshold=float(threshold))
-            if hit is None:
-                continue
-            hit_key = f"{parent_key}|1382|{level}|{round_ref}"
+            if round_ref == round_current:
+                c_line_for_hit = c_line
+        if threshold is None or c_line_for_hit is None:
+            continue
+        for hit in find_1382_hits(klus, start_x=line_end_x(c_line_for_hit), direction=parent_dir, threshold=float(threshold)):
+            hit_key = f"{parent_key}|1382|{level}|{round_current}|{int(hit['x'])}"
             hits.append(
                 {
                     "key": hit_key,
@@ -651,8 +685,8 @@ def build_parent_rhythm_entries(
                     "parent_level": parent_level,
                     "parent_key": parent_key,
                     "display_label": f"{level_label_cn}1382",
-                    "round_ref": round_ref,
-                    "color_group": color_group,
+                    "round_ref": round_current,
+                    "color_group": f"rhythm{round_current}",
                     "dir": "UP" if parent_dir == BI_DIR.UP else "DOWN",
                     "threshold": float(threshold),
                     "time": hit["time"],
@@ -661,7 +695,7 @@ def build_parent_rhythm_entries(
                         f"时间：{hit['time']}\n"
                         f"父结构：{parent_label}\n"
                         f"方向：{'上升' if parent_dir == BI_DIR.UP else '下降'}\n"
-                        f"轮次：第{round_ref}次回调\n"
+                        f"轮次：第{round_current}次回调\n"
                         f"阈值价：{float(threshold):.3f}\n"
                         f"触发价：{hit['price_field']}={float(hit['price_value']):.3f}"
                     ),
@@ -1912,7 +1946,7 @@ HTML = r"""
       line-height: 1.5;
     }
 
-    /* Chart tools panel (now integrated in left column) */
+    /* Chart tools panel (pinned to the very top of the trainer controls) */
     .chartToolsPanel {
       width: 100%;
       border: 1px solid var(--border);
@@ -1921,9 +1955,10 @@ HTML = r"""
       padding: 12px;
       box-sizing: border-box;
       display: flex;
-      flex-direction: column;
-      gap: 8px;
-      margin-bottom: 12px;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+      margin: 0 0 12px 0;
     }
     :fullscreen #chart { height: 100vh; }
     .fullscreen-btn {
@@ -1935,7 +1970,8 @@ HTML = r"""
       display: flex;
       align-items: center;
       gap: 4px;
-      width: 100%;
+      width: auto;
+      min-width: 140px;
       justify-content: center;
     }
     .fullscreen-btn:hover { background: #fff; border-color: #2563eb; }
@@ -1950,7 +1986,8 @@ HTML = r"""
       align-items: center;
       gap: 4px;
       white-space: nowrap;
-      width: 100%;
+      width: auto;
+      min-width: 124px;
       justify-content: center;
     }
     .judge-bsp-btn:hover { background: #fff; border-color: #16a34a; }
@@ -1962,14 +1999,18 @@ HTML = r"""
       border-radius: 8px;
       padding: 8px;
       display: flex;
-      flex-direction: column;
+      flex: 1 1 460px;
+      flex-direction: row;
+      flex-wrap: wrap;
       gap: 8px;
-      align-items: stretch;
+      align-items: center;
+      min-width: 0;
     }
     .toolbox .label {
       color: var(--muted);
       font-size: 12px;
       white-space: nowrap;
+      margin-right: 4px;
     }
     .toolbox button {
       padding: 4px 8px;
@@ -2013,6 +2054,7 @@ HTML = r"""
       text-align: center;
       transition: opacity 0.3s;
       white-space: pre-wrap;
+      line-height: 1.5;
     }
     @keyframes toastFadeIn {
       from { opacity: 0; transform: translateY(-20px); }
@@ -2345,6 +2387,20 @@ HTML = r"""
   <div class="wrap">
     <div class="left">
       <div class="title">chan.py 复盘训练器 <span class="tip-icon" data-tip="Chan.py 缠论复盘交易系统"></span></div>
+      <div id="chartToolsPanel" class="chartToolsPanel">
+        <button id="btnFullscreen" class="fullscreen-btn" data-tip="切换图表区域全屏显示。">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+          全屏显示 (F11)
+        </button>
+        <button id="btnJudgeBsp" class="judge-bsp-btn" data-tip="手动检查买卖点（仅手动判定模式下可用）。" disabled>检查买卖点</button>
+        <div id="toolbox" class="toolbox">
+          <span class="label">画线工具箱</span>
+          <button id="toolNone" type="button" class="active" data-tip="选择模式：可选中画线并使用“画线属性”进行编辑。">选择</button>
+          <button id="toolHorizontalRay" type="button" data-tip="生成水平射线：点击图表在当前价位生成一条水平射线。">水平射线</button>
+          <button id="toolBiRay" type="button" data-tip="笔端点射线：依次点击两个笔端点生成一条向右延伸的射线。再次点击可退出。">笔端点射线</button>
+          <button id="toolLineProps" type="button" data-tip="先使用“选择”并点击某条画线，再点此按钮编辑粗细/颜色/线型。">画线属性</button>
+        </div>
+      </div>
       <div class="card" id="configCard">
         <div class="btnRow">
           <button id="btnChanSettingsOpen" data-tip="打开缠论逻辑配置面板，可调整笔、线段、中枢等算法。">缠论配置... <small>(L)</small></button>
@@ -2373,7 +2429,7 @@ HTML = r"""
           <button id="btnReset" data-tip="清空当前会话并恢复到可重新配置的初始状态。">重新训练 <small>(Ctrl+R)</small></button>
           <button id="btnFinish" data-tip="结束当前训练，并可选择导出本次交易总结文件。" disabled>结束训练</button>
           <button id="btnExit" data-tip="尝试关闭当前页面。浏览器可能会拦截关闭操作。">退出</button>
-          <button id="btnStep" data-tip="步进到下一根K线。若当前K线命中买卖点，将以弹窗提示（自动消失）。" disabled>下一根K线 <small>(Space)</small></button>
+          <button id="btnStep" data-tip="步进到下一根K线。若当前K线命中买卖点或 1382 提示，会合并为一个弹窗提示。" disabled>下一根K线 <small>(Space)</small></button>
         </div>
         <div class="stepNRow">
           <label for="stepN">步进数量 N</label>
@@ -2393,21 +2449,6 @@ HTML = r"""
           <button id="btnSell" data-tip="按当前收盘价全部卖出，若受 T+1 约束则按钮不可用。" disabled>卖出（全量） <small>(PageDown)</small></button>
         </div>
       </div>
-      <div id="chartToolsPanel" class="chartToolsPanel">
-        <button id="btnFullscreen" class="fullscreen-btn" data-tip="切换图表区域全屏显示。">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
-          全屏显示 (F11)
-        </button>
-        <button id="btnJudgeBsp" class="judge-bsp-btn" data-tip="手动检查买卖点（仅手动判定模式下可用）。" disabled>检查买卖点</button>
-        <div id="toolbox" class="toolbox">
-          <span class="label">画线工具箱</span>
-          <button id="toolNone" type="button" class="active" data-tip="选择模式：可选中画线并使用“画线属性”进行编辑。">选择</button>
-          <button id="toolHorizontalRay" type="button" data-tip="生成水平射线：点击图表在当前价位生成一条水平射线。">水平射线</button>
-          <button id="toolBiRay" type="button" data-tip="笔端点射线：依次点击两个笔端点生成一条向右延伸的射线。再次点击可退出。">笔端点射线</button>
-          <button id="toolLineProps" type="button" data-tip="先使用“选择”并点击某条画线，再点此按钮编辑粗细/颜色/线型。">画线属性</button>
-        </div>
-      </div>
-
       <div class="card">
         <div class="title" style="margin:0 0 12px 0; display:flex; justify-content:space-between; align-items:center;">
           历史记录
@@ -2539,6 +2580,10 @@ HTML = r"""
   </div>
 <script>
 const $ = (id) => document.getElementById(id);
+function markUiBound(id) {
+  const el = $(id);
+  if (el) el.dataset.bound = "1";
+}
 const canvas = $("chart");
 const ctx = canvas.getContext("2d");
 function safeJsonParse(raw, fallback) {
@@ -2731,13 +2776,36 @@ const DEFAULT_CHART_CONFIG = {
     fractToBiEnabled: true,
     biToSegEnabled: true,
     segToSegsegEnabled: true,
-    width: 1.2,
-    lineStyle: "dashed",
-    color1: "#9333ea",
-    color2: "#0f766e",
-    color3: "#2563eb",
-    color4: "#ea580c",
-    color5: "#be123c"
+    group1LineColor: "#9333ea",
+    group1LineWidth: 1.2,
+    group1LineStyle: "dashed",
+    group1TextColor: "#9333ea",
+    group1TextFontSize: 12,
+    group1TextFontWeight: "bold",
+    group2LineColor: "#0f766e",
+    group2LineWidth: 1.6,
+    group2LineStyle: "solid",
+    group2TextColor: "#0f766e",
+    group2TextFontSize: 13,
+    group2TextFontWeight: "bold",
+    group3LineColor: "#2563eb",
+    group3LineWidth: 2.0,
+    group3LineStyle: "dashed",
+    group3TextColor: "#2563eb",
+    group3TextFontSize: 14,
+    group3TextFontWeight: "bold",
+    group4LineColor: "#ea580c",
+    group4LineWidth: 2.4,
+    group4LineStyle: "solid",
+    group4TextColor: "#ea580c",
+    group4TextFontSize: 15,
+    group4TextFontWeight: "bold",
+    group5LineColor: "#be123c",
+    group5LineWidth: 2.8,
+    group5LineStyle: "dotted",
+    group5TextColor: "#be123c",
+    group5TextFontSize: 16,
+    group5TextFontWeight: "bold"
   },
   rhythmHit: {
     fontSize: 14,
@@ -2782,6 +2850,7 @@ const DEFAULT_CHART_CONFIG = {
     stretchLevel: 5,
     bucketStep: 0.1,
     color: "rgba(59,130,246,0.45)",
+    peakLineEnabled: true,
     peakRefMode: "latest_visible",
     peakLineColor: "#2563eb",
     peakLineWidth: 1.2,
@@ -2858,8 +2927,8 @@ const SHORTCUT_ACTIONS = [
   { id: "toggleFullscreen", label: "切换全屏显示", description: "切换右侧图表区域全屏显示。", defaults: ["f11"], contexts: ["global"], buttonId: "btnFullscreen" },
   { id: "initSession", label: "加载会话", description: "根据当前代码、日期区间和初始资金加载复盘会话。", defaults: ["ctrl+i"], contexts: ["global"], buttonId: "btnInit" },
   { id: "resetSession", label: "重新训练", description: "清空当前会话并恢复到可重新配置的初始状态。", defaults: ["ctrl+r"], contexts: ["global"], buttonId: "btnReset" },
-  { id: "nextBar", label: "步进到下一根K线", description: "步进到下一根 K 线；若当前 K 线命中买卖点会等待确认。", defaults: ["space"], contexts: ["global"], buttonId: "btnStep" },
-  { id: "stepForwardN", label: "步进 N 根", description: "按步进数量 N 连续推进，遇到买卖点自动停止。", defaults: ["ctrl+alt+n"], contexts: ["global"], buttonId: "btnStepN" },
+  { id: "nextBar", label: "步进到下一根K线", description: "步进到下一根 K 线；若当前 K 线命中买卖点或 1382，会合并为一个弹窗提示。", defaults: ["space"], contexts: ["global"], buttonId: "btnStep" },
+  { id: "stepForwardN", label: "步进 N 根", description: "按步进数量 N 连续推进，遇到买卖点自动停止，并合并当根提示。", defaults: ["ctrl+alt+n"], contexts: ["global"], buttonId: "btnStepN" },
   { id: "stepBackwardN", label: "后退 N 根", description: "按步进数量 N 回退，会自动重建到更早状态。", defaults: ["ctrl+alt+m"], contexts: ["global"], buttonId: "btnBackN" },
   { id: "buyAll", label: "买入（全仓）", description: "按当前收盘价使用全部可用现金买入。", defaults: ["pageup"], contexts: ["global"], buttonId: "btnBuy" },
   { id: "sellAll", label: "卖出（全量）", description: "按当前收盘价全部卖出。", defaults: ["pagedown"], contexts: ["global"], buttonId: "btnSell" },
@@ -3171,7 +3240,7 @@ function updateShortcutUI() {
   $("btnSystemSettingsOpen").setAttribute("data-tip", `打开系统配置面板，可统一维护快捷键。快捷键：${getActionShortcutDisplay("openSystemSettings") || "未设置"}。`);
   $("btnInit").setAttribute("data-tip", `根据当前代码、日期区间、初始资金加载复盘会话。首次加载历史数据可能较慢。快捷键：${getActionShortcutDisplay("initSession") || "未设置"}。`);
   $("btnReset").setAttribute("data-tip", `清空当前会话并恢复到可重新配置的初始状态。快捷键：${getActionShortcutDisplay("resetSession") || "未设置"}。`);
-  $("btnStep").setAttribute("data-tip", `步进到下一根K线。若当前K线命中买卖点，会先中断并等待确认。快捷键：${getActionShortcutDisplay("nextBar") || "未设置"}。`);
+  $("btnStep").setAttribute("data-tip", `步进到下一根K线。若当前K线命中买卖点或 1382 提示，会合并为一个弹窗提示。快捷键：${getActionShortcutDisplay("nextBar") || "未设置"}。`);
   $("btnStepN").setAttribute("data-tip", `按步进数量 N 连续推进，若中途遇到买卖点则自动停止。快捷键：${getActionShortcutDisplay("stepForwardN") || "未设置"}。`);
   $("btnBackN").setAttribute("data-tip", `按步进数量 N 回退，会自动重建到更早的状态。快捷键：${getActionShortcutDisplay("stepBackwardN") || "未设置"}。`);
   $("btnBuy").setAttribute("data-tip", `按当前收盘价使用全部可用现金买入，遵循单持仓和每步最多一笔规则。快捷键：${getActionShortcutDisplay("buyAll") || "未设置"}。`);
@@ -3294,11 +3363,37 @@ function isRhythmLevelEnabled(level) {
   return !!cfg[subKey];
 }
 
-function getRhythmLineColor(group) {
+function getRhythmGroupIndex(group) {
+  const raw = String(group || "rhythm1").replace(/[^0-9]/g, "");
+  const idx = Number(raw || "1");
+  return Number.isFinite(idx) && idx >= 1 ? idx : 1;
+}
+
+function getRhythmVisualConfig(group) {
   const cfg = chartConfig.rhythmLine || DEFAULT_CHART_CONFIG.rhythmLine;
-  const raw = String(group || "rhythm5").replace(/[^0-9]/g, "");
-  const idx = Math.min(5, Math.max(1, Number(raw || "5")));
-  return getCfgColor(cfg[`color${idx}`] || DEFAULT_CHART_CONFIG.rhythmLine[`color${idx}`]);
+  const rawIdx = getRhythmGroupIndex(group);
+  const cycleIdx = ((rawIdx - 1) % 5) + 1;
+  const growth = Math.max(0, rawIdx - 5);
+  const lineColor = getCfgColor(cfg[`group${cycleIdx}LineColor`] || DEFAULT_CHART_CONFIG.rhythmLine[`group${cycleIdx}LineColor`]);
+  const lineStyle = String(cfg[`group${cycleIdx}LineStyle`] || DEFAULT_CHART_CONFIG.rhythmLine[`group${cycleIdx}LineStyle`] || "dashed");
+  const baseLineWidth = Number(cfg[`group${cycleIdx}LineWidth`] || DEFAULT_CHART_CONFIG.rhythmLine[`group${cycleIdx}LineWidth`] || 1.2);
+  const baseTextSize = Number(cfg[`group${cycleIdx}TextFontSize`] || DEFAULT_CHART_CONFIG.rhythmLine[`group${cycleIdx}TextFontSize`] || 12);
+  const textColor = getCfgColor(cfg[`group${cycleIdx}TextColor`] || lineColor);
+  const configuredWeight = String(cfg[`group${cycleIdx}TextFontWeight`] || DEFAULT_CHART_CONFIG.rhythmLine[`group${cycleIdx}TextFontWeight`] || "bold");
+  return {
+    rawIdx,
+    cycleIdx,
+    lineColor,
+    lineStyle,
+    lineWidth: baseLineWidth + growth * 0.4,
+    textColor,
+    textFontSize: baseTextSize + growth,
+    textFontWeight: growth > 0 ? "bold" : configuredWeight,
+  };
+}
+
+function getRhythmLineColor(group) {
+  return getRhythmVisualConfig(group).lineColor;
 }
 
 function openChanSettings() {
@@ -3709,6 +3804,7 @@ function renderSettingsForm() {
       bgColor: "rgba(8, 145, 178, 0.08)",
       items: [
         { label: "启用筹码", subKey: "enabled", type: "checkbox" },
+        { label: "筹码峰延长线", subKey: "peakLineEnabled", type: "checkbox", tip: "控制筹码峰水平延长线的显示开关。" },
         { label: "拉伸强度", subKey: "stretchLevel", type: "number", min: 1, max: 20 },
         { label: "价格桶(元)", subKey: "bucketStep", type: "number", min: 0.001, max: 1, step: 0.001 },
         { label: "填充颜色", subKey: "color", type: "color" },
@@ -3780,17 +3876,71 @@ function renderSettingsForm() {
         { label: "分型→笔", subKey: "fractToBiEnabled", type: "checkbox", tip: "是否绘制分型→笔层级的节奏线。" },
         { label: "笔→段", subKey: "biToSegEnabled", type: "checkbox", tip: "是否绘制笔→段层级的节奏线。" },
         { label: "段→2段", subKey: "segToSegsegEnabled", type: "checkbox", tip: "是否绘制段→2段层级的节奏线。" },
-        { label: "节奏线粗细", subKey: "width", type: "number", min: 0.1, max: 6, step: 0.1 },
-        { label: "节奏线线型", subKey: "lineStyle", type: "select", options: [
+        { label: "节奏线1颜色", subKey: "group1LineColor", type: "color" },
+        { label: "节奏线1粗细", subKey: "group1LineWidth", type: "number", min: 0.1, max: 8, step: 0.1 },
+        { label: "节奏线1线型", subKey: "group1LineStyle", type: "select", options: [
           { value: "dashed", label: "虚线" },
           { value: "solid", label: "实线" },
           { value: "dotted", label: "点线" }
         ]},
-        { label: "节奏线1颜色", subKey: "color1", type: "color" },
-        { label: "节奏线2颜色", subKey: "color2", type: "color" },
-        { label: "节奏线3颜色", subKey: "color3", type: "color" },
-        { label: "节奏线4颜色", subKey: "color4", type: "color" },
-        { label: "节奏线5颜色", subKey: "color5", type: "color" }
+        { label: "节奏线1数字颜色", subKey: "group1TextColor", type: "color" },
+        { label: "节奏线1数字大小", subKey: "group1TextFontSize", type: "number", min: 8, max: 32, step: 1 },
+        { label: "节奏线1数字粗细", subKey: "group1TextFontWeight", type: "select", options: [
+          { value: "normal", label: "常规" },
+          { value: "bold", label: "加粗" }
+        ]},
+        { label: "节奏线2颜色", subKey: "group2LineColor", type: "color" },
+        { label: "节奏线2粗细", subKey: "group2LineWidth", type: "number", min: 0.1, max: 8, step: 0.1 },
+        { label: "节奏线2线型", subKey: "group2LineStyle", type: "select", options: [
+          { value: "dashed", label: "虚线" },
+          { value: "solid", label: "实线" },
+          { value: "dotted", label: "点线" }
+        ]},
+        { label: "节奏线2数字颜色", subKey: "group2TextColor", type: "color" },
+        { label: "节奏线2数字大小", subKey: "group2TextFontSize", type: "number", min: 8, max: 32, step: 1 },
+        { label: "节奏线2数字粗细", subKey: "group2TextFontWeight", type: "select", options: [
+          { value: "normal", label: "常规" },
+          { value: "bold", label: "加粗" }
+        ]},
+        { label: "节奏线3颜色", subKey: "group3LineColor", type: "color" },
+        { label: "节奏线3粗细", subKey: "group3LineWidth", type: "number", min: 0.1, max: 8, step: 0.1 },
+        { label: "节奏线3线型", subKey: "group3LineStyle", type: "select", options: [
+          { value: "dashed", label: "虚线" },
+          { value: "solid", label: "实线" },
+          { value: "dotted", label: "点线" }
+        ]},
+        { label: "节奏线3数字颜色", subKey: "group3TextColor", type: "color" },
+        { label: "节奏线3数字大小", subKey: "group3TextFontSize", type: "number", min: 8, max: 32, step: 1 },
+        { label: "节奏线3数字粗细", subKey: "group3TextFontWeight", type: "select", options: [
+          { value: "normal", label: "常规" },
+          { value: "bold", label: "加粗" }
+        ]},
+        { label: "节奏线4颜色", subKey: "group4LineColor", type: "color" },
+        { label: "节奏线4粗细", subKey: "group4LineWidth", type: "number", min: 0.1, max: 8, step: 0.1 },
+        { label: "节奏线4线型", subKey: "group4LineStyle", type: "select", options: [
+          { value: "dashed", label: "虚线" },
+          { value: "solid", label: "实线" },
+          { value: "dotted", label: "点线" }
+        ]},
+        { label: "节奏线4数字颜色", subKey: "group4TextColor", type: "color" },
+        { label: "节奏线4数字大小", subKey: "group4TextFontSize", type: "number", min: 8, max: 32, step: 1 },
+        { label: "节奏线4数字粗细", subKey: "group4TextFontWeight", type: "select", options: [
+          { value: "normal", label: "常规" },
+          { value: "bold", label: "加粗" }
+        ]},
+        { label: "节奏线5颜色", subKey: "group5LineColor", type: "color" },
+        { label: "节奏线5粗细", subKey: "group5LineWidth", type: "number", min: 0.1, max: 8, step: 0.1 },
+        { label: "节奏线5线型", subKey: "group5LineStyle", type: "select", options: [
+          { value: "dashed", label: "虚线" },
+          { value: "solid", label: "实线" },
+          { value: "dotted", label: "点线" }
+        ]},
+        { label: "节奏线5数字颜色", subKey: "group5TextColor", type: "color" },
+        { label: "节奏线5数字大小", subKey: "group5TextFontSize", type: "number", min: 8, max: 32, step: 1 },
+        { label: "节奏线5数字粗细", subKey: "group5TextFontWeight", type: "select", options: [
+          { value: "normal", label: "常规" },
+          { value: "bold", label: "加粗" }
+        ]}
       ]
     },
     {
@@ -4539,10 +4689,12 @@ function resetSystemSettings() {
 }
 
 $("btnChanSettingsOpen").addEventListener("click", openChanSettings);
+markUiBound("btnChanSettingsOpen");
 $("btnChanSettingsClose").addEventListener("click", closeChanSettings);
 $("btnChanSettingsSave").addEventListener("click", saveChanSettings);
 $("btnChanSettingsReset").addEventListener("click", resetChanSettings);
 $("btnSettingsOpen").addEventListener("click", openSettings);
+markUiBound("btnSettingsOpen");
 $("btnSettingsClose").addEventListener("click", closeSettings);
 $("btnSettingsSave").addEventListener("click", saveSettings);
 $("btnSettingsReset").addEventListener("click", resetSettings);
@@ -4554,6 +4706,7 @@ $("btnJudgeBsp").addEventListener("click", () => {
   if (!isBspJudgeManual()) return;
   checkBspJudge("manual_button");
 });
+markUiBound("btnJudgeBsp");
 
 // Close on outside click
 $("chanSettingsModal").addEventListener("click", (e) => {
@@ -4997,6 +5150,7 @@ btnFullscreen.onclick = () => {
     document.exitFullscreen();
   }
 };
+markUiBound("btnFullscreen");
 
 document.addEventListener("fullscreenchange", () => {
   resizeCanvas();
@@ -5026,9 +5180,18 @@ function setActiveTool(next) {
   if (lastPayload && lastPayload.ready) draw(lastPayload.chart);
 }
 
-if ($("toolNone")) $("toolNone").addEventListener("click", () => setActiveTool("none"));
-if ($("toolHorizontalRay")) $("toolHorizontalRay").addEventListener("click", () => setActiveTool(activeTool === "horizontalRay" ? "none" : "horizontalRay"));
-if ($("toolBiRay")) $("toolBiRay").addEventListener("click", () => setActiveTool(activeTool === "biRay" ? "none" : "biRay"));
+if ($("toolNone")) {
+  $("toolNone").addEventListener("click", () => setActiveTool("none"));
+  markUiBound("toolNone");
+}
+if ($("toolHorizontalRay")) {
+  $("toolHorizontalRay").addEventListener("click", () => setActiveTool(activeTool === "horizontalRay" ? "none" : "horizontalRay"));
+  markUiBound("toolHorizontalRay");
+}
+if ($("toolBiRay")) {
+  $("toolBiRay").addEventListener("click", () => setActiveTool(activeTool === "biRay" ? "none" : "biRay"));
+  markUiBound("toolBiRay");
+}
 updateToolboxUI();
 
 function getRayLineStyle(ray) {
@@ -5534,6 +5697,66 @@ function judgeStatsText(stats) {
     lines.push(`${item.level_label || item.level || "-"}：出现${item.appeared || 0}，正确${item.correct || 0}，正确率${itemRate}`);
   });
   return lines.join("\n");
+}
+
+function getRhythmNoticeTexts(payload) {
+  const hits = payload && Array.isArray(payload.rhythm_notice_hits) ? payload.rhythm_notice_hits : [];
+  return hits
+    .map((hit) => String(hit && (hit.detail || hit.display_label || "1382")).trim())
+    .filter(Boolean);
+}
+
+function getLatestBspNotice(payload) {
+  if (!payload || !payload.ready || !payload.chart || !Array.isArray(payload.chart.kline) || payload.chart.kline.length === 0) return null;
+  const lastX = payload.chart.kline[payload.chart.kline.length - 1].x;
+  const hits = (payload.chart.bsp || []).filter((p) => p && p.x === lastX);
+  if (hits.length <= 0) return null;
+  const key = lastX + "|" + hits.map((p) => `${p.level || "-"}:${getBspDisplayLabel(p)}`).join("|");
+  if (lastSeenBspKey.has(key)) return null;
+  lastSeenBspKey.add(key);
+  return {
+    key,
+    x: lastX,
+    lines: hits.map((p) => getBspDisplayLabel(p)),
+    hits,
+  };
+}
+
+function formatCombinedNoticeSection(title, blocks) {
+  const cleanBlocks = (blocks || []).map((block) => String(block || "").trim()).filter(Boolean);
+  if (cleanBlocks.length <= 0) return "";
+  if (cleanBlocks.length === 1) return `${title}\n${cleanBlocks[0]}`;
+  return `${title}\n${cleanBlocks.map((block, idx) => `${idx + 1}. ${block.replace(/\n/g, "\n   ")}`).join("\n\n")}`;
+}
+
+function buildStepNoticeText(payload, bspNotice) {
+  const sections = [];
+  if (bspNotice && Array.isArray(bspNotice.lines) && bspNotice.lines.length > 0) {
+    sections.push(formatCombinedNoticeSection("买卖点提示", bspNotice.lines));
+  }
+  const rhythmTexts = getRhythmNoticeTexts(payload);
+  if (rhythmTexts.length > 0) {
+    sections.push(formatCombinedNoticeSection("1382提示", rhythmTexts));
+  }
+  if (payload && payload.judge_notice) {
+    const judgeText = judgeStatsText(payload && payload.judge_stats ? payload.judge_stats : null) || "买卖点判定";
+    sections.push(formatCombinedNoticeSection("买卖点判定", [judgeText]));
+  }
+  const cleanSections = sections.filter(Boolean);
+  if (cleanSections.length <= 0) return null;
+  if (cleanSections.length === 1) {
+    const only = cleanSections[0];
+    return only.includes("\n1.") ? only : only.replace(/^[^\n]+\n/, "");
+  }
+  return cleanSections.join("\n\n");
+}
+
+function showCombinedNotice(text) {
+  const clean = String(text || "").trim();
+  if (!clean) return false;
+  showToast(clean, { record: false });
+  setMsg(clean, true);
+  return true;
 }
 
 function showJudgeNotice(payload) {
@@ -6413,12 +6636,14 @@ function drawChips(chart, s) {
     ctx.strokeStyle = getCfgColor(chartConfig.chip.peakLineColor || "#2563eb");
     ctx.lineWidth = Number(chartConfig.chip.peakLineWidth || 1.2);
     ctx.setLineDash(getTradeLineDash(chartConfig.chip.peakLineStyle || "dashed"));
-    for (const p of peaks) {
-      const yPx = s.y(p);
-      ctx.beginPath();
-      ctx.moveTo(xL, yPx);
-      ctx.lineTo(PAD_L, yPx);
-      ctx.stroke();
+    if (chartConfig.chip.peakLineEnabled !== false) {
+      for (const p of peaks) {
+        const yPx = s.y(p);
+        ctx.beginPath();
+        ctx.moveTo(xL, yPx);
+        ctx.lineTo(PAD_L, yPx);
+        ctx.stroke();
+      }
     }
     ctx.restore();
   }
@@ -6492,9 +6717,11 @@ function drawLegend() {
     { label: "段(未完成)", color: getCfgColor(chartConfig.seg.color), dashed: true, w: chartConfig.seg.widthUnsure },
     { label: "2段(确定)", color: getCfgColor(chartConfig.segseg.color), dashed: false, w: chartConfig.segseg.widthSure },
     { label: "2段(未完成)", color: getCfgColor(chartConfig.segseg.color), dashed: true, w: chartConfig.segseg.widthUnsure },
-    { label: "节奏线1", color: getRhythmLineColor("rhythm1"), dashed: chartConfig.rhythmLine.lineStyle !== "solid", w: chartConfig.rhythmLine.width },
-    { label: "节奏线2", color: getRhythmLineColor("rhythm2"), dashed: chartConfig.rhythmLine.lineStyle !== "solid", w: chartConfig.rhythmLine.width },
-    { label: "节奏线3", color: getRhythmLineColor("rhythm3"), dashed: chartConfig.rhythmLine.lineStyle !== "solid", w: chartConfig.rhythmLine.width },
+    { label: "节奏线1", color: getRhythmVisualConfig("rhythm1").lineColor, dashed: getRhythmVisualConfig("rhythm1").lineStyle !== "solid", w: getRhythmVisualConfig("rhythm1").lineWidth },
+    { label: "节奏线2", color: getRhythmVisualConfig("rhythm2").lineColor, dashed: getRhythmVisualConfig("rhythm2").lineStyle !== "solid", w: getRhythmVisualConfig("rhythm2").lineWidth },
+    { label: "节奏线3", color: getRhythmVisualConfig("rhythm3").lineColor, dashed: getRhythmVisualConfig("rhythm3").lineStyle !== "solid", w: getRhythmVisualConfig("rhythm3").lineWidth },
+    { label: "节奏线4", color: getRhythmVisualConfig("rhythm4").lineColor, dashed: getRhythmVisualConfig("rhythm4").lineStyle !== "solid", w: getRhythmVisualConfig("rhythm4").lineWidth },
+    { label: "节奏线5", color: getRhythmVisualConfig("rhythm5").lineColor, dashed: getRhythmVisualConfig("rhythm5").lineStyle !== "solid", w: getRhythmVisualConfig("rhythm5").lineWidth },
   ];
   ctx.save();
   const fontSize = chartConfig.legend.fontSize;
@@ -6785,19 +7012,37 @@ function drawBsp(arr, s) {
 
 function drawRhythmLines(arr, s) {
   if (!chartConfig.rhythmLine || !chartConfig.rhythmLine.enabled) return;
-  ctx.save();
-  ctx.lineWidth = Number(chartConfig.rhythmLine.width || 1.2);
-  ctx.setLineDash(getTradeLineDash(chartConfig.rhythmLine.lineStyle || "dashed"));
+  // 自定义术语说明：
+  // - “推进峰值端点”指与父结构同向推进的子级端点（上升时对应 D/F/H...）。
+  // - line.label_left 是节奏线编号，例如 2_1。
+  // - line.label_right 是该线复用的回调比例，例如 0.618。
   for (const line of arr || []) {
     if (!line || !isRhythmLevelEnabled(line.level)) continue;
     if (!intersects(line, s.xMin, s.xMax)) continue;
-    ctx.strokeStyle = getRhythmLineColor(line.color_group);
+    const visual = getRhythmVisualConfig(line.color_group);
+    const x1Val = Math.max(s.xMin, Math.min(s.xMax, Number(line.x1)));
+    const x2Val = Math.max(s.xMin, Math.min(s.xMax, Number(line.x2)));
+    const xp1 = s.x(x1Val);
+    const xp2 = s.x(x2Val);
+    const yp = s.y(line.y1);
+    ctx.save();
+    ctx.lineWidth = visual.lineWidth;
+    ctx.setLineDash(getTradeLineDash(visual.lineStyle));
+    ctx.strokeStyle = visual.lineColor;
     ctx.beginPath();
-    ctx.moveTo(s.x(line.x1), s.y(line.y1));
-    ctx.lineTo(s.x(line.x2), s.y(line.y2));
+    ctx.moveTo(xp1, yp);
+    ctx.lineTo(xp2, yp);
     ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = visual.textColor;
+    ctx.font = `${visual.textFontWeight} ${visual.textFontSize}px Consolas`;
+    ctx.textBaseline = "middle";
+    ctx.textAlign = "right";
+    ctx.fillText(String(line.label_left || ""), xp1 - 6, yp);
+    ctx.textAlign = "left";
+    ctx.fillText(String(line.label_right || ""), xp2 + 6, yp);
+    ctx.restore();
   }
-  ctx.restore();
 }
 
 function buildBottomSignalGroups(chart, bspArr) {
@@ -6814,10 +7059,12 @@ function buildBottomSignalGroups(chart, bspArr) {
     const bspCfg = getBspConfig(p.level);
     const prefix = p.status === "correct" ? "✓" : (p.status === "wrong" ? "×" : "·");
     const text = `${prefix} ${getBspDisplayLabel(p)}`;
+    const levelPriority = p.level === "segseg" ? 0 : (p.level === "seg" ? 1 : 2);
+    const statusPriority = p.status === "correct" ? 0 : (p.status === "wrong" ? 1 : 2);
     push(Number(p.x), {
       kind: "bsp",
-      priority: 20,
-      sortKey: p.level === "bi" ? 0 : (p.level === "seg" ? 1 : 2),
+      priority: 0,
+      sortKey: levelPriority * 10 + statusPriority,
       text,
       tipText: text,
       fontSize: Number(bspCfg.fontSize || 14),
@@ -6826,22 +7073,6 @@ function buildBottomSignalGroups(chart, bspArr) {
       lineColor: getCfgColor(bspCfg.lineColor),
       lineWidth: Number(bspCfg.lineWidth || 1),
       lineStyle: bspCfg.lineStyle || "dashed",
-    });
-  }
-  for (const hit of (chart && chart.rhythm_hits) || []) {
-    if (!hit || !Number.isFinite(hit.x)) continue;
-    push(Number(hit.x), {
-      kind: "rhythm",
-      priority: 0,
-      sortKey: Number(hit.round_ref || 0),
-      text: String(hit.display_label || "1382"),
-      tipText: String(hit.detail || hit.display_label || "1382"),
-      fontSize: Number(chartConfig.rhythmHit.fontSize || 14),
-      textColor: getCfgColor(chartConfig.rhythmHit.color),
-      borderColor: getCfgColor(chartConfig.rhythmHit.color),
-      lineColor: getCfgColor(chartConfig.rhythmHit.lineColor),
-      lineWidth: Number(chartConfig.rhythmHit.lineWidth || 1),
-      lineStyle: chartConfig.rhythmHit.lineStyle || "dashed",
     });
   }
   return groups;
@@ -6854,7 +7085,7 @@ function drawBottomSignals(chart, s) {
   const boxGap = 4;
   const boxPadX = 8;
   const boxPadY = 5;
-  const overflowLimit = Math.max(1, Number(chartConfig.rhythmHit.overflowLimit || 4));
+  const overflowLimit = 6;
   const byX = new Map((s.visibleK || []).map((k) => [k.x, k]));
 
   for (const x of xs) {
@@ -6870,12 +7101,16 @@ function drawBottomSignals(chart, s) {
         sortKey: 999,
         text: "!",
         tipText: groupTip,
-        fontSize: Number(chartConfig.rhythmHit.fontSize || 14),
-        textColor: getCfgColor(chartConfig.rhythmHit.overflowColor || chartConfig.rhythmHit.color),
-        borderColor: getCfgColor(chartConfig.rhythmHit.overflowColor || chartConfig.rhythmHit.color),
-        lineColor: getCfgColor(chartConfig.rhythmHit.lineColor),
-        lineWidth: Number(chartConfig.rhythmHit.lineWidth || 1),
-        lineStyle: chartConfig.rhythmHit.lineStyle || "dashed",
+        fontSize: Math.max(
+          Number(chartConfig.bspBi && chartConfig.bspBi.fontSize) || 14,
+          Number(chartConfig.bspSeg && chartConfig.bspSeg.fontSize) || 14,
+          Number(chartConfig.bspSegseg && chartConfig.bspSegseg.fontSize) || 14,
+        ),
+        textColor: cssVar("--muted", "#475569"),
+        borderColor: cssVar("--muted", "#475569"),
+        lineColor: cssVar("--muted", "#475569"),
+        lineWidth: 1,
+        lineStyle: "dashed",
         hoverOnly: true,
       });
     }
@@ -6933,6 +7168,9 @@ function drawUserRays(s) {
   if (!userRays || userRays.length === 0) return;
   ctx.save();
   ctx.font = `${chartConfig.userRay.fontSize}px Consolas`;
+  // 这里刻意使用 forEach + return。
+  // 注意：forEach 回调里不能写 continue，否则会触发
+  // "Illegal continue statement" 并导致整段前端脚本失效。
   userRays.forEach((ray, idx) => {
     ctx.lineWidth = getRayLineWidth(ray);
     ctx.strokeStyle = getRayLineColor(ray);
@@ -7006,6 +7244,7 @@ function getNearestBiEndpoint(chart, s, px, py, maxDistPx = 12) {
 function drawUserBiRays(s, chart) {
   if (!userBiRays || userBiRays.length === 0) return;
   ctx.save();
+  // 同上：需要跳过当前回调时统一使用 return，避免继续踩到 JS 语法坑。
   userBiRays.forEach((r, idx) => {
     ctx.lineWidth = getRayLineWidth(r);
     ctx.strokeStyle = getRayLineColor(r);
@@ -7162,30 +7401,26 @@ async function checkBspJudge(reason) {
 }
 
 function detectBspPromptOnLastBar(payload) {
-  if (!payload || !payload.ready || !payload.chart || !payload.chart.kline || payload.chart.kline.length === 0) return false;
-  const lastX = payload.chart.kline[payload.chart.kline.length - 1].x;
-  const hits = (payload.chart.bsp || []).filter((p) => p.x === lastX);
-  if (hits.length <= 0) return false;
-  const lines = hits.map((p) => getBspDisplayLabel(p)).join("\n");
-  const key = lastX + "|" + hits.map((p) => `${p.level || "-"}:${getBspDisplayLabel(p)}`).join("|");
-  if (lastSeenBspKey.has(key)) return false;
-  lastSeenBspKey.add(key);
-  showBspPrompt(payload, lines, key, hits);
-  return true;
+  return getLatestBspNotice(payload);
 }
 
 async function stepOnce(logMessage) {
   const prevStepIdx = lastPayload && Number.isFinite(lastPayload.step_idx) ? Number(lastPayload.step_idx) : null;
   const payload = await api("/api/step", { judge_mode: systemConfig.bspJudgeMode || "auto" });
-  if (logMessage) setMsg(payload.message || "步进成功");
-  refreshUI(payload, { afterStep: true });
-  const interrupted = isBspJudgeManual() ? false : detectBspPromptOnLastBar(payload);
+  const bspNotice = isBspJudgeManual() ? null : detectBspPromptOnLastBar(payload);
+  const noticeText = buildStepNoticeText(payload, bspNotice);
+  refreshUI(payload, { afterStep: true, showStandaloneNotices: false });
+  const noticeShown = showCombinedNotice(noticeText);
+  if (logMessage && !noticeShown) setMsg(payload.message || "步进成功");
   const reachedEnd = prevStepIdx !== null && Number(payload.step_idx) === prevStepIdx;
-  return { payload, interrupted, reachedEnd };
+  return { payload, interrupted: !!bspNotice, reachedEnd, noticeShown };
 }
 
 function refreshUI(payload, options) {
   const afterStep = options && options.afterStep;
+  const showStandaloneNotices = options && Object.prototype.hasOwnProperty.call(options, "showStandaloneNotices")
+    ? !!options.showStandaloneNotices
+    : !afterStep;
   lastPayload = payload;
   sessionFinished = !!payload.finished;
   syncTradesFromPayload(payload);
@@ -7199,10 +7434,10 @@ function refreshUI(payload, options) {
   }
   setState(payload);
   updateTradeStatusOverlay(payload);
-  if (payload && Array.isArray(payload.rhythm_notice_hits) && payload.rhythm_notice_hits.length > 0) {
+  if (showStandaloneNotices && payload && Array.isArray(payload.rhythm_notice_hits) && payload.rhythm_notice_hits.length > 0) {
     showRhythmHitNotices(payload);
   }
-  if (payload && payload.judge_notice) {
+  if (showStandaloneNotices && payload && payload.judge_notice) {
     showJudgeNotice(payload);
   }
   if (payload.ready) {
@@ -7327,16 +7562,20 @@ $("btnStepN").onclick = async () => {
   if ($("btnStepN").disabled || stepInFlight) return;
   const n = getStepNValue();
   let done = 0;
+  let lastResult = null;
   stepInFlight = true;
   syncStepButtonState();
   hideGlobalLoading();
   try {
     for (let i = 0; i < n; i++) {
       const result = await stepOnce(false);
+      lastResult = result;
       done += 1;
       if (result.interrupted || result.reachedEnd) break;
     }
-    setMsg(`步进N（${done}）根完成`);
+    if (!lastResult || !lastResult.noticeShown) {
+      setMsg(`步进N（${done}）根完成`);
+    }
   } catch (e) {
     setMsg("步进 N 失败：" + e.message);
   } finally {
@@ -7355,7 +7594,7 @@ $("btnBackN").onclick = async () => {
     clearBspPrompt();
     const payload = await api("/api/back_n", { n });
     lastSeenBspKey = new Set();
-    refreshUI(payload, { afterStep: true });
+    refreshUI(payload, { afterStep: true, showStandaloneNotices: false });
     setMsg(payload.message || `后退 N 完成：N=${n}`);
   } catch (e) {
     setMsg("后退 N 失败：" + e.message);
@@ -7390,6 +7629,12 @@ $("btnSell").onclick = async () => {
     setMsg("卖出失败：" + e.message);
   }
 };
+markUiBound("btnInit");
+markUiBound("btnStep");
+markUiBound("btnStepN");
+markUiBound("btnBackN");
+markUiBound("btnBuy");
+markUiBound("btnSell");
 
 $("btnFinish").onclick = async () => {
   try {
@@ -7480,6 +7725,37 @@ if ($("bspPrompt")) {
   });
 }
 
+function verifyCriticalUiBindings() {
+  const checks = [
+    { id: "btnInit", ok: () => typeof $("btnInit").onclick === "function" || $("btnInit").dataset.bound === "1" },
+    { id: "btnStep", ok: () => typeof $("btnStep").onclick === "function" || $("btnStep").dataset.bound === "1" },
+    { id: "btnBuy", ok: () => typeof $("btnBuy").onclick === "function" || $("btnBuy").dataset.bound === "1" },
+    { id: "btnSell", ok: () => typeof $("btnSell").onclick === "function" || $("btnSell").dataset.bound === "1" },
+    { id: "btnSettingsOpen", ok: () => $("btnSettingsOpen").dataset.bound === "1" },
+    { id: "btnFullscreen", ok: () => typeof $("btnFullscreen").onclick === "function" || $("btnFullscreen").dataset.bound === "1" },
+    { id: "toolHorizontalRay", ok: () => $("toolHorizontalRay").dataset.bound === "1" },
+    { id: "toolBiRay", ok: () => $("toolBiRay").dataset.bound === "1" },
+  ];
+  const broken = checks
+    .map((check) => {
+      const el = $(check.id);
+      if (!el) return `${check.id}: 缺少 DOM 节点`;
+      try {
+        return check.ok() ? null : `${check.id}: 事件绑定缺失`;
+      } catch (err) {
+        return `${check.id}: 自检异常 (${err && err.message ? err.message : err})`;
+      }
+    })
+    .filter(Boolean);
+  if (broken.length <= 0) {
+    console.info("UI binding self-check passed.");
+    return;
+  }
+  const text = `前端脚本自检发现异常：\n${broken.join("\n")}\n请重点检查 forEach 回调里是否误用了 continue。`;
+  console.error(text);
+  setTimeout(() => showToast(text, { record: false }), 0);
+}
+
 (async () => {
   loadSessionConfig();
   applyThemeFromSelect();
@@ -7501,6 +7777,7 @@ if ($("bspPrompt")) {
   } catch (e) {
     console.error("恢复会话失败:", e);
   }
+  verifyCriticalUiBindings();
 })();
 </script>
 </body>
