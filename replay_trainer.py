@@ -4,6 +4,9 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, Optional
 
+import akshare as ak
+import pandas as pd
+import tushare as ts
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
@@ -13,12 +16,15 @@ from Bi.Bi import CBi
 from BuySellPoint.BSPointList import CBSPointList
 from Chan import CChan
 from ChanConfig import CChanConfig
-from Common.CEnum import AUTYPE, BI_DIR, DATA_SRC, FX_TYPE, KL_TYPE, KLINE_DIR, SEG_TYPE, TREND_LINE_SIDE
+from Common.CEnum import AUTYPE, BI_DIR, DATA_FIELD, DATA_SRC, FX_TYPE, KL_TYPE, KLINE_DIR, SEG_TYPE, TREND_LINE_SIDE
 from Common.ChanException import CChanException, ErrCode
 from Common.CTime import CTime
 from DataAPI.BaoStockAPI import CBaoStock
+from DataAPI.CommonStockAPI import CCommonStockApi
+from Common.func_util import str2float
 from KLine.KLine import CKLine
 from KLine.KLine_List import cal_seg, get_seglist_instance, update_zs_in_seg
+from KLine.KLine_Unit import CKLine_Unit
 from Math.BOLL import BollModel
 from Math.Demark import CDemarkEngine
 from Math.KDJ import KDJ
@@ -64,11 +70,224 @@ LEVEL_LABELS = {"bi": "笔", "seg": "段", "segseg": "2段"}
 STRUCTURE_LEVEL_LABELS = {"fract": "分型", **LEVEL_LABELS}
 RHYTHM_LEVEL_LABELS = {"fract": "分型", "bi": "笔", "seg": "线段", "segseg": "二段"}
 JUDGE_TRIGGER_LEVELS = {"bi": "seg", "seg": "segseg", "segseg": "segsegseg"}
+DEFAULT_TUSHARE_TOKEN = "0de8d8ce7b0d4758c52959230694d55e0571d57c9b1f37ef3ffe72ca"
+AKSHARE_INLINE_SRC = "inline:akshare"
+TUSHARE_INLINE_SRC = "inline:tushare"
+DATA_SOURCE_CHAIN: list[tuple[str, Any]] = [
+    ("AKShare", AKSHARE_INLINE_SRC),
+    ("BaoStock", DATA_SRC.BAO_STOCK),
+    ("Tushare", TUSHARE_INLINE_SRC),
+]
 
 
 def normalize_chan_algo(raw: Any) -> str:
     text = str(raw or CHAN_ALGO_CLASSIC).strip().lower()
     return CHAN_ALGO_NEW if text == CHAN_ALGO_NEW else CHAN_ALGO_CLASSIC
+
+
+def data_source_label(data_src: Any) -> str:
+    if data_src == DATA_SRC.AKSHARE or data_src == AKSHARE_INLINE_SRC:
+        return "AKShare"
+    if data_src == DATA_SRC.BAO_STOCK:
+        return "BaoStock"
+    if data_src == TUSHARE_INLINE_SRC:
+        return "Tushare"
+    if isinstance(data_src, DATA_SRC):
+        return data_src.name
+    return str(data_src)
+
+
+def get_stock_api_cls(data_src: Any):
+    if data_src == DATA_SRC.AKSHARE or data_src == AKSHARE_INLINE_SRC:
+        return CAkshareInline
+    if data_src == DATA_SRC.BAO_STOCK:
+        return CBaoStock
+    if data_src == TUSHARE_INLINE_SRC:
+        return CTushareInline
+    raise ValueError(f"unsupported data source: {data_src}")
+
+
+def create_stock_api_instance(data_src: Any, code: str, begin_date: Optional[str], end_date: Optional[str], autype: AUTYPE) -> CCommonStockApi:
+    api_cls = get_stock_api_cls(data_src)
+    api_cls.do_init()
+    try:
+        return api_cls(code=code, k_type=KL_TYPE.K_DAY, begin_date=begin_date, end_date=end_date, autype=autype)
+    except Exception:
+        api_cls.do_close()
+        raise
+
+
+def format_source_error(exc: Exception) -> str:
+    text = str(exc or exc.__class__.__name__).strip()
+    if not text:
+        text = exc.__class__.__name__
+    return " ".join(text.split())
+
+
+def _strip_market_prefix(code: str) -> str:
+    text = str(code or "").strip().lower()
+    if text.startswith("sh.") or text.startswith("sz."):
+        return text.split(".", 1)[1]
+    if text.startswith("sh") or text.startswith("sz"):
+        return text[2:]
+    return text
+
+
+def _parse_inline_date(value) -> CTime:
+    if isinstance(value, pd.Timestamp):
+        return CTime(value.year, value.month, value.day, 0, 0)
+    text = str(value or "").strip()
+    if len(text) >= 10 and "-" in text:
+        return CTime(int(text[:4]), int(text[5:7]), int(text[8:10]), 0, 0)
+    if len(text) >= 8 and text[:8].isdigit():
+        return CTime(int(text[:4]), int(text[4:6]), int(text[6:8]), 0, 0)
+    raise ValueError(f"unknown date format: {value}")
+
+
+def _parse_trade_date_8(value: str) -> CTime:
+    text = str(value or "").strip()
+    if len(text) != 8 or not text.isdigit():
+        raise ValueError(f"invalid trade date: {value}")
+    return CTime(int(text[:4]), int(text[4:6]), int(text[6:8]), 0, 0)
+
+
+class CAkshareInline(CCommonStockApi):
+    def __init__(self, code, k_type=KL_TYPE.K_DAY, begin_date=None, end_date=None, autype=AUTYPE.QFQ):
+        self.symbol = _strip_market_prefix(code)
+        super(CAkshareInline, self).__init__(code, k_type, begin_date, end_date, autype)
+
+    def get_kl_data(self):
+        adjust_map = {AUTYPE.QFQ: "qfq", AUTYPE.HFQ: "hfq", AUTYPE.NONE: ""}
+        period_map = {KL_TYPE.K_DAY: "daily", KL_TYPE.K_WEEK: "weekly", KL_TYPE.K_MON: "monthly"}
+        if self.k_type not in period_map:
+            raise ValueError(f"AKShare 暂不支持 {self.k_type} 级别")
+
+        start_date = (self.begin_date or "1990-01-01").replace("-", "")
+        end_date = (self.end_date or "2099-12-31").replace("-", "")
+        if self.is_stock:
+            df = ak.stock_zh_a_hist(
+                symbol=self.symbol,
+                period=period_map[self.k_type],
+                start_date=start_date,
+                end_date=end_date,
+                adjust=adjust_map.get(self.autype, "qfq"),
+            )
+        else:
+            market = "sh" if str(self.code).lower().startswith("sh") else "sz"
+            raw_df = ak.stock_zh_index_daily(symbol=f"{market}{self.symbol}")
+            df = raw_df.rename(columns={"date": "日期", "open": "开盘", "high": "最高", "low": "最低", "close": "收盘", "volume": "成交量", "amount": "成交额"})
+            df["日期"] = df["日期"].astype(str).str.replace("-", "", regex=False)
+            df = df[(df["日期"] >= start_date) & (df["日期"] <= end_date)]
+        if df is None or df.empty:
+            return
+        for _, row in df.iterrows():
+            item = {
+                DATA_FIELD.FIELD_TIME: _parse_inline_date(row["日期"]),
+                DATA_FIELD.FIELD_OPEN: str2float(row["开盘"]),
+                DATA_FIELD.FIELD_HIGH: str2float(row["最高"]),
+                DATA_FIELD.FIELD_LOW: str2float(row["最低"]),
+                DATA_FIELD.FIELD_CLOSE: str2float(row["收盘"]),
+                DATA_FIELD.FIELD_VOLUME: str2float(row.get("成交量", 0)),
+                DATA_FIELD.FIELD_TURNOVER: str2float(row.get("成交额", 0)),
+            }
+            yield CKLine_Unit(item)
+
+    def SetBasciInfo(self):
+        self.name = self.code
+        raw = str(self.code or "").strip().lower()
+        if raw.startswith(("sh.", "sz.")):
+            symbol = raw.split(".", 1)[1]
+            self.is_stock = not (symbol.startswith("000") or symbol.startswith("399"))
+        else:
+            self.is_stock = True
+
+    @classmethod
+    def do_init(cls):
+        pass
+
+    @classmethod
+    def do_close(cls):
+        pass
+
+
+class CTushareInline(CCommonStockApi):
+    pro = None
+    token = None
+
+    def __init__(self, code, k_type=KL_TYPE.K_DAY, begin_date=None, end_date=None, autype=AUTYPE.QFQ):
+        self.ts_code = self._to_ts_code(code)
+        super(CTushareInline, self).__init__(code, k_type, begin_date, end_date, autype)
+
+    @staticmethod
+    def _to_ts_code(code: str) -> str:
+        raw = str(code or "").strip().lower()
+        if raw.startswith("sh.") or raw.startswith("sz."):
+            market = raw[:2].upper()
+            symbol = raw[3:]
+            return f"{symbol}.{market}"
+        if len(raw) == 6 and raw.isdigit():
+            return f"{raw}.SH" if raw.startswith("6") else f"{raw}.SZ"
+        raise ValueError(f"unsupported tushare code: {code}")
+
+    @classmethod
+    def do_init(cls):
+        token = DEFAULT_TUSHARE_TOKEN
+        if not token:
+            raise RuntimeError("未配置 Tushare Token")
+        if cls.pro is None or cls.token != token:
+            ts.set_token(token)
+            cls.pro = ts.pro_api(token)
+            cls.token = token
+
+    @classmethod
+    def do_close(cls):
+        cls.pro = None
+        cls.token = None
+
+    def SetBasciInfo(self):
+        self.name = self.code
+        self.is_stock = True
+
+    def get_kl_data(self):
+        if self.k_type not in {KL_TYPE.K_DAY, KL_TYPE.K_WEEK, KL_TYPE.K_MON}:
+            raise ValueError(f"Tushare 暂不支持 {self.k_type} 级别")
+        self.do_init()
+        if self.pro is None:
+            raise RuntimeError("Tushare Pro 未初始化")
+        start_date = (self.begin_date or "1990-01-01").replace("-", "")
+        end_date = (self.end_date or "2099-12-31").replace("-", "")
+        freq_map = {KL_TYPE.K_DAY: "D", KL_TYPE.K_WEEK: "W", KL_TYPE.K_MON: "M"}
+        adj_map = {AUTYPE.QFQ: "qfq", AUTYPE.HFQ: "hfq", AUTYPE.NONE: None}
+        df = ts.pro_bar(
+            ts_code=self.ts_code,
+            adj=adj_map.get(self.autype),
+            freq=freq_map[self.k_type],
+            start_date=start_date,
+            end_date=end_date,
+        )
+        if df is None or df.empty:
+            return
+        df = df.sort_values("trade_date", ascending=True)
+        for _, row in df.iterrows():
+            item = {
+                DATA_FIELD.FIELD_TIME: _parse_trade_date_8(row["trade_date"]),
+                DATA_FIELD.FIELD_OPEN: str2float(row["open"]),
+                DATA_FIELD.FIELD_HIGH: str2float(row["high"]),
+                DATA_FIELD.FIELD_LOW: str2float(row["low"]),
+                DATA_FIELD.FIELD_CLOSE: str2float(row["close"]),
+                DATA_FIELD.FIELD_VOLUME: str2float(row.get("vol", 0)),
+                DATA_FIELD.FIELD_TURNOVER: str2float(row.get("amount", 0)),
+            }
+            yield CKLine_Unit(item)
+
+
+class ReplayDataChan(CChan):
+    def GetStockAPI(self):
+        if self.data_src == AKSHARE_INLINE_SRC:
+            return CAkshareInline
+        if self.data_src == TUSHARE_INLINE_SRC:
+            return CTushareInline
+        return super().GetStockAPI()
 
 
 class SimpleLineList(list):
@@ -119,6 +338,16 @@ class ChanStructureBundle:
     fx_lines: list[dict[str, Any]]
     rhythm_lines: list[dict[str, Any]]
     rhythm_hits: list[dict[str, Any]]
+
+
+@dataclass
+class DataSourceSelection:
+    data_src: Any
+    label: str
+    logs: list[str]
+    replay_klus_master: list
+    kline_all: list[dict[str, Any]]
+    stock_name: Optional[str]
 
 
 class CombinedNewKBar:
@@ -1036,11 +1265,98 @@ class ChanStepper:
         # 会话级行情缓存：同一股票代码与日期区间下只拉取一次，缠论/BSP 配置变更时仅重算结构。
         self._data_session_key: Optional[tuple[Any, ...]] = None
         self._replay_klus_master: Optional[list] = None
+        self.data_src_used: Any = None
+        self.data_src_logs: list[str] = []
+        self.stock_name: Optional[str] = None
         self.structure_bundle: Optional[ChanStructureBundle] = None
         self._bundle_cache_step_idx: Optional[int] = None
 
     def _cfg_without_chan_algo(self, cfg_dict: dict[str, Any]) -> dict[str, Any]:
         return {k: v for k, v in cfg_dict.items() if k != "chan_algo"}
+
+    def _fetch_from_single_source(
+        self,
+        data_src: Any,
+        begin_date: str,
+        end_date: Optional[str],
+        autype: AUTYPE,
+        chan_cfg_dict: dict[str, Any],
+    ) -> tuple[list, list[dict[str, Any]], Optional[str]]:
+        cfg_fetch = CChanConfig({**chan_cfg_dict, "trigger_step": False})
+        fetch_chan = ReplayDataChan(
+            code=self.code,
+            begin_time=begin_date,
+            end_time=end_date,
+            data_src=data_src,
+            lv_list=[KL_TYPE.K_DAY],
+            config=cfg_fetch,
+            autype=autype,
+        )
+        replay_klus_master = copy.deepcopy(list(fetch_chan[0].klu_iter()))
+        if not replay_klus_master:
+            raise ValueError("未获取到任何日线数据")
+
+        stock_name: Optional[str] = None
+        try:
+            api = create_stock_api_instance(data_src, self.code, begin_date, end_date, autype)
+            stock_name = getattr(api, "name", None) or None
+        except Exception:
+            stock_name = None
+        finally:
+            try:
+                get_stock_api_cls(data_src).do_close()
+            except Exception:
+                pass
+
+        chip_begin_date = "1990-01-01"
+        try:
+            cfg_all = CChanConfig({**chan_cfg_dict, "trigger_step": False})
+            chan_all = ReplayDataChan(
+                code=self.code,
+                begin_time=chip_begin_date,
+                end_time=end_date,
+                data_src=data_src,
+                lv_list=[KL_TYPE.K_DAY],
+                config=cfg_all,
+                autype=autype,
+            )
+            kline_all = serialize_klu_iter(chan_all[0].klu_iter())
+        except Exception:
+            kline_all = serialize_klu_iter(replay_klus_master)
+        return replay_klus_master, kline_all, stock_name
+
+    def _select_data_source_with_fallback(
+        self,
+        begin_date: str,
+        end_date: Optional[str],
+        autype: AUTYPE,
+        chan_cfg_dict: dict[str, Any],
+    ) -> DataSourceSelection:
+        logs: list[str] = []
+        errors: list[str] = []
+        for idx, (label, data_src) in enumerate(DATA_SOURCE_CHAIN):
+            print(f"[DataSource] try {label} for {self.code} {begin_date} -> {end_date or 'latest'}")
+            try:
+                replay_klus_master, kline_all, stock_name = self._fetch_from_single_source(data_src, begin_date, end_date, autype, chan_cfg_dict)
+                if idx == 0:
+                    logs.append(f"数据源已连接：{label}")
+                else:
+                    logs.append(f"数据源切换成功：{label}（前序源不可用，已自动降级）")
+                print(f"[DataSource] selected {label}")
+                return DataSourceSelection(
+                    data_src=data_src,
+                    label=label,
+                    logs=logs + errors,
+                    replay_klus_master=replay_klus_master,
+                    kline_all=kline_all,
+                    stock_name=stock_name,
+                )
+            except Exception as exc:
+                detail = format_source_error(exc)
+                errors.append(f"{label} 失败：{detail}")
+                logs.append(f"数据源尝试失败：{label}")
+                print(f"[DataSource] failed {label}: {detail}")
+        raise RuntimeError("全部数据源均不可用：" + "；".join(errors))
 
     def get_structure_bundle(self, *, force: bool = False, chan: Optional[CChan] = None) -> ChanStructureBundle:
         target_chan = chan or self.chan
@@ -1123,44 +1439,28 @@ class ChanStepper:
         chan_cfg_dict = self._cfg_without_chan_algo(cfg_dict)
         cfg = CChanConfig(chan_cfg_dict)
         self.code = normalize_code(code)
+        self.stock_name = None
         session_key = (self.code, begin_date, end_date, autype)
         cache_hit = session_key == self._data_session_key and self._replay_klus_master is not None
 
         if not cache_hit:
-            # 一次性拉取复盘区间内的完整日线，供后续任意缠论配置重放（避免 reconfig/back_n 重复请求）。
-            cfg_fetch = CChanConfig({**chan_cfg_dict, "trigger_step": False})
-            fetch_chan = CChan(
-                code=self.code,
-                begin_time=begin_date,
-                end_time=end_date,
-                data_src=DATA_SRC.BAO_STOCK,
-                lv_list=[KL_TYPE.K_DAY],
-                config=cfg_fetch,
-                autype=autype,
-            )
-            self._replay_klus_master = copy.deepcopy(list(fetch_chan[0].klu_iter()))
+            selection = self._select_data_source_with_fallback(begin_date, end_date, autype, chan_cfg_dict)
+            self._replay_klus_master = selection.replay_klus_master
+            self.kline_all = selection.kline_all
+            self.data_src_used = selection.data_src
+            self.data_src_logs = list(selection.logs)
             self._data_session_key = session_key
-
-            cfg_all_dict = chan_cfg_dict.copy()
-            cfg_all_dict["trigger_step"] = False  # Always False for chip calculation
-            cfg_all = CChanConfig(cfg_all_dict)
-            chip_begin_date = "1990-01-01"
-            chan_all = CChan(
-                code=self.code,
-                begin_time=chip_begin_date,
-                end_time=end_date,
-                data_src=DATA_SRC.BAO_STOCK,
-                lv_list=[KL_TYPE.K_DAY],
-                config=cfg_all,
-                autype=autype,
-            )
-            self.kline_all = serialize_klu_iter(chan_all[0].klu_iter())
+            if selection.stock_name:
+                self.stock_name = selection.stock_name
+        else:
+            if self.data_src_logs:
+                self.data_src_logs = [f"沿用已缓存数据源：{data_source_label(self.data_src_used)}"]
 
         self.chan = ReplayChan(
             code=self.code,
             begin_time=begin_date,
             end_time=end_date,
-            data_src=DATA_SRC.BAO_STOCK,
+            data_src=self.data_src_used or DATA_SRC.AKSHARE,
             lv_list=[KL_TYPE.K_DAY],
             config=cfg,
             autype=autype,
@@ -1339,7 +1639,7 @@ class AppState:
             code=self.stepper.code,
             begin_time=self.session_params["begin_date"],
             end_time=self.session_params["end_date"],
-            data_src=DATA_SRC.BAO_STOCK,
+            data_src=self.stepper.data_src_used or DATA_SRC.AKSHARE,
             lv_list=[KL_TYPE.K_DAY],
             config=cfg,
             autype=self.session_params["autype"],
@@ -1672,6 +1972,10 @@ class AppState:
             "finished": self.finished,
             "code": self.stepper.code,
             "name": stock_name,
+            "data_source": {
+                "label": data_source_label(self.stepper.data_src_used),
+                "logs": list(self.stepper.data_src_logs),
+            },
             "chan_algo": self.stepper.chan_algo,
             "step_idx": self.stepper.step_idx,
             "time": self.stepper.current_time(),
@@ -1873,7 +2177,18 @@ HTML = r"""
     }
     body { margin: 0; font-family: Arial, sans-serif; background: var(--bg); color: var(--text); overflow: hidden; }
     .wrap { display: flex; height: 100vh; flex-direction: row-reverse; }
-    .left { width: 360px; padding: 12px; border-right: none; border-left: 1px solid var(--border); box-sizing: border-box; overflow-y: auto; background: var(--panel); position: relative; }
+    .left { width: 360px; padding: 12px; border-right: none; border-left: 1px solid var(--border); box-sizing: border-box; overflow: hidden; background: var(--panel); position: relative; }
+    .leftContent {
+      transform-origin: top left;
+      width: 100%;
+      will-change: transform;
+    }
+    .sourceStatus {
+      margin: -4px 0 10px;
+      color: var(--muted);
+      font-size: 12px;
+      min-height: 18px;
+    }
     .resizer {
       width: 4px;
       cursor: col-resize;
@@ -1884,7 +2199,7 @@ HTML = r"""
     }
     .resizer:hover { background: #2563eb; }
     .right { flex: 1; padding: 0; box-sizing: border-box; min-width: 0; position: relative; display: flex; }
-    .row { margin-bottom: 8px; display: flex; align-items: center; }
+    .row { margin-bottom: 8px; display: flex; align-items: center; gap: 6px; }
     .row input[type="checkbox"] { width: auto; transform: scale(1.1); margin-left: 8px; }
     label { display: inline-block; width: 110px; font-size: 14px; }
     input, select { flex: 1; padding: 4px; background: var(--panel); color: var(--text); border: 1px solid var(--border); min-width: 0; }
@@ -1898,6 +2213,17 @@ HTML = r"""
     
     .title { font-size: 16px; margin: 4px 0 10px; color: #2563eb; font-weight: bold; }
     .card { border: 1px solid var(--border); padding: 12px; margin-bottom: 12px; background: var(--panel); border-radius: 8px; }
+    .left.compact .title { margin-bottom: 8px; font-size: 15px; }
+    .left.compact .sourceStatus { margin-bottom: 8px; font-size: 11px; }
+    .left.compact .chartToolsPanel,
+    .left.compact .card { padding: 10px; margin-bottom: 10px; }
+    .left.compact .btnRow { gap: 4px; margin-bottom: 6px; }
+    .left.compact .btnRow button { padding: 6px 8px; }
+    .left.compact .row { margin-bottom: 6px; }
+    .left.compact label { width: 96px; font-size: 13px; }
+    .left.compact input,
+    .left.compact select,
+    .left.compact button { font-size: 12px; }
     #chart { width: 100%; height: 100%; background: var(--chartBg); display: block; flex: 1; min-width: 0; }
     .muted { color: var(--muted); font-size: 12px; }
     .mono { font-family: Consolas, monospace; }
@@ -1938,7 +2264,7 @@ HTML = r"""
       white-space: pre-wrap;
       z-index: 30000;
       width: max-content;
-      max-width: 260px;
+      max-width: 280px;
       font-weight: normal;
       box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
       pointer-events: none;
@@ -2387,6 +2713,8 @@ HTML = r"""
   <div class="wrap">
     <div class="left">
       <div class="title">chan.py 复盘训练器 <span class="tip-icon" data-tip="Chan.py 缠论复盘交易系统"></span></div>
+      <div id="dataSourceStatus" class="sourceStatus mono">当前数据源：未加载</div>
+      <div id="leftContent" class="leftContent">
       <div id="chartToolsPanel" class="chartToolsPanel">
         <button id="btnFullscreen" class="fullscreen-btn" data-tip="切换图表区域全屏显示。">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
@@ -2455,6 +2783,7 @@ HTML = r"""
           <button id="btnMsgHistory" style="padding:2px 6px; font-size:12px; width:auto;">历史记录</button>
         </div>
         <div class="muted">账户状态信息已迁移到“当前持仓状态”浮窗（仅持仓时显示）。</div>
+      </div>
       </div>
     </div>
     <div class="resizer" id="resizer"></div>
@@ -4623,7 +4952,7 @@ function saveSystemSettingsFromForm() {
   updateBspJudgeUI();
 }
 
-function showFloatingTip(text, clientX, clientY) {
+function showFloatingTip(text, clientX, clientY, avoidRect = null) {
   const tipContent = $("tipContent");
   if (!tipContent || !text) return;
   tipContent.textContent = text;
@@ -4631,7 +4960,21 @@ function showFloatingTip(text, clientX, clientY) {
   const tipRect = tipContent.getBoundingClientRect();
   let top = clientY - tipRect.height / 2;
   let left = clientX + 12;
-  if (left + tipRect.width > window.innerWidth) left = clientX - tipRect.width - 12;
+  if (avoidRect) {
+    const gap = 14;
+    const rightCandidate = avoidRect.right + gap;
+    const leftCandidate = avoidRect.left - tipRect.width - gap;
+    if (rightCandidate + tipRect.width <= window.innerWidth - 8) {
+      left = rightCandidate;
+    } else if (leftCandidate >= 8) {
+      left = leftCandidate;
+    }
+    const centeredTop = avoidRect.top + (avoidRect.height - tipRect.height) / 2;
+    top = Math.max(8, centeredTop);
+  } else if (left + tipRect.width > window.innerWidth) {
+    left = clientX - tipRect.width - 12;
+  }
+  if (left + tipRect.width > window.innerWidth) left = window.innerWidth - tipRect.width - 8;
   if (top + tipRect.height > window.innerHeight) top = window.innerHeight - tipRect.height - 8;
   if (top < 0) top = 8;
   if (left < 0) left = 8;
@@ -4649,7 +4992,7 @@ function initTooltips() {
     const text = target.getAttribute("data-tip");
     if (!text) return;
     const rect = target.getBoundingClientRect();
-    showFloatingTip(text, rect.left + rect.width, rect.top + rect.height / 2);
+    showFloatingTip(text, rect.left + rect.width, rect.top + rect.height / 2, rect);
   };
   const hideTooltip = () => {
     hideFloatingTip();
@@ -5620,11 +5963,15 @@ window.addEventListener("keydown", (e) => {
 });
 
 let msgHistory = ensureArray(safeJsonParse(storageGet("chan_msg_history"), []), []);
+let lastToastText = "";
+let lastToastAt = 0;
 
 function appendMsgHistory(text) {
   const content = String(text || "").trim();
   if (!content) return;
   if (!Array.isArray(msgHistory)) msgHistory = [];
+  const last = msgHistory.length > 0 ? msgHistory[msgHistory.length - 1] : null;
+  if (last && String(last.text || "").trim() === content) return;
   const t = new Date().toLocaleTimeString();
   const entry = { time: t, text: content };
   msgHistory.push(entry);
@@ -5638,14 +5985,20 @@ function setMsg(text, quiet = false) {
 }
 
 function showToast(text, options = {}) {
+  const content = String(text || "").trim();
+  if (!content) return;
   const record = options && Object.prototype.hasOwnProperty.call(options, "record") ? !!options.record : true;
-  if (record) appendMsgHistory(text);
+  if (record) appendMsgHistory(content);
+  const now = Date.now();
+  if (content === lastToastText && now - lastToastAt < 1600) return;
+  lastToastText = content;
+  lastToastAt = now;
   const container = $("toastContainer");
   if (!container) return;
   
   const toast = document.createElement("div");
   toast.className = "toast";
-  toast.textContent = text;
+  toast.textContent = content;
   
   // Apply settings
   toast.style.fontSize = `${chartConfig.toast.fontSize}px`;
@@ -5701,9 +6054,9 @@ function judgeStatsText(stats) {
 
 function getRhythmNoticeTexts(payload) {
   const hits = payload && Array.isArray(payload.rhythm_notice_hits) ? payload.rhythm_notice_hits : [];
-  return hits
+  return Array.from(new Set(hits
     .map((hit) => String(hit && (hit.detail || hit.display_label || "1382")).trim())
-    .filter(Boolean);
+    .filter(Boolean)));
 }
 
 function getLatestBspNotice(payload) {
@@ -5723,7 +6076,7 @@ function getLatestBspNotice(payload) {
 }
 
 function formatCombinedNoticeSection(title, blocks) {
-  const cleanBlocks = (blocks || []).map((block) => String(block || "").trim()).filter(Boolean);
+  const cleanBlocks = Array.from(new Set((blocks || []).map((block) => String(block || "").trim()).filter(Boolean)));
   if (cleanBlocks.length <= 0) return "";
   if (cleanBlocks.length === 1) return `${title}\n${cleanBlocks[0]}`;
   return `${title}\n${cleanBlocks.map((block, idx) => `${idx + 1}. ${block.replace(/\n/g, "\n   ")}`).join("\n\n")}`;
@@ -5797,6 +6150,11 @@ $("btnMsgHistoryClear").onclick = () => {
     $("msgHistoryList").innerHTML = "";
   }
 };
+
+window.addEventListener("resize", () => {
+  updateCompactLayout();
+  hideFloatingTip();
+});
 
 // Sidebar Resizer
 const resizer = $("resizer");
@@ -7416,6 +7774,39 @@ async function stepOnce(logMessage) {
   return { payload, interrupted: !!bspNotice, reachedEnd, noticeShown };
 }
 
+function updateDataSourceStatus(payload) {
+  const el = $("dataSourceStatus");
+  if (!el) return;
+  if (!payload || !payload.ready || !payload.data_source) {
+    el.textContent = "当前数据源：未加载";
+    el.title = "";
+    return;
+  }
+  const info = payload.data_source || {};
+  const label = String(info.label || "-");
+  const logs = Array.isArray(info.logs) ? info.logs.map((item) => String(item || "").trim()).filter(Boolean) : [];
+  el.textContent = `当前数据源：${label}`;
+  el.title = logs.join("\n");
+}
+
+function updateCompactLayout() {
+  const left = document.querySelector(".left");
+  const content = $("leftContent");
+  if (!left || !content) return;
+  content.style.transform = "scale(1)";
+  content.style.width = "100%";
+  left.classList.remove("compact");
+  const available = Math.max(100, left.clientHeight - 4);
+  let contentHeight = content.scrollHeight;
+  if (contentHeight <= available) return;
+  left.classList.add("compact");
+  contentHeight = content.scrollHeight;
+  if (contentHeight <= available) return;
+  const scale = Math.max(0.76, Math.min(1, available / Math.max(1, contentHeight)));
+  content.style.transform = `scale(${scale})`;
+  content.style.width = `${100 / scale}%`;
+}
+
 function refreshUI(payload, options) {
   const afterStep = options && options.afterStep;
   const showStandaloneNotices = options && Object.prototype.hasOwnProperty.call(options, "showStandaloneNotices")
@@ -7433,6 +7824,7 @@ function refreshUI(payload, options) {
     bspHistoryKey = new Set();
   }
   setState(payload);
+  updateDataSourceStatus(payload);
   updateTradeStatusOverlay(payload);
   if (showStandaloneNotices && payload && Array.isArray(payload.rhythm_notice_hits) && payload.rhythm_notice_hits.length > 0) {
     showRhythmHitNotices(payload);
@@ -7480,6 +7872,7 @@ function refreshUI(payload, options) {
   $("btnSell").disabled = !payload.ready || sessionFinished || !payload.account.can_sell;
   $("configCard").classList.toggle("collapsed", payload.ready);
   updateBspJudgeUI();
+  requestAnimationFrame(updateCompactLayout);
 }
 
 $("btnInit").onclick = async () => {
@@ -7508,7 +7901,7 @@ $("btnInit").onclick = async () => {
     });
     initSucceeded = true;
     document.title = `chan.py 复盘训练器 - ${(payload.name ? payload.name : payload.code)}`;
-    setMsg(`加载成功：${payload.name ? payload.name : payload.code}，请点击“下一根K线”。`);
+    setMsg(payload.message || `加载成功：${payload.name ? payload.name : payload.code}`);
     initBtn.disabled = true;
     initBtn.innerHTML = "已加载";
     // $("btnChanSettingsOpen").disabled = true;
@@ -7678,8 +8071,10 @@ $("btnReset").onclick = async () => {
     viewYShiftRatio = 0;
     clearBspPrompt();
     setState(payload);
+    updateDataSourceStatus(payload);
     ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
     setMsg("已重置，可重新配置并加载会话。");
+    requestAnimationFrame(updateCompactLayout);
   } catch (e) {
     setMsg("重置失败：" + e.message);
   }
@@ -7777,6 +8172,8 @@ function verifyCriticalUiBindings() {
   } catch (e) {
     console.error("恢复会话失败:", e);
   }
+  updateDataSourceStatus(lastPayload);
+  updateCompactLayout();
   verifyCriticalUiBindings();
 })();
 </script>
@@ -7791,7 +8188,6 @@ APP_STOCK_NAME: Optional[str] = None
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    CBaoStock.do_init()
     yield
     CBaoStock.do_close()
 
@@ -7812,16 +8208,10 @@ def api_init(req: InitReq):
         if req.initial_cash <= 0:
             raise ValueError("初始资金必须大于0")
         code_norm = normalize_code(req.code)
-        # 获取股票名称（BaoStock basic info）
-        try:
-            api = CBaoStock(code=code_norm, k_type=KL_TYPE.K_DAY, begin_date=req.begin_date, end_date=req.end_date, autype=autype)
-            stock_name = api.name
-        except Exception:
-            stock_name = None
-        global APP_STOCK_NAME
-        APP_STOCK_NAME = stock_name
 
         APP_STATE.stepper.init(code_norm, req.begin_date, req.end_date, autype, chan_config=req.chan_config)
+        global APP_STOCK_NAME
+        APP_STOCK_NAME = APP_STATE.stepper.stock_name
         APP_STATE.account.reset(req.initial_cash)
         APP_STATE.ready = True
         APP_STATE.finished = False
@@ -7845,7 +8235,13 @@ def api_init(req: InitReq):
         APP_STATE.sync_rhythm_history()
         APP_STATE._rhythm_notice_hits = []
         APP_STATE.after_step_update()
-        return APP_STATE.build_payload(stock_name=APP_STOCK_NAME)
+        payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME)
+        source_label = data_source_label(APP_STATE.stepper.data_src_used)
+        if source_label == "AKShare":
+            payload["message"] = f"加载成功：{APP_STOCK_NAME or code_norm}，当前数据源 {source_label}。"
+        else:
+            payload["message"] = f"加载成功：{APP_STOCK_NAME or code_norm}，已自动切换到 {source_label}。"
+        return payload
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
