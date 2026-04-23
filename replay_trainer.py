@@ -1,8 +1,10 @@
 ﻿import copy
 import json
+import math
+import re
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
-from typing import Any, Optional
+from dataclasses import dataclass, field
+from typing import Any, Iterable, Optional
 
 import akshare as ak
 import pandas as pd
@@ -10,7 +12,7 @@ import tushare as ts
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from Bi.Bi import CBi
 from BuySellPoint.BSPointList import CBSPointList
@@ -21,7 +23,7 @@ from Common.ChanException import CChanException, ErrCode
 from Common.CTime import CTime
 from DataAPI.BaoStockAPI import CBaoStock
 from DataAPI.CommonStockAPI import CCommonStockApi
-from Common.func_util import str2float
+from Common.func_util import check_kltype_order, str2float
 from KLine.KLine import CKLine
 from KLine.KLine_List import cal_seg, get_seglist_instance, update_zs_in_seg
 from KLine.KLine_Unit import CKLine_Unit
@@ -2064,6 +2066,1271 @@ def serialize_chan(
         "trend_lines": active_bundle.trend_lines if active_bundle.trend_lines else trend_lines,
     }
 
+
+RLD_DEFAULT_LV_LIST = [KL_TYPE.K_DAY, KL_TYPE.K_60M, KL_TYPE.K_15M]
+RLD_LEVEL_LABELS = {
+    KL_TYPE.K_YEAR: "年线",
+    KL_TYPE.K_QUARTER: "季线",
+    KL_TYPE.K_MON: "月线",
+    KL_TYPE.K_WEEK: "周线",
+    KL_TYPE.K_DAY: "日线",
+    KL_TYPE.K_60M: "60分钟",
+    KL_TYPE.K_30M: "30分钟",
+    KL_TYPE.K_15M: "15分钟",
+    KL_TYPE.K_5M: "5分钟",
+    KL_TYPE.K_3M: "3分钟",
+    KL_TYPE.K_1M: "1分钟",
+}
+RLD_LEVEL_NAMES = {
+    KL_TYPE.K_YEAR: "year",
+    KL_TYPE.K_QUARTER: "quarter",
+    KL_TYPE.K_MON: "month",
+    KL_TYPE.K_WEEK: "week",
+    KL_TYPE.K_DAY: "day",
+    KL_TYPE.K_60M: "60m",
+    KL_TYPE.K_30M: "30m",
+    KL_TYPE.K_15M: "15m",
+    KL_TYPE.K_5M: "5m",
+    KL_TYPE.K_3M: "3m",
+    KL_TYPE.K_1M: "1m",
+}
+RLD_LEVEL_RANK = {
+    KL_TYPE.K_YEAR: 0,
+    KL_TYPE.K_QUARTER: 1,
+    KL_TYPE.K_MON: 2,
+    KL_TYPE.K_WEEK: 3,
+    KL_TYPE.K_DAY: 4,
+    KL_TYPE.K_60M: 5,
+    KL_TYPE.K_30M: 6,
+    KL_TYPE.K_15M: 7,
+    KL_TYPE.K_5M: 8,
+    KL_TYPE.K_3M: 9,
+    KL_TYPE.K_1M: 10,
+}
+RLD_INTRADAY_TYPES = {KL_TYPE.K_60M, KL_TYPE.K_30M, KL_TYPE.K_15M, KL_TYPE.K_5M, KL_TYPE.K_3M, KL_TYPE.K_1M}
+RLD_ENTRY_RULES_DEFAULT = ["rld_bs_buy", "one_line"]
+RLD_EXIT_RULES_DEFAULT = ["rld_bs_sell", "trend_down"]
+
+
+def kl_type_to_name(lv: KL_TYPE) -> str:
+    return RLD_LEVEL_NAMES.get(lv, str(lv.name).lower())
+
+
+def kl_type_to_label(lv: KL_TYPE) -> str:
+    return RLD_LEVEL_LABELS.get(lv, str(lv.name))
+
+
+def is_intraday_kl_type(lv: KL_TYPE) -> bool:
+    return lv in RLD_INTRADAY_TYPES
+
+
+def parse_kl_type(raw: Any) -> KL_TYPE:
+    if isinstance(raw, KL_TYPE):
+        return raw
+    text = str(raw or "").strip().lower()
+    mapping = {
+        "year": KL_TYPE.K_YEAR,
+        "y": KL_TYPE.K_YEAR,
+        "quarter": KL_TYPE.K_QUARTER,
+        "q": KL_TYPE.K_QUARTER,
+        "mon": KL_TYPE.K_MON,
+        "month": KL_TYPE.K_MON,
+        "m": KL_TYPE.K_MON,
+        "week": KL_TYPE.K_WEEK,
+        "w": KL_TYPE.K_WEEK,
+        "day": KL_TYPE.K_DAY,
+        "d": KL_TYPE.K_DAY,
+        "60m": KL_TYPE.K_60M,
+        "1h": KL_TYPE.K_60M,
+        "30m": KL_TYPE.K_30M,
+        "15m": KL_TYPE.K_15M,
+        "5m": KL_TYPE.K_5M,
+        "3m": KL_TYPE.K_3M,
+        "1m": KL_TYPE.K_1M,
+        "k_year": KL_TYPE.K_YEAR,
+        "k_quarter": KL_TYPE.K_QUARTER,
+        "k_mon": KL_TYPE.K_MON,
+        "k_week": KL_TYPE.K_WEEK,
+        "k_day": KL_TYPE.K_DAY,
+        "k_60m": KL_TYPE.K_60M,
+        "k_30m": KL_TYPE.K_30M,
+        "k_15m": KL_TYPE.K_15M,
+        "k_5m": KL_TYPE.K_5M,
+        "k_3m": KL_TYPE.K_3M,
+        "k_1m": KL_TYPE.K_1M,
+    }
+    if text in mapping:
+        return mapping[text]
+    raise ValueError(f"不支持的周期：{raw}")
+
+
+def normalize_rld_lv_list(raw: Any) -> list[KL_TYPE]:
+    if raw is None:
+        return list(RLD_DEFAULT_LV_LIST)
+    if isinstance(raw, str):
+        parts = [part for part in re.split(r"[\s,，;；|/]+", raw) if part]
+    elif isinstance(raw, Iterable):
+        parts = list(raw)
+    else:
+        parts = [raw]
+    levels: list[KL_TYPE] = []
+    seen: set[KL_TYPE] = set()
+    for part in parts:
+        try:
+            lv = parse_kl_type(part)
+        except Exception:
+            continue
+        if lv not in seen:
+            levels.append(lv)
+            seen.add(lv)
+    if len(levels) <= 0:
+        levels = list(RLD_DEFAULT_LV_LIST)
+    levels.sort(key=lambda lv: RLD_LEVEL_RANK.get(lv, 999))
+    check_kltype_order(levels)
+    return levels[:3]
+
+
+def build_chan_config_dict(chan_config: Optional[dict[str, Any]] = None, *, trigger_step: bool) -> dict[str, Any]:
+    cfg_dict = {
+        "chan_algo": CHAN_ALGO_CLASSIC,
+        "bi_strict": True,
+        "bi_algo": "normal",
+        "bi_fx_check": "strict",
+        "gap_as_kl": False,
+        "bi_end_is_peak": True,
+        "bi_allow_sub_peak": True,
+        "seg_algo": "chan",
+        "left_seg_method": "peak",
+        "zs_combine": True,
+        "zs_combine_mode": "zs",
+        "one_bi_zs": False,
+        "zs_algo": "normal",
+        "trigger_step": trigger_step,
+        "skip_step": 0,
+        "kl_data_check": True,
+        "print_warning": False,
+        "print_err_time": False,
+        "divergence_rate": float("inf"),
+        "min_zs_cnt": 1,
+        "bsp1_only_multibi_zs": True,
+        "max_bs2_rate": 0.9999,
+        "macd_algo": "peak",
+        "bs1_peak": True,
+        "bs_type": "1,1p,2,2s,3a,3b",
+        "bsp2_follow_1": True,
+        "bsp3_follow_1": True,
+        "bsp3_peak": False,
+        "bsp2s_follow_2": False,
+        "max_bsp2s_lv": None,
+        "strict_bsp3": False,
+        "bsp3a_max_zs_cnt": 1,
+        "macd": {"fast": 12, "slow": 26, "signal": 9},
+    }
+    if chan_config:
+        for k, v in chan_config.items():
+            if v is None or v == "":
+                continue
+            if k in ["divergence_rate", "max_bs2_rate"]:
+                try:
+                    cfg_dict[k] = float(v)
+                except (TypeError, ValueError):
+                    if isinstance(v, str) and v.lower() == "inf":
+                        cfg_dict[k] = float("inf")
+            elif k in ["min_zs_cnt", "bsp3a_max_zs_cnt", "boll_n", "rsi_cycle", "kdj_cycle", "skip_step"]:
+                try:
+                    cfg_dict[k] = int(v)
+                except (TypeError, ValueError):
+                    continue
+            elif k == "macd" and isinstance(v, dict):
+                macd_dict = cfg_dict["macd"].copy()
+                for mk, mv in v.items():
+                    if mv is None or mv == "":
+                        continue
+                    try:
+                        macd_dict[mk] = int(mv)
+                    except (TypeError, ValueError):
+                        continue
+                cfg_dict["macd"] = macd_dict
+            else:
+                cfg_dict[k] = v
+    cfg_dict["chan_algo"] = normalize_chan_algo(cfg_dict.get("chan_algo"))
+    cfg_dict["trigger_step"] = trigger_step
+    return cfg_dict
+
+
+def strip_chan_algo(cfg_dict: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in cfg_dict.items() if k != "chan_algo"}
+
+
+class ReplayMultiLvChan(CChan):
+    def __init__(self, *args: Any, replay_klus_map_master: Optional[dict[KL_TYPE, list]] = None, **kwargs: Any) -> None:
+        self._replay_klus_map_master: Optional[dict[KL_TYPE, list]] = replay_klus_map_master
+        super().__init__(*args, **kwargs)
+
+    def load(self, step: bool = False):
+        if self._replay_klus_map_master is None:
+            yield from super().load(step)
+            return
+        frozen_map = {lv: copy.deepcopy(self._replay_klus_map_master.get(lv, [])) for lv in self.lv_list}
+        self.klu_cache = [None for _ in self.lv_list]
+        self.klu_last_t = [CTime(1980, 1, 1, 0, 0) for _ in self.lv_list]
+        for lv_idx, lv in enumerate(self.lv_list):
+            self.add_lv_iter(lv_idx, iter(frozen_map.get(lv, [])))
+        yield from self.load_iterator(lv_idx=0, parent_klu=None, step=step)
+        if not step:
+            for lv in self.lv_list:
+                self.kl_datas[lv].cal_seg_and_zs()
+        if len(self[0]) == 0:
+            raise CChanException("最高级别没有获得任何数据", ErrCode.NO_DATA)
+
+
+class _SingleLevelChanView:
+    def __init__(self, kl_list, conf: CChanConfig):
+        self._kl_list = kl_list
+        self.conf = conf
+
+    def __getitem__(self, n):
+        if n == 0:
+            return self._kl_list
+        raise IndexError(n)
+
+
+def create_stock_api_instance_for_level(
+    data_src: Any,
+    code: str,
+    begin_date: Optional[str],
+    end_date: Optional[str],
+    autype: AUTYPE,
+    k_type: KL_TYPE,
+) -> CCommonStockApi:
+    api_cls = get_stock_api_cls(data_src)
+    api_cls.do_init()
+    try:
+        return api_cls(code=code, k_type=k_type, begin_date=begin_date, end_date=end_date, autype=autype)
+    except Exception:
+        api_cls.do_close()
+        raise
+
+
+def fetch_klu_list_from_api(api: CCommonStockApi, lv: KL_TYPE) -> list[CKLine_Unit]:
+    items: list[CKLine_Unit] = []
+    for idx, klu in enumerate(api.get_kl_data()):
+        klu.set_idx(idx)
+        klu.kl_type = lv
+        if not hasattr(klu, "macd"):
+            klu.macd = None
+        if not hasattr(klu, "boll"):
+            klu.boll = None
+        items.append(klu)
+    return items
+
+
+def fetch_level_klus_from_source(
+    data_src: Any,
+    code: str,
+    begin_date: Optional[str],
+    end_date: Optional[str],
+    autype: AUTYPE,
+    lv: KL_TYPE,
+) -> tuple[list[CKLine_Unit], Optional[str]]:
+    api_cls = get_stock_api_cls(data_src)
+    api_cls.do_init()
+    try:
+        api = api_cls(code=code, k_type=lv, begin_date=begin_date, end_date=end_date, autype=autype)
+        stock_name = getattr(api, "name", None) or None
+        items = fetch_klu_list_from_api(api, lv)
+        return items, stock_name
+    finally:
+        try:
+            api_cls.do_close()
+        except Exception:
+            pass
+
+
+def select_data_source_for_level(
+    code: str,
+    begin_date: str,
+    end_date: Optional[str],
+    autype: AUTYPE,
+    lv: KL_TYPE,
+) -> tuple[Any, str, list[CKLine_Unit], Optional[str], list[str]]:
+    logs: list[str] = []
+    if is_intraday_kl_type(lv):
+        data_src = DATA_SRC.BAO_STOCK
+        try:
+            items, stock_name = fetch_level_klus_from_source(data_src, code, begin_date, end_date, autype, lv)
+        except Exception as exc:
+            raise RuntimeError(f"{kl_type_to_label(lv)} 仅支持 BaoStock，拉取失败：{format_source_error(exc)}") from exc
+        if len(items) <= 0:
+            raise RuntimeError(f"{kl_type_to_label(lv)} 未获取到任何数据")
+        logs.append(f"{kl_type_to_label(lv)} 使用 BaoStock，加载 {len(items)} 根 K 线")
+        return data_src, "BaoStock", items, stock_name, logs
+
+    errors: list[str] = []
+    for label, data_src in DATA_SOURCE_CHAIN:
+        try:
+            items, stock_name = fetch_level_klus_from_source(data_src, code, begin_date, end_date, autype, lv)
+            if len(items) <= 0:
+                raise RuntimeError("未获取到任何数据")
+            logs.append(f"{kl_type_to_label(lv)} 使用 {label}，加载 {len(items)} 根 K 线")
+            return data_src, label, items, stock_name, logs
+        except Exception as exc:
+            errors.append(f"{label}:{format_source_error(exc)}")
+    raise RuntimeError(f"{kl_type_to_label(lv)} 数据源全部失败：{'；'.join(errors)}")
+
+
+def serialize_rld_klu_iter(klu_iter) -> list[dict[str, Any]]:
+    arr: list[dict[str, Any]] = []
+    for klu in klu_iter:
+        arr.append(
+            {
+                "x": int(klu.idx),
+                "t": klu.time.to_str(),
+                "o": float(klu.open),
+                "h": float(klu.high),
+                "l": float(klu.low),
+                "c": float(klu.close),
+                "v": float(getattr(klu, "volume", getattr(klu, "vol", 0.0)) or 0.0),
+                "sup_x": int(klu.sup_kl.idx) if getattr(klu, "sup_kl", None) is not None else None,
+                "sub_count": len(getattr(klu, "sub_kl_list", []) or []),
+            }
+        )
+    return arr
+
+
+@dataclass
+class RldDataSession:
+    code: str
+    begin_date: str
+    end_date: Optional[str]
+    autype: AUTYPE
+    lv_list: list[KL_TYPE]
+    replay_klus_map: dict[KL_TYPE, list]
+    source_map: dict[str, str]
+    logs: list[str] = field(default_factory=list)
+    stock_name: Optional[str] = None
+
+    @classmethod
+    def load(
+        cls,
+        code: str,
+        begin_date: str,
+        end_date: Optional[str],
+        autype: AUTYPE,
+        lv_list: list[KL_TYPE],
+    ) -> "RldDataSession":
+        replay_klus_map: dict[KL_TYPE, list] = {}
+        source_map: dict[str, str] = {}
+        logs: list[str] = []
+        stock_name: Optional[str] = None
+        valid_lv_list: list[KL_TYPE] = []
+        for idx, lv in enumerate(lv_list):
+            try:
+                data_src, label, items, name, lv_logs = select_data_source_for_level(code, begin_date, end_date, autype, lv)
+                replay_klus_map[lv] = items
+                source_map[kl_type_to_name(lv)] = label
+                logs.extend(lv_logs)
+                valid_lv_list.append(lv)
+                if stock_name is None and name:
+                    stock_name = name
+            except Exception as exc:
+                if idx == 0:
+                    raise
+                logs.append(f"{kl_type_to_label(lv)} 降级跳过：{format_source_error(exc)}")
+                continue
+        if not valid_lv_list:
+            raise RuntimeError("未能构建任何有效周期")
+        return cls(
+            code=code,
+            begin_date=begin_date,
+            end_date=end_date,
+            autype=autype,
+            lv_list=valid_lv_list,
+            replay_klus_map=replay_klus_map,
+            source_map=source_map,
+            logs=logs,
+            stock_name=stock_name,
+        )
+
+    def build_chan(self, chan_config: Optional[dict[str, Any]] = None, *, trigger_step: bool = False) -> tuple[ReplayMultiLvChan, dict[str, Any]]:
+        cfg_dict = build_chan_config_dict(chan_config, trigger_step=trigger_step)
+        cfg = CChanConfig(strip_chan_algo(cfg_dict))
+        chan = ReplayMultiLvChan(
+            code=self.code,
+            begin_time=self.begin_date,
+            end_time=self.end_date,
+            data_src=DATA_SRC.BAO_STOCK,
+            lv_list=self.lv_list,
+            config=cfg,
+            autype=self.autype,
+            replay_klus_map_master=self.replay_klus_map,
+        )
+        return chan, cfg_dict
+
+
+def build_level_macd_history(klus: list[Any], macd_cfg: Optional[dict[str, Any]] = None) -> list[dict[str, Any]]:
+    macd_cfg = macd_cfg or {}
+    eng = CMACD(
+        fastperiod=int(macd_cfg.get("fast", 12) or 12),
+        slowperiod=int(macd_cfg.get("slow", 26) or 26),
+        signalperiod=int(macd_cfg.get("signal", 9) or 9),
+    )
+    arr: list[dict[str, Any]] = []
+    for klu in klus:
+        item = eng.add(float(klu.close))
+        arr.append({"x": int(klu.idx), "macd": {"dif": float(item.DIF), "dea": float(item.DEA), "macd": float(item.macd)}})
+    return arr
+
+
+def line_dir_sign(line: Any) -> int:
+    try:
+        y1 = float(line.get_begin_val())
+        y2 = float(line.get_end_val())
+    except Exception:
+        return 0
+    if y2 > y1:
+        return 1
+    if y2 < y1:
+        return -1
+    return 0
+
+
+def describe_trend(sign: int) -> str:
+    if sign > 0:
+        return "上升"
+    if sign < 0:
+        return "下降"
+    return "震荡"
+
+
+def get_latest_nonempty_line(bundle: ChanStructureBundle):
+    for lines in (bundle.segseg_list, bundle.seg_list, bundle.bi_list, bundle.fract_list):
+        if lines and len(lines) > 0:
+            return lines[-1]
+    return None
+
+
+def latest_bundle_bsp(bundle: ChanStructureBundle) -> Optional[dict[str, Any]]:
+    arr = []
+    arr.extend(serialize_bsp_collection("bi", bundle.bs_point_lst))
+    arr.extend(serialize_bsp_collection("seg", bundle.seg_bs_point_lst))
+    arr.extend(serialize_bsp_collection("segseg", bundle.segseg_bs_point_lst))
+    if not arr:
+        return None
+    arr.sort(key=lambda item: (int(item["x"]), LEVEL_ORDER.get(str(item["level"]), 999), int(not bool(item["is_buy"]))))
+    return arr[-1]
+
+
+def latest_zs_state(bundle: ChanStructureBundle, current_price: float) -> dict[str, Any]:
+    last_zs = None
+    last_kind = "笔中枢"
+    for kind, zs_list in [("段中枢", bundle.segzs_list), ("笔中枢", bundle.zs_list), ("分型中枢", bundle.fractzs_list)]:
+        zs_items = list(zs_list)
+        if zs_items:
+            last_zs = zs_items[-1]
+            last_kind = kind
+            break
+    if last_zs is None:
+        return {"label": "无中枢", "kind": "无", "low": None, "high": None, "bias": 0}
+    low = float(last_zs.low)
+    high = float(last_zs.high)
+    if current_price > high:
+        return {"label": "上离开", "kind": last_kind, "low": low, "high": high, "bias": 1}
+    if current_price < low:
+        return {"label": "下离开", "kind": last_kind, "low": low, "high": high, "bias": -1}
+    return {"label": "中枢内", "kind": last_kind, "low": low, "high": high, "bias": 0}
+
+
+def calc_macd_area(macd_history: list[dict[str, Any]], start_x: Optional[int], end_x: Optional[int]) -> Optional[float]:
+    if start_x is None or end_x is None or end_x < start_x:
+        return None
+    total = 0.0
+    hit = False
+    for item in macd_history:
+        x = int(item["x"])
+        if x < start_x or x > end_x:
+            continue
+        total += abs(float(item["macd"]["macd"]))
+        hit = True
+    return round(total, 4) if hit else None
+
+
+def find_previous_same_dir_line(lines: Any, latest_line: Any):
+    if not lines or len(lines) <= 1:
+        return None
+    latest_sign = line_dir_sign(latest_line)
+    if latest_sign == 0:
+        return None
+    for line in reversed(lines[:-1]):
+        if line_dir_sign(line) == latest_sign:
+            return line
+    return None
+
+
+def calc_divergence_bias(lines: Any, latest_line: Any, macd_history: list[dict[str, Any]]) -> int:
+    if latest_line is None:
+        return 0
+    prev_line = find_previous_same_dir_line(lines, latest_line)
+    if prev_line is None:
+        return 0
+    latest_area = calc_macd_area(macd_history, int(latest_line.get_begin_klu().idx), int(latest_line.get_end_klu().idx))
+    prev_area = calc_macd_area(macd_history, int(prev_line.get_begin_klu().idx), int(prev_line.get_end_klu().idx))
+    if latest_area is None or prev_area is None or prev_area <= 1e-9:
+        return 0
+    latest_sign = line_dir_sign(latest_line)
+    if latest_area <= prev_area * 0.85:
+        return -latest_sign
+    if latest_area >= prev_area * 1.05:
+        return latest_sign
+    return 0
+
+
+def last_macd_bias(macd_history: list[dict[str, Any]]) -> float:
+    if not macd_history:
+        return 0.0
+    value = float(macd_history[-1]["macd"]["macd"])
+    return float(math.tanh(value * 4.0) * 100.0)
+
+
+def bsp_bias(item: Optional[dict[str, Any]], latest_x: int) -> tuple[int, list[str]]:
+    if not item:
+        return 0, ["最近未出现明确买卖点"]
+    label_weight = {"1": 22, "1p": 18, "2": 16, "2s": 12, "3a": 18, "3b": 16}
+    sign = 1 if bool(item.get("is_buy")) else -1
+    weight = label_weight.get(str(item.get("label")), 10)
+    reasons = [f"最近买卖点：{item.get('display_label') or item.get('label')}"]
+    if latest_x - int(item.get("x", latest_x)) > 12:
+        weight = int(weight * 0.55)
+        reasons.append("买卖点距离当前较远，影响衰减")
+    return sign * weight, reasons
+
+
+def build_level_chart_payload(kl_list, chan_algo: str, macd_cfg: Optional[dict[str, Any]] = None) -> tuple[dict[str, Any], dict[str, Any]]:
+    klu_items = list(kl_list.klu_iter())
+    chart = {"kline": [], "fract": [], "bi": [], "seg": [], "segseg": [], "fract_zs": [], "bi_zs": [], "seg_zs": [], "segseg_zs": [], "bsp": [], "trend_lines": [], "indicators": []}
+    if not klu_items:
+        return chart, {
+            "trend_sign": 0,
+            "trend_label": "震荡",
+            "zs_state": {"label": "无数据", "kind": "无", "low": None, "high": None, "bias": 0},
+            "latest_bsp": None,
+            "macd_bi_area": None,
+            "macd_seg_area": None,
+            "macd_bias": 0.0,
+            "chdl_score": 0.0,
+            "divergence_bias": 0,
+            "reasons": ["当前级别无数据"],
+        }
+    view = _SingleLevelChanView(kl_list, kl_list.config)
+    bundle = build_structure_bundle(view, chan_algo)
+    macd_history = build_level_macd_history(klu_items, macd_cfg)
+    current_price = float(klu_items[-1].close)
+    latest_x = int(klu_items[-1].idx)
+    latest_line = get_latest_nonempty_line(bundle)
+    trend_sign = line_dir_sign(latest_line) if latest_line is not None else 0
+    trend_label = describe_trend(trend_sign)
+    zs_state = latest_zs_state(bundle, current_price)
+    latest_bsp = latest_bundle_bsp(bundle)
+    bi_line = bundle.bi_list[-1] if bundle.bi_list and len(bundle.bi_list) > 0 else None
+    seg_line = bundle.seg_list[-1] if bundle.seg_list and len(bundle.seg_list) > 0 else None
+    macd_bi_area = calc_macd_area(macd_history, int(bi_line.get_begin_klu().idx), int(bi_line.get_end_klu().idx)) if bi_line is not None else None
+    macd_seg_area = calc_macd_area(macd_history, int(seg_line.get_begin_klu().idx), int(seg_line.get_end_klu().idx)) if seg_line is not None else None
+    divergence = calc_divergence_bias(bundle.bi_list if bundle.bi_list else bundle.seg_list, bi_line or seg_line, macd_history)
+    macd_bias = last_macd_bias(macd_history)
+    chdl = 0.0
+    reasons: list[str] = [f"结构方向：{trend_label}"]
+    chdl += trend_sign * 22.0
+    chdl += float(zs_state["bias"]) * 14.0
+    reasons.append(f"中枢状态：{zs_state['kind']}{zs_state['label']}")
+    _bsp_bias, bsp_reasons = bsp_bias(latest_bsp, latest_x)
+    chdl += float(_bsp_bias)
+    reasons.extend(bsp_reasons)
+    chdl += macd_bias * 0.18
+    if abs(macd_bias) >= 8:
+        reasons.append(f"MACD 动量：{macd_bias:+.1f}")
+    chdl += divergence * 14.0
+    if divergence > 0:
+        reasons.append("最近结构出现正向背驰/动能改善")
+    elif divergence < 0:
+        reasons.append("最近结构出现反向背驰/动能衰减")
+    chdl = round(max(-100.0, min(100.0, chdl)), 2)
+    chart = {
+        "kline": serialize_rld_klu_iter(klu_items),
+        "fract": serialize_line_collection(bundle.fract_list),
+        "bi": serialize_line_collection(bundle.bi_list),
+        "seg": serialize_line_collection(bundle.seg_list),
+        "segseg": serialize_line_collection(bundle.segseg_list),
+        "fract_zs": serialize_zs_collection(bundle.fractzs_list),
+        "bi_zs": serialize_zs_collection(bundle.zs_list),
+        "seg_zs": serialize_zs_collection(bundle.segzs_list),
+        "segseg_zs": serialize_zs_collection(bundle.segsegzs_list),
+        "bsp": sorted(
+            [
+                *serialize_bsp_collection("bi", bundle.bs_point_lst),
+                *serialize_bsp_collection("seg", bundle.seg_bs_point_lst),
+                *serialize_bsp_collection("segseg", bundle.segseg_bs_point_lst),
+            ],
+            key=lambda item: (int(item["x"]), LEVEL_ORDER.get(str(item["level"]), 999), int(not bool(item["is_buy"]))),
+        ),
+        "trend_lines": bundle.trend_lines,
+        "indicators": macd_history,
+    }
+    return chart, {
+        "trend_sign": trend_sign,
+        "trend_label": trend_label,
+        "zs_state": zs_state,
+        "latest_bsp": latest_bsp,
+        "macd_bi_area": macd_bi_area,
+        "macd_seg_area": macd_seg_area,
+        "macd_bias": round(macd_bias, 2),
+        "chdl_score": chdl,
+        "divergence_bias": divergence,
+        "reasons": reasons,
+    }
+
+
+def normalize_strategy_config(strategy_config: Optional[dict[str, Any]], lv_list: list[KL_TYPE]) -> dict[str, Any]:
+    default_weights = [50.0, 30.0, 20.0]
+    weights_raw = []
+    if isinstance(strategy_config, dict):
+        weights_raw = list(strategy_config.get("weights", []) or [])
+    weights: list[float] = []
+    for idx, lv in enumerate(lv_list):
+        try:
+            weights.append(float(weights_raw[idx]))
+        except Exception:
+            weights.append(default_weights[idx] if idx < len(default_weights) else max(5.0, 20.0 - idx * 3.0))
+    total = sum(abs(weight) for weight in weights) or 1.0
+    normalized = [round(weight / total * 100.0, 3) for weight in weights]
+    return {"weights": normalized}
+
+
+def build_rld_summary(level_snapshots: list[dict[str, Any]], strategy_config: dict[str, Any]) -> dict[str, Any]:
+    if not level_snapshots:
+        return {"weighted_chdl": 0.0, "three_macd": 0.0, "one_line": False, "stupid_buy_bi": False, "stupid_buy_seg": False, "rld_bs": {"side": "neutral", "score": 0.0, "reasons": ["暂无数据"]}, "weights": []}
+    weights = strategy_config.get("weights", [])
+    weighted_chdl = 0.0
+    weighted_macd = 0.0
+    trend_signs: list[int] = []
+    reasons: list[str] = []
+    for idx, item in enumerate(level_snapshots):
+        weight = float(weights[idx] if idx < len(weights) else 0.0)
+        weighted_chdl += float(item["summary"]["chdl_score"]) * weight / 100.0
+        weighted_macd += float(item["summary"]["macd_bias"]) * weight / 100.0
+        trend_signs.append(int(item["summary"]["trend_sign"]))
+        reasons.append(f"{item['label']} CHDL={item['summary']['chdl_score']:+.1f}")
+    nonzero_signs = [sign for sign in trend_signs if sign != 0]
+    aligned = len(nonzero_signs) == len(level_snapshots) and len(set(nonzero_signs)) == 1
+    no_recent_opposite = all(
+        snapshot["summary"]["latest_bsp"] is None
+        or (
+            snapshot["summary"]["trend_sign"] == 0
+            or (
+                (snapshot["summary"]["trend_sign"] > 0 and bool(snapshot["summary"]["latest_bsp"].get("is_buy")))
+                or (snapshot["summary"]["trend_sign"] < 0 and not bool(snapshot["summary"]["latest_bsp"].get("is_buy")))
+            )
+        )
+        for snapshot in level_snapshots
+    )
+    one_line = bool(aligned and no_recent_opposite and abs(weighted_chdl) >= 12)
+    stupid_buy_bi = bool(weighted_chdl >= 20 and aligned and all(item["summary"]["macd_bi_area"] is not None for item in level_snapshots[:2]))
+    stupid_buy_seg = bool(weighted_chdl >= 38 and aligned and all(item["summary"]["zs_state"]["bias"] >= 0 for item in level_snapshots[:2]))
+    rld_bs_score = round(max(-100.0, min(100.0, weighted_chdl * 0.7 + weighted_macd * 0.3 + (12.0 if one_line else 0.0))), 2)
+    if rld_bs_score >= 25:
+        side = "buy"
+        reasons.append("多周期合成分偏多")
+    elif rld_bs_score <= -25:
+        side = "sell"
+        reasons.append("多周期合成分偏空")
+    else:
+        side = "neutral"
+        reasons.append("多周期分歧较大，维持中性")
+    if one_line:
+        reasons.append("三周期同向且最近未见明显逆向破坏")
+    if stupid_buy_bi:
+        reasons.append("满足无脑买入（笔）模板")
+    if stupid_buy_seg:
+        reasons.append("满足无脑买入（线段）模板")
+    return {
+        "weighted_chdl": round(weighted_chdl, 2),
+        "three_macd": round(weighted_macd, 2),
+        "one_line": one_line,
+        "stupid_buy_bi": stupid_buy_bi,
+        "stupid_buy_seg": stupid_buy_seg,
+        "rld_bs": {"side": side, "score": rld_bs_score, "reasons": reasons},
+        "weights": list(weights),
+    }
+
+
+def build_level_matrix(level_snapshots: list[dict[str, Any]], aggregate: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    metrics = [
+        ("趋势", lambda item: item["summary"]["trend_label"]),
+        ("BSP", lambda item: item["summary"]["latest_bsp"]["display_label"] if item["summary"]["latest_bsp"] else "无"),
+        ("ZS状态", lambda item: f"{item['summary']['zs_state']['kind']}{item['summary']['zs_state']['label']}"),
+        ("CHDL", lambda item: f"{item['summary']['chdl_score']:+.2f}"),
+        ("MACD笔面积", lambda item: "-" if item["summary"]["macd_bi_area"] is None else f"{float(item['summary']['macd_bi_area']):.3f}"),
+        ("MACD段面积", lambda item: "-" if item["summary"]["macd_seg_area"] is None else f"{float(item['summary']['macd_seg_area']):.3f}"),
+        ("三级别MACD", lambda item: f"{item['summary']['macd_bias']:+.2f}"),
+    ]
+    for metric, getter in metrics:
+        row = {"metric": metric}
+        for item in level_snapshots:
+            row[item["label"]] = getter(item)
+        rows.append(row)
+    rows.append({"metric": "一根筋", **{item["label"]: ("是" if aggregate["one_line"] else "否") for item in level_snapshots}})
+    rows.append({"metric": "无脑买入(笔)", **{item["label"]: ("是" if aggregate["stupid_buy_bi"] else "否") for item in level_snapshots}})
+    rows.append({"metric": "无脑买入(线段)", **{item["label"]: ("是" if aggregate["stupid_buy_seg"] else "否") for item in level_snapshots}})
+    rows.append({"metric": "RLD_BS", **{item["label"]: f"{aggregate['rld_bs']['side']} {aggregate['rld_bs']['score']:+.2f}" for item in level_snapshots}})
+    return rows
+
+
+def analyze_rld_chan(chan: ReplayMultiLvChan, effective_cfg_dict: dict[str, Any], strategy_config: Optional[dict[str, Any]] = None, *, include_chart: bool = True) -> dict[str, Any]:
+    level_snapshots: list[dict[str, Any]] = []
+    normalized_strategy = normalize_strategy_config(strategy_config, list(chan.lv_list))
+    macd_cfg = effective_cfg_dict.get("macd") if isinstance(effective_cfg_dict.get("macd"), dict) else {}
+    for lv in chan.lv_list:
+        kl_list = chan[lv]
+        chart, summary = build_level_chart_payload(kl_list, effective_cfg_dict.get("chan_algo", CHAN_ALGO_CLASSIC), macd_cfg)
+        level_snapshots.append(
+            {
+                "level": kl_type_to_name(lv),
+                "label": kl_type_to_label(lv),
+                "chart": chart if include_chart else None,
+                "summary": summary,
+                "last_time": chart["kline"][-1]["t"] if chart["kline"] else "-",
+                "last_price": chart["kline"][-1]["c"] if chart["kline"] else None,
+            }
+        )
+    aggregate = build_rld_summary(level_snapshots, normalized_strategy)
+    return {
+        "levels": level_snapshots,
+        "aggregate": aggregate,
+        "level_matrix": build_level_matrix(level_snapshots, aggregate),
+        "strategy_config": normalized_strategy,
+    }
+
+
+def parse_watchlist_codes(raw: Any) -> list[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        candidates = raw
+    else:
+        candidates = re.findall(r"\d{6}", str(raw))
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in candidates:
+        try:
+            code = normalize_code(str(item)[-6:])
+        except Exception:
+            continue
+        if code not in seen:
+            normalized.append(code)
+            seen.add(code)
+    return normalized
+
+
+def resolve_watchlist_or_sector(raw: Any, *, limit: int = 18) -> tuple[list[str], str]:
+    codes = parse_watchlist_codes(raw)
+    if codes:
+        return codes[:limit], "manual"
+    name = str(raw or "").strip()
+    if not name:
+        return [], "empty"
+    loaders = [
+        ("概念板块", getattr(ak, "stock_board_concept_cons_em", None)),
+        ("行业板块", getattr(ak, "stock_board_industry_cons_em", None)),
+    ]
+    for label, loader in loaders:
+        if loader is None:
+            continue
+        try:
+            df = loader(symbol=name)
+            if df is None or df.empty:
+                continue
+            code_col = next((col for col in ["代码", "code", "证券代码", "股票代码"] if col in df.columns), None)
+            if code_col is None:
+                continue
+            resolved = parse_watchlist_codes(df[code_col].astype(str).tolist())
+            if resolved:
+                return resolved[:limit], label
+        except Exception:
+            continue
+    return [], "unknown"
+
+
+def compact_reasons(reasons: list[str], *, limit: int = 5) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for reason in reasons:
+        text = str(reason or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+        if len(result) >= limit:
+            break
+    return result
+
+
+def build_matrix_row(code: str, payload: dict[str, Any], *, stock_name: Optional[str] = None) -> dict[str, Any]:
+    levels = payload["analysis"]["levels"]
+    agg = payload["analysis"]["aggregate"]
+    row = {
+        "code": code,
+        "name": stock_name,
+        "rotation_score": round((agg["weighted_chdl"] * 0.55) + (agg["three_macd"] * 0.25) + (20.0 if agg["one_line"] else 0.0), 2),
+        "chdl": agg["weighted_chdl"],
+        "three_macd": agg["three_macd"],
+        "one_line": agg["one_line"],
+        "stupid_buy_bi": agg["stupid_buy_bi"],
+        "stupid_buy_seg": agg["stupid_buy_seg"],
+        "rld_bs_side": agg["rld_bs"]["side"],
+        "rld_bs_score": agg["rld_bs"]["score"],
+    }
+    for idx, level in enumerate(levels):
+        prefix = f"lv{idx + 1}"
+        row[f"{prefix}_name"] = level["label"]
+        row[f"{prefix}_trend"] = level["summary"]["trend_label"]
+        row[f"{prefix}_bsp"] = level["summary"]["latest_bsp"]["display_label"] if level["summary"]["latest_bsp"] else "无"
+        row[f"{prefix}_zs"] = f"{level['summary']['zs_state']['kind']}{level['summary']['zs_state']['label']}"
+        row[f"{prefix}_chdl"] = level["summary"]["chdl_score"]
+    row["reasons"] = compact_reasons(list(agg["rld_bs"]["reasons"]))
+    return row
+
+
+def evaluate_entry_rule(rule: str, analysis: dict[str, Any]) -> bool:
+    agg = analysis["aggregate"]
+    top = analysis["levels"][0]["summary"] if analysis["levels"] else {}
+    rule = str(rule or "").strip().lower()
+    if rule == "rld_bs_buy":
+        return agg["rld_bs"]["side"] == "buy"
+    if rule == "one_line":
+        return bool(agg["one_line"])
+    if rule == "stupid_buy_bi":
+        return bool(agg["stupid_buy_bi"])
+    if rule == "stupid_buy_seg":
+        return bool(agg["stupid_buy_seg"])
+    if rule == "bsp_buy":
+        return bool(top.get("latest_bsp") and top["latest_bsp"].get("is_buy"))
+    if rule == "zs_breakout_up":
+        return int(top.get("zs_state", {}).get("bias", 0)) > 0
+    if rule == "chdl_ge_20":
+        return float(agg["weighted_chdl"]) >= 20.0
+    if rule == "chdl_ge_40":
+        return float(agg["weighted_chdl"]) >= 40.0
+    return False
+
+
+def evaluate_exit_rule(rule: str, analysis: dict[str, Any], *, pnl_pct: Optional[float] = None) -> bool:
+    agg = analysis["aggregate"]
+    top = analysis["levels"][0]["summary"] if analysis["levels"] else {}
+    rule = str(rule or "").strip().lower()
+    if rule == "rld_bs_sell":
+        return agg["rld_bs"]["side"] == "sell"
+    if rule == "trend_down":
+        return int(top.get("trend_sign", 0)) < 0
+    if rule == "bsp_sell":
+        return bool(top.get("latest_bsp") and not top["latest_bsp"].get("is_buy"))
+    if rule == "chdl_le_-20":
+        return float(agg["weighted_chdl"]) <= -20.0
+    if rule == "chdl_le_-40":
+        return float(agg["weighted_chdl"]) <= -40.0
+    if rule == "take_profit_8":
+        return pnl_pct is not None and pnl_pct >= 0.08
+    if rule == "stop_loss_5":
+        return pnl_pct is not None and pnl_pct <= -0.05
+    return False
+
+
+def evaluate_rules(rule_ids: list[str], analysis: dict[str, Any], *, logic: str, pnl_pct: Optional[float] = None, exit_mode: bool = False) -> bool:
+    if not rule_ids:
+        return False
+    results = []
+    for rule in rule_ids:
+        if exit_mode:
+            results.append(evaluate_exit_rule(rule, analysis, pnl_pct=pnl_pct))
+        else:
+            results.append(evaluate_entry_rule(rule, analysis))
+    mode = str(logic or "and").strip().lower()
+    return all(results) if mode == "and" else any(results)
+
+
+def compute_max_drawdown(points: list[dict[str, Any]]) -> float:
+    if not points:
+        return 0.0
+    peak = float(points[0]["equity"])
+    max_dd = 0.0
+    for point in points:
+        equity = float(point["equity"])
+        if equity > peak:
+            peak = equity
+        if peak > 1e-9:
+            max_dd = min(max_dd, (equity - peak) / peak)
+    return round(max_dd, 4)
+
+
+def run_backtest_for_code(
+    session: RldDataSession,
+    chan_config: dict[str, Any],
+    strategy_config: dict[str, Any],
+    entry_rules: list[str],
+    exit_rules: list[str],
+    *,
+    logic: str,
+    fee: float,
+    slippage: float,
+) -> dict[str, Any]:
+    chan, effective_cfg_dict = session.build_chan(chan_config, trigger_step=True)
+    iterator = chan.step_load()
+    top_lv = session.lv_list[0]
+    top_master = session.replay_klus_map[top_lv]
+    cash = 100000.0
+    position = 0
+    avg_cost = 0.0
+    buy_idx: Optional[int] = None
+    pending_order: Optional[dict[str, Any]] = None
+    trades: list[dict[str, Any]] = []
+    equity_curve: list[dict[str, Any]] = []
+    wins = 0
+    losses = 0
+    while True:
+        try:
+            next(iterator)
+        except StopIteration:
+            break
+        current_klu = chan[top_lv].lst[-1].lst[-1]
+        current_idx = int(current_klu.idx)
+        if pending_order and int(pending_order["execute_idx"]) == current_idx:
+            open_price = float(current_klu.open)
+            if pending_order["side"] == "buy" and position <= 0:
+                exec_price = open_price * (1.0 + slippage)
+                hand_cost = exec_price * 100 * (1.0 + fee)
+                hands = int(cash // hand_cost)
+                if hands > 0:
+                    shares = hands * 100
+                    gross = exec_price * shares
+                    commission = gross * fee
+                    cash -= gross + commission
+                    position = shares
+                    avg_cost = exec_price
+                    buy_idx = current_idx
+                    trades.append({"side": "buy", "idx": current_idx, "time": current_klu.time.to_str(), "price": round(exec_price, 4), "shares": shares, "reason": list(pending_order.get("reasons", []))})
+            elif pending_order["side"] == "sell" and position > 0:
+                exec_price = open_price * (1.0 - slippage)
+                gross = exec_price * position
+                commission = gross * fee
+                pnl = gross - commission - position * avg_cost
+                pnl_pct = pnl / (position * avg_cost) if position * avg_cost > 1e-9 else 0.0
+                cash += gross - commission
+                trades.append({"side": "sell", "idx": current_idx, "time": current_klu.time.to_str(), "price": round(exec_price, 4), "shares": position, "pnl": round(pnl, 2), "pnl_pct": round(pnl_pct, 4), "reason": list(pending_order.get("reasons", []))})
+                if pnl >= 0:
+                    wins += 1
+                else:
+                    losses += 1
+                position = 0
+                avg_cost = 0.0
+                buy_idx = None
+            pending_order = None
+
+        analysis = analyze_rld_chan(chan, effective_cfg_dict, strategy_config, include_chart=False)
+        current_close = float(current_klu.close)
+        equity_curve.append({"idx": current_idx, "time": current_klu.time.to_str(), "equity": round(cash + position * current_close, 2)})
+
+        if current_idx >= len(top_master) - 1 or pending_order is not None:
+            continue
+        pnl_pct = None
+        if position > 0 and avg_cost > 1e-9:
+            pnl_pct = (current_close - avg_cost) / avg_cost
+        if position > 0:
+            can_sell = buy_idx is None or current_idx >= buy_idx + 1
+            if can_sell and evaluate_rules(exit_rules, analysis, logic=logic, pnl_pct=pnl_pct, exit_mode=True):
+                pending_order = {"side": "sell", "execute_idx": current_idx + 1, "reasons": compact_reasons(list(analysis["aggregate"]["rld_bs"]["reasons"]))}
+        else:
+            if evaluate_rules(entry_rules, analysis, logic=logic, exit_mode=False):
+                pending_order = {"side": "buy", "execute_idx": current_idx + 1, "reasons": compact_reasons(list(analysis["aggregate"]["rld_bs"]["reasons"]))}
+
+    if position > 0 and top_master:
+        last_klu = top_master[-1]
+        exit_price = float(last_klu.close) * (1.0 - slippage)
+        gross = exit_price * position
+        commission = gross * fee
+        pnl = gross - commission - position * avg_cost
+        pnl_pct = pnl / (position * avg_cost) if position * avg_cost > 1e-9 else 0.0
+        cash += gross - commission
+        trades.append({"side": "sell", "idx": int(last_klu.idx), "time": last_klu.time.to_str(), "price": round(exit_price, 4), "shares": position, "pnl": round(pnl, 2), "pnl_pct": round(pnl_pct, 4), "reason": ["回测结束强制平仓"]})
+        if pnl >= 0:
+            wins += 1
+        else:
+            losses += 1
+
+    completed = sum(1 for item in trades if item["side"] == "sell")
+    total_return = (cash - 100000.0) / 100000.0
+    pnl_values = [float(item.get("pnl", 0.0)) for item in trades if item["side"] == "sell"]
+    gross_profit = sum(value for value in pnl_values if value > 0)
+    gross_loss = -sum(value for value in pnl_values if value < 0)
+    profit_factor = gross_profit / gross_loss if gross_loss > 1e-9 else None
+    return {
+        "code": session.code,
+        "name": session.stock_name,
+        "trade_count": completed,
+        "win_rate": round((wins / completed) if completed > 0 else 0.0, 4),
+        "return": round(total_return, 4),
+        "max_drawdown": compute_max_drawdown(equity_curve),
+        "profit_factor": round(profit_factor, 4) if profit_factor is not None else None,
+        "equity_curve": equity_curve,
+        "trades": trades,
+    }
+
+
+class RldInitReq(BaseModel):
+    code: str
+    begin_date: str
+    end_date: Optional[str] = None
+    autype: str = "qfq"
+    lv_list: Optional[list[str]] = None
+    chan_config: Optional[dict[str, Any]] = None
+    strategy_config: Optional[dict[str, Any]] = None
+    watchlist_or_sector: Optional[str] = None
+
+
+class RldMatrixReq(BaseModel):
+    codes: Optional[list[str]] = None
+    watchlist_or_sector: Optional[str] = None
+
+
+class RldBacktestReq(BaseModel):
+    codes: Optional[list[str]] = None
+    watchlist_or_sector: Optional[str] = None
+    entry_rules: list[str] = Field(default_factory=list)
+    exit_rules: list[str] = Field(default_factory=list)
+    logic: str = "and"
+    execution_mode: str = "next_open"
+    fee: float = 0.001
+    slippage: float = 0.0005
+
+
+class RldReconfigReq(BaseModel):
+    chan_config: Optional[dict[str, Any]] = None
+    strategy_config: Optional[dict[str, Any]] = None
+    watchlist_or_sector: Optional[str] = None
+    lv_list: Optional[list[str]] = None
+
+
+class RldAppState:
+    def __init__(self) -> None:
+        self.reset()
+
+    def reset(self) -> None:
+        self.ready = False
+        self.session: Optional[RldDataSession] = None
+        self.chan: Optional[ReplayMultiLvChan] = None
+        self.effective_cfg_dict: dict[str, Any] = {}
+        self.analysis: Optional[dict[str, Any]] = None
+        self.session_params: Optional[dict[str, Any]] = None
+        self.matrix_rows: list[dict[str, Any]] = []
+        self.matrix_meta: dict[str, Any] = {}
+        self.backtest_result: Optional[dict[str, Any]] = None
+
+    def init(self, req: RldInitReq) -> None:
+        autype_map = {"qfq": AUTYPE.QFQ, "hfq": AUTYPE.HFQ, "none": AUTYPE.NONE}
+        autype = autype_map.get(str(req.autype).lower(), AUTYPE.QFQ)
+        code = normalize_code(req.code)
+        lv_list = normalize_rld_lv_list(req.lv_list)
+        self.session = RldDataSession.load(code, req.begin_date, req.end_date, autype, lv_list)
+        self.chan, self.effective_cfg_dict = self.session.build_chan(req.chan_config, trigger_step=False)
+        self.analysis = analyze_rld_chan(self.chan, self.effective_cfg_dict, req.strategy_config, include_chart=True)
+        self.session_params = {
+            "code": code,
+            "begin_date": req.begin_date,
+            "end_date": req.end_date,
+            "autype": autype,
+            "lv_list": lv_list,
+            "chan_config": req.chan_config or {},
+            "strategy_config": req.strategy_config or {},
+            "watchlist_or_sector": req.watchlist_or_sector,
+        }
+        self.ready = True
+        self.matrix_rows = []
+        self.matrix_meta = {}
+        self.backtest_result = None
+
+    def reconfig(self, req: RldReconfigReq) -> None:
+        if not self.ready or self.session is None or self.session_params is None:
+            raise ValueError("请先初始化融立得工作台")
+        lv_list = normalize_rld_lv_list(req.lv_list) if req.lv_list else list(self.session.lv_list)
+        if lv_list != self.session.lv_list:
+            self.session = RldDataSession.load(self.session.code, self.session.begin_date, self.session.end_date, self.session.autype, lv_list)
+        chan_config = req.chan_config if req.chan_config is not None else self.session_params.get("chan_config", {})
+        strategy_config = req.strategy_config if req.strategy_config is not None else self.session_params.get("strategy_config", {})
+        watchlist_or_sector = req.watchlist_or_sector if req.watchlist_or_sector is not None else self.session_params.get("watchlist_or_sector")
+        self.chan, self.effective_cfg_dict = self.session.build_chan(chan_config, trigger_step=False)
+        self.analysis = analyze_rld_chan(self.chan, self.effective_cfg_dict, strategy_config, include_chart=True)
+        self.session_params.update({"lv_list": lv_list, "chan_config": chan_config, "strategy_config": strategy_config, "watchlist_or_sector": watchlist_or_sector})
+        self.matrix_rows = []
+        self.matrix_meta = {}
+        self.backtest_result = None
+
+    def build_payload(self) -> dict[str, Any]:
+        if not self.ready or self.session is None or self.analysis is None:
+            return {"ready": False, "message": "请先加载融立得工作台"}
+        levels = []
+        for snapshot in self.analysis["levels"]:
+            item = {"level": snapshot["level"], "label": snapshot["label"], "summary": snapshot["summary"]}
+            if snapshot["chart"] is not None:
+                item["chart"] = snapshot["chart"]
+            levels.append(item)
+        return {
+            "ready": True,
+            "code": self.session.code,
+            "name": self.session.stock_name,
+            "begin_date": self.session.begin_date,
+            "end_date": self.session.end_date,
+            "lv_list": [kl_type_to_name(lv) for lv in self.session.lv_list],
+            "lv_labels": [kl_type_to_label(lv) for lv in self.session.lv_list],
+            "data_source": {"levels": dict(self.session.source_map), "logs": list(self.session.logs)},
+            "analysis": {"levels": levels, "aggregate": self.analysis["aggregate"], "level_matrix": self.analysis["level_matrix"], "strategy_config": self.analysis["strategy_config"]},
+            "matrix": {"rows": self.matrix_rows, "meta": self.matrix_meta},
+            "backtest": self.backtest_result,
+        }
+
+    def _require_ready(self) -> None:
+        if not self.ready or self.session is None or self.analysis is None or self.session_params is None:
+            raise ValueError("请先初始化融立得工作台")
+
+    def build_matrix(self, req: Optional[RldMatrixReq] = None) -> dict[str, Any]:
+        self._require_ready()
+        assert self.session_params is not None
+        codes = parse_watchlist_codes(req.codes) if req and req.codes else []
+        source_kind = "manual"
+        if not codes:
+            source_value = req.watchlist_or_sector if req and req.watchlist_or_sector is not None else self.session_params.get("watchlist_or_sector")
+            codes, source_kind = resolve_watchlist_or_sector(source_value)
+        if not codes:
+            codes = [self.session.code]
+            source_kind = "current"
+        rows: list[dict[str, Any]] = []
+        failures: list[str] = []
+        for code in codes:
+            try:
+                if self.session and code == self.session.code:
+                    payload = self.build_payload()
+                    rows.append(build_matrix_row(code, payload, stock_name=self.session.stock_name))
+                    continue
+                session = RldDataSession.load(
+                    code,
+                    self.session_params["begin_date"],
+                    self.session_params["end_date"],
+                    self.session_params["autype"],
+                    list(self.session_params["lv_list"]),
+                )
+                chan, effective_cfg_dict = session.build_chan(self.session_params.get("chan_config"), trigger_step=False)
+                analysis = analyze_rld_chan(chan, effective_cfg_dict, self.session_params.get("strategy_config"), include_chart=False)
+                rows.append(
+                    build_matrix_row(
+                        code,
+                        {
+                            "analysis": analysis,
+                        },
+                        stock_name=session.stock_name,
+                    )
+                )
+            except Exception as exc:
+                failures.append(f"{code}:{format_source_error(exc)}")
+        rows.sort(key=lambda item: float(item.get("rotation_score", 0.0)), reverse=True)
+        avg_chdl = sum(float(item.get("chdl", 0.0)) for item in rows) / len(rows) if rows else 0.0
+        buy_breadth = (sum(1 for item in rows if item.get("rld_bs_side") == "buy") / len(rows)) if rows else 0.0
+        macd_breadth = (sum(1 for item in rows if float(item.get("three_macd", 0.0)) > 0.0) / len(rows)) if rows else 0.0
+        self.matrix_rows = rows
+        self.matrix_meta = {
+            "source_kind": source_kind,
+            "count": len(rows),
+            "avg_chdl": round(avg_chdl, 2),
+            "buy_breadth": round(buy_breadth, 4),
+            "macd_breadth": round(macd_breadth, 4),
+            "failures": failures,
+        }
+        return {"rows": self.matrix_rows, "meta": self.matrix_meta}
+
+    def run_backtest(self, req: RldBacktestReq) -> dict[str, Any]:
+        self._require_ready()
+        assert self.session_params is not None
+        codes = parse_watchlist_codes(req.codes) if req.codes else []
+        if not codes:
+            source_value = req.watchlist_or_sector if req.watchlist_or_sector is not None else self.session_params.get("watchlist_or_sector")
+            codes, _ = resolve_watchlist_or_sector(source_value, limit=12)
+        if not codes:
+            codes = [self.session.code]
+        entry_rules = req.entry_rules or list(RLD_ENTRY_RULES_DEFAULT)
+        exit_rules = req.exit_rules or list(RLD_EXIT_RULES_DEFAULT)
+        logic = str(req.logic or "and").strip().lower()
+        if logic not in {"and", "or"}:
+            logic = "and"
+        fee = max(0.0, float(req.fee or 0.0))
+        slippage = max(0.0, float(req.slippage or 0.0))
+        rows: list[dict[str, Any]] = []
+        curves: list[dict[str, Any]] = []
+        trades: list[dict[str, Any]] = []
+        failures: list[str] = []
+        for code in codes:
+            try:
+                session = self.session if self.session and code == self.session.code else RldDataSession.load(
+                    code,
+                    self.session_params["begin_date"],
+                    self.session_params["end_date"],
+                    self.session_params["autype"],
+                    list(self.session_params["lv_list"]),
+                )
+                result = run_backtest_for_code(
+                    session,
+                    self.session_params.get("chan_config", {}),
+                    self.session_params.get("strategy_config", {}),
+                    entry_rules,
+                    exit_rules,
+                    logic=logic,
+                    fee=fee,
+                    slippage=slippage,
+                )
+                rows.append(
+                    {
+                        "code": result["code"],
+                        "name": result.get("name"),
+                        "trade_count": result["trade_count"],
+                        "return": result["return"],
+                        "max_drawdown": result["max_drawdown"],
+                        "win_rate": result["win_rate"],
+                        "profit_factor": result["profit_factor"],
+                    }
+                )
+                curves.append({"code": result["code"], "name": result.get("name"), "points": result["equity_curve"]})
+                for item in result["trades"]:
+                    trade_item = {"code": result["code"], "name": result.get("name"), **item}
+                    trades.append(trade_item)
+            except Exception as exc:
+                failures.append(f"{code}:{format_source_error(exc)}")
+        avg_return = sum(float(item.get("return", 0.0)) for item in rows) / len(rows) if rows else 0.0
+        avg_mdd = sum(float(item.get("max_drawdown", 0.0)) for item in rows) / len(rows) if rows else 0.0
+        self.backtest_result = {
+            "params": {
+                "entry_rules": entry_rules,
+                "exit_rules": exit_rules,
+                "logic": logic,
+                "execution_mode": "next_open",
+                "fee": fee,
+                "slippage": slippage,
+            },
+            "summary": {
+                "count": len(rows),
+                "avg_return": round(avg_return, 4),
+                "avg_max_drawdown": round(avg_mdd, 4),
+                "failures": failures,
+            },
+            "rows": rows,
+            "equity_curves": curves,
+            "trades": trades[:200],
+        }
+        return self.backtest_result
 
 HTML = r"""
 <!DOCTYPE html>
@@ -8120,6 +9387,1174 @@ if ($("bspPrompt")) {
   });
 }
 
+let rldPayload = null;
+let rldCrosshairTime = null;
+let rldActiveTopTab = "trainer";
+const RLD_LEVEL_OPTIONS = [
+  { value: "day", label: "日线" },
+  { value: "week", label: "周线" },
+  { value: "month", label: "月线" },
+  { value: "60m", label: "60分钟" },
+  { value: "30m", label: "30分钟" },
+  { value: "15m", label: "15分钟" },
+  { value: "5m", label: "5分钟" },
+  { value: "3m", label: "3分钟" },
+  { value: "1m", label: "1分钟" },
+];
+const RLD_ENTRY_RULE_OPTIONS = [
+  { value: "rld_bs_buy", label: "RLD_BS 买入" },
+  { value: "one_line", label: "一根筋" },
+  { value: "stupid_buy_bi", label: "无脑买入(笔)" },
+  { value: "stupid_buy_seg", label: "无脑买入(线段)" },
+  { value: "bsp_buy", label: "最近买点" },
+  { value: "zs_breakout_up", label: "上离开中枢" },
+  { value: "chdl_ge_20", label: "CHDL>=20" },
+  { value: "chdl_ge_40", label: "CHDL>=40" },
+];
+const RLD_EXIT_RULE_OPTIONS = [
+  { value: "rld_bs_sell", label: "RLD_BS 卖出" },
+  { value: "trend_down", label: "趋势转空" },
+  { value: "bsp_sell", label: "最近卖点" },
+  { value: "chdl_le_-20", label: "CHDL<=-20" },
+  { value: "chdl_le_-40", label: "CHDL<=-40" },
+  { value: "take_profit_8", label: "止盈8%" },
+  { value: "stop_loss_5", label: "止损5%" },
+];
+
+function rldStorageKey(key) {
+  return `rld_${key}`;
+}
+
+function rldGetStoredJson(key, fallback) {
+  return safeJsonParse(storageGet(rldStorageKey(key)), fallback);
+}
+
+function rldSetStoredJson(key, value) {
+  storageSet(rldStorageKey(key), JSON.stringify(value));
+}
+
+function rldInjectStyles() {
+  if ($("rldWorkbenchStyles")) return;
+  const style = document.createElement("style");
+  style.id = "rldWorkbenchStyles";
+  style.textContent = `
+    .topTabBar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+      background: linear-gradient(180deg, rgba(255,255,255,0.96), rgba(241,245,249,0.96));
+      position: relative;
+      z-index: 40;
+    }
+    .topTabBar .tabButton {
+      border-radius: 999px;
+      padding: 8px 16px;
+      font-weight: 700;
+      background: rgba(255,255,255,0.75);
+      border: 1px solid var(--border);
+      width: auto;
+      text-align: center;
+    }
+    .topTabBar .tabButton.active {
+      background: #0f172a;
+      color: #fff;
+      border-color: #0f172a;
+      box-shadow: 0 8px 24px rgba(15, 23, 42, 0.2);
+    }
+    #topPageShell {
+      height: calc(100vh - 58px);
+      overflow: hidden;
+    }
+    .topPage {
+      display: none;
+      height: 100%;
+    }
+    .topPage.active {
+      display: block;
+    }
+    .topPage .wrap {
+      height: 100%;
+    }
+    .rldWorkbench {
+      display: grid;
+      grid-template-columns: 360px minmax(0, 1fr);
+      gap: 14px;
+      height: 100%;
+      padding: 14px;
+      box-sizing: border-box;
+      background:
+        radial-gradient(circle at top right, rgba(14,165,233,0.12), transparent 28%),
+        radial-gradient(circle at bottom left, rgba(249,115,22,0.12), transparent 32%),
+        linear-gradient(180deg, #f8fafc, #eef2f7);
+    }
+    .rldSidebar, .rldMain {
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .rldCard, .rldPanel {
+      border: 1px solid rgba(148,163,184,0.5);
+      background: rgba(255,255,255,0.92);
+      border-radius: 16px;
+      box-shadow: 0 10px 30px rgba(15,23,42,0.08);
+      padding: 14px;
+      min-height: 0;
+      backdrop-filter: blur(6px);
+    }
+    .rldCardTitle {
+      font-size: 15px;
+      font-weight: 800;
+      margin-bottom: 12px;
+      color: #0f172a;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .rldStatus {
+      color: #334155;
+      font-size: 12px;
+      white-space: pre-wrap;
+      line-height: 1.6;
+      max-height: 140px;
+      overflow: auto;
+    }
+    .rldFormGrid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .rldField {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .rldField.full {
+      grid-column: 1 / -1;
+    }
+    .rldField label {
+      width: auto;
+      font-size: 12px;
+      color: #475569;
+      font-weight: 700;
+    }
+    .rldField input, .rldField select, .rldField textarea {
+      width: 100%;
+      box-sizing: border-box;
+      border-radius: 10px;
+      border: 1px solid rgba(148,163,184,0.6);
+      background: rgba(255,255,255,0.92);
+      padding: 8px 10px;
+      resize: vertical;
+    }
+    .rldActions {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .rldActions button {
+      width: 100%;
+      text-align: center;
+      border-radius: 12px;
+      padding: 9px 10px;
+      font-weight: 700;
+    }
+    .rldRuleList {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 6px;
+      font-size: 12px;
+    }
+    .rldRuleItem {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid rgba(226,232,240,0.8);
+      border-radius: 10px;
+      padding: 6px 8px;
+      background: rgba(248,250,252,0.85);
+    }
+    .rldRuleItem input {
+      width: auto;
+      flex: none;
+    }
+    .rldHeaderBar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 4px;
+    }
+    .rldHeaderText {
+      font-weight: 800;
+      color: #0f172a;
+      font-size: 18px;
+    }
+    .rldHeaderSub {
+      color: #64748b;
+      font-size: 12px;
+    }
+    .rldSummaryGrid {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .rldSummaryCard {
+      border-radius: 14px;
+      padding: 12px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(241,245,249,0.95));
+      border: 1px solid rgba(148,163,184,0.45);
+      min-height: 88px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 6px;
+    }
+    .rldSummaryCard .k {
+      font-size: 11px;
+      color: #64748b;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .rldSummaryCard .v {
+      font-size: 22px;
+      font-weight: 800;
+      color: #0f172a;
+    }
+    .rldSummaryCard .d {
+      font-size: 12px;
+      color: #475569;
+    }
+    .rldChartStack {
+      display: grid;
+      grid-template-rows: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      min-height: 0;
+      flex: 1;
+    }
+    .rldChartCard {
+      border: 1px solid rgba(148,163,184,0.55);
+      background: rgba(255,255,255,0.95);
+      border-radius: 16px;
+      padding: 10px;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .rldChartHead {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 12px;
+      color: #475569;
+      font-weight: 700;
+    }
+    .rldChartCanvas {
+      width: 100%;
+      height: 210px;
+      display: block;
+      border-radius: 12px;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.95), rgba(248,250,252,0.95)),
+        linear-gradient(90deg, rgba(148,163,184,0.08), transparent);
+      border: 1px solid rgba(226,232,240,0.85);
+    }
+    .rldBottomGrid {
+      display: grid;
+      grid-template-columns: 1.15fr 1fr;
+      gap: 12px;
+      min-height: 280px;
+    }
+    .rldScroll {
+      min-height: 0;
+      overflow: auto;
+    }
+    .rldPerspectiveTime {
+      font-size: 16px;
+      font-weight: 800;
+      color: #0f172a;
+      margin-bottom: 10px;
+    }
+    .rldPerspectiveGrid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .rldPerspectiveCard {
+      border-radius: 12px;
+      border: 1px solid rgba(148,163,184,0.35);
+      background: rgba(248,250,252,0.92);
+      padding: 10px;
+      font-size: 12px;
+      color: #334155;
+      line-height: 1.6;
+    }
+    .rldTable {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+    .rldTable th, .rldTable td {
+      border-bottom: 1px solid rgba(226,232,240,0.9);
+      padding: 8px 6px;
+      text-align: left;
+      white-space: nowrap;
+    }
+    .rldTable th {
+      position: sticky;
+      top: 0;
+      background: rgba(248,250,252,0.98);
+      z-index: 1;
+    }
+    .rldBadge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 999px;
+      padding: 2px 10px;
+      font-size: 11px;
+      font-weight: 700;
+      background: rgba(226,232,240,0.75);
+      color: #0f172a;
+    }
+    .rldBadge.buy {
+      background: rgba(220,38,38,0.12);
+      color: #b91c1c;
+    }
+    .rldBadge.sell {
+      background: rgba(22,163,74,0.12);
+      color: #15803d;
+    }
+    .rldMetaRow {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 8px;
+      font-size: 12px;
+      color: #475569;
+    }
+    @media (max-width: 1380px) {
+      .rldWorkbench {
+        grid-template-columns: 320px minmax(0, 1fr);
+      }
+      .rldSummaryGrid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+      .rldBottomGrid {
+        grid-template-columns: 1fr;
+      }
+    }
+    @media (max-width: 1024px) {
+      .rldWorkbench {
+        grid-template-columns: 1fr;
+      }
+      .rldSummaryGrid, .rldPerspectiveGrid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+function rldRuleHtml(name, options, checked) {
+  return options.map((item) => {
+    const isChecked = checked.includes(item.value) ? "checked" : "";
+    return `<label class="rldRuleItem"><input type="checkbox" name="${name}" value="${item.value}" ${isChecked} /> <span>${item.label}</span></label>`;
+  }).join("");
+}
+
+function rldWorkbenchMarkup() {
+  const saved = ensureObject(rldGetStoredJson("form", {}), {});
+  const entryRules = ensureArray(saved.entry_rules, ["rld_bs_buy", "one_line"]);
+  const exitRules = ensureArray(saved.exit_rules, ["rld_bs_sell", "trend_down"]);
+  return `
+    <div class="rldWorkbench">
+      <div class="rldSidebar">
+        <div class="rldCard">
+          <div class="rldCardTitle">融立得高级工作台</div>
+          <div class="rldFormGrid">
+            <div class="rldField"><label>代码</label><input id="rldCode" value="${escapeHtmlAttr(saved.code || "600340")}" /></div>
+            <div class="rldField"><label>复权</label><select id="rldAutype"><option value="qfq">前复权</option><option value="hfq">后复权</option><option value="none">不复权</option></select></div>
+            <div class="rldField"><label>开始日期</label><input id="rldBegin" type="date" value="${escapeHtmlAttr(saved.begin_date || "2018-01-01")}" /></div>
+            <div class="rldField"><label>结束日期</label><input id="rldEnd" type="date" value="${escapeHtmlAttr(saved.end_date || "")}" /></div>
+            <div class="rldField"><label>周期1</label><select id="rldLv1"></select></div>
+            <div class="rldField"><label>周期2</label><select id="rldLv2"></select></div>
+            <div class="rldField"><label>周期3</label><select id="rldLv3"></select></div>
+            <div class="rldField"><label>逻辑</label><select id="rldRuleLogic"><option value="and">AND</option><option value="or">OR</option></select></div>
+            <div class="rldField full"><label>股票池 / 板块</label><textarea id="rldWatchlist" rows="3" placeholder="输入 600340,000001,600519 或板块名">${escapeHtmlAttr(saved.watchlist_or_sector || "600340,000001,600519")}</textarea></div>
+            <div class="rldField"><label>权重1</label><input id="rldWeight1" type="number" step="1" value="${escapeHtmlAttr(saved.weight1 || "50")}" /></div>
+            <div class="rldField"><label>权重2</label><input id="rldWeight2" type="number" step="1" value="${escapeHtmlAttr(saved.weight2 || "30")}" /></div>
+            <div class="rldField"><label>权重3</label><input id="rldWeight3" type="number" step="1" value="${escapeHtmlAttr(saved.weight3 || "20")}" /></div>
+            <div class="rldField"><label>手续费</label><input id="rldFee" type="number" step="0.0001" value="${escapeHtmlAttr(saved.fee || "0.001")}" /></div>
+            <div class="rldField"><label>滑点</label><input id="rldSlippage" type="number" step="0.0001" value="${escapeHtmlAttr(saved.slippage || "0.0005")}" /></div>
+          </div>
+          <div class="rldActions">
+            <button id="rldBtnInit">加载工作台</button>
+            <button id="rldBtnReconfig">应用配置</button>
+            <button id="rldBtnMatrix">刷新矩阵</button>
+            <button id="rldBtnBacktest">运行回测</button>
+            <button id="rldBtnReset">重置</button>
+          </div>
+        </div>
+        <div class="rldCard">
+          <div class="rldCardTitle">回测规则</div>
+          <div class="rldField full">
+            <label>入场规则</label>
+            <div class="rldRuleList">${rldRuleHtml("rldEntryRule", RLD_ENTRY_RULE_OPTIONS, entryRules)}</div>
+          </div>
+          <div class="rldField full" style="margin-top:10px;">
+            <label>出场规则</label>
+            <div class="rldRuleList">${rldRuleHtml("rldExitRule", RLD_EXIT_RULE_OPTIONS, exitRules)}</div>
+          </div>
+        </div>
+        <div class="rldCard">
+          <div class="rldCardTitle">状态 / 数据源</div>
+          <div id="rldStatus" class="rldStatus">等待加载...</div>
+        </div>
+      </div>
+      <div class="rldMain">
+        <div class="rldPanel">
+          <div class="rldHeaderBar">
+            <div>
+              <div class="rldHeaderText">融立得多周期联动 / 多级联立工作台</div>
+              <div id="rldHeaderSub" class="rldHeaderSub">尚未加载数据</div>
+            </div>
+            <div id="rldHeaderBadge" class="rldBadge">空闲</div>
+          </div>
+          <div id="rldSummaryGrid" class="rldSummaryGrid"></div>
+        </div>
+        <div class="rldChartStack">
+          <div class="rldChartCard"><div id="rldChartHead1" class="rldChartHead">周期1</div><canvas id="rldChart1" class="rldChartCanvas"></canvas></div>
+          <div class="rldChartCard"><div id="rldChartHead2" class="rldChartHead">周期2</div><canvas id="rldChart2" class="rldChartCanvas"></canvas></div>
+          <div class="rldChartCard"><div id="rldChartHead3" class="rldChartHead">周期3</div><canvas id="rldChart3" class="rldChartCanvas"></canvas></div>
+        </div>
+        <div class="rldBottomGrid">
+          <div class="rldPanel rldScroll">
+            <div class="rldCardTitle">时间线 / 透视窗</div>
+            <div id="rldPerspective"></div>
+          </div>
+          <div class="rldPanel rldScroll">
+            <div class="rldCardTitle">个股矩阵 / 板块轮动</div>
+            <div id="rldMatrixContainer"></div>
+          </div>
+        </div>
+        <div class="rldPanel rldScroll">
+          <div class="rldCardTitle">回归评测系统</div>
+          <div id="rldBacktestContainer"></div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function rldEnsureShell() {
+  rldInjectStyles();
+  if ($("topPageShell")) return;
+  const wrap = document.querySelector(".wrap");
+  if (!wrap) return;
+  const tabBar = document.createElement("div");
+  tabBar.id = "topTabBar";
+  tabBar.className = "topTabBar";
+  tabBar.innerHTML = `
+    <button id="topTabTrainer" class="tabButton active" type="button">chan.py 复盘训练器</button>
+    <button id="topTabRld" class="tabButton" type="button">融立得</button>
+  `;
+  const shell = document.createElement("div");
+  shell.id = "topPageShell";
+  const trainerPage = document.createElement("div");
+  trainerPage.id = "pageTrainer";
+  trainerPage.className = "topPage active";
+  const rldPage = document.createElement("div");
+  rldPage.id = "pageRld";
+  rldPage.className = "topPage";
+  rldPage.innerHTML = rldWorkbenchMarkup();
+  wrap.parentNode.insertBefore(tabBar, wrap);
+  wrap.parentNode.insertBefore(shell, wrap);
+  trainerPage.appendChild(wrap);
+  shell.appendChild(trainerPage);
+  shell.appendChild(rldPage);
+}
+
+function rldPopulateLevelSelect(id, value) {
+  const el = $(id);
+  if (!el) return;
+  el.innerHTML = RLD_LEVEL_OPTIONS.map((item) => `<option value="${item.value}">${item.label}</option>`).join("");
+  el.value = value;
+}
+
+function rldSaveForm() {
+  const form = rldCollectForm();
+  rldSetStoredJson("form", {
+    ...form,
+    weight1: $("rldWeight1") ? $("rldWeight1").value : "50",
+    weight2: $("rldWeight2") ? $("rldWeight2").value : "30",
+    weight3: $("rldWeight3") ? $("rldWeight3").value : "20",
+    fee: $("rldFee") ? $("rldFee").value : "0.001",
+    slippage: $("rldSlippage") ? $("rldSlippage").value : "0.0005",
+    entry_rules: rldGetSelectedRules("rldEntryRule"),
+    exit_rules: rldGetSelectedRules("rldExitRule"),
+  });
+}
+
+function rldSetStatus(text, tone = "idle") {
+  const el = $("rldStatus");
+  if (el) el.textContent = text || "等待加载...";
+  const badge = $("rldHeaderBadge");
+  if (badge) {
+    badge.textContent = tone === "error" ? "错误" : tone === "busy" ? "处理中" : tone === "ready" ? "已就绪" : "空闲";
+    badge.className = `rldBadge ${tone === "error" ? "sell" : tone === "ready" ? "buy" : ""}`;
+  }
+}
+
+function rldCollectForm() {
+  const lvList = [
+    $("rldLv1") ? $("rldLv1").value : "day",
+    $("rldLv2") ? $("rldLv2").value : "60m",
+    $("rldLv3") ? $("rldLv3").value : "15m",
+  ];
+  return {
+    code: $("rldCode") ? $("rldCode").value : "600340",
+    begin_date: $("rldBegin") ? $("rldBegin").value : "2018-01-01",
+    end_date: $("rldEnd") && $("rldEnd").value ? $("rldEnd").value : null,
+    autype: $("rldAutype") ? $("rldAutype").value : "qfq",
+    lv_list: lvList,
+    watchlist_or_sector: $("rldWatchlist") ? $("rldWatchlist").value : "",
+    strategy_config: {
+      weights: [
+        Number($("rldWeight1") ? $("rldWeight1").value : 50),
+        Number($("rldWeight2") ? $("rldWeight2").value : 30),
+        Number($("rldWeight3") ? $("rldWeight3").value : 20),
+      ]
+    },
+    chan_config: {
+      chan_algo: chanConfig.chan_algo,
+      bi_strict: chanConfig.bi_strict,
+      bi_algo: chanConfig.bi_algo,
+      bi_fx_check: chanConfig.bi_fx_check,
+      gap_as_kl: chanConfig.gap_as_kl,
+      bi_end_is_peak: chanConfig.bi_end_is_peak,
+      bi_allow_sub_peak: chanConfig.bi_allow_sub_peak,
+      seg_algo: chanConfig.seg_algo,
+      left_seg_method: chanConfig.left_seg_method,
+      zs_algo: chanConfig.zs_algo,
+      zs_combine: chanConfig.zs_combine,
+      zs_combine_mode: chanConfig.zs_combine_mode,
+      one_bi_zs: chanConfig.one_bi_zs,
+      divergence_rate: chanConfig.divergence_rate,
+      min_zs_cnt: chanConfig.min_zs_cnt,
+      bsp1_only_multibi_zs: chanConfig.bsp1_only_multibi_zs,
+      max_bs2_rate: chanConfig.max_bs2_rate,
+      macd_algo: chanConfig.macd_algo,
+      bs1_peak: chanConfig.bs1_peak,
+      bs_type: chanConfig.bs_type,
+      bsp2_follow_1: chanConfig.bsp2_follow_1,
+      bsp3_follow_1: chanConfig.bsp3_follow_1,
+      bsp3_peak: chanConfig.bsp3_peak,
+      bsp2s_follow_2: chanConfig.bsp2s_follow_2,
+      max_bsp2s_lv: chanConfig.max_bsp2s_lv,
+      strict_bsp3: chanConfig.strict_bsp3,
+      bsp3a_max_zs_cnt: chanConfig.bsp3a_max_zs_cnt,
+      macd: chanConfig.macd,
+    },
+  };
+}
+
+function rldGetSelectedRules(name) {
+  return Array.from(document.querySelectorAll(`input[name="${name}"]:checked`)).map((node) => node.value);
+}
+
+async function rldCall(path, body, method = "POST", loadingText = "融立得工作台处理中...") {
+  setGlobalLoading(true, loadingText);
+  try {
+    return await api(path, body, method);
+  } finally {
+    hideGlobalLoading();
+  }
+}
+
+function rldNumber(value, digits = 2) {
+  if (value === null || value === undefined || value === "" || Number.isNaN(Number(value))) return "-";
+  return Number(value).toFixed(digits);
+}
+
+function rldPct(value, digits = 2) {
+  if (value === null || value === undefined || value === "" || Number.isNaN(Number(value))) return "-";
+  return `${(Number(value) * 100).toFixed(digits)}%`;
+}
+
+function rldSideBadge(side) {
+  const cls = side === "buy" ? "buy" : side === "sell" ? "sell" : "";
+  const text = side === "buy" ? "偏多" : side === "sell" ? "偏空" : "中性";
+  return `<span class="rldBadge ${cls}">${text}</span>`;
+}
+
+function rldRenderSummary(payload) {
+  const grid = $("rldSummaryGrid");
+  if (!grid) return;
+  if (!payload || !payload.ready || !payload.analysis) {
+    grid.innerHTML = `<div class="rldSummaryCard"><div class="k">状态</div><div class="v">未加载</div><div class="d">请先加载融立得工作台。</div></div>`;
+    return;
+  }
+  const agg = payload.analysis.aggregate || {};
+  const rows = [
+    { k: "CHDL", v: rldNumber(agg.weighted_chdl), d: "结构方向 + 中枢位置 + BSP + MACD 面积的综合分" },
+    { k: "三级别 MACD", v: rldNumber(agg.three_macd), d: "三周期 MACD 动量加权结果" },
+    { k: "一根筋", v: agg.one_line ? "是" : "否", d: "三周期同向且最近无明显逆向破坏" },
+    { k: "无脑买入(笔)", v: agg.stupid_buy_bi ? "触发" : "未触发", d: "激进笔级模板" },
+    { k: "无脑买入(线段)", v: agg.stupid_buy_seg ? "触发" : "未触发", d: "激进线段模板" },
+    { k: "RLD_BS", v: `${agg.rld_bs ? rldNumber(agg.rld_bs.score) : "-"} ${agg.rld_bs ? (agg.rld_bs.side || "neutral") : ""}`, d: agg.rld_bs && agg.rld_bs.reasons ? compactReasText(agg.rld_bs.reasons) : "解释型交易建议" },
+  ];
+  grid.innerHTML = rows.map((item) => `<div class="rldSummaryCard"><div class="k">${item.k}</div><div class="v">${item.v}</div><div class="d">${item.d}</div></div>`).join("");
+}
+
+function compactReasText(reasons) {
+  return ensureArray(reasons, []).slice(0, 3).join("；") || "-";
+}
+
+function rldRenderHeader(payload) {
+  const headerSub = $("rldHeaderSub");
+  if (!headerSub) return;
+  if (!payload || !payload.ready) {
+    headerSub.textContent = "尚未加载数据";
+    return;
+  }
+  const lvLabels = ensureArray(payload.lv_labels, []).join(" / ");
+  headerSub.textContent = `${payload.name || payload.code} | ${lvLabels}`;
+}
+
+function rldRenderStatus(payload, fallbackText) {
+  if (fallbackText) {
+    rldSetStatus(fallbackText, payload && payload.ready ? "ready" : "idle");
+    return;
+  }
+  if (!payload || !payload.ready) {
+    rldSetStatus("请先加载融立得工作台。");
+    return;
+  }
+  const logs = payload.data_source && payload.data_source.logs ? payload.data_source.logs : [];
+  const lines = [
+    `标的：${payload.name || payload.code}`,
+    `周期：${ensureArray(payload.lv_labels, []).join(" / ")}`,
+    ...logs,
+  ];
+  rldSetStatus(lines.join("\n"), "ready");
+}
+
+function rldFindNearestK(chart, timeText) {
+  const ks = chart && chart.kline ? chart.kline : [];
+  if (ks.length <= 0) return null;
+  if (!timeText) return ks[ks.length - 1];
+  const target = rldToTs(timeText);
+  let best = ks[0];
+  let bestGap = Math.abs(rldToTs(best.t) - target);
+  for (const item of ks) {
+    const gap = Math.abs(rldToTs(item.t) - target);
+    if (gap < bestGap) {
+      best = item;
+      bestGap = gap;
+    }
+  }
+  return best;
+}
+
+function rldToTs(text) {
+  const raw = String(text || "").trim().replace(/\//g, "-");
+  const dt = new Date(raw);
+  const t = dt.getTime();
+  return Number.isFinite(t) ? t : 0;
+}
+
+function rldChartColor(kind) {
+  const palette = {
+    candleUp: "#dc2626",
+    candleDown: "#16a34a",
+    bi: "#f59e0b",
+    seg: "#059669",
+    segseg: "#2563eb",
+    zs: "rgba(14,165,233,0.12)",
+    macdPos: "rgba(220,38,38,0.45)",
+    macdNeg: "rgba(22,163,74,0.45)",
+    cross: "#0f172a",
+  };
+  return palette[kind] || "#334155";
+}
+
+function rldPrepareCanvas(canvas) {
+  if (!canvas) return null;
+  const rect = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const width = Math.max(320, Math.floor(rect.width));
+  const height = Math.max(180, Math.floor(rect.height || 210));
+  if (canvas.width !== Math.floor(width * dpr) || canvas.height !== Math.floor(height * dpr)) {
+    canvas.width = Math.floor(width * dpr);
+    canvas.height = Math.floor(height * dpr);
+  }
+  const ctx2 = canvas.getContext("2d");
+  ctx2.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { ctx: ctx2, width, height };
+}
+
+function rldDrawChart(canvas, levelItem) {
+  const prepared = rldPrepareCanvas(canvas);
+  if (!prepared) return;
+  const { ctx: ctx2, width, height } = prepared;
+  ctx2.clearRect(0, 0, width, height);
+  ctx2.fillStyle = "#ffffff";
+  ctx2.fillRect(0, 0, width, height);
+  if (!levelItem || !levelItem.chart || !Array.isArray(levelItem.chart.kline) || levelItem.chart.kline.length <= 0) {
+    ctx2.fillStyle = "#64748b";
+    ctx2.font = "12px Arial";
+    ctx2.fillText("暂无数据", 20, 24);
+    return;
+  }
+  const chart = levelItem.chart;
+  const ks = chart.kline;
+  const padL = 56;
+  const padR = 14;
+  const padT = 16;
+  const padB = 26;
+  const macdH = Math.max(38, Math.floor(height * 0.2));
+  const priceH = height - macdH - padT - padB - 8;
+  const maxPrice = Math.max(...ks.map((k) => Number(k.h)), ...chart.seg_zs.map((z) => Number(z.high)));
+  const minPrice = Math.min(...ks.map((k) => Number(k.l)), ...chart.seg_zs.map((z) => Number(z.low)));
+  const range = Math.max(1e-6, maxPrice - minPrice);
+  const stepX = (width - padL - padR) / Math.max(1, ks.length - 1);
+  const xByIndex = (idx) => padL + idx * stepX;
+  const yByPrice = (price) => padT + priceH - ((price - minPrice) / range) * priceH;
+  const macdItems = chart.indicators || [];
+  const macdAbs = Math.max(1e-6, ...macdItems.map((item) => Math.abs(Number(item.macd && item.macd.macd || 0))));
+  const macdBaseY = padT + priceH + 12 + macdH / 2;
+  const macdScale = (macdH / 2 - 8) / macdAbs;
+
+  ctx2.strokeStyle = "rgba(148,163,184,0.35)";
+  ctx2.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = padT + (priceH / 4) * i;
+    ctx2.beginPath();
+    ctx2.moveTo(padL, y);
+    ctx2.lineTo(width - padR, y);
+    ctx2.stroke();
+  }
+  ctx2.fillStyle = "#64748b";
+  ctx2.font = "11px Arial";
+  for (let i = 0; i <= 4; i++) {
+    const price = maxPrice - (range / 4) * i;
+    const y = padT + (priceH / 4) * i;
+    ctx2.fillText(Number(price).toFixed(2), 8, y + 4);
+  }
+
+  for (let i = 0; i < ks.length; i++) {
+    const k = ks[i];
+    const x = xByIndex(i);
+    const openY = yByPrice(Number(k.o));
+    const closeY = yByPrice(Number(k.c));
+    const highY = yByPrice(Number(k.h));
+    const lowY = yByPrice(Number(k.l));
+    const isUp = Number(k.c) >= Number(k.o);
+    ctx2.strokeStyle = isUp ? rldChartColor("candleUp") : rldChartColor("candleDown");
+    ctx2.beginPath();
+    ctx2.moveTo(x, highY);
+    ctx2.lineTo(x, lowY);
+    ctx2.stroke();
+    ctx2.fillStyle = isUp ? "rgba(220,38,38,0.2)" : "rgba(22,163,74,0.55)";
+    const bodyY = Math.min(openY, closeY);
+    const bodyH = Math.max(2, Math.abs(closeY - openY));
+    ctx2.fillRect(x - Math.max(1.4, stepX * 0.24), bodyY, Math.max(3, stepX * 0.48), bodyH);
+  }
+
+  const drawLineSet = (arr, color, widthPx) => {
+    ctx2.strokeStyle = color;
+    ctx2.lineWidth = widthPx;
+    for (const line of arr || []) {
+      ctx2.beginPath();
+      ctx2.moveTo(xByIndex(Number(line.x1)), yByPrice(Number(line.y1)));
+      ctx2.lineTo(xByIndex(Number(line.x2)), yByPrice(Number(line.y2)));
+      ctx2.stroke();
+    }
+  };
+  const drawZsSet = (arr, stroke, fill) => {
+    for (const zs of arr || []) {
+      const x1 = xByIndex(Number(zs.x1));
+      const x2 = xByIndex(Number(zs.x2));
+      const y1 = yByPrice(Number(zs.high));
+      const y2 = yByPrice(Number(zs.low));
+      ctx2.fillStyle = fill;
+      ctx2.fillRect(x1, y1, Math.max(4, x2 - x1), Math.max(4, y2 - y1));
+      ctx2.strokeStyle = stroke;
+      ctx2.lineWidth = 1;
+      ctx2.strokeRect(x1, y1, Math.max(4, x2 - x1), Math.max(4, y2 - y1));
+    }
+  };
+  drawZsSet(chart.bi_zs || [], "rgba(249,115,22,0.45)", "rgba(249,115,22,0.08)");
+  drawZsSet(chart.seg_zs || [], "rgba(14,165,233,0.45)", "rgba(14,165,233,0.08)");
+  drawLineSet(chart.bi || [], rldChartColor("bi"), 1.3);
+  drawLineSet(chart.seg || [], rldChartColor("seg"), 2.0);
+  drawLineSet(chart.segseg || [], rldChartColor("segseg"), 2.6);
+
+  for (const item of chart.bsp || []) {
+    const x = xByIndex(Number(item.x));
+    const y = item.is_buy ? yByPrice(Number(item.y)) + 14 : yByPrice(Number(item.y)) - 12;
+    ctx2.fillStyle = item.is_buy ? "#b91c1c" : "#15803d";
+    ctx2.font = "bold 11px Arial";
+    ctx2.fillText(item.display_label || item.label || "", x - 10, y);
+  }
+
+  ctx2.strokeStyle = "rgba(100,116,139,0.35)";
+  ctx2.beginPath();
+  ctx2.moveTo(padL, macdBaseY);
+  ctx2.lineTo(width - padR, macdBaseY);
+  ctx2.stroke();
+  for (let i = 0; i < macdItems.length; i++) {
+    const item = macdItems[i];
+    const x = xByIndex(i);
+    const val = Number(item.macd && item.macd.macd || 0);
+    const barH = val * macdScale;
+    ctx2.strokeStyle = val >= 0 ? rldChartColor("macdPos") : rldChartColor("macdNeg");
+    ctx2.beginPath();
+    ctx2.moveTo(x, macdBaseY);
+    ctx2.lineTo(x, macdBaseY - barH);
+    ctx2.stroke();
+  }
+
+  const selectedK = rldFindNearestK(chart, rldCrosshairTime);
+  if (selectedK) {
+    const idx = ks.findIndex((item) => Number(item.x) === Number(selectedK.x));
+    const x = xByIndex(Math.max(0, idx));
+    ctx2.strokeStyle = rldChartColor("cross");
+    ctx2.setLineDash([5, 4]);
+    ctx2.beginPath();
+    ctx2.moveTo(x, padT);
+    ctx2.lineTo(x, height - padB);
+    ctx2.stroke();
+    ctx2.setLineDash([]);
+    ctx2.fillStyle = "#0f172a";
+    ctx2.font = "11px Arial";
+    ctx2.fillText(String(selectedK.t), Math.max(padL, x - 50), height - 8);
+  }
+}
+
+function rldDrawAllCharts() {
+  if (!rldPayload || !rldPayload.ready || !rldPayload.analysis) return;
+  const levels = ensureArray(rldPayload.analysis.levels, []);
+  for (let i = 0; i < 3; i++) {
+    const levelItem = levels[i];
+    const head = $(`rldChartHead${i + 1}`);
+    if (head) {
+      head.innerHTML = levelItem ? `${levelItem.label} <span>${levelItem.summary ? `${levelItem.summary.trend_label} / CHDL ${rldNumber(levelItem.summary.chdl_score)}` : ""}</span>` : `周期${i + 1}`;
+    }
+    rldDrawChart($(`rldChart${i + 1}`), levelItem);
+  }
+}
+
+function rldRenderPerspective() {
+  const box = $("rldPerspective");
+  if (!box) return;
+  if (!rldPayload || !rldPayload.ready || !rldPayload.analysis) {
+    box.innerHTML = `<div class="rldPerspectiveTime">等待加载</div>`;
+    return;
+  }
+  const levels = ensureArray(rldPayload.analysis.levels, []);
+  let pivotTime = rldCrosshairTime;
+  if (!pivotTime && levels[0] && levels[0].chart && levels[0].chart.kline && levels[0].chart.kline.length > 0) {
+    pivotTime = levels[0].chart.kline[levels[0].chart.kline.length - 1].t;
+  }
+  const cards = levels.map((level) => {
+    const nearest = rldFindNearestK(level.chart, pivotTime);
+    const ind = ensureArray(level.chart && level.chart.indicators, []).find((item) => nearest && Number(item.x) === Number(nearest.x));
+    return `
+      <div class="rldPerspectiveCard">
+        <div style="font-weight:800;color:#0f172a;margin-bottom:6px;">${level.label}</div>
+        <div>时间：${nearest ? nearest.t : "-"}</div>
+        <div>OHLC：${nearest ? `${rldNumber(nearest.o, 3)} / ${rldNumber(nearest.h, 3)} / ${rldNumber(nearest.l, 3)} / ${rldNumber(nearest.c, 3)}` : "-"}</div>
+        <div>趋势：${level.summary.trend_label}</div>
+        <div>BSP：${level.summary.latest_bsp ? level.summary.latest_bsp.display_label : "无"}</div>
+        <div>中枢：${level.summary.zs_state.kind}${level.summary.zs_state.label}</div>
+        <div>MACD：${ind && ind.macd ? rldNumber(ind.macd.macd, 4) : "-"}</div>
+        <div>笔面积 / 段面积：${rldNumber(level.summary.macd_bi_area, 3)} / ${rldNumber(level.summary.macd_seg_area, 3)}</div>
+        <div>CHDL：${rldNumber(level.summary.chdl_score)}</div>
+      </div>
+    `;
+  }).join("");
+  const agg = rldPayload.analysis.aggregate || {};
+  box.innerHTML = `
+    <div class="rldPerspectiveTime">${pivotTime || "-"}</div>
+    <div class="rldMetaRow">
+      ${rldSideBadge(agg.rld_bs ? agg.rld_bs.side : "neutral")}
+      <span>RLD_BS 分数：${agg.rld_bs ? rldNumber(agg.rld_bs.score) : "-"}</span>
+      <span>一根筋：${agg.one_line ? "是" : "否"}</span>
+      <span>无脑买入(笔)：${agg.stupid_buy_bi ? "是" : "否"}</span>
+      <span>无脑买入(线段)：${agg.stupid_buy_seg ? "是" : "否"}</span>
+    </div>
+    <div class="rldPerspectiveGrid">${cards}</div>
+    <div style="margin-top:10px;font-size:12px;color:#475569;line-height:1.6;">${agg.rld_bs && agg.rld_bs.reasons ? compactReasText(agg.rld_bs.reasons) : "-"}</div>
+  `;
+}
+
+function rldRenderLevelMatrix(payload) {
+  const target = $("rldMatrixContainer");
+  if (!target) return;
+  if (!payload || !payload.analysis || !Array.isArray(payload.analysis.level_matrix)) {
+    target.innerHTML = `<div class="muted">尚未生成矩阵。</div>`;
+    return;
+  }
+  const headers = ensureArray(payload.lv_labels, []);
+  const rows = ensureArray(payload.analysis.level_matrix, []);
+  const matrixTable = `
+    <div class="rldCardTitle" style="margin-top:0;">当前标的矩阵</div>
+    <div class="rldScroll" style="max-height:220px;">
+      <table class="rldTable">
+        <thead><tr><th>指标</th>${headers.map((h) => `<th>${h}</th>`).join("")}</tr></thead>
+        <tbody>
+          ${rows.map((row) => `<tr><td>${row.metric || "-"}</td>${headers.map((h) => `<td>${row[h] || "-"}</td>`).join("")}</tr>`).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+  const multi = payload.matrix && payload.matrix.rows && payload.matrix.rows.length > 0 ? `
+    <div class="rldCardTitle" style="margin-top:14px;">多股矩阵 / 板块轮动</div>
+    <div class="rldMetaRow">
+      <span>标的数：${payload.matrix.meta ? payload.matrix.meta.count : 0}</span>
+      <span>平均 CHDL：${payload.matrix.meta ? rldNumber(payload.matrix.meta.avg_chdl) : "-"}</span>
+      <span>买入广度：${payload.matrix.meta ? rldPct(payload.matrix.meta.buy_breadth, 1) : "-"}</span>
+      <span>MACD 广度：${payload.matrix.meta ? rldPct(payload.matrix.meta.macd_breadth, 1) : "-"}</span>
+    </div>
+    <div class="rldScroll" style="max-height:280px;">
+      <table class="rldTable">
+        <thead>
+          <tr>
+            <th>代码</th><th>名称</th><th>轮动分</th><th>CHDL</th><th>三级别MACD</th><th>一根筋</th><th>无脑买入(笔)</th><th>无脑买入(段)</th><th>RLD_BS</th><th>原因</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${payload.matrix.rows.map((row) => `
+            <tr>
+              <td>${row.code || "-"}</td>
+              <td>${row.name || "-"}</td>
+              <td>${rldNumber(row.rotation_score)}</td>
+              <td>${rldNumber(row.chdl)}</td>
+              <td>${rldNumber(row.three_macd)}</td>
+              <td>${row.one_line ? "是" : "否"}</td>
+              <td>${row.stupid_buy_bi ? "是" : "否"}</td>
+              <td>${row.stupid_buy_seg ? "是" : "否"}</td>
+              <td>${row.rld_bs_side || "-"} ${rldNumber(row.rld_bs_score)}</td>
+              <td>${ensureArray(row.reasons, []).join("；")}</td>
+            </tr>`).join("")}
+        </tbody>
+      </table>
+    </div>
+  ` : `<div class="muted" style="margin-top:10px;">尚未生成多股矩阵，可点击“刷新矩阵”。</div>`;
+  target.innerHTML = matrixTable + multi;
+}
+
+function rldRenderBacktest(payload) {
+  const target = $("rldBacktestContainer");
+  if (!target) return;
+  const backtest = payload && payload.backtest;
+  if (!backtest || !Array.isArray(backtest.rows) || backtest.rows.length <= 0) {
+    target.innerHTML = `<div class="muted">尚未执行回测。</div>`;
+    return;
+  }
+  target.innerHTML = `
+    <div class="rldMetaRow">
+      <span>标的数：${backtest.summary ? backtest.summary.count : 0}</span>
+      <span>平均收益：${backtest.summary ? rldPct(backtest.summary.avg_return) : "-"}</span>
+      <span>平均回撤：${backtest.summary ? rldPct(backtest.summary.avg_max_drawdown) : "-"}</span>
+      <span>入场规则：${ensureArray(backtest.params && backtest.params.entry_rules, []).join(" + ")}</span>
+      <span>出场规则：${ensureArray(backtest.params && backtest.params.exit_rules, []).join(" + ")}</span>
+    </div>
+    <div class="rldScroll" style="max-height:260px;">
+      <table class="rldTable">
+        <thead><tr><th>代码</th><th>名称</th><th>交易数</th><th>收益</th><th>最大回撤</th><th>胜率</th><th>Profit Factor</th></tr></thead>
+        <tbody>
+          ${backtest.rows.map((row) => `<tr><td>${row.code}</td><td>${row.name || "-"}</td><td>${row.trade_count}</td><td>${rldPct(row.return)}</td><td>${rldPct(row.max_drawdown)}</td><td>${rldPct(row.win_rate)}</td><td>${row.profit_factor === null || row.profit_factor === undefined ? "-" : rldNumber(row.profit_factor, 3)}</td></tr>`).join("")}
+        </tbody>
+      </table>
+    </div>
+    <div class="rldCardTitle" style="margin-top:12px;">最近交易明细</div>
+    <div class="rldScroll" style="max-height:220px;">
+      <table class="rldTable">
+        <thead><tr><th>代码</th><th>方向</th><th>时间</th><th>价格</th><th>股数</th><th>盈亏</th><th>原因</th></tr></thead>
+        <tbody>
+          ${ensureArray(backtest.trades, []).slice(-80).reverse().map((row) => `<tr><td>${row.code}</td><td>${row.side}</td><td>${row.time || "-"}</td><td>${rldNumber(row.price, 4)}</td><td>${row.shares || "-"}</td><td>${row.pnl === undefined ? "-" : rldNumber(row.pnl, 2)}</td><td>${ensureArray(row.reason, []).join("；")}</td></tr>`).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function rldRefresh(payload, message) {
+  rldPayload = payload;
+  rldRenderHeader(payload);
+  rldRenderSummary(payload);
+  rldRenderLevelMatrix(payload);
+  rldRenderBacktest(payload);
+  rldRenderStatus(payload, message || payload.message || "");
+  const firstLevel = payload && payload.analysis && payload.analysis.levels && payload.analysis.levels[0];
+  if (!rldCrosshairTime && firstLevel && firstLevel.chart && firstLevel.chart.kline && firstLevel.chart.kline.length > 0) {
+    rldCrosshairTime = firstLevel.chart.kline[firstLevel.chart.kline.length - 1].t;
+  }
+  rldRenderPerspective();
+  rldDrawAllCharts();
+}
+
+function rldBindCanvasInteractions() {
+  for (let i = 1; i <= 3; i++) {
+    const canvasEl = $(`rldChart${i}`);
+    if (!canvasEl || canvasEl.dataset.bound === "1") continue;
+    canvasEl.dataset.bound = "1";
+    canvasEl.addEventListener("mousemove", (e) => {
+      if (!rldPayload || !rldPayload.ready) return;
+      const levelItem = rldPayload.analysis && rldPayload.analysis.levels ? rldPayload.analysis.levels[i - 1] : null;
+      const chart = levelItem && levelItem.chart;
+      if (!chart || !chart.kline || chart.kline.length <= 0) return;
+      const rect = canvasEl.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const idx = Math.max(0, Math.min(chart.kline.length - 1, Math.round(((x - 56) / Math.max(1, rect.width - 70)) * (chart.kline.length - 1))));
+      const k = chart.kline[idx];
+      if (!k) return;
+      rldCrosshairTime = k.t;
+      rldRenderPerspective();
+      rldDrawAllCharts();
+    });
+  }
+}
+
+function rldSetTopTab(tab) {
+  rldActiveTopTab = tab === "rld" ? "rld" : "trainer";
+  storageSet("chan_top_active_tab", rldActiveTopTab);
+  $("topTabTrainer").classList.toggle("active", rldActiveTopTab === "trainer");
+  $("topTabRld").classList.toggle("active", rldActiveTopTab === "rld");
+  $("pageTrainer").classList.toggle("active", rldActiveTopTab === "trainer");
+  $("pageRld").classList.toggle("active", rldActiveTopTab === "rld");
+  if (rldActiveTopTab === "trainer") {
+    requestAnimationFrame(() => {
+      resizeCanvas();
+      if (lastPayload && lastPayload.ready) draw(lastPayload.chart);
+      updateCompactLayout();
+    });
+  } else {
+    requestAnimationFrame(() => {
+      rldDrawAllCharts();
+      rldRenderPerspective();
+    });
+  }
+}
+
+function rldBindUi() {
+  rldPopulateLevelSelect("rldLv1", storageGet(rldStorageKey("lv1")) || "day");
+  rldPopulateLevelSelect("rldLv2", storageGet(rldStorageKey("lv2")) || "60m");
+  rldPopulateLevelSelect("rldLv3", storageGet(rldStorageKey("lv3")) || "15m");
+  if ($("rldAutype")) $("rldAutype").value = storageGet(rldStorageKey("autype")) || "qfq";
+  if ($("rldRuleLogic")) $("rldRuleLogic").value = storageGet(rldStorageKey("logic")) || "and";
+  if ($("topTabTrainer") && !$("topTabTrainer").dataset.bound) {
+    $("topTabTrainer").dataset.bound = "1";
+    $("topTabTrainer").onclick = () => rldSetTopTab("trainer");
+    $("topTabRld").onclick = () => rldSetTopTab("rld");
+  }
+  const bindBtn = (id, fn) => {
+    const el = $(id);
+    if (!el || el.dataset.bound === "1") return;
+    el.dataset.bound = "1";
+    el.onclick = fn;
+  };
+  bindBtn("rldBtnInit", async () => {
+    try {
+      const body = rldCollectForm();
+      const payload = await rldCall("/api/rld/init", body, "POST", "正在加载融立得工作台...");
+      storageSet(rldStorageKey("lv1"), body.lv_list[0]);
+      storageSet(rldStorageKey("lv2"), body.lv_list[1]);
+      storageSet(rldStorageKey("lv3"), body.lv_list[2]);
+      storageSet(rldStorageKey("autype"), body.autype);
+      storageSet(rldStorageKey("logic"), $("rldRuleLogic").value);
+      rldSaveForm();
+      rldRefresh(payload, payload.message || "加载成功");
+    } catch (e) {
+      rldSetStatus(`加载失败：${e.message}`, "error");
+    }
+  });
+  bindBtn("rldBtnReconfig", async () => {
+    try {
+      const form = rldCollectForm();
+      const payload = await rldCall("/api/rld/reconfig", {
+        chan_config: form.chan_config,
+        strategy_config: form.strategy_config,
+        watchlist_or_sector: form.watchlist_or_sector,
+        lv_list: form.lv_list,
+      }, "POST", "正在应用融立得配置...");
+      rldSaveForm();
+      rldRefresh(payload, payload.message || "配置已更新");
+    } catch (e) {
+      rldSetStatus(`应用配置失败：${e.message}`, "error");
+    }
+  });
+  bindBtn("rldBtnMatrix", async () => {
+    try {
+      const payload = await rldCall("/api/rld/matrix", {
+        watchlist_or_sector: $("rldWatchlist").value,
+      }, "POST", "正在刷新多股矩阵...");
+      rldRefresh(payload, payload.message || "矩阵已刷新");
+    } catch (e) {
+      rldSetStatus(`矩阵刷新失败：${e.message}`, "error");
+    }
+  });
+  bindBtn("rldBtnBacktest", async () => {
+    try {
+      const payload = await rldCall("/api/rld/backtest", {
+        entry_rules: rldGetSelectedRules("rldEntryRule"),
+        exit_rules: rldGetSelectedRules("rldExitRule"),
+        logic: $("rldRuleLogic").value,
+        execution_mode: "next_open",
+        fee: Number($("rldFee").value),
+        slippage: Number($("rldSlippage").value),
+        codes: parseCodeListForBacktest($("rldWatchlist").value),
+        watchlist_or_sector: $("rldWatchlist").value,
+      }, "POST", "正在运行回归评测...");
+      rldSaveForm();
+      rldRefresh(payload, payload.message || "回测完成");
+    } catch (e) {
+      rldSetStatus(`回测失败：${e.message}`, "error");
+    }
+  });
+  bindBtn("rldBtnReset", async () => {
+    try {
+      const payload = await rldCall("/api/rld/reset", {}, "POST", "正在重置融立得工作台...");
+      rldPayload = null;
+      rldCrosshairTime = null;
+      rldRefresh(payload, payload.message || "已重置");
+    } catch (e) {
+      rldSetStatus(`重置失败：${e.message}`, "error");
+    }
+  });
+  rldBindCanvasInteractions();
+  const savedTab = storageGet("chan_top_active_tab") || "trainer";
+  rldSetTopTab(savedTab);
+}
+
+function parseCodeListForBacktest(text) {
+  const matched = String(text || "").match(/\d{6}/g);
+  return matched ? matched.slice(0, 12) : [];
+}
+
+async function rldRestoreState() {
+  try {
+    const payload = await api("/api/rld/state", null, "GET");
+    if (payload && payload.ready) {
+      rldRefresh(payload, "已恢复融立得工作台会话。");
+    } else {
+      rldRenderSummary(null);
+      rldRenderLevelMatrix(null);
+      rldRenderBacktest(null);
+      rldRenderPerspective();
+    }
+  } catch (e) {
+    console.warn("恢复融立得工作台失败:", e);
+  }
+}
+
 function verifyCriticalUiBindings() {
   const checks = [
     { id: "btnInit", ok: () => typeof $("btnInit").onclick === "function" || $("btnInit").dataset.bound === "1" },
@@ -8152,6 +10587,8 @@ function verifyCriticalUiBindings() {
 }
 
 (async () => {
+  rldEnsureShell();
+  rldBindUi();
   loadSessionConfig();
   applyThemeFromSelect();
   hideGlobalLoading();
@@ -8174,6 +10611,7 @@ function verifyCriticalUiBindings() {
   }
   updateDataSourceStatus(lastPayload);
   updateCompactLayout();
+  await rldRestoreState();
   verifyCriticalUiBindings();
 })();
 </script>
@@ -8184,6 +10622,7 @@ function verifyCriticalUiBindings() {
 
 APP_STATE = AppState()
 APP_STOCK_NAME: Optional[str] = None
+RLD_APP_STATE = RldAppState()
 
 
 @asynccontextmanager
@@ -8369,6 +10808,65 @@ def api_back_n(req: BackNReq):
 @app.get("/api/state")
 def api_state():
     return APP_STATE.build_payload(stock_name=APP_STOCK_NAME)
+
+
+@app.post("/api/rld/init")
+def api_rld_init(req: RldInitReq):
+    try:
+        RLD_APP_STATE.init(req)
+        payload = RLD_APP_STATE.build_payload()
+        payload["message"] = f"融立得工作台已加载：{payload.get('name') or payload.get('code')}"
+        return payload
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.get("/api/rld/state")
+def api_rld_state():
+    return RLD_APP_STATE.build_payload()
+
+
+@app.post("/api/rld/reconfig")
+def api_rld_reconfig(req: RldReconfigReq):
+    try:
+        RLD_APP_STATE.reconfig(req)
+        payload = RLD_APP_STATE.build_payload()
+        payload["message"] = "融立得工作台配置已更新"
+        return payload
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.post("/api/rld/matrix")
+def api_rld_matrix(req: RldMatrixReq):
+    try:
+        result = RLD_APP_STATE.build_matrix(req)
+        payload = RLD_APP_STATE.build_payload()
+        payload["matrix"] = result
+        payload["message"] = f"矩阵评估完成，共 {result['meta'].get('count', 0)} 个标的"
+        return payload
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.post("/api/rld/backtest")
+def api_rld_backtest(req: RldBacktestReq):
+    try:
+        result = RLD_APP_STATE.run_backtest(req)
+        payload = RLD_APP_STATE.build_payload()
+        payload["backtest"] = result
+        payload["message"] = f"回归评测完成，共 {result['summary'].get('count', 0)} 个标的"
+        return payload
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.post("/api/rld/reset")
+def api_rld_reset():
+    RLD_APP_STATE.reset()
+    payload = RLD_APP_STATE.build_payload()
+    payload["message"] = "融立得工作台已重置"
+    return payload
 
 
 @app.post("/api/finish")
