@@ -12,6 +12,30 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
+# 尝试导入其他数据源库
+try:
+    import ashare
+    HAS_ASHARE = True
+except ImportError:
+    HAS_ASHARE = False
+try:
+    import adata
+    HAS_ADATA = True
+except ImportError:
+    HAS_ADATA = False
+try:
+    import pytdx
+    HAS_PYTDX = True
+except ImportError:
+    HAS_PYTDX = False
+try:
+    import yfinance as yf
+    HAS_YFINANCE = True
+except ImportError:
+    HAS_YFINANCE = False
+import requests
+from bs4 import BeautifulSoup
+
 from Bi.Bi import CBi
 from BuySellPoint.BSPointList import CBSPointList
 from Chan import CChan
@@ -82,11 +106,36 @@ EASTMONEY_INLINE_SRC = "inline:eastmoney"
 CONFIG_DATA_SRC_PRIORITY: list = []
 CONFIG_OHLC_SRC: Any = None  # 开高低收数据源，默认第一个可用
 CONFIG_VOL_SRC: Any = None   # 成交量数据源，默认第一个可用
-DATA_SOURCE_CHAIN: list[tuple[str, Any]] = [
+
+# 扩展后的数据源链，支持K线和筹码数据源分离
+DATA_SOURCE_CHAIN_KLINE: list[tuple[str, Any]] = [
     ("AKShare", AKSHARE_INLINE_SRC),
+    ("Ashare", "inline:ashare"),
+    ("AData", "inline:adata"),
+    ("pytdx", PYTDX_INLINE_SRC),
     ("BaoStock", DATA_SRC.BAO_STOCK),
     ("Tushare", TUSHARE_INLINE_SRC),
+    ("新浪财经", SINA_INLINE_SRC),
+    ("腾讯财经", TENCENT_INLINE_SRC),
+    ("雅虎财经", YAHOO_INLINE_SRC),
+    ("东方财富", EASTMONEY_INLINE_SRC),
 ]
+
+DATA_SOURCE_CHAIN_CHIP = DATA_SOURCE_CHAIN_KLINE  # 筹码默认使用相同配置
+
+# 数据源显示名称映射
+DATA_SOURCE_LABELS = {
+    AKSHARE_INLINE_SRC: "AKShare",
+    "inline:ashare": "Ashare",
+    "inline:adata": "AData",
+    PYTDX_INLINE_SRC: "pytdx",
+    DATA_SRC.BAO_STOCK: "BaoStock",
+    TUSHARE_INLINE_SRC: "Tushare",
+    SINA_INLINE_SRC: "新浪财经",
+    TENCENT_INLINE_SRC: "腾讯财经",
+    YAHOO_INLINE_SRC: "雅虎财经",
+    EASTMONEY_INLINE_SRC: "东方财富",
+}
 
 
 def parse_k_type(raw: str) -> KL_TYPE:
@@ -339,12 +388,559 @@ class CTushareInline(CCommonStockApi):
             yield CKLine_Unit(item)
 
 
+class CAshareInline(CCommonStockApi):
+    """使用 Ashare 库获取K线数据"""
+    def __init__(self, code, k_type=KL_TYPE.K_DAY, begin_date=None, end_date=None, autype=AUTYPE.QFQ):
+        self.symbol = _strip_market_prefix(code)
+        super(CAshareInline, self).__init__(code, k_type, begin_date, end_date, autype)
+
+    def get_kl_data(self):
+        if not HAS_ASHARE:
+            raise RuntimeError("未安装 ashare 库，请运行：pip install ashare")
+        # Ashare 支持周期映射
+        period_map = {
+            KL_TYPE.K_1M: "1m",
+            KL_TYPE.K_5M: "5m",
+            KL_TYPE.K_15M: "15m",
+            KL_TYPE.K_30M: "30m",
+            KL_TYPE.K_60M: "60m",
+            KL_TYPE.K_DAY: "d",
+            KL_TYPE.K_WEEK: "w",
+            KL_TYPE.K_MON: "m",
+        }
+        if self.k_type not in period_map:
+            raise ValueError(f"Ashare 暂不支持 {self.k_type} 级别")
+        
+        start_date = (self.begin_date or "1990-01-01").replace("-", "")
+        end_date = (self.end_date or "2099-12-31").replace("-", "")
+        
+        # 调用 ashare 获取K线
+        # 注意：ashare的API可能需要调整，这里提供示例结构
+        try:
+            from ashare import get_price
+            df = get_price(
+                self.symbol,
+                start_date=start_date,
+                end_date=end_date,
+                frequency=period_map[self.k_type],
+                fq=self.autype.name.lower() if self.autype != AUTYPE.NONE else None
+            )
+        except Exception as e:
+            raise RuntimeError(f"Ashare 获取数据失败: {e}")
+        
+        if df is None or df.empty:
+            return
+        
+        for _, row in df.iterrows():
+            item = {
+                DATA_FIELD.FIELD_TIME: _parse_inline_date(row.get("date") or row.get("time")),
+                DATA_FIELD.FIELD_OPEN: str2float(row.get("open", 0)),
+                DATA_FIELD.FIELD_HIGH: str2float(row.get("high", 0)),
+                DATA_FIELD.FIELD_LOW: str2float(row.get("low", 0)),
+                DATA_FIELD.FIELD_CLOSE: str2float(row.get("close", 0)),
+                DATA_FIELD.FIELD_VOLUME: str2float(row.get("volume", 0)),
+                DATA_FIELD.FIELD_TURNOVER: str2float(row.get("amount", 0)),
+            }
+            yield CKLine_Unit(item)
+
+    def SetBasciInfo(self):
+        self.name = self.code
+        self.is_stock = True
+
+    @classmethod
+    def do_init(cls):
+        pass
+
+    @classmethod
+    def do_close(cls):
+        pass
+
+
+class CADataInline(CCommonStockApi):
+    """使用 AData 库获取K线数据"""
+    def __init__(self, code, k_type=KL_TYPE.K_DAY, begin_date=None, end_date=None, autype=AUTYPE.QFQ):
+        self.symbol = _strip_market_prefix(code)
+        super(CADataInline, self).__init__(code, k_type, begin_date, end_date, autype)
+
+    def get_kl_data(self):
+        if not HAS_ADATA:
+            raise RuntimeError("未安装 adata 库，请运行：pip install adata")
+        
+        period_map = {
+            KL_TYPE.K_1M: "1m",
+            KL_TYPE.K_5M: "5m",
+            KL_TYPE.K_15M: "15m",
+            KL_TYPE.K_30M: "30m",
+            KL_TYPE.K_60M: "60m",
+            KL_TYPE.K_DAY: "d",
+            KL_TYPE.K_WEEK: "w",
+        }
+        if self.k_type not in period_map:
+            raise ValueError(f"AData 暂不支持 {self.k_type} 级别")
+        
+        start_date = (self.begin_date or "1990-01-01").replace("-", "")
+        end_date = (self.end_date or "2099-12-31").replace("-", "")
+        
+        try:
+            from adata import get_stock_price
+            df = get_stock_price(
+                code=self.symbol,
+                start_date=start_date,
+                end_date=end_date,
+                freq=period_map[self.k_type],
+                adj="qfq" if self.autype == AUTYPE.QFQ else ("hfq" if self.autype == AUTYPE.HFQ else "none")
+            )
+        except Exception as e:
+            raise RuntimeError(f"AData 获取数据失败: {e}")
+        
+        if df is None or df.empty:
+            return
+        
+        for _, row in df.iterrows():
+            item = {
+                DATA_FIELD.FIELD_TIME: _parse_inline_date(row.get("date") or row.get("time")),
+                DATA_FIELD.FIELD_OPEN: str2float(row.get("open", 0)),
+                DATA_FIELD.FIELD_HIGH: str2float(row.get("high", 0)),
+                DATA_FIELD.FIELD_LOW: str2float(row.get("low", 0)),
+                DATA_FIELD.FIELD_CLOSE: str2float(row.get("close", 0)),
+                DATA_FIELD.FIELD_VOLUME: str2float(row.get("volume", 0)),
+                DATA_FIELD.FIELD_TURNOVER: str2float(row.get("amount", 0)),
+            }
+            yield CKLine_Unit(item)
+
+    def SetBasciInfo(self):
+        self.name = self.code
+        self.is_stock = True
+
+    @classmethod
+    def do_init(cls):
+        pass
+
+    @classmethod
+    def do_close(cls):
+        pass
+
+
+class CPytdxInline(CCommonStockApi):
+    """使用 pytdx 库获取K线数据"""
+    def __init__(self, code, k_type=KL_TYPE.K_DAY, begin_date=None, end_date=None, autype=AUTYPE.QFQ):
+        self.symbol = code  # pytdx 需要完整代码如 "000001"
+        super(CPytdxInline, self).__init__(code, k_type, begin_date, end_date, autype)
+
+    def get_kl_data(self):
+        if not HAS_PYTDX:
+            raise RuntimeError("未安装 pytdx 库，请运行：pip install pytdx")
+        
+        period_map = {
+            KL_TYPE.K_1M: 8,   # 1分钟
+            KL_TYPE.K_5M: 0,   # 5分钟
+            KL_TYPE.K_15M: 1,  # 15分钟
+            KL_TYPE.K_30M: 2,  # 30分钟
+            KL_TYPE.K_60M: 3,  # 60分钟
+            KL_TYPE.K_DAY: 9,   # 日线
+            KL_TYPE.K_WEEK: 5, # 周线
+            KL_TYPE.K_MON: 6,   # 月线
+        }
+        if self.k_type not in period_map:
+            raise ValueError(f"pytdx 暂不支持 {self.k_type} 级别")
+        
+        try:
+            from pytdx.hq import TdxHq_API
+            api = TdxHq_API()
+            api.connect('119.147.212.81', 7709)  # 使用标准行情服务器
+            
+            # 确定市场代码
+            market = 0 if str(self.symbol).startswith("6") else 1
+            symbol = str(self.symbol).replace("sh.", "").replace("sz.", "")
+            
+            # 获取数据
+            data = api.get_security_bars(
+                period_map[self.k_type],
+                market,
+                symbol,
+                0,  # 起始位置
+                800  # 获取数量
+            )
+            api.disconnect()
+            
+            if not data:
+                return
+            
+            import datetime
+            for bar in data:
+                # pytdx 返回的数据格式转换
+                dt = datetime.datetime.fromtimestamp(bar['datetime'])
+                item = {
+                    DATA_FIELD.FIELD_TIME: CTime(dt.year, dt.month, dt.day, dt.hour, dt.minute),
+                    DATA_FIELD.FIELD_OPEN: float(bar['open']),
+                    DATA_FIELD.FIELD_HIGH: float(bar['high']),
+                    DATA_FIELD.FIELD_LOW: float(bar['low']),
+                    DATA_FIELD.FIELD_CLOSE: float(bar['close']),
+                    DATA_FIELD.FIELD_VOLUME: float(bar.get('vol', 0)),
+                    DATA_FIELD.FIELD_TURNOVER: float(bar.get('amount', 0)),
+                }
+                yield CKLine_Unit(item)
+                
+        except Exception as e:
+            raise RuntimeError(f"pytdx 获取数据失败: {e}")
+
+    def SetBasciInfo(self):
+        self.name = self.code
+        self.is_stock = True
+
+    @classmethod
+    def do_init(cls):
+        pass
+
+    @classmethod
+    def do_close(cls):
+        pass
+
+
+class CSinaInline(CCommonStockApi):
+    """使用新浪财经爬虫获取K线数据"""
+    def __init__(self, code, k_type=KL_TYPE.K_DAY, begin_date=None, end_date=None, autype=AUTYPE.QFQ):
+        self.symbol = self._to_sina_code(code)
+        super(CSinaInline, self).__init__(code, k_type, begin_date, end_date, autype)
+
+    @staticmethod
+    def _to_sina_code(code: str) -> str:
+        """转换为新浪代码格式：sh000001 或 sz000001"""
+        raw = str(code or "").strip().lower()
+        if raw.startswith("sh.") or raw.startswith("sz."):
+            return raw.replace(".", "")
+        if len(raw) == 6 and raw.isdigit():
+            return ("sh" if raw.startswith("6") else "sz") + raw
+        return raw
+
+    def get_kl_data(self):
+        # 新浪财经K线接口
+        period_map = {
+            KL_TYPE.K_1M: "m1",
+            KL_TYPE.K_5M: "m5",
+            KL_TYPE.K_15M: "m15",
+            KL_TYPE.K_30M: "m30",
+            KL_TYPE.K_60M: "m60",
+            KL_TYPE.K_DAY: "d",
+            KL_TYPE.K_WEEK: "w",
+        }
+        if self.k_type not in period_map:
+            raise ValueError(f"新浪财经暂不支持 {self.k_type} 级别")
+        
+        start_date = (self.begin_date or "1990-01-01").replace("-", "")
+        end_date = (self.end_date or "2099-12-31").replace("-", "")
+        
+        # 新浪K线接口URL
+        url = f"http://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData"
+        params = {
+            "symbol": self.symbol,
+            "scale": period_map[self.k_type].replace("m", ""),
+            "ma": "no",
+            "datalen": 800
+        }
+        
+        try:
+            response = requests.get(url, params=params, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            
+            if not data:
+                return
+            
+            for item in data:
+                # 新浪返回的时间格式：2024-01-01
+                dt = str(item.get("day", ""))
+                if len(dt) >= 10:
+                    ct = CTime(int(dt[:4]), int(dt[5:7]), int(dt[8:10]), 0, 0)
+                else:
+                    continue
+                
+                kline_item = {
+                    DATA_FIELD.FIELD_TIME: ct,
+                    DATA_FIELD.FIELD_OPEN: str2float(item.get("open", 0)),
+                    DATA_FIELD.FIELD_HIGH: str2float(item.get("high", 0)),
+                    DATA_FIELD.FIELD_LOW: str2float(item.get("low", 0)),
+                    DATA_FIELD.FIELD_CLOSE: str2float(item.get("close", 0)),
+                    DATA_FIELD.FIELD_VOLUME: str2float(item.get("volume", 0)),
+                    DATA_FIELD.FIELD_TURNOVER: str2float(item.get("amount", 0)),
+                }
+                yield CKLine_Unit(kline_item)
+                
+        except Exception as e:
+            raise RuntimeError(f"新浪财经获取数据失败: {e}")
+
+    def SetBasciInfo(self):
+        self.name = self.code
+        self.is_stock = True
+
+    @classmethod
+    def do_init(cls):
+        pass
+
+    @classmethod
+    def do_close(cls):
+        pass
+
+
+class CTencentInline(CCommonStockApi):
+    """使用腾讯财经爬虫获取K线数据"""
+    def __init__(self, code, k_type=KL_TYPE.K_DAY, begin_date=None, end_date=None, autype=AUTYPE.QFQ):
+        self.symbol = self._to_tencent_code(code)
+        super(CTencentInline, self).__init__(code, k_type, begin_date, end_date, autype)
+
+    @staticmethod
+    def _to_tencent_code(code: str) -> str:
+        """转换为腾讯代码格式：sh000001 或 sz000001"""
+        raw = str(code or "").strip().lower()
+        if raw.startswith("sh.") or raw.startswith("sz."):
+            return raw.replace(".", "")
+        if len(raw) == 6 and raw.isdigit():
+            return ("sh" if raw.startswith("6") else "sz") + raw
+        return raw
+
+    def get_kl_data(self):
+        # 腾讯财经K线接口
+        period_map = {
+            KL_TYPE.K_1M: "m1",
+            KL_TYPE.K_5M: "m5",
+            KL_TYPE.K_15M: "m15",
+            KL_TYPE.K_30M: "m30",
+            KL_TYPE.K_60M: "m60",
+            KL_TYPE.K_DAY: "d",
+        }
+        if self.k_type not in period_map:
+            raise ValueError(f"腾讯财经暂不支持 {self.k_type} 级别")
+        
+        # 腾讯K线接口URL
+        url = f"http://data.gtimg.cn/flashdata/hushen/daily/{self.symbol}.js"
+        if self.k_type != KL_TYPE.K_DAY:
+            # 分钟线使用不同接口
+            url = f"http://data.gtimg.cn/flashdata/hushen/minute/{self.symbol}.js"
+        
+        try:
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            # 解析返回的数据（通常是JS格式）
+            text = response.text
+            # 简化解析，实际需要更复杂解析
+            raise NotImplementedError("腾讯财经数据解析待实现")
+            
+        except Exception as e:
+            raise RuntimeError(f"腾讯财经获取数据失败: {e}")
+
+    def SetBasciInfo(self):
+        self.name = self.code
+        self.is_stock = True
+
+    @classmethod
+    def do_init(cls):
+        pass
+
+    @classmethod
+    def do_close(cls):
+        pass
+
+
+class CYahooInline(CCommonStockApi):
+    """使用 Yahoo Finance 获取K线数据"""
+    def __init__(self, code, k_type=KL_TYPE.K_DAY, begin_date=None, end_date=None, autype=AUTYPE.QFQ):
+        self.symbol = self._to_yahoo_code(code)
+        super(CYahooInline, self).__init__(code, k_type, begin_date, end_date, autype)
+
+    @staticmethod
+    def _to_yahoo_code(code: str) -> str:
+        """转换为Yahoo代码格式：600340.SS 或 000001.SZ"""
+        raw = str(code or "").strip()
+        if raw.startswith("sh."):
+            return raw[3:] + ".SS"
+        if raw.startswith("sz."):
+            return raw[3:] + ".SZ"
+        if len(raw) == 6 and raw.isdigit():
+            return raw + (".SS" if raw.startswith("6") else ".SZ")
+        return raw
+
+    def get_kl_data(self):
+        if not HAS_YFINANCE:
+            raise RuntimeError("未安装 yfinance 库，请运行：pip install yfinance")
+        
+        period_map = {
+            KL_TYPE.K_1M: "1m",
+            KL_TYPE.K_5M: "5m",
+            KL_TYPE.K_15M: "15m",
+            KL_TYPE.K_30M: "30m",
+            KL_TYPE.K_60M: "60m",
+            KL_TYPE.K_DAY: "1d",
+            KL_TYPE.K_WEEK: "1wk",
+            KL_TYPE.K_MON: "1mo",
+        }
+        if self.k_type not in period_map:
+            raise ValueError(f"Yahoo Finance 暂不支持 {self.k_type} 级别")
+        
+        try:
+            ticker = yf.Ticker(self.symbol)
+            df = ticker.history(
+                start=self.begin_date or "1990-01-01",
+                end=self.end_date or "2099-12-31",
+                interval=period_map[self.k_type]
+            )
+            
+            if df is None or df.empty:
+                return
+            
+            for idx, row in df.iterrows():
+                item = {
+                    DATA_FIELD.FIELD_TIME: CTime(idx.year, idx.month, idx.day, idx.hour if hasattr(idx, 'hour') else 0, idx.minute if hasattr(idx, 'minute') else 0),
+                    DATA_FIELD.FIELD_OPEN: float(row['Open']),
+                    DATA_FIELD.FIELD_HIGH: float(row['High']),
+                    DATA_FIELD.FIELD_LOW: float(row['Low']),
+                    DATA_FIELD.FIELD_CLOSE: float(row['Close']),
+                    DATA_FIELD.FIELD_VOLUME: float(row['Volume']),
+                    DATA_FIELD.FIELD_TURNOVER: float(row.get('Amount', 0)),
+                }
+                yield CKLine_Unit(item)
+                
+        except Exception as e:
+            raise RuntimeError(f"Yahoo Finance 获取数据失败: {e}")
+
+    def SetBasciInfo(self):
+        self.name = self.code
+        self.is_stock = True
+
+    @classmethod
+    def do_init(cls):
+        pass
+
+    @classmethod
+    def do_close(cls):
+        pass
+
+
+class CEastmoneyInline(CCommonStockApi):
+    """使用东方财富网爬虫获取K线数据"""
+    def __init__(self, code, k_type=KL_TYPE.K_DAY, begin_date=None, end_date=None, autype=AUTYPE.QFQ):
+        self.symbol = _strip_market_prefix(code)
+        super(CEastmoneyInline, self).__init__(code, k_type, begin_date, end_date, autype)
+
+    def get_kl_data(self):
+        # 东方财富K线接口
+        period_map = {
+            KL_TYPE.K_1M: "1",
+            KL_TYPE.K_5M: "5",
+            KL_TYPE.K_15M: "15",
+            KL_TYPE.K_30M: "30",
+            KL_TYPE.K_60M: "60",
+            KL_TYPE.K_DAY: "101",
+            KL_TYPE.K_WEEK: "102",
+        }
+        if self.k_type not in period_map:
+            raise ValueError(f"东方财富暂不支持 {self.k_type} 级别")
+        
+        start_date = (self.begin_date or "1990-01-01").replace("-", "")
+        end_date = (self.end_date or "2099-12-31").replace("-", "")
+        
+        # 东方财富接口URL
+        url = "http://push2his.eastmoney.com/api/qt/stock/kline/get"
+        params = {
+            "secid": ("1." if str(self.symbol).startswith("6") else "0.") + self.symbol,
+            "fields1": "f1,f2,f3,f4,f5",
+            "fields2": "f51,f52,f53,f54,f55,f56,f57,f58",
+            "klt": period_map[self.k_type],
+            "fqt": "1" if self.autype == AUTYPE.QFQ else ("2" if self.autype == AUTYPE.HFQ else "0"),
+            "beg": start_date,
+            "end": end_date,
+        }
+        
+        try:
+            response = requests.get(url, params=params, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            
+            if not data or 'data' not in data or 'klines' not in data['data']:
+                return
+            
+            for line in data['data']['klines']:
+                parts = line.split(",")
+                if len(parts) < 6:
+                    continue
+                # 格式：日期,开盘,收盘,最高,最低,成交量,成交额
+                dt = str(parts[0])
+                if len(dt) >= 8:
+                    ct = CTime(int(dt[:4]), int(dt[4:6]), int(dt[6:8]), 0, 0)
+                else:
+                    continue
+                
+                kline_item = {
+                    DATA_FIELD.FIELD_TIME: ct,
+                    DATA_FIELD.FIELD_OPEN: str2float(parts[1]),
+                    DATA_FIELD.FIELD_CLOSE: str2float(parts[2]),
+                    DATA_FIELD.FIELD_HIGH: str2float(parts[3]),
+                    DATA_FIELD.FIELD_LOW: str2float(parts[4]),
+                    DATA_FIELD.FIELD_VOLUME: str2float(parts[5]),
+                    DATA_FIELD.FIELD_TURNOVER: str2float(parts[6]) if len(parts) > 6 else 0,
+                }
+                yield CKLine_Unit(kline_item)
+                
+        except Exception as e:
+            raise RuntimeError(f"东方财富获取数据失败: {e}")
+
+    def SetBasciInfo(self):
+        self.name = self.code
+        self.is_stock = True
+
+    @classmethod
+    def do_init(cls):
+        pass
+
+    @classmethod
+    def do_close(cls):
+        pass
+
+
+def get_stock_api_cls(data_src: Any):
+    """根据数据源返回对应的API类"""
+    if data_src == DATA_SRC.AKSHARE or data_src == AKSHARE_INLINE_SRC:
+        return CAkshareInline
+    if data_src == DATA_SRC.BAO_STOCK:
+        return CBaoStock
+    if data_src == TUSHARE_INLINE_SRC:
+        return CTushareInline
+    if data_src == "inline:ashare":
+        return CAshareInline
+    if data_src == "inline:adata":
+        return CADataInline
+    if data_src == PYTDX_INLINE_SRC:
+        return CPytdxInline
+    if data_src == SINA_INLINE_SRC:
+        return CSinaInline
+    if data_src == TENCENT_INLINE_SRC:
+        return CTencentInline
+    if data_src == YAHOO_INLINE_SRC:
+        return CYahooInline
+    if data_src == EASTMONEY_INLINE_SRC:
+        return CEastmoneyInline
+    raise ValueError(f"unsupported data source: {data_src}")
+
+
 class ReplayDataChan(CChan):
     def GetStockAPI(self):
         if self.data_src == AKSHARE_INLINE_SRC:
             return CAkshareInline
         if self.data_src == TUSHARE_INLINE_SRC:
             return CTushareInline
+        if self.data_src == "inline:ashare":
+            return CAshareInline
+        if self.data_src == "inline:adata":
+            return CADataInline
+        if self.data_src == PYTDX_INLINE_SRC:
+            return CPytdxInline
+        if self.data_src == SINA_INLINE_SRC:
+            return CSinaInline
+        if self.data_src == TENCENT_INLINE_SRC:
+            return CTencentInline
+        if self.data_src == YAHOO_INLINE_SRC:
+            return CYahooInline
+        if self.data_src == EASTMONEY_INLINE_SRC:
+            return CEastmoneyInline
         return super().GetStockAPI()
 
 
@@ -1321,6 +1917,9 @@ class ChanStepper:
         }
         self.indicator_history = []
         self.trend_lines = []
+        # 数据源分离配置
+        self.data_src_kline: Any = None  # K线数据源（开高低收）
+        self.data_src_chip: Any = None   # 筹码数据源（成交量）
         # 会话级行情缓存：同一股票代码与日期区间下只拉取一次，缠论/BSP 配置变更时仅重算结构。
         self._data_session_key: Optional[tuple[Any, ...]] = None
         self._replay_klus_master: Optional[list] = None
@@ -1340,7 +1939,13 @@ class ChanStepper:
         end_date: Optional[str],
         autype: AUTYPE,
         chan_cfg_dict: dict[str, Any],
+        use_for: str = "kline",  # "kline" 或 "chip"
     ) -> tuple[list, list[dict[str, Any]], Optional[str]]:
+        """从单一数据源获取K线数据。
+        
+        Args:
+            use_for: "kline" 表示用于K线开高低收，"chip" 表示用于筹码成交量
+        """
         cfg_fetch = CChanConfig({**chan_cfg_dict, "trigger_step": False})
         fetch_chan = ReplayDataChan(
             code=self.code,
@@ -1357,16 +1962,16 @@ class ChanStepper:
 
         stock_name: Optional[str] = None
         try:
-            api = create_stock_api_instance(data_src, self.code, begin_date, end_date, autype, self.k_type)
+            api_cls = get_stock_api_cls(data_src)
+            api = api_cls(code=self.code, k_type=self.k_type, begin_date=begin_date, end_date=end_date, autype=autype)
+            api.do_init()
             stock_name = getattr(api, "name", None) or None
+            api.do_close()
         except Exception:
             stock_name = None
-        finally:
-            try:
-                get_stock_api_cls(data_src).do_close()
-            except Exception:
-                pass
 
+        # 筹码数据使用独立的数据源（如果配置了）
+        chip_src = self.data_src_chip if use_for == "chip" and self.data_src_chip else data_src
         chip_begin_date = "1990-01-01"
         try:
             cfg_all = CChanConfig({**chan_cfg_dict, "trigger_step": False})
@@ -1374,7 +1979,7 @@ class ChanStepper:
                 code=self.code,
                 begin_time=chip_begin_date,
                 end_time=end_date,
-                data_src=data_src,
+                data_src=chip_src,
                 lv_list=[self.k_type],
                 config=cfg_all,
                 autype=autype,
@@ -1382,6 +1987,7 @@ class ChanStepper:
             kline_all = serialize_klu_iter(chan_all[0].klu_iter())
         except Exception:
             kline_all = serialize_klu_iter(replay_klus_master)
+
         return replay_klus_master, kline_all, stock_name
 
     def _select_data_source_with_fallback(
@@ -1390,13 +1996,50 @@ class ChanStepper:
         end_date: Optional[str],
         autype: AUTYPE,
         chan_cfg_dict: dict[str, Any],
+        use_for: str = "kline",  # "kline" 或 "chip"
     ) -> DataSourceSelection:
+        """选择数据源，支持K线和筹码分离。
+        
+        Args:
+            use_for: "kline" 表示用于K线开高低收，"chip" 表示用于筹码成交量
+        """
         logs: list[str] = []
         errors: list[str] = []
-        for idx, (label, data_src) in enumerate(DATA_SOURCE_CHAIN):
+        
+        # 确定使用哪个数据源链
+        if use_for == "chip" and self.data_src_chip:
+            # 使用指定的筹码数据源
+            chip_src = self.data_src_chip
+            chip_label = DATA_SOURCE_LABELS.get(chip_src, str(chip_src))
+            print(f"[DataSource] try {chip_label} (chip) for {self.code}")
+            try:
+                replay_klus_master, kline_all, stock_name = self._fetch_from_single_source(
+                    chip_src, begin_date, end_date, autype, chan_cfg_dict, use_for="chip"
+                )
+                logs.append(f"筹码数据源已连接：{chip_label}")
+                return DataSourceSelection(
+                    data_src=chip_src,
+                    label=chip_label,
+                    logs=logs,
+                    replay_klus_master=replay_klus_master,
+                    kline_all=kline_all,
+                    stock_name=stock_name,
+                )
+            except Exception as exc:
+                detail = format_source_error(exc)
+                errors.append(f"{chip_label} 失败：{detail}")
+                logs.append(f"筹码数据源尝试失败：{chip_label}")
+                print(f"[DataSource] chip source failed: {detail}")
+                # 失败后继续使用K线数据源链
+        
+        # 使用K线数据源链
+        data_chain = DATA_SOURCE_CHAIN_KLINE
+        for idx, (label, data_src) in enumerate(data_chain):
             print(f"[DataSource] try {label} for {self.code} {begin_date} -> {end_date or 'latest'}")
             try:
-                replay_klus_master, kline_all, stock_name = self._fetch_from_single_source(data_src, begin_date, end_date, autype, chan_cfg_dict)
+                replay_klus_master, kline_all, stock_name = self._fetch_from_single_source(
+                    data_src, begin_date, end_date, autype, chan_cfg_dict, use_for=use_for
+                )
                 if idx == 0:
                     logs.append(f"数据源已连接：{label}")
                 else:
@@ -1434,6 +2077,10 @@ class ChanStepper:
         # 解析并设置周期类型
         self.k_type = parse_k_type(k_type)
         
+        # 解析数据源配置（从系统配置或参数）
+        self.data_src_kline = None
+        self.data_src_chip = None
+        
         cfg_dict = {
             "chan_algo": CHAN_ALGO_CLASSIC,
             "bi_strict": True,
@@ -1453,6 +2100,9 @@ class ChanStepper:
             "kl_data_check": True,
             "print_warning": False,
             "print_err_time": False,
+            # 数据源配置
+            "data_src_kline": None,  # K线数据源
+            "data_src_chip": None,   # 筹码数据源
             # BSP defaults
             "divergence_rate": float("inf"),
             "min_zs_cnt": 1,
@@ -1492,6 +2142,14 @@ class ChanStepper:
                                 except (ValueError, TypeError):
                                     pass
                         cfg_dict["macd"] = macd_dict
+                    elif k == "data_src_kline" and v:
+                        # 设置K线数据源
+                        self.data_src_kline = v
+                        cfg_dict["data_src_kline"] = v
+                    elif k == "data_src_chip" and v:
+                        # 设置筹码数据源
+                        self.data_src_chip = v
+                        cfg_dict["data_src_chip"] = v
                     else:
                         cfg_dict[k] = v
 
@@ -1948,6 +2606,10 @@ class AppState:
         if self.session_params is None:
             raise ValueError("当前无可重建会话")
         params = self.session_params
+        # 恢复数据源配置
+        data_src_kline = params.get("data_src_kline")
+        data_src_chip = params.get("data_src_chip")
+        
         self.stepper.init(
             params["code"],
             params["begin_date"],
@@ -1956,6 +2618,12 @@ class AppState:
             chan_config=params.get("chan_config"),
             k_type=params.get("k_type", "daily"),  # 重建时保留周期类型
         )
+        # 恢复数据源配置到stepper
+        if data_src_kline:
+            self.stepper.data_src_kline = data_src_kline
+        if data_src_chip:
+            self.stepper.data_src_chip = data_src_chip
+            
         # Account reset is handled by the caller if needed (e.g. in reconfig)
         # but for back_n it should stay consistent with history.
         # However, rebuild_to_step is also used by back_n which needs to replay trades.
@@ -3370,7 +4038,11 @@ const DEFAULT_SYSTEM_CONFIG = {
   shortcuts: SHORTCUT_ACTIONS.reduce((acc, action) => {
     acc[action.id] = action.defaults.slice();
     return acc;
-  }, {})
+  }, {}),
+  // 数据源配置
+  dataSourcePriority: ["AKShare", "Ashare", "AData", "pytdx", "BaoStock", "Tushare", "新浪财经", "腾讯财经", "雅虎财经", "东方财富"],
+  klineDataSource: "AKShare",  // 默认K线数据源
+  chipDataSource: "AKShare",   // 默认筹码数据源
 };
 
 let systemConfig = ensureObject(
@@ -3569,32 +4241,70 @@ function setActionShortcuts(actionId, parsedShortcuts) {
 }
 
 function normalizeSystemConfig() {
-  const normalized = { shortcuts: {}, bspJudgeMode: "auto" };
-  const rawMode = systemConfig && typeof systemConfig.bspJudgeMode === "string" ? systemConfig.bspJudgeMode : "auto";
-  normalized.bspJudgeMode = rawMode === "manual" ? "manual" : "auto";
-  SHORTCUT_ACTIONS.forEach(action => {
-    const hasOwn = systemConfig.shortcuts && Object.prototype.hasOwnProperty.call(systemConfig.shortcuts, action.id);
-    const source = ensureArray(hasOwn ? systemConfig.shortcuts[action.id] : action.defaults, []);
-    const parsed = [];
-    const seen = new Set();
-    source.forEach(item => {
-      const def = typeof item === "string" ? parseShortcutToken(item) : item;
-      const canonical = canonicalizeShortcut(def);
-      if (canonical && !seen.has(canonical)) {
-        parsed.push(canonical);
-        seen.add(canonical);
-      }
+    const normalized = { shortcuts: {}, bspJudgeMode: "auto" };
+    const rawMode = systemConfig && typeof systemConfig.bspJudgeMode === "string" ? systemConfig.bspJudgeMode : "auto";
+    normalized.bspJudgeMode = rawMode === "manual" ? "manual" : "auto";
+    
+    // 处理数据源优先级配置
+    if (systemConfig && Array.isArray(systemConfig.dataSourcePriority)) {
+        normalized.dataSourcePriority = systemConfig.dataSourcePriority.filter(item => typeof item === "string");
+    } else {
+        normalized.dataSourcePriority = DEFAULT_SYSTEM_CONFIG.dataSourcePriority.slice();
+    }
+    
+    // 处理K线和筹码数据源配置
+    if (systemConfig && systemConfig.klineDataSource) {
+        normalized.klineDataSource = systemConfig.klineDataSource;
+    } else {
+        normalized.klineDataSource = DEFAULT_SYSTEM_CONFIG.klineDataSource;
+    }
+    
+    if (systemConfig && systemConfig.chipDataSource) {
+        normalized.chipDataSource = systemConfig.chipDataSource;
+    } else {
+        normalized.chipDataSource = DEFAULT_SYSTEM_CONFIG.chipDataSource;
+    }
+    
+    SHORTCUT_ACTIONS.forEach(action => {
+        const hasOwn = systemConfig.shortcuts && Object.prototype.hasOwnProperty.call(systemConfig.shortcuts, action.id);
+        const source = ensureArray(hasOwn ? systemConfig.shortcuts[action.id] : action.defaults, []);
+        const parsed = [];
+        const seen = new Set();
+        source.forEach(item => {
+            const def = typeof item === "string" ? parseShortcutToken(item) : item;
+            const canonical = canonicalizeShortcut(def);
+            if (canonical && !seen.has(canonical)) {
+                parsed.push(canonical);
+                seen.add(canonical);
+            }
+        });
+        normalized.shortcuts[action.id] = parsed;
     });
-    normalized.shortcuts[action.id] = parsed;
-  });
-  systemConfig = normalized;
+    systemConfig = normalized;
 }
 
 function saveSystemConfig() {
-  normalizeSystemConfig();
-  storageSet("chan_system_config", JSON.stringify(systemConfig));
-  rebuildShortcutRegistry();
-  updateShortcutUI();
+    normalizeSystemConfig();
+    
+    // 保存数据源配置
+    const dataSourcePriority = getDataSourcePriority();
+    if (dataSourcePriority && dataSourcePriority.length > 0) {
+        systemConfig.dataSourcePriority = dataSourcePriority;
+    }
+    
+    const klineSrc = getKlineDataSource();
+    if (klineSrc) {
+        systemConfig.klineDataSource = klineSrc;
+    }
+    
+    const chipSrc = getChipDataSource();
+    if (chipSrc) {
+        systemConfig.chipDataSource = chipSrc;
+    }
+    
+    storageSet("chan_system_config", JSON.stringify(systemConfig));
+    rebuildShortcutRegistry();
+    updateShortcutUI();
 }
 
 function rebuildShortcutRegistry() {
@@ -3729,17 +4439,27 @@ function saveSessionConfig() {
 }
 
 function loadSessionConfig() {
-  if (sessionConfig.code !== undefined) $("code").value = sessionConfig.code;
-  if (sessionConfig.begin !== undefined) $("begin").value = sessionConfig.begin;
-  if (sessionConfig.end !== undefined) $("end").value = sessionConfig.end;
-  if (sessionConfig.cash !== undefined) $("cash").value = sessionConfig.cash;
-  if (sessionConfig.autype !== undefined) $("autype").value = sessionConfig.autype;
-  if (sessionConfig.theme !== undefined) {
-    chartConfig.theme = sessionConfig.theme;
-    applyThemeFromSelect();
-  }
-  // No longer setting DOM for chip/biZs/segZs here as they are in chartConfig
-  if (sessionConfig.stepN !== undefined) $("stepN").value = sessionConfig.stepN;
+    if (sessionConfig.code !== undefined) $("code").value = sessionConfig.code;
+    if (sessionConfig.begin !== undefined) $("begin").value = sessionConfig.begin;
+    if (sessionConfig.end !== undefined) $("end").value = sessionConfig.end;
+    if (sessionConfig.cash !== undefined) $("cash").value = sessionConfig.cash;
+    if (sessionConfig.autype !== undefined) $("autype").value = sessionConfig.autype;
+    if (sessionConfig.theme !== undefined) {
+        chartConfig.theme = sessionConfig.theme;
+        applyThemeFromSelect();
+    }
+    // No longer setting DOM for chip/biZs/segZs here as they are in chartConfig
+    if (sessionConfig.stepN !== undefined) $("stepN").value = sessionConfig.stepN;
+    
+    // 加载数据源配置
+    if (sessionConfig.data_src_kline !== undefined) {
+        // 这里可以更新前端显示
+        console.log(`加载K线数据源: ${sessionConfig.data_src_kline}`);
+    }
+    if (sessionConfig.data_src_chip !== undefined) {
+        // 这里可以更新前端显示
+        console.log(`加载筹码数据源: ${sessionConfig.data_src_chip}`);
+    }
 }
 
 function getCfgColor(c) {
@@ -4753,13 +5473,201 @@ function renderSettingsForm() {
 }
 
 function renderSystemSettingsForm() {
-  const container = $("systemSettingsContent");
-  container.innerHTML = "";
+    const container = $("systemSettingsContent");
+    container.innerHTML = "";
 
-  const bspSec = document.createElement("div");
-  bspSec.className = "settingsSection";
-  bspSec.style.background = "rgba(34, 197, 94, 0.08)";
-  bspSec.innerHTML = `<div class="settingsSectionTitle" style="color:#16a34a">买卖点判定</div>`;
+    // 添加数据源管理区块
+    const dsSec = document.createElement("div");
+    dsSec.className = "settingsSection";
+    dsSec.style.background = "rgba(245, 158, 11, 0.08)";
+    dsSec.innerHTML = `<div class="settingsSectionTitle" style="color:#f59e0b">数据源管理</div>`;
+
+    const dsGrid = document.createElement("div");
+    dsGrid.className = "settingsGrid";
+    dsGrid.id = "dataSourceGrid";
+
+    // 添加说明
+    const dsNote = document.createElement("div");
+    dsNote.className = "muted";
+    dsNote.style.fontSize = "12px";
+    dsNote.style.gridColumn = "1 / -1";
+    dsNote.textContent = "拖拽可调整优先级顺序，上方优先级更高。K线和筹码可分别设置数据源。";
+    dsGrid.appendChild(dsNote);
+
+    // 数据源优先级列表容器
+    const dsList = document.createElement("div");
+    dsList.id = "dataSourceList";
+    dsList.style.gridColumn = "1 / -1";
+    dsList.style.display = "flex";
+    dsList.style.flexDirection = "column";
+    dsList.style.gap = "6px";
+    dsList.style.marginTop = "8px";
+
+    // 获取当前数据源优先级配置
+    const currentPriority = systemConfig.dataSourcePriority || ["AKShare", "Ashare", "AData", "pytdx", "BaoStock", "Tushare", "新浪财经", "腾讯财经", "雅虎财经", "东方财富"];
+    
+    currentPriority.forEach((srcName, idx) => {
+        const item = document.createElement("div");
+        item.className = "dataSourceItem";
+        item.style.display = "flex";
+        item.style.alignItems = "center";
+        item.style.gap = "8px";
+        item.style.padding = "6px 10px";
+        item.style.background = "var(--panel)";
+        item.style.border = "1px solid var(--border)";
+        item.style.borderRadius = "6px";
+        item.draggable = true;
+        item.dataset.index = String(idx);
+        item.dataset.name = srcName;
+        
+        // 拖拽手柄
+        const handle = document.createElement("span");
+        handle.textContent = "☰";
+        handle.style.cursor = "move";
+        handle.style.color = "var(--muted)";
+        handle.style.fontSize = "16px";
+        item.appendChild(handle);
+        
+        // 名称
+        const nameSpan = document.createElement("span");
+        nameSpan.textContent = srcName;
+        nameSpan.style.flex = "1";
+        nameSpan.style.fontWeight = "bold";
+        item.appendChild(nameSpan);
+        
+        // 状态（模拟检测）
+        const statusSpan = document.createElement("span");
+        statusSpan.className = "dataSourceStatus";
+        statusSpan.textContent = "●";
+        statusSpan.style.color = "#22c55e"; // 默认绿色，表示可用
+        statusSpan.style.fontSize = "12px";
+        statusSpan.title = "点击检测状态";
+        statusSpan.onclick = () => checkDataSource(srcName);
+        item.appendChild(statusSpan);
+        
+        // 上移按钮
+        const upBtn = document.createElement("button");
+        upBtn.textContent = "↑";
+        upBtn.style.width = "auto";
+        upBtn.style.padding = "2px 6px";
+        upBtn.onclick = () => moveDataSource(idx, -1);
+        item.appendChild(upBtn);
+        
+        // 下移按钮
+        const downBtn = document.createElement("button");
+        downBtn.textContent = "↓";
+        downBtn.style.width = "auto";
+        downBtn.style.padding = "2px 6px";
+        downBtn.onclick = () => moveDataSource(idx, 1);
+        item.appendChild(downBtn);
+        
+        // 删除按钮
+        const delBtn = document.createElement("button");
+        delBtn.textContent = "×";
+        delBtn.style.width = "auto";
+        delBtn.style.padding = "2px 6px";
+        delBtn.style.color = "#dc2626";
+        delBtn.onclick = () => removeDataSource(idx);
+        item.appendChild(delBtn);
+        
+        // 拖拽事件
+        item.ondragstart = (e) => {
+            draggedItem = item;
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', item.dataset.index);
+            setTimeout(() => item.style.opacity = '0.5', 0);
+        };
+        item.ondragover = (e) => e.preventDefault();
+        item.ondrop = (e) => onDrop(e, item);
+        
+        dsList.appendChild(item);
+    });
+    
+    dsGrid.appendChild(dsList);
+    
+    // 添加数据源按钮行
+    const addRow = document.createElement("div");
+    addRow.style.gridColumn = "1 / -1";
+    addRow.style.display = "flex";
+    addRow.style.gap = "8px";
+    addRow.style.marginTop = "8px";
+    
+    const addSelect = document.createElement("select");
+    addSelect.id = "addDataSourceSelect";
+    const addOptions = [
+        ["AKShare", "AKShare"],
+        ["Ashare", "Ashare (ashare库)"],
+        ["AData", "AData (adata库)"],
+        ["pytdx", "pytdx"],
+        ["BaoStock", "BaoStock"],
+        ["Tushare", "Tushare"],
+        ["新浪财经", "新浪财经 (爬虫)"],
+        ["腾讯财经", "腾讯财经 (爬虫)"],
+        ["雅虎财经", "雅虎财经 (yfinance)"],
+        ["东方财富", "东方财富 (爬虫)"],
+    ];
+    addOptions.forEach(([val, label]) => {
+        const opt = document.createElement("option");
+        opt.value = val;
+        opt.textContent = label;
+        addSelect.appendChild(opt);
+    });
+    
+    const addBtn = document.createElement("button");
+    addBtn.textContent = "添加数据源";
+    addBtn.onclick = () => addDataSource();
+    
+    addRow.appendChild(addSelect);
+    addRow.appendChild(addBtn);
+    dsGrid.appendChild(addRow);
+    
+    // K线和筹码数据源选择行
+    const klineRow = document.createElement("div");
+    klineRow.className = "settingsItem";
+    klineRow.innerHTML = `<label>K线数据源 <span class="tip-icon" data-tip="用于获取开高低收数据的源">!</span></label>`;
+    
+    const klineSelect = document.createElement("select");
+    klineSelect.id = "klineDataSource";
+    klineSelect.dataset.sysKey = "klineDataSource";
+    addOptions.forEach(([val, label]) => {
+        const opt = document.createElement("option");
+        opt.value = val;
+        opt.textContent = label;
+        if (systemConfig.klineDataSource === val) {
+            opt.selected = true;
+        }
+        klineSelect.appendChild(opt);
+    });
+    klineRow.appendChild(klineSelect);
+    dsGrid.appendChild(klineRow);
+    
+    const chipRow = document.createElement("div");
+    chipRow.className = "settingsItem";
+    chipRow.innerHTML = `<label>筹码数据源 <span class="tip-icon" data-tip="用于获取成交量数据的源">!</span></label>`;
+    
+    const chipSelect = document.createElement("select");
+    chipSelect.id = "chipDataSource";
+    chipSelect.dataset.sysKey = "chipDataSource";
+    addOptions.forEach(([val, label]) => {
+        const opt = document.createElement("option");
+        opt.value = val;
+        opt.textContent = label;
+        if (systemConfig.chipDataSource === val) {
+            opt.selected = true;
+        }
+        chipSelect.appendChild(opt);
+    });
+    chipRow.appendChild(chipSelect);
+    dsGrid.appendChild(chipRow);
+    
+    dsSec.appendChild(dsGrid);
+    container.appendChild(dsSec);
+
+    // 继续原有的买卖点判定部分
+    const bspSec = document.createElement("div");
+    bspSec.className = "settingsSection";
+    bspSec.style.background = "rgba(34, 197, 94, 0.08)";
+    bspSec.innerHTML = `<div class="settingsSectionTitle" style="color:#16a34a">买卖点判定</div>`;
 
   const bspGrid = document.createElement("div");
   bspGrid.className = "settingsGrid";
@@ -4986,21 +5894,69 @@ function saveSettings() {
 }
 
 function saveSystemSettingsFromForm() {
-  const modeSelect = $("systemSettingsContent").querySelector('select[data-sys-key="bspJudgeMode"]');
-  if (modeSelect) {
-    const prev = systemConfig.bspJudgeMode;
-    const next = String(modeSelect.value || "auto") === "manual" ? "manual" : "auto";
-    systemConfig.bspJudgeMode = next;
-    if (prev === "manual" && next === "auto" && lastPayload && lastPayload.ready) {
-      saveSystemConfig();
-      updateBspJudgeUI();
-      showAlertAndLog("买卖点判定方式切换：手动 → 自动。\n将自动补判当前尚未判定的笔/段/2段买卖点，并记录到后台。");
-      checkBspJudge("switch_manual_to_auto");
-    } else if (prev === "auto" && next === "manual") {
-      saveSystemConfig();
-      updateBspJudgeUI();
-      showAlertAndLog("买卖点判定方式切换：自动 → 手动。\n上一级结构变向时将不再自动判定，需手动点击“检查买卖点”。");
+    const modeSelect = $("systemSettingsContent").querySelector('select[data-sys-key="bspJudgeMode"]');
+    if (modeSelect) {
+        const prev = systemConfig.bspJudgeMode;
+        const next = String(modeSelect.value || "auto") === "manual" ? "manual" : "auto";
+        systemConfig.bspJudgeMode = next;
+        if (prev === "manual" && next === "auto" && lastPayload && lastPayload.ready) {
+            saveSystemConfig();
+            updateBspJudgeUI();
+            showAlertAndLog("买卖点判定方式切换：手动 → 自动。\n将自动补判当前尚未判定的笔/段/2段买卖点，并记录到后台。");
+            checkBspJudge("switch_manual_to_auto");
+        } else if (prev === "auto" && next === "manual") {
+            saveSystemConfig();
+            updateBspJudgeUI();
+            showAlertAndLog("买卖点判定方式切换：自动 → 手动。\n上一级结构变向时将不再自动判定，需手动点击"检查买卖点"。");
+        }
     }
+    
+    // 保存数据源配置
+    const dataSourcePriority = getDataSourcePriority();
+    if (dataSourcePriority && dataSourcePriority.length > 0) {
+        systemConfig.dataSourcePriority = dataSourcePriority;
+    }
+    
+    const klineSrc = getKlineDataSource();
+    if (klineSrc) {
+        systemConfig.klineDataSource = klineSrc;
+    }
+    
+    const chipSrc = getChipDataSource();
+    if (chipSrc) {
+        systemConfig.chipDataSource = chipSrc;
+    }
+    
+    const inputs = $("systemSettingsContent").querySelectorAll("input[data-action-id]");
+    const nextShortcuts = {};
+    const errors = [];
+
+    inputs.forEach(input => {
+        const actionId = input.dataset.actionId;
+        const action = SHORTCUT_ACTION_MAP[actionId];
+        if (!action) return;
+        const { parsed, invalid } = parseShortcutList(input.value);
+        if (invalid.length > 0) {
+            errors.push(`${action.label}: ${invalid.join("、")}`);
+            return;
+        }
+        nextShortcuts[actionId] = parsed.map(canonicalizeShortcut);
+    });
+
+    if (errors.length > 0) {
+        showAlertAndLog(`以下快捷键格式无法识别，请修改后再保存：\n${errors.join("\n")}`);
+        return;
+    }
+
+    systemConfig.shortcuts = {};
+    SHORTCUT_ACTIONS.forEach(action => {
+        systemConfig.shortcuts[action.id] = nextShortcuts[action.id] || [];
+    });
+    saveSystemConfig();
+    closeSystemSettings();
+    renderSystemSettingsForm();
+    updateBspJudgeUI();
+}
   }
   const inputs = $("systemSettingsContent").querySelectorAll("input[data-action-id]");
   const nextShortcuts = {};
@@ -5105,11 +6061,12 @@ function resetSettings() {
 }
 
 function resetSystemSettings() {
-  if (confirmAndLog("确定要恢复默认快捷键配置吗？")) {
-    systemConfig = JSON.parse(JSON.stringify(DEFAULT_SYSTEM_CONFIG));
-    saveSystemConfig();
-    renderSystemSettingsForm();
-  }
+    if (confirmAndLog("确定要恢复默认系统配置吗（包括数据源、快捷键等）？")) {
+        systemConfig = JSON.parse(JSON.stringify(DEFAULT_SYSTEM_CONFIG));
+        saveSystemConfig();
+        renderSystemSettingsForm();
+        showAlertAndLog("系统配置已重置为默认值，包括数据源优先级。");
+    }
 }
 
 $("btnChanSettingsOpen").addEventListener("click", openChanSettings);
@@ -8258,6 +9215,217 @@ function verifyCriticalUiBindings() {
   updateCompactLayout();
   verifyCriticalUiBindings();
 })();
+
+// 数据源管理相关函数
+let draggedItem = null;
+
+function onDragStart(e, item) {
+    draggedItem = item;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', item.dataset.index);
+    setTimeout(() => item.style.opacity = '0.5', 0);
+}
+
+function onDragEnd(e) {
+    e.target.style.opacity = '1';
+    draggedItem = null;
+}
+
+function onDrop(e, targetItem) {
+    e.preventDefault();
+    if (!draggedItem || draggedItem === targetItem) return;
+    
+    const list = document.getElementById('dataSourceList');
+    const items = Array.from(list.children);
+    const fromIndex = parseInt(draggedItem.dataset.index);
+    const toIndex = parseInt(targetItem.dataset.index);
+    
+    if (fromIndex < toIndex) {
+        list.insertBefore(draggedItem, targetItem.nextSibling);
+    } else {
+        list.insertBefore(draggedItem, targetItem);
+    }
+    
+    // 更新索引
+    updateDataSourceIndexes();
+}
+
+function updateDataSourceIndexes() {
+    const list = document.getElementById('dataSourceList');
+    if (!list) return;
+    const items = Array.from(list.children);
+    items.forEach((item, idx) => {
+        item.dataset.index = idx;
+    });
+}
+
+function moveDataSource(index, direction) {
+    const list = document.getElementById('dataSourceList');
+    if (!list) return;
+    const items = Array.from(list.children);
+    const newIndex = index + direction;
+    if (newIndex < 0 || newIndex >= items.length) return;
+    
+    const item = items[index];
+    const swapItem = items[newIndex];
+    
+    if (direction === -1) {
+        list.insertBefore(item, swapItem);
+    } else {
+        list.insertBefore(swapItem, item);
+    }
+    
+    updateDataSourceIndexes();
+}
+
+function removeDataSource(index) {
+    const list = document.getElementById('dataSourceList');
+    if (!list) return;
+    const items = Array.from(list.children);
+    if (index >= 0 && index < items.length) {
+        items[index].remove();
+        updateDataSourceIndexes();
+    }
+}
+
+function addDataSource() {
+    const select = document.getElementById('addDataSourceSelect');
+    if (!select) return;
+    const srcName = select.value;
+    if (!srcName) return;
+    
+    const list = document.getElementById('dataSourceList');
+    if (!list) return;
+    const idx = list.children.length;
+    
+    // 检查是否已存在
+    const existing = Array.from(list.children).find(item => item.dataset.name === srcName);
+    if (existing) {
+        alert('该数据源已存在！');
+        return;
+    }
+    
+    const item = document.createElement("div");
+    item.className = "dataSourceItem";
+    item.style.display = "flex";
+    item.style.alignItems = "center";
+    item.style.gap = "8px";
+    item.style.padding = "6px 10px";
+    item.style.background = "var(--panel)";
+    item.style.border = "1px solid var(--border)";
+    item.style.borderRadius = "6px";
+    item.draggable = true;
+    item.dataset.index = String(idx);
+    item.dataset.name = srcName;
+    
+    // 拖拽手柄
+    const handle = document.createElement("span");
+    handle.textContent = "☰";
+    handle.style.cursor = "move";
+    handle.style.color = "var(--muted)";
+    handle.style.fontSize = "16px";
+    item.appendChild(handle);
+    
+    // 名称
+    const nameSpan = document.createElement("span");
+    nameSpan.textContent = srcName;
+    nameSpan.style.flex = "1";
+    nameSpan.style.fontWeight = "bold";
+    item.appendChild(nameSpan);
+    
+    // 状态
+    const statusSpan = document.createElement("span");
+    statusSpan.className = "dataSourceStatus";
+    statusSpan.textContent = "●";
+    statusSpan.style.color = "#22c55e";
+    statusSpan.style.fontSize = "12px";
+    statusSpan.title = "点击检测状态";
+    statusSpan.onclick = () => checkDataSource(srcName);
+    item.appendChild(statusSpan);
+    
+    // 上移按钮
+    const upBtn = document.createElement("button");
+    upBtn.textContent = "↑";
+    upBtn.style.width = "auto";
+    upBtn.style.padding = "2px 6px";
+    upBtn.onclick = () => moveDataSource(idx, -1);
+    item.appendChild(upBtn);
+    
+    // 下移按钮
+    const downBtn = document.createElement("button");
+    downBtn.textContent = "↓";
+    downBtn.style.width = "auto";
+    downBtn.style.padding = "2px 6px";
+    downBtn.onclick = () => moveDataSource(idx, 1);
+    item.appendChild(downBtn);
+    
+    // 删除按钮
+    const delBtn = document.createElement("button");
+    delBtn.textContent = "×";
+    delBtn.style.width = "auto";
+    delBtn.style.padding = "2px 6px";
+    delBtn.style.color = "#dc2626";
+    delBtn.onclick = () => removeDataSource(idx);
+    item.appendChild(delBtn);
+    
+    // 拖拽事件
+    item.ondragstart = (e) => onDragStart(e, item);
+    item.ondragover = (e) => e.preventDefault();
+    item.ondrop = (e) => onDrop(e, item);
+    
+    list.appendChild(item);
+}
+
+function checkDataSource(srcName) {
+    // 模拟检测数据源状态
+    const statusSpans = document.querySelectorAll('.dataSourceStatus');
+    statusSpans.forEach(span => {
+        if (span.parentElement.dataset.name === srcName) {
+            span.textContent = '检测中...';
+            span.style.color = '#f59e0b';
+            
+            // 模拟异步检测
+            setTimeout(() => {
+                // 这里应该调用后端API检测，暂时模拟
+                const available = ['AKShare', 'Ashare', 'AData', 'pytdx', 'BaoStock', 'Tushare', '新浪财经', '腾讯财经', '雅虎财经', '东方财富'].includes(srcName);
+                span.textContent = available ? '●' : '○';
+                span.style.color = available ? '#22c55e' : '#ef4444';
+                span.title = available ? '可用' : '不可用';
+            }, 500);
+        }
+    });
+}
+
+function getDataSourcePriority() {
+    const list = document.getElementById('dataSourceList');
+    if (!list) return [];
+    const items = Array.from(list.children);
+    return items.map(item => item.dataset.name).filter(name => name);
+}
+
+function getKlineDataSource() {
+    const select = document.getElementById('klineDataSource');
+    return select ? select.value : null;
+}
+
+function getChipDataSource() {
+    const select = document.getElementById('chipDataSource');
+    return select ? select.value : null;
+}
+
+// 更新数据源状态显示
+function updateDataSourceStatus(payload) {
+    if (!payload || !payload.data_source) return;
+    const statusSpans = document.querySelectorAll('.dataSourceStatus');
+    statusSpans.forEach(span => {
+        const name = span.parentElement.dataset.name;
+        if (name === payload.data_source.label) {
+            span.textContent = '●';
+            span.style.color = '#22c55e';
+            span.title = '当前使用';
+        }
+    });
+}
 </script>
 </body>
 </html>
@@ -8305,6 +9473,8 @@ def api_init(req: InitReq):
             "initial_cash": req.initial_cash,
             "chan_config": req.chan_config,
             "k_type": req.k_type,  # 保存周期类型到会话参数
+            "data_src_kline": APP_STATE.stepper.data_src_kline,  # 保存K线数据源
+            "data_src_chip": APP_STATE.stepper.data_src_chip,    # 保存筹码数据源
         }
         APP_STATE.trade_events = []
         APP_STATE.bsp_history = []
@@ -8462,6 +9632,52 @@ def api_finish():
     payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME)
     payload["message"] = "训练结束"
     return payload
+
+
+@app.post("/api/set_data_source_priority")
+def api_set_data_source_priority(req: dict):
+    """设置数据源优先级"""
+    try:
+        priority = req.get("priority", [])
+        if not isinstance(priority, list):
+            raise ValueError("priority 必须是数组")
+        
+        # 更新数据源链
+        global DATA_SOURCE_CHAIN_KLINE
+        DATA_SOURCE_CHAIN_KLINE = []
+        for name in priority:
+            # 根据名称找到对应的数据源
+            if name == "AKShare":
+                DATA_SOURCE_CHAIN_KLINE.append(("AKShare", AKSHARE_INLINE_SRC))
+            elif name == "Ashare":
+                DATA_SOURCE_CHAIN_KLINE.append(("Ashare", "inline:ashare"))
+            elif name == "AData":
+                DATA_SOURCE_CHAIN_KLINE.append(("AData", "inline:adata"))
+            elif name == "pytdx":
+                DATA_SOURCE_CHAIN_KLINE.append(("pytdx", PYTDX_INLINE_SRC))
+            elif name == "BaoStock":
+                DATA_SOURCE_CHAIN_KLINE.append(("BaoStock", DATA_SRC.BAO_STOCK))
+            elif name == "Tushare":
+                DATA_SOURCE_CHAIN_KLINE.append(("Tushare", TUSHARE_INLINE_SRC))
+            elif name == "新浪财经":
+                DATA_SOURCE_CHAIN_KLINE.append(("新浪财经", SINA_INLINE_SRC))
+            elif name == "腾讯财经":
+                DATA_SOURCE_CHAIN_KLINE.append(("腾讯财经", TENCENT_INLINE_SRC))
+            elif name == "雅虎财经":
+                DATA_SOURCE_CHAIN_KLINE.append(("雅虎财经", YAHOO_INLINE_SRC))
+            elif name == "东方财富":
+                DATA_SOURCE_CHAIN_KLINE.append(("东方财富", EASTMONEY_INLINE_SRC))
+        
+        # 更新系统配置
+        system_config = APP_STATE.stepper.effective_cfg_dict
+        if not system_config:
+            system_config = {}
+        system_config["data_source_priority"] = priority
+        APP_STATE.stepper.effective_cfg_dict = system_config
+        
+        return {"message": f"数据源优先级已更新：{priority}"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @app.post("/api/reset")

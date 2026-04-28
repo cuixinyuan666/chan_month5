@@ -1,0 +1,12 @@
+baostock>=0.8.8
+ipython>=8.5.0
+matplotlib>=3.5.3
+numpy>=1.23.3
+pandas>=1.4.2
+requests>=2.22.0
+# 新数据源依赖（可选，根据需要安装）
+ashare
+adata
+pytdx
+yfinance
+# beautifulsoup4  # 如需解析HTML爬虫可取消注释
