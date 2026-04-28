@@ -4,7 +4,6 @@ __pycache__
 *.vscode
 *.log
 *.db
-*.md
 *.gitignore
 config.yaml
 OpenConfig.yaml

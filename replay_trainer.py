@@ -73,11 +73,41 @@ JUDGE_TRIGGER_LEVELS = {"bi": "seg", "seg": "segseg", "segseg": "segsegseg"}
 DEFAULT_TUSHARE_TOKEN = "0de8d8ce7b0d4758c52959230694d55e0571d57c9b1f37ef3ffe72ca"
 AKSHARE_INLINE_SRC = "inline:akshare"
 TUSHARE_INLINE_SRC = "inline:tushare"
+PYTDX_INLINE_SRC = "inline:pytdx"
+SINA_INLINE_SRC = "inline:sina"
+TENCENT_INLINE_SRC = "inline:tencent"
+YAHOO_INLINE_SRC = "inline:yahoo"
+EASTMONEY_INLINE_SRC = "inline:eastmoney"
+# 可配置的数据源优先级（从系统配置读取）
+CONFIG_DATA_SRC_PRIORITY: list = []
+CONFIG_OHLC_SRC: Any = None  # 开高低收数据源，默认第一个可用
+CONFIG_VOL_SRC: Any = None   # 成交量数据源，默认第一个可用
 DATA_SOURCE_CHAIN: list[tuple[str, Any]] = [
     ("AKShare", AKSHARE_INLINE_SRC),
     ("BaoStock", DATA_SRC.BAO_STOCK),
     ("Tushare", TUSHARE_INLINE_SRC),
 ]
+
+
+def parse_k_type(raw: str) -> KL_TYPE:
+    """将字符串周期转换为KL_TYPE枚举"""
+    raw = raw.strip().lower()
+    mapping = {
+        "1min": KL_TYPE.K_1M,
+        "5min": KL_TYPE.K_5M,
+        "15min": KL_TYPE.K_15M,
+        "30min": KL_TYPE.K_30M,
+        "60min": KL_TYPE.K_60M,
+        "daily": KL_TYPE.K_DAY,
+        "weekly": KL_TYPE.K_WEEK,
+        "monthly": KL_TYPE.K_MON,
+        "quarterly": KL_TYPE.K_QUARTER,
+        "yearly": KL_TYPE.K_YEAR,
+        "3min": KL_TYPE.K_3M,
+    }
+    if raw not in mapping:
+        raise ValueError(f"不支持的周期类型：{raw}，可选：{list(mapping.keys())}")
+    return mapping[raw]
 
 
 def normalize_chan_algo(raw: Any) -> str:
@@ -107,11 +137,11 @@ def get_stock_api_cls(data_src: Any):
     raise ValueError(f"unsupported data source: {data_src}")
 
 
-def create_stock_api_instance(data_src: Any, code: str, begin_date: Optional[str], end_date: Optional[str], autype: AUTYPE) -> CCommonStockApi:
+def create_stock_api_instance(data_src: Any, code: str, begin_date: Optional[str], end_date: Optional[str], autype: AUTYPE, k_type: Optional[KL_TYPE] = None) -> CCommonStockApi:
     api_cls = get_stock_api_cls(data_src)
     api_cls.do_init()
     try:
-        return api_cls(code=code, k_type=KL_TYPE.K_DAY, begin_date=begin_date, end_date=end_date, autype=autype)
+        return api_cls(code=code, k_type=k_type or KL_TYPE.K_DAY, begin_date=begin_date, end_date=end_date, autype=autype)
     except Exception:
         api_cls.do_close()
         raise
@@ -158,13 +188,34 @@ class CAkshareInline(CCommonStockApi):
 
     def get_kl_data(self):
         adjust_map = {AUTYPE.QFQ: "qfq", AUTYPE.HFQ: "hfq", AUTYPE.NONE: ""}
-        period_map = {KL_TYPE.K_DAY: "daily", KL_TYPE.K_WEEK: "weekly", KL_TYPE.K_MON: "monthly"}
+        # AKShare stock_zh_a_hist 支持的周期
+        period_map = {
+            KL_TYPE.K_1M: "1min",
+            KL_TYPE.K_5M: "5min",
+            KL_TYPE.K_15M: "15min",
+            KL_TYPE.K_30M: "30min",
+            KL_TYPE.K_60M: "60min",
+            KL_TYPE.K_DAY: "daily",
+            KL_TYPE.K_WEEK: "weekly",
+            KL_TYPE.K_MON: "monthly",
+            KL_TYPE.K_3M: "3min",
+        }
         if self.k_type not in period_map:
-            raise ValueError(f"AKShare 暂不支持 {self.k_type} 级别")
-
+            raise ValueError(f"AKShare 暂不支持 {self.k_type} 级别，仅支持1/5/15/30/60分钟、日线、周线、月线、3分钟")
+        
         start_date = (self.begin_date or "1990-01-01").replace("-", "")
         end_date = (self.end_date or "2099-12-31").replace("-", "")
-        if self.is_stock:
+        
+        # 指数数据仅支持日线
+        if not self.is_stock:
+            if self.k_type != KL_TYPE.K_DAY:
+                raise ValueError(f"指数数据仅支持日线级别，当前选择：{self.k_type}")
+            market = "sh" if str(self.code).lower().startswith("sh") else "sz"
+            raw_df = ak.stock_zh_index_daily(symbol=f"{market}{self.symbol}")
+            df = raw_df.rename(columns={"date": "日期", "open": "开盘", "high": "最高", "low": "最低", "close": "收盘", "volume": "成交量", "amount": "成交额"})
+            df["日期"] = df["日期"].astype(str).str.replace("-", "", regex=False)
+            df = df[(df["日期"] >= start_date) & (df["日期"] <= end_date)]
+        else:
             df = ak.stock_zh_a_hist(
                 symbol=self.symbol,
                 period=period_map[self.k_type],
@@ -172,14 +223,10 @@ class CAkshareInline(CCommonStockApi):
                 end_date=end_date,
                 adjust=adjust_map.get(self.autype, "qfq"),
             )
-        else:
-            market = "sh" if str(self.code).lower().startswith("sh") else "sz"
-            raw_df = ak.stock_zh_index_daily(symbol=f"{market}{self.symbol}")
-            df = raw_df.rename(columns={"date": "日期", "open": "开盘", "high": "最高", "low": "最低", "close": "收盘", "volume": "成交量", "amount": "成交额"})
-            df["日期"] = df["日期"].astype(str).str.replace("-", "", regex=False)
-            df = df[(df["日期"] >= start_date) & (df["日期"] <= end_date)]
+        
         if df is None or df.empty:
             return
+        
         for _, row in df.iterrows():
             item = {
                 DATA_FIELD.FIELD_TIME: _parse_inline_date(row["日期"]),
@@ -249,14 +296,25 @@ class CTushareInline(CCommonStockApi):
         self.is_stock = True
 
     def get_kl_data(self):
-        if self.k_type not in {KL_TYPE.K_DAY, KL_TYPE.K_WEEK, KL_TYPE.K_MON}:
-            raise ValueError(f"Tushare 暂不支持 {self.k_type} 级别")
+        # Tushare 支持 1/5/15/30/60分钟、日、周、月、季、年线
         self.do_init()
         if self.pro is None:
             raise RuntimeError("Tushare Pro 未初始化")
         start_date = (self.begin_date or "1990-01-01").replace("-", "")
         end_date = (self.end_date or "2099-12-31").replace("-", "")
-        freq_map = {KL_TYPE.K_DAY: "D", KL_TYPE.K_WEEK: "W", KL_TYPE.K_MON: "M"}
+        freq_map = {
+            KL_TYPE.K_1M: "1MIN",
+            KL_TYPE.K_5M: "5MIN",
+            KL_TYPE.K_15M: "15MIN",
+            KL_TYPE.K_30M: "30MIN",
+            KL_TYPE.K_60M: "60MIN",
+            KL_TYPE.K_DAY: "D",
+            KL_TYPE.K_WEEK: "W",
+            KL_TYPE.K_MON: "M",
+            KL_TYPE.K_3M: "3MIN",
+            KL_TYPE.K_QUARTER: "Q",
+            KL_TYPE.K_YEAR: "Y",
+        }
         adj_map = {AUTYPE.QFQ: "qfq", AUTYPE.HFQ: "hfq", AUTYPE.NONE: None}
         df = ts.pro_bar(
             ts_code=self.ts_code,
@@ -1250,6 +1308,7 @@ class ChanStepper:
         self.step_idx = -1
         self.code = ""
         self.chan_algo = CHAN_ALGO_CLASSIC
+        self.k_type = KL_TYPE.K_DAY  # 默认日线
         self.effective_cfg_dict: dict[str, Any] = {}
         # Full history K-lines (used by chip distribution).
         self.kline_all: list[dict[str, Any]] = []
@@ -1288,7 +1347,7 @@ class ChanStepper:
             begin_time=begin_date,
             end_time=end_date,
             data_src=data_src,
-            lv_list=[KL_TYPE.K_DAY],
+            lv_list=[self.k_type],
             config=cfg_fetch,
             autype=autype,
         )
@@ -1298,7 +1357,7 @@ class ChanStepper:
 
         stock_name: Optional[str] = None
         try:
-            api = create_stock_api_instance(data_src, self.code, begin_date, end_date, autype)
+            api = create_stock_api_instance(data_src, self.code, begin_date, end_date, autype, self.k_type)
             stock_name = getattr(api, "name", None) or None
         except Exception:
             stock_name = None
@@ -1316,7 +1375,7 @@ class ChanStepper:
                 begin_time=chip_begin_date,
                 end_time=end_date,
                 data_src=data_src,
-                lv_list=[KL_TYPE.K_DAY],
+                lv_list=[self.k_type],
                 config=cfg_all,
                 autype=autype,
             )
@@ -1371,7 +1430,10 @@ class ChanStepper:
             self.trend_lines = list(bundle.trend_lines)
         return bundle
 
-    def init(self, code: str, begin_date: str, end_date: Optional[str], autype: AUTYPE, chan_config: Optional[dict[str, Any]] = None) -> None:
+    def init(self, code: str, begin_date: str, end_date: Optional[str], autype: AUTYPE, chan_config: Optional[dict[str, Any]] = None, k_type: str = "daily") -> None:
+        # 解析并设置周期类型
+        self.k_type = parse_k_type(k_type)
+        
         cfg_dict = {
             "chan_algo": CHAN_ALGO_CLASSIC,
             "bi_strict": True,
@@ -1440,7 +1502,7 @@ class ChanStepper:
         cfg = CChanConfig(chan_cfg_dict)
         self.code = normalize_code(code)
         self.stock_name = None
-        session_key = (self.code, begin_date, end_date, autype)
+        session_key = (self.code, begin_date, end_date, autype, self.k_type)
         cache_hit = session_key == self._data_session_key and self._replay_klus_master is not None
 
         if not cache_hit:
@@ -1461,7 +1523,7 @@ class ChanStepper:
             begin_time=begin_date,
             end_time=end_date,
             data_src=self.data_src_used or DATA_SRC.AKSHARE,
-            lv_list=[KL_TYPE.K_DAY],
+            lv_list=[self.k_type],
             config=cfg,
             autype=autype,
             replay_klus_master=self._replay_klus_master,
@@ -1548,6 +1610,7 @@ class InitReq(BaseModel):
     initial_cash: float = 10_000
     autype: str = "qfq"
     chan_config: Optional[dict[str, Any]] = None
+    k_type: str = "daily"  # 周期类型
 
 
 class ReconfigReq(BaseModel):
@@ -1640,7 +1703,7 @@ class AppState:
             begin_time=self.session_params["begin_date"],
             end_time=self.session_params["end_date"],
             data_src=self.stepper.data_src_used or DATA_SRC.AKSHARE,
-            lv_list=[KL_TYPE.K_DAY],
+            lv_list=[self.stepper.k_type],
             config=cfg,
             autype=self.session_params["autype"],
             replay_klus_master=self.stepper._replay_klus_master,
@@ -1891,6 +1954,7 @@ class AppState:
             params["end_date"],
             params["autype"],
             chan_config=params.get("chan_config"),
+            k_type=params.get("k_type", "daily"),  # 重建时保留周期类型
         )
         # Account reset is handled by the caller if needed (e.g. in reconfig)
         # but for back_n it should stay consistent with history.
@@ -2751,6 +2815,23 @@ HTML = r"""
             <option value="none">不复权</option>
           </select>
           <span class="tip-icon" data-tip="选择K线数据的复权方式。"></span>
+        </div>
+        <div class="row cfg-editable">
+          <label>周期类型</label>
+          <select id="kType">
+            <option value="1min">1分钟</option>
+            <option value="5min">5分钟</option>
+            <option value="15min">15分钟</option>
+            <option value="30min">30分钟</option>
+            <option value="60min">60分钟</option>
+            <option value="daily" selected>日线</option>
+            <option value="weekly">周线</option>
+            <option value="monthly">月线</option>
+            <option value="quarterly">季线</option>
+            <option value="yearly">年线</option>
+            <option value="3min">3分钟</option>
+          </select>
+          <span class="tip-icon" data-tip="选择K线周期类型，不同数据源支持不同周期。"></span>
         </div>
         <div class="btnRow">
           <button id="btnInit" data-tip="根据当前代码、日期区间、初始资金加载复盘会话。首次加载历史数据可能较慢。">加载会话 <small>(Ctrl+I)</small></button>
@@ -7891,14 +7972,15 @@ $("btnInit").onclick = async () => {
         processedConfig[k] = processedConfig[k].split(/[,，\s]+/).map(v => parseInt(v.trim())).filter(v => !isNaN(v));
       }
     });
-    const payload = await api("/api/init", {
-      code: $("code").value,
-      begin_date: $("begin").value,
-      end_date: $("end").value || null,
-      initial_cash: Number($("cash").value),
-      autype: $("autype").value,
-      chan_config: processedConfig
-    });
+     const payload = await api("/api/init", {
+       code: $("code").value,
+       begin_date: $("begin").value,
+       end_date: $("end").value || null,
+       initial_cash: Number($("cash").value),
+       autype: $("autype").value,
+       chan_config: processedConfig,
+       k_type: $("kType").value  // 添加周期类型
+     });
     initSucceeded = true;
     document.title = `chan.py 复盘训练器 - ${(payload.name ? payload.name : payload.code)}`;
     setMsg(payload.message || `加载成功：${payload.name ? payload.name : payload.code}`);
@@ -8209,7 +8291,7 @@ def api_init(req: InitReq):
             raise ValueError("初始资金必须大于0")
         code_norm = normalize_code(req.code)
 
-        APP_STATE.stepper.init(code_norm, req.begin_date, req.end_date, autype, chan_config=req.chan_config)
+        APP_STATE.stepper.init(code_norm, req.begin_date, req.end_date, autype, chan_config=req.chan_config, k_type=req.k_type)
         global APP_STOCK_NAME
         APP_STOCK_NAME = APP_STATE.stepper.stock_name
         APP_STATE.account.reset(req.initial_cash)
@@ -8222,6 +8304,7 @@ def api_init(req: InitReq):
             "autype": autype,
             "initial_cash": req.initial_cash,
             "chan_config": req.chan_config,
+            "k_type": req.k_type,  # 保存周期类型到会话参数
         }
         APP_STATE.trade_events = []
         APP_STATE.bsp_history = []
@@ -8238,9 +8321,9 @@ def api_init(req: InitReq):
         payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME)
         source_label = data_source_label(APP_STATE.stepper.data_src_used)
         if source_label == "AKShare":
-            payload["message"] = f"加载成功：{APP_STOCK_NAME or code_norm}，当前数据源 {source_label}。"
+            payload["message"] = f"加载成功：{APP_STOCK_NAME or code_norm}，当前数据源 {source_label}，周期 {req.k_type}。"
         else:
-            payload["message"] = f"加载成功：{APP_STOCK_NAME or code_norm}，已自动切换到 {source_label}。"
+            payload["message"] = f"加载成功：{APP_STOCK_NAME or code_norm}，已自动切换到 {source_label}，周期 {req.k_type}。"
         return payload
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
