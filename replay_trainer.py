@@ -1,10 +1,12 @@
 import copy
+import inspect
 import json
 import os
 import re
 import warnings
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Any, Iterator, Optional
 
 # 可选数据源：未安装时统一提示（与下方 RuntimeError 文案一致）
@@ -121,6 +123,8 @@ SINA_INLINE_SRC = "inline:sina"
 TENCENT_INLINE_SRC = "inline:tencent"
 YAHOO_INLINE_SRC = "inline:yahoo"
 EASTMONEY_INLINE_SRC = "inline:eastmoney"
+AKTX_INLINE_SRC = "inline:aktx"
+GITHUB_CSV_INLINE_SRC = "inline:github_csv"
 # 本地 a_Data 离线包（分笔优先，否则 1 分钟合成高周期）
 OFFLINE_INLINE_SRC = "inline:offline"
 # 可配置的数据源优先级（从系统配置读取）
@@ -131,6 +135,7 @@ CONFIG_VOL_SRC: Any = None   # 成交量数据源，默认第一个可用
 # 默认优先级显示名（与前端 systemConfig.dataSourcePriority 一致）
 DEFAULT_DATA_SOURCE_PRIORITY_NAMES: list[str] = [
     "AKShare",
+    "AKShare-腾讯历史",
     "Ashare",
     "AData",
     "pytdx",
@@ -141,11 +146,14 @@ DEFAULT_DATA_SOURCE_PRIORITY_NAMES: list[str] = [
     "腾讯财经",
     "雅虎财经",
     "东方财富",
+    "GitHub-CSV",
 ]
 
 # 显示名 -> (列表展示名, data_src 键)
 _DATA_SOURCE_NAME_TO_PAIR: dict[str, tuple[str, Any]] = {
     "AKShare": ("AKShare", AKSHARE_INLINE_SRC),
+    "AKShare-腾讯历史": ("AKShare-腾讯历史", AKTX_INLINE_SRC),
+    "GitHub-CSV": ("GitHub-CSV", GITHUB_CSV_INLINE_SRC),
     "Ashare": ("Ashare", "inline:ashare"),
     "AData": ("AData", "inline:adata"),
     "pytdx": ("pytdx", PYTDX_INLINE_SRC),
@@ -186,6 +194,8 @@ def apply_data_source_priority(names: list[str] | None) -> None:
 # 数据源显示名称映射
 DATA_SOURCE_LABELS = {
     AKSHARE_INLINE_SRC: "AKShare",
+    AKTX_INLINE_SRC: "AKShare-腾讯历史",
+    GITHUB_CSV_INLINE_SRC: "GitHub-CSV",
     "inline:ashare": "Ashare",
     "inline:adata": "AData",
     PYTDX_INLINE_SRC: "pytdx",
@@ -504,6 +514,57 @@ def _strip_market_prefix(code: str) -> str:
     return text
 
 
+def _detect_market(code: str) -> str:
+    symbol = _strip_market_prefix(code)
+    return "sh" if symbol.startswith(("5", "6", "9")) else "sz"
+
+
+def _to_tencent_symbol(code: str) -> str:
+    symbol = _strip_market_prefix(code)
+    return f"{_detect_market(symbol)}{symbol}"
+
+
+def _to_eastmoney_secid(code: str) -> str:
+    symbol = _strip_market_prefix(code)
+    market_id = "1" if _detect_market(symbol) == "sh" else "0"
+    return f"{market_id}.{symbol}"
+
+
+def _parse_inline_datetime(value: Any, *, default_time: tuple[int, int] = (0, 0)) -> tuple[CTime, datetime]:
+    """解析常见日期/时间格式，统一用于线上数据源。"""
+    if isinstance(value, pd.Timestamp):
+        dt = value.to_pydatetime()
+        return CTime(dt.year, dt.month, dt.day, dt.hour, dt.minute), dt
+    text = str(value or "").strip().replace("/", "-")
+    if re.match(r"^\d{8}$", text):
+        dt = datetime(int(text[:4]), int(text[4:6]), int(text[6:8]), default_time[0], default_time[1])
+        return CTime(dt.year, dt.month, dt.day, dt.hour, dt.minute), dt
+    if re.match(r"^\d{4}-\d{2}-\d{2}$", text):
+        dt = datetime(int(text[:4]), int(text[5:7]), int(text[8:10]), default_time[0], default_time[1])
+        return CTime(dt.year, dt.month, dt.day, dt.hour, dt.minute), dt
+    if re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}", text):
+        dt = datetime.strptime(text[:16], "%Y-%m-%d %H:%M")
+        return CTime(dt.year, dt.month, dt.day, dt.hour, dt.minute), dt
+    if re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", text):
+        dt = datetime.strptime(text[:19], "%Y-%m-%d %H:%M:%S")
+        return CTime(dt.year, dt.month, dt.day, dt.hour, dt.minute), dt
+    raise ValueError(f"unknown date value: {value}")
+
+
+def _request_json_with_headers(url: str, *, params: Optional[dict[str, Any]] = None) -> Any:
+    """统一请求 JSON，给线上源一个稳定 UA。"""
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/136.0.0.0 Safari/537.36"
+        )
+    }
+    resp = requests.get(url, params=params, headers=headers, timeout=20)
+    resp.raise_for_status()
+    return resp.json()
+
+
 def _parse_inline_date(value) -> CTime:
     if isinstance(value, pd.Timestamp):
         return CTime(value.year, value.month, value.day, 0, 0)
@@ -520,6 +581,24 @@ def _parse_trade_date_8(value: str) -> CTime:
     if len(text) != 8 or not text.isdigit():
         raise ValueError(f"invalid trade date: {value}")
     return CTime(int(text[:4]), int(text[4:6]), int(text[6:8]), 0, 0)
+
+
+def _k_type_label_cn(k_type: KL_TYPE) -> str:
+    """周期中文标签，用于错误提示。"""
+    mapping = {
+        KL_TYPE.K_1M: "1分钟",
+        KL_TYPE.K_3M: "3分钟",
+        KL_TYPE.K_5M: "5分钟",
+        KL_TYPE.K_15M: "15分钟",
+        KL_TYPE.K_30M: "30分钟",
+        KL_TYPE.K_60M: "60分钟",
+        KL_TYPE.K_DAY: "日线",
+        KL_TYPE.K_WEEK: "周线",
+        KL_TYPE.K_MON: "月线",
+        KL_TYPE.K_QUARTER: "季线",
+        KL_TYPE.K_YEAR: "年线",
+    }
+    return mapping.get(k_type, str(k_type))
 
 
 class CAkshareInline(CCommonStockApi):
@@ -588,6 +667,70 @@ class CAkshareInline(CCommonStockApi):
             self.is_stock = not (symbol.startswith("000") or symbol.startswith("399"))
         else:
             self.is_stock = True
+
+    @classmethod
+    def do_init(cls):
+        pass
+
+    @classmethod
+    def do_close(cls):
+        pass
+
+
+class CAkTxInline(CCommonStockApi):
+    """AKShare 腾讯历史接口封装：作为 AKShare 的补充回退源。"""
+
+    def __init__(self, code, k_type=KL_TYPE.K_DAY, begin_date=None, end_date=None, autype=AUTYPE.QFQ):
+        self.symbol = _strip_market_prefix(code)
+        super(CAkTxInline, self).__init__(code, k_type, begin_date, end_date, autype)
+
+    def get_kl_data(self):
+        period_map = {
+            KL_TYPE.K_DAY: "day",
+            KL_TYPE.K_WEEK: "week",
+            KL_TYPE.K_MON: "month",
+        }
+        if self.k_type not in period_map:
+            raise ValueError(f"AKShare-腾讯历史暂不支持 {self.k_type} 级别")
+        start_date = (self.begin_date or "1990-01-01").replace("-", "")
+        end_date = (self.end_date or "2099-12-31").replace("-", "")
+        adjust = "qfq" if self.autype == AUTYPE.QFQ else ("hfq" if self.autype == AUTYPE.HFQ else "")
+        symbol = ("sh" if str(self.code).lower().startswith("sh.") else ("sz" if str(self.code).lower().startswith("sz.") else ("sh" if self.symbol.startswith("6") else "sz")) ) + self.symbol
+        try:
+            df = ak.stock_zh_a_hist_tx(symbol=symbol, start_date=start_date, end_date=end_date, adjust=adjust)
+        except Exception as e:
+            if isinstance(e, IndexError):
+                raise RuntimeError("AKShare-腾讯历史返回空结构（该标的可能无可用历史）")
+            raise RuntimeError(f"AKShare-腾讯历史获取数据失败: {e}")
+        if df is None or df.empty:
+            return
+
+        # 兼容列名差异：优先英文列（AKShare 常见）
+        col_date = "date" if "date" in df.columns else ("日期" if "日期" in df.columns else None)
+        col_open = "open" if "open" in df.columns else "开盘"
+        col_high = "high" if "high" in df.columns else "最高"
+        col_low = "low" if "low" in df.columns else "最低"
+        col_close = "close" if "close" in df.columns else "收盘"
+        col_vol = "volume" if "volume" in df.columns else "成交量"
+        col_amt = "amount" if "amount" in df.columns else "成交额"
+        for _, row in df.iterrows():
+            raw_t = row.get(col_date) if col_date else None
+            if raw_t is None:
+                continue
+            item = {
+                DATA_FIELD.FIELD_TIME: _parse_inline_date(raw_t),
+                DATA_FIELD.FIELD_OPEN: str2float(row.get(col_open, 0)),
+                DATA_FIELD.FIELD_HIGH: str2float(row.get(col_high, 0)),
+                DATA_FIELD.FIELD_LOW: str2float(row.get(col_low, 0)),
+                DATA_FIELD.FIELD_CLOSE: str2float(row.get(col_close, 0)),
+                DATA_FIELD.FIELD_VOLUME: str2float(row.get(col_vol, 0)),
+                DATA_FIELD.FIELD_TURNOVER: str2float(row.get(col_amt, 0)),
+            }
+            yield CKLine_Unit(item)
+
+    def SetBasciInfo(self):
+        self.name = self.code
+        self.is_stock = True
 
     @classmethod
     def do_init(cls):
@@ -689,43 +832,60 @@ class CAshareInline(CCommonStockApi):
     def get_kl_data(self):
         if not HAS_ASHARE:
             raise RuntimeError(_OPT_DEP_HINT_ASHARE)
-        # Ashare 支持周期映射
+        # Ashare/ashares 周期映射（ashares 常见写法是 1d/1w/1M）
         period_map = {
             KL_TYPE.K_1M: "1m",
             KL_TYPE.K_5M: "5m",
             KL_TYPE.K_15M: "15m",
             KL_TYPE.K_30M: "30m",
             KL_TYPE.K_60M: "60m",
-            KL_TYPE.K_DAY: "d",
-            KL_TYPE.K_WEEK: "w",
-            KL_TYPE.K_MON: "m",
+            KL_TYPE.K_DAY: "1d",
+            KL_TYPE.K_WEEK: "1w",
+            KL_TYPE.K_MON: "1M",
         }
         if self.k_type not in period_map:
             raise ValueError(f"Ashare 暂不支持 {self.k_type} 级别")
         
-        start_date = (self.begin_date or "1990-01-01").replace("-", "")
-        end_date = (self.end_date or "2099-12-31").replace("-", "")
-        
-        # 调用 ashare 获取K线
-        # 注意：ashare的API可能需要调整，这里提供示例结构
+        start_date = (self.begin_date or "1990-01-01").replace("/", "-")
+        end_date = (self.end_date or "2099-12-31").replace("/", "-")
+        # 兼容两类签名：
+        # 1) get_price(code, start_date=..., end_date=..., frequency=..., fq=...)
+        # 2) get_price(code, end_date='', count=10, frequency='1d', fields=[])
         try:
             get_price = ASHARE_MOD.get_price
-            df = get_price(
-                self.symbol,
-                start_date=start_date,
-                end_date=end_date,
-                frequency=period_map[self.k_type],
-                fq=self.autype.name.lower() if self.autype != AUTYPE.NONE else None
-            )
+            sig = inspect.signature(get_price)
+            params = set(sig.parameters.keys())
+            call_kwargs: dict[str, Any] = {"frequency": period_map[self.k_type]}
+            if "start_date" in params:
+                call_kwargs["start_date"] = start_date
+            if "end_date" in params:
+                call_kwargs["end_date"] = end_date
+            if "fq" in params:
+                call_kwargs["fq"] = self.autype.name.lower() if self.autype != AUTYPE.NONE else None
+            if "count" in params and "start_date" not in params:
+                call_kwargs["count"] = 10000
+            df = get_price(self.symbol, **call_kwargs)
         except Exception as e:
             raise RuntimeError(f"Ashare 获取数据失败: {e}")
         
         if df is None or df.empty:
             return
         
-        for _, row in df.iterrows():
+        local_df = df.copy()
+        if "date" not in local_df.columns and "time" not in local_df.columns:
+            local_df["date"] = local_df.index
+        s0 = start_date[:10]
+        s1 = end_date[:10]
+        for _, row in local_df.iterrows():
+            dt_raw = row.get("date") if "date" in local_df.columns else row.get("time")
+            ct = _parse_inline_date(dt_raw)
+            ds = ct.toDateStr("-")
+            if len(s0) == 10 and ds < s0:
+                continue
+            if len(s1) == 10 and ds > s1:
+                continue
             item = {
-                DATA_FIELD.FIELD_TIME: _parse_inline_date(row.get("date") or row.get("time")),
+                DATA_FIELD.FIELD_TIME: ct,
                 DATA_FIELD.FIELD_OPEN: str2float(row.get("open", 0)),
                 DATA_FIELD.FIELD_HIGH: str2float(row.get("high", 0)),
                 DATA_FIELD.FIELD_LOW: str2float(row.get("low", 0)),
@@ -757,46 +917,83 @@ class CADataInline(CCommonStockApi):
     def get_kl_data(self):
         if not HAS_ADATA:
             raise RuntimeError(_OPT_DEP_HINT_ADATA)
-        
         period_map = {
-            KL_TYPE.K_1M: "1m",
-            KL_TYPE.K_5M: "5m",
-            KL_TYPE.K_15M: "15m",
-            KL_TYPE.K_30M: "30m",
-            KL_TYPE.K_60M: "60m",
-            KL_TYPE.K_DAY: "d",
-            KL_TYPE.K_WEEK: "w",
+            KL_TYPE.K_DAY: 1,
+            KL_TYPE.K_WEEK: 2,
+            KL_TYPE.K_MON: 3,
+            KL_TYPE.K_QUARTER: 4,
+            KL_TYPE.K_5M: 5,
+            KL_TYPE.K_15M: 15,
+            KL_TYPE.K_30M: 30,
+            KL_TYPE.K_60M: 60,
         }
-        if self.k_type not in period_map:
-            raise ValueError(f"AData 暂不支持 {self.k_type} 级别")
-        
-        start_date = (self.begin_date or "1990-01-01").replace("-", "")
-        end_date = (self.end_date or "2099-12-31").replace("-", "")
-        
+        minute_bar_only = self.k_type == KL_TYPE.K_1M
+        start_date = (self.begin_date or "1990-01-01").replace("/", "-")
+        end_date = (self.end_date or "2099-12-31").replace("/", "-")
+        adj_val = 1 if self.autype == AUTYPE.QFQ else (2 if self.autype == AUTYPE.HFQ else 0)
+
         try:
-            from adata import get_stock_price
-            df = get_stock_price(
-                code=self.symbol,
-                start_date=start_date,
-                end_date=end_date,
-                freq=period_map[self.k_type],
-                adj="qfq" if self.autype == AUTYPE.QFQ else ("hfq" if self.autype == AUTYPE.HFQ else "none")
-            )
+            # 优先走新版 market.get_market，失败再回退旧 get_stock_price。
+            if minute_bar_only:
+                get_market_min = getattr(getattr(adata, "stock"), "market").get_market_min
+                df = get_market_min(self.symbol)
+            else:
+                if self.k_type not in period_map:
+                    raise ValueError(f"AData 暂不支持 {_k_type_label_cn(self.k_type)}")
+                get_market = getattr(getattr(adata, "stock"), "market").get_market
+                df = get_market(
+                    self.symbol,
+                    start_date=start_date,
+                    end_date=end_date,
+                    k_type=period_map[self.k_type],
+                    adjust_type=adj_val,
+                )
         except Exception as e:
-            raise RuntimeError(f"AData 获取数据失败: {e}")
-        
+            try:
+                from adata import get_stock_price  # type: ignore
+                if self.k_type == KL_TYPE.K_DAY:
+                    freq = "d"
+                elif self.k_type == KL_TYPE.K_WEEK:
+                    freq = "w"
+                elif self.k_type == KL_TYPE.K_MON:
+                    freq = "m"
+                else:
+                    raise RuntimeError(f"AData 获取数据失败: {e}")
+                df = get_stock_price(
+                    code=self.symbol,
+                    start_date=start_date.replace("-", ""),
+                    end_date=end_date.replace("-", ""),
+                    freq=freq,
+                    adj="qfq" if self.autype == AUTYPE.QFQ else ("hfq" if self.autype == AUTYPE.HFQ else "none"),
+                )
+            except Exception:
+                raise RuntimeError(f"AData 获取数据失败: {e}")
+
         if df is None or df.empty:
             return
-        
+
+        col_date = "trade_time" if "trade_time" in df.columns else ("trade_date" if "trade_date" in df.columns else ("date" if "date" in df.columns else None))
+        col_open = "open" if "open" in df.columns else "开盘"
+        col_high = "high" if "high" in df.columns else "最高"
+        col_low = "low" if "low" in df.columns else "最低"
+        col_close = "close" if "close" in df.columns else "收盘"
+        col_vol = "volume" if "volume" in df.columns else ("vol" if "vol" in df.columns else "成交量")
+        col_amt = "amount" if "amount" in df.columns else "成交额"
         for _, row in df.iterrows():
+            raw_time = row.get(col_date) if col_date else (row.get("time") or row.get("date"))
+            if minute_bar_only and str(raw_time or "").strip() and not re.search(r"\d{4}-\d{2}-\d{2}", str(raw_time)):
+                # get_market_min 仅给时分，这里拼接结束日（或今天）补全日期。
+                day = (self.end_date or datetime.now().strftime("%Y-%m-%d")).replace("/", "-")
+                raw_time = f"{day} {str(raw_time).strip()[:5]}"
+            ct, _ = _parse_inline_datetime(raw_time)
             item = {
-                DATA_FIELD.FIELD_TIME: _parse_inline_date(row.get("date") or row.get("time")),
-                DATA_FIELD.FIELD_OPEN: str2float(row.get("open", 0)),
-                DATA_FIELD.FIELD_HIGH: str2float(row.get("high", 0)),
-                DATA_FIELD.FIELD_LOW: str2float(row.get("low", 0)),
-                DATA_FIELD.FIELD_CLOSE: str2float(row.get("close", 0)),
-                DATA_FIELD.FIELD_VOLUME: str2float(row.get("volume", 0)),
-                DATA_FIELD.FIELD_TURNOVER: str2float(row.get("amount", 0)),
+                DATA_FIELD.FIELD_TIME: ct,
+                DATA_FIELD.FIELD_OPEN: str2float(row.get(col_open, 0)),
+                DATA_FIELD.FIELD_HIGH: str2float(row.get(col_high, 0)),
+                DATA_FIELD.FIELD_LOW: str2float(row.get(col_low, 0)),
+                DATA_FIELD.FIELD_CLOSE: str2float(row.get(col_close, 0)),
+                DATA_FIELD.FIELD_VOLUME: str2float(row.get(col_vol, 0)),
+                DATA_FIELD.FIELD_TURNOVER: str2float(row.get(col_amt, 0)),
             }
             yield CKLine_Unit(item)
 
@@ -816,7 +1013,8 @@ class CADataInline(CCommonStockApi):
 class CPytdxInline(CCommonStockApi):
     """使用 pytdx 库获取K线数据"""
     def __init__(self, code, k_type=KL_TYPE.K_DAY, begin_date=None, end_date=None, autype=AUTYPE.QFQ):
-        self.symbol = code  # pytdx 需要完整代码如 "000001"
+        # pytdx 使用纯 6 位代码，避免 sh./sz. 前缀导致市场判断错误
+        self.symbol = _strip_market_prefix(code)
         super(CPytdxInline, self).__init__(code, k_type, begin_date, end_date, autype)
 
     def get_kl_data(self):
@@ -839,11 +1037,13 @@ class CPytdxInline(CCommonStockApi):
         try:
             from pytdx.hq import TdxHq_API
             api = TdxHq_API()
-            api.connect('119.147.212.81', 7709)  # 使用标准行情服务器
+            ok = api.connect('119.147.212.81', 7709)  # 标准行情服务器
+            if not ok:
+                raise RuntimeError("pytdx 行情服务器连接失败")
             
             # 确定市场代码
-            market = 0 if str(self.symbol).startswith("6") else 1
-            symbol = str(self.symbol).replace("sh.", "").replace("sz.", "")
+            market = 1 if str(self.code).lower().startswith("sz.") else (0 if str(self.symbol).startswith("6") else 1)
+            symbol = str(self.symbol)
             
             # 获取数据
             data = api.get_security_bars(
@@ -858,12 +1058,21 @@ class CPytdxInline(CCommonStockApi):
             if not data:
                 return
             
-            import datetime
             for bar in data:
                 # pytdx 返回的数据格式转换
-                dt = datetime.datetime.fromtimestamp(bar['datetime'])
+                dt_raw = bar.get('datetime')
+                if isinstance(dt_raw, str):
+                    text = dt_raw.strip()
+                    if len(text) >= 16 and text[4] == "-" and text[7] == "-":
+                        dt = CTime(int(text[:4]), int(text[5:7]), int(text[8:10]), int(text[11:13]), int(text[14:16]))
+                    elif len(text) >= 10 and text[4] == "-" and text[7] == "-":
+                        dt = CTime(int(text[:4]), int(text[5:7]), int(text[8:10]), 0, 0)
+                    else:
+                        continue
+                else:
+                    continue
                 item = {
-                    DATA_FIELD.FIELD_TIME: CTime(dt.year, dt.month, dt.day, dt.hour, dt.minute),
+                    DATA_FIELD.FIELD_TIME: dt,
                     DATA_FIELD.FIELD_OPEN: float(bar['open']),
                     DATA_FIELD.FIELD_HIGH: float(bar['high']),
                     DATA_FIELD.FIELD_LOW: float(bar['low']),
@@ -906,9 +1115,8 @@ class CSinaInline(CCommonStockApi):
         return raw
 
     def get_kl_data(self):
-        # quotes.sina.cn 的 JSON 接口（money.finance 旧接口常返回非 dict 列表项）
+        # 先走 money.finance 老接口，失败回退 quotes.sina.cn。
         period_map = {
-            KL_TYPE.K_1M: "1",
             KL_TYPE.K_5M: "5",
             KL_TYPE.K_15M: "15",
             KL_TYPE.K_30M: "30",
@@ -920,55 +1128,48 @@ class CSinaInline(CCommonStockApi):
         if self.k_type not in period_map:
             raise ValueError(f"新浪财经暂不支持 {self.k_type} 级别")
 
-        start_d = (self.begin_date or "1990-01-01").strip()
-        end_d = (self.end_date or "2099-12-31").strip()
-
-        url = "https://quotes.sina.cn/cn/api/json_v2.php/CN_MarketDataService.getKLineData"
-        params = {"symbol": self.symbol, "scale": period_map[self.k_type], "ma": "no", "datalen": 1023}
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
+        start_d = (self.begin_date or "1990-01-01").replace("/", "-")[:10]
+        end_d = (self.end_date or "2099-12-31").replace("/", "-")[:10]
 
         try:
-            response = requests.get(url, params=params, headers=headers, timeout=15)
-            response.raise_for_status()
-            data = response.json()
-            if isinstance(data, str):
-                import json as _json
-
-                data = _json.loads(data)
-            if not isinstance(data, list):
-                raise RuntimeError(f"新浪财经返回类型异常：{type(data).__name__}")
-
-            for item in data:
-                if not isinstance(item, dict):
-                    continue
-                dt = str(item.get("day", "") or "")
-                if len(dt) >= 10 and dt[4] == "-" and dt[7] == "-":
-                    ct = CTime(int(dt[:4]), int(dt[5:7]), int(dt[8:10]), 0, 0)
-                elif len(dt) >= 8 and dt.isdigit():
-                    ct = CTime(int(dt[:4]), int(dt[4:6]), int(dt[6:8]), 0, 0)
-                else:
-                    continue
-                ds = ct.toDateStr("-")
-                s0 = start_d.replace("/", "-")[:10]
-                s1 = end_d.replace("/", "-")[:10]
-                if len(s0) == 10 and ds < s0:
-                    continue
-                if len(s1) == 10 and ds > s1:
-                    continue
-
-                kline_item = {
-                    DATA_FIELD.FIELD_TIME: ct,
-                    DATA_FIELD.FIELD_OPEN: str2float(item.get("open", 0)),
-                    DATA_FIELD.FIELD_HIGH: str2float(item.get("high", 0)),
-                    DATA_FIELD.FIELD_LOW: str2float(item.get("low", 0)),
-                    DATA_FIELD.FIELD_CLOSE: str2float(item.get("close", 0)),
-                    DATA_FIELD.FIELD_VOLUME: str2float(item.get("volume", 0)),
-                    DATA_FIELD.FIELD_TURNOVER: str2float(item.get("amount", 0)),
-                }
-                yield CKLine_Unit(kline_item)
-
+            url = (
+                "https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/"
+                "CN_MarketData.getKLineData"
+            )
+            payload = _request_json_with_headers(
+                url,
+                params={"symbol": self.symbol, "scale": period_map[self.k_type], "ma": "no", "datalen": "1023"},
+            )
+            rows = payload if isinstance(payload, list) else []
+            if not rows:
+                # 新接口兜底
+                payload2 = _request_json_with_headers(
+                    "https://quotes.sina.cn/cn/api/json_v2.php/CN_MarketDataService.getKLineData",
+                    params={"symbol": self.symbol, "scale": period_map[self.k_type], "ma": "no", "datalen": "1023"},
+                )
+                rows = payload2 if isinstance(payload2, list) else []
         except Exception as e:
             raise RuntimeError(f"新浪财经获取数据失败: {e}")
+        for item in rows:
+            if not isinstance(item, dict):
+                continue
+            try:
+                ct, dt_obj = _parse_inline_datetime(item.get("day"), default_time=(0, 0))
+            except Exception:
+                continue
+            ds = dt_obj.strftime("%Y-%m-%d")
+            if ds < start_d or ds > end_d:
+                continue
+            kline_item = {
+                DATA_FIELD.FIELD_TIME: ct,
+                DATA_FIELD.FIELD_OPEN: str2float(item.get("open", 0)),
+                DATA_FIELD.FIELD_HIGH: str2float(item.get("high", 0)),
+                DATA_FIELD.FIELD_LOW: str2float(item.get("low", 0)),
+                DATA_FIELD.FIELD_CLOSE: str2float(item.get("close", 0)),
+                DATA_FIELD.FIELD_VOLUME: str2float(item.get("volume", 0)) * 100.0,
+                DATA_FIELD.FIELD_TURNOVER: str2float(item.get("amount", 0)),
+            }
+            yield CKLine_Unit(kline_item)
 
     def SetBasciInfo(self):
         self.name = self.code
@@ -983,10 +1184,107 @@ class CSinaInline(CCommonStockApi):
         pass
 
 
-class CTencentInline(CSinaInline):
-    """腾讯 data.gtimg 旧版日线已 404；与新浪共用 quotes.sina.cn 通道，保证训练器可拉取。"""
+class CTencentInline(CCommonStockApi):
+    """腾讯 ifzq K 线接口（独立于新浪），优先复权通道。"""
 
-    pass
+    def __init__(self, code, k_type=KL_TYPE.K_DAY, begin_date=None, end_date=None, autype=AUTYPE.QFQ):
+        self.symbol = _to_tencent_symbol(code)
+        super(CTencentInline, self).__init__(code, k_type, begin_date, end_date, autype)
+
+    @staticmethod
+    def _to_tx_code(code: str) -> str:
+        raw = str(code or "").strip().lower()
+        if raw.startswith("sh.") or raw.startswith("sz."):
+            return raw.replace(".", "")
+        if len(raw) == 6 and raw.isdigit():
+            return ("sh" if raw.startswith("6") else "sz") + raw
+        return raw
+
+    def get_kl_data(self):
+        day_period_map = {
+            KL_TYPE.K_DAY: "day",
+            KL_TYPE.K_WEEK: "week",
+            KL_TYPE.K_MON: "month",
+        }
+        minute_map = {
+            KL_TYPE.K_1M: 1,
+            KL_TYPE.K_5M: 5,
+            KL_TYPE.K_15M: 15,
+            KL_TYPE.K_30M: 30,
+            KL_TYPE.K_60M: 60,
+        }
+        if self.k_type not in day_period_map and self.k_type not in minute_map:
+            raise ValueError(f"腾讯财经暂不支持 {_k_type_label_cn(self.k_type)}")
+        start_d = (self.begin_date or "1990-01-01").replace("/", "-")[:10]
+        end_d = (self.end_date or "2099-12-31").replace("/", "-")[:10]
+        fq = "qfq" if self.autype == AUTYPE.QFQ else ("hfq" if self.autype == AUTYPE.HFQ else "")
+        try:
+            lines = []
+            if self.k_type in day_period_map:
+                k_period = day_period_map[self.k_type]
+                end_token = "" if end_d == datetime.now().strftime("%Y-%m-%d") else end_d
+                # 优先走 fqkline，结构为空时再走 kline。
+                payload = _request_json_with_headers(
+                    "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get",
+                    params={"param": f"{self.symbol},{k_period},,{end_token},800,{fq or 'qfq'}"},
+                )
+                node = payload.get("data", {}).get(self.symbol, {}) if isinstance(payload, dict) else {}
+                lines = node.get(f"{fq}{k_period}") if fq else None
+                if not lines:
+                    lines = node.get(f"qfq{k_period}") or node.get(k_period) or []
+                if not lines:
+                    payload2 = _request_json_with_headers(
+                        "https://web.ifzq.gtimg.cn/appstock/app/kline/kline",
+                        params={"param": f"{self.symbol},{k_period},{start_d},{end_d},800"},
+                    )
+                    node2 = payload2.get("data", {}).get(self.symbol, {}) if isinstance(payload2, dict) else {}
+                    lines = node2.get(k_period) or []
+            else:
+                minute = minute_map[self.k_type]
+                payload = _request_json_with_headers(
+                    "https://ifzq.gtimg.cn/appstock/app/kline/mkline",
+                    params={"param": f"{self.symbol},m{minute},,800"},
+                )
+                lines = payload.get("data", {}).get(self.symbol, {}).get(f"m{minute}") or []
+            if not lines:
+                return
+
+            for row in lines:
+                if not isinstance(row, (list, tuple)) or len(row) < 6:
+                    continue
+                try:
+                    ct, dt_obj = _parse_inline_datetime(row[0])
+                except Exception:
+                    continue
+                ds = dt_obj.strftime("%Y-%m-%d")
+                if len(start_d) == 10 and ds < start_d:
+                    continue
+                if len(end_d) == 10 and ds > end_d:
+                    continue
+                item = {
+                    DATA_FIELD.FIELD_TIME: ct,
+                    DATA_FIELD.FIELD_OPEN: str2float(row[1]),
+                    DATA_FIELD.FIELD_CLOSE: str2float(row[2]),
+                    DATA_FIELD.FIELD_HIGH: str2float(row[3]),
+                    DATA_FIELD.FIELD_LOW: str2float(row[4]),
+                    DATA_FIELD.FIELD_VOLUME: str2float(row[5]) * 100.0,
+                    DATA_FIELD.FIELD_TURNOVER: str2float(row[6]) if len(row) > 6 else 0,
+                }
+                yield CKLine_Unit(item)
+        except Exception as e:
+            raise RuntimeError(f"腾讯财经获取数据失败: {e}")
+
+    def SetBasciInfo(self):
+        self.name = self.code
+        self.is_stock = True
+
+    @classmethod
+    def do_init(cls):
+        pass
+
+    @classmethod
+    def do_close(cls):
+        pass
 
 
 class CYahooInline(CCommonStockApi):
@@ -1067,58 +1365,50 @@ class CEastmoneyInline(CCommonStockApi):
     """使用东方财富网爬虫获取K线数据"""
     def __init__(self, code, k_type=KL_TYPE.K_DAY, begin_date=None, end_date=None, autype=AUTYPE.QFQ):
         self.symbol = _strip_market_prefix(code)
+        self.secid = _to_eastmoney_secid(code)
         super(CEastmoneyInline, self).__init__(code, k_type, begin_date, end_date, autype)
 
     def get_kl_data(self):
-        # 东方财富K线接口
+        # 东方财富 push2his 接口，支持分钟 + 日周月。
         period_map = {
-            KL_TYPE.K_1M: "1",
-            KL_TYPE.K_5M: "5",
-            KL_TYPE.K_15M: "15",
-            KL_TYPE.K_30M: "30",
-            KL_TYPE.K_60M: "60",
-            KL_TYPE.K_DAY: "101",
-            KL_TYPE.K_WEEK: "102",
+            KL_TYPE.K_1M: 1,
+            KL_TYPE.K_5M: 5,
+            KL_TYPE.K_15M: 15,
+            KL_TYPE.K_30M: 30,
+            KL_TYPE.K_60M: 60,
+            KL_TYPE.K_DAY: 101,
+            KL_TYPE.K_WEEK: 102,
+            KL_TYPE.K_MON: 103,
         }
         if self.k_type not in period_map:
-            raise ValueError(f"东方财富暂不支持 {self.k_type} 级别")
-        
+            raise ValueError(f"东方财富暂不支持 {_k_type_label_cn(self.k_type)}")
         start_date = (self.begin_date or "1990-01-01").replace("-", "")
         end_date = (self.end_date or "2099-12-31").replace("-", "")
-        
-        url = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
-        params = {
-            "secid": ("1." if str(self.symbol).startswith("6") else "0.") + self.symbol,
-            "fields1": "f1,f2,f3,f4,f5",
-            "fields2": "f51,f52,f53,f54,f55,f56,f57,f58",
-            "klt": period_map[self.k_type],
-            "fqt": "1" if self.autype == AUTYPE.QFQ else ("2" if self.autype == AUTYPE.HFQ else "0"),
-            "beg": start_date,
-            "end": end_date,
-        }
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
-
         try:
-            response = requests.get(url, params=params, headers=headers, timeout=15)
-            response.raise_for_status()
-            data = response.json()
-
-            if not data or "data" not in data or "klines" not in data["data"]:
+            payload = _request_json_with_headers(
+                "https://push2his.eastmoney.com/api/qt/stock/kline/get",
+                params={
+                    "secid": self.secid,
+                    "fields1": "f1,f2,f3",
+                    "fields2": "f51,f52,f53,f54,f55,f56,f57,f58",
+                    "klt": str(period_map[self.k_type]),
+                    "fqt": "1" if self.autype == AUTYPE.QFQ else ("2" if self.autype == AUTYPE.HFQ else "0"),
+                    "beg": start_date,
+                    "end": end_date,
+                    "lmt": "1200",
+                },
+            )
+            lines = payload.get("data", {}).get("klines") if isinstance(payload, dict) else None
+            if not lines:
                 return
-
-            for line in data["data"]["klines"]:
+            for line in lines:
                 parts = line.split(",")
-                if len(parts) < 6:
+                if len(parts) < 7:
                     continue
-                # 日期多为 YYYY-MM-DD 或 YYYYMMDD
-                dt = str(parts[0])
-                if len(dt) >= 10 and dt[4] == "-" and dt[7] == "-":
-                    ct = CTime(int(dt[:4]), int(dt[5:7]), int(dt[8:10]), 0, 0)
-                elif len(dt) >= 8 and dt[:8].isdigit():
-                    ct = CTime(int(dt[:4]), int(dt[4:6]), int(dt[6:8]), 0, 0)
-                else:
+                try:
+                    ct, _ = _parse_inline_datetime(parts[0], default_time=(0, 0))
+                except Exception:
                     continue
-
                 kline_item = {
                     DATA_FIELD.FIELD_TIME: ct,
                     DATA_FIELD.FIELD_OPEN: str2float(parts[1]),
@@ -1132,6 +1422,75 @@ class CEastmoneyInline(CCommonStockApi):
                 
         except Exception as e:
             raise RuntimeError(f"东方财富获取数据失败: {e}")
+
+    def SetBasciInfo(self):
+        self.name = self.code
+        self.is_stock = True
+
+    @classmethod
+    def do_init(cls):
+        pass
+
+    @classmethod
+    def do_close(cls):
+        pass
+
+
+class CGitHubCsvInline(CCommonStockApi):
+    """GitHub Raw CSV 数据源（通过环境变量模板配置）。"""
+
+    def __init__(self, code, k_type=KL_TYPE.K_DAY, begin_date=None, end_date=None, autype=AUTYPE.QFQ):
+        self.symbol = _strip_market_prefix(code)
+        super(CGitHubCsvInline, self).__init__(code, k_type, begin_date, end_date, autype)
+
+    def get_kl_data(self):
+        if self.k_type not in {KL_TYPE.K_DAY, KL_TYPE.K_WEEK, KL_TYPE.K_MON}:
+            raise ValueError(f"GitHub-CSV 暂不支持 {self.k_type} 级别")
+        tpl = os.getenv("CHAN_GITHUB_RAW_CSV_TEMPLATE", "").strip()
+        if not tpl:
+            raise RuntimeError("未配置 GitHub CSV 模板，请设置环境变量 CHAN_GITHUB_RAW_CSV_TEMPLATE")
+        market = "sh" if str(self.code).lower().startswith("sh.") or str(self.symbol).startswith("6") else "sz"
+        url = tpl.format(code6=self.symbol, symbol=f"{market}{self.symbol}", market=market)
+        try:
+            df = pd.read_csv(url)
+        except Exception as e:
+            raise RuntimeError(f"GitHub-CSV 读取失败: {e}")
+        if df is None or df.empty:
+            return
+        # 常见列名兼容
+        def pick(*names: str) -> Optional[str]:
+            for n in names:
+                if n in df.columns:
+                    return n
+            return None
+        c_date = pick("date", "日期", "Date", "trade_date")
+        c_open = pick("open", "开盘", "Open")
+        c_high = pick("high", "最高", "High")
+        c_low = pick("low", "最低", "Low")
+        c_close = pick("close", "收盘", "Close")
+        c_vol = pick("volume", "vol", "成交量", "Volume")
+        c_amt = pick("amount", "成交额", "Amount")
+        if not all([c_date, c_open, c_high, c_low, c_close]):
+            raise RuntimeError("GitHub-CSV 列名不匹配，至少需要 date/open/high/low/close")
+        s0 = (self.begin_date or "1990-01-01").replace("/", "-")[:10]
+        s1 = (self.end_date or "2099-12-31").replace("/", "-")[:10]
+        for _, row in df.iterrows():
+            ct = _parse_inline_date(row.get(c_date))
+            ds = ct.toDateStr("-")
+            if len(s0) == 10 and ds < s0:
+                continue
+            if len(s1) == 10 and ds > s1:
+                continue
+            item = {
+                DATA_FIELD.FIELD_TIME: ct,
+                DATA_FIELD.FIELD_OPEN: str2float(row.get(c_open, 0)),
+                DATA_FIELD.FIELD_HIGH: str2float(row.get(c_high, 0)),
+                DATA_FIELD.FIELD_LOW: str2float(row.get(c_low, 0)),
+                DATA_FIELD.FIELD_CLOSE: str2float(row.get(c_close, 0)),
+                DATA_FIELD.FIELD_VOLUME: str2float(row.get(c_vol, 0)) if c_vol else 0,
+                DATA_FIELD.FIELD_TURNOVER: str2float(row.get(c_amt, 0)) if c_amt else 0,
+            }
+            yield CKLine_Unit(item)
 
     def SetBasciInfo(self):
         self.name = self.code
@@ -1449,10 +1808,11 @@ class COfflineInline(CCommonStockApi):
         else:
             p1m = os.path.join(self._base, "KLine", "1MINUTE", self._folder_name + ".txt")
             if not os.path.isfile(p1m):
-                raise ValueError(f"未找到离线 1 分钟文件：{p1m}")
+                # 离线包以分笔或 1 分钟为基础数据，再合成到目标周期
+                raise ValueError(f"未找到离线基础数据文件（1分钟）：{p1m}，当前请求周期：{_k_type_label_cn(self.k_type)}")
             rows_1m = _offline_load_1m_rows(p1m, b8, e8)
             if not rows_1m:
-                raise ValueError("离线 1 分钟数据在指定日期区间内为空")
+                raise ValueError(f"离线基础数据（1分钟）在指定日期区间为空，当前请求周期：{_k_type_label_cn(self.k_type)}")
         bars = _offline_rows_to_ktype(rows_1m, self.k_type)
         if not bars:
             raise ValueError("离线合成后 K 线为空")
@@ -1481,6 +1841,10 @@ def get_stock_api_cls(data_src: Any):
     """根据数据源返回对应的API类"""
     if data_src == DATA_SRC.AKSHARE or data_src == AKSHARE_INLINE_SRC:
         return CAkshareInline
+    if data_src == AKTX_INLINE_SRC:
+        return CAkTxInline
+    if data_src == GITHUB_CSV_INLINE_SRC:
+        return CGitHubCsvInline
     if data_src == DATA_SRC.BAO_STOCK:
         return CBaoStock
     if data_src == TUSHARE_INLINE_SRC:
@@ -1508,6 +1872,10 @@ class ReplayDataChan(CChan):
     def GetStockAPI(self):
         if self.data_src == AKSHARE_INLINE_SRC:
             return CAkshareInline
+        if self.data_src == AKTX_INLINE_SRC:
+            return CAkTxInline
+        if self.data_src == GITHUB_CSV_INLINE_SRC:
+            return CGitHubCsvInline
         if self.data_src == TUSHARE_INLINE_SRC:
             return CTushareInline
         if self.data_src == "inline:ashare":
@@ -2533,16 +2901,30 @@ class ChanStepper:
             use_for: "kline" 表示用于K线开高低收，"chip" 表示用于筹码成交量
         """
         cfg_fetch = CChanConfig({**chan_cfg_dict, "trigger_step": False})
-        fetch_chan = ReplayDataChan(
-            code=self.code,
-            begin_time=begin_date,
-            end_time=end_date,
-            data_src=data_src,
-            lv_list=[self.k_type],
-            config=cfg_fetch,
-            autype=autype,
-        )
-        replay_klus_master = copy.deepcopy(list(fetch_chan[0].klu_iter()))
+        replay_klus_master: list = []
+        # 先走 CChan 原生通道，若三方库在内部触发 IndexError 等异常，则回退到 API 直拉。
+        try:
+            fetch_chan = ReplayDataChan(
+                code=self.code,
+                begin_time=begin_date,
+                end_time=end_date,
+                data_src=data_src,
+                lv_list=[self.k_type],
+                config=cfg_fetch,
+                autype=autype,
+            )
+            replay_klus_master = copy.deepcopy(list(fetch_chan[0].klu_iter()))
+        except Exception as chan_exc:
+            try:
+                api_cls = get_stock_api_cls(data_src)
+                api_cls.do_init()
+                try:
+                    api = api_cls(code=self.code, k_type=self.k_type, begin_date=begin_date, end_date=end_date, autype=autype)
+                    replay_klus_master = copy.deepcopy(list(api.get_kl_data()))
+                finally:
+                    api_cls.do_close()
+            except Exception as api_exc:
+                raise RuntimeError(f"CChan拉取失败: {format_source_error(chan_exc)}；API直拉失败: {format_source_error(api_exc)}")
         if not replay_klus_master:
             raise ValueError("未获取到任何K线数据")
 
@@ -3376,6 +3758,28 @@ def serialize_klu_iter(klu_iter) -> list[dict[str, Any]]:
     return arr
 
 
+def serialize_kline_combine(kl_list) -> list[dict[str, Any]]:
+    """序列化合并K线线框，供前端独立绘制。"""
+    bars = build_combined_newk_bars(list(kl_list.lst))
+    out: list[dict[str, Any]] = []
+    for bar in bars:
+        if len(bar.elements) == 0:
+            continue
+        first = bar.elements[0]
+        last = bar.elements[-1]
+        out.append(
+            {
+                "x1": int(first.begin_x),
+                "x2": int(last.end_x),
+                "high": float(bar.high),
+                "low": float(bar.low),
+                "fx": str(bar.fx.name if isinstance(bar.fx, FX_TYPE) else bar.fx),
+                "count": len(bar.elements),
+            }
+        )
+    return out
+
+
 def serialize_chan(
     chan: CChan,
     indicator_history: list,
@@ -3397,6 +3801,7 @@ def serialize_chan(
     bi_zs_arr = serialize_zs_collection(active_bundle.zs_list)
     seg_zs_arr = serialize_zs_collection(active_bundle.segzs_list)
     segseg_zs_arr = serialize_zs_collection(active_bundle.segsegzs_list)
+    kline_combine_arr = serialize_kline_combine(kl_list)
     bsp_bi_arr = serialize_bsp_collection("bi", active_bundle.bs_point_lst)
     bsp_seg_arr = serialize_bsp_collection("seg", active_bundle.seg_bs_point_lst)
     bsp_segseg_arr = serialize_bsp_collection("segseg", active_bundle.segseg_bs_point_lst)
@@ -3424,6 +3829,7 @@ def serialize_chan(
         "fx_lines": active_bundle.fx_lines,
         "indicators": indicator_history,
         "trend_lines": active_bundle.trend_lines if active_bundle.trend_lines else trend_lines,
+        "kline_combine": kline_combine_arr,
     }
     # None 表示「不下发」以减小步进等接口的 JSON；[] 仍表示真实空列表。
     if kline_all is not None:
@@ -4568,8 +4974,36 @@ const DEFAULT_CHART_CONFIG = {
     peakLineWidth: 1.2,
     peakLineStyle: "dashed"
   },
-  xAxis: { fontSize: 12, rotation: -45, fontWeight: "normal", interval: 10 },
-  yAxis: { fontSize: 12, fontWeight: "normal", interval: 0.5 },
+  xAxis: {
+    mode: "manual",
+    fontSize: 12,
+    rotation: -45,
+    fontWeight: "normal",
+    interval: 10,
+    autoMinFontSize: 8,
+    autoMaxFontSize: 12,
+    autoDenseRotation: -90,
+    autoSparseRotation: -35,
+    autoDenseFontWeight: "normal",
+    autoSparseFontWeight: "bold",
+  },
+  yAxis: {
+    mode: "manual",
+    fontSize: 12,
+    fontWeight: "normal",
+    interval: 0.5,
+    autoMinFontSize: 10,
+    autoMaxFontSize: 12,
+    autoDenseFontWeight: "normal",
+    autoSparseFontWeight: "bold",
+    autoMaxDigits: 6,
+  },
+  klineCombineFrame: {
+    enabled: true,
+    color: "#6366f1",
+    lineWidth: 1.2,
+    lineStyle: "solid",
+  },
   toast: { fontSize: 16, fontWeight: "bold", speed: 3000 },
   legend: { fontSize: 12, fontWeight: "normal", color: "#0f172a" },
   userRay: { color: "#f97316", width: 1.5, dash: [8, 4], fontSize: 12 }
@@ -4605,6 +5039,9 @@ function migrateChartConfig(cfg) {
   if (!next.bspSegseg) next.bspSegseg = {};
   if (!next.rhythmLine) next.rhythmLine = {};
   if (!next.rhythmHit) next.rhythmHit = {};
+  if (!next.xAxis) next.xAxis = {};
+  if (!next.yAxis) next.yAxis = {};
+  if (!next.klineCombineFrame) next.klineCombineFrame = {};
   return next;
 }
 
@@ -5825,13 +6262,17 @@ function renderSettingsForm() {
       color: "#475569",
       bgColor: "rgba(71, 85, 105, 0.08)",
       items: [
-        { label: "文字大小", subKey: "fontSize", type: "number", min: 8, max: 24 },
-        { label: "文字方向(度)", subKey: "rotation", type: "number", min: -180, max: 180 },
-        { label: "文字粗细", subKey: "fontWeight", type: "select", options: [
+        { label: "模式", subKey: "mode", type: "select", options: [
+          { value: "manual", label: "手动设置" },
+          { value: "auto", label: "自动设置" }
+        ], tip: "自动模式会按缩放动态调整字体、角度和日期抽样间隔。" },
+        { label: "手动-文字大小", subKey: "fontSize", type: "number", min: 8, max: 24 },
+        { label: "手动-文字方向(度)", subKey: "rotation", type: "number", min: -180, max: 180 },
+        { label: "手动-文字粗细", subKey: "fontWeight", type: "select", options: [
           { value: "normal", label: "常规" },
           { value: "bold", label: "加粗" }
         ]},
-        { label: "刻度间隔(K线)", subKey: "interval", type: "number", min: 1, max: 100 }
+        { label: "手动-刻度间隔(K线)", subKey: "interval", type: "number", min: 1, max: 100 }
       ]
     },
     {
@@ -5840,12 +6281,32 @@ function renderSettingsForm() {
       color: "#334155",
       bgColor: "rgba(51, 65, 85, 0.08)",
       items: [
-        { label: "文字大小", subKey: "fontSize", type: "number", min: 8, max: 24 },
-        { label: "文字粗细", subKey: "fontWeight", type: "select", options: [
+        { label: "模式", subKey: "mode", type: "select", options: [
+          { value: "manual", label: "手动设置" },
+          { value: "auto", label: "自动设置" }
+        ], tip: "自动模式会按纵向缩放动态调整刻度步长和显示精度。" },
+        { label: "手动-文字大小", subKey: "fontSize", type: "number", min: 8, max: 24 },
+        { label: "手动-文字粗细", subKey: "fontWeight", type: "select", options: [
           { value: "normal", label: "常规" },
           { value: "bold", label: "加粗" }
         ]},
-        { label: "刻度间隔(价格)", subKey: "interval", type: "number", min: 0.001, max: 100, step: 0.001 }
+        { label: "手动-刻度间隔(价格)", subKey: "interval", type: "number", min: 0.001, max: 100, step: 0.001 }
+      ]
+    },
+    {
+      title: "合并K线线框",
+      key: "klineCombineFrame",
+      color: "#4f46e5",
+      bgColor: "rgba(79, 70, 229, 0.08)",
+      items: [
+        { label: "启用线框", subKey: "enabled", type: "checkbox", tip: "按合并K线范围绘制独立线框层。" },
+        { label: "线框颜色", subKey: "color", type: "color" },
+        { label: "线框粗细", subKey: "lineWidth", type: "number", min: 0.1, max: 5, step: 0.1 },
+        { label: "线框线型", subKey: "lineStyle", type: "select", options: [
+          { value: "solid", label: "实线" },
+          { value: "dashed", label: "虚线" },
+          { value: "dotted", label: "点线" }
+        ]}
       ]
     },
     {
@@ -8211,6 +8672,38 @@ function toScaler(chart, xMin, xMax) {
   };
 }
 
+function chooseAutoYAxisStep(range, targetTicks) {
+  if (!Number.isFinite(range) || range <= 0) return 1;
+  const rough = range / Math.max(1, targetTicks);
+  const exponent = Math.floor(Math.log10(Math.max(rough, 1e-9)));
+  const base = Math.pow(10, exponent);
+  const factors = [1, 2, 2.5, 5, 10];
+  for (const f of factors) {
+    const step = base * f;
+    if (step >= rough) return step;
+  }
+  return base * 10;
+}
+
+function chooseAutoYDigits(step, maxDigits = 6) {
+  if (!Number.isFinite(step) || step <= 0) return 2;
+  const digits = Math.max(0, Math.ceil(-Math.log10(step)) + 1);
+  return Math.min(maxDigits, digits);
+}
+
+function toDateLabel(raw, minuteLike) {
+  const text = String(raw || "").trim();
+  if (!text) return "-";
+  if (minuteLike) return text.length >= 16 ? text.slice(0, 16) : text;
+  if (text.length >= 10) return text.slice(0, 10);
+  return text;
+}
+
+function isMinuteLikeXAxisLabel(raw) {
+  const text = String(raw || "");
+  return text.includes(":");
+}
+
 function drawAxes(s) {
   const yBase = s.plotBottomY;
   const xLeft = PAD_L;
@@ -8226,13 +8719,29 @@ function drawAxes(s) {
   ctx.stroke();
 
   // main y labels/ticks on both sides
-  const tickStep = chartConfig.yAxis.interval || 0.5;
+  const yAutoMode = (chartConfig.yAxis.mode || "manual") === "auto";
+  const yRange = Math.max(1e-9, s.yMax - s.yMin);
+  const axisPxH = Math.max(1, s.plotBottomY - PAD_T);
+  const targetTicks = Math.max(4, Math.min(18, Math.round(axisPxH / 64)));
+  const tickStep = yAutoMode
+    ? chooseAutoYAxisStep(yRange, targetTicks)
+    : (chartConfig.yAxis.interval || 0.5);
+  const yDigits = yAutoMode
+    ? chooseAutoYDigits(tickStep, Number(chartConfig.yAxis.autoMaxDigits || 6))
+    : 2;
   const startTick = Math.ceil(s.yMin / tickStep);
   const endTick = Math.floor(s.yMax / tickStep);
   ctx.save();
   ctx.strokeStyle = cssVar("--grid", "#e2e8f0");
   ctx.fillStyle = cssVar("--muted", "#475569");
-  ctx.font = `${chartConfig.yAxis.fontWeight || "normal"} ${chartConfig.yAxis.fontSize || 12}px Consolas`;
+  const yDensity = Math.max(0, Math.min(1, axisPxH / Math.max(1, targetTicks * 80)));
+  const yFontSize = yAutoMode
+    ? Math.round((Number(chartConfig.yAxis.autoMinFontSize || 10)) + ((Number(chartConfig.yAxis.autoMaxFontSize || 12) - Number(chartConfig.yAxis.autoMinFontSize || 10)) * yDensity))
+    : (chartConfig.yAxis.fontSize || 12);
+  const yFontWeight = yAutoMode
+    ? (yDensity >= 0.65 ? (chartConfig.yAxis.autoSparseFontWeight || "bold") : (chartConfig.yAxis.autoDenseFontWeight || "normal"))
+    : (chartConfig.yAxis.fontWeight || "normal");
+  ctx.font = `${yFontWeight} ${yFontSize}px Consolas`;
   ctx.lineWidth = 1;
   for (let t = startTick; t <= endTick; t++) {
     const p = t * tickStep;
@@ -8250,10 +8759,10 @@ function drawAxes(s) {
     ctx.moveTo(xRight, y);
     ctx.lineTo(xRight + 4, y);
     ctx.stroke();
-    const txt = formatPriceText(p, 2);
-    ctx.fillText(txt, 4, y + (chartConfig.yAxis.fontSize / 2.5));
+    const txt = formatPriceText(p, yDigits);
+    ctx.fillText(txt, 4, y + (yFontSize / 2.5));
     const tw = ctx.measureText(txt).width;
-    ctx.fillText(txt, s.w - tw - 4, y + (chartConfig.yAxis.fontSize / 2.5));
+    ctx.fillText(txt, s.w - tw - 4, y + (yFontSize / 2.5));
   }
   ctx.restore();
   
@@ -8277,7 +8786,13 @@ function drawAxes(s) {
 function drawXTicks(s, yPos) {
   const span = s.xMax - s.xMin;
   if (span <= 0) return;
-  const interval = chartConfig.xAxis.interval || 10;
+  const xAutoMode = (chartConfig.xAxis.mode || "manual") === "auto";
+  const minuteLike = isMinuteLikeXAxisLabel(s.xToTime[Math.round(s.xMin)] || s.xToTime[Math.round(s.xMax)] || "");
+  const sampledLabel = toDateLabel(s.xToTime[Math.round(s.xMin)] || s.xToTime[Math.round(s.xMax)] || "", minuteLike);
+  const approxLabelWidth = Math.max(30, sampledLabel.length * 7 + 10);
+  const perBarPx = s.plotW / Math.max(1, span);
+  const autoInterval = Math.max(1, Math.ceil(approxLabelWidth / Math.max(1, perBarPx)));
+  const interval = xAutoMode ? autoInterval : (chartConfig.xAxis.interval || 10);
   const tickXs = [];
   const startX = Math.ceil(s.xMin / interval) * interval;
   for (let x = startX; x <= s.xMax; x += interval) {
@@ -8286,7 +8801,17 @@ function drawXTicks(s, yPos) {
   const uniq = [...new Set(tickXs)];
 
   ctx.save();
-  ctx.font = `${chartConfig.xAxis.fontWeight || "normal"} ${chartConfig.xAxis.fontSize || 12}px Consolas`;
+  const xDensity = Math.max(0, Math.min(1, perBarPx * interval / Math.max(approxLabelWidth, 1)));
+  const xFontSize = xAutoMode
+    ? Math.round((Number(chartConfig.xAxis.autoMinFontSize || 8)) + ((Number(chartConfig.xAxis.autoMaxFontSize || 12) - Number(chartConfig.xAxis.autoMinFontSize || 8)) * xDensity))
+    : (chartConfig.xAxis.fontSize || 12);
+  const xFontWeight = xAutoMode
+    ? (xDensity >= 0.65 ? (chartConfig.xAxis.autoSparseFontWeight || "bold") : (chartConfig.xAxis.autoDenseFontWeight || "normal"))
+    : (chartConfig.xAxis.fontWeight || "normal");
+  ctx.font = `${xFontWeight} ${xFontSize}px Consolas`;
+  const xRotationDeg = xAutoMode
+    ? (xDensity < 0.55 ? Number(chartConfig.xAxis.autoDenseRotation || -90) : Number(chartConfig.xAxis.autoSparseRotation || -35))
+    : Number(chartConfig.xAxis.rotation || -45);
   for (const x of uniq) {
     const xp = s.x(x);
     ctx.strokeStyle = cssVar("--grid", "#e2e8f0");
@@ -8297,12 +8822,13 @@ function drawXTicks(s, yPos) {
 
     const t = s.xToTime[x];
     if (!t) continue;
+    const label = toDateLabel(t, minuteLike);
     ctx.save();
     ctx.translate(xp, yPos + 20);
-    const rad = (chartConfig.xAxis.rotation || -45) * (Math.PI / 180);
+    const rad = xRotationDeg * (Math.PI / 180);
     ctx.rotate(rad);
     ctx.fillStyle = cssVar("--muted", "#475569");
-    ctx.fillText(t, 0, 0);
+    ctx.fillText(label, 0, 0);
     ctx.restore();
   }
   ctx.restore();
@@ -8598,6 +9124,33 @@ function drawCandles(chart, s) {
       ctx.fillRect(x - bodyW / 2, top, bodyW, bh);
     }
   }
+}
+
+function drawKlineCombineFrames(chart, s) {
+  if (!chartConfig.klineCombineFrame || chartConfig.klineCombineFrame.enabled === false) return;
+  const frames = Array.isArray(chart.kline_combine) ? chart.kline_combine : [];
+  if (frames.length === 0) return;
+  ctx.save();
+  ctx.strokeStyle = getCfgColor(chartConfig.klineCombineFrame.color || "#6366f1");
+  ctx.lineWidth = Number(chartConfig.klineCombineFrame.lineWidth || 1.2);
+  ctx.setLineDash(getTradeLineDash(chartConfig.klineCombineFrame.lineStyle || "solid"));
+  for (const frame of frames) {
+    if (!frame) continue;
+    const loX = Math.min(Number(frame.x1), Number(frame.x2));
+    const hiX = Math.max(Number(frame.x1), Number(frame.x2));
+    if (!Number.isFinite(loX) || !Number.isFinite(hiX)) continue;
+    if (hiX < s.xMin || loX > s.xMax) continue;
+    const x1 = s.x(loX);
+    const x2 = s.x(hiX);
+    const yTop = s.y(Number(frame.high));
+    const yBottom = s.y(Number(frame.low));
+    const rectX = Math.min(x1, x2);
+    const rectY = Math.min(yTop, yBottom);
+    const rectW = Math.max(1, Math.abs(x2 - x1));
+    const rectH = Math.max(1, Math.abs(yBottom - yTop));
+    ctx.strokeRect(rectX, rectY, rectW, rectH);
+  }
+  ctx.restore();
 }
 
 function intersects(l, xMin, xMax) {
@@ -9267,6 +9820,7 @@ function draw(chart) {
   drawAxes(s);
   drawIndicators(chart, s);
   drawCandles(chart, s);
+  drawKlineCombineFrames(chart, s);
   if (chartConfig.fractZs.enabled) {
     drawZsRects(chart.fract_zs || [], s, getCfgColor(chartConfig.fractZs.color), chartConfig.fractZs.width);
   }
