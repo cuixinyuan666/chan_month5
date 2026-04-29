@@ -3239,6 +3239,8 @@ class AppState:
             raise ValueError("当前无可重建会话")
         params = self.session_params
 
+        # 必须与首次 /api/init 传入的 data_source_priority、confirm_offline 一致，
+        # 否则 session_key 中 prio_fp 变化会导致误判缓存未命中，重新拉行情并在 BaoStock 等源上失败。
         self.stepper.init(
             params["code"],
             params["begin_date"],
@@ -3246,6 +3248,8 @@ class AppState:
             params["autype"],
             chan_config=params.get("chan_config"),
             k_type=params.get("k_type", "daily"),  # 重建时保留周期类型
+            confirm_offline=bool(params.get("confirm_offline", False)),
+            data_source_priority=params.get("data_source_priority"),
         )
 
         # Account reset is handled by the caller if needed (e.g. in reconfig)
@@ -9962,6 +9966,9 @@ def api_init(req: InitReq):
             "initial_cash": req.initial_cash,
             "chan_config": req.chan_config,
             "k_type": req.k_type,  # 保存周期类型到会话参数
+            # 与 ChanStepper.init 的 session_key 一致，供 reconfig/back_n 重建时命中 K 线缓存、避免重复联网
+            "confirm_offline": bool(req.confirm_offline),
+            "data_source_priority": req.data_source_priority,
         }
         APP_STATE.trade_events = []
         APP_STATE.bsp_history = []
