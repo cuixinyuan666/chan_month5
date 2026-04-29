@@ -1,9 +1,11 @@
 import copy
 import json
+import os
+import re
 import warnings
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 # 可选数据源：未安装时统一提示（与下方 RuntimeError 文案一致）
 # 说明：PyPI 无 ashare 包，开源封装多为 pip install ashares（import ashares）
@@ -119,6 +121,8 @@ SINA_INLINE_SRC = "inline:sina"
 TENCENT_INLINE_SRC = "inline:tencent"
 YAHOO_INLINE_SRC = "inline:yahoo"
 EASTMONEY_INLINE_SRC = "inline:eastmoney"
+# 本地 a_Data 离线包（分笔优先，否则 1 分钟合成高周期）
+OFFLINE_INLINE_SRC = "inline:offline"
 # 可配置的数据源优先级（从系统配置读取）
 CONFIG_DATA_SRC_PRIORITY: list = []
 CONFIG_OHLC_SRC: Any = None  # 开高低收数据源，默认第一个可用
@@ -131,6 +135,7 @@ DEFAULT_DATA_SOURCE_PRIORITY_NAMES: list[str] = [
     "AData",
     "pytdx",
     "BaoStock",
+    "离线数据",
     "Tushare",
     "新浪财经",
     "腾讯财经",
@@ -150,6 +155,7 @@ _DATA_SOURCE_NAME_TO_PAIR: dict[str, tuple[str, Any]] = {
     "腾讯财经": ("腾讯财经", TENCENT_INLINE_SRC),
     "雅虎财经": ("雅虎财经", YAHOO_INLINE_SRC),
     "东方财富": ("东方财富", EASTMONEY_INLINE_SRC),
+    "离线数据": ("离线数据", OFFLINE_INLINE_SRC),
 }
 
 # K 线拉取与筹码全历史拉取各用一份链（顺序由同一套优先级生成，回退结果可不同）
@@ -189,6 +195,7 @@ DATA_SOURCE_LABELS = {
     TENCENT_INLINE_SRC: "腾讯财经",
     YAHOO_INLINE_SRC: "雅虎财经",
     EASTMONEY_INLINE_SRC: "东方财富",
+    OFFLINE_INLINE_SRC: "离线数据",
 }
 
 apply_data_source_priority(DEFAULT_DATA_SOURCE_PRIORITY_NAMES)
@@ -242,6 +249,250 @@ def format_source_error(exc: Exception) -> str:
     if not text:
         text = exc.__class__.__name__
     return " ".join(text.split())
+
+
+class OfflineDataConfirmRequired(Exception):
+    """在线源失败后、即将尝试离线源前，交给前端 confirm 的专用异常。"""
+
+    def __init__(self, display_code: str, failed_label: str, reason_tag: str, reason_detail: str) -> None:
+        self.display_code = display_code
+        self.failed_label = failed_label
+        self.reason_tag = reason_tag
+        self.reason_detail = reason_detail
+        super().__init__(reason_detail)
+
+
+def classify_fetch_error_tag(exc: Exception) -> str:
+    """将异常归类为简短中文桶，用于弹窗【原因为 xxx】。"""
+    low = str(exc).lower()
+    cls_name = exc.__class__.__name__.lower()
+    if isinstance(exc, (TimeoutError, ConnectionError, OSError)):
+        if "timed out" in low or "timeout" in cls_name:
+            return "网络问题"
+        if any(x in low for x in ("connection", "network", "resolve", "getaddrinfo", "10060", "10054")):
+            return "网络问题"
+    if any(x in low for x in ("connection aborted", "remote end closed", "ssl", "certificate", "403", "404", "502", "503")):
+        return "网络问题"
+    if "网络" in str(exc) or "连接" in str(exc):
+        return "网络问题"
+    return "数据源异常"
+
+
+def _offline_root_dir() -> str:
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "a_Data")
+
+
+def offline_folder_from_code(code: str) -> str:
+    """sz.001312 -> SZ#001312"""
+    c = str(code or "").strip().lower()
+    if c.startswith("sh."):
+        return "SH#" + c[3:9] if len(c) >= 9 else "SH#" + c[3:]
+    if c.startswith("sz."):
+        return "SZ#" + c[3:9] if len(c) >= 9 else "SZ#" + c[3:]
+    sym = _strip_market_prefix(code)
+    if len(sym) == 6 and sym.isdigit():
+        return ("SH#" if sym.startswith("6") else "SZ#") + sym
+    return "SZ#" + sym
+
+
+def _offline_date_bounds(begin_date: Optional[str], end_date: Optional[str]) -> tuple[int, int]:
+    """返回 YYYYMMDD 整数闭区间，便于与分笔文件名比较。"""
+    b = (begin_date or "1990-01-01").replace("/", "-").strip()
+    e = (end_date or "2099-12-31").replace("/", "-").strip()
+    b8 = int(b[:4] + b[5:7] + b[8:10]) if len(b) >= 10 else 19900101
+    e8 = int(e[:4] + e[5:7] + e[8:10]) if len(e) >= 10 else 20991231
+    return b8, e8
+
+
+def offline_bundle_exists(code: str, begin_date: Optional[str], end_date: Optional[str]) -> bool:
+    """会话加载前探测：是否有可用离线包（分笔或 1 分钟文件）。"""
+    folder = os.path.join(_offline_root_dir(), offline_folder_from_code(code))
+    if not os.path.isdir(folder):
+        return False
+    code6 = _strip_market_prefix(code)
+    b8, e8 = _offline_date_bounds(begin_date, end_date)
+    tick_dir = os.path.join(folder, "TickData")
+    if os.path.isdir(tick_dir):
+        pat = re.compile(r"^(\d{8})_" + re.escape(code6) + r"\.txt$", re.I)
+        for fn in os.listdir(tick_dir):
+            m = pat.match(fn)
+            if m:
+                d8 = int(m.group(1))
+                if b8 <= d8 <= e8:
+                    return True
+    k1 = os.path.join(folder, "KLine", "1MINUTE", offline_folder_from_code(code) + ".txt")
+    return os.path.isfile(k1) and os.path.getsize(k1) > 80
+
+
+def offline_tick_files_exist_for_range(code: str, begin_date: Optional[str], end_date: Optional[str]) -> bool:
+    """指定日期闭区间内是否存在可分笔 TickData 文件（与 offline_bundle_exists 中分笔判定一致）。"""
+    folder = os.path.join(_offline_root_dir(), offline_folder_from_code(code))
+    if not os.path.isdir(folder):
+        return False
+    code6 = _strip_market_prefix(code)
+    b8, e8 = _offline_date_bounds(begin_date, end_date)
+    return len(_offline_list_tick_paths(folder, code6, b8, e8)) > 0
+
+
+def _offline_chip_supported_ktypes() -> frozenset:
+    """离线合成支持的周期：均可写 chip_tick_bins，避免前端三角分摊。"""
+    return frozenset(
+        {
+            KL_TYPE.K_1M,
+            KL_TYPE.K_3M,
+            KL_TYPE.K_5M,
+            KL_TYPE.K_15M,
+            KL_TYPE.K_30M,
+            KL_TYPE.K_60M,
+            KL_TYPE.K_DAY,
+            KL_TYPE.K_WEEK,
+            KL_TYPE.K_MON,
+            KL_TYPE.K_QUARTER,
+            KL_TYPE.K_YEAR,
+        }
+    )
+
+
+def offline_1m_file_exists(code: str) -> bool:
+    """a_Data 下是否存在可用的 1 分钟 K 线文本（无分笔时用于分钟收盘点质量化筹码）。"""
+    folder = os.path.join(_offline_root_dir(), offline_folder_from_code(code))
+    fn = offline_folder_from_code(code) + ".txt"
+    p = os.path.join(folder, "KLine", "1MINUTE", fn)
+    return os.path.isfile(p) and os.path.getsize(p) > 80
+
+
+def _parse_kline_bar_ctime(bar_t: str) -> Optional[CTime]:
+    """解析 serialize_klu_iter 的时间串（与 CTime.to_str 一致：YYYY/MM/DD 或带 HH:MM）。"""
+    s = str(bar_t or "").strip()
+    if len(s) < 10 or s[4] != "/" or s[7] != "/":
+        return None
+    try:
+        y, mo, d = int(s[0:4]), int(s[5:7]), int(s[8:10])
+    except (ValueError, TypeError):
+        return None
+    if len(s) >= 16 and s[10] == " ":
+        tail = s[11:].strip()
+        if ":" in tail:
+            a, b = tail.split(":", 1)
+            try:
+                hh = int(a)
+                mm = int(b[:2]) if len(b) >= 2 else 0
+            except (ValueError, TypeError):
+                return CTime(y, mo, d, 0, 0, auto=False)
+            return CTime(y, mo, d, hh, mm, auto=False)
+    return CTime(y, mo, d, 0, 0, auto=False)
+
+
+def _offline_chip_bar_bucket_key(ct: CTime, k_type: KL_TYPE) -> tuple:
+    """与 Offline 合成 K 的分桶一致：分笔或 1 分钟行归入同一根 K。"""
+    from datetime import date as _date
+
+    if k_type == KL_TYPE.K_DAY:
+        return ("d", ct.year, ct.month, ct.day)
+    minute_like = {
+        KL_TYPE.K_1M,
+        KL_TYPE.K_3M,
+        KL_TYPE.K_5M,
+        KL_TYPE.K_15M,
+        KL_TYPE.K_30M,
+        KL_TYPE.K_60M,
+    }
+    if k_type in minute_like:
+        pm = _offline_kl_minutes(k_type)
+        slot = (ct.hour * 60 + ct.minute) // pm
+        return ("m", ct.year, ct.month, ct.day, slot)
+    if k_type == KL_TYPE.K_WEEK:
+        iy, iw, _ = _date(ct.year, ct.month, ct.day).isocalendar()
+        return ("w", iy, iw)
+    if k_type == KL_TYPE.K_MON:
+        return ("mo", ct.year, ct.month)
+    if k_type == KL_TYPE.K_QUARTER:
+        q = (ct.month - 1) // 3 + 1
+        return ("q", ct.year, q)
+    if k_type == KL_TYPE.K_YEAR:
+        return ("y", ct.year)
+    raise ValueError(f"离线筹码分桶不支持的周期: {k_type}")
+
+
+def _fold_price_vols(rows: list[tuple[float, float]]) -> tuple[list[float], list[float]]:
+    from collections import defaultdict
+
+    pr_acc: dict[float, float] = defaultdict(float)
+    for p, v in rows:
+        if v <= 0 or not (p > 0) or not (v == v):
+            continue
+        rp = round(float(p), 4)
+        pr_acc[rp] += float(v)
+    if not pr_acc:
+        return [], []
+    ps = sorted(pr_acc.keys())
+    ws = [float(pr_acc[p]) for p in ps]
+    return ps, ws
+
+
+def _enrich_kline_all_offline_chip_non_triangle(
+    code: str, kline_all: list[dict[str, Any]], end_date: Optional[str], k_type: KL_TYPE
+) -> None:
+    """
+    离线任意支持周期：写入 chip_tick_bins（分笔价量直加；无分笔则用 1 分钟收盘点质量化），前端不走 OHLC 三角分摊。
+    """
+    from collections import defaultdict
+
+    if k_type not in _offline_chip_supported_ktypes():
+        return
+    folder = os.path.join(_offline_root_dir(), offline_folder_from_code(code))
+    if not kline_all or not os.path.isdir(folder):
+        return
+    code6 = _strip_market_prefix(code)
+    b8, e8 = _offline_date_bounds("1990-01-01", end_date)
+    key_to_rows: dict[tuple, list[tuple[float, float]]] = defaultdict(list)
+
+    paths = _offline_list_tick_paths(folder, code6, b8, e8)
+    if paths:
+        ticks = _offline_load_ticks(paths)
+        if not ticks:
+            return
+        for t, price, vol in ticks:
+            try:
+                bk = _offline_chip_bar_bucket_key(t, k_type)
+            except ValueError:
+                continue
+            key_to_rows[bk].append((float(price), float(vol)))
+    else:
+        p1m = os.path.join(folder, "KLine", "1MINUTE", offline_folder_from_code(code) + ".txt")
+        if not (os.path.isfile(p1m) and os.path.getsize(p1m) > 80):
+            return
+        rows_1m = _offline_load_1m_rows(p1m, b8, e8)
+        if not rows_1m:
+            return
+        for r in rows_1m:
+            ct = r["t"]
+            try:
+                bk = _offline_chip_bar_bucket_key(ct, k_type)
+            except ValueError:
+                continue
+            key_to_rows[bk].append((float(r["c"]), float(r["v"])))
+
+    if not key_to_rows:
+        return
+    key_to_bins: dict[tuple, tuple[list[float], list[float]]] = {}
+    for bk, arr in key_to_rows.items():
+        ps, ws = _fold_price_vols(arr)
+        if ps:
+            key_to_bins[bk] = (ps, ws)
+
+    for bar in kline_all:
+        ct = _parse_kline_bar_ctime(str(bar.get("t", "")))
+        if ct is None:
+            continue
+        try:
+            bk = _offline_chip_bar_bucket_key(ct, k_type)
+        except ValueError:
+            continue
+        tup = key_to_bins.get(bk)
+        if not tup or not tup[0]:
+            continue
+        bar["chip_tick_bins"] = {"p": tup[0], "w": tup[1]}
 
 
 def _strip_market_prefix(code: str) -> str:
@@ -895,6 +1146,337 @@ class CEastmoneyInline(CCommonStockApi):
         pass
 
 
+def _offline_kl_minutes(klt: KL_TYPE) -> int:
+    m = {
+        KL_TYPE.K_1M: 1,
+        KL_TYPE.K_3M: 3,
+        KL_TYPE.K_5M: 5,
+        KL_TYPE.K_15M: 15,
+        KL_TYPE.K_30M: 30,
+        KL_TYPE.K_60M: 60,
+    }
+    if klt not in m:
+        raise ValueError(f"离线数据暂不支持从 1 分钟合成的周期：{klt}")
+    return m[klt]
+
+
+def _offline_parse_slash_date(s: str) -> tuple[int, int, int]:
+    s = s.strip().replace("-", "/")
+    a = s.split("/")
+    if len(a) < 3:
+        raise ValueError(s)
+    return int(a[0]), int(a[1]), int(a[2])
+
+
+def _offline_parse_hhmm(s: str) -> tuple[int, int]:
+    s = str(s).strip()
+    if ":" in s:
+        a, b = s.split(":", 1)
+        return int(a), int(b)
+    if len(s) == 4 and s.isdigit():
+        return int(s[:2]), int(s[2:])
+    raise ValueError(s)
+
+
+def _offline_load_1m_rows(path: str, b8: int, e8: int) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+        for line in f:
+            line = line.rstrip("\n\r")
+            if not line.strip():
+                continue
+            raw = line.replace("\t", " ")
+            if "日期" in raw and "时间" in raw:
+                continue
+            if "分钟线" in raw or re.match(r"^\d{6}\s", raw.strip()):
+                continue
+            parts = [p for p in line.split("\t") if p != ""]
+            if len(parts) < 8:
+                parts = re.split(r"\s+", raw.strip())
+            if len(parts) < 8:
+                continue
+            try:
+                y, mo, d = _offline_parse_slash_date(parts[0])
+                d8 = y * 10000 + mo * 100 + d
+                if d8 < b8 or d8 > e8:
+                    continue
+                hh, mm = _offline_parse_hhmm(parts[1])
+                ct = CTime(y, mo, d, hh, mm, auto=False)
+                rows.append(
+                    {
+                        "t": ct,
+                        "o": str2float(parts[2]),
+                        "h": str2float(parts[3]),
+                        "l": str2float(parts[4]),
+                        "c": str2float(parts[5]),
+                        "v": str2float(parts[6]),
+                        "amt": str2float(parts[7]),
+                    }
+                )
+            except (ValueError, TypeError, IndexError):
+                continue
+    rows.sort(key=lambda r: r["t"].ts)
+    return rows
+
+
+def _offline_list_tick_paths(folder: str, code6: str, b8: int, e8: int) -> list[str]:
+    tick_dir = os.path.join(folder, "TickData")
+    if not os.path.isdir(tick_dir):
+        return []
+    pat = re.compile(r"^(\d{8})_" + re.escape(code6) + r"\.txt$", re.I)
+    out: list[tuple[int, str]] = []
+    for fn in os.listdir(tick_dir):
+        m = pat.match(fn)
+        if not m:
+            continue
+        d8 = int(m.group(1))
+        if b8 <= d8 <= e8:
+            out.append((d8, os.path.join(tick_dir, fn)))
+    out.sort(key=lambda x: x[0])
+    return [p for _, p in out]
+
+
+def _offline_load_ticks(paths: list[str]) -> list[tuple[CTime, float, float]]:
+    ticks: list[tuple[CTime, float, float]] = []
+    for p in paths:
+        base = os.path.basename(p)
+        d8 = int(base.split("_")[0])
+        y, mo, d0 = d8 // 10000, (d8 // 100) % 100, d8 % 100
+        with open(p, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                parts = re.split(r"\s+", line)
+                if len(parts) < 3:
+                    continue
+                if parts[0] in ("时间", "---") or parts[0].startswith("时间"):
+                    continue
+                if not re.match(r"^\d{1,2}:\d{2}$", parts[0]):
+                    continue
+                a, b = parts[0].split(":", 1)
+                hh, mm = int(a), int(b)
+                price = str2float(parts[1])
+                vol = str2float(parts[2])
+                ticks.append((CTime(y, mo, d0, hh, mm, auto=False), price, vol))
+    ticks.sort(key=lambda x: x[0].ts)
+    return ticks
+
+
+def _offline_ticks_to_1m(ticks: list[tuple[CTime, float, float]]) -> list[dict[str, Any]]:
+    from collections import defaultdict
+
+    buck: dict[tuple[int, int, int, int, int], list[tuple[float, float]]] = defaultdict(list)
+    for t, price, vol in ticks:
+        key = (t.year, t.month, t.day, t.hour, t.minute)
+        buck[key].append((price, vol))
+    rows: list[dict[str, Any]] = []
+    for key in sorted(buck):
+        y, mo, d, hh, mm = key
+        arr = buck[key]
+        o0 = arr[0][0]
+        c0 = arr[-1][0]
+        hi = max(x[0] for x in arr)
+        lo = min(x[0] for x in arr)
+        v0 = sum(x[1] for x in arr)
+        amt0 = sum(x[0] * x[1] for x in arr)
+        rows.append({"t": CTime(y, mo, d, hh, mm, auto=False), "o": o0, "h": hi, "l": lo, "c": c0, "v": v0, "amt": amt0})
+    return rows
+
+
+def _offline_merge_bar_group(lst: list[dict[str, Any]]) -> dict[str, Any]:
+    o0, c0 = lst[0]["o"], lst[-1]["c"]
+    hi = max(x["h"] for x in lst)
+    lo = min(x["l"] for x in lst)
+    v0 = sum(x["v"] for x in lst)
+    amt0 = sum(x["amt"] for x in lst)
+    return {"t": lst[-1]["t"], "o": o0, "h": hi, "l": lo, "c": c0, "v": v0, "amt": amt0}
+
+
+def _offline_resample_minutes(rows: list[dict[str, Any]], period_m: int) -> list[dict[str, Any]]:
+    if period_m <= 1:
+        return rows
+    from collections import defaultdict
+
+    buck: dict[tuple[int, int, int, int], list[dict[str, Any]]] = defaultdict(list)
+    for r in rows:
+        t = r["t"]
+        slot = (t.hour * 60 + t.minute) // period_m
+        key = (t.year, t.month, t.day, slot)
+        buck[key].append(r)
+    out: list[dict[str, Any]] = []
+    for key in sorted(buck):
+        lst = sorted(buck[key], key=lambda x: x["t"].ts)
+        out.append(_offline_merge_bar_group(lst))
+    return out
+
+
+def _offline_daily_from_1m(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    from collections import defaultdict
+
+    by_d: dict[tuple[int, int, int], list[dict[str, Any]]] = defaultdict(list)
+    for r in rows:
+        t = r["t"]
+        by_d[(t.year, t.month, t.day)].append(r)
+    out: list[dict[str, Any]] = []
+    for key in sorted(by_d):
+        lst = sorted(by_d[key], key=lambda x: x["t"].ts)
+        m = _offline_merge_bar_group(lst)
+        y, mo, d = key
+        m["t"] = CTime(y, mo, d, 15, 0, auto=False)
+        out.append(m)
+    return out
+
+
+def _offline_weekly_from_daily(daily: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    from collections import defaultdict
+    from datetime import date as _date
+
+    by_w: dict[tuple[int, int], list[dict[str, Any]]] = defaultdict(list)
+    for r in daily:
+        t = r["t"]
+        iy, iw, _ = _date(t.year, t.month, t.day).isocalendar()
+        by_w[(iy, iw)].append(r)
+    out: list[dict[str, Any]] = []
+    for key in sorted(by_w):
+        lst = sorted(by_w[key], key=lambda x: x["t"].ts)
+        m = _offline_merge_bar_group(lst)
+        m["t"] = lst[-1]["t"]
+        out.append(m)
+    return out
+
+
+def _offline_monthly_from_daily(daily: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    from collections import defaultdict
+
+    by_m: dict[tuple[int, int], list[dict[str, Any]]] = defaultdict(list)
+    for r in daily:
+        t = r["t"]
+        by_m[(t.year, t.month)].append(r)
+    out: list[dict[str, Any]] = []
+    for key in sorted(by_m):
+        lst = sorted(by_m[key], key=lambda x: x["t"].ts)
+        m = _offline_merge_bar_group(lst)
+        m["t"] = lst[-1]["t"]
+        out.append(m)
+    return out
+
+
+def _offline_yearly_from_daily(daily: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    from collections import defaultdict
+
+    by_y: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for r in daily:
+        by_y[r["t"].year].append(r)
+    out: list[dict[str, Any]] = []
+    for y in sorted(by_y):
+        lst = sorted(by_y[y], key=lambda x: x["t"].ts)
+        m = _offline_merge_bar_group(lst)
+        m["t"] = lst[-1]["t"]
+        out.append(m)
+    return out
+
+
+def _offline_quarterly_from_daily(daily: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    from collections import defaultdict
+
+    by_q: dict[tuple[int, int], list[dict[str, Any]]] = defaultdict(list)
+    for r in daily:
+        t = r["t"]
+        q = (t.month - 1) // 3 + 1
+        by_q[(t.year, q)].append(r)
+    out: list[dict[str, Any]] = []
+    for key in sorted(by_q):
+        lst = sorted(by_q[key], key=lambda x: x["t"].ts)
+        m = _offline_merge_bar_group(lst)
+        m["t"] = lst[-1]["t"]
+        out.append(m)
+    return out
+
+
+def _offline_rows_to_ktype(rows_1m: list[dict[str, Any]], k_type: KL_TYPE) -> list[dict[str, Any]]:
+    if not rows_1m:
+        return []
+    # kltype_lt_day 不含 K_3M，此处显式列出所有分钟类
+    minute_like = {
+        KL_TYPE.K_1M,
+        KL_TYPE.K_3M,
+        KL_TYPE.K_5M,
+        KL_TYPE.K_15M,
+        KL_TYPE.K_30M,
+        KL_TYPE.K_60M,
+    }
+    if k_type in minute_like:
+        pm = _offline_kl_minutes(k_type)
+        return _offline_resample_minutes(rows_1m, pm)
+    if k_type == KL_TYPE.K_DAY:
+        return _offline_daily_from_1m(rows_1m)
+    daily = _offline_daily_from_1m(rows_1m)
+    if k_type == KL_TYPE.K_WEEK:
+        return _offline_weekly_from_daily(daily)
+    if k_type == KL_TYPE.K_MON:
+        return _offline_monthly_from_daily(daily)
+    if k_type == KL_TYPE.K_YEAR:
+        return _offline_yearly_from_daily(daily)
+    if k_type == KL_TYPE.K_QUARTER:
+        return _offline_quarterly_from_daily(daily)
+    raise ValueError(f"离线数据不支持的周期：{k_type}")
+
+
+class COfflineInline(CCommonStockApi):
+    """读取 a_Data/{SH|SZ}#代码/ 下分笔或 1 分钟文本，合成任意请求周期。"""
+
+    def __init__(self, code, k_type=KL_TYPE.K_DAY, begin_date=None, end_date=None, autype=AUTYPE.QFQ):
+        self._folder_name = offline_folder_from_code(code)
+        self._base = os.path.join(_offline_root_dir(), self._folder_name)
+        super().__init__(code, k_type, begin_date, end_date, autype)
+
+    def SetBasciInfo(self):
+        sym = _strip_market_prefix(self.code)
+        self.is_stock = True
+        self.name = self.code
+
+    def get_kl_data(self) -> Iterator[CKLine_Unit]:
+        code6 = _strip_market_prefix(self.code)
+        b8, e8 = _offline_date_bounds(self.begin_date, self.end_date)
+        tick_paths = _offline_list_tick_paths(self._base, code6, b8, e8)
+        rows_1m: list[dict[str, Any]]
+        if tick_paths:
+            ticks = _offline_load_ticks(tick_paths)
+            if not ticks:
+                raise ValueError("分笔文件在日期区间内无有效成交行")
+            rows_1m = _offline_ticks_to_1m(ticks)
+        else:
+            p1m = os.path.join(self._base, "KLine", "1MINUTE", self._folder_name + ".txt")
+            if not os.path.isfile(p1m):
+                raise ValueError(f"未找到离线 1 分钟文件：{p1m}")
+            rows_1m = _offline_load_1m_rows(p1m, b8, e8)
+            if not rows_1m:
+                raise ValueError("离线 1 分钟数据在指定日期区间内为空")
+        bars = _offline_rows_to_ktype(rows_1m, self.k_type)
+        if not bars:
+            raise ValueError("离线合成后 K 线为空")
+        for r in bars:
+            item = {
+                DATA_FIELD.FIELD_TIME: r["t"],
+                DATA_FIELD.FIELD_OPEN: r["o"],
+                DATA_FIELD.FIELD_HIGH: r["h"],
+                DATA_FIELD.FIELD_LOW: r["l"],
+                DATA_FIELD.FIELD_CLOSE: r["c"],
+                DATA_FIELD.FIELD_VOLUME: r["v"],
+                DATA_FIELD.FIELD_TURNOVER: r["amt"],
+            }
+            yield CKLine_Unit(item)
+
+    @classmethod
+    def do_init(cls):
+        pass
+
+    @classmethod
+    def do_close(cls):
+        pass
+
+
 def get_stock_api_cls(data_src: Any):
     """根据数据源返回对应的API类"""
     if data_src == DATA_SRC.AKSHARE or data_src == AKSHARE_INLINE_SRC:
@@ -917,6 +1499,8 @@ def get_stock_api_cls(data_src: Any):
         return CYahooInline
     if data_src == EASTMONEY_INLINE_SRC:
         return CEastmoneyInline
+    if data_src == OFFLINE_INLINE_SRC:
+        return COfflineInline
     raise ValueError(f"unsupported data source: {data_src}")
 
 
@@ -940,6 +1524,8 @@ class ReplayDataChan(CChan):
             return CYahooInline
         if self.data_src == EASTMONEY_INLINE_SRC:
             return CEastmoneyInline
+        if self.data_src == OFFLINE_INLINE_SRC:
+            return COfflineInline
         return super().GetStockAPI()
 
 
@@ -1958,7 +2544,7 @@ class ChanStepper:
         )
         replay_klus_master = copy.deepcopy(list(fetch_chan[0].klu_iter()))
         if not replay_klus_master:
-            raise ValueError("未获取到任何日线数据")
+            raise ValueError("未获取到任何K线数据")
 
         stock_name: Optional[str] = None
         try:
@@ -1997,11 +2583,13 @@ class ChanStepper:
         autype: AUTYPE,
         chan_cfg_dict: dict[str, Any],
         use_for: str = "kline",  # "kline" 或 "chip"
+        chain_override: Optional[list[tuple[str, Any]]] = None,
+        offline_confirm_suppressed: bool = False,
     ) -> DataSourceSelection:
         """按优先级链选择数据源；K 线与筹码共用排序逻辑，链独立故可选用不同实际源。"""
         logs: list[str] = []
         errors: list[str] = []
-        data_chain = DATA_SOURCE_CHAIN_KLINE if use_for == "kline" else DATA_SOURCE_CHAIN_CHIP
+        data_chain = chain_override or (DATA_SOURCE_CHAIN_KLINE if use_for == "kline" else DATA_SOURCE_CHAIN_CHIP)
         for idx, (label, data_src) in enumerate(data_chain):
             print(f"[DataSource] try {label} for {self.code} {begin_date} -> {end_date or 'latest'}")
             try:
@@ -2021,11 +2609,22 @@ class ChanStepper:
                     kline_all=kline_all,
                     stock_name=stock_name,
                 )
+            except OfflineDataConfirmRequired:
+                raise
             except Exception as exc:
                 detail = format_source_error(exc)
                 errors.append(f"{label} 失败：{detail}")
                 logs.append(f"数据源尝试失败：{label}")
                 print(f"[DataSource] failed {label}: {detail}")
+                next_is_offline = idx + 1 < len(data_chain) and data_chain[idx + 1][1] == OFFLINE_INLINE_SRC
+                if (
+                    next_is_offline
+                    and not offline_confirm_suppressed
+                    and offline_bundle_exists(self.code, begin_date, end_date)
+                ):
+                    tag = classify_fetch_error_tag(exc)
+                    disp = _strip_market_prefix(self.code)
+                    raise OfflineDataConfirmRequired(disp, label, tag, detail)
         raise RuntimeError("全部数据源均不可用：" + "；".join(errors))
 
     def get_structure_bundle(self, *, force: bool = False, chan: Optional[CChan] = None) -> ChanStructureBundle:
@@ -2041,7 +2640,17 @@ class ChanStepper:
             self.trend_lines = list(bundle.trend_lines)
         return bundle
 
-    def init(self, code: str, begin_date: str, end_date: Optional[str], autype: AUTYPE, chan_config: Optional[dict[str, Any]] = None, k_type: str = "daily") -> None:
+    def init(
+        self,
+        code: str,
+        begin_date: str,
+        end_date: Optional[str],
+        autype: AUTYPE,
+        chan_config: Optional[dict[str, Any]] = None,
+        k_type: str = "daily",
+        confirm_offline: bool = False,
+        data_source_priority: Optional[list[str]] = None,
+    ) -> None:
         # 解析并设置周期类型
         self.k_type = parse_k_type(k_type)
         
@@ -2118,13 +2727,37 @@ class ChanStepper:
         cfg = CChanConfig(chan_cfg_dict)
         self.code = normalize_code(code)
         self.stock_name = None
-        session_key = (self.code, begin_date, end_date, autype, self.k_type)
+        chain_override: Optional[list[tuple[str, Any]]] = None
+        if data_source_priority:
+            chain_override = chains_from_priority([str(x) for x in data_source_priority])
+            if not chain_override:
+                chain_override = None
+        prio_fp = (tuple(data_source_priority) if data_source_priority else (), bool(confirm_offline))
+        session_key = (self.code, begin_date, end_date, autype, self.k_type, prio_fp)
         cache_hit = session_key == self._data_session_key and self._replay_klus_master is not None
 
         if not cache_hit:
-            k_sel = self._select_data_source_with_fallback(begin_date, end_date, autype, chan_cfg_dict, use_for="kline")
+            k_sel = self._select_data_source_with_fallback(
+                begin_date,
+                end_date,
+                autype,
+                chan_cfg_dict,
+                use_for="kline",
+                chain_override=chain_override,
+                offline_confirm_suppressed=confirm_offline,
+            )
             try:
-                chip_sel = self._select_data_source_with_fallback(begin_date, end_date, autype, chan_cfg_dict, use_for="chip")
+                chip_sel = self._select_data_source_with_fallback(
+                    begin_date,
+                    end_date,
+                    autype,
+                    chan_cfg_dict,
+                    use_for="chip",
+                    chain_override=chain_override,
+                    offline_confirm_suppressed=confirm_offline,
+                )
+            except OfflineDataConfirmRequired:
+                raise
             except RuntimeError as exc:
                 self._replay_klus_master = k_sel.replay_klus_master
                 self.kline_all = k_sel.kline_all
@@ -2133,13 +2766,36 @@ class ChanStepper:
                 self.data_src_logs = list(k_sel.logs) + [f"筹码全历史与K线同源（筹码链不可用：{format_source_error(exc)}）"]
             else:
                 self._replay_klus_master = k_sel.replay_klus_master
-                self.kline_all = chip_sel.kline_all
+                # K 线来自离线包时，筹码全历史必须与 K 线同源；否则易出现「K 为分笔合成日线、筹码却走筹码链上先成功的在线日线」
+                if k_sel.data_src == OFFLINE_INLINE_SRC:
+                    self.kline_all = k_sel.kline_all
+                    self.data_src_chip_used = k_sel.data_src
+                    if chip_sel.data_src == OFFLINE_INLINE_SRC:
+                        chip_logs_extra = [f"筹码全历史：{chip_sel.label}"] + list(chip_sel.logs)
+                    else:
+                        chip_logs_extra = [
+                            f"筹码全历史与离线K线同源（已忽略筹码链上的在线源：{chip_sel.label}）"
+                        ] + list(chip_sel.logs)
+                else:
+                    self.kline_all = chip_sel.kline_all
+                    self.data_src_chip_used = chip_sel.data_src
+                    chip_logs_extra = [f"筹码全历史：{chip_sel.label}"] + list(chip_sel.logs)
                 self.data_src_used = k_sel.data_src
-                self.data_src_chip_used = chip_sel.data_src
-                self.data_src_logs = list(k_sel.logs) + [f"筹码全历史：{chip_sel.label}"] + list(chip_sel.logs)
+                self.data_src_logs = list(k_sel.logs) + chip_logs_extra
             self._data_session_key = session_key
             if k_sel.stock_name:
                 self.stock_name = k_sel.stock_name
+            # 离线 + 支持周期：为 kline_all 写 chip_tick_bins（分笔或 1 分钟收盘点质量化），全周期前端不走三角分摊
+            if (
+                self.data_src_used == OFFLINE_INLINE_SRC
+                and self.kline_all
+                and self.k_type in _offline_chip_supported_ktypes()
+                and (
+                    offline_tick_files_exist_for_range(self.code, "1990-01-01", end_date)
+                    or offline_1m_file_exists(self.code)
+                )
+            ):
+                _enrich_kline_all_offline_chip_non_triangle(self.code, self.kline_all, end_date, self.k_type)
         else:
             if self.data_src_logs:
                 self.data_src_logs = [
@@ -2242,6 +2898,9 @@ class InitReq(BaseModel):
     autype: str = "qfq"
     chan_config: Optional[dict[str, Any]] = None
     k_type: str = "daily"  # 周期类型
+    # 用户确认使用离线源后二次 init 传 True；单次 init 可传 data_source_priority 覆盖链（不改服务端全局）
+    confirm_offline: bool = False
+    data_source_priority: Optional[list[str]] = None
 
 
 class ReconfigReq(BaseModel):
@@ -2643,7 +3302,7 @@ class AppState:
         target_step = self.stepper.step_idx
         self.rebuild_to_step(target_step)
 
-    def build_payload(self, stock_name: Optional[str] = None) -> dict[str, Any]:
+    def build_payload(self, stock_name: Optional[str] = None, *, include_kline_all: bool = True) -> dict[str, Any]:
         if not self.ready or self.stepper.chan is None:
             return {
                 "ready": False,
@@ -2653,13 +3312,14 @@ class AppState:
         rhythm_notice_hits = list(self._rhythm_notice_hits)
         self._rhythm_notice_hits = []
         bundle = self.stepper.get_structure_bundle()
+        # 1 分钟全历史 kline_all 体量极大；步进等高频接口不再重复下发，由前端沿用上次 chart.kline_all（筹码分布仍正确）。
         chart = serialize_chan(
             self.stepper.chan,
             self.stepper.indicator_history,
             self.stepper.trend_lines,
             chan_algo=self.stepper.chan_algo,
             bundle=bundle,
-            kline_all=self.stepper.kline_all,
+            kline_all=(self.stepper.kline_all if include_kline_all else None),
         )
         price: Optional[float] = None
         if len(chart.get("kline", [])) > 0:
@@ -2721,6 +3381,7 @@ def serialize_chan(
     bundle: Optional[ChanStructureBundle] = None,
     kline_all: Optional[list[dict[str, Any]]] = None,
 ) -> dict[str, Any]:
+    """kline_all 为 None 时不写入 chart（与空列表不同：空列表表示确实无全量数据）。"""
     kl_list = chan[0]
     klu_arr = serialize_klu_iter(kl_list.klu_iter())
     active_bundle = bundle or build_structure_bundle(chan, chan_algo)
@@ -2740,9 +3401,8 @@ def serialize_chan(
         key=lambda item: (int(item["x"]), LEVEL_ORDER.get(str(item["level"]), 999), int(not bool(item["is_buy"]))),
     )
 
-    return {
+    out: dict[str, Any] = {
         "kline": klu_arr,
-        "kline_all": kline_all or [],
         "fract": fract_arr,
         "bi": bi_arr,
         "seg": seg_arr,
@@ -2761,6 +3421,10 @@ def serialize_chan(
         "indicators": indicator_history,
         "trend_lines": active_bundle.trend_lines if active_bundle.trend_lines else trend_lines,
     }
+    # None 表示「不下发」以减小步进等接口的 JSON；[] 仍表示真实空列表。
+    if kline_all is not None:
+        out["kline_all"] = kline_all
+    return out
 
 
 HTML = r"""
@@ -4006,7 +4670,7 @@ const DEFAULT_SYSTEM_CONFIG = {
     return acc;
   }, {}),
   // K 线与筹码共用一套优先级顺序（服务端两套链独立按序回退）
-  dataSourcePriority: ["AKShare", "Ashare", "AData", "pytdx", "BaoStock", "Tushare", "新浪财经", "腾讯财经", "雅虎财经", "东方财富"],
+  dataSourcePriority: ["AKShare", "Ashare", "AData", "pytdx", "BaoStock", "离线数据", "Tushare", "新浪财经", "腾讯财经", "雅虎财经", "东方财富"],
 };
 
 let systemConfig = ensureObject(
@@ -5459,7 +6123,7 @@ function renderSystemSettingsForm() {
     dsList.style.marginTop = "8px";
 
     // 获取当前数据源优先级配置
-    const currentPriority = systemConfig.dataSourcePriority || ["AKShare", "Ashare", "AData", "pytdx", "BaoStock", "Tushare", "新浪财经", "腾讯财经", "雅虎财经", "东方财富"];
+    const currentPriority = systemConfig.dataSourcePriority || ["AKShare", "Ashare", "AData", "pytdx", "BaoStock", "离线数据", "Tushare", "新浪财经", "腾讯财经", "雅虎财经", "东方财富"];
     
     currentPriority.forEach((srcName, idx) => {
         const item = document.createElement("div");
@@ -7761,6 +8425,15 @@ function drawChips(chart, s) {
   for (const k of useKs) {
     if (k.l < allMin) allMin = k.l;
     if (k.h > allMax) allMax = k.h;
+    const tb = k.chip_tick_bins;
+    if (tb && Array.isArray(tb.p)) {
+      for (const pr of tb.p) {
+        const pv = Number(pr);
+        if (!Number.isFinite(pv)) continue;
+        if (pv < allMin) allMin = pv;
+        if (pv > allMax) allMax = pv;
+      }
+    }
   }
   if (!isFinite(allMin) || !isFinite(allMax)) return;
   const minTick = Math.floor(allMin * stepMul);
@@ -7769,6 +8442,19 @@ function drawChips(chart, s) {
   const arr = new Array(tickCount).fill(0);
 
   for (const k of useKs) {
+    const tickBins = k.chip_tick_bins;
+    if (tickBins && Array.isArray(tickBins.p) && Array.isArray(tickBins.w) && tickBins.p.length === tickBins.w.length) {
+      for (let j = 0; j < tickBins.p.length; j++) {
+        const p = Number(tickBins.p[j]);
+        const w = Number(tickBins.w[j]);
+        if (!Number.isFinite(p) || !Number.isFinite(w) || w <= 0) continue;
+        const bi = Math.floor(p * stepMul);
+        if (bi < minTick || bi > maxTick) continue;
+        arr[bi - minTick] += w;
+      }
+      continue;
+    }
+
     const low = Math.min(k.l, k.h);
     const high = Math.max(k.l, k.h);
     const mode = Math.min(high, Math.max(low, k.c)); // close作为筹码峰值
@@ -8617,7 +9303,16 @@ async function api(path, body, method = "POST") {
   if (body !== null && body !== undefined) options.body = JSON.stringify(body);
   const res = await fetch(path, options);
   const data = await res.json();
-  if (!res.ok) throw new Error(data.detail || JSON.stringify(data));
+  if (!res.ok) {
+    const err = new Error(
+      typeof data.detail === "string" ? data.detail : (data.detail && data.detail.reason_detail) || JSON.stringify(data.detail || data)
+    );
+    if (data.detail && typeof data.detail === "object" && data.detail.type === "offline_confirm") {
+      err.offlineConfirm = data.detail;
+    }
+    err.httpStatus = res.status;
+    throw err;
+  }
   return data;
 }
 
@@ -8693,6 +9388,22 @@ function refreshUI(payload, options) {
   const showStandaloneNotices = options && Object.prototype.hasOwnProperty.call(options, "showStandaloneNotices")
     ? !!options.showStandaloneNotices
     : !afterStep;
+  const prev = lastPayload;
+  // 后端在步进等接口省略 kline_all，避免 1 分钟全量重复 JSON 导致超时/断连（浏览器报 Failed to fetch）；此处沿用上一包全历史供筹码用。
+  if (
+    payload &&
+    payload.ready &&
+    payload.chart &&
+    prev &&
+    prev.ready &&
+    prev.chart &&
+    Array.isArray(prev.chart.kline_all) &&
+    prev.chart.kline_all.length > 0
+  ) {
+    if (!Object.prototype.hasOwnProperty.call(payload.chart, "kline_all") || !payload.chart.kline_all || payload.chart.kline_all.length === 0) {
+      payload.chart.kline_all = prev.chart.kline_all;
+    }
+  }
   lastPayload = payload;
   sessionFinished = !!payload.finished;
   syncTradesFromPayload(payload);
@@ -8772,15 +9483,36 @@ $("btnInit").onclick = async () => {
         processedConfig[k] = processedConfig[k].split(/[,，\s]+/).map(v => parseInt(v.trim())).filter(v => !isNaN(v));
       }
     });
-     const payload = await api("/api/init", {
-       code: $("code").value,
-       begin_date: $("begin").value,
-       end_date: $("end").value || null,
-       initial_cash: Number($("cash").value),
-       autype: $("autype").value,
-       chan_config: processedConfig,
-       k_type: $("kType").value  // 添加周期类型
-     });
+    const buildInitBody = (extra = {}) => ({
+      code: $("code").value,
+      begin_date: $("begin").value,
+      end_date: $("end").value || null,
+      initial_cash: Number($("cash").value),
+      autype: $("autype").value,
+      chan_config: processedConfig,
+      k_type: $("kType").value,
+      ...extra,
+    });
+    let payload;
+    try {
+      payload = await api("/api/init", buildInitBody({}));
+    } catch (e) {
+      if (e.offlineConfirm && Number(e.httpStatus) === 409) {
+        const oc = e.offlineConfirm;
+        const tip = `${oc.display_code}使用${oc.failed_label}获取数据失败，原因为【${oc.reason_tag}】是否使用离线数据继续获取？`;
+        if (confirmAndLog(tip)) {
+          payload = await api("/api/init", buildInitBody({ confirm_offline: true }));
+        } else {
+          let p = (systemConfig.dataSourcePriority || []).filter((x) => x !== "离线数据");
+          if (!p.length) {
+            p = DEFAULT_SYSTEM_CONFIG.dataSourcePriority.filter((x) => x !== "离线数据");
+          }
+          payload = await api("/api/init", buildInitBody({ data_source_priority: p }));
+        }
+      } else {
+        throw e;
+      }
+    }
     initSucceeded = true;
     document.title = `chan.py 复盘训练器 - ${(payload.name ? payload.name : payload.code)}`;
     setMsg(payload.message || `加载成功：${payload.name ? payload.name : payload.code}`);
@@ -9195,7 +9927,28 @@ def api_init(req: InitReq):
             raise ValueError("初始资金必须大于0")
         code_norm = normalize_code(req.code)
 
-        APP_STATE.stepper.init(code_norm, req.begin_date, req.end_date, autype, chan_config=req.chan_config, k_type=req.k_type)
+        try:
+            APP_STATE.stepper.init(
+                code_norm,
+                req.begin_date,
+                req.end_date,
+                autype,
+                chan_config=req.chan_config,
+                k_type=req.k_type,
+                confirm_offline=bool(req.confirm_offline),
+                data_source_priority=req.data_source_priority,
+            )
+        except OfflineDataConfirmRequired as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "type": "offline_confirm",
+                    "display_code": exc.display_code,
+                    "failed_label": exc.failed_label,
+                    "reason_tag": exc.reason_tag,
+                    "reason_detail": exc.reason_detail,
+                },
+            ) from exc
         global APP_STOCK_NAME
         APP_STOCK_NAME = APP_STATE.stepper.stock_name
         APP_STATE.account.reset(req.initial_cash)
@@ -9224,11 +9977,13 @@ def api_init(req: InitReq):
         APP_STATE.after_step_update()
         payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME)
         source_label = data_source_label(APP_STATE.stepper.data_src_used)
-        if source_label == "AKShare":
+        if source_label in ("AKShare", "离线数据"):
             payload["message"] = f"加载成功：{APP_STOCK_NAME or code_norm}，当前数据源 {source_label}，周期 {req.k_type}。"
         else:
             payload["message"] = f"加载成功：{APP_STOCK_NAME or code_norm}，已自动切换到 {source_label}，周期 {req.k_type}。"
         return payload
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
@@ -9240,7 +9995,7 @@ def api_reconfig(req: ReconfigReq):
     try:
         APP_STATE.reconfig(req.chan_config)
         APP_STATE._rhythm_notice_hits = []
-        payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME)
+        payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME, include_kline_all=False)
         payload["message"] = "缠论配置更新成功，已按新逻辑重新计算并清除模拟持仓。"
         return payload
     except Exception as e:
@@ -9260,7 +10015,7 @@ def api_step(req: StepReq):
         mode = (req.judge_mode or "auto").lower().strip()
         if mode != "manual":
             APP_STATE.after_step_update()
-        payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME)
+        payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME, include_kline_all=False)
         payload["message"] = "已到最后一根K线" if not ok else "步进成功"
         return payload
     except Exception as e:
@@ -9275,7 +10030,7 @@ def api_judge_bsp(req: JudgeBspReq):
         raise HTTPException(status_code=400, detail="当前会话已结束，请重新训练")
     try:
         APP_STATE._judge_bsp_against_all(reason=str(req.reason or "manual_check"))
-        payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME)
+        payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME, include_kline_all=False)
         payload["message"] = "买卖点判定完成"
         return payload
     except Exception as e:
@@ -9301,7 +10056,7 @@ def api_buy():
                 "shares": int(detail.get("shares", 0)),
             }
         )
-        payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME)
+        payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME, include_kline_all=False)
         payload["message"] = f"买入成功：{json.dumps(detail, ensure_ascii=False)}"
         return payload
     except Exception as e:
@@ -9327,7 +10082,7 @@ def api_sell():
                 "shares": int(detail.get("shares", 0)),
             }
         )
-        payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME)
+        payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME, include_kline_all=False)
         payload["message"] = f"卖出结果：{json.dumps(detail, ensure_ascii=False)}"
         return payload
     except Exception as e:
@@ -9346,7 +10101,7 @@ def api_back_n(req: BackNReq):
         target = max(0, cur - n)
         APP_STATE.rebuild_to_step(target)
         APP_STATE._rhythm_notice_hits = []
-        payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME)
+        payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME, include_kline_all=False)
         payload["message"] = f"自动重建回放：已后退 {cur - target} 根（目标 step={target}）"
         return payload
     except Exception as e:
@@ -9363,7 +10118,7 @@ def api_finish():
     if not APP_STATE.ready:
         raise HTTPException(status_code=400, detail="请先初始化会话")
     APP_STATE.finished = True
-    payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME)
+    payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME, include_kline_all=False)
     payload["message"] = "训练结束"
     return payload
 
@@ -9392,6 +10147,11 @@ def api_check_data_source(req: dict):
     if not pair:
         raise HTTPException(status_code=400, detail=f"未知数据源：{name}")
     _label, data_src = pair
+    if data_src == OFFLINE_INLINE_SRC:
+        for probe in ("sz.000001", "sh.600000"):
+            if offline_bundle_exists(probe, "1990-01-01", "2099-12-31"):
+                return {"ok": True, "name": name, "message": f"a_Data 下存在 {offline_folder_from_code(probe)} 离线包（1 分钟或分笔）"}
+        return {"ok": False, "name": name, "message": "a_Data 下未发现 SH#000001 / SZ#000001 的 1 分钟或分笔数据"}
     test_code = "sz.000001"
     begin = "2024-06-01"
     end = "2024-06-15"
