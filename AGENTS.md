@@ -1,10 +1,15 @@
+---
+description: 
+alwaysApply: true
+---
+
 # AGENTS.md
 
 ## Environment
 
 - **Python 3.11+ required** (project is compute-intensive; 3.11 improves speed ~16% over 3.8)
 - Not a pip package; run modules directly (e.g., `python main.py`)
-- Dependencies: `pip install -r Script/requirements.txt`
+- Dependencies: `pip install -r a_Script/a_requirements.txt`
   - `replay_trainer.py` needs extra: `fastapi uvicorn akshare tushare pydantic`
 
 ## Running
@@ -88,11 +93,12 @@ No test framework, no linting config, no CI found. Verify changes manually with 
 你是一个资深的python 量化程序员，具有完整的Python和股票理论基础。
 
 ###背景
-1.我编写的，可更改的文件只有一个：replay_trainer.py
-2.当前的工程包含了大量中国交易体系：缠中说禅的逻辑。
+1.我编写的，可更改的文件只有一个：replay_trainer.py’
+2.a_Data是我自定义的离线数据文件；
 3.当前工程的说明基于quick_guide.md，是作业本，README.md是个答案本，是我将要或者以后要实现的版本。
 4.README.md包含quick_guide.md，当前工程有很多功能并不在README.md中。
-5.当前终端可使用playwright、git、winget、curl。
+5.当前终端可使用playwright、git、winget、curl；
+6.当前的工程包含了大量中国交易体系：缠中说禅的逻辑。
 
 ###代码规范
 1.写成的代码加上注释；

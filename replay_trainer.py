@@ -4791,6 +4791,8 @@ let crosshairX = null;
 let crosshairY = null;
 let canvasHovered = false;
 let signalHoverBoxes = [];
+let legendHoverBox = null;
+let legendHoverActive = false;
 let selectedMainIndicatorSlot = Number(storageGet("chan_selected_main_indicator_slot") || "0");
 let selectedSubIndicatorSlot = Number(storageGet("chan_selected_sub_indicator_slot") || "0");
 let indicatorMainSlots = ensureObject(safeJsonParse(storageGet("chan_indicator_main_slots"), null), null);
@@ -5004,7 +5006,7 @@ const DEFAULT_CHART_CONFIG = {
     lineWidth: 1.2,
     lineStyle: "solid",
   },
-  toast: { fontSize: 16, fontWeight: "bold", speed: 3000 },
+  toast: { fontSize: 16, fontWeight: "bold", speed: 3000, showBsp: true, showRhythm1382: true, showJudge: true },
   legend: { fontSize: 12, fontWeight: "normal", color: "#0f172a" },
   userRay: { color: "#f97316", width: 1.5, dash: [8, 4], fontSize: 12 }
 };
@@ -5042,6 +5044,10 @@ function migrateChartConfig(cfg) {
   if (!next.xAxis) next.xAxis = {};
   if (!next.yAxis) next.yAxis = {};
   if (!next.klineCombineFrame) next.klineCombineFrame = {};
+  if (!next.toast) next.toast = {};
+  if (typeof next.toast.showBsp !== "boolean") next.toast.showBsp = true;
+  if (typeof next.toast.showRhythm1382 !== "boolean") next.toast.showRhythm1382 = true;
+  if (typeof next.toast.showJudge !== "boolean") next.toast.showJudge = true;
   return next;
 }
 
@@ -5062,7 +5068,8 @@ const DEFAULT_SESSION_CONFIG = {
   biZsEnabled: true,
   segZsEnabled: true,
   segsegZsEnabled: true,
-  stepN: "5"
+  stepN: "5",
+  kType: "daily"
 };
 let sessionConfig = ensureObject(
   safeJsonParse(storageGet("chan_session_config"), JSON.parse(JSON.stringify(DEFAULT_SESSION_CONFIG))),
@@ -5503,7 +5510,8 @@ function saveSessionConfig() {
     biZsEnabled: chartConfig.biZs.enabled,
     segZsEnabled: chartConfig.segZs.enabled,
     segsegZsEnabled: chartConfig.segsegZs.enabled,
-    stepN: $("stepN").value
+    stepN: $("stepN").value,
+    kType: $("kType").value
   };
   storageSet("chan_session_config", JSON.stringify(sessionConfig));
 }
@@ -5518,6 +5526,7 @@ function loadSessionConfig() {
         chartConfig.theme = sessionConfig.theme;
         applyThemeFromSelect();
     }
+    if (sessionConfig.kType !== undefined) $("kType").value = sessionConfig.kType;
     // No longer setting DOM for chip/biZs/segZs here as they are in chartConfig
     if (sessionConfig.stepN !== undefined) $("stepN").value = sessionConfig.stepN;
 }
@@ -6400,7 +6409,10 @@ function renderSettingsForm() {
           { value: "normal", label: "常规" },
           { value: "bold", label: "加粗" }
         ]},
-        { label: "消失速度(ms)", subKey: "speed", type: "number", min: 500, max: 10000, step: 100 }
+        { label: "消失速度(ms)", subKey: "speed", type: "number", min: 500, max: 10000, step: 100 },
+        { label: "显示买卖点弹窗", subKey: "showBsp", type: "checkbox", tip: "勾选后显示买卖点（分型/笔/段/2段）相关弹窗。" },
+        { label: "显示1382弹窗", subKey: "showRhythm1382", type: "checkbox", tip: "勾选后显示 1382 节奏提示弹窗。" },
+        { label: "显示判定统计弹窗", subKey: "showJudge", type: "checkbox", tip: "勾选后显示买卖点 ×/✓ 判定统计弹窗。" }
       ]
     }
   ];
@@ -7216,7 +7228,7 @@ function applyThemeFromSelect() {
 
 // Indicator controls moved to modal.
 
-const IDS_SESSION_PARAMS = ["code", "begin", "end", "cash", "autype", "stepN"];
+const IDS_SESSION_PARAMS = ["code", "begin", "end", "cash", "autype", "kType", "stepN"];
 IDS_SESSION_PARAMS.forEach(id => {
   const el = $(id);
   if (!el) return;
@@ -7398,6 +7410,8 @@ canvas.addEventListener("mousemove", (e) => {
   const visibleKs = getVisibleKs(lastPayload.chart, s.xMin, s.xMax);
   const rawX = e.clientX - rect.left;
   const rawY = e.clientY - rect.top;
+  const hoveredLegend = !!(legendHoverBox && rawX >= legendHoverBox.x1 && rawX <= legendHoverBox.x2 && rawY >= legendHoverBox.y1 && rawY <= legendHoverBox.y2);
+  legendHoverActive = hoveredLegend;
   const clampedX = Math.max(PAD_L, Math.min(s.w - PAD_R, rawX));
   
   // Lock X if Ctrl is held
@@ -7419,6 +7433,7 @@ canvas.addEventListener("mousemove", (e) => {
 
 canvas.addEventListener("mouseleave", () => {
   canvasHovered = false;
+  legendHoverActive = false;
   crosshairX = null;
   crosshairY = null;
   hideFloatingTip();
@@ -8057,6 +8072,14 @@ function getRhythmNoticeTexts(payload) {
     .filter(Boolean)));
 }
 
+function shouldShowToastCategory(category) {
+  const toastCfg = chartConfig && chartConfig.toast ? chartConfig.toast : DEFAULT_CHART_CONFIG.toast;
+  if (category === "bsp") return toastCfg.showBsp !== false;
+  if (category === "rhythm1382") return toastCfg.showRhythm1382 !== false;
+  if (category === "judge") return toastCfg.showJudge !== false;
+  return true;
+}
+
 function getLatestBspNotice(payload) {
   if (!payload || !payload.ready || !payload.chart || !Array.isArray(payload.chart.kline) || payload.chart.kline.length === 0) return null;
   const lastX = payload.chart.kline[payload.chart.kline.length - 1].x;
@@ -8082,14 +8105,14 @@ function formatCombinedNoticeSection(title, blocks) {
 
 function buildStepNoticeText(payload, bspNotice) {
   const sections = [];
-  if (bspNotice && Array.isArray(bspNotice.lines) && bspNotice.lines.length > 0) {
+  if (shouldShowToastCategory("bsp") && bspNotice && Array.isArray(bspNotice.lines) && bspNotice.lines.length > 0) {
     sections.push(formatCombinedNoticeSection("买卖点提示", bspNotice.lines));
   }
-  const rhythmTexts = getRhythmNoticeTexts(payload);
+  const rhythmTexts = shouldShowToastCategory("rhythm1382") ? getRhythmNoticeTexts(payload) : [];
   if (rhythmTexts.length > 0) {
     sections.push(formatCombinedNoticeSection("1382提示", rhythmTexts));
   }
-  if (payload && payload.judge_notice) {
+  if (shouldShowToastCategory("judge") && payload && payload.judge_notice) {
     const judgeText = judgeStatsText(payload && payload.judge_stats ? payload.judge_stats : null) || "买卖点判定";
     sections.push(formatCombinedNoticeSection("买卖点判定", [judgeText]));
   }
@@ -8111,12 +8134,14 @@ function showCombinedNotice(text) {
 }
 
 function showJudgeNotice(payload) {
+  if (!shouldShowToastCategory("judge")) return;
   const text = judgeStatsText(payload && payload.judge_stats ? payload.judge_stats : null) || "买卖点判定";
   showToast(text, { record: false });
   setMsg(text, true);
 }
 
 function showRhythmHitNotices(payload) {
+  if (!shouldShowToastCategory("rhythm1382")) return;
   const hits = payload && Array.isArray(payload.rhythm_notice_hits) ? payload.rhythm_notice_hits : [];
   hits.forEach((hit) => {
     const text = String(hit.detail || hit.display_label || "1382").trim();
@@ -9207,6 +9232,12 @@ function drawLegend() {
   const boxW = maxW;
   const x0 = PAD_L + 4;
   const y0 = PAD_T + 4;
+  legendHoverBox = { x1: x0, y1: y0, x2: x0 + boxW, y2: y0 + boxH };
+  // 图例只在鼠标悬停左上角图例区域时显示，默认隐藏。
+  if (!legendHoverActive) {
+    ctx.restore();
+    return;
+  }
   ctx.fillStyle = cssVar("--legendBg", "rgba(255,255,255,0.92)");
   ctx.strokeStyle = cssVar("--legendBorder", "rgba(148,163,184,0.6)");
   ctx.lineWidth = 1;
