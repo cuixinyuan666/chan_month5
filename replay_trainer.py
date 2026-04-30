@@ -232,6 +232,79 @@ def parse_k_type(raw: str) -> KL_TYPE:
     return mapping[raw]
 
 
+def normalize_data_form_mode(raw: Any) -> str:
+    mode = str(raw or "traditional").strip().lower()
+    return "quantity" if mode == "quantity" else "traditional"
+
+
+def normalize_data_form_quantity(raw: Any, total: int) -> int:
+    total_n = max(1, int(total))
+    try:
+        q = int(raw)
+    except (TypeError, ValueError):
+        q = total_n
+    if q < 1:
+        q = 1
+    if q > total_n:
+        q = total_n
+    return q
+
+
+def _ensure_klu_deepcopy_attrs(klus: list[Any]) -> None:
+    """兼容旧会话/聚合K线：补齐 CKLine_Unit.__deepcopy__ 依赖字段。"""
+    for klu in klus:
+        # CKLine_Unit.__deepcopy__ 会直接访问 macd/boll，缺失会在重配时报错
+        if not hasattr(klu, "macd"):
+            klu.macd = None
+        if not hasattr(klu, "boll"):
+            klu.boll = None
+
+
+def aggregate_klu_by_quantity(klus: list[Any], quantity: int) -> list[Any]:
+    """按数量Q聚合K线：前面等分，余数全部放最后一组。"""
+    _ensure_klu_deepcopy_attrs(klus)
+    total = len(klus)
+    if total == 0:
+        return []
+    q = normalize_data_form_quantity(quantity, total)
+    if q >= total:
+        return list(copy.deepcopy(klus))
+
+    base = total // q
+    rem = total % q
+    out: list[Any] = []
+    start = 0
+    for i in range(q):
+        seg_len = base + (rem if i == q - 1 else 0)
+        end = start + seg_len
+        chunk = klus[start:end]
+        start = end
+        if not chunk:
+            continue
+        first = chunk[0]
+        last = chunk[-1]
+        high = max(float(getattr(k, "high", 0.0)) for k in chunk)
+        low = min(float(getattr(k, "low", 0.0)) for k in chunk)
+        volume = sum(float(getattr(k, "volume", getattr(k, "vol", 0.0)) or 0.0) for k in chunk)
+        turnover = sum(float(getattr(k, "turnover", 0.0) or 0.0) for k in chunk)
+        merged = CKLine_Unit(
+            {
+                DATA_FIELD.FIELD_TIME: getattr(last, "time"),
+                DATA_FIELD.FIELD_OPEN: float(getattr(first, "open", 0.0)),
+                DATA_FIELD.FIELD_HIGH: high,
+                DATA_FIELD.FIELD_LOW: low,
+                DATA_FIELD.FIELD_CLOSE: float(getattr(last, "close", 0.0)),
+                DATA_FIELD.FIELD_VOLUME: volume,
+                DATA_FIELD.FIELD_TURNOVER: turnover,
+            }
+        )
+        # 避免后续 ReplayChan.load 深拷贝时访问不存在属性
+        merged.macd = None
+        merged.boll = None
+        out.append(merged)
+    return out
+
+
 def normalize_chan_algo(raw: Any) -> str:
     text = str(raw or CHAN_ALGO_CLASSIC).strip().lower()
     return CHAN_ALGO_NEW if text == CHAN_ALGO_NEW else CHAN_ALGO_CLASSIC
@@ -2875,11 +2948,15 @@ class ChanStepper:
         # 会话级行情缓存：同一股票代码与日期区间下只拉取一次，缠论/BSP 配置变更时仅重算结构。
         self._data_session_key: Optional[tuple[Any, ...]] = None
         self._replay_klus_master: Optional[list] = None
+        self._replay_klus_master_raw: Optional[list] = None
         self.data_src_used: Any = None
         self.data_src_logs: list[str] = []
         self.stock_name: Optional[str] = None
         self.structure_bundle: Optional[ChanStructureBundle] = None
         self._bundle_cache_step_idx: Optional[int] = None
+        self.data_form_mode: str = "traditional"
+        self.data_form_quantity: int = 0
+        self.raw_kline_count: int = 0
 
     def _cfg_without_chan_algo(self, cfg_dict: dict[str, Any]) -> dict[str, Any]:
         # 训练器自用键，勿传入 CChanConfig（否则会触发 unknown para）
@@ -3032,6 +3109,8 @@ class ChanStepper:
         k_type: str = "daily",
         confirm_offline: bool = False,
         data_source_priority: Optional[list[str]] = None,
+        data_form_mode: str = "traditional",
+        data_form_quantity: Optional[int] = None,
     ) -> None:
         # 解析并设置周期类型
         self.k_type = parse_k_type(k_type)
@@ -3142,12 +3221,14 @@ class ChanStepper:
                 raise
             except RuntimeError as exc:
                 self._replay_klus_master = k_sel.replay_klus_master
+                self._replay_klus_master_raw = copy.deepcopy(k_sel.replay_klus_master)
                 self.kline_all = k_sel.kline_all
                 self.data_src_used = k_sel.data_src
                 self.data_src_chip_used = k_sel.data_src
                 self.data_src_logs = list(k_sel.logs) + [f"筹码全历史与K线同源（筹码链不可用：{format_source_error(exc)}）"]
             else:
                 self._replay_klus_master = k_sel.replay_klus_master
+                self._replay_klus_master_raw = copy.deepcopy(k_sel.replay_klus_master)
                 # K 线来自离线包时，筹码全历史必须与 K 线同源；否则易出现「K 为分笔合成日线、筹码却走筹码链上先成功的在线日线」
                 if k_sel.data_src == OFFLINE_INLINE_SRC:
                     self.kline_all = k_sel.kline_all
@@ -3186,6 +3267,18 @@ class ChanStepper:
                     + "，筹码 "
                     + data_source_label(self.data_src_chip_used or self.data_src_used)
                 ]
+
+        raw_master = self._replay_klus_master_raw or self._replay_klus_master or []
+        self.raw_kline_count = len(raw_master)
+        self.data_form_mode = normalize_data_form_mode(data_form_mode)
+        self.data_form_quantity = normalize_data_form_quantity(
+            data_form_quantity if data_form_quantity is not None else self.raw_kline_count,
+            self.raw_kline_count,
+        )
+        if self.data_form_mode == "quantity" and self.raw_kline_count > 0:
+            self._replay_klus_master = aggregate_klu_by_quantity(raw_master, self.data_form_quantity)
+        else:
+            self._replay_klus_master = copy.deepcopy(raw_master)
 
         self.chan = ReplayChan(
             code=self.code,
@@ -3283,10 +3376,14 @@ class InitReq(BaseModel):
     # 用户确认使用离线源后二次 init 传 True；单次 init 可传 data_source_priority 覆盖链（不改服务端全局）
     confirm_offline: bool = False
     data_source_priority: Optional[list[str]] = None
+    data_form_mode: str = "traditional"
+    data_form_quantity: Optional[int] = None
 
 
 class ReconfigReq(BaseModel):
     chan_config: dict[str, Any]
+    data_form_mode: Optional[str] = None
+    data_form_quantity: Optional[int] = None
 
 
 class BackNReq(BaseModel):
@@ -3632,6 +3729,8 @@ class AppState:
             k_type=params.get("k_type", "daily"),  # 重建时保留周期类型
             confirm_offline=bool(params.get("confirm_offline", False)),
             data_source_priority=params.get("data_source_priority"),
+            data_form_mode=params.get("data_form_mode", "traditional"),
+            data_form_quantity=params.get("data_form_quantity"),
         )
 
         # Account reset is handled by the caller if needed (e.g. in reconfig)
@@ -3673,12 +3772,22 @@ class AppState:
                 # Replay might fail if parameters changed drastically, but we try our best
                 pass
 
-    def reconfig(self, chan_config: dict[str, Any]) -> None:
+    def reconfig(
+        self,
+        chan_config: dict[str, Any],
+        *,
+        data_form_mode: Optional[str] = None,
+        data_form_quantity: Optional[int] = None,
+    ) -> None:
         if self.session_params is None:
             raise ValueError("当前无可重配会话")
         
         # 1. Update session params
         self.session_params["chan_config"] = chan_config
+        if data_form_mode is not None:
+            self.session_params["data_form_mode"] = normalize_data_form_mode(data_form_mode)
+        if data_form_quantity is not None:
+            self.session_params["data_form_quantity"] = int(data_form_quantity)
         
         # 2. Clear simulation data (trades and account)
         self.trade_events = []
@@ -3725,6 +3834,12 @@ class AppState:
             "time": self.stepper.current_time(),
             "price": price,
             "chart": chart,
+            "data_form": {
+                "mode": self.stepper.data_form_mode,
+                "quantity": int(self.stepper.data_form_quantity or 0),
+                "raw_count": int(self.stepper.raw_kline_count or 0),
+                "current_count": int(len(chart.get("kline", []))),
+            },
             "bsp_history": self.bsp_history,
             "rhythm_notice_hits": rhythm_notice_hits,
             "judge_notice": bool(self._judge_notice),
@@ -5053,6 +5168,31 @@ function migrateChartConfig(cfg) {
 
 let savedChartConfig = ensureObject(safeJsonParse(storageGet("chan_chart_config"), {}), {});
 let chartConfig = deepMerge(JSON.parse(JSON.stringify(DEFAULT_CHART_CONFIG)), migrateChartConfig(savedChartConfig));
+const DATA_FORM_DEFAULT = { mode: "traditional", quantity: 1 };
+let dataFormConfig = { ...DATA_FORM_DEFAULT };
+
+function normalizeDataFormMode(mode) {
+  return String(mode || "traditional").toLowerCase() === "quantity" ? "quantity" : "traditional";
+}
+
+function getRawKlineCount() {
+  const n = Number(lastPayload && lastPayload.data_form ? lastPayload.data_form.raw_count : 0);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+}
+
+function clampDataFormQuantity(rawVal, fallback = null) {
+  const n = getRawKlineCount();
+  const base = Number.isFinite(fallback) && fallback > 0 ? Math.floor(fallback) : (n > 0 ? n : 1);
+  let q = parseInt(rawVal, 10);
+  if (!Number.isFinite(q)) q = base;
+  if (n > 0) {
+    if (q < 1) q = 1;
+    if (q > n) q = n;
+  } else if (q < 1) {
+    q = 1;
+  }
+  return q;
+}
 
 const DEFAULT_SESSION_CONFIG = {
   code: "600340",
@@ -5940,6 +6080,19 @@ function renderSettingsForm() {
 
   const sections = [
     {
+      title: "数据形式",
+      key: "dataForm",
+      color: "#0369a1",
+      bgColor: "rgba(3, 105, 161, 0.08)",
+      items: [
+        { label: "形式", subKey: "mode", type: "select", options: [
+          { value: "traditional", label: "传统" },
+          { value: "quantity", label: "数量" }
+        ], tip: "传统：原始K线。数量：将加载会话后的整段K线按数量Q聚合后再进入缠论计算。" },
+        { label: "数量", subKey: "quantity", type: "number", min: 1, step: 1, tip: "数量模式下生效。范围为 1 到会话总K线数N；1=全合并，N=不聚合。" }
+      ]
+    },
+    {
       title: "系统主题",
       key: "theme_section",
       color: "#3b82f6",
@@ -6424,17 +6577,21 @@ function renderSettingsForm() {
     div.innerHTML = `<div class="settingsSectionTitle" style="color:${sec.color}">${sec.title}</div>`;
     const grid = document.createElement("div");
     grid.className = "settingsGrid";
+    // 兜底处理：本地旧配置或异常配置可能把 section 写成 null，避免点击设置后渲染报错
+    const sectionCfg = ensureObject(chartConfig[sec.key], {});
     sec.items.forEach(item => {
       let val;
       if (sec.key === "theme_section") {
         val = chartConfig.theme;
+      } else if (sec.key === "dataForm") {
+        val = dataFormConfig[item.subKey];
       } else if (sec.key === "indicators") {
         if (item.subKey === "mainSlot") val = selectedMainIndicatorSlot;
         else if (item.subKey === "subSlot") val = selectedSubIndicatorSlot;
         else if (item.subKey === "mainType") val = indicatorMainSlots[String(selectedMainIndicatorSlot)] || [];
         else if (item.subKey === "subType") val = indicatorSubSlots[String(selectedSubIndicatorSlot)] || [];
       } else {
-        val = chartConfig[sec.key][item.subKey];
+        val = sectionCfg[item.subKey];
       }
       
       const itemDiv = document.createElement("div");
@@ -6446,7 +6603,7 @@ function renderSettingsForm() {
           previewLine.style.height = "2px";
           previewLine.style.width = "100%";
           previewLine.style.marginBottom = "4px";
-          const color = chartConfig[sec.key].color || chartConfig[sec.key].lineColor || chartConfig[sec.key].upColor || "#ccc";
+          const color = sectionCfg.color || sectionCfg.lineColor || sectionCfg.upColor || "#ccc";
           previewLine.style.background = getCfgColor(color);
           itemDiv.appendChild(previewLine);
        }
@@ -6457,6 +6614,15 @@ function renderSettingsForm() {
             <label>${buildLabelHtml(item)}</label>
             <select data-key="${sec.key}" data-subkey="${item.subKey}">${optionsHtml}</select>
           `;
+        if (sec.key === "dataForm" && item.subKey === "mode") {
+           const select = itemDiv.querySelector("select");
+           const loaded = !!(lastPayload && lastPayload.ready);
+           if (!loaded) {
+             const qOpt = Array.from(select.options).find((o) => o.value === "quantity");
+             if (qOpt) qOpt.disabled = true;
+             if (String(select.value) === "quantity") select.value = "traditional";
+           }
+        }
         if (sec.key === "indicators" && item.subKey === "mainSlot") {
            const select = itemDiv.querySelector("select");
            select.onchange = (e) => {
@@ -6550,6 +6716,27 @@ function renderSettingsForm() {
       } else {
         let displayVal = val;
         if (item.subKey === "dash" && Array.isArray(val)) displayVal = val.join(", ");
+        if (sec.key === "dataForm" && item.subKey === "quantity") {
+          const n = getRawKlineCount();
+          const minN = 1;
+          const maxN = n > 0 ? n : 1;
+          const disabled = !(lastPayload && lastPayload.ready);
+          const finalVal = clampDataFormQuantity(displayVal, maxN);
+          itemDiv.innerHTML += `
+            <label>${buildLabelHtml(item)}</label>
+            <input type="number"
+                   value="${finalVal}"
+                   min="${minN}"
+                   max="${maxN}"
+                   step="1"
+                   ${disabled ? "disabled" : ""}
+                   data-key="${sec.key}"
+                   data-subkey="${item.subKey}">
+            <div class="muted" style="font-size:12px;">${disabled ? "请先加载会话后再使用数量模式。" : `当前范围：1 - ${maxN}`}</div>
+          `;
+          grid.appendChild(itemDiv);
+          return;
+        }
         itemDiv.innerHTML += `
           <label>${buildLabelHtml(item)}</label>
           <input type="${item.type}" 
@@ -6850,8 +7037,10 @@ function renderSystemSettingsForm() {
   initTooltips();
 }
 
-function saveSettings() {
+async function saveSettings() {
   const inputs = $("settingsContent").querySelectorAll("input, select");
+  let nextDataFormMode = dataFormConfig.mode;
+  let nextDataFormQuantity = dataFormConfig.quantity;
   inputs.forEach(input => {
     const key = input.dataset.key;
     const subkey = input.dataset.subkey;
@@ -6869,6 +7058,9 @@ function saveSettings() {
     if (key === "theme_section") {
       chartConfig.theme = val;
       applyThemeFromSelect();
+    } else if (key === "dataForm") {
+      if (subkey === "mode") nextDataFormMode = normalizeDataFormMode(val);
+      if (subkey === "quantity") nextDataFormQuantity = clampDataFormQuantity(val, dataFormConfig.quantity);
     } else if (key === "indicators") {
       if (subkey === "mainSlot") {
         selectedMainIndicatorSlot = Number(val);
@@ -6900,9 +7092,25 @@ function saveSettings() {
       chartConfig[key][subkey] = val;
     }
   });
+  dataFormConfig.mode = nextDataFormMode;
+  dataFormConfig.quantity = nextDataFormQuantity;
   storageSet("chan_chart_config", JSON.stringify(chartConfig));
   closeSettings();
-  if (lastPayload && lastPayload.ready && lastPayload.chart) draw(lastPayload.chart);
+  if (lastPayload && lastPayload.ready) {
+    const n = getRawKlineCount();
+    if (dataFormConfig.mode === "quantity" && n <= 0) {
+      throw new Error("请先加载会话后再选择数量模式。");
+    }
+    const payload = await api("/api/reconfig", {
+      chan_config: chanConfig,
+      data_form_mode: dataFormConfig.mode,
+      data_form_quantity: clampDataFormQuantity(dataFormConfig.quantity, n || 1),
+    });
+    refreshUI(payload, { afterStep: false });
+    setMsg(payload.message || "图表设置更新成功");
+  } else if (lastPayload && lastPayload.chart) {
+    draw(lastPayload.chart);
+  }
 }
 
 function saveSystemSettingsFromForm() {
@@ -7049,7 +7257,9 @@ $("btnChanSettingsReset").addEventListener("click", resetChanSettings);
 $("btnSettingsOpen").addEventListener("click", openSettings);
 markUiBound("btnSettingsOpen");
 $("btnSettingsClose").addEventListener("click", closeSettings);
-$("btnSettingsSave").addEventListener("click", saveSettings);
+$("btnSettingsSave").addEventListener("click", () => {
+  void saveSettings().catch((e) => setMsg("保存图表设置失败：" + e.message));
+});
 $("btnSettingsReset").addEventListener("click", resetSettings);
 $("btnSystemSettingsOpen").addEventListener("click", openSystemSettings);
 $("btnSystemSettingsClose").addEventListener("click", closeSystemSettings);
@@ -7843,7 +8053,7 @@ function executeShortcutAction(actionId) {
     }
     case "saveChartSettings":
       if (!isSettingsOpen()) return false;
-      saveSettings();
+      void saveSettings().catch((e) => setMsg("保存图表设置失败：" + e.message));
       return true;
     case "saveSystemSettings":
       if (!isSystemSettingsOpen()) return false;
@@ -9994,6 +10204,12 @@ function refreshUI(payload, options) {
     }
   }
   lastPayload = payload;
+  if (payload && payload.ready && payload.data_form) {
+    dataFormConfig.mode = normalizeDataFormMode(payload.data_form.mode);
+    dataFormConfig.quantity = clampDataFormQuantity(payload.data_form.quantity, payload.data_form.raw_count || payload.data_form.current_count || 1);
+  } else if (!payload || !payload.ready) {
+    dataFormConfig = { ...DATA_FORM_DEFAULT };
+  }
   sessionFinished = !!payload.finished;
   syncTradesFromPayload(payload);
   syncIndicatorControls();
@@ -10080,6 +10296,8 @@ $("btnInit").onclick = async () => {
       autype: $("autype").value,
       chan_config: processedConfig,
       k_type: $("kType").value,
+      data_form_mode: normalizeDataFormMode(dataFormConfig.mode),
+      data_form_quantity: clampDataFormQuantity(dataFormConfig.quantity, getRawKlineCount() || 1),
       ...extra,
     });
     let payload;
@@ -10267,6 +10485,7 @@ $("btnReset").onclick = async () => {
     bspHistoryKey = new Set();
     lastSeenBspKey = new Set();
     lastPayload = null;
+    dataFormConfig = { ...DATA_FORM_DEFAULT };
     sessionFinished = false;
     stepInFlight = false;
     userAdjustedView = false;
@@ -10526,6 +10745,8 @@ def api_init(req: InitReq):
                 k_type=req.k_type,
                 confirm_offline=bool(req.confirm_offline),
                 data_source_priority=req.data_source_priority,
+                data_form_mode=req.data_form_mode,
+                data_form_quantity=req.data_form_quantity,
             )
         except OfflineDataConfirmRequired as exc:
             raise HTTPException(
@@ -10554,6 +10775,8 @@ def api_init(req: InitReq):
             # 与 ChanStepper.init 的 session_key 一致，供 reconfig/back_n 重建时命中 K 线缓存、避免重复联网
             "confirm_offline": bool(req.confirm_offline),
             "data_source_priority": req.data_source_priority,
+            "data_form_mode": normalize_data_form_mode(req.data_form_mode),
+            "data_form_quantity": req.data_form_quantity,
         }
         APP_STATE.trade_events = []
         APP_STATE.bsp_history = []
@@ -10585,10 +10808,14 @@ def api_reconfig(req: ReconfigReq):
     if not APP_STATE.ready:
         raise HTTPException(status_code=400, detail="请先初始化会话")
     try:
-        APP_STATE.reconfig(req.chan_config)
+        APP_STATE.reconfig(
+            req.chan_config,
+            data_form_mode=req.data_form_mode,
+            data_form_quantity=req.data_form_quantity,
+        )
         APP_STATE._rhythm_notice_hits = []
         payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME, include_kline_all=False)
-        payload["message"] = "缠论配置更新成功，已按新逻辑重新计算并清除模拟持仓。"
+        payload["message"] = "配置更新成功，已按新逻辑重新计算并清除模拟持仓。"
         return payload
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e)) from e

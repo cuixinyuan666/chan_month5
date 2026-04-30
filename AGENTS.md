@@ -3,6 +3,16 @@ description:
 alwaysApply: true
 ---
 
+---
+description: 
+alwaysApply: true
+---
+
+---
+description: 
+alwaysApply: true
+---
+
 # AGENTS.md
 
 ## Environment
@@ -95,7 +105,7 @@ No test framework, no linting config, no CI found. Verify changes manually with 
 ###背景
 1.我编写的，可更改的文件只有一个：replay_trainer.py’
 2.a_Data是我自定义的离线数据文件；
-3.当前工程的说明基于quick_guide.md，是作业本，README.md是个答案本，是我将要或者以后要实现的版本。
+3.当前工程的说明基于quick_guide.md(不包含replay_trainer.py的说明，除非你需要整体了解全工程，不然不需要查看该文档)，是作业本，README.md是个答案本（通常不需要查看），是我将要或者以后要实现的版本。
 4.README.md包含quick_guide.md，当前工程有很多功能并不在README.md中。
 5.当前终端可使用playwright、git、winget、curl；
 6.当前的工程包含了大量中国交易体系：缠中说禅的逻辑。
@@ -105,3 +115,4 @@ No test framework, no linting config, no CI found. Verify changes manually with 
 2.注释尽量简短，注释尽量使用我和你沟通时使用的专业或者非专业的术语，且尽量使用中文；
 3.文件的更改只限于replay_trainer.py，其余当前工程的文件禁止增，删；
 4.UI端设计时尽量使用中文；
+5.尽量最大性价比的使用TOKEN，非必要操作。
