@@ -103,7 +103,7 @@ No test framework, no linting config, no CI found. Verify changes manually with 
 你是一个资深的python 量化程序员，具有完整的Python和股票理论基础。
 
 ###背景
-1.我编写的，可更改的文件只有一个：replay_trainer.py’
+1.我编写的文件或文件夹以a_开头，并且可更改的文件只有一个：replay_trainer.py’
 2.a_Data是我自定义的离线数据文件；
 3.当前工程的说明基于quick_guide.md(不包含replay_trainer.py的说明，除非你需要整体了解全工程，不然不需要查看该文档)，是作业本，README.md是个答案本（通常不需要查看），是我将要或者以后要实现的版本。
 4.README.md包含quick_guide.md，当前工程有很多功能并不在README.md中。

@@ -3373,6 +3373,9 @@ class InitReq(BaseModel):
     autype: str = "qfq"
     chan_config: Optional[dict[str, Any]] = None
     k_type: str = "daily"  # 周期类型
+    chart_mode: str = "single"  # single | dual
+    k_type_2: Optional[str] = None  # 双周期下第二周期
+    active_chart_id: str = "chart1"  # chart1 | chart2
     # 用户确认使用离线源后二次 init 传 True；单次 init 可传 data_source_priority 覆盖链（不改服务端全局）
     confirm_offline: bool = False
     data_source_priority: Optional[list[str]] = None
@@ -3392,6 +3395,7 @@ class BackNReq(BaseModel):
 
 class StepReq(BaseModel):
     judge_mode: Optional[str] = None  # "auto" | "manual"
+    active_chart_id: Optional[str] = None
 
 
 class JudgeBspReq(BaseModel):
@@ -3401,6 +3405,9 @@ class JudgeBspReq(BaseModel):
 class AppState:
     def __init__(self) -> None:
         self.stepper = ChanStepper()
+        self.stepper2: Optional[ChanStepper] = None
+        self.chart_mode: str = "single"
+        self.active_chart_id: str = "chart1"
         self.account = PaperAccount(initial_cash=10_000, cash=10_000)
         self.ready = False
         self.finished = False
@@ -3424,6 +3431,94 @@ class AppState:
         # 上次判定位置（用于弹窗展示区间）
         self._last_judge_x: Optional[int] = None
         self._last_judge_time: Optional[str] = None
+
+    def _normalize_chart_id(self, chart_id: Optional[str]) -> str:
+        cid = str(chart_id or self.active_chart_id or "chart1").strip().lower()
+        return "chart2" if (self.chart_mode == "dual" and cid == "chart2" and self.stepper2 is not None) else "chart1"
+
+    def get_active_stepper(self, chart_id: Optional[str] = None) -> ChanStepper:
+        cid = self._normalize_chart_id(chart_id)
+        return self.stepper2 if (cid == "chart2" and self.stepper2 is not None) else self.stepper
+
+    def get_passive_stepper(self, chart_id: Optional[str] = None) -> Optional[ChanStepper]:
+        if self.chart_mode != "dual" or self.stepper2 is None:
+            return None
+        cid = self._normalize_chart_id(chart_id)
+        return self.stepper if cid == "chart2" else self.stepper2
+
+    @staticmethod
+    def _parse_time_safe(ts: str) -> Optional[datetime]:
+        s = str(ts or "").strip()
+        if not s:
+            return None
+        fmts = ("%Y/%m/%d", "%Y/%m/%d %H:%M", "%Y/%m/%d %H:%M:%S")
+        for fmt in fmts:
+            try:
+                return datetime.strptime(s, fmt)
+            except Exception:
+                continue
+        return None
+
+    def _sync_stepper_to_anchor(self, stepper: ChanStepper, anchor_time: str) -> None:
+        """将目标周期步进到 anchor_time（包含优先，兜底左侧最近）。"""
+        t_anchor = self._parse_time_safe(anchor_time)
+        if t_anchor is None:
+            return
+        if stepper.chan is None:
+            return
+        # 已到末尾直接返回
+        prev_step = int(stepper.step_idx)
+        while True:
+            cur_t = self._parse_time_safe(stepper.current_time())
+            if cur_t is None:
+                break
+            # 当前已在锚点右侧时，不再前进，保留左侧最近
+            if cur_t >= t_anchor:
+                break
+            if not stepper.step():
+                break
+        if int(stepper.step_idx) != prev_step:
+            # 同步被动周期时重建结构缓存
+            stepper.structure_bundle = None
+            stepper._bundle_cache_step_idx = None
+
+    def _apply_partial_last_bar(self, big_chart: dict[str, Any], small_chart: dict[str, Any], anchor_time: str) -> None:
+        """防未来数据：用小周期截至锚点的数据重算大周期最后一根OHLCV。"""
+        big_ks = big_chart.get("kline") if isinstance(big_chart, dict) else None
+        small_ks = small_chart.get("kline") if isinstance(small_chart, dict) else None
+        if not isinstance(big_ks, list) or not isinstance(small_ks, list) or len(big_ks) <= 0 or len(small_ks) <= 0:
+            return
+        t_anchor = self._parse_time_safe(anchor_time)
+        if t_anchor is None:
+            return
+        last_big = big_ks[-1]
+        prev_big = big_ks[-2] if len(big_ks) >= 2 else None
+        t_prev = self._parse_time_safe(prev_big.get("t")) if isinstance(prev_big, dict) else None
+        picked: list[dict[str, Any]] = []
+        for bar in small_ks:
+            t = self._parse_time_safe(str(bar.get("t", "")))
+            if t is None:
+                continue
+            if t > t_anchor:
+                continue
+            if t_prev is not None and t <= t_prev:
+                continue
+            picked.append(bar)
+        if not picked:
+            return
+        try:
+            o = float(picked[0]["o"])
+            h = max(float(x["h"]) for x in picked)
+            l = min(float(x["l"]) for x in picked)
+            c = float(picked[-1]["c"])
+            v = sum(float(x.get("v", 0.0) or 0.0) for x in picked)
+        except Exception:
+            return
+        last_big["o"] = o
+        last_big["h"] = h
+        last_big["l"] = l
+        last_big["c"] = c
+        last_big["v"] = v
 
     def _reset_judge_state(self) -> None:
         self._judge_notice = False
@@ -3597,9 +3692,10 @@ class AppState:
             self._judge_bsp_against_all(reason="; ".join(reason_parts), levels=triggered_levels)
 
     def _current_kline_x(self) -> Optional[int]:
-        if self.stepper.chan is None:
+        stepper = self.get_active_stepper()
+        if stepper.chan is None:
             return None
-        kl_list = self.stepper.chan[0]
+        kl_list = stepper.chan[0]
         if len(kl_list.lst) == 0:
             return None
         return int(kl_list.lst[-1].lst[-1].idx)
@@ -3630,9 +3726,10 @@ class AppState:
         return {"history": history, "active": active}
 
     def _current_bsp_snapshot(self) -> list[dict[str, Any]]:
-        if self.stepper.chan is None:
+        stepper = self.get_active_stepper()
+        if stepper.chan is None:
             return []
-        bundle = self.stepper.get_structure_bundle()
+        bundle = stepper.get_structure_bundle()
         snapshot: list[dict[str, Any]] = []
         for level in VISIBLE_BSP_LEVELS:
             bsp_list = get_bundle_bsp_list(bundle, level)
@@ -3680,9 +3777,10 @@ class AppState:
     def sync_rhythm_history(self) -> None:
         current_x = self._current_kline_x()
         self._rhythm_notice_hits = []
-        if current_x is None or self.stepper.chan is None:
+        stepper = self.get_active_stepper()
+        if current_x is None or stepper.chan is None:
             return
-        bundle = self.stepper.get_structure_bundle()
+        bundle = stepper.get_structure_bundle()
         for item in bundle.rhythm_hits:
             if int(item.get("x", -1)) != current_x:
                 continue
@@ -3699,7 +3797,7 @@ class AppState:
                 "display_label": str(item.get("display_label", "")),
                 "round_ref": int(item.get("round_ref", 0)),
                 "detail": str(item.get("detail", "")),
-                "time": str(item.get("time", self.stepper.current_time())),
+                "time": str(item.get("time", stepper.current_time())),
             }
             self.rhythm_hit_history.append(history_item)
             self.rhythm_hit_keys.add(key)
@@ -3732,6 +3830,24 @@ class AppState:
             data_form_mode=params.get("data_form_mode", "traditional"),
             data_form_quantity=params.get("data_form_quantity"),
         )
+        if str(params.get("chart_mode", "single")).lower() == "dual":
+            self.chart_mode = "dual"
+            self.stepper2 = ChanStepper()
+            self.stepper2.init(
+                params["code"],
+                params["begin_date"],
+                params["end_date"],
+                params["autype"],
+                chan_config=params.get("chan_config"),
+                k_type=params.get("k_type_2") or params.get("k_type", "daily"),
+                confirm_offline=bool(params.get("confirm_offline", False)),
+                data_source_priority=params.get("data_source_priority"),
+                data_form_mode=params.get("data_form_mode", "traditional"),
+                data_form_quantity=params.get("data_form_quantity"),
+            )
+        else:
+            self.chart_mode = "single"
+            self.stepper2 = None
 
         # Account reset is handled by the caller if needed (e.g. in reconfig)
         # but for back_n it should stay consistent with history.
@@ -3746,12 +3862,17 @@ class AppState:
 
         if not self.stepper.step():
             return
+        if self.chart_mode == "dual" and self.stepper2 is not None:
+            self.stepper2.step()
+            self._sync_stepper_to_anchor(self.stepper2, self.stepper.current_time())
         self.sync_bsp_history()
         self.sync_rhythm_history()
         self.after_step_update()
         for _ in range(target_step):
             if not self.stepper.step():
                 break
+            if self.chart_mode == "dual" and self.stepper2 is not None:
+                self._sync_stepper_to_anchor(self.stepper2, self.stepper.current_time())
             self.sync_bsp_history()
             self.sync_rhythm_history()
             self.after_step_update()
@@ -3806,19 +3927,41 @@ class AppState:
             }
         rhythm_notice_hits = list(self._rhythm_notice_hits)
         self._rhythm_notice_hits = []
-        bundle = self.stepper.get_structure_bundle()
-        # 1 分钟全历史 kline_all 体量极大；步进等高频接口不再重复下发，由前端沿用上次 chart.kline_all（筹码分布仍正确）。
-        chart = serialize_chan(
-            self.stepper.chan,
-            self.stepper.indicator_history,
-            self.stepper.trend_lines,
-            chan_algo=self.stepper.chan_algo,
-            bundle=bundle,
-            kline_all=(self.stepper.kline_all if include_kline_all else None),
-        )
+
+        def _build_chart_payload(stepper: ChanStepper) -> dict[str, Any]:
+            bundle = stepper.get_structure_bundle()
+            return serialize_chan(
+                stepper.chan,
+                stepper.indicator_history,
+                stepper.trend_lines,
+                chan_algo=stepper.chan_algo,
+                bundle=bundle,
+                kline_all=(stepper.kline_all if include_kline_all else None),
+            )
+
+        chart = _build_chart_payload(self.stepper)
+        chart2: Optional[dict[str, Any]] = None
+        if self.chart_mode == "dual" and self.stepper2 is not None and self.stepper2.chan is not None:
+            chart2 = _build_chart_payload(self.stepper2)
+
+        active_stepper = self.get_active_stepper()
+        anchor_time = active_stepper.current_time()
+        if chart2 is not None:
+            k1 = len(chart.get("kline", []))
+            k2 = len(chart2.get("kline", []))
+            # 数量模式或不同周期下，K线更少视作大周期，末根按锚点裁剪避免未来数据
+            if k1 > 0 and k2 > 0 and k1 != k2:
+                if k1 < k2:
+                    self._apply_partial_last_bar(chart, chart2, anchor_time)
+                else:
+                    self._apply_partial_last_bar(chart2, chart, anchor_time)
         price: Optional[float] = None
-        if len(chart.get("kline", [])) > 0:
-            price = self.stepper.current_price()
+        active_chart = chart2 if (self._normalize_chart_id(self.active_chart_id) == "chart2" and chart2 is not None) else chart
+        if len(active_chart.get("kline", [])) > 0:
+            price = active_stepper.current_price()
+        charts_payload = {"chart1": chart}
+        if chart2 is not None:
+            charts_payload["chart2"] = chart2
         return {
             "ready": True,
             "finished": self.finished,
@@ -3830,15 +3973,19 @@ class AppState:
                 "logs": list(self.stepper.data_src_logs),
             },
             "chan_algo": self.stepper.chan_algo,
-            "step_idx": self.stepper.step_idx,
-            "time": self.stepper.current_time(),
+            "step_idx": active_stepper.step_idx,
+            "time": active_stepper.current_time(),
             "price": price,
             "chart": chart,
+            "charts": charts_payload,
+            "chart_mode": self.chart_mode,
+            "active_chart_id": self._normalize_chart_id(self.active_chart_id),
+            "time_anchor": anchor_time,
             "data_form": {
                 "mode": self.stepper.data_form_mode,
                 "quantity": int(self.stepper.data_form_quantity or 0),
                 "raw_count": int(self.stepper.raw_kline_count or 0),
-                "current_count": int(len(chart.get("kline", []))),
+                "current_count": int(len(active_chart.get("kline", []))),
             },
             "bsp_history": self.bsp_history,
             "rhythm_notice_hits": rhythm_notice_hits,
@@ -4640,6 +4787,31 @@ HTML = r"""
           <span class="tip-icon" data-tip="选择K线数据的复权方式。"></span>
         </div>
         <div class="row cfg-editable">
+          <label>K线图模式</label>
+          <select id="chartMode">
+            <option value="single" selected>单品种单周期图</option>
+            <option value="dual">单品种两周期图</option>
+          </select>
+          <span class="tip-icon" data-tip="单周期=原模式；两周期=上下两个周期联动分析。"></span>
+        </div>
+        <div class="row cfg-editable" id="kType2Row" style="display:none;">
+          <label>周期类型2</label>
+          <select id="kType2">
+            <option value="1min">1分钟</option>
+            <option value="5min">5分钟</option>
+            <option value="15min">15分钟</option>
+            <option value="30min">30分钟</option>
+            <option value="60min">60分钟</option>
+            <option value="daily" selected>日线</option>
+            <option value="weekly">周线</option>
+            <option value="monthly">月线</option>
+            <option value="quarterly">季线</option>
+            <option value="yearly">年线</option>
+            <option value="3min">3分钟</option>
+          </select>
+          <span class="tip-icon" data-tip="双周期模式下第二个图窗的周期。"></span>
+        </div>
+        <div class="row cfg-editable">
           <label>周期类型</label>
           <select id="kType">
             <option value="1min">1分钟</option>
@@ -4808,6 +4980,10 @@ HTML = r"""
         <div class="tradeStatusResizeHandle"></div>
       </div>
 
+      <div id="dualChartToolbar" style="position:absolute; top:8px; right:12px; z-index:10; display:none; gap:6px;">
+        <button id="btnActiveChart1" style="width:auto; padding:4px 8px;">图1激活</button>
+        <button id="btnActiveChart2" style="width:auto; padding:4px 8px;">图2激活</button>
+      </div>
       <canvas id="chart"></canvas>
     </div>
   </div>
@@ -4817,8 +4993,10 @@ function markUiBound(id) {
   const el = $(id);
   if (el) el.dataset.bound = "1";
 }
-const canvas = $("chart");
-const ctx = canvas.getContext("2d");
+let canvas = $("chart");
+let ctx = canvas.getContext("2d");
+const rootCanvas = canvas;
+const rootCtx = ctx;
 function safeJsonParse(raw, fallback) {
   try {
     if (raw === null || raw === undefined || raw === "") return fallback;
@@ -5167,7 +5345,39 @@ function migrateChartConfig(cfg) {
 }
 
 let savedChartConfig = ensureObject(safeJsonParse(storageGet("chan_chart_config"), {}), {});
-let chartConfig = deepMerge(JSON.parse(JSON.stringify(DEFAULT_CHART_CONFIG)), migrateChartConfig(savedChartConfig));
+function buildChartConfigStore(rawCfg) {
+  const raw = ensureObject(rawCfg, {});
+  // 兼容旧版：旧版直接是单套配置
+  if (!raw.shared || !raw.perChart) {
+    const migratedSingle = deepMerge(JSON.parse(JSON.stringify(DEFAULT_CHART_CONFIG)), migrateChartConfig(raw));
+    return {
+      shared: {
+        mode: "single",
+        theme: migratedSingle.theme,
+        crosshair: JSON.parse(JSON.stringify(migratedSingle.crosshair || {})),
+      },
+      perChart: {
+        chart1: migratedSingle,
+        chart2: deepMerge(JSON.parse(JSON.stringify(DEFAULT_CHART_CONFIG)), migrateChartConfig(raw)),
+      },
+    };
+  }
+  const shared = ensureObject(raw.shared, {});
+  const perChart = ensureObject(raw.perChart, {});
+  return {
+    shared: {
+      mode: String(shared.mode || "single"),
+      theme: String(shared.theme || "light"),
+      crosshair: deepMerge(JSON.parse(JSON.stringify(DEFAULT_CHART_CONFIG.crosshair)), ensureObject(shared.crosshair, {})),
+    },
+    perChart: {
+      chart1: deepMerge(JSON.parse(JSON.stringify(DEFAULT_CHART_CONFIG)), migrateChartConfig(ensureObject(perChart.chart1, {}))),
+      chart2: deepMerge(JSON.parse(JSON.stringify(DEFAULT_CHART_CONFIG)), migrateChartConfig(ensureObject(perChart.chart2, {}))),
+    },
+  };
+}
+let chartConfigStore = buildChartConfigStore(savedChartConfig);
+let chartConfig = chartConfigStore.perChart.chart1;
 const DATA_FORM_DEFAULT = { mode: "traditional", quantity: 1 };
 let dataFormConfig = { ...DATA_FORM_DEFAULT };
 
@@ -5209,7 +5419,10 @@ const DEFAULT_SESSION_CONFIG = {
   segZsEnabled: true,
   segsegZsEnabled: true,
   stepN: "5",
-  kType: "daily"
+  kType: "daily",
+  chartMode: "single",
+  kType2: "weekly",
+  activeChartId: "chart1"
 };
 let sessionConfig = ensureObject(
   safeJsonParse(storageGet("chan_session_config"), JSON.parse(JSON.stringify(DEFAULT_SESSION_CONFIG))),
@@ -5651,7 +5864,10 @@ function saveSessionConfig() {
     segZsEnabled: chartConfig.segZs.enabled,
     segsegZsEnabled: chartConfig.segsegZs.enabled,
     stepN: $("stepN").value,
-    kType: $("kType").value
+    kType: $("kType").value,
+    chartMode: $("chartMode") ? $("chartMode").value : "single",
+    kType2: $("kType2") ? $("kType2").value : $("kType").value,
+    activeChartId: String(lastPayload && lastPayload.active_chart_id ? lastPayload.active_chart_id : "chart1")
   };
   storageSet("chan_session_config", JSON.stringify(sessionConfig));
 }
@@ -5667,8 +5883,26 @@ function loadSessionConfig() {
         applyThemeFromSelect();
     }
     if (sessionConfig.kType !== undefined) $("kType").value = sessionConfig.kType;
+    if ($("chartMode") && sessionConfig.chartMode !== undefined) $("chartMode").value = String(sessionConfig.chartMode || "single");
+    if ($("kType2") && sessionConfig.kType2 !== undefined) $("kType2").value = String(sessionConfig.kType2 || $("kType").value);
     // No longer setting DOM for chip/biZs/segZs here as they are in chartConfig
     if (sessionConfig.stepN !== undefined) $("stepN").value = sessionConfig.stepN;
+    if ($("kType2Row")) $("kType2Row").style.display = ($("chartMode") && $("chartMode").value === "dual") ? "" : "none";
+}
+
+function updateDualModeUI(payload = null) {
+  const mode = payload && payload.chart_mode ? String(payload.chart_mode) : ($("chartMode") ? $("chartMode").value : "single");
+  const dual = mode === "dual";
+  if ($("kType2Row")) $("kType2Row").style.display = dual ? "" : "none";
+  if ($("dualChartToolbar")) $("dualChartToolbar").style.display = dual ? "flex" : "none";
+  const active = payload && payload.active_chart_id ? String(payload.active_chart_id) : (sessionConfig.activeChartId || "chart1");
+  chartConfig = active === "chart2" ? chartConfigStore.perChart.chart2 : chartConfigStore.perChart.chart1;
+  chartConfig.theme = chartConfigStore.shared.theme || chartConfig.theme;
+  chartConfig.crosshair = deepMerge(JSON.parse(JSON.stringify(chartConfig.crosshair || {})), chartConfigStore.shared.crosshair || {});
+  const btn1 = $("btnActiveChart1");
+  const btn2 = $("btnActiveChart2");
+  if (btn1) btn1.style.border = active === "chart1" ? "2px solid #2563eb" : "";
+  if (btn2) btn2.style.border = active === "chart2" ? "2px solid #2563eb" : "";
 }
 
 function getCfgColor(c) {
@@ -7094,7 +7328,12 @@ async function saveSettings() {
   });
   dataFormConfig.mode = nextDataFormMode;
   dataFormConfig.quantity = nextDataFormQuantity;
-  storageSet("chan_chart_config", JSON.stringify(chartConfig));
+  const activeCfgKey = (lastPayload && String(lastPayload.active_chart_id) === "chart2") ? "chart2" : "chart1";
+  chartConfigStore.perChart[activeCfgKey] = JSON.parse(JSON.stringify(chartConfig));
+  chartConfigStore.shared.theme = chartConfig.theme;
+  chartConfigStore.shared.crosshair = JSON.parse(JSON.stringify(chartConfig.crosshair || chartConfigStore.shared.crosshair));
+  chartConfigStore.shared.mode = $("chartMode") ? $("chartMode").value : chartConfigStore.shared.mode;
+  storageSet("chan_chart_config", JSON.stringify(chartConfigStore));
   closeSettings();
   if (lastPayload && lastPayload.ready) {
     const n = getRawKlineCount();
@@ -10094,6 +10333,48 @@ function draw(chart) {
   drawLegend();
 }
 
+function drawDualCharts(payload) {
+  if (!payload || !payload.charts || !payload.charts.chart1 || !payload.charts.chart2) {
+    draw(payload && payload.chart ? payload.chart : null);
+    return;
+  }
+  // 复用原单图 draw 管线：分别离屏绘制，再拼接到同一画布上下两栏
+  const c1 = payload.charts.chart1;
+  const c2 = payload.charts.chart2;
+  const temp = document.createElement("canvas");
+  temp.width = rootCanvas.width;
+  temp.height = rootCanvas.height;
+  temp.style.width = `${rootCanvas.clientWidth}px`;
+  temp.style.height = `${rootCanvas.clientHeight}px`;
+  const tempCtx = temp.getContext("2d");
+  if (!tempCtx) {
+    draw(c1);
+    return;
+  }
+  const oldCanvas = canvas;
+  const oldCtx = ctx;
+  canvas = temp;
+  ctx = tempCtx;
+  draw(c1);
+  const img1 = tempCtx.getImageData(0, 0, temp.width, temp.height);
+  tempCtx.clearRect(0, 0, temp.width, temp.height);
+  draw(c2);
+  const img2 = tempCtx.getImageData(0, 0, temp.width, temp.height);
+  canvas = oldCanvas;
+  ctx = oldCtx;
+  rootCtx.clearRect(0, 0, rootCanvas.clientWidth, rootCanvas.clientHeight);
+  // 这里直接用像素数据缩放绘制，保证旧渲染逻辑可复用
+  const t1 = document.createElement("canvas");
+  t1.width = temp.width; t1.height = temp.height;
+  t1.getContext("2d").putImageData(img1, 0, 0);
+  const t2 = document.createElement("canvas");
+  t2.width = temp.width; t2.height = temp.height;
+  t2.getContext("2d").putImageData(img2, 0, 0);
+  const h = Math.floor(rootCanvas.clientHeight / 2);
+  rootCtx.drawImage(t1, 0, 0, rootCanvas.clientWidth, h);
+  rootCtx.drawImage(t2, 0, h, rootCanvas.clientWidth, rootCanvas.clientHeight - h);
+}
+
 async function api(path, body, method = "POST") {
   const options = {
     method,
@@ -10127,7 +10408,10 @@ function detectBspPromptOnLastBar(payload) {
 
 async function stepOnce(logMessage) {
   const prevStepIdx = lastPayload && Number.isFinite(lastPayload.step_idx) ? Number(lastPayload.step_idx) : null;
-  const payload = await api("/api/step", { judge_mode: systemConfig.bspJudgeMode || "auto" });
+  const payload = await api("/api/step", {
+    judge_mode: systemConfig.bspJudgeMode || "auto",
+    active_chart_id: (lastPayload && lastPayload.active_chart_id) ? lastPayload.active_chart_id : "chart1",
+  });
   const bspNotice = isBspJudgeManual() ? null : detectBspPromptOnLastBar(payload);
   const noticeText = buildStepNoticeText(payload, bspNotice);
   refreshUI(payload, { afterStep: true, showStandaloneNotices: false });
@@ -10203,7 +10487,14 @@ function refreshUI(payload, options) {
       payload.chart.kline_all = prev.chart.kline_all;
     }
   }
+  if (payload && payload.ready && payload.charts && typeof payload.charts === "object") {
+    const activeId = String(payload.active_chart_id || "chart1");
+    sessionConfig.activeChartId = activeId;
+    if (payload.charts[activeId]) payload.chart = payload.charts[activeId];
+    else if (payload.charts.chart1) payload.chart = payload.charts.chart1;
+  }
   lastPayload = payload;
+  updateDualModeUI(payload);
   if (payload && payload.ready && payload.data_form) {
     dataFormConfig.mode = normalizeDataFormMode(payload.data_form.mode);
     dataFormConfig.quantity = clampDataFormQuantity(payload.data_form.quantity, payload.data_form.raw_count || payload.data_form.current_count || 1);
@@ -10260,7 +10551,8 @@ function refreshUI(payload, options) {
           return Number.isFinite(x) && x <= allXMax;
         })
       );
-      draw(payload.chart);
+      if (payload.chart_mode === "dual" && payload.charts && payload.charts.chart1 && payload.charts.chart2) drawDualCharts(payload);
+      else draw(payload.chart);
     }
   }
   syncStepButtonState();
@@ -10296,6 +10588,9 @@ $("btnInit").onclick = async () => {
       autype: $("autype").value,
       chan_config: processedConfig,
       k_type: $("kType").value,
+      chart_mode: $("chartMode") ? $("chartMode").value : "single",
+      k_type_2: $("kType2") ? $("kType2").value : $("kType").value,
+      active_chart_id: (sessionConfig && sessionConfig.activeChartId) ? sessionConfig.activeChartId : "chart1",
       data_form_mode: normalizeDataFormMode(dataFormConfig.mode),
       data_form_quantity: clampDataFormQuantity(dataFormConfig.quantity, getRawKlineCount() || 1),
       ...extra,
@@ -10449,6 +10744,36 @@ markUiBound("btnStepN");
 markUiBound("btnBackN");
 markUiBound("btnBuy");
 markUiBound("btnSell");
+
+if ($("chartMode")) {
+  $("chartMode").addEventListener("change", () => {
+    updateDualModeUI();
+    saveSessionConfig();
+  });
+}
+if ($("kType2")) {
+  $("kType2").addEventListener("change", () => saveSessionConfig());
+}
+if ($("btnActiveChart1")) {
+  $("btnActiveChart1").addEventListener("click", () => {
+    if (!lastPayload || !lastPayload.ready || !lastPayload.charts || !lastPayload.charts.chart1) return;
+    lastPayload.active_chart_id = "chart1";
+    sessionConfig.activeChartId = "chart1";
+    saveSessionConfig();
+    lastPayload.chart = lastPayload.charts.chart1;
+    refreshUI(lastPayload, { afterStep: false });
+  });
+}
+if ($("btnActiveChart2")) {
+  $("btnActiveChart2").addEventListener("click", () => {
+    if (!lastPayload || !lastPayload.ready || !lastPayload.charts || !lastPayload.charts.chart2) return;
+    lastPayload.active_chart_id = "chart2";
+    sessionConfig.activeChartId = "chart2";
+    saveSessionConfig();
+    lastPayload.chart = lastPayload.charts.chart2;
+    refreshUI(lastPayload, { afterStep: false });
+  });
+}
 
 $("btnFinish").onclick = async () => {
   try {
@@ -10748,6 +11073,25 @@ def api_init(req: InitReq):
                 data_form_mode=req.data_form_mode,
                 data_form_quantity=req.data_form_quantity,
             )
+            chart_mode = "dual" if str(req.chart_mode or "single").strip().lower() == "dual" else "single"
+            APP_STATE.chart_mode = chart_mode
+            APP_STATE.active_chart_id = "chart2" if (chart_mode == "dual" and str(req.active_chart_id or "").strip().lower() == "chart2") else "chart1"
+            APP_STATE.stepper2 = None
+            if chart_mode == "dual":
+                k_type_2 = str(req.k_type_2 or req.k_type or "daily").strip()
+                APP_STATE.stepper2 = ChanStepper()
+                APP_STATE.stepper2.init(
+                    code_norm,
+                    req.begin_date,
+                    req.end_date,
+                    autype,
+                    chan_config=req.chan_config,
+                    k_type=k_type_2,
+                    confirm_offline=bool(req.confirm_offline),
+                    data_source_priority=req.data_source_priority,
+                    data_form_mode=req.data_form_mode,
+                    data_form_quantity=req.data_form_quantity,
+                )
         except OfflineDataConfirmRequired as exc:
             raise HTTPException(
                 status_code=409,
@@ -10772,6 +11116,9 @@ def api_init(req: InitReq):
             "initial_cash": req.initial_cash,
             "chan_config": req.chan_config,
             "k_type": req.k_type,  # 保存周期类型到会话参数
+            "chart_mode": APP_STATE.chart_mode,
+            "k_type_2": req.k_type_2,
+            "active_chart_id": APP_STATE.active_chart_id,
             # 与 ChanStepper.init 的 session_key 一致，供 reconfig/back_n 重建时命中 K 线缓存、避免重复联网
             "confirm_offline": bool(req.confirm_offline),
             "data_source_priority": req.data_source_priority,
@@ -10786,16 +11133,20 @@ def api_init(req: InitReq):
         # init后先推进一根，确保前端有可视数据并可交互
         APP_STATE.rebuild_bsp_all_snapshot()
         APP_STATE.stepper.step()
+        if APP_STATE.chart_mode == "dual" and APP_STATE.stepper2 is not None:
+            APP_STATE.stepper2.step()
+            APP_STATE._sync_stepper_to_anchor(APP_STATE.stepper2, APP_STATE.stepper.current_time())
         APP_STATE.sync_bsp_history()
         APP_STATE.sync_rhythm_history()
         APP_STATE._rhythm_notice_hits = []
         APP_STATE.after_step_update()
         payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME)
         source_label = data_source_label(APP_STATE.stepper.data_src_used)
+        mode_desc = f"双周期({req.k_type}/{(req.k_type_2 or req.k_type)})" if APP_STATE.chart_mode == "dual" else f"单周期({req.k_type})"
         if source_label in ("AKShare", "离线数据"):
-            payload["message"] = f"加载成功：{APP_STOCK_NAME or code_norm}，当前数据源 {source_label}，周期 {req.k_type}。"
+            payload["message"] = f"加载成功：{APP_STOCK_NAME or code_norm}，当前数据源 {source_label}，{mode_desc}。"
         else:
-            payload["message"] = f"加载成功：{APP_STOCK_NAME or code_norm}，已自动切换到 {source_label}，周期 {req.k_type}。"
+            payload["message"] = f"加载成功：{APP_STOCK_NAME or code_norm}，已自动切换到 {source_label}，{mode_desc}。"
         return payload
     except HTTPException:
         raise
@@ -10828,7 +11179,13 @@ def api_step(req: StepReq):
     if APP_STATE.finished:
         raise HTTPException(status_code=400, detail="当前会话已结束，请重新训练")
     try:
-        ok = APP_STATE.stepper.step()
+        if req.active_chart_id:
+            APP_STATE.active_chart_id = APP_STATE._normalize_chart_id(req.active_chart_id)
+        active_stepper = APP_STATE.get_active_stepper()
+        passive_stepper = APP_STATE.get_passive_stepper()
+        ok = active_stepper.step()
+        if passive_stepper is not None and ok:
+            APP_STATE._sync_stepper_to_anchor(passive_stepper, active_stepper.current_time())
         APP_STATE.sync_bsp_history()
         APP_STATE.sync_rhythm_history()
         mode = (req.judge_mode or "auto").lower().strip()
@@ -10863,8 +11220,9 @@ def api_buy():
     if APP_STATE.finished:
         raise HTTPException(status_code=400, detail="当前会话已结束，请重新训练")
     try:
-        price = APP_STATE.stepper.current_price()
-        step_idx = APP_STATE.stepper.step_idx
+        active_stepper = APP_STATE.get_active_stepper()
+        price = active_stepper.current_price()
+        step_idx = active_stepper.step_idx
         detail = APP_STATE.account.buy_with_all_cash(price, step_idx)
         APP_STATE.trade_events.append(
             {
@@ -10889,8 +11247,9 @@ def api_sell():
     if APP_STATE.finished:
         raise HTTPException(status_code=400, detail="当前会话已结束，请重新训练")
     try:
-        price = APP_STATE.stepper.current_price()
-        step_idx = APP_STATE.stepper.step_idx
+        active_stepper = APP_STATE.get_active_stepper()
+        price = active_stepper.current_price()
+        step_idx = active_stepper.step_idx
         detail = APP_STATE.account.sell_all(price, step_idx)
         APP_STATE.trade_events.append(
             {
@@ -10916,7 +11275,7 @@ def api_back_n(req: BackNReq):
         n = int(req.n)
         if n < 1:
             raise ValueError("N 必须>=1")
-        cur = APP_STATE.stepper.step_idx
+        cur = APP_STATE.get_active_stepper().step_idx
         target = max(0, cur - n)
         APP_STATE.rebuild_to_step(target)
         APP_STATE._rhythm_notice_hits = []
@@ -11000,6 +11359,9 @@ def api_reset():
     global APP_STOCK_NAME
     APP_STOCK_NAME = None
     APP_STATE.stepper = ChanStepper()
+    APP_STATE.stepper2 = None
+    APP_STATE.chart_mode = "single"
+    APP_STATE.active_chart_id = "chart1"
     APP_STATE.account = PaperAccount(initial_cash=10_000, cash=10_000)
     APP_STATE.ready = False
     APP_STATE.finished = False
