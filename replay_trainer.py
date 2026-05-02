@@ -232,6 +232,24 @@ def parse_k_type(raw: str) -> KL_TYPE:
     return mapping[raw]
 
 
+def k_type_to_api_key(kl: KL_TYPE) -> str:
+    """KL_TYPE → 与 parse_k_type 对称的周期键（供前端历史文案等）。"""
+    inv = {
+        KL_TYPE.K_1M: "1min",
+        KL_TYPE.K_3M: "3min",
+        KL_TYPE.K_5M: "5min",
+        KL_TYPE.K_15M: "15min",
+        KL_TYPE.K_30M: "30min",
+        KL_TYPE.K_60M: "60min",
+        KL_TYPE.K_DAY: "daily",
+        KL_TYPE.K_WEEK: "weekly",
+        KL_TYPE.K_MON: "monthly",
+        KL_TYPE.K_QUARTER: "quarterly",
+        KL_TYPE.K_YEAR: "yearly",
+    }
+    return inv.get(kl, "daily")
+
+
 def normalize_data_form_mode(raw: Any) -> str:
     mode = str(raw or "traditional").strip().lower()
     return "quantity" if mode == "quantity" else "traditional"
@@ -2959,8 +2977,21 @@ class ChanStepper:
         self.raw_kline_count: int = 0
 
     def _cfg_without_chan_algo(self, cfg_dict: dict[str, Any]) -> dict[str, Any]:
-        # 训练器自用键，勿传入 CChanConfig（否则会触发 unknown para）
-        skip = frozenset({"chan_algo"})
+        # 训练器 / API 自用键，勿传入 CChanConfig（否则会触发 unknown para）
+        skip = frozenset(
+            {
+                "chan_algo",
+                "data_source_priority",
+                "confirm_offline",
+                "chart_mode",
+                "k_type",
+                "k_type_2",
+                "active_chart_id",
+                "initial_cash",
+                "data_form_mode",
+                "data_form_quantity",
+            }
+        )
         return {k: v for k, v in cfg_dict.items() if k not in skip}
 
     def _fetch_from_single_source(
@@ -3175,8 +3206,20 @@ class ChanStepper:
                                 except (ValueError, TypeError):
                                     pass
                         cfg_dict["macd"] = macd_dict
-                    elif k in ("data_src_kline", "data_src_chip"):
-                        # 旧版前端/会话字段，忽略以免传入 CChanConfig 触发 unknown
+                    elif k in (
+                        "data_src_kline",
+                        "data_src_chip",
+                        "data_source_priority",
+                        "confirm_offline",
+                        "chart_mode",
+                        "k_type",
+                        "k_type_2",
+                        "active_chart_id",
+                        "initial_cash",
+                        "data_form_mode",
+                        "data_form_quantity",
+                    ):
+                        # 训练器/会话字段，勿写入 CChan 配置
                         pass
                     else:
                         cfg_dict[k] = v
@@ -3459,6 +3502,20 @@ class AppState:
                 continue
         return None
 
+    def _anchor_compare_effective_dt(self, stepper: ChanStepper, time_str: str) -> Optional[datetime]:
+        """被动同步比较用：日线等常只有日期串，解析成午夜会与同日分钟锚点误判，故用「该显示日结束」比较。"""
+        dt = self._parse_time_safe(time_str)
+        if dt is None:
+            return None
+        if self._k_type_granularity_rank(stepper.k_type) < self._k_type_granularity_rank(KL_TYPE.K_DAY):
+            return dt
+        s = str(time_str or "").strip()
+        if " " in s:
+            return dt
+        if dt.hour == 0 and dt.minute == 0 and dt.second == 0:
+            return dt.replace(hour=23, minute=59, second=59, microsecond=0)
+        return dt
+
     def _sync_stepper_to_anchor(self, stepper: ChanStepper, anchor_time: str) -> None:
         """将目标周期步进到 anchor_time（包含优先，兜底左侧最近）。"""
         t_anchor = self._parse_time_safe(anchor_time)
@@ -3469,7 +3526,7 @@ class AppState:
         # 已到末尾直接返回
         prev_step = int(stepper.step_idx)
         while True:
-            cur_t = self._parse_time_safe(stepper.current_time())
+            cur_t = self._anchor_compare_effective_dt(stepper, stepper.current_time())
             if cur_t is None:
                 break
             # 当前已在锚点右侧时，不再前进，保留左侧最近
@@ -3535,8 +3592,12 @@ class AppState:
             return
         last_big = big_ks[-1]
         # 开盘价保持粗周期已形成的周期首价，仅用细周期重算高低收量
-        last_big["h"] = h
-        last_big["l"] = l
+        o_keep = float(last_big.get("o", last_big.get("open", 0.0)) or 0.0)
+        # 细周期片段可能不含粗 K 开盘时刻，须保证 O/H/L/C 极值合法以免 kl_data_check 报错
+        lo = min(o_keep, h, l, c)
+        hi = max(o_keep, h, l, c)
+        last_big["h"] = hi
+        last_big["l"] = lo
         last_big["c"] = c
         last_big["v"] = v
 
@@ -3610,6 +3671,9 @@ class AppState:
         h = max(float(k.high) for k in picked)
         l = min(float(k.low) for k in picked)
         c = float(picked[-1].close)
+        # 粗 K 开盘保留、高低收来自细周期截至锚点；开盘可能低于片段内最低价，须拉齐 OHLC
+        l = min(o0, h, l, c)
+        h = max(o0, h, l, c)
         v = sum(float(getattr(k, "volume", getattr(k, "vol", 0.0)) or 0.0) for k in picked)
         turnover = 0.0
         for k in picked:
@@ -4106,11 +4170,25 @@ class AppState:
         charts_payload = {"chart1": chart}
         if chart2 is not None:
             charts_payload["chart2"] = chart2
+        src_per_chart: dict[str, Any] = {
+            "chart1": {
+                "k_type": k_type_to_api_key(self.stepper.k_type),
+                "kline_label": data_source_label(self.stepper.data_src_used),
+                "chip_label": data_source_label(getattr(self.stepper, "data_src_chip_used", None) or self.stepper.data_src_used),
+            }
+        }
+        if self.stepper2 is not None:
+            src_per_chart["chart2"] = {
+                "k_type": k_type_to_api_key(self.stepper2.k_type),
+                "kline_label": data_source_label(self.stepper2.data_src_used),
+                "chip_label": data_source_label(getattr(self.stepper2, "data_src_chip_used", None) or self.stepper2.data_src_used),
+            }
         return {
             "ready": True,
             "finished": self.finished,
             "code": self.stepper.code,
             "name": stock_name,
+            "src_per_chart": src_per_chart,
             "data_source": {
                 "label": data_source_label(self.stepper.data_src_used),
                 "chip_label": data_source_label(getattr(self.stepper, "data_src_chip_used", None) or self.stepper.data_src_used),
@@ -4355,7 +4433,27 @@ HTML = r"""
     }
     body { margin: 0; font-family: Arial, sans-serif; background: var(--bg); color: var(--text); overflow: hidden; }
     .wrap { display: flex; height: 100vh; flex-direction: row-reverse; }
-    .left { width: 360px; padding: 12px; border-right: none; border-left: 1px solid var(--border); box-sizing: border-box; overflow: hidden; background: var(--panel); position: relative; }
+    /* 左侧操控区：纵向 flex，下方内容区滚轮可滚动 */
+    .left {
+      width: 360px;
+      padding: 12px;
+      border-right: none;
+      border-left: 1px solid var(--border);
+      box-sizing: border-box;
+      overflow: hidden;
+      background: var(--panel);
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+    .leftScrollRegion {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow-y: auto;
+      overflow-x: hidden;
+      overscroll-behavior: contain;
+    }
     .leftContent {
       transform-origin: top left;
       width: 100%;
@@ -4892,6 +4990,7 @@ HTML = r"""
     <div class="left">
       <div class="title">chan.py 复盘训练器 <span class="tip-icon" data-tip="Chan.py 缠论复盘交易系统"></span></div>
       <div id="dataSourceStatus" class="sourceStatus mono">当前数据源：未加载</div>
+      <div class="leftScrollRegion">
       <div id="leftContent" class="leftContent">
       <div id="chartToolsPanel" class="chartToolsPanel">
         <button id="btnFullscreen" class="fullscreen-btn" data-tip="切换图表区域全屏显示。">
@@ -4938,6 +5037,23 @@ HTML = r"""
           </select>
           <span class="tip-icon" data-tip="单周期=原模式；两周期=上下两个周期联动分析。"></span>
         </div>
+        <div class="row cfg-editable">
+          <label>周期类型1</label>
+          <select id="kType">
+            <option value="1min">1分钟</option>
+            <option value="5min">5分钟</option>
+            <option value="15min">15分钟</option>
+            <option value="30min">30分钟</option>
+            <option value="60min">60分钟</option>
+            <option value="daily" selected>日线</option>
+            <option value="weekly">周线</option>
+            <option value="monthly">月线</option>
+            <option value="quarterly">季线</option>
+            <option value="yearly">年线</option>
+            <option value="3min">3分钟</option>
+          </select>
+          <span class="tip-icon" data-tip="双周期时对应图1；单周期时为当前主图周期。不同数据源支持周期可能不同。"></span>
+        </div>
         <div class="row cfg-editable" id="kType2Row" style="display:none;">
           <label>周期类型2</label>
           <select id="kType2">
@@ -4963,28 +5079,18 @@ HTML = r"""
           </select>
           <span class="tip-icon" data-tip="双周期模式下两张主图的排列方式：上下或左右。"></span>
         </div>
-        <div class="row cfg-editable">
-          <label>周期类型</label>
-          <select id="kType">
-            <option value="1min">1分钟</option>
-            <option value="5min">5分钟</option>
-            <option value="15min">15分钟</option>
-            <option value="30min">30分钟</option>
-            <option value="60min">60分钟</option>
-            <option value="daily" selected>日线</option>
-            <option value="weekly">周线</option>
-            <option value="monthly">月线</option>
-            <option value="quarterly">季线</option>
-            <option value="yearly">年线</option>
-            <option value="3min">3分钟</option>
-          </select>
-          <span class="tip-icon" data-tip="选择K线周期类型，不同数据源支持不同周期。"></span>
+        <div class="row cfg-editable" id="dualSplitRow" style="display:none;">
+          <label>双图区域比</label>
+          <input type="range" id="dualSplitRatio" min="22" max="78" step="1" value="50" style="flex:2; min-width:0;" />
+          <span id="dualSplitRatioLabel" class="muted" style="width:40px; text-align:right; flex-shrink:0;">50%</span>
+          <span class="tip-icon" data-tip="双周期下调节图1与图2占比：上下排为高度比，左右排为宽度比。"></span>
         </div>
         <div class="btnRow">
           <button id="btnInit" data-tip="根据当前代码、日期区间、初始资金加载复盘会话。首次加载历史数据可能较慢。">加载会话 <small>(Ctrl+I)</small></button>
           <button id="btnReset" data-tip="清空当前会话并恢复到可重新配置的初始状态。">重新训练 <small>(Ctrl+R)</small></button>
           <button id="btnFinish" data-tip="结束当前训练，并可选择导出本次交易总结文件。" disabled>结束训练</button>
           <button id="btnExit" data-tip="尝试关闭当前页面。浏览器可能会拦截关闭操作。">退出</button>
+          <button id="btnStepPrev" data-tip="回退一根K线（重建到上一根）。快捷键可在系统配置中修改。" disabled>上一根K线 <small>(Shift+Space)</small></button>
           <button id="btnStep" data-tip="步进到下一根K线。若当前K线命中买卖点或 1382 提示，会合并为一个弹窗提示。" disabled>下一根K线 <small>(Space)</small></button>
         </div>
         <div class="stepNRow">
@@ -5011,6 +5117,7 @@ HTML = r"""
           <button id="btnMsgHistory" style="padding:2px 6px; font-size:12px; width:auto;">历史记录</button>
         </div>
         <div class="muted">账户状态信息已迁移到“当前持仓状态”浮窗（仅持仓时显示）。</div>
+      </div>
       </div>
       </div>
     </div>
@@ -5210,7 +5317,8 @@ let chartMouseDownPos = null;
 const PAD_L = 64;
 const PAD_R = 64;
 const PAD_T = 10;
-const PAD_B = 90;
+/** 单周期主图底部留白（时间轴、副图、买卖点标签连线锚点） */
+const PAD_B_SINGLE = 90;
 const PRICE_AXIS_STEP = 0.5;
 const WEEKDAY_NAMES = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
 
@@ -5253,21 +5361,36 @@ function getSessionDualLayout() {
   return raw === "horizontal" ? "horizontal" : "vertical";
 }
 
+/** 图1占双图可用空间比例（0.22~0.78），来自滑块或 session */
+function getDualSplitRatio1() {
+  const el = $("dualSplitRatio");
+  if (el) {
+    const pv = Number(el.value);
+    if (Number.isFinite(pv)) return Math.min(0.78, Math.max(0.22, pv / 100));
+  }
+  const sv = Number(sessionConfig && sessionConfig.dualSplitRatio1);
+  if (Number.isFinite(sv)) return Math.min(0.78, Math.max(0.22, sv));
+  return 0.5;
+}
+
 function getDualPaneRects() {
   const w = Math.max(1, canvas.clientWidth);
   const h = Math.max(1, canvas.clientHeight);
   const gap = 10;
+  const r1 = getDualSplitRatio1();
   if (getSessionDualLayout() === "horizontal") {
-    const half = Math.floor((w - gap) / 2);
+    const inner = w - gap;
+    const w1 = Math.max(80, Math.min(inner - 80, Math.floor(inner * r1)));
     return {
-      chart1: { x: 0, y: 0, w: half, h },
-      chart2: { x: half + gap, y: 0, w: Math.max(1, w - half - gap), h },
+      chart1: { x: 0, y: 0, w: w1, h },
+      chart2: { x: w1 + gap, y: 0, w: Math.max(1, inner - w1), h },
     };
   }
-  const half = Math.floor((h - gap) / 2);
+  const inner = h - gap;
+  const h1 = Math.max(60, Math.min(inner - 60, Math.floor(inner * r1)));
   return {
-    chart1: { x: 0, y: 0, w, h: half },
-    chart2: { x: 0, y: half + gap, w, h: Math.max(1, h - half - gap) },
+    chart1: { x: 0, y: 0, w, h: h1 },
+    chart2: { x: 0, y: h1 + gap, w, h: Math.max(1, inner - h1) },
   };
 }
 
@@ -5693,6 +5816,7 @@ const DEFAULT_SESSION_CONFIG = {
   chartMode: "single",
   kType2: "weekly",
   dualLayout: "vertical",
+  dualSplitRatio1: 0.5,
   activeChartId: "chart1"
 };
 let sessionConfig = ensureObject(
@@ -5707,6 +5831,7 @@ const SHORTCUT_ACTIONS = [
   { id: "toggleFullscreen", label: "切换全屏显示", description: "切换右侧图表区域全屏显示。", defaults: ["f11"], contexts: ["global"], buttonId: "btnFullscreen" },
   { id: "initSession", label: "加载会话", description: "根据当前代码、日期区间和初始资金加载复盘会话。", defaults: ["ctrl+i"], contexts: ["global"], buttonId: "btnInit" },
   { id: "resetSession", label: "重新训练", description: "清空当前会话并恢复到可重新配置的初始状态。", defaults: ["ctrl+r"], contexts: ["global"], buttonId: "btnReset" },
+  { id: "prevBar", label: "回退一根K线", description: "重建到上一根 K 线（与后退 N 根 N=1 相同）。", defaults: ["shift+space"], contexts: ["global"], buttonId: "btnStepPrev" },
   { id: "nextBar", label: "步进到下一根K线", description: "步进到下一根 K 线；若当前 K 线命中买卖点或 1382，会合并为一个弹窗提示。", defaults: ["space"], contexts: ["global"], buttonId: "btnStep" },
   { id: "stepForwardN", label: "步进 N 根", description: "按步进数量 N 连续推进，遇到买卖点自动停止，并合并当根提示。", defaults: ["ctrl+alt+n"], contexts: ["global"], buttonId: "btnStepN" },
   { id: "stepBackwardN", label: "后退 N 根", description: "按步进数量 N 回退，会自动重建到更早状态。", defaults: ["ctrl+alt+m"], contexts: ["global"], buttonId: "btnBackN" },
@@ -6044,6 +6169,7 @@ function updateShortcutUI() {
     setButtonShortcutLabel($("btnInit"), "加载会话", "initSession");
   }
   setButtonShortcutLabel($("btnReset"), "重新训练", "resetSession");
+  setButtonShortcutLabel($("btnStepPrev"), "上一根K线", "prevBar");
   setButtonShortcutLabel($("btnStep"), "下一根K线", "nextBar");
   setButtonShortcutLabel($("btnStepN"), "步进 N 根", "stepForwardN");
   setButtonShortcutLabel($("btnBackN"), "后退 N 根", "stepBackwardN");
@@ -6061,6 +6187,9 @@ function updateShortcutUI() {
   $("btnSystemSettingsOpen").setAttribute("data-tip", `打开系统配置面板，可统一维护快捷键。快捷键：${getActionShortcutDisplay("openSystemSettings") || "未设置"}。`);
   $("btnInit").setAttribute("data-tip", `根据当前代码、日期区间、初始资金加载复盘会话。首次加载历史数据可能较慢。快捷键：${getActionShortcutDisplay("initSession") || "未设置"}。`);
   $("btnReset").setAttribute("data-tip", `清空当前会话并恢复到可重新配置的初始状态。快捷键：${getActionShortcutDisplay("resetSession") || "未设置"}。`);
+  if ($("btnStepPrev")) {
+    $("btnStepPrev").setAttribute("data-tip", `回退一根K线（服务端重建）。快捷键：${getActionShortcutDisplay("prevBar") || "未设置"}。`);
+  }
   $("btnStep").setAttribute("data-tip", `步进到下一根K线。若当前K线命中买卖点或 1382 提示，会合并为一个弹窗提示。快捷键：${getActionShortcutDisplay("nextBar") || "未设置"}。`);
   $("btnStepN").setAttribute("data-tip", `按步进数量 N 连续推进，若中途遇到买卖点则自动停止。快捷键：${getActionShortcutDisplay("stepForwardN") || "未设置"}。`);
   $("btnBackN").setAttribute("data-tip", `按步进数量 N 回退，会自动重建到更早的状态。快捷键：${getActionShortcutDisplay("stepBackwardN") || "未设置"}。`);
@@ -6139,6 +6268,7 @@ function saveSessionConfig() {
     chartMode: $("chartMode") ? $("chartMode").value : "single",
     kType2: $("kType2") ? $("kType2").value : $("kType").value,
     dualLayout: $("dualLayout") ? $("dualLayout").value : "vertical",
+    dualSplitRatio1: getDualSplitRatio1(),
     activeChartId: String(lastPayload && lastPayload.active_chart_id ? lastPayload.active_chart_id : "chart1")
   };
   storageSet("chan_session_config", JSON.stringify(sessionConfig));
@@ -6158,10 +6288,17 @@ function loadSessionConfig() {
     if ($("chartMode") && sessionConfig.chartMode !== undefined) $("chartMode").value = String(sessionConfig.chartMode || "single");
     if ($("kType2") && sessionConfig.kType2 !== undefined) $("kType2").value = String(sessionConfig.kType2 || $("kType").value);
     if ($("dualLayout") && sessionConfig.dualLayout !== undefined) $("dualLayout").value = String(sessionConfig.dualLayout || "vertical");
+    if ($("dualSplitRatio") && sessionConfig.dualSplitRatio1 !== undefined) {
+      const pct = Math.round(Math.min(0.78, Math.max(0.22, Number(sessionConfig.dualSplitRatio1) || 0.5)) * 100);
+      $("dualSplitRatio").value = String(pct);
+      const lab = $("dualSplitRatioLabel");
+      if (lab) lab.textContent = `${pct}%`;
+    }
     // No longer setting DOM for chip/biZs/segZs here as they are in chartConfig
     if (sessionConfig.stepN !== undefined) $("stepN").value = sessionConfig.stepN;
-    if ($("kType2Row")) $("kType2Row").style.display = ($("chartMode") && $("chartMode").value === "dual") ? "" : "none";
-    if ($("dualLayoutRow")) $("dualLayoutRow").style.display = ($("chartMode") && $("chartMode").value === "dual") ? "" : "none";
+  if ($("kType2Row")) $("kType2Row").style.display = ($("chartMode") && $("chartMode").value === "dual") ? "" : "none";
+  if ($("dualLayoutRow")) $("dualLayoutRow").style.display = ($("chartMode") && $("chartMode").value === "dual") ? "" : "none";
+  if ($("dualSplitRow")) $("dualSplitRow").style.display = ($("chartMode") && $("chartMode").value === "dual") ? "" : "none";
 }
 
 function updateDualModeUI(payload = null) {
@@ -6169,6 +6306,7 @@ function updateDualModeUI(payload = null) {
   const dual = mode === "dual";
   if ($("kType2Row")) $("kType2Row").style.display = dual ? "" : "none";
   if ($("dualLayoutRow")) $("dualLayoutRow").style.display = dual ? "" : "none";
+  if ($("dualSplitRow")) $("dualSplitRow").style.display = dual ? "" : "none";
   // 双图激活：鼠标移入子图即激活（可右键锁定）；无“图1/图2激活”按钮入口
   if ($("dualChartToolbar")) $("dualChartToolbar").style.display = "none";
   const active = payload && payload.active_chart_id ? String(payload.active_chart_id) : (sessionConfig.activeChartId || "chart1");
@@ -7863,6 +8001,8 @@ function syncStepButtonState() {
   $("btnStep").disabled = disabled;
   $("btnStepN").disabled = disabled;
   $("btnBackN").disabled = !lastPayload || !lastPayload.ready || stepInFlight;
+  const si = lastPayload && Number.isFinite(Number(lastPayload.step_idx)) ? Number(lastPayload.step_idx) : -1;
+  if ($("btnStepPrev")) $("btnStepPrev").disabled = disabled || si <= 0;
 }
 
 function getStepNValue() {
@@ -8056,6 +8196,11 @@ setTimeout(resizeCanvas, 0);
 
 function isDualRuntimeReady() {
   return !!(lastPayload && lastPayload.ready && lastPayload.chart_mode === "dual" && lastPayload.charts && lastPayload.charts.chart1 && lastPayload.charts.chart2);
+}
+
+/** 底部留白：双周期子图矮，收紧以抬高 K 线主区，仍留时间轴与买卖点标签连线 */
+function getLayoutPadB() {
+  return isDualRuntimeReady() ? 46 : PAD_B_SINGLE;
 }
 
 function normalizePointerEventToActivePane(e, requireInside = true) {
@@ -8306,7 +8451,7 @@ canvas.addEventListener("dblclick", (e) => {
       const rect = canvas.getBoundingClientRect();
       const rawX = pe.clientX - rect.left;
       const rawY = pe.clientY - rect.top;
-      const s0 = toScaler(chartRef, Math.max(allXMin, viewXMin), viewXMax);
+      const s0 = toScaler(chartRef, Math.max(allXMin, viewXMin), viewXMax, isDualRuntimeReady() ? dualActiveChartId : undefined);
       const clampedX = Math.max(PAD_L, Math.min(s0.w - PAD_R, rawX));
       const visibleKs = getVisibleKs(chartRef, s0.xMin, s0.xMax);
       const targetX = s0.xMin + ((clampedX - PAD_L) / Math.max(1, s0.plotW)) * (s0.xMax - s0.xMin);
@@ -8319,6 +8464,10 @@ canvas.addEventListener("dblclick", (e) => {
   if (lastPayload && lastPayload.ready) {
     if (isDualRuntimeReady()) saveRuntimeState(dualActiveChartId);
     redrawCurrentPayload();
+    if (crosshairEnabled) {
+      centerCrosshairKLineInViewForPayload();
+      redrawCurrentPayload();
+    }
   }
 });
 
@@ -8605,6 +8754,10 @@ function executeShortcutAction(actionId) {
       if ($("btnReset").disabled) return false;
       $("btnReset").click();
       return true;
+    case "prevBar":
+      if (!$("btnStepPrev") || $("btnStepPrev").disabled || stepInFlight) return false;
+      $("btnStepPrev").click();
+      return true;
     case "nextBar":
       if ($("btnStep").disabled || stepInFlight) return false;
       $("btnStep").click();
@@ -8766,14 +8919,26 @@ window.addEventListener("keydown", (e) => {
   if (e.code === "ArrowLeft") {
     if (crosshairEnabled && crosshairX !== null) {
       e.preventDefault();
-      const s = toScaler(lastPayload.chart, Math.max(allXMin, viewXMin), viewXMax);
-      const refK = getReferenceK(lastPayload.chart, s);
+      if (isDualRuntimeReady()) loadRuntimeState(dualActiveChartId);
+      const ch = isDualRuntimeReady() && lastPayload.charts && lastPayload.charts[dualActiveChartId]
+        ? lastPayload.charts[dualActiveChartId]
+        : lastPayload.chart;
+      const s = toScaler(ch, Math.max(allXMin, viewXMin), viewXMax, isDualRuntimeReady() ? dualActiveChartId : undefined);
+      const refK = getReferenceK(ch, s);
       if (refK) {
-        const prev = nearestKByX(lastPayload.chart.kline.filter((k) => k.x < refK.x), refK.x - 1);
+        const prev = nearestKByX(ch.kline.filter((k) => k.x < refK.x), refK.x - 1);
         if (prev) {
           crosshairX = s.x(prev.x);
           crosshairY = s.y(prev.c);
-          draw(lastPayload.chart);
+          if (isDualRuntimeReady()) {
+            saveRuntimeState(dualActiveChartId);
+            syncDualCrosshairByTime(lastPayload);
+            centerCrosshairKLineInViewForPayload();
+            redrawCurrentPayload();
+          } else {
+            centerCrosshairKLineInViewForPayload();
+            draw(lastPayload.chart);
+          }
         }
       }
       return;
@@ -8785,14 +8950,26 @@ window.addEventListener("keydown", (e) => {
   } else if (e.code === "ArrowRight") {
     if (crosshairEnabled && crosshairX !== null) {
       e.preventDefault();
-      const s = toScaler(lastPayload.chart, Math.max(allXMin, viewXMin), viewXMax);
-      const refK = getReferenceK(lastPayload.chart, s);
+      if (isDualRuntimeReady()) loadRuntimeState(dualActiveChartId);
+      const ch = isDualRuntimeReady() && lastPayload.charts && lastPayload.charts[dualActiveChartId]
+        ? lastPayload.charts[dualActiveChartId]
+        : lastPayload.chart;
+      const s = toScaler(ch, Math.max(allXMin, viewXMin), viewXMax, isDualRuntimeReady() ? dualActiveChartId : undefined);
+      const refK = getReferenceK(ch, s);
       if (refK) {
-        const next = nearestKByX(lastPayload.chart.kline.filter((k) => k.x > refK.x), refK.x + 1);
+        const next = nearestKByX(ch.kline.filter((k) => k.x > refK.x), refK.x + 1);
         if (next) {
           crosshairX = s.x(next.x);
           crosshairY = s.y(next.c);
-          draw(lastPayload.chart);
+          if (isDualRuntimeReady()) {
+            saveRuntimeState(dualActiveChartId);
+            syncDualCrosshairByTime(lastPayload);
+            centerCrosshairKLineInViewForPayload();
+            redrawCurrentPayload();
+          } else {
+            centerCrosshairKLineInViewForPayload();
+            draw(lastPayload.chart);
+          }
         }
       }
       return;
@@ -9483,7 +9660,8 @@ function toScaler(chart, xMin, xMax, dualChartIdHint) {
   const xSpan = Math.max(1, xMax - xMin);
   const ySpan = Math.max(1e-6, yMax - yMin);
 
-  const totalChartH = h - PAD_T - PAD_B;
+  const padB = getLayoutPadB();
+  const totalChartH = h - PAD_T - padB;
   const subCharts = indicatorCfg.subCharts;
   let subPanelGap = 18;
   let subPanelH = 90;
@@ -9495,7 +9673,7 @@ function toScaler(chart, xMin, xMax, dualChartIdHint) {
     subPanelH *= scale;
   }
   const totalSubH = subCharts.length > 0 ? subCharts.length * (subPanelH + subPanelGap) : 0;
-  const plotBottomY = h - PAD_B - totalSubH;
+  const plotBottomY = h - padB - totalSubH;
   const plotH = plotBottomY - PAD_T;
   const plotW = w - PAD_L - PAD_R;
   const subPanels = [];
@@ -10468,7 +10646,7 @@ function drawBottomSignals(chart, s) {
       const rectY = boxBottom - offsetY - lineH;
       if (k) {
         const anchorY = s.y(k.l);
-        const toY = Math.max(PAD_T + 2, Math.min(s.h - PAD_B + 8, rectY - 6));
+        const toY = Math.max(PAD_T + 2, Math.min(s.h - getLayoutPadB() + 8, rectY - 6));
         ctx.save();
         ctx.lineWidth = Number(item.lineWidth || 1);
         ctx.setLineDash(getTradeLineDash(item.lineStyle || "dashed"));
@@ -10761,6 +10939,114 @@ function getKTypeLabelText(v) {
   return map[String(v || "").toLowerCase()] || String(v || "-");
 }
 
+/** 写入消息历史的数据源摘要（与后端 src_per_chart 对齐） */
+function buildSessionSourceHistoryLine(payload) {
+  if (!payload || !payload.ready || !payload.code) return "";
+  const code = String(payload.code || "").trim();
+  const sp = payload.src_per_chart;
+  if (payload.chart_mode === "dual" && sp && sp.chart1 && sp.chart2) {
+    const a = sp.chart1;
+    const b = sp.chart2;
+    const k1 = String(a.k_type || "daily");
+    const k2 = String(b.k_type || "daily");
+    const lk = (v) => String(v || "-").trim();
+    return `${code}，当前数据源${k1}K线：【${lk(a.kline_label)}】，${k2}K线：【${lk(b.kline_label)}】。${k1}筹码：【${lk(a.chip_label)}】，${k2}筹码：【${lk(b.chip_label)}】`;
+  }
+  const kt = (sp && sp.chart1 && sp.chart1.k_type) ? String(sp.chart1.k_type) : (($("kType") && $("kType").value) || "daily");
+  const info = payload.data_source || {};
+  const lab = String(info.label || "-").trim();
+  const chip = String(info.chip_label || lab).trim();
+  return `${code}，当前数据源${kt}K线：【${lab}】。${kt}筹码：【${chip}】`;
+}
+
+/** 十字激活后：两图（或单图）视窗以当前锚定 K 的 x 居中，并刷新十字像素坐标 */
+function centerCrosshairKLineInViewForPayload() {
+  const payload = lastPayload;
+  if (!payload || !payload.ready || !crosshairEnabled) return;
+  if (isDualRuntimeReady() && payload.charts) {
+    DUAL_CHART_IDS.forEach((cid) => {
+      const c = payload.charts[cid];
+      const rt = getRuntimeState(cid);
+      if (c && c.kline && c.kline.length > 0) {
+        rt.allXMin = c.kline[0].x;
+        rt.allXMax = c.kline[c.kline.length - 1].x;
+        if (!rt.viewReady || rt.viewXMax <= rt.viewXMin) {
+          rt.viewXMin = rt.allXMin;
+          rt.viewXMax = rt.allXMax;
+          rt.viewReady = true;
+        }
+      }
+    });
+    const activeId = dualActiveChartId === "chart2" ? "chart2" : "chart1";
+    const activeChart = payload.charts[activeId];
+    loadRuntimeState(activeId);
+    const stA = getRuntimeState(activeId);
+    if (!activeChart || !activeChart.kline || activeChart.kline.length === 0) return;
+    const sA = toScaler(activeChart, Math.max(stA.allXMin, stA.viewXMin), stA.viewXMax, activeId);
+    const refK = getReferenceK(activeChart, sA);
+    if (!refK || !refK.t) return;
+    DUAL_CHART_IDS.forEach((chartId) => {
+      const chart = payload.charts[chartId];
+      if (!chart || !chart.kline || chart.kline.length === 0) return;
+      const rt = getRuntimeState(chartId);
+      const nk = findNearestKByTime(chart, refK.t);
+      if (!nk || !Number.isFinite(nk.x)) return;
+      let useSpan = Math.max(2, rt.viewXMax - rt.viewXMin);
+      if (!rt.viewReady || useSpan <= 1) useSpan = Math.max(4, rt.allXMax - rt.allXMin);
+      let newMin = nk.x - useSpan * 0.5;
+      if (newMin < rt.allXMin) newMin = rt.allXMin;
+      let newMax = newMin + useSpan;
+      const rightPad = Math.max(2, Math.round(useSpan * 0.15));
+      const rightBound = rt.allXMax + rightPad;
+      if (newMax > rightBound) {
+        newMax = rightBound;
+        newMin = newMax - useSpan;
+        if (newMin < rt.allXMin) newMin = rt.allXMin;
+      }
+      rt.viewXMin = Math.round(newMin);
+      rt.viewXMax = Math.round(newMax);
+      rt.userAdjustedView = true;
+      rt.viewReady = true;
+      const s2 = toScaler(chart, Math.max(rt.allXMin, rt.viewXMin), rt.viewXMax, chartId);
+      rt.crosshairX = s2.x(nk.x);
+      rt.crosshairY = s2.y(nk.c);
+    });
+    loadRuntimeState(activeId);
+    return;
+  }
+  const ch = payload.chart;
+  if (!ch || !ch.kline || ch.kline.length === 0) return;
+  allXMin = ch.kline[0].x;
+  allXMax = ch.kline[ch.kline.length - 1].x;
+  if (!viewReady || viewXMax <= viewXMin) {
+    viewXMin = allXMin;
+    viewXMax = allXMax;
+    viewReady = true;
+  }
+  const s0 = toScaler(ch, Math.max(allXMin, viewXMin), viewXMax);
+  const refK = getReferenceK(ch, s0);
+  if (!refK || !Number.isFinite(refK.x)) return;
+  let useSpan = Math.max(2, viewXMax - viewXMin);
+  if (!viewReady || useSpan <= 1) useSpan = Math.max(4, allXMax - allXMin);
+  let newMin = refK.x - useSpan * 0.5;
+  if (newMin < allXMin) newMin = allXMin;
+  let newMax = newMin + useSpan;
+  const rightPad = Math.max(2, Math.round(useSpan * 0.15));
+  const rightBound = allXMax + rightPad;
+  if (newMax > rightBound) {
+    newMax = rightBound;
+    newMin = newMax - useSpan;
+    if (newMin < allXMin) newMin = allXMin;
+  }
+  viewXMin = Math.round(newMin);
+  viewXMax = Math.round(newMax);
+  userAdjustedView = true;
+  viewReady = true;
+  const s2 = toScaler(ch, Math.max(allXMin, viewXMin), viewXMax);
+  crosshairX = s2.x(refK.x);
+  crosshairY = s2.y(refK.c);
+}
+
 function buildPaneTitle(payload, chartId) {
   const name = String((payload && payload.name) || "").trim();
   const code = String((payload && payload.code) || "").trim();
@@ -10942,12 +11228,15 @@ function updateDataSourceStatus(payload) {
 
 function updateCompactLayout() {
   const left = document.querySelector(".left");
+  const scrollRegion = document.querySelector(".leftScrollRegion");
   const content = $("leftContent");
   if (!left || !content) return;
   content.style.transform = "scale(1)";
   content.style.width = "100%";
   left.classList.remove("compact");
-  const available = Math.max(100, left.clientHeight - 4);
+  // 可滚动区域内高度：超出则 compact 缩放，避免与滚轮滚动抢空间
+  const region = scrollRegion || left;
+  const available = Math.max(100, region.clientHeight - 4);
   let contentHeight = content.scrollHeight;
   if (contentHeight <= available) return;
   left.classList.add("compact");
@@ -11198,6 +11487,8 @@ $("btnInit").onclick = async () => {
     stepInFlight = false;
     clearBspPrompt();
     refreshUI(payload);
+    const srcHistLine = buildSessionSourceHistoryLine(payload);
+    if (srcHistLine) appendMsgHistory(srcHistLine);
   } catch (e) {
     setMsg("加载失败：" + e.message);
   } finally {
@@ -11207,6 +11498,25 @@ $("btnInit").onclick = async () => {
       updateShortcutUI();
     }
     hideGlobalLoading();
+  }
+};
+
+$("btnStepPrev").onclick = async () => {
+  if (!$("btnStepPrev") || $("btnStepPrev").disabled || stepInFlight) return;
+  stepInFlight = true;
+  syncStepButtonState();
+  hideGlobalLoading();
+  try {
+    clearBspPrompt();
+    const payload = await api("/api/back_n", { n: 1 });
+    lastSeenBspKey = new Set();
+    refreshUI(payload, { afterStep: true, showStandaloneNotices: false });
+    setMsg(payload.message || "已回退一根K线");
+  } catch (e) {
+    setMsg("回退失败：" + e.message);
+  } finally {
+    stepInFlight = false;
+    syncStepButtonState();
   }
 };
 
@@ -11297,6 +11607,7 @@ $("btnSell").onclick = async () => {
   }
 };
 markUiBound("btnInit");
+markUiBound("btnStepPrev");
 markUiBound("btnStep");
 markUiBound("btnStepN");
 markUiBound("btnBackN");
@@ -11314,6 +11625,14 @@ if ($("kType2")) {
 }
 if ($("dualLayout")) {
   $("dualLayout").addEventListener("change", () => {
+    saveSessionConfig();
+    redrawCurrentPayload();
+  });
+}
+if ($("dualSplitRatio")) {
+  $("dualSplitRatio").addEventListener("input", () => {
+    const lab = $("dualSplitRatioLabel");
+    if (lab) lab.textContent = `${$("dualSplitRatio").value}%`;
     saveSessionConfig();
     redrawCurrentPayload();
   });
@@ -11480,6 +11799,8 @@ function verifyCriticalUiBindings() {
       $("autype").disabled = true;
       refreshUI(payload);
       setMsg("已自动恢复上次会话。");
+      const srcHistLine = buildSessionSourceHistoryLine(payload);
+      if (srcHistLine) appendMsgHistory(srcHistLine);
     }
   } catch (e) {
     console.error("恢复会话失败:", e);
