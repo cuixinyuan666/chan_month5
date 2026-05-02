@@ -3482,43 +3482,185 @@ class AppState:
             stepper.structure_bundle = None
             stepper._bundle_cache_step_idx = None
 
-    def _apply_partial_last_bar(self, big_chart: dict[str, Any], small_chart: dict[str, Any], anchor_time: str) -> None:
-        """防未来数据：用小周期截至锚点的数据重算大周期最后一根OHLCV。"""
+    @staticmethod
+    def _k_type_granularity_rank(k_type: KL_TYPE) -> int:
+        """周期粒度排序：值越大表示周期越粗。"""
+        rank_map = {
+            KL_TYPE.K_1M: 1,
+            KL_TYPE.K_3M: 2,
+            KL_TYPE.K_5M: 3,
+            KL_TYPE.K_15M: 4,
+            KL_TYPE.K_30M: 5,
+            KL_TYPE.K_60M: 6,
+            KL_TYPE.K_DAY: 7,
+            KL_TYPE.K_WEEK: 8,
+            KL_TYPE.K_MON: 9,
+            KL_TYPE.K_QUARTER: 10,
+            KL_TYPE.K_YEAR: 11,
+        }
+        return int(rank_map.get(k_type, 10_000))
+
+    def _resolve_dual_coarse_fine(self) -> Optional[tuple[ChanStepper, ChanStepper]]:
+        """双周期下识别粗细周期；优先按 k_type，兜底按已载入 K 根数。"""
+        if self.chart_mode != "dual" or self.stepper2 is None:
+            return None
+        s1 = self.stepper
+        s2 = self.stepper2
+        r1 = self._k_type_granularity_rank(s1.k_type)
+        r2 = self._k_type_granularity_rank(s2.k_type)
+        if r1 != r2:
+            return (s1, s2) if r1 > r2 else (s2, s1)
+        n1 = self._count_stepper_klus(s1)
+        n2 = self._count_stepper_klus(s2)
+        if n1 <= 0 or n2 <= 0 or n1 == n2:
+            return None
+        return (s1, s2) if n1 < n2 else (s2, s1)
+
+    def _apply_partial_last_bar(
+        self, big_chart: dict[str, Any], coarse: ChanStepper, fine: ChanStepper, anchor_time: str
+    ) -> None:
+        """防未来数据：用细周期（必要时回退 raw）截至锚点数据重算粗周期末根 OHLCV。"""
         big_ks = big_chart.get("kline") if isinstance(big_chart, dict) else None
-        small_ks = small_chart.get("kline") if isinstance(small_chart, dict) else None
-        if not isinstance(big_ks, list) or not isinstance(small_ks, list) or len(big_ks) <= 0 or len(small_ks) <= 0:
+        if not isinstance(big_ks, list) or len(big_ks) <= 0:
             return
-        t_anchor = self._parse_time_safe(anchor_time)
-        if t_anchor is None:
+        picked = self._collect_fine_klus_for_coarse_tail(coarse, fine, anchor_time)
+        if not picked:
+            return
+        try:
+            h = max(float(getattr(x, "high", 0.0)) for x in picked)
+            l = min(float(getattr(x, "low", 0.0)) for x in picked)
+            c = float(getattr(picked[-1], "close", 0.0))
+            v = sum(float(getattr(x, "volume", getattr(x, "vol", 0.0)) or 0.0) for x in picked)
+        except Exception:
             return
         last_big = big_ks[-1]
-        prev_big = big_ks[-2] if len(big_ks) >= 2 else None
-        t_prev = self._parse_time_safe(prev_big.get("t")) if isinstance(prev_big, dict) else None
-        picked: list[dict[str, Any]] = []
-        for bar in small_ks:
-            t = self._parse_time_safe(str(bar.get("t", "")))
+        # 开盘价保持粗周期已形成的周期首价，仅用细周期重算高低收量
+        last_big["h"] = h
+        last_big["l"] = l
+        last_big["c"] = c
+        last_big["v"] = v
+
+    def _count_stepper_klus(self, stepper: ChanStepper) -> int:
+        """已载入 K 线单元根数；较少者视为粗周期（与 build_payload 一致）。"""
+        if stepper.chan is None or len(stepper.chan[0].lst) == 0:
+            return 0
+        return len(list(stepper.chan[0].klu_iter()))
+
+    @staticmethod
+    def _klu_to_datetime(klu: Any) -> Optional[datetime]:
+        try:
+            return AppState._parse_time_safe(klu.time.to_str())
+        except Exception:
+            return None
+
+    def _collect_fine_klus_for_coarse_tail(
+        self, coarse: ChanStepper, fine: ChanStepper, anchor_time: str
+    ) -> list[Any]:
+        """细周期在(上一根粗K时间, 锚点]内的 KLU；数量模式且 raw 不太大时用划分前 raw，避免合并后缺日。"""
+        t_anchor = self._parse_time_safe(anchor_time)
+        if t_anchor is None or coarse.chan is None or len(coarse.chan[0].lst) == 0:
+            return []
+        klus_c = list(coarse.chan[0].klu_iter())
+        if not klus_c:
+            return []
+        t_prev = self._klu_to_datetime(klus_c[-2]) if len(klus_c) >= 2 else None
+        use_raw = (
+            getattr(fine, "data_form_mode", "traditional") == "quantity"
+            and fine._replay_klus_master_raw
+            and len(fine._replay_klus_master_raw) <= 100_000
+        )
+        if use_raw:
+            source_iter = list(fine._replay_klus_master_raw)
+        elif fine.chan is not None and len(fine.chan[0].lst) > 0:
+            source_iter = list(fine.chan[0].klu_iter())
+        else:
+            source_iter = []
+        picked: list[Any] = []
+        for klu in source_iter:
+            t = self._klu_to_datetime(klu)
             if t is None:
                 continue
             if t > t_anchor:
                 continue
             if t_prev is not None and t <= t_prev:
                 continue
-            picked.append(bar)
+            picked.append(klu)
+        picked.sort(key=lambda k: float(getattr(getattr(k, "time", None), "ts", 0.0)))
+        return picked
+
+    def _dual_rebuild_coarse_chan_anti_future(self, anchor_time: str) -> None:
+        """双周期：末根粗 K 的 HL收量 按细周期截至锚点重算，并重建粗周期 Chan（结构/指标与展示一致）。"""
+        pair = self._resolve_dual_coarse_fine()
+        if pair is None:
+            return
+        coarse, fine = pair
+        if self.session_params is None:
+            return
+        saved = int(coarse.step_idx)
+        if saved < 0:
+            return
+        master_full = coarse._replay_klus_master
+        if not master_full or saved >= len(master_full):
+            return
+        picked = self._collect_fine_klus_for_coarse_tail(coarse, fine, anchor_time)
         if not picked:
             return
-        try:
-            o = float(picked[0]["o"])
-            h = max(float(x["h"]) for x in picked)
-            l = min(float(x["l"]) for x in picked)
-            c = float(picked[-1]["c"])
-            v = sum(float(x.get("v", 0.0) or 0.0) for x in picked)
-        except Exception:
-            return
-        last_big["o"] = o
-        last_big["h"] = h
-        last_big["l"] = l
-        last_big["c"] = c
-        last_big["v"] = v
+        last_orig = master_full[saved]
+        o0 = float(last_orig.open)
+        h = max(float(k.high) for k in picked)
+        l = min(float(k.low) for k in picked)
+        c = float(picked[-1].close)
+        v = sum(float(getattr(k, "volume", getattr(k, "vol", 0.0)) or 0.0) for k in picked)
+        turnover = 0.0
+        for k in picked:
+            ti = getattr(k, "trade_info", None)
+            if ti and getattr(ti, "metric", None):
+                tv = ti.metric.get(DATA_FIELD.FIELD_TURNOVER)
+                if tv is not None:
+                    turnover += float(tv or 0.0)
+        patch_dict: dict[str, Any] = {
+            DATA_FIELD.FIELD_TIME: last_orig.time,
+            DATA_FIELD.FIELD_OPEN: o0,
+            DATA_FIELD.FIELD_HIGH: h,
+            DATA_FIELD.FIELD_LOW: l,
+            DATA_FIELD.FIELD_CLOSE: c,
+            DATA_FIELD.FIELD_VOLUME: v,
+        }
+        if turnover > 0:
+            patch_dict[DATA_FIELD.FIELD_TURNOVER] = turnover
+        patched = CKLine_Unit(patch_dict)
+        patched.macd = None
+        patched.boll = None
+        new_master = copy.deepcopy(list(master_full))
+        new_master[saved] = patched
+        params = self.session_params
+        cfg = CChanConfig(coarse._cfg_without_chan_algo(dict(coarse.effective_cfg_dict or {})))
+        coarse.chan = ReplayChan(
+            code=coarse.code,
+            begin_time=params["begin_date"],
+            end_time=params.get("end_date"),
+            data_src=coarse.data_src_used or DATA_SRC.AKSHARE,
+            lv_list=[coarse.k_type],
+            config=cfg,
+            autype=params["autype"],
+            replay_klus_master=new_master,
+        )
+        coarse._iter = coarse.chan.step_load()
+        coarse.indicators = {
+            "macd": CMACD(),
+            "kdj": KDJ(),
+            "rsi": RSI(),
+            "boll": BollModel(),
+            "demark": CDemarkEngine(),
+        }
+        coarse.indicator_history = []
+        coarse.structure_bundle = None
+        coarse._bundle_cache_step_idx = None
+        coarse.step_idx = -1
+        coarse.trend_lines = []
+        for _ in range(saved + 1):
+            if not coarse.step():
+                break
 
     def _reset_judge_state(self) -> None:
         self._judge_notice = False
@@ -3877,6 +4019,8 @@ class AppState:
             self.sync_rhythm_history()
             self.after_step_update()
 
+        self._dual_rebuild_coarse_chan_anti_future(self.get_active_stepper().current_time())
+
         effective_step = max(0, self.stepper.step_idx)
         self.trade_events = [e for e in self.trade_events if int(e.get("step_idx", -1)) <= effective_step]
         self.account.reset(params["initial_cash"])
@@ -3947,14 +4091,14 @@ class AppState:
         active_stepper = self.get_active_stepper()
         anchor_time = active_stepper.current_time()
         if chart2 is not None:
-            k1 = len(chart.get("kline", []))
-            k2 = len(chart2.get("kline", []))
-            # 数量模式或不同周期下，K线更少视作大周期，末根按锚点裁剪避免未来数据
-            if k1 > 0 and k2 > 0 and k1 != k2:
-                if k1 < k2:
-                    self._apply_partial_last_bar(chart, chart2, anchor_time)
+            # 展示层也按同一套粗细/raw感知逻辑裁剪，避免数量模式分组把未来数据带回末根显示。
+            pair = self._resolve_dual_coarse_fine()
+            if pair is not None:
+                coarse, fine = pair
+                if coarse is self.stepper:
+                    self._apply_partial_last_bar(chart, coarse, fine, anchor_time)
                 else:
-                    self._apply_partial_last_bar(chart2, chart, anchor_time)
+                    self._apply_partial_last_bar(chart2, coarse, fine, anchor_time)
         price: Optional[float] = None
         active_chart = chart2 if (self._normalize_chart_id(self.active_chart_id) == "chart2" and chart2 is not None) else chart
         if len(active_chart.get("kline", [])) > 0:
@@ -11557,6 +11701,7 @@ def api_init(req: InitReq):
         if APP_STATE.chart_mode == "dual" and APP_STATE.stepper2 is not None:
             APP_STATE.stepper2.step()
             APP_STATE._sync_stepper_to_anchor(APP_STATE.stepper2, APP_STATE.stepper.current_time())
+        APP_STATE._dual_rebuild_coarse_chan_anti_future(APP_STATE.get_active_stepper().current_time())
         APP_STATE.sync_bsp_history()
         APP_STATE.sync_rhythm_history()
         APP_STATE._rhythm_notice_hits = []
@@ -11607,6 +11752,7 @@ def api_step(req: StepReq):
         ok = active_stepper.step()
         if passive_stepper is not None and ok:
             APP_STATE._sync_stepper_to_anchor(passive_stepper, active_stepper.current_time())
+        APP_STATE._dual_rebuild_coarse_chan_anti_future(active_stepper.current_time())
         APP_STATE.sync_bsp_history()
         APP_STATE.sync_rhythm_history()
         mode = (req.judge_mode or "auto").lower().strip()
