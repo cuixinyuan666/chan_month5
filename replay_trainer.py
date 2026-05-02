@@ -5097,6 +5097,9 @@ const dualChartRuntime = {
   chart2: { allXMin: 0, allXMax: 0, viewXMin: 0, viewXMax: 0, viewReady: false, userAdjustedView: false, viewYShiftRatio: 0, viewYZoomRatio: 1, crosshairX: null, crosshairY: null },
 };
 let dualActiveChartId = "chart1";
+/** 右键锁定后，悬停不再切换激活子图；步进刷新时仍保持该图窗为激活 */
+let dualActivePaneLock = false;
+let dualLockedChartId = "chart1";
 let canvasHovered = false;
 let signalHoverBoxes = [];
 let legendHoverBox = null;
@@ -5122,6 +5125,33 @@ function getDualPaneRects() {
     chart1: { x: 0, y: 0, w, h: half },
     chart2: { x: 0, y: half + gap, w, h: Math.max(1, h - half - gap) },
   };
+}
+
+/** 双周期下某子图在根画布上的 CSS 宽高（与 draw 时子 canvas 一致）；单图返回 null */
+function dualPaneCssSize(chartId) {
+  if (!isDualRuntimeReady()) return null;
+  const id = chartId === "chart2" ? "chart2" : "chart1";
+  const p = getDualPaneRects()[id];
+  return p && p.w > 0 && p.h > 0 ? { w: p.w, h: p.h } : null;
+}
+
+/**
+ * toScaler 用的画布 CSS 尺寸：子图内渲染时读当前子 canvas；根画布上交互时用对应当前/指定子窗宽高，
+ * 否则左右双图时 plotW 误用整宽会导致十字线隔根跳变。
+ */
+function scalerCssDimensions(dualChartIdHint) {
+  if (typeof dualInternalRenderDepth === "number" && dualInternalRenderDepth > 0) {
+    return readCanvasCssSize(canvas);
+  }
+  if (dualChartIdHint === "chart1" || dualChartIdHint === "chart2") {
+    const ph = dualPaneCssSize(dualChartIdHint);
+    if (ph) return ph;
+  }
+  if (isDualRuntimeReady()) {
+    const ph = dualPaneCssSize(dualActiveChartId || "chart1");
+    if (ph) return ph;
+  }
+  return readCanvasCssSize(canvas);
 }
 
 function resolveDualChartIdFromClient(clientX, clientY) {
@@ -5995,7 +6025,7 @@ function updateDualModeUI(payload = null) {
   const dual = mode === "dual";
   if ($("kType2Row")) $("kType2Row").style.display = dual ? "" : "none";
   if ($("dualLayoutRow")) $("dualLayoutRow").style.display = dual ? "" : "none";
-  // 双图激活改为点击图窗自动激活，去掉“图1/图2激活”按钮标签入口
+  // 双图激活：鼠标移入子图即激活（可右键锁定）；无“图1/图2激活”按钮入口
   if ($("dualChartToolbar")) $("dualChartToolbar").style.display = "none";
   const active = payload && payload.active_chart_id ? String(payload.active_chart_id) : (sessionConfig.activeChartId || "chart1");
   dualActiveChartId = active === "chart2" ? "chart2" : "chart1";
@@ -7795,7 +7825,7 @@ function zoomViewAt(factor, anchorCanvasX) {
   if (span <= 1) return;
   let newSpan = span / factor;
   newSpan = Math.max(5, newSpan);
-  const w = canvas.clientWidth;
+  const w = Math.max(1, scalerCssDimensions(undefined).w);
   const usableW = Math.max(1, w - PAD_L - PAD_R);
   const rel = Math.min(1, Math.max(0, (anchorCanvasX - PAD_L) / usableW));
   const xAtMouse = viewXMin + rel * span;
@@ -7922,6 +7952,10 @@ function redrawCurrentPayload() {
 canvas.addEventListener(
   "wheel",
   (e) => {
+    if (isDualRuntimeReady() && !dualActivePaneLock) {
+      const hitId = resolveDualChartIdFromClient(e.clientX, e.clientY);
+      if (hitId && hitId !== dualActiveChartId) setActiveChart(hitId, true);
+    }
     const pe = normalizePointerEventToActivePane(e, true);
     if (!pe) return;
     e.preventDefault();
@@ -7945,9 +7979,25 @@ canvas.addEventListener(
 );
 
 canvas.addEventListener("mousedown", (e) => {
+  if (e.button === 2) {
+    if (isDualRuntimeReady()) {
+      e.preventDefault();
+      dualActivePaneLock = !dualActivePaneLock;
+      if (dualActivePaneLock) dualLockedChartId = dualActiveChartId;
+      setMsg(dualActivePaneLock ? "已锁定当前激活图窗，再次右键解锁。" : "已解锁图窗切换。");
+      redrawCurrentPayload();
+    }
+    return;
+  }
   if (e.button !== 0) return;
+  if (isDualRuntimeReady() && !dualActivePaneLock) {
+    const hitId = resolveDualChartIdFromClient(e.clientX, e.clientY);
+    if (hitId && hitId !== dualActiveChartId) setActiveChart(hitId, true);
+  }
   const pe = normalizePointerEventToActivePane(e, true);
   if (!pe) return;
+  chartClickMoved = false;
+  chartMouseDownPos = { x: pe.clientX, y: pe.clientY };
   if (!lastPayload || !lastPayload.ready || !viewReady) return;
   isPanning = true;
   panStartX = pe.clientX;
@@ -7973,7 +8023,7 @@ window.addEventListener("mousemove", (e) => {
   const dx = pe.clientX - panStartX;
   const dy = pe.clientY - panStartY;
   const span = panStartViewMax - panStartViewMin;
-  const usableW = Math.max(1, canvas.clientWidth - PAD_L - PAD_R);
+  const usableW = Math.max(1, scalerCssDimensions(undefined).w - PAD_L - PAD_R);
   const dxBars = Math.round((-dx / usableW) * span);
   let newMin = panStartViewMin + dxBars;
   let newMax = panStartViewMax + dxBars;
@@ -7993,6 +8043,10 @@ window.addEventListener("mousemove", (e) => {
 });
 
 canvas.addEventListener("mousemove", (e) => {
+  if (isDualRuntimeReady() && !dualActivePaneLock) {
+    const hitId = resolveDualChartIdFromClient(e.clientX, e.clientY);
+    if (hitId && hitId !== dualActiveChartId) setActiveChart(hitId, true);
+  }
   const pe = normalizePointerEventToActivePane(e, true);
   if (!pe) return;
   canvasHovered = true;
@@ -8042,6 +8096,10 @@ canvas.addEventListener("mouseleave", () => {
 });
 
 canvas.addEventListener("dblclick", (e) => {
+  if (isDualRuntimeReady() && !dualActivePaneLock) {
+    const hitId = resolveDualChartIdFromClient(e.clientX, e.clientY);
+    if (hitId && hitId !== dualActiveChartId) setActiveChart(hitId, true);
+  }
   const pe = normalizePointerEventToActivePane(e, true);
   if (!pe) return;
   if (crosshairX !== null && crosshairY !== null) {
@@ -8311,26 +8369,11 @@ window.addEventListener("beforeunload", () => {
   });
 })();
 
-canvas.addEventListener("mousedown", (e) => {
-  if (e.button !== 0) return;
-  if (isDualRuntimeReady()) {
-    const hitId = resolveDualChartIdFromClient(e.clientX, e.clientY);
-    if (hitId !== dualActiveChartId) setActiveChart(hitId, true);
-  }
-  const pe = normalizePointerEventToActivePane(e, true);
-  if (!pe) return;
-  chartClickMoved = false;
-  chartMouseDownPos = { x: pe.clientX, y: pe.clientY };
+canvas.addEventListener("contextmenu", (e) => {
+  if (isDualRuntimeReady()) e.preventDefault();
 });
 
 canvas.addEventListener("click", (e) => {
-  if (isDualRuntimeReady()) {
-    const hitId = resolveDualChartIdFromClient(e.clientX, e.clientY);
-    if (hitId !== dualActiveChartId) {
-      setActiveChart(hitId, true);
-      redrawCurrentPayload();
-    }
-  }
   const pe = normalizePointerEventToActivePane(e, true);
   if (!pe) return;
   if (!lastPayload || !lastPayload.ready || !viewReady) return;
@@ -8465,11 +8508,11 @@ function executeShortcutAction(actionId) {
       return true;
     case "zoomXIn":
       if (!lastPayload || !lastPayload.ready) return false;
-      zoomViewAt(1.15, canvas.clientWidth / 2);
+      zoomViewAt(1.15, Math.max(1, scalerCssDimensions(undefined).w) / 2);
       return true;
     case "zoomXOut":
       if (!lastPayload || !lastPayload.ready) return false;
-      zoomViewAt(1 / 1.15, canvas.clientWidth / 2);
+      zoomViewAt(1 / 1.15, Math.max(1, scalerCssDimensions(undefined).w) / 2);
       return true;
     case "adjustCrosshairUp":
     case "adjustCrosshairDown": {
@@ -8564,7 +8607,8 @@ window.addEventListener("keydown", (e) => {
   if (!viewReady || !lastPayload || !lastPayload.ready || contexts[0] !== "global") return;
   const span = viewXMax - viewXMin;
   const shift = Math.max(2, Math.round(span * 0.1));
-  const plotMidX = PAD_L + (canvas.clientWidth - PAD_L - PAD_R) / 2;
+  const iw = Math.max(1, scalerCssDimensions(undefined).w);
+  const plotMidX = PAD_L + (iw - PAD_L - PAD_R) / 2;
   if (e.code === "ArrowUp") {
     e.preventDefault();
     zoomViewAt(1.15, plotMidX);
@@ -9225,8 +9269,8 @@ function readCanvasCssSize(cv) {
   return { w, h };
 }
 
-function toScaler(chart, xMin, xMax) {
-  const { w, h } = readCanvasCssSize(canvas);
+function toScaler(chart, xMin, xMax, dualChartIdHint) {
+  const { w, h } = scalerCssDimensions(dualChartIdHint);
 
   const xToTime = {};
   for (const k of chart.kline) {
@@ -10589,22 +10633,8 @@ function syncDualCrosshairByTime(payload) {
   const activeChart = payload.charts[activeId];
   const activeState = getRuntimeState(activeId);
   if (!activeChart || !activeState || !Number.isFinite(activeState.crosshairX)) return;
-  const prevCanvas = canvas;
-  const prevCtx = ctx;
-  const temp = document.createElement("canvas");
-  temp.width = Math.max(1, Math.round((prevCanvas.clientWidth || 1) * window.devicePixelRatio));
-  temp.height = Math.max(1, Math.round((prevCanvas.clientHeight || 1) * window.devicePixelRatio));
-  temp.style.width = `${Math.max(1, prevCanvas.clientWidth || 1)}px`;
-  temp.style.height = `${Math.max(1, prevCanvas.clientHeight || 1)}px`;
-  canvas = temp;
-  ctx = temp.getContext("2d");
-  if (!ctx) {
-    canvas = prevCanvas;
-    ctx = prevCtx;
-    return;
-  }
   loadRuntimeState(activeId);
-  const sActive = toScaler(activeChart, Math.max(allXMin, viewXMin), viewXMax);
+  const sActive = toScaler(activeChart, Math.max(allXMin, viewXMin), viewXMax, activeId);
   const xSpan = Math.max(1, sActive.xMax - sActive.xMin);
   const localX = Math.max(PAD_L, Math.min(sActive.w - PAD_R, activeState.crosshairX));
   const targetX = sActive.xMin + ((localX - PAD_L) / Math.max(1, sActive.plotW)) * xSpan;
@@ -10615,15 +10645,13 @@ function syncDualCrosshairByTime(payload) {
     if (!chart) return;
     const st = getRuntimeState(chartId);
     loadRuntimeState(chartId);
-    const s = toScaler(chart, Math.max(allXMin, viewXMin), viewXMax);
+    const s = toScaler(chart, Math.max(allXMin, viewXMin), viewXMax, chartId);
     const nk = findNearestKByTime(chart, anchorTime);
     if (nk) {
       st.crosshairX = s.x(nk.x);
-      if (!Number.isFinite(st.crosshairY)) st.crosshairY = s.y(nk.c);
+      st.crosshairY = s.y(nk.c);
     }
   });
-  canvas = prevCanvas;
-  ctx = prevCtx;
   loadRuntimeState(activeId);
 }
 
@@ -10851,7 +10879,11 @@ function refreshUI(payload, options) {
     }
   }
   if (payload && payload.ready && payload.charts && typeof payload.charts === "object") {
-    const activeId = String(payload.active_chart_id || "chart1") === "chart2" ? "chart2" : "chart1";
+    let activeId = String(payload.active_chart_id || "chart1") === "chart2" ? "chart2" : "chart1";
+    if (dualActivePaneLock && payload.charts[dualLockedChartId]) {
+      activeId = dualLockedChartId;
+      payload.active_chart_id = dualLockedChartId;
+    }
     sessionConfig.activeChartId = activeId;
     dualActiveChartId = activeId;
     if (payload.charts[activeId]) payload.chart = payload.charts[activeId];
@@ -11011,6 +11043,8 @@ $("btnInit").onclick = async () => {
       dualChartRuntime[cid] = { allXMin: 0, allXMax: 0, viewXMin: 0, viewXMax: 0, viewReady: false, userAdjustedView: false, viewYShiftRatio: 0, viewYZoomRatio: 1, crosshairX: null, crosshairY: null };
     });
     dualActiveChartId = (sessionConfig && sessionConfig.activeChartId === "chart2") ? "chart2" : "chart1";
+    dualActivePaneLock = false;
+    dualLockedChartId = "chart1";
     activeTrade = null;
     tradeHistory = [];
     bspHistory = [];
@@ -11201,6 +11235,8 @@ $("btnReset").onclick = async () => {
       dualChartRuntime[cid] = { allXMin: 0, allXMax: 0, viewXMin: 0, viewXMax: 0, viewReady: false, userAdjustedView: false, viewYShiftRatio: 0, viewYZoomRatio: 1, crosshairX: null, crosshairY: null };
     });
     dualActiveChartId = "chart1";
+    dualActivePaneLock = false;
+    dualLockedChartId = "chart1";
     clearBspPrompt();
     setState(payload);
     updateDataSourceStatus(payload);
