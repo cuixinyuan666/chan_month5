@@ -2150,3 +2150,1069 @@ session_key = (code, begin_date, end_date, autype, chan_cfg_hash,
 | 双周期图2无数据 | kType2 设置的周期该数据源不支持 | 换数据源或换周期 |
 | reconfig 后结构不变 | chan_config 字段名错误被忽略 | 检查字段是否匹配 §7 定义的名称 |
 | 409 离线确认弹窗 | 检测到离线数据但未确认 | 勾选确认或取消勾选离线优先级 |
+
+---
+
+## 二十七、BOLL 回测功能详细说明
+
+### 27.1 概述
+
+BOLL（布林带）回测是 `replay_trainer.py` 提供的**独立统计回测功能**，用于验证"**触碰 BOLL 下轨买入 + 固定持有 N 根 K 线卖出**"这一简单策略的历史表现。
+
+**核心特点**：
+- **不影响当前复盘会话**：回测使用独立的临时 ChanStepper，不修改 APP_STATE
+- **支持双周期联动**：双周期模式下要求主次周期同时满足买讯才触发
+- **防未来数据泄漏**：粗周期使用细周期截至锚点的数据重算末根
+
+### 27.2 API 接口
+
+**POST** `/api/boll_backtest`
+
+#### 请求体 (BollBacktestReq)
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| `code` | string | 是 | - | 股票代码，如 `sz.000001` |
+| `begin_date` | string | 是 | - | 开始日期，格式 `YYYY-MM-DD` |
+| `end_date` | string | 否 | null（至今） | 结束日期 |
+| `initial_cash` | float | 否 | 10000.0 | 初始资金 |
+| `autype` | string | 否 | "qfq" | 复权类型：qfq/hfq/none |
+| `chan_config` | dict | 否 | null | 缠论配置（仅使用 boll_n 参数） |
+| `k_type` | string | 否 | "daily" | 主周期类型 |
+| `chart_mode` | string | 否 | "single" | 图表模式：single/dual |
+| `k_type_2` | string | 否 | null | 双周期模式下的第二周期 |
+| `sell_hold_bars` | int | 否 | 5 | 买入后持有 N 根 K 线再卖（必须 >= 1） |
+| `confirm_offline` | bool | 否 | false | 是否确认使用离线数据 |
+| `data_source_priority` | list | 否 | null | 自定义数据源优先级 |
+| `data_form_mode` | string | 否 | "traditional" | 数据形态模式 |
+| `data_form_quantity` | int | 否 | null | 聚合数量 |
+
+### 27.3 策略逻辑详解
+
+#### 单周期模式 (`chart_mode = "single"`)
+
+```
+对每一根 K 线 i（从第1根到最后一根）：
+
+① 卖出检查：若已持仓 且 (i - 买入索引) >= hold_n → 以第 i 根收盘价卖出
+② 买信号检测：_boll_buy_signal_at_bar(bars, downs, i)
+   条件：
+     - 第 i-1 根的最高价 < 第 i-1 根的 BOLL 下轨值
+     - 第 i 根的收盘价 >= 第 i 根的 BOLL 下轨值
+   含义：上一根K线跌破下轨，本根K线收回下轨上方 → 触碰反弹信号
+③ 若有买信号 → 以第 i 根收盘价全仓买入（按手取整）
+④ 记录权益曲线：cash +持仓市值
+⑤ 循环结束后，若有持仓 → 以最后一根收盘价强制平仓
+```
+
+#### 双周期模式 (`chart_mode = "dual"`)
+
+双周期模式下策略更严格，**两个周期必须同时满足买讯**：
+
+```
+情况A：两周期粒度相同（极少见）
+  → 退化为主周期单图逻辑（与单周期一致）
+
+情况B：两周期粒度不同（正常情况）
+  → 细周期驱动锚点时间
+  → 对每个细周期锚点时刻：
+    ① 粗周期用细周期截至锚点的数据重算末根OHLCV（防未来函数）
+    ② _dual_chart_boll_buy_at_anchor() 分别检测两图的买讯
+    ③ 两图同时满足 → 触发买入
+```
+
+**防未来数据机制** ([_coarse_rows_eff_upto_anchor](file:///c:\Users\Administrator/Desktop/my_file1/my_file/3/chan.py/replay_trainer.py#L3599-L3628))：
+
+```python
+# 粗周期截至 anchor 的 K 线序列：
+# - 已完全走完的粗K线 → 保持原始数据
+# - 当前未走完的粗段 → 用细周期 (t_prev, anchor] 区间内的数据重算：
+#   open  = 细段首根开盘价
+#   high  = 细段区间最高价
+#   low   = 细段区间最低价
+#   close = 细段末根收盘价
+```
+
+### 27.4 BOLL 下轨计算方式
+
+[`_boll_down_series_from_closes()`](file:///c:\Users/Administrator/Desktop/my_file1/my_file/3/chan.py/replay_trainer.py#L3577-L3580) 使用与复盘 stepper 一致的递推算法：
+
+```python
+boll = BollModel(N=boll_n)  # 默认 N=20
+downs = [float(boll.add(close).DOWN) for close in closes]
+```
+
+- 使用标准 BOLL 公式：中轨 = N 日均线，上轨 = 中轨 + K×标准差，下轨 = 中轨 - K×标准差
+- K 值默认为 2（标准参数）
+- `boll_n` 可通过 `chan_config.boll_n` 配置，范围 >= 2
+
+### 27.5 返回值格式
+
+```json
+{
+  "code": "sz.000001",
+  "name": "平安银行",
+  "chart_mode": "single",
+  "k_type": "daily",
+  "k_type_2": null,
+  "bars": 1523,
+  "initial_cash": 10000.00,
+  "final_equity": 12345.67,
+  "total_pnl": 2345.67,
+  "total_return_pct": 23.47,
+  "trade_count": 15,
+  "win_count": 8,
+  "loss_count": 7,
+  "win_rate_pct": 53.33,
+  "hold_bars_rule": 5,
+  "trades": [
+    {
+      "buy_idx": 42,
+      "sell_idx": 47,
+      "buy_t": "2024-03-15",
+      "sell_t": "2024-03-22",
+      "buy_price": 12.35,
+      "sell_price": 12.88,
+      "shares": 800,
+      "pnl": 424.00
+    }
+  ]
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `code` | string | 股票代码 |
+| `name` | string | 股票名称 |
+| `chart_mode` | string | 回测时使用的图表模式 |
+| `k_type` | string | 主周期类型 |
+| `k_type_2` | string/null | 第二周期（双周期模式） |
+| `bars` | int | 总 K 线数 |
+| `initial_cash` | float | 初始资金 |
+| `final_equity` | float | 最终权益（现金+持仓市值） |
+| `total_pnl` | float | 总盈亏金额 |
+| `total_return_pct` | float | 总收益率（%） |
+| `trade_count` | int | 总交易次数 |
+| `win_count` | int | 盈利次数 |
+| `loss_count` | int | 亏损次数 |
+| `win_rate_pct` | float | 胜率（%） |
+| `hold_bars_rule` | int | 持有规则（N根后卖） |
+| `trades` | array | 每笔交易的明细 |
+
+#### trades 数组元素说明
+
+| 字段 | 说明 |
+|------|------|
+| `buy_idx` | 买入时的 K 线索引（从0开始） |
+| `sell_idx` | 卖出时的 K 线索引 |
+| `buy_t` | 买入日期 |
+| `sell_t` | 卖出日期 |
+| `buy_price` | 买入价格 |
+| `sell_price` | 卖出价格 |
+| `shares` | 买入股数（按手取整） |
+| `pnl` | 该笔盈亏金额 |
+
+### 27.6 交易规则
+
+| 规则 | 说明 |
+|------|------|
+| **单持仓** | 同时只能持有一笔仓位，新买入前必须先卖出 |
+| **按手买入** | `shares = int(cash // price)`，每手100股自动取整 |
+| **不足一手跳过** | 若现金不足以买入1手（100股），则放弃该次买入信号 |
+| **固定持有期** | 买入后必须持有至少 `hold_bars` 根 K 线才能卖出 |
+| **末尾强制平仓** | 回测结束时若仍有持仓，以最后一根收盘价强制卖出 |
+| **无 T+1 约束** | 回测模式不考虑 T+1 限制（与模拟交易不同） |
+
+### 27.7 典型调用示例
+
+#### 前端 JavaScript 调用
+
+```javascript
+const resp = await fetch("/api/boll_backtest", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    code: "sz.000001",
+    begin_date: "2020-01-01",
+    end_date: "2024-12-31",
+    initial_cash: 100000,
+    autype: "qfq",
+    k_type: "daily",
+    sell_hold_bars: 5,
+    chan_config: { boll_n: 20 }
+  })
+});
+const result = await resp.json();
+console.log(`总收益率: ${result.total_return_pct}%`);
+console.log(`胜率: ${result.win_rate_pct}%`);
+```
+
+#### Python requests 调用
+
+```python
+import requests
+
+resp = requests.post("http://127.0.0.1:8000/api/boll_backtest", json={
+    "code": "sz.000001",
+    "begin_date": "2020-01-01",
+    "end_date": "2024-12-31",
+    "initial_cash": 100000,
+    "sell_hold_bars": 5,
+    "k_type": "daily"
+})
+data = resp.json()
+print(f"总收益: {data['total_pnl']}, 胜率: {data['win_rate_pct']}%")
+for t in data["trades"]:
+    print(f"  {t['buy_t']} 买@{t['buy_price']} → {t['sell_t']} 卖@{t['sell_price']}, 盈亏: {t['pnl']}")
+```
+
+### 27.8 结果解读指南
+
+| 指标 | 理想范围 | 解读 |
+|------|---------|------|
+| `total_return_pct` > 0 | 正收益 | 策略在该股票/时间段有效 |
+| `win_rate_pct` > 50% | 多数交易盈利 | 买入信号质量较好 |
+| `trade_count` > 10 | 有足够样本 | 统计意义较强；过少则偶然性大 |
+| `avg_pnl_per_trade` > 0 | 平均每笔盈利 | 结合胜率看期望值为正 |
+| `max_drawdown`（需自行计算）| < 20% | 最大回撤可控 |
+
+**注意事项**：
+- BOLL 触碰策略是**趋势跟踪类策略**，在震荡市中可能频繁止损
+- `hold_bars` 过小（如1-2根）可能导致交易过于频繁，手续费侵蚀利润
+- `hold_bars` 过大（如20+根）可能导致错过波段转折
+- 建议对不同 `hold_bars` 值（3/5/10/20）进行参数扫描对比
+
+---
+
+## 二十八、节奏系统 (Rhythm / 1382) 详细说明
+
+### 28.1 概述
+
+节奏系统是基于缠论结构层级关系的**技术分析工具**，用于预测价格在未来可能触及的关键价位。其核心思想是利用历史回调比例来推算当前推进段的潜在支撑/压力位。
+
+**命名来源**：
+- **节奏线 (Rhythm Line)**：基于历史回调比例绘制的水平价位线
+- **1382**：指黄金分割扩展系数 **1.382**，用于计算确认阈值
+
+### 28.2 核心概念
+
+#### 结构层级关系
+
+节奏系统建立在缠论结构的父子层级之上：
+
+```
+父级结构（Parent）：如一个上涨段（Seg）
+  └─ 子级结构（Child）：包含在该段范围内的笔（Bi）序列
+       └─ 交替序列（Alternating Sequence）：按方向交替排列的子线
+            └─ 推进峰值端点：与父级同方向的子线端点
+```
+
+#### 交替子线序列构建
+
+[`build_alternating_child_sequence()`](file:///c:\Users\Administrator/Desktop/my_file1/my_file/3/chan.py/replay_trainer.py#L2447-L2462) 从子线列表中提取方向交替的序列：
+
+```
+输入：父级方向=UP，子线=[↑, ↓, ↑, ↓, ↑, ↓, ↑]
+输出：seq[0]=↑(第一个同向), seq[1]=↓, seq[2]=↑, seq[3]=↓, seq[4]=↑, seq[5]=↓, seq[6]=↑
+
+规则：
+  1. 从第一个与父级同方向的子线开始
+  2. 之后每根子线方向必须与前一根相反
+  3. 跳过不符合交替规则的子线
+```
+
+**最少需要 5 个元素**才能生成节奏线（即至少 3 个推进峰值 + 2 个回调）。
+
+### 28.3 节奏线计算公式
+
+对于**上涨父级结构**（`parent_dir = UP`）：
+
+```
+已知变量：
+  a0 = 父级起始值（起点价格）
+  b_j = 第 j 个推进峰值端点（偶数索引 seq[2j] 的终点值）
+  c_j = 第 j 个回调端点（奇数索引 seq[2j+1] 的终点值）
+  d_k = 第 k 个当前推进峰值端点（待预测）
+
+计算步骤：
+  ① 回调比率 ratio = (b_j - c_j) / (b_j - a0)
+     （表示第 j 次回调占整个推进幅度的比例）
+
+  ② 节奏价格 rhythm_price = d_k - (d_k - a0) × ratio
+     （将历史回调比率应用到当前推进段）
+
+  ③ 1382 阈值 threshold = c_j + (b_j - c_j) × 1.382
+     （回调幅度的 1.382 倍扩展，作为确认触发线）
+```
+
+对于**下跌父级结构**（`parent_dir = DOWN`），公式镜像：
+
+```
+  ① ratio = (c_j - b_j) / (a0 - b_j)
+  ② rhythm_price = d_k + (a0 - d_k) × ratio
+  ③ threshold = c_j - (c_j - b_j) × 1.382
+```
+
+### 28.4 图示说明（以上涨段为例）
+
+```
+价格
+  ↑
+  │         b₁ ────┐
+  │        /  \     │
+  │       /    c₁   │ ← 回调低点
+  │      /          │
+  │  a₀─┘           │
+  │                 d₂ ───── 节奏线2（用ratio₁计算）
+  │                / \
+  │               /   c₂
+  │              /
+  │  ───────────────────────── threshold₁ = c₁ + (b₁-c₁)×1.382
+  │                     （1382确认线）
+  └────────────────────────→ 时间/K线索引
+
+节奏线含义：
+  - 节奏线2的价格 = d₂ - (d₂-a₀) × ratio₁
+  - 若后续K线最高价 >= threshold₁ → 触发1382命中通知
+```
+
+### 28.5 节奏线生成规则
+
+[`build_parent_rhythm_entries()`](file:///c:\Users\Administrator\Desktop/my_file1/my_file/3/chan.py/replay_trainer.py#L2514-L2660) 的生成逻辑：
+
+| 参数 | 说明 |
+|------|------|
+| `round_current` (k) | 当前正在预测的第 k 轮推进 |
+| `round_ref` (j) | 参考历史回调的第 j 轮 |
+| **生成条件** | `1 <= j <= k`（可用历史轮次参考当前及之前的轮次） |
+| **最少子线数** | `len(seq) >= 5`（至少3个推进+2个回调） |
+| **最大轮次** | `max_round = (len(seq) - 3) // 2` |
+
+**生成的节奏线数量**：对于一个有 n 个元素的交替序列，最多生成 `max_round × (max_round + 1) / 2` 条节奏线（三角矩阵）。
+
+示例（seq 有 7 个元素，max_round = 2）：
+
+| round_current (k) | round_ref (j) | 标签 | 说明 |
+|-------------------|---------------|------|------|
+| 1 | 1 | 节奏线1 | 用第1轮回调比率预测第1轮推进 |
+| 2 | 1 | 节奏线2_1 | 用第1轮回调比率预测第2轮推进 |
+| 2 | 2 | 节奏线2 | 用第2轮回调比率预测第2轮推进 |
+
+### 28.6 1382 命中检测
+
+[`find_1382_hits()`](file:///c:\Users\Administrator\Desktop/my_file1/my_file/3/chan.py/replay_trainer.py#L2500-L2512) 在节奏线生成后检测实际K线是否触及确认阈值：
+
+```
+检测逻辑：
+  从 c_line_for_hit（产生阈值的回调线）结束位置开始，
+  遍历后续每一根 K 线：
+
+  上涨父级：若 K 线最高价(H) >= threshold → 记录一次命中
+  下跌父级：若 K 线最低价(L) <= threshold → 记录一次命中
+
+命中记录内容：
+  {
+    "x": K线索引,
+    "y": 触及价格,
+    "time": K线时间,
+    "price_field": "H" 或 "L",  // 使用了最高价还是最低价
+    "price_value": 实际价格值
+  }
+```
+
+**去重机制**：每个命中有一个唯一 key = `{parent_key}|1382|{level}|{round_ref}|{x}`，避免重复记录同一位置的命中。
+
+### 28.7 节奏线数据结构
+
+#### 节奏线对象 (lines 数组元素)
+
+```json
+{
+  "key": "seg|0|120|150|UP|line|2|1",
+  "level": "bi",
+  "parent_level": "seg",
+  "parent_key": "seg|0|120|150|UP",
+  "parent_label": "段",
+  "display_label": "节奏线2_1",
+  "round_current": 2,
+  "round_ref": 1,
+  "color_group": "rhythm1",
+  "dir": "UP",
+  "ratio": 0.382,
+  "label_left": "2_1",
+  "label_right": "0.382",
+  "x1": 130,
+  "y1": 15.50,
+  "x2": 148,
+  "y2": 15.50
+}
+```
+
+| 字段 | 说明 |
+|------|------|
+| `key` | 唯一标识 |
+| `level` | 当前级别（bi/seg/segseg） |
+| `parent_level` | 父级级别 |
+| `display_label` | 显示标签（如"节奏线2"、"节奏线2_1"） |
+| `round_current` | 当前轮次 k |
+| `round_ref` | 参考轮次 j |
+| `color_group` | 颜色分组（rhythm1~rhythmN，对应前端配置） |
+| `dir` | 方向 UP/DOWN |
+| `ratio` | 历史回调比率 |
+| `x1`, `y1` | 起点坐标（K线索引, 价格） |
+| `x2`, `y2` | 终点坐标（K线索引, 价格） |
+
+#### 1382 命中对象 (hits 数组元素)
+
+```json
+{
+  "key": "seg|0|120|150|UP|1382|bi|2|145",
+  "x": 145,
+  "y": 14.80,
+  "level": "bi",
+  "parent_level": "seg",
+  "parent_key": "seg|0|120|150|UP",
+  "display_label": "笔1382",
+  "round_ref": 2,
+  "color_group": "rhythm2",
+  "dir": "UP",
+  "threshold": 14.75
+}
+```
+
+### 28.8 支持的结构级别组合
+
+节奏系统支持以下**父子级别组合**（由 [`RHYTHM_LEVEL_PAIRS`](file:///c:\Users\Administrator/Desktop/my_file1/my_file/3/chan.py/replay_trainer.py) 定义）：
+
+| 父级 (Parent) | 子级 (Child) | 说明 |
+|--------------|-------------|------|
+| 段 (seg) | 笔 (bi) | 在段内根据笔的交替序列构建节奏线 |
+| 2段 (segseg) | 段 (seg) | 在2段内根据段的交替序列构建节奏线 |
+
+**注意**：
+- 节奏线**仅在激活图**上计算和显示
+- 每次步进后通过 `sync_rhythm_history()` 同步到全局历史
+- 命中通知会合并到 payload 中，前端可弹窗提示
+
+### 28.9 前端渲染配置
+
+节奏线的样式可在【图表显示设置】→【节奏线 (rhythmLine)】中配置（参见 §8.8）：
+
+| 配置项 | 说明 |
+|--------|------|
+| 颜色 | 按 color_group 分组（rhythm1~rhythm5 各自独立颜色） |
+| 线宽 | 节奏线水平线的粗细 |
+| 线型 | solid/dashed/dotted |
+| 字体大小 | 标签文字大小 |
+
+节奏命中的样式在【节奏命中 (rhythmHit)】中配置。
+
+### 28.10 使用场景与限制
+
+| 场景 | 适用性 | 说明 |
+|------|--------|------|
+| 波段趋势确认 | ✅ 推荐 | 趋势行情中节奏线提供的支撑/压力位参考价值较高 |
+| 震荡市 | ⚠️ 有限 | 反复穿越节奏线导致信号频繁，需结合其他指标过滤 |
+| 新缠论模式 | ✅ 支持 | 基于 build_new_bundle 的结构包计算 |
+| 经典缠论模式 | ✅ 支持 | 基于 CChan 原生结构计算 |
+
+**限制**：
+- 至少需要 **5 根有效子线** 才能生成第一条节奏线
+- 节奏线是**水平线**，不代表价格一定会到达该位置
+- 1382 命中仅表示价格触及了扩展阈值，**不构成买卖建议**
+- 双周期模式下仅基于**激活图**的结构计算
+
+---
+
+## 二十九、Goto Step 跳转功能说明
+
+### 29.1 概述
+
+`/api/goto_step` 提供将当前复盘会话**跳转到指定步进索引**的功能，主要用于从 BOLL 回测成交记录快速定位到对应的历史K线位置。
+
+### 29.2 API 接口
+
+**POST** `/api/goto_step`
+
+#### 请求体 (GotoStepReq)
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| `step_idx` | int | 是 | 0 | 目标步进索引（0 = 第一根可见K线） |
+
+### 29.3 跳转逻辑
+
+[`api_goto_step()`](file:///c:\Users\Administrator\Desktop/my_file1/my_file/3/chan.py/replay_trainer.py#L12694-L12734) 的处理流程：
+
+```
+输入目标 step_idx = target
+
+① 安全检查
+   - target < 0 → 修正为 0
+   - 会话未就绪 → 400 错误
+   - 会话已结束 → 400 错误
+
+② 获取当前位置 cur = active_stepper.step_idx
+
+③ 三种情况分支：
+
+   情况 A: target == cur
+     → 已在目标位置，直接返回当前 payload
+     → message: "已在目标步进 step={target}"
+
+   情况 B: target < cur（向后跳转 / 回退）
+     → 调用 rebuild_to_step(target)
+     → 一次性重建到目标位置（高效）
+     → 清空节奏命中缓存
+     → message: "已跳转到 step={target}"
+
+   情况 C: target > cur（向前跳转）
+     → 先 rebuild_to_step(0) 回到起点
+     → 然后 for 循环 step() × target 次
+     → 每步执行完整的事件链（同步/判定/更新）
+     → 若中途到达末尾则提前终止
+     → message: "已跳转到 step={实际到达位置}"
+```
+
+### 29.4 与 back_n 的区别
+
+| 维度 | goto_step | back_n |
+|------|-----------|--------|
+| **目标指定方式** | 绝对位置（跳到第 N 根） | 相对位置（后退 N 根） |
+| **向前跳转** | ✅ 支持 | ❌ 仅支持后退 |
+| **实现方式（向后）** | rebuild_to_step | rebuild_to_step（相同） |
+| **实现方式（向前）** | 逐步 step() 循环 | 不适用 |
+| **性能（向前远距离）** | 较慢（需逐步步进） | 不适用 |
+| **典型用途** | 从回测结果跳转到历史位置 | 复盘时回退几步重新观察 |
+
+### 29.5 典型使用场景
+
+#### 场景 1：从 BOLL 回测结果跳转
+
+```javascript
+// 假设回测返回的 trades 数组
+const trade = bollResult.trades[0];  // 第一笔交易
+
+// 跳转到该笔交易的买入位置
+await fetch("/api/goto_step", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ step_idx: trade.buy_idx })
+});
+// 前端自动滚动到该K线位置并高亮显示
+```
+
+#### 场景 2：快速定位到关键日期
+
+```python
+import requests
+
+# 先通过 /api/state 获取当前状态找到目标索引
+state = requests.get("http://127.0.0.1:8000/api/state").json()
+
+# 找到目标日期对应的 step_idx（假设已找到 idx=500）
+requests.post("http://127.0.0.1:8000/api/goto_step", json={"step_idx": 500})
+```
+
+### 29.6 注意事项
+
+1. **向前跳转的性能开销**：若 target 远大于当前位置（如从 0 跳到 1000），需要循环调用 1000 次 `step()`，每次都会重建缠论结构、同步双周期、检测买卖点等，**耗时较长**
+2. **双周期同步**：跳转后会自动执行 `_sync_stepper_to_anchor` 和 `_dual_rebuild_coarse_chan_anti_future`，确保两图时间对齐且无未来数据
+3. **节奏命中清空**：每次跳转会清空 `_rhythm_notice_hits` 缓存，下次步进时重新计算
+4. **买卖点历史保留**：跳转不会清空 `bsp_history` 和 `trade_events`，但新增的判定会追加到现有历史中
+5. **边界保护**：target 自动 clamp 到 `[0, 最大步进数]` 范围内
+
+---
+
+## 三十、数据源链回退机制详细说明
+
+### 30.1 概述
+
+数据源链回退是 `replay_trainer.py` 的核心容错机制，确保在某数据源不可用时能**自动切换到下一个可用源**，保证服务持续可用。
+
+### 30.2 架构设计
+
+#### 两套独立链
+
+系统维护**两条独立的数据源优先级链**（定义在 [replay_trainer.py 全局变量区域](file:///c:\Users\Administrator/Desktop/my_file1/my_file/3/chan.py/replay_trainer.py)）：
+
+```python
+DATA_SOURCE_CHAIN_KLINE = [
+    ("AKShare", DATA_SRC.AKSHARE),
+    ("AKShare-腾讯历史", ...),
+    ("Ashare", ...),
+    # ... 共 12 个数据源
+]
+
+DATA_SOURCE_CHAIN_CHIP = [
+    # 与 KLINE 链相同的顺序
+    # 但各自独立回退，最终可能选中不同源
+]
+```
+
+**为什么需要两套链？**
+- K线主序列只需拉取用户指定的日期范围
+- 筹码全历史需要拉取从 1990-01-01 到结束日期的**全量数据**
+- 不同数据源在全量拉取时可能有不同的超时/限制表现
+
+#### 选择器接口
+
+[`_select_data_source_with_fallback()`](file:///c:\Users\Administrator\Desktop/my_file1/my_file/3/chan.py/replay_trainer.py#L3069-L3109) 是统一的数据源选择入口：
+
+```python
+def _select_data_source_with_fallback(
+    self,
+    begin_date, end_date, autype, chan_cfg_dict,
+    use_for="kline",           # "kline" 或 "chip"
+    chain_override=None,       # 可覆盖默认链
+    offline_confirm_suppressed=False,  # 是否抑制离线确认弹窗
+) -> DataSourceSelection:
+```
+
+### 30.3 回退流程详解
+
+```
+_select_data_source_with_fallback() 执行流程：
+
+for idx, (label, data_src) in enumerate(data_chain):
+  │
+  ├─ ① 尝试从当前源获取数据
+  │   _fetch_from_single_source(data_src, ...)
+  │
+  ├─ ② 成功？
+  │   ├─ 是 → 返回 DataSourceSelection(
+  │   │        data_src=data_src,
+  │   │        label=label,
+  │   │        logs=[成功日志],
+  │   │        replay_klus_master=...,
+  │   │        kline_all=...,
+  │   │        stock_name=...
+  │   │      )
+  │   │   第一个源成功 → 日志："数据源已连接：{label}"
+  │   │   后续源成功 → 日志："数据源切换成功：{label}（前序源不可用，已自动降级）"
+  │   │
+  │   └─ 否 ↓
+  │
+  ├─ ③ 异常类型判断
+  │   ├─ OfflineDataConfirmRequired → 直接抛出（不继续尝试后续源）
+  │   │
+  │   └─ 其他异常 ↓
+  │
+  ├─ ④ 记录失败日志
+  │   errors.append(f"{label} 失败：{detail}")
+  │   logs.append(f"数据源尝试失败：{label}")
+  │
+  └─ ⑤ 检查下一个是否为离线源 + 是否需要确认
+      ├─ 下一个是离线源 AND 未抑制确认 AND 离线包存在
+      │   → 抛出 OfflineDataConfirmRequired（HTTP 409）
+      │
+      └─ 否则 → continue（尝试下一个源）
+
+全部源都失败 → raise RuntimeError("全部数据源均不可用：...")
+```
+
+### 30.4 DataSourceSelection 返回结构
+
+```python
+class DataSourceSelection:
+    data_src: Any              # 枚举值，实际使用的数据源
+    label: str                 # 显示名称，如 "AKShare"
+    logs: list[str]            # 选择过程的日志列表
+    replay_klus_master: list   # 步进用的K线单元列表（已聚合/原始）
+    kline_all: list            # 筹码全历史K线列表
+    stock_name: str            # 股票名称
+```
+
+### 30.5 默认优先级顺序（完整列表）
+
+| 优先级 | 名称 | 数据源枚举 | 特点 |
+|--------|------|-----------|------|
+| 1 | AKShare | DATA_SRC.AKSHARE | 首选，数据全面 |
+| 2 | AKShare-腾讯历史 | - | AKShare 备用接口 |
+| 3 | Ashare | DATA_SRC.ASHARE | 备选 |
+| 4 | AData | DATA_SRC.ADATA | 备选 |
+| 5 | pytdx | DATA_SRC.PYTDX | 通达信，速度快 |
+| 6 | BaoStock | DATA_SRC.BAO_STOCK | 稳定但需登录 |
+| 7 | **离线数据** | OFFLINE_INLINE_SRC | 本地文件，无需网络 |
+| 8 | Tushare | DATA_SRC.TUSHARE | 需 token |
+| 9 | 新浪财经 | DATA_SRC.SINA | 公开接口 |
+| 10 | 腾讯财经 | DATA_SRC.TENCENT | 公开接口 |
+| 11 | 雅虎财经 | DATA_SRC.YAHOO | 海外市场 |
+| 12 | 东方财富 | DATA_SRC.EAST_MONEY | 公开接口 |
+| 13 | GitHub-CSV | DATA_SRC.GITHUB_CSV | 自定义CSV |
+
+### 30.6 用户自定义优先级
+
+前端可通过【系统配置】→【数据源优先级】面板调整顺序：
+
+```javascript
+// 发送请求
+POST /api/set_data_source_priority
+{
+  "priority": ["AKShare", "pytdx", "离线数据", "BaoStock"]
+}
+
+// 后端处理
+apply_data_source_priority(priority)
+→ 重新排序 DATA_SOURCE_CHAIN_KLINE 和 DATA_SOURCE_CHAIN_CHIP
+→ 两套链保持相同顺序
+```
+
+**约束**：
+- 必须传入数组
+- 数组元素必须是有效的数据源名称
+- 未知名称会被忽略（但不报错）
+- 设置后立即生效，下次 init 时使用新顺序
+
+### 30.7 离线数据的特殊处理
+
+离线数据在回退链中有**特殊的确认机制**（详见 §22.9）：
+
+```
+触发条件（四者缺一不可）：
+  ① 当前在线源请求失败
+  ② 链中下一个待尝试的是离线数据
+  ③ 用户尚未确认使用离线数据（confirm_offline=False）
+  ④ offline_bundle_exists() 探测到离线包确实存在
+
+满足条件 → 抛出 OfflineDataConfirmRequired
+→ HTTP 409 + detail 包含确认信息
+→ 前端弹出确认对话框
+→ 用户确认后重新发起请求（confirm_offline=True）
+→ 跳过确认，直接使用离线数据
+```
+
+### 30.8 错误分类与日志
+
+[`classify_fetch_error_tag()`](file:///c:\Users\Administrator\Desktop/my_file1/my_file/3/chan.py/replay_trainer.py#L354-L370) 将异常分为两类：
+
+| 分类标签 | 触发关键词 | 含义 |
+|---------|-----------|------|
+| **网络问题** | timeout, connection, ssl, 403/404/502/503, 10060/10054 | 网络层问题，换源可能解决 |
+| **数据源异常** | 其他所有异常 | 数据本身问题（如代码不存在、日期无数据） |
+
+**日志输出示例**：
+
+```
+[DataSource] try AKShare for sz.000001 2018-01-01 -> latest
+[DataSource] failed AKShare: Connection timeout
+[DataSource] try Ashare for sz.000001 2018-01-01 -> latest
+[DataSource] selected Ashare
+数据源切换成功：Ashare（前序源不可用，已自动降级）
+```
+
+### 30.9 性能与可靠性考量
+
+| 因素 | 影响 | 优化措施 |
+|------|------|---------|
+| 链长度过长 | 首次尝试失败时逐个重试耗时久 | 默认13个源，通常前3个就能成功 |
+| 全量筹码拉取 | 可能超时（尤其免费源） | 独立链允许K线先成功，筹码继续尝试 |
+| 离线探测 | 每次 init 都检查目录存在性 | 文件系统操作，毫秒级 |
+| 网络抖动 | 偶发超时被误判为源不可用 | 下次 init 时会重新尝试该源 |
+
+---
+
+## 三十一、API 接口返回值完整说明
+
+### 31.1 通用返回格式
+
+所有 API 接口在成功时返回 JSON 对象，失败时返回 HTTP 错误状态码 + JSON 错误详情：
+
+**成功响应**：
+```json
+{
+  // ... 业务数据字段
+  "message": "操作成功描述"
+}
+```
+
+**错误响应**：
+```json
+{
+  "detail": "错误原因描述"
+}
+```
+
+| HTTP 状态码 | 含义 | 触发场景 |
+|------------|------|---------|
+| 200 | 成功 | 操作正常完成 |
+| 400 | 请求错误 | 参数缺失/无效、业务规则校验失败 |
+| 409 | 冲突 | 需要用户确认（离线数据确认） |
+
+### 31.2 各接口返回值详解
+
+#### /api/init — 初始化会话
+
+**成功返回** (`build_payload()` 生成的完整 payload)：
+
+```json
+{
+  "ready": true,
+  "finished": false,
+  "step_idx": 1,
+  "current_time": "2024-01-08",
+  "stock_name": "中国平安",
+
+  "account": {
+    "initial_cash": 10000.0,
+    "cash": 10000.0,
+    "position": 0,
+    "avg_cost": 0.0,
+    "total_pnl": 0.0
+  },
+
+  "kline": [ /* 当前可见K线子集 */ ],
+  "kline_all": [ /* 全历史K线（含 chip_tick_bins）*/ ],
+
+  "chan": { /* 缠论结构数据 */ },
+  "indicators": { /* 指标数据 */ },
+  "bsp_history": [ /* 买卖点历史 */ ],
+
+  "chart_mode": "single",
+  "active_chart_id": "chart1",
+
+  "data_source_label": "AKShare",
+  "data_source_logs": ["数据源已连接：AKShare"],
+  "data_source_chip_label": "AKShare",
+
+  "message": "加载成功：中国平安，当前数据源 AKShare，单周期(daily)。"
+}
+```
+
+**特殊情况返回 (HTTP 409)**：
+```json
+{
+  "detail": {
+    "type": "offline_confirm",
+    "display_code": "600340",
+    "failed_label": "AKShare",
+    "reason_tag": "网络问题",
+    "reason_detail": "Connection timeout"
+  }
+}
+```
+
+#### /api/step — 步进
+
+**成功返回**：
+```json
+{
+  "ready": true,
+  "step_idx": 2,
+  "current_time": "2024-01-09",
+  "kline": [ /* 更新后的K线 */ ],
+  "chan": { /* 重新计算的缠论结构 */ },
+  "indicators": { /* 更新后的指标 */ },
+  "bsp_history": [ /* 追加新的买卖点记录 */ ],
+  "message": "步进成功"
+}
+
+// 或到达末尾时：
+{
+  "message": "已到最后一根K线"
+}
+```
+
+#### /api/judge_bsp — 买卖点判定
+
+**成功返回**：
+```json
+{
+  "ready": true,
+  "bsp_history": [ /* 更新后的买卖点历史（含新判定结果）*/ ],
+  "judge_notice": true,
+  "last_judge_stats": {
+    "total_checked": 5,
+    "valid_count": 2,
+    "invalid_count": 3
+  },
+  "last_judge_x": 120,
+  "last_judge_time": "2024-03-15",
+  "message": "买卖点判定完成"
+}
+```
+
+#### /api/buy — 买入
+
+**成功返回**：
+```json
+{
+  "ready": true,
+  "account": {
+    "initial_cash": 10000.0,
+    "cash": 1234.5,      // 扣除买入成本后剩余
+    "position": 80,       // 买入股数（按手取整）
+    "avg_cost": 10.95,   // 平均成本
+    "total_pnl": 0.0
+  },
+  "trade_events": [{
+    "side": "buy",
+    "step_idx": 5,
+    "x": 120,
+    "price": 10.95,
+    "shares": 80
+  }],
+  "message": "买入成功：{\"shares\":80,\"cost\":8760,\"remaining\":1234.5}"
+}
+```
+
+**失败返回 (HTTP 400)**：
+```json
+{
+  "detail": "现金不足"  // 或 "请先初始化会话" / "当前会话已结束"
+}
+```
+
+#### /api/sell — 卖出
+
+**成功返回**：
+```json
+{
+  "ready": true,
+  "account": {
+    "cash": 2108.5,       // 卖出后现金增加
+    "position": 0,        // 清仓
+    "avg_cost": 10.95,
+    "total_pnl": 174.0    // 本次盈亏
+  },
+  "trade_events": [
+    // ... 之前的交易记录
+    {
+      "side": "sell",
+      "step_idx": 15,
+      "x": 380,
+      "price": 12.13,
+      "shares": 80
+    }
+  ],
+  "message": "卖出结果：{\"shares\":80,\"pnl\":174.0,\"reason\":\"正常卖出\"}"
+}
+```
+
+**失败返回 (HTTP 400)**：
+```json
+{
+  "detail": "无持仓"  // 或 "T+1约束：当天买入的股票不能当天卖出"
+}
+```
+
+#### /api/back_n — 后退N步
+
+**成功返回**：
+```json
+{
+  "ready": true,
+  "step_idx": 45,       // 后退后的新位置
+  "current_time": "2024-02-28",
+  "chan": { /* 重建后的缠论结构 */ },
+  "message": "自动重建回放：已后退 10 根（目标 step=45）"
+}
+```
+
+#### /api/goto_step — 跳转到指定位置
+
+**成功返回**（三种情况的 message 不同）：
+```json
+// 已在目标位置
+{ "message": "已在目标步进 step=100" }
+
+// 向后跳转
+{ "message": "已跳转到 step=50" }
+
+// 向前跳转
+{ "message": "已跳转到 step=200" }
+```
+
+#### /api/boll_backtest — BOLL回测
+
+详见 §27.5 节。
+
+#### /api/state — 获取状态
+
+返回与 `/api/step` 相同格式的完整 payload（不含 message 字段差异）。
+
+#### /api/reconfig — 重新配置
+
+**成功返回**：
+```json
+{
+  "ready": true,
+  "chan": { /* 用新配置重算的缠论结构 */ },
+  "account": {
+    "initial_cash": 10000.0,
+    "cash": 10000.0,     // reconfig 会重置账户
+    "position": 0,
+    "avg_cost": 0.0,
+    "total_pnl": 0.0
+  },
+  "message": "配置更新成功，已按新逻辑重新计算并清除模拟持仓。"
+}
+```
+
+#### /api/set_data_source_priority — 设置数据源优先级
+
+**成功返回**：
+```json
+{
+  "message": "数据源优先级已更新：[\"AKShare\",\"pytdx\",\"离线数据\"]"
+}
+```
+
+#### /api/check_data_source — 检测数据源
+
+**成功返回**：
+```json
+// 数据源可用
+{ "ok": true, "name": "AKShare", "message": "AKShare 可拉取日线样本（5 根）" }
+
+// 数据源不可用
+{ "ok": false, "name": "Tushare", "message": "API token 未配置" }
+```
+
+#### /api/reset — 重置会话
+
+**成功返回**：返回初始状态的 payload（所有字段归零/归空）。
+
+#### /api/finish — 结束训练
+
+**成功返回**：
+```json
+{
+  "ready": true,
+  "finished": true,
+  "message": "训练结束"
+}
+```
+
+#### /api/exit — 退出服务
+
+成功返回后服务器进程终止，无返回体（连接断开）。
+
+### 31.3 build_payload() 核心字段说明
+
+所有涉及状态查询的接口（init/step/state/goto_step/back_n 等）都通过 [`build_payload()`](file:///c:\Users\Administrator/Desktop/my_file1/my_file/3/chan.py/replay_trainer.py) 生成返回值：
+
+| 字段组 | 字段 | 类型 | 说明 |
+|--------|------|------|------|
+| **状态** | `ready` | bool | 会话是否就绪 |
+| | `finished` | bool | 是否已结束 |
+| | `step_idx` | int | 当前步进索引 |
+| | `current_time` | string | 当前K线时间 |
+| | `stock_name` | string | 股票名称 |
+| **账户** | `account` | object | 模拟账户状态（见上文） |
+| **K线** | `kline` | array | 当前视口可见K线（随步进变化） |
+| | `kline_all` | array | 全历史K线（固定不变，含筹码数据） |
+| **缠论** | `chan` | object | 缠论结构（笔/段/中枢/买卖点） |
+| **指标** | `indicators` | object | MACD/KDJ/RSI/BOLL/Demark |
+| **历史** | `bsp_history` | array | 买卖点历史记录 |
+| | `trade_events` | array | 交易事件记录 |
+| | `rhythm_hit_history` | array | 节奏命中历史 |
+| **图表** | `chart_mode` | string | single/dual |
+| | `active_chart_id` | string | chart1/chart2 |
+| | `chan2` | object/null | 第二图表的缠论数据（双周期模式） |
+| **数据源** | `data_source_label` | string | K线数据源名称 |
+| | `data_source_chip_label` | string | 筹码数据源名称 |
+| | `data_source_logs` | array[string] | 数据源选择日志 |
+| **判定** | `judge_notice` | bool | 是否有新的判定通知 |
+| | `last_judge_stats` | object | 最近一次判定统计 |
+| **消息** | `message` | string | 操作结果描述 |

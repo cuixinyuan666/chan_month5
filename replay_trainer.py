@@ -3445,6 +3445,322 @@ class JudgeBspReq(BaseModel):
     reason: str = "manual_check"
 
 
+class GotoStepReq(BaseModel):
+    """跳转到指定步进索引（与 rebuild_to_step 一致，0 为第一根可见 K）。"""
+    step_idx: int = 0
+
+
+class BollBacktestReq(BaseModel):
+    """BOLL 下轨触碰策略回测（独立临时会话，不改当前复盘状态）。"""
+    code: str
+    begin_date: str
+    end_date: Optional[str] = None
+    initial_cash: float = 10_000.0
+    autype: str = "qfq"
+    chan_config: Optional[dict[str, Any]] = None
+    k_type: str = "daily"
+    chart_mode: str = "single"
+    k_type_2: Optional[str] = None
+    sell_hold_bars: int = 5  # 买入后持有 N 根 K 线，于第 N 根收盘价卖出
+    confirm_offline: bool = False
+    data_source_priority: Optional[list[str]] = None
+    data_form_mode: str = "traditional"
+    data_form_quantity: Optional[int] = None
+
+
+def _bars_from_stepper_master(stepper: ChanStepper) -> list[dict[str, Any]]:
+    """从已 init 的 stepper 取主序列 K 线（与聚合/数量模式一致）。"""
+    klus = stepper._replay_klus_master or []
+    out: list[dict[str, Any]] = []
+    for klu in klus:
+        out.append(
+            {
+                "t": str(klu.time.to_str()),
+                "o": float(klu.open),
+                "h": float(klu.high),
+                "l": float(klu.low),
+                "c": float(klu.close),
+            }
+        )
+    return out
+
+
+def _boll_down_series_from_closes(closes: list[float], boll_n: int) -> list[float]:
+    """与复盘 stepper 一致：逐根收盘价递推 BOLL 下轨。"""
+    boll = BollModel(N=max(2, int(boll_n)))
+    return [float(boll.add(float(c)).DOWN) for c in closes]
+
+
+def _boll_buy_signal_at_bar(bars: list[dict[str, Any]], downs: list[float], i: int) -> bool:
+    """第 i 根：上一根最高价 < 上一根下轨；本根收盘价 >= 本根下轨。"""
+    if i < 1 or i >= len(bars) or len(downs) != len(bars):
+        return False
+    return float(bars[i - 1]["h"]) < float(downs[i - 1]) and float(bars[i]["c"]) >= float(downs[i])
+
+
+def _dual_secondary_index_for_primary_time(primary: list[dict[str, Any]], secondary: list[dict[str, Any]], i: int) -> int:
+    """取主周期第 i 根时刻下，次周期最后一根 t<=主 t 的索引。"""
+    if i < 0 or i >= len(primary) or not secondary:
+        return -1
+    t_end = str(primary[i]["t"])
+    j = -1
+    for k, row in enumerate(secondary):
+        if str(row["t"]) <= t_end:
+            j = k
+        else:
+            break
+    return j
+
+
+def _last_bar_idx_at_or_before(bars: list[dict[str, Any]], t_anchor: str) -> int:
+    """最后一根 bar.t <= t_anchor 的索引；若无则 -1。"""
+    t_anchor = str(t_anchor)
+    j = -1
+    for i, row in enumerate(bars):
+        if str(row["t"]) <= t_anchor:
+            j = i
+        else:
+            break
+    return j
+
+
+def _coarse_rows_eff_upto_anchor(
+    coarse: list[dict[str, Any]],
+    fine: list[dict[str, Any]],
+    anchor_t: str,
+) -> list[dict[str, Any]]:
+    """粗周期截至 anchor 的 K 线序列：已收盘粗 K 保留；当前未收盘粗段用细周期 (t_prev, anchor] 重算末根 HL收（粗开沿用细段首根开盘，与复盘 _apply_partial_last_bar 一致），避免大周期未来数据。"""
+    anchor_t = str(anchor_t)
+    if not coarse or not fine:
+        return []
+    j_lt = -1
+    for i, c in enumerate(coarse):
+        ct = str(c["t"])
+        if ct < anchor_t:
+            j_lt = i
+        elif ct == anchor_t:
+            return [dict(x) for x in coarse[: i + 1]]
+        else:
+            break
+    eff: list[dict[str, Any]] = [dict(x) for x in coarse[: j_lt + 1]]
+    left_excl = str(coarse[j_lt]["t"]) if j_lt >= 0 else ""
+    picked = [f for f in fine if str(f["t"]) > left_excl and str(f["t"]) <= anchor_t]
+    if not picked:
+        return eff
+    o0 = float(picked[0]["o"])
+    hi = max(float(r["h"]) for r in picked)
+    lo = min(float(r["l"]) for r in picked)
+    cc = float(picked[-1]["c"])
+    lo = min(o0, hi, lo, cc)
+    hi = max(o0, hi, lo, cc)
+    eff.append({"t": anchor_t, "o": o0, "h": hi, "l": lo, "c": cc})
+    return eff
+
+
+def _boll_buy_on_effective_rows(eff: list[dict[str, Any]], boll_n: int) -> bool:
+    """对「含末根可能为细周期合成」的粗 K 序列，在最后一根上判定 BOLL 触碰买。"""
+    if len(eff) < 2:
+        return False
+    closes = [float(r["c"]) for r in eff]
+    downs = _boll_down_series_from_closes(closes, boll_n)
+    i = len(eff) - 1
+    return _boll_buy_signal_at_bar(eff, downs, i)
+
+
+def _dual_chart_boll_buy_at_anchor(
+    own_bars: list[dict[str, Any]],
+    own_rank: int,
+    other_bars: list[dict[str, Any]],
+    other_rank: int,
+    anchor_t: str,
+    boll_n: int,
+) -> bool:
+    """双周期下：某图在 anchor 时刻的 BOLL 买讯；粗周期用细 K 合成末根防未来；细周期仅用截至 anchor 的 K 线重算 BOLL。"""
+    if own_rank > other_rank:
+        eff = _coarse_rows_eff_upto_anchor(own_bars, other_bars, anchor_t)
+        return _boll_buy_on_effective_rows(eff, boll_n)
+    j = _last_bar_idx_at_or_before(own_bars, anchor_t)
+    if j < 1:
+        return False
+    # 细周期：仅用 anchor 及以前的收盘递推 BOLL，避免用到未来 K 的统计量
+    slice_bars = own_bars[: j + 1]
+    downs_slice = _boll_down_series_from_closes([float(b["c"]) for b in slice_bars], boll_n)
+    return _boll_buy_signal_at_bar(slice_bars, downs_slice, j)
+
+
+def run_boll_backtest(req: BollBacktestReq) -> dict[str, Any]:
+    """全样本 BOLL 触碰买 + 固定持有 N 根卖；双周期要求主次在对应时刻同时满足买讯。"""
+    autype_map = {"qfq": AUTYPE.QFQ, "hfq": AUTYPE.HFQ, "none": AUTYPE.NONE}
+    autype = autype_map.get(str(req.autype or "qfq").lower(), AUTYPE.QFQ)
+    code_norm = normalize_code(req.code)
+    hold_n = max(1, int(req.sell_hold_bars))
+    cfg = req.chan_config if isinstance(req.chan_config, dict) else {}
+    boll_n = 20
+    if cfg.get("boll_n") is not None:
+        try:
+            boll_n = max(2, int(cfg["boll_n"]))
+        except (TypeError, ValueError):
+            boll_n = 20
+
+    s1 = ChanStepper()
+    s1.init(
+        code_norm,
+        req.begin_date,
+        req.end_date,
+        autype,
+        chan_config=cfg,
+        k_type=req.k_type,
+        confirm_offline=bool(req.confirm_offline),
+        data_source_priority=req.data_source_priority,
+        data_form_mode=req.data_form_mode,
+        data_form_quantity=req.data_form_quantity,
+    )
+    bars1 = _bars_from_stepper_master(s1)
+    if len(bars1) < 2:
+        raise ValueError("K 线数据不足，无法回测")
+
+    downs1 = _boll_down_series_from_closes([float(b["c"]) for b in bars1], boll_n)
+
+    chart_mode = str(req.chart_mode or "single").strip().lower()
+    bars2: Optional[list[dict[str, Any]]] = None
+    downs2: Optional[list[float]] = None
+    if chart_mode == "dual":
+        s2 = ChanStepper()
+        s2.init(
+            code_norm,
+            req.begin_date,
+            req.end_date,
+            autype,
+            chan_config=cfg,
+            k_type=str(req.k_type_2 or req.k_type),
+            confirm_offline=bool(req.confirm_offline),
+            data_source_priority=req.data_source_priority,
+            data_form_mode=req.data_form_mode,
+            data_form_quantity=req.data_form_quantity,
+        )
+        bars2 = _bars_from_stepper_master(s2)
+        downs2 = _boll_down_series_from_closes([float(b["c"]) for b in bars2], boll_n) if bars2 else None
+
+    cash = float(req.initial_cash)
+    pos_shares = 0
+    pos_buy_price = 0.0
+    pos_buy_idx = -1
+    trades: list[dict[str, Any]] = []
+    equity_curve: list[float] = []
+
+    def try_buy(idx_buy: int, price: float) -> None:
+        nonlocal cash, pos_shares, pos_buy_price, pos_buy_idx
+        if pos_shares > 0 or cash <= 0 or price <= 0:
+            return
+        shares = int(cash // price)
+        if shares <= 0:
+            return
+        cost = shares * price
+        cash -= cost
+        pos_shares = shares
+        pos_buy_price = float(price)
+        pos_buy_idx = int(idx_buy)
+
+    def try_sell(idx_sell: int, price: float) -> None:
+        nonlocal cash, pos_shares, pos_buy_price, pos_buy_idx
+        if pos_shares <= 0 or price <= 0:
+            return
+        cash += pos_shares * price
+        trades.append(
+            {
+                "buy_idx": int(pos_buy_idx),
+                "sell_idx": int(idx_sell),
+                "buy_t": bars1[pos_buy_idx]["t"],
+                "sell_t": bars1[idx_sell]["t"],
+                "buy_price": round(pos_buy_price, 4),
+                "sell_price": round(float(price), 4),
+                "shares": int(pos_shares),
+                "pnl": round((float(price) - pos_buy_price) * pos_shares, 2),
+            }
+        )
+        pos_shares = 0
+        pos_buy_price = 0.0
+        pos_buy_idx = -1
+
+    if chart_mode == "dual" and bars2 is not None and downs2 is not None:
+        r1 = AppState._k_type_granularity_rank(s1.k_type)
+        r2 = AppState._k_type_granularity_rank(s2.k_type)
+        if len(bars2) < 2:
+            raise ValueError("双周期副序列 K 线不足")
+        if r1 == r2:
+            # 两周期粒度相同：无粗细之分，仍按图1步进（与旧逻辑一致）
+            for i in range(len(bars1)):
+                c_now = float(bars1[i]["c"])
+                if pos_shares > 0 and pos_buy_idx >= 0 and i - pos_buy_idx >= hold_n:
+                    try_sell(i, c_now)
+                buy_signal = _boll_buy_signal_at_bar(bars1, downs1, i)
+                j = _dual_secondary_index_for_primary_time(bars1, bars2, i)
+                buy_signal = buy_signal and j >= 1 and _boll_buy_signal_at_bar(bars2, downs2, j)
+                if buy_signal:
+                    try_buy(i, c_now)
+                mv = cash + (pos_shares * c_now if pos_shares > 0 else 0.0)
+                equity_curve.append(round(mv, 2))
+        else:
+            # 细周期驱动锚点；粗周期 BOLL 用细 K 截至锚点重算末根，避免大周期未来数据
+            finer_bars = bars1 if r1 < r2 else bars2
+            if len(finer_bars) < 2:
+                raise ValueError("双周期细序列 K 线不足")
+            for kf in range(1, len(finer_bars)):
+                anchor_t = finer_bars[kf]["t"]
+                idx1 = _last_bar_idx_at_or_before(bars1, anchor_t)
+                if idx1 < 0:
+                    continue
+                c_now = float(bars1[idx1]["c"])
+                if pos_shares > 0 and pos_buy_idx >= 0 and idx1 - pos_buy_idx >= hold_n:
+                    try_sell(idx1, c_now)
+                buy_signal = _dual_chart_boll_buy_at_anchor(bars1, r1, bars2, r2, anchor_t, boll_n) and _dual_chart_boll_buy_at_anchor(
+                    bars2, r2, bars1, r1, anchor_t, boll_n
+                )
+                if buy_signal:
+                    try_buy(idx1, c_now)
+                mv = cash + (pos_shares * c_now if pos_shares > 0 else 0.0)
+                equity_curve.append(round(mv, 2))
+    else:
+        for i in range(len(bars1)):
+            c_now = float(bars1[i]["c"])
+            if pos_shares > 0 and pos_buy_idx >= 0 and i - pos_buy_idx >= hold_n:
+                try_sell(i, c_now)
+            buy_signal = _boll_buy_signal_at_bar(bars1, downs1, i)
+            if buy_signal:
+                try_buy(i, c_now)
+            mv = cash + (pos_shares * c_now if pos_shares > 0 else 0.0)
+            equity_curve.append(round(mv, 2))
+
+    if pos_shares > 0 and bars1:
+        try_sell(len(bars1) - 1, float(bars1[-1]["c"]))
+
+    final_equity = cash
+    total_pnl = round(final_equity - float(req.initial_cash), 2)
+    ret_pct = (total_pnl / float(req.initial_cash) * 100.0) if req.initial_cash else 0.0
+    wins = sum(1 for tr in trades if float(tr.get("pnl", 0)) > 0)
+    losses = sum(1 for tr in trades if float(tr.get("pnl", 0)) < 0)
+    ntr = len(trades)
+
+    return {
+        "code": code_norm,
+        "name": s1.stock_name,
+        "chart_mode": chart_mode,
+        "k_type": req.k_type,
+        "k_type_2": req.k_type_2 if chart_mode == "dual" else None,
+        "bars": len(bars1),
+        "initial_cash": round(float(req.initial_cash), 2),
+        "final_equity": round(final_equity, 2),
+        "total_pnl": total_pnl,
+        "total_return_pct": round(ret_pct, 2),
+        "trade_count": ntr,
+        "win_count": wins,
+        "loss_count": losses,
+        "win_rate_pct": round((wins / ntr * 100.0) if ntr else 0.0, 2),
+        "trades": trades,
+        "hold_bars_rule": hold_n,
+    }
+
+
 class AppState:
     def __init__(self) -> None:
         self.stepper = ChanStepper()
@@ -4982,6 +5298,44 @@ HTML = r"""
     .settingsActions button {
       min-width: 100px;
     }
+    /* 左侧主标签：1 复盘 / 2 BOLL 回测 */
+    .mainTabs {
+      display: flex;
+      gap: 6px;
+      margin: 0 0 8px 0;
+      flex-shrink: 0;
+    }
+    .mainTabBtn {
+      flex: 1;
+      padding: 8px 6px;
+      font-size: 13px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--btn);
+      color: var(--btnText);
+      cursor: pointer;
+    }
+    .mainTabBtn:hover:not(.active) { border-color: #2563eb; }
+    .mainTabBtn.active {
+      border-color: #2563eb;
+      background: var(--panel);
+      font-weight: bold;
+      color: #2563eb;
+      box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.15);
+    }
+    .tabPanel { width: 100%; box-sizing: border-box; }
+    .subTabs { display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
+    .subTabBtn {
+      padding: 5px 12px;
+      font-size: 12px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--btn);
+      cursor: pointer;
+    }
+    .subTabBtn.active { border-color: #2563eb; color: #2563eb; font-weight: bold; }
+    .bollTradeRow { cursor: pointer; font-size: 12px; }
+    .bollTradeRow:hover { background: rgba(37, 99, 235, 0.08); }
   </style>
 
 </head>
@@ -4990,8 +5344,13 @@ HTML = r"""
     <div class="left">
       <div class="title">chan.py 复盘训练器 <span class="tip-icon" data-tip="Chan.py 缠论复盘交易系统"></span></div>
       <div id="dataSourceStatus" class="sourceStatus mono">当前数据源：未加载</div>
+      <div class="mainTabs" role="tablist" aria-label="主标签">
+        <button type="button" class="mainTabBtn active" id="btnMainTab1" role="tab" aria-selected="true">1 · 复盘训练</button>
+        <button type="button" class="mainTabBtn" id="btnMainTab2" role="tab" aria-selected="false">2 · BOLL回测</button>
+      </div>
       <div class="leftScrollRegion">
       <div id="leftContent" class="leftContent">
+      <div id="tabPanel1" class="tabPanel">
       <div id="chartToolsPanel" class="chartToolsPanel">
         <button id="btnFullscreen" class="fullscreen-btn" data-tip="切换图表区域全屏显示。">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
@@ -5117,6 +5476,31 @@ HTML = r"""
           <button id="btnMsgHistory" style="padding:2px 6px; font-size:12px; width:auto;">历史记录</button>
         </div>
         <div class="muted">账户状态信息已迁移到“当前持仓状态”浮窗（仅持仓时显示）。</div>
+      </div>
+      </div>
+      <div id="tabPanel2" class="tabPanel" style="display:none;">
+        <div class="card">
+          <div class="subTabs">
+            <button type="button" class="subTabBtn active" id="btnSubTabBoll">BOLL</button>
+          </div>
+          <p class="muted" style="font-size:12px; line-height:1.5; margin:0 0 10px;">代码、开始/结束日期、初始资金、复权、K线图模式、周期类型1/2 与<strong>标签1</strong>左侧表单为同一组控件，请在标签1中修改。</p>
+          <div class="row" style="margin:4px 0 2px;"><span class="muted" style="font-size:12px;">买入规则（固定）</span></div>
+          <p class="muted" style="font-size:12px; line-height:1.55; margin:0 0 10px;">上一根K最高价 &lt; 布林下轨，本根收盘价 ≥ 下轨。双周期时两图在同一细周期锚点下同时满足；大周期末根由细K合成以防未来数据。</p>
+          <div class="row cfg-editable">
+            <label for="bollSellHoldN">卖出 持有 N 根K</label>
+            <input id="bollSellHoldN" type="number" min="1" step="1" value="5" style="max-width:96px; flex:0 0 auto;" />
+            <span class="tip-icon" data-tip="按图1（周期类型1）K 线计数：买入后满 N 根，于第 N 根收盘价卖出。"></span>
+          </div>
+          <div class="btnRow" style="margin-top:8px;">
+            <button type="button" id="btnBollBacktestRun">执行回测</button>
+          </div>
+        </div>
+        <div class="card" id="bollResultCard" style="display:none; margin-top:10px;">
+          <div class="title" style="margin:0 0 8px;">回测结果</div>
+          <pre id="bollBacktestSummary" class="mono" style="white-space:pre-wrap; font-size:12px; margin:0; color:var(--text);"></pre>
+          <p class="muted" style="font-size:11px; margin:8px 0 0;">双击表格一行：切到标签1并跳转到该笔买入 K（需已用相同代码与周期加载会话）。</p>
+          <div id="bollTradeTableWrap" style="max-height:240px; overflow:auto; margin-top:8px; border:1px solid var(--border); border-radius:6px;"></div>
+        </div>
       </div>
       </div>
       </div>
@@ -11751,6 +12135,158 @@ if ($("bspPrompt")) {
   });
 }
 
+/** 左侧主标签：1 复盘训练 / 2 BOLL 回测（仅切换左栏内容，图表全宽不变） */
+const MAIN_TAB_STORAGE_KEY = "chan_left_main_tab";
+function setMainTab(which) {
+  const w = which === "2" ? "2" : "1";
+  storageSet(MAIN_TAB_STORAGE_KEY, w);
+  const p1 = $("tabPanel1");
+  const p2 = $("tabPanel2");
+  const b1 = $("btnMainTab1");
+  const b2 = $("btnMainTab2");
+  if (p1) p1.style.display = w === "1" ? "" : "none";
+  if (p2) p2.style.display = w === "2" ? "" : "none";
+  if (b1) {
+    b1.classList.toggle("active", w === "1");
+    b1.setAttribute("aria-selected", w === "1" ? "true" : "false");
+  }
+  if (b2) {
+    b2.classList.toggle("active", w === "2");
+    b2.setAttribute("aria-selected", w === "2" ? "true" : "false");
+  }
+  requestAnimationFrame(updateCompactLayout);
+}
+if ($("btnMainTab1")) {
+  $("btnMainTab1").addEventListener("click", () => setMainTab("1"));
+}
+if ($("btnMainTab2")) {
+  $("btnMainTab2").addEventListener("click", () => setMainTab("2"));
+}
+setMainTab(storageGet(MAIN_TAB_STORAGE_KEY) || "1");
+
+function _processedChanConfigForApi() {
+  const processedConfig = JSON.parse(JSON.stringify(chanConfig));
+  ["mean_metrics", "trend_metrics"].forEach((k) => {
+    if (typeof processedConfig[k] === "string") {
+      processedConfig[k] = processedConfig[k]
+        .split(/[,，\s]+/)
+        .map((v) => parseInt(v.trim(), 10))
+        .filter((v) => !Number.isNaN(v));
+    }
+  });
+  return processedConfig;
+}
+
+function renderBollBacktestResult(res) {
+  const card = $("bollResultCard");
+  const pre = $("bollBacktestSummary");
+  const wrap = $("bollTradeTableWrap");
+  if (!card || !pre || !wrap) return;
+  card.style.display = "";
+  const lines = [
+    `标的：${res.name || res.code || "-"}`,
+    `模式：${res.chart_mode === "dual" ? "双周期" : "单周期"}  ${res.k_type || ""}${res.chart_mode === "dual" && res.k_type_2 ? " / " + res.k_type_2 : ""}`,
+    `K 线根数：${res.bars != null ? res.bars : "-"}`,
+    `初始资金：${res.initial_cash}  期末权益：${res.final_equity}`,
+    `总盈亏：${res.total_pnl}  收益率：${res.total_return_pct}%`,
+    `成交笔数：${res.trade_count}  胜/负：${res.win_count}/${res.loss_count}  胜率：${res.win_rate_pct}%`,
+    `卖出规则：持有 ${res.hold_bars_rule || "-"} 根后卖出`,
+  ];
+  pre.textContent = lines.join("\n");
+  wrap.innerHTML = "";
+  const tbl = document.createElement("table");
+  tbl.style.width = "100%";
+  tbl.style.borderCollapse = "collapse";
+  tbl.style.fontSize = "12px";
+  const head = document.createElement("thead");
+  head.innerHTML = "<tr><th style='text-align:left;padding:4px;border-bottom:1px solid var(--border)'>#</th><th style='text-align:left;padding:4px;border-bottom:1px solid var(--border)'>买时</th><th style='text-align:left;padding:4px;border-bottom:1px solid var(--border)'>卖时</th><th style='text-align:right;padding:4px;border-bottom:1px solid var(--border)'>买价</th><th style='text-align:right;padding:4px;border-bottom:1px solid var(--border)'>卖价</th><th style='text-align:right;padding:4px;border-bottom:1px solid var(--border)'>盈亏</th></tr>";
+  tbl.appendChild(head);
+  const body = document.createElement("tbody");
+  const rows = Array.isArray(res.trades) ? res.trades : [];
+  rows.forEach((tr, idx) => {
+    const r = document.createElement("tr");
+    r.className = "bollTradeRow";
+    r.dataset.buyIdx = String(tr.buy_idx != null ? tr.buy_idx : "");
+    r.innerHTML = `<td style="padding:4px;border-bottom:1px dashed var(--grid)">${idx + 1}</td><td style="padding:4px;border-bottom:1px dashed var(--grid)">${escapeHtmlAttr(tr.buy_t || "")}</td><td style="padding:4px;border-bottom:1px dashed var(--grid)">${escapeHtmlAttr(tr.sell_t || "")}</td><td style="padding:4px;text-align:right;border-bottom:1px dashed var(--grid)">${tr.buy_price != null ? tr.buy_price : "-"}</td><td style="padding:4px;text-align:right;border-bottom:1px dashed var(--grid)">${tr.sell_price != null ? tr.sell_price : "-"}</td><td style="padding:4px;text-align:right;border-bottom:1px dashed var(--grid)">${tr.pnl != null ? tr.pnl : "-"}</td>`;
+    r.addEventListener("dblclick", () => {
+      const bi = parseInt(r.dataset.buyIdx, 10);
+      if (!Number.isFinite(bi) || bi < 0) return;
+      void jumpToBollTradeBuy(bi);
+    });
+    body.appendChild(r);
+  });
+  tbl.appendChild(body);
+  wrap.appendChild(tbl);
+}
+
+async function jumpToBollTradeBuy(buyIdx) {
+  setMainTab("1");
+  if (!lastPayload || !lastPayload.ready) {
+    showToast("请先在标签1点击「加载会话」。");
+    return;
+  }
+  setGlobalLoading(true, "正在跳转K线…");
+  try {
+    const p = await api("/api/goto_step", { step_idx: buyIdx });
+    refreshUI(p, { afterStep: false });
+    showToast("已跳转到该笔买入所在K线。");
+  } catch (e) {
+    showToast("跳转失败：" + e.message);
+  } finally {
+    hideGlobalLoading();
+  }
+}
+
+if ($("btnBollBacktestRun")) {
+  $("btnBollBacktestRun").addEventListener("click", async () => {
+    const n = Math.max(1, parseInt($("bollSellHoldN") && $("bollSellHoldN").value, 10) || 5);
+    if ($("bollSellHoldN")) $("bollSellHoldN").value = String(n);
+    const processedConfig = _processedChanConfigForApi();
+    const rawN = getRawKlineCount();
+    const buildBody = (extra = {}) => ({
+      code: $("code").value,
+      begin_date: $("begin").value,
+      end_date: $("end").value || null,
+      initial_cash: Number($("cash").value),
+      autype: $("autype").value,
+      chan_config: processedConfig,
+      k_type: $("kType").value,
+      chart_mode: $("chartMode") ? $("chartMode").value : "single",
+      k_type_2: $("kType2") ? $("kType2").value : $("kType").value,
+      sell_hold_bars: n,
+      data_form_mode: normalizeDataFormMode(dataFormConfig.mode),
+      data_form_quantity: clampDataFormQuantity(dataFormConfig.quantity, rawN > 0 ? rawN : 1),
+      ...extra,
+    });
+    setGlobalLoading(true, "BOLL 回测计算中…");
+    try {
+      let res;
+      try {
+        res = await api("/api/boll_backtest", buildBody({}));
+      } catch (e) {
+        if (e.offlineConfirm && Number(e.httpStatus) === 409) {
+          const oc = e.offlineConfirm;
+          const tip = `${oc.display_code}使用${oc.failed_label}获取数据失败，原因为【${oc.reason_tag}】是否使用离线数据继续？`;
+          if (confirmAndLog(tip)) {
+            res = await api("/api/boll_backtest", buildBody({ confirm_offline: true }));
+          } else {
+            let p = (systemConfig.dataSourcePriority || []).filter((x) => x !== "离线数据");
+            if (!p.length) p = DEFAULT_SYSTEM_CONFIG.dataSourcePriority.filter((x) => x !== "离线数据");
+            res = await api("/api/boll_backtest", buildBody({ data_source_priority: p }));
+          }
+        } else {
+          throw e;
+        }
+      }
+      if (res) renderBollBacktestResult(res);
+    } catch (e) {
+      showToast("BOLL回测失败：" + e.message);
+    } finally {
+      hideGlobalLoading();
+    }
+  });
+}
+
 function verifyCriticalUiBindings() {
   const checks = [
     { id: "btnInit", ok: () => typeof $("btnInit").onclick === "function" || $("btnInit").dataset.bound === "1" },
@@ -12151,6 +12687,74 @@ def api_sell():
         payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME, include_kline_all=False)
         payload["message"] = f"卖出结果：{json.dumps(detail, ensure_ascii=False)}"
         return payload
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.post("/api/goto_step")
+def api_goto_step(req: GotoStepReq):
+    """将当前复盘会话重建到指定 step_idx（便于从回测成交跳转）。"""
+    if not APP_STATE.ready:
+        raise HTTPException(status_code=400, detail="请先加载会话")
+    if APP_STATE.finished:
+        raise HTTPException(status_code=400, detail="当前会话已结束，请重新训练")
+    try:
+        target = max(0, int(req.step_idx))
+        cur = int(APP_STATE.get_active_stepper().step_idx)
+        if target == cur:
+            payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME, include_kline_all=False)
+            payload["message"] = f"已在目标步进 step={target}"
+            return payload
+        if target < cur:
+            APP_STATE.rebuild_to_step(target)
+            APP_STATE._rhythm_notice_hits = []
+            payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME, include_kline_all=False)
+            payload["message"] = f"已跳转到 step={target}"
+            return payload
+        # 向前跳转：先回到 0 再步进到 target（步数可能较多）
+        APP_STATE.rebuild_to_step(0)
+        APP_STATE._rhythm_notice_hits = []
+        for _ in range(target):
+            active = APP_STATE.get_active_stepper()
+            passive = APP_STATE.get_passive_stepper()
+            ok = active.step()
+            if passive is not None and ok:
+                APP_STATE._sync_stepper_to_anchor(passive, active.current_time())
+            APP_STATE._dual_rebuild_coarse_chan_anti_future(active.current_time())
+            APP_STATE.sync_bsp_history()
+            APP_STATE.sync_rhythm_history()
+            APP_STATE.after_step_update()
+            if not ok:
+                break
+        payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME, include_kline_all=False)
+        payload["message"] = f"已跳转到 step={APP_STATE.get_active_stepper().step_idx}"
+        return payload
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.post("/api/boll_backtest")
+def api_boll_backtest(req: BollBacktestReq):
+    """BOLL 触碰策略统计回测（不修改当前 APP_STATE 会话）。"""
+    try:
+        if req.initial_cash <= 0:
+            raise ValueError("初始资金必须大于0")
+        if int(req.sell_hold_bars) < 1:
+            raise ValueError("卖出持有根数 N 必须>=1")
+        return run_boll_backtest(req)
+    except OfflineDataConfirmRequired as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "type": "offline_confirm",
+                "display_code": exc.display_code,
+                "failed_label": exc.failed_label,
+                "reason_tag": exc.reason_tag,
+                "reason_detail": exc.reason_detail,
+            },
+        ) from exc
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
