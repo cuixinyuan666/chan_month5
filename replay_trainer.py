@@ -28,15 +28,11 @@ from pydantic import BaseModel, Field
 # 尝试导入其他数据源库（缺失时启动阶段给出明确安装提示）
 ASHARE_MOD = None  # ashare 或 PyPI 的 ashares，供 get_price 使用
 try:
-    import ashare as ASHARE_MOD
+    import ashares as ASHARE_MOD  # PyPI 包名 ashares，API 与 Ashare 一致
     HAS_ASHARE = True
 except ImportError:
-    try:
-        import ashares as ASHARE_MOD  # PyPI 包名 ashares，API 与 Ashare 一致
-        HAS_ASHARE = True
-    except ImportError:
-        HAS_ASHARE = False
-        warnings.warn(_OPT_DEP_HINT_ASHARE, ImportWarning, stacklevel=1)
+    HAS_ASHARE = False
+    warnings.warn(_OPT_DEP_HINT_ASHARE, ImportWarning, stacklevel=1)
 try:
     import adata
     HAS_ADATA = True
@@ -256,7 +252,20 @@ def k_type_to_api_key(kl: KL_TYPE) -> str:
 
 def normalize_data_form_mode(raw: Any) -> str:
     mode = str(raw or "traditional").strip().lower()
-    return "quantity" if mode == "quantity" else "traditional"
+    allow = {"traditional", "quantity", "tick_traditional", "tick_quantity"}
+    return mode if mode in allow else "traditional"
+
+
+def is_data_form_quantity_mode(mode: Any) -> bool:
+    """数量类数据形式：普通数量 + 分笔价格合成数量。"""
+    m = normalize_data_form_mode(mode)
+    return m in {"quantity", "tick_quantity"}
+
+
+def is_data_form_tick_synth_mode(mode: Any) -> bool:
+    """分笔价格合成类数据形式。"""
+    m = normalize_data_form_mode(mode)
+    return m in {"tick_traditional", "tick_quantity"}
 
 
 def normalize_data_form_quantity(raw: Any, total: int) -> int:
@@ -342,6 +351,165 @@ def aggregate_klu_by_quantity(klus: list[Any], quantity: int) -> list[Any]:
         merged.boll = None
         out.append(merged)
     return out
+
+
+def _bars_to_klu_list(bars: list[dict[str, Any]]) -> list[Any]:
+    """离线合成 bars -> CKLine_Unit 列表。"""
+    out: list[Any] = []
+    for r in bars:
+        klu = CKLine_Unit(
+            {
+                DATA_FIELD.FIELD_TIME: r["t"],
+                DATA_FIELD.FIELD_OPEN: float(r["o"]),
+                DATA_FIELD.FIELD_HIGH: float(r["h"]),
+                DATA_FIELD.FIELD_LOW: float(r["l"]),
+                DATA_FIELD.FIELD_CLOSE: float(r["c"]),
+                DATA_FIELD.FIELD_VOLUME: float(r["v"]),
+                DATA_FIELD.FIELD_TURNOVER: float(r["amt"]),
+            }
+        )
+        klu.macd = None
+        klu.boll = None
+        out.append(klu)
+    return out
+
+
+def _build_tick_rows_by_bucket(
+    ticks: list[tuple[CTime, float, float]], k_type: KL_TYPE
+) -> dict[tuple, list[tuple[float, float]]]:
+    """把分笔按目标周期分桶，保留每桶逐笔价量。"""
+    from collections import defaultdict
+
+    by_bucket: dict[tuple, list[tuple[float, float]]] = defaultdict(list)
+    for t, price, vol in ticks:
+        try:
+            bk = _offline_chip_bar_bucket_key(t, k_type)
+        except ValueError:
+            continue
+        by_bucket[bk].append((float(price), float(vol)))
+    return by_bucket
+
+
+def _aggregate_kline_dicts_by_quantity(
+    bars: list[dict[str, Any]], quantity: int
+) -> list[dict[str, Any]]:
+    """数量聚合 kline_all（含 chip_tick_bins 累加）。"""
+    total = len(bars)
+    if total == 0:
+        return []
+    q = normalize_data_form_quantity(quantity, total)
+    if q >= total:
+        return [dict(x) for x in bars]
+    base = total // q
+    rem = total % q
+    out: list[dict[str, Any]] = []
+    start = 0
+    for i in range(q):
+        seg_len = base + (rem if i == q - 1 else 0)
+        end = start + seg_len
+        chunk = bars[start:end]
+        start = end
+        if not chunk:
+            continue
+        merged: dict[str, Any] = {
+            "t": chunk[-1].get("t"),
+            "o": float(chunk[0].get("o", 0.0)),
+            "h": max(float(k.get("h", 0.0)) for k in chunk),
+            "l": min(float(k.get("l", 0.0)) for k in chunk),
+            "c": float(chunk[-1].get("c", 0.0)),
+            "v": sum(float(k.get("v", 0.0) or 0.0) for k in chunk),
+        }
+        tb_rows: list[tuple[float, float]] = []
+        for k in chunk:
+            tb = k.get("chip_tick_bins")
+            if tb and isinstance(tb, dict):
+                ps = tb.get("p") or []
+                ws = tb.get("w") or []
+                if isinstance(ps, list) and isinstance(ws, list) and len(ps) == len(ws):
+                    for j in range(len(ps)):
+                        try:
+                            p = float(ps[j])
+                            w = float(ws[j])
+                        except (TypeError, ValueError):
+                            continue
+                        if w > 0 and p > 0:
+                            tb_rows.append((p, w))
+        ps2, ws2 = _fold_price_vols(tb_rows)
+        if ps2:
+            merged["chip_tick_bins"] = {"p": ps2, "w": ws2}
+        out.append(merged)
+    return out
+
+
+def build_tick_synth_session_data(
+    code: str,
+    k_type: KL_TYPE,
+    begin_date: Optional[str],
+    end_date: Optional[str],
+    mode: str,
+    quantity: Optional[int],
+) -> tuple[list[Any], list[dict[str, Any]]]:
+    """
+    分笔价格合成会话数据：
+    - tick_traditional：分笔价格合成传统
+    - tick_quantity：分笔价格合成数量
+    """
+    folder = os.path.join(_offline_root_dir(), offline_folder_from_code(code))
+    if not os.path.isdir(folder):
+        raise ValueError(f"未找到离线目录：{folder}")
+    code6 = _strip_market_prefix(code)
+    b8, e8 = _offline_date_bounds(begin_date, end_date)
+    tick_paths = _offline_list_tick_paths(folder, code6, b8, e8)
+    if not tick_paths:
+        raise ValueError("分笔价格合成模式要求存在 TickData 分笔文件（当前日期区间未找到）")
+    ticks = _offline_load_ticks(tick_paths)
+    if not ticks:
+        raise ValueError("分笔文件在日期区间内无有效成交行")
+
+    rows_1m = _offline_ticks_to_1m(ticks)
+    bars = _offline_rows_to_ktype(rows_1m, k_type)
+    if not bars:
+        raise ValueError("分笔价格合成后 K 线为空")
+
+    by_bucket = _build_tick_rows_by_bucket(ticks, k_type)
+    kline_all = serialize_klu_iter(_bars_to_klu_list(bars))
+    for bar in kline_all:
+        ct = _parse_kline_bar_ctime(str(bar.get("t", "")))
+        if ct is None:
+            continue
+        try:
+            bk = _offline_chip_bar_bucket_key(ct, k_type)
+        except ValueError:
+            continue
+        rows = by_bucket.get(bk, [])
+        if not rows:
+            continue
+        ps, ws = _fold_price_vols(rows)
+        if ps:
+            bar["chip_tick_bins"] = {"p": ps, "w": ws}
+
+    if mode == "tick_quantity":
+        q = normalize_data_form_quantity(quantity, len(kline_all))
+        kline_all = _aggregate_kline_dicts_by_quantity(kline_all, q)
+
+    replay_klus_master = _bars_to_klu_list(
+        [
+            {
+                "t": _parse_kline_bar_ctime(str(k.get("t", ""))),
+                "o": k.get("o", 0.0),
+                "h": k.get("h", 0.0),
+                "l": k.get("l", 0.0),
+                "c": k.get("c", 0.0),
+                "v": k.get("v", 0.0),
+                "amt": float(k.get("amt", 0.0) or 0.0),
+            }
+            for k in kline_all
+            if _parse_kline_bar_ctime(str(k.get("t", ""))) is not None
+        ]
+    )
+    if not replay_klus_master:
+        raise ValueError("分笔价格合成后会话 K 线为空")
+    return replay_klus_master, kline_all
 
 
 def normalize_chan_algo(raw: Any) -> str:
@@ -481,14 +649,27 @@ def _offline_root_dir() -> str:
 def offline_folder_from_code(code: str) -> str:
     """sz.001312 -> SZ#001312"""
     c = str(code or "").strip().lower()
+    # 北交所代码优先按数字前缀识别，避免被前端传来的 sz./sh. 误导
+    if c.startswith("bj."):
+        out = "BJ#" + c[3:9] if len(c) >= 9 else "BJ#" + c[3:]
+        return out
     if c.startswith("sh."):
-        return "SH#" + c[3:9] if len(c) >= 9 else "SH#" + c[3:]
+        sym = c[3:9] if len(c) >= 9 else c[3:]
+        out = ("BJ#" if sym.startswith(("8", "9", "4")) else "SH#") + sym
+        return out
     if c.startswith("sz."):
-        return "SZ#" + c[3:9] if len(c) >= 9 else "SZ#" + c[3:]
+        sym = c[3:9] if len(c) >= 9 else c[3:]
+        out = ("BJ#" if sym.startswith(("8", "9", "4")) else "SZ#") + sym
+        return out
     sym = _strip_market_prefix(code)
     if len(sym) == 6 and sym.isdigit():
-        return ("SH#" if sym.startswith("6") else "SZ#") + sym
-    return "SZ#" + sym
+        if sym.startswith(("8", "9", "4")):
+            out = "BJ#" + sym
+        else:
+            out = ("SH#" if sym.startswith("6") else "SZ#") + sym
+        return out
+    out = "SZ#" + sym
+    return out
 
 
 def _offline_date_bounds(begin_date: Optional[str], end_date: Optional[str]) -> tuple[int, int]:
@@ -693,9 +874,9 @@ def _enrich_kline_all_offline_chip_non_triangle(
 
 def _strip_market_prefix(code: str) -> str:
     text = str(code or "").strip().lower()
-    if text.startswith("sh.") or text.startswith("sz."):
+    if text.startswith("sh.") or text.startswith("sz.") or text.startswith("bj."):
         return text.split(".", 1)[1]
-    if text.startswith("sh") or text.startswith("sz"):
+    if text.startswith("sh") or text.startswith("sz") or text.startswith("bj"):
         return text[2:]
     return text
 
@@ -3407,13 +3588,30 @@ class ChanStepper:
                 ]
 
         raw_master = self._replay_klus_master_raw or self._replay_klus_master or []
-        self.raw_kline_count = len(raw_master)
         self.data_form_mode = normalize_data_form_mode(data_form_mode)
+        self.raw_kline_count = len(raw_master)
         self.data_form_quantity = normalize_data_form_quantity(
             data_form_quantity if data_form_quantity is not None else self.raw_kline_count,
-            self.raw_kline_count,
+            self.raw_kline_count if self.raw_kline_count > 0 else 1,
         )
-        if self.data_form_mode == "quantity" and self.raw_kline_count > 0:
+        if is_data_form_tick_synth_mode(self.data_form_mode):
+            synth_master, synth_kline_all = build_tick_synth_session_data(
+                self.code,
+                self.k_type,
+                begin_date,
+                end_date,
+                self.data_form_mode,
+                self.data_form_quantity,
+            )
+            self._replay_klus_master_raw = copy.deepcopy(synth_master)
+            self._replay_klus_master = copy.deepcopy(synth_master)
+            self.kline_all = synth_kline_all
+            self.raw_kline_count = len(synth_master)
+            self.data_form_quantity = normalize_data_form_quantity(
+                self.data_form_quantity,
+                self.raw_kline_count if self.raw_kline_count > 0 else 1,
+            )
+        elif is_data_form_quantity_mode(self.data_form_mode) and self.raw_kline_count > 0:
             self._replay_klus_master = aggregate_klu_by_quantity(raw_master, self.data_form_quantity)
         else:
             self._replay_klus_master = copy.deepcopy(raw_master)
@@ -4327,7 +4525,7 @@ def bt_collect_fine_klus_for_coarse_tail(coarse: ChanStepper, fine: ChanStepper,
         return []
     t_prev = bt_klu_to_datetime(klus_c[-2]) if len(klus_c) >= 2 else None
     use_raw = (
-        getattr(fine, "data_form_mode", "traditional") == "quantity"
+        is_data_form_quantity_mode(getattr(fine, "data_form_mode", "traditional"))
         and fine._replay_klus_master_raw
         and len(fine._replay_klus_master_raw) <= 100_000
     )
@@ -5548,7 +5746,8 @@ HTML = r"""
       color: var(--legendText);
       box-shadow: 0 14px 36px rgba(2, 6, 23, 0.26);
       display: flex;
-      align-items: center;
+      flex-direction: column;
+      align-items: stretch;
       gap: 12px;
       font: 14px Consolas, monospace;
     }
@@ -5560,6 +5759,32 @@ HTML = r"""
       border-top-color: #2563eb;
       animation: spin 0.8s linear infinite;
       flex: 0 0 auto;
+    }
+    .globalLoading .loadingMain {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+      flex: 1;
+    }
+    .globalLoading .loadingText {
+      flex: 1;
+      min-width: 0;
+      word-break: break-word;
+    }
+    .globalLoading .loadingActions {
+      display: none;
+      margin-top: 10px;
+      text-align: right;
+    }
+    .globalLoading .loadingActions.show {
+      display: block;
+    }
+    .globalLoading .loadingActions button {
+      width: auto;
+      padding: 4px 10px;
+      font-size: 12px;
+      line-height: 1.4;
     }
     @keyframes spin {
       from { transform: rotate(0deg); }
@@ -6212,8 +6437,13 @@ HTML = r"""
       </div>
       <div id="globalLoading" class="globalLoading" aria-hidden="true">
         <div class="panel">
-          <div class="spinner"></div>
-          <div id="globalLoadingText">正在加载数据...</div>
+          <div class="loadingMain">
+            <div class="spinner"></div>
+            <div id="globalLoadingText" class="loadingText">正在加载数据...</div>
+          </div>
+          <div id="globalLoadingActions" class="loadingActions">
+            <button id="btnCancelInitLoad" type="button">终止加载</button>
+          </div>
         </div>
       </div>
 
@@ -6341,6 +6571,7 @@ let bspHistory = [];
 let bspHistoryKey = new Set();
 let sessionFinished = false;
 let stepInFlight = false;
+let initAbortController = null;
 let pendingBspPrompt = null;
 let crosshairEnabled = false;
 let crosshairX = null;
@@ -6778,7 +7009,14 @@ const DATA_FORM_DEFAULT = { mode: "traditional", quantity: 1 };
 let dataFormConfig = { ...DATA_FORM_DEFAULT };
 
 function normalizeDataFormMode(mode) {
-  return String(mode || "traditional").toLowerCase() === "quantity" ? "quantity" : "traditional";
+  const m = String(mode || "traditional").toLowerCase();
+  const allow = new Set(["traditional", "quantity", "tick_traditional", "tick_quantity"]);
+  return allow.has(m) ? m : "traditional";
+}
+
+function isQuantityDataFormMode(mode) {
+  const m = normalizeDataFormMode(mode);
+  return m === "quantity" || m === "tick_quantity";
 }
 
 function getRawKlineCount() {
@@ -6820,7 +7058,9 @@ const DEFAULT_SESSION_CONFIG = {
   kType2: "weekly",
   dualLayout: "vertical",
   dualSplitRatio1: 0.5,
-  activeChartId: "chart1"
+  activeChartId: "chart1",
+  dataFormMode: "traditional",
+  dataFormQuantity: 1,
 };
 let sessionConfig = ensureObject(
   safeJsonParse(storageGet("chan_session_config"), JSON.parse(JSON.stringify(DEFAULT_SESSION_CONFIG))),
@@ -7272,7 +7512,10 @@ function saveSessionConfig() {
     kType2: $("kType2") ? $("kType2").value : $("kType").value,
     dualLayout: $("dualLayout") ? $("dualLayout").value : "vertical",
     dualSplitRatio1: getDualSplitRatio1(),
-    activeChartId: String(lastPayload && lastPayload.active_chart_id ? lastPayload.active_chart_id : "chart1")
+    activeChartId: String(lastPayload && lastPayload.active_chart_id ? lastPayload.active_chart_id : "chart1"),
+    // 保存数据形式，支持传统/数量/分笔价格合成传统/分笔价格合成数量
+    dataFormMode: normalizeDataFormMode(dataFormConfig.mode),
+    dataFormQuantity: clampDataFormQuantity(dataFormConfig.quantity, dataFormConfig.quantity || 1),
   };
   storageSet("chan_session_config", JSON.stringify(sessionConfig));
 }
@@ -7299,6 +7542,11 @@ function loadSessionConfig() {
     }
     // No longer setting DOM for chip/biZs/segZs here as they are in chartConfig
     if (sessionConfig.stepN !== undefined) $("stepN").value = sessionConfig.stepN;
+    dataFormConfig.mode = normalizeDataFormMode(sessionConfig.dataFormMode);
+    dataFormConfig.quantity = clampDataFormQuantity(
+      sessionConfig.dataFormQuantity,
+      Number.isFinite(Number(sessionConfig.dataFormQuantity)) ? Number(sessionConfig.dataFormQuantity) : 1
+    );
   if ($("kType2Row")) $("kType2Row").style.display = ($("chartMode") && $("chartMode").value === "dual") ? "" : "none";
   if ($("dualLayoutRow")) $("dualLayoutRow").style.display = ($("chartMode") && $("chartMode").value === "dual") ? "" : "none";
   if ($("dualSplitRow")) $("dualSplitRow").style.display = ($("chartMode") && $("chartMode").value === "dual") ? "" : "none";
@@ -7736,9 +7984,11 @@ function renderSettingsForm() {
       items: [
         { label: "形式", subKey: "mode", type: "select", options: [
           { value: "traditional", label: "传统" },
-          { value: "quantity", label: "数量" }
-        ], tip: "传统：原始K线。数量：将加载会话后的整段K线按数量Q聚合后再进入缠论计算。" },
-        { label: "数量", subKey: "quantity", type: "number", min: 1, step: 1, tip: "数量模式下生效。范围为 1 到会话总K线数N；1=全合并，N=不聚合。" }
+          { value: "quantity", label: "数量" },
+          { value: "tick_traditional", label: "分笔价格合成传统" },
+          { value: "tick_quantity", label: "分笔价格合成数量" }
+        ], tip: "传统：保持原始K线；数量：按数量Q聚合原始K线；分笔价格合成传统：用TickData逐笔价格合成目标周期K线；分笔价格合成数量：先逐笔合成再按数量Q聚合。分笔合成两种模式的筹码均使用逐笔累加，不使用三角分摊。" },
+        { label: "数量", subKey: "quantity", type: "number", min: 1, step: 1, tip: "仅“数量/分笔价格合成数量”生效。范围 1~N（N=当前模式原始K线数）：1=全合并，N=不聚合。" }
       ]
     },
     {
@@ -8267,9 +8517,11 @@ function renderSettingsForm() {
            const select = itemDiv.querySelector("select");
            const loaded = !!(lastPayload && lastPayload.ready);
            if (!loaded) {
-             const qOpt = Array.from(select.options).find((o) => o.value === "quantity");
-             if (qOpt) qOpt.disabled = true;
-             if (String(select.value) === "quantity") select.value = "traditional";
+             const disableModes = new Set(["quantity", "tick_quantity"]);
+             Array.from(select.options).forEach((o) => {
+               if (disableModes.has(String(o.value))) o.disabled = true;
+             });
+             if (isQuantityDataFormMode(select.value)) select.value = "traditional";
            }
         }
         if (sec.key === "indicators" && item.subKey === "mainSlot") {
@@ -8743,6 +8995,8 @@ async function saveSettings() {
   });
   dataFormConfig.mode = nextDataFormMode;
   dataFormConfig.quantity = nextDataFormQuantity;
+  // 数据形式配置单独持久化，避免刷新后丢失选择
+  saveSessionConfig();
   const activeCfgKey = (lastPayload && String(lastPayload.active_chart_id) === "chart2") ? "chart2" : "chart1";
   chartConfigStore.perChart[activeCfgKey] = JSON.parse(JSON.stringify(chartConfig));
   chartConfigStore.shared.theme = chartConfig.theme;
@@ -8752,8 +9006,8 @@ async function saveSettings() {
   closeSettings();
   if (lastPayload && lastPayload.ready) {
     const n = getRawKlineCount();
-    if (dataFormConfig.mode === "quantity" && n <= 0) {
-      throw new Error("请先加载会话后再选择数量模式。");
+    if (isQuantityDataFormMode(dataFormConfig.mode) && n <= 0) {
+      throw new Error("请先加载会话后再使用数量类模式。");
     }
     const payload = await api("/api/reconfig", {
       chan_config: chanConfig,
@@ -8993,6 +9247,11 @@ function setGlobalLoading(visible, text) {
   const txt = $("globalLoadingText");
   if (txt && text) txt.textContent = text;
   overlay.classList.toggle("show", !!visible);
+  const actions = $("globalLoadingActions");
+  if (actions) {
+    const canCancel = !!(visible && initAbortController);
+    actions.classList.toggle("show", canCancel);
+  }
 }
 
 function hideGlobalLoading() {
@@ -12284,11 +12543,14 @@ function drawDualCharts(payload) {
   }
 }
 
-async function api(path, body, method = "POST") {
+async function api(path, body, method = "POST", extraOptions = null) {
   const options = {
     method,
     headers: {"Content-Type": "application/json"}
   };
+  if (extraOptions && typeof extraOptions === "object") {
+    if (extraOptions.signal) options.signal = extraOptions.signal;
+  }
   if (body !== null && body !== undefined) options.body = JSON.stringify(body);
   const res = await fetch(path, options);
   const data = await res.json();
@@ -12541,7 +12803,11 @@ $("btnInit").onclick = async () => {
   if (initBtn.disabled) return;
   let initSucceeded = false;
   const initBtnHtml = initBtn.innerHTML;
+  // 先创建取消控制器，再展示遮罩；否则首次 show 时看不到“终止加载”按钮
+  initAbortController = new AbortController();
   setGlobalLoading(true, "正在加载会话，首次加载历史数据可能需要约 30-40 秒，请稍候...");
+  // 再次同步一次动作区显示，确保灰屏时始终有退出入口
+  setGlobalLoading(true);
   setMsg("正在加载会话...");
   initBtn.disabled = true;
   initBtn.innerHTML = "加载中...";
@@ -12569,19 +12835,24 @@ $("btnInit").onclick = async () => {
     });
     let payload;
     try {
-      payload = await api("/api/init", buildInitBody({}));
+      payload = await api("/api/init", buildInitBody({}), "POST", { signal: initAbortController.signal });
     } catch (e) {
+      if (e && e.name === "AbortError") {
+        throw new Error("已手动终止加载");
+      }
       if (e.offlineConfirm && Number(e.httpStatus) === 409) {
         const oc = e.offlineConfirm;
         const tip = `${oc.display_code}使用${oc.failed_label}获取数据失败，原因为【${oc.reason_tag}】是否使用离线数据继续获取？`;
         if (confirmAndLog(tip)) {
-          payload = await api("/api/init", buildInitBody({ confirm_offline: true }));
+          if (!initAbortController || initAbortController.signal.aborted) throw new Error("已手动终止加载");
+          payload = await api("/api/init", buildInitBody({ confirm_offline: true }), "POST", { signal: initAbortController.signal });
         } else {
           let p = (systemConfig.dataSourcePriority || []).filter((x) => x !== "离线数据");
           if (!p.length) {
             p = DEFAULT_SYSTEM_CONFIG.dataSourcePriority.filter((x) => x !== "离线数据");
           }
-          payload = await api("/api/init", buildInitBody({ data_source_priority: p }));
+          if (!initAbortController || initAbortController.signal.aborted) throw new Error("已手动终止加载");
+          payload = await api("/api/init", buildInitBody({ data_source_priority: p }), "POST", { signal: initAbortController.signal });
         }
       } else {
         throw e;
@@ -12621,8 +12892,9 @@ $("btnInit").onclick = async () => {
     const srcHistLine = buildSessionSourceHistoryLine(payload);
     if (srcHistLine) appendMsgHistory(srcHistLine);
   } catch (e) {
-    setMsg("加载失败：" + e.message);
+    setMsg((e && e.message) ? ("加载失败：" + e.message) : "加载失败：未知错误");
   } finally {
+    initAbortController = null;
     if (!initSucceeded) {
       initBtn.disabled = false;
       initBtn.innerHTML = initBtnHtml;
@@ -12631,6 +12903,16 @@ $("btnInit").onclick = async () => {
     hideGlobalLoading();
   }
 };
+
+if ($("btnCancelInitLoad")) {
+  $("btnCancelInitLoad").onclick = () => {
+    if (!initAbortController) return;
+    initAbortController.abort();
+    setMsg("已请求终止加载，会话加载请求已取消。");
+    hideGlobalLoading();
+  };
+  markUiBound("btnCancelInitLoad");
+}
 
 $("btnStepPrev").onclick = async () => {
   if (!$("btnStepPrev") || $("btnStepPrev").disabled || stepInFlight) return;
