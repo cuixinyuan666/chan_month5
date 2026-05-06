@@ -3155,7 +3155,8 @@ class PaperAccount:
     cash: float
     position: int = 0
     avg_cost: float = 0.0
-    last_buy_step: Optional[int] = None
+    # 最近一次开仓步（多/空通用），用于与原有做多一致的 T+1 平仓限制
+    last_open_step: Optional[int] = None
     last_trade_step: Optional[int] = None
 
     def reset(self, initial_cash: float) -> None:
@@ -3163,12 +3164,12 @@ class PaperAccount:
         self.cash = initial_cash
         self.position = 0
         self.avg_cost = 0.0
-        self.last_buy_step = None
+        self.last_open_step = None
         self.last_trade_step = None
 
     def buy_with_all_cash(self, price: float, step_idx: int) -> dict[str, Any]:
-        if self.position > 0:
-            raise ValueError("当前已有持仓，需先卖出全部再买入。")
+        if self.position != 0:
+            raise ValueError("当前已有持仓，需先平仓后再开多。")
         if self.last_trade_step == step_idx:
             raise ValueError("每一步最多允许一笔成交。")
         hand_cost = price * 100
@@ -3181,16 +3182,16 @@ class PaperAccount:
         self.cash -= cost
         self.position = hands * 100
         self.avg_cost = price
-        self.last_buy_step = step_idx
+        self.last_open_step = step_idx
         self.last_trade_step = step_idx
         return {"hands": hands, "shares": self.position, "cost": round(cost, 2)}
 
     def can_sell(self, step_idx: int) -> bool:
         if self.position <= 0:
             return False
-        if self.last_buy_step is None:
+        if self.last_open_step is None:
             return False
-        return step_idx >= self.last_buy_step + 1
+        return step_idx >= self.last_open_step + 1
 
     def sell_all(self, price: float, step_idx: int) -> dict[str, Any]:
         if self.position <= 0:
@@ -3205,11 +3206,63 @@ class PaperAccount:
         self.cash += proceeds
         self.position = 0
         self.avg_cost = 0.0
-        self.last_buy_step = None
+        self.last_open_step = None
         self.last_trade_step = step_idx
         return {
             "shares": shares,
             "proceeds": round(proceeds, 2),
+            "pnl": round(pnl, 2),
+        }
+
+    def short_with_all_cash(self, price: float, step_idx: int) -> dict[str, Any]:
+        """做空开仓：逻辑与做多开仓一致（单持仓 + 每步仅一笔 + 全仓按整手）。"""
+        if self.position != 0:
+            raise ValueError("当前已有持仓，需先平仓后再开空。")
+        if self.last_trade_step == step_idx:
+            raise ValueError("每一步最多允许一笔成交。")
+        hand_cost = price * 100
+        hands = int(self.cash // hand_cost)
+        if hands <= 0:
+            raise ValueError("余额不足一手。")
+        shares = hands * 100
+        proceeds = shares * price
+        # 简化撮合：做空卖出所得计入现金，权益用 cash + position*price 统一核算
+        self.cash += proceeds
+        self.position = -shares
+        self.avg_cost = price
+        self.last_open_step = step_idx
+        self.last_trade_step = step_idx
+        return {
+            "shares": shares,
+            "proceeds": round(proceeds, 2),
+        }
+
+    def can_cover(self, step_idx: int) -> bool:
+        if self.position >= 0:
+            return False
+        if self.last_open_step is None:
+            return False
+        return step_idx >= self.last_open_step + 1
+
+    def cover_all(self, price: float, step_idx: int) -> dict[str, Any]:
+        """平空：逻辑与做多平仓一致（每步仅一笔 + T+1）。"""
+        if self.position >= 0:
+            return {"noop": True, "message": "当前无空仓。"}
+        if self.last_trade_step == step_idx:
+            raise ValueError("每一步最多允许一笔成交。")
+        if not self.can_cover(step_idx):
+            raise ValueError("受T+1限制，下一根K线后才能平空。")
+        shares = -self.position
+        cost = shares * price
+        pnl = (self.avg_cost - price) * shares
+        self.cash -= cost
+        self.position = 0
+        self.avg_cost = 0.0
+        self.last_open_step = None
+        self.last_trade_step = step_idx
+        return {
+            "shares": shares,
+            "cost": round(cost, 2),
             "pnl": round(pnl, 2),
         }
 
@@ -4140,10 +4193,12 @@ class AppState:
 
     def _build_trade_state(self) -> dict[str, Any]:
         history: list[dict[str, Any]] = []
+        short_history: list[dict[str, Any]] = []
         active: Optional[dict[str, Any]] = None
         for event in self.trade_events:
             if event.get("side") == "buy":
                 active = {
+                    "side": "long",
                     "buyX": event.get("x"),
                     "buyPrice": float(event.get("price", 0.0)),
                     "shares": int(event.get("shares", 0)),
@@ -4161,7 +4216,27 @@ class AppState:
                     }
                 )
                 active = None
-        return {"history": history, "active": active}
+            elif event.get("side") == "short":
+                active = {
+                    "side": "short",
+                    "shortX": event.get("x"),
+                    "shortPrice": float(event.get("price", 0.0)),
+                    "shares": int(event.get("shares", 0)),
+                    "coverX": None,
+                    "coverPrice": None,
+                }
+            elif event.get("side") == "cover" and active is not None:
+                short_history.append(
+                    {
+                        "shortX": active.get("shortX"),
+                        "shortPrice": active.get("shortPrice"),
+                        "shares": active.get("shares"),
+                        "coverX": event.get("x"),
+                        "coverPrice": float(event.get("price", 0.0)),
+                    }
+                )
+                active = None
+        return {"history": history, "short_history": short_history, "active": active}
 
     def _current_bsp_snapshot(self) -> list[dict[str, Any]]:
         stepper = self.get_active_stepper()
@@ -4329,6 +4404,10 @@ class AppState:
                     self.account.buy_with_all_cash(price, step_idx)
                 elif side == "sell":
                     self.account.sell_all(price, step_idx)
+                elif side == "short":
+                    self.account.short_with_all_cash(price, step_idx)
+                elif side == "cover":
+                    self.account.cover_all(price, step_idx)
             except Exception:
                 # Replay might fail if parameters changed drastically, but we try our best
                 pass
@@ -4452,6 +4531,7 @@ class AppState:
                 "avg_cost": round(self.account.avg_cost, 4),
                 "equity": round(self.account.equity(price or 0.0), 2),
                 "can_sell": bool(price is not None and self.account.can_sell(self.stepper.step_idx)),
+                "can_cover": bool(price is not None and self.account.can_cover(self.stepper.step_idx)),
             },
             "trades": self._build_trade_state(),
         }
@@ -6093,6 +6173,8 @@ HTML = r"""
           <button id="toolNone" type="button" class="active" data-tip="选择模式：可选中画线并使用“画线属性”进行编辑。">选择</button>
           <button id="toolHorizontalRay" type="button" data-tip="生成水平射线：点击图表在当前价位生成一条水平射线。">水平射线</button>
           <button id="toolBiRay" type="button" data-tip="笔端点射线：依次点击两个笔端点生成一条向右延伸的射线。再次点击可退出。">笔端点射线</button>
+          <button id="toolRatioLine" type="button" data-tip="比例线：依次点击两个笔端点，自动生成两端价差的 0.382 / 0.5 / 0.618 三条向右射线。再次点击可退出。">比例线</button>
+          <button id="toolParallelogram" type="button" data-tip="平行四边形：依次点击三个笔端点，以第三个端点为起点，生成一条平行于倒数第二笔的射线。再次点击可退出。">平行四边形</button>
           <button id="toolLineProps" type="button" data-tip="先使用“选择”并点击某条画线，再点此按钮编辑粗细/颜色/线型。">画线属性</button>
         </div>
       </div>
@@ -6182,14 +6264,15 @@ HTML = r"""
           <button id="btnFinish" data-tip="结束当前训练，并可选择导出本次交易总结文件。" disabled>结束训练</button>
           <button id="btnExit" data-tip="尝试关闭当前页面。浏览器可能会拦截关闭操作。">退出</button>
           <button id="btnStepPrev" data-tip="回退一根K线（重建到上一根）。快捷键可在系统配置中修改。" disabled>上一根K线 <small>(Shift+Space)</small></button>
-          <button id="btnStep" data-tip="步进到下一根K线。若当前K线命中买卖点或 1382 提示，会合并为一个弹窗提示。" disabled>下一根K线 <small>(Space)</small></button>
+          <button id="btnStep" data-tip="步进到下一根K线。若当前K线命中买卖点（1/1p/2/2s/3a/3b）或 1382 提示，会合并为一个弹窗提示。" disabled>下一根K线 <small>(Space)</small></button>
         </div>
         <div class="stepNRow">
           <label for="stepN">步进数量 N</label>
-          <span id="tipStepN" class="tip-icon" data-tip="设置连续步进或回退时使用的根数。遇到买卖点将以弹窗提示（自动消失）。"></span>
+          <span id="tipStepN" class="tip-icon" data-tip="设置连续步进或回退时使用的根数。连续步进遇到买卖点（1/1p/2/2s/3a/3b）或 1382 提示可自动中断，中断项可在图表显示设置里配置。"></span>
           <input id="stepN" type="number" min="1" step="1" value="5" />
           <div class="btnRow" style="width:100%; margin-top:4px;">
-            <button id="btnStepN" data-tip="按步进数量 N 连续推进，若中途遇到买卖点则自动停止。" disabled>步进 N 根 <small>(Ctrl+Alt+N)</small></button>
+            <button id="btnStepN" data-tip="按步进数量 N 连续推进，若中途遇到买卖点（1/1p/2/2s/3a/3b）或 1382 提示会按设置自动停止。" disabled>步进 N 根 <small>(Ctrl+Alt+N)</small></button>
+            <button id="btnStepInterrupt" data-tip="正在连续步进时可点击中断；当前根处理完后停止。" disabled>中断步进</button>
             <button id="btnBackN" data-tip="按步进数量 N 回退，会自动重建到更早的状态。" disabled>后退 N 根 <small>(Ctrl+Alt+M)</small></button>
           </div>
         </div>
@@ -6200,6 +6283,8 @@ HTML = r"""
         <div class="btnRow" style="margin-top:6px;">
           <button id="btnBuy" data-tip="按当前收盘价使用全部可用现金买入，遵循单持仓和每步最多一笔规则。" disabled>买入（全仓） <small>(PageUp)</small></button>
           <button id="btnSell" data-tip="按当前收盘价全部卖出，若受 T+1 约束则按钮不可用。" disabled>卖出（全量） <small>(PageDown)</small></button>
+          <button id="btnShort" data-tip="按当前收盘价使用全仓做空，遵循单持仓和每步最多一笔规则。" disabled>做空（全仓）</button>
+          <button id="btnCover" data-tip="按当前收盘价全部平空，若受 T+1 约束则按钮不可用。" disabled>平空（全量）</button>
         </div>
       </div>
       <div class="card">
@@ -6542,7 +6627,9 @@ let userRays = ensureArray(safeJsonParse(storageGet("chan_user_rays"), []), []);
 let userBiRays = ensureArray(safeJsonParse(storageGet("chan_user_bi_rays"), []), []);
 let userBiRaysDirty = false;
 let pendingBiRayPts = [];
-let activeTool = storageGet("chan_active_tool") || "none"; // none | horizontalRay | biRay
+let pendingRatioLinePts = [];
+let pendingParallelogramPts = [];
+let activeTool = storageGet("chan_active_tool") || "none"; // none | horizontalRay | biRay | ratioLine | parallelogram
 let selectedDrawing = null; // { type: "ray"|"biRay", index: number }
 let chartClickMoved = false;
 let chartMouseDownPos = null;
@@ -6571,6 +6658,7 @@ let bspHistory = [];
 let bspHistoryKey = new Set();
 let sessionFinished = false;
 let stepInFlight = false;
+let stepInterruptRequested = false;
 let initAbortController = null;
 let pendingBspPrompt = null;
 let crosshairEnabled = false;
@@ -6926,7 +7014,26 @@ const DEFAULT_CHART_CONFIG = {
     lineWidth: 1.2,
     lineStyle: "solid",
   },
-  toast: { fontSize: 16, fontWeight: "bold", speed: 3000, showBsp: true, showRhythm1382: true, showJudge: true },
+  toast: {
+    fontSize: 16,
+    fontWeight: "bold",
+    speed: 3000,
+    showBsp: true,
+    showRhythm1382: true,
+    showJudge: true,
+    interruptOnBsp: true,
+    interruptOnRhythm1382: true,
+    // 步进中断细分：按级别+买卖点类型
+    interruptBspBi1: true,
+    interruptBspBi2: true,
+    interruptBspBi2s: true,
+    interruptBspSeg1: true,
+    interruptBspSeg2: true,
+    interruptBspSeg2s: true,
+    interruptBspSegseg1: true,
+    interruptBspSegseg2: true,
+    interruptBspSegseg2s: true,
+  },
   legend: { fontSize: 12, fontWeight: "normal", color: "#0f172a" },
   userRay: { color: "#f97316", width: 1.5, dash: [8, 4], fontSize: 12 }
 };
@@ -6968,6 +7075,17 @@ function migrateChartConfig(cfg) {
   if (typeof next.toast.showBsp !== "boolean") next.toast.showBsp = true;
   if (typeof next.toast.showRhythm1382 !== "boolean") next.toast.showRhythm1382 = true;
   if (typeof next.toast.showJudge !== "boolean") next.toast.showJudge = true;
+  if (typeof next.toast.interruptOnBsp !== "boolean") next.toast.interruptOnBsp = true;
+  if (typeof next.toast.interruptOnRhythm1382 !== "boolean") next.toast.interruptOnRhythm1382 = true;
+  if (typeof next.toast.interruptBspBi1 !== "boolean") next.toast.interruptBspBi1 = true;
+  if (typeof next.toast.interruptBspBi2 !== "boolean") next.toast.interruptBspBi2 = true;
+  if (typeof next.toast.interruptBspBi2s !== "boolean") next.toast.interruptBspBi2s = true;
+  if (typeof next.toast.interruptBspSeg1 !== "boolean") next.toast.interruptBspSeg1 = true;
+  if (typeof next.toast.interruptBspSeg2 !== "boolean") next.toast.interruptBspSeg2 = true;
+  if (typeof next.toast.interruptBspSeg2s !== "boolean") next.toast.interruptBspSeg2s = true;
+  if (typeof next.toast.interruptBspSegseg1 !== "boolean") next.toast.interruptBspSegseg1 = true;
+  if (typeof next.toast.interruptBspSegseg2 !== "boolean") next.toast.interruptBspSegseg2 = true;
+  if (typeof next.toast.interruptBspSegseg2s !== "boolean") next.toast.interruptBspSegseg2s = true;
   return next;
 }
 
@@ -7075,11 +7193,13 @@ const SHORTCUT_ACTIONS = [
   { id: "initSession", label: "加载会话", description: "根据当前代码、日期区间和初始资金加载复盘会话。", defaults: ["ctrl+i"], contexts: ["global"], buttonId: "btnInit" },
   { id: "resetSession", label: "重新训练", description: "清空当前会话并恢复到可重新配置的初始状态。", defaults: ["ctrl+r"], contexts: ["global"], buttonId: "btnReset" },
   { id: "prevBar", label: "回退一根K线", description: "重建到上一根 K 线（与后退 N 根 N=1 相同）。", defaults: ["shift+space"], contexts: ["global"], buttonId: "btnStepPrev" },
-  { id: "nextBar", label: "步进到下一根K线", description: "步进到下一根 K 线；若当前 K 线命中买卖点或 1382，会合并为一个弹窗提示。", defaults: ["space"], contexts: ["global"], buttonId: "btnStep" },
-  { id: "stepForwardN", label: "步进 N 根", description: "按步进数量 N 连续推进，遇到买卖点自动停止，并合并当根提示。", defaults: ["ctrl+alt+n"], contexts: ["global"], buttonId: "btnStepN" },
+  { id: "nextBar", label: "步进到下一根K线", description: "步进到下一根 K 线；若当前 K 线命中买卖点（1/1p/2/2s/3a/3b）或 1382，会合并为一个弹窗提示。", defaults: ["space"], contexts: ["global"], buttonId: "btnStep" },
+  { id: "stepForwardN", label: "步进 N 根", description: "按步进数量 N 连续推进，遇到买卖点（1/1p/2/2s/3a/3b）或 1382 可按设置自动停止，并合并当根提示。", defaults: ["ctrl+alt+n"], contexts: ["global"], buttonId: "btnStepN" },
   { id: "stepBackwardN", label: "后退 N 根", description: "按步进数量 N 回退，会自动重建到更早状态。", defaults: ["ctrl+alt+m"], contexts: ["global"], buttonId: "btnBackN" },
   { id: "buyAll", label: "买入（全仓）", description: "按当前收盘价使用全部可用现金买入。", defaults: ["pageup"], contexts: ["global"], buttonId: "btnBuy" },
   { id: "sellAll", label: "卖出（全量）", description: "按当前收盘价全部卖出。", defaults: ["pagedown"], contexts: ["global"], buttonId: "btnSell" },
+  { id: "shortAll", label: "做空（全仓）", description: "按当前收盘价使用全部可用现金做空。", defaults: [], contexts: ["global"], buttonId: "btnShort" },
+  { id: "coverAll", label: "平空（全量）", description: "按当前收盘价全部平空。", defaults: [], contexts: ["global"], buttonId: "btnCover" },
   { id: "centerLatest", label: "居中到最新K线", description: "将视图快速居中到最新一根 K 线。", defaults: ["c", "center"], contexts: ["global"] },
   { id: "drawHorizontalRay", label: "生成水平射线", description: "在当前十字光标价位生成一条水平射线。", defaults: ["ctrl+enter"], contexts: ["global"] },
   { id: "zoomYIn", label: "纵向放大", description: "放大图表纵轴缩放比例。", defaults: ["ctrl+alt+arrowup"], contexts: ["global"] },
@@ -7418,6 +7538,8 @@ function updateShortcutUI() {
   setButtonShortcutLabel($("btnBackN"), "后退 N 根", "stepBackwardN");
   setButtonShortcutLabel($("btnBuy"), "买入（全仓）", "buyAll");
   setButtonShortcutLabel($("btnSell"), "卖出（全量）", "sellAll");
+  setButtonShortcutLabel($("btnShort"), "做空（全仓）", "shortAll");
+  setButtonShortcutLabel($("btnCover"), "平空（全量）", "coverAll");
   $("btnChanSettingsSave").textContent = `保存并应用${getActionShortcutDisplay("saveChanSettings") ? ` (${getActionShortcutDisplay("saveChanSettings")})` : ""}`;
   $("btnSettingsSave").textContent = `保存并应用${getActionShortcutDisplay("saveChartSettings") ? ` (${getActionShortcutDisplay("saveChartSettings")})` : ""}`;
   $("btnSystemSettingsSave").textContent = `保存并应用${getActionShortcutDisplay("saveSystemSettings") ? ` (${getActionShortcutDisplay("saveSystemSettings")})` : ""}`;
@@ -7433,12 +7555,17 @@ function updateShortcutUI() {
   if ($("btnStepPrev")) {
     $("btnStepPrev").setAttribute("data-tip", `回退一根K线（服务端重建）。快捷键：${getActionShortcutDisplay("prevBar") || "未设置"}。`);
   }
-  $("btnStep").setAttribute("data-tip", `步进到下一根K线。若当前K线命中买卖点或 1382 提示，会合并为一个弹窗提示。快捷键：${getActionShortcutDisplay("nextBar") || "未设置"}。`);
-  $("btnStepN").setAttribute("data-tip", `按步进数量 N 连续推进，若中途遇到买卖点则自动停止。快捷键：${getActionShortcutDisplay("stepForwardN") || "未设置"}。`);
+  $("btnStep").setAttribute("data-tip", `步进到下一根K线。若当前K线命中买卖点（1/1p/2/2s/3a/3b）或 1382 提示，会合并为一个弹窗提示。快捷键：${getActionShortcutDisplay("nextBar") || "未设置"}。`);
+  $("btnStepN").setAttribute("data-tip", `按步进数量 N 连续推进，若中途遇到买卖点（1/1p/2/2s/3a/3b）或 1382 提示会按设置自动停止。快捷键：${getActionShortcutDisplay("stepForwardN") || "未设置"}。`);
+  if ($("btnStepInterrupt")) {
+    $("btnStepInterrupt").setAttribute("data-tip", "正在连续步进时可点击中断；当前根处理完后停止。");
+  }
   $("btnBackN").setAttribute("data-tip", `按步进数量 N 回退，会自动重建到更早的状态。快捷键：${getActionShortcutDisplay("stepBackwardN") || "未设置"}。`);
   $("btnBuy").setAttribute("data-tip", `按当前收盘价使用全部可用现金买入，遵循单持仓和每步最多一笔规则。快捷键：${getActionShortcutDisplay("buyAll") || "未设置"}。`);
   $("btnSell").setAttribute("data-tip", `按当前收盘价全部卖出，若受 T+1 约束则按钮不可用。快捷键：${getActionShortcutDisplay("sellAll") || "未设置"}。`);
-  $("tipStepN").setAttribute("data-tip", `设置连续步进或回退时使用的根数。步进快捷键：${getActionShortcutDisplay("stepForwardN") || "未设置"}；回退快捷键：${getActionShortcutDisplay("stepBackwardN") || "未设置"}。`);
+  $("btnShort").setAttribute("data-tip", `按当前收盘价使用全仓做空，遵循单持仓和每步最多一笔规则。快捷键：${getActionShortcutDisplay("shortAll") || "未设置"}。`);
+  $("btnCover").setAttribute("data-tip", `按当前收盘价全部平空，若受 T+1 约束则按钮不可用。快捷键：${getActionShortcutDisplay("coverAll") || "未设置"}。`);
+  $("tipStepN").setAttribute("data-tip", `设置连续步进或回退时使用的根数。连续步进遇到买卖点（1/1p/2/2s/3a/3b）或 1382 可自动中断。步进快捷键：${getActionShortcutDisplay("stepForwardN") || "未设置"}；回退快捷键：${getActionShortcutDisplay("stepBackwardN") || "未设置"}。`);
   if ($("btnJudgeBsp")) {
     setButtonShortcutLabel($("btnJudgeBsp"), "检查买卖点", "checkBspJudge");
     $("btnJudgeBsp").setAttribute("data-tip", `手动检查笔/段/2段买卖点（仅手动判定模式下可用）。快捷键：${getActionShortcutDisplay("checkBspJudge") || "未设置"}。`);
@@ -8464,7 +8591,18 @@ function renderSettingsForm() {
         { label: "消失速度(ms)", subKey: "speed", type: "number", min: 500, max: 10000, step: 100 },
         { label: "显示买卖点弹窗", subKey: "showBsp", type: "checkbox", tip: "勾选后显示买卖点（分型/笔/段/2段）相关弹窗。" },
         { label: "显示1382弹窗", subKey: "showRhythm1382", type: "checkbox", tip: "勾选后显示 1382 节奏提示弹窗。" },
-        { label: "显示判定统计弹窗", subKey: "showJudge", type: "checkbox", tip: "勾选后显示买卖点 ×/✓ 判定统计弹窗。" }
+        { label: "显示判定统计弹窗", subKey: "showJudge", type: "checkbox", tip: "勾选后显示买卖点 ×/✓ 判定统计弹窗。" },
+        { label: "步进N遇买卖点中断", subKey: "interruptOnBsp", type: "checkbox", tip: "勾选后，步进 N 根遇到买卖点会自动停止；买卖点类型包含 1/1p/2/2s/3a/3b。" },
+        { label: "步进N遇1382中断", subKey: "interruptOnRhythm1382", type: "checkbox", tip: "勾选后，步进 N 根遇到 1.382 节奏提示（含各层级显示）会自动停止。" },
+        { label: "中断细分：笔1", subKey: "interruptBspBi1", type: "checkbox", tip: "勾选后，步进N遇到“笔1”时中断。" },
+        { label: "中断细分：笔2", subKey: "interruptBspBi2", type: "checkbox", tip: "勾选后，步进N遇到“笔2”时中断。" },
+        { label: "中断细分：笔2s", subKey: "interruptBspBi2s", type: "checkbox", tip: "勾选后，步进N遇到“笔2s”时中断。" },
+        { label: "中断细分：段1", subKey: "interruptBspSeg1", type: "checkbox", tip: "勾选后，步进N遇到“段1”时中断。" },
+        { label: "中断细分：段2", subKey: "interruptBspSeg2", type: "checkbox", tip: "勾选后，步进N遇到“段2”时中断。" },
+        { label: "中断细分：段2s", subKey: "interruptBspSeg2s", type: "checkbox", tip: "勾选后，步进N遇到“段2s”时中断。" },
+        { label: "中断细分：2段1", subKey: "interruptBspSegseg1", type: "checkbox", tip: "勾选后，步进N遇到“2段1”时中断。" },
+        { label: "中断细分：2段2", subKey: "interruptBspSegseg2", type: "checkbox", tip: "勾选后，步进N遇到“2段2”时中断。" },
+        { label: "中断细分：2段2s", subKey: "interruptBspSegseg2s", type: "checkbox", tip: "勾选后，步进N遇到“2段2s”时中断。" }
       ]
     }
   ];
@@ -9112,11 +9250,50 @@ function hideFloatingTip() {
 }
 
 function initTooltips() {
+  // data-tip 专用：优先贴近按钮上下方，且尽量避开 K 线画布区域
+  const showTooltipNearTarget = (target, text) => {
+    const tipContent = $("tipContent");
+    if (!tipContent || !text || !target) return;
+    tipContent.textContent = text;
+    tipContent.style.display = "block";
+    const tipRect = tipContent.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    const chartRect = canvas ? canvas.getBoundingClientRect() : null;
+    const gap = 10;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const minEdge = 8;
+    const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+    let left = targetRect.left + (targetRect.width - tipRect.width) / 2;
+    left = clamp(left, minEdge, Math.max(minEdge, vw - tipRect.width - minEdge));
+    const overlapWithChart = (top) => {
+      if (!chartRect) return false;
+      const right = left + tipRect.width;
+      const bottom = top + tipRect.height;
+      return !(right <= chartRect.left || left >= chartRect.right || bottom <= chartRect.top || top >= chartRect.bottom);
+    };
+    const topAbove = targetRect.top - tipRect.height - gap;
+    const topBelow = targetRect.bottom + gap;
+    const aboveOk = topAbove >= minEdge;
+    const belowOk = topBelow + tipRect.height <= vh - minEdge;
+    const aboveClear = aboveOk && !overlapWithChart(topAbove);
+    const belowClear = belowOk && !overlapWithChart(topBelow);
+    let top = topBelow;
+    if (aboveClear) top = topAbove;
+    else if (belowClear) top = topBelow;
+    else if (aboveOk) top = topAbove;
+    else if (belowOk) top = topBelow;
+    else {
+      // 极端空间不足时兜底：继续贴近控件，按窗口边界裁剪
+      top = clamp(topBelow, minEdge, Math.max(minEdge, vh - tipRect.height - minEdge));
+    }
+    tipContent.style.top = `${top}px`;
+    tipContent.style.left = `${left}px`;
+  };
   const showTooltip = (target) => {
     const text = target.getAttribute("data-tip");
     if (!text) return;
-    const rect = target.getBoundingClientRect();
-    showFloatingTip(text, rect.left + rect.width, rect.top + rect.height / 2, rect);
+    showTooltipNearTarget(target, text);
   };
   const hideTooltip = () => {
     hideFloatingTip();
@@ -9263,6 +9440,7 @@ function syncStepButtonState() {
   $("btnStep").disabled = disabled;
   $("btnStepN").disabled = disabled;
   $("btnBackN").disabled = !lastPayload || !lastPayload.ready || stepInFlight;
+  if ($("btnStepInterrupt")) $("btnStepInterrupt").disabled = !stepInFlight;
   const si = lastPayload && Number.isFinite(Number(lastPayload.step_idx)) ? Number(lastPayload.step_idx) : -1;
   if ($("btnStepPrev")) $("btnStepPrev").disabled = disabled || si <= 0;
   // 查看数据：与会话绑定，训练结束后仍可查看；步进进行中不禁止（只读）
@@ -9280,7 +9458,9 @@ function getStepNValue() {
 
 function syncTradesFromPayload(payload) {
   if (!payload || !payload.trades) return;
-  tradeHistory = Array.isArray(payload.trades.history) ? payload.trades.history : [];
+  const longHist = Array.isArray(payload.trades.history) ? payload.trades.history : [];
+  const shortHist = Array.isArray(payload.trades.short_history) ? payload.trades.short_history : [];
+  tradeHistory = longHist.concat(shortHist);
   activeTrade = payload.trades.active || null;
 }
 
@@ -9756,7 +9936,7 @@ document.addEventListener("fullscreenchange", () => {
 });
 
 function updateToolboxUI() {
-  const ids = ["toolNone", "toolHorizontalRay", "toolBiRay"];
+  const ids = ["toolNone", "toolHorizontalRay", "toolBiRay", "toolRatioLine", "toolParallelogram"];
   ids.forEach((id) => {
     const el = $(id);
     if (!el) return;
@@ -9764,14 +9944,18 @@ function updateToolboxUI() {
   });
   if (activeTool === "horizontalRay" && $("toolHorizontalRay")) $("toolHorizontalRay").classList.add("active");
   else if (activeTool === "biRay" && $("toolBiRay")) $("toolBiRay").classList.add("active");
+  else if (activeTool === "ratioLine" && $("toolRatioLine")) $("toolRatioLine").classList.add("active");
+  else if (activeTool === "parallelogram" && $("toolParallelogram")) $("toolParallelogram").classList.add("active");
   else if ($("toolNone")) $("toolNone").classList.add("active");
 }
 
 function setActiveTool(next) {
-  const v = next === "horizontalRay" || next === "biRay" ? next : "none";
+  const v = next === "horizontalRay" || next === "biRay" || next === "ratioLine" || next === "parallelogram" ? next : "none";
   activeTool = v;
   storageSet("chan_active_tool", v);
   if (v !== "biRay") pendingBiRayPts = [];
+  if (v !== "ratioLine") pendingRatioLinePts = [];
+  if (v !== "parallelogram") pendingParallelogramPts = [];
   if (v !== "none") selectedDrawing = null;
   updateToolboxUI();
   if (lastPayload && lastPayload.ready) draw(lastPayload.chart);
@@ -9788,6 +9972,14 @@ if ($("toolHorizontalRay")) {
 if ($("toolBiRay")) {
   $("toolBiRay").addEventListener("click", () => setActiveTool(activeTool === "biRay" ? "none" : "biRay"));
   markUiBound("toolBiRay");
+}
+if ($("toolRatioLine")) {
+  $("toolRatioLine").addEventListener("click", () => setActiveTool(activeTool === "ratioLine" ? "none" : "ratioLine"));
+  markUiBound("toolRatioLine");
+}
+if ($("toolParallelogram")) {
+  $("toolParallelogram").addEventListener("click", () => setActiveTool(activeTool === "parallelogram" ? "none" : "parallelogram"));
+  markUiBound("toolParallelogram");
 }
 updateToolboxUI();
 
@@ -9942,6 +10134,8 @@ canvas.addEventListener("click", (e) => {
 
   const wantHorizontalRay = !!pe.ctrlKey || activeTool === "horizontalRay";
   const wantBiRay = !!pe.shiftKey || activeTool === "biRay";
+  const wantRatioLine = activeTool === "ratioLine";
+  const wantParallelogram = activeTool === "parallelogram";
 
   // Ctrl + Left Click (or toolbox): Horizontal Ray
   if (wantHorizontalRay) {
@@ -9981,12 +10175,86 @@ canvas.addEventListener("click", (e) => {
     redrawCurrentPayload();
     return;
   }
+  // 比例线工具：依次点 2 个笔端点，生成 0.382 / 0.5 / 0.618 三条向右射线
+  if (wantRatioLine) {
+    const pt = getNearestBiEndpoint(lastPayload.chart, s, x, y, 12);
+    if (!pt) return;
+    pendingRatioLinePts.push(pt);
+    if (pendingRatioLinePts.length === 1) {
+      setMsg("已选择端点1，请再选择端点2生成比例线。");
+      redrawCurrentPayload();
+      return;
+    }
+    const p1 = pendingRatioLinePts[0];
+    const p2 = pendingRatioLinePts[1];
+    pendingRatioLinePts = [];
+    const xStart = Math.max(Number(p1.x), Number(p2.x));
+    const low = Math.min(Number(p1.y), Number(p2.y));
+    const high = Math.max(Number(p1.y), Number(p2.y));
+    const span = high - low;
+    if (!Number.isFinite(xStart) || !Number.isFinite(span) || span <= 0) {
+      setMsg("两个端点价格相同或无效，无法生成比例线。");
+      return;
+    }
+    [0.382, 0.5, 0.618].forEach((ratio) => {
+      const yLevel = low + span * ratio;
+      userBiRays.push({
+        x1: xStart,
+        y1: yLevel,
+        x2: xStart + 1,
+        y2: yLevel,
+        kind: "ratioLine",
+        ratio,
+      });
+    });
+    userBiRaysDirty = true;
+    setMsg("已生成比例线（0.382 / 0.5 / 0.618）→");
+    redrawCurrentPayload();
+    return;
+  }
+  // 平行四边形工具：依次点 3 个笔端点，生成从第3点出发、平行于前一笔(p1->p2)的射线
+  if (wantParallelogram) {
+    const pt = getNearestBiEndpoint(lastPayload.chart, s, x, y, 12);
+    if (!pt) return;
+    pendingParallelogramPts.push(pt);
+    if (pendingParallelogramPts.length === 1) {
+      setMsg("已选择端点1，请继续选择端点2、端点3。");
+      redrawCurrentPayload();
+      return;
+    }
+    if (pendingParallelogramPts.length === 2) {
+      setMsg("已选择端点2，请再选择端点3。");
+      redrawCurrentPayload();
+      return;
+    }
+    const p1 = pendingParallelogramPts[0];
+    const p2 = pendingParallelogramPts[1];
+    const p3 = pendingParallelogramPts[2];
+    pendingParallelogramPts = [];
+    const dx = Number(p2.x) - Number(p1.x);
+    const dy = Number(p2.y) - Number(p1.y);
+    if (!Number.isFinite(dx) || !Number.isFinite(dy) || dx === 0) {
+      setMsg("倒数第二笔水平跨度为 0，无法生成平行射线。");
+      return;
+    }
+    userBiRays.push({
+      x1: Number(p3.x),
+      y1: Number(p3.y),
+      x2: Number(p3.x) + dx,
+      y2: Number(p3.y) + dy,
+      kind: "parallelogram",
+    });
+    userBiRaysDirty = true;
+    setMsg("已生成平行四边形射线 →");
+    redrawCurrentPayload();
+    return;
+  }
 
   if (activeTool === "none") {
     const picked = pickDrawingAt(s, x, y);
     if (picked) {
       selectedDrawing = picked;
-      setMsg(picked.type === "biRay" ? "已选中笔端点射线，可点击“画线属性”编辑。" : "已选中水平射线，可点击“画线属性”编辑。");
+      setMsg(picked.type === "biRay" ? "已选中笔端点/比例/平行射线，可点击“画线属性”编辑。" : "已选中水平射线，可点击“画线属性”编辑。");
       redrawCurrentPayload();
       return;
     }
@@ -10041,6 +10309,14 @@ function executeShortcutAction(actionId) {
     case "sellAll":
       if ($("btnSell").disabled) return false;
       $("btnSell").click();
+      return true;
+    case "shortAll":
+      if ($("btnShort").disabled) return false;
+      $("btnShort").click();
+      return true;
+    case "coverAll":
+      if ($("btnCover").disabled) return false;
+      $("btnCover").click();
       return true;
     case "centerLatest":
       centerLatestK();
@@ -10340,6 +10616,48 @@ function getRhythmNoticeTexts(payload) {
   return Array.from(new Set(hits
     .map((hit) => String(hit && (hit.detail || hit.display_label || "1382")).trim())
     .filter(Boolean)));
+}
+
+function shouldInterruptStepOnBsp() {
+  const toastCfg = chartConfig && chartConfig.toast ? chartConfig.toast : DEFAULT_CHART_CONFIG.toast;
+  return toastCfg.interruptOnBsp !== false;
+}
+
+function _normalizeBspTypeLabel(rawLabel) {
+  const s = String(rawLabel || "").toLowerCase();
+  if (s.includes("2s")) return "2s";
+  if (s.includes("2")) return "2";
+  if (s.includes("1")) return "1";
+  return "";
+}
+
+function _interruptToastKeyByBsp(level, typeLabel) {
+  const lv = String(level || "").toLowerCase();
+  const tp = String(typeLabel || "");
+  if (!tp) return "";
+  if (lv === "bi") return `interruptBspBi${tp}`;
+  if (lv === "seg") return `interruptBspSeg${tp}`;
+  if (lv === "segseg") return `interruptBspSegseg${tp}`;
+  return "";
+}
+
+function shouldInterruptStepOnBspFine(hits) {
+  if (!shouldInterruptStepOnBsp()) return false;
+  const toastCfg = chartConfig && chartConfig.toast ? chartConfig.toast : DEFAULT_CHART_CONFIG.toast;
+  const arr = Array.isArray(hits) ? hits : [];
+  for (const item of arr) {
+    if (!item) continue;
+    const tp = _normalizeBspTypeLabel(item.label);
+    const key = _interruptToastKeyByBsp(item.level, tp);
+    if (!key) continue;
+    if (toastCfg[key] !== false) return true;
+  }
+  return false;
+}
+
+function shouldInterruptStepOnRhythm1382() {
+  const toastCfg = chartConfig && chartConfig.toast ? chartConfig.toast : DEFAULT_CHART_CONFIG.toast;
+  return toastCfg.interruptOnRhythm1382 !== false;
 }
 
 function shouldShowToastCategory(category) {
@@ -10733,7 +11051,9 @@ function setState(p) {
   
   // Fix precision: very small P/L should be 0
   const totalPnl = Math.abs(a.equity - a.initial_cash) < 0.005 ? 0 : (a.equity - a.initial_cash);
-  const posPnlRaw = a.position > 0 && price !== null ? (price - a.avg_cost) * a.position : 0;
+  let posPnlRaw = 0;
+  if (price !== null && a.position > 0) posPnlRaw = (price - a.avg_cost) * a.position;
+  else if (price !== null && a.position < 0) posPnlRaw = (a.avg_cost - price) * Math.abs(a.position);
   const posPnl = Math.abs(posPnlRaw) < 0.005 ? 0 : posPnlRaw;
 
   setText("st_cash", a.cash.toFixed(2) + " 元");
@@ -10758,17 +11078,18 @@ function setState(p) {
 
 function updateTradeStatusOverlay(payload) {
   const overlay = $("tradeStatusOverlay");
-  if (!payload || !payload.ready || !payload.account || payload.account.position <= 0) {
+  if (!payload || !payload.ready || !payload.account || payload.account.position === 0) {
     overlay.style.display = "none";
     return;
   }
 
   const a = payload.account;
   const price = payload.price;
-  const buyX = activeTrade ? activeTrade.buyX : null;
+  const isLong = a.position > 0;
+  const openX = activeTrade ? (isLong ? activeTrade.buyX : activeTrade.shortX) : null;
   const lastX = payload.chart.kline[payload.chart.kline.length - 1].x;
-  const holdBars = buyX !== null ? (lastX - buyX) : 0;
-  const pnlRaw = (price - a.avg_cost) * a.position;
+  const holdBars = openX !== null ? (lastX - openX) : 0;
+  const pnlRaw = isLong ? ((price - a.avg_cost) * a.position) : ((a.avg_cost - price) * Math.abs(a.position));
   const pnl = Math.abs(pnlRaw) < 0.005 ? 0 : pnlRaw;
   const pnlPct = (a.avg_cost > 0 && a.position > 0) ? (pnl / (a.avg_cost * a.position)) * 100 : 0;
   const totalPnlRaw = a.equity - a.initial_cash;
@@ -10795,7 +11116,7 @@ function updateTradeStatusOverlay(payload) {
 
   setText("ts_hold_bars", `${holdBars} 根`);
   setText("ts_pos", `${a.position} 股`);
-  setText("ts_buy_price", a.avg_cost.toFixed(4));
+  setText("ts_buy_price", `${isLong ? "多" : "空"}@${a.avg_cost.toFixed(4)}`);
   setText("ts_curr_price", price.toFixed(4));
   
   const pnlEl = $("ts_pnl");
@@ -11712,11 +12033,18 @@ function drawTradeBands(s, chart) {
     if (tr.buyX != null && tr.sellX != null) {
       fillHoldBackground(tr.buyX, tr.sellX, getCfgColor(chartConfig.trade.rangeFillSell), 0.11);
       fillPnlBand(tr.buyX, tr.sellX, tr.buyPrice, tr.sellPrice);
+    } else if (tr.shortX != null && tr.coverX != null) {
+      fillHoldBackground(tr.shortX, tr.coverX, getCfgColor(chartConfig.trade.rangeFillSell), 0.11);
+      // 做空盈亏区间用反向价格关系（shortPrice 与 coverPrice）
+      fillPnlBand(tr.shortX, tr.coverX, tr.coverPrice, tr.shortPrice);
     }
   }
   if (lastPayload.account.position > 0 && activeTrade && activeTrade.buyX != null) {
     fillHoldBackground(activeTrade.buyX, lastX, getCfgColor(chartConfig.trade.rangeFillBuy), 0.11);
     fillPnlBand(activeTrade.buyX, lastX, activeTrade.buyPrice, lastPayload.price);
+  } else if (lastPayload.account.position < 0 && activeTrade && activeTrade.shortX != null) {
+    fillHoldBackground(activeTrade.shortX, lastX, getCfgColor(chartConfig.trade.rangeFillBuy), 0.11);
+    fillPnlBand(activeTrade.shortX, lastX, lastPayload.price, activeTrade.shortPrice);
   }
 }
 
@@ -11747,9 +12075,13 @@ function drawTradeMarkers(s, chart) {
   for (const tr of tradeHistory) {
     if (tr.buyX != null) mark(tr.buyX, buyC, "买");
     if (tr.sellX != null) mark(tr.sellX, sellC, "卖");
+    if (tr.shortX != null) mark(tr.shortX, sellC, "空");
+    if (tr.coverX != null) mark(tr.coverX, buyC, "平");
   }
   if (lastPayload.account.position > 0 && activeTrade && activeTrade.buyX != null) {
     mark(activeTrade.buyX, buyC, "买");
+  } else if (lastPayload.account.position < 0 && activeTrade && activeTrade.shortX != null) {
+    mark(activeTrade.shortX, sellC, "空");
   }
 }
 
@@ -11775,10 +12107,16 @@ function drawTradeRays(s) {
   for (const tr of tradeHistory) {
     drawRay(tr.buyX, tr.buyPrice, tr.sellX, rayBuy, chartConfig.trade.buyCloseLineStyle || "solid");
     drawRay(tr.sellX, tr.sellPrice, tr.buyX, raySell, chartConfig.trade.sellCloseLineStyle || "dashed");
+    drawRay(tr.shortX, tr.shortPrice, tr.coverX, raySell, chartConfig.trade.sellCloseLineStyle || "dashed");
+    drawRay(tr.coverX, tr.coverPrice, tr.shortX, rayBuy, chartConfig.trade.buyCloseLineStyle || "solid");
   }
   if (activeTrade && activeTrade.buyX != null && activeTrade.buyPrice != null) {
     const rightTo = Math.max(s.xMax, activeTrade.buyX + 1);
     drawRay(activeTrade.buyX, activeTrade.buyPrice, rightTo, rayBuy, chartConfig.trade.buyCloseLineStyle || "solid");
+  }
+  if (activeTrade && activeTrade.shortX != null && activeTrade.shortPrice != null) {
+    const rightTo = Math.max(s.xMax, activeTrade.shortX + 1);
+    drawRay(activeTrade.shortX, activeTrade.shortPrice, rightTo, raySell, chartConfig.trade.sellCloseLineStyle || "dashed");
   }
 }
 
@@ -12173,6 +12511,14 @@ function drawUserBiRays(s, chart) {
     ctx.moveTo(p1x, p1y);
     ctx.lineTo(p2x, p2y);
     ctx.stroke();
+    if (r && r.kind === "ratioLine" && Number.isFinite(Number(r.ratio))) {
+      ctx.save();
+      ctx.setLineDash([]);
+      ctx.fillStyle = getRayLineColor(r);
+      ctx.font = `bold ${Math.max(10, chartConfig.userRay.fontSize - 1)}px sans-serif`;
+      ctx.fillText(`${Number(r.ratio).toFixed(3)}`, p1x + 4, p1y - 4);
+      ctx.restore();
+    }
     if (selectedDrawing && selectedDrawing.type === "biRay" && selectedDrawing.index === idx) {
       ctx.save();
       ctx.setLineDash([]);
@@ -12199,19 +12545,25 @@ function drawUserBiRays(s, chart) {
 }
 
 function drawPendingBiEndpointCircle(s) {
-  if (!pendingBiRayPts || pendingBiRayPts.length !== 1) return;
-  const pt = pendingBiRayPts[0];
-  if (!pt || !Number.isFinite(pt.x) || !Number.isFinite(pt.y)) return;
-  const xp = s.x(pt.x);
-  const yp = s.y(pt.y);
-  if (!Number.isFinite(xp) || !Number.isFinite(yp)) return;
+  const drawOne = (pt) => {
+    if (!pt || !Number.isFinite(pt.x) || !Number.isFinite(pt.y)) return;
+    const xp = s.x(pt.x);
+    const yp = s.y(pt.y);
+    if (!Number.isFinite(xp) || !Number.isFinite(yp)) return;
+    ctx.beginPath();
+    ctx.arc(xp, yp, 10, 0, Math.PI * 2);
+    ctx.stroke();
+  };
+  const pending = [];
+  if (Array.isArray(pendingBiRayPts) && pendingBiRayPts.length === 1) pending.push(...pendingBiRayPts);
+  if (Array.isArray(pendingRatioLinePts) && pendingRatioLinePts.length === 1) pending.push(...pendingRatioLinePts);
+  if (Array.isArray(pendingParallelogramPts) && pendingParallelogramPts.length > 0) pending.push(...pendingParallelogramPts);
+  if (pending.length <= 0) return;
   ctx.save();
-  ctx.beginPath();
-  ctx.arc(xp, yp, 10, 0, Math.PI * 2);
   ctx.strokeStyle = "#2563eb";
   ctx.lineWidth = 2;
   ctx.setLineDash([]);
-  ctx.stroke();
+  pending.forEach((pt) => drawOne(pt));
   ctx.restore();
 }
 
@@ -12583,13 +12935,16 @@ async function stepOnce(logMessage) {
     judge_mode: systemConfig.bspJudgeMode || "auto",
     active_chart_id: (lastPayload && lastPayload.active_chart_id) ? lastPayload.active_chart_id : "chart1",
   });
-  const bspNotice = isBspJudgeManual() ? null : detectBspPromptOnLastBar(payload);
+  const bspNotice = detectBspPromptOnLastBar(payload);
+  const rhythmTexts = getRhythmNoticeTexts(payload);
+  const interruptedByBsp = shouldInterruptStepOnBspFine(bspNotice ? bspNotice.hits : []);
+  const interruptedByRhythm = shouldInterruptStepOnRhythm1382() && rhythmTexts.length > 0;
   const noticeText = buildStepNoticeText(payload, bspNotice);
   refreshUI(payload, { afterStep: true, showStandaloneNotices: false });
   const noticeShown = showCombinedNotice(noticeText);
   if (logMessage && !noticeShown) setMsg(payload.message || "步进成功");
   const reachedEnd = prevStepIdx !== null && Number(payload.step_idx) === prevStepIdx;
-  return { payload, interrupted: !!bspNotice, reachedEnd, noticeShown };
+  return { payload, interrupted: (interruptedByBsp || interruptedByRhythm), reachedEnd, noticeShown };
 }
 
 function updateDataSourceStatus(payload) {
@@ -12791,8 +13146,10 @@ function refreshUI(payload, options) {
   }
   syncStepButtonState();
   $("btnFinish").disabled = !payload.ready || sessionFinished;
-  $("btnBuy").disabled = !payload.ready || sessionFinished || payload.price === null || payload.account.position > 0;
+  $("btnBuy").disabled = !payload.ready || sessionFinished || payload.price === null || payload.account.position !== 0;
   $("btnSell").disabled = !payload.ready || sessionFinished || !payload.account.can_sell;
+  $("btnShort").disabled = !payload.ready || sessionFinished || payload.price === null || payload.account.position !== 0;
+  $("btnCover").disabled = !payload.ready || sessionFinished || !payload.account.can_cover;
   $("configCard").classList.toggle("collapsed", payload.ready);
   updateBspJudgeUI();
   requestAnimationFrame(updateCompactLayout);
@@ -12954,25 +13311,43 @@ $("btnStepN").onclick = async () => {
   let done = 0;
   let lastResult = null;
   stepInFlight = true;
+  stepInterruptRequested = false;
   syncStepButtonState();
   hideGlobalLoading();
   try {
     for (let i = 0; i < n; i++) {
+      if (stepInterruptRequested) break;
       const result = await stepOnce(false);
       lastResult = result;
       done += 1;
       if (result.interrupted || result.reachedEnd) break;
     }
     if (!lastResult || !lastResult.noticeShown) {
-      setMsg(`步进N（${done}）根完成`);
+      if (stepInterruptRequested) {
+        setMsg(`步进N已手动中断，实际完成 ${done} 根。`);
+      } else if (lastResult && lastResult.interrupted) {
+        setMsg(`步进N已中断，实际完成 ${done} 根（触发中断条件）。`);
+      } else {
+        setMsg(`步进N（${done}）根完成`);
+      }
     }
   } catch (e) {
     setMsg("步进 N 失败：" + e.message);
   } finally {
+    stepInterruptRequested = false;
     stepInFlight = false;
     syncStepButtonState();
   }
 };
+
+if ($("btnStepInterrupt")) {
+  $("btnStepInterrupt").onclick = () => {
+    if (!stepInFlight) return;
+    stepInterruptRequested = true;
+    setMsg("已请求中断连续步进，将在当前根处理后停止。");
+    syncStepButtonState();
+  };
+}
 
 $("btnBackN").onclick = async () => {
   if ($("btnBackN").disabled || stepInFlight) return;
@@ -13019,14 +13394,37 @@ $("btnSell").onclick = async () => {
     setMsg("卖出失败：" + e.message);
   }
 };
+
+$("btnShort").onclick = async () => {
+  try {
+    const payload = await api("/api/short");
+    setMsg(payload.message || "做空成功");
+    refreshUI(payload);
+  } catch (e) {
+    setMsg("做空失败：" + e.message);
+  }
+};
+
+$("btnCover").onclick = async () => {
+  try {
+    const payload = await api("/api/cover");
+    setMsg(payload.message || "平空成功");
+    refreshUI(payload);
+  } catch (e) {
+    setMsg("平空失败：" + e.message);
+  }
+};
 markUiBound("btnInit");
 markUiBound("btnViewKlineData");
 markUiBound("btnStepPrev");
 markUiBound("btnStep");
 markUiBound("btnStepN");
+markUiBound("btnStepInterrupt");
 markUiBound("btnBackN");
 markUiBound("btnBuy");
 markUiBound("btnSell");
+markUiBound("btnShort");
+markUiBound("btnCover");
 
 if ($("chartMode")) {
   $("chartMode").addEventListener("change", () => {
@@ -13454,6 +13852,7 @@ function verifyCriticalUiBindings() {
     { id: "btnFullscreen", ok: () => typeof $("btnFullscreen").onclick === "function" || $("btnFullscreen").dataset.bound === "1" },
     { id: "toolHorizontalRay", ok: () => $("toolHorizontalRay").dataset.bound === "1" },
     { id: "toolBiRay", ok: () => $("toolBiRay").dataset.bound === "1" },
+    { id: "toolParallelogram", ok: () => $("toolParallelogram").dataset.bound === "1" },
   ];
   const broken = checks
     .map((check) => {
@@ -13843,6 +14242,60 @@ def api_sell():
         )
         payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME, include_kline_all=False)
         payload["message"] = f"卖出结果：{json.dumps(detail, ensure_ascii=False)}"
+        return payload
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.post("/api/short")
+def api_short():
+    if not APP_STATE.ready:
+        raise HTTPException(status_code=400, detail="请先初始化会话")
+    if APP_STATE.finished:
+        raise HTTPException(status_code=400, detail="当前会话已结束，请重新训练")
+    try:
+        active_stepper = APP_STATE.get_active_stepper()
+        price = active_stepper.current_price()
+        step_idx = active_stepper.step_idx
+        detail = APP_STATE.account.short_with_all_cash(price, step_idx)
+        APP_STATE.trade_events.append(
+            {
+                "side": "short",
+                "step_idx": step_idx,
+                "x": APP_STATE._current_kline_x(),
+                "price": float(price),
+                "shares": int(detail.get("shares", 0)),
+            }
+        )
+        payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME, include_kline_all=False)
+        payload["message"] = f"做空成功：{json.dumps(detail, ensure_ascii=False)}"
+        return payload
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.post("/api/cover")
+def api_cover():
+    if not APP_STATE.ready:
+        raise HTTPException(status_code=400, detail="请先初始化会话")
+    if APP_STATE.finished:
+        raise HTTPException(status_code=400, detail="当前会话已结束，请重新训练")
+    try:
+        active_stepper = APP_STATE.get_active_stepper()
+        price = active_stepper.current_price()
+        step_idx = active_stepper.step_idx
+        detail = APP_STATE.account.cover_all(price, step_idx)
+        APP_STATE.trade_events.append(
+            {
+                "side": "cover",
+                "step_idx": step_idx,
+                "x": APP_STATE._current_kline_x(),
+                "price": float(price),
+                "shares": int(detail.get("shares", 0)),
+            }
+        )
+        payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME, include_kline_all=False)
+        payload["message"] = f"平空结果：{json.dumps(detail, ensure_ascii=False)}"
         return payload
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
