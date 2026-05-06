@@ -3,6 +3,7 @@ import inspect
 import json
 import os
 import re
+import time
 import warnings
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -22,7 +23,7 @@ import tushare as ts
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # 尝试导入其他数据源库（缺失时启动阶段给出明确安装提示）
 ASHARE_MOD = None  # ashare 或 PyPI 的 ashares，供 get_price 使用
@@ -169,6 +170,9 @@ _DATA_SOURCE_NAME_TO_PAIR: dict[str, tuple[str, Any]] = {
 # K 线拉取与筹码全历史拉取各用一份链（顺序由同一套优先级生成，回退结果可不同）
 DATA_SOURCE_CHAIN_KLINE: list[tuple[str, Any]] = []
 DATA_SOURCE_CHAIN_CHIP: list[tuple[str, Any]] = []
+# BaoStock 网络异常时的会话级冷却（避免 WinError 10057 连续刷屏）
+_BAOSTOCK_COOLDOWN_UNTIL: Optional[datetime] = None
+_BAOSTOCK_LAST_ERROR: str = ""
 
 
 def chains_from_priority(names: list[str]) -> list[tuple[str, Any]]:
@@ -337,7 +341,7 @@ def data_source_label(data_src: Any) -> str:
 
 def create_stock_api_instance(data_src: Any, code: str, begin_date: Optional[str], end_date: Optional[str], autype: AUTYPE, k_type: Optional[KL_TYPE] = None) -> CCommonStockApi:
     api_cls = get_stock_api_cls(data_src)
-    api_cls.do_init()
+    safe_api_do_init(api_cls, data_src)
     try:
         return api_cls(code=code, k_type=k_type or KL_TYPE.K_DAY, begin_date=begin_date, end_date=end_date, autype=autype)
     except Exception:
@@ -350,6 +354,80 @@ def format_source_error(exc: Exception) -> str:
     if not text:
         text = exc.__class__.__name__
     return " ".join(text.split())
+
+
+def _is_baostock_source(data_src: Any) -> bool:
+    return data_src == DATA_SRC.BAO_STOCK
+
+
+def _is_baostock_network_error(exc: Exception) -> bool:
+    """识别 BaoStock 常见网络故障关键字。"""
+    low = str(exc or "").lower()
+    return any(
+        key in low
+        for key in (
+            "10057",  # WinError 10057: socket 未连接
+            "网络接收错误",
+            "接收数据异常",
+            "服务器连接失败",
+            "network",
+            "connection",
+            "socket",
+            "timed out",
+            "timeout",
+        )
+    )
+
+
+def _baostock_cooldown_guard() -> None:
+    """冷却期内直接失败，避免同类网络错误反复刷屏。"""
+    global _BAOSTOCK_COOLDOWN_UNTIL
+    if _BAOSTOCK_COOLDOWN_UNTIL is None:
+        return
+    now = datetime.now()
+    if now >= _BAOSTOCK_COOLDOWN_UNTIL:
+        _BAOSTOCK_COOLDOWN_UNTIL = None
+        return
+    left = int((_BAOSTOCK_COOLDOWN_UNTIL - now).total_seconds())
+    raise RuntimeError(f"BaoStock 网络连接异常，冷却中（剩余约 {max(left, 1)} 秒）")
+
+
+def _mark_baostock_failure(exc: Exception, cooldown_sec: int = 90) -> None:
+    """命中网络类故障后进入短冷却，减少重复初始化与日志噪音。"""
+    global _BAOSTOCK_COOLDOWN_UNTIL, _BAOSTOCK_LAST_ERROR
+    if not _is_baostock_network_error(exc):
+        return
+    _BAOSTOCK_LAST_ERROR = format_source_error(exc)
+    _BAOSTOCK_COOLDOWN_UNTIL = datetime.now() + timedelta(seconds=max(10, int(cooldown_sec)))
+
+
+def safe_api_do_init(api_cls: Any, data_src: Any) -> None:
+    """统一数据源初始化；BaoStock 增加重置与一次重试。"""
+    if not _is_baostock_source(data_src):
+        api_cls.do_init()
+        return
+
+    _baostock_cooldown_guard()
+    # 先尝试清理残留连接状态（忽略异常）
+    try:
+        api_cls.do_close()
+    except Exception:
+        pass
+    try:
+        api_cls.do_init()
+    except Exception as first_exc:
+        _mark_baostock_failure(first_exc)
+        # 轻量重试一次，处理临时连接抖动
+        try:
+            api_cls.do_close()
+        except Exception:
+            pass
+        time.sleep(0.2)
+        try:
+            api_cls.do_init()
+        except Exception as second_exc:
+            _mark_baostock_failure(second_exc)
+            raise
 
 
 class OfflineDataConfirmRequired(Exception):
@@ -3025,7 +3103,7 @@ class ChanStepper:
         except Exception as chan_exc:
             try:
                 api_cls = get_stock_api_cls(data_src)
-                api_cls.do_init()
+                safe_api_do_init(api_cls, data_src)
                 try:
                     api = api_cls(code=self.code, k_type=self.k_type, begin_date=begin_date, end_date=end_date, autype=autype)
                     replay_klus_master = copy.deepcopy(list(api.get_kl_data()))
@@ -3039,10 +3117,10 @@ class ChanStepper:
         stock_name: Optional[str] = None
         try:
             api_cls = get_stock_api_cls(data_src)
+            safe_api_do_init(api_cls, data_src)
             api = api_cls(code=self.code, k_type=self.k_type, begin_date=begin_date, end_date=end_date, autype=autype)
-            api.do_init()
             stock_name = getattr(api, "name", None) or None
-            api.do_close()
+            api_cls.do_close()
         except Exception:
             stock_name = None
 
@@ -3450,315 +3528,41 @@ class GotoStepReq(BaseModel):
     step_idx: int = 0
 
 
-class BollBacktestReq(BaseModel):
-    """BOLL 下轨触碰策略回测（独立临时会话，不改当前复盘状态）。"""
+class IndicatorBacktestReq(BaseModel):
+    """指标+买卖点回测（独立会话）。步进顺序与复盘 api_step 一致：驱动 step → 被动 sync → bt_dual 防未来。
+
+    出场：exit_conditions（与 exit_combine）与 exit_hold_bars 为「或」关系，任一满足即卖。
+    兼容旧字段：conditions / combine_mode / sell_hold_bars。
+    """
+
     code: str
     begin_date: str
     end_date: Optional[str] = None
     initial_cash: float = 10_000.0
     autype: str = "qfq"
     chan_config: Optional[dict[str, Any]] = None
-    k_type: str = "daily"
+    k_type: str = "daily"  # 周期1
     chart_mode: str = "single"
-    k_type_2: Optional[str] = None
-    sell_hold_bars: int = 5  # 买入后持有 N 根 K 线，于第 N 根收盘价卖出
+    k_type_2: Optional[str] = None  # 周期2
+    step_driver: str = "auto"  # auto | k1 | k2：步进时钟；auto=较细周期
+    entry_conditions: list[dict[str, Any]] = Field(default_factory=list)
+    entry_combine: str = "and"
+    exit_conditions: list[dict[str, Any]] = Field(default_factory=list)
+    exit_combine: str = "and"
+    exit_hold_bars: Optional[int] = None  # 与出场公式为或；均未设时内部默认 5
+    # 兼容旧前端
+    conditions: Optional[list[dict[str, Any]]] = None
+    combine_mode: Optional[str] = None
+    sell_hold_bars: Optional[int] = None
     confirm_offline: bool = False
     data_source_priority: Optional[list[str]] = None
     data_form_mode: str = "traditional"
     data_form_quantity: Optional[int] = None
 
 
-def _bars_from_stepper_master(stepper: ChanStepper) -> list[dict[str, Any]]:
-    """从已 init 的 stepper 取主序列 K 线（与聚合/数量模式一致）。"""
-    klus = stepper._replay_klus_master or []
-    out: list[dict[str, Any]] = []
-    for klu in klus:
-        out.append(
-            {
-                "t": str(klu.time.to_str()),
-                "o": float(klu.open),
-                "h": float(klu.high),
-                "l": float(klu.low),
-                "c": float(klu.close),
-            }
-        )
-    return out
-
-
-def _boll_down_series_from_closes(closes: list[float], boll_n: int) -> list[float]:
-    """与复盘 stepper 一致：逐根收盘价递推 BOLL 下轨。"""
-    boll = BollModel(N=max(2, int(boll_n)))
-    return [float(boll.add(float(c)).DOWN) for c in closes]
-
-
-def _boll_buy_signal_at_bar(bars: list[dict[str, Any]], downs: list[float], i: int) -> bool:
-    """第 i 根：上一根最高价 < 上一根下轨；本根收盘价 >= 本根下轨。"""
-    if i < 1 or i >= len(bars) or len(downs) != len(bars):
-        return False
-    return float(bars[i - 1]["h"]) < float(downs[i - 1]) and float(bars[i]["c"]) >= float(downs[i])
-
-
-def _dual_secondary_index_for_primary_time(primary: list[dict[str, Any]], secondary: list[dict[str, Any]], i: int) -> int:
-    """取主周期第 i 根时刻下，次周期最后一根 t<=主 t 的索引。"""
-    if i < 0 or i >= len(primary) or not secondary:
-        return -1
-    t_end = str(primary[i]["t"])
-    j = -1
-    for k, row in enumerate(secondary):
-        if str(row["t"]) <= t_end:
-            j = k
-        else:
-            break
-    return j
-
-
-def _last_bar_idx_at_or_before(bars: list[dict[str, Any]], t_anchor: str) -> int:
-    """最后一根 bar.t <= t_anchor 的索引；若无则 -1。"""
-    t_anchor = str(t_anchor)
-    j = -1
-    for i, row in enumerate(bars):
-        if str(row["t"]) <= t_anchor:
-            j = i
-        else:
-            break
-    return j
-
-
-def _coarse_rows_eff_upto_anchor(
-    coarse: list[dict[str, Any]],
-    fine: list[dict[str, Any]],
-    anchor_t: str,
-) -> list[dict[str, Any]]:
-    """粗周期截至 anchor 的 K 线序列：已收盘粗 K 保留；当前未收盘粗段用细周期 (t_prev, anchor] 重算末根 HL收（粗开沿用细段首根开盘，与复盘 _apply_partial_last_bar 一致），避免大周期未来数据。"""
-    anchor_t = str(anchor_t)
-    if not coarse or not fine:
-        return []
-    j_lt = -1
-    for i, c in enumerate(coarse):
-        ct = str(c["t"])
-        if ct < anchor_t:
-            j_lt = i
-        elif ct == anchor_t:
-            return [dict(x) for x in coarse[: i + 1]]
-        else:
-            break
-    eff: list[dict[str, Any]] = [dict(x) for x in coarse[: j_lt + 1]]
-    left_excl = str(coarse[j_lt]["t"]) if j_lt >= 0 else ""
-    picked = [f for f in fine if str(f["t"]) > left_excl and str(f["t"]) <= anchor_t]
-    if not picked:
-        return eff
-    o0 = float(picked[0]["o"])
-    hi = max(float(r["h"]) for r in picked)
-    lo = min(float(r["l"]) for r in picked)
-    cc = float(picked[-1]["c"])
-    lo = min(o0, hi, lo, cc)
-    hi = max(o0, hi, lo, cc)
-    eff.append({"t": anchor_t, "o": o0, "h": hi, "l": lo, "c": cc})
-    return eff
-
-
-def _boll_buy_on_effective_rows(eff: list[dict[str, Any]], boll_n: int) -> bool:
-    """对「含末根可能为细周期合成」的粗 K 序列，在最后一根上判定 BOLL 触碰买。"""
-    if len(eff) < 2:
-        return False
-    closes = [float(r["c"]) for r in eff]
-    downs = _boll_down_series_from_closes(closes, boll_n)
-    i = len(eff) - 1
-    return _boll_buy_signal_at_bar(eff, downs, i)
-
-
-def _dual_chart_boll_buy_at_anchor(
-    own_bars: list[dict[str, Any]],
-    own_rank: int,
-    other_bars: list[dict[str, Any]],
-    other_rank: int,
-    anchor_t: str,
-    boll_n: int,
-) -> bool:
-    """双周期下：某图在 anchor 时刻的 BOLL 买讯；粗周期用细 K 合成末根防未来；细周期仅用截至 anchor 的 K 线重算 BOLL。"""
-    if own_rank > other_rank:
-        eff = _coarse_rows_eff_upto_anchor(own_bars, other_bars, anchor_t)
-        return _boll_buy_on_effective_rows(eff, boll_n)
-    j = _last_bar_idx_at_or_before(own_bars, anchor_t)
-    if j < 1:
-        return False
-    # 细周期：仅用 anchor 及以前的收盘递推 BOLL，避免用到未来 K 的统计量
-    slice_bars = own_bars[: j + 1]
-    downs_slice = _boll_down_series_from_closes([float(b["c"]) for b in slice_bars], boll_n)
-    return _boll_buy_signal_at_bar(slice_bars, downs_slice, j)
-
-
-def run_boll_backtest(req: BollBacktestReq) -> dict[str, Any]:
-    """全样本 BOLL 触碰买 + 固定持有 N 根卖；双周期要求主次在对应时刻同时满足买讯。"""
-    autype_map = {"qfq": AUTYPE.QFQ, "hfq": AUTYPE.HFQ, "none": AUTYPE.NONE}
-    autype = autype_map.get(str(req.autype or "qfq").lower(), AUTYPE.QFQ)
-    code_norm = normalize_code(req.code)
-    hold_n = max(1, int(req.sell_hold_bars))
-    cfg = req.chan_config if isinstance(req.chan_config, dict) else {}
-    boll_n = 20
-    if cfg.get("boll_n") is not None:
-        try:
-            boll_n = max(2, int(cfg["boll_n"]))
-        except (TypeError, ValueError):
-            boll_n = 20
-
-    s1 = ChanStepper()
-    s1.init(
-        code_norm,
-        req.begin_date,
-        req.end_date,
-        autype,
-        chan_config=cfg,
-        k_type=req.k_type,
-        confirm_offline=bool(req.confirm_offline),
-        data_source_priority=req.data_source_priority,
-        data_form_mode=req.data_form_mode,
-        data_form_quantity=req.data_form_quantity,
-    )
-    bars1 = _bars_from_stepper_master(s1)
-    if len(bars1) < 2:
-        raise ValueError("K 线数据不足，无法回测")
-
-    downs1 = _boll_down_series_from_closes([float(b["c"]) for b in bars1], boll_n)
-
-    chart_mode = str(req.chart_mode or "single").strip().lower()
-    bars2: Optional[list[dict[str, Any]]] = None
-    downs2: Optional[list[float]] = None
-    if chart_mode == "dual":
-        s2 = ChanStepper()
-        s2.init(
-            code_norm,
-            req.begin_date,
-            req.end_date,
-            autype,
-            chan_config=cfg,
-            k_type=str(req.k_type_2 or req.k_type),
-            confirm_offline=bool(req.confirm_offline),
-            data_source_priority=req.data_source_priority,
-            data_form_mode=req.data_form_mode,
-            data_form_quantity=req.data_form_quantity,
-        )
-        bars2 = _bars_from_stepper_master(s2)
-        downs2 = _boll_down_series_from_closes([float(b["c"]) for b in bars2], boll_n) if bars2 else None
-
-    cash = float(req.initial_cash)
-    pos_shares = 0
-    pos_buy_price = 0.0
-    pos_buy_idx = -1
-    trades: list[dict[str, Any]] = []
-    equity_curve: list[float] = []
-
-    def try_buy(idx_buy: int, price: float) -> None:
-        nonlocal cash, pos_shares, pos_buy_price, pos_buy_idx
-        if pos_shares > 0 or cash <= 0 or price <= 0:
-            return
-        shares = int(cash // price)
-        if shares <= 0:
-            return
-        cost = shares * price
-        cash -= cost
-        pos_shares = shares
-        pos_buy_price = float(price)
-        pos_buy_idx = int(idx_buy)
-
-    def try_sell(idx_sell: int, price: float) -> None:
-        nonlocal cash, pos_shares, pos_buy_price, pos_buy_idx
-        if pos_shares <= 0 or price <= 0:
-            return
-        cash += pos_shares * price
-        trades.append(
-            {
-                "buy_idx": int(pos_buy_idx),
-                "sell_idx": int(idx_sell),
-                "buy_t": bars1[pos_buy_idx]["t"],
-                "sell_t": bars1[idx_sell]["t"],
-                "buy_price": round(pos_buy_price, 4),
-                "sell_price": round(float(price), 4),
-                "shares": int(pos_shares),
-                "pnl": round((float(price) - pos_buy_price) * pos_shares, 2),
-            }
-        )
-        pos_shares = 0
-        pos_buy_price = 0.0
-        pos_buy_idx = -1
-
-    if chart_mode == "dual" and bars2 is not None and downs2 is not None:
-        r1 = AppState._k_type_granularity_rank(s1.k_type)
-        r2 = AppState._k_type_granularity_rank(s2.k_type)
-        if len(bars2) < 2:
-            raise ValueError("双周期副序列 K 线不足")
-        if r1 == r2:
-            # 两周期粒度相同：无粗细之分，仍按图1步进（与旧逻辑一致）
-            for i in range(len(bars1)):
-                c_now = float(bars1[i]["c"])
-                if pos_shares > 0 and pos_buy_idx >= 0 and i - pos_buy_idx >= hold_n:
-                    try_sell(i, c_now)
-                buy_signal = _boll_buy_signal_at_bar(bars1, downs1, i)
-                j = _dual_secondary_index_for_primary_time(bars1, bars2, i)
-                buy_signal = buy_signal and j >= 1 and _boll_buy_signal_at_bar(bars2, downs2, j)
-                if buy_signal:
-                    try_buy(i, c_now)
-                mv = cash + (pos_shares * c_now if pos_shares > 0 else 0.0)
-                equity_curve.append(round(mv, 2))
-        else:
-            # 细周期驱动锚点；粗周期 BOLL 用细 K 截至锚点重算末根，避免大周期未来数据
-            finer_bars = bars1 if r1 < r2 else bars2
-            if len(finer_bars) < 2:
-                raise ValueError("双周期细序列 K 线不足")
-            for kf in range(1, len(finer_bars)):
-                anchor_t = finer_bars[kf]["t"]
-                idx1 = _last_bar_idx_at_or_before(bars1, anchor_t)
-                if idx1 < 0:
-                    continue
-                c_now = float(bars1[idx1]["c"])
-                if pos_shares > 0 and pos_buy_idx >= 0 and idx1 - pos_buy_idx >= hold_n:
-                    try_sell(idx1, c_now)
-                buy_signal = _dual_chart_boll_buy_at_anchor(bars1, r1, bars2, r2, anchor_t, boll_n) and _dual_chart_boll_buy_at_anchor(
-                    bars2, r2, bars1, r1, anchor_t, boll_n
-                )
-                if buy_signal:
-                    try_buy(idx1, c_now)
-                mv = cash + (pos_shares * c_now if pos_shares > 0 else 0.0)
-                equity_curve.append(round(mv, 2))
-    else:
-        for i in range(len(bars1)):
-            c_now = float(bars1[i]["c"])
-            if pos_shares > 0 and pos_buy_idx >= 0 and i - pos_buy_idx >= hold_n:
-                try_sell(i, c_now)
-            buy_signal = _boll_buy_signal_at_bar(bars1, downs1, i)
-            if buy_signal:
-                try_buy(i, c_now)
-            mv = cash + (pos_shares * c_now if pos_shares > 0 else 0.0)
-            equity_curve.append(round(mv, 2))
-
-    if pos_shares > 0 and bars1:
-        try_sell(len(bars1) - 1, float(bars1[-1]["c"]))
-
-    final_equity = cash
-    total_pnl = round(final_equity - float(req.initial_cash), 2)
-    ret_pct = (total_pnl / float(req.initial_cash) * 100.0) if req.initial_cash else 0.0
-    wins = sum(1 for tr in trades if float(tr.get("pnl", 0)) > 0)
-    losses = sum(1 for tr in trades if float(tr.get("pnl", 0)) < 0)
-    ntr = len(trades)
-
-    return {
-        "code": code_norm,
-        "name": s1.stock_name,
-        "chart_mode": chart_mode,
-        "k_type": req.k_type,
-        "k_type_2": req.k_type_2 if chart_mode == "dual" else None,
-        "bars": len(bars1),
-        "initial_cash": round(float(req.initial_cash), 2),
-        "final_equity": round(final_equity, 2),
-        "total_pnl": total_pnl,
-        "total_return_pct": round(ret_pct, 2),
-        "trade_count": ntr,
-        "win_count": wins,
-        "loss_count": losses,
-        "win_rate_pct": round((wins / ntr * 100.0) if ntr else 0.0, 2),
-        "trades": trades,
-        "hold_bars_rule": hold_n,
-    }
+def run_strategy_backtest(req: IndicatorBacktestReq) -> dict[str, Any]:
+    """兼容旧路由名；实现见 run_indicator_backtest。"""
+    return run_indicator_backtest(req)
 
 
 class AppState:
@@ -3807,53 +3611,15 @@ class AppState:
 
     @staticmethod
     def _parse_time_safe(ts: str) -> Optional[datetime]:
-        s = str(ts or "").strip()
-        if not s:
-            return None
-        fmts = ("%Y/%m/%d", "%Y/%m/%d %H:%M", "%Y/%m/%d %H:%M:%S")
-        for fmt in fmts:
-            try:
-                return datetime.strptime(s, fmt)
-            except Exception:
-                continue
-        return None
+        return bt_parse_time_safe(ts)
 
     def _anchor_compare_effective_dt(self, stepper: ChanStepper, time_str: str) -> Optional[datetime]:
         """被动同步比较用：日线等常只有日期串，解析成午夜会与同日分钟锚点误判，故用「该显示日结束」比较。"""
-        dt = self._parse_time_safe(time_str)
-        if dt is None:
-            return None
-        if self._k_type_granularity_rank(stepper.k_type) < self._k_type_granularity_rank(KL_TYPE.K_DAY):
-            return dt
-        s = str(time_str or "").strip()
-        if " " in s:
-            return dt
-        if dt.hour == 0 and dt.minute == 0 and dt.second == 0:
-            return dt.replace(hour=23, minute=59, second=59, microsecond=0)
-        return dt
+        return bt_anchor_compare_effective_dt(stepper, time_str)
 
     def _sync_stepper_to_anchor(self, stepper: ChanStepper, anchor_time: str) -> None:
         """将目标周期步进到 anchor_time（包含优先，兜底左侧最近）。"""
-        t_anchor = self._parse_time_safe(anchor_time)
-        if t_anchor is None:
-            return
-        if stepper.chan is None:
-            return
-        # 已到末尾直接返回
-        prev_step = int(stepper.step_idx)
-        while True:
-            cur_t = self._anchor_compare_effective_dt(stepper, stepper.current_time())
-            if cur_t is None:
-                break
-            # 当前已在锚点右侧时，不再前进，保留左侧最近
-            if cur_t >= t_anchor:
-                break
-            if not stepper.step():
-                break
-        if int(stepper.step_idx) != prev_step:
-            # 同步被动周期时重建结构缓存
-            stepper.structure_bundle = None
-            stepper._bundle_cache_step_idx = None
+        bt_sync_stepper_to_anchor(stepper, anchor_time)
 
     @staticmethod
     def _k_type_granularity_rank(k_type: KL_TYPE) -> int:
@@ -3875,19 +3641,7 @@ class AppState:
 
     def _resolve_dual_coarse_fine(self) -> Optional[tuple[ChanStepper, ChanStepper]]:
         """双周期下识别粗细周期；优先按 k_type，兜底按已载入 K 根数。"""
-        if self.chart_mode != "dual" or self.stepper2 is None:
-            return None
-        s1 = self.stepper
-        s2 = self.stepper2
-        r1 = self._k_type_granularity_rank(s1.k_type)
-        r2 = self._k_type_granularity_rank(s2.k_type)
-        if r1 != r2:
-            return (s1, s2) if r1 > r2 else (s2, s1)
-        n1 = self._count_stepper_klus(s1)
-        n2 = self._count_stepper_klus(s2)
-        if n1 <= 0 or n2 <= 0 or n1 == n2:
-            return None
-        return (s1, s2) if n1 < n2 else (s2, s1)
+        return bt_resolve_dual_coarse_fine(str(self.chart_mode or "single"), self.stepper, self.stepper2)
 
     def _apply_partial_last_bar(
         self, big_chart: dict[str, Any], coarse: ChanStepper, fine: ChanStepper, anchor_time: str
@@ -3919,128 +3673,27 @@ class AppState:
 
     def _count_stepper_klus(self, stepper: ChanStepper) -> int:
         """已载入 K 线单元根数；较少者视为粗周期（与 build_payload 一致）。"""
-        if stepper.chan is None or len(stepper.chan[0].lst) == 0:
-            return 0
-        return len(list(stepper.chan[0].klu_iter()))
+        return bt_count_stepper_klus(stepper)
 
     @staticmethod
     def _klu_to_datetime(klu: Any) -> Optional[datetime]:
-        try:
-            return AppState._parse_time_safe(klu.time.to_str())
-        except Exception:
-            return None
+        return bt_klu_to_datetime(klu)
 
     def _collect_fine_klus_for_coarse_tail(
         self, coarse: ChanStepper, fine: ChanStepper, anchor_time: str
     ) -> list[Any]:
         """细周期在(上一根粗K时间, 锚点]内的 KLU；数量模式且 raw 不太大时用划分前 raw，避免合并后缺日。"""
-        t_anchor = self._parse_time_safe(anchor_time)
-        if t_anchor is None or coarse.chan is None or len(coarse.chan[0].lst) == 0:
-            return []
-        klus_c = list(coarse.chan[0].klu_iter())
-        if not klus_c:
-            return []
-        t_prev = self._klu_to_datetime(klus_c[-2]) if len(klus_c) >= 2 else None
-        use_raw = (
-            getattr(fine, "data_form_mode", "traditional") == "quantity"
-            and fine._replay_klus_master_raw
-            and len(fine._replay_klus_master_raw) <= 100_000
-        )
-        if use_raw:
-            source_iter = list(fine._replay_klus_master_raw)
-        elif fine.chan is not None and len(fine.chan[0].lst) > 0:
-            source_iter = list(fine.chan[0].klu_iter())
-        else:
-            source_iter = []
-        picked: list[Any] = []
-        for klu in source_iter:
-            t = self._klu_to_datetime(klu)
-            if t is None:
-                continue
-            if t > t_anchor:
-                continue
-            if t_prev is not None and t <= t_prev:
-                continue
-            picked.append(klu)
-        picked.sort(key=lambda k: float(getattr(getattr(k, "time", None), "ts", 0.0)))
-        return picked
+        return bt_collect_fine_klus_for_coarse_tail(coarse, fine, anchor_time)
 
     def _dual_rebuild_coarse_chan_anti_future(self, anchor_time: str) -> None:
         """双周期：末根粗 K 的 HL收量 按细周期截至锚点重算，并重建粗周期 Chan（结构/指标与展示一致）。"""
-        pair = self._resolve_dual_coarse_fine()
-        if pair is None:
-            return
-        coarse, fine = pair
-        if self.session_params is None:
-            return
-        saved = int(coarse.step_idx)
-        if saved < 0:
-            return
-        master_full = coarse._replay_klus_master
-        if not master_full or saved >= len(master_full):
-            return
-        picked = self._collect_fine_klus_for_coarse_tail(coarse, fine, anchor_time)
-        if not picked:
-            return
-        last_orig = master_full[saved]
-        o0 = float(last_orig.open)
-        h = max(float(k.high) for k in picked)
-        l = min(float(k.low) for k in picked)
-        c = float(picked[-1].close)
-        # 粗 K 开盘保留、高低收来自细周期截至锚点；开盘可能低于片段内最低价，须拉齐 OHLC
-        l = min(o0, h, l, c)
-        h = max(o0, h, l, c)
-        v = sum(float(getattr(k, "volume", getattr(k, "vol", 0.0)) or 0.0) for k in picked)
-        turnover = 0.0
-        for k in picked:
-            ti = getattr(k, "trade_info", None)
-            if ti and getattr(ti, "metric", None):
-                tv = ti.metric.get(DATA_FIELD.FIELD_TURNOVER)
-                if tv is not None:
-                    turnover += float(tv or 0.0)
-        patch_dict: dict[str, Any] = {
-            DATA_FIELD.FIELD_TIME: last_orig.time,
-            DATA_FIELD.FIELD_OPEN: o0,
-            DATA_FIELD.FIELD_HIGH: h,
-            DATA_FIELD.FIELD_LOW: l,
-            DATA_FIELD.FIELD_CLOSE: c,
-            DATA_FIELD.FIELD_VOLUME: v,
-        }
-        if turnover > 0:
-            patch_dict[DATA_FIELD.FIELD_TURNOVER] = turnover
-        patched = CKLine_Unit(patch_dict)
-        patched.macd = None
-        patched.boll = None
-        new_master = copy.deepcopy(list(master_full))
-        new_master[saved] = patched
-        params = self.session_params
-        cfg = CChanConfig(coarse._cfg_without_chan_algo(dict(coarse.effective_cfg_dict or {})))
-        coarse.chan = ReplayChan(
-            code=coarse.code,
-            begin_time=params["begin_date"],
-            end_time=params.get("end_date"),
-            data_src=coarse.data_src_used or DATA_SRC.AKSHARE,
-            lv_list=[coarse.k_type],
-            config=cfg,
-            autype=params["autype"],
-            replay_klus_master=new_master,
+        bt_dual_rebuild_coarse_chan_anti_future(
+            self.session_params or {},
+            str(self.chart_mode or "single"),
+            self.stepper,
+            self.stepper2,
+            anchor_time,
         )
-        coarse._iter = coarse.chan.step_load()
-        coarse.indicators = {
-            "macd": CMACD(),
-            "kdj": KDJ(),
-            "rsi": RSI(),
-            "boll": BollModel(),
-            "demark": CDemarkEngine(),
-        }
-        coarse.indicator_history = []
-        coarse.structure_bundle = None
-        coarse._bundle_cache_step_idx = None
-        coarse.step_idx = -1
-        coarse.trend_lines = []
-        for _ in range(saved + 1):
-            if not coarse.step():
-                break
 
     def _reset_judge_state(self) -> None:
         self._judge_notice = False
@@ -4541,6 +4194,629 @@ class AppState:
         }
 
 
+# ---------------------------------------------------------------------------
+# 双周期防未来：被动同步 + 粗末根按细K重算（与 AppState 原实现一致，供回测与复盘共用）
+# ---------------------------------------------------------------------------
+
+
+def bt_parse_time_safe(ts: str) -> Optional[datetime]:
+    s = str(ts or "").strip()
+    if not s:
+        return None
+    fmts = ("%Y/%m/%d", "%Y/%m/%d %H:%M", "%Y/%m/%d %H:%M:%S")
+    for fmt in fmts:
+        try:
+            return datetime.strptime(s, fmt)
+        except Exception:
+            continue
+    return None
+
+
+def bt_anchor_compare_effective_dt(stepper: ChanStepper, time_str: str) -> Optional[datetime]:
+    dt = bt_parse_time_safe(time_str)
+    if dt is None:
+        return None
+    if AppState._k_type_granularity_rank(stepper.k_type) < AppState._k_type_granularity_rank(KL_TYPE.K_DAY):
+        return dt
+    s = str(time_str or "").strip()
+    if " " in s:
+        return dt
+    if dt.hour == 0 and dt.minute == 0 and dt.second == 0:
+        return dt.replace(hour=23, minute=59, second=59, microsecond=0)
+    return dt
+
+
+def bt_klu_to_datetime(klu: Any) -> Optional[datetime]:
+    try:
+        return bt_parse_time_safe(klu.time.to_str())
+    except Exception:
+        return None
+
+
+def bt_count_stepper_klus(stepper: ChanStepper) -> int:
+    if stepper.chan is None or len(stepper.chan[0].lst) == 0:
+        return 0
+    return len(list(stepper.chan[0].klu_iter()))
+
+
+def bt_resolve_dual_coarse_fine(chart_mode: str, s1: ChanStepper, s2: Optional[ChanStepper]) -> Optional[tuple[ChanStepper, ChanStepper]]:
+    if str(chart_mode or "single").lower() != "dual" or s2 is None:
+        return None
+    r1 = AppState._k_type_granularity_rank(s1.k_type)
+    r2 = AppState._k_type_granularity_rank(s2.k_type)
+    if r1 != r2:
+        return (s1, s2) if r1 > r2 else (s2, s1)
+    n1 = bt_count_stepper_klus(s1)
+    n2 = bt_count_stepper_klus(s2)
+    if n1 <= 0 or n2 <= 0 or n1 == n2:
+        return None
+    return (s1, s2) if n1 < n2 else (s2, s1)
+
+
+def bt_collect_fine_klus_for_coarse_tail(coarse: ChanStepper, fine: ChanStepper, anchor_time: str) -> list[Any]:
+    t_anchor = bt_parse_time_safe(anchor_time)
+    if t_anchor is None or coarse.chan is None or len(coarse.chan[0].lst) == 0:
+        return []
+    klus_c = list(coarse.chan[0].klu_iter())
+    if not klus_c:
+        return []
+    t_prev = bt_klu_to_datetime(klus_c[-2]) if len(klus_c) >= 2 else None
+    use_raw = (
+        getattr(fine, "data_form_mode", "traditional") == "quantity"
+        and fine._replay_klus_master_raw
+        and len(fine._replay_klus_master_raw) <= 100_000
+    )
+    if use_raw:
+        source_iter = list(fine._replay_klus_master_raw)
+    elif fine.chan is not None and len(fine.chan[0].lst) > 0:
+        source_iter = list(fine.chan[0].klu_iter())
+    else:
+        source_iter = []
+    picked: list[Any] = []
+    for klu in source_iter:
+        t = bt_klu_to_datetime(klu)
+        if t is None:
+            continue
+        if t > t_anchor:
+            continue
+        if t_prev is not None and t <= t_prev:
+            continue
+        picked.append(klu)
+    picked.sort(key=lambda k: float(getattr(getattr(k, "time", None), "ts", 0.0)))
+    return picked
+
+
+def bt_sync_stepper_to_anchor(stepper: ChanStepper, anchor_time: str) -> None:
+    t_anchor = bt_parse_time_safe(anchor_time)
+    if t_anchor is None or stepper.chan is None:
+        return
+    prev_step = int(stepper.step_idx)
+    while True:
+        cur_t = bt_anchor_compare_effective_dt(stepper, stepper.current_time())
+        if cur_t is None:
+            break
+        if cur_t >= t_anchor:
+            break
+        if not stepper.step():
+            break
+    if int(stepper.step_idx) != prev_step:
+        stepper.structure_bundle = None
+        stepper._bundle_cache_step_idx = None
+
+
+def bt_dual_rebuild_coarse_chan_anti_future(
+    session_params: dict[str, Any],
+    chart_mode: str,
+    stepper: ChanStepper,
+    stepper2: Optional[ChanStepper],
+    anchor_time: str,
+) -> None:
+    pair = bt_resolve_dual_coarse_fine(chart_mode, stepper, stepper2)
+    if pair is None:
+        return
+    coarse, fine = pair
+    if not session_params:
+        return
+    saved = int(coarse.step_idx)
+    if saved < 0:
+        return
+    master_full = coarse._replay_klus_master
+    if not master_full or saved >= len(master_full):
+        return
+    picked = bt_collect_fine_klus_for_coarse_tail(coarse, fine, anchor_time)
+    if not picked:
+        return
+    last_orig = master_full[saved]
+    o0 = float(last_orig.open)
+    h = max(float(k.high) for k in picked)
+    l = min(float(k.low) for k in picked)
+    c = float(picked[-1].close)
+    l = min(o0, h, l, c)
+    h = max(o0, h, l, c)
+    v = sum(float(getattr(k, "volume", getattr(k, "vol", 0.0)) or 0.0) for k in picked)
+    turnover = 0.0
+    for k in picked:
+        ti = getattr(k, "trade_info", None)
+        if ti and getattr(ti, "metric", None):
+            tv = ti.metric.get(DATA_FIELD.FIELD_TURNOVER)
+            if tv is not None:
+                turnover += float(tv or 0.0)
+    patch_dict: dict[str, Any] = {
+        DATA_FIELD.FIELD_TIME: last_orig.time,
+        DATA_FIELD.FIELD_OPEN: o0,
+        DATA_FIELD.FIELD_HIGH: h,
+        DATA_FIELD.FIELD_LOW: l,
+        DATA_FIELD.FIELD_CLOSE: c,
+        DATA_FIELD.FIELD_VOLUME: v,
+    }
+    if turnover > 0:
+        patch_dict[DATA_FIELD.FIELD_TURNOVER] = turnover
+    patched = CKLine_Unit(patch_dict)
+    patched.macd = None
+    patched.boll = None
+    new_master = copy.deepcopy(list(master_full))
+    new_master[saved] = patched
+    params = session_params
+    cfg = CChanConfig(coarse._cfg_without_chan_algo(dict(coarse.effective_cfg_dict or {})))
+    coarse.chan = ReplayChan(
+        code=coarse.code,
+        begin_time=params["begin_date"],
+        end_time=params.get("end_date"),
+        data_src=coarse.data_src_used or DATA_SRC.AKSHARE,
+        lv_list=[coarse.k_type],
+        config=cfg,
+        autype=params["autype"],
+        replay_klus_master=new_master,
+    )
+    coarse._iter = coarse.chan.step_load()
+    coarse.indicators = {
+        "macd": CMACD(),
+        "kdj": KDJ(),
+        "rsi": RSI(),
+        "boll": BollModel(),
+        "demark": CDemarkEngine(),
+    }
+    coarse.indicator_history = []
+    coarse.structure_bundle = None
+    coarse._bundle_cache_step_idx = None
+    coarse.step_idx = -1
+    coarse.trend_lines = []
+    for _ in range(saved + 1):
+        if not coarse.step():
+            break
+
+
+def _bt_bsp_key_set(stepper: ChanStepper) -> set[str]:
+    if stepper.chan is None:
+        return set()
+    bundle = stepper.get_structure_bundle()
+    keys: set[str] = set()
+    for level in VISIBLE_BSP_LEVELS:
+        bsp_list = get_bundle_bsp_list(bundle, level)
+        for bsp in bsp_list.bsp_iter():
+            item = make_bsp_item(level, bsp)
+            keys.add(f'{item["level"]}|{int(item["x"])}|{item["label"]}|{1 if item["is_buy"] else 0}')
+    return keys
+
+
+def _bt_stepper_for_chart(sim: AppState, chart: str) -> Optional[ChanStepper]:
+    c = str(chart or "k1").lower().strip()
+    if c in ("k2", "chart2", "2"):
+        return sim.stepper2
+    return sim.stepper
+
+
+def _pick_driver_for_indicator_bt(sim: AppState, step_driver: str) -> tuple[ChanStepper, Optional[ChanStepper]]:
+    sd = str(step_driver or "auto").lower().strip()
+    if str(sim.chart_mode or "single").lower() != "dual" or sim.stepper2 is None:
+        return sim.stepper, None
+    if sd == "k1":
+        return sim.stepper, sim.stepper2
+    if sd == "k2":
+        return sim.stepper2, sim.stepper
+    r1 = AppState._k_type_granularity_rank(sim.stepper.k_type)
+    r2 = AppState._k_type_granularity_rank(sim.stepper2.k_type)
+    if r1 < r2:
+        return sim.stepper, sim.stepper2
+    if r2 < r1:
+        return sim.stepper2, sim.stepper
+    return sim.stepper, sim.stepper2
+
+
+def _normalize_indicator_backtest_req(req: IndicatorBacktestReq) -> tuple[list[dict[str, Any]], str, list[dict[str, Any]], str, Optional[int]]:
+    entry = [c for c in (req.entry_conditions or []) if isinstance(c, dict)]
+    if not entry and req.conditions:
+        entry = [c for c in req.conditions if isinstance(c, dict)]
+    exit_c = [c for c in (req.exit_conditions or []) if isinstance(c, dict)]
+    ent_comb = str(req.entry_combine or req.combine_mode or "and").strip().lower()
+    ex_comb = str(req.exit_combine or "and").strip().lower()
+    hold = req.exit_hold_bars
+    if hold is None and req.sell_hold_bars is not None:
+        hold = int(req.sell_hold_bars)
+    if not exit_c and hold is None:
+        hold = 5
+    return entry, ent_comb, exit_c, ex_comb, hold
+
+
+def _combine_cond_flags(flags: list[bool], use_or: bool) -> bool:
+    if not flags:
+        return False
+    return any(flags) if use_or else all(flags)
+
+
+def _eval_indicator_condition(
+    cond: dict[str, Any],
+    sim: AppState,
+    bsp_ctx: dict[str, set[str]],
+) -> bool:
+    """BSP 类条件仅在本步新增的 key 集合上成立（与上一步快照 diff），避免历史买卖点重复触发。"""
+    st = _bt_stepper_for_chart(sim, str(cond.get("chart", "k1")))
+    if st is None or st.chan is None:
+        return False
+    kl_list = st.chan[0]
+    if len(kl_list.lst) == 0:
+        return False
+    hist = st.indicator_history
+    if len(hist) < 1:
+        return False
+    kind = str(cond.get("kind", "")).strip().lower()
+    last = hist[-1]
+    prev = hist[-2] if len(hist) >= 2 else None
+
+    def last_klu_idx() -> Optional[int]:
+        try:
+            return int(kl_list.lst[-1].lst[-1].idx)
+        except Exception:
+            return None
+
+    def new_bsp_keys_for_stepper() -> set[str]:
+        if st is sim.stepper:
+            return set(bsp_ctx.get("new_k1") or ())
+        if st is sim.stepper2:
+            return set(bsp_ctx.get("new_k2") or ())
+        return set()
+
+    if kind == "boll_lower_reclaim":
+        if prev is None:
+            return False
+        klus = list(kl_list.klu_iter())
+        if len(klus) < 2:
+            return False
+        h_prev = float(klus[-2].high)
+        down_prev = float(prev.get("boll", {}).get("down", 0.0))
+        c_now = float(klus[-1].close)
+        down_now = float(last.get("boll", {}).get("down", 0.0))
+        return h_prev < down_prev and c_now >= down_now
+
+    if kind == "close_ge_boll_down":
+        c_now = float(kl_list.lst[-1].lst[-1].close)
+        return c_now >= float(last.get("boll", {}).get("down", c_now))
+
+    if kind == "cross_up_boll_mid":
+        if prev is None:
+            return False
+        klus = list(kl_list.klu_iter())
+        if len(klus) < 2:
+            return False
+        c_prev2 = float(klus[-2].close)
+        pmid = float(prev.get("boll", {}).get("mid", 0.0))
+        cmid = float(last.get("boll", {}).get("mid", 0.0))
+        c_now = float(klus[-1].close)
+        return c_prev2 <= pmid and c_now > cmid
+
+    if kind == "macd_golden_cross":
+        if prev is None:
+            return False
+        pd, pa = float(prev["macd"]["dif"]), float(prev["macd"]["dea"])
+        cd, ca = float(last["macd"]["dif"]), float(last["macd"]["dea"])
+        return pd <= pa and cd > ca
+
+    if kind == "macd_dead_cross":
+        if prev is None:
+            return False
+        pd, pa = float(prev["macd"]["dif"]), float(prev["macd"]["dea"])
+        cd, ca = float(last["macd"]["dif"]), float(last["macd"]["dea"])
+        return pd >= pa and cd < ca
+
+    if kind == "macd_above_zero":
+        return float(last["macd"]["dif"]) > 0.0
+
+    if kind == "macd_below_zero":
+        return float(last["macd"]["dif"]) < 0.0
+
+    if kind == "kdj_golden_cross":
+        if prev is None:
+            return False
+        pk, pdj = float(prev["kdj"]["k"]), float(prev["kdj"]["d"])
+        ck, cdj = float(last["kdj"]["k"]), float(last["kdj"]["d"])
+        return pk <= pdj and ck > cdj
+
+    if kind == "kdj_dead_cross":
+        if prev is None:
+            return False
+        pk, pdj = float(prev["kdj"]["k"]), float(prev["kdj"]["d"])
+        ck, cdj = float(last["kdj"]["k"]), float(last["kdj"]["d"])
+        return pk >= pdj and ck < cdj
+
+    if kind == "rsi_below":
+        thr = float(cond.get("value", 30))
+        return float(last.get("rsi", 50)) < thr
+
+    if kind == "rsi_above":
+        thr = float(cond.get("value", 70))
+        return float(last.get("rsi", 50)) > thr
+
+    if kind == "close_above_boll_mid":
+        c_now = float(kl_list.lst[-1].lst[-1].close)
+        return c_now > float(last.get("boll", {}).get("mid", c_now))
+
+    if kind == "close_below_boll_upper":
+        c_now = float(kl_list.lst[-1].lst[-1].close)
+        return c_now < float(last.get("boll", {}).get("up", c_now))
+
+    if kind == "close_above_boll_upper":
+        c_now = float(kl_list.lst[-1].lst[-1].close)
+        return c_now > float(last.get("boll", {}).get("up", c_now))
+
+    if kind in ("bsp_buy", "bsp_sell"):
+        lv = str(cond.get("level", "bi")).strip().lower()
+        if lv not in VISIBLE_BSP_LEVELS:
+            lv = "bi"
+        want_buy = kind == "bsp_buy"
+        xi = last_klu_idx()
+        if xi is None:
+            return False
+        new_keys = new_bsp_keys_for_stepper()
+        if not new_keys:
+            return False
+        bundle = st.get_structure_bundle()
+        bsp_list = get_bundle_bsp_list(bundle, lv)
+        for bsp in bsp_list.bsp_iter():
+            if bool(bsp.is_buy) != want_buy or int(bsp.klu.idx) != xi:
+                continue
+            item = make_bsp_item(lv, bsp)
+            k = f'{item["level"]}|{int(item["x"])}|{item["label"]}|{1 if item["is_buy"] else 0}'
+            if k in new_keys:
+                return True
+        return False
+
+    return False
+
+
+def _indicator_backtest_init_first_bar(sim: AppState, driver: ChanStepper) -> None:
+    """首根：与驱动周期一致；driver=k2 时先推图2 再同步图1。"""
+    if driver is sim.stepper2:
+        if sim.stepper2 is None or not sim.stepper2.step():
+            raise ValueError("K 线数据不足，无法回测")
+        bt_sync_stepper_to_anchor(sim.stepper, sim.stepper2.current_time())
+    else:
+        if not sim.stepper.step():
+            raise ValueError("K 线数据不足，无法回测")
+        if sim.stepper2 is not None:
+            sim.stepper2.step()
+            bt_sync_stepper_to_anchor(sim.stepper2, sim.stepper.current_time())
+    bt_dual_rebuild_coarse_chan_anti_future(
+        sim.session_params or {},
+        str(sim.chart_mode or "single"),
+        sim.stepper,
+        sim.stepper2,
+        driver.current_time(),
+    )
+
+
+def run_indicator_backtest(req: IndicatorBacktestReq) -> dict[str, Any]:
+    autype_map = {"qfq": AUTYPE.QFQ, "hfq": AUTYPE.HFQ, "none": AUTYPE.NONE}
+    autype = autype_map.get(str(req.autype or "qfq").lower(), AUTYPE.QFQ)
+    code_norm = normalize_code(req.code)
+    cfg = req.chan_config if isinstance(req.chan_config, dict) else {}
+    chart_mode = str(req.chart_mode or "single").strip().lower()
+    entry_conds, entry_comb_s, exit_conds, exit_comb_s, exit_hold = _normalize_indicator_backtest_req(req)
+    if not entry_conds:
+        raise ValueError("请至少配置一条入场条件（entry_conditions 或兼容字段 conditions）")
+    entry_use_or = str(entry_comb_s).lower() == "or"
+    exit_use_or = str(exit_comb_s).lower() == "or"
+
+    sim = AppState()
+    sim.chart_mode = "dual" if chart_mode == "dual" else "single"
+    sim.stepper.init(
+        code_norm,
+        req.begin_date,
+        req.end_date,
+        autype,
+        chan_config=cfg,
+        k_type=req.k_type,
+        confirm_offline=bool(req.confirm_offline),
+        data_source_priority=req.data_source_priority,
+        data_form_mode=req.data_form_mode,
+        data_form_quantity=req.data_form_quantity,
+    )
+    sim.stepper2 = None
+    if sim.chart_mode == "dual":
+        sim.stepper2 = ChanStepper()
+        sim.stepper2.init(
+            code_norm,
+            req.begin_date,
+            req.end_date,
+            autype,
+            chan_config=cfg,
+            k_type=str(req.k_type_2 or req.k_type),
+            confirm_offline=bool(req.confirm_offline),
+            data_source_priority=req.data_source_priority,
+            data_form_mode=req.data_form_mode,
+            data_form_quantity=req.data_form_quantity,
+        )
+    sim.session_params = {
+        "code": code_norm,
+        "begin_date": req.begin_date,
+        "end_date": req.end_date,
+        "autype": autype,
+        "initial_cash": float(req.initial_cash),
+        "chan_config": cfg,
+        "k_type": req.k_type,
+        "chart_mode": sim.chart_mode,
+        "k_type_2": req.k_type_2,
+        "active_chart_id": "chart1",
+        "confirm_offline": bool(req.confirm_offline),
+        "data_source_priority": req.data_source_priority,
+        "data_form_mode": normalize_data_form_mode(req.data_form_mode),
+        "data_form_quantity": req.data_form_quantity,
+    }
+    sim.ready = True
+
+    sdriver = str(req.step_driver or "auto").lower().strip()
+    if sdriver == "k2" and chart_mode != "dual":
+        raise ValueError("步进驱动选「周期2」时需开启双周期模式")
+    driver, follower = _pick_driver_for_indicator_bt(sim, sdriver)
+    _indicator_backtest_init_first_bar(sim, driver)
+
+    prev_k1 = _bt_bsp_key_set(sim.stepper)
+    prev_k2 = _bt_bsp_key_set(sim.stepper2) if sim.stepper2 else set()
+
+    cash = float(req.initial_cash)
+    pos_shares = 0
+    pos_buy_price = 0.0
+    pos_buy_step_ch1 = -1
+    pos_buy_driver_step = -1
+    pos_buy_time = ""
+    trades: list[dict[str, Any]] = []
+    equity_curve: list[float] = []
+
+    def ref_price() -> float:
+        return float(sim.stepper.chan[0].lst[-1].lst[-1].close)
+
+    def eval_entry(bsp_ctx: dict[str, set[str]]) -> bool:
+        flags = [_eval_indicator_condition(c, sim, bsp_ctx) for c in entry_conds]
+        return _combine_cond_flags(flags, entry_use_or)
+
+    def eval_exit(bsp_ctx: dict[str, set[str]]) -> bool:
+        if not exit_conds:
+            return False
+        flags = [_eval_indicator_condition(c, sim, bsp_ctx) for c in exit_conds]
+        return _combine_cond_flags(flags, exit_use_or)
+
+    def try_buy() -> None:
+        nonlocal cash, pos_shares, pos_buy_price, pos_buy_step_ch1, pos_buy_driver_step, pos_buy_time
+        if pos_shares > 0 or cash <= 0:
+            return
+        price = ref_price()
+        if price <= 0:
+            return
+        shares = int(cash // price)
+        if shares <= 0:
+            return
+        cash -= shares * price
+        pos_shares = shares
+        pos_buy_price = float(price)
+        pos_buy_step_ch1 = int(sim.stepper.step_idx)
+        pos_buy_driver_step = int(driver.step_idx)
+        pos_buy_time = str(sim.stepper.current_time())
+
+    def try_sell(idx_sell: int, sell_reason: str) -> None:
+        nonlocal cash, pos_shares, pos_buy_price, pos_buy_step_ch1, pos_buy_driver_step, pos_buy_time
+        if pos_shares <= 0:
+            return
+        price = ref_price()
+        if price <= 0:
+            return
+        cash += pos_shares * price
+        trades.append(
+            {
+                "buy_idx": int(pos_buy_step_ch1),
+                "sell_idx": int(idx_sell),
+                "buy_t": pos_buy_time,
+                "sell_t": str(sim.stepper.current_time()),
+                "buy_price": round(pos_buy_price, 4),
+                "sell_price": round(float(price), 4),
+                "shares": int(pos_shares),
+                "pnl": round((float(price) - pos_buy_price) * pos_shares, 2),
+                "sell_reason": sell_reason,
+                "driver_step": int(driver.step_idx),
+            }
+        )
+        pos_shares = 0
+        pos_buy_price = 0.0
+        pos_buy_step_ch1 = -1
+        pos_buy_driver_step = -1
+        pos_buy_time = ""
+
+    while True:
+        keys_k1 = _bt_bsp_key_set(sim.stepper)
+        keys_k2 = _bt_bsp_key_set(sim.stepper2) if sim.stepper2 else set()
+        bsp_ctx = {"new_k1": keys_k1 - prev_k1, "new_k2": keys_k2 - prev_k2}
+
+        c_now = ref_price()
+        if pos_shares > 0 and pos_buy_driver_step >= 0:
+            exit_sig = eval_exit(bsp_ctx)
+            hold_hit = exit_hold is not None and (int(driver.step_idx) - pos_buy_driver_step >= int(exit_hold))
+            if exit_sig or hold_hit:
+                if exit_sig and hold_hit:
+                    reason = "exit_formula+hold"
+                elif exit_sig:
+                    reason = "exit_formula"
+                else:
+                    reason = "exit_hold"
+                try_sell(int(sim.stepper.step_idx), reason)
+        if pos_shares <= 0 and eval_entry(bsp_ctx):
+            try_buy()
+        mv = cash + (pos_shares * c_now if pos_shares > 0 else 0.0)
+        equity_curve.append(round(mv, 2))
+
+        ok = driver.step()
+        if not ok:
+            break
+        if follower is not None:
+            bt_sync_stepper_to_anchor(follower, driver.current_time())
+        bt_dual_rebuild_coarse_chan_anti_future(
+            sim.session_params or {},
+            str(sim.chart_mode or "single"),
+            sim.stepper,
+            sim.stepper2,
+            driver.current_time(),
+        )
+        prev_k1 = _bt_bsp_key_set(sim.stepper)
+        prev_k2 = _bt_bsp_key_set(sim.stepper2) if sim.stepper2 else set()
+
+    if pos_shares > 0:
+        try_sell(int(sim.stepper.step_idx), "eof")
+
+    final_equity = cash
+    total_pnl = round(final_equity - float(req.initial_cash), 2)
+    ret_pct = (total_pnl / float(req.initial_cash) * 100.0) if req.initial_cash else 0.0
+    wins = sum(1 for tr in trades if float(tr.get("pnl", 0)) > 0)
+    losses = sum(1 for tr in trades if float(tr.get("pnl", 0)) < 0)
+    ntr = len(trades)
+    bar_count = len(sim.stepper._replay_klus_master or [])
+    warn = None
+    if bar_count > 8000:
+        warn = "K 线根数较多，回测可能较慢（每步粗周期可能整段重建）。"
+
+    return {
+        "code": code_norm,
+        "name": sim.stepper.stock_name,
+        "chart_mode": chart_mode,
+        "k_type": req.k_type,
+        "k_type_2": req.k_type_2 if chart_mode == "dual" else None,
+        "step_driver": str(req.step_driver or "auto"),
+        "bars": bar_count,
+        "initial_cash": round(float(req.initial_cash), 2),
+        "final_equity": round(final_equity, 2),
+        "total_pnl": total_pnl,
+        "total_return_pct": round(ret_pct, 2),
+        "trade_count": ntr,
+        "win_count": wins,
+        "loss_count": losses,
+        "win_rate_pct": round((wins / ntr * 100.0) if ntr else 0.0, 2),
+        "trades": trades,
+        "entry_combine": entry_comb_s,
+        "exit_combine": exit_comb_s,
+        "exit_hold_bars": exit_hold,
+        "entry_conditions": entry_conds,
+        "exit_conditions": exit_conds,
+        "hold_bars_basis": "driver",
+        "warning": warn,
+    }
+
+
 def serialize_klu_iter(klu_iter) -> list[dict[str, Any]]:
     arr: list[dict[str, Any]] = []
     for klu in klu_iter:
@@ -4824,6 +5100,144 @@ HTML = r"""
     .account-item { display: flex; justify-content: space-between; font-size: 14px; padding: 4px 0; border-bottom: 1px dashed var(--grid); }
     .account-item label { width: auto; color: var(--muted); }
     .account-item span { font-weight: bold; font-family: Consolas, monospace; }
+
+    /* 回测条件区：Figma 风格分区卡片 */
+    .bt-cond-shell {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.95), rgba(248,250,252,0.95));
+      padding: 10px;
+      margin-top: 8px;
+    }
+    .bt-cond-section {
+      border: 1px solid rgba(148,163,184,0.25);
+      border-radius: 10px;
+      background: #ffffff;
+      padding: 10px;
+      margin-bottom: 10px;
+      box-shadow: 0 2px 8px rgba(15,23,42,0.04);
+    }
+    .bt-cond-section:last-child { margin-bottom: 0; }
+    .bt-cond-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+    .bt-cond-title strong {
+      font-size: 13px;
+      letter-spacing: 0.2px;
+      color: #1e3a8a;
+    }
+    .bt-cond-badge {
+      font-size: 11px;
+      color: #334155;
+      background: #e2e8f0;
+      border-radius: 999px;
+      padding: 2px 8px;
+      white-space: nowrap;
+    }
+    .bt-cond-desc {
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.45;
+      margin: 0 0 8px;
+    }
+    .bt-combine-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .bt-combine-row label {
+      width: auto;
+      min-width: 72px;
+      color: #334155;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .bt-combine-row select {
+      flex: 1 1 auto;
+      max-width: 180px;
+      border-radius: 8px;
+      padding: 6px 8px;
+      background: #f8fafc;
+    }
+    .bt-cond-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      font-size: 12px;
+    }
+    .bt-cond-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      border: 1px solid #dbeafe;
+      background: #f8fbff;
+      border-radius: 8px;
+      padding: 7px 8px;
+      cursor: pointer;
+      transition: all .16s ease;
+      min-height: 42px;
+      box-sizing: border-box;
+    }
+    .bt-cond-item:hover {
+      border-color: #93c5fd;
+      background: #eff6ff;
+      transform: translateY(-1px);
+    }
+    .bt-cond-item input[type="checkbox"] {
+      margin: 2px 0 0;
+      width: 14px;
+      height: 14px;
+      accent-color: #2563eb;
+      transform: none;
+    }
+    .bt-cond-text {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      line-height: 1.3;
+      min-width: 0;
+    }
+    .bt-cond-main {
+      color: #0f172a;
+      word-break: break-word;
+    }
+    .bt-cond-sub {
+      color: #64748b;
+      font-size: 11px;
+    }
+    .bt-hold-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 8px;
+      padding: 8px;
+      border-radius: 8px;
+      background: #f8fafc;
+      border: 1px dashed #cbd5e1;
+    }
+    .bt-hold-row label {
+      width: auto;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      color: #334155;
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+    .bt-hold-row input[type="number"] {
+      max-width: 100px;
+      flex: 0 0 auto;
+      border-radius: 8px;
+      background: #fff;
+      padding: 6px 8px;
+    }
 
     /* Tooltip logic */
     .tip-icon {
@@ -5298,7 +5712,7 @@ HTML = r"""
     .settingsActions button {
       min-width: 100px;
     }
-    /* 左侧主标签：1 复盘 / 2 BOLL 回测 */
+    /* 左侧主标签：1 复盘 / 2 回测 */
     .mainTabs {
       display: flex;
       gap: 6px;
@@ -5334,8 +5748,8 @@ HTML = r"""
       cursor: pointer;
     }
     .subTabBtn.active { border-color: #2563eb; color: #2563eb; font-weight: bold; }
-    .bollTradeRow { cursor: pointer; font-size: 12px; }
-    .bollTradeRow:hover { background: rgba(37, 99, 235, 0.08); }
+    .btTradeRow { cursor: pointer; font-size: 12px; }
+    .btTradeRow:hover { background: rgba(37, 99, 235, 0.08); }
   </style>
 
 </head>
@@ -5346,7 +5760,7 @@ HTML = r"""
       <div id="dataSourceStatus" class="sourceStatus mono">当前数据源：未加载</div>
       <div class="mainTabs" role="tablist" aria-label="主标签">
         <button type="button" class="mainTabBtn active" id="btnMainTab1" role="tab" aria-selected="true">1 · 复盘训练</button>
-        <button type="button" class="mainTabBtn" id="btnMainTab2" role="tab" aria-selected="false">2 · BOLL回测</button>
+        <button type="button" class="mainTabBtn" id="btnMainTab2" role="tab" aria-selected="false">2 · 回测</button>
       </div>
       <div class="leftScrollRegion">
       <div id="leftContent" class="leftContent">
@@ -5480,26 +5894,105 @@ HTML = r"""
       </div>
       <div id="tabPanel2" class="tabPanel" style="display:none;">
         <div class="card">
-          <div class="subTabs">
-            <button type="button" class="subTabBtn active" id="btnSubTabBoll">BOLL</button>
-          </div>
-          <p class="muted" style="font-size:12px; line-height:1.5; margin:0 0 10px;">代码、开始/结束日期、初始资金、复权、K线图模式、周期类型1/2 与<strong>标签1</strong>左侧表单为同一组控件，请在标签1中修改。</p>
-          <div class="row" style="margin:4px 0 2px;"><span class="muted" style="font-size:12px;">买入规则（固定）</span></div>
-          <p class="muted" style="font-size:12px; line-height:1.55; margin:0 0 10px;">上一根K最高价 &lt; 布林下轨，本根收盘价 ≥ 下轨。双周期时两图在同一细周期锚点下同时满足；大周期末根由细K合成以防未来数据。</p>
+          <p class="muted" style="font-size:12px; line-height:1.5; margin:0 0 10px;">股票代码、日期、资金、复权与<strong>标签1</strong>共用；本页可单独设回测周期与条件。步进规则与复盘一致：<strong>细周期驱动、粗周期跟随</strong>，粗末根按细K重算，无大周期未来函数。</p>
           <div class="row cfg-editable">
-            <label for="bollSellHoldN">卖出 持有 N 根K</label>
-            <input id="bollSellHoldN" type="number" min="1" step="1" value="5" style="max-width:96px; flex:0 0 auto;" />
-            <span class="tip-icon" data-tip="按图1（周期类型1）K 线计数：买入后满 N 根，于第 N 根收盘价卖出。"></span>
+            <label>K线图模式</label>
+            <select id="btChartMode">
+              <option value="single">单周期</option>
+              <option value="dual">双周期</option>
+            </select>
+            <span class="tip-icon" data-tip="双周期时可选手动指定步进时钟；默认较细周期驱动。被动周期同步+粗末根防未来与复盘一致。"></span>
+          </div>
+          <div class="row cfg-editable" id="btStepDriverRow" style="display:none;">
+            <label>步进驱动</label>
+            <select id="btStepDriver">
+              <option value="auto" selected>自动（较细周期）</option>
+              <option value="k1">周期1 K 线</option>
+              <option value="k2">周期2 K 线</option>
+            </select>
+            <span class="tip-icon" data-tip="回测每步以所选周期的下一根 K 为时钟；与复盘里「点 active 图步进」不同，此处由本项固定，避免歧义。"></span>
+          </div>
+          <div class="row cfg-editable">
+            <label>周期1</label>
+            <select id="btKType1">
+              <option value="1min">1分钟</option>
+              <option value="5min">5分钟</option>
+              <option value="15min">15分钟</option>
+              <option value="30min">30分钟</option>
+              <option value="60min">60分钟</option>
+              <option value="daily" selected>日线</option>
+              <option value="weekly">周线</option>
+              <option value="monthly">月线</option>
+              <option value="quarterly">季线</option>
+              <option value="yearly">年线</option>
+              <option value="3min">3分钟</option>
+            </select>
+          </div>
+          <div class="row cfg-editable" id="btKType2Row" style="display:none;">
+            <label>周期2</label>
+            <select id="btKType2">
+              <option value="1min">1分钟</option>
+              <option value="5min">5分钟</option>
+              <option value="15min">15分钟</option>
+              <option value="30min">30分钟</option>
+              <option value="60min">60分钟</option>
+              <option value="daily">日线</option>
+              <option value="weekly" selected>周线</option>
+              <option value="monthly">月线</option>
+              <option value="quarterly">季线</option>
+              <option value="yearly">年线</option>
+              <option value="3min">3分钟</option>
+            </select>
+          </div>
+          <div class="bt-cond-shell">
+            <div class="bt-cond-section">
+              <div class="bt-cond-title">
+                <strong>入场条件</strong>
+                <span class="bt-cond-badge">多选</span>
+              </div>
+              <p class="bt-cond-desc">BOLL/MACD/KDJ/RSI 与复盘同一递推；买卖点仅当<strong>本步新增</strong>且落在当前 K 上触发。</p>
+              <div class="bt-combine-row cfg-editable">
+                <label>条件关系</label>
+                <select id="btEntryCombineMode">
+                  <option value="and" selected>AND（全部满足）</option>
+                  <option value="or">OR（任一满足）</option>
+                </select>
+              </div>
+              <div id="btEntryCondGrid" class="bt-cond-grid"></div>
+            </div>
+            <div class="bt-cond-section">
+              <div class="bt-cond-title">
+                <strong>出场条件</strong>
+                <span class="bt-cond-badge">多选 + 兜底</span>
+              </div>
+              <p class="bt-cond-desc">出场公式与“持有满 N 根兜底平仓”为「或」关系，任一满足即触发卖出。</p>
+              <div class="bt-combine-row cfg-editable">
+                <label>条件关系</label>
+                <select id="btExitCombineMode">
+                  <option value="and" selected>AND（全部满足）</option>
+                  <option value="or">OR（任一满足）</option>
+                </select>
+              </div>
+              <div id="btExitCondGrid" class="bt-cond-grid"></div>
+              <div class="bt-hold-row cfg-editable">
+                <label>
+                  <input type="checkbox" id="btUseExitHold" checked />
+                  <span>持有满 N 根（驱动周期）兜底平仓</span>
+                </label>
+                <input id="btExitHoldN" type="number" min="1" step="1" value="5" />
+                <span class="tip-icon" data-tip="未勾选时仅按出场公式平仓；若未配出场公式且未勾选，服务端仍默认持有 5 根兜底。出场公式与兜底任一满足即卖。"></span>
+              </div>
+            </div>
           </div>
           <div class="btnRow" style="margin-top:8px;">
-            <button type="button" id="btnBollBacktestRun">执行回测</button>
+            <button type="button" id="btnStrategyBacktestRun">执行回测</button>
           </div>
         </div>
-        <div class="card" id="bollResultCard" style="display:none; margin-top:10px;">
+        <div class="card" id="btResultCard" style="display:none; margin-top:10px;">
           <div class="title" style="margin:0 0 8px;">回测结果</div>
-          <pre id="bollBacktestSummary" class="mono" style="white-space:pre-wrap; font-size:12px; margin:0; color:var(--text);"></pre>
-          <p class="muted" style="font-size:11px; margin:8px 0 0;">双击表格一行：切到标签1并跳转到该笔买入 K（需已用相同代码与周期加载会话）。</p>
-          <div id="bollTradeTableWrap" style="max-height:240px; overflow:auto; margin-top:8px; border:1px solid var(--border); border-radius:6px;"></div>
+          <pre id="btBacktestSummary" class="mono" style="white-space:pre-wrap; font-size:12px; margin:0; color:var(--text);"></pre>
+          <p class="muted" style="font-size:11px; margin:8px 0 0;">双击表格一行：切到标签1并跳转到该笔买入 K（需已用相同代码与周期1加载会话）。买卖点与粗周期指标已按细周期重算末根，与复盘防未来逻辑一致。</p>
+          <div id="btTradeTableWrap" style="max-height:240px; overflow:auto; margin-top:8px; border:1px solid var(--border); border-radius:6px;"></div>
         </div>
       </div>
       </div>
@@ -12135,8 +12628,103 @@ if ($("bspPrompt")) {
   });
 }
 
-/** 左侧主标签：1 复盘训练 / 2 BOLL 回测（仅切换左栏内容，图表全宽不变） */
+/** 左侧主标签：1 复盘训练 / 2 回测（仅切换左栏内容，图表全宽不变） */
 const MAIN_TAB_STORAGE_KEY = "chan_left_main_tab";
+function syncBacktestFormFromSession() {
+  if ($("btKType1") && $("kType")) $("btKType1").value = $("kType").value;
+  if ($("btKType2") && $("kType2")) $("btKType2").value = $("kType2").value;
+  if ($("btChartMode") && $("chartMode")) $("btChartMode").value = $("chartMode").value;
+  const dual = $("btChartMode") && $("btChartMode").value === "dual";
+  if ($("btKType2Row")) $("btKType2Row").style.display = dual ? "" : "none";
+  if ($("btStepDriverRow")) $("btStepDriverRow").style.display = dual ? "" : "none";
+}
+function buildBtConditionsFromGrid(gridId) {
+  const out = [];
+  const wrap = $(gridId);
+  if (!wrap) return out;
+  wrap.querySelectorAll('input[type="checkbox"][data-chart][data-kind]').forEach((el) => {
+    if (!el.checked) return;
+    const one = { chart: el.getAttribute("data-chart"), kind: el.getAttribute("data-kind") };
+    const lv = el.getAttribute("data-level");
+    const vf = el.getAttribute("data-value");
+    if (lv) one.level = lv;
+    if (vf != null && vf !== "") {
+      const n = parseFloat(vf);
+      if (!Number.isNaN(n)) one.value = n;
+    }
+    out.push(one);
+  });
+  return out;
+}
+function _fillBtCondGrid(gridId, defs, idPrefix) {
+  const wrap = $(gridId);
+  if (!wrap || wrap.dataset.inited === "1") return;
+  wrap.dataset.inited = "1";
+  defs.forEach(([chart, kind, level, value, label], idx) => {
+    const id = `${idPrefix}${idx}`;
+    const lab = document.createElement("label");
+    lab.className = "bt-cond-item";
+    const inp = document.createElement("input");
+    inp.type = "checkbox";
+    inp.id = id;
+    inp.setAttribute("data-chart", chart);
+    inp.setAttribute("data-kind", kind);
+    if (level) inp.setAttribute("data-level", level);
+    if (value) inp.setAttribute("data-value", value);
+    const text = document.createElement("span");
+    text.className = "bt-cond-text";
+    const main = document.createElement("span");
+    main.className = "bt-cond-main";
+    const sub = document.createElement("span");
+    sub.className = "bt-cond-sub";
+    // 中文文案拆成主副标题，提升可读性
+    const left = String(label || "");
+    const i = left.indexOf("（");
+    if (i > 0) {
+      main.textContent = left.slice(0, i);
+      sub.textContent = left.slice(i);
+    } else {
+      main.textContent = left;
+      sub.textContent = `${chart.toUpperCase()} · ${kind}`;
+    }
+    text.appendChild(main);
+    text.appendChild(sub);
+    lab.appendChild(inp);
+    lab.appendChild(text);
+    wrap.appendChild(lab);
+  });
+}
+function initBtCondGrids() {
+  const entryDefs = [
+    ["k1", "boll_lower_reclaim", "", "", "图1 布林下轨收回"],
+    ["k2", "boll_lower_reclaim", "", "", "图2 布林下轨收回"],
+    ["k1", "close_ge_boll_down", "", "", "图1 收盘≥布林下轨"],
+    ["k1", "cross_up_boll_mid", "", "", "图1 上穿布林中轨"],
+    ["k1", "macd_golden_cross", "", "", "图1 MACD金叉"],
+    ["k1", "macd_dead_cross", "", "", "图1 MACD死叉"],
+    ["k1", "macd_above_zero", "", "", "图1 MACD DIF>0"],
+    ["k1", "kdj_golden_cross", "", "", "图1 KDJ金叉"],
+    ["k1", "kdj_dead_cross", "", "", "图1 KDJ死叉"],
+    ["k1", "rsi_below", "", "30", "图1 RSI<30"],
+    ["k1", "rsi_above", "", "70", "图1 RSI>70"],
+    ["k1", "close_above_boll_mid", "", "", "图1 收盘>布林中轨"],
+    ["k1", "close_below_boll_upper", "", "", "图1 收盘<布林上轨"],
+    ["k1", "bsp_buy", "bi", "", "图1 笔买点（本步新增）"],
+    ["k2", "bsp_buy", "bi", "", "图2 笔买点（本步新增）"],
+    ["k1", "bsp_buy", "seg", "", "图1 段买点（本步新增）"],
+  ];
+  const exitDefs = [
+    ["k1", "macd_dead_cross", "", "", "图1 MACD死叉"],
+    ["k1", "macd_below_zero", "", "", "图1 MACD DIF<0"],
+    ["k1", "kdj_dead_cross", "", "", "图1 KDJ死叉"],
+    ["k1", "rsi_above", "", "70", "图1 RSI>70"],
+    ["k1", "close_above_boll_upper", "", "", "图1 收盘>布林上轨"],
+    ["k1", "bsp_sell", "bi", "", "图1 笔卖点（本步新增）"],
+    ["k1", "bsp_sell", "seg", "", "图1 段卖点（本步新增）"],
+  ];
+  _fillBtCondGrid("btEntryCondGrid", entryDefs, "btEntCb");
+  _fillBtCondGrid("btExitCondGrid", exitDefs, "btExCb");
+}
 function setMainTab(which) {
   const w = which === "2" ? "2" : "1";
   storageSet(MAIN_TAB_STORAGE_KEY, w);
@@ -12154,6 +12742,10 @@ function setMainTab(which) {
     b2.classList.toggle("active", w === "2");
     b2.setAttribute("aria-selected", w === "2" ? "true" : "false");
   }
+  if (w === "2") {
+    initBtCondGrids();
+    syncBacktestFormFromSession();
+  }
   requestAnimationFrame(updateCompactLayout);
 }
 if ($("btnMainTab1")) {
@@ -12163,6 +12755,13 @@ if ($("btnMainTab2")) {
   $("btnMainTab2").addEventListener("click", () => setMainTab("2"));
 }
 setMainTab(storageGet(MAIN_TAB_STORAGE_KEY) || "1");
+if ($("btChartMode")) {
+  $("btChartMode").addEventListener("change", () => {
+    const dual = $("btChartMode").value === "dual";
+    if ($("btKType2Row")) $("btKType2Row").style.display = dual ? "" : "none";
+    if ($("btStepDriverRow")) $("btStepDriverRow").style.display = dual ? "" : "none";
+  });
+}
 
 function _processedChanConfigForApi() {
   const processedConfig = JSON.parse(JSON.stringify(chanConfig));
@@ -12177,21 +12776,28 @@ function _processedChanConfigForApi() {
   return processedConfig;
 }
 
-function renderBollBacktestResult(res) {
-  const card = $("bollResultCard");
-  const pre = $("bollBacktestSummary");
-  const wrap = $("bollTradeTableWrap");
+function renderStrategyBacktestResult(res) {
+  const card = $("btResultCard");
+  const pre = $("btBacktestSummary");
+  const wrap = $("btTradeTableWrap");
   if (!card || !pre || !wrap) return;
   card.style.display = "";
+  const entC = res.entry_combine === "or" ? "OR" : "AND";
+  const exC = res.exit_combine === "or" ? "OR" : "AND";
+  const holdLine =
+    res.exit_hold_bars != null && res.exit_hold_bars !== ""
+      ? `兜底：持有 ${res.exit_hold_bars} 根（驱动周期）`
+      : "兜底：未启用（仅出场公式或收盘强平）";
   const lines = [
     `标的：${res.name || res.code || "-"}`,
-    `模式：${res.chart_mode === "dual" ? "双周期" : "单周期"}  ${res.k_type || ""}${res.chart_mode === "dual" && res.k_type_2 ? " / " + res.k_type_2 : ""}`,
-    `K 线根数：${res.bars != null ? res.bars : "-"}`,
+    `模式：${res.chart_mode === "dual" ? "双周期" : "单周期"}  ${res.k_type || ""}${res.chart_mode === "dual" && res.k_type_2 ? " / " + res.k_type_2 : ""}  步进：${res.step_driver || "auto"}`,
+    `入场：${entC}  出场：${exC}  ${holdLine}`,
+    res.warning ? `提示：${res.warning}` : "",
+    `K 线根数（周期1）：${res.bars != null ? res.bars : "-"}`,
     `初始资金：${res.initial_cash}  期末权益：${res.final_equity}`,
     `总盈亏：${res.total_pnl}  收益率：${res.total_return_pct}%`,
     `成交笔数：${res.trade_count}  胜/负：${res.win_count}/${res.loss_count}  胜率：${res.win_rate_pct}%`,
-    `卖出规则：持有 ${res.hold_bars_rule || "-"} 根后卖出`,
-  ];
+  ].filter(Boolean);
   pre.textContent = lines.join("\n");
   wrap.innerHTML = "";
   const tbl = document.createElement("table");
@@ -12199,19 +12805,20 @@ function renderBollBacktestResult(res) {
   tbl.style.borderCollapse = "collapse";
   tbl.style.fontSize = "12px";
   const head = document.createElement("thead");
-  head.innerHTML = "<tr><th style='text-align:left;padding:4px;border-bottom:1px solid var(--border)'>#</th><th style='text-align:left;padding:4px;border-bottom:1px solid var(--border)'>买时</th><th style='text-align:left;padding:4px;border-bottom:1px solid var(--border)'>卖时</th><th style='text-align:right;padding:4px;border-bottom:1px solid var(--border)'>买价</th><th style='text-align:right;padding:4px;border-bottom:1px solid var(--border)'>卖价</th><th style='text-align:right;padding:4px;border-bottom:1px solid var(--border)'>盈亏</th></tr>";
+  head.innerHTML =
+    "<tr><th style='text-align:left;padding:4px;border-bottom:1px solid var(--border)'>#</th><th style='text-align:left;padding:4px;border-bottom:1px solid var(--border)'>买时</th><th style='text-align:left;padding:4px;border-bottom:1px solid var(--border)'>卖时</th><th style='text-align:left;padding:4px;border-bottom:1px solid var(--border)'>卖因</th><th style='text-align:right;padding:4px;border-bottom:1px solid var(--border)'>驱动step</th><th style='text-align:right;padding:4px;border-bottom:1px solid var(--border)'>买价</th><th style='text-align:right;padding:4px;border-bottom:1px solid var(--border)'>卖价</th><th style='text-align:right;padding:4px;border-bottom:1px solid var(--border)'>盈亏</th></tr>";
   tbl.appendChild(head);
   const body = document.createElement("tbody");
   const rows = Array.isArray(res.trades) ? res.trades : [];
   rows.forEach((tr, idx) => {
     const r = document.createElement("tr");
-    r.className = "bollTradeRow";
+    r.className = "btTradeRow";
     r.dataset.buyIdx = String(tr.buy_idx != null ? tr.buy_idx : "");
-    r.innerHTML = `<td style="padding:4px;border-bottom:1px dashed var(--grid)">${idx + 1}</td><td style="padding:4px;border-bottom:1px dashed var(--grid)">${escapeHtmlAttr(tr.buy_t || "")}</td><td style="padding:4px;border-bottom:1px dashed var(--grid)">${escapeHtmlAttr(tr.sell_t || "")}</td><td style="padding:4px;text-align:right;border-bottom:1px dashed var(--grid)">${tr.buy_price != null ? tr.buy_price : "-"}</td><td style="padding:4px;text-align:right;border-bottom:1px dashed var(--grid)">${tr.sell_price != null ? tr.sell_price : "-"}</td><td style="padding:4px;text-align:right;border-bottom:1px dashed var(--grid)">${tr.pnl != null ? tr.pnl : "-"}</td>`;
+    r.innerHTML = `<td style="padding:4px;border-bottom:1px dashed var(--grid)">${idx + 1}</td><td style="padding:4px;border-bottom:1px dashed var(--grid)">${escapeHtmlAttr(tr.buy_t || "")}</td><td style="padding:4px;border-bottom:1px dashed var(--grid)">${escapeHtmlAttr(tr.sell_t || "")}</td><td style="padding:4px;border-bottom:1px dashed var(--grid)">${escapeHtmlAttr(tr.sell_reason || "")}</td><td style="padding:4px;text-align:right;border-bottom:1px dashed var(--grid)">${tr.driver_step != null ? tr.driver_step : "-"}</td><td style="padding:4px;text-align:right;border-bottom:1px dashed var(--grid)">${tr.buy_price != null ? tr.buy_price : "-"}</td><td style="padding:4px;text-align:right;border-bottom:1px dashed var(--grid)">${tr.sell_price != null ? tr.sell_price : "-"}</td><td style="padding:4px;text-align:right;border-bottom:1px dashed var(--grid)">${tr.pnl != null ? tr.pnl : "-"}</td>`;
     r.addEventListener("dblclick", () => {
       const bi = parseInt(r.dataset.buyIdx, 10);
       if (!Number.isFinite(bi) || bi < 0) return;
-      void jumpToBollTradeBuy(bi);
+      void jumpToBacktestBuy(bi);
     });
     body.appendChild(r);
   });
@@ -12219,7 +12826,7 @@ function renderBollBacktestResult(res) {
   wrap.appendChild(tbl);
 }
 
-async function jumpToBollTradeBuy(buyIdx) {
+async function jumpToBacktestBuy(buyIdx) {
   setMainTab("1");
   if (!lastPayload || !lastPayload.ready) {
     showToast("请先在标签1点击「加载会话」。");
@@ -12237,10 +12844,18 @@ async function jumpToBollTradeBuy(buyIdx) {
   }
 }
 
-if ($("btnBollBacktestRun")) {
-  $("btnBollBacktestRun").addEventListener("click", async () => {
-    const n = Math.max(1, parseInt($("bollSellHoldN") && $("bollSellHoldN").value, 10) || 5);
-    if ($("bollSellHoldN")) $("bollSellHoldN").value = String(n);
+if ($("btnStrategyBacktestRun")) {
+  $("btnStrategyBacktestRun").addEventListener("click", async () => {
+    initBtCondGrids();
+    const useHold = $("btUseExitHold") && $("btUseExitHold").checked;
+    const n = Math.max(1, parseInt($("btExitHoldN") && $("btExitHoldN").value, 10) || 5);
+    if ($("btExitHoldN")) $("btExitHoldN").value = String(n);
+    const entryConds = buildBtConditionsFromGrid("btEntryCondGrid");
+    if (!entryConds.length) {
+      showToast("请至少勾选一条入场条件。");
+      return;
+    }
+    const exitConds = buildBtConditionsFromGrid("btExitCondGrid");
     const processedConfig = _processedChanConfigForApi();
     const rawN = getRawKlineCount();
     const buildBody = (extra = {}) => ({
@@ -12250,37 +12865,42 @@ if ($("btnBollBacktestRun")) {
       initial_cash: Number($("cash").value),
       autype: $("autype").value,
       chan_config: processedConfig,
-      k_type: $("kType").value,
-      chart_mode: $("chartMode") ? $("chartMode").value : "single",
-      k_type_2: $("kType2") ? $("kType2").value : $("kType").value,
-      sell_hold_bars: n,
+      k_type: $("btKType1") ? $("btKType1").value : $("kType").value,
+      chart_mode: $("btChartMode") ? $("btChartMode").value : "single",
+      k_type_2: $("btKType2") ? $("btKType2").value : $("kType").value,
+      step_driver: $("btStepDriver") ? $("btStepDriver").value : "auto",
+      entry_conditions: entryConds,
+      entry_combine: $("btEntryCombineMode") ? $("btEntryCombineMode").value : "and",
+      exit_conditions: exitConds,
+      exit_combine: $("btExitCombineMode") ? $("btExitCombineMode").value : "and",
+      exit_hold_bars: useHold ? n : null,
       data_form_mode: normalizeDataFormMode(dataFormConfig.mode),
       data_form_quantity: clampDataFormQuantity(dataFormConfig.quantity, rawN > 0 ? rawN : 1),
       ...extra,
     });
-    setGlobalLoading(true, "BOLL 回测计算中…");
+    setGlobalLoading(true, "指标回测计算中…");
     try {
       let res;
       try {
-        res = await api("/api/boll_backtest", buildBody({}));
+        res = await api("/api/indicator_backtest", buildBody({}));
       } catch (e) {
         if (e.offlineConfirm && Number(e.httpStatus) === 409) {
           const oc = e.offlineConfirm;
           const tip = `${oc.display_code}使用${oc.failed_label}获取数据失败，原因为【${oc.reason_tag}】是否使用离线数据继续？`;
           if (confirmAndLog(tip)) {
-            res = await api("/api/boll_backtest", buildBody({ confirm_offline: true }));
+            res = await api("/api/indicator_backtest", buildBody({ confirm_offline: true }));
           } else {
             let p = (systemConfig.dataSourcePriority || []).filter((x) => x !== "离线数据");
             if (!p.length) p = DEFAULT_SYSTEM_CONFIG.dataSourcePriority.filter((x) => x !== "离线数据");
-            res = await api("/api/boll_backtest", buildBody({ data_source_priority: p }));
+            res = await api("/api/indicator_backtest", buildBody({ data_source_priority: p }));
           }
         } else {
           throw e;
         }
       }
-      if (res) renderBollBacktestResult(res);
+      if (res) renderStrategyBacktestResult(res);
     } catch (e) {
-      showToast("BOLL回测失败：" + e.message);
+      showToast("回测失败：" + e.message);
     } finally {
       hideGlobalLoading();
     }
@@ -12733,15 +13353,21 @@ def api_goto_step(req: GotoStepReq):
         raise HTTPException(status_code=400, detail=str(e)) from e
 
 
-@app.post("/api/boll_backtest")
-def api_boll_backtest(req: BollBacktestReq):
-    """BOLL 触碰策略统计回测（不修改当前 APP_STATE 会话）。"""
+def _indicator_backtest_http(req: IndicatorBacktestReq) -> dict[str, Any]:
+    if req.initial_cash <= 0:
+        raise ValueError("初始资金必须大于0")
+    if req.exit_hold_bars is not None and int(req.exit_hold_bars) < 1:
+        raise ValueError("exit_hold_bars 必须>=1 或未传（仅用出场公式）")
+    if req.sell_hold_bars is not None and int(req.sell_hold_bars) < 1:
+        raise ValueError("兼容字段 sell_hold_bars 必须>=1")
+    return run_indicator_backtest(req)
+
+
+@app.post("/api/indicator_backtest")
+def api_indicator_backtest(req: IndicatorBacktestReq):
+    """指标+买卖点组合回测（与复盘同序步进+防未来粗末根；BSP 用步进增量 diff）。"""
     try:
-        if req.initial_cash <= 0:
-            raise ValueError("初始资金必须大于0")
-        if int(req.sell_hold_bars) < 1:
-            raise ValueError("卖出持有根数 N 必须>=1")
-        return run_boll_backtest(req)
+        return _indicator_backtest_http(req)
     except OfflineDataConfirmRequired as exc:
         raise HTTPException(
             status_code=409,
@@ -12757,6 +13383,12 @@ def api_boll_backtest(req: BollBacktestReq):
         raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.post("/api/strategy_backtest")
+def api_strategy_backtest(req: IndicatorBacktestReq):
+    """兼容旧路径，逻辑同 /api/indicator_backtest。"""
+    return api_indicator_backtest(req)
 
 
 @app.post("/api/back_n")
