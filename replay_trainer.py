@@ -282,6 +282,23 @@ def _ensure_klu_deepcopy_attrs(klus: list[Any]) -> None:
             klu.boll = None
 
 
+def _klu_float_trade_metric(klu: Any, field: str) -> float:
+    """读 K 线量额：引擎里在 trade_info.metric，不是顶层 .volume；部分封装可能直接挂属性。"""
+    raw = getattr(klu, field, None)
+    if raw is not None:
+        return float(raw or 0.0)
+    if field == DATA_FIELD.FIELD_VOLUME:
+        raw_v = getattr(klu, "vol", None)
+        if raw_v is not None:
+            return float(raw_v or 0.0)
+    ti = getattr(klu, "trade_info", None)
+    if ti and getattr(ti, "metric", None):
+        mv = ti.metric.get(field)
+        if mv is not None:
+            return float(mv or 0.0)
+    return 0.0
+
+
 def aggregate_klu_by_quantity(klus: list[Any], quantity: int) -> list[Any]:
     """按数量Q聚合K线：前面等分，余数全部放最后一组。"""
     _ensure_klu_deepcopy_attrs(klus)
@@ -307,8 +324,8 @@ def aggregate_klu_by_quantity(klus: list[Any], quantity: int) -> list[Any]:
         last = chunk[-1]
         high = max(float(getattr(k, "high", 0.0)) for k in chunk)
         low = min(float(getattr(k, "low", 0.0)) for k in chunk)
-        volume = sum(float(getattr(k, "volume", getattr(k, "vol", 0.0)) or 0.0) for k in chunk)
-        turnover = sum(float(getattr(k, "turnover", 0.0) or 0.0) for k in chunk)
+        volume = sum(_klu_float_trade_metric(k, DATA_FIELD.FIELD_VOLUME) for k in chunk)
+        turnover = sum(_klu_float_trade_metric(k, DATA_FIELD.FIELD_TURNOVER) for k in chunk)
         merged = CKLine_Unit(
             {
                 DATA_FIELD.FIELD_TIME: getattr(last, "time"),
@@ -3528,6 +3545,54 @@ class GotoStepReq(BaseModel):
     step_idx: int = 0
 
 
+class SessionKlineViewReq(BaseModel):
+    """弹窗查看全量 K 线缓存：OHLC / 成交量+筹码分桶 / 原始字段。"""
+    chart_id: str = "active"  # chart1 | chart2 | active
+    view: str = "kline"  # kline | volume_chip | all
+
+
+def _stepper_for_kline_data_chart_id(chart_id: str) -> ChanStepper:
+    cid = str(chart_id or "active").strip().lower()
+    if cid == "chart2":
+        if APP_STATE.chart_mode == "dual" and APP_STATE.stepper2 is not None:
+            return APP_STATE.stepper2
+        raise ValueError("当前为单图模式，无周期 2")
+    if cid == "chart1":
+        return APP_STATE.stepper
+    if cid in ("active", "", "current"):
+        return APP_STATE.get_active_stepper()
+    raise ValueError("chart_id 须为 chart1、chart2 或 active")
+
+
+def _kline_view_rows_filtered(bars: list[dict[str, Any]], view: str) -> list[dict[str, Any]]:
+    v = str(view or "kline").strip().lower()
+    if v in ("kline", "ohlc", "k", "k线"):
+        out: list[dict[str, Any]] = []
+        for b in bars:
+            out.append(
+                {
+                    "x": b.get("x"),
+                    "t": b.get("t"),
+                    "o": b.get("o"),
+                    "h": b.get("h"),
+                    "l": b.get("l"),
+                    "c": b.get("c"),
+                }
+            )
+        return out
+    if v in ("volume_chip", "vol", "chip", "成交量", "筹码"):
+        out2: list[dict[str, Any]] = []
+        for b in bars:
+            row: dict[str, Any] = {"x": b.get("x"), "t": b.get("t"), "v": b.get("v")}
+            if "chip_tick_bins" in b:
+                row["chip_tick_bins"] = b.get("chip_tick_bins")
+            out2.append(row)
+        return out2
+    if v in ("all", "full", "全部", "raw"):
+        return [dict(b) for b in bars]
+    raise ValueError("view 须为 kline、volume_chip 或 all")
+
+
 class IndicatorBacktestReq(BaseModel):
     """指标+买卖点回测（独立会话）。步进顺序与复盘 api_step 一致：驱动 step → 被动 sync → bt_dual 防未来。
 
@@ -3657,7 +3722,7 @@ class AppState:
             h = max(float(getattr(x, "high", 0.0)) for x in picked)
             l = min(float(getattr(x, "low", 0.0)) for x in picked)
             c = float(getattr(picked[-1], "close", 0.0))
-            v = sum(float(getattr(x, "volume", getattr(x, "vol", 0.0)) or 0.0) for x in picked)
+            v = sum(_klu_float_trade_metric(x, DATA_FIELD.FIELD_VOLUME) for x in picked)
         except Exception:
             return
         last_big = big_ks[-1]
@@ -4333,7 +4398,7 @@ def bt_dual_rebuild_coarse_chan_anti_future(
     c = float(picked[-1].close)
     l = min(o0, h, l, c)
     h = max(o0, h, l, c)
-    v = sum(float(getattr(k, "volume", getattr(k, "vol", 0.0)) or 0.0) for k in picked)
+    v = sum(_klu_float_trade_metric(k, DATA_FIELD.FIELD_VOLUME) for k in picked)
     turnover = 0.0
     for k in picked:
         ti = getattr(k, "trade_info", None)
@@ -4828,7 +4893,7 @@ def serialize_klu_iter(klu_iter) -> list[dict[str, Any]]:
                 "h": float(klu.high),
                 "l": float(klu.low),
                 "c": float(klu.close),
-                "v": float(getattr(klu, "volume", getattr(klu, "vol", 0.0)) or 0.0),
+                "v": _klu_float_trade_metric(klu, DATA_FIELD.FIELD_VOLUME),
             }
         )
     return arr
@@ -5409,6 +5474,33 @@ HTML = r"""
     }
     .msgHistoryItem { border-bottom: 1px dashed var(--grid); padding: 6px 0; }
     .msgHistoryItem .time { color: #2563eb; margin-right: 10px; }
+
+    /* 全量 K 线数据查看弹窗 */
+    .klineDataModal {
+      position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
+      background: rgba(2, 6, 23, 0.6); z-index: 10007;
+    }
+    .klineDataModal.show { display: flex; }
+    .klineDataModal .panel {
+      width: min(920px, 96vw); max-height: 86vh; background: var(--panel); padding: 16px 18px; border-radius: 12px;
+      display: flex; flex-direction: column; box-sizing: border-box;
+    }
+    .klineDataToolbar {
+      display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; font-size: 13px;
+    }
+    .klineDataToolbar label { margin-right: 4px; color: var(--muted); }
+    .klineDataToolbar select { padding: 4px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--panel); color: var(--text); }
+    .klineDataMeta { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+    .klineDataTableWrap {
+      flex: 1; overflow: auto; border: 1px solid var(--border); border-radius: 8px; max-height: 58vh;
+      font-family: Consolas, "Microsoft YaHei UI", monospace; font-size: 12px;
+    }
+    .klineDataTableWrap table { width: 100%; border-collapse: collapse; }
+    .klineDataTableWrap th, .klineDataTableWrap td {
+      border-bottom: 1px solid var(--grid); padding: 4px 6px; text-align: left; vertical-align: top;
+    }
+    .klineDataTableWrap th { position: sticky; top: 0; background: var(--btn); z-index: 1; }
+    .klineDataCellJson { max-width: 420px; white-space: pre-wrap; word-break: break-all; }
     
     .stepNRow {
       margin-top: 6px;
@@ -5860,6 +5952,7 @@ HTML = r"""
         </div>
         <div class="btnRow">
           <button id="btnInit" data-tip="根据当前代码、日期区间、初始资金加载复盘会话。首次加载历史数据可能较慢。">加载会话 <small>(Ctrl+I)</small></button>
+          <button id="btnViewKlineData" data-tip="查看当前会话全量 K 线：开高低收、成交量与筹码分桶（若有）、或全部字段。" disabled>查看数据</button>
           <button id="btnReset" data-tip="清空当前会话并恢复到可重新配置的初始状态。">重新训练 <small>(Ctrl+R)</small></button>
           <button id="btnFinish" data-tip="结束当前训练，并可选择导出本次交易总结文件。" disabled>结束训练</button>
           <button id="btnExit" data-tip="尝试关闭当前页面。浏览器可能会拦截关闭操作。">退出</button>
@@ -6061,6 +6154,39 @@ HTML = r"""
           <div class="settingsActions">
             <button id="btnMsgHistoryClear">清空记录</button>
             <button id="btnMsgHistoryOk">确 认</button>
+          </div>
+        </div>
+      </div>
+      <div id="klineDataModal" class="klineDataModal" aria-hidden="true">
+        <div class="panel">
+          <div class="settingsTitle">
+            查看 K 线数据
+            <button id="btnKlineDataClose" type="button" style="margin:0; padding:4px 8px;">&times;</button>
+          </div>
+          <div class="klineDataToolbar">
+            <span id="klineDataChartWrap" style="display:none;">
+              <label for="klineDataChartId">图表</label>
+              <select id="klineDataChartId">
+                <option value="chart1">周期 1（图1）</option>
+                <option value="chart2">周期 2（图2）</option>
+                <option value="active">当前激活图</option>
+              </select>
+            </span>
+            <span>
+              <label for="klineDataView">内容</label>
+              <select id="klineDataView">
+                <option value="kline">K 线（开高低收）</option>
+                <option value="volume_chip">成交量与筹码分桶</option>
+                <option value="all">全部字段</option>
+              </select>
+            </span>
+            <button id="btnKlineDataRefresh" type="button">刷新</button>
+            <button id="btnKlineDataCopy" type="button">复制 JSON</button>
+          </div>
+          <div id="klineDataMeta" class="klineDataMeta"></div>
+          <div id="klineDataTableWrap" class="klineDataTableWrap"></div>
+          <div class="settingsActions" style="margin-top:12px;">
+            <button id="btnKlineDataOk" type="button">关 闭</button>
           </div>
         </div>
       </div>
@@ -8880,6 +9006,8 @@ function syncStepButtonState() {
   $("btnBackN").disabled = !lastPayload || !lastPayload.ready || stepInFlight;
   const si = lastPayload && Number.isFinite(Number(lastPayload.step_idx)) ? Number(lastPayload.step_idx) : -1;
   if ($("btnStepPrev")) $("btnStepPrev").disabled = disabled || si <= 0;
+  // 查看数据：与会话绑定，训练结束后仍可查看；步进进行中不禁止（只读）
+  if ($("btnViewKlineData")) $("btnViewKlineData").disabled = !lastPayload || !lastPayload.ready;
 }
 
 function getStepNValue() {
@@ -10057,6 +10185,111 @@ $("btnMsgHistoryClear").onclick = () => {
   }
 };
 
+function syncKlineDataChartSelectVisibility() {
+  const wrap = $("klineDataChartWrap");
+  const sel = $("klineDataChartId");
+  if (!wrap || !sel) return;
+  const dual = lastPayload && String(lastPayload.chart_mode || "") === "dual";
+  wrap.style.display = dual ? "inline" : "none";
+  if (dual && lastPayload && lastPayload.active_chart_id) {
+    const ac = String(lastPayload.active_chart_id) === "chart2" ? "chart2" : "chart1";
+    sel.value = ac;
+  } else {
+    sel.value = "chart1";
+  }
+}
+
+function renderKlineDataTable(rows) {
+  const wrap = $("klineDataTableWrap");
+  if (!wrap) return;
+  if (!Array.isArray(rows) || rows.length === 0) {
+    wrap.innerHTML = '<p class="muted" style="padding:10px">暂无数据</p>';
+    return;
+  }
+  const keys = Object.keys(rows[0]);
+  let thead = "<thead><tr>";
+  keys.forEach((k) => {
+    thead += `<th>${escapeHtmlAttr(k)}</th>`;
+  });
+  thead += "</tr></thead>";
+  let tbody = "<tbody>";
+  rows.forEach((r) => {
+    tbody += "<tr>";
+    keys.forEach((k) => {
+      let cell = r[k];
+      if (cell !== null && cell !== undefined && typeof cell === "object") cell = JSON.stringify(cell);
+      const str = cell === null || cell === undefined ? "" : String(cell);
+      const jsonCls = k === "chip_tick_bins" || str.length > 80 ? "klineDataCellJson" : "";
+      tbody += `<td class="${jsonCls}">${escapeHtmlAttr(str)}</td>`;
+    });
+    tbody += "</tr>";
+  });
+  tbody += "</tbody>";
+  wrap.innerHTML = `<table>${thead}${tbody}</table>`;
+}
+
+async function loadKlineDataView() {
+  const meta = $("klineDataMeta");
+  const wrap = $("klineDataTableWrap");
+  if (!meta || !wrap) return;
+  meta.textContent = "加载中…";
+  wrap.innerHTML = "";
+  window._klineDataViewLastJson = "";
+  const chartId = ($("klineDataChartId") && $("klineDataChartId").value) || "active";
+  const view = ($("klineDataView") && $("klineDataView").value) || "kline";
+  try {
+    const data = await api("/api/session_kline_view", { chart_id: chartId, view });
+    meta.textContent = `代码 ${data.code || "-"}　周期 ${data.k_type || "-"}　图表 ${data.chart_id || "-"}　共 ${data.bar_count != null ? data.bar_count : "-"} 根`;
+    renderKlineDataTable(data.rows || []);
+    window._klineDataViewLastJson = JSON.stringify(data.rows || [], null, 0);
+  } catch (e) {
+    meta.textContent = "加载失败：" + (e && e.message ? e.message : String(e));
+  }
+}
+
+function openKlineDataModal() {
+  if (!lastPayload || !lastPayload.ready) return;
+  syncKlineDataChartSelectVisibility();
+  $("klineDataModal").classList.add("show");
+  loadKlineDataView();
+}
+
+function closeKlineDataModal() {
+  $("klineDataModal").classList.remove("show");
+}
+
+if ($("btnViewKlineData")) $("btnViewKlineData").onclick = () => openKlineDataModal();
+if ($("btnKlineDataClose")) $("btnKlineDataClose").onclick = () => closeKlineDataModal();
+if ($("btnKlineDataOk")) $("btnKlineDataOk").onclick = () => closeKlineDataModal();
+if ($("btnKlineDataRefresh")) $("btnKlineDataRefresh").onclick = () => loadKlineDataView();
+if ($("klineDataChartId")) $("klineDataChartId").onchange = () => loadKlineDataView();
+if ($("klineDataView")) $("klineDataView").onchange = () => loadKlineDataView();
+if ($("btnKlineDataCopy")) {
+  $("btnKlineDataCopy").onclick = async () => {
+    const t = window._klineDataViewLastJson || "";
+    if (!t) {
+      setMsg("没有可复制的内容");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(t);
+      setMsg("当前表格数据已复制为 JSON");
+    } catch (_) {
+      const ta = document.createElement("textarea");
+      ta.value = t;
+      document.body.appendChild(ta);
+      ta.select();
+      try {
+        document.execCommand("copy");
+        setMsg("当前表格数据已复制为 JSON");
+      } catch (e2) {
+        setMsg("复制失败：" + (e2 && e2.message ? e2.message : String(e2)));
+      }
+      document.body.removeChild(ta);
+    }
+  };
+}
+
 window.addEventListener("resize", () => {
   updateCompactLayout();
   hideFloatingTip();
@@ -10433,6 +10666,27 @@ function getChipBaseKs(chart) {
   // Use full history K-lines for chip distribution.
   // Accumulation cutoff is controlled by reference K (crosshair/latest), not by replay step.
   return (chart.kline_all && chart.kline_all.length > 0) ? chart.kline_all : (chart.kline || []);
+}
+
+/** 解析 K 线时间为可比毫秒（UTC）；失败时 chipTimeLe 回退字符串比较。分钟线、混合格式时比纯字符串更稳。 */
+function chipTimeComparable(t) {
+  const s = String(t || "").trim();
+  if (!s) return null;
+  const m = s.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/);
+  if (m) {
+    const y = +m[1], mo = +m[2], d = +m[3];
+    const hh = m[4] != null ? +m[4] : 0, mm = m[5] != null ? +m[5] : 0, ss = m[6] != null ? +m[6] : 0;
+    return Date.UTC(y, mo - 1, d, hh, mm, ss);
+  }
+  const iso = Date.parse(s.replace(/\//g, "-"));
+  return Number.isFinite(iso) ? iso : null;
+}
+
+function chipTimeLe(barTime, refTime) {
+  const cb = chipTimeComparable(barTime);
+  const cr = chipTimeComparable(refTime);
+  if (cb != null && cr != null) return cb <= cr;
+  return String(barTime || "") <= String(refTime || "");
 }
 
 function getReferenceKByBounds(chart, xMin, xMax, w) {
@@ -10865,9 +11119,9 @@ function drawChips(chart, s) {
   if (ksAll.length === 0 || !refK) return;
   const priceStep = chartConfig.chip.bucketStep || 0.1;
   const stepMul = 1 / priceStep;
-  // Cutoff by date/time (stable across different x indexing bases)
+  // 累计至参考日：按解析时间比较（兼容分钟线、非统一分隔符等，避免仅靠字符串误判）
   const refT = String(refK.t || "");
-  const useKs = refT ? ksAll.filter((k) => String(k.t || "") <= refT) : ksAll;
+  const useKs = refT ? ksAll.filter((k) => chipTimeLe(k.t, refT)) : ksAll;
 
   let allMin = Infinity;
   let allMax = -Infinity;
@@ -12484,6 +12738,7 @@ $("btnSell").onclick = async () => {
   }
 };
 markUiBound("btnInit");
+markUiBound("btnViewKlineData");
 markUiBound("btnStepPrev");
 markUiBound("btnStep");
 markUiBound("btnStepN");
@@ -13476,6 +13731,30 @@ def api_check_data_source(req: dict):
         return {"ok": True, "name": name, "message": f"{name} 可拉取日线样本（{n} 根）"}
     except Exception as e:
         return {"ok": False, "name": name, "message": format_source_error(e)}
+
+
+@app.post("/api/session_kline_view")
+def api_session_kline_view(req: SessionKlineViewReq):
+    """供前端「查看数据」：从服务端 kline_all 取全量，避免步进后前端未带全量 JSON。"""
+    if not APP_STATE.ready:
+        raise HTTPException(status_code=400, detail="请先加载会话")
+    try:
+        stepper = _stepper_for_kline_data_chart_id(req.chart_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    try:
+        rows = _kline_view_rows_filtered(list(stepper.kline_all or []), req.view)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    resolved = "chart2" if stepper is APP_STATE.stepper2 else "chart1"
+    return {
+        "code": stepper.code,
+        "k_type": k_type_to_api_key(stepper.k_type),
+        "chart_id": resolved,
+        "view": str(req.view or "").strip().lower(),
+        "bar_count": len(rows),
+        "rows": rows,
+    }
 
 
 @app.post("/api/reset")
