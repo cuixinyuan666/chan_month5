@@ -6208,7 +6208,7 @@ HTML = r"""
           <button id="toolNone" type="button" class="active" data-tip="选择模式：可选中画线并使用“画线属性”进行编辑。">选择</button>
           <button id="toolHorizontalRay" type="button" data-tip="生成水平射线：点击图表在当前价位生成一条水平射线。">水平射线</button>
           <button id="toolBiRay" type="button" data-tip="笔端点射线：依次点击两个笔端点生成一条向右延伸的射线。再次点击可退出。">笔端点射线</button>
-          <button id="toolRatioLine" type="button" data-tip="比例线：依次点击两个笔端点，自动生成两端价差的 0.382 / 0.5 / 0.618 三条向右射线。再次点击可退出。">比例线</button>
+          <button id="toolRatioLine" type="button" data-tip="比例线：点击按钮会弹出详细操作说明。依次点两个笔端点可生成 0.382 / 0.5 / 0.618，悬停可高亮，拖拽可上下移动，按 Ctrl 可吸附K线高低点。">比例线</button>
           <button id="toolParallelogram" type="button" data-tip="平行四边形：依次点击三个笔端点，以第三个端点为起点，生成一条平行于倒数第二笔的射线。再次点击可退出。">平行四边形</button>
           <button id="toolLineProps" type="button" data-tip="先使用“选择”并点击某条画线，再点此按钮编辑粗细/颜色/线型。">画线属性</button>
         </div>
@@ -6667,8 +6667,53 @@ let pendingRatioLinePts = [];
 let pendingParallelogramPts = [];
 let activeTool = storageGet("chan_active_tool") || "none"; // none | horizontalRay | biRay | ratioLine | parallelogram
 let selectedDrawing = null; // { type: "ray"|"biRay", index: number }
+let hoveredBiRay = null; // { type: "biRay", index: number }
+let draggingRatioLine = null; // { index: number, ratio: number }
 let chartClickMoved = false;
 let chartMouseDownPos = null;
+
+// 比例线默认展示比例（常用回撤档）
+const DEFAULT_RATIO_LINE_RATIOS = [0.191, 0.236, 0.382, 0.5, 0.618, 0.782, 0.809];
+// 多组比例线自动分配颜色（尽量区分度高）
+const RATIO_GROUP_COLORS = [
+  "#ef4444", "#f97316", "#eab308", "#22c55e", "#06b6d4",
+  "#3b82f6", "#8b5cf6", "#ec4899", "#14b8a6", "#a3e635",
+];
+
+function normalizeRatioLineRatios(list) {
+  const raw = Array.isArray(list) ? list : DEFAULT_RATIO_LINE_RATIOS;
+  const out = [];
+  raw.forEach((v) => {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return;
+    if (n <= 0 || n >= 2.5) return;
+    const k = Math.round(n * 1000) / 1000;
+    if (!out.includes(k)) out.push(k);
+  });
+  out.sort((a, b) => a - b);
+  return out.length > 0 ? out : DEFAULT_RATIO_LINE_RATIOS.slice();
+}
+
+function buildRatioGroupId() {
+  // 轻量可读：时间戳+随机，避免与旧数据冲突
+  return `rg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function pickNextRatioGroupColor() {
+  const used = new Set();
+  (userBiRays || []).forEach((r) => {
+    if (r && r.kind === "ratioLine" && r.groupColor) used.add(String(r.groupColor));
+  });
+  for (const c of RATIO_GROUP_COLORS) {
+    if (!used.has(c)) return c;
+  }
+  const groups = new Set();
+  (userBiRays || []).forEach((r) => {
+    if (r && r.kind === "ratioLine" && r.groupId) groups.add(String(r.groupId));
+  });
+  const idx = groups.size % Math.max(1, RATIO_GROUP_COLORS.length);
+  return RATIO_GROUP_COLORS[idx] || "#f97316";
+}
 
 const PAD_L = 64;
 const PAD_R = 64;
@@ -9869,6 +9914,24 @@ canvas.addEventListener("mousedown", (e) => {
   chartClickMoved = false;
   chartMouseDownPos = { x: pe.clientX, y: pe.clientY };
   if (!lastPayload || !lastPayload.ready || !viewReady) return;
+  if (e.button === 0) {
+    const rect = canvas.getBoundingClientRect();
+    const s = toScaler(lastPayload.chart, Math.max(allXMin, viewXMin), viewXMax);
+    const px = pe.clientX - rect.left;
+    const py = pe.clientY - rect.top;
+    const pickedRatio = pickRatioLineAt(s, px, py, 10);
+    if (pickedRatio) {
+      draggingRatioLine = {
+        index: pickedRatio.index,
+        ratio: Number(userBiRays[pickedRatio.index] && userBiRays[pickedRatio.index].ratio),
+      };
+      hoveredBiRay = pickedRatio;
+      selectedDrawing = pickedRatio;
+      isPanning = false;
+      redrawCurrentPayload();
+      return;
+    }
+  }
   isPanning = true;
   panStartX = pe.clientX;
   panStartY = pe.clientY;
@@ -9877,10 +9940,48 @@ canvas.addEventListener("mousedown", (e) => {
   panStartYShiftRatio = viewYShiftRatio;
 });
 window.addEventListener("mouseup", () => {
+  if (draggingRatioLine) {
+    const idx = Number(draggingRatioLine.index);
+    const line = userBiRays[idx];
+    if (line) {
+      const ratioVal = getRatioLineDynamicRatio(line);
+      const ratioText = Number.isFinite(ratioVal) ? ratioVal.toFixed(3) : "-";
+      const priceText = Number.isFinite(Number(line.y1)) ? Number(line.y1).toFixed(2) : "-";
+      setMsg(`比例线已放置：比例 ${ratioText}，价格 ${priceText}`);
+    }
+    draggingRatioLine = null;
+  }
   isPanning = false;
   chartMouseDownPos = null;
 });
 window.addEventListener("mousemove", (e) => {
+  if (draggingRatioLine && lastPayload && lastPayload.ready) {
+    const pe = normalizePointerEventToActivePane(e, true);
+    if (!pe) return;
+    const rect = canvas.getBoundingClientRect();
+    const s = toScaler(lastPayload.chart, Math.max(allXMin, viewXMin), viewXMax);
+    const px = pe.clientX - rect.left;
+    const py = pe.clientY - rect.top;
+    const idx = Number(draggingRatioLine.index);
+    const line = userBiRays[idx];
+    if (!line) {
+      draggingRatioLine = null;
+      return;
+    }
+    const yVal = getDragRatioLinePrice(lastPayload.chart, s, px, py, !!pe.ctrlKey);
+    if (!Number.isFinite(yVal)) return;
+    line.y1 = yVal;
+    line.y2 = yVal;
+    if (line.kind === "ratioLine") {
+      // 拖拽后比例按“当前价相对初始端点区间”实时重算
+      line.ratio = getRatioLineDynamicRatio(line);
+    }
+    userBiRaysDirty = true;
+    hoveredBiRay = { type: "biRay", index: idx };
+    selectedDrawing = { type: "biRay", index: idx };
+    scheduleChartRedraw();
+    return;
+  }
   if (!isPanning) return;
   const pe = normalizePointerEventToActivePane(e, true);
   if (!pe) return;
@@ -9933,6 +10034,7 @@ canvas.addEventListener("mousemove", (e) => {
   const visibleKs = getVisibleKs(lastPayload.chart, s.xMin, s.xMax);
   const rawX = pe.clientX - rect.left;
   const rawY = pe.clientY - rect.top;
+  hoveredBiRay = pickRatioLineAt(s, rawX, rawY, 9);
   const hoveredLegend = !!(legendHoverBox && rawX >= legendHoverBox.x1 && rawX <= legendHoverBox.x2 && rawY >= legendHoverBox.y1 && rawY <= legendHoverBox.y2);
   legendHoverActive = hoveredLegend;
   const clampedX = Math.max(PAD_L, Math.min(s.w - PAD_R, rawX));
@@ -9951,6 +10053,11 @@ canvas.addEventListener("mousemove", (e) => {
    } else {
      hideFloatingTip();
    }
+  if (draggingRatioLine || hoveredBiRay) {
+    canvas.style.cursor = "ns-resize";
+  } else {
+    canvas.style.cursor = crosshairEnabled ? "crosshair" : "default";
+  }
    if (isDualRuntimeReady()) saveRuntimeState(dualActiveChartId);
    scheduleChartRedraw();
 });
@@ -9958,6 +10065,7 @@ canvas.addEventListener("mousemove", (e) => {
 canvas.addEventListener("mouseleave", () => {
   canvasHovered = false;
   legendHoverActive = false;
+  hoveredBiRay = null;
   crosshairX = null;
   crosshairY = null;
   if (isDualRuntimeReady()) saveRuntimeState(dualActiveChartId);
@@ -9995,23 +10103,35 @@ canvas.addEventListener("dblclick", (e) => {
       return;
     }
 
-    // Check if we are deleting a Bi ray
+    // Check if we are deleting a Bi ray（含比例线/平行四边形）
     let removedBi = false;
+    let removedRatioGroupId = null;
     const xVal = xFromPx(s, xp);
-    userBiRays = userBiRays.filter(r => {
+    let removedIdx = -1;
+    for (let i = userBiRays.length - 1; i >= 0; i -= 1) {
+      const r = userBiRays[i];
+      if (!r) continue;
       const x1 = Number(r.x1), y1 = Number(r.y1), x2 = Number(r.x2), y2 = Number(r.y2);
       const dx = (x2 - x1);
-      if (!Number.isFinite(x1) || !Number.isFinite(y1) || !Number.isFinite(dx) || dx === 0) return true;
-      if (xVal < x1) return true;
+      if (!Number.isFinite(x1) || !Number.isFinite(y1) || !Number.isFinite(dx) || dx === 0) continue;
+      if (xVal < x1) continue;
       const slope = (y2 - y1) / dx;
       const yOn = y1 + slope * (xVal - x1);
       const yPx = s.y(yOn);
       if (Math.abs(yPx - yp) < 8) {
+        removedIdx = i;
         removedBi = true;
-        return false;
+        if (r.kind === "ratioLine" && r.groupId) removedRatioGroupId = String(r.groupId);
+        break;
       }
-      return true;
-    });
+    }
+    if (removedBi) {
+      if (removedRatioGroupId) {
+        userBiRays = userBiRays.filter((r) => !(r && r.kind === "ratioLine" && String(r.groupId || "") === removedRatioGroupId));
+      } else if (removedIdx >= 0) {
+        userBiRays.splice(removedIdx, 1);
+      }
+    }
     if (removedBi) {
       userBiRaysDirty = true;
       if (selectedDrawing && selectedDrawing.type === "biRay") selectedDrawing = null;
@@ -10111,7 +10231,22 @@ if ($("toolBiRay")) {
   markUiBound("toolBiRay");
 }
 if ($("toolRatioLine")) {
-  $("toolRatioLine").addEventListener("click", () => setActiveTool(activeTool === "ratioLine" ? "none" : "ratioLine"));
+  $("toolRatioLine").addEventListener("click", () => {
+    if (activeTool !== "ratioLine") {
+      showAlertAndLog(
+        [
+          "比例线操作说明：",
+          `1) 点击两个笔端点，自动生成 ${normalizeRatioLineRatios(DEFAULT_RATIO_LINE_RATIOS).map((x) => x.toFixed(3)).join(" / ")} 多条比例线。`,
+          "2) 鼠标移到比例线会高亮；按住左键可上下拖动调整位置。",
+          "3) 拖动时按住 Ctrl，可自动吸附到当前K线最高价或最低价。",
+          "4) 松开鼠标后即完成放置，并显示该比例线比例值与价格。",
+          "5) 所有比例线都会在右侧显示“比例 + 价格”。",
+          "6) 双击比例线可删除（会删除整组比例线）；在“选择”模式下可用“画线属性”改样式。"
+        ].join("\n")
+      );
+    }
+    setActiveTool(activeTool === "ratioLine" ? "none" : "ratioLine");
+  });
   markUiBound("toolRatioLine");
 }
 if ($("toolParallelogram")) {
@@ -10172,6 +10307,51 @@ function pickDrawingAt(s, px, py) {
     if (Math.abs(yPx - py) <= threshold) return { type: "biRay", index: i };
   }
   return null;
+}
+
+function pickRatioLineAt(s, px, py, threshold = 8) {
+  const xVal = xFromPx(s, px);
+  for (let i = userBiRays.length - 1; i >= 0; i -= 1) {
+    const r = userBiRays[i];
+    if (!r || r.kind !== "ratioLine") continue;
+    const x1 = Number(r.x1), y1 = Number(r.y1), x2 = Number(r.x2), y2 = Number(r.y2);
+    const dx = x2 - x1;
+    if (!Number.isFinite(x1) || !Number.isFinite(y1) || !Number.isFinite(dx) || dx === 0) continue;
+    if (xVal < x1) continue;
+    const slope = (y2 - y1) / dx;
+    const yOn = y1 + slope * (xVal - x1);
+    const yPx = s.y(yOn);
+    if (Math.abs(yPx - py) <= threshold) return { type: "biRay", index: i };
+  }
+  return null;
+}
+
+function getDragRatioLinePrice(chart, s, px, py, ctrlKey) {
+  const rawPrice = s.yFromPx(py);
+  if (!ctrlKey) return rawPrice;
+  const visibleKs = getVisibleKs(chart, s.xMin, s.xMax);
+  const xVal = xFromPx(s, px);
+  const refK = nearestKByX(visibleKs, xVal);
+  if (!refK) return rawPrice;
+  const high = Number(refK.h);
+  const low = Number(refK.l);
+  if (!Number.isFinite(high) || !Number.isFinite(low)) return rawPrice;
+  return Math.abs(high - rawPrice) <= Math.abs(low - rawPrice) ? high : low;
+}
+
+function getRatioLineDynamicRatio(line) {
+  if (!line || line.kind !== "ratioLine") return Number.NaN;
+  const low = Number(line.baseLow);
+  const high = Number(line.baseHigh);
+  const baseDir = String(line.baseDir || "").toLowerCase();
+  const y = Number(line.y1);
+  const span = high - low;
+  if (!Number.isFinite(low) || !Number.isFinite(high) || !Number.isFinite(y) || !Number.isFinite(span) || span === 0) {
+    return Number(line.ratio);
+  }
+  // 上升笔：越往下回调比例越大；下降笔：沿用常规从低到高比例递增
+  if (baseDir === "up") return (high - y) / span;
+  return (y - low) / span;
 }
 
 function editSelectedLineProps() {
@@ -10312,7 +10492,7 @@ canvas.addEventListener("click", (e) => {
     redrawCurrentPayload();
     return;
   }
-  // 比例线工具：依次点 2 个笔端点，生成 0.382 / 0.5 / 0.618 三条向右射线
+  // 比例线工具：依次点 2 个笔端点，生成多条向右射线（按默认比例列表）
   if (wantRatioLine) {
     const pt = getNearestBiEndpoint(lastPayload.chart, s, x, y, 12);
     if (!pt) return;
@@ -10328,13 +10508,21 @@ canvas.addEventListener("click", (e) => {
     const xStart = Math.max(Number(p1.x), Number(p2.x));
     const low = Math.min(Number(p1.y), Number(p2.y));
     const high = Math.max(Number(p1.y), Number(p2.y));
+    // 右侧端点价格 > 左侧端点价格 => 上升，否则下降
+    const leftPt = Number(p1.x) <= Number(p2.x) ? p1 : p2;
+    const rightPt = Number(p1.x) <= Number(p2.x) ? p2 : p1;
+    const isUpBi = Number(rightPt.y) > Number(leftPt.y);
+    const baseDir = isUpBi ? "up" : "down";
     const span = high - low;
     if (!Number.isFinite(xStart) || !Number.isFinite(span) || span <= 0) {
       setMsg("两个端点价格相同或无效，无法生成比例线。");
       return;
     }
-    [0.382, 0.5, 0.618].forEach((ratio) => {
-      const yLevel = low + span * ratio;
+    const ratios = normalizeRatioLineRatios(DEFAULT_RATIO_LINE_RATIOS);
+    const groupId = buildRatioGroupId();
+    const groupColor = pickNextRatioGroupColor();
+    ratios.forEach((ratio) => {
+      const yLevel = baseDir === "up" ? (high - span * ratio) : (low + span * ratio);
       userBiRays.push({
         x1: xStart,
         y1: yLevel,
@@ -10342,10 +10530,19 @@ canvas.addEventListener("click", (e) => {
         y2: yLevel,
         kind: "ratioLine",
         ratio,
+        baseLow: low, // 记录该组比例线的基准端点最低价
+        baseHigh: high, // 记录该组比例线的基准端点最高价
+        baseDir, // 记录基准笔方向，供动态比例重算使用
+        groupId,
+        groupColor,
+        lineColor: groupColor,
+        // 记录该组选择的两个端点，渲染同色圆圈
+        anchor1: { x: Number(p1.x), y: Number(p1.y) },
+        anchor2: { x: Number(p2.x), y: Number(p2.y) },
       });
     });
     userBiRaysDirty = true;
-    setMsg("已生成比例线（0.382 / 0.5 / 0.618）→");
+    setMsg(`已生成比例线（${ratios.map((x) => x.toFixed(3)).join(" / ")}）→`);
     redrawCurrentPayload();
     return;
   }
@@ -12712,9 +12909,46 @@ function drawUserBiRays(s, chart) {
   if (!userBiRays || userBiRays.length === 0) return;
   ctx.save();
   // 同上：需要跳过当前回调时统一使用 return，避免继续踩到 JS 语法坑。
+  // 每组比例线：用同色圆圈标注选中的两个端点
+  const ratioGroups = new Map(); // groupId -> { color, a1, a2 }
+  userBiRays.forEach((r) => {
+    if (!r || r.kind !== "ratioLine") return;
+    const gid = r.groupId ? String(r.groupId) : "";
+    if (!gid || ratioGroups.has(gid)) return;
+    const a1 = r.anchor1;
+    const a2 = r.anchor2;
+    if (!a1 || !a2) return;
+    if (!Number.isFinite(Number(a1.x)) || !Number.isFinite(Number(a1.y)) || !Number.isFinite(Number(a2.x)) || !Number.isFinite(Number(a2.y))) return;
+    ratioGroups.set(gid, { color: String(r.groupColor || r.lineColor || "") || getRayLineColor(r), a1, a2 });
+  });
+  if (ratioGroups.size > 0) {
+    ctx.save();
+    ctx.setLineDash([]);
+    ctx.lineWidth = 2;
+    ratioGroups.forEach((g) => {
+      ctx.strokeStyle = g.color || "#f97316";
+      const drawOne = (pt) => {
+        const xp = s.x(Number(pt.x));
+        const yp = s.y(Number(pt.y));
+        if (!Number.isFinite(xp) || !Number.isFinite(yp)) return;
+        ctx.beginPath();
+        ctx.arc(xp, yp, 9, 0, Math.PI * 2);
+        ctx.stroke();
+      };
+      drawOne(g.a1);
+      drawOne(g.a2);
+    });
+    ctx.restore();
+  }
   userBiRays.forEach((r, idx) => {
-    ctx.lineWidth = getRayLineWidth(r);
-    ctx.strokeStyle = getRayLineColor(r);
+    const isRatio = !!(r && r.kind === "ratioLine");
+    const isHovered = !!(hoveredBiRay && hoveredBiRay.type === "biRay" && hoveredBiRay.index === idx);
+    const isDragging = !!(draggingRatioLine && Number(draggingRatioLine.index) === idx);
+    const isActiveRatio = isRatio && (isHovered || isDragging);
+    const baseColor = getRayLineColor(r);
+    ctx.lineWidth = isActiveRatio ? Math.max(2, getRayLineWidth(r) + 1) : getRayLineWidth(r);
+    // 比例线按组色显示；悬停/拖拽时仅加粗，不强行改色（避免多组同屏时难以分辨）
+    ctx.strokeStyle = baseColor;
     ctx.setLineDash(getTradeLineDash(getRayLineStyle(r)));
     const x1 = Number(r.x1), y1 = Number(r.y1), x2 = Number(r.x2), y2 = Number(r.y2);
     if (!Number.isFinite(x1) || !Number.isFinite(y1) || !Number.isFinite(x2) || !Number.isFinite(y2)) return;
@@ -12732,12 +12966,19 @@ function drawUserBiRays(s, chart) {
     ctx.moveTo(p1x, p1y);
     ctx.lineTo(p2x, p2y);
     ctx.stroke();
-    if (r && r.kind === "ratioLine" && Number.isFinite(Number(r.ratio))) {
+    if (isRatio) {
       ctx.save();
       ctx.setLineDash([]);
-      ctx.fillStyle = getRayLineColor(r);
+      ctx.fillStyle = baseColor;
       ctx.font = `bold ${Math.max(10, chartConfig.userRay.fontSize - 1)}px sans-serif`;
-      ctx.fillText(`${Number(r.ratio).toFixed(3)}`, p1x + 4, p1y - 4);
+      const ratioVal = getRatioLineDynamicRatio(r);
+      const ratioText = Number.isFinite(ratioVal) ? ratioVal.toFixed(3) : "-";
+      const priceText = Number.isFinite(y1) ? y1.toFixed(2) : "-";
+      ctx.fillText(`${ratioText} @ ${priceText}`, p1x + 4, p1y - 4);
+      // 右侧也显示比例+价格，便于多条比例线快速对照
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      ctx.fillText(`${ratioText} | ${priceText}`, Math.min(s.w - PAD_R + 6, p2x + 6), p2y);
       ctx.restore();
     }
     if (selectedDrawing && selectedDrawing.type === "biRay" && selectedDrawing.index === idx) {
