@@ -3158,6 +3158,16 @@ class PaperAccount:
     # 最近一次开仓步（多/空通用），用于与原有做多一致的 T+1 平仓限制
     last_open_step: Optional[int] = None
     last_trade_step: Optional[int] = None
+    # 本 K 步内刚平多→仅允许再开空；刚平空→仅允许再开多（与「每步一笔」叠加）
+    same_step_flip_side: Optional[str] = None
+    same_step_flip_at_idx: Optional[int] = None
+
+    def _sync_flip_scope(self, step_idx: int) -> None:
+        if self.same_step_flip_at_idx is None:
+            return
+        if step_idx != self.same_step_flip_at_idx:
+            self.same_step_flip_side = None
+            self.same_step_flip_at_idx = None
 
     def reset(self, initial_cash: float) -> None:
         self.initial_cash = initial_cash
@@ -3166,12 +3176,16 @@ class PaperAccount:
         self.avg_cost = 0.0
         self.last_open_step = None
         self.last_trade_step = None
+        self.same_step_flip_side = None
+        self.same_step_flip_at_idx = None
 
     def buy_with_all_cash(self, price: float, step_idx: int) -> dict[str, Any]:
+        self._sync_flip_scope(step_idx)
         if self.position != 0:
             raise ValueError("当前已有持仓，需先平仓后再开多。")
         if self.last_trade_step == step_idx:
-            raise ValueError("每一步最多允许一笔成交。")
+            if not (self.same_step_flip_side == "buy" and self.same_step_flip_at_idx == step_idx):
+                raise ValueError("每一步最多允许一笔成交。")
         hand_cost = price * 100
         hands = int(self.cash // hand_cost)
         if hands <= 0:
@@ -3184,6 +3198,8 @@ class PaperAccount:
         self.avg_cost = price
         self.last_open_step = step_idx
         self.last_trade_step = step_idx
+        self.same_step_flip_side = None
+        self.same_step_flip_at_idx = None
         return {"hands": hands, "shares": self.position, "cost": round(cost, 2)}
 
     def can_sell(self, step_idx: int) -> bool:
@@ -3194,6 +3210,7 @@ class PaperAccount:
         return step_idx >= self.last_open_step + 1
 
     def sell_all(self, price: float, step_idx: int) -> dict[str, Any]:
+        self._sync_flip_scope(step_idx)
         if self.position <= 0:
             return {"noop": True, "message": "当前无持仓。"}
         if self.last_trade_step == step_idx:
@@ -3208,6 +3225,9 @@ class PaperAccount:
         self.avg_cost = 0.0
         self.last_open_step = None
         self.last_trade_step = step_idx
+        # 平多当步可反手开空
+        self.same_step_flip_side = "short"
+        self.same_step_flip_at_idx = step_idx
         return {
             "shares": shares,
             "proceeds": round(proceeds, 2),
@@ -3216,10 +3236,12 @@ class PaperAccount:
 
     def short_with_all_cash(self, price: float, step_idx: int) -> dict[str, Any]:
         """做空开仓：逻辑与做多开仓一致（单持仓 + 每步仅一笔 + 全仓按整手）。"""
+        self._sync_flip_scope(step_idx)
         if self.position != 0:
             raise ValueError("当前已有持仓，需先平仓后再开空。")
         if self.last_trade_step == step_idx:
-            raise ValueError("每一步最多允许一笔成交。")
+            if not (self.same_step_flip_side == "short" and self.same_step_flip_at_idx == step_idx):
+                raise ValueError("每一步最多允许一笔成交。")
         hand_cost = price * 100
         hands = int(self.cash // hand_cost)
         if hands <= 0:
@@ -3232,6 +3254,8 @@ class PaperAccount:
         self.avg_cost = price
         self.last_open_step = step_idx
         self.last_trade_step = step_idx
+        self.same_step_flip_side = None
+        self.same_step_flip_at_idx = None
         return {
             "shares": shares,
             "proceeds": round(proceeds, 2),
@@ -3246,6 +3270,7 @@ class PaperAccount:
 
     def cover_all(self, price: float, step_idx: int) -> dict[str, Any]:
         """平空：逻辑与做多平仓一致（每步仅一笔 + T+1）。"""
+        self._sync_flip_scope(step_idx)
         if self.position >= 0:
             return {"noop": True, "message": "当前无空仓。"}
         if self.last_trade_step == step_idx:
@@ -3260,6 +3285,9 @@ class PaperAccount:
         self.avg_cost = 0.0
         self.last_open_step = None
         self.last_trade_step = step_idx
+        # 平空当步可反手开多
+        self.same_step_flip_side = "buy"
+        self.same_step_flip_at_idx = step_idx
         return {
             "shares": shares,
             "cost": round(cost, 2),
@@ -4464,6 +4492,11 @@ class AppState:
             chart2 = _build_chart_payload(self.stepper2)
 
         active_stepper = self.get_active_stepper()
+        # 驱动周期下还可向前步进的根数（与 step_idx、聚合后 master 长度一致）
+        _master = getattr(active_stepper, "_replay_klus_master", None) or []
+        _total = len(_master) if isinstance(_master, list) else 0
+        _si = int(getattr(active_stepper, "step_idx", -1) or -1)
+        step_forward_max = max(0, _total - 1 - _si) if _total > 0 else 0
         anchor_time = active_stepper.current_time()
         if chart2 is not None:
             # 展示层也按同一套粗细/raw感知逻辑裁剪，避免数量模式分组把未来数据带回末根显示。
@@ -4507,6 +4540,8 @@ class AppState:
             },
             "chan_algo": self.stepper.chan_algo,
             "step_idx": active_stepper.step_idx,
+            "step_forward_max": int(step_forward_max),
+            "replay_bar_total": int(_total),
             "time": active_stepper.current_time(),
             "price": price,
             "chart": chart,
@@ -6270,6 +6305,7 @@ HTML = r"""
           <label for="stepN">步进数量 N</label>
           <span id="tipStepN" class="tip-icon" data-tip="设置连续步进或回退时使用的根数。连续步进遇到买卖点（1/1p/2/2s/3a/3b）或 1382 提示可自动中断，中断项可在图表显示设置里配置。"></span>
           <input id="stepN" type="number" min="1" step="1" value="5" />
+          <span id="stepNMaxHint" class="hint" style="flex:1 1 200px; min-width:0;"></span>
           <div class="btnRow" style="width:100%; margin-top:4px;">
             <button id="btnStepN" data-tip="按步进数量 N 连续推进，若中途遇到买卖点（1/1p/2/2s/3a/3b）或 1382 提示会按设置自动停止。" disabled>步进 N 根 <small>(Ctrl+Alt+N)</small></button>
             <button id="btnStepInterrupt" data-tip="正在连续步进时可点击中断；当前根处理完后停止。" disabled>中断步进</button>
@@ -6278,7 +6314,7 @@ HTML = r"""
         </div>
         <div class="row" style="margin:6px 0 4px 0;">
           <span class="muted">交易规则</span>
-          <span class="tip-icon" data-tip="规则：单持仓、T+1、每步最多一笔。"></span>
+          <span class="tip-icon" data-tip="规则：单持仓、T+1、每步最多一笔；平多当根可再开空，平空当根可再开多。"></span>
         </div>
         <div class="btnRow" style="margin-top:6px;">
           <button id="btnBuy" data-tip="按当前收盘价使用全部可用现金买入，遵循单持仓和每步最多一笔规则。" disabled>买入（全仓） <small>(PageUp)</small></button>
@@ -7023,16 +7059,33 @@ const DEFAULT_CHART_CONFIG = {
     showJudge: true,
     interruptOnBsp: true,
     interruptOnRhythm1382: true,
-    // 步进中断细分：按级别+买卖点类型
-    interruptBspBi1: true,
-    interruptBspBi2: true,
-    interruptBspBi2s: true,
-    interruptBspSeg1: true,
-    interruptBspSeg2: true,
-    interruptBspSeg2s: true,
-    interruptBspSegseg1: true,
-    interruptBspSegseg2: true,
-    interruptBspSegseg2s: true,
+    // 步进中断：BSP 与 1382 之间 OR / AND
+    interruptStepSourcesCombine: "or",
+    // 细分条件之间 OR / AND（AND=勾选的各档须当根同时命中才停）
+    interruptBspFineCombine: "or",
+    // 方向例外：无 / 仅买点参与 / 仅卖点参与
+    interruptBspSideException: "none",
+    // 未覆盖在下方细分表里的类型（如 3a/3b）是否仍参与中断
+    interruptBspUnlistedTypes: true,
+    // 步进中断细分：级别 + 类型 + 买/卖
+    interruptBspBi1Buy: true,
+    interruptBspBi1Sell: true,
+    interruptBspBi2Buy: true,
+    interruptBspBi2Sell: true,
+    interruptBspBi2sBuy: true,
+    interruptBspBi2sSell: true,
+    interruptBspSeg1Buy: true,
+    interruptBspSeg1Sell: true,
+    interruptBspSeg2Buy: true,
+    interruptBspSeg2Sell: true,
+    interruptBspSeg2sBuy: true,
+    interruptBspSeg2sSell: true,
+    interruptBspSegseg1Buy: true,
+    interruptBspSegseg1Sell: true,
+    interruptBspSegseg2Buy: true,
+    interruptBspSegseg2Sell: true,
+    interruptBspSegseg2sBuy: true,
+    interruptBspSegseg2sSell: true,
   },
   legend: { fontSize: 12, fontWeight: "normal", color: "#0f172a" },
   userRay: { color: "#f97316", width: 1.5, dash: [8, 4], fontSize: 12 }
@@ -7077,15 +7130,45 @@ function migrateChartConfig(cfg) {
   if (typeof next.toast.showJudge !== "boolean") next.toast.showJudge = true;
   if (typeof next.toast.interruptOnBsp !== "boolean") next.toast.interruptOnBsp = true;
   if (typeof next.toast.interruptOnRhythm1382 !== "boolean") next.toast.interruptOnRhythm1382 = true;
-  if (typeof next.toast.interruptBspBi1 !== "boolean") next.toast.interruptBspBi1 = true;
-  if (typeof next.toast.interruptBspBi2 !== "boolean") next.toast.interruptBspBi2 = true;
-  if (typeof next.toast.interruptBspBi2s !== "boolean") next.toast.interruptBspBi2s = true;
-  if (typeof next.toast.interruptBspSeg1 !== "boolean") next.toast.interruptBspSeg1 = true;
-  if (typeof next.toast.interruptBspSeg2 !== "boolean") next.toast.interruptBspSeg2 = true;
-  if (typeof next.toast.interruptBspSeg2s !== "boolean") next.toast.interruptBspSeg2s = true;
-  if (typeof next.toast.interruptBspSegseg1 !== "boolean") next.toast.interruptBspSegseg1 = true;
-  if (typeof next.toast.interruptBspSegseg2 !== "boolean") next.toast.interruptBspSegseg2 = true;
-  if (typeof next.toast.interruptBspSegseg2s !== "boolean") next.toast.interruptBspSegseg2s = true;
+  const legacyBspPairs = [
+    ["interruptBspBi1", "interruptBspBi1Buy", "interruptBspBi1Sell"],
+    ["interruptBspBi2", "interruptBspBi2Buy", "interruptBspBi2Sell"],
+    ["interruptBspBi2s", "interruptBspBi2sBuy", "interruptBspBi2sSell"],
+    ["interruptBspSeg1", "interruptBspSeg1Buy", "interruptBspSeg1Sell"],
+    ["interruptBspSeg2", "interruptBspSeg2Buy", "interruptBspSeg2Sell"],
+    ["interruptBspSeg2s", "interruptBspSeg2sBuy", "interruptBspSeg2sSell"],
+    ["interruptBspSegseg1", "interruptBspSegseg1Buy", "interruptBspSegseg1Sell"],
+    ["interruptBspSegseg2", "interruptBspSegseg2Buy", "interruptBspSegseg2Sell"],
+    ["interruptBspSegseg2s", "interruptBspSegseg2sBuy", "interruptBspSegseg2sSell"],
+  ];
+  legacyBspPairs.forEach(([legacy, buyK, sellK]) => {
+    if (typeof next.toast[buyK] !== "boolean" && typeof next.toast[legacy] === "boolean") {
+      next.toast[buyK] = next.toast[legacy];
+      next.toast[sellK] = next.toast[legacy];
+    }
+  });
+  if (typeof next.toast.interruptBspBi1Buy !== "boolean") next.toast.interruptBspBi1Buy = true;
+  if (typeof next.toast.interruptBspBi1Sell !== "boolean") next.toast.interruptBspBi1Sell = true;
+  if (typeof next.toast.interruptBspBi2Buy !== "boolean") next.toast.interruptBspBi2Buy = true;
+  if (typeof next.toast.interruptBspBi2Sell !== "boolean") next.toast.interruptBspBi2Sell = true;
+  if (typeof next.toast.interruptBspBi2sBuy !== "boolean") next.toast.interruptBspBi2sBuy = true;
+  if (typeof next.toast.interruptBspBi2sSell !== "boolean") next.toast.interruptBspBi2sSell = true;
+  if (typeof next.toast.interruptBspSeg1Buy !== "boolean") next.toast.interruptBspSeg1Buy = true;
+  if (typeof next.toast.interruptBspSeg1Sell !== "boolean") next.toast.interruptBspSeg1Sell = true;
+  if (typeof next.toast.interruptBspSeg2Buy !== "boolean") next.toast.interruptBspSeg2Buy = true;
+  if (typeof next.toast.interruptBspSeg2Sell !== "boolean") next.toast.interruptBspSeg2Sell = true;
+  if (typeof next.toast.interruptBspSeg2sBuy !== "boolean") next.toast.interruptBspSeg2sBuy = true;
+  if (typeof next.toast.interruptBspSeg2sSell !== "boolean") next.toast.interruptBspSeg2sSell = true;
+  if (typeof next.toast.interruptBspSegseg1Buy !== "boolean") next.toast.interruptBspSegseg1Buy = true;
+  if (typeof next.toast.interruptBspSegseg1Sell !== "boolean") next.toast.interruptBspSegseg1Sell = true;
+  if (typeof next.toast.interruptBspSegseg2Buy !== "boolean") next.toast.interruptBspSegseg2Buy = true;
+  if (typeof next.toast.interruptBspSegseg2Sell !== "boolean") next.toast.interruptBspSegseg2Sell = true;
+  if (typeof next.toast.interruptBspSegseg2sBuy !== "boolean") next.toast.interruptBspSegseg2sBuy = true;
+  if (typeof next.toast.interruptBspSegseg2sSell !== "boolean") next.toast.interruptBspSegseg2sSell = true;
+  if (!next.toast.interruptStepSourcesCombine) next.toast.interruptStepSourcesCombine = "or";
+  if (!next.toast.interruptBspFineCombine) next.toast.interruptBspFineCombine = "or";
+  if (!next.toast.interruptBspSideException) next.toast.interruptBspSideException = "none";
+  if (typeof next.toast.interruptBspUnlistedTypes !== "boolean") next.toast.interruptBspUnlistedTypes = true;
   return next;
 }
 
@@ -8594,15 +8677,38 @@ function renderSettingsForm() {
         { label: "显示判定统计弹窗", subKey: "showJudge", type: "checkbox", tip: "勾选后显示买卖点 ×/✓ 判定统计弹窗。" },
         { label: "步进N遇买卖点中断", subKey: "interruptOnBsp", type: "checkbox", tip: "勾选后，步进 N 根遇到买卖点会自动停止；买卖点类型包含 1/1p/2/2s/3a/3b。" },
         { label: "步进N遇1382中断", subKey: "interruptOnRhythm1382", type: "checkbox", tip: "勾选后，步进 N 根遇到 1.382 节奏提示（含各层级显示）会自动停止。" },
-        { label: "中断细分：笔1", subKey: "interruptBspBi1", type: "checkbox", tip: "勾选后，步进N遇到“笔1”时中断。" },
-        { label: "中断细分：笔2", subKey: "interruptBspBi2", type: "checkbox", tip: "勾选后，步进N遇到“笔2”时中断。" },
-        { label: "中断细分：笔2s", subKey: "interruptBspBi2s", type: "checkbox", tip: "勾选后，步进N遇到“笔2s”时中断。" },
-        { label: "中断细分：段1", subKey: "interruptBspSeg1", type: "checkbox", tip: "勾选后，步进N遇到“段1”时中断。" },
-        { label: "中断细分：段2", subKey: "interruptBspSeg2", type: "checkbox", tip: "勾选后，步进N遇到“段2”时中断。" },
-        { label: "中断细分：段2s", subKey: "interruptBspSeg2s", type: "checkbox", tip: "勾选后，步进N遇到“段2s”时中断。" },
-        { label: "中断细分：2段1", subKey: "interruptBspSegseg1", type: "checkbox", tip: "勾选后，步进N遇到“2段1”时中断。" },
-        { label: "中断细分：2段2", subKey: "interruptBspSegseg2", type: "checkbox", tip: "勾选后，步进N遇到“2段2”时中断。" },
-        { label: "中断细分：2段2s", subKey: "interruptBspSegseg2s", type: "checkbox", tip: "勾选后，步进N遇到“2段2s”时中断。" }
+        { label: "BSP 与 1382 中断组合", subKey: "interruptStepSourcesCombine", type: "select", tip: "OR：满足买卖点或 1382 之一即停；AND：两者均开启时需同时满足才停。", options: [
+          { value: "or", label: "OR（任一来源）" },
+          { value: "and", label: "AND（同时命中）" }
+        ]},
+        { label: "买卖点细分条件组合", subKey: "interruptBspFineCombine", type: "select", tip: "OR：任一档位命中即停；AND：下方勾选生效的每一档都须在当根有命中才停。", options: [
+          { value: "or", label: "OR（任一档位）" },
+          { value: "and", label: "AND（各档同时）" }
+        ]},
+        { label: "方向例外（下拉）", subKey: "interruptBspSideException", type: "select", tip: "过滤当根买卖点后再判中断：仅买点 / 仅卖点 / 不例外。", options: [
+          { value: "none", label: "无例外（买卖均参与）" },
+          { value: "buy_only", label: "仅买点参与" },
+          { value: "sell_only", label: "仅卖点参与" }
+        ]},
+        { label: "未列出类型仍中断", subKey: "interruptBspUnlistedTypes", type: "checkbox", tip: "如 3a/3b 等未出现在下方细分行时，仍按「有买卖点」参与中断（OR 下易触发；AND 下作额外 OR 分支）。" },
+        { label: "笔1/1p·买", subKey: "interruptBspBi1Buy", type: "checkbox", tip: "笔级别 1 或 1p 买点命中时可中断。" },
+        { label: "笔1/1p·卖", subKey: "interruptBspBi1Sell", type: "checkbox", tip: "笔级别 1 或 1p 卖点命中时可中断。" },
+        { label: "笔2·买", subKey: "interruptBspBi2Buy", type: "checkbox", tip: "笔2 买点。" },
+        { label: "笔2·卖", subKey: "interruptBspBi2Sell", type: "checkbox", tip: "笔2 卖点。" },
+        { label: "笔2s·买", subKey: "interruptBspBi2sBuy", type: "checkbox", tip: "笔2s 买点。" },
+        { label: "笔2s·卖", subKey: "interruptBspBi2sSell", type: "checkbox", tip: "笔2s 卖点。" },
+        { label: "段1/1p·买", subKey: "interruptBspSeg1Buy", type: "checkbox", tip: "段 1/1p 买点。" },
+        { label: "段1/1p·卖", subKey: "interruptBspSeg1Sell", type: "checkbox", tip: "段 1/1p 卖点。" },
+        { label: "段2·买", subKey: "interruptBspSeg2Buy", type: "checkbox", tip: "段2 买点。" },
+        { label: "段2·卖", subKey: "interruptBspSeg2Sell", type: "checkbox", tip: "段2 卖点。" },
+        { label: "段2s·买", subKey: "interruptBspSeg2sBuy", type: "checkbox", tip: "段2s 买点。" },
+        { label: "段2s·卖", subKey: "interruptBspSeg2sSell", type: "checkbox", tip: "段2s 卖点。" },
+        { label: "2段1/1p·买", subKey: "interruptBspSegseg1Buy", type: "checkbox", tip: "2段 1/1p 买点。" },
+        { label: "2段1/1p·卖", subKey: "interruptBspSegseg1Sell", type: "checkbox", tip: "2段 1/1p 卖点。" },
+        { label: "2段2·买", subKey: "interruptBspSegseg2Buy", type: "checkbox", tip: "2段2 买点。" },
+        { label: "2段2·卖", subKey: "interruptBspSegseg2Sell", type: "checkbox", tip: "2段2 卖点。" },
+        { label: "2段2s·买", subKey: "interruptBspSegseg2sBuy", type: "checkbox", tip: "2段2s 买点。" },
+        { label: "2段2s·卖", subKey: "interruptBspSegseg2sSell", type: "checkbox", tip: "2段2s 卖点。" }
       ]
     }
   ];
@@ -9682,6 +9788,37 @@ function redrawCurrentPayload() {
   }
 }
 
+/** 合并到下一帧再整图重绘，减轻十字移动时同帧多次 draw 的卡顿 */
+let chartRedrawScheduled = false;
+function scheduleChartRedraw() {
+  if (chartRedrawScheduled) return;
+  chartRedrawScheduled = true;
+  requestAnimationFrame(() => {
+    chartRedrawScheduled = false;
+    redrawCurrentPayload();
+  });
+}
+
+/** 会话载荷里由服务端给出的「还可向前步进」根数上限（加载后随步进变化） */
+function getStepForwardMaxFromPayload(payload) {
+  const n = Number(payload && payload.step_forward_max);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : null;
+}
+
+function updateStepForwardMaxUi(payload) {
+  const hint = $("stepNMaxHint");
+  if (!hint) return;
+  const maxV = getStepForwardMaxFromPayload(payload);
+  if (!payload || !payload.ready || maxV === null) {
+    hint.textContent = "";
+    return;
+  }
+  hint.textContent =
+    maxV > 0
+      ? `还可向前步进至多 ${maxV} 根（N 勿超过此值可避免无效请求）。`
+      : "已在最后一根 K 线，向前步进为 0（仍可按 N 回退）。";
+}
+
 canvas.addEventListener(
   "wheel",
   (e) => {
@@ -9702,7 +9839,7 @@ canvas.addEventListener(
         viewYZoomRatio *= 1.15;
       }
       if (isDualRuntimeReady()) saveRuntimeState(dualActiveChartId);
-      redrawCurrentPayload();
+      scheduleChartRedraw();
       return;
     }
     zoomViewAt(factor, mouseX);
@@ -9718,7 +9855,7 @@ canvas.addEventListener("mousedown", (e) => {
       dualActivePaneLock = !dualActivePaneLock;
       if (dualActivePaneLock) dualLockedChartId = dualActiveChartId;
       setMsg(dualActivePaneLock ? "已锁定当前激活图窗，再次右键解锁。" : "已解锁图窗切换。");
-      redrawCurrentPayload();
+      scheduleChartRedraw();
     }
     return;
   }
@@ -9772,7 +9909,7 @@ window.addEventListener("mousemove", (e) => {
   viewYShiftRatio = Math.max(-3, Math.min(3, viewYShiftRatio));
   userAdjustedView = true;
   if (isDualRuntimeReady()) saveRuntimeState(dualActiveChartId);
-  redrawCurrentPayload();
+  scheduleChartRedraw();
 });
 
 canvas.addEventListener("mousemove", (e) => {
@@ -9815,7 +9952,7 @@ canvas.addEventListener("mousemove", (e) => {
      hideFloatingTip();
    }
    if (isDualRuntimeReady()) saveRuntimeState(dualActiveChartId);
-   redrawCurrentPayload();
+   scheduleChartRedraw();
 });
 
 canvas.addEventListener("mouseleave", () => {
@@ -9825,7 +9962,7 @@ canvas.addEventListener("mouseleave", () => {
   crosshairY = null;
   if (isDualRuntimeReady()) saveRuntimeState(dualActiveChartId);
   hideFloatingTip();
-  if (lastPayload && lastPayload.ready) redrawCurrentPayload();
+  if (lastPayload && lastPayload.ready) scheduleChartRedraw();
 });
 
 canvas.addEventListener("dblclick", (e) => {
@@ -10623,36 +10760,94 @@ function shouldInterruptStepOnBsp() {
   return toastCfg.interruptOnBsp !== false;
 }
 
-function _normalizeBspTypeLabel(rawLabel) {
-  const s = String(rawLabel || "").toLowerCase();
-  if (s.includes("2s")) return "2s";
-  if (s.includes("2")) return "2";
-  if (s.includes("1")) return "1";
-  return "";
+/** 买卖点 label 拆成类型 token（与后端 type2str 逗号分隔一致） */
+function _bspLabelTokens(label) {
+  return String(label || "").split(/[,，]/).map((s) => s.trim().toLowerCase()).filter(Boolean);
 }
 
-function _interruptToastKeyByBsp(level, typeLabel) {
-  const lv = String(level || "").toLowerCase();
-  const tp = String(typeLabel || "");
-  if (!tp) return "";
-  if (lv === "bi") return `interruptBspBi${tp}`;
-  if (lv === "seg") return `interruptBspSeg${tp}`;
-  if (lv === "segseg") return `interruptBspSegseg${tp}`;
-  return "";
+// 步进 N 中断：细分档位（买/卖各一键）
+const INTERRUPT_BSP_SLOT_DEFS = [
+  { level: "bi", tokens: ["1", "1p"], buyKey: "interruptBspBi1Buy", sellKey: "interruptBspBi1Sell" },
+  { level: "bi", tokens: ["2"], buyKey: "interruptBspBi2Buy", sellKey: "interruptBspBi2Sell" },
+  { level: "bi", tokens: ["2s"], buyKey: "interruptBspBi2sBuy", sellKey: "interruptBspBi2sSell" },
+  { level: "seg", tokens: ["1", "1p"], buyKey: "interruptBspSeg1Buy", sellKey: "interruptBspSeg1Sell" },
+  { level: "seg", tokens: ["2"], buyKey: "interruptBspSeg2Buy", sellKey: "interruptBspSeg2Sell" },
+  { level: "seg", tokens: ["2s"], buyKey: "interruptBspSeg2sBuy", sellKey: "interruptBspSeg2sSell" },
+  { level: "segseg", tokens: ["1", "1p"], buyKey: "interruptBspSegseg1Buy", sellKey: "interruptBspSegseg1Sell" },
+  { level: "segseg", tokens: ["2"], buyKey: "interruptBspSegseg2Buy", sellKey: "interruptBspSegseg2Sell" },
+  { level: "segseg", tokens: ["2s"], buyKey: "interruptBspSegseg2sBuy", sellKey: "interruptBspSegseg2sSell" },
+];
+
+function _filterBspHitsBySideException(hits, toastCfg) {
+  const mode = String(toastCfg.interruptBspSideException || "none").toLowerCase();
+  const arr = Array.isArray(hits) ? hits.filter(Boolean) : [];
+  if (mode === "buy_only") return arr.filter((h) => h.is_buy);
+  if (mode === "sell_only") return arr.filter((h) => !h.is_buy);
+  return arr;
+}
+
+function _bspHitMatchesSlot(item, slot, toastCfg) {
+  if (String(item.level || "").toLowerCase() !== slot.level) return false;
+  const labelToks = new Set(_bspLabelTokens(item.label));
+  const typeOk = slot.tokens.some((t) => labelToks.has(t));
+  if (!typeOk) return false;
+  const buyOn = toastCfg[slot.buyKey] !== false;
+  const sellOn = toastCfg[slot.sellKey] !== false;
+  if (item.is_buy && !buyOn) return false;
+  if (!item.is_buy && !sellOn) return false;
+  return true;
+}
+
+function _bspHitHasUnlistedToken(item) {
+  const lv = String(item.level || "").toLowerCase();
+  const covered = new Set();
+  INTERRUPT_BSP_SLOT_DEFS.forEach((s) => {
+    if (s.level === lv) s.tokens.forEach((t) => covered.add(t));
+  });
+  const toks = _bspLabelTokens(item.label);
+  return toks.some((t) => !covered.has(t));
 }
 
 function shouldInterruptStepOnBspFine(hits) {
   if (!shouldInterruptStepOnBsp()) return false;
   const toastCfg = chartConfig && chartConfig.toast ? chartConfig.toast : DEFAULT_CHART_CONFIG.toast;
-  const arr = Array.isArray(hits) ? hits : [];
-  for (const item of arr) {
-    if (!item) continue;
-    const tp = _normalizeBspTypeLabel(item.label);
-    const key = _interruptToastKeyByBsp(item.level, tp);
-    if (!key) continue;
-    if (toastCfg[key] !== false) return true;
+  let arr = Array.isArray(hits) ? hits.filter(Boolean) : [];
+  arr = _filterBspHitsBySideException(arr, toastCfg);
+  if (arr.length <= 0) return false;
+
+  const activeSlots = INTERRUPT_BSP_SLOT_DEFS.filter((slot) => toastCfg[slot.buyKey] !== false || toastCfg[slot.sellKey] !== false);
+  const unlistedOk = toastCfg.interruptBspUnlistedTypes !== false;
+  const useAnd = String(toastCfg.interruptBspFineCombine || "or").toLowerCase() === "and";
+
+  // 全部细分买/卖都关时，退化为「当根有任一买卖点即中断」
+  if (activeSlots.length <= 0) {
+    return arr.length > 0;
   }
-  return false;
+
+  const anyUnlistedHit = unlistedOk && arr.some((h) => _bspHitHasUnlistedToken(h));
+
+  if (!useAnd) {
+    for (const item of arr) {
+      for (const slot of activeSlots) {
+        if (_bspHitMatchesSlot(item, slot, toastCfg)) return true;
+      }
+    }
+    return anyUnlistedHit;
+  }
+
+  const allSlotsHit = activeSlots.every((slot) => arr.some((item) => _bspHitMatchesSlot(item, slot, toastCfg)));
+  return allSlotsHit || anyUnlistedHit;
+}
+
+function combineStepInterruptSources(bspOn, bspHit, rhythmOn, rhythmHit, combineRaw) {
+  const mode = String(combineRaw || "or").toLowerCase();
+  if (mode === "and") {
+    if (bspOn && rhythmOn) return !!bspHit && !!rhythmHit;
+    if (bspOn) return !!bspHit;
+    if (rhythmOn) return !!rhythmHit;
+    return false;
+  }
+  return (!!bspOn && !!bspHit) || (!!rhythmOn && !!rhythmHit);
 }
 
 function shouldInterruptStepOnRhythm1382() {
@@ -11995,6 +12190,8 @@ function drawLegend() {
 function drawTradeBands(s, chart) {
   if (!lastPayload || !lastPayload.ready) return;
   const lastX = chart.kline[chart.kline.length - 1].x;
+  /** 同根反手时 x 像素重合，给区间一个最小宽度避免「看不见」或与竖线完全重叠 */
+  const minXBandPx = 2.2;
   const fillHoldBackground = (x1, x2, color, alphaMul) => {
     if (x1 == null || x2 == null) return;
     const lo = Math.min(x1, x2);
@@ -12002,10 +12199,12 @@ function drawTradeBands(s, chart) {
     if (hi < s.xMin || lo > s.xMax) return;
     const xa = s.x(lo);
     const xb = s.x(hi);
+    const xLeft = Math.min(xa, xb);
+    const xW = Math.max(minXBandPx, Math.abs(xb - xa));
     ctx.save();
     ctx.fillStyle = color;
     ctx.globalAlpha = alphaMul;
-    ctx.fillRect(Math.min(xa, xb), PAD_T, Math.abs(xb - xa), s.plotBottomY - PAD_T);
+    ctx.fillRect(xLeft, PAD_T, xW, s.plotBottomY - PAD_T);
     ctx.restore();
   };
 
@@ -12016,6 +12215,8 @@ function drawTradeBands(s, chart) {
     if (hi < s.xMin || lo > s.xMax) return;
     const xa = s.x(lo);
     const xb = s.x(hi);
+    const xLeft = Math.min(xa, xb);
+    const xW = Math.max(minXBandPx, Math.abs(xb - xa));
     const yBuy = s.y(buyPrice);
     const yEnd = s.y(endPrice);
     const top = Math.min(yBuy, yEnd);
@@ -12025,7 +12226,7 @@ function drawTradeBands(s, chart) {
     ctx.save();
     ctx.fillStyle = pnlColor;
     ctx.globalAlpha = 0.28;
-    ctx.fillRect(Math.min(xa, xb), top, Math.abs(xb - xa), height);
+    ctx.fillRect(xLeft, top, xW, height);
     ctx.restore();
   };
 
@@ -12052,10 +12253,36 @@ function drawTradeMarkers(s, chart) {
   if (!lastPayload || !lastPayload.ready) return;
   const buyC = getCfgColor(chartConfig.trade.buyColor);
   const sellC = getCfgColor(chartConfig.trade.sellColor);
-
-  const mark = (xBar, color, tag) => {
-    if (xBar < s.xMin || xBar > s.xMax) return;
+  /** 同根、同色多笔（如平多+做空）合并竖线，文字纵向错开 */
+  const entries = [];
+  const push = (xBar, color, tag) => {
+    if (xBar == null || xBar === undefined) return;
+    entries.push({ xBar: Number(xBar), color, tag: String(tag) });
+  };
+  for (const tr of tradeHistory) {
+    if (tr.buyX != null) push(tr.buyX, buyC, "买");
+    if (tr.sellX != null) push(tr.sellX, sellC, "卖");
+    if (tr.shortX != null) push(tr.shortX, sellC, "空");
+    if (tr.coverX != null) push(tr.coverX, buyC, "平");
+  }
+  if (lastPayload.account.position > 0 && activeTrade && activeTrade.buyX != null) {
+    push(activeTrade.buyX, buyC, "买");
+  } else if (lastPayload.account.position < 0 && activeTrade && activeTrade.shortX != null) {
+    push(activeTrade.shortX, sellC, "空");
+  }
+  const groups = new Map();
+  for (const e of entries) {
+    const key = `${e.xBar}\t${e.color}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(e.tag);
+  }
+  for (const [key, tags] of groups) {
+    const tab = key.indexOf("\t");
+    const xBar = Number(key.slice(0, tab));
+    const color = key.slice(tab + 1);
+    if (xBar < s.xMin || xBar > s.xMax) continue;
     const xp = s.x(xBar);
+    const uniq = [...new Set(tags)];
     ctx.save();
     ctx.strokeStyle = color;
     ctx.lineWidth = chartConfig.trade.markerLineWidth || 2;
@@ -12066,22 +12293,16 @@ function drawTradeMarkers(s, chart) {
     ctx.stroke();
     ctx.setLineDash([]);
     ctx.fillStyle = color;
-    ctx.font = `${chartConfig.trade.markerFontWeight || "bold"} ${chartConfig.trade.markerFontSize}px Consolas`;
+    const fs = chartConfig.trade.markerFontSize || 14;
+    ctx.font = `${chartConfig.trade.markerFontWeight || "bold"} ${fs}px Consolas`;
     ctx.textAlign = "center";
-    ctx.fillText(tag, xp, s.plotBottomY + 18);
+    const baseY = s.plotBottomY + 18;
+    const stackGap = Math.min(18, Math.max(12, fs + 3));
+    uniq.forEach((tag, idx) => {
+      const off = (idx - (uniq.length - 1) / 2) * stackGap;
+      ctx.fillText(tag, xp, baseY + off);
+    });
     ctx.restore();
-  };
-
-  for (const tr of tradeHistory) {
-    if (tr.buyX != null) mark(tr.buyX, buyC, "买");
-    if (tr.sellX != null) mark(tr.sellX, sellC, "卖");
-    if (tr.shortX != null) mark(tr.shortX, sellC, "空");
-    if (tr.coverX != null) mark(tr.coverX, buyC, "平");
-  }
-  if (lastPayload.account.position > 0 && activeTrade && activeTrade.buyX != null) {
-    mark(activeTrade.buyX, buyC, "买");
-  } else if (lastPayload.account.position < 0 && activeTrade && activeTrade.shortX != null) {
-    mark(activeTrade.shortX, sellC, "空");
   }
 }
 
@@ -12937,14 +13158,24 @@ async function stepOnce(logMessage) {
   });
   const bspNotice = detectBspPromptOnLastBar(payload);
   const rhythmTexts = getRhythmNoticeTexts(payload);
+  const toastCfg = chartConfig && chartConfig.toast ? chartConfig.toast : DEFAULT_CHART_CONFIG.toast;
   const interruptedByBsp = shouldInterruptStepOnBspFine(bspNotice ? bspNotice.hits : []);
   const interruptedByRhythm = shouldInterruptStepOnRhythm1382() && rhythmTexts.length > 0;
+  const bspOn = toastCfg.interruptOnBsp !== false;
+  const rhythmOn = toastCfg.interruptOnRhythm1382 !== false;
+  const interrupted = combineStepInterruptSources(
+    bspOn,
+    interruptedByBsp,
+    rhythmOn,
+    interruptedByRhythm,
+    toastCfg.interruptStepSourcesCombine
+  );
   const noticeText = buildStepNoticeText(payload, bspNotice);
   refreshUI(payload, { afterStep: true, showStandaloneNotices: false });
   const noticeShown = showCombinedNotice(noticeText);
   if (logMessage && !noticeShown) setMsg(payload.message || "步进成功");
   const reachedEnd = prevStepIdx !== null && Number(payload.step_idx) === prevStepIdx;
-  return { payload, interrupted: (interruptedByBsp || interruptedByRhythm), reachedEnd, noticeShown };
+  return { payload, interrupted, reachedEnd, noticeShown };
 }
 
 function updateDataSourceStatus(payload) {
@@ -13152,6 +13383,7 @@ function refreshUI(payload, options) {
   $("btnCover").disabled = !payload.ready || sessionFinished || !payload.account.can_cover;
   $("configCard").classList.toggle("collapsed", payload.ready);
   updateBspJudgeUI();
+  updateStepForwardMaxUi(payload);
   requestAnimationFrame(updateCompactLayout);
 }
 
@@ -13441,12 +13673,12 @@ if ($("dualLayout")) {
     redrawCurrentPayload();
   });
 }
-if ($("dualSplitRatio")) {
+  if ($("dualSplitRatio")) {
   $("dualSplitRatio").addEventListener("input", () => {
     const lab = $("dualSplitRatioLabel");
     if (lab) lab.textContent = `${$("dualSplitRatio").value}%`;
     saveSessionConfig();
-    redrawCurrentPayload();
+    scheduleChartRedraw();
   });
 }
 if ($("btnActiveChart1")) {
@@ -14193,6 +14425,44 @@ def api_judge_bsp(req: JudgeBspReq):
         raise HTTPException(status_code=400, detail=str(e)) from e
 
 
+def _trade_events_same_bar_flip(events: list[dict[str, Any]], prev_side: str, cur_side: str) -> bool:
+    """判断是否同一 step、同一 K 线 x 上连续两笔（如平多→做空、平空→做多）。"""
+    if len(events) < 2:
+        return False
+    a, b = events[-2], events[-1]
+    if str(a.get("side")) != prev_side or str(b.get("side")) != cur_side:
+        return False
+    if int(a.get("step_idx", -10_000_000)) != int(b.get("step_idx", -9_000_000)):
+        return False
+    return a.get("x") == b.get("x")
+
+
+def _msg_buy(detail: dict[str, Any]) -> str:
+    if detail.get("noop"):
+        return str(detail.get("message") or "无操作")
+    sh = int(detail.get("shares", 0))
+    return f"开多成功：{sh} 股，耗资 {detail.get('cost')} 元。"
+
+
+def _msg_sell(detail: dict[str, Any]) -> str:
+    if detail.get("noop"):
+        return str(detail.get("message") or "无操作")
+    sh = int(detail.get("shares", 0))
+    return f"平多成功：{sh} 股，回笼 {detail.get('proceeds')} 元，盈亏 {detail.get('pnl')} 元。"
+
+
+def _msg_short(detail: dict[str, Any]) -> str:
+    sh = int(detail.get("shares", 0))
+    return f"开空成功：{sh} 股，名义占用约 {detail.get('proceeds')} 元。"
+
+
+def _msg_cover(detail: dict[str, Any]) -> str:
+    if detail.get("noop"):
+        return str(detail.get("message") or "无操作")
+    sh = int(detail.get("shares", 0))
+    return f"平空成功：{sh} 股，支出 {detail.get('cost')} 元，盈亏 {detail.get('pnl')} 元。"
+
+
 @app.post("/api/buy")
 def api_buy():
     if not APP_STATE.ready:
@@ -14214,7 +14484,11 @@ def api_buy():
             }
         )
         payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME, include_kline_all=False)
-        payload["message"] = f"买入成功：{json.dumps(detail, ensure_ascii=False)}"
+        if _trade_events_same_bar_flip(APP_STATE.trade_events, "cover", "buy"):
+            sh = int(detail.get("shares", 0))
+            payload["message"] = f"当根反手：平空后已开多（{sh} 股）。图表同根「平/买」标记已纵向错开。"
+        else:
+            payload["message"] = _msg_buy(detail)
         return payload
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -14241,7 +14515,7 @@ def api_sell():
             }
         )
         payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME, include_kline_all=False)
-        payload["message"] = f"卖出结果：{json.dumps(detail, ensure_ascii=False)}"
+        payload["message"] = _msg_sell(detail)
         return payload
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -14268,7 +14542,11 @@ def api_short():
             }
         )
         payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME, include_kline_all=False)
-        payload["message"] = f"做空成功：{json.dumps(detail, ensure_ascii=False)}"
+        if _trade_events_same_bar_flip(APP_STATE.trade_events, "sell", "short"):
+            sh = int(detail.get("shares", 0))
+            payload["message"] = f"当根反手：平多后已开空（{sh} 股）。图表同根「卖/空」标记已纵向错开。"
+        else:
+            payload["message"] = _msg_short(detail)
         return payload
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -14295,7 +14573,7 @@ def api_cover():
             }
         )
         payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME, include_kline_all=False)
-        payload["message"] = f"平空结果：{json.dumps(detail, ensure_ascii=False)}"
+        payload["message"] = _msg_cover(detail)
         return payload
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
