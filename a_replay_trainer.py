@@ -5,6 +5,7 @@ import os
 import re
 import time
 import warnings
+from bisect import bisect_right
 from collections import deque
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -3904,11 +3905,19 @@ class AppState:
         self._rollback_light: deque[AppLightSnapshot] = deque(maxlen=self._rollback_max)
         self._rollback_full: dict[int, AppRollbackSnapshot] = {}
         self._rollback_full_order: deque[int] = deque()
+        # 目标步精确命中表：记录已到达过的目标步全量快照，减少重复前向补步。
+        self._rollback_target_hits: dict[int, AppRollbackSnapshot] = {}
+        self._rollback_target_hit_order: deque[int] = deque()
+        # BSP 全量快照前缀索引缓存：用内存换判定速度。
+        self._bsp_all_prefix_x: list[int] = []
+        self._bsp_all_prefix_keys: list[set[str]] = []
 
     def _clear_rollback_cache(self) -> None:
         self._rollback_light.clear()
         self._rollback_full.clear()
         self._rollback_full_order.clear()
+        self._rollback_target_hits.clear()
+        self._rollback_target_hit_order.clear()
 
     def _set_rollback_config(
         self,
@@ -3968,6 +3977,43 @@ class AppState:
             old = self._rollback_full_order.popleft()
             if old in self._rollback_full:
                 del self._rollback_full[old]
+        # 全量快照存在更新时，精确命中表也保守控长，避免无限增长。
+        while len(self._rollback_target_hit_order) > self._rollback_max * 2:
+            old = self._rollback_target_hit_order.popleft()
+            if old in self._rollback_target_hits:
+                del self._rollback_target_hits[old]
+
+    def _capture_full_snapshot(self) -> Optional[AppRollbackSnapshot]:
+        """抓取当前完整状态快照，供精确命中表复用。"""
+        if not self.ready or self.stepper.chan is None:
+            return None
+        return AppRollbackSnapshot(
+            active_chart_id=str(self.active_chart_id),
+            chart_mode=str(self.chart_mode),
+            stepper1=capture_stepper_snapshot(self.stepper),
+            stepper2=(capture_stepper_snapshot(self.stepper2) if self.stepper2 is not None else None),
+            trade_events=copy.deepcopy(self.trade_events),
+            account=copy.deepcopy(self.account),
+            bsp_history=copy.deepcopy(self.bsp_history),
+            rhythm_hit_history=copy.deepcopy(self.rhythm_hit_history),
+            rhythm_hit_keys=copy.deepcopy(self.rhythm_hit_keys),
+            bsp_judge_logs=copy.deepcopy(self.bsp_judge_logs),
+            last_level_dirs=copy.deepcopy(self._last_level_dirs),
+            judge_notice=bool(self._judge_notice),
+            last_judge_stats=copy.deepcopy(self._last_judge_stats),
+            last_judge_x=copy.deepcopy(self._last_judge_x),
+            last_judge_time=copy.deepcopy(self._last_judge_time),
+        )
+
+    def _store_target_hit_snapshot(self, step_idx: int, snap: AppRollbackSnapshot) -> None:
+        """保存目标步精确命中快照，供 back_n 直接命中。"""
+        idx = int(step_idx)
+        self._rollback_target_hits[idx] = snap
+        self._rollback_target_hit_order.append(idx)
+        while len(self._rollback_target_hit_order) > self._rollback_max * 2:
+            old = self._rollback_target_hit_order.popleft()
+            if old in self._rollback_target_hits:
+                del self._rollback_target_hits[old]
 
     def _capture_should_store_full(self, step_idx: int) -> bool:
         master = getattr(self.stepper, "_replay_klus_master", None) or []
@@ -4001,6 +4047,7 @@ class AppState:
             last_judge_time=copy.deepcopy(self._last_judge_time),
         )
         self._store_full_snapshot(snap)
+        self._store_target_hit_snapshot(cur_step, copy.deepcopy(snap))
 
     def _restore_full_snapshot(self, snap: AppRollbackSnapshot) -> None:
         self.chart_mode = snap.chart_mode
@@ -4047,11 +4094,18 @@ class AppState:
         target = max(-1, cur - int(n))
         if target == cur:
             return 0
+        hit = self._rollback_target_hits.get(target)
+        if hit is not None:
+            self._restore_full_snapshot(copy.deepcopy(hit))
+            return max(0, cur - int(self.get_active_stepper().step_idx))
         # 先找 <= target 的最近全量快照
-        full_candidates = [idx for idx in self._rollback_full.keys() if idx <= target]
-        if not full_candidates:
+        full_keys = sorted(int(k) for k in self._rollback_full.keys())
+        if not full_keys:
             return 0
-        base_idx = max(full_candidates)
+        pos = bisect_right(full_keys, target) - 1
+        if pos < 0:
+            return 0
+        base_idx = full_keys[pos]
         snap = self._rollback_full.get(base_idx)
         if snap is None:
             return 0
@@ -4062,6 +4116,9 @@ class AppState:
             if int(ls.step_idx) == target:
                 self._restore_light_snapshot(copy.deepcopy(ls))
                 break
+        exact_snap = self._capture_full_snapshot()
+        if exact_snap is not None:
+            self._store_target_hit_snapshot(target, exact_snap)
         return max(0, cur - int(self.get_active_stepper().step_idx))
 
     def _normalize_chart_id(self, chart_id: Optional[str]) -> str:
@@ -4198,6 +4255,8 @@ class AppState:
     def rebuild_bsp_all_snapshot(self) -> None:
         """使用 trigger_step==False 一次性计算全量买卖点快照。"""
         self.bsp_all_snapshot = []
+        self._bsp_all_prefix_x = []
+        self._bsp_all_prefix_keys = []
         self._reset_judge_state()
         if self.session_params is None:
             return
@@ -4231,6 +4290,19 @@ class AppState:
             snapshot,
             key=lambda item: (int(item.get("x", -1)), LEVEL_ORDER.get(str(item.get("level")), 999), int(not bool(item.get("is_buy")))),
         )
+        # 前缀索引缓存：每个 x 对应“<=x 的全部 key 集合”，判定时 O(logN) 直取。
+        running_keys: set[str] = set()
+        for item in self.bsp_all_snapshot:
+            x = int(item.get("x", -1))
+            key = str(item.get("key") or "")
+            if not key:
+                continue
+            running_keys.add(key)
+            if self._bsp_all_prefix_x and self._bsp_all_prefix_x[-1] == x:
+                self._bsp_all_prefix_keys[-1] = set(running_keys)
+            else:
+                self._bsp_all_prefix_x.append(x)
+                self._bsp_all_prefix_keys.append(set(running_keys))
 
     def _judge_bsp_against_all(self, *, reason: str, levels: Optional[list[str]] = None) -> None:
         """在当前步进位置，对照（全量预计算）与（步进触发快照）进行 ×/✓ 判定。"""
@@ -4242,7 +4314,12 @@ class AppState:
         active_levels = [level for level in (levels or list(VISIBLE_BSP_LEVELS)) if level in VISIBLE_BSP_LEVELS]
         if not active_levels:
             return
-        all_keys_upto = {str(it.get("key")) for it in self.bsp_all_snapshot if int(it.get("x", -1)) <= current_x}
+        all_keys_upto: set[str]
+        if self._bsp_all_prefix_x:
+            pos = bisect_right(self._bsp_all_prefix_x, int(current_x)) - 1
+            all_keys_upto = set(self._bsp_all_prefix_keys[pos]) if pos >= 0 else set()
+        else:
+            all_keys_upto = {str(it.get("key")) for it in self.bsp_all_snapshot if int(it.get("x", -1)) <= current_x}
         details: list[dict[str, Any]] = []
         summary = {"appeared": 0, "judged": 0, "correct": 0, "wrong": 0}
         for level in active_levels:
