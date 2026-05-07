@@ -54,17 +54,25 @@ class AppLightSnapshot:
 
 
 def capture_stepper_snapshot(stepper: Any) -> StepperRollbackSnapshot:
-    # 深拷贝缠论状态 + 指标状态，回退时可直接恢复到上一根
+    # 深拷贝缠论状态 + 指标状态，回退时可直接恢复到上一根。
+    # 性能优化要点：
+    # 1) 列表 / dict 元素是 immutable（int/float/str/None）的容器，
+    #    直接 list(...)/dict(...) 浅拷贝即可，无需 deepcopy 递归走每个元素；
+    # 2) chart_payload_cache 中的值是已定型的 dict，浅拷贝足够；
+    # 3) bundle_cache_step_idx 是 Optional[int]，直接赋值；
+    # 4) chan/indicators/structure_bundle 含复杂引用图，仍需 deepcopy。
+    sk_cache = stepper._serialized_klu_cache
+    chart_cache = stepper._chart_payload_cache
     return StepperRollbackSnapshot(
         step_idx=int(stepper.step_idx),
         chan=copy.deepcopy(stepper.chan),
         indicators=copy.deepcopy(stepper.indicators),
-        indicator_history=copy.deepcopy(stepper.indicator_history),
-        trend_lines=copy.deepcopy(stepper.trend_lines),
+        indicator_history=list(stepper.indicator_history),
+        trend_lines=list(stepper.trend_lines),
         structure_bundle=copy.deepcopy(stepper.structure_bundle),
-        bundle_cache_step_idx=copy.deepcopy(stepper._bundle_cache_step_idx),
-        serialized_klu_cache=copy.deepcopy(stepper._serialized_klu_cache),
-        chart_payload_cache=copy.deepcopy(stepper._chart_payload_cache),
+        bundle_cache_step_idx=stepper._bundle_cache_step_idx,
+        serialized_klu_cache=list(sk_cache) if isinstance(sk_cache, list) else [],
+        chart_payload_cache=dict(chart_cache) if isinstance(chart_cache, dict) else {},
     )
 
 

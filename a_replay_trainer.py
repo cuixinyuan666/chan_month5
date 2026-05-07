@@ -41,6 +41,11 @@ from a_replay_cache.a_step_rollback import (
     capture_stepper_snapshot,
     restore_stepper_snapshot,
 )
+from a_replay_cache.a_step_rollback_fast import (
+    AppStepDelta,
+    capture_app_step_delta,
+    overlay_app_step_delta,
+)
 from a_replay_core.a_replay_kline_view import kline_view_rows_filtered
 from a_replay_core.a_replay_presenters import (
     msg_buy,
@@ -3863,6 +3868,23 @@ def _kline_view_rows_filtered(bars: list[dict[str, Any]], view: str) -> list[dic
     return kline_view_rows_filtered(bars, view)
 
 
+def _capture_bsp_history_with_status(bsp_history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """为 bsp_history 抓取冻结快照（每个 item 都浅复制为新 dict）。
+
+    bsp_history 每个 item 的 status 字段会被 _judge_bsp_against_all 原地改写，
+    若直接 list(...) 浅拷贝会与实时态共享同一个 dict 引用，后续 status 改写"穿透"到快照。
+    每个 item 的字段均为不可变类型（int/float/str/bool），用 `dict(it)` 浅拷贝即可隔离，
+    且开销远低于 `copy.deepcopy`（无需走 protocol、构造 memo、递归走访）。
+    """
+    out: list[dict[str, Any]] = []
+    for it in bsp_history or []:
+        if isinstance(it, dict):
+            out.append(dict(it))
+        else:
+            out.append(it)
+    return out
+
+
 def run_strategy_backtest(req: IndicatorBacktestReq) -> dict[str, Any]:
     """兼容旧路由名；实现见 run_indicator_backtest。"""
     return run_indicator_backtest(req)
@@ -3899,10 +3921,14 @@ class AppState:
         self._last_judge_time: Optional[str] = None
         # 回退缓存参数（可由前端 init/reconfig 调整）
         self._rollback_max: int = 96
+        # 默认全量快照间隔：>1 时每步只产生轻量 delta，间隔步才做一次全量 deepcopy，
+        # 解决「步进多根 K 线后再继续步进越来越慢」的根因（每步 deepcopy 链式累积）。
         self._rollback_full_snapshot_interval: int = 8
-        self._rollback_capture_max_bars: int = 30000
+        # 单根数据集很小（<= capture_max_bars）时强制每步全量；默认值大于常见股票全量根数，
+        # 改为更小的阈值后默认走稀疏全量路径，单步只做零拷贝的轻量 delta。
+        self._rollback_capture_max_bars: int = 800
         # 分层快照：每步轻量 + 稀疏全量
-        self._rollback_light: deque[AppLightSnapshot] = deque(maxlen=self._rollback_max)
+        self._rollback_light: deque[AppStepDelta] = deque(maxlen=self._rollback_max)
         self._rollback_full: dict[int, AppRollbackSnapshot] = {}
         self._rollback_full_order: deque[int] = deque()
         # 目标步精确命中表：记录已到达过的目标步全量快照，减少重复前向补步。
@@ -3935,38 +3961,86 @@ class AppState:
         if capture_max_bars is not None:
             self._rollback_capture_max_bars = max(0, int(capture_max_bars))
 
-    def _capture_light_snapshot(self) -> AppLightSnapshot:
-        return AppLightSnapshot(
-            step_idx=int(self.get_active_stepper().step_idx),
+    def _capture_light_snapshot(self) -> AppStepDelta:
+        """步进前抓取轻量增量快照。
+
+        相较旧实现的 `copy.deepcopy(self.bsp_history)` 等递归走访式拷贝，
+        本实现对「元素创建后不再修改」的列表用 `list(...)` 浅拷贝；
+        对「会被原地改写 status 的 bsp_history」额外维护稀疏 status map；
+        对 PaperAccount 转 tuple 后逐字段写回。
+        随历史步数增长不再触发递归走访，单步开销基本恒定。
+        """
+        return capture_app_step_delta(
+            pre_step_idx=int(self.get_active_stepper().step_idx),
             active_chart_id=str(self.active_chart_id),
             chart_mode=str(self.chart_mode),
-            trade_events=copy.deepcopy(self.trade_events),
-            account=copy.deepcopy(self.account),
-            bsp_history=copy.deepcopy(self.bsp_history),
-            rhythm_hit_history=copy.deepcopy(self.rhythm_hit_history),
-            rhythm_hit_keys=copy.deepcopy(self.rhythm_hit_keys),
-            bsp_judge_logs=copy.deepcopy(self.bsp_judge_logs),
-            last_level_dirs=copy.deepcopy(self._last_level_dirs),
-            judge_notice=bool(self._judge_notice),
-            last_judge_stats=copy.deepcopy(self._last_judge_stats),
-            last_judge_x=copy.deepcopy(self._last_judge_x),
-            last_judge_time=copy.deepcopy(self._last_judge_time),
+            trade_events=self.trade_events,
+            bsp_history=self.bsp_history,
+            bsp_judge_logs=self.bsp_judge_logs,
+            rhythm_hit_history=self.rhythm_hit_history,
+            rhythm_hit_keys=self.rhythm_hit_keys,
+            last_level_dirs=self._last_level_dirs,
+            judge_notice=self._judge_notice,
+            last_judge_stats=self._last_judge_stats,
+            last_judge_x=self._last_judge_x,
+            last_judge_time=self._last_judge_time,
+            account=self.account,
         )
 
-    def _restore_light_snapshot(self, snap: AppLightSnapshot) -> None:
-        self.active_chart_id = snap.active_chart_id
-        self.chart_mode = snap.chart_mode
-        self.trade_events = snap.trade_events
-        self.account = snap.account
-        self.bsp_history = snap.bsp_history
-        self.rhythm_hit_history = snap.rhythm_hit_history
-        self.rhythm_hit_keys = snap.rhythm_hit_keys
-        self.bsp_judge_logs = snap.bsp_judge_logs
-        self._last_level_dirs = snap.last_level_dirs
-        self._judge_notice = snap.judge_notice
-        self._last_judge_stats = snap.last_judge_stats
-        self._last_judge_x = snap.last_judge_x
-        self._last_judge_time = snap.last_judge_time
+    def _restore_light_snapshot(self, delta: AppStepDelta) -> None:
+        """把当前非 chan 累加状态覆盖回 delta 表示的目标态。"""
+        def _set_active(v: str) -> None:
+            self.active_chart_id = v
+
+        def _set_chart_mode(v: str) -> None:
+            self.chart_mode = v
+
+        def _set_trade_events(v: list) -> None:
+            self.trade_events = v
+
+        def _set_bsp_history(v: list) -> None:
+            self.bsp_history = v
+
+        def _set_bsp_judge_logs(v: list) -> None:
+            self.bsp_judge_logs = v
+
+        def _set_rhythm_hit_history(v: list) -> None:
+            self.rhythm_hit_history = v
+
+        def _set_rhythm_hit_keys(v: set) -> None:
+            self.rhythm_hit_keys = v
+
+        def _set_last_level_dirs(v: dict) -> None:
+            self._last_level_dirs = v
+
+        def _set_judge_notice(v: bool) -> None:
+            self._judge_notice = v
+
+        def _set_last_judge_stats(v: Any) -> None:
+            self._last_judge_stats = v
+
+        def _set_last_judge_x(v: Any) -> None:
+            self._last_judge_x = v
+
+        def _set_last_judge_time(v: Any) -> None:
+            self._last_judge_time = v
+
+        overlay_app_step_delta(
+            delta,
+            set_active_chart_id=_set_active,
+            set_chart_mode=_set_chart_mode,
+            set_trade_events=_set_trade_events,
+            set_bsp_history=_set_bsp_history,
+            set_bsp_judge_logs=_set_bsp_judge_logs,
+            set_rhythm_hit_history=_set_rhythm_hit_history,
+            set_rhythm_hit_keys=_set_rhythm_hit_keys,
+            set_last_level_dirs=_set_last_level_dirs,
+            set_judge_notice=_set_judge_notice,
+            set_last_judge_stats=_set_last_judge_stats,
+            set_last_judge_x=_set_last_judge_x,
+            set_last_judge_time=_set_last_judge_time,
+            account=self.account,
+        )
         self._rhythm_notice_hits = []
 
     def _store_full_snapshot(self, snap: AppRollbackSnapshot) -> None:
@@ -3984,7 +4058,14 @@ class AppState:
                 del self._rollback_target_hits[old]
 
     def _capture_full_snapshot(self) -> Optional[AppRollbackSnapshot]:
-        """抓取当前完整状态快照，供精确命中表复用。"""
+        """抓取当前完整状态快照，供精确命中表复用。
+
+        性能优化：
+        - 列表 / dict 的元素是只读 frozen dict 时，用 `list(...)`/`dict(...)`
+          浅拷贝而非 `deepcopy` 递归走访，避免随历史步数线性变慢；
+        - bsp_history 的可变 status 字段，由 `_capture_bsp_history_with_status`
+          复制 item 字典浅副本以隔离后续 status 改写。
+        """
         if not self.ready or self.stepper.chan is None:
             return None
         return AppRollbackSnapshot(
@@ -3992,17 +4073,17 @@ class AppState:
             chart_mode=str(self.chart_mode),
             stepper1=capture_stepper_snapshot(self.stepper),
             stepper2=(capture_stepper_snapshot(self.stepper2) if self.stepper2 is not None else None),
-            trade_events=copy.deepcopy(self.trade_events),
-            account=copy.deepcopy(self.account),
-            bsp_history=copy.deepcopy(self.bsp_history),
-            rhythm_hit_history=copy.deepcopy(self.rhythm_hit_history),
-            rhythm_hit_keys=copy.deepcopy(self.rhythm_hit_keys),
-            bsp_judge_logs=copy.deepcopy(self.bsp_judge_logs),
-            last_level_dirs=copy.deepcopy(self._last_level_dirs),
+            trade_events=list(self.trade_events),
+            account=copy.copy(self.account),
+            bsp_history=_capture_bsp_history_with_status(self.bsp_history),
+            rhythm_hit_history=list(self.rhythm_hit_history),
+            rhythm_hit_keys=set(self.rhythm_hit_keys),
+            bsp_judge_logs=list(self.bsp_judge_logs),
+            last_level_dirs=dict(self._last_level_dirs),
             judge_notice=bool(self._judge_notice),
-            last_judge_stats=copy.deepcopy(self._last_judge_stats),
-            last_judge_x=copy.deepcopy(self._last_judge_x),
-            last_judge_time=copy.deepcopy(self._last_judge_time),
+            last_judge_stats=self._last_judge_stats,
+            last_judge_x=self._last_judge_x,
+            last_judge_time=self._last_judge_time,
         )
 
     def _store_target_hit_snapshot(self, step_idx: int, snap: AppRollbackSnapshot) -> None:
@@ -4026,28 +4107,21 @@ class AppState:
         if not self.ready or self.stepper.chan is None:
             return
         cur_step = int(self.get_active_stepper().step_idx)
+        # 单步快照：零深拷贝；本次仍要做的轻量 delta 与历史步数解耦，恒定成本。
         self._rollback_light.append(self._capture_light_snapshot())
         if not self._capture_should_store_full(cur_step):
             return
-        snap = AppRollbackSnapshot(
-            active_chart_id=str(self.active_chart_id),
-            chart_mode=str(self.chart_mode),
-            stepper1=capture_stepper_snapshot(self.stepper),
-            stepper2=(capture_stepper_snapshot(self.stepper2) if self.stepper2 is not None else None),
-            trade_events=copy.deepcopy(self.trade_events),
-            account=copy.deepcopy(self.account),
-            bsp_history=copy.deepcopy(self.bsp_history),
-            rhythm_hit_history=copy.deepcopy(self.rhythm_hit_history),
-            rhythm_hit_keys=copy.deepcopy(self.rhythm_hit_keys),
-            bsp_judge_logs=copy.deepcopy(self.bsp_judge_logs),
-            last_level_dirs=copy.deepcopy(self._last_level_dirs),
-            judge_notice=bool(self._judge_notice),
-            last_judge_stats=copy.deepcopy(self._last_judge_stats),
-            last_judge_x=copy.deepcopy(self._last_judge_x),
-            last_judge_time=copy.deepcopy(self._last_judge_time),
-        )
+        # 全量快照：仅在采样间隔点触发。chan/indicators 仍需 deepcopy；
+        # 累加列表用浅拷贝避免随步数累积的递归走访开销。
+        snap = self._capture_full_snapshot()
+        if snap is None:
+            return
         self._store_full_snapshot(snap)
-        self._store_target_hit_snapshot(cur_step, copy.deepcopy(snap))
+        # target_hits 与 full snapshot 共享同一份 snap 引用：
+        # 旧实现的 `copy.deepcopy(snap)` 完全是冗余复制（_restore_full_snapshot 中
+        # 已对 _rollback_target_hits.get(target) 做了 `copy.deepcopy(hit)`）。
+        # 这里直接共享引用即可，省下一次完整 deepcopy。
+        self._store_target_hit_snapshot(cur_step, snap)
 
     def _restore_full_snapshot(self, snap: AppRollbackSnapshot) -> None:
         self.chart_mode = snap.chart_mode

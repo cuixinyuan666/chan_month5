@@ -104,7 +104,7 @@ No test framework, no linting config, no CI found. Verify changes manually with 
 
 ###背景
 1.我编写的文件或文件夹以"a"_开头，a_replay_trainer.py的使用说明位于：a_quick_guide.md。a_quick_guide.md也包含了quick_guide.md的全部内容。所有新增的文件或者文件夹使用“a_”开头的命名规范；
-2.a_Data是我自定义的离线数据文件,a_replay_trainer.py的引用包为我的自定义包：a_replay_cache，a_replay_core；
+2.a_Data是我自定义的离线数据文件,a_replay_trainer.py的引用包为我的自定义包：a_replay_cache，a_replay_core，a_Script；
 3.README.md是个答案本（通常不需要查看），是我将要或者以后要实现的版本。
 4.README.md包含quick_guide.md，当前工程有很多功能并不在README.md中。
 5.当前终端可使用playwright、git、winget、curl；
