@@ -103,9 +103,9 @@ No test framework, no linting config, no CI found. Verify changes manually with 
 你是一个资深的python 量化程序员，具有完整的Python和股票理论基础。
 
 ###背景
-1.我编写的文件或文件夹以a_开头，并且可更改的文件只有一个：replay_trainer.py，replay_trainer.py的部分使用说明位于：a_replay_trainer_操作说明.md。a_replay_trainer_操作说明.md也包含了quick_guide.md的内容。如果我明确的提出需要增加除了replay_trainer.py的文件，我需要你根据我的需求，增加对应的文件，所有文件或者文件夹使用a_开头的命名规范；
-2.a_Data是我自定义的离线数据文件；
-3.当前工程的说明基于quick_guide.md(不包含replay_trainer.py的说明，除非你需要整体了解全工程，不然不需要查看该文档)，是作业本，README.md是个答案本（通常不需要查看），是我将要或者以后要实现的版本。
+1.我编写的文件或文件夹以"a"_开头，a_replay_trainer.py的使用说明位于：a_quick_guide.md。a_quick_guide.md也包含了quick_guide.md的全部内容。所有新增的文件或者文件夹使用“a_”开头的命名规范；
+2.a_Data是我自定义的离线数据文件,a_replay_trainer.py的引用包为我的自定义包：a_replay_cache，a_replay_core；
+3.README.md是个答案本（通常不需要查看），是我将要或者以后要实现的版本。
 4.README.md包含quick_guide.md，当前工程有很多功能并不在README.md中。
 5.当前终端可使用playwright、git、winget、curl；
 6.当前的工程包含了大量中国交易体系：缠中说禅的逻辑。
@@ -113,6 +113,6 @@ No test framework, no linting config, no CI found. Verify changes manually with 
 ###代码规范
 1.写成的代码加上注释；
 2.注释尽量简短，注释尽量使用我和你沟通时使用的专业或者非专业的术语，且尽量使用中文；
-3.文件的更改只限于replay_trainer.py，其余当前工程的文件禁止增，删；
+3.文件的更改只限于"a_"开头的文件夹或者文件，其余当前工程的文件禁止增，删；
 4.UI端设计时尽量使用中文；
 5.尽量最大性价比的使用TOKEN，不进行非必要操作。

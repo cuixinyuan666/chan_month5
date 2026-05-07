@@ -5,6 +5,7 @@ import os
 import re
 import time
 import warnings
+from collections import deque
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -23,7 +24,32 @@ import tushare as ts
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel, Field
+from a_replay_core.a_replay_api_models import (
+    BackNReq,
+    GotoStepReq,
+    IndicatorBacktestReq,
+    InitReq,
+    JudgeBspReq,
+    ReconfigReq,
+    SessionKlineViewReq,
+    StepReq,
+)
+from a_replay_cache.a_step_rollback import (
+    AppLightSnapshot,
+    AppRollbackSnapshot,
+    capture_stepper_snapshot,
+    restore_stepper_snapshot,
+)
+from a_replay_core.a_replay_kline_view import kline_view_rows_filtered
+from a_replay_core.a_replay_presenters import (
+    msg_buy,
+    msg_cover,
+    msg_sell,
+    msg_short,
+    trade_events_same_bar_flip,
+)
+from a_replay_core.a_replay_serializers import serialize_chan_with_cache, serialize_klu_iter_fast
+from a_replay_core.a_replay_step_utils import serialize_klu_unit_fast
 
 # 尝试导入其他数据源库（缺失时启动阶段给出明确安装提示）
 ASHARE_MOD = None  # ashare 或 PyPI 的 ashares，供 get_price 使用
@@ -3332,6 +3358,10 @@ class ChanStepper:
         self.data_form_mode: str = "traditional"
         self.data_form_quantity: int = 0
         self.raw_kline_count: int = 0
+        # 步进增量缓存：避免每次 payload 全量遍历 klu_iter()
+        self._serialized_klu_cache: list[dict[str, Any]] = []
+        # 同一步下的图表序列化缓存：键为是否包含 kline_all
+        self._chart_payload_cache: dict[bool, tuple[int, dict[str, Any]]] = {}
 
     def _cfg_without_chan_algo(self, cfg_dict: dict[str, Any]) -> dict[str, Any]:
         # 训练器 / API 自用键，勿传入 CChanConfig（否则会触发 unknown para）
@@ -3709,6 +3739,8 @@ class ChanStepper:
         )
         self._iter = self.chan.step_load()
         self.step_idx = -1
+        self._serialized_klu_cache = []
+        self._chart_payload_cache = {}
         self.indicators = {
             "macd": CMACD(),
             "kdj": KDJ(),
@@ -3729,10 +3761,17 @@ class ChanStepper:
             self.step_idx += 1
             self.structure_bundle = None
             self._bundle_cache_step_idx = None
+            self._chart_payload_cache = {}
             # Update indicators
             kl_list = self.chan[0]
             latest_klu = kl_list.lst[-1].lst[-1]
             h, l, c = float(latest_klu.high), float(latest_klu.low), float(latest_klu.close)
+            self._serialized_klu_cache.append(
+                serialize_klu_unit_fast(
+                    latest_klu,
+                    lambda x: _klu_float_trade_metric(x, DATA_FIELD.FIELD_VOLUME),
+                )
+            )
             
             macd_item = self.indicators["macd"].add(c)
             kdj_item = self.indicators["kdj"].add(h, l, c)
@@ -3781,53 +3820,29 @@ class ChanStepper:
             return "-"
         return kl_list.lst[-1].lst[-1].time.to_str()
 
-
-class InitReq(BaseModel):
-    code: str
-    begin_date: str
-    end_date: Optional[str] = None
-    initial_cash: float = 10_000
-    autype: str = "qfq"
-    chan_config: Optional[dict[str, Any]] = None
-    k_type: str = "daily"  # 周期类型
-    chart_mode: str = "single"  # single | dual
-    k_type_2: Optional[str] = None  # 双周期下第二周期
-    active_chart_id: str = "chart1"  # chart1 | chart2
-    # 用户确认使用离线源后二次 init 传 True；单次 init 可传 data_source_priority 覆盖链（不改服务端全局）
-    confirm_offline: bool = False
-    data_source_priority: Optional[list[str]] = None
-    data_form_mode: str = "traditional"
-    data_form_quantity: Optional[int] = None
-
-
-class ReconfigReq(BaseModel):
-    chan_config: dict[str, Any]
-    data_form_mode: Optional[str] = None
-    data_form_quantity: Optional[int] = None
-
-
-class BackNReq(BaseModel):
-    n: int = 1
-
-
-class StepReq(BaseModel):
-    judge_mode: Optional[str] = None  # "auto" | "manual"
-    active_chart_id: Optional[str] = None
-
-
-class JudgeBspReq(BaseModel):
-    reason: str = "manual_check"
-
-
-class GotoStepReq(BaseModel):
-    """跳转到指定步进索引（与 rebuild_to_step 一致，0 为第一根可见 K）。"""
-    step_idx: int = 0
-
-
-class SessionKlineViewReq(BaseModel):
-    """弹窗查看全量 K 线缓存：OHLC / 成交量+筹码分桶 / 原始字段。"""
-    chart_id: str = "active"  # chart1 | chart2 | active
-    view: str = "kline"  # kline | volume_chip | all
+    def build_chart_payload_cached(self, *, include_kline_all: bool) -> dict[str, Any]:
+        """按 step 索引缓存图表序列化结果，减少同一步重复重算。"""
+        if self.chan is None:
+            raise ValueError("会话未初始化")
+        cache = self._chart_payload_cache.get(include_kline_all)
+        if cache is not None and cache[0] == self.step_idx:
+            return cache[1]
+        bundle = self.get_structure_bundle()
+        klu_arr_cache = self._serialized_klu_cache
+        # 兜底：缓存与步进长度不一致时回退全量序列化。
+        if len(klu_arr_cache) != max(0, self.step_idx + 1):
+            klu_arr_cache = None
+        payload = serialize_chan(
+            self.chan,
+            self.indicator_history,
+            self.trend_lines,
+            chan_algo=self.chan_algo,
+            bundle=bundle,
+            kline_all=(self.kline_all if include_kline_all else None),
+            klu_arr_cache=klu_arr_cache,
+        )
+        self._chart_payload_cache[include_kline_all] = (self.step_idx, payload)
+        return payload
 
 
 def _stepper_for_kline_data_chart_id(chart_id: str) -> ChanStepper:
@@ -3844,64 +3859,7 @@ def _stepper_for_kline_data_chart_id(chart_id: str) -> ChanStepper:
 
 
 def _kline_view_rows_filtered(bars: list[dict[str, Any]], view: str) -> list[dict[str, Any]]:
-    v = str(view or "kline").strip().lower()
-    if v in ("kline", "ohlc", "k", "k线"):
-        out: list[dict[str, Any]] = []
-        for b in bars:
-            out.append(
-                {
-                    "x": b.get("x"),
-                    "t": b.get("t"),
-                    "o": b.get("o"),
-                    "h": b.get("h"),
-                    "l": b.get("l"),
-                    "c": b.get("c"),
-                }
-            )
-        return out
-    if v in ("volume_chip", "vol", "chip", "成交量", "筹码"):
-        out2: list[dict[str, Any]] = []
-        for b in bars:
-            row: dict[str, Any] = {"x": b.get("x"), "t": b.get("t"), "v": b.get("v")}
-            if "chip_tick_bins" in b:
-                row["chip_tick_bins"] = b.get("chip_tick_bins")
-            out2.append(row)
-        return out2
-    if v in ("all", "full", "全部", "raw"):
-        return [dict(b) for b in bars]
-    raise ValueError("view 须为 kline、volume_chip 或 all")
-
-
-class IndicatorBacktestReq(BaseModel):
-    """指标+买卖点回测（独立会话）。步进顺序与复盘 api_step 一致：驱动 step → 被动 sync → bt_dual 防未来。
-
-    出场：exit_conditions（与 exit_combine）与 exit_hold_bars 为「或」关系，任一满足即卖。
-    兼容旧字段：conditions / combine_mode / sell_hold_bars。
-    """
-
-    code: str
-    begin_date: str
-    end_date: Optional[str] = None
-    initial_cash: float = 10_000.0
-    autype: str = "qfq"
-    chan_config: Optional[dict[str, Any]] = None
-    k_type: str = "daily"  # 周期1
-    chart_mode: str = "single"
-    k_type_2: Optional[str] = None  # 周期2
-    step_driver: str = "auto"  # auto | k1 | k2：步进时钟；auto=较细周期
-    entry_conditions: list[dict[str, Any]] = Field(default_factory=list)
-    entry_combine: str = "and"
-    exit_conditions: list[dict[str, Any]] = Field(default_factory=list)
-    exit_combine: str = "and"
-    exit_hold_bars: Optional[int] = None  # 与出场公式为或；均未设时内部默认 5
-    # 兼容旧前端
-    conditions: Optional[list[dict[str, Any]]] = None
-    combine_mode: Optional[str] = None
-    sell_hold_bars: Optional[int] = None
-    confirm_offline: bool = False
-    data_source_priority: Optional[list[str]] = None
-    data_form_mode: str = "traditional"
-    data_form_quantity: Optional[int] = None
+    return kline_view_rows_filtered(bars, view)
 
 
 def run_strategy_backtest(req: IndicatorBacktestReq) -> dict[str, Any]:
@@ -3938,6 +3896,173 @@ class AppState:
         # 上次判定位置（用于弹窗展示区间）
         self._last_judge_x: Optional[int] = None
         self._last_judge_time: Optional[str] = None
+        # 回退缓存参数（可由前端 init/reconfig 调整）
+        self._rollback_max: int = 96
+        self._rollback_full_snapshot_interval: int = 8
+        self._rollback_capture_max_bars: int = 30000
+        # 分层快照：每步轻量 + 稀疏全量
+        self._rollback_light: deque[AppLightSnapshot] = deque(maxlen=self._rollback_max)
+        self._rollback_full: dict[int, AppRollbackSnapshot] = {}
+        self._rollback_full_order: deque[int] = deque()
+
+    def _clear_rollback_cache(self) -> None:
+        self._rollback_light.clear()
+        self._rollback_full.clear()
+        self._rollback_full_order.clear()
+
+    def _set_rollback_config(
+        self,
+        *,
+        cache_depth: Optional[int] = None,
+        full_snapshot_interval: Optional[int] = None,
+        capture_max_bars: Optional[int] = None,
+    ) -> None:
+        if cache_depth is not None:
+            v = max(8, int(cache_depth))
+            self._rollback_max = v
+            self._rollback_light = deque(self._rollback_light, maxlen=v)
+        if full_snapshot_interval is not None:
+            self._rollback_full_snapshot_interval = max(1, int(full_snapshot_interval))
+        if capture_max_bars is not None:
+            self._rollback_capture_max_bars = max(0, int(capture_max_bars))
+
+    def _capture_light_snapshot(self) -> AppLightSnapshot:
+        return AppLightSnapshot(
+            step_idx=int(self.get_active_stepper().step_idx),
+            active_chart_id=str(self.active_chart_id),
+            chart_mode=str(self.chart_mode),
+            trade_events=copy.deepcopy(self.trade_events),
+            account=copy.deepcopy(self.account),
+            bsp_history=copy.deepcopy(self.bsp_history),
+            rhythm_hit_history=copy.deepcopy(self.rhythm_hit_history),
+            rhythm_hit_keys=copy.deepcopy(self.rhythm_hit_keys),
+            bsp_judge_logs=copy.deepcopy(self.bsp_judge_logs),
+            last_level_dirs=copy.deepcopy(self._last_level_dirs),
+            judge_notice=bool(self._judge_notice),
+            last_judge_stats=copy.deepcopy(self._last_judge_stats),
+            last_judge_x=copy.deepcopy(self._last_judge_x),
+            last_judge_time=copy.deepcopy(self._last_judge_time),
+        )
+
+    def _restore_light_snapshot(self, snap: AppLightSnapshot) -> None:
+        self.active_chart_id = snap.active_chart_id
+        self.chart_mode = snap.chart_mode
+        self.trade_events = snap.trade_events
+        self.account = snap.account
+        self.bsp_history = snap.bsp_history
+        self.rhythm_hit_history = snap.rhythm_hit_history
+        self.rhythm_hit_keys = snap.rhythm_hit_keys
+        self.bsp_judge_logs = snap.bsp_judge_logs
+        self._last_level_dirs = snap.last_level_dirs
+        self._judge_notice = snap.judge_notice
+        self._last_judge_stats = snap.last_judge_stats
+        self._last_judge_x = snap.last_judge_x
+        self._last_judge_time = snap.last_judge_time
+        self._rhythm_notice_hits = []
+
+    def _store_full_snapshot(self, snap: AppRollbackSnapshot) -> None:
+        idx = int(snap.stepper1.step_idx)
+        self._rollback_full[idx] = snap
+        self._rollback_full_order.append(idx)
+        while len(self._rollback_full_order) > self._rollback_max:
+            old = self._rollback_full_order.popleft()
+            if old in self._rollback_full:
+                del self._rollback_full[old]
+
+    def _capture_should_store_full(self, step_idx: int) -> bool:
+        master = getattr(self.stepper, "_replay_klus_master", None) or []
+        bars = len(master) if isinstance(master, list) else 0
+        if bars <= self._rollback_capture_max_bars:
+            return True
+        return step_idx % self._rollback_full_snapshot_interval == 0
+
+    def _push_rollback_snapshot(self) -> None:
+        if not self.ready or self.stepper.chan is None:
+            return
+        cur_step = int(self.get_active_stepper().step_idx)
+        self._rollback_light.append(self._capture_light_snapshot())
+        if not self._capture_should_store_full(cur_step):
+            return
+        snap = AppRollbackSnapshot(
+            active_chart_id=str(self.active_chart_id),
+            chart_mode=str(self.chart_mode),
+            stepper1=capture_stepper_snapshot(self.stepper),
+            stepper2=(capture_stepper_snapshot(self.stepper2) if self.stepper2 is not None else None),
+            trade_events=copy.deepcopy(self.trade_events),
+            account=copy.deepcopy(self.account),
+            bsp_history=copy.deepcopy(self.bsp_history),
+            rhythm_hit_history=copy.deepcopy(self.rhythm_hit_history),
+            rhythm_hit_keys=copy.deepcopy(self.rhythm_hit_keys),
+            bsp_judge_logs=copy.deepcopy(self.bsp_judge_logs),
+            last_level_dirs=copy.deepcopy(self._last_level_dirs),
+            judge_notice=bool(self._judge_notice),
+            last_judge_stats=copy.deepcopy(self._last_judge_stats),
+            last_judge_x=copy.deepcopy(self._last_judge_x),
+            last_judge_time=copy.deepcopy(self._last_judge_time),
+        )
+        self._store_full_snapshot(snap)
+
+    def _restore_full_snapshot(self, snap: AppRollbackSnapshot) -> None:
+        self.chart_mode = snap.chart_mode
+        self.active_chart_id = snap.active_chart_id
+        restore_stepper_snapshot(self.stepper, snap.stepper1)
+        if snap.stepper2 is None:
+            self.stepper2 = None
+        else:
+            if self.stepper2 is None:
+                self.stepper2 = ChanStepper()
+            restore_stepper_snapshot(self.stepper2, snap.stepper2)
+        self.trade_events = snap.trade_events
+        self.account = snap.account
+        self.bsp_history = snap.bsp_history
+        self.rhythm_hit_history = snap.rhythm_hit_history
+        self.rhythm_hit_keys = snap.rhythm_hit_keys
+        self.bsp_judge_logs = snap.bsp_judge_logs
+        self._last_level_dirs = snap.last_level_dirs
+        self._judge_notice = snap.judge_notice
+        self._last_judge_stats = snap.last_judge_stats
+        self._last_judge_x = snap.last_judge_x
+        self._last_judge_time = snap.last_judge_time
+        self._rhythm_notice_hits = []
+
+    def _memory_step_forward_no_snapshot(self, n: int) -> None:
+        for _ in range(max(0, int(n))):
+            active = self.get_active_stepper()
+            passive = self.get_passive_stepper()
+            ok = active.step()
+            if passive is not None and ok:
+                self._sync_stepper_to_anchor(passive, active.current_time())
+            self._dual_rebuild_coarse_chan_anti_future(active.current_time())
+            if not ok:
+                break
+            self.sync_bsp_history()
+            self.sync_rhythm_history()
+            self.after_step_update()
+
+    def _rollback_n_steps_from_memory(self, n: int) -> int:
+        """内存回退 n 步；返回实际回退步数。"""
+        if n <= 0:
+            return 0
+        cur = int(self.get_active_stepper().step_idx)
+        target = max(-1, cur - int(n))
+        if target == cur:
+            return 0
+        # 先找 <= target 的最近全量快照
+        full_candidates = [idx for idx in self._rollback_full.keys() if idx <= target]
+        if not full_candidates:
+            return 0
+        base_idx = max(full_candidates)
+        snap = self._rollback_full.get(base_idx)
+        if snap is None:
+            return 0
+        self._restore_full_snapshot(snap)
+        self._memory_step_forward_no_snapshot(target - base_idx)
+        # 若轻量快照里有目标步，覆盖一次轻量状态（进一步对齐）
+        for ls in reversed(self._rollback_light):
+            if int(ls.step_idx) == target:
+                self._restore_light_snapshot(copy.deepcopy(ls))
+                break
+        return max(0, cur - int(self.get_active_stepper().step_idx))
 
     def _normalize_chart_id(self, chart_id: Optional[str]) -> str:
         cid = str(chart_id or self.active_chart_id or "chart1").strip().lower()
@@ -4266,7 +4391,7 @@ class AppState:
                 active = None
         return {"history": history, "short_history": short_history, "active": active}
 
-    def _current_bsp_snapshot(self) -> list[dict[str, Any]]:
+    def _current_bsp_snapshot(self, *, current_x: Optional[int] = None) -> list[dict[str, Any]]:
         stepper = self.get_active_stepper()
         if stepper.chan is None:
             return []
@@ -4275,7 +4400,12 @@ class AppState:
         for level in VISIBLE_BSP_LEVELS:
             bsp_list = get_bundle_bsp_list(bundle, level)
             for bsp in bsp_list.bsp_iter():
-                snapshot.append(make_bsp_item(level, bsp))
+                item = make_bsp_item(level, bsp)
+                if current_x is not None and int(item["x"]) != int(current_x):
+                    continue
+                snapshot.append(item)
+        if current_x is not None:
+            return snapshot
         return sorted(snapshot, key=lambda item: (int(item["x"]), LEVEL_ORDER.get(item["level"], 999), int(not bool(item["is_buy"]))))
 
     @staticmethod
@@ -4292,12 +4422,10 @@ class AppState:
             self.bsp_history = []
             return
 
-        snapshot = self._current_bsp_snapshot()
+        snapshot = self._current_bsp_snapshot(current_x=current_x)
 
         existing_keys = {str(item.get("key")) for item in self.bsp_history}
         for item in snapshot:
-            if int(item["x"]) != current_x:
-                continue
             key = self._bsp_key(item)
             if key in existing_keys:
                 continue
@@ -4356,6 +4484,12 @@ class AppState:
         if self.session_params is None:
             raise ValueError("当前无可重建会话")
         params = self.session_params
+        self._set_rollback_config(
+            cache_depth=params.get("rollback_cache_depth"),
+            full_snapshot_interval=params.get("rollback_full_snapshot_interval"),
+            capture_max_bars=params.get("rollback_capture_max_bars"),
+        )
+        self._clear_rollback_cache()
 
         # 必须与首次 /api/init 传入的 data_source_priority、confirm_offline 一致，
         # 否则 session_key 中 prio_fp 变化会导致误判缓存未命中，重新拉行情并在 BaoStock 等源上失败。
@@ -4446,6 +4580,9 @@ class AppState:
         *,
         data_form_mode: Optional[str] = None,
         data_form_quantity: Optional[int] = None,
+        rollback_cache_depth: Optional[int] = None,
+        rollback_full_snapshot_interval: Optional[int] = None,
+        rollback_capture_max_bars: Optional[int] = None,
     ) -> None:
         if self.session_params is None:
             raise ValueError("当前无可重配会话")
@@ -4456,6 +4593,17 @@ class AppState:
             self.session_params["data_form_mode"] = normalize_data_form_mode(data_form_mode)
         if data_form_quantity is not None:
             self.session_params["data_form_quantity"] = int(data_form_quantity)
+        if rollback_cache_depth is not None:
+            self.session_params["rollback_cache_depth"] = int(rollback_cache_depth)
+        if rollback_full_snapshot_interval is not None:
+            self.session_params["rollback_full_snapshot_interval"] = int(rollback_full_snapshot_interval)
+        if rollback_capture_max_bars is not None:
+            self.session_params["rollback_capture_max_bars"] = int(rollback_capture_max_bars)
+        self._set_rollback_config(
+            cache_depth=rollback_cache_depth,
+            full_snapshot_interval=rollback_full_snapshot_interval,
+            capture_max_bars=rollback_capture_max_bars,
+        )
         
         # 2. Clear simulation data (trades and account)
         self.trade_events = []
@@ -4475,21 +4623,10 @@ class AppState:
         rhythm_notice_hits = list(self._rhythm_notice_hits)
         self._rhythm_notice_hits = []
 
-        def _build_chart_payload(stepper: ChanStepper) -> dict[str, Any]:
-            bundle = stepper.get_structure_bundle()
-            return serialize_chan(
-                stepper.chan,
-                stepper.indicator_history,
-                stepper.trend_lines,
-                chan_algo=stepper.chan_algo,
-                bundle=bundle,
-                kline_all=(stepper.kline_all if include_kline_all else None),
-            )
-
-        chart = _build_chart_payload(self.stepper)
+        chart = self.stepper.build_chart_payload_cached(include_kline_all=include_kline_all)
         chart2: Optional[dict[str, Any]] = None
         if self.chart_mode == "dual" and self.stepper2 is not None and self.stepper2.chan is not None:
-            chart2 = _build_chart_payload(self.stepper2)
+            chart2 = self.stepper2.build_chart_payload_cached(include_kline_all=include_kline_all)
 
         active_stepper = self.get_active_stepper()
         # 驱动周期下还可向前步进的根数（与 step_idx、聚合后 master 长度一致）
@@ -4504,8 +4641,10 @@ class AppState:
             if pair is not None:
                 coarse, fine = pair
                 if coarse is self.stepper:
+                    chart = copy.deepcopy(chart)
                     self._apply_partial_last_bar(chart, coarse, fine, anchor_time)
                 else:
+                    chart2 = copy.deepcopy(chart2)
                     self._apply_partial_last_bar(chart2, coarse, fine, anchor_time)
         price: Optional[float] = None
         active_chart = chart2 if (self._normalize_chart_id(self.active_chart_id) == "chart2" and chart2 is not None) else chart
@@ -4542,6 +4681,13 @@ class AppState:
             "step_idx": active_stepper.step_idx,
             "step_forward_max": int(step_forward_max),
             "replay_bar_total": int(_total),
+            "rollback_config": {
+                "cache_depth": int(self._rollback_max),
+                "full_snapshot_interval": int(self._rollback_full_snapshot_interval),
+                "capture_max_bars": int(self._rollback_capture_max_bars),
+                "light_count": int(len(self._rollback_light)),
+                "full_count": int(len(self._rollback_full)),
+            },
             "time": active_stepper.current_time(),
             "price": price,
             "chart": chart,
@@ -5196,20 +5342,11 @@ def run_indicator_backtest(req: IndicatorBacktestReq) -> dict[str, Any]:
 
 
 def serialize_klu_iter(klu_iter) -> list[dict[str, Any]]:
-    arr: list[dict[str, Any]] = []
-    for klu in klu_iter:
-        arr.append(
-            {
-                "x": klu.idx,
-                "t": klu.time.to_str(),
-                "o": float(klu.open),
-                "h": float(klu.high),
-                "l": float(klu.low),
-                "c": float(klu.close),
-                "v": _klu_float_trade_metric(klu, DATA_FIELD.FIELD_VOLUME),
-            }
-        )
-    return arr
+    return serialize_klu_iter_fast(
+        klu_iter,
+        serialize_klu_unit_fast_fn=serialize_klu_unit_fast,
+        volume_getter_fn=lambda x: _klu_float_trade_metric(x, DATA_FIELD.FIELD_VOLUME),
+    )
 
 
 def serialize_kline_combine(kl_list) -> list[dict[str, Any]]:
@@ -5242,53 +5379,24 @@ def serialize_chan(
     chan_algo: str = CHAN_ALGO_CLASSIC,
     bundle: Optional[ChanStructureBundle] = None,
     kline_all: Optional[list[dict[str, Any]]] = None,
+    klu_arr_cache: Optional[list[dict[str, Any]]] = None,
 ) -> dict[str, Any]:
-    """kline_all 为 None 时不写入 chart（与空列表不同：空列表表示确实无全量数据）。"""
-    kl_list = chan[0]
-    klu_arr = serialize_klu_iter(kl_list.klu_iter())
-    active_bundle = bundle or build_structure_bundle(chan, chan_algo)
-    fract_arr = serialize_line_collection(active_bundle.fract_list)
-    bi_arr = serialize_line_collection(active_bundle.bi_list)
-    seg_arr = serialize_line_collection(active_bundle.seg_list)
-    segseg_arr = serialize_line_collection(active_bundle.segseg_list)
-    fract_zs_arr = serialize_zs_collection(active_bundle.fractzs_list)
-    bi_zs_arr = serialize_zs_collection(active_bundle.zs_list)
-    seg_zs_arr = serialize_zs_collection(active_bundle.segzs_list)
-    segseg_zs_arr = serialize_zs_collection(active_bundle.segsegzs_list)
-    kline_combine_arr = serialize_kline_combine(kl_list)
-    bsp_bi_arr = serialize_bsp_collection("bi", active_bundle.bs_point_lst)
-    bsp_seg_arr = serialize_bsp_collection("seg", active_bundle.seg_bs_point_lst)
-    bsp_segseg_arr = serialize_bsp_collection("segseg", active_bundle.segseg_bs_point_lst)
-    bsp_arr = sorted(
-        [*bsp_bi_arr, *bsp_seg_arr, *bsp_segseg_arr],
-        key=lambda item: (int(item["x"]), LEVEL_ORDER.get(str(item["level"]), 999), int(not bool(item["is_buy"]))),
+    return serialize_chan_with_cache(
+        chan,
+        indicator_history,
+        trend_lines,
+        build_structure_bundle_fn=build_structure_bundle,
+        serialize_klu_iter_fn=serialize_klu_iter,
+        serialize_line_collection_fn=serialize_line_collection,
+        serialize_zs_collection_fn=serialize_zs_collection,
+        serialize_kline_combine_fn=serialize_kline_combine,
+        serialize_bsp_collection_fn=serialize_bsp_collection,
+        level_order=LEVEL_ORDER,
+        chan_algo=chan_algo,
+        bundle=bundle,
+        kline_all=kline_all,
+        klu_arr_cache=klu_arr_cache,
     )
-
-    out: dict[str, Any] = {
-        "kline": klu_arr,
-        "fract": fract_arr,
-        "bi": bi_arr,
-        "seg": seg_arr,
-        "segseg": segseg_arr,
-        "fract_zs": fract_zs_arr,
-        "bi_zs": bi_zs_arr,
-        "seg_zs": seg_zs_arr,
-        "segseg_zs": segseg_zs_arr,
-        "bsp": bsp_arr,
-        "bsp_bi": bsp_bi_arr,
-        "bsp_seg": bsp_seg_arr,
-        "bsp_segseg": bsp_segseg_arr,
-        "rhythm_lines": active_bundle.rhythm_lines,
-        "rhythm_hits": active_bundle.rhythm_hits,
-        "fx_lines": active_bundle.fx_lines,
-        "indicators": indicator_history,
-        "trend_lines": active_bundle.trend_lines if active_bundle.trend_lines else trend_lines,
-        "kline_combine": kline_combine_arr,
-    }
-    # None 表示「不下发」以减小步进等接口的 JSON；[] 仍表示真实空列表。
-    if kline_all is not None:
-        out["kline_all"] = kline_all
-    return out
 
 
 HTML = r"""
@@ -7359,6 +7467,10 @@ const DEFAULT_SYSTEM_CONFIG = {
   }, {}),
   // K 线与筹码共用一套优先级顺序（服务端两套链独立按序回退）
   dataSourcePriority: ["AKShare", "Ashare", "AData", "pytdx", "BaoStock", "离线数据", "Tushare", "新浪财经", "腾讯财经", "雅虎财经", "东方财富"],
+  // 回退缓存（以内存换速度）
+  rollbackCacheDepth: 96,
+  rollbackFullSnapshotInterval: 8,
+  rollbackCaptureMaxBars: 30000,
 };
 
 let systemConfig = ensureObject(
@@ -9302,6 +9414,9 @@ async function saveSettings() {
       chan_config: chanConfig,
       data_form_mode: dataFormConfig.mode,
       data_form_quantity: clampDataFormQuantity(dataFormConfig.quantity, n || 1),
+      rollback_cache_depth: Number(systemConfig.rollbackCacheDepth || DEFAULT_SYSTEM_CONFIG.rollbackCacheDepth),
+      rollback_full_snapshot_interval: Number(systemConfig.rollbackFullSnapshotInterval || DEFAULT_SYSTEM_CONFIG.rollbackFullSnapshotInterval),
+      rollback_capture_max_bars: Number(systemConfig.rollbackCaptureMaxBars || DEFAULT_SYSTEM_CONFIG.rollbackCaptureMaxBars),
     });
     refreshUI(payload, { afterStep: false });
     setMsg(payload.message || "图表设置更新成功");
@@ -13661,6 +13776,9 @@ $("btnInit").onclick = async () => {
       active_chart_id: (sessionConfig && sessionConfig.activeChartId) ? sessionConfig.activeChartId : "chart1",
       data_form_mode: normalizeDataFormMode(dataFormConfig.mode),
       data_form_quantity: clampDataFormQuantity(dataFormConfig.quantity, getRawKlineCount() || 1),
+      rollback_cache_depth: Number(systemConfig.rollbackCacheDepth || DEFAULT_SYSTEM_CONFIG.rollbackCacheDepth),
+      rollback_full_snapshot_interval: Number(systemConfig.rollbackFullSnapshotInterval || DEFAULT_SYSTEM_CONFIG.rollbackFullSnapshotInterval),
+      rollback_capture_max_bars: Number(systemConfig.rollbackCaptureMaxBars || DEFAULT_SYSTEM_CONFIG.rollbackCaptureMaxBars),
       ...extra,
     });
     let payload;
@@ -14559,6 +14677,11 @@ def api_init(req: InitReq):
         APP_STATE.account.reset(req.initial_cash)
         APP_STATE.ready = True
         APP_STATE.finished = False
+        APP_STATE._set_rollback_config(
+            cache_depth=req.rollback_cache_depth,
+            full_snapshot_interval=req.rollback_full_snapshot_interval,
+            capture_max_bars=req.rollback_capture_max_bars,
+        )
         APP_STATE.session_params = {
             "code": code_norm,
             "begin_date": req.begin_date,
@@ -14575,12 +14698,16 @@ def api_init(req: InitReq):
             "data_source_priority": req.data_source_priority,
             "data_form_mode": normalize_data_form_mode(req.data_form_mode),
             "data_form_quantity": req.data_form_quantity,
+            "rollback_cache_depth": req.rollback_cache_depth,
+            "rollback_full_snapshot_interval": req.rollback_full_snapshot_interval,
+            "rollback_capture_max_bars": req.rollback_capture_max_bars,
         }
         APP_STATE.trade_events = []
         APP_STATE.bsp_history = []
         APP_STATE._reset_rhythm_history()
         APP_STATE.bsp_judge_logs = []
         APP_STATE._last_level_dirs = {level: None for level in set(JUDGE_TRIGGER_LEVELS.values())}
+        APP_STATE._clear_rollback_cache()
         # init后先推进一根，确保前端有可视数据并可交互
         APP_STATE.rebuild_bsp_all_snapshot()
         APP_STATE.stepper.step()
@@ -14615,6 +14742,9 @@ def api_reconfig(req: ReconfigReq):
             req.chan_config,
             data_form_mode=req.data_form_mode,
             data_form_quantity=req.data_form_quantity,
+            rollback_cache_depth=req.rollback_cache_depth,
+            rollback_full_snapshot_interval=req.rollback_full_snapshot_interval,
+            rollback_capture_max_bars=req.rollback_capture_max_bars,
         )
         APP_STATE._rhythm_notice_hits = []
         payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME, include_kline_all=False)
@@ -14635,6 +14765,7 @@ def api_step(req: StepReq):
             APP_STATE.active_chart_id = APP_STATE._normalize_chart_id(req.active_chart_id)
         active_stepper = APP_STATE.get_active_stepper()
         passive_stepper = APP_STATE.get_passive_stepper()
+        APP_STATE._push_rollback_snapshot()
         ok = active_stepper.step()
         if passive_stepper is not None and ok:
             APP_STATE._sync_stepper_to_anchor(passive_stepper, active_stepper.current_time())
@@ -14666,44 +14797,6 @@ def api_judge_bsp(req: JudgeBspReq):
         raise HTTPException(status_code=400, detail=str(e)) from e
 
 
-def _trade_events_same_bar_flip(events: list[dict[str, Any]], prev_side: str, cur_side: str) -> bool:
-    """判断是否同一 step、同一 K 线 x 上连续两笔（如平多→做空、平空→做多）。"""
-    if len(events) < 2:
-        return False
-    a, b = events[-2], events[-1]
-    if str(a.get("side")) != prev_side or str(b.get("side")) != cur_side:
-        return False
-    if int(a.get("step_idx", -10_000_000)) != int(b.get("step_idx", -9_000_000)):
-        return False
-    return a.get("x") == b.get("x")
-
-
-def _msg_buy(detail: dict[str, Any]) -> str:
-    if detail.get("noop"):
-        return str(detail.get("message") or "无操作")
-    sh = int(detail.get("shares", 0))
-    return f"开多成功：{sh} 股，耗资 {detail.get('cost')} 元。"
-
-
-def _msg_sell(detail: dict[str, Any]) -> str:
-    if detail.get("noop"):
-        return str(detail.get("message") or "无操作")
-    sh = int(detail.get("shares", 0))
-    return f"平多成功：{sh} 股，回笼 {detail.get('proceeds')} 元，盈亏 {detail.get('pnl')} 元。"
-
-
-def _msg_short(detail: dict[str, Any]) -> str:
-    sh = int(detail.get("shares", 0))
-    return f"开空成功：{sh} 股，名义占用约 {detail.get('proceeds')} 元。"
-
-
-def _msg_cover(detail: dict[str, Any]) -> str:
-    if detail.get("noop"):
-        return str(detail.get("message") or "无操作")
-    sh = int(detail.get("shares", 0))
-    return f"平空成功：{sh} 股，支出 {detail.get('cost')} 元，盈亏 {detail.get('pnl')} 元。"
-
-
 @app.post("/api/buy")
 def api_buy():
     if not APP_STATE.ready:
@@ -14725,11 +14818,11 @@ def api_buy():
             }
         )
         payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME, include_kline_all=False)
-        if _trade_events_same_bar_flip(APP_STATE.trade_events, "cover", "buy"):
+        if trade_events_same_bar_flip(APP_STATE.trade_events, "cover", "buy"):
             sh = int(detail.get("shares", 0))
             payload["message"] = f"当根反手：平空后已开多（{sh} 股）。图表同根「平/买」标记已纵向错开。"
         else:
-            payload["message"] = _msg_buy(detail)
+            payload["message"] = msg_buy(detail)
         return payload
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -14756,7 +14849,7 @@ def api_sell():
             }
         )
         payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME, include_kline_all=False)
-        payload["message"] = _msg_sell(detail)
+        payload["message"] = msg_sell(detail)
         return payload
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -14783,11 +14876,11 @@ def api_short():
             }
         )
         payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME, include_kline_all=False)
-        if _trade_events_same_bar_flip(APP_STATE.trade_events, "sell", "short"):
+        if trade_events_same_bar_flip(APP_STATE.trade_events, "sell", "short"):
             sh = int(detail.get("shares", 0))
             payload["message"] = f"当根反手：平多后已开空（{sh} 股）。图表同根「卖/空」标记已纵向错开。"
         else:
-            payload["message"] = _msg_short(detail)
+            payload["message"] = msg_short(detail)
         return payload
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -14814,7 +14907,7 @@ def api_cover():
             }
         )
         payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME, include_kline_all=False)
-        payload["message"] = _msg_cover(detail)
+        payload["message"] = msg_cover(detail)
         return payload
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -14908,6 +15001,13 @@ def api_back_n(req: BackNReq):
         n = int(req.n)
         if n < 1:
             raise ValueError("N 必须>=1")
+        moved_mem = APP_STATE._rollback_n_steps_from_memory(n)
+        if moved_mem == n:
+            payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME, include_kline_all=False)
+            payload["message"] = f"内存快速回退：已后退 {moved_mem} 根"
+            return payload
+        if moved_mem > 0:
+            n -= moved_mem
         cur = APP_STATE.get_active_stepper().step_idx
         target = max(0, cur - n)
         APP_STATE.rebuild_to_step(target)
@@ -15030,6 +15130,7 @@ def api_reset():
     APP_STATE.bsp_judge_logs = []
     APP_STATE._last_level_dirs = {level: None for level in set(JUDGE_TRIGGER_LEVELS.values())}
     APP_STATE._reset_judge_state()
+    APP_STATE._clear_rollback_cache()
     return APP_STATE.build_payload(stock_name=APP_STOCK_NAME)
 
 
