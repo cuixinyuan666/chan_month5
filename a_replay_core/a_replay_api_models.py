@@ -19,6 +19,8 @@ class InitReq(BaseModel):
     data_source_priority: Optional[list[str]] = None
     data_form_mode: str = "traditional"
     data_form_quantity: Optional[int] = None
+    # 喂数据方式：step=现有逐根喂入；unified=一次性喂给缠论计算（仅看画线/筹码）
+    data_feed_mode: str = "step"
     # 回退缓存参数（前端可调）
     rollback_cache_depth: Optional[int] = None
     rollback_full_snapshot_interval: Optional[int] = None
@@ -29,6 +31,7 @@ class ReconfigReq(BaseModel):
     chan_config: dict[str, Any]
     data_form_mode: Optional[str] = None
     data_form_quantity: Optional[int] = None
+    data_feed_mode: Optional[str] = None
     rollback_cache_depth: Optional[int] = None
     rollback_full_snapshot_interval: Optional[int] = None
     rollback_capture_max_bars: Optional[int] = None
@@ -41,6 +44,7 @@ class BackNReq(BaseModel):
 class StepReq(BaseModel):
     judge_mode: Optional[str] = None  # "auto" | "manual"
     active_chart_id: Optional[str] = None
+    n: int = 1
 
 
 class JudgeBspReq(BaseModel):
@@ -51,6 +55,8 @@ class GotoStepReq(BaseModel):
     """跳转到指定步进索引（与 rebuild_to_step 一致，0 为第一根可见 K）。"""
 
     step_idx: int = 0
+    # 与 /api/step 一致：指定当前激活图窗，跳转作用于该图的步进器
+    active_chart_id: Optional[str] = None
 
 
 class SessionKlineViewReq(BaseModel):

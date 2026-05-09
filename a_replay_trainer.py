@@ -287,6 +287,11 @@ def normalize_data_form_mode(raw: Any) -> str:
     allow = {"traditional", "quantity", "tick_traditional", "tick_quantity"}
     return mode if mode in allow else "traditional"
 
+def normalize_data_feed_mode(raw: Any) -> str:
+    """统一数据喂入模式：step=逐步喂入，unified=统一喂入。"""
+    mode = str(raw or "step").strip().lower()
+    return "unified" if mode == "unified" else "step"
+
 
 def is_data_form_quantity_mode(mode: Any) -> bool:
     """数量类数据形式：普通数量 + 分笔价格合成数量。"""
@@ -407,18 +412,18 @@ def _bars_to_klu_list(bars: list[dict[str, Any]]) -> list[Any]:
 
 
 def _build_tick_rows_by_bucket(
-    ticks: list[tuple[CTime, float, float]], k_type: KL_TYPE
-) -> dict[tuple, list[tuple[float, float]]]:
+    ticks: list[tuple[CTime, float, float, str]], k_type: KL_TYPE
+) -> dict[tuple, list[tuple[float, float, str]]]:
     """把分笔按目标周期分桶，保留每桶逐笔价量。"""
     from collections import defaultdict
 
-    by_bucket: dict[tuple, list[tuple[float, float]]] = defaultdict(list)
-    for t, price, vol in ticks:
+    by_bucket: dict[tuple, list[tuple[float, float, str]]] = defaultdict(list)
+    for t, price, vol, side in ticks:
         try:
             bk = _offline_chip_bar_bucket_key(t, k_type)
         except ValueError:
             continue
-        by_bucket[bk].append((float(price), float(vol)))
+        by_bucket[bk].append((float(price), float(vol), str(side)))
     return by_bucket
 
 
@@ -451,24 +456,59 @@ def _aggregate_kline_dicts_by_quantity(
             "c": float(chunk[-1].get("c", 0.0)),
             "v": sum(float(k.get("v", 0.0) or 0.0) for k in chunk),
         }
-        tb_rows: list[tuple[float, float]] = []
+        from collections import defaultdict
+
+        s_acc: dict[float, float] = defaultdict(float)
+        b_acc: dict[float, float] = defaultdict(float)
         for k in chunk:
             tb = k.get("chip_tick_bins")
             if tb and isinstance(tb, dict):
                 ps = tb.get("p") or []
-                ws = tb.get("w") or []
-                if isinstance(ps, list) and isinstance(ws, list) and len(ps) == len(ws):
+                if not isinstance(ps, list) or not ps:
+                    continue
+
+                s_arr = tb.get("s")
+                b_arr = tb.get("b")
+                w_arr = tb.get("w")
+
+                if (
+                    isinstance(s_arr, list)
+                    and isinstance(b_arr, list)
+                    and len(s_arr) == len(ps)
+                    and len(b_arr) == len(ps)
+                ):
                     for j in range(len(ps)):
                         try:
-                            p = float(ps[j])
-                            w = float(ws[j])
+                            p = round(float(ps[j]), 4)
+                            s_v = float(s_arr[j])
+                            b_v = float(b_arr[j])
                         except (TypeError, ValueError):
                             continue
-                        if w > 0 and p > 0:
-                            tb_rows.append((p, w))
-        ps2, ws2 = _fold_price_vols(tb_rows)
-        if ps2:
-            merged["chip_tick_bins"] = {"p": ps2, "w": ws2}
+                        if not (p > 0) or not (s_v == s_v and b_v == b_v) or (s_v <= 0 and b_v <= 0):
+                            continue
+                        if s_v > 0:
+                            s_acc[p] += s_v
+                        if b_v > 0:
+                            b_acc[p] += b_v
+                elif isinstance(w_arr, list) and len(w_arr) == len(ps):
+                    # 兼容旧字段：无 s/b 时把总量都当作 B(右红)
+                    for j in range(len(ps)):
+                        try:
+                            p = round(float(ps[j]), 4)
+                            w = float(w_arr[j])
+                        except (TypeError, ValueError):
+                            continue
+                        if not (p > 0) or w <= 0 or not (w == w):
+                            continue
+                        b_acc[p] += w
+
+        if s_acc or b_acc:
+            ps2 = sorted(set(s_acc.keys()) | set(b_acc.keys()))
+            if ps2:
+                s_ws2 = [float(s_acc[p]) for p in ps2]
+                b_ws2 = [float(b_acc[p]) for p in ps2]
+                ws2 = [float(s_ws2[i] + b_ws2[i]) for i in range(len(ps2))]
+                merged["chip_tick_bins"] = {"p": ps2, "s": s_ws2, "b": b_ws2, "w": ws2}
         out.append(merged)
     return out
 
@@ -516,9 +556,10 @@ def build_tick_synth_session_data(
         rows = by_bucket.get(bk, [])
         if not rows:
             continue
-        ps, ws = _fold_price_vols(rows)
+        ps, s_ws, b_ws = _fold_price_side_vols(rows)
         if ps:
-            bar["chip_tick_bins"] = {"p": ps, "w": ws}
+            ws = [float(s_ws[i] + b_ws[i]) for i in range(len(ps))]
+            bar["chip_tick_bins"] = {"p": ps, "s": s_ws, "b": b_ws, "w": ws}
 
     if mode == "tick_quantity":
         q = normalize_data_form_quantity(quantity, len(kline_all))
@@ -839,6 +880,37 @@ def _fold_price_vols(rows: list[tuple[float, float]]) -> tuple[list[float], list
     return ps, ws
 
 
+def _fold_price_side_vols(
+    rows: list[tuple[float, float, str]],
+) -> tuple[list[float], list[float], list[float]]:
+    """
+    将分笔按价位累计，拆成两侧：
+    - 左侧绿色 S
+    - 右侧红色 B
+    """
+    from collections import defaultdict
+
+    pr_acc_s: dict[float, float] = defaultdict(float)
+    pr_acc_b: dict[float, float] = defaultdict(float)
+    for p, v, side in rows:
+        if v <= 0 or not (p > 0) or not (v == v):
+            continue
+        rp = round(float(p), 4)
+        s = str(side).strip().upper()
+        if s == "S":
+            pr_acc_s[rp] += float(v)
+        else:
+            # 方向缺失/异常 -> 统一当作 B(右红)
+            pr_acc_b[rp] += float(v)
+
+    ps = sorted(set(pr_acc_s.keys()) | set(pr_acc_b.keys()))
+    if not ps:
+        return [], [], []
+    s_ws = [float(pr_acc_s[p]) for p in ps]
+    b_ws = [float(pr_acc_b[p]) for p in ps]
+    return ps, s_ws, b_ws
+
+
 def _enrich_kline_all_offline_chip_non_triangle(
     code: str, kline_all: list[dict[str, Any]], end_date: Optional[str], k_type: KL_TYPE
 ) -> None:
@@ -854,19 +926,27 @@ def _enrich_kline_all_offline_chip_non_triangle(
         return
     code6 = _strip_market_prefix(code)
     b8, e8 = _offline_date_bounds("1990-01-01", end_date)
-    key_to_rows: dict[tuple, list[tuple[float, float]]] = defaultdict(list)
+    key_to_rows: dict[tuple, list[tuple[float, float, str]]] = defaultdict(list)
 
     paths = _offline_list_tick_paths(folder, code6, b8, e8)
+    tick_vol_s = 0.0
+    tick_vol_b = 0.0
+    used_tick_files = False
     if paths:
         ticks = _offline_load_ticks(paths)
         if not ticks:
             return
-        for t, price, vol in ticks:
+        used_tick_files = True
+        for t, price, vol, side in ticks:
             try:
                 bk = _offline_chip_bar_bucket_key(t, k_type)
             except ValueError:
                 continue
-            key_to_rows[bk].append((float(price), float(vol)))
+            key_to_rows[bk].append((float(price), float(vol), str(side)))
+            if str(side).strip().upper() == "S":
+                tick_vol_s += float(vol)
+            else:
+                tick_vol_b += float(vol)
     else:
         p1m = os.path.join(folder, "KLine", "1MINUTE", offline_folder_from_code(code) + ".txt")
         if not (os.path.isfile(p1m) and os.path.getsize(p1m) > 80):
@@ -880,15 +960,20 @@ def _enrich_kline_all_offline_chip_non_triangle(
                 bk = _offline_chip_bar_bucket_key(ct, k_type)
             except ValueError:
                 continue
-            key_to_rows[bk].append((float(r["c"]), float(r["v"])))
+            # 仅有 1 分钟 K：无法得知 tick 级别方向，用 OHLC 简易判定：
+            # close >= open 视作 B(右红)，否则视作 S(左绿)
+            o = float(r.get("o", 0.0) or 0.0)
+            c = float(r.get("c", 0.0) or 0.0)
+            side = "B" if c >= o else "S"
+            key_to_rows[bk].append((float(r["c"]), float(r["v"]), side))
 
     if not key_to_rows:
         return
-    key_to_bins: dict[tuple, tuple[list[float], list[float]]] = {}
+    key_to_bins: dict[tuple, tuple[list[float], list[float], list[float]]] = {}
     for bk, arr in key_to_rows.items():
-        ps, ws = _fold_price_vols(arr)
+        ps, s_ws, b_ws = _fold_price_side_vols(arr)
         if ps:
-            key_to_bins[bk] = (ps, ws)
+            key_to_bins[bk] = (ps, s_ws, b_ws)
 
     for bar in kline_all:
         ct = _parse_kline_bar_ctime(str(bar.get("t", "")))
@@ -901,8 +986,9 @@ def _enrich_kline_all_offline_chip_non_triangle(
         tup = key_to_bins.get(bk)
         if not tup or not tup[0]:
             continue
-        bar["chip_tick_bins"] = {"p": tup[0], "w": tup[1]}
-
+        ps, s_ws, b_ws = tup
+        ws = [float(s_ws[i] + b_ws[i]) for i in range(len(ps))]
+        bar["chip_tick_bins"] = {"p": ps, "s": s_ws, "b": b_ws, "w": ws}
 
 def _strip_market_prefix(code: str) -> str:
     text = str(code or "").strip().lower()
@@ -1994,8 +2080,14 @@ def _offline_list_tick_paths(folder: str, code6: str, b8: int, e8: int) -> list[
     return [p for _, p in out]
 
 
-def _offline_load_ticks(paths: list[str]) -> list[tuple[CTime, float, float]]:
-    ticks: list[tuple[CTime, float, float]] = []
+def _offline_load_ticks(paths: list[str]) -> list[tuple[CTime, float, float, str]]:
+    """
+    读取离线分笔 TickData。
+
+    TickData 一般列为：时间 价格 成交 笔数 B/S(可选)
+    其中 B/S 用于筹码分布的左右拆分：S(左绿) / B(右红)
+    """
+    ticks: list[tuple[CTime, float, float, str]] = []
     for p in paths:
         base = os.path.basename(p)
         d8 = int(base.split("_")[0])
@@ -2016,16 +2108,26 @@ def _offline_load_ticks(paths: list[str]) -> list[tuple[CTime, float, float]]:
                 hh, mm = int(a), int(b)
                 price = str2float(parts[1])
                 vol = str2float(parts[2])
-                ticks.append((CTime(y, mo, d0, hh, mm, auto=False), price, vol))
+                side = ""
+                # B/S 通常在最后一列（且在 parts[3:] 内）
+                for tok in parts[3:]:
+                    s = str(tok).strip().upper()
+                    if s in ("B", "S"):
+                        side = s
+                        break
+                # 兜底：无法解析方向时按 B 处理（右红）
+                if side not in ("B", "S"):
+                    side = "B"
+                ticks.append((CTime(y, mo, d0, hh, mm, auto=False), price, vol, side))
     ticks.sort(key=lambda x: x[0].ts)
     return ticks
 
 
-def _offline_ticks_to_1m(ticks: list[tuple[CTime, float, float]]) -> list[dict[str, Any]]:
+def _offline_ticks_to_1m(ticks: list[tuple[CTime, float, float, str]]) -> list[dict[str, Any]]:
     from collections import defaultdict
 
     buck: dict[tuple[int, int, int, int, int], list[tuple[float, float]]] = defaultdict(list)
-    for t, price, vol in ticks:
+    for t, price, vol, _side in ticks:
         key = (t.year, t.month, t.day, t.hour, t.minute)
         buck[key].append((price, vol))
     rows: list[dict[str, Any]] = []
@@ -3012,8 +3114,9 @@ def build_classic_bundle(chan: CChan) -> ChanStructureBundle:
     conf = chan.conf
     segsegseg_list = build_hidden_seg_layer(kl_list.segseg_list, conf)
     fract_list = SimpleLineList()
+    # 与「新缠」分型层一致：由分型端点构造的简笔链，再相对官方 bi_list 计算分型中枢
     rhythm_fract_children = build_new_bi_list(kl_list)
-    fractzs_list = empty_zs_list(conf.zs_conf)
+    fractzs_list = build_level_zs(rhythm_fract_children, kl_list.bi_list, conf.zs_conf)
     segsegzs_list = build_level_zs(kl_list.segseg_list, segsegseg_list, conf.zs_conf)
     segseg_bs_point_lst = build_level_bsp(kl_list.segseg_list, segsegseg_list, conf.seg_bs_point_conf)
     rhythm_lines, rhythm_hits = build_rhythm_structures(
@@ -3363,11 +3466,14 @@ class ChanStepper:
         self._bundle_cache_step_idx: Optional[int] = None
         self.data_form_mode: str = "traditional"
         self.data_form_quantity: int = 0
+        self.data_feed_mode: str = "step"
         self.raw_kline_count: int = 0
         # 步进增量缓存：避免每次 payload 全量遍历 klu_iter()
         self._serialized_klu_cache: list[dict[str, Any]] = []
         # 同一步下的图表序列化缓存：键为是否包含 kline_all
         self._chart_payload_cache: dict[bool, tuple[int, dict[str, Any]]] = {}
+        # unified 模式：全量一次性计算后，仅按 step_idx 切片显示
+        self._unified_full_payload: Optional[dict[str, Any]] = None
 
     def _cfg_without_chan_algo(self, cfg_dict: dict[str, Any]) -> dict[str, Any]:
         # 训练器 / API 自用键，勿传入 CChanConfig（否则会触发 unknown para）
@@ -3535,9 +3641,11 @@ class ChanStepper:
         data_source_priority: Optional[list[str]] = None,
         data_form_mode: str = "traditional",
         data_form_quantity: Optional[int] = None,
+        data_feed_mode: str = "step",
     ) -> None:
         # 解析并设置周期类型
         self.k_type = parse_k_type(k_type)
+        feed_mode = normalize_data_feed_mode(data_feed_mode)
         
         self.data_src_chip_used = None
 
@@ -3555,7 +3663,7 @@ class ChanStepper:
             "zs_combine_mode": "zs",
             "one_bi_zs": False,
             "zs_algo": "normal",
-            "trigger_step": True,
+            "trigger_step": feed_mode == "step",
             "skip_step": 0,
             "kl_data_check": True,
             "print_warning": False,
@@ -3706,6 +3814,7 @@ class ChanStepper:
 
         raw_master = self._replay_klus_master_raw or self._replay_klus_master or []
         self.data_form_mode = normalize_data_form_mode(data_form_mode)
+        self.data_feed_mode = feed_mode
         self.raw_kline_count = len(raw_master)
         self.data_form_quantity = normalize_data_form_quantity(
             data_form_quantity if data_form_quantity is not None else self.raw_kline_count,
@@ -3743,10 +3852,6 @@ class ChanStepper:
             autype=autype,
             replay_klus_master=self._replay_klus_master,
         )
-        self._iter = self.chan.step_load()
-        self.step_idx = -1
-        self._serialized_klu_cache = []
-        self._chart_payload_cache = {}
         self.indicators = {
             "macd": CMACD(),
             "kdj": KDJ(),
@@ -3758,8 +3863,106 @@ class ChanStepper:
         self.trend_lines = []
         self.structure_bundle = None
         self._bundle_cache_step_idx = None
+        self._serialized_klu_cache = []
+        self._chart_payload_cache = {}
+        self._unified_full_payload = None
+        if self.data_feed_mode == "unified":
+            for _ in self.chan.load(step=False):
+                pass
+            self.step_idx = -1
+            self._iter = None
+            self._rebuild_indicator_history_from_chan()
+            bundle = self.get_structure_bundle(force=True)
+            self._unified_full_payload = serialize_chan(
+                self.chan,
+                self.indicator_history,
+                self.trend_lines,
+                chan_algo=self.chan_algo,
+                bundle=bundle,
+                kline_all=self.kline_all,
+                klu_arr_cache=None,
+            )
+        else:
+            self._iter = self.chan.step_load()
+            self.step_idx = -1
+
+    def _rebuild_indicator_history_from_chan(self) -> None:
+        """基于当前 chan 全量重建指标序列（统一喂数据模式使用）。"""
+        self.indicators = {
+            "macd": CMACD(),
+            "kdj": KDJ(),
+            "rsi": RSI(),
+            "boll": BollModel(),
+            "demark": CDemarkEngine(),
+        }
+        self.indicator_history = []
+        if self.chan is None or len(self.chan[0].lst) == 0:
+            return
+        for latest_klu in self.chan[0].klu_iter():
+            h, l, c = float(latest_klu.high), float(latest_klu.low), float(latest_klu.close)
+            macd_item = self.indicators["macd"].add(c)
+            kdj_item = self.indicators["kdj"].add(h, l, c)
+            rsi_val = self.indicators["rsi"].add(c)
+            boll_item = self.indicators["boll"].add(c)
+            demark_idx = self.indicators["demark"].update(latest_klu.idx, c, h, l)
+            demark_pts = []
+            for item in demark_idx.data:
+                demark_pts.append(
+                    {
+                        "type": item["type"],
+                        "dir": "UP" if item["dir"].name == "UP" else "DOWN",
+                        "val": item["idx"],
+                        "x": item["idx_in_kl"] if "idx_in_kl" in item else latest_klu.idx,
+                    }
+                )
+            self.indicator_history.append(
+                {
+                    "x": latest_klu.idx,
+                    "macd": {"dif": macd_item.DIF, "dea": macd_item.DEA, "macd": macd_item.macd},
+                    "kdj": {"k": kdj_item.k, "d": kdj_item.d, "j": kdj_item.j},
+                    "rsi": rsi_val,
+                    "boll": {"mid": boll_item.MID, "up": boll_item.UP, "down": boll_item.DOWN},
+                    "demark": demark_pts,
+                }
+            )
+
+    @staticmethod
+    def _slice_chart_payload_to_x(payload: dict[str, Any], x_max: int) -> dict[str, Any]:
+        """按 x 上限裁剪图表数据，保证 unified 模式仅展示当前步可见范围。"""
+        out = dict(payload)
+        out["kline"] = [it for it in payload.get("kline", []) if int(it.get("x", -1)) <= x_max]
+        out["fract"] = [it for it in payload.get("fract", []) if int(it.get("x2", -1)) <= x_max]
+        out["bi"] = [it for it in payload.get("bi", []) if int(it.get("x2", -1)) <= x_max]
+        out["seg"] = [it for it in payload.get("seg", []) if int(it.get("x2", -1)) <= x_max]
+        out["segseg"] = [it for it in payload.get("segseg", []) if int(it.get("x2", -1)) <= x_max]
+        out["fract_zs"] = [it for it in payload.get("fract_zs", []) if int(it.get("x2", -1)) <= x_max]
+        out["bi_zs"] = [it for it in payload.get("bi_zs", []) if int(it.get("x2", -1)) <= x_max]
+        out["seg_zs"] = [it for it in payload.get("seg_zs", []) if int(it.get("x2", -1)) <= x_max]
+        out["segseg_zs"] = [it for it in payload.get("segseg_zs", []) if int(it.get("x2", -1)) <= x_max]
+        out["bsp_bi"] = [it for it in payload.get("bsp_bi", []) if int(it.get("x", -1)) <= x_max]
+        out["bsp_seg"] = [it for it in payload.get("bsp_seg", []) if int(it.get("x", -1)) <= x_max]
+        out["bsp_segseg"] = [it for it in payload.get("bsp_segseg", []) if int(it.get("x", -1)) <= x_max]
+        out["bsp"] = [it for it in payload.get("bsp", []) if int(it.get("x", -1)) <= x_max]
+        out["rhythm_hits"] = [it for it in payload.get("rhythm_hits", []) if int(it.get("x", -1)) <= x_max]
+        out["indicators"] = [it for it in payload.get("indicators", []) if int(it.get("x", -1)) <= x_max]
+        out["trend_lines"] = [it for it in payload.get("trend_lines", []) if int(it.get("x2", -1)) <= x_max]
+        out["kline_combine"] = [it for it in payload.get("kline_combine", []) if int(it.get("x2", -1)) <= x_max]
+        out["fx_lines"] = [it for it in payload.get("fx_lines", []) if int(it.get("x2", -1)) <= x_max]
+        out["rhythm_lines"] = [it for it in payload.get("rhythm_lines", []) if int(it.get("x2", -1)) <= x_max]
+        return out
 
     def step(self) -> bool:
+        if self.data_feed_mode == "unified":
+            if self._unified_full_payload is None:
+                raise ValueError("统一喂数据模式未完成初始化。")
+            total = len(self._unified_full_payload.get("kline", []))
+            if self.step_idx + 1 >= total:
+                return False
+            self.step_idx += 1
+            self.structure_bundle = None
+            self._bundle_cache_step_idx = None
+            self._chart_payload_cache = {}
+            return True
         if self._iter is None:
             raise ValueError("请先初始化会话。")
         try:
@@ -3810,7 +4013,65 @@ class ChanStepper:
         except StopIteration:
             return False
 
+    def unified_set_step_idx(self, target_idx: int) -> int:
+        """统一喂数据：直接设置切片游标（0=第一根），不重算缠论。"""
+        if self.data_feed_mode != "unified":
+            raise ValueError("仅统一喂数据模式支持 step 跳转切片")
+        if self._unified_full_payload is None:
+            raise ValueError("统一模式未完成初始化")
+        bars = self._unified_full_payload.get("kline", [])
+        total = len(bars)
+        if total <= 0:
+            self.step_idx = -1
+            self.structure_bundle = None
+            self._bundle_cache_step_idx = None
+            self._chart_payload_cache = {}
+            return -1
+        t = max(0, min(int(target_idx), total - 1))
+        self.step_idx = t
+        self.structure_bundle = None
+        self._bundle_cache_step_idx = None
+        self._chart_payload_cache = {}
+        return t
+
+    def unified_sync_to_anchor_time(self, anchor_time: str) -> None:
+        """统一喂数据：被动周期按锚点时间对齐 step_idx（可前进也可后退）。"""
+        if self.data_feed_mode != "unified" or self._unified_full_payload is None:
+            bt_sync_stepper_to_anchor(self, anchor_time)
+            return
+        t_anchor = bt_parse_time_safe(anchor_time)
+        if t_anchor is None:
+            return
+        bars = self._unified_full_payload.get("kline", [])
+        if not bars:
+            self.step_idx = -1
+            self.structure_bundle = None
+            self._bundle_cache_step_idx = None
+            self._chart_payload_cache = {}
+            return
+        best = -1
+        for i, bar in enumerate(bars):
+            t_str = str(bar.get("t", "-"))
+            cur_eff = bt_anchor_compare_effective_dt(self, t_str)
+            if cur_eff is None:
+                continue
+            if cur_eff <= t_anchor:
+                best = i
+            else:
+                break
+        self.step_idx = max(0, best)
+        self.structure_bundle = None
+        self._bundle_cache_step_idx = None
+        self._chart_payload_cache = {}
+
     def current_price(self) -> float:
+        if self.data_feed_mode == "unified":
+            if self._unified_full_payload is None:
+                raise ValueError("会话未初始化")
+            bars = self._unified_full_payload.get("kline", [])
+            if self.step_idx < 0 or self.step_idx >= len(bars):
+                raise ValueError("当前无K线数据")
+            return float(bars[self.step_idx].get("c", 0.0))
         if self.chan is None:
             raise ValueError("会话未初始化")
         kl_list = self.chan[0]
@@ -3819,6 +4080,13 @@ class ChanStepper:
         return kl_list.lst[-1].lst[-1].close
 
     def current_time(self) -> str:
+        if self.data_feed_mode == "unified":
+            if self._unified_full_payload is None:
+                return "-"
+            bars = self._unified_full_payload.get("kline", [])
+            if self.step_idx < 0 or self.step_idx >= len(bars):
+                return "-"
+            return str(bars[self.step_idx].get("t", "-"))
         if self.chan is None:
             return "-"
         kl_list = self.chan[0]
@@ -3828,6 +4096,24 @@ class ChanStepper:
 
     def build_chart_payload_cached(self, *, include_kline_all: bool) -> dict[str, Any]:
         """按 step 索引缓存图表序列化结果，减少同一步重复重算。"""
+        if self.data_feed_mode == "unified":
+            if self._unified_full_payload is None:
+                raise ValueError("会话未初始化")
+            cache = self._chart_payload_cache.get(include_kline_all)
+            if cache is not None and cache[0] == self.step_idx:
+                return cache[1]
+            if self.step_idx < 0:
+                payload = self._slice_chart_payload_to_x(self._unified_full_payload, -1)
+            else:
+                bars = self._unified_full_payload.get("kline", [])
+                if self.step_idx >= len(bars):
+                    raise ValueError("步进索引越界")
+                x_max = int(bars[self.step_idx].get("x", -1))
+                payload = self._slice_chart_payload_to_x(self._unified_full_payload, x_max)
+            if not include_kline_all:
+                payload.pop("kline_all", None)
+            self._chart_payload_cache[include_kline_all] = (self.step_idx, payload)
+            return payload
         if self.chan is None:
             raise ValueError("会话未初始化")
         cache = self._chart_payload_cache.get(include_kline_all)
@@ -4068,23 +4354,26 @@ class AppState:
         """
         if not self.ready or self.stepper.chan is None:
             return None
-        return AppRollbackSnapshot(
-            active_chart_id=str(self.active_chart_id),
-            chart_mode=str(self.chart_mode),
-            stepper1=capture_stepper_snapshot(self.stepper),
-            stepper2=(capture_stepper_snapshot(self.stepper2) if self.stepper2 is not None else None),
-            trade_events=list(self.trade_events),
-            account=copy.copy(self.account),
-            bsp_history=_capture_bsp_history_with_status(self.bsp_history),
-            rhythm_hit_history=list(self.rhythm_hit_history),
-            rhythm_hit_keys=set(self.rhythm_hit_keys),
-            bsp_judge_logs=list(self.bsp_judge_logs),
-            last_level_dirs=dict(self._last_level_dirs),
-            judge_notice=bool(self._judge_notice),
-            last_judge_stats=self._last_judge_stats,
-            last_judge_x=self._last_judge_x,
-            last_judge_time=self._last_judge_time,
-        )
+        try:
+            return AppRollbackSnapshot(
+                active_chart_id=str(self.active_chart_id),
+                chart_mode=str(self.chart_mode),
+                stepper1=capture_stepper_snapshot(self.stepper),
+                stepper2=(capture_stepper_snapshot(self.stepper2) if self.stepper2 is not None else None),
+                trade_events=list(self.trade_events),
+                account=copy.copy(self.account),
+                bsp_history=_capture_bsp_history_with_status(self.bsp_history),
+                rhythm_hit_history=list(self.rhythm_hit_history),
+                rhythm_hit_keys=set(self.rhythm_hit_keys),
+                bsp_judge_logs=list(self.bsp_judge_logs),
+                last_level_dirs=dict(self._last_level_dirs),
+                judge_notice=bool(self._judge_notice),
+                last_judge_stats=self._last_judge_stats,
+                last_judge_x=self._last_judge_x,
+                last_judge_time=self._last_judge_time,
+            )
+        except RecursionError:
+            return None
 
     def _store_target_hit_snapshot(self, step_idx: int, snap: AppRollbackSnapshot) -> None:
         """保存目标步精确命中快照，供 back_n 直接命中。"""
@@ -4107,9 +4396,10 @@ class AppState:
         if not self.ready or self.stepper.chan is None:
             return
         cur_step = int(self.get_active_stepper().step_idx)
+        should_full = self._capture_should_store_full(cur_step)
         # 单步快照：零深拷贝；本次仍要做的轻量 delta 与历史步数解耦，恒定成本。
         self._rollback_light.append(self._capture_light_snapshot())
-        if not self._capture_should_store_full(cur_step):
+        if not should_full:
             return
         # 全量快照：仅在采样间隔点触发。chan/indicators 仍需 deepcopy；
         # 累加列表用浅拷贝避免随步数累积的递归走访开销。
@@ -4218,8 +4508,8 @@ class AppState:
         return bt_anchor_compare_effective_dt(stepper, time_str)
 
     def _sync_stepper_to_anchor(self, stepper: ChanStepper, anchor_time: str) -> None:
-        """将目标周期步进到 anchor_time（包含优先，兜底左侧最近）。"""
-        bt_sync_stepper_to_anchor(stepper, anchor_time)
+        """将目标周期对齐到 anchor_time；unified 可前进/后退切片，step 仍为逐步向前。"""
+        stepper.unified_sync_to_anchor_time(anchor_time)
 
     @staticmethod
     def _k_type_granularity_rank(k_type: KL_TYPE) -> int:
@@ -4308,9 +4598,26 @@ class AppState:
         self._rhythm_notice_hits = []
 
     def _current_level_dir(self, level: str) -> Optional[str]:
-        if self.stepper.chan is None:
+        st = self.get_active_stepper()
+        if st.data_feed_mode == "unified":
+            chart = st.build_chart_payload_cached(include_kline_all=False)
+            lines = chart.get(level, [])
+            if not lines:
+                return None
+            line = lines[-1]
+            try:
+                y1 = float(line.get("y1"))
+                y2 = float(line.get("y2"))
+            except Exception:
+                return None
+            if y2 > y1:
+                return "UP"
+            if y2 < y1:
+                return "DOWN"
             return None
-        bundle = self.stepper.get_structure_bundle()
+        if st.chan is None:
+            return None
+        bundle = st.get_structure_bundle()
         lines = get_bundle_line_list(bundle, level)
         if not lines:
             return None
@@ -4432,7 +4739,7 @@ class AppState:
             )
 
         rate = (summary["correct"] / summary["judged"]) if summary["judged"] > 0 else None
-        cur_time = self.stepper.current_time() if self.stepper.chan is not None else "-"
+        cur_time = self.get_active_stepper().current_time()
         interval = {
             "from_x": self._last_judge_x,
             "to_x": int(current_x),
@@ -4440,7 +4747,7 @@ class AppState:
             "to_time": cur_time,
         }
         stats = {
-            "step_idx": int(self.stepper.step_idx),
+            "step_idx": int(self.get_active_stepper().step_idx),
             "x": int(current_x),
             "time": cur_time,
             "reason": reason,
@@ -4488,6 +4795,12 @@ class AppState:
 
     def _current_kline_x(self) -> Optional[int]:
         stepper = self.get_active_stepper()
+        if stepper.data_feed_mode == "unified":
+            chart = stepper.build_chart_payload_cached(include_kline_all=False)
+            bars = chart.get("kline", [])
+            if not bars:
+                return None
+            return int(bars[-1].get("x", -1))
         if stepper.chan is None:
             return None
         kl_list = stepper.chan[0]
@@ -4544,6 +4857,28 @@ class AppState:
 
     def _current_bsp_snapshot(self, *, current_x: Optional[int] = None) -> list[dict[str, Any]]:
         stepper = self.get_active_stepper()
+        if stepper.data_feed_mode == "unified":
+            chart = stepper.build_chart_payload_cached(include_kline_all=False)
+            src = chart.get("bsp", [])
+            snapshot: list[dict[str, Any]] = []
+            for item in src:
+                x = int(item.get("x", -1))
+                if current_x is not None and x != int(current_x):
+                    continue
+                snapshot.append(
+                    {
+                        "x": x,
+                        "y": float(item.get("y", 0.0)),
+                        "is_buy": bool(item.get("is_buy")),
+                        "label": str(item.get("label", "")),
+                        "level": str(item.get("level", "")),
+                        "level_label": str(item.get("level_label", "")),
+                        "display_label": str(item.get("display_label", "")),
+                    }
+                )
+            if current_x is not None:
+                return snapshot
+            return sorted(snapshot, key=lambda it: (int(it["x"]), LEVEL_ORDER.get(str(it["level"]), 999), int(not bool(it["is_buy"]))))
         if stepper.chan is None:
             return []
         bundle = stepper.get_structure_bundle()
@@ -4573,6 +4908,47 @@ class AppState:
             self.bsp_history = []
             return
 
+        stepper = self.get_active_stepper()
+        # unified：图表序列化已含截至当前切片的全部 BSP，直接对齐 bsp_history（步进 N、切片浏览均一致）
+        if stepper.data_feed_mode == "unified":
+            chart = stepper.build_chart_payload_cached(include_kline_all=False)
+            src = chart.get("bsp", []) or []
+            status_by_key = {str(it.get("key")): it.get("status") for it in self.bsp_history if it.get("key")}
+            next_hist: list[dict[str, Any]] = []
+            for item in sorted(
+                src,
+                key=lambda it: (
+                    int(it.get("x", -1)),
+                    LEVEL_ORDER.get(str(it.get("level")), 999),
+                    int(not bool(it.get("is_buy"))),
+                ),
+            ):
+                try:
+                    key = self._bsp_key(
+                        {
+                            "level": str(item.get("level", "")),
+                            "x": int(item.get("x", -1)),
+                            "label": str(item.get("label", "")),
+                            "is_buy": bool(item.get("is_buy")),
+                        }
+                    )
+                except Exception:
+                    continue
+                next_hist.append(
+                    {
+                        "key": key,
+                        "x": int(item.get("x", -1)),
+                        "is_buy": bool(item.get("is_buy")),
+                        "label": str(item.get("label", "")),
+                        "level": str(item.get("level", "")),
+                        "level_label": str(item.get("level_label", "")),
+                        "display_label": str(item.get("display_label", "")),
+                        "status": status_by_key.get(key),
+                    }
+                )
+            self.bsp_history = next_hist
+            return
+
         snapshot = self._current_bsp_snapshot(current_x=current_x)
 
         existing_keys = {str(item.get("key")) for item in self.bsp_history}
@@ -4598,10 +4974,15 @@ class AppState:
         current_x = self._current_kline_x()
         self._rhythm_notice_hits = []
         stepper = self.get_active_stepper()
-        if current_x is None or stepper.chan is None:
+        if current_x is None:
             return
-        bundle = stepper.get_structure_bundle()
-        for item in bundle.rhythm_hits:
+        if stepper.data_feed_mode == "unified":
+            source_hits = stepper.build_chart_payload_cached(include_kline_all=False).get("rhythm_hits", [])
+        else:
+            if stepper.chan is None:
+                return
+            source_hits = stepper.get_structure_bundle().rhythm_hits
+        for item in source_hits:
             if int(item.get("x", -1)) != current_x:
                 continue
             key = str(item.get("key") or "")
@@ -4655,6 +5036,7 @@ class AppState:
             data_source_priority=params.get("data_source_priority"),
             data_form_mode=params.get("data_form_mode", "traditional"),
             data_form_quantity=params.get("data_form_quantity"),
+            data_feed_mode=params.get("data_feed_mode", "step"),
         )
         if str(params.get("chart_mode", "single")).lower() == "dual":
             self.chart_mode = "dual"
@@ -4670,6 +5052,7 @@ class AppState:
                 data_source_priority=params.get("data_source_priority"),
                 data_form_mode=params.get("data_form_mode", "traditional"),
                 data_form_quantity=params.get("data_form_quantity"),
+                data_feed_mode=params.get("data_feed_mode", "step"),
             )
         else:
             self.chart_mode = "single"
@@ -4731,6 +5114,7 @@ class AppState:
         *,
         data_form_mode: Optional[str] = None,
         data_form_quantity: Optional[int] = None,
+        data_feed_mode: Optional[str] = None,
         rollback_cache_depth: Optional[int] = None,
         rollback_full_snapshot_interval: Optional[int] = None,
         rollback_capture_max_bars: Optional[int] = None,
@@ -4744,6 +5128,8 @@ class AppState:
             self.session_params["data_form_mode"] = normalize_data_form_mode(data_form_mode)
         if data_form_quantity is not None:
             self.session_params["data_form_quantity"] = int(data_form_quantity)
+        if data_feed_mode is not None:
+            self.session_params["data_feed_mode"] = normalize_data_feed_mode(data_feed_mode)
         if rollback_cache_depth is not None:
             self.session_params["rollback_cache_depth"] = int(rollback_cache_depth)
         if rollback_full_snapshot_interval is not None:
@@ -4780,9 +5166,16 @@ class AppState:
             chart2 = self.stepper2.build_chart_payload_cached(include_kline_all=include_kline_all)
 
         active_stepper = self.get_active_stepper()
-        # 驱动周期下还可向前步进的根数（与 step_idx、聚合后 master 长度一致）
-        _master = getattr(active_stepper, "_replay_klus_master", None) or []
-        _total = len(_master) if isinstance(_master, list) else 0
+        # 还可向前步进根数：须与 ChanStepper.step() 一致（unified 以 _unified_full_payload.kline 根数为准，避免与 _replay_klus_master 长度不一致时误判）
+        if (
+            normalize_data_feed_mode(getattr(active_stepper, "data_feed_mode", "step")) == "unified"
+            and getattr(active_stepper, "_unified_full_payload", None) is not None
+        ):
+            ukl = active_stepper._unified_full_payload.get("kline") or []
+            _total = len(ukl)
+        else:
+            _master = getattr(active_stepper, "_replay_klus_master", None) or []
+            _total = len(_master) if isinstance(_master, list) else 0
         _si = int(getattr(active_stepper, "step_idx", -1) or -1)
         step_forward_max = max(0, _total - 1 - _si) if _total > 0 else 0
         anchor_time = active_stepper.current_time()
@@ -4849,6 +5242,7 @@ class AppState:
             "data_form": {
                 "mode": self.stepper.data_form_mode,
                 "quantity": int(self.stepper.data_form_quantity or 0),
+                "feed_mode": normalize_data_feed_mode(getattr(self.stepper, "data_feed_mode", "step")),
                 "raw_count": int(self.stepper.raw_kline_count or 0),
                 "current_count": int(len(active_chart.get("kline", []))),
             },
@@ -4862,8 +5256,16 @@ class AppState:
                 "position": self.account.position,
                 "avg_cost": round(self.account.avg_cost, 4),
                 "equity": round(self.account.equity(price or 0.0), 2),
-                "can_sell": bool(price is not None and self.account.can_sell(self.stepper.step_idx)),
-                "can_cover": bool(price is not None and self.account.can_cover(self.stepper.step_idx)),
+                "can_sell": bool(
+                    normalize_data_feed_mode(getattr(self.stepper, "data_feed_mode", "step")) == "step"
+                    and price is not None
+                    and self.account.can_sell(self.stepper.step_idx)
+                ),
+                "can_cover": bool(
+                    normalize_data_feed_mode(getattr(self.stepper, "data_feed_mode", "step")) == "step"
+                    and price is not None
+                    and self.account.can_cover(self.stepper.step_idx)
+                ),
             },
             "trades": self._build_trade_state(),
         }
@@ -4986,6 +5388,11 @@ def bt_dual_rebuild_coarse_chan_anti_future(
     stepper2: Optional[ChanStepper],
     anchor_time: str,
 ) -> None:
+    # unified：全量快照 + 切片游标，勿对 coarse 做 incremental 重算（会替换 chan 且与 _unified_full_payload 脱节，导致 step 误判已到末尾）
+    if getattr(stepper, "data_feed_mode", "step") == "unified" or (
+        stepper2 is not None and getattr(stepper2, "data_feed_mode", "step") == "unified"
+    ):
+        return
     pair = bt_resolve_dual_coarse_fine(chart_mode, stepper, stepper2)
     if pair is None:
         return
@@ -5304,6 +5711,7 @@ def run_indicator_backtest(req: IndicatorBacktestReq) -> dict[str, Any]:
         data_source_priority=req.data_source_priority,
         data_form_mode=req.data_form_mode,
         data_form_quantity=req.data_form_quantity,
+        data_feed_mode=getattr(req, "data_feed_mode", "step"),
     )
     sim.stepper2 = None
     if sim.chart_mode == "dual":
@@ -5319,6 +5727,7 @@ def run_indicator_backtest(req: IndicatorBacktestReq) -> dict[str, Any]:
             data_source_priority=req.data_source_priority,
             data_form_mode=req.data_form_mode,
             data_form_quantity=req.data_form_quantity,
+            data_feed_mode=getattr(req, "data_feed_mode", "step"),
         )
     sim.session_params = {
         "code": code_norm,
@@ -5335,6 +5744,7 @@ def run_indicator_backtest(req: IndicatorBacktestReq) -> dict[str, Any]:
         "data_source_priority": req.data_source_priority,
         "data_form_mode": normalize_data_form_mode(req.data_form_mode),
         "data_form_quantity": req.data_form_quantity,
+        "data_feed_mode": normalize_data_feed_mode(getattr(req, "data_feed_mode", "step")),
     }
     sim.ready = True
 
@@ -5995,6 +6405,12 @@ HTML = r"""
       border-color: #2563eb;
       box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.12);
     }
+    .toolbox button.focus-highlight {
+      border-color: #f59e0b;
+      box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.3), 0 8px 18px rgba(245, 158, 11, 0.18);
+      background: linear-gradient(180deg, #fff9ec 0%, #fffbeb 100%);
+      font-weight: 700;
+    }
 
     /* Toast 弹窗 */
     #toastContainer {
@@ -6567,8 +6983,14 @@ HTML = r"""
           <span id="stepNMaxHint" class="hint" style="flex:1 1 200px; min-width:0;"></span>
           <div class="btnRow" style="width:100%; margin-top:4px;">
             <button id="btnStepN" data-tip="按步进数量 N 连续推进，若中途遇到买卖点（1/1p/2/2s/3a/3b）或 1382 提示会按设置自动停止。" disabled>步进 N 根 <small>(Ctrl+Alt+N)</small></button>
-            <button id="btnStepInterrupt" data-tip="正在连续步进时可点击中断；当前根处理完后停止。" disabled>中断步进</button>
+            <button id="btnStepInterrupt" data-tip="正在连续步进时可点击中断；当前根处理完后停止。" disabled>中断步进 <small>(Ctrl+Alt+X)</small></button>
             <button id="btnBackN" data-tip="按步进数量 N 回退，会自动重建到更早的状态。" disabled>后退 N 根 <small>(Ctrl+Alt+M)</small></button>
+          </div>
+          <div id="unifiedGotoRow" style="display:none; width:100%; margin-top:6px; align-items:center; gap:6px; flex-wrap:wrap;">
+            <label for="inputUnifiedGotoStep">跳转 step</label>
+            <span id="tipUnifiedGotoStep" class="tip-icon" data-tip="统一喂数据专用：跳转作用于当前激活图窗（与图1/图2激活按钮一致），仅切片不重算；step 与界面 step_idx 一致（0 为第一根）。双周期时被动图按锚点时间对齐。"></span>
+            <input id="inputUnifiedGotoStep" type="number" min="0" step="1" value="0" />
+            <button type="button" id="btnUnifiedGotoStep" data-tip="跳转到指定 step_idx（统一喂数据模式）。" disabled>跳转</button>
           </div>
         </div>
         <div class="row" style="margin:6px 0 4px 0;">
@@ -6912,6 +7334,7 @@ function ensureArray(v, fallback = []) {
   return Array.isArray(v) ? v : fallback;
 }
 let lastPayload = null;
+let chipKlineAllCache = null; // 兜底缓存：后续 payload 省略 kline_all 时仍用于筹码分布
 let allXMin = 0;
 let allXMax = 0;
 let viewXMin = 0;
@@ -6926,6 +7349,7 @@ let pendingRatioLinePts = [];
 let pendingParallelogramPts = [];
 let activeTool = storageGet("chan_active_tool") || "none"; // none | horizontalRay | biRay | ratioLine | parallelogram
 let selectedDrawing = null; // { type: "ray"|"biRay", index: number }
+let linePropsHighlightUntil = 0;
 let hoveredBiRay = null; // { type: "biRay", index: number }
 let draggingRatioLine = null; // { index: number, ratio: number }
 let chartClickMoved = false;
@@ -7236,9 +7660,9 @@ const DEFAULT_CHART_CONFIG = {
   segZs: { width: 2.4, color: "#059669", enabled: true },
   segsegZs: { width: 2.8, color: "#2563eb", enabled: true },
   candle: { width: 1.4, upColor: "#ef4444", downColor: "#22c55e" },
-  bspBi: { fontSize: 14, lineColor: "#94a3b8", lineWidth: 1, lineStyle: "dashed", lineDash: [5, 4] },
-  bspSeg: { fontSize: 14, lineColor: "#64748b", lineWidth: 1.1, lineStyle: "dashed", lineDash: [5, 4] },
-  bspSegseg: { fontSize: 14, lineColor: "#475569", lineWidth: 1.2, lineStyle: "dashed", lineDash: [5, 4] },
+  bspBi: { fontSize: 14, lineColor: "#94a3b8", lineWidth: 1, lineStyle: "dashed", lineDash: [5, 4], showLowerExtension: true },
+  bspSeg: { fontSize: 14, lineColor: "#64748b", lineWidth: 1.1, lineStyle: "dashed", lineDash: [5, 4], showLowerExtension: true },
+  bspSegseg: { fontSize: 14, lineColor: "#475569", lineWidth: 1.2, lineStyle: "dashed", lineDash: [5, 4], showLowerExtension: true },
   rhythmLine: {
     enabled: true,
     fractToBiEnabled: true,
@@ -7318,6 +7742,8 @@ const DEFAULT_CHART_CONFIG = {
     stretchLevel: 5,
     bucketStep: 0.1,
     color: "rgba(59,130,246,0.45)",
+    sColor: "rgba(34,197,94,0.78)",
+    bColor: "rgba(220,38,38,0.78)",
     peakLineEnabled: true,
     peakRefMode: "latest_visible",
     peakLineColor: "#2563eb",
@@ -7487,6 +7913,8 @@ function buildChartConfigStore(rawCfg) {
         mode: "single",
         theme: migratedSingle.theme,
         crosshair: JSON.parse(JSON.stringify(migratedSingle.crosshair || {})),
+        // K 线主图底部买卖点总标注（单周期/双周期共用，存于 shared）
+        showBottomBsp: typeof raw.showBottomBsp === "boolean" ? raw.showBottomBsp : true,
       },
       perChart: {
         chart1: migratedSingle,
@@ -7501,6 +7929,7 @@ function buildChartConfigStore(rawCfg) {
       mode: String(shared.mode || "single"),
       theme: String(shared.theme || "light"),
       crosshair: deepMerge(JSON.parse(JSON.stringify(DEFAULT_CHART_CONFIG.crosshair)), ensureObject(shared.crosshair, {})),
+      showBottomBsp: typeof shared.showBottomBsp === "boolean" ? shared.showBottomBsp : true,
     },
     perChart: {
       chart1: deepMerge(JSON.parse(JSON.stringify(DEFAULT_CHART_CONFIG)), migrateChartConfig(ensureObject(perChart.chart1, {}))),
@@ -7510,13 +7939,18 @@ function buildChartConfigStore(rawCfg) {
 }
 let chartConfigStore = buildChartConfigStore(savedChartConfig);
 let chartConfig = chartConfigStore.perChart.chart1;
-const DATA_FORM_DEFAULT = { mode: "traditional", quantity: 1 };
+const DATA_FORM_DEFAULT = { mode: "traditional", quantity: 1, feedMode: "step" };
 let dataFormConfig = { ...DATA_FORM_DEFAULT };
 
 function normalizeDataFormMode(mode) {
   const m = String(mode || "traditional").toLowerCase();
   const allow = new Set(["traditional", "quantity", "tick_traditional", "tick_quantity"]);
   return allow.has(m) ? m : "traditional";
+}
+
+function normalizeDataFeedMode(mode) {
+  const m = String(mode || "step").toLowerCase();
+  return m === "unified" ? "unified" : "step";
 }
 
 function isQuantityDataFormMode(mode) {
@@ -7566,6 +8000,7 @@ const DEFAULT_SESSION_CONFIG = {
   activeChartId: "chart1",
   dataFormMode: "traditional",
   dataFormQuantity: 1,
+  dataFeedMode: "step",
 };
 let sessionConfig = ensureObject(
   safeJsonParse(storageGet("chan_session_config"), JSON.parse(JSON.stringify(DEFAULT_SESSION_CONFIG))),
@@ -7582,6 +8017,7 @@ const SHORTCUT_ACTIONS = [
   { id: "prevBar", label: "回退一根K线", description: "重建到上一根 K 线（与后退 N 根 N=1 相同）。", defaults: ["shift+space"], contexts: ["global"], buttonId: "btnStepPrev" },
   { id: "nextBar", label: "步进到下一根K线", description: "步进到下一根 K 线；若当前 K 线命中买卖点（1/1p/2/2s/3a/3b）或 1382，会合并为一个弹窗提示。", defaults: ["space"], contexts: ["global"], buttonId: "btnStep" },
   { id: "stepForwardN", label: "步进 N 根", description: "按步进数量 N 连续推进，遇到买卖点（1/1p/2/2s/3a/3b）或 1382 可按设置自动停止，并合并当根提示。", defaults: ["ctrl+alt+n"], contexts: ["global"], buttonId: "btnStepN" },
+  { id: "interruptStepForward", label: "中断连续步进", description: "连续步进过程中请求中断，将在当前根处理完成后停止。", defaults: ["ctrl+alt+x"], contexts: ["global"], buttonId: "btnStepInterrupt" },
   { id: "stepBackwardN", label: "后退 N 根", description: "按步进数量 N 回退，会自动重建到更早状态。", defaults: ["ctrl+alt+m"], contexts: ["global"], buttonId: "btnBackN" },
   { id: "buyAll", label: "买入（全仓）", description: "按当前收盘价使用全部可用现金买入。", defaults: ["pageup"], contexts: ["global"], buttonId: "btnBuy" },
   { id: "sellAll", label: "卖出（全量）", description: "按当前收盘价全部卖出。", defaults: ["pagedown"], contexts: ["global"], buttonId: "btnSell" },
@@ -7949,7 +8385,7 @@ function updateShortcutUI() {
   $("btnStep").setAttribute("data-tip", `步进到下一根K线。若当前K线命中买卖点（1/1p/2/2s/3a/3b）或 1382 提示，会合并为一个弹窗提示。快捷键：${getActionShortcutDisplay("nextBar") || "未设置"}。`);
   $("btnStepN").setAttribute("data-tip", `按步进数量 N 连续推进，若中途遇到买卖点（1/1p/2/2s/3a/3b）或 1382 提示会按设置自动停止。快捷键：${getActionShortcutDisplay("stepForwardN") || "未设置"}。`);
   if ($("btnStepInterrupt")) {
-    $("btnStepInterrupt").setAttribute("data-tip", "正在连续步进时可点击中断；当前根处理完后停止。");
+    $("btnStepInterrupt").setAttribute("data-tip", `正在连续步进时可点击中断；当前根处理完后停止。快捷键：${getActionShortcutDisplay("interruptStepForward") || "未设置"}。`);
   }
   $("btnBackN").setAttribute("data-tip", `按步进数量 N 回退，会自动重建到更早的状态。快捷键：${getActionShortcutDisplay("stepBackwardN") || "未设置"}。`);
   $("btnBuy").setAttribute("data-tip", `按当前收盘价使用全部可用现金买入，遵循单持仓和每步最多一笔规则。快捷键：${getActionShortcutDisplay("buyAll") || "未设置"}。`);
@@ -8031,9 +8467,10 @@ function saveSessionConfig() {
     dualLayout: $("dualLayout") ? $("dualLayout").value : "vertical",
     dualSplitRatio1: getDualSplitRatio1(),
     activeChartId: String(lastPayload && lastPayload.active_chart_id ? lastPayload.active_chart_id : "chart1"),
-    // 保存数据形式，支持传统/数量/分笔价格合成传统/分笔价格合成数量
+    // 保存数据形式与喂数据方式
     dataFormMode: normalizeDataFormMode(dataFormConfig.mode),
     dataFormQuantity: clampDataFormQuantity(dataFormConfig.quantity, dataFormConfig.quantity || 1),
+    dataFeedMode: normalizeDataFeedMode(dataFormConfig.feedMode),
   };
   storageSet("chan_session_config", JSON.stringify(sessionConfig));
 }
@@ -8065,6 +8502,7 @@ function loadSessionConfig() {
       sessionConfig.dataFormQuantity,
       Number.isFinite(Number(sessionConfig.dataFormQuantity)) ? Number(sessionConfig.dataFormQuantity) : 1
     );
+    dataFormConfig.feedMode = normalizeDataFeedMode(sessionConfig.dataFeedMode);
   if ($("kType2Row")) $("kType2Row").style.display = ($("chartMode") && $("chartMode").value === "dual") ? "" : "none";
   if ($("dualLayoutRow")) $("dualLayoutRow").style.display = ($("chartMode") && $("chartMode").value === "dual") ? "" : "none";
   if ($("dualSplitRow")) $("dualSplitRow").style.display = ($("chartMode") && $("chartMode").value === "dual") ? "" : "none";
@@ -8506,6 +8944,10 @@ function renderSettingsForm() {
           { value: "tick_traditional", label: "分笔价格合成传统" },
           { value: "tick_quantity", label: "分笔价格合成数量" }
         ], tip: "传统：保持原始K线；数量：按数量Q聚合原始K线；分笔价格合成传统：用TickData逐笔价格合成目标周期K线；分笔价格合成数量：先逐笔合成再按数量Q聚合。分笔合成两种模式的筹码均使用逐笔累加，不使用三角分摊。" },
+        { label: "喂数据方式", subKey: "feedMode", type: "select", options: [
+          { value: "step", label: "步进（当前实现）" },
+          { value: "unified", label: "统一喂数据（一次性喂给缠论计算）" }
+        ], tip: "步进：沿用当前逐根喂入逻辑。统一喂数据：初始化时一次性喂给缠论计算，不用于模拟操盘（买卖按钮禁用），主要用于查看缠论画线与筹码分布；其它步进浏览操作可继续使用。" },
         { label: "数量", subKey: "quantity", type: "number", min: 1, step: 1, tip: "仅“数量/分笔价格合成数量”生效。范围 1~N（N=当前模式原始K线数）：1=全合并，N=不聚合。" }
       ]
     },
@@ -8577,6 +9019,8 @@ function renderSettingsForm() {
         { label: "拉伸强度", subKey: "stretchLevel", type: "number", min: 1, max: 20 },
         { label: "价格桶(元)", subKey: "bucketStep", type: "number", min: 0.001, max: 1, step: 0.001 },
         { label: "填充颜色", subKey: "color", type: "color" },
+        { label: "S颜色(左侧)", subKey: "sColor", type: "color" },
+        { label: "B颜色(右侧)", subKey: "bColor", type: "color" },
         { label: "筹码峰延长线参考", subKey: "peakRefMode", type: "select", options: [
           { value: "latest_visible", label: "最新可见K线" },
           { value: "seg_turn", label: "线段转折点" },
@@ -8757,6 +9201,20 @@ function renderSettingsForm() {
       ]
     },
     {
+      title: "K线下方买卖点（总）",
+      key: "shared_bsp_bottom",
+      color: "#991b1b",
+      bgColor: "rgba(153, 27, 27, 0.08)",
+      items: [
+        {
+          label: "显示图底买卖点标注",
+          subKey: "enabled",
+          type: "checkbox",
+          tip: "总开关：关闭后隐藏 K 线下方买卖点标签与垂线；笔/段/2段买卖点样式仍可在下方各节调整。单周期、双周期、各 K 线周期与步进/统一喂数据模式均适用。",
+        },
+      ],
+    },
+    {
       title: "笔买卖点",
       key: "bspBi",
       color: "#be123c",
@@ -8765,6 +9223,7 @@ function renderSettingsForm() {
         { label: "文字大小", subKey: "fontSize", type: "number", min: 8, max: 30 },
         { label: "连线颜色", subKey: "lineColor", type: "color" },
         { label: "连线粗细", subKey: "lineWidth", type: "number", min: 0.1, max: 5, step: 0.1 },
+        { label: "竖线延长线", subKey: "showLowerExtension", type: "checkbox", tip: "控制买卖点从K线低点向下连接到底部信号框的竖线显示。" },
         { label: "连线线型", subKey: "lineStyle", type: "select", options: [
           { value: "dashed", label: "虚线" },
           { value: "solid", label: "实线" },
@@ -8781,6 +9240,7 @@ function renderSettingsForm() {
         { label: "文字大小", subKey: "fontSize", type: "number", min: 8, max: 30 },
         { label: "连线颜色", subKey: "lineColor", type: "color" },
         { label: "连线粗细", subKey: "lineWidth", type: "number", min: 0.1, max: 5, step: 0.1 },
+        { label: "竖线延长线", subKey: "showLowerExtension", type: "checkbox", tip: "控制买卖点从K线低点向下连接到底部信号框的竖线显示。" },
         { label: "连线线型", subKey: "lineStyle", type: "select", options: [
           { value: "dashed", label: "虚线" },
           { value: "solid", label: "实线" },
@@ -8797,6 +9257,7 @@ function renderSettingsForm() {
         { label: "文字大小", subKey: "fontSize", type: "number", min: 8, max: 30 },
         { label: "连线颜色", subKey: "lineColor", type: "color" },
         { label: "连线粗细", subKey: "lineWidth", type: "number", min: 0.1, max: 5, step: 0.1 },
+        { label: "竖线延长线", subKey: "showLowerExtension", type: "checkbox", tip: "控制买卖点从K线低点向下连接到底部信号框的竖线显示。" },
         { label: "连线线型", subKey: "lineStyle", type: "select", options: [
           { value: "dashed", label: "虚线" },
           { value: "solid", label: "实线" },
@@ -9034,6 +9495,8 @@ function renderSettingsForm() {
       let val;
       if (sec.key === "theme_section") {
         val = chartConfig.theme;
+      } else if (sec.key === "shared_bsp_bottom") {
+        val = chartConfigStore.shared && chartConfigStore.shared.showBottomBsp !== false;
       } else if (sec.key === "dataForm") {
         val = dataFormConfig[item.subKey];
       } else if (sec.key === "indicators") {
@@ -9049,7 +9512,7 @@ function renderSettingsForm() {
       itemDiv.className = "settingsItem";
       
       // Add a line preview for sections with color/width
-       if (sec.key !== "theme_section" && sec.key !== "indicators" && sec.key !== "toast" && sec.key !== "xAxis" && sec.key !== "yAxis") {
+       if (sec.key !== "theme_section" && sec.key !== "shared_bsp_bottom" && sec.key !== "indicators" && sec.key !== "toast" && sec.key !== "xAxis" && sec.key !== "yAxis") {
           const previewLine = document.createElement("div");
           previewLine.style.height = "2px";
           previewLine.style.width = "100%";
@@ -9494,6 +9957,7 @@ async function saveSettings() {
   const inputs = $("settingsContent").querySelectorAll("input, select");
   let nextDataFormMode = dataFormConfig.mode;
   let nextDataFormQuantity = dataFormConfig.quantity;
+  let nextDataFeedMode = dataFormConfig.feedMode;
   inputs.forEach(input => {
     const key = input.dataset.key;
     const subkey = input.dataset.subkey;
@@ -9511,9 +9975,12 @@ async function saveSettings() {
     if (key === "theme_section") {
       chartConfig.theme = val;
       applyThemeFromSelect();
+    } else if (key === "shared_bsp_bottom") {
+      if (subkey === "enabled") chartConfigStore.shared.showBottomBsp = !!val;
     } else if (key === "dataForm") {
       if (subkey === "mode") nextDataFormMode = normalizeDataFormMode(val);
       if (subkey === "quantity") nextDataFormQuantity = clampDataFormQuantity(val, dataFormConfig.quantity);
+      if (subkey === "feedMode") nextDataFeedMode = normalizeDataFeedMode(val);
     } else if (key === "indicators") {
       if (subkey === "mainSlot") {
         selectedMainIndicatorSlot = Number(val);
@@ -9547,6 +10014,7 @@ async function saveSettings() {
   });
   dataFormConfig.mode = nextDataFormMode;
   dataFormConfig.quantity = nextDataFormQuantity;
+  dataFormConfig.feedMode = nextDataFeedMode;
   // 数据形式配置单独持久化，避免刷新后丢失选择
   saveSessionConfig();
   const activeCfgKey = (lastPayload && String(lastPayload.active_chart_id) === "chart2") ? "chart2" : "chart1";
@@ -9554,6 +10022,7 @@ async function saveSettings() {
   chartConfigStore.shared.theme = chartConfig.theme;
   chartConfigStore.shared.crosshair = JSON.parse(JSON.stringify(chartConfig.crosshair || chartConfigStore.shared.crosshair));
   chartConfigStore.shared.mode = $("chartMode") ? $("chartMode").value : chartConfigStore.shared.mode;
+  if (typeof chartConfigStore.shared.showBottomBsp !== "boolean") chartConfigStore.shared.showBottomBsp = true;
   storageSet("chan_chart_config", JSON.stringify(chartConfigStore));
   closeSettings();
   if (lastPayload && lastPayload.ready) {
@@ -9565,6 +10034,7 @@ async function saveSettings() {
       chan_config: chanConfig,
       data_form_mode: dataFormConfig.mode,
       data_form_quantity: clampDataFormQuantity(dataFormConfig.quantity, n || 1),
+      data_feed_mode: normalizeDataFeedMode(dataFormConfig.feedMode),
       rollback_cache_depth: Number(systemConfig.rollbackCacheDepth || DEFAULT_SYSTEM_CONFIG.rollbackCacheDepth),
       rollback_full_snapshot_interval: Number(systemConfig.rollbackFullSnapshotInterval || DEFAULT_SYSTEM_CONFIG.rollbackFullSnapshotInterval),
       rollback_capture_max_bars: Number(systemConfig.rollbackCaptureMaxBars || DEFAULT_SYSTEM_CONFIG.rollbackCaptureMaxBars),
@@ -9862,6 +10332,7 @@ function syncStepButtonState() {
   if ($("btnStepPrev")) $("btnStepPrev").disabled = disabled || si <= 0;
   // 查看数据：与会话绑定，训练结束后仍可查看；步进进行中不禁止（只读）
   if ($("btnViewKlineData")) $("btnViewKlineData").disabled = !lastPayload || !lastPayload.ready;
+  if ($("btnUnifiedGotoStep")) $("btnUnifiedGotoStep").disabled = disabled;
 }
 
 function getStepNValue() {
@@ -10130,6 +10601,29 @@ function updateStepForwardMaxUi(payload) {
       : "已在最后一根 K 线，向前步进为 0（仍可按 N 回退）。";
 }
 
+/** 统一喂数据：显示 step 跳转行并同步输入范围（与 payload.step_idx / step_forward_max 一致） */
+function updateUnifiedGotoRow(payload) {
+  const row = $("unifiedGotoRow");
+  const inp = $("inputUnifiedGotoStep");
+  const tip = $("tipUnifiedGotoStep");
+  if (!row || !inp) return;
+  const isUnified = normalizeDataFeedMode(payload && payload.data_form ? payload.data_form.feed_mode : "step") === "unified";
+  row.style.display = isUnified ? "flex" : "none";
+  if (tip) {
+    tip.setAttribute(
+      "data-tip",
+      "统一喂数据专用：跳转作用于当前激活图窗（与图1/图2激活一致），仅切片不重算；step 与界面 step_idx 一致（0 为第一根）。双周期时被动图按锚点时间对齐。"
+    );
+  }
+  if (!isUnified || !payload || !payload.ready) return;
+  const si = Number.isFinite(Number(payload.step_idx)) ? Math.floor(Number(payload.step_idx)) : 0;
+  const maxF = getStepForwardMaxFromPayload(payload);
+  const maxIdx = maxF !== null ? si + maxF : si;
+  inp.min = "0";
+  inp.max = String(Math.max(0, maxIdx));
+  inp.value = String(Math.max(0, si));
+}
+
 canvas.addEventListener(
   "wheel",
   (e) => {
@@ -10182,7 +10676,7 @@ canvas.addEventListener("mousedown", (e) => {
   if (!lastPayload || !lastPayload.ready || !viewReady) return;
   if (e.button === 0) {
     const rect = canvas.getBoundingClientRect();
-    const s = toScaler(lastPayload.chart, Math.max(allXMin, viewXMin), viewXMax);
+    const s = scalerForActivePayloadChart(lastPayload.chart, Math.max(allXMin, viewXMin), viewXMax);
     const px = pe.clientX - rect.left;
     const py = pe.clientY - rect.top;
     const pickedRatio = pickRatioLineAt(s, px, py, 10);
@@ -10225,7 +10719,7 @@ window.addEventListener("mousemove", (e) => {
     const pe = normalizePointerEventToActivePane(e, true);
     if (!pe) return;
     const rect = canvas.getBoundingClientRect();
-    const s = toScaler(lastPayload.chart, Math.max(allXMin, viewXMin), viewXMax);
+    const s = scalerForActivePayloadChart(lastPayload.chart, Math.max(allXMin, viewXMin), viewXMax);
     const px = pe.clientX - rect.left;
     const py = pe.clientY - rect.top;
     const idx = Number(draggingRatioLine.index);
@@ -10270,7 +10764,7 @@ window.addEventListener("mousemove", (e) => {
   }
   viewXMin = newMin;
   viewXMax = newMax;
-  const s = toScaler(lastPayload.chart, Math.max(allXMin, viewXMin), viewXMax);
+  const s = scalerForActivePayloadChart(lastPayload.chart, Math.max(allXMin, viewXMin), viewXMax);
   const plotH = Math.max(1, s.plotH);
   viewYShiftRatio = panStartYShiftRatio + (dy / plotH);
   viewYShiftRatio = Math.max(-3, Math.min(3, viewYShiftRatio));
@@ -10296,7 +10790,7 @@ canvas.addEventListener("mousemove", (e) => {
     return;
   }
   const rect = canvas.getBoundingClientRect();
-  const s = toScaler(lastPayload.chart, Math.max(allXMin, viewXMin), viewXMax);
+  const s = scalerForActivePayloadChart(lastPayload.chart, Math.max(allXMin, viewXMin), viewXMax);
   const visibleKs = getVisibleKs(lastPayload.chart, s.xMin, s.xMax);
   const rawX = pe.clientX - rect.left;
   const rawY = pe.clientY - rect.top;
@@ -10347,7 +10841,7 @@ canvas.addEventListener("dblclick", (e) => {
   const pe = normalizePointerEventToActivePane(e, true);
   if (!pe) return;
   if (crosshairX !== null && crosshairY !== null) {
-    const s = toScaler(lastPayload.chart, Math.max(allXMin, viewXMin), viewXMax);
+    const s = scalerForActivePayloadChart(lastPayload.chart, Math.max(allXMin, viewXMin), viewXMax);
     const rect = canvas.getBoundingClientRect();
     const xp = (pe && typeof pe.clientX === "number") ? (pe.clientX - rect.left) : crosshairX;
     const yp = (pe && typeof pe.clientY === "number") ? (pe.clientY - rect.top) : crosshairY;
@@ -10459,17 +10953,24 @@ document.addEventListener("fullscreenchange", () => {
 });
 
 function updateToolboxUI() {
-  const ids = ["toolNone", "toolHorizontalRay", "toolBiRay", "toolRatioLine", "toolParallelogram"];
+  const ids = ["toolNone", "toolHorizontalRay", "toolBiRay", "toolRatioLine", "toolParallelogram", "toolLineProps"];
   ids.forEach((id) => {
     const el = $(id);
     if (!el) return;
     el.classList.remove("active");
+    el.classList.remove("focus-highlight");
   });
   if (activeTool === "horizontalRay" && $("toolHorizontalRay")) $("toolHorizontalRay").classList.add("active");
   else if (activeTool === "biRay" && $("toolBiRay")) $("toolBiRay").classList.add("active");
   else if (activeTool === "ratioLine" && $("toolRatioLine")) $("toolRatioLine").classList.add("active");
   else if (activeTool === "parallelogram" && $("toolParallelogram")) $("toolParallelogram").classList.add("active");
   else if ($("toolNone")) $("toolNone").classList.add("active");
+  if (activeTool === "none" && $("toolNone")) $("toolNone").classList.add("focus-highlight");
+  if (activeTool === "horizontalRay" && $("toolHorizontalRay")) $("toolHorizontalRay").classList.add("focus-highlight");
+  if (activeTool === "biRay" && $("toolBiRay")) $("toolBiRay").classList.add("focus-highlight");
+  if (activeTool === "ratioLine" && $("toolRatioLine")) $("toolRatioLine").classList.add("focus-highlight");
+  if (activeTool === "parallelogram" && $("toolParallelogram")) $("toolParallelogram").classList.add("focus-highlight");
+  if ($("toolLineProps") && Date.now() < linePropsHighlightUntil) $("toolLineProps").classList.add("focus-highlight");
 }
 
 function setActiveTool(next) {
@@ -10653,7 +11154,12 @@ function editSelectedLineProps() {
   }
 }
 
-if ($("toolLineProps")) $("toolLineProps").addEventListener("click", editSelectedLineProps);
+if ($("toolLineProps")) $("toolLineProps").addEventListener("click", () => {
+  linePropsHighlightUntil = Date.now() + 1500;
+  updateToolboxUI();
+  editSelectedLineProps();
+  setTimeout(updateToolboxUI, 1600);
+});
 
 function persistUserBiRaysNow() {
   storageSet("chan_user_bi_rays", JSON.stringify(userBiRays));
@@ -10711,7 +11217,7 @@ canvas.addEventListener("click", (e) => {
   if (!lastPayload || !lastPayload.ready || !viewReady) return;
   if (chartClickMoved) return;
   const rect = canvas.getBoundingClientRect();
-  const s = toScaler(lastPayload.chart, Math.max(allXMin, viewXMin), viewXMax);
+  const s = scalerForActivePayloadChart(lastPayload.chart, Math.max(allXMin, viewXMin), viewXMax);
   const y = pe.clientY - rect.top;
   const x = pe.clientX - rect.left;
 
@@ -10898,6 +11404,10 @@ function executeShortcutAction(actionId) {
       if ($("btnStepN").disabled) return false;
       $("btnStepN").click();
       return true;
+    case "interruptStepForward":
+      if (!$("btnStepInterrupt") || $("btnStepInterrupt").disabled || !stepInFlight) return false;
+      $("btnStepInterrupt").click();
+      return true;
     case "stepBackwardN":
       if ($("btnBackN").disabled) return false;
       $("btnBackN").click();
@@ -10923,7 +11433,7 @@ function executeShortcutAction(actionId) {
       return true;
     case "drawHorizontalRay": {
       if (!crosshairEnabled || crosshairX === null || crosshairY === null || !lastPayload || !lastPayload.ready) return false;
-      const s = toScaler(lastPayload.chart, Math.max(allXMin, viewXMin), viewXMax);
+      const s = scalerForActivePayloadChart(lastPayload.chart, Math.max(allXMin, viewXMin), viewXMax);
       const refK = getReferenceK(lastPayload.chart, s);
       if (!refK) return false;
       const yVal = s.yFromPx(crosshairY);
@@ -10954,7 +11464,7 @@ function executeShortcutAction(actionId) {
     case "adjustCrosshairUp":
     case "adjustCrosshairDown": {
       if (!crosshairEnabled || crosshairY === null || !lastPayload || !lastPayload.ready) return false;
-      const s = toScaler(lastPayload.chart, Math.max(allXMin, viewXMin), viewXMax);
+      const s = scalerForActivePayloadChart(lastPayload.chart, Math.max(allXMin, viewXMin), viewXMax);
       const delta = actionId === "adjustCrosshairUp" ? -0.01 : 0.01;
       const curPrice = s.yFromPx(crosshairY);
       const newPrice = curPrice - delta;
@@ -11903,7 +12413,9 @@ function nearestKByX(ks, targetX) {
 function getChipBaseKs(chart) {
   // Use full history K-lines for chip distribution.
   // Accumulation cutoff is controlled by reference K (crosshair/latest), not by replay step.
-  return (chart.kline_all && chart.kline_all.length > 0) ? chart.kline_all : (chart.kline || []);
+  if (chart.kline_all && chart.kline_all.length > 0) return chart.kline_all;
+  if (chipKlineAllCache && chipKlineAllCache.length > 0) return chipKlineAllCache;
+  return chart.kline || [];
 }
 
 /** 解析 K 线时间为可比毫秒（UTC）；失败时 chipTimeLe 回退字符串比较。分钟线、混合格式时比纯字符串更稳。 */
@@ -11934,6 +12446,9 @@ function getReferenceKByBounds(chart, xMin, xMax, w) {
   const plotW = Math.max(1, w - PAD_L - PAD_R);
   const clampedX = Math.max(PAD_L, Math.min(w - PAD_R, crosshairX));
   const targetX = xMin + ((clampedX - PAD_L) / plotW) * (xMax - xMin);
+  // 先在筹码底座 ksAll 上吸附：避免仅用 chart.kline 可视集导致与 kline_all 时刻不一致，chipTimeLe 过滤后只剩极少根 K → 筹码「一格」
+  const refFromAll = nearestKByX(ksAll, targetX);
+  if (refFromAll) return refFromAll;
   const visibleKs = getVisibleKs(chart, xMin, xMax).filter((k) => k.x <= ksAll[ksAll.length - 1].x);
   return nearestKByX(visibleKs.length > 0 ? visibleKs : ksAll, targetX) || ksAll[ksAll.length - 1];
 }
@@ -12082,6 +12597,12 @@ function toScaler(chart, xMin, xMax, dualChartIdHint) {
     y: (y) => PAD_T + ((yMax - y) / ySpan) * plotH,
     yFromPx: (py) => yMax - ((py - PAD_T) / Math.max(1, plotH)) * ySpan,
   };
+}
+
+/** 根画布上的鼠标/键盘交互：双图时传入当前子窗 hint，保证 plotW 与激活 pane 一致 */
+function scalerForActivePayloadChart(chart, xMin, xMax) {
+  const hint = isDualRuntimeReady() ? dualActiveChartId : undefined;
+  return toScaler(chart, xMin, xMax, hint);
 }
 
 function chooseAutoYAxisStep(range, targetTicks) {
@@ -12249,10 +12770,18 @@ function drawXTicks(s, yPos) {
 function drawCrosshair(chart, s) {
   if (!crosshairEnabled || crosshairX === null || crosshairY === null) return;
   if (!chart || !chart.kline || chart.kline.length === 0) return;
-  const refK = getReferenceK(chart, s);
-  if (!refK) return;
-  const x = s.x(refK.x);
+  // 竖线以 crosshairX 为准（与 mousemove / 各 pane 缓存一致），避免 getReferenceK 与 s.x(refK.x) 二次映射把线钳到轴边「消失」
+  const x = Math.max(PAD_L, Math.min(s.w - PAD_R, Number(crosshairX)));
   const y = Math.max(PAD_T, Math.min(s.contentBottom, crosshairY));
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    return;
+  }
+  let refK = getReferenceK(chart, s);
+  if (!refK) {
+    const tx = xFromPx(s, x);
+    const vis = getVisibleKs(chart, s.xMin, s.xMax);
+    refK = nearestKByX(vis.length ? vis : chart.kline, tx) || chart.kline[chart.kline.length - 1];
+  }
   const t = refK.t || "-";
   const crossPrice = s.yFromPx(y);
   const bspTags = getBspAtX(chart, refK.x);
@@ -12334,7 +12863,8 @@ function drawChips(chart, s) {
   const ksAll = getChipBaseKs(chart);
   const visibleKs = s.visibleK || [];
   const latestVisibleK = visibleKs.length > 0 ? visibleKs[visibleKs.length - 1] : ((chart.kline && chart.kline.length > 0) ? chart.kline[chart.kline.length - 1] : null);
-  const crossRefK = (crosshairEnabled && crosshairX !== null && canvasHovered) ? getReferenceK(chart, s) : null;
+  // 十字开启后无论是否悬停，都按十字参考K联动筹码，避免只显示横线时筹码不跟随。
+  const crossRefK = (crosshairEnabled && crosshairX !== null) ? getReferenceK(chart, s) : null;
   const refMode = String(chartConfig.chip.peakRefMode || "latest_visible");
   const getTurnRef = (type) => {
     const arr = type === "seg" ? (chart.seg || []) : (chart.bi || []);
@@ -12357,9 +12887,16 @@ function drawChips(chart, s) {
   if (ksAll.length === 0 || !refK) return;
   const priceStep = chartConfig.chip.bucketStep || 0.1;
   const stepMul = 1 / priceStep;
-  // 累计至参考日：按解析时间比较（兼容分钟线、非统一分隔符等，避免仅靠字符串误判）
   const refT = String(refK.t || "");
-  const useKs = refT ? ksAll.filter((k) => chipTimeLe(k.t, refT)) : ksAll;
+  // 十字模式：按 K 线索引 x 累计至参考柱（与吸附 refK 同源）；非十字仍按时间 chipTimeLe，避免 t 格式与 kline_all 不一致时过滤成单根 → 筹码仅一格
+  let useKs;
+  if (crosshairEnabled && crosshairX !== null && Number.isFinite(Number(refK.x))) {
+    const rx = Number(refK.x);
+    useKs = ksAll.filter((k) => Number(k.x) <= rx);
+    if (useKs.length === 0) useKs = ksAll.length ? ksAll.slice(0, 1) : [];
+  } else {
+    useKs = refT ? ksAll.filter((k) => chipTimeLe(k.t, refT)) : ksAll;
+  }
 
   let allMin = Infinity;
   let allMax = -Infinity;
@@ -12380,10 +12917,37 @@ function drawChips(chart, s) {
   const minTick = Math.floor(allMin * stepMul);
   const maxTick = Math.ceil(allMax * stepMul);
   const tickCount = Math.max(1, maxTick - minTick + 1);
-  const arr = new Array(tickCount).fill(0);
+  const arrS = new Array(tickCount).fill(0);
+  const arrB = new Array(tickCount).fill(0);
+  const arrT = new Array(tickCount).fill(0);
 
   for (const k of useKs) {
     const tickBins = k.chip_tick_bins;
+    if (
+      tickBins &&
+      Array.isArray(tickBins.p) &&
+      Array.isArray(tickBins.s) &&
+      Array.isArray(tickBins.b) &&
+      tickBins.p.length === tickBins.s.length &&
+      tickBins.p.length === tickBins.b.length
+    ) {
+      for (let j = 0; j < tickBins.p.length; j++) {
+        const p = Number(tickBins.p[j]);
+        const sV = Number(tickBins.s[j]);
+        const bV = Number(tickBins.b[j]);
+        if (!Number.isFinite(p) || !Number.isFinite(sV) || !Number.isFinite(bV)) continue;
+        if (sV <= 0 && bV <= 0) continue;
+        const bi = Math.floor(p * stepMul);
+        if (bi < minTick || bi > maxTick) continue;
+        const idx = bi - minTick;
+        if (sV > 0) arrS[idx] += sV;
+        if (bV > 0) arrB[idx] += bV;
+        arrT[idx] += sV + bV;
+      }
+      continue;
+    }
+
+    // 兼容旧字段：无 s/b 则全部当作右红 B
     if (tickBins && Array.isArray(tickBins.p) && Array.isArray(tickBins.w) && tickBins.p.length === tickBins.w.length) {
       for (let j = 0; j < tickBins.p.length; j++) {
         const p = Number(tickBins.p[j]);
@@ -12391,7 +12955,9 @@ function drawChips(chart, s) {
         if (!Number.isFinite(p) || !Number.isFinite(w) || w <= 0) continue;
         const bi = Math.floor(p * stepMul);
         if (bi < minTick || bi > maxTick) continue;
-        arr[bi - minTick] += w;
+        const idx = bi - minTick;
+        arrB[idx] += w;
+        arrT[idx] += w;
       }
       continue;
     }
@@ -12406,7 +12972,8 @@ function drawChips(chart, s) {
     const i1 = Math.min(maxTick, Math.ceil(high * stepMul));
     if (i1 < i0) continue;
     if (Math.abs(high - low) < 1e-12) {
-      arr[i0 - minTick] += vol;
+      arrB[i0 - minTick] += vol;
+      arrT[i0 - minTick] += vol;
       continue;
     }
 
@@ -12432,7 +12999,9 @@ function drawChips(chart, s) {
     for (let t = i0; t <= i1; t++) {
       const w = ws[t - i0];
       if (w <= 0) continue;
-      arr[t - minTick] += (w / sumW) * vol;
+      const addV = (w / sumW) * vol;
+      arrB[t - minTick] += addV;
+      arrT[t - minTick] += addV;
     }
   }
 
@@ -12440,18 +13009,22 @@ function drawChips(chart, s) {
   // only amplify contrast on rendering.
   const stretchExp = getChipStretchExponent();
   const stretchVol = (v) => Math.pow(Math.max(0, v), stretchExp);
-  let maxVVisible = 0;
+  // 与旧版单色筹码一致：按 (S+B) 拉伸后取最大柱长；再在柱内按比例分 B(靠右原点) / S(在 B 左侧)
+  let maxTotVisible = 0;
   for (let i = 0; i < tickCount; i++) {
     const p = (minTick + i) / stepMul;
-    const v = stretchVol(arr[i]);
     if (p < s.yMin || p > s.yMax) continue;
-    if (v > maxVVisible) maxVVisible = v;
+    const tot = arrS[i] + arrB[i];
+    const vT = stretchVol(tot);
+    if (vT > maxTotVisible) maxTotVisible = vT;
   }
-  if (maxVVisible <= 0) return;
+  if (maxTotVisible <= 0) return;
   const chipW = Math.max(96, Math.min(220, s.plotW * 0.2));
   const xR = s.w - PAD_R - 2;
   const xL = xR - chipW;
-  const fill = getCfgColor(chartConfig.chip.color);
+  const xOrig = xR - 2; // 筹码峰右端锚点，柱体向左延伸
+  const sFill = getCfgColor(chartConfig.chip.sColor || "rgba(34,197,94,0.78)"); // S: 左绿
+  const bFill = getCfgColor(chartConfig.chip.bColor || "rgba(220,38,38,0.78)"); // B: 右红
   const bg = cssVar("--chipBg", "rgba(148,163,184,0.12)");
   const edge = cssVar("--chipEdge", "rgba(59,130,246,0.75)");
 
@@ -12459,28 +13032,38 @@ function drawChips(chart, s) {
   ctx.fillStyle = bg;
   ctx.fillRect(xL, PAD_T, chipW, s.plotBottomY - PAD_T);
   for (let i = 0; i < tickCount; i++) {
-    const vRaw = arr[i];
-    const v = stretchVol(vRaw);
-    if (v <= 0) continue;
     const p = (minTick + i) / stepMul;
     if (p < s.yMin || p > s.yMax) continue;
-    const len = (v / maxVVisible) * chipW;
+    const vSraw = arrS[i];
+    const vBraw = arrB[i];
+    const totRaw = vSraw + vBraw;
+    if (!(totRaw > 0)) continue;
     const yTop = s.y(p + priceStep);
     const yBot = s.y(p);
     const h = Math.max(1, yBot - yTop);
-    ctx.fillStyle = fill;
-    ctx.fillRect(xR - len, yTop, len, h);
+    const vT = stretchVol(totRaw);
+    const lenTotal = maxTotVisible > 0 ? (vT / maxTotVisible) * chipW : 0;
+    const lenB = totRaw > 1e-12 ? lenTotal * (vBraw / totRaw) : 0;
+    const lenS = lenTotal - lenB;
+    if (lenB > 0) {
+      ctx.fillStyle = bFill;
+      ctx.fillRect(xOrig - lenB, yTop, lenB, h);
+    }
+    if (lenS > 0) {
+      ctx.fillStyle = sFill;
+      ctx.fillRect(xOrig - lenB - lenS, yTop, lenS, h);
+    }
   }
   ctx.strokeStyle = edge;
   ctx.lineWidth = 1;
   ctx.strokeRect(xL, PAD_T, chipW, s.plotBottomY - PAD_T);
   ctx.fillStyle = cssVar("--legendText", "#0f172a");
   ctx.font = "12px Consolas";
-  ctx.fillText(`筹码(${refText})`, xL + 6, PAD_T + 14);
+  ctx.fillText(`筹码(S/B)(${refText})`, xL + 6, PAD_T + 14);
   const peaks = [];
   for (let i = 1; i < tickCount - 1; i++) {
-    const cur = arr[i];
-    if (!(cur > arr[i - 1] && cur > arr[i + 1])) continue;
+    const cur = arrT[i];
+    if (!(cur > arrT[i - 1] && cur > arrT[i + 1])) continue;
     const p = (minTick + i) / stepMul;
     if (p < s.yMin || p > s.yMax) continue;
     peaks.push(p);
@@ -12940,6 +13523,36 @@ function drawBsp(arr, s) {
   return drawBottomSignals({ bsp: arr || [], rhythm: [] }, s);
 }
 
+/** 与后端 ChanStepper._bsp_key 一致，用于合并判定状态 */
+function bottomBspRowKey(p) {
+  if (!p) return "";
+  const lvl = String(p.level || "");
+  const x = Math.floor(Number(p.x));
+  const lab = String(p.label || "");
+  const buy = p.is_buy ? 1 : 0;
+  return `${lvl}|${x}|${lab}|${buy}`;
+}
+
+/**
+ * 图底买卖点数据源：单图用全局 bspHistory（含 ×/✓ 状态）；
+ * 双周期子图各自 K 线索引不同，须用当前 chart.bsp 再叠 bsp_history 中同 key 的状态。
+ */
+function resolveBottomBspRowsForDraw(chart) {
+  if (dualInternalRenderDepth > 0 && chart && Array.isArray(chart.bsp)) {
+    const statusMap = new Map();
+    (bspHistory || []).forEach((h) => {
+      const k = h.key || bottomBspRowKey(h);
+      if (k) statusMap.set(k, h.status);
+    });
+    return chart.bsp.map((it) => {
+      const k = it.key || bottomBspRowKey(it);
+      const st = statusMap.has(k) ? statusMap.get(k) : it.status;
+      return { ...it, key: k, status: st };
+    });
+  }
+  return bspHistory || [];
+}
+
 function drawRhythmLines(arr, s) {
   if (!chartConfig.rhythmLine || !chartConfig.rhythmLine.enabled) return;
   // 自定义术语说明：
@@ -13003,14 +13616,16 @@ function buildBottomSignalGroups(chart, bspArr) {
       lineColor: getCfgColor(bspCfg.lineColor),
       lineWidth: Number(bspCfg.lineWidth || 1),
       lineStyle: bspCfg.lineStyle || "dashed",
+      showLowerExtension: bspCfg.showLowerExtension !== false,
     });
   }
   return groups;
 }
 
 function drawBottomSignals(chart, s) {
+  if (chartConfigStore && chartConfigStore.shared && chartConfigStore.shared.showBottomBsp === false) return;
   signalHoverBoxes = [];
-  const groups = buildBottomSignalGroups(chart, bspHistory || []);
+  const groups = buildBottomSignalGroups(chart, resolveBottomBspRowsForDraw(chart));
   const xs = Object.keys(groups).map((x) => Number(x)).filter((x) => x >= s.xMin && x <= s.xMax).sort((a, b) => a - b);
   const boxGap = 4;
   const boxPadX = 8;
@@ -13056,7 +13671,7 @@ function drawBottomSignals(chart, s) {
       const rectW = textW + boxPadX * 2;
       const rectX = xp - rectW / 2;
       const rectY = boxBottom - offsetY - lineH;
-      if (k) {
+      if (k && item.showLowerExtension !== false) {
         const anchorY = s.y(k.l);
         const toY = Math.max(PAD_T + 2, Math.min(s.h - getLayoutPadB() + 8, rectY - 6));
         ctx.save();
@@ -13782,6 +14397,16 @@ function refreshUI(payload, options) {
     ? !!options.showStandaloneNotices
     : !afterStep;
   const prev = lastPayload;
+  // 稳定缓存 kline_all：避免后续 payload 省略时丢失筹码全历史
+  if (
+    payload &&
+    payload.ready &&
+    payload.chart &&
+    Array.isArray(payload.chart.kline_all) &&
+    payload.chart.kline_all.length > 0
+  ) {
+    chipKlineAllCache = payload.chart.kline_all;
+  }
   // 后端在步进等接口省略 kline_all，避免 1 分钟全量重复 JSON 导致超时/断连（浏览器报 Failed to fetch）；此处沿用上一包全历史供筹码用。
   if (
     payload &&
@@ -13807,12 +14432,22 @@ function refreshUI(payload, options) {
     dualActiveChartId = activeId;
     if (payload.charts[activeId]) payload.chart = payload.charts[activeId];
     else if (payload.charts.chart1) payload.chart = payload.charts.chart1;
+    if (
+      payload.chart &&
+      Array.isArray(payload.chart.kline_all) &&
+      payload.chart.kline_all.length > 0
+    ) {
+      chipKlineAllCache = payload.chart.kline_all;
+    } else if (chipKlineAllCache && chipKlineAllCache.length > 0 && payload.chart) {
+      payload.chart.kline_all = chipKlineAllCache;
+    }
   }
   lastPayload = payload;
   updateDualModeUI(payload);
   if (payload && payload.ready && payload.data_form) {
     dataFormConfig.mode = normalizeDataFormMode(payload.data_form.mode);
     dataFormConfig.quantity = clampDataFormQuantity(payload.data_form.quantity, payload.data_form.raw_count || payload.data_form.current_count || 1);
+    dataFormConfig.feedMode = normalizeDataFeedMode(payload.data_form.feed_mode);
   } else if (!payload || !payload.ready) {
     dataFormConfig = { ...DATA_FORM_DEFAULT };
   }
@@ -13884,13 +14519,15 @@ function refreshUI(payload, options) {
   }
   syncStepButtonState();
   $("btnFinish").disabled = !payload.ready || sessionFinished;
-  $("btnBuy").disabled = !payload.ready || sessionFinished || payload.price === null || payload.account.position !== 0;
-  $("btnSell").disabled = !payload.ready || sessionFinished || !payload.account.can_sell;
-  $("btnShort").disabled = !payload.ready || sessionFinished || payload.price === null || payload.account.position !== 0;
-  $("btnCover").disabled = !payload.ready || sessionFinished || !payload.account.can_cover;
+  const isUnifiedFeedMode = normalizeDataFeedMode(payload && payload.data_form ? payload.data_form.feed_mode : "step") === "unified";
+  $("btnBuy").disabled = isUnifiedFeedMode || !payload.ready || sessionFinished || payload.price === null || payload.account.position !== 0;
+  $("btnSell").disabled = isUnifiedFeedMode || !payload.ready || sessionFinished || !payload.account.can_sell;
+  $("btnShort").disabled = isUnifiedFeedMode || !payload.ready || sessionFinished || payload.price === null || payload.account.position !== 0;
+  $("btnCover").disabled = isUnifiedFeedMode || !payload.ready || sessionFinished || !payload.account.can_cover;
   $("configCard").classList.toggle("collapsed", payload.ready);
   updateBspJudgeUI();
   updateStepForwardMaxUi(payload);
+  updateUnifiedGotoRow(payload);
   requestAnimationFrame(updateCompactLayout);
 }
 
@@ -13927,6 +14564,7 @@ $("btnInit").onclick = async () => {
       active_chart_id: (sessionConfig && sessionConfig.activeChartId) ? sessionConfig.activeChartId : "chart1",
       data_form_mode: normalizeDataFormMode(dataFormConfig.mode),
       data_form_quantity: clampDataFormQuantity(dataFormConfig.quantity, getRawKlineCount() || 1),
+      data_feed_mode: normalizeDataFeedMode(dataFormConfig.feedMode),
       rollback_cache_depth: Number(systemConfig.rollbackCacheDepth || DEFAULT_SYSTEM_CONFIG.rollbackCacheDepth),
       rollback_full_snapshot_interval: Number(systemConfig.rollbackFullSnapshotInterval || DEFAULT_SYSTEM_CONFIG.rollbackFullSnapshotInterval),
       rollback_capture_max_bars: Number(systemConfig.rollbackCaptureMaxBars || DEFAULT_SYSTEM_CONFIG.rollbackCaptureMaxBars),
@@ -14050,6 +14688,7 @@ $("btnStep").onclick = async () => {
 $("btnStepN").onclick = async () => {
   if ($("btnStepN").disabled || stepInFlight) return;
   const n = getStepNValue();
+  const isUnifiedFeedMode = normalizeDataFeedMode(lastPayload && lastPayload.data_form ? lastPayload.data_form.feed_mode : "step") === "unified";
   let done = 0;
   let lastResult = null;
   stepInFlight = true;
@@ -14057,6 +14696,16 @@ $("btnStepN").onclick = async () => {
   syncStepButtonState();
   hideGlobalLoading();
   try {
+    if (isUnifiedFeedMode) {
+      const payload = await api("/api/step", {
+        judge_mode: systemConfig.bspJudgeMode || "auto",
+        active_chart_id: (lastPayload && lastPayload.active_chart_id) ? lastPayload.active_chart_id : "chart1",
+        n,
+      });
+      refreshUI(payload, { afterStep: true, showStandaloneNotices: false });
+      setMsg(payload.message || `步进N（${n}）根完成`);
+      return;
+    }
     for (let i = 0; i < n; i++) {
       if (stepInterruptRequested) break;
       const result = await stepOnce(false);
@@ -14156,6 +14805,41 @@ $("btnCover").onclick = async () => {
     setMsg("平空失败：" + e.message);
   }
 };
+
+if ($("btnUnifiedGotoStep")) {
+  $("btnUnifiedGotoStep").onclick = async () => {
+    if ($("btnUnifiedGotoStep").disabled || stepInFlight) return;
+    const inp = $("inputUnifiedGotoStep");
+    const raw = Number(inp ? inp.value : 0);
+    const target = Number.isFinite(raw) ? Math.max(0, Math.floor(raw)) : 0;
+    stepInFlight = true;
+    syncStepButtonState();
+    hideGlobalLoading();
+    try {
+      const payload = await api("/api/goto_step", {
+        step_idx: target,
+        active_chart_id: (lastPayload && lastPayload.active_chart_id) ? lastPayload.active_chart_id : "chart1",
+      });
+      refreshUI(payload, { afterStep: true, showStandaloneNotices: false });
+      setMsg(payload.message || "已跳转");
+    } catch (e) {
+      setMsg("跳转失败：" + e.message);
+    } finally {
+      stepInFlight = false;
+      syncStepButtonState();
+    }
+  };
+}
+if ($("inputUnifiedGotoStep")) {
+  $("inputUnifiedGotoStep").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const btn = $("btnUnifiedGotoStep");
+      if (btn && !btn.disabled) btn.click();
+    }
+  });
+}
+
 markUiBound("btnInit");
 markUiBound("btnViewKlineData");
 markUiBound("btnStepPrev");
@@ -14163,6 +14847,7 @@ markUiBound("btnStep");
 markUiBound("btnStepN");
 markUiBound("btnStepInterrupt");
 markUiBound("btnBackN");
+markUiBound("btnUnifiedGotoStep");
 markUiBound("btnBuy");
 markUiBound("btnSell");
 markUiBound("btnShort");
@@ -14511,7 +15196,10 @@ async function jumpToBacktestBuy(buyIdx) {
   }
   setGlobalLoading(true, "正在跳转K线…");
   try {
-    const p = await api("/api/goto_step", { step_idx: buyIdx });
+    const p = await api("/api/goto_step", {
+      step_idx: buyIdx,
+      active_chart_id: (lastPayload && lastPayload.active_chart_id) ? lastPayload.active_chart_id : "chart1",
+    });
     refreshUI(p, { afterStep: false });
     showToast("已跳转到该笔买入所在K线。");
   } catch (e) {
@@ -14792,6 +15480,7 @@ def api_init(req: InitReq):
                 data_source_priority=req.data_source_priority,
                 data_form_mode=req.data_form_mode,
                 data_form_quantity=req.data_form_quantity,
+                data_feed_mode=getattr(req, "data_feed_mode", "step"),
             )
             chart_mode = "dual" if str(req.chart_mode or "single").strip().lower() == "dual" else "single"
             APP_STATE.chart_mode = chart_mode
@@ -14811,6 +15500,7 @@ def api_init(req: InitReq):
                     data_source_priority=req.data_source_priority,
                     data_form_mode=req.data_form_mode,
                     data_form_quantity=req.data_form_quantity,
+                    data_feed_mode=getattr(req, "data_feed_mode", "step"),
                 )
         except OfflineDataConfirmRequired as exc:
             raise HTTPException(
@@ -14849,6 +15539,7 @@ def api_init(req: InitReq):
             "data_source_priority": req.data_source_priority,
             "data_form_mode": normalize_data_form_mode(req.data_form_mode),
             "data_form_quantity": req.data_form_quantity,
+            "data_feed_mode": normalize_data_feed_mode(getattr(req, "data_feed_mode", "step")),
             "rollback_cache_depth": req.rollback_cache_depth,
             "rollback_full_snapshot_interval": req.rollback_full_snapshot_interval,
             "rollback_capture_max_bars": req.rollback_capture_max_bars,
@@ -14893,6 +15584,7 @@ def api_reconfig(req: ReconfigReq):
             req.chan_config,
             data_form_mode=req.data_form_mode,
             data_form_quantity=req.data_form_quantity,
+            data_feed_mode=getattr(req, "data_feed_mode", "step"),
             rollback_cache_depth=req.rollback_cache_depth,
             rollback_full_snapshot_interval=req.rollback_full_snapshot_interval,
             rollback_capture_max_bars=req.rollback_capture_max_bars,
@@ -14912,22 +15604,35 @@ def api_step(req: StepReq):
     if APP_STATE.finished:
         raise HTTPException(status_code=400, detail="当前会话已结束，请重新训练")
     try:
+        step_n = max(1, int(getattr(req, "n", 1) or 1))
         if req.active_chart_id:
             APP_STATE.active_chart_id = APP_STATE._normalize_chart_id(req.active_chart_id)
         active_stepper = APP_STATE.get_active_stepper()
         passive_stepper = APP_STATE.get_passive_stepper()
         APP_STATE._push_rollback_snapshot()
-        ok = active_stepper.step()
-        if passive_stepper is not None and ok:
+        ok = True
+        done = 0
+        for _ in range(step_n):
+            ok = active_stepper.step()
+            if not ok:
+                break
+            done += 1
+        if passive_stepper is not None and done > 0:
             APP_STATE._sync_stepper_to_anchor(passive_stepper, active_stepper.current_time())
-        APP_STATE._dual_rebuild_coarse_chan_anti_future(active_stepper.current_time())
+        if done > 0:
+            APP_STATE._dual_rebuild_coarse_chan_anti_future(active_stepper.current_time())
         APP_STATE.sync_bsp_history()
         APP_STATE.sync_rhythm_history()
         mode = (req.judge_mode or "auto").lower().strip()
         if mode != "manual":
             APP_STATE.after_step_update()
         payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME, include_kline_all=False)
-        payload["message"] = "已到最后一根K线" if not ok else "步进成功"
+        if done <= 0:
+            payload["message"] = "已到最后一根K线"
+        elif step_n == 1:
+            payload["message"] = "步进成功"
+        else:
+            payload["message"] = f"步进成功（{done}/{step_n}）"
         return payload
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -14954,6 +15659,8 @@ def api_buy():
         raise HTTPException(status_code=400, detail="请先初始化会话")
     if APP_STATE.finished:
         raise HTTPException(status_code=400, detail="当前会话已结束，请重新训练")
+    if normalize_data_feed_mode((APP_STATE.session_params or {}).get("data_feed_mode", "step")) == "unified":
+        raise HTTPException(status_code=400, detail="统一喂数据模式仅用于看图，不支持模拟操盘")
     try:
         active_stepper = APP_STATE.get_active_stepper()
         price = active_stepper.current_price()
@@ -14985,6 +15692,8 @@ def api_sell():
         raise HTTPException(status_code=400, detail="请先初始化会话")
     if APP_STATE.finished:
         raise HTTPException(status_code=400, detail="当前会话已结束，请重新训练")
+    if normalize_data_feed_mode((APP_STATE.session_params or {}).get("data_feed_mode", "step")) == "unified":
+        raise HTTPException(status_code=400, detail="统一喂数据模式仅用于看图，不支持模拟操盘")
     try:
         active_stepper = APP_STATE.get_active_stepper()
         price = active_stepper.current_price()
@@ -15012,6 +15721,8 @@ def api_short():
         raise HTTPException(status_code=400, detail="请先初始化会话")
     if APP_STATE.finished:
         raise HTTPException(status_code=400, detail="当前会话已结束，请重新训练")
+    if normalize_data_feed_mode((APP_STATE.session_params or {}).get("data_feed_mode", "step")) == "unified":
+        raise HTTPException(status_code=400, detail="统一喂数据模式仅用于看图，不支持模拟操盘")
     try:
         active_stepper = APP_STATE.get_active_stepper()
         price = active_stepper.current_price()
@@ -15043,6 +15754,8 @@ def api_cover():
         raise HTTPException(status_code=400, detail="请先初始化会话")
     if APP_STATE.finished:
         raise HTTPException(status_code=400, detail="当前会话已结束，请重新训练")
+    if normalize_data_feed_mode((APP_STATE.session_params or {}).get("data_feed_mode", "step")) == "unified":
+        raise HTTPException(status_code=400, detail="统一喂数据模式仅用于看图，不支持模拟操盘")
     try:
         active_stepper = APP_STATE.get_active_stepper()
         price = active_stepper.current_price()
@@ -15072,6 +15785,28 @@ def api_goto_step(req: GotoStepReq):
     if APP_STATE.finished:
         raise HTTPException(status_code=400, detail="当前会话已结束，请重新训练")
     try:
+        if getattr(req, "active_chart_id", None):
+            APP_STATE.active_chart_id = APP_STATE._normalize_chart_id(req.active_chart_id)
+        if normalize_data_feed_mode((APP_STATE.session_params or {}).get("data_feed_mode", "step")) == "unified":
+            target_raw = max(0, int(req.step_idx))
+            active = APP_STATE.get_active_stepper()
+            effective = active.unified_set_step_idx(target_raw)
+            passive = APP_STATE.get_passive_stepper()
+            if passive is not None:
+                APP_STATE._sync_stepper_to_anchor(passive, active.current_time())
+            APP_STATE._dual_rebuild_coarse_chan_anti_future(active.current_time())
+            APP_STATE.sync_bsp_history()
+            APP_STATE.sync_rhythm_history()
+            APP_STATE.after_step_update()
+            payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME, include_kline_all=False)
+            if effective < 0:
+                payload["message"] = "跳转失败：无 K 线数据"
+            elif effective != target_raw:
+                payload["message"] = f"已跳转 step={effective}（请求 {target_raw} 已钳制到合法范围，统一喂数据·仅切片）"
+            else:
+                payload["message"] = f"已跳转 step={effective}（统一喂数据·仅切片）"
+            return payload
+
         target = max(0, int(req.step_idx))
         cur = int(APP_STATE.get_active_stepper().step_idx)
         if target == cur:
