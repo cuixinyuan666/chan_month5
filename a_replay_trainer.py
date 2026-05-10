@@ -144,6 +144,10 @@ LEVEL_LABELS = {"bi": "笔", "seg": "段", "segseg": "2段"}
 STRUCTURE_LEVEL_LABELS = {"fract": "分型", **LEVEL_LABELS}
 RHYTHM_LEVEL_LABELS = {"fract": "分型", "bi": "笔", "seg": "线段", "segseg": "二段"}
 JUDGE_TRIGGER_LEVELS = {"bi": "seg", "seg": "segseg", "segseg": "segsegseg"}
+RHYTHM_CALC_MODE_NORMAL = "normal"
+RHYTHM_CALC_MODE_TRANSITION = "transition"
+RHYTHM_CALC_MODE_STRICT_1382 = "strict1382"
+RHYTHM_CALC_MODES = {RHYTHM_CALC_MODE_NORMAL, RHYTHM_CALC_MODE_TRANSITION, RHYTHM_CALC_MODE_STRICT_1382}
 DEFAULT_TUSHARE_TOKEN = "0de8d8ce7b0d4758c52959230694d55e0571d57c9b1f37ef3ffe72ca"
 AKSHARE_INLINE_SRC = "inline:akshare"
 TUSHARE_INLINE_SRC = "inline:tushare"
@@ -2854,6 +2858,22 @@ def child_lines_within_parent(parent: Any, child_lines: list[Any]) -> list[Any]:
     )
 
 
+def child_lines_for_parent_rhythm(parent: Any, child_lines: list[Any]) -> list[Any]:
+    begin_x = line_begin_x(parent)
+    end_x = line_end_x(parent)
+    picked: dict[str, Any] = {}
+    for line in child_lines:
+        bx = line_begin_x(line)
+        ex = line_end_x(line)
+        # 节奏线允许多取一根跨父端点子线，用于补齐“前一拐点 -> 下一拐点”。
+        if bx >= begin_x and (ex <= end_x or bx <= end_x):
+            picked[make_line_key("child", line)] = line
+    return sorted(
+        picked.values(),
+        key=lambda item: (line_begin_x(item), line_end_x(item), getattr(item, "idx", -1)),
+    )
+
+
 def build_alternating_child_sequence(child_lines: list[Any], parent_dir: BI_DIR) -> list[Any]:
     if not child_lines:
         return []
@@ -2875,8 +2895,52 @@ def build_alternating_child_sequence(child_lines: list[Any], parent_dir: BI_DIR)
     return seq
 
 
+def normalize_rhythm_calc_mode(mode: Any) -> str:
+    text = str(mode or RHYTHM_CALC_MODE_NORMAL).strip()
+    return text if text in RHYTHM_CALC_MODES else RHYTHM_CALC_MODE_NORMAL
+
+
+def rhythm_layer_index(round_current: int, round_ref: int) -> int:
+    return max(0, int(round_current) - int(round_ref))
+
+
 def make_rhythm_display_label(round_current: int, round_ref: int) -> str:
-    return f"节奏线{round_current}" if round_current == round_ref else f"节奏线{round_current}_{round_ref}"
+    return f"节奏线{round_ref}-{rhythm_layer_index(round_current, round_ref)}"
+
+
+def rhythm_dir_text(direction: Any) -> str:
+    if direction == BI_DIR.UP or str(direction).upper() == "UP":
+        return "UP"
+    if direction == BI_DIR.DOWN or str(direction).upper() == "DOWN":
+        return "DOWN"
+    return str(direction).upper()
+
+
+def rhythm_1382_threshold(direction: Any, *, prev_same_val: float, opposite_val: float) -> float:
+    """按 1382 提示同一套公式计算当前推进端点门槛。"""
+    dir_text = rhythm_dir_text(direction)
+    if dir_text == "UP":
+        return float(opposite_val) + (float(prev_same_val) - float(opposite_val)) * 1.382
+    if dir_text == "DOWN":
+        return float(opposite_val) - (float(opposite_val) - float(prev_same_val)) * 1.382
+    return float("nan")
+
+
+def rhythm_retrace_allowed(mode: Any, direction: Any, *, b_val: float, d_val: float, threshold: float) -> bool:
+    calc_mode = normalize_rhythm_calc_mode(mode)
+    if calc_mode == RHYTHM_CALC_MODE_NORMAL:
+        return True
+    dir_text = rhythm_dir_text(direction)
+    eps = 1e-12
+    if dir_text == "UP":
+        if d_val + eps < b_val:
+            return False
+        return calc_mode != RHYTHM_CALC_MODE_STRICT_1382 or d_val + eps >= threshold
+    if dir_text == "DOWN":
+        if d_val - eps > b_val:
+            return False
+        return calc_mode != RHYTHM_CALC_MODE_STRICT_1382 or d_val - eps <= threshold
+    return True
 
 
 def iter_klus(kl_list) -> list[Any]:
@@ -2928,67 +2992,72 @@ def build_parent_rhythm_entries(
     parent_line: Any,
     child_lines: list[Any],
     klus: list[Any],
+    rhythm_calc_mode: str = RHYTHM_CALC_MODE_NORMAL,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Build rhythm lines for one parent structure.
 
-    The user-defined term "推进峰值端点" means the endpoint of the child line
-    that moves in the same direction as the parent structure:
-    - up parent: D / F / H ...
-    - down parent: mirrored low endpoints
-
-    For line k_j:
-    - j controls which historic retracement ratio is reused
-    - k controls which current retracement round is being projected
-    - x1 starts from the j-th same-direction peak endpoint
-    - x2 ends at the (k+1)-th same-direction peak endpoint
+    节奏线横向画在相邻回调拐点之间：
+    - 下降：顶2 -> 顶3
+    - 上升：底2 -> 底3
+    纵向价格仍沿用历史回调比例。
     """
     parent_dir = getattr(parent_line, "dir", None)
     if parent_dir not in (BI_DIR.UP, BI_DIR.DOWN):
         return [], []
     seq = build_alternating_child_sequence(child_lines, parent_dir)
-    if len(seq) < 5:
+    if len(seq) < 4:
         return [], []
 
+    calc_mode = normalize_rhythm_calc_mode(rhythm_calc_mode)
     parent_key = make_line_key(parent_level, parent_line)
     parent_label = rhythm_level_label(parent_level)
     level_label_cn = rhythm_level_label(level)
     a0 = float(parent_line.get_begin_val())
     lines: list[dict[str, Any]] = []
     hits: list[dict[str, Any]] = []
-    max_round = max(0, (len(seq) - 3) // 2)
+    max_round = max(0, (len(seq) - 2) // 2)
 
     for round_current in range(1, max_round + 1):
         d_line = seq[2 * round_current]
-        next_peak_line = seq[2 * (round_current + 1)]
+        line_start = seq[2 * round_current - 1]
+        line_end = seq[2 * round_current + 1]
         d_val = float(d_line.get_end_val())
-        threshold: Optional[float] = None
-        c_line_for_hit = None
+        gate_b_line = seq[2 * (round_current - 1)]
+        gate_c_line = seq[2 * (round_current - 1) + 1]
+        gate_b_val = float(gate_b_line.get_end_val())
+        gate_c_val = float(gate_c_line.get_end_val())
+        gate_threshold = rhythm_1382_threshold(parent_dir, prev_same_val=gate_b_val, opposite_val=gate_c_val)
+        if not abs(gate_threshold) < float("inf"):
+            continue
+        if not rhythm_retrace_allowed(calc_mode, parent_dir, b_val=gate_b_val, d_val=d_val, threshold=float(gate_threshold)):
+            continue
+        has_self_line_for_hit = False
         for round_ref in range(1, round_current + 1):
             b_line = seq[2 * (round_ref - 1)]
             c_line = seq[2 * (round_ref - 1) + 1]
-            start_peak_line = seq[2 * round_ref]
             b_val = float(b_line.get_end_val())
             c_val = float(c_line.get_end_val())
             if parent_dir == BI_DIR.UP:
                 denom = b_val - a0
                 ratio = (b_val - c_val) / denom if abs(denom) > 1e-12 else None
                 rhythm_price = d_val - (d_val - a0) * ratio if ratio is not None else None
-                threshold = c_val + (b_val - c_val) * 1.382 if ratio is not None else None
+                threshold = rhythm_1382_threshold(parent_dir, prev_same_val=b_val, opposite_val=c_val) if ratio is not None else None
             else:
                 denom = a0 - b_val
                 ratio = (c_val - b_val) / denom if abs(denom) > 1e-12 else None
                 rhythm_price = d_val + (a0 - d_val) * ratio if ratio is not None else None
-                threshold = c_val - (c_val - b_val) * 1.382 if ratio is not None else None
+                threshold = rhythm_1382_threshold(parent_dir, prev_same_val=b_val, opposite_val=c_val) if ratio is not None else None
             if ratio is None or rhythm_price is None or threshold is None:
                 continue
             if not (ratio >= 0 and abs(rhythm_price) < float("inf") and abs(threshold) < float("inf")):
                 continue
-            label_left = str(round_current) if round_current == round_ref else f"{round_current}_{round_ref}"
+            layer_idx = rhythm_layer_index(round_current, round_ref)
+            label_left = f"{round_ref}-{layer_idx}"
             label_right = format_rhythm_ratio(ratio)
             color_group = f"rhythm{round_ref}"
             lines.append(
                 {
-                    "key": f"{parent_key}|line|{round_current}|{round_ref}",
+                    "key": f"{parent_key}|line|{round_ref}|{layer_idx}",
                     "level": level,
                     "parent_level": parent_level,
                     "parent_key": parent_key,
@@ -2996,22 +3065,26 @@ def build_parent_rhythm_entries(
                     "display_label": make_rhythm_display_label(round_current, round_ref),
                     "round_current": round_current,
                     "round_ref": round_ref,
+                    "layer": layer_idx,
+                    "calc_mode": calc_mode,
                     "color_group": color_group,
                     "dir": "UP" if parent_dir == BI_DIR.UP else "DOWN",
                     "ratio": float(ratio),
                     "label_left": label_left,
                     "label_right": label_right,
-                    "x1": line_end_x(start_peak_line),
+                    "x1": line_end_x(line_start),
                     "y1": float(rhythm_price),
-                    "x2": line_end_x(next_peak_line),
+                    "x2": line_end_x(line_end),
                     "y2": float(rhythm_price),
                 }
             )
             if round_ref == round_current:
-                c_line_for_hit = c_line
-        if threshold is None or c_line_for_hit is None:
+                gate_c_line = c_line
+                gate_threshold = float(threshold)
+                has_self_line_for_hit = True
+        if not has_self_line_for_hit:
             continue
-        for hit in find_1382_hits(klus, start_x=line_end_x(c_line_for_hit), direction=parent_dir, threshold=float(threshold)):
+        for hit in find_1382_hits(klus, start_x=line_end_x(gate_c_line), direction=parent_dir, threshold=float(gate_threshold)):
             hit_key = f"{parent_key}|1382|{level}|{round_current}|{int(hit['x'])}"
             hits.append(
                 {
@@ -3050,6 +3123,7 @@ def build_rhythm_structures(
     bi_parents: Any,
     seg_parents: Any,
     segseg_parents: Any,
+    rhythm_calc_mode: str = RHYTHM_CALC_MODE_NORMAL,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     all_lines: list[dict[str, Any]] = []
     all_hits: list[dict[str, Any]] = []
@@ -3061,16 +3135,14 @@ def build_rhythm_structures(
     ]
     for level, parent_level, source_children, parents in mappings:
         for parent_line in parents:
-            if parent_level in ("seg", "segseg"):
-                parent_children = list(getattr(parent_line, "bi_list", []) or child_lines_within_parent(parent_line, source_children))
-            else:
-                parent_children = child_lines_within_parent(parent_line, source_children)
+            parent_children = child_lines_for_parent_rhythm(parent_line, source_children)
             lines, hits = build_parent_rhythm_entries(
                 level=level,
                 parent_level=parent_level,
                 parent_line=parent_line,
                 child_lines=parent_children,
                 klus=klus,
+                rhythm_calc_mode=rhythm_calc_mode,
             )
             all_lines.extend(lines)
             all_hits.extend(hits)
@@ -3109,7 +3181,7 @@ def build_hidden_seg_layer(source_lines: Any, conf: CChanConfig):
     return hidden_seg_list
 
 
-def build_classic_bundle(chan: CChan) -> ChanStructureBundle:
+def build_classic_bundle(chan: CChan, rhythm_calc_mode: str = RHYTHM_CALC_MODE_NORMAL) -> ChanStructureBundle:
     kl_list = chan[0]
     conf = chan.conf
     segsegseg_list = build_hidden_seg_layer(kl_list.segseg_list, conf)
@@ -3127,6 +3199,7 @@ def build_classic_bundle(chan: CChan) -> ChanStructureBundle:
         bi_parents=kl_list.bi_list,
         seg_parents=kl_list.seg_list,
         segseg_parents=kl_list.segseg_list,
+        rhythm_calc_mode=rhythm_calc_mode,
     )
     return ChanStructureBundle(
         chan_algo=CHAN_ALGO_CLASSIC,
@@ -3149,7 +3222,7 @@ def build_classic_bundle(chan: CChan) -> ChanStructureBundle:
     )
 
 
-def build_new_bundle(chan: CChan) -> ChanStructureBundle:
+def build_new_bundle(chan: CChan, rhythm_calc_mode: str = RHYTHM_CALC_MODE_NORMAL) -> ChanStructureBundle:
     kl_list = chan[0]
     conf = chan.conf
     # 新缠论：分型端点 -> 新K线 -> 分型 -> 笔 -> 段 -> 2段；额外再递推一层隐藏结构支撑 2段 中枢/BSP。
@@ -3173,6 +3246,7 @@ def build_new_bundle(chan: CChan) -> ChanStructureBundle:
         bi_parents=bi_list,
         seg_parents=seg_list,
         segseg_parents=segseg_list,
+        rhythm_calc_mode=rhythm_calc_mode,
     )
     return ChanStructureBundle(
         chan_algo=CHAN_ALGO_NEW,
@@ -3195,9 +3269,13 @@ def build_new_bundle(chan: CChan) -> ChanStructureBundle:
     )
 
 
-def build_structure_bundle(chan: CChan, chan_algo: str) -> ChanStructureBundle:
+def build_structure_bundle(
+    chan: CChan,
+    chan_algo: str,
+    rhythm_calc_mode: str = RHYTHM_CALC_MODE_NORMAL,
+) -> ChanStructureBundle:
     algo = normalize_chan_algo(chan_algo)
-    return build_new_bundle(chan) if algo == CHAN_ALGO_NEW else build_classic_bundle(chan)
+    return build_new_bundle(chan, rhythm_calc_mode) if algo == CHAN_ALGO_NEW else build_classic_bundle(chan, rhythm_calc_mode)
 
 
 def get_bundle_line_list(bundle: ChanStructureBundle, level: str):
@@ -3440,6 +3518,7 @@ class ChanStepper:
         self.step_idx = -1
         self.code = ""
         self.chan_algo = CHAN_ALGO_CLASSIC
+        self.rhythm_calc_mode = RHYTHM_CALC_MODE_NORMAL
         self.k_type = KL_TYPE.K_DAY  # 默认日线
         self.effective_cfg_dict: dict[str, Any] = {}
         # Full history K-lines (used by chip distribution).
@@ -3489,6 +3568,7 @@ class ChanStepper:
                 "initial_cash",
                 "data_form_mode",
                 "data_form_quantity",
+                "rhythm_calc_mode",
             }
         )
         return {k: v for k, v in cfg_dict.items() if k not in skip}
@@ -3622,7 +3702,7 @@ class ChanStepper:
             raise ValueError("会话未初始化")
         if chan is None and not force and self.structure_bundle is not None and self._bundle_cache_step_idx == self.step_idx:
             return self.structure_bundle
-        bundle = build_structure_bundle(target_chan, self.chan_algo)
+        bundle = build_structure_bundle(target_chan, self.chan_algo, self.rhythm_calc_mode)
         if chan is None:
             self.structure_bundle = bundle
             self._bundle_cache_step_idx = self.step_idx
@@ -3668,6 +3748,7 @@ class ChanStepper:
             "kl_data_check": True,
             "print_warning": False,
             "print_err_time": False,
+            "rhythm_calc_mode": RHYTHM_CALC_MODE_NORMAL,
             # BSP defaults
             "divergence_rate": float("inf"),
             "min_zs_cnt": 1,
@@ -3727,6 +3808,8 @@ class ChanStepper:
 
         self.chan_algo = normalize_chan_algo(cfg_dict.get("chan_algo"))
         cfg_dict["chan_algo"] = self.chan_algo
+        self.rhythm_calc_mode = normalize_rhythm_calc_mode(cfg_dict.get("rhythm_calc_mode"))
+        cfg_dict["rhythm_calc_mode"] = self.rhythm_calc_mode
         self.effective_cfg_dict = cfg_dict.copy()
         chan_cfg_dict = self._cfg_without_chan_algo(cfg_dict)
         cfg = CChanConfig(chan_cfg_dict)
@@ -7621,6 +7704,7 @@ const DEFAULT_CHAN_CONFIG = {
   kl_data_check: true,
   print_warning: false,
   print_err_time: false,
+  rhythm_calc_mode: "normal",
   mean_metrics: "",
   trend_metrics: "",
   macd: { fast: 12, slow: 26, signal: 9 },
@@ -7668,6 +7752,8 @@ const DEFAULT_CHART_CONFIG = {
     fractToBiEnabled: true,
     biToSegEnabled: true,
     segToSegsegEnabled: true,
+    maxLayer: 9,
+    calcMode: "normal",
     group1LineColor: "#9333ea",
     group1LineWidth: 1.2,
     group1LineStyle: "dashed",
@@ -7850,6 +7936,11 @@ function migrateChartConfig(cfg) {
   if (!next.bspSeg) next.bspSeg = {};
   if (!next.bspSegseg) next.bspSegseg = {};
   if (!next.rhythmLine) next.rhythmLine = {};
+  if (!Number.isFinite(Number(next.rhythmLine.maxLayer))) next.rhythmLine.maxLayer = 9;
+  next.rhythmLine.maxLayer = Math.max(0, Math.min(9, Math.floor(Number(next.rhythmLine.maxLayer))));
+  if (!["normal", "transition", "strict1382"].includes(String(next.rhythmLine.calcMode || ""))) {
+    next.rhythmLine.calcMode = "normal";
+  }
   if (!next.rhythmHit) next.rhythmHit = {};
   if (!next.xAxis) next.xAxis = {};
   if (!next.yAxis) next.yAxis = {};
@@ -8535,6 +8626,29 @@ const RHYTHM_LEVEL_ENABLED_KEY = {
   bi: "biToSegEnabled",
   seg: "segToSegsegEnabled",
 };
+const RHYTHM_CALC_MODE_LABELS = {
+  normal: "通用",
+  transition: "过渡",
+  strict1382: "1382严格",
+};
+
+function normalizeRhythmCalcMode(mode) {
+  const text = String(mode || "normal");
+  return Object.prototype.hasOwnProperty.call(RHYTHM_CALC_MODE_LABELS, text) ? text : "normal";
+}
+
+function applyRhythmCalcModeToChanConfig(targetConfig) {
+  const cfg = targetConfig || chanConfig;
+  const rhythmCfg = chartConfig.rhythmLine || DEFAULT_CHART_CONFIG.rhythmLine;
+  cfg.rhythm_calc_mode = normalizeRhythmCalcMode(rhythmCfg.calcMode);
+  return cfg;
+}
+
+function getRhythmMaxLayer() {
+  const cfg = chartConfig.rhythmLine || DEFAULT_CHART_CONFIG.rhythmLine;
+  const n = Math.floor(Number(cfg.maxLayer));
+  return Number.isFinite(n) ? Math.max(0, Math.min(9, n)) : 9;
+}
 
 function getBspConfig(level) {
   const key = BSP_LEVEL_CONFIG_KEY[level] || "bspBi";
@@ -8553,6 +8667,14 @@ function isRhythmLevelEnabled(level) {
   const subKey = RHYTHM_LEVEL_ENABLED_KEY[level];
   if (!subKey) return true;
   return !!cfg[subKey];
+}
+
+function isRhythmLineVisible(line) {
+  if (!line || !isRhythmLevelEnabled(line.level)) return false;
+  const layer = Number.isFinite(Number(line.layer))
+    ? Number(line.layer)
+    : Math.max(0, Number(line.round_current || 0) - Number(line.round_ref || 0));
+  return layer <= getRhythmMaxLayer();
 }
 
 function getRhythmGroupIndex(group) {
@@ -8825,6 +8947,7 @@ function saveChanSettings() {
   
   // Create a deep copy for the final config to be sent to backend
   const finalConfig = JSON.parse(JSON.stringify(chanConfig));
+  applyRhythmCalcModeToChanConfig(finalConfig);
   
   // Post-process list fields
   ["mean_metrics", "trend_metrics"].forEach(k => {
@@ -9089,6 +9212,12 @@ function renderSettingsForm() {
         { label: "分型→笔", subKey: "fractToBiEnabled", type: "checkbox", tip: "是否绘制分型→笔层级的节奏线。" },
         { label: "笔→段", subKey: "biToSegEnabled", type: "checkbox", tip: "是否绘制笔→段层级的节奏线。" },
         { label: "段→2段", subKey: "segToSegsegEnabled", type: "checkbox", tip: "是否绘制段→2段层级的节奏线。" },
+        { label: "显示层级", subKey: "maxLayer", type: "number", min: 0, max: 9, step: 1, tip: "0层只显示 1-0 / 2-0；N层显示 <=N 的所有节奏线，如 2 显示 1-0、1-1、1-2。三层结构共用该开关，保存后立即生效。" },
+        { label: "计算逻辑", subKey: "calcMode", type: "select", options: [
+          { value: "normal", label: "通用" },
+          { value: "transition", label: "过渡" },
+          { value: "strict1382", label: "1382严格" }
+        ], tip: "通用：保留原实现；过渡：当前推进端点不突破前一同向端点；1382严格：在过渡基础上还需达到 1.382 阈值。保存后会重算当前会话。" },
         { label: "节奏线1颜色", subKey: "group1LineColor", type: "color" },
         { label: "节奏线1粗细", subKey: "group1LineWidth", type: "number", min: 0.1, max: 8, step: 0.1 },
         { label: "节奏线1线型", subKey: "group1LineStyle", type: "select", options: [
@@ -9958,6 +10087,7 @@ async function saveSettings() {
   let nextDataFormMode = dataFormConfig.mode;
   let nextDataFormQuantity = dataFormConfig.quantity;
   let nextDataFeedMode = dataFormConfig.feedMode;
+  const prevRhythmCalcMode = normalizeRhythmCalcMode(chartConfig.rhythmLine && chartConfig.rhythmLine.calcMode);
   inputs.forEach(input => {
     const key = input.dataset.key;
     const subkey = input.dataset.subkey;
@@ -10008,10 +10138,19 @@ async function saveSettings() {
         const arr = val.split(",").map(n => parseFloat(n.trim())).filter(n => !isNaN(n));
         val = arr.length > 0 ? arr : null;
       }
+      if (key === "rhythmLine" && subkey === "maxLayer") {
+        val = Math.max(0, Math.min(9, Math.floor(Number(val))));
+      }
+      if (key === "rhythmLine" && subkey === "calcMode") {
+        val = normalizeRhythmCalcMode(val);
+      }
       if (!chartConfig[key]) chartConfig[key] = {};
       chartConfig[key][subkey] = val;
     }
   });
+  applyRhythmCalcModeToChanConfig(chanConfig);
+  const nextRhythmCalcMode = normalizeRhythmCalcMode(chartConfig.rhythmLine && chartConfig.rhythmLine.calcMode);
+  storageSet("chan_logic_config", JSON.stringify(chanConfig));
   dataFormConfig.mode = nextDataFormMode;
   dataFormConfig.quantity = nextDataFormQuantity;
   dataFormConfig.feedMode = nextDataFeedMode;
@@ -10025,6 +10164,13 @@ async function saveSettings() {
   if (typeof chartConfigStore.shared.showBottomBsp !== "boolean") chartConfigStore.shared.showBottomBsp = true;
   storageSet("chan_chart_config", JSON.stringify(chartConfigStore));
   closeSettings();
+  if (prevRhythmCalcMode !== nextRhythmCalcMode) {
+    showAlertAndLog(
+      `节奏线计算逻辑已切换为【${RHYTHM_CALC_MODE_LABELS[nextRhythmCalcMode]}】。\n` +
+      "操作逻辑：保存后会将该模式写入缠论配置，并从第1根K线重算当前会话。\n" +
+      "显示层级只影响前端显示，不改变服务端计算结果。"
+    );
+  }
   if (lastPayload && lastPayload.ready) {
     const n = getRawKlineCount();
     if (isQuantityDataFormMode(dataFormConfig.mode) && n <= 0) {
@@ -10587,6 +10733,17 @@ function getStepForwardMaxFromPayload(payload) {
   return Number.isFinite(n) && n >= 0 ? Math.floor(n) : null;
 }
 
+/** 仅「逐步喂数据」且仍可向前步进时视为正在步进：筹码跟当前步末端 K，十字不裁剪筹码；统一喂数据只用切片游标浏览，十字仍可锚定筹码 */
+function isChipReplayStepping(payload) {
+  if (!payload || !payload.ready) return false;
+  const feed = normalizeDataFeedMode(payload.data_form ? payload.data_form.feed_mode : "step");
+  if (feed !== "step") return false;
+  const si = Number(payload.step_idx);
+  if (!Number.isFinite(si) || si < 0) return false;
+  const maxF = getStepForwardMaxFromPayload(payload);
+  return maxF !== null && maxF > 0;
+}
+
 function updateStepForwardMaxUi(payload) {
   const hint = $("stepNMaxHint");
   if (!hint) return;
@@ -10925,10 +11082,6 @@ canvas.addEventListener("dblclick", (e) => {
   if (lastPayload && lastPayload.ready) {
     if (isDualRuntimeReady()) saveRuntimeState(dualActiveChartId);
     redrawCurrentPayload();
-    if (crosshairEnabled) {
-      centerCrosshairKLineInViewForPayload();
-      redrawCurrentPayload();
-    }
   }
 });
 
@@ -11583,10 +11736,8 @@ window.addEventListener("keydown", (e) => {
           if (isDualRuntimeReady()) {
             saveRuntimeState(dualActiveChartId);
             syncDualCrosshairByTime(lastPayload);
-            centerCrosshairKLineInViewForPayload();
             redrawCurrentPayload();
           } else {
-            centerCrosshairKLineInViewForPayload();
             draw(lastPayload.chart);
           }
         }
@@ -11614,10 +11765,8 @@ window.addEventListener("keydown", (e) => {
           if (isDualRuntimeReady()) {
             saveRuntimeState(dualActiveChartId);
             syncDualCrosshairByTime(lastPayload);
-            centerCrosshairKLineInViewForPayload();
             redrawCurrentPayload();
           } else {
-            centerCrosshairKLineInViewForPayload();
             draw(lastPayload.chart);
           }
         }
@@ -12418,6 +12567,37 @@ function getChipBaseKs(chart) {
   return chart.kline || [];
 }
 
+/** 主图 K 线 bar 映射到筹码底座 ksAll（kline_all 与 kline 的 x 刻度常不一致，须按时间对齐） */
+function mapChartBarToKsAll(bar, ksAll) {
+  if (!bar || !ksAll || ksAll.length === 0) return null;
+  const refT = String(bar.t || "").trim();
+  const cb = chipTimeComparable(refT);
+  if (cb != null) {
+    for (let i = ksAll.length - 1; i >= 0; i--) {
+      if (chipTimeComparable(ksAll[i].t) === cb) return ksAll[i];
+    }
+  }
+  if (refT) {
+    for (let i = ksAll.length - 1; i >= 0; i--) {
+      if (String(ksAll[i].t || "").trim() === refT) return ksAll[i];
+    }
+  }
+  const bx = Number(bar.x);
+  if (Number.isFinite(bx)) {
+    let best = ksAll[0];
+    let bestD = Math.abs(Number(best.x) - bx);
+    for (let i = 1; i < ksAll.length; i++) {
+      const d = Math.abs(Number(ksAll[i].x) - bx);
+      if (d < bestD) {
+        best = ksAll[i];
+        bestD = d;
+      }
+    }
+    if (best && bestD <= 1) return best;
+  }
+  return null;
+}
+
 /** 解析 K 线时间为可比毫秒（UTC）；失败时 chipTimeLe 回退字符串比较。分钟线、混合格式时比纯字符串更稳。 */
 function chipTimeComparable(t) {
   const s = String(t || "").trim();
@@ -12441,16 +12621,20 @@ function chipTimeLe(barTime, refTime) {
 
 function getReferenceKByBounds(chart, xMin, xMax, w) {
   const ksAll = getChipBaseKs(chart);
-  if (ksAll.length === 0) return null;
-  if (!crosshairEnabled || crosshairX === null) return ksAll[ksAll.length - 1];
+  if (!chart || !chart.kline || chart.kline.length === 0) {
+    return ksAll.length > 0 ? ksAll[ksAll.length - 1] : null;
+  }
+  if (!crosshairEnabled || crosshairX === null) {
+    return chart.kline[chart.kline.length - 1];
+  }
   const plotW = Math.max(1, w - PAD_L - PAD_R);
   const clampedX = Math.max(PAD_L, Math.min(w - PAD_R, crosshairX));
   const targetX = xMin + ((clampedX - PAD_L) / plotW) * (xMax - xMin);
-  // 先在筹码底座 ksAll 上吸附：避免仅用 chart.kline 可视集导致与 kline_all 时刻不一致，chipTimeLe 过滤后只剩极少根 K → 筹码「一格」
-  const refFromAll = nearestKByX(ksAll, targetX);
-  if (refFromAll) return refFromAll;
-  const visibleKs = getVisibleKs(chart, xMin, xMax).filter((k) => k.x <= ksAll[ksAll.length - 1].x);
-  return nearestKByX(visibleKs.length > 0 ? visibleKs : ksAll, targetX) || ksAll[ksAll.length - 1];
+  // 十字锚定在主图 kline x 域（与 OHLC/BSP/射线一致）；筹码再在 drawChips 内映射 kline_all
+  const visibleKs = getVisibleKs(chart, xMin, xMax);
+  const klSrc = chart.kline && chart.kline.length > 0 ? chart.kline : visibleKs;
+  const refFromChart = nearestKByX(visibleKs.length > 0 ? visibleKs : klSrc, targetX);
+  return refFromChart || chart.kline[chart.kline.length - 1];
 }
 
 function getReferenceK(chart, s) {
@@ -12517,7 +12701,7 @@ function toScaler(chart, xMin, xMax, dualChartIdHint) {
   }
   if (chartConfig.rhythmLine && chartConfig.rhythmLine.enabled && chart.rhythm_lines) {
     for (const rl of chart.rhythm_lines) {
-      if (!isRhythmLevelEnabled(rl.level)) continue;
+      if (!isRhythmLineVisible(rl)) continue;
       if (!intersects(rl, xMin, xMax)) continue;
       const yVal = Number(rl.y1);
       if (!Number.isFinite(yVal)) continue;
@@ -12863,8 +13047,8 @@ function drawChips(chart, s) {
   const ksAll = getChipBaseKs(chart);
   const visibleKs = s.visibleK || [];
   const latestVisibleK = visibleKs.length > 0 ? visibleKs[visibleKs.length - 1] : ((chart.kline && chart.kline.length > 0) ? chart.kline[chart.kline.length - 1] : null);
-  // 十字开启后无论是否悬停，都按十字参考K联动筹码，避免只显示横线时筹码不跟随。
-  const crossRefK = (crosshairEnabled && crosshairX !== null) ? getReferenceK(chart, s) : null;
+  const stepping = isChipReplayStepping(lastPayload);
+  const crossChipOn = crosshairEnabled && crosshairX !== null && !stepping;
   const refMode = String(chartConfig.chip.peakRefMode || "latest_visible");
   const getTurnRef = (type) => {
     const arr = type === "seg" ? (chart.seg || []) : (chart.bi || []);
@@ -12877,22 +13061,38 @@ function drawChips(chart, s) {
     if (!best) return null;
     return (chart.kline || []).find((k) => k.x === best.x) || null;
   };
-  let refK = crossRefK;
+  let refK = null;
+  let chipCutoffByKsX = false;
+  if (stepping && chart.kline && chart.kline.length > 0) {
+    const tail = chart.kline[chart.kline.length - 1];
+    const mappedTail = mapChartBarToKsAll(tail, ksAll);
+    refK = mappedTail || tail;
+    chipCutoffByKsX = !!mappedTail;
+  } else if (crossChipOn) {
+    const anchorOnChart = getReferenceK(chart, s);
+    if (anchorOnChart) {
+      const mappedCross = mapChartBarToKsAll(anchorOnChart, ksAll);
+      refK = mappedCross || anchorOnChart;
+      chipCutoffByKsX = !!mappedCross;
+    }
+  }
   if (!refK) {
     if (refMode === "seg_turn") refK = getTurnRef("seg");
     else if (refMode === "bi_turn") refK = getTurnRef("bi");
-    if (!refK) refK = latestVisibleK || (ksAll.length > 0 ? ksAll[ksAll.length - 1] : null);
+    if (!refK && latestVisibleK) refK = mapChartBarToKsAll(latestVisibleK, ksAll) || latestVisibleK;
+    if (!refK) refK = ksAll.length > 0 ? ksAll[ksAll.length - 1] : null;
   }
   const refText = `日期:${refK?.t || "-"}`;
   if (ksAll.length === 0 || !refK) return;
   const priceStep = chartConfig.chip.bucketStep || 0.1;
   const stepMul = 1 / priceStep;
   const refT = String(refK.t || "");
-  // 十字模式：按 K 线索引 x 累计至参考柱（与吸附 refK 同源）；非十字仍按时间 chipTimeLe，避免 t 格式与 kline_all 不一致时过滤成单根 → 筹码仅一格
+  // 映射到 kline_all 且 ref 带有效 bar x 时用 x 截止；若 kline_all 全为占位 x（如 -1），x<=rx 会把全集算进来，须改按时间截止
+  const refKX = Number(refK.x);
+  const useXCutoff = chipCutoffByKsX && Number.isFinite(refKX) && refKX >= 0;
   let useKs;
-  if (crosshairEnabled && crosshairX !== null && Number.isFinite(Number(refK.x))) {
-    const rx = Number(refK.x);
-    useKs = ksAll.filter((k) => Number(k.x) <= rx);
+  if (useXCutoff) {
+    useKs = ksAll.filter((k) => Number(k.x) <= refKX);
     if (useKs.length === 0) useKs = ksAll.length ? ksAll.slice(0, 1) : [];
   } else {
     useKs = refT ? ksAll.filter((k) => chipTimeLe(k.t, refT)) : ksAll;
@@ -13557,10 +13757,10 @@ function drawRhythmLines(arr, s) {
   if (!chartConfig.rhythmLine || !chartConfig.rhythmLine.enabled) return;
   // 自定义术语说明：
   // - “推进峰值端点”指与父结构同向推进的子级端点（上升时对应 D/F/H...）。
-  // - line.label_left 是节奏线编号，例如 2_1。
+  // - line.label_left 是节奏线编号，例如 1-0 / 1-1。
   // - line.label_right 是该线复用的回调比例，例如 0.618。
   for (const line of arr || []) {
-    if (!line || !isRhythmLevelEnabled(line.level)) continue;
+    if (!isRhythmLineVisible(line)) continue;
     if (!intersects(line, s.xMin, s.xMax)) continue;
     const visual = getRhythmVisualConfig(line.color_group);
     const x1Val = Math.max(s.xMin, Math.min(s.xMax, Number(line.x1)));
@@ -14044,94 +14244,6 @@ function buildSessionSourceHistoryLine(payload) {
   return `${code}，当前数据源${kt}K线：【${lab}】。${kt}筹码：【${chip}】`;
 }
 
-/** 十字激活后：两图（或单图）视窗以当前锚定 K 的 x 居中，并刷新十字像素坐标 */
-function centerCrosshairKLineInViewForPayload() {
-  const payload = lastPayload;
-  if (!payload || !payload.ready || !crosshairEnabled) return;
-  if (isDualRuntimeReady() && payload.charts) {
-    DUAL_CHART_IDS.forEach((cid) => {
-      const c = payload.charts[cid];
-      const rt = getRuntimeState(cid);
-      if (c && c.kline && c.kline.length > 0) {
-        rt.allXMin = c.kline[0].x;
-        rt.allXMax = c.kline[c.kline.length - 1].x;
-        if (!rt.viewReady || rt.viewXMax <= rt.viewXMin) {
-          rt.viewXMin = rt.allXMin;
-          rt.viewXMax = rt.allXMax;
-          rt.viewReady = true;
-        }
-      }
-    });
-    const activeId = dualActiveChartId === "chart2" ? "chart2" : "chart1";
-    const activeChart = payload.charts[activeId];
-    loadRuntimeState(activeId);
-    const stA = getRuntimeState(activeId);
-    if (!activeChart || !activeChart.kline || activeChart.kline.length === 0) return;
-    const sA = toScaler(activeChart, Math.max(stA.allXMin, stA.viewXMin), stA.viewXMax, activeId);
-    const refK = getReferenceK(activeChart, sA);
-    if (!refK || !refK.t) return;
-    DUAL_CHART_IDS.forEach((chartId) => {
-      const chart = payload.charts[chartId];
-      if (!chart || !chart.kline || chart.kline.length === 0) return;
-      const rt = getRuntimeState(chartId);
-      const nk = findNearestKByTime(chart, refK.t);
-      if (!nk || !Number.isFinite(nk.x)) return;
-      let useSpan = Math.max(2, rt.viewXMax - rt.viewXMin);
-      if (!rt.viewReady || useSpan <= 1) useSpan = Math.max(4, rt.allXMax - rt.allXMin);
-      let newMin = nk.x - useSpan * 0.5;
-      if (newMin < rt.allXMin) newMin = rt.allXMin;
-      let newMax = newMin + useSpan;
-      const rightPad = Math.max(2, Math.round(useSpan * 0.15));
-      const rightBound = rt.allXMax + rightPad;
-      if (newMax > rightBound) {
-        newMax = rightBound;
-        newMin = newMax - useSpan;
-        if (newMin < rt.allXMin) newMin = rt.allXMin;
-      }
-      rt.viewXMin = Math.round(newMin);
-      rt.viewXMax = Math.round(newMax);
-      rt.userAdjustedView = true;
-      rt.viewReady = true;
-      const s2 = toScaler(chart, Math.max(rt.allXMin, rt.viewXMin), rt.viewXMax, chartId);
-      rt.crosshairX = s2.x(nk.x);
-      rt.crosshairY = s2.y(nk.c);
-    });
-    loadRuntimeState(activeId);
-    return;
-  }
-  const ch = payload.chart;
-  if (!ch || !ch.kline || ch.kline.length === 0) return;
-  allXMin = ch.kline[0].x;
-  allXMax = ch.kline[ch.kline.length - 1].x;
-  if (!viewReady || viewXMax <= viewXMin) {
-    viewXMin = allXMin;
-    viewXMax = allXMax;
-    viewReady = true;
-  }
-  const s0 = toScaler(ch, Math.max(allXMin, viewXMin), viewXMax);
-  const refK = getReferenceK(ch, s0);
-  if (!refK || !Number.isFinite(refK.x)) return;
-  let useSpan = Math.max(2, viewXMax - viewXMin);
-  if (!viewReady || useSpan <= 1) useSpan = Math.max(4, allXMax - allXMin);
-  let newMin = refK.x - useSpan * 0.5;
-  if (newMin < allXMin) newMin = allXMin;
-  let newMax = newMin + useSpan;
-  const rightPad = Math.max(2, Math.round(useSpan * 0.15));
-  const rightBound = allXMax + rightPad;
-  if (newMax > rightBound) {
-    newMax = rightBound;
-    newMin = newMax - useSpan;
-    if (newMin < allXMin) newMin = allXMin;
-  }
-  viewXMin = Math.round(newMin);
-  viewXMax = Math.round(newMax);
-  userAdjustedView = true;
-  viewReady = true;
-  const s2 = toScaler(ch, Math.max(allXMin, viewXMin), viewXMax);
-  crosshairX = s2.x(refK.x);
-  crosshairY = s2.y(refK.c);
-}
-
 function buildPaneTitle(payload, chartId) {
   const name = String((payload && payload.name) || "").trim();
   const code = String((payload && payload.code) || "").trim();
@@ -14546,6 +14658,7 @@ $("btnInit").onclick = async () => {
   initBtn.innerHTML = "加载中...";
   try {
     const processedConfig = JSON.parse(JSON.stringify(chanConfig));
+    applyRhythmCalcModeToChanConfig(processedConfig);
     ["mean_metrics", "trend_metrics"].forEach(k => {
       if (typeof processedConfig[k] === "string") {
         processedConfig[k] = processedConfig[k].split(/[,，\s]+/).map(v => parseInt(v.trim())).filter(v => !isNaN(v));
@@ -15127,6 +15240,7 @@ if ($("btChartMode")) {
 
 function _processedChanConfigForApi() {
   const processedConfig = JSON.parse(JSON.stringify(chanConfig));
+  applyRhythmCalcModeToChanConfig(processedConfig);
   ["mean_metrics", "trend_metrics"].forEach((k) => {
     if (typeof processedConfig[k] === "string") {
       processedConfig[k] = processedConfig[k]
