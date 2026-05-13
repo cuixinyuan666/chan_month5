@@ -4273,7 +4273,16 @@ class ChanStepper:
         return payload
 
 
-def _stepper_for_kline_data_chart_id(chart_id: str) -> ChanStepper:
+def _stepper_for_session_kline_view(chart_id: str, layer_k_type: Optional[str] = None) -> ChanStepper:
+    """查看数据：双图按 chart_id；多周期单图可按 layer_k_type 选各周期步进器。"""
+    lk = str(layer_k_type or "").strip().lower()
+    cm = normalize_replay_chart_mode(getattr(APP_STATE, "chart_mode", "single"))
+    if cm == "multi" and lk:
+        want = parse_k_type(lk)
+        for st in [APP_STATE.stepper, *(getattr(APP_STATE, "multi_steppers", None) or [])]:
+            if st is not None and getattr(st, "k_type", None) == want:
+                return st
+        raise ValueError(f"当前会话未包含周期「{lk}」的 K 线缓存")
     cid = str(chart_id or "active").strip().lower()
     if cid == "chart2":
         if APP_STATE.chart_mode == "dual" and APP_STATE.stepper2 is not None:
@@ -7150,7 +7159,7 @@ HTML = r"""
           </select>
           <span class="tip-icon" data-tip="单周期=原模式；两周期=上下两窗；多周期单图=多周期叠在同一主图（仅离线分笔，最细勾选周期步进，粗周期防未来）。后两者互斥。"></span>
         </div>
-        <div class="row cfg-editable">
+        <div class="row cfg-editable" id="kType1Row">
           <label>周期类型1</label>
           <select id="kType">
             <option value="1min">1分钟</option>
@@ -7186,20 +7195,23 @@ HTML = r"""
         </div>
         <div class="row cfg-editable" id="kTypesMultiRow" style="display:none;">
           <label style="align-self:flex-start; margin-top:4px;">叠加周期</label>
-          <div style="flex:2; display:flex; flex-wrap:wrap; gap:4px 10px; align-items:center; min-width:0;">
-            <label style="display:inline-flex; align-items:center; gap:3px; white-space:nowrap;"><input type="checkbox" class="kTypesMultiCb" value="1min" />1分</label>
-            <label style="display:inline-flex; align-items:center; gap:3px; white-space:nowrap;"><input type="checkbox" class="kTypesMultiCb" value="3min" />3分</label>
-            <label style="display:inline-flex; align-items:center; gap:3px; white-space:nowrap;"><input type="checkbox" class="kTypesMultiCb" value="5min" />5分</label>
-            <label style="display:inline-flex; align-items:center; gap:3px; white-space:nowrap;"><input type="checkbox" class="kTypesMultiCb" value="15min" />15分</label>
-            <label style="display:inline-flex; align-items:center; gap:3px; white-space:nowrap;"><input type="checkbox" class="kTypesMultiCb" value="30min" />30分</label>
-            <label style="display:inline-flex; align-items:center; gap:3px; white-space:nowrap;"><input type="checkbox" class="kTypesMultiCb" value="60min" />60分</label>
-            <label style="display:inline-flex; align-items:center; gap:3px; white-space:nowrap;"><input type="checkbox" class="kTypesMultiCb" value="daily" />日</label>
-            <label style="display:inline-flex; align-items:center; gap:3px; white-space:nowrap;"><input type="checkbox" class="kTypesMultiCb" value="weekly" />周</label>
-            <label style="display:inline-flex; align-items:center; gap:3px; white-space:nowrap;"><input type="checkbox" class="kTypesMultiCb" value="monthly" />月</label>
-            <label style="display:inline-flex; align-items:center; gap:3px; white-space:nowrap;"><input type="checkbox" class="kTypesMultiCb" value="quarterly" />季</label>
-            <label style="display:inline-flex; align-items:center; gap:3px; white-space:nowrap;"><input type="checkbox" class="kTypesMultiCb" value="yearly" />年</label>
+          <div id="kTypesMultiCbWrap" style="flex:2; display:flex; flex-direction:column; gap:4px; min-width:0;">
+            <div style="display:flex; flex-wrap:wrap; gap:4px 10px; align-items:center;">
+            <label class="kTypesMultiLbl" style="display:inline-flex; align-items:center; gap:3px; white-space:nowrap;" data-kt="1min"><input type="checkbox" class="kTypesMultiCb" value="1min" /><span class="kTypesMultiTxt">1分</span></label>
+            <label class="kTypesMultiLbl" style="display:inline-flex; align-items:center; gap:3px; white-space:nowrap;" data-kt="3min"><input type="checkbox" class="kTypesMultiCb" value="3min" /><span class="kTypesMultiTxt">3分</span></label>
+            <label class="kTypesMultiLbl" style="display:inline-flex; align-items:center; gap:3px; white-space:nowrap;" data-kt="5min"><input type="checkbox" class="kTypesMultiCb" value="5min" /><span class="kTypesMultiTxt">5分</span></label>
+            <label class="kTypesMultiLbl" style="display:inline-flex; align-items:center; gap:3px; white-space:nowrap;" data-kt="15min"><input type="checkbox" class="kTypesMultiCb" value="15min" /><span class="kTypesMultiTxt">15分</span></label>
+            <label class="kTypesMultiLbl" style="display:inline-flex; align-items:center; gap:3px; white-space:nowrap;" data-kt="30min"><input type="checkbox" class="kTypesMultiCb" value="30min" /><span class="kTypesMultiTxt">30分</span></label>
+            <label class="kTypesMultiLbl" style="display:inline-flex; align-items:center; gap:3px; white-space:nowrap;" data-kt="60min"><input type="checkbox" class="kTypesMultiCb" value="60min" /><span class="kTypesMultiTxt">60分</span></label>
+            <label class="kTypesMultiLbl" style="display:inline-flex; align-items:center; gap:3px; white-space:nowrap;" data-kt="daily"><input type="checkbox" class="kTypesMultiCb" value="daily" /><span class="kTypesMultiTxt">日</span></label>
+            <label class="kTypesMultiLbl" style="display:inline-flex; align-items:center; gap:3px; white-space:nowrap;" data-kt="weekly"><input type="checkbox" class="kTypesMultiCb" value="weekly" /><span class="kTypesMultiTxt">周</span></label>
+            <label class="kTypesMultiLbl" style="display:inline-flex; align-items:center; gap:3px; white-space:nowrap;" data-kt="monthly"><input type="checkbox" class="kTypesMultiCb" value="monthly" /><span class="kTypesMultiTxt">月</span></label>
+            <label class="kTypesMultiLbl" style="display:inline-flex; align-items:center; gap:3px; white-space:nowrap;" data-kt="quarterly"><input type="checkbox" class="kTypesMultiCb" value="quarterly" /><span class="kTypesMultiTxt">季</span></label>
+            <label class="kTypesMultiLbl" style="display:inline-flex; align-items:center; gap:3px; white-space:nowrap;" data-kt="yearly"><input type="checkbox" class="kTypesMultiCb" value="yearly" /><span class="kTypesMultiTxt">年</span></label>
+            </div>
+            <div class="muted" style="font-size:11px;">多周期叠画时可用键盘 <b>1–5</b> 切换第 1–5 个勾选周期（按上表从左到右顺序）的 K 线/缠论线显示，不改变已选周期。</div>
           </div>
-          <span class="tip-icon" data-tip="多周期单图：须至少勾选 2 个周期；其中最细的勾选周期为步进驱动。仅支持离线分笔数据形式。筹码仅跟驱动周期。指标回测页不支持本模式。"></span>
+          <span class="tip-icon" data-tip="多周期单图：须至少勾选 2 个周期；其中最细的勾选周期为步进驱动。左侧「周期类型1」行在本模式下隐藏，仅在此勾选叠加周期。仅支持离线分笔数据。筹码仅跟驱动周期。指标回测页不支持本模式。"></span>
         </div>
         <div class="row cfg-editable" id="dualLayoutRow" style="display:none;">
           <label>排列方式</label>
@@ -7446,6 +7458,10 @@ HTML = r"""
                 <option value="chart2">周期 2（图2）</option>
                 <option value="active">当前激活图</option>
               </select>
+            </span>
+            <span id="klineDataMultiWrap" style="display:none;">
+              <label for="klineDataLayerKt">查看周期</label>
+              <select id="klineDataLayerKt"></select>
             </span>
             <span>
               <label for="klineDataView">内容</label>
@@ -8167,6 +8183,15 @@ function migrateChartConfig(cfg) {
 }
 
 let savedChartConfig = ensureObject(safeJsonParse(storageGet("chan_chart_config"), {}), {});
+/** 多周期单图：各 API 周期键一套「缠论线样式」局部配置（与 chart1/chart2 主配置并列持久化） */
+function cloneMultiPerKFromRaw(raw) {
+  const mp = ensureObject(raw.multiPerK, {});
+  const out = {};
+  Object.keys(mp).forEach((kt) => {
+    out[kt] = JSON.parse(JSON.stringify(ensureObject(mp[kt], {})));
+  });
+  return out;
+}
 function buildChartConfigStore(rawCfg) {
   const raw = ensureObject(rawCfg, {});
   // 兼容旧版：旧版直接是单套配置
@@ -8184,6 +8209,7 @@ function buildChartConfigStore(rawCfg) {
         chart1: migratedSingle,
         chart2: deepMerge(JSON.parse(JSON.stringify(DEFAULT_CHART_CONFIG)), migrateChartConfig(raw)),
       },
+      multiPerK: cloneMultiPerKFromRaw(raw),
     };
   }
   const shared = ensureObject(raw.shared, {});
@@ -8199,10 +8225,27 @@ function buildChartConfigStore(rawCfg) {
       chart1: deepMerge(JSON.parse(JSON.stringify(DEFAULT_CHART_CONFIG)), migrateChartConfig(ensureObject(perChart.chart1, {}))),
       chart2: deepMerge(JSON.parse(JSON.stringify(DEFAULT_CHART_CONFIG)), migrateChartConfig(ensureObject(perChart.chart2, {}))),
     },
+    multiPerK: cloneMultiPerKFromRaw(raw),
   };
 }
 let chartConfigStore = buildChartConfigStore(savedChartConfig);
 let chartConfig = chartConfigStore.perChart.chart1;
+/** 多周期叠层绘制时临时覆盖的样式对象（与 chartConfig 结构一致） */
+let drawStyleCtx = null;
+function activeDrawStyle() {
+  return drawStyleCtx || chartConfig;
+}
+/** 合并默认 + 持久化 multiPerK[kt]；合并 K 线框开关/样式跟主图 chartConfig（避免叠层默认强制启用线框） */
+function getMultiLayerDrawConfig(kt) {
+  const base = JSON.parse(JSON.stringify(DEFAULT_CHART_CONFIG));
+  const raw = (chartConfigStore.multiPerK && chartConfigStore.multiPerK[kt]) || {};
+  const merged = deepMerge(base, JSON.parse(JSON.stringify(raw)));
+  merged.klineCombineFrame = deepMerge(
+    JSON.parse(JSON.stringify(merged.klineCombineFrame || {})),
+    JSON.parse(JSON.stringify(chartConfig.klineCombineFrame || {}))
+  );
+  return merged;
+}
 const DATA_FORM_DEFAULT = { mode: "traditional", quantity: 1, feedMode: "step" };
 let dataFormConfig = { ...DATA_FORM_DEFAULT };
 
@@ -8258,7 +8301,8 @@ const DEFAULT_SESSION_CONFIG = {
   stepN: "5",
   kType: "daily",
   chartMode: "single",
-  kTypesMulti: ["daily", "weekly"],
+  kTypesMulti: ["1min", "3min"],
+  multiLayerHidden: [],
   kType2: "weekly",
   dualLayout: "vertical",
   dualSplitRatio1: 0.5,
@@ -8721,22 +8765,55 @@ function collectKTypesMultiSelected() {
   return MULTI_KTYPE_ORDER.filter((k) => picked.includes(k));
 }
 
+function collectKTypesMultiOrdered() {
+  return collectKTypesMultiSelected();
+}
+
+const KTYPE_MULTI_SHORT = {
+  "1min": "1分", "3min": "3分", "5min": "5分", "15min": "15分", "30min": "30分", "60min": "60分",
+  "daily": "日", "weekly": "周", "monthly": "月", "quarterly": "季", "yearly": "年",
+};
+
+/** 多周期勾选区：按固定顺序给已勾选项加 1. 2. 前缀（与快捷键序号一致） */
+function refreshKTypesMultiOrderLabels() {
+  const row = $("kTypesMultiRow");
+  if (!row) return;
+  row.querySelectorAll(".kTypesMultiLbl").forEach((lab) => {
+    const kt = lab.getAttribute("data-kt") || "";
+    const span = lab.querySelector(".kTypesMultiTxt");
+    if (span) span.textContent = KTYPE_MULTI_SHORT[kt] || kt;
+  });
+  const picked = MULTI_KTYPE_ORDER.filter((k) => {
+    const cb = row.querySelector(`input.kTypesMultiCb[value="${k}"]`);
+    return cb && cb.checked;
+  });
+  picked.forEach((k, i) => {
+    const span = row.querySelector(`.kTypesMultiLbl[data-kt="${k}"] .kTypesMultiTxt`);
+    if (span) span.textContent = `${i + 1}.${KTYPE_MULTI_SHORT[k] || k}`;
+  });
+}
+
 function applyKTypesMultiToDomFromList(list) {
   const row = $("kTypesMultiRow");
   if (!row) return;
   let arr = Array.isArray(list) ? list.filter((k) => typeof k === "string") : [];
   arr = MULTI_KTYPE_ORDER.filter((k) => arr.includes(k));
-  if (arr.length < 2) arr = ["daily", "weekly"];
+  if (arr.length < 2) arr = ["1min", "3min"];
   const set = new Set(arr);
   row.querySelectorAll("input.kTypesMultiCb[type=\"checkbox\"]").forEach((cb) => {
     cb.checked = set.has(cb.value);
   });
+  if (Array.isArray(sessionConfig.multiLayerHidden)) {
+    sessionConfig.multiLayerHidden = sessionConfig.multiLayerHidden.filter((k) => set.has(k));
+  }
+  refreshKTypesMultiOrderLabels();
 }
 
 function syncChartModeOptionRows() {
   const cm = $("chartMode") ? String($("chartMode").value || "single") : "single";
   const dual = cm === "dual";
   const multi = cm === "multi";
+  if ($("kType1Row")) $("kType1Row").style.display = multi ? "none" : "";
   if ($("kType2Row")) $("kType2Row").style.display = dual ? "" : "none";
   if ($("dualLayoutRow")) $("dualLayoutRow").style.display = dual ? "" : "none";
   if ($("dualSplitRow")) $("dualSplitRow").style.display = dual ? "" : "none";
@@ -8744,6 +8821,7 @@ function syncChartModeOptionRows() {
 }
 
 function saveSessionConfig() {
+  const prevHid = Array.isArray(sessionConfig.multiLayerHidden) ? sessionConfig.multiLayerHidden.slice() : [];
   sessionConfig = {
     code: $("code").value,
     begin: $("begin").value,
@@ -8765,13 +8843,31 @@ function saveSessionConfig() {
     kType2: $("kType2") ? $("kType2").value : $("kType").value,
     dualLayout: $("dualLayout") ? $("dualLayout").value : "vertical",
     dualSplitRatio1: getDualSplitRatio1(),
-    activeChartId: String(lastPayload && lastPayload.active_chart_id ? lastPayload.active_chart_id : "chart1"),
+    activeChartId: String(
+      (lastPayload && lastPayload.ready && lastPayload.active_chart_id)
+        ? lastPayload.active_chart_id
+        : (sessionConfig.activeChartId || dualActiveChartId || "chart1")
+    ),
+    multiLayerHidden: prevHid,
     // 保存数据形式与喂数据方式
     dataFormMode: normalizeDataFormMode(dataFormConfig.mode),
     dataFormQuantity: clampDataFormQuantity(dataFormConfig.quantity, dataFormConfig.quantity || 1),
     dataFeedMode: normalizeDataFeedMode(dataFormConfig.feedMode),
   };
   storageSet("chan_session_config", JSON.stringify(sessionConfig));
+}
+
+/** 将内存中的 chartConfig 写回 localStorage（重新训练前调用，避免未点「保存」时丢失） */
+function persistChartConfigStoreNow() {
+  const aid = (lastPayload && lastPayload.ready && String(lastPayload.active_chart_id) === "chart2")
+    ? "chart2"
+    : (String(sessionConfig.activeChartId || dualActiveChartId || "chart1") === "chart2" ? "chart2" : "chart1");
+  chartConfigStore.perChart[aid] = JSON.parse(JSON.stringify(chartConfig));
+  chartConfigStore.shared.theme = chartConfig.theme;
+  chartConfigStore.shared.crosshair = JSON.parse(JSON.stringify(chartConfig.crosshair || chartConfigStore.shared.crosshair));
+  if ($("chartMode")) chartConfigStore.shared.mode = $("chartMode").value;
+  if (!chartConfigStore.multiPerK) chartConfigStore.multiPerK = {};
+  storageSet("chan_chart_config", JSON.stringify(chartConfigStore));
 }
 
 function loadSessionConfig() {
@@ -8802,6 +8898,7 @@ function loadSessionConfig() {
       Number.isFinite(Number(sessionConfig.dataFormQuantity)) ? Number(sessionConfig.dataFormQuantity) : 1
     );
     dataFormConfig.feedMode = normalizeDataFeedMode(sessionConfig.dataFeedMode);
+    if (!Array.isArray(sessionConfig.multiLayerHidden)) sessionConfig.multiLayerHidden = [];
     applyKTypesMultiToDomFromList(sessionConfig.kTypesMulti);
     syncChartModeOptionRows();
 }
@@ -8861,7 +8958,7 @@ function applyRhythmCalcModeToChanConfig(targetConfig) {
 }
 
 function getRhythmMaxLayer() {
-  const cfg = chartConfig.rhythmLine || DEFAULT_CHART_CONFIG.rhythmLine;
+  const cfg = activeDrawStyle().rhythmLine || DEFAULT_CHART_CONFIG.rhythmLine;
   const n = Math.floor(Number(cfg.maxLayer));
   return Number.isFinite(n) ? Math.max(0, Math.min(9, n)) : 9;
 }
@@ -8879,7 +8976,7 @@ function getBspDisplayLabel(p) {
 }
 
 function isRhythmLevelEnabled(level) {
-  const cfg = chartConfig.rhythmLine || DEFAULT_CHART_CONFIG.rhythmLine;
+  const cfg = activeDrawStyle().rhythmLine || DEFAULT_CHART_CONFIG.rhythmLine;
   const subKey = RHYTHM_LEVEL_ENABLED_KEY[level];
   if (!subKey) return true;
   return !!cfg[subKey];
@@ -8900,7 +8997,7 @@ function getRhythmGroupIndex(group) {
 }
 
 function getRhythmVisualConfig(group) {
-  const cfg = chartConfig.rhythmLine || DEFAULT_CHART_CONFIG.rhythmLine;
+  const cfg = activeDrawStyle().rhythmLine || DEFAULT_CHART_CONFIG.rhythmLine;
   const rawIdx = getRhythmGroupIndex(group);
   const cycleIdx = ((rawIdx - 1) % 5) + 1;
   const growth = Math.max(0, rawIdx - 5);
@@ -9235,6 +9332,73 @@ function closeSystemSettings() {
 
 function isSystemSettingsOpen() {
   return $("systemSettingsModal").classList.contains("show");
+}
+
+const MULTI_LAYER_STYLE_KEYS = new Set(["fx", "fract", "bi", "seg", "segseg", "fractZs", "biZs", "segZs", "segsegZs", "candle", "bspBi", "bspSeg", "bspSegseg", "rhythmLine", "rhythmHit", "klineCombineFrame"]);
+
+/** 图表显示设置：单品种多周期单图下按周期覆盖「缠论线/K 线蜡烛」等样式 */
+function appendMultiLayerPerKStyleSections(container, sections, buildLabelHtml) {
+  if (!$("chartMode") || $("chartMode").value !== "multi") return;
+  const kts = collectKTypesMultiSelected();
+  if (!kts.length) return;
+  const secs = sections.filter((s) => MULTI_LAYER_STYLE_KEYS.has(s.key));
+  const wrap = document.createElement("div");
+  wrap.className = "settingsSection";
+  wrap.style.background = "rgba(30, 64, 175, 0.09)";
+  wrap.innerHTML = `<div class="settingsSectionTitle" style="color:#1d4ed8">单品种多周期单图 · 各周期样式</div>
+    <div class="muted" style="margin:0 0 10px 4px;font-size:12px;">以下为当前勾选的叠加周期分别配置（持久化在 chan_chart_config.multiPerK）。未填项使用默认值。全局「分型/笔/段」等节仍作用于单周期与双周期图。</div>`;
+  container.appendChild(wrap);
+  kts.forEach((kt) => {
+    const det = document.createElement("details");
+    det.style.margin = "6px 0";
+    det.open = false;
+    const sm = document.createElement("summary");
+    sm.style.cursor = "pointer";
+    sm.style.fontWeight = "600";
+    sm.textContent = `${getKTypeLabelText(kt)}（${kt}）`;
+    det.appendChild(sm);
+    if (!chartConfigStore.multiPerK || typeof chartConfigStore.multiPerK !== "object") chartConfigStore.multiPerK = {};
+    if (!chartConfigStore.multiPerK[kt] || typeof chartConfigStore.multiPerK[kt] !== "object") chartConfigStore.multiPerK[kt] = {};
+    const layerMap = chartConfigStore.multiPerK[kt];
+    secs.forEach((sec) => {
+      const div = document.createElement("div");
+      div.className = "settingsSection";
+      div.style.background = sec.bgColor;
+      div.innerHTML = `<div class="settingsSectionTitle" style="color:${sec.color}">${sec.title} · ${getKTypeLabelText(kt)}</div>`;
+      const grid = document.createElement("div");
+      grid.className = "settingsGrid";
+      const sectionCfg = ensureObject(layerMap[sec.key], {});
+      sec.items.forEach((item) => {
+        let val = sectionCfg[item.subKey];
+        if (val === undefined || val === null) {
+          const d0 = DEFAULT_CHART_CONFIG[sec.key] || {};
+          val = d0[item.subKey];
+        }
+        const itemDiv = document.createElement("div");
+        itemDiv.className = "settingsItem";
+        if (item.type === "select") {
+          const opts = (item.options || []).map((o) => `<option value="${o.value}" ${String(val) === String(o.value) ? "selected" : ""}>${o.label}</option>`).join("");
+          itemDiv.innerHTML = `<label>${buildLabelHtml(item)}</label><select data-multi-kt="${kt}" data-key="${sec.key}" data-subkey="${item.subKey}">${opts}</select>`;
+        } else if (item.type === "checkbox") {
+          itemDiv.innerHTML = `<label style="flex-direction:row;align-items:center;display:flex;"><input type="checkbox" data-multi-kt="${kt}" data-key="${sec.key}" data-subkey="${item.subKey}" ${val ? "checked" : ""} style="width:auto;margin-right:8px;">${item.label}</label>`;
+        } else if (item.type === "color") {
+          const safeVal = typeof val === "string" ? val : "#000000";
+          itemDiv.innerHTML = `<label>${buildLabelHtml(item)}</label><div style="display:flex;align-items:center;gap:8px;"><input type="color" value="${safeVal.startsWith("#") ? safeVal : "#000000"}" data-multi-kt="${kt}" data-key="${sec.key}" data-subkey="${item.subKey}" style="width:40px;height:24px;padding:0;border:none;"><input type="text" value="${safeVal}" data-multi-kt="${kt}" data-key="${sec.key}" data-subkey="${item.subKey}-text" style="flex:1;height:24px;font-size:12px;font-family:monospace;"></div>`;
+        } else if (item.type === "number") {
+          const mn = item.min != null ? item.min : "";
+          const mx = item.max != null ? item.max : "";
+          const st = item.step != null ? item.step : "";
+          itemDiv.innerHTML = `<label>${buildLabelHtml(item)}</label><input type="number" data-multi-kt="${kt}" data-key="${sec.key}" data-subkey="${item.subKey}" min="${mn}" max="${mx}" step="${st}" value="${val != null ? val : ""}">`;
+        } else if (item.type === "text") {
+          itemDiv.innerHTML = `<label>${buildLabelHtml(item)}</label><input type="text" data-multi-kt="${kt}" data-key="${sec.key}" data-subkey="${item.subKey}" value="${val != null ? String(val) : ""}" placeholder="${item.placeholder || ""}">`;
+        }
+        grid.appendChild(itemDiv);
+      });
+      div.appendChild(grid);
+      det.appendChild(div);
+    });
+    wrap.appendChild(det);
+  });
 }
 
 function renderSettingsForm() {
@@ -10023,6 +10187,7 @@ function renderSettingsForm() {
     div.appendChild(grid);
     container.appendChild(div);
   });
+  appendMultiLayerPerKStyleSections(container, sections, buildLabelHtml);
   initTooltips();
 }
 
@@ -10317,6 +10482,24 @@ async function saveSettings() {
   inputs.forEach(input => {
     const key = input.dataset.key;
     const subkey = input.dataset.subkey;
+    const mkt = input.dataset.multiKt;
+    if (mkt && key && subkey && !subkey.endsWith("-text")) {
+      let val;
+      if (input.type === "checkbox") val = input.checked;
+      else if (input.type === "number") val = parseFloat(input.value);
+      else val = input.value;
+      if (subkey === "dash" && typeof val === "string") {
+        const arr = val.split(",").map((n) => parseFloat(n.trim())).filter((n) => !Number.isNaN(n));
+        val = arr.length > 0 ? arr : null;
+      }
+      if (key === "rhythmLine" && subkey === "maxLayer") val = Math.max(0, Math.min(9, Math.floor(Number(val))));
+      if (key === "rhythmLine" && subkey === "calcMode") val = normalizeRhythmCalcMode(val);
+      if (!chartConfigStore.multiPerK || typeof chartConfigStore.multiPerK !== "object") chartConfigStore.multiPerK = {};
+      if (!chartConfigStore.multiPerK[mkt] || typeof chartConfigStore.multiPerK[mkt] !== "object") chartConfigStore.multiPerK[mkt] = {};
+      if (!chartConfigStore.multiPerK[mkt][key]) chartConfigStore.multiPerK[mkt][key] = {};
+      chartConfigStore.multiPerK[mkt][key][subkey] = val;
+      return;
+    }
     if (!key || !subkey || subkey.endsWith("-text")) return;
     
     let val;
@@ -10374,6 +10557,20 @@ async function saveSettings() {
       chartConfig[key][subkey] = val;
     }
   });
+  $("settingsContent").querySelectorAll('input[type="text"][data-multi-kt]').forEach((textInput) => {
+    const sk = textInput.dataset.subkey || "";
+    if (!sk.endsWith("-text")) return;
+    const mainKey = sk.slice(0, -5);
+    const mkt = textInput.dataset.multiKt;
+    const key = textInput.dataset.key;
+    if (!mkt || !key) return;
+    const col = textInput.parentElement && textInput.parentElement.querySelector(`input[type="color"][data-multi-kt="${mkt}"][data-key="${key}"][data-subkey="${mainKey}"]`);
+    const v = (textInput.value && String(textInput.value).trim()) || (col && col.value) || "#000000";
+    if (!chartConfigStore.multiPerK || typeof chartConfigStore.multiPerK !== "object") chartConfigStore.multiPerK = {};
+    if (!chartConfigStore.multiPerK[mkt]) chartConfigStore.multiPerK[mkt] = {};
+    if (!chartConfigStore.multiPerK[mkt][key]) chartConfigStore.multiPerK[mkt][key] = {};
+    chartConfigStore.multiPerK[mkt][key][mainKey] = v;
+  });
   applyRhythmCalcModeToChanConfig(chanConfig);
   const nextRhythmCalcMode = normalizeRhythmCalcMode(chartConfig.rhythmLine && chartConfig.rhythmLine.calcMode);
   storageSet("chan_logic_config", JSON.stringify(chanConfig));
@@ -10382,7 +10579,9 @@ async function saveSettings() {
   dataFormConfig.feedMode = nextDataFeedMode;
   // 数据形式配置单独持久化，避免刷新后丢失选择
   saveSessionConfig();
-  const activeCfgKey = (lastPayload && String(lastPayload.active_chart_id) === "chart2") ? "chart2" : "chart1";
+  const activeCfgKey = (lastPayload && lastPayload.ready && String(lastPayload.active_chart_id) === "chart2")
+    ? "chart2"
+    : (String(sessionConfig.activeChartId || dualActiveChartId || "chart1") === "chart2" ? "chart2" : "chart1");
   chartConfigStore.perChart[activeCfgKey] = JSON.parse(JSON.stringify(chartConfig));
   chartConfigStore.shared.theme = chartConfig.theme;
   chartConfigStore.shared.crosshair = JSON.parse(JSON.stringify(chartConfig.crosshair || chartConfigStore.shared.crosshair));
@@ -12306,16 +12505,27 @@ $("btnMsgHistoryClear").onclick = () => {
 };
 
 function syncKlineDataChartSelectVisibility() {
-  const wrap = $("klineDataChartWrap");
+  const wrapDual = $("klineDataChartWrap");
+  const wrapMulti = $("klineDataMultiWrap");
   const sel = $("klineDataChartId");
-  if (!wrap || !sel) return;
+  const selM = $("klineDataLayerKt");
   const dual = lastPayload && String(lastPayload.chart_mode || "") === "dual";
-  wrap.style.display = dual ? "inline" : "none";
+  const multi = lastPayload && String(lastPayload.chart_mode || "") === "multi";
+  if (wrapDual) wrapDual.style.display = dual ? "inline" : "none";
+  if (wrapMulti) wrapMulti.style.display = multi ? "inline" : "none";
+  if (!sel) return;
   if (dual && lastPayload && lastPayload.active_chart_id) {
     const ac = String(lastPayload.active_chart_id) === "chart2" ? "chart2" : "chart1";
     sel.value = ac;
   } else {
     sel.value = "chart1";
+  }
+  if (multi && selM && lastPayload && Array.isArray(lastPayload.k_types_multi)) {
+    const ordered = MULTI_KTYPE_ORDER.filter((k) => lastPayload.k_types_multi.includes(k));
+    const cur = selM.value;
+    selM.innerHTML = ordered.map((k) => `<option value="${k}">${getKTypeLabelText(k)}（${k}）</option>`).join("");
+    if (cur && ordered.includes(cur)) selM.value = cur;
+    else if (ordered[0]) selM.value = ordered[0];
   }
 }
 
@@ -12357,9 +12567,13 @@ async function loadKlineDataView() {
   window._klineDataViewLastJson = "";
   const chartId = ($("klineDataChartId") && $("klineDataChartId").value) || "active";
   const view = ($("klineDataView") && $("klineDataView").value) || "kline";
+  const layerKt = ($("klineDataLayerKt") && $("klineDataLayerKt").value) || "";
+  const multi = lastPayload && String(lastPayload.chart_mode || "") === "multi";
   try {
-    const data = await api("/api/session_kline_view", { chart_id: chartId, view });
-    meta.textContent = `代码 ${data.code || "-"}　周期 ${data.k_type || "-"}　图表 ${data.chart_id || "-"}　共 ${data.bar_count != null ? data.bar_count : "-"} 根`;
+    const body = { chart_id: chartId, view };
+    if (multi && layerKt) body.layer_k_type = layerKt;
+    const data = await api("/api/session_kline_view", body);
+    meta.textContent = `代码 ${data.code || "-"}　周期 ${data.k_type || "-"}${data.layer_k_type ? `（查看层 ${data.layer_k_type}）` : ""}　图表 ${data.chart_id || "-"}　共 ${data.bar_count != null ? data.bar_count : "-"} 根`;
     renderKlineDataTable(data.rows || []);
     window._klineDataViewLastJson = JSON.stringify(data.rows || [], null, 0);
   } catch (e) {
@@ -12383,6 +12597,7 @@ if ($("btnKlineDataClose")) $("btnKlineDataClose").onclick = () => closeKlineDat
 if ($("btnKlineDataOk")) $("btnKlineDataOk").onclick = () => closeKlineDataModal();
 if ($("btnKlineDataRefresh")) $("btnKlineDataRefresh").onclick = () => loadKlineDataView();
 if ($("klineDataChartId")) $("klineDataChartId").onchange = () => loadKlineDataView();
+if ($("klineDataLayerKt")) $("klineDataLayerKt").onchange = () => loadKlineDataView();
 if ($("klineDataView")) $("klineDataView").onchange = () => loadKlineDataView();
 if ($("btnKlineDataCopy")) {
   $("btnKlineDataCopy").onclick = async () => {
@@ -13599,11 +13814,11 @@ function drawCandles(chart, s, paintOpts = {}) {
   const ks = getVisibleKs(chart, s.xMin, s.xMax);
   const driverKl = paintOpts.driverKlineForOverlaySpan;
   const spanOverlay = !!(paintOpts.overlaySpanCandles && Array.isArray(driverKl) && driverKl.length > 0);
-  const upS = getCfgColor(chartConfig.candle.upColor);
-  const dnS = getCfgColor(chartConfig.candle.downColor);
+  const upS = getCfgColor(activeDrawStyle().candle.upColor);
+  const dnS = getCfgColor(activeDrawStyle().candle.downColor);
   const upF = cssVar("--candleUpFill", "rgba(239,68,68,0.12)");
   const dnF = cssVar("--candleDownFill", "rgba(34,197,94,0.75)");
-  const lw = Math.max(1, Number(chartConfig.candle.width) || 1);
+  const lw = Math.max(1, Number(activeDrawStyle().candle.width) || 1);
 
   if (spanOverlay) {
     const fullKl = chart.kline || [];
@@ -13662,7 +13877,7 @@ function drawCandles(chart, s, paintOpts = {}) {
     const up = k.c >= k.o;
     ctx.strokeStyle = up ? upS : dnS;
     ctx.fillStyle = up ? upF : dnF;
-    ctx.lineWidth = chartConfig.candle.width;
+    ctx.lineWidth = activeDrawStyle().candle.width;
 
     ctx.beginPath();
     ctx.moveTo(x, yh);
@@ -13680,13 +13895,13 @@ function drawCandles(chart, s, paintOpts = {}) {
 }
 
 function drawKlineCombineFrames(chart, s) {
-  if (!chartConfig.klineCombineFrame || chartConfig.klineCombineFrame.enabled === false) return;
+  if (!activeDrawStyle().klineCombineFrame || activeDrawStyle().klineCombineFrame.enabled === false) return;
   const frames = Array.isArray(chart.kline_combine) ? chart.kline_combine : [];
   if (frames.length === 0) return;
   ctx.save();
-  ctx.strokeStyle = getCfgColor(chartConfig.klineCombineFrame.color || "#6366f1");
-  ctx.lineWidth = Number(chartConfig.klineCombineFrame.lineWidth || 1.2);
-  ctx.setLineDash(getTradeLineDash(chartConfig.klineCombineFrame.lineStyle || "solid"));
+  ctx.strokeStyle = getCfgColor(activeDrawStyle().klineCombineFrame.color || "#6366f1");
+  ctx.lineWidth = Number(activeDrawStyle().klineCombineFrame.lineWidth || 1.2);
+  ctx.setLineDash(getTradeLineDash(activeDrawStyle().klineCombineFrame.lineStyle || "solid"));
   for (const frame of frames) {
     if (!frame) continue;
     const loX = Math.min(Number(frame.x1), Number(frame.x2));
@@ -13730,22 +13945,30 @@ function drawLines(arr, s, color, width, dashed = false) {
 
 function drawLegend() {
   const pad = 8;
-  const lines = [
-    { label: "分型辅助线", color: getCfgColor(chartConfig.fx.color), dashed: true, w: chartConfig.fx.width },
-    { label: "分型(确定)", color: getCfgColor(chartConfig.fract.color), dashed: false, w: chartConfig.fract.widthSure },
-    { label: "分型(未完成)", color: getCfgColor(chartConfig.fract.color), dashed: true, w: chartConfig.fract.widthUnsure },
-    { label: "笔(确定)", color: getCfgColor(chartConfig.bi.color), dashed: false, w: chartConfig.bi.widthSure },
-    { label: "笔(未完成)", color: getCfgColor(chartConfig.bi.color), dashed: true, w: chartConfig.bi.widthUnsure },
-    { label: "段(确定)", color: getCfgColor(chartConfig.seg.color), dashed: false, w: chartConfig.seg.widthSure },
-    { label: "段(未完成)", color: getCfgColor(chartConfig.seg.color), dashed: true, w: chartConfig.seg.widthUnsure },
-    { label: "2段(确定)", color: getCfgColor(chartConfig.segseg.color), dashed: false, w: chartConfig.segseg.widthSure },
-    { label: "2段(未完成)", color: getCfgColor(chartConfig.segseg.color), dashed: true, w: chartConfig.segseg.widthUnsure },
-    { label: "节奏线1", color: getRhythmVisualConfig("rhythm1").lineColor, dashed: getRhythmVisualConfig("rhythm1").lineStyle !== "solid", w: getRhythmVisualConfig("rhythm1").lineWidth },
-    { label: "节奏线2", color: getRhythmVisualConfig("rhythm2").lineColor, dashed: getRhythmVisualConfig("rhythm2").lineStyle !== "solid", w: getRhythmVisualConfig("rhythm2").lineWidth },
-    { label: "节奏线3", color: getRhythmVisualConfig("rhythm3").lineColor, dashed: getRhythmVisualConfig("rhythm3").lineStyle !== "solid", w: getRhythmVisualConfig("rhythm3").lineWidth },
-    { label: "节奏线4", color: getRhythmVisualConfig("rhythm4").lineColor, dashed: getRhythmVisualConfig("rhythm4").lineStyle !== "solid", w: getRhythmVisualConfig("rhythm4").lineWidth },
-    { label: "节奏线5", color: getRhythmVisualConfig("rhythm5").lineColor, dashed: getRhythmVisualConfig("rhythm5").lineStyle !== "solid", w: getRhythmVisualConfig("rhythm5").lineWidth },
+  const lineTpl = (label, cfg, sureKey, unsureKey) => [
+    { label: `${label}(确定)`, color: getCfgColor(cfg.color), dashed: false, w: cfg[sureKey] },
+    { label: `${label}(未完成)`, color: getCfgColor(cfg.color), dashed: true, w: cfg[unsureKey] },
   ];
+  let lines = [
+    { label: "分型辅助线", color: getCfgColor(chartConfig.fx.color), dashed: true, w: chartConfig.fx.width },
+    ...lineTpl("分型", chartConfig.fract, "widthSure", "widthUnsure"),
+    ...lineTpl("笔", chartConfig.bi, "widthSure", "widthUnsure"),
+    ...lineTpl("段", chartConfig.seg, "widthSure", "widthUnsure"),
+    ...lineTpl("2段", chartConfig.segseg, "widthSure", "widthUnsure"),
+  ];
+  if (lastPayload && String(lastPayload.chart_mode || "") === "multi" && Array.isArray(lastPayload.k_types_multi) && lastPayload.k_types_multi.length >= 2) {
+    lines = [];
+    const ordered = MULTI_KTYPE_ORDER.filter((k) => (lastPayload.k_types_multi || []).includes(k));
+    ordered.forEach((kt) => {
+      const st = getMultiLayerDrawConfig(kt);
+      const tag = getKTypeLabelText(kt);
+      lines.push({ label: `${tag}·分型辅助线`, color: getCfgColor(st.fx.color), dashed: true, w: st.fx.width });
+      lines.push(...lineTpl(`${tag}·分型`, st.fract, "widthSure", "widthUnsure"));
+      lines.push(...lineTpl(`${tag}·笔`, st.bi, "widthSure", "widthUnsure"));
+      lines.push(...lineTpl(`${tag}·段`, st.seg, "widthSure", "widthUnsure"));
+      lines.push(...lineTpl(`${tag}·2段`, st.segseg, "widthSure", "widthUnsure"));
+    });
+  }
   ctx.save();
   const fontSize = chartConfig.legend.fontSize;
   ctx.font = `${chartConfig.legend.fontWeight || "normal"} ${fontSize}px Consolas`;
@@ -14113,7 +14336,7 @@ function resolveBottomBspRowsForDraw(chart) {
 }
 
 function drawRhythmLines(arr, s) {
-  if (!chartConfig.rhythmLine || !chartConfig.rhythmLine.enabled) return;
+  if (!activeDrawStyle().rhythmLine || !activeDrawStyle().rhythmLine.enabled) return;
   // 自定义术语说明：
   // - “推进峰值端点”指与父结构同向推进的子级端点（上升时对应 D/F/H...）。
   // - line.label_left 是节奏线编号，例如 1-0 / 1-1。
@@ -14492,33 +14715,39 @@ function drawZsRects(arr, s, color, width) {
   ctx.restore();
 }
 
-/** K 线蜡烛 + 合并框 + 缠论线/中枢/节奏（不含筹码与底部 BSP）；paintOpts 仅多周期叠图非驱动层传 overlaySpanCandles。 */
+/** K 线蜡烛 + 合并框 + 缠论线/中枢/节奏（不含筹码与底部 BSP）；paintOpts.layerStyle 多周期叠层按周期样式。 */
 function drawMainChartLayers(chart, s, paintOpts = {}) {
   if (!chart || !chart.kline || chart.kline.length === 0) return;
+  const prevCtx = drawStyleCtx;
+  if (paintOpts && paintOpts.layerStyle) drawStyleCtx = paintOpts.layerStyle;
+  try {
   drawCandles(chart, s, paintOpts);
   drawKlineCombineFrames(chart, s);
-  if (chartConfig.fractZs.enabled) {
-    drawZsRects(chart.fract_zs || [], s, getCfgColor(chartConfig.fractZs.color), chartConfig.fractZs.width);
+  if (activeDrawStyle().fractZs.enabled) {
+    drawZsRects(chart.fract_zs || [], s, getCfgColor(activeDrawStyle().fractZs.color), activeDrawStyle().fractZs.width);
   }
-  if (chartConfig.biZs.enabled) {
-    drawZsRects(chart.bi_zs || [], s, getCfgColor(chartConfig.biZs.color), chartConfig.biZs.width);
+  if (activeDrawStyle().biZs.enabled) {
+    drawZsRects(chart.bi_zs || [], s, getCfgColor(activeDrawStyle().biZs.color), activeDrawStyle().biZs.width);
   }
-  if (chartConfig.segZs.enabled) {
-    drawZsRects(chart.seg_zs || [], s, getCfgColor(chartConfig.segZs.color), chartConfig.segZs.width);
+  if (activeDrawStyle().segZs.enabled) {
+    drawZsRects(chart.seg_zs || [], s, getCfgColor(activeDrawStyle().segZs.color), activeDrawStyle().segZs.width);
   }
-  if (chartConfig.segsegZs.enabled) {
-    drawZsRects(chart.segseg_zs || [], s, getCfgColor(chartConfig.segsegZs.color), chartConfig.segsegZs.width);
+  if (activeDrawStyle().segsegZs.enabled) {
+    drawZsRects(chart.segseg_zs || [], s, getCfgColor(activeDrawStyle().segsegZs.color), activeDrawStyle().segsegZs.width);
   }
-  drawLines(chart.fx_lines || [], s, getCfgColor(chartConfig.fx.color), chartConfig.fx.width, true);
-  drawLines((chart.fract || []).filter((x) => x.is_sure), s, getCfgColor(chartConfig.fract.color), chartConfig.fract.widthSure, false);
-  drawLines((chart.fract || []).filter((x) => !x.is_sure), s, getCfgColor(chartConfig.fract.color), chartConfig.fract.widthUnsure, true);
-  drawLines((chart.bi || []).filter((x) => x.is_sure), s, getCfgColor(chartConfig.bi.color), chartConfig.bi.widthSure, false);
-  drawLines((chart.bi || []).filter((x) => !x.is_sure), s, getCfgColor(chartConfig.bi.color), chartConfig.bi.widthUnsure, true);
-  drawLines((chart.seg || []).filter((x) => x.is_sure), s, getCfgColor(chartConfig.seg.color), chartConfig.seg.widthSure, false);
-  drawLines((chart.seg || []).filter((x) => !x.is_sure), s, getCfgColor(chartConfig.seg.color), chartConfig.seg.widthUnsure, true);
-  drawLines((chart.segseg || []).filter((x) => x.is_sure), s, getCfgColor(chartConfig.segseg.color), chartConfig.segseg.widthSure, false);
-  drawLines((chart.segseg || []).filter((x) => !x.is_sure), s, getCfgColor(chartConfig.segseg.color), chartConfig.segseg.widthUnsure, true);
+  drawLines(chart.fx_lines || [], s, getCfgColor(activeDrawStyle().fx.color), activeDrawStyle().fx.width, true);
+  drawLines((chart.fract || []).filter((x) => x.is_sure), s, getCfgColor(activeDrawStyle().fract.color), activeDrawStyle().fract.widthSure, false);
+  drawLines((chart.fract || []).filter((x) => !x.is_sure), s, getCfgColor(activeDrawStyle().fract.color), activeDrawStyle().fract.widthUnsure, true);
+  drawLines((chart.bi || []).filter((x) => x.is_sure), s, getCfgColor(activeDrawStyle().bi.color), activeDrawStyle().bi.widthSure, false);
+  drawLines((chart.bi || []).filter((x) => !x.is_sure), s, getCfgColor(activeDrawStyle().bi.color), activeDrawStyle().bi.widthUnsure, true);
+  drawLines((chart.seg || []).filter((x) => x.is_sure), s, getCfgColor(activeDrawStyle().seg.color), activeDrawStyle().seg.widthSure, false);
+  drawLines((chart.seg || []).filter((x) => !x.is_sure), s, getCfgColor(activeDrawStyle().seg.color), activeDrawStyle().seg.widthUnsure, true);
+  drawLines((chart.segseg || []).filter((x) => x.is_sure), s, getCfgColor(activeDrawStyle().segseg.color), activeDrawStyle().segseg.widthSure, false);
+  drawLines((chart.segseg || []).filter((x) => !x.is_sure), s, getCfgColor(activeDrawStyle().segseg.color), activeDrawStyle().segseg.widthUnsure, true);
   drawRhythmLines(chart.rhythm_lines || [], s);
+  } finally {
+    drawStyleCtx = prevCtx;
+  }
 }
 
 function drawMultiLayers(payload) {
@@ -14544,10 +14773,12 @@ function drawMultiLayers(payload) {
   drawIndicators(driverChart, s);
   const mo = chartConfig.multiOverlay || { defaultAlpha: 0.58, defaultCandleWidth: 1.2, layers: {} };
   const layers = Array.isArray(payload.chart_layers) ? payload.chart_layers : [];
+  const hidden = new Set(Array.isArray(sessionConfig.multiLayerHidden) ? sessionConfig.multiLayerHidden : []);
   for (const layer of layers) {
     const ch = layer.chart;
     if (!ch || !ch.kline || ch.kline.length === 0) continue;
     const kt = String(layer.k_type || "");
+    if (hidden.has(kt)) continue;
     const L = (mo.layers && mo.layers[kt]) || {};
     const isDriver = layer.role === "driver";
     const alpha = isDriver ? 1 : Math.min(1, Math.max(0.1, Number(L.alpha != null ? L.alpha : mo.defaultAlpha)));
@@ -14564,6 +14795,7 @@ function drawMultiLayers(payload) {
       drawMainChartLayers(ch, s, {
         overlaySpanCandles: !isDriver,
         driverKlineForOverlaySpan: driverChart.kline,
+        layerStyle: getMultiLayerDrawConfig(kt),
       });
     } finally {
       chartConfig.candle = candleBak;
@@ -15022,7 +15254,12 @@ function refreshUI(payload, options) {
     dataFormConfig.quantity = clampDataFormQuantity(payload.data_form.quantity, payload.data_form.raw_count || payload.data_form.current_count || 1);
     dataFormConfig.feedMode = normalizeDataFeedMode(payload.data_form.feed_mode);
   } else if (!payload || !payload.ready) {
-    dataFormConfig = { ...DATA_FORM_DEFAULT };
+    dataFormConfig.mode = normalizeDataFormMode(sessionConfig.dataFormMode);
+    dataFormConfig.quantity = clampDataFormQuantity(
+      sessionConfig.dataFormQuantity,
+      Number.isFinite(Number(sessionConfig.dataFormQuantity)) ? Number(sessionConfig.dataFormQuantity) : 1
+    );
+    dataFormConfig.feedMode = normalizeDataFeedMode(sessionConfig.dataFeedMode);
   }
   sessionFinished = !!payload.finished;
   syncTradesFromPayload(payload);
@@ -15472,18 +15709,54 @@ markUiBound("btnCover");
 if ($("chartMode")) {
   $("chartMode").addEventListener("change", () => {
     if ($("chartMode").value === "multi" && collectKTypesMultiSelected().length < 2) {
-      applyKTypesMultiToDomFromList(["daily", "weekly"]);
+      applyKTypesMultiToDomFromList(["1min", "3min"]);
     }
     updateDualModeUI();
+    refreshKTypesMultiOrderLabels();
     saveSessionConfig();
     redrawCurrentPayload();
   });
 }
 document.querySelectorAll("input.kTypesMultiCb[type=\"checkbox\"]").forEach((cb) => {
   cb.addEventListener("change", () => {
+    refreshKTypesMultiOrderLabels();
     saveSessionConfig();
     if (lastPayload && lastPayload.ready) scheduleChartRedraw();
   });
+});
+
+function toggleMultiLayerVisibleByOrderIndex(orderIdx0) {
+  const cm = $("chartMode") && String($("chartMode").value);
+  if (cm !== "multi" || !lastPayload || !lastPayload.ready) return;
+  const ordered = collectKTypesMultiOrdered();
+  if (orderIdx0 < 0 || orderIdx0 >= ordered.length || orderIdx0 >= 5) return;
+  const kt = ordered[orderIdx0];
+  const hid = new Set(Array.isArray(sessionConfig.multiLayerHidden) ? sessionConfig.multiLayerHidden : []);
+  if (hid.has(kt)) hid.delete(kt);
+  else hid.add(kt);
+  sessionConfig.multiLayerHidden = [...hid];
+  saveSessionConfig();
+  drawFromLastPayload();
+  const st = hid.has(kt) ? "已隐藏" : "已显示";
+  setMsg(`${st} ${getKTypeLabelText(kt)} 周期叠层（快捷键 ${orderIdx0 + 1}）`);
+}
+
+window.addEventListener("keydown", (e) => {
+  if (!lastPayload || !lastPayload.ready) return;
+  if (!$("chartMode") || $("chartMode").value !== "multi") return;
+  const t = e.target;
+  if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) return;
+  if (e.ctrlKey || e.altKey || e.metaKey) return;
+  const code = e.code || "";
+  let idx = -1;
+  if (code === "Digit1" || code === "Numpad1") idx = 0;
+  else if (code === "Digit2" || code === "Numpad2") idx = 1;
+  else if (code === "Digit3" || code === "Numpad3") idx = 2;
+  else if (code === "Digit4" || code === "Numpad4") idx = 3;
+  else if (code === "Digit5" || code === "Numpad5") idx = 4;
+  if (idx < 0) return;
+  e.preventDefault();
+  toggleMultiLayerVisibleByOrderIndex(idx);
 });
 if ($("kType2")) {
   $("kType2").addEventListener("change", () => saveSessionConfig());
@@ -15534,6 +15807,8 @@ $("btnFinish").onclick = async () => {
 $("btnReset").onclick = async () => {
   try {
   if (!confirmAndLog("确定要重新训练吗？当前会话状态将被清空。")) return;
+    persistChartConfigStoreNow();
+    saveSessionConfig();
     hideGlobalLoading();
     const payload = await api("/api/reset");
     $("btnInit").disabled = false;
@@ -15551,8 +15826,6 @@ $("btnReset").onclick = async () => {
     bspHistory = [];
     bspHistoryKey = new Set();
     lastSeenBspKey = new Set();
-    lastPayload = null;
-    dataFormConfig = { ...DATA_FORM_DEFAULT };
     sessionFinished = false;
     stepInFlight = false;
     userAdjustedView = false;
@@ -15566,8 +15839,10 @@ $("btnReset").onclick = async () => {
     dualActivePaneLock = false;
     dualLockedChartId = "chart1";
     clearBspPrompt();
-    setState(payload);
-    updateDataSourceStatus(payload);
+    lastPayload = payload;
+    refreshUI(payload, { afterStep: false });
+    persistChartConfigStoreNow();
+    saveSessionConfig();
     ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
     setMsg("已重置，可重新配置并加载会话。");
     requestAnimationFrame(updateCompactLayout);
@@ -15937,6 +16212,7 @@ function verifyCriticalUiBindings() {
 
 (async () => {
   loadSessionConfig();
+  refreshKTypesMultiOrderLabels();
   applyThemeFromSelect();
   hideGlobalLoading();
   try {
@@ -16667,7 +16943,7 @@ def api_session_kline_view(req: SessionKlineViewReq):
     if not APP_STATE.ready:
         raise HTTPException(status_code=400, detail="请先加载会话")
     try:
-        stepper = _stepper_for_kline_data_chart_id(req.chart_id)
+        stepper = _stepper_for_session_kline_view(req.chart_id, req.layer_k_type)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     try:
@@ -16679,6 +16955,7 @@ def api_session_kline_view(req: SessionKlineViewReq):
         "code": stepper.code,
         "k_type": k_type_to_api_key(stepper.k_type),
         "chart_id": resolved,
+        "layer_k_type": str(req.layer_k_type).strip().lower() if req.layer_k_type else None,
         "view": str(req.view or "").strip().lower(),
         "bar_count": len(rows),
         "rows": rows,

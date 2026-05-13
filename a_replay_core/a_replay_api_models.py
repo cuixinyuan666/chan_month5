@@ -66,6 +66,8 @@ class SessionKlineViewReq(BaseModel):
 
     chart_id: str = "active"  # chart1 | chart2 | active
     view: str = "kline"  # kline | volume_chip | all
+    # 单品种多周期单图：指定 API 周期键（如 3min、5min），从对应步进器取 kline_all；空则默认驱动层（最细周期）
+    layer_k_type: Optional[str] = None
 
 
 class IndicatorBacktestReq(BaseModel):
