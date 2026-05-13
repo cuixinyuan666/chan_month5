@@ -11,8 +11,10 @@ class InitReq(BaseModel):
     autype: str = "qfq"
     chan_config: Optional[dict[str, Any]] = None
     k_type: str = "daily"  # 周期类型
-    chart_mode: str = "single"  # single | dual
+    chart_mode: str = "single"  # single | dual | multi
     k_type_2: Optional[str] = None  # 双周期下第二周期
+    # 单品种多周期单图：至少 2 个周期 API 键（与 k_type 独立，服务端按粒度选最细为步进驱动）
+    k_types_multi: Optional[list[str]] = None
     active_chart_id: str = "chart1"  # chart1 | chart2
     # 用户确认使用离线源后二次 init 传 True；单次 init 可传 data_source_priority 覆盖链（不改服务端全局）
     confirm_offline: bool = False

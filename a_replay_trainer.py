@@ -35,6 +35,7 @@ from a_replay_core.a_replay_api_models import (
     SessionKlineViewReq,
     StepReq,
 )
+from a_replay_core.a_replay_multi_xmap import remap_overlay_chart_to_driver_x
 from a_replay_cache.a_step_rollback import (
     AppLightSnapshot,
     AppRollbackSnapshot,
@@ -295,6 +296,56 @@ def normalize_data_feed_mode(raw: Any) -> str:
     """统一数据喂入模式：step=逐步喂入，unified=统一喂入。"""
     mode = str(raw or "step").strip().lower()
     return "unified" if mode == "unified" else "step"
+
+
+def normalize_replay_chart_mode(raw: Any) -> str:
+    m = str(raw or "single").strip().lower()
+    if m == "dual":
+        return "dual"
+    if m == "multi":
+        return "multi"
+    return "single"
+
+
+MULTI_CHART_MAX_LAYERS = 5
+
+
+def kl_granularity_rank(k_type: KL_TYPE) -> int:
+    """周期粒度：值越大越粗。"""
+    rank_map = {
+        KL_TYPE.K_1M: 1,
+        KL_TYPE.K_3M: 2,
+        KL_TYPE.K_5M: 3,
+        KL_TYPE.K_15M: 4,
+        KL_TYPE.K_30M: 5,
+        KL_TYPE.K_60M: 6,
+        KL_TYPE.K_DAY: 7,
+        KL_TYPE.K_WEEK: 8,
+        KL_TYPE.K_MON: 9,
+        KL_TYPE.K_QUARTER: 10,
+        KL_TYPE.K_YEAR: 11,
+    }
+    return int(rank_map.get(k_type, 10_000))
+
+
+def resolve_multi_k_types_from_request(k_types_multi: Any) -> tuple[str, list[str]]:
+    """(driver_api_key, passive_api_keys)；驱动为最细周期，passives 从细到粗。"""
+    if not isinstance(k_types_multi, list) or len(k_types_multi) < 2:
+        raise ValueError("单品种多周期单图须勾选至少 2 个时间周期")
+    seen: set[KL_TYPE] = set()
+    pairs: list[tuple[KL_TYPE, str]] = []
+    for raw in k_types_multi:
+        kt = parse_k_type(str(raw).strip())
+        if kt in seen:
+            continue
+        seen.add(kt)
+        pairs.append((kt, k_type_to_api_key(kt)))
+    if len(pairs) < 2:
+        raise ValueError("单品种多周期单图至少需要 2 个不同周期")
+    if len(pairs) > MULTI_CHART_MAX_LAYERS:
+        raise ValueError(f"单品种多周期单图最多勾选 {MULTI_CHART_MAX_LAYERS} 个周期")
+    pairs.sort(key=lambda it: kl_granularity_rank(it[0]))
+    return pairs[0][1], [p[1] for p in pairs[1:]]
 
 
 def is_data_form_quantity_mode(mode: Any) -> bool:
@@ -3564,6 +3615,7 @@ class ChanStepper:
                 "chart_mode",
                 "k_type",
                 "k_type_2",
+                "k_types_multi",
                 "active_chart_id",
                 "initial_cash",
                 "data_form_mode",
@@ -3796,6 +3848,7 @@ class ChanStepper:
                         "chart_mode",
                         "k_type",
                         "k_type_2",
+                        "k_types_multi",
                         "active_chart_id",
                         "initial_cash",
                         "data_form_mode",
@@ -4263,6 +4316,7 @@ class AppState:
     def __init__(self) -> None:
         self.stepper = ChanStepper()
         self.stepper2: Optional[ChanStepper] = None
+        self.multi_steppers: list[ChanStepper] = []
         self.chart_mode: str = "single"
         self.active_chart_id: str = "chart1"
         self.account = PaperAccount(initial_cash=10_000, cash=10_000)
@@ -4454,6 +4508,9 @@ class AppState:
                 last_judge_stats=self._last_judge_stats,
                 last_judge_x=self._last_judge_x,
                 last_judge_time=self._last_judge_time,
+                multi_steppers=(
+                    [capture_stepper_snapshot(s) for s in self.multi_steppers] if self.multi_steppers else None
+                ),
             )
         except RecursionError:
             return None
@@ -4506,6 +4563,15 @@ class AppState:
             if self.stepper2 is None:
                 self.stepper2 = ChanStepper()
             restore_stepper_snapshot(self.stepper2, snap.stepper2)
+        msn = getattr(snap, "multi_steppers", None)
+        if msn:
+            self.multi_steppers = []
+            for sub in msn:
+                st = ChanStepper()
+                restore_stepper_snapshot(st, sub)
+                self.multi_steppers.append(st)
+        else:
+            self.multi_steppers = []
         self.trade_events = snap.trade_events
         self.account = snap.account
         self.bsp_history = snap.bsp_history
@@ -4522,10 +4588,9 @@ class AppState:
     def _memory_step_forward_no_snapshot(self, n: int) -> None:
         for _ in range(max(0, int(n))):
             active = self.get_active_stepper()
-            passive = self.get_passive_stepper()
             ok = active.step()
-            if passive is not None and ok:
-                self._sync_stepper_to_anchor(passive, active.current_time())
+            if ok:
+                self._sync_passives_to_anchor(active.current_time())
             self._dual_rebuild_coarse_chan_anti_future(active.current_time())
             if not ok:
                 break
@@ -4596,21 +4661,7 @@ class AppState:
 
     @staticmethod
     def _k_type_granularity_rank(k_type: KL_TYPE) -> int:
-        """周期粒度排序：值越大表示周期越粗。"""
-        rank_map = {
-            KL_TYPE.K_1M: 1,
-            KL_TYPE.K_3M: 2,
-            KL_TYPE.K_5M: 3,
-            KL_TYPE.K_15M: 4,
-            KL_TYPE.K_30M: 5,
-            KL_TYPE.K_60M: 6,
-            KL_TYPE.K_DAY: 7,
-            KL_TYPE.K_WEEK: 8,
-            KL_TYPE.K_MON: 9,
-            KL_TYPE.K_QUARTER: 10,
-            KL_TYPE.K_YEAR: 11,
-        }
-        return int(rank_map.get(k_type, 10_000))
+        return kl_granularity_rank(k_type)
 
     def _resolve_dual_coarse_fine(self) -> Optional[tuple[ChanStepper, ChanStepper]]:
         """双周期下识别粗细周期；优先按 k_type，兜底按已载入 K 根数。"""
@@ -4658,8 +4709,23 @@ class AppState:
         """细周期在(上一根粗K时间, 锚点]内的 KLU；数量模式且 raw 不太大时用划分前 raw，避免合并后缺日。"""
         return bt_collect_fine_klus_for_coarse_tail(coarse, fine, anchor_time)
 
+    def _sync_passives_to_anchor(self, anchor_time: str) -> None:
+        """双周期：同步被动图；多周期：同步全部被动层到锚点。"""
+        if normalize_replay_chart_mode(self.chart_mode) == "multi" and self.multi_steppers:
+            for st in self.multi_steppers:
+                self._sync_stepper_to_anchor(st, anchor_time)
+            return
+        passive = self.get_passive_stepper()
+        if passive is not None:
+            self._sync_stepper_to_anchor(passive, anchor_time)
+
     def _dual_rebuild_coarse_chan_anti_future(self, anchor_time: str) -> None:
-        """双周期：末根粗 K 的 HL收量 按细周期截至锚点重算，并重建粗周期 Chan（结构/指标与展示一致）。"""
+        """双/多周期：粗周期末根按 driver 截至锚点重算并重建 Chan。"""
+        if normalize_replay_chart_mode(self.chart_mode) == "multi" and self.multi_steppers:
+            bt_multi_rebuild_coarse_chan_anti_future(
+                self.session_params or {}, self.stepper, self.multi_steppers, anchor_time
+            )
+            return
         bt_dual_rebuild_coarse_chan_anti_future(
             self.session_params or {},
             str(self.chart_mode or "single"),
@@ -5121,7 +5187,9 @@ class AppState:
             data_form_quantity=params.get("data_form_quantity"),
             data_feed_mode=params.get("data_feed_mode", "step"),
         )
-        if str(params.get("chart_mode", "single")).lower() == "dual":
+        cm = normalize_replay_chart_mode(params.get("chart_mode", "single"))
+        self.multi_steppers = []
+        if cm == "dual":
             self.chart_mode = "dual"
             self.stepper2 = ChanStepper()
             self.stepper2.init(
@@ -5137,6 +5205,27 @@ class AppState:
                 data_form_quantity=params.get("data_form_quantity"),
                 data_feed_mode=params.get("data_feed_mode", "step"),
             )
+        elif cm == "multi":
+            self.chart_mode = "multi"
+            self.stepper2 = None
+            ktm = params.get("k_types_multi") or []
+            _, passives = resolve_multi_k_types_from_request(ktm)
+            for pk in passives:
+                st = ChanStepper()
+                st.init(
+                    params["code"],
+                    params["begin_date"],
+                    params["end_date"],
+                    params["autype"],
+                    chan_config=params.get("chan_config"),
+                    k_type=pk,
+                    confirm_offline=bool(params.get("confirm_offline", False)),
+                    data_source_priority=params.get("data_source_priority"),
+                    data_form_mode=params.get("data_form_mode", "traditional"),
+                    data_form_quantity=params.get("data_form_quantity"),
+                    data_feed_mode=params.get("data_feed_mode", "step"),
+                )
+                self.multi_steppers.append(st)
         else:
             self.chart_mode = "single"
             self.stepper2 = None
@@ -5157,6 +5246,8 @@ class AppState:
         if self.chart_mode == "dual" and self.stepper2 is not None:
             self.stepper2.step()
             self._sync_stepper_to_anchor(self.stepper2, self.stepper.current_time())
+        elif self.chart_mode == "multi" and self.multi_steppers:
+            self._sync_passives_to_anchor(self.stepper.current_time())
         self.sync_bsp_history()
         self.sync_rhythm_history()
         self.after_step_update()
@@ -5165,6 +5256,8 @@ class AppState:
                 break
             if self.chart_mode == "dual" and self.stepper2 is not None:
                 self._sync_stepper_to_anchor(self.stepper2, self.stepper.current_time())
+            elif self.chart_mode == "multi" and self.multi_steppers:
+                self._sync_passives_to_anchor(self.stepper.current_time())
             self.sync_bsp_history()
             self.sync_rhythm_history()
             self.after_step_update()
@@ -5249,6 +5342,7 @@ class AppState:
             chart2 = self.stepper2.build_chart_payload_cached(include_kline_all=include_kline_all)
 
         active_stepper = self.get_active_stepper()
+        anchor_time = active_stepper.current_time()
         # 还可向前步进根数：须与 ChanStepper.step() 一致（unified 以 _unified_full_payload.kline 根数为准，避免与 _replay_klus_master 长度不一致时误判）
         if (
             normalize_data_feed_mode(getattr(active_stepper, "data_feed_mode", "step")) == "unified"
@@ -5261,7 +5355,6 @@ class AppState:
             _total = len(_master) if isinstance(_master, list) else 0
         _si = int(getattr(active_stepper, "step_idx", -1) or -1)
         step_forward_max = max(0, _total - 1 - _si) if _total > 0 else 0
-        anchor_time = active_stepper.current_time()
         if chart2 is not None:
             # 展示层也按同一套粗细/raw感知逻辑裁剪，避免数量模式分组把未来数据带回末根显示。
             pair = self._resolve_dual_coarse_fine()
@@ -5273,6 +5366,27 @@ class AppState:
                 else:
                     chart2 = copy.deepcopy(chart2)
                     self._apply_partial_last_bar(chart2, coarse, fine, anchor_time)
+        chart_layers: Optional[list[dict[str, Any]]] = None
+        chip_basis: Optional[str] = None
+        if normalize_replay_chart_mode(self.chart_mode) == "multi" and self.multi_steppers:
+            chip_basis = "tick_accum_driver" if self.stepper.data_src_used == OFFLINE_INLINE_SRC else None
+            dk = chart.get("kline") or []
+            chart_layers = []
+            for st in sorted(self.multi_steppers, key=lambda s: -kl_granularity_rank(s.k_type)):
+                if st.chan is None:
+                    continue
+                ch_ov = st.build_chart_payload_cached(include_kline_all=False)
+                ch_ov = copy.deepcopy(ch_ov)
+                self._apply_partial_last_bar(ch_ov, st, self.stepper, anchor_time)
+                ch_mapped = remap_overlay_chart_to_driver_x(
+                    ch_ov, coarse_kline=list(ch_ov.get("kline") or []), driver_kline=list(dk)
+                )
+                chart_layers.append(
+                    {"k_type": k_type_to_api_key(st.k_type), "role": "overlay", "chart": ch_mapped}
+                )
+            chart_layers.append(
+                {"k_type": k_type_to_api_key(self.stepper.k_type), "role": "driver", "chart": chart}
+            )
         price: Optional[float] = None
         active_chart = chart2 if (self._normalize_chart_id(self.active_chart_id) == "chart2" and chart2 is not None) else chart
         if len(active_chart.get("kline", [])) > 0:
@@ -5319,6 +5433,9 @@ class AppState:
             "price": price,
             "chart": chart,
             "charts": charts_payload,
+            "chart_layers": chart_layers,
+            "chip_basis": chip_basis,
+            "k_types_multi": (self.session_params or {}).get("k_types_multi"),
             "chart_mode": self.chart_mode,
             "active_chart_id": self._normalize_chart_id(self.active_chart_id),
             "time_anchor": anchor_time,
@@ -5402,8 +5519,8 @@ def bt_count_stepper_klus(stepper: ChanStepper) -> int:
 def bt_resolve_dual_coarse_fine(chart_mode: str, s1: ChanStepper, s2: Optional[ChanStepper]) -> Optional[tuple[ChanStepper, ChanStepper]]:
     if str(chart_mode or "single").lower() != "dual" or s2 is None:
         return None
-    r1 = AppState._k_type_granularity_rank(s1.k_type)
-    r2 = AppState._k_type_granularity_rank(s2.k_type)
+    r1 = kl_granularity_rank(s1.k_type)
+    r2 = kl_granularity_rank(s2.k_type)
     if r1 != r2:
         return (s1, s2) if r1 > r2 else (s2, s1)
     n1 = bt_count_stepper_klus(s1)
@@ -5464,23 +5581,18 @@ def bt_sync_stepper_to_anchor(stepper: ChanStepper, anchor_time: str) -> None:
         stepper._bundle_cache_step_idx = None
 
 
-def bt_dual_rebuild_coarse_chan_anti_future(
+def bt_rebuild_coarse_anti_future_vs_fine(
     session_params: dict[str, Any],
-    chart_mode: str,
-    stepper: ChanStepper,
-    stepper2: Optional[ChanStepper],
+    coarse: ChanStepper,
+    fine: ChanStepper,
     anchor_time: str,
 ) -> None:
-    # unified：全量快照 + 切片游标，勿对 coarse 做 incremental 重算（会替换 chan 且与 _unified_full_payload 脱节，导致 step 误判已到末尾）
-    if getattr(stepper, "data_feed_mode", "step") == "unified" or (
-        stepper2 is not None and getattr(stepper2, "data_feed_mode", "step") == "unified"
-    ):
+    """粗周期末根按细周期截至锚点重算并重建 coarse.chan（防未来）。"""
+    if getattr(coarse, "data_feed_mode", "step") == "unified" or getattr(fine, "data_feed_mode", "step") == "unified":
         return
-    pair = bt_resolve_dual_coarse_fine(chart_mode, stepper, stepper2)
-    if pair is None:
-        return
-    coarse, fine = pair
     if not session_params:
+        return
+    if kl_granularity_rank(coarse.k_type) <= kl_granularity_rank(fine.k_type):
         return
     saved = int(coarse.step_idx)
     if saved < 0:
@@ -5549,6 +5661,39 @@ def bt_dual_rebuild_coarse_chan_anti_future(
     for _ in range(saved + 1):
         if not coarse.step():
             break
+
+
+def bt_multi_rebuild_coarse_chan_anti_future(
+    session_params: dict[str, Any],
+    driver: ChanStepper,
+    passive_steppers: list[ChanStepper],
+    anchor_time: str,
+) -> None:
+    """多周期：每个粗于 driver 的周期分别做末根 patch + chan 重建。"""
+    if getattr(driver, "data_feed_mode", "step") == "unified":
+        return
+    if any(getattr(s, "data_feed_mode", "step") == "unified" for s in passive_steppers):
+        return
+    for coarse in passive_steppers:
+        bt_rebuild_coarse_anti_future_vs_fine(session_params, coarse, driver, anchor_time)
+
+
+def bt_dual_rebuild_coarse_chan_anti_future(
+    session_params: dict[str, Any],
+    chart_mode: str,
+    stepper: ChanStepper,
+    stepper2: Optional[ChanStepper],
+    anchor_time: str,
+) -> None:
+    if getattr(stepper, "data_feed_mode", "step") == "unified" or (
+        stepper2 is not None and getattr(stepper2, "data_feed_mode", "step") == "unified"
+    ):
+        return
+    pair = bt_resolve_dual_coarse_fine(chart_mode, stepper, stepper2)
+    if pair is None:
+        return
+    coarse, fine = pair
+    bt_rebuild_coarse_anti_future_vs_fine(session_params, coarse, fine, anchor_time)
 
 
 def _bt_bsp_key_set(stepper: ChanStepper) -> set[str]:
@@ -5775,6 +5920,8 @@ def run_indicator_backtest(req: IndicatorBacktestReq) -> dict[str, Any]:
     code_norm = normalize_code(req.code)
     cfg = req.chan_config if isinstance(req.chan_config, dict) else {}
     chart_mode = str(req.chart_mode or "single").strip().lower()
+    if chart_mode == "multi":
+        raise ValueError("指标回测暂不支持「单品种多周期单图」模式，请改用单周期或双周期")
     entry_conds, entry_comb_s, exit_conds, exit_comb_s, exit_hold = _normalize_indicator_backtest_req(req)
     if not entry_conds:
         raise ValueError("请至少配置一条入场条件（entry_conditions 或兼容字段 conditions）")
@@ -6999,8 +7146,9 @@ HTML = r"""
           <select id="chartMode">
             <option value="single" selected>单品种单周期图</option>
             <option value="dual">单品种两周期图</option>
+            <option value="multi">单品种多周期单图</option>
           </select>
-          <span class="tip-icon" data-tip="单周期=原模式；两周期=上下两个周期联动分析。"></span>
+          <span class="tip-icon" data-tip="单周期=原模式；两周期=上下两窗；多周期单图=多周期叠在同一主图（仅离线分笔，最细勾选周期步进，粗周期防未来）。后两者互斥。"></span>
         </div>
         <div class="row cfg-editable">
           <label>周期类型1</label>
@@ -7035,6 +7183,23 @@ HTML = r"""
             <option value="3min">3分钟</option>
           </select>
           <span class="tip-icon" data-tip="双周期模式下第二个图窗的周期。"></span>
+        </div>
+        <div class="row cfg-editable" id="kTypesMultiRow" style="display:none;">
+          <label style="align-self:flex-start; margin-top:4px;">叠加周期</label>
+          <div style="flex:2; display:flex; flex-wrap:wrap; gap:4px 10px; align-items:center; min-width:0;">
+            <label style="display:inline-flex; align-items:center; gap:3px; white-space:nowrap;"><input type="checkbox" class="kTypesMultiCb" value="1min" />1分</label>
+            <label style="display:inline-flex; align-items:center; gap:3px; white-space:nowrap;"><input type="checkbox" class="kTypesMultiCb" value="3min" />3分</label>
+            <label style="display:inline-flex; align-items:center; gap:3px; white-space:nowrap;"><input type="checkbox" class="kTypesMultiCb" value="5min" />5分</label>
+            <label style="display:inline-flex; align-items:center; gap:3px; white-space:nowrap;"><input type="checkbox" class="kTypesMultiCb" value="15min" />15分</label>
+            <label style="display:inline-flex; align-items:center; gap:3px; white-space:nowrap;"><input type="checkbox" class="kTypesMultiCb" value="30min" />30分</label>
+            <label style="display:inline-flex; align-items:center; gap:3px; white-space:nowrap;"><input type="checkbox" class="kTypesMultiCb" value="60min" />60分</label>
+            <label style="display:inline-flex; align-items:center; gap:3px; white-space:nowrap;"><input type="checkbox" class="kTypesMultiCb" value="daily" />日</label>
+            <label style="display:inline-flex; align-items:center; gap:3px; white-space:nowrap;"><input type="checkbox" class="kTypesMultiCb" value="weekly" />周</label>
+            <label style="display:inline-flex; align-items:center; gap:3px; white-space:nowrap;"><input type="checkbox" class="kTypesMultiCb" value="monthly" />月</label>
+            <label style="display:inline-flex; align-items:center; gap:3px; white-space:nowrap;"><input type="checkbox" class="kTypesMultiCb" value="quarterly" />季</label>
+            <label style="display:inline-flex; align-items:center; gap:3px; white-space:nowrap;"><input type="checkbox" class="kTypesMultiCb" value="yearly" />年</label>
+          </div>
+          <span class="tip-icon" data-tip="多周期单图：须至少勾选 2 个周期；其中最细的勾选周期为步进驱动。仅支持离线分笔数据形式。筹码仅跟驱动周期。指标回测页不支持本模式。"></span>
         </div>
         <div class="row cfg-editable" id="dualLayoutRow" style="display:none;">
           <label>排列方式</label>
@@ -7904,7 +8069,9 @@ const DEFAULT_CHART_CONFIG = {
     interruptBspSegseg2sSell: true,
   },
   legend: { fontSize: 12, fontWeight: "normal", color: "#0f172a" },
-  userRay: { color: "#f97316", width: 1.5, dash: [8, 4], fontSize: 12 }
+  userRay: { color: "#f97316", width: 1.5, dash: [8, 4], fontSize: 12 },
+  // 多周期单图：非 driver 层透明度与 K 线宽度倍率；layers[周期字符串] 可覆盖 alpha/candleWidth/upColor/downColor
+  multiOverlay: { defaultAlpha: 0.58, defaultCandleWidth: 1.2, layers: {} }
 };
 
 function deepMerge(target, source) {
@@ -7990,6 +8157,12 @@ function migrateChartConfig(cfg) {
   if (!next.toast.interruptBspFineCombine) next.toast.interruptBspFineCombine = "or";
   if (!next.toast.interruptBspSideException) next.toast.interruptBspSideException = "none";
   if (typeof next.toast.interruptBspUnlistedTypes !== "boolean") next.toast.interruptBspUnlistedTypes = true;
+  if (!next.multiOverlay) next.multiOverlay = { defaultAlpha: 0.58, defaultCandleWidth: 1.2, layers: {} };
+  if (!next.multiOverlay.layers || typeof next.multiOverlay.layers !== "object") next.multiOverlay.layers = {};
+  const da = Number(next.multiOverlay.defaultAlpha);
+  next.multiOverlay.defaultAlpha = Number.isFinite(da) ? Math.min(1, Math.max(0.1, da)) : 0.58;
+  const dw = Number(next.multiOverlay.defaultCandleWidth);
+  next.multiOverlay.defaultCandleWidth = Number.isFinite(dw) ? Math.min(3, Math.max(0.2, dw)) : 1.2;
   return next;
 }
 
@@ -8085,6 +8258,7 @@ const DEFAULT_SESSION_CONFIG = {
   stepN: "5",
   kType: "daily",
   chartMode: "single",
+  kTypesMulti: ["daily", "weekly"],
   kType2: "weekly",
   dualLayout: "vertical",
   dualSplitRatio1: 0.5,
@@ -8536,6 +8710,39 @@ function shortcutSequenceMatches(def) {
   return def.keys.every((key, idx) => tail[idx] === key);
 }
 
+/** 多周期勾选顺序（请求体与持久化稳定排序） */
+const MULTI_KTYPE_ORDER = ["1min", "3min", "5min", "15min", "30min", "60min", "daily", "weekly", "monthly", "quarterly", "yearly"];
+
+function collectKTypesMultiSelected() {
+  const row = $("kTypesMultiRow");
+  if (!row) return [];
+  const picked = [];
+  row.querySelectorAll("input.kTypesMultiCb[type=\"checkbox\"]:checked").forEach((cb) => picked.push(cb.value));
+  return MULTI_KTYPE_ORDER.filter((k) => picked.includes(k));
+}
+
+function applyKTypesMultiToDomFromList(list) {
+  const row = $("kTypesMultiRow");
+  if (!row) return;
+  let arr = Array.isArray(list) ? list.filter((k) => typeof k === "string") : [];
+  arr = MULTI_KTYPE_ORDER.filter((k) => arr.includes(k));
+  if (arr.length < 2) arr = ["daily", "weekly"];
+  const set = new Set(arr);
+  row.querySelectorAll("input.kTypesMultiCb[type=\"checkbox\"]").forEach((cb) => {
+    cb.checked = set.has(cb.value);
+  });
+}
+
+function syncChartModeOptionRows() {
+  const cm = $("chartMode") ? String($("chartMode").value || "single") : "single";
+  const dual = cm === "dual";
+  const multi = cm === "multi";
+  if ($("kType2Row")) $("kType2Row").style.display = dual ? "" : "none";
+  if ($("dualLayoutRow")) $("dualLayoutRow").style.display = dual ? "" : "none";
+  if ($("dualSplitRow")) $("dualSplitRow").style.display = dual ? "" : "none";
+  if ($("kTypesMultiRow")) $("kTypesMultiRow").style.display = multi ? "" : "none";
+}
+
 function saveSessionConfig() {
   sessionConfig = {
     code: $("code").value,
@@ -8554,6 +8761,7 @@ function saveSessionConfig() {
     stepN: $("stepN").value,
     kType: $("kType").value,
     chartMode: $("chartMode") ? $("chartMode").value : "single",
+    kTypesMulti: collectKTypesMultiSelected(),
     kType2: $("kType2") ? $("kType2").value : $("kType").value,
     dualLayout: $("dualLayout") ? $("dualLayout").value : "vertical",
     dualSplitRatio1: getDualSplitRatio1(),
@@ -8594,17 +8802,25 @@ function loadSessionConfig() {
       Number.isFinite(Number(sessionConfig.dataFormQuantity)) ? Number(sessionConfig.dataFormQuantity) : 1
     );
     dataFormConfig.feedMode = normalizeDataFeedMode(sessionConfig.dataFeedMode);
-  if ($("kType2Row")) $("kType2Row").style.display = ($("chartMode") && $("chartMode").value === "dual") ? "" : "none";
-  if ($("dualLayoutRow")) $("dualLayoutRow").style.display = ($("chartMode") && $("chartMode").value === "dual") ? "" : "none";
-  if ($("dualSplitRow")) $("dualSplitRow").style.display = ($("chartMode") && $("chartMode").value === "dual") ? "" : "none";
+    applyKTypesMultiToDomFromList(sessionConfig.kTypesMulti);
+    syncChartModeOptionRows();
 }
 
 function updateDualModeUI(payload = null) {
+  if (payload && payload.ready && $("chartMode") && payload.chart_mode) {
+    const pcm = String(payload.chart_mode || "single");
+    const sel = $("chartMode");
+    if (sel) {
+      const ok = [...sel.options].some((o) => o.value === pcm);
+      if (ok) sel.value = pcm;
+    }
+    if (Array.isArray(payload.k_types_multi) && payload.k_types_multi.length >= 2) {
+      applyKTypesMultiToDomFromList(payload.k_types_multi);
+    }
+  }
+  syncChartModeOptionRows();
   const mode = payload && payload.chart_mode ? String(payload.chart_mode) : ($("chartMode") ? $("chartMode").value : "single");
   const dual = mode === "dual";
-  if ($("kType2Row")) $("kType2Row").style.display = dual ? "" : "none";
-  if ($("dualLayoutRow")) $("dualLayoutRow").style.display = dual ? "" : "none";
-  if ($("dualSplitRow")) $("dualSplitRow").style.display = dual ? "" : "none";
   // 双图激活：鼠标移入子图即激活（可右键锁定）；无“图1/图2激活”按钮入口
   if ($("dualChartToolbar")) $("dualChartToolbar").style.display = "none";
   const active = payload && payload.active_chart_id ? String(payload.active_chart_id) : (sessionConfig.activeChartId || "chart1");
@@ -9119,6 +9335,16 @@ function renderSettingsForm() {
         { label: "描边粗细", subKey: "width", type: "number", min: 0.1, max: 5, step: 0.1 },
         { label: "上涨颜色", subKey: "upColor", type: "color" },
         { label: "下跌颜色", subKey: "downColor", type: "color" }
+      ]
+    },
+    {
+      title: "多周期叠图 (multi)",
+      key: "multiOverlay",
+      color: "#7c2d12",
+      bgColor: "rgba(124, 45, 18, 0.08)",
+      items: [
+        { label: "非驱动层透明度", subKey: "defaultAlpha", type: "number", min: 0.1, max: 1, step: 0.02, tip: "多周期单图时粗周期叠加层相对驱动层的透明度（驱动层为 1）。" },
+        { label: "非驱动层K宽倍率", subKey: "defaultCandleWidth", type: "number", min: 0.2, max: 3, step: 0.1, tip: "叠加层蜡烛宽度 = 当前主图K线宽度×倍率；可按周期在持久化配置 multiOverlay.layers 里单独写 alpha/candleWidth/upColor/downColor。" }
       ]
     },
     {
@@ -9641,7 +9867,7 @@ function renderSettingsForm() {
       itemDiv.className = "settingsItem";
       
       // Add a line preview for sections with color/width
-       if (sec.key !== "theme_section" && sec.key !== "shared_bsp_bottom" && sec.key !== "indicators" && sec.key !== "toast" && sec.key !== "xAxis" && sec.key !== "yAxis") {
+       if (sec.key !== "theme_section" && sec.key !== "shared_bsp_bottom" && sec.key !== "indicators" && sec.key !== "toast" && sec.key !== "xAxis" && sec.key !== "yAxis" && sec.key !== "multiOverlay") {
           const previewLine = document.createElement("div");
           previewLine.style.height = "2px";
           previewLine.style.width = "100%";
@@ -10188,7 +10414,7 @@ async function saveSettings() {
     refreshUI(payload, { afterStep: false });
     setMsg(payload.message || "图表设置更新成功");
   } else if (lastPayload && lastPayload.chart) {
-    draw(lastPayload.chart);
+    drawFromLastPayload();
   }
 }
 
@@ -10564,7 +10790,7 @@ function syncIndicatorControls() {
 function applyThemeFromSelect() {
   const t = chartConfig.theme || "light";
   document.documentElement.setAttribute("data-theme", t);
-  if (lastPayload && lastPayload.ready && lastPayload.chart) draw(lastPayload.chart);
+  if (lastPayload && lastPayload.ready && lastPayload.chart) drawFromLastPayload();
 }
 
 // Indicator controls moved to modal.
@@ -10610,7 +10836,7 @@ function zoomViewAt(factor, anchorCanvasX) {
     viewXMax = allXMax;
   }
   userAdjustedView = true;
-  draw(lastPayload.chart);
+  drawFromLastPayload();
 }
 
 function ensureLatestKVisible() {
@@ -10649,7 +10875,7 @@ function centerLatestK() {
   viewXMin = Math.round(newMin);
   viewXMax = Math.round(newMax);
   userAdjustedView = true;
-  draw(lastPayload.chart);
+  drawFromLastPayload();
 }
 
 function setText(id, value) {
@@ -10663,7 +10889,7 @@ function resizeCanvas() {
   canvas.width = rect.width * devicePixelRatio;
   canvas.height = rect.height * devicePixelRatio;
   ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
-  if (lastPayload && lastPayload.ready) draw(lastPayload.chart);
+  if (lastPayload && lastPayload.ready) drawFromLastPayload();
 }
 window.addEventListener("resize", () => {
   resizeCanvas();
@@ -10712,7 +10938,7 @@ function redrawCurrentPayload() {
   if (isDualRuntimeReady()) {
     drawDualCharts(lastPayload);
   } else {
-    draw(lastPayload.chart);
+    drawFromLastPayload();
   }
 }
 
@@ -11135,7 +11361,7 @@ function setActiveTool(next) {
   if (v !== "parallelogram") pendingParallelogramPts = [];
   if (v !== "none") selectedDrawing = null;
   updateToolboxUI();
-  if (lastPayload && lastPayload.ready) draw(lastPayload.chart);
+  if (lastPayload && lastPayload.ready) drawFromLastPayload();
 }
 
 if ($("toolNone")) {
@@ -11303,7 +11529,7 @@ function editSelectedLineProps() {
   const style = ["solid", "dashed", "dotted"].includes(String(styleText).trim()) ? String(styleText).trim() : "dashed";
   if (applyLinePropsToDrawing(selectedDrawing, { lineColor: String(lineColor).trim() || defaultColor, lineWidth, lineStyle: style })) {
     setMsg("画线属性已更新。");
-    if (lastPayload && lastPayload.ready) draw(lastPayload.chart);
+    if (lastPayload && lastPayload.ready) drawFromLastPayload();
   }
 }
 
@@ -11593,18 +11819,18 @@ function executeShortcutAction(actionId) {
       userRays.push({ x: refK.x, y: yVal });
       storageSet("chan_user_rays", JSON.stringify(userRays));
       setMsg(`已生成射线: ${yVal.toFixed(2)}`);
-      draw(lastPayload.chart);
+      drawFromLastPayload();
       return true;
     }
     case "zoomYIn":
       if (!lastPayload || !lastPayload.ready) return false;
       viewYZoomRatio *= 1.15;
-      draw(lastPayload.chart);
+      drawFromLastPayload();
       return true;
     case "zoomYOut":
       if (!lastPayload || !lastPayload.ready) return false;
       viewYZoomRatio /= 1.15;
-      draw(lastPayload.chart);
+      drawFromLastPayload();
       return true;
     case "zoomXIn":
       if (!lastPayload || !lastPayload.ready) return false;
@@ -11622,7 +11848,7 @@ function executeShortcutAction(actionId) {
       const curPrice = s.yFromPx(crosshairY);
       const newPrice = curPrice - delta;
       crosshairY = s.y(newPrice);
-      draw(lastPayload.chart);
+      drawFromLastPayload();
       return true;
     }
     case "saveChartSettings":
@@ -11738,7 +11964,7 @@ window.addEventListener("keydown", (e) => {
             syncDualCrosshairByTime(lastPayload);
             redrawCurrentPayload();
           } else {
-            draw(lastPayload.chart);
+            drawFromLastPayload();
           }
         }
       }
@@ -11747,7 +11973,7 @@ window.addEventListener("keydown", (e) => {
     viewXMin = Math.max(allXMin, viewXMin - shift);
     viewXMax = viewXMin + span;
     userAdjustedView = true;
-    draw(lastPayload.chart);
+    drawFromLastPayload();
   } else if (e.code === "ArrowRight") {
     if (crosshairEnabled && crosshairX !== null) {
       e.preventDefault();
@@ -11767,7 +11993,7 @@ window.addEventListener("keydown", (e) => {
             syncDualCrosshairByTime(lastPayload);
             redrawCurrentPayload();
           } else {
-            draw(lastPayload.chart);
+            drawFromLastPayload();
           }
         }
       }
@@ -11776,7 +12002,7 @@ window.addEventListener("keydown", (e) => {
     viewXMin = viewXMin + shift;
     viewXMax = viewXMax + shift;
     userAdjustedView = true;
-    draw(lastPayload.chart);
+    drawFromLastPayload();
   }
 });
 
@@ -12552,6 +12778,83 @@ function getVisibleKs(chart, xMin, xMax) {
   return visibleK;
 }
 
+/** 多周期叠图：粗 K 时间窗内 driver 细 K 的 x 最小/最大（与后端按时间对齐思路一致）。 */
+function driverXSpanInTimeWindow(driverKs, tLoMs, tHiMs) {
+  const xs = [];
+  for (const dk of driverKs || []) {
+    const tm = parseChartTimeToMs(String(dk.t || ""));
+    if (!Number.isFinite(tm) || tm < tLoMs || tm >= tHiMs) continue;
+    const xv = Number(dk.x);
+    if (Number.isFinite(xv)) xs.push(xv);
+  }
+  if (xs.length === 0) return null;
+  return { xLo: Math.min(...xs), xHi: Math.max(...xs) };
+}
+
+/** 粗 K 的 [tLo, tHi)；右界无下一根时用大偏移（对齐 a_replay_multi_xmap）。 */
+function overlayCoarseBarTimeHiMs(bar, nextBar) {
+  const tLoMs = parseChartTimeToMs(String(bar.t || ""));
+  if (!Number.isFinite(tLoMs)) return null;
+  let tHiMs = nextBar ? parseChartTimeToMs(String(nextBar.t || "")) : NaN;
+  if (!Number.isFinite(tHiMs) || tHiMs <= tLoMs) tHiMs = tLoMs + 86400000 * 400;
+  return { tLoMs, tHiMs };
+}
+
+function overlayFindBarIndexInKline(chart, bar) {
+  const arr = chart.kline || [];
+  const tt = String(bar.t || "");
+  for (let i = 0; i < arr.length; i++) {
+    if (String(arr[i].t || "") === tt) return i;
+  }
+  const bx = Number(bar.x);
+  if (Number.isFinite(bx)) {
+    for (let i = 0; i < arr.length; i++) {
+      if (Number(arr[i].x) === bx) return i;
+    }
+  }
+  return -1;
+}
+
+/** [tLo,tHi) 内 driver 细 K，按时间排序；叠图线框 OHLC 与框内细 K 统计一致。 */
+function driverBarsInTimeWindowSorted(driverKs, tLoMs, tHiMs) {
+  const out = [];
+  for (const dk of driverKs || []) {
+    const tm = parseChartTimeToMs(String(dk.t || ""));
+    if (!Number.isFinite(tm) || tm < tLoMs || tm >= tHiMs) continue;
+    out.push(dk);
+  }
+  out.sort((a, b) => {
+    const ta = parseChartTimeToMs(String(a.t || ""));
+    const tb = parseChartTimeToMs(String(b.t || ""));
+    if (ta !== tb) return ta - tb;
+    return Number(a.x) - Number(b.x);
+  });
+  return out;
+}
+
+/** 细 K 序列合成 OHLC：首根开、区间最高、区间最低、末根收；无数据则回退粗 K 字段。 */
+function synthOhlcFromDriverSlice(slice, coarseBar) {
+  const fb = {
+    o: Number(coarseBar.o),
+    h: Number(coarseBar.h),
+    l: Number(coarseBar.l),
+    c: Number(coarseBar.c),
+  };
+  if (!slice || slice.length === 0) return fb;
+  const o = Number(slice[0].o);
+  const c = Number(slice[slice.length - 1].c);
+  let h = -Infinity;
+  let l = Infinity;
+  for (const b of slice) {
+    const bh = Number(b.h);
+    const bl = Number(b.l);
+    if (Number.isFinite(bh)) h = Math.max(h, bh);
+    if (Number.isFinite(bl)) l = Math.min(l, bl);
+  }
+  if (!Number.isFinite(o) || !Number.isFinite(c) || !Number.isFinite(h) || !Number.isFinite(l)) return fb;
+  return { o, h, l, c };
+}
+
 function nearestKByX(ks, targetX) {
   if (!ks || ks.length === 0) return null;
   return ks.reduce((best, cur) => {
@@ -13162,6 +13465,11 @@ function drawChips(chart, s) {
       continue;
     }
 
+    // 多周期离线：服务端 chip_basis=tick_accum_driver，仅分桶累加；禁止 OHLC 三角分摊
+    if (lastPayload && lastPayload.chip_basis === "tick_accum_driver") {
+      continue;
+    }
+
     const low = Math.min(k.l, k.h);
     const high = Math.max(k.l, k.h);
     const mode = Math.min(high, Math.max(low, k.c)); // close作为筹码峰值
@@ -13287,13 +13595,64 @@ function drawChips(chart, s) {
   ctx.restore();
 }
 
-function drawCandles(chart, s) {
-  const ks = s.visibleK;
-  const bodyW = Math.max(3, (s.plotW) / Math.max(42, ks.length * 1.28));
+function drawCandles(chart, s, paintOpts = {}) {
+  const ks = getVisibleKs(chart, s.xMin, s.xMax);
+  const driverKl = paintOpts.driverKlineForOverlaySpan;
+  const spanOverlay = !!(paintOpts.overlaySpanCandles && Array.isArray(driverKl) && driverKl.length > 0);
   const upS = getCfgColor(chartConfig.candle.upColor);
   const dnS = getCfgColor(chartConfig.candle.downColor);
   const upF = cssVar("--candleUpFill", "rgba(239,68,68,0.12)");
   const dnF = cssVar("--candleDownFill", "rgba(34,197,94,0.75)");
+  const lw = Math.max(1, Number(chartConfig.candle.width) || 1);
+
+  if (spanOverlay) {
+    const fullKl = chart.kline || [];
+    ctx.save();
+    ctx.lineJoin = "miter";
+    for (const k of ks) {
+      const idx = overlayFindBarIndexInKline(chart, k);
+      const nextBar = idx >= 0 && idx + 1 < fullKl.length ? fullKl[idx + 1] : null;
+      const tr = overlayCoarseBarTimeHiMs(k, nextBar);
+      if (!tr) continue;
+      const slice = driverBarsInTimeWindowSorted(driverKl, tr.tLoMs, tr.tHiMs);
+      const q = synthOhlcFromDriverSlice(slice, k);
+      const span = driverXSpanInTimeWindow(driverKl, tr.tLoMs, tr.tHiMs);
+      let xLo = span ? span.xLo : Number(k.x);
+      let xHi = span ? span.xHi : Number(k.x);
+      if (!Number.isFinite(xLo) || !Number.isFinite(xHi)) continue;
+      xLo = Math.max(s.xMin, Math.min(xLo, xHi));
+      xHi = Math.min(s.xMax, Math.max(xLo, xHi));
+      if (xHi < xLo) continue;
+      const pxL = s.x(xLo);
+      const pxR = s.x(xHi);
+      const rectW = Math.max(1, pxR - pxL);
+      const yHigh = s.y(q.h);
+      const yLow = s.y(q.l);
+      const yOpen = s.y(q.o);
+      const yClose = s.y(q.c);
+      const envTop = Math.min(yHigh, yLow);
+      const envBot = Math.max(yHigh, yLow);
+      const bodyTop = Math.min(yOpen, yClose);
+      const bodyBot = Math.max(yOpen, yClose);
+      const up = q.c >= q.o;
+      ctx.strokeStyle = up ? upS : dnS;
+      ctx.lineWidth = lw;
+      ctx.setLineDash([]);
+      ctx.strokeRect(pxL, envTop, rectW, Math.max(1, envBot - envTop));
+      ctx.strokeRect(pxL, bodyTop, rectW, Math.max(1, bodyBot - bodyTop));
+      const tick = Math.min(6, Math.max(2, rectW * 0.14));
+      ctx.beginPath();
+      ctx.moveTo(pxL, yOpen);
+      ctx.lineTo(pxL + tick, yOpen);
+      ctx.moveTo(pxR, yClose);
+      ctx.lineTo(pxR - tick, yClose);
+      ctx.stroke();
+    }
+    ctx.restore();
+    return;
+  }
+
+  const bodyW = Math.max(3, (s.plotW) / Math.max(42, ks.length * 1.28));
   for (const k of ks) {
     const x = s.x(k.x);
     const yo = s.y(k.o),
@@ -14133,6 +14492,102 @@ function drawZsRects(arr, s, color, width) {
   ctx.restore();
 }
 
+/** K 线蜡烛 + 合并框 + 缠论线/中枢/节奏（不含筹码与底部 BSP）；paintOpts 仅多周期叠图非驱动层传 overlaySpanCandles。 */
+function drawMainChartLayers(chart, s, paintOpts = {}) {
+  if (!chart || !chart.kline || chart.kline.length === 0) return;
+  drawCandles(chart, s, paintOpts);
+  drawKlineCombineFrames(chart, s);
+  if (chartConfig.fractZs.enabled) {
+    drawZsRects(chart.fract_zs || [], s, getCfgColor(chartConfig.fractZs.color), chartConfig.fractZs.width);
+  }
+  if (chartConfig.biZs.enabled) {
+    drawZsRects(chart.bi_zs || [], s, getCfgColor(chartConfig.biZs.color), chartConfig.biZs.width);
+  }
+  if (chartConfig.segZs.enabled) {
+    drawZsRects(chart.seg_zs || [], s, getCfgColor(chartConfig.segZs.color), chartConfig.segZs.width);
+  }
+  if (chartConfig.segsegZs.enabled) {
+    drawZsRects(chart.segseg_zs || [], s, getCfgColor(chartConfig.segsegZs.color), chartConfig.segsegZs.width);
+  }
+  drawLines(chart.fx_lines || [], s, getCfgColor(chartConfig.fx.color), chartConfig.fx.width, true);
+  drawLines((chart.fract || []).filter((x) => x.is_sure), s, getCfgColor(chartConfig.fract.color), chartConfig.fract.widthSure, false);
+  drawLines((chart.fract || []).filter((x) => !x.is_sure), s, getCfgColor(chartConfig.fract.color), chartConfig.fract.widthUnsure, true);
+  drawLines((chart.bi || []).filter((x) => x.is_sure), s, getCfgColor(chartConfig.bi.color), chartConfig.bi.widthSure, false);
+  drawLines((chart.bi || []).filter((x) => !x.is_sure), s, getCfgColor(chartConfig.bi.color), chartConfig.bi.widthUnsure, true);
+  drawLines((chart.seg || []).filter((x) => x.is_sure), s, getCfgColor(chartConfig.seg.color), chartConfig.seg.widthSure, false);
+  drawLines((chart.seg || []).filter((x) => !x.is_sure), s, getCfgColor(chartConfig.seg.color), chartConfig.seg.widthUnsure, true);
+  drawLines((chart.segseg || []).filter((x) => x.is_sure), s, getCfgColor(chartConfig.segseg.color), chartConfig.segseg.widthSure, false);
+  drawLines((chart.segseg || []).filter((x) => !x.is_sure), s, getCfgColor(chartConfig.segseg.color), chartConfig.segseg.widthUnsure, true);
+  drawRhythmLines(chart.rhythm_lines || [], s);
+}
+
+function drawMultiLayers(payload) {
+  if (dualInternalRenderDepth === 0 && isDualRuntimeReady()) {
+    drawDualCharts(payload);
+    return;
+  }
+  const driverChart = payload.chart;
+  if (!driverChart || !driverChart.kline || driverChart.kline.length === 0) return;
+  const { w: cw, h: ch } = readCanvasCssSize(canvas);
+  ctx.clearRect(0, 0, cw, ch);
+  signalHoverBoxes = [];
+  ctx.fillStyle = cssVar("--chartBg", "#ffffff");
+  ctx.fillRect(0, 0, cw, ch);
+  const xMin = Math.max(allXMin, viewXMin);
+  const xMax = viewXMax;
+  const s = toScaler(driverChart, xMin, xMax);
+  drawGridLines(s);
+  drawChips(driverChart, s);
+  drawTradeBands(s, driverChart);
+  drawTradeRays(s);
+  drawAxes(s);
+  drawIndicators(driverChart, s);
+  const mo = chartConfig.multiOverlay || { defaultAlpha: 0.58, defaultCandleWidth: 1.2, layers: {} };
+  const layers = Array.isArray(payload.chart_layers) ? payload.chart_layers : [];
+  for (const layer of layers) {
+    const ch = layer.chart;
+    if (!ch || !ch.kline || ch.kline.length === 0) continue;
+    const kt = String(layer.k_type || "");
+    const L = (mo.layers && mo.layers[kt]) || {};
+    const isDriver = layer.role === "driver";
+    const alpha = isDriver ? 1 : Math.min(1, Math.max(0.1, Number(L.alpha != null ? L.alpha : mo.defaultAlpha)));
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    const candleBak = JSON.parse(JSON.stringify(chartConfig.candle));
+    try {
+      if (!isDriver) {
+        const cMul = Number(L.candleWidth != null ? L.candleWidth : mo.defaultCandleWidth);
+        chartConfig.candle.width = Number(candleBak.width || chartConfig.candle.width) * cMul;
+        if (L.upColor) chartConfig.candle.upColor = L.upColor;
+        if (L.downColor) chartConfig.candle.downColor = L.downColor;
+      }
+      drawMainChartLayers(ch, s, {
+        overlaySpanCandles: !isDriver,
+        driverKlineForOverlaySpan: driverChart.kline,
+      });
+    } finally {
+      chartConfig.candle = candleBak;
+    }
+    ctx.restore();
+  }
+  drawBottomSignals(driverChart, s);
+  drawUserRays(s);
+  drawUserBiRays(s, driverChart);
+  drawPendingBiEndpointCircle(s);
+  drawTradeMarkers(s, driverChart);
+  drawCrosshair(driverChart, s);
+  drawLegend();
+}
+
+function drawFromLastPayload() {
+  if (!lastPayload || !lastPayload.ready) return;
+  if (lastPayload.chart_mode === "multi" && Array.isArray(lastPayload.chart_layers) && lastPayload.chart_layers.length > 0) {
+    drawMultiLayers(lastPayload);
+    return;
+  }
+  if (lastPayload.chart) draw(lastPayload.chart);
+}
+
 function draw(chart) {
   if (dualInternalRenderDepth === 0 && isDualRuntimeReady()) {
     drawDualCharts(lastPayload);
@@ -14155,31 +14610,7 @@ function draw(chart) {
   drawTradeRays(s);
   drawAxes(s);
   drawIndicators(chart, s);
-  drawCandles(chart, s);
-  drawKlineCombineFrames(chart, s);
-  if (chartConfig.fractZs.enabled) {
-    drawZsRects(chart.fract_zs || [], s, getCfgColor(chartConfig.fractZs.color), chartConfig.fractZs.width);
-  }
-  if (chartConfig.biZs.enabled) {
-    drawZsRects(chart.bi_zs || [], s, getCfgColor(chartConfig.biZs.color), chartConfig.biZs.width);
-  }
-  if (chartConfig.segZs.enabled) {
-    drawZsRects(chart.seg_zs || [], s, getCfgColor(chartConfig.segZs.color), chartConfig.segZs.width);
-  }
-  if (chartConfig.segsegZs.enabled) {
-    drawZsRects(chart.segseg_zs || [], s, getCfgColor(chartConfig.segsegZs.color), chartConfig.segsegZs.width);
-  }
-  // 分型辅助线最细虚线 → 分型 → 笔 → 段 → 2段
-  drawLines(chart.fx_lines || [], s, getCfgColor(chartConfig.fx.color), chartConfig.fx.width, true);
-  drawLines((chart.fract || []).filter((x) => x.is_sure), s, getCfgColor(chartConfig.fract.color), chartConfig.fract.widthSure, false);
-  drawLines((chart.fract || []).filter((x) => !x.is_sure), s, getCfgColor(chartConfig.fract.color), chartConfig.fract.widthUnsure, true);
-  drawLines((chart.bi || []).filter((x) => x.is_sure), s, getCfgColor(chartConfig.bi.color), chartConfig.bi.widthSure, false);
-  drawLines((chart.bi || []).filter((x) => !x.is_sure), s, getCfgColor(chartConfig.bi.color), chartConfig.bi.widthUnsure, true);
-  drawLines((chart.seg || []).filter((x) => x.is_sure), s, getCfgColor(chartConfig.seg.color), chartConfig.seg.widthSure, false);
-  drawLines((chart.seg || []).filter((x) => !x.is_sure), s, getCfgColor(chartConfig.seg.color), chartConfig.seg.widthUnsure, true);
-  drawLines((chart.segseg || []).filter((x) => x.is_sure), s, getCfgColor(chartConfig.segseg.color), chartConfig.segseg.widthSure, false);
-  drawLines((chart.segseg || []).filter((x) => !x.is_sure), s, getCfgColor(chartConfig.segseg.color), chartConfig.segseg.widthUnsure, true);
-  drawRhythmLines(chart.rhythm_lines || [], s);
+  drawMainChartLayers(chart, s);
   drawBottomSignals(chart, s);
   drawUserRays(s);
   drawUserBiRays(s, chart);
@@ -14189,11 +14620,37 @@ function draw(chart) {
   drawLegend();
 }
 
+/** 与 a_replay_multi_xmap._parse_chart_time_ms / 后端 strptime 顺序一致，用本地年月日时分秒，避免 `new Date("...")` 各浏览器歧义导致叠图时间窗多/少包 1 根细 K。 */
 function parseChartTimeToMs(text) {
-  const raw = String(text || "").trim();
-  if (!raw) return NaN;
-  const normalized = raw.replace(/\//g, "-");
-  const dt = new Date(normalized);
+  const s0 = String(text || "").trim();
+  if (!s0) return NaN;
+  const localTs = (y, mo, d, hh, mm, ss) => {
+    const dt = new Date(y, mo - 1, d, hh | 0, mm | 0, ss | 0, 0);
+    return Number.isFinite(dt.getTime()) ? dt.getTime() : NaN;
+  };
+  const rows = [
+    [/^(\d{4})\/(\d{1,2})\/(\d{1,2})\s+(\d{1,2}):(\d{1,2}):(\d{1,2})$/, 6],
+    [/^(\d{4})\/(\d{1,2})\/(\d{1,2})\s+(\d{1,2}):(\d{1,2})$/, 5],
+    [/^(\d{4})\/(\d{1,2})\/(\d{1,2})$/, 3],
+    [/^(\d{4})-(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{1,2}):(\d{1,2})$/, 6],
+    [/^(\d{4})-(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{1,2})$/, 5],
+    [/^(\d{4})-(\d{1,2})-(\d{1,2})$/, 3],
+  ];
+  for (const cand of [s0, s0.replace(/\//g, "-")]) {
+    for (const [re, n] of rows) {
+      const m = cand.match(re);
+      if (!m) continue;
+      const y = +m[1],
+        mo = +m[2],
+        d = +m[3];
+      const hh = n >= 5 ? +m[4] : 0;
+      const mm = n >= 5 ? +m[5] : 0;
+      const ss = n >= 6 ? +m[6] : 0;
+      const t = localTs(y, mo, d, hh, mm, ss);
+      if (Number.isFinite(t)) return t;
+    }
+  }
+  const dt = new Date(s0.replace(/\//g, "-"));
   return Number.isFinite(dt.getTime()) ? dt.getTime() : NaN;
 }
 
@@ -14284,7 +14741,11 @@ function syncDualCrosshairByTime(payload) {
 
 function drawDualCharts(payload) {
   if (!payload || !payload.charts || !payload.charts.chart1 || !payload.charts.chart2) {
-    draw(payload && payload.chart ? payload.chart : null);
+    if (payload && payload.chart_mode === "multi" && Array.isArray(payload.chart_layers) && payload.chart_layers.length > 0) {
+      drawMultiLayers(payload);
+    } else {
+      draw(payload && payload.chart ? payload.chart : null);
+    }
     return;
   }
   const activeId = (payload.active_chart_id === "chart2") ? "chart2" : "chart1";
@@ -14598,6 +15059,40 @@ function refreshUI(payload, options) {
         })
       );
       redrawCurrentPayload();
+    } else if (
+      payload.chart_mode === "multi" &&
+      Array.isArray(payload.chart_layers) &&
+      payload.chart_layers.length > 0 &&
+      payload.chart
+    ) {
+      const ks = payload.chart.kline ? payload.chart.kline : [];
+      if (ks.length > 0) {
+        allXMin = ks[0].x;
+        allXMax = ks[ks.length - 1].x;
+        if (!viewReady) {
+          viewXMin = allXMin;
+          viewXMax = allXMax;
+          viewReady = true;
+        } else if (!userAdjustedView) {
+          viewXMin = allXMin;
+          viewXMax = allXMax;
+        } else {
+          if (viewXMin < allXMin) viewXMin = allXMin;
+          if (viewXMin >= viewXMax) {
+            viewXMin = allXMin;
+            viewXMax = allXMax;
+            userAdjustedView = false;
+          }
+        }
+        if (afterStep) ensureLatestKVisible();
+        lastSeenBspKey = new Set(
+          [...lastSeenBspKey].filter((k) => {
+            const x = Number(String(k).split("|")[0]);
+            return Number.isFinite(x) && x <= allXMax;
+          })
+        );
+        drawMultiLayers(payload);
+      }
     } else {
       const ks = payload.chart && payload.chart.kline ? payload.chart.kline : [];
       if (ks.length > 0) {
@@ -14674,6 +15169,7 @@ $("btnInit").onclick = async () => {
       k_type: $("kType").value,
       chart_mode: $("chartMode") ? $("chartMode").value : "single",
       k_type_2: $("kType2") ? $("kType2").value : $("kType").value,
+      k_types_multi: (String($("chartMode") ? $("chartMode").value : "single") === "multi") ? collectKTypesMultiSelected() : undefined,
       active_chart_id: (sessionConfig && sessionConfig.activeChartId) ? sessionConfig.activeChartId : "chart1",
       data_form_mode: normalizeDataFormMode(dataFormConfig.mode),
       data_form_quantity: clampDataFormQuantity(dataFormConfig.quantity, getRawKlineCount() || 1),
@@ -14683,6 +15179,13 @@ $("btnInit").onclick = async () => {
       rollback_capture_max_bars: Number(systemConfig.rollbackCaptureMaxBars || DEFAULT_SYSTEM_CONFIG.rollbackCaptureMaxBars),
       ...extra,
     });
+    const cmInit = $("chartMode") ? $("chartMode").value : "single";
+    if (cmInit === "multi") {
+      const km = collectKTypesMultiSelected();
+      if (km.length < 2) {
+        throw new Error("多周期单图须至少勾选 2 个叠加周期");
+      }
+    }
     let payload;
     try {
       payload = await api("/api/init", buildInitBody({}), "POST", { signal: initAbortController.signal });
@@ -14968,10 +15471,20 @@ markUiBound("btnCover");
 
 if ($("chartMode")) {
   $("chartMode").addEventListener("change", () => {
+    if ($("chartMode").value === "multi" && collectKTypesMultiSelected().length < 2) {
+      applyKTypesMultiToDomFromList(["daily", "weekly"]);
+    }
     updateDualModeUI();
     saveSessionConfig();
+    redrawCurrentPayload();
   });
 }
+document.querySelectorAll("input.kTypesMultiCb[type=\"checkbox\"]").forEach((cb) => {
+  cb.addEventListener("change", () => {
+    saveSessionConfig();
+    if (lastPayload && lastPayload.ready) scheduleChartRedraw();
+  });
+});
 if ($("kType2")) {
   $("kType2").addEventListener("change", () => saveSessionConfig());
 }
@@ -15108,7 +15621,11 @@ const MAIN_TAB_STORAGE_KEY = "chan_left_main_tab";
 function syncBacktestFormFromSession() {
   if ($("btKType1") && $("kType")) $("btKType1").value = $("kType").value;
   if ($("btKType2") && $("kType2")) $("btKType2").value = $("kType2").value;
-  if ($("btChartMode") && $("chartMode")) $("btChartMode").value = $("chartMode").value;
+  // 指标回测后端不支持 multi，复盘选多周期时回测页回落为单周期
+  if ($("btChartMode") && $("chartMode")) {
+    const cm = String($("chartMode").value || "single");
+    $("btChartMode").value = cm === "multi" ? "single" : cm;
+  }
   const dual = $("btChartMode") && $("btChartMode").value === "dual";
   if ($("btKType2Row")) $("btKType2Row").style.display = dual ? "" : "none";
   if ($("btStepDriverRow")) $("btStepDriverRow").style.display = dual ? "" : "none";
@@ -15583,39 +16100,84 @@ def api_init(req: InitReq):
         code_norm = normalize_code(req.code)
 
         try:
-            APP_STATE.stepper.init(
-                code_norm,
-                req.begin_date,
-                req.end_date,
-                autype,
-                chan_config=req.chan_config,
-                k_type=req.k_type,
-                confirm_offline=bool(req.confirm_offline),
-                data_source_priority=req.data_source_priority,
-                data_form_mode=req.data_form_mode,
-                data_form_quantity=req.data_form_quantity,
-                data_feed_mode=getattr(req, "data_feed_mode", "step"),
-            )
-            chart_mode = "dual" if str(req.chart_mode or "single").strip().lower() == "dual" else "single"
-            APP_STATE.chart_mode = chart_mode
-            APP_STATE.active_chart_id = "chart2" if (chart_mode == "dual" and str(req.active_chart_id or "").strip().lower() == "chart2") else "chart1"
+            cm_init = normalize_replay_chart_mode(req.chart_mode)
+            APP_STATE.multi_steppers = []
             APP_STATE.stepper2 = None
-            if chart_mode == "dual":
-                k_type_2 = str(req.k_type_2 or req.k_type or "daily").strip()
-                APP_STATE.stepper2 = ChanStepper()
-                APP_STATE.stepper2.init(
+
+            if cm_init == "multi":
+                if not offline_tick_files_exist_for_range(code_norm, req.begin_date, req.end_date):
+                    raise ValueError("单品种多周期单图仅支持离线分笔：当前代码与日期区间内未找到 TickData 分笔文件")
+                driver_k, passive_ks = resolve_multi_k_types_from_request(getattr(req, "k_types_multi", None))
+                APP_STATE.stepper.init(
                     code_norm,
                     req.begin_date,
                     req.end_date,
                     autype,
                     chan_config=req.chan_config,
-                    k_type=k_type_2,
+                    k_type=driver_k,
                     confirm_offline=bool(req.confirm_offline),
                     data_source_priority=req.data_source_priority,
                     data_form_mode=req.data_form_mode,
                     data_form_quantity=req.data_form_quantity,
                     data_feed_mode=getattr(req, "data_feed_mode", "step"),
                 )
+                if APP_STATE.stepper.data_src_used != OFFLINE_INLINE_SRC:
+                    raise ValueError(
+                        "单品种多周期单图仅允许离线数据包（a_Data 分笔）；请勾选确认离线或调整数据源优先级使离线成功"
+                    )
+                APP_STATE.chart_mode = "multi"
+                APP_STATE.active_chart_id = "chart1"
+                for pk in passive_ks:
+                    st = ChanStepper()
+                    st.init(
+                        code_norm,
+                        req.begin_date,
+                        req.end_date,
+                        autype,
+                        chan_config=req.chan_config,
+                        k_type=pk,
+                        confirm_offline=bool(req.confirm_offline),
+                        data_source_priority=req.data_source_priority,
+                        data_form_mode=req.data_form_mode,
+                        data_form_quantity=req.data_form_quantity,
+                        data_feed_mode=getattr(req, "data_feed_mode", "step"),
+                    )
+                    APP_STATE.multi_steppers.append(st)
+            else:
+                APP_STATE.stepper.init(
+                    code_norm,
+                    req.begin_date,
+                    req.end_date,
+                    autype,
+                    chan_config=req.chan_config,
+                    k_type=req.k_type,
+                    confirm_offline=bool(req.confirm_offline),
+                    data_source_priority=req.data_source_priority,
+                    data_form_mode=req.data_form_mode,
+                    data_form_quantity=req.data_form_quantity,
+                    data_feed_mode=getattr(req, "data_feed_mode", "step"),
+                )
+                chart_mode = "dual" if cm_init == "dual" else "single"
+                APP_STATE.chart_mode = chart_mode
+                APP_STATE.active_chart_id = (
+                    "chart2" if (chart_mode == "dual" and str(req.active_chart_id or "").strip().lower() == "chart2") else "chart1"
+                )
+                if chart_mode == "dual":
+                    k_type_2 = str(req.k_type_2 or req.k_type or "daily").strip()
+                    APP_STATE.stepper2 = ChanStepper()
+                    APP_STATE.stepper2.init(
+                        code_norm,
+                        req.begin_date,
+                        req.end_date,
+                        autype,
+                        chan_config=req.chan_config,
+                        k_type=k_type_2,
+                        confirm_offline=bool(req.confirm_offline),
+                        data_source_priority=req.data_source_priority,
+                        data_form_mode=req.data_form_mode,
+                        data_form_quantity=req.data_form_quantity,
+                        data_feed_mode=getattr(req, "data_feed_mode", "step"),
+                    )
         except OfflineDataConfirmRequired as exc:
             raise HTTPException(
                 status_code=409,
@@ -15644,9 +16206,15 @@ def api_init(req: InitReq):
             "autype": autype,
             "initial_cash": req.initial_cash,
             "chan_config": req.chan_config,
-            "k_type": req.k_type,  # 保存周期类型到会话参数
+            "k_type": k_type_to_api_key(APP_STATE.stepper.k_type),
             "chart_mode": APP_STATE.chart_mode,
             "k_type_2": req.k_type_2,
+            "k_types_multi": (
+                [k_type_to_api_key(APP_STATE.stepper.k_type)]
+                + [k_type_to_api_key(s.k_type) for s in APP_STATE.multi_steppers]
+                if APP_STATE.chart_mode == "multi"
+                else None
+            ),
             "active_chart_id": APP_STATE.active_chart_id,
             # 与 ChanStepper.init 的 session_key 一致，供 reconfig/back_n 重建时命中 K 线缓存、避免重复联网
             "confirm_offline": bool(req.confirm_offline),
@@ -15670,6 +16238,8 @@ def api_init(req: InitReq):
         if APP_STATE.chart_mode == "dual" and APP_STATE.stepper2 is not None:
             APP_STATE.stepper2.step()
             APP_STATE._sync_stepper_to_anchor(APP_STATE.stepper2, APP_STATE.stepper.current_time())
+        elif APP_STATE.chart_mode == "multi" and APP_STATE.multi_steppers:
+            APP_STATE._sync_passives_to_anchor(APP_STATE.stepper.current_time())
         APP_STATE._dual_rebuild_coarse_chan_anti_future(APP_STATE.get_active_stepper().current_time())
         APP_STATE.sync_bsp_history()
         APP_STATE.sync_rhythm_history()
@@ -15677,7 +16247,12 @@ def api_init(req: InitReq):
         APP_STATE.after_step_update()
         payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME)
         source_label = data_source_label(APP_STATE.stepper.data_src_used)
-        mode_desc = f"双周期({req.k_type}/{(req.k_type_2 or req.k_type)})" if APP_STATE.chart_mode == "dual" else f"单周期({req.k_type})"
+        if APP_STATE.chart_mode == "dual":
+            mode_desc = f"双周期({k_type_to_api_key(APP_STATE.stepper.k_type)}/{k_type_to_api_key(APP_STATE.stepper2.k_type)})"
+        elif APP_STATE.chart_mode == "multi":
+            mode_desc = "多周期单图(" + ",".join(k_type_to_api_key(s.k_type) for s in [APP_STATE.stepper, *APP_STATE.multi_steppers]) + ")"
+        else:
+            mode_desc = f"单周期({k_type_to_api_key(APP_STATE.stepper.k_type)})"
         if source_label in ("AKShare", "离线数据"):
             payload["message"] = f"加载成功：{APP_STOCK_NAME or code_norm}，当前数据源 {source_label}，{mode_desc}。"
         else:
@@ -15722,7 +16297,6 @@ def api_step(req: StepReq):
         if req.active_chart_id:
             APP_STATE.active_chart_id = APP_STATE._normalize_chart_id(req.active_chart_id)
         active_stepper = APP_STATE.get_active_stepper()
-        passive_stepper = APP_STATE.get_passive_stepper()
         APP_STATE._push_rollback_snapshot()
         ok = True
         done = 0
@@ -15731,9 +16305,8 @@ def api_step(req: StepReq):
             if not ok:
                 break
             done += 1
-        if passive_stepper is not None and done > 0:
-            APP_STATE._sync_stepper_to_anchor(passive_stepper, active_stepper.current_time())
         if done > 0:
+            APP_STATE._sync_passives_to_anchor(active_stepper.current_time())
             APP_STATE._dual_rebuild_coarse_chan_anti_future(active_stepper.current_time())
         APP_STATE.sync_bsp_history()
         APP_STATE.sync_rhythm_history()
@@ -15908,6 +16481,8 @@ def api_goto_step(req: GotoStepReq):
             passive = APP_STATE.get_passive_stepper()
             if passive is not None:
                 APP_STATE._sync_stepper_to_anchor(passive, active.current_time())
+            elif APP_STATE.chart_mode == "multi" and APP_STATE.multi_steppers:
+                APP_STATE._sync_passives_to_anchor(active.current_time())
             APP_STATE._dual_rebuild_coarse_chan_anti_future(active.current_time())
             APP_STATE.sync_bsp_history()
             APP_STATE.sync_rhythm_history()
@@ -15938,10 +16513,9 @@ def api_goto_step(req: GotoStepReq):
         APP_STATE._rhythm_notice_hits = []
         for _ in range(target):
             active = APP_STATE.get_active_stepper()
-            passive = APP_STATE.get_passive_stepper()
             ok = active.step()
-            if passive is not None and ok:
-                APP_STATE._sync_stepper_to_anchor(passive, active.current_time())
+            if ok:
+                APP_STATE._sync_passives_to_anchor(active.current_time())
             APP_STATE._dual_rebuild_coarse_chan_anti_future(active.current_time())
             APP_STATE.sync_bsp_history()
             APP_STATE.sync_rhythm_history()

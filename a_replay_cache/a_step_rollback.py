@@ -33,6 +33,8 @@ class AppRollbackSnapshot:
     last_judge_stats: Optional[dict[str, Any]]
     last_judge_x: Optional[int]
     last_judge_time: Optional[str]
+    # multi：除 driver 外的各周期步进器快照，顺序与 AppState.multi_steppers 一致
+    multi_steppers: Optional[list[StepperRollbackSnapshot]] = None
 
 
 @dataclass
