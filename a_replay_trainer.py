@@ -6149,6 +6149,26 @@ def serialize_klu_iter(klu_iter) -> list[dict[str, Any]]:
     )
 
 
+def _newk_combine_frame_time_lo(el: NewKElement) -> str:
+    """合并框左界时间（与 begin_x 同源）。"""
+    it = el.item
+    if isinstance(it, CKLine):
+        return it.lst[0].time.to_str()
+    if isinstance(it, (CBi, CSeg)):
+        return it.get_begin_klu().time.to_str()
+    return ""
+
+
+def _newk_combine_frame_time_hi(el: NewKElement) -> str:
+    """合并框右界时间（与 end_x 同源）。"""
+    it = el.item
+    if isinstance(it, CKLine):
+        return it.lst[-1].time.to_str()
+    if isinstance(it, (CBi, CSeg)):
+        return it.get_end_klu().time.to_str()
+    return ""
+
+
 def serialize_kline_combine(kl_list) -> list[dict[str, Any]]:
     """序列化合并K线线框，供前端独立绘制。"""
     bars = build_combined_newk_bars(list(kl_list.lst))
@@ -6158,10 +6178,14 @@ def serialize_kline_combine(kl_list) -> list[dict[str, Any]]:
             continue
         first = bar.elements[0]
         last = bar.elements[-1]
+        t1 = _newk_combine_frame_time_lo(first)
+        t2 = _newk_combine_frame_time_hi(last)
         out.append(
             {
                 "x1": int(first.begin_x),
                 "x2": int(last.end_x),
+                "t1": t1,
+                "t2": t2,
                 "high": float(bar.high),
                 "low": float(bar.low),
                 "fx": str(bar.fx.name if isinstance(bar.fx, FX_TYPE) else bar.fx),
@@ -12993,12 +13017,14 @@ function getVisibleKs(chart, xMin, xMax) {
   return visibleK;
 }
 
-/** 多周期叠图：粗 K 时间窗内 driver 细 K 的 x 最小/最大（与后端按时间对齐思路一致）。 */
-function driverXSpanInTimeWindow(driverKs, tLoMs, tHiMs) {
+/** 多周期叠图：driver 细 K 在 (tLo,tHi]（loOpen=true 时 tLo=-∞，等价于 <=tHi）内 x 最小/最大，与 a_replay_multi_xmap 一致。 */
+function driverXSpanInTimeWindow(driverKs, tLoMs, tHiMs, loOpen) {
   const xs = [];
   for (const dk of driverKs || []) {
     const tm = parseChartTimeToMs(String(dk.t || ""));
-    if (!Number.isFinite(tm) || tm < tLoMs || tm >= tHiMs) continue;
+    if (!Number.isFinite(tm) || !Number.isFinite(tHiMs)) continue;
+    const inWin = loOpen ? tm <= tHiMs : tm > tLoMs && tm <= tHiMs;
+    if (!inWin) continue;
     const xv = Number(dk.x);
     if (Number.isFinite(xv)) xs.push(xv);
   }
@@ -13006,13 +13032,21 @@ function driverXSpanInTimeWindow(driverKs, tLoMs, tHiMs) {
   return { xLo: Math.min(...xs), xHi: Math.max(...xs) };
 }
 
-/** 粗 K 的 [tLo, tHi)；右界无下一根时用大偏移（对齐 a_replay_multi_xmap）。 */
-function overlayCoarseBarTimeHiMs(bar, nextBar) {
-  const tLoMs = parseChartTimeToMs(String(bar.t || ""));
-  if (!Number.isFinite(tLoMs)) return null;
-  let tHiMs = nextBar ? parseChartTimeToMs(String(nextBar.t || "")) : NaN;
-  if (!Number.isFinite(tHiMs) || tHiMs <= tLoMs) tHiMs = tLoMs + 86400000 * 400;
-  return { tLoMs, tHiMs };
+/** 粗 K 的 t 为桶末时刻：细 K 归属 (tPrev, tCurr]；无上一根则 (-∞, tCurr]（对齐 a_replay_multi_xmap._coarse_bar_time_span_ms）。 */
+function overlayCoarseBarTimeWindowMs(prevBar, bar) {
+  const tHiMs = parseChartTimeToMs(String(bar.t || ""));
+  if (!Number.isFinite(tHiMs)) return null;
+  if (!prevBar) {
+    return { tLoMs: Number.NEGATIVE_INFINITY, tHiMs, loOpen: true };
+  }
+  const tLoMs = parseChartTimeToMs(String(prevBar.t || ""));
+  if (!Number.isFinite(tLoMs)) {
+    return { tLoMs: Number.NEGATIVE_INFINITY, tHiMs, loOpen: true };
+  }
+  if (tLoMs >= tHiMs) {
+    return { tLoMs: Number.NEGATIVE_INFINITY, tHiMs, loOpen: true };
+  }
+  return { tLoMs, tHiMs, loOpen: false };
 }
 
 function overlayFindBarIndexInKline(chart, bar) {
@@ -13030,12 +13064,14 @@ function overlayFindBarIndexInKline(chart, bar) {
   return -1;
 }
 
-/** [tLo,tHi) 内 driver 细 K，按时间排序；叠图线框 OHLC 与框内细 K 统计一致。 */
-function driverBarsInTimeWindowSorted(driverKs, tLoMs, tHiMs) {
+/** (tLo,tHi]（或 loOpen 时 <=tHi）内 driver 细 K，按时间排序；与叠图横轴 span 同一时间语义。 */
+function driverBarsInTimeWindowSorted(driverKs, tLoMs, tHiMs, loOpen) {
   const out = [];
   for (const dk of driverKs || []) {
     const tm = parseChartTimeToMs(String(dk.t || ""));
-    if (!Number.isFinite(tm) || tm < tLoMs || tm >= tHiMs) continue;
+    if (!Number.isFinite(tm) || !Number.isFinite(tHiMs)) continue;
+    const inWin = loOpen ? tm <= tHiMs : tm > tLoMs && tm <= tHiMs;
+    if (!inWin) continue;
     out.push(dk);
   }
   out.sort((a, b) => {
@@ -13826,12 +13862,18 @@ function drawCandles(chart, s, paintOpts = {}) {
     ctx.lineJoin = "miter";
     for (const k of ks) {
       const idx = overlayFindBarIndexInKline(chart, k);
-      const nextBar = idx >= 0 && idx + 1 < fullKl.length ? fullKl[idx + 1] : null;
-      const tr = overlayCoarseBarTimeHiMs(k, nextBar);
+      const prevBar = idx > 0 ? fullKl[idx - 1] : null;
+      const tr = overlayCoarseBarTimeWindowMs(prevBar, k);
       if (!tr) continue;
-      const slice = driverBarsInTimeWindowSorted(driverKl, tr.tLoMs, tr.tHiMs);
-      const q = synthOhlcFromDriverSlice(slice, k);
-      const span = driverXSpanInTimeWindow(driverKl, tr.tLoMs, tr.tHiMs);
+      const slice = driverBarsInTimeWindowSorted(driverKl, tr.tLoMs, tr.tHiMs, tr.loOpen);
+      // 多周期叠层：OHLC 与本层周期 K 线（及后端 kline_combine）一致；横轴仍按 driver 细 K 时间窗对齐。
+      const oN = Number(k.o),
+        hN = Number(k.h),
+        lN = Number(k.l),
+        cN = Number(k.c);
+      const nativeOk = [oN, hN, lN, cN].every((v) => Number.isFinite(v));
+      const q = nativeOk ? { o: oN, h: hN, l: lN, c: cN } : synthOhlcFromDriverSlice(slice, k);
+      const span = driverXSpanInTimeWindow(driverKl, tr.tLoMs, tr.tHiMs, tr.loOpen);
       let xLo = span ? span.xLo : Number(k.x);
       let xHi = span ? span.xHi : Number(k.x);
       if (!Number.isFinite(xLo) || !Number.isFinite(xHi)) continue;
