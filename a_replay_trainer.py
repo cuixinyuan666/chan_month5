@@ -159,7 +159,7 @@ YAHOO_INLINE_SRC = "inline:yahoo"
 EASTMONEY_INLINE_SRC = "inline:eastmoney"
 AKTX_INLINE_SRC = "inline:aktx"
 GITHUB_CSV_INLINE_SRC = "inline:github_csv"
-# 本地 a_Data 离线包（分笔优先，否则 1 分钟合成高周期）
+# 本地 a_Data 离线包：仅分笔 txt（a_Data/六位代码/YYYYMMDD_六位代码.txt），内存中聚合成各周期 K
 OFFLINE_INLINE_SRC = "inline:offline"
 # 可配置的数据源优先级（从系统配置读取）
 CONFIG_DATA_SRC_PRIORITY: list = []
@@ -588,7 +588,7 @@ def build_tick_synth_session_data(
     b8, e8 = _offline_date_bounds(begin_date, end_date)
     tick_paths = _offline_list_tick_paths(folder, code6, b8, e8)
     if not tick_paths:
-        raise ValueError("分笔价格合成模式要求存在 TickData 分笔文件（当前日期区间未找到）")
+        raise ValueError("分笔价格合成模式要求 a_Data 下存在分笔文件（当前日期区间未找到 YYYYMMDD_代码.txt）")
     ticks = _offline_load_ticks(tick_paths)
     if not ticks:
         raise ValueError("分笔文件在日期区间内无有效成交行")
@@ -775,29 +775,15 @@ def _offline_root_dir() -> str:
 
 
 def offline_folder_from_code(code: str) -> str:
-    """sz.001312 -> SZ#001312"""
-    c = str(code or "").strip().lower()
-    # 北交所代码优先按数字前缀识别，避免被前端传来的 sz./sh. 误导
-    if c.startswith("bj."):
-        out = "BJ#" + c[3:9] if len(c) >= 9 else "BJ#" + c[3:]
-        return out
-    if c.startswith("sh."):
-        sym = c[3:9] if len(c) >= 9 else c[3:]
-        out = ("BJ#" if sym.startswith(("8", "9", "4")) else "SH#") + sym
-        return out
-    if c.startswith("sz."):
-        sym = c[3:9] if len(c) >= 9 else c[3:]
-        out = ("BJ#" if sym.startswith(("8", "9", "4")) else "SZ#") + sym
-        return out
-    sym = _strip_market_prefix(code)
-    if len(sym) == 6 and sym.isdigit():
-        if sym.startswith(("8", "9", "4")):
-            out = "BJ#" + sym
-        else:
-            out = ("SH#" if sym.startswith("6") else "SZ#") + sym
-        return out
-    out = "SZ#" + sym
-    return out
+    """证券代码 -> a_Data 子目录名：纯 6 位数字（与分笔文件名 YYYYMMDD_xxxxxx.txt 后缀一致）。"""
+    sym = str(_strip_market_prefix(code or "")).strip()
+    digits = "".join(ch for ch in sym if ch.isdigit())
+    if len(digits) >= 6:
+        return digits[:6]
+    if digits:
+        return digits.zfill(6)
+    # 无数字时兜底，避免非法路径
+    return "000000"
 
 
 def _offline_date_bounds(begin_date: Optional[str], end_date: Optional[str]) -> tuple[int, int]:
@@ -810,27 +796,17 @@ def _offline_date_bounds(begin_date: Optional[str], end_date: Optional[str]) -> 
 
 
 def offline_bundle_exists(code: str, begin_date: Optional[str], end_date: Optional[str]) -> bool:
-    """会话加载前探测：是否有可用离线包（分笔或 1 分钟文件）。"""
+    """会话加载前探测：a_Data/六位代码/ 下日期闭区间内是否存在分笔文件。"""
     folder = os.path.join(_offline_root_dir(), offline_folder_from_code(code))
     if not os.path.isdir(folder):
         return False
     code6 = _strip_market_prefix(code)
     b8, e8 = _offline_date_bounds(begin_date, end_date)
-    tick_dir = os.path.join(folder, "TickData")
-    if os.path.isdir(tick_dir):
-        pat = re.compile(r"^(\d{8})_" + re.escape(code6) + r"\.txt$", re.I)
-        for fn in os.listdir(tick_dir):
-            m = pat.match(fn)
-            if m:
-                d8 = int(m.group(1))
-                if b8 <= d8 <= e8:
-                    return True
-    k1 = os.path.join(folder, "KLine", "1MINUTE", offline_folder_from_code(code) + ".txt")
-    return os.path.isfile(k1) and os.path.getsize(k1) > 80
+    return len(_offline_list_tick_paths(folder, code6, b8, e8)) > 0
 
 
 def offline_tick_files_exist_for_range(code: str, begin_date: Optional[str], end_date: Optional[str]) -> bool:
-    """指定日期闭区间内是否存在可分笔 TickData 文件（与 offline_bundle_exists 中分笔判定一致）。"""
+    """指定日期闭区间内是否存在可分笔文件（与 offline_bundle_exists 判定一致）。"""
     folder = os.path.join(_offline_root_dir(), offline_folder_from_code(code))
     if not os.path.isdir(folder):
         return False
@@ -858,14 +834,6 @@ def _offline_chip_supported_ktypes() -> frozenset:
     )
 
 
-def offline_1m_file_exists(code: str) -> bool:
-    """a_Data 下是否存在可用的 1 分钟 K 线文本（无分笔时用于分钟收盘点质量化筹码）。"""
-    folder = os.path.join(_offline_root_dir(), offline_folder_from_code(code))
-    fn = offline_folder_from_code(code) + ".txt"
-    p = os.path.join(folder, "KLine", "1MINUTE", fn)
-    return os.path.isfile(p) and os.path.getsize(p) > 80
-
-
 def _parse_kline_bar_ctime(bar_t: str) -> Optional[CTime]:
     """解析 serialize_klu_iter 的时间串（与 CTime.to_str 一致：YYYY/MM/DD 或带 HH:MM）。"""
     s = str(bar_t or "").strip()
@@ -889,7 +857,7 @@ def _parse_kline_bar_ctime(bar_t: str) -> Optional[CTime]:
 
 
 def _offline_chip_bar_bucket_key(ct: CTime, k_type: KL_TYPE) -> tuple:
-    """与 Offline 合成 K 的分桶一致：分笔或 1 分钟行归入同一根 K。"""
+    """与 Offline 合成 K 的分桶一致：分笔时刻归入对应周期 K 根。"""
     from datetime import date as _date
 
     if k_type == KL_TYPE.K_DAY:
@@ -970,7 +938,7 @@ def _enrich_kline_all_offline_chip_non_triangle(
     code: str, kline_all: list[dict[str, Any]], end_date: Optional[str], k_type: KL_TYPE
 ) -> None:
     """
-    离线任意支持周期：写入 chip_tick_bins（分笔价量直加；无分笔则用 1 分钟收盘点质量化），前端不走 OHLC 三角分摊。
+    离线任意支持周期：写入 chip_tick_bins（分笔价量直加），前端不走 OHLC 三角分摊。
     """
     from collections import defaultdict
 
@@ -984,43 +952,17 @@ def _enrich_kline_all_offline_chip_non_triangle(
     key_to_rows: dict[tuple, list[tuple[float, float, str]]] = defaultdict(list)
 
     paths = _offline_list_tick_paths(folder, code6, b8, e8)
-    tick_vol_s = 0.0
-    tick_vol_b = 0.0
-    used_tick_files = False
-    if paths:
-        ticks = _offline_load_ticks(paths)
-        if not ticks:
-            return
-        used_tick_files = True
-        for t, price, vol, side in ticks:
-            try:
-                bk = _offline_chip_bar_bucket_key(t, k_type)
-            except ValueError:
-                continue
-            key_to_rows[bk].append((float(price), float(vol), str(side)))
-            if str(side).strip().upper() == "S":
-                tick_vol_s += float(vol)
-            else:
-                tick_vol_b += float(vol)
-    else:
-        p1m = os.path.join(folder, "KLine", "1MINUTE", offline_folder_from_code(code) + ".txt")
-        if not (os.path.isfile(p1m) and os.path.getsize(p1m) > 80):
-            return
-        rows_1m = _offline_load_1m_rows(p1m, b8, e8)
-        if not rows_1m:
-            return
-        for r in rows_1m:
-            ct = r["t"]
-            try:
-                bk = _offline_chip_bar_bucket_key(ct, k_type)
-            except ValueError:
-                continue
-            # 仅有 1 分钟 K：无法得知 tick 级别方向，用 OHLC 简易判定：
-            # close >= open 视作 B(右红)，否则视作 S(左绿)
-            o = float(r.get("o", 0.0) or 0.0)
-            c = float(r.get("c", 0.0) or 0.0)
-            side = "B" if c >= o else "S"
-            key_to_rows[bk].append((float(r["c"]), float(r["v"]), side))
+    if not paths:
+        return
+    ticks = _offline_load_ticks(paths)
+    if not ticks:
+        return
+    for t, price, vol, side in ticks:
+        try:
+            bk = _offline_chip_bar_bucket_key(t, k_type)
+        except ValueError:
+            continue
+        key_to_rows[bk].append((float(price), float(vol), str(side)))
 
     if not key_to_rows:
         return
@@ -2055,92 +1997,40 @@ def _offline_kl_minutes(klt: KL_TYPE) -> int:
         KL_TYPE.K_60M: 60,
     }
     if klt not in m:
-        raise ValueError(f"离线数据暂不支持从 1 分钟合成的周期：{klt}")
+        raise ValueError(f"离线数据不支持的分钟类周期：{klt}")
     return m[klt]
 
 
-def _offline_parse_slash_date(s: str) -> tuple[int, int, int]:
-    s = s.strip().replace("-", "/")
-    a = s.split("/")
-    if len(a) < 3:
-        raise ValueError(s)
-    return int(a[0]), int(a[1]), int(a[2])
-
-
-def _offline_parse_hhmm(s: str) -> tuple[int, int]:
-    s = str(s).strip()
-    if ":" in s:
-        a, b = s.split(":", 1)
-        return int(a), int(b)
-    if len(s) == 4 and s.isdigit():
-        return int(s[:2]), int(s[2:])
-    raise ValueError(s)
-
-
-def _offline_load_1m_rows(path: str, b8: int, e8: int) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    with open(path, "r", encoding="utf-8", errors="ignore") as f:
-        for line in f:
-            line = line.rstrip("\n\r")
-            if not line.strip():
-                continue
-            raw = line.replace("\t", " ")
-            if "日期" in raw and "时间" in raw:
-                continue
-            if "分钟线" in raw or re.match(r"^\d{6}\s", raw.strip()):
-                continue
-            parts = [p for p in line.split("\t") if p != ""]
-            if len(parts) < 8:
-                parts = re.split(r"\s+", raw.strip())
-            if len(parts) < 8:
-                continue
-            try:
-                y, mo, d = _offline_parse_slash_date(parts[0])
-                d8 = y * 10000 + mo * 100 + d
-                if d8 < b8 or d8 > e8:
-                    continue
-                hh, mm = _offline_parse_hhmm(parts[1])
-                ct = CTime(y, mo, d, hh, mm, auto=False)
-                rows.append(
-                    {
-                        "t": ct,
-                        "o": str2float(parts[2]),
-                        "h": str2float(parts[3]),
-                        "l": str2float(parts[4]),
-                        "c": str2float(parts[5]),
-                        "v": str2float(parts[6]),
-                        "amt": str2float(parts[7]),
-                    }
-                )
-            except (ValueError, TypeError, IndexError):
-                continue
-    rows.sort(key=lambda r: r["t"].ts)
-    return rows
-
-
 def _offline_list_tick_paths(folder: str, code6: str, b8: int, e8: int) -> list[str]:
-    tick_dir = os.path.join(folder, "TickData")
-    if not os.path.isdir(tick_dir):
+    """枚举 a_Data/六位代码/ 下分笔：YYYYMMDD_六位代码.txt（自动 os.listdir，增删股票目录无需改代码）。"""
+    digits = "".join(ch for ch in str(code6) if ch.isdigit())
+    c6 = digits[:6] if len(digits) >= 6 else digits.zfill(6) if digits else ""
+    if not c6 or len(c6) != 6:
         return []
-    pat = re.compile(r"^(\d{8})_" + re.escape(code6) + r"\.txt$", re.I)
+    if not os.path.isdir(folder):
+        return []
+    pat = re.compile(r"^(\d{8})_" + re.escape(c6) + r"\.txt$", re.I)
     out: list[tuple[int, str]] = []
-    for fn in os.listdir(tick_dir):
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return []
+    for fn in names:
         m = pat.match(fn)
         if not m:
             continue
         d8 = int(m.group(1))
         if b8 <= d8 <= e8:
-            out.append((d8, os.path.join(tick_dir, fn)))
+            out.append((d8, os.path.join(folder, fn)))
     out.sort(key=lambda x: x[0])
     return [p for _, p in out]
 
 
 def _offline_load_ticks(paths: list[str]) -> list[tuple[CTime, float, float, str]]:
     """
-    读取离线分笔 TickData。
+    读取离线分笔 txt（a_Data/代码/YYYYMMDD_代码.txt）。
 
-    TickData 一般列为：时间 价格 成交 笔数 B/S(可选)
-    其中 B/S 用于筹码分布的左右拆分：S(左绿) / B(右红)
+    行格式一般为：时间 价格 成交 笔数 B/S(可选)；B/S 用于筹码左右拆分：S(左绿) / B(右红)。
     """
     ticks: list[tuple[CTime, float, float, str]] = []
     for p in paths:
@@ -2339,7 +2229,7 @@ def _offline_rows_to_ktype(rows_1m: list[dict[str, Any]], k_type: KL_TYPE) -> li
 
 
 class COfflineInline(CCommonStockApi):
-    """读取 a_Data/{SH|SZ}#代码/ 下分笔或 1 分钟文本，合成任意请求周期。"""
+    """读取 a_Data/六位代码/ 下分笔 txt，在内存中聚合成任意请求周期 K 线。"""
 
     def __init__(self, code, k_type=KL_TYPE.K_DAY, begin_date=None, end_date=None, autype=AUTYPE.QFQ):
         self._folder_name = offline_folder_from_code(code)
@@ -2355,20 +2245,15 @@ class COfflineInline(CCommonStockApi):
         code6 = _strip_market_prefix(self.code)
         b8, e8 = _offline_date_bounds(self.begin_date, self.end_date)
         tick_paths = _offline_list_tick_paths(self._base, code6, b8, e8)
-        rows_1m: list[dict[str, Any]]
-        if tick_paths:
-            ticks = _offline_load_ticks(tick_paths)
-            if not ticks:
-                raise ValueError("分笔文件在日期区间内无有效成交行")
-            rows_1m = _offline_ticks_to_1m(ticks)
-        else:
-            p1m = os.path.join(self._base, "KLine", "1MINUTE", self._folder_name + ".txt")
-            if not os.path.isfile(p1m):
-                # 离线包以分笔或 1 分钟为基础数据，再合成到目标周期
-                raise ValueError(f"未找到离线基础数据文件（1分钟）：{p1m}，当前请求周期：{_k_type_label_cn(self.k_type)}")
-            rows_1m = _offline_load_1m_rows(p1m, b8, e8)
-            if not rows_1m:
-                raise ValueError(f"离线基础数据（1分钟）在指定日期区间为空，当前请求周期：{_k_type_label_cn(self.k_type)}")
+        if not tick_paths:
+            raise ValueError(
+                f"未找到离线分笔数据：目录 {self._base} 下无日期区间内 YYYYMMDD_{self._folder_name}.txt，"
+                f"当前请求周期：{_k_type_label_cn(self.k_type)}"
+            )
+        ticks = _offline_load_ticks(tick_paths)
+        if not ticks:
+            raise ValueError("分笔文件在日期区间内无有效成交行")
+        rows_1m = _offline_ticks_to_1m(ticks)
         bars = _offline_rows_to_ktype(rows_1m, self.k_type)
         if not bars:
             raise ValueError("离线合成后 K 线为空")
@@ -3928,15 +3813,12 @@ class ChanStepper:
             self._data_session_key = session_key
             if k_sel.stock_name:
                 self.stock_name = k_sel.stock_name
-            # 离线 + 支持周期：为 kline_all 写 chip_tick_bins（分笔或 1 分钟收盘点质量化），全周期前端不走三角分摊
+            # 离线 + 支持周期：为 kline_all 写 chip_tick_bins（分笔累加），全周期前端不走三角分摊
             if (
                 self.data_src_used == OFFLINE_INLINE_SRC
                 and self.kline_all
                 and self.k_type in _offline_chip_supported_ktypes()
-                and (
-                    offline_tick_files_exist_for_range(self.code, "1990-01-01", end_date)
-                    or offline_1m_file_exists(self.code)
-                )
+                and offline_tick_files_exist_for_range(self.code, "1990-01-01", end_date)
             ):
                 _enrich_kline_all_offline_chip_non_triangle(self.code, self.kline_all, end_date, self.k_type)
         else:
@@ -7948,7 +7830,7 @@ const DEFAULT_CHART_CONFIG = {
   biZs: { width: 1.8, color: "#f59e0b", enabled: true },
   segZs: { width: 2.4, color: "#059669", enabled: true },
   segsegZs: { width: 2.8, color: "#2563eb", enabled: true },
-  candle: { width: 1.4, upColor: "#ef4444", downColor: "#22c55e" },
+  candle: { width: 1.4, upColor: "#ef4444", downColor: "#22c55e", alpha: 1 },
   bspBi: { fontSize: 14, lineColor: "#94a3b8", lineWidth: 1, lineStyle: "dashed", lineDash: [5, 4], showLowerExtension: true },
   bspSeg: { fontSize: 14, lineColor: "#64748b", lineWidth: 1.1, lineStyle: "dashed", lineDash: [5, 4], showLowerExtension: true },
   bspSegseg: { fontSize: 14, lineColor: "#475569", lineWidth: 1.2, lineStyle: "dashed", lineDash: [5, 4], showLowerExtension: true },
@@ -8110,8 +7992,17 @@ const DEFAULT_CHART_CONFIG = {
   },
   legend: { fontSize: 12, fontWeight: "normal", color: "#0f172a" },
   userRay: { color: "#f97316", width: 1.5, dash: [8, 4], fontSize: 12 },
-  // 多周期单图：非 driver 层透明度与 K 线宽度倍率；layers[周期字符串] 可覆盖 alpha/candleWidth/upColor/downColor
-  multiOverlay: { defaultAlpha: 0.58, defaultCandleWidth: 1.2, layers: {} }
+  // 多周期单图：layers[周期键] 可覆盖粗层蜡烛/影线/缠论线透明度；default* 为各粗周期缺省
+  multiOverlay: {
+    defaultAlpha: 0.58,
+    defaultCandleWidth: 1.2,
+    defaultCoarseBodyAlpha: 0.42,
+    defaultCoarseUpperShadowAlpha: 0.55,
+    defaultCoarseLowerShadowAlpha: 0.55,
+    defaultUpperShadowStyle: "grid",
+    defaultLowerShadowStyle: "grid",
+    layers: {},
+  },
 };
 
 function deepMerge(target, source) {
@@ -8200,9 +8091,36 @@ function migrateChartConfig(cfg) {
   if (!next.multiOverlay) next.multiOverlay = { defaultAlpha: 0.58, defaultCandleWidth: 1.2, layers: {} };
   if (!next.multiOverlay.layers || typeof next.multiOverlay.layers !== "object") next.multiOverlay.layers = {};
   const da = Number(next.multiOverlay.defaultAlpha);
-  next.multiOverlay.defaultAlpha = Number.isFinite(da) ? Math.min(1, Math.max(0.1, da)) : 0.58;
+  next.multiOverlay.defaultAlpha = Number.isFinite(da) ? Math.min(1, Math.max(0.05, da)) : 0.58;
   const dw = Number(next.multiOverlay.defaultCandleWidth);
   next.multiOverlay.defaultCandleWidth = Number.isFinite(dw) ? Math.min(3, Math.max(0.2, dw)) : 1.2;
+  const dba = Number(next.multiOverlay.defaultCoarseBodyAlpha);
+  next.multiOverlay.defaultCoarseBodyAlpha = Number.isFinite(dba) ? Math.min(1, Math.max(0.05, dba)) : 0.42;
+  const dua = Number(next.multiOverlay.defaultCoarseUpperShadowAlpha);
+  next.multiOverlay.defaultCoarseUpperShadowAlpha = Number.isFinite(dua) ? Math.min(1, Math.max(0.05, dua)) : 0.55;
+  const dla = Number(next.multiOverlay.defaultCoarseLowerShadowAlpha);
+  next.multiOverlay.defaultCoarseLowerShadowAlpha = Number.isFinite(dla) ? Math.min(1, Math.max(0.05, dla)) : 0.55;
+  if (!next.multiOverlay.defaultUpperShadowStyle) next.multiOverlay.defaultUpperShadowStyle = "grid";
+  if (!next.multiOverlay.defaultLowerShadowStyle) next.multiOverlay.defaultLowerShadowStyle = "grid";
+  const styOk = new Set(["grid", "dots", "hatch", "shade", "soft"]);
+  if (!styOk.has(String(next.multiOverlay.defaultUpperShadowStyle || "").toLowerCase())) next.multiOverlay.defaultUpperShadowStyle = "grid";
+  if (!styOk.has(String(next.multiOverlay.defaultLowerShadowStyle || "").toLowerCase())) next.multiOverlay.defaultLowerShadowStyle = "grid";
+  if (next.multiOverlay.layers && typeof next.multiOverlay.layers === "object") {
+    Object.keys(next.multiOverlay.layers).forEach((kt) => {
+      const L = next.multiOverlay.layers[kt];
+      if (!L || typeof L !== "object") return;
+      if (L.lineAlpha == null && L.alpha != null) L.lineAlpha = L.alpha;
+      if (L.bodyAlpha == null && L.alpha != null) L.bodyAlpha = Math.min(1, Math.max(0.05, Number(L.alpha) * 0.88));
+      if (L.upperShadowAlpha == null && L.alpha != null) L.upperShadowAlpha = L.alpha;
+      if (L.lowerShadowAlpha == null && L.alpha != null) L.lowerShadowAlpha = L.alpha;
+    });
+  }
+  if (!next.candle || typeof next.candle.alpha !== "number" || !Number.isFinite(next.candle.alpha)) {
+    if (!next.candle) next.candle = {};
+    next.candle.alpha = 1;
+  } else {
+    next.candle.alpha = Math.min(1, Math.max(0.05, Number(next.candle.alpha)));
+  }
   return next;
 }
 
@@ -9425,6 +9343,77 @@ function appendMultiLayerPerKStyleSections(container, sections, buildLabelHtml) 
   });
 }
 
+/** 多周期单图：各粗周期 multiOverlay.layers[kt] 蜡烛分项（持久化在 chartConfig.multiOverlay.layers） */
+function appendMultiOverlayPerLayerFields(container, buildLabelHtml) {
+  if (!$("chartMode") || $("chartMode").value !== "multi") return;
+  const picked = collectKTypesMultiSelected();
+  const driverKt = MULTI_KTYPE_ORDER.filter((k) => picked.includes(k))[0];
+  const coarses = picked.filter((k) => k !== driverKt);
+  if (coarses.length === 0) return;
+  if (!chartConfig.multiOverlay) chartConfig.multiOverlay = JSON.parse(JSON.stringify(DEFAULT_CHART_CONFIG.multiOverlay));
+  if (!chartConfig.multiOverlay.layers || typeof chartConfig.multiOverlay.layers !== "object") chartConfig.multiOverlay.layers = {};
+  const mo = chartConfig.multiOverlay;
+  const styleOpts = [
+    { value: "grid", label: "网格" },
+    { value: "dots", label: "点状" },
+    { value: "hatch", label: "斜线阴影" },
+    { value: "shade", label: "竖向明暗" },
+    { value: "soft", label: "淡色平铺" },
+  ];
+  const wrap = document.createElement("div");
+  wrap.className = "settingsSection";
+  wrap.style.background = "rgba(124, 45, 18, 0.1)";
+  wrap.innerHTML = `<div class="settingsSectionTitle" style="color:#9a3412">单品种多周期 · 各粗周期叠层蜡烛</div>
+    <div class="muted" style="margin:0 0 10px 4px;font-size:12px;">驱动周期（最细勾选：${getKTypeLabelText(driverKt)}）使用上方「K线显示」整体透明度。以下为粗于驱动的各周期独立参数（保存到 multiOverlay.layers）。</div>`;
+  container.appendChild(wrap);
+  coarses.forEach((kt) => {
+    if (!chartConfig.multiOverlay.layers[kt]) chartConfig.multiOverlay.layers[kt] = {};
+    const L = chartConfig.multiOverlay.layers[kt];
+    const det = document.createElement("details");
+    det.style.margin = "6px 0";
+    det.open = false;
+    const sm = document.createElement("summary");
+    sm.style.cursor = "pointer";
+    sm.style.fontWeight = "600";
+    sm.textContent = `${getKTypeLabelText(kt)}（${kt}）叠层`;
+    det.appendChild(sm);
+    const grid = document.createElement("div");
+    grid.className = "settingsGrid";
+    const items = [
+      { label: "缠论线透明度 lineAlpha", subkey: "lineAlpha", type: "number", min: 0.05, max: 1, step: 0.02, def: mo.defaultAlpha, tip: "合并框/分型笔段等；默认取上方「缠论线默认透明度」。" },
+      { label: "实体透明度 bodyAlpha", subkey: "bodyAlpha", type: "number", min: 0.05, max: 1, step: 0.02, def: mo.defaultCoarseBodyAlpha, tip: "大周期实心矩形。" },
+      { label: "上影线透明度", subkey: "upperShadowAlpha", type: "number", min: 0.05, max: 1, step: 0.02, def: mo.defaultCoarseUpperShadowAlpha, tip: "" },
+      { label: "下影线透明度", subkey: "lowerShadowAlpha", type: "number", min: 0.05, max: 1, step: 0.02, def: mo.defaultCoarseLowerShadowAlpha, tip: "" },
+      { label: "上影线纹理", subkey: "upperShadowStyle", type: "select", options: styleOpts, def: mo.defaultUpperShadowStyle, tip: "" },
+      { label: "下影线纹理", subkey: "lowerShadowStyle", type: "select", options: styleOpts, def: mo.defaultLowerShadowStyle, tip: "" },
+      { label: "兼容旧字段 alpha", subkey: "alpha", type: "number", min: 0.05, max: 1, step: 0.02, def: null, tip: "旧版单一透明度；若新字段未填可继续用此项，保存迁移时会拆到 line/body/影线。" },
+    ];
+    items.forEach((it) => {
+      let val = L[it.subkey];
+      if ((val === undefined || val === null) && it.def != null) val = it.def;
+      if (val === undefined || val === null) val = "";
+      const itemDiv = document.createElement("div");
+      itemDiv.className = "settingsItem";
+      const tip = it.tip || "";
+      const labelH = buildLabelHtml({ ...it, tip: tip || `${it.label}。` });
+      if (it.type === "select") {
+        const opts = (it.options || [])
+          .map((o) => `<option value="${o.value}" ${String(val) === String(o.value) ? "selected" : ""}>${o.label}</option>`)
+          .join("");
+        itemDiv.innerHTML = `<label>${labelH}</label><select data-moverlay-kt="${kt}" data-moverlay-subkey="${it.subkey}">${opts}</select>`;
+      } else {
+        const mn = it.min != null ? it.min : "";
+        const mx = it.max != null ? it.max : "";
+        const st = it.step != null ? it.step : "";
+        itemDiv.innerHTML = `<label>${labelH}</label><input type="number" data-moverlay-kt="${kt}" data-moverlay-subkey="${it.subkey}" min="${mn}" max="${mx}" step="${st}" value="${val !== "" ? val : ""}">`;
+      }
+      grid.appendChild(itemDiv);
+    });
+    det.appendChild(grid);
+    wrap.appendChild(det);
+  });
+}
+
 function renderSettingsForm() {
   const container = $("settingsContent");
   container.innerHTML = "";
@@ -9470,7 +9459,7 @@ function renderSettingsForm() {
           { value: "quantity", label: "数量" },
           { value: "tick_traditional", label: "分笔价格合成传统" },
           { value: "tick_quantity", label: "分笔价格合成数量" }
-        ], tip: "传统：保持原始K线；数量：按数量Q聚合原始K线；分笔价格合成传统：用TickData逐笔价格合成目标周期K线；分笔价格合成数量：先逐笔合成再按数量Q聚合。分笔合成两种模式的筹码均使用逐笔累加，不使用三角分摊。" },
+        ], tip: "传统：保持原始K线；数量：按数量Q聚合原始K线；分笔价格合成传统：用 a_Data/六位代码/ 下分笔 txt 合成目标周期K线；分笔价格合成数量：先逐笔合成再按数量Q聚合。分笔合成两种模式的筹码均使用逐笔累加，不使用三角分摊。" },
         { label: "喂数据方式", subKey: "feedMode", type: "select", options: [
           { value: "step", label: "步进（当前实现）" },
           { value: "unified", label: "统一喂数据（一次性喂给缠论计算）" }
@@ -9522,7 +9511,16 @@ function renderSettingsForm() {
       items: [
         { label: "描边粗细", subKey: "width", type: "number", min: 0.1, max: 5, step: 0.1 },
         { label: "上涨颜色", subKey: "upColor", type: "color" },
-        { label: "下跌颜色", subKey: "downColor", type: "color" }
+        { label: "下跌颜色", subKey: "downColor", type: "color" },
+        {
+          label: "K线整体透明度",
+          subKey: "alpha",
+          type: "number",
+          min: 0.05,
+          max: 1,
+          step: 0.02,
+          tip: "所有模式下主图蜡烛透明度（1=不透明）。多周期单图时主要影响驱动周期（最细勾选周期，通常为 1 分钟）小 K 线；粗周期叠层另有独立透明度项。",
+        },
       ]
     },
     {
@@ -9531,9 +9529,78 @@ function renderSettingsForm() {
       color: "#7c2d12",
       bgColor: "rgba(124, 45, 18, 0.08)",
       items: [
-        { label: "非驱动层透明度", subKey: "defaultAlpha", type: "number", min: 0.1, max: 1, step: 0.02, tip: "多周期单图时粗周期叠加层相对驱动层的透明度（驱动层为 1）。" },
-        { label: "非驱动层K宽倍率", subKey: "defaultCandleWidth", type: "number", min: 0.2, max: 3, step: 0.1, tip: "叠加层蜡烛宽度 = 当前主图K线宽度×倍率；可按周期在持久化配置 multiOverlay.layers 里单独写 alpha/candleWidth/upColor/downColor。" }
-      ]
+        {
+          label: "缠论线默认透明度",
+          subKey: "defaultAlpha",
+          type: "number",
+          min: 0.05,
+          max: 1,
+          step: 0.02,
+          tip: "各粗周期叠层「合并框/笔段/中枢」等默认透明度；可按周期在下方「各粗周期叠层」中单独覆盖（lineAlpha）。",
+        },
+        {
+          label: "非驱动层K宽倍率",
+          subKey: "defaultCandleWidth",
+          type: "number",
+          min: 0.2,
+          max: 3,
+          step: 0.1,
+          tip: "叠加层线宽基数=主图 K 线描边粗细×本倍率；实体宽度仍按细 K 外沿全包对齐，不受倍率拉伸。",
+        },
+        {
+          label: "粗层实体默认透明度",
+          subKey: "defaultCoarseBodyAlpha",
+          type: "number",
+          min: 0.05,
+          max: 1,
+          step: 0.02,
+          tip: "大周期实心实体默认透明度；可按周期单独覆盖 bodyAlpha。",
+        },
+        {
+          label: "上影线默认透明度",
+          subKey: "defaultCoarseUpperShadowAlpha",
+          type: "number",
+          min: 0.05,
+          max: 1,
+          step: 0.02,
+          tip: "大周期上影线（纹理填充）默认透明度。",
+        },
+        {
+          label: "下影线默认透明度",
+          subKey: "defaultCoarseLowerShadowAlpha",
+          type: "number",
+          min: 0.05,
+          max: 1,
+          step: 0.02,
+          tip: "大周期下影线（纹理填充）默认透明度。",
+        },
+        {
+          label: "上影线默认纹理",
+          subKey: "defaultUpperShadowStyle",
+          type: "select",
+          options: [
+            { value: "grid", label: "网格" },
+            { value: "dots", label: "点状" },
+            { value: "hatch", label: "斜线阴影" },
+            { value: "shade", label: "竖向明暗" },
+            { value: "soft", label: "淡色平铺" },
+          ],
+          tip: "非驱动层大周期蜡烛上影线区域填充样式；可按周期用 upperShadowStyle 覆盖。",
+        },
+        {
+          label: "下影线默认纹理",
+          subKey: "defaultLowerShadowStyle",
+          type: "select",
+          options: [
+            { value: "grid", label: "网格" },
+            { value: "dots", label: "点状" },
+            { value: "hatch", label: "斜线阴影" },
+            { value: "shade", label: "竖向明暗" },
+            { value: "soft", label: "淡色平铺" },
+          ],
+          tip: "下影线区域样式；可按周期用 lowerShadowStyle 覆盖。",
+        },
+      ],
     },
     {
       title: "分型辅助线",
@@ -10025,7 +10092,9 @@ function renderSettingsForm() {
     }
   ];
 
-  sections.forEach(sec => {
+  const cmv = $("chartMode") ? String($("chartMode").value || "single") : "single";
+  sections.forEach((sec) => {
+    if (sec.key === "multiOverlay" && cmv !== "multi") return;
     const div = document.createElement("div");
     div.className = "settingsSection";
     div.style.background = sec.bgColor;
@@ -10212,6 +10281,7 @@ function renderSettingsForm() {
     container.appendChild(div);
   });
   appendMultiLayerPerKStyleSections(container, sections, buildLabelHtml);
+  appendMultiOverlayPerLayerFields(container, buildLabelHtml);
   initTooltips();
 }
 
@@ -10522,6 +10592,28 @@ async function saveSettings() {
       if (!chartConfigStore.multiPerK[mkt] || typeof chartConfigStore.multiPerK[mkt] !== "object") chartConfigStore.multiPerK[mkt] = {};
       if (!chartConfigStore.multiPerK[mkt][key]) chartConfigStore.multiPerK[mkt][key] = {};
       chartConfigStore.multiPerK[mkt][key][subkey] = val;
+      return;
+    }
+    const mokt = input.dataset.moverlayKt;
+    const mosub = input.dataset.moverlaySubkey;
+    if (mokt && mosub) {
+      let valMo;
+      if (input.type === "number") valMo = parseFloat(input.value);
+      else valMo = input.value;
+      if (!chartConfig.multiOverlay) chartConfig.multiOverlay = JSON.parse(JSON.stringify(DEFAULT_CHART_CONFIG.multiOverlay));
+      if (!chartConfig.multiOverlay.layers || typeof chartConfig.multiOverlay.layers !== "object") chartConfig.multiOverlay.layers = {};
+      if (!chartConfig.multiOverlay.layers[mokt]) chartConfig.multiOverlay.layers[mokt] = {};
+      if (input.type === "number") {
+        if (!Number.isFinite(valMo)) {
+          delete chartConfig.multiOverlay.layers[mokt][mosub];
+        } else {
+          let v = valMo;
+          if (/Alpha$/.test(mosub) || mosub === "alpha" || mosub === "lineAlpha") v = Math.min(1, Math.max(0.05, v));
+          chartConfig.multiOverlay.layers[mokt][mosub] = v;
+        }
+      } else {
+        chartConfig.multiOverlay.layers[mokt][mosub] = valMo;
+      }
       return;
     }
     if (!key || !subkey || subkey.endsWith("-text")) return;
@@ -13846,6 +13938,128 @@ function drawChips(chart, s) {
   ctx.restore();
 }
 
+const _wickTexturePatternCache = new Map();
+function hexToRgbComponents(hex) {
+  let h = String(hex || "")
+    .trim()
+    .replace(/^#/, "");
+  if (h.length === 3) h = h.split("").map((c) => c + c).join("");
+  if (h.length !== 6 || !/^[0-9a-fA-F]+$/.test(h)) return { r: 148, g: 163, b: 184 };
+  return { r: parseInt(h.slice(0, 2), 16), g: parseInt(h.slice(2, 4), 16), b: parseInt(h.slice(4, 6), 16) };
+}
+
+function normalizeWickStyle(v) {
+  const s = String(v || "grid").toLowerCase();
+  if (["grid", "dots", "hatch", "shade", "soft"].includes(s)) return s;
+  return "grid";
+}
+
+/** 影线区域填充用重复纹理（与实体同宽的一体化粗影线） */
+function getWickTexturePattern(ctx2d, style, colorHex) {
+  const k = `${style}|${colorHex}`;
+  let p = _wickTexturePatternCache.get(k);
+  if (p) return p;
+  const tile = document.createElement("canvas");
+  tile.width = 12;
+  tile.height = 12;
+  const t = tile.getContext("2d");
+  if (!t) return null;
+  const { r, g, b } = hexToRgbComponents(colorHex);
+  if (style === "soft") {
+    t.fillStyle = `rgba(${r},${g},${b},0.22)`;
+    t.fillRect(0, 0, 12, 12);
+  } else if (style === "shade") {
+    const grd = t.createLinearGradient(0, 0, 12, 0);
+    grd.addColorStop(0, `rgba(${r},${g},${b},0.12)`);
+    grd.addColorStop(0.5, `rgba(${r},${g},${b},0.45)`);
+    grd.addColorStop(1, `rgba(${r},${g},${b},0.12)`);
+    t.fillStyle = grd;
+    t.fillRect(0, 0, 12, 12);
+  } else if (style === "dots") {
+    t.fillStyle = `rgba(${r},${g},${b},0.06)`;
+    t.fillRect(0, 0, 12, 12);
+    t.fillStyle = `rgba(${r},${g},${b},0.55)`;
+    for (let i = 0; i < 12; i += 3) for (let j = 0; j < 12; j += 3) t.fillRect(i, j, 1.2, 1.2);
+  } else if (style === "hatch") {
+    t.fillStyle = `rgba(${r},${g},${b},0.08)`;
+    t.fillRect(0, 0, 12, 12);
+    t.strokeStyle = `rgba(${r},${g},${b},0.38)`;
+    t.lineWidth = 1;
+    t.beginPath();
+    for (let d = -12; d < 24; d += 4) {
+      t.moveTo(d, 0);
+      t.lineTo(d + 12, 12);
+    }
+    t.stroke();
+  } else {
+    t.fillStyle = `rgba(${r},${g},${b},0.08)`;
+    t.fillRect(0, 0, 12, 12);
+    t.strokeStyle = `rgba(${r},${g},${b},0.35)`;
+    t.lineWidth = 1;
+    t.beginPath();
+    for (let i = 0; i <= 12; i += 6) {
+      t.moveTo(i, 0);
+      t.lineTo(i, 12);
+    }
+    for (let j = 0; j <= 12; j += 6) {
+      t.moveTo(0, j);
+      t.lineTo(12, j);
+    }
+    t.moveTo(0, 0);
+    t.lineTo(12, 12);
+    t.stroke();
+  }
+  try {
+    p = ctx2d.createPattern(tile, "repeat");
+  } catch {
+    p = null;
+  }
+  _wickTexturePatternCache.set(k, p);
+  return p;
+}
+
+/** 多周期粗层：实体/上下影线/缠论线透明度与影线纹理（来自 multiOverlay） */
+function resolveCoarseOverlayPaintOpts(mo, ktKey) {
+  const moO = mo || {};
+  const L = (moO.layers && moO.layers[ktKey]) || {};
+  const da = Number(moO.defaultAlpha);
+  const baseLine = Number.isFinite(da) ? Math.min(1, Math.max(0.05, da)) : 0.58;
+  const lineA = Number(L.lineAlpha != null ? L.lineAlpha : L.alpha != null ? L.alpha : baseLine);
+  const bodyA = Number(
+    L.bodyAlpha != null ? L.bodyAlpha : moO.defaultCoarseBodyAlpha != null ? moO.defaultCoarseBodyAlpha : 0.42
+  );
+  const upA = Number(
+    L.upperShadowAlpha != null
+      ? L.upperShadowAlpha
+      : moO.defaultCoarseUpperShadowAlpha != null
+        ? moO.defaultCoarseUpperShadowAlpha
+        : 0.55
+  );
+  const lowA = Number(
+    L.lowerShadowAlpha != null
+      ? L.lowerShadowAlpha
+      : moO.defaultCoarseLowerShadowAlpha != null
+        ? moO.defaultCoarseLowerShadowAlpha
+        : 0.55
+  );
+  return {
+    lineAlpha: Math.min(1, Math.max(0.05, Number.isFinite(lineA) ? lineA : baseLine)),
+    bodyAlpha: Math.min(1, Math.max(0.05, Number.isFinite(bodyA) ? bodyA : 0.42)),
+    upperShadowAlpha: Math.min(1, Math.max(0.05, Number.isFinite(upA) ? upA : 0.55)),
+    lowerShadowAlpha: Math.min(1, Math.max(0.05, Number.isFinite(lowA) ? lowA : 0.55)),
+    upperStyle: normalizeWickStyle(L.upperShadowStyle || moO.defaultUpperShadowStyle),
+    lowerStyle: normalizeWickStyle(L.lowerShadowStyle || moO.defaultLowerShadowStyle),
+  };
+}
+
+/** 与细 K 蜡烛同算法：半根实体宽（像素），用于粗 K 左右边界对齐到首末根细 K 外沿 */
+function driverPixelHalfBarWidth(s, driverKs) {
+  const drvVis = getVisibleKs({ kline: driverKs || [] }, s.xMin, s.xMax);
+  const n = drvVis.length;
+  const bodyW = Math.max(3, s.plotW / Math.max(42, (n || 1) * 1.28));
+  return bodyW / 2;
+}
+
 function drawCandles(chart, s, paintOpts = {}) {
   const ks = getVisibleKs(chart, s.xMin, s.xMax);
   const driverKl = paintOpts.driverKlineForOverlaySpan;
@@ -13854,10 +14068,12 @@ function drawCandles(chart, s, paintOpts = {}) {
   const dnS = getCfgColor(activeDrawStyle().candle.downColor);
   const upF = cssVar("--candleUpFill", "rgba(239,68,68,0.12)");
   const dnF = cssVar("--candleDownFill", "rgba(34,197,94,0.75)");
-  const lw = Math.max(1, Number(activeDrawStyle().candle.width) || 1);
+  const ovPhase = paintOpts.overlayCandlePhase;
 
   if (spanOverlay) {
     const fullKl = chart.kline || [];
+    const coarseOpts = paintOpts.coarseOverlayOpts || resolveCoarseOverlayPaintOpts(chartConfig.multiOverlay, String(paintOpts.overlayKtKey || ""));
+    const halfW = driverPixelHalfBarWidth(s, driverKl);
     ctx.save();
     ctx.lineJoin = "miter";
     for (const k of ks) {
@@ -13866,7 +14082,6 @@ function drawCandles(chart, s, paintOpts = {}) {
       const tr = overlayCoarseBarTimeWindowMs(prevBar, k);
       if (!tr) continue;
       const slice = driverBarsInTimeWindowSorted(driverKl, tr.tLoMs, tr.tHiMs, tr.loOpen);
-      // 多周期叠层：OHLC 与本层周期 K 线（及后端 kline_combine）一致；横轴仍按 driver 细 K 时间窗对齐。
       const oN = Number(k.o),
         hN = Number(k.h),
         lN = Number(k.l),
@@ -13880,8 +14095,10 @@ function drawCandles(chart, s, paintOpts = {}) {
       xLo = Math.max(s.xMin, Math.min(xLo, xHi));
       xHi = Math.min(s.xMax, Math.max(xLo, xHi));
       if (xHi < xLo) continue;
-      const pxL = s.x(xLo);
-      const pxR = s.x(xHi);
+      const pxCL = s.x(xLo);
+      const pxCR = s.x(xHi);
+      const pxL = Math.min(pxCL, pxCR) - halfW;
+      const pxR = Math.max(pxCL, pxCR) + halfW;
       const rectW = Math.max(1, pxR - pxL);
       const yHigh = s.y(q.h);
       const yLow = s.y(q.l);
@@ -13889,27 +14106,66 @@ function drawCandles(chart, s, paintOpts = {}) {
       const yClose = s.y(q.c);
       const envTop = Math.min(yHigh, yLow);
       const envBot = Math.max(yHigh, yLow);
-      const bodyTop = Math.min(yOpen, yClose);
-      const bodyBot = Math.max(yOpen, yClose);
+      let bodyTop = Math.min(yOpen, yClose);
+      let bodyBot = Math.max(yOpen, yClose);
+      if (bodyBot - bodyTop < 1) {
+        const mid = (bodyTop + bodyBot) / 2;
+        bodyTop = mid - 0.5;
+        bodyBot = mid + 0.5;
+      }
       const up = q.c >= q.o;
-      ctx.strokeStyle = up ? upS : dnS;
-      ctx.lineWidth = lw;
-      ctx.setLineDash([]);
-      ctx.strokeRect(pxL, envTop, rectW, Math.max(1, envBot - envTop));
-      ctx.strokeRect(pxL, bodyTop, rectW, Math.max(1, bodyBot - bodyTop));
-      const tick = Math.min(6, Math.max(2, rectW * 0.14));
-      ctx.beginPath();
-      ctx.moveTo(pxL, yOpen);
-      ctx.lineTo(pxL + tick, yOpen);
-      ctx.moveTo(pxR, yClose);
-      ctx.lineTo(pxR - tick, yClose);
-      ctx.stroke();
+      const strokeC = up ? upS : dnS;
+      const phase = ovPhase || "both";
+      if (phase === "shadows" || phase === "both") {
+        const uh = Math.max(0, bodyTop - envTop);
+        const lh = Math.max(0, envBot - bodyBot);
+        const patUp = getWickTexturePattern(ctx, coarseOpts.upperStyle, strokeC);
+        const patLo = getWickTexturePattern(ctx, coarseOpts.lowerStyle, strokeC);
+        if (uh > 0) {
+          ctx.save();
+          ctx.globalAlpha = coarseOpts.upperShadowAlpha;
+          if (patUp) {
+            ctx.fillStyle = patUp;
+            ctx.fillRect(pxL, envTop, rectW, uh);
+          } else {
+            ctx.fillStyle = strokeC;
+            ctx.globalAlpha *= 0.35;
+            ctx.fillRect(pxL, envTop, rectW, uh);
+          }
+          ctx.restore();
+        }
+        if (lh > 0) {
+          ctx.save();
+          ctx.globalAlpha = coarseOpts.lowerShadowAlpha;
+          if (patLo) {
+            ctx.fillStyle = patLo;
+            ctx.fillRect(pxL, bodyBot, rectW, lh);
+          } else {
+            ctx.fillStyle = strokeC;
+            ctx.globalAlpha *= 0.35;
+            ctx.fillRect(pxL, bodyBot, rectW, lh);
+          }
+          ctx.restore();
+        }
+      }
+      if (phase === "bodies" || phase === "both") {
+        const bh = Math.max(1, bodyBot - bodyTop);
+        ctx.save();
+        ctx.globalAlpha = coarseOpts.bodyAlpha;
+        ctx.fillStyle = strokeC;
+        ctx.fillRect(pxL, bodyTop, rectW, bh);
+        ctx.restore();
+      }
     }
     ctx.restore();
     return;
   }
 
-  const bodyW = Math.max(3, (s.plotW) / Math.max(42, ks.length * 1.28));
+  const bodyW = Math.max(3, s.plotW / Math.max(42, ks.length * 1.28));
+  const ca = Number(activeDrawStyle().candle && activeDrawStyle().candle.alpha);
+  const candleAlphaMul = Number.isFinite(ca) ? Math.min(1, Math.max(0.05, ca)) : 1;
+  ctx.save();
+  ctx.globalAlpha = candleAlphaMul;
   for (const k of ks) {
     const x = s.x(k.x);
     const yo = s.y(k.o),
@@ -13934,6 +14190,7 @@ function drawCandles(chart, s, paintOpts = {}) {
       ctx.fillRect(x - bodyW / 2, top, bodyW, bh);
     }
   }
+  ctx.restore();
 }
 
 function drawKlineCombineFrames(chart, s) {
@@ -14757,13 +15014,8 @@ function drawZsRects(arr, s, color, width) {
   ctx.restore();
 }
 
-/** K 线蜡烛 + 合并框 + 缠论线/中枢/节奏（不含筹码与底部 BSP）；paintOpts.layerStyle 多周期叠层按周期样式。 */
-function drawMainChartLayers(chart, s, paintOpts = {}) {
-  if (!chart || !chart.kline || chart.kline.length === 0) return;
-  const prevCtx = drawStyleCtx;
-  if (paintOpts && paintOpts.layerStyle) drawStyleCtx = paintOpts.layerStyle;
-  try {
-  drawCandles(chart, s, paintOpts);
+/** 缠论主图装饰：合并框、中枢框、分型/笔/段/2段线、节奏线（不含 K 线蜡烛） */
+function drawMainChartChanDecor(chart, s) {
   drawKlineCombineFrames(chart, s);
   if (activeDrawStyle().fractZs.enabled) {
     drawZsRects(chart.fract_zs || [], s, getCfgColor(activeDrawStyle().fractZs.color), activeDrawStyle().fractZs.width);
@@ -14787,6 +15039,30 @@ function drawMainChartLayers(chart, s, paintOpts = {}) {
   drawLines((chart.segseg || []).filter((x) => x.is_sure), s, getCfgColor(activeDrawStyle().segseg.color), activeDrawStyle().segseg.widthSure, false);
   drawLines((chart.segseg || []).filter((x) => !x.is_sure), s, getCfgColor(activeDrawStyle().segseg.color), activeDrawStyle().segseg.widthUnsure, true);
   drawRhythmLines(chart.rhythm_lines || [], s);
+}
+
+/** K 线蜡烛 + 合并框 + 缠论线/中枢/节奏（不含筹码与底部 BSP）；paintOpts.layerStyle 多周期叠层按周期样式。 */
+function drawMainChartLayers(chart, s, paintOpts = {}) {
+  if (!chart || !chart.kline || chart.kline.length === 0) return;
+  const prevCtx = drawStyleCtx;
+  if (paintOpts && paintOpts.layerStyle) drawStyleCtx = paintOpts.layerStyle;
+  const decor = paintOpts.drawChanDecor !== false;
+  const sga = Number(paintOpts.structureGlobalAlpha);
+  const useSga = Number.isFinite(sga) && sga < 0.999;
+  try {
+    if (!paintOpts.skipCandles) {
+      drawCandles(chart, s, paintOpts);
+    }
+    if (decor) {
+      if (useSga) {
+        ctx.save();
+        ctx.globalAlpha = Math.min(1, Math.max(0.05, sga));
+        drawMainChartChanDecor(chart, s);
+        ctx.restore();
+      } else {
+        drawMainChartChanDecor(chart, s);
+      }
+    }
   } finally {
     drawStyleCtx = prevCtx;
   }
@@ -14816,16 +15092,14 @@ function drawMultiLayers(payload) {
   const mo = chartConfig.multiOverlay || { defaultAlpha: 0.58, defaultCandleWidth: 1.2, layers: {} };
   const layers = Array.isArray(payload.chart_layers) ? payload.chart_layers : [];
   const hidden = new Set(Array.isArray(sessionConfig.multiLayerHidden) ? sessionConfig.multiLayerHidden : []);
-  for (const layer of layers) {
+
+  const drawOneLayer = (layer, paintExtra) => {
     const ch = layer.chart;
-    if (!ch || !ch.kline || ch.kline.length === 0) continue;
+    if (!ch || !ch.kline || ch.kline.length === 0) return;
     const kt = String(layer.k_type || "");
-    if (hidden.has(kt)) continue;
-    const L = (mo.layers && mo.layers[kt]) || {};
+    if (hidden.has(kt)) return;
     const isDriver = layer.role === "driver";
-    const alpha = isDriver ? 1 : Math.min(1, Math.max(0.1, Number(L.alpha != null ? L.alpha : mo.defaultAlpha)));
-    ctx.save();
-    ctx.globalAlpha = alpha;
+    const L = (mo.layers && mo.layers[kt]) || {};
     const candleBak = JSON.parse(JSON.stringify(chartConfig.candle));
     try {
       if (!isDriver) {
@@ -14838,12 +15112,38 @@ function drawMultiLayers(payload) {
         overlaySpanCandles: !isDriver,
         driverKlineForOverlaySpan: driverChart.kline,
         layerStyle: getMultiLayerDrawConfig(kt),
+        overlayKtKey: kt,
+        coarseOverlayOpts: !isDriver ? resolveCoarseOverlayPaintOpts(mo, kt) : null,
+        ...paintExtra,
       });
     } finally {
       chartConfig.candle = candleBak;
     }
-    ctx.restore();
-  }
+  };
+
+  layers.forEach((layer) => {
+    if (layer.role === "driver") return;
+    drawOneLayer(layer, { overlayCandlePhase: "shadows", skipCandles: false, drawChanDecor: false });
+  });
+  layers.forEach((layer) => {
+    if (layer.role === "driver") return;
+    drawOneLayer(layer, { overlayCandlePhase: "bodies", skipCandles: false, drawChanDecor: false });
+  });
+  layers.forEach((layer) => {
+    if (layer.role === "driver") return;
+    const kt = String(layer.k_type || "");
+    const o = resolveCoarseOverlayPaintOpts(mo, kt);
+    drawOneLayer(layer, {
+      skipCandles: true,
+      drawChanDecor: true,
+      structureGlobalAlpha: o.lineAlpha,
+    });
+  });
+  layers.forEach((layer) => {
+    if (layer.role !== "driver") return;
+    drawOneLayer(layer, {});
+  });
+
   drawBottomSignals(driverChart, s);
   drawUserRays(s);
   drawUserBiRays(s, driverChart);
@@ -16424,7 +16724,7 @@ def api_init(req: InitReq):
 
             if cm_init == "multi":
                 if not offline_tick_files_exist_for_range(code_norm, req.begin_date, req.end_date):
-                    raise ValueError("单品种多周期单图仅支持离线分笔：当前代码与日期区间内未找到 TickData 分笔文件")
+                    raise ValueError("单品种多周期单图仅支持离线分笔：当前代码与日期区间内未找到 a_Data 分笔文件（YYYYMMDD_代码.txt）")
                 driver_k, passive_ks = resolve_multi_k_types_from_request(getattr(req, "k_types_multi", None))
                 APP_STATE.stepper.init(
                     code_norm,
@@ -16953,8 +17253,8 @@ def api_check_data_source(req: dict):
     if data_src == OFFLINE_INLINE_SRC:
         for probe in ("sz.000001", "sh.600000"):
             if offline_bundle_exists(probe, "1990-01-01", "2099-12-31"):
-                return {"ok": True, "name": name, "message": f"a_Data 下存在 {offline_folder_from_code(probe)} 离线包（1 分钟或分笔）"}
-        return {"ok": False, "name": name, "message": "a_Data 下未发现 SH#000001 / SZ#000001 的 1 分钟或分笔数据"}
+                return {"ok": True, "name": name, "message": f"a_Data 下存在 {offline_folder_from_code(probe)} 分笔目录（含日期范围内 YYYYMMDD_代码.txt）"}
+        return {"ok": False, "name": name, "message": "a_Data 下未发现探测用股票（如 000001）的离线分笔：需 a_Data/六位代码/YYYYMMDD_六位代码.txt"}
     test_code = "sz.000001"
     begin = "2024-06-01"
     end = "2024-06-15"
