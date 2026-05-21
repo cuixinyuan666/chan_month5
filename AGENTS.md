@@ -121,3 +121,23 @@ No test framework, no linting config, no CI found. Verify changes manually with 
 8.代码的设计应模块化，在后续添加其它功能时可以方便复用；
 9.如果生成了测试代码或者文件，在调试结束后应当删除无用代码；
 10.尽量最大性价比的使用TOKEN，不进行非必要操作。
+
+## Cursor Cloud specific instructions
+
+### Services
+
+| Service | Command | Port | Notes |
+|---------|---------|------|-------|
+| main.py demo | `python3 main.py` | N/A | Fetches BaoStock data, outputs `test.png`; needs network |
+| Replay Trainer | `python3 a_replay_trainer.py` | 8000 | FastAPI SPA at `http://127.0.0.1:8000` |
+
+### Gotchas
+
+- Use `python3` (not `python`) — `python` is not aliased on this VM.
+- `pip install` goes to `~/.local`; add `~/.local/bin` to PATH if you need `uvicorn`/`fastapi` CLI commands directly.
+- `ashare` PyPI package may not exist; it is listed as optional in `a_Script/a_requirements.txt` — safe to ignore install errors for it.
+- `main.py` uses BaoStock which requires internet; it calls `do_init()`/`do_close()` automatically for login/logout.
+- `a_replay_trainer.py` data source priority will fall back through AKShare → AKShare-腾讯历史 etc. if the primary source fails; offline data is available in `a_Data/` for stocks 001312, 002003, 688687, 920992.
+- No test framework or linter is configured. Verify changes by running `python3 main.py` and/or testing the replay trainer API/UI.
+- The replay trainer frontend is an embedded SPA (~10k lines inline HTML/JS); changes to it are inside `a_replay_trainer.py`.
+- For full API reference and frontend usage, see `a_quick_guide.md`.
