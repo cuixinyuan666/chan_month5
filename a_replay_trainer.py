@@ -7514,6 +7514,14 @@ let userAdjustedView = false;
 let userRays = ensureArray(safeJsonParse(storageGet("chan_user_rays"), []), []);
 let userBiRays = ensureArray(safeJsonParse(storageGet("chan_user_bi_rays"), []), []);
 let userBiRaysDirty = false;
+/** 数量模式射线（锚定原始 K 线时间+OHLC，切换数量 Q 时位置不变） */
+const QUANTITY_RAY_STORAGE_KEY = "chan_user_quantity_rays";
+let userQuantityRays = ensureArray(safeJsonParse(storageGet(QUANTITY_RAY_STORAGE_KEY), []), []);
+let userQuantityRaysDirty = false;
+let pendingQuantityRayPts = [];
+let quantityDigitBuffer = "";
+let quantityDigitBufferTimer = null;
+const QUANTITY_DIGIT_BUFFER_MS = 1200;
 let pendingBiRayPts = [];
 let pendingRatioLinePts = [];
 let pendingParallelogramPts = [];
@@ -8224,6 +8232,150 @@ function clampDataFormQuantity(rawVal, fallback = null) {
     q = 1;
   }
   return q;
+}
+
+/** 单品种单周期 + 数量类数据形式 */
+function isSingleQuantityRayMode() {
+  if (!lastPayload || !lastPayload.ready) return false;
+  const cm = $("chartMode") ? String($("chartMode").value || "single") : "single";
+  return cm === "single" && isQuantityDataFormMode(dataFormConfig.mode);
+}
+
+function getActiveSessionCode() {
+  return String((lastPayload && lastPayload.code) || sessionConfig.code || "").trim();
+}
+
+function quantityRaysForActiveSession() {
+  const code = getActiveSessionCode();
+  if (!code) return userQuantityRays || [];
+  return (userQuantityRays || []).filter((r) => !r.code || String(r.code) === code);
+}
+
+function snapPriceToKlineOhlc(k, rawPrice) {
+  if (!k) return { field: "c", y: rawPrice };
+  const candidates = [
+    { field: "o", v: Number(k.o) },
+    { field: "h", v: Number(k.h) },
+    { field: "l", v: Number(k.l) },
+    { field: "c", v: Number(k.c) },
+  ].filter((c) => Number.isFinite(c.v));
+  if (candidates.length === 0) return { field: "c", y: rawPrice };
+  let best = candidates[0];
+  let bestD = Math.abs(best.v - rawPrice);
+  for (let i = 1; i < candidates.length; i++) {
+    const d = Math.abs(candidates[i].v - rawPrice);
+    if (d < bestD) {
+      best = candidates[i];
+      bestD = d;
+    }
+  }
+  return { field: best.field, y: best.v };
+}
+
+function findDisplayKlineForRawTime(chart, rawTimeStr) {
+  const dk = chart && chart.kline ? chart.kline : [];
+  if (!dk.length) return null;
+  const rawT = String(rawTimeStr || "").trim();
+  const rawCmp = chipTimeComparable(rawT);
+  if (rawCmp == null) {
+    for (const k of dk) {
+      if (String(k.t || "").trim() === rawT) return k;
+    }
+    return dk[dk.length - 1];
+  }
+  for (const k of dk) {
+    if (chipTimeComparable(String(k.t || "")) === rawCmp) return k;
+  }
+  for (let i = 0; i < dk.length; i++) {
+    const km = chipTimeComparable(String(dk[i].t || ""));
+    if (km == null) continue;
+    const prev = i > 0 ? chipTimeComparable(String(dk[i - 1].t || "")) : null;
+    if (i === 0 && rawCmp <= km) return dk[i];
+    if (prev != null && rawCmp > prev && rawCmp <= km) return dk[i];
+  }
+  return dk[dk.length - 1];
+}
+
+function resolveQuantityRayAnchor(chart, anchor) {
+  if (!chart || !anchor) return null;
+  const y = Number(anchor.y);
+  if (!Number.isFinite(y)) return null;
+  const displayK = findDisplayKlineForRawTime(chart, anchor.t);
+  if (!displayK || !Number.isFinite(Number(displayK.x))) return null;
+  return { x: Number(displayK.x), y };
+}
+
+function buildQuantityRayAnchor(chart, s, px, py) {
+  const visibleKs = getVisibleKs(chart, s.xMin, s.xMax);
+  const xVal = xFromPx(s, px);
+  const refK = nearestKByX(visibleKs, xVal);
+  if (!refK) return null;
+  const rawPrice = s.yFromPx(py);
+  const snapped = snapPriceToKlineOhlc(refK, rawPrice);
+  const rawK = mapChartBarToKsAll(refK, getChipBaseKs(chart)) || refK;
+  return {
+    t: String(rawK.t || refK.t || ""),
+    ohlc: snapped.field,
+    y: snapped.y,
+    code: getActiveSessionCode(),
+  };
+}
+
+function persistUserQuantityRaysNow() {
+  storageSet(QUANTITY_RAY_STORAGE_KEY, JSON.stringify(userQuantityRays));
+  userQuantityRaysDirty = false;
+}
+
+async function applyQuantityFromKeyboard(rawQ) {
+  if (!isSingleQuantityRayMode() || stepInFlight) return;
+  const n = getRawKlineCount();
+  if (n <= 0) {
+    setMsg("请先加载会话后再使用数量模式。");
+    return;
+  }
+  const nextQ = clampDataFormQuantity(rawQ, n);
+  if (nextQ === dataFormConfig.quantity) return;
+  dataFormConfig.quantity = nextQ;
+  sessionConfig.dataFormQuantity = nextQ;
+  saveSessionConfig();
+  try {
+    const payload = await api("/api/reconfig", {
+      chan_config: chanConfig,
+      data_form_mode: dataFormConfig.mode,
+      data_form_quantity: nextQ,
+      data_feed_mode: normalizeDataFeedMode(dataFormConfig.feedMode),
+      rollback_cache_depth: Number(systemConfig.rollbackCacheDepth || DEFAULT_SYSTEM_CONFIG.rollbackCacheDepth),
+      rollback_full_snapshot_interval: Number(systemConfig.rollbackFullSnapshotInterval || DEFAULT_SYSTEM_CONFIG.rollbackFullSnapshotInterval),
+      rollback_capture_max_bars: Number(systemConfig.rollbackCaptureMaxBars || DEFAULT_SYSTEM_CONFIG.rollbackCaptureMaxBars),
+    });
+    refreshUI(payload, { afterStep: false });
+    setMsg(`数量已设为 ${nextQ}（原始 K 线共 ${n} 根）`);
+  } catch (e) {
+    setMsg("数量切换失败：" + (e && e.message ? e.message : e));
+  }
+}
+
+function scheduleQuantityDigitApply() {
+  if (quantityDigitBufferTimer) clearTimeout(quantityDigitBufferTimer);
+  quantityDigitBufferTimer = setTimeout(() => {
+    quantityDigitBufferTimer = null;
+    const buf = quantityDigitBuffer;
+    quantityDigitBuffer = "";
+    if (!buf) return;
+    applyQuantityFromKeyboard(parseInt(buf, 10));
+  }, QUANTITY_DIGIT_BUFFER_MS);
+}
+
+function pushQuantityDigitKey(digit) {
+  quantityDigitBuffer = `${quantityDigitBuffer}${digit}`.replace(/^0+(\d)/, "$1");
+  const n = getRawKlineCount();
+  const maxLen = n > 0 ? String(n).length : 6;
+  if (quantityDigitBuffer.length > maxLen) {
+    quantityDigitBuffer = quantityDigitBuffer.slice(-maxLen);
+  }
+  const preview = clampDataFormQuantity(parseInt(quantityDigitBuffer, 10), n || 1);
+  setMsg(`数量输入: ${quantityDigitBuffer} → ${preview}（${QUANTITY_DIGIT_BUFFER_MS / 1000}s 无输入自动应用，Enter 立即应用）`, true);
+  scheduleQuantityDigitApply();
 }
 
 const DEFAULT_SESSION_CONFIG = {
@@ -11159,7 +11311,12 @@ function ensureLatestKVisible() {
   const lastX = lastPayload.chart.kline[lastPayload.chart.kline.length - 1].x;
   if (lastX >= viewXMin && lastX <= viewXMax) return;
   const span = viewXMax - viewXMin;
-  if (span <= 1) return;
+  // 数量聚合后 bar 很少时 span 常为 1，旧逻辑直接 return 会导致步进后最新 K 在视窗外
+  if (span <= 1) {
+    viewXMin = allXMin;
+    viewXMax = allXMax;
+    return;
+  }
   const pos = 0.85;
   let newMin = lastX - span * pos;
   let newMax = newMin + span;
@@ -11497,14 +11654,19 @@ canvas.addEventListener("mousemove", (e) => {
   legendHoverActive = hoveredLegend;
   const clampedX = Math.max(PAD_L, Math.min(s.w - PAD_R, rawX));
   
-  // Lock X if Ctrl is held
-   if (!pe.ctrlKey) {
-     const targetX = s.xMin + ((clampedX - PAD_L) / Math.max(1, s.plotW)) * (s.xMax - s.xMin);
-     const refK = nearestKByX(visibleKs, targetX);
-     crosshairX = refK ? s.x(refK.x) : clampedX;
-   }
-  
-   crosshairY = Math.max(PAD_T, Math.min(s.contentBottom, rawY));
+  const targetX = s.xMin + ((clampedX - PAD_L) / Math.max(1, s.plotW)) * (s.xMax - s.xMin);
+  const refK = nearestKByX(visibleKs, targetX);
+  // Lock X if Ctrl is held（数量模式除外：仍吸附到 K 线列）
+  if (!pe.ctrlKey || isSingleQuantityRayMode()) {
+    crosshairX = refK ? s.x(refK.x) : clampedX;
+  }
+  let nextY = Math.max(PAD_T, Math.min(s.contentBottom, rawY));
+  // 数量模式 + Ctrl：吸附开高低收四价
+  if (isSingleQuantityRayMode() && pe.ctrlKey && refK) {
+    const snapped = snapPriceToKlineOhlc(refK, s.yFromPx(rawY));
+    nextY = s.y(snapped.y);
+  }
+  crosshairY = nextY;
    const hoveredSignal = (signalHoverBoxes || []).find((box) => rawX >= box.x1 && rawX <= box.x2 && rawY >= box.y1 && rawY <= box.y2);
    if (hoveredSignal && hoveredSignal.text) {
      showFloatingTip(hoveredSignal.text, pe.clientX, pe.clientY);
@@ -11595,6 +11757,36 @@ canvas.addEventListener("dblclick", (e) => {
       if (selectedDrawing && selectedDrawing.type === "biRay") selectedDrawing = null;
       redrawCurrentPayload();
       return;
+    }
+
+    // 数量模式射线删除
+    if (isSingleQuantityRayMode() && lastPayload && lastPayload.chart) {
+      const code = getActiveSessionCode();
+      let removedQty = false;
+      const list = quantityRaysForActiveSession();
+      for (let i = list.length - 1; i >= 0; i -= 1) {
+        const r = list[i];
+        const p1 = resolveQuantityRayAnchor(lastPayload.chart, r.p1);
+        const p2 = resolveQuantityRayAnchor(lastPayload.chart, r.p2);
+        if (!p1 || !p2) continue;
+        const dx = p2.x - p1.x;
+        if (!Number.isFinite(dx) || dx === 0) continue;
+        if (xVal < p1.x) continue;
+        const slope = (p2.y - p1.y) / dx;
+        const yOn = p1.y + slope * (xVal - p1.x);
+        const yPx = s.y(yOn);
+        if (Math.abs(yPx - yp) < 8) {
+          const gi = userQuantityRays.indexOf(r);
+          if (gi >= 0) userQuantityRays.splice(gi, 1);
+          removedQty = true;
+          break;
+        }
+      }
+      if (removedQty) {
+        userQuantityRaysDirty = true;
+        redrawCurrentPayload();
+        return;
+      }
     }
   }
 
@@ -11861,9 +12053,16 @@ function persistUserBiRaysNow() {
 }
 
 function maybeSaveUserBiRaysOnExit() {
-  if (!userBiRaysDirty || !Array.isArray(userBiRays) || userBiRays.length <= 0) return;
-  const shouldSave = confirmAndLog("是否保存画线？");
-  if (shouldSave) persistUserBiRaysNow();
+  const biDirty = userBiRaysDirty && Array.isArray(userBiRays) && userBiRays.length > 0;
+  const qtyDirty = userQuantityRaysDirty && Array.isArray(userQuantityRays) && userQuantityRays.length > 0;
+  if (!biDirty && !qtyDirty) return;
+  const msg = biDirty && qtyDirty
+    ? "是否保存画线（含工具箱射线与数量模式射线）？"
+    : (qtyDirty ? "是否保持数量模式画线？" : "是否保存画线？");
+  const shouldSave = confirmAndLog(msg);
+  if (!shouldSave) return;
+  if (biDirty) persistUserBiRaysNow();
+  if (qtyDirty) persistUserQuantityRaysNow();
 }
 
 window.addEventListener("beforeunload", () => {
@@ -11915,10 +12114,47 @@ canvas.addEventListener("click", (e) => {
   const y = pe.clientY - rect.top;
   const x = pe.clientX - rect.left;
 
-  const wantHorizontalRay = !!pe.ctrlKey || activeTool === "horizontalRay";
+  const qtyRayMode = isSingleQuantityRayMode();
+  const wantQuantityRay = qtyRayMode && !!pe.ctrlKey;
+  const wantHorizontalRay = (!qtyRayMode && !!pe.ctrlKey) || activeTool === "horizontalRay";
   const wantBiRay = !!pe.shiftKey || activeTool === "biRay";
   const wantRatioLine = activeTool === "ratioLine";
   const wantParallelogram = activeTool === "parallelogram";
+
+  // 数量模式：Ctrl+左键 固定端点（吸附 OHLC），两点生成向右射线
+  if (wantQuantityRay) {
+    const anchor = buildQuantityRayAnchor(lastPayload.chart, s, x, y);
+    if (!anchor) return;
+    pendingQuantityRayPts.push(anchor);
+    if (pendingQuantityRayPts.length === 1) {
+      setMsg("已固定端点1（Ctrl 吸附开高低收），请再 Ctrl+左键 固定端点2。");
+      redrawCurrentPayload();
+      return;
+    }
+    const p1 = pendingQuantityRayPts[0];
+    const p2 = pendingQuantityRayPts[1];
+    pendingQuantityRayPts = [];
+    const r1 = resolveQuantityRayAnchor(lastPayload.chart, p1);
+    const r2 = resolveQuantityRayAnchor(lastPayload.chart, p2);
+    if (!r1 || !r2) {
+      setMsg("端点无法映射到当前图表，已取消。");
+      return;
+    }
+    if (Number(r2.x) === Number(r1.x)) {
+      setMsg("两个端点 x 相同，无法生成射线。");
+      return;
+    }
+    userQuantityRays.push({
+      code: getActiveSessionCode(),
+      quantity: clampDataFormQuantity(dataFormConfig.quantity, getRawKlineCount() || 1),
+      p1: { t: p1.t, ohlc: p1.ohlc, y: p1.y },
+      p2: { t: p2.t, ohlc: p2.ohlc, y: p2.y },
+    });
+    userQuantityRaysDirty = true;
+    setMsg(`已生成数量射线 →（数量:${clampDataFormQuantity(dataFormConfig.quantity, 1)}）`);
+    redrawCurrentPayload();
+    return;
+  }
 
   // Ctrl + Left Click (or toolbox): Horizontal Ray
   if (wantHorizontalRay) {
@@ -14867,6 +15103,66 @@ function getNearestBiEndpoint(chart, s, px, py, maxDistPx = 12) {
   return best;
 }
 
+function drawUserQuantityRays(s, chart) {
+  const list = quantityRaysForActiveSession();
+  if (!list || list.length === 0) return;
+  ctx.save();
+  try {
+    const rayCfg = chartConfig.userRay || DEFAULT_CHART_CONFIG.userRay;
+    ctx.font = `${rayCfg.fontSize}px Consolas`;
+    list.forEach((r) => {
+      if (!r) return;
+      const p1 = resolveQuantityRayAnchor(chart, r.p1);
+      const p2 = resolveQuantityRayAnchor(chart, r.p2);
+      if (!p1 || !p2) return;
+      const x1 = p1.x;
+      const y1 = p1.y;
+      const x2 = p2.x;
+      const y2 = p2.y;
+      const dx = x2 - x1;
+      if (!Number.isFinite(dx) || dx === 0) return;
+      const slope = (y2 - y1) / dx;
+      const xEnd = s.xMax;
+      const p1x = s.x(x1);
+      const p1y = s.y(y1);
+      const p2x = s.x(xEnd);
+      const p2y = s.y(y1 + slope * (xEnd - x1));
+      if (!Number.isFinite(p1x) || !Number.isFinite(p1y) || !Number.isFinite(p2x) || !Number.isFinite(p2y)) return;
+      if (p1x > s.w - PAD_R) return;
+      ctx.lineWidth = getRayLineWidth(r);
+      ctx.strokeStyle = getRayLineColor(r) || "#a855f7";
+      ctx.setLineDash(getTradeLineDash(getRayLineStyle(r)));
+      ctx.beginPath();
+      ctx.moveTo(p1x, p1y);
+      ctx.lineTo(p2x, p2y);
+      ctx.stroke();
+      const qLabel = Number.isFinite(Number(r.quantity)) ? Math.floor(Number(r.quantity)) : "-";
+      ctx.save();
+      ctx.setLineDash([]);
+      ctx.fillStyle = getRayLineColor(r) || "#a855f7";
+      ctx.font = `bold ${Math.max(10, rayCfg.fontSize)}px sans-serif`;
+      ctx.fillText(`数量:${qLabel}`, p1x + 4, p1y - 6);
+      ctx.restore();
+      if (crosshairX !== null && crosshairY !== null) {
+        const xVal = xFromPx(s, crosshairX);
+        if (xVal >= x1) {
+          const yVal = y1 + slope * (xVal - x1);
+          const yPx = s.y(yVal);
+          if (Math.abs(yPx - crosshairY) < 8) {
+            ctx.fillStyle = "#ef4444";
+            ctx.font = `bold ${rayCfg.fontSize}px sans-serif`;
+            ctx.fillText("双击删除数量射线", p1x + 5, yPx - 5);
+          }
+        }
+      }
+    });
+  } catch (err) {
+    console.warn("drawUserQuantityRays:", err);
+  } finally {
+    ctx.restore();
+  }
+}
+
 function drawUserBiRays(s, chart) {
   if (!userBiRays || userBiRays.length === 0) return;
   ctx.save();
@@ -14982,6 +15278,15 @@ function drawPendingBiEndpointCircle(s) {
   if (Array.isArray(pendingBiRayPts) && pendingBiRayPts.length === 1) pending.push(...pendingBiRayPts);
   if (Array.isArray(pendingRatioLinePts) && pendingRatioLinePts.length === 1) pending.push(...pendingRatioLinePts);
   if (Array.isArray(pendingParallelogramPts) && pendingParallelogramPts.length > 0) pending.push(...pendingParallelogramPts);
+  if (Array.isArray(pendingQuantityRayPts) && pendingQuantityRayPts.length > 0) {
+    const chart = lastPayload && lastPayload.chart;
+    if (chart) {
+      pendingQuantityRayPts.forEach((a) => {
+        const pt = resolveQuantityRayAnchor(chart, a);
+        if (pt) pending.push(pt);
+      });
+    }
+  }
   if (pending.length <= 0) return;
   ctx.save();
   ctx.strokeStyle = "#2563eb";
@@ -15147,6 +15452,7 @@ function drawMultiLayers(payload) {
   drawBottomSignals(driverChart, s);
   drawUserRays(s);
   drawUserBiRays(s, driverChart);
+  drawUserQuantityRays(s, driverChart);
   drawPendingBiEndpointCircle(s);
   drawTradeMarkers(s, driverChart);
   drawCrosshair(driverChart, s);
@@ -15188,6 +15494,7 @@ function draw(chart) {
   drawBottomSignals(chart, s);
   drawUserRays(s);
   drawUserBiRays(s, chart);
+  drawUserQuantityRays(s, chart);
   drawPendingBiEndpointCircle(s);
   drawTradeMarkers(s, chart);
   drawCrosshair(chart, s);
@@ -15692,7 +15999,17 @@ function refreshUI(payload, options) {
             userAdjustedView = false;
           }
         }
-        if (afterStep) ensureLatestKVisible();
+        if (afterStep) {
+          ensureLatestKVisible();
+          // 数量模式 bar 数少，步进后若最新 K 仍不在视窗则展到全范围
+          if (isSingleQuantityRayMode() && payload.chart && payload.chart.kline && payload.chart.kline.length > 0) {
+            const lastX = payload.chart.kline[payload.chart.kline.length - 1].x;
+            if (!(lastX >= viewXMin && lastX <= viewXMax)) {
+              viewXMin = allXMin;
+              viewXMax = allXMax;
+            }
+          }
+        }
         lastSeenBspKey = new Set(
           [...lastSeenBspKey].filter((k) => {
             const x = Number(String(k).split("|")[0]);
@@ -16084,6 +16401,40 @@ function toggleMultiLayerVisibleByOrderIndex(orderIdx0) {
 }
 
 window.addEventListener("keydown", (e) => {
+  if (isSingleQuantityRayMode() && !stepInFlight) {
+    const t = e.target;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) {
+      return;
+    }
+    if (!e.ctrlKey && !e.altKey && !e.metaKey) {
+      const code = e.code || "";
+      let digit = null;
+      if (/^Digit[0-9]$/.test(code)) digit = code.slice(5);
+      else if (/^Numpad[0-9]$/.test(code)) digit = code.slice(6);
+      if (digit !== null) {
+        e.preventDefault();
+        pushQuantityDigitKey(digit);
+        return;
+      }
+      if (code === "Enter" && quantityDigitBuffer) {
+        e.preventDefault();
+        if (quantityDigitBufferTimer) clearTimeout(quantityDigitBufferTimer);
+        quantityDigitBufferTimer = null;
+        const buf = quantityDigitBuffer;
+        quantityDigitBuffer = "";
+        applyQuantityFromKeyboard(parseInt(buf, 10));
+        return;
+      }
+      if (code === "Escape" && quantityDigitBuffer) {
+        e.preventDefault();
+        if (quantityDigitBufferTimer) clearTimeout(quantityDigitBufferTimer);
+        quantityDigitBufferTimer = null;
+        quantityDigitBuffer = "";
+        setMsg("已取消数量输入。");
+        return;
+      }
+    }
+  }
   if (!lastPayload || !lastPayload.ready) return;
   if (!$("chartMode") || $("chartMode").value !== "multi") return;
   const t = e.target;
@@ -16134,6 +16485,7 @@ if ($("btnActiveChart2")) {
 
 $("btnFinish").onclick = async () => {
   try {
+  maybeSaveUserBiRaysOnExit();
   if (!confirmAndLog("确定要结束当前训练吗？")) return;
     const payload = await api("/api/finish");
     refreshUI(payload);
@@ -16148,6 +16500,7 @@ $("btnFinish").onclick = async () => {
 
 $("btnReset").onclick = async () => {
   try {
+  maybeSaveUserBiRaysOnExit();
   if (!confirmAndLog("确定要重新训练吗？当前会话状态将被清空。")) return;
     persistChartConfigStoreNow();
     saveSessionConfig();
@@ -16174,6 +16527,10 @@ $("btnReset").onclick = async () => {
     viewReady = false;
     viewYShiftRatio = 0;
     viewYZoomRatio = 1.0;
+    pendingQuantityRayPts = [];
+    quantityDigitBuffer = "";
+    if (quantityDigitBufferTimer) clearTimeout(quantityDigitBufferTimer);
+    quantityDigitBufferTimer = null;
     DUAL_CHART_IDS.forEach((cid) => {
       dualChartRuntime[cid] = { allXMin: 0, allXMax: 0, viewXMin: 0, viewXMax: 0, viewReady: false, userAdjustedView: false, viewYShiftRatio: 0, viewYZoomRatio: 1, crosshairX: null, crosshairY: null };
     });
