@@ -6,7 +6,7 @@ import re
 import time
 import warnings
 from bisect import bisect_right
-from collections import deque
+from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -119,12 +119,19 @@ class ReplayChan(CChan):
 
     def __init__(self, *args: Any, replay_klus_master: Optional[list] = None, **kwargs: Any) -> None:
         self._replay_klus_master: Optional[list] = replay_klus_master
+        # 复盘由 load/step_load 显式喂 K；禁止 CChan.__init__ 在 trigger_step=False 时自动全量 load（unified 曾因此重复喂入）
+        conf = kwargs.get("config")
+        if conf is not None:
+            conf.trigger_step = True
         super().__init__(*args, **kwargs)
 
     def load(self, step: bool = False):
         if self._replay_klus_master is None:
             yield from super().load(step)
             return
+        # 重载前清空级别数据，避免 re-load / 误触二次 load 叠加重复 K 线
+        self.do_init()
+        self.g_kl_iter = defaultdict(list)
         frozen = copy.deepcopy(self._replay_klus_master)
         self.klu_cache = [None for _ in self.lv_list]
         self.klu_last_t = [CTime(1980, 1, 1, 0, 0) for _ in self.lv_list]
@@ -360,6 +367,24 @@ def is_data_form_tick_synth_mode(mode: Any) -> bool:
     return m in {"tick_traditional", "tick_quantity"}
 
 
+def stepper_needs_chip_kline_all(st: Any) -> bool:
+    """筹码依赖 kline_all 内 chip_tick_bins；分笔合成/数量聚合后须随 reconfig 下发。"""
+    return is_data_form_tick_synth_mode(getattr(st, "data_form_mode", "")) or is_data_form_quantity_mode(
+        getattr(st, "data_form_mode", "")
+    )
+
+
+def _chip_kline_all_with_x(bars: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """为 kline_all 补 x 序号，便于与主图 K 线按 x/时间对齐截断筹码。"""
+    out: list[dict[str, Any]] = []
+    for i, bar in enumerate(bars or []):
+        b = dict(bar)
+        if int(b.get("x", -1)) < 0:
+            b["x"] = i
+        out.append(b)
+    return out
+
+
 def normalize_data_form_quantity(raw: Any, total: int) -> int:
     total_n = max(1, int(total))
     try:
@@ -371,6 +396,36 @@ def normalize_data_form_quantity(raw: Any, total: int) -> int:
     if q > total_n:
         q = total_n
     return q
+
+
+def normalize_data_form_quantity_alloc(raw: Any) -> str:
+    """数量分配原则：front=靠前分配（余数优先给前方组）；back=靠后分配。"""
+    m = str(raw or "front").strip().lower()
+    if m in {"back", "rear", "后", "靠后", "靠后分配"}:
+        return "back"
+    return "front"
+
+
+def normalize_kline_presentation_mode(raw: Any) -> str:
+    """K 线图呈现：step=步进；instant=一次性呈现末根完整图。"""
+    m = str(raw or "step").strip().lower()
+    if m in {"instant", "oneshot", "once", "一次性", "一次性呈现"}:
+        return "instant"
+    return "step"
+
+
+def _quantity_group_sizes(total: int, q: int, alloc: str) -> list[int]:
+    """将 total 根原生 K 线划分为 q 组，返回每组根数列表。"""
+    if total <= 0 or q <= 0:
+        return []
+    if q >= total:
+        return [1] * total
+    base = total // q
+    rem = total % q
+    if normalize_data_form_quantity_alloc(alloc) == "back":
+        return [base + (rem if i == q - 1 else 0) for i in range(q)]
+    # 靠前：余数 1 根依次分给最前几组（例：99/4 → 25,25,25,24）
+    return [base + (1 if i < rem else 0) for i in range(q)]
 
 
 def _ensure_klu_deepcopy_attrs(klus: list[Any]) -> None:
@@ -400,8 +455,10 @@ def _klu_float_trade_metric(klu: Any, field: str) -> float:
     return 0.0
 
 
-def aggregate_klu_by_quantity(klus: list[Any], quantity: int) -> list[Any]:
-    """按数量Q聚合K线：前面等分，余数全部放最后一组。"""
+def aggregate_klu_by_quantity(
+    klus: list[Any], quantity: int, quantity_alloc: str = "front"
+) -> list[Any]:
+    """按数量 Q 聚合 K 线；quantity_alloc 控制余数靠前/靠后分配。"""
     _ensure_klu_deepcopy_attrs(klus)
     total = len(klus)
     if total == 0:
@@ -410,12 +467,10 @@ def aggregate_klu_by_quantity(klus: list[Any], quantity: int) -> list[Any]:
     if q >= total:
         return list(copy.deepcopy(klus))
 
-    base = total // q
-    rem = total % q
+    sizes = _quantity_group_sizes(total, q, quantity_alloc)
     out: list[Any] = []
     start = 0
-    for i in range(q):
-        seg_len = base + (rem if i == q - 1 else 0)
+    for seg_len in sizes:
         end = start + seg_len
         chunk = klus[start:end]
         start = end
@@ -483,7 +538,7 @@ def _build_tick_rows_by_bucket(
 
 
 def _aggregate_kline_dicts_by_quantity(
-    bars: list[dict[str, Any]], quantity: int
+    bars: list[dict[str, Any]], quantity: int, quantity_alloc: str = "front"
 ) -> list[dict[str, Any]]:
     """数量聚合 kline_all（含 chip_tick_bins 累加）。"""
     total = len(bars)
@@ -492,12 +547,10 @@ def _aggregate_kline_dicts_by_quantity(
     q = normalize_data_form_quantity(quantity, total)
     if q >= total:
         return [dict(x) for x in bars]
-    base = total // q
-    rem = total % q
+    sizes = _quantity_group_sizes(total, q, quantity_alloc)
     out: list[dict[str, Any]] = []
     start = 0
-    for i in range(q):
-        seg_len = base + (rem if i == q - 1 else 0)
+    for seg_len in sizes:
         end = start + seg_len
         chunk = bars[start:end]
         start = end
@@ -575,11 +628,13 @@ def build_tick_synth_session_data(
     end_date: Optional[str],
     mode: str,
     quantity: Optional[int],
-) -> tuple[list[Any], list[dict[str, Any]]]:
+    quantity_alloc: str = "front",
+) -> tuple[list[Any], list[dict[str, Any]], int, list[Any]]:
     """
     分笔价格合成会话数据：
     - tick_traditional：分笔价格合成传统
     - tick_quantity：分笔价格合成数量
+    返回 (喂入/展示用 master, kline_all, 聚合前根数, 聚合前 master)。
     """
     folder = os.path.join(_offline_root_dir(), offline_folder_from_code(code))
     if not os.path.isdir(folder):
@@ -616,9 +671,26 @@ def build_tick_synth_session_data(
             ws = [float(s_ws[i] + b_ws[i]) for i in range(len(ps))]
             bar["chip_tick_bins"] = {"p": ps, "s": s_ws, "b": b_ws, "w": ws}
 
+    # 数量聚合前根数：供 raw_kline_count / 前端数量上限（勿用聚合后根数）
+    pre_agg_count = len(kline_all)
+    pre_agg_master = _bars_to_klu_list(
+        [
+            {
+                "t": _parse_kline_bar_ctime(str(k.get("t", ""))),
+                "o": k.get("o", 0.0),
+                "h": k.get("h", 0.0),
+                "l": k.get("l", 0.0),
+                "c": k.get("c", 0.0),
+                "v": k.get("v", 0.0),
+                "amt": float(k.get("amt", 0.0) or 0.0),
+            }
+            for k in kline_all
+            if _parse_kline_bar_ctime(str(k.get("t", ""))) is not None
+        ]
+    )
     if mode == "tick_quantity":
-        q = normalize_data_form_quantity(quantity, len(kline_all))
-        kline_all = _aggregate_kline_dicts_by_quantity(kline_all, q)
+        q = normalize_data_form_quantity(quantity, pre_agg_count)
+        kline_all = _aggregate_kline_dicts_by_quantity(kline_all, q, quantity_alloc)
 
     replay_klus_master = _bars_to_klu_list(
         [
@@ -637,7 +709,7 @@ def build_tick_synth_session_data(
     )
     if not replay_klus_master:
         raise ValueError("分笔价格合成后会话 K 线为空")
-    return replay_klus_master, kline_all
+    return replay_klus_master, kline_all, pre_agg_count, pre_agg_master
 
 
 def normalize_chan_algo(raw: Any) -> str:
@@ -3481,6 +3553,7 @@ class ChanStepper:
         self._bundle_cache_step_idx: Optional[int] = None
         self.data_form_mode: str = "traditional"
         self.data_form_quantity: int = 0
+        self.data_form_quantity_alloc: str = "front"
         self.data_feed_mode: str = "step"
         self.raw_kline_count: int = 0
         # 步进增量缓存：避免每次 payload 全量遍历 klu_iter()
@@ -3505,6 +3578,8 @@ class ChanStepper:
                 "initial_cash",
                 "data_form_mode",
                 "data_form_quantity",
+                "data_form_quantity_alloc",
+                "kline_presentation_mode",
                 "rhythm_calc_mode",
             }
         )
@@ -3658,11 +3733,13 @@ class ChanStepper:
         data_source_priority: Optional[list[str]] = None,
         data_form_mode: str = "traditional",
         data_form_quantity: Optional[int] = None,
+        data_form_quantity_alloc: str = "front",
         data_feed_mode: str = "step",
     ) -> None:
         # 解析并设置周期类型
         self.k_type = parse_k_type(k_type)
         feed_mode = normalize_data_feed_mode(data_feed_mode)
+        qty_alloc = normalize_data_form_quantity_alloc(data_form_quantity_alloc)
         
         self.data_src_chip_used = None
 
@@ -3680,7 +3757,8 @@ class ChanStepper:
             "zs_combine_mode": "zs",
             "one_bi_zs": False,
             "zs_algo": "normal",
-            "trigger_step": feed_mode == "step",
+            # 复盘统一 trigger_step=True，由 ReplayChan.load/step_load 显式喂 K（unified 用 load(step=False)）
+            "trigger_step": True,
             "skip_step": 0,
             "kl_data_check": True,
             "print_warning": False,
@@ -3833,30 +3911,35 @@ class ChanStepper:
         raw_master = self._replay_klus_master_raw or self._replay_klus_master or []
         self.data_form_mode = normalize_data_form_mode(data_form_mode)
         self.data_feed_mode = feed_mode
+        self.data_form_quantity_alloc = qty_alloc
         self.raw_kline_count = len(raw_master)
         self.data_form_quantity = normalize_data_form_quantity(
             data_form_quantity if data_form_quantity is not None else self.raw_kline_count,
             self.raw_kline_count if self.raw_kline_count > 0 else 1,
         )
         if is_data_form_tick_synth_mode(self.data_form_mode):
-            synth_master, synth_kline_all = build_tick_synth_session_data(
+            synth_master, synth_kline_all, tick_raw_count, tick_raw_master = build_tick_synth_session_data(
                 self.code,
                 self.k_type,
                 begin_date,
                 end_date,
                 self.data_form_mode,
                 self.data_form_quantity,
+                self.data_form_quantity_alloc,
             )
-            self._replay_klus_master_raw = copy.deepcopy(synth_master)
+            # tick_quantity：raw 保存聚合前 master，与 quantity 模式一致
+            self._replay_klus_master_raw = copy.deepcopy(tick_raw_master)
             self._replay_klus_master = copy.deepcopy(synth_master)
             self.kline_all = synth_kline_all
-            self.raw_kline_count = len(synth_master)
+            self.raw_kline_count = int(tick_raw_count)
             self.data_form_quantity = normalize_data_form_quantity(
                 self.data_form_quantity,
                 self.raw_kline_count if self.raw_kline_count > 0 else 1,
             )
         elif is_data_form_quantity_mode(self.data_form_mode) and self.raw_kline_count > 0:
-            self._replay_klus_master = aggregate_klu_by_quantity(raw_master, self.data_form_quantity)
+            self._replay_klus_master = aggregate_klu_by_quantity(
+                raw_master, self.data_form_quantity, self.data_form_quantity_alloc
+            )
         else:
             self._replay_klus_master = copy.deepcopy(raw_master)
 
@@ -3891,6 +3974,11 @@ class ChanStepper:
             self._iter = None
             self._rebuild_indicator_history_from_chan()
             bundle = self.get_structure_bundle(force=True)
+            klu_chart = (
+                serialize_replay_master_klines(self._replay_klus_master)
+                if use_master_kline_for_chart(self.data_form_mode)
+                else None
+            )
             self._unified_full_payload = serialize_chan(
                 self.chan,
                 self.indicator_history,
@@ -3898,7 +3986,7 @@ class ChanStepper:
                 chan_algo=self.chan_algo,
                 bundle=bundle,
                 kline_all=self.kline_all,
-                klu_arr_cache=None,
+                klu_arr_cache=klu_chart,
             )
         else:
             self._iter = self.chan.step_load()
@@ -3993,12 +4081,18 @@ class ChanStepper:
             kl_list = self.chan[0]
             latest_klu = kl_list.lst[-1].lst[-1]
             h, l, c = float(latest_klu.high), float(latest_klu.low), float(latest_klu.close)
-            self._serialized_klu_cache.append(
-                serialize_klu_unit_fast(
-                    latest_klu,
-                    lambda x: _klu_float_trade_metric(x, DATA_FIELD.FIELD_VOLUME),
+            if use_master_kline_for_chart(self.data_form_mode):
+                master = self._replay_klus_master or []
+                self._serialized_klu_cache = serialize_replay_master_klines(
+                    master[: max(0, self.step_idx + 1)]
                 )
-            )
+            else:
+                self._serialized_klu_cache.append(
+                    serialize_klu_unit_fast(
+                        latest_klu,
+                        lambda x: _klu_float_trade_metric(x, DATA_FIELD.FIELD_VOLUME),
+                    )
+                )
             
             macd_item = self.indicators["macd"].add(c)
             kdj_item = self.indicators["kdj"].add(h, l, c)
@@ -4130,6 +4224,8 @@ class ChanStepper:
                 payload = self._slice_chart_payload_to_x(self._unified_full_payload, x_max)
             if not include_kline_all:
                 payload.pop("kline_all", None)
+            elif self.kline_all:
+                payload["kline_all"] = _chip_kline_all_with_x(self.kline_all)
             self._chart_payload_cache[include_kline_all] = (self.step_idx, payload)
             return payload
         if self.chan is None:
@@ -4139,8 +4235,13 @@ class ChanStepper:
             return cache[1]
         bundle = self.get_structure_bundle()
         klu_arr_cache = self._serialized_klu_cache
-        # 兜底：缓存与步进长度不一致时回退全量序列化。
-        if len(klu_arr_cache) != max(0, self.step_idx + 1):
+        if use_master_kline_for_chart(self.data_form_mode):
+            master = self._replay_klus_master or []
+            want = max(0, self.step_idx + 1)
+            if want <= len(master):
+                klu_arr_cache = serialize_replay_master_klines(master[:want])
+        elif len(klu_arr_cache) != max(0, self.step_idx + 1):
+            # 兜底：缓存与步进长度不一致时回退全量序列化。
             klu_arr_cache = None
         payload = serialize_chan(
             self.chan,
@@ -4151,6 +4252,8 @@ class ChanStepper:
             kline_all=(self.kline_all if include_kline_all else None),
             klu_arr_cache=klu_arr_cache,
         )
+        if include_kline_all and self.kline_all:
+            payload["kline_all"] = _chip_kline_all_with_x(self.kline_all)
         self._chart_payload_cache[include_kline_all] = (self.step_idx, payload)
         return payload
 
@@ -5052,6 +5155,40 @@ class AppState:
                 }
             )
 
+    @staticmethod
+    def _replay_bar_total_for_stepper(stepper: "ChanStepper") -> int:
+        if (
+            normalize_data_feed_mode(getattr(stepper, "data_feed_mode", "step")) == "unified"
+            and getattr(stepper, "_unified_full_payload", None) is not None
+        ):
+            return len(stepper._unified_full_payload.get("kline") or [])
+        master = getattr(stepper, "_replay_klus_master", None) or []
+        return len(master) if isinstance(master, list) else 0
+
+    def apply_kline_presentation_end(self) -> None:
+        """一次性呈现：加载/重配后直接展示末根完整图表（跳过逐步浏览过程）。"""
+        pres = normalize_kline_presentation_mode(
+            (self.session_params or {}).get("kline_presentation_mode", "step")
+        )
+        if pres != "instant":
+            return
+        total = self._replay_bar_total_for_stepper(self.stepper)
+        if total <= 0:
+            return
+        last_idx = total - 1
+        if normalize_data_feed_mode(getattr(self.stepper, "data_feed_mode", "step")) == "unified":
+            self.stepper.unified_set_step_idx(last_idx)
+            if self.chart_mode == "dual" and self.stepper2 is not None:
+                self._sync_stepper_to_anchor(self.stepper2, self.stepper.current_time())
+            elif self.chart_mode == "multi" and self.multi_steppers:
+                self._sync_passives_to_anchor(self.stepper.current_time())
+            self._dual_rebuild_coarse_chan_anti_future(self.stepper.current_time())
+            self.sync_bsp_history()
+            self.sync_rhythm_history()
+            self.after_step_update()
+            return
+        self.rebuild_to_step(last_idx)
+
     def rebuild_to_step(self, target_step: int) -> None:
         if self.session_params is None:
             raise ValueError("当前无可重建会话")
@@ -5076,10 +5213,12 @@ class AppState:
             data_source_priority=params.get("data_source_priority"),
             data_form_mode=params.get("data_form_mode", "traditional"),
             data_form_quantity=params.get("data_form_quantity"),
+            data_form_quantity_alloc=params.get("data_form_quantity_alloc", "front"),
             data_feed_mode=params.get("data_feed_mode", "step"),
         )
         cm = normalize_replay_chart_mode(params.get("chart_mode", "single"))
         self.multi_steppers = []
+        qty_alloc = params.get("data_form_quantity_alloc", "front")
         if cm == "dual":
             self.chart_mode = "dual"
             self.stepper2 = ChanStepper()
@@ -5094,6 +5233,7 @@ class AppState:
                 data_source_priority=params.get("data_source_priority"),
                 data_form_mode=params.get("data_form_mode", "traditional"),
                 data_form_quantity=params.get("data_form_quantity"),
+                data_form_quantity_alloc=qty_alloc,
                 data_feed_mode=params.get("data_feed_mode", "step"),
             )
         elif cm == "multi":
@@ -5114,6 +5254,7 @@ class AppState:
                     data_source_priority=params.get("data_source_priority"),
                     data_form_mode=params.get("data_form_mode", "traditional"),
                     data_form_quantity=params.get("data_form_quantity"),
+                    data_form_quantity_alloc=qty_alloc,
                     data_feed_mode=params.get("data_feed_mode", "step"),
                 )
                 self.multi_steppers.append(st)
@@ -5132,28 +5273,45 @@ class AppState:
         self._reset_judge_state()
         self.rebuild_bsp_all_snapshot()
 
-        if not self.stepper.step():
+        total = self._replay_bar_total_for_stepper(self.stepper)
+        if total <= 0:
             return
-        if self.chart_mode == "dual" and self.stepper2 is not None:
-            self.stepper2.step()
-            self._sync_stepper_to_anchor(self.stepper2, self.stepper.current_time())
-        elif self.chart_mode == "multi" and self.multi_steppers:
-            self._sync_passives_to_anchor(self.stepper.current_time())
-        self.sync_bsp_history()
-        self.sync_rhythm_history()
-        self.after_step_update()
-        for _ in range(target_step):
-            if not self.stepper.step():
-                break
+        target_step = max(0, min(int(target_step), total - 1))
+
+        # 统一喂数据：切片游标直接定位，避免按步循环；修改数量后须钳制到新区间末根
+        if normalize_data_feed_mode(getattr(self.stepper, "data_feed_mode", "step")) == "unified":
+            self.stepper.unified_set_step_idx(target_step)
             if self.chart_mode == "dual" and self.stepper2 is not None:
+                self._sync_stepper_to_anchor(self.stepper2, self.stepper.current_time())
+            elif self.chart_mode == "multi" and self.multi_steppers:
+                self._sync_passives_to_anchor(self.stepper.current_time())
+            self._dual_rebuild_coarse_chan_anti_future(self.stepper.current_time())
+            self.sync_bsp_history()
+            self.sync_rhythm_history()
+            self.after_step_update()
+        else:
+            if not self.stepper.step():
+                return
+            if self.chart_mode == "dual" and self.stepper2 is not None:
+                self.stepper2.step()
                 self._sync_stepper_to_anchor(self.stepper2, self.stepper.current_time())
             elif self.chart_mode == "multi" and self.multi_steppers:
                 self._sync_passives_to_anchor(self.stepper.current_time())
             self.sync_bsp_history()
             self.sync_rhythm_history()
             self.after_step_update()
+            for _ in range(target_step):
+                if not self.stepper.step():
+                    break
+                if self.chart_mode == "dual" and self.stepper2 is not None:
+                    self._sync_stepper_to_anchor(self.stepper2, self.stepper.current_time())
+                elif self.chart_mode == "multi" and self.multi_steppers:
+                    self._sync_passives_to_anchor(self.stepper.current_time())
+                self.sync_bsp_history()
+                self.sync_rhythm_history()
+                self.after_step_update()
 
-        self._dual_rebuild_coarse_chan_anti_future(self.get_active_stepper().current_time())
+            self._dual_rebuild_coarse_chan_anti_future(self.get_active_stepper().current_time())
 
         effective_step = max(0, self.stepper.step_idx)
         self.trade_events = [e for e in self.trade_events if int(e.get("step_idx", -1)) <= effective_step]
@@ -5181,7 +5339,9 @@ class AppState:
         *,
         data_form_mode: Optional[str] = None,
         data_form_quantity: Optional[int] = None,
+        data_form_quantity_alloc: Optional[str] = None,
         data_feed_mode: Optional[str] = None,
+        kline_presentation_mode: Optional[str] = None,
         rollback_cache_depth: Optional[int] = None,
         rollback_full_snapshot_interval: Optional[int] = None,
         rollback_capture_max_bars: Optional[int] = None,
@@ -5195,8 +5355,16 @@ class AppState:
             self.session_params["data_form_mode"] = normalize_data_form_mode(data_form_mode)
         if data_form_quantity is not None:
             self.session_params["data_form_quantity"] = int(data_form_quantity)
+        if data_form_quantity_alloc is not None:
+            self.session_params["data_form_quantity_alloc"] = normalize_data_form_quantity_alloc(
+                data_form_quantity_alloc
+            )
         if data_feed_mode is not None:
             self.session_params["data_feed_mode"] = normalize_data_feed_mode(data_feed_mode)
+        if kline_presentation_mode is not None:
+            self.session_params["kline_presentation_mode"] = normalize_kline_presentation_mode(
+                kline_presentation_mode
+            )
         if rollback_cache_depth is not None:
             self.session_params["rollback_cache_depth"] = int(rollback_cache_depth)
         if rollback_full_snapshot_interval is not None:
@@ -5213,8 +5381,24 @@ class AppState:
         self.trade_events = []
         self.account.reset(self.session_params["initial_cash"])
         
-        # 3. Rebuild to current step
-        target_step = self.stepper.step_idx
+        # 3. 重建：改数量/形式/喂入方式后展示全部聚合 K 线（末根）；仅改缠论配置时保持步位
+        pres = normalize_kline_presentation_mode(
+            self.session_params.get("kline_presentation_mode", "step")
+        )
+        data_form_changed = any(
+            x is not None
+            for x in (
+                data_form_mode,
+                data_form_quantity,
+                data_form_quantity_alloc,
+                data_feed_mode,
+            )
+        )
+        if data_form_changed or pres == "instant":
+            # 重建后钳制到末根（rebuild_to_step 内按新 total 处理）
+            target_step = 10**9
+        else:
+            target_step = self.stepper.step_idx
         self.rebuild_to_step(target_step)
 
     def build_payload(self, stock_name: Optional[str] = None, *, include_kline_all: bool = True) -> dict[str, Any]:
@@ -5259,7 +5443,9 @@ class AppState:
                     self._apply_partial_last_bar(chart2, coarse, fine, anchor_time)
         chart_layers: Optional[list[dict[str, Any]]] = None
         chip_basis: Optional[str] = None
-        if normalize_replay_chart_mode(self.chart_mode) == "multi" and self.multi_steppers:
+        if is_data_form_tick_synth_mode(self.stepper.data_form_mode):
+            chip_basis = "tick_accum_driver"
+        elif normalize_replay_chart_mode(self.chart_mode) == "multi" and self.multi_steppers:
             chip_basis = "tick_accum_driver" if self.stepper.data_src_used == OFFLINE_INLINE_SRC else None
             dk = chart.get("kline") or []
             chart_layers = []
@@ -5333,9 +5519,16 @@ class AppState:
             "data_form": {
                 "mode": self.stepper.data_form_mode,
                 "quantity": int(self.stepper.data_form_quantity or 0),
+                "quantity_alloc": normalize_data_form_quantity_alloc(
+                    getattr(self.stepper, "data_form_quantity_alloc", "front")
+                ),
                 "feed_mode": normalize_data_feed_mode(getattr(self.stepper, "data_feed_mode", "step")),
+                "presentation_mode": normalize_kline_presentation_mode(
+                    (self.session_params or {}).get("kline_presentation_mode", "step")
+                ),
                 "raw_count": int(self.stepper.raw_kline_count or 0),
-                "current_count": int(len(active_chart.get("kline", []))),
+                # 聚合后的总根数（非 unified 切片后的可见根数）
+                "current_count": int(_total),
             },
             "bsp_history": self.bsp_history,
             "rhythm_notice_hits": rhythm_notice_hits,
@@ -5832,6 +6025,7 @@ def run_indicator_backtest(req: IndicatorBacktestReq) -> dict[str, Any]:
         data_source_priority=req.data_source_priority,
         data_form_mode=req.data_form_mode,
         data_form_quantity=req.data_form_quantity,
+        data_form_quantity_alloc=getattr(req, "data_form_quantity_alloc", "front"),
         data_feed_mode=getattr(req, "data_feed_mode", "step"),
     )
     sim.stepper2 = None
@@ -5848,6 +6042,7 @@ def run_indicator_backtest(req: IndicatorBacktestReq) -> dict[str, Any]:
             data_source_priority=req.data_source_priority,
             data_form_mode=req.data_form_mode,
             data_form_quantity=req.data_form_quantity,
+            data_form_quantity_alloc=getattr(req, "data_form_quantity_alloc", "front"),
             data_feed_mode=getattr(req, "data_feed_mode", "step"),
         )
     sim.session_params = {
@@ -6029,6 +6224,23 @@ def serialize_klu_iter(klu_iter) -> list[dict[str, Any]]:
         serialize_klu_unit_fast_fn=serialize_klu_unit_fast,
         volume_getter_fn=lambda x: _klu_float_trade_metric(x, DATA_FIELD.FIELD_VOLUME),
     )
+
+
+def serialize_replay_master_klines(master: list[Any]) -> list[dict[str, Any]]:
+    """数量/分笔数量模式：主图 K 线按喂入的聚合根数序列化，避免引擎合并 K 后 klu_iter 多出重叠蜡烛。"""
+    _ensure_klu_deepcopy_attrs(master)
+    out: list[dict[str, Any]] = []
+    vol_fn = lambda x: _klu_float_trade_metric(x, DATA_FIELD.FIELD_VOLUME)
+    for i, klu in enumerate(master):
+        row = serialize_klu_unit_fast(klu, vol_fn)
+        row["x"] = i
+        out.append(row)
+    return out
+
+
+def use_master_kline_for_chart(data_form_mode: str) -> bool:
+    """图表主图 K 线是否以 _replay_klus_master 为准（与数量聚合根数一致）。"""
+    return is_data_form_quantity_mode(data_form_mode)
 
 
 def _newk_combine_frame_time_lo(el: NewKElement) -> str:
@@ -6362,6 +6574,16 @@ HTML = r"""
       gap: 8px;
       font-size: 12px;
     }
+    .bt-cond-cascade-host .settings-cascade { min-height: 200px; max-height: 280px; }
+    .bt-cond-cascade-host .settings-cascade-list { max-height: none; flex: 1; }
+    .bt-cond-cascade-panel {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      max-height: 220px;
+      overflow-y: auto;
+    }
+    .bt-cond-cascade-panel .bt-cond-item { margin: 0; }
     .bt-cond-item {
       display: flex;
       align-items: flex-start;
@@ -6896,6 +7118,20 @@ HTML = r"""
       padding: 24px;
       box-sizing: border-box;
     }
+    #settingsModal .panel.chart-settings-panel {
+      width: min(920px, calc(100vw - 32px));
+      max-height: 88vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    #settingsModal .panel.chart-settings-panel #settingsContent {
+      flex: 1;
+      min-height: 0;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
     .settingsTitle {
       font-size: 20px;
       font-weight: bold;
@@ -6948,6 +7184,132 @@ HTML = r"""
     .settingsItem input {
       width: 100%;
       box-sizing: border-box;
+    }
+    .settingsItemWide {
+      grid-column: 1 / -1;
+    }
+    /* 图表显示设置：三级级联（级别 → 类型 → 买/卖） */
+    .settings-cascade {
+      display: flex;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+      min-height: 200px;
+      font-size: 13px;
+      background: var(--panel);
+    }
+    .settings-cascade-col {
+      flex: 1;
+      min-width: 0;
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+    }
+    .settings-cascade-col:last-child { border-right: none; }
+    .settings-cascade-head {
+      padding: 8px 10px;
+      background: rgba(37, 99, 235, 0.06);
+      font-weight: 600;
+      border-bottom: 1px solid var(--border);
+      color: #1e40af;
+    }
+    .settings-cascade-list {
+      flex: 1;
+      overflow-y: auto;
+      max-height: 220px;
+    }
+    .settings-cascade-item {
+      padding: 8px 10px;
+      cursor: pointer;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+      user-select: none;
+    }
+    .settings-cascade-item:hover { background: rgba(37, 99, 235, 0.08); }
+    .settings-cascade-item.active {
+      background: rgba(37, 99, 235, 0.14);
+      color: #1d4ed8;
+      font-weight: 600;
+    }
+    .settings-cascade-panel {
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      flex: 1;
+    }
+    .settings-cascade-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 4px;
+    }
+    .settings-cascade-actions button {
+      padding: 4px 8px;
+      font-size: 12px;
+      width: auto;
+    }
+    /* 图表显示设置：单面板级联（分组 → 配置项） */
+    .chart-settings-shell { margin-bottom: 8px; display: flex; flex-direction: column; min-height: 0; flex: 1; }
+    .chart-settings-hint { font-size: 12px; margin-bottom: 10px; line-height: 1.5; flex-shrink: 0; }
+    .chart-settings-cascade {
+      display: flex;
+      flex: 1;
+      min-height: min(420px, 52vh);
+      max-height: min(560px, 62vh);
+      min-width: 0;
+    }
+    .chart-settings-nav {
+      flex: 0 0 26%;
+      min-width: 132px;
+      max-width: 220px;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    .chart-settings-nav .settings-cascade-list {
+      flex: 1;
+      max-height: none;
+      min-height: 0;
+    }
+    .chart-settings-nav .settings-cascade-item {
+      width: 100%;
+      box-sizing: border-box;
+      line-height: 1.35;
+      word-break: break-word;
+    }
+    .chart-settings-detail-col {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    .chart-settings-detail-scroll {
+      flex: 1;
+      overflow-y: auto;
+      min-height: 0;
+      max-height: none;
+      padding: 12px 14px;
+      box-sizing: border-box;
+    }
+    .chart-settings-detail-head {
+      margin-bottom: 12px;
+      padding-left: 10px;
+      border-left: 4px solid #2563eb;
+    }
+    .chart-settings-detail-body {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .chart-settings-detail-body .settingsItem {
+      padding: 10px;
+      border: 1px solid rgba(148, 163, 184, 0.35);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.5);
+    }
+    [data-theme="dark"] .chart-settings-detail-body .settingsItem {
+      background: rgba(15, 23, 42, 0.35);
     }
     .settingsActions {
       margin-top: 16px;
@@ -7029,7 +7391,7 @@ HTML = r"""
           <button id="toolHorizontalRay" type="button" data-tip="生成水平射线：点击图表在当前价位生成一条水平射线。">水平射线</button>
           <button id="toolBiRay" type="button" data-tip="笔端点射线：依次点击两个笔端点生成一条向右延伸的射线。再次点击可退出。">笔端点射线</button>
           <button id="toolRatioLine" type="button" data-tip="比例线：点击按钮会弹出详细操作说明。依次点两个笔端点可生成 0.382 / 0.5 / 0.618，悬停可高亮，拖拽可上下移动，按 Ctrl 可吸附K线高低点。">比例线</button>
-          <button id="toolParallelogram" type="button" data-tip="平行四边形：依次点击三个笔端点，以第三个端点为起点，生成一条平行于倒数第二笔的射线。再次点击可退出。">平行四边形</button>
+          <button id="toolParallelogram" type="button" data-tip="平行四边形：依次点 3 个位置。Ctrl+左键可在任意 K 线列吸附开高低收（不必是笔/段端点）；无 Ctrl 时仍优先吸附笔端点。第1、2点定平行边方向。再次点击工具退出。">平行四边形</button>
           <button id="toolLineProps" type="button" data-tip="先使用“选择”并点击某条画线，再点此按钮编辑粗细/颜色/线型。">画线属性</button>
         </div>
       </div>
@@ -7244,7 +7606,7 @@ HTML = r"""
                   <option value="or">OR（任一满足）</option>
                 </select>
               </div>
-              <div id="btEntryCondGrid" class="bt-cond-grid"></div>
+              <div id="btEntryCondCascade" class="bt-cond-cascade-host"></div>
             </div>
             <div class="bt-cond-section">
               <div class="bt-cond-title">
@@ -7259,7 +7621,7 @@ HTML = r"""
                   <option value="or">OR（任一满足）</option>
                 </select>
               </div>
-              <div id="btExitCondGrid" class="bt-cond-grid"></div>
+              <div id="btExitCondCascade" class="bt-cond-cascade-host"></div>
               <div class="bt-hold-row cfg-editable">
                 <label>
                   <input type="checkbox" id="btUseExitHold" checked />
@@ -7744,6 +8106,8 @@ function setActiveChart(chartId, persist = true) {
   updateDualModeUI(lastPayload);
 }
 let selectedMainIndicatorSlot = Number(storageGet("chan_selected_main_indicator_slot") || "0");
+/** 图表显示设置级联面板：当前选中的分组 key */
+let chartSettingsCascadeSelKey = null;
 let selectedSubIndicatorSlot = Number(storageGet("chan_selected_sub_indicator_slot") || "0");
 let indicatorMainSlots = ensureObject(safeJsonParse(storageGet("chan_indicator_main_slots"), null), null);
 let indicatorSubSlots = ensureObject(safeJsonParse(storageGet("chan_indicator_sub_slots"), null), null);
@@ -7828,7 +8192,7 @@ const DEFAULT_CHAN_CONFIG = {
 
 const DEFAULT_CHART_CONFIG = {
   theme: "light",
-  crosshair: { width: 5, color: "#000000", fontSize: 16 },
+  crosshair: { width: 5, color: "#000000", fontSize: 16, enabled: false },
   fx: { width: 1.1, color: "#06b6d4", dashed: true },
   fract: { widthSure: 2.2, widthUnsure: 1.6, color: "#d97706" },
   bi: { widthSure: 3.1, widthUnsure: 2.2, color: "#f59e0b" },
@@ -8051,6 +8415,8 @@ function migrateChartConfig(cfg) {
   if (!next.xAxis) next.xAxis = {};
   if (!next.yAxis) next.yAxis = {};
   if (!next.klineCombineFrame) next.klineCombineFrame = {};
+  if (!next.crosshair) next.crosshair = {};
+  if (typeof next.crosshair.enabled !== "boolean") next.crosshair.enabled = false;
   if (!next.toast) next.toast = {};
   if (typeof next.toast.showBsp !== "boolean") next.toast.showBsp = true;
   if (typeof next.toast.showRhythm1382 !== "boolean") next.toast.showRhythm1382 = true;
@@ -8180,6 +8546,24 @@ function buildChartConfigStore(rawCfg) {
 }
 let chartConfigStore = buildChartConfigStore(savedChartConfig);
 let chartConfig = chartConfigStore.perChart.chart1;
+
+function syncCrosshairEnabledFromStore() {
+  const sh = chartConfigStore.shared && chartConfigStore.shared.crosshair;
+  if (sh && typeof sh.enabled === "boolean") crosshairEnabled = !!sh.enabled;
+  else if (chartConfig.crosshair && typeof chartConfig.crosshair.enabled === "boolean") {
+    crosshairEnabled = !!chartConfig.crosshair.enabled;
+  }
+}
+
+function persistCrosshairEnabledToStore() {
+  if (!chartConfig.crosshair) chartConfig.crosshair = {};
+  chartConfig.crosshair.enabled = !!crosshairEnabled;
+  if (!chartConfigStore.shared.crosshair) chartConfigStore.shared.crosshair = {};
+  chartConfigStore.shared.crosshair.enabled = !!crosshairEnabled;
+  storageSet("chan_chart_config", JSON.stringify(chartConfigStore));
+}
+
+syncCrosshairEnabledFromStore();
 /** 多周期叠层绘制时临时覆盖的样式对象（与 chartConfig 结构一致） */
 let drawStyleCtx = null;
 function activeDrawStyle() {
@@ -8196,8 +8580,24 @@ function getMultiLayerDrawConfig(kt) {
   );
   return merged;
 }
-const DATA_FORM_DEFAULT = { mode: "traditional", quantity: 1, feedMode: "step" };
+const DATA_FORM_DEFAULT = {
+  mode: "traditional",
+  quantity: 1,
+  quantityAlloc: "front",
+  feedMode: "step",
+  klinePresentation: "step",
+};
 let dataFormConfig = { ...DATA_FORM_DEFAULT };
+
+function normalizeDataFormQuantityAlloc(alloc) {
+  const m = String(alloc || "front").toLowerCase();
+  return m === "back" || m === "靠后" || m === "靠后分配" ? "back" : "front";
+}
+
+function normalizeKlinePresentationMode(mode) {
+  const m = String(mode || "step").toLowerCase();
+  return m === "instant" || m === "oneshot" || m === "一次性" || m === "一次性呈现" ? "instant" : "step";
+}
 
 function normalizeDataFormMode(mode) {
   const m = String(mode || "traditional").toLowerCase();
@@ -8272,10 +8672,12 @@ function snapPriceToKlineOhlc(k, rawPrice) {
   return { field: best.field, y: best.v };
 }
 
+/** 数量射线锚点：按锚点保存的时间 t，映射到当前数量聚合后的 K 线（桶末时刻区间） */
 function findDisplayKlineForRawTime(chart, rawTimeStr) {
   const dk = chart && chart.kline ? chart.kline : [];
   if (!dk.length) return null;
   const rawT = String(rawTimeStr || "").trim();
+  if (!rawT) return dk[dk.length - 1];
   const rawCmp = chipTimeComparable(rawT);
   if (rawCmp == null) {
     for (const k of dk) {
@@ -8283,17 +8685,17 @@ function findDisplayKlineForRawTime(chart, rawTimeStr) {
     }
     return dk[dk.length - 1];
   }
-  for (const k of dk) {
-    if (chipTimeComparable(String(k.t || "")) === rawCmp) return k;
-  }
   for (let i = 0; i < dk.length; i++) {
-    const km = chipTimeComparable(String(dk[i].t || ""));
-    if (km == null) continue;
-    const prev = i > 0 ? chipTimeComparable(String(dk[i - 1].t || "")) : null;
-    if (i === 0 && rawCmp <= km) return dk[i];
-    if (prev != null && rawCmp > prev && rawCmp <= km) return dk[i];
+    const curCmp = chipTimeComparable(String(dk[i].t || ""));
+    if (curCmp == null) continue;
+    const prevCmp = i > 0 ? chipTimeComparable(String(dk[i - 1].t || "")) : null;
+    if (prevCmp == null && rawCmp <= curCmp) return dk[i];
+    if (prevCmp != null && rawCmp > prevCmp && rawCmp <= curCmp) return dk[i];
+    if (curCmp === rawCmp) return dk[i];
   }
-  return dk[dk.length - 1];
+  const lastCmp = chipTimeComparable(String(dk[dk.length - 1].t || ""));
+  if (lastCmp != null && rawCmp > lastCmp) return dk[dk.length - 1];
+  return dk[0];
 }
 
 function resolveQuantityRayAnchor(chart, anchor) {
@@ -8303,6 +8705,177 @@ function resolveQuantityRayAnchor(chart, anchor) {
   const displayK = findDisplayKlineForRawTime(chart, anchor.t);
   if (!displayK || !Number.isFinite(Number(displayK.x))) return null;
   return { x: Number(displayK.x), y };
+}
+
+function parseSessionDateToComparableMs(dateStr, endOfDay) {
+  const s = String(dateStr || "").trim();
+  if (!s) return null;
+  const cmp = chipTimeComparable(s.replace(/\//g, "-"));
+  if (cmp != null) return cmp;
+  const m = s.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  if (!m) return null;
+  const y = +m[1], mo = +m[2], d = +m[3];
+  if (endOfDay) return Date.UTC(y, mo - 1, d, 23, 59, 59);
+  return Date.UTC(y, mo - 1, d, 0, 0, 0);
+}
+
+function getCurrentSessionRangeMs() {
+  const beginStr = $("begin") ? $("begin").value : sessionConfig.begin;
+  const endStr = $("end") && $("end").value ? $("end").value : sessionConfig.end;
+  let beginMs = parseSessionDateToComparableMs(beginStr, false);
+  let endMs = parseSessionDateToComparableMs(endStr, true);
+  if (beginMs == null) beginMs = parseSessionDateToComparableMs("1990-01-01", false);
+  if (endMs == null) {
+    const now = new Date();
+    endMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 23, 59, 59);
+  }
+  if (endMs < beginMs) endMs = beginMs;
+  return { beginMs, endMs, beginStr: String(beginStr || ""), endStr: String(endStr || "") };
+}
+
+function raySavedSessionRangeMs(r) {
+  let beginMs = parseSessionDateToComparableMs(r.sessionBegin, false);
+  let endMs = parseSessionDateToComparableMs(r.sessionEnd, true);
+  if (beginMs == null && r.p1 && r.p2) {
+    const t1 = chipTimeComparable(r.p1.t);
+    const t2 = chipTimeComparable(r.p2.t);
+    if (t1 != null && t2 != null) {
+      beginMs = Math.min(t1, t2);
+      endMs = Math.max(t1, t2);
+    }
+  }
+  if (beginMs == null) beginMs = parseSessionDateToComparableMs("1990-01-01", false);
+  if (endMs == null) endMs = parseSessionDateToComparableMs("2099-12-31", true);
+  return { beginMs, endMs };
+}
+
+function sessionRangeContains(outer, inner) {
+  return outer.beginMs <= inner.beginMs && inner.endMs <= outer.endMs;
+}
+
+/** 时间-价格斜率 k：切换数量时保持不变（不随 K 线索引 x 变化） */
+function quantityRayTimePriceK(r) {
+  const t1 = chipTimeComparable(r.p1.t);
+  const t2 = chipTimeComparable(r.p2.t);
+  const y1 = Number(r.p1.y);
+  const y2 = Number(r.p2.y);
+  if (t1 == null || t2 == null || !Number.isFinite(y1) || !Number.isFinite(y2)) return null;
+  const dt = t2 - t1;
+  if (Math.abs(dt) < 1) return null;
+  return { t1, y1, k: (y2 - y1) / dt };
+}
+
+function quantityRayPriceAt(tp, tMs) {
+  return tp.y1 + tp.k * (tMs - tp.t1);
+}
+
+function chartPointAtTimeMs(chart, tp, tMs) {
+  const ks = chart.kline || [];
+  if (!ks.length) return null;
+  let best = ks[ks.length - 1];
+  for (let i = 0; i < ks.length; i++) {
+    const c = chipTimeComparable(String(ks[i].t || ""));
+    if (c == null) continue;
+    const prev = i > 0 ? chipTimeComparable(String(ks[i - 1].t || "")) : null;
+    if (prev == null && tMs <= c) {
+      best = ks[i];
+      break;
+    }
+    if (prev != null && tMs > prev && tMs <= c) {
+      best = ks[i];
+      break;
+    }
+    if (c === tMs) {
+      best = ks[i];
+      break;
+    }
+  }
+  const y = quantityRayPriceAt(tp, tMs);
+  const x = Number(best.x);
+  if (!Number.isFinite(x)) return null;
+  return { x, y, tMs };
+}
+
+function chartPointAtTimeStr(chart, tp, tStr) {
+  const tMs = chipTimeComparable(tStr);
+  if (tMs == null) return null;
+  return chartPointAtTimeMs(chart, tp, tMs);
+}
+
+function quantityRayRightEnd(chart, s, tp) {
+  const ks = chart.kline || [];
+  if (!ks.length) return null;
+  const last = ks[ks.length - 1];
+  const tEnd = chipTimeComparable(String(last.t || ""));
+  if (tEnd == null) return null;
+  const y = quantityRayPriceAt(tp, tEnd);
+  const px = s.x(s.xMax);
+  const py = s.y(y);
+  if (!Number.isFinite(px) || !Number.isFinite(py)) return null;
+  return { x: s.xMax, y, tMs: tEnd, px, py };
+}
+
+function resolveQuantityRayDrawSpec(chart, s, r) {
+  const tp = quantityRayTimePriceK(r);
+  if (!tp) return null;
+  const p1d = chartPointAtTimeStr(chart, tp, r.p1.t);
+  const p2d = chartPointAtTimeStr(chart, tp, r.p2.t);
+  const right = quantityRayRightEnd(chart, s, tp);
+  if (!p1d || !right) return null;
+  const current = getCurrentSessionRangeMs();
+  const saved = raySavedSessionRangeMs(r);
+  const contained = sessionRangeContains(current, saved);
+  const segments = [];
+  const tRay0 = tp.t1;
+  const tEnd = right.tMs;
+  if (!contained) {
+    segments.push({ from: p1d, to: right, dashed: true });
+    return { tp, p1d, p2d, right, contained, segments, allDashed: true };
+  }
+  const tSolidStart = Math.max(tRay0, saved.beginMs);
+  const tSolidEnd = Math.min(saved.endMs, tEnd);
+  if (tRay0 < saved.beginMs) {
+    const ptA0 = chartPointAtTimeMs(chart, tp, saved.beginMs);
+    if (ptA0) segments.push({ from: p1d, to: ptA0, dashed: true });
+  }
+  if (tSolidEnd > tSolidStart + 1) {
+    const ptS0 = chartPointAtTimeMs(chart, tp, tSolidStart);
+    const ptS1 = chartPointAtTimeMs(chart, tp, tSolidEnd);
+    if (ptS0 && ptS1) segments.push({ from: ptS0, to: ptS1, dashed: false });
+  }
+  if (saved.endMs < tEnd - 1) {
+    const ptAe = chartPointAtTimeMs(chart, tp, saved.endMs);
+    if (ptAe) segments.push({ from: ptAe, to: right, dashed: true });
+  } else if (tRay0 > saved.endMs) {
+    segments.push({ from: p1d, to: right, dashed: true });
+  }
+  if (segments.length === 0) segments.push({ from: p1d, to: right, dashed: false });
+  return { tp, p1d, p2d, right, contained, segments, allDashed: false };
+}
+
+function distPointToSegmentPx(px, py, x0, y0, x1, y1) {
+  const dx = x1 - x0;
+  const dy = y1 - y0;
+  const len2 = dx * dx + dy * dy;
+  if (len2 < 1e-6) return Math.hypot(px - x0, py - y0);
+  let t = ((px - x0) * dx + (py - y0) * dy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  const qx = x0 + t * dx;
+  const qy = y0 + t * dy;
+  return Math.hypot(px - qx, py - qy);
+}
+
+function hitTestQuantityRayPx(chart, s, r, xp, yp, threshold) {
+  const spec = resolveQuantityRayDrawSpec(chart, s, r);
+  if (!spec || !spec.segments) return false;
+  for (const seg of spec.segments) {
+    const x0 = s.x(seg.from.x);
+    const y0 = s.y(seg.from.y);
+    const x1 = seg.to.px != null ? seg.to.px : s.x(seg.to.x);
+    const y1 = seg.to.py != null ? seg.to.py : s.y(seg.to.y);
+    if (distPointToSegmentPx(xp, yp, x0, y0, x1, y1) <= threshold) return true;
+  }
+  return false;
 }
 
 function buildQuantityRayAnchor(chart, s, px, py) {
@@ -8343,7 +8916,9 @@ async function applyQuantityFromKeyboard(rawQ) {
       chan_config: chanConfig,
       data_form_mode: dataFormConfig.mode,
       data_form_quantity: nextQ,
+      data_form_quantity_alloc: normalizeDataFormQuantityAlloc(dataFormConfig.quantityAlloc),
       data_feed_mode: normalizeDataFeedMode(dataFormConfig.feedMode),
+      kline_presentation_mode: normalizeKlinePresentationMode(dataFormConfig.klinePresentation),
       rollback_cache_depth: Number(systemConfig.rollbackCacheDepth || DEFAULT_SYSTEM_CONFIG.rollbackCacheDepth),
       rollback_full_snapshot_interval: Number(systemConfig.rollbackFullSnapshotInterval || DEFAULT_SYSTEM_CONFIG.rollbackFullSnapshotInterval),
       rollback_capture_max_bars: Number(systemConfig.rollbackCaptureMaxBars || DEFAULT_SYSTEM_CONFIG.rollbackCaptureMaxBars),
@@ -8403,7 +8978,9 @@ const DEFAULT_SESSION_CONFIG = {
   activeChartId: "chart1",
   dataFormMode: "traditional",
   dataFormQuantity: 1,
+  dataFormQuantityAlloc: "front",
   dataFeedMode: "step",
+  klinePresentationMode: "step",
 };
 let sessionConfig = ensureObject(
   safeJsonParse(storageGet("chan_session_config"), JSON.parse(JSON.stringify(DEFAULT_SESSION_CONFIG))),
@@ -8946,21 +9523,37 @@ function saveSessionConfig() {
     // 保存数据形式与喂数据方式
     dataFormMode: normalizeDataFormMode(dataFormConfig.mode),
     dataFormQuantity: clampDataFormQuantity(dataFormConfig.quantity, dataFormConfig.quantity || 1),
+    dataFormQuantityAlloc: normalizeDataFormQuantityAlloc(dataFormConfig.quantityAlloc),
     dataFeedMode: normalizeDataFeedMode(dataFormConfig.feedMode),
+    klinePresentationMode: normalizeKlinePresentationMode(dataFormConfig.klinePresentation),
   };
   storageSet("chan_session_config", JSON.stringify(sessionConfig));
 }
 
 /** 将内存中的 chartConfig 写回 localStorage（重新训练前调用，避免未点「保存」时丢失） */
-function persistChartConfigStoreNow() {
+function persistChartConfigStoreNow(syncAllPerChart) {
   const aid = (lastPayload && lastPayload.ready && String(lastPayload.active_chart_id) === "chart2")
     ? "chart2"
     : (String(sessionConfig.activeChartId || dualActiveChartId || "chart1") === "chart2" ? "chart2" : "chart1");
-  chartConfigStore.perChart[aid] = JSON.parse(JSON.stringify(chartConfig));
+  const snap = JSON.parse(JSON.stringify(chartConfig));
+  chartConfigStore.perChart[aid] = snap;
+  if (syncAllPerChart !== false) {
+    chartConfigStore.perChart.chart1 = JSON.parse(JSON.stringify(snap));
+    chartConfigStore.perChart.chart2 = deepMerge(
+      JSON.parse(JSON.stringify(chartConfigStore.perChart.chart2 || DEFAULT_CHART_CONFIG)),
+      JSON.parse(JSON.stringify(snap))
+    );
+  }
   chartConfigStore.shared.theme = chartConfig.theme;
-  chartConfigStore.shared.crosshair = JSON.parse(JSON.stringify(chartConfig.crosshair || chartConfigStore.shared.crosshair));
+  chartConfigStore.shared.crosshair = JSON.parse(JSON.stringify(chartConfig.crosshair || chartConfigStore.shared.crosshair || {}));
+  if (typeof chartConfigStore.shared.showBottomBsp !== "boolean") {
+    chartConfigStore.shared.showBottomBsp = true;
+  }
   if ($("chartMode")) chartConfigStore.shared.mode = $("chartMode").value;
   if (!chartConfigStore.multiPerK) chartConfigStore.multiPerK = {};
+  if (chartConfig.multiOverlay) {
+    chartConfigStore.multiOverlay = JSON.parse(JSON.stringify(chartConfig.multiOverlay));
+  }
   storageSet("chan_chart_config", JSON.stringify(chartConfigStore));
 }
 
@@ -8992,6 +9585,12 @@ function loadSessionConfig() {
       Number.isFinite(Number(sessionConfig.dataFormQuantity)) ? Number(sessionConfig.dataFormQuantity) : 1
     );
     dataFormConfig.feedMode = normalizeDataFeedMode(sessionConfig.dataFeedMode);
+    dataFormConfig.quantityAlloc = normalizeDataFormQuantityAlloc(
+      sessionConfig.dataFormQuantityAlloc != null ? sessionConfig.dataFormQuantityAlloc : dataFormConfig.quantityAlloc
+    );
+    dataFormConfig.klinePresentation = normalizeKlinePresentationMode(
+      sessionConfig.klinePresentationMode != null ? sessionConfig.klinePresentationMode : dataFormConfig.klinePresentation
+    );
     if (!Array.isArray(sessionConfig.multiLayerHidden)) sessionConfig.multiLayerHidden = [];
     applyKTypesMultiToDomFromList(sessionConfig.kTypesMulti);
     syncChartModeOptionRows();
@@ -9019,6 +9618,7 @@ function updateDualModeUI(payload = null) {
   chartConfig = active === "chart2" ? chartConfigStore.perChart.chart2 : chartConfigStore.perChart.chart1;
   chartConfig.theme = chartConfigStore.shared.theme || chartConfig.theme;
   chartConfig.crosshair = deepMerge(JSON.parse(JSON.stringify(chartConfig.crosshair || {})), chartConfigStore.shared.crosshair || {});
+  syncCrosshairEnabledFromStore();
   if (dual) loadRuntimeState(dualActiveChartId);
 }
 
@@ -9402,12 +10002,18 @@ function resetChanSettings() {
 
 function openSettings() {
   if (isSystemSettingsOpen()) closeSystemSettings();
+  if (!chartConfig.crosshair) chartConfig.crosshair = {};
+  chartConfig.crosshair.enabled = !!crosshairEnabled;
+  const panel = $("settingsModal") && $("settingsModal").querySelector(".panel");
+  if (panel) panel.classList.add("chart-settings-panel");
   renderSettingsForm();
   $("settingsModal").classList.add("show");
 }
 
 function closeSettings() {
   $("settingsModal").classList.remove("show");
+  const panel = $("settingsModal") && $("settingsModal").querySelector(".panel");
+  if (panel) panel.classList.remove("chart-settings-panel");
 }
 
 function isSettingsOpen() {
@@ -9566,6 +10172,478 @@ function appendMultiOverlayPerLayerFields(container, buildLabelHtml) {
   });
 }
 
+/** 图表显示设置：可见分组（含多周期动态项） */
+function buildVisibleChartSettingsSections(baseSections) {
+  const cmv = $("chartMode") ? String($("chartMode").value || "single") : "single";
+  const out = baseSections.filter((s) => s.key !== "multiOverlay" || cmv === "multi");
+  if (cmv === "multi") {
+    const picked = collectKTypesMultiSelected();
+    const driverKt = MULTI_KTYPE_ORDER.filter((k) => picked.includes(k))[0];
+    picked.forEach((kt) => {
+      out.push({
+        key: `__multiPerK_${kt}__`,
+        title: `多周期·${getKTypeLabelText(kt)}`,
+        color: "#1d4ed8",
+        bgColor: "rgba(29, 78, 216, 0.08)",
+        panel: "multiPerK",
+        kt,
+        items: [],
+      });
+    });
+    picked.filter((k) => k !== driverKt).forEach((kt) => {
+      out.push({
+        key: `__moverlay_${kt}__`,
+        title: `叠层蜡烛·${getKTypeLabelText(kt)}`,
+        color: "#9a3412",
+        bgColor: "rgba(124, 45, 18, 0.1)",
+        panel: "moverlay",
+        kt,
+        items: [],
+      });
+    });
+  }
+  return out;
+}
+
+function resolveChartSettingsItemValue(sec, item) {
+  if (sec.key === "theme_section") return chartConfig.theme;
+  if (sec.key === "shared_bsp_bottom") return chartConfigStore.shared && chartConfigStore.shared.showBottomBsp !== false;
+  if (sec.key === "dataForm") return dataFormConfig[item.subKey];
+  if (sec.key === "indicators") {
+    if (item.subKey === "mainSlot") return selectedMainIndicatorSlot;
+    if (item.subKey === "subSlot") return selectedSubIndicatorSlot;
+    if (item.subKey === "mainType") return indicatorMainSlots[String(selectedMainIndicatorSlot)] || [];
+    if (item.subKey === "subType") return indicatorSubSlots[String(selectedSubIndicatorSlot)] || [];
+  }
+  const sectionCfg = ensureObject(chartConfig[sec.key], {});
+  return sectionCfg[item.subKey];
+}
+
+/** 渲染单项控件到父节点，返回 item 根元素 */
+function appendChartSettingsItemTo(parent, sec, item, buildLabelHtml) {
+  const val = resolveChartSettingsItemValue(sec, item);
+  const sectionCfg = ensureObject(chartConfig[sec.key], {});
+  const itemDiv = document.createElement("div");
+  itemDiv.className = "settingsItem";
+  const noPreview = new Set(["theme_section", "shared_bsp_bottom", "indicators", "toast", "xAxis", "yAxis", "multiOverlay"]);
+  if (!noPreview.has(sec.key)) {
+    const previewLine = document.createElement("div");
+    previewLine.style.height = "2px";
+    previewLine.style.width = "100%";
+    previewLine.style.marginBottom = "4px";
+    const color = sectionCfg.color || sectionCfg.lineColor || sectionCfg.upColor || "#ccc";
+    previewLine.style.background = getCfgColor(color);
+    itemDiv.appendChild(previewLine);
+  }
+  if (item.type === "select") {
+    const optionsHtml = (item.options || []).map((o) => `<option value="${o.value}" ${String(val) === String(o.value) ? "selected" : ""}>${o.label}</option>`).join("");
+    itemDiv.innerHTML += `<label>${buildLabelHtml(item)}</label><select data-key="${sec.key}" data-subkey="${item.subKey}">${optionsHtml}</select>`;
+    if (sec.key === "dataForm" && item.subKey === "mode") {
+      const select = itemDiv.querySelector("select");
+      const loaded = !!(lastPayload && lastPayload.ready);
+      if (!loaded) {
+        const disableModes = new Set(["quantity", "tick_quantity"]);
+        Array.from(select.options).forEach((o) => {
+          if (disableModes.has(String(o.value))) o.disabled = true;
+        });
+        if (isQuantityDataFormMode(select.value)) select.value = "traditional";
+      }
+    }
+    if (sec.key === "indicators" && item.subKey === "mainSlot") {
+      itemDiv.querySelector("select").onchange = (e) => {
+        selectedMainIndicatorSlot = Number(e.target.value);
+        storageSet("chan_selected_main_indicator_slot", String(selectedMainIndicatorSlot));
+        renderSettingsForm();
+      };
+    } else if (sec.key === "indicators" && item.subKey === "subSlot") {
+      itemDiv.querySelector("select").onchange = (e) => {
+        selectedSubIndicatorSlot = Number(e.target.value);
+        storageSet("chan_selected_sub_indicator_slot", String(selectedSubIndicatorSlot));
+        renderSettingsForm();
+      };
+    }
+  } else if (item.type === "indicator_multi_main") {
+    let html = `<label>${buildLabelHtml(item)}</label>`;
+    if (selectedMainIndicatorSlot === 0) {
+      html += `<div class="muted" style="margin-top:8px;">当前主图槽位为 0，不显示主图指标。</div>`;
+    } else {
+      const currentList = Array.isArray(val) ? val : [];
+      const options = [{ v: "boll", l: "BOLL" }, { v: "demark", l: "Demark" }, { v: "trendline", l: "TrendLine" }];
+      html += `<div style="display:flex;flex-direction:column;gap:4px;margin-top:8px;">`;
+      options.forEach((opt) => {
+        const checked = currentList.includes(opt.v);
+        html += `<label style="flex-direction:row;align-items:center;display:flex;"><input type="checkbox" class="indicator-check-main" value="${opt.v}" ${checked ? "checked" : ""} data-key="indicators" data-subkey="mainType" style="width:auto;margin-right:8px;">${opt.l}</label>`;
+      });
+      html += `</div>`;
+    }
+    itemDiv.innerHTML += html;
+  } else if (item.type === "indicator_multi_sub") {
+    let html = `<label>${buildLabelHtml(item)}</label>`;
+    if (selectedSubIndicatorSlot === 0) {
+      html += `<div class="muted" style="margin-top:8px;">当前副图槽位为 0，不显示任何副图指标。</div>`;
+    } else {
+      const currentList = Array.isArray(val) ? val : [];
+      const options = [{ v: "macd", l: "MACD" }, { v: "kdj", l: "KDJ" }, { v: "rsi", l: "RSI" }];
+      html += `<div style="display:flex;flex-direction:column;gap:4px;margin-top:8px;">`;
+      options.forEach((opt) => {
+        const checked = currentList.includes(opt.v);
+        html += `<label style="flex-direction:row;align-items:center;display:flex;"><input type="checkbox" class="indicator-check-sub" value="${opt.v}" ${checked ? "checked" : ""} data-key="indicators" data-subkey="subType" style="width:auto;margin-right:8px;">${opt.l}</label>`;
+      });
+      html += `</div>`;
+    }
+    itemDiv.innerHTML += html;
+  } else if (item.type === "interrupt_bsp_cascade") {
+    itemDiv.classList.add("settingsItemWide");
+    itemDiv.innerHTML = `<label>${buildLabelHtml(item)}</label><div class="muted" style="font-size:12px;line-height:1.5;margin:4px 0 8px;">内嵌三级：级别 → 类型 → 买/卖。</div>`;
+    const cascadeRoot = document.createElement("div");
+    cascadeRoot.className = "settings-cascade interrupt-bsp-cascade";
+    itemDiv.appendChild(cascadeRoot);
+    mountInterruptBspCascade(cascadeRoot, sectionCfg);
+  } else if (item.type === "checkbox") {
+    itemDiv.innerHTML += `<label style="flex-direction:row;align-items:center;display:flex;"><input type="checkbox" ${val ? "checked" : ""} data-key="${sec.key}" data-subkey="${item.subKey}" style="width:auto;margin-right:8px;">${item.label}</label>`;
+  } else if (item.type === "color") {
+    const safeVal = typeof val === "string" ? val : "#000000";
+    itemDiv.innerHTML += `<label>${buildLabelHtml(item)}</label><div style="display:flex;align-items:center;gap:8px;"><input type="color" value="${safeVal.startsWith("#") ? safeVal : "#000000"}" data-key="${sec.key}" data-subkey="${item.subKey}" style="width:40px;height:24px;padding:0;border:none;cursor:pointer;"><input type="text" value="${safeVal}" data-key="${sec.key}" data-subkey="${item.subKey}-text" style="flex:1;height:24px;padding:2px 4px;font-size:12px;font-family:monospace;"></div>`;
+    const colorInput = itemDiv.querySelector('input[type="color"]');
+    const textInput = itemDiv.querySelector('input[type="text"]');
+    colorInput.oninput = (e) => { textInput.value = e.target.value; };
+    textInput.oninput = (e) => {
+      if (/^#[0-9a-fA-F]{6}$/.test(e.target.value)) colorInput.value = e.target.value;
+    };
+  } else {
+    let displayVal = val;
+    if (item.subKey === "dash" && Array.isArray(val)) displayVal = val.join(", ");
+    if (sec.key === "dataForm" && item.subKey === "quantity") {
+      const n = getRawKlineCount();
+      const minN = 1;
+      const maxN = n > 0 ? n : 1;
+      const disabled = !(lastPayload && lastPayload.ready);
+      const finalVal = clampDataFormQuantity(displayVal, maxN);
+      itemDiv.innerHTML += `<label>${buildLabelHtml(item)}</label><input type="number" value="${finalVal}" min="${minN}" max="${maxN}" step="1" ${disabled ? "disabled" : ""} data-key="${sec.key}" data-subkey="${item.subKey}"><div class="muted" style="font-size:12px;">${disabled ? "请先加载会话后再使用数量模式。" : `当前范围：1 - ${maxN}`}</div>`;
+    } else {
+      itemDiv.innerHTML += `<label>${buildLabelHtml(item)}</label><input type="${item.type}" value="${displayVal != null ? displayVal : ""}" step="${item.step || 1}" placeholder="${item.placeholder || ""}" data-key="${sec.key}" data-subkey="${item.subKey}">`;
+    }
+  }
+  parent.appendChild(itemDiv);
+  return itemDiv;
+}
+
+function renderMultiPerKPanelInto(parent, kt, baseSections, buildLabelHtml) {
+  if (!chartConfigStore.multiPerK || typeof chartConfigStore.multiPerK !== "object") chartConfigStore.multiPerK = {};
+  if (!chartConfigStore.multiPerK[kt] || typeof chartConfigStore.multiPerK[kt] !== "object") chartConfigStore.multiPerK[kt] = {};
+  const layerMap = chartConfigStore.multiPerK[kt];
+  const secs = baseSections.filter((s) => MULTI_LAYER_STYLE_KEYS.has(s.key));
+  secs.forEach((sec) => {
+    const sub = document.createElement("div");
+    sub.className = "chart-settings-subblock";
+    sub.innerHTML = `<div class="muted" style="font-weight:600;margin:8px 0 6px;color:${sec.color}">${sec.title}</div>`;
+    const sectionCfg = ensureObject(layerMap[sec.key], {});
+    sec.items.forEach((item) => {
+      let val = sectionCfg[item.subKey];
+      if (val === undefined || val === null) {
+        const d0 = DEFAULT_CHART_CONFIG[sec.key] || {};
+        val = d0[item.subKey];
+      }
+      const itemDiv = document.createElement("div");
+      itemDiv.className = "settingsItem";
+      if (item.type === "select") {
+        const opts = (item.options || []).map((o) => `<option value="${o.value}" ${String(val) === String(o.value) ? "selected" : ""}>${o.label}</option>`).join("");
+        itemDiv.innerHTML = `<label>${buildLabelHtml(item)}</label><select data-multi-kt="${kt}" data-key="${sec.key}" data-subkey="${item.subKey}">${opts}</select>`;
+      } else if (item.type === "checkbox") {
+        itemDiv.innerHTML = `<label style="flex-direction:row;align-items:center;display:flex;"><input type="checkbox" data-multi-kt="${kt}" data-key="${sec.key}" data-subkey="${item.subKey}" ${val ? "checked" : ""} style="width:auto;margin-right:8px;">${item.label}</label>`;
+      } else if (item.type === "color") {
+        const safeVal = typeof val === "string" ? val : "#000000";
+        itemDiv.innerHTML = `<label>${buildLabelHtml(item)}</label><div style="display:flex;align-items:center;gap:8px;"><input type="color" value="${safeVal.startsWith("#") ? safeVal : "#000000"}" data-multi-kt="${kt}" data-key="${sec.key}" data-subkey="${item.subKey}" style="width:40px;height:24px;padding:0;border:none;"><input type="text" value="${safeVal}" data-multi-kt="${kt}" data-key="${sec.key}" data-subkey="${item.subKey}-text" style="flex:1;height:24px;font-size:12px;font-family:monospace;"></div>`;
+      } else if (item.type === "number") {
+        const mn = item.min != null ? item.min : "";
+        const mx = item.max != null ? item.max : "";
+        const st = item.step != null ? item.step : "";
+        itemDiv.innerHTML = `<label>${buildLabelHtml(item)}</label><input type="number" data-multi-kt="${kt}" data-key="${sec.key}" data-subkey="${item.subKey}" min="${mn}" max="${mx}" step="${st}" value="${val != null ? val : ""}">`;
+      } else if (item.type === "text") {
+        itemDiv.innerHTML = `<label>${buildLabelHtml(item)}</label><input type="text" data-multi-kt="${kt}" data-key="${sec.key}" data-subkey="${item.subKey}" value="${val != null ? String(val) : ""}" placeholder="${item.placeholder || ""}">`;
+      }
+      sub.appendChild(itemDiv);
+    });
+    parent.appendChild(sub);
+  });
+}
+
+function renderMoverlayKtPanelInto(parent, kt, buildLabelHtml) {
+  if (!chartConfig.multiOverlay) chartConfig.multiOverlay = JSON.parse(JSON.stringify(DEFAULT_CHART_CONFIG.multiOverlay));
+  if (!chartConfig.multiOverlay.layers || typeof chartConfig.multiOverlay.layers !== "object") chartConfig.multiOverlay.layers = {};
+  if (!chartConfig.multiOverlay.layers[kt]) chartConfig.multiOverlay.layers[kt] = {};
+  const L = chartConfig.multiOverlay.layers[kt];
+  const mo = chartConfig.multiOverlay;
+  const styleOpts = [
+    { value: "grid", label: "网格" },
+    { value: "dots", label: "点状" },
+    { value: "hatch", label: "斜线阴影" },
+    { value: "shade", label: "竖向明暗" },
+    { value: "soft", label: "淡色平铺" },
+  ];
+  const items = [
+    { label: "缠论线透明度 lineAlpha", subkey: "lineAlpha", type: "number", min: 0.05, max: 1, step: 0.02, def: mo.defaultAlpha, tip: "合并框/分型笔段等。" },
+    { label: "实体透明度 bodyAlpha", subkey: "bodyAlpha", type: "number", min: 0.05, max: 1, step: 0.02, def: mo.defaultCoarseBodyAlpha, tip: "大周期实心矩形。" },
+    { label: "上影线透明度", subkey: "upperShadowAlpha", type: "number", min: 0.05, max: 1, step: 0.02, def: mo.defaultCoarseUpperShadowAlpha, tip: "" },
+    { label: "下影线透明度", subkey: "lowerShadowAlpha", type: "number", min: 0.05, max: 1, step: 0.02, def: mo.defaultCoarseLowerShadowAlpha, tip: "" },
+    { label: "上影线纹理", subkey: "upperShadowStyle", type: "select", options: styleOpts, def: mo.defaultUpperShadowStyle, tip: "" },
+    { label: "下影线纹理", subkey: "lowerShadowStyle", type: "select", options: styleOpts, def: mo.defaultLowerShadowStyle, tip: "" },
+    { label: "兼容旧字段 alpha", subkey: "alpha", type: "number", min: 0.05, max: 1, step: 0.02, def: null, tip: "旧版单一透明度。" },
+  ];
+  items.forEach((it) => {
+    let val = L[it.subkey];
+    if ((val === undefined || val === null) && it.def != null) val = it.def;
+    if (val === undefined || val === null) val = "";
+    const itemDiv = document.createElement("div");
+    itemDiv.className = "settingsItem";
+    const labelH = buildLabelHtml({ ...it, subKey: it.subkey, tip: it.tip || `${it.label}。` });
+    if (it.type === "select") {
+      const opts = (it.options || []).map((o) => `<option value="${o.value}" ${String(val) === String(o.value) ? "selected" : ""}>${o.label}</option>`).join("");
+      itemDiv.innerHTML = `<label>${labelH}</label><select data-moverlay-kt="${kt}" data-moverlay-subkey="${it.subkey}">${opts}</select>`;
+    } else {
+      const mn = it.min != null ? it.min : "";
+      const mx = it.max != null ? it.max : "";
+      const st = it.step != null ? it.step : "";
+      itemDiv.innerHTML = `<label>${labelH}</label><input type="number" data-moverlay-kt="${kt}" data-moverlay-subkey="${it.subkey}" min="${mn}" max="${mx}" step="${st}" value="${val !== "" ? val : ""}">`;
+    }
+    parent.appendChild(itemDiv);
+  });
+}
+
+function renderChartSettingsSectionInto(detailEl, sec, baseSections, buildLabelHtml) {
+  detailEl.innerHTML = "";
+  const head = document.createElement("div");
+  head.className = "chart-settings-detail-head";
+  head.style.borderLeftColor = sec.color || "#2563eb";
+  let hint = "";
+  if (sec.panel === "multiPerK") hint = `<div class="muted" style="font-size:12px;margin-top:4px;">持久化：multiPerK[${sec.kt}]，未填项用默认。</div>`;
+  else if (sec.panel === "moverlay") hint = `<div class="muted" style="font-size:12px;margin-top:4px;">粗周期叠层蜡烛，持久化：multiOverlay.layers[${sec.kt}]</div>`;
+  head.innerHTML = `<strong style="color:${sec.color || "#2563eb"}">${sec.title}</strong>${hint}`;
+  detailEl.appendChild(head);
+  const body = document.createElement("div");
+  body.className = "chart-settings-detail-body";
+  if (sec.panel === "multiPerK") renderMultiPerKPanelInto(body, sec.kt, baseSections, buildLabelHtml);
+  else if (sec.panel === "moverlay") renderMoverlayKtPanelInto(body, sec.kt, buildLabelHtml);
+  else (sec.items || []).forEach((item) => appendChartSettingsItemTo(body, sec, item, buildLabelHtml));
+  detailEl.appendChild(body);
+}
+
+/** 单面板级联：左列分组、右列该组全部配置 */
+function mountChartSettingsCascadePanel(container, baseSections, buildLabelHtml) {
+  const sections = buildVisibleChartSettingsSections(baseSections);
+  if (!sections.length) return;
+  if (!chartSettingsCascadeSelKey || !sections.some((s) => s.key === chartSettingsCascadeSelKey)) {
+    chartSettingsCascadeSelKey = sections[0].key;
+  }
+  const shell = document.createElement("div");
+  shell.className = "chart-settings-shell";
+  shell.innerHTML = `<div class="muted chart-settings-hint">单面板级联：左侧选分组，右侧编辑该组全部项；内嵌子级联（如步进中断档位）在右侧展开。改完后点「保存并应用」。</div>`;
+  const panel = document.createElement("div");
+  panel.className = "settings-cascade chart-settings-cascade";
+  const colNav = document.createElement("div");
+  colNav.className = "settings-cascade-col chart-settings-nav";
+  colNav.innerHTML = `<div class="settings-cascade-head">分组</div><div class="settings-cascade-list" data-chart-nav="1"></div>`;
+  const colDetail = document.createElement("div");
+  colDetail.className = "settings-cascade-col chart-settings-detail-col";
+  colDetail.innerHTML = `<div class="settings-cascade-head">配置项</div><div class="chart-settings-detail-scroll" data-chart-detail="1"></div>`;
+  panel.appendChild(colNav);
+  panel.appendChild(colDetail);
+  shell.appendChild(panel);
+  container.appendChild(shell);
+  const listEl = colNav.querySelector('[data-chart-nav="1"]');
+  const detailEl = colDetail.querySelector('[data-chart-detail="1"]');
+  const paint = () => {
+    listEl.innerHTML = "";
+    sections.forEach((sec) => {
+      const el = document.createElement("div");
+      el.className = "settings-cascade-item" + (sec.key === chartSettingsCascadeSelKey ? " active" : "");
+      el.textContent = sec.title;
+      if (sec.color) el.style.boxShadow = sec.key === chartSettingsCascadeSelKey ? `inset 3px 0 0 ${sec.color}` : `inset 3px 0 0 transparent`;
+      el.onclick = () => {
+        chartSettingsCascadeSelKey = sec.key;
+        paint();
+      };
+      listEl.appendChild(el);
+    });
+    const cur = sections.find((s) => s.key === chartSettingsCascadeSelKey) || sections[0];
+    renderChartSettingsSectionInto(detailEl, cur, baseSections, buildLabelHtml);
+    initTooltips();
+  };
+  paint();
+}
+
+/** 步进 N 买卖点中断：三级级联树（级别 → 类型 → 买/卖） */
+const INTERRUPT_BSP_CASCADE_TREE = [
+  {
+    id: "bi", label: "笔",
+    types: [
+      { id: "1", label: "1 / 1p", buyKey: "interruptBspBi1Buy", sellKey: "interruptBspBi1Sell" },
+      { id: "2", label: "2", buyKey: "interruptBspBi2Buy", sellKey: "interruptBspBi2Sell" },
+      { id: "2s", label: "2s", buyKey: "interruptBspBi2sBuy", sellKey: "interruptBspBi2sSell" },
+    ],
+  },
+  {
+    id: "seg", label: "段",
+    types: [
+      { id: "1", label: "1 / 1p", buyKey: "interruptBspSeg1Buy", sellKey: "interruptBspSeg1Sell" },
+      { id: "2", label: "2", buyKey: "interruptBspSeg2Buy", sellKey: "interruptBspSeg2Sell" },
+      { id: "2s", label: "2s", buyKey: "interruptBspSeg2sBuy", sellKey: "interruptBspSeg2sSell" },
+    ],
+  },
+  {
+    id: "segseg", label: "2段",
+    types: [
+      { id: "1", label: "1 / 1p", buyKey: "interruptBspSegseg1Buy", sellKey: "interruptBspSegseg1Sell" },
+      { id: "2", label: "2", buyKey: "interruptBspSegseg2Buy", sellKey: "interruptBspSegseg2Sell" },
+      { id: "2s", label: "2s", buyKey: "interruptBspSegseg2sBuy", sellKey: "interruptBspSegseg2sSell" },
+    ],
+  },
+];
+
+function _interruptBspSlotEnabled(toastCfg, typeNode) {
+  return toastCfg[typeNode.buyKey] !== false || toastCfg[typeNode.sellKey] !== false;
+}
+
+function _interruptBspLevelEnabledCount(toastCfg, levelNode) {
+  return levelNode.types.filter((t) => _interruptBspSlotEnabled(toastCfg, t)).length;
+}
+
+function _setInterruptBspCascadeKeys(toastCfg, keys, checked) {
+  keys.forEach((k) => { toastCfg[k] = !!checked; });
+}
+
+function mountInterruptBspCascade(root, toastCfg) {
+  const cfg = ensureObject(toastCfg, {});
+  let selLevelId = INTERRUPT_BSP_CASCADE_TREE[0].id;
+  let selTypeId = INTERRUPT_BSP_CASCADE_TREE[0].types[0].id;
+
+  const colLevel = document.createElement("div");
+  colLevel.className = "settings-cascade-col";
+  colLevel.innerHTML = `<div class="settings-cascade-head">1. 级别</div><div class="settings-cascade-list" data-cascade="level"></div>`;
+
+  const colType = document.createElement("div");
+  colType.className = "settings-cascade-col";
+  colType.innerHTML = `<div class="settings-cascade-head">2. 类型</div><div class="settings-cascade-list" data-cascade="type"></div>`;
+
+  const colSide = document.createElement("div");
+  colSide.className = "settings-cascade-col";
+  colSide.innerHTML = `<div class="settings-cascade-head">3. 买 / 卖</div>`;
+  const sidePanel = document.createElement("div");
+  sidePanel.className = "settings-cascade-panel";
+  sidePanel.setAttribute("data-cascade", "side");
+  colSide.appendChild(sidePanel);
+
+  root.appendChild(colLevel);
+  root.appendChild(colType);
+  root.appendChild(colSide);
+
+  const listLevel = colLevel.querySelector('[data-cascade="level"]');
+  const listType = colType.querySelector('[data-cascade="type"]');
+
+  function currentLevel() {
+    return INTERRUPT_BSP_CASCADE_TREE.find((l) => l.id === selLevelId) || INTERRUPT_BSP_CASCADE_TREE[0];
+  }
+
+  function currentType() {
+    const lv = currentLevel();
+    const t = lv.types.find((x) => x.id === selTypeId);
+    return t || lv.types[0];
+  }
+
+  function renderLevels() {
+    listLevel.innerHTML = "";
+    INTERRUPT_BSP_CASCADE_TREE.forEach((lv) => {
+      const n = _interruptBspLevelEnabledCount(cfg, lv);
+      const el = document.createElement("div");
+      el.className = "settings-cascade-item" + (lv.id === selLevelId ? " active" : "");
+      el.textContent = `${lv.label}（${n}/${lv.types.length}）`;
+      el.onclick = () => {
+        selLevelId = lv.id;
+        const first = lv.types[0];
+        selTypeId = first ? first.id : selTypeId;
+        renderAll();
+      };
+      listLevel.appendChild(el);
+    });
+  }
+
+  function renderTypes() {
+    listType.innerHTML = "";
+    const lv = currentLevel();
+    if (!lv.types.some((t) => t.id === selTypeId)) selTypeId = lv.types[0].id;
+    lv.types.forEach((tp) => {
+      const buyOn = cfg[tp.buyKey] !== false;
+      const sellOn = cfg[tp.sellKey] !== false;
+      const el = document.createElement("div");
+      el.className = "settings-cascade-item" + (tp.id === selTypeId ? " active" : "");
+      const marks = [];
+      if (buyOn) marks.push("买");
+      if (sellOn) marks.push("卖");
+      el.textContent = `${tp.label}${marks.length ? " ·" + marks.join("·") : ""}`;
+      el.onclick = () => {
+        selTypeId = tp.id;
+        renderAll();
+      };
+      listType.appendChild(el);
+    });
+  }
+
+  function renderSides() {
+    const tp = currentType();
+    sidePanel.innerHTML = `
+      <div class="muted" style="font-size:12px;line-height:1.5;">
+        当前：${currentLevel().label} → ${tp.label}。勾选后该档位参与「买卖点细分条件」；与上方 OR/AND、方向例外组合生效。
+      </div>
+      <label style="flex-direction:row;align-items:center;display:flex;">
+        <input type="checkbox" data-key="toast" data-subkey="${tp.buyKey}" ${cfg[tp.buyKey] !== false ? "checked" : ""} style="width:auto;margin-right:8px;">
+        买点参与中断
+      </label>
+      <label style="flex-direction:row;align-items:center;display:flex;">
+        <input type="checkbox" data-key="toast" data-subkey="${tp.sellKey}" ${cfg[tp.sellKey] !== false ? "checked" : ""} style="width:auto;margin-right:8px;">
+        卖点参与中断
+      </label>
+      <div class="settings-cascade-actions">
+        <button type="button" data-act="type-all">本类型全选</button>
+        <button type="button" data-act="type-none">本类型全清</button>
+        <button type="button" data-act="level-all">本级别全选</button>
+        <button type="button" data-act="level-none">本级别全清</button>
+        <button type="button" data-act="all-on">全部全选</button>
+        <button type="button" data-act="all-off">全部全清</button>
+      </div>
+    `;
+    sidePanel.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+      cb.onchange = () => {
+        cfg[cb.dataset.subkey] = cb.checked;
+        renderLevels();
+        renderTypes();
+      };
+    });
+    sidePanel.querySelectorAll("button[data-act]").forEach((btn) => {
+      btn.onclick = () => {
+        const act = btn.getAttribute("data-act");
+        const lv = currentLevel();
+        const allKeys = [];
+        INTERRUPT_BSP_CASCADE_TREE.forEach((l) => l.types.forEach((t) => { allKeys.push(t.buyKey, t.sellKey); }));
+        if (act === "type-all") _setInterruptBspCascadeKeys(cfg, [tp.buyKey, tp.sellKey], true);
+        else if (act === "type-none") _setInterruptBspCascadeKeys(cfg, [tp.buyKey, tp.sellKey], false);
+        else if (act === "level-all") lv.types.forEach((t) => _setInterruptBspCascadeKeys(cfg, [t.buyKey, t.sellKey], true));
+        else if (act === "level-none") lv.types.forEach((t) => _setInterruptBspCascadeKeys(cfg, [t.buyKey, t.sellKey], false));
+        else if (act === "all-on") _setInterruptBspCascadeKeys(cfg, allKeys, true);
+        else if (act === "all-off") _setInterruptBspCascadeKeys(cfg, allKeys, false);
+        renderAll();
+      };
+    });
+  }
+
+  function renderAll() {
+    renderLevels();
+    renderTypes();
+    renderSides();
+  }
+
+  renderAll();
+}
+
 function renderSettingsForm() {
   const container = $("settingsContent");
   container.innerHTML = "";
@@ -9612,11 +10690,19 @@ function renderSettingsForm() {
           { value: "tick_traditional", label: "分笔价格合成传统" },
           { value: "tick_quantity", label: "分笔价格合成数量" }
         ], tip: "传统：保持原始K线；数量：按数量Q聚合原始K线；分笔价格合成传统：用 a_Data/六位代码/ 下分笔 txt 合成目标周期K线；分笔价格合成数量：先逐笔合成再按数量Q聚合。分笔合成两种模式的筹码均使用逐笔累加，不使用三角分摊。" },
+        { label: "数量分配原则", subKey: "quantityAlloc", type: "select", options: [
+          { value: "front", label: "靠前分配（余数优先分给前方K线）" },
+          { value: "back", label: "靠后分配（余数优先分给后方K线）" }
+        ], tip: "仅「数量/分笔价格合成数量」生效。例：原生99根、数量4、靠前分配 → 25+25+25+24；靠后分配 → 24+24+24+27。默认靠前。" },
         { label: "喂数据方式", subKey: "feedMode", type: "select", options: [
-          { value: "step", label: "步进（当前实现）" },
+          { value: "step", label: "逐K喂数据" },
           { value: "unified", label: "统一喂数据（一次性喂给缠论计算）" }
-        ], tip: "步进：沿用当前逐根喂入逻辑。统一喂数据：初始化时一次性喂给缠论计算，不用于模拟操盘（买卖按钮禁用），主要用于查看缠论画线与筹码分布；其它步进浏览操作可继续使用。" },
-        { label: "数量", subKey: "quantity", type: "number", min: 1, step: 1, tip: "仅“数量/分笔价格合成数量”生效。范围 1~N（N=当前模式原始K线数）：1=全合并，N=不聚合。" }
+        ], tip: "逐K喂数据：逐根喂入缠论引擎，可模拟操盘。统一喂数据：初始化时一次性全量计算，买卖按钮禁用，主要用于看画线/筹码；仍可用步进或跳转浏览切片。" },
+        { label: "数量", subKey: "quantity", type: "number", min: 1, step: 1, tip: "仅“数量/分笔价格合成数量”生效。范围 1~N（N=当前模式原始K线数）：1=全合并，N=不聚合。数量射线：Ctrl+左键固定两点；斜率按时间-价格固定（换数量不变）；同代码跨区间保留。若当前区间 B 包含绘制时区间 A：A 段实线、超出 A 的延长虚线；若不包含 A：全线虚线。" },
+        { label: "K线图呈现形式", subKey: "klinePresentation", type: "select", options: [
+          { value: "step", label: "步进" },
+          { value: "instant", label: "一次性呈现" }
+        ], tip: "适配所有「形式」与「喂数据方式」。步进：加载后从第一根起逐步展示（当前默认）。一次性呈现：加载后直接显示末根完整K线与缠论结果，跳过逐步过程；之后仍可用步进/回退/跳转浏览。" }
       ]
     },
     {
@@ -9638,6 +10724,7 @@ function renderSettingsForm() {
       color: "#0f766e",
       bgColor: "rgba(15, 118, 110, 0.08)",
       items: [
+        { label: "启用十字线", subKey: "enabled", type: "checkbox", tip: "也可在 K 线图双击切换；状态会写入本地持久化。" },
         { label: "粗细", subKey: "width", type: "number", min: 1, max: 10, step: 0.5 },
         { label: "颜色", subKey: "color", type: "color" },
         { label: "文字大小", subKey: "fontSize", type: "number", min: 10, max: 24 }
@@ -10221,220 +11308,18 @@ function renderSettingsForm() {
           { value: "buy_only", label: "仅买点参与" },
           { value: "sell_only", label: "仅卖点参与" }
         ]},
-        { label: "未列出类型仍中断", subKey: "interruptBspUnlistedTypes", type: "checkbox", tip: "如 3a/3b 等未出现在下方细分行时，仍按「有买卖点」参与中断（OR 下易触发；AND 下作额外 OR 分支）。" },
-        { label: "笔1/1p·买", subKey: "interruptBspBi1Buy", type: "checkbox", tip: "笔级别 1 或 1p 买点命中时可中断。" },
-        { label: "笔1/1p·卖", subKey: "interruptBspBi1Sell", type: "checkbox", tip: "笔级别 1 或 1p 卖点命中时可中断。" },
-        { label: "笔2·买", subKey: "interruptBspBi2Buy", type: "checkbox", tip: "笔2 买点。" },
-        { label: "笔2·卖", subKey: "interruptBspBi2Sell", type: "checkbox", tip: "笔2 卖点。" },
-        { label: "笔2s·买", subKey: "interruptBspBi2sBuy", type: "checkbox", tip: "笔2s 买点。" },
-        { label: "笔2s·卖", subKey: "interruptBspBi2sSell", type: "checkbox", tip: "笔2s 卖点。" },
-        { label: "段1/1p·买", subKey: "interruptBspSeg1Buy", type: "checkbox", tip: "段 1/1p 买点。" },
-        { label: "段1/1p·卖", subKey: "interruptBspSeg1Sell", type: "checkbox", tip: "段 1/1p 卖点。" },
-        { label: "段2·买", subKey: "interruptBspSeg2Buy", type: "checkbox", tip: "段2 买点。" },
-        { label: "段2·卖", subKey: "interruptBspSeg2Sell", type: "checkbox", tip: "段2 卖点。" },
-        { label: "段2s·买", subKey: "interruptBspSeg2sBuy", type: "checkbox", tip: "段2s 买点。" },
-        { label: "段2s·卖", subKey: "interruptBspSeg2sSell", type: "checkbox", tip: "段2s 卖点。" },
-        { label: "2段1/1p·买", subKey: "interruptBspSegseg1Buy", type: "checkbox", tip: "2段 1/1p 买点。" },
-        { label: "2段1/1p·卖", subKey: "interruptBspSegseg1Sell", type: "checkbox", tip: "2段 1/1p 卖点。" },
-        { label: "2段2·买", subKey: "interruptBspSegseg2Buy", type: "checkbox", tip: "2段2 买点。" },
-        { label: "2段2·卖", subKey: "interruptBspSegseg2Sell", type: "checkbox", tip: "2段2 卖点。" },
-        { label: "2段2s·买", subKey: "interruptBspSegseg2sBuy", type: "checkbox", tip: "2段2s 买点。" },
-        { label: "2段2s·卖", subKey: "interruptBspSegseg2sSell", type: "checkbox", tip: "2段2s 卖点。" }
+        { label: "未列出类型仍中断", subKey: "interruptBspUnlistedTypes", type: "checkbox", tip: "如 3a/3b 等未出现在下方级联档位时，仍按「有买卖点」参与中断（OR 下易触发；AND 下作额外 OR 分支）。" },
+        {
+          label: "步进N买卖点中断档位",
+          subKey: "interruptBspCascade",
+          type: "interrupt_bsp_cascade",
+          tip: "操作：① 左列选级别（笔/段/2段）→ ② 中列选类型（1/1p、2、2s）→ ③ 右列勾选买/卖是否参与中断。可与上方「细分条件组合 OR/AND」「方向例外」联用。保存后写入本地配置，步进 N 时按档位匹配当根买卖点。",
+        }
       ]
     }
   ];
 
-  const cmv = $("chartMode") ? String($("chartMode").value || "single") : "single";
-  sections.forEach((sec) => {
-    if (sec.key === "multiOverlay" && cmv !== "multi") return;
-    const div = document.createElement("div");
-    div.className = "settingsSection";
-    div.style.background = sec.bgColor;
-    div.innerHTML = `<div class="settingsSectionTitle" style="color:${sec.color}">${sec.title}</div>`;
-    const grid = document.createElement("div");
-    grid.className = "settingsGrid";
-    // 兜底处理：本地旧配置或异常配置可能把 section 写成 null，避免点击设置后渲染报错
-    const sectionCfg = ensureObject(chartConfig[sec.key], {});
-    sec.items.forEach(item => {
-      let val;
-      if (sec.key === "theme_section") {
-        val = chartConfig.theme;
-      } else if (sec.key === "shared_bsp_bottom") {
-        val = chartConfigStore.shared && chartConfigStore.shared.showBottomBsp !== false;
-      } else if (sec.key === "dataForm") {
-        val = dataFormConfig[item.subKey];
-      } else if (sec.key === "indicators") {
-        if (item.subKey === "mainSlot") val = selectedMainIndicatorSlot;
-        else if (item.subKey === "subSlot") val = selectedSubIndicatorSlot;
-        else if (item.subKey === "mainType") val = indicatorMainSlots[String(selectedMainIndicatorSlot)] || [];
-        else if (item.subKey === "subType") val = indicatorSubSlots[String(selectedSubIndicatorSlot)] || [];
-      } else {
-        val = sectionCfg[item.subKey];
-      }
-      
-      const itemDiv = document.createElement("div");
-      itemDiv.className = "settingsItem";
-      
-      // Add a line preview for sections with color/width
-       if (sec.key !== "theme_section" && sec.key !== "shared_bsp_bottom" && sec.key !== "indicators" && sec.key !== "toast" && sec.key !== "xAxis" && sec.key !== "yAxis" && sec.key !== "multiOverlay") {
-          const previewLine = document.createElement("div");
-          previewLine.style.height = "2px";
-          previewLine.style.width = "100%";
-          previewLine.style.marginBottom = "4px";
-          const color = sectionCfg.color || sectionCfg.lineColor || sectionCfg.upColor || "#ccc";
-          previewLine.style.background = getCfgColor(color);
-          itemDiv.appendChild(previewLine);
-       }
-       
-       if (item.type === "select") {
-          let optionsHtml = item.options.map(o => `<option value="${o.value}" ${String(val) === String(o.value) ? "selected" : ""}>${o.label}</option>`).join("");
-          itemDiv.innerHTML += `
-            <label>${buildLabelHtml(item)}</label>
-            <select data-key="${sec.key}" data-subkey="${item.subKey}">${optionsHtml}</select>
-          `;
-        if (sec.key === "dataForm" && item.subKey === "mode") {
-           const select = itemDiv.querySelector("select");
-           const loaded = !!(lastPayload && lastPayload.ready);
-           if (!loaded) {
-             const disableModes = new Set(["quantity", "tick_quantity"]);
-             Array.from(select.options).forEach((o) => {
-               if (disableModes.has(String(o.value))) o.disabled = true;
-             });
-             if (isQuantityDataFormMode(select.value)) select.value = "traditional";
-           }
-        }
-        if (sec.key === "indicators" && item.subKey === "mainSlot") {
-           const select = itemDiv.querySelector("select");
-           select.onchange = (e) => {
-              selectedMainIndicatorSlot = Number(e.target.value);
-              storageSet("chan_selected_main_indicator_slot", String(selectedMainIndicatorSlot));
-              renderSettingsForm();
-           };
-        } else if (sec.key === "indicators" && item.subKey === "subSlot") {
-           const select = itemDiv.querySelector("select");
-           select.onchange = (e) => {
-              selectedSubIndicatorSlot = Number(e.target.value);
-              storageSet("chan_selected_sub_indicator_slot", String(selectedSubIndicatorSlot));
-              renderSettingsForm();
-           };
-        }
-      } else if (item.type === "indicator_multi_main") {
-          let html = `<label>${buildLabelHtml(item)}</label>`;
-          if (selectedMainIndicatorSlot === 0) {
-            html += `
-              <div class="muted" style="margin-top:8px;">当前主图槽位为 0，不显示主图指标。</div>
-            `;
-          } else {
-            const currentList = Array.isArray(val) ? val : [];
-            const options = [{v:"boll",l:"BOLL"}, {v:"demark",l:"Demark"}, {v:"trendline",l:"TrendLine"}];
-            html += `<div style="display:flex; flex-direction:column; gap:4px; margin-top:8px;">`;
-            options.forEach(opt => {
-              const checked = currentList.includes(opt.v);
-              html += `
-                <label style="flex-direction:row; align-items:center; display:flex;">
-                  <input type="checkbox" class="indicator-check-main" value="${opt.v}" ${checked ? "checked" : ""} 
-                         data-key="indicators" data-subkey="mainType"
-                         style="width:auto; margin-right:8px;">
-                  ${opt.l}
-                </label>
-              `;
-            });
-            html += `</div>`;
-          }
-          itemDiv.innerHTML += html;
-      } else if (item.type === "indicator_multi_sub") {
-          let html = `<label>${buildLabelHtml(item)}</label>`;
-          if (selectedSubIndicatorSlot === 0) {
-            html += `
-              <div class="muted" style="margin-top:8px;">当前副图槽位为 0，不显示任何副图指标。</div>
-            `;
-          } else {
-            const currentList = Array.isArray(val) ? val : [];
-            const options = [{v:"macd",l:"MACD"}, {v:"kdj",l:"KDJ"}, {v:"rsi",l:"RSI"}];
-            html += `<div style="display:flex; flex-direction:column; gap:4px; margin-top:8px;">`;
-            options.forEach(opt => {
-              const checked = currentList.includes(opt.v);
-              html += `
-                <label style="flex-direction:row; align-items:center; display:flex;">
-                  <input type="checkbox" class="indicator-check-sub" value="${opt.v}" ${checked ? "checked" : ""} 
-                         data-key="indicators" data-subkey="subType"
-                         style="width:auto; margin-right:8px;">
-                  ${opt.l}
-                </label>
-              `;
-            });
-            html += `</div>`;
-          }
-          itemDiv.innerHTML += html;
-      } else if (item.type === "checkbox") {
-        itemDiv.innerHTML += `
-          <label style="flex-direction:row; align-items:center; display:flex;">
-            <input type="checkbox" ${val ? "checked" : ""} 
-                   data-key="${sec.key}" data-subkey="${item.subKey}" 
-                   style="width:auto; margin-right:8px;">
-            ${item.label}
-          </label>
-        `;
-      } else if (item.type === "color") {
-        // Use a better color indicator for colors
-        const safeVal = typeof val === "string" ? val : "#000000";
-        itemDiv.innerHTML += `
-          <label>${buildLabelHtml(item)}</label>
-          <div style="display:flex; align-items:center; gap:8px;">
-            <input type="color" value="${safeVal.startsWith('#') ? safeVal : '#000000'}" data-key="${sec.key}" data-subkey="${item.subKey}" style="width:40px; height:24px; padding:0; border:none; background:none; cursor:pointer;">
-            <input type="text" value="${safeVal}" data-key="${sec.key}" data-subkey="${item.subKey}-text" style="flex:1; height:24px; padding:2px 4px; font-size:12px; font-family:monospace;">
-          </div>
-        `;
-        const colorInput = itemDiv.querySelector('input[type="color"]');
-        const textInput = itemDiv.querySelector('input[type="text"]');
-        colorInput.oninput = (e) => { textInput.value = e.target.value; };
-        textInput.oninput = (e) => { 
-          if (/^#[0-9a-fA-F]{6}$/.test(e.target.value)) {
-            colorInput.value = e.target.value;
-          }
-        };
-      } else {
-        let displayVal = val;
-        if (item.subKey === "dash" && Array.isArray(val)) displayVal = val.join(", ");
-        if (sec.key === "dataForm" && item.subKey === "quantity") {
-          const n = getRawKlineCount();
-          const minN = 1;
-          const maxN = n > 0 ? n : 1;
-          const disabled = !(lastPayload && lastPayload.ready);
-          const finalVal = clampDataFormQuantity(displayVal, maxN);
-          itemDiv.innerHTML += `
-            <label>${buildLabelHtml(item)}</label>
-            <input type="number"
-                   value="${finalVal}"
-                   min="${minN}"
-                   max="${maxN}"
-                   step="1"
-                   ${disabled ? "disabled" : ""}
-                   data-key="${sec.key}"
-                   data-subkey="${item.subKey}">
-            <div class="muted" style="font-size:12px;">${disabled ? "请先加载会话后再使用数量模式。" : `当前范围：1 - ${maxN}`}</div>
-          `;
-          grid.appendChild(itemDiv);
-          return;
-        }
-        itemDiv.innerHTML += `
-          <label>${buildLabelHtml(item)}</label>
-          <input type="${item.type}" 
-                 value="${displayVal}" 
-                 step="${item.step || 1}" 
-                 placeholder="${item.placeholder || ""}"
-                 data-key="${sec.key}" 
-                 data-subkey="${item.subKey}">
-        `;
-      }
-      grid.appendChild(itemDiv);
-    });
-    div.appendChild(grid);
-    container.appendChild(div);
-  });
-  appendMultiLayerPerKStyleSections(container, sections, buildLabelHtml);
-  appendMultiOverlayPerLayerFields(container, buildLabelHtml);
-  initTooltips();
+  mountChartSettingsCascadePanel(container, sections, buildLabelHtml);
 }
 
 function renderSystemSettingsForm() {
@@ -10723,8 +11608,11 @@ async function saveSettings() {
   const inputs = $("settingsContent").querySelectorAll("input, select");
   let nextDataFormMode = dataFormConfig.mode;
   let nextDataFormQuantity = dataFormConfig.quantity;
+  let nextDataFormQuantityAlloc = dataFormConfig.quantityAlloc;
   let nextDataFeedMode = dataFormConfig.feedMode;
+  let nextKlinePresentation = dataFormConfig.klinePresentation;
   const prevRhythmCalcMode = normalizeRhythmCalcMode(chartConfig.rhythmLine && chartConfig.rhythmLine.calcMode);
+  const prevKlinePresentation = normalizeKlinePresentationMode(dataFormConfig.klinePresentation);
   inputs.forEach(input => {
     const key = input.dataset.key;
     const subkey = input.dataset.subkey;
@@ -10786,8 +11674,10 @@ async function saveSettings() {
       if (subkey === "enabled") chartConfigStore.shared.showBottomBsp = !!val;
     } else if (key === "dataForm") {
       if (subkey === "mode") nextDataFormMode = normalizeDataFormMode(val);
-      if (subkey === "quantity") nextDataFormQuantity = clampDataFormQuantity(val, dataFormConfig.quantity);
+      if (subkey === "quantity") nextDataFormQuantity = clampDataFormQuantity(val, getRawKlineCount() || dataFormConfig.quantity || 1);
+      if (subkey === "quantityAlloc") nextDataFormQuantityAlloc = normalizeDataFormQuantityAlloc(val);
       if (subkey === "feedMode") nextDataFeedMode = normalizeDataFeedMode(val);
+      if (subkey === "klinePresentation") nextKlinePresentation = normalizeKlinePresentationMode(val);
     } else if (key === "indicators") {
       if (subkey === "mainSlot") {
         selectedMainIndicatorSlot = Number(val);
@@ -10810,6 +11700,10 @@ async function saveSettings() {
         storageSet("chan_indicator_main_slots", JSON.stringify(indicatorMainSlots));
         storageSet("chan_indicator_sub_slots", JSON.stringify(indicatorSubSlots));
       } 
+    } else if (key === "crosshair" && subkey === "enabled") {
+      crosshairEnabled = !!val;
+      if (!chartConfig.crosshair) chartConfig.crosshair = {};
+      chartConfig.crosshair.enabled = crosshairEnabled;
     } else if (key && subkey) {
       if (subkey === "dash" && typeof val === "string") {
         const arr = val.split(",").map(n => parseFloat(n.trim())).filter(n => !isNaN(n));
@@ -10844,18 +11738,18 @@ async function saveSettings() {
   storageSet("chan_logic_config", JSON.stringify(chanConfig));
   dataFormConfig.mode = nextDataFormMode;
   dataFormConfig.quantity = nextDataFormQuantity;
+  dataFormConfig.quantityAlloc = nextDataFormQuantityAlloc;
   dataFormConfig.feedMode = nextDataFeedMode;
+  dataFormConfig.klinePresentation = nextKlinePresentation;
   // 数据形式配置单独持久化，避免刷新后丢失选择
   saveSessionConfig();
   const activeCfgKey = (lastPayload && lastPayload.ready && String(lastPayload.active_chart_id) === "chart2")
     ? "chart2"
     : (String(sessionConfig.activeChartId || dualActiveChartId || "chart1") === "chart2" ? "chart2" : "chart1");
-  chartConfigStore.perChart[activeCfgKey] = JSON.parse(JSON.stringify(chartConfig));
-  chartConfigStore.shared.theme = chartConfig.theme;
-  chartConfigStore.shared.crosshair = JSON.parse(JSON.stringify(chartConfig.crosshair || chartConfigStore.shared.crosshair));
-  chartConfigStore.shared.mode = $("chartMode") ? $("chartMode").value : chartConfigStore.shared.mode;
-  if (typeof chartConfigStore.shared.showBottomBsp !== "boolean") chartConfigStore.shared.showBottomBsp = true;
-  storageSet("chan_chart_config", JSON.stringify(chartConfigStore));
+  if (chartConfig.crosshair && typeof chartConfig.crosshair.enabled === "boolean") {
+    crosshairEnabled = !!chartConfig.crosshair.enabled;
+  }
+  persistChartConfigStoreNow(true);
   closeSettings();
   if (prevRhythmCalcMode !== nextRhythmCalcMode) {
     showAlertAndLog(
@@ -10873,15 +11767,25 @@ async function saveSettings() {
       chan_config: chanConfig,
       data_form_mode: dataFormConfig.mode,
       data_form_quantity: clampDataFormQuantity(dataFormConfig.quantity, n || 1),
+      data_form_quantity_alloc: normalizeDataFormQuantityAlloc(dataFormConfig.quantityAlloc),
       data_feed_mode: normalizeDataFeedMode(dataFormConfig.feedMode),
+      kline_presentation_mode: normalizeKlinePresentationMode(dataFormConfig.klinePresentation),
       rollback_cache_depth: Number(systemConfig.rollbackCacheDepth || DEFAULT_SYSTEM_CONFIG.rollbackCacheDepth),
       rollback_full_snapshot_interval: Number(systemConfig.rollbackFullSnapshotInterval || DEFAULT_SYSTEM_CONFIG.rollbackFullSnapshotInterval),
       rollback_capture_max_bars: Number(systemConfig.rollbackCaptureMaxBars || DEFAULT_SYSTEM_CONFIG.rollbackCaptureMaxBars),
     });
     refreshUI(payload, { afterStep: false });
     setMsg(payload.message || "图表设置更新成功");
+    if (prevKlinePresentation !== normalizeKlinePresentationMode(dataFormConfig.klinePresentation)) {
+      showAlertAndLog(
+        `K线图呈现已切换为【${dataFormConfig.klinePresentation === "instant" ? "一次性呈现" : "步进"}】。\n` +
+        "一次性呈现：加载/重配后直接显示末根完整图表；步进：从第一根起逐步展示。"
+      );
+    }
   } else if (lastPayload && lastPayload.chart) {
     drawFromLastPayload();
+  } else {
+    canvas.style.cursor = crosshairEnabled ? "crosshair" : "default";
   }
 }
 
@@ -11039,6 +11943,7 @@ updateBspJudgeUI();
 function resetSettings() {
   if (confirmAndLog("确定要恢复默认设置吗？")) {
     chartConfig = JSON.parse(JSON.stringify(DEFAULT_CHART_CONFIG));
+    crosshairEnabled = !!(chartConfig.crosshair && chartConfig.crosshair.enabled);
     indicatorMainSlots = { ...defaultMainSlots };
     indicatorSubSlots = { ...defaultSubSlots };
     selectedMainIndicatorSlot = 0;
@@ -11047,6 +11952,15 @@ function resetSettings() {
     storageSet("chan_indicator_sub_slots", JSON.stringify(indicatorSubSlots));
     storageSet("chan_selected_main_indicator_slot", "0");
     storageSet("chan_selected_sub_indicator_slot", "0");
+    const sharedReset = JSON.parse(
+      JSON.stringify(chartConfigStore.shared || { theme: chartConfig.theme, crosshair: chartConfig.crosshair, showBottomBsp: true })
+    );
+    chartConfigStore = buildChartConfigStore({
+      shared: sharedReset,
+      perChart: { chart1: chartConfig, chart2: JSON.parse(JSON.stringify(chartConfig)) },
+      multiPerK: chartConfigStore.multiPerK || {},
+    });
+    persistChartConfigStoreNow(true);
     renderSettingsForm();
   }
 }
@@ -11649,7 +12563,7 @@ canvas.addEventListener("mousemove", (e) => {
   const visibleKs = getVisibleKs(lastPayload.chart, s.xMin, s.xMax);
   const rawX = pe.clientX - rect.left;
   const rawY = pe.clientY - rect.top;
-  hoveredBiRay = pickRatioLineAt(s, rawX, rawY, 9);
+  hoveredBiRay = pickParallelogramAt(s, rawX, rawY, 9) || pickRatioLineAt(s, rawX, rawY, 9);
   const hoveredLegend = !!(legendHoverBox && rawX >= legendHoverBox.x1 && rawX <= legendHoverBox.x2 && rawY >= legendHoverBox.y1 && rawY <= legendHoverBox.y2);
   legendHoverActive = hoveredLegend;
   const clampedX = Math.max(PAD_L, Math.min(s.w - PAD_R, rawX));
@@ -11705,7 +12619,8 @@ canvas.addEventListener("dblclick", (e) => {
     const rect = canvas.getBoundingClientRect();
     const xp = (pe && typeof pe.clientX === "number") ? (pe.clientX - rect.left) : crosshairX;
     const yp = (pe && typeof pe.clientY === "number") ? (pe.clientY - rect.top) : crosshairY;
-    
+    const xVal = xFromPx(s, xp);
+
     // Check if we are deleting a ray
     let removed = false;
     userRays = userRays.filter(ray => {
@@ -11726,23 +12641,30 @@ canvas.addEventListener("dblclick", (e) => {
     // Check if we are deleting a Bi ray（含比例线/平行四边形）
     let removedBi = false;
     let removedRatioGroupId = null;
-    const xVal = xFromPx(s, xp);
     let removedIdx = -1;
-    for (let i = userBiRays.length - 1; i >= 0; i -= 1) {
-      const r = userBiRays[i];
-      if (!r) continue;
-      const x1 = Number(r.x1), y1 = Number(r.y1), x2 = Number(r.x2), y2 = Number(r.y2);
-      const dx = (x2 - x1);
-      if (!Number.isFinite(x1) || !Number.isFinite(y1) || !Number.isFinite(dx) || dx === 0) continue;
-      if (xVal < x1) continue;
-      const slope = (y2 - y1) / dx;
-      const yOn = y1 + slope * (xVal - x1);
-      const yPx = s.y(yOn);
-      if (Math.abs(yPx - yp) < 8) {
-        removedIdx = i;
-        removedBi = true;
-        if (r.kind === "ratioLine" && r.groupId) removedRatioGroupId = String(r.groupId);
-        break;
+    const pickedPara = pickParallelogramAt(s, xp, yp, 8);
+    if (pickedPara) {
+      removedIdx = pickedPara.index;
+      removedBi = true;
+      const r = userBiRays[removedIdx];
+      if (r && r.kind === "ratioLine" && r.groupId) removedRatioGroupId = String(r.groupId);
+    } else {
+      for (let i = userBiRays.length - 1; i >= 0; i -= 1) {
+        const r = userBiRays[i];
+        if (!r || r.kind === "parallelogram") continue;
+        const x1 = Number(r.x1), y1 = Number(r.y1), x2 = Number(r.x2), y2 = Number(r.y2);
+        const dx = (x2 - x1);
+        if (!Number.isFinite(x1) || !Number.isFinite(y1) || !Number.isFinite(dx) || dx === 0) continue;
+        if (xVal < x1) continue;
+        const slope = (y2 - y1) / dx;
+        const yOn = y1 + slope * (xVal - x1);
+        const yPx = s.y(yOn);
+        if (Math.abs(yPx - yp) < 8) {
+          removedIdx = i;
+          removedBi = true;
+          if (r.kind === "ratioLine" && r.groupId) removedRatioGroupId = String(r.groupId);
+          break;
+        }
       }
     }
     if (removedBi) {
@@ -11766,16 +12688,7 @@ canvas.addEventListener("dblclick", (e) => {
       const list = quantityRaysForActiveSession();
       for (let i = list.length - 1; i >= 0; i -= 1) {
         const r = list[i];
-        const p1 = resolveQuantityRayAnchor(lastPayload.chart, r.p1);
-        const p2 = resolveQuantityRayAnchor(lastPayload.chart, r.p2);
-        if (!p1 || !p2) continue;
-        const dx = p2.x - p1.x;
-        if (!Number.isFinite(dx) || dx === 0) continue;
-        if (xVal < p1.x) continue;
-        const slope = (p2.y - p1.y) / dx;
-        const yOn = p1.y + slope * (xVal - p1.x);
-        const yPx = s.y(yOn);
-        if (Math.abs(yPx - yp) < 8) {
+        if (hitTestQuantityRayPx(lastPayload.chart, s, r, xp, yp, 8)) {
           const gi = userQuantityRays.indexOf(r);
           if (gi >= 0) userQuantityRays.splice(gi, 1);
           removedQty = true;
@@ -11791,6 +12704,7 @@ canvas.addEventListener("dblclick", (e) => {
   }
 
   crosshairEnabled = !crosshairEnabled;
+  persistCrosshairEnabledToStore();
   canvas.style.cursor = crosshairEnabled ? "crosshair" : "default";
   // 刚开启十字时尚无像素坐标（未触发 mousemove 等）时用双击点对齐最近 K，否则 drawCrosshair 直接 return
   if (crosshairEnabled && lastPayload && lastPayload.ready && pe && (crosshairX === null || crosshairY === null)) {
@@ -11937,8 +12851,93 @@ function applyLinePropsToDrawing(target, props) {
   return true;
 }
 
+/** 平行四边形：由任意三点 p1,p2,p3 确定（边方向 p2-p1，邻边 p1-p3） */
+function buildParallelogramVerts(p1, p2, p3) {
+  const dx = Number(p2.x) - Number(p1.x);
+  const dy = Number(p2.y) - Number(p1.y);
+  const vx = Number(p1.x) - Number(p3.x);
+  const vy = Number(p1.y) - Number(p3.y);
+  if (![dx, dy, vx, vy, p3.x, p3.y].every(Number.isFinite)) return null;
+  return [
+    { x: Number(p3.x), y: Number(p3.y) },
+    { x: Number(p3.x) + dx, y: Number(p3.y) + dy },
+    { x: Number(p2.x), y: Number(p2.y) },
+    { x: Number(p1.x), y: Number(p1.y) },
+  ];
+}
+
+function getParallelogramVerts(r) {
+  if (!r || r.kind !== "parallelogram") return null;
+  if (Array.isArray(r.verts) && r.verts.length >= 4) {
+    const vs = r.verts.map((v) => ({ x: Number(v.x), y: Number(v.y) }));
+    if (vs.every((v) => Number.isFinite(v.x) && Number.isFinite(v.y))) return vs;
+  }
+  const x1 = Number(r.x1), y1 = Number(r.y1), x2 = Number(r.x2), y2 = Number(r.y2);
+  if (Number.isFinite(x1) && Number.isFinite(y1) && Number.isFinite(x2) && Number.isFinite(y2)) {
+    return [{ x: x1, y: y1 }, { x: x2, y: y2 }];
+  }
+  return null;
+}
+
+function distPxToSegment(px, py, x1, y1, x2, y2) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const len2 = dx * dx + dy * dy;
+  if (len2 <= 1e-12) return Math.hypot(px - x1, py - y1);
+  let t = ((px - x1) * dx + (py - y1) * dy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
+}
+
+function pickParallelogramAt(s, px, py, threshold = 8) {
+  for (let i = userBiRays.length - 1; i >= 0; i -= 1) {
+    const r = userBiRays[i];
+    const verts = getParallelogramVerts(r);
+    if (!verts) continue;
+    if (verts.length === 2) {
+      const x1 = s.x(verts[0].x), y1 = s.y(verts[0].y);
+      const x2 = s.x(verts[1].x), y2 = s.y(verts[1].y);
+      if (distPxToSegment(px, py, x1, y1, x2, y2) <= threshold) return { type: "biRay", index: i };
+      continue;
+    }
+    let hit = false;
+    for (let j = 0; j < 4; j += 1) {
+      const a = verts[j];
+      const b = verts[(j + 1) % 4];
+      const x1 = s.x(a.x), y1 = s.y(a.y);
+      const x2 = s.x(b.x), y2 = s.y(b.y);
+      if (distPxToSegment(px, py, x1, y1, x2, y2) <= threshold) {
+        hit = true;
+        break;
+      }
+    }
+    if (hit) return { type: "biRay", index: i };
+  }
+  return null;
+}
+
+/** 平行四边形等：Ctrl 吸附当前列 K 线 OHLC；无 Ctrl 时优先笔端点 */
+function pickBiEndpointWithCtrl(chart, s, px, py, ctrlKey) {
+  const visibleKs = getVisibleKs(chart, s.xMin, s.xMax);
+  const xVal = xFromPx(s, px);
+  const refK = nearestKByX(visibleKs.length ? visibleKs : (chart.kline || []), xVal);
+  if (ctrlKey && refK) {
+    const snapped = snapPriceToKlineOhlc(refK, s.yFromPx(py));
+    return { x: Number(refK.x), y: snapped.y };
+  }
+  const pt = getNearestBiEndpoint(chart, s, px, py, 12);
+  if (pt) return pt;
+  if (refK) {
+    const snapped = snapPriceToKlineOhlc(refK, s.yFromPx(py));
+    return { x: Number(refK.x), y: snapped.y };
+  }
+  return null;
+}
+
 function pickDrawingAt(s, px, py) {
   const threshold = 8;
+  const pg = pickParallelogramAt(s, px, py, threshold);
+  if (pg) return pg;
   for (let i = userRays.length - 1; i >= 0; i -= 1) {
     const ray = userRays[i];
     const yp = s.y(ray.y);
@@ -12134,24 +13133,24 @@ canvas.addEventListener("click", (e) => {
     const p1 = pendingQuantityRayPts[0];
     const p2 = pendingQuantityRayPts[1];
     pendingQuantityRayPts = [];
-    const r1 = resolveQuantityRayAnchor(lastPayload.chart, p1);
-    const r2 = resolveQuantityRayAnchor(lastPayload.chart, p2);
-    if (!r1 || !r2) {
-      setMsg("端点无法映射到当前图表，已取消。");
+    if (!quantityRayTimePriceK({ p1, p2 })) {
+      setMsg("两端点时间相同或无效，无法生成射线。");
       return;
     }
-    if (Number(r2.x) === Number(r1.x)) {
-      setMsg("两个端点 x 相同，无法生成射线。");
-      return;
-    }
+    const sr = getCurrentSessionRangeMs();
     userQuantityRays.push({
       code: getActiveSessionCode(),
-      quantity: clampDataFormQuantity(dataFormConfig.quantity, getRawKlineCount() || 1),
+      createdQty: clampDataFormQuantity(dataFormConfig.quantity, getRawKlineCount() || 1),
+      sessionBegin: sr.beginStr,
+      sessionEnd: sr.endStr,
       p1: { t: p1.t, ohlc: p1.ohlc, y: p1.y },
       p2: { t: p2.t, ohlc: p2.ohlc, y: p2.y },
     });
     userQuantityRaysDirty = true;
-    setMsg(`已生成数量射线 →（数量:${clampDataFormQuantity(dataFormConfig.quantity, 1)}）`);
+    persistUserQuantityRaysNow();
+    setMsg(
+      "已生成数量射线：斜率按时间-价格固定；换数量后按时间重映射。当前区间包含绘制区间时，旧区间为实线、延长为虚线，否则全虚线。"
+    );
     redrawCurrentPayload();
     return;
   }
@@ -12248,18 +13247,18 @@ canvas.addEventListener("click", (e) => {
     redrawCurrentPayload();
     return;
   }
-  // 平行四边形工具：依次点 3 个笔端点，生成从第3点出发、平行于前一笔(p1->p2)的射线
+  // 平行四边形：任意 3 笔端点 → 完整四边形（Ctrl 吸附 OHLC）
   if (wantParallelogram) {
-    const pt = getNearestBiEndpoint(lastPayload.chart, s, x, y, 12);
+    const pt = pickBiEndpointWithCtrl(lastPayload.chart, s, x, y, !!pe.ctrlKey);
     if (!pt) return;
     pendingParallelogramPts.push(pt);
     if (pendingParallelogramPts.length === 1) {
-      setMsg("已选择端点1，请继续选择端点2、端点3。");
+      setMsg("已选端点1，请再选端点2、端点3（Ctrl+左键可在任意 K 线列吸附 OHLC）。");
       redrawCurrentPayload();
       return;
     }
     if (pendingParallelogramPts.length === 2) {
-      setMsg("已选择端点2，请再选择端点3。");
+      setMsg("已选端点2，请再选端点3。");
       redrawCurrentPayload();
       return;
     }
@@ -12267,21 +13266,21 @@ canvas.addEventListener("click", (e) => {
     const p2 = pendingParallelogramPts[1];
     const p3 = pendingParallelogramPts[2];
     pendingParallelogramPts = [];
-    const dx = Number(p2.x) - Number(p1.x);
-    const dy = Number(p2.y) - Number(p1.y);
-    if (!Number.isFinite(dx) || !Number.isFinite(dy) || dx === 0) {
-      setMsg("倒数第二笔水平跨度为 0，无法生成平行射线。");
+    const verts = buildParallelogramVerts(p1, p2, p3);
+    if (!verts) {
+      setMsg("端点无效，无法生成平行四边形。");
       return;
     }
     userBiRays.push({
-      x1: Number(p3.x),
-      y1: Number(p3.y),
-      x2: Number(p3.x) + dx,
-      y2: Number(p3.y) + dy,
       kind: "parallelogram",
+      verts,
+      x1: verts[0].x,
+      y1: verts[0].y,
+      x2: verts[1].x,
+      y2: verts[1].y,
     });
     userBiRaysDirty = true;
-    setMsg("已生成平行四边形射线 →");
+    setMsg("已生成完整平行四边形。");
     redrawCurrentPayload();
     return;
   }
@@ -15110,49 +16109,60 @@ function drawUserQuantityRays(s, chart) {
   try {
     const rayCfg = chartConfig.userRay || DEFAULT_CHART_CONFIG.userRay;
     ctx.font = `${rayCfg.fontSize}px Consolas`;
+    const strokeSeg = (x0, y0, x1, y1, dashed) => {
+      ctx.setLineDash(dashed ? getTradeLineDash("dashed") || [8, 4] : []);
+      ctx.beginPath();
+      ctx.moveTo(x0, y0);
+      ctx.lineTo(x1, y1);
+      ctx.stroke();
+    };
     list.forEach((r) => {
       if (!r) return;
-      const p1 = resolveQuantityRayAnchor(chart, r.p1);
-      const p2 = resolveQuantityRayAnchor(chart, r.p2);
-      if (!p1 || !p2) return;
-      const x1 = p1.x;
-      const y1 = p1.y;
-      const x2 = p2.x;
-      const y2 = p2.y;
-      const dx = x2 - x1;
-      if (!Number.isFinite(dx) || dx === 0) return;
-      const slope = (y2 - y1) / dx;
-      const xEnd = s.xMax;
-      const p1x = s.x(x1);
-      const p1y = s.y(y1);
-      const p2x = s.x(xEnd);
-      const p2y = s.y(y1 + slope * (xEnd - x1));
-      if (!Number.isFinite(p1x) || !Number.isFinite(p1y) || !Number.isFinite(p2x) || !Number.isFinite(p2y)) return;
+      const spec = resolveQuantityRayDrawSpec(chart, s, r);
+      if (!spec) return;
+      const { p1d, p2d, allDashed, segments } = spec;
+      const p1x = s.x(p1d.x);
+      const p1y = s.y(p1d.y);
+      if (!Number.isFinite(p1x) || !Number.isFinite(p1y)) return;
       if (p1x > s.w - PAD_R) return;
       ctx.lineWidth = getRayLineWidth(r);
       ctx.strokeStyle = getRayLineColor(r) || "#a855f7";
-      ctx.setLineDash(getTradeLineDash(getRayLineStyle(r)));
-      ctx.beginPath();
-      ctx.moveTo(p1x, p1y);
-      ctx.lineTo(p2x, p2y);
-      ctx.stroke();
-      const qLabel = Number.isFinite(Number(r.quantity)) ? Math.floor(Number(r.quantity)) : "-";
+      for (const seg of segments) {
+        const x0 = s.x(seg.from.x);
+        const y0 = s.y(seg.from.y);
+        const x1 = seg.to.px != null ? seg.to.px : s.x(seg.to.x);
+        const y1 = seg.to.py != null ? seg.to.py : s.y(seg.to.y);
+        if (!Number.isFinite(x0) || !Number.isFinite(y0) || !Number.isFinite(x1) || !Number.isFinite(y1)) continue;
+        strokeSeg(x0, y0, x1, y1, !!seg.dashed);
+      }
+      const qLabel = Number.isFinite(Number(r.createdQty != null ? r.createdQty : r.quantity))
+        ? Math.floor(Number(r.createdQty != null ? r.createdQty : r.quantity))
+        : "-";
       ctx.save();
       ctx.setLineDash([]);
       ctx.fillStyle = getRayLineColor(r) || "#a855f7";
       ctx.font = `bold ${Math.max(10, rayCfg.fontSize)}px sans-serif`;
-      ctx.fillText(`数量:${qLabel}`, p1x + 4, p1y - 6);
+      const styleHint = allDashed ? "虚" : "实+虚";
+      ctx.fillText(`数量:${qLabel}(${styleHint})`, p1x + 4, p1y - 6);
+      const markCircle = (px, py) => {
+        if (!Number.isFinite(px) || !Number.isFinite(py)) return;
+        ctx.beginPath();
+        ctx.arc(px, py + 10, 7, 0, Math.PI * 2);
+        ctx.strokeStyle = getRayLineColor(r) || "#a855f7";
+        ctx.lineWidth = 2;
+        ctx.setLineDash([]);
+        ctx.stroke();
+      };
+      markCircle(p1x, p1y);
+      if (p2d) {
+        markCircle(s.x(p2d.x), s.y(p2d.y));
+      }
       ctx.restore();
       if (crosshairX !== null && crosshairY !== null) {
-        const xVal = xFromPx(s, crosshairX);
-        if (xVal >= x1) {
-          const yVal = y1 + slope * (xVal - x1);
-          const yPx = s.y(yVal);
-          if (Math.abs(yPx - crosshairY) < 8) {
-            ctx.fillStyle = "#ef4444";
-            ctx.font = `bold ${rayCfg.fontSize}px sans-serif`;
-            ctx.fillText("双击删除数量射线", p1x + 5, yPx - 5);
-          }
+        if (hitTestQuantityRayPx(chart, s, r, crosshairX, crosshairY, 8)) {
+          ctx.fillStyle = "#ef4444";
+          ctx.font = `bold ${rayCfg.fontSize}px sans-serif`;
+          ctx.fillText("双击删除数量射线", p1x + 5, crosshairY - 5);
         }
       }
     });
@@ -15199,6 +16209,38 @@ function drawUserBiRays(s, chart) {
     ctx.restore();
   }
   userBiRays.forEach((r, idx) => {
+    const isPara = !!(r && r.kind === "parallelogram");
+    const paraVerts = isPara ? getParallelogramVerts(r) : null;
+    if (isPara && paraVerts && paraVerts.length >= 4) {
+      const isHovered = !!(hoveredBiRay && hoveredBiRay.type === "biRay" && hoveredBiRay.index === idx);
+      const baseColor = getRayLineColor(r);
+      ctx.lineWidth = isHovered ? Math.max(2, getRayLineWidth(r) + 1) : getRayLineWidth(r);
+      ctx.strokeStyle = baseColor;
+      ctx.setLineDash(getTradeLineDash(getRayLineStyle(r)));
+      const pxs = paraVerts.map((v) => ({ x: s.x(v.x), y: s.y(v.y) }));
+      if (pxs.every((p) => Number.isFinite(p.x) && Number.isFinite(p.y))) {
+        ctx.beginPath();
+        ctx.moveTo(pxs[0].x, pxs[0].y);
+        for (let i = 1; i < pxs.length; i += 1) ctx.lineTo(pxs[i].x, pxs[i].y);
+        ctx.closePath();
+        ctx.globalAlpha = 0.08;
+        ctx.fillStyle = baseColor;
+        ctx.fill();
+        ctx.globalAlpha = 1;
+        ctx.stroke();
+      }
+      if (selectedDrawing && selectedDrawing.type === "biRay" && selectedDrawing.index === idx) {
+        ctx.save();
+        ctx.setLineDash([]);
+        ctx.strokeStyle = "#2563eb";
+        ctx.lineWidth = 2;
+        pxs.forEach((p) => {
+          ctx.strokeRect(p.x - 4, p.y - 4, 8, 8);
+        });
+        ctx.restore();
+      }
+      return;
+    }
     const isRatio = !!(r && r.kind === "ratioLine");
     const isHovered = !!(hoveredBiRay && hoveredBiRay.type === "biRay" && hoveredBiRay.index === idx);
     const isDragging = !!(draggingRatioLine && Number(draggingRatioLine.index) === idx);
@@ -15277,7 +16319,29 @@ function drawPendingBiEndpointCircle(s) {
   const pending = [];
   if (Array.isArray(pendingBiRayPts) && pendingBiRayPts.length === 1) pending.push(...pendingBiRayPts);
   if (Array.isArray(pendingRatioLinePts) && pendingRatioLinePts.length === 1) pending.push(...pendingRatioLinePts);
-  if (Array.isArray(pendingParallelogramPts) && pendingParallelogramPts.length > 0) pending.push(...pendingParallelogramPts);
+  if (Array.isArray(pendingParallelogramPts) && pendingParallelogramPts.length > 0) {
+    pending.push(...pendingParallelogramPts);
+    if (pendingParallelogramPts.length >= 2) {
+      const v2 = buildParallelogramVerts(
+        pendingParallelogramPts[0],
+        pendingParallelogramPts[1],
+        pendingParallelogramPts[2] || pendingParallelogramPts[1]
+      );
+      if (v2 && v2.length >= 4) {
+        ctx.save();
+        ctx.strokeStyle = "#2563eb";
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([4, 4]);
+        const pxs = v2.map((v) => ({ x: s.x(v.x), y: s.y(v.y) }));
+        ctx.beginPath();
+        ctx.moveTo(pxs[0].x, pxs[0].y);
+        for (let i = 1; i < pxs.length; i += 1) ctx.lineTo(pxs[i].x, pxs[i].y);
+        ctx.closePath();
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+  }
   if (Array.isArray(pendingQuantityRayPts) && pendingQuantityRayPts.length > 0) {
     const chart = lastPayload && lastPayload.chart;
     if (chart) {
@@ -15851,6 +16915,17 @@ function refreshUI(payload, options) {
     ? !!options.showStandaloneNotices
     : !afterStep;
   const prev = lastPayload;
+  const dataFormChanged =
+    prev &&
+    payload &&
+    prev.ready &&
+    payload.ready &&
+    prev.data_form &&
+    payload.data_form &&
+    (prev.data_form.mode !== payload.data_form.mode ||
+      prev.data_form.quantity !== payload.data_form.quantity ||
+      prev.data_form.quantity_alloc !== payload.data_form.quantity_alloc ||
+      prev.data_form.feed_mode !== payload.data_form.feed_mode);
   // 稳定缓存 kline_all：避免后续 payload 省略时丢失筹码全历史
   if (
     payload &&
@@ -15861,8 +16936,9 @@ function refreshUI(payload, options) {
   ) {
     chipKlineAllCache = payload.chart.kline_all;
   }
-  // 后端在步进等接口省略 kline_all，避免 1 分钟全量重复 JSON 导致超时/断连（浏览器报 Failed to fetch）；此处沿用上一包全历史供筹码用。
+  // 后端在步进等接口省略 kline_all；数据形式/数量变更时禁止沿用旧 kline_all（聚合根数已变）
   if (
+    !dataFormChanged &&
     payload &&
     payload.ready &&
     payload.chart &&
@@ -15892,7 +16968,7 @@ function refreshUI(payload, options) {
       payload.chart.kline_all.length > 0
     ) {
       chipKlineAllCache = payload.chart.kline_all;
-    } else if (chipKlineAllCache && chipKlineAllCache.length > 0 && payload.chart) {
+    } else if (!dataFormChanged && chipKlineAllCache && chipKlineAllCache.length > 0 && payload.chart) {
       payload.chart.kline_all = chipKlineAllCache;
     }
   }
@@ -15901,7 +16977,15 @@ function refreshUI(payload, options) {
   if (payload && payload.ready && payload.data_form) {
     dataFormConfig.mode = normalizeDataFormMode(payload.data_form.mode);
     dataFormConfig.quantity = clampDataFormQuantity(payload.data_form.quantity, payload.data_form.raw_count || payload.data_form.current_count || 1);
+    dataFormConfig.quantityAlloc = normalizeDataFormQuantityAlloc(
+      payload.data_form.quantity_alloc != null ? payload.data_form.quantity_alloc : dataFormConfig.quantityAlloc
+    );
     dataFormConfig.feedMode = normalizeDataFeedMode(payload.data_form.feed_mode);
+    dataFormConfig.klinePresentation = normalizeKlinePresentationMode(
+      payload.data_form.presentation_mode != null ? payload.data_form.presentation_mode : dataFormConfig.klinePresentation
+    );
+    sessionConfig.dataFormQuantityAlloc = dataFormConfig.quantityAlloc;
+    sessionConfig.klinePresentationMode = dataFormConfig.klinePresentation;
   } else if (!payload || !payload.ready) {
     dataFormConfig.mode = normalizeDataFormMode(sessionConfig.dataFormMode);
     dataFormConfig.quantity = clampDataFormQuantity(
@@ -15929,7 +17013,17 @@ function refreshUI(payload, options) {
   if (showStandaloneNotices && payload && payload.judge_notice) {
     showJudgeNotice(payload);
   }
-  if (payload.ready) {
+    if (payload.ready) {
+    if (dataFormChanged && !afterStep) {
+      chipKlineAllCache = null;
+      userAdjustedView = false;
+      viewReady = false;
+      DUAL_CHART_IDS.forEach((id) => {
+        const rt = getRuntimeState(id);
+        rt.userAdjustedView = false;
+        rt.viewReady = false;
+      });
+    }
     if (payload.chart_mode === "dual" && payload.charts && payload.charts.chart1 && payload.charts.chart2) {
       DUAL_CHART_IDS.forEach((chartId) => {
         const c = payload.charts[chartId];
@@ -16069,7 +17163,9 @@ $("btnInit").onclick = async () => {
       active_chart_id: (sessionConfig && sessionConfig.activeChartId) ? sessionConfig.activeChartId : "chart1",
       data_form_mode: normalizeDataFormMode(dataFormConfig.mode),
       data_form_quantity: clampDataFormQuantity(dataFormConfig.quantity, getRawKlineCount() || 1),
+      data_form_quantity_alloc: normalizeDataFormQuantityAlloc(dataFormConfig.quantityAlloc),
       data_feed_mode: normalizeDataFeedMode(dataFormConfig.feedMode),
+      kline_presentation_mode: normalizeKlinePresentationMode(dataFormConfig.klinePresentation),
       rollback_cache_depth: Number(systemConfig.rollbackCacheDepth || DEFAULT_SYSTEM_CONFIG.rollbackCacheDepth),
       rollback_full_snapshot_interval: Number(systemConfig.rollbackFullSnapshotInterval || DEFAULT_SYSTEM_CONFIG.rollbackFullSnapshotInterval),
       rollback_capture_max_bars: Number(systemConfig.rollbackCaptureMaxBars || DEFAULT_SYSTEM_CONFIG.rollbackCaptureMaxBars),
@@ -16604,11 +17700,54 @@ function syncBacktestFormFromSession() {
   if ($("btKType2Row")) $("btKType2Row").style.display = dual ? "" : "none";
   if ($("btStepDriverRow")) $("btStepDriverRow").style.display = dual ? "" : "none";
 }
-function buildBtConditionsFromGrid(gridId) {
+const BT_COND_STORAGE_KEY = "chan_bt_cond_selected";
+
+function _btCondItemKey(chart, kind, level, value) {
+  return `${chart}|${kind}|${level || ""}|${value || ""}`;
+}
+
+function _btDefsToTree(defs) {
+  const groups = new Map();
+  defs.forEach(([chart, kind, level, value, label]) => {
+    const cat = kind.startsWith("bsp_") ? "买卖点" : "指标";
+    const gid = `${chart}_${cat}`;
+    const glabel = chart === "k2" ? `图2 · ${cat}` : `图1 · ${cat}`;
+    if (!groups.has(gid)) groups.set(gid, { id: gid, label: glabel, items: [] });
+    groups.get(gid).items.push({
+      id: _btCondItemKey(chart, kind, level, value),
+      chart,
+      kind,
+      level: level || "",
+      value: value || "",
+      label,
+    });
+  });
+  return [...groups.values()];
+}
+
+function _loadBtCondSelected(side) {
+  const raw = safeJsonParse(storageGet(BT_COND_STORAGE_KEY), {});
+  const arr = raw && raw[side];
+  return Array.isArray(arr) ? new Set(arr.map(String)) : new Set();
+}
+
+function _saveBtCondSelected(side, hostId) {
+  const host = $(hostId);
+  if (!host) return;
+  const ids = [];
+  host.querySelectorAll('input[type="checkbox"][data-bt-cond-id]:checked').forEach((el) => {
+    ids.push(String(el.getAttribute("data-bt-cond-id")));
+  });
+  const raw = safeJsonParse(storageGet(BT_COND_STORAGE_KEY), {});
+  raw[side] = ids;
+  storageSet(BT_COND_STORAGE_KEY, JSON.stringify(raw));
+}
+
+function buildBtConditionsFromCascade(hostId) {
   const out = [];
-  const wrap = $(gridId);
-  if (!wrap) return out;
-  wrap.querySelectorAll('input[type="checkbox"][data-chart][data-kind]').forEach((el) => {
+  const host = $(hostId);
+  if (!host) return out;
+  host.querySelectorAll('input[type="checkbox"][data-chart][data-kind]').forEach((el) => {
     if (!el.checked) return;
     const one = { chart: el.getAttribute("data-chart"), kind: el.getAttribute("data-kind") };
     const lv = el.getAttribute("data-level");
@@ -16622,44 +17761,86 @@ function buildBtConditionsFromGrid(gridId) {
   });
   return out;
 }
-function _fillBtCondGrid(gridId, defs, idPrefix) {
-  const wrap = $(gridId);
-  if (!wrap || wrap.dataset.inited === "1") return;
-  wrap.dataset.inited = "1";
-  defs.forEach(([chart, kind, level, value, label], idx) => {
-    const id = `${idPrefix}${idx}`;
-    const lab = document.createElement("label");
-    lab.className = "bt-cond-item";
-    const inp = document.createElement("input");
-    inp.type = "checkbox";
-    inp.id = id;
-    inp.setAttribute("data-chart", chart);
-    inp.setAttribute("data-kind", kind);
-    if (level) inp.setAttribute("data-level", level);
-    if (value) inp.setAttribute("data-value", value);
-    const text = document.createElement("span");
-    text.className = "bt-cond-text";
-    const main = document.createElement("span");
-    main.className = "bt-cond-main";
-    const sub = document.createElement("span");
-    sub.className = "bt-cond-sub";
-    // 中文文案拆成主副标题，提升可读性
-    const left = String(label || "");
-    const i = left.indexOf("（");
-    if (i > 0) {
-      main.textContent = left.slice(0, i);
-      sub.textContent = left.slice(i);
-    } else {
-      main.textContent = left;
-      sub.textContent = `${chart.toUpperCase()} · ${kind}`;
-    }
-    text.appendChild(main);
-    text.appendChild(sub);
-    lab.appendChild(inp);
-    lab.appendChild(text);
-    wrap.appendChild(lab);
-  });
+
+function mountBtCondCascade(hostId, defs, side) {
+  const host = $(hostId);
+  if (!host) return;
+  const tree = _btDefsToTree(defs);
+  if (!tree.length) return;
+  const saved = _loadBtCondSelected(side);
+  let selGroupId = tree[0].id;
+  host.innerHTML = "";
+  host.dataset.inited = "1";
+  const panel = document.createElement("div");
+  panel.className = "settings-cascade";
+  const colNav = document.createElement("div");
+  colNav.className = "settings-cascade-col";
+  colNav.innerHTML = `<div class="settings-cascade-head">分类</div><div class="settings-cascade-list" data-bt-nav="1"></div>`;
+  const colDetail = document.createElement("div");
+  colDetail.className = "settings-cascade-col";
+  colDetail.innerHTML = `<div class="settings-cascade-head">条件（多选）</div><div class="bt-cond-cascade-panel" data-bt-detail="1"></div>`;
+  panel.appendChild(colNav);
+  panel.appendChild(colDetail);
+  host.appendChild(panel);
+  const listEl = colNav.querySelector('[data-bt-nav="1"]');
+  const detailEl = colDetail.querySelector('[data-bt-detail="1"]');
+  const paint = () => {
+    listEl.innerHTML = "";
+    tree.forEach((g) => {
+      const el = document.createElement("div");
+      const nOn = g.items.filter((it) => saved.has(it.id)).length;
+      el.className = "settings-cascade-item" + (g.id === selGroupId ? " active" : "");
+      el.textContent = nOn > 0 ? `${g.label} (${nOn})` : g.label;
+      el.onclick = () => {
+        selGroupId = g.id;
+        paint();
+      };
+      listEl.appendChild(el);
+    });
+    const grp = tree.find((g) => g.id === selGroupId) || tree[0];
+    detailEl.innerHTML = "";
+    grp.items.forEach((it) => {
+      const lab = document.createElement("label");
+      lab.className = "bt-cond-item";
+      const inp = document.createElement("input");
+      inp.type = "checkbox";
+      inp.setAttribute("data-bt-cond-id", it.id);
+      inp.setAttribute("data-chart", it.chart);
+      inp.setAttribute("data-kind", it.kind);
+      if (it.level) inp.setAttribute("data-level", it.level);
+      if (it.value) inp.setAttribute("data-value", it.value);
+      inp.checked = saved.has(it.id);
+      inp.addEventListener("change", () => {
+        if (inp.checked) saved.add(it.id);
+        else saved.delete(it.id);
+        _saveBtCondSelected(side, hostId);
+        paint();
+      });
+      const text = document.createElement("span");
+      text.className = "bt-cond-text";
+      const main = document.createElement("span");
+      main.className = "bt-cond-main";
+      const sub = document.createElement("span");
+      sub.className = "bt-cond-sub";
+      const left = String(it.label || "");
+      const i = left.indexOf("（");
+      if (i > 0) {
+        main.textContent = left.slice(0, i);
+        sub.textContent = left.slice(i);
+      } else {
+        main.textContent = left;
+        sub.textContent = `${it.chart.toUpperCase()} · ${it.kind}`;
+      }
+      text.appendChild(main);
+      text.appendChild(sub);
+      lab.appendChild(inp);
+      lab.appendChild(text);
+      detailEl.appendChild(lab);
+    });
+  };
+  paint();
 }
+
 function initBtCondGrids() {
   const entryDefs = [
     ["k1", "boll_lower_reclaim", "", "", "图1 布林下轨收回"],
@@ -16688,8 +17869,8 @@ function initBtCondGrids() {
     ["k1", "bsp_sell", "bi", "", "图1 笔卖点（本步新增）"],
     ["k1", "bsp_sell", "seg", "", "图1 段卖点（本步新增）"],
   ];
-  _fillBtCondGrid("btEntryCondGrid", entryDefs, "btEntCb");
-  _fillBtCondGrid("btExitCondGrid", exitDefs, "btExCb");
+  mountBtCondCascade("btEntryCondCascade", entryDefs, "entry");
+  mountBtCondCascade("btExitCondCascade", exitDefs, "exit");
 }
 function setMainTab(which) {
   const w = which === "2" ? "2" : "1";
@@ -16820,12 +18001,12 @@ if ($("btnStrategyBacktestRun")) {
     const useHold = $("btUseExitHold") && $("btUseExitHold").checked;
     const n = Math.max(1, parseInt($("btExitHoldN") && $("btExitHoldN").value, 10) || 5);
     if ($("btExitHoldN")) $("btExitHoldN").value = String(n);
-    const entryConds = buildBtConditionsFromGrid("btEntryCondGrid");
+    const entryConds = buildBtConditionsFromCascade("btEntryCondCascade");
     if (!entryConds.length) {
       showToast("请至少勾选一条入场条件。");
       return;
     }
-    const exitConds = buildBtConditionsFromGrid("btExitCondGrid");
+    const exitConds = buildBtConditionsFromCascade("btExitCondCascade");
     const processedConfig = _processedChanConfigForApi();
     const rawN = getRawKlineCount();
     const buildBody = (extra = {}) => ({
@@ -17094,6 +18275,7 @@ def api_init(req: InitReq):
                     data_source_priority=req.data_source_priority,
                     data_form_mode=req.data_form_mode,
                     data_form_quantity=req.data_form_quantity,
+                    data_form_quantity_alloc=getattr(req, "data_form_quantity_alloc", "front"),
                     data_feed_mode=getattr(req, "data_feed_mode", "step"),
                 )
                 if APP_STATE.stepper.data_src_used != OFFLINE_INLINE_SRC:
@@ -17115,6 +18297,7 @@ def api_init(req: InitReq):
                         data_source_priority=req.data_source_priority,
                         data_form_mode=req.data_form_mode,
                         data_form_quantity=req.data_form_quantity,
+                        data_form_quantity_alloc=getattr(req, "data_form_quantity_alloc", "front"),
                         data_feed_mode=getattr(req, "data_feed_mode", "step"),
                     )
                     APP_STATE.multi_steppers.append(st)
@@ -17130,6 +18313,7 @@ def api_init(req: InitReq):
                     data_source_priority=req.data_source_priority,
                     data_form_mode=req.data_form_mode,
                     data_form_quantity=req.data_form_quantity,
+                    data_form_quantity_alloc=getattr(req, "data_form_quantity_alloc", "front"),
                     data_feed_mode=getattr(req, "data_feed_mode", "step"),
                 )
                 chart_mode = "dual" if cm_init == "dual" else "single"
@@ -17151,6 +18335,7 @@ def api_init(req: InitReq):
                         data_source_priority=req.data_source_priority,
                         data_form_mode=req.data_form_mode,
                         data_form_quantity=req.data_form_quantity,
+                        data_form_quantity_alloc=getattr(req, "data_form_quantity_alloc", "front"),
                         data_feed_mode=getattr(req, "data_feed_mode", "step"),
                     )
         except OfflineDataConfirmRequired as exc:
@@ -17196,7 +18381,13 @@ def api_init(req: InitReq):
             "data_source_priority": req.data_source_priority,
             "data_form_mode": normalize_data_form_mode(req.data_form_mode),
             "data_form_quantity": req.data_form_quantity,
+            "data_form_quantity_alloc": normalize_data_form_quantity_alloc(
+                getattr(req, "data_form_quantity_alloc", "front")
+            ),
             "data_feed_mode": normalize_data_feed_mode(getattr(req, "data_feed_mode", "step")),
+            "kline_presentation_mode": normalize_kline_presentation_mode(
+                getattr(req, "kline_presentation_mode", "step")
+            ),
             "rollback_cache_depth": req.rollback_cache_depth,
             "rollback_full_snapshot_interval": req.rollback_full_snapshot_interval,
             "rollback_capture_max_bars": req.rollback_capture_max_bars,
@@ -17207,19 +18398,25 @@ def api_init(req: InitReq):
         APP_STATE.bsp_judge_logs = []
         APP_STATE._last_level_dirs = {level: None for level in set(JUDGE_TRIGGER_LEVELS.values())}
         APP_STATE._clear_rollback_cache()
-        # init后先推进一根，确保前端有可视数据并可交互
         APP_STATE.rebuild_bsp_all_snapshot()
-        APP_STATE.stepper.step()
-        if APP_STATE.chart_mode == "dual" and APP_STATE.stepper2 is not None:
-            APP_STATE.stepper2.step()
-            APP_STATE._sync_stepper_to_anchor(APP_STATE.stepper2, APP_STATE.stepper.current_time())
-        elif APP_STATE.chart_mode == "multi" and APP_STATE.multi_steppers:
-            APP_STATE._sync_passives_to_anchor(APP_STATE.stepper.current_time())
-        APP_STATE._dual_rebuild_coarse_chan_anti_future(APP_STATE.get_active_stepper().current_time())
-        APP_STATE.sync_bsp_history()
-        APP_STATE.sync_rhythm_history()
+        pres_init = normalize_kline_presentation_mode(
+            getattr(req, "kline_presentation_mode", "step")
+        )
+        if pres_init == "instant":
+            APP_STATE.apply_kline_presentation_end()
+        else:
+            # init 后先推进一根，确保前端有可视数据并可交互
+            APP_STATE.stepper.step()
+            if APP_STATE.chart_mode == "dual" and APP_STATE.stepper2 is not None:
+                APP_STATE.stepper2.step()
+                APP_STATE._sync_stepper_to_anchor(APP_STATE.stepper2, APP_STATE.stepper.current_time())
+            elif APP_STATE.chart_mode == "multi" and APP_STATE.multi_steppers:
+                APP_STATE._sync_passives_to_anchor(APP_STATE.stepper.current_time())
+            APP_STATE._dual_rebuild_coarse_chan_anti_future(APP_STATE.get_active_stepper().current_time())
+            APP_STATE.sync_bsp_history()
+            APP_STATE.sync_rhythm_history()
+            APP_STATE.after_step_update()
         APP_STATE._rhythm_notice_hits = []
-        APP_STATE.after_step_update()
         payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME)
         source_label = data_source_label(APP_STATE.stepper.data_src_used)
         if APP_STATE.chart_mode == "dual":
@@ -17248,13 +18445,16 @@ def api_reconfig(req: ReconfigReq):
             req.chan_config,
             data_form_mode=req.data_form_mode,
             data_form_quantity=req.data_form_quantity,
+            data_form_quantity_alloc=getattr(req, "data_form_quantity_alloc", None),
             data_feed_mode=getattr(req, "data_feed_mode", "step"),
+            kline_presentation_mode=getattr(req, "kline_presentation_mode", None),
             rollback_cache_depth=req.rollback_cache_depth,
             rollback_full_snapshot_interval=req.rollback_full_snapshot_interval,
             rollback_capture_max_bars=req.rollback_capture_max_bars,
         )
         APP_STATE._rhythm_notice_hits = []
-        payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME, include_kline_all=False)
+        include_kline_all = stepper_needs_chip_kline_all(APP_STATE.stepper)
+        payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME, include_kline_all=include_kline_all)
         payload["message"] = "配置更新成功，已按新逻辑重新计算并清除模拟持仓。"
         return payload
     except Exception as e:

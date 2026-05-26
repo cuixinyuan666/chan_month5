@@ -21,8 +21,10 @@ class InitReq(BaseModel):
     data_source_priority: Optional[list[str]] = None
     data_form_mode: str = "traditional"
     data_form_quantity: Optional[int] = None
-    # 喂数据方式：step=现有逐根喂入；unified=一次性喂给缠论计算（仅看画线/筹码）
+    data_form_quantity_alloc: str = "front"  # front=靠前分配 | back=靠后分配
+    # 喂数据方式：step=逐K喂数据；unified=一次性喂给缠论计算（仅看画线/筹码）
     data_feed_mode: str = "step"
+    kline_presentation_mode: str = "step"  # step=步进呈现 | instant=一次性呈现末根
     # 回退缓存参数（前端可调）
     rollback_cache_depth: Optional[int] = None
     rollback_full_snapshot_interval: Optional[int] = None
@@ -33,7 +35,9 @@ class ReconfigReq(BaseModel):
     chan_config: dict[str, Any]
     data_form_mode: Optional[str] = None
     data_form_quantity: Optional[int] = None
+    data_form_quantity_alloc: Optional[str] = None
     data_feed_mode: Optional[str] = None
+    kline_presentation_mode: Optional[str] = None
     rollback_cache_depth: Optional[int] = None
     rollback_full_snapshot_interval: Optional[int] = None
     rollback_capture_max_bars: Optional[int] = None
