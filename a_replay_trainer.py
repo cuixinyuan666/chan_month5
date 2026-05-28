@@ -4128,6 +4128,7 @@ class ChanStepper:
             return
         for latest_klu in self.chan[0].klu_iter():
             h, l, c = float(latest_klu.high), float(latest_klu.low), float(latest_klu.close)
+            vol = _klu_float_trade_metric(latest_klu, DATA_FIELD.FIELD_VOLUME)
             macd_item = self.indicators["macd"].add(c)
             kdj_item = self.indicators["kdj"].add(h, l, c)
             rsi_val = self.indicators["rsi"].add(c)
@@ -4150,6 +4151,7 @@ class ChanStepper:
                     "kdj": {"k": kdj_item.k, "d": kdj_item.d, "j": kdj_item.j},
                     "rsi": rsi_val,
                     "boll": {"mid": boll_item.MID, "up": boll_item.UP, "down": boll_item.DOWN},
+                    "vol": vol,
                     "demark": demark_pts,
                 }
             )
@@ -4203,6 +4205,7 @@ class ChanStepper:
             kl_list = self.chan[0]
             latest_klu = kl_list.lst[-1].lst[-1]
             h, l, c = float(latest_klu.high), float(latest_klu.low), float(latest_klu.close)
+            vol = _klu_float_trade_metric(latest_klu, DATA_FIELD.FIELD_VOLUME)
             if use_master_kline_for_chart(self.data_form_mode):
                 master = self._replay_klus_master or []
                 self._serialized_klu_cache = serialize_replay_master_klines(
@@ -4238,6 +4241,7 @@ class ChanStepper:
                 "kdj": {"k": kdj_item.k, "d": kdj_item.d, "j": kdj_item.j},
                 "rsi": rsi_val,
                 "boll": {"mid": boll_item.MID, "up": boll_item.UP, "down": boll_item.DOWN},
+                "vol": vol,
                 "demark": demark_pts
             })
             
@@ -8340,7 +8344,7 @@ for (let i = 0; i <= 5; i++) {
 storageSet("chan_indicator_main_slots", JSON.stringify(indicatorMainSlots));
 storageSet("chan_indicator_sub_slots", JSON.stringify(indicatorSubSlots));
 const MAIN_INDICATORS = new Set(["boll", "demark", "trendline"]);
-const SUB_INDICATORS = new Set(["macd", "kdj", "rsi"]);
+const SUB_INDICATORS = new Set(["macd", "kdj", "rsi", "vol"]);
 
 const DEFAULT_CHAN_CONFIG = {
   chan_algo: "classic",
@@ -10736,7 +10740,7 @@ function appendChartSettingsItemTo(parent, sec, item, buildLabelHtml) {
       html += `<div class="muted" style="margin-top:8px;">当前副图槽位为 0，不显示任何副图指标。</div>`;
     } else {
       const currentList = Array.isArray(val) ? val : [];
-      const options = [{ v: "macd", l: "MACD" }, { v: "kdj", l: "KDJ" }, { v: "rsi", l: "RSI" }];
+      const options = [{ v: "macd", l: "MACD" }, { v: "kdj", l: "KDJ" }, { v: "rsi", l: "RSI" }, { v: "vol", l: "VOL" }];
       html += `<div style="display:flex;flex-direction:column;gap:4px;margin-top:8px;">`;
       options.forEach((opt) => {
         const checked = currentList.includes(opt.v);
@@ -16271,6 +16275,19 @@ function drawIndicators(chart, s) {
     } else if (type === "rsi") {
       min = 0;
       max = 100;
+    } else if (type === "vol") {
+      min = 0;
+      for (const i of visibleInd) {
+        const vv = Number(i && i.vol);
+        if (Number.isFinite(vv)) max = Math.max(max, vv);
+      }
+      // 兼容旧 payload：没有 vol 时回退读取 kline.v
+      if (!isFinite(max)) {
+        for (const k of s.visibleK || []) {
+          const kv = Number(k && k.v);
+          if (Number.isFinite(kv)) max = Math.max(max, kv);
+        }
+      }
     }
     if (!isFinite(min) || !isFinite(max)) {
       min = 0;
@@ -16310,6 +16327,35 @@ function drawIndicators(chart, s) {
       drawPanelLine(visibleInd, (i) => i.kdj?.j, subY, "#f472b6");
     } else if (panel.type === "rsi") {
       drawPanelLine(visibleInd, (i) => i.rsi, subY, lineMain);
+    } else if (panel.type === "vol") {
+      // 成交量柱：优先用指标序列，旧数据回退到当前可见K线
+      const volRows = [];
+      for (const i of visibleInd) {
+        const vv = Number(i && i.vol);
+        if (Number.isFinite(vv)) volRows.push({ x: Number(i.x), vol: vv });
+      }
+      if (volRows.length === 0) {
+        for (const k of s.visibleK || []) {
+          const kv = Number(k && k.v);
+          if (Number.isFinite(kv)) volRows.push({ x: Number(k.x), vol: kv });
+        }
+      }
+      const closeByX = new Map();
+      for (const k of s.visibleK || []) closeByX.set(Number(k.x), Number(k.c));
+      for (let idx = 0; idx < volRows.length; idx++) {
+        const row = volRows[idx];
+        const xp = s.x(row.x);
+        const y0 = subY(0);
+        const yp = subY(row.vol);
+        const prevClose = idx > 0 ? closeByX.get(Number(volRows[idx - 1].x)) : undefined;
+        const curClose = closeByX.get(Number(row.x));
+        let barColor = cssVar("--muted", "#475569");
+        if (Number.isFinite(curClose) && Number.isFinite(prevClose)) {
+          barColor = curClose >= prevClose ? cssVar("--candleUp", "#ef4444") : cssVar("--candleDown", "#22c55e");
+        }
+        ctx.fillStyle = barColor;
+        ctx.fillRect(xp - 1.5, Math.min(yp, y0), 3, Math.abs(yp - y0));
+      }
     }
     ctx.restore();
   };
