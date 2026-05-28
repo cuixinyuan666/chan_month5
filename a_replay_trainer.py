@@ -104,6 +104,14 @@ from a_replay_core.a_offline_tick_merge import (
     parse_offline_tick_line,
     rows_to_legacy_ticks,
 )
+from a_replay_record import (
+    ChanRecordApplyResult,
+    build_chan_config_fingerprint,
+    drain_record_trace,
+    push_record_trace,
+    schedule_chan_record_save,
+    try_apply_chan_record,
+)
 from KLine.KLine import CKLine
 from KLine.KLine_List import cal_seg, get_seglist_instance, update_zs_in_seg
 from KLine.KLine_Unit import CKLine_Unit
@@ -115,7 +123,6 @@ from Math.RSI import RSI
 from Math.TrendLine import CTrendLine
 from Seg.Seg import CSeg
 from ZS.ZSList import CZSList
-
 
 class ReplayChan(CChan):
     """使用会话内缓存的日线 K 线单元重建缠论计算，避免重复请求行情。
@@ -3578,6 +3585,9 @@ class ChanStepper:
         self._chart_payload_cache: dict[bool, tuple[int, dict[str, Any]]] = {}
         # unified 模式：全量一次性计算后，仅按 step_idx 切片显示
         self._unified_full_payload: Optional[dict[str, Any]] = None
+        self._chan_record_apply: ChanRecordApplyResult = ChanRecordApplyResult()
+        self._chan_record_fingerprint: str = ""
+        self._chan_record_enabled: bool = True
 
     def _cfg_without_chan_algo(self, cfg_dict: dict[str, Any]) -> dict[str, Any]:
         # 训练器 / API 自用键，勿传入 CChanConfig（否则会触发 unknown para）
@@ -3753,9 +3763,11 @@ class ChanStepper:
         data_form_quantity_alloc: str = "front",
         data_feed_mode: str = "step",
         offline_data_custom: str = "native",
+        chan_record_enabled: bool = True,
     ) -> None:
         # 解析并设置周期类型
         self.k_type = parse_k_type(k_type)
+        self._chan_record_enabled = bool(chan_record_enabled)
         feed_mode = normalize_data_feed_mode(data_feed_mode)
         qty_alloc = normalize_data_form_quantity_alloc(data_form_quantity_alloc)
         off_custom = normalize_offline_data_custom(offline_data_custom)
@@ -3964,54 +3976,143 @@ class ChanStepper:
         else:
             self._replay_klus_master = copy.deepcopy(raw_master)
 
-        self.chan = ReplayChan(
+        autype_key = getattr(autype, "name", str(autype)).lower()
+        k_type_key = k_type_to_api_key(self.k_type)
+        self._chan_record_fingerprint = build_chan_config_fingerprint(
             code=self.code,
-            begin_time=begin_date,
-            end_time=end_date,
-            data_src=self.data_src_used or DATA_SRC.AKSHARE,
-            lv_list=[self.k_type],
-            config=cfg,
-            autype=autype,
-            replay_klus_master=self._replay_klus_master,
+            k_type_key=k_type_key,
+            autype_key=autype_key,
+            chan_cfg_dict=chan_cfg_dict,
+            data_form_mode=self.data_form_mode,
+            data_form_quantity=self.data_form_quantity,
+            data_form_quantity_alloc=self.data_form_quantity_alloc,
+            offline_data_custom=self.offline_data_custom,
+            data_feed_mode=self.data_feed_mode,
+            data_source_priority=data_source_priority,
+            confirm_offline=bool(confirm_offline),
         )
-        self.indicators = {
-            "macd": CMACD(),
-            "kdj": KDJ(),
-            "rsi": RSI(),
-            "boll": BollModel(),
-            "demark": CDemarkEngine(),
-        }
-        self.indicator_history = []
-        self.trend_lines = []
-        self.structure_bundle = None
-        self._bundle_cache_step_idx = None
-        self._serialized_klu_cache = []
-        self._chart_payload_cache = {}
-        self._unified_full_payload = None
-        if self.data_feed_mode == "unified":
-            for _ in self.chan.load(step=False):
-                pass
-            self.step_idx = -1
-            self._iter = None
-            self._rebuild_indicator_history_from_chan()
-            bundle = self.get_structure_bundle(force=True)
-            klu_chart = (
-                serialize_replay_master_klines(self._replay_klus_master)
-                if use_master_kline_for_chart(self.data_form_mode)
-                else None
+        self._chan_record_apply = try_apply_chan_record(
+            self,
+            enabled=self._chan_record_enabled,
+            fingerprint=self._chan_record_fingerprint,
+            code=self.code,
+            k_type_key=k_type_key,
+            autype_key=autype_key,
+            begin_date=begin_date,
+            end_date=end_date,
+            new_master=self._replay_klus_master or [],
+            create_replay_chan_fn=ReplayChan,
+            cfg=cfg,
+            autype=autype,
+            k_type=self.k_type,
+            data_src=self.data_src_used or DATA_SRC.AKSHARE,
+            allow_end_snapshot_restore=False,
+        )
+        chan_bootstrapped = bool(self._chan_record_apply.applied)
+
+        if not chan_bootstrapped:
+            self.chan = ReplayChan(
+                code=self.code,
+                begin_time=begin_date,
+                end_time=end_date,
+                data_src=self.data_src_used or DATA_SRC.AKSHARE,
+                lv_list=[self.k_type],
+                config=cfg,
+                autype=autype,
+                replay_klus_master=self._replay_klus_master,
             )
-            self._unified_full_payload = serialize_chan(
-                self.chan,
-                self.indicator_history,
-                self.trend_lines,
-                chan_algo=self.chan_algo,
-                bundle=bundle,
-                kline_all=self.kline_all,
-                klu_arr_cache=klu_chart,
+            self.indicators = {
+                "macd": CMACD(),
+                "kdj": KDJ(),
+                "rsi": RSI(),
+                "boll": BollModel(),
+                "demark": CDemarkEngine(),
+            }
+            self.indicator_history = []
+            self.trend_lines = []
+            self.structure_bundle = None
+            self._bundle_cache_step_idx = None
+            self._serialized_klu_cache = []
+            self._chart_payload_cache = {}
+            self._unified_full_payload = None
+            if self.data_feed_mode == "unified":
+                for _ in self.chan.load(step=False):
+                    pass
+                self.step_idx = -1
+                self._iter = None
+                self._rebuild_indicator_history_from_chan()
+                bundle = self.get_structure_bundle(force=True)
+                klu_chart = (
+                    serialize_replay_master_klines(self._replay_klus_master)
+                    if use_master_kline_for_chart(self.data_form_mode)
+                    else None
+                )
+                self._unified_full_payload = serialize_chan(
+                    self.chan,
+                    self.indicator_history,
+                    self.trend_lines,
+                    chan_algo=self.chan_algo,
+                    bundle=bundle,
+                    kline_all=self.kline_all,
+                    klu_arr_cache=klu_chart,
+                )
+            else:
+                self._iter = self.chan.step_load()
+                self.step_idx = -1
+
+        if self._chan_record_enabled and not self._chan_record_apply.applied:
+            push_record_trace("缠论record：未命中，将后台异步保存本次全量计算")
+            schedule_chan_record_save(
+                self,
+                enabled=True,
+                fingerprint=self._chan_record_fingerprint,
+                code=self.code,
+                k_type_key=k_type_key,
+                autype_key=autype_key,
+                begin_date=begin_date,
+                end_date=end_date,
+                warmup=True,
             )
-        else:
-            self._iter = self.chan.step_load()
-            self.step_idx = -1
+        elif self._chan_record_enabled and self._chan_record_apply.mode in ("extend", "overlap_replay"):
+            schedule_chan_record_save(
+                self,
+                enabled=True,
+                fingerprint=self._chan_record_fingerprint,
+                code=self.code,
+                k_type_key=k_type_key,
+                autype_key=autype_key,
+                begin_date=begin_date,
+                end_date=end_date,
+                warmup=False,
+            )
+
+        if self.data_feed_mode == "unified" and chan_bootstrapped:
+            self.ensure_unified_full_payload()
+
+    def ensure_unified_full_payload(self) -> bool:
+        """统一喂数据：record 复用或 overlap 重算后补齐序列化图表包。"""
+        if str(self.data_feed_mode) != "unified":
+            return False
+        if self._unified_full_payload is not None:
+            return True
+        if self.chan is None:
+            return False
+        bundle = self.get_structure_bundle(force=True)
+        klu_chart = (
+            serialize_replay_master_klines(self._replay_klus_master)
+            if use_master_kline_for_chart(self.data_form_mode)
+            else None
+        )
+        self._unified_full_payload = serialize_chan(
+            self.chan,
+            self.indicator_history,
+            self.trend_lines,
+            chan_algo=self.chan_algo,
+            bundle=bundle,
+            kline_all=self.kline_all,
+            klu_arr_cache=klu_chart,
+        )
+        return self._unified_full_payload is not None
 
     def _rebuild_indicator_history_from_chan(self) -> None:
         """基于当前 chan 全量重建指标序列（统一喂数据模式使用）。"""
@@ -5193,6 +5294,8 @@ class AppState:
         )
         if pres != "instant":
             return
+        if normalize_data_feed_mode(getattr(self.stepper, "data_feed_mode", "step")) == "unified":
+            self.stepper.ensure_unified_full_payload()
         total = self._replay_bar_total_for_stepper(self.stepper)
         if total <= 0:
             return
@@ -5237,11 +5340,13 @@ class AppState:
             data_form_quantity_alloc=params.get("data_form_quantity_alloc", "front"),
             data_feed_mode=params.get("data_feed_mode", "step"),
             offline_data_custom=params.get("offline_data_custom", "native"),
+            chan_record_enabled=bool(params.get("chan_record_enabled", True)),
         )
         cm = normalize_replay_chart_mode(params.get("chart_mode", "single"))
         off_custom = normalize_offline_data_custom(params.get("offline_data_custom", "native"))
         self.multi_steppers = []
         qty_alloc = params.get("data_form_quantity_alloc", "front")
+        rec_en = bool(params.get("chan_record_enabled", True))
         if cm == "dual":
             self.chart_mode = "dual"
             self.stepper2 = ChanStepper()
@@ -5259,6 +5364,7 @@ class AppState:
                 data_form_quantity_alloc=qty_alloc,
                 data_feed_mode=params.get("data_feed_mode", "step"),
                 offline_data_custom=off_custom,
+                chan_record_enabled=rec_en,
             )
         elif cm == "multi":
             self.chart_mode = "multi"
@@ -5281,6 +5387,7 @@ class AppState:
                     data_form_quantity_alloc=qty_alloc,
                     data_feed_mode=params.get("data_feed_mode", "step"),
                     offline_data_custom=off_custom,
+                    chan_record_enabled=rec_en,
                 )
                 self.multi_steppers.append(st)
         else:
@@ -5513,7 +5620,7 @@ class AppState:
                 "kline_label": data_source_label(self.stepper2.data_src_used),
                 "chip_label": data_source_label(getattr(self.stepper2, "data_src_chip_used", None) or self.stepper2.data_src_used),
             }
-        return {
+        result = {
             "ready": True,
             "finished": self.finished,
             "code": self.stepper.code,
@@ -5585,6 +5692,10 @@ class AppState:
             },
             "trades": self._build_trade_state(),
         }
+        trace = drain_record_trace()
+        if trace:
+            result["record_trace"] = trace
+        return result
 
 
 # ---------------------------------------------------------------------------
@@ -9146,6 +9257,7 @@ const DEFAULT_SYSTEM_CONFIG = {
   rollbackCacheDepth: 96,
   rollbackFullSnapshotInterval: 8,
   rollbackCaptureMaxBars: 30000,
+  chanRecordEnabled: true,
 };
 
 let systemConfig = ensureObject(
@@ -11948,6 +12060,29 @@ function renderSystemSettingsForm() {
   bspSec.appendChild(bspGrid);
   container.appendChild(bspSec);
 
+  const recSec = document.createElement("div");
+  recSec.className = "settingsSection";
+  recSec.style.background = "rgba(99, 102, 241, 0.08)";
+  recSec.innerHTML = `<div class="settingsSectionTitle" style="color:#6366f1">缠论计算 record</div>`;
+  const recGrid = document.createElement("div");
+  recGrid.className = "settingsGrid";
+  const recItem = document.createElement("div");
+  recItem.className = "settingsItem";
+  recItem.style.gridColumn = "1 / -1";
+  const recTip =
+    "同标的+同缠论配置下，首次全量计算后写入工程目录 a_replay_record/；再次加载时按 K 线时间重叠复用（统一喂入可整包恢复）。\n" +
+    "配置指纹含：代码、周期、复权、缠论参数、数据形态/喂入、离线解析、数据源优先级等；不含日期区间（日期写在文件名与 meta）。\n" +
+    "示例：曾算过 2022/10/18–11/30，再开 10/20–12/30 可复用重叠段再增量补算。";
+  recItem.innerHTML = `<label><input type="checkbox" data-sys-key="chanRecordEnabled" ${systemConfig.chanRecordEnabled !== false ? "checked" : ""}/> 启用本地 record 缓存</label> <span class="tip-icon" data-tip="${escapeHtmlAttr(recTip)}">!</span>`;
+  const recNote = document.createElement("div");
+  recNote.className = "muted";
+  recNote.style.fontSize = "12px";
+  recNote.textContent = "关闭后仅内存会话缓存 K 线，不再读写 a_replay_record。环境变量 CHAN_RECORD=0 可全局关闭。";
+  recItem.appendChild(recNote);
+  recGrid.appendChild(recItem);
+  recSec.appendChild(recGrid);
+  container.appendChild(recSec);
+
   const section = document.createElement("div");
   section.className = "settingsSection";
   section.style.background = "rgba(14, 165, 233, 0.08)";
@@ -12185,6 +12320,19 @@ function saveSystemSettingsFromForm() {
     const dataSourcePriority = getDataSourcePriority();
     if (dataSourcePriority && dataSourcePriority.length > 0) {
         systemConfig.dataSourcePriority = dataSourcePriority;
+    }
+
+    const recChk = $("systemSettingsContent").querySelector('input[data-sys-key="chanRecordEnabled"]');
+    if (recChk) {
+        const prevRec = systemConfig.chanRecordEnabled !== false;
+        systemConfig.chanRecordEnabled = !!recChk.checked;
+        if (prevRec !== systemConfig.chanRecordEnabled) {
+            showAlertAndLog(
+                systemConfig.chanRecordEnabled
+                    ? "已启用缠论 record：下次加载同配置会话将尝试从 a_replay_record 复用计算结果。"
+                    : "已关闭缠论 record：不再写入/读取 a_replay_record（已有文件仍保留）。"
+            );
+        }
     }
 
     const inputs = $("systemSettingsContent").querySelectorAll("input[data-action-id]");
@@ -17348,6 +17496,9 @@ function refreshUI(payload, options) {
     }
   }
   lastPayload = payload;
+  if (payload && Array.isArray(payload.record_trace)) {
+    payload.record_trace.forEach((line) => appendMsgHistory(String(line)));
+  }
   updateDualModeUI(payload);
   if (payload && payload.ready && payload.data_form) {
     dataFormConfig.mode = normalizeDataFormMode(payload.data_form.mode);
@@ -17549,6 +17700,7 @@ $("btnInit").onclick = async () => {
       rollback_cache_depth: Number(systemConfig.rollbackCacheDepth || DEFAULT_SYSTEM_CONFIG.rollbackCacheDepth),
       rollback_full_snapshot_interval: Number(systemConfig.rollbackFullSnapshotInterval || DEFAULT_SYSTEM_CONFIG.rollbackFullSnapshotInterval),
       rollback_capture_max_bars: Number(systemConfig.rollbackCaptureMaxBars || DEFAULT_SYSTEM_CONFIG.rollbackCaptureMaxBars),
+      chan_record_enabled: systemConfig.chanRecordEnabled !== false,
       ...extra,
     });
     const cmInit = $("chartMode") ? $("chartMode").value : "single";
@@ -18658,6 +18810,7 @@ def api_init(req: InitReq):
                     data_form_quantity_alloc=getattr(req, "data_form_quantity_alloc", "front"),
                     data_feed_mode=getattr(req, "data_feed_mode", "step"),
                     offline_data_custom=getattr(req, "offline_data_custom", "native"),
+                    chan_record_enabled=bool(getattr(req, "chan_record_enabled", True)),
                 )
                 if APP_STATE.stepper.data_src_used != OFFLINE_INLINE_SRC:
                     raise ValueError(
@@ -18681,6 +18834,7 @@ def api_init(req: InitReq):
                         data_form_quantity_alloc=getattr(req, "data_form_quantity_alloc", "front"),
                         data_feed_mode=getattr(req, "data_feed_mode", "step"),
                         offline_data_custom=getattr(req, "offline_data_custom", "native"),
+                        chan_record_enabled=bool(getattr(req, "chan_record_enabled", True)),
                     )
                     APP_STATE.multi_steppers.append(st)
             else:
@@ -18698,6 +18852,7 @@ def api_init(req: InitReq):
                     data_form_quantity_alloc=getattr(req, "data_form_quantity_alloc", "front"),
                     data_feed_mode=getattr(req, "data_feed_mode", "step"),
                     offline_data_custom=getattr(req, "offline_data_custom", "native"),
+                    chan_record_enabled=bool(getattr(req, "chan_record_enabled", True)),
                 )
                 chart_mode = "dual" if cm_init == "dual" else "single"
                 APP_STATE.chart_mode = chart_mode
@@ -18721,6 +18876,7 @@ def api_init(req: InitReq):
                         data_form_quantity_alloc=getattr(req, "data_form_quantity_alloc", "front"),
                         data_feed_mode=getattr(req, "data_feed_mode", "step"),
                         offline_data_custom=getattr(req, "offline_data_custom", "native"),
+                        chan_record_enabled=bool(getattr(req, "chan_record_enabled", True)),
                     )
         except OfflineDataConfirmRequired as exc:
             raise HTTPException(
@@ -18748,6 +18904,7 @@ def api_init(req: InitReq):
             "begin_date": req.begin_date,
             "end_date": req.end_date,
             "autype": autype,
+            "chan_record_enabled": bool(getattr(req, "chan_record_enabled", True)),
             "initial_cash": req.initial_cash,
             "chan_config": req.chan_config,
             "k_type": k_type_to_api_key(APP_STATE.stepper.k_type),
@@ -18814,6 +18971,19 @@ def api_init(req: InitReq):
             payload["message"] = f"加载成功：{APP_STOCK_NAME or code_norm}，当前数据源 {source_label}，{mode_desc}。"
         else:
             payload["message"] = f"加载成功：{APP_STOCK_NAME or code_norm}，已自动切换到 {source_label}，{mode_desc}。"
+        rec_apply = getattr(APP_STATE.stepper, "_chan_record_apply", None)
+        trace_extra = drain_record_trace()
+        if trace_extra:
+            existing = list(payload.get("record_trace") or [])
+            payload["record_trace"] = existing + trace_extra
+        has_trace = bool(payload.get("record_trace"))
+        if rec_apply and getattr(rec_apply, "applied", False) and getattr(rec_apply, "message", ""):
+            if not has_trace:
+                payload["message"] += f"（缠论 record：{rec_apply.message}）"
+        elif getattr(APP_STATE.stepper, "_chan_record_enabled", True) and not (
+            rec_apply and getattr(rec_apply, "applied", False)
+        ):
+            payload["message"] += "（缠论 record：未命中，后台将异步保存本次全量计算）"
         return payload
     except HTTPException:
         raise

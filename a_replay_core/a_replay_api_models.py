@@ -30,6 +30,8 @@ class InitReq(BaseModel):
     rollback_cache_depth: Optional[int] = None
     rollback_full_snapshot_interval: Optional[int] = None
     rollback_capture_max_bars: Optional[int] = None
+    # 是否读写 a_replay_record 本地缠论计算缓存（默认开）
+    chan_record_enabled: bool = True
 
 
 class ReconfigReq(BaseModel):
