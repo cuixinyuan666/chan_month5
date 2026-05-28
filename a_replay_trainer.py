@@ -47,6 +47,18 @@ from a_replay_cache.a_step_rollback_fast import (
     capture_app_step_delta,
     overlay_app_step_delta,
 )
+from a_replay_cache.a_kline_session_cache import (
+    build_cache_key,
+    kline_session_cache_enabled,
+    save_kline_session,
+    try_load_kline_session,
+)
+from a_replay_core.a_init_perf import (
+    init_perf_enabled,
+    init_perf_report,
+    init_perf_run,
+    init_perf_stage,
+)
 from a_replay_core.a_replay_kline_view import kline_view_rows_filtered
 from a_replay_core.a_replay_presenters import (
     msg_buy,
@@ -397,6 +409,39 @@ def stepper_needs_chip_kline_all(st: Any) -> bool:
     return is_data_form_tick_synth_mode(getattr(st, "data_form_mode", "")) or is_data_form_quantity_mode(
         getattr(st, "data_form_mode", "")
     )
+
+
+def _kline_all_likely_full_history(stepper: Any) -> bool:
+    """粗判 kline_all 是否已是全历史底座（避免 cache_hit 重复拉 1990~）。"""
+    arr = list(getattr(stepper, "kline_all", None) or [])
+    if len(arr) < 800:
+        return False
+    begin = str(getattr(stepper, "_session_begin_date", "") or "").strip()
+    if begin and arr:
+        first_t = str(arr[0].get("t", "") or "")
+        if first_t and begin[:7] not in first_t and first_t[:10] > begin:
+            return False
+    return True
+
+
+def _ensure_offline_chip_bins_enriched(stepper: Any) -> None:
+    """懒加载：仅在需要下发筹码时补全 chip_tick_bins。"""
+    if getattr(stepper, "_chip_bins_enriched", False):
+        return
+    code = getattr(stepper, "code", None)
+    k_type = getattr(stepper, "k_type", None)
+    if (
+        not code
+        or k_type is None
+        or getattr(stepper, "data_src_used", None) != OFFLINE_INLINE_SRC
+        or not (getattr(stepper, "kline_all", None) or [])
+        or k_type not in _offline_chip_supported_ktypes()
+        or not offline_tick_files_exist_for_range(code, "1990-01-01", None)
+    ):
+        stepper._chip_bins_enriched = True
+        return
+    _enrich_kline_all_offline_chip_non_triangle(code, stepper.kline_all, None, k_type)
+    stepper._chip_bins_enriched = True
 
 
 def _chip_kline_all_with_x(bars: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -771,11 +816,11 @@ def _aggregate_kline_dicts_by_quantity(
                     and len(s_arr) == len(ps)
                     and len(b_arr) == len(ps)
                 ):
-                    for j in range(len(ps)):
+                    for p_raw, s_raw, b_raw in zip(ps, s_arr, b_arr):
                         try:
-                            p = round(float(ps[j]), 4)
-                            s_v = float(s_arr[j])
-                            b_v = float(b_arr[j])
+                            p = round(float(p_raw), 4)
+                            s_v = float(s_raw)
+                            b_v = float(b_raw)
                         except (TypeError, ValueError):
                             continue
                         if not (p > 0) or not (s_v == s_v and b_v == b_v) or (s_v <= 0 and b_v <= 0):
@@ -786,10 +831,10 @@ def _aggregate_kline_dicts_by_quantity(
                             b_acc[p] += b_v
                 elif isinstance(w_arr, list) and len(w_arr) == len(ps):
                     # 兼容旧字段：无 s/b 时把总量都当作 B(右红)
-                    for j in range(len(ps)):
+                    for p_raw, w_raw in zip(ps, w_arr):
                         try:
-                            p = round(float(ps[j]), 4)
-                            w = float(w_arr[j])
+                            p = round(float(p_raw), 4)
+                            w = float(w_raw)
                         except (TypeError, ValueError):
                             continue
                         if not (p > 0) or w <= 0 or not (w == w):
@@ -797,11 +842,11 @@ def _aggregate_kline_dicts_by_quantity(
                         b_acc[p] += w
 
         if s_acc or b_acc:
-            ps2 = sorted(set(s_acc.keys()) | set(b_acc.keys()))
+            ps2 = sorted({*s_acc.keys(), *b_acc.keys()})
             if ps2:
                 s_ws2 = [float(s_acc[p]) for p in ps2]
                 b_ws2 = [float(b_acc[p]) for p in ps2]
-                ws2 = [float(s_ws2[i] + b_ws2[i]) for i in range(len(ps2))]
+                ws2 = [float(sv + bv) for sv, bv in zip(s_ws2, b_ws2)]
                 merged["chip_tick_bins"] = {"p": ps2, "s": s_ws2, "b": b_ws2, "w": ws2}
         out.append(merged)
     return out
@@ -2317,23 +2362,31 @@ def _offline_load_ticks(
 
 
 def _offline_ticks_to_1m_from_rows(rows: list[OfflineTickRow]) -> list[dict[str, Any]]:
-    from collections import defaultdict
-
-    buck: dict[tuple[int, int, int, int, int], list[OfflineTickRow]] = defaultdict(list)
+    # 单次扫描分钟桶，避免每桶列表+重复 max/min/sum。
+    # 语义与旧实现一致：按输入顺序取该分钟首价/末价。
+    buck: dict[tuple[int, int, int, int, int], list[float]] = {}
     for row in rows:
         t = row.t
         key = (t.year, t.month, t.day, t.hour, t.minute)
-        buck[key].append(row)
+        price = float(row.price)
+        vol = float(row.vol)
+        hi = float(row.price_hi if row.price_hi is not None else price)
+        lo = float(row.price_lo if row.price_lo is not None else price)
+        cur = buck.get(key)
+        if cur is None:
+            # [open, close, high, low, vol, amount]
+            buck[key] = [price, price, hi, lo, vol, price * vol]
+            continue
+        cur[1] = price
+        if hi > cur[2]:
+            cur[2] = hi
+        if lo < cur[3]:
+            cur[3] = lo
+        cur[4] += vol
+        cur[5] += price * vol
     out: list[dict[str, Any]] = []
-    for key in sorted(buck):
-        y, mo, d, hh, mm = key
-        arr = buck[key]
-        o0 = arr[0].price
-        c0 = arr[-1].price
-        hi = max(r.hi() for r in arr)
-        lo = min(r.lo() for r in arr)
-        v0 = sum(r.vol for r in arr)
-        amt0 = sum(r.price * r.vol for r in arr)
+    for y, mo, d, hh, mm in sorted(buck):
+        o0, c0, hi, lo, v0, amt0 = buck[(y, mo, d, hh, mm)]
         out.append({"t": CTime(y, mo, d, hh, mm, auto=False), "o": o0, "h": hi, "l": lo, "c": c0, "v": v0, "amt": amt0})
     return out
 
@@ -3875,17 +3928,74 @@ class ChanStepper:
         use_for: str = "kline",  # "kline" 或 "chip"
         chain_override: Optional[list[tuple[str, Any]]] = None,
         offline_confirm_suppressed: bool = False,
+        cache_context: Optional[dict[str, Any]] = None,
     ) -> DataSourceSelection:
         """按优先级链选择数据源；K 线与筹码共用排序逻辑，链独立故可选用不同实际源。"""
         logs: list[str] = []
         errors: list[str] = []
+        if cache_context and kline_session_cache_enabled():
+            autype_key = str(cache_context.get("autype_key", "") or getattr(autype, "name", str(autype))).lower()
+            k_type_key = str(cache_context.get("k_type_key", "") or k_type_to_api_key(self.k_type))
+            cache_key = build_cache_key(
+                code=self.code,
+                begin_date=begin_date,
+                end_date=end_date,
+                autype_key=autype_key,
+                k_type_key=k_type_key,
+                use_for=use_for,
+                offline_data_custom=str(cache_context.get("offline_data_custom", "native")),
+                priority=list(cache_context.get("priority") or []),
+                confirm_offline=bool(cache_context.get("confirm_offline", False)),
+            )
+            with init_perf_stage(f"disk_cache_{use_for}"):
+                disk_hit = try_load_kline_session(cache_key)
+            if disk_hit is not None:
+                label = disk_hit.data_src_label or "磁盘缓存"
+                pair = _DATA_SOURCE_NAME_TO_PAIR.get(label)
+                data_src = pair[1] if pair else OFFLINE_INLINE_SRC
+                logs.append(f"K线磁盘缓存命中（{use_for}）：{label}")
+                print(f"[DataSource] disk cache hit {use_for} {disk_hit.cache_path}")
+                return DataSourceSelection(
+                    data_src=data_src,
+                    label=label,
+                    logs=logs,
+                    replay_klus_master=disk_hit.replay_klus_master,
+                    kline_all=disk_hit.kline_all,
+                    stock_name=disk_hit.stock_name,
+                )
         data_chain = chain_override or (DATA_SOURCE_CHAIN_KLINE if use_for == "kline" else DATA_SOURCE_CHAIN_CHIP)
         for idx, (label, data_src) in enumerate(data_chain):
             print(f"[DataSource] try {label} for {self.code} {begin_date} -> {end_date or 'latest'}")
             try:
-                replay_klus_master, kline_all, stock_name = self._fetch_from_single_source(
-                    data_src, begin_date, end_date, autype, chan_cfg_dict, use_for=use_for
-                )
+                with init_perf_stage(f"fetch_{use_for}_{label}"):
+                    replay_klus_master, kline_all, stock_name = self._fetch_from_single_source(
+                        data_src, begin_date, end_date, autype, chan_cfg_dict, use_for=use_for
+                    )
+                if cache_context and kline_session_cache_enabled():
+                    autype_key = str(cache_context.get("autype_key", "") or getattr(autype, "name", str(autype))).lower()
+                    k_type_key = str(cache_context.get("k_type_key", "") or k_type_to_api_key(self.k_type))
+                    cache_key = build_cache_key(
+                        code=self.code,
+                        begin_date=begin_date,
+                        end_date=end_date,
+                        autype_key=autype_key,
+                        k_type_key=k_type_key,
+                        use_for=use_for,
+                        offline_data_custom=str(cache_context.get("offline_data_custom", "native")),
+                        priority=list(cache_context.get("priority") or []),
+                        confirm_offline=bool(cache_context.get("confirm_offline", False)),
+                    )
+                    save_kline_session(
+                        cache_key,
+                        replay_klus_master=replay_klus_master,
+                        kline_all=kline_all,
+                        stock_name=stock_name,
+                        meta_extra={
+                            "data_src_label": label,
+                            "code": self.code,
+                            "use_for": use_for,
+                        },
+                    )
                 if idx == 0:
                     logs.append(f"数据源已连接：{label}")
                 else:
@@ -4058,39 +4168,52 @@ class ChanStepper:
         prio_fp = (tuple(data_source_priority) if data_source_priority else (), bool(confirm_offline))
         session_key = (self.code, begin_date, end_date, autype, self.k_type, prio_fp, off_custom)
         cache_hit = session_key == self._data_session_key and self._replay_klus_master is not None
+        autype_key = getattr(autype, "name", str(autype)).lower()
+        k_type_key = k_type_to_api_key(self.k_type)
+        cache_context = {
+            "autype_key": autype_key,
+            "k_type_key": k_type_key,
+            "offline_data_custom": off_custom,
+            "priority": list(data_source_priority or []),
+            "confirm_offline": bool(confirm_offline),
+        }
 
         if not cache_hit:
-            k_sel = self._select_data_source_with_fallback(
-                begin_date,
-                end_date,
-                autype,
-                chan_cfg_dict,
-                use_for="kline",
-                chain_override=chain_override,
-                offline_confirm_suppressed=confirm_offline,
-            )
-            try:
-                chip_sel = self._select_data_source_with_fallback(
+            with init_perf_stage("data_kline"):
+                k_sel = self._select_data_source_with_fallback(
                     begin_date,
                     end_date,
                     autype,
                     chan_cfg_dict,
-                    use_for="chip",
+                    use_for="kline",
                     chain_override=chain_override,
                     offline_confirm_suppressed=confirm_offline,
+                    cache_context=cache_context,
                 )
+            try:
+                with init_perf_stage("data_chip"):
+                    chip_sel = self._select_data_source_with_fallback(
+                        begin_date,
+                        end_date,
+                        autype,
+                        chan_cfg_dict,
+                        use_for="chip",
+                        chain_override=chain_override,
+                        offline_confirm_suppressed=confirm_offline,
+                        cache_context=cache_context,
+                    )
             except OfflineDataConfirmRequired:
                 raise
             except RuntimeError as exc:
-                self._replay_klus_master = k_sel.replay_klus_master
                 self._replay_klus_master_raw = copy.deepcopy(k_sel.replay_klus_master)
+                self._replay_klus_master = self._replay_klus_master_raw
                 self.kline_all = k_sel.kline_all
                 self.data_src_used = k_sel.data_src
                 self.data_src_chip_used = k_sel.data_src
                 self.data_src_logs = list(k_sel.logs) + [f"筹码全历史与K线同源（筹码链不可用：{format_source_error(exc)}）"]
             else:
-                self._replay_klus_master = k_sel.replay_klus_master
                 self._replay_klus_master_raw = copy.deepcopy(k_sel.replay_klus_master)
+                self._replay_klus_master = self._replay_klus_master_raw
                 # 离线 K 线仅会话区间；筹码底座须 1990~最新全历史（直拉 + 筹码链，取更宽）
                 if k_sel.data_src == OFFLINE_INLINE_SRC:
                     offline_chip_all: list[dict[str, Any]] = []
@@ -4136,14 +4259,7 @@ class ChanStepper:
             stage_t0_ms = int(time.time() * 1000)
             if k_sel.stock_name:
                 self.stock_name = k_sel.stock_name
-            # 离线 + 支持周期：为 kline_all 写 chip_tick_bins（分笔累加），全周期前端不走三角分摊
-            if (
-                self.data_src_used == OFFLINE_INLINE_SRC
-                and self.kline_all
-                and self.k_type in _offline_chip_supported_ktypes()
-                and offline_tick_files_exist_for_range(self.code, "1990-01-01", None)
-            ):
-                _enrich_kline_all_offline_chip_non_triangle(self.code, self.kline_all, None, self.k_type)
+            self._chip_bins_enriched = False
             # #region agent log
             _agent_debug_log_backend(
                 "P4",
@@ -4171,8 +4287,11 @@ class ChanStepper:
                     + "，筹码 "
                     + data_source_label(self.data_src_chip_used or self.data_src_used)
                 ]
-            # 沿用 K 线缓存时仍刷新筹码全历史底座
-            _refresh_stepper_chip_kline_all_base(self, autype)
+            # 沿用内存 K 线缓存：仅当底座不像全历史时才重拉筹码
+            if not _kline_all_likely_full_history(self):
+                with init_perf_stage("chip_refresh"):
+                    _refresh_stepper_chip_kline_all_base(self, autype)
+            self._chip_bins_enriched = False
             # #region agent log
             _agent_debug_log_backend(
                 "P3",
@@ -4244,37 +4363,32 @@ class ChanStepper:
             confirm_offline=bool(confirm_offline),
         )
         # record 快照里的 kline_all 可能是旧会话区间；保留 init 拉到的更宽底座
-        init_kline_all_for_chip = copy.deepcopy(self.kline_all) if self.kline_all else []
-        self._chan_record_apply = try_apply_chan_record(
-            self,
-            enabled=self._chan_record_enabled,
-            fingerprint=self._chan_record_fingerprint,
-            code=self.code,
-            k_type_key=k_type_key,
-            autype_key=autype_key,
-            begin_date=begin_date,
-            end_date=end_date,
-            new_master=self._replay_klus_master or [],
-            create_replay_chan_fn=ReplayChan,
-            cfg=cfg,
-            autype=autype,
-            k_type=self.k_type,
-            data_src=self.data_src_used or DATA_SRC.AKSHARE,
-            allow_end_snapshot_restore=False,
-        )
+        init_kline_all_for_chip = list(self.kline_all) if self.kline_all else []
+        with init_perf_stage("chan_record"):
+            self._chan_record_apply = try_apply_chan_record(
+                self,
+                enabled=self._chan_record_enabled,
+                fingerprint=self._chan_record_fingerprint,
+                code=self.code,
+                k_type_key=k_type_key,
+                autype_key=autype_key,
+                begin_date=begin_date,
+                end_date=end_date,
+                new_master=self._replay_klus_master or [],
+                create_replay_chan_fn=ReplayChan,
+                cfg=cfg,
+                autype=autype,
+                k_type=self.k_type,
+                data_src=self.data_src_used or DATA_SRC.AKSHARE,
+                allow_end_snapshot_restore=False,
+            )
         if self._chan_record_apply.applied and init_kline_all_for_chip:
             wider = _pick_wider_kline_all_for_chip(
                 [init_kline_all_for_chip, list(self.kline_all or [])]
             )
             if wider:
                 self.kline_all = wider
-                if (
-                    self.data_src_used == OFFLINE_INLINE_SRC
-                    and self.kline_all
-                    and self.k_type in _offline_chip_supported_ktypes()
-                    and offline_tick_files_exist_for_range(self.code, "1990-01-01", None)
-                ):
-                    _enrich_kline_all_offline_chip_non_triangle(self.code, self.kline_all, None, self.k_type)
+                self._chip_bins_enriched = False
         if self.kline_all:
             push_record_trace(
                 f"筹码kline_all：{len(self.kline_all)} 根（{self.kline_all[0].get('t', '-')} ~ {self.kline_all[-1].get('t', '-')}）"
@@ -4310,16 +4424,17 @@ class ChanStepper:
         chan_bootstrapped = bool(self._chan_record_apply.applied)
 
         if not chan_bootstrapped:
-            self.chan = ReplayChan(
-                code=self.code,
-                begin_time=begin_date,
-                end_time=end_date,
-                data_src=self.data_src_used or DATA_SRC.AKSHARE,
-                lv_list=[self.k_type],
-                config=cfg,
-                autype=autype,
-                replay_klus_master=self._replay_klus_master,
-            )
+            with init_perf_stage("chan_bootstrap"):
+                self.chan = ReplayChan(
+                    code=self.code,
+                    begin_time=begin_date,
+                    end_time=end_date,
+                    data_src=self.data_src_used or DATA_SRC.AKSHARE,
+                    lv_list=[self.k_type],
+                    config=cfg,
+                    autype=autype,
+                    replay_klus_master=self._replay_klus_master,
+                )
             self.indicators = {
                 "macd": CMACD(),
                 "kdj": KDJ(),
@@ -4696,6 +4811,7 @@ class ChanStepper:
             klu_arr_cache=klu_arr_cache,
         )
         if include_kline_all and self.kline_all:
+            _ensure_offline_chip_bins_enriched(self)
             chip_out = _kline_all_for_chip_payload(
                 self.kline_all, getattr(self, "_session_end_date", None)
             )
@@ -12477,7 +12593,7 @@ function renderSystemSettingsForm() {
   const recNote = document.createElement("div");
   recNote.className = "muted";
   recNote.style.fontSize = "12px";
-  recNote.textContent = "默认关闭（推荐）：避免 record 恢复拖慢加载。勾选后才读写 a_replay_record。环境变量 CHAN_RECORD=0 可全局关闭。";
+  recNote.textContent = "默认关闭：首次加载偏慢，二次同配置可显著加速。K线拉取另存 a_replay_cache/kline_sessions/（环境变量 KLINE_SESSION_CACHE=0 关闭）。CHAN_RECORD=0 全局禁用 record。";
   recItem.appendChild(recNote);
   recGrid.appendChild(recItem);
   recSec.appendChild(recGrid);
@@ -18088,6 +18204,23 @@ function syncRuntimeWindowFromChart(runtime, chart, afterStep) {
   }
 }
 
+async function fetchChipKlineAllLazy(payload) {
+  if (!payload || !payload.ready || payload.chip_kline_all_lazy !== true) return;
+  const cid = String((payload.active_chart_id) || "chart1");
+  try {
+    const r = await api(`/api/chip_kline_all?chart_id=${encodeURIComponent(cid)}`, null, "GET");
+    if (!r || !Array.isArray(r.kline_all) || !r.kline_all.length) return;
+    if (lastPayload && lastPayload.chart) {
+      lastPayload.chart.kline_all = r.kline_all;
+    }
+    chipKlineAllCache = normalizeChipKlineAllX(r.kline_all);
+    const sid = chipSessionIdentity(lastPayload);
+    if (sid) chipKlineAllCacheSessionKey = sid;
+  } catch (e) {
+    console.warn("[chip] lazy kline_all failed", e);
+  }
+}
+
 function refreshUI(payload, options) {
   const afterStep = options && options.afterStep;
   const showStandaloneNotices = options && Object.prototype.hasOwnProperty.call(options, "showStandaloneNotices")
@@ -18511,6 +18644,11 @@ $("btnInit").onclick = async () => {
     stepInFlight = false;
     clearBspPrompt();
     refreshUI(payload);
+    void fetchChipKlineAllLazy(payload);
+    if (payload && payload.init_perf && payload.init_perf.rank && payload.init_perf.rank.length) {
+      const top = payload.init_perf.rank.slice(0, 4).map((r) => `${r.stage}:${r.ms}ms`).join("；");
+      appendMsgHistory(`加载耗时 ${payload.init_perf.total_ms}ms（${top}）`);
+    }
     const srcHistLine = buildSessionSourceHistoryLine(payload);
     if (srcHistLine) appendMsgHistory(srcHistLine);
   } catch (e) {
@@ -19570,6 +19708,11 @@ def index():
 
 @app.post("/api/init")
 def api_init(req: InitReq):
+    with init_perf_run("api_init") as perf_col:
+        return _api_init_impl(req, perf_col)
+
+
+def _api_init_impl(req: InitReq, perf_col: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     try:
         autype_map = {"qfq": AUTYPE.QFQ, "hfq": AUTYPE.HFQ, "none": AUTYPE.NONE}
         autype = autype_map.get(req.autype.lower(), AUTYPE.QFQ)
@@ -19749,7 +19892,9 @@ def api_init(req: InitReq):
             APP_STATE.sync_rhythm_history()
             APP_STATE.after_step_update()
         APP_STATE._rhythm_notice_hits = []
-        payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME)
+        with init_perf_stage("build_payload"):
+            # init 首包省略 kline_all，显著减小 JSON；筹码由 /api/chip_kline_all 懒加载
+            payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME, include_kline_all=False)
         source_label = data_source_label(APP_STATE.stepper.data_src_used)
         if APP_STATE.chart_mode == "dual":
             mode_desc = f"双周期({k_type_to_api_key(APP_STATE.stepper.k_type)}/{k_type_to_api_key(APP_STATE.stepper2.k_type)})"
@@ -19774,11 +19919,40 @@ def api_init(req: InitReq):
             rec_apply and getattr(rec_apply, "applied", False)
         ):
             payload["message"] += "（缠论 record：未命中，后台将异步保存本次全量计算）"
+        if init_perf_enabled() and perf_col is not None:
+            payload["init_perf"] = init_perf_report(
+                {
+                    "chart_mode": APP_STATE.chart_mode,
+                    "chan_record_applied": bool(rec_apply and getattr(rec_apply, "applied", False)),
+                }
+            )
+        payload["chip_kline_all_lazy"] = stepper_needs_chip_kline_all(APP_STATE.stepper)
         return payload
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.get("/api/chip_kline_all")
+def api_chip_kline_all(chart_id: str = "active"):
+    """懒加载筹码全历史 kline_all（init 首包已省略以提速）。"""
+    if not APP_STATE.ready:
+        raise HTTPException(status_code=400, detail="请先加载会话")
+    try:
+        st = _stepper_for_session_kline_view(chart_id, None)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not stepper_needs_chip_kline_all(st):
+        return {"kline_all": [], "chart_id": chart_id}
+    with init_perf_stage("chip_kline_all_api"):
+        _ensure_offline_chip_bins_enriched(st)
+        bars = _kline_all_for_chip_payload(list(st.kline_all or []), getattr(st, "_session_end_date", None))
+    return {
+        "chart_id": chart_id,
+        "kline_all": bars,
+        "count": len(bars),
+    }
 
 
 @app.post("/api/reconfig")
