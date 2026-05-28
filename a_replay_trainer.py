@@ -7346,6 +7346,54 @@ HTML = r"""
     [data-theme="dark"] .chart-settings-detail-body .settingsItem {
       background: rgba(15, 23, 42, 0.35);
     }
+    .chart-settings-branch-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px 14px;
+      margin-top: 10px;
+      padding: 10px 12px;
+      border-radius: 8px;
+      background: rgba(37, 99, 235, 0.05);
+      border: 1px solid rgba(148, 163, 184, 0.35);
+    }
+    .chart-settings-cascade-label {
+      font-size: 12px;
+      font-weight: 600;
+      color: #475569;
+      margin-right: -4px;
+    }
+    [data-theme="dark"] .chart-settings-cascade-label { color: #94a3b8; }
+    .chart-settings-cascade-select {
+      min-width: 128px;
+      max-width: min(100%, 240px);
+      padding: 6px 10px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--panel);
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .chart-settings-cascade-select:disabled {
+      opacity: 0.85;
+      cursor: default;
+      color: #1e40af;
+      font-weight: 600;
+    }
+    .chart-settings-branch-help {
+      margin-left: auto;
+      padding: 5px 12px;
+      font-size: 12px;
+      width: auto;
+      border-radius: 6px;
+    }
+    .chart-settings-branch-subtitle {
+      margin: 2px 0 10px;
+      padding-left: 10px;
+      border-left: 3px solid rgba(37, 99, 235, 0.4);
+      font-size: 13px;
+    }
+    .chart-settings-branch-body { margin-top: 4px; }
     .settingsActions {
       margin-top: 16px;
       display: flex;
@@ -8143,6 +8191,8 @@ function setActiveChart(chartId, persist = true) {
 let selectedMainIndicatorSlot = Number(storageGet("chan_selected_main_indicator_slot") || "0");
 /** 图表显示设置级联面板：当前选中的分组 key */
 let chartSettingsCascadeSelKey = null;
+/** 「级别/中枢/买卖点」组内二级选中（仅 UI 状态，持久化键名不变） */
+let chartSettingsBranchChildSel = ensureObject(safeJsonParse(storageGet("chan_chart_settings_branch_sel"), null), {});
 /** 打开面板时的快照，关闭未保存时恢复 */
 let chartSettingsDraftBaseline = null;
 let selectedSubIndicatorSlot = Number(storageGet("chan_selected_sub_indicator_slot") || "0");
@@ -10244,6 +10294,79 @@ function isSystemSettingsOpen() {
 
 const MULTI_LAYER_STYLE_KEYS = new Set(["fx", "fract", "bi", "seg", "segseg", "fractZs", "biZs", "segZs", "segsegZs", "candle", "bspBi", "bspSeg", "bspSegseg", "rhythmLine", "rhythmHit", "klineCombineFrame"]);
 
+/** 图表显示：级别 / 中枢 / 买卖点 合并导航（子项仍用原 chartConfig 键持久化） */
+const CHART_SETTINGS_BRANCH_GROUPS = [
+  {
+    key: "__branch_level__",
+    title: "级别",
+    color: "#b45309",
+    bgColor: "rgba(180, 83, 9, 0.1)",
+    tip: "分型 / 笔 / 段 / 2段 的缠论线颜色与粗细。\n持久化键：fract、bi、seg、segseg（与旧版相同）。\n多周期单图可在「多周期·某周期」中按周期覆盖。",
+    childKeys: ["fract", "bi", "seg", "segseg"],
+  },
+  {
+    key: "__branch_zs__",
+    title: "中枢",
+    color: "#c2410c",
+    bgColor: "rgba(194, 65, 12, 0.1)",
+    tip: "分型中枢 / 笔中枢 / 段中枢 / 2段中枢。\n持久化键：fractZs、biZs、segZs、segsegZs。",
+    childKeys: ["fractZs", "biZs", "segZs", "segsegZs"],
+  },
+  {
+    key: "__branch_bsp__",
+    title: "买卖点",
+    color: "#be123c",
+    bgColor: "rgba(190, 18, 60, 0.1)",
+    tip: "K 线下方总开关与各层买卖点样式。\n总开关：shared.showBottomBsp；笔/段/2段：bspBi、bspSeg、bspSegseg。",
+    childKeys: ["shared_bsp_bottom", "bspBi", "bspSeg", "bspSegseg"],
+  },
+];
+const CHART_SETTINGS_BRANCH_CHILD_KEYS = new Set(CHART_SETTINGS_BRANCH_GROUPS.flatMap((g) => g.childKeys));
+const CHART_SETTINGS_BRANCH_BY_KEY = Object.fromEntries(CHART_SETTINGS_BRANCH_GROUPS.map((g) => [g.key, g]));
+
+function persistChartSettingsBranchChildSel() {
+  storageSet("chan_chart_settings_branch_sel", JSON.stringify(chartSettingsBranchChildSel));
+}
+
+/** 旧版左侧直接点「分型/笔中枢」等时，映射到合并组并记住子项 */
+function normalizeChartSettingsCascadeSelKey(key) {
+  if (!key || !CHART_SETTINGS_BRANCH_CHILD_KEYS.has(key)) return key;
+  const branch = CHART_SETTINGS_BRANCH_GROUPS.find((b) => b.childKeys.includes(key));
+  if (!branch) return key;
+  if (!chartSettingsBranchChildSel[branch.key]) chartSettingsBranchChildSel[branch.key] = key;
+  persistChartSettingsBranchChildSel();
+  return branch.key;
+}
+
+/** 左侧导航：隐藏已并入「级别/中枢/买卖点」的子节 */
+function buildChartSettingsNavSections(baseSections) {
+  const visible = buildVisibleChartSettingsSections(baseSections);
+  const nav = [];
+  const inserted = new Set();
+  visible.forEach((sec) => {
+    if (CHART_SETTINGS_BRANCH_CHILD_KEYS.has(sec.key)) {
+      const branch = CHART_SETTINGS_BRANCH_GROUPS.find((b) => b.childKeys.includes(sec.key));
+      if (branch && !inserted.has(branch.key)) {
+        inserted.add(branch.key);
+        nav.push({
+          key: branch.key,
+          title: branch.title,
+          color: branch.color,
+          bgColor: branch.bgColor,
+          panel: "branch",
+          branchKey: branch.key,
+          childKeys: branch.childKeys.slice(),
+          tip: branch.tip,
+          items: [],
+        });
+      }
+      return;
+    }
+    nav.push(sec);
+  });
+  return nav;
+}
+
 /** 图表显示设置：单品种多周期单图下按周期覆盖「缠论线/K 线蜡烛」等样式 */
 function appendMultiLayerPerKStyleSections(container, sections, buildLabelHtml) {
   if (!$("chartMode") || $("chartMode").value !== "multi") return;
@@ -10254,7 +10377,7 @@ function appendMultiLayerPerKStyleSections(container, sections, buildLabelHtml) 
   wrap.className = "settingsSection";
   wrap.style.background = "rgba(30, 64, 175, 0.09)";
   wrap.innerHTML = `<div class="settingsSectionTitle" style="color:#1d4ed8">单品种多周期单图 · 各周期样式</div>
-    <div class="muted" style="margin:0 0 10px 4px;font-size:12px;">以下为当前勾选的叠加周期分别配置（持久化在 chan_chart_config.multiPerK）。未填项使用默认值。全局「分型/笔/段」等节仍作用于单周期与双周期图。</div>`;
+    <div class="muted" style="margin:0 0 10px 4px;font-size:12px;">以下为当前勾选的叠加周期分别配置（持久化在 chan_chart_config.multiPerK）。未填项使用默认值。全局「级别 / 中枢 / 买卖点」组内各项仍作用于单周期与双周期图。</div>`;
   container.appendChild(wrap);
   kts.forEach((kt) => {
     const det = document.createElement("details");
@@ -10636,6 +10759,10 @@ function renderMoverlayKtPanelInto(parent, kt, buildLabelHtml) {
 }
 
 function renderChartSettingsSectionInto(detailEl, sec, baseSections, buildLabelHtml) {
+  if (sec.panel === "branch") {
+    renderChartSettingsBranchPanel(detailEl, sec, baseSections, buildLabelHtml);
+    return;
+  }
   detailEl.innerHTML = "";
   const head = document.createElement("div");
   head.className = "chart-settings-detail-head";
@@ -10653,16 +10780,100 @@ function renderChartSettingsSectionInto(detailEl, sec, baseSections, buildLabelH
   detailEl.appendChild(body);
 }
 
+/** 「级别/中枢/买卖点」：级联下拉（类别 → 具体项）+ 配置区 */
+function renderChartSettingsBranchPanel(detailEl, navSec, baseSections, buildLabelHtml) {
+  const branch = CHART_SETTINGS_BRANCH_BY_KEY[navSec.branchKey];
+  if (!branch) return;
+  const visible = buildVisibleChartSettingsSections(baseSections);
+  const childSecs = branch.childKeys.map((k) => visible.find((s) => s.key === k)).filter(Boolean);
+  if (!childSecs.length) {
+    detailEl.innerHTML = '<div class="muted">当前模式下无可用子项。</div>';
+    return;
+  }
+  let selChildKey = chartSettingsBranchChildSel[branch.key];
+  if (!branch.childKeys.includes(selChildKey)) selChildKey = branch.childKeys[0];
+
+  detailEl.innerHTML = "";
+  const head = document.createElement("div");
+  head.className = "chart-settings-detail-head chart-settings-branch-head";
+  head.style.borderLeftColor = branch.color;
+  head.innerHTML = `<strong style="color:${branch.color}">${branch.title}</strong><div class="muted" style="font-size:12px;margin-top:4px;">左侧选组后，用下方下拉选具体项；保存仍写入原有配置键。</div>`;
+
+  const toolbar = document.createElement("div");
+  toolbar.className = "chart-settings-branch-toolbar";
+
+  const grpLbl = document.createElement("span");
+  grpLbl.className = "chart-settings-cascade-label";
+  grpLbl.textContent = "类别";
+  const grpSel = document.createElement("select");
+  grpSel.className = "chart-settings-cascade-select";
+  grpSel.disabled = true;
+  grpSel.innerHTML = `<option selected>${branch.title}</option>`;
+
+  const childLbl = document.createElement("span");
+  childLbl.className = "chart-settings-cascade-label";
+  childLbl.textContent = "具体项";
+  const childSel = document.createElement("select");
+  childSel.className = "chart-settings-cascade-select";
+  childSecs.forEach((cs) => {
+    const opt = document.createElement("option");
+    opt.value = cs.key;
+    opt.textContent = cs.title;
+    if (cs.key === selChildKey) opt.selected = true;
+    childSel.appendChild(opt);
+  });
+
+  const helpBtn = document.createElement("button");
+  helpBtn.type = "button";
+  helpBtn.className = "chart-settings-branch-help";
+  helpBtn.textContent = "说明";
+  helpBtn.setAttribute("data-tip", "查看本组的持久化键与操作说明");
+  helpBtn.onclick = () => showAlertAndLog(branch.tip || branch.title);
+
+  toolbar.append(grpLbl, grpSel, childLbl, childSel, helpBtn);
+  head.appendChild(toolbar);
+  detailEl.appendChild(head);
+
+  const bodyWrap = document.createElement("div");
+  bodyWrap.className = "chart-settings-branch-body";
+  detailEl.appendChild(bodyWrap);
+
+  const paintBody = () => {
+    const cur = childSecs.find((s) => s.key === selChildKey) || childSecs[0];
+    bodyWrap.innerHTML = "";
+    const subHead = document.createElement("div");
+    subHead.className = "chart-settings-branch-subtitle";
+    subHead.innerHTML = `<strong style="color:${cur.color || branch.color}">${cur.title}</strong>`;
+    bodyWrap.appendChild(subHead);
+    const grid = document.createElement("div");
+    grid.className = "chart-settings-detail-body";
+    (cur.items || []).forEach((item) => appendChartSettingsItemTo(grid, cur, item, buildLabelHtml));
+    bodyWrap.appendChild(grid);
+    initTooltips();
+  };
+
+  childSel.onchange = () => {
+    flushChartSettingsFormToMemory();
+    selChildKey = childSel.value;
+    chartSettingsBranchChildSel[branch.key] = selChildKey;
+    persistChartSettingsBranchChildSel();
+    paintBody();
+  };
+
+  paintBody();
+}
+
 /** 单面板级联：左列分组、右列该组全部配置 */
 function mountChartSettingsCascadePanel(container, baseSections, buildLabelHtml) {
-  const sections = buildVisibleChartSettingsSections(baseSections);
+  const sections = buildChartSettingsNavSections(baseSections);
   if (!sections.length) return;
+  chartSettingsCascadeSelKey = normalizeChartSettingsCascadeSelKey(chartSettingsCascadeSelKey);
   if (!chartSettingsCascadeSelKey || !sections.some((s) => s.key === chartSettingsCascadeSelKey)) {
     chartSettingsCascadeSelKey = sections[0].key;
   }
   const shell = document.createElement("div");
   shell.className = "chart-settings-shell";
-  shell.innerHTML = `<div class="muted chart-settings-hint">单面板级联：左侧选分组，右侧编辑该组全部项；内嵌子级联（如步进中断档位）在右侧展开。改完后点「保存并应用」。</div>`;
+  shell.innerHTML = `<div class="muted chart-settings-hint">左侧选分组；「级别 / 中枢 / 买卖点」组内用级联下拉先确认类别、再选具体项（分型/笔中枢等）。配置仍按原键名持久化。改完后点「保存并应用」。</div>`;
   const panel = document.createElement("div");
   panel.className = "settings-cascade chart-settings-cascade";
   const colNav = document.createElement("div");
