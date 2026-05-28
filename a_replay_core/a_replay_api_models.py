@@ -22,6 +22,7 @@ class InitReq(BaseModel):
     data_form_mode: str = "traditional"
     data_form_quantity: Optional[int] = None
     data_form_quantity_alloc: str = "front"  # front=靠前分配 | back=靠后分配
+    offline_data_custom: str = "native"  # native | merge_no_bs
     # 喂数据方式：step=逐K喂数据；unified=一次性喂给缠论计算（仅看画线/筹码）
     data_feed_mode: str = "step"
     kline_presentation_mode: str = "step"  # step=步进呈现 | instant=一次性呈现末根
@@ -36,6 +37,7 @@ class ReconfigReq(BaseModel):
     data_form_mode: Optional[str] = None
     data_form_quantity: Optional[int] = None
     data_form_quantity_alloc: Optional[str] = None
+    offline_data_custom: Optional[str] = None
     data_feed_mode: Optional[str] = None
     kline_presentation_mode: Optional[str] = None
     rollback_cache_depth: Optional[int] = None

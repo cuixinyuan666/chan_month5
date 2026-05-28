@@ -97,6 +97,13 @@ from Common.CTime import CTime
 from DataAPI.BaoStockAPI import CBaoStock
 from DataAPI.CommonStockAPI import CCommonStockApi
 from Common.func_util import str2float
+from a_replay_core.a_offline_tick_merge import (
+    OfflineTickRow,
+    merge_no_bs_offline_ticks,
+    normalize_offline_data_custom,
+    parse_offline_tick_line,
+    rows_to_legacy_ticks,
+)
 from KLine.KLine import CKLine
 from KLine.KLine_List import cal_seg, get_seglist_instance, update_zs_in_seg
 from KLine.KLine_Unit import CKLine_Unit
@@ -298,6 +305,15 @@ def normalize_data_form_mode(raw: Any) -> str:
     mode = str(raw or "traditional").strip().lower()
     allow = {"traditional", "quantity", "tick_traditional", "tick_quantity"}
     return mode if mode in allow else "traditional"
+
+
+# 当前会话离线分笔解析模式（ChanStepper.init 写入）
+_ACTIVE_OFFLINE_DATA_CUSTOM = "native"
+
+
+def set_active_offline_data_custom(mode: Any) -> None:
+    global _ACTIVE_OFFLINE_DATA_CUSTOM
+    _ACTIVE_OFFLINE_DATA_CUSTOM = normalize_offline_data_custom(mode)
 
 def normalize_data_feed_mode(raw: Any) -> str:
     """统一数据喂入模式：step=逐步喂入，unified=统一喂入。"""
@@ -644,11 +660,12 @@ def build_tick_synth_session_data(
     tick_paths = _offline_list_tick_paths(folder, code6, b8, e8)
     if not tick_paths:
         raise ValueError("分笔价格合成模式要求 a_Data 下存在分笔文件（当前日期区间未找到 YYYYMMDD_代码.txt）")
-    ticks = _offline_load_ticks(tick_paths)
-    if not ticks:
+    tick_rows = _offline_load_tick_rows(tick_paths)
+    if not tick_rows:
         raise ValueError("分笔文件在日期区间内无有效成交行")
+    ticks = rows_to_legacy_ticks(tick_rows)
 
-    rows_1m = _offline_ticks_to_1m(ticks)
+    rows_1m = _offline_ticks_to_1m_from_rows(tick_rows)
     bars = _offline_rows_to_ktype(rows_1m, k_type)
     if not bars:
         raise ValueError("分笔价格合成后 K 线为空")
@@ -2098,67 +2115,65 @@ def _offline_list_tick_paths(folder: str, code6: str, b8: int, e8: int) -> list[
     return [p for _, p in out]
 
 
-def _offline_load_ticks(paths: list[str]) -> list[tuple[CTime, float, float, str]]:
-    """
-    读取离线分笔 txt（a_Data/代码/YYYYMMDD_代码.txt）。
-
-    行格式一般为：时间 价格 成交 笔数 B/S(可选)；B/S 用于筹码左右拆分：S(左绿) / B(右红)。
-    """
-    ticks: list[tuple[CTime, float, float, str]] = []
+def _offline_load_tick_rows(
+    paths: list[str], offline_data_custom: Any | None = None
+) -> list[OfflineTickRow]:
+    """读取离线分笔；merge_no_bs 时开盘向下/收盘向上合并无 B/S 行。"""
+    mode = normalize_offline_data_custom(offline_data_custom or _ACTIVE_OFFLINE_DATA_CUSTOM)
+    rows: list[OfflineTickRow] = []
     for p in paths:
         base = os.path.basename(p)
         d8 = int(base.split("_")[0])
         y, mo, d0 = d8 // 10000, (d8 // 100) % 100, d8 % 100
         with open(p, "r", encoding="utf-8", errors="ignore") as f:
             for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                parts = re.split(r"\s+", line)
-                if len(parts) < 3:
-                    continue
-                if parts[0] in ("时间", "---") or parts[0].startswith("时间"):
-                    continue
-                if not re.match(r"^\d{1,2}:\d{2}$", parts[0]):
-                    continue
-                a, b = parts[0].split(":", 1)
-                hh, mm = int(a), int(b)
-                price = str2float(parts[1])
-                vol = str2float(parts[2])
-                side = ""
-                # B/S 通常在最后一列（且在 parts[3:] 内）
-                for tok in parts[3:]:
-                    s = str(tok).strip().upper()
-                    if s in ("B", "S"):
-                        side = s
-                        break
-                # 兜底：无法解析方向时按 B 处理（右红）
-                if side not in ("B", "S"):
-                    side = "B"
-                ticks.append((CTime(y, mo, d0, hh, mm, auto=False), price, vol, side))
-    ticks.sort(key=lambda x: x[0].ts)
-    return ticks
+                row = parse_offline_tick_line(line, y, mo, d0)
+                if row is not None:
+                    rows.append(row)
+    rows.sort(key=lambda x: x.t.ts)
+    if mode == "merge_no_bs":
+        return merge_no_bs_offline_ticks(rows)
+    for r in rows:
+        if not r.has_bs:
+            r.side = "B"
+    return rows
 
 
-def _offline_ticks_to_1m(ticks: list[tuple[CTime, float, float, str]]) -> list[dict[str, Any]]:
+def _offline_load_ticks(
+    paths: list[str], offline_data_custom: Any | None = None
+) -> list[tuple[CTime, float, float, str]]:
+    """兼容四元组接口；B/S 用于筹码 S(左绿)/B(右红)。"""
+    return rows_to_legacy_ticks(_offline_load_tick_rows(paths, offline_data_custom))
+
+
+def _offline_ticks_to_1m_from_rows(rows: list[OfflineTickRow]) -> list[dict[str, Any]]:
     from collections import defaultdict
 
-    buck: dict[tuple[int, int, int, int, int], list[tuple[float, float]]] = defaultdict(list)
-    for t, price, vol, _side in ticks:
+    buck: dict[tuple[int, int, int, int, int], list[OfflineTickRow]] = defaultdict(list)
+    for row in rows:
+        t = row.t
         key = (t.year, t.month, t.day, t.hour, t.minute)
-        buck[key].append((price, vol))
-    rows: list[dict[str, Any]] = []
+        buck[key].append(row)
+    out: list[dict[str, Any]] = []
     for key in sorted(buck):
         y, mo, d, hh, mm = key
         arr = buck[key]
-        o0 = arr[0][0]
-        c0 = arr[-1][0]
-        hi = max(x[0] for x in arr)
-        lo = min(x[0] for x in arr)
-        v0 = sum(x[1] for x in arr)
-        amt0 = sum(x[0] * x[1] for x in arr)
-        rows.append({"t": CTime(y, mo, d, hh, mm, auto=False), "o": o0, "h": hi, "l": lo, "c": c0, "v": v0, "amt": amt0})
-    return rows
+        o0 = arr[0].price
+        c0 = arr[-1].price
+        hi = max(r.hi() for r in arr)
+        lo = min(r.lo() for r in arr)
+        v0 = sum(r.vol for r in arr)
+        amt0 = sum(r.price * r.vol for r in arr)
+        out.append({"t": CTime(y, mo, d, hh, mm, auto=False), "o": o0, "h": hi, "l": lo, "c": c0, "v": v0, "amt": amt0})
+    return out
+
+
+def _offline_ticks_to_1m(ticks: list[tuple[CTime, float, float, str]]) -> list[dict[str, Any]]:
+    """由四元组分笔聚合 1 分钟（兼容旧调用）。"""
+    rows = [
+        OfflineTickRow(t, price, vol, side, side in ("B", "S")) for t, price, vol, side in ticks
+    ]
+    return _offline_ticks_to_1m_from_rows(rows)
 
 
 def _offline_merge_bar_group(lst: list[dict[str, Any]]) -> dict[str, Any]:
@@ -3555,6 +3570,7 @@ class ChanStepper:
         self.data_form_quantity: int = 0
         self.data_form_quantity_alloc: str = "front"
         self.data_feed_mode: str = "step"
+        self.offline_data_custom: str = "native"
         self.raw_kline_count: int = 0
         # 步进增量缓存：避免每次 payload 全量遍历 klu_iter()
         self._serialized_klu_cache: list[dict[str, Any]] = []
@@ -3579,6 +3595,7 @@ class ChanStepper:
                 "data_form_mode",
                 "data_form_quantity",
                 "data_form_quantity_alloc",
+                "offline_data_custom",
                 "kline_presentation_mode",
                 "rhythm_calc_mode",
             }
@@ -3735,11 +3752,15 @@ class ChanStepper:
         data_form_quantity: Optional[int] = None,
         data_form_quantity_alloc: str = "front",
         data_feed_mode: str = "step",
+        offline_data_custom: str = "native",
     ) -> None:
         # 解析并设置周期类型
         self.k_type = parse_k_type(k_type)
         feed_mode = normalize_data_feed_mode(data_feed_mode)
         qty_alloc = normalize_data_form_quantity_alloc(data_form_quantity_alloc)
+        off_custom = normalize_offline_data_custom(offline_data_custom)
+        set_active_offline_data_custom(off_custom)
+        self.offline_data_custom = off_custom
         
         self.data_src_chip_used = None
 
@@ -3837,7 +3858,7 @@ class ChanStepper:
             if not chain_override:
                 chain_override = None
         prio_fp = (tuple(data_source_priority) if data_source_priority else (), bool(confirm_offline))
-        session_key = (self.code, begin_date, end_date, autype, self.k_type, prio_fp)
+        session_key = (self.code, begin_date, end_date, autype, self.k_type, prio_fp, off_custom)
         cache_hit = session_key == self._data_session_key and self._replay_klus_master is not None
 
         if not cache_hit:
@@ -5215,8 +5236,10 @@ class AppState:
             data_form_quantity=params.get("data_form_quantity"),
             data_form_quantity_alloc=params.get("data_form_quantity_alloc", "front"),
             data_feed_mode=params.get("data_feed_mode", "step"),
+            offline_data_custom=params.get("offline_data_custom", "native"),
         )
         cm = normalize_replay_chart_mode(params.get("chart_mode", "single"))
+        off_custom = normalize_offline_data_custom(params.get("offline_data_custom", "native"))
         self.multi_steppers = []
         qty_alloc = params.get("data_form_quantity_alloc", "front")
         if cm == "dual":
@@ -5235,6 +5258,7 @@ class AppState:
                 data_form_quantity=params.get("data_form_quantity"),
                 data_form_quantity_alloc=qty_alloc,
                 data_feed_mode=params.get("data_feed_mode", "step"),
+                offline_data_custom=off_custom,
             )
         elif cm == "multi":
             self.chart_mode = "multi"
@@ -5256,6 +5280,7 @@ class AppState:
                     data_form_quantity=params.get("data_form_quantity"),
                     data_form_quantity_alloc=qty_alloc,
                     data_feed_mode=params.get("data_feed_mode", "step"),
+                    offline_data_custom=off_custom,
                 )
                 self.multi_steppers.append(st)
         else:
@@ -5340,6 +5365,7 @@ class AppState:
         data_form_mode: Optional[str] = None,
         data_form_quantity: Optional[int] = None,
         data_form_quantity_alloc: Optional[str] = None,
+        offline_data_custom: Optional[str] = None,
         data_feed_mode: Optional[str] = None,
         kline_presentation_mode: Optional[str] = None,
         rollback_cache_depth: Optional[int] = None,
@@ -5359,6 +5385,8 @@ class AppState:
             self.session_params["data_form_quantity_alloc"] = normalize_data_form_quantity_alloc(
                 data_form_quantity_alloc
             )
+        if offline_data_custom is not None:
+            self.session_params["offline_data_custom"] = normalize_offline_data_custom(offline_data_custom)
         if data_feed_mode is not None:
             self.session_params["data_feed_mode"] = normalize_data_feed_mode(data_feed_mode)
         if kline_presentation_mode is not None:
@@ -5391,6 +5419,7 @@ class AppState:
                 data_form_mode,
                 data_form_quantity,
                 data_form_quantity_alloc,
+                offline_data_custom,
                 data_feed_mode,
             )
         )
@@ -5523,6 +5552,9 @@ class AppState:
                     getattr(self.stepper, "data_form_quantity_alloc", "front")
                 ),
                 "feed_mode": normalize_data_feed_mode(getattr(self.stepper, "data_feed_mode", "step")),
+                "offline_data_custom": normalize_offline_data_custom(
+                    getattr(self.stepper, "offline_data_custom", "native")
+                ),
                 "presentation_mode": normalize_kline_presentation_mode(
                     (self.session_params or {}).get("kline_presentation_mode", "step")
                 ),
@@ -6027,6 +6059,7 @@ def run_indicator_backtest(req: IndicatorBacktestReq) -> dict[str, Any]:
         data_form_quantity=req.data_form_quantity,
         data_form_quantity_alloc=getattr(req, "data_form_quantity_alloc", "front"),
         data_feed_mode=getattr(req, "data_feed_mode", "step"),
+        offline_data_custom=getattr(req, "offline_data_custom", "native"),
     )
     sim.stepper2 = None
     if sim.chart_mode == "dual":
@@ -6044,6 +6077,7 @@ def run_indicator_backtest(req: IndicatorBacktestReq) -> dict[str, Any]:
             data_form_quantity=req.data_form_quantity,
             data_form_quantity_alloc=getattr(req, "data_form_quantity_alloc", "front"),
             data_feed_mode=getattr(req, "data_feed_mode", "step"),
+            offline_data_custom=getattr(req, "offline_data_custom", "native"),
         )
     sim.session_params = {
         "code": code_norm,
@@ -6061,6 +6095,7 @@ def run_indicator_backtest(req: IndicatorBacktestReq) -> dict[str, Any]:
         "data_form_mode": normalize_data_form_mode(req.data_form_mode),
         "data_form_quantity": req.data_form_quantity,
         "data_feed_mode": normalize_data_feed_mode(getattr(req, "data_feed_mode", "step")),
+        "offline_data_custom": normalize_offline_data_custom(getattr(req, "offline_data_custom", "native")),
     }
     sim.ready = True
 
@@ -8108,6 +8143,8 @@ function setActiveChart(chartId, persist = true) {
 let selectedMainIndicatorSlot = Number(storageGet("chan_selected_main_indicator_slot") || "0");
 /** 图表显示设置级联面板：当前选中的分组 key */
 let chartSettingsCascadeSelKey = null;
+/** 打开面板时的快照，关闭未保存时恢复 */
+let chartSettingsDraftBaseline = null;
 let selectedSubIndicatorSlot = Number(storageGet("chan_selected_sub_indicator_slot") || "0");
 let indicatorMainSlots = ensureObject(safeJsonParse(storageGet("chan_indicator_main_slots"), null), null);
 let indicatorSubSlots = ensureObject(safeJsonParse(storageGet("chan_indicator_sub_slots"), null), null);
@@ -8586,8 +8623,28 @@ const DATA_FORM_DEFAULT = {
   quantityAlloc: "front",
   feedMode: "step",
   klinePresentation: "step",
+  offlineDataCustom: "native",
 };
 let dataFormConfig = { ...DATA_FORM_DEFAULT };
+
+const OFFLINE_DATA_CUSTOM_HELP =
+  "【离线数据自定义】\n" +
+  "原生：分笔按文件原样解析（无 B/S 标记行默认按 B 处理）。\n" +
+  "无BS向上或向下合并：\n" +
+  "1) 开盘侧连续无 B/S（例 09:25）→ 成交量累加到下一根有 B/S 或常规成交行（例 09:30）；\n" +
+  "   价格若在目标高低之间则不改价，低于最低价则扩低，高于最高价则扩高。\n" +
+  "2) 收盘侧连续无 B/S（例 15:00–15:07 多根）→ 向上合并到上一根有 B/S（例 14:57），价格规则同上。\n" +
+  "3) 保存后使用离线包或分笔合成模式时会重新加载分笔并重算。";
+
+function normalizeOfflineDataCustom(mode) {
+  const m = String(mode || "native").toLowerCase();
+  if (m === "merge_no_bs" || m === "merge" || m === "无bs" || m.includes("合并")) return "merge_no_bs";
+  return "native";
+}
+
+function offlineDataCustomLabel(mode) {
+  return normalizeOfflineDataCustom(mode) === "merge_no_bs" ? "无BS向上或者向下合并" : "原生";
+}
 
 function normalizeDataFormQuantityAlloc(alloc) {
   const m = String(alloc || "front").toLowerCase();
@@ -8918,6 +8975,7 @@ async function applyQuantityFromKeyboard(rawQ) {
       data_form_quantity: nextQ,
       data_form_quantity_alloc: normalizeDataFormQuantityAlloc(dataFormConfig.quantityAlloc),
       data_feed_mode: normalizeDataFeedMode(dataFormConfig.feedMode),
+      offline_data_custom: normalizeOfflineDataCustom(dataFormConfig.offlineDataCustom),
       kline_presentation_mode: normalizeKlinePresentationMode(dataFormConfig.klinePresentation),
       rollback_cache_depth: Number(systemConfig.rollbackCacheDepth || DEFAULT_SYSTEM_CONFIG.rollbackCacheDepth),
       rollback_full_snapshot_interval: Number(systemConfig.rollbackFullSnapshotInterval || DEFAULT_SYSTEM_CONFIG.rollbackFullSnapshotInterval),
@@ -9526,6 +9584,7 @@ function saveSessionConfig() {
     dataFormQuantityAlloc: normalizeDataFormQuantityAlloc(dataFormConfig.quantityAlloc),
     dataFeedMode: normalizeDataFeedMode(dataFormConfig.feedMode),
     klinePresentationMode: normalizeKlinePresentationMode(dataFormConfig.klinePresentation),
+    offlineDataCustom: normalizeOfflineDataCustom(dataFormConfig.offlineDataCustom),
   };
   storageSet("chan_session_config", JSON.stringify(sessionConfig));
 }
@@ -9590,6 +9649,9 @@ function loadSessionConfig() {
     );
     dataFormConfig.klinePresentation = normalizeKlinePresentationMode(
       sessionConfig.klinePresentationMode != null ? sessionConfig.klinePresentationMode : dataFormConfig.klinePresentation
+    );
+    dataFormConfig.offlineDataCustom = normalizeOfflineDataCustom(
+      sessionConfig.offlineDataCustom != null ? sessionConfig.offlineDataCustom : dataFormConfig.offlineDataCustom
     );
     if (!Array.isArray(sessionConfig.multiLayerHidden)) sessionConfig.multiLayerHidden = [];
     applyKTypesMultiToDomFromList(sessionConfig.kTypesMulti);
@@ -10000,17 +10062,163 @@ function resetChanSettings() {
   }
 }
 
+function captureChartSettingsDraftBaseline() {
+  chartSettingsDraftBaseline = {
+    chartConfig: JSON.parse(JSON.stringify(chartConfig)),
+    chartConfigStore: JSON.parse(JSON.stringify(chartConfigStore)),
+    dataFormConfig: JSON.parse(JSON.stringify(dataFormConfig)),
+    selectedMainIndicatorSlot,
+    selectedSubIndicatorSlot,
+    indicatorMainSlots: JSON.parse(JSON.stringify(indicatorMainSlots)),
+    indicatorSubSlots: JSON.parse(JSON.stringify(indicatorSubSlots)),
+    crosshairEnabled,
+  };
+}
+
+function restoreChartSettingsDraftBaseline() {
+  if (!chartSettingsDraftBaseline) return;
+  const b = chartSettingsDraftBaseline;
+  chartConfig = JSON.parse(JSON.stringify(b.chartConfig));
+  chartConfigStore = JSON.parse(JSON.stringify(b.chartConfigStore));
+  dataFormConfig = JSON.parse(JSON.stringify(b.dataFormConfig));
+  selectedMainIndicatorSlot = b.selectedMainIndicatorSlot;
+  selectedSubIndicatorSlot = b.selectedSubIndicatorSlot;
+  indicatorMainSlots = JSON.parse(JSON.stringify(b.indicatorMainSlots));
+  indicatorSubSlots = JSON.parse(JSON.stringify(b.indicatorSubSlots));
+  crosshairEnabled = b.crosshairEnabled;
+  chartSettingsDraftBaseline = null;
+}
+
+/** 将当前可见表单写入内存草稿（切换分组前调用，不写 localStorage） */
+function flushChartSettingsFormToMemory() {
+  const root = $("settingsContent");
+  if (!root || !isSettingsOpen()) return;
+  const inputs = root.querySelectorAll("input, select");
+  let nextDataFormMode = dataFormConfig.mode;
+  let nextDataFormQuantity = dataFormConfig.quantity;
+  let nextDataFormQuantityAlloc = dataFormConfig.quantityAlloc;
+  let nextDataFeedMode = dataFormConfig.feedMode;
+  let nextKlinePresentation = dataFormConfig.klinePresentation;
+  let nextOfflineDataCustom = dataFormConfig.offlineDataCustom;
+  inputs.forEach((input) => {
+    const key = input.dataset.key;
+    const subkey = input.dataset.subkey;
+    const mkt = input.dataset.multiKt;
+    if (mkt && key && subkey && !subkey.endsWith("-text")) {
+      let val;
+      if (input.type === "checkbox") val = input.checked;
+      else if (input.type === "number") val = parseFloat(input.value);
+      else val = input.value;
+      if (subkey === "dash" && typeof val === "string") {
+        const arr = val.split(",").map((n) => parseFloat(n.trim())).filter((n) => !Number.isNaN(n));
+        val = arr.length > 0 ? arr : null;
+      }
+      if (key === "rhythmLine" && subkey === "maxLayer") val = Math.max(0, Math.min(9, Math.floor(Number(val))));
+      if (key === "rhythmLine" && subkey === "calcMode") val = normalizeRhythmCalcMode(val);
+      if (!chartConfigStore.multiPerK) chartConfigStore.multiPerK = {};
+      if (!chartConfigStore.multiPerK[mkt]) chartConfigStore.multiPerK[mkt] = {};
+      if (!chartConfigStore.multiPerK[mkt][key]) chartConfigStore.multiPerK[mkt][key] = {};
+      chartConfigStore.multiPerK[mkt][key][subkey] = val;
+      return;
+    }
+    const mokt = input.dataset.moverlayKt;
+    const mosub = input.dataset.moverlaySubkey;
+    if (mokt && mosub) {
+      let valMo;
+      if (input.type === "number") valMo = parseFloat(input.value);
+      else valMo = input.value;
+      if (!chartConfig.multiOverlay) chartConfig.multiOverlay = JSON.parse(JSON.stringify(DEFAULT_CHART_CONFIG.multiOverlay));
+      if (!chartConfig.multiOverlay.layers) chartConfig.multiOverlay.layers = {};
+      if (!chartConfig.multiOverlay.layers[mokt]) chartConfig.multiOverlay.layers[mokt] = {};
+      if (input.type === "number") {
+        if (!Number.isFinite(valMo)) delete chartConfig.multiOverlay.layers[mokt][mosub];
+        else {
+          let v = valMo;
+          if (/Alpha$/.test(mosub) || mosub === "alpha" || mosub === "lineAlpha") v = Math.min(1, Math.max(0.05, v));
+          chartConfig.multiOverlay.layers[mokt][mosub] = v;
+        }
+      } else chartConfig.multiOverlay.layers[mokt][mosub] = valMo;
+      return;
+    }
+    if (!key || !subkey || subkey.endsWith("-text")) return;
+    let val;
+    if (input.type === "checkbox") val = input.checked;
+    else if (input.type === "number") val = parseFloat(input.value);
+    else val = input.value;
+    if (key === "theme_section") chartConfig.theme = val;
+    else if (key === "shared_bsp_bottom" && subkey === "enabled") chartConfigStore.shared.showBottomBsp = !!val;
+    else if (key === "dataForm") {
+      if (subkey === "mode") nextDataFormMode = normalizeDataFormMode(val);
+      if (subkey === "quantity") nextDataFormQuantity = clampDataFormQuantity(val, getRawKlineCount() || dataFormConfig.quantity || 1);
+      if (subkey === "quantityAlloc") nextDataFormQuantityAlloc = normalizeDataFormQuantityAlloc(val);
+      if (subkey === "feedMode") nextDataFeedMode = normalizeDataFeedMode(val);
+      if (subkey === "klinePresentation") nextKlinePresentation = normalizeKlinePresentationMode(val);
+      if (subkey === "offlineDataCustom") nextOfflineDataCustom = normalizeOfflineDataCustom(val);
+    } else if (key === "indicators") {
+      if (subkey === "mainSlot") selectedMainIndicatorSlot = Number(val);
+      else if (subkey === "subSlot") selectedSubIndicatorSlot = Number(val);
+      else if (subkey === "mainType") {
+        const selected = [];
+        root.querySelectorAll(".indicator-check-main").forEach((c) => { if (c.checked) selected.push(c.value); });
+        indicatorMainSlots[String(selectedMainIndicatorSlot)] = selected;
+      } else if (subkey === "subType") {
+        const selected = [];
+        root.querySelectorAll(".indicator-check-sub").forEach((c) => { if (c.checked) selected.push(c.value); });
+        indicatorSubSlots[String(selectedSubIndicatorSlot)] = selected;
+      }
+    } else if (key === "crosshair" && subkey === "enabled") {
+      crosshairEnabled = !!val;
+      if (!chartConfig.crosshair) chartConfig.crosshair = {};
+      chartConfig.crosshair.enabled = crosshairEnabled;
+    } else if (key && subkey) {
+      if (subkey === "dash" && typeof val === "string") {
+        const arr = val.split(",").map((n) => parseFloat(n.trim())).filter((n) => !Number.isNaN(n));
+        val = arr.length > 0 ? arr : null;
+      }
+      if (key === "rhythmLine" && subkey === "maxLayer") val = Math.max(0, Math.min(9, Math.floor(Number(val))));
+      if (key === "rhythmLine" && subkey === "calcMode") val = normalizeRhythmCalcMode(val);
+      if (!chartConfig[key]) chartConfig[key] = {};
+      chartConfig[key][subkey] = val;
+    }
+  });
+  root.querySelectorAll('input[type="text"][data-multi-kt]').forEach((textInput) => {
+    const sk = textInput.dataset.subkey || "";
+    if (!sk.endsWith("-text")) return;
+    const mainKey = sk.slice(0, -5);
+    const mkt = textInput.dataset.multiKt;
+    const key = textInput.dataset.key;
+    if (!mkt || !key) return;
+    const col = textInput.parentElement && textInput.parentElement.querySelector(`input[type="color"][data-multi-kt="${mkt}"][data-key="${key}"][data-subkey="${mainKey}"]`);
+    const v = (textInput.value && String(textInput.value).trim()) || (col && col.value) || "#000000";
+    if (!chartConfigStore.multiPerK) chartConfigStore.multiPerK = {};
+    if (!chartConfigStore.multiPerK[mkt]) chartConfigStore.multiPerK[mkt] = {};
+    if (!chartConfigStore.multiPerK[mkt][key]) chartConfigStore.multiPerK[mkt][key] = {};
+    chartConfigStore.multiPerK[mkt][key][mainKey] = v;
+  });
+  dataFormConfig.mode = nextDataFormMode;
+  dataFormConfig.quantity = nextDataFormQuantity;
+  dataFormConfig.quantityAlloc = nextDataFormQuantityAlloc;
+  dataFormConfig.feedMode = nextDataFeedMode;
+  dataFormConfig.klinePresentation = nextKlinePresentation;
+  dataFormConfig.offlineDataCustom = nextOfflineDataCustom;
+}
+
 function openSettings() {
   if (isSystemSettingsOpen()) closeSystemSettings();
   if (!chartConfig.crosshair) chartConfig.crosshair = {};
   chartConfig.crosshair.enabled = !!crosshairEnabled;
+  captureChartSettingsDraftBaseline();
   const panel = $("settingsModal") && $("settingsModal").querySelector(".panel");
   if (panel) panel.classList.add("chart-settings-panel");
   renderSettingsForm();
   $("settingsModal").classList.add("show");
 }
 
+let chartSettingsCloseKeepDraft = false;
+
 function closeSettings() {
+  if (!chartSettingsCloseKeepDraft) restoreChartSettingsDraftBaseline();
+  chartSettingsCloseKeepDraft = false;
   $("settingsModal").classList.remove("show");
   const panel = $("settingsModal") && $("settingsModal").querySelector(".panel");
   if (panel) panel.classList.remove("chart-settings-panel");
@@ -10249,14 +10457,24 @@ function appendChartSettingsItemTo(parent, sec, item, buildLabelHtml) {
         if (isQuantityDataFormMode(select.value)) select.value = "traditional";
       }
     }
+    if (sec.key === "dataForm" && item.subKey === "offlineDataCustom") {
+      const sel = itemDiv.querySelector("select");
+      sel.onchange = () => {
+        if (normalizeOfflineDataCustom(sel.value) === "merge_no_bs") {
+          showAlertAndLog(OFFLINE_DATA_CUSTOM_HELP);
+        }
+      };
+    }
     if (sec.key === "indicators" && item.subKey === "mainSlot") {
       itemDiv.querySelector("select").onchange = (e) => {
+        flushChartSettingsFormToMemory();
         selectedMainIndicatorSlot = Number(e.target.value);
         storageSet("chan_selected_main_indicator_slot", String(selectedMainIndicatorSlot));
         renderSettingsForm();
       };
     } else if (sec.key === "indicators" && item.subKey === "subSlot") {
       itemDiv.querySelector("select").onchange = (e) => {
+        flushChartSettingsFormToMemory();
         selectedSubIndicatorSlot = Number(e.target.value);
         storageSet("chan_selected_sub_indicator_slot", String(selectedSubIndicatorSlot));
         renderSettingsForm();
@@ -10299,6 +10517,13 @@ function appendChartSettingsItemTo(parent, sec, item, buildLabelHtml) {
     cascadeRoot.className = "settings-cascade interrupt-bsp-cascade";
     itemDiv.appendChild(cascadeRoot);
     mountInterruptBspCascade(cascadeRoot, sectionCfg);
+  } else if (item.type === "nested_cascade") {
+    itemDiv.classList.add("settingsItemWide");
+    itemDiv.innerHTML = `<div class="muted" style="font-size:12px;margin-bottom:8px;">${item.tip || "二级分类 → 具体配置项。"}</div>`;
+    const cascadeRoot = document.createElement("div");
+    cascadeRoot.className = "settings-cascade chart-nested-cascade";
+    itemDiv.appendChild(cascadeRoot);
+    mountChartNestedCascade(cascadeRoot, sec.key, item.tree || [], buildLabelHtml);
   } else if (item.type === "checkbox") {
     itemDiv.innerHTML += `<label style="flex-direction:row;align-items:center;display:flex;"><input type="checkbox" ${val ? "checked" : ""} data-key="${sec.key}" data-subkey="${item.subKey}" style="width:auto;margin-right:8px;">${item.label}</label>`;
   } else if (item.type === "color") {
@@ -10460,6 +10685,7 @@ function mountChartSettingsCascadePanel(container, baseSections, buildLabelHtml)
       el.textContent = sec.title;
       if (sec.color) el.style.boxShadow = sec.key === chartSettingsCascadeSelKey ? `inset 3px 0 0 ${sec.color}` : `inset 3px 0 0 transparent`;
       el.onclick = () => {
+        flushChartSettingsFormToMemory();
         chartSettingsCascadeSelKey = sec.key;
         paint();
       };
@@ -10644,6 +10870,51 @@ function mountInterruptBspCascade(root, toastCfg) {
   renderAll();
 }
 
+/** 图表显示：分组内二级级联（子类 → 配置项） */
+function mountChartNestedCascade(root, sectionKey, tree, buildLabelHtml) {
+  let selCatId = (tree[0] && tree[0].id) || "";
+  const colCat = document.createElement("div");
+  colCat.className = "settings-cascade-col";
+  colCat.innerHTML = `<div class="settings-cascade-head">1. 子类</div><div class="settings-cascade-list" data-nested-cat="1"></div>`;
+  const colDetail = document.createElement("div");
+  colDetail.className = "settings-cascade-col";
+  colDetail.innerHTML = `<div class="settings-cascade-head">2. 配置项</div><div class="settings-cascade-panel" data-nested-detail="1"></div>`;
+  root.appendChild(colCat);
+  root.appendChild(colDetail);
+  const listCat = colCat.querySelector("[data-nested-cat='1']");
+  const panelDetail = colDetail.querySelector("[data-nested-detail='1']");
+
+  function currentCat() {
+    return tree.find((c) => c.id === selCatId) || tree[0];
+  }
+
+  function paint() {
+    listCat.innerHTML = "";
+    tree.forEach((cat) => {
+      const el = document.createElement("div");
+      el.className = "settings-cascade-item" + (cat.id === selCatId ? " active" : "");
+      el.textContent = cat.label;
+      el.onclick = () => {
+        flushChartSettingsFormToMemory();
+        selCatId = cat.id;
+        paint();
+      };
+      listCat.appendChild(el);
+    });
+    panelDetail.innerHTML = "";
+    const cat = currentCat();
+    if (!cat) return;
+    const grid = document.createElement("div");
+    grid.className = "settingsGrid";
+    (cat.items || []).forEach((item) => {
+      appendChartSettingsItemTo(grid, { key: sectionKey, title: cat.label }, item, buildLabelHtml);
+    });
+    panelDetail.appendChild(grid);
+    initTooltips();
+  }
+  paint();
+}
+
 function renderSettingsForm() {
   const container = $("settingsContent");
   container.innerHTML = "";
@@ -10702,7 +10973,11 @@ function renderSettingsForm() {
         { label: "K线图呈现形式", subKey: "klinePresentation", type: "select", options: [
           { value: "step", label: "步进" },
           { value: "instant", label: "一次性呈现" }
-        ], tip: "适配所有「形式」与「喂数据方式」。步进：加载后从第一根起逐步展示（当前默认）。一次性呈现：加载后直接显示末根完整K线与缠论结果，跳过逐步过程；之后仍可用步进/回退/跳转浏览。" }
+        ], tip: "适配所有「形式」与「喂数据方式」。步进：加载后从第一根起逐步展示（当前默认）。一次性呈现：加载后直接显示末根完整K线与缠论结果，跳过逐步过程；之后仍可用步进/回退/跳转浏览。" },
+        { label: "离线数据自定义", subKey: "offlineDataCustom", type: "select", options: [
+          { value: "native", label: "原生" },
+          { value: "merge_no_bs", label: "无BS向上或者向下合并" }
+        ], tip: OFFLINE_DATA_CUSTOM_HELP }
       ]
     },
     {
@@ -10928,82 +11203,54 @@ function renderSettingsForm() {
       color: "#7c3aed",
       bgColor: "rgba(124, 58, 237, 0.08)",
       items: [
-        { label: "启用节奏线", subKey: "enabled", type: "checkbox", tip: "总开关，关闭后不绘制任何节奏线。" },
-        { label: "分型→笔", subKey: "fractToBiEnabled", type: "checkbox", tip: "是否绘制分型→笔层级的节奏线。" },
-        { label: "笔→段", subKey: "biToSegEnabled", type: "checkbox", tip: "是否绘制笔→段层级的节奏线。" },
-        { label: "段→2段", subKey: "segToSegsegEnabled", type: "checkbox", tip: "是否绘制段→2段层级的节奏线。" },
-        { label: "显示层级", subKey: "maxLayer", type: "number", min: 0, max: 9, step: 1, tip: "0层只显示 1-0 / 2-0；N层显示 <=N 的所有节奏线，如 2 显示 1-0、1-1、1-2。三层结构共用该开关，保存后立即生效。" },
-        { label: "计算逻辑", subKey: "calcMode", type: "select", options: [
-          { value: "normal", label: "通用" },
-          { value: "transition", label: "过渡" },
-          { value: "strict1382", label: "1382严格" }
-        ], tip: "通用：保留原实现；过渡：当前推进端点不突破前一同向端点；1382严格：在过渡基础上还需达到 1.382 阈值。保存后会重算当前会话。" },
-        { label: "节奏线1颜色", subKey: "group1LineColor", type: "color" },
-        { label: "节奏线1粗细", subKey: "group1LineWidth", type: "number", min: 0.1, max: 8, step: 0.1 },
-        { label: "节奏线1线型", subKey: "group1LineStyle", type: "select", options: [
-          { value: "dashed", label: "虚线" },
-          { value: "solid", label: "实线" },
-          { value: "dotted", label: "点线" }
-        ]},
-        { label: "节奏线1数字颜色", subKey: "group1TextColor", type: "color" },
-        { label: "节奏线1数字大小", subKey: "group1TextFontSize", type: "number", min: 8, max: 32, step: 1 },
-        { label: "节奏线1数字粗细", subKey: "group1TextFontWeight", type: "select", options: [
-          { value: "normal", label: "常规" },
-          { value: "bold", label: "加粗" }
-        ]},
-        { label: "节奏线2颜色", subKey: "group2LineColor", type: "color" },
-        { label: "节奏线2粗细", subKey: "group2LineWidth", type: "number", min: 0.1, max: 8, step: 0.1 },
-        { label: "节奏线2线型", subKey: "group2LineStyle", type: "select", options: [
-          { value: "dashed", label: "虚线" },
-          { value: "solid", label: "实线" },
-          { value: "dotted", label: "点线" }
-        ]},
-        { label: "节奏线2数字颜色", subKey: "group2TextColor", type: "color" },
-        { label: "节奏线2数字大小", subKey: "group2TextFontSize", type: "number", min: 8, max: 32, step: 1 },
-        { label: "节奏线2数字粗细", subKey: "group2TextFontWeight", type: "select", options: [
-          { value: "normal", label: "常规" },
-          { value: "bold", label: "加粗" }
-        ]},
-        { label: "节奏线3颜色", subKey: "group3LineColor", type: "color" },
-        { label: "节奏线3粗细", subKey: "group3LineWidth", type: "number", min: 0.1, max: 8, step: 0.1 },
-        { label: "节奏线3线型", subKey: "group3LineStyle", type: "select", options: [
-          { value: "dashed", label: "虚线" },
-          { value: "solid", label: "实线" },
-          { value: "dotted", label: "点线" }
-        ]},
-        { label: "节奏线3数字颜色", subKey: "group3TextColor", type: "color" },
-        { label: "节奏线3数字大小", subKey: "group3TextFontSize", type: "number", min: 8, max: 32, step: 1 },
-        { label: "节奏线3数字粗细", subKey: "group3TextFontWeight", type: "select", options: [
-          { value: "normal", label: "常规" },
-          { value: "bold", label: "加粗" }
-        ]},
-        { label: "节奏线4颜色", subKey: "group4LineColor", type: "color" },
-        { label: "节奏线4粗细", subKey: "group4LineWidth", type: "number", min: 0.1, max: 8, step: 0.1 },
-        { label: "节奏线4线型", subKey: "group4LineStyle", type: "select", options: [
-          { value: "dashed", label: "虚线" },
-          { value: "solid", label: "实线" },
-          { value: "dotted", label: "点线" }
-        ]},
-        { label: "节奏线4数字颜色", subKey: "group4TextColor", type: "color" },
-        { label: "节奏线4数字大小", subKey: "group4TextFontSize", type: "number", min: 8, max: 32, step: 1 },
-        { label: "节奏线4数字粗细", subKey: "group4TextFontWeight", type: "select", options: [
-          { value: "normal", label: "常规" },
-          { value: "bold", label: "加粗" }
-        ]},
-        { label: "节奏线5颜色", subKey: "group5LineColor", type: "color" },
-        { label: "节奏线5粗细", subKey: "group5LineWidth", type: "number", min: 0.1, max: 8, step: 0.1 },
-        { label: "节奏线5线型", subKey: "group5LineStyle", type: "select", options: [
-          { value: "dashed", label: "虚线" },
-          { value: "solid", label: "实线" },
-          { value: "dotted", label: "点线" }
-        ]},
-        { label: "节奏线5数字颜色", subKey: "group5TextColor", type: "color" },
-        { label: "节奏线5数字大小", subKey: "group5TextFontSize", type: "number", min: 8, max: 32, step: 1 },
-        { label: "节奏线5数字粗细", subKey: "group5TextFontWeight", type: "select", options: [
-          { value: "normal", label: "常规" },
-          { value: "bold", label: "加粗" }
-        ]}
-      ]
+        {
+          label: "节奏线配置",
+          subKey: "__nested__",
+          type: "nested_cascade",
+          tip: "左侧选子类，右侧编辑；切换子类前会自动暂存当前修改到内存草稿。",
+          tree: [
+            {
+              id: "switch", label: "开关与层级",
+              items: [
+                { label: "启用节奏线", subKey: "enabled", type: "checkbox", tip: "总开关，关闭后不绘制任何节奏线。" },
+                { label: "分型→笔", subKey: "fractToBiEnabled", type: "checkbox" },
+                { label: "笔→段", subKey: "biToSegEnabled", type: "checkbox" },
+                { label: "段→2段", subKey: "segToSegsegEnabled", type: "checkbox" },
+                { label: "显示层级", subKey: "maxLayer", type: "number", min: 0, max: 9, step: 1, tip: "0层只显示 1-0 / 2-0；N 层显示 <=N 的所有节奏线。" },
+              ],
+            },
+            {
+              id: "calc", label: "计算",
+              items: [
+                { label: "计算逻辑", subKey: "calcMode", type: "select", options: [
+                  { value: "normal", label: "通用" },
+                  { value: "transition", label: "过渡" },
+                  { value: "strict1382", label: "1382严格" },
+                ], tip: "保存后会重算当前会话。" },
+              ],
+            },
+            ...[1, 2, 3, 4, 5].map((n) => ({
+              id: `g${n}`,
+              label: `节奏线${n}`,
+              items: [
+                { label: `节奏线${n}颜色`, subKey: `group${n}LineColor`, type: "color" },
+                { label: `节奏线${n}粗细`, subKey: `group${n}LineWidth`, type: "number", min: 0.1, max: 8, step: 0.1 },
+                { label: `节奏线${n}线型`, subKey: `group${n}LineStyle`, type: "select", options: [
+                  { value: "dashed", label: "虚线" },
+                  { value: "solid", label: "实线" },
+                  { value: "dotted", label: "点线" },
+                ]},
+                { label: `节奏线${n}数字颜色`, subKey: `group${n}TextColor`, type: "color" },
+                { label: `节奏线${n}数字大小`, subKey: `group${n}TextFontSize`, type: "number", min: 8, max: 32, step: 1 },
+                { label: `节奏线${n}数字粗细`, subKey: `group${n}TextFontWeight`, type: "select", options: [
+                  { value: "normal", label: "常规" },
+                  { value: "bold", label: "加粗" },
+                ]},
+              ],
+            })),
+          ],
+        },
+      ],
     },
     {
       title: "分型中枢",
@@ -11199,73 +11446,88 @@ function renderSettingsForm() {
       ]
     },
     {
-      title: "买卖文字标记",
+      title: "模拟交易",
       key: "trade",
       color: "#be123c",
       bgColor: "rgba(190, 18, 60, 0.08)",
       items: [
-        { label: "买入颜色", subKey: "buyColor", type: "color" },
-        { label: "卖出颜色", subKey: "sellColor", type: "color" },
-        { label: "文字大小", subKey: "markerFontSize", type: "number", min: 10, max: 32 },
-        { label: "文字粗细", subKey: "markerFontWeight", type: "select", options: [
-          { value: "normal", label: "常规" },
-          { value: "bold", label: "加粗" }
-        ]},
-        { label: "买卖竖线粗细", subKey: "markerLineWidth", type: "number", min: 0.5, max: 8, step: 0.1 },
-        { label: "买卖竖线线型", subKey: "markerLineStyle", type: "select", options: [
-          { value: "dashed", label: "虚线" },
-          { value: "solid", label: "实线" },
-          { value: "dotted", label: "点线" }
-        ]}
-      ]
+        {
+          label: "交易样式",
+          subKey: "__nested__",
+          type: "nested_cascade",
+          tip: "二级：文字标记 / 收盘价线 / 持仓区间。",
+          tree: [
+            {
+              id: "marker", label: "买卖文字标记",
+              items: [
+                { label: "买入颜色", subKey: "buyColor", type: "color" },
+                { label: "卖出颜色", subKey: "sellColor", type: "color" },
+                { label: "文字大小", subKey: "markerFontSize", type: "number", min: 10, max: 32 },
+                { label: "文字粗细", subKey: "markerFontWeight", type: "select", options: [{ value: "normal", label: "常规" }, { value: "bold", label: "加粗" }] },
+                { label: "买卖竖线粗细", subKey: "markerLineWidth", type: "number", min: 0.5, max: 8, step: 0.1 },
+                { label: "买卖竖线线型", subKey: "markerLineStyle", type: "select", options: [
+                  { value: "dashed", label: "虚线" }, { value: "solid", label: "实线" }, { value: "dotted", label: "点线" },
+                ]},
+              ],
+            },
+            {
+              id: "close", label: "收盘价指示线",
+              items: [
+                { label: "指示线粗细", subKey: "closeLineWidth", type: "number", min: 0.5, max: 8, step: 0.1 },
+                { label: "买入价线型", subKey: "buyCloseLineStyle", type: "select", options: [
+                  { value: "solid", label: "实线" }, { value: "dashed", label: "虚线" }, { value: "dotted", label: "点线" },
+                ]},
+                { label: "卖出价线型", subKey: "sellCloseLineStyle", type: "select", options: [
+                  { value: "dashed", label: "虚线" }, { value: "solid", label: "实线" }, { value: "dotted", label: "点线" },
+                ]},
+              ],
+            },
+            {
+              id: "range", label: "持仓与盈亏区间",
+              items: [
+                { label: "持仓区间(买)背景", subKey: "rangeFillBuy", type: "color" },
+                { label: "持仓区间(卖)背景", subKey: "rangeFillSell", type: "color" },
+                { label: "盈利区间颜色", subKey: "profitBandColor", type: "color" },
+                { label: "亏损区间颜色", subKey: "lossBandColor", type: "color" },
+              ],
+            },
+          ],
+        },
+      ],
     },
     {
-      title: "买卖收盘价指示线",
-      key: "trade",
-      color: "#0f766e",
-      bgColor: "rgba(15, 118, 110, 0.08)",
-      items: [
-        { label: "指示线粗细", subKey: "closeLineWidth", type: "number", min: 0.5, max: 8, step: 0.1 },
-        { label: "买入价线型", subKey: "buyCloseLineStyle", type: "select", options: [
-          { value: "solid", label: "实线" },
-          { value: "dashed", label: "虚线" },
-          { value: "dotted", label: "点线" }
-        ]},
-        { label: "卖出价线型", subKey: "sellCloseLineStyle", type: "select", options: [
-          { value: "dashed", label: "虚线" },
-          { value: "solid", label: "实线" },
-          { value: "dotted", label: "点线" }
-        ]}
-      ]
-    },
-    {
-      title: "持仓区间与盈亏区间",
-      key: "trade",
-      color: "#7c3aed",
-      bgColor: "rgba(124, 58, 237, 0.08)",
-      items: [
-        { label: "持仓区间(买)背景", subKey: "rangeFillBuy", type: "color", tip: "用于买入后到卖出前整段背景色。" },
-        { label: "持仓区间(卖)背景", subKey: "rangeFillSell", type: "color", tip: "用于已卖出历史交易区间整段背景色。" },
-        { label: "盈利区间颜色", subKey: "profitBandColor", type: "color", tip: "用于买卖价之间的盈利区间填充色。" },
-        { label: "亏损区间颜色", subKey: "lossBandColor", type: "color", tip: "用于买卖价之间的亏损区间填充色。" }
-      ]
-    },
-    {
-      title: "持仓浮窗字体",
+      title: "持仓浮窗",
       key: "tradeStatus",
       color: "#1d4ed8",
       bgColor: "rgba(29, 78, 216, 0.08)",
       items: [
-        { label: "标题大小", subKey: "titleFontSize", type: "number", min: 10, max: 28, tip: "控制持仓状态窗口标题栏文字大小。" },
-        { label: "标题粗细", subKey: "titleFontWeight", type: "select", options: [{ value: "normal", label: "常规" }, { value: "bold", label: "加粗" }], tip: "控制持仓状态窗口标题栏文字粗细。" },
-        { label: "标题颜色", subKey: "titleColor", type: "color", tip: "控制持仓状态窗口标题栏文字颜色。" },
-        { label: "名称大小", subKey: "labelFontSize", type: "number", min: 10, max: 24, tip: "控制持仓状态窗口左侧名称文字大小。" },
-        { label: "名称粗细", subKey: "labelFontWeight", type: "select", options: [{ value: "normal", label: "常规" }, { value: "bold", label: "加粗" }], tip: "控制持仓状态窗口左侧名称文字粗细。" },
-        { label: "名称颜色", subKey: "labelColor", type: "color", tip: "控制持仓状态窗口左侧名称文字颜色。" },
-        { label: "数值大小", subKey: "valueFontSize", type: "number", min: 10, max: 28, tip: "控制持仓状态窗口右侧数值文字大小。" },
-        { label: "数值粗细", subKey: "valueFontWeight", type: "select", options: [{ value: "normal", label: "常规" }, { value: "bold", label: "加粗" }], tip: "控制持仓状态窗口右侧数值文字粗细。" },
-        { label: "数值颜色", subKey: "valueColor", type: "color", tip: "控制持仓状态窗口右侧数值默认颜色。" }
-      ]
+        {
+          label: "浮窗字体",
+          subKey: "__nested__",
+          type: "nested_cascade",
+          tree: [
+            {
+              id: "title", label: "标题栏",
+              items: [
+                { label: "标题大小", subKey: "titleFontSize", type: "number", min: 10, max: 28 },
+                { label: "标题粗细", subKey: "titleFontWeight", type: "select", options: [{ value: "normal", label: "常规" }, { value: "bold", label: "加粗" }] },
+                { label: "标题颜色", subKey: "titleColor", type: "color" },
+              ],
+            },
+            {
+              id: "body", label: "内容区",
+              items: [
+                { label: "名称大小", subKey: "labelFontSize", type: "number", min: 10, max: 24 },
+                { label: "名称粗细", subKey: "labelFontWeight", type: "select", options: [{ value: "normal", label: "常规" }, { value: "bold", label: "加粗" }] },
+                { label: "名称颜色", subKey: "labelColor", type: "color" },
+                { label: "数值大小", subKey: "valueFontSize", type: "number", min: 10, max: 28 },
+                { label: "数值粗细", subKey: "valueFontWeight", type: "select", options: [{ value: "normal", label: "常规" }, { value: "bold", label: "加粗" }] },
+                { label: "数值颜色", subKey: "valueColor", type: "color" },
+              ],
+            },
+          ],
+        },
+      ],
     },
     {
       title: "图例说明",
@@ -11284,38 +11546,54 @@ function renderSettingsForm() {
       color: "#1e293b",
       bgColor: "rgba(30, 41, 59, 0.12)",
       items: [
-        { label: "文字大小", subKey: "fontSize", type: "number", min: 10, max: 30 },
-        { label: "文字粗细", subKey: "fontWeight", type: "select", options: [
-          { value: "normal", label: "常规" },
-          { value: "bold", label: "加粗" }
-        ]},
-        { label: "消失速度(ms)", subKey: "speed", type: "number", min: 500, max: 10000, step: 100 },
-        { label: "显示买卖点弹窗", subKey: "showBsp", type: "checkbox", tip: "勾选后显示买卖点（分型/笔/段/2段）相关弹窗。" },
-        { label: "显示1382弹窗", subKey: "showRhythm1382", type: "checkbox", tip: "勾选后显示 1382 节奏提示弹窗。" },
-        { label: "显示判定统计弹窗", subKey: "showJudge", type: "checkbox", tip: "勾选后显示买卖点 ×/✓ 判定统计弹窗。" },
-        { label: "步进N遇买卖点中断", subKey: "interruptOnBsp", type: "checkbox", tip: "勾选后，步进 N 根遇到买卖点会自动停止；买卖点类型包含 1/1p/2/2s/3a/3b。" },
-        { label: "步进N遇1382中断", subKey: "interruptOnRhythm1382", type: "checkbox", tip: "勾选后，步进 N 根遇到 1.382 节奏提示（含各层级显示）会自动停止。" },
-        { label: "BSP 与 1382 中断组合", subKey: "interruptStepSourcesCombine", type: "select", tip: "OR：满足买卖点或 1382 之一即停；AND：两者均开启时需同时满足才停。", options: [
-          { value: "or", label: "OR（任一来源）" },
-          { value: "and", label: "AND（同时命中）" }
-        ]},
-        { label: "买卖点细分条件组合", subKey: "interruptBspFineCombine", type: "select", tip: "OR：任一档位命中即停；AND：下方勾选生效的每一档都须在当根有命中才停。", options: [
-          { value: "or", label: "OR（任一档位）" },
-          { value: "and", label: "AND（各档同时）" }
-        ]},
-        { label: "方向例外（下拉）", subKey: "interruptBspSideException", type: "select", tip: "过滤当根买卖点后再判中断：仅买点 / 仅卖点 / 不例外。", options: [
-          { value: "none", label: "无例外（买卖均参与）" },
-          { value: "buy_only", label: "仅买点参与" },
-          { value: "sell_only", label: "仅卖点参与" }
-        ]},
-        { label: "未列出类型仍中断", subKey: "interruptBspUnlistedTypes", type: "checkbox", tip: "如 3a/3b 等未出现在下方级联档位时，仍按「有买卖点」参与中断（OR 下易触发；AND 下作额外 OR 分支）。" },
         {
-          label: "步进N买卖点中断档位",
-          subKey: "interruptBspCascade",
-          type: "interrupt_bsp_cascade",
-          tip: "操作：① 左列选级别（笔/段/2段）→ ② 中列选类型（1/1p、2、2s）→ ③ 右列勾选买/卖是否参与中断。可与上方「细分条件组合 OR/AND」「方向例外」联用。保存后写入本地配置，步进 N 时按档位匹配当根买卖点。",
-        }
-      ]
+          label: "通知与步进中断",
+          subKey: "__nested__",
+          type: "nested_cascade",
+          tip: "二级：基础弹窗 / 步进中断规则 / 买卖点档位。",
+          tree: [
+            {
+              id: "basic", label: "基础",
+              items: [
+                { label: "文字大小", subKey: "fontSize", type: "number", min: 10, max: 30 },
+                { label: "文字粗细", subKey: "fontWeight", type: "select", options: [{ value: "normal", label: "常规" }, { value: "bold", label: "加粗" }] },
+                { label: "消失速度(ms)", subKey: "speed", type: "number", min: 500, max: 10000, step: 100 },
+                { label: "显示买卖点弹窗", subKey: "showBsp", type: "checkbox" },
+                { label: "显示1382弹窗", subKey: "showRhythm1382", type: "checkbox" },
+                { label: "显示判定统计弹窗", subKey: "showJudge", type: "checkbox" },
+              ],
+            },
+            {
+              id: "interrupt", label: "步进 N 中断",
+              items: [
+                { label: "步进N遇买卖点中断", subKey: "interruptOnBsp", type: "checkbox" },
+                { label: "步进N遇1382中断", subKey: "interruptOnRhythm1382", type: "checkbox" },
+                { label: "BSP 与 1382 组合", subKey: "interruptStepSourcesCombine", type: "select", options: [
+                  { value: "or", label: "OR（任一来源）" }, { value: "and", label: "AND（同时命中）" },
+                ]},
+                { label: "买卖点细分组合", subKey: "interruptBspFineCombine", type: "select", options: [
+                  { value: "or", label: "OR（任一档位）" }, { value: "and", label: "AND（各档同时）" },
+                ]},
+                { label: "方向例外", subKey: "interruptBspSideException", type: "select", options: [
+                  { value: "none", label: "无例外" }, { value: "buy_only", label: "仅买点" }, { value: "sell_only", label: "仅卖点" },
+                ]},
+                { label: "未列出类型仍中断", subKey: "interruptBspUnlistedTypes", type: "checkbox" },
+              ],
+            },
+            {
+              id: "bspCascade", label: "买卖点档位",
+              items: [
+                {
+                  label: "步进N买卖点中断档位",
+                  subKey: "interruptBspCascade",
+                  type: "interrupt_bsp_cascade",
+                  tip: "三级：级别 → 类型 → 买/卖。",
+                },
+              ],
+            },
+          ],
+        },
+      ],
     }
   ];
 
@@ -11605,143 +11883,20 @@ function renderSystemSettingsForm() {
 }
 
 async function saveSettings() {
-  const inputs = $("settingsContent").querySelectorAll("input, select");
-  let nextDataFormMode = dataFormConfig.mode;
-  let nextDataFormQuantity = dataFormConfig.quantity;
-  let nextDataFormQuantityAlloc = dataFormConfig.quantityAlloc;
-  let nextDataFeedMode = dataFormConfig.feedMode;
-  let nextKlinePresentation = dataFormConfig.klinePresentation;
+  if (isSettingsOpen()) flushChartSettingsFormToMemory();
   const prevRhythmCalcMode = normalizeRhythmCalcMode(chartConfig.rhythmLine && chartConfig.rhythmLine.calcMode);
   const prevKlinePresentation = normalizeKlinePresentationMode(dataFormConfig.klinePresentation);
-  inputs.forEach(input => {
-    const key = input.dataset.key;
-    const subkey = input.dataset.subkey;
-    const mkt = input.dataset.multiKt;
-    if (mkt && key && subkey && !subkey.endsWith("-text")) {
-      let val;
-      if (input.type === "checkbox") val = input.checked;
-      else if (input.type === "number") val = parseFloat(input.value);
-      else val = input.value;
-      if (subkey === "dash" && typeof val === "string") {
-        const arr = val.split(",").map((n) => parseFloat(n.trim())).filter((n) => !Number.isNaN(n));
-        val = arr.length > 0 ? arr : null;
-      }
-      if (key === "rhythmLine" && subkey === "maxLayer") val = Math.max(0, Math.min(9, Math.floor(Number(val))));
-      if (key === "rhythmLine" && subkey === "calcMode") val = normalizeRhythmCalcMode(val);
-      if (!chartConfigStore.multiPerK || typeof chartConfigStore.multiPerK !== "object") chartConfigStore.multiPerK = {};
-      if (!chartConfigStore.multiPerK[mkt] || typeof chartConfigStore.multiPerK[mkt] !== "object") chartConfigStore.multiPerK[mkt] = {};
-      if (!chartConfigStore.multiPerK[mkt][key]) chartConfigStore.multiPerK[mkt][key] = {};
-      chartConfigStore.multiPerK[mkt][key][subkey] = val;
-      return;
-    }
-    const mokt = input.dataset.moverlayKt;
-    const mosub = input.dataset.moverlaySubkey;
-    if (mokt && mosub) {
-      let valMo;
-      if (input.type === "number") valMo = parseFloat(input.value);
-      else valMo = input.value;
-      if (!chartConfig.multiOverlay) chartConfig.multiOverlay = JSON.parse(JSON.stringify(DEFAULT_CHART_CONFIG.multiOverlay));
-      if (!chartConfig.multiOverlay.layers || typeof chartConfig.multiOverlay.layers !== "object") chartConfig.multiOverlay.layers = {};
-      if (!chartConfig.multiOverlay.layers[mokt]) chartConfig.multiOverlay.layers[mokt] = {};
-      if (input.type === "number") {
-        if (!Number.isFinite(valMo)) {
-          delete chartConfig.multiOverlay.layers[mokt][mosub];
-        } else {
-          let v = valMo;
-          if (/Alpha$/.test(mosub) || mosub === "alpha" || mosub === "lineAlpha") v = Math.min(1, Math.max(0.05, v));
-          chartConfig.multiOverlay.layers[mokt][mosub] = v;
-        }
-      } else {
-        chartConfig.multiOverlay.layers[mokt][mosub] = valMo;
-      }
-      return;
-    }
-    if (!key || !subkey || subkey.endsWith("-text")) return;
-    
-    let val;
-    if (input.type === "checkbox") {
-      val = input.checked;
-    } else if (input.type === "number") {
-      val = parseFloat(input.value);
-    } else {
-      val = input.value;
-    }
-    
-    if (key === "theme_section") {
-      chartConfig.theme = val;
-      applyThemeFromSelect();
-    } else if (key === "shared_bsp_bottom") {
-      if (subkey === "enabled") chartConfigStore.shared.showBottomBsp = !!val;
-    } else if (key === "dataForm") {
-      if (subkey === "mode") nextDataFormMode = normalizeDataFormMode(val);
-      if (subkey === "quantity") nextDataFormQuantity = clampDataFormQuantity(val, getRawKlineCount() || dataFormConfig.quantity || 1);
-      if (subkey === "quantityAlloc") nextDataFormQuantityAlloc = normalizeDataFormQuantityAlloc(val);
-      if (subkey === "feedMode") nextDataFeedMode = normalizeDataFeedMode(val);
-      if (subkey === "klinePresentation") nextKlinePresentation = normalizeKlinePresentationMode(val);
-    } else if (key === "indicators") {
-      if (subkey === "mainSlot") {
-        selectedMainIndicatorSlot = Number(val);
-        storageSet("chan_selected_main_indicator_slot", String(selectedMainIndicatorSlot));
-      } else if (subkey === "subSlot") {
-        selectedSubIndicatorSlot = Number(val);
-        storageSet("chan_selected_sub_indicator_slot", String(selectedSubIndicatorSlot));
-      } else if (subkey === "mainType") {
-        const checks = $("settingsContent").querySelectorAll(".indicator-check-main");
-        const selected = [];
-        checks.forEach(c => { if (c.checked) selected.push(c.value); });
-        indicatorMainSlots[String(selectedMainIndicatorSlot)] = selected;
-      } else if (subkey === "subType") {
-        const checks = $("settingsContent").querySelectorAll(".indicator-check-sub");
-        const selected = [];
-        checks.forEach(c => { if (c.checked) selected.push(c.value); });
-        indicatorSubSlots[String(selectedSubIndicatorSlot)] = selected;
-      }
-      if (subkey === "mainType" || subkey === "subType" || subkey === "mainSlot" || subkey === "subSlot") {
-        storageSet("chan_indicator_main_slots", JSON.stringify(indicatorMainSlots));
-        storageSet("chan_indicator_sub_slots", JSON.stringify(indicatorSubSlots));
-      } 
-    } else if (key === "crosshair" && subkey === "enabled") {
-      crosshairEnabled = !!val;
-      if (!chartConfig.crosshair) chartConfig.crosshair = {};
-      chartConfig.crosshair.enabled = crosshairEnabled;
-    } else if (key && subkey) {
-      if (subkey === "dash" && typeof val === "string") {
-        const arr = val.split(",").map(n => parseFloat(n.trim())).filter(n => !isNaN(n));
-        val = arr.length > 0 ? arr : null;
-      }
-      if (key === "rhythmLine" && subkey === "maxLayer") {
-        val = Math.max(0, Math.min(9, Math.floor(Number(val))));
-      }
-      if (key === "rhythmLine" && subkey === "calcMode") {
-        val = normalizeRhythmCalcMode(val);
-      }
-      if (!chartConfig[key]) chartConfig[key] = {};
-      chartConfig[key][subkey] = val;
-    }
-  });
-  $("settingsContent").querySelectorAll('input[type="text"][data-multi-kt]').forEach((textInput) => {
-    const sk = textInput.dataset.subkey || "";
-    if (!sk.endsWith("-text")) return;
-    const mainKey = sk.slice(0, -5);
-    const mkt = textInput.dataset.multiKt;
-    const key = textInput.dataset.key;
-    if (!mkt || !key) return;
-    const col = textInput.parentElement && textInput.parentElement.querySelector(`input[type="color"][data-multi-kt="${mkt}"][data-key="${key}"][data-subkey="${mainKey}"]`);
-    const v = (textInput.value && String(textInput.value).trim()) || (col && col.value) || "#000000";
-    if (!chartConfigStore.multiPerK || typeof chartConfigStore.multiPerK !== "object") chartConfigStore.multiPerK = {};
-    if (!chartConfigStore.multiPerK[mkt]) chartConfigStore.multiPerK[mkt] = {};
-    if (!chartConfigStore.multiPerK[mkt][key]) chartConfigStore.multiPerK[mkt][key] = {};
-    chartConfigStore.multiPerK[mkt][key][mainKey] = v;
-  });
+  const prevOfflineDataCustom = normalizeOfflineDataCustom(dataFormConfig.offlineDataCustom);
+  const nextOfflineDataCustom = normalizeOfflineDataCustom(dataFormConfig.offlineDataCustom);
+  if (chartConfig.theme) applyThemeFromSelect();
+  storageSet("chan_indicator_main_slots", JSON.stringify(indicatorMainSlots));
+  storageSet("chan_indicator_sub_slots", JSON.stringify(indicatorSubSlots));
+  storageSet("chan_selected_main_indicator_slot", String(selectedMainIndicatorSlot));
+  storageSet("chan_selected_sub_indicator_slot", String(selectedSubIndicatorSlot));
   applyRhythmCalcModeToChanConfig(chanConfig);
   const nextRhythmCalcMode = normalizeRhythmCalcMode(chartConfig.rhythmLine && chartConfig.rhythmLine.calcMode);
   storageSet("chan_logic_config", JSON.stringify(chanConfig));
-  dataFormConfig.mode = nextDataFormMode;
-  dataFormConfig.quantity = nextDataFormQuantity;
-  dataFormConfig.quantityAlloc = nextDataFormQuantityAlloc;
-  dataFormConfig.feedMode = nextDataFeedMode;
-  dataFormConfig.klinePresentation = nextKlinePresentation;
-  // 数据形式配置单独持久化，避免刷新后丢失选择
+  chartSettingsDraftBaseline = null;
   saveSessionConfig();
   const activeCfgKey = (lastPayload && lastPayload.ready && String(lastPayload.active_chart_id) === "chart2")
     ? "chart2"
@@ -11750,7 +11905,14 @@ async function saveSettings() {
     crosshairEnabled = !!chartConfig.crosshair.enabled;
   }
   persistChartConfigStoreNow(true);
+  chartSettingsCloseKeepDraft = true;
   closeSettings();
+  if (prevOfflineDataCustom !== nextOfflineDataCustom) {
+    showAlertAndLog(
+      `离线数据自定义已切换为【${offlineDataCustomLabel(nextOfflineDataCustom)}】。\n` +
+      (nextOfflineDataCustom === "merge_no_bs" ? OFFLINE_DATA_CUSTOM_HELP.split("\n").slice(1).join("\n") : "已恢复原生分笔解析。")
+    );
+  }
   if (prevRhythmCalcMode !== nextRhythmCalcMode) {
     showAlertAndLog(
       `节奏线计算逻辑已切换为【${RHYTHM_CALC_MODE_LABELS[nextRhythmCalcMode]}】。\n` +
@@ -11769,6 +11931,7 @@ async function saveSettings() {
       data_form_quantity: clampDataFormQuantity(dataFormConfig.quantity, n || 1),
       data_form_quantity_alloc: normalizeDataFormQuantityAlloc(dataFormConfig.quantityAlloc),
       data_feed_mode: normalizeDataFeedMode(dataFormConfig.feedMode),
+      offline_data_custom: normalizeOfflineDataCustom(dataFormConfig.offlineDataCustom),
       kline_presentation_mode: normalizeKlinePresentationMode(dataFormConfig.klinePresentation),
       rollback_cache_depth: Number(systemConfig.rollbackCacheDepth || DEFAULT_SYSTEM_CONFIG.rollbackCacheDepth),
       rollback_full_snapshot_interval: Number(systemConfig.rollbackFullSnapshotInterval || DEFAULT_SYSTEM_CONFIG.rollbackFullSnapshotInterval),
@@ -11942,6 +12105,7 @@ updateBspJudgeUI();
 
 function resetSettings() {
   if (confirmAndLog("确定要恢复默认设置吗？")) {
+    dataFormConfig = { ...DATA_FORM_DEFAULT };
     chartConfig = JSON.parse(JSON.stringify(DEFAULT_CHART_CONFIG));
     crosshairEnabled = !!(chartConfig.crosshair && chartConfig.crosshair.enabled);
     indicatorMainSlots = { ...defaultMainSlots };
@@ -16984,8 +17148,12 @@ function refreshUI(payload, options) {
     dataFormConfig.klinePresentation = normalizeKlinePresentationMode(
       payload.data_form.presentation_mode != null ? payload.data_form.presentation_mode : dataFormConfig.klinePresentation
     );
+    dataFormConfig.offlineDataCustom = normalizeOfflineDataCustom(
+      payload.data_form.offline_data_custom != null ? payload.data_form.offline_data_custom : dataFormConfig.offlineDataCustom
+    );
     sessionConfig.dataFormQuantityAlloc = dataFormConfig.quantityAlloc;
     sessionConfig.klinePresentationMode = dataFormConfig.klinePresentation;
+    sessionConfig.offlineDataCustom = dataFormConfig.offlineDataCustom;
   } else if (!payload || !payload.ready) {
     dataFormConfig.mode = normalizeDataFormMode(sessionConfig.dataFormMode);
     dataFormConfig.quantity = clampDataFormQuantity(
@@ -17165,6 +17333,7 @@ $("btnInit").onclick = async () => {
       data_form_quantity: clampDataFormQuantity(dataFormConfig.quantity, getRawKlineCount() || 1),
       data_form_quantity_alloc: normalizeDataFormQuantityAlloc(dataFormConfig.quantityAlloc),
       data_feed_mode: normalizeDataFeedMode(dataFormConfig.feedMode),
+      offline_data_custom: normalizeOfflineDataCustom(dataFormConfig.offlineDataCustom),
       kline_presentation_mode: normalizeKlinePresentationMode(dataFormConfig.klinePresentation),
       rollback_cache_depth: Number(systemConfig.rollbackCacheDepth || DEFAULT_SYSTEM_CONFIG.rollbackCacheDepth),
       rollback_full_snapshot_interval: Number(systemConfig.rollbackFullSnapshotInterval || DEFAULT_SYSTEM_CONFIG.rollbackFullSnapshotInterval),
@@ -18277,6 +18446,7 @@ def api_init(req: InitReq):
                     data_form_quantity=req.data_form_quantity,
                     data_form_quantity_alloc=getattr(req, "data_form_quantity_alloc", "front"),
                     data_feed_mode=getattr(req, "data_feed_mode", "step"),
+                    offline_data_custom=getattr(req, "offline_data_custom", "native"),
                 )
                 if APP_STATE.stepper.data_src_used != OFFLINE_INLINE_SRC:
                     raise ValueError(
@@ -18299,6 +18469,7 @@ def api_init(req: InitReq):
                         data_form_quantity=req.data_form_quantity,
                         data_form_quantity_alloc=getattr(req, "data_form_quantity_alloc", "front"),
                         data_feed_mode=getattr(req, "data_feed_mode", "step"),
+                        offline_data_custom=getattr(req, "offline_data_custom", "native"),
                     )
                     APP_STATE.multi_steppers.append(st)
             else:
@@ -18315,6 +18486,7 @@ def api_init(req: InitReq):
                     data_form_quantity=req.data_form_quantity,
                     data_form_quantity_alloc=getattr(req, "data_form_quantity_alloc", "front"),
                     data_feed_mode=getattr(req, "data_feed_mode", "step"),
+                    offline_data_custom=getattr(req, "offline_data_custom", "native"),
                 )
                 chart_mode = "dual" if cm_init == "dual" else "single"
                 APP_STATE.chart_mode = chart_mode
@@ -18337,6 +18509,7 @@ def api_init(req: InitReq):
                         data_form_quantity=req.data_form_quantity,
                         data_form_quantity_alloc=getattr(req, "data_form_quantity_alloc", "front"),
                         data_feed_mode=getattr(req, "data_feed_mode", "step"),
+                        offline_data_custom=getattr(req, "offline_data_custom", "native"),
                     )
         except OfflineDataConfirmRequired as exc:
             raise HTTPException(
@@ -18385,6 +18558,7 @@ def api_init(req: InitReq):
                 getattr(req, "data_form_quantity_alloc", "front")
             ),
             "data_feed_mode": normalize_data_feed_mode(getattr(req, "data_feed_mode", "step")),
+            "offline_data_custom": normalize_offline_data_custom(getattr(req, "offline_data_custom", "native")),
             "kline_presentation_mode": normalize_kline_presentation_mode(
                 getattr(req, "kline_presentation_mode", "step")
             ),
@@ -18447,6 +18621,7 @@ def api_reconfig(req: ReconfigReq):
             data_form_quantity=req.data_form_quantity,
             data_form_quantity_alloc=getattr(req, "data_form_quantity_alloc", None),
             data_feed_mode=getattr(req, "data_feed_mode", "step"),
+            offline_data_custom=getattr(req, "offline_data_custom", None),
             kline_presentation_mode=getattr(req, "kline_presentation_mode", None),
             rollback_cache_depth=req.rollback_cache_depth,
             rollback_full_snapshot_interval=req.rollback_full_snapshot_interval,
