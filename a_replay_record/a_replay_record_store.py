@@ -239,6 +239,61 @@ def _pick_best_record(
     return best
 
 
+def _safe_range_text(v: Any) -> str:
+    return str(v or "").strip()
+
+
+def _record_fully_covers_request(meta: dict[str, Any], begin_date: str, end_date: Optional[str]) -> bool:
+    """请求区间被旧 record 完整覆盖时返回 True。"""
+    req_begin = _safe_range_text(begin_date)
+    req_end = _safe_range_text(end_date)
+    rec_begin = _safe_range_text(meta.get("begin_date"))
+    rec_end = _safe_range_text(meta.get("end_date"))
+    if not req_begin or not req_end or not rec_begin or not rec_end:
+        return False
+    return rec_begin <= req_begin and req_end <= rec_end
+
+
+def _find_covering_record_meta(
+    fingerprint: str,
+    code: str,
+    k_type_key: str,
+    autype_key: str,
+    begin_date: str,
+    end_date: Optional[str],
+) -> Optional[str]:
+    """
+    查询是否已有同指纹 record 完整覆盖当前请求区间。
+    命中则返回对应 pkl 路径（仅用于跳过重复保存）。
+    """
+    folder = os.path.join(record_root(), fingerprint)
+    if not os.path.isdir(folder):
+        return None
+    prefix = f"{_safe_slug(code, 16)}_{_safe_slug(k_type_key, 12)}_{_safe_slug(autype_key, 8)}_"
+    for name in os.listdir(folder):
+        if not name.endswith(".meta.json") or not name.startswith(prefix):
+            continue
+        meta_path = os.path.join(folder, name)
+        meta = _load_meta(meta_path)
+        if not meta:
+            continue
+        # 关键元信息不一致则不复用，维持旧逻辑继续新建。
+        if str(meta.get("fingerprint", "")) != str(fingerprint):
+            continue
+        if str(meta.get("code", "")) != str(code):
+            continue
+        if str(meta.get("k_type", "")) != str(k_type_key):
+            continue
+        if str(meta.get("autype", "")) != str(autype_key):
+            continue
+        if not _record_fully_covers_request(meta, begin_date, end_date):
+            continue
+        pkl_path = meta_path[:-10] + ".pkl"
+        if os.path.isfile(pkl_path):
+            return pkl_path
+    return None
+
+
 def _chan_break_pickle_links(chan: Any) -> None:
     """??? K ??/??/????????????? deepcopy/pickle ?? pre/next ?????"""
     for kl_list in chan.kl_datas.values():
@@ -284,6 +339,26 @@ def _load_payload(pkl_path: str) -> Optional[_ChanRecordPayload]:
     return None
 
 
+def _pick_wider_kline_all(a: list, b: list) -> list:
+    """取时间跨度更宽的 kline_all（供 record 恢复时不缩窄筹码底座）。"""
+    if not a:
+        return list(b or [])
+    if not b:
+        return list(a or [])
+
+    def _key(arr: list) -> tuple:
+        if not arr:
+            return ("", "", 0)
+        return (str(arr[0].get("t", "") or ""), str(arr[-1].get("t", "") or ""), len(arr))
+
+    ka, kb = _key(a), _key(b)
+    if kb[2] > ka[2]:
+        return list(b)
+    if kb[2] == ka[2] and kb[0] and ka[0] and kb[0] < ka[0]:
+        return list(b)
+    return list(a)
+
+
 def _restore_snapshot(stepper: Any, payload: _ChanRecordPayload, *, target_step_idx: Optional[int] = None) -> None:
     restore_stepper_snapshot(stepper, payload.snapshot)
     # ????????????????????? pre/next
@@ -296,7 +371,9 @@ def _restore_snapshot(stepper: Any, payload: _ChanRecordPayload, *, target_step_
     stepper.data_form_mode = payload.data_form_mode
     stepper.data_src_used = payload.data_src_used
     stepper.data_src_chip_used = payload.data_src_chip_used
-    stepper.kline_all = list(payload.kline_all or [])
+    incoming = list(payload.kline_all or [])
+    existing = list(getattr(stepper, "kline_all", None) or [])
+    stepper.kline_all = _pick_wider_kline_all(existing, incoming)
     stepper._unified_full_payload = copy.deepcopy(payload.unified_full_payload) if payload.unified_full_payload else None
     if payload.replay_klus_master_raw is not None:
         stepper._replay_klus_master_raw = copy.deepcopy(payload.replay_klus_master_raw)
@@ -566,6 +643,19 @@ def _save_record_sync(
 ) -> None:
     master = stepper._replay_klus_master or []
     if not master:
+        return
+    covered_pkl = _find_covering_record_meta(
+        fingerprint=fingerprint,
+        code=code,
+        k_type_key=k_type_key,
+        autype_key=autype_key,
+        begin_date=begin_date,
+        end_date=end_date,
+    )
+    if covered_pkl:
+        msg = f"缠论record：命中区间覆盖，复用旧文件（{os.path.basename(covered_pkl)}）"
+        print(f"[ChanRecord] skip save covered by {covered_pkl}")
+        push_record_trace(msg)
         return
     folder, base = _record_paths(fingerprint, code, k_type_key, autype_key, begin_date, end_date)
     pkl_path = base + ".pkl"

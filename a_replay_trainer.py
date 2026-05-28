@@ -391,7 +391,9 @@ def is_data_form_tick_synth_mode(mode: Any) -> bool:
 
 
 def stepper_needs_chip_kline_all(st: Any) -> bool:
-    """筹码依赖 kline_all 内 chip_tick_bins；分笔合成/数量聚合后须随 reconfig 下发。"""
+    """筹码分布需要 kline_all；有全历史底座时 reconfig/step 也应下发。"""
+    if len(getattr(st, "kline_all", None) or []) > 0:
+        return True
     return is_data_form_tick_synth_mode(getattr(st, "data_form_mode", "")) or is_data_form_quantity_mode(
         getattr(st, "data_form_mode", "")
     )
@@ -406,6 +408,167 @@ def _chip_kline_all_with_x(bars: list[dict[str, Any]]) -> list[dict[str, Any]]:
             b["x"] = i
         out.append(b)
     return out
+
+
+def _fetch_offline_chip_kline_all(code: str, k_type: KL_TYPE, autype: AUTYPE) -> list[dict[str, Any]]:
+    """离线筹码底座：API 直拉 1990~最新（绕过 ReplayDataChan 全量拉取易失败）。"""
+    t0_ms = int(time.time() * 1000)
+    api_cls = COfflineInline
+    safe_api_do_init(api_cls, OFFLINE_INLINE_SRC)
+    try:
+        api = api_cls(
+            code=normalize_code(code),
+            k_type=k_type,
+            begin_date="1990-01-01",
+            end_date=None,
+            autype=autype,
+        )
+        out = serialize_klu_iter(list(api.get_kl_data()))
+        # #region agent log
+        _agent_debug_log_backend(
+            "P1",
+            "a_replay_trainer.py:_fetch_offline_chip_kline_all",
+            "离线全历史直拉耗时",
+            {
+                "code": str(code),
+                "kType": str(getattr(k_type, "name", k_type)),
+                "bars": len(out),
+                "costMs": int(time.time() * 1000) - t0_ms,
+            },
+            run_id="perf-check",
+        )
+        # #endregion
+        return out
+    finally:
+        api_cls.do_close()
+
+
+def _refresh_stepper_chip_kline_all_base(stepper: Any, autype: AUTYPE) -> None:
+    """尽力拉齐筹码全历史底座（上市首根~最新），避免仅会话区间。"""
+    t0_ms = int(time.time() * 1000)
+    code = getattr(stepper, "code", None)
+    k_type = getattr(stepper, "k_type", None)
+    if not code or k_type is None:
+        return
+    refresh_reason = "noop"
+    candidates: list[list[dict[str, Any]]] = [list(getattr(stepper, "kline_all", None) or [])]
+    if k_type in _offline_chip_supported_ktypes() and offline_tick_files_exist_for_range(
+        code, "1990-01-01", None
+    ):
+        try:
+            candidates.insert(0, _fetch_offline_chip_kline_all(code, k_type, autype))
+            refresh_reason = "offline-full-fetch"
+        except Exception as exc:
+            print(f"[Chip] refresh offline full kline_all failed: {format_source_error(exc)}")
+            refresh_reason = "offline-full-fetch-failed"
+    wider = _pick_wider_kline_all_for_chip(candidates)
+    if not wider:
+        return
+    cur = list(getattr(stepper, "kline_all", None) or [])
+    if len(wider) <= len(cur):
+        if cur and wider:
+            cur_first = str(cur[0].get("t", "") or "")
+            wide_first = str(wider[0].get("t", "") or "")
+            if not (wide_first and cur_first and wide_first < cur_first):
+                return
+        elif cur:
+            return
+    stepper.kline_all = wider
+    if (
+        getattr(stepper, "data_src_used", None) == OFFLINE_INLINE_SRC
+        and stepper.kline_all
+        and k_type in _offline_chip_supported_ktypes()
+        and offline_tick_files_exist_for_range(code, "1990-01-01", None)
+    ):
+        _enrich_kline_all_offline_chip_non_triangle(code, stepper.kline_all, None, k_type)
+    # #region agent log
+    _agent_debug_log_backend(
+        "P2",
+        "a_replay_trainer.py:_refresh_stepper_chip_kline_all_base",
+        "刷新筹码全历史底座耗时",
+        {
+            "reason": refresh_reason,
+            "beforeCount": len(cur),
+            "afterCount": len(stepper.kline_all or []),
+            "costMs": int(time.time() * 1000) - t0_ms,
+        },
+        run_id="perf-check",
+    )
+    # #endregion
+
+
+def _pick_wider_kline_all_for_chip(candidates: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    """在多个 kline_all 候选里取时间跨度更宽的一份（供筹码全历史累计）。"""
+    best: list[dict[str, Any]] = []
+    best_key: tuple = ("", "", 0)
+    for arr in candidates:
+        if not arr:
+            continue
+        first_t = str(arr[0].get("t", "") or "")
+        last_t = str(arr[-1].get("t", "") or "")
+        key = (first_t, last_t, len(arr))
+        if not best:
+            best, best_key = list(arr), key
+            continue
+        if key[2] > best_key[2]:
+            best, best_key = list(arr), key
+        elif key[2] == best_key[2] and key[0] and best_key[0] and key[0] < best_key[0]:
+            best, best_key = list(arr), key
+    return best
+
+
+def _parse_bar_time_ms(t: Any) -> Optional[int]:
+    """K 线时间转毫秒（与前端 chipTimeComparable 对齐）。"""
+    s = str(t or "").strip()
+    if not s:
+        return None
+    m = re.match(r"^(\d{4})/(\d{1,2})/(\d{1,2})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?", s)
+    if m:
+        y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        hh = int(m.group(4)) if m.group(4) is not None else 0
+        mm = int(m.group(5)) if m.group(5) is not None else 0
+        ss = int(m.group(6)) if m.group(6) is not None else 0
+        return int(datetime(y, mo, d, hh, mm, ss).timestamp() * 1000)
+    try:
+        iso = datetime.fromisoformat(s.replace("/", "-").replace(" ", "T", 1))
+        return int(iso.timestamp() * 1000)
+    except ValueError:
+        return None
+
+
+def _session_end_ms(end_date: Optional[str]) -> Optional[int]:
+    if not end_date:
+        return None
+    d = str(end_date).replace("/", "-").strip()[:10]
+    try:
+        dt = datetime.strptime(d, "%Y-%m-%d").replace(hour=23, minute=59, second=59)
+        return int(dt.timestamp() * 1000)
+    except ValueError:
+        return None
+
+
+def _kline_all_for_chip_payload(
+    kline_all: list[dict[str, Any]],
+    session_end_date: Optional[str],
+) -> list[dict[str, Any]]:
+    """
+    下发给前端的筹码底座：上市首根 ~ 会话结束日（含），避免 10万+ 根撑爆 JSON。
+    累计筹码仍从首根截到十字线，满足「上市日 -> 当前 K」。
+    """
+    if not kline_all:
+        return []
+    end_ms = _session_end_ms(session_end_date)
+    if end_ms is None:
+        return _chip_kline_all_with_x(kline_all)
+    out: list[dict[str, Any]] = []
+    for bar in kline_all:
+        bt = _parse_bar_time_ms(bar.get("t"))
+        if bt is not None and bt > end_ms:
+            break
+        out.append(bar)
+    if not out:
+        out = list(kline_all)
+    return _chip_kline_all_with_x(out)
 
 
 def normalize_data_form_quantity(raw: Any, total: int) -> int:
@@ -3587,7 +3750,7 @@ class ChanStepper:
         self._unified_full_payload: Optional[dict[str, Any]] = None
         self._chan_record_apply: ChanRecordApplyResult = ChanRecordApplyResult()
         self._chan_record_fingerprint: str = ""
-        self._chan_record_enabled: bool = True
+        self._chan_record_enabled: bool = False
 
     def _cfg_without_chan_algo(self, cfg_dict: dict[str, Any]) -> dict[str, Any]:
         # 训练器 / API 自用键，勿传入 CChanConfig（否则会触发 unknown para）
@@ -3664,15 +3827,18 @@ class ChanStepper:
         except Exception:
             stock_name = None
 
-        # 筹码全历史与当前候选 data_src 一致（筹码链独立回退时在循环里换 data_src）
+        # 筹码链：全历史 1990~最新；K 线链：kline_all 与会话区间一致
         chip_src = data_src
         chip_begin_date = "1990-01-01"
+        chip_end_date: Optional[str] = None
+        all_begin = chip_begin_date if use_for == "chip" else begin_date
+        all_end = chip_end_date if use_for == "chip" else end_date
         try:
             cfg_all = CChanConfig({**chan_cfg_dict, "trigger_step": False})
             chan_all = ReplayDataChan(
                 code=self.code,
-                begin_time=chip_begin_date,
-                end_time=end_date,
+                begin_time=all_begin,
+                end_time=all_end,
                 data_src=chip_src,
                 lv_list=[self.k_type],
                 config=cfg_all,
@@ -3680,7 +3846,23 @@ class ChanStepper:
             )
             kline_all = serialize_klu_iter(chan_all[0].klu_iter())
         except Exception:
-            kline_all = serialize_klu_iter(replay_klus_master)
+            # 全历史失败时勿回退会话 master（仅数日），改 API 直拉 1990~最新
+            try:
+                api_cls = get_stock_api_cls(chip_src)
+                safe_api_do_init(api_cls, chip_src)
+                try:
+                    api = api_cls(
+                        code=self.code,
+                        k_type=self.k_type,
+                        begin_date=all_begin,
+                        end_date=all_end,
+                        autype=autype,
+                    )
+                    kline_all = serialize_klu_iter(list(api.get_kl_data()))
+                finally:
+                    api_cls.do_close()
+            except Exception:
+                kline_all = serialize_klu_iter(replay_klus_master)
 
         return replay_klus_master, kline_all, stock_name
 
@@ -3763,8 +3945,10 @@ class ChanStepper:
         data_form_quantity_alloc: str = "front",
         data_feed_mode: str = "step",
         offline_data_custom: str = "native",
-        chan_record_enabled: bool = True,
+        chan_record_enabled: bool = False,
     ) -> None:
+        init_t0_ms = int(time.time() * 1000)
+        stage_t0_ms = init_t0_ms
         # 解析并设置周期类型
         self.k_type = parse_k_type(k_type)
         self._chan_record_enabled = bool(chan_record_enabled)
@@ -3773,6 +3957,8 @@ class ChanStepper:
         off_custom = normalize_offline_data_custom(offline_data_custom)
         set_active_offline_data_custom(off_custom)
         self.offline_data_custom = off_custom
+        self._session_begin_date = begin_date
+        self._session_end_date = end_date
         
         self.data_src_chip_used = None
 
@@ -3905,15 +4091,26 @@ class ChanStepper:
             else:
                 self._replay_klus_master = k_sel.replay_klus_master
                 self._replay_klus_master_raw = copy.deepcopy(k_sel.replay_klus_master)
-                # K 线来自离线包时，筹码全历史必须与 K 线同源；否则易出现「K 为分笔合成日线、筹码却走筹码链上先成功的在线日线」
+                # 离线 K 线仅会话区间；筹码底座须 1990~最新全历史（直拉 + 筹码链，取更宽）
                 if k_sel.data_src == OFFLINE_INLINE_SRC:
-                    self.kline_all = k_sel.kline_all
-                    self.data_src_chip_used = k_sel.data_src
+                    offline_chip_all: list[dict[str, Any]] = []
+                    try:
+                        offline_chip_all = _fetch_offline_chip_kline_all(self.code, self.k_type, autype)
+                    except Exception as exc:
+                        print(f"[Chip] offline full kline_all failed: {format_source_error(exc)}")
+                    self.kline_all = _pick_wider_kline_all_for_chip(
+                        [
+                            offline_chip_all,
+                            list(chip_sel.kline_all or []),
+                            list(k_sel.kline_all or []),
+                        ]
+                    )
+                    self.data_src_chip_used = chip_sel.data_src
                     if chip_sel.data_src == OFFLINE_INLINE_SRC:
                         chip_logs_extra = [f"筹码全历史：{chip_sel.label}"] + list(chip_sel.logs)
                     else:
                         chip_logs_extra = [
-                            f"筹码全历史与离线K线同源（已忽略筹码链上的在线源：{chip_sel.label}）"
+                            f"筹码全历史：{chip_sel.label}（离线K线会话区间 + 筹码链全历史）"
                         ] + list(chip_sel.logs)
                 else:
                     self.kline_all = chip_sel.kline_all
@@ -3922,6 +4119,21 @@ class ChanStepper:
                 self.data_src_used = k_sel.data_src
                 self.data_src_logs = list(k_sel.logs) + chip_logs_extra
             self._data_session_key = session_key
+            # #region agent log
+            _agent_debug_log_backend(
+                "P3",
+                "a_replay_trainer.py:init:dataSourceSelect",
+                "数据源选择与基础K线构建耗时",
+                {
+                    "cacheHit": bool(cache_hit),
+                    "dataSrc": str(self.data_src_used),
+                    "chipSrc": str(self.data_src_chip_used),
+                    "costMs": int(time.time() * 1000) - stage_t0_ms,
+                },
+                run_id="perf-check",
+            )
+            # #endregion
+            stage_t0_ms = int(time.time() * 1000)
             if k_sel.stock_name:
                 self.stock_name = k_sel.stock_name
             # 离线 + 支持周期：为 kline_all 写 chip_tick_bins（分笔累加），全周期前端不走三角分摊
@@ -3929,9 +4141,28 @@ class ChanStepper:
                 self.data_src_used == OFFLINE_INLINE_SRC
                 and self.kline_all
                 and self.k_type in _offline_chip_supported_ktypes()
-                and offline_tick_files_exist_for_range(self.code, "1990-01-01", end_date)
+                and offline_tick_files_exist_for_range(self.code, "1990-01-01", None)
             ):
-                _enrich_kline_all_offline_chip_non_triangle(self.code, self.kline_all, end_date, self.k_type)
+                _enrich_kline_all_offline_chip_non_triangle(self.code, self.kline_all, None, self.k_type)
+            # #region agent log
+            _agent_debug_log_backend(
+                "P4",
+                "a_replay_trainer.py:init:chipEnrich",
+                "离线筹码分笔补全耗时",
+                {
+                    "enabled": bool(
+                        self.data_src_used == OFFLINE_INLINE_SRC
+                        and self.kline_all
+                        and self.k_type in _offline_chip_supported_ktypes()
+                        and offline_tick_files_exist_for_range(self.code, "1990-01-01", None)
+                    ),
+                    "klineAllCount": len(self.kline_all or []),
+                    "costMs": int(time.time() * 1000) - stage_t0_ms,
+                },
+                run_id="perf-check",
+            )
+            # #endregion
+            stage_t0_ms = int(time.time() * 1000)
         else:
             if self.data_src_logs:
                 self.data_src_logs = [
@@ -3940,6 +4171,23 @@ class ChanStepper:
                     + "，筹码 "
                     + data_source_label(self.data_src_chip_used or self.data_src_used)
                 ]
+            # 沿用 K 线缓存时仍刷新筹码全历史底座
+            _refresh_stepper_chip_kline_all_base(self, autype)
+            # #region agent log
+            _agent_debug_log_backend(
+                "P3",
+                "a_replay_trainer.py:init:dataSourceSelect",
+                "沿用缓存路径耗时",
+                {
+                    "cacheHit": bool(cache_hit),
+                    "dataSrc": str(self.data_src_used),
+                    "chipSrc": str(self.data_src_chip_used),
+                    "costMs": int(time.time() * 1000) - stage_t0_ms,
+                },
+                run_id="perf-check",
+            )
+            # #endregion
+            stage_t0_ms = int(time.time() * 1000)
 
         raw_master = self._replay_klus_master_raw or self._replay_klus_master or []
         self.data_form_mode = normalize_data_form_mode(data_form_mode)
@@ -3951,6 +4199,7 @@ class ChanStepper:
             self.raw_kline_count if self.raw_kline_count > 0 else 1,
         )
         if is_data_form_tick_synth_mode(self.data_form_mode):
+            chip_base_before_synth = copy.deepcopy(self.kline_all) if self.kline_all else []
             synth_master, synth_kline_all, tick_raw_count, tick_raw_master = build_tick_synth_session_data(
                 self.code,
                 self.k_type,
@@ -3963,7 +4212,10 @@ class ChanStepper:
             # tick_quantity：raw 保存聚合前 master，与 quantity 模式一致
             self._replay_klus_master_raw = copy.deepcopy(tick_raw_master)
             self._replay_klus_master = copy.deepcopy(synth_master)
-            self.kline_all = synth_kline_all
+            # 分笔合成仅覆盖会话区间，筹码底座保留更宽全历史
+            self.kline_all = _pick_wider_kline_all_for_chip(
+                [chip_base_before_synth, list(synth_kline_all or [])]
+            )
             self.raw_kline_count = int(tick_raw_count)
             self.data_form_quantity = normalize_data_form_quantity(
                 self.data_form_quantity,
@@ -3991,6 +4243,8 @@ class ChanStepper:
             data_source_priority=data_source_priority,
             confirm_offline=bool(confirm_offline),
         )
+        # record 快照里的 kline_all 可能是旧会话区间；保留 init 拉到的更宽底座
+        init_kline_all_for_chip = copy.deepcopy(self.kline_all) if self.kline_all else []
         self._chan_record_apply = try_apply_chan_record(
             self,
             enabled=self._chan_record_enabled,
@@ -4008,6 +4262,51 @@ class ChanStepper:
             data_src=self.data_src_used or DATA_SRC.AKSHARE,
             allow_end_snapshot_restore=False,
         )
+        if self._chan_record_apply.applied and init_kline_all_for_chip:
+            wider = _pick_wider_kline_all_for_chip(
+                [init_kline_all_for_chip, list(self.kline_all or [])]
+            )
+            if wider:
+                self.kline_all = wider
+                if (
+                    self.data_src_used == OFFLINE_INLINE_SRC
+                    and self.kline_all
+                    and self.k_type in _offline_chip_supported_ktypes()
+                    and offline_tick_files_exist_for_range(self.code, "1990-01-01", None)
+                ):
+                    _enrich_kline_all_offline_chip_non_triangle(self.code, self.kline_all, None, self.k_type)
+        if self.kline_all:
+            push_record_trace(
+                f"筹码kline_all：{len(self.kline_all)} 根（{self.kline_all[0].get('t', '-')} ~ {self.kline_all[-1].get('t', '-')}）"
+            )
+            _agent_debug_log_backend(
+                "H4",
+                "a_replay_trainer.py:init:chipKlineAll",
+                "init 后 stepper.kline_all 宽度",
+                {
+                    "count": len(self.kline_all),
+                    "firstT": str(self.kline_all[0].get("t", "")),
+                    "lastT": str(self.kline_all[-1].get("t", "")),
+                    "dataSrc": str(getattr(self, "data_src_used", "")),
+                    "cacheHit": bool(cache_hit),
+                },
+            )
+        # #region agent log
+        _agent_debug_log_backend(
+            "P0",
+            "a_replay_trainer.py:init",
+            "会话初始化耗时总览",
+            {
+                "cacheHit": bool(cache_hit),
+                "recordEnabled": bool(self._chan_record_enabled),
+                "dataFeedMode": str(self.data_feed_mode),
+                "masterCount": len(self._replay_klus_master or []),
+                "klineAllCount": len(self.kline_all or []),
+                "costMs": int(time.time() * 1000) - init_t0_ms,
+            },
+            run_id="perf-check",
+        )
+        # #endregion
         chan_bootstrapped = bool(self._chan_record_apply.applied)
 
         if not chan_bootstrapped:
@@ -4036,8 +4335,10 @@ class ChanStepper:
             self._chart_payload_cache = {}
             self._unified_full_payload = None
             if self.data_feed_mode == "unified":
+                unified_t0_ms = int(time.time() * 1000)
                 for _ in self.chan.load(step=False):
                     pass
+                load_cost_ms = int(time.time() * 1000) - unified_t0_ms
                 self.step_idx = -1
                 self._iter = None
                 self._rebuild_indicator_history_from_chan()
@@ -4056,6 +4357,20 @@ class ChanStepper:
                     kline_all=self.kline_all,
                     klu_arr_cache=klu_chart,
                 )
+                # #region agent log
+                _agent_debug_log_backend(
+                    "P5",
+                    "a_replay_trainer.py:init:unifiedBuild",
+                    "unified 全量load+序列化耗时",
+                    {
+                        "loadCostMs": load_cost_ms,
+                        "totalCostMs": int(time.time() * 1000) - unified_t0_ms,
+                        "indicatorCount": len(self.indicator_history or []),
+                        "chartBars": len((self._unified_full_payload or {}).get("kline", []) or []),
+                    },
+                    run_id="perf-check",
+                )
+                # #endregion
             else:
                 self._iter = self.chan.step_load()
                 self.step_idx = -1
@@ -4351,7 +4666,9 @@ class ChanStepper:
             if not include_kline_all:
                 payload.pop("kline_all", None)
             elif self.kline_all:
-                payload["kline_all"] = _chip_kline_all_with_x(self.kline_all)
+                payload["kline_all"] = _kline_all_for_chip_payload(
+                    self.kline_all, getattr(self, "_session_end_date", None)
+                )
             self._chart_payload_cache[include_kline_all] = (self.step_idx, payload)
             return payload
         if self.chan is None:
@@ -4379,7 +4696,24 @@ class ChanStepper:
             klu_arr_cache=klu_arr_cache,
         )
         if include_kline_all and self.kline_all:
-            payload["kline_all"] = _chip_kline_all_with_x(self.kline_all)
+            chip_out = _kline_all_for_chip_payload(
+                self.kline_all, getattr(self, "_session_end_date", None)
+            )
+            payload["kline_all"] = chip_out
+            if not getattr(self, "_chip_payload_h4_logged", False):
+                self._chip_payload_h4_logged = True
+                _agent_debug_log_backend(
+                    "H4",
+                    "a_replay_trainer.py:build_chart_payload_cached",
+                    "下发 payload kline_all",
+                    {
+                        "stepIdx": int(self.step_idx),
+                        "rawCount": len(self.kline_all),
+                        "outCount": len(chip_out),
+                        "outFirstT": str(chip_out[0].get("t", "")) if chip_out else "",
+                        "outLastT": str(chip_out[-1].get("t", "")) if chip_out else "",
+                    },
+                )
         self._chart_payload_cache[include_kline_all] = (self.step_idx, payload)
         return payload
 
@@ -5344,13 +5678,13 @@ class AppState:
             data_form_quantity_alloc=params.get("data_form_quantity_alloc", "front"),
             data_feed_mode=params.get("data_feed_mode", "step"),
             offline_data_custom=params.get("offline_data_custom", "native"),
-            chan_record_enabled=bool(params.get("chan_record_enabled", True)),
+            chan_record_enabled=bool(params.get("chan_record_enabled", False)),
         )
         cm = normalize_replay_chart_mode(params.get("chart_mode", "single"))
         off_custom = normalize_offline_data_custom(params.get("offline_data_custom", "native"))
         self.multi_steppers = []
         qty_alloc = params.get("data_form_quantity_alloc", "front")
-        rec_en = bool(params.get("chan_record_enabled", True))
+        rec_en = bool(params.get("chan_record_enabled", False))
         if cm == "dual":
             self.chart_mode = "dual"
             self.stepper2 = ChanStepper()
@@ -8065,6 +8399,38 @@ function ensureArray(v, fallback = []) {
 }
 let lastPayload = null;
 let chipKlineAllCache = null; // 兜底缓存：后续 payload 省略 kline_all 时仍用于筹码分布
+let chipKlineAllCacheSessionKey = "";
+// #region agent log
+const __agentDebugState = { lastByKey: {} };
+function __agentDebugLog(hypothesisId, location, message, data, dedupeKey = "", dedupeMs = 500) {
+  try {
+    const now = Date.now();
+    const key = `${hypothesisId}|${location}|${dedupeKey || message}`;
+    const last = Number(__agentDebugState.lastByKey[key] || 0);
+    if (now - last < dedupeMs) return;
+    __agentDebugState.lastByKey[key] = now;
+    const body = {
+      sessionId: "cb2ced",
+      runId: "post-fix",
+      hypothesisId,
+      location,
+      message,
+      data: data || {},
+      timestamp: now,
+    };
+    fetch("/api/_agent_debug_log", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).catch(() => {});
+    fetch("http://127.0.0.1:7753/ingest/f371f054-1caf-42ef-b835-583f3f88c3f9", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "cb2ced" },
+      body: JSON.stringify(body),
+    }).catch(() => {});
+  } catch (_) {}
+}
+// #endregion
 let allXMin = 0;
 let allXMax = 0;
 let viewXMin = 0;
@@ -8313,6 +8679,8 @@ let chartSettingsDraftBaseline = null;
 let selectedSubIndicatorSlot = Number(storageGet("chan_selected_sub_indicator_slot") || "0");
 let indicatorMainSlots = ensureObject(safeJsonParse(storageGet("chan_indicator_main_slots"), null), null);
 let indicatorSubSlots = ensureObject(safeJsonParse(storageGet("chan_indicator_sub_slots"), null), null);
+let indicatorMainVarVisible = String(storageGet("chan_indicator_main_var_visible") || "1") !== "0";
+let indicatorSubVarVisible = String(storageGet("chan_indicator_sub_var_visible") || "1") !== "0";
 
 const defaultMainSlots = { "0": [], "1": [], "2": [], "3": [], "4": [], "5": [] };
 const defaultSubSlots = { "0": [], "1": [], "2": [], "3": [], "4": [], "5": [] };
@@ -8343,6 +8711,8 @@ for (let i = 0; i <= 5; i++) {
 
 storageSet("chan_indicator_main_slots", JSON.stringify(indicatorMainSlots));
 storageSet("chan_indicator_sub_slots", JSON.stringify(indicatorSubSlots));
+storageSet("chan_indicator_main_var_visible", indicatorMainVarVisible ? "1" : "0");
+storageSet("chan_indicator_sub_var_visible", indicatorSubVarVisible ? "1" : "0");
 const MAIN_INDICATORS = new Set(["boll", "demark", "trendline"]);
 const SUB_INDICATORS = new Set(["macd", "kdj", "rsi", "vol"]);
 
@@ -9261,7 +9631,7 @@ const DEFAULT_SYSTEM_CONFIG = {
   rollbackCacheDepth: 96,
   rollbackFullSnapshotInterval: 8,
   rollbackCaptureMaxBars: 30000,
-  chanRecordEnabled: true,
+  chanRecordEnabled: false,
 };
 
 let systemConfig = ensureObject(
@@ -10237,6 +10607,8 @@ function captureChartSettingsDraftBaseline() {
     selectedSubIndicatorSlot,
     indicatorMainSlots: JSON.parse(JSON.stringify(indicatorMainSlots)),
     indicatorSubSlots: JSON.parse(JSON.stringify(indicatorSubSlots)),
+    indicatorMainVarVisible,
+    indicatorSubVarVisible,
     crosshairEnabled,
   };
 }
@@ -10251,6 +10623,8 @@ function restoreChartSettingsDraftBaseline() {
   selectedSubIndicatorSlot = b.selectedSubIndicatorSlot;
   indicatorMainSlots = JSON.parse(JSON.stringify(b.indicatorMainSlots));
   indicatorSubSlots = JSON.parse(JSON.stringify(b.indicatorSubSlots));
+  indicatorMainVarVisible = !!b.indicatorMainVarVisible;
+  indicatorSubVarVisible = !!b.indicatorSubVarVisible;
   crosshairEnabled = b.crosshairEnabled;
   chartSettingsDraftBaseline = null;
 }
@@ -10323,6 +10697,8 @@ function flushChartSettingsFormToMemory() {
     } else if (key === "indicators") {
       if (subkey === "mainSlot") selectedMainIndicatorSlot = Number(val);
       else if (subkey === "subSlot") selectedSubIndicatorSlot = Number(val);
+      else if (subkey === "mainVarVisible") indicatorMainVarVisible = !!val;
+      else if (subkey === "subVarVisible") indicatorSubVarVisible = !!val;
       else if (subkey === "mainType") {
         const selected = [];
         root.querySelectorAll(".indicator-check-main").forEach((c) => { if (c.checked) selected.push(c.value); });
@@ -10661,6 +11037,8 @@ function resolveChartSettingsItemValue(sec, item) {
     if (item.subKey === "subSlot") return selectedSubIndicatorSlot;
     if (item.subKey === "mainType") return indicatorMainSlots[String(selectedMainIndicatorSlot)] || [];
     if (item.subKey === "subType") return indicatorSubSlots[String(selectedSubIndicatorSlot)] || [];
+    if (item.subKey === "mainVarVisible") return !!indicatorMainVarVisible;
+    if (item.subKey === "subVarVisible") return !!indicatorSubVarVisible;
   }
   const sectionCfg = ensureObject(chartConfig[sec.key], {});
   return sectionCfg[item.subKey];
@@ -10765,6 +11143,22 @@ function appendChartSettingsItemTo(parent, sec, item, buildLabelHtml) {
     mountChartNestedCascade(cascadeRoot, sec.key, item.tree || [], buildLabelHtml);
   } else if (item.type === "checkbox") {
     itemDiv.innerHTML += `<label style="flex-direction:row;align-items:center;display:flex;"><input type="checkbox" ${val ? "checked" : ""} data-key="${sec.key}" data-subkey="${item.subKey}" style="width:auto;margin-right:8px;">${item.label}</label>`;
+    if (sec.key === "indicators" && (item.subKey === "mainVarVisible" || item.subKey === "subVarVisible")) {
+      const c = itemDiv.querySelector('input[type="checkbox"]');
+      if (c) {
+        c.onchange = () => {
+          const who = item.subKey === "mainVarVisible" ? "主图" : "副图";
+          const st = c.checked ? "开启" : "关闭";
+          showAlertAndLog(
+            `${who}变量显示已${st}。\n` +
+            "操作逻辑：\n" +
+            "1) 开启后显示指标变量文本（示例：VOL: 1999）。\n" +
+            "2) 关闭后仅保留图形，不显示变量文本。\n" +
+            "3) 保存设置后会持久化，重启后保持。"
+          );
+        };
+      }
+    }
   } else if (item.type === "color") {
     const safeVal = typeof val === "string" ? val : "#000000";
     itemDiv.innerHTML += `<label>${buildLabelHtml(item)}</label><div style="display:flex;align-items:center;gap:8px;"><input type="color" value="${safeVal.startsWith("#") ? safeVal : "#000000"}" data-key="${sec.key}" data-subkey="${item.subKey}" style="width:40px;height:24px;padding:0;border:none;cursor:pointer;"><input type="text" value="${safeVal}" data-key="${sec.key}" data-subkey="${item.subKey}-text" style="flex:1;height:24px;padding:2px 4px;font-size:12px;font-family:monospace;"></div>`;
@@ -11340,8 +11734,10 @@ function renderSettingsForm() {
       items: [
         { label: "主图配置槽位", subKey: "mainSlot", type: "select", options: mainSlotOptions, tip: slotTip },
         { label: "主图指标选择", subKey: "mainType", type: "indicator_multi_main" },
+        { label: "主图变量显示", subKey: "mainVarVisible", type: "checkbox", tip: "控制主图指标变量文本显示（如 BOLL 当前值）。" },
         { label: "副图配置槽位", subKey: "subSlot", type: "select", options: subSlotOptions, tip: slotTip },
-        { label: "副图指标选择", subKey: "subType", type: "indicator_multi_sub" }
+        { label: "副图指标选择", subKey: "subType", type: "indicator_multi_sub" },
+        { label: "副图变量显示", subKey: "subVarVisible", type: "checkbox", tip: "控制副图指标变量文本显示（如 VOL: 1999）。" }
       ]
     },
     {
@@ -12077,11 +12473,11 @@ function renderSystemSettingsForm() {
     "同标的+同缠论配置下，首次全量计算后写入工程目录 a_replay_record/；再次加载时按 K 线时间重叠复用（统一喂入可整包恢复）。\n" +
     "配置指纹含：代码、周期、复权、缠论参数、数据形态/喂入、离线解析、数据源优先级等；不含日期区间（日期写在文件名与 meta）。\n" +
     "示例：曾算过 2022/10/18–11/30，再开 10/20–12/30 可复用重叠段再增量补算。";
-  recItem.innerHTML = `<label><input type="checkbox" data-sys-key="chanRecordEnabled" ${systemConfig.chanRecordEnabled !== false ? "checked" : ""}/> 启用本地 record 缓存</label> <span class="tip-icon" data-tip="${escapeHtmlAttr(recTip)}">!</span>`;
+  recItem.innerHTML = `<label><input type="checkbox" data-sys-key="chanRecordEnabled" ${systemConfig.chanRecordEnabled === true ? "checked" : ""}/> 启用本地 record 缓存</label> <span class="tip-icon" data-tip="${escapeHtmlAttr(recTip)}">!</span>`;
   const recNote = document.createElement("div");
   recNote.className = "muted";
   recNote.style.fontSize = "12px";
-  recNote.textContent = "关闭后仅内存会话缓存 K 线，不再读写 a_replay_record。环境变量 CHAN_RECORD=0 可全局关闭。";
+  recNote.textContent = "默认关闭（推荐）：避免 record 恢复拖慢加载。勾选后才读写 a_replay_record。环境变量 CHAN_RECORD=0 可全局关闭。";
   recItem.appendChild(recNote);
   recGrid.appendChild(recItem);
   recSec.appendChild(recGrid);
@@ -12243,6 +12639,8 @@ async function saveSettings() {
   storageSet("chan_indicator_sub_slots", JSON.stringify(indicatorSubSlots));
   storageSet("chan_selected_main_indicator_slot", String(selectedMainIndicatorSlot));
   storageSet("chan_selected_sub_indicator_slot", String(selectedSubIndicatorSlot));
+  storageSet("chan_indicator_main_var_visible", indicatorMainVarVisible ? "1" : "0");
+  storageSet("chan_indicator_sub_var_visible", indicatorSubVarVisible ? "1" : "0");
   applyRhythmCalcModeToChanConfig(chanConfig);
   const nextRhythmCalcMode = normalizeRhythmCalcMode(chartConfig.rhythmLine && chartConfig.rhythmLine.calcMode);
   storageSet("chan_logic_config", JSON.stringify(chanConfig));
@@ -12328,7 +12726,7 @@ function saveSystemSettingsFromForm() {
 
     const recChk = $("systemSettingsContent").querySelector('input[data-sys-key="chanRecordEnabled"]');
     if (recChk) {
-        const prevRec = systemConfig.chanRecordEnabled !== false;
+        const prevRec = systemConfig.chanRecordEnabled === true;
         systemConfig.chanRecordEnabled = !!recChk.checked;
         if (prevRec !== systemConfig.chanRecordEnabled) {
             showAlertAndLog(
@@ -12475,10 +12873,14 @@ function resetSettings() {
     indicatorSubSlots = { ...defaultSubSlots };
     selectedMainIndicatorSlot = 0;
     selectedSubIndicatorSlot = 0;
+    indicatorMainVarVisible = true;
+    indicatorSubVarVisible = true;
     storageSet("chan_indicator_main_slots", JSON.stringify(indicatorMainSlots));
     storageSet("chan_indicator_sub_slots", JSON.stringify(indicatorSubSlots));
     storageSet("chan_selected_main_indicator_slot", "0");
     storageSet("chan_selected_sub_indicator_slot", "0");
+    storageSet("chan_indicator_main_var_visible", "1");
+    storageSet("chan_indicator_sub_var_visible", "1");
     const sharedReset = JSON.parse(
       JSON.stringify(chartConfigStore.shared || { theme: chartConfig.theme, crosshair: chartConfig.crosshair, showBottomBsp: true })
     );
@@ -12577,7 +12979,12 @@ function getIndicatorConfig() {
       }
     }
   }
-  return { mainTypes, subCharts };
+  return {
+    mainTypes,
+    subCharts,
+    mainVarVisible: !!indicatorMainVarVisible,
+    subVarVisible: !!indicatorSubVarVisible,
+  };
 }
 
 function getChipBucketStep() {
@@ -15032,7 +15439,7 @@ function getReferenceKByBounds(chart, xMin, xMax, w) {
   if (!chart || !chart.kline || chart.kline.length === 0) {
     return ksAll.length > 0 ? ksAll[ksAll.length - 1] : null;
   }
-  if (!crosshairEnabled || crosshairX === null) {
+  if (crosshairX === null) {
     return chart.kline[chart.kline.length - 1];
   }
   const plotW = Math.max(1, w - PAD_L - PAD_R);
@@ -15047,6 +15454,72 @@ function getReferenceKByBounds(chart, xMin, xMax, w) {
 
 function getReferenceK(chart, s) {
   return getReferenceKByBounds(chart, s.xMin, s.xMax, s.w);
+}
+
+/** 十字线/末根对应的指标行（按主图 K 的 x 吸附） */
+function resolveIndicatorRowForDisplay(chart, s, visibleInd) {
+  if (!visibleInd || visibleInd.length === 0) return null;
+  const refK = getReferenceK(chart, s);
+  if (!refK) return visibleInd[visibleInd.length - 1];
+  const refX = Number(refK.x);
+  const exact = visibleInd.find((i) => Number(i.x) === refX);
+  if (exact) return exact;
+  return nearestKByX(visibleInd, refX);
+}
+
+function chipSessionIdentity(payload) {
+  const sc = sessionConfig || {};
+  return [
+    String((payload && payload.code) || sc.code || ""),
+    String(sc.begin || ""),
+    String(sc.end || ""),
+    String(sc.k_type || sc.kType || ""),
+  ].join("|");
+}
+
+function chipKlineAllFirstTime(arr) {
+  return arr && arr.length > 0 ? String(arr[0].t || "") : "";
+}
+
+/** 新下发的 kline_all 是否应覆盖旧缓存（更早起点或更长） */
+function shouldPreferChipKlineAll(candidate, cached) {
+  if (!cached || !cached.length) return true;
+  if (!candidate || !candidate.length) return false;
+  const c0 = chipTimeComparable(chipKlineAllFirstTime(candidate));
+  const o0 = chipTimeComparable(chipKlineAllFirstTime(cached));
+  if (c0 != null && o0 != null && c0 < o0) return true;
+  return candidate.length > cached.length;
+}
+
+/** 按时间合并多段 kline_all（跨日加载时累加筹码底座） */
+function mergeChipKlineAllByTime(a, b) {
+  const rowsA = Array.isArray(a) ? a : [];
+  const rowsB = Array.isArray(b) ? b : [];
+  if (rowsA.length === 0) return rowsB.slice();
+  if (rowsB.length === 0) return rowsA.slice();
+  const map = new Map();
+  for (const row of [...rowsA, ...rowsB]) {
+    if (!row) continue;
+    const key = String(row.t || "").trim();
+    if (!key) continue;
+    map.set(key, row);
+  }
+  const merged = Array.from(map.values());
+  merged.sort((x, y) => {
+    const cx = chipTimeComparable(x.t);
+    const cy = chipTimeComparable(y.t);
+    if (cx != null && cy != null) return cx - cy;
+    return String(x.t || "").localeCompare(String(y.t || ""));
+  });
+  return merged;
+}
+
+function normalizeChipKlineAllX(arr) {
+  return (arr || []).map((bar, i) => {
+    const row = { ...bar };
+    row.x = i;
+    return row;
+  });
 }
 
 function getPanelByY(s, y) {
@@ -15456,7 +15929,7 @@ function drawChips(chart, s) {
   const visibleKs = s.visibleK || [];
   const latestVisibleK = visibleKs.length > 0 ? visibleKs[visibleKs.length - 1] : ((chart.kline && chart.kline.length > 0) ? chart.kline[chart.kline.length - 1] : null);
   const stepping = isChipReplayStepping(lastPayload);
-  const crossChipOn = crosshairEnabled && crosshairX !== null && !stepping;
+  const crossChipOn = crosshairX !== null && !stepping;
   const refMode = String(chartConfig.chip.peakRefMode || "latest_visible");
   const getTurnRef = (type) => {
     const arr = type === "seg" ? (chart.seg || []) : (chart.bi || []);
@@ -15497,7 +15970,11 @@ function drawChips(chart, s) {
   const refT = String(refK.t || "");
   // 映射到 kline_all 且 ref 带有效 bar x 时用 x 截止；若 kline_all 全为占位 x（如 -1），x<=rx 会把全集算进来，须改按时间截止
   const refKX = Number(refK.x);
-  const useXCutoff = chipCutoffByKsX && Number.isFinite(refKX) && refKX >= 0;
+  const ksUsesSequentialX =
+    ksAll.length > 0 &&
+    Number(ksAll[0].x) === 0 &&
+    Number(ksAll[ksAll.length - 1].x) === ksAll.length - 1;
+  const useXCutoff = chipCutoffByKsX && Number.isFinite(refKX) && refKX >= 0 && ksUsesSequentialX;
   let useKs;
   if (useXCutoff) {
     useKs = ksAll.filter((k) => Number(k.x) <= refKX);
@@ -15505,6 +15982,28 @@ function drawChips(chart, s) {
   } else {
     useKs = refT ? ksAll.filter((k) => chipTimeLe(k.t, refT)) : ksAll;
   }
+  // #region agent log
+  __agentDebugLog(
+    "H5",
+    "a_replay_trainer.py:drawChips:cutoff",
+    "筹码截止区间计算",
+    {
+      ksAllCount: ksAll.length,
+      ksAllFirstT: ksAll.length > 0 ? String(ksAll[0].t || "") : "",
+      ksAllLastT: ksAll.length > 0 ? String(ksAll[ksAll.length - 1].t || "") : "",
+      refT,
+      refX: Number.isFinite(refKX) ? refKX : null,
+      useXCutoff,
+      useKsCount: useKs.length,
+      useKsFirstT: useKs.length > 0 ? String(useKs[0].t || "") : "",
+      useKsLastT: useKs.length > 0 ? String(useKs[useKs.length - 1].t || "") : "",
+      crossChipOn,
+      stepping,
+    },
+    `all:${ksAll.length}|use:${useKs.length}|ref:${refT}|xCut:${useXCutoff ? 1 : 0}`,
+    250
+  );
+  // #endregion
 
   let allMin = Infinity;
   let allMax = -Infinity;
@@ -16238,6 +16737,33 @@ function drawIndicators(chart, s) {
   const theme = document.documentElement.getAttribute("data-theme") || "light";
   const lineMain = theme === "light" ? "#1e293b" : "#f8fafc";
   const mainTypeSet = new Set((s.mainTypes || []).map((m) => m.type));
+  const indicatorCfg = getIndicatorConfig();
+  const showMainVar = !!indicatorCfg.mainVarVisible;
+  const showSubVar = !!indicatorCfg.subVarVisible;
+  const fmtIndNum = (v, digits = 2) => (Number.isFinite(Number(v)) ? Number(v).toFixed(digits) : "--");
+  const refInd = resolveIndicatorRowForDisplay(chart, s, visibleInd);
+  const latestVisible = visibleInd.length > 0 ? visibleInd[visibleInd.length - 1] : null;
+  const dispInd = refInd || latestVisible;
+  // #region agent log
+  const __dbgRefK = getReferenceK(chart, s);
+  __agentDebugLog(
+    "H1",
+    "a_replay_trainer.py:drawIndicators:refInd",
+    "指标变量锚点检查",
+    {
+      crosshairEnabled: !!crosshairEnabled,
+      crosshairX,
+      latestX: latestVisible ? Number(latestVisible.x) : null,
+      refX: __dbgRefK ? Number(__dbgRefK.x) : null,
+      dispX: dispInd ? Number(dispInd.x) : null,
+      visibleIndCount: visibleInd.length,
+      showMainVar,
+      showSubVar,
+    },
+    `disp:${dispInd ? Number(dispInd.x) : "na"}|ref:${__dbgRefK ? Number(__dbgRefK.x) : "na"}|cx:${crosshairX}`,
+    250
+  );
+  // #endregion
 
   const drawPanelLine = (arr, getter, yFn, color) => {
     ctx.strokeStyle = color;
@@ -16310,6 +16836,30 @@ function drawIndicators(chart, s) {
     ctx.font = "10px Consolas";
     ctx.fillText(subYMax.toFixed(2), 4, panel.top + 10);
     ctx.fillText(subYMin.toFixed(2), 4, panel.bottom);
+    if (showSubVar && dispInd) {
+      let subLabel = "";
+      if (panel.type === "macd" && dispInd.macd) {
+        subLabel = `MACD DIF:${fmtIndNum(dispInd.macd.dif)} DEA:${fmtIndNum(dispInd.macd.dea)} MACD:${fmtIndNum(dispInd.macd.macd)}`;
+      } else if (panel.type === "kdj" && dispInd.kdj) {
+        subLabel = `KDJ K:${fmtIndNum(dispInd.kdj.k)} D:${fmtIndNum(dispInd.kdj.d)} J:${fmtIndNum(dispInd.kdj.j)}`;
+      } else if (panel.type === "rsi" && Number.isFinite(Number(dispInd.rsi))) {
+        subLabel = `RSI:${fmtIndNum(dispInd.rsi)}`;
+      } else if (panel.type === "vol") {
+        const volV = Number.isFinite(Number(dispInd.vol))
+          ? Number(dispInd.vol)
+          : (() => {
+              const refK = getReferenceK(chart, s);
+              const vk = refK && s.visibleK ? s.visibleK.find((k) => Number(k.x) === Number(refK.x)) : null;
+              return vk ? Number(vk.v) : NaN;
+            })();
+        subLabel = `VOL:${fmtIndNum(volV, 0)}`;
+      }
+      if (subLabel) {
+        ctx.textAlign = "right";
+        ctx.fillText(subLabel, s.w - PAD_R - 6, panel.top + 10);
+        ctx.textAlign = "left";
+      }
+    }
     if (panel.type === "macd") {
       for (const i of visibleInd) {
         if (!i.macd) continue;
@@ -16397,6 +16947,66 @@ function drawIndicators(chart, s) {
         ctx.moveTo(s.x(s.xMin), s.y(y_start));
         ctx.lineTo(s.x(s.xMax), s.y(y_end));
         ctx.stroke();
+      }
+      ctx.restore();
+    }
+  }
+  if (showMainVar && dispInd) {
+    const rows = [];
+    if (mainTypeSet.has("boll") && dispInd.boll) {
+      rows.push(
+        `BOLL MID:${fmtIndNum(dispInd.boll.mid)} UP:${fmtIndNum(dispInd.boll.up)} DN:${fmtIndNum(dispInd.boll.down)}`
+      );
+    }
+    if (mainTypeSet.has("demark")) {
+      const demarkCnt = Array.isArray(dispInd.demark) ? dispInd.demark.length : 0;
+      rows.push(`Demark: ${demarkCnt} 个标记`);
+    }
+    if (mainTypeSet.has("trendline")) {
+      rows.push(`TrendLine: ${Array.isArray(chart.trend_lines) ? chart.trend_lines.length : 0} 条`);
+    }
+    // #region agent log
+    __agentDebugLog(
+      "H3",
+      "a_replay_trainer.py:drawIndicators:mainRowsAssembled",
+      "主图变量行组装结果",
+      {
+        showMainVar,
+        rowsCount: rows.length,
+        mainTypes: Array.from(mainTypeSet || []),
+        hasBollValue: !!(dispInd && dispInd.boll),
+        demarkValueCount: dispInd && Array.isArray(dispInd.demark) ? dispInd.demark.length : null,
+        trendLineCount: Array.isArray(chart.trend_lines) ? chart.trend_lines.length : 0,
+      },
+      `mainVar:${showMainVar ? 1 : 0}|rows:${rows.length}|types:${Array.from(mainTypeSet || []).join(",")}`,
+      350
+    );
+    // #endregion
+    if (rows.length > 0) {
+      // #region agent log
+      __agentDebugLog(
+        "H2",
+        "a_replay_trainer.py:drawIndicators:mainVarBox",
+        "主图变量绘制位置",
+        {
+          rowsCount: rows.length,
+          textX: PAD_L + 4,
+          textY: PAD_T + 8,
+        },
+        `rows:${rows.length}`,
+        400
+      );
+      // #endregion
+      ctx.save();
+      ctx.fillStyle = cssVar("--legendText", "#0f172a");
+      ctx.font = "11px Consolas";
+      ctx.textBaseline = "top";
+      ctx.textAlign = "left";
+      let y = PAD_T + 8;
+      const xLeft = PAD_L + 4;
+      for (const row of rows) {
+        ctx.fillText(row, xLeft, y);
+        y += 14;
       }
       ctx.restore();
     }
@@ -17484,6 +18094,11 @@ function refreshUI(payload, options) {
     ? !!options.showStandaloneNotices
     : !afterStep;
   const prev = lastPayload;
+  const chipSid = chipSessionIdentity(payload);
+  if (chipSid && chipKlineAllCacheSessionKey && chipSid !== chipKlineAllCacheSessionKey) {
+    chipKlineAllCache = null;
+  }
+  if (chipSid) chipKlineAllCacheSessionKey = chipSid;
   const dataFormChanged =
     prev &&
     payload &&
@@ -17503,7 +18118,28 @@ function refreshUI(payload, options) {
     Array.isArray(payload.chart.kline_all) &&
     payload.chart.kline_all.length > 0
   ) {
-    chipKlineAllCache = payload.chart.kline_all;
+    if (!chipKlineAllCache || chipKlineAllCache.length === 0) {
+      chipKlineAllCache = normalizeChipKlineAllX(payload.chart.kline_all);
+    } else {
+      chipKlineAllCache = normalizeChipKlineAllX(
+        mergeChipKlineAllByTime(chipKlineAllCache, payload.chart.kline_all)
+      );
+    }
+    // #region agent log
+    __agentDebugLog(
+      "H4",
+      "a_replay_trainer.py:refreshUI:updateCacheFromPayload",
+      "payload 主图更新 kline_all 缓存",
+      {
+        payloadHasKlineAll: true,
+        payloadKlineAllCount: Array.isArray(payload.chart.kline_all) ? payload.chart.kline_all.length : 0,
+        payloadKlineAllFirstT: Array.isArray(payload.chart.kline_all) && payload.chart.kline_all.length > 0 ? String(payload.chart.kline_all[0].t || "") : "",
+        payloadKlineAllLastT: Array.isArray(payload.chart.kline_all) && payload.chart.kline_all.length > 0 ? String(payload.chart.kline_all[payload.chart.kline_all.length - 1].t || "") : "",
+      },
+      `payload-main:${Array.isArray(payload.chart.kline_all) ? payload.chart.kline_all.length : 0}|first:${Array.isArray(payload.chart.kline_all) && payload.chart.kline_all.length > 0 ? String(payload.chart.kline_all[0].t || "") : ""}`,
+      300
+    );
+    // #endregion
   }
   // 后端在步进等接口省略 kline_all；数据形式/数量变更时禁止沿用旧 kline_all（聚合根数已变）
   if (
@@ -17519,6 +18155,21 @@ function refreshUI(payload, options) {
   ) {
     if (!Object.prototype.hasOwnProperty.call(payload.chart, "kline_all") || !payload.chart.kline_all || payload.chart.kline_all.length === 0) {
       payload.chart.kline_all = prev.chart.kline_all;
+      // #region agent log
+      __agentDebugLog(
+        "H4",
+        "a_replay_trainer.py:refreshUI:reusePrevChartKlineAll",
+        "payload 缺失 kline_all 时复用 prev.chart",
+        {
+          dataFormChanged: !!dataFormChanged,
+          prevCount: Array.isArray(prev.chart.kline_all) ? prev.chart.kline_all.length : 0,
+          prevFirstT: Array.isArray(prev.chart.kline_all) && prev.chart.kline_all.length > 0 ? String(prev.chart.kline_all[0].t || "") : "",
+          prevLastT: Array.isArray(prev.chart.kline_all) && prev.chart.kline_all.length > 0 ? String(prev.chart.kline_all[prev.chart.kline_all.length - 1].t || "") : "",
+        },
+        `reuse-prev:${Array.isArray(prev.chart.kline_all) ? prev.chart.kline_all.length : 0}`,
+        300
+      );
+      // #endregion
     }
   }
   if (payload && payload.ready && payload.charts && typeof payload.charts === "object") {
@@ -17536,8 +18187,56 @@ function refreshUI(payload, options) {
       Array.isArray(payload.chart.kline_all) &&
       payload.chart.kline_all.length > 0
     ) {
-      chipKlineAllCache = payload.chart.kline_all;
+      if (!chipKlineAllCache || chipKlineAllCache.length === 0) {
+        chipKlineAllCache = normalizeChipKlineAllX(payload.chart.kline_all);
+      } else {
+        chipKlineAllCache = normalizeChipKlineAllX(
+          mergeChipKlineAllByTime(chipKlineAllCache, payload.chart.kline_all)
+        );
+      }
+      // #region agent log
+      __agentDebugLog(
+        "H4",
+        "a_replay_trainer.py:refreshUI:updateCacheFromDualActive",
+        "dual active 图更新 kline_all 缓存",
+        {
+          activeChartId: String(payload.active_chart_id || dualActiveChartId || "chart1"),
+          count: payload.chart.kline_all.length,
+          firstT: String(payload.chart.kline_all[0].t || ""),
+          lastT: String(payload.chart.kline_all[payload.chart.kline_all.length - 1].t || ""),
+        },
+        `payload-dual:${payload.chart.kline_all.length}`,
+        300
+      );
+      // #endregion
     } else if (!dataFormChanged && chipKlineAllCache && chipKlineAllCache.length > 0 && payload.chart) {
+      payload.chart.kline_all = chipKlineAllCache;
+      // #region agent log
+      __agentDebugLog(
+        "H4",
+        "a_replay_trainer.py:refreshUI:reuseGlobalChipCache",
+        "dual active 图缺失 kline_all 时复用全局缓存",
+        {
+          cacheCount: chipKlineAllCache.length,
+          cacheFirstT: String(chipKlineAllCache[0].t || ""),
+          cacheLastT: String(chipKlineAllCache[chipKlineAllCache.length - 1].t || ""),
+          dataFormChanged: !!dataFormChanged,
+        },
+        `reuse-cache:${chipKlineAllCache.length}`,
+        300
+      );
+      // #endregion
+    }
+  }
+  if (
+    payload &&
+    payload.ready &&
+    payload.chart &&
+    chipKlineAllCache &&
+    chipKlineAllCache.length > 0
+  ) {
+    const cur = payload.chart.kline_all;
+    if (!cur || !cur.length || chipKlineAllCache.length > cur.length) {
       payload.chart.kline_all = chipKlineAllCache;
     }
   }
@@ -17590,7 +18289,7 @@ function refreshUI(payload, options) {
     showJudgeNotice(payload);
   }
     if (payload.ready) {
-    if (dataFormChanged && !afterStep) {
+    if ((dataFormChanged || (chipSid && chipKlineAllCacheSessionKey && chipSid !== chipSessionIdentity(prev))) && !afterStep) {
       chipKlineAllCache = null;
       userAdjustedView = false;
       viewReady = false;
@@ -17746,7 +18445,7 @@ $("btnInit").onclick = async () => {
       rollback_cache_depth: Number(systemConfig.rollbackCacheDepth || DEFAULT_SYSTEM_CONFIG.rollbackCacheDepth),
       rollback_full_snapshot_interval: Number(systemConfig.rollbackFullSnapshotInterval || DEFAULT_SYSTEM_CONFIG.rollbackFullSnapshotInterval),
       rollback_capture_max_bars: Number(systemConfig.rollbackCaptureMaxBars || DEFAULT_SYSTEM_CONFIG.rollbackCaptureMaxBars),
-      chan_record_enabled: systemConfig.chanRecordEnabled !== false,
+      chan_record_enabled: systemConfig.chanRecordEnabled === true,
       ...extra,
     });
     const cmInit = $("chartMode") ? $("chartMode").value : "single";
@@ -18819,6 +19518,51 @@ async def lifespan(_: FastAPI):
 app = FastAPI(title="chan.py replay trainer", lifespan=lifespan)
 
 
+_AGENT_DEBUG_LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "debug-cb2ced.log")
+
+
+def _agent_debug_log_backend(
+    hypothesis_id: str,
+    location: str,
+    message: str,
+    data: dict[str, Any],
+    *,
+    run_id: str = "post-fix2",
+) -> None:
+    """Python 侧调试埋点（NDJSON 落盘）。"""
+    try:
+        import time
+
+        line = json.dumps(
+            {
+                "sessionId": "cb2ced",
+                "runId": run_id,
+                "hypothesisId": hypothesis_id,
+                "location": location,
+                "message": message,
+                "data": data,
+                "timestamp": int(time.time() * 1000),
+            },
+            ensure_ascii=False,
+        )
+        with open(_AGENT_DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception:
+        pass
+
+
+@app.post("/api/_agent_debug_log")
+def api_agent_debug_log(body: dict[str, Any]):
+    """调试埋点：前端 NDJSON 落盘（debug 会话 cb2ced）。"""
+    try:
+        line = json.dumps(body, ensure_ascii=False) + "\n"
+        with open(_AGENT_DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(line)
+    except Exception:
+        pass
+    return {"ok": True}
+
+
 @app.get("/", response_class=HTMLResponse)
 def index():
     return HTML
@@ -18856,7 +19600,7 @@ def api_init(req: InitReq):
                     data_form_quantity_alloc=getattr(req, "data_form_quantity_alloc", "front"),
                     data_feed_mode=getattr(req, "data_feed_mode", "step"),
                     offline_data_custom=getattr(req, "offline_data_custom", "native"),
-                    chan_record_enabled=bool(getattr(req, "chan_record_enabled", True)),
+                    chan_record_enabled=bool(getattr(req, "chan_record_enabled", False)),
                 )
                 if APP_STATE.stepper.data_src_used != OFFLINE_INLINE_SRC:
                     raise ValueError(
@@ -18880,7 +19624,7 @@ def api_init(req: InitReq):
                         data_form_quantity_alloc=getattr(req, "data_form_quantity_alloc", "front"),
                         data_feed_mode=getattr(req, "data_feed_mode", "step"),
                         offline_data_custom=getattr(req, "offline_data_custom", "native"),
-                        chan_record_enabled=bool(getattr(req, "chan_record_enabled", True)),
+                        chan_record_enabled=bool(getattr(req, "chan_record_enabled", False)),
                     )
                     APP_STATE.multi_steppers.append(st)
             else:
@@ -18898,7 +19642,7 @@ def api_init(req: InitReq):
                     data_form_quantity_alloc=getattr(req, "data_form_quantity_alloc", "front"),
                     data_feed_mode=getattr(req, "data_feed_mode", "step"),
                     offline_data_custom=getattr(req, "offline_data_custom", "native"),
-                    chan_record_enabled=bool(getattr(req, "chan_record_enabled", True)),
+                    chan_record_enabled=bool(getattr(req, "chan_record_enabled", False)),
                 )
                 chart_mode = "dual" if cm_init == "dual" else "single"
                 APP_STATE.chart_mode = chart_mode
@@ -18922,7 +19666,7 @@ def api_init(req: InitReq):
                         data_form_quantity_alloc=getattr(req, "data_form_quantity_alloc", "front"),
                         data_feed_mode=getattr(req, "data_feed_mode", "step"),
                         offline_data_custom=getattr(req, "offline_data_custom", "native"),
-                        chan_record_enabled=bool(getattr(req, "chan_record_enabled", True)),
+                        chan_record_enabled=bool(getattr(req, "chan_record_enabled", False)),
                     )
         except OfflineDataConfirmRequired as exc:
             raise HTTPException(
@@ -18950,7 +19694,7 @@ def api_init(req: InitReq):
             "begin_date": req.begin_date,
             "end_date": req.end_date,
             "autype": autype,
-            "chan_record_enabled": bool(getattr(req, "chan_record_enabled", True)),
+            "chan_record_enabled": bool(getattr(req, "chan_record_enabled", False)),
             "initial_cash": req.initial_cash,
             "chan_config": req.chan_config,
             "k_type": k_type_to_api_key(APP_STATE.stepper.k_type),
@@ -19026,7 +19770,7 @@ def api_init(req: InitReq):
         if rec_apply and getattr(rec_apply, "applied", False) and getattr(rec_apply, "message", ""):
             if not has_trace:
                 payload["message"] += f"（缠论 record：{rec_apply.message}）"
-        elif getattr(APP_STATE.stepper, "_chan_record_enabled", True) and not (
+        elif getattr(APP_STATE.stepper, "_chan_record_enabled", False) and not (
             rec_apply and getattr(rec_apply, "applied", False)
         ):
             payload["message"] += "（缠论 record：未命中，后台将异步保存本次全量计算）"
