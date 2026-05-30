@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "bar_count": 256,
+  "kline_all_count": 256,
+  "data_src_label": "AData",
+  "code": "sz.920992",
+  "use_for": "kline"
+}

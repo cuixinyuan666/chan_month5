@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "fingerprint": "c30df32a629ebf612af3",
+  "code": "sz.920992",
+  "k_type": "1min",
+  "autype": "qfq",
+  "begin_date": "2022-10-18",
+  "end_date": "2022-10-21",
+  "bar_count": 256,
+  "first_bar_time": "2026/05/28 09:15",
+  "last_bar_time": "2026/05/28 15:00",
+  "saved_at": "2026-05-28T22:28:43",
+  "data_feed_mode": "step",
+  "step_idx": 255
+}

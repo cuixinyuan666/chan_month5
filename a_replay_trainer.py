@@ -15515,6 +15515,10 @@ function mapChartBarToKsAll(bar, ksAll) {
   }
   const bx = Number(bar.x);
   if (Number.isFinite(bx)) {
+    const barCmp = chipTimeComparable(refT);
+    const firstCmp = chipTimeComparable(ksAll[0] && ksAll[0].t);
+    // 全历史筹码底座通常早于主图会话；此时主图 x=0 不能拿来匹配底座 x=0。
+    if (barCmp != null && firstCmp != null && firstCmp < barCmp) return null;
     let best = ksAll[0];
     let bestD = Math.abs(Number(best.x) - bx);
     for (let i = 1; i < ksAll.length; i++) {
@@ -18214,8 +18218,13 @@ async function fetchChipKlineAllLazy(payload) {
       lastPayload.chart.kline_all = r.kline_all;
     }
     chipKlineAllCache = normalizeChipKlineAllX(r.kline_all);
+    if (lastPayload && lastPayload.chart) {
+      lastPayload.chart.kline_all = chipKlineAllCache;
+    }
     const sid = chipSessionIdentity(lastPayload);
     if (sid) chipKlineAllCacheSessionKey = sid;
+    // 懒加载完成后重绘一次，避免首屏停留在仅会话区间的筹码上。
+    if (lastPayload && lastPayload.ready) scheduleChartRedraw();
   } catch (e) {
     console.warn("[chip] lazy kline_all failed", e);
   }

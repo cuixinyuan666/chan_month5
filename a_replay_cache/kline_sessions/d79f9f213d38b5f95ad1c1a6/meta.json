@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "bar_count": 236,
+  "kline_all_count": 236,
+  "data_src_label": "离线数据",
+  "code": "sz.920992",
+  "use_for": "kline"
+}

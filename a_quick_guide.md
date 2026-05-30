@@ -24,20 +24,29 @@ python replay_trainer.py
 
 ```
 chan.py/
-├── a_replay_trainer.py      # 主入口：FastAPI 服务 + HTML 前端 + 全部业务逻辑
-├── a_replay_cache/           # 复盘内存缓存包（以空间换时间）
+├── a_replay_trainer.py        # 主入口：FastAPI 服务 + HTML 前端 + 全部业务逻辑
+├── a_replay_cache/            # 复盘缓存包（内存快照 + 磁盘缓存）
 │   ├── __init__.py
-│   ├── a_step_rollback.py    # 回退快照：全量深拷贝快照（StepperRollbackSnapshot / AppRollbackSnapshot）
-│   └── a_step_rollback_fast.py # 高性能步进快照：轻量增量快照（AppStepDelta），避免递归 deepcopy
-├── a_replay_core/            # replay_trainer 拆分核心包
+│   ├── a_step_rollback.py     # 回退快照：全量深拷贝快照（StepperRollbackSnapshot / AppRollbackSnapshot）
+│   ├── a_step_rollback_fast.py # 高性能步进快照：轻量增量快照（AppStepDelta），避免递归 deepcopy
+│   └── a_kline_session_cache.py # K线会话磁盘缓存：将K线/筹码数据缓存到磁盘，避免重载时重复拉取
+├── a_replay_core/             # replay_trainer 拆分核心包
 │   ├── __init__.py
 │   ├── a_replay_api_models.py   # API 请求/响应模型（InitReq / ReconfigReq / StepReq 等）
 │   ├── a_replay_kline_view.py   # K线数据视图过滤（kline / volume_chip / all）
 │   ├── a_replay_presenters.py   # 交易事件消息格式化（买入/卖出/做空/平空提示文案）
 │   ├── a_replay_serializers.py  # 缠论数据序列化（K线/笔/段/中枢/买卖点 → JSON）
-│   └── a_replay_step_utils.py   # 步进工具函数（单根K线快速序列化）
-└── a_Script/                 # 依赖与脚本
-    └── a_requirements.txt    # 项目依赖清单
+│   ├── a_replay_step_utils.py   # 步进工具函数（单根K线快速序列化）
+│   ├── a_init_perf.py           # 初始化性能计时：perf_counter 测量会话加载各阶段耗时
+│   ├── a_replay_multi_xmap.py   # 多周期同图坐标映射：将 overlay 周期图表坐标映射到 driver 周期
+│   └── a_offline_tick_merge.py  # 离线分笔BS合并：解析txt分笔，合并无B/S标记行
+├── a_replay_record/           # ReplayChan计算记录持久化包
+│   ├── __init__.py
+│   └── a_replay_record_store.py # 记录存储：持久化 ReplayChan 步进器状态，复用历史计算
+├── a_Script/                  # 依赖与脚本
+│   ├── a_requirements.txt     # 项目依赖清单
+│   └── a_bench_init_session.py # 会话初始化基准测试：离线测试 init 各阶段耗时
+└── a_Data/                    # 自定义离线数据目录
 ```
 
 ### 2.2 各模块职责
@@ -46,12 +55,18 @@ chan.py/
 |------|------|------|
 | **a_replay_cache** | `a_step_rollback.py` | 定义 `StepperRollbackSnapshot`（步进器全量快照，含 chan/indicators/structure_bundle 深拷贝）、`AppRollbackSnapshot`（应用全量快照，含双图+账户+交易事件）、`AppLightSnapshot`（轻量快照），提供 `capture_stepper_snapshot()` / `restore_stepper_snapshot()` 等深拷贝回退能力 |
 | | `a_step_rollback_fast.py` | 定义 `AppStepDelta`（单步增量快照），用浅拷贝+冻结 dict 替代递归 deepcopy；`capture_app_step_delta()` 步进前抓取，`overlay_app_step_delta()` 回退时覆盖；PaperAccount 转 tuple 快照避免深拷贝；大幅降低步进回退 CPU 开销 |
+| | `a_kline_session_cache.py` | 将 K线/筹码全历史数据持久化到磁盘（`a_replay_cache/kline_sessions/`），`build_cache_key()` 按代码/日期/复权/周期/优先级等参数生成 SHA256 缓存键，`try_load_kline_session()` 加载已缓存数据，`save_kline_session()` 保存到磁盘；线程安全（threading.Lock）；可通过环境变量 `KLINE_SESSION_CACHE=0` 关闭 |
 | **a_replay_core** | `a_replay_api_models.py` | 所有 Pydantic 请求体模型：`InitReq`、`ReconfigReq`、`StepReq`、`BackNReq`、`GotoStepReq`、`IndicatorBacktestReq`、`SessionKlineViewReq`、`JudgeBspReq`；含回退缓存参数、数据形态/喂入模式等字段 |
 | | `a_replay_kline_view.py` | `kline_view_rows_filtered()`：按视图类型（kline=OHLC / volume_chip=量+筹码分桶 / all=全字段）过滤 K 线数据，供 `/api/session_kline_view` 弹窗查看 |
 | | `a_replay_presenters.py` | `msg_buy()` / `msg_sell()` / `msg_short()` / `msg_cover()`：交易结果中文文案；`trade_events_same_bar_flip()`：检测同根K线反手（平多→开空 / 平空→开多） |
 | | `a_replay_serializers.py` | `serialize_chan_with_cache()`：将缠论结构包序列化为前端 JSON，含 K线/分型/笔/段/中枢/买卖点/节奏线/指标；`serialize_klu_iter_fast()`：批量 K 线快速序列化 |
 | | `a_replay_step_utils.py` | `serialize_klu_unit_fast()`：单根 K 线快速序列化（步进增量追加用），仅输出 x/t/o/h/l/c/v 七字段 |
+| | `a_init_perf.py` | 初始化性能计时：`init_perf_run()` 上下文管理器包裹 init 全流程，`init_perf_stage()` 标记各子阶段耗时，`init_perf_report()` 生成排名报告（各阶段耗时 ms + 占比 %）；通过 `INIT_PERF` 环境变量控制开关 |
+| | `a_replay_multi_xmap.py` | 多周期同图坐标映射：`remap_overlay_chart_to_driver_x()` 将 overlay（粗周期）图表的 K线/分型/笔/段/中枢/买卖点/节奏线/指标等所有元素的 X/X1/X2 坐标从 overlay 周期索引域映射到 driver（最细周期）K 线索引域，支持合并K线线框的时间区间匹配 |
+| | `a_offline_tick_merge.py` | 离线分笔BS合并：`parse_offline_tick_line()` 解析 `HH:MM 价格 成交量 [B/S]` 格式，`merge_no_bs_offline_ticks()` 将无 B/S 标记的行合并到最近的 BS 行，`rows_to_legacy_ticks()` 转为旧版 (t, price, vol, side) 元组格式；支持 `normalize_offline_data_custom("merge_no_bs")` 切换 |
+| **a_replay_record** | `a_replay_record_store.py` | ReplayChan 计算记录持久化：`build_chan_config_fingerprint()` 按代码/周期/配置等生成 SHA256 指纹，`try_apply_chan_record()` 尝试复用已有记录到 stepper（支持 exact/extend/overlap_replay 三种模式），`schedule_chan_record_save()` 异步保存当前步进器状态到磁盘；通过 `CHAN_RECORD` 环境变量控制开关 |
 | **a_Script** | `a_requirements.txt` | 项目依赖：baostock、matplotlib、numpy、pandas、requests 及可选数据源库（ashare/adata/pytdx/yfinance） |
+| | `a_bench_init_session.py` | 会话初始化基准测试脚本：离线测试 `/api/init` 各阶段耗时，支持 `--code` / `--begin` / `--end` / `--k-type` / `--rounds` 参数，输出 per-round 性能报告 |
 
 ---
 
@@ -3690,6 +3705,212 @@ apply_data_source_priority(priority)
 | **数据形态** | `data_form` | object | 数据形态信息（mode / quantity / feed_mode / raw_count / current_count） |
 | **消息** | `message` | string | 操作结果描述 |
 
+
+---
+
+## 二十九、K线会话磁盘缓存
+
+### 29.1 概述
+
+K线会话磁盘缓存（`a_replay_cache/a_kline_session_cache.py`）将已拉取的 K 线和筹码全历史数据持久化到本地磁盘，下次加载相同参数的会话时可直接从磁盘读取，**跳过数据源拉取环节**，大幅缩短二次加载耗时。
+
+**核心价值**：首次加载耗时可能 10~30 秒（取决于数据源），二次加载仅需 <1 秒（磁盘读取）。
+
+### 29.2 缓存策略
+
+#### 缓存键生成
+
+`build_cache_key()` 按以下参数组合生成 SHA256 摘要（取前 24 位）：
+
+| 参数 | 说明 |
+|------|------|
+| `code` | 股票代码 |
+| `begin_date` / `end_date` | 日期范围 |
+| `autype_key` | 复权类型（qfq/hfq/none） |
+| `k_type_key` | K线周期 |
+| `use_for` | 用途（kline / chip） |
+| `offline_data_custom` | 离线数据模式（native / merge_no_bs） |
+| `priority` | 数据源优先级列表 |
+| `confirm_offline` | 是否确认使用离线数据 |
+
+> **关键**：`confirm_offline` 是缓存键的一部分，切换到离线数据后视为新的缓存条目。
+
+#### 缓存存储位置
+
+```
+a_replay_cache/kline_sessions/{cache_key}/
+├── bundle.pkl    # pickle 序列化的 K线数据
+└── meta.json     # 元信息（版本号、K线数量、数据源标签）
+```
+
+#### 生命周期
+
+```
+首次 init
+  → 数据源拉取成功
+  → save_kline_session() 写入磁盘 ✅
+
+再次 init（相同参数）
+  → try_load_kline_session() 命中缓存
+  → 直接加载磁盘数据（跳过数据源）⚡
+```
+
+### 29.3 缓存内容
+
+`saved payload` 包含：
+
+| 字段 | 说明 |
+|------|------|
+| `replay_klus_master` | 步进用 K线单元列表（已聚合/原始） |
+| `kline_all` | 筹码全历史 K线列表 |
+| `stock_name` | 股票名称 |
+| `data_src_label` | 数据源标签（用于前端显示） |
+
+### 29.4 数据一致性保证
+
+- **版本控制**：`_CACHE_VERSION` 变更时自动淘汰旧缓存
+- **原子写入**：先写入 `.tmp` 临时文件，再 `os.replace` 原子替换，防止写一半崩溃
+- **线程安全**：`threading.Lock` 保护写操作
+- **pickle 递归深度**：自动设置 `sys.setrecursionlimit(0x100000)` 避免序列化溢出
+
+### 29.5 开关控制
+
+| 方式 | 说明 |
+|------|------|
+| 环境变量 `KLINE_SESSION_CACHE=0` | 全局关闭磁盘缓存 |
+| 代码调用 `kline_session_cache_enabled()` | 检查缓存是否启用 |
+
+### 29.6 缓存命中/未命中日志
+
+```
+# 命中
+[KlineSessionCache] loaded .../abc123.pkl bars=500
+
+# 未命中（首次或参数变化）
+[KlineSessionCache] saved .../def456.pkl bars=500
+```
+
+---
+
+## 三十、ReplayChan 计算记录持久化与复用
+
+### 30.1 概述
+
+ReplayChan 计算记录持久化（`a_replay_record/a_replay_record_store.py`）将每次 `step_load` 后的**完整步进器状态**保存到磁盘，下次加载相同股票+相同配置的会话时，系统自动检测并**复用之前的计算结果**，大幅减少重复的缠论计算开销。
+
+**与回退缓存的区别**：
+- **回退缓存**（§十四）：内存级，仅在同一次会话中有效，用于步进回退
+- **计算记录持久化**：磁盘级，跨会话复用，用于避免重复计算
+
+### 30.2 核心概念
+
+#### 记录指纹 (Fingerprint)
+
+`build_chan_config_fingerprint()` 按以下参数生成 SHA256 摘要（取前 20 位）：
+
+| 参数 | 说明 |
+|------|------|
+| `code` | 股票代码 |
+| `k_type_key` | K线周期 |
+| `autype_key` | 复权类型 |
+| `chan_cfg_dict` | 完整缠论配置字典 |
+| `data_form_mode` / `data_form_quantity` | 数据形态参数 |
+| `data_feed_mode` | 喂入模式 |
+| `data_source_priority` / `confirm_offline` | 数据源参数 |
+
+> **指纹相同的两次 init，缠论计算结果完全等价**，因此可以复用。
+
+#### 记录存储位置
+
+```
+a_replay_record/{fingerprint}/
+├── {code}_{ktype}_{autype}_{begin}_{end}.pkl        # 步进器状态快照
+└── {code}_{ktype}_{autype}_{begin}_{end}.meta.json   # 元信息
+```
+
+### 30.3 三种复用模式
+
+`try_apply_chan_record()` 尝试将已有记录应用到当前 stepper，返回 `ChanRecordApplyResult`：
+
+| 模式 | 条件 | 说明 |
+|------|------|------|
+| **exact** | 新旧 K线完全一致 | 直接覆盖 stepper 的 chan + indicators + step_idx，最快速 |
+| **extend** | 新 K线是旧 K线的超集（旧 K线完整包含在新数据头部） | 从记录恢复后，从重叠位置继续步进到末尾 |
+| **overlap_replay** | 新 K线与旧 K线有部分重叠（日期区间部分一致） | 从重叠区间开始逐步回放，兼顾复用与新数据计算 |
+| **miss** | 无可用记录或不匹配 | 从头开始全新计算 |
+
+### 30.4 记录内容
+
+`_ChanRecordPayload` 包含的完整快照：
+
+| 字段 | 说明 |
+|------|------|
+| `replay_klus_master` | K线单元列表 |
+| `replay_klus_master_raw` | 原始K线（数量模式时保留，供粗周期末根修正用） |
+| `kline_all` | 筹码全历史K线 |
+| `snapshot` | `StepperRollbackSnapshot`（chan + indicators + structure_bundle 深拷贝） |
+| `effective_cfg_dict` | 生效的缠论配置 |
+| `data_feed_mode` / `chan_algo` / `rhythm_calc_mode` | 喂入模式/缠论算法/节奏计算模式 |
+| `unified_full_payload` | unified 模式的完整 payload（可选） |
+| `data_src_used` / `data_src_chip_used` | 数据源信息 |
+
+### 30.5 K线对齐算法
+
+`_align_masters()` 比较新旧 K线主列表，找到**最大重合区间**：
+
+```python
+1. 取新 master[0] 的 (时间, O, H, L, C, V) 六元组
+2. 在旧 record 的 master 中查找匹配位置
+3. 从匹配位置开始向后逐根比较六元组
+4. 取匹配长度最长的作为重合区间
+5. 重叠 K线部分直接复制 chan 状态，仅步进新增部分
+```
+
+### 30.6 跨日期区间兼容
+
+记录系统支持以下日期区间匹配逻辑：
+
+| 新请求区间 | 已有记录区间 | 匹配结果 |
+|-----------|------------|---------|
+| `2021-01-01 ~ 2021-06-30` | `2021-01-01 ~ 2021-12-31` | 完全覆盖，取 exact |
+| `2021-01-01 ~ 2021-12-31` | `2021-01-01 ~ 2021-06-30` | 新区间更长，取 extend |
+| `2021-03-01 ~ 2021-09-30` | `2021-01-01 ~ 2021-06-30` | 部分重叠，取 overlap_replay |
+| `2022-01-01 ~ 2022-06-30` | `2021-01-01 ~ 2021-06-30` | 无重叠，取 miss |
+
+### 30.7 保存与异步写入
+
+`schedule_chan_record_save()` 将保存任务提交到后台线程：
+
+```python
+1. 捕获当前 stepper 的完整快照
+2. 避免阻塞主线程（API 响应不受影响）
+3. 写入 a_replay_record/{fingerprint}/ 目录
+4. 旧记录被新记录替换（同一区间）
+```
+
+### 30.8 开关与调试
+
+| 方式 | 说明 |
+|------|------|
+| 环境变量 `CHAN_RECORD=0` | 全局关闭记录功能 |
+| `push_record_trace(msg)` | 记录跟踪日志 |
+| `drain_record_trace()` | 获取并清空跟踪日志 |
+| 前端 `chan_record_enabled` 参数 | 通过 `InitReq` 控制是否启用 |
+
+**前端日志输出示例**：
+```
+[ChanRecord] exact match: loaded from a_replay_record/abc123. record_bars=500
+[ChanRecord] extend: loaded 500 bars, need step 50 more to reach new end
+```
+
+### 30.9 适用场景
+
+| 场景 | 收益 |
+|------|------|
+| 同一股票反复切换配置测试 | 每次 reconfig 后复用记录，秒级重建 |
+| 日线+周线双周期 | 粗周期记录可被下次 init 复用 |
+| 间歇性复盘训练 | 关闭服务后再打开，历史计算不丢失 |
+| 回测迭代 | 修改策略参数后快速重新计算基础结构 |
 
 ---
 
