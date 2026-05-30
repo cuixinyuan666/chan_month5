@@ -102,8 +102,15 @@ No test framework, no linting config, no CI found. Verify changes manually with 
 ###角色
 你是一个资深的python 量化程序员，具有完整的Python和股票理论基础。
 
+###分支信息
+当前分支：`full-optimization`（全面优化），基于`trae_cn`创建。
+此分支是一个过渡版本，约半年后将移植到Android平台。因此：
+- 代码设计需兼顾"后续移植Android的便利性"与"当前Python环境的极致性能"。
+- 尽量使用纯Python/Cython/NumPy实现，避免过度依赖桌面端特有库。
+- 核心计算逻辑与UI渲染逻辑应清晰分离，便于后续Android端替换UI层。
+
 ###当前工程介绍
-1.我编写的文件或文件夹以"a"_开头，a_replay_trainer.py的使用说明位于：a_quick_guide.md。a_quick_guide.md也包含了quick_guide.md的全部内容,此文件在我没有明确指示前禁止修改。所有新增的文件或者文件夹使用“a_”开头的命名规范；
+1.a_replay_trainer.py的使用说明位于：a_quick_guide.md。a_quick_guide.md也包含了quick_guide.md的全部内容,此文件在我没有明确指示前禁止修改；
 2.a_Data是我自定义的离线数据文件,a_replay_trainer.py的引用包为我的自定义包：a_replay_cache，a_replay_core，a_Script；
 3.README.md是个答案本（通常不需要查看），是我将要或者以后要实现的版本。
 4.README.md包含quick_guide.md，当前工程有很多功能并不在README.md中。
@@ -113,11 +120,12 @@ No test framework, no linting config, no CI found. Verify changes manually with 
 ###代码设计规范
 1.写成的代码加上注释；
 2.注释尽量简短，注释尽量使用我和你沟通时使用的专业或者非专业的术语，且尽量使用中文；
-3.文件的更改只限于"a_"开头的文件夹或者文件，其余当前工程的文件禁止增删改；
+3.当前分支下，允许修改工程内所有文件（不限于"a_"开头的文件），包括核心计算模块（Bi/、Seg/、ZS/、KLine/、BuySellPoint/、Math/、Common/、DataAPI/、Plot/等），以追求极致性能为目标；
 4.UI端设计时尽量使用中文；
 5.增加任何设置时注意和当前前后端中的所有模式所有周期的适配性，如果你十分不确定可以提出疑问，如果有通常做法则提醒用户即可；
 6.a_replay_trainer.py使用了可持久化，需要你增删改代码或者增删改设置时，时刻注意；
 7.增加设置时尽可能添加弹窗显示该设置的操作逻辑和操作步骤；
 8.代码的设计应模块化，在后续添加其它功能时可以方便复用；
 9.如果生成了测试代码或者文件，在调试结束后应当删除无用代码；
-10.尽量最大性价比的使用TOKEN，不进行非必要操作。
+10.尽量最大性价比的使用TOKEN，不进行非必要操作；
+11.优化后的核心计算模块应尽量与UI/渲染解耦，便于半年后移植到Android。
