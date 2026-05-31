@@ -7676,6 +7676,7 @@ HTML = r"""
       top: 12px;
       right: 12px;
       bottom: 12px;
+      z-index: 20001;
       width: min(360px, calc(100vw - 24px));
       overflow-y: auto;
       border: 1px solid var(--legendBorder);
@@ -7692,7 +7693,7 @@ HTML = r"""
       margin-right: 6px;
     }
     .globalLoading .loadingActions {
-      display: none;
+      display: block;
       margin-top: 10px;
       text-align: right;
     }
@@ -13379,6 +13380,11 @@ function renderGlobalLoadingHistory() {
   const box = $("globalLoadingHistory");
   if (!box) return;
   const rows = (Array.isArray(msgHistory) ? msgHistory : []).slice(-80);
+  if (!rows.length) {
+    box.innerHTML = `<div><span class="time">[--]</span>正在加载会话...</div>`;
+    box.scrollTop = box.scrollHeight;
+    return;
+  }
   box.innerHTML = rows.map((m) => {
     return `<div><span class="time">[${escapeHtml(String(m.time || "--"))}]</span>${escapeHtml(String(m.text || ""))}</div>`;
   }).join("");
@@ -13425,9 +13431,11 @@ function setGlobalLoading(visible, text) {
   }
   const actions = $("globalLoadingActions");
   if (actions) {
-    const canCancel = !!(visible && initAbortController);
+    const canCancel = !!visible;
     actions.classList.toggle("show", canCancel);
   }
+  const cancelBtn = $("btnCancelInitLoad");
+  if (cancelBtn) cancelBtn.disabled = !(visible && initAbortController);
 }
 
 function hideGlobalLoading() {
@@ -18964,10 +18972,10 @@ $("btnInit").onclick = async () => {
   const initBtnHtml = initBtn.innerHTML;
   // 先创建取消控制器，再展示遮罩；否则首次 show 时看不到“终止加载”按钮
   initAbortController = new AbortController();
+  setMsg("正在加载会话...");
   setGlobalLoading(true, "正在加载会话，请稍候...");
   // 再次同步一次动作区显示，确保灰屏时始终有退出入口
   setGlobalLoading(true);
-  setMsg("正在加载会话...");
   initBtn.disabled = true;
   initBtn.innerHTML = "加载中...";
   try {
