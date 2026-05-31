@@ -64,14 +64,14 @@ fn normalize_bars(py: Python<'_>, bars: &PyList) -> PyResult<PyObject> {
     Ok(out.into())
 }
 
-#[pyfunction]
+#[pyfunction(signature = (code, k_type, begin_date, bars, end_date=None, chip_bars=None))]
 fn load_session(
     py: Python<'_>,
     code: String,
     k_type: String,
     begin_date: String,
-    end_date: Option<String>,
     bars: &PyList,
+    end_date: Option<String>,
     chip_bars: Option<&PyList>,
 ) -> PyResult<PyObject> {
     let mut hasher = blake3::Hasher::new();
