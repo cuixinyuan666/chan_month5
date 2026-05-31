@@ -69,6 +69,7 @@ from a_replay_core.a_replay_presenters import (
 )
 from a_replay_core.a_replay_serializers import serialize_chan_with_cache, serialize_klu_iter_fast
 from a_replay_core.a_replay_step_utils import serialize_klu_unit_fast
+from a_replay_core.a_perf_engine import PerfEngine
 
 # 尝试导入其他数据源库（缺失时启动阶段给出明确安装提示）
 ASHARE_MOD = None  # ashare 或 PyPI 的 ashares，供 get_price 使用
@@ -3804,6 +3805,9 @@ class ChanStepper:
         self._chan_record_apply: ChanRecordApplyResult = ChanRecordApplyResult()
         self._chan_record_fingerprint: str = ""
         self._chan_record_enabled: bool = False
+        # Rust/Python 高性能过渡引擎会话：先接数据/筹码/步进增量层
+        self.perf_session_id: Optional[str] = None
+        self.perf_engine_mode: str = "python-fallback"
 
     def _cfg_without_chan_algo(self, cfg_dict: dict[str, Any]) -> dict[str, Any]:
         # 训练器 / API 自用键，勿传入 CChanConfig（否则会触发 unknown para）
@@ -4382,6 +4386,23 @@ class ChanStepper:
                 data_src=self.data_src_used or DATA_SRC.AKSHARE,
                 allow_end_snapshot_restore=False,
             )
+        self.perf_session_id = None
+        self.perf_engine_mode = "python-fallback"
+        try:
+            perf_bars = serialize_klu_iter(self._replay_klus_master or [])
+            perf_session = APP_PERF_ENGINE.load_session(
+                code=self.code,
+                k_type=k_type_to_api_key(self.k_type),
+                begin_date=begin_date,
+                end_date=end_date,
+                bars=perf_bars,
+                chip_bars=self.kline_all,
+            )
+            self.perf_session_id = perf_session.session_id
+            self.perf_engine_mode = perf_session.engine_mode
+        except Exception as perf_exc:
+            self.perf_session_id = None
+            self.perf_engine_mode = f"python-fallback-error:{format_source_error(perf_exc)}"
         if self._chan_record_apply.applied and init_kline_all_for_chip:
             wider = _pick_wider_kline_all_for_chip(
                 [init_kline_all_for_chip, list(self.kline_all or [])]
@@ -5771,6 +5792,7 @@ class AppState:
         if self.session_params is None:
             raise ValueError("当前无可重建会话")
         params = self.session_params
+        APP_PERF_ENGINE.requested_mode = str(params.get("performance_engine_mode", "rust_auto") or "rust_auto")
         self._set_rollback_config(
             cache_depth=params.get("rollback_cache_depth"),
             full_snapshot_interval=params.get("rollback_full_snapshot_interval"),
@@ -5932,6 +5954,8 @@ class AppState:
         rollback_cache_depth: Optional[int] = None,
         rollback_full_snapshot_interval: Optional[int] = None,
         rollback_capture_max_bars: Optional[int] = None,
+        performance_engine_mode: Optional[str] = None,
+        chip_bucket_step: Optional[float] = None,
     ) -> None:
         if self.session_params is None:
             raise ValueError("当前无可重配会话")
@@ -5960,6 +5984,11 @@ class AppState:
             self.session_params["rollback_full_snapshot_interval"] = int(rollback_full_snapshot_interval)
         if rollback_capture_max_bars is not None:
             self.session_params["rollback_capture_max_bars"] = int(rollback_capture_max_bars)
+        if performance_engine_mode is not None:
+            self.session_params["performance_engine_mode"] = str(performance_engine_mode or "rust_auto")
+            APP_PERF_ENGINE.requested_mode = self.session_params["performance_engine_mode"]
+        if chip_bucket_step is not None:
+            self.session_params["chip_bucket_step"] = float(chip_bucket_step)
         self._set_rollback_config(
             cache_depth=rollback_cache_depth,
             full_snapshot_interval=rollback_full_snapshot_interval,
@@ -5996,6 +6025,12 @@ class AppState:
             return {
                 "ready": False,
                 "finished": self.finished,
+                "payload_version": 2,
+                "engine_mode": APP_PERF_ENGINE.cache_status().get("engine_mode", "python-fallback"),
+                "step_delta": None,
+                "chip_profile": None,
+                "cache_info": APP_PERF_ENGINE.cache_status(),
+                "legacy_chart": None,
                 "message": "请先加载会话",
             }
         rhythm_notice_hits = list(self._rhythm_notice_hits)
@@ -6058,6 +6093,30 @@ class AppState:
         active_chart = chart2 if (self._normalize_chart_id(self.active_chart_id) == "chart2" and chart2 is not None) else chart
         if len(active_chart.get("kline", [])) > 0:
             price = active_stepper.current_price()
+        perf_step_delta: Optional[dict[str, Any]] = None
+        perf_chip_profile: Optional[dict[str, Any]] = None
+        perf_cache_info: dict[str, Any] = APP_PERF_ENGINE.cache_status()
+        perf_mode = getattr(active_stepper, "perf_engine_mode", perf_cache_info.get("engine_mode", "python-fallback"))
+        if getattr(active_stepper, "perf_session_id", None) and str(APP_PERF_ENGINE.requested_mode) != "python_legacy":
+            try:
+                perf_step_delta = APP_PERF_ENGINE.next_step_delta(
+                    active_stepper.perf_session_id,
+                    int(active_stepper.step_idx) - 1,
+                    int(active_stepper.step_idx),
+                )
+            except Exception as exc:
+                perf_step_delta = {"error": format_source_error(exc), "structure_dirty": True}
+            try:
+                ks_for_chip = active_chart.get("kline", []) or []
+                cutoff_x = int(ks_for_chip[-1].get("x")) if ks_for_chip else None
+                bucket_step = float((self.session_params or {}).get("chip_bucket_step") or 0.1)
+                perf_chip_profile = APP_PERF_ENGINE.chip_profile(
+                    active_stepper.perf_session_id,
+                    cutoff_x=cutoff_x,
+                    bucket_step=bucket_step,
+                )
+            except Exception as exc:
+                perf_chip_profile = {"error": format_source_error(exc), "prices": [], "s": [], "b": [], "total": []}
         charts_payload = {"chart1": chart}
         if chart2 is not None:
             charts_payload["chart2"] = chart2
@@ -6077,6 +6136,12 @@ class AppState:
         result = {
             "ready": True,
             "finished": self.finished,
+            "payload_version": 2,
+            "engine_mode": perf_mode,
+            "step_delta": perf_step_delta,
+            "chip_profile": perf_chip_profile,
+            "cache_info": perf_cache_info,
+            "legacy_chart": {"field": "chart", "note": "旧前端继续读取 chart 字段，避免重复下发完整图表。"},
             "code": self.stepper.code,
             "name": stock_name,
             "src_per_chart": src_per_chart,
@@ -8547,6 +8612,7 @@ function __agentDebugLog(hypothesisId, location, message, data, dedupeKey = "", 
   } catch (_) {}
 }
 // #endregion
+let chipProfileCache = null; // 极速引擎筹码 profile：前端只绘制数组，不再每帧扫历史
 let allXMin = 0;
 let allXMax = 0;
 let viewXMin = 0;
@@ -9748,6 +9814,8 @@ const DEFAULT_SYSTEM_CONFIG = {
   rollbackFullSnapshotInterval: 8,
   rollbackCaptureMaxBars: 30000,
   chanRecordEnabled: false,
+  // 性能引擎：rust_auto=优先 Rust，失败自动 Python fallback；python_legacy=旧路径
+  performanceEngineMode: "rust_auto",
 };
 
 let systemConfig = ensureObject(
@@ -9969,6 +10037,12 @@ function normalizeSystemConfig() {
     } else {
         normalized.dataSourcePriority = canonical.slice();
     }
+    normalized.rollbackCacheDepth = Number(systemConfig.rollbackCacheDepth || DEFAULT_SYSTEM_CONFIG.rollbackCacheDepth);
+    normalized.rollbackFullSnapshotInterval = Number(systemConfig.rollbackFullSnapshotInterval || DEFAULT_SYSTEM_CONFIG.rollbackFullSnapshotInterval);
+    normalized.rollbackCaptureMaxBars = Number(systemConfig.rollbackCaptureMaxBars || DEFAULT_SYSTEM_CONFIG.rollbackCaptureMaxBars);
+    normalized.performanceEngineMode = String(systemConfig.performanceEngineMode || DEFAULT_SYSTEM_CONFIG.performanceEngineMode || "rust_auto") === "python_legacy"
+      ? "python_legacy"
+      : "rust_auto";
 
     SHORTCUT_ACTIONS.forEach(action => {
         const hasOwn = systemConfig.shortcuts && Object.prototype.hasOwnProperty.call(systemConfig.shortcuts, action.id);
@@ -12546,6 +12620,60 @@ function renderSystemSettingsForm() {
     dsSec.appendChild(dsGrid);
     container.appendChild(dsSec);
 
+    const perfSec = document.createElement("div");
+    perfSec.className = "settingsSection";
+    perfSec.style.background = "rgba(79, 70, 229, 0.08)";
+    perfSec.innerHTML = `<div class="settingsSectionTitle" style="color:#4f46e5">性能引擎</div>`;
+    const perfGrid = document.createElement("div");
+    perfGrid.className = "settingsGrid";
+    const perfModeItem = document.createElement("div");
+    perfModeItem.className = "settingsItem";
+    perfModeItem.style.gridColumn = "1 / -1";
+    perfModeItem.innerHTML = `<label>运行模式 <span class="tip-icon" data-tip="${escapeHtmlAttr("Rust极速：优先使用 a_rust_core 编译扩展；未安装时自动切换 Python fallback。Python兼容：关闭极速 payload，用旧逻辑排查问题。保存后重新加载会话生效。")}">!</span></label>`;
+    const perfSel = document.createElement("select");
+    perfSel.dataset.sysKey = "performanceEngineMode";
+    perfSel.innerHTML = `<option value="rust_auto">Rust极速（自动回退）</option><option value="python_legacy">Python兼容</option>`;
+    perfSel.value = String(systemConfig.performanceEngineMode || DEFAULT_SYSTEM_CONFIG.performanceEngineMode || "rust_auto");
+    perfModeItem.appendChild(perfSel);
+    const perfNote = document.createElement("div");
+    perfNote.className = "muted";
+    perfNote.style.fontSize = "12px";
+    perfNote.textContent = "操作步骤：保存系统配置 → 重新加载会话。当前阶段先加速数据/筹码/步进增量协议，缠论结构仍按 Python 严格计算。";
+    perfModeItem.appendChild(perfNote);
+    perfGrid.appendChild(perfModeItem);
+    const perfBtnItem = document.createElement("div");
+    perfBtnItem.className = "settingsItem";
+    perfBtnItem.style.gridColumn = "1 / -1";
+    perfBtnItem.innerHTML = `<label>缓存维护</label><button type="button" id="btnPerfCacheStatus" style="width:auto;">查看性能缓存</button><button type="button" id="btnPerfCacheClear" style="width:auto;margin-top:6px;">清理性能缓存</button>`;
+    perfGrid.appendChild(perfBtnItem);
+    perfSec.appendChild(perfGrid);
+    container.appendChild(perfSec);
+    setTimeout(() => {
+      const statusBtn = $("btnPerfCacheStatus");
+      const clearBtn = $("btnPerfCacheClear");
+      if (statusBtn) {
+        statusBtn.onclick = async () => {
+          try {
+            const st = await api("/api/perf_cache_status", null, "GET");
+            showAlertAndLog(`性能缓存状态：\n模式：${st.engine_mode}\nRust可用：${st.rust_available ? "是" : "否"}\n文件数：${st.file_count}\n大小：${Math.round(Number(st.total_bytes || 0) / 1024)} KB\n目录：${st.cache_dir}`);
+          } catch (e) {
+            showToast("读取性能缓存失败：" + e.message);
+          }
+        };
+      }
+      if (clearBtn) {
+        clearBtn.onclick = async () => {
+          if (!confirmAndLog("确定清理性能引擎缓存吗？下次加载会重新解析并生成缓存。")) return;
+          try {
+            const st = await api("/api/perf_clear_cache", {}, "POST");
+            showAlertAndLog(`性能缓存已清理：删除 ${st.removed || 0} 个文件。`);
+          } catch (e) {
+            showToast("清理性能缓存失败：" + e.message);
+          }
+        };
+      }
+    }, 0);
+
     // 继续原有的买卖点判定部分
     const bspSec = document.createElement("div");
     bspSec.className = "settingsSection";
@@ -12800,6 +12928,8 @@ async function saveSettings() {
       rollback_cache_depth: Number(systemConfig.rollbackCacheDepth || DEFAULT_SYSTEM_CONFIG.rollbackCacheDepth),
       rollback_full_snapshot_interval: Number(systemConfig.rollbackFullSnapshotInterval || DEFAULT_SYSTEM_CONFIG.rollbackFullSnapshotInterval),
       rollback_capture_max_bars: Number(systemConfig.rollbackCaptureMaxBars || DEFAULT_SYSTEM_CONFIG.rollbackCaptureMaxBars),
+      performance_engine_mode: String(systemConfig.performanceEngineMode || DEFAULT_SYSTEM_CONFIG.performanceEngineMode || "rust_auto"),
+      chip_bucket_step: Number(chartConfig.chip && chartConfig.chip.bucketStep ? chartConfig.chip.bucketStep : 0.1),
     });
     refreshUI(payload, { afterStep: false });
     setMsg(payload.message || "图表设置更新成功");
@@ -12831,6 +12961,15 @@ function saveSystemSettingsFromForm() {
             saveSystemConfig();
             updateBspJudgeUI();
             showAlertAndLog("买卖点判定方式切换：自动 → 手动。\n上一级结构变向时将不再自动判定，需手动点击“检查买卖点”。");
+        }
+    }
+    const perfModeSelect = $("systemSettingsContent").querySelector('select[data-sys-key="performanceEngineMode"]');
+    if (perfModeSelect) {
+        const nextPerf = String(perfModeSelect.value || "rust_auto");
+        const prevPerf = String(systemConfig.performanceEngineMode || DEFAULT_SYSTEM_CONFIG.performanceEngineMode || "rust_auto");
+        systemConfig.performanceEngineMode = nextPerf === "python_legacy" ? "python_legacy" : "rust_auto";
+        if (prevPerf !== systemConfig.performanceEngineMode) {
+            showAlertAndLog("性能引擎模式已更新。\n操作逻辑：保存后请重新加载会话；Rust极速模式会优先使用 a_rust_core，失败时自动回退 Python。");
         }
     }
     
@@ -16043,8 +16182,103 @@ function drawGridLines(s) {
   // Keep chart background clean: no horizontal grid lines.
 }
 
+function tryDrawChipProfileFromEngine(chart, s) {
+  if (lastPayload && lastPayload.chart_mode === "dual" && chart !== lastPayload.chart) return false;
+  const profile = (lastPayload && lastPayload.chip_profile && Array.isArray(lastPayload.chip_profile.prices))
+    ? lastPayload.chip_profile
+    : chipProfileCache;
+  if (!profile || !Array.isArray(profile.prices) || profile.prices.length === 0) return false;
+  if (systemConfig && systemConfig.performanceEngineMode === "python_legacy") return false;
+  const priceStep = Number(profile.bucket_step || chartConfig.chip.bucketStep || 0.1);
+  const cfgStep = Number(chartConfig.chip.bucketStep || 0.1);
+  if (Number.isFinite(cfgStep) && Number.isFinite(priceStep) && Math.abs(cfgStep - priceStep) > Math.max(1e-9, cfgStep * 0.001)) {
+    return false;
+  }
+  const prices = profile.prices || [];
+  const arrS = profile.s || [];
+  const arrB = profile.b || [];
+  const arrT = profile.total || [];
+  let maxTotVisible = 0;
+  const stretchExp = getChipStretchExponent();
+  const stretchVol = (v) => Math.pow(Math.max(0, Number(v) || 0), stretchExp);
+  for (let i = 0; i < prices.length; i++) {
+    const p = Number(prices[i]);
+    if (!Number.isFinite(p) || p < s.yMin || p > s.yMax) continue;
+    const vT = stretchVol(arrT[i]);
+    if (vT > maxTotVisible) maxTotVisible = vT;
+  }
+  if (!(maxTotVisible > 0)) return false;
+  const chipW = Math.max(96, Math.min(220, s.plotW * 0.2));
+  const xR = s.w - PAD_R - 2;
+  const xL = xR - chipW;
+  const xOrig = xR - 2;
+  const sFill = getCfgColor(chartConfig.chip.sColor || "rgba(34,197,94,0.78)");
+  const bFill = getCfgColor(chartConfig.chip.bColor || "rgba(220,38,38,0.78)");
+  const bg = cssVar("--chipBg", "rgba(148,163,184,0.12)");
+  const edge = cssVar("--chipEdge", "rgba(59,130,246,0.75)");
+  ctx.save();
+  ctx.fillStyle = bg;
+  ctx.fillRect(xL, PAD_T, chipW, s.plotBottomY - PAD_T);
+  for (let i = 0; i < prices.length; i++) {
+    const p = Number(prices[i]);
+    if (!Number.isFinite(p) || p < s.yMin || p > s.yMax) continue;
+    const vSraw = Number(arrS[i] || 0);
+    const vBraw = Number(arrB[i] || 0);
+    const totRaw = vSraw + vBraw;
+    if (!(totRaw > 0)) continue;
+    const yTop = s.y(p + priceStep);
+    const yBot = s.y(p);
+    const h = Math.max(1, yBot - yTop);
+    const lenTotal = (stretchVol(totRaw) / maxTotVisible) * chipW;
+    const lenB = totRaw > 1e-12 ? lenTotal * (vBraw / totRaw) : 0;
+    const lenS = lenTotal - lenB;
+    if (lenB > 0) {
+      ctx.fillStyle = bFill;
+      ctx.fillRect(xOrig - lenB, yTop, lenB, h);
+    }
+    if (lenS > 0) {
+      ctx.fillStyle = sFill;
+      ctx.fillRect(xOrig - lenB - lenS, yTop, lenS, h);
+    }
+  }
+  ctx.strokeStyle = edge;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(xL, PAD_T, chipW, s.plotBottomY - PAD_T);
+  ctx.fillStyle = cssVar("--legendText", "#0f172a");
+  ctx.font = "12px Consolas";
+  const mode = lastPayload && lastPayload.engine_mode ? String(lastPayload.engine_mode) : "engine";
+  ctx.fillText(`筹码(S/B)极速(${mode})`, xL + 6, PAD_T + 14);
+  if (chartConfig.chip.peakLineEnabled !== false) {
+    const peaks = [];
+    for (let i = 1; i < prices.length - 1; i++) {
+      const cur = Number(arrT[i] || 0);
+      if (!(cur > Number(arrT[i - 1] || 0) && cur > Number(arrT[i + 1] || 0))) continue;
+      const p = Number(prices[i]);
+      if (p < s.yMin || p > s.yMax) continue;
+      peaks.push(p);
+    }
+    if (peaks.length > 0) {
+      ctx.save();
+      ctx.strokeStyle = getCfgColor(chartConfig.chip.peakLineColor || "#2563eb");
+      ctx.lineWidth = Number(chartConfig.chip.peakLineWidth || 1.2);
+      ctx.setLineDash(getTradeLineDash(chartConfig.chip.peakLineStyle || "dashed"));
+      for (const p of peaks) {
+        const yPx = s.y(p);
+        ctx.beginPath();
+        ctx.moveTo(xL, yPx);
+        ctx.lineTo(PAD_L, yPx);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+  }
+  ctx.restore();
+  return true;
+}
+
 function drawChips(chart, s) {
   if (!chartConfig.chip.enabled) return;
+  if (tryDrawChipProfileFromEngine(chart, s)) return;
   const ksAll = getChipBaseKs(chart);
   const visibleKs = s.visibleK || [];
   const latestVisibleK = visibleKs.length > 0 ? visibleKs[visibleKs.length - 1] : ((chart.kline && chart.kline.length > 0) ? chart.kline[chart.kline.length - 1] : null);
@@ -18283,6 +18517,11 @@ function refreshUI(payload, options) {
     );
     // #endregion
   }
+  if (payload && payload.ready && payload.chip_profile && Array.isArray(payload.chip_profile.prices)) {
+    chipProfileCache = payload.chip_profile;
+  } else if (!payload || !payload.ready) {
+    chipProfileCache = null;
+  }
   // 后端在步进等接口省略 kline_all；数据形式/数量变更时禁止沿用旧 kline_all（聚合根数已变）
   if (
     !dataFormChanged &&
@@ -18588,6 +18827,8 @@ $("btnInit").onclick = async () => {
       rollback_full_snapshot_interval: Number(systemConfig.rollbackFullSnapshotInterval || DEFAULT_SYSTEM_CONFIG.rollbackFullSnapshotInterval),
       rollback_capture_max_bars: Number(systemConfig.rollbackCaptureMaxBars || DEFAULT_SYSTEM_CONFIG.rollbackCaptureMaxBars),
       chan_record_enabled: systemConfig.chanRecordEnabled === true,
+      performance_engine_mode: String(systemConfig.performanceEngineMode || DEFAULT_SYSTEM_CONFIG.performanceEngineMode || "rust_auto"),
+      chip_bucket_step: Number(chartConfig.chip && chartConfig.chip.bucketStep ? chartConfig.chip.bucketStep : 0.1),
       ...extra,
     });
     const cmInit = $("chartMode") ? $("chartMode").value : "single";
@@ -19652,6 +19893,7 @@ function getDataSourcePriority() {
 """
 
 
+APP_PERF_ENGINE = PerfEngine()
 APP_STATE = AppState()
 APP_STOCK_NAME: Optional[str] = None
 
@@ -19728,6 +19970,7 @@ def _api_init_impl(req: InitReq, perf_col: Optional[dict[str, Any]] = None) -> d
         if req.initial_cash <= 0:
             raise ValueError("初始资金必须大于0")
         code_norm = normalize_code(req.code)
+        APP_PERF_ENGINE.requested_mode = str(getattr(req, "performance_engine_mode", "rust_auto") or "rust_auto")
 
         try:
             cm_init = normalize_replay_chart_mode(req.chart_mode)
@@ -19875,6 +20118,8 @@ def _api_init_impl(req: InitReq, perf_col: Optional[dict[str, Any]] = None) -> d
             "rollback_cache_depth": req.rollback_cache_depth,
             "rollback_full_snapshot_interval": req.rollback_full_snapshot_interval,
             "rollback_capture_max_bars": req.rollback_capture_max_bars,
+            "performance_engine_mode": str(getattr(req, "performance_engine_mode", "rust_auto") or "rust_auto"),
+            "chip_bucket_step": getattr(req, "chip_bucket_step", None),
         }
         APP_STATE.trade_events = []
         APP_STATE.bsp_history = []
@@ -19980,6 +20225,8 @@ def api_reconfig(req: ReconfigReq):
             rollback_cache_depth=req.rollback_cache_depth,
             rollback_full_snapshot_interval=req.rollback_full_snapshot_interval,
             rollback_capture_max_bars=req.rollback_capture_max_bars,
+            performance_engine_mode=getattr(req, "performance_engine_mode", None),
+            chip_bucket_step=getattr(req, "chip_bucket_step", None),
         )
         APP_STATE._rhythm_notice_hits = []
         include_kline_all = stepper_needs_chip_kline_all(APP_STATE.stepper)
@@ -20365,6 +20612,21 @@ def api_check_data_source(req: dict):
         return {"ok": False, "name": name, "message": format_source_error(e)}
 
 
+@app.get("/api/perf_cache_status")
+def api_perf_cache_status():
+    """性能引擎缓存状态：前端系统设置弹窗展示与调试使用。"""
+    return APP_PERF_ENGINE.cache_status()
+
+
+@app.post("/api/perf_clear_cache")
+def api_perf_clear_cache():
+    """清理 a_replay_cache/a_perf_engine_cache 下的性能缓存。"""
+    try:
+        return APP_PERF_ENGINE.clear_cache()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
 @app.post("/api/session_kline_view")
 def api_session_kline_view(req: SessionKlineViewReq):
     """供前端「查看数据」：从服务端 kline_all 取全量，避免步进后前端未带全量 JSON。"""
@@ -20424,28 +20686,45 @@ def api_exit():
 if __name__ == "__main__":
     import os
     import socket
-    
-    # 尝试检查并杀死占用 8000 端口的进程
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            if s.connect_ex(("127.0.0.1", 8000)) == 0:
-                print("发现 8000 端口已被占用，尝试清理...")
-                import subprocess
-                # 在 Windows 下查找占用 8000 端口的 PID
-                cmd = "netstat -ano | findstr :8000"
-                res = subprocess.check_output(cmd, shell=True).decode()
-                pids = set()
-                for line in res.strip().split("\n"):
-                    parts = line.split()
-                    if len(parts) >= 5:
-                        pids.add(parts[-1])
-                for pid in pids:
-                    if pid != "0":
-                        print(f"终止进程 PID: {pid}")
-                        subprocess.run(f"taskkill /F /PID {pid}", shell=True)
-    except Exception as e:
-        print(f"清理端口冲突时出错: {e}")
 
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    def _can_bind_port(host: str, port: int) -> tuple[bool, str]:
+        """启动前探测端口；10013 通常是 Windows 保留/安全策略拒绝。"""
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                s.bind((host, int(port)))
+            return True, ""
+        except OSError as exc:
+            return False, str(exc)
+
+    def _pick_server_port(host: str = "127.0.0.1") -> int:
+        """优先 8000；被占用或被系统拒绝时自动换端口。"""
+        env_port = str(os.environ.get("A_REPLAY_PORT") or "").strip()
+        candidates: list[int] = []
+        if env_port:
+            try:
+                candidates.append(int(env_port))
+            except ValueError:
+                print(f"A_REPLAY_PORT={env_port!r} 不是合法端口，已忽略。")
+        candidates.extend([8000, 8765, 8766, 8767, 8768, 8769, 8770, 18000, 18001])
+        seen: set[int] = set()
+        last_error = ""
+        for port in candidates:
+            if port in seen:
+                continue
+            seen.add(port)
+            ok, reason = _can_bind_port(host, port)
+            if ok:
+                if port != 8000:
+                    print(f"8000 不可用或被系统拒绝，已自动改用端口 {port}。")
+                return port
+            last_error = reason
+            print(f"端口 {port} 不可用：{reason}")
+        raise RuntimeError(f"没有找到可用端口，最后错误：{last_error}")
+
+    host = "127.0.0.1"
+    port = _pick_server_port(host)
+    print(f"复盘训练器已准备启动：请访问 http://{host}:{port}/")
+    uvicorn.run(app, host=host, port=port)
 
 

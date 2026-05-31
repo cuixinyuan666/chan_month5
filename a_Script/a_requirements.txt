@@ -9,4 +9,6 @@ ashare
 adata
 pytdx
 yfinance
+# Rust 极速引擎构建依赖（可选；未安装时自动走 Python fallback）
+maturin>=1.5
 # beautifulsoup4  # 如需解析HTML爬虫可取消注释

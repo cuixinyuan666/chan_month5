@@ -32,6 +32,9 @@ class InitReq(BaseModel):
     rollback_capture_max_bars: Optional[int] = None
     # 是否读写 a_replay_record 本地缠论计算缓存（默认开）
     chan_record_enabled: bool = True
+    # 性能引擎：rust_auto=优先Rust，否则Python fallback；python_legacy=兼容旧路径
+    performance_engine_mode: str = "rust_auto"
+    chip_bucket_step: Optional[float] = None
 
 
 class ReconfigReq(BaseModel):
@@ -45,6 +48,8 @@ class ReconfigReq(BaseModel):
     rollback_cache_depth: Optional[int] = None
     rollback_full_snapshot_interval: Optional[int] = None
     rollback_capture_max_bars: Optional[int] = None
+    performance_engine_mode: Optional[str] = None
+    chip_bucket_step: Optional[float] = None
 
 
 class BackNReq(BaseModel):
