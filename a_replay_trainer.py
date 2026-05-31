@@ -4261,34 +4261,21 @@ class ChanStepper:
             else:
                 self._replay_klus_master_raw = copy.deepcopy(k_sel.replay_klus_master)
                 self._replay_klus_master = self._replay_klus_master_raw
-                # 离线 K 线仅会话区间；筹码底座须 1990~最新全历史（直拉 + 筹码链，取更宽）
+                # 离线 K 线仅会话区间；init 不同步直拉全历史筹码，避免加载会话被大分笔拖慢。
                 if k_sel.data_src == OFFLINE_INLINE_SRC:
-                    offline_chip_all: list[dict[str, Any]] = []
                     chip_cached = list(chip_sel.kline_all or [])
-                    # chip 链/磁盘缓存已是全历史时，禁止再解析全量分笔，加载会话会被 200万行分笔拖慢。
-                    if len(chip_cached) <= len(k_sel.kline_all or []):
-                        try:
-                            offline_chip_all = _fetch_offline_chip_kline_all(
-                                self.code,
-                                self.k_type,
-                                autype,
-                                end_date,
-                            )
-                        except Exception as exc:
-                            print(f"[Chip] offline full kline_all failed: {format_source_error(exc)}")
                     self.kline_all = _pick_wider_kline_all_for_chip(
                         [
-                            offline_chip_all,
                             chip_cached,
                             list(k_sel.kline_all or []),
                         ]
                     )
                     self.data_src_chip_used = chip_sel.data_src
                     if chip_sel.data_src == OFFLINE_INLINE_SRC:
-                        chip_logs_extra = [f"筹码全历史：{chip_sel.label}"] + list(chip_sel.logs)
+                        chip_logs_extra = [f"筹码底座：{chip_sel.label}（全历史按需懒加载）"] + list(chip_sel.logs)
                     else:
                         chip_logs_extra = [
-                            f"筹码全历史：{chip_sel.label}（离线K线会话区间 + 筹码链全历史）"
+                            f"筹码底座：{chip_sel.label}（离线K线会话区间 + 筹码链按需补全）"
                         ] + list(chip_sel.logs)
                 else:
                     self.kline_all = chip_sel.kline_all
@@ -7616,6 +7603,7 @@ HTML = r"""
     }
     .globalLoading.show { display: flex; }
     .globalLoading .panel {
+      width: min(420px, calc(100vw - 32px));
       min-width: 260px;
       padding: 18px 20px;
       border-radius: 10px;
@@ -7628,6 +7616,11 @@ HTML = r"""
       align-items: stretch;
       gap: 12px;
       font: 14px Consolas, monospace;
+    }
+    .globalLoadingBody {
+      display: flex;
+      gap: 14px;
+      align-items: stretch;
     }
     .globalLoading .spinner {
       width: 18px;
@@ -7645,10 +7638,58 @@ HTML = r"""
       min-width: 0;
       flex: 1;
     }
+    .globalLoadingPrimary {
+      flex: 1 1 380px;
+      min-width: 0;
+    }
     .globalLoading .loadingText {
       flex: 1;
       min-width: 0;
       word-break: break-word;
+    }
+    .loadingEta {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 6px;
+    }
+    .loadingProgressOuter {
+      margin-top: 10px;
+      height: 16px;
+      border-radius: 999px;
+      overflow: hidden;
+      background: rgba(148, 163, 184, 0.28);
+      border: 1px solid rgba(148, 163, 184, 0.26);
+    }
+    .loadingProgressInner {
+      height: 100%;
+      width: 0%;
+      min-width: 34px;
+      background: #2563eb;
+      color: #fff;
+      font-size: 11px;
+      line-height: 16px;
+      text-align: center;
+      transition: width 0.25s ease;
+    }
+    .loadingHistorySide {
+      position: fixed;
+      top: 12px;
+      right: 12px;
+      bottom: 12px;
+      width: min(360px, calc(100vw - 24px));
+      overflow-y: auto;
+      border: 1px solid var(--legendBorder);
+      border-radius: 8px;
+      padding: 10px 12px;
+      background: var(--legendBg);
+      color: var(--legendText);
+      font-size: 12px;
+      line-height: 1.55;
+      box-shadow: 0 14px 36px rgba(2, 6, 23, 0.22);
+    }
+    .loadingHistorySide .time {
+      color: #2563eb;
+      margin-right: 6px;
     }
     .globalLoading .loadingActions {
       display: none;
@@ -7663,6 +7704,15 @@ HTML = r"""
       padding: 4px 10px;
       font-size: 12px;
       line-height: 1.4;
+    }
+    @media (max-width: 760px) {
+      .globalLoadingBody { flex-direction: column; }
+      .loadingHistorySide {
+        top: auto;
+        left: 12px;
+        max-height: 36vh;
+        width: auto;
+      }
     }
     @keyframes spin {
       from { transform: rotate(0deg); }
@@ -8540,9 +8590,20 @@ HTML = r"""
       </div>
       <div id="globalLoading" class="globalLoading" aria-hidden="true">
         <div class="panel">
-          <div class="loadingMain">
-            <div class="spinner"></div>
-            <div id="globalLoadingText" class="loadingText">正在加载数据...</div>
+          <div class="globalLoadingBody">
+            <div class="globalLoadingPrimary">
+              <div class="loadingMain">
+                <div class="spinner"></div>
+                <div>
+                  <div id="globalLoadingText" class="loadingText">正在加载数据...</div>
+                  <div id="globalLoadingEta" class="loadingEta">预计剩余：--</div>
+                </div>
+              </div>
+              <div class="loadingProgressOuter">
+                <div id="globalLoadingBar" class="loadingProgressInner">0%</div>
+              </div>
+            </div>
+            <div id="globalLoadingHistory" class="loadingHistorySide"></div>
           </div>
           <div id="globalLoadingActions" class="loadingActions">
             <button id="btnCancelInitLoad" type="button">终止加载</button>
@@ -13304,12 +13365,64 @@ function getChipBucketStep() {
   return Number.isFinite(v) && v > 0 ? v : 0.1;
 }
 
+let initLoadTimer = null;
+let initLoadStartMs = 0;
+let initLoadExpectedMs = Number(storageGet("chan_init_expected_ms") || 40000);
+
+function fmtLoadingRemain(sec) {
+  const s = Math.max(0, Math.round(Number(sec) || 0));
+  if (s >= 60) return `${(s / 60).toFixed(1)}分钟`;
+  return `${s}秒`;
+}
+
+function renderGlobalLoadingHistory() {
+  const box = $("globalLoadingHistory");
+  if (!box) return;
+  const rows = (Array.isArray(msgHistory) ? msgHistory : []).slice(-80);
+  box.innerHTML = rows.map((m) => {
+    return `<div><span class="time">[${escapeHtml(String(m.time || "--"))}]</span>${escapeHtml(String(m.text || ""))}</div>`;
+  }).join("");
+  box.scrollTop = box.scrollHeight;
+}
+
+function updateGlobalLoadingProgress(done = false) {
+  const bar = $("globalLoadingBar");
+  const eta = $("globalLoadingEta");
+  if (!bar || !eta || !initLoadStartMs) return;
+  if (done) {
+    bar.style.width = "100%";
+    bar.textContent = "100%";
+    eta.textContent = "预计剩余：0秒";
+    renderGlobalLoadingHistory();
+    return;
+  }
+  const elapsed = Date.now() - initLoadStartMs;
+  const expected = Math.max(5000, Number(initLoadExpectedMs) || 40000);
+  const pct = Math.max(1, Math.min(92, Math.floor((elapsed / expected) * 100)));
+  const remainSec = Math.max(1, (expected - elapsed) / 1000);
+  bar.style.width = `${pct}%`;
+  bar.textContent = `${pct}%`;
+  eta.textContent = `预计剩余：${fmtLoadingRemain(remainSec)}`;
+  renderGlobalLoadingHistory();
+}
+
 function setGlobalLoading(visible, text) {
   const overlay = $("globalLoading");
   if (!overlay) return;
   const txt = $("globalLoadingText");
   if (txt && text) txt.textContent = text;
   overlay.classList.toggle("show", !!visible);
+  if (visible) {
+    if (!initLoadStartMs) initLoadStartMs = Date.now();
+    if (!initLoadTimer) initLoadTimer = setInterval(() => updateGlobalLoadingProgress(false), 1000);
+    updateGlobalLoadingProgress(false);
+  } else {
+    if (initLoadTimer) {
+      clearInterval(initLoadTimer);
+      initLoadTimer = null;
+    }
+    initLoadStartMs = 0;
+  }
   const actions = $("globalLoadingActions");
   if (actions) {
     const canCancel = !!(visible && initAbortController);
@@ -14817,6 +14930,8 @@ function appendMsgHistory(text) {
   msgHistory.push(entry);
   if (msgHistory.length > 500) msgHistory.shift();
   storageSet("chan_msg_history", JSON.stringify(msgHistory));
+  const loading = $("globalLoading");
+  if (loading && loading.classList.contains("show")) renderGlobalLoadingHistory();
 }
 
 function setMsg(text, quiet = false) {
@@ -18849,7 +18964,7 @@ $("btnInit").onclick = async () => {
   const initBtnHtml = initBtn.innerHTML;
   // 先创建取消控制器，再展示遮罩；否则首次 show 时看不到“终止加载”按钮
   initAbortController = new AbortController();
-  setGlobalLoading(true, "正在加载会话，首次加载历史数据可能需要约 30-40 秒，请稍候...");
+  setGlobalLoading(true, "正在加载会话，请稍候...");
   // 再次同步一次动作区显示，确保灰屏时始终有退出入口
   setGlobalLoading(true);
   setMsg("正在加载会话...");
@@ -18922,6 +19037,11 @@ $("btnInit").onclick = async () => {
       }
     }
     initSucceeded = true;
+    if (payload && payload.init_perf && Number.isFinite(Number(payload.init_perf.total_ms))) {
+      initLoadExpectedMs = Math.max(5000, Number(payload.init_perf.total_ms));
+      storageSet("chan_init_expected_ms", String(initLoadExpectedMs));
+    }
+    updateGlobalLoadingProgress(true);
     document.title = `chan.py 复盘训练器 - ${(payload.name ? payload.name : payload.code)}`;
     setMsg(payload.message || `加载成功：${payload.name ? payload.name : payload.code}`);
     initBtn.disabled = true;
@@ -18954,8 +19074,24 @@ $("btnInit").onclick = async () => {
     refreshUI(payload);
     void fetchChipKlineAllLazy(payload);
     if (payload && payload.init_perf && payload.init_perf.rank && payload.init_perf.rank.length) {
-      const top = payload.init_perf.rank.slice(0, 4).map((r) => `${r.stage}:${r.ms}ms`).join("；");
-      appendMsgHistory(`加载耗时 ${payload.init_perf.total_ms}ms（${top}）`);
+      const fmtCost = (ms) => {
+        const sec = Math.max(0, Number(ms || 0) / 1000);
+        return sec >= 60 ? `${(sec / 60).toFixed(2)}分钟` : `${sec.toFixed(2)}秒`;
+      };
+      const stageLabel = {
+        data_kline: "加载K线数据",
+        data_chip: "加载筹码底座",
+        chan_record: "读取缠论缓存",
+        perf_engine_load: "加载性能引擎",
+        bsp_snapshot: "生成买卖点快照",
+        initial_step: "初始化首根K线",
+        presentation_end: "一次性呈现到末根",
+        build_payload: "构建图表首包",
+        chip_refresh: "刷新筹码底座",
+        chip_kline_all_api: "懒加载筹码底座",
+      };
+      const top = payload.init_perf.rank.slice(0, 4).map((r) => `${stageLabel[r.stage] || r.stage}:${fmtCost(r.ms)}`).join("；");
+      appendMsgHistory(`加载耗时 ${fmtCost(payload.init_perf.total_ms)}（${top}）`);
     }
     const srcHistLine = buildSessionSourceHistoryLine(payload);
     if (srcHistLine) appendMsgHistory(srcHistLine);
@@ -20000,16 +20136,36 @@ def _agent_debug_log_backend(
 
 
 def _init_perf_history_lines(perf: dict[str, Any]) -> list[str]:
-    """把初始化节点耗时写入前端历史记录，方便现场核对慢点。"""
+    """把初始化节点耗时写入前端历史记录，使用中文功能名与秒/分钟。"""
     if not perf:
         return []
-    out = [f"加载节点总耗时：{float(perf.get('total_ms') or 0.0):.3f}ms"]
+    stage_name_map = {
+        "data_kline": "加载K线数据",
+        "data_chip": "加载筹码底座",
+        "chan_record": "读取缠论缓存",
+        "perf_engine_load": "加载性能引擎",
+        "bsp_snapshot": "生成买卖点快照",
+        "initial_step": "初始化首根K线",
+        "presentation_end": "一次性呈现到末根",
+        "build_payload": "构建图表首包",
+        "chip_refresh": "刷新筹码底座",
+        "chip_kline_all_api": "懒加载筹码底座",
+    }
+
+    def fmt_cost(ms: float) -> str:
+        sec = max(0.0, float(ms) / 1000.0)
+        if sec >= 60.0:
+            return f"{sec / 60.0:.2f}分钟"
+        return f"{sec:.2f}秒"
+
+    out = [f"加载节点总耗时：{fmt_cost(float(perf.get('total_ms') or 0.0))}"]
     for row in perf.get("rank") or []:
-        stage = str(row.get("stage", ""))
+        raw_stage = str(row.get("stage", ""))
+        stage = stage_name_map.get(raw_stage, raw_stage)
         ms = float(row.get("ms") or 0.0)
         pct = float(row.get("pct") or 0.0)
         if stage:
-            out.append(f"加载节点：{stage} {ms:.3f}ms（{pct:.1f}%）")
+            out.append(f"加载节点：{stage} {fmt_cost(ms)}（{pct:.1f}%）")
     return out
 
 
@@ -20273,6 +20429,17 @@ def api_chip_kline_all(chart_id: str = "active"):
     if not stepper_needs_chip_kline_all(st):
         return {"kline_all": [], "chart_id": chart_id}
     with init_perf_stage("chip_kline_all_api"):
+        if (
+            getattr(st, "data_src_used", None) == OFFLINE_INLINE_SRC
+            and not _kline_all_likely_full_history(st)
+            and getattr(st, "k_type", None) in _offline_chip_supported_ktypes()
+            and offline_tick_files_exist_for_range(getattr(st, "code", ""), "1990-01-01", None)
+        ):
+            # 筹码底座只影响筹码分布，放到懒加载接口，避免阻塞“加载会话”。
+            _refresh_stepper_chip_kline_all_base(
+                st,
+                (APP_STATE.session_params or {}).get("autype", AUTYPE.QFQ),
+            )
         bars = _kline_all_for_chip_payload(list(st.kline_all or []), getattr(st, "_session_end_date", None))
         if (
             getattr(st, "data_src_used", None) == OFFLINE_INLINE_SRC

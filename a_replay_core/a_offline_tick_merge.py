@@ -29,9 +29,18 @@ class OfflineTickRow:
 
 
 def normalize_offline_data_custom(raw: Any) -> str:
-    """native=?????merge_no_bs=?? BS ??????????"""
+    """native=原生；merge_no_bs=合并头尾无 BS 分笔。"""
     m = str(raw or "native").strip().lower()
-    if m in ("merge_no_bs", "merge", "no_bs", "??bs", "??bs?????????????"):
+    compact = re.sub(r"\s+", "", m)
+    if compact in (
+        "merge_no_bs",
+        "merge",
+        "no_bs",
+        "无bs",
+        "无b/s",
+        "无bs向上或者向下合并",
+        "无bs向上或向下合并",
+    ) or ("无bs" in compact and "合并" in compact):
         return "merge_no_bs"
     return "native"
 
