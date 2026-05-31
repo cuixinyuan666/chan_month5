@@ -10,3 +10,12 @@ OpenConfig.yaml
 gotify_push.py
 cos_config.yaml
 .cursor
+
+# 本地运行缓存
+a_replay_cache/a_perf_engine_cache/
+a_replay_cache/kline_sessions/
+a_replay_record/*/*.pkl
+a_replay_record/*/*.meta.json
+
+# Rust 编译产物
+a_rust_core/target/

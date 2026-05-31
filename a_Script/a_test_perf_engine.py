@@ -75,6 +75,59 @@ class PerfEngineFallbackTest(unittest.TestCase):
 
         self.assertEqual(session.engine_mode, "python-legacy")
 
+    def test_rust_backend_methods_are_used_when_available(self):
+        class FakeRust:
+            def __init__(self):
+                self.calls = []
+
+            def load_session(self, **kwargs):
+                self.calls.append(("load_session", kwargs))
+                return {
+                    "session_id": "rust-session",
+                    "payload_version": 2,
+                    "engine_mode": "rust",
+                    "bar_count": len(kwargs.get("bars") or []),
+                    "chip_bar_count": len(kwargs.get("chip_bars") or kwargs.get("bars") or []),
+                }
+
+            def normalize_bars(self, bars):
+                self.calls.append(("normalize_bars", list(bars)))
+                return {"x": [7], "t": ["rust"], "open": [1.0], "high": [2.0], "low": [0.5], "close": [1.5], "volume": [10.0]}
+
+            def chip_profile(self, session_id, cutoff_x=None, bucket_step=None):
+                self.calls.append(("chip_profile", session_id, cutoff_x, bucket_step))
+                return {
+                    "profile_id": f"{session_id}:{cutoff_x}:{bucket_step}",
+                    "cutoff_x": cutoff_x,
+                    "bucket_step": bucket_step,
+                    "prices": [1.0],
+                    "s": [2.0],
+                    "b": [3.0],
+                    "total": [5.0],
+                    "max_total": 5.0,
+                    "source": "rust",
+                }
+
+        engine = PerfEngine(cache_dir=self.tmp_dir, requested_mode="rust_auto")
+        fake = FakeRust()
+        engine._rust = fake
+
+        session = engine.load_session(
+            code="000001",
+            k_type="1min",
+            begin_date="2024-01-02",
+            end_date="2024-01-02",
+            bars=[{"x": 0, "t": "2024/01/02 09:31", "o": 10, "h": 11, "l": 9, "c": 10, "v": 100}],
+            chip_bars=None,
+        )
+        chip = engine.chip_profile(session.session_id, cutoff_x=0, bucket_step=0.1)
+
+        self.assertEqual(session.session_id, "rust-session")
+        self.assertEqual(chip["source"], "rust")
+        self.assertIn("load_session", [call[0] for call in fake.calls])
+        self.assertIn("normalize_bars", [call[0] for call in fake.calls])
+        self.assertIn("chip_profile", [call[0] for call in fake.calls])
+
 
 if __name__ == "__main__":
     unittest.main()

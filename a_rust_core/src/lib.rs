@@ -1,5 +1,32 @@
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
+use std::collections::{BTreeMap, HashMap};
+use std::sync::{Mutex, OnceLock};
+
+#[derive(Clone, Default)]
+struct ChipBins {
+    p: Vec<f64>,
+    s: Vec<f64>,
+    b: Vec<f64>,
+    w: Vec<f64>,
+}
+
+#[derive(Clone, Default)]
+struct Bar {
+    x: i64,
+    o: f64,
+    h: f64,
+    l: f64,
+    c: f64,
+    v: f64,
+    chip_tick_bins: Option<ChipBins>,
+}
+
+static SESSIONS: OnceLock<Mutex<HashMap<String, Vec<Bar>>>> = OnceLock::new();
+
+fn sessions() -> &'static Mutex<HashMap<String, Vec<Bar>>> {
+    SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
+}
 
 fn as_f64(item: &PyAny, key: &str) -> f64 {
     item.get_item(key)
@@ -21,6 +48,84 @@ fn as_string(item: &PyAny, key: &str) -> String {
         .ok()
         .and_then(|v| v.extract::<String>().ok())
         .unwrap_or_default()
+}
+
+fn list_f64(item: &PyAny, key: &str) -> Vec<f64> {
+    item.get_item(key)
+        .ok()
+        .and_then(|v| v.extract::<Vec<f64>>().ok())
+        .unwrap_or_default()
+}
+
+fn parse_bar(item: &PyAny, default_x: i64) -> Bar {
+    let chip_tick_bins = item
+        .get_item("chip_tick_bins")
+        .ok()
+        .and_then(|bins| {
+            let p = list_f64(bins, "p");
+            if p.is_empty() {
+                return None;
+            }
+            Some(ChipBins {
+                p,
+                s: list_f64(bins, "s"),
+                b: list_f64(bins, "b"),
+                w: list_f64(bins, "w"),
+            })
+        });
+    Bar {
+        x: as_i64(item, "x", default_x),
+        o: as_f64(item, "o"),
+        h: as_f64(item, "h"),
+        l: as_f64(item, "l"),
+        c: as_f64(item, "c"),
+        v: as_f64(item, "v"),
+        chip_tick_bins,
+    }
+}
+
+fn accumulate_ohlc_triangle(bar: &Bar, step: f64, buckets_b: &mut BTreeMap<i64, f64>) {
+    let low = bar.l.min(bar.h);
+    let high = bar.l.max(bar.h);
+    let mode = bar.c.max(low).min(high);
+    let vol = bar.v.max(0.0);
+    if high < low || vol <= 0.0 {
+        return;
+    }
+    let i0 = (low / step).floor() as i64;
+    let i1 = (high / step).ceil() as i64;
+    if i1 < i0 {
+        return;
+    }
+    if (high - low).abs() < 1e-12 {
+        *buckets_b.entry(i0).or_insert(0.0) += vol;
+        return;
+    }
+    let mut weights: Vec<(i64, f64)> = Vec::new();
+    let mut total_w = 0.0;
+    for key in i0..=i1 {
+        let price = key as f64 * step;
+        let weight = if (mode - low).abs() < 1e-12 {
+            (high - price) / (high - low).max(1e-12)
+        } else if (high - mode).abs() < 1e-12 {
+            (price - low) / (high - low).max(1e-12)
+        } else if price <= mode {
+            (price - low) / (mode - low).max(1e-12)
+        } else {
+            (high - price) / (high - mode).max(1e-12)
+        }
+        .max(0.0);
+        weights.push((key, weight));
+        total_w += weight;
+    }
+    if total_w <= 1e-12 {
+        return;
+    }
+    for (key, weight) in weights {
+        if weight > 0.0 {
+            *buckets_b.entry(key).or_insert(0.0) += weight / total_w * vol;
+        }
+    }
 }
 
 #[pyfunction]
@@ -83,6 +188,14 @@ fn load_session(
     let chip_len = chip_bars.map(|x| x.len()).unwrap_or_else(|| bars.len());
     hasher.update(chip_len.to_string().as_bytes());
     let session_id = hasher.finalize().to_hex().to_string();
+    let chip_iter = chip_bars.unwrap_or(bars);
+    let mut stored = Vec::with_capacity(chip_iter.len());
+    for (idx, bar) in chip_iter.iter().enumerate() {
+        stored.push(parse_bar(bar, idx as i64));
+    }
+    if let Ok(mut guard) = sessions().lock() {
+        guard.insert(session_id.clone(), stored);
+    }
     let d = PyDict::new(py);
     d.set_item("session_id", session_id)?;
     d.set_item("payload_version", 2)?;
@@ -110,15 +223,84 @@ fn next_step_delta(py: Python<'_>, _session_id: String, from_step: i64, to_step:
 
 #[pyfunction]
 fn chip_profile(py: Python<'_>, session_id: String, cutoff_x: Option<i64>, bucket_step: Option<f64>) -> PyResult<PyObject> {
+    let step = bucket_step.unwrap_or(0.1).max(0.001);
+    let bars = sessions()
+        .lock()
+        .ok()
+        .and_then(|guard| guard.get(&session_id).cloned())
+        .unwrap_or_default();
+    if !bars.is_empty() {
+        let cut = cutoff_x.unwrap_or_else(|| bars.last().map(|b| b.x).unwrap_or(-1));
+        let mut buckets_s: BTreeMap<i64, f64> = BTreeMap::new();
+        let mut buckets_b: BTreeMap<i64, f64> = BTreeMap::new();
+        for bar in bars.iter().filter(|b| b.x <= cut) {
+            if let Some(bins) = &bar.chip_tick_bins {
+                for (idx, price) in bins.p.iter().enumerate() {
+                    if !price.is_finite() {
+                        continue;
+                    }
+                    let key = (*price / step).floor() as i64;
+                    let sv = bins.s.get(idx).copied().unwrap_or(0.0);
+                    let mut bv = bins.b.get(idx).copied().unwrap_or(0.0);
+                    if bins.b.is_empty() {
+                        bv = bins.w.get(idx).copied().unwrap_or(0.0);
+                    }
+                    if sv > 0.0 {
+                        *buckets_s.entry(key).or_insert(0.0) += sv;
+                    }
+                    if bv > 0.0 {
+                        *buckets_b.entry(key).or_insert(0.0) += bv;
+                    }
+                }
+            } else {
+                accumulate_ohlc_triangle(bar, step, &mut buckets_b);
+            }
+        }
+        let keys: Vec<i64> = buckets_s
+            .keys()
+            .chain(buckets_b.keys())
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let prices = PyList::empty(py);
+        let s_vals = PyList::empty(py);
+        let b_vals = PyList::empty(py);
+        let totals = PyList::empty(py);
+        let mut max_total = 0.0;
+        for key in keys {
+            let sv = *buckets_s.get(&key).unwrap_or(&0.0);
+            let bv = *buckets_b.get(&key).unwrap_or(&0.0);
+            let total = sv + bv;
+            if total > max_total {
+                max_total = total;
+            }
+            prices.append(key as f64 * step)?;
+            s_vals.append(sv)?;
+            b_vals.append(bv)?;
+            totals.append(total)?;
+        }
+        let d = PyDict::new(py);
+        d.set_item("profile_id", format!("{}:{}:{}", session_id, cut, step))?;
+        d.set_item("cutoff_x", cut)?;
+        d.set_item("bucket_step", step)?;
+        d.set_item("prices", prices)?;
+        d.set_item("s", s_vals)?;
+        d.set_item("b", b_vals)?;
+        d.set_item("total", totals)?;
+        d.set_item("max_total", max_total)?;
+        d.set_item("source", "rust")?;
+        return Ok(d.into());
+    }
     let d = PyDict::new(py);
     let prices = PyList::empty(py);
     let empty = PyList::empty(py);
     d.set_item(
         "profile_id",
-        format!("{}:{}:{}", session_id, cutoff_x.unwrap_or(-1), bucket_step.unwrap_or(0.1)),
+            format!("{}:{}:{}", session_id, cutoff_x.unwrap_or(-1), step),
     )?;
     d.set_item("cutoff_x", cutoff_x)?;
-    d.set_item("bucket_step", bucket_step.unwrap_or(0.1))?;
+    d.set_item("bucket_step", step)?;
     d.set_item("prices", prices)?;
     d.set_item("s", empty)?;
     d.set_item("b", PyList::empty(py))?;

@@ -140,6 +140,9 @@ class PerfEngine:
             return "rust"
         return "python-fallback"
 
+    def _use_rust(self) -> bool:
+        return self.requested_mode != "python_legacy" and self._rust is not None
+
     def _cache_path(self, session_id: str) -> Path:
         safe = "".join(ch if ch.isalnum() else "_" for ch in session_id)
         return self.cache_dir / f"{safe}.json"
@@ -163,10 +166,26 @@ class PerfEngine:
             "end": str(end_date or ""),
             "payload_version": PAYLOAD_VERSION,
         }
-        session_id = _series_fingerprint(meta, bar_src, chip_src)
+        rust_meta: dict[str, Any] = {}
+        if self._use_rust() and hasattr(self._rust, "load_session"):
+            try:
+                # Rust 先接管会话指纹/元信息；Python 仍保留服务端会话缓存给旧接口复用。
+                rust_raw = self._rust.load_session(
+                    code=str(code),
+                    k_type=str(k_type),
+                    begin_date=str(begin_date),
+                    end_date=str(end_date or ""),
+                    bars=bar_src,
+                    chip_bars=chip_src,
+                )
+                if isinstance(rust_raw, dict):
+                    rust_meta = dict(rust_raw)
+            except Exception:
+                rust_meta = {}
+        session_id = str(rust_meta.get("session_id") or _series_fingerprint(meta, bar_src, chip_src))
         cache_path = self._cache_path(session_id)
-        series = normalize_bars(bar_src)
-        chip_series = normalize_bars(chip_src)
+        series = self._normalize_bars_for_session(bar_src)
+        chip_series = self._normalize_bars_for_session(chip_src)
         payload = {
             "meta": meta,
             "series": series,
@@ -193,11 +212,25 @@ class PerfEngine:
         return PerfSession(
             session_id=session_id,
             payload_version=PAYLOAD_VERSION,
-            engine_mode=self._engine_mode(),
-            bar_count=len(bar_src),
-            chip_bar_count=len(chip_src),
+            engine_mode=str(rust_meta.get("engine_mode") or self._engine_mode()),
+            bar_count=_safe_int(rust_meta.get("bar_count"), len(bar_src)),
+            chip_bar_count=_safe_int(rust_meta.get("chip_bar_count"), len(chip_src)),
             cache_file=str(cache_path),
         )
+
+    def _normalize_bars_for_session(self, bars: list[dict[str, Any]]) -> dict[str, list[Any]]:
+        if self._use_rust() and hasattr(self._rust, "normalize_bars"):
+            try:
+                raw = self._rust.normalize_bars(bars)
+                if isinstance(raw, dict):
+                    out = {str(k): list(v) if isinstance(v, list) else v for k, v in raw.items()}
+                    # 当前 Rust 扩展尚未返回 time_ms，Python 补齐以保持旧接口稳定。
+                    if "time_ms" not in out:
+                        out["time_ms"] = [_parse_time_ms(t) for t in out.get("t", [])]
+                    return out
+            except Exception:
+                pass
+        return normalize_bars(bars)
 
     def _get_session(self, session_id: str) -> dict[str, Any]:
         try:
@@ -243,6 +276,16 @@ class PerfEngine:
         if not chip_bars:
             return self._empty_chip_profile(session_id, cutoff_x, bucket_step)
         step = max(0.001, _safe_float(bucket_step, 0.1))
+        if self._use_rust() and hasattr(self._rust, "chip_profile"):
+            try:
+                rust_raw = self._rust.chip_profile(str(session_id), cutoff_x=cutoff_x, bucket_step=step)
+                if isinstance(rust_raw, dict):
+                    rust_out = dict(rust_raw)
+                    # Rust 当前版本可能只返回空壳；有筹码数据时保留 Python 兼容结果。
+                    if rust_out.get("prices") or _safe_float(rust_out.get("max_total"), 0.0) > 0:
+                        return rust_out
+            except Exception:
+                pass
         cut = cutoff_x
         if cut is not None:
             use_bars = [b for b in chip_bars if _safe_int(b.get("x"), -1) <= int(cut)]
@@ -296,7 +339,7 @@ class PerfEngine:
             "b": b_arr,
             "total": total,
             "max_total": max(total) if total else 0.0,
-            "source": "rust" if self.rust_available else "python-fallback",
+            "source": "python-fallback",
         }
         try:
             profile_path.write_text(json.dumps(out, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")

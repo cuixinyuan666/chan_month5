@@ -456,8 +456,13 @@ def _chip_kline_all_with_x(bars: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
-def _fetch_offline_chip_kline_all(code: str, k_type: KL_TYPE, autype: AUTYPE) -> list[dict[str, Any]]:
-    """离线筹码底座：API 直拉 1990~最新（绕过 ReplayDataChan 全量拉取易失败）。"""
+def _fetch_offline_chip_kline_all(
+    code: str,
+    k_type: KL_TYPE,
+    autype: AUTYPE,
+    end_date: Optional[str] = None,
+) -> list[dict[str, Any]]:
+    """离线筹码底座：只拉 A~C（上市首根到会话结束日），避免把未来 Z 段载入。"""
     t0_ms = int(time.time() * 1000)
     api_cls = COfflineInline
     safe_api_do_init(api_cls, OFFLINE_INLINE_SRC)
@@ -466,7 +471,7 @@ def _fetch_offline_chip_kline_all(code: str, k_type: KL_TYPE, autype: AUTYPE) ->
             code=normalize_code(code),
             k_type=k_type,
             begin_date="1990-01-01",
-            end_date=None,
+            end_date=end_date,
             autype=autype,
         )
         out = serialize_klu_iter(list(api.get_kl_data()))
@@ -478,6 +483,7 @@ def _fetch_offline_chip_kline_all(code: str, k_type: KL_TYPE, autype: AUTYPE) ->
             {
                 "code": str(code),
                 "kType": str(getattr(k_type, "name", k_type)),
+                "endDate": str(end_date or ""),
                 "bars": len(out),
                 "costMs": int(time.time() * 1000) - t0_ms,
             },
@@ -502,7 +508,15 @@ def _refresh_stepper_chip_kline_all_base(stepper: Any, autype: AUTYPE) -> None:
         code, "1990-01-01", None
     ):
         try:
-            candidates.insert(0, _fetch_offline_chip_kline_all(code, k_type, autype))
+            candidates.insert(
+                0,
+                _fetch_offline_chip_kline_all(
+                    code,
+                    k_type,
+                    autype,
+                    getattr(stepper, "_session_end_date", None),
+                ),
+            )
             refresh_reason = "offline-full-fetch"
         except Exception as exc:
             print(f"[Chip] refresh offline full kline_all failed: {format_source_error(exc)}")
@@ -615,6 +629,30 @@ def _kline_all_for_chip_payload(
     if not out:
         out = list(kline_all)
     return _chip_kline_all_with_x(out)
+
+
+def _chip_bars_for_perf_session(
+    kline_all: list[dict[str, Any]],
+    chart_bars: list[dict[str, Any]],
+    session_end_date: Optional[str],
+) -> list[dict[str, Any]]:
+    """性能引擎筹码底座：裁掉未来，并把 x 对齐主图会话轴。"""
+    if not kline_all:
+        return []
+    session_bars = _kline_all_for_chip_payload(kline_all, session_end_date)
+    if not session_bars:
+        return []
+    x_by_t = {str(bar.get("t", "")): int(bar.get("x", i)) for i, bar in enumerate(chart_bars or [])}
+    out: list[dict[str, Any]] = []
+    for i, bar in enumerate(session_bars):
+        b = dict(bar)
+        t = str(b.get("t", ""))
+        if t in x_by_t:
+            b["x"] = x_by_t[t]
+        elif int(b.get("x", -1)) < 0:
+            b["x"] = i
+        out.append(b)
+    return out
 
 
 def normalize_data_form_quantity(raw: Any, total: int) -> int:
@@ -3884,10 +3922,10 @@ class ChanStepper:
         except Exception:
             stock_name = None
 
-        # 筹码链：全历史 1990~最新；K 线链：kline_all 与会话区间一致
+        # 筹码链：A~C（上市首根~会话结束日）；K 线链：kline_all 与会话区间一致
         chip_src = data_src
         chip_begin_date = "1990-01-01"
-        chip_end_date: Optional[str] = None
+        chip_end_date: Optional[str] = end_date
         all_begin = chip_begin_date if use_for == "chip" else begin_date
         all_end = chip_end_date if use_for == "chip" else end_date
         try:
@@ -3903,7 +3941,7 @@ class ChanStepper:
             )
             kline_all = serialize_klu_iter(chan_all[0].klu_iter())
         except Exception:
-            # 全历史失败时勿回退会话 master（仅数日），改 API 直拉 1990~最新
+            # A~C 失败时勿回退会话 master（仅数日），改 API 直拉 1990~C
             try:
                 api_cls = get_stock_api_cls(chip_src)
                 safe_api_do_init(api_cls, chip_src)
@@ -4169,6 +4207,11 @@ class ChanStepper:
             chain_override = chains_from_priority([str(x) for x in data_source_priority])
             if not chain_override:
                 chain_override = None
+        if confirm_offline and offline_tick_files_exist_for_range(self.code, begin_date, end_date):
+            base_chain = list(chain_override or DATA_SOURCE_CHAIN_KLINE or chains_from_priority(DEFAULT_DATA_SOURCE_PRIORITY_NAMES))
+            chain_override = [("离线数据", OFFLINE_INLINE_SRC)] + [
+                pair for pair in base_chain if pair[1] != OFFLINE_INLINE_SRC
+            ]
         prio_fp = (tuple(data_source_priority) if data_source_priority else (), bool(confirm_offline))
         session_key = (self.code, begin_date, end_date, autype, self.k_type, prio_fp, off_custom)
         cache_hit = session_key == self._data_session_key and self._replay_klus_master is not None
@@ -4221,14 +4264,22 @@ class ChanStepper:
                 # 离线 K 线仅会话区间；筹码底座须 1990~最新全历史（直拉 + 筹码链，取更宽）
                 if k_sel.data_src == OFFLINE_INLINE_SRC:
                     offline_chip_all: list[dict[str, Any]] = []
-                    try:
-                        offline_chip_all = _fetch_offline_chip_kline_all(self.code, self.k_type, autype)
-                    except Exception as exc:
-                        print(f"[Chip] offline full kline_all failed: {format_source_error(exc)}")
+                    chip_cached = list(chip_sel.kline_all or [])
+                    # chip 链/磁盘缓存已是全历史时，禁止再解析全量分笔，加载会话会被 200万行分笔拖慢。
+                    if len(chip_cached) <= len(k_sel.kline_all or []):
+                        try:
+                            offline_chip_all = _fetch_offline_chip_kline_all(
+                                self.code,
+                                self.k_type,
+                                autype,
+                                end_date,
+                            )
+                        except Exception as exc:
+                            print(f"[Chip] offline full kline_all failed: {format_source_error(exc)}")
                     self.kline_all = _pick_wider_kline_all_for_chip(
                         [
                             offline_chip_all,
-                            list(chip_sel.kline_all or []),
+                            chip_cached,
                             list(k_sel.kline_all or []),
                         ]
                     )
@@ -4390,13 +4441,18 @@ class ChanStepper:
         self.perf_engine_mode = "python-fallback"
         try:
             perf_bars = serialize_klu_iter(self._replay_klus_master or [])
+            perf_chip_bars = _chip_bars_for_perf_session(
+                self.kline_all,
+                perf_bars,
+                end_date,
+            )
             perf_session = APP_PERF_ENGINE.load_session(
                 code=self.code,
                 k_type=k_type_to_api_key(self.k_type),
                 begin_date=begin_date,
                 end_date=end_date,
                 bars=perf_bars,
-                chip_bars=self.kline_all,
+                chip_bars=perf_chip_bars or perf_bars,
             )
             self.perf_session_id = perf_session.session_id
             self.perf_engine_mode = perf_session.engine_mode
@@ -8584,6 +8640,7 @@ let chipKlineAllCacheSessionKey = "";
 // #region agent log
 const __agentDebugState = { lastByKey: {} };
 function __agentDebugLog(hypothesisId, location, message, data, dedupeKey = "", dedupeMs = 500) {
+  return;
   try {
     const now = Date.now();
     const key = `${hypothesisId}|${location}|${dedupeKey || message}`;
@@ -16184,6 +16241,7 @@ function drawGridLines(s) {
 
 function tryDrawChipProfileFromEngine(chart, s) {
   if (lastPayload && lastPayload.chart_mode === "dual" && chart !== lastPayload.chart) return false;
+  if (crosshairX !== null && !isChipReplayStepping(lastPayload)) return false;
   const profile = (lastPayload && lastPayload.chip_profile && Array.isArray(lastPayload.chip_profile.prices))
     ? lastPayload.chip_profile
     : chipProfileCache;
@@ -19919,6 +19977,7 @@ def _agent_debug_log_backend(
     run_id: str = "post-fix2",
 ) -> None:
     """Python 侧调试埋点（NDJSON 落盘）。"""
+    return
     try:
         import time
 
@@ -19940,15 +19999,23 @@ def _agent_debug_log_backend(
         pass
 
 
+def _init_perf_history_lines(perf: dict[str, Any]) -> list[str]:
+    """把初始化节点耗时写入前端历史记录，方便现场核对慢点。"""
+    if not perf:
+        return []
+    out = [f"加载节点总耗时：{float(perf.get('total_ms') or 0.0):.3f}ms"]
+    for row in perf.get("rank") or []:
+        stage = str(row.get("stage", ""))
+        ms = float(row.get("ms") or 0.0)
+        pct = float(row.get("pct") or 0.0)
+        if stage:
+            out.append(f"加载节点：{stage} {ms:.3f}ms（{pct:.1f}%）")
+    return out
+
+
 @app.post("/api/_agent_debug_log")
 def api_agent_debug_log(body: dict[str, Any]):
     """调试埋点：前端 NDJSON 落盘（debug 会话 cb2ced）。"""
-    try:
-        line = json.dumps(body, ensure_ascii=False) + "\n"
-        with open(_AGENT_DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
-            f.write(line)
-    except Exception:
-        pass
     return {"ok": True}
 
 
@@ -20127,24 +20194,27 @@ def _api_init_impl(req: InitReq, perf_col: Optional[dict[str, Any]] = None) -> d
         APP_STATE.bsp_judge_logs = []
         APP_STATE._last_level_dirs = {level: None for level in set(JUDGE_TRIGGER_LEVELS.values())}
         APP_STATE._clear_rollback_cache()
-        APP_STATE.rebuild_bsp_all_snapshot()
+        with init_perf_stage("bsp_snapshot"):
+            APP_STATE.rebuild_bsp_all_snapshot()
         pres_init = normalize_kline_presentation_mode(
             getattr(req, "kline_presentation_mode", "step")
         )
         if pres_init == "instant":
-            APP_STATE.apply_kline_presentation_end()
+            with init_perf_stage("presentation_end"):
+                APP_STATE.apply_kline_presentation_end()
         else:
             # init 后先推进一根，确保前端有可视数据并可交互
-            APP_STATE.stepper.step()
-            if APP_STATE.chart_mode == "dual" and APP_STATE.stepper2 is not None:
-                APP_STATE.stepper2.step()
-                APP_STATE._sync_stepper_to_anchor(APP_STATE.stepper2, APP_STATE.stepper.current_time())
-            elif APP_STATE.chart_mode == "multi" and APP_STATE.multi_steppers:
-                APP_STATE._sync_passives_to_anchor(APP_STATE.stepper.current_time())
-            APP_STATE._dual_rebuild_coarse_chan_anti_future(APP_STATE.get_active_stepper().current_time())
-            APP_STATE.sync_bsp_history()
-            APP_STATE.sync_rhythm_history()
-            APP_STATE.after_step_update()
+            with init_perf_stage("initial_step"):
+                APP_STATE.stepper.step()
+                if APP_STATE.chart_mode == "dual" and APP_STATE.stepper2 is not None:
+                    APP_STATE.stepper2.step()
+                    APP_STATE._sync_stepper_to_anchor(APP_STATE.stepper2, APP_STATE.stepper.current_time())
+                elif APP_STATE.chart_mode == "multi" and APP_STATE.multi_steppers:
+                    APP_STATE._sync_passives_to_anchor(APP_STATE.stepper.current_time())
+                APP_STATE._dual_rebuild_coarse_chan_anti_future(APP_STATE.get_active_stepper().current_time())
+                APP_STATE.sync_bsp_history()
+                APP_STATE.sync_rhythm_history()
+                APP_STATE.after_step_update()
         APP_STATE._rhythm_notice_hits = []
         with init_perf_stage("build_payload"):
             # init 首包省略 kline_all，显著减小 JSON；筹码由 /api/chip_kline_all 懒加载
@@ -20174,12 +20244,15 @@ def _api_init_impl(req: InitReq, perf_col: Optional[dict[str, Any]] = None) -> d
         ):
             payload["message"] += "（缠论 record：未命中，后台将异步保存本次全量计算）"
         if init_perf_enabled() and perf_col is not None:
-            payload["init_perf"] = init_perf_report(
+            init_perf_payload = init_perf_report(
                 {
                     "chart_mode": APP_STATE.chart_mode,
                     "chan_record_applied": bool(rec_apply and getattr(rec_apply, "applied", False)),
                 }
             )
+            payload["init_perf"] = init_perf_payload
+            existing_trace = list(payload.get("record_trace") or [])
+            payload["record_trace"] = existing_trace + _init_perf_history_lines(init_perf_payload)
         payload["chip_kline_all_lazy"] = stepper_needs_chip_kline_all(APP_STATE.stepper)
         return payload
     except HTTPException:
@@ -20200,8 +20273,20 @@ def api_chip_kline_all(chart_id: str = "active"):
     if not stepper_needs_chip_kline_all(st):
         return {"kline_all": [], "chart_id": chart_id}
     with init_perf_stage("chip_kline_all_api"):
-        _ensure_offline_chip_bins_enriched(st)
         bars = _kline_all_for_chip_payload(list(st.kline_all or []), getattr(st, "_session_end_date", None))
+        if (
+            getattr(st, "data_src_used", None) == OFFLINE_INLINE_SRC
+            and bars
+            and getattr(st, "k_type", None) in _offline_chip_supported_ktypes()
+            and offline_tick_files_exist_for_range(getattr(st, "code", ""), getattr(st, "_session_begin_date", None), getattr(st, "_session_end_date", None))
+        ):
+            # 懒加载只补会话区间，避免 28万根全历史分笔补全卡住前端动态筹码。
+            _enrich_kline_all_offline_chip_non_triangle(
+                getattr(st, "code", ""),
+                bars,
+                getattr(st, "_session_end_date", None),
+                getattr(st, "k_type", None),
+            )
     return {
         "chart_id": chart_id,
         "kline_all": bars,

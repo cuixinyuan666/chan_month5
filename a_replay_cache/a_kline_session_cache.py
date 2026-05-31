@@ -12,7 +12,7 @@ import threading
 from dataclasses import dataclass
 from typing import Any, Optional
 
-_CACHE_VERSION = 1
+_CACHE_VERSION = 3
 _PICKLE_RECURSION = 0x100000
 _ENV_DISABLE = os.environ.get("KLINE_SESSION_CACHE", "1").strip().lower() in ("0", "false", "no", "off")
 _lock = threading.Lock()
