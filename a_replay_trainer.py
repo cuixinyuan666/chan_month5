@@ -3,6 +3,7 @@ import inspect
 import json
 import os
 import re
+import threading
 import time
 import warnings
 from bisect import bisect_right
@@ -25,6 +26,7 @@ import tushare as ts
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
+from starlette.concurrency import run_in_threadpool
 from a_replay_core.a_replay_api_models import (
     BackNReq,
     GotoStepReq,
@@ -58,6 +60,7 @@ from a_replay_core.a_init_perf import (
     init_perf_report,
     init_perf_run,
     init_perf_stage,
+    set_init_stage_listener,
 )
 from a_replay_core.a_replay_kline_view import kline_view_rows_filtered
 from a_replay_core.a_replay_presenters import (
@@ -121,6 +124,7 @@ from a_replay_record import (
     ChanRecordApplyResult,
     build_chan_config_fingerprint,
     drain_record_trace,
+    peek_record_trace,
     push_record_trace,
     schedule_chan_record_save,
     try_apply_chan_record,
@@ -4360,6 +4364,7 @@ class ChanStepper:
             self.raw_kline_count if self.raw_kline_count > 0 else 1,
         )
         if is_data_form_tick_synth_mode(self.data_form_mode):
+            push_record_trace("分笔价格合成：读取离线分笔并聚合K线…")
             chip_base_before_synth = copy.deepcopy(self.kline_all) if self.kline_all else []
             synth_master, synth_kline_all, tick_raw_count, tick_raw_master = build_tick_synth_session_data(
                 self.code,
@@ -4675,6 +4680,39 @@ class ChanStepper:
         out["rhythm_lines"] = [it for it in payload.get("rhythm_lines", []) if int(it.get("x2", -1)) <= x_max]
         return out
 
+    def bulk_present_to_step(self, target_step: int) -> None:
+        """一次性呈现快路径：全量灌入 chan 并定位到 target_step。"""
+        if self.chan is None:
+            return
+        master = self._replay_klus_master or []
+        total = len(master)
+        if total <= 0:
+            return
+        target_step = max(0, min(int(target_step), total - 1))
+        _check_init_cancelled()
+        for _ in self.chan.load(step=False):
+            _check_init_cancelled()
+        self._rebuild_indicator_history_from_chan()
+        self.step_idx = target_step
+        self.structure_bundle = None
+        self._bundle_cache_step_idx = None
+        self._chart_payload_cache = {}
+        if use_master_kline_for_chart(self.data_form_mode):
+            self._serialized_klu_cache = serialize_replay_master_klines(master[: target_step + 1])
+        else:
+            self._serialized_klu_cache = []
+            for latest_klu in self.chan[0].klu_iter():
+                if latest_klu.idx > target_step:
+                    break
+                self._serialized_klu_cache.append(
+                    serialize_klu_unit_fast(
+                        latest_klu,
+                        lambda x: _klu_float_trade_metric(x, DATA_FIELD.FIELD_VOLUME),
+                    )
+                )
+        self.get_structure_bundle(force=True)
+        self._iter = None
+
     def step(self) -> bool:
         if self.data_feed_mode == "unified":
             if self._unified_full_payload is None:
@@ -4688,7 +4726,10 @@ class ChanStepper:
             self._chart_payload_cache = {}
             return True
         if self._iter is None:
-            raise ValueError("请先初始化会话。")
+            master = self._replay_klus_master or []
+            if self.step_idx + 1 >= len(master):
+                return False
+            raise ValueError("全量呈现后会话已在末根，请回退后再步进")
         try:
             next(self._iter)
             self.step_idx += 1
@@ -5829,7 +5870,82 @@ class AppState:
             self.sync_rhythm_history()
             self.after_step_update()
             return
-        self.rebuild_to_step(last_idx)
+        # init 快路径：stepper 已就绪，直接步进至末根，避免 rebuild_to_step 重复 init
+        self._advance_steppers_to_index(last_idx, report_progress=True)
+
+    def _advance_steppers_to_index(self, target_step: int, *, report_progress: bool = False) -> None:
+        """从当前步位推进到 target_step，不重建 stepper。"""
+        total = self._replay_bar_total_for_stepper(self.stepper)
+        if total <= 0:
+            return
+        target_step = max(0, min(int(target_step), total - 1))
+        feed = normalize_data_feed_mode(getattr(self.stepper, "data_feed_mode", "step"))
+        if feed == "unified":
+            self.stepper.unified_set_step_idx(target_step)
+            if self.chart_mode == "dual" and self.stepper2 is not None:
+                self._sync_stepper_to_anchor(self.stepper2, self.stepper.current_time())
+            elif self.chart_mode == "multi" and self.multi_steppers:
+                self._sync_passives_to_anchor(self.stepper.current_time())
+            self._dual_rebuild_coarse_chan_anti_future(self.stepper.current_time())
+            self.sync_bsp_history()
+            self.sync_rhythm_history()
+            self.after_step_update()
+            return
+
+        if self.stepper.step_idx < 0:
+            _check_init_cancelled()
+            if not self.stepper.step():
+                return
+            if self.chart_mode == "dual" and self.stepper2 is not None:
+                self.stepper2.step()
+                self._sync_stepper_to_anchor(self.stepper2, self.stepper.current_time())
+            elif self.chart_mode == "multi" and self.multi_steppers:
+                self._sync_passives_to_anchor(self.stepper.current_time())
+            self.sync_bsp_history()
+            self.sync_rhythm_history()
+            self.after_step_update()
+
+        current = max(0, int(self.stepper.step_idx))
+        if current >= target_step:
+            self._dual_rebuild_coarse_chan_anti_future(self.get_active_stepper().current_time())
+            return
+
+        # init 一次性呈现：全量灌入，避免逐 K step 极慢
+        if report_progress and self.stepper.chan is not None:
+            push_record_trace("一次性呈现：全量计算缠论与指标…")
+            _init_status_set_subprogress(88, "一次性呈现：全量计算", push_trace=True)
+            self.stepper.bulk_present_to_step(target_step)
+            if self.chart_mode == "dual" and self.stepper2 is not None:
+                self._sync_stepper_to_anchor(self.stepper2, self.stepper.current_time())
+            elif self.chart_mode == "multi" and self.multi_steppers:
+                self._sync_passives_to_anchor(self.stepper.current_time())
+            self.sync_bsp_history()
+            self.sync_rhythm_history()
+            self._dual_rebuild_coarse_chan_anti_future(self.get_active_stepper().current_time())
+            self.after_step_update()
+            return
+
+        span = max(1, target_step - current)
+        for i in range(current, target_step):
+            _check_init_cancelled()
+            if report_progress and (i == current or (i - current) % max(1, span // 20) == 0 or i == target_step - 1):
+                pct = 85 + int(13 * (i - current + 1) / span)
+                _init_status_set_subprogress(
+                    min(98, pct),
+                    f"一次性呈现 {i + 1}/{target_step + 1}",
+                    push_trace=(i == current or i == target_step - 1 or (i - current) % max(1, span // 5) == 0),
+                )
+            if not self.stepper.step():
+                break
+            if self.chart_mode == "dual" and self.stepper2 is not None:
+                self._sync_stepper_to_anchor(self.stepper2, self.stepper.current_time())
+            elif self.chart_mode == "multi" and self.multi_steppers:
+                self._sync_passives_to_anchor(self.stepper.current_time())
+            self.sync_bsp_history()
+            self.sync_rhythm_history()
+            self.after_step_update()
+
+        self._dual_rebuild_coarse_chan_anti_future(self.get_active_stepper().current_time())
 
     def rebuild_to_step(self, target_step: int) -> None:
         if self.session_params is None:
@@ -7603,7 +7719,7 @@ HTML = r"""
     }
     .globalLoading.show { display: flex; }
     .globalLoading .panel {
-      width: min(420px, calc(100vw - 32px));
+      width: min(780px, calc(100vw - 32px));
       min-width: 260px;
       padding: 18px 20px;
       border-radius: 10px;
@@ -7616,6 +7732,8 @@ HTML = r"""
       align-items: stretch;
       gap: 12px;
       font: 14px Consolas, monospace;
+      position: relative;
+      z-index: 20002;
     }
     .globalLoadingBody {
       display: flex;
@@ -7672,12 +7790,9 @@ HTML = r"""
       transition: width 0.25s ease;
     }
     .loadingHistorySide {
-      position: fixed;
-      top: 12px;
-      right: 12px;
-      bottom: 12px;
-      z-index: 20001;
-      width: min(360px, calc(100vw - 24px));
+      flex: 0 0 min(300px, 38%);
+      min-width: 200px;
+      max-height: min(320px, 42vh);
       overflow-y: auto;
       border: 1px solid var(--legendBorder);
       border-radius: 8px;
@@ -7686,7 +7801,6 @@ HTML = r"""
       color: var(--legendText);
       font-size: 12px;
       line-height: 1.55;
-      box-shadow: 0 14px 36px rgba(2, 6, 23, 0.22);
     }
     .loadingHistorySide .time {
       color: #2563eb;
@@ -7696,21 +7810,27 @@ HTML = r"""
       display: block;
       margin-top: 10px;
       text-align: right;
+      position: relative;
+      z-index: 20003;
     }
     .globalLoading .loadingActions.show {
       display: block;
     }
     .globalLoading .loadingActions button {
       width: auto;
-      padding: 4px 10px;
-      font-size: 12px;
+      padding: 6px 14px;
+      font-size: 13px;
       line-height: 1.4;
+      pointer-events: auto;
+    }
+    .globalLoading .loadingActions button:disabled {
+      opacity: 0.45;
     }
     @media (max-width: 760px) {
       .globalLoadingBody { flex-direction: column; }
       .loadingHistorySide {
-        top: auto;
-        left: 12px;
+        flex: 1 1 auto;
+        min-width: 0;
         max-height: 36vh;
         width: auto;
       }
@@ -11374,14 +11494,11 @@ function appendChartSettingsItemTo(parent, sec, item, buildLabelHtml) {
     itemDiv.innerHTML += `<label>${buildLabelHtml(item)}</label><select data-key="${sec.key}" data-subkey="${item.subKey}">${optionsHtml}</select>`;
     if (sec.key === "dataForm" && item.subKey === "mode") {
       const select = itemDiv.querySelector("select");
-      const loaded = !!(lastPayload && lastPayload.ready);
-      if (!loaded) {
-        const disableModes = new Set(["quantity", "tick_quantity"]);
-        Array.from(select.options).forEach((o) => {
-          if (disableModes.has(String(o.value))) o.disabled = true;
-        });
-        if (isQuantityDataFormMode(select.value)) select.value = "traditional";
-      }
+      // 首次加载前 N 未知，后端会按真实根数钳制数量；不要拦截会话加载。
+      select.onchange = () => {
+        flushChartSettingsFormToMemory();
+        renderSettingsForm();
+      };
     }
     if (sec.key === "dataForm" && item.subKey === "offlineDataCustom") {
       const sel = itemDiv.querySelector("select");
@@ -11484,9 +11601,13 @@ function appendChartSettingsItemTo(parent, sec, item, buildLabelHtml) {
       const n = getRawKlineCount();
       const minN = 1;
       const maxN = n > 0 ? n : 1;
-      const disabled = !(lastPayload && lastPayload.ready);
+      const quantityMode = isQuantityDataFormMode(dataFormConfig.mode);
+      const disabled = quantityMode && !(lastPayload && lastPayload.ready);
       const finalVal = clampDataFormQuantity(displayVal, maxN);
-      itemDiv.innerHTML += `<label>${buildLabelHtml(item)}</label><input type="number" value="${finalVal}" min="${minN}" max="${maxN}" step="1" ${disabled ? "disabled" : ""} data-key="${sec.key}" data-subkey="${item.subKey}"><div class="muted" style="font-size:12px;">${disabled ? "请先加载会话后再使用数量模式。" : `当前范围：1 - ${maxN}`}</div>`;
+      const helpText = !quantityMode
+        ? "仅“数量/分笔价格合成数量”生效，当前不会参与加载。"
+        : (disabled ? "请先加载会话后再使用数量模式。" : `当前范围：1 - ${maxN}`);
+      itemDiv.innerHTML += `<label>${buildLabelHtml(item)}</label><input type="number" value="${finalVal}" min="${minN}" max="${maxN}" step="1" ${disabled ? "disabled" : ""} data-key="${sec.key}" data-subkey="${item.subKey}"><div class="muted" style="font-size:12px;">${helpText}</div>`;
     } else {
       itemDiv.innerHTML += `<label>${buildLabelHtml(item)}</label><input type="${item.type}" value="${displayVal != null ? displayVal : ""}" step="${item.step || 1}" placeholder="${item.placeholder || ""}" data-key="${sec.key}" data-subkey="${item.subKey}">`;
     }
@@ -13367,7 +13488,10 @@ function getChipBucketStep() {
 }
 
 let initLoadTimer = null;
+let initStatusPollTimer = null;
+let initTraceSeenCount = 0;
 let initLoadStartMs = 0;
+let initLoadServerPct = 0;
 let initLoadExpectedMs = Number(storageGet("chan_init_expected_ms") || 40000);
 
 function fmtLoadingRemain(sec) {
@@ -13391,9 +13515,10 @@ function renderGlobalLoadingHistory() {
   box.scrollTop = box.scrollHeight;
 }
 
-function updateGlobalLoadingProgress(done = false) {
+function updateGlobalLoadingProgress(done = false, serverHint = null) {
   const bar = $("globalLoadingBar");
   const eta = $("globalLoadingEta");
+  const txt = $("globalLoadingText");
   if (!bar || !eta || !initLoadStartMs) return;
   if (done) {
     bar.style.width = "100%";
@@ -13404,12 +13529,57 @@ function updateGlobalLoadingProgress(done = false) {
   }
   const elapsed = Date.now() - initLoadStartMs;
   const expected = Math.max(5000, Number(initLoadExpectedMs) || 40000);
-  const pct = Math.max(1, Math.min(92, Math.floor((elapsed / expected) * 100)));
-  const remainSec = Math.max(1, (expected - elapsed) / 1000);
+  let pct = Math.max(1, Math.min(92, Math.floor((elapsed / expected) * 100)));
+  if (Number.isFinite(initLoadServerPct) && initLoadServerPct > 0) {
+    pct = Math.max(pct, Math.min(99, Math.floor(initLoadServerPct)));
+  }
+  if (serverHint && Number.isFinite(Number(serverHint.progress_pct))) {
+    pct = Math.max(pct, Math.min(99, Math.floor(Number(serverHint.progress_pct))));
+    initLoadServerPct = pct;
+  }
+  let remainSec = Math.max(1, (expected - elapsed) / 1000);
+  if (serverHint && Number.isFinite(Number(serverHint.eta_sec))) {
+    remainSec = Math.max(1, Number(serverHint.eta_sec));
+  } else if (pct > 3 && pct < 99) {
+    remainSec = Math.max(1, (elapsed / pct) * (100 - pct) / 1000);
+  }
   bar.style.width = `${pct}%`;
   bar.textContent = `${pct}%`;
   eta.textContent = `预计剩余：${fmtLoadingRemain(remainSec)}`;
+  if (txt && serverHint && serverHint.stage_label) {
+    txt.textContent = `正在加载会话：${serverHint.stage_label}`;
+  }
   renderGlobalLoadingHistory();
+}
+
+async function pollInitStatusOnce() {
+  if (!initAbortController) return;
+  try {
+    const st = await api("/api/init_status", null, "GET");
+    const traces = Array.isArray(st.traces) ? st.traces : [];
+    if (traces.length > initTraceSeenCount) {
+      traces.slice(initTraceSeenCount).forEach((line) => appendMsgHistory(String(line)));
+      initTraceSeenCount = traces.length;
+    }
+    updateGlobalLoadingProgress(false, st);
+  } catch (_) {
+    /* 轮询失败忽略 */
+  }
+}
+
+function startInitStatusPoll() {
+  stopInitStatusPoll();
+  initTraceSeenCount = 0;
+  initLoadServerPct = 0;
+  void pollInitStatusOnce();
+  initStatusPollTimer = setInterval(() => { void pollInitStatusOnce(); }, 600);
+}
+
+function stopInitStatusPoll() {
+  if (initStatusPollTimer) {
+    clearInterval(initStatusPollTimer);
+    initStatusPollTimer = null;
+  }
 }
 
 function setGlobalLoading(visible, text) {
@@ -13422,20 +13592,30 @@ function setGlobalLoading(visible, text) {
     if (!initLoadStartMs) initLoadStartMs = Date.now();
     if (!initLoadTimer) initLoadTimer = setInterval(() => updateGlobalLoadingProgress(false), 1000);
     updateGlobalLoadingProgress(false);
+    renderGlobalLoadingHistory();
   } else {
     if (initLoadTimer) {
       clearInterval(initLoadTimer);
       initLoadTimer = null;
     }
+    stopInitStatusPoll();
+    initLoadServerPct = 0;
+  }
+  if (!visible) {
     initLoadStartMs = 0;
   }
   const actions = $("globalLoadingActions");
   if (actions) {
-    const canCancel = !!visible;
-    actions.classList.toggle("show", canCancel);
+    const canCancel = !!visible && !!initAbortController;
+    actions.classList.toggle("show", !!visible);
+    actions.style.display = visible ? "block" : "none";
   }
   const cancelBtn = $("btnCancelInitLoad");
-  if (cancelBtn) cancelBtn.disabled = !(visible && initAbortController);
+  if (cancelBtn) {
+    const canCancel = !!(visible && initAbortController);
+    cancelBtn.disabled = !canCancel;
+    cancelBtn.style.pointerEvents = canCancel ? "auto" : "none";
+  }
 }
 
 function hideGlobalLoading() {
@@ -18972,10 +19152,11 @@ $("btnInit").onclick = async () => {
   const initBtnHtml = initBtn.innerHTML;
   // 先创建取消控制器，再展示遮罩；否则首次 show 时看不到“终止加载”按钮
   initAbortController = new AbortController();
-  setMsg("正在加载会话...");
-  setGlobalLoading(true, "正在加载会话，请稍候...");
-  // 再次同步一次动作区显示，确保灰屏时始终有退出入口
-  setGlobalLoading(true);
+  initLoadStartMs = Date.now();
+  initLoadServerPct = 0;
+  setGlobalLoading(true, "正在加载会话，请稍候…");
+  appendMsgHistory("正在加载会话…");
+  startInitStatusPoll();
   initBtn.disabled = true;
   initBtn.innerHTML = "加载中...";
   try {
@@ -19104,8 +19285,14 @@ $("btnInit").onclick = async () => {
     const srcHistLine = buildSessionSourceHistoryLine(payload);
     if (srcHistLine) appendMsgHistory(srcHistLine);
   } catch (e) {
-    setMsg((e && e.message) ? ("加载失败：" + e.message) : "加载失败：未知错误");
+    const msg = (e && e.message) ? String(e.message) : "未知错误";
+    if (e && (e.name === "AbortError" || msg.indexOf("终止") >= 0 || Number(e.httpStatus) === 499)) {
+      setMsg("已终止加载会话。");
+    } else {
+      setMsg("加载失败：" + msg);
+    }
   } finally {
+    stopInitStatusPoll();
     initAbortController = null;
     if (!initSucceeded) {
       initBtn.disabled = false;
@@ -19119,7 +19306,9 @@ $("btnInit").onclick = async () => {
 if ($("btnCancelInitLoad")) {
   $("btnCancelInitLoad").onclick = () => {
     if (!initAbortController) return;
+    void api("/api/init_cancel", {}, "POST").catch(() => {});
     initAbortController.abort();
+    appendMsgHistory("已请求终止加载…");
     setMsg("已请求终止加载，会话加载请求已取消。");
     hideGlobalLoading();
   };
@@ -20099,6 +20288,145 @@ APP_PERF_ENGINE = PerfEngine()
 APP_STATE = AppState()
 APP_STOCK_NAME: Optional[str] = None
 
+# ---------- 加载会话进度 / 终止 ----------
+class InitCancelledError(Exception):
+    """用户终止加载会话。"""
+
+
+_INIT_STATUS_LOCK = threading.Lock()
+_INIT_CANCEL = threading.Event()
+_INIT_STATUS: dict[str, Any] = {
+    "busy": False,
+    "stage": "",
+    "stage_label": "",
+    "progress_pct": 0,
+    "started_at": 0.0,
+}
+
+_INIT_STAGE_LABELS: dict[str, str] = {
+    "data_kline": "加载K线数据",
+    "data_chip": "加载筹码底座",
+    "chip_refresh": "刷新筹码底座",
+    "chan_record": "读取缠论缓存",
+    "chan_bootstrap": "计算缠论结构",
+    "bsp_snapshot": "生成买卖点快照",
+    "presentation_end": "一次性呈现到末根",
+    "initial_step": "初始化首根K线",
+    "build_payload": "构建图表首包",
+}
+
+_INIT_STAGE_PROGRESS: dict[str, int] = {
+    "data_kline": 8,
+    "data_chip": 18,
+    "chip_refresh": 22,
+    "chan_record": 32,
+    "chan_bootstrap": 52,
+    "bsp_snapshot": 68,
+    "presentation_end": 72,
+    "initial_step": 72,
+    "build_payload": 92,
+}
+
+
+def _init_stage_label(name: str) -> str:
+    raw = str(name or "")
+    if raw in _INIT_STAGE_LABELS:
+        return _INIT_STAGE_LABELS[raw]
+    if raw.startswith("fetch_"):
+        return f"拉取数据（{raw.replace('fetch_', '')}）"
+    if raw.startswith("disk_cache_"):
+        return f"磁盘缓存（{raw.replace('disk_cache_', '')}）"
+    return raw or "处理中"
+
+
+def _init_status_begin() -> None:
+    _INIT_CANCEL.clear()
+    with _INIT_STATUS_LOCK:
+        _INIT_STATUS.update(
+            {
+                "busy": True,
+                "stage": "start",
+                "stage_label": "准备加载",
+                "progress_pct": 1,
+                "started_at": time.time(),
+            }
+        )
+    push_record_trace("开始加载会话…")
+
+
+def _init_status_end() -> None:
+    with _INIT_STATUS_LOCK:
+        _INIT_STATUS.update(
+            {
+                "busy": False,
+                "stage": "",
+                "stage_label": "",
+                "progress_pct": 100,
+            }
+        )
+    _INIT_CANCEL.clear()
+
+
+def _init_status_on_stage(event: str, stage: str) -> None:
+    if event != "enter":
+        return
+    label = _init_stage_label(stage)
+    pct = int(_INIT_STAGE_PROGRESS.get(stage, 0))
+    if pct <= 0:
+        pct = 3
+    with _INIT_STATUS_LOCK:
+        cur = int(_INIT_STATUS.get("progress_pct") or 0)
+        _INIT_STATUS.update(
+            {
+                "stage": stage,
+                "stage_label": label,
+                "progress_pct": max(cur, pct),
+            }
+        )
+    push_record_trace(f"进行中：{label}")
+
+
+def _init_status_set_subprogress(pct: int, label: str, *, push_trace: bool = False) -> None:
+    with _INIT_STATUS_LOCK:
+        cur = int(_INIT_STATUS.get("progress_pct") or 0)
+        _INIT_STATUS.update(
+            {
+                "stage_label": str(label or _INIT_STATUS.get("stage_label") or ""),
+                "progress_pct": max(cur, int(pct)),
+            }
+        )
+    if push_trace:
+        push_record_trace(str(label))
+
+
+def _init_status_snapshot() -> dict[str, Any]:
+    with _INIT_STATUS_LOCK:
+        st = dict(_INIT_STATUS)
+    traces = peek_record_trace()
+    elapsed = max(0.0, time.time() - float(st.get("started_at") or time.time()))
+    pct = int(st.get("progress_pct") or 0)
+    eta_sec = None
+    if st.get("busy") and pct > 2 and pct < 99:
+        eta_sec = max(1.0, elapsed * (100.0 - pct) / pct)
+    return {
+        "busy": bool(st.get("busy")),
+        "stage": st.get("stage") or "",
+        "stage_label": st.get("stage_label") or "",
+        "progress_pct": pct,
+        "elapsed_sec": round(elapsed, 1),
+        "eta_sec": round(eta_sec, 1) if eta_sec is not None else None,
+        "traces": traces,
+        "trace_count": len(traces),
+    }
+
+
+def _check_init_cancelled() -> None:
+    if _INIT_CANCEL.is_set():
+        raise InitCancelledError("已手动终止加载")
+
+
+set_init_stage_listener(_init_status_on_stage)
+
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -20189,9 +20517,33 @@ def index():
 
 
 @app.post("/api/init")
-def api_init(req: InitReq):
-    with init_perf_run("api_init") as perf_col:
-        return _api_init_impl(req, perf_col)
+async def api_init(req: InitReq):
+    _init_status_begin()
+    try:
+        def _run_init() -> dict[str, Any]:
+            with init_perf_run("api_init") as perf_col:
+                return _api_init_impl(req, perf_col)
+
+        return await run_in_threadpool(_run_init)
+    except InitCancelledError as exc:
+        APP_STATE.ready = False
+        raise HTTPException(status_code=499, detail=str(exc)) from exc
+    finally:
+        _init_status_end()
+
+
+@app.get("/api/init_status")
+def api_init_status():
+    """加载会话进度与实时跟踪日志（供前端轮询）。"""
+    return _init_status_snapshot()
+
+
+@app.post("/api/init_cancel")
+def api_init_cancel():
+    """请求终止当前加载会话（长循环内会检测并中断）。"""
+    _INIT_CANCEL.set()
+    push_record_trace("已请求终止加载…")
+    return {"ok": True}
 
 
 def _api_init_impl(req: InitReq, perf_col: Optional[dict[str, Any]] = None) -> dict[str, Any]:

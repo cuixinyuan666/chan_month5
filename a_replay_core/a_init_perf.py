@@ -7,14 +7,22 @@ import os
 import threading
 import time
 from contextlib import contextmanager
-from typing import Any, Iterator, Optional
+from typing import Any, Callable, Iterator, Optional
 
 _ENV_ENABLE = os.environ.get("INIT_PERF", "1").strip().lower() not in ("0", "false", "no", "off")
 _tls = threading.local()
+# 可选：init 阶段进入/退出回调（供前端轮询进度与历史记录）
+_stage_listener: Optional[Callable[[str, str], None]] = None
 
 
 def init_perf_enabled() -> bool:
     return _ENV_ENABLE
+
+
+def set_init_stage_listener(fn: Optional[Callable[[str, str], None]]) -> None:
+    """注册 init 阶段监听：fn(event, stage)，event 为 enter|exit。"""
+    global _stage_listener
+    _stage_listener = fn
 
 
 def _collector() -> Optional[dict[str, Any]]:
@@ -28,12 +36,23 @@ def init_perf_stage(name: str) -> Iterator[None]:
         yield
         return
     t0 = time.perf_counter()
+    listener = _stage_listener
+    if listener is not None:
+        try:
+            listener("enter", str(name))
+        except Exception:
+            pass
     try:
         yield
     finally:
         ms = (time.perf_counter() - t0) * 1000.0
         stages: dict[str, float] = col.setdefault("stages", {})
         stages[str(name)] = round(stages.get(str(name), 0.0) + ms, 3)
+        if listener is not None:
+            try:
+                listener("exit", str(name))
+            except Exception:
+                pass
 
 
 @contextmanager

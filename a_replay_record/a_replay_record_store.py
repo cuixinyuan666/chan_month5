@@ -44,6 +44,12 @@ def drain_record_trace() -> list[str]:
         return out
 
 
+def peek_record_trace() -> list[str]:
+    """读取尚未 drain 的跟踪日志副本（供加载会话轮询）。"""
+    with _record_trace_lock:
+        return list(_record_trace_pending)
+
+
 @dataclass
 class ChanRecordApplyResult:
     applied: bool = False

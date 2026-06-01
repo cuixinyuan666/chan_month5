@@ -14,6 +14,7 @@ struct ChipBins {
 #[derive(Clone, Default)]
 struct Bar {
     x: i64,
+    t: String,
     o: f64,
     h: f64,
     l: f64,
@@ -22,9 +23,15 @@ struct Bar {
     chip_tick_bins: Option<ChipBins>,
 }
 
-static SESSIONS: OnceLock<Mutex<HashMap<String, Vec<Bar>>>> = OnceLock::new();
+#[derive(Clone, Default)]
+struct SessionData {
+    bars: Vec<Bar>,
+    chip_bars: Vec<Bar>,
+}
 
-fn sessions() -> &'static Mutex<HashMap<String, Vec<Bar>>> {
+static SESSIONS: OnceLock<Mutex<HashMap<String, SessionData>>> = OnceLock::new();
+
+fn sessions() -> &'static Mutex<HashMap<String, SessionData>> {
     SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -75,12 +82,21 @@ fn parse_bar(item: &PyAny, default_x: i64) -> Bar {
         });
     Bar {
         x: as_i64(item, "x", default_x),
+        t: as_string(item, "t"),
         o: as_f64(item, "o"),
         h: as_f64(item, "h"),
         l: as_f64(item, "l"),
         c: as_f64(item, "c"),
         v: as_f64(item, "v"),
         chip_tick_bins,
+    }
+}
+
+fn hash_bar(hasher: &mut blake3::Hasher, bar: &PyAny, default_x: i64) {
+    hasher.update(&as_i64(bar, "x", default_x).to_le_bytes());
+    hasher.update(as_string(bar, "t").as_bytes());
+    for key in ["o", "h", "l", "c", "v"] {
+        hasher.update(&as_f64(bar, key).to_le_bytes());
     }
 }
 
@@ -187,14 +203,32 @@ fn load_session(
     hasher.update(bars.len().to_string().as_bytes());
     let chip_len = chip_bars.map(|x| x.len()).unwrap_or_else(|| bars.len());
     hasher.update(chip_len.to_string().as_bytes());
+    for (idx, bar) in bars.iter().enumerate() {
+        hash_bar(&mut hasher, bar, idx as i64);
+    }
+    if let Some(chips) = chip_bars {
+        for (idx, bar) in chips.iter().enumerate() {
+            hash_bar(&mut hasher, bar, idx as i64);
+        }
+    }
     let session_id = hasher.finalize().to_hex().to_string();
     let chip_iter = chip_bars.unwrap_or(bars);
-    let mut stored = Vec::with_capacity(chip_iter.len());
+    let mut stored_bars = Vec::with_capacity(bars.len());
+    for (idx, bar) in bars.iter().enumerate() {
+        stored_bars.push(parse_bar(bar, idx as i64));
+    }
+    let mut stored_chip_bars = Vec::with_capacity(chip_iter.len());
     for (idx, bar) in chip_iter.iter().enumerate() {
-        stored.push(parse_bar(bar, idx as i64));
+        stored_chip_bars.push(parse_bar(bar, idx as i64));
     }
     if let Ok(mut guard) = sessions().lock() {
-        guard.insert(session_id.clone(), stored);
+        guard.insert(
+            session_id.clone(),
+            SessionData {
+                bars: stored_bars,
+                chip_bars: stored_chip_bars,
+            },
+        );
     }
     let d = PyDict::new(py);
     d.set_item("session_id", session_id)?;
@@ -211,12 +245,43 @@ fn step_to(py: Python<'_>, session_id: String, target_step: i64) -> PyResult<PyO
 }
 
 #[pyfunction]
-fn next_step_delta(py: Python<'_>, _session_id: String, from_step: i64, to_step: i64) -> PyResult<PyObject> {
+fn next_step_delta(py: Python<'_>, session_id: String, from_step: i64, to_step: i64) -> PyResult<PyObject> {
     let d = PyDict::new(py);
+    let bars = sessions()
+        .lock()
+        .ok()
+        .and_then(|guard| guard.get(&session_id).map(|s| s.bars.clone()))
+        .unwrap_or_default();
+    if bars.is_empty() {
+        d.set_item("from_step", from_step)?;
+        d.set_item("to_step", -1)?;
+        d.set_item("append_kline", PyList::empty(py))?;
+        d.set_item("tail_patch", py.None())?;
+        d.set_item("structure_dirty", false)?;
+        return Ok(d.into());
+    }
+    let total = bars.len() as i64;
+    let target = to_step.max(0).min(total - 1);
+    let start = (from_step + 1).max(0).min(target);
+    let append = PyList::empty(py);
+    let mut tail_patch: Option<Py<PyAny>> = None;
+    for i in start..=target {
+        let bar = &bars[i as usize];
+        let row = PyDict::new(py);
+        row.set_item("x", bar.x)?;
+        row.set_item("t", bar.t.clone())?;
+        row.set_item("o", bar.o)?;
+        row.set_item("h", bar.h)?;
+        row.set_item("l", bar.l)?;
+        row.set_item("c", bar.c)?;
+        row.set_item("v", bar.v)?;
+        append.append(row)?;
+        tail_patch = Some(row.into());
+    }
     d.set_item("from_step", from_step)?;
-    d.set_item("to_step", to_step)?;
-    d.set_item("append_kline", PyList::empty(py))?;
-    d.set_item("tail_patch", py.None())?;
+    d.set_item("to_step", target)?;
+    d.set_item("append_kline", append)?;
+    d.set_item("tail_patch", tail_patch.unwrap_or_else(|| py.None()))?;
     d.set_item("structure_dirty", true)?;
     Ok(d.into())
 }
@@ -227,7 +292,7 @@ fn chip_profile(py: Python<'_>, session_id: String, cutoff_x: Option<i64>, bucke
     let bars = sessions()
         .lock()
         .ok()
-        .and_then(|guard| guard.get(&session_id).cloned())
+        .and_then(|guard| guard.get(&session_id).map(|s| s.chip_bars.clone()))
         .unwrap_or_default();
     if !bars.is_empty() {
         let cut = cutoff_x.unwrap_or_else(|| bars.last().map(|b| b.x).unwrap_or(-1));

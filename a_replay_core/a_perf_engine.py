@@ -242,6 +242,13 @@ class PerfEngine:
         return self.next_step_delta(session_id, target_step - 1, target_step)
 
     def next_step_delta(self, session_id: str, from_step: int, to_step: int) -> dict[str, Any]:
+        if self._use_rust() and hasattr(self._rust, "next_step_delta"):
+            try:
+                raw = self._rust.next_step_delta(str(session_id), int(from_step), int(to_step))
+                if isinstance(raw, dict) and isinstance(raw.get("append_kline"), list):
+                    return raw
+            except Exception:
+                pass
         sess = self._get_session(session_id)
         series = sess["series"]
         total = len(series["x"])
