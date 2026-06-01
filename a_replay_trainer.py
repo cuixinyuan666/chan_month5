@@ -7298,10 +7298,169 @@ HTML = r"""
     
     .title { font-size: 16px; margin: 4px 0 10px; color: #2563eb; font-weight: bold; }
     .card { border: 1px solid var(--border); padding: 12px; margin-bottom: 12px; background: var(--panel); border-radius: 8px; }
+    #configCard {
+      padding: 0;
+      overflow: hidden;
+      background:
+        linear-gradient(135deg, rgba(15,23,42,0.05), transparent 38%),
+        var(--panel);
+    }
+    .configHero {
+      padding: 12px 12px 10px;
+      border-bottom: 1px solid var(--border);
+      background: linear-gradient(180deg, rgba(37,99,235,0.08), rgba(15,23,42,0.02));
+    }
+    .configHeroTitle {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 4px;
+      color: var(--text);
+      font-size: 14px;
+      font-weight: 700;
+    }
+    .configHeroBadge {
+      flex: 0 0 auto;
+      padding: 2px 7px;
+      border: 1px solid rgba(37,99,235,0.32);
+      border-radius: 999px;
+      color: #2563eb;
+      background: rgba(37,99,235,0.08);
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .configHeroHint { color: var(--muted); font-size: 11px; line-height: 1.45; margin: 0; }
+    .configQuickActions {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 6px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(148,163,184,0.06);
+    }
+    .configQuickActions button {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 7px 9px;
+      border-radius: 6px;
+      font-weight: 700;
+      text-align: left;
+    }
+    .configSection {
+      padding: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    .configSection:last-child { border-bottom: none; }
+    .configSectionHead {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 9px;
+    }
+    .configSectionTitle {
+      color: #0f172a;
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0;
+    }
+    [data-theme="dark"] .configSectionTitle { color: #dbeafe; }
+    .configSectionNote {
+      color: var(--muted);
+      font-size: 11px;
+      white-space: nowrap;
+    }
+    #configCard .row {
+      margin-bottom: 7px;
+      align-items: center;
+    }
+    #configCard .row:last-child { margin-bottom: 0; }
+    #configCard label {
+      width: 86px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+    #configCard input,
+    #configCard select {
+      min-height: 30px;
+      border-radius: 6px;
+      padding: 5px 8px;
+      font-size: 13px;
+    }
+    #configCard input:focus,
+    #configCard select:focus {
+      outline: 2px solid rgba(37,99,235,0.2);
+      border-color: #2563eb;
+    }
+    .configPrimaryActions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      margin-bottom: 10px;
+    }
+    .configPrimaryActions button,
+    .configStepActions button,
+    .tradeActions button {
+      min-height: 32px;
+      text-align: center;
+      font-weight: 700;
+    }
+    #btnInit {
+      background: #2563eb;
+      border-color: #1d4ed8;
+      color: #fff;
+    }
+    #btnInit:hover:not(:disabled) {
+      background: #1d4ed8;
+      color: #fff;
+    }
+    .configStepActions {
+      display: grid !important;
+      grid-template-columns: 1fr;
+      gap: 6px;
+      width: 100%;
+      margin-top: 6px !important;
+    }
+    .tradeRuleLine {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin: 0 0 8px;
+      padding: 7px 8px;
+      border: 1px dashed var(--border);
+      border-radius: 6px;
+      background: rgba(148,163,184,0.07);
+    }
+    .tradeActions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      margin: 0;
+    }
+    #kTypesMultiCbWrap > div:first-child {
+      gap: 5px 6px !important;
+    }
+    #configCard .kTypesMultiLbl {
+      width: auto !important;
+      min-height: 26px;
+      padding: 3px 7px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: rgba(148,163,184,0.07);
+    }
+    #configCard .kTypesMultiLbl input { min-height: 0; }
     .left.compact .title { margin-bottom: 8px; font-size: 15px; }
     .left.compact .sourceStatus { margin-bottom: 8px; font-size: 11px; }
     .left.compact .chartToolsPanel,
     .left.compact .card { padding: 10px; margin-bottom: 10px; }
+    .left.compact #configCard { padding: 0; }
+    .left.compact .configHero,
+    .left.compact .configSection { padding: 10px; }
+    .left.compact .configQuickActions { padding: 8px 10px; }
     .left.compact .btnRow { gap: 4px; margin-bottom: 6px; }
     .left.compact .btnRow button { padding: 6px 8px; }
     .left.compact .row { margin-bottom: 6px; }
@@ -8331,11 +8490,23 @@ HTML = r"""
         </div>
       </div>
       <div class="card" id="configCard">
-        <div class="btnRow">
+        <div class="configHero">
+          <div class="configHeroTitle">
+            <span>K线复盘控制台</span>
+            <span class="configHeroBadge">右侧图窗</span>
+          </div>
+          <p class="configHeroHint">先定标的与周期，再加载会话；训练、回退、交易动作集中在下方。</p>
+        </div>
+        <div class="configQuickActions">
           <button id="btnChanSettingsOpen" data-tip="打开缠论逻辑配置面板，可调整笔、线段、中枢等算法。">缠论配置... <small>(L)</small></button>
           <button id="btnSettingsOpen" data-tip="打开图表显示设置面板，可调整主题、指标与绘制项。">图表显示设置... <small>(P)</small></button>
           <button id="btnSystemSettingsOpen" data-tip="打开系统配置面板，可统一维护快捷键。">系统配置... <small>(Shift+P)</small></button>
         </div>
+        <div class="configSection">
+          <div class="configSectionHead">
+            <div class="configSectionTitle">基础参数</div>
+            <div class="configSectionNote">标的 / 日期 / 资金</div>
+          </div>
         <div class="row cfg-editable">
           <label>代码</label>
           <input id="code" value="600340" />
@@ -8353,6 +8524,12 @@ HTML = r"""
           </select>
           <span class="tip-icon" data-tip="选择K线数据的复权方式。"></span>
         </div>
+        </div>
+        <div class="configSection">
+          <div class="configSectionHead">
+            <div class="configSectionTitle">图形结构</div>
+            <div class="configSectionNote">模式 / 周期 / 双图</div>
+          </div>
         <div class="row cfg-editable">
           <label>K线图模式</label>
           <select id="chartMode">
@@ -8430,7 +8607,13 @@ HTML = r"""
           <span id="dualSplitRatioLabel" class="muted" style="width:40px; text-align:right; flex-shrink:0;">50%</span>
           <span class="tip-icon" data-tip="双周期下调节图1与图2占比：上下排为高度比，左右排为宽度比。"></span>
         </div>
-        <div class="btnRow">
+        </div>
+        <div class="configSection">
+          <div class="configSectionHead">
+            <div class="configSectionTitle">会话动作</div>
+            <div class="configSectionNote">加载 / 步进 / 跳转</div>
+          </div>
+        <div class="btnRow configPrimaryActions">
           <button id="btnInit" data-tip="根据当前代码、日期区间、初始资金加载复盘会话。首次加载历史数据可能较慢。">加载会话 <small>(Ctrl+I)</small></button>
           <button id="btnViewKlineData" data-tip="查看当前会话全量 K 线：开高低收、成交量与筹码分桶（若有）、或全部字段。" disabled>查看数据</button>
           <button id="btnReset" data-tip="清空当前会话并恢复到可重新配置的初始状态。">重新训练 <small>(Ctrl+R)</small></button>
@@ -8444,7 +8627,7 @@ HTML = r"""
           <span id="tipStepN" class="tip-icon" data-tip="设置连续步进或回退时使用的根数。连续步进遇到买卖点（1/1p/2/2s/3a/3b）或 1382 提示可自动中断，中断项可在图表显示设置里配置。"></span>
           <input id="stepN" type="number" min="1" step="1" value="5" />
           <span id="stepNMaxHint" class="hint" style="flex:1 1 200px; min-width:0;"></span>
-          <div class="btnRow" style="width:100%; margin-top:4px;">
+          <div class="btnRow configStepActions">
             <button id="btnStepN" data-tip="按步进数量 N 连续推进，若中途遇到买卖点（1/1p/2/2s/3a/3b）或 1382 提示会按设置自动停止。" disabled>步进 N 根 <small>(Ctrl+Alt+N)</small></button>
             <button id="btnStepInterrupt" data-tip="正在连续步进时可点击中断；当前根处理完后停止。" disabled>中断步进 <small>(Ctrl+Alt+X)</small></button>
             <button id="btnBackN" data-tip="按步进数量 N 回退，会自动重建到更早的状态。" disabled>后退 N 根 <small>(Ctrl+Alt+M)</small></button>
@@ -8456,15 +8639,22 @@ HTML = r"""
             <button type="button" id="btnUnifiedGotoStep" data-tip="跳转到指定 step_idx（统一喂数据模式）。" disabled>跳转</button>
           </div>
         </div>
-        <div class="row" style="margin:6px 0 4px 0;">
+        </div>
+        <div class="configSection">
+          <div class="configSectionHead">
+            <div class="configSectionTitle">交易动作</div>
+            <div class="configSectionNote">单持仓 / T+1</div>
+          </div>
+        <div class="tradeRuleLine">
           <span class="muted">交易规则</span>
           <span class="tip-icon" data-tip="规则：单持仓、T+1、每步最多一笔；平多当根可再开空，平空当根可再开多。"></span>
         </div>
-        <div class="btnRow" style="margin-top:6px;">
+        <div class="btnRow tradeActions">
           <button id="btnBuy" data-tip="按当前收盘价使用全部可用现金买入，遵循单持仓和每步最多一笔规则。" disabled>买入（全仓） <small>(PageUp)</small></button>
           <button id="btnSell" data-tip="按当前收盘价全部卖出，若受 T+1 约束则按钮不可用。" disabled>卖出（全量） <small>(PageDown)</small></button>
           <button id="btnShort" data-tip="按当前收盘价使用全仓做空，遵循单持仓和每步最多一笔规则。" disabled>做空（全仓）</button>
           <button id="btnCover" data-tip="按当前收盘价全部平空，若受 T+1 约束则按钮不可用。" disabled>平空（全量）</button>
+        </div>
         </div>
       </div>
       <div class="card">
@@ -10061,6 +10251,34 @@ let systemConfig = ensureObject(
 );
 systemConfig.dataSourcePriority = ["离线数据"];
 systemConfig.chanRecordEnabled = false;
+
+function storageSetDefaultJson(key, value) {
+  if (storageGet(key) == null) storageSet(key, JSON.stringify(value));
+}
+
+function storageSetDefaultText(key, value) {
+  if (storageGet(key) == null) storageSet(key, String(value));
+}
+
+function ensurePersistentDefaultSelections() {
+  // 可持久化设置默认值：只补空，不覆盖用户已保存的选择。
+  storageSetDefaultJson("chan_logic_config", DEFAULT_CHAN_CONFIG);
+  storageSetDefaultJson("chan_chart_config", buildChartConfigStore({}));
+  storageSetDefaultJson("chan_session_config", DEFAULT_SESSION_CONFIG);
+  storageSetDefaultJson("chan_system_config", systemConfig);
+  storageSetDefaultJson("chan_chart_settings_branch_sel", {});
+  storageSetDefaultJson("chan_bt_cond_selected", { entry: [], exit: [] });
+  storageSetDefaultText("chan_left_main_tab", "1");
+  storageSetDefaultText("chan_active_tool", "none");
+  storageSetDefaultText("chan_selected_main_indicator_slot", "0");
+  storageSetDefaultText("chan_selected_sub_indicator_slot", "0");
+  storageSetDefaultText("chan_indicator_main_var_visible", "1");
+  storageSetDefaultText("chan_indicator_sub_var_visible", "1");
+  storageSetDefaultJson("chan_indicator_main_slots", defaultMainSlots);
+  storageSetDefaultJson("chan_indicator_sub_slots", defaultSubSlots);
+}
+
+ensurePersistentDefaultSelections();
 
 let compiledShortcuts = [];
 let shortcutSequenceBuffer = [];
