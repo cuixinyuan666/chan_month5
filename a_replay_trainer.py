@@ -33,6 +33,7 @@ from a_replay_core.a_replay_api_models import (
     IndicatorBacktestReq,
     InitReq,
     JudgeBspReq,
+    LoadChartLayersReq,
     ReconfigReq,
     SessionKlineViewReq,
     StepReq,
@@ -179,6 +180,51 @@ CHAN_ALGO_CLASSIC = "classic"
 CHAN_ALGO_NEW = "new"
 VISIBLE_BSP_LEVELS = ("bi", "seg", "segseg")
 LEVEL_ORDER = {level: idx for idx, level in enumerate(VISIBLE_BSP_LEVELS)}
+
+
+def normalize_chart_lazy_layers(raw: Any, default_enabled: bool = True) -> dict[str, Any]:
+    """首包/懒加载图层策略：未传按旧逻辑全开。"""
+    src = raw if isinstance(raw, dict) else {}
+    bsp_src = src.get("bsp_levels") if isinstance(src.get("bsp_levels"), dict) else {}
+    zs_src = src.get("zs_levels") if isinstance(src.get("zs_levels"), dict) else {}
+    return {
+        "rhythm": bool(src.get("rhythm", default_enabled)),
+        "rhythm_hits": bool(src.get("rhythm_hits", src.get("rhythm", default_enabled))),
+        "bsp_levels": {
+            "bi": bool(bsp_src.get("bi", default_enabled)),
+            "seg": bool(bsp_src.get("seg", default_enabled)),
+            "segseg": bool(bsp_src.get("segseg", default_enabled)),
+        },
+        "zs_levels": {
+            "fract": bool(zs_src.get("fract", default_enabled)),
+            "bi": bool(zs_src.get("bi", default_enabled)),
+            "seg": bool(zs_src.get("seg", default_enabled)),
+            "segseg": bool(zs_src.get("segseg", default_enabled)),
+        },
+    }
+
+
+def merge_chart_lazy_layers(base: Any, extra: Any) -> dict[str, Any]:
+    """图层开关只增不减；已加载过的图层保持可用。"""
+    out = normalize_chart_lazy_layers(base)
+    add = normalize_chart_lazy_layers(extra, default_enabled=False)
+    out["rhythm"] = bool(out.get("rhythm")) or bool(add.get("rhythm"))
+    out["rhythm_hits"] = bool(out.get("rhythm_hits")) or bool(add.get("rhythm_hits"))
+    for level in VISIBLE_BSP_LEVELS:
+        out["bsp_levels"][level] = bool(out["bsp_levels"].get(level)) or bool(add["bsp_levels"].get(level))
+    for level in ("fract", *VISIBLE_BSP_LEVELS):
+        out["zs_levels"][level] = bool(out["zs_levels"].get(level)) or bool(add["zs_levels"].get(level))
+    return out
+
+
+def chart_lazy_bsp_enabled(layers: Any, level: str) -> bool:
+    cfg = normalize_chart_lazy_layers(layers)
+    return bool((cfg.get("bsp_levels") or {}).get(level, True))
+
+
+def chart_lazy_zs_enabled(layers: Any, level: str) -> bool:
+    cfg = normalize_chart_lazy_layers(layers)
+    return bool((cfg.get("zs_levels") or {}).get(level, True))
 LEVEL_LABELS = {"bi": "笔", "seg": "段", "segseg": "2段"}
 STRUCTURE_LEVEL_LABELS = {"fract": "分型", **LEVEL_LABELS}
 RHYTHM_LEVEL_LABELS = {"fract": "分型", "bi": "笔", "seg": "线段", "segseg": "二段"}
@@ -321,6 +367,9 @@ def normalize_data_form_mode(raw: Any) -> str:
 
 # 当前会话离线分笔解析模式（ChanStepper.init 写入）
 _ACTIVE_OFFLINE_DATA_CUSTOM = "native"
+_OFFLINE_TICK_FILE_CACHE_LOCK = threading.Lock()
+_OFFLINE_TICK_FILE_CACHE: dict[tuple[str, int, int], list[OfflineTickRow]] = {}
+_OFFLINE_TICK_FILE_CACHE_MAX = 256
 
 
 def set_active_offline_data_custom(mode: Any) -> None:
@@ -623,6 +672,24 @@ def _kline_all_for_chip_payload(
     return _chip_kline_all_with_x(out)
 
 
+def _chip_range_text(kline_all: list[dict[str, Any]], session_begin_date: Optional[str], session_end_date: Optional[str]) -> str:
+    """用于历史记录：展示「底座范围 / 用户配置范围 / 实际默认显示范围」三者关系。
+
+    约定：
+    - 底座范围：stepper.kline_all 的首尾时间（服务端内存态，可能比首包/懒加载下发更宽）
+    - 用户配置范围：会话 begin_date ~ end_date（前端可配）
+    - 实际默认显示范围：筹码渲染按「底座从首根开始累计」+「截至当前参考K（默认会话末根）」截断
+    """
+    if not kline_all:
+        return "筹码范围：底座为空"
+    base_a = str((kline_all[0] or {}).get("t") or "-")
+    base_z = str((kline_all[-1] or {}).get("t") or "-")
+    user_b = str(session_begin_date or "-")
+    user_c = str(session_end_date or "-")
+    # 默认参考K为会话末根（或当前可视末根），因此“实际显示”截至 C；起点仍来自底座 A。
+    return f"筹码范围：底座 {base_a}~{base_z}；配置 {user_b}~{user_c}；显示(默认) {base_a}~{user_c}"
+
+
 def _chip_bars_for_perf_session(
     kline_all: list[dict[str, Any]],
     chart_bars: list[dict[str, Any]],
@@ -891,6 +958,7 @@ def build_tick_synth_session_data(
     mode: str,
     quantity: Optional[int],
     quantity_alloc: str = "front",
+    offline_data_custom: Any | None = None,
 ) -> tuple[list[Any], list[dict[str, Any]], int, list[Any]]:
     """
     分笔价格合成会话数据：
@@ -906,7 +974,7 @@ def build_tick_synth_session_data(
     tick_paths = _offline_list_tick_paths(folder, code6, b8, e8)
     if not tick_paths:
         raise ValueError("分笔价格合成模式要求 a_Data 下存在分笔文件（当前日期区间未找到 YYYYMMDD_代码.txt）")
-    tick_rows = _offline_load_tick_rows(tick_paths)
+    tick_rows = _offline_load_tick_rows(tick_paths, offline_data_custom)
     if not tick_rows:
         raise ValueError("分笔文件在日期区间内无有效成交行")
     ticks = rows_to_legacy_ticks(tick_rows)
@@ -2361,6 +2429,39 @@ def _offline_list_tick_paths(folder: str, code6: str, b8: int, e8: int) -> list[
     return [p for _, p in out]
 
 
+def _clone_offline_tick_row(row: OfflineTickRow) -> OfflineTickRow:
+    return OfflineTickRow(row.t, row.price, row.vol, row.side, row.has_bs, row.price_lo, row.price_hi)
+
+
+def _offline_load_tick_rows_from_file(path: str) -> list[OfflineTickRow]:
+    """按文件缓存分笔解析结果；合并模式在区间层处理。"""
+    try:
+        st = os.stat(path)
+        key = (os.path.abspath(path), int(st.st_mtime_ns), int(st.st_size))
+    except OSError:
+        key = (os.path.abspath(path), 0, -1)
+    with _OFFLINE_TICK_FILE_CACHE_LOCK:
+        cached = _OFFLINE_TICK_FILE_CACHE.get(key)
+        if cached is not None:
+            return [_clone_offline_tick_row(r) for r in cached]
+
+    base = os.path.basename(path)
+    d8 = int(base.split("_")[0])
+    y, mo, d0 = d8 // 10000, (d8 // 100) % 100, d8 % 100
+    rows: list[OfflineTickRow] = []
+    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+        for line in f:
+            row = parse_offline_tick_line(line, y, mo, d0)
+            if row is not None:
+                rows.append(row)
+    rows.sort(key=lambda x: x.t.ts)
+    with _OFFLINE_TICK_FILE_CACHE_LOCK:
+        if len(_OFFLINE_TICK_FILE_CACHE) >= _OFFLINE_TICK_FILE_CACHE_MAX:
+            _OFFLINE_TICK_FILE_CACHE.pop(next(iter(_OFFLINE_TICK_FILE_CACHE)), None)
+        _OFFLINE_TICK_FILE_CACHE[key] = [_clone_offline_tick_row(r) for r in rows]
+    return rows
+
+
 def _offline_load_tick_rows(
     paths: list[str], offline_data_custom: Any | None = None
 ) -> list[OfflineTickRow]:
@@ -2368,14 +2469,7 @@ def _offline_load_tick_rows(
     mode = normalize_offline_data_custom(offline_data_custom or _ACTIVE_OFFLINE_DATA_CUSTOM)
     rows: list[OfflineTickRow] = []
     for p in paths:
-        base = os.path.basename(p)
-        d8 = int(base.split("_")[0])
-        y, mo, d0 = d8 // 10000, (d8 // 100) % 100, d8 % 100
-        with open(p, "r", encoding="utf-8", errors="ignore") as f:
-            for line in f:
-                row = parse_offline_tick_line(line, y, mo, d0)
-                if row is not None:
-                    rows.append(row)
+        rows.extend(_offline_load_tick_rows_from_file(p))
     rows.sort(key=lambda x: x.t.ts)
     if mode == "merge_no_bs":
         return merge_no_bs_offline_ticks(rows)
@@ -3440,6 +3534,10 @@ def build_level_zs(base_lines: Any, upper_lines: Any, zs_conf) -> CZSList:
     return zs_list
 
 
+def empty_zs_list(zs_conf) -> CZSList:
+    return CZSList(zs_config=zs_conf)
+
+
 def build_level_bsp(base_lines: Any, upper_lines: Any, bsp_conf) -> CBSPointList:
     bsp_list = CBSPointList(bs_point_config=bsp_conf)
     try:
@@ -3447,6 +3545,10 @@ def build_level_bsp(base_lines: Any, upper_lines: Any, bsp_conf) -> CBSPointList
     except Exception:
         return CBSPointList(bs_point_config=bsp_conf)
     return bsp_list
+
+
+def empty_bsp_list(bsp_conf) -> CBSPointList:
+    return CBSPointList(bs_point_config=bsp_conf)
 
 
 def build_hidden_seg_layer(source_lines: Any, conf: CChanConfig):
@@ -3458,26 +3560,52 @@ def build_hidden_seg_layer(source_lines: Any, conf: CChanConfig):
     return hidden_seg_list
 
 
-def build_classic_bundle(chan: CChan, rhythm_calc_mode: str = RHYTHM_CALC_MODE_NORMAL) -> ChanStructureBundle:
+def build_classic_bundle(
+    chan: CChan,
+    rhythm_calc_mode: str = RHYTHM_CALC_MODE_NORMAL,
+    chart_lazy_layers: Optional[dict[str, Any]] = None,
+) -> ChanStructureBundle:
     kl_list = chan[0]
     conf = chan.conf
-    segsegseg_list = build_hidden_seg_layer(kl_list.segseg_list, conf)
+    lazy = normalize_chart_lazy_layers(chart_lazy_layers)
+    need_hidden_upper = chart_lazy_zs_enabled(lazy, "segseg") or chart_lazy_bsp_enabled(lazy, "segseg")
+    segsegseg_list = build_hidden_seg_layer(kl_list.segseg_list, conf) if need_hidden_upper else SimpleLineList()
     fract_list = SimpleLineList()
     # 与「新缠」分型层一致：由分型端点构造的简笔链，再相对官方 bi_list 计算分型中枢
-    rhythm_fract_children = build_new_bi_list(kl_list)
-    fractzs_list = build_level_zs(rhythm_fract_children, kl_list.bi_list, conf.zs_conf)
-    segsegzs_list = build_level_zs(kl_list.segseg_list, segsegseg_list, conf.zs_conf)
-    segseg_bs_point_lst = build_level_bsp(kl_list.segseg_list, segsegseg_list, conf.seg_bs_point_conf)
-    rhythm_lines, rhythm_hits = build_rhythm_structures(
-        kl_list=kl_list,
-        fract_children=rhythm_fract_children,
-        bi_children=list(kl_list.bi_list),
-        seg_children=list(kl_list.seg_list),
-        bi_parents=kl_list.bi_list,
-        seg_parents=kl_list.seg_list,
-        segseg_parents=kl_list.segseg_list,
-        rhythm_calc_mode=rhythm_calc_mode,
+    need_fract_children = chart_lazy_zs_enabled(lazy, "fract") or bool(lazy.get("rhythm")) or bool(lazy.get("rhythm_hits"))
+    rhythm_fract_children = build_new_bi_list(kl_list) if need_fract_children else []
+    fractzs_list = (
+        build_level_zs(rhythm_fract_children, kl_list.bi_list, conf.zs_conf)
+        if chart_lazy_zs_enabled(lazy, "fract")
+        else empty_zs_list(conf.zs_conf)
     )
+    segsegzs_list = (
+        build_level_zs(kl_list.segseg_list, segsegseg_list, conf.zs_conf)
+        if chart_lazy_zs_enabled(lazy, "segseg")
+        else empty_zs_list(conf.zs_conf)
+    )
+    segseg_bs_point_lst = (
+        build_level_bsp(kl_list.segseg_list, segsegseg_list, conf.seg_bs_point_conf)
+        if chart_lazy_bsp_enabled(lazy, "segseg")
+        else empty_bsp_list(conf.seg_bs_point_conf)
+    )
+    if bool(lazy.get("rhythm")) or bool(lazy.get("rhythm_hits")):
+        rhythm_lines, rhythm_hits = build_rhythm_structures(
+            kl_list=kl_list,
+            fract_children=rhythm_fract_children,
+            bi_children=list(kl_list.bi_list),
+            seg_children=list(kl_list.seg_list),
+            bi_parents=kl_list.bi_list,
+            seg_parents=kl_list.seg_list,
+            segseg_parents=kl_list.segseg_list,
+            rhythm_calc_mode=rhythm_calc_mode,
+        )
+        if not bool(lazy.get("rhythm")):
+            rhythm_lines = []
+        if not bool(lazy.get("rhythm_hits")):
+            rhythm_hits = []
+    else:
+        rhythm_lines, rhythm_hits = [], []
     return ChanStructureBundle(
         chan_algo=CHAN_ALGO_CLASSIC,
         fract_list=fract_list,
@@ -3486,11 +3614,11 @@ def build_classic_bundle(chan: CChan, rhythm_calc_mode: str = RHYTHM_CALC_MODE_N
         segseg_list=kl_list.segseg_list,
         segsegseg_list=segsegseg_list,
         fractzs_list=fractzs_list,
-        zs_list=kl_list.zs_list,
-        segzs_list=kl_list.segzs_list,
+        zs_list=kl_list.zs_list if chart_lazy_zs_enabled(lazy, "bi") else empty_zs_list(conf.zs_conf),
+        segzs_list=kl_list.segzs_list if chart_lazy_zs_enabled(lazy, "seg") else empty_zs_list(conf.zs_conf),
         segsegzs_list=segsegzs_list,
-        bs_point_lst=kl_list.bs_point_lst,
-        seg_bs_point_lst=kl_list.seg_bs_point_lst,
+        bs_point_lst=kl_list.bs_point_lst if chart_lazy_bsp_enabled(lazy, "bi") else empty_bsp_list(conf.bs_point_conf),
+        seg_bs_point_lst=kl_list.seg_bs_point_lst if chart_lazy_bsp_enabled(lazy, "seg") else empty_bsp_list(conf.seg_bs_point_conf),
         segseg_bs_point_lst=segseg_bs_point_lst,
         trend_lines=build_trend_lines_from_bi_list(list(kl_list.bi_list)),
         fx_lines=build_fx_lines(kl_list),
@@ -3499,32 +3627,49 @@ def build_classic_bundle(chan: CChan, rhythm_calc_mode: str = RHYTHM_CALC_MODE_N
     )
 
 
-def build_new_bundle(chan: CChan, rhythm_calc_mode: str = RHYTHM_CALC_MODE_NORMAL) -> ChanStructureBundle:
+def build_new_bundle(
+    chan: CChan,
+    rhythm_calc_mode: str = RHYTHM_CALC_MODE_NORMAL,
+    chart_lazy_layers: Optional[dict[str, Any]] = None,
+) -> ChanStructureBundle:
     kl_list = chan[0]
     conf = chan.conf
+    lazy = normalize_chart_lazy_layers(chart_lazy_layers)
     # 新缠论：分型端点 -> 新K线 -> 分型 -> 笔 -> 段 -> 2段；额外再递推一层隐藏结构支撑 2段 中枢/BSP。
     fract_list = build_new_bi_list(kl_list)
     bi_list = build_new_seg_list(fract_list, "new_chan_bi")
     seg_list = build_new_seg_list(bi_list, "new_chan_seg")
     segseg_list = build_new_seg_list(seg_list, "new_chan_segseg")
-    segsegseg_list = build_new_seg_list(segseg_list, "new_chan_hidden_upper")
-    fractzs_list = build_level_zs(fract_list, bi_list, conf.zs_conf)
-    zs_list = build_level_zs(bi_list, seg_list, conf.zs_conf)
-    segzs_list = build_level_zs(seg_list, segseg_list, conf.zs_conf)
-    segsegzs_list = build_level_zs(segseg_list, segsegseg_list, conf.zs_conf)
-    bs_point_lst = build_level_bsp(bi_list, seg_list, conf.bs_point_conf)
-    seg_bs_point_lst = build_level_bsp(seg_list, segseg_list, conf.seg_bs_point_conf)
-    segseg_bs_point_lst = build_level_bsp(segseg_list, segsegseg_list, conf.seg_bs_point_conf)
-    rhythm_lines, rhythm_hits = build_rhythm_structures(
-        kl_list=kl_list,
-        fract_children=list(fract_list),
-        bi_children=list(bi_list),
-        seg_children=list(seg_list),
-        bi_parents=bi_list,
-        seg_parents=seg_list,
-        segseg_parents=segseg_list,
-        rhythm_calc_mode=rhythm_calc_mode,
+    need_hidden_upper = chart_lazy_zs_enabled(lazy, "segseg") or chart_lazy_bsp_enabled(lazy, "segseg")
+    segsegseg_list = build_new_seg_list(segseg_list, "new_chan_hidden_upper") if need_hidden_upper else SimpleLineList()
+    fractzs_list = build_level_zs(fract_list, bi_list, conf.zs_conf) if chart_lazy_zs_enabled(lazy, "fract") else empty_zs_list(conf.zs_conf)
+    zs_list = build_level_zs(bi_list, seg_list, conf.zs_conf) if chart_lazy_zs_enabled(lazy, "bi") else empty_zs_list(conf.zs_conf)
+    segzs_list = build_level_zs(seg_list, segseg_list, conf.zs_conf) if chart_lazy_zs_enabled(lazy, "seg") else empty_zs_list(conf.zs_conf)
+    segsegzs_list = (
+        build_level_zs(segseg_list, segsegseg_list, conf.zs_conf)
+        if chart_lazy_zs_enabled(lazy, "segseg")
+        else empty_zs_list(conf.zs_conf)
     )
+    bs_point_lst = build_level_bsp(bi_list, seg_list, conf.bs_point_conf) if chart_lazy_bsp_enabled(lazy, "bi") else empty_bsp_list(conf.bs_point_conf)
+    seg_bs_point_lst = build_level_bsp(seg_list, segseg_list, conf.seg_bs_point_conf) if chart_lazy_bsp_enabled(lazy, "seg") else empty_bsp_list(conf.seg_bs_point_conf)
+    segseg_bs_point_lst = build_level_bsp(segseg_list, segsegseg_list, conf.seg_bs_point_conf) if chart_lazy_bsp_enabled(lazy, "segseg") else empty_bsp_list(conf.seg_bs_point_conf)
+    if bool(lazy.get("rhythm")) or bool(lazy.get("rhythm_hits")):
+        rhythm_lines, rhythm_hits = build_rhythm_structures(
+            kl_list=kl_list,
+            fract_children=list(fract_list),
+            bi_children=list(bi_list),
+            seg_children=list(seg_list),
+            bi_parents=bi_list,
+            seg_parents=seg_list,
+            segseg_parents=segseg_list,
+            rhythm_calc_mode=rhythm_calc_mode,
+        )
+        if not bool(lazy.get("rhythm")):
+            rhythm_lines = []
+        if not bool(lazy.get("rhythm_hits")):
+            rhythm_hits = []
+    else:
+        rhythm_lines, rhythm_hits = [], []
     return ChanStructureBundle(
         chan_algo=CHAN_ALGO_NEW,
         fract_list=fract_list,
@@ -3550,9 +3695,14 @@ def build_structure_bundle(
     chan: CChan,
     chan_algo: str,
     rhythm_calc_mode: str = RHYTHM_CALC_MODE_NORMAL,
+    chart_lazy_layers: Optional[dict[str, Any]] = None,
 ) -> ChanStructureBundle:
     algo = normalize_chan_algo(chan_algo)
-    return build_new_bundle(chan, rhythm_calc_mode) if algo == CHAN_ALGO_NEW else build_classic_bundle(chan, rhythm_calc_mode)
+    return (
+        build_new_bundle(chan, rhythm_calc_mode, chart_lazy_layers)
+        if algo == CHAN_ALGO_NEW
+        else build_classic_bundle(chan, rhythm_calc_mode, chart_lazy_layers)
+    )
 
 
 def get_bundle_line_list(bundle: ChanStructureBundle, level: str):
@@ -3820,6 +3970,7 @@ class ChanStepper:
         self.stock_name: Optional[str] = None
         self.structure_bundle: Optional[ChanStructureBundle] = None
         self._bundle_cache_step_idx: Optional[int] = None
+        self._suppress_step_bundle_refresh = False
         self.data_form_mode: str = "traditional"
         self.data_form_quantity: int = 0
         self.data_form_quantity_alloc: str = "front"
@@ -3830,6 +3981,7 @@ class ChanStepper:
         self._serialized_klu_cache: list[dict[str, Any]] = []
         # 同一步下的图表序列化缓存：键为是否包含 kline_all
         self._chart_payload_cache: dict[bool, tuple[int, dict[str, Any]]] = {}
+        self.chart_lazy_layers = normalize_chart_lazy_layers(None)
         # unified 模式：全量一次性计算后，仅按 step_idx 切片显示
         self._unified_full_payload: Optional[dict[str, Any]] = None
         self._chan_record_apply: ChanRecordApplyResult = ChanRecordApplyResult()
@@ -4070,7 +4222,7 @@ class ChanStepper:
             raise ValueError("会话未初始化")
         if chan is None and not force and self.structure_bundle is not None and self._bundle_cache_step_idx == self.step_idx:
             return self.structure_bundle
-        bundle = build_structure_bundle(target_chan, self.chan_algo, self.rhythm_calc_mode)
+        bundle = build_structure_bundle(target_chan, self.chan_algo, self.rhythm_calc_mode, self.chart_lazy_layers)
         if chan is None:
             self.structure_bundle = bundle
             self._bundle_cache_step_idx = self.step_idx
@@ -4093,6 +4245,7 @@ class ChanStepper:
         data_feed_mode: str = "step",
         offline_data_custom: str = "native",
         chan_record_enabled: bool = False,
+        chart_lazy_layers: Optional[dict[str, Any]] = None,
     ) -> None:
         init_t0_ms = int(time.time() * 1000)
         stage_t0_ms = init_t0_ms
@@ -4106,6 +4259,7 @@ class ChanStepper:
         off_custom = normalize_offline_data_custom(offline_data_custom)
         set_active_offline_data_custom(off_custom)
         self.offline_data_custom = off_custom
+        self.chart_lazy_layers = normalize_chart_lazy_layers(chart_lazy_layers)
         self._session_begin_date = begin_date
         self._session_end_date = end_date
         
@@ -4362,6 +4516,7 @@ class ChanStepper:
                 self.data_form_mode,
                 self.data_form_quantity,
                 self.data_form_quantity_alloc,
+                self.offline_data_custom,
             )
             # tick_quantity：raw 保存聚合前 master，与 quantity 模式一致
             self._replay_klus_master_raw = copy.deepcopy(tick_raw_master)
@@ -4452,6 +4607,13 @@ class ChanStepper:
         if self.kline_all:
             push_record_trace(
                 f"筹码kline_all：{len(self.kline_all)} 根（{self.kline_all[0].get('t', '-')} ~ {self.kline_all[-1].get('t', '-')}）"
+            )
+            push_record_trace(
+                _chip_range_text(
+                    list(self.kline_all or []),
+                    getattr(self, "_session_begin_date", None),
+                    getattr(self, "_session_end_date", None),
+                )
             )
             _agent_debug_log_backend(
                 "H4",
@@ -4771,8 +4933,9 @@ class ChanStepper:
                 "demark": demark_pts
             })
             
-            # 新缠论/原缠论统一从 bundle 获取趋势线，避免前端与当前笔级别脱节。
-            self.get_structure_bundle(force=True)
+            # 自动一次性呈现只收集 BSP，完整图表包留到末尾统一构建。
+            if not self._suppress_step_bundle_refresh:
+                self.get_structure_bundle(force=True)
             return True
         except StopIteration:
             return False
@@ -4928,6 +5091,27 @@ class ChanStepper:
                 )
         self._chart_payload_cache[include_kline_all] = (self.step_idx, payload)
         return payload
+
+    def rebuild_unified_full_payload_for_layers(self) -> None:
+        """统一喂数据的懒加载：全量 payload 已缓存，图层变化后必须重建一次。"""
+        if self.data_feed_mode != "unified" or self.chan is None:
+            return
+        bundle = self.get_structure_bundle(force=True)
+        klu_chart = (
+            serialize_replay_master_klines(self._replay_klus_master or [])
+            if use_master_kline_for_chart(self.data_form_mode)
+            else None
+        )
+        self._unified_full_payload = serialize_chan(
+            self.chan,
+            self.indicator_history,
+            self.trend_lines,
+            chan_algo=self.chan_algo,
+            bundle=bundle,
+            kline_all=self.kline_all,
+            klu_arr_cache=klu_chart,
+        )
+        self._chart_payload_cache = {}
 
 
 def _stepper_for_session_kline_view(chart_id: str, layer_k_type: Optional[str] = None) -> ChanStepper:
@@ -5474,9 +5658,12 @@ class AppState:
         # 强制全量加载一次，生成笔/线段/中枢/买卖点
         for _ in chan_all.load(step=False):
             pass
-        bundle = build_structure_bundle(chan_all, self.stepper.chan_algo)
+        lazy_layers = (self.session_params or {}).get("chart_lazy_layers")
+        bundle = build_structure_bundle(chan_all, self.stepper.chan_algo, chart_lazy_layers=lazy_layers)
         snapshot: list[dict[str, Any]] = []
         for level in VISIBLE_BSP_LEVELS:
+            if not chart_lazy_bsp_enabled(lazy_layers, level):
+                continue
             bsp_list = get_bundle_bsp_list(bundle, level)
             for bsp in bsp_list.bsp_iter():
                 item = make_bsp_item(level, bsp)
@@ -5499,6 +5686,63 @@ class AppState:
             else:
                 self._bsp_all_prefix_x.append(x)
                 self._bsp_all_prefix_keys.append(set(running_keys))
+
+    def _install_bsp_all_snapshot(self, snapshot: list[dict[str, Any]]) -> None:
+        """安装全量 BSP 快照，并重建前缀索引。"""
+        self.bsp_all_snapshot = sorted(
+            snapshot,
+            key=lambda item: (int(item.get("x", -1)), LEVEL_ORDER.get(str(item.get("level")), 999), int(not bool(item.get("is_buy")))),
+        )
+        self._bsp_all_prefix_x = []
+        self._bsp_all_prefix_keys = []
+        running_keys: set[str] = set()
+        for item in self.bsp_all_snapshot:
+            x = int(item.get("x", -1))
+            key = str(item.get("key") or "")
+            if not key:
+                continue
+            running_keys.add(key)
+            if self._bsp_all_prefix_x and self._bsp_all_prefix_x[-1] == x:
+                self._bsp_all_prefix_keys[-1] = set(running_keys)
+            else:
+                self._bsp_all_prefix_x.append(x)
+                self._bsp_all_prefix_keys.append(set(running_keys))
+
+    def rebuild_bsp_all_snapshot_from_current(self) -> None:
+        """一次性呈现后复用当前已算好的结构，避免全量缠论重复跑一遍。"""
+        self.bsp_all_snapshot = []
+        self._bsp_all_prefix_x = []
+        self._bsp_all_prefix_keys = []
+        self._reset_judge_state()
+        stepper = self.get_active_stepper()
+        if stepper.data_feed_mode == "unified":
+            chart = stepper.build_chart_payload_cached(include_kline_all=False)
+            src = chart.get("bsp", []) or []
+            snapshot: list[dict[str, Any]] = []
+            for item in src:
+                try:
+                    snap = {
+                        "x": int(item.get("x", -1)),
+                        "y": float(item.get("y", 0.0)),
+                        "is_buy": bool(item.get("is_buy")),
+                        "label": str(item.get("label", "")),
+                        "level": str(item.get("level", "")),
+                        "level_label": str(item.get("level_label", "")),
+                        "display_label": str(item.get("display_label", "")),
+                    }
+                    snap["key"] = self._bsp_key(snap)
+                    snapshot.append(snap)
+                except Exception:
+                    continue
+            self._install_bsp_all_snapshot(snapshot)
+            return
+        if stepper.chan is None:
+            return
+        snapshot = []
+        for item in self._current_bsp_snapshot_light(current_x=None, include_segseg=True):
+            item["key"] = self._bsp_key(item)
+            snapshot.append(item)
+        self._install_bsp_all_snapshot(snapshot)
 
     def _judge_bsp_against_all(self, *, reason: str, levels: Optional[list[str]] = None) -> None:
         """在当前步进位置，对照（全量预计算）与（步进触发快照）进行 ×/✓ 判定。"""
@@ -5709,6 +5953,38 @@ class AppState:
             return snapshot
         return sorted(snapshot, key=lambda item: (int(item["x"]), LEVEL_ORDER.get(item["level"], 999), int(not bool(item["is_buy"]))))
 
+    def _current_bsp_snapshot_light(self, *, current_x: Optional[int] = None, include_segseg: bool = False) -> list[dict[str, Any]]:
+        """一次性呈现专用：只抓当前 BSP，不重建完整图表包。"""
+        stepper = self.get_active_stepper()
+        if stepper.chan is None:
+            return []
+        if normalize_chan_algo(stepper.chan_algo) != CHAN_ALGO_CLASSIC:
+            return self._current_bsp_snapshot(current_x=current_x)
+        kl_list = stepper.chan[0]
+        conf = stepper.chan.conf
+        level_sources: list[tuple[str, Any]] = []
+        if chart_lazy_bsp_enabled(stepper.chart_lazy_layers, "bi"):
+            level_sources.append(("bi", getattr(kl_list, "bs_point_lst", None)))
+        if chart_lazy_bsp_enabled(stepper.chart_lazy_layers, "seg"):
+            level_sources.append(("seg", getattr(kl_list, "seg_bs_point_lst", None)))
+        # 2段买卖点没有官方增量缓存，逐K过程中先跳过，末尾再一次补齐。
+        segseg_list = getattr(kl_list, "segseg_list", None)
+        if include_segseg and segseg_list is not None and chart_lazy_bsp_enabled(stepper.chart_lazy_layers, "segseg"):
+            segsegseg_list = build_hidden_seg_layer(segseg_list, conf)
+            level_sources.append(("segseg", build_level_bsp(segseg_list, segsegseg_list, conf.seg_bs_point_conf)))
+        snapshot: list[dict[str, Any]] = []
+        for level, bsp_list in level_sources:
+            if bsp_list is None:
+                continue
+            for bsp in bsp_list.bsp_iter():
+                item = make_bsp_item(level, bsp)
+                if current_x is not None and int(item["x"]) != int(current_x):
+                    continue
+                snapshot.append(item)
+        if current_x is not None:
+            return snapshot
+        return sorted(snapshot, key=lambda item: (int(item["x"]), LEVEL_ORDER.get(item["level"], 999), int(not bool(item["is_buy"]))))
+
     @staticmethod
     def _bsp_key(item: dict[str, Any]) -> str:
         return f'{item["level"]}|{int(item["x"])}|{item["label"]}|{1 if item["is_buy"] else 0}'
@@ -5765,7 +6041,10 @@ class AppState:
             return
 
         snapshot = self._current_bsp_snapshot(current_x=current_x)
+        self._append_bsp_history_items(snapshot)
 
+    def _append_bsp_history_items(self, snapshot: list[dict[str, Any]]) -> None:
+        """追加 BSP 历史，供普通步进和轻量逐K共用。"""
         existing_keys = {str(item.get("key")) for item in self.bsp_history}
         for item in snapshot:
             key = self._bsp_key(item)
@@ -5784,6 +6063,23 @@ class AppState:
                 }
             )
             existing_keys.add(key)
+
+    def sync_bsp_history_light(self) -> None:
+        """一次性呈现轻量同步：只收集当下新增 BSP。"""
+        current_x = self._current_kline_x()
+        if current_x is None:
+            return
+        if self.get_active_stepper().data_feed_mode == "unified":
+            self.sync_bsp_history()
+            return
+        self._append_bsp_history_items(self._current_bsp_snapshot_light(current_x=current_x, include_segseg=False))
+
+    def sync_bsp_history_full_from_current_light(self) -> None:
+        """逐K跑完后补齐全量可见 BSP，避免末根附近未命中的显示缺口。"""
+        if self.get_active_stepper().data_feed_mode == "unified":
+            self.sync_bsp_history()
+            return
+        self._append_bsp_history_items(self._current_bsp_snapshot_light(current_x=None, include_segseg=True))
 
     def sync_rhythm_history(self) -> None:
         current_x = self._current_kline_x()
@@ -5885,57 +6181,82 @@ class AppState:
 
         if self.stepper.step_idx < 0:
             _check_init_cancelled()
-            if not self.stepper.step():
-                return
+            prev_suppress_first = bool(getattr(self.stepper, "_suppress_step_bundle_refresh", False))
+            if report_progress:
+                self.stepper._suppress_step_bundle_refresh = True
+            try:
+                if not self.stepper.step():
+                    return
+            finally:
+                if report_progress:
+                    self.stepper._suppress_step_bundle_refresh = prev_suppress_first
             if self.chart_mode == "dual" and self.stepper2 is not None:
                 self.stepper2.step()
                 self._sync_stepper_to_anchor(self.stepper2, self.stepper.current_time())
             elif self.chart_mode == "multi" and self.multi_steppers:
                 self._sync_passives_to_anchor(self.stepper.current_time())
-            self.sync_bsp_history()
-            self.sync_rhythm_history()
-            self.after_step_update()
+            if report_progress:
+                self.sync_bsp_history_light()
+            else:
+                self.sync_bsp_history()
+                self.sync_rhythm_history()
+                self.after_step_update()
 
         current = max(0, int(self.stepper.step_idx))
         if current >= target_step:
             self._dual_rebuild_coarse_chan_anti_future(self.get_active_stepper().current_time())
             return
 
-        # init 一次性呈现：全量灌入，避免逐 K step 极慢
-        if report_progress and self.stepper.chan is not None:
-            push_record_trace("一次性呈现：全量计算缠论与指标…")
-            _init_status_set_subprogress(88, "一次性呈现：全量计算", push_trace=True)
-            self.stepper.bulk_present_to_step(target_step)
-            if self.chart_mode == "dual" and self.stepper2 is not None:
-                self._sync_stepper_to_anchor(self.stepper2, self.stepper.current_time())
-            elif self.chart_mode == "multi" and self.multi_steppers:
-                self._sync_passives_to_anchor(self.stepper.current_time())
-            self.sync_bsp_history()
-            self.sync_rhythm_history()
-            self._dual_rebuild_coarse_chan_anti_future(self.get_active_stepper().current_time())
-            self.after_step_update()
-            return
-
         span = max(1, target_step - current)
-        for i in range(current, target_step):
-            _check_init_cancelled()
-            if report_progress and (i == current or (i - current) % max(1, span // 20) == 0 or i == target_step - 1):
-                pct = 85 + int(13 * (i - current + 1) / span)
-                _init_status_set_subprogress(
-                    min(98, pct),
-                    f"一次性呈现 {i + 1}/{target_step + 1}",
-                    push_trace=(i == current or i == target_step - 1 or (i - current) % max(1, span // 5) == 0),
+        if report_progress:
+            push_record_trace("一次性呈现：按逐K步进跑到末根…")
+        total_count = target_step + 1
+        progress_unit = max(1, total_count // 5)
+        prev_suppress = bool(getattr(self.stepper, "_suppress_step_bundle_refresh", False))
+        if report_progress:
+            self.stepper._suppress_step_bundle_refresh = True
+        try:
+            for i in range(current, target_step):
+                _check_init_cancelled()
+                step_no = i + 1
+                should_report = (
+                    report_progress
+                    and (
+                        i == current
+                        or step_no % progress_unit == 0
+                        or i == target_step - 1
+                    )
                 )
-            if not self.stepper.step():
-                break
-            if self.chart_mode == "dual" and self.stepper2 is not None:
-                self._sync_stepper_to_anchor(self.stepper2, self.stepper.current_time())
-            elif self.chart_mode == "multi" and self.multi_steppers:
-                self._sync_passives_to_anchor(self.stepper.current_time())
-            self.sync_bsp_history()
-            self.sync_rhythm_history()
-            self.after_step_update()
+                if should_report:
+                    pct = 85 + int(13 * (i - current + 1) / span)
+                    _init_status_set_subprogress(
+                        min(98, pct),
+                        f"一次性呈现：逐K步进 {step_no}/{total_count}",
+                        push_trace=True,
+                    )
+                if not self.stepper.step():
+                    break
+                if self.chart_mode == "dual" and self.stepper2 is not None:
+                    self._sync_stepper_to_anchor(self.stepper2, self.stepper.current_time())
+                elif self.chart_mode == "multi" and self.multi_steppers:
+                    self._sync_passives_to_anchor(self.stepper.current_time())
+                if report_progress:
+                    self.sync_bsp_history_light()
+                else:
+                    self.sync_bsp_history()
+                    self.sync_rhythm_history()
+                    self.after_step_update()
+        finally:
+            if report_progress:
+                self.stepper._suppress_step_bundle_refresh = prev_suppress
 
+        if report_progress:
+            self.sync_bsp_history_full_from_current_light()
+            _init_status_set_subprogress(
+                98,
+                f"一次性呈现：逐K步进 {total_count}/{total_count}",
+                push_trace=True,
+            )
         self._dual_rebuild_coarse_chan_anti_future(self.get_active_stepper().current_time())
 
     def rebuild_to_step(self, target_step: int) -> None:
@@ -5966,6 +6287,7 @@ class AppState:
             data_feed_mode=params.get("data_feed_mode", "step"),
             offline_data_custom=params.get("offline_data_custom", "native"),
             chan_record_enabled=False,
+            chart_lazy_layers=params.get("chart_lazy_layers"),
         )
         cm = normalize_replay_chart_mode(params.get("chart_mode", "single"))
         off_custom = normalize_offline_data_custom(params.get("offline_data_custom", "native"))
@@ -5990,6 +6312,7 @@ class AppState:
                 data_feed_mode=params.get("data_feed_mode", "step"),
                 offline_data_custom=off_custom,
                 chan_record_enabled=rec_en,
+                chart_lazy_layers=params.get("chart_lazy_layers"),
             )
         elif cm == "multi":
             self.chart_mode = "multi"
@@ -6013,6 +6336,7 @@ class AppState:
                     data_feed_mode=params.get("data_feed_mode", "step"),
                     offline_data_custom=off_custom,
                     chan_record_enabled=rec_en,
+                    chart_lazy_layers=params.get("chart_lazy_layers"),
                 )
                 self.multi_steppers.append(st)
         else:
@@ -6105,6 +6429,7 @@ class AppState:
         rollback_capture_max_bars: Optional[int] = None,
         performance_engine_mode: Optional[str] = None,
         chip_bucket_step: Optional[float] = None,
+        chart_lazy_layers: Optional[dict[str, Any]] = None,
     ) -> None:
         if self.session_params is None:
             raise ValueError("当前无可重配会话")
@@ -6138,6 +6463,8 @@ class AppState:
             APP_PERF_ENGINE.requested_mode = self.session_params["performance_engine_mode"]
         if chip_bucket_step is not None:
             self.session_params["chip_bucket_step"] = float(chip_bucket_step)
+        if chart_lazy_layers is not None:
+            self.session_params["chart_lazy_layers"] = normalize_chart_lazy_layers(chart_lazy_layers)
         self._set_rollback_config(
             cache_depth=rollback_cache_depth,
             full_snapshot_interval=rollback_full_snapshot_interval,
@@ -6309,6 +6636,7 @@ class AppState:
             "chart": chart,
             "charts": charts_payload,
             "chart_layers": chart_layers,
+            "chart_lazy_layers": normalize_chart_lazy_layers((self.session_params or {}).get("chart_lazy_layers")),
             "chip_basis": chip_basis,
             "k_types_multi": (self.session_params or {}).get("k_types_multi"),
             "chart_mode": self.chart_mode,
@@ -6358,6 +6686,24 @@ class AppState:
         if trace:
             result["record_trace"] = trace
         return result
+
+    def load_chart_layers(self, layers: dict[str, Any]) -> dict[str, Any]:
+        """会话后按需补算图层，并返回最新图表包。"""
+        wanted = normalize_chart_lazy_layers(layers, default_enabled=False)
+        for st in [self.stepper, self.stepper2, *(self.multi_steppers or [])]:
+            if st is None:
+                continue
+            st.chart_lazy_layers = merge_chart_lazy_layers(getattr(st, "chart_lazy_layers", None), wanted)
+            st.structure_bundle = None
+            st._bundle_cache_step_idx = None
+            st._chart_payload_cache = {}
+            st.rebuild_unified_full_payload_for_layers()
+        if self.session_params is not None:
+            self.session_params["chart_lazy_layers"] = merge_chart_lazy_layers(
+                self.session_params.get("chart_lazy_layers"), wanted
+            )
+        with init_perf_stage("chart_lazy_layers"):
+            return self.build_payload(stock_name=APP_STOCK_NAME, include_kline_all=False)
 
 
 # ---------------------------------------------------------------------------
@@ -9379,9 +9725,9 @@ const DEFAULT_CHART_CONFIG = {
   segZs: { width: 2.4, color: "#059669", enabled: true },
   segsegZs: { width: 2.8, color: "#2563eb", enabled: true },
   candle: { width: 1.4, upColor: "#ef4444", downColor: "#22c55e", alpha: 1 },
-  bspBi: { fontSize: 14, lineColor: "#94a3b8", lineWidth: 1, lineStyle: "dashed", lineDash: [5, 4], showLowerExtension: true },
-  bspSeg: { fontSize: 14, lineColor: "#64748b", lineWidth: 1.1, lineStyle: "dashed", lineDash: [5, 4], showLowerExtension: true },
-  bspSegseg: { fontSize: 14, lineColor: "#475569", lineWidth: 1.2, lineStyle: "dashed", lineDash: [5, 4], showLowerExtension: true },
+  bspBi: { enabled: true, fontSize: 14, lineColor: "#94a3b8", lineWidth: 1, lineStyle: "dashed", lineDash: [5, 4], showLowerExtension: true },
+  bspSeg: { enabled: true, fontSize: 14, lineColor: "#64748b", lineWidth: 1.1, lineStyle: "dashed", lineDash: [5, 4], showLowerExtension: true },
+  bspSegseg: { enabled: true, fontSize: 14, lineColor: "#475569", lineWidth: 1.2, lineStyle: "dashed", lineDash: [5, 4], showLowerExtension: true },
   rhythmLine: {
     enabled: true,
     fractToBiEnabled: true,
@@ -9421,6 +9767,7 @@ const DEFAULT_CHART_CONFIG = {
     group5TextFontWeight: "bold"
   },
   rhythmHit: {
+    enabled: true,
     fontSize: 14,
     color: "#7c3aed",
     lineColor: "#8b5cf6",
@@ -9581,6 +9928,9 @@ function migrateChartConfig(cfg) {
   if (!next.bspBi) next.bspBi = {};
   if (!next.bspSeg) next.bspSeg = {};
   if (!next.bspSegseg) next.bspSegseg = {};
+  ["bspBi", "bspSeg", "bspSegseg"].forEach((k) => {
+    if (typeof next[k].enabled !== "boolean") next[k].enabled = true;
+  });
   if (!next.rhythmLine) next.rhythmLine = {};
   if (!Number.isFinite(Number(next.rhythmLine.maxLayer))) next.rhythmLine.maxLayer = 9;
   next.rhythmLine.maxLayer = Math.max(0, Math.min(9, Math.floor(Number(next.rhythmLine.maxLayer))));
@@ -9588,6 +9938,7 @@ function migrateChartConfig(cfg) {
     next.rhythmLine.calcMode = "normal";
   }
   if (!next.rhythmHit) next.rhythmHit = {};
+  if (typeof next.rhythmHit.enabled !== "boolean") next.rhythmHit.enabled = true;
   if (!next.xAxis) next.xAxis = {};
   if (!next.yAxis) next.yAxis = {};
   if (!next.klineCombineFrame) next.klineCombineFrame = {};
@@ -10905,6 +11256,73 @@ function getRhythmMaxLayer() {
 function getBspConfig(level) {
   const key = BSP_LEVEL_CONFIG_KEY[level] || "bspBi";
   return chartConfig[key] || chartConfig.bspBi || DEFAULT_CHART_CONFIG.bspBi;
+}
+function isBspLevelEnabled(level, cfg = chartConfig, store = chartConfigStore) {
+  if (store && store.shared && store.shared.showBottomBsp === false) return false;
+  const key = BSP_LEVEL_CONFIG_KEY[level] || "bspBi";
+  const c = cfg && cfg[key] ? cfg[key] : DEFAULT_CHART_CONFIG[key];
+  return !c || c.enabled !== false;
+}
+function collectChartLazyLayersFromConfig(cfg = chartConfig, store = chartConfigStore) {
+  const rhythmOn = !!(cfg && cfg.rhythmLine && cfg.rhythmLine.enabled);
+  const rhythmHitOn = !!(cfg && cfg.rhythmHit && cfg.rhythmHit.enabled !== false);
+  return {
+    rhythm: rhythmOn,
+    rhythm_hits: rhythmOn && rhythmHitOn,
+    bsp_levels: {
+      bi: isBspLevelEnabled("bi", cfg, store),
+      seg: isBspLevelEnabled("seg", cfg, store),
+      segseg: isBspLevelEnabled("segseg", cfg, store),
+    },
+    zs_levels: {
+      fract: !!(cfg && cfg.fractZs && cfg.fractZs.enabled),
+      bi: !!(cfg && cfg.biZs && cfg.biZs.enabled),
+      seg: !!(cfg && cfg.segZs && cfg.segZs.enabled),
+      segseg: !!(cfg && cfg.segsegZs && cfg.segsegZs.enabled),
+    },
+  };
+}
+function diffEnabledLazyLayers(prev, next) {
+  const out = {
+    rhythm: false,
+    rhythm_hits: false,
+    bsp_levels: { bi: false, seg: false, segseg: false },
+    zs_levels: { fract: false, bi: false, seg: false, segseg: false },
+  };
+  if (!prev || !next) return out;
+  out.rhythm = !prev.rhythm && !!next.rhythm;
+  out.rhythm_hits = !prev.rhythm_hits && !!next.rhythm_hits;
+  ["bi", "seg", "segseg"].forEach((lv) => {
+    out.bsp_levels[lv] = !(prev.bsp_levels && prev.bsp_levels[lv]) && !!(next.bsp_levels && next.bsp_levels[lv]);
+  });
+  ["fract", "bi", "seg", "segseg"].forEach((lv) => {
+    out.zs_levels[lv] = !(prev.zs_levels && prev.zs_levels[lv]) && !!(next.zs_levels && next.zs_levels[lv]);
+  });
+  return out;
+}
+function hasAnyLazyLayer(layers) {
+  return !!(layers && (
+    layers.rhythm ||
+    layers.rhythm_hits ||
+    Object.values(layers.bsp_levels || {}).some(Boolean) ||
+    Object.values(layers.zs_levels || {}).some(Boolean)
+  ));
+}
+function filterUnloadedLazyLayers(request, loaded) {
+  if (!request || !loaded) return request;
+  const out = {
+    rhythm: !!request.rhythm && !loaded.rhythm,
+    rhythm_hits: !!request.rhythm_hits && !loaded.rhythm_hits,
+    bsp_levels: { bi: false, seg: false, segseg: false },
+    zs_levels: { fract: false, bi: false, seg: false, segseg: false },
+  };
+  ["bi", "seg", "segseg"].forEach((lv) => {
+    out.bsp_levels[lv] = !!(request.bsp_levels && request.bsp_levels[lv]) && !(loaded.bsp_levels && loaded.bsp_levels[lv]);
+  });
+  ["fract", "bi", "seg", "segseg"].forEach((lv) => {
+    out.zs_levels[lv] = !!(request.zs_levels && request.zs_levels[lv]) && !(loaded.zs_levels && loaded.zs_levels[lv]);
+  });
+  return out;
 }
 
 function getBspDisplayLabel(p) {
@@ -12630,7 +13048,7 @@ function renderSettingsForm() {
       color: "#c2410c",
       bgColor: "rgba(194, 65, 12, 0.08)",
       items: [
-        { label: "启用分型中枢", subKey: "enabled", type: "checkbox" },
+        { label: "启用分型中枢", subKey: "enabled", type: "checkbox", tip: "关闭后首包不构建/下发分型中枢；会话后开启时按需懒加载。" },
         { label: "分型中枢颜色", subKey: "color", type: "color" },
         { label: "分型中枢粗细", subKey: "width", type: "number", min: 0.1, max: 5, step: 0.1 }
       ]
@@ -12641,7 +13059,7 @@ function renderSettingsForm() {
       color: "#ea580c",
       bgColor: "rgba(234, 88, 12, 0.08)",
       items: [
-        { label: "启用笔中枢", subKey: "enabled", type: "checkbox" },
+        { label: "启用笔中枢", subKey: "enabled", type: "checkbox", tip: "关闭后首包不下发笔中枢；会话后开启时按需懒加载。" },
         { label: "笔中枢颜色", subKey: "color", type: "color" },
         { label: "笔中枢粗细", subKey: "width", type: "number", min: 0.1, max: 5, step: 0.1 }
       ]
@@ -12652,7 +13070,7 @@ function renderSettingsForm() {
       color: "#0d9488",
       bgColor: "rgba(13, 148, 136, 0.08)",
       items: [
-        { label: "启用段中枢", subKey: "enabled", type: "checkbox" },
+        { label: "启用段中枢", subKey: "enabled", type: "checkbox", tip: "关闭后首包不下发段中枢；会话后开启时按需懒加载。" },
         { label: "段中枢颜色", subKey: "color", type: "color" },
         { label: "段中枢粗细", subKey: "width", type: "number", min: 0.1, max: 5, step: 0.1 }
       ]
@@ -12663,7 +13081,7 @@ function renderSettingsForm() {
       color: "#1d4ed8",
       bgColor: "rgba(29, 78, 216, 0.08)",
       items: [
-        { label: "启用2段中枢", subKey: "enabled", type: "checkbox" },
+        { label: "启用2段中枢", subKey: "enabled", type: "checkbox", tip: "关闭后首包不构建/下发2段中枢；会话后开启时按需懒加载。" },
         { label: "2段中枢颜色", subKey: "color", type: "color" },
         { label: "2段中枢粗细", subKey: "width", type: "number", min: 0.1, max: 5, step: 0.1 }
       ]
@@ -12688,6 +13106,7 @@ function renderSettingsForm() {
       color: "#be123c",
       bgColor: "rgba(190, 18, 60, 0.08)",
       items: [
+        { label: "启用笔买卖点", subKey: "enabled", type: "checkbox", tip: "关闭后加载会话首包不计算/下发笔买卖点；会话后再开启会按需懒加载。" },
         { label: "文字大小", subKey: "fontSize", type: "number", min: 8, max: 30 },
         { label: "连线颜色", subKey: "lineColor", type: "color" },
         { label: "连线粗细", subKey: "lineWidth", type: "number", min: 0.1, max: 5, step: 0.1 },
@@ -12705,6 +13124,7 @@ function renderSettingsForm() {
       color: "#9f1239",
       bgColor: "rgba(159, 18, 57, 0.08)",
       items: [
+        { label: "启用段买卖点", subKey: "enabled", type: "checkbox", tip: "关闭后加载会话首包不计算/下发段买卖点；会话后再开启会按需懒加载。" },
         { label: "文字大小", subKey: "fontSize", type: "number", min: 8, max: 30 },
         { label: "连线颜色", subKey: "lineColor", type: "color" },
         { label: "连线粗细", subKey: "lineWidth", type: "number", min: 0.1, max: 5, step: 0.1 },
@@ -12722,6 +13142,7 @@ function renderSettingsForm() {
       color: "#881337",
       bgColor: "rgba(136, 19, 55, 0.08)",
       items: [
+        { label: "启用2段买卖点", subKey: "enabled", type: "checkbox", tip: "关闭后加载会话首包不计算/下发2段买卖点；会话后再开启会按需懒加载。" },
         { label: "文字大小", subKey: "fontSize", type: "number", min: 8, max: 30 },
         { label: "连线颜色", subKey: "lineColor", type: "color" },
         { label: "连线粗细", subKey: "lineWidth", type: "number", min: 0.1, max: 5, step: 0.1 },
@@ -12739,6 +13160,7 @@ function renderSettingsForm() {
       color: "#6d28d9",
       bgColor: "rgba(109, 40, 217, 0.08)",
       items: [
+        { label: "启用1382提示", subKey: "enabled", type: "checkbox", tip: "关闭后首包不下发节奏命中；会话后开启时按需懒加载。" },
         { label: "文字大小", subKey: "fontSize", type: "number", min: 8, max: 30 },
         { label: "文字颜色", subKey: "color", type: "color" },
         { label: "连线颜色", subKey: "lineColor", type: "color" },
@@ -13330,7 +13752,39 @@ function renderSystemSettingsForm() {
   initTooltips();
 }
 
+async function loadChartLazyLayers(layers) {
+  initAbortController = new AbortController();
+  initLoadStartMs = Date.now();
+  initLoadServerPct = 0;
+  setGlobalLoading(true, "正在加载图表图层，请稍候…");
+  appendMsgHistory("图表懒加载：准备加载勾选图层…");
+  startInitStatusPoll();
+  try {
+    const payload = await api("/api/load_chart_layers", {
+      chart_lazy_layers: layers || collectChartLazyLayersFromConfig(chartConfig, chartConfigStore),
+    }, "POST", { signal: initAbortController.signal });
+    if (payload && Array.isArray(payload.record_trace)) {
+      const startIdx = initStatusPollTimer ? Math.min(initTraceSeenCount, payload.record_trace.length) : 0;
+      payload.record_trace.slice(startIdx).forEach((line) => appendMsgHistory(String(line)));
+      initTraceSeenCount = Math.max(initTraceSeenCount, payload.record_trace.length);
+      // 已在懒加载流程刷过历史，避免 refreshUI 再重复刷一遍。
+      payload.record_trace = [];
+    }
+    return payload;
+  } finally {
+    stopInitStatusPoll();
+    initAbortController = null;
+    updateGlobalLoadingProgress(true);
+    setGlobalLoading(false);
+    initLoadStartMs = 0;
+    initLoadServerPct = 0;
+  }
+}
+
 async function saveSettings() {
+  const prevLazyLayers = collectChartLazyLayersFromConfig(chartConfig, chartConfigStore);
+  const prevDataFormSnapshot = JSON.stringify(dataFormConfig || {});
+  const prevChanSnapshot = JSON.stringify(chanConfig || {});
   if (isSettingsOpen()) flushChartSettingsFormToMemory();
   const prevRhythmCalcMode = normalizeRhythmCalcMode(chartConfig.rhythmLine && chartConfig.rhythmLine.calcMode);
   const prevKlinePresentation = normalizeKlinePresentationMode(dataFormConfig.klinePresentation);
@@ -13371,6 +13825,24 @@ async function saveSettings() {
     );
   }
   if (lastPayload && lastPayload.ready) {
+    const nextLazyLayers = collectChartLazyLayersFromConfig(chartConfig, chartConfigStore);
+    const newLazyLayers = filterUnloadedLazyLayers(
+      diffEnabledLazyLayers(prevLazyLayers, nextLazyLayers),
+      lastPayload.chart_lazy_layers
+    );
+    const dataFormSame = prevDataFormSnapshot === JSON.stringify(dataFormConfig || {});
+    const chanSame = prevChanSnapshot === JSON.stringify(chanConfig || {});
+    if (dataFormSame && chanSame) {
+      if (hasAnyLazyLayer(newLazyLayers)) {
+        const payload = await loadChartLazyLayers(newLazyLayers);
+        refreshUI(payload, { afterStep: false });
+        setMsg(payload.message || "图表懒加载图层加载完成");
+      } else {
+        drawFromLastPayload();
+        setMsg("图表显示设置已保存");
+      }
+      return;
+    }
     const n = getRawKlineCount();
     if (isQuantityDataFormMode(dataFormConfig.mode) && n <= 0) {
       throw new Error("请先加载会话后再使用数量类模式。");
@@ -13388,6 +13860,7 @@ async function saveSettings() {
       rollback_capture_max_bars: Number(systemConfig.rollbackCaptureMaxBars || DEFAULT_SYSTEM_CONFIG.rollbackCaptureMaxBars),
       performance_engine_mode: String(systemConfig.performanceEngineMode || DEFAULT_SYSTEM_CONFIG.performanceEngineMode || "rust_auto"),
       chip_bucket_step: Number(chartConfig.chip && chartConfig.chip.bucketStep ? chartConfig.chip.bucketStep : 0.1),
+      chart_lazy_layers: collectChartLazyLayersFromConfig(chartConfig, chartConfigStore),
     });
     refreshUI(payload, { afterStep: false });
     void fetchChipKlineAllLazy(payload);
@@ -16826,6 +17299,8 @@ function drawGridLines(s) {
 
 function tryDrawChipProfileFromEngine(chart, s) {
   if (lastPayload && lastPayload.chart_mode === "dual" && chart !== lastPayload.chart) return false;
+  // 分笔累计已有 chip_tick_bins.s/b，走前端按鼠标锚点重算，避免引擎快照丢 B/S 颜色。
+  if (lastPayload && lastPayload.chip_basis === "tick_accum_driver") return false;
   if (crosshairX !== null && crosshairY !== null && crosshairY <= s.plotBottomY && !isChipReplayStepping(lastPayload)) return false;
   const profile = (lastPayload && lastPayload.chip_profile && Array.isArray(lastPayload.chip_profile.prices))
     ? lastPayload.chip_profile
@@ -18030,19 +18505,28 @@ function bottomBspRowKey(p) {
  * 双周期子图各自 K 线索引不同，须用当前 chart.bsp 再叠 bsp_history 中同 key 的状态。
  */
 function resolveBottomBspRowsForDraw(chart) {
-  if (dualInternalRenderDepth > 0 && chart && Array.isArray(chart.bsp)) {
+  const chartRows = (chart && Array.isArray(chart.bsp)) ? chart.bsp : [];
+  const historyRows = Array.isArray(bspHistory) ? bspHistory : [];
+  const mergeChartRowsWithHistory = () => {
     const statusMap = new Map();
-    (bspHistory || []).forEach((h) => {
+    historyRows.forEach((h) => {
       const k = h.key || bottomBspRowKey(h);
       if (k) statusMap.set(k, h.status);
     });
-    return chart.bsp.map((it) => {
+    return chartRows.map((it) => {
       const k = it.key || bottomBspRowKey(it);
       const st = statusMap.has(k) ? statusMap.get(k) : it.status;
       return { ...it, key: k, status: st };
     });
+  };
+  if (dualInternalRenderDepth > 0 && chart && Array.isArray(chart.bsp)) {
+    return mergeChartRowsWithHistory();
   }
-  return bspHistory || [];
+  if (chartRows.length > 0 && historyRows.length === 0) return mergeChartRowsWithHistory();
+  if (chartRows.length > historyRows.length) {
+    return mergeChartRowsWithHistory();
+  }
+  return historyRows;
 }
 
 function drawRhythmLines(arr, s) {
@@ -18091,6 +18575,7 @@ function buildBottomSignalGroups(chart, bspArr) {
   const colSell = getCfgColor(chartConfig.trade.sellColor);
   for (const p of bspArr || []) {
     if (!p || !Number.isFinite(p.x)) continue;
+    if (!isBspLevelEnabled(p.level)) continue;
     const bspCfg = getBspConfig(p.level);
     const prefix = p.status === "correct" ? "✓" : (p.status === "wrong" ? "×" : "·");
     const text = `${prefix} ${getBspDisplayLabel(p)}`;
@@ -19273,7 +19758,9 @@ function refreshUI(payload, options) {
   }
   lastPayload = payload;
   if (payload && Array.isArray(payload.record_trace)) {
-    payload.record_trace.forEach((line) => appendMsgHistory(String(line)));
+    const startIdx = initStatusPollTimer ? Math.min(initTraceSeenCount, payload.record_trace.length) : 0;
+    payload.record_trace.slice(startIdx).forEach((line) => appendMsgHistory(String(line)));
+    initTraceSeenCount = Math.max(initTraceSeenCount, payload.record_trace.length);
   }
   appendRustHistoryFromPayload(payload);
   updateDualModeUI(payload);
@@ -19488,6 +19975,7 @@ $("btnInit").onclick = async () => {
       chan_record_enabled: false,
       performance_engine_mode: String(systemConfig.performanceEngineMode || DEFAULT_SYSTEM_CONFIG.performanceEngineMode || "rust_auto"),
       chip_bucket_step: Number(chartConfig.chip && chartConfig.chip.bucketStep ? chartConfig.chip.bucketStep : 0.1),
+      chart_lazy_layers: collectChartLazyLayersFromConfig(chartConfig, chartConfigStore),
       ...extra,
     });
     const cmInit = $("chartMode") ? $("chartMode").value : "single";
@@ -19571,6 +20059,7 @@ $("btnInit").onclick = async () => {
         data_chip: "加载筹码底座",
         chan_record: "跳过本地缓存",
         perf_engine_load: "加载性能引擎",
+        chan_bootstrap: "计算缠论结构",
         bsp_snapshot: "生成买卖点快照",
         initial_step: "初始化首根K线",
         presentation_end: "一次性呈现到末根",
@@ -19589,8 +20078,15 @@ $("btnInit").onclick = async () => {
         if (raw.startsWith("disk_cache_")) return "跳过历史磁盘缓存";
         return raw || "处理中";
       };
-      const top = payload.init_perf.rank.slice(0, 4).map((r) => `${initStageName(r.stage)}:${fmtCost(r.ms)}`).join("；");
-      appendMsgHistory(`加载耗时 ${fmtCost(payload.init_perf.total_ms)}（${top}）`);
+      const stageCore = (stage) => {
+        const raw = String(stage || "");
+        if (raw === "perf_engine_load") {
+          return String(payload.engine_mode || "").toLowerCase().includes("python") ? "python" : "rust";
+        }
+        return "python";
+      };
+      const top = payload.init_perf.rank.slice(0, 4).map((r) => `${stageCore(r.stage)}:${initStageName(r.stage)}:${fmtCost(r.ms)}`).join("；");
+      appendMsgHistory(`python<汇总>：加载耗时 ${fmtCost(payload.init_perf.total_ms)}（${top}）`);
     }
     const srcHistLine = buildSessionSourceHistoryLine(payload);
     if (srcHistLine) appendMsgHistory(srcHistLine);
@@ -20636,6 +21132,7 @@ _INIT_STAGE_LABELS: dict[str, str] = {
     "presentation_end": "一次性呈现到末根",
     "initial_step": "初始化首根K线",
     "build_payload": "构建图表首包",
+    "chart_lazy_layers": "加载图表懒加载图层",
 }
 
 _INIT_STAGE_PROGRESS: dict[str, int] = {
@@ -20649,7 +21146,21 @@ _INIT_STAGE_PROGRESS: dict[str, int] = {
     "presentation_end": 72,
     "initial_step": 72,
     "build_payload": 92,
+    "chart_lazy_layers": 96,
 }
+
+
+def _init_stage_core(name: str) -> str:
+    """历史记录核心标识：性能引擎按实际模式，其余初始化默认 Python。"""
+    raw = str(name or "")
+    if raw == "perf_engine_load":
+        mode = str(getattr(APP_PERF_ENGINE, "requested_mode", "") or "").lower()
+        return "python" if mode == "python_legacy" else "rust"
+    return "python"
+
+
+def _init_trace_prefix(stage: str, status: str) -> str:
+    return f"{_init_stage_core(stage)}<{status}>"
 
 
 def _init_stage_label(name: str) -> str:
@@ -20666,7 +21177,7 @@ def _init_stage_label(name: str) -> str:
     return raw or "处理中"
 
 
-def _init_status_begin() -> None:
+def _init_status_begin(message: Optional[str] = None) -> None:
     _INIT_CANCEL.clear()
     with _INIT_STATUS_LOCK:
         _INIT_STATUS.update(
@@ -20679,7 +21190,7 @@ def _init_status_begin() -> None:
                 "stage_started_at": time.time(),
             }
         )
-    push_record_trace("开始加载会话：固定使用 a_Data 重新计算，不读取历史缓存")
+    push_record_trace(message or "开始加载会话：固定使用 a_Data 重新计算，不读取历史缓存")
 
 
 def _init_status_end() -> None:
@@ -20701,7 +21212,7 @@ def _init_status_on_stage(event: str, stage: str) -> None:
         with _INIT_STATUS_LOCK:
             stage_started = float(_INIT_STATUS.get("stage_started_at") or time.time())
         cost = max(0.0, time.time() - stage_started)
-        push_record_trace(f"完成：{label}（耗时 {cost:.1f} 秒）")
+        push_record_trace(f"{_init_trace_prefix(stage, '成功')}：{label}（耗时 {cost:.1f} 秒）")
         return
     if event != "enter":
         return
@@ -20718,7 +21229,7 @@ def _init_status_on_stage(event: str, stage: str) -> None:
                 "stage_started_at": time.time(),
             }
         )
-    push_record_trace(f"进行中：{label}（{max(cur, pct)}%）")
+    push_record_trace(f"{_init_trace_prefix(stage, '进行中')}：{label}（{max(cur, pct)}%）")
 
 
 def _init_status_set_subprogress(pct: int, label: str, *, push_trace: bool = False) -> None:
@@ -20815,12 +21326,28 @@ def _init_perf_history_lines(perf: dict[str, Any]) -> list[str]:
         "data_chip": "加载筹码底座",
         "chan_record": "跳过本地缓存",
         "perf_engine_load": "加载性能引擎",
+        "chan_bootstrap": "计算缠论结构",
         "bsp_snapshot": "生成买卖点快照",
         "initial_step": "初始化首根K线",
         "presentation_end": "一次性呈现到末根",
         "build_payload": "构建图表首包",
         "chip_refresh": "刷新筹码底座",
         "chip_kline_all_api": "懒加载筹码底座",
+        "chart_lazy_layers": "加载图表懒加载图层",
+    }
+    stage_core_map = {
+        "data_kline": "python",
+        "data_chip": "python",
+        "chan_record": "python",
+        "perf_engine_load": "rust" if str(perf.get("engine_mode") or "").lower() != "python-legacy" else "python",
+        "chan_bootstrap": "python",
+        "bsp_snapshot": "python",
+        "initial_step": "python",
+        "presentation_end": "python",
+        "build_payload": "python",
+        "chip_refresh": "python",
+        "chip_kline_all_api": "python",
+        "chart_lazy_layers": "python",
     }
 
     def fmt_cost(ms: float) -> str:
@@ -20829,14 +21356,15 @@ def _init_perf_history_lines(perf: dict[str, Any]) -> list[str]:
             return f"{sec / 60.0:.2f}分钟"
         return f"{sec:.2f}秒"
 
-    out = [f"加载节点总耗时：{fmt_cost(float(perf.get('total_ms') or 0.0))}"]
+    out = [f"python<汇总>：加载节点总耗时 {fmt_cost(float(perf.get('total_ms') or 0.0))}"]
     for row in perf.get("rank") or []:
         raw_stage = str(row.get("stage", ""))
         stage = stage_name_map.get(raw_stage, _init_stage_label(raw_stage))
+        core = stage_core_map.get(raw_stage, _init_stage_core(raw_stage))
         ms = float(row.get("ms") or 0.0)
         pct = float(row.get("pct") or 0.0)
         if stage:
-            out.append(f"加载节点：{stage} {fmt_cost(ms)}（{pct:.1f}%）")
+            out.append(f"{core}<成功>加载节点：{stage} {fmt_cost(ms)}（{pct:.1f}%）")
     return out
 
 
@@ -20940,6 +21468,7 @@ def _api_init_impl(req: InitReq, perf_col: Optional[dict[str, Any]] = None) -> d
                     data_feed_mode=getattr(req, "data_feed_mode", "step"),
                     offline_data_custom=getattr(req, "offline_data_custom", "native"),
                     chan_record_enabled=bool(getattr(req, "chan_record_enabled", False)),
+                    chart_lazy_layers=getattr(req, "chart_lazy_layers", None),
                 )
                 if APP_STATE.stepper.data_src_used != OFFLINE_INLINE_SRC:
                     raise ValueError(
@@ -20964,6 +21493,7 @@ def _api_init_impl(req: InitReq, perf_col: Optional[dict[str, Any]] = None) -> d
                         data_feed_mode=getattr(req, "data_feed_mode", "step"),
                         offline_data_custom=getattr(req, "offline_data_custom", "native"),
                         chan_record_enabled=bool(getattr(req, "chan_record_enabled", False)),
+                        chart_lazy_layers=getattr(req, "chart_lazy_layers", None),
                     )
                     APP_STATE.multi_steppers.append(st)
             else:
@@ -20982,6 +21512,7 @@ def _api_init_impl(req: InitReq, perf_col: Optional[dict[str, Any]] = None) -> d
                     data_feed_mode=getattr(req, "data_feed_mode", "step"),
                     offline_data_custom=getattr(req, "offline_data_custom", "native"),
                     chan_record_enabled=bool(getattr(req, "chan_record_enabled", False)),
+                    chart_lazy_layers=getattr(req, "chart_lazy_layers", None),
                 )
                 chart_mode = "dual" if cm_init == "dual" else "single"
                 APP_STATE.chart_mode = chart_mode
@@ -21006,6 +21537,7 @@ def _api_init_impl(req: InitReq, perf_col: Optional[dict[str, Any]] = None) -> d
                         data_feed_mode=getattr(req, "data_feed_mode", "step"),
                         offline_data_custom=getattr(req, "offline_data_custom", "native"),
                         chan_record_enabled=bool(getattr(req, "chan_record_enabled", False)),
+                        chart_lazy_layers=getattr(req, "chart_lazy_layers", None),
                     )
         except OfflineDataConfirmRequired as exc:
             raise HTTPException(
@@ -21064,6 +21596,7 @@ def _api_init_impl(req: InitReq, perf_col: Optional[dict[str, Any]] = None) -> d
             "rollback_capture_max_bars": req.rollback_capture_max_bars,
             "performance_engine_mode": str(getattr(req, "performance_engine_mode", "rust_auto") or "rust_auto"),
             "chip_bucket_step": getattr(req, "chip_bucket_step", None),
+            "chart_lazy_layers": normalize_chart_lazy_layers(getattr(req, "chart_lazy_layers", None)),
         }
         APP_STATE.trade_events = []
         APP_STATE.bsp_history = []
@@ -21071,15 +21604,18 @@ def _api_init_impl(req: InitReq, perf_col: Optional[dict[str, Any]] = None) -> d
         APP_STATE.bsp_judge_logs = []
         APP_STATE._last_level_dirs = {level: None for level in set(JUDGE_TRIGGER_LEVELS.values())}
         APP_STATE._clear_rollback_cache()
-        with init_perf_stage("bsp_snapshot"):
-            APP_STATE.rebuild_bsp_all_snapshot()
         pres_init = normalize_kline_presentation_mode(
             getattr(req, "kline_presentation_mode", "step")
         )
         if pres_init == "instant":
             with init_perf_stage("presentation_end"):
                 APP_STATE.apply_kline_presentation_end()
+            with init_perf_stage("bsp_snapshot"):
+                # 一次性呈现已全量计算缠论，直接复用当前结构生成 BSP 快照。
+                APP_STATE.rebuild_bsp_all_snapshot_from_current()
         else:
+            with init_perf_stage("bsp_snapshot"):
+                APP_STATE.rebuild_bsp_all_snapshot()
             # init 后先推进一根，确保前端有可视数据并可交互
             with init_perf_stage("initial_step"):
                 APP_STATE.stepper.step()
@@ -21117,6 +21653,7 @@ def _api_init_impl(req: InitReq, perf_col: Optional[dict[str, Any]] = None) -> d
                 {
                     "chart_mode": APP_STATE.chart_mode,
                     "chan_record_applied": bool(rec_apply and getattr(rec_apply, "applied", False)),
+                    "engine_mode": getattr(APP_STATE.stepper, "perf_engine_mode", ""),
                 }
             )
             payload["init_perf"] = init_perf_payload
@@ -21171,7 +21708,43 @@ def api_chip_kline_all(chart_id: str = "active"):
         "chart_id": chart_id,
         "kline_all": bars,
         "count": len(bars),
+        "range_hint": _chip_range_text(
+            list(getattr(st, "kline_all", None) or []),
+            getattr(st, "_session_begin_date", None),
+            getattr(st, "_session_end_date", None),
+        ),
     }
+
+
+@app.post("/api/load_chart_layers")
+async def api_load_chart_layers(req: LoadChartLayersReq):
+    """按需计算图表重图层（节奏线/各级买卖点）。"""
+    if not APP_STATE.ready:
+        raise HTTPException(status_code=400, detail="请先加载会话")
+    _init_status_begin("图表懒加载：开始按当前勾选补算图层，不重新加载会话")
+    try:
+        def _run() -> dict[str, Any]:
+            with init_perf_run("chart_lazy_layers") as perf_col:
+                payload = APP_STATE.load_chart_layers(req.chart_lazy_layers or {})
+                payload["message"] = "图表懒加载图层加载完成"
+                if init_perf_enabled() and perf_col is not None:
+                    init_perf_payload = init_perf_report(
+                        {
+                            "chart_mode": APP_STATE.chart_mode,
+                            "engine_mode": getattr(APP_STATE.stepper, "perf_engine_mode", ""),
+                        }
+                    )
+                    payload["init_perf"] = init_perf_payload
+                    existing = list(payload.get("record_trace") or [])
+                    payload["record_trace"] = existing + _init_perf_history_lines(init_perf_payload)
+                return payload
+        return await run_in_threadpool(_run)
+    except InitCancelledError as exc:
+        raise HTTPException(status_code=499, detail=str(exc)) from exc
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=_error_detail_with_rust(e)) from e
+    finally:
+        _init_status_end()
 
 
 @app.post("/api/reconfig")
@@ -21192,6 +21765,7 @@ def api_reconfig(req: ReconfigReq):
             rollback_capture_max_bars=req.rollback_capture_max_bars,
             performance_engine_mode=getattr(req, "performance_engine_mode", None),
             chip_bucket_step=getattr(req, "chip_bucket_step", None),
+            chart_lazy_layers=getattr(req, "chart_lazy_layers", None),
         )
         APP_STATE._rhythm_notice_hits = []
         include_kline_all = stepper_needs_chip_kline_all(APP_STATE.stepper)

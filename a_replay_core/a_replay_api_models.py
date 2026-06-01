@@ -35,6 +35,7 @@ class InitReq(BaseModel):
     # 性能引擎：rust_auto=严格 Rust；python_legacy=兼容旧路径
     performance_engine_mode: str = "rust_auto"
     chip_bucket_step: Optional[float] = None
+    chart_lazy_layers: Optional[dict[str, Any]] = None
 
 
 class ReconfigReq(BaseModel):
@@ -50,6 +51,11 @@ class ReconfigReq(BaseModel):
     rollback_capture_max_bars: Optional[int] = None
     performance_engine_mode: Optional[str] = None
     chip_bucket_step: Optional[float] = None
+    chart_lazy_layers: Optional[dict[str, Any]] = None
+
+
+class LoadChartLayersReq(BaseModel):
+    chart_lazy_layers: dict[str, Any] = Field(default_factory=dict)
 
 
 class BackNReq(BaseModel):
