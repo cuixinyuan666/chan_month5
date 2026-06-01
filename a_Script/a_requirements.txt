@@ -9,6 +9,6 @@ ashare
 adata
 pytdx
 yfinance
-# Rust 极速引擎构建依赖（可选；未安装时自动走 Python fallback）
+# Rust 极速引擎构建依赖（rust_auto 模式必需；python_legacy 才走 Python 兼容路径）
 maturin>=1.5
 # beautifulsoup4  # 如需解析HTML爬虫可取消注释

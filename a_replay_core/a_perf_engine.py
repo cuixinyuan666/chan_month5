@@ -4,6 +4,7 @@ import hashlib
 import json
 import math
 import shutil
+import traceback
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -119,7 +120,7 @@ class PerfSession:
 class PerfEngine:
     """高性能过渡引擎门面。
 
-    Rust 扩展可用时优先走 Rust；不可用时使用严格等价的 Python fallback。
+    Rust 扩展可用时走 Rust；python_legacy 才使用 Python 兼容路径。
     """
 
     def __init__(self, cache_dir: Optional[str | Path] = None, requested_mode: str = "rust_auto") -> None:
@@ -128,6 +129,7 @@ class PerfEngine:
         self.requested_mode = str(requested_mode or "rust_auto")
         self._rust = _load_rust_backend()
         self._sessions: dict[str, dict[str, Any]] = {}
+        self._last_rust_errors: list[dict[str, Any]] = []
 
     @property
     def rust_available(self) -> bool:
@@ -138,10 +140,44 @@ class PerfEngine:
             return "python-legacy"
         if self.rust_available:
             return "rust"
-        return "python-fallback"
+        return "rust-missing"
 
     def _use_rust(self) -> bool:
         return self.requested_mode != "python_legacy" and self._rust is not None
+
+    def _rust_required(self) -> bool:
+        return self.requested_mode != "python_legacy"
+
+    def _record_rust_error(self, feature: str, exc: BaseException | str) -> None:
+        """记录 Rust 失败细节，供前端历史记录复制给排查。"""
+        if isinstance(exc, BaseException):
+            detail = "".join(traceback.format_exception_only(type(exc), exc)).strip()
+            tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)).strip()
+        else:
+            detail = str(exc)
+            tb = detail
+        self._last_rust_errors.append(
+            {
+                "feature": str(feature),
+                "detail": detail,
+                "traceback": tb[-4000:],
+            }
+        )
+        if len(self._last_rust_errors) > 20:
+            self._last_rust_errors = self._last_rust_errors[-20:]
+
+    def _rust_failure(self, feature: str, exc: BaseException | str) -> RuntimeError:
+        self._record_rust_error(feature, exc)
+        detail = self._last_rust_errors[-1]["detail"] if self._last_rust_errors else str(exc)
+        return RuntimeError(f"{feature}计算调用rust失败：{detail}")
+
+    def _require_rust_method(self, feature: str, method: str):
+        if self._rust is None:
+            raise self._rust_failure(feature, f"Rust模块 {RUST_MODULE_NAME} 不可用")
+        fn = getattr(self._rust, method, None)
+        if not callable(fn):
+            raise self._rust_failure(feature, f"Rust模块缺少方法 {method}")
+        return fn
 
     def _cache_path(self, session_id: str) -> Path:
         safe = "".join(ch if ch.isalnum() else "_" for ch in session_id)
@@ -167,10 +203,11 @@ class PerfEngine:
             "payload_version": PAYLOAD_VERSION,
         }
         rust_meta: dict[str, Any] = {}
-        if self._use_rust() and hasattr(self._rust, "load_session"):
+        if self._rust_required():
+            load_fn = self._require_rust_method("会话加载", "load_session")
             try:
-                # Rust 先接管会话指纹/元信息；Python 仍保留服务端会话缓存给旧接口复用。
-                rust_raw = self._rust.load_session(
+                # Rust 先接管会话指纹/元信息；Python 仅保留服务端内存态给旧接口复用。
+                rust_raw = load_fn(
                     code=str(code),
                     k_type=str(k_type),
                     begin_date=str(begin_date),
@@ -180,8 +217,10 @@ class PerfEngine:
                 )
                 if isinstance(rust_raw, dict):
                     rust_meta = dict(rust_raw)
-            except Exception:
-                rust_meta = {}
+                else:
+                    raise TypeError(f"load_session 返回类型异常: {type(rust_raw).__name__}")
+            except Exception as exc:
+                raise self._rust_failure("会话加载", exc) from exc
         session_id = str(rust_meta.get("session_id") or _series_fingerprint(meta, bar_src, chip_src))
         cache_path = self._cache_path(session_id)
         series = self._normalize_bars_for_session(bar_src)
@@ -204,17 +243,19 @@ class PerfEngine:
         )
 
     def _normalize_bars_for_session(self, bars: list[dict[str, Any]]) -> dict[str, list[Any]]:
-        if self._use_rust() and hasattr(self._rust, "normalize_bars"):
+        if self._rust_required():
+            normalize_fn = self._require_rust_method("K线标准化", "normalize_bars")
             try:
-                raw = self._rust.normalize_bars(bars)
+                raw = normalize_fn(bars)
                 if isinstance(raw, dict):
                     out = {str(k): list(v) if isinstance(v, list) else v for k, v in raw.items()}
                     # 当前 Rust 扩展尚未返回 time_ms，Python 补齐以保持旧接口稳定。
                     if "time_ms" not in out:
                         out["time_ms"] = [_parse_time_ms(t) for t in out.get("t", [])]
                     return out
-            except Exception:
-                pass
+                raise TypeError(f"normalize_bars 返回类型异常: {type(raw).__name__}")
+            except Exception as exc:
+                raise self._rust_failure("K线标准化", exc) from exc
         return normalize_bars(bars)
 
     def _get_session(self, session_id: str) -> dict[str, Any]:
@@ -227,13 +268,15 @@ class PerfEngine:
         return self.next_step_delta(session_id, target_step - 1, target_step)
 
     def next_step_delta(self, session_id: str, from_step: int, to_step: int) -> dict[str, Any]:
-        if self._use_rust() and hasattr(self._rust, "next_step_delta"):
+        if self._rust_required():
+            next_fn = self._require_rust_method("步进增量", "next_step_delta")
             try:
-                raw = self._rust.next_step_delta(str(session_id), int(from_step), int(to_step))
+                raw = next_fn(str(session_id), int(from_step), int(to_step))
                 if isinstance(raw, dict) and isinstance(raw.get("append_kline"), list):
                     return raw
-            except Exception:
-                pass
+                raise TypeError(f"next_step_delta 返回结构异常: {type(raw).__name__}")
+            except Exception as exc:
+                raise self._rust_failure("步进增量", exc) from exc
         sess = self._get_session(session_id)
         series = sess["series"]
         total = len(series["x"])
@@ -268,16 +311,18 @@ class PerfEngine:
         if not chip_bars:
             return self._empty_chip_profile(session_id, cutoff_x, bucket_step)
         step = max(0.001, _safe_float(bucket_step, 0.1))
-        if self._use_rust() and hasattr(self._rust, "chip_profile"):
+        if self._rust_required():
+            chip_fn = self._require_rust_method("筹码分布", "chip_profile")
             try:
-                rust_raw = self._rust.chip_profile(str(session_id), cutoff_x=cutoff_x, bucket_step=step)
+                rust_raw = chip_fn(str(session_id), cutoff_x=cutoff_x, bucket_step=step)
                 if isinstance(rust_raw, dict):
                     rust_out = dict(rust_raw)
-                    # Rust 当前版本可能只返回空壳；有筹码数据时保留 Python 兼容结果。
                     if rust_out.get("prices") or _safe_float(rust_out.get("max_total"), 0.0) > 0:
                         return rust_out
-            except Exception:
-                pass
+                    raise ValueError("Rust返回空筹码：prices为空且max_total为0")
+                raise TypeError(f"chip_profile 返回类型异常: {type(rust_raw).__name__}")
+            except Exception as exc:
+                raise self._rust_failure("筹码分布", exc) from exc
         cut = cutoff_x
         if cut is not None:
             use_bars = [b for b in chip_bars if _safe_int(b.get("x"), -1) <= int(cut)]
@@ -325,7 +370,7 @@ class PerfEngine:
             "b": b_arr,
             "total": total,
             "max_total": max(total) if total else 0.0,
-            "source": "python-fallback",
+            "source": "python-legacy",
         }
         return out
 
@@ -390,6 +435,7 @@ class PerfEngine:
             "requested_mode": self.requested_mode,
             "engine_mode": self._engine_mode(),
             "payload_version": PAYLOAD_VERSION,
+            "last_rust_errors": list(self._last_rust_errors[-10:]),
         }
 
     def clear_cache(self) -> dict[str, Any]:
@@ -409,6 +455,7 @@ class PerfEngine:
                 if item.is_dir():
                     shutil.rmtree(item, ignore_errors=True)
         self._sessions.clear()
+        self._last_rust_errors.clear()
         return {"removed": removed, **self.cache_status()}
 
 

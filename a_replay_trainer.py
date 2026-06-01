@@ -3837,7 +3837,7 @@ class ChanStepper:
         self._chan_record_enabled: bool = False
         # Rust/Python 高性能过渡引擎会话：先接数据/筹码/步进增量层
         self.perf_session_id: Optional[str] = None
-        self.perf_engine_mode: str = "python-fallback"
+        self.perf_engine_mode: str = "rust-missing"
 
     def _cfg_without_chan_algo(self, cfg_dict: dict[str, Any]) -> dict[str, Any]:
         # 训练器 / API 自用键，勿传入 CChanConfig（否则会触发 unknown para）
@@ -4420,8 +4420,8 @@ class ChanStepper:
             )
         _check_init_cancelled()
         self.perf_session_id = None
-        self.perf_engine_mode = "python-fallback"
-        try:
+        self.perf_engine_mode = "python-legacy" if str(APP_PERF_ENGINE.requested_mode) == "python_legacy" else "rust"
+        with init_perf_stage("perf_engine_load"):
             perf_bars = serialize_klu_iter(self._replay_klus_master or [])
             perf_chip_bars = _chip_bars_for_perf_session(
                 self.kline_all,
@@ -4438,9 +4438,10 @@ class ChanStepper:
             )
             self.perf_session_id = perf_session.session_id
             self.perf_engine_mode = perf_session.engine_mode
-        except Exception as perf_exc:
-            self.perf_session_id = None
-            self.perf_engine_mode = f"python-fallback-error:{format_source_error(perf_exc)}"
+            push_record_trace(
+                f"Rust性能引擎：会话加载成功，mode={perf_session.engine_mode}，"
+                f"K线={perf_session.bar_count}，筹码={perf_session.chip_bar_count}"
+            )
         if self._chan_record_apply.applied and init_kline_all_for_chip:
             wider = _pick_wider_kline_all_for_chip(
                 [init_kline_all_for_chip, list(self.kline_all or [])]
@@ -6174,7 +6175,7 @@ class AppState:
                 "ready": False,
                 "finished": self.finished,
                 "payload_version": 2,
-                "engine_mode": APP_PERF_ENGINE.cache_status().get("engine_mode", "python-fallback"),
+                "engine_mode": APP_PERF_ENGINE.cache_status().get("engine_mode", "rust-missing"),
                 "step_delta": None,
                 "chip_profile": None,
                 "cache_info": APP_PERF_ENGINE.cache_status(),
@@ -6244,27 +6245,21 @@ class AppState:
         perf_step_delta: Optional[dict[str, Any]] = None
         perf_chip_profile: Optional[dict[str, Any]] = None
         perf_cache_info: dict[str, Any] = APP_PERF_ENGINE.cache_status()
-        perf_mode = getattr(active_stepper, "perf_engine_mode", perf_cache_info.get("engine_mode", "python-fallback"))
+        perf_mode = getattr(active_stepper, "perf_engine_mode", perf_cache_info.get("engine_mode", "rust-missing"))
         if getattr(active_stepper, "perf_session_id", None) and str(APP_PERF_ENGINE.requested_mode) != "python_legacy":
-            try:
-                perf_step_delta = APP_PERF_ENGINE.next_step_delta(
-                    active_stepper.perf_session_id,
-                    int(active_stepper.step_idx) - 1,
-                    int(active_stepper.step_idx),
-                )
-            except Exception as exc:
-                perf_step_delta = {"error": format_source_error(exc), "structure_dirty": True}
-            try:
-                ks_for_chip = active_chart.get("kline", []) or []
-                cutoff_x = int(ks_for_chip[-1].get("x")) if ks_for_chip else None
-                bucket_step = float((self.session_params or {}).get("chip_bucket_step") or 0.1)
-                perf_chip_profile = APP_PERF_ENGINE.chip_profile(
-                    active_stepper.perf_session_id,
-                    cutoff_x=cutoff_x,
-                    bucket_step=bucket_step,
-                )
-            except Exception as exc:
-                perf_chip_profile = {"error": format_source_error(exc), "prices": [], "s": [], "b": [], "total": []}
+            perf_step_delta = APP_PERF_ENGINE.next_step_delta(
+                active_stepper.perf_session_id,
+                int(active_stepper.step_idx) - 1,
+                int(active_stepper.step_idx),
+            )
+            ks_for_chip = active_chart.get("kline", []) or []
+            cutoff_x = int(ks_for_chip[-1].get("x")) if ks_for_chip else None
+            bucket_step = float((self.session_params or {}).get("chip_bucket_step") or 0.1)
+            perf_chip_profile = APP_PERF_ENGINE.chip_profile(
+                active_stepper.perf_session_id,
+                cutoff_x=cutoff_x,
+                bucket_step=bucket_step,
+            )
         charts_payload = {"chart1": chart}
         if chart2 is not None:
             charts_payload["chart2"] = chart2
@@ -10126,6 +10121,7 @@ async function applyQuantityFromKeyboard(rawQ) {
       rollback_capture_max_bars: Number(systemConfig.rollbackCaptureMaxBars || DEFAULT_SYSTEM_CONFIG.rollbackCaptureMaxBars),
     });
     refreshUI(payload, { afterStep: false });
+    void fetchChipKlineAllLazy(payload);
     setMsg(`数量已设为 ${nextQ}（原始 K 线共 ${n} 根）`);
   } catch (e) {
     setMsg("数量切换失败：" + (e && e.message ? e.message : e));
@@ -10241,7 +10237,7 @@ const DEFAULT_SYSTEM_CONFIG = {
   rollbackFullSnapshotInterval: 8,
   rollbackCaptureMaxBars: 30000,
   chanRecordEnabled: false,
-  // 性能引擎：rust_auto=优先 Rust，失败自动 Python fallback；python_legacy=旧路径
+  // 性能引擎：rust_auto=严格 Rust；python_legacy=旧路径
   performanceEngineMode: "rust_auto",
 };
 
@@ -11221,6 +11217,7 @@ function saveChanSettings() {
       api("/api/reconfig", { chan_config: finalConfig })
         .then(payload => {
           refreshUI(payload);
+          void fetchChipKlineAllLazy(payload);
           if (payload.bsp_history && payload.bsp_history.length > 0) {
             payload.bsp_history.forEach(h => {
               setMsg(`[重算] 发现 ${h.display_label || h.label} @K线:${h.x}`, true);
@@ -13091,7 +13088,7 @@ function renderSystemSettingsForm() {
     const perfModeItem = document.createElement("div");
     perfModeItem.className = "settingsItem";
     perfModeItem.style.gridColumn = "1 / -1";
-    perfModeItem.innerHTML = `<label>运行模式 <span class="tip-icon" data-tip="${escapeHtmlAttr("Rust极速：优先使用 a_rust_core 编译扩展；未安装时自动切换 Python fallback。Python兼容：关闭极速 payload，用旧逻辑排查问题。保存后重新加载会话生效。")}">!</span></label>`;
+  perfModeItem.innerHTML = `<label>运行模式 <span class="tip-icon" data-tip="${escapeHtmlAttr("Rust极速：使用 a_rust_core 编译扩展；Rust 调用失败会直接弹窗并写入历史记录。Python兼容：关闭极速 payload，用旧逻辑排查问题。保存后重新加载会话生效。")}">!</span></label>`;
     const perfSel = document.createElement("select");
     perfSel.dataset.sysKey = "performanceEngineMode";
     perfSel.innerHTML = `<option value="rust_auto">Rust极速（自动回退）</option><option value="python_legacy">Python兼容</option>`;
@@ -13393,6 +13390,7 @@ async function saveSettings() {
       chip_bucket_step: Number(chartConfig.chip && chartConfig.chip.bucketStep ? chartConfig.chip.bucketStep : 0.1),
     });
     refreshUI(payload, { afterStep: false });
+    void fetchChipKlineAllLazy(payload);
     setMsg(payload.message || "图表设置更新成功");
     if (prevKlinePresentation !== normalizeKlinePresentationMode(dataFormConfig.klinePresentation)) {
       showAlertAndLog(
@@ -15329,6 +15327,7 @@ window.addEventListener("keydown", (e) => {
 let msgHistory = ensureArray(safeJsonParse(storageGet("chan_msg_history"), []), []);
 let lastToastText = "";
 let lastToastAt = 0;
+const rustHistorySeen = new Set();
 
 function appendMsgHistory(text) {
   const content = String(text || "").trim();
@@ -15345,6 +15344,28 @@ function appendMsgHistory(text) {
   if (loading && loading.classList.contains("show")) renderGlobalLoadingHistory();
   const modal = $("msgHistoryModal");
   if (modal && modal.classList.contains("show")) renderMsgHistory();
+}
+
+function appendRustHistoryFromPayload(payload) {
+  const rows = [];
+  const cacheInfo = payload && payload.cache_info;
+  if (cacheInfo && Array.isArray(cacheInfo.last_rust_errors)) {
+    cacheInfo.last_rust_errors.forEach((it) => rows.push(it));
+  }
+  const profile = payload && payload.chip_profile;
+  if (profile && profile.error) {
+    rows.push({ feature: "筹码分布", detail: String(profile.error || ""), traceback: "" });
+  }
+  rows.forEach((it) => {
+    const feature = String(it && it.feature ? it.feature : "未知");
+    const detail = String(it && it.detail ? it.detail : "").trim();
+    const tb = String(it && it.traceback ? it.traceback : "").trim();
+    const key = `${feature}|${detail}|${tb.slice(-240)}`;
+    if (!detail || rustHistorySeen.has(key)) return;
+    rustHistorySeen.add(key);
+    appendMsgHistory(`Rust失败详情：${feature}：${detail}`);
+    if (tb && tb !== detail) appendMsgHistory(`Rust失败堆栈：${feature}：${tb}`);
+  });
 }
 
 function msgHistoryText(rows = null) {
@@ -16805,7 +16826,7 @@ function drawGridLines(s) {
 
 function tryDrawChipProfileFromEngine(chart, s) {
   if (lastPayload && lastPayload.chart_mode === "dual" && chart !== lastPayload.chart) return false;
-  if (crosshairX !== null && !isChipReplayStepping(lastPayload)) return false;
+  if (crosshairX !== null && crosshairY !== null && crosshairY <= s.plotBottomY && !isChipReplayStepping(lastPayload)) return false;
   const profile = (lastPayload && lastPayload.chip_profile && Array.isArray(lastPayload.chip_profile.prices))
     ? lastPayload.chip_profile
     : chipProfileCache;
@@ -19247,6 +19268,7 @@ function refreshUI(payload, options) {
   if (payload && Array.isArray(payload.record_trace)) {
     payload.record_trace.forEach((line) => appendMsgHistory(String(line)));
   }
+  appendRustHistoryFromPayload(payload);
   updateDualModeUI(payload);
   if (payload && payload.ready && payload.data_form) {
     dataFormConfig.mode = normalizeDataFormMode(payload.data_form.mode);
@@ -19291,9 +19313,14 @@ function refreshUI(payload, options) {
   if (showStandaloneNotices && payload && payload.judge_notice) {
     showJudgeNotice(payload);
   }
-    if (payload.ready) {
+  if (payload.ready) {
     if ((dataFormChanged || (chipSid && chipKlineAllCacheSessionKey && chipSid !== chipSessionIdentity(prev))) && !afterStep) {
-      chipKlineAllCache = null;
+      if (payload.chart && Array.isArray(payload.chart.kline_all) && payload.chart.kline_all.length > 0) {
+        chipKlineAllCache = normalizeChipKlineAllX(payload.chart.kline_all);
+        payload.chart.kline_all = chipKlineAllCache;
+      } else {
+        chipKlineAllCache = null;
+      }
       userAdjustedView = false;
       viewReady = false;
       DUAL_CHART_IDS.forEach((id) => {
@@ -19489,6 +19516,8 @@ $("btnInit").onclick = async () => {
       }
     }
     initSucceeded = true;
+    // 最后一轮进度可能在 /api/init 返回前刚写入，完成后补拉一次。
+    await pollInitStatusOnce();
     if (payload && payload.init_perf && Number.isFinite(Number(payload.init_perf.total_ms))) {
       initLoadExpectedMs = Math.max(5000, Number(payload.init_perf.total_ms));
       storageSet("chan_init_expected_ms", String(initLoadExpectedMs));
@@ -20802,6 +20831,31 @@ def _init_perf_history_lines(perf: dict[str, Any]) -> list[str]:
     return out
 
 
+def _rust_error_history_lines() -> list[str]:
+    """把最近 Rust 失败细节写给前端历史记录，便于复制排查。"""
+    status = APP_PERF_ENGINE.cache_status()
+    rows = status.get("last_rust_errors") or []
+    out: list[str] = []
+    for item in rows[-5:]:
+        feature = str(item.get("feature") or "未知")
+        detail = str(item.get("detail") or "").strip()
+        tb = str(item.get("traceback") or "").strip()
+        if detail:
+            out.append(f"Rust失败详情：{feature}：{detail}")
+        if tb and tb != detail:
+            out.append(f"Rust失败堆栈：{feature}：{tb}")
+    return out
+
+
+def _error_detail_with_rust(exc: Exception) -> str:
+    """HTTP 错误里附带 Rust 最近细节，前端弹窗和历史记录都能看到。"""
+    detail = str(exc)
+    rust_lines = _rust_error_history_lines()
+    if rust_lines:
+        detail = detail + "\n" + "\n".join(rust_lines)
+    return detail
+
+
 @app.post("/api/_agent_debug_log")
 def api_agent_debug_log(body: dict[str, Any]):
     """调试埋点：前端 NDJSON 落盘（debug 会话 cb2ced）。"""
@@ -21063,7 +21117,7 @@ def _api_init_impl(req: InitReq, perf_col: Optional[dict[str, Any]] = None) -> d
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        raise HTTPException(status_code=400, detail=_error_detail_with_rust(e)) from e
 
 
 @app.get("/api/chip_kline_all")
@@ -21135,7 +21189,7 @@ def api_reconfig(req: ReconfigReq):
         payload["message"] = "配置更新成功，已按新逻辑重新计算并清除模拟持仓。"
         return payload
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        raise HTTPException(status_code=400, detail=_error_detail_with_rust(e)) from e
 
 
 @app.post("/api/step")
@@ -21174,7 +21228,7 @@ def api_step(req: StepReq):
             payload["message"] = f"步进成功（{done}/{step_n}）"
         return payload
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        raise HTTPException(status_code=400, detail=_error_detail_with_rust(e)) from e
 
 
 @app.post("/api/judge_bsp")
@@ -21189,7 +21243,7 @@ def api_judge_bsp(req: JudgeBspReq):
         payload["message"] = "买卖点判定完成"
         return payload
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        raise HTTPException(status_code=400, detail=_error_detail_with_rust(e)) from e
 
 
 @app.post("/api/buy")
@@ -21222,7 +21276,7 @@ def api_buy():
             payload["message"] = msg_buy(detail)
         return payload
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        raise HTTPException(status_code=400, detail=_error_detail_with_rust(e)) from e
 
 
 @app.post("/api/sell")
@@ -21251,7 +21305,7 @@ def api_sell():
         payload["message"] = msg_sell(detail)
         return payload
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        raise HTTPException(status_code=400, detail=_error_detail_with_rust(e)) from e
 
 
 @app.post("/api/short")
@@ -21284,7 +21338,7 @@ def api_short():
             payload["message"] = msg_short(detail)
         return payload
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        raise HTTPException(status_code=400, detail=_error_detail_with_rust(e)) from e
 
 
 @app.post("/api/cover")
@@ -21313,7 +21367,7 @@ def api_cover():
         payload["message"] = msg_cover(detail)
         return payload
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        raise HTTPException(status_code=400, detail=_error_detail_with_rust(e)) from e
 
 
 @app.post("/api/goto_step")
@@ -21378,7 +21432,7 @@ def api_goto_step(req: GotoStepReq):
         payload["message"] = f"已跳转到 step={APP_STATE.get_active_stepper().step_idx}"
         return payload
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        raise HTTPException(status_code=400, detail=_error_detail_with_rust(e)) from e
 
 
 def _indicator_backtest_http(req: IndicatorBacktestReq) -> dict[str, Any]:

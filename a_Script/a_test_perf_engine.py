@@ -26,8 +26,8 @@ class PerfEngineFallbackTest(unittest.TestCase):
         self.assertEqual(len(bars["time_ms"]), 2)
         self.assertLess(bars["time_ms"][0], bars["time_ms"][1])
 
-    def test_perf_engine_returns_payload_v2_chip_profile_and_cache_status(self):
-        engine = PerfEngine(cache_dir=self.tmp_dir, requested_mode="rust_auto")
+    def test_python_legacy_returns_payload_v2_chip_profile_and_cache_status(self):
+        engine = PerfEngine(cache_dir=self.tmp_dir, requested_mode="python_legacy")
         bars = [
             {"x": 0, "t": "2024/01/02 09:31", "o": 10, "h": 11, "l": 9, "c": 10, "v": 100},
             {
@@ -55,12 +55,26 @@ class PerfEngineFallbackTest(unittest.TestCase):
         status = engine.cache_status()
 
         self.assertEqual(session.payload_version, 2)
-        self.assertIn(session.engine_mode, ("rust", "python-fallback"))
+        self.assertEqual(session.engine_mode, "python-legacy")
         self.assertEqual(step_delta["append_kline"][0]["x"], 0)
         self.assertEqual(chip["profile_id"], f"{session.session_id}:1:0.1")
         self.assertGreater(chip["max_total"], 0)
         self.assertTrue(os.path.isdir(status["cache_dir"]))
         self.assertIn("rust_available", status)
+
+    def test_rust_auto_requires_rust_backend(self):
+        engine = PerfEngine(cache_dir=self.tmp_dir, requested_mode="rust_auto")
+        engine._rust = None
+
+        with self.assertRaisesRegex(RuntimeError, "会话加载计算调用rust失败"):
+            engine.load_session(
+                code="000001",
+                k_type="1min",
+                begin_date="2024-01-02",
+                end_date="2024-01-02",
+                bars=[{"x": 0, "t": "2024/01/02 09:31", "o": 10, "h": 11, "l": 9, "c": 10, "v": 100}],
+                chip_bars=None,
+            )
 
     def test_python_legacy_mode_still_forces_compatible_engine_mode(self):
         engine = PerfEngine(cache_dir=self.tmp_dir, requested_mode="python_legacy")
@@ -107,6 +121,10 @@ class PerfEngineFallbackTest(unittest.TestCase):
                     "max_total": 5.0,
                     "source": "rust",
                 }
+
+            def next_step_delta(self, session_id, from_step, to_step):
+                self.calls.append(("next_step_delta", session_id, from_step, to_step))
+                return {"from_step": from_step, "to_step": to_step, "append_kline": [], "tail_patch": None, "structure_dirty": False}
 
         engine = PerfEngine(cache_dir=self.tmp_dir, requested_mode="rust_auto")
         fake = FakeRust()

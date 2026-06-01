@@ -32,7 +32,7 @@ class InitReq(BaseModel):
     rollback_capture_max_bars: Optional[int] = None
     # 本地 record 持久化缓存已禁用：每次加载从 a_Data 重新计算。
     chan_record_enabled: bool = False
-    # 性能引擎：rust_auto=优先Rust，否则Python fallback；python_legacy=兼容旧路径
+    # 性能引擎：rust_auto=严格 Rust；python_legacy=兼容旧路径
     performance_engine_mode: str = "rust_auto"
     chip_bucket_step: Optional[float] = None
 
