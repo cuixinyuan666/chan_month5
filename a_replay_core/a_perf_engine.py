@@ -124,7 +124,7 @@ class PerfEngine:
 
     def __init__(self, cache_dir: Optional[str | Path] = None, requested_mode: str = "rust_auto") -> None:
         self.cache_dir = Path(cache_dir) if cache_dir is not None else _default_cache_dir()
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        # 性能会话只保留内存态，避免加载会话时生成历史缓存文件。
         self.requested_mode = str(requested_mode or "rust_auto")
         self._rust = _load_rust_backend()
         self._sessions: dict[str, dict[str, Any]] = {}
@@ -194,21 +194,6 @@ class PerfEngine:
             "chip_bars": chip_src,
         }
         self._sessions[session_id] = payload
-        if not cache_path.exists():
-            cache_path.write_text(
-                json.dumps(
-                    {
-                        "meta": meta,
-                        "bar_count": len(bar_src),
-                        "chip_bar_count": len(chip_src),
-                        "first_t": bar_src[0].get("t") if bar_src else "",
-                        "last_t": bar_src[-1].get("t") if bar_src else "",
-                    },
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                ),
-                encoding="utf-8",
-            )
         return PerfSession(
             session_id=session_id,
             payload_version=PAYLOAD_VERSION,
@@ -300,12 +285,6 @@ class PerfEngine:
             use_bars = list(chip_bars)
             cut = _safe_int(use_bars[-1].get("x"), len(use_bars) - 1) if use_bars else -1
         profile_id = f"{session_id}:{cut}:{step:g}"
-        profile_path = self.cache_dir / f"chip_{profile_id.replace(':', '_').replace('.', 'p')}.json"
-        if profile_path.exists():
-            try:
-                return json.loads(profile_path.read_text(encoding="utf-8"))
-            except Exception:
-                pass
 
         buckets_s: dict[int, float] = {}
         buckets_b: dict[int, float] = {}
@@ -348,10 +327,6 @@ class PerfEngine:
             "max_total": max(total) if total else 0.0,
             "source": "python-fallback",
         }
-        try:
-            profile_path.write_text(json.dumps(out, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-        except Exception:
-            pass
         return out
 
     @staticmethod
@@ -406,12 +381,11 @@ class PerfEngine:
         }
 
     def cache_status(self) -> dict[str, Any]:
-        files = list(self.cache_dir.glob("*.json")) if self.cache_dir.exists() else []
-        total_bytes = sum(p.stat().st_size for p in files if p.exists())
         return {
             "cache_dir": str(self.cache_dir),
-            "file_count": len(files),
-            "total_bytes": total_bytes,
+            "file_count": 0,
+            "total_bytes": 0,
+            "disabled": True,
             "rust_available": self.rust_available,
             "requested_mode": self.requested_mode,
             "engine_mode": self._engine_mode(),

@@ -1,5 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Persist and reuse ReplayChan stepper state (a_replay_record/)."""
+"""ReplayChan record cache hooks.
+
+本工程当前禁用持久化 record：加载会话每次从 a_Data 重新计算，避免产生 pkl。
+"""
 
 from __future__ import annotations
 
@@ -22,7 +25,7 @@ RECORD_DIR_NAME = "a_replay_record"
 # ?? Chan.chan_dump_pickle ???????????? pre/next ??????????????????????
 _PICKLE_RECURSION_LIMIT = 0x100000
 # ???????? CHAN_RECORD=0 ???????
-_ENV_DISABLE = os.environ.get("CHAN_RECORD", "1").strip().lower() in ("0", "false", "no", "off")
+_ENV_DISABLE = True
 
 _record_trace_lock = threading.Lock()
 _record_trace_pending: list[str] = []
@@ -91,11 +94,8 @@ def record_root() -> str:
 
 
 def is_chan_record_enabled(flag: Optional[bool] = None) -> bool:
-    if _ENV_DISABLE:
-        return False
-    if flag is None:
-        return True
-    return bool(flag)
+    # 硬禁用：不读、不写 a_replay_record/*.pkl。
+    return False
 
 
 def _stable_json(obj: Any) -> str:
@@ -647,61 +647,8 @@ def _save_record_sync(
     begin_date: str,
     end_date: Optional[str],
 ) -> None:
-    master = stepper._replay_klus_master or []
-    if not master:
-        return
-    covered_pkl = _find_covering_record_meta(
-        fingerprint=fingerprint,
-        code=code,
-        k_type_key=k_type_key,
-        autype_key=autype_key,
-        begin_date=begin_date,
-        end_date=end_date,
-    )
-    if covered_pkl:
-        msg = f"缠论record：命中区间覆盖，复用旧文件（{os.path.basename(covered_pkl)}）"
-        print(f"[ChanRecord] skip save covered by {covered_pkl}")
-        push_record_trace(msg)
-        return
-    folder, base = _record_paths(fingerprint, code, k_type_key, autype_key, begin_date, end_date)
-    pkl_path = base + ".pkl"
-    meta_path = base + ".meta.json"
-    first_t = _klu_bar_key(master[0])[0]
-    last_t = _klu_bar_key(master[-1])[0]
-    meta = {
-        "version": RECORD_VERSION,
-        "fingerprint": fingerprint,
-        "code": code,
-        "k_type": k_type_key,
-        "autype": autype_key,
-        "begin_date": begin_date,
-        "end_date": end_date,
-        "bar_count": len(master),
-        "first_bar_time": first_t,
-        "last_bar_time": last_t,
-        "saved_at": datetime.now().isoformat(timespec="seconds"),
-        "data_feed_mode": getattr(stepper, "data_feed_mode", "step"),
-        "step_idx": int(getattr(stepper, "step_idx", -1)),
-    }
-    chan = getattr(stepper, "chan", None)
-    try:
-        if chan is not None:
-            _chan_break_pickle_links(chan)
-
-        def _capture_and_dump() -> None:
-            payload = capture_chan_record_payload(stepper, meta=meta)
-            os.makedirs(folder, exist_ok=True)
-            tmp_pkl = pkl_path + ".tmp"
-            with open(tmp_pkl, "wb") as f:
-                pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
-            os.replace(tmp_pkl, pkl_path)
-            _write_meta(meta_path, meta)
-
-        _with_pickle_recursion(_capture_and_dump)
-        print(f"[ChanRecord] saved {pkl_path} bars={len(master)}")
-    finally:
-        if chan is not None and hasattr(chan, "chan_pickle_restore"):
-            chan.chan_pickle_restore()
+    # record 持久化已禁用，不生成 pkl/meta 文件。
+    return
 
 
 def warmup_stepper_to_end(stepper: Any) -> int:

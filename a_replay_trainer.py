@@ -204,21 +204,9 @@ CONFIG_DATA_SRC_PRIORITY: list = []
 CONFIG_OHLC_SRC: Any = None  # 开高低收数据源，默认第一个可用
 CONFIG_VOL_SRC: Any = None   # 成交量数据源，默认第一个可用
 
-# 默认优先级显示名（与前端 systemConfig.dataSourcePriority 一致）
+# 默认只走本地 a_Data 离线包；加载会话不再读取历史缓存或联网兜底。
 DEFAULT_DATA_SOURCE_PRIORITY_NAMES: list[str] = [
-    "AKShare",
-    "AKShare-腾讯历史",
-    "Ashare",
-    "AData",
-    "pytdx",
-    "BaoStock",
     "离线数据",
-    "Tushare",
-    "新浪财经",
-    "腾讯财经",
-    "雅虎财经",
-    "东方财富",
-    "GitHub-CSV",
 ]
 
 # 显示名 -> (列表展示名, data_src 键)
@@ -3979,6 +3967,7 @@ class ChanStepper:
         """按优先级链选择数据源；K 线与筹码共用排序逻辑，链独立故可选用不同实际源。"""
         logs: list[str] = []
         errors: list[str] = []
+        _check_init_cancelled()
         if cache_context and kline_session_cache_enabled():
             autype_key = str(cache_context.get("autype_key", "") or getattr(autype, "name", str(autype))).lower()
             k_type_key = str(cache_context.get("k_type_key", "") or k_type_to_api_key(self.k_type))
@@ -4011,12 +4000,14 @@ class ChanStepper:
                 )
         data_chain = chain_override or (DATA_SOURCE_CHAIN_KLINE if use_for == "kline" else DATA_SOURCE_CHAIN_CHIP)
         for idx, (label, data_src) in enumerate(data_chain):
+            _check_init_cancelled()
             print(f"[DataSource] try {label} for {self.code} {begin_date} -> {end_date or 'latest'}")
             try:
                 with init_perf_stage(f"fetch_{use_for}_{label}"):
                     replay_klus_master, kline_all, stock_name = self._fetch_from_single_source(
                         data_src, begin_date, end_date, autype, chan_cfg_dict, use_for=use_for
                     )
+                _check_init_cancelled()
                 if cache_context and kline_session_cache_enabled():
                     autype_key = str(cache_context.get("autype_key", "") or getattr(autype, "name", str(autype))).lower()
                     k_type_key = str(cache_context.get("k_type_key", "") or k_type_to_api_key(self.k_type))
@@ -4105,9 +4096,11 @@ class ChanStepper:
     ) -> None:
         init_t0_ms = int(time.time() * 1000)
         stage_t0_ms = init_t0_ms
+        _check_init_cancelled()
         # 解析并设置周期类型
         self.k_type = parse_k_type(k_type)
-        self._chan_record_enabled = bool(chan_record_enabled)
+        # 本地 record 持久化缓存已禁用：每次加载都从 a_Data 重新计算。
+        self._chan_record_enabled = False
         feed_mode = normalize_data_feed_mode(data_feed_mode)
         qty_alloc = normalize_data_form_quantity_alloc(data_form_quantity_alloc)
         off_custom = normalize_offline_data_custom(offline_data_custom)
@@ -4206,17 +4199,10 @@ class ChanStepper:
         cfg = CChanConfig(chan_cfg_dict)
         self.code = normalize_code(code)
         self.stock_name = None
-        chain_override: Optional[list[tuple[str, Any]]] = None
-        if data_source_priority:
-            chain_override = chains_from_priority([str(x) for x in data_source_priority])
-            if not chain_override:
-                chain_override = None
-        if confirm_offline and offline_tick_files_exist_for_range(self.code, begin_date, end_date):
-            base_chain = list(chain_override or DATA_SOURCE_CHAIN_KLINE or chains_from_priority(DEFAULT_DATA_SOURCE_PRIORITY_NAMES))
-            chain_override = [("离线数据", OFFLINE_INLINE_SRC)] + [
-                pair for pair in base_chain if pair[1] != OFFLINE_INLINE_SRC
-            ]
-        prio_fp = (tuple(data_source_priority) if data_source_priority else (), bool(confirm_offline))
+        # 全量禁用历史缓存后，加载会话固定从 a_Data 离线分笔取数。
+        chain_override: Optional[list[tuple[str, Any]]] = [("离线数据", OFFLINE_INLINE_SRC)]
+        confirm_offline = True
+        prio_fp = (("离线数据",), True)
         session_key = (self.code, begin_date, end_date, autype, self.k_type, prio_fp, off_custom)
         cache_hit = session_key == self._data_session_key and self._replay_klus_master is not None
         autype_key = getattr(autype, "name", str(autype)).lower()
@@ -4241,6 +4227,7 @@ class ChanStepper:
                     offline_confirm_suppressed=confirm_offline,
                     cache_context=cache_context,
                 )
+            _check_init_cancelled()
             try:
                 with init_perf_stage("data_chip"):
                     chip_sel = self._select_data_source_with_fallback(
@@ -4253,6 +4240,7 @@ class ChanStepper:
                         offline_confirm_suppressed=confirm_offline,
                         cache_context=cache_context,
                     )
+                _check_init_cancelled()
             except OfflineDataConfirmRequired:
                 raise
             except RuntimeError as exc:
@@ -4412,6 +4400,7 @@ class ChanStepper:
         # record 快照里的 kline_all 可能是旧会话区间；保留 init 拉到的更宽底座
         init_kline_all_for_chip = list(self.kline_all) if self.kline_all else []
         with init_perf_stage("chan_record"):
+            _check_init_cancelled()
             self._chan_record_apply = try_apply_chan_record(
                 self,
                 enabled=self._chan_record_enabled,
@@ -4429,6 +4418,7 @@ class ChanStepper:
                 data_src=self.data_src_used or DATA_SRC.AKSHARE,
                 allow_end_snapshot_restore=False,
             )
+        _check_init_cancelled()
         self.perf_session_id = None
         self.perf_engine_mode = "python-fallback"
         try:
@@ -5959,8 +5949,7 @@ class AppState:
         )
         self._clear_rollback_cache()
 
-        # 必须与首次 /api/init 传入的 data_source_priority、confirm_offline 一致，
-        # 否则 session_key 中 prio_fp 变化会导致误判缓存未命中，重新拉行情并在 BaoStock 等源上失败。
+        # 重建也固定走 a_Data；不复用历史缓存。
         self.stepper.init(
             params["code"],
             params["begin_date"],
@@ -5975,13 +5964,13 @@ class AppState:
             data_form_quantity_alloc=params.get("data_form_quantity_alloc", "front"),
             data_feed_mode=params.get("data_feed_mode", "step"),
             offline_data_custom=params.get("offline_data_custom", "native"),
-            chan_record_enabled=bool(params.get("chan_record_enabled", False)),
+            chan_record_enabled=False,
         )
         cm = normalize_replay_chart_mode(params.get("chart_mode", "single"))
         off_custom = normalize_offline_data_custom(params.get("offline_data_custom", "native"))
         self.multi_steppers = []
         qty_alloc = params.get("data_form_quantity_alloc", "front")
-        rec_en = bool(params.get("chan_record_enabled", False))
+        rec_en = False
         if cm == "dual":
             self.chart_mode = "dual"
             self.stepper2 = ChanStepper()
@@ -7640,7 +7629,7 @@ HTML = r"""
     /* 消息历史弹窗 */
     .msgHistoryModal {
       position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
-      background: rgba(2, 6, 23, 0.6); z-index: 10006;
+      background: rgba(2, 6, 23, 0.6); z-index: 21000;
     }
     .msgHistoryModal.show { display: flex; }
     .msgHistoryModal .panel {
@@ -7649,7 +7638,9 @@ HTML = r"""
     }
     .msgHistoryList {
       flex: 1; overflow-y: auto; border: 1px solid var(--border); margin: 10px 0; padding: 10px;
-      font-family: Consolas, monospace; font-size: 13px;
+      font-family: Consolas, "Microsoft YaHei UI", monospace; font-size: 13px;
+      white-space: pre-wrap;
+      user-select: text;
     }
     .msgHistoryItem { border-bottom: 1px dashed var(--grid); padding: 6px 0; }
     .msgHistoryItem .time { color: #2563eb; margin-right: 10px; }
@@ -7716,6 +7707,7 @@ HTML = r"""
       background: rgba(15, 23, 42, 0.36);
       backdrop-filter: blur(1px);
       z-index: 20000;
+      pointer-events: none;
     }
     .globalLoading.show { display: flex; }
     .globalLoading .panel {
@@ -7734,6 +7726,7 @@ HTML = r"""
       font: 14px Consolas, monospace;
       position: relative;
       z-index: 20002;
+      pointer-events: auto;
     }
     .globalLoadingBody {
       display: flex;
@@ -7801,6 +7794,8 @@ HTML = r"""
       color: var(--legendText);
       font-size: 12px;
       line-height: 1.55;
+      white-space: pre-wrap;
+      user-select: text;
     }
     .loadingHistorySide .time {
       color: #2563eb;
@@ -8647,6 +8642,7 @@ HTML = r"""
           </div>
           <div id="msgHistoryList" class="msgHistoryList"></div>
           <div class="settingsActions">
+            <button id="btnMsgHistoryCopy">复制记录</button>
             <button id="btnMsgHistoryClear">清空记录</button>
             <button id="btnMsgHistoryOk">确 认</button>
           </div>
@@ -8727,6 +8723,8 @@ HTML = r"""
             <div id="globalLoadingHistory" class="loadingHistorySide"></div>
           </div>
           <div id="globalLoadingActions" class="loadingActions">
+            <button id="btnLoadingHistory" type="button">查看历史记录</button>
+            <button id="btnCopyLoadingHistory" type="button">复制进度</button>
             <button id="btnCancelInitLoad" type="button">终止加载</button>
           </div>
         </div>
@@ -10046,8 +10044,8 @@ const DEFAULT_SYSTEM_CONFIG = {
     acc[action.id] = action.defaults.slice();
     return acc;
   }, {}),
-  // K 线与筹码共用一套优先级顺序（服务端两套链独立按序回退）
-  dataSourcePriority: ["AKShare", "Ashare", "AData", "pytdx", "BaoStock", "离线数据", "Tushare", "新浪财经", "腾讯财经", "雅虎财经", "东方财富"],
+  // 固定使用 a_Data 离线分笔，加载时重新计算，不走历史缓存。
+  dataSourcePriority: ["离线数据"],
   // 回退缓存（以内存换速度）
   rollbackCacheDepth: 96,
   rollbackFullSnapshotInterval: 8,
@@ -10061,6 +10059,8 @@ let systemConfig = ensureObject(
   safeJsonParse(storageGet("chan_system_config"), JSON.parse(JSON.stringify(DEFAULT_SYSTEM_CONFIG))),
   JSON.parse(JSON.stringify(DEFAULT_SYSTEM_CONFIG))
 );
+systemConfig.dataSourcePriority = ["离线数据"];
+systemConfig.chanRecordEnabled = false;
 
 let compiledShortcuts = [];
 let shortcutSequenceBuffer = [];
@@ -10073,6 +10073,10 @@ function escapeHtmlAttr(text) {
     .replace(/"/g, "&quot;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
+}
+
+function escapeHtml(text) {
+  return escapeHtmlAttr(text).replace(/'/g, "&#39;");
 }
 
 function normalizeShortcutKeyToken(raw) {
@@ -12947,21 +12951,20 @@ function renderSystemSettingsForm() {
   const recSec = document.createElement("div");
   recSec.className = "settingsSection";
   recSec.style.background = "rgba(99, 102, 241, 0.08)";
-  recSec.innerHTML = `<div class="settingsSectionTitle" style="color:#6366f1">缠论计算 record</div>`;
+  recSec.innerHTML = `<div class="settingsSectionTitle" style="color:#6366f1">历史缓存</div>`;
   const recGrid = document.createElement("div");
   recGrid.className = "settingsGrid";
   const recItem = document.createElement("div");
   recItem.className = "settingsItem";
   recItem.style.gridColumn = "1 / -1";
   const recTip =
-    "同标的+同缠论配置下，首次全量计算后写入工程目录 a_replay_record/；再次加载时按 K 线时间重叠复用（统一喂入可整包恢复）。\n" +
-    "配置指纹含：代码、周期、复权、缠论参数、数据形态/喂入、离线解析、数据源优先级等；不含日期区间（日期写在文件名与 meta）。\n" +
-    "示例：曾算过 2022/10/18–11/30，再开 10/20–12/30 可复用重叠段再增量补算。";
-  recItem.innerHTML = `<label><input type="checkbox" data-sys-key="chanRecordEnabled" ${systemConfig.chanRecordEnabled === true ? "checked" : ""}/> 启用本地 record 缓存</label> <span class="tip-icon" data-tip="${escapeHtmlAttr(recTip)}">!</span>`;
+    "本分支已关闭 K线会话磁盘缓存与缠论 record 缓存。\n" +
+    "加载会话时固定从 a_Data 离线分笔重新取数、重新计算，不再读取或生成 pkl。";
+  recItem.innerHTML = `<label>已禁用本地历史缓存</label> <span class="tip-icon" data-tip="${escapeHtmlAttr(recTip)}">!</span>`;
   const recNote = document.createElement("div");
   recNote.className = "muted";
   recNote.style.fontSize = "12px";
-  recNote.textContent = "默认关闭：首次加载偏慢，二次同配置可显著加速。K线拉取另存 a_replay_cache/kline_sessions/（环境变量 KLINE_SESSION_CACHE=0 关闭）。CHAN_RECORD=0 全局禁用 record。";
+  recNote.textContent = "当前加载策略：每次从 a_Data 重新计算；不会写入 a_replay_cache/kline_sessions 或 a_replay_record 的 pkl 文件。";
   recItem.appendChild(recNote);
   recGrid.appendChild(recItem);
   recSec.appendChild(recGrid);
@@ -13231,6 +13234,8 @@ function saveSystemSettingsFromForm() {
             );
         }
     }
+    systemConfig.chanRecordEnabled = false;
+    systemConfig.dataSourcePriority = ["离线数据"];
 
     const inputs = $("systemSettingsContent").querySelectorAll("input[data-action-id]");
     const nextShortcuts = {};
@@ -15120,6 +15125,37 @@ function appendMsgHistory(text) {
   storageSet("chan_msg_history", JSON.stringify(msgHistory));
   const loading = $("globalLoading");
   if (loading && loading.classList.contains("show")) renderGlobalLoadingHistory();
+  const modal = $("msgHistoryModal");
+  if (modal && modal.classList.contains("show")) renderMsgHistory();
+}
+
+function msgHistoryText(rows = null) {
+  const src = Array.isArray(rows) ? rows : (Array.isArray(msgHistory) ? msgHistory : []);
+  return src.map((m) => `[${String(m.time || "--")}] ${String(m.text || "")}`).join("\n");
+}
+
+async function copyTextToClipboard(text, okMsg = "内容已复制") {
+  const t = String(text || "");
+  if (!t.trim()) {
+    setMsg("没有可复制的内容");
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(t);
+    setMsg(okMsg);
+  } catch (_) {
+    const ta = document.createElement("textarea");
+    ta.value = t;
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      document.execCommand("copy");
+      setMsg(okMsg);
+    } catch (e2) {
+      setMsg("复制失败：" + (e2 && e2.message ? e2.message : String(e2)));
+    }
+    document.body.removeChild(ta);
+  }
 }
 
 function setMsg(text, quiet = false) {
@@ -15381,21 +15417,28 @@ function showRhythmHitNotices(payload) {
   });
 }
 
-function showMsgHistory() {
+function renderMsgHistory() {
   const list = $("msgHistoryList");
+  if (!list) return;
   list.innerHTML = "";
-  msgHistory.slice().reverse().forEach(m => {
+  (Array.isArray(msgHistory) ? msgHistory : []).forEach(m => {
     const item = document.createElement("div");
     item.className = "msgHistoryItem";
-    item.innerHTML = `<span class="time">[${m.time}]</span><span class="text">${m.text}</span>`;
+    item.innerHTML = `<span class="time">[${escapeHtml(String(m.time || "--"))}]</span><span class="text">${escapeHtml(String(m.text || ""))}</span>`;
     list.appendChild(item);
   });
+  list.scrollTop = list.scrollHeight;
+}
+
+function showMsgHistory() {
+  renderMsgHistory();
   $("msgHistoryModal").classList.add("show");
 }
 
 $("btnMsgHistory").onclick = showMsgHistory;
 $("btnMsgHistoryClose").onclick = () => $("msgHistoryModal").classList.remove("show");
 $("btnMsgHistoryOk").onclick = () => $("msgHistoryModal").classList.remove("show");
+if ($("btnMsgHistoryCopy")) $("btnMsgHistoryCopy").onclick = () => copyTextToClipboard(msgHistoryText(), "历史记录已复制");
 $("btnMsgHistoryClear").onclick = () => {
   if (confirmAndLog("确定要清空所有消息历史记录吗？")) {
     msgHistory = [];
@@ -19179,6 +19222,8 @@ $("btnInit").onclick = async () => {
       k_type_2: $("kType2") ? $("kType2").value : $("kType").value,
       k_types_multi: (String($("chartMode") ? $("chartMode").value : "single") === "multi") ? collectKTypesMultiSelected() : undefined,
       active_chart_id: (sessionConfig && sessionConfig.activeChartId) ? sessionConfig.activeChartId : "chart1",
+      confirm_offline: true,
+      data_source_priority: ["离线数据"],
       data_form_mode: normalizeDataFormMode(dataFormConfig.mode),
       data_form_quantity: clampDataFormQuantity(dataFormConfig.quantity, getRawKlineCount() || 1),
       data_form_quantity_alloc: normalizeDataFormQuantityAlloc(dataFormConfig.quantityAlloc),
@@ -19188,7 +19233,7 @@ $("btnInit").onclick = async () => {
       rollback_cache_depth: Number(systemConfig.rollbackCacheDepth || DEFAULT_SYSTEM_CONFIG.rollbackCacheDepth),
       rollback_full_snapshot_interval: Number(systemConfig.rollbackFullSnapshotInterval || DEFAULT_SYSTEM_CONFIG.rollbackFullSnapshotInterval),
       rollback_capture_max_bars: Number(systemConfig.rollbackCaptureMaxBars || DEFAULT_SYSTEM_CONFIG.rollbackCaptureMaxBars),
-      chan_record_enabled: systemConfig.chanRecordEnabled === true,
+      chan_record_enabled: false,
       performance_engine_mode: String(systemConfig.performanceEngineMode || DEFAULT_SYSTEM_CONFIG.performanceEngineMode || "rust_auto"),
       chip_bucket_step: Number(chartConfig.chip && chartConfig.chip.bucketStep ? chartConfig.chip.bucketStep : 0.1),
       ...extra,
@@ -19270,7 +19315,7 @@ $("btnInit").onclick = async () => {
       const stageLabel = {
         data_kline: "加载K线数据",
         data_chip: "加载筹码底座",
-        chan_record: "读取缠论缓存",
+        chan_record: "跳过本地缓存",
         perf_engine_load: "加载性能引擎",
         bsp_snapshot: "生成买卖点快照",
         initial_step: "初始化首根K线",
@@ -19279,7 +19324,18 @@ $("btnInit").onclick = async () => {
         chip_refresh: "刷新筹码底座",
         chip_kline_all_api: "懒加载筹码底座",
       };
-      const top = payload.init_perf.rank.slice(0, 4).map((r) => `${stageLabel[r.stage] || r.stage}:${fmtCost(r.ms)}`).join("；");
+      const initStageName = (stage) => {
+        const raw = String(stage || "");
+        if (stageLabel[raw]) return stageLabel[raw];
+        if (raw.startsWith("fetch_")) {
+          const parts = raw.split("_");
+          const useFor = parts[1] === "chip" ? "筹码" : (parts[1] === "kline" ? "K线" : "数据");
+          return `读取${useFor}数据：${parts.slice(2).join("_") || "数据源"}`;
+        }
+        if (raw.startsWith("disk_cache_")) return "跳过历史磁盘缓存";
+        return raw || "处理中";
+      };
+      const top = payload.init_perf.rank.slice(0, 4).map((r) => `${initStageName(r.stage)}:${fmtCost(r.ms)}`).join("；");
       appendMsgHistory(`加载耗时 ${fmtCost(payload.init_perf.total_ms)}（${top}）`);
     }
     const srcHistLine = buildSessionSourceHistoryLine(payload);
@@ -19313,6 +19369,17 @@ if ($("btnCancelInitLoad")) {
     hideGlobalLoading();
   };
   markUiBound("btnCancelInitLoad");
+}
+if ($("btnLoadingHistory")) {
+  $("btnLoadingHistory").onclick = () => showMsgHistory();
+  markUiBound("btnLoadingHistory");
+}
+if ($("btnCopyLoadingHistory")) {
+  $("btnCopyLoadingHistory").onclick = () => {
+    const rows = Array.isArray(msgHistory) ? msgHistory.slice(-120) : [];
+    void copyTextToClipboard(msgHistoryText(rows), "加载进度已复制");
+  };
+  markUiBound("btnCopyLoadingHistory");
 }
 
 $("btnStepPrev").onclick = async () => {
@@ -20301,13 +20368,14 @@ _INIT_STATUS: dict[str, Any] = {
     "stage_label": "",
     "progress_pct": 0,
     "started_at": 0.0,
+    "stage_started_at": 0.0,
 }
 
 _INIT_STAGE_LABELS: dict[str, str] = {
     "data_kline": "加载K线数据",
     "data_chip": "加载筹码底座",
     "chip_refresh": "刷新筹码底座",
-    "chan_record": "读取缠论缓存",
+    "chan_record": "跳过本地缓存",
     "chan_bootstrap": "计算缠论结构",
     "bsp_snapshot": "生成买卖点快照",
     "presentation_end": "一次性呈现到末根",
@@ -20333,9 +20401,12 @@ def _init_stage_label(name: str) -> str:
     if raw in _INIT_STAGE_LABELS:
         return _INIT_STAGE_LABELS[raw]
     if raw.startswith("fetch_"):
-        return f"拉取数据（{raw.replace('fetch_', '')}）"
+        parts = raw.split("_", 2)
+        use_for = {"kline": "K线", "chip": "筹码"}.get(parts[1] if len(parts) > 1 else "", "数据")
+        src = parts[2] if len(parts) > 2 else "数据源"
+        return f"读取{use_for}数据：{src}"
     if raw.startswith("disk_cache_"):
-        return f"磁盘缓存（{raw.replace('disk_cache_', '')}）"
+        return "跳过历史磁盘缓存"
     return raw or "处理中"
 
 
@@ -20349,9 +20420,10 @@ def _init_status_begin() -> None:
                 "stage_label": "准备加载",
                 "progress_pct": 1,
                 "started_at": time.time(),
+                "stage_started_at": time.time(),
             }
         )
-    push_record_trace("开始加载会话…")
+    push_record_trace("开始加载会话：固定使用 a_Data 重新计算，不读取历史缓存")
 
 
 def _init_status_end() -> None:
@@ -20368,9 +20440,15 @@ def _init_status_end() -> None:
 
 
 def _init_status_on_stage(event: str, stage: str) -> None:
+    label = _init_stage_label(stage)
+    if event == "exit":
+        with _INIT_STATUS_LOCK:
+            stage_started = float(_INIT_STATUS.get("stage_started_at") or time.time())
+        cost = max(0.0, time.time() - stage_started)
+        push_record_trace(f"完成：{label}（耗时 {cost:.1f} 秒）")
+        return
     if event != "enter":
         return
-    label = _init_stage_label(stage)
     pct = int(_INIT_STAGE_PROGRESS.get(stage, 0))
     if pct <= 0:
         pct = 3
@@ -20381,9 +20459,10 @@ def _init_status_on_stage(event: str, stage: str) -> None:
                 "stage": stage,
                 "stage_label": label,
                 "progress_pct": max(cur, pct),
+                "stage_started_at": time.time(),
             }
         )
-    push_record_trace(f"进行中：{label}")
+    push_record_trace(f"进行中：{label}（{max(cur, pct)}%）")
 
 
 def _init_status_set_subprogress(pct: int, label: str, *, push_trace: bool = False) -> None:
@@ -20478,7 +20557,7 @@ def _init_perf_history_lines(perf: dict[str, Any]) -> list[str]:
     stage_name_map = {
         "data_kline": "加载K线数据",
         "data_chip": "加载筹码底座",
-        "chan_record": "读取缠论缓存",
+        "chan_record": "跳过本地缓存",
         "perf_engine_load": "加载性能引擎",
         "bsp_snapshot": "生成买卖点快照",
         "initial_step": "初始化首根K线",
@@ -20497,7 +20576,7 @@ def _init_perf_history_lines(perf: dict[str, Any]) -> list[str]:
     out = [f"加载节点总耗时：{fmt_cost(float(perf.get('total_ms') or 0.0))}"]
     for row in perf.get("rank") or []:
         raw_stage = str(row.get("stage", ""))
-        stage = stage_name_map.get(raw_stage, raw_stage)
+        stage = stage_name_map.get(raw_stage, _init_stage_label(raw_stage))
         ms = float(row.get("ms") or 0.0)
         pct = float(row.get("pct") or 0.0)
         if stage:
@@ -20571,8 +20650,8 @@ def _api_init_impl(req: InitReq, perf_col: Optional[dict[str, Any]] = None) -> d
                     autype,
                     chan_config=req.chan_config,
                     k_type=driver_k,
-                    confirm_offline=bool(req.confirm_offline),
-                    data_source_priority=req.data_source_priority,
+                    confirm_offline=True,
+                    data_source_priority=["离线数据"],
                     data_form_mode=req.data_form_mode,
                     data_form_quantity=req.data_form_quantity,
                     data_form_quantity_alloc=getattr(req, "data_form_quantity_alloc", "front"),
@@ -20595,8 +20674,8 @@ def _api_init_impl(req: InitReq, perf_col: Optional[dict[str, Any]] = None) -> d
                         autype,
                         chan_config=req.chan_config,
                         k_type=pk,
-                        confirm_offline=bool(req.confirm_offline),
-                        data_source_priority=req.data_source_priority,
+                        confirm_offline=True,
+                        data_source_priority=["离线数据"],
                         data_form_mode=req.data_form_mode,
                         data_form_quantity=req.data_form_quantity,
                         data_form_quantity_alloc=getattr(req, "data_form_quantity_alloc", "front"),
@@ -20613,8 +20692,8 @@ def _api_init_impl(req: InitReq, perf_col: Optional[dict[str, Any]] = None) -> d
                     autype,
                     chan_config=req.chan_config,
                     k_type=req.k_type,
-                    confirm_offline=bool(req.confirm_offline),
-                    data_source_priority=req.data_source_priority,
+                    confirm_offline=True,
+                    data_source_priority=["离线数据"],
                     data_form_mode=req.data_form_mode,
                     data_form_quantity=req.data_form_quantity,
                     data_form_quantity_alloc=getattr(req, "data_form_quantity_alloc", "front"),
@@ -20637,8 +20716,8 @@ def _api_init_impl(req: InitReq, perf_col: Optional[dict[str, Any]] = None) -> d
                         autype,
                         chan_config=req.chan_config,
                         k_type=k_type_2,
-                        confirm_offline=bool(req.confirm_offline),
-                        data_source_priority=req.data_source_priority,
+                        confirm_offline=True,
+                        data_source_priority=["离线数据"],
                         data_form_mode=req.data_form_mode,
                         data_form_quantity=req.data_form_quantity,
                         data_form_quantity_alloc=getattr(req, "data_form_quantity_alloc", "front"),
@@ -20672,7 +20751,7 @@ def _api_init_impl(req: InitReq, perf_col: Optional[dict[str, Any]] = None) -> d
             "begin_date": req.begin_date,
             "end_date": req.end_date,
             "autype": autype,
-            "chan_record_enabled": bool(getattr(req, "chan_record_enabled", False)),
+            "chan_record_enabled": False,
             "initial_cash": req.initial_cash,
             "chan_config": req.chan_config,
             "k_type": k_type_to_api_key(APP_STATE.stepper.k_type),
@@ -20686,8 +20765,8 @@ def _api_init_impl(req: InitReq, perf_col: Optional[dict[str, Any]] = None) -> d
             ),
             "active_chart_id": APP_STATE.active_chart_id,
             # 与 ChanStepper.init 的 session_key 一致，供 reconfig/back_n 重建时命中 K 线缓存、避免重复联网
-            "confirm_offline": bool(req.confirm_offline),
-            "data_source_priority": req.data_source_priority,
+            "confirm_offline": True,
+            "data_source_priority": ["离线数据"],
             "data_form_mode": normalize_data_form_mode(req.data_form_mode),
             "data_form_quantity": req.data_form_quantity,
             "data_form_quantity_alloc": normalize_data_form_quantity_alloc(
@@ -20751,14 +20830,6 @@ def _api_init_impl(req: InitReq, perf_col: Optional[dict[str, Any]] = None) -> d
         if trace_extra:
             existing = list(payload.get("record_trace") or [])
             payload["record_trace"] = existing + trace_extra
-        has_trace = bool(payload.get("record_trace"))
-        if rec_apply and getattr(rec_apply, "applied", False) and getattr(rec_apply, "message", ""):
-            if not has_trace:
-                payload["message"] += f"（缠论 record：{rec_apply.message}）"
-        elif getattr(APP_STATE.stepper, "_chan_record_enabled", False) and not (
-            rec_apply and getattr(rec_apply, "applied", False)
-        ):
-            payload["message"] += "（缠论 record：未命中，后台将异步保存本次全量计算）"
         if init_perf_enabled() and perf_col is not None:
             init_perf_payload = init_perf_report(
                 {
