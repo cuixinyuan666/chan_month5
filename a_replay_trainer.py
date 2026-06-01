@@ -18944,8 +18944,15 @@ async function api(path, body, method = "POST", extraOptions = null) {
   const res = await fetch(path, options);
   const data = await res.json();
   if (!res.ok) {
+    const rawMessage = typeof data.detail === "string" ? data.detail : (data.detail && data.detail.reason_detail) || JSON.stringify(data.detail || data);
+    if (String(rawMessage || "").includes("调用rust失败")) {
+      try {
+        const stRes = await fetch("/api/perf_cache_status", { method: "GET" });
+        if (stRes.ok) appendRustHistoryFromPayload({ cache_info: await stRes.json() });
+      } catch (_) {}
+    }
     const err = new Error(
-      typeof data.detail === "string" ? data.detail : (data.detail && data.detail.reason_detail) || JSON.stringify(data.detail || data)
+      rawMessage
     );
     if (data.detail && typeof data.detail === "object" && data.detail.type === "offline_confirm") {
       err.offlineConfirm = data.detail;
@@ -20623,6 +20630,7 @@ _INIT_STAGE_LABELS: dict[str, str] = {
     "data_chip": "加载筹码底座",
     "chip_refresh": "刷新筹码底座",
     "chan_record": "跳过本地缓存",
+    "perf_engine_load": "加载性能引擎",
     "chan_bootstrap": "计算缠论结构",
     "bsp_snapshot": "生成买卖点快照",
     "presentation_end": "一次性呈现到末根",
@@ -20635,6 +20643,7 @@ _INIT_STAGE_PROGRESS: dict[str, int] = {
     "data_chip": 18,
     "chip_refresh": 22,
     "chan_record": 32,
+    "perf_engine_load": 38,
     "chan_bootstrap": 52,
     "bsp_snapshot": 68,
     "presentation_end": 72,
@@ -20836,10 +20845,15 @@ def _rust_error_history_lines() -> list[str]:
     status = APP_PERF_ENGINE.cache_status()
     rows = status.get("last_rust_errors") or []
     out: list[str] = []
+    seen: set[tuple[str, str, str]] = set()
     for item in rows[-5:]:
         feature = str(item.get("feature") or "未知")
         detail = str(item.get("detail") or "").strip()
         tb = str(item.get("traceback") or "").strip()
+        key = (feature, detail, tb)
+        if key in seen:
+            continue
+        seen.add(key)
         if detail:
             out.append(f"Rust失败详情：{feature}：{detail}")
         if tb and tb != detail:
@@ -20849,11 +20863,7 @@ def _rust_error_history_lines() -> list[str]:
 
 def _error_detail_with_rust(exc: Exception) -> str:
     """HTTP 错误里附带 Rust 最近细节，前端弹窗和历史记录都能看到。"""
-    detail = str(exc)
-    rust_lines = _rust_error_history_lines()
-    if rust_lines:
-        detail = detail + "\n" + "\n".join(rust_lines)
-    return detail
+    return str(exc)
 
 
 @app.post("/api/_agent_debug_log")

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.machinery
+import importlib.util
 import json
 import math
 import shutil
@@ -23,7 +25,28 @@ def _load_rust_backend():
     try:
         return __import__(RUST_MODULE_NAME)
     except Exception:
-        return None
+        pass
+    root = Path(__file__).resolve().parents[1]
+    candidates = [
+        root / "a_rust_core" / "target" / "release" / f"{RUST_MODULE_NAME}.pyd",
+        root / "a_rust_core" / "target" / "debug" / f"{RUST_MODULE_NAME}.pyd",
+        root / "a_rust_core" / "target" / "release" / f"{RUST_MODULE_NAME}.dll",
+        root / "a_rust_core" / "target" / "debug" / f"{RUST_MODULE_NAME}.dll",
+    ]
+    for path in candidates:
+        if not path.exists():
+            continue
+        try:
+            loader = importlib.machinery.ExtensionFileLoader(RUST_MODULE_NAME, str(path))
+            spec = importlib.util.spec_from_file_location(RUST_MODULE_NAME, str(path), loader=loader)
+            if spec is None:
+                continue
+            mod = importlib.util.module_from_spec(spec)
+            loader.exec_module(mod)
+            return mod
+        except Exception:
+            continue
+    return None
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
