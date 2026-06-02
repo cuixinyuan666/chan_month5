@@ -10168,6 +10168,7 @@ function segLevelId(num) {
 function segLevelLabel(level) {
   const n = customSegLevelNum(level);
   if (n != null) return `${n}段`;
+  if (level === "fract") return "分型";
   if (level === "bi") return "笔";
   if (level === "seg") return "段";
   return String(level || "");
@@ -16406,6 +16407,7 @@ function buildCurrentConfigSummaryText() {
     `数据逻辑：${offlineDataCustomLabel(dataFormConfig.offlineDataCustom)} 会影响 K线、VOL、筹码分布；分笔合成传统/数量均固定从 a_Data 重算。`,
     `计算逻辑：${dataFeedModeLabel(dataFormConfig.feedMode)}；${klinePresentationLabel(dataFormConfig.klinePresentation)}${normalizeDataFeedMode(dataFormConfig.feedMode) === "step" && normalizeKlinePresentationMode(dataFormConfig.klinePresentation) === "instant" ? " = 自动从第1根逐步 step 到末根并展示当时当下结果" : ""}。`,
     "买卖点逻辑：逐K喂数据下同级别/同锚点/同方向只冻结首次识别标签，未来组合标签不回写、不追加；当下性优先于事后正确性。",
+    "级别依赖：2段买卖点依赖已形成的3段结构，3段买卖点依赖4段结构，依此类推；若上一级未形成，则该级可能只有结构线没有买卖点文字。",
     `系统关键项：性能引擎=${systemConfig.performanceEngineMode || DEFAULT_SYSTEM_CONFIG.performanceEngineMode}；买卖点判定=${systemConfig.bspJudgeMode || "auto"}；回退缓存=${systemConfig.rollbackCacheDepth || DEFAULT_SYSTEM_CONFIG.rollbackCacheDepth}/${systemConfig.rollbackFullSnapshotInterval || DEFAULT_SYSTEM_CONFIG.rollbackFullSnapshotInterval}/${systemConfig.rollbackCaptureMaxBars || DEFAULT_SYSTEM_CONFIG.rollbackCaptureMaxBars}`,
   ];
   return lines.join("\n");
@@ -19091,23 +19093,28 @@ function resolveBottomBspRowsForDraw(chart) {
   const chartRows = (chart && Array.isArray(chart.bsp)) ? chart.bsp : [];
   const historyRows = Array.isArray(bspHistory) ? bspHistory : [];
   const mergeChartRowsWithHistory = () => {
-    const statusMap = new Map();
+    const historyMap = new Map();
     historyRows.forEach((h) => {
       const k = h.key || bottomBspRowKey(h);
-      if (k) statusMap.set(k, h.status);
+      if (k && !historyMap.has(k)) historyMap.set(k, { ...h, key: k });
     });
-    return chartRows.map((it) => {
+    const used = new Set();
+    const merged = chartRows.map((it) => {
       const k = it.key || bottomBspRowKey(it);
-      const st = statusMap.has(k) ? statusMap.get(k) : it.status;
-      return { ...it, key: k, status: st };
+      if (k && historyMap.has(k)) {
+        used.add(k);
+        const h = historyMap.get(k);
+        // 逐K当下性：同 key 用历史冻结标签；chart 只补历史没覆盖的新级别。
+        return { ...it, ...h, key: k, status: h.status != null ? h.status : it.status };
+      }
+      return { ...it, key: k };
     });
+    historyMap.forEach((h, k) => {
+      if (!used.has(k)) merged.push(h);
+    });
+    return merged;
   };
-  if (dualInternalRenderDepth > 0 && chart && Array.isArray(chart.bsp)) {
-    return mergeChartRowsWithHistory();
-  }
-  if (chartRows.length > 0 && historyRows.length === 0) return mergeChartRowsWithHistory();
-  if (historyRows.length > 0) return historyRows;
-  return historyRows;
+  return mergeChartRowsWithHistory();
 }
 
 function drawRhythmLines(arr, s) {
