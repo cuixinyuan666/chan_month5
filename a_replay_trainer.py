@@ -8572,6 +8572,13 @@ HTML = r"""
       width: 100%;
       box-sizing: border-box;
     }
+    .settingsItemDisabled {
+      opacity: 0.58;
+    }
+    .settingsItemDisabled select,
+    .settingsItemDisabled input {
+      cursor: not-allowed;
+    }
     .settingsItemWide {
       grid-column: 1 / -1;
     }
@@ -10121,10 +10128,12 @@ const OFFLINE_DATA_CUSTOM_HELP =
   "【离线数据自定义】\n" +
   "原生：分笔按文件原样解析（无 B/S 标记行默认按 B 处理）。\n" +
   "无BS向上或向下合并：\n" +
-  "1) 开盘侧连续无 B/S（例 09:25）→ 成交量累加到下一根有 B/S 或常规成交行（例 09:30）；\n" +
+  "1) 按每个交易日独立处理，不跨交易日合并。\n" +
+  "2) 当天开盘侧连续无 B/S（例 09:25）→ 成交量累加到当天下一根有 B/S 或常规成交行（例 09:30）；\n" +
   "   价格若在目标高低之间则不改价，低于最低价则扩低，高于最高价则扩高。\n" +
-  "2) 收盘侧连续无 B/S（例 15:00–15:07 多根）→ 向上合并到上一根有 B/S（例 14:57），价格规则同上。\n" +
-  "3) 保存后使用离线包或分笔合成模式时会重新加载分笔并重算。";
+  "3) 当天收盘侧连续无 B/S（例 15:00–15:07 多根）→ 向上合并到当天上一根有 B/S（例 14:57），价格规则同上。\n" +
+  "4) 当天中间仍无 B/S 的分笔不做头尾合并，保留并默认按 B 处理。\n" +
+  "5) 分笔价格合成传统/数量模式下，该设置会影响 K线、VOL、筹码分布；保存后会重新加载分笔并重算。";
 
 function normalizeOfflineDataCustom(mode) {
   const m = String(mode || "native").toLowerCase();
@@ -12129,6 +12138,15 @@ function appendChartSettingsItemTo(parent, sec, item, buildLabelHtml) {
   if (item.type === "select") {
     const optionsHtml = (item.options || []).map((o) => `<option value="${o.value}" ${String(val) === String(o.value) ? "selected" : ""}>${o.label}</option>`).join("");
     itemDiv.innerHTML += `<label>${buildLabelHtml(item)}</label><select data-key="${sec.key}" data-subkey="${item.subKey}">${optionsHtml}</select>`;
+    if (sec.key === "dataForm" && item.subKey === "quantityAlloc") {
+      const select = itemDiv.querySelector("select");
+      const quantityMode = isQuantityDataFormMode(dataFormConfig.mode);
+      if (!quantityMode) {
+        select.disabled = true;
+        itemDiv.classList.add("settingsItemDisabled");
+      }
+      itemDiv.innerHTML += `<div class="muted" style="font-size:12px;">${quantityMode ? "当前数量模式生效。" : "仅“数量/分笔价格合成数量”生效，当前模式不参与加载。"}</div>`;
+    }
     if (sec.key === "dataForm" && item.subKey === "mode") {
       const select = itemDiv.querySelector("select");
       // 首次加载前 N 未知，后端会按真实根数钳制数量；不要拦截会话加载。
@@ -12239,11 +12257,12 @@ function appendChartSettingsItemTo(parent, sec, item, buildLabelHtml) {
       const minN = 1;
       const maxN = n > 0 ? n : 1;
       const quantityMode = isQuantityDataFormMode(dataFormConfig.mode);
-      const disabled = quantityMode && !(lastPayload && lastPayload.ready);
+      const disabled = !quantityMode;
       const finalVal = clampDataFormQuantity(displayVal, maxN);
       const helpText = !quantityMode
-        ? "仅“数量/分笔价格合成数量”生效，当前不会参与加载。"
-        : (disabled ? "请先加载会话后再使用数量模式。" : `当前范围：1 - ${maxN}`);
+        ? "仅“数量/分笔价格合成数量”生效，当前模式不参与加载。"
+        : ((lastPayload && lastPayload.ready) ? `当前范围：1 - ${maxN}` : "首次加载前范围未知，后端会按真实根数自动钳制。");
+      if (disabled) itemDiv.classList.add("settingsItemDisabled");
       itemDiv.innerHTML += `<label>${buildLabelHtml(item)}</label><input type="number" value="${finalVal}" min="${minN}" max="${maxN}" step="1" ${disabled ? "disabled" : ""} data-key="${sec.key}" data-subkey="${item.subKey}"><div class="muted" style="font-size:12px;">${helpText}</div>`;
     } else {
       itemDiv.innerHTML += `<label>${buildLabelHtml(item)}</label><input type="${item.type}" value="${displayVal != null ? displayVal : ""}" step="${item.step || 1}" placeholder="${item.placeholder || ""}" data-key="${sec.key}" data-subkey="${item.subKey}">`;

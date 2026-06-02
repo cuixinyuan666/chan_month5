@@ -87,37 +87,62 @@ def _merge_vol_price_into(target: OfflineTickRow, src: OfflineTickRow) -> None:
 
 def merge_no_bs_offline_ticks(rows: list[OfflineTickRow]) -> list[OfflineTickRow]:
     """
-    ??????????? BS ?? ??????????????? BS??
-    ??????????? BS ?? ??????????????? BS??
-    ??????????? BS???? 15:00?C15:07????
+    按交易日处理无 B/S 分笔：
+    - 当天开盘侧连续无 B/S，向下合并到当天下一根有 B/S 的分笔。
+    - 当天收盘侧连续无 B/S，向上合并到当天上一根有 B/S 的分笔。
+    - 当天中间仍无 B/S 的行，保留并按 B 处理。
     """
     if not rows:
         return []
-    out: list[OfflineTickRow] = [OfflineTickRow(r.t, r.price, r.vol, r.side, r.has_bs, r.price_lo, r.price_hi) for r in rows]
-    n = len(out)
-    i = 0
-    while i < n and not out[i].has_bs:
-        i += 1
-    if i > 0 and i < n:
-        target = out[i]
-        for j in range(i):
-            _merge_vol_price_into(target, out[j])
-        out = out[i:]
-        n = len(out)
-    elif i >= n:
-        return []
-    j = n - 1
-    while j >= 0 and not out[j].has_bs:
-        j -= 1
-    if j >= 0 and j < n - 1:
-        target = out[j]
-        for k in range(j + 1, n):
-            _merge_vol_price_into(target, out[k])
-        out = out[: j + 1]
-    for r in out:
-        if not r.has_bs:
-            r.side = "B"
-            r.has_bs = True
+    sorted_rows = sorted(rows, key=lambda x: x.t.ts)
+    out: list[OfflineTickRow] = []
+    day_rows: list[OfflineTickRow] = []
+    cur_day: tuple[int, int, int] | None = None
+
+    def flush_day(src: list[OfflineTickRow]) -> None:
+        if not src:
+            return
+        day = [OfflineTickRow(r.t, r.price, r.vol, r.side, r.has_bs, r.price_lo, r.price_hi) for r in src]
+        n = len(day)
+        i = 0
+        while i < n and not day[i].has_bs:
+            i += 1
+        if i > 0 and i < n:
+            target = day[i]
+            for j0 in range(i):
+                _merge_vol_price_into(target, day[j0])
+            day = day[i:]
+            n = len(day)
+        elif i >= n:
+            # 全日都无 B/S 时无法判断方向，丢弃这一天的无效分笔。
+            return
+
+        j = n - 1
+        while j >= 0 and not day[j].has_bs:
+            j -= 1
+        if j >= 0 and j < n - 1:
+            target = day[j]
+            for k0 in range(j + 1, n):
+                _merge_vol_price_into(target, day[k0])
+            day = day[: j + 1]
+
+        for r0 in day:
+            if not r0.has_bs:
+                r0.side = "B"
+                r0.has_bs = True
+        out.extend(day)
+
+    for row in sorted_rows:
+        day_key = (row.t.year, row.t.month, row.t.day)
+        if cur_day is None:
+            cur_day = day_key
+        if day_key != cur_day:
+            flush_day(day_rows)
+            day_rows = []
+            cur_day = day_key
+        day_rows.append(row)
+    flush_day(day_rows)
+    out.sort(key=lambda x: x.t.ts)
     return out
 
 
