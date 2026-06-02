@@ -191,6 +191,10 @@ def remap_overlay_chart_to_driver_x(chart: dict[str, Any], *, coarse_kline: list
         if key not in root:
             continue
         root[key] = _walk_remap(root.get(key), coarse_kline, driver_kline)
+    for group_key in ("extra_levels", "extra_zs", "extra_bsp"):
+        group = root.get(group_key)
+        if isinstance(group, dict):
+            root[group_key] = {k: _walk_remap(v, coarse_kline, driver_kline) for k, v in group.items()}
     kc = root.get("kline_combine")
     if isinstance(kc, list):
         root["kline_combine"] = _remap_kline_combine_list(kc, coarse_kline, driver_kline)

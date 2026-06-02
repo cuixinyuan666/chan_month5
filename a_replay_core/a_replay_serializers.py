@@ -1,4 +1,15 @@
 from typing import Any, Optional
+import re
+
+
+def _level_sort_order(level: Any, level_order: dict[str, int]) -> int:
+    text = str(level or "").strip().lower()
+    if text in level_order:
+        return int(level_order[text])
+    m = re.fullmatch(r"seg(\d+)", text)
+    if m:
+        return int(m.group(1))
+    return 999
 
 
 def serialize_klu_iter_fast(klu_iter, serialize_klu_unit_fast_fn, volume_getter_fn) -> list[dict[str, Any]]:
@@ -41,9 +52,18 @@ def serialize_chan_with_cache(
     bsp_bi_arr = serialize_bsp_collection_fn("bi", active_bundle.bs_point_lst)
     bsp_seg_arr = serialize_bsp_collection_fn("seg", active_bundle.seg_bs_point_lst)
     bsp_segseg_arr = serialize_bsp_collection_fn("segseg", active_bundle.segseg_bs_point_lst)
+    extra_lines: dict[str, list[dict[str, Any]]] = {}
+    extra_zs: dict[str, list[dict[str, Any]]] = {}
+    extra_bsp: dict[str, list[dict[str, Any]]] = {}
+    for level, lines in sorted((getattr(active_bundle, "extra_line_lists", {}) or {}).items(), key=lambda kv: _level_sort_order(kv[0], level_order)):
+        extra_lines[str(level)] = serialize_line_collection_fn(lines)
+    for level, zs in sorted((getattr(active_bundle, "extra_zs_lists", {}) or {}).items(), key=lambda kv: _level_sort_order(kv[0], level_order)):
+        extra_zs[str(level)] = serialize_zs_collection_fn(zs)
+    for level, bsp_list in sorted((getattr(active_bundle, "extra_bsp_lists", {}) or {}).items(), key=lambda kv: _level_sort_order(kv[0], level_order)):
+        extra_bsp[str(level)] = serialize_bsp_collection_fn(str(level), bsp_list)
     bsp_arr = sorted(
-        [*bsp_bi_arr, *bsp_seg_arr, *bsp_segseg_arr],
-        key=lambda item: (int(item["x"]), level_order.get(str(item["level"]), 999), int(not bool(item["is_buy"]))),
+        [*bsp_bi_arr, *bsp_seg_arr, *bsp_segseg_arr, *[it for arr in extra_bsp.values() for it in arr]],
+        key=lambda item: (int(item["x"]), _level_sort_order(str(item["level"]), level_order), int(not bool(item["is_buy"]))),
     )
     out: dict[str, Any] = {
         "kline": klu_arr,
@@ -59,6 +79,9 @@ def serialize_chan_with_cache(
         "bsp_bi": bsp_bi_arr,
         "bsp_seg": bsp_seg_arr,
         "bsp_segseg": bsp_segseg_arr,
+        "extra_levels": extra_lines,
+        "extra_zs": extra_zs,
+        "extra_bsp": extra_bsp,
         "rhythm_lines": active_bundle.rhythm_lines,
         "rhythm_hits": active_bundle.rhythm_hits,
         "fx_lines": active_bundle.fx_lines,

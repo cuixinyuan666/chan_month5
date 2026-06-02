@@ -9,7 +9,7 @@ import warnings
 from bisect import bisect_right
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Iterator, Optional
 
@@ -182,25 +182,106 @@ VISIBLE_BSP_LEVELS = ("bi", "seg", "segseg")
 LEVEL_ORDER = {level: idx for idx, level in enumerate(VISIBLE_BSP_LEVELS)}
 
 
+def custom_seg_level_num(level: Any) -> Optional[int]:
+    text = str(level or "").strip().lower()
+    if text == "segseg":
+        return 2
+    m = re.fullmatch(r"seg(\d+)", text)
+    if not m:
+        return None
+    n = int(m.group(1))
+    return n if n >= 3 else None
+
+
+def seg_level_id(num: int) -> str:
+    n = int(num)
+    return "segseg" if n == 2 else f"seg{n}"
+
+
+def is_bsp_level(level: Any) -> bool:
+    text = str(level or "").strip().lower()
+    return text in ("bi", "seg") or custom_seg_level_num(text) is not None
+
+
+def bsp_level_sort_order(level: Any) -> int:
+    text = str(level or "").strip().lower()
+    if text == "bi":
+        return 0
+    if text == "seg":
+        return 1
+    n = custom_seg_level_num(text)
+    if n is not None:
+        return n
+    return 999
+
+
+def extra_seg_levels_from_layers(layers: Any) -> list[str]:
+    cfg = normalize_chart_lazy_layers(layers, default_enabled=False)
+    levels: set[str] = set()
+    for group_name in ("line_levels", "bsp_levels", "zs_levels"):
+        group = cfg.get(group_name) or {}
+        for level, enabled in group.items():
+            n = custom_seg_level_num(level)
+            if enabled and n is not None and n >= 3:
+                levels.add(seg_level_id(n))
+    return sorted(levels, key=bsp_level_sort_order)
+
+
+def extra_bsp_levels_from_layers(layers: Any) -> list[str]:
+    cfg = normalize_chart_lazy_layers(layers, default_enabled=False)
+    levels: set[str] = set()
+    for level, enabled in (cfg.get("bsp_levels") or {}).items():
+        n = custom_seg_level_num(level)
+        if enabled and n is not None and n >= 3:
+            levels.add(seg_level_id(n))
+    return sorted(levels, key=bsp_level_sort_order)
+
+
+def bsp_levels_from_layers(layers: Any = None) -> list[str]:
+    cfg = normalize_chart_lazy_layers(layers)
+    bsp_cfg = cfg.get("bsp_levels") or {}
+    levels = [level for level in ("bi", "seg", "segseg") if bool(bsp_cfg.get(level, True))]
+    for level in extra_bsp_levels_from_layers(layers):
+        if level not in levels:
+            levels.append(level)
+    return levels
+
+
 def normalize_chart_lazy_layers(raw: Any, default_enabled: bool = True) -> dict[str, Any]:
     """首包/懒加载图层策略：未传按旧逻辑全开。"""
     src = raw if isinstance(raw, dict) else {}
     bsp_src = src.get("bsp_levels") if isinstance(src.get("bsp_levels"), dict) else {}
     zs_src = src.get("zs_levels") if isinstance(src.get("zs_levels"), dict) else {}
+    line_src = src.get("line_levels") if isinstance(src.get("line_levels"), dict) else {}
+    if isinstance(src.get("line_levels"), list):
+        line_src = {str(level): True for level in src.get("line_levels") or []}
+    line_levels: dict[str, bool] = {}
+    bsp_levels = {
+        "bi": bool(bsp_src.get("bi", default_enabled)),
+        "seg": bool(bsp_src.get("seg", default_enabled)),
+        "segseg": bool(bsp_src.get("segseg", default_enabled)),
+    }
+    zs_levels = {
+        "fract": bool(zs_src.get("fract", default_enabled)),
+        "bi": bool(zs_src.get("bi", default_enabled)),
+        "seg": bool(zs_src.get("seg", default_enabled)),
+        "segseg": bool(zs_src.get("segseg", default_enabled)),
+    }
+    for level, enabled in bsp_src.items():
+        if custom_seg_level_num(level) is not None:
+            bsp_levels[str(level)] = bool(enabled)
+    for level, enabled in zs_src.items():
+        if custom_seg_level_num(level) is not None:
+            zs_levels[str(level)] = bool(enabled)
+    for level, enabled in line_src.items():
+        if custom_seg_level_num(level) is not None:
+            line_levels[str(level)] = bool(enabled)
     return {
         "rhythm": bool(src.get("rhythm", default_enabled)),
         "rhythm_hits": bool(src.get("rhythm_hits", src.get("rhythm", default_enabled))),
-        "bsp_levels": {
-            "bi": bool(bsp_src.get("bi", default_enabled)),
-            "seg": bool(bsp_src.get("seg", default_enabled)),
-            "segseg": bool(bsp_src.get("segseg", default_enabled)),
-        },
-        "zs_levels": {
-            "fract": bool(zs_src.get("fract", default_enabled)),
-            "bi": bool(zs_src.get("bi", default_enabled)),
-            "seg": bool(zs_src.get("seg", default_enabled)),
-            "segseg": bool(zs_src.get("segseg", default_enabled)),
-        },
+        "line_levels": dict(sorted(line_levels.items(), key=lambda kv: bsp_level_sort_order(kv[0]))),
+        "bsp_levels": dict(sorted(bsp_levels.items(), key=lambda kv: bsp_level_sort_order(kv[0]))),
+        "zs_levels": dict(sorted(zs_levels.items(), key=lambda kv: bsp_level_sort_order(kv[0]))),
     }
 
 
@@ -210,9 +291,11 @@ def merge_chart_lazy_layers(base: Any, extra: Any) -> dict[str, Any]:
     add = normalize_chart_lazy_layers(extra, default_enabled=False)
     out["rhythm"] = bool(out.get("rhythm")) or bool(add.get("rhythm"))
     out["rhythm_hits"] = bool(out.get("rhythm_hits")) or bool(add.get("rhythm_hits"))
-    for level in VISIBLE_BSP_LEVELS:
+    for level in sorted({*out["line_levels"].keys(), *add["line_levels"].keys()}, key=bsp_level_sort_order):
+        out["line_levels"][level] = bool(out["line_levels"].get(level)) or bool(add["line_levels"].get(level))
+    for level in sorted({*out["bsp_levels"].keys(), *add["bsp_levels"].keys()}, key=bsp_level_sort_order):
         out["bsp_levels"][level] = bool(out["bsp_levels"].get(level)) or bool(add["bsp_levels"].get(level))
-    for level in ("fract", *VISIBLE_BSP_LEVELS):
+    for level in sorted({*out["zs_levels"].keys(), *add["zs_levels"].keys()}, key=bsp_level_sort_order):
         out["zs_levels"][level] = bool(out["zs_levels"].get(level)) or bool(add["zs_levels"].get(level))
     return out
 
@@ -229,6 +312,24 @@ LEVEL_LABELS = {"bi": "笔", "seg": "段", "segseg": "2段"}
 STRUCTURE_LEVEL_LABELS = {"fract": "分型", **LEVEL_LABELS}
 RHYTHM_LEVEL_LABELS = {"fract": "分型", "bi": "笔", "seg": "线段", "segseg": "二段"}
 JUDGE_TRIGGER_LEVELS = {"bi": "seg", "seg": "segseg", "segseg": "segsegseg"}
+
+
+def dynamic_level_label(level: Any) -> str:
+    text = str(level or "").strip().lower()
+    n = custom_seg_level_num(text)
+    if n is not None:
+        return f"{n}段"
+    return LEVEL_LABELS.get(text, str(level))
+
+
+def judge_trigger_level(level: Any) -> str:
+    text = str(level or "").strip().lower()
+    if text in JUDGE_TRIGGER_LEVELS:
+        return JUDGE_TRIGGER_LEVELS[text]
+    n = custom_seg_level_num(text)
+    if n is not None:
+        return seg_level_id(n + 1)
+    return ""
 RHYTHM_CALC_MODE_NORMAL = "normal"
 RHYTHM_CALC_MODE_TRANSITION = "transition"
 RHYTHM_CALC_MODE_STRICT_1382 = "strict1382"
@@ -2821,6 +2922,9 @@ class ChanStructureBundle:
     fx_lines: list[dict[str, Any]]
     rhythm_lines: list[dict[str, Any]]
     rhythm_hits: list[dict[str, Any]]
+    extra_line_lists: dict[str, Any] = field(default_factory=dict)
+    extra_zs_lists: dict[str, Any] = field(default_factory=dict)
+    extra_bsp_lists: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -3198,7 +3302,7 @@ def reverse_bi_dir(direction: BI_DIR) -> BI_DIR:
 
 
 def structure_level_label(level: str) -> str:
-    return STRUCTURE_LEVEL_LABELS.get(level, level)
+    return dynamic_level_label(level) if is_bsp_level(level) else STRUCTURE_LEVEL_LABELS.get(level, level)
 
 
 def rhythm_level_label(level: str) -> str:
@@ -3560,6 +3664,73 @@ def build_hidden_seg_layer(source_lines: Any, conf: CChanConfig):
     return hidden_seg_list
 
 
+def _max_extra_level_needed(lazy: dict[str, Any]) -> int:
+    max_n = 0
+    for level, enabled in (lazy.get("line_levels") or {}).items():
+        n = custom_seg_level_num(level)
+        if enabled and n is not None and n >= 3:
+            max_n = max(max_n, n)
+    for group_name in ("bsp_levels", "zs_levels"):
+        for level, enabled in (lazy.get(group_name) or {}).items():
+            n = custom_seg_level_num(level)
+            if enabled and n is not None and n >= 3:
+                # BSP/中枢需要上一级结构作为 parents。
+                max_n = max(max_n, n + 1)
+    return max_n
+
+
+def build_extra_seg_chain(base_segseg: Any, conf: CChanConfig, lazy: dict[str, Any], *, new_algo: bool = False) -> dict[str, Any]:
+    max_n = _max_extra_level_needed(lazy)
+    if max_n < 3:
+        return {}
+    out: dict[str, Any] = {}
+    prev = base_segseg
+    for n in range(3, max_n + 1):
+        level = seg_level_id(n)
+        prev = build_new_seg_list(prev, f"new_chan_{level}") if new_algo else build_hidden_seg_layer(prev, conf)
+        out[level] = prev
+    return out
+
+
+def build_extra_zs_and_bsp(extra_lines: dict[str, Any], conf: CChanConfig, lazy: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    extra_zs: dict[str, Any] = {}
+    extra_bsp: dict[str, Any] = {}
+    for level, base in sorted(extra_lines.items(), key=lambda kv: bsp_level_sort_order(kv[0])):
+        n = custom_seg_level_num(level)
+        if n is None:
+            continue
+        upper = extra_lines.get(seg_level_id(n + 1))
+        if upper is None:
+            continue
+        if chart_lazy_zs_enabled(lazy, level):
+            extra_zs[level] = build_level_zs(base, upper, conf.zs_conf)
+        if chart_lazy_bsp_enabled(lazy, level):
+            extra_bsp[level] = build_level_bsp(base, upper, conf.seg_bs_point_conf)
+    return extra_zs, extra_bsp
+
+
+def line_list_light_signature(lines: Any, tail: int = 2) -> tuple[Any, ...]:
+    try:
+        arr = list(lines)
+    except Exception:
+        return (0,)
+    sig: list[Any] = [len(arr)]
+    for line in arr[-max(1, int(tail)):]:
+        try:
+            sig.append(
+                (
+                    int(line.get_begin_klu().idx),
+                    int(line.get_end_klu().idx),
+                    bool(getattr(line, "is_sure", False)),
+                    float(line.get_begin_val()),
+                    float(line.get_end_val()),
+                )
+            )
+        except Exception:
+            sig.append(("?", bool(getattr(line, "is_sure", False))))
+    return tuple(sig)
+
+
 def build_classic_bundle(
     chan: CChan,
     rhythm_calc_mode: str = RHYTHM_CALC_MODE_NORMAL,
@@ -3568,8 +3739,17 @@ def build_classic_bundle(
     kl_list = chan[0]
     conf = chan.conf
     lazy = normalize_chart_lazy_layers(chart_lazy_layers)
-    need_hidden_upper = chart_lazy_zs_enabled(lazy, "segseg") or chart_lazy_bsp_enabled(lazy, "segseg")
+    need_hidden_upper = chart_lazy_zs_enabled(lazy, "segseg") or chart_lazy_bsp_enabled(lazy, "segseg") or _max_extra_level_needed(lazy) >= 3
     segsegseg_list = build_hidden_seg_layer(kl_list.segseg_list, conf) if need_hidden_upper else SimpleLineList()
+    extra_lines = build_extra_seg_chain(kl_list.segseg_list, conf, lazy, new_algo=False)
+    if need_hidden_upper and "seg3" not in extra_lines:
+        extra_lines["seg3"] = segsegseg_list
+    extra_zs, extra_bsp = build_extra_zs_and_bsp(extra_lines, conf, lazy)
+    requested_extra_lines = set(extra_seg_levels_from_layers(lazy))
+    for level in extra_bsp_levels_from_layers(lazy):
+        trig = judge_trigger_level(level)
+        if custom_seg_level_num(trig) is not None:
+            requested_extra_lines.add(trig)
     fract_list = SimpleLineList()
     # 与「新缠」分型层一致：由分型端点构造的简笔链，再相对官方 bi_list 计算分型中枢
     need_fract_children = chart_lazy_zs_enabled(lazy, "fract") or bool(lazy.get("rhythm")) or bool(lazy.get("rhythm_hits"))
@@ -3624,6 +3804,9 @@ def build_classic_bundle(
         fx_lines=build_fx_lines(kl_list),
         rhythm_lines=rhythm_lines,
         rhythm_hits=rhythm_hits,
+        extra_line_lists={k: v for k, v in extra_lines.items() if k in requested_extra_lines},
+        extra_zs_lists=extra_zs,
+        extra_bsp_lists=extra_bsp,
     )
 
 
@@ -3640,8 +3823,17 @@ def build_new_bundle(
     bi_list = build_new_seg_list(fract_list, "new_chan_bi")
     seg_list = build_new_seg_list(bi_list, "new_chan_seg")
     segseg_list = build_new_seg_list(seg_list, "new_chan_segseg")
-    need_hidden_upper = chart_lazy_zs_enabled(lazy, "segseg") or chart_lazy_bsp_enabled(lazy, "segseg")
+    need_hidden_upper = chart_lazy_zs_enabled(lazy, "segseg") or chart_lazy_bsp_enabled(lazy, "segseg") or _max_extra_level_needed(lazy) >= 3
     segsegseg_list = build_new_seg_list(segseg_list, "new_chan_hidden_upper") if need_hidden_upper else SimpleLineList()
+    extra_lines = build_extra_seg_chain(segseg_list, conf, lazy, new_algo=True)
+    if need_hidden_upper and "seg3" not in extra_lines:
+        extra_lines["seg3"] = segsegseg_list
+    extra_zs, extra_bsp = build_extra_zs_and_bsp(extra_lines, conf, lazy)
+    requested_extra_lines = set(extra_seg_levels_from_layers(lazy))
+    for level in extra_bsp_levels_from_layers(lazy):
+        trig = judge_trigger_level(level)
+        if custom_seg_level_num(trig) is not None:
+            requested_extra_lines.add(trig)
     fractzs_list = build_level_zs(fract_list, bi_list, conf.zs_conf) if chart_lazy_zs_enabled(lazy, "fract") else empty_zs_list(conf.zs_conf)
     zs_list = build_level_zs(bi_list, seg_list, conf.zs_conf) if chart_lazy_zs_enabled(lazy, "bi") else empty_zs_list(conf.zs_conf)
     segzs_list = build_level_zs(seg_list, segseg_list, conf.zs_conf) if chart_lazy_zs_enabled(lazy, "seg") else empty_zs_list(conf.zs_conf)
@@ -3688,6 +3880,9 @@ def build_new_bundle(
         fx_lines=build_fx_lines(kl_list),
         rhythm_lines=rhythm_lines,
         rhythm_hits=rhythm_hits,
+        extra_line_lists={k: v for k, v in extra_lines.items() if k in requested_extra_lines},
+        extra_zs_lists=extra_zs,
+        extra_bsp_lists=extra_bsp,
     )
 
 
@@ -3706,6 +3901,8 @@ def build_structure_bundle(
 
 
 def get_bundle_line_list(bundle: ChanStructureBundle, level: str):
+    if str(level) in (bundle.extra_line_lists or {}):
+        return bundle.extra_line_lists[str(level)]
     mapping = {
         "fract": bundle.fract_list,
         "bi": bundle.bi_list,
@@ -3717,6 +3914,8 @@ def get_bundle_line_list(bundle: ChanStructureBundle, level: str):
 
 
 def get_bundle_bsp_list(bundle: ChanStructureBundle, level: str):
+    if str(level) in (bundle.extra_bsp_lists or {}):
+        return bundle.extra_bsp_lists[str(level)]
     mapping = {
         "bi": bundle.bs_point_lst,
         "seg": bundle.seg_bs_point_lst,
@@ -3726,7 +3925,7 @@ def get_bundle_bsp_list(bundle: ChanStructureBundle, level: str):
 
 
 def level_label(level: str) -> str:
-    return LEVEL_LABELS.get(level, level)
+    return dynamic_level_label(level)
 
 
 def make_bsp_item(level: str, bsp) -> dict[str, Any]:
@@ -3982,6 +4181,8 @@ class ChanStepper:
         # 同一步下的图表序列化缓存：键为是否包含 kline_all
         self._chart_payload_cache: dict[bool, tuple[int, dict[str, Any]]] = {}
         self.chart_lazy_layers = normalize_chart_lazy_layers(None)
+        self._extra_bsp_cache_key: Optional[tuple[Any, ...]] = None
+        self._extra_bsp_cache_value: dict[str, Any] = {}
         # unified 模式：全量一次性计算后，仅按 step_idx 切片显示
         self._unified_full_payload: Optional[dict[str, Any]] = None
         self._chan_record_apply: ChanRecordApplyResult = ChanRecordApplyResult()
@@ -3990,6 +4191,29 @@ class ChanStepper:
         # Rust/Python 高性能过渡引擎会话：先接数据/筹码/步进增量层
         self.perf_session_id: Optional[str] = None
         self.perf_engine_mode: str = "rust-missing"
+
+    def clear_structure_runtime_cache(self) -> None:
+        self.structure_bundle = None
+        self._bundle_cache_step_idx = None
+        self._chart_payload_cache = {}
+        self._extra_bsp_cache_key = None
+        self._extra_bsp_cache_value = {}
+
+    def extra_bsp_snapshot_cached(self, *, segseg_list: Any, conf: CChanConfig, lazy_layers: dict[str, Any]) -> dict[str, Any]:
+        """逐K当下性缓存：输入只来自当前已喂入结构，签名没变才复用。"""
+        if segseg_list is None:
+            return {}
+        wanted = tuple(extra_seg_levels_from_layers({"bsp_levels": lazy_layers.get("bsp_levels", {})}))
+        if not wanted:
+            return {}
+        key = (wanted, line_list_light_signature(segseg_list))
+        if key == self._extra_bsp_cache_key:
+            return self._extra_bsp_cache_value
+        extra_lines = build_extra_seg_chain(segseg_list, conf, lazy_layers, new_algo=False)
+        _, extra_bsp = build_extra_zs_and_bsp(extra_lines, conf, lazy_layers)
+        self._extra_bsp_cache_key = key
+        self._extra_bsp_cache_value = extra_bsp
+        return extra_bsp
 
     def _cfg_without_chan_algo(self, cfg_dict: dict[str, Any]) -> dict[str, Any]:
         # 训练器 / API 自用键，勿传入 CChanConfig（否则会触发 unknown para）
@@ -4260,6 +4484,7 @@ class ChanStepper:
         set_active_offline_data_custom(off_custom)
         self.offline_data_custom = off_custom
         self.chart_lazy_layers = normalize_chart_lazy_layers(chart_lazy_layers)
+        self.clear_structure_runtime_cache()
         self._session_begin_date = begin_date
         self._session_end_date = end_date
         
@@ -4666,10 +4891,8 @@ class ChanStepper:
             }
             self.indicator_history = []
             self.trend_lines = []
-            self.structure_bundle = None
-            self._bundle_cache_step_idx = None
             self._serialized_klu_cache = []
-            self._chart_payload_cache = {}
+            self.clear_structure_runtime_cache()
             self._unified_full_payload = None
             if self.data_feed_mode == "unified":
                 unified_t0_ms = int(time.time() * 1000)
@@ -4817,13 +5040,31 @@ class ChanStepper:
         out["bi"] = [it for it in payload.get("bi", []) if int(it.get("x2", -1)) <= x_max]
         out["seg"] = [it for it in payload.get("seg", []) if int(it.get("x2", -1)) <= x_max]
         out["segseg"] = [it for it in payload.get("segseg", []) if int(it.get("x2", -1)) <= x_max]
+        if isinstance(payload.get("extra_levels"), dict):
+            out["extra_levels"] = {
+                str(level): [it for it in items if int(it.get("x2", -1)) <= x_max]
+                for level, items in payload.get("extra_levels", {}).items()
+                if isinstance(items, list)
+            }
         out["fract_zs"] = [it for it in payload.get("fract_zs", []) if int(it.get("x2", -1)) <= x_max]
         out["bi_zs"] = [it for it in payload.get("bi_zs", []) if int(it.get("x2", -1)) <= x_max]
         out["seg_zs"] = [it for it in payload.get("seg_zs", []) if int(it.get("x2", -1)) <= x_max]
         out["segseg_zs"] = [it for it in payload.get("segseg_zs", []) if int(it.get("x2", -1)) <= x_max]
+        if isinstance(payload.get("extra_zs"), dict):
+            out["extra_zs"] = {
+                str(level): [it for it in items if int(it.get("x2", -1)) <= x_max]
+                for level, items in payload.get("extra_zs", {}).items()
+                if isinstance(items, list)
+            }
         out["bsp_bi"] = [it for it in payload.get("bsp_bi", []) if int(it.get("x", -1)) <= x_max]
         out["bsp_seg"] = [it for it in payload.get("bsp_seg", []) if int(it.get("x", -1)) <= x_max]
         out["bsp_segseg"] = [it for it in payload.get("bsp_segseg", []) if int(it.get("x", -1)) <= x_max]
+        if isinstance(payload.get("extra_bsp"), dict):
+            out["extra_bsp"] = {
+                str(level): [it for it in items if int(it.get("x", -1)) <= x_max]
+                for level, items in payload.get("extra_bsp", {}).items()
+                if isinstance(items, list)
+            }
         out["bsp"] = [it for it in payload.get("bsp", []) if int(it.get("x", -1)) <= x_max]
         out["rhythm_hits"] = [it for it in payload.get("rhythm_hits", []) if int(it.get("x", -1)) <= x_max]
         out["indicators"] = [it for it in payload.get("indicators", []) if int(it.get("x", -1)) <= x_max]
@@ -4847,9 +5088,7 @@ class ChanStepper:
             _check_init_cancelled()
         self._rebuild_indicator_history_from_chan()
         self.step_idx = target_step
-        self.structure_bundle = None
-        self._bundle_cache_step_idx = None
-        self._chart_payload_cache = {}
+        self.clear_structure_runtime_cache()
         if use_master_kline_for_chart(self.data_form_mode):
             self._serialized_klu_cache = serialize_replay_master_klines(master[: target_step + 1])
         else:
@@ -4874,9 +5113,7 @@ class ChanStepper:
             if self.step_idx + 1 >= total:
                 return False
             self.step_idx += 1
-            self.structure_bundle = None
-            self._bundle_cache_step_idx = None
-            self._chart_payload_cache = {}
+            self.clear_structure_runtime_cache()
             return True
         if self._iter is None:
             master = self._replay_klus_master or []
@@ -4886,9 +5123,7 @@ class ChanStepper:
         try:
             next(self._iter)
             self.step_idx += 1
-            self.structure_bundle = None
-            self._bundle_cache_step_idx = None
-            self._chart_payload_cache = {}
+            self.clear_structure_runtime_cache()
             # Update indicators
             kl_list = self.chan[0]
             latest_klu = kl_list.lst[-1].lst[-1]
@@ -4950,15 +5185,11 @@ class ChanStepper:
         total = len(bars)
         if total <= 0:
             self.step_idx = -1
-            self.structure_bundle = None
-            self._bundle_cache_step_idx = None
-            self._chart_payload_cache = {}
+            self.clear_structure_runtime_cache()
             return -1
         t = max(0, min(int(target_idx), total - 1))
         self.step_idx = t
-        self.structure_bundle = None
-        self._bundle_cache_step_idx = None
-        self._chart_payload_cache = {}
+        self.clear_structure_runtime_cache()
         return t
 
     def unified_sync_to_anchor_time(self, anchor_time: str) -> None:
@@ -4972,9 +5203,7 @@ class ChanStepper:
         bars = self._unified_full_payload.get("kline", [])
         if not bars:
             self.step_idx = -1
-            self.structure_bundle = None
-            self._bundle_cache_step_idx = None
-            self._chart_payload_cache = {}
+            self.clear_structure_runtime_cache()
             return
         best = -1
         for i, bar in enumerate(bars):
@@ -4987,9 +5216,7 @@ class ChanStepper:
             else:
                 break
         self.step_idx = max(0, best)
-        self.structure_bundle = None
-        self._bundle_cache_step_idx = None
-        self._chart_payload_cache = {}
+        self.clear_structure_runtime_cache()
 
     def current_price(self) -> float:
         if self.data_feed_mode == "unified":
@@ -5602,6 +5829,8 @@ class AppState:
             chart = st.build_chart_payload_cached(include_kline_all=False)
             lines = chart.get(level, [])
             if not lines:
+                lines = (chart.get("extra_levels") or {}).get(level, [])
+            if not lines:
                 return None
             line = lines[-1]
             try:
@@ -5661,7 +5890,7 @@ class AppState:
         lazy_layers = (self.session_params or {}).get("chart_lazy_layers")
         bundle = build_structure_bundle(chan_all, self.stepper.chan_algo, chart_lazy_layers=lazy_layers)
         snapshot: list[dict[str, Any]] = []
-        for level in VISIBLE_BSP_LEVELS:
+        for level in bsp_levels_from_layers(lazy_layers):
             if not chart_lazy_bsp_enabled(lazy_layers, level):
                 continue
             bsp_list = get_bundle_bsp_list(bundle, level)
@@ -5671,7 +5900,7 @@ class AppState:
                 snapshot.append(item)
         self.bsp_all_snapshot = sorted(
             snapshot,
-            key=lambda item: (int(item.get("x", -1)), LEVEL_ORDER.get(str(item.get("level")), 999), int(not bool(item.get("is_buy")))),
+            key=lambda item: (int(item.get("x", -1)), bsp_level_sort_order(str(item.get("level"))), int(not bool(item.get("is_buy")))),
         )
         # 前缀索引缓存：每个 x 对应“<=x 的全部 key 集合”，判定时 O(logN) 直取。
         running_keys: set[str] = set()
@@ -5691,7 +5920,7 @@ class AppState:
         """安装全量 BSP 快照，并重建前缀索引。"""
         self.bsp_all_snapshot = sorted(
             snapshot,
-            key=lambda item: (int(item.get("x", -1)), LEVEL_ORDER.get(str(item.get("level")), 999), int(not bool(item.get("is_buy")))),
+            key=lambda item: (int(item.get("x", -1)), bsp_level_sort_order(str(item.get("level"))), int(not bool(item.get("is_buy")))),
         )
         self._bsp_all_prefix_x = []
         self._bsp_all_prefix_keys = []
@@ -5751,7 +5980,7 @@ class AppState:
             return
         if not self.bsp_all_snapshot:
             return
-        active_levels = [level for level in (levels or list(VISIBLE_BSP_LEVELS)) if level in VISIBLE_BSP_LEVELS]
+        active_levels = [level for level in (levels or bsp_levels_from_layers(self.session_params.get("chart_lazy_layers") if self.session_params else None)) if is_bsp_level(level)]
         if not active_levels:
             return
         all_keys_upto: set[str]
@@ -5836,8 +6065,10 @@ class AppState:
         self._last_judge_stats = None
         triggered_levels: list[str] = []
         reason_parts: list[str] = []
-        for level in VISIBLE_BSP_LEVELS:
-            trigger_level = JUDGE_TRIGGER_LEVELS[level]
+        for level in bsp_levels_from_layers(self.get_active_stepper().chart_lazy_layers):
+            trigger_level = judge_trigger_level(level)
+            if not trigger_level:
+                continue
             cur_dir = self._current_level_dir(trigger_level)
             last_dir = self._last_level_dirs.get(trigger_level)
             if last_dir is None:
@@ -5937,12 +6168,12 @@ class AppState:
                 )
             if current_x is not None:
                 return snapshot
-            return sorted(snapshot, key=lambda it: (int(it["x"]), LEVEL_ORDER.get(str(it["level"]), 999), int(not bool(it["is_buy"]))))
+            return sorted(snapshot, key=lambda it: (int(it["x"]), bsp_level_sort_order(str(it["level"])), int(not bool(it["is_buy"]))))
         if stepper.chan is None:
             return []
         bundle = stepper.get_structure_bundle()
         snapshot: list[dict[str, Any]] = []
-        for level in VISIBLE_BSP_LEVELS:
+        for level in bsp_levels_from_layers(stepper.chart_lazy_layers):
             bsp_list = get_bundle_bsp_list(bundle, level)
             for bsp in bsp_list.bsp_iter():
                 item = make_bsp_item(level, bsp)
@@ -5951,7 +6182,7 @@ class AppState:
                 snapshot.append(item)
         if current_x is not None:
             return snapshot
-        return sorted(snapshot, key=lambda item: (int(item["x"]), LEVEL_ORDER.get(item["level"], 999), int(not bool(item["is_buy"]))))
+        return sorted(snapshot, key=lambda item: (int(item["x"]), bsp_level_sort_order(item["level"]), int(not bool(item["is_buy"]))))
 
     def _current_bsp_snapshot_light(self, *, current_x: Optional[int] = None, include_segseg: bool = False) -> list[dict[str, Any]]:
         """一次性呈现专用：只抓当前 BSP，不重建完整图表包。"""
@@ -5967,11 +6198,14 @@ class AppState:
             level_sources.append(("bi", getattr(kl_list, "bs_point_lst", None)))
         if chart_lazy_bsp_enabled(stepper.chart_lazy_layers, "seg"):
             level_sources.append(("seg", getattr(kl_list, "seg_bs_point_lst", None)))
-        # 2段买卖点没有官方增量缓存，逐K过程中先跳过，末尾再一次补齐。
         segseg_list = getattr(kl_list, "segseg_list", None)
-        if include_segseg and segseg_list is not None and chart_lazy_bsp_enabled(stepper.chart_lazy_layers, "segseg"):
+        lazy_layers = normalize_chart_lazy_layers(stepper.chart_lazy_layers)
+        if segseg_list is not None and chart_lazy_bsp_enabled(lazy_layers, "segseg"):
             segsegseg_list = build_hidden_seg_layer(segseg_list, conf)
             level_sources.append(("segseg", build_level_bsp(segseg_list, segsegseg_list, conf.seg_bs_point_conf)))
+        extra_bsp = stepper.extra_bsp_snapshot_cached(segseg_list=segseg_list, conf=conf, lazy_layers=lazy_layers)
+        for level in sorted(extra_bsp.keys(), key=bsp_level_sort_order):
+            level_sources.append((level, extra_bsp[level]))
         snapshot: list[dict[str, Any]] = []
         for level, bsp_list in level_sources:
             if bsp_list is None:
@@ -5983,11 +6217,12 @@ class AppState:
                 snapshot.append(item)
         if current_x is not None:
             return snapshot
-        return sorted(snapshot, key=lambda item: (int(item["x"]), LEVEL_ORDER.get(item["level"], 999), int(not bool(item["is_buy"]))))
+        return sorted(snapshot, key=lambda item: (int(item["x"]), bsp_level_sort_order(item["level"]), int(not bool(item["is_buy"]))))
 
     @staticmethod
     def _bsp_key(item: dict[str, Any]) -> str:
-        return f'{item["level"]}|{int(item["x"])}|{item["label"]}|{1 if item["is_buy"] else 0}'
+        # 逐K当下性：同级别/同锚点/同方向只冻结首次识别标签，未来组合标签不回写、不追加。
+        return f'{item["level"]}|{int(item["x"])}|{1 if item["is_buy"] else 0}'
 
     def sync_bsp_history(self) -> None:
         """同步当前步进下的买卖点历史。
@@ -6006,11 +6241,12 @@ class AppState:
             src = chart.get("bsp", []) or []
             status_by_key = {str(it.get("key")): it.get("status") for it in self.bsp_history if it.get("key")}
             next_hist: list[dict[str, Any]] = []
+            seen_keys: set[str] = set()
             for item in sorted(
                 src,
                 key=lambda it: (
                     int(it.get("x", -1)),
-                    LEVEL_ORDER.get(str(it.get("level")), 999),
+                    bsp_level_sort_order(str(it.get("level"))),
                     int(not bool(it.get("is_buy"))),
                 ),
             ):
@@ -6025,6 +6261,9 @@ class AppState:
                     )
                 except Exception:
                     continue
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
                 next_hist.append(
                     {
                         "key": key,
@@ -6040,7 +6279,8 @@ class AppState:
             self.bsp_history = next_hist
             return
 
-        snapshot = self._current_bsp_snapshot(current_x=current_x)
+        # 普通步进也按“当前已知全量快照 - 已冻结历史”增量追加；不按锚点等于当前 K 过滤。
+        snapshot = self._current_bsp_snapshot(current_x=None)
         self._append_bsp_history_items(snapshot)
 
     def _append_bsp_history_items(self, snapshot: list[dict[str, Any]]) -> None:
@@ -6072,14 +6312,16 @@ class AppState:
         if self.get_active_stepper().data_feed_mode == "unified":
             self.sync_bsp_history()
             return
-        self._append_bsp_history_items(self._current_bsp_snapshot_light(current_x=current_x, include_segseg=False))
+        # 不按 current_x 过滤：BSP 常在当前 step 才确认、锚点却落在更早 K。
+        self._append_bsp_history_items(self._current_bsp_snapshot_light(current_x=None, include_segseg=True))
 
     def sync_bsp_history_full_from_current_light(self) -> None:
-        """逐K跑完后补齐全量可见 BSP，避免末根附近未命中的显示缺口。"""
+        """逐K跑完后不做末态回填，避免未来组合标签污染历史。"""
         if self.get_active_stepper().data_feed_mode == "unified":
             self.sync_bsp_history()
             return
-        self._append_bsp_history_items(self._current_bsp_snapshot_light(current_x=None, include_segseg=True))
+        # 逐K模式不做末态回填，避免把未来才出现的组合标签写回历史。
+        return
 
     def sync_rhythm_history(self) -> None:
         current_x = self._current_kline_x()
@@ -6694,9 +6936,7 @@ class AppState:
             if st is None:
                 continue
             st.chart_lazy_layers = merge_chart_lazy_layers(getattr(st, "chart_lazy_layers", None), wanted)
-            st.structure_bundle = None
-            st._bundle_cache_step_idx = None
-            st._chart_payload_cache = {}
+            st.clear_structure_runtime_cache()
             st.rebuild_unified_full_payload_for_layers()
         if self.session_params is not None:
             self.session_params["chart_lazy_layers"] = merge_chart_lazy_layers(
@@ -6812,8 +7052,7 @@ def bt_sync_stepper_to_anchor(stepper: ChanStepper, anchor_time: str) -> None:
         if not stepper.step():
             break
     if int(stepper.step_idx) != prev_step:
-        stepper.structure_bundle = None
-        stepper._bundle_cache_step_idx = None
+        stepper.clear_structure_runtime_cache()
 
 
 def bt_rebuild_coarse_anti_future_vs_fine(
@@ -6889,8 +7128,7 @@ def bt_rebuild_coarse_anti_future_vs_fine(
         "demark": CDemarkEngine(),
     }
     coarse.indicator_history = []
-    coarse.structure_bundle = None
-    coarse._bundle_cache_step_idx = None
+    coarse.clear_structure_runtime_cache()
     coarse.step_idx = -1
     coarse.trend_lines = []
     for _ in range(saved + 1):
@@ -6936,11 +7174,11 @@ def _bt_bsp_key_set(stepper: ChanStepper) -> set[str]:
         return set()
     bundle = stepper.get_structure_bundle()
     keys: set[str] = set()
-    for level in VISIBLE_BSP_LEVELS:
+    for level in bsp_levels_from_layers(getattr(stepper, "chart_lazy_layers", None)):
         bsp_list = get_bundle_bsp_list(bundle, level)
         for bsp in bsp_list.bsp_iter():
             item = make_bsp_item(level, bsp)
-            keys.add(f'{item["level"]}|{int(item["x"])}|{item["label"]}|{1 if item["is_buy"] else 0}')
+            keys.add(ChanStepper._bsp_key(item))
     return keys
 
 
@@ -7105,7 +7343,7 @@ def _eval_indicator_condition(
 
     if kind in ("bsp_buy", "bsp_sell"):
         lv = str(cond.get("level", "bi")).strip().lower()
-        if lv not in VISIBLE_BSP_LEVELS:
+        if not is_bsp_level(lv):
             lv = "bi"
         want_buy = kind == "bsp_buy"
         xi = last_klu_idx()
@@ -7120,7 +7358,7 @@ def _eval_indicator_condition(
             if bool(bsp.is_buy) != want_buy or int(bsp.klu.idx) != xi:
                 continue
             item = make_bsp_item(lv, bsp)
-            k = f'{item["level"]}|{int(item["x"])}|{item["label"]}|{1 if item["is_buy"] else 0}'
+            k = ChanStepper._bsp_key(item)
             if k in new_keys:
                 return True
         return False
@@ -8812,7 +9050,10 @@ HTML = r"""
 <body>
   <div class="wrap">
     <div class="left">
-      <div class="title">chan.py 复盘训练器 <span class="tip-icon" data-tip="Chan.py 缠论复盘交易系统"></span></div>
+      <div class="title" style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+        <span>chan.py 复盘训练器 <span class="tip-icon" data-tip="Chan.py 缠论复盘交易系统"></span></span>
+        <button id="btnCopyCurrentConfig" type="button" style="width:auto; padding:3px 8px; font-size:12px;" data-tip="复制当前基础参数、缠论配置、图表显示设置和系统关键配置，方便粘贴给调试。">复制配置</button>
+      </div>
       <div id="dataSourceStatus" class="sourceStatus mono">当前数据源：未加载</div>
       <div class="mainTabs" role="tablist" aria-label="主标签">
         <button type="button" class="mainTabBtn active" id="btnMainTab1" role="tab" aria-selected="true">1 · 复盘训练</button>
@@ -9181,6 +9422,7 @@ HTML = r"""
           <div id="msgHistoryList" class="msgHistoryList"></div>
           <div class="settingsActions">
             <button id="btnMsgHistoryCopy">复制记录</button>
+            <button id="btnMsgHistoryPrev">上一次记录</button>
             <button id="btnMsgHistoryClear">清空记录</button>
             <button id="btnMsgHistoryOk">确 认</button>
           </div>
@@ -9262,6 +9504,7 @@ HTML = r"""
           </div>
           <div id="globalLoadingActions" class="loadingActions">
             <button id="btnLoadingHistory" type="button">查看历史记录</button>
+            <button id="btnPrevLoadingHistory" type="button">上一次记录</button>
             <button id="btnCopyLoadingHistory" type="button">复制进度</button>
             <button id="btnCancelInitLoad" type="button">终止加载</button>
           </div>
@@ -9735,6 +9978,7 @@ const DEFAULT_CHART_CONFIG = {
   bspBi: { enabled: true, fontSize: 14, lineColor: "#94a3b8", lineWidth: 1, lineStyle: "dashed", lineDash: [5, 4], showLowerExtension: true },
   bspSeg: { enabled: true, fontSize: 14, lineColor: "#64748b", lineWidth: 1.1, lineStyle: "dashed", lineDash: [5, 4], showLowerExtension: true },
   bspSegseg: { enabled: true, fontSize: 14, lineColor: "#475569", lineWidth: 1.2, lineStyle: "dashed", lineDash: [5, 4], showLowerExtension: true },
+  customSegmentLevels: [],
   rhythmLine: {
     enabled: true,
     fractToBiEnabled: true,
@@ -9907,6 +10151,103 @@ const DEFAULT_CHART_CONFIG = {
   },
 };
 
+function customSegLevelNum(level) {
+  const text = String(level || "").trim().toLowerCase();
+  if (text === "segseg") return 2;
+  const m = text.match(/^seg(\d+)$/);
+  if (!m) return null;
+  const n = Number(m[1]);
+  return Number.isFinite(n) && n >= 3 ? Math.floor(n) : null;
+}
+
+function segLevelId(num) {
+  const n = Math.floor(Number(num));
+  return n === 2 ? "segseg" : `seg${n}`;
+}
+
+function segLevelLabel(level) {
+  const n = customSegLevelNum(level);
+  if (n != null) return `${n}段`;
+  if (level === "bi") return "笔";
+  if (level === "seg") return "段";
+  return String(level || "");
+}
+
+function segLevelSortOrder(level) {
+  const text = String(level || "").trim().toLowerCase();
+  if (text === "bi") return 0;
+  if (text === "seg") return 1;
+  const n = customSegLevelNum(text);
+  return n != null ? n : 999;
+}
+
+function lineConfigKeyForLevel(level) {
+  const n = customSegLevelNum(level);
+  return n != null && n >= 3 ? `seg${n}` : String(level || "");
+}
+
+function zsConfigKeyForLevel(level) {
+  const n = customSegLevelNum(level);
+  if (n != null && n >= 3) return `seg${n}Zs`;
+  return level === "segseg" ? "segsegZs" : `${level}Zs`;
+}
+
+function bspConfigKeyForLevel(level) {
+  const n = customSegLevelNum(level);
+  if (n != null && n >= 3) return `bspSeg${n}`;
+  if (level === "segseg") return "bspSegseg";
+  if (level === "seg") return "bspSeg";
+  return "bspBi";
+}
+
+function customSegmentLevelsFromConfig(cfg = chartConfig) {
+  const raw = Array.isArray(cfg && cfg.customSegmentLevels) ? cfg.customSegmentLevels : [];
+  const nums = new Set();
+  raw.forEach((v) => {
+    const n = customSegLevelNum(v);
+    if (n != null && n >= 3) nums.add(n);
+  });
+  return Array.from(nums).sort((a, b) => a - b).map((n) => segLevelId(n));
+}
+
+function allBspLevels(cfg = chartConfig) {
+  return ["bi", "seg", "segseg", ...customSegmentLevelsFromConfig(cfg)];
+}
+
+function allZsLevels(cfg = chartConfig) {
+  return ["fract", "bi", "seg", "segseg", ...customSegmentLevelsFromConfig(cfg)];
+}
+
+function ensureCustomLevelDefaults(cfg) {
+  if (!cfg || typeof cfg !== "object") return cfg;
+  const levels = customSegmentLevelsFromConfig(cfg);
+  cfg.customSegmentLevels = levels;
+  levels.forEach((level) => {
+    const n = customSegLevelNum(level);
+    const lineKey = lineConfigKeyForLevel(level);
+    const zsKey = zsConfigKeyForLevel(level);
+    const bspKey = bspConfigKeyForLevel(level);
+    if (!cfg[lineKey]) cfg[lineKey] = { widthSure: 5.4 + Math.min(4, (n || 3) - 3) * 0.35, widthUnsure: 4.0, color: "#7c3aed" };
+    if (!cfg[zsKey]) cfg[zsKey] = { width: 2.6, color: cfg[lineKey].color || "#7c3aed", enabled: true };
+    if (!cfg[bspKey]) cfg[bspKey] = { enabled: true, fontSize: 14, lineColor: "#475569", lineWidth: 1.2, lineStyle: "dashed", lineDash: [5, 4], showLowerExtension: true };
+    if (typeof cfg[zsKey].enabled !== "boolean") cfg[zsKey].enabled = true;
+    if (typeof cfg[bspKey].enabled !== "boolean") cfg[bspKey].enabled = true;
+  });
+  return cfg;
+}
+
+function addNextCustomSegmentLevel() {
+  flushChartSettingsFormToMemory();
+  const nums = customSegmentLevelsFromConfig(chartConfig).map((level) => customSegLevelNum(level)).filter((n) => n != null);
+  const nextN = nums.length ? Math.max(...nums) + 1 : 3;
+  chartConfig.customSegmentLevels = [...customSegmentLevelsFromConfig(chartConfig), segLevelId(nextN)];
+  ensureCustomLevelDefaults(chartConfig);
+  const key = lineConfigKeyForLevel(segLevelId(nextN));
+  chartSettingsBranchChildSel.__branch_level__ = key;
+  persistChartSettingsBranchChildSel();
+  renderSettingsForm();
+}
+
 function deepMerge(target, source) {
   if (!source || typeof source !== "object" || Array.isArray(source)) return target;
   for (const key in source) {
@@ -9935,6 +10276,8 @@ function migrateChartConfig(cfg) {
   if (!next.bspBi) next.bspBi = {};
   if (!next.bspSeg) next.bspSeg = {};
   if (!next.bspSegseg) next.bspSegseg = {};
+  if (!Array.isArray(next.customSegmentLevels)) next.customSegmentLevels = [];
+  ensureCustomLevelDefaults(next);
   ["bspBi", "bspSeg", "bspSegseg"].forEach((k) => {
     if (typeof next[k].enabled !== "boolean") next[k].enabled = true;
   });
@@ -10106,8 +10449,15 @@ function activeDrawStyle() {
 /** 合并默认 + 持久化 multiPerK[kt]；合并 K 线框开关/样式跟主图 chartConfig（避免叠层默认强制启用线框） */
 function getMultiLayerDrawConfig(kt) {
   const base = JSON.parse(JSON.stringify(DEFAULT_CHART_CONFIG));
+  base.customSegmentLevels = customSegmentLevelsFromConfig(chartConfig);
+  ensureCustomLevelDefaults(base);
   const raw = (chartConfigStore.multiPerK && chartConfigStore.multiPerK[kt]) || {};
   const merged = deepMerge(base, JSON.parse(JSON.stringify(raw)));
+  customSegmentLevelsFromConfig(chartConfig).forEach((level) => {
+    [lineConfigKeyForLevel(level), zsConfigKeyForLevel(level), bspConfigKeyForLevel(level)].forEach((key) => {
+      if (chartConfig[key] && !raw[key]) merged[key] = JSON.parse(JSON.stringify(chartConfig[key]));
+    });
+  });
   merged.klineCombineFrame = deepMerge(
     JSON.parse(JSON.stringify(merged.klineCombineFrame || {})),
     JSON.parse(JSON.stringify(chartConfig.klineCombineFrame || {}))
@@ -11263,48 +11613,53 @@ function getRhythmMaxLayer() {
 }
 
 function getBspConfig(level) {
-  const key = BSP_LEVEL_CONFIG_KEY[level] || "bspBi";
+  const key = BSP_LEVEL_CONFIG_KEY[level] || bspConfigKeyForLevel(level);
   return chartConfig[key] || chartConfig.bspBi || DEFAULT_CHART_CONFIG.bspBi;
 }
 function isBspLevelEnabled(level, cfg = chartConfig, store = chartConfigStore) {
   if (store && store.shared && store.shared.showBottomBsp === false) return false;
-  const key = BSP_LEVEL_CONFIG_KEY[level] || "bspBi";
+  const key = BSP_LEVEL_CONFIG_KEY[level] || bspConfigKeyForLevel(level);
   const c = cfg && cfg[key] ? cfg[key] : DEFAULT_CHART_CONFIG[key];
   return !c || c.enabled !== false;
 }
 function collectChartLazyLayersFromConfig(cfg = chartConfig, store = chartConfigStore) {
   const rhythmOn = !!(cfg && cfg.rhythmLine && cfg.rhythmLine.enabled);
   const rhythmHitOn = !!(cfg && cfg.rhythmHit && cfg.rhythmHit.enabled !== false);
+  const lineLevels = {};
+  customSegmentLevelsFromConfig(cfg).forEach((lv) => { lineLevels[lv] = true; });
+  const bspLevels = {};
+  allBspLevels(cfg).forEach((lv) => { bspLevels[lv] = isBspLevelEnabled(lv, cfg, store); });
+  const zsLevels = {};
+  allZsLevels(cfg).forEach((lv) => {
+    const key = zsConfigKeyForLevel(lv);
+    zsLevels[lv] = !!(cfg && cfg[key] && cfg[key].enabled);
+  });
   return {
     rhythm: rhythmOn,
     rhythm_hits: rhythmOn && rhythmHitOn,
-    bsp_levels: {
-      bi: isBspLevelEnabled("bi", cfg, store),
-      seg: isBspLevelEnabled("seg", cfg, store),
-      segseg: isBspLevelEnabled("segseg", cfg, store),
-    },
-    zs_levels: {
-      fract: !!(cfg && cfg.fractZs && cfg.fractZs.enabled),
-      bi: !!(cfg && cfg.biZs && cfg.biZs.enabled),
-      seg: !!(cfg && cfg.segZs && cfg.segZs.enabled),
-      segseg: !!(cfg && cfg.segsegZs && cfg.segsegZs.enabled),
-    },
+    line_levels: lineLevels,
+    bsp_levels: bspLevels,
+    zs_levels: zsLevels,
   };
 }
 function diffEnabledLazyLayers(prev, next) {
   const out = {
     rhythm: false,
     rhythm_hits: false,
-    bsp_levels: { bi: false, seg: false, segseg: false },
-    zs_levels: { fract: false, bi: false, seg: false, segseg: false },
+    line_levels: {},
+    bsp_levels: {},
+    zs_levels: {},
   };
   if (!prev || !next) return out;
   out.rhythm = !prev.rhythm && !!next.rhythm;
   out.rhythm_hits = !prev.rhythm_hits && !!next.rhythm_hits;
-  ["bi", "seg", "segseg"].forEach((lv) => {
+  Array.from(new Set([...Object.keys(prev.line_levels || {}), ...Object.keys(next.line_levels || {})])).sort((a, b) => segLevelSortOrder(a) - segLevelSortOrder(b)).forEach((lv) => {
+    out.line_levels[lv] = !(prev.line_levels && prev.line_levels[lv]) && !!(next.line_levels && next.line_levels[lv]);
+  });
+  Array.from(new Set([...Object.keys(prev.bsp_levels || {}), ...Object.keys(next.bsp_levels || {})])).sort((a, b) => segLevelSortOrder(a) - segLevelSortOrder(b)).forEach((lv) => {
     out.bsp_levels[lv] = !(prev.bsp_levels && prev.bsp_levels[lv]) && !!(next.bsp_levels && next.bsp_levels[lv]);
   });
-  ["fract", "bi", "seg", "segseg"].forEach((lv) => {
+  Array.from(new Set([...Object.keys(prev.zs_levels || {}), ...Object.keys(next.zs_levels || {})])).sort((a, b) => segLevelSortOrder(a) - segLevelSortOrder(b)).forEach((lv) => {
     out.zs_levels[lv] = !(prev.zs_levels && prev.zs_levels[lv]) && !!(next.zs_levels && next.zs_levels[lv]);
   });
   return out;
@@ -11313,6 +11668,7 @@ function hasAnyLazyLayer(layers) {
   return !!(layers && (
     layers.rhythm ||
     layers.rhythm_hits ||
+    Object.values(layers.line_levels || {}).some(Boolean) ||
     Object.values(layers.bsp_levels || {}).some(Boolean) ||
     Object.values(layers.zs_levels || {}).some(Boolean)
   ));
@@ -11322,13 +11678,17 @@ function filterUnloadedLazyLayers(request, loaded) {
   const out = {
     rhythm: !!request.rhythm && !loaded.rhythm,
     rhythm_hits: !!request.rhythm_hits && !loaded.rhythm_hits,
-    bsp_levels: { bi: false, seg: false, segseg: false },
-    zs_levels: { fract: false, bi: false, seg: false, segseg: false },
+    line_levels: {},
+    bsp_levels: {},
+    zs_levels: {},
   };
-  ["bi", "seg", "segseg"].forEach((lv) => {
+  Array.from(new Set([...Object.keys(request.line_levels || {}), ...Object.keys(loaded.line_levels || {})])).sort((a, b) => segLevelSortOrder(a) - segLevelSortOrder(b)).forEach((lv) => {
+    out.line_levels[lv] = !!(request.line_levels && request.line_levels[lv]) && !(loaded.line_levels && loaded.line_levels[lv]);
+  });
+  Array.from(new Set([...Object.keys(request.bsp_levels || {}), ...Object.keys(loaded.bsp_levels || {})])).sort((a, b) => segLevelSortOrder(a) - segLevelSortOrder(b)).forEach((lv) => {
     out.bsp_levels[lv] = !!(request.bsp_levels && request.bsp_levels[lv]) && !(loaded.bsp_levels && loaded.bsp_levels[lv]);
   });
-  ["fract", "bi", "seg", "segseg"].forEach((lv) => {
+  Array.from(new Set([...Object.keys(request.zs_levels || {}), ...Object.keys(loaded.zs_levels || {})])).sort((a, b) => segLevelSortOrder(a) - segLevelSortOrder(b)).forEach((lv) => {
     out.zs_levels[lv] = !!(request.zs_levels && request.zs_levels[lv]) && !(loaded.zs_levels && loaded.zs_levels[lv]);
   });
   return out;
@@ -11818,6 +12178,7 @@ function flushChartSettingsFormToMemory() {
   dataFormConfig.feedMode = nextDataFeedMode;
   dataFormConfig.klinePresentation = nextKlinePresentation;
   dataFormConfig.offlineDataCustom = nextOfflineDataCustom;
+  ensureCustomLevelDefaults(chartConfig);
 }
 
 function openSettings() {
@@ -11860,6 +12221,15 @@ function isSystemSettingsOpen() {
 }
 
 const MULTI_LAYER_STYLE_KEYS = new Set(["fx", "fract", "bi", "seg", "segseg", "fractZs", "biZs", "segZs", "segsegZs", "candle", "bspBi", "bspSeg", "bspSegseg", "rhythmLine", "rhythmHit", "klineCombineFrame"]);
+function multiLayerStyleKeys() {
+  const keys = new Set(MULTI_LAYER_STYLE_KEYS);
+  customSegmentLevelsFromConfig(chartConfig).forEach((level) => {
+    keys.add(lineConfigKeyForLevel(level));
+    keys.add(zsConfigKeyForLevel(level));
+    keys.add(bspConfigKeyForLevel(level));
+  });
+  return keys;
+}
 
 /** 图表显示：级别 / 中枢 / 买卖点 合并导航（子项仍用原 chartConfig 键持久化） */
 const CHART_SETTINGS_BRANCH_GROUPS = [
@@ -11884,12 +12254,85 @@ const CHART_SETTINGS_BRANCH_GROUPS = [
     title: "买卖点",
     color: "#be123c",
     bgColor: "rgba(190, 18, 60, 0.1)",
-    tip: "K 线下方总开关与各层买卖点样式。\n总开关：shared.showBottomBsp；笔/段/2段：bspBi、bspSeg、bspSegseg。",
+    tip: "K 线下方总开关与各层买卖点样式。\n总开关：shared.showBottomBsp；笔/段/2段：bspBi、bspSeg、bspSegseg。\n逐K喂数据下按当时当下冻结：同级别、同锚点、同方向只保留首次识别标签；未来演化出的组合标签不回写、不追加。",
     childKeys: ["shared_bsp_bottom", "bspBi", "bspSeg", "bspSegseg"],
   },
 ];
 const CHART_SETTINGS_BRANCH_CHILD_KEYS = new Set(CHART_SETTINGS_BRANCH_GROUPS.flatMap((g) => g.childKeys));
 const CHART_SETTINGS_BRANCH_BY_KEY = Object.fromEntries(CHART_SETTINGS_BRANCH_GROUPS.map((g) => [g.key, g]));
+
+function makeCustomLevelLineSection(level) {
+  const label = segLevelLabel(level);
+  const key = lineConfigKeyForLevel(level);
+  const cfg = chartConfig[key] || {};
+  return {
+    title: label,
+    key,
+    color: cfg.color || "#7c3aed",
+    bgColor: "rgba(124, 58, 237, 0.08)",
+    items: [
+      { label: `${label}颜色`, subKey: "color", type: "color" },
+      { label: "粗细(确定)", subKey: "widthSure", type: "number", min: 0.1, max: 14, step: 0.1 },
+      { label: "粗细(未完成)", subKey: "widthUnsure", type: "number", min: 0.1, max: 14, step: 0.1 },
+    ],
+  };
+}
+
+function makeCustomLevelZsSection(level) {
+  const label = segLevelLabel(level);
+  const key = zsConfigKeyForLevel(level);
+  return {
+    title: `${label}中枢`,
+    key,
+    color: "#6d28d9",
+    bgColor: "rgba(109, 40, 217, 0.08)",
+    items: [
+      { label: `启用${label}中枢`, subKey: "enabled", type: "checkbox", tip: "关闭后首包不构建/下发该级别中枢；会话后开启时按需懒加载。" },
+      { label: `${label}中枢颜色`, subKey: "color", type: "color" },
+      { label: `${label}中枢粗细`, subKey: "width", type: "number", min: 0.1, max: 5, step: 0.1 },
+    ],
+  };
+}
+
+function makeCustomLevelBspSection(level) {
+  const label = segLevelLabel(level);
+  const key = bspConfigKeyForLevel(level);
+  return {
+    title: `${label}买卖点`,
+    key,
+    color: "#7f1d1d",
+    bgColor: "rgba(127, 29, 29, 0.08)",
+    items: [
+      { label: `启用${label}买卖点`, subKey: "enabled", type: "checkbox", tip: `关闭后加载会话首包不计算/下发${label}买卖点；会话后再开启会按需懒加载。逐K喂数据模式下，当下性优先，历史买卖点写入后冻结。` },
+      { label: "文字大小", subKey: "fontSize", type: "number", min: 8, max: 30 },
+      { label: "连线颜色", subKey: "lineColor", type: "color" },
+      { label: "连线粗细", subKey: "lineWidth", type: "number", min: 0.1, max: 5, step: 0.1 },
+      { label: "竖线延长线", subKey: "showLowerExtension", type: "checkbox", tip: "控制买卖点从K线低点向下连接到底部信号框的竖线显示。" },
+      { label: "连线线型", subKey: "lineStyle", type: "select", options: [
+        { value: "dashed", label: "虚线" },
+        { value: "solid", label: "实线" },
+        { value: "dotted", label: "点线" },
+      ]},
+    ],
+  };
+}
+
+function chartSettingsBranchChildKeys(branchKey) {
+  const branch = CHART_SETTINGS_BRANCH_BY_KEY[branchKey];
+  const keys = branch ? branch.childKeys.slice() : [];
+  customSegmentLevelsFromConfig(chartConfig).forEach((level) => {
+    if (branchKey === "__branch_level__") keys.push(lineConfigKeyForLevel(level));
+    if (branchKey === "__branch_zs__") keys.push(zsConfigKeyForLevel(level));
+    if (branchKey === "__branch_bsp__") keys.push(bspConfigKeyForLevel(level));
+  });
+  return keys;
+}
+
+function chartSettingsBranchChildKeySet() {
+  const keys = new Set(CHART_SETTINGS_BRANCH_CHILD_KEYS);
+  CHART_SETTINGS_BRANCH_GROUPS.forEach((b) => chartSettingsBranchChildKeys(b.key).forEach((k) => keys.add(k)));
+  return keys;
+}
 
 function persistChartSettingsBranchChildSel() {
   storageSet("chan_chart_settings_branch_sel", JSON.stringify(chartSettingsBranchChildSel));
@@ -11897,8 +12340,8 @@ function persistChartSettingsBranchChildSel() {
 
 /** 旧版左侧直接点「分型/笔中枢」等时，映射到合并组并记住子项 */
 function normalizeChartSettingsCascadeSelKey(key) {
-  if (!key || !CHART_SETTINGS_BRANCH_CHILD_KEYS.has(key)) return key;
-  const branch = CHART_SETTINGS_BRANCH_GROUPS.find((b) => b.childKeys.includes(key));
+  if (!key || !chartSettingsBranchChildKeySet().has(key)) return key;
+  const branch = CHART_SETTINGS_BRANCH_GROUPS.find((b) => chartSettingsBranchChildKeys(b.key).includes(key));
   if (!branch) return key;
   if (!chartSettingsBranchChildSel[branch.key]) chartSettingsBranchChildSel[branch.key] = key;
   persistChartSettingsBranchChildSel();
@@ -11911,8 +12354,8 @@ function buildChartSettingsNavSections(baseSections) {
   const nav = [];
   const inserted = new Set();
   visible.forEach((sec) => {
-    if (CHART_SETTINGS_BRANCH_CHILD_KEYS.has(sec.key)) {
-      const branch = CHART_SETTINGS_BRANCH_GROUPS.find((b) => b.childKeys.includes(sec.key));
+    if (chartSettingsBranchChildKeySet().has(sec.key)) {
+      const branch = CHART_SETTINGS_BRANCH_GROUPS.find((b) => chartSettingsBranchChildKeys(b.key).includes(sec.key));
       if (branch && !inserted.has(branch.key)) {
         inserted.add(branch.key);
         nav.push({
@@ -11922,7 +12365,7 @@ function buildChartSettingsNavSections(baseSections) {
           bgColor: branch.bgColor,
           panel: "branch",
           branchKey: branch.key,
-          childKeys: branch.childKeys.slice(),
+          childKeys: chartSettingsBranchChildKeys(branch.key),
           tip: branch.tip,
           items: [],
         });
@@ -11939,7 +12382,8 @@ function appendMultiLayerPerKStyleSections(container, sections, buildLabelHtml) 
   if (!$("chartMode") || $("chartMode").value !== "multi") return;
   const kts = collectKTypesMultiSelected();
   if (!kts.length) return;
-  const secs = sections.filter((s) => MULTI_LAYER_STYLE_KEYS.has(s.key));
+  const styleKeys = multiLayerStyleKeys();
+  const secs = sections.filter((s) => styleKeys.has(s.key));
   const wrap = document.createElement("div");
   wrap.className = "settingsSection";
   wrap.style.background = "rgba(30, 64, 175, 0.09)";
@@ -12074,6 +12518,11 @@ function appendMultiOverlayPerLayerFields(container, buildLabelHtml) {
 function buildVisibleChartSettingsSections(baseSections) {
   const cmv = $("chartMode") ? String($("chartMode").value || "single") : "single";
   const out = baseSections.filter((s) => s.key !== "multiOverlay" || cmv === "multi");
+  customSegmentLevelsFromConfig(chartConfig).forEach((level) => {
+    out.push(makeCustomLevelLineSection(level));
+    out.push(makeCustomLevelZsSection(level));
+    out.push(makeCustomLevelBspSection(level));
+  });
   if (cmv === "multi") {
     const picked = collectKTypesMultiSelected();
     const driverKt = MULTI_KTYPE_ORDER.filter((k) => picked.includes(k))[0];
@@ -12276,7 +12725,8 @@ function renderMultiPerKPanelInto(parent, kt, baseSections, buildLabelHtml) {
   if (!chartConfigStore.multiPerK || typeof chartConfigStore.multiPerK !== "object") chartConfigStore.multiPerK = {};
   if (!chartConfigStore.multiPerK[kt] || typeof chartConfigStore.multiPerK[kt] !== "object") chartConfigStore.multiPerK[kt] = {};
   const layerMap = chartConfigStore.multiPerK[kt];
-  const secs = baseSections.filter((s) => MULTI_LAYER_STYLE_KEYS.has(s.key));
+  const styleKeys = multiLayerStyleKeys();
+  const secs = buildVisibleChartSettingsSections(baseSections).filter((s) => styleKeys.has(s.key));
   secs.forEach((sec) => {
     const sub = document.createElement("div");
     sub.className = "chart-settings-subblock";
@@ -12381,13 +12831,14 @@ function renderChartSettingsBranchPanel(detailEl, navSec, baseSections, buildLab
   const branch = CHART_SETTINGS_BRANCH_BY_KEY[navSec.branchKey];
   if (!branch) return;
   const visible = buildVisibleChartSettingsSections(baseSections);
-  const childSecs = branch.childKeys.map((k) => visible.find((s) => s.key === k)).filter(Boolean);
+  const branchKeys = chartSettingsBranchChildKeys(branch.key);
+  const childSecs = branchKeys.map((k) => visible.find((s) => s.key === k)).filter(Boolean);
   if (!childSecs.length) {
     detailEl.innerHTML = '<div class="muted">当前模式下无可用子项。</div>';
     return;
   }
   let selChildKey = chartSettingsBranchChildSel[branch.key];
-  if (!branch.childKeys.includes(selChildKey)) selChildKey = branch.childKeys[0];
+  if (!branchKeys.includes(selChildKey)) selChildKey = branchKeys[0];
 
   detailEl.innerHTML = "";
   const head = document.createElement("div");
@@ -12427,6 +12878,15 @@ function renderChartSettingsBranchPanel(detailEl, navSec, baseSections, buildLab
   helpBtn.onclick = () => showAlertAndLog(branch.tip || branch.title);
 
   toolbar.append(grpLbl, grpSel, childLbl, childSel, helpBtn);
+  if (branch.key === "__branch_level__") {
+    const addBtn = document.createElement("button");
+    addBtn.type = "button";
+    addBtn.className = "chart-settings-branch-help";
+    addBtn.textContent = "增加级别";
+    addBtn.setAttribute("data-tip", "新增 3段、4段……并同步添加中枢/买卖点显示设置");
+    addBtn.onclick = addNextCustomSegmentLevel;
+    toolbar.appendChild(addBtn);
+  }
   head.appendChild(toolbar);
   detailEl.appendChild(head);
 
@@ -15817,6 +16277,7 @@ window.addEventListener("keydown", (e) => {
 });
 
 let msgHistory = ensureArray(safeJsonParse(storageGet("chan_msg_history"), []), []);
+let previousMsgHistory = ensureArray(safeJsonParse(storageGet("chan_msg_history_prev"), []), []);
 let lastToastText = "";
 let lastToastAt = 0;
 const rustHistorySeen = new Set();
@@ -15865,6 +16326,96 @@ function msgHistoryText(rows = null) {
   return src.map((m) => `[${String(m.time || "--")}] ${String(m.text || "")}`).join("\n");
 }
 
+function archiveAndClearMsgHistory(reason = "新会话") {
+  if (Array.isArray(msgHistory) && msgHistory.length > 0) {
+    previousMsgHistory = msgHistory.slice();
+    storageSet("chan_msg_history_prev", JSON.stringify(previousMsgHistory));
+  }
+  msgHistory = [];
+  storageSet("chan_msg_history", JSON.stringify(msgHistory));
+  const loading = $("globalLoading");
+  if (loading && loading.classList.contains("show")) renderGlobalLoadingHistory();
+  const modal = $("msgHistoryModal");
+  if (modal && modal.classList.contains("show")) renderMsgHistory();
+  if (reason) appendMsgHistory(`历史记录已清空：${reason}`);
+}
+
+function showPreviousMsgHistory() {
+  const rows = Array.isArray(previousMsgHistory) ? previousMsgHistory : [];
+  if (!rows.length) {
+    setMsg("暂无上一次历史记录。");
+    return;
+  }
+  showMsgHistory(rows, "上一次历史记录");
+}
+
+function dataFormModeLabel(mode) {
+  const m = normalizeDataFormMode(mode);
+  return {
+    traditional: "传统",
+    quantity: "数量",
+    tick_traditional: "分笔价格合成传统",
+    tick_quantity: "分笔价格合成数量",
+  }[m] || m;
+}
+
+function dataFeedModeLabel(mode) {
+  return normalizeDataFeedMode(mode) === "unified" ? "统一喂数据（一次性喂给缠论计算）" : "逐K喂数据";
+}
+
+function klinePresentationLabel(mode) {
+  return normalizeKlinePresentationMode(mode) === "instant" ? "一次性呈现" : "步进";
+}
+
+function quantityAllocLabel(alloc) {
+  return normalizeDataFormQuantityAlloc(alloc) === "back" ? "靠后分配（余数优先分给后方K线）" : "靠前分配（余数优先分给前方K线）";
+}
+
+function collectCheckedLazySummary() {
+  const layers = collectChartLazyLayersFromConfig(chartConfig, chartConfigStore);
+  const onKeys = (obj) => Object.entries(obj || {}).filter(([, v]) => !!v).map(([k]) => segLevelLabel(k));
+  return {
+    rhythm: !!layers.rhythm,
+    rhythmHits: !!layers.rhythm_hits,
+    lineLevels: (Object.entries(layers.line_levels || {}).filter(([, v]) => !!v).map(([k]) => segLevelLabel(k))),
+    bspLevels: onKeys(layers.bsp_levels),
+    zsLevels: onKeys(layers.zs_levels),
+  };
+}
+
+function buildCurrentConfigSummaryText() {
+  flushChartSettingsFormToMemory();
+  const chartMode = $("chartMode") ? String($("chartMode").value || "single") : "single";
+  const k1 = $("kType") ? String($("kType").value || "") : "";
+  const k2 = $("kType2") ? String($("kType2").value || "") : "";
+  const multi = chartMode === "multi" ? collectKTypesMultiSelected().map(getKTypeLabelText).join("、") : "";
+  const lazy = collectCheckedLazySummary();
+  const customLevels = customSegmentLevelsFromConfig(chartConfig).map(segLevelLabel);
+  const qtyMode = isQuantityDataFormMode(dataFormConfig.mode);
+  const lines = [
+    "当前配置快照",
+    "【基础参数】",
+    `代码=${$("code") ? $("code").value : "-"}；开始=${$("begin") ? $("begin").value : "-"}；结束=${$("end") && $("end").value ? $("end").value : "空/最新"}；初始资金=${$("cash") ? $("cash").value : "-"}；复权=${$("autype") ? $("autype").selectedOptions[0].textContent : "-"}`,
+    `图形结构=${$("chartMode") ? $("chartMode").selectedOptions[0].textContent : "-"}；周期1=${getKTypeLabelText(k1)}${chartMode === "dual" ? `；周期2=${getKTypeLabelText(k2)}` : ""}${chartMode === "multi" ? `；叠加周期=${multi || "未选"}` : ""}`,
+    "【配置项】",
+    `数据形式=${dataFormModeLabel(dataFormConfig.mode)}；数量=${qtyMode ? clampDataFormQuantity(dataFormConfig.quantity, getRawKlineCount() || 1) : "不生效"}；数量分配=${qtyMode ? quantityAllocLabel(dataFormConfig.quantityAlloc) : "不生效/控件应灰度"}`,
+    `喂数据方式=${dataFeedModeLabel(dataFormConfig.feedMode)}；K线图呈现形式=${klinePresentationLabel(dataFormConfig.klinePresentation)}；离线数据自定义=${offlineDataCustomLabel(dataFormConfig.offlineDataCustom)}`,
+    "【懒加载/显示】",
+    `中枢=${lazy.zsLevels.length ? lazy.zsLevels.join("、") : "全关"}；买卖点=${lazy.bspLevels.length ? lazy.bspLevels.join("、") : "全关"}；自定义级别=${customLevels.length ? customLevels.join("、") : "无"}；节奏线=${lazy.rhythm ? "开" : "关"}；1382提示=${lazy.rhythmHits ? "开" : "关"}；图底买卖点总开关=${chartConfigStore.shared && chartConfigStore.shared.showBottomBsp === false ? "关" : "开"}`,
+    "【关键逻辑总结】",
+    `数据逻辑：${offlineDataCustomLabel(dataFormConfig.offlineDataCustom)} 会影响 K线、VOL、筹码分布；分笔合成传统/数量均固定从 a_Data 重算。`,
+    `计算逻辑：${dataFeedModeLabel(dataFormConfig.feedMode)}；${klinePresentationLabel(dataFormConfig.klinePresentation)}${normalizeDataFeedMode(dataFormConfig.feedMode) === "step" && normalizeKlinePresentationMode(dataFormConfig.klinePresentation) === "instant" ? " = 自动从第1根逐步 step 到末根并展示当时当下结果" : ""}。`,
+    "买卖点逻辑：逐K喂数据下同级别/同锚点/同方向只冻结首次识别标签，未来组合标签不回写、不追加；当下性优先于事后正确性。",
+    `系统关键项：性能引擎=${systemConfig.performanceEngineMode || DEFAULT_SYSTEM_CONFIG.performanceEngineMode}；买卖点判定=${systemConfig.bspJudgeMode || "auto"}；回退缓存=${systemConfig.rollbackCacheDepth || DEFAULT_SYSTEM_CONFIG.rollbackCacheDepth}/${systemConfig.rollbackFullSnapshotInterval || DEFAULT_SYSTEM_CONFIG.rollbackFullSnapshotInterval}/${systemConfig.rollbackCaptureMaxBars || DEFAULT_SYSTEM_CONFIG.rollbackCaptureMaxBars}`,
+  ];
+  return lines.join("\n");
+}
+
+function appendCurrentConfigSummaryToHistory() {
+  const text = buildCurrentConfigSummaryText();
+  text.split("\n").forEach((line) => appendMsgHistory(line));
+}
+
 async function copyTextToClipboard(text, okMsg = "内容已复制") {
   const t = String(text || "");
   if (!t.trim()) {
@@ -15892,6 +16443,13 @@ async function copyTextToClipboard(text, okMsg = "内容已复制") {
 function setMsg(text, quiet = false) {
   appendMsgHistory(text);
   if (!quiet) showToast(text, { record: false });
+}
+
+if ($("btnCopyCurrentConfig")) {
+  $("btnCopyCurrentConfig").onclick = () => {
+    void copyTextToClipboard(buildCurrentConfigSummaryText(), "当前配置已复制");
+  };
+  markUiBound("btnCopyCurrentConfig");
 }
 
 function showToast(text, options = {}) {
@@ -16148,11 +16706,19 @@ function showRhythmHitNotices(payload) {
   });
 }
 
-function renderMsgHistory() {
+let msgHistoryViewRows = null;
+let msgHistoryViewTitle = "消息历史记录";
+
+function renderMsgHistory(rows = null, title = null) {
   const list = $("msgHistoryList");
   if (!list) return;
   list.innerHTML = "";
-  (Array.isArray(msgHistory) ? msgHistory : []).forEach(m => {
+  const src = Array.isArray(rows) ? rows : (Array.isArray(msgHistory) ? msgHistory : []);
+  msgHistoryViewRows = src;
+  msgHistoryViewTitle = title || "消息历史记录";
+  const titleEl = $("msgHistoryModal") && $("msgHistoryModal").querySelector(".settingsTitle");
+  if (titleEl && titleEl.firstChild) titleEl.firstChild.textContent = msgHistoryViewTitle;
+  src.forEach(m => {
     const item = document.createElement("div");
     item.className = "msgHistoryItem";
     item.innerHTML = `<span class="time">[${escapeHtml(String(m.time || "--"))}]</span><span class="text">${escapeHtml(String(m.text || ""))}</span>`;
@@ -16161,20 +16727,19 @@ function renderMsgHistory() {
   list.scrollTop = list.scrollHeight;
 }
 
-function showMsgHistory() {
-  renderMsgHistory();
+function showMsgHistory(rows = null, title = null) {
+  renderMsgHistory(rows, title);
   $("msgHistoryModal").classList.add("show");
 }
 
 $("btnMsgHistory").onclick = showMsgHistory;
 $("btnMsgHistoryClose").onclick = () => $("msgHistoryModal").classList.remove("show");
 $("btnMsgHistoryOk").onclick = () => $("msgHistoryModal").classList.remove("show");
-if ($("btnMsgHistoryCopy")) $("btnMsgHistoryCopy").onclick = () => copyTextToClipboard(msgHistoryText(), "历史记录已复制");
+if ($("btnMsgHistoryCopy")) $("btnMsgHistoryCopy").onclick = () => copyTextToClipboard(msgHistoryText(msgHistoryViewRows), "历史记录已复制");
+if ($("btnMsgHistoryPrev")) $("btnMsgHistoryPrev").onclick = () => showPreviousMsgHistory();
 $("btnMsgHistoryClear").onclick = () => {
   if (confirmAndLog("确定要清空所有消息历史记录吗？")) {
-    msgHistory = [];
-    storageRemove("chan_msg_history");
-    $("msgHistoryList").innerHTML = "";
+    archiveAndClearMsgHistory("手动清空");
   }
 };
 
@@ -18514,9 +19079,8 @@ function bottomBspRowKey(p) {
   if (!p) return "";
   const lvl = String(p.level || "");
   const x = Math.floor(Number(p.x));
-  const lab = String(p.label || "");
   const buy = p.is_buy ? 1 : 0;
-  return `${lvl}|${x}|${lab}|${buy}`;
+  return `${lvl}|${x}|${buy}`;
 }
 
 /**
@@ -18542,9 +19106,7 @@ function resolveBottomBspRowsForDraw(chart) {
     return mergeChartRowsWithHistory();
   }
   if (chartRows.length > 0 && historyRows.length === 0) return mergeChartRowsWithHistory();
-  if (chartRows.length > historyRows.length) {
-    return mergeChartRowsWithHistory();
-  }
+  if (historyRows.length > 0) return historyRows;
   return historyRows;
 }
 
@@ -18598,7 +19160,7 @@ function buildBottomSignalGroups(chart, bspArr) {
     const bspCfg = getBspConfig(p.level);
     const prefix = p.status === "correct" ? "✓" : (p.status === "wrong" ? "×" : "·");
     const text = `${prefix} ${getBspDisplayLabel(p)}`;
-    const levelPriority = p.level === "segseg" ? 0 : (p.level === "seg" ? 1 : 2);
+    const levelPriority = segLevelSortOrder(p.level);
     const statusPriority = p.status === "correct" ? 0 : (p.status === "wrong" ? 1 : 2);
     push(Number(p.x), {
       kind: "bsp",
@@ -18626,7 +19188,7 @@ function drawBottomSignals(chart, s) {
   const boxGap = 4;
   const boxPadX = 8;
   const boxPadY = 5;
-  const overflowLimit = 6;
+  const compactLimit = 3;
   const byX = new Map((s.visibleK || []).map((k) => [k.x, k]));
 
   for (const x of xs) {
@@ -18634,13 +19196,12 @@ function drawBottomSignals(chart, s) {
     const items = (groups[x] || []).slice().sort((a, b) => (a.priority - b.priority) || (a.sortKey - b.sortKey) || String(a.text).localeCompare(String(b.text)));
     const groupTip = items.map((item) => item.tipText || item.text).join("\n");
     let renderItems = items.slice();
-    if (items.length > overflowLimit) {
-      renderItems = items.slice(0, Math.max(0, overflowLimit - 1));
-      renderItems.push({
+    if (items.length > compactLimit) {
+      renderItems = [{
         kind: "overflow",
         priority: 999,
         sortKey: 999,
-        text: "!",
+        text: String(items.length),
         tipText: groupTip,
         fontSize: Math.max(
           Number(chartConfig.bspBi && chartConfig.bspBi.fontSize) || 14,
@@ -18653,7 +19214,8 @@ function drawBottomSignals(chart, s) {
         lineWidth: 1,
         lineStyle: "dashed",
         hoverOnly: true,
-      });
+        showLowerExtension: false,
+      }];
     }
 
     const boxBottom = s.h - 8;
@@ -19078,6 +19640,13 @@ function drawMainChartChanDecor(chart, s) {
   if (activeDrawStyle().segsegZs.enabled) {
     drawZsRects(chart.segseg_zs || [], s, getCfgColor(activeDrawStyle().segsegZs.color), activeDrawStyle().segsegZs.width);
   }
+  customSegmentLevelsFromConfig(activeDrawStyle()).forEach((level) => {
+    const key = zsConfigKeyForLevel(level);
+    const cfg = activeDrawStyle()[key];
+    if (cfg && cfg.enabled !== false) {
+      drawZsRects((chart.extra_zs && chart.extra_zs[level]) || [], s, getCfgColor(cfg.color), cfg.width);
+    }
+  });
   drawLines(chart.fx_lines || [], s, getCfgColor(activeDrawStyle().fx.color), activeDrawStyle().fx.width, true);
   drawLines((chart.fract || []).filter((x) => x.is_sure), s, getCfgColor(activeDrawStyle().fract.color), activeDrawStyle().fract.widthSure, false);
   drawLines((chart.fract || []).filter((x) => !x.is_sure), s, getCfgColor(activeDrawStyle().fract.color), activeDrawStyle().fract.widthUnsure, true);
@@ -19087,6 +19656,14 @@ function drawMainChartChanDecor(chart, s) {
   drawLines((chart.seg || []).filter((x) => !x.is_sure), s, getCfgColor(activeDrawStyle().seg.color), activeDrawStyle().seg.widthUnsure, true);
   drawLines((chart.segseg || []).filter((x) => x.is_sure), s, getCfgColor(activeDrawStyle().segseg.color), activeDrawStyle().segseg.widthSure, false);
   drawLines((chart.segseg || []).filter((x) => !x.is_sure), s, getCfgColor(activeDrawStyle().segseg.color), activeDrawStyle().segseg.widthUnsure, true);
+  customSegmentLevelsFromConfig(activeDrawStyle()).forEach((level) => {
+    const key = lineConfigKeyForLevel(level);
+    const cfg = activeDrawStyle()[key];
+    const arr = (chart.extra_levels && chart.extra_levels[level]) || [];
+    if (!cfg || !arr.length) return;
+    drawLines(arr.filter((x) => x.is_sure), s, getCfgColor(cfg.color), cfg.widthSure, false);
+    drawLines(arr.filter((x) => !x.is_sure), s, getCfgColor(cfg.color), cfg.widthUnsure, true);
+  });
   drawRhythmLines(chart.rhythm_lines || [], s);
 }
 
@@ -19812,7 +20389,7 @@ function refreshUI(payload, options) {
   syncIndicatorControls();
   if (payload.ready && Array.isArray(payload.bsp_history)) {
     bspHistory = payload.bsp_history.slice();
-    bspHistoryKey = new Set(bspHistory.map((p) => p.key || `${p.level}|${p.x}|${p.label}|${p.is_buy ? 1 : 0}`));
+    bspHistoryKey = new Set(bspHistory.map((p) => p.key || bottomBspRowKey(p)));
   } else {
     bspHistory = [];
     bspHistoryKey = new Set();
@@ -19955,6 +20532,8 @@ $("btnInit").onclick = async () => {
   initAbortController = new AbortController();
   initLoadStartMs = Date.now();
   initLoadServerPct = 0;
+  archiveAndClearMsgHistory("开始加载新会话");
+  appendCurrentConfigSummaryToHistory();
   setGlobalLoading(true, "正在加载会话，请稍候…");
   appendMsgHistory("正在加载会话…");
   startInitStatusPoll();
@@ -20142,6 +20721,10 @@ if ($("btnCancelInitLoad")) {
 if ($("btnLoadingHistory")) {
   $("btnLoadingHistory").onclick = () => showMsgHistory();
   markUiBound("btnLoadingHistory");
+}
+if ($("btnPrevLoadingHistory")) {
+  $("btnPrevLoadingHistory").onclick = () => showPreviousMsgHistory();
+  markUiBound("btnPrevLoadingHistory");
 }
 if ($("btnCopyLoadingHistory")) {
   $("btnCopyLoadingHistory").onclick = () => {
@@ -20475,6 +21058,7 @@ $("btnFinish").onclick = async () => {
   try {
   maybeSaveUserBiRaysOnExit();
   if (!confirmAndLog("确定要结束当前训练吗？")) return;
+    archiveAndClearMsgHistory("结束当前训练");
     const payload = await api("/api/finish");
     refreshUI(payload);
     setMsg("训练已结束。");
@@ -20490,6 +21074,7 @@ $("btnReset").onclick = async () => {
   try {
   maybeSaveUserBiRaysOnExit();
   if (!confirmAndLog("确定要重新训练吗？当前会话状态将被清空。")) return;
+    archiveAndClearMsgHistory("重新训练");
     persistChartConfigStoreNow();
     saveSessionConfig();
     hideGlobalLoading();
@@ -20541,6 +21126,7 @@ $("btnReset").onclick = async () => {
 $("btnExit").onclick = async () => {
   if (!confirmAndLog("确定要退出并终止后台服务吗？")) return;
   maybeSaveUserBiRaysOnExit();
+  archiveAndClearMsgHistory("退出训练器");
   setMsg("正在尝试终止后台服务并关闭页面...");
   try {
     await fetch("/api/exit", { method: "POST" });
