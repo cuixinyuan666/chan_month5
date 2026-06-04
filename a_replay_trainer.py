@@ -3655,12 +3655,36 @@ def empty_bsp_list(bsp_conf) -> CBSPointList:
     return CBSPointList(bs_point_config=bsp_conf)
 
 
+def ensure_recursive_seg_klc_anchors(line: Any) -> None:
+    """a_高阶适配：给 CSeg[CSeg] 补官方 cal_seg 需要的 begin_klc/end_klc。"""
+    if not isinstance(line, CSeg):
+        return
+    start = getattr(line, "start_bi", None)
+    end = getattr(line, "end_bi", None)
+    ensure_recursive_seg_klc_anchors(start)
+    ensure_recursive_seg_klc_anchors(end)
+    begin_klc = getattr(start, "begin_klc", None)
+    end_klc = getattr(end, "end_klc", None)
+    if begin_klc is not None:
+        line.begin_klc = begin_klc
+    if end_klc is not None:
+        line.end_klc = end_klc
+
+
+def prepare_recursive_seg_source(source_lines: Any) -> None:
+    # 官方 Combine_Item 在高阶递推时会访问 start_bi.begin_klc/end_bi.end_klc。
+    for line in source_lines or []:
+        ensure_recursive_seg_klc_anchors(line)
+
+
 def build_hidden_seg_layer(source_lines: Any, conf: CChanConfig):
+    # 经典递推：仿照 KLine_List 中「段 -> 2段」，继续用 cal_seg 做 N段 -> N+1段。
     hidden_seg_list = get_seglist_instance(seg_config=conf.seg_conf, lv=SEG_TYPE.SEG)
     try:
+        prepare_recursive_seg_source(source_lines)
         cal_seg(source_lines, hidden_seg_list, -1)
     except Exception:
-        return hidden_seg_list
+        return get_seglist_instance(seg_config=conf.seg_conf, lv=SEG_TYPE.SEG)
     return hidden_seg_list
 
 
@@ -4541,6 +4565,11 @@ class ChanStepper:
                             cfg_dict[k] = int(v)
                         except (ValueError, TypeError):
                             pass
+                    elif k in ["max_kl_misalgin_cnt", "max_kl_inconsistent_cnt"]:
+                        try:
+                            cfg_dict[k] = int(v)
+                        except (ValueError, TypeError):
+                            pass
                     elif k == "macd" and isinstance(v, dict):
                         macd_dict = cfg_dict.get("macd", {"fast": 12, "slow": 26, "signal": 9}).copy()
                         for mk, mv in v.items():
@@ -4550,6 +4579,30 @@ class ChanStepper:
                                 except (ValueError, TypeError):
                                     pass
                         cfg_dict["macd"] = macd_dict
+                    elif k == "demark" and isinstance(v, dict):
+                        demark_dict = cfg_dict.get(
+                            "demark",
+                            {
+                                "demark_len": 9,
+                                "setup_bias": 4,
+                                "countdown_bias": 2,
+                                "max_countdown": 13,
+                                "tiaokong_st": True,
+                                "setup_cmp2close": True,
+                                "countdown_cmp2close": True,
+                            },
+                        ).copy()
+                        for dk, dv in v.items():
+                            if dv is None or dv == "":
+                                continue
+                            if dk in {"tiaokong_st", "setup_cmp2close", "countdown_cmp2close"}:
+                                demark_dict[dk] = bool(dv)
+                            else:
+                                try:
+                                    demark_dict[dk] = int(dv)
+                                except (ValueError, TypeError):
+                                    pass
+                        cfg_dict["demark"] = demark_dict
                     elif k in (
                         "data_src_kline",
                         "data_src_chip",
@@ -6202,6 +6255,8 @@ class AppState:
         lazy_layers = normalize_chart_lazy_layers(stepper.chart_lazy_layers)
         if segseg_list is not None and chart_lazy_bsp_enabled(lazy_layers, "segseg"):
             segsegseg_list = build_hidden_seg_layer(segseg_list, conf)
+            # 2段BSP依赖2段中枢；轻量路径也要先挂中枢，否则逐K历史会漏掉2段买卖点。
+            build_level_zs(segseg_list, segsegseg_list, conf.zs_conf)
             level_sources.append(("segseg", build_level_bsp(segseg_list, segsegseg_list, conf.seg_bs_point_conf)))
         extra_bsp = stepper.extra_bsp_snapshot_cached(segseg_list=segseg_list, conf=conf, lazy_layers=lazy_layers)
         for level in sorted(extra_bsp.keys(), key=bsp_level_sort_order):
@@ -6281,19 +6336,22 @@ class AppState:
 
         # 普通步进也按“当前已知全量快照 - 已冻结历史”增量追加；不按锚点等于当前 K 过滤。
         snapshot = self._current_bsp_snapshot(current_x=None)
-        self._append_bsp_history_items(snapshot)
+        self._append_bsp_history_items(snapshot, display_x=current_x)
 
-    def _append_bsp_history_items(self, snapshot: list[dict[str, Any]]) -> None:
+    def _append_bsp_history_items(self, snapshot: list[dict[str, Any]], *, display_x: Optional[int] = None) -> None:
         """追加 BSP 历史，供普通步进和轻量逐K共用。"""
         existing_keys = {str(item.get("key")) for item in self.bsp_history}
         for item in snapshot:
             key = self._bsp_key(item)
             if key in existing_keys:
                 continue
+            anchor_x = int(item["x"])
+            shown_x = int(display_x) if display_x is not None else anchor_x
             self.bsp_history.append(
                 {
                     "key": key,
-                    "x": int(item["x"]),
+                    "x": shown_x,
+                    "anchor_x": anchor_x,
                     "is_buy": bool(item["is_buy"]),
                     "label": item["label"],
                     "level": item["level"],
@@ -6313,7 +6371,7 @@ class AppState:
             self.sync_bsp_history()
             return
         # 不按 current_x 过滤：BSP 常在当前 step 才确认、锚点却落在更早 K。
-        self._append_bsp_history_items(self._current_bsp_snapshot_light(current_x=None, include_segseg=True))
+        self._append_bsp_history_items(self._current_bsp_snapshot_light(current_x=None, include_segseg=True), display_x=current_x)
 
     def sync_bsp_history_full_from_current_light(self) -> None:
         """逐K跑完后不做末态回填，避免未来组合标签污染历史。"""
@@ -9939,12 +9997,24 @@ const DEFAULT_CHAN_CONFIG = {
   mean_metrics: "",
   trend_metrics: "",
   macd: { fast: 12, slow: 26, signal: 9 },
+  demark: {
+    demark_len: 9,
+    setup_bias: 4,
+    countdown_bias: 2,
+    max_countdown: 13,
+    tiaokong_st: true,
+    setup_cmp2close: true,
+    countdown_cmp2close: true,
+  },
   cal_demark: false,
   cal_rsi: false,
   cal_kdj: false,
   rsi_cycle: 14,
   kdj_cycle: 9,
   boll_n: 20,
+  max_kl_misalgin_cnt: 2,
+  max_kl_inconsistent_cnt: 5,
+  auto_skip_illegal_sub_lv: false,
   // BSP General
   divergence_rate: "inf",
   min_zs_cnt: 1,
@@ -11898,6 +11968,159 @@ function renderChanSettingsForm() {
     }
   ];
 
+  const readmeTip = (text) => text;
+  const sectionsFromReadme = [
+    {
+      title: "主逻辑 (Algo)",
+      key: "algo",
+      color: "#2563eb",
+      bgColor: "rgba(37, 99, 235, 0.08)",
+      items: [
+        { label: "chan_algo", subKey: "chan_algo", type: "select", options: [
+          { value: "classic", label: "classic" },
+          { value: "new", label: "new" }
+        ], tip: readmeTip("复盘扩展项：classic=工程原有笔/段/2段逻辑；new=新K线 -> 分型 -> 笔 -> 段 -> 2段递推逻辑。") }
+      ]
+    },
+    {
+      title: "笔 (Bi)",
+      key: "bi",
+      color: "#d97706",
+      bgColor: "rgba(217, 119, 6, 0.08)",
+      items: [
+        { label: "bi_algo", subKey: "bi_algo", type: "select", options: [
+          { value: "normal", label: "normal" },
+          { value: "fx", label: "fx" }
+        ], tip: readmeTip("README.md：bi_algo 笔算法，默认为 normal。normal：按缠论笔定义来算；fx：顶底分形即成笔。") },
+        { label: "bi_strict", subKey: "bi_strict", type: "checkbox", tip: readmeTip("README.md：bi_strict 是否只用严格笔（bi_algo=normal时有效），默认为 True。这里的严格笔只考虑顶底分形之间相隔几个合并K线。") },
+        { label: "gap_as_kl", subKey: "gap_as_kl", type: "checkbox", tip: readmeTip("README.md：gap_as_kl 缺口是否处理成一根K线，默认为 True。当前复盘默认 False。") },
+        { label: "bi_end_is_peak", subKey: "bi_end_is_peak", type: "checkbox", tip: readmeTip("README.md：bi_end_is_peak 笔的尾部是否是整笔中最低/最高，默认为 True。") },
+        { label: "bi_fx_check", subKey: "bi_fx_check", type: "select", options: [
+          { value: "strict", label: "strict" },
+          { value: "totally", label: "totally" },
+          { value: "loss", label: "loss" },
+          { value: "half", label: "half" }
+        ], tip: readmeTip("README.md：bi_fx_check 检查笔顶底分形是否成立的方法。strict(默认)：底分型的最低点必须比顶分型3元素最低点的最小值还低，顶分型反之。totally：底分型3元素的最高点必须必顶分型三元素的最低点还低。loss：底分型的最低点比顶分型中间元素低点还低，顶分型反之。half：对于上升笔，底分型的最低点比顶分型前两元素最低点还低，顶分型的最高点比底分型后两元素高点还高；下降笔反之。") },
+        { label: "bi_allow_sub_peak", subKey: "bi_allow_sub_peak", type: "checkbox", tip: readmeTip("README.md：bi_allow_sub_peak 是否允许次高点成笔，默认为 True。") }
+      ]
+    },
+    {
+      title: "线段 (Seg)",
+      key: "seg",
+      color: "#059669",
+      bgColor: "rgba(5, 150, 105, 0.1)",
+      items: [
+        { label: "seg_algo", subKey: "seg_algo", type: "select", options: [
+          { value: "chan", label: "chan" },
+          { value: "1+1", label: "1+1" },
+          { value: "break", label: "break" }
+        ], tip: readmeTip("README.md：seg_algo 线段计算方法。chan：利用特征序列来计算（默认）；1+1：都业华版本 1+1 终结算法；break：线段破坏定义来计算线段。") },
+        { label: "left_seg_method", subKey: "left_seg_method", type: "select", options: [
+          { value: "peak", label: "peak" },
+          { value: "all", label: "all" }
+        ], tip: readmeTip("README.md：left_seg_method 剩余那些不能归入确定线段的笔如何处理成段。all：收集至最后一个方向正确的笔，成为一段；peak：如果有个靠谱的新的极值，那么分成两段（默认）。") }
+      ]
+    },
+    {
+      title: "中枢 (ZS)",
+      key: "zs",
+      color: "#ea580c",
+      bgColor: "rgba(234, 88, 12, 0.08)",
+      items: [
+        { label: "zs_combine", subKey: "zs_combine", type: "checkbox", tip: readmeTip("README.md：zs_combine 是否进行中枢合并，默认为 True。") },
+        { label: "zs_combine_mode", subKey: "zs_combine_mode", type: "select", options: [
+          { value: "zs", label: "zs" },
+          { value: "peak", label: "peak" }
+        ], tip: readmeTip("README.md：zs_combine_mode 中枢合并模式。zs：两中枢区间有重叠才合并（默认）；peak：两中枢有K线重叠就合并。") },
+        { label: "one_bi_zs", subKey: "one_bi_zs", type: "checkbox", tip: readmeTip("README.md：one_bi_zs 是否需要计算只有一笔的中枢（分析趋势时会用到），默认为 False。") },
+        { label: "zs_algo", subKey: "zs_algo", type: "select", options: [
+          { value: "normal", label: "normal" },
+          { value: "over_seg", label: "over_seg" },
+          { value: "auto", label: "auto" }
+        ], tip: readmeTip("README.md：zs_algo 中枢算法 normal/over_seg/auto（段内中枢/跨段中枢/自动），默认为 normal。") }
+      ]
+    },
+    {
+      title: "指标 (Ind)",
+      key: "ind",
+      color: "#6366f1",
+      bgColor: "rgba(99, 102, 241, 0.08)",
+      items: [
+        { label: "mean_metrics", subKey: "mean_metrics", type: "text", placeholder: "5,20", tip: readmeTip("README.md：mean_metrics 均线计算周期（用于生成特征及绘图时使用），默认为空[]。例子：[5,20]。") },
+        { label: "trend_metrics", subKey: "trend_metrics", type: "text", placeholder: "20,60", tip: readmeTip("README.md：trend_metrics 计算上下轨道线周期，即 T 天内最高/低价格（用于生成特征及绘图时使用），默认为空[]。") },
+        { label: "macd.fast", subKey: "macd_fast", type: "number", tip: readmeTip("README.md：macd.fast 默认为12。") },
+        { label: "macd.slow", subKey: "macd_slow", type: "number", tip: readmeTip("README.md：macd.slow 默认为26。") },
+        { label: "macd.signal", subKey: "macd_signal", type: "number", tip: readmeTip("README.md：macd.signal 默认为9。") },
+        { label: "boll_n", subKey: "boll_n", type: "number", tip: readmeTip("README.md：boll_n 布林线参数 N，整数，默认为20。") },
+        { label: "cal_demark", subKey: "cal_demark", type: "checkbox", tip: readmeTip("README.md：cal_demark 是否计算demark指标，默认为False。") },
+        { label: "demark.demark_len", subKey: "demark_len", type: "number", tip: readmeTip("README.md：demark_len setup完成时长度，默认为9。") },
+        { label: "demark.setup_bias", subKey: "setup_bias", type: "number", tip: readmeTip("README.md：setup_bias setup比较偏移量，默认为4。") },
+        { label: "demark.countdown_bias", subKey: "countdown_bias", type: "number", tip: readmeTip("README.md：countdown_bias countdown比较偏移量，默认为2。") },
+        { label: "demark.max_countdown", subKey: "max_countdown", type: "number", tip: readmeTip("README.md：max_countdown 最大countdown数，默认为13。") },
+        { label: "demark.tiaokong_st", subKey: "tiaokong_st", type: "checkbox", tip: readmeTip("README.md：tiaokong_st 序列真实起始位置计算时，如果setup第一根跳空，是否需要取前一根收盘价，默认为True。") },
+        { label: "demark.setup_cmp2close", subKey: "setup_cmp2close", type: "checkbox", tip: readmeTip("README.md：setup_cmp2close setup计算当前K线的收盘价对比的是 setup_bias 根K线前的close，如果不是，下跌setup对比的是low，上升对比的是close，默认为True。") },
+        { label: "demark.countdown_cmp2close", subKey: "countdown_cmp2close", type: "checkbox", tip: readmeTip("README.md：countdown_cmp2close countdown计算当前K线的收盘价对比的是 countdown_bias 根K线前的close，如果不是，下跌setup对比的是low，上升对比的是close，默认为True。") },
+        { label: "cal_rsi", subKey: "cal_rsi", type: "checkbox", tip: readmeTip("README.md：cal_rsi 是否计算rsi指标，默认为False。") },
+        { label: "rsi_cycle", subKey: "rsi_cycle", type: "number", tip: readmeTip("CChanConfig：rsi_cycle 默认为14。") },
+        { label: "cal_kdj", subKey: "cal_kdj", type: "checkbox", tip: readmeTip("README.md：cal_kdj 是否计算kdj指标，默认为False。") },
+        { label: "kdj_cycle", subKey: "kdj_cycle", type: "number", tip: readmeTip("CChanConfig：kdj_cycle 默认为9。") }
+      ]
+    },
+    {
+      title: "买卖点 (BSP)",
+      key: "bsp",
+      color: "#be123c",
+      bgColor: "rgba(190, 18, 60, 0.08)",
+      items: [
+        { label: "divergence_rate", subKey: "divergence_rate", type: "text", tip: readmeTip("README.md：divergence_rate 1类买卖点背驰比例，即离开中枢的笔的 MACD 指标相对于进入中枢的笔，默认为0.9。当前复盘默认 inf。") },
+        { label: "min_zs_cnt", subKey: "min_zs_cnt", type: "number", tip: readmeTip("README.md：min_zs_cnt 1类买卖点至少要经历几个中枢，默认为1。") },
+        { label: "bsp1_only_multibi_zs", subKey: "bsp1_only_multibi_zs", type: "checkbox", tip: readmeTip("README.md：bsp1_only_multibi_zs：min_zs_cnt 计算的中枢至少3笔（少于3笔是因为开启了 one_bi_zs 参数），默认为 True。") },
+        { label: "max_bs2_rate", subKey: "max_bs2_rate", type: "number", tip: readmeTip("README.md：max_bs2_rate 2类买卖点那一笔回撤最大比例，默认为0.9999。注：如果是1.0，那么相当于允许回测到1类买卖点的位置。") },
+        { label: "bs1_peak", subKey: "bs1_peak", type: "checkbox", tip: readmeTip("README.md：bs1_peak 1类买卖点位置是否必须是整个中枢最低点，默认为 True。") },
+        { label: "macd_algo", subKey: "macd_algo", type: "select", options: [
+          { value: "peak", label: "peak" },
+          { value: "full_area", label: "full_area" },
+          { value: "area", label: "area" },
+          { value: "slope", label: "slope" },
+          { value: "amp", label: "amp" },
+          { value: "diff", label: "diff" },
+          { value: "amount", label: "amount" },
+          { value: "volumn", label: "volumn" },
+          { value: "amount_avg", label: "amount_avg" },
+          { value: "volumn_avg", label: "volumn_avg" },
+          { value: "turnrate_avg", label: "turnrate_avg" },
+          { value: "rsi", label: "rsi" }
+        ], tip: readmeTip("README.md：macd_algo MACD指标算法：peak/full_area/area/slope/amp/diff/amount/volumn/amount_avg/volumn_avg/turnrate_avg/rsi。") },
+        { label: "bs_type", subKey: "bs_type", type: "text", tip: readmeTip("README.md：bs_type 关注的买卖点类型，逗号分隔，默认 1,1p,2,2s,3a,3b。1,2：分别表示1、2、3类买卖点；2s：类二买卖点；1p：盘整背驰1类买卖点；3a：中枢出现在1类后面的3类买卖点；3b：中枢出现在1类前面的3类买卖点。") },
+        { label: "bsp2_follow_1", subKey: "bsp2_follow_1", type: "checkbox", tip: readmeTip("README.md：bsp2_follow_1 2类买卖点是否必须跟在1类买卖点后面（用于小转大时1类买卖点因为背驰度不足没生成），默认为 True。") },
+        { label: "bsp3_follow_1", subKey: "bsp3_follow_1", type: "checkbox", tip: readmeTip("README.md：bsp3_follow_1 3类买卖点是否必须跟在1类买卖点后面（用于小转大时1类买卖点因为背驰度不足没生成），默认为 True。") },
+        { label: "bsp3_peak", subKey: "bsp3_peak", type: "checkbox", tip: readmeTip("README.md：bsp3_peak 3类买卖点突破笔是不是必须突破中枢里面最高/最低的，默认为 False。") },
+        { label: "bsp3a_max_zs_cnt", subKey: "bsp3a_max_zs_cnt", type: "number", tip: readmeTip("README.md：bsp3a_max_zs_cnt 3类买卖点最多可以跨越多少个中枢，默认为1。") },
+        { label: "bsp2s_follow_2", subKey: "bsp2s_follow_2", type: "checkbox", tip: readmeTip("README.md：bsp2s_follow_2 类2买卖点是否必须跟在2类买卖点后面（2类买卖点可能由于不满足 max_bs2_rate 最大回测比例条件没生成），默认为 False。") },
+        { label: "max_bsp2s_lv", subKey: "max_bsp2s_lv", type: "text", tip: readmeTip("README.md：max_bsp2s_lv 类2买卖点最大层级（距离2类买卖点的笔的距离/2），默认为None，不做限制。") },
+        { label: "strict_bsp3", subKey: "strict_bsp3", type: "checkbox", tip: readmeTip("README.md：strict_bsp3 3类买卖点对应的中枢必须紧挨着1类买卖点，默认为 False。") }
+      ]
+    },
+    {
+      title: "系统运行 (Sys)",
+      key: "sys",
+      color: "#334155",
+      bgColor: "rgba(51, 65, 85, 0.08)",
+      items: [
+        { label: "trigger_step", subKey: "trigger_step", type: "checkbox", tip: readmeTip("README.md：trigger_step 是否回放逐步返回，复盘逐K模式需要保持开启。") },
+        { label: "skip_step", subKey: "skip_step", type: "number", tip: readmeTip("CChanConfig：skip_step 跳过前 N 步。") },
+        { label: "kl_data_check", subKey: "kl_data_check", type: "checkbox", tip: readmeTip("CChanConfig：kl_data_check 是否检查K线数据完整性，默认为 True。") },
+        { label: "max_kl_misalgin_cnt", subKey: "max_kl_misalgin_cnt", type: "number", tip: readmeTip("CChanConfig：max_kl_misalgin_cnt K线时间错位最大容忍数量，默认为2。") },
+        { label: "max_kl_inconsistent_cnt", subKey: "max_kl_inconsistent_cnt", type: "number", tip: readmeTip("CChanConfig：max_kl_inconsistent_cnt K线不一致最大容忍数量，默认为5。") },
+        { label: "auto_skip_illegal_sub_lv", subKey: "auto_skip_illegal_sub_lv", type: "checkbox", tip: readmeTip("CChanConfig：auto_skip_illegal_sub_lv 是否自动跳过非法子级别，默认为 False。") },
+        { label: "print_warning", subKey: "print_warning", type: "checkbox", tip: readmeTip("CChanConfig：print_warning 是否打印警告，默认为 True；复盘默认 False。") },
+        { label: "print_err_time", subKey: "print_err_time", type: "checkbox", tip: readmeTip("CChanConfig：print_err_time 警告中是否包含时间信息，默认为 True；复盘默认 False。") }
+      ]
+    }
+  ];
+  sections.length = 0;
+  sections.push(...sectionsFromReadme);
+
   const buildLabelHtml = (item) => {
     const tipText = escapeHtmlAttr(item.tip || `${item.label}：用于调整缠论逻辑参数。`);
     const tipIcon = `<svg class="tip-icon" data-tip="${tipText}" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; cursor:help; color:#3b82f6; margin-left:4px;"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>`;
@@ -11924,6 +12147,13 @@ function renderChanSettingsForm() {
       if (item.subKey === "macd_fast") val = (chanConfig.macd && chanConfig.macd.fast) || 12;
       else if (item.subKey === "macd_slow") val = (chanConfig.macd && chanConfig.macd.slow) || 26;
       else if (item.subKey === "macd_signal") val = (chanConfig.macd && chanConfig.macd.signal) || 9;
+      else if (item.subKey === "demark_len") val = (chanConfig.demark && chanConfig.demark.demark_len) || 9;
+      else if (item.subKey === "setup_bias") val = (chanConfig.demark && chanConfig.demark.setup_bias) || 4;
+      else if (item.subKey === "countdown_bias") val = (chanConfig.demark && chanConfig.demark.countdown_bias) || 2;
+      else if (item.subKey === "max_countdown") val = (chanConfig.demark && chanConfig.demark.max_countdown) || 13;
+      else if (item.subKey === "tiaokong_st") val = chanConfig.demark ? chanConfig.demark.tiaokong_st !== false : true;
+      else if (item.subKey === "setup_cmp2close") val = chanConfig.demark ? chanConfig.demark.setup_cmp2close !== false : true;
+      else if (item.subKey === "countdown_cmp2close") val = chanConfig.demark ? chanConfig.demark.countdown_cmp2close !== false : true;
       else val = chanConfig[item.subKey];
 
       if (item.type === "select") {
@@ -11964,11 +12194,13 @@ function renderChanSettingsForm() {
 function saveChanSettings() {
   const inputs = $("chanSettingsContent").querySelectorAll("input, select");
   if (!chanConfig.macd) chanConfig.macd = { fast: 12, slow: 26, signal: 9 };
+  if (!chanConfig.demark) chanConfig.demark = { demark_len: 9, setup_bias: 4, countdown_bias: 2, max_countdown: 13, tiaokong_st: true, setup_cmp2close: true, countdown_cmp2close: true };
   
   inputs.forEach(input => {
     const key = input.dataset.key;
     if (input.type === "checkbox") {
-      chanConfig[key] = input.checked;
+      if (key === "tiaokong_st" || key === "setup_cmp2close" || key === "countdown_cmp2close") chanConfig.demark[key] = input.checked;
+      else chanConfig[key] = input.checked;
     } else if (input.tagName === "SELECT") {
       const val = input.value;
       chanConfig[key] = (val === "true" ? true : (val === "false" ? false : val));
@@ -11977,6 +12209,7 @@ function saveChanSettings() {
       if (key === "macd_fast") chanConfig.macd.fast = numVal;
       else if (key === "macd_slow") chanConfig.macd.slow = numVal;
       else if (key === "macd_signal") chanConfig.macd.signal = numVal;
+      else if (key === "demark_len" || key === "setup_bias" || key === "countdown_bias" || key === "max_countdown") chanConfig.demark[key] = numVal;
       else chanConfig[key] = numVal;
     } else if (key === "mean_metrics" || key === "trend_metrics" || key === "bs_type") {
       chanConfig[key] = input.value; // Store as string for easy editing
@@ -19080,7 +19313,7 @@ function drawBsp(arr, s) {
 function bottomBspRowKey(p) {
   if (!p) return "";
   const lvl = String(p.level || "");
-  const x = Math.floor(Number(p.x));
+  const x = Math.floor(Number(p.anchor_x != null ? p.anchor_x : p.x));
   const buy = p.is_buy ? 1 : 0;
   return `${lvl}|${x}|${buy}`;
 }
@@ -19092,6 +19325,10 @@ function bottomBspRowKey(p) {
 function resolveBottomBspRowsForDraw(chart) {
   const chartRows = (chart && Array.isArray(chart.bsp)) ? chart.bsp : [];
   const historyRows = Array.isArray(bspHistory) ? bspHistory : [];
+  const payloadFeed = normalizeDataFeedMode(lastPayload && lastPayload.data_form ? lastPayload.data_form.feed_mode : dataFormConfig.feedMode);
+  if (payloadFeed === "step" && historyRows.length > 0 && dualInternalRenderDepth === 0) {
+    return historyRows;
+  }
   const mergeChartRowsWithHistory = () => {
     const historyMap = new Map();
     historyRows.forEach((h) => {
@@ -19104,7 +19341,7 @@ function resolveBottomBspRowsForDraw(chart) {
       if (k && historyMap.has(k)) {
         used.add(k);
         const h = historyMap.get(k);
-        // 逐K当下性：同 key 用历史冻结标签；chart 只补历史没覆盖的新级别。
+        // 同 key 用历史冻结标签；统一喂数据/双图再由 chart 补齐当前图索引。
         return { ...it, ...h, key: k, status: h.status != null ? h.status : it.status };
       }
       return { ...it, key: k };
@@ -19171,6 +19408,8 @@ function buildBottomSignalGroups(chart, bspArr) {
     const statusPriority = p.status === "correct" ? 0 : (p.status === "wrong" ? 1 : 2);
     push(Number(p.x), {
       kind: "bsp",
+      anchorX: Number.isFinite(Number(p.anchor_x)) ? Number(p.anchor_x) : Number(p.x),
+      isBuy: !!p.is_buy,
       priority: 0,
       sortKey: levelPriority * 10 + statusPriority,
       text,
@@ -19236,18 +19475,24 @@ function drawBottomSignals(chart, s) {
       const rectW = textW + boxPadX * 2;
       const rectX = xp - rectW / 2;
       const rectY = boxBottom - offsetY - lineH;
-      if (k && item.showLowerExtension !== false) {
-        const anchorY = s.y(k.l);
-        const toY = Math.max(PAD_T + 2, Math.min(s.h - getLayoutPadB() + 8, rectY - 6));
-        ctx.save();
-        ctx.lineWidth = Number(item.lineWidth || 1);
-        ctx.setLineDash(getTradeLineDash(item.lineStyle || "dashed"));
-        ctx.strokeStyle = item.lineColor;
-        ctx.beginPath();
-        ctx.moveTo(xp, anchorY);
-        ctx.lineTo(xp, toY);
-        ctx.stroke();
-        ctx.restore();
+      if (item.showLowerExtension !== false) {
+        const anchorX = Number.isFinite(Number(item.anchorX)) ? Number(item.anchorX) : x;
+        const anchorK = byX.get(anchorX) || k;
+        if (anchorK) {
+          const anchorXp = s.x(Math.max(s.xMin, Math.min(s.xMax, anchorX)));
+          const anchorPrice = item.isBuy ? anchorK.l : anchorK.h;
+          const anchorY = s.y(anchorPrice);
+          const toY = Math.max(PAD_T + 2, Math.min(s.h - getLayoutPadB() + 8, rectY - 6));
+          ctx.save();
+          ctx.lineWidth = Number(item.lineWidth || 1);
+          ctx.setLineDash(getTradeLineDash(item.lineStyle || "dashed"));
+          ctx.strokeStyle = item.lineColor;
+          ctx.beginPath();
+          ctx.moveTo(anchorXp, anchorY);
+          ctx.lineTo(xp, toY);
+          ctx.stroke();
+          ctx.restore();
+        }
       }
       ctx.fillStyle = cssVar("--panel", "#ffffff");
       ctx.strokeStyle = item.borderColor;
