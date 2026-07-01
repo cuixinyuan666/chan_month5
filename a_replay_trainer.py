@@ -74,6 +74,20 @@ from a_replay_core.a_replay_presenters import (
 from a_replay_core.a_replay_serializers import serialize_chan_with_cache, serialize_klu_iter_fast
 from a_replay_core.a_replay_step_utils import serialize_klu_unit_fast
 from a_replay_core.a_perf_engine import PerfEngine
+from a_replay_core.a_rust_chan_shadow import (
+    destroy_rust_chan_state,
+    ensure_rust_chan_state,
+    feed_rust_chan_bar,
+    reset_rust_chan_state,
+    run_rust_chan_shadow,
+    rust_chan_primary_enabled,
+    rust_chan_shadow_enabled,
+    rust_chan_state_created_lines,
+    rust_perf_engine_loaded_lines,
+    rust_presentation_begin_lines,
+    rust_presentation_detail_lines,
+    rust_session_env_trace_lines,
+)
 
 # 尝试导入其他数据源库（缺失时启动阶段给出明确安装提示）
 ASHARE_MOD = None  # ashare 或 PyPI 的 ashares，供 get_price 使用
@@ -3733,9 +3747,25 @@ def build_extra_zs_and_bsp(extra_lines: dict[str, Any], conf: CChanConfig, lazy:
     return extra_zs, extra_bsp
 
 
+def _line_list_raw_items(lines: Any) -> Any:
+    """结构列表原始容器：少复制整表，只看尾巴。"""
+    if lines is None:
+        return []
+    raw = getattr(lines, "lst", None)
+    if isinstance(raw, (list, tuple)):
+        return raw
+    raw = getattr(lines, "bi_list", None)
+    if isinstance(raw, (list, tuple)):
+        return raw
+    try:
+        return list(lines)
+    except Exception:
+        return []
+
+
 def line_list_light_signature(lines: Any, tail: int = 2) -> tuple[Any, ...]:
     try:
-        arr = list(lines)
+        arr = _line_list_raw_items(lines)
     except Exception:
         return (0,)
     sig: list[Any] = [len(arr)]
@@ -3748,6 +3778,62 @@ def line_list_light_signature(lines: Any, tail: int = 2) -> tuple[Any, ...]:
                     bool(getattr(line, "is_sure", False)),
                     float(line.get_begin_val()),
                     float(line.get_end_val()),
+                )
+            )
+        except Exception:
+            sig.append(("?", bool(getattr(line, "is_sure", False))))
+    return tuple(sig)
+
+
+def line_list_structural_signature(lines: Any, tail: int = 3) -> tuple[Any, ...]:
+    """结构签名：段数 + 尾部端点 idx/确认态；忽略形成中价位浮动，减少逐K无效重算。"""
+    try:
+        arr = _line_list_raw_items(lines)
+    except Exception:
+        return (0,)
+    sig: list[Any] = [len(arr)]
+    for line in arr[-max(1, int(tail)):]:
+        try:
+            sig.append(
+                (
+                    int(line.get_begin_klu().idx),
+                    int(line.get_end_klu().idx),
+                    bool(getattr(line, "is_sure", False)),
+                )
+            )
+        except Exception:
+            sig.append(("?", bool(getattr(line, "is_sure", False))))
+    return tuple(sig)
+
+
+def _bsp_list_flat_len(bsp_list: Any) -> int:
+    """BSP 列表扁平长度：用于判断是否有新增买卖点。"""
+    if bsp_list is None:
+        return 0
+    try:
+        return int(len(bsp_list))
+    except Exception:
+        return 0
+
+
+def line_list_full_signature(lines: Any) -> tuple[Any, ...]:
+    """完整结构签名：少猜一点，结构没变才复用 BSP。"""
+    try:
+        arr = _line_list_raw_items(lines)
+    except Exception:
+        return (0,)
+    sig: list[Any] = [len(arr)]
+    for line in arr:
+        try:
+            direction = getattr(line, "dir", None)
+            sig.append(
+                (
+                    int(line.get_begin_klu().idx),
+                    int(line.get_end_klu().idx),
+                    bool(getattr(line, "is_sure", False)),
+                    float(line.get_begin_val()),
+                    float(line.get_end_val()),
+                    getattr(direction, "name", str(direction)),
                 )
             )
         except Exception:
@@ -4205,8 +4291,14 @@ class ChanStepper:
         # 同一步下的图表序列化缓存：键为是否包含 kline_all
         self._chart_payload_cache: dict[bool, tuple[int, dict[str, Any]]] = {}
         self.chart_lazy_layers = normalize_chart_lazy_layers(None)
+        self._segseg_bsp_cache_key: Optional[tuple[Any, ...]] = None
+        self._segseg_bsp_cache_value: Any = None
         self._extra_bsp_cache_key: Optional[tuple[Any, ...]] = None
         self._extra_bsp_cache_value: dict[str, Any] = {}
+        self._extra_lines_cache_key: Optional[tuple[Any, ...]] = None
+        self._extra_lines_cache_value: dict[str, Any] = {}
+        self._bsp_cache_stats: dict[str, Any] = {}
+        self._step_perf_stats: dict[str, Any] = {}
         # unified 模式：全量一次性计算后，仅按 step_idx 切片显示
         self._unified_full_payload: Optional[dict[str, Any]] = None
         self._chan_record_apply: ChanRecordApplyResult = ChanRecordApplyResult()
@@ -4215,29 +4307,186 @@ class ChanStepper:
         # Rust/Python 高性能过渡引擎会话：先接数据/筹码/步进增量层
         self.perf_session_id: Optional[str] = None
         self.perf_engine_mode: str = "rust-missing"
+        self.rust_chan_state_id: Optional[str] = None
+        self._rust_chan_shadow_disabled: bool = False
+        self._rust_chan_primary_used: bool = False
 
-    def clear_structure_runtime_cache(self) -> None:
+    def _maybe_presentation_rust_shadow(self, ms: float, mismatch: Optional[str]) -> None:
+        # shadow 关时只喂 bar 的旧路径已移除，此处再挡一层避免误记账
+        if not rust_chan_shadow_enabled():
+            return
+        app = globals().get("APP_STATE")
+        if app is None or not hasattr(app, "_presentation_perf_active"):
+            return
+        if not app._presentation_perf_active():
+            return
+        app._presentation_perf_add("rust_shadow_ms", ms)
+        app._presentation_perf_inc("rust_shadow_calls")
+        if mismatch:
+            perf = getattr(app, "_presentation_perf", None)
+            if isinstance(perf, dict) and perf.get("rust_shadow_mismatch_step") is None:
+                perf["rust_shadow_mismatch_step"] = int(self.step_idx)
+                push_record_trace(f"RustChan shadow: {mismatch}")
+
+    def clear_bsp_signature_cache(self) -> None:
+        """清掉结构签名 BSP 缓存：新会话、重配、图层变化才需要。"""
+        self._segseg_bsp_cache_key = None
+        self._segseg_bsp_cache_value = None
+        self._extra_bsp_cache_key = None
+        self._extra_bsp_cache_value = {}
+        self._extra_lines_cache_key = None
+        self._extra_lines_cache_value = {}
+
+    def reset_bsp_cache_stats(self) -> None:
+        """一次性呈现性能账本：只统计缓存命中，不参与计算。"""
+        self._bsp_cache_stats = {
+            "segseg_calls": 0,
+            "segseg_hit": 0,
+            "segseg_miss": 0,
+            "segseg_ms": 0.0,
+            "extra_calls": 0,
+            "extra_empty": 0,
+            "extra_hit": 0,
+            "extra_miss": 0,
+            "extra_ms": 0.0,
+            "extra_lines_hit": 0,
+            "extra_lines_miss": 0,
+            "extra_lines_ms": 0.0,
+        }
+
+    def bsp_cache_stats_snapshot(self) -> dict[str, Any]:
+        return dict(getattr(self, "_bsp_cache_stats", {}) or {})
+
+    def reset_step_perf_stats(self) -> None:
+        """一次性呈现 step 内部账本：只看热点，不参与计算。"""
+        self._step_perf_stats = {
+            "calls": 0,
+            "iter_ms": 0.0,
+            "clear_cache_ms": 0.0,
+            "extract_klu_ms": 0.0,
+            "kline_cache_ms": 0.0,
+            "indicator_ms": 0.0,
+            "demark_extract_ms": 0.0,
+            "history_append_ms": 0.0,
+            "bundle_ms": 0.0,
+            "rust_shadow_ms": 0.0,
+            "rust_shadow_calls": 0,
+        }
+
+    def step_perf_stats_snapshot(self) -> dict[str, Any]:
+        return dict(getattr(self, "_step_perf_stats", {}) or {})
+
+    def _step_perf_add(self, key: str, value: float) -> None:
+        stats = getattr(self, "_step_perf_stats", None)
+        if not isinstance(stats, dict) or not stats:
+            return
+        stats[key] = float(stats.get(key, 0.0)) + float(value)
+
+    def _step_perf_inc(self, key: str, value: int = 1) -> None:
+        stats = getattr(self, "_step_perf_stats", None)
+        if not isinstance(stats, dict) or not stats:
+            return
+        stats[key] = int(stats.get(key, 0)) + int(value)
+
+    def clear_structure_runtime_cache(self, *, clear_bsp_cache: bool = False) -> None:
         self.structure_bundle = None
         self._bundle_cache_step_idx = None
         self._chart_payload_cache = {}
-        self._extra_bsp_cache_key = None
-        self._extra_bsp_cache_value = {}
+        if clear_bsp_cache:
+            self.clear_bsp_signature_cache()
 
     def extra_bsp_snapshot_cached(self, *, segseg_list: Any, conf: CChanConfig, lazy_layers: dict[str, Any]) -> dict[str, Any]:
         """逐K当下性缓存：输入只来自当前已喂入结构，签名没变才复用。"""
+        t0 = time.perf_counter()
+        stats = getattr(self, "_bsp_cache_stats", None)
+        if isinstance(stats, dict):
+            stats["extra_calls"] = int(stats.get("extra_calls", 0)) + 1
         if segseg_list is None:
+            if isinstance(stats, dict):
+                stats["extra_empty"] = int(stats.get("extra_empty", 0)) + 1
+                stats["extra_ms"] = float(stats.get("extra_ms", 0.0)) + (time.perf_counter() - t0) * 1000.0
             return {}
         wanted = tuple(extra_seg_levels_from_layers({"bsp_levels": lazy_layers.get("bsp_levels", {})}))
         if not wanted:
+            if isinstance(stats, dict):
+                stats["extra_empty"] = int(stats.get("extra_empty", 0)) + 1
+                stats["extra_ms"] = float(stats.get("extra_ms", 0.0)) + (time.perf_counter() - t0) * 1000.0
             return {}
-        key = (wanted, line_list_light_signature(segseg_list))
+        key = (
+            "extra_bsp",
+            wanted,
+            id(conf),
+            id(conf.seg_conf),
+            id(conf.zs_conf),
+            id(conf.seg_bs_point_conf),
+            line_list_structural_signature(segseg_list),
+        )
         if key == self._extra_bsp_cache_key:
+            if isinstance(stats, dict):
+                stats["extra_hit"] = int(stats.get("extra_hit", 0)) + 1
+                stats["extra_ms"] = float(stats.get("extra_ms", 0.0)) + (time.perf_counter() - t0) * 1000.0
             return self._extra_bsp_cache_value
-        extra_lines = build_extra_seg_chain(segseg_list, conf, lazy_layers, new_algo=False)
+        lines_key = (
+            "extra_lines",
+            wanted,
+            id(conf),
+            id(conf.seg_conf),
+            line_list_structural_signature(segseg_list),
+        )
+        lines_t0 = time.perf_counter()
+        if lines_key == self._extra_lines_cache_key:
+            extra_lines = self._extra_lines_cache_value
+            if isinstance(stats, dict):
+                stats["extra_lines_hit"] = int(stats.get("extra_lines_hit", 0)) + 1
+                stats["extra_lines_ms"] = float(stats.get("extra_lines_ms", 0.0)) + (time.perf_counter() - lines_t0) * 1000.0
+        else:
+            extra_lines = build_extra_seg_chain(segseg_list, conf, lazy_layers, new_algo=False)
+            self._extra_lines_cache_key = lines_key
+            self._extra_lines_cache_value = extra_lines
+            if isinstance(stats, dict):
+                stats["extra_lines_miss"] = int(stats.get("extra_lines_miss", 0)) + 1
+                stats["extra_lines_ms"] = float(stats.get("extra_lines_ms", 0.0)) + (time.perf_counter() - lines_t0) * 1000.0
         _, extra_bsp = build_extra_zs_and_bsp(extra_lines, conf, lazy_layers)
         self._extra_bsp_cache_key = key
         self._extra_bsp_cache_value = extra_bsp
+        if isinstance(stats, dict):
+            stats["extra_miss"] = int(stats.get("extra_miss", 0)) + 1
+            stats["extra_ms"] = float(stats.get("extra_ms", 0.0)) + (time.perf_counter() - t0) * 1000.0
         return extra_bsp
+
+    def segseg_bsp_snapshot_cached(self, *, segseg_list: Any, conf: CChanConfig):
+        """一次性逐K：2段结构没变时，复用隐藏上级和 BSP 结果。"""
+        t0 = time.perf_counter()
+        stats = getattr(self, "_bsp_cache_stats", None)
+        if isinstance(stats, dict):
+            stats["segseg_calls"] = int(stats.get("segseg_calls", 0)) + 1
+        if segseg_list is None:
+            if isinstance(stats, dict):
+                stats["segseg_ms"] = float(stats.get("segseg_ms", 0.0)) + (time.perf_counter() - t0) * 1000.0
+            return None
+        key = (
+            "segseg_bsp",
+            id(conf),
+            id(conf.seg_conf),
+            id(conf.zs_conf),
+            id(conf.seg_bs_point_conf),
+            line_list_structural_signature(segseg_list),
+        )
+        if key == self._segseg_bsp_cache_key:
+            if isinstance(stats, dict):
+                stats["segseg_hit"] = int(stats.get("segseg_hit", 0)) + 1
+                stats["segseg_ms"] = float(stats.get("segseg_ms", 0.0)) + (time.perf_counter() - t0) * 1000.0
+            return self._segseg_bsp_cache_value
+        segsegseg_list = build_hidden_seg_layer(segseg_list, conf)
+        # 2段 BSP 先挂中枢，保持原来的当下性计算口径。
+        build_level_zs(segseg_list, segsegseg_list, conf.zs_conf)
+        bsp_list = build_level_bsp(segseg_list, segsegseg_list, conf.seg_bs_point_conf)
+        self._segseg_bsp_cache_key = key
+        self._segseg_bsp_cache_value = bsp_list
+        if isinstance(stats, dict):
+            stats["segseg_miss"] = int(stats.get("segseg_miss", 0)) + 1
+            stats["segseg_ms"] = float(stats.get("segseg_ms", 0.0)) + (time.perf_counter() - t0) * 1000.0
+        return bsp_list
 
     def _cfg_without_chan_algo(self, cfg_dict: dict[str, Any]) -> dict[str, Any]:
         # 训练器 / API 自用键，勿传入 CChanConfig（否则会触发 unknown para）
@@ -4508,7 +4757,7 @@ class ChanStepper:
         set_active_offline_data_custom(off_custom)
         self.offline_data_custom = off_custom
         self.chart_lazy_layers = normalize_chart_lazy_layers(chart_lazy_layers)
-        self.clear_structure_runtime_cache()
+        self.clear_structure_runtime_cache(clear_bsp_cache=True)
         self._session_begin_date = begin_date
         self._session_end_date = end_date
         
@@ -4871,10 +5120,12 @@ class ChanStepper:
             )
             self.perf_session_id = perf_session.session_id
             self.perf_engine_mode = perf_session.engine_mode
-            push_record_trace(
-                f"Rust性能引擎：会话加载成功，mode={perf_session.engine_mode}，"
-                f"K线={perf_session.bar_count}，筹码={perf_session.chip_bar_count}"
-            )
+            for line in rust_perf_engine_loaded_lines(
+                engine_mode=str(perf_session.engine_mode),
+                bar_count=int(perf_session.bar_count),
+                chip_bar_count=int(perf_session.chip_bar_count),
+            ):
+                push_record_trace(line)
         if self._chan_record_apply.applied and init_kline_all_for_chip:
             wider = _pick_wider_kline_all_for_chip(
                 [init_kline_all_for_chip, list(self.kline_all or [])]
@@ -4945,7 +5196,7 @@ class ChanStepper:
             self.indicator_history = []
             self.trend_lines = []
             self._serialized_klu_cache = []
-            self.clear_structure_runtime_cache()
+            self.clear_structure_runtime_cache(clear_bsp_cache=True)
             self._unified_full_payload = None
             if self.data_feed_mode == "unified":
                 unified_t0_ms = int(time.time() * 1000)
@@ -4987,6 +5238,12 @@ class ChanStepper:
             else:
                 self._iter = self.chan.step_load()
                 self.step_idx = -1
+                destroy_rust_chan_state(self)
+                # 仅 shadow/primary 开启时才创建 Rust Chan 状态机，避免关 shadow 仍逐根 feed_bar
+                if rust_chan_shadow_enabled() or rust_chan_primary_enabled():
+                    ensure_rust_chan_state(self)
+                    for line in rust_chan_state_created_lines(self):
+                        push_record_trace(line)
 
         if self._chan_record_enabled and not self._chan_record_apply.applied:
             push_record_trace("缠论record：未命中，将后台异步保存本次全量计算")
@@ -5141,7 +5398,7 @@ class ChanStepper:
             _check_init_cancelled()
         self._rebuild_indicator_history_from_chan()
         self.step_idx = target_step
-        self.clear_structure_runtime_cache()
+        self.clear_structure_runtime_cache(clear_bsp_cache=True)
         if use_master_kline_for_chart(self.data_form_mode):
             self._serialized_klu_cache = serialize_replay_master_klines(master[: target_step + 1])
         else:
@@ -5174,14 +5431,58 @@ class ChanStepper:
                 return False
             raise ValueError("全量呈现后会话已在末根，请回退后再步进")
         try:
-            next(self._iter)
-            self.step_idx += 1
+            self._step_perf_inc("calls")
+            primary = rust_chan_primary_enabled() and bool(self._suppress_step_bundle_refresh)
+            master = self._replay_klus_master or []
+            if primary:
+                next_idx = self.step_idx + 1
+                if next_idx >= len(master):
+                    return False
+                klu = master[next_idx]
+                t0 = time.perf_counter()
+                feed_rust_chan_bar(
+                    self,
+                    idx=int(getattr(klu, "idx", next_idx)),
+                    high=float(klu.high),
+                    low=float(klu.low),
+                    close=float(klu.close),
+                )
+                self._step_perf_add("iter_ms", (time.perf_counter() - t0) * 1000.0)
+                self._rust_chan_primary_used = True
+                self.step_idx += 1
+                latest_klu = klu
+            else:
+                t0 = time.perf_counter()
+                next(self._iter)
+                self._step_perf_add("iter_ms", (time.perf_counter() - t0) * 1000.0)
+                self.step_idx += 1
+                kl_list = self.chan[0]
+                latest_klu = kl_list.lst[-1].lst[-1]
+                # shadow 关：不 feed_bar、不比对，避免误记为「shadow 双跑」
+                if rust_chan_shadow_enabled():
+                    shadow_t0 = time.perf_counter()
+                    feed_rust_chan_bar(
+                        self,
+                        idx=int(latest_klu.idx),
+                        high=float(latest_klu.high),
+                        low=float(latest_klu.low),
+                        close=float(latest_klu.close),
+                    )
+                    mismatch = run_rust_chan_shadow(self, step_idx=int(self.step_idx))
+                    shadow_ms = (time.perf_counter() - shadow_t0) * 1000.0
+                    self._step_perf_add("rust_shadow_ms", shadow_ms)
+                    self._maybe_presentation_rust_shadow(shadow_ms, mismatch)
+            t0 = time.perf_counter()
             self.clear_structure_runtime_cache()
+            self._step_perf_add("clear_cache_ms", (time.perf_counter() - t0) * 1000.0)
             # Update indicators
-            kl_list = self.chan[0]
-            latest_klu = kl_list.lst[-1].lst[-1]
+            t0 = time.perf_counter()
+            if not primary:
+                kl_list = self.chan[0]
             h, l, c = float(latest_klu.high), float(latest_klu.low), float(latest_klu.close)
             vol = _klu_float_trade_metric(latest_klu, DATA_FIELD.FIELD_VOLUME)
+            self._step_perf_add("extract_klu_ms", (time.perf_counter() - t0) * 1000.0)
+            t0 = time.perf_counter()
             if use_master_kline_for_chart(self.data_form_mode):
                 master = self._replay_klus_master or []
                 self._serialized_klu_cache = serialize_replay_master_klines(
@@ -5194,14 +5495,18 @@ class ChanStepper:
                         lambda x: _klu_float_trade_metric(x, DATA_FIELD.FIELD_VOLUME),
                     )
                 )
-            
+            self._step_perf_add("kline_cache_ms", (time.perf_counter() - t0) * 1000.0)
+
+            t0 = time.perf_counter()
             macd_item = self.indicators["macd"].add(c)
             kdj_item = self.indicators["kdj"].add(h, l, c)
             rsi_val = self.indicators["rsi"].add(c)
             boll_item = self.indicators["boll"].add(c)
             demark_idx = self.indicators["demark"].update(latest_klu.idx, c, h, l)
-            
+            self._step_perf_add("indicator_ms", (time.perf_counter() - t0) * 1000.0)
+
             # Extract current demark points
+            t0 = time.perf_counter()
             demark_pts = []
             for item in demark_idx.data:
                 demark_pts.append({
@@ -5210,7 +5515,9 @@ class ChanStepper:
                     "val": item["idx"],
                     "x": item["idx_in_kl"] if "idx_in_kl" in item else latest_klu.idx # Fallback to current
                 })
+            self._step_perf_add("demark_extract_ms", (time.perf_counter() - t0) * 1000.0)
 
+            t0 = time.perf_counter()
             self.indicator_history.append({
                 "x": latest_klu.idx,
                 "macd": {"dif": macd_item.DIF, "dea": macd_item.DEA, "macd": macd_item.macd},
@@ -5220,10 +5527,13 @@ class ChanStepper:
                 "vol": vol,
                 "demark": demark_pts
             })
-            
+            self._step_perf_add("history_append_ms", (time.perf_counter() - t0) * 1000.0)
+
             # 自动一次性呈现只收集 BSP，完整图表包留到末尾统一构建。
             if not self._suppress_step_bundle_refresh:
+                t0 = time.perf_counter()
                 self.get_structure_bundle(force=True)
+                self._step_perf_add("bundle_ms", (time.perf_counter() - t0) * 1000.0)
             return True
         except StopIteration:
             return False
@@ -5455,6 +5765,13 @@ class AppState:
         self.session_params: Optional[dict[str, Any]] = None
         self.trade_events: list[dict[str, Any]] = []
         self.bsp_history: list[dict[str, Any]] = []
+        self._bsp_history_seen_keys: set[str] = set()
+        self._bsp_history_seen_list_id: int = id(self.bsp_history)
+        self._bsp_history_seen_count: int = 0
+        self._bsp_light_level_signatures: dict[str, tuple[Any, ...]] = {}
+        self._bsp_level_scan_meta: dict[str, tuple[Any, ...]] = {}
+        self._bsp_delta_collector_id: str = ""
+        self._presentation_perf: dict[str, Any] = {}
         # trigger_step==False 全量预计算的买卖点（基于当前缠论配置）
         self.bsp_all_snapshot: list[dict[str, Any]] = []
         # 用于检测各级别变向（不区分确定/不确定）
@@ -5490,6 +5807,231 @@ class AppState:
         # BSP 全量快照前缀索引缓存：用内存换判定速度。
         self._bsp_all_prefix_x: list[int] = []
         self._bsp_all_prefix_keys: list[set[str]] = []
+
+    def _reset_bsp_incremental_cache(self) -> None:
+        """重置逐K BSP 增量小账本，避免回退/重配后串历史。"""
+        self._bsp_history_seen_keys = set()
+        self._bsp_history_seen_list_id = id(self.bsp_history)
+        self._bsp_history_seen_count = len(self.bsp_history)
+        self._bsp_light_level_signatures = {}
+        self._bsp_level_scan_meta = {}
+        self._reset_rust_bsp_delta_collector()
+
+    def _current_bsp_delta_collector_id(self) -> str:
+        try:
+            stepper = self.get_active_stepper()
+        except Exception:
+            stepper = self.stepper
+        sid = str(getattr(stepper, "perf_session_id", "") or id(stepper))
+        return f"{id(self)}:{sid}:{self.active_chart_id}"
+
+    def _reset_rust_bsp_delta_collector(self) -> None:
+        self._bsp_delta_collector_id = self._current_bsp_delta_collector_id()
+        try:
+            APP_PERF_ENGINE.reset_bsp_delta_collector(self._bsp_delta_collector_id, self.bsp_history)
+        except Exception:
+            pass
+
+    def _bsp_history_seen_keys_current(self) -> set[str]:
+        """拿到已冻结 BSP key 集合；历史列表换过就重建一次。"""
+        cur_id = id(self.bsp_history)
+        cur_len = len(self.bsp_history)
+        if (
+            cur_id != getattr(self, "_bsp_history_seen_list_id", None)
+            or cur_len != getattr(self, "_bsp_history_seen_count", -1)
+        ):
+            self._bsp_history_seen_keys = {
+                str(item.get("key"))
+                for item in self.bsp_history
+                if isinstance(item, dict) and item.get("key")
+            }
+            self._bsp_history_seen_list_id = cur_id
+            self._bsp_history_seen_count = cur_len
+            self._bsp_light_level_signatures = {}
+            self._bsp_level_scan_meta = {}
+            self._reset_rust_bsp_delta_collector()
+        return self._bsp_history_seen_keys
+
+    def _mark_bsp_history_appended(self, key: str) -> None:
+        self._bsp_history_seen_keys.add(str(key))
+        self._bsp_history_seen_list_id = id(self.bsp_history)
+        self._bsp_history_seen_count = len(self.bsp_history)
+
+    @staticmethod
+    def _bsp_source_signature(*parts: Any) -> tuple[Any, ...]:
+        """结构尾巴签名：用于判断某级 BSP 是否需要重新扫。"""
+        return tuple(parts)
+
+    def _bsp_incremental_need_scan(
+        self,
+        level: str,
+        structural_sig: tuple[Any, ...],
+        bsp_list: Any,
+    ) -> bool:
+        """结构签名+列表长度未变则跳过；形成中价位浮动不触发重扫。"""
+        flat_len = _bsp_list_flat_len(bsp_list)
+        meta = self._bsp_level_scan_meta.get(str(level))
+        bsp_id = id(bsp_list) if bsp_list is not None else 0
+        if meta and meta[0] == structural_sig and meta[1] == bsp_id and meta[2] == flat_len:
+            return False
+        return True
+
+    def _bsp_incremental_mark_scanned(
+        self,
+        level: str,
+        structural_sig: tuple[Any, ...],
+        bsp_list: Any,
+    ) -> None:
+        self._bsp_level_scan_meta[str(level)] = (
+            structural_sig,
+            id(bsp_list) if bsp_list is not None else 0,
+            _bsp_list_flat_len(bsp_list),
+        )
+
+    def _bsp_struct_sig_unchanged(self, key: str, structural_sig: tuple[Any, ...]) -> bool:
+        """高级别 BSP 重算门闩：2段/3段结构签名未变则跳过重链构建。"""
+        return self._bsp_level_scan_meta.get(f"@{key}") == structural_sig
+
+    def _bsp_mark_struct_sig(self, key: str, structural_sig: tuple[Any, ...]) -> None:
+        self._bsp_level_scan_meta[f"@{key}"] = structural_sig
+
+    def _reset_presentation_perf(self, *, target_step: int, total: int) -> None:
+        """一次性呈现性能账本：只记耗时和次数，不改计算结果。"""
+        self._presentation_perf = {
+            "enabled": True,
+            "target_step": int(target_step),
+            "total": int(total),
+            "loop_steps": 0,
+            "step_calls": 0,
+            "step_ms": 0.0,
+            "progress_ms": 0.0,
+            "bsp_sync_calls": 0,
+            "bsp_sync_ms": 0.0,
+            "bsp_snapshot_calls": 0,
+            "bsp_snapshot_ms": 0.0,
+            "bsp_snapshot_items": 0,
+            "bsp_append_calls": 0,
+            "bsp_append_ms": 0.0,
+            "rust_collect_calls": 0,
+            "rust_collect_ms": 0.0,
+            "rust_items": 0,
+            "python_items": 0,
+            "rust_shadow_ms": 0.0,
+            "rust_shadow_calls": 0,
+            "rust_shadow_mismatch_step": None,
+            "dual_sync_ms": 0.0,
+            "final_sync_ms": 0.0,
+            "coarse_rebuild_ms": 0.0,
+            "levels": {},
+            "cache": {},
+        }
+        for st in [self.stepper, self.stepper2, *(self.multi_steppers or [])]:
+            if st is not None and hasattr(st, "reset_bsp_cache_stats"):
+                st.reset_bsp_cache_stats()
+            if st is not None and hasattr(st, "reset_step_perf_stats"):
+                st.reset_step_perf_stats()
+
+    def _presentation_perf_active(self) -> bool:
+        return bool((getattr(self, "_presentation_perf", None) or {}).get("enabled"))
+
+    def _presentation_perf_add(self, key: str, value: float) -> None:
+        perf = getattr(self, "_presentation_perf", None)
+        if not perf or not perf.get("enabled"):
+            return
+        perf[key] = float(perf.get(key, 0.0)) + float(value)
+
+    def _presentation_perf_inc(self, key: str, value: int = 1) -> None:
+        perf = getattr(self, "_presentation_perf", None)
+        if not perf or not perf.get("enabled"):
+            return
+        perf[key] = int(perf.get(key, 0)) + int(value)
+
+    def _presentation_level_perf(self, level: str) -> Optional[dict[str, Any]]:
+        perf = getattr(self, "_presentation_perf", None)
+        if not perf or not perf.get("enabled"):
+            return None
+        levels = perf.setdefault("levels", {})
+        return levels.setdefault(
+            str(level),
+            {"checks": 0, "skip": 0, "scan": 0, "items": 0, "scan_ms": 0.0},
+        )
+
+    def _presentation_record_bsp_snapshot(self, start: float, item_count: int) -> None:
+        perf = getattr(self, "_presentation_perf", None)
+        if not perf or not perf.get("enabled"):
+            return
+        perf["bsp_snapshot_calls"] = int(perf.get("bsp_snapshot_calls", 0)) + 1
+        perf["bsp_snapshot_ms"] = float(perf.get("bsp_snapshot_ms", 0.0)) + (time.perf_counter() - start) * 1000.0
+        perf["bsp_snapshot_items"] = int(perf.get("bsp_snapshot_items", 0)) + int(item_count)
+
+    def _finish_presentation_perf(self) -> None:
+        perf = getattr(self, "_presentation_perf", None)
+        if not perf or not perf.get("enabled"):
+            return
+        cache: dict[str, Any] = {}
+        for label, st in [
+            ("stepper1", self.stepper),
+            ("stepper2", self.stepper2),
+            *[(f"multi{idx + 1}", st) for idx, st in enumerate(self.multi_steppers or [])],
+        ]:
+            if st is not None and hasattr(st, "bsp_cache_stats_snapshot"):
+                cache[label] = st.bsp_cache_stats_snapshot()
+        perf["cache"] = cache
+        step_detail: dict[str, Any] = {}
+        for label, st in [
+            ("stepper1", self.stepper),
+            ("stepper2", self.stepper2),
+            *[(f"multi{idx + 1}", st) for idx, st in enumerate(self.multi_steppers or [])],
+        ]:
+            if st is not None and hasattr(st, "step_perf_stats_snapshot"):
+                step_detail[label] = st.step_perf_stats_snapshot()
+        perf["step_detail"] = step_detail
+        perf["enabled"] = False
+
+        step_s = float(perf.get("step_ms", 0.0)) / 1000.0
+        bsp_s = float(perf.get("bsp_sync_ms", 0.0)) / 1000.0
+        snap_s = float(perf.get("bsp_snapshot_ms", 0.0)) / 1000.0
+        rust_s = float(perf.get("rust_shadow_ms", 0.0)) / 1000.0
+        rust_shadow_calls = int(perf.get("rust_shadow_calls", 0))
+        mismatch_step = perf.get("rust_shadow_mismatch_step")
+        cache1 = cache.get("stepper1", {}) if isinstance(cache, dict) else {}
+        detail1 = step_detail.get("stepper1", {}) if isinstance(step_detail, dict) else {}
+        level_parts: list[str] = []
+        levels_map = perf.get("levels") if isinstance(perf.get("levels"), dict) else {}
+        for lv_key in ("bi", "seg", "segseg", "extra"):
+            row = levels_map.get(lv_key) if isinstance(levels_map, dict) else None
+            if not isinstance(row, dict):
+                continue
+            scan_ms = float(row.get("scan_ms", 0.0)) / 1000.0
+            level_parts.append(
+                f"{lv_key}={scan_ms:.2f}s"
+                f"/扫{int(row.get('scan', 0))}"
+                f"跳{int(row.get('skip', 0))}"
+                f"增{int(row.get('items', 0))}"
+            )
+        level_tail = f"；BSP分级={'；'.join(level_parts)}" if level_parts else ""
+        for line in rust_presentation_detail_lines(perf, step_detail, stepper=self.stepper or ChanStepper()):
+            push_record_trace(line)
+        shadow_tail = ""
+        if rust_chan_shadow_enabled():
+            shadow_tail = (
+                f"；RustShadow={rust_s:.2f}s/{rust_shadow_calls}次"
+                f"{'' if mismatch_step is None else f'；shadow首错step={mismatch_step}'}"
+            )
+        push_record_trace(
+            "一次性呈现耗时细分："
+            f"step={step_s:.2f}s/{int(perf.get('step_calls', 0))}次；"
+            f"step递推={float(detail1.get('iter_ms', 0.0)) / 1000.0:.2f}s；"
+            f"step指标={float(detail1.get('indicator_ms', 0.0)) / 1000.0:.2f}s；"
+            f"stepK线缓存={float(detail1.get('kline_cache_ms', 0.0)) / 1000.0:.2f}s；"
+            f"BSP同步={bsp_s:.2f}s/{int(perf.get('bsp_sync_calls', 0))}次；"
+            f"BSP快照={snap_s:.2f}s；Rust去重={float(perf.get('rust_collect_ms', 0.0)) / 1000.0:.2f}s"
+            f"{shadow_tail}；"
+            f"segseg缓存={int(cache1.get('segseg_hit', 0))}/{int(cache1.get('segseg_miss', 0))} 命中/重算；"
+            f"extra缓存={int(cache1.get('extra_hit', 0))}/{int(cache1.get('extra_miss', 0))} 命中/重算；"
+            f"extra链缓存={int(cache1.get('extra_lines_hit', 0))}/{int(cache1.get('extra_lines_miss', 0))} 命中/重算"
+            f"{level_tail}"
+        )
 
     def _clear_rollback_cache(self) -> None:
         self._rollback_light.clear()
@@ -5595,6 +6137,7 @@ class AppState:
             account=self.account,
         )
         self._rhythm_notice_hits = []
+        self._reset_bsp_incremental_cache()
 
     def _store_full_snapshot(self, snap: AppRollbackSnapshot) -> None:
         idx = int(snap.stepper1.step_idx)
@@ -5714,6 +6257,7 @@ class AppState:
         self._last_judge_x = snap.last_judge_x
         self._last_judge_time = snap.last_judge_time
         self._rhythm_notice_hits = []
+        self._reset_bsp_incremental_cache()
 
     def _memory_step_forward_no_snapshot(self, n: int) -> None:
         for _ in range(max(0, int(n))):
@@ -6254,10 +6798,8 @@ class AppState:
         segseg_list = getattr(kl_list, "segseg_list", None)
         lazy_layers = normalize_chart_lazy_layers(stepper.chart_lazy_layers)
         if segseg_list is not None and chart_lazy_bsp_enabled(lazy_layers, "segseg"):
-            segsegseg_list = build_hidden_seg_layer(segseg_list, conf)
             # 2段BSP依赖2段中枢；轻量路径也要先挂中枢，否则逐K历史会漏掉2段买卖点。
-            build_level_zs(segseg_list, segsegseg_list, conf.zs_conf)
-            level_sources.append(("segseg", build_level_bsp(segseg_list, segsegseg_list, conf.seg_bs_point_conf)))
+            level_sources.append(("segseg", stepper.segseg_bsp_snapshot_cached(segseg_list=segseg_list, conf=conf)))
         extra_bsp = stepper.extra_bsp_snapshot_cached(segseg_list=segseg_list, conf=conf, lazy_layers=lazy_layers)
         for level in sorted(extra_bsp.keys(), key=bsp_level_sort_order):
             level_sources.append((level, extra_bsp[level]))
@@ -6274,6 +6816,188 @@ class AppState:
             return snapshot
         return sorted(snapshot, key=lambda item: (int(item["x"]), bsp_level_sort_order(item["level"]), int(not bool(item["is_buy"]))))
 
+    def _collect_new_bsp_items_from_list(
+        self,
+        *,
+        level: str,
+        bsp_list: Any,
+        seen_keys: set[str],
+        current_x: Optional[int] = None,
+    ) -> list[dict[str, Any]]:
+        """只收本次还没冻结过的 BSP；历史标签不回写。"""
+        if bsp_list is None or _bsp_list_flat_len(bsp_list) <= 0:
+            return []
+        rust_items = APP_PERF_ENGINE.collect_bsp_items_from_list(
+            level=level,
+            level_label=level_label(level),
+            bsp_list=bsp_list,
+            seen_keys=seen_keys,
+            current_x=current_x,
+        )
+        if rust_items is not None:
+            return rust_items
+        out: list[dict[str, Any]] = []
+        for bsp in bsp_list.bsp_iter():
+            item = make_bsp_item(level, bsp)
+            if current_x is not None and int(item["x"]) != int(current_x):
+                continue
+            key = self._bsp_key(item)
+            if key in seen_keys:
+                continue
+            out.append(item)
+        return out
+
+    def _incremental_collect_level_bsp(
+        self,
+        *,
+        level: str,
+        structural_sig: tuple[Any, ...],
+        bsp_list: Any,
+        seen_keys: set[str],
+        current_x: Optional[int] = None,
+    ) -> list[dict[str, Any]]:
+        """一次性逐K：按结构签名决定是否扫描该级 BSP。"""
+        lv_perf = self._presentation_level_perf(level)
+        if lv_perf is not None:
+            lv_perf["checks"] = int(lv_perf.get("checks", 0)) + 1
+        if not self._bsp_incremental_need_scan(level, structural_sig, bsp_list):
+            if lv_perf is not None:
+                lv_perf["skip"] = int(lv_perf.get("skip", 0)) + 1
+            return []
+        t0 = time.perf_counter()
+        items = self._collect_new_bsp_items_from_list(
+            level=level,
+            bsp_list=bsp_list,
+            seen_keys=seen_keys,
+            current_x=current_x,
+        )
+        if lv_perf is not None:
+            lv_perf["scan"] = int(lv_perf.get("scan", 0)) + 1
+            lv_perf["items"] = int(lv_perf.get("items", 0)) + len(items)
+            lv_perf["scan_ms"] = float(lv_perf.get("scan_ms", 0.0)) + (time.perf_counter() - t0) * 1000.0
+        self._bsp_incremental_mark_scanned(level, structural_sig, bsp_list)
+        return items
+
+    def _current_bsp_snapshot_incremental_light(self, *, current_x: Optional[int] = None) -> list[dict[str, Any]]:
+        """一次性逐K专用：结构没变的级别直接跳过，只返回新增 BSP。"""
+        snapshot_t0 = time.perf_counter()
+        stepper = self.get_active_stepper()
+        if stepper.chan is None:
+            self._presentation_record_bsp_snapshot(snapshot_t0, 0)
+            return []
+        if normalize_chan_algo(stepper.chan_algo) != CHAN_ALGO_CLASSIC:
+            seen_keys = self._bsp_history_seen_keys_current()
+            out = [
+                item
+                for item in self._current_bsp_snapshot(current_x=current_x)
+                if self._bsp_key(item) not in seen_keys
+            ]
+            self._presentation_record_bsp_snapshot(snapshot_t0, len(out))
+            return out
+
+        kl_list = stepper.chan[0]
+        conf = stepper.chan.conf
+        lazy_layers = normalize_chart_lazy_layers(stepper.chart_lazy_layers)
+        seen_keys = self._bsp_history_seen_keys_current()
+        snapshot: list[dict[str, Any]] = []
+
+        if chart_lazy_bsp_enabled(lazy_layers, "bi"):
+            bi_sig = self._bsp_source_signature(
+                "bi",
+                id(conf.bs_point_conf),
+                line_list_structural_signature(getattr(kl_list, "bi_list", None), tail=3),
+                line_list_structural_signature(getattr(kl_list, "seg_list", None), tail=3),
+            )
+            snapshot.extend(
+                self._incremental_collect_level_bsp(
+                    level="bi",
+                    structural_sig=bi_sig,
+                    bsp_list=getattr(kl_list, "bs_point_lst", None),
+                    seen_keys=seen_keys,
+                    current_x=current_x,
+                )
+            )
+
+        if chart_lazy_bsp_enabled(lazy_layers, "seg"):
+            seg_sig = self._bsp_source_signature(
+                "seg",
+                id(conf.seg_bs_point_conf),
+                line_list_structural_signature(getattr(kl_list, "seg_list", None), tail=3),
+                line_list_structural_signature(getattr(kl_list, "segseg_list", None), tail=3),
+            )
+            snapshot.extend(
+                self._incremental_collect_level_bsp(
+                    level="seg",
+                    structural_sig=seg_sig,
+                    bsp_list=getattr(kl_list, "seg_bs_point_lst", None),
+                    seen_keys=seen_keys,
+                    current_x=current_x,
+                )
+            )
+
+        segseg_list = getattr(kl_list, "segseg_list", None)
+        if segseg_list is not None and chart_lazy_bsp_enabled(lazy_layers, "segseg"):
+            segseg_sig = self._bsp_source_signature(
+                "segseg",
+                id(conf.seg_conf),
+                id(conf.zs_conf),
+                id(conf.seg_bs_point_conf),
+                line_list_structural_signature(segseg_list, tail=3),
+            )
+            if not self._bsp_struct_sig_unchanged("segseg", segseg_sig):
+                segseg_bsp = stepper.segseg_bsp_snapshot_cached(segseg_list=segseg_list, conf=conf)
+                snapshot.extend(
+                    self._incremental_collect_level_bsp(
+                        level="segseg",
+                        structural_sig=segseg_sig,
+                        bsp_list=segseg_bsp,
+                        seen_keys=seen_keys,
+                        current_x=current_x,
+                    )
+                )
+                self._bsp_mark_struct_sig("segseg", segseg_sig)
+            else:
+                lv_perf = self._presentation_level_perf("segseg")
+                if lv_perf is not None:
+                    lv_perf["checks"] = int(lv_perf.get("checks", 0)) + 1
+                    lv_perf["skip"] = int(lv_perf.get("skip", 0)) + 1
+
+        extra_levels = tuple(extra_bsp_levels_from_layers(lazy_layers))
+        if segseg_list is not None and extra_levels:
+            extra_sig = self._bsp_source_signature(
+                "extra",
+                extra_levels,
+                id(conf.seg_conf),
+                id(conf.zs_conf),
+                id(conf.seg_bs_point_conf),
+                line_list_structural_signature(segseg_list, tail=3),
+            )
+            if not self._bsp_struct_sig_unchanged("extra", extra_sig):
+                extra_bsp = stepper.extra_bsp_snapshot_cached(segseg_list=segseg_list, conf=conf, lazy_layers=lazy_layers)
+                for level in sorted(extra_bsp.keys(), key=bsp_level_sort_order):
+                    snapshot.extend(
+                        self._incremental_collect_level_bsp(
+                            level=str(level),
+                            structural_sig=extra_sig,
+                            bsp_list=extra_bsp[level],
+                            seen_keys=seen_keys,
+                            current_x=current_x,
+                        )
+                    )
+                self._bsp_mark_struct_sig("extra", extra_sig)
+            else:
+                lv_perf = self._presentation_level_perf("extra")
+                if lv_perf is not None:
+                    lv_perf["checks"] = int(lv_perf.get("checks", 0)) + 1
+                    lv_perf["skip"] = int(lv_perf.get("skip", 0)) + 1
+
+        if current_x is not None:
+            self._presentation_record_bsp_snapshot(snapshot_t0, len(snapshot))
+            return snapshot
+        out = sorted(snapshot, key=lambda item: (int(item["x"]), bsp_level_sort_order(item["level"]), int(not bool(item["is_buy"]))))
+        self._presentation_record_bsp_snapshot(snapshot_t0, len(out))
+        return out
+
     @staticmethod
     def _bsp_key(item: dict[str, Any]) -> str:
         # 逐K当下性：同级别/同锚点/同方向只冻结首次识别标签，未来组合标签不回写、不追加。
@@ -6287,6 +7011,7 @@ class AppState:
         current_x = self._current_kline_x()
         if current_x is None:
             self.bsp_history = []
+            self._reset_bsp_incremental_cache()
             return
 
         stepper = self.get_active_stepper()
@@ -6332,15 +7057,50 @@ class AppState:
                     }
                 )
             self.bsp_history = next_hist
+            self._reset_bsp_incremental_cache()
             return
 
         # 普通步进也按“当前已知全量快照 - 已冻结历史”增量追加；不按锚点等于当前 K 过滤。
         snapshot = self._current_bsp_snapshot(current_x=None)
         self._append_bsp_history_items(snapshot, display_x=current_x)
 
-    def _append_bsp_history_items(self, snapshot: list[dict[str, Any]], *, display_x: Optional[int] = None) -> None:
+    def _append_bsp_history_items(
+        self,
+        snapshot: list[dict[str, Any]],
+        *,
+        display_x: Optional[int] = None,
+        use_rust_delta: bool = False,
+    ) -> None:
         """追加 BSP 历史，供普通步进和轻量逐K共用。"""
-        existing_keys = {str(item.get("key")) for item in self.bsp_history}
+        append_t0 = time.perf_counter()
+        if not snapshot:
+            self._presentation_perf_inc("bsp_append_calls")
+            self._presentation_perf_add("bsp_append_ms", (time.perf_counter() - append_t0) * 1000.0)
+            return
+        if use_rust_delta:
+            # POC：只让 Rust 接管一次性呈现里的 BSP 增量小账本，普通步进先不扩范围。
+            if not self._bsp_delta_collector_id:
+                self._reset_rust_bsp_delta_collector()
+            rust_t0 = time.perf_counter()
+            rust_items = APP_PERF_ENGINE.collect_bsp_delta(
+                self._bsp_delta_collector_id,
+                snapshot,
+                display_x=(int(display_x) if display_x is not None else None),
+            )
+            self._presentation_perf_inc("rust_collect_calls")
+            self._presentation_perf_add("rust_collect_ms", (time.perf_counter() - rust_t0) * 1000.0)
+            if rust_items is not None:
+                for item in rust_items:
+                    self.bsp_history.append(item)
+                    key = str(item.get("key", ""))
+                    if key:
+                        self._mark_bsp_history_appended(key)
+                self._presentation_perf_inc("rust_items", len(rust_items))
+                self._presentation_perf_inc("bsp_append_calls")
+                self._presentation_perf_add("bsp_append_ms", (time.perf_counter() - append_t0) * 1000.0)
+                return
+        existing_keys = self._bsp_history_seen_keys_current()
+        python_added = 0
         for item in snapshot:
             key = self._bsp_key(item)
             if key in existing_keys:
@@ -6360,10 +7120,23 @@ class AppState:
                     "status": None,
                 }
             )
-            existing_keys.add(key)
+            self._mark_bsp_history_appended(key)
+            python_added += 1
+        self._presentation_perf_inc("python_items", python_added)
+        self._presentation_perf_inc("bsp_append_calls")
+        self._presentation_perf_add("bsp_append_ms", (time.perf_counter() - append_t0) * 1000.0)
 
     def sync_bsp_history_light(self) -> None:
         """一次性呈现轻量同步：只收集当下新增 BSP。"""
+        sync_t0 = time.perf_counter()
+        self._presentation_perf_inc("bsp_sync_calls")
+        try:
+            self._sync_bsp_history_light_impl()
+        finally:
+            self._presentation_perf_add("bsp_sync_ms", (time.perf_counter() - sync_t0) * 1000.0)
+
+    def _sync_bsp_history_light_impl(self) -> None:
+        """一次性呈现轻量同步主体：外层只负责性能记账。"""
         current_x = self._current_kline_x()
         if current_x is None:
             return
@@ -6371,7 +7144,11 @@ class AppState:
             self.sync_bsp_history()
             return
         # 不按 current_x 过滤：BSP 常在当前 step 才确认、锚点却落在更早 K。
-        self._append_bsp_history_items(self._current_bsp_snapshot_light(current_x=None, include_segseg=True), display_x=current_x)
+        self._append_bsp_history_items(
+            self._current_bsp_snapshot_incremental_light(current_x=None),
+            display_x=current_x,
+            use_rust_delta=True,
+        )
 
     def sync_bsp_history_full_from_current_light(self) -> None:
         """逐K跑完后不做末态回填，避免未来组合标签污染历史。"""
@@ -6467,6 +7244,8 @@ class AppState:
             return
         target_step = max(0, min(int(target_step), total - 1))
         feed = normalize_data_feed_mode(getattr(self.stepper, "data_feed_mode", "step"))
+        if report_progress and feed != "unified":
+            self._reset_presentation_perf(target_step=target_step, total=total)
         if feed == "unified":
             self.stepper.unified_set_step_idx(target_step)
             if self.chart_mode == "dual" and self.stepper2 is not None:
@@ -6485,16 +7264,26 @@ class AppState:
             if report_progress:
                 self.stepper._suppress_step_bundle_refresh = True
             try:
-                if not self.stepper.step():
+                step_t0 = time.perf_counter()
+                step_ok = self.stepper.step()
+                if report_progress:
+                    self._presentation_perf_inc("step_calls")
+                    self._presentation_perf_add("step_ms", (time.perf_counter() - step_t0) * 1000.0)
+                    if step_ok:
+                        self._presentation_perf_inc("loop_steps")
+                if not step_ok:
                     return
             finally:
                 if report_progress:
                     self.stepper._suppress_step_bundle_refresh = prev_suppress_first
+            dual_t0 = time.perf_counter()
             if self.chart_mode == "dual" and self.stepper2 is not None:
                 self.stepper2.step()
                 self._sync_stepper_to_anchor(self.stepper2, self.stepper.current_time())
             elif self.chart_mode == "multi" and self.multi_steppers:
                 self._sync_passives_to_anchor(self.stepper.current_time())
+            if report_progress:
+                self._presentation_perf_add("dual_sync_ms", (time.perf_counter() - dual_t0) * 1000.0)
             if report_progress:
                 self.sync_bsp_history_light()
             else:
@@ -6504,11 +7293,17 @@ class AppState:
 
         current = max(0, int(self.stepper.step_idx))
         if current >= target_step:
+            coarse_t0 = time.perf_counter()
             self._dual_rebuild_coarse_chan_anti_future(self.get_active_stepper().current_time())
+            if report_progress:
+                self._presentation_perf_add("coarse_rebuild_ms", (time.perf_counter() - coarse_t0) * 1000.0)
+                self._finish_presentation_perf()
             return
 
         span = max(1, target_step - current)
         if report_progress:
+            for line in rust_presentation_begin_lines(self.stepper):
+                push_record_trace(line)
             push_record_trace("一次性呈现：按逐K步进跑到末根…")
         total_count = target_step + 1
         progress_unit = max(1, total_count // 5)
@@ -6528,18 +7323,28 @@ class AppState:
                     )
                 )
                 if should_report:
+                    progress_t0 = time.perf_counter()
                     pct = 85 + int(13 * (i - current + 1) / span)
                     _init_status_set_subprogress(
                         min(98, pct),
                         f"一次性呈现：逐K步进 {step_no}/{total_count}",
                         push_trace=True,
                     )
-                if not self.stepper.step():
+                    self._presentation_perf_add("progress_ms", (time.perf_counter() - progress_t0) * 1000.0)
+                step_t0 = time.perf_counter()
+                step_ok = self.stepper.step()
+                self._presentation_perf_inc("step_calls")
+                self._presentation_perf_add("step_ms", (time.perf_counter() - step_t0) * 1000.0)
+                if step_ok:
+                    self._presentation_perf_inc("loop_steps")
+                if not step_ok:
                     break
+                dual_t0 = time.perf_counter()
                 if self.chart_mode == "dual" and self.stepper2 is not None:
                     self._sync_stepper_to_anchor(self.stepper2, self.stepper.current_time())
                 elif self.chart_mode == "multi" and self.multi_steppers:
                     self._sync_passives_to_anchor(self.stepper.current_time())
+                self._presentation_perf_add("dual_sync_ms", (time.perf_counter() - dual_t0) * 1000.0)
                 if report_progress:
                     self.sync_bsp_history_light()
                 else:
@@ -6551,13 +7356,27 @@ class AppState:
                 self.stepper._suppress_step_bundle_refresh = prev_suppress
 
         if report_progress:
+            final_t0 = time.perf_counter()
             self.sync_bsp_history_full_from_current_light()
+            self._presentation_perf_add("final_sync_ms", (time.perf_counter() - final_t0) * 1000.0)
+            progress_t0 = time.perf_counter()
             _init_status_set_subprogress(
                 98,
                 f"一次性呈现：逐K步进 {total_count}/{total_count}",
                 push_trace=True,
             )
+            self._presentation_perf_add("progress_ms", (time.perf_counter() - progress_t0) * 1000.0)
+        coarse_t0 = time.perf_counter()
         self._dual_rebuild_coarse_chan_anti_future(self.get_active_stepper().current_time())
+        if report_progress:
+            self._presentation_perf_add("coarse_rebuild_ms", (time.perf_counter() - coarse_t0) * 1000.0)
+            if getattr(self.stepper, "_rust_chan_primary_used", False):
+                self._presentation_perf_add("rust_chan_primary_used", 1)
+                sync_t0 = time.perf_counter()
+                self.stepper.bulk_present_to_step(int(self.stepper.step_idx))
+                self.stepper._rust_chan_primary_used = False
+                self._presentation_perf_add("final_sync_ms", (time.perf_counter() - sync_t0) * 1000.0)
+            self._finish_presentation_perf()
 
     def rebuild_to_step(self, target_step: int) -> None:
         if self.session_params is None:
@@ -6649,6 +7468,7 @@ class AppState:
         self.ready = True
         self.finished = False
         self.bsp_history = []
+        self._reset_bsp_incremental_cache()
         self._reset_rhythm_history()
         self._last_level_dirs = {level: None for level in set(JUDGE_TRIGGER_LEVELS.values())}
         self._reset_judge_state()
@@ -6994,8 +7814,9 @@ class AppState:
             if st is None:
                 continue
             st.chart_lazy_layers = merge_chart_lazy_layers(getattr(st, "chart_lazy_layers", None), wanted)
-            st.clear_structure_runtime_cache()
+            st.clear_structure_runtime_cache(clear_bsp_cache=True)
             st.rebuild_unified_full_payload_for_layers()
+        self._reset_bsp_incremental_cache()
         if self.session_params is not None:
             self.session_params["chart_lazy_layers"] = merge_chart_lazy_layers(
                 self.session_params.get("chart_lazy_layers"), wanted
@@ -7186,7 +8007,7 @@ def bt_rebuild_coarse_anti_future_vs_fine(
         "demark": CDemarkEngine(),
     }
     coarse.indicator_history = []
-    coarse.clear_structure_runtime_cache()
+    coarse.clear_structure_runtime_cache(clear_bsp_cache=True)
     coarse.step_idx = -1
     coarse.trend_lines = []
     for _ in range(saved + 1):
@@ -22442,6 +23263,8 @@ def _api_init_impl(req: InitReq, perf_col: Optional[dict[str, Any]] = None) -> d
             raise ValueError("初始资金必须大于0")
         code_norm = normalize_code(req.code)
         APP_PERF_ENGINE.requested_mode = str(getattr(req, "performance_engine_mode", "rust_auto") or "rust_auto")
+        for line in rust_session_env_trace_lines():
+            push_record_trace(line)
 
         try:
             cm_init = normalize_replay_chart_mode(req.chart_mode)
@@ -22599,6 +23422,7 @@ def _api_init_impl(req: InitReq, perf_col: Optional[dict[str, Any]] = None) -> d
         }
         APP_STATE.trade_events = []
         APP_STATE.bsp_history = []
+        APP_STATE._reset_bsp_incremental_cache()
         APP_STATE._reset_rhythm_history()
         APP_STATE.bsp_judge_logs = []
         APP_STATE._last_level_dirs = {level: None for level in set(JUDGE_TRIGGER_LEVELS.values())}
@@ -23221,6 +24045,7 @@ def api_reset():
     APP_STATE.session_params = None
     APP_STATE.trade_events = []
     APP_STATE.bsp_history = []
+    APP_STATE._reset_bsp_incremental_cache()
     APP_STATE._reset_rhythm_history()
     APP_STATE.bsp_all_snapshot = []
     APP_STATE.bsp_judge_logs = []

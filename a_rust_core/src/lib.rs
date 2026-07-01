@@ -1,7 +1,16 @@
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList};
-use std::collections::{BTreeMap, HashMap};
+use pyo3::types::{PyDict, PyIterator, PyList};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
+
+use chan_core::ChanState;
+use chan_core::config::ChanConfig;
+
+static CHAN_STATES: OnceLock<Mutex<HashMap<String, ChanState>>> = OnceLock::new();
+
+fn chan_states() -> &'static Mutex<HashMap<String, ChanState>> {
+    CHAN_STATES.get_or_init(|| Mutex::new(HashMap::new()))
+}
 
 #[derive(Clone, Default)]
 struct ChipBins {
@@ -30,9 +39,19 @@ struct SessionData {
 }
 
 static SESSIONS: OnceLock<Mutex<HashMap<String, SessionData>>> = OnceLock::new();
+static BSP_COLLECTORS: OnceLock<Mutex<HashMap<String, BspCollector>>> = OnceLock::new();
 
 fn sessions() -> &'static Mutex<HashMap<String, SessionData>> {
     SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+#[derive(Clone, Default)]
+struct BspCollector {
+    seen: HashSet<String>,
+}
+
+fn bsp_collectors() -> &'static Mutex<HashMap<String, BspCollector>> {
+    BSP_COLLECTORS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 fn as_f64(item: &PyAny, key: &str) -> f64 {
@@ -55,6 +74,62 @@ fn as_string(item: &PyAny, key: &str) -> String {
         .ok()
         .and_then(|v| v.extract::<String>().ok())
         .unwrap_or_default()
+}
+
+fn as_bool(item: &PyAny, key: &str) -> bool {
+    item.get_item(key)
+        .ok()
+        .and_then(|v| v.extract::<bool>().ok())
+        .unwrap_or(false)
+}
+
+fn bsp_key_for(level: &str, x: i64, is_buy: bool) -> String {
+    format!("{}|{}|{}", level, x, if is_buy { 1 } else { 0 })
+}
+
+fn bsp_key_from_item(item: &PyAny) -> Option<String> {
+    if let Ok(key) = item.get_item("key").and_then(|v| v.extract::<String>()) {
+        if !key.is_empty() {
+            return Some(key);
+        }
+    }
+    let level = as_string(item, "level");
+    if level.is_empty() {
+        return None;
+    }
+    let x = as_i64(item, "x", -1);
+    if x < 0 {
+        return None;
+    }
+    Some(bsp_key_for(&level, x, as_bool(item, "is_buy")))
+}
+
+fn attr_i64(item: &PyAny, key: &str, default: i64) -> i64 {
+    item.getattr(key)
+        .ok()
+        .and_then(|v| v.extract::<i64>().ok())
+        .unwrap_or(default)
+}
+
+fn attr_f64(item: &PyAny, key: &str, default: f64) -> f64 {
+    item.getattr(key)
+        .ok()
+        .and_then(|v| v.extract::<f64>().ok())
+        .filter(|v| v.is_finite())
+        .unwrap_or(default)
+}
+
+fn attr_bool(item: &PyAny, key: &str, default: bool) -> bool {
+    item.getattr(key)
+        .ok()
+        .and_then(|v| v.extract::<bool>().ok())
+        .unwrap_or(default)
+}
+
+fn contains_seen_key(seen_keys: Option<&PyAny>, key: &str) -> bool {
+    seen_keys
+        .and_then(|seen| seen.contains(key).ok())
+        .unwrap_or(false)
 }
 
 fn list_f64(item: &PyAny, key: &str) -> Vec<f64> {
@@ -375,12 +450,210 @@ fn chip_profile(py: Python<'_>, session_id: String, cutoff_x: Option<i64>, bucke
     Ok(d.into())
 }
 
+#[pyfunction(signature = (level, level_label, bsp_list, seen_keys=None, current_x=None))]
+fn bsp_items_from_list(
+    py: Python<'_>,
+    level: String,
+    level_label: String,
+    bsp_list: &PyAny,
+    seen_keys: Option<&PyAny>,
+    current_x: Option<i64>,
+) -> PyResult<PyObject> {
+    let out = PyList::empty(py);
+    let iter_obj = bsp_list.call_method0("bsp_iter")?;
+    let iter = PyIterator::from_object(iter_obj)?;
+    for item in iter {
+        let bsp = item?;
+        let klu = match bsp.getattr("klu") {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let x = attr_i64(klu, "idx", -1);
+        if x < 0 {
+            continue;
+        }
+        if let Some(cur) = current_x {
+            if x != cur {
+                continue;
+            }
+        }
+        let is_buy = attr_bool(bsp, "is_buy", false);
+        let key = bsp_key_for(&level, x, is_buy);
+        if contains_seen_key(seen_keys, &key) {
+            continue;
+        }
+        let label = bsp
+            .call_method0("type2str")
+            .ok()
+            .and_then(|v| v.extract::<String>().ok())
+            .unwrap_or_default();
+        let y = if is_buy {
+            attr_f64(klu, "low", 0.0)
+        } else {
+            attr_f64(klu, "high", 0.0)
+        };
+        let row = PyDict::new(py);
+        row.set_item("x", x)?;
+        row.set_item("y", y)?;
+        row.set_item("is_buy", is_buy)?;
+        row.set_item("label", label.clone())?;
+        row.set_item("level", level.clone())?;
+        row.set_item("level_label", level_label.clone())?;
+        row.set_item("display_label", format!("{}{}", level_label, label))?;
+        out.append(row)?;
+    }
+    Ok(out.into())
+}
+
+#[pyfunction(signature = (collector_id, existing_history=None))]
+fn bsp_delta_reset(
+    py: Python<'_>,
+    collector_id: String,
+    existing_history: Option<&PyList>,
+) -> PyResult<PyObject> {
+    let mut collector = BspCollector::default();
+    if let Some(history) = existing_history {
+        for item in history.iter() {
+            if let Some(key) = bsp_key_from_item(item) {
+                collector.seen.insert(key);
+            }
+        }
+    }
+    let seen_count = collector.seen.len();
+    if let Ok(mut guard) = bsp_collectors().lock() {
+        guard.insert(collector_id, collector);
+    }
+    let d = PyDict::new(py);
+    d.set_item("ok", true)?;
+    d.set_item("seen_count", seen_count)?;
+    Ok(d.into())
+}
+
+#[pyfunction(signature = (collector_id, snapshot, display_x=None))]
+fn bsp_delta_collect(
+    py: Python<'_>,
+    collector_id: String,
+    snapshot: &PyList,
+    display_x: Option<i64>,
+) -> PyResult<PyObject> {
+    let out = PyList::empty(py);
+    let mut added = 0usize;
+    let mut seen_count = 0usize;
+    if let Ok(mut guard) = bsp_collectors().lock() {
+        let collector = guard.entry(collector_id).or_insert_with(BspCollector::default);
+        for item in snapshot.iter() {
+            let level = as_string(item, "level");
+            let anchor_x = as_i64(item, "x", -1);
+            if level.is_empty() || anchor_x < 0 {
+                continue;
+            }
+            let is_buy = as_bool(item, "is_buy");
+            let key = bsp_key_for(&level, anchor_x, is_buy);
+            if collector.seen.contains(&key) {
+                continue;
+            }
+            collector.seen.insert(key.clone());
+            let row = PyDict::new(py);
+            row.set_item("key", key)?;
+            row.set_item("x", display_x.unwrap_or(anchor_x))?;
+            row.set_item("anchor_x", anchor_x)?;
+            row.set_item("is_buy", is_buy)?;
+            row.set_item("label", as_string(item, "label"))?;
+            row.set_item("level", level)?;
+            row.set_item("level_label", as_string(item, "level_label"))?;
+            row.set_item("display_label", as_string(item, "display_label"))?;
+            row.set_item("status", py.None())?;
+            out.append(row)?;
+            added += 1;
+        }
+        seen_count = collector.seen.len();
+    }
+    let d = PyDict::new(py);
+    d.set_item("items", out)?;
+    d.set_item("added", added)?;
+    d.set_item("seen_count", seen_count)?;
+    Ok(d.into())
+}
+
 #[pyfunction]
 fn clear_cache(py: Python<'_>) -> PyResult<PyObject> {
     let d = PyDict::new(py);
     d.set_item("removed", 0)?;
     d.set_item("rust_available", true)?;
     Ok(d.into())
+}
+
+#[pyfunction]
+fn chan_create(py: Python<'_>, state_id: String) -> PyResult<PyObject> {
+  let st = ChanState::new(ChanConfig::default());
+  if let Ok(mut guard) = chan_states().lock() {
+    guard.insert(state_id.clone(), st);
+  }
+  let d = PyDict::new(py);
+  d.set_item("state_id", state_id)?;
+  d.set_item("ok", true)?;
+  Ok(d.into())
+}
+
+#[pyfunction]
+fn chan_reset(py: Python<'_>, state_id: String) -> PyResult<PyObject> {
+  if let Ok(mut guard) = chan_states().lock() {
+    if let Some(st) = guard.get_mut(&state_id) {
+      st.reset();
+    }
+  }
+  let d = PyDict::new(py);
+  d.set_item("ok", true)?;
+  Ok(d.into())
+}
+
+#[pyfunction(signature = (state_id, idx, high, low, close))]
+fn chan_feed_bar(
+  py: Python<'_>,
+  state_id: String,
+  idx: i64,
+  high: f64,
+  low: f64,
+  close: f64,
+) -> PyResult<PyObject> {
+  let mut changed = false;
+  if let Ok(mut guard) = chan_states().lock() {
+    if let Some(st) = guard.get_mut(&state_id) {
+      let before = st.step_count;
+      st.feed_bar(idx as i32, high, low, close);
+      changed = st.step_count > before;
+    }
+  }
+  let d = PyDict::new(py);
+  d.set_item("ok", true)?;
+  d.set_item("changed", changed)?;
+  Ok(d.into())
+}
+
+#[pyfunction]
+fn chan_structure_signature(py: Python<'_>, state_id: String) -> PyResult<PyObject> {
+  let sig = if let Ok(guard) = chan_states().lock() {
+    guard
+      .get(&state_id)
+      .map(|st| st.structure_signature())
+      .unwrap_or_else(|| serde_json::json!({}))
+  } else {
+    serde_json::json!({})
+  };
+  let text = serde_json::to_string(&sig).unwrap_or_else(|_| "{}".to_string());
+  let d = PyDict::new(py);
+  d.set_item("signature", text)?;
+  Ok(d.into())
+}
+
+#[pyfunction]
+fn chan_destroy(py: Python<'_>, state_id: String) -> PyResult<PyObject> {
+  if let Ok(mut guard) = chan_states().lock() {
+    guard.remove(&state_id);
+  }
+  let d = PyDict::new(py);
+  d.set_item("ok", true)?;
+  Ok(d.into())
 }
 
 #[pymodule]
@@ -391,6 +664,14 @@ fn a_rust_core_ext(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(step_to, m)?)?;
     m.add_function(wrap_pyfunction!(next_step_delta, m)?)?;
     m.add_function(wrap_pyfunction!(chip_profile, m)?)?;
+    m.add_function(wrap_pyfunction!(bsp_items_from_list, m)?)?;
+    m.add_function(wrap_pyfunction!(bsp_delta_reset, m)?)?;
+    m.add_function(wrap_pyfunction!(bsp_delta_collect, m)?)?;
     m.add_function(wrap_pyfunction!(clear_cache, m)?)?;
+    m.add_function(wrap_pyfunction!(chan_create, m)?)?;
+    m.add_function(wrap_pyfunction!(chan_reset, m)?)?;
+    m.add_function(wrap_pyfunction!(chan_feed_bar, m)?)?;
+    m.add_function(wrap_pyfunction!(chan_structure_signature, m)?)?;
+    m.add_function(wrap_pyfunction!(chan_destroy, m)?)?;
     Ok(())
 }

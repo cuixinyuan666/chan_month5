@@ -1,0 +1,117 @@
+{
+  "code": "sh.688687",
+  "begin": "2021-04-01",
+  "end": "2021-04-10",
+  "k_type": "daily",
+  "step_idx": 5,
+  "step_count": 6,
+  "final_step_hash": "29153171b2b9e4ae534244669c3fa8567cc052bd7a300aea3f096f4b268ad92a",
+  "bsp_history_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+  "chart_bsp_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+  "final_signature": [
+    [
+      5,
+      [
+        2,
+        "UNKNOWN",
+        25.73,
+        25.39
+      ],
+      [
+        3,
+        "UNKNOWN",
+        25.8,
+        25.42
+      ],
+      [
+        4,
+        "UNKNOWN",
+        26.69,
+        25.82
+      ]
+    ],
+    [
+      0
+    ],
+    [
+      0
+    ],
+    [
+      0
+    ],
+    -1,
+    -1,
+    []
+  ],
+  "init_perf": {
+    "label": "rust_chan_parity",
+    "total_ms": 8327.751,
+    "stages_ms": {
+      "fetch_kline_离线数据": 350.443,
+      "data_kline": 350.665,
+      "fetch_chip_离线数据": 3799.587,
+      "data_chip": 3799.763,
+      "chan_record": 0.043,
+      "perf_engine_load": 17.727,
+      "chan_bootstrap": 0.171,
+      "bsp_snapshot": 2.725,
+      "initial_step": 2.225,
+      "build_payload": 4.402
+    },
+    "rank": [
+      {
+        "stage": "data_chip",
+        "ms": 3799.763,
+        "pct": 45.6
+      },
+      {
+        "stage": "fetch_chip_离线数据",
+        "ms": 3799.587,
+        "pct": 45.6
+      },
+      {
+        "stage": "data_kline",
+        "ms": 350.665,
+        "pct": 4.2
+      },
+      {
+        "stage": "fetch_kline_离线数据",
+        "ms": 350.443,
+        "pct": 4.2
+      },
+      {
+        "stage": "perf_engine_load",
+        "ms": 17.727,
+        "pct": 0.2
+      },
+      {
+        "stage": "build_payload",
+        "ms": 4.402,
+        "pct": 0.1
+      },
+      {
+        "stage": "bsp_snapshot",
+        "ms": 2.725,
+        "pct": 0.0
+      },
+      {
+        "stage": "initial_step",
+        "ms": 2.225,
+        "pct": 0.0
+      },
+      {
+        "stage": "chan_bootstrap",
+        "ms": 0.171,
+        "pct": 0.0
+      },
+      {
+        "stage": "chan_record",
+        "ms": 0.043,
+        "pct": 0.0
+      }
+    ],
+    "chart_mode": "single",
+    "chan_record_applied": false,
+    "engine_mode": "rust"
+  }
+}

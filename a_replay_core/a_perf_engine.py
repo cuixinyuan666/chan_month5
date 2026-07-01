@@ -153,6 +153,8 @@ class PerfEngine:
         self._rust = _load_rust_backend()
         self._sessions: dict[str, dict[str, Any]] = {}
         self._last_rust_errors: list[dict[str, Any]] = []
+        self._bsp_items_from_list_fn = getattr(self._rust, "bsp_items_from_list", None) if self._rust is not None else None
+        self._bsp_items_from_list_disabled = False
 
     @property
     def rust_available(self) -> bool:
@@ -481,8 +483,129 @@ class PerfEngine:
         self._last_rust_errors.clear()
         return {"removed": removed, **self.cache_status()}
 
+    def reset_bsp_delta_collector(self, collector_id: str, existing_history: Optional[list[dict[str, Any]]] = None) -> bool:
+        """POC：Rust 维护逐K BSP seen key；失败时允许 Python 兜底。"""
+        if not self._use_rust():
+            return False
+        try:
+            reset_fn = self._require_rust_method("BSP增量收集重置", "bsp_delta_reset")
+            raw = reset_fn(str(collector_id), list(existing_history or []))
+            return isinstance(raw, dict) and bool(raw.get("ok", False))
+        except Exception as exc:
+            self._record_rust_error("BSP增量收集重置", exc)
+            return False
+
+    def collect_bsp_items_from_list(
+        self,
+        *,
+        level: str,
+        level_label: str,
+        bsp_list: Any,
+        seen_keys: set[str],
+        current_x: Optional[int] = None,
+    ) -> Optional[list[dict[str, Any]]]:
+        """POC：Rust 遍历 BSP 列表并生成轻量 item；None 表示回退 Python。"""
+        if not self._use_rust() or self._bsp_items_from_list_disabled:
+            return None
+        fn = self._bsp_items_from_list_fn
+        if not callable(fn):
+            return None
+        try:
+            raw = fn(str(level), str(level_label), bsp_list, seen_keys, current_x)
+            if not isinstance(raw, list):
+                raise TypeError(f"bsp_items_from_list 返回结构异常: {type(raw).__name__}")
+            return [dict(item) for item in raw if isinstance(item, dict)]
+        except Exception as exc:
+            self._bsp_items_from_list_disabled = True
+            self._record_rust_error("BSP列表轻量收集", exc)
+            return None
+
+    def collect_bsp_delta(
+        self,
+        collector_id: str,
+        snapshot: list[dict[str, Any]],
+        *,
+        display_x: Optional[int] = None,
+    ) -> Optional[list[dict[str, Any]]]:
+        """POC：把 BSP 去重冻结交给 Rust；None 表示回退 Python。"""
+        if not self._use_rust():
+            return None
+        try:
+            collect_fn = self._require_rust_method("BSP增量收集", "bsp_delta_collect")
+            raw = collect_fn(str(collector_id), list(snapshot or []), display_x)
+            if not isinstance(raw, dict) or not isinstance(raw.get("items"), list):
+                raise TypeError(f"bsp_delta_collect 返回结构异常: {type(raw).__name__}")
+            return [dict(item) for item in raw.get("items") or [] if isinstance(item, dict)]
+        except Exception as exc:
+            self._record_rust_error("BSP增量收集", exc)
+            return None
+
+    def chan_create(self, state_id: str) -> bool:
+        if not self._use_rust():
+            return False
+        try:
+            fn = self._require_rust_method("Chan状态机", "chan_create")
+            raw = fn(str(state_id))
+            return isinstance(raw, dict) and bool(raw.get("ok", False))
+        except Exception as exc:
+            self._record_rust_error("Chan状态机创建", exc)
+            return False
+
+    def chan_reset(self, state_id: str) -> bool:
+        if not self._use_rust():
+            return False
+        try:
+            fn = getattr(self._rust, "chan_reset", None)
+            if not callable(fn):
+                return False
+            raw = fn(str(state_id))
+            return isinstance(raw, dict) and bool(raw.get("ok", False))
+        except Exception as exc:
+            self._record_rust_error("Chan状态机重置", exc)
+            return False
+
+    def chan_feed_bar(self, state_id: str, *, idx: int, high: float, low: float, close: float) -> bool:
+        if not self._use_rust():
+            return False
+        try:
+            fn = getattr(self._rust, "chan_feed_bar", None)
+            if not callable(fn):
+                return False
+            raw = fn(str(state_id), int(idx), float(high), float(low), float(close))
+            return isinstance(raw, dict) and bool(raw.get("ok", False))
+        except Exception as exc:
+            self._record_rust_error("Chan喂K", exc)
+            return False
+
+    def chan_structure_signature(self, state_id: str) -> Optional[str]:
+        if not self._use_rust():
+            return None
+        try:
+            fn = getattr(self._rust, "chan_structure_signature", None)
+            if not callable(fn):
+                return None
+            raw = fn(str(state_id))
+            if isinstance(raw, dict):
+                text = raw.get("signature")
+                return str(text) if text is not None else None
+            return None
+        except Exception as exc:
+            self._record_rust_error("Chan结构签名", exc)
+            return None
+
+    def chan_destroy(self, state_id: str) -> None:
+        if self._rust is None:
+            return
+        try:
+            fn = getattr(self._rust, "chan_destroy", None)
+            if callable(fn):
+                fn(str(state_id))
+        except Exception:
+            pass
+
 
 _GLOBAL_ENGINE = PerfEngine()
+APP_PERF_ENGINE = _GLOBAL_ENGINE
 
 
 def load_session(**kwargs: Any) -> PerfSession:
@@ -507,3 +630,16 @@ def cache_status() -> dict[str, Any]:
 
 def clear_cache() -> dict[str, Any]:
     return _GLOBAL_ENGINE.clear_cache()
+
+
+def reset_bsp_delta_collector(collector_id: str, existing_history: Optional[list[dict[str, Any]]] = None) -> bool:
+    return _GLOBAL_ENGINE.reset_bsp_delta_collector(collector_id, existing_history)
+
+
+def collect_bsp_delta(
+    collector_id: str,
+    snapshot: list[dict[str, Any]],
+    *,
+    display_x: Optional[int] = None,
+) -> Optional[list[dict[str, Any]]]:
+    return _GLOBAL_ENGINE.collect_bsp_delta(collector_id, snapshot, display_x=display_x)
