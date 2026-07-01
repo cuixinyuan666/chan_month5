@@ -9,7 +9,6 @@ config.yaml
 OpenConfig.yaml
 gotify_push.py
 cos_config.yaml
-.cursor
 
 # 本地运行缓存
 a_replay_cache/a_perf_engine_cache/

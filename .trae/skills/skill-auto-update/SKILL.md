@@ -90,6 +90,8 @@ skill: <name>
 |------------|------|---------------------|
 | `chan-mode-compat` | `.trae/skills/chan-mode-compat/SKILL.md` | `a_replay_trainer.py`、Bi/、Seg/、ZS/、KLine/、BuySellPoint/、配置项（chart_mode、data_form_mode、data_feed_mode、kline_presentation_mode、data_form_quantity、data_form_quantity_alloc 等） |
 | `chan-framework-ref` | `.trae/skills/chan-framework-ref/SKILL.md` | `DataAPI/`、`Common/CEnum.py`、`ChanConfig.py`、`Chan.py`、`a_replay_trainer.py`（数据源注册）、数据源常量和优先级链 |
+| `chan-cross-ref-impact` | `.trae/skills/chan-cross-ref-impact/SKILL.md` | 所有核心模块（Bi/、Seg/、ZS/、KLine/、BuySellPoint/、Math/、Common/） |
+| `chan-rust-rewrite` | `.trae/skills/chan-rust-rewrite/SKILL.md` | `chan-core/`（Rust 项目）、核心计算模块（Bi/Seg/ZS/KLine/Combiner/BuySellPoint/Math）、PyO3 绑定、JNI 绑定 |
 | `skill-auto-update` | `.trae/skills/skill-auto-update/SKILL.md` | 所有 `SKILL.md` 文件（自身） |
 
 ---

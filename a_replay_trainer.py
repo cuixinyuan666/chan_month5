@@ -10888,6 +10888,7 @@ async function applyQuantityFromKeyboard(rawQ) {
   dataFormConfig.quantity = nextQ;
   sessionConfig.dataFormQuantity = nextQ;
   saveSessionConfig();
+  const ctl = prepareCancelableLoading("正在按新数量重算K线…", `数量切换：准备重算为 ${nextQ} 根…`);
   try {
     const payload = await api("/api/reconfig", {
       chan_config: chanConfig,
@@ -10900,12 +10901,18 @@ async function applyQuantityFromKeyboard(rawQ) {
       rollback_cache_depth: Number(systemConfig.rollbackCacheDepth || DEFAULT_SYSTEM_CONFIG.rollbackCacheDepth),
       rollback_full_snapshot_interval: Number(systemConfig.rollbackFullSnapshotInterval || DEFAULT_SYSTEM_CONFIG.rollbackFullSnapshotInterval),
       rollback_capture_max_bars: Number(systemConfig.rollbackCaptureMaxBars || DEFAULT_SYSTEM_CONFIG.rollbackCaptureMaxBars),
-    });
+    }, "POST", { signal: ctl.signal });
     refreshUI(payload, { afterStep: false });
     void fetchChipKlineAllLazy(payload);
     setMsg(`数量已设为 ${nextQ}（原始 K 线共 ${n} 根）`);
   } catch (e) {
-    setMsg("数量切换失败：" + (e && e.message ? e.message : e));
+    if (e && (e.name === "AbortError" || String(e.message || "").indexOf("终止") >= 0 || Number(e.httpStatus) === 499)) {
+      setMsg("已终止数量切换重算。");
+    } else {
+      setMsg("数量切换失败：" + (e && e.message ? e.message : e));
+    }
+  } finally {
+    finishCancelableLoading(false);
   }
 }
 
@@ -12191,6 +12198,66 @@ function renderChanSettingsForm() {
   initTooltips();
 }
 
+function chanSettingDisplayKey(key) {
+  const map = {
+    macd_fast: "macd.fast",
+    macd_slow: "macd.slow",
+    macd_signal: "macd.signal",
+    demark_len: "demark.demark_len",
+    setup_bias: "demark.setup_bias",
+    countdown_bias: "demark.countdown_bias",
+    max_countdown: "demark.max_countdown",
+    tiaokong_st: "demark.tiaokong_st",
+    setup_cmp2close: "demark.setup_cmp2close",
+    countdown_cmp2close: "demark.countdown_cmp2close",
+  };
+  return map[key] || key;
+}
+
+function chanSettingValueByInputKey(cfg, key) {
+  if (!cfg) return undefined;
+  if (key === "macd_fast") return cfg.macd ? cfg.macd.fast : undefined;
+  if (key === "macd_slow") return cfg.macd ? cfg.macd.slow : undefined;
+  if (key === "macd_signal") return cfg.macd ? cfg.macd.signal : undefined;
+  if (key === "demark_len") return cfg.demark ? cfg.demark.demark_len : undefined;
+  if (key === "setup_bias") return cfg.demark ? cfg.demark.setup_bias : undefined;
+  if (key === "countdown_bias") return cfg.demark ? cfg.demark.countdown_bias : undefined;
+  if (key === "max_countdown") return cfg.demark ? cfg.demark.max_countdown : undefined;
+  if (key === "tiaokong_st") return cfg.demark ? cfg.demark.tiaokong_st : undefined;
+  if (key === "setup_cmp2close") return cfg.demark ? cfg.demark.setup_cmp2close : undefined;
+  if (key === "countdown_cmp2close") return cfg.demark ? cfg.demark.countdown_cmp2close : undefined;
+  return cfg[key];
+}
+
+function normalizeChanSettingCompareValue(v) {
+  if (Array.isArray(v)) return v.join(",");
+  if (v == null) return "";
+  if (typeof v === "number" && !Number.isFinite(v)) return String(v);
+  return String(v);
+}
+
+function formatChanSettingValue(v) {
+  if (Array.isArray(v)) return `[${v.join(",")}]`;
+  if (v === "") return "空";
+  if (v == null) return "None";
+  return String(v);
+}
+
+function collectChanDefaultChanges(inputs) {
+  const changes = [];
+  const seen = new Set();
+  inputs.forEach(input => {
+    const key = input.dataset.key;
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    const cur = chanSettingValueByInputKey(chanConfig, key);
+    const def = chanSettingValueByInputKey(DEFAULT_CHAN_CONFIG, key);
+    if (normalizeChanSettingCompareValue(cur) === normalizeChanSettingCompareValue(def)) return;
+    changes.push(`您已更改了默认项 ${chanSettingDisplayKey(key)} 为 ${formatChanSettingValue(cur)}（默认 ${formatChanSettingValue(def)}）`);
+  });
+  return changes;
+}
+
 function saveChanSettings() {
   const inputs = $("chanSettingsContent").querySelectorAll("input, select");
   if (!chanConfig.macd) chanConfig.macd = { fast: 12, slow: 26, signal: 9 };
@@ -12217,6 +12284,15 @@ function saveChanSettings() {
       chanConfig[key] = input.value;
     }
   });
+
+  const defaultChanges = collectChanDefaultChanges(inputs);
+  if (defaultChanges.length > 0) {
+    const preview = defaultChanges.slice(0, 20).join("\n");
+    const more = defaultChanges.length > 20 ? `\n……另有 ${defaultChanges.length - 20} 项默认项被更改。` : "";
+    if (!confirmAndLog(`检测到缠论配置默认项变更：\n${preview}${more}\n\n是否确认保存这些更改？`)) {
+      return;
+    }
+  }
   
   // Create a deep copy for the final config to be sent to backend
   const finalConfig = JSON.parse(JSON.stringify(chanConfig));
@@ -12234,8 +12310,8 @@ function saveChanSettings() {
   // If session is already loaded, prompt for reconfig
   if (lastPayload && lastPayload.ready) {
     if (confirmAndLog("更改缠论配置将导致从第1根K线重新计算到当前位置，且之前的模拟持仓数据（若有）将被清除。是否继续并应用配置？")) {
-      setGlobalLoading(true, "正在重新计算缠论逻辑...");
-      api("/api/reconfig", { chan_config: finalConfig })
+      const ctl = prepareCancelableLoading("正在重新计算缠论逻辑...", "配置重算：开始按新缠论配置重建会话…");
+      api("/api/reconfig", { chan_config: finalConfig }, "POST", { signal: ctl.signal })
         .then(payload => {
           refreshUI(payload);
           void fetchChipKlineAllLazy(payload);
@@ -12248,10 +12324,14 @@ function saveChanSettings() {
           closeChanSettings();
         })
         .catch(e => {
-          showToast("配置应用失败：" + e.message);
+          if (e && (e.name === "AbortError" || String(e.message || "").indexOf("终止") >= 0 || Number(e.httpStatus) === 499)) {
+            showToast("已终止配置重算。");
+          } else {
+            showToast("配置应用失败：" + e.message);
+          }
         })
         .finally(() => {
-          hideGlobalLoading();
+          finishCancelableLoading(false);
         });
     }
   } else {
@@ -14466,16 +14546,11 @@ function renderSystemSettingsForm() {
 }
 
 async function loadChartLazyLayers(layers) {
-  initAbortController = new AbortController();
-  initLoadStartMs = Date.now();
-  initLoadServerPct = 0;
-  setGlobalLoading(true, "正在加载图表图层，请稍候…");
-  appendMsgHistory("图表懒加载：准备加载勾选图层…");
-  startInitStatusPoll();
+  const ctl = prepareCancelableLoading("正在加载图表图层，请稍候…", "图表懒加载：准备加载勾选图层…");
   try {
     const payload = await api("/api/load_chart_layers", {
       chart_lazy_layers: layers || collectChartLazyLayersFromConfig(chartConfig, chartConfigStore),
-    }, "POST", { signal: initAbortController.signal });
+    }, "POST", { signal: ctl.signal });
     if (payload && Array.isArray(payload.record_trace)) {
       const startIdx = initStatusPollTimer ? Math.min(initTraceSeenCount, payload.record_trace.length) : 0;
       payload.record_trace.slice(startIdx).forEach((line) => appendMsgHistory(String(line)));
@@ -14485,12 +14560,7 @@ async function loadChartLazyLayers(layers) {
     }
     return payload;
   } finally {
-    stopInitStatusPoll();
-    initAbortController = null;
-    updateGlobalLoadingProgress(true);
-    setGlobalLoading(false);
-    initLoadStartMs = 0;
-    initLoadServerPct = 0;
+    finishCancelableLoading(true);
   }
 }
 
@@ -14560,7 +14630,10 @@ async function saveSettings() {
     if (isQuantityDataFormMode(dataFormConfig.mode) && n <= 0) {
       throw new Error("请先加载会话后再使用数量类模式。");
     }
-    const payload = await api("/api/reconfig", {
+    const ctl = prepareCancelableLoading("正在按新设置重算会话…", "图表设置：开始按新配置重算当前会话…");
+    let payload;
+    try {
+      payload = await api("/api/reconfig", {
       chan_config: chanConfig,
       data_form_mode: dataFormConfig.mode,
       data_form_quantity: clampDataFormQuantity(dataFormConfig.quantity, n || 1),
@@ -14574,7 +14647,10 @@ async function saveSettings() {
       performance_engine_mode: String(systemConfig.performanceEngineMode || DEFAULT_SYSTEM_CONFIG.performanceEngineMode || "rust_auto"),
       chip_bucket_step: Number(chartConfig.chip && chartConfig.chip.bucketStep ? chartConfig.chip.bucketStep : 0.1),
       chart_lazy_layers: collectChartLazyLayersFromConfig(chartConfig, chartConfigStore),
-    });
+      }, "POST", { signal: ctl.signal });
+    } finally {
+      finishCancelableLoading(false);
+    }
     refreshUI(payload, { afterStep: false });
     void fetchChipKlineAllLazy(payload);
     setMsg(payload.message || "图表设置更新成功");
@@ -14900,11 +14976,56 @@ let initTraceSeenCount = 0;
 let initLoadStartMs = 0;
 let initLoadServerPct = 0;
 let initLoadExpectedMs = Number(storageGet("chan_init_expected_ms") || 40000);
+const INIT_STAGE_PROGRESS_FRONT = {
+  start: 1,
+  data_kline: 8,
+  data_chip: 18,
+  chip_refresh: 22,
+  chan_record: 32,
+  perf_engine_load: 38,
+  chan_bootstrap: 52,
+  bsp_snapshot: 68,
+  presentation_end: 72,
+  initial_step: 72,
+  build_payload: 92,
+  chart_lazy_layers: 96,
+};
+const INIT_STAGE_PROGRESS_ORDER = [
+  "start",
+  "data_kline",
+  "data_chip",
+  "chip_refresh",
+  "chan_record",
+  "perf_engine_load",
+  "chan_bootstrap",
+  "bsp_snapshot",
+  "presentation_end",
+  "initial_step",
+  "build_payload",
+  "chart_lazy_layers",
+];
 
 function fmtLoadingRemain(sec) {
   const s = Math.max(0, Math.round(Number(sec) || 0));
   if (s >= 60) return `${(s / 60).toFixed(1)}分钟`;
   return `${s}秒`;
+}
+
+function loadingStageSoftPct(serverHint, fallbackPct) {
+  if (!serverHint || !serverHint.stage) return fallbackPct;
+  const stage = String(serverHint.stage || "");
+  const base = Number(INIT_STAGE_PROGRESS_FRONT[stage]);
+  if (!Number.isFinite(base)) return fallbackPct;
+  const idx = INIT_STAGE_PROGRESS_ORDER.indexOf(stage);
+  const nextStage = idx >= 0 ? INIT_STAGE_PROGRESS_ORDER[idx + 1] : "";
+  const nextBase = Number(INIT_STAGE_PROGRESS_FRONT[nextStage]);
+  if (!Number.isFinite(nextBase) || nextBase <= base + 1) return fallbackPct;
+  const stageElapsed = Number(serverHint.stage_elapsed_sec);
+  if (!Number.isFinite(stageElapsed) || stageElapsed <= 0) return fallbackPct;
+  // 同一阶段久等时给用户一个“还活着”的软进度，真实节点进度仍以后端为准。
+  const span = Math.max(1, nextBase - base - 1);
+  const softStep = Math.min(span, Math.floor(stageElapsed / 8));
+  return Math.max(fallbackPct, base + softStep);
 }
 
 function renderGlobalLoadingHistory() {
@@ -14944,6 +15065,7 @@ function updateGlobalLoadingProgress(done = false, serverHint = null) {
     pct = Math.max(pct, Math.min(99, Math.floor(Number(serverHint.progress_pct))));
     initLoadServerPct = pct;
   }
+  pct = Math.min(99, Math.floor(loadingStageSoftPct(serverHint, pct)));
   let remainSec = Math.max(1, (expected - elapsed) / 1000);
   if (serverHint && Number.isFinite(Number(serverHint.eta_sec))) {
     remainSec = Math.max(1, Number(serverHint.eta_sec));
@@ -14952,11 +15074,35 @@ function updateGlobalLoadingProgress(done = false, serverHint = null) {
   }
   bar.style.width = `${pct}%`;
   bar.textContent = `${pct}%`;
-  eta.textContent = `预计剩余：${fmtLoadingRemain(remainSec)}`;
+  const elapsedText = `已用：${fmtLoadingRemain(elapsed / 1000)}`;
+  const stageElapsed = serverHint && Number.isFinite(Number(serverHint.stage_elapsed_sec))
+    ? ` 当前阶段：${fmtLoadingRemain(Number(serverHint.stage_elapsed_sec))}`
+    : "";
+  eta.textContent = `预计剩余：${fmtLoadingRemain(remainSec)} ｜ ${elapsedText}${stageElapsed}`;
   if (txt && serverHint && serverHint.stage_label) {
     txt.textContent = `正在加载会话：${serverHint.stage_label}`;
   }
   renderGlobalLoadingHistory();
+}
+
+function prepareCancelableLoading(text, historyText = "") {
+  if (initAbortController) {
+    try { initAbortController.abort(); } catch (_) {}
+  }
+  initAbortController = new AbortController();
+  initLoadStartMs = Date.now();
+  initLoadServerPct = 0;
+  if (historyText) appendMsgHistory(historyText);
+  setGlobalLoading(true, text);
+  startInitStatusPoll();
+  return initAbortController;
+}
+
+function finishCancelableLoading(done = false) {
+  stopInitStatusPoll();
+  if (done) updateGlobalLoadingProgress(true);
+  initAbortController = null;
+  hideGlobalLoading();
 }
 
 async function pollInitStatusOnce() {
@@ -20780,15 +20926,9 @@ $("btnInit").onclick = async () => {
   if (initBtn.disabled) return;
   let initSucceeded = false;
   const initBtnHtml = initBtn.innerHTML;
-  // 先创建取消控制器，再展示遮罩；否则首次 show 时看不到“终止加载”按钮
-  initAbortController = new AbortController();
-  initLoadStartMs = Date.now();
-  initLoadServerPct = 0;
   archiveAndClearMsgHistory("开始加载新会话");
   appendCurrentConfigSummaryToHistory();
-  setGlobalLoading(true, "正在加载会话，请稍候…");
-  appendMsgHistory("正在加载会话…");
-  startInitStatusPoll();
+  const ctl = prepareCancelableLoading("正在加载会话，请稍候…", "正在加载会话…");
   initBtn.disabled = true;
   initBtn.innerHTML = "加载中...";
   try {
@@ -20837,7 +20977,7 @@ $("btnInit").onclick = async () => {
     }
     let payload;
     try {
-      payload = await api("/api/init", buildInitBody({}), "POST", { signal: initAbortController.signal });
+      payload = await api("/api/init", buildInitBody({}), "POST", { signal: ctl.signal });
     } catch (e) {
       if (e && e.name === "AbortError") {
         throw new Error("已手动终止加载");
@@ -20948,14 +21088,12 @@ $("btnInit").onclick = async () => {
       setMsg("加载失败：" + msg);
     }
   } finally {
-    stopInitStatusPoll();
-    initAbortController = null;
     if (!initSucceeded) {
       initBtn.disabled = false;
       initBtn.innerHTML = initBtnHtml;
       updateShortcutUI();
     }
-    hideGlobalLoading();
+    finishCancelableLoading(false);
   }
 };
 
@@ -22036,6 +22174,8 @@ def _init_stage_label(name: str) -> str:
 
 def _init_status_begin(message: Optional[str] = None) -> None:
     _INIT_CANCEL.clear()
+    # 新任务先倒掉旧进度桶，避免前端清屏后又被旧日志灌回来。
+    drain_record_trace()
     with _INIT_STATUS_LOCK:
         _INIT_STATUS.update(
             {
@@ -22107,6 +22247,7 @@ def _init_status_snapshot() -> dict[str, Any]:
         st = dict(_INIT_STATUS)
     traces = peek_record_trace()
     elapsed = max(0.0, time.time() - float(st.get("started_at") or time.time()))
+    stage_elapsed = max(0.0, time.time() - float(st.get("stage_started_at") or time.time()))
     pct = int(st.get("progress_pct") or 0)
     eta_sec = None
     if st.get("busy") and pct > 2 and pct < 99:
@@ -22117,6 +22258,7 @@ def _init_status_snapshot() -> dict[str, Any]:
         "stage_label": st.get("stage_label") or "",
         "progress_pct": pct,
         "elapsed_sec": round(elapsed, 1),
+        "stage_elapsed_sec": round(stage_elapsed, 1),
         "eta_sec": round(eta_sec, 1) if eta_sec is not None else None,
         "traces": traces,
         "trace_count": len(traces),
@@ -22608,29 +22750,46 @@ async def api_load_chart_layers(req: LoadChartLayersReq):
 def api_reconfig(req: ReconfigReq):
     if not APP_STATE.ready:
         raise HTTPException(status_code=400, detail="请先初始化会话")
+    _init_status_begin("配置重算：开始按当前设置重建会话")
     try:
-        APP_STATE.reconfig(
-            req.chan_config,
-            data_form_mode=req.data_form_mode,
-            data_form_quantity=req.data_form_quantity,
-            data_form_quantity_alloc=getattr(req, "data_form_quantity_alloc", None),
-            data_feed_mode=getattr(req, "data_feed_mode", "step"),
-            offline_data_custom=getattr(req, "offline_data_custom", None),
-            kline_presentation_mode=getattr(req, "kline_presentation_mode", None),
-            rollback_cache_depth=req.rollback_cache_depth,
-            rollback_full_snapshot_interval=req.rollback_full_snapshot_interval,
-            rollback_capture_max_bars=req.rollback_capture_max_bars,
-            performance_engine_mode=getattr(req, "performance_engine_mode", None),
-            chip_bucket_step=getattr(req, "chip_bucket_step", None),
-            chart_lazy_layers=getattr(req, "chart_lazy_layers", None),
-        )
-        APP_STATE._rhythm_notice_hits = []
-        include_kline_all = stepper_needs_chip_kline_all(APP_STATE.stepper)
-        payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME, include_kline_all=include_kline_all)
-        payload["message"] = "配置更新成功，已按新逻辑重新计算并清除模拟持仓。"
+        with init_perf_run("api_reconfig") as perf_col:
+            APP_STATE.reconfig(
+                req.chan_config,
+                data_form_mode=req.data_form_mode,
+                data_form_quantity=req.data_form_quantity,
+                data_form_quantity_alloc=getattr(req, "data_form_quantity_alloc", None),
+                data_feed_mode=getattr(req, "data_feed_mode", "step"),
+                offline_data_custom=getattr(req, "offline_data_custom", None),
+                kline_presentation_mode=getattr(req, "kline_presentation_mode", None),
+                rollback_cache_depth=req.rollback_cache_depth,
+                rollback_full_snapshot_interval=req.rollback_full_snapshot_interval,
+                rollback_capture_max_bars=req.rollback_capture_max_bars,
+                performance_engine_mode=getattr(req, "performance_engine_mode", None),
+                chip_bucket_step=getattr(req, "chip_bucket_step", None),
+                chart_lazy_layers=getattr(req, "chart_lazy_layers", None),
+            )
+            APP_STATE._rhythm_notice_hits = []
+            include_kline_all = stepper_needs_chip_kline_all(APP_STATE.stepper)
+            payload = APP_STATE.build_payload(stock_name=APP_STOCK_NAME, include_kline_all=include_kline_all)
+            payload["message"] = "配置更新成功，已按新逻辑重新计算并清除模拟持仓。"
+            if init_perf_enabled() and perf_col is not None:
+                init_perf_payload = init_perf_report(
+                    {
+                        "chart_mode": APP_STATE.chart_mode,
+                        "engine_mode": getattr(APP_STATE.stepper, "perf_engine_mode", ""),
+                    }
+                )
+                payload["init_perf"] = init_perf_payload
+                trace_extra = drain_record_trace()
+                payload["record_trace"] = list(payload.get("record_trace") or []) + trace_extra + _init_perf_history_lines(init_perf_payload)
         return payload
+    except InitCancelledError as exc:
+        APP_STATE.ready = False
+        raise HTTPException(status_code=499, detail=str(exc)) from exc
     except Exception as e:
         raise HTTPException(status_code=400, detail=_error_detail_with_rust(e)) from e
+    finally:
+        _init_status_end()
 
 
 @app.post("/api/step")
