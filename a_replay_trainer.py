@@ -11212,6 +11212,8 @@ let chartSettingsCascadeSelKey = null;
 let chartSettingsBranchChildSel = ensureObject(safeJsonParse(storageGet("chan_chart_settings_branch_sel"), null), {});
 /** 打开面板时的快照，关闭未保存时恢复 */
 let chartSettingsDraftBaseline = null;
+/** 本次设置面板里是否手动碰过节奏线总开关，避免自动联动覆盖用户明确关闭 */
+let rhythmLineEnabledTouchedInSettings = false;
 let selectedSubIndicatorSlot = Number(storageGet("chan_selected_sub_indicator_slot") || "0");
 let indicatorMainSlots = ensureObject(safeJsonParse(storageGet("chan_indicator_main_slots"), null), null);
 let indicatorSubSlots = ensureObject(safeJsonParse(storageGet("chan_indicator_sub_slots"), null), null);
@@ -11249,7 +11251,7 @@ storageSet("chan_indicator_main_slots", JSON.stringify(indicatorMainSlots));
 storageSet("chan_indicator_sub_slots", JSON.stringify(indicatorSubSlots));
 storageSet("chan_indicator_main_var_visible", indicatorMainVarVisible ? "1" : "0");
 storageSet("chan_indicator_sub_var_visible", indicatorSubVarVisible ? "1" : "0");
-const MAIN_INDICATORS = new Set(["boll", "demark", "trendline"]);
+const MAIN_INDICATORS = new Set(["boll", "demark", "trendline", "rhythm"]);
 const SUB_INDICATORS = new Set(["macd", "kdj", "rsi", "vol"]);
 
 const DEFAULT_CHAN_CONFIG = {
@@ -11334,30 +11336,36 @@ const DEFAULT_CHART_CONFIG = {
     segToSegsegEnabled: true,
     maxLayer: 9,
     calcMode: "normal",
+    showLabels: true,
+    group1Enabled: true,
     group1LineColor: "#9333ea",
     group1LineWidth: 1.2,
     group1LineStyle: "dashed",
     group1TextColor: "#9333ea",
     group1TextFontSize: 12,
     group1TextFontWeight: "bold",
+    group2Enabled: true,
     group2LineColor: "#0f766e",
     group2LineWidth: 1.6,
     group2LineStyle: "solid",
     group2TextColor: "#0f766e",
     group2TextFontSize: 13,
     group2TextFontWeight: "bold",
+    group3Enabled: true,
     group3LineColor: "#2563eb",
     group3LineWidth: 2.0,
     group3LineStyle: "dashed",
     group3TextColor: "#2563eb",
     group3TextFontSize: 14,
     group3TextFontWeight: "bold",
+    group4Enabled: true,
     group4LineColor: "#ea580c",
     group4LineWidth: 2.4,
     group4LineStyle: "solid",
     group4TextColor: "#ea580c",
     group4TextFontSize: 15,
     group4TextFontWeight: "bold",
+    advancedGroupsEnabled: true,
     group5LineColor: "#be123c",
     group5LineWidth: 2.8,
     group5LineStyle: "dotted",
@@ -11636,6 +11644,12 @@ function migrateChartConfig(cfg) {
   if (!["normal", "transition", "strict1382"].includes(String(next.rhythmLine.calcMode || ""))) {
     next.rhythmLine.calcMode = "normal";
   }
+  if (typeof next.rhythmLine.showLabels !== "boolean") next.rhythmLine.showLabels = true;
+  [1, 2, 3, 4].forEach((n) => {
+    const key = `group${n}Enabled`;
+    if (typeof next.rhythmLine[key] !== "boolean") next.rhythmLine[key] = true;
+  });
+  if (typeof next.rhythmLine.advancedGroupsEnabled !== "boolean") next.rhythmLine.advancedGroupsEnabled = true;
   if (!next.rhythmHit) next.rhythmHit = {};
   if (typeof next.rhythmHit.enabled !== "boolean") next.rhythmHit.enabled = true;
   if (!next.xAxis) next.xAxis = {};
@@ -11772,6 +11786,46 @@ function buildChartConfigStore(rawCfg) {
 }
 let chartConfigStore = buildChartConfigStore(savedChartConfig);
 let chartConfig = chartConfigStore.perChart.chart1;
+
+function mainIndicatorSlotsContain(type) {
+  for (let i = 1; i <= 5; i++) {
+    const arr = indicatorMainSlots[String(i)];
+    if (Array.isArray(arr) && arr.includes(type)) return true;
+  }
+  return false;
+}
+
+function pickRhythmMigrationSlot() {
+  const cur = Number(selectedMainIndicatorSlot);
+  if (Number.isFinite(cur) && cur >= 1 && cur <= 5) return cur;
+  for (let i = 1; i <= 5; i++) {
+    const arr = indicatorMainSlots[String(i)];
+    if (Array.isArray(arr) && arr.length === 0) return i;
+  }
+  return 1;
+}
+
+function migrateLegacyRhythmMainIndicatorSlot() {
+  const migrationKey = "chan_indicator_rhythm_migrated_v1";
+  if (storageGet(migrationKey) === "1") return;
+  const rhythmWasLayerOn = !!(
+    (chartConfigStore.perChart.chart1 && chartConfigStore.perChart.chart1.rhythmLine && chartConfigStore.perChart.chart1.rhythmLine.enabled !== false) ||
+    (chartConfigStore.perChart.chart2 && chartConfigStore.perChart.chart2.rhythmLine && chartConfigStore.perChart.chart2.rhythmLine.enabled !== false)
+  );
+  if (rhythmWasLayerOn && !mainIndicatorSlotsContain("rhythm")) {
+    const targetSlot = pickRhythmMigrationSlot();
+    const key = String(targetSlot);
+    const arr = Array.isArray(indicatorMainSlots[key]) ? indicatorMainSlots[key].slice() : [];
+    arr.push("rhythm");
+    indicatorMainSlots[key] = arr;
+    selectedMainIndicatorSlot = targetSlot;
+    storageSet("chan_indicator_main_slots", JSON.stringify(indicatorMainSlots));
+    storageSet("chan_selected_main_indicator_slot", String(selectedMainIndicatorSlot));
+  }
+  storageSet(migrationKey, "1");
+}
+
+migrateLegacyRhythmMainIndicatorSlot();
 
 function syncCrosshairEnabledFromStore() {
   const sh = chartConfigStore.shared && chartConfigStore.shared.crosshair;
@@ -12962,8 +13016,8 @@ function applyRhythmCalcModeToChanConfig(targetConfig) {
   return cfg;
 }
 
-function getRhythmMaxLayer() {
-  const cfg = activeDrawStyle().rhythmLine || DEFAULT_CHART_CONFIG.rhythmLine;
+function getRhythmMaxLayer(cfgSource = activeDrawStyle()) {
+  const cfg = (cfgSource && cfgSource.rhythmLine) || DEFAULT_CHART_CONFIG.rhythmLine;
   const n = Math.floor(Number(cfg.maxLayer));
   return Number.isFinite(n) ? Math.max(0, Math.min(9, n)) : 9;
 }
@@ -12978,9 +13032,37 @@ function isBspLevelEnabled(level, cfg = chartConfig, store = chartConfigStore) {
   const c = cfg && cfg[key] ? cfg[key] : DEFAULT_CHART_CONFIG[key];
   return !c || c.enabled !== false;
 }
+function getSelectedMainIndicatorTypes() {
+  const mainSlot = Number(selectedMainIndicatorSlot);
+  if (!indicatorMainSlots || !Number.isFinite(mainSlot) || mainSlot < 1 || mainSlot > 5) return [];
+  const list = indicatorMainSlots[String(mainSlot)] || [];
+  if (!Array.isArray(list)) return [];
+  return list.filter((type) => type && type !== "none" && isMainIndicator(type));
+}
+function isMainIndicatorSelected(type) {
+  return getSelectedMainIndicatorTypes().includes(type);
+}
+function syncRhythmLineSwitchFromMainIndicator(opts = {}) {
+  const respectTouched = opts.respectTouched !== false;
+  if (!isMainIndicatorSelected("rhythm")) return false;
+  if (respectTouched && rhythmLineEnabledTouchedInSettings) return false;
+  if (!chartConfig.rhythmLine) chartConfig.rhythmLine = JSON.parse(JSON.stringify(DEFAULT_CHART_CONFIG.rhythmLine));
+  if (chartConfig.rhythmLine.enabled === true) return false;
+  // 指标入口勾选节奏线时，自动打开老图层总开关，避免“勾了但不画”。
+  chartConfig.rhythmLine.enabled = true;
+  const input = document.querySelector('input[data-key="rhythmLine"][data-subkey="enabled"]');
+  if (input) input.checked = true;
+  return true;
+}
+function isRhythmIndicatorEnabled(cfg = chartConfig) {
+  return isMainIndicatorSelected("rhythm") && !!(cfg && cfg.rhythmLine && cfg.rhythmLine.enabled);
+}
+function isRhythmHitEnabled(cfg = chartConfig) {
+  return isRhythmIndicatorEnabled(cfg) && !!(cfg && cfg.rhythmHit && cfg.rhythmHit.enabled !== false);
+}
 function collectChartLazyLayersFromConfig(cfg = chartConfig, store = chartConfigStore) {
-  const rhythmOn = !!(cfg && cfg.rhythmLine && cfg.rhythmLine.enabled);
-  const rhythmHitOn = !!(cfg && cfg.rhythmHit && cfg.rhythmHit.enabled !== false);
+  const rhythmOn = isRhythmIndicatorEnabled(cfg);
+  const rhythmHitOn = isRhythmHitEnabled(cfg);
   const lineLevels = {};
   customSegmentLevelsFromConfig(cfg).forEach((lv) => { lineLevels[lv] = true; });
   const bspLevels = {};
@@ -13057,19 +13139,33 @@ function getBspDisplayLabel(p) {
   return String(p.label || "");
 }
 
-function isRhythmLevelEnabled(level) {
-  const cfg = activeDrawStyle().rhythmLine || DEFAULT_CHART_CONFIG.rhythmLine;
+function isRhythmLevelEnabled(level, cfgSource = activeDrawStyle()) {
+  const cfg = (cfgSource && cfgSource.rhythmLine) || DEFAULT_CHART_CONFIG.rhythmLine;
   const subKey = RHYTHM_LEVEL_ENABLED_KEY[level];
   if (!subKey) return true;
   return !!cfg[subKey];
 }
 
-function isRhythmLineVisible(line) {
-  if (!line || !isRhythmLevelEnabled(line.level)) return false;
+function getRhythmRoundRef(line) {
+  const roundRef = Number(line && line.round_ref);
+  if (Number.isFinite(roundRef) && roundRef >= 1) return Math.floor(roundRef);
+  return getRhythmGroupIndex(line && line.color_group);
+}
+
+function isRhythmGroupEnabled(line, cfgSource = activeDrawStyle()) {
+  const cfg = (cfgSource && cfgSource.rhythmLine) || DEFAULT_CHART_CONFIG.rhythmLine;
+  const roundRef = getRhythmRoundRef(line);
+  // 轮次开关：一二三四单独控，高级开关接住第5轮以后。
+  if (roundRef >= 1 && roundRef <= 4) return cfg[`group${roundRef}Enabled`] !== false;
+  return cfg.advancedGroupsEnabled !== false;
+}
+
+function isRhythmLineVisible(line, cfgSource = activeDrawStyle()) {
+  if (!line || !isRhythmIndicatorEnabled(cfgSource) || !isRhythmLevelEnabled(line.level, cfgSource) || !isRhythmGroupEnabled(line, cfgSource)) return false;
   const layer = Number.isFinite(Number(line.layer))
     ? Number(line.layer)
     : Math.max(0, Number(line.round_current || 0) - Number(line.round_ref || 0));
-  return layer <= getRhythmMaxLayer();
+  return layer <= getRhythmMaxLayer(cfgSource);
 }
 
 function getRhythmGroupIndex(group) {
@@ -13750,6 +13846,7 @@ function flushChartSettingsFormToMemory() {
       chartConfig[key][subkey] = val;
     }
   });
+  syncRhythmLineSwitchFromMainIndicator({ respectTouched: true });
   root.querySelectorAll('input[type="text"][data-multi-kt]').forEach((textInput) => {
     const sk = textInput.dataset.subkey || "";
     if (!sk.endsWith("-text")) return;
@@ -13777,6 +13874,7 @@ function openSettings() {
   if (isSystemSettingsOpen()) closeSystemSettings();
   if (!chartConfig.crosshair) chartConfig.crosshair = {};
   chartConfig.crosshair.enabled = !!crosshairEnabled;
+  rhythmLineEnabledTouchedInSettings = false;
   captureChartSettingsDraftBaseline();
   const panel = $("settingsModal") && $("settingsModal").querySelector(".panel");
   if (panel) panel.classList.add("chart-settings-panel");
@@ -14225,7 +14323,7 @@ function appendChartSettingsItemTo(parent, sec, item, buildLabelHtml) {
       html += `<div class="muted" style="margin-top:8px;">当前主图槽位为 0，不显示主图指标。</div>`;
     } else {
       const currentList = Array.isArray(val) ? val : [];
-      const options = [{ v: "boll", l: "BOLL" }, { v: "demark", l: "Demark" }, { v: "trendline", l: "TrendLine" }];
+      const options = [{ v: "boll", l: "BOLL" }, { v: "demark", l: "Demark" }, { v: "trendline", l: "TrendLine" }, { v: "rhythm", l: "节奏线" }];
       html += `<div style="display:flex;flex-direction:column;gap:4px;margin-top:8px;">`;
       options.forEach((opt) => {
         const checked = currentList.includes(opt.v);
@@ -14234,6 +14332,16 @@ function appendChartSettingsItemTo(parent, sec, item, buildLabelHtml) {
       html += `</div>`;
     }
     itemDiv.innerHTML += html;
+    const rhythmCb = itemDiv.querySelector('.indicator-check-main[value="rhythm"]');
+    if (rhythmCb) {
+      rhythmCb.onchange = () => {
+        if (!rhythmCb.checked) return;
+        if (!chartConfig.rhythmLine) chartConfig.rhythmLine = JSON.parse(JSON.stringify(DEFAULT_CHART_CONFIG.rhythmLine));
+        chartConfig.rhythmLine.enabled = true;
+        const rhythmSwitch = document.querySelector('input[data-key="rhythmLine"][data-subkey="enabled"]');
+        if (rhythmSwitch) rhythmSwitch.checked = true;
+      };
+    }
   } else if (item.type === "indicator_multi_sub") {
     let html = `<label>${buildLabelHtml(item)}</label>`;
     if (selectedSubIndicatorSlot === 0) {
@@ -14278,6 +14386,14 @@ function appendChartSettingsItemTo(parent, sec, item, buildLabelHtml) {
             "2) 关闭后仅保留图形，不显示变量文本。\n" +
             "3) 保存设置后会持久化，重启后保持。"
           );
+        };
+      }
+    }
+    if (sec.key === "rhythmLine" && item.subKey === "enabled") {
+      const c = itemDiv.querySelector('input[type="checkbox"]');
+      if (c) {
+        c.onchange = () => {
+          rhythmLineEnabledTouchedInSettings = true;
         };
       }
     }
@@ -15077,6 +15193,8 @@ function renderSettingsForm() {
                 { label: "分型→笔", subKey: "fractToBiEnabled", type: "checkbox" },
                 { label: "笔→段", subKey: "biToSegEnabled", type: "checkbox" },
                 { label: "段→2段", subKey: "segToSegsegEnabled", type: "checkbox" },
+                { label: "显示数字标签", subKey: "showLabels", type: "checkbox", tip: "控制线左侧编号和右侧回调比例文字；不改变节奏线本身。" },
+                { label: "显示第5轮及以后", subKey: "advancedGroupsEnabled", type: "checkbox", tip: "高级轮次只影响前端显示，不改变原生节奏线计算。" },
                 { label: "显示层级", subKey: "maxLayer", type: "number", min: 0, max: 9, step: 1, tip: "0层只显示 1-0 / 2-0；N 层显示 <=N 的所有节奏线。" },
               ],
             },
@@ -15090,10 +15208,11 @@ function renderSettingsForm() {
                 ], tip: "保存后会重算当前会话。" },
               ],
             },
-            ...[1, 2, 3, 4, 5].map((n) => ({
+            ...[1, 2, 3, 4].map((n) => ({
               id: `g${n}`,
               label: `节奏线${n}`,
               items: [
+                { label: `显示节奏线${n}`, subKey: `group${n}Enabled`, type: "checkbox", tip: `独立控制第 ${n} 轮节奏线显示；服务端仍按原生算法计算。` },
                 { label: `节奏线${n}颜色`, subKey: `group${n}LineColor`, type: "color" },
                 { label: `节奏线${n}粗细`, subKey: `group${n}LineWidth`, type: "number", min: 0.1, max: 8, step: 0.1 },
                 { label: `节奏线${n}线型`, subKey: `group${n}LineStyle`, type: "select", options: [
@@ -15109,6 +15228,26 @@ function renderSettingsForm() {
                 ]},
               ],
             })),
+            {
+              id: "gAdvanced",
+              label: "高级轮次",
+              items: [
+                { label: "显示第5轮及以后", subKey: "advancedGroupsEnabled", type: "checkbox", tip: "第5轮以后共用高级样式；关闭后只隐藏显示，不影响原生计算。" },
+                { label: "高级轮次颜色", subKey: "group5LineColor", type: "color" },
+                { label: "高级轮次粗细", subKey: "group5LineWidth", type: "number", min: 0.1, max: 8, step: 0.1 },
+                { label: "高级轮次线型", subKey: "group5LineStyle", type: "select", options: [
+                  { value: "dashed", label: "虚线" },
+                  { value: "solid", label: "实线" },
+                  { value: "dotted", label: "点线" },
+                ]},
+                { label: "高级轮次数字颜色", subKey: "group5TextColor", type: "color" },
+                { label: "高级轮次数字大小", subKey: "group5TextFontSize", type: "number", min: 8, max: 32, step: 1 },
+                { label: "高级轮次数字粗细", subKey: "group5TextFontWeight", type: "select", options: [
+                  { value: "normal", label: "常规" },
+                  { value: "bold", label: "加粗" },
+                ]},
+              ],
+            },
           ],
         },
       ],
@@ -15885,6 +16024,7 @@ async function saveSettings() {
       "显示层级只影响前端显示，不改变服务端计算结果。"
     );
   }
+  appendMsgHistory(`节奏线指标设置：${rhythmIndicatorHistorySummary(chartConfig)}`);
   if (lastPayload && lastPayload.ready) {
     const nextLazyLayers = collectChartLazyLayersFromConfig(chartConfig, chartConfigStore);
     const newLazyLayers = filterUnloadedLazyLayers(
@@ -16216,12 +16356,9 @@ function getTradeLineDash(style) {
 function getIndicatorConfig() {
   const mainTypes = [];
   const mainSlot = Number(selectedMainIndicatorSlot);
-  if (indicatorMainSlots && Number.isFinite(mainSlot) && mainSlot >= 1 && mainSlot <= 5) {
-    const list = indicatorMainSlots[String(mainSlot)] || [];
-    for (const type of list) {
-      if (type && type !== "none" && isMainIndicator(type)) {
-        mainTypes.push({ slot: mainSlot, type });
-      }
+  if (Number.isFinite(mainSlot) && mainSlot >= 1 && mainSlot <= 5) {
+    for (const type of getSelectedMainIndicatorTypes()) {
+      mainTypes.push({ slot: mainSlot, type });
     }
   }
   
@@ -16524,12 +16661,14 @@ function getBspAtX(chart, xVal) {
     seen.add(txt);
     tags.push(txt);
   }
-  for (const hit of (chart && chart.rhythm_hits) || []) {
-    if (!hit || hit.x !== xVal) continue;
-    const txt = String(hit.display_label || "1382");
-    if (seen.has(txt)) continue;
-    seen.add(txt);
-    tags.push(txt);
+  if (isRhythmHitEnabled(chartConfig)) {
+    for (const hit of (chart && chart.rhythm_hits) || []) {
+      if (!hit || hit.x !== xVal) continue;
+      const txt = String(hit.display_label || "1382");
+      if (seen.has(txt)) continue;
+      seen.add(txt);
+      tags.push(txt);
+    }
   }
   return tags;
 }
@@ -18041,6 +18180,26 @@ function collectCheckedLazySummary() {
   };
 }
 
+function rhythmIndicatorHistorySummary(cfg = chartConfig) {
+  const r = (cfg && cfg.rhythmLine) || DEFAULT_CHART_CONFIG.rhythmLine;
+  const h = (cfg && cfg.rhythmHit) || DEFAULT_CHART_CONFIG.rhythmHit;
+  const onOff = (v) => v ? "开" : "关";
+  const mode = normalizeRhythmCalcMode(r.calcMode);
+  return [
+    `主图指标=${isMainIndicatorSelected("rhythm") ? "已选" : "未选"}`,
+    `总开关=${onOff(!!r.enabled)}`,
+    `节奏线一=${onOff(r.group1Enabled !== false)}`,
+    `节奏线二=${onOff(r.group2Enabled !== false)}`,
+    `节奏线三=${onOff(r.group3Enabled !== false)}`,
+    `节奏线四=${onOff(r.group4Enabled !== false)}`,
+    `5轮+=${onOff(r.advancedGroupsEnabled !== false)}`,
+    `数字标签=${onOff(r.showLabels !== false)}`,
+    `1382提示=${onOff(h.enabled !== false)}`,
+    `显示层级<=${getRhythmMaxLayer(cfg)}`,
+    `计算=${RHYTHM_CALC_MODE_LABELS[mode] || mode}`,
+  ].join("；");
+}
+
 function buildCurrentConfigSummaryText() {
   flushChartSettingsFormToMemory();
   const chartMode = $("chartMode") ? String($("chartMode").value || "single") : "single";
@@ -18060,6 +18219,7 @@ function buildCurrentConfigSummaryText() {
     `喂数据方式=${dataFeedModeLabel(dataFormConfig.feedMode)}；K线图呈现形式=${klinePresentationLabel(dataFormConfig.klinePresentation)}；离线数据自定义=${offlineDataCustomLabel(dataFormConfig.offlineDataCustom)}`,
     "【懒加载/显示】",
     `中枢=${lazy.zsLevels.length ? lazy.zsLevels.join("、") : "全关"}；买卖点=${lazy.bspLevels.length ? lazy.bspLevels.join("、") : "全关"}；自定义级别=${customLevels.length ? customLevels.join("、") : "无"}；节奏线=${lazy.rhythm ? "开" : "关"}；1382提示=${lazy.rhythmHits ? "开" : "关"}；图底买卖点总开关=${chartConfigStore.shared && chartConfigStore.shared.showBottomBsp === false ? "关" : "开"}`,
+    `节奏线指标：${rhythmIndicatorHistorySummary(chartConfig)}`,
     "【关键逻辑总结】",
     `数据逻辑：${offlineDataCustomLabel(dataFormConfig.offlineDataCustom)} 会影响 K线、VOL、筹码分布；分笔合成传统/数量均固定从 a_Data 重算。`,
     `计算逻辑：${dataFeedModeLabel(dataFormConfig.feedMode)}；${klinePresentationLabel(dataFormConfig.klinePresentation)}${normalizeDataFeedMode(dataFormConfig.feedMode) === "step" && normalizeKlinePresentationMode(dataFormConfig.klinePresentation) === "instant" ? " = 自动从第1根逐步 step 到末根并展示当时当下结果" : ""}。`,
@@ -18180,6 +18340,7 @@ function judgeStatsText(stats) {
 }
 
 function getRhythmNoticeTexts(payload) {
+  if (!isRhythmHitEnabled(chartConfig)) return [];
   const hits = payload && Array.isArray(payload.rhythm_notice_hits) ? payload.rhythm_notice_hits : [];
   return Array.from(new Set(hits
     .map((hit) => String(hit && (hit.detail || hit.display_label || "1382")).trim())
@@ -18283,13 +18444,13 @@ function combineStepInterruptSources(bspOn, bspHit, rhythmOn, rhythmHit, combine
 
 function shouldInterruptStepOnRhythm1382() {
   const toastCfg = chartConfig && chartConfig.toast ? chartConfig.toast : DEFAULT_CHART_CONFIG.toast;
-  return toastCfg.interruptOnRhythm1382 !== false;
+  return isRhythmHitEnabled(chartConfig) && toastCfg.interruptOnRhythm1382 !== false;
 }
 
 function shouldShowToastCategory(category) {
   const toastCfg = chartConfig && chartConfig.toast ? chartConfig.toast : DEFAULT_CHART_CONFIG.toast;
   if (category === "bsp") return toastCfg.showBsp !== false;
-  if (category === "rhythm1382") return toastCfg.showRhythm1382 !== false;
+  if (category === "rhythm1382") return isRhythmHitEnabled(chartConfig) && toastCfg.showRhythm1382 !== false;
   if (category === "judge") return toastCfg.showJudge !== false;
   return true;
 }
@@ -19197,9 +19358,9 @@ function toScaler(chart, xMin, xMax, dualChartIdHint) {
       }
     }
   }
-  if (chartConfig.rhythmLine && chartConfig.rhythmLine.enabled && chart.rhythm_lines) {
+  if (isRhythmIndicatorEnabled(chartConfig) && chart.rhythm_lines) {
     for (const rl of chart.rhythm_lines) {
-      if (!isRhythmLineVisible(rl)) continue;
+      if (!isRhythmLineVisible(rl, chartConfig)) continue;
       if (!intersects(rl, xMin, xMax)) continue;
       const yVal = Number(rl.y1);
       if (!Number.isFinite(yVal)) continue;
@@ -20680,6 +20841,12 @@ function drawIndicators(chart, s) {
     if (mainTypeSet.has("trendline")) {
       rows.push(`TrendLine: ${Array.isArray(chart.trend_lines) ? chart.trend_lines.length : 0} 条`);
     }
+    if (mainTypeSet.has("rhythm")) {
+      const rhythmCount = Array.isArray(chart.rhythm_lines)
+        ? chart.rhythm_lines.filter((line) => isRhythmLineVisible(line, chartConfig)).length
+        : 0;
+      rows.push(`节奏线: ${rhythmCount} 条`);
+    }
     // #region agent log
     __agentDebugLog(
       "H3",
@@ -20779,7 +20946,8 @@ function resolveBottomBspRowsForDraw(chart) {
 }
 
 function drawRhythmLines(arr, s) {
-  if (!activeDrawStyle().rhythmLine || !activeDrawStyle().rhythmLine.enabled) return;
+  const rhythmCfg = activeDrawStyle().rhythmLine || DEFAULT_CHART_CONFIG.rhythmLine;
+  if (!isRhythmIndicatorEnabled(activeDrawStyle())) return;
   // 自定义术语说明：
   // - “推进峰值端点”指与父结构同向推进的子级端点（上升时对应 D/F/H...）。
   // - line.label_left 是节奏线编号，例如 1-0 / 1-1。
@@ -20802,13 +20970,15 @@ function drawRhythmLines(arr, s) {
     ctx.lineTo(xp2, yp);
     ctx.stroke();
     ctx.setLineDash([]);
-    ctx.fillStyle = visual.textColor;
-    ctx.font = `${visual.textFontWeight} ${visual.textFontSize}px Consolas`;
-    ctx.textBaseline = "middle";
-    ctx.textAlign = "right";
-    ctx.fillText(String(line.label_left || ""), xp1 - 6, yp);
-    ctx.textAlign = "left";
-    ctx.fillText(String(line.label_right || ""), xp2 + 6, yp);
+    if (rhythmCfg.showLabels !== false) {
+      ctx.fillStyle = visual.textColor;
+      ctx.font = `${visual.textFontWeight} ${visual.textFontSize}px Consolas`;
+      ctx.textBaseline = "middle";
+      ctx.textAlign = "right";
+      ctx.fillText(String(line.label_left || ""), xp1 - 6, yp);
+      ctx.textAlign = "left";
+      ctx.fillText(String(line.label_right || ""), xp2 + 6, yp);
+    }
     ctx.restore();
   }
 }
@@ -21742,7 +21912,7 @@ async function stepOnce(logMessage) {
   const interruptedByBsp = shouldInterruptStepOnBspFine(bspNotice ? bspNotice.hits : []);
   const interruptedByRhythm = shouldInterruptStepOnRhythm1382() && rhythmTexts.length > 0;
   const bspOn = toastCfg.interruptOnBsp !== false;
-  const rhythmOn = toastCfg.interruptOnRhythm1382 !== false;
+  const rhythmOn = shouldInterruptStepOnRhythm1382();
   const interrupted = combineStepInterruptSources(
     bspOn,
     interruptedByBsp,
