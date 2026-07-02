@@ -11,6 +11,7 @@ from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from functools import lru_cache
 from typing import Any, Iterator, Optional
 
 # 可选数据源：未安装时统一提示（与下方 RuntimeError 文案一致）
@@ -156,6 +157,7 @@ from Math.TrendLine import CTrendLine
 from Seg.Seg import CSeg
 from ZS.ZSList import CZSList
 
+
 class ReplayChan(CChan):
     """使用会话内缓存的日线 K 线单元重建缠论计算，避免重复请求行情。
 
@@ -196,15 +198,23 @@ VISIBLE_BSP_LEVELS = ("bi", "seg", "segseg")
 LEVEL_ORDER = {level: idx for idx, level in enumerate(VISIBLE_BSP_LEVELS)}
 
 
-def custom_seg_level_num(level: Any) -> Optional[int]:
-    text = str(level or "").strip().lower()
+@lru_cache(maxsize=128)
+def _custom_seg_level_num_text(text: str) -> Optional[int]:
+    """热路径级别解析：不用正则，避免百万次 fullmatch。"""
     if text == "segseg":
         return 2
-    m = re.fullmatch(r"seg(\d+)", text)
-    if not m:
+    if len(text) <= 3 or not text.startswith("seg"):
         return None
-    n = int(m.group(1))
+    tail = text[3:]
+    if not tail.isdecimal():
+        return None
+    n = int(tail)
     return n if n >= 3 else None
+
+
+def custom_seg_level_num(level: Any) -> Optional[int]:
+    text = str(level or "").strip().lower()
+    return _custom_seg_level_num_text(text)
 
 
 def seg_level_id(num: int) -> str:
@@ -217,8 +227,8 @@ def is_bsp_level(level: Any) -> bool:
     return text in ("bi", "seg") or custom_seg_level_num(text) is not None
 
 
-def bsp_level_sort_order(level: Any) -> int:
-    text = str(level or "").strip().lower()
+@lru_cache(maxsize=128)
+def _bsp_level_sort_order_text(text: str) -> int:
     if text == "bi":
         return 0
     if text == "seg":
@@ -229,8 +239,21 @@ def bsp_level_sort_order(level: Any) -> int:
     return 999
 
 
+def bsp_level_sort_order(level: Any) -> int:
+    text = str(level or "").strip().lower()
+    return _bsp_level_sort_order_text(text)
+
+
 def extra_seg_levels_from_layers(layers: Any) -> list[str]:
-    cfg = normalize_chart_lazy_layers(layers, default_enabled=False)
+    if (
+        isinstance(layers, dict)
+        and isinstance(layers.get("line_levels"), dict)
+        and isinstance(layers.get("bsp_levels"), dict)
+        and isinstance(layers.get("zs_levels"), dict)
+    ):
+        cfg = layers
+    else:
+        cfg = normalize_chart_lazy_layers(layers, default_enabled=False)
     levels: set[str] = set()
     for group_name in ("line_levels", "bsp_levels", "zs_levels"):
         group = cfg.get(group_name) or {}
@@ -242,7 +265,10 @@ def extra_seg_levels_from_layers(layers: Any) -> list[str]:
 
 
 def extra_bsp_levels_from_layers(layers: Any) -> list[str]:
-    cfg = normalize_chart_lazy_layers(layers, default_enabled=False)
+    if isinstance(layers, dict) and isinstance(layers.get("bsp_levels"), dict):
+        cfg = layers
+    else:
+        cfg = normalize_chart_lazy_layers(layers, default_enabled=False)
     levels: set[str] = set()
     for level, enabled in (cfg.get("bsp_levels") or {}).items():
         n = custom_seg_level_num(level)
@@ -252,7 +278,10 @@ def extra_bsp_levels_from_layers(layers: Any) -> list[str]:
 
 
 def bsp_levels_from_layers(layers: Any = None) -> list[str]:
-    cfg = normalize_chart_lazy_layers(layers)
+    if isinstance(layers, dict) and isinstance(layers.get("bsp_levels"), dict):
+        cfg = layers
+    else:
+        cfg = normalize_chart_lazy_layers(layers)
     bsp_cfg = cfg.get("bsp_levels") or {}
     levels = [level for level in ("bi", "seg", "segseg") if bool(bsp_cfg.get(level, True))]
     for level in extra_bsp_levels_from_layers(layers):
@@ -315,11 +344,23 @@ def merge_chart_lazy_layers(base: Any, extra: Any) -> dict[str, Any]:
 
 
 def chart_lazy_bsp_enabled(layers: Any, level: str) -> bool:
+    if isinstance(layers, dict):
+        group = layers.get("bsp_levels")
+        if isinstance(group, dict):
+            return bool(group.get(level, True))
+        if group is None:
+            return True
     cfg = normalize_chart_lazy_layers(layers)
     return bool((cfg.get("bsp_levels") or {}).get(level, True))
 
 
 def chart_lazy_zs_enabled(layers: Any, level: str) -> bool:
+    if isinstance(layers, dict):
+        group = layers.get("zs_levels")
+        if isinstance(group, dict):
+            return bool(group.get(level, True))
+        if group is None:
+            return True
     cfg = normalize_chart_lazy_layers(layers)
     return bool((cfg.get("zs_levels") or {}).get(level, True))
 LEVEL_LABELS = {"bi": "笔", "seg": "段", "segseg": "2段"}
@@ -3816,6 +3857,23 @@ def _bsp_list_flat_len(bsp_list: Any) -> int:
         return 0
 
 
+def _bsp_raw_freeze_key(level: str, bsp: Any) -> str:
+    """逐K冻结key：只看级别、锚点、方向，不让未来组合标签回写。"""
+    klu = getattr(bsp, "klu", None)
+    if klu is None:
+        bi = getattr(bsp, "bi", None)
+        try:
+            klu = bi.get_end_klu() if bi is not None else None
+        except Exception:
+            klu = None
+    x = int(getattr(klu, "idx", -1))
+    return f"{level}|{x}|{1 if bool(getattr(bsp, 'is_buy', False)) else 0}"
+
+
+def _bsp_type_key(bsp_type: Any) -> str:
+    return str(getattr(bsp_type, "value", getattr(bsp_type, "name", bsp_type)))
+
+
 def line_list_full_signature(lines: Any) -> tuple[Any, ...]:
     """完整结构签名：少猜一点，结构没变才复用 BSP。"""
     try:
@@ -4293,6 +4351,9 @@ class ChanStepper:
         self.chart_lazy_layers = normalize_chart_lazy_layers(None)
         self._segseg_bsp_cache_key: Optional[tuple[Any, ...]] = None
         self._segseg_bsp_cache_value: Any = None
+        self._hidden_seg_layer_cache: dict[str, dict[str, Any]] = {}
+        self._level_zs_cache: dict[str, dict[str, Any]] = {}
+        self._level_bsp_cache: dict[str, dict[str, Any]] = {}
         self._extra_bsp_cache_key: Optional[tuple[Any, ...]] = None
         self._extra_bsp_cache_value: dict[str, Any] = {}
         self._extra_lines_cache_key: Optional[tuple[Any, ...]] = None
@@ -4332,6 +4393,9 @@ class ChanStepper:
         """清掉结构签名 BSP 缓存：新会话、重配、图层变化才需要。"""
         self._segseg_bsp_cache_key = None
         self._segseg_bsp_cache_value = None
+        self._hidden_seg_layer_cache = {}
+        self._level_zs_cache = {}
+        self._level_bsp_cache = {}
         self._extra_bsp_cache_key = None
         self._extra_bsp_cache_value = {}
         self._extra_lines_cache_key = None
@@ -4344,14 +4408,27 @@ class ChanStepper:
             "segseg_hit": 0,
             "segseg_miss": 0,
             "segseg_ms": 0.0,
+            "segseg_sig_ms": 0.0,
+            "segseg_hidden_ms": 0.0,
+            "segseg_zs_ms": 0.0,
+            "segseg_bsp_ms": 0.0,
             "extra_calls": 0,
             "extra_empty": 0,
             "extra_hit": 0,
             "extra_miss": 0,
             "extra_ms": 0.0,
+            "extra_sig_ms": 0.0,
             "extra_lines_hit": 0,
             "extra_lines_miss": 0,
             "extra_lines_ms": 0.0,
+            "extra_lines_build_ms": 0.0,
+            "extra_zs_bsp_ms": 0.0,
+            "level_zs_hit": 0,
+            "level_zs_miss": 0,
+            "level_zs_ms": 0.0,
+            "level_bsp_hit": 0,
+            "level_bsp_miss": 0,
+            "level_bsp_ms": 0.0,
         }
 
     def bsp_cache_stats_snapshot(self) -> dict[str, Any]:
@@ -4395,7 +4472,150 @@ class ChanStepper:
         if clear_bsp_cache:
             self.clear_bsp_signature_cache()
 
-    def extra_bsp_snapshot_cached(self, *, segseg_list: Any, conf: CChanConfig, lazy_layers: dict[str, Any]) -> dict[str, Any]:
+    def hidden_seg_layer_cached(self, *, level: str, source_lines: Any, conf: CChanConfig, source_sig: Optional[tuple[Any, ...]] = None):
+        """逐K隐藏级别复用官方增量段对象，避免每步全量重建。"""
+        if source_lines is None:
+            return get_seglist_instance(seg_config=conf.seg_conf, lv=SEG_TYPE.SEG)
+        cache_key = str(level)
+        entry = self._hidden_seg_layer_cache.get(cache_key)
+        conf_id = id(conf.seg_conf)
+        source_id = id(source_lines)
+        if source_sig is None:
+            source_sig = line_list_structural_signature(source_lines)
+        if entry and entry.get("conf_id") == conf_id and entry.get("source_id") == source_id and entry.get("source_sig") == source_sig:
+            return entry["lines"]
+        if not entry or entry.get("conf_id") != conf_id or entry.get("source_id") != source_id:
+            entry = {
+                "conf_id": conf_id,
+                "source_id": source_id,
+                "source_sig": None,
+                "lines": get_seglist_instance(seg_config=conf.seg_conf, lv=SEG_TYPE.SEG),
+                "last_sure": -1,
+            }
+        hidden_seg_list = entry["lines"]
+        try:
+            prepare_recursive_seg_source(source_lines)
+            entry["last_sure"] = cal_seg(source_lines, hidden_seg_list, int(entry.get("last_sure", -1)))
+            entry["source_sig"] = source_sig
+        except Exception:
+            hidden_seg_list = get_seglist_instance(seg_config=conf.seg_conf, lv=SEG_TYPE.SEG)
+            entry = {"conf_id": conf_id, "source_id": source_id, "source_sig": None, "lines": hidden_seg_list, "last_sure": -1}
+        self._hidden_seg_layer_cache[cache_key] = entry
+        return hidden_seg_list
+
+    def level_zs_snapshot_cached(
+        self,
+        *,
+        level: str,
+        base_lines: Any,
+        upper_lines: Any,
+        conf: CChanConfig,
+        base_sig: Optional[tuple[Any, ...]] = None,
+        upper_sig: Optional[tuple[Any, ...]] = None,
+    ):
+        """中枢增量复用：用官方 last_sure 游标，不再额外算签名。"""
+        t0 = time.perf_counter()
+        stats = getattr(self, "_bsp_cache_stats", None)
+        cache_key = str(level)
+        key = (id(conf.zs_conf), id(base_lines), id(upper_lines))
+        entry = self._level_zs_cache.get(cache_key)
+        reused = bool(entry and entry.get("key") == key)
+        if not reused:
+            entry = {"key": key, "zs": CZSList(zs_config=conf.zs_conf)}
+        zs_list = entry["zs"]
+        try:
+            zs_list.cal_bi_zs(base_lines, upper_lines)
+            update_zs_in_seg(base_lines, upper_lines, zs_list)
+        except Exception:
+            zs_list = CZSList(zs_config=conf.zs_conf)
+            entry = {"key": key, "zs": zs_list}
+            reused = False
+        self._level_zs_cache[cache_key] = entry
+        if isinstance(stats, dict):
+            stat_key = "level_zs_hit" if reused else "level_zs_miss"
+            stats[stat_key] = int(stats.get(stat_key, 0)) + 1
+            stats["level_zs_ms"] = float(stats.get("level_zs_ms", 0.0)) + (time.perf_counter() - t0) * 1000.0
+        return zs_list
+
+    def level_bsp_snapshot_cached(
+        self,
+        *,
+        level: str,
+        base_lines: Any,
+        upper_lines: Any,
+        bsp_conf: Any,
+        base_sig: Optional[tuple[Any, ...]] = None,
+        upper_sig: Optional[tuple[Any, ...]] = None,
+    ):
+        """BSP增量复用：逐K冻结仍靠外层账本，内部只复用官方游标。"""
+        t0 = time.perf_counter()
+        stats = getattr(self, "_bsp_cache_stats", None)
+        cache_key = str(level)
+        key = (id(bsp_conf), id(base_lines), id(upper_lines))
+        entry = self._level_bsp_cache.get(cache_key)
+        reused = bool(entry and entry.get("key") == key)
+        if not reused:
+            entry = {"key": key, "bsp": CBSPointList(bs_point_config=bsp_conf)}
+        bsp_list = entry["bsp"]
+        try:
+            bsp_list.cal(base_lines, upper_lines)
+        except Exception:
+            bsp_list = CBSPointList(bs_point_config=bsp_conf)
+            entry = {"key": key, "bsp": bsp_list}
+            reused = False
+        self._level_bsp_cache[cache_key] = entry
+        if isinstance(stats, dict):
+            stat_key = "level_bsp_hit" if reused else "level_bsp_miss"
+            stats[stat_key] = int(stats.get(stat_key, 0)) + 1
+            stats["level_bsp_ms"] = float(stats.get("level_bsp_ms", 0.0)) + (time.perf_counter() - t0) * 1000.0
+        return bsp_list
+
+    def extra_seg_chain_cached(self, *, base_segseg: Any, conf: CChanConfig, lazy_layers: dict[str, Any], base_sig: Optional[tuple[Any, ...]] = None) -> dict[str, Any]:
+        max_n = _max_extra_level_needed(lazy_layers)
+        if max_n < 3:
+            return {}
+        out: dict[str, Any] = {}
+        prev = base_segseg
+        for n in range(3, max_n + 1):
+            level = seg_level_id(n)
+            prev = self.hidden_seg_layer_cached(level=level, source_lines=prev, conf=conf, source_sig=base_sig if n == 3 else None)
+            out[level] = prev
+        return out
+
+    def extra_zs_and_bsp_cached(self, *, extra_lines: dict[str, Any], conf: CChanConfig, lazy_layers: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+        extra_zs: dict[str, Any] = {}
+        extra_bsp: dict[str, Any] = {}
+        for level, base in sorted(extra_lines.items(), key=lambda kv: bsp_level_sort_order(kv[0])):
+            n = custom_seg_level_num(level)
+            if n is None:
+                continue
+            upper = extra_lines.get(seg_level_id(n + 1))
+            if upper is None:
+                continue
+            if chart_lazy_zs_enabled(lazy_layers, level):
+                extra_zs[level] = self.level_zs_snapshot_cached(
+                    level=f"extra_zs:{level}",
+                    base_lines=base,
+                    upper_lines=upper,
+                    conf=conf,
+                )
+            if chart_lazy_bsp_enabled(lazy_layers, level):
+                extra_bsp[level] = self.level_bsp_snapshot_cached(
+                    level=f"extra_bsp:{level}",
+                    base_lines=base,
+                    upper_lines=upper,
+                    bsp_conf=conf.seg_bs_point_conf,
+                )
+        return extra_zs, extra_bsp
+
+    def extra_bsp_snapshot_cached(
+        self,
+        *,
+        segseg_list: Any,
+        conf: CChanConfig,
+        lazy_layers: dict[str, Any],
+        source_sig: Optional[tuple[Any, ...]] = None,
+    ) -> dict[str, Any]:
         """逐K当下性缓存：输入只来自当前已喂入结构，签名没变才复用。"""
         t0 = time.perf_counter()
         stats = getattr(self, "_bsp_cache_stats", None)
@@ -4412,6 +4632,10 @@ class ChanStepper:
                 stats["extra_empty"] = int(stats.get("extra_empty", 0)) + 1
                 stats["extra_ms"] = float(stats.get("extra_ms", 0.0)) + (time.perf_counter() - t0) * 1000.0
             return {}
+        sig_t0 = time.perf_counter()
+        segseg_sig = source_sig if source_sig is not None else line_list_structural_signature(segseg_list)
+        if isinstance(stats, dict):
+            stats["extra_sig_ms"] = float(stats.get("extra_sig_ms", 0.0)) + (time.perf_counter() - sig_t0) * 1000.0
         key = (
             "extra_bsp",
             wanted,
@@ -4419,7 +4643,7 @@ class ChanStepper:
             id(conf.seg_conf),
             id(conf.zs_conf),
             id(conf.seg_bs_point_conf),
-            line_list_structural_signature(segseg_list),
+            segseg_sig,
         )
         if key == self._extra_bsp_cache_key:
             if isinstance(stats, dict):
@@ -4431,7 +4655,7 @@ class ChanStepper:
             wanted,
             id(conf),
             id(conf.seg_conf),
-            line_list_structural_signature(segseg_list),
+            segseg_sig,
         )
         lines_t0 = time.perf_counter()
         if lines_key == self._extra_lines_cache_key:
@@ -4440,13 +4664,18 @@ class ChanStepper:
                 stats["extra_lines_hit"] = int(stats.get("extra_lines_hit", 0)) + 1
                 stats["extra_lines_ms"] = float(stats.get("extra_lines_ms", 0.0)) + (time.perf_counter() - lines_t0) * 1000.0
         else:
-            extra_lines = build_extra_seg_chain(segseg_list, conf, lazy_layers, new_algo=False)
+            extra_lines = self.extra_seg_chain_cached(base_segseg=segseg_list, conf=conf, lazy_layers=lazy_layers, base_sig=segseg_sig)
             self._extra_lines_cache_key = lines_key
             self._extra_lines_cache_value = extra_lines
             if isinstance(stats, dict):
                 stats["extra_lines_miss"] = int(stats.get("extra_lines_miss", 0)) + 1
-                stats["extra_lines_ms"] = float(stats.get("extra_lines_ms", 0.0)) + (time.perf_counter() - lines_t0) * 1000.0
-        _, extra_bsp = build_extra_zs_and_bsp(extra_lines, conf, lazy_layers)
+                lines_ms = (time.perf_counter() - lines_t0) * 1000.0
+                stats["extra_lines_ms"] = float(stats.get("extra_lines_ms", 0.0)) + lines_ms
+                stats["extra_lines_build_ms"] = float(stats.get("extra_lines_build_ms", 0.0)) + lines_ms
+        build_t0 = time.perf_counter()
+        _, extra_bsp = self.extra_zs_and_bsp_cached(extra_lines=extra_lines, conf=conf, lazy_layers=lazy_layers)
+        if isinstance(stats, dict):
+            stats["extra_zs_bsp_ms"] = float(stats.get("extra_zs_bsp_ms", 0.0)) + (time.perf_counter() - build_t0) * 1000.0
         self._extra_bsp_cache_key = key
         self._extra_bsp_cache_value = extra_bsp
         if isinstance(stats, dict):
@@ -4454,7 +4683,7 @@ class ChanStepper:
             stats["extra_ms"] = float(stats.get("extra_ms", 0.0)) + (time.perf_counter() - t0) * 1000.0
         return extra_bsp
 
-    def segseg_bsp_snapshot_cached(self, *, segseg_list: Any, conf: CChanConfig):
+    def segseg_bsp_snapshot_cached(self, *, segseg_list: Any, conf: CChanConfig, source_sig: Optional[tuple[Any, ...]] = None):
         """一次性逐K：2段结构没变时，复用隐藏上级和 BSP 结果。"""
         t0 = time.perf_counter()
         stats = getattr(self, "_bsp_cache_stats", None)
@@ -4464,23 +4693,46 @@ class ChanStepper:
             if isinstance(stats, dict):
                 stats["segseg_ms"] = float(stats.get("segseg_ms", 0.0)) + (time.perf_counter() - t0) * 1000.0
             return None
+        sig_t0 = time.perf_counter()
+        segseg_sig = source_sig if source_sig is not None else line_list_structural_signature(segseg_list)
+        if isinstance(stats, dict):
+            stats["segseg_sig_ms"] = float(stats.get("segseg_sig_ms", 0.0)) + (time.perf_counter() - sig_t0) * 1000.0
         key = (
             "segseg_bsp",
             id(conf),
             id(conf.seg_conf),
             id(conf.zs_conf),
             id(conf.seg_bs_point_conf),
-            line_list_structural_signature(segseg_list),
+            segseg_sig,
         )
         if key == self._segseg_bsp_cache_key:
             if isinstance(stats, dict):
                 stats["segseg_hit"] = int(stats.get("segseg_hit", 0)) + 1
                 stats["segseg_ms"] = float(stats.get("segseg_ms", 0.0)) + (time.perf_counter() - t0) * 1000.0
             return self._segseg_bsp_cache_value
-        segsegseg_list = build_hidden_seg_layer(segseg_list, conf)
+        hidden_t0 = time.perf_counter()
+        segsegseg_list = self.hidden_seg_layer_cached(level="seg3", source_lines=segseg_list, conf=conf, source_sig=segseg_sig)
+        if isinstance(stats, dict):
+            stats["segseg_hidden_ms"] = float(stats.get("segseg_hidden_ms", 0.0)) + (time.perf_counter() - hidden_t0) * 1000.0
         # 2段 BSP 先挂中枢，保持原来的当下性计算口径。
-        build_level_zs(segseg_list, segsegseg_list, conf.zs_conf)
-        bsp_list = build_level_bsp(segseg_list, segsegseg_list, conf.seg_bs_point_conf)
+        zs_t0 = time.perf_counter()
+        self.level_zs_snapshot_cached(
+            level="segseg_zs",
+            base_lines=segseg_list,
+            upper_lines=segsegseg_list,
+            conf=conf,
+        )
+        if isinstance(stats, dict):
+            stats["segseg_zs_ms"] = float(stats.get("segseg_zs_ms", 0.0)) + (time.perf_counter() - zs_t0) * 1000.0
+        bsp_t0 = time.perf_counter()
+        bsp_list = self.level_bsp_snapshot_cached(
+            level="segseg_bsp",
+            base_lines=segseg_list,
+            upper_lines=segsegseg_list,
+            bsp_conf=conf.seg_bs_point_conf,
+        )
+        if isinstance(stats, dict):
+            stats["segseg_bsp_ms"] = float(stats.get("segseg_bsp_ms", 0.0)) + (time.perf_counter() - bsp_t0) * 1000.0
         self._segseg_bsp_cache_key = key
         self._segseg_bsp_cache_value = bsp_list
         if isinstance(stats, dict):
@@ -5770,6 +6022,7 @@ class AppState:
         self._bsp_history_seen_count: int = 0
         self._bsp_light_level_signatures: dict[str, tuple[Any, ...]] = {}
         self._bsp_level_scan_meta: dict[str, tuple[Any, ...]] = {}
+        self._bsp_bucket_scan_meta: dict[str, dict[str, dict[str, Any]]] = {}
         self._bsp_delta_collector_id: str = ""
         self._presentation_perf: dict[str, Any] = {}
         # trigger_step==False 全量预计算的买卖点（基于当前缠论配置）
@@ -5815,6 +6068,7 @@ class AppState:
         self._bsp_history_seen_count = len(self.bsp_history)
         self._bsp_light_level_signatures = {}
         self._bsp_level_scan_meta = {}
+        self._bsp_bucket_scan_meta = {}
         self._reset_rust_bsp_delta_collector()
 
     def _current_bsp_delta_collector_id(self) -> str:
@@ -5849,6 +6103,7 @@ class AppState:
             self._bsp_history_seen_count = cur_len
             self._bsp_light_level_signatures = {}
             self._bsp_level_scan_meta = {}
+            self._bsp_bucket_scan_meta = {}
             self._reset_rust_bsp_delta_collector()
         return self._bsp_history_seen_keys
 
@@ -5953,7 +6208,22 @@ class AppState:
         levels = perf.setdefault("levels", {})
         return levels.setdefault(
             str(level),
-            {"checks": 0, "skip": 0, "scan": 0, "items": 0, "scan_ms": 0.0},
+            {
+                "checks": 0,
+                "skip": 0,
+                "struct_skip": 0,
+                "scan": 0,
+                "items": 0,
+                "scan_ms": 0.0,
+                "signature_ms": 0.0,
+                "rust_ms": 0.0,
+                "python_iter_ms": 0.0,
+                "item_ms": 0.0,
+                "cursor_tail": 0,
+                "cursor_full": 0,
+                "cursor_empty": 0,
+                "bucket_candidates": 0,
+            },
         )
 
     def _presentation_record_bsp_snapshot(self, start: float, item_count: int) -> None:
@@ -5998,7 +6268,11 @@ class AppState:
         detail1 = step_detail.get("stepper1", {}) if isinstance(step_detail, dict) else {}
         level_parts: list[str] = []
         levels_map = perf.get("levels") if isinstance(perf.get("levels"), dict) else {}
-        for lv_key in ("bi", "seg", "segseg", "extra"):
+        level_keys = ["bi", "seg", "segseg", "extra"]
+        if isinstance(levels_map, dict):
+            for lv_key in sorted((k for k in levels_map.keys() if k not in set(level_keys)), key=bsp_level_sort_order):
+                level_keys.append(str(lv_key))
+        for lv_key in level_keys:
             row = levels_map.get(lv_key) if isinstance(levels_map, dict) else None
             if not isinstance(row, dict):
                 continue
@@ -6010,6 +6284,38 @@ class AppState:
                 f"增{int(row.get('items', 0))}"
             )
         level_tail = f"；BSP分级={'；'.join(level_parts)}" if level_parts else ""
+        bsp_action_parts: list[str] = []
+        for lv_key in level_keys:
+            row = levels_map.get(lv_key) if isinstance(levels_map, dict) else None
+            if not isinstance(row, dict):
+                continue
+            bsp_action_parts.append(
+                f"{lv_key}:签名={float(row.get('signature_ms', 0.0)) / 1000.0:.2f}s"
+                f"/扫描={float(row.get('scan_ms', 0.0)) / 1000.0:.2f}s"
+                f"/Rust全扫={float(row.get('rust_ms', 0.0)) / 1000.0:.2f}s"
+                f"/Python遍历={float(row.get('python_iter_ms', 0.0)) / 1000.0:.2f}s"
+                f"/item构造={float(row.get('item_ms', 0.0)) / 1000.0:.2f}s"
+                f"/游标尾扫{int(row.get('cursor_tail', 0))}"
+                f"/全扫{int(row.get('cursor_full', 0))}"
+                f"/空跳{int(row.get('cursor_empty', 0))}"
+                f"/候选{int(row.get('bucket_candidates', 0))}"
+                f"/结构跳过{int(row.get('struct_skip', 0))}"
+            )
+        bsp_rebuild_detail = (
+            f"segseg结构跳过={int(perf.get('segseg_struct_skip', 0))}次；"
+            f"extra结构跳过={int(perf.get('extra_struct_skip', 0))}次；"
+            f"segseg签名={float(cache1.get('segseg_sig_ms', 0.0)) / 1000.0:.2f}s；"
+            f"segseg隐藏层={float(cache1.get('segseg_hidden_ms', 0.0)) / 1000.0:.2f}s；"
+            f"segseg挂中枢={float(cache1.get('segseg_zs_ms', 0.0)) / 1000.0:.2f}s；"
+            f"segseg BSP计算={float(cache1.get('segseg_bsp_ms', 0.0)) / 1000.0:.2f}s；"
+            f"extra签名={float(cache1.get('extra_sig_ms', 0.0)) / 1000.0:.2f}s；"
+            f"extra链构建={float(cache1.get('extra_lines_build_ms', 0.0)) / 1000.0:.2f}s；"
+            f"extra中枢/BSP={float(cache1.get('extra_zs_bsp_ms', 0.0)) / 1000.0:.2f}s；"
+            f"level中枢复用/新建={int(cache1.get('level_zs_hit', 0))}/{int(cache1.get('level_zs_miss', 0))}；"
+            f"level中枢耗时={float(cache1.get('level_zs_ms', 0.0)) / 1000.0:.2f}s；"
+            f"levelBSP复用/新建={int(cache1.get('level_bsp_hit', 0))}/{int(cache1.get('level_bsp_miss', 0))}；"
+            f"levelBSP耗时={float(cache1.get('level_bsp_ms', 0.0)) / 1000.0:.2f}s"
+        )
         for line in rust_presentation_detail_lines(perf, step_detail, stepper=self.stepper or ChanStepper()):
             push_record_trace(line)
         shadow_tail = ""
@@ -6027,11 +6333,14 @@ class AppState:
             f"BSP同步={bsp_s:.2f}s/{int(perf.get('bsp_sync_calls', 0))}次；"
             f"BSP快照={snap_s:.2f}s；Rust去重={float(perf.get('rust_collect_ms', 0.0)) / 1000.0:.2f}s"
             f"{shadow_tail}；"
-            f"segseg缓存={int(cache1.get('segseg_hit', 0))}/{int(cache1.get('segseg_miss', 0))} 命中/重算；"
-            f"extra缓存={int(cache1.get('extra_hit', 0))}/{int(cache1.get('extra_miss', 0))} 命中/重算；"
+            f"segseg快照缓存={int(cache1.get('segseg_hit', 0))}/{int(cache1.get('segseg_miss', 0))} 命中/重算(结构跳过{int(perf.get('segseg_struct_skip', 0))})；"
+            f"extra快照缓存={int(cache1.get('extra_hit', 0))}/{int(cache1.get('extra_miss', 0))} 命中/重算(结构跳过{int(perf.get('extra_struct_skip', 0))})；"
             f"extra链缓存={int(cache1.get('extra_lines_hit', 0))}/{int(cache1.get('extra_lines_miss', 0))} 命中/重算"
             f"{level_tail}"
         )
+        if bsp_action_parts:
+            push_record_trace(f"BSP动作耗时拆分：{'；'.join(bsp_action_parts)}")
+        push_record_trace(f"BSP重链耗时拆分：{bsp_rebuild_detail}")
 
     def _clear_rollback_cache(self) -> None:
         self._rollback_light.clear()
@@ -6796,7 +7105,7 @@ class AppState:
         if chart_lazy_bsp_enabled(stepper.chart_lazy_layers, "seg"):
             level_sources.append(("seg", getattr(kl_list, "seg_bs_point_lst", None)))
         segseg_list = getattr(kl_list, "segseg_list", None)
-        lazy_layers = normalize_chart_lazy_layers(stepper.chart_lazy_layers)
+        lazy_layers = stepper.chart_lazy_layers if isinstance(stepper.chart_lazy_layers, dict) else normalize_chart_lazy_layers(stepper.chart_lazy_layers)
         if segseg_list is not None and chart_lazy_bsp_enabled(lazy_layers, "segseg"):
             # 2段BSP依赖2段中枢；轻量路径也要先挂中枢，否则逐K历史会漏掉2段买卖点。
             level_sources.append(("segseg", stepper.segseg_bsp_snapshot_cached(segseg_list=segseg_list, conf=conf)))
@@ -6816,6 +7125,121 @@ class AppState:
             return snapshot
         return sorted(snapshot, key=lambda item: (int(item["x"]), bsp_level_sort_order(item["level"]), int(not bool(item["is_buy"]))))
 
+    def _bsp_structural_signature_timed(self, level: str, lines: Any, *, tail: int = 3) -> tuple[Any, ...]:
+        t0 = time.perf_counter()
+        sig = line_list_structural_signature(lines, tail=tail)
+        lv_perf = self._presentation_level_perf(level)
+        if lv_perf is not None:
+            lv_perf["signature_ms"] = float(lv_perf.get("signature_ms", 0.0)) + (time.perf_counter() - t0) * 1000.0
+        return sig
+
+    def _collect_new_bsp_items_from_buckets(
+        self,
+        *,
+        level: str,
+        bsp_list: Any,
+        seen_keys: set[str],
+        current_x: Optional[int] = None,
+    ) -> Optional[list[dict[str, Any]]]:
+        """逐K轻量路径：按 BSP 分桶游标只扫新增尾巴。"""
+        if current_x is not None:
+            return None
+        store = getattr(bsp_list, "bsp_store_dict", None)
+        if not isinstance(store, dict):
+            return None
+        if not store:
+            return []
+
+        lv_perf = self._presentation_level_perf(level)
+        level_meta = self._bsp_bucket_scan_meta.setdefault(str(level), {})
+        active_keys: set[str] = set()
+        out: list[dict[str, Any]] = []
+        iter_t0 = time.perf_counter()
+
+        for bsp_type, bucket_pair in store.items():
+            for is_buy in (True, False):
+                try:
+                    bucket = bucket_pair[1 if is_buy else 0]
+                except Exception:
+                    continue
+                if not isinstance(bucket, list):
+                    return None
+                bucket_key = f"{_bsp_type_key(bsp_type)}|{1 if is_buy else 0}"
+                active_keys.add(bucket_key)
+                bucket_len = len(bucket)
+                meta = level_meta.get(bucket_key) or {}
+                start = 0
+                cursor_ok = False
+
+                if meta.get("list_id") == id(bucket):
+                    prev_next = int(meta.get("next_pos", 0) or 0)
+                    if bucket_len >= prev_next:
+                        if prev_next <= 0:
+                            cursor_ok = True
+                            start = 0
+                        else:
+                            check_idx = prev_next - 1
+                            if check_idx < bucket_len:
+                                check_bsp = bucket[check_idx]
+                                if (
+                                    int(meta.get("last_obj_id", -1)) == id(check_bsp)
+                                    and str(meta.get("last_key", "")) == _bsp_raw_freeze_key(level, check_bsp)
+                                ):
+                                    cursor_ok = True
+                                    start = prev_next
+
+                if lv_perf is not None:
+                    if cursor_ok and start >= bucket_len:
+                        lv_perf["cursor_empty"] = int(lv_perf.get("cursor_empty", 0)) + 1
+                    elif cursor_ok:
+                        lv_perf["cursor_tail"] = int(lv_perf.get("cursor_tail", 0)) + 1
+                    else:
+                        lv_perf["cursor_full"] = int(lv_perf.get("cursor_full", 0)) + 1
+
+                if not cursor_ok and bucket_len > 0:
+                    # 官方 BSP 桶只会尾部回撤再递增追加；前缀不稳时，从尾部找已冻结点即可。
+                    suffix_start = 0
+                    for idx in range(bucket_len - 1, -1, -1):
+                        if _bsp_raw_freeze_key(level, bucket[idx]) in seen_keys:
+                            suffix_start = idx + 1
+                            break
+                    if suffix_start > 0:
+                        start = suffix_start
+
+                for bsp in bucket[start:]:
+                    if lv_perf is not None:
+                        lv_perf["bucket_candidates"] = int(lv_perf.get("bucket_candidates", 0)) + 1
+                    key = _bsp_raw_freeze_key(level, bsp)
+                    if key in seen_keys:
+                        continue
+                    item_t0 = time.perf_counter()
+                    item = make_bsp_item(level, bsp)
+                    if lv_perf is not None:
+                        lv_perf["item_ms"] = float(lv_perf.get("item_ms", 0.0)) + (time.perf_counter() - item_t0) * 1000.0
+                    key = self._bsp_key(item)
+                    if key in seen_keys:
+                        continue
+                    out.append(item)
+
+                if bucket_len > 0:
+                    tail_bsp = bucket[-1]
+                    level_meta[bucket_key] = {
+                        "list_id": id(bucket),
+                        "next_pos": bucket_len,
+                        "last_obj_id": id(tail_bsp),
+                        "last_key": _bsp_raw_freeze_key(level, tail_bsp),
+                    }
+                else:
+                    level_meta[bucket_key] = {"list_id": id(bucket), "next_pos": 0, "last_obj_id": 0, "last_key": ""}
+
+        for old_key in list(level_meta.keys()):
+            if old_key not in active_keys:
+                level_meta.pop(old_key, None)
+
+        if lv_perf is not None:
+            lv_perf["python_iter_ms"] = float(lv_perf.get("python_iter_ms", 0.0)) + (time.perf_counter() - iter_t0) * 1000.0
+        return out
+
     def _collect_new_bsp_items_from_list(
         self,
         *,
@@ -6827,6 +7251,16 @@ class AppState:
         """只收本次还没冻结过的 BSP；历史标签不回写。"""
         if bsp_list is None or _bsp_list_flat_len(bsp_list) <= 0:
             return []
+        bucket_items = self._collect_new_bsp_items_from_buckets(
+            level=level,
+            bsp_list=bsp_list,
+            seen_keys=seen_keys,
+            current_x=current_x,
+        )
+        if bucket_items is not None:
+            return bucket_items
+        lv_perf = self._presentation_level_perf(level)
+        rust_t0 = time.perf_counter()
         rust_items = APP_PERF_ENGINE.collect_bsp_items_from_list(
             level=level,
             level_label=level_label(level),
@@ -6834,17 +7268,25 @@ class AppState:
             seen_keys=seen_keys,
             current_x=current_x,
         )
+        if lv_perf is not None:
+            lv_perf["rust_ms"] = float(lv_perf.get("rust_ms", 0.0)) + (time.perf_counter() - rust_t0) * 1000.0
         if rust_items is not None:
             return rust_items
         out: list[dict[str, Any]] = []
+        iter_t0 = time.perf_counter()
         for bsp in bsp_list.bsp_iter():
+            item_t0 = time.perf_counter()
             item = make_bsp_item(level, bsp)
+            if lv_perf is not None:
+                lv_perf["item_ms"] = float(lv_perf.get("item_ms", 0.0)) + (time.perf_counter() - item_t0) * 1000.0
             if current_x is not None and int(item["x"]) != int(current_x):
                 continue
             key = self._bsp_key(item)
             if key in seen_keys:
                 continue
             out.append(item)
+        if lv_perf is not None:
+            lv_perf["python_iter_ms"] = float(lv_perf.get("python_iter_ms", 0.0)) + (time.perf_counter() - iter_t0) * 1000.0
         return out
 
     def _incremental_collect_level_bsp(
@@ -6897,16 +7339,22 @@ class AppState:
 
         kl_list = stepper.chan[0]
         conf = stepper.chan.conf
-        lazy_layers = normalize_chart_lazy_layers(stepper.chart_lazy_layers)
+        lazy_layers = stepper.chart_lazy_layers if isinstance(stepper.chart_lazy_layers, dict) else normalize_chart_lazy_layers(stepper.chart_lazy_layers)
         seen_keys = self._bsp_history_seen_keys_current()
         snapshot: list[dict[str, Any]] = []
+        source_sig_cache: dict[str, tuple[Any, ...]] = {}
+
+        def source_sig(name: str, stat_level: str, lines: Any) -> tuple[Any, ...]:
+            if name not in source_sig_cache:
+                source_sig_cache[name] = self._bsp_structural_signature_timed(stat_level, lines, tail=3)
+            return source_sig_cache[name]
 
         if chart_lazy_bsp_enabled(lazy_layers, "bi"):
             bi_sig = self._bsp_source_signature(
                 "bi",
                 id(conf.bs_point_conf),
-                line_list_structural_signature(getattr(kl_list, "bi_list", None), tail=3),
-                line_list_structural_signature(getattr(kl_list, "seg_list", None), tail=3),
+                source_sig("bi_list", "bi", getattr(kl_list, "bi_list", None)),
+                source_sig("seg_list", "bi", getattr(kl_list, "seg_list", None)),
             )
             snapshot.extend(
                 self._incremental_collect_level_bsp(
@@ -6922,8 +7370,8 @@ class AppState:
             seg_sig = self._bsp_source_signature(
                 "seg",
                 id(conf.seg_bs_point_conf),
-                line_list_structural_signature(getattr(kl_list, "seg_list", None), tail=3),
-                line_list_structural_signature(getattr(kl_list, "segseg_list", None), tail=3),
+                source_sig("seg_list", "seg", getattr(kl_list, "seg_list", None)),
+                source_sig("segseg_list", "seg", getattr(kl_list, "segseg_list", None)),
             )
             snapshot.extend(
                 self._incremental_collect_level_bsp(
@@ -6936,16 +7384,22 @@ class AppState:
             )
 
         segseg_list = getattr(kl_list, "segseg_list", None)
+        extra_levels = tuple(extra_bsp_levels_from_layers(lazy_layers))
+        segseg_lines_sig: Optional[tuple[Any, ...]] = None
+        if segseg_list is not None and (chart_lazy_bsp_enabled(lazy_layers, "segseg") or extra_levels):
+            sig_level = "segseg" if chart_lazy_bsp_enabled(lazy_layers, "segseg") else "extra"
+            segseg_lines_sig = source_sig("segseg_list", sig_level, segseg_list)
+
         if segseg_list is not None and chart_lazy_bsp_enabled(lazy_layers, "segseg"):
             segseg_sig = self._bsp_source_signature(
                 "segseg",
                 id(conf.seg_conf),
                 id(conf.zs_conf),
                 id(conf.seg_bs_point_conf),
-                line_list_structural_signature(segseg_list, tail=3),
+                segseg_lines_sig,
             )
             if not self._bsp_struct_sig_unchanged("segseg", segseg_sig):
-                segseg_bsp = stepper.segseg_bsp_snapshot_cached(segseg_list=segseg_list, conf=conf)
+                segseg_bsp = stepper.segseg_bsp_snapshot_cached(segseg_list=segseg_list, conf=conf, source_sig=segseg_lines_sig)
                 snapshot.extend(
                     self._incremental_collect_level_bsp(
                         level="segseg",
@@ -6957,12 +7411,13 @@ class AppState:
                 )
                 self._bsp_mark_struct_sig("segseg", segseg_sig)
             else:
+                self._presentation_perf_inc("segseg_struct_skip")
                 lv_perf = self._presentation_level_perf("segseg")
                 if lv_perf is not None:
                     lv_perf["checks"] = int(lv_perf.get("checks", 0)) + 1
                     lv_perf["skip"] = int(lv_perf.get("skip", 0)) + 1
+                    lv_perf["struct_skip"] = int(lv_perf.get("struct_skip", 0)) + 1
 
-        extra_levels = tuple(extra_bsp_levels_from_layers(lazy_layers))
         if segseg_list is not None and extra_levels:
             extra_sig = self._bsp_source_signature(
                 "extra",
@@ -6970,10 +7425,10 @@ class AppState:
                 id(conf.seg_conf),
                 id(conf.zs_conf),
                 id(conf.seg_bs_point_conf),
-                line_list_structural_signature(segseg_list, tail=3),
+                segseg_lines_sig,
             )
             if not self._bsp_struct_sig_unchanged("extra", extra_sig):
-                extra_bsp = stepper.extra_bsp_snapshot_cached(segseg_list=segseg_list, conf=conf, lazy_layers=lazy_layers)
+                extra_bsp = stepper.extra_bsp_snapshot_cached(segseg_list=segseg_list, conf=conf, lazy_layers=lazy_layers, source_sig=segseg_lines_sig)
                 for level in sorted(extra_bsp.keys(), key=bsp_level_sort_order):
                     snapshot.extend(
                         self._incremental_collect_level_bsp(
@@ -6986,10 +7441,12 @@ class AppState:
                     )
                 self._bsp_mark_struct_sig("extra", extra_sig)
             else:
+                self._presentation_perf_inc("extra_struct_skip")
                 lv_perf = self._presentation_level_perf("extra")
                 if lv_perf is not None:
                     lv_perf["checks"] = int(lv_perf.get("checks", 0)) + 1
                     lv_perf["skip"] = int(lv_perf.get("skip", 0)) + 1
+                    lv_perf["struct_skip"] = int(lv_perf.get("struct_skip", 0)) + 1
 
         if current_x is not None:
             self._presentation_record_bsp_snapshot(snapshot_t0, len(snapshot))
@@ -7147,7 +7604,7 @@ class AppState:
         self._append_bsp_history_items(
             self._current_bsp_snapshot_incremental_light(current_x=None),
             display_x=current_x,
-            use_rust_delta=True,
+            use_rust_delta=False,
         )
 
     def sync_bsp_history_full_from_current_light(self) -> None:

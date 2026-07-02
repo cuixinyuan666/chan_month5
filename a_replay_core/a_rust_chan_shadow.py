@@ -116,6 +116,8 @@ def rust_presentation_detail_lines(
     rust_bsp_s = float(perf.get("rust_collect_ms", 0.0)) / 1000.0
     rust_bsp_n = int(perf.get("rust_collect_calls", 0))
     rust_bsp_items = int(perf.get("rust_items", 0))
+    py_bsp_items = int(perf.get("python_items", 0))
+    total_bsp_items = rust_bsp_items + py_bsp_items
     rust_shadow_s = float(perf.get("rust_shadow_ms", 0.0)) / 1000.0
     rust_shadow_n = int(perf.get("rust_shadow_calls", 0))
     py_iter_s = float(detail1.get("iter_ms", 0.0)) / 1000.0
@@ -124,7 +126,8 @@ def rust_presentation_detail_lines(
     primary_used = bool(perf.get("rust_chan_primary_used"))
 
     lines = [
-        f"{rust_trace_prefix('\u6210\u529f')}\uff1a\u8282\u70b9\u0043 \u0042\u0053\u0050\u589e\u91cf\u53bb\u91cd {rust_bsp_s:.2f}s/{rust_bsp_n}\u6b21 \u65b0\u589e{rust_bsp_items}\u6761\uff08\u0050\u0079\u0074\u0068\u006f\u006e\u9012\u63a8\u4ecd\u8d1f\u8d23\u7ed3\u6784\uff09",
+        f"{rust_trace_prefix('\u6210\u529f')}\uff1a\u8282\u70b9\u0043 \u0042\u0053\u0050\u589e\u91cf\u6536\u96c6 {rust_bsp_s:.2f}s/{rust_bsp_n}\u6b21 \u65b0\u589e{total_bsp_items}\u6761"
+        f"\uff08\u0052\u0075\u0073\u0074\u53bb\u91cd{rust_bsp_items}\u6761\uff1b\u0050\u0079\u0074\u0068\u006f\u006e\u65b0\u589e{py_bsp_items}\u6761\uff1b\u0050\u0079\u0074\u0068\u006f\u006e\u9012\u63a8\u4ecd\u8d1f\u8d23\u7ed3\u6784\uff09",
     ]
     shadow_on = rust_chan_shadow_enabled()
     if shadow_on and (rust_shadow_n > 0 or step_shadow_s > 0):
