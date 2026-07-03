@@ -270,6 +270,10 @@ def normalize_chart_lazy_layers(raw: Any, default_enabled: bool = True) -> dict[
     sub_src = src.get("sub_indicators") if isinstance(src.get("sub_indicators"), dict) else {}
     if isinstance(src.get("line_levels"), list):
         line_src = {str(level): True for level in src.get("line_levels") or []}
+    sub_indicators: dict[str, bool] = {}
+    for k, v in sorted(sub_src.items()):
+        name = "adjacent_bi_ratio" if str(k) in {"retrace_ratio", "trend_ratio"} else str(k)
+        sub_indicators[name] = bool(sub_indicators.get(name)) or bool(v)
     line_levels: dict[str, bool] = {}
     bsp_levels = {
         "bi": bool(bsp_src.get("bi", default_enabled)),
@@ -297,7 +301,7 @@ def normalize_chart_lazy_layers(raw: Any, default_enabled: bool = True) -> dict[
         "line_levels": dict(sorted(line_levels.items(), key=lambda kv: bsp_level_sort_order(kv[0]))),
         "bsp_levels": dict(sorted(bsp_levels.items(), key=lambda kv: bsp_level_sort_order(kv[0]))),
         "zs_levels": dict(sorted(zs_levels.items(), key=lambda kv: bsp_level_sort_order(kv[0]))),
-        "sub_indicators": {str(k): bool(v) for k, v in sorted(sub_src.items())},
+        "sub_indicators": sub_indicators,
     }
 
 
@@ -4708,35 +4712,8 @@ class ChanStepper:
                 continue
         return False
 
-    def _current_ratio_context_dir(self) -> Any:
-        for sig in reversed(self.seg_sure_signal_history):
-            if not isinstance(sig, dict) or str(sig.get("level", "")) != "seg":
-                continue
-            text = str(sig.get("dir", ""))
-            if text == "up":
-                return BI_DIR.DOWN
-            if text == "down":
-                return BI_DIR.UP
-        try:
-            seg_lines = list(self._direct_line_list_for_level("seg") or [])
-        except Exception:
-            seg_lines = []
-        if seg_lines:
-            direction = getattr(seg_lines[0], "dir", None)
-            if direction in (BI_DIR.UP, BI_DIR.DOWN):
-                return direction
-        try:
-            bi_lines = list(self._direct_line_list_for_level("bi") or [])
-        except Exception:
-            bi_lines = []
-        if bi_lines:
-            direction = getattr(bi_lines[0], "dir", None)
-            if direction in (BI_DIR.UP, BI_DIR.DOWN):
-                return direction
-        return None
-
-    def calc_segment_ratio_metrics_for_current_step(self, bundle: Optional[ChanStructureBundle] = None, latest_klu: Any = None) -> dict[str, Any]:
-        """段内笔比例：按笔确认点启动；线段规则只在段确认后切换。"""
+    def calc_adjacent_bi_ratio_metrics_for_current_step(self, bundle: Optional[ChanStructureBundle] = None, latest_klu: Any = None) -> dict[str, Any]:
+        """相邻笔比例：只看上一笔确认，不按父级方向拆回调/趋势。"""
         if self.data_feed_mode != "step" or self.chan is None:
             return {}
         try:
@@ -4745,19 +4722,15 @@ class ChanStepper:
             return {}
         if len(children) < 2:
             return {}
-        context_dir = self._current_ratio_context_dir()
-        if context_dir not in (BI_DIR.UP, BI_DIR.DOWN):
-            return {}
         display_x = self._current_display_x_for_signal(latest_klu)
         out: dict[str, Any] = {
-            "ratio_context_dir": "up" if context_dir == BI_DIR.UP else "down",
-            "ratio_level": "seg",
+            "ratio_level": "bi",
         }
 
         def add_ratio_pair(prev_line: Any, cur_line: Any) -> None:
             prev_dir = getattr(prev_line, "dir", None)
             cur_dir = getattr(cur_line, "dir", None)
-            if cur_dir not in (BI_DIR.UP, BI_DIR.DOWN) or prev_dir not in (BI_DIR.UP, BI_DIR.DOWN) or cur_dir == prev_dir:
+            if cur_dir not in (BI_DIR.UP, BI_DIR.DOWN) or prev_dir not in (BI_DIR.UP, BI_DIR.DOWN):
                 return
             if not bool(getattr(prev_line, "is_sure", False)):
                 return
@@ -4773,16 +4746,15 @@ class ChanStepper:
                 return
             ratio = float(numer / denom)
             out["ratio_child_dir"] = "up" if cur_dir == BI_DIR.UP else "down"
-            if cur_dir == context_dir:
-                out["trend_ratio"] = ratio
-            else:
-                out["retrace_ratio"] = ratio
+            out["ratio_prev_bi_idx"] = int(getattr(prev_line, "idx", -1))
+            out["ratio_cur_bi_idx"] = int(getattr(cur_line, "idx", -1))
+            out["adjacent_bi_ratio"] = ratio
 
         # 刚确认的旧笔落在下一笔内部，同一step先补旧笔终值，再让新笔启动实时比例。
         if len(children) >= 3 and self._line_confirmed_on_display_x(children[-2], display_x):
             add_ratio_pair(children[-3], children[-2])
         add_ratio_pair(children[-2], children[-1])
-        return out if ("trend_ratio" in out or "retrace_ratio" in out) else {}
+        return out if "adjacent_bi_ratio" in out else {}
 
     def extra_bsp_snapshot_cached(self, *, segseg_list: Any, conf: CChanConfig, lazy_layers: dict[str, Any]) -> dict[str, Any]:
         """逐K当下性缓存：输入只来自当前已喂入结构，签名没变才复用。"""
@@ -5927,8 +5899,7 @@ class ChanStepper:
             suppress_bundle = bool(self._suppress_step_bundle_refresh)
             need_seg_sure_sub = suppress_bundle and chart_lazy_sub_indicator_enabled(self.chart_lazy_layers, "seg_sure")
             need_ratio_sub = suppress_bundle and (
-                chart_lazy_sub_indicator_enabled(self.chart_lazy_layers, "retrace_ratio")
-                or chart_lazy_sub_indicator_enabled(self.chart_lazy_layers, "trend_ratio")
+                chart_lazy_sub_indicator_enabled(self.chart_lazy_layers, "adjacent_bi_ratio")
             )
             need_seg_signal = (not suppress_bundle) or need_seg_sure_sub
             need_ratio_signal = (not suppress_bundle) or need_ratio_sub
@@ -5939,7 +5910,7 @@ class ChanStepper:
                 self._clear_native_seg_sure_events()
             if need_ratio_signal:
                 t0 = time.perf_counter()
-                ratio_metrics = self.calc_segment_ratio_metrics_for_current_step(bundle, latest_klu)
+                ratio_metrics = self.calc_adjacent_bi_ratio_metrics_for_current_step(bundle, latest_klu)
                 self._step_perf_add("ratio_ms", (time.perf_counter() - t0) * 1000.0)
                 if ratio_metrics:
                     indicator_row.update(ratio_metrics)
@@ -11199,6 +11170,9 @@ for (let i = 0; i <= 5; i++) {
   let v = indicatorSubSlots[String(i)];
   if (typeof v === "string") indicatorSubSlots[String(i)] = (v === "none" ? [] : [v]);
   else if (!Array.isArray(v)) indicatorSubSlots[String(i)] = [];
+  indicatorSubSlots[String(i)] = Array.from(new Set(indicatorSubSlots[String(i)].map((type) => (
+    type === "retrace_ratio" || type === "trend_ratio" ? "adjacent_bi_ratio" : type
+  ))));
 }
 
 storageSet("chan_indicator_main_slots", JSON.stringify(indicatorMainSlots));
@@ -11206,7 +11180,7 @@ storageSet("chan_indicator_sub_slots", JSON.stringify(indicatorSubSlots));
 storageSet("chan_indicator_main_var_visible", indicatorMainVarVisible ? "1" : "0");
 storageSet("chan_indicator_sub_var_visible", indicatorSubVarVisible ? "1" : "0");
 const MAIN_INDICATORS = new Set(["boll", "demark", "trendline", "chip_peak"]);
-const SUB_INDICATORS = new Set(["macd", "kdj", "rsi", "vol", "bi_sure", "seg_sure", "retrace_ratio", "trend_ratio"]);
+const SUB_INDICATORS = new Set(["macd", "kdj", "rsi", "vol", "bi_sure", "seg_sure", "adjacent_bi_ratio"]);
 
 const DEFAULT_CHAN_CONFIG = {
   chan_algo: "classic",
@@ -13044,6 +13018,7 @@ function diffEnabledLazyLayers(prev, next) {
     line_levels: {},
     bsp_levels: {},
     zs_levels: {},
+    sub_indicators: {},
   };
   if (!prev || !next) return out;
   out.rhythm = !prev.rhythm && !!next.rhythm;
@@ -13057,6 +13032,9 @@ function diffEnabledLazyLayers(prev, next) {
   Array.from(new Set([...Object.keys(prev.zs_levels || {}), ...Object.keys(next.zs_levels || {})])).sort((a, b) => segLevelSortOrder(a) - segLevelSortOrder(b)).forEach((lv) => {
     out.zs_levels[lv] = !(prev.zs_levels && prev.zs_levels[lv]) && !!(next.zs_levels && next.zs_levels[lv]);
   });
+  Array.from(new Set([...Object.keys(prev.sub_indicators || {}), ...Object.keys(next.sub_indicators || {})])).sort().forEach((name) => {
+    out.sub_indicators[name] = !(prev.sub_indicators && prev.sub_indicators[name]) && !!(next.sub_indicators && next.sub_indicators[name]);
+  });
   return out;
 }
 function hasAnyLazyLayer(layers) {
@@ -13065,7 +13043,8 @@ function hasAnyLazyLayer(layers) {
     layers.rhythm_hits ||
     Object.values(layers.line_levels || {}).some(Boolean) ||
     Object.values(layers.bsp_levels || {}).some(Boolean) ||
-    Object.values(layers.zs_levels || {}).some(Boolean)
+    Object.values(layers.zs_levels || {}).some(Boolean) ||
+    Object.values(layers.sub_indicators || {}).some(Boolean)
   ));
 }
 function filterUnloadedLazyLayers(request, loaded) {
@@ -13076,6 +13055,7 @@ function filterUnloadedLazyLayers(request, loaded) {
     line_levels: {},
     bsp_levels: {},
     zs_levels: {},
+    sub_indicators: {},
   };
   Array.from(new Set([...Object.keys(request.line_levels || {}), ...Object.keys(loaded.line_levels || {})])).sort((a, b) => segLevelSortOrder(a) - segLevelSortOrder(b)).forEach((lv) => {
     out.line_levels[lv] = !!(request.line_levels && request.line_levels[lv]) && !(loaded.line_levels && loaded.line_levels[lv]);
@@ -13085,6 +13065,9 @@ function filterUnloadedLazyLayers(request, loaded) {
   });
   Array.from(new Set([...Object.keys(request.zs_levels || {}), ...Object.keys(loaded.zs_levels || {})])).sort((a, b) => segLevelSortOrder(a) - segLevelSortOrder(b)).forEach((lv) => {
     out.zs_levels[lv] = !!(request.zs_levels && request.zs_levels[lv]) && !(loaded.zs_levels && loaded.zs_levels[lv]);
+  });
+  Array.from(new Set([...Object.keys(request.sub_indicators || {}), ...Object.keys(loaded.sub_indicators || {})])).sort().forEach((name) => {
+    out.sub_indicators[name] = !!(request.sub_indicators && request.sub_indicators[name]) && !(loaded.sub_indicators && loaded.sub_indicators[name]);
   });
   return out;
 }
@@ -14310,8 +14293,7 @@ function appendChartSettingsItemTo(parent, sec, item, buildLabelHtml) {
         { v: "vol", l: "VOL" },
         { v: "bi_sure", l: "Bi确认" },
         { v: "seg_sure", l: "段确认" },
-        { v: "retrace_ratio", l: "回调比例" },
-        { v: "trend_ratio", l: "趋势比例" },
+        { v: "adjacent_bi_ratio", l: "相邻笔比例" },
       ];
       html += `<div style="display:flex;flex-direction:column;gap:4px;margin-top:8px;">`;
       options.forEach((opt) => {
@@ -14319,7 +14301,7 @@ function appendChartSettingsItemTo(parent, sec, item, buildLabelHtml) {
         html += `<label style="flex-direction:row;align-items:center;display:flex;"><input type="checkbox" class="indicator-check-sub" value="${opt.v}" ${checked ? "checked" : ""} data-key="indicators" data-subkey="subType" style="width:auto;margin-right:8px;">${opt.l}</label>`;
       });
       html += `</div>`;
-      html += `<div class="muted" style="font-size:11px;line-height:1.45;margin-top:6px;">Bi/段确认：逐K记录首次确认当步K，未来不回写旧柱；比例线只在对应确认点后启动。</div>`;
+      html += `<div class="muted" style="font-size:11px;line-height:1.45;margin-top:6px;">Bi/段确认：逐K记录首次确认当步K，未来不回写旧柱；相邻笔比例只看上一笔确认后启动。</div>`;
     }
     itemDiv.innerHTML += html;
   } else if (item.type === "interrupt_bsp_cascade") {
@@ -14859,7 +14841,7 @@ function renderSettingsForm() {
     "4) 更改配置后点击保存即可生效。",
     "5) 主图「筹码峰」：每根K最近两组峰价连成折线（类MA），缺失值断线，非右侧面板水平延长线；逻辑写入历史记录便于排查。",
     "6) 副图「Bi确认/段确认」：逐K记录结构首次确认的当步K；正柱=上涨，负柱=下跌，未来不回写旧柱。",
-    "7) 副图「回调比例/趋势比例」：仅从对应笔确认点后开始计算，线段规则切换等待段确认。"
+    "7) 副图「相邻笔比例」：上一笔确认后启动当前笔比例计算，不再按父级方向拆回调/趋势。"
   ].join("\n");
   const mainSlotOptions = [
     { value: "0", label: "主图(0) 不显示指标" },
@@ -16355,7 +16337,7 @@ function isSegSureIndicatorActive() {
 
 function isRatioIndicatorActive() {
   const cfg = getIndicatorConfig();
-  return (cfg.subCharts || []).some((m) => m && (m.type === "retrace_ratio" || m.type === "trend_ratio"));
+  return (cfg.subCharts || []).some((m) => m && m.type === "adjacent_bi_ratio");
 }
 
 function formatMainIndicatorSlotSummary() {
@@ -16383,8 +16365,7 @@ function formatSubIndicatorSlotSummary() {
     vol: "VOL",
     bi_sure: "Bi确认",
     seg_sure: "段确认",
-    retrace_ratio: "回调比例",
-    trend_ratio: "趋势比例",
+    adjacent_bi_ratio: "相邻笔比例",
   };
   const picked = list.map((t) => labels[t] || t).filter(Boolean);
   return `副图指标：槽位${slot}=${picked.length ? picked.join("+") : "未选"}`;
@@ -18344,7 +18325,7 @@ function buildCurrentConfigSummaryText() {
     formatSubIndicatorSlotSummary()
       + (isBiSureIndicatorActive() ? "；Bi确认=逐K首次确认当步柱，未来不回写" : "")
       + (isSegSureIndicatorActive() ? "；段确认=原生线段确认事件当步柱，未来不回写" : "")
-      + (isRatioIndicatorActive() ? "；比例=确认点后启动，段确认后切换线段规则" : ""),
+      + (isRatioIndicatorActive() ? "；相邻笔比例=上一笔确认后启动，不区分回调/趋势" : ""),
   ];
   return lines.join("\n");
 }
@@ -21207,12 +21188,11 @@ function drawIndicators(chart, s) {
     } else if (type === "seg_sure") {
       min = -5;
       max = 5;
-    } else if (type === "retrace_ratio" || type === "trend_ratio") {
+    } else if (type === "adjacent_bi_ratio") {
       min = 0;
       max = 1.382;
-      const key = type === "retrace_ratio" ? "retrace_ratio" : "trend_ratio";
       for (const i of visibleInd) {
-        const vv = Number(i && i[key]);
+        const vv = Number(i && i.adjacent_bi_ratio);
         if (!Number.isFinite(vv)) continue;
         min = Math.min(min, vv);
         max = Math.max(max, vv);
@@ -21279,10 +21259,8 @@ function drawIndicators(chart, s) {
         const refX = dispInd ? Number(dispInd.x) : NaN;
         const hit = rows.find((r) => Number(r.x) === refX);
         subLabel = `段确认:${rows.length}${hit ? ` 当前:${hit.level}${hit.value > 0 ? "上" : "下"}` : ""}`;
-      } else if (panel.type === "retrace_ratio") {
-        subLabel = `回调比例:${fmtIndNum(dispInd && dispInd.retrace_ratio, 3)}`;
-      } else if (panel.type === "trend_ratio") {
-        subLabel = `趋势比例:${fmtIndNum(dispInd && dispInd.trend_ratio, 3)}`;
+      } else if (panel.type === "adjacent_bi_ratio") {
+        subLabel = `相邻笔比例:${fmtIndNum(dispInd && dispInd.adjacent_bi_ratio, 3)}`;
       }
       if (subLabel) {
         ctx.textAlign = "right";
@@ -21346,12 +21324,9 @@ function drawIndicators(chart, s) {
         }
       }
       ctx.textAlign = "left";
-    } else if (panel.type === "retrace_ratio") {
+    } else if (panel.type === "adjacent_bi_ratio") {
       drawRatioRefs(subY);
-      drawRatioLine((i) => i && i.retrace_ratio, subY, "#0f766e");
-    } else if (panel.type === "trend_ratio") {
-      drawRatioRefs(subY);
-      drawRatioLine((i) => i && i.trend_ratio, subY, "#dc2626");
+      drawRatioLine((i) => i && i.adjacent_bi_ratio, subY, "#2563eb");
     } else if (panel.type === "vol") {
       // 成交量柱：优先用指标序列，旧数据回退到当前可见K线
       const volRows = [];
