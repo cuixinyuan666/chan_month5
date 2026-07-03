@@ -14,6 +14,8 @@ class StepperRollbackSnapshot:
     bundle_cache_step_idx: Optional[int]
     serialized_klu_cache: list[dict[str, Any]]
     chart_payload_cache: dict[bool, tuple[int, dict[str, Any]]]
+    bi_sure_signal_history: list[dict[str, Any]] | None = None
+    bi_sure_signal_seen_keys: set[str] | None = None
 
 
 @dataclass
@@ -75,6 +77,8 @@ def capture_stepper_snapshot(stepper: Any) -> StepperRollbackSnapshot:
         bundle_cache_step_idx=stepper._bundle_cache_step_idx,
         serialized_klu_cache=list(sk_cache) if isinstance(sk_cache, list) else [],
         chart_payload_cache=dict(chart_cache) if isinstance(chart_cache, dict) else {},
+        bi_sure_signal_history=[dict(it) for it in getattr(stepper, "bi_sure_signal_history", [])],
+        bi_sure_signal_seen_keys=set(getattr(stepper, "_bi_sure_signal_seen_keys", set())),
     )
 
 
@@ -88,6 +92,23 @@ def restore_stepper_snapshot(stepper: Any, snap: StepperRollbackSnapshot) -> Non
     stepper._bundle_cache_step_idx = snap.bundle_cache_step_idx
     stepper._serialized_klu_cache = snap.serialized_klu_cache
     stepper._chart_payload_cache = snap.chart_payload_cache
+    signal_hist = getattr(snap, "bi_sure_signal_history", None) or []
+    stepper.bi_sure_signal_history = [dict(it) for it in signal_hist]
+    seen_keys = getattr(snap, "bi_sure_signal_seen_keys", None)
+    if seen_keys is None:
+        seen_keys = {str(it.get("key")) for it in stepper.bi_sure_signal_history if isinstance(it, dict) and it.get("key")}
+    seen_keys = set(seen_keys)
+    # Bi确认柱去重：兼容旧快照里的旧key，同时补上当前key算法。
+    key_fn = getattr(stepper, "_bi_sure_signal_key", None)
+    if callable(key_fn):
+        for it in stepper.bi_sure_signal_history:
+            try:
+                seen_keys.add(key_fn(it))
+            except Exception:
+                pass
+    stepper._bi_sure_signal_seen_keys = seen_keys
+    stepper._bi_sure_signal_seen_list_id = id(stepper.bi_sure_signal_history)
+    stepper._bi_sure_signal_seen_count = len(stepper.bi_sure_signal_history)
     if stepper.chan is None:
         stepper._iter = None
     else:

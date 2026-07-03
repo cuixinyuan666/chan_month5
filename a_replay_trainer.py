@@ -4290,6 +4290,10 @@ class ChanStepper:
         self._serialized_klu_cache: list[dict[str, Any]] = []
         # 同一步下的图表序列化缓存：键为是否包含 kline_all
         self._chart_payload_cache: dict[bool, tuple[int, dict[str, Any]]] = {}
+        self.bi_sure_signal_history: list[dict[str, Any]] = []
+        self._bi_sure_signal_seen_keys: set[str] = set()
+        self._bi_sure_signal_seen_list_id: int = id(self.bi_sure_signal_history)
+        self._bi_sure_signal_seen_count: int = 0
         self.chart_lazy_layers = normalize_chart_lazy_layers(None)
         self._segseg_bsp_cache_key: Optional[tuple[Any, ...]] = None
         self._segseg_bsp_cache_value: Any = None
@@ -4394,6 +4398,121 @@ class ChanStepper:
         self._chart_payload_cache = {}
         if clear_bsp_cache:
             self.clear_bsp_signature_cache()
+
+    def reset_bi_sure_signal_history(self) -> None:
+        """Bi确认柱历史：只记确认发生当步，未来不回写旧柱。"""
+        self.bi_sure_signal_history = []
+        self._bi_sure_signal_seen_keys = set()
+        self._bi_sure_signal_seen_list_id = id(self.bi_sure_signal_history)
+        self._bi_sure_signal_seen_count = 0
+        self._chart_payload_cache = {}
+
+    def _bi_sure_signal_seen_keys_current(self) -> set[str]:
+        cur_id = id(self.bi_sure_signal_history)
+        cur_len = len(self.bi_sure_signal_history)
+        if (
+            cur_id != getattr(self, "_bi_sure_signal_seen_list_id", None)
+            or cur_len != getattr(self, "_bi_sure_signal_seen_count", -1)
+        ):
+            keys: set[str] = set()
+            for item in self.bi_sure_signal_history:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("key"):
+                    keys.add(str(item.get("key")))
+                try:
+                    keys.add(self._bi_sure_signal_key(item))
+                except Exception:
+                    pass
+            self._bi_sure_signal_seen_keys = keys
+            self._bi_sure_signal_seen_list_id = cur_id
+            self._bi_sure_signal_seen_count = cur_len
+        return self._bi_sure_signal_seen_keys
+
+    def _mark_bi_sure_signal_appended(self, key: str) -> None:
+        self._bi_sure_signal_seen_keys.add(str(key))
+        self._bi_sure_signal_seen_list_id = id(self.bi_sure_signal_history)
+        self._bi_sure_signal_seen_count = len(self.bi_sure_signal_history)
+
+    def _current_display_x_for_signal(self, latest_klu: Any = None) -> Optional[int]:
+        if use_master_kline_for_chart(self.data_form_mode):
+            return int(self.step_idx) if int(self.step_idx) >= 0 else None
+        if latest_klu is not None and getattr(latest_klu, "idx", None) is not None:
+            return int(latest_klu.idx)
+        if self.chan is None or len(self.chan[0].lst) == 0:
+            return None
+        return int(self.chan[0].lst[-1].lst[-1].idx)
+
+    @staticmethod
+    def _bi_sure_signal_key(item: dict[str, Any]) -> str:
+        return (
+            f'{int(item.get("bi_idx", -1))}|{int(item.get("begin_x", -1))}|'
+            f'{int(item.get("value", 0))}'
+        )
+
+    def record_bi_sure_signals_for_current_step(self, latest_klu: Any = None) -> None:
+        """逐K当下：本 step 首次看到 sure Bi，就在当前K冻结一根柱。"""
+        if self.data_feed_mode != "step" or self.chan is None:
+            return
+        display_x = self._current_display_x_for_signal(latest_klu)
+        if display_x is None:
+            return
+        bi_list = getattr(self.chan[0], "bi_list", None)
+        if not bi_list:
+            return
+        seen_keys = self._bi_sure_signal_seen_keys_current()
+        added = False
+        for bi in bi_list:
+            if not bool(getattr(bi, "is_sure", False)):
+                continue
+            try:
+                begin_x = int(bi.get_begin_klu().idx)
+                anchor_x = int(bi.get_end_klu().idx)
+                y1 = float(bi.get_begin_val())
+                y2 = float(bi.get_end_val())
+                value = 1 if y2 >= y1 else -1
+                item = {
+                    "bi_idx": int(getattr(bi, "idx", -1)),
+                    "x": int(display_x),
+                    "anchor_x": anchor_x,
+                    "begin_x": begin_x,
+                    "value": value,
+                    "dir": "up" if value > 0 else "down",
+                    "y1": y1,
+                    "y2": y2,
+                }
+                key = self._bi_sure_signal_key(item)
+            except Exception:
+                continue
+            if key in seen_keys:
+                continue
+            item["key"] = key
+            self.bi_sure_signal_history.append(item)
+            self._mark_bi_sure_signal_appended(key)
+            added = True
+        if added:
+            self._chart_payload_cache = {}
+
+    def _attach_bi_sure_signals_to_payload(self, payload: dict[str, Any]) -> None:
+        """Bi确认柱：只下发已冻结到可见K范围的事件。"""
+        bars = payload.get("kline") or []
+        if not bars:
+            payload["bi_sure_signals"] = []
+            return
+        try:
+            x_max = int(bars[-1].get("x", -1))
+        except Exception:
+            x_max = -1
+        rows: list[dict[str, Any]] = []
+        for item in self.bi_sure_signal_history:
+            if not isinstance(item, dict):
+                continue
+            try:
+                if int(item.get("x", -1)) <= x_max:
+                    rows.append(dict(item))
+            except Exception:
+                continue
+        payload["bi_sure_signals"] = rows
 
     def extra_bsp_snapshot_cached(self, *, segseg_list: Any, conf: CChanConfig, lazy_layers: dict[str, Any]) -> dict[str, Any]:
         """逐K当下性缓存：输入只来自当前已喂入结构，签名没变才复用。"""
@@ -5196,6 +5315,7 @@ class ChanStepper:
             self.indicator_history = []
             self.trend_lines = []
             self._serialized_klu_cache = []
+            self.reset_bi_sure_signal_history()
             self.clear_structure_runtime_cache(clear_bsp_cache=True)
             self._unified_full_payload = None
             if self.data_feed_mode == "unified":
@@ -5378,6 +5498,7 @@ class ChanStepper:
         out["bsp"] = [it for it in payload.get("bsp", []) if int(it.get("x", -1)) <= x_max]
         out["rhythm_hits"] = [it for it in payload.get("rhythm_hits", []) if int(it.get("x", -1)) <= x_max]
         out["indicators"] = [it for it in payload.get("indicators", []) if int(it.get("x", -1)) <= x_max]
+        out["bi_sure_signals"] = [it for it in payload.get("bi_sure_signals", []) if int(it.get("x", -1)) <= x_max]
         out["trend_lines"] = [it for it in payload.get("trend_lines", []) if int(it.get("x2", -1)) <= x_max]
         out["kline_combine"] = [it for it in payload.get("kline_combine", []) if int(it.get("x2", -1)) <= x_max]
         out["fx_lines"] = [it for it in payload.get("fx_lines", []) if int(it.get("x2", -1)) <= x_max]
@@ -5399,6 +5520,7 @@ class ChanStepper:
         self._rebuild_indicator_history_from_chan()
         self.step_idx = target_step
         self.clear_structure_runtime_cache(clear_bsp_cache=True)
+        self.reset_bi_sure_signal_history()
         if use_master_kline_for_chart(self.data_form_mode):
             self._serialized_klu_cache = serialize_replay_master_klines(master[: target_step + 1])
         else:
@@ -5528,6 +5650,7 @@ class ChanStepper:
                 "demark": demark_pts
             })
             self._step_perf_add("history_append_ms", (time.perf_counter() - t0) * 1000.0)
+            self.record_bi_sure_signals_for_current_step(latest_klu)
 
             # 自动一次性呈现只收集 BSP，完整图表包留到末尾统一构建。
             if not self._suppress_step_bundle_refresh:
@@ -5633,6 +5756,7 @@ class ChanStepper:
                 payload["kline_all"] = _kline_all_for_chip_payload(
                     self.kline_all, getattr(self, "_session_end_date", None)
                 )
+            self._attach_bi_sure_signals_to_payload(payload)
             self._chart_payload_cache[include_kline_all] = (self.step_idx, payload)
             return payload
         if self.chan is None:
@@ -5679,6 +5803,7 @@ class ChanStepper:
                         "outLastT": str(chip_out[-1].get("t", "")) if chip_out else "",
                     },
                 )
+        self._attach_bi_sure_signals_to_payload(payload)
         self._chart_payload_cache[include_kline_all] = (self.step_idx, payload)
         return payload
 
@@ -10792,8 +10917,8 @@ storageSet("chan_indicator_main_slots", JSON.stringify(indicatorMainSlots));
 storageSet("chan_indicator_sub_slots", JSON.stringify(indicatorSubSlots));
 storageSet("chan_indicator_main_var_visible", indicatorMainVarVisible ? "1" : "0");
 storageSet("chan_indicator_sub_var_visible", indicatorSubVarVisible ? "1" : "0");
-const MAIN_INDICATORS = new Set(["boll", "demark", "trendline"]);
-const SUB_INDICATORS = new Set(["macd", "kdj", "rsi", "vol"]);
+const MAIN_INDICATORS = new Set(["boll", "demark", "trendline", "chip_peak"]);
+const SUB_INDICATORS = new Set(["macd", "kdj", "rsi", "vol", "bi_sure"]);
 
 const DEFAULT_CHAN_CONFIG = {
   chan_algo: "classic",
@@ -10958,7 +11083,11 @@ const DEFAULT_CHART_CONFIG = {
     peakRefMode: "latest_visible",
     peakLineColor: "#2563eb",
     peakLineWidth: 1.2,
-    peakLineStyle: "dashed"
+    peakLineStyle: "dashed",
+    chipPeakIndicatorUpColor: "#ef4444",
+    chipPeakIndicatorDownColor: "#22c55e",
+    chipPeakIndicatorLineWidth: 1.4,
+    chipPeakIndicatorLineStyle: "solid"
   },
   xAxis: {
     mode: "manual",
@@ -13768,13 +13897,14 @@ function appendChartSettingsItemTo(parent, sec, item, buildLabelHtml) {
       html += `<div class="muted" style="margin-top:8px;">当前主图槽位为 0，不显示主图指标。</div>`;
     } else {
       const currentList = Array.isArray(val) ? val : [];
-      const options = [{ v: "boll", l: "BOLL" }, { v: "demark", l: "Demark" }, { v: "trendline", l: "TrendLine" }];
+      const options = [{ v: "boll", l: "BOLL" }, { v: "demark", l: "Demark" }, { v: "trendline", l: "TrendLine" }, { v: "chip_peak", l: "筹码峰" }];
       html += `<div style="display:flex;flex-direction:column;gap:4px;margin-top:8px;">`;
       options.forEach((opt) => {
         const checked = currentList.includes(opt.v);
         html += `<label style="flex-direction:row;align-items:center;display:flex;"><input type="checkbox" class="indicator-check-main" value="${opt.v}" ${checked ? "checked" : ""} data-key="indicators" data-subkey="mainType" style="width:auto;margin-right:8px;">${opt.l}</label>`;
       });
       html += `</div>`;
+      html += `<div class="muted" style="font-size:11px;line-height:1.45;margin-top:6px;">筹码峰：逐K折线（类MA/BOLL），每根K取截止当日距离当前K线最近的两组筹码峰；与右侧「筹码峰延长线」（水平射线）不同。</div>`;
     }
     itemDiv.innerHTML += html;
   } else if (item.type === "indicator_multi_sub") {
@@ -13783,13 +13913,14 @@ function appendChartSettingsItemTo(parent, sec, item, buildLabelHtml) {
       html += `<div class="muted" style="margin-top:8px;">当前副图槽位为 0，不显示任何副图指标。</div>`;
     } else {
       const currentList = Array.isArray(val) ? val : [];
-      const options = [{ v: "macd", l: "MACD" }, { v: "kdj", l: "KDJ" }, { v: "rsi", l: "RSI" }, { v: "vol", l: "VOL" }];
+      const options = [{ v: "macd", l: "MACD" }, { v: "kdj", l: "KDJ" }, { v: "rsi", l: "RSI" }, { v: "vol", l: "VOL" }, { v: "bi_sure", l: "Bi确认" }];
       html += `<div style="display:flex;flex-direction:column;gap:4px;margin-top:8px;">`;
       options.forEach((opt) => {
         const checked = currentList.includes(opt.v);
         html += `<label style="flex-direction:row;align-items:center;display:flex;"><input type="checkbox" class="indicator-check-sub" value="${opt.v}" ${checked ? "checked" : ""} data-key="indicators" data-subkey="subType" style="width:auto;margin-right:8px;">${opt.l}</label>`;
       });
       html += `</div>`;
+      html += `<div class="muted" style="font-size:11px;line-height:1.45;margin-top:6px;">Bi确认：逐K记录 Bi 首次确认的当步K；向上笔为正柱，向下笔为负柱，未来不回写旧柱。</div>`;
     }
     itemDiv.innerHTML += html;
   } else if (item.type === "interrupt_bsp_cascade") {
@@ -14326,7 +14457,9 @@ function renderSettingsForm() {
     "1) 主图槽位(0-5)：0 表示主图不显示指标，1-5 为主图指标方案槽位。",
     "2) 副图槽位(0-5)：0 表示不显示任何副图，1-5 为副图指标方案槽位。",
     "3) 主图与副图槽位独立选择、独立保存。",
-    "4) 更改配置后点击保存即可生效。"
+    "4) 更改配置后点击保存即可生效。",
+    "5) 主图「筹码峰」：每根K最近两组峰价连成折线（类MA），缺失值断线，非右侧面板水平延长线；逻辑写入历史记录便于排查。",
+    "6) 副图「Bi确认」：逐K记录 Bi 首次确认的当步K；正柱=向上笔，负柱=向下笔，未来不回写旧柱。"
   ].join("\n");
   const mainSlotOptions = [
     { value: "0", label: "主图(0) 不显示指标" },
@@ -14554,7 +14687,15 @@ function renderSettingsForm() {
           { value: "dashed", label: "虚线" },
           { value: "solid", label: "实线" },
           { value: "dotted", label: "点线" }
-        ]}
+        ]},
+        { label: "主图筹码峰近1线颜色", subKey: "chipPeakIndicatorUpColor", type: "color", tip: "主图指标「筹码峰」最近一组峰折线颜色（类MA随K变化）。" },
+        { label: "主图筹码峰近2线颜色", subKey: "chipPeakIndicatorDownColor", type: "color", tip: "主图指标「筹码峰」第二近峰折线颜色（类MA随K变化）。" },
+        { label: "主图筹码峰线粗细", subKey: "chipPeakIndicatorLineWidth", type: "number", min: 0.1, max: 6, step: 0.1 },
+        { label: "主图筹码峰线型", subKey: "chipPeakIndicatorLineStyle", type: "select", options: [
+          { value: "solid", label: "实线" },
+          { value: "dashed", label: "虚线" },
+          { value: "dotted", label: "点线" }
+        ], tip: "主图指标「筹码峰」折线线型（类MA/BOLL）；与右侧筹码面板水平延长线独立。" }
       ]
     },
     {
@@ -15389,6 +15530,9 @@ async function saveSettings() {
   const prevLazyLayers = collectChartLazyLayersFromConfig(chartConfig, chartConfigStore);
   const prevDataFormSnapshot = JSON.stringify(dataFormConfig || {});
   const prevChanSnapshot = JSON.stringify(chanConfig || {});
+  const prevIndicatorMainSlots = JSON.stringify(indicatorMainSlots || {});
+  const prevMainIndicatorSlot = Number(selectedMainIndicatorSlot);
+  const prevChipPeakBucket = getChipBucketStep();
   if (isSettingsOpen()) flushChartSettingsFormToMemory();
   const prevRhythmCalcMode = normalizeRhythmCalcMode(chartConfig.rhythmLine && chartConfig.rhythmLine.calcMode);
   const prevKlinePresentation = normalizeKlinePresentationMode(dataFormConfig.klinePresentation);
@@ -15415,6 +15559,14 @@ async function saveSettings() {
   persistChartConfigStoreNow(true);
   chartSettingsCloseKeepDraft = true;
   closeSettings();
+  const indicatorSlotsChanged = JSON.stringify(indicatorMainSlots || {}) !== prevIndicatorMainSlots
+    || Number(selectedMainIndicatorSlot) !== prevMainIndicatorSlot;
+  const chipPeakBucketChanged = getChipBucketStep() !== prevChipPeakBucket;
+  if (isChipPeakIndicatorActive() && (indicatorSlotsChanged || chipPeakBucketChanged)) {
+    maybeAppendChipPeakIndicatorHistory(lastPayload, true);
+  } else if (!isChipPeakIndicatorActive()) {
+    _chipPeakIndicatorHistoryKey = "";
+  }
   if (prevOfflineDataCustom !== nextOfflineDataCustom) {
     showAlertAndLog(
       `离线数据自定义已切换为【${offlineDataCustomLabel(nextOfflineDataCustom)}】。\n` +
@@ -15784,6 +15936,169 @@ function getIndicatorConfig() {
     mainVarVisible: !!indicatorMainVarVisible,
     subVarVisible: !!indicatorSubVarVisible,
   };
+}
+
+function isChipPeakIndicatorActive() {
+  const cfg = getIndicatorConfig();
+  return (cfg.mainTypes || []).some((m) => m && m.type === "chip_peak");
+}
+
+function isBiSureIndicatorActive() {
+  const cfg = getIndicatorConfig();
+  return (cfg.subCharts || []).some((m) => m && m.type === "bi_sure");
+}
+
+function formatMainIndicatorSlotSummary() {
+  const slot = Number(selectedMainIndicatorSlot);
+  if (!Number.isFinite(slot) || slot < 1 || slot > 5) return "主图指标：槽位0（不显示）";
+  const list = (indicatorMainSlots && indicatorMainSlots[String(slot)]) || [];
+  const labels = {
+    boll: "BOLL",
+    demark: "Demark",
+    trendline: "TrendLine",
+    chip_peak: "筹码峰",
+  };
+  const picked = list.map((t) => labels[t] || t).filter(Boolean);
+  return `主图指标：槽位${slot}=${picked.length ? picked.join("+") : "未选"}`;
+}
+
+function formatSubIndicatorSlotSummary() {
+  const slot = Number(selectedSubIndicatorSlot);
+  if (!Number.isFinite(slot) || slot < 1 || slot > 5) return "副图指标：槽位0（不显示）";
+  const list = (indicatorSubSlots && indicatorSubSlots[String(slot)]) || [];
+  const labels = {
+    macd: "MACD",
+    kdj: "KDJ",
+    rsi: "RSI",
+    vol: "VOL",
+    bi_sure: "Bi确认",
+  };
+  const picked = list.map((t) => labels[t] || t).filter(Boolean);
+  return `副图指标：槽位${slot}=${picked.length ? picked.join("+") : "未选"}`;
+}
+
+/** 主图筹码峰指标：写入历史记录，便于复制排查（与右侧筹码面板水平延长线区分） */
+function buildChipPeakIndicatorHistoryLines(payload) {
+  const bucket = getChipBucketStep();
+  const feed = normalizeDataFeedMode(dataFormConfig.feedMode);
+  const present = normalizeKlinePresentationMode(dataFormConfig.klinePresentation);
+  const p = payload || lastPayload;
+  return [
+    formatMainIndicatorSlotSummary(),
+    "主图指标[筹码峰]：逐K当下截止累加筹码→局部峰检测→按当前K线高低区间选最近两组峰价；缺峰用null断线，非筹码面板水平延长线。",
+    `筹码峰参数：价格桶=${bucket}元；距离=峰价到当前K线高低区间，收盘价仅作同距排序；喂数据=${dataFeedModeLabel(feed)}；呈现=${klinePresentationLabel(present)}。`,
+    "与右侧面板区别：面板「筹码峰延长线」= 当前锚点下全部峰的水平射线；主图「筹码峰」= 每根K各自最近两组峰价连成的折线。",
+    "缩放规则：null不参与绘图/缩放；过远筹码峰不参与主图Y轴范围，避免压扁K线。",
+    (p && p.chip_kline_all_lazy)
+      ? "筹码峰数据：init 首包省略 kline_all，需等待 /api/chip_kline_all 懒加载 chip_tick_bins 后再绘制。"
+      : "",
+  ].filter(Boolean);
+}
+
+let _chipPeakIndicatorHistoryKey = "";
+
+function maybeAppendChipPeakIndicatorHistory(payload, force = false) {
+  if (!isChipPeakIndicatorActive()) {
+    _chipPeakIndicatorHistoryKey = "";
+    return;
+  }
+  const key = [
+    "chip_peak_nearest2_v1",
+    chipSessionIdentity(payload || lastPayload),
+    String(selectedMainIndicatorSlot),
+    String(getChipBucketStep()),
+    JSON.stringify(indicatorMainSlots[String(selectedMainIndicatorSlot)] || []),
+  ].join("|");
+  if (!force && _chipPeakIndicatorHistoryKey === key) return;
+  _chipPeakIndicatorHistoryKey = key;
+  buildChipPeakIndicatorHistoryLines(payload || lastPayload).forEach((line) => appendMsgHistory(line));
+}
+
+function toValidMainPrice(value) {
+  // 价格空值：null/空串不能变成0，否则会把K线压扁
+  if (value === null || value === undefined || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function chipPeakPriceForYAxis(value, baseMin, baseMax) {
+  const price = toValidMainPrice(value);
+  if (price === null) return null;
+  if (!Number.isFinite(baseMin) || !Number.isFinite(baseMax) || baseMax <= baseMin) return price;
+  const baseSpan = Math.max(1e-6, baseMax - baseMin);
+  const pad = Math.max(baseSpan * 0.35, getChipBucketStep() * 6);
+  return price >= baseMin - pad && price <= baseMax + pad ? price : null;
+}
+
+/** 主图指标折线：类 MA/BOLL，空值断线，圆角连接 */
+function drawMainIndicatorPolyline(s, rows, valueGetter, color, lineWidth, dash) {
+  if (!rows || rows.length === 0) return;
+  const sorted = [...rows].sort((a, b) => Number(a.x) - Number(b.x));
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(PAD_L, PAD_T, s.plotW, s.plotH);
+  ctx.clip();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = Number(lineWidth) || 1.2;
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+  ctx.setLineDash(Array.isArray(dash) ? dash : []);
+  let started = false;
+  ctx.beginPath();
+  for (const row of sorted) {
+    const yVal = toValidMainPrice(valueGetter(row));
+    if (yVal === null) {
+      if (started) {
+        ctx.stroke();
+        ctx.beginPath();
+        started = false;
+      }
+      continue;
+    }
+    const xp = s.x(row.x);
+    const yp = s.y(yVal);
+    if (!started) {
+      ctx.moveTo(xp, yp);
+      started = true;
+    } else {
+      ctx.lineTo(xp, yp);
+    }
+  }
+  if (started) ctx.stroke();
+  ctx.restore();
+}
+
+function drawMainChartChipPeakLines(chart, s) {
+  if (!isChipPeakIndicatorActive()) return;
+  const chipPeakRows = buildChipPeakIndicatorSeries(chart, lastPayload).filter(
+    (r) => r.x >= s.xMin && r.x <= s.xMax
+  );
+  if (chipPeakRows.length === 0) return;
+  const drawable = countChipPeakDrawablePoints(chipPeakRows);
+  if (drawable <= 0) {
+    const histKey = chipPeakIndicatorCacheKey(chart, lastPayload);
+    if (_chipPeakIndicatorEmptyHistKey !== histKey) {
+      _chipPeakIndicatorEmptyHistKey = histKey;
+      const ksAll = getChipBaseKs(chart);
+      let binsCount = 0;
+      for (const k of ksAll) {
+        const tb = k && k.chip_tick_bins;
+        if (tb && Array.isArray(tb.p) && tb.p.length > 0) binsCount += 1;
+      }
+      appendMsgHistory(
+        `主图指标[筹码峰]：当前无可绘制点（chip_tick_bins=${binsCount}/${ksAll.length}）。` +
+        (lastPayload && lastPayload.chip_kline_all_lazy ? " 请等待筹码底座懒加载完成或检查分笔数据。" : "")
+      );
+    }
+    return;
+  }
+  _chipPeakIndicatorEmptyHistKey = "";
+  const near1Color = getCfgColor(chartConfig.chip.chipPeakIndicatorUpColor || "#ef4444");
+  const near2Color = getCfgColor(chartConfig.chip.chipPeakIndicatorDownColor || "#22c55e");
+  const lw = Number(chartConfig.chip.chipPeakIndicatorLineWidth || 1.4);
+  const dash = getTradeLineDash(chartConfig.chip.chipPeakIndicatorLineStyle || "solid");
+  drawMainIndicatorPolyline(s, chipPeakRows, (r) => r.chip_peak?.near1, near1Color, lw, dash);
+  drawMainIndicatorPolyline(s, chipPeakRows, (r) => r.chip_peak?.near2, near2Color, lw, dash);
 }
 
 function getChipBucketStep() {
@@ -17609,6 +17924,10 @@ function buildCurrentConfigSummaryText() {
     "买卖点逻辑：逐K喂数据下同级别/同锚点/同方向只冻结首次识别标签，未来组合标签不回写、不追加；当下性优先于事后正确性。",
     "级别依赖：2段买卖点依赖已形成的3段结构，3段买卖点依赖4段结构，依此类推；若上一级未形成，则该级可能只有结构线没有买卖点文字。",
     `系统关键项：性能引擎=${systemConfig.performanceEngineMode || DEFAULT_SYSTEM_CONFIG.performanceEngineMode}；买卖点判定=${systemConfig.bspJudgeMode || "auto"}；回退缓存=${systemConfig.rollbackCacheDepth || DEFAULT_SYSTEM_CONFIG.rollbackCacheDepth}/${systemConfig.rollbackFullSnapshotInterval || DEFAULT_SYSTEM_CONFIG.rollbackFullSnapshotInterval}/${systemConfig.rollbackCaptureMaxBars || DEFAULT_SYSTEM_CONFIG.rollbackCaptureMaxBars}`,
+    "【主图指标】",
+    formatMainIndicatorSlotSummary() + (isChipPeakIndicatorActive() ? "；筹码峰=最近两峰逐K折线(类MA)，缺峰断线，非面板水平延长线" : ""),
+    "【副图指标】",
+    formatSubIndicatorSlotSummary() + (isBiSureIndicatorActive() ? "；Bi确认=逐K首次确认当步柱，未来不回写" : ""),
   ];
   return lines.join("\n");
 }
@@ -18715,6 +19034,8 @@ function toScaler(chart, xMin, xMax, dualChartIdHint) {
     if (k.l < yMin) yMin = k.l;
     if (k.h > yMax) yMax = k.h;
   }
+  const candleYMin = yMin;
+  const candleYMax = yMax;
   
   const indicatorCfg = getIndicatorConfig();
   const mainTypes = indicatorCfg.mainTypes || [];
@@ -18724,6 +19045,24 @@ function toScaler(chart, xMin, xMax, dualChartIdHint) {
     for (const i of visibleInd) {
       if (i.boll.up > yMax) yMax = i.boll.up;
       if (i.boll.down < yMin) yMin = i.boll.down;
+    }
+  }
+  if (mainTypeSet.has("chip_peak")) {
+    const chipPeakRows = buildChipPeakIndicatorSeries(chart, lastPayload).filter(
+      (r) => r.x >= xMin && r.x <= xMax
+    );
+    for (const row of chipPeakRows) {
+      const cp = row.chip_peak || {};
+      const near1 = chipPeakPriceForYAxis(cp.near1, candleYMin, candleYMax);
+      const near2 = chipPeakPriceForYAxis(cp.near2, candleYMin, candleYMax);
+      if (near1 !== null) {
+        if (near1 > yMax) yMax = near1;
+        if (near1 < yMin) yMin = near1;
+      }
+      if (near2 !== null) {
+        if (near2 > yMax) yMax = near2;
+        if (near2 < yMin) yMin = near2;
+      }
     }
   }
   if (mainTypeSet.has("trendline") && chart.trend_lines) {
@@ -19081,6 +19420,303 @@ function drawCrosshair(chart, s) {
 
 function drawGridLines(s) {
   // Keep chart background clean: no horizontal grid lines.
+}
+
+/** 筹码直方图增量状态：逐K累加用，与 drawChips 同口径 */
+function createChipHistogramState(priceStep) {
+  const ps = Number(priceStep);
+  const safe = Number.isFinite(ps) && ps > 0 ? ps : 0.1;
+  return {
+    priceStep: safe,
+    stepMul: 1 / safe,
+    minTick: null,
+    maxTick: null,
+    arrS: [],
+    arrB: [],
+    arrT: [],
+  };
+}
+
+/** 按单根K扩展价格桶范围（含 chip_tick_bins 价域） */
+function chipHistogramEnsureRange(state, k) {
+  if (!k) return;
+  let allMin = Math.min(Number(k.l), Number(k.h));
+  let allMax = Math.max(Number(k.l), Number(k.h));
+  const tb = k.chip_tick_bins;
+  if (tb && Array.isArray(tb.p)) {
+    for (const pr of tb.p) {
+      const pv = Number(pr);
+      if (!Number.isFinite(pv)) continue;
+      if (pv < allMin) allMin = pv;
+      if (pv > allMax) allMax = pv;
+    }
+  }
+  if (!Number.isFinite(allMin) || !Number.isFinite(allMax)) return;
+  const stepMul = state.stepMul;
+  const newMinTick = Math.floor(allMin * stepMul);
+  const newMaxTick = Math.ceil(allMax * stepMul);
+  if (state.minTick === null) {
+    state.minTick = newMinTick;
+    state.maxTick = newMaxTick;
+    const n = Math.max(1, newMaxTick - newMinTick + 1);
+    state.arrS = new Array(n).fill(0);
+    state.arrB = new Array(n).fill(0);
+    state.arrT = new Array(n).fill(0);
+    return;
+  }
+  if (newMinTick >= state.minTick && newMaxTick <= state.maxTick) return;
+  const oldMin = state.minTick;
+  const oldLen = state.maxTick - oldMin + 1;
+  state.minTick = Math.min(state.minTick, newMinTick);
+  state.maxTick = Math.max(state.maxTick, newMaxTick);
+  const newLen = state.maxTick - state.minTick + 1;
+  const newS = new Array(newLen).fill(0);
+  const newB = new Array(newLen).fill(0);
+  const newT = new Array(newLen).fill(0);
+  const offset = oldMin - state.minTick;
+  for (let i = 0; i < oldLen; i++) {
+    newS[offset + i] = state.arrS[i];
+    newB[offset + i] = state.arrB[i];
+    newT[offset + i] = state.arrT[i];
+  }
+  state.arrS = newS;
+  state.arrB = newB;
+  state.arrT = newT;
+}
+
+/** 单根K线筹码写入直方图（直加 / 三角分摊，与 drawChips 一致） */
+function chipHistogramAddKline(state, k, payload) {
+  if (!k || state.minTick === null) return;
+  const minTick = state.minTick;
+  const maxTick = state.maxTick;
+  const stepMul = state.stepMul;
+  const tickBins = k.chip_tick_bins;
+  if (
+    tickBins &&
+    Array.isArray(tickBins.p) &&
+    Array.isArray(tickBins.s) &&
+    Array.isArray(tickBins.b) &&
+    tickBins.p.length === tickBins.s.length &&
+    tickBins.p.length === tickBins.b.length
+  ) {
+    for (let j = 0; j < tickBins.p.length; j++) {
+      const p = Number(tickBins.p[j]);
+      const sV = Number(tickBins.s[j]);
+      const bV = Number(tickBins.b[j]);
+      if (!Number.isFinite(p) || !Number.isFinite(sV) || !Number.isFinite(bV)) continue;
+      if (sV <= 0 && bV <= 0) continue;
+      const bi = Math.floor(p * stepMul);
+      if (bi < minTick || bi > maxTick) continue;
+      const idx = bi - minTick;
+      if (sV > 0) state.arrS[idx] += sV;
+      if (bV > 0) state.arrB[idx] += bV;
+      state.arrT[idx] += sV + bV;
+    }
+    return;
+  }
+  if (tickBins && Array.isArray(tickBins.p) && Array.isArray(tickBins.w) && tickBins.p.length === tickBins.w.length) {
+    for (let j = 0; j < tickBins.p.length; j++) {
+      const p = Number(tickBins.p[j]);
+      const w = Number(tickBins.w[j]);
+      if (!Number.isFinite(p) || !Number.isFinite(w) || w <= 0) continue;
+      const bi = Math.floor(p * stepMul);
+      if (bi < minTick || bi > maxTick) continue;
+      const idx = bi - minTick;
+      state.arrB[idx] += w;
+      state.arrT[idx] += w;
+    }
+    return;
+  }
+  if (payload && payload.chip_basis === "tick_accum_driver") return;
+  const low = Math.min(k.l, k.h);
+  const high = Math.max(k.l, k.h);
+  const mode = Math.min(high, Math.max(low, k.c));
+  let vol = Number(k.v);
+  if (!Number.isFinite(vol) || vol <= 0) vol = 1;
+  const i0 = Math.max(minTick, Math.floor(low * stepMul));
+  const i1 = Math.min(maxTick, Math.ceil(high * stepMul));
+  if (i1 < i0) return;
+  if (Math.abs(high - low) < 1e-12) {
+    state.arrB[i0 - minTick] += vol;
+    state.arrT[i0 - minTick] += vol;
+    return;
+  }
+  let sumW = 0;
+  const ws = [];
+  for (let t = i0; t <= i1; t++) {
+    const p = t / stepMul;
+    let w = 0;
+    if (Math.abs(mode - low) < 1e-12) {
+      w = (high - p) / Math.max(1e-12, high - low);
+    } else if (Math.abs(high - mode) < 1e-12) {
+      w = (p - low) / Math.max(1e-12, high - low);
+    } else if (p <= mode) {
+      w = (p - low) / Math.max(1e-12, mode - low);
+    } else {
+      w = (high - p) / Math.max(1e-12, high - mode);
+    }
+    w = Math.max(0, w);
+    ws.push(w);
+    sumW += w;
+  }
+  if (sumW <= 1e-12) return;
+  for (let t = i0; t <= i1; t++) {
+    const w = ws[t - i0];
+    if (w <= 0) continue;
+    const addV = (w / sumW) * vol;
+    state.arrB[t - minTick] += addV;
+    state.arrT[t - minTick] += addV;
+  }
+}
+
+/** 局部极大值检测：严格大于左右邻桶（与筹码峰延长线同算法） */
+function detectChipPeakPrices(state) {
+  if (!state || state.minTick === null || !state.arrT || state.arrT.length < 3) return [];
+  const { arrT, minTick, stepMul } = state;
+  const peaks = [];
+  for (let i = 1; i < arrT.length - 1; i++) {
+    const cur = arrT[i];
+    if (!(cur > arrT[i - 1] && cur > arrT[i + 1])) continue;
+    peaks.push((minTick + i) / stepMul);
+  }
+  return peaks;
+}
+
+function chipPeakDistanceToKline(price, bar) {
+  const p = toValidMainPrice(price);
+  if (p === null || !bar) return null;
+  const lowRaw = Math.min(Number(bar.l), Number(bar.h));
+  const highRaw = Math.max(Number(bar.l), Number(bar.h));
+  const low = toValidMainPrice(lowRaw);
+  const high = toValidMainPrice(highRaw);
+  const close = toValidMainPrice(bar.c);
+  if (low === null || high === null) {
+    return close === null ? null : { rangeDist: Math.abs(p - close), closeDist: Math.abs(p - close) };
+  }
+  let rangeDist = 0;
+  if (p < low) rangeDist = low - p;
+  else if (p > high) rangeDist = p - high;
+  const closeDist = close === null ? Math.abs(p - ((low + high) / 2)) : Math.abs(p - close);
+  return { rangeDist, closeDist };
+}
+
+/** 最近两峰：不分上下，缺峰保持null */
+function nearestTwoChipPeaksForKline(peaks, bar) {
+  if (!Array.isArray(peaks) || peaks.length === 0) {
+    return { near1: null, near2: null };
+  }
+  const candidates = [];
+  const seen = new Set();
+  for (const p of peaks) {
+    const price = toValidMainPrice(p);
+    if (price === null) continue;
+    const dist = chipPeakDistanceToKline(price, bar);
+    if (dist === null) continue;
+    const key = price.toFixed(8);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    candidates.push({ price, ...dist });
+  }
+  candidates.sort((a, b) =>
+    (a.rangeDist - b.rangeDist) || (a.closeDist - b.closeDist) || (a.price - b.price)
+  );
+  return {
+    near1: candidates.length > 0 ? candidates[0].price : null,
+    near2: candidates.length > 1 ? candidates[1].price : null,
+  };
+}
+
+/** 判断 ksAll 截止条件：x 轴对齐时用 x，否则用时间 */
+function chipKsCutoffIncludesK(k, refK, ksAll, chipCutoffByKsX) {
+  const refKX = Number(refK && refK.x);
+  const refT = String((refK && refK.t) || "").trim();
+  const ksUsesSequentialX =
+    ksAll.length > 0 &&
+    Number(ksAll[0].x) === 0 &&
+    Number(ksAll[ksAll.length - 1].x) === ksAll.length - 1;
+  const useXCutoff = chipCutoffByKsX && Number.isFinite(refKX) && refKX >= 0 && ksUsesSequentialX;
+  if (useXCutoff) return Number(k.x) <= refKX;
+  if (refT) return chipTimeLe(k.t, refT);
+  return true;
+}
+
+let _chipPeakIndicatorSeriesCache = { key: "", series: [] };
+let _chipPeakIndicatorEmptyHistKey = "";
+
+function invalidateChipPeakIndicatorSeriesCache() {
+  _chipPeakIndicatorSeriesCache = { key: "", series: [] };
+}
+
+function countChipPeakDrawablePoints(series) {
+  let n = 0;
+  for (const r of series || []) {
+    const cp = r.chip_peak || {};
+    if (toValidMainPrice(cp.near1) !== null || toValidMainPrice(cp.near2) !== null) n += 1;
+  }
+  return n;
+}
+
+function chipPeakIndicatorCacheKey(chart, payload) {
+  const kline = (chart && chart.kline) || [];
+  const tail = kline.length > 0 ? kline[kline.length - 1] : null;
+  const ksAll = getChipBaseKs(chart);
+  let binsCount = 0;
+  for (const k of ksAll) {
+    const tb = k && k.chip_tick_bins;
+    if (tb && Array.isArray(tb.p) && tb.p.length > 0) binsCount += 1;
+  }
+  return [
+    chipSessionIdentity(payload),
+    kline.length,
+    tail ? String(tail.t || "") : "",
+    tail ? Number(tail.x) : -1,
+    getChipBucketStep(),
+    String((payload && payload.chip_basis) || ""),
+    ksAll.length,
+    binsCount,
+  ].join("|");
+}
+
+/** 逐K当下：每根主图K截止累加筹码后，匹配最近两组筹码峰 */
+function buildChipPeakIndicatorSeries(chart, payload) {
+  const kline = (chart && chart.kline) || [];
+  const cacheKey = chipPeakIndicatorCacheKey(chart, payload);
+  if (_chipPeakIndicatorSeriesCache.key === cacheKey) {
+    return _chipPeakIndicatorSeriesCache.series;
+  }
+  const ksAll = getChipBaseKs(chart);
+  const priceStep = getChipBucketStep();
+  const state = createChipHistogramState(priceStep);
+  const series = [];
+  let ksPtr = 0;
+  for (const bar of kline) {
+    const mappedRef = mapChartBarToKsAll(bar, ksAll);
+    const refK = mappedRef || bar;
+    chipHistogramEnsureRange(state, refK);
+    while (ksPtr < ksAll.length) {
+      const k = ksAll[ksPtr];
+      chipHistogramEnsureRange(state, k);
+      if (!chipKsCutoffIncludesK(k, refK, ksAll, !!mappedRef)) break;
+      chipHistogramAddKline(state, k, payload);
+      ksPtr += 1;
+    }
+    const peaks = detectChipPeakPrices(state);
+    const chip_peak = nearestTwoChipPeaksForKline(peaks, bar);
+    series.push({ x: Number(bar.x), chip_peak });
+  }
+  const ksAllFinal = getChipBaseKs(chart);
+  let binsCountFinal = 0;
+  for (const k of ksAllFinal) {
+    const tb = k && k.chip_tick_bins;
+    if (tb && Array.isArray(tb.p) && tb.p.length > 0) binsCountFinal += 1;
+  }
+  // 懒加载筹码底座未到位时不缓存空序列，避免挡住后续重算
+  if (binsCountFinal === 0 && payload && payload.chip_kline_all_lazy) {
+    _chipPeakIndicatorSeriesCache = { key: "", series };
+    return series;
+  }
+  _chipPeakIndicatorSeriesCache = { key: cacheKey, series };
+  return series;
 }
 
 function tryDrawChipProfileFromEngine(chart, s) {
@@ -19988,17 +20624,23 @@ function drawTradeRays(s) {
 }
 
 function drawIndicators(chart, s) {
-  if (!chart || !chart.indicators || chart.indicators.length === 0) return;
+  if (!chart) return;
+  const indicatorCfg = getIndicatorConfig();
+  const hasBiSureSub = (indicatorCfg.subCharts || []).some((m) => m && m.type === "bi_sure");
+  if ((!chart.indicators || chart.indicators.length === 0) && !hasBiSureSub) return;
   const visibleInd = s.visibleInd || [];
-  if (visibleInd.length === 0) return;
+  if (visibleInd.length === 0 && !hasBiSureSub) return;
   
   const theme = document.documentElement.getAttribute("data-theme") || "light";
   const lineMain = theme === "light" ? "#1e293b" : "#f8fafc";
   const mainTypeSet = new Set((s.mainTypes || []).map((m) => m.type));
-  const indicatorCfg = getIndicatorConfig();
   const showMainVar = !!indicatorCfg.mainVarVisible;
   const showSubVar = !!indicatorCfg.subVarVisible;
-  const fmtIndNum = (v, digits = 2) => (Number.isFinite(Number(v)) ? Number(v).toFixed(digits) : "--");
+  const fmtIndNum = (v, digits = 2) => {
+    if (v === null || v === undefined || v === "") return "--";
+    const n = Number(v);
+    return Number.isFinite(n) ? n.toFixed(digits) : "--";
+  };
   const refInd = resolveIndicatorRowForDisplay(chart, s, visibleInd);
   const latestVisible = visibleInd.length > 0 ? visibleInd[visibleInd.length - 1] : null;
   const dispInd = refInd || latestVisible;
@@ -20039,6 +20681,22 @@ function drawIndicators(chart, s) {
     if (!first) ctx.stroke();
   };
 
+  let biSureRowsCache = null;
+  const getBiSureRows = () => {
+    if (biSureRowsCache) return biSureRowsCache;
+    const rows = [];
+    for (const sig of chart.bi_sure_signals || []) {
+      const x = Number(sig && sig.x);
+      const value = Number(sig && sig.value);
+      if (!Number.isFinite(x) || x < s.xMin || x > s.xMax) continue;
+      if (!Number.isFinite(value) || value === 0) continue;
+      // Bi确认柱：确认发生当步画柱，未来不回写到笔端点。
+      rows.push({ x, value: value > 0 ? 1 : -1, anchorX: Number(sig && sig.anchor_x) });
+    }
+    biSureRowsCache = rows.sort((a, b) => a.x - b.x);
+    return biSureRowsCache;
+  };
+
   const getPanelRange = (type) => {
     let min = Infinity;
     let max = -Infinity;
@@ -20059,6 +20717,9 @@ function drawIndicators(chart, s) {
     } else if (type === "rsi") {
       min = 0;
       max = 100;
+    } else if (type === "bi_sure") {
+      min = -1;
+      max = 1;
     } else if (type === "vol") {
       min = 0;
       for (const i of visibleInd) {
@@ -20111,6 +20772,11 @@ function drawIndicators(chart, s) {
               return vk ? Number(vk.v) : NaN;
             })();
         subLabel = `VOL:${fmtIndNum(volV, 0)}`;
+      } else if (panel.type === "bi_sure") {
+        const rows = getBiSureRows();
+        const refX = dispInd ? Number(dispInd.x) : NaN;
+        const hit = rows.find((r) => Number(r.x) === refX);
+        subLabel = `Bi确认:${rows.length}${hit ? ` 当前:${hit.value > 0 ? "上" : "下"}` : ""}`;
       }
       if (subLabel) {
         ctx.textAlign = "right";
@@ -20135,6 +20801,22 @@ function drawIndicators(chart, s) {
       drawPanelLine(visibleInd, (i) => i.kdj?.j, subY, "#f472b6");
     } else if (panel.type === "rsi") {
       drawPanelLine(visibleInd, (i) => i.rsi, subY, lineMain);
+    } else if (panel.type === "bi_sure") {
+      const y0 = subY(0);
+      ctx.strokeStyle = cssVar("--grid", "#e2e8f0");
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(PAD_L, y0);
+      ctx.lineTo(s.w - PAD_R, y0);
+      ctx.stroke();
+      const rows = getBiSureRows();
+      const barW = Math.max(2, Math.min(8, (s.plotW / Math.max(1, s.xMax - s.xMin + 1)) * 0.58));
+      for (const row of rows) {
+        const xp = s.x(row.x);
+        const yp = subY(row.value);
+        ctx.fillStyle = row.value > 0 ? cssVar("--candleUp", "#ef4444") : cssVar("--candleDown", "#22c55e");
+        ctx.fillRect(xp - barW / 2, Math.min(yp, y0), barW, Math.max(1, Math.abs(yp - y0)));
+      }
     } else if (panel.type === "vol") {
       // 成交量柱：优先用指标序列，旧数据回退到当前可见K线
       const volRows = [];
@@ -20222,6 +20904,17 @@ function drawIndicators(chart, s) {
     }
     if (mainTypeSet.has("trendline")) {
       rows.push(`TrendLine: ${Array.isArray(chart.trend_lines) ? chart.trend_lines.length : 0} 条`);
+    }
+    if (mainTypeSet.has("chip_peak")) {
+      const chipPeakRows = buildChipPeakIndicatorSeries(chart, lastPayload);
+      const cpRow = chipPeakRows.find((r) => Number(r.x) === Number(dispInd.x))
+        || nearestKByX(chipPeakRows, Number(dispInd.x));
+      const cp = cpRow && cpRow.chip_peak ? cpRow.chip_peak : null;
+      const near1 = cp ? toValidMainPrice(cp.near1) : null;
+      const near2 = cp ? toValidMainPrice(cp.near2) : null;
+      if (near1 !== null || near2 !== null) {
+        rows.push(`筹码峰 近1:${fmtIndNum(near1)} 近2:${fmtIndNum(near2)}`);
+      }
     }
     // #region agent log
     __agentDebugLog(
@@ -20988,6 +21681,7 @@ function drawMultiLayers(payload) {
     if (layer.role !== "driver") return;
     drawOneLayer(layer, {});
   });
+  drawMainChartChipPeakLines(driverChart, s);
 
   drawBottomSignals(driverChart, s);
   drawUserRays(s);
@@ -21031,6 +21725,7 @@ function draw(chart) {
   drawAxes(s);
   drawIndicators(chart, s);
   drawMainChartLayers(chart, s);
+  drawMainChartChipPeakLines(chart, s);
   drawBottomSignals(chart, s);
   drawUserRays(s);
   drawUserBiRays(s, chart);
@@ -21407,6 +22102,7 @@ async function fetchChipKlineAllLazy(payload) {
     }
     const sid = chipSessionIdentity(lastPayload);
     if (sid) chipKlineAllCacheSessionKey = sid;
+    invalidateChipPeakIndicatorSeriesCache();
     // 懒加载完成后重绘一次，避免首屏停留在仅会话区间的筹码上。
     if (lastPayload && lastPayload.ready) scheduleChartRedraw();
   } catch (e) {
@@ -21423,6 +22119,7 @@ function refreshUI(payload, options) {
   const chipSid = chipSessionIdentity(payload);
   if (chipSid && chipKlineAllCacheSessionKey && chipSid !== chipKlineAllCacheSessionKey) {
     chipKlineAllCache = null;
+    invalidateChipPeakIndicatorSeriesCache();
   }
   if (chipSid) chipKlineAllCacheSessionKey = chipSid;
   const dataFormChanged =
@@ -21451,6 +22148,7 @@ function refreshUI(payload, options) {
         mergeChipKlineAllByTime(chipKlineAllCache, payload.chart.kline_all)
       );
     }
+    invalidateChipPeakIndicatorSeriesCache();
     // #region agent log
     __agentDebugLog(
       "H4",
@@ -21525,6 +22223,7 @@ function refreshUI(payload, options) {
           mergeChipKlineAllByTime(chipKlineAllCache, payload.chart.kline_all)
         );
       }
+      invalidateChipPeakIndicatorSeriesCache();
       // #region agent log
       __agentDebugLog(
         "H4",
@@ -21578,6 +22277,7 @@ function refreshUI(payload, options) {
     initTraceSeenCount = Math.max(initTraceSeenCount, payload.record_trace.length);
   }
   appendRustHistoryFromPayload(payload);
+  maybeAppendChipPeakIndicatorHistory(payload);
   updateDualModeUI(payload);
   if (payload && payload.ready && payload.data_form) {
     dataFormConfig.mode = normalizeDataFormMode(payload.data_form.mode);
@@ -21630,6 +22330,7 @@ function refreshUI(payload, options) {
       } else {
         chipKlineAllCache = null;
       }
+      invalidateChipPeakIndicatorSeriesCache();
       userAdjustedView = false;
       viewReady = false;
       DUAL_CHART_IDS.forEach((id) => {
