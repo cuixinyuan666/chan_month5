@@ -267,6 +267,7 @@ def normalize_chart_lazy_layers(raw: Any, default_enabled: bool = True) -> dict[
     bsp_src = src.get("bsp_levels") if isinstance(src.get("bsp_levels"), dict) else {}
     zs_src = src.get("zs_levels") if isinstance(src.get("zs_levels"), dict) else {}
     line_src = src.get("line_levels") if isinstance(src.get("line_levels"), dict) else {}
+    sub_src = src.get("sub_indicators") if isinstance(src.get("sub_indicators"), dict) else {}
     if isinstance(src.get("line_levels"), list):
         line_src = {str(level): True for level in src.get("line_levels") or []}
     line_levels: dict[str, bool] = {}
@@ -296,6 +297,7 @@ def normalize_chart_lazy_layers(raw: Any, default_enabled: bool = True) -> dict[
         "line_levels": dict(sorted(line_levels.items(), key=lambda kv: bsp_level_sort_order(kv[0]))),
         "bsp_levels": dict(sorted(bsp_levels.items(), key=lambda kv: bsp_level_sort_order(kv[0]))),
         "zs_levels": dict(sorted(zs_levels.items(), key=lambda kv: bsp_level_sort_order(kv[0]))),
+        "sub_indicators": {str(k): bool(v) for k, v in sorted(sub_src.items())},
     }
 
 
@@ -311,6 +313,8 @@ def merge_chart_lazy_layers(base: Any, extra: Any) -> dict[str, Any]:
         out["bsp_levels"][level] = bool(out["bsp_levels"].get(level)) or bool(add["bsp_levels"].get(level))
     for level in sorted({*out["zs_levels"].keys(), *add["zs_levels"].keys()}, key=bsp_level_sort_order):
         out["zs_levels"][level] = bool(out["zs_levels"].get(level)) or bool(add["zs_levels"].get(level))
+    for key in sorted({*out.get("sub_indicators", {}).keys(), *add.get("sub_indicators", {}).keys()}):
+        out.setdefault("sub_indicators", {})[key] = bool(out.get("sub_indicators", {}).get(key)) or bool(add.get("sub_indicators", {}).get(key))
     return out
 
 
@@ -319,12 +323,18 @@ def chart_lazy_bsp_enabled(layers: Any, level: str) -> bool:
     return bool((cfg.get("bsp_levels") or {}).get(level, True))
 
 
+def chart_lazy_sub_indicator_enabled(layers: Any, name: str) -> bool:
+    cfg = normalize_chart_lazy_layers(layers)
+    return bool((cfg.get("sub_indicators") or {}).get(str(name), False))
+
+
 def chart_lazy_zs_enabled(layers: Any, level: str) -> bool:
     cfg = normalize_chart_lazy_layers(layers)
     return bool((cfg.get("zs_levels") or {}).get(level, True))
 LEVEL_LABELS = {"bi": "笔", "seg": "段", "segseg": "2段"}
 STRUCTURE_LEVEL_LABELS = {"fract": "分型", **LEVEL_LABELS}
 RHYTHM_LEVEL_LABELS = {"fract": "分型", "bi": "笔", "seg": "线段", "segseg": "二段"}
+SEG_SURE_SIGNAL_LEVELS = ("seg", "segseg", "seg3", "seg4", "seg5")
 JUDGE_TRIGGER_LEVELS = {"bi": "seg", "seg": "segseg", "segseg": "segsegseg"}
 
 
@@ -334,6 +344,13 @@ def dynamic_level_label(level: Any) -> str:
     if n is not None:
         return f"{n}段"
     return LEVEL_LABELS.get(text, str(level))
+
+
+def seg_sure_signal_value(level: Any, direction: Any) -> int:
+    text = str(level or "").strip().lower()
+    n = 1 if text == "seg" else 2 if text == "segseg" else custom_seg_level_num(text)
+    mag = max(1, int(n or 1))
+    return mag if direction == BI_DIR.UP else -mag
 
 
 def judge_trigger_level(level: Any) -> str:
@@ -4294,6 +4311,10 @@ class ChanStepper:
         self._bi_sure_signal_seen_keys: set[str] = set()
         self._bi_sure_signal_seen_list_id: int = id(self.bi_sure_signal_history)
         self._bi_sure_signal_seen_count: int = 0
+        self.seg_sure_signal_history: list[dict[str, Any]] = []
+        self._seg_sure_signal_seen_keys: set[str] = set()
+        self._seg_sure_signal_seen_list_id: int = id(self.seg_sure_signal_history)
+        self._seg_sure_signal_seen_count: int = 0
         self.chart_lazy_layers = normalize_chart_lazy_layers(None)
         self._segseg_bsp_cache_key: Optional[tuple[Any, ...]] = None
         self._segseg_bsp_cache_value: Any = None
@@ -4373,6 +4394,7 @@ class ChanStepper:
             "demark_extract_ms": 0.0,
             "history_append_ms": 0.0,
             "bundle_ms": 0.0,
+            "ratio_ms": 0.0,
             "rust_shadow_ms": 0.0,
             "rust_shadow_calls": 0,
         }
@@ -4513,6 +4535,254 @@ class ChanStepper:
             except Exception:
                 continue
         payload["bi_sure_signals"] = rows
+
+    def reset_seg_sure_signal_history(self) -> None:
+        """段确认柱历史：只记确认发生当步，未来不回写旧柱。"""
+        self.seg_sure_signal_history = []
+        self._seg_sure_signal_seen_keys = set()
+        self._seg_sure_signal_seen_list_id = id(self.seg_sure_signal_history)
+        self._seg_sure_signal_seen_count = 0
+        self._chart_payload_cache = {}
+
+    def reset_structure_signal_history(self) -> None:
+        self.reset_bi_sure_signal_history()
+        self.reset_seg_sure_signal_history()
+
+    def _seg_sure_signal_seen_keys_current(self) -> set[str]:
+        cur_id = id(self.seg_sure_signal_history)
+        cur_len = len(self.seg_sure_signal_history)
+        if (
+            cur_id != getattr(self, "_seg_sure_signal_seen_list_id", None)
+            or cur_len != getattr(self, "_seg_sure_signal_seen_count", -1)
+        ):
+            keys: set[str] = set()
+            for item in self.seg_sure_signal_history:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("key"):
+                    keys.add(str(item.get("key")))
+                try:
+                    keys.add(self._seg_sure_signal_key(item))
+                except Exception:
+                    pass
+            self._seg_sure_signal_seen_keys = keys
+            self._seg_sure_signal_seen_list_id = cur_id
+            self._seg_sure_signal_seen_count = cur_len
+        return self._seg_sure_signal_seen_keys
+
+    def _mark_seg_sure_signal_appended(self, key: str) -> None:
+        self._seg_sure_signal_seen_keys.add(str(key))
+        self._seg_sure_signal_seen_list_id = id(self.seg_sure_signal_history)
+        self._seg_sure_signal_seen_count = len(self.seg_sure_signal_history)
+
+    @staticmethod
+    def _seg_sure_signal_key(item: dict[str, Any]) -> str:
+        return (
+            f'{str(item.get("level", ""))}|{int(item.get("seg_idx", -1))}|'
+            f'{int(item.get("begin_x", -1))}|{int(item.get("anchor_x", -1))}|'
+            f'{int(item.get("value", 0))}'
+        )
+
+    def _direct_line_list_for_level(self, level: str) -> Any:
+        if self.chan is None:
+            return []
+        try:
+            kl_list = self.chan[0]
+        except Exception:
+            return []
+        if level == "bi":
+            return getattr(kl_list, "bi_list", [])
+        if level == "seg":
+            return getattr(kl_list, "seg_list", [])
+        if level == "segseg":
+            return getattr(kl_list, "segseg_list", [])
+        return []
+
+    def _native_seg_sure_event_sources(self) -> list[tuple[str, Any]]:
+        try:
+            kl_list = self.chan[0]
+        except Exception:
+            return []
+        return [
+            ("seg", getattr(getattr(kl_list, "seg_list", None), "sure_event_lst", [])),
+            ("segseg", getattr(getattr(kl_list, "segseg_list", None), "sure_event_lst", [])),
+        ]
+
+    def _clear_native_seg_sure_events(self) -> None:
+        for _, event_lst in self._native_seg_sure_event_sources():
+            if hasattr(event_lst, "clear"):
+                event_lst.clear()
+
+    def record_seg_sure_signals_for_current_step(self, bundle: Optional[ChanStructureBundle] = None, latest_klu: Any = None) -> None:
+        """逐K当下：只消费原生 SegList 确认事件，当前K冻结，未来不回写。"""
+        if self.data_feed_mode != "step" or self.chan is None:
+            return
+        display_x = self._current_display_x_for_signal(latest_klu)
+        if display_x is None:
+            return
+        seen_keys = self._seg_sure_signal_seen_keys_current()
+        added = False
+        for level, event_lst in self._native_seg_sure_event_sources():
+            events = list(event_lst or [])
+            if hasattr(event_lst, "clear"):
+                event_lst.clear()
+            for event in events:
+                line = event.get("line") if isinstance(event, dict) else None
+                if line is None:
+                    continue
+                direction = getattr(line, "dir", None)
+                if direction not in (BI_DIR.UP, BI_DIR.DOWN):
+                    continue
+                try:
+                    y1 = float(line.get_begin_val())
+                    y2 = float(line.get_end_val())
+                    item = {
+                        "level": str(level),
+                        "level_label": dynamic_level_label(level),
+                        "seg_idx": int(getattr(line, "idx", -1)),
+                        "x": int(display_x),
+                        "anchor_x": int(line.get_end_klu().idx),
+                        "begin_x": int(line.get_begin_klu().idx),
+                        "value": seg_sure_signal_value(level, direction),
+                        "dir": "up" if direction == BI_DIR.UP else "down",
+                        "y1": y1,
+                        "y2": y2,
+                        "confirm_reason": str(event.get("reason") or "native_sure") if isinstance(event, dict) else "native_sure",
+                    }
+                    key = self._seg_sure_signal_key(item)
+                except Exception:
+                    continue
+                if key in seen_keys:
+                    continue
+                item["key"] = key
+                self.seg_sure_signal_history.append(item)
+                self._mark_seg_sure_signal_appended(key)
+                added = True
+        if added:
+            self._chart_payload_cache = {}
+
+    def _attach_seg_sure_signals_to_payload(self, payload: dict[str, Any]) -> None:
+        """段确认柱：只下发已冻结到可见K范围的事件。"""
+        bars = payload.get("kline") or []
+        if not bars:
+            payload["seg_sure_signals"] = []
+            return
+        try:
+            x_max = int(bars[-1].get("x", -1))
+        except Exception:
+            x_max = -1
+        rows: list[dict[str, Any]] = []
+        for item in self.seg_sure_signal_history:
+            if not isinstance(item, dict):
+                continue
+            try:
+                if int(item.get("x", -1)) <= x_max:
+                    rows.append(dict(item))
+            except Exception:
+                continue
+        payload["seg_sure_signals"] = rows
+
+    def _line_confirmed_on_display_x(self, line: Any, display_x: Optional[int]) -> bool:
+        if display_x is None:
+            return False
+        try:
+            y1 = float(line.get_begin_val())
+            y2 = float(line.get_end_val())
+            item = {
+                "bi_idx": int(getattr(line, "idx", -1)),
+                "begin_x": int(line.get_begin_klu().idx),
+                "value": 1 if y2 >= y1 else -1,
+            }
+            key = self._bi_sure_signal_key(item)
+        except Exception:
+            return False
+        for sig in reversed(self.bi_sure_signal_history[-16:]):
+            if not isinstance(sig, dict):
+                continue
+            try:
+                if int(sig.get("x", -1)) == int(display_x) and (
+                    str(sig.get("key", "")) == key or self._bi_sure_signal_key(sig) == key
+                ):
+                    return True
+            except Exception:
+                continue
+        return False
+
+    def _current_ratio_context_dir(self) -> Any:
+        for sig in reversed(self.seg_sure_signal_history):
+            if not isinstance(sig, dict) or str(sig.get("level", "")) != "seg":
+                continue
+            text = str(sig.get("dir", ""))
+            if text == "up":
+                return BI_DIR.DOWN
+            if text == "down":
+                return BI_DIR.UP
+        try:
+            seg_lines = list(self._direct_line_list_for_level("seg") or [])
+        except Exception:
+            seg_lines = []
+        if seg_lines:
+            direction = getattr(seg_lines[0], "dir", None)
+            if direction in (BI_DIR.UP, BI_DIR.DOWN):
+                return direction
+        try:
+            bi_lines = list(self._direct_line_list_for_level("bi") or [])
+        except Exception:
+            bi_lines = []
+        if bi_lines:
+            direction = getattr(bi_lines[0], "dir", None)
+            if direction in (BI_DIR.UP, BI_DIR.DOWN):
+                return direction
+        return None
+
+    def calc_segment_ratio_metrics_for_current_step(self, bundle: Optional[ChanStructureBundle] = None, latest_klu: Any = None) -> dict[str, Any]:
+        """段内笔比例：按笔确认点启动；线段规则只在段确认后切换。"""
+        if self.data_feed_mode != "step" or self.chan is None:
+            return {}
+        try:
+            children = list(self._direct_line_list_for_level("bi") or [])
+        except Exception:
+            return {}
+        if len(children) < 2:
+            return {}
+        context_dir = self._current_ratio_context_dir()
+        if context_dir not in (BI_DIR.UP, BI_DIR.DOWN):
+            return {}
+        display_x = self._current_display_x_for_signal(latest_klu)
+        out: dict[str, Any] = {
+            "ratio_context_dir": "up" if context_dir == BI_DIR.UP else "down",
+            "ratio_level": "seg",
+        }
+
+        def add_ratio_pair(prev_line: Any, cur_line: Any) -> None:
+            prev_dir = getattr(prev_line, "dir", None)
+            cur_dir = getattr(cur_line, "dir", None)
+            if cur_dir not in (BI_DIR.UP, BI_DIR.DOWN) or prev_dir not in (BI_DIR.UP, BI_DIR.DOWN) or cur_dir == prev_dir:
+                return
+            if not bool(getattr(prev_line, "is_sure", False)):
+                return
+            if bool(getattr(cur_line, "is_sure", False)) and not self._line_confirmed_on_display_x(cur_line, display_x):
+                # 旧确认笔不重复出值；刚确认当步保留终值，下一笔可同K启动。
+                return
+            try:
+                denom = abs(float(prev_line.get_end_val()) - float(prev_line.get_begin_val()))
+                numer = abs(float(cur_line.get_end_val()) - float(cur_line.get_begin_val()))
+            except Exception:
+                return
+            if denom <= 1e-12:
+                return
+            ratio = float(numer / denom)
+            out["ratio_child_dir"] = "up" if cur_dir == BI_DIR.UP else "down"
+            if cur_dir == context_dir:
+                out["trend_ratio"] = ratio
+            else:
+                out["retrace_ratio"] = ratio
+
+        # 刚确认的旧笔落在下一笔内部，同一step先补旧笔终值，再让新笔启动实时比例。
+        if len(children) >= 3 and self._line_confirmed_on_display_x(children[-2], display_x):
+            add_ratio_pair(children[-3], children[-2])
+        add_ratio_pair(children[-2], children[-1])
+        return out if ("trend_ratio" in out or "retrace_ratio" in out) else {}
 
     def extra_bsp_snapshot_cached(self, *, segseg_list: Any, conf: CChanConfig, lazy_layers: dict[str, Any]) -> dict[str, Any]:
         """逐K当下性缓存：输入只来自当前已喂入结构，签名没变才复用。"""
@@ -5315,7 +5585,7 @@ class ChanStepper:
             self.indicator_history = []
             self.trend_lines = []
             self._serialized_klu_cache = []
-            self.reset_bi_sure_signal_history()
+            self.reset_structure_signal_history()
             self.clear_structure_runtime_cache(clear_bsp_cache=True)
             self._unified_full_payload = None
             if self.data_feed_mode == "unified":
@@ -5499,6 +5769,7 @@ class ChanStepper:
         out["rhythm_hits"] = [it for it in payload.get("rhythm_hits", []) if int(it.get("x", -1)) <= x_max]
         out["indicators"] = [it for it in payload.get("indicators", []) if int(it.get("x", -1)) <= x_max]
         out["bi_sure_signals"] = [it for it in payload.get("bi_sure_signals", []) if int(it.get("x", -1)) <= x_max]
+        out["seg_sure_signals"] = [it for it in payload.get("seg_sure_signals", []) if int(it.get("x", -1)) <= x_max]
         out["trend_lines"] = [it for it in payload.get("trend_lines", []) if int(it.get("x2", -1)) <= x_max]
         out["kline_combine"] = [it for it in payload.get("kline_combine", []) if int(it.get("x2", -1)) <= x_max]
         out["fx_lines"] = [it for it in payload.get("fx_lines", []) if int(it.get("x2", -1)) <= x_max]
@@ -5520,7 +5791,7 @@ class ChanStepper:
         self._rebuild_indicator_history_from_chan()
         self.step_idx = target_step
         self.clear_structure_runtime_cache(clear_bsp_cache=True)
-        self.reset_bi_sure_signal_history()
+        self.reset_structure_signal_history()
         if use_master_kline_for_chart(self.data_form_mode):
             self._serialized_klu_cache = serialize_replay_master_klines(master[: target_step + 1])
         else:
@@ -5640,7 +5911,7 @@ class ChanStepper:
             self._step_perf_add("demark_extract_ms", (time.perf_counter() - t0) * 1000.0)
 
             t0 = time.perf_counter()
-            self.indicator_history.append({
+            indicator_row = {
                 "x": latest_klu.idx,
                 "macd": {"dif": macd_item.DIF, "dea": macd_item.DEA, "macd": macd_item.macd},
                 "kdj": {"k": kdj_item.k, "d": kdj_item.d, "j": kdj_item.j},
@@ -5648,15 +5919,30 @@ class ChanStepper:
                 "boll": {"mid": boll_item.MID, "up": boll_item.UP, "down": boll_item.DOWN},
                 "vol": vol,
                 "demark": demark_pts
-            })
+            }
+            self.indicator_history.append(indicator_row)
             self._step_perf_add("history_append_ms", (time.perf_counter() - t0) * 1000.0)
             self.record_bi_sure_signals_for_current_step(latest_klu)
 
-            # 自动一次性呈现只收集 BSP，完整图表包留到末尾统一构建。
-            if not self._suppress_step_bundle_refresh:
+            suppress_bundle = bool(self._suppress_step_bundle_refresh)
+            need_seg_sure_sub = suppress_bundle and chart_lazy_sub_indicator_enabled(self.chart_lazy_layers, "seg_sure")
+            need_ratio_sub = suppress_bundle and (
+                chart_lazy_sub_indicator_enabled(self.chart_lazy_layers, "retrace_ratio")
+                or chart_lazy_sub_indicator_enabled(self.chart_lazy_layers, "trend_ratio")
+            )
+            need_seg_signal = (not suppress_bundle) or need_seg_sure_sub
+            need_ratio_signal = (not suppress_bundle) or need_ratio_sub
+            bundle = None
+            if need_seg_signal:
+                self.record_seg_sure_signals_for_current_step(bundle, latest_klu)
+            else:
+                self._clear_native_seg_sure_events()
+            if need_ratio_signal:
                 t0 = time.perf_counter()
-                self.get_structure_bundle(force=True)
-                self._step_perf_add("bundle_ms", (time.perf_counter() - t0) * 1000.0)
+                ratio_metrics = self.calc_segment_ratio_metrics_for_current_step(bundle, latest_klu)
+                self._step_perf_add("ratio_ms", (time.perf_counter() - t0) * 1000.0)
+                if ratio_metrics:
+                    indicator_row.update(ratio_metrics)
             return True
         except StopIteration:
             return False
@@ -5757,6 +6043,7 @@ class ChanStepper:
                     self.kline_all, getattr(self, "_session_end_date", None)
                 )
             self._attach_bi_sure_signals_to_payload(payload)
+            self._attach_seg_sure_signals_to_payload(payload)
             self._chart_payload_cache[include_kline_all] = (self.step_idx, payload)
             return payload
         if self.chan is None:
@@ -5804,6 +6091,7 @@ class ChanStepper:
                     },
                 )
         self._attach_bi_sure_signals_to_payload(payload)
+        self._attach_seg_sure_signals_to_payload(payload)
         self._chart_payload_cache[include_kline_all] = (self.step_idx, payload)
         return payload
 
@@ -10918,7 +11206,7 @@ storageSet("chan_indicator_sub_slots", JSON.stringify(indicatorSubSlots));
 storageSet("chan_indicator_main_var_visible", indicatorMainVarVisible ? "1" : "0");
 storageSet("chan_indicator_sub_var_visible", indicatorSubVarVisible ? "1" : "0");
 const MAIN_INDICATORS = new Set(["boll", "demark", "trendline", "chip_peak"]);
-const SUB_INDICATORS = new Set(["macd", "kdj", "rsi", "vol", "bi_sure"]);
+const SUB_INDICATORS = new Set(["macd", "kdj", "rsi", "vol", "bi_sure", "seg_sure", "retrace_ratio", "trend_ratio"]);
 
 const DEFAULT_CHAN_CONFIG = {
   chan_algo: "classic",
@@ -10977,6 +11265,77 @@ const DEFAULT_CHAN_CONFIG = {
   strict_bsp3: false,
   bsp3a_max_zs_cnt: 1
 };
+
+const CHAN_CONFIG_HISTORY_GROUPS = [
+  { title: "主逻辑", items: [
+    ["缠论主逻辑", "chan_algo"],
+    ["节奏线计算逻辑", "rhythm_calc_mode"],
+  ] },
+  { title: "笔", items: [
+    ["笔算法", "bi_algo"],
+    ["严格笔", "bi_strict"],
+    ["分型检查", "bi_fx_check"],
+    ["缺口当K线", "gap_as_kl"],
+    ["笔终点极值", "bi_end_is_peak"],
+    ["允许次极值", "bi_allow_sub_peak"],
+  ] },
+  { title: "线段", items: [
+    ["线段算法", "seg_algo"],
+    ["左端点方法", "left_seg_method"],
+  ] },
+  { title: "中枢", items: [
+    ["中枢算法", "zs_algo"],
+    ["中枢合并", "zs_combine"],
+    ["合并模式", "zs_combine_mode"],
+    ["一笔中枢", "one_bi_zs"],
+  ] },
+  { title: "指标参数", items: [
+    ["均线周期", "mean_metrics"],
+    ["趋势线周期", "trend_metrics"],
+    ["MACD快线", "macd_fast"],
+    ["MACD慢线", "macd_slow"],
+    ["MACD信号", "macd_signal"],
+    ["BOLL周期", "boll_n"],
+    ["计算Demark", "cal_demark"],
+    ["Demark长度", "demark_len"],
+    ["Setup偏移", "setup_bias"],
+    ["Countdown偏移", "countdown_bias"],
+    ["最大Countdown", "max_countdown"],
+    ["跳空起始", "tiaokong_st"],
+    ["Setup比收盘", "setup_cmp2close"],
+    ["Countdown比收盘", "countdown_cmp2close"],
+    ["计算RSI", "cal_rsi"],
+    ["RSI周期", "rsi_cycle"],
+    ["计算KDJ", "cal_kdj"],
+    ["KDJ周期", "kdj_cycle"],
+  ] },
+  { title: "买卖点", items: [
+    ["背驰阈值", "divergence_rate"],
+    ["最小中枢数", "min_zs_cnt"],
+    ["1类需多笔中枢", "bsp1_only_multibi_zs"],
+    ["2类最大回撤", "max_bs2_rate"],
+    ["MACD比较算法", "macd_algo"],
+    ["1类需顶底分型", "bs1_peak"],
+    ["买卖点类型", "bs_type"],
+    ["2类跟随1类", "bsp2_follow_1"],
+    ["3类跟随1类", "bsp3_follow_1"],
+    ["3类需顶底分型", "bsp3_peak"],
+    ["类2s跟随2类", "bsp2s_follow_2"],
+    ["类2s最大级别", "max_bsp2s_lv"],
+    ["严格3类", "strict_bsp3"],
+    ["3a最大中枢数", "bsp3a_max_zs_cnt"],
+  ] },
+  { title: "系统运行", items: [
+    ["逐步触发", "trigger_step"],
+    ["跳过步数", "skip_step"],
+    ["K线数据检查", "kl_data_check"],
+    ["时间错位容忍", "max_kl_misalgin_cnt"],
+    ["K线不一致容忍", "max_kl_inconsistent_cnt"],
+    ["自动跳非法子级别", "auto_skip_illegal_sub_lv"],
+    ["打印警告", "print_warning"],
+    ["打印错误时间", "print_err_time"],
+  ] },
+];
 
 const DEFAULT_CHART_CONFIG = {
   theme: "light",
@@ -12654,6 +13013,13 @@ function collectChartLazyLayersFromConfig(cfg = chartConfig, store = chartConfig
   const rhythmOn = !!(cfg && cfg.rhythmLine && cfg.rhythmLine.enabled);
   const rhythmHitOn = !!(cfg && cfg.rhythmHit && cfg.rhythmHit.enabled !== false);
   const lineLevels = {};
+  const subIndicators = {};
+  try {
+    const indCfg = (typeof getIndicatorConfig === "function") ? getIndicatorConfig() : null;
+    (indCfg && indCfg.subCharts ? indCfg.subCharts : []).forEach((m) => {
+      if (m && m.type) subIndicators[String(m.type)] = true;
+    });
+  } catch (_) {}
   customSegmentLevelsFromConfig(cfg).forEach((lv) => { lineLevels[lv] = true; });
   const bspLevels = {};
   allBspLevels(cfg).forEach((lv) => { bspLevels[lv] = isBspLevelEnabled(lv, cfg, store); });
@@ -12668,6 +13034,7 @@ function collectChartLazyLayersFromConfig(cfg = chartConfig, store = chartConfig
     line_levels: lineLevels,
     bsp_levels: bspLevels,
     zs_levels: zsLevels,
+    sub_indicators: subIndicators,
   };
 }
 function diffEnabledLazyLayers(prev, next) {
@@ -13191,6 +13558,29 @@ function formatChanSettingValue(v) {
   if (v === "") return "空";
   if (v == null) return "None";
   return String(v);
+}
+
+function formatChanHistoryValue(v) {
+  if (typeof v === "boolean") return v ? "开" : "关";
+  return formatChanSettingValue(v);
+}
+
+function buildChanConfigHistoryLines() {
+  const cfg = deepMerge(
+    JSON.parse(JSON.stringify(DEFAULT_CHAN_CONFIG)),
+    JSON.parse(JSON.stringify(chanConfig || {}))
+  );
+  applyRhythmCalcModeToChanConfig(cfg);
+  const lines = ["【缠论计算配置】"];
+  for (const group of CHAN_CONFIG_HISTORY_GROUPS) {
+    const parts = [];
+    for (const [label, key] of group.items || []) {
+      const val = chanSettingValueByInputKey(cfg, key);
+      parts.push(`${label}=${formatChanHistoryValue(val)}`);
+    }
+    lines.push(`${group.title}：${parts.join("；")}`);
+  }
+  return lines;
 }
 
 function collectChanDefaultChanges(inputs) {
@@ -13913,14 +14303,23 @@ function appendChartSettingsItemTo(parent, sec, item, buildLabelHtml) {
       html += `<div class="muted" style="margin-top:8px;">当前副图槽位为 0，不显示任何副图指标。</div>`;
     } else {
       const currentList = Array.isArray(val) ? val : [];
-      const options = [{ v: "macd", l: "MACD" }, { v: "kdj", l: "KDJ" }, { v: "rsi", l: "RSI" }, { v: "vol", l: "VOL" }, { v: "bi_sure", l: "Bi确认" }];
+      const options = [
+        { v: "macd", l: "MACD" },
+        { v: "kdj", l: "KDJ" },
+        { v: "rsi", l: "RSI" },
+        { v: "vol", l: "VOL" },
+        { v: "bi_sure", l: "Bi确认" },
+        { v: "seg_sure", l: "段确认" },
+        { v: "retrace_ratio", l: "回调比例" },
+        { v: "trend_ratio", l: "趋势比例" },
+      ];
       html += `<div style="display:flex;flex-direction:column;gap:4px;margin-top:8px;">`;
       options.forEach((opt) => {
         const checked = currentList.includes(opt.v);
         html += `<label style="flex-direction:row;align-items:center;display:flex;"><input type="checkbox" class="indicator-check-sub" value="${opt.v}" ${checked ? "checked" : ""} data-key="indicators" data-subkey="subType" style="width:auto;margin-right:8px;">${opt.l}</label>`;
       });
       html += `</div>`;
-      html += `<div class="muted" style="font-size:11px;line-height:1.45;margin-top:6px;">Bi确认：逐K记录 Bi 首次确认的当步K；向上笔为正柱，向下笔为负柱，未来不回写旧柱。</div>`;
+      html += `<div class="muted" style="font-size:11px;line-height:1.45;margin-top:6px;">Bi/段确认：逐K记录首次确认当步K，未来不回写旧柱；比例线只在对应确认点后启动。</div>`;
     }
     itemDiv.innerHTML += html;
   } else if (item.type === "interrupt_bsp_cascade") {
@@ -14459,7 +14858,8 @@ function renderSettingsForm() {
     "3) 主图与副图槽位独立选择、独立保存。",
     "4) 更改配置后点击保存即可生效。",
     "5) 主图「筹码峰」：每根K最近两组峰价连成折线（类MA），缺失值断线，非右侧面板水平延长线；逻辑写入历史记录便于排查。",
-    "6) 副图「Bi确认」：逐K记录 Bi 首次确认的当步K；正柱=向上笔，负柱=向下笔，未来不回写旧柱。"
+    "6) 副图「Bi确认/段确认」：逐K记录结构首次确认的当步K；正柱=上涨，负柱=下跌，未来不回写旧柱。",
+    "7) 副图「回调比例/趋势比例」：仅从对应笔确认点后开始计算，线段规则切换等待段确认。"
   ].join("\n");
   const mainSlotOptions = [
     { value: "0", label: "主图(0) 不显示指标" },
@@ -15948,6 +16348,16 @@ function isBiSureIndicatorActive() {
   return (cfg.subCharts || []).some((m) => m && m.type === "bi_sure");
 }
 
+function isSegSureIndicatorActive() {
+  const cfg = getIndicatorConfig();
+  return (cfg.subCharts || []).some((m) => m && m.type === "seg_sure");
+}
+
+function isRatioIndicatorActive() {
+  const cfg = getIndicatorConfig();
+  return (cfg.subCharts || []).some((m) => m && (m.type === "retrace_ratio" || m.type === "trend_ratio"));
+}
+
 function formatMainIndicatorSlotSummary() {
   const slot = Number(selectedMainIndicatorSlot);
   if (!Number.isFinite(slot) || slot < 1 || slot > 5) return "主图指标：槽位0（不显示）";
@@ -15972,6 +16382,9 @@ function formatSubIndicatorSlotSummary() {
     rsi: "RSI",
     vol: "VOL",
     bi_sure: "Bi确认",
+    seg_sure: "段确认",
+    retrace_ratio: "回调比例",
+    trend_ratio: "趋势比例",
   };
   const picked = list.map((t) => labels[t] || t).filter(Boolean);
   return `副图指标：槽位${slot}=${picked.length ? picked.join("+") : "未选"}`;
@@ -17916,6 +18329,7 @@ function buildCurrentConfigSummaryText() {
     "【配置项】",
     `数据形式=${dataFormModeLabel(dataFormConfig.mode)}；数量=${qtyMode ? clampDataFormQuantity(dataFormConfig.quantity, getRawKlineCount() || 1) : "不生效"}；数量分配=${qtyMode ? quantityAllocLabel(dataFormConfig.quantityAlloc) : "不生效/控件应灰度"}`,
     `喂数据方式=${dataFeedModeLabel(dataFormConfig.feedMode)}；K线图呈现形式=${klinePresentationLabel(dataFormConfig.klinePresentation)}；离线数据自定义=${offlineDataCustomLabel(dataFormConfig.offlineDataCustom)}`,
+    ...buildChanConfigHistoryLines(),
     "【懒加载/显示】",
     `中枢=${lazy.zsLevels.length ? lazy.zsLevels.join("、") : "全关"}；买卖点=${lazy.bspLevels.length ? lazy.bspLevels.join("、") : "全关"}；自定义级别=${customLevels.length ? customLevels.join("、") : "无"}；节奏线=${lazy.rhythm ? "开" : "关"}；1382提示=${lazy.rhythmHits ? "开" : "关"}；图底买卖点总开关=${chartConfigStore.shared && chartConfigStore.shared.showBottomBsp === false ? "关" : "开"}`,
     "【关键逻辑总结】",
@@ -17927,7 +18341,10 @@ function buildCurrentConfigSummaryText() {
     "【主图指标】",
     formatMainIndicatorSlotSummary() + (isChipPeakIndicatorActive() ? "；筹码峰=最近两峰逐K折线(类MA)，缺峰断线，非面板水平延长线" : ""),
     "【副图指标】",
-    formatSubIndicatorSlotSummary() + (isBiSureIndicatorActive() ? "；Bi确认=逐K首次确认当步柱，未来不回写" : ""),
+    formatSubIndicatorSlotSummary()
+      + (isBiSureIndicatorActive() ? "；Bi确认=逐K首次确认当步柱，未来不回写" : "")
+      + (isSegSureIndicatorActive() ? "；段确认=原生线段确认事件当步柱，未来不回写" : "")
+      + (isRatioIndicatorActive() ? "；比例=确认点后启动，段确认后切换线段规则" : ""),
   ];
   return lines.join("\n");
 }
@@ -20627,9 +21044,11 @@ function drawIndicators(chart, s) {
   if (!chart) return;
   const indicatorCfg = getIndicatorConfig();
   const hasBiSureSub = (indicatorCfg.subCharts || []).some((m) => m && m.type === "bi_sure");
-  if ((!chart.indicators || chart.indicators.length === 0) && !hasBiSureSub) return;
+  const hasSegSureSub = (indicatorCfg.subCharts || []).some((m) => m && m.type === "seg_sure");
+  const hasEventSub = hasBiSureSub || hasSegSureSub;
+  if ((!chart.indicators || chart.indicators.length === 0) && !hasEventSub) return;
   const visibleInd = s.visibleInd || [];
-  if (visibleInd.length === 0 && !hasBiSureSub) return;
+  if (visibleInd.length === 0 && !hasEventSub) return;
   
   const theme = document.documentElement.getAttribute("data-theme") || "light";
   const lineMain = theme === "light" ? "#1e293b" : "#f8fafc";
@@ -20696,6 +21115,71 @@ function drawIndicators(chart, s) {
     biSureRowsCache = rows.sort((a, b) => a.x - b.x);
     return biSureRowsCache;
   };
+  let segSureRowsCache = null;
+  const getSegSureRows = () => {
+    if (segSureRowsCache) return segSureRowsCache;
+    const rows = [];
+    for (const sig of chart.seg_sure_signals || []) {
+      const x = Number(sig && sig.x);
+      const value = Number(sig && sig.value);
+      if (!Number.isFinite(x) || x < s.xMin || x > s.xMax) continue;
+      if (!Number.isFinite(value) || value === 0) continue;
+      rows.push({
+        x,
+        value,
+        level: String(sig && sig.level_label ? sig.level_label : sig.level || ""),
+        anchorX: Number(sig && sig.anchor_x),
+      });
+    }
+    segSureRowsCache = rows.sort((a, b) => a.x - b.x);
+    return segSureRowsCache;
+  };
+
+  const drawRatioRefs = (subY) => {
+    const refs = [
+      { v: 1, text: "1.000" },
+      { v: 1.382, text: "1.382" },
+    ];
+    ctx.save();
+    ctx.setLineDash([4, 4]);
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = cssVar("--grid", "#e2e8f0");
+    ctx.fillStyle = cssVar("--muted", "#64748b");
+    ctx.font = "10px Consolas";
+    for (const ref of refs) {
+      const y = subY(ref.v);
+      ctx.beginPath();
+      ctx.moveTo(PAD_L, y);
+      ctx.lineTo(s.w - PAD_R, y);
+      ctx.stroke();
+      ctx.fillText(ref.text, PAD_L + 4, y - 3);
+    }
+    ctx.restore();
+  };
+
+  const drawRatioLine = (getter, subY, color) => {
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    let drawing = false;
+    let hasPoint = false;
+    for (const item of visibleInd) {
+      const yVal = Number(getter(item));
+      if (!Number.isFinite(yVal)) {
+        drawing = false;
+        continue;
+      }
+      const xp = s.x(item.x);
+      const yp = subY(yVal);
+      if (!drawing) ctx.moveTo(xp, yp);
+      else ctx.lineTo(xp, yp);
+      drawing = true;
+      hasPoint = true;
+    }
+    if (hasPoint) ctx.stroke();
+    ctx.restore();
+  };
 
   const getPanelRange = (type) => {
     let min = Infinity;
@@ -20720,6 +21204,19 @@ function drawIndicators(chart, s) {
     } else if (type === "bi_sure") {
       min = -1;
       max = 1;
+    } else if (type === "seg_sure") {
+      min = -5;
+      max = 5;
+    } else if (type === "retrace_ratio" || type === "trend_ratio") {
+      min = 0;
+      max = 1.382;
+      const key = type === "retrace_ratio" ? "retrace_ratio" : "trend_ratio";
+      for (const i of visibleInd) {
+        const vv = Number(i && i[key]);
+        if (!Number.isFinite(vv)) continue;
+        min = Math.min(min, vv);
+        max = Math.max(max, vv);
+      }
     } else if (type === "vol") {
       min = 0;
       for (const i of visibleInd) {
@@ -20777,6 +21274,15 @@ function drawIndicators(chart, s) {
         const refX = dispInd ? Number(dispInd.x) : NaN;
         const hit = rows.find((r) => Number(r.x) === refX);
         subLabel = `Bi确认:${rows.length}${hit ? ` 当前:${hit.value > 0 ? "上" : "下"}` : ""}`;
+      } else if (panel.type === "seg_sure") {
+        const rows = getSegSureRows();
+        const refX = dispInd ? Number(dispInd.x) : NaN;
+        const hit = rows.find((r) => Number(r.x) === refX);
+        subLabel = `段确认:${rows.length}${hit ? ` 当前:${hit.level}${hit.value > 0 ? "上" : "下"}` : ""}`;
+      } else if (panel.type === "retrace_ratio") {
+        subLabel = `回调比例:${fmtIndNum(dispInd && dispInd.retrace_ratio, 3)}`;
+      } else if (panel.type === "trend_ratio") {
+        subLabel = `趋势比例:${fmtIndNum(dispInd && dispInd.trend_ratio, 3)}`;
       }
       if (subLabel) {
         ctx.textAlign = "right";
@@ -20817,6 +21323,35 @@ function drawIndicators(chart, s) {
         ctx.fillStyle = row.value > 0 ? cssVar("--candleUp", "#ef4444") : cssVar("--candleDown", "#22c55e");
         ctx.fillRect(xp - barW / 2, Math.min(yp, y0), barW, Math.max(1, Math.abs(yp - y0)));
       }
+    } else if (panel.type === "seg_sure") {
+      const y0 = subY(0);
+      ctx.strokeStyle = cssVar("--grid", "#e2e8f0");
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(PAD_L, y0);
+      ctx.lineTo(s.w - PAD_R, y0);
+      ctx.stroke();
+      const rows = getSegSureRows();
+      const barW = Math.max(2, Math.min(9, (s.plotW / Math.max(1, s.xMax - s.xMin + 1)) * 0.62));
+      ctx.font = "10px Consolas";
+      ctx.textAlign = "center";
+      for (const row of rows) {
+        const xp = s.x(row.x);
+        const yp = subY(row.value);
+        ctx.fillStyle = row.value > 0 ? cssVar("--candleUp", "#ef4444") : cssVar("--candleDown", "#22c55e");
+        ctx.fillRect(xp - barW / 2, Math.min(yp, y0), barW, Math.max(1, Math.abs(yp - y0)));
+        if (Math.abs(row.value) >= 2) {
+          ctx.fillStyle = cssVar("--muted", "#64748b");
+          ctx.fillText(String(Math.abs(row.value)), xp, row.value > 0 ? yp - 3 : yp + 10);
+        }
+      }
+      ctx.textAlign = "left";
+    } else if (panel.type === "retrace_ratio") {
+      drawRatioRefs(subY);
+      drawRatioLine((i) => i && i.retrace_ratio, subY, "#0f766e");
+    } else if (panel.type === "trend_ratio") {
+      drawRatioRefs(subY);
+      drawRatioLine((i) => i && i.trend_ratio, subY, "#dc2626");
     } else if (panel.type === "vol") {
       // 成交量柱：优先用指标序列，旧数据回退到当前可见K线
       const volRows = [];

@@ -16,6 +16,8 @@ class StepperRollbackSnapshot:
     chart_payload_cache: dict[bool, tuple[int, dict[str, Any]]]
     bi_sure_signal_history: list[dict[str, Any]] | None = None
     bi_sure_signal_seen_keys: set[str] | None = None
+    seg_sure_signal_history: list[dict[str, Any]] | None = None
+    seg_sure_signal_seen_keys: set[str] | None = None
 
 
 @dataclass
@@ -79,6 +81,8 @@ def capture_stepper_snapshot(stepper: Any) -> StepperRollbackSnapshot:
         chart_payload_cache=dict(chart_cache) if isinstance(chart_cache, dict) else {},
         bi_sure_signal_history=[dict(it) for it in getattr(stepper, "bi_sure_signal_history", [])],
         bi_sure_signal_seen_keys=set(getattr(stepper, "_bi_sure_signal_seen_keys", set())),
+        seg_sure_signal_history=[dict(it) for it in getattr(stepper, "seg_sure_signal_history", [])],
+        seg_sure_signal_seen_keys=set(getattr(stepper, "_seg_sure_signal_seen_keys", set())),
     )
 
 
@@ -109,6 +113,23 @@ def restore_stepper_snapshot(stepper: Any, snap: StepperRollbackSnapshot) -> Non
     stepper._bi_sure_signal_seen_keys = seen_keys
     stepper._bi_sure_signal_seen_list_id = id(stepper.bi_sure_signal_history)
     stepper._bi_sure_signal_seen_count = len(stepper.bi_sure_signal_history)
+    seg_signal_hist = getattr(snap, "seg_sure_signal_history", None) or []
+    stepper.seg_sure_signal_history = [dict(it) for it in seg_signal_hist]
+    seg_seen_keys = getattr(snap, "seg_sure_signal_seen_keys", None)
+    if seg_seen_keys is None:
+        seg_seen_keys = {str(it.get("key")) for it in stepper.seg_sure_signal_history if isinstance(it, dict) and it.get("key")}
+    seg_seen_keys = set(seg_seen_keys)
+    # 段确认柱去重：兼容旧快照，同时补上当前key算法。
+    seg_key_fn = getattr(stepper, "_seg_sure_signal_key", None)
+    if callable(seg_key_fn):
+        for it in stepper.seg_sure_signal_history:
+            try:
+                seg_seen_keys.add(seg_key_fn(it))
+            except Exception:
+                pass
+    stepper._seg_sure_signal_seen_keys = seg_seen_keys
+    stepper._seg_sure_signal_seen_list_id = id(stepper.seg_sure_signal_history)
+    stepper._seg_sure_signal_seen_count = len(stepper.seg_sure_signal_history)
     if stepper.chan is None:
         stepper._iter = None
     else:

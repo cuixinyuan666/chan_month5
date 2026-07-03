@@ -70,6 +70,10 @@ class CSegListChan(CSegListComm):
                 self.cal_seg_sure(bi_lst, end_bi_idx+1)
                 return
             self.lst[-1].eigen_fx = fx_eigen
+            evidence_bi = getattr(fx_eigen, "last_evidence_bi", None)
+            if is_true and evidence_bi is not None and evidence_bi.is_sure:
+                # 线段确认当下：特征序列分型已成，证据笔已确认；副图只消费这个事件
+                self.append_sure_event(self.lst[-1], reason="eigen_confirm")
             if is_true:
                 self.cal_seg_sure(bi_lst, end_bi_idx + 1)
         else:

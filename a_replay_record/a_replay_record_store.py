@@ -446,6 +446,9 @@ def _replay_prefix_steps(
         "demark": CDemarkEngine(),
     }
     stepper.indicator_history = []
+    reset_signals = getattr(stepper, "reset_structure_signal_history", None)
+    if callable(reset_signals):
+        reset_signals()
     stepper.trend_lines = []
     stepper.structure_bundle = None
     stepper._bundle_cache_step_idx = None
