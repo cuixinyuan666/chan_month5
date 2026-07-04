@@ -4319,6 +4319,7 @@ class ChanStepper:
         self._seg_sure_signal_seen_keys: set[str] = set()
         self._seg_sure_signal_seen_list_id: int = id(self.seg_sure_signal_history)
         self._seg_sure_signal_seen_count: int = 0
+        self.reset_step_rhythm_state()
         self.chart_lazy_layers = normalize_chart_lazy_layers(None)
         self._segseg_bsp_cache_key: Optional[tuple[Any, ...]] = None
         self._segseg_bsp_cache_value: Any = None
@@ -4551,6 +4552,14 @@ class ChanStepper:
     def reset_structure_signal_history(self) -> None:
         self.reset_bi_sure_signal_history()
         self.reset_seg_sure_signal_history()
+        self.reset_step_rhythm_state()
+
+    def reset_step_rhythm_state(self) -> None:
+        """副图节奏线：只记当前线段方向，段确认后下一步再切换。"""
+        self._step_rhythm_active_dir: Optional[BI_DIR] = None
+        self._step_rhythm_start_bi_idx: Optional[int] = None
+        self._step_rhythm_start_x: Optional[int] = None
+        self._step_rhythm_last_seg_key: Optional[str] = None
 
     def _seg_sure_signal_seen_keys_current(self) -> set[str]:
         cur_id = id(self.seg_sure_signal_history)
@@ -4759,6 +4768,203 @@ class ChanStepper:
             add_ratio_pair(children[-3], children[-2])
         add_ratio_pair(children[-2], children[-1])
         return out if "adjacent_bi_ratio" in out else {}
+
+    @staticmethod
+    def _step_rhythm_signal_dir(signal: dict[str, Any]) -> Optional[BI_DIR]:
+        text = str(signal.get("dir", "")).strip().lower()
+        if text == "up":
+            return BI_DIR.UP
+        if text == "down":
+            return BI_DIR.DOWN
+        try:
+            value = int(signal.get("value", 0))
+        except Exception:
+            value = 0
+        if value > 0:
+            return BI_DIR.UP
+        if value < 0:
+            return BI_DIR.DOWN
+        return None
+
+    def _current_step_seg_signals(self, display_x: Optional[int]) -> list[dict[str, Any]]:
+        if display_x is None:
+            return []
+        out: list[dict[str, Any]] = []
+        for item in self.seg_sure_signal_history:
+            if not isinstance(item, dict) or str(item.get("level", "")) != "seg":
+                continue
+            try:
+                if int(item.get("x", -1)) == int(display_x):
+                    out.append(item)
+            except Exception:
+                continue
+        return out
+
+    def _advance_step_rhythm_after_seg_confirm(
+        self,
+        *,
+        display_x: Optional[int],
+        children: list[Any],
+        current_seg_signals: list[dict[str, Any]],
+    ) -> None:
+        if display_x is None or not current_seg_signals:
+            return
+        last_sig = current_seg_signals[-1]
+        sig_key = str(last_sig.get("key") or self._seg_sure_signal_key(last_sig))
+        if sig_key == getattr(self, "_step_rhythm_last_seg_key", None):
+            return
+        old_dir = self._step_rhythm_signal_dir(last_sig)
+        if old_dir not in (BI_DIR.UP, BI_DIR.DOWN):
+            return
+        next_dir = reverse_bi_dir(old_dir)
+        start_bi_idx: Optional[int] = None
+        for line in sorted(children, key=lambda item: (getattr(item, "idx", -1), line_begin_x(item), line_end_x(item))):
+            try:
+                if int(line_end_x(line)) >= int(display_x):
+                    start_bi_idx = int(getattr(line, "idx", -1))
+                    break
+            except Exception:
+                continue
+        self._step_rhythm_active_dir = next_dir
+        self._step_rhythm_start_bi_idx = start_bi_idx
+        self._step_rhythm_start_x = int(display_x)
+        self._step_rhythm_last_seg_key = sig_key
+
+    def calc_step_rhythm_metrics_for_current_step(self, bundle: Optional[ChanStructureBundle] = None, latest_klu: Any = None) -> dict[str, Any]:
+        """节奏线副图：复用 normal 公式，只在当前 step 输出，不回写旧K。"""
+        if self.data_feed_mode != "step" or self.chan is None:
+            return {}
+        display_x = self._current_display_x_for_signal(latest_klu)
+        try:
+            children = list(self._direct_line_list_for_level("bi") or [])
+        except Exception:
+            return {}
+        if len(children) < 3:
+            self._advance_step_rhythm_after_seg_confirm(
+                display_x=display_x,
+                children=children,
+                current_seg_signals=self._current_step_seg_signals(display_x),
+            )
+            return {}
+
+        current_seg_signals = self._current_step_seg_signals(display_x)
+        current_confirm_dir = self._step_rhythm_signal_dir(current_seg_signals[-1]) if current_seg_signals else None
+        active_dir = getattr(self, "_step_rhythm_active_dir", None)
+        if current_confirm_dir in (BI_DIR.UP, BI_DIR.DOWN):
+            # 确认K本身仍按旧线段方向画到截止点，下一步再切新方向。
+            active_dir = current_confirm_dir
+        if active_dir not in (BI_DIR.UP, BI_DIR.DOWN):
+            for line in children:
+                if bool(getattr(line, "is_sure", False)) and getattr(line, "dir", None) in (BI_DIR.UP, BI_DIR.DOWN):
+                    active_dir = getattr(line, "dir", None)
+                    break
+        if active_dir not in (BI_DIR.UP, BI_DIR.DOWN):
+            return {}
+
+        start_bi_idx = getattr(self, "_step_rhythm_start_bi_idx", None)
+        confirmed_children: list[Any] = []
+        for line in children:
+            if getattr(line, "dir", None) not in (BI_DIR.UP, BI_DIR.DOWN):
+                continue
+            if not bool(getattr(line, "is_sure", False)):
+                continue
+            try:
+                if start_bi_idx is not None and int(getattr(line, "idx", -1)) < int(start_bi_idx):
+                    continue
+                if display_x is not None and int(line_end_x(line)) > int(display_x):
+                    continue
+            except Exception:
+                continue
+            confirmed_children.append(line)
+        seq = build_alternating_child_sequence(confirmed_children, active_dir)
+        if len(seq) < 3:
+            self._advance_step_rhythm_after_seg_confirm(
+                display_x=display_x,
+                children=children,
+                current_seg_signals=current_seg_signals,
+            )
+            return {}
+
+        even_indices = [idx for idx in range(2, len(seq), 2)]
+        if not even_indices:
+            self._advance_step_rhythm_after_seg_confirm(
+                display_x=display_x,
+                children=children,
+                current_seg_signals=current_seg_signals,
+            )
+            return {}
+
+        current_even_idx = even_indices[-1]
+        round_current = current_even_idx // 2
+        d_line = seq[current_even_idx]
+        try:
+            a0 = float(seq[0].get_begin_val())
+            d_val = float(d_line.get_end_val())
+            current_bi_idx = int(getattr(d_line, "idx", -1))
+        except Exception:
+            return {}
+
+        lines: list[dict[str, Any]] = []
+        for round_ref in range(1, round_current + 1):
+            b_idx = 2 * (round_ref - 1)
+            c_idx = b_idx + 1
+            if c_idx >= len(seq):
+                continue
+            b_line = seq[b_idx]
+            c_line = seq[c_idx]
+            try:
+                b_val = float(b_line.get_end_val())
+                c_val = float(c_line.get_end_val())
+                ref_bi_idx = int(getattr(b_line, "idx", -1))
+                retrace_bi_idx = int(getattr(c_line, "idx", -1))
+            except Exception:
+                continue
+            if active_dir == BI_DIR.UP:
+                denom = b_val - a0
+                ratio = (b_val - c_val) / denom if abs(denom) > 1e-12 else None
+                rhythm_price = d_val - (d_val - a0) * ratio if ratio is not None else None
+            else:
+                denom = a0 - b_val
+                ratio = (c_val - b_val) / denom if abs(denom) > 1e-12 else None
+                rhythm_price = d_val + (a0 - d_val) * ratio if ratio is not None else None
+            if ratio is None or rhythm_price is None:
+                continue
+            if not (ratio >= 0 and abs(float(rhythm_price)) < float("inf")):
+                continue
+            layer_idx = rhythm_layer_index(round_current, round_ref)
+            line_item = {
+                "key": f"step_rhythm|{rhythm_dir_text(active_dir)}|{current_bi_idx}|{ref_bi_idx}|{retrace_bi_idx}",
+                "value": float(rhythm_price),
+                "ratio": float(ratio),
+                "dir": "up" if active_dir == BI_DIR.UP else "down",
+                "round_current": int(round_current),
+                "round_ref": int(round_ref),
+                "layer": int(layer_idx),
+                "label": f"{round_ref}-{layer_idx}",
+                "calc_mode": RHYTHM_CALC_MODE_NORMAL,
+                "current_bi_idx": current_bi_idx,
+                "ref_bi_idx": ref_bi_idx,
+                "retrace_bi_idx": retrace_bi_idx,
+                "base_bi_idx": int(getattr(seq[0], "idx", -1)),
+                "base_x": int(line_begin_x(seq[0])),
+                "current_x": int(line_end_x(d_line)),
+            }
+            lines.append(line_item)
+
+        self._step_rhythm_active_dir = active_dir
+        self._advance_step_rhythm_after_seg_confirm(
+            display_x=display_x,
+            children=children,
+            current_seg_signals=current_seg_signals,
+        )
+        if not lines:
+            return {}
+        return {
+            "step_rhythm_lines": lines,
+            "step_rhythm_count": len(lines),
+            "step_rhythm_dir": "up" if active_dir == BI_DIR.UP else "down",
+            "step_rhythm_value": float(lines[0]["value"]),
+        }
 
     def extra_bsp_snapshot_cached(self, *, segseg_list: Any, conf: CChanConfig, lazy_layers: dict[str, Any]) -> dict[str, Any]:
         """逐K当下性缓存：输入只来自当前已喂入结构，签名没变才复用。"""
@@ -5905,8 +6111,9 @@ class ChanStepper:
             need_ratio_sub = suppress_bundle and (
                 chart_lazy_sub_indicator_enabled(self.chart_lazy_layers, "adjacent_bi_ratio")
             )
-            need_seg_signal = (not suppress_bundle) or need_seg_sure_sub
-            need_ratio_signal = (not suppress_bundle) or need_ratio_sub
+            need_step_rhythm_sub = suppress_bundle and chart_lazy_sub_indicator_enabled(self.chart_lazy_layers, "step_rhythm")
+            need_seg_signal = (not suppress_bundle) or need_seg_sure_sub or need_step_rhythm_sub
+            need_ratio_signal = (not suppress_bundle) or need_ratio_sub or need_step_rhythm_sub
             bundle = None
             if need_seg_signal:
                 self.record_seg_sure_signals_for_current_step(bundle, latest_klu)
@@ -5915,9 +6122,12 @@ class ChanStepper:
             if need_ratio_signal:
                 t0 = time.perf_counter()
                 ratio_metrics = self.calc_adjacent_bi_ratio_metrics_for_current_step(bundle, latest_klu)
+                step_rhythm_metrics = self.calc_step_rhythm_metrics_for_current_step(bundle, latest_klu)
                 self._step_perf_add("ratio_ms", (time.perf_counter() - t0) * 1000.0)
                 if ratio_metrics:
                     indicator_row.update(ratio_metrics)
+                if step_rhythm_metrics:
+                    indicator_row.update(step_rhythm_metrics)
             return True
         except StopIteration:
             return False
@@ -11184,7 +11394,7 @@ storageSet("chan_indicator_sub_slots", JSON.stringify(indicatorSubSlots));
 storageSet("chan_indicator_main_var_visible", indicatorMainVarVisible ? "1" : "0");
 storageSet("chan_indicator_sub_var_visible", indicatorSubVarVisible ? "1" : "0");
 const MAIN_INDICATORS = new Set(["boll", "demark", "trendline", "chip_peak"]);
-const SUB_INDICATORS = new Set(["macd", "kdj", "rsi", "vol", "bi_sure", "seg_sure", "adjacent_bi_ratio"]);
+const SUB_INDICATORS = new Set(["macd", "kdj", "rsi", "vol", "bi_sure", "seg_sure", "adjacent_bi_ratio", "step_rhythm"]);
 
 const DEFAULT_CHAN_CONFIG = {
   chan_algo: "classic",
@@ -14298,6 +14508,7 @@ function appendChartSettingsItemTo(parent, sec, item, buildLabelHtml) {
         { v: "bi_sure", l: "Bi确认" },
         { v: "seg_sure", l: "段确认" },
         { v: "adjacent_bi_ratio", l: "相邻笔比例" },
+        { v: "step_rhythm", l: "节奏线" },
       ];
       html += `<div style="display:flex;flex-direction:column;gap:4px;margin-top:8px;">`;
       options.forEach((opt) => {
@@ -14305,7 +14516,7 @@ function appendChartSettingsItemTo(parent, sec, item, buildLabelHtml) {
         html += `<label style="flex-direction:row;align-items:center;display:flex;"><input type="checkbox" class="indicator-check-sub" value="${opt.v}" ${checked ? "checked" : ""} data-key="indicators" data-subkey="subType" style="width:auto;margin-right:8px;">${opt.l}</label>`;
       });
       html += `</div>`;
-      html += `<div class="muted" style="font-size:11px;line-height:1.45;margin-top:6px;">Bi/段确认：逐K记录首次确认当步K，未来不回写旧柱；相邻笔比例只看上一笔确认后启动。</div>`;
+      html += `<div class="muted" style="font-size:11px;line-height:1.45;margin-top:6px;">Bi/段确认：逐K记录首次确认当步K，未来不回写旧柱；相邻笔比例只看上一笔确认后启动；节奏线复用normal公式并按确认当步输出。</div>`;
     }
     itemDiv.innerHTML += html;
   } else if (item.type === "interrupt_bsp_cascade") {
@@ -16344,6 +16555,11 @@ function isRatioIndicatorActive() {
   return (cfg.subCharts || []).some((m) => m && m.type === "adjacent_bi_ratio");
 }
 
+function isStepRhythmIndicatorActive() {
+  const cfg = getIndicatorConfig();
+  return (cfg.subCharts || []).some((m) => m && m.type === "step_rhythm");
+}
+
 function formatMainIndicatorSlotSummary() {
   const slot = Number(selectedMainIndicatorSlot);
   if (!Number.isFinite(slot) || slot < 1 || slot > 5) return "主图指标：槽位0（不显示）";
@@ -16370,6 +16586,7 @@ function formatSubIndicatorSlotSummary() {
     bi_sure: "Bi确认",
     seg_sure: "段确认",
     adjacent_bi_ratio: "相邻笔比例",
+    step_rhythm: "节奏线",
   };
   const picked = list.map((t) => labels[t] || t).filter(Boolean);
   return `副图指标：槽位${slot}=${picked.length ? picked.join("+") : "未选"}`;
@@ -18329,7 +18546,8 @@ function buildCurrentConfigSummaryText() {
     formatSubIndicatorSlotSummary()
       + (isBiSureIndicatorActive() ? "；Bi确认=逐K首次确认当步柱，未来不回写" : "")
       + (isSegSureIndicatorActive() ? "；段确认=纯特征序列顶/底分型检测步柱，保留证据笔位置" : "")
-      + (isRatioIndicatorActive() ? "；相邻笔比例=上一笔确认后启动，不区分回调/趋势" : ""),
+      + (isRatioIndicatorActive() ? "；相邻笔比例=上一笔确认后启动，不区分回调/趋势" : "")
+      + (isStepRhythmIndicatorActive() ? "；节奏线=副图normal公式逐K输出，段确认K截止不回写" : ""),
   ];
   return lines.join("\n");
 }
@@ -21166,6 +21384,55 @@ function drawIndicators(chart, s) {
     ctx.restore();
   };
 
+  const stepRhythmColor = (idx) => {
+    const colors = ["#2563eb", "#dc2626", "#16a34a", "#f59e0b", "#7c3aed", "#0891b2"];
+    return colors[Math.abs(Number(idx) || 0) % colors.length];
+  };
+
+  const drawStepRhythmLines = (subY) => {
+    const series = new Map();
+    for (const item of visibleInd) {
+      const rows = Array.isArray(item && item.step_rhythm_lines) ? item.step_rhythm_lines : [];
+      for (const line of rows) {
+        const yVal = Number(line && line.value);
+        if (!Number.isFinite(yVal)) continue;
+        const key = String(line && line.key ? line.key : `step_rhythm|${line && line.label || ""}|${line && line.round_ref || 0}`);
+        if (!series.has(key)) {
+          series.set(key, {
+            label: String(line && line.label ? line.label : ""),
+            roundRef: Number(line && line.round_ref),
+            points: [],
+          });
+        }
+        series.get(key).points.push({ x: Number(item.x), y: yVal });
+      }
+    }
+    ctx.save();
+    ctx.lineWidth = 1.35;
+    ctx.font = "10px Consolas";
+    ctx.textAlign = "left";
+    for (const meta of series.values()) {
+      const pts = (meta.points || []).filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y)).sort((a, b) => a.x - b.x);
+      if (!pts.length) continue;
+      ctx.strokeStyle = stepRhythmColor(meta.roundRef);
+      ctx.beginPath();
+      for (let idx = 0; idx < pts.length; idx++) {
+        const xp = s.x(pts[idx].x);
+        const yp = subY(pts[idx].y);
+        if (idx === 0) ctx.moveTo(xp, yp);
+        else ctx.lineTo(xp, yp);
+      }
+      ctx.stroke();
+      const last = pts[pts.length - 1];
+      const lx = s.x(last.x);
+      if (lx > PAD_L && lx < s.w - PAD_R - 36 && meta.label) {
+        ctx.fillStyle = ctx.strokeStyle;
+        ctx.fillText(meta.label, lx + 4, subY(last.y) - 2);
+      }
+    }
+    ctx.restore();
+  };
+
   const getPanelRange = (type) => {
     let min = Infinity;
     let max = -Infinity;
@@ -21200,6 +21467,16 @@ function drawIndicators(chart, s) {
         if (!Number.isFinite(vv)) continue;
         min = Math.min(min, vv);
         max = Math.max(max, vv);
+      }
+    } else if (type === "step_rhythm") {
+      for (const i of visibleInd) {
+        const rows = Array.isArray(i && i.step_rhythm_lines) ? i.step_rhythm_lines : [];
+        for (const line of rows) {
+          const vv = Number(line && line.value);
+          if (!Number.isFinite(vv)) continue;
+          min = Math.min(min, vv);
+          max = Math.max(max, vv);
+        }
       }
     } else if (type === "vol") {
       min = 0;
@@ -21265,6 +21542,11 @@ function drawIndicators(chart, s) {
         subLabel = `段确认:${rows.length}${hit ? ` 当前:${hit.level}${hit.value > 0 ? "上" : "下"}` : ""}`;
       } else if (panel.type === "adjacent_bi_ratio") {
         subLabel = `相邻笔比例:${fmtIndNum(dispInd && dispInd.adjacent_bi_ratio, 3)}`;
+      } else if (panel.type === "step_rhythm") {
+        const rows = Array.isArray(dispInd && dispInd.step_rhythm_lines) ? dispInd.step_rhythm_lines : [];
+        const first = rows.length ? rows[0] : null;
+        const dirText = first ? (first.dir === "up" ? "上" : "下") : "";
+        subLabel = `节奏线:${rows.length}${first ? ` ${dirText} ${fmtIndNum(first.value, 3)}` : ""}`;
       }
       if (subLabel) {
         ctx.textAlign = "right";
@@ -21331,6 +21613,8 @@ function drawIndicators(chart, s) {
     } else if (panel.type === "adjacent_bi_ratio") {
       drawRatioRefs(subY);
       drawRatioLine((i) => i && i.adjacent_bi_ratio, subY, "#2563eb");
+    } else if (panel.type === "step_rhythm") {
+      drawStepRhythmLines(subY);
     } else if (panel.type === "vol") {
       // 成交量柱：优先用指标序列，旧数据回退到当前可见K线
       const volRows = [];
