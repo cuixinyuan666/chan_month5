@@ -11631,10 +11631,8 @@ const DEFAULT_CHART_CONFIG = {
     peakLineColor: "#2563eb",
     peakLineWidth: 1.2,
     peakLineStyle: "dashed",
-    chipPeakIndicatorUpColor: "#ef4444",
-    chipPeakIndicatorDownColor: "#22c55e",
-    chipPeakIndicatorLineWidth: 1.4,
-    chipPeakIndicatorLineStyle: "solid"
+    chipPeakIndicatorDotColor: "#f59e0b",
+    chipPeakIndicatorDotRadius: 2.5
   },
   xAxis: {
     mode: "manual",
@@ -14491,7 +14489,7 @@ function appendChartSettingsItemTo(parent, sec, item, buildLabelHtml) {
         html += `<label style="flex-direction:row;align-items:center;display:flex;"><input type="checkbox" class="indicator-check-main" value="${opt.v}" ${checked ? "checked" : ""} data-key="indicators" data-subkey="mainType" style="width:auto;margin-right:8px;">${opt.l}</label>`;
       });
       html += `</div>`;
-      html += `<div class="muted" style="font-size:11px;line-height:1.45;margin-top:6px;">筹码峰：逐K折线（类MA/BOLL），每根K取截止当日距离当前K线最近的两组筹码峰；与右侧「筹码峰延长线」（水平射线）不同。</div>`;
+      html += `<div class="muted" style="font-size:11px;line-height:1.45;margin-top:6px;">筹码峰：每根K线取截止当日全部筹码峰值，各峰值以圆点标记，点间不连线；与右侧「筹码峰延长线」（水平射线）不同。</div>`;
     }
     itemDiv.innerHTML += html;
   } else if (item.type === "indicator_multi_sub") {
@@ -15054,7 +15052,7 @@ function renderSettingsForm() {
     "2) 副图槽位(0-5)：0 表示不显示任何副图，1-5 为副图指标方案槽位。",
     "3) 主图与副图槽位独立选择、独立保存。",
     "4) 更改配置后点击保存即可生效。",
-    "5) 主图「筹码峰」：每根K最近两组峰价连成折线（类MA），缺失值断线，非右侧面板水平延长线；逻辑写入历史记录便于排查。",
+    "5) 主图「筹码峰」：每根K全部峰值以圆点标记（不连线），非右侧面板水平延长线；逻辑写入历史记录便于排查。",
     "6) 副图「Bi确认/段确认」：逐K记录结构首次确认的当步K；正柱=上涨，负柱=下跌，未来不回写旧柱。",
     "7) 副图「相邻笔比例」：上一笔确认后启动当前笔比例计算，不再按父级方向拆回调/趋势。"
   ].join("\n");
@@ -15285,14 +15283,8 @@ function renderSettingsForm() {
           { value: "solid", label: "实线" },
           { value: "dotted", label: "点线" }
         ]},
-        { label: "主图筹码峰近1线颜色", subKey: "chipPeakIndicatorUpColor", type: "color", tip: "主图指标「筹码峰」最近一组峰折线颜色（类MA随K变化）。" },
-        { label: "主图筹码峰近2线颜色", subKey: "chipPeakIndicatorDownColor", type: "color", tip: "主图指标「筹码峰」第二近峰折线颜色（类MA随K变化）。" },
-        { label: "主图筹码峰线粗细", subKey: "chipPeakIndicatorLineWidth", type: "number", min: 0.1, max: 6, step: 0.1 },
-        { label: "主图筹码峰线型", subKey: "chipPeakIndicatorLineStyle", type: "select", options: [
-          { value: "solid", label: "实线" },
-          { value: "dashed", label: "虚线" },
-          { value: "dotted", label: "点线" }
-        ], tip: "主图指标「筹码峰」折线线型（类MA/BOLL）；与右侧筹码面板水平延长线独立。" }
+        { label: "主图筹码峰圆点颜色", subKey: "chipPeakIndicatorDotColor", type: "color", tip: "主图指标「筹码峰」每根K线全部峰值圆点的颜色。" },
+        { label: "主图筹码峰圆点半径", subKey: "chipPeakIndicatorDotRadius", type: "number", min: 0.5, max: 8, step: 0.5, tip: "主图指标「筹码峰」圆点大小（像素半径）。" }
       ]
     },
     {
@@ -16600,10 +16592,10 @@ function buildChipPeakIndicatorHistoryLines(payload) {
   const p = payload || lastPayload;
   return [
     formatMainIndicatorSlotSummary(),
-    "主图指标[筹码峰]：逐K当下截止累加筹码→局部峰检测→按当前K线高低区间选最近两组峰价；缺峰用null断线，非筹码面板水平延长线。",
-    `筹码峰参数：价格桶=${bucket}元；距离=峰价到当前K线高低区间，收盘价仅作同距排序；喂数据=${dataFeedModeLabel(feed)}；呈现=${klinePresentationLabel(present)}。`,
-    "与右侧面板区别：面板「筹码峰延长线」= 当前锚点下全部峰的水平射线；主图「筹码峰」= 每根K各自最近两组峰价连成的折线。",
-    "缩放规则：null不参与绘图/缩放；过远筹码峰不参与主图Y轴范围，避免压扁K线。",
+    "主图指标[筹码峰]：逐K当下截止累加筹码→局部峰检测→全部峰值以圆点标记，不连线，非筹码面板水平延长线。",
+    `筹码峰参数：价格桶=${bucket}元；喂数据=${dataFeedModeLabel(feed)}；呈现=${klinePresentationLabel(present)}。`,
+    "与右侧面板区别：面板「筹码峰延长线」= 当前锚点下全部峰的水平射线；主图「筹码峰」= 每根K各自全部峰值的独立圆点标记。",
+    "缩放规则：过远筹码峰不参与主图Y轴范围，避免压扁K线。",
     (p && p.chip_kline_all_lazy)
       ? "筹码峰数据：init 首包省略 kline_all，需等待 /api/chip_kline_all 懒加载 chip_tick_bins 后再绘制。"
       : "",
@@ -16618,7 +16610,7 @@ function maybeAppendChipPeakIndicatorHistory(payload, force = false) {
     return;
   }
   const key = [
-    "chip_peak_nearest2_v1",
+    "chip_peak_all_dots_v2",
     chipSessionIdentity(payload || lastPayload),
     String(selectedMainIndicatorSlot),
     String(getChipBucketStep()),
@@ -16643,44 +16635,6 @@ function chipPeakPriceForYAxis(value, baseMin, baseMax) {
   const baseSpan = Math.max(1e-6, baseMax - baseMin);
   const pad = Math.max(baseSpan * 0.35, getChipBucketStep() * 6);
   return price >= baseMin - pad && price <= baseMax + pad ? price : null;
-}
-
-/** 主图指标折线：类 MA/BOLL，空值断线，圆角连接 */
-function drawMainIndicatorPolyline(s, rows, valueGetter, color, lineWidth, dash) {
-  if (!rows || rows.length === 0) return;
-  const sorted = [...rows].sort((a, b) => Number(a.x) - Number(b.x));
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(PAD_L, PAD_T, s.plotW, s.plotH);
-  ctx.clip();
-  ctx.strokeStyle = color;
-  ctx.lineWidth = Number(lineWidth) || 1.2;
-  ctx.lineJoin = "round";
-  ctx.lineCap = "round";
-  ctx.setLineDash(Array.isArray(dash) ? dash : []);
-  let started = false;
-  ctx.beginPath();
-  for (const row of sorted) {
-    const yVal = toValidMainPrice(valueGetter(row));
-    if (yVal === null) {
-      if (started) {
-        ctx.stroke();
-        ctx.beginPath();
-        started = false;
-      }
-      continue;
-    }
-    const xp = s.x(row.x);
-    const yp = s.y(yVal);
-    if (!started) {
-      ctx.moveTo(xp, yp);
-      started = true;
-    } else {
-      ctx.lineTo(xp, yp);
-    }
-  }
-  if (started) ctx.stroke();
-  ctx.restore();
 }
 
 function drawMainChartChipPeakLines(chart, s) {
@@ -16708,12 +16662,25 @@ function drawMainChartChipPeakLines(chart, s) {
     return;
   }
   _chipPeakIndicatorEmptyHistKey = "";
-  const near1Color = getCfgColor(chartConfig.chip.chipPeakIndicatorUpColor || "#ef4444");
-  const near2Color = getCfgColor(chartConfig.chip.chipPeakIndicatorDownColor || "#22c55e");
-  const lw = Number(chartConfig.chip.chipPeakIndicatorLineWidth || 1.4);
-  const dash = getTradeLineDash(chartConfig.chip.chipPeakIndicatorLineStyle || "solid");
-  drawMainIndicatorPolyline(s, chipPeakRows, (r) => r.chip_peak?.near1, near1Color, lw, dash);
-  drawMainIndicatorPolyline(s, chipPeakRows, (r) => r.chip_peak?.near2, near2Color, lw, dash);
+  const dotColor = getCfgColor(chartConfig.chip.chipPeakIndicatorDotColor || "#f59e0b");
+  const dotRadius = Number(chartConfig.chip.chipPeakIndicatorDotRadius || 2.5);
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(PAD_L, PAD_T, s.plotW, s.plotH);
+  ctx.clip();
+  ctx.fillStyle = dotColor;
+  for (const row of chipPeakRows) {
+    const cp = row.chip_peak || {};
+    const all = Array.isArray(cp.all) ? cp.all : [];
+    const xp = s.x(row.x);
+    for (const price of all) {
+      const yp = s.y(price);
+      ctx.beginPath();
+      ctx.arc(xp, yp, dotRadius, 0, 2 * Math.PI);
+      ctx.fill();
+    }
+  }
+  ctx.restore();
 }
 
 function getChipBucketStep() {
@@ -18541,7 +18508,7 @@ function buildCurrentConfigSummaryText() {
     "级别依赖：2段买卖点依赖已形成的3段结构，3段买卖点依赖4段结构，依此类推；若上一级未形成，则该级可能只有结构线没有买卖点文字。",
     `系统关键项：性能引擎=${systemConfig.performanceEngineMode || DEFAULT_SYSTEM_CONFIG.performanceEngineMode}；买卖点判定=${systemConfig.bspJudgeMode || "auto"}；回退缓存=${systemConfig.rollbackCacheDepth || DEFAULT_SYSTEM_CONFIG.rollbackCacheDepth}/${systemConfig.rollbackFullSnapshotInterval || DEFAULT_SYSTEM_CONFIG.rollbackFullSnapshotInterval}/${systemConfig.rollbackCaptureMaxBars || DEFAULT_SYSTEM_CONFIG.rollbackCaptureMaxBars}`,
     "【主图指标】",
-    formatMainIndicatorSlotSummary() + (isChipPeakIndicatorActive() ? "；筹码峰=最近两峰逐K折线(类MA)，缺峰断线，非面板水平延长线" : ""),
+    formatMainIndicatorSlotSummary() + (isChipPeakIndicatorActive() ? "；筹码峰=全部峰值圆点标记(不连线)，非面板水平延长线" : ""),
     "【副图指标】",
     formatSubIndicatorSlotSummary()
       + (isBiSureIndicatorActive() ? "；Bi确认=逐K首次确认当步柱，未来不回写" : "")
@@ -19673,15 +19640,13 @@ function toScaler(chart, xMin, xMax, dualChartIdHint) {
     );
     for (const row of chipPeakRows) {
       const cp = row.chip_peak || {};
-      const near1 = chipPeakPriceForYAxis(cp.near1, candleYMin, candleYMax);
-      const near2 = chipPeakPriceForYAxis(cp.near2, candleYMin, candleYMax);
-      if (near1 !== null) {
-        if (near1 > yMax) yMax = near1;
-        if (near1 < yMin) yMin = near1;
-      }
-      if (near2 !== null) {
-        if (near2 > yMax) yMax = near2;
-        if (near2 < yMin) yMin = near2;
+      const all = Array.isArray(cp.all) ? cp.all : [];
+      for (const price of all) {
+        const p = chipPeakPriceForYAxis(price, candleYMin, candleYMax);
+        if (p !== null) {
+          if (p > yMax) yMax = p;
+          if (p < yMin) yMin = p;
+        }
       }
     }
   }
@@ -20202,50 +20167,6 @@ function detectChipPeakPrices(state) {
   return peaks;
 }
 
-function chipPeakDistanceToKline(price, bar) {
-  const p = toValidMainPrice(price);
-  if (p === null || !bar) return null;
-  const lowRaw = Math.min(Number(bar.l), Number(bar.h));
-  const highRaw = Math.max(Number(bar.l), Number(bar.h));
-  const low = toValidMainPrice(lowRaw);
-  const high = toValidMainPrice(highRaw);
-  const close = toValidMainPrice(bar.c);
-  if (low === null || high === null) {
-    return close === null ? null : { rangeDist: Math.abs(p - close), closeDist: Math.abs(p - close) };
-  }
-  let rangeDist = 0;
-  if (p < low) rangeDist = low - p;
-  else if (p > high) rangeDist = p - high;
-  const closeDist = close === null ? Math.abs(p - ((low + high) / 2)) : Math.abs(p - close);
-  return { rangeDist, closeDist };
-}
-
-/** 最近两峰：不分上下，缺峰保持null */
-function nearestTwoChipPeaksForKline(peaks, bar) {
-  if (!Array.isArray(peaks) || peaks.length === 0) {
-    return { near1: null, near2: null };
-  }
-  const candidates = [];
-  const seen = new Set();
-  for (const p of peaks) {
-    const price = toValidMainPrice(p);
-    if (price === null) continue;
-    const dist = chipPeakDistanceToKline(price, bar);
-    if (dist === null) continue;
-    const key = price.toFixed(8);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    candidates.push({ price, ...dist });
-  }
-  candidates.sort((a, b) =>
-    (a.rangeDist - b.rangeDist) || (a.closeDist - b.closeDist) || (a.price - b.price)
-  );
-  return {
-    near1: candidates.length > 0 ? candidates[0].price : null,
-    near2: candidates.length > 1 ? candidates[1].price : null,
-  };
-}
-
 /** 判断 ksAll 截止条件：x 轴对齐时用 x，否则用时间 */
 function chipKsCutoffIncludesK(k, refK, ksAll, chipCutoffByKsX) {
   const refKX = Number(refK && refK.x);
@@ -20271,7 +20192,8 @@ function countChipPeakDrawablePoints(series) {
   let n = 0;
   for (const r of series || []) {
     const cp = r.chip_peak || {};
-    if (toValidMainPrice(cp.near1) !== null || toValidMainPrice(cp.near2) !== null) n += 1;
+    const all = Array.isArray(cp.all) ? cp.all : [];
+    if (all.length > 0) n += 1;
   }
   return n;
 }
@@ -20297,7 +20219,7 @@ function chipPeakIndicatorCacheKey(chart, payload) {
   ].join("|");
 }
 
-/** 逐K当下：每根主图K截止累加筹码后，匹配最近两组筹码峰 */
+/** 逐K当下：每根主图K截止累加筹码后，检测全部筹码峰价格 */
 function buildChipPeakIndicatorSeries(chart, payload) {
   const kline = (chart && chart.kline) || [];
   const cacheKey = chipPeakIndicatorCacheKey(chart, payload);
@@ -20321,7 +20243,8 @@ function buildChipPeakIndicatorSeries(chart, payload) {
       ksPtr += 1;
     }
     const peaks = detectChipPeakPrices(state);
-    const chip_peak = nearestTwoChipPeaksForKline(peaks, bar);
+    // 存全部峰价格，每根K绘圆点标记
+    const chip_peak = { all: peaks.map(p => toValidMainPrice(p)).filter(v => v !== null) };
     series.push({ x: Number(bar.x), chip_peak });
   }
   const ksAllFinal = getChipBaseKs(chart);
@@ -21708,10 +21631,10 @@ function drawIndicators(chart, s) {
       const cpRow = chipPeakRows.find((r) => Number(r.x) === Number(dispInd.x))
         || nearestKByX(chipPeakRows, Number(dispInd.x));
       const cp = cpRow && cpRow.chip_peak ? cpRow.chip_peak : null;
-      const near1 = cp ? toValidMainPrice(cp.near1) : null;
-      const near2 = cp ? toValidMainPrice(cp.near2) : null;
-      if (near1 !== null || near2 !== null) {
-        rows.push(`筹码峰 近1:${fmtIndNum(near1)} 近2:${fmtIndNum(near2)}`);
+      const all = cp && Array.isArray(cp.all) ? cp.all : [];
+      if (all.length > 0) {
+        const peakStrs = all.map(p => fmtIndNum(p)).join(" ");
+        rows.push(`筹码峰(${all.length}): ${peakStrs}`);
       }
     }
     // #region agent log
