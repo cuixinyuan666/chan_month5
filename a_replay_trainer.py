@@ -4618,7 +4618,7 @@ class ChanStepper:
                 event_lst.clear()
 
     def record_seg_sure_signals_for_current_step(self, bundle: Optional[ChanStructureBundle] = None, latest_klu: Any = None) -> None:
-        """逐K当下：只消费原生 SegList 确认事件，当前K冻结，未来不回写。"""
+        """逐K当下：只消费纯特征序列分型事件，当前K冻结，未来不回写。"""
         if self.data_feed_mode != "step" or self.chan is None:
             return
         display_x = self._current_display_x_for_signal(latest_klu)
@@ -4631,27 +4631,31 @@ class ChanStepper:
             if hasattr(event_lst, "clear"):
                 event_lst.clear()
             for event in events:
-                line = event.get("line") if isinstance(event, dict) else None
-                if line is None:
+                if not isinstance(event, dict) or str(event.get("event_type", "")) != "pure_eigen_fx":
                     continue
-                direction = getattr(line, "dir", None)
+                direction = event.get("dir")
                 if direction not in (BI_DIR.UP, BI_DIR.DOWN):
                     continue
                 try:
-                    y1 = float(line.get_begin_val())
-                    y2 = float(line.get_end_val())
+                    y1 = float(event.get("y1"))
+                    y2 = float(event.get("y2"))
                     item = {
                         "level": str(level),
                         "level_label": dynamic_level_label(level),
-                        "seg_idx": int(getattr(line, "idx", -1)),
+                        "seg_idx": int(event.get("idx", -1)),
                         "x": int(display_x),
-                        "anchor_x": int(line.get_end_klu().idx),
-                        "begin_x": int(line.get_begin_klu().idx),
+                        "detected_x": int(display_x),
+                        "anchor_x": int(event.get("anchor_x", -1)),
+                        "begin_x": int(event.get("begin_x", -1)),
+                        "evidence_x": int(event.get("evidence_x", -1)),
+                        "peak_bi_idx": int(event.get("peak_bi_idx", -1)),
+                        "evidence_bi_idx": int(event.get("evidence_bi_idx", -1)),
                         "value": seg_sure_signal_value(level, direction),
                         "dir": "up" if direction == BI_DIR.UP else "down",
+                        "fx_type": str(event.get("fx_type", "")),
                         "y1": y1,
                         "y2": y2,
-                        "confirm_reason": str(event.get("reason") or "native_sure") if isinstance(event, dict) else "native_sure",
+                        "confirm_reason": str(event.get("reason") or "pure_eigen_fx"),
                     }
                     key = self._seg_sure_signal_key(item)
                 except Exception:
@@ -18324,7 +18328,7 @@ function buildCurrentConfigSummaryText() {
     "【副图指标】",
     formatSubIndicatorSlotSummary()
       + (isBiSureIndicatorActive() ? "；Bi确认=逐K首次确认当步柱，未来不回写" : "")
-      + (isSegSureIndicatorActive() ? "；段确认=原生线段确认事件当步柱，未来不回写" : "")
+      + (isSegSureIndicatorActive() ? "；段确认=纯特征序列顶/底分型检测步柱，保留证据笔位置" : "")
       + (isRatioIndicatorActive() ? "；相邻笔比例=上一笔确认后启动，不区分回调/趋势" : ""),
   ];
   return lines.join("\n");

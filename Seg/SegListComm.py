@@ -47,6 +47,43 @@ class CSegListComm(Generic[SUB_LINE_TYPE]):
             "line_is_sure": bool(getattr(line, "is_sure", False)),
         })
 
+    def append_eigen_fx_event(self, fx_eigen, bi_lst, reason="pure_eigen_fx"):
+        # 纯特征序列：add 返回 True 当下就抛事件，不等后续线段严格确认
+        try:
+            peak_bi_idx = int(fx_eigen.GetPeakBiIdx())
+            peak_bi = bi_lst[peak_bi_idx]
+            evidence_bi = getattr(fx_eigen, "last_evidence_bi", None)
+            fx_ele = fx_eigen.ele[1]
+            fx_type = getattr(fx_ele, "fx", None)
+            direction = getattr(fx_eigen, "dir", None)
+            begin_bi_idx = 0 if len(self) == 0 else self[-1].end_bi.idx + 1
+            begin_bi = bi_lst[begin_bi_idx]
+            evidence_idx = int(getattr(evidence_bi, "idx", -1)) if evidence_bi is not None else -1
+            evidence_x = int(evidence_bi.get_end_klu().idx) if evidence_bi is not None else int(peak_bi.get_end_klu().idx)
+            fx_name = getattr(fx_type, "name", str(fx_type))
+            key = ("pure_eigen_fx", self.lv, direction, fx_name, begin_bi_idx, peak_bi_idx, evidence_idx)
+        except Exception:
+            return
+        for event in reversed(self.sure_event_lst):
+            if event.get("key") == key:
+                return
+        self.sure_event_lst.append({
+            "key": key,
+            "event_type": "pure_eigen_fx",
+            "idx": peak_bi_idx,
+            "lv": self.lv,
+            "reason": reason,
+            "dir": direction,
+            "fx_type": fx_name,
+            "peak_bi_idx": peak_bi_idx,
+            "evidence_bi_idx": evidence_idx,
+            "begin_x": int(begin_bi.get_begin_klu().idx),
+            "anchor_x": int(peak_bi.get_end_klu().idx),
+            "evidence_x": evidence_x,
+            "y1": float(begin_bi.get_begin_val()),
+            "y2": float(peak_bi.get_end_val()),
+        })
+
     def __iter__(self):
         yield from self.lst
 

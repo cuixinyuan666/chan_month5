@@ -42,9 +42,11 @@ class CSegListChan(CSegListComm):
             if bi.is_down() and last_seg_dir != BI_DIR.UP:
                 if up_eigen.add(bi):
                     fx_eigen = up_eigen
+                    self.append_eigen_fx_event(fx_eigen, bi_lst)
             elif bi.is_up() and last_seg_dir != BI_DIR.DOWN:
                 if down_eigen.add(bi):
                     fx_eigen = down_eigen
+                    self.append_eigen_fx_event(fx_eigen, bi_lst)
             if len(self) == 0:  # 尝试确定第一段方向，不要以谁先成为分形来决定，反例：US.EVRG
                 if up_eigen.ele[1] is not None and bi.is_down():
                     last_seg_dir = BI_DIR.DOWN
