@@ -1693,6 +1693,7 @@ class _KlineCompositePainter extends CustomPainter {
           '${bar.close.toStringAsFixed(2)}/'
           '$volText',
       '合并K线[H/L]:${combineHigh.toStringAsFixed(2)}/${combineLow.toStringAsFixed(2)}',
+      ...featureLookup.crosshairBiLines(bar.idx),
       ...featureLookup.crosshairSubLines(bar.idx, subIndicators),
     ];
     var maxW = 0.0;

@@ -261,28 +261,75 @@ pub struct HlFxConfirm {
 pub struct HlCombineStepState {
     klcs: Vec<HlMergedKlc>,
     unit_counts: Vec<usize>,
+    /// 每笔已喂入单元的 bi idx（扁平，与合并计数同步）
+    unit_bi_idxs: Vec<i32>,
     /// 末单元是否为进行中笔 K（方案 A：笔内可更新，确认后转永久）
     provisional: bool,
 }
 
+/// 合并笔 K 线当步十字线快照。
+#[derive(Debug, Clone)]
+pub struct BiCombineCrosshairSnap {
+    pub bi_merge_inner_seq: i32,
+    pub bi_merge_count: i32,
+    pub bi_combine_high: f64,
+    pub bi_combine_low: f64,
+    pub bi_combine_fx: String,
+}
+
 impl HlCombineStepState {
+    /// 十字线：末合并笔 K 线框当步 H/L 与笔 K 合并内序。
+    pub fn crosshair_snapshot(&self, active_bi_idx: i32) -> BiCombineCrosshairSnap {
+        if self.klcs.is_empty() {
+            return BiCombineCrosshairSnap {
+                bi_merge_inner_seq: 1,
+                bi_merge_count: 1,
+                bi_combine_high: 0.0,
+                bi_combine_low: 0.0,
+                bi_combine_fx: FxType::Unknown.as_str().to_string(),
+            };
+        }
+        let last_klc = self.klcs.len() - 1;
+        let cnt = self.unit_counts.get(last_klc).copied().unwrap_or(1).max(1);
+        let unit_start: usize = self.unit_counts.iter().take(last_klc).sum();
+        let mut inner_seq = cnt as i32;
+        for j in 0..cnt {
+            let ui = unit_start + j;
+            if ui < self.unit_bi_idxs.len() && self.unit_bi_idxs[ui] == active_bi_idx {
+                inner_seq = (j + 1) as i32;
+                break;
+            }
+        }
+        let klc = &self.klcs[last_klc];
+        BiCombineCrosshairSnap {
+            bi_merge_inner_seq: inner_seq,
+            bi_merge_count: cnt as i32,
+            bi_combine_high: klc.high,
+            bi_combine_low: klc.low,
+            bi_combine_fx: klc.fx.as_str().to_string(),
+        }
+    }
+
     /// 喂入已确认笔 K 线；若末位为进行中单元则先移除再喂入。
-    pub fn feed_permanent(&mut self, u: &HlMergeUnit) -> Option<HlFxConfirm> {
+    pub fn feed_permanent(&mut self, u: &HlMergeUnit, bi_idx: i32) -> Option<HlFxConfirm> {
         if self.provisional {
             self.klcs.pop();
             self.unit_counts.pop();
+            if !self.unit_bi_idxs.is_empty() {
+                self.unit_bi_idxs.pop();
+            }
             self.provisional = false;
         }
-        self.feed(u)
+        self.feed(u, bi_idx)
     }
 
     /// 更新进行中笔 K 线（每笔内逐 K 刷新高低与 x2）；可触发合并笔 K 分型确认。
-    pub fn update_provisional(&mut self, u: &HlMergeUnit) -> Option<HlFxConfirm> {
+    pub fn update_provisional(&mut self, u: &HlMergeUnit, bi_idx: i32) -> Option<HlFxConfirm> {
         if self.provisional && !self.klcs.is_empty() {
-            self.replace_last_with_new_unit(u);
+            self.replace_last_with_new_unit(u, bi_idx);
         } else {
             self.provisional = true;
-            return self.feed(u);
+            return self.feed(u, bi_idx);
         }
         self.reeval_mid_fx()
     }
@@ -292,15 +339,23 @@ impl HlCombineStepState {
         if self.provisional {
             self.klcs.pop();
             self.unit_counts.pop();
+            if !self.unit_bi_idxs.is_empty() {
+                self.unit_bi_idxs.pop();
+            }
             self.provisional = false;
         }
     }
 
-    fn replace_last_with_new_unit(&mut self, u: &HlMergeUnit) {
+    fn replace_last_with_new_unit(&mut self, u: &HlMergeUnit, bi_idx: i32) {
         let last = self.klcs.len() - 1;
         if last == 0 {
             self.klcs[0] = HlMergedKlc::new_first(u);
             self.unit_counts[0] = 1;
+            if let Some(tag) = self.unit_bi_idxs.last_mut() {
+                *tag = bi_idx;
+            } else {
+                self.unit_bi_idxs.push(bi_idx);
+            }
             return;
         }
         let prev_idx = last - 1;
@@ -311,16 +366,23 @@ impl HlCombineStepState {
             self.klcs[prev_idx].try_add(u);
             self.klcs.pop();
             self.unit_counts.pop();
+            if !self.unit_bi_idxs.is_empty() {
+                self.unit_bi_idxs.pop();
+            }
             self.provisional = false;
             if prev_idx < self.unit_counts.len() {
                 self.unit_counts[prev_idx] += 1;
             }
+            self.unit_bi_idxs.push(bi_idx);
         } else {
             let mut nk = HlMergedKlc::new_first(u);
             nk.dir = dir;
             self.klcs[last] = nk;
             if last < self.unit_counts.len() {
                 self.unit_counts[last] = 1;
+            }
+            if let Some(tag) = self.unit_bi_idxs.last_mut() {
+                *tag = bi_idx;
             }
         }
     }
@@ -354,22 +416,25 @@ impl HlCombineStepState {
     }
 
     /// 喂入一笔笔 K 线单元；第三元素进入触发分型时返回确认信息。
-    pub fn feed(&mut self, u: &HlMergeUnit) -> Option<HlFxConfirm> {
+    pub fn feed(&mut self, u: &HlMergeUnit, bi_idx: i32) -> Option<HlFxConfirm> {
         if self.klcs.is_empty() {
             self.klcs.push(HlMergedKlc::new_first(u));
             self.unit_counts.push(1);
+            self.unit_bi_idxs.push(bi_idx);
             return None;
         }
         let last = self.klcs.len() - 1;
         let dir = self.klcs[last].try_add(u);
         if dir == KlineDir::Combine {
             self.unit_counts[last] += 1;
+            self.unit_bi_idxs.push(bi_idx);
             return None;
         }
         let mut nk = HlMergedKlc::new_first(u);
         nk.dir = dir;
         self.klcs.push(nk);
         self.unit_counts.push(1);
+        self.unit_bi_idxs.push(bi_idx);
         if self.klcs.len() < 3 {
             return None;
         }
@@ -516,6 +581,17 @@ pub fn build_bar_crosshair_features_stepwise(bars: &[KlineBar]) -> Vec<BarCrossh
                 combine_high: st.combine_high,
                 combine_low: st.combine_low,
                 fractal_peak_dist: 0,
+                bi_idx: None,
+                bi_merge_inner_seq: 1,
+                bi_merge_count: 1,
+                bi_open: 0.0,
+                bi_high: 0.0,
+                bi_low: 0.0,
+                bi_close: 0.0,
+                bi_volume: 0.0,
+                bi_combine_high: 0.0,
+                bi_combine_low: 0.0,
+                bi_combine_fx: "UNKNOWN".to_string(),
             }
         })
         .collect()
@@ -685,6 +761,8 @@ pub fn build_kline_combine_bundle(bars: &[KlineBar]) -> KlineCombineBundle {
     let bi_combine_frames = build_bi_combine_frames(bars, &bi_virtual_bars);
     let mut bar_features = build_bar_crosshair_features_stepwise(bars);
     enrich_fractal_peak_dist(bars, &mut bar_features, &bi_confirms);
+    use crate::feature::enrich_bi_crosshair_fields;
+    enrich_bi_crosshair_fields(bars, &mut bar_features, &bi_segments, &bi_confirms);
     let seg_analysis = build_seg_analysis(bars, &bi_segments, &bi_confirms);
 
     KlineCombineBundle {

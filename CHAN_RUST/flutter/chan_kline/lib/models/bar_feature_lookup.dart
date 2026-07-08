@@ -72,6 +72,28 @@ class BarFeatureLookup {
 
         'combine_low': feat?.combineLow ?? b.low,
 
+        'bi_idx': feat?.biIdx,
+
+        'bi_merge_inner_seq': feat?.biMergeInnerSeq ?? 1,
+
+        'bi_merge_count': feat?.biMergeCount ?? 1,
+
+        'bi_open': feat?.biOpen ?? 0,
+
+        'bi_high': feat?.biHigh ?? 0,
+
+        'bi_low': feat?.biLow ?? 0,
+
+        'bi_close': feat?.biClose ?? 0,
+
+        'bi_volume': feat?.biVolume ?? 0,
+
+        'bi_combine_high': feat?.biCombineHigh ?? 0,
+
+        'bi_combine_low': feat?.biCombineLow ?? 0,
+
+        'bi_combine_fx': feat?.biCombineFx ?? 'UNKNOWN',
+
         'open': b.open,
 
         'high': b.high,
@@ -342,6 +364,58 @@ class BarFeatureLookup {
     }
 
     return lines;
+
+  }
+
+
+
+  /// 笔 K 十字线行（有 active 笔 K 时展示，含首笔进行中 #0）。
+
+  List<String> crosshairBiLines(int idx) {
+
+    final row = byIdx[idx];
+
+    if (row == null) return const [];
+
+    final biIdx = row['bi_idx'];
+
+    if (biIdx == null) return const [];
+
+    String fmt(double v) => v.toStringAsFixed(2);
+
+    final vol = row['bi_volume'];
+
+    final volText = vol is num && vol == vol.roundToDouble()
+
+        ? vol.toInt().toString()
+
+        : (vol as num?)?.toStringAsFixed(2) ?? '0';
+
+    return [
+
+      '笔K线[序号]：#$biIdx',
+
+      '笔K线[合并内序]：${row['bi_merge_inner_seq'] ?? 1}',
+
+      '笔K线[O/H/L/C/VOL]：'
+
+          '${fmt((row['bi_open'] as num?)?.toDouble() ?? 0)}/'
+
+          '${fmt((row['bi_high'] as num?)?.toDouble() ?? 0)}/'
+
+          '${fmt((row['bi_low'] as num?)?.toDouble() ?? 0)}/'
+
+          '${fmt((row['bi_close'] as num?)?.toDouble() ?? 0)}/'
+
+          '$volText',
+
+      '合并笔K线[H/L]：'
+
+          '${fmt((row['bi_combine_high'] as num?)?.toDouble() ?? 0)}/'
+
+          '${fmt((row['bi_combine_low'] as num?)?.toDouble() ?? 0)}',
+
+    ];
 
   }
 

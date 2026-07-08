@@ -260,6 +260,14 @@ class AppDebugSnapshot {
         'combine_h/l=${feat.combineHigh}/${feat.combineLow}；'
         'fractal_peak_dist=${feat.fractalPeakDist}',
       );
+      if (feat.biIdx != null) {
+        buf.writeln(
+          'bi_idx=#${feat.biIdx}；bi_merge_inner_seq=${feat.biMergeInnerSeq}；'
+          'bi_o/h/l/c/vol=${feat.biOpen}/${feat.biHigh}/${feat.biLow}/'
+          '${feat.biClose}/${feat.biVolume}；'
+          'bi_combine_h/l=${feat.biCombineHigh}/${feat.biCombineLow}',
+        );
+      }
     }
     buf.writeln();
   }

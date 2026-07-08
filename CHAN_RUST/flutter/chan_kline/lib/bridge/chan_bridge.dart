@@ -6,6 +6,7 @@ import 'package:ffi/ffi.dart';
 
 import '../compute/bar_feature_compute.dart';
 import '../compute/bi_combine_compute.dart';
+import '../compute/bi_crosshair_compute.dart';
 import '../compute/bi_confirm_compute.dart';
 import '../compute/seg_analysis_compute.dart';
 import '../compute/bi_virtual_bar_compute.dart';
@@ -194,6 +195,12 @@ class ChanBridge {
     final segments = biSegments.isNotEmpty
         ? biSegments
         : computeBiSegments(signals);
+    final featuresWithBi = enrichBiCrosshairFields(
+      bars,
+      features,
+      segments,
+      signals,
+    );
     final virtualBars = biVirtualBars.isNotEmpty
         ? biVirtualBars
         : computeBiVirtualBars(bars, segments);
@@ -207,7 +214,7 @@ class ChanBridge {
     return KlineCombineBundle(
       frames: frames,
       biConfirms: signals,
-      barFeatures: features,
+      barFeatures: featuresWithBi,
       biSegments: segments,
       segAnalysis: analysis,
       biVirtualBars: virtualBars,

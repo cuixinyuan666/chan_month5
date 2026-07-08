@@ -3,7 +3,7 @@
 use chrono::{Datelike, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::combine::{BiConfirmSignal, KlineCombineFrame};
+use crate::combine::{BiConfirmSignal, HlCombineStepState, HlMergeUnit, KlineCombineFrame};
 use crate::kline::KlineBar;
 
 const WEEKDAY_CN: [&str; 7] = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
@@ -31,6 +31,38 @@ pub struct BarCrosshairFeature {
     /// 距最近冻结笔确认分型极点间隔根数（不含极点 K）；首笔确认前=0
     #[serde(default)]
     pub fractal_peak_dist: i32,
+    /// 当步所属笔 K 序号；首笔确认前=None
+    #[serde(default)]
+    pub bi_idx: Option<i32>,
+    /// 当步笔 K 在合并笔 K 线框内序号（1 起）
+    #[serde(default = "default_one")]
+    pub bi_merge_inner_seq: i32,
+    /// 当步所在合并笔 K 线框已含笔 K 根数（逐K当下）
+    #[serde(default = "default_one")]
+    pub bi_merge_count: i32,
+    #[serde(default)]
+    pub bi_open: f64,
+    #[serde(default)]
+    pub bi_high: f64,
+    #[serde(default)]
+    pub bi_low: f64,
+    #[serde(default)]
+    pub bi_close: f64,
+    #[serde(default)]
+    pub bi_volume: f64,
+    /// 当步合并笔 K 线区间最高价（逐K当下）
+    #[serde(default)]
+    pub bi_combine_high: f64,
+    /// 当步合并笔 K 线区间最低价（逐K当下）
+    #[serde(default)]
+    pub bi_combine_low: f64,
+    /// 当步合并笔 K 分型：未确认=UNKNOWN
+    #[serde(default = "default_unknown")]
+    pub bi_combine_fx: String,
+}
+
+fn default_one() -> i32 {
+    1
 }
 
 fn default_unknown() -> String {
@@ -200,6 +232,166 @@ pub fn enrich_fractal_peak_dist(
             Some(ext) => (i as i32) - ext,
             None => 0,
         };
+    }
+}
+
+fn hl_unit_from_vb(bars: &[KlineBar], vb: &BiVirtualBar) -> HlMergeUnit {
+    let t1 = bars
+        .get(vb.x1.max(0) as usize)
+        .map(|b| b.time_text.clone())
+        .unwrap_or_default();
+    let t2 = bars
+        .get(vb.x2.max(0) as usize)
+        .map(|b| b.time_text.clone())
+        .unwrap_or_default();
+    HlMergeUnit {
+        x1: vb.x1,
+        x2: vb.x2,
+        high: vb.high,
+        low: vb.low,
+        t1,
+        t2,
+        end_at_left_half: false,
+        start_at_right_half: false,
+    }
+}
+
+fn bi_volume(bars: &[KlineBar], x1: usize, x2: usize) -> f64 {
+    if bars.is_empty() {
+        return 0.0;
+    }
+    let a = x1.min(x2).min(bars.len() - 1);
+    let b = x1.max(x2).min(bars.len() - 1);
+    bars[a..=b].iter().map(|b| b.volume).sum()
+}
+
+/// 当步进行中笔 K（方案 A，与段分析同源）。
+fn provisional_bi_at(
+    bars: &[KlineBar],
+    bi_segments: &[BiSegment],
+    bi_confirms: &[BiConfirmSignal],
+    bar_x: usize,
+    next_bi: usize,
+) -> Option<BiVirtualBar> {
+    if next_bi < bi_segments.len() {
+        let seg = &bi_segments[next_bi];
+        let bx = bar_x as i32;
+        if seg.begin_confirm_x <= bx && bx < seg.end_confirm_x {
+            return bi_virtual_bar_provisional(
+                bars,
+                seg.begin_fractal_x1,
+                seg.begin_fractal_x2,
+                bar_x,
+                seg.dir,
+                seg.idx,
+            );
+        }
+        return None;
+    }
+    if next_bi > 0 {
+        return None;
+    }
+    let last = bi_confirms
+        .iter()
+        .filter(|c| c.fx == "TOP" || c.fx == "BOTTOM")
+        .last()?;
+    if last.x >= bar_x as i32 {
+        return None;
+    }
+    let dir = if last.fx == "BOTTOM" { 1 } else { -1 };
+    bi_virtual_bar_provisional(
+        bars,
+        last.fractal_x1,
+        last.fractal_x2,
+        bar_x,
+        dir,
+        0,
+    )
+}
+
+/// 当步已确认笔 K：仅 end_confirm_x 已到达的笔段，且分钟 K 落在笔区间内。
+fn confirmed_bi_at(bars: &[KlineBar], bi_segments: &[BiSegment], bar_x: usize) -> Option<BiVirtualBar> {
+    let bx = bar_x as i32;
+    for seg in bi_segments.iter().rev() {
+        if seg.end_confirm_x > bx {
+            continue;
+        }
+        let vb = bi_virtual_bar_from_segment(bars, seg);
+        if vb.x1 <= bx && bx <= vb.x2 {
+            return Some(vb);
+        }
+    }
+    None
+}
+
+fn active_bi_at(
+    bars: &[KlineBar],
+    bi_segments: &[BiSegment],
+    bi_confirms: &[BiConfirmSignal],
+    bar_x: usize,
+    next_bi: usize,
+) -> Option<BiVirtualBar> {
+    provisional_bi_at(bars, bi_segments, bi_confirms, bar_x, next_bi)
+        .or_else(|| confirmed_bi_at(bars, bi_segments, bar_x))
+}
+
+/// 逐 K 填充笔 K 十字线字段（与 1 分钟 K 特征同向量，逐K当下冻结）。
+pub fn enrich_bi_crosshair_fields(
+    bars: &[KlineBar],
+    features: &mut [BarCrosshairFeature],
+    bi_segments: &[BiSegment],
+    bi_confirms: &[BiConfirmSignal],
+) {
+    if features.is_empty() || bars.is_empty() {
+        return;
+    }
+    let mut merge_state = HlCombineStepState::default();
+    let mut next_bi = 0usize;
+    let limit = bars.len().min(features.len());
+
+    for bar_x in 0..limit {
+        while next_bi < bi_segments.len() && bi_segments[next_bi].end_confirm_x == bar_x as i32 {
+            let seg = &bi_segments[next_bi];
+            let vb = bi_virtual_bar_from_segment(bars, seg);
+            let unit = hl_unit_from_vb(bars, &vb);
+            merge_state.feed_permanent(&unit, seg.idx);
+            next_bi += 1;
+        }
+
+        let active = active_bi_at(bars, bi_segments, bi_confirms, bar_x, next_bi);
+        let mut snap_state = merge_state.clone();
+        if let Some(vb) = provisional_bi_at(bars, bi_segments, bi_confirms, bar_x, next_bi) {
+            let unit = hl_unit_from_vb(bars, &vb);
+            snap_state.update_provisional(&unit, vb.idx);
+        }
+
+        let feat = &mut features[bar_x];
+        if let Some(vb) = active {
+            let snap = snap_state.crosshair_snapshot(vb.idx);
+            feat.bi_idx = Some(vb.idx);
+            feat.bi_merge_inner_seq = snap.bi_merge_inner_seq;
+            feat.bi_merge_count = snap.bi_merge_count;
+            feat.bi_open = vb.open;
+            feat.bi_high = vb.high;
+            feat.bi_low = vb.low;
+            feat.bi_close = vb.close;
+            feat.bi_volume = bi_volume(bars, vb.x1.max(0) as usize, vb.x2.max(0) as usize);
+            feat.bi_combine_high = snap.bi_combine_high;
+            feat.bi_combine_low = snap.bi_combine_low;
+            feat.bi_combine_fx = snap.bi_combine_fx;
+        } else {
+            feat.bi_idx = None;
+            feat.bi_merge_inner_seq = 1;
+            feat.bi_merge_count = 1;
+            feat.bi_open = 0.0;
+            feat.bi_high = 0.0;
+            feat.bi_low = 0.0;
+            feat.bi_close = 0.0;
+            feat.bi_volume = 0.0;
+            feat.bi_combine_high = 0.0;
+            feat.bi_combine_low = 0.0;
+            feat.bi_combine_fx = default_unknown();
+        }
     }
 }
 
@@ -485,6 +677,17 @@ mod tests {
                 combine_high: 0.0,
                 combine_low: 0.0,
                 fractal_peak_dist: 0,
+                bi_idx: None,
+                bi_merge_inner_seq: 1,
+                bi_merge_count: 1,
+                bi_open: 0.0,
+                bi_high: 0.0,
+                bi_low: 0.0,
+                bi_close: 0.0,
+                bi_volume: 0.0,
+                bi_combine_high: 0.0,
+                bi_combine_low: 0.0,
+                bi_combine_fx: "UNKNOWN".into(),
             })
             .collect::<Vec<_>>();
         enrich_fractal_peak_dist(&bars, &mut feats, &[conf]);
@@ -493,6 +696,38 @@ mod tests {
         // 确认当步 K3：距极点 K0 不含首根 = 3
         assert_eq!(feats[3].fractal_peak_dist, 3);
         assert_eq!(feats[4].fractal_peak_dist, 4);
+    }
+
+    #[test]
+    fn bi_crosshair_fields_provisional_idx_zero() {
+        use crate::combine::build_bar_crosshair_features_stepwise;
+        let bars: Vec<KlineBar> = (0..8)
+            .map(|i| KlineBar {
+                idx: i,
+                time_ms: i as i64,
+                time_text: format!("2024/01/01 09:{i:02}"),
+                open: 10.0 + i as f64 * 0.1,
+                high: 10.5 + i as f64 * 0.1,
+                low: 9.5 + i as f64 * 0.1,
+                close: 10.2 + i as f64 * 0.1,
+                volume: 100.0 + i as f64,
+                amount: 1.0,
+                metrics: serde_json::Map::new(),
+            })
+            .collect();
+        let confirms = vec![BiConfirmSignal {
+            x: 1,
+            fx: "BOTTOM".to_string(),
+            value: 1,
+            fractal_x1: 0,
+            fractal_x2: 1,
+        }];
+        let mut feats = build_bar_crosshair_features_stepwise(&bars);
+        enrich_bi_crosshair_fields(&bars, &mut feats, &[], &confirms);
+        assert_eq!(feats[2].bi_idx, Some(0));
+        assert!(feats[2].bi_high > 0.0);
+        assert!(feats[2].bi_volume > 0.0);
+        assert_eq!(feats[0].bi_idx, None);
     }
 
     #[test]

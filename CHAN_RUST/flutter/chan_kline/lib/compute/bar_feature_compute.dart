@@ -520,6 +520,28 @@ List<BarCrosshairFeature> enrichFractalPeakDist(
 
         fractalPeakDist: dist,
 
+        biIdx: f.biIdx,
+
+        biMergeInnerSeq: f.biMergeInnerSeq,
+
+        biMergeCount: f.biMergeCount,
+
+        biOpen: f.biOpen,
+
+        biHigh: f.biHigh,
+
+        biLow: f.biLow,
+
+        biClose: f.biClose,
+
+        biVolume: f.biVolume,
+
+        biCombineHigh: f.biCombineHigh,
+
+        biCombineLow: f.biCombineLow,
+
+        biCombineFx: f.biCombineFx,
+
       ),
 
     );

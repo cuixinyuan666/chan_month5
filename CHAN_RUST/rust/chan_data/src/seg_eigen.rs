@@ -283,7 +283,7 @@ pub fn build_seg_analysis(
             let vb = bi_virtual_bar_from_segment(bars, seg);
             let unit = hl_unit_from_vb(bars, &vb);
 
-            if let Some(fx) = merge_state.feed_permanent(&unit) {
+            if let Some(fx) = merge_state.feed_permanent(&unit, seg.idx) {
                 seg_confirm_val = try_emit_seg_confirm(
                     &mut seg_confirms,
                     &mut frozen_fractals,
@@ -303,7 +303,7 @@ pub fn build_seg_analysis(
             provisional_unit_at(bars, bi_segments, bi_confirms, bar_x, next_bi)
         {
             let mut early = merge_state.clone();
-            if let Some(fx) = early.update_provisional(&unit) {
+            if let Some(fx) = early.update_provisional(&unit, peak_idx) {
                 seg_confirm_val = try_emit_seg_confirm(
                     &mut seg_confirms,
                     &mut frozen_fractals,
