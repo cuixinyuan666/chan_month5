@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import '../compute/bi_crosshair_compute.dart';
 import '../models/bar_crosshair_feature.dart';
 import '../models/bi_confirm_signal.dart';
 import '../models/bi_segment.dart';
@@ -112,7 +113,7 @@ class AppDebugSnapshot {
     _writeDllDiag(buf, barFeatures, segAnalysis, biSegments.length);
     buf.writeln();
 
-    _writeTailBarFeature(buf, visibleBars, barFeatures);
+    _writeTailBarFeature(buf, visibleBars, barFeatures, biSegments, biConfirms);
     _writeBiConfirms(buf, biConfirms);
     _writeBiSegments(buf, biSegments);
     _writeBiVsSegCompare(buf, biConfirms, biSegments, biCombineFrames, segAnalysis, visibleBars);
@@ -235,6 +236,8 @@ class AppDebugSnapshot {
     StringBuffer buf,
     List<KlineBar> visibleBars,
     List<BarCrosshairFeature> barFeatures,
+    List<BiSegment> biSegments,
+    List<BiConfirmSignal> biConfirms,
   ) {
     buf.writeln('【末K十字线特征（ML口径）】');
     if (visibleBars.isEmpty || barFeatures.isEmpty) {
@@ -262,10 +265,23 @@ class AppDebugSnapshot {
       );
       if (feat.biIdx != null) {
         buf.writeln(
-          'bi_idx=#${feat.biIdx}；bi_merge_inner_seq=${feat.biMergeInnerSeq}；'
+          'bi_idx=#${feat.biIdx}（ML冻结）；bi_merge_inner_seq=${feat.biMergeInnerSeq}；'
           'bi_o/h/l/c/vol=${feat.biOpen}/${feat.biHigh}/${feat.biLow}/'
           '${feat.biClose}/${feat.biVolume}；'
           'bi_combine_h/l=${feat.biCombineHigh}/${feat.biCombineLow}',
+        );
+      }
+      final tip = buildBiCrosshairTooltipMap(
+        visibleBars,
+        biSegments,
+        biConfirms,
+      )[idx];
+      if (tip != null) {
+        buf.writeln(
+          'tooltip_bi_idx=#${tip.biIdx}（当前步归属）；tooltip_merge_inner=${tip.biMergeInnerSeq}；'
+          'tooltip_o/h/l/c/vol=${tip.biOpen}/${tip.biHigh}/${tip.biLow}/'
+          '${tip.biClose}/${tip.biVolume}；'
+          'tooltip_combine_h/l=${tip.biCombineHigh}/${tip.biCombineLow}',
         );
       }
     }
