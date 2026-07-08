@@ -14,8 +14,9 @@ pub use combine::{
     KlineCombineFrame,
 };
 pub use feature::{
-    build_bi_virtual_bar_views, enrich_bi_crosshair_fields, enrich_fractal_peak_dist,
-    fractal_extreme_bar_idx, BarCrosshairFeature, BiSegment, BiVirtualBar, BiVirtualBarView,
+    bootstrap_reverse_extreme_bar_idx, build_bi_segments, build_bi_virtual_bar_views,
+    enrich_bi_crosshair_fields, enrich_fractal_peak_dist, fractal_extreme_bar_idx,
+    BarCrosshairFeature, BiSegment, BiVirtualBar, BiVirtualBarView,
 };
 pub use seg_eigen::{
     build_seg_analysis, BarSubSnapshot, EigenFrame, FirstSegDirSignal, SegAnalysisBundle,

@@ -115,6 +115,9 @@ pub struct BiSegment {
     pub end_fractal_x2: i32,
     pub prev_idx: Option<i32>,
     pub next_idx: Option<i32>,
+    /// 首笔确认引导笔：虚拟起点=区间极值法，第二次笔确认后丢弃
+    #[serde(default)]
+    pub is_bootstrap: bool,
 }
 
 /// 由 time_ms 推导中文星期（无未来函数，仅用当前 K 时间）。
@@ -211,6 +214,43 @@ pub fn fractal_extreme_bar_idx(bars: &[KlineBar], conf: &BiConfirmSignal) -> Opt
     None
 }
 
+/// 首笔确认引导：在 [0..=首次分型极点K] 内取反向极值 K（TOP→最低 low，BOTTOM→最高 high）。
+pub fn bootstrap_reverse_extreme_bar_idx(
+    bars: &[KlineBar],
+    end_conf: &BiConfirmSignal,
+) -> Option<i32> {
+    let end_i = fractal_extreme_bar_idx(bars, end_conf)? as usize;
+    if bars.is_empty() || end_i >= bars.len() {
+        return None;
+    }
+    match end_conf.fx.as_str() {
+        "TOP" => {
+            let mut trough = f64::INFINITY;
+            for j in 0..=end_i {
+                trough = trough.min(bars[j].low);
+            }
+            for j in 0..=end_i {
+                if (bars[j].low - trough).abs() < 1e-12 {
+                    return Some(j as i32);
+                }
+            }
+        }
+        "BOTTOM" => {
+            let mut peak = f64::NEG_INFINITY;
+            for j in 0..=end_i {
+                peak = peak.max(bars[j].high);
+            }
+            for j in 0..=end_i {
+                if (bars[j].high - peak).abs() < 1e-12 {
+                    return Some(j as i32);
+                }
+            }
+        }
+        _ => {}
+    }
+    None
+}
+
 /// 逐 K 填充 K线分型极点距：基准=最近冻结笔确认分型框；确认当步起算；不含极点 K。
 pub fn enrich_fractal_peak_dist(
     bars: &[KlineBar],
@@ -265,6 +305,31 @@ fn bi_volume(bars: &[KlineBar], x1: usize, x2: usize) -> f64 {
     bars[a..=b].iter().map(|b| b.volume).sum()
 }
 
+/// 末次笔确认之后、下一笔尚未成段时的进行中笔 K。
+fn provisional_from_last_confirm(
+    bars: &[KlineBar],
+    bi_confirms: &[BiConfirmSignal],
+    bar_x: usize,
+    seg_idx: i32,
+) -> Option<BiVirtualBar> {
+    let last = bi_confirms
+        .iter()
+        .filter(|c| c.fx == "TOP" || c.fx == "BOTTOM")
+        .last()?;
+    if last.x > bar_x as i32 {
+        return None;
+    }
+    let dir = if last.fx == "BOTTOM" { 1 } else { -1 };
+    bi_virtual_bar_provisional(
+        bars,
+        last.fractal_x1,
+        last.fractal_x2,
+        bar_x,
+        dir,
+        seg_idx,
+    )
+}
+
 /// 当步进行中笔 K（方案 A，与段分析同源）。
 fn provisional_bi_at(
     bars: &[KlineBar],
@@ -276,7 +341,7 @@ fn provisional_bi_at(
     if next_bi < bi_segments.len() {
         let seg = &bi_segments[next_bi];
         let bx = bar_x as i32;
-        if seg.begin_confirm_x <= bx && bx < seg.end_confirm_x {
+        if !seg.is_bootstrap && seg.begin_confirm_x <= bx && bx < seg.end_confirm_x {
             return bi_virtual_bar_provisional(
                 bars,
                 seg.begin_fractal_x1,
@@ -288,25 +353,7 @@ fn provisional_bi_at(
         }
         return None;
     }
-    if next_bi > 0 {
-        return None;
-    }
-    let last = bi_confirms
-        .iter()
-        .filter(|c| c.fx == "TOP" || c.fx == "BOTTOM")
-        .last()?;
-    if last.x >= bar_x as i32 {
-        return None;
-    }
-    let dir = if last.fx == "BOTTOM" { 1 } else { -1 };
-    bi_virtual_bar_provisional(
-        bars,
-        last.fractal_x1,
-        last.fractal_x2,
-        bar_x,
-        dir,
-        0,
-    )
+    provisional_from_last_confirm(bars, bi_confirms, bar_x, bi_segments.len() as i32)
 }
 
 /// 当步已确认笔 K：仅 end_confirm_x 已到达的笔段，且分钟 K 落在笔区间内。
@@ -395,16 +442,11 @@ pub fn enrich_bi_crosshair_fields(
     }
 }
 
-/// 分型确认信号 → 笔段链（异向分型配对，prev/next 连续关联）。
-pub fn build_bi_segments(confirms: &[BiConfirmSignal]) -> Vec<BiSegment> {
-    let valid: Vec<&BiConfirmSignal> = confirms
-        .iter()
-        .filter(|c| c.fx == "TOP" || c.fx == "BOTTOM")
-        .collect();
+/// 异向分型配对 → 正式笔段（不含引导笔）。
+fn build_bi_segments_from_pairs(valid: &[&BiConfirmSignal]) -> Vec<BiSegment> {
     if valid.len() < 2 {
         return Vec::new();
     }
-
     let mut segments = Vec::new();
     for i in 1..valid.len() {
         let prev = valid[i - 1];
@@ -431,12 +473,44 @@ pub fn build_bi_segments(confirms: &[BiConfirmSignal]) -> Vec<BiSegment> {
             end_fractal_x2: curr.fractal_x2,
             prev_idx: if idx > 0 { Some(idx - 1) } else { None },
             next_idx: None,
+            is_bootstrap: false,
         });
     }
     for i in 0..segments.len().saturating_sub(1) {
         segments[i].next_idx = Some(segments[i + 1].idx);
     }
     segments
+}
+
+/// 分型确认信号 → 笔段链；仅 1 次确认时用区间极值法补引导笔，≥2 次确认时丢弃引导笔。
+pub fn build_bi_segments(bars: &[KlineBar], confirms: &[BiConfirmSignal]) -> Vec<BiSegment> {
+    let valid: Vec<&BiConfirmSignal> = confirms
+        .iter()
+        .filter(|c| c.fx == "TOP" || c.fx == "BOTTOM")
+        .collect();
+    if valid.len() >= 2 {
+        return build_bi_segments_from_pairs(&valid);
+    }
+    if valid.len() == 1 && !bars.is_empty() {
+        let first = valid[0];
+        if let Some(virtual_k) = bootstrap_reverse_extreme_bar_idx(bars, first) {
+            let dir = if first.fx == "TOP" { 1 } else { -1 };
+            return vec![BiSegment {
+                idx: 0,
+                dir,
+                begin_confirm_x: first.x,
+                end_confirm_x: first.x,
+                begin_fractal_x1: virtual_k,
+                begin_fractal_x2: virtual_k,
+                end_fractal_x1: first.fractal_x1,
+                end_fractal_x2: first.fractal_x2,
+                prev_idx: None,
+                next_idx: None,
+                is_bootstrap: true,
+            }];
+        }
+    }
+    Vec::new()
 }
 
 fn bar_hl_range(bars: &[KlineBar], x1: usize, x2: usize) -> (f64, f64, f64, f64) {
@@ -722,12 +796,112 @@ mod tests {
             fractal_x1: 0,
             fractal_x2: 1,
         }];
+        let segs = build_bi_segments(&bars, &confirms);
+        assert_eq!(segs.len(), 1);
+        assert!(segs[0].is_bootstrap);
         let mut feats = build_bar_crosshair_features_stepwise(&bars);
-        enrich_bi_crosshair_fields(&bars, &mut feats, &[], &confirms);
-        assert_eq!(feats[2].bi_idx, Some(0));
-        assert!(feats[2].bi_high > 0.0);
-        assert!(feats[2].bi_volume > 0.0);
+        enrich_bi_crosshair_fields(&bars, &mut feats, &segs, &confirms);
+        assert_eq!(feats[1].bi_idx, Some(1));
+        assert!(feats[1].bi_high > 0.0);
+        assert!(feats[1].bi_volume > 0.0);
         assert_eq!(feats[0].bi_idx, None);
+    }
+
+    #[test]
+    fn bootstrap_segment_on_first_confirm() {
+        let bars = vec![
+            KlineBar {
+                idx: 0,
+                time_ms: 0,
+                time_text: "t0".into(),
+                open: 9.0,
+                high: 10.0,
+                low: 8.0,
+                close: 9.5,
+                volume: 1.0,
+                amount: 1.0,
+                metrics: serde_json::Map::new(),
+            },
+            KlineBar {
+                idx: 1,
+                time_ms: 1,
+                time_text: "t1".into(),
+                open: 9.5,
+                high: 10.0,
+                low: 9.0,
+                close: 9.5,
+                volume: 1.0,
+                amount: 1.0,
+                metrics: serde_json::Map::new(),
+            },
+            KlineBar {
+                idx: 2,
+                time_ms: 2,
+                time_text: "t2".into(),
+                open: 9.0,
+                high: 9.5,
+                low: 8.5,
+                close: 9.0,
+                volume: 1.0,
+                amount: 1.0,
+                metrics: serde_json::Map::new(),
+            },
+            KlineBar {
+                idx: 3,
+                time_ms: 3,
+                time_text: "t3".into(),
+                open: 8.0,
+                high: 8.5,
+                low: 7.0,
+                close: 7.5,
+                volume: 1.0,
+                amount: 1.0,
+                metrics: serde_json::Map::new(),
+            },
+        ];
+        let conf = BiConfirmSignal {
+            x: 3,
+            fx: "TOP".to_string(),
+            value: -1,
+            fractal_x1: 0,
+            fractal_x2: 2,
+        };
+        assert_eq!(bootstrap_reverse_extreme_bar_idx(&bars, &conf), Some(0));
+        let segs = build_bi_segments(&bars, &[conf]);
+        assert_eq!(segs.len(), 1);
+        assert!(segs[0].is_bootstrap);
+        assert_eq!(segs[0].dir, 1);
+        assert_eq!(segs[0].begin_fractal_x1, 0);
+        assert_eq!(segs[0].end_confirm_x, 3);
+        let vb = build_bi_virtual_bars(&bars, &segs);
+        assert_eq!(vb[0].low, 8.0);
+        assert_eq!(vb[0].high, 10.0);
+    }
+
+    #[test]
+    fn bootstrap_discarded_when_two_confirms() {
+        let bars: Vec<KlineBar> = (0..10)
+            .map(|i| bar(i, &format!("2024/01/01 09:{i:02}"), 0))
+            .collect();
+        let confirms = vec![
+            BiConfirmSignal {
+                x: 2,
+                fx: "BOTTOM".to_string(),
+                value: 1,
+                fractal_x1: 1,
+                fractal_x2: 1,
+            },
+            BiConfirmSignal {
+                x: 5,
+                fx: "TOP".to_string(),
+                value: -1,
+                fractal_x1: 4,
+                fractal_x2: 4,
+            },
+        ];
+        let segs = build_bi_segments(&bars, &confirms);
+        assert_eq!(segs.len(), 1);
+        assert!(!segs[0].is_bootstrap);
     }
 
     #[test]
@@ -752,6 +926,9 @@ mod tests {
 
     #[test]
     fn bi_segments_link_opposite_fractals() {
+        let bars: Vec<KlineBar> = (0..12)
+            .map(|i| bar(i, &format!("2024/01/01 09:{i:02}"), 0))
+            .collect();
         let confirms = vec![
             BiConfirmSignal {
                 x: 2,
@@ -775,8 +952,9 @@ mod tests {
                 fractal_x2: 7,
             },
         ];
-        let segs = build_bi_segments(&confirms);
+        let segs = build_bi_segments(&bars, &confirms);
         assert_eq!(segs.len(), 2);
+        assert!(!segs[0].is_bootstrap);
         assert_eq!(segs[0].dir, 1);
         assert_eq!(segs[1].dir, -1);
         assert_eq!(segs[0].next_idx, Some(1));
@@ -813,6 +991,7 @@ mod tests {
             end_fractal_x2: 2,
             prev_idx: None,
             next_idx: None,
+            is_bootstrap: false,
         }];
         let vb = build_bi_virtual_bars(&bars, &segs);
         assert_eq!(vb.len(), 1);

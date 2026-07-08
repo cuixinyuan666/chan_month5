@@ -756,7 +756,7 @@ pub fn build_kline_combine_bundle(bars: &[KlineBar]) -> KlineCombineBundle {
         })
         .collect::<Vec<KlineCombineFrame>>();
 
-    let bi_segments = build_bi_segments(&bi_confirms);
+    let bi_segments = build_bi_segments(bars, &bi_confirms);
     let bi_virtual_bars = build_bi_virtual_bars(bars, &bi_segments);
     let bi_combine_frames = build_bi_combine_frames(bars, &bi_virtual_bars);
     let mut bar_features = build_bar_crosshair_features_stepwise(bars);

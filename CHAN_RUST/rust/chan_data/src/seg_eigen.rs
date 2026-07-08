@@ -171,6 +171,32 @@ fn hl_unit_from_vb(bars: &[KlineBar], vb: &crate::feature::BiVirtualBar) -> HlMe
     }
 }
 
+/// 末次笔确认之后、下一笔尚未成段时的进行中笔 K 单元。
+fn provisional_from_last_confirm_unit(
+    bars: &[KlineBar],
+    bi_confirms: &[BiConfirmSignal],
+    bar_x: usize,
+    peak_idx: i32,
+) -> Option<(HlMergeUnit, i32)> {
+    let last = bi_confirms
+        .iter()
+        .filter(|c| c.fx == "TOP" || c.fx == "BOTTOM")
+        .last()?;
+    if last.x > bar_x as i32 {
+        return None;
+    }
+    let dir = if last.fx == "BOTTOM" { 1 } else { -1 };
+    let vb = bi_virtual_bar_provisional(
+        bars,
+        last.fractal_x1,
+        last.fractal_x2,
+        bar_x,
+        dir,
+        peak_idx,
+    )?;
+    Some((hl_unit_from_vb(bars, &vb), peak_idx))
+}
+
 /// 当步是否存在进行中笔，并构造其临时笔 K 单元。
 fn provisional_unit_at(
     bars: &[KlineBar],
@@ -182,7 +208,7 @@ fn provisional_unit_at(
     if next_bi < bi_segments.len() {
         let seg = &bi_segments[next_bi];
         let bx = bar_x as i32;
-        if seg.begin_confirm_x <= bx && bx < seg.end_confirm_x {
+        if !seg.is_bootstrap && seg.begin_confirm_x <= bx && bx < seg.end_confirm_x {
             let vb = bi_virtual_bar_provisional(
                 bars,
                 seg.begin_fractal_x1,
@@ -195,26 +221,7 @@ fn provisional_unit_at(
         }
         return None;
     }
-    if next_bi > 0 {
-        return None;
-    }
-    let last = bi_confirms
-        .iter()
-        .filter(|c| c.fx == "TOP" || c.fx == "BOTTOM")
-        .last()?;
-    if last.x >= bar_x as i32 {
-        return None;
-    }
-    let dir = if last.fx == "BOTTOM" { 1 } else { -1 };
-    let vb = bi_virtual_bar_provisional(
-        bars,
-        last.fractal_x1,
-        last.fractal_x2,
-        bar_x,
-        dir,
-        0,
-    )?;
-    Some((hl_unit_from_vb(bars, &vb), 0))
+    provisional_from_last_confirm_unit(bars, bi_confirms, bar_x, bi_segments.len() as i32)
 }
 
 fn try_emit_seg_confirm(
@@ -394,6 +401,7 @@ mod tests {
                 end_fractal_x2: 4,
                 prev_idx: None,
                 next_idx: Some(1),
+                is_bootstrap: false,
             },
             BiSegment {
                 idx: 1,
@@ -406,6 +414,7 @@ mod tests {
                 end_fractal_x2: 8,
                 prev_idx: Some(0),
                 next_idx: Some(2),
+                is_bootstrap: false,
             },
             BiSegment {
                 idx: 2,
@@ -418,6 +427,7 @@ mod tests {
                 end_fractal_x2: 13,
                 prev_idx: Some(1),
                 next_idx: None,
+                is_bootstrap: false,
             },
         ];
         let bundle = build_seg_analysis(&bars, &bi_segs, &[]);
@@ -449,6 +459,7 @@ mod tests {
             end_fractal_x2: 7,
             prev_idx: None,
             next_idx: None,
+            is_bootstrap: false,
         }];
         let bi_confirms = vec![
             BiConfirmSignal {

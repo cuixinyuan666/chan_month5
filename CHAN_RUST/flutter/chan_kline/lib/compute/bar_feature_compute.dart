@@ -314,102 +314,108 @@ String _weekdayFromBar(KlineBar bar) {
 
 
 
-/// Dart 回退：与 Rust `build_bi_segments` 同口径。
+/// 首笔确认引导：在 [0..=首次分型极点K] 内取反向极值 K。
+int? bootstrapReverseExtremeBarIdx(List<KlineBar> bars, BiConfirmSignal endConf) {
+  final endI = fractalExtremeBarIdx(bars, endConf);
+  if (endI == null || bars.isEmpty || endI >= bars.length) return null;
+  if (endConf.fx == 'TOP') {
+    var trough = double.infinity;
+    for (var j = 0; j <= endI; j++) {
+      trough = math.min(trough, bars[j].low);
+    }
+    for (var j = 0; j <= endI; j++) {
+      if ((bars[j].low - trough).abs() < 1e-12) return j;
+    }
+  } else if (endConf.fx == 'BOTTOM') {
+    var peak = double.negativeInfinity;
+    for (var j = 0; j <= endI; j++) {
+      peak = math.max(peak, bars[j].high);
+    }
+    for (var j = 0; j <= endI; j++) {
+      if ((bars[j].high - peak).abs() < 1e-12) return j;
+    }
+  }
+  return null;
+}
 
-List<BiSegment> computeBiSegments(List<BiConfirmSignal> confirms) {
-
-  final valid = confirms.where((c) => c.fx == 'TOP' || c.fx == 'BOTTOM').toList();
-
+List<BiSegment> _buildBiSegmentsFromPairs(List<BiConfirmSignal> valid) {
   if (valid.length < 2) return const [];
-
-
-
   final segments = <BiSegment>[];
-
   for (var i = 1; i < valid.length; i++) {
-
     final prev = valid[i - 1];
-
     final curr = valid[i];
-
     if (prev.fx == curr.fx) continue;
-
     final dir = prev.fx == 'BOTTOM' && curr.fx == 'TOP'
-
         ? 1
-
         : prev.fx == 'TOP' && curr.fx == 'BOTTOM'
-
             ? -1
-
             : 0;
-
     if (dir == 0) continue;
-
     final idx = segments.length;
-
     segments.add(
-
       BiSegment(
-
         idx: idx,
-
         dir: dir,
-
         beginConfirmX: prev.x,
-
         endConfirmX: curr.x,
-
         beginFractalX1: prev.fractalX1,
-
         beginFractalX2: prev.fractalX2,
-
         endFractalX1: curr.fractalX1,
-
         endFractalX2: curr.fractalX2,
-
         prevIdx: idx > 0 ? idx - 1 : null,
-
         nextIdx: null,
-
       ),
-
     );
-
   }
-
   for (var i = 0; i < segments.length - 1; i++) {
-
     final s = segments[i];
-
     segments[i] = BiSegment(
-
       idx: s.idx,
-
       dir: s.dir,
-
       beginConfirmX: s.beginConfirmX,
-
       endConfirmX: s.endConfirmX,
-
       beginFractalX1: s.beginFractalX1,
-
       beginFractalX2: s.beginFractalX2,
-
       endFractalX1: s.endFractalX1,
-
       endFractalX2: s.endFractalX2,
-
       prevIdx: s.prevIdx,
-
       nextIdx: i + 1,
-
+      isBootstrap: s.isBootstrap,
     );
-
   }
-
   return segments;
+}
 
+/// Dart 回退：与 Rust `build_bi_segments` 同口径。
+List<BiSegment> computeBiSegments(
+  List<KlineBar> bars,
+  List<BiConfirmSignal> confirms,
+) {
+  final valid = confirms.where((c) => c.fx == 'TOP' || c.fx == 'BOTTOM').toList();
+  if (valid.length >= 2) {
+    return _buildBiSegmentsFromPairs(valid);
+  }
+  if (valid.length == 1 && bars.isNotEmpty) {
+    final first = valid.first;
+    final virtualK = bootstrapReverseExtremeBarIdx(bars, first);
+    if (virtualK != null) {
+      final dir = first.fx == 'TOP' ? 1 : -1;
+      return [
+        BiSegment(
+          idx: 0,
+          dir: dir,
+          beginConfirmX: first.x,
+          endConfirmX: first.x,
+          beginFractalX1: virtualK,
+          beginFractalX2: virtualK,
+          endFractalX1: first.fractalX1,
+          endFractalX2: first.fractalX2,
+          isBootstrap: true,
+        ),
+      ];
+    }
+  }
+  return const [];
 }
 
 

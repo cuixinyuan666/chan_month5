@@ -194,7 +194,7 @@ class ChanBridge {
     );
     final segments = biSegments.isNotEmpty
         ? biSegments
-        : computeBiSegments(signals);
+        : computeBiSegments(bars, signals);
     final featuresWithBi = enrichBiCrosshairFields(
       bars,
       features,

@@ -270,6 +270,28 @@ double _biVolume(List<KlineBar> bars, int x1, int x2) {
   return vol;
 }
 
+BiVirtualBar? _provisionalFromLastConfirm(
+  List<KlineBar> bars,
+  List<BiConfirmSignal> biConfirms,
+  int barX,
+  int segIdx,
+) {
+  BiConfirmSignal? last;
+  for (final c in biConfirms) {
+    if (c.fx == 'TOP' || c.fx == 'BOTTOM') last = c;
+  }
+  if (last == null || last.x > barX) return null;
+  final dir = last.fx == 'BOTTOM' ? 1 : -1;
+  return computeBiVirtualBarProvisional(
+    bars,
+    last.fractalX1,
+    last.fractalX2,
+    barX,
+    dir,
+    segIdx,
+  );
+}
+
 BiVirtualBar? _provisionalBiAt(
   List<KlineBar> bars,
   List<BiSegment> biSegments,
@@ -279,8 +301,9 @@ BiVirtualBar? _provisionalBiAt(
 ) {
   if (nextBi < biSegments.length) {
     final seg = biSegments[nextBi];
-    final bx = barX;
-    if (seg.beginConfirmX <= bx && bx < seg.endConfirmX) {
+    if (!seg.isBootstrap &&
+        seg.beginConfirmX <= barX &&
+        barX < seg.endConfirmX) {
       return computeBiVirtualBarProvisional(
         bars,
         seg.beginFractalX1,
@@ -292,20 +315,11 @@ BiVirtualBar? _provisionalBiAt(
     }
     return null;
   }
-  if (nextBi > 0) return null;
-  BiConfirmSignal? last;
-  for (final c in biConfirms) {
-    if (c.fx == 'TOP' || c.fx == 'BOTTOM') last = c;
-  }
-  if (last == null || last.x >= barX) return null;
-  final dir = last.fx == 'BOTTOM' ? 1 : -1;
-  return computeBiVirtualBarProvisional(
+  return _provisionalFromLastConfirm(
     bars,
-    last.fractalX1,
-    last.fractalX2,
+    biConfirms,
     barX,
-    dir,
-    0,
+    biSegments.length,
   );
 }
 

@@ -765,51 +765,111 @@ class _KlineCompositePainter extends CustomPainter {
     double plotH,
     double slotW,
   ) {
-    if (biSegments.isEmpty) return;
+    if (biSegments.isEmpty && biConfirmSignals.isEmpty) return;
 
     final paint = Paint()
       ..strokeWidth = 1.6
       ..style = PaintingStyle.stroke;
 
     for (final seg in biSegments) {
-      if (seg.endConfirmX < viewport.viewXMin - 1 ||
-          seg.beginConfirmX > viewport.viewXMax + 1) {
+      final xMin = [
+        seg.beginFractalX1,
+        seg.beginFractalX2,
+        seg.endFractalX1,
+        seg.endFractalX2,
+      ].reduce(math.min);
+      final xMax = [
+        seg.beginFractalX1,
+        seg.beginFractalX2,
+        seg.endFractalX1,
+        seg.endFractalX2,
+      ].reduce(math.max);
+      if (xMax < viewport.viewXMin - 1 || xMin > viewport.viewXMax + 1) {
         continue;
       }
-      final beginConf = _biConfirmAt(
-        seg.beginConfirmX,
-        seg.beginFractalX1,
-        seg.beginFractalX2,
-      );
-      final endConf = _biConfirmAt(
-        seg.endConfirmX,
-        seg.endFractalX1,
-        seg.endFractalX2,
-      );
-      final (beginX, beginPrice) = _biExtremeAnchorPoint(
-        beginConf,
-        seg.beginFractalX1,
-        seg.beginFractalX2,
-        w,
-        slotW,
-        fallbackWantHigh: seg.dir < 0,
-      );
-      final (endX, endPrice) = _biExtremeAnchorPoint(
-        endConf,
-        seg.endFractalX1,
-        seg.endFractalX2,
-        w,
-        slotW,
-        fallbackWantHigh: seg.dir > 0,
-      );
+      final (beginX, beginPrice) =
+          _biSegmentEndpoint(seg, isBegin: true, w: w, slotW: slotW);
+      final (endX, endPrice) =
+          _biSegmentEndpoint(seg, isBegin: false, w: w, slotW: slotW);
       final y1 = priceRange.yOf(beginPrice, plotTop, plotH);
       final y2 = priceRange.yOf(endPrice, plotTop, plotH);
-      paint.color = ChartLineColors.bi;
+      paint.color = seg.isBootstrap
+          ? ChartLineColors.bi.withValues(alpha: 0.55)
+          : ChartLineColors.bi;
       canvas.drawLine(Offset(beginX, y1), Offset(endX, y2), paint);
     }
+
+    _drawBuildingBiLine(canvas, w, plotTop, plotH, slotW);
   }
 
-  /// 按确认步 + 分型框匹配笔确认信号。
+  /// 笔段端点：引导笔起点走分型框极值；其余严格匹配笔确认信号。
+  (double, double) _biSegmentEndpoint(
+    BiSegment seg, {
+    required bool isBegin,
+    required double w,
+    required double slotW,
+  }) {
+    final fx1 = isBegin ? seg.beginFractalX1 : seg.endFractalX1;
+    final fx2 = isBegin ? seg.beginFractalX2 : seg.endFractalX2;
+    final wantHigh = isBegin ? seg.dir < 0 : seg.dir > 0;
+
+    if (isBegin && seg.isBootstrap) {
+      return _fractalBoxExtremeAnchor(fx1, fx2, wantHigh, w, slotW);
+    }
+
+    final confirmX = isBegin ? seg.beginConfirmX : seg.endConfirmX;
+    final conf = _biConfirmAt(confirmX, fx1, fx2);
+    if (conf != null) {
+      return _biExtremeAnchorPoint(
+        conf,
+        fx1,
+        fx2,
+        w,
+        slotW,
+        fallbackWantHigh: wantHigh,
+      );
+    }
+    return _fractalBoxExtremeAnchor(fx1, fx2, wantHigh, w, slotW);
+  }
+
+  /// 分型框内极点 K 锚点（无笔确认信号时用，如引导笔虚拟起点）。
+  (double, double) _fractalBoxExtremeAnchor(
+    int fractalX1,
+    int fractalX2,
+    bool wantHigh,
+    double w,
+    double slotW,
+  ) {
+    final lo = fractalX1 < fractalX2 ? fractalX1 : fractalX2;
+    final hi = fractalX1 > fractalX2 ? fractalX1 : fractalX2;
+    if (lo < 0 || hi >= bars.length || lo > hi) {
+      return (
+        _fractalCenterX(fractalX1, fractalX2, w, slotW),
+        _combineFramePriceAt(fractalX1, wantHigh),
+      );
+    }
+    var extremeIdx = lo;
+    if (wantHigh) {
+      var peak = double.negativeInfinity;
+      for (var j = lo; j <= hi; j++) {
+        if (bars[j].high > peak) {
+          peak = bars[j].high;
+          extremeIdx = j;
+        }
+      }
+      return (_barCenterX(extremeIdx, w, slotW), bars[extremeIdx].high);
+    }
+    var trough = double.infinity;
+    for (var j = lo; j <= hi; j++) {
+      if (bars[j].low < trough) {
+        trough = bars[j].low;
+        extremeIdx = j;
+      }
+    }
+    return (_barCenterX(extremeIdx, w, slotW), bars[extremeIdx].low);
+  }
+
+  /// 按确认步 + 分型框严格匹配笔确认信号（禁止仅按 x 退化匹配，避免引导笔起终点重合）。
   BiConfirmSignal? _biConfirmAt(int confirmX, int fractalX1, int fractalX2) {
     for (final c in biConfirmSignals) {
       if (c.x == confirmX &&
@@ -817,9 +877,6 @@ class _KlineCompositePainter extends CustomPainter {
           c.fractalX2 == fractalX2) {
         return c;
       }
-    }
-    for (final c in biConfirmSignals) {
-      if (c.x == confirmX) return c;
     }
     return null;
   }
@@ -944,6 +1001,65 @@ class _KlineCompositePainter extends CustomPainter {
     final paint = Paint()
       ..color = ChartLineColors.seg.withValues(alpha: 0.65)
       ..strokeWidth = 2.0
+      ..style = PaintingStyle.stroke;
+
+    _drawDashedLine(canvas, Offset(beginX, y1), Offset(endX, y2), paint);
+  }
+
+  /// 构建中笔：末次笔确认分型极点 → 当前末根 K 方向极值（虚线，展示专用）。
+  void _drawBuildingBiLine(
+    Canvas canvas,
+    double w,
+    double plotTop,
+    double plotH,
+    double slotW,
+  ) {
+    if (bars.isEmpty || biConfirmSignals.isEmpty) return;
+
+    BiConfirmSignal? last;
+    for (final c in biConfirmSignals) {
+      if (c.fx == 'TOP' || c.fx == 'BOTTOM') last = c;
+    }
+    if (last == null) return;
+
+    final tail = bars.last;
+    if (last.x > tail.idx) return;
+
+    final buildingDir = last.fx == 'BOTTOM' ? 1 : -1;
+    final extremeIdx = fractalExtremeBarIdx(bars, last);
+    if (extremeIdx == null ||
+        extremeIdx < 0 ||
+        extremeIdx >= bars.length) {
+      return;
+    }
+
+    final beginX = _barCenterX(extremeIdx, w, slotW);
+    final beginBar = bars[extremeIdx];
+    final beginPrice = last.fx == 'TOP' ? beginBar.high : beginBar.low;
+
+    final endX = _barCenterX(tail.idx, w, slotW);
+    var endPrice = buildingDir > 0 ? tail.high : tail.low;
+    for (final b in bars) {
+      if (b.idx <= last.x || b.idx > tail.idx) continue;
+      if (buildingDir > 0) {
+        endPrice = math.max(endPrice, b.high);
+      } else {
+        endPrice = math.min(endPrice, b.low);
+      }
+    }
+
+    final geomMin = math.min(extremeIdx, tail.idx);
+    final geomMax = math.max(extremeIdx, tail.idx);
+    if (geomMax < viewport.viewXMin - 1 ||
+        geomMin > viewport.viewXMax + 1) {
+      return;
+    }
+
+    final y1 = priceRange.yOf(beginPrice, plotTop, plotH);
+    final y2 = priceRange.yOf(endPrice, plotTop, plotH);
+    final paint = Paint()
+      ..color = ChartLineColors.bi.withValues(alpha: 0.45)
+      ..strokeWidth = 1.4
       ..style = PaintingStyle.stroke;
 
     _drawDashedLine(canvas, Offset(beginX, y1), Offset(endX, y2), paint);

@@ -243,6 +243,31 @@ _HlMergeUnit _unitFromVb(BiVirtualBar vb) => _HlMergeUnit(
       low: vb.low,
     );
 
+({_HlMergeUnit unit, int peakIdx})? _provisionalFromLastConfirm(
+  List<KlineBar> bars,
+  List<BiConfirmSignal> biConfirms,
+  int barX,
+  int peakIdx,
+) {
+  final valid = biConfirms
+      .where((c) => c.fx == 'TOP' || c.fx == 'BOTTOM')
+      .toList();
+  if (valid.isEmpty) return null;
+  final last = valid.last;
+  if (last.x > barX) return null;
+  final dir = last.fx == 'BOTTOM' ? 1 : -1;
+  final vb = computeBiVirtualBarProvisional(
+    bars,
+    last.fractalX1,
+    last.fractalX2,
+    barX,
+    dir,
+    peakIdx,
+  );
+  if (vb == null) return null;
+  return (unit: _unitFromVb(vb), peakIdx: peakIdx);
+}
+
 /// 当步进行中笔 K 单元（方案 A）。
 ({_HlMergeUnit unit, int peakIdx})? _provisionalUnitAt(
   List<KlineBar> bars,
@@ -253,7 +278,9 @@ _HlMergeUnit _unitFromVb(BiVirtualBar vb) => _HlMergeUnit(
 ) {
   if (nextBi < biSegments.length) {
     final seg = biSegments[nextBi];
-    if (seg.beginConfirmX <= barX && barX < seg.endConfirmX) {
+    if (!seg.isBootstrap &&
+        seg.beginConfirmX <= barX &&
+        barX < seg.endConfirmX) {
       final vb = computeBiVirtualBarProvisional(
         bars,
         seg.beginFractalX1,
@@ -267,24 +294,12 @@ _HlMergeUnit _unitFromVb(BiVirtualBar vb) => _HlMergeUnit(
     }
     return null;
   }
-  if (nextBi > 0) return null;
-  final valid = biConfirms
-      .where((c) => c.fx == 'TOP' || c.fx == 'BOTTOM')
-      .toList();
-  if (valid.isEmpty) return null;
-  final last = valid.last;
-  if (last.x >= barX) return null;
-  final dir = last.fx == 'BOTTOM' ? 1 : -1;
-  final vb = computeBiVirtualBarProvisional(
+  return _provisionalFromLastConfirm(
     bars,
-    last.fractalX1,
-    last.fractalX2,
+    biConfirms,
     barX,
-    dir,
-    0,
+    biSegments.length,
   );
-  if (vb == null) return null;
-  return (unit: _unitFromVb(vb), peakIdx: 0);
 }
 
 int _tryEmitSegConfirm(

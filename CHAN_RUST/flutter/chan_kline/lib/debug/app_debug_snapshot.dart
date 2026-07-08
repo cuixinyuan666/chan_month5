@@ -55,7 +55,8 @@ class AppDebugSnapshot {
       '合并fx/合并数：十字线应走 bar_features 逐步口径；主图 combine frame 的 fx/count 仅展示末态。',
     );
     buf.writeln(
-      '主图笔/段连线：展示用，可含未来修正，不参与 ML/回测。',
+      '主图笔/段连线：展示用，可含未来修正，不参与 ML/回测。'
+      '引导笔起点=区间极值虚拟锚点；构建中笔=末次笔确认后虚线延伸。',
     );
     buf.writeln();
 
@@ -300,7 +301,7 @@ class AppDebugSnapshot {
     for (final s in tail) {
       buf.writeln(
         'idx=${s.idx} dir=${s.dir} begin=${s.beginConfirmX} end=${s.endConfirmX} '
-        'prev=${s.prevIdx} next=${s.nextIdx}',
+        'bootstrap=${s.isBootstrap} prev=${s.prevIdx} next=${s.nextIdx}',
       );
     }
     buf.writeln();
