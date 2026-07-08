@@ -1,0 +1,17 @@
+[package]
+name = "chan_ffi"
+version = "0.1.0"
+edition = "2021"
+description = "CHAN_RUST Flutter FFI 桥（JSON 字符串交换，避免复杂结构体绑定）"
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+[[bin]]
+name = "chan_compare"
+path = "src/bin/chan_compare.rs"
+
+[dependencies]
+chan_data = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

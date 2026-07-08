@@ -1,0 +1,15 @@
+[package]
+name = "chan_data"
+version = "0.1.0"
+edition = "2021"
+description = "从 a_Data 分笔 txt 聚合 K 线（纯 Rust，与 Python 工程解耦）"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+encoding_rs = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

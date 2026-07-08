@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = ["chan_data", "chan_ffi"]
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+chan_data = { path = "chan_data" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+encoding_rs = "0.8"
+flutter_rust_bridge = "=2.11.1"

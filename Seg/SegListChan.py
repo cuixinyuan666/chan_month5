@@ -42,11 +42,9 @@ class CSegListChan(CSegListComm):
             if bi.is_down() and last_seg_dir != BI_DIR.UP:
                 if up_eigen.add(bi):
                     fx_eigen = up_eigen
-                    self.append_eigen_fx_event(fx_eigen, bi_lst)
             elif bi.is_up() and last_seg_dir != BI_DIR.DOWN:
                 if down_eigen.add(bi):
                     fx_eigen = down_eigen
-                    self.append_eigen_fx_event(fx_eigen, bi_lst)
             if len(self) == 0:  # 尝试确定第一段方向，不要以谁先成为分形来决定，反例：US.EVRG
                 if up_eigen.ele[1] is not None and bi.is_down():
                     last_seg_dir = BI_DIR.DOWN
@@ -72,10 +70,6 @@ class CSegListChan(CSegListComm):
                 self.cal_seg_sure(bi_lst, end_bi_idx+1)
                 return
             self.lst[-1].eigen_fx = fx_eigen
-            evidence_bi = getattr(fx_eigen, "last_evidence_bi", None)
-            if is_true and evidence_bi is not None and evidence_bi.is_sure:
-                # 线段确认当下：特征序列分型已成，证据笔已确认；副图只消费这个事件
-                self.append_sure_event(self.lst[-1], reason="eigen_confirm")
             if is_true:
                 self.cal_seg_sure(bi_lst, end_bi_idx + 1)
         else:

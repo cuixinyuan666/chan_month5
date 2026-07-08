@@ -128,6 +128,7 @@ from Common.CTime import CTime
 from DataAPI.BaoStockAPI import CBaoStock
 from DataAPI.CommonStockAPI import CCommonStockApi
 from Common.func_util import str2float
+from a_replay_core.a_pure_eigen_seg import make_pure_eigen_seg_trackers
 from a_replay_core.a_offline_tick_merge import (
     OfflineTickRow,
     merge_no_bs_offline_ticks,
@@ -4319,6 +4320,7 @@ class ChanStepper:
         self._seg_sure_signal_seen_keys: set[str] = set()
         self._seg_sure_signal_seen_list_id: int = id(self.seg_sure_signal_history)
         self._seg_sure_signal_seen_count: int = 0
+        self._pure_eigen_seg_trackers = make_pure_eigen_seg_trackers()
         self.reset_step_rhythm_state()
         self.chart_lazy_layers = normalize_chart_lazy_layers(None)
         self._segseg_bsp_cache_key: Optional[tuple[Any, ...]] = None
@@ -4547,6 +4549,7 @@ class ChanStepper:
         self._seg_sure_signal_seen_keys = set()
         self._seg_sure_signal_seen_list_id = id(self.seg_sure_signal_history)
         self._seg_sure_signal_seen_count = 0
+        self._pure_eigen_seg_trackers = make_pure_eigen_seg_trackers()
         self._chart_payload_cache = {}
 
     def reset_structure_signal_history(self) -> None:
@@ -4591,10 +4594,25 @@ class ChanStepper:
     @staticmethod
     def _seg_sure_signal_key(item: dict[str, Any]) -> str:
         return (
-            f'{str(item.get("level", ""))}|{int(item.get("seg_idx", -1))}|'
-            f'{int(item.get("begin_x", -1))}|{int(item.get("anchor_x", -1))}|'
-            f'{int(item.get("value", 0))}'
+            f'{str(item.get("level", ""))}|{int(item.get("peak_bi_idx", -1))}|'
+            f'{int(item.get("evidence_bi_idx", -1))}|{int(item.get("evidence_x", -1))}|'
+            f'{int(item.get("begin_x", -1))}|{int(item.get("value", 0))}'
         )
+
+    def _pure_eigen_line_list_for_level(self, level: str) -> list[Any]:
+        if self.chan is None:
+            return []
+        try:
+            kl_list = self.chan[0]
+        except Exception:
+            return []
+        if level == "seg":
+            bi_list = getattr(kl_list, "bi_list", None)
+            return list(bi_list) if bi_list is not None else []
+        if level == "segseg":
+            seg_list = getattr(kl_list, "seg_list", None)
+            return list(seg_list) if seg_list is not None else []
+        return []
 
     def _direct_line_list_for_level(self, level: str) -> Any:
         if self.chan is None:
@@ -4611,23 +4629,8 @@ class ChanStepper:
             return getattr(kl_list, "segseg_list", [])
         return []
 
-    def _native_seg_sure_event_sources(self) -> list[tuple[str, Any]]:
-        try:
-            kl_list = self.chan[0]
-        except Exception:
-            return []
-        return [
-            ("seg", getattr(getattr(kl_list, "seg_list", None), "sure_event_lst", [])),
-            ("segseg", getattr(getattr(kl_list, "segseg_list", None), "sure_event_lst", [])),
-        ]
-
-    def _clear_native_seg_sure_events(self) -> None:
-        for _, event_lst in self._native_seg_sure_event_sources():
-            if hasattr(event_lst, "clear"):
-                event_lst.clear()
-
     def record_seg_sure_signals_for_current_step(self, bundle: Optional[ChanStructureBundle] = None, latest_klu: Any = None) -> None:
-        """逐K当下：只消费纯特征序列分型事件，当前K冻结，未来不回写。"""
+        """逐K当下：纯特征序列分型+有效突破；第三元素笔内破E低/高即可确认，不等整笔确认。"""
         if self.data_feed_mode != "step" or self.chan is None:
             return
         display_x = self._current_display_x_for_signal(latest_klu)
@@ -4635,11 +4638,11 @@ class ChanStepper:
             return
         seen_keys = self._seg_sure_signal_seen_keys_current()
         added = False
-        for level, event_lst in self._native_seg_sure_event_sources():
-            events = list(event_lst or [])
-            if hasattr(event_lst, "clear"):
-                event_lst.clear()
-            for event in events:
+        for level, tracker in (self._pure_eigen_seg_trackers or {}).items():
+            lines = self._pure_eigen_line_list_for_level(level)
+            if not lines:
+                continue
+            for event in tracker.feed_new_lines(lines, latest_klu):
                 if not isinstance(event, dict) or str(event.get("event_type", "")) != "pure_eigen_fx":
                     continue
                 direction = event.get("dir")
@@ -4648,15 +4651,17 @@ class ChanStepper:
                 try:
                     y1 = float(event.get("y1"))
                     y2 = float(event.get("y2"))
+                    evidence_x = int(event.get("evidence_x", -1))
+                    signal_x = evidence_x if evidence_x >= 0 else int(display_x)
                     item = {
                         "level": str(level),
                         "level_label": dynamic_level_label(level),
                         "seg_idx": int(event.get("idx", -1)),
-                        "x": int(display_x),
-                        "detected_x": int(display_x),
+                        "x": int(signal_x),
+                        "detected_x": int(signal_x),
                         "anchor_x": int(event.get("anchor_x", -1)),
                         "begin_x": int(event.get("begin_x", -1)),
-                        "evidence_x": int(event.get("evidence_x", -1)),
+                        "evidence_x": int(evidence_x),
                         "peak_bi_idx": int(event.get("peak_bi_idx", -1)),
                         "evidence_bi_idx": int(event.get("evidence_bi_idx", -1)),
                         "value": seg_sure_signal_value(level, direction),
@@ -6117,8 +6122,6 @@ class ChanStepper:
             bundle = None
             if need_seg_signal:
                 self.record_seg_sure_signals_for_current_step(bundle, latest_klu)
-            else:
-                self._clear_native_seg_sure_events()
             if need_ratio_signal:
                 t0 = time.perf_counter()
                 ratio_metrics = self.calc_adjacent_bi_ratio_metrics_for_current_step(bundle, latest_klu)
@@ -18512,7 +18515,7 @@ function buildCurrentConfigSummaryText() {
     "【副图指标】",
     formatSubIndicatorSlotSummary()
       + (isBiSureIndicatorActive() ? "；Bi确认=逐K首次确认当步柱，未来不回写" : "")
-      + (isSegSureIndicatorActive() ? "；段确认=纯特征序列顶/底分型检测步柱，保留证据笔位置" : "")
+      + (isSegSureIndicatorActive() ? "；段确认=特征序列分型+破E低/高，支持笔内K当下确认" : "")
       + (isRatioIndicatorActive() ? "；相邻笔比例=上一笔确认后启动，不区分回调/趋势" : "")
       + (isStepRhythmIndicatorActive() ? "；节奏线=副图normal公式逐K输出，段确认K截止不回写" : ""),
   ];

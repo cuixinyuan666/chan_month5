@@ -15,74 +15,12 @@ SUB_LINE_TYPE = TypeVar('SUB_LINE_TYPE', CBi, "CSeg")
 class CSegListComm(Generic[SUB_LINE_TYPE]):
     def __init__(self, seg_config=CSegConfig(), lv=SEG_TYPE.BI):
         self.lst: List[CSeg[SUB_LINE_TYPE]] = []
-        # 原生线段确认事件：只记录 SegList 自己确认出的线段，副图不再二次解释
-        self.sure_event_lst = []
         self.lv = lv
         self.do_init()
         self.config = seg_config
 
     def do_init(self):
         self.lst = []
-
-    def append_sure_event(self, line, reason="native_sure"):
-        # 原生确认事件去重：同一段同一端点只抛一次
-        key = (
-            getattr(line, "idx", -1),
-            getattr(getattr(line, "start_bi", None), "idx", -1),
-            getattr(getattr(line, "end_bi", None), "idx", -1),
-            getattr(line, "dir", None),
-        )
-        for event in reversed(self.sure_event_lst):
-            if event.get("key") == key:
-                if reason == "eigen_confirm":
-                    event["reason"] = reason
-                event["line_is_sure"] = bool(getattr(line, "is_sure", False))
-                return
-        self.sure_event_lst.append({
-            "key": key,
-            "line": line,
-            "idx": getattr(line, "idx", -1),
-            "lv": self.lv,
-            "reason": reason,
-            "line_is_sure": bool(getattr(line, "is_sure", False)),
-        })
-
-    def append_eigen_fx_event(self, fx_eigen, bi_lst, reason="pure_eigen_fx"):
-        # 纯特征序列：add 返回 True 当下就抛事件，不等后续线段严格确认
-        try:
-            peak_bi_idx = int(fx_eigen.GetPeakBiIdx())
-            peak_bi = bi_lst[peak_bi_idx]
-            evidence_bi = getattr(fx_eigen, "last_evidence_bi", None)
-            fx_ele = fx_eigen.ele[1]
-            fx_type = getattr(fx_ele, "fx", None)
-            direction = getattr(fx_eigen, "dir", None)
-            begin_bi_idx = 0 if len(self) == 0 else self[-1].end_bi.idx + 1
-            begin_bi = bi_lst[begin_bi_idx]
-            evidence_idx = int(getattr(evidence_bi, "idx", -1)) if evidence_bi is not None else -1
-            evidence_x = int(evidence_bi.get_end_klu().idx) if evidence_bi is not None else int(peak_bi.get_end_klu().idx)
-            fx_name = getattr(fx_type, "name", str(fx_type))
-            key = ("pure_eigen_fx", self.lv, direction, fx_name, begin_bi_idx, peak_bi_idx, evidence_idx)
-        except Exception:
-            return
-        for event in reversed(self.sure_event_lst):
-            if event.get("key") == key:
-                return
-        self.sure_event_lst.append({
-            "key": key,
-            "event_type": "pure_eigen_fx",
-            "idx": peak_bi_idx,
-            "lv": self.lv,
-            "reason": reason,
-            "dir": direction,
-            "fx_type": fx_name,
-            "peak_bi_idx": peak_bi_idx,
-            "evidence_bi_idx": evidence_idx,
-            "begin_x": int(begin_bi.get_begin_klu().idx),
-            "anchor_x": int(peak_bi.get_end_klu().idx),
-            "evidence_x": evidence_x,
-            "y1": float(begin_bi.get_begin_val()),
-            "y2": float(peak_bi.get_end_val()),
-        })
 
     def __iter__(self):
         yield from self.lst
@@ -198,16 +136,12 @@ class CSegListComm(Generic[SUB_LINE_TYPE]):
         bi1_idx = 0 if len(self) == 0 else self[-1].end_bi.idx+1
         bi1 = bi_lst[bi1_idx]
         bi2 = bi_lst[end_bi_idx]
-        seg = CSeg(len(self.lst), bi1, bi2, is_sure=is_sure, seg_dir=seg_dir, reason=reason)
-        self.lst.append(seg)
+        self.lst.append(CSeg(len(self.lst), bi1, bi2, is_sure=is_sure, seg_dir=seg_dir, reason=reason))
 
         if len(self.lst) >= 2:
             self.lst[-2].next = self.lst[-1]
             self.lst[-1].pre = self.lst[-2]
         self.lst[-1].update_bi_list(bi_lst, bi1_idx, end_bi_idx)
-        if self.lst[-1].is_sure:
-            # 事件钩子：确认发生在原生 add_new_seg，不在副图层补判
-            self.append_sure_event(self.lst[-1], reason=reason)
 
     def add_new_seg(self, bi_lst: CBiList, end_bi_idx: int, is_sure=True, seg_dir=None, split_first_seg=True, reason="normal"):
         try:
