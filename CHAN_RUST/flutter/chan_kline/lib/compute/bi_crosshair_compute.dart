@@ -7,6 +7,7 @@ import '../models/bi_virtual_bar.dart';
 import '../models/kline_bar.dart';
 import 'bi_virtual_bar_compute.dart';
 import 'bi_virtual_bar_provisional_compute.dart';
+import 'default_bi_compute.dart';
 
 class _HlMergeUnit {
   const _HlMergeUnit({
@@ -337,6 +338,19 @@ BiVirtualBar? _confirmedBiAt(
   return null;
 }
 
+BiVirtualBar? _segmentVbEndedAtBar(
+  List<KlineBar> bars,
+  List<BiSegment> biSegments,
+  int barX,
+) {
+  for (final seg in biSegments) {
+    if (seg.endConfirmX == barX) {
+      return computeBiVirtualBars(bars, [seg]).firstOrNull;
+    }
+  }
+  return null;
+}
+
 BiVirtualBar? _activeBiAt(
   List<KlineBar> bars,
   List<BiSegment> biSegments,
@@ -344,7 +358,8 @@ BiVirtualBar? _activeBiAt(
   int barX,
   int nextBi,
 ) {
-  return _provisionalBiAt(bars, biSegments, biConfirms, barX, nextBi) ??
+  return _segmentVbEndedAtBar(bars, biSegments, barX) ??
+      _provisionalBiAt(bars, biSegments, biConfirms, barX, nextBi) ??
       _confirmedBiAt(bars, biSegments, barX);
 }
 
@@ -392,6 +407,7 @@ List<BarCrosshairFeature> enrichBiCrosshairFields(
   List<BarCrosshairFeature> features,
   List<BiSegment> biSegments,
   List<BiConfirmSignal> biConfirms,
+  String defaultBiPolicy,
 ) {
   if (features.isEmpty || bars.isEmpty) return features;
   final mergeState = _HlCombineStepState();
@@ -408,7 +424,10 @@ List<BarCrosshairFeature> enrichBiCrosshairFields(
       nextBi++;
     }
 
-    final active = _activeBiAt(bars, biSegments, biConfirms, barX, nextBi);
+    var active = _activeBiAt(bars, biSegments, biConfirms, barX, nextBi);
+    if (active == null && defaultBiPolicy == 'pending') {
+      active = buildPreConfirmDefaultBi(bars, barX);
+    }
     final snapState = mergeState.clone();
     final prov = _provisionalBiAt(bars, biSegments, biConfirms, barX, nextBi);
     if (prov != null) {

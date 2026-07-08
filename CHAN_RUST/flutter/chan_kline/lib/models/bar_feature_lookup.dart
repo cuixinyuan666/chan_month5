@@ -369,7 +369,7 @@ class BarFeatureLookup {
 
 
 
-  /// 笔 K 十字线行（与 ML 同源：barFeatures 逐步冻结 bi_*）。
+  /// 笔 K 十字线行（与 ML 同源：barFeatures 逐步冻结 bi_*；首笔确认前占位）。
 
   List<String> crosshairBiLines(int idx) {
 
@@ -379,7 +379,21 @@ class BarFeatureLookup {
 
     final biIdx = row['bi_idx'];
 
-    if (biIdx == null) return const [];
+    if (biIdx == null) {
+
+      return const [
+
+        '笔K线[序号]：首笔确认前',
+
+        '笔K线[合并内序]：—',
+
+        '笔K线[O/H/L/C/VOL]：—',
+
+        '合并笔K线[H/L]：—',
+
+      ];
+
+    }
 
     String fmt(double v) => v.toStringAsFixed(2);
 
@@ -391,11 +405,15 @@ class BarFeatureLookup {
 
         : (vol as num?)?.toStringAsFixed(2) ?? '0';
 
-    return [
+    final inner = row['bi_merge_inner_seq'] ?? 1;
 
-      '笔K线[序号]：#$biIdx',
+    final mergeCnt = row['bi_merge_count'] ?? 1;
 
-      '笔K线[合并内序]：${row['bi_merge_inner_seq'] ?? 1}',
+    final lines = <String>[
+
+      '笔K线[序号]：#${(biIdx as num).toInt() + 1}',
+
+      '笔K线[合并内序]：$inner/$mergeCnt',
 
       '笔K线[O/H/L/C/VOL]：'
 
@@ -416,6 +434,34 @@ class BarFeatureLookup {
           '${fmt((row['bi_combine_low'] as num?)?.toDouble() ?? 0)}',
 
     ];
+
+    final biFx = row['bi_combine_fx'];
+
+    if (biFx is String && biFx != 'UNKNOWN') {
+
+      lines.add('合并笔K线[分型]：$biFx');
+
+    }
+
+    final biConfirm = row['bi_confirm'];
+
+    if (biConfirm is Map) {
+
+      final v = biConfirm['value'];
+
+      final fx = biConfirm['fx'];
+
+      if (v is num && v != 0 && fx is String) {
+
+        final sign = v > 0 ? '+$v' : '$v';
+
+        lines.add('笔确认当步：$fx $sign（冻结）');
+
+      }
+
+    }
+
+    return lines;
 
   }
 

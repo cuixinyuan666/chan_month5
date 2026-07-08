@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:ffi/ffi.dart';
 
+import '../compute/default_bi_compute.dart';
 import '../compute/bar_feature_compute.dart';
 import '../compute/bi_combine_compute.dart';
 import '../compute/bi_crosshair_compute.dart';
@@ -18,6 +19,9 @@ import '../models/kline_bar.dart';
 import '../models/kline_combine_bundle.dart';
 import '../models/kline_combine_frame.dart';
 import '../models/seg_analysis.dart';
+
+/// 十字线/ML 笔 K 字段固定 purged：首笔确认前不填 bi_*，与主图 defaultBiPolicy 解耦。
+const String kCrosshairBiPolicy = 'purged';
 
 /// Rust `chan_ffi` 动态库桥接。
 class ChanBridge {
@@ -181,6 +185,7 @@ class ChanBridge {
     SegAnalysisBundle segAnalysis,
     List<BiVirtualBar> biVirtualBars,
     List<KlineCombineFrame> biCombineFrames,
+    String defaultBiPolicy,
   ) {
     final signals = biConfirms.isNotEmpty
         ? biConfirms
@@ -195,15 +200,19 @@ class ChanBridge {
     final segments = biSegments.isNotEmpty
         ? biSegments
         : computeBiSegments(bars, signals);
+    final policy = defaultBiPolicy != 'pending' || segments.isNotEmpty
+        ? defaultBiPolicy
+        : resolveDefaultBiPolicy(bars, signals);
     final featuresWithBi = enrichBiCrosshairFields(
       bars,
       features,
       segments,
       signals,
+      kCrosshairBiPolicy,
     );
     final virtualBars = biVirtualBars.isNotEmpty
         ? biVirtualBars
-        : computeBiVirtualBars(bars, segments);
+        : computeBiVirtualBarsForDisplay(bars, segments, signals, policy);
     final biCombines = biCombineFrames.isNotEmpty
         ? biCombineFrames
         : computeBiCombineFrames(bars, virtualBars);
@@ -219,6 +228,7 @@ class ChanBridge {
       segAnalysis: analysis,
       biVirtualBars: virtualBars,
       biCombineFrames: biCombines,
+      defaultBiPolicy: policy,
     );
   }
 
@@ -246,6 +256,7 @@ class ChanBridge {
           SegAnalysisBundle.empty(),
           const [],
           const [],
+          'pending',
         );
       }
       final bundle = KlineCombineBundle.fromJson(
@@ -260,6 +271,7 @@ class ChanBridge {
         bundle.segAnalysis,
         bundle.biVirtualBars,
         bundle.biCombineFrames,
+        bundle.defaultBiPolicy,
       );
     } finally {
       if (ptr != nullptr) calloc.free(ptr);

@@ -402,6 +402,7 @@ mod tests {
                 prev_idx: None,
                 next_idx: Some(1),
                 is_bootstrap: false,
+                is_promoted_default: false,
             },
             BiSegment {
                 idx: 1,
@@ -415,6 +416,7 @@ mod tests {
                 prev_idx: Some(0),
                 next_idx: Some(2),
                 is_bootstrap: false,
+                is_promoted_default: false,
             },
             BiSegment {
                 idx: 2,
@@ -428,6 +430,7 @@ mod tests {
                 prev_idx: Some(1),
                 next_idx: None,
                 is_bootstrap: false,
+                is_promoted_default: false,
             },
         ];
         let bundle = build_seg_analysis(&bars, &bi_segs, &[]);
@@ -460,6 +463,7 @@ mod tests {
             prev_idx: None,
             next_idx: None,
             is_bootstrap: false,
+            is_promoted_default: false,
         }];
         let bi_confirms = vec![
             BiConfirmSignal {

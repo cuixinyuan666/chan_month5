@@ -1,5 +1,6 @@
 import '../models/bi_virtual_bar.dart';
 import '../models/kline_bar.dart';
+import 'default_bi_compute.dart';
 
 /// Dart 回退：与 Rust `bi_virtual_bar_provisional` 同口径（进行中笔 K）。
 BiVirtualBar? computeBiVirtualBarProvisional(
@@ -11,10 +12,10 @@ BiVirtualBar? computeBiVirtualBarProvisional(
   int segIdx,
 ) {
   if (bars.isEmpty) return null;
-  final x1 = beginFractalX1 < beginFractalX2
-      ? beginFractalX1
-      : beginFractalX2;
-  final x1c = x1.clamp(0, bars.length - 1);
+  // 起点取分型极点 K（与笔连线端点同口径）
+  final x1c = fractalPoleBarIdx(bars, beginFractalX1, beginFractalX2, -dir) ??
+      (beginFractalX1 < beginFractalX2 ? beginFractalX1 : beginFractalX2)
+          .clamp(0, bars.length - 1);
   final x2c = endBarX.clamp(0, bars.length - 1);
   if (x2c < x1c) return null;
 

@@ -15,7 +15,8 @@ pub use combine::{
 };
 pub use feature::{
     bootstrap_reverse_extreme_bar_idx, build_bi_segments, build_bi_virtual_bar_views,
-    enrich_bi_crosshair_fields, enrich_fractal_peak_dist, fractal_extreme_bar_idx,
+    build_bi_virtual_bars_as_of, build_pre_confirm_default_bi, enrich_bi_crosshair_fields, enrich_fractal_peak_dist,
+    fractal_extreme_bar_idx, resolve_default_bi_policy, trial_default_bi,
     BarCrosshairFeature, BiSegment, BiVirtualBar, BiVirtualBarView,
 };
 pub use seg_eigen::{

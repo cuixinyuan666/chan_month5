@@ -14,6 +14,7 @@ class KlineCombineBundle {
   final SegAnalysisBundle segAnalysis;
   final List<BiVirtualBar> biVirtualBars;
   final List<KlineCombineFrame> biCombineFrames;
+  final String defaultBiPolicy;
 
   const KlineCombineBundle({
     required this.frames,
@@ -23,6 +24,7 @@ class KlineCombineBundle {
     this.segAnalysis = const SegAnalysisBundle(),
     this.biVirtualBars = const [],
     this.biCombineFrames = const [],
+    this.defaultBiPolicy = 'pending',
   });
 
   factory KlineCombineBundle.fromJson(Map<String, dynamic> json) {
@@ -74,6 +76,7 @@ class KlineCombineBundle {
             ),
           )
           .toList(),
+      defaultBiPolicy: json['default_bi_policy'] as String? ?? 'pending',
     );
   }
 
@@ -85,5 +88,6 @@ class KlineCombineBundle {
         segAnalysis: SegAnalysisBundle(),
         biVirtualBars: [],
         biCombineFrames: [],
+        defaultBiPolicy: 'pending',
       );
 }

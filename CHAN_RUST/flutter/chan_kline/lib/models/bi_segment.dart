@@ -13,6 +13,8 @@ class BiSegment {
   final int? nextIdx;
   /// 首笔确认引导笔：虚拟起点=区间极值法，第二次笔确认后丢弃
   final bool isBootstrap;
+  /// 首笔确认审判 PASS：升格默认笔为第一笔，≥2 次确认仍保留
+  final bool isPromotedDefault;
 
   const BiSegment({
     required this.idx,
@@ -26,6 +28,7 @@ class BiSegment {
     this.prevIdx,
     this.nextIdx,
     this.isBootstrap = false,
+    this.isPromotedDefault = false,
   });
 
   factory BiSegment.fromJson(Map<String, dynamic> json) {
@@ -41,6 +44,7 @@ class BiSegment {
       prevIdx: (json['prev_idx'] as num?)?.toInt(),
       nextIdx: (json['next_idx'] as num?)?.toInt(),
       isBootstrap: json['is_bootstrap'] as bool? ?? false,
+      isPromotedDefault: json['is_promoted_default'] as bool? ?? false,
     );
   }
 }

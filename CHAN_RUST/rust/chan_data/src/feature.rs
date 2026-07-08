@@ -118,6 +118,9 @@ pub struct BiSegment {
     /// 首笔确认引导笔：虚拟起点=区间极值法，第二次笔确认后丢弃
     #[serde(default)]
     pub is_bootstrap: bool,
+    /// 首笔确认审判 PASS：升格默认笔为第一笔，≥2 次确认仍保留
+    #[serde(default)]
+    pub is_promoted_default: bool,
 }
 
 /// 由 time_ms 推导中文星期（无未来函数，仅用当前 K 时间）。
@@ -371,6 +374,21 @@ fn confirmed_bi_at(bars: &[KlineBar], bi_segments: &[BiSegment], bar_x: usize) -
     None
 }
 
+/// 当步是否有笔段在 end_confirm_x 冻结（审判 PASS 当步优先于 provisional 下一笔）。
+fn segment_vb_ended_at_bar(
+    bars: &[KlineBar],
+    bi_segments: &[BiSegment],
+    bar_x: usize,
+) -> Option<BiVirtualBar> {
+    let bx = bar_x as i32;
+    for seg in bi_segments {
+        if seg.end_confirm_x == bx {
+            return Some(bi_virtual_bar_from_segment(bars, seg));
+        }
+    }
+    None
+}
+
 fn active_bi_at(
     bars: &[KlineBar],
     bi_segments: &[BiSegment],
@@ -378,16 +396,20 @@ fn active_bi_at(
     bar_x: usize,
     next_bi: usize,
 ) -> Option<BiVirtualBar> {
-    provisional_bi_at(bars, bi_segments, bi_confirms, bar_x, next_bi)
-        .or_else(|| confirmed_bi_at(bars, bi_segments, bar_x))
+    segment_vb_ended_at_bar(bars, bi_segments, bar_x).or_else(|| {
+        provisional_bi_at(bars, bi_segments, bi_confirms, bar_x, next_bi)
+            .or_else(|| confirmed_bi_at(bars, bi_segments, bar_x))
+    })
 }
 
 /// 逐 K 填充笔 K 十字线字段（与 1 分钟 K 特征同向量，逐K当下冻结）。
+/// `default_bi_policy`：仅影响首笔确认前是否用默认笔填 bi_*；ML/十字线应传 `"purged"`。
 pub fn enrich_bi_crosshair_fields(
     bars: &[KlineBar],
     features: &mut [BarCrosshairFeature],
     bi_segments: &[BiSegment],
     bi_confirms: &[BiConfirmSignal],
+    default_bi_policy: &str,
 ) {
     if features.is_empty() || bars.is_empty() {
         return;
@@ -405,7 +427,10 @@ pub fn enrich_bi_crosshair_fields(
             next_bi += 1;
         }
 
-        let active = active_bi_at(bars, bi_segments, bi_confirms, bar_x, next_bi);
+        let mut active = active_bi_at(bars, bi_segments, bi_confirms, bar_x, next_bi);
+        if active.is_none() && default_bi_policy == "pending" {
+            active = build_pre_confirm_default_bi(bars, bar_x);
+        }
         let mut snap_state = merge_state.clone();
         if let Some(vb) = provisional_bi_at(bars, bi_segments, bi_confirms, bar_x, next_bi) {
             let unit = hl_unit_from_vb(bars, &vb);
@@ -442,8 +467,11 @@ pub fn enrich_bi_crosshair_fields(
     }
 }
 
-/// 异向分型配对 → 正式笔段（不含引导笔）。
-fn build_bi_segments_from_pairs(valid: &[&BiConfirmSignal]) -> Vec<BiSegment> {
+/// 异向分型配对 → 正式笔段（不含引导笔 / 升格默认笔）。
+fn build_bi_segments_from_pairs_with_start(
+    valid: &[&BiConfirmSignal],
+    start_idx: i32,
+) -> Vec<BiSegment> {
     if valid.len() < 2 {
         return Vec::new();
     }
@@ -461,7 +489,7 @@ fn build_bi_segments_from_pairs(valid: &[&BiConfirmSignal]) -> Vec<BiSegment> {
         } else {
             continue;
         };
-        let idx = segments.len() as i32;
+        let idx = start_idx + segments.len() as i32;
         segments.push(BiSegment {
             idx,
             dir,
@@ -474,6 +502,7 @@ fn build_bi_segments_from_pairs(valid: &[&BiConfirmSignal]) -> Vec<BiSegment> {
             prev_idx: if idx > 0 { Some(idx - 1) } else { None },
             next_idx: None,
             is_bootstrap: false,
+            is_promoted_default: false,
         });
     }
     for i in 0..segments.len().saturating_sub(1) {
@@ -482,35 +511,92 @@ fn build_bi_segments_from_pairs(valid: &[&BiConfirmSignal]) -> Vec<BiSegment> {
     segments
 }
 
-/// 分型确认信号 → 笔段链；仅 1 次确认时用区间极值法补引导笔，≥2 次确认时丢弃引导笔。
+fn build_bi_segments_from_pairs(valid: &[&BiConfirmSignal]) -> Vec<BiSegment> {
+    build_bi_segments_from_pairs_with_start(valid, 0)
+}
+
+fn link_segment_chain(segments: &mut [BiSegment]) {
+    for i in 0..segments.len().saturating_sub(1) {
+        segments[i].next_idx = Some(segments[i + 1].idx);
+        segments[i + 1].prev_idx = Some(segments[i].idx);
+    }
+}
+
+fn dir_from_confirm_fx(fx: &str) -> i32 {
+    if fx == "TOP" {
+        1
+    } else {
+        -1
+    }
+}
+
+fn build_bootstrap_segment(bars: &[KlineBar], first: &BiConfirmSignal) -> Option<BiSegment> {
+    let virtual_k = bootstrap_reverse_extreme_bar_idx(bars, first)?;
+    Some(BiSegment {
+        idx: 0,
+        dir: dir_from_confirm_fx(&first.fx),
+        begin_confirm_x: first.x,
+        end_confirm_x: first.x,
+        begin_fractal_x1: virtual_k,
+        begin_fractal_x2: virtual_k,
+        end_fractal_x1: first.fractal_x1,
+        end_fractal_x2: first.fractal_x2,
+        prev_idx: None,
+        next_idx: None,
+        is_bootstrap: true,
+        is_promoted_default: false,
+    })
+}
+
+fn build_promoted_segment(first: &BiConfirmSignal, virtual_k: i32) -> BiSegment {
+    BiSegment {
+        idx: 0,
+        dir: dir_from_confirm_fx(&first.fx),
+        begin_confirm_x: first.x,
+        end_confirm_x: first.x,
+        begin_fractal_x1: virtual_k,
+        begin_fractal_x2: virtual_k,
+        end_fractal_x1: first.fractal_x1,
+        end_fractal_x2: first.fractal_x2,
+        prev_idx: None,
+        next_idx: None,
+        is_bootstrap: false,
+        is_promoted_default: true,
+    }
+}
+
+/// 分型确认信号 → 笔段链；首确认审判默认笔，PASS 升格为第一笔并保留至 ≥2 确认。
 pub fn build_bi_segments(bars: &[KlineBar], confirms: &[BiConfirmSignal]) -> Vec<BiSegment> {
     let valid: Vec<&BiConfirmSignal> = confirms
         .iter()
         .filter(|c| c.fx == "TOP" || c.fx == "BOTTOM")
         .collect();
+    if valid.is_empty() {
+        return Vec::new();
+    }
+    let first = valid[0];
+    let trial_passed =
+        (first.x as usize) < bars.len() && trial_default_bi(bars, first);
+
     if valid.len() >= 2 {
+        if trial_passed {
+            let virtual_k = bootstrap_reverse_extreme_bar_idx(bars, first).unwrap_or(0);
+            let mut segments = vec![build_promoted_segment(first, virtual_k)];
+            let mut pair_segs = build_bi_segments_from_pairs_with_start(&valid, 1);
+            segments.append(&mut pair_segs);
+            link_segment_chain(&mut segments);
+            return segments;
+        }
         return build_bi_segments_from_pairs(&valid);
     }
-    if valid.len() == 1 && !bars.is_empty() {
-        let first = valid[0];
+
+    if trial_passed {
         if let Some(virtual_k) = bootstrap_reverse_extreme_bar_idx(bars, first) {
-            let dir = if first.fx == "TOP" { 1 } else { -1 };
-            return vec![BiSegment {
-                idx: 0,
-                dir,
-                begin_confirm_x: first.x,
-                end_confirm_x: first.x,
-                begin_fractal_x1: virtual_k,
-                begin_fractal_x2: virtual_k,
-                end_fractal_x1: first.fractal_x1,
-                end_fractal_x2: first.fractal_x2,
-                prev_idx: None,
-                next_idx: None,
-                is_bootstrap: true,
-            }];
+            return vec![build_promoted_segment(first, virtual_k)];
         }
+        return Vec::new();
     }
-    Vec::new()
+    build_bootstrap_segment(bars, first).into_iter().collect()
 }
 
 fn bar_hl_range(bars: &[KlineBar], x1: usize, x2: usize) -> (f64, f64, f64, f64) {
@@ -530,6 +616,204 @@ fn bar_hl_range(bars: &[KlineBar], x1: usize, x2: usize) -> (f64, f64, f64, f64)
     (open, hi, lo, close)
 }
 
+/// 笔确认前展示用默认笔：首根 K → 当步末 K（仅 pending 策略下展示/十字线）。
+pub fn build_pre_confirm_default_bi(bars: &[KlineBar], end_bar_x: usize) -> Option<BiVirtualBar> {
+    if bars.is_empty() || end_bar_x >= bars.len() {
+        return None;
+    }
+    let x1 = 0usize;
+    let x2 = end_bar_x;
+    let dir = if bars[x2].close >= bars[x1].open {
+        1
+    } else {
+        -1
+    };
+    let (open, high, low, close) = bar_hl_range(bars, x1, x2);
+    Some(BiVirtualBar {
+        idx: 0,
+        dir,
+        x1: 0,
+        x2: x2 as i32,
+        open,
+        high,
+        low,
+        close,
+        confirm_x: x2 as i32,
+    })
+}
+
+/// 分型框内极点 K（dir>0 取首个 high 极大，dir<0 取首个 low 极小）。
+fn fractal_pole_bar_idx(bars: &[KlineBar], fx1: i32, fx2: i32, dir: i32) -> Option<usize> {
+    let x1 = fx1.max(0) as usize;
+    let x2 = fx2.max(0) as usize;
+    if bars.is_empty() || x1 > x2 || x2 >= bars.len() {
+        return None;
+    }
+    if dir > 0 {
+        let mut peak = f64::NEG_INFINITY;
+        for j in x1..=x2 {
+            peak = peak.max(bars[j].high);
+        }
+        for j in x1..=x2 {
+            if (bars[j].high - peak).abs() < 1e-12 {
+                return Some(j);
+            }
+        }
+    } else {
+        let mut trough = f64::INFINITY;
+        for j in x1..=x2 {
+            trough = trough.min(bars[j].low);
+        }
+        for j in x1..=x2 {
+            if (bars[j].low - trough).abs() < 1e-12 {
+                return Some(j);
+            }
+        }
+    }
+    None
+}
+
+/// 首确认当步冻结默认笔：virtual_k → 分型极点 K（审判用，终点非 confirm_x）。
+fn build_frozen_default_bi_at_first_confirm(
+    bars: &[KlineBar],
+    first: &BiConfirmSignal,
+    virtual_k: i32,
+) -> Option<BiVirtualBar> {
+    let pole = fractal_extreme_bar_idx(bars, first)? as usize;
+    let x1 = virtual_k.max(0) as usize;
+    let x2 = pole;
+    if x1 >= bars.len() || x2 >= bars.len() || x1 > x2 {
+        return None;
+    }
+    let dir = if bars[x2].close >= bars[x1].open {
+        1
+    } else {
+        -1
+    };
+    let (open, high, low, close) = bar_hl_range(bars, x1, x2);
+    Some(BiVirtualBar {
+        idx: 0,
+        dir,
+        x1: x1 as i32,
+        x2: x2 as i32,
+        open,
+        high,
+        low,
+        close,
+        confirm_x: first.x,
+    })
+}
+
+/// 首确认 bootstrap 对照笔 K：virtual_k → 极点（F8 几何等价参照）。
+fn bootstrap_vb_at_first_confirm(
+    bars: &[KlineBar],
+    first: &BiConfirmSignal,
+    virtual_k: i32,
+) -> Option<BiVirtualBar> {
+    let pole = fractal_extreme_bar_idx(bars, first)? as usize;
+    let x1 = virtual_k.max(0) as usize;
+    let x2 = pole;
+    if x1 >= bars.len() || x2 >= bars.len() || x1 > x2 {
+        return None;
+    }
+    let dir = dir_from_confirm_fx(&first.fx);
+    let (open, high, low, close) = bar_hl_range(bars, x1, x2);
+    Some(BiVirtualBar {
+        idx: 0,
+        dir,
+        x1: x1 as i32,
+        x2: x2 as i32,
+        open,
+        high,
+        low,
+        close,
+        confirm_x: first.x,
+    })
+}
+
+fn end_is_directional_peak(bars: &[KlineBar], vb: &BiVirtualBar, first: &BiConfirmSignal) -> bool {
+    let pole = match fractal_extreme_bar_idx(bars, first) {
+        Some(p) => p as usize,
+        None => return false,
+    };
+    let x1 = vb.x1.max(0) as usize;
+    let x2 = vb.x2.max(0) as usize;
+    if pole < x1 || pole > x2 {
+        return false;
+    }
+    if vb.dir > 0 {
+        let peak = bars[x1..=x2]
+            .iter()
+            .map(|b| b.high)
+            .fold(f64::NEG_INFINITY, f64::max);
+        (bars[pole].high - peak).abs() < 1e-9
+    } else {
+        let trough = bars[x1..=x2]
+            .iter()
+            .map(|b| b.low)
+            .fold(f64::INFINITY, f64::min);
+        (bars[pole].low - trough).abs() < 1e-9
+    }
+}
+
+fn geom_equiv_vb(a: &BiVirtualBar, b: &BiVirtualBar) -> bool {
+    a.x1 == b.x1
+        && a.x2 == b.x2
+        && a.dir == b.dir
+        && (a.high - b.high).abs() < 1e-9
+        && (a.low - b.low).abs() < 1e-9
+}
+
+/// 首笔确认当步审判默认笔：F1∧F2∧F3∧F8（终点=分型极点 K，与 bootstrap 几何等价）。
+pub fn trial_default_bi(bars: &[KlineBar], first: &BiConfirmSignal) -> bool {
+    let confirm_x = first.x as usize;
+    if confirm_x >= bars.len() {
+        return false;
+    }
+    let virtual_k = match bootstrap_reverse_extreme_bar_idx(bars, first) {
+        Some(v) => v,
+        None => return false,
+    };
+    let frozen = match build_frozen_default_bi_at_first_confirm(bars, first, virtual_k) {
+        Some(v) => v,
+        None => return false,
+    };
+    if frozen.dir != dir_from_confirm_fx(&first.fx) {
+        return false;
+    }
+    if frozen.x1 != virtual_k {
+        return false;
+    }
+    if !end_is_directional_peak(bars, &frozen, first) {
+        return false;
+    }
+    let bootstrap_vb = match bootstrap_vb_at_first_confirm(bars, first, virtual_k) {
+        Some(v) => v,
+        None => return false,
+    };
+    geom_equiv_vb(&frozen, &bootstrap_vb)
+}
+
+/// 默认笔策略：pending=首确认未入前缀；retained=审判PASS；purged=审判FAIL。
+pub fn resolve_default_bi_policy(bars: &[KlineBar], confirms: &[BiConfirmSignal]) -> String {
+    let valid: Vec<&BiConfirmSignal> = confirms
+        .iter()
+        .filter(|c| c.fx == "TOP" || c.fx == "BOTTOM")
+        .collect();
+    if valid.is_empty() {
+        return "pending".to_string();
+    }
+    let first = valid[0];
+    if first.x as usize >= bars.len() {
+        return "pending".to_string();
+    }
+    if trial_default_bi(bars, first) {
+        "retained".to_string()
+    } else {
+        "purged".to_string()
+    }
+}
+
 /// 进行中笔 K 线：起点分型至当步 K（方案 A，仅段分析喂入用）。
 pub fn bi_virtual_bar_provisional(
     bars: &[KlineBar],
@@ -542,9 +826,13 @@ pub fn bi_virtual_bar_provisional(
     if bars.is_empty() {
         return None;
     }
-    let x1 = begin_fractal_x1
-        .min(begin_fractal_x2)
-        .max(0) as usize;
+    // 起点取分型极点 K（与笔连线端点同口径），非分型框边界
+    let x1 = fractal_pole_bar_idx(bars, begin_fractal_x1, begin_fractal_x2, -dir)
+        .unwrap_or_else(|| {
+            begin_fractal_x1
+                .min(begin_fractal_x2)
+                .max(0) as usize
+        });
     let x2 = end_bar_x.min(bars.len() - 1);
     if x2 < x1 {
         return None;
@@ -565,14 +853,23 @@ pub fn bi_virtual_bar_provisional(
 
 /// 每笔确认后：用该笔覆盖区间的最高/最低价与起止开收包装成一根 K 线。
 pub fn bi_virtual_bar_from_segment(bars: &[KlineBar], seg: &BiSegment) -> BiVirtualBar {
-    let x1 = seg
+    let bx_fallback = seg
         .begin_fractal_x1
         .min(seg.begin_fractal_x2)
         .max(0) as usize;
-    let x2 = seg
+    let ex_fallback = seg
         .end_fractal_x1
         .max(seg.end_fractal_x2)
         .max(0) as usize;
+    // 起终点均取分型极点 K（与笔连线 _biExtremeAnchorPoint 同口径）
+    let x1 = if seg.begin_confirm_x == seg.end_confirm_x {
+        bx_fallback
+    } else {
+        fractal_pole_bar_idx(bars, seg.begin_fractal_x1, seg.begin_fractal_x2, -seg.dir)
+            .unwrap_or(bx_fallback)
+    };
+    let x2 = fractal_pole_bar_idx(bars, seg.end_fractal_x1, seg.end_fractal_x2, seg.dir)
+        .unwrap_or(ex_fallback);
     let (open, high, low, close) = bar_hl_range(bars, x1, x2);
     BiVirtualBar {
         idx: seg.idx,
@@ -596,6 +893,57 @@ pub fn build_bi_virtual_bars(bars: &[KlineBar], segments: &[BiSegment]) -> Vec<B
         .iter()
         .map(|seg| bi_virtual_bar_from_segment(bars, seg))
         .collect()
+}
+
+/// 逐 K 当步展示笔 K：已确认笔段 + 进行中笔（笔确认当步亦起笔 provisional，含半侧衔接）。
+pub fn build_bi_virtual_bars_as_of(
+    bars: &[KlineBar],
+    segments: &[BiSegment],
+    bi_confirms: &[BiConfirmSignal],
+    default_bi_policy: &str,
+    as_of_bar_x: usize,
+) -> Vec<BiVirtualBar> {
+    if bars.is_empty() {
+        return Vec::new();
+    }
+    let as_of_bar_x = as_of_bar_x.min(bars.len() - 1);
+    let bx = as_of_bar_x as i32;
+
+    let confirmed: Vec<&BiSegment> = segments
+        .iter()
+        .filter(|s| s.end_confirm_x <= bx)
+        .collect();
+    let mut virtual_bars: Vec<BiVirtualBar> = confirmed
+        .iter()
+        .map(|s| bi_virtual_bar_from_segment(bars, s))
+        .collect();
+
+    if default_bi_policy == "pending" && segments.is_empty() {
+        if let Some(d) = build_pre_confirm_default_bi(bars, as_of_bar_x) {
+            virtual_bars.push(d);
+        }
+        return virtual_bars;
+    }
+
+    let next_bi = confirmed.len();
+    if let Some(prov) = provisional_bi_at(bars, segments, bi_confirms, as_of_bar_x, next_bi) {
+        virtual_bars.push(prov);
+    }
+    virtual_bars
+}
+
+/// 展示用笔 K：已确认笔 + 末步进行中笔（逐K当下，主图/副图动态绘制）。
+pub fn build_bi_virtual_bars_for_display(
+    bars: &[KlineBar],
+    segments: &[BiSegment],
+    bi_confirms: &[BiConfirmSignal],
+    default_bi_policy: &str,
+) -> Vec<BiVirtualBar> {
+    if bars.is_empty() {
+        return Vec::new();
+    }
+    let bar_x = bars.len() - 1;
+    build_bi_virtual_bars_as_of(bars, segments, bi_confirms, default_bi_policy, bar_x)
 }
 
 /// 由计算层笔 K 生成展示视图：相邻笔在共享分钟 K 上左/右半侧衔接，view 横向无缝。
@@ -800,8 +1148,8 @@ mod tests {
         assert_eq!(segs.len(), 1);
         assert!(segs[0].is_bootstrap);
         let mut feats = build_bar_crosshair_features_stepwise(&bars);
-        enrich_bi_crosshair_fields(&bars, &mut feats, &segs, &confirms);
-        assert_eq!(feats[1].bi_idx, Some(1));
+        enrich_bi_crosshair_fields(&bars, &mut feats, &segs, &confirms, "purged");
+        assert_eq!(feats[1].bi_idx, Some(0));
         assert!(feats[1].bi_high > 0.0);
         assert!(feats[1].bi_volume > 0.0);
         assert_eq!(feats[0].bi_idx, None);
@@ -867,13 +1215,18 @@ mod tests {
             fractal_x2: 2,
         };
         assert_eq!(bootstrap_reverse_extreme_bar_idx(&bars, &conf), Some(0));
+        assert!(trial_default_bi(&bars, &conf));
         let segs = build_bi_segments(&bars, &[conf]);
         assert_eq!(segs.len(), 1);
-        assert!(segs[0].is_bootstrap);
+        // 审判 PASS → 升格默认笔，非 bootstrap
+        assert!(!segs[0].is_bootstrap);
+        assert!(segs[0].is_promoted_default);
         assert_eq!(segs[0].dir, 1);
         assert_eq!(segs[0].begin_fractal_x1, 0);
         assert_eq!(segs[0].end_confirm_x, 3);
         let vb = build_bi_virtual_bars(&bars, &segs);
+        // 单段终点=极点 K0，非 confirm_x=3 或分型框右端 K2
+        assert_eq!(vb[0].x2, 0);
         assert_eq!(vb[0].low, 8.0);
         assert_eq!(vb[0].high, 10.0);
     }
@@ -902,6 +1255,41 @@ mod tests {
         let segs = build_bi_segments(&bars, &confirms);
         assert_eq!(segs.len(), 1);
         assert!(!segs[0].is_bootstrap);
+    }
+
+    #[test]
+    fn provisional_starts_on_bi_confirm_step() {
+        let bars: Vec<KlineBar> = (0..10)
+            .map(|i| bar(i, &format!("2024/01/01 09:{i:02}"), 0))
+            .collect();
+        let confirms = vec![
+            BiConfirmSignal {
+                x: 2,
+                fx: "BOTTOM".to_string(),
+                value: 1,
+                fractal_x1: 1,
+                fractal_x2: 1,
+            },
+            BiConfirmSignal {
+                x: 5,
+                fx: "TOP".to_string(),
+                value: -1,
+                fractal_x1: 4,
+                fractal_x2: 4,
+            },
+        ];
+        let segs = build_bi_segments(&bars, &confirms);
+        assert_eq!(segs.len(), 1);
+        let at_confirm = build_bi_virtual_bars_as_of(&bars, &segs, &confirms, "purged", 5);
+        assert_eq!(
+            at_confirm.len(),
+            2,
+            "确认当步应含冻结笔+新起 provisional 笔"
+        );
+        let views = build_bi_virtual_bar_views(&at_confirm);
+        assert!(views[0].end_at_left_half);
+        assert!(views[1].start_at_right_half);
+        assert_eq!(views[0].view_x2, views[1].view_x1);
     }
 
     #[test]
@@ -992,6 +1380,7 @@ mod tests {
             prev_idx: None,
             next_idx: None,
             is_bootstrap: false,
+            is_promoted_default: false,
         }];
         let vb = build_bi_virtual_bars(&bars, &segs);
         assert_eq!(vb.len(), 1);

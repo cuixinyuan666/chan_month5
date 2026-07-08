@@ -5,9 +5,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../compute/bar_feature_compute.dart';
+import '../compute/bi_combine_compute.dart';
+import '../compute/bi_virtual_bar_compute.dart';
+import '../compute/bi_virtual_bar_view_compute.dart';
 import '../models/bi_confirm_signal.dart';
 import '../models/bar_crosshair_feature.dart';
 import '../models/bi_segment.dart';
+import '../models/bi_virtual_bar.dart';
 import '../models/bi_virtual_bar_view.dart';
 import '../models/kline_bar.dart';
 import '../models/kline_combine_frame.dart';
@@ -40,6 +44,7 @@ class KlineChart extends StatefulWidget {
     required this.segAnalysis,
     required this.mainIndicators,
     required this.subIndicators,
+    this.defaultBiPolicy = 'pending',
     this.onMainIndicatorsChanged,
     this.onSubIndicatorsChanged,
     this.autoFollowLatest = false,
@@ -55,6 +60,7 @@ class KlineChart extends StatefulWidget {
   final SegAnalysisBundle segAnalysis;
   final Set<MainChartIndicator> mainIndicators;
   final Set<SubChartIndicator> subIndicators;
+  final String defaultBiPolicy;
   final ValueChanged<Set<MainChartIndicator>>? onMainIndicatorsChanged;
   final ValueChanged<Set<SubChartIndicator>>? onSubIndicatorsChanged;
   final bool autoFollowLatest;
@@ -154,6 +160,39 @@ class _KlineChartState extends State<KlineChart> {
     _crosshairX = _viewport.barCenterX(barIdx, _chartSize.width);
     _crosshairY = pos.dy.clamp(plotTop, contentBottom);
     _scheduleRedraw();
+  }
+
+  /// 十字线开启时按当步 K 重建笔 K view，与 bar_features 逐步冻结口径对齐。
+  List<BiVirtualBarView> get _effectiveBiVirtualBarViews {
+    if (!_crosshairEnabled || _crosshairBarIdx == null) {
+      return widget.biVirtualBarViews;
+    }
+    final asOfBars = _asOfBiVirtualBars();
+    return buildBiVirtualBarViews(asOfBars);
+  }
+
+  /// 十字线开启时按当步笔 K 重建合并笔 K 框（与 bi_combine 逐步口径对齐）。
+  List<KlineCombineFrame> get _effectiveBiCombineFrames {
+    if (!_crosshairEnabled || _crosshairBarIdx == null) {
+      return widget.biCombineFrames;
+    }
+    final asOf = _crosshairAsOfIdx();
+    final barsSlice = widget.bars.where((b) => b.idx <= asOf).toList();
+    if (barsSlice.isEmpty) return const [];
+    return computeBiCombineFrames(barsSlice, _asOfBiVirtualBars());
+  }
+
+  int _crosshairAsOfIdx() =>
+      widget.bars[_crosshairBarIdx!.clamp(0, widget.bars.length - 1)].idx;
+
+  List<BiVirtualBar> _asOfBiVirtualBars() {
+    return computeBiVirtualBarsAsOf(
+      widget.bars,
+      widget.biSegments,
+      widget.biConfirmSignals,
+      widget.defaultBiPolicy,
+      _crosshairAsOfIdx(),
+    );
   }
 
   void _resetViewport() {
@@ -332,8 +371,8 @@ class _KlineChartState extends State<KlineChart> {
                       biConfirmSignals: widget.biConfirmSignals,
                       barFeatures: widget.barFeatures,
                       biSegments: widget.biSegments,
-                      biVirtualBarViews: widget.biVirtualBarViews,
-                      biCombineFrames: widget.biCombineFrames,
+                      biVirtualBarViews: _effectiveBiVirtualBarViews,
+                      biCombineFrames: _effectiveBiCombineFrames,
                       segAnalysis: widget.segAnalysis,
                       mainIndicators: _activeMains,
                       subIndicators: _activeSubs,
@@ -724,10 +763,11 @@ class _KlineCompositePainter extends CustomPainter {
   }) {
     if (biVirtualBarViews.isEmpty) return;
 
-    final upBody = faint ? const Color(0x55E53935) : const Color(0x88E53935);
-    final dnBody = faint ? const Color(0x5526A69A) : const Color(0x8826A69A);
-    final upStroke = faint ? const Color(0x99E53935) : const Color(0xFFE53935);
-    final dnStroke = faint ? const Color(0x9926A69A) : const Color(0xFF26A69A);
+    // faint：主图合并笔K底层，低不透明度以免压住 1 分钟 K
+    final upBody = faint ? const Color(0x38E53935) : const Color(0x88E53935);
+    final dnBody = faint ? const Color(0x3826A69A) : const Color(0x8826A69A);
+    final upStroke = faint ? const Color(0x55E53935) : const Color(0xFFE53935);
+    final dnStroke = faint ? const Color(0x5526A69A) : const Color(0xFF26A69A);
 
     for (final v in biVirtualBarViews) {
       if (v.viewX2 < viewport.viewXMin - 1 || v.viewX1 > viewport.viewXMax + 1) {
@@ -1170,7 +1210,7 @@ class _KlineCompositePainter extends CustomPainter {
     double barW,
     double slotW,
   ) {
-    if (biCombineFrames.isEmpty) return;
+    if (biCombineFrames.isEmpty && biVirtualBarViews.isEmpty) return;
 
     _drawBiVirtualCandles(
       canvas,
@@ -1182,18 +1222,20 @@ class _KlineCompositePainter extends CustomPainter {
       faint: true,
     );
 
-    _drawCombineFramesOnMainChart(
-      canvas,
-      w,
-      plotTop,
-      plotH,
-      barW,
-      slotW,
-      biCombineFrames,
-      const Color(0xAAF59E0B),
-      const Color(0x0CF59E0B),
-      alignBiCombineWithViews: true,
-    );
+    if (biCombineFrames.isNotEmpty) {
+      _drawCombineFramesOnMainChart(
+        canvas,
+        w,
+        plotTop,
+        plotH,
+        barW,
+        slotW,
+        biCombineFrames,
+        const Color(0xAAF59E0B),
+        const Color(0x0CF59E0B),
+        alignBiCombineWithViews: true,
+      );
+    }
   }
 
   void _drawSubCharts(
@@ -1347,8 +1389,8 @@ class _KlineCompositePainter extends CustomPainter {
       final cx = (left + right) / 2;
       final spanW = math.max(1.5, right - left);
       final color = v.isUp
-          ? const Color(0x99E53935)
-          : const Color(0x9926A69A);
+          ? const Color(0x55E53935)
+          : const Color(0x5526A69A);
       wick.color = color;
       final yH = subY(v.high);
       final yL = subY(v.low);
@@ -1359,7 +1401,7 @@ class _KlineCompositePainter extends CustomPainter {
       final bottom = math.max(yO, yC);
       canvas.drawRect(
         Rect.fromLTWH(left, top, spanW, math.max(1.0, bottom - top)),
-        Paint()..color = color.withValues(alpha: 0.35),
+        Paint()..color = color.withValues(alpha: 0.22),
       );
     }
 

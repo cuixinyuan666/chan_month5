@@ -3,8 +3,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::feature::{
-    build_bi_segments, build_bi_virtual_bar_views, build_bi_virtual_bars, enrich_fractal_peak_dist,
-    BarCrosshairFeature, BiSegment, BiVirtualBar,
+    build_bi_segments, build_bi_virtual_bar_views, build_bi_virtual_bars_for_display,
+    enrich_fractal_peak_dist, resolve_default_bi_policy, BarCrosshairFeature, BiSegment,
+    BiVirtualBar,
 };
 use crate::kline::KlineBar;
 use crate::seg_eigen::{build_seg_analysis, SegAnalysisBundle};
@@ -495,6 +496,13 @@ pub struct KlineCombineBundle {
     /// 笔 K 线包含合并线框（副图「合并笔K线」）
     #[serde(default)]
     pub bi_combine_frames: Vec<KlineCombineFrame>,
+    /// 默认笔策略：pending / retained / purged
+    #[serde(default = "default_bi_policy_pending")]
+    pub default_bi_policy: String,
+}
+
+fn default_bi_policy_pending() -> String {
+    "pending".to_string()
 }
 
 /// 单步合并 K 线状态（逐K当下，供 ML / 十字线）。
@@ -697,6 +705,7 @@ pub fn build_kline_combine_bundle(bars: &[KlineBar]) -> KlineCombineBundle {
             seg_analysis: SegAnalysisBundle::default(),
             bi_virtual_bars: Vec::new(),
             bi_combine_frames: Vec::new(),
+            default_bi_policy: default_bi_policy_pending(),
         };
     }
 
@@ -757,12 +766,21 @@ pub fn build_kline_combine_bundle(bars: &[KlineBar]) -> KlineCombineBundle {
         .collect::<Vec<KlineCombineFrame>>();
 
     let bi_segments = build_bi_segments(bars, &bi_confirms);
-    let bi_virtual_bars = build_bi_virtual_bars(bars, &bi_segments);
+    let default_bi_policy = resolve_default_bi_policy(bars, &bi_confirms);
+    let bi_virtual_bars =
+        build_bi_virtual_bars_for_display(bars, &bi_segments, &bi_confirms, &default_bi_policy);
     let bi_combine_frames = build_bi_combine_frames(bars, &bi_virtual_bars);
     let mut bar_features = build_bar_crosshair_features_stepwise(bars);
     enrich_fractal_peak_dist(bars, &mut bar_features, &bi_confirms);
     use crate::feature::enrich_bi_crosshair_fields;
-    enrich_bi_crosshair_fields(bars, &mut bar_features, &bi_segments, &bi_confirms);
+    // 十字线/ML 笔 K 字段固定 purged：首笔确认前不填 bi_*，与主图展示策略解耦。
+    enrich_bi_crosshair_fields(
+        bars,
+        &mut bar_features,
+        &bi_segments,
+        &bi_confirms,
+        "purged",
+    );
     let seg_analysis = build_seg_analysis(bars, &bi_segments, &bi_confirms);
 
     KlineCombineBundle {
@@ -773,6 +791,7 @@ pub fn build_kline_combine_bundle(bars: &[KlineBar]) -> KlineCombineBundle {
         seg_analysis,
         bi_virtual_bars,
         bi_combine_frames,
+        default_bi_policy,
     }
 }
 

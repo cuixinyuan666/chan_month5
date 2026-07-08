@@ -11,6 +11,7 @@ import '../models/bi_segment.dart';
 import '../models/kline_bar.dart';
 
 import '../models/kline_combine_frame.dart';
+import 'default_bi_compute.dart';
 
 
 
@@ -338,7 +339,10 @@ int? bootstrapReverseExtremeBarIdx(List<KlineBar> bars, BiConfirmSignal endConf)
   return null;
 }
 
-List<BiSegment> _buildBiSegmentsFromPairs(List<BiConfirmSignal> valid) {
+List<BiSegment> _buildBiSegmentsFromPairsWithStart(
+  List<BiConfirmSignal> valid,
+  int startIdx,
+) {
   if (valid.length < 2) return const [];
   final segments = <BiSegment>[];
   for (var i = 1; i < valid.length; i++) {
@@ -351,7 +355,7 @@ List<BiSegment> _buildBiSegmentsFromPairs(List<BiConfirmSignal> valid) {
             ? -1
             : 0;
     if (dir == 0) continue;
-    final idx = segments.length;
+    final idx = startIdx + segments.length;
     segments.add(
       BiSegment(
         idx: idx,
@@ -363,7 +367,6 @@ List<BiSegment> _buildBiSegmentsFromPairs(List<BiConfirmSignal> valid) {
         endFractalX1: curr.fractalX1,
         endFractalX2: curr.fractalX2,
         prevIdx: idx > 0 ? idx - 1 : null,
-        nextIdx: null,
       ),
     );
   }
@@ -379,11 +382,51 @@ List<BiSegment> _buildBiSegmentsFromPairs(List<BiConfirmSignal> valid) {
       endFractalX1: s.endFractalX1,
       endFractalX2: s.endFractalX2,
       prevIdx: s.prevIdx,
-      nextIdx: i + 1,
+      nextIdx: s.idx + 1,
       isBootstrap: s.isBootstrap,
+      isPromotedDefault: s.isPromotedDefault,
     );
   }
   return segments;
+}
+
+List<BiSegment> _buildBiSegmentsFromPairs(List<BiConfirmSignal> valid) {
+  return _buildBiSegmentsFromPairsWithStart(valid, 0);
+}
+
+void _linkSegmentChain(List<BiSegment> segments) {
+  for (var i = 0; i < segments.length - 1; i++) {
+    final s = segments[i];
+    segments[i] = BiSegment(
+      idx: s.idx,
+      dir: s.dir,
+      beginConfirmX: s.beginConfirmX,
+      endConfirmX: s.endConfirmX,
+      beginFractalX1: s.beginFractalX1,
+      beginFractalX2: s.beginFractalX2,
+      endFractalX1: s.endFractalX1,
+      endFractalX2: s.endFractalX2,
+      prevIdx: s.prevIdx,
+      nextIdx: s.idx + 1,
+      isBootstrap: s.isBootstrap,
+      isPromotedDefault: s.isPromotedDefault,
+    );
+    final n = segments[i + 1];
+    segments[i + 1] = BiSegment(
+      idx: n.idx,
+      dir: n.dir,
+      beginConfirmX: n.beginConfirmX,
+      endConfirmX: n.endConfirmX,
+      beginFractalX1: n.beginFractalX1,
+      beginFractalX2: n.beginFractalX2,
+      endFractalX1: n.endFractalX1,
+      endFractalX2: n.endFractalX2,
+      prevIdx: s.idx,
+      nextIdx: n.nextIdx,
+      isBootstrap: n.isBootstrap,
+      isPromotedDefault: n.isPromotedDefault,
+    );
+  }
 }
 
 /// Dart 回退：与 Rust `build_bi_segments` 同口径。
@@ -392,30 +435,34 @@ List<BiSegment> computeBiSegments(
   List<BiConfirmSignal> confirms,
 ) {
   final valid = confirms.where((c) => c.fx == 'TOP' || c.fx == 'BOTTOM').toList();
+  if (valid.isEmpty) return const [];
+  final first = valid.first;
+  final trialPassed =
+      first.x < bars.length && trialDefaultBi(bars, first);
+
   if (valid.length >= 2) {
+    if (trialPassed) {
+      final virtualK = bootstrapReverseExtremeBarIdx(bars, first) ?? 0;
+      final segments = <BiSegment>[
+        buildPromotedSegment(first, virtualK),
+        ..._buildBiSegmentsFromPairsWithStart(valid, 1),
+      ];
+      _linkSegmentChain(segments);
+      return segments;
+    }
     return _buildBiSegmentsFromPairs(valid);
   }
-  if (valid.length == 1 && bars.isNotEmpty) {
-    final first = valid.first;
+
+  if (trialPassed) {
     final virtualK = bootstrapReverseExtremeBarIdx(bars, first);
     if (virtualK != null) {
-      final dir = first.fx == 'TOP' ? 1 : -1;
-      return [
-        BiSegment(
-          idx: 0,
-          dir: dir,
-          beginConfirmX: first.x,
-          endConfirmX: first.x,
-          beginFractalX1: virtualK,
-          beginFractalX2: virtualK,
-          endFractalX1: first.fractalX1,
-          endFractalX2: first.fractalX2,
-          isBootstrap: true,
-        ),
-      ];
+      return [buildPromotedSegment(first, virtualK)];
     }
+    return const [];
   }
-  return const [];
+
+  final bootstrap = buildBootstrapSegment(bars, first);
+  return bootstrap != null ? [bootstrap] : const [];
 }
 
 
