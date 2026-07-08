@@ -1,7 +1,5 @@
 import 'bi_confirm_signal.dart';
 
-import '../compute/bi_crosshair_compute.dart';
-
 import 'bar_crosshair_feature.dart';
 
 import 'bi_segment.dart';
@@ -14,7 +12,7 @@ import 'seg_analysis.dart';
 
 
 
-/// 逐 K 字典式特征索引（ML 用冻结 bi_*；十字线 tooltip 用 tooltip_bi_* 当前步归属）。
+/// 逐 K 字典式特征索引（ML / 十字线 tooltip 同源，均用 barFeatures 逐步冻结 bi_*）。
 
 class BarFeatureLookup {
 
@@ -48,20 +46,11 @@ class BarFeatureLookup {
 
     final featureByIdx = {for (final f in barFeatures) f.idx: f};
 
-    // tooltip：当前步前缀归属；ML 导出仍读 bi_*（barFeatures 逐步冻结）
-    final tooltipByIdx = buildBiCrosshairTooltipMap(
-      bars,
-      biSegments,
-      biConfirms,
-    );
-
 
 
     for (final b in bars) {
 
       final feat = featureByIdx[b.idx];
-
-      final tip = tooltipByIdx[b.idx];
 
       byIdx[b.idx] = {
 
@@ -104,28 +93,6 @@ class BarFeatureLookup {
         'bi_combine_low': feat?.biCombineLow ?? 0,
 
         'bi_combine_fx': feat?.biCombineFx ?? 'UNKNOWN',
-
-        'tooltip_bi_idx': tip?.biIdx,
-
-        'tooltip_bi_merge_inner_seq': tip?.biMergeInnerSeq ?? 1,
-
-        'tooltip_bi_merge_count': tip?.biMergeCount ?? 1,
-
-        'tooltip_bi_open': tip?.biOpen ?? 0,
-
-        'tooltip_bi_high': tip?.biHigh ?? 0,
-
-        'tooltip_bi_low': tip?.biLow ?? 0,
-
-        'tooltip_bi_close': tip?.biClose ?? 0,
-
-        'tooltip_bi_volume': tip?.biVolume ?? 0,
-
-        'tooltip_bi_combine_high': tip?.biCombineHigh ?? 0,
-
-        'tooltip_bi_combine_low': tip?.biCombineLow ?? 0,
-
-        'tooltip_bi_combine_fx': tip?.biCombineFx ?? 'UNKNOWN',
 
         'open': b.open,
 
@@ -402,7 +369,7 @@ class BarFeatureLookup {
 
 
 
-  /// 笔 K 十字线行（当前步归属 tooltip_bi_*；含非进行中已确认笔）。
+  /// 笔 K 十字线行（与 ML 同源：barFeatures 逐步冻结 bi_*）。
 
   List<String> crosshairBiLines(int idx) {
 
@@ -410,13 +377,13 @@ class BarFeatureLookup {
 
     if (row == null) return const [];
 
-    final biIdx = row['tooltip_bi_idx'];
+    final biIdx = row['bi_idx'];
 
     if (biIdx == null) return const [];
 
     String fmt(double v) => v.toStringAsFixed(2);
 
-    final vol = row['tooltip_bi_volume'];
+    final vol = row['bi_volume'];
 
     final volText = vol is num && vol == vol.roundToDouble()
 
@@ -428,25 +395,25 @@ class BarFeatureLookup {
 
       '笔K线[序号]：#$biIdx',
 
-      '笔K线[合并内序]：${row['tooltip_bi_merge_inner_seq'] ?? 1}',
+      '笔K线[合并内序]：${row['bi_merge_inner_seq'] ?? 1}',
 
       '笔K线[O/H/L/C/VOL]：'
 
-          '${fmt((row['tooltip_bi_open'] as num?)?.toDouble() ?? 0)}/'
+          '${fmt((row['bi_open'] as num?)?.toDouble() ?? 0)}/'
 
-          '${fmt((row['tooltip_bi_high'] as num?)?.toDouble() ?? 0)}/'
+          '${fmt((row['bi_high'] as num?)?.toDouble() ?? 0)}/'
 
-          '${fmt((row['tooltip_bi_low'] as num?)?.toDouble() ?? 0)}/'
+          '${fmt((row['bi_low'] as num?)?.toDouble() ?? 0)}/'
 
-          '${fmt((row['tooltip_bi_close'] as num?)?.toDouble() ?? 0)}/'
+          '${fmt((row['bi_close'] as num?)?.toDouble() ?? 0)}/'
 
           '$volText',
 
       '合并笔K线[H/L]：'
 
-          '${fmt((row['tooltip_bi_combine_high'] as num?)?.toDouble() ?? 0)}/'
+          '${fmt((row['bi_combine_high'] as num?)?.toDouble() ?? 0)}/'
 
-          '${fmt((row['tooltip_bi_combine_low'] as num?)?.toDouble() ?? 0)}',
+          '${fmt((row['bi_combine_low'] as num?)?.toDouble() ?? 0)}',
 
     ];
 
