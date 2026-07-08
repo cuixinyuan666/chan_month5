@@ -1,3 +1,5 @@
+import 'level_models.dart';
+
 /// 单根 K 十字线特征（Rust `BarCrosshairFeature`）。
 
 class BarCrosshairFeature {
@@ -45,6 +47,9 @@ class BarCrosshairFeature {
   /// 当步笔K线合并分型（未确认=UNKNOWN）
   final String biCombineFx;
 
+  /// 各层 N 段快照（levels[0]=1段/笔，levels[1]=2段/线段，…穷尽）
+  final List<LevelSnap> levels;
+
   const BarCrosshairFeature({
     required this.idx,
     required this.weekday,
@@ -65,6 +70,7 @@ class BarCrosshairFeature {
     this.biCombineHigh = 0,
     this.biCombineLow = 0,
     this.biCombineFx = 'UNKNOWN',
+    this.levels = const [],
   });
 
   factory BarCrosshairFeature.fromJson(Map<String, dynamic> json) {
@@ -89,6 +95,9 @@ class BarCrosshairFeature {
       biCombineHigh: (json['bi_combine_high'] as num?)?.toDouble() ?? 0,
       biCombineLow: (json['bi_combine_low'] as num?)?.toDouble() ?? 0,
       biCombineFx: json['bi_combine_fx'] as String? ?? 'UNKNOWN',
+      levels: (json['levels'] as List? ?? const [])
+          .map((e) => LevelSnap.fromJson(Map<String, dynamic>.from(e as Map)))
+          .toList(),
     );
   }
 }

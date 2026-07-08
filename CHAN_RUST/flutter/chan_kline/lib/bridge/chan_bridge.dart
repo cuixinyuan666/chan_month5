@@ -4,26 +4,11 @@ import 'dart:io';
 
 import 'package:ffi/ffi.dart';
 
-import '../compute/default_bi_compute.dart';
-import '../compute/bar_feature_compute.dart';
-import '../compute/bi_combine_compute.dart';
-import '../compute/bi_crosshair_compute.dart';
-import '../compute/bi_confirm_compute.dart';
-import '../compute/seg_analysis_compute.dart';
-import '../compute/bi_virtual_bar_compute.dart';
-import '../models/bar_crosshair_feature.dart';
-import '../models/bi_confirm_signal.dart';
-import '../models/bi_segment.dart';
-import '../models/bi_virtual_bar.dart';
 import '../models/kline_bar.dart';
 import '../models/kline_combine_bundle.dart';
 import '../models/kline_combine_frame.dart';
-import '../models/seg_analysis.dart';
 
-/// 十字线/ML 笔 K 字段固定 purged：首笔确认前不填 bi_*，与主图 defaultBiPolicy 解耦。
-const String kCrosshairBiPolicy = 'purged';
-
-/// Rust `chan_ffi` 动态库桥接。
+/// Rust `chan_ffi` 动态库桥接（纯 FFI：全部计算在 Rust，Dart 无回退实现）。
 class ChanBridge {
   ChanBridge._();
 
@@ -176,103 +161,20 @@ class ChanBridge {
     }
   }
 
-  KlineCombineBundle _finalizeCombineBundle(
-    List<KlineBar> bars,
-    List<KlineCombineFrame> frames,
-    List<BiConfirmSignal> biConfirms,
-    List<BarCrosshairFeature> barFeatures,
-    List<BiSegment> biSegments,
-    SegAnalysisBundle segAnalysis,
-    List<BiVirtualBar> biVirtualBars,
-    List<KlineCombineFrame> biCombineFrames,
-    String defaultBiPolicy,
-  ) {
-    final signals = biConfirms.isNotEmpty
-        ? biConfirms
-        : computeBiConfirmSignals(bars);
-    final features = enrichFractalPeakDist(
-      bars,
-      barFeatures.isNotEmpty
-          ? barFeatures
-          : computeBarCrosshairFeatures(bars, frames),
-      signals,
-    );
-    final segments = biSegments.isNotEmpty
-        ? biSegments
-        : computeBiSegments(bars, signals);
-    final policy = defaultBiPolicy != 'pending' || segments.isNotEmpty
-        ? defaultBiPolicy
-        : resolveDefaultBiPolicy(bars, signals);
-    final featuresWithBi = enrichBiCrosshairFields(
-      bars,
-      features,
-      segments,
-      signals,
-      kCrosshairBiPolicy,
-    );
-    final virtualBars = biVirtualBars.isNotEmpty
-        ? biVirtualBars
-        : computeBiVirtualBarsForDisplay(bars, segments, signals, policy);
-    final biCombines = biCombineFrames.isNotEmpty
-        ? biCombineFrames
-        : computeBiCombineFrames(bars, virtualBars);
-    final analysis = segAnalysis.segConfirms.isNotEmpty ||
-            segAnalysis.barSubSnapshots.isNotEmpty
-        ? segAnalysis
-        : computeSegAnalysis(bars, segments, signals);
-    return KlineCombineBundle(
-      frames: frames,
-      biConfirms: signals,
-      barFeatures: featuresWithBi,
-      biSegments: segments,
-      segAnalysis: analysis,
-      biVirtualBars: virtualBars,
-      biCombineFrames: biCombines,
-      defaultBiPolicy: policy,
-    );
-  }
-
-  /// 对当前已喂入 K 线做包含合并（逐K：传入前缀 bars 即可）。
+  /// 对当前已喂入 K 线跑 Rust N 段流水线（逐K：传入前缀 bars 即可）。
+  /// 纯 FFI：旧 DLL 只返回 frames 数组时直接报错，提示重新构建。
   KlineCombineBundle buildKlineCombineBundle(List<KlineBar> bars) {
     ensureInitialized();
     final jsonBars = jsonEncode(bars.map((b) => b.toJson()).toList());
     final ptr = _toNative(jsonBars);
     try {
       final data = _decode(_takeJson(_klineCombineFrames(ptr)));
-      if (data is List) {
-        final frames = data
-            .map(
-              (e) => KlineCombineFrame.fromJson(
-                Map<String, dynamic>.from(e as Map),
-              ),
-            )
-            .toList();
-        return _finalizeCombineBundle(
-          bars,
-          frames,
-          const [],
-          const [],
-          const [],
-          SegAnalysisBundle.empty(),
-          const [],
-          const [],
-          'pending',
+      if (data is! Map) {
+        throw StateError(
+          'chan_ffi.dll 版本过旧（缺少 N 段流水线输出），请重新构建并替换 windows/native/chan_ffi.dll',
         );
       }
-      final bundle = KlineCombineBundle.fromJson(
-        Map<String, dynamic>.from(data as Map),
-      );
-      return _finalizeCombineBundle(
-        bars,
-        bundle.frames,
-        bundle.biConfirms,
-        bundle.barFeatures,
-        bundle.biSegments,
-        bundle.segAnalysis,
-        bundle.biVirtualBars,
-        bundle.biCombineFrames,
-        bundle.defaultBiPolicy,
-      );
+      return KlineCombineBundle.fromJson(Map<String, dynamic>.from(data));
     } finally {
       if (ptr != nullptr) calloc.free(ptr);
     }

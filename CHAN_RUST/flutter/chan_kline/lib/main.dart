@@ -5,13 +5,13 @@ import 'package:flutter/material.dart';
 
 import 'bridge/chan_bridge.dart';
 import 'compute/bi_virtual_bar_view_compute.dart';
-import 'compute/default_bi_compute.dart';
 import 'models/kline_bar.dart';
 import 'models/bi_confirm_signal.dart';
 import 'models/bar_crosshair_feature.dart';
 import 'models/bi_segment.dart';
 import 'models/bi_virtual_bar_view.dart';
 import 'models/kline_combine_frame.dart';
+import 'models/level_models.dart';
 import 'models/seg_analysis.dart';
 import 'widgets/kline_chart.dart';
 
@@ -65,6 +65,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
   List<BiVirtualBarView> _biVirtualBarViews = [];
   List<KlineCombineFrame> _biCombineFrames = [];
   SegAnalysisBundle _segAnalysis = SegAnalysisBundle.empty();
+  List<LevelBundle> _levels = [];
   Set<MainChartIndicator> _mainIndicators = {
     MainChartIndicator.kline,
     MainChartIndicator.biLine,
@@ -196,6 +197,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _biVirtualBarViews = [];
         _biCombineFrames = [];
         _segAnalysis = SegAnalysisBundle.empty();
+        _levels = [];
         _stepIdx = -1;
       });
     } finally {
@@ -213,35 +215,34 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _biVirtualBarViews = [];
         _biCombineFrames = [];
         _segAnalysis = SegAnalysisBundle.empty();
+        _levels = [];
       });
       return;
     }
     try {
-      var bundle = _bridge.buildKlineCombineBundle(_visibleBars);
+      final bundle = _bridge.buildKlineCombineBundle(_visibleBars);
       if (bundle.defaultBiPolicy == 'purged') {
         _defaultBiPurged = true;
       }
       var virtualBars = bundle.biVirtualBars;
-      var barFeatures = bundle.barFeatures;
-      if (_defaultBiPurged && bundle.defaultBiPolicy == 'pending') {
-        final stripped = stripPreConfirmDefault(
-          virtualBars,
-          barFeatures,
-          bundle.biSegments,
-        );
-        virtualBars = stripped.bars;
-        barFeatures = stripped.features;
+      // 会话级 purge：审判 FAIL 出现过后，步退回首笔确认前也不再展示默认笔
+      // （bar_features 的 bi_* 由 Rust 固定 purged 口径，首笔确认前本就为空）
+      if (_defaultBiPurged &&
+          bundle.defaultBiPolicy == 'pending' &&
+          bundle.biSegments.isEmpty) {
+        virtualBars = const [];
       }
       final biViews = buildBiVirtualBarViews(virtualBars);
       setState(() {
         _combineFrames = bundle.frames;
         _biConfirmSignals = bundle.biConfirms;
-        _barFeatures = barFeatures;
+        _barFeatures = bundle.barFeatures;
         _biSegments = bundle.biSegments;
         _biVirtualBarViews = biViews;
         _biCombineFrames = bundle.biCombineFrames;
         _segAnalysis = bundle.segAnalysis;
         _defaultBiPolicy = bundle.defaultBiPolicy;
+        _levels = bundle.levels;
       });
     } catch (e) {
       setState(() => _error = e.toString());
@@ -353,6 +354,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
                       biVirtualBarViews: _biVirtualBarViews,
                       biCombineFrames: _biCombineFrames,
                       segAnalysis: _segAnalysis,
+                      levels: _levels,
                       defaultBiPolicy: _defaultBiPolicy,
                       mainIndicators: _mainIndicators,
                       onMainIndicatorsChanged: (v) =>

@@ -3,9 +3,10 @@ import 'bar_crosshair_feature.dart';
 import 'bi_segment.dart';
 import 'bi_virtual_bar.dart';
 import 'kline_combine_frame.dart';
+import 'level_models.dart';
 import 'seg_analysis.dart';
 
-/// Rust `KlineCombineBundle`：合并线框 + 笔确认 + 十字线特征 + 笔段链 + 段分析。
+/// Rust `KlineCombineBundle`：合并线框 + 笔确认 + 十字线特征 + 笔段链 + N段流水线。
 class KlineCombineBundle {
   final List<KlineCombineFrame> frames;
   final List<BiConfirmSignal> biConfirms;
@@ -16,6 +17,9 @@ class KlineCombineBundle {
   final List<KlineCombineFrame> biCombineFrames;
   final String defaultBiPolicy;
 
+  /// N 段流水线全量输出（levels[0]=1段/笔，levels[1]=2段/线段，…穷尽）
+  final List<LevelBundle> levels;
+
   const KlineCombineBundle({
     required this.frames,
     required this.biConfirms,
@@ -25,6 +29,7 @@ class KlineCombineBundle {
     this.biVirtualBars = const [],
     this.biCombineFrames = const [],
     this.defaultBiPolicy = 'pending',
+    this.levels = const [],
   });
 
   factory KlineCombineBundle.fromJson(Map<String, dynamic> json) {
@@ -77,6 +82,9 @@ class KlineCombineBundle {
           )
           .toList(),
       defaultBiPolicy: json['default_bi_policy'] as String? ?? 'pending',
+      levels: (json['levels'] as List? ?? const [])
+          .map((e) => LevelBundle.fromJson(Map<String, dynamic>.from(e as Map)))
+          .toList(),
     );
   }
 
@@ -89,5 +97,6 @@ class KlineCombineBundle {
         biVirtualBars: [],
         biCombineFrames: [],
         defaultBiPolicy: 'pending',
+        levels: [],
       );
 }

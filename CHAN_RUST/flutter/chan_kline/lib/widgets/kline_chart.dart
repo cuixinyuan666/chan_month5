@@ -4,10 +4,9 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import '../compute/bar_feature_compute.dart';
 import '../compute/bi_combine_compute.dart';
-import '../compute/bi_virtual_bar_compute.dart';
 import '../compute/bi_virtual_bar_view_compute.dart';
+import '../compute/chart_view_compute.dart';
 import '../models/bi_confirm_signal.dart';
 import '../models/bar_crosshair_feature.dart';
 import '../models/bi_segment.dart';
@@ -16,6 +15,7 @@ import '../models/bi_virtual_bar_view.dart';
 import '../models/kline_bar.dart';
 import '../models/kline_combine_frame.dart';
 import '../models/bar_feature_lookup.dart';
+import '../models/level_models.dart';
 import '../models/seg_analysis.dart';
 import 'kline_axis_format.dart';
 import 'kline_viewport.dart';
@@ -44,6 +44,7 @@ class KlineChart extends StatefulWidget {
     required this.segAnalysis,
     required this.mainIndicators,
     required this.subIndicators,
+    this.levels = const [],
     this.defaultBiPolicy = 'pending',
     this.onMainIndicatorsChanged,
     this.onSubIndicatorsChanged,
@@ -58,6 +59,9 @@ class KlineChart extends StatefulWidget {
   final List<BiVirtualBarView> biVirtualBarViews;
   final List<KlineCombineFrame> biCombineFrames;
   final SegAnalysisBundle segAnalysis;
+
+  /// N 段流水线全量输出（十字线 as-of 重绘与 tooltip N 段块查表用）
+  final List<LevelBundle> levels;
   final Set<MainChartIndicator> mainIndicators;
   final Set<SubChartIndicator> subIndicators;
   final String defaultBiPolicy;
@@ -185,13 +189,14 @@ class _KlineChartState extends State<KlineChart> {
   int _crosshairAsOfIdx() =>
       widget.bars[_crosshairBarIdx!.clamp(0, widget.bars.length - 1)].idx;
 
+  /// as-of 笔 K 重建：Rust 冻结段 + 当步快照查表组装，Dart 端零缠论计算。
   List<BiVirtualBar> _asOfBiVirtualBars() {
-    return computeBiVirtualBarsAsOf(
-      widget.bars,
-      widget.biSegments,
-      widget.biConfirmSignals,
-      widget.defaultBiPolicy,
-      _crosshairAsOfIdx(),
+    return asOfBiVirtualBars(
+      bars: widget.bars,
+      levels: widget.levels,
+      barFeatures: widget.barFeatures,
+      defaultBiPolicy: widget.defaultBiPolicy,
+      asOf: _crosshairAsOfIdx(),
     );
   }
 
@@ -374,6 +379,7 @@ class _KlineChartState extends State<KlineChart> {
                       biVirtualBarViews: _effectiveBiVirtualBarViews,
                       biCombineFrames: _effectiveBiCombineFrames,
                       segAnalysis: widget.segAnalysis,
+                      levels: widget.levels,
                       mainIndicators: _activeMains,
                       subIndicators: _activeSubs,
                       viewport: _viewport,
@@ -515,6 +521,7 @@ class _KlineCompositePainter extends CustomPainter {
     required this.biVirtualBarViews,
     required this.biCombineFrames,
     required this.segAnalysis,
+    required this.levels,
     required this.mainIndicators,
     required this.subIndicators,
     required this.viewport,
@@ -533,6 +540,7 @@ class _KlineCompositePainter extends CustomPainter {
           barFeatures: barFeatures,
           biSegments: biSegments,
           segAnalysis: segAnalysis,
+          levels: levels,
           subIndicators: subIndicators,
         );
 
@@ -544,6 +552,7 @@ class _KlineCompositePainter extends CustomPainter {
   final List<BiVirtualBarView> biVirtualBarViews;
   final List<KlineCombineFrame> biCombineFrames;
   final SegAnalysisBundle segAnalysis;
+  final List<LevelBundle> levels;
   final Set<MainChartIndicator> mainIndicators;
   final Set<SubChartIndicator> subIndicators;
   final BarFeatureLookup featureLookup;

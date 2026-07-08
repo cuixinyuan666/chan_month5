@@ -8,19 +8,24 @@ import 'kline_bar.dart';
 
 import 'kline_combine_frame.dart';
 
+import 'level_models.dart';
+
 import 'seg_analysis.dart';
 
 
 
-/// 逐 K 字典式特征索引（ML / 十字线 tooltip 同源，均用 barFeatures 逐步冻结 bi_*）。
+/// 逐 K 字典式特征索引（ML / 十字线 tooltip 同源，均用 barFeatures 逐步冻结快照）。
 
 class BarFeatureLookup {
 
-  BarFeatureLookup._({required this.byIdx});
+  BarFeatureLookup._({required this.byIdx, this.totalLevels = 0});
 
 
 
   final Map<int, Map<String, dynamic>> byIdx;
+
+  /// 穷尽后的 N 段总层数（tooltip 对未诞生层输出占位行）
+  final int totalLevels;
 
 
 
@@ -38,6 +43,8 @@ class BarFeatureLookup {
 
     SegAnalysisBundle segAnalysis = const SegAnalysisBundle(),
 
+    List<LevelBundle> levels = const [],
+
     Set<SubChartIndicator> subIndicators = const {},
 
   }) {
@@ -45,6 +52,17 @@ class BarFeatureLookup {
     final byIdx = <int, Map<String, dynamic>>{};
 
     final featureByIdx = {for (final f in barFeatures) f.idx: f};
+
+    // 各层确认查表：level_confirms[n][x] = 确认柱值（n段K线合并分型确认，当步冻结）
+    // n 段块显示 n+1 层确认（K线块显示 levels[1] 即笔确认，与旧"K线合并分型确认"一致）
+    final levelConfirmByX = <int, Map<int, int>>{};
+    for (final lv in levels) {
+      final m = <int, int>{};
+      for (final c in lv.confirms) {
+        if (c.value == 1 || c.value == -1) m[c.x] = c.value;
+      }
+      levelConfirmByX[lv.level] = m;
+    }
 
 
 
@@ -93,6 +111,13 @@ class BarFeatureLookup {
         'bi_combine_low': feat?.biCombineLow ?? 0,
 
         'bi_combine_fx': feat?.biCombineFx ?? 'UNKNOWN',
+
+        'levels': feat?.levels ?? const <LevelSnap>[],
+
+        'level_confirms': {
+          for (final e in levelConfirmByX.entries)
+            if (e.value.containsKey(b.idx)) e.key: e.value[b.idx]!,
+        },
 
         'open': b.open,
 
@@ -313,7 +338,7 @@ class BarFeatureLookup {
 
 
 
-    return BarFeatureLookup._(byIdx: byIdx);
+    return BarFeatureLookup._(byIdx: byIdx, totalLevels: levels.length);
 
   }
 
@@ -355,7 +380,7 @@ class BarFeatureLookup {
     return 'O${_fmtPrice(open)}/H${_fmtPrice(high)}/L${_fmtPrice(low)}/C${_fmtPrice(close)}/VOL${_fmtVol(volume)}';
   }
 
-  /// 十字线主 tooltip（K 线 + 笔 K 线，与示例排序一致）。
+  /// 十字线主 tooltip：K 线块 + 全部 N 段块（1段=笔，2段=线段，…穷尽层全量输出）。
   List<String> crosshairTooltipLines(int idx, {required String timePart}) {
     final row = byIdx[idx];
     if (row == null) return const [];
@@ -371,7 +396,7 @@ class BarFeatureLookup {
     final combineHigh = (row['combine_high'] as num?)?.toDouble() ?? high;
     final combineLow = (row['combine_low'] as num?)?.toDouble() ?? low;
 
-    // K线合并分型确认：仅 1 / -1 显示数值，0 或空显示空值
+    // K线合并分型确认（=1段端点确认）：仅 1 / -1 显示数值，0 或空显示空值
     var combineFxConfirm = '';
     final biConfirm = row['bi_confirm'];
     if (biConfirm is Map) {
@@ -388,7 +413,7 @@ class BarFeatureLookup {
       'K线合并:H${_fmtPrice(combineHigh)}/L${_fmtPrice(combineLow)}',
       'K线合并K线序:$mergeInner',
       'K线合并分型确认:$combineFxConfirm',
-      ...crosshairBiLines(idx),
+      ...crosshairLevelLines(idx),
     ];
     return lines;
   }
@@ -435,61 +460,99 @@ class BarFeatureLookup {
 
 
 
-  /// 笔 K 十字线行（与 ML 同源：barFeatures 逐步冻结 bi_*；首笔确认前占位）。
-
-  List<String> crosshairBiLines(int idx) {
+  /// N 段十字线行（与 ML 同源：逐步冻结 levels 快照；1段=笔，2段=线段，…）。
+  /// 每层块模板与 K 线块同构：[序号] / OHLCV / 合并序 / 合并H:L / 合并分型确认。
+  /// 未诞生层输出占位行（当时当下历史，不回写）。
+  List<String> crosshairLevelLines(int idx) {
 
     final row = byIdx[idx];
 
     if (row == null) return const [];
 
-    final biIdx = row['bi_idx'];
+    final snaps = row['levels'];
 
-    if (biIdx == null) {
+    final confirms = row['level_confirms'];
 
-      return const [
+    final snapList = snaps is List<LevelSnap> ? snaps : const <LevelSnap>[];
 
-        '笔K线[序号]:首笔确认前',
+    final total = totalLevels > snapList.length ? totalLevels : snapList.length;
 
-        '笔K线:—',
+    final lines = <String>[];
 
-        '笔K线合并笔K线序:—',
+    for (var n = 1; n <= total; n++) {
 
-        '笔K线合并:—',
+      final snap = n - 1 < snapList.length ? snapList[n - 1] : null;
+
+      // n 段块的"合并分型确认"= n+1 层端点确认（当步冻结，n+1 层不存在则空）
+      int? confirmVal;
+
+      if (confirms is Map) {
+
+        final v = confirms[n + 1];
+
+        if (v is int && (v == 1 || v == -1)) confirmVal = v;
+
+      }
+
+      lines.addAll(_levelBlockLines(n, snap, confirmVal));
+
+    }
+
+    return lines;
+
+  }
+
+
+
+  List<String> _levelBlockLines(int n, LevelSnap? snap, int? confirmVal) {
+
+    final label = '$n段K线';
+
+    final confirmText = confirmVal == null ? '' : '$confirmVal';
+
+    if (snap == null || snap.unitIdx == null) {
+
+      return [
+
+        '$label[序号]:首$n段确认前',
+
+        '$label:—',
+
+        '$label合并$label序:—',
+
+        '$label合并:—',
+
+        '$label合并分型确认:$confirmText',
 
       ];
 
     }
 
-    final inner = row['bi_merge_inner_seq'] ?? 0;
+    return [
 
-    final lines = <String>[
+      '$label[序号]:${snap.unitIdx}',
 
-      '笔K线[序号]:${(biIdx as num).toInt()}',
+      '$label:${_fmtOhlcv(
 
-      '笔K线:${_fmtOhlcv(
+        open: snap.unitOpen,
 
-        open: (row['bi_open'] as num?)?.toDouble() ?? 0,
+        high: snap.unitHigh,
 
-        high: (row['bi_high'] as num?)?.toDouble() ?? 0,
+        low: snap.unitLow,
 
-        low: (row['bi_low'] as num?)?.toDouble() ?? 0,
+        close: snap.unitClose,
 
-        close: (row['bi_close'] as num?)?.toDouble() ?? 0,
-
-        volume: (row['bi_volume'] as num?) ?? 0,
+        volume: snap.unitVolume,
 
       )}',
 
-      '笔K线合并笔K线序:$inner',
+      '$label合并$label序:${snap.mergeInnerSeq}',
 
-      '笔K线合并:H${_fmtPrice((row['bi_combine_high'] as num?)?.toDouble() ?? 0)}/'
+      '$label合并:H${_fmtPrice(snap.combineHigh)}/L${_fmtPrice(snap.combineLow)}',
 
-          'L${_fmtPrice((row['bi_combine_low'] as num?)?.toDouble() ?? 0)}',
+      '$label合并分型确认:$confirmText',
 
     ];
-
-    return lines;
 
   }
 

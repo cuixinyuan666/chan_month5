@@ -1,11 +1,8 @@
-import 'package:chan_kline/compute/bar_feature_compute.dart';
-import 'package:chan_kline/compute/bi_crosshair_compute.dart';
-import 'package:chan_kline/compute/bi_confirm_compute.dart';
-import 'package:chan_kline/compute/default_bi_compute.dart';
 import 'package:chan_kline/models/bar_crosshair_feature.dart';
 import 'package:chan_kline/models/bi_confirm_signal.dart';
 import 'package:chan_kline/models/kline_bar.dart';
 import 'package:chan_kline/models/bar_feature_lookup.dart';
+import 'package:chan_kline/models/level_models.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 List<KlineBar> _bars(int n) => List.generate(
@@ -24,126 +21,104 @@ List<KlineBar> _bars(int n) => List.generate(
       ),
     );
 
+/// 模拟 Rust 逐K快照：首段确认前 unitIdx=null（purged 口径）
+BarCrosshairFeature _feat(int idx, {int? unitIdx, int level2Unit = -1}) {
+  return BarCrosshairFeature(
+    idx: idx,
+    weekday: '周一',
+    mergeInnerSeq: 0,
+    levels: [
+      LevelSnap(
+        level: 1,
+        unitIdx: unitIdx,
+        unitDir: 1,
+        unitX1: unitIdx == null ? -1 : 0,
+        unitX2: unitIdx == null ? -1 : idx,
+        unitOpen: 10.0,
+        unitHigh: 11.0,
+        unitLow: 9.5,
+        unitClose: 10.5,
+        unitVolume: 300,
+        mergeInnerSeq: 0,
+        mergeCount: 1,
+        combineHigh: 11.0,
+        combineLow: 9.5,
+      ),
+      if (level2Unit >= 0)
+        LevelSnap(
+          level: 2,
+          unitIdx: level2Unit,
+          unitDir: -1,
+          unitX1: 0,
+          unitX2: idx,
+          unitOpen: 10.0,
+          unitHigh: 12.0,
+          unitLow: 9.0,
+          unitClose: 9.5,
+          unitVolume: 900,
+          mergeInnerSeq: 1,
+          mergeCount: 2,
+          combineHigh: 12.0,
+          combineLow: 9.0,
+        ),
+    ],
+  );
+}
+
 void main() {
-  test('purged：首笔确认前 tooltip 占位，确认当步有笔K字段', () {
-    final bars = _bars(8);
-    final confirms = [
-      const BiConfirmSignal(
-        x: 1,
-        fx: 'BOTTOM',
-        value: 1,
-        fractalX1: 0,
-        fractalX2: 1,
-      ),
-    ];
-    final segments = computeBiSegments(bars, confirms);
-    var features = computeBarCrosshairFeatures(bars, const []);
-    features = enrichBiCrosshairFields(
-      bars,
-      features,
-      segments,
-      confirms,
-      'purged',
-    );
-
-    expect(features[0].biIdx, isNull);
-    expect(features[1].biIdx, 0);
-    expect(features[1].biHigh, greaterThan(0));
-
+  test('首段确认前：全部 N 段块输出占位行', () {
+    final bars = _bars(3);
     final lookup = BarFeatureLookup.build(
       bars: bars,
       combineFrames: const [],
-      biConfirms: confirms,
-      barFeatures: features,
-      biSegments: segments,
+      biConfirms: const [],
+      barFeatures: [for (var i = 0; i < 3; i++) _feat(i)],
+      levels: const [LevelBundle(level: 1), LevelBundle(level: 2)],
     );
-
-    final before = lookup.crosshairTooltipLines(0, timePart: '2024/01/01 09:00');
-    expect(before.any((l) => l.contains('首笔确认前')), isTrue);
-    expect(before.any((l) => l.startsWith('K线合并K线序:')), isTrue);
-    expect(before.any((l) => l.startsWith('K线合并分型确认:')), isTrue);
-    expect(BarFeatureLookup.weekdayToW('周五'), 'w5');
-    expect(BarFeatureLookup.weekdayToW('周日'), 'w7');
-    expect(before.first, '日期时间:2024/01/01 09:00 w1');
-
-    final atConfirm = lookup.crosshairTooltipLines(1, timePart: '2024/01/01 09:01');
-    final biSeqIdx = atConfirm.indexWhere((l) => l.startsWith('笔K线[序号]:'));
-    final biOhlcvIdx = atConfirm.indexWhere((l) => l.startsWith('笔K线:O'));
-    final biMergeSeqIdx = atConfirm.indexWhere((l) => l.startsWith('笔K线合并笔K线序:'));
-    expect(biSeqIdx, lessThan(biOhlcvIdx));
-    expect(biOhlcvIdx, lessThan(biMergeSeqIdx));
-    expect(atConfirm.any((l) => l.startsWith('笔K线[序号]:0')), isTrue);
-    expect(atConfirm.any((l) => l.startsWith('K线合并分型确认:1')), isTrue);
-    expect(atConfirm.any((l) => l.startsWith('K线合并:H')), isTrue);
-    expect(atConfirm.any((l) => l.startsWith('笔K线合并:H')), isTrue);
+    final lines = lookup.crosshairTooltipLines(0, timePart: '2024/01/01 09:00');
+    expect(lines.first, '日期时间:2024/01/01 09:00 w1');
+    expect(lines.any((l) => l == '1段K线[序号]:首1段确认前'), isTrue);
+    expect(lines.any((l) => l == '2段K线[序号]:首2段确认前'), isTrue);
+    expect(lines.any((l) => l.startsWith('K线合并分型确认:')), isTrue);
   });
 
-  test('第二笔 K线合并分型确认当步展示新起 provisional 笔K字段', () {
-    final bars = _bars(10);
-    final confirms = [
-      const BiConfirmSignal(
-        x: 2,
-        fx: 'BOTTOM',
-        value: 1,
-        fractalX1: 1,
-        fractalX2: 1,
-      ),
-      const BiConfirmSignal(
-        x: 5,
-        fx: 'TOP',
-        value: -1,
-        fractalX1: 4,
-        fractalX2: 4,
-      ),
-    ];
-    final segments = computeBiSegments(bars, confirms);
-    var features = computeBarCrosshairFeatures(bars, const []);
-    features = enrichBiCrosshairFields(
-      bars,
-      features,
-      segments,
-      confirms,
-      'purged',
-    );
-    expect(features[5].biIdx, 1);
-    expect(features[5].biHigh, greaterThan(0));
-    expect(features[5].biCombineHigh, greaterThan(0));
-
+  test('1段/2段快照齐全时：N 段块按模板输出序号/OHLCV/合并/确认', () {
+    final bars = _bars(6);
+    final feats = [for (var i = 0; i < 6; i++) _feat(i, unitIdx: i >= 2 ? 0 : null, level2Unit: i >= 4 ? 0 : -1)];
     final lookup = BarFeatureLookup.build(
       bars: bars,
       combineFrames: const [],
-      biConfirms: confirms,
-      barFeatures: features,
-      biSegments: segments,
+      biConfirms: const [
+        BiConfirmSignal(x: 2, fx: 'BOTTOM', value: 1, fractalX1: 1, fractalX2: 1),
+      ],
+      barFeatures: feats,
+      levels: [
+        const LevelBundle(level: 1, confirms: [
+          LevelConfirm(x: 2, fx: 'BOTTOM', value: 1),
+        ]),
+        const LevelBundle(level: 2, confirms: [
+          LevelConfirm(x: 4, fx: 'TOP', value: -1),
+        ]),
+      ],
     );
-    final atSecond = lookup.crosshairTooltipLines(5, timePart: '2024/01/01 09:05');
-    expect(atSecond.any((l) => l.startsWith('K线合并分型确认:-1')), isTrue);
-    expect(atSecond.any((l) => l.startsWith('笔K线[序号]:1')), isTrue);
-    expect(atSecond.any((l) => l.startsWith('笔K线:O')), isTrue);
-    expect(atSecond.any((l) => l.startsWith('笔K线合并笔K线序:')), isTrue);
-    expect(atSecond.any((l) => l.startsWith('笔K线合并:H')), isTrue);
-  });
 
-  test('pending 展示策略不影响 purged 十字线笔K字段', () {
-    final bars = _bars(5);
-    final confirms = computeBiConfirmSignals(bars);
-    final segments = computeBiSegments(bars, confirms);
-    var features = computeBarCrosshairFeatures(bars, const []);
-    // 模拟 bridge：十字线固定 purged
-    features = enrichBiCrosshairFields(
-      bars,
-      features,
-      segments,
-      confirms,
-      'purged',
-    );
-    if (confirms.isEmpty) {
-      expect(features.every((f) => f.biIdx == null), isTrue);
-    } else {
-      final firstX = confirms.first.x;
-      for (var i = 0; i < firstX; i++) {
-        expect(features[i].biIdx, isNull, reason: 'idx=$i');
-      }
-    }
+    final atConfirm = lookup.crosshairTooltipLines(2, timePart: '2024/01/01 09:02');
+    // K线合并分型确认=1层确认（旧口径 bi_confirm）
+    expect(atConfirm.any((l) => l == 'K线合并分型确认:1'), isTrue);
+    // 1段块顺序：序号 → OHLCV → 合并序 → 合并H/L → 合并分型确认
+    final seqIdx = atConfirm.indexWhere((l) => l.startsWith('1段K线[序号]:0'));
+    final ohlcvIdx = atConfirm.indexWhere((l) => l.startsWith('1段K线:O'));
+    final mergeSeqIdx = atConfirm.indexWhere((l) => l.startsWith('1段K线合并1段K线序:'));
+    final mergeHlIdx = atConfirm.indexWhere((l) => l.startsWith('1段K线合并:H'));
+    expect(seqIdx, greaterThanOrEqualTo(0));
+    expect(seqIdx, lessThan(ohlcvIdx));
+    expect(ohlcvIdx, lessThan(mergeSeqIdx));
+    expect(mergeSeqIdx, lessThan(mergeHlIdx));
+
+    // x=4 当步：1段块的"合并分型确认"=2层确认值 -1
+    final at2 = lookup.crosshairTooltipLines(4, timePart: '2024/01/01 09:04');
+    expect(at2.any((l) => l == '1段K线合并分型确认:-1'), isTrue);
+    expect(at2.any((l) => l.startsWith('2段K线[序号]:0')), isTrue);
+    expect(at2.any((l) => l.startsWith('2段K线合并2段K线序:1')), isTrue);
   });
 }

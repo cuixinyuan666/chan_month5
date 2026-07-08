@@ -12,7 +12,9 @@ import 'bi_virtual_bar_view_compute.dart';
 
 
 
-/// Dart 回退：与 Rust `build_bi_combine_frames` 同口径（view 坐标 + 半侧锚定）。
+/// 十字线 as-of 视图重建专用：与 Rust `build_bi_combine_frames` 同口径
+/// （view 坐标 + 半侧锚定）。末态口径由 Rust bundle 直供，此处仅服务
+/// 十字线指向历史 K 时的本地重绘，避免高频跨 FFI。
 
 List<KlineCombineFrame> computeBiCombineFrames(
 
