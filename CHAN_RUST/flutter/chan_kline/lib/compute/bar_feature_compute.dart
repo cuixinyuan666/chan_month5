@@ -63,7 +63,7 @@ List<BarCrosshairFeature> computeBarCrosshairFeatures(
 
 class _StepState {
 
-  int mergeInnerSeq = 1;
+  int mergeInnerSeq = 0;
 
   int mergeCount = 1;
 
@@ -255,7 +255,7 @@ List<_StepState> _buildBarCombineStepStates(List<KlineBar> bars) {
 
     out.add(_StepState()
 
-      ..mergeInnerSeq = mergeCount
+      ..mergeInnerSeq = mergeCount - 1
 
       ..mergeCount = mergeCount
 

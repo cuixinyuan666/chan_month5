@@ -219,7 +219,7 @@ class _HlCombineStepState {
   _BiCombineSnap crosshairSnapshot(int activeBiIdx) {
     if (highs.isEmpty) {
       return const _BiCombineSnap(
-        biMergeInnerSeq: 1,
+        biMergeInnerSeq: 0,
         biMergeCount: 1,
         biCombineHigh: 0,
         biCombineLow: 0,
@@ -232,11 +232,11 @@ class _HlCombineStepState {
     for (var i = 0; i < lastKlc; i++) {
       unitStart += unitCounts[i];
     }
-    var innerSeq = cnt;
+    var innerSeq = cnt - 1;
     for (var j = 0; j < cnt; j++) {
       final ui = unitStart + j;
       if (ui < unitBiIdxs.length && unitBiIdxs[ui] == activeBiIdx) {
-        innerSeq = j + 1;
+        innerSeq = j;
         break;
       }
     }
@@ -351,16 +351,45 @@ BiVirtualBar? _segmentVbEndedAtBar(
   return null;
 }
 
-BiVirtualBar? _activeBiAt(
+bool _isFirstBiFreezeStep(
+  List<BiSegment> biSegments,
+  List<BiConfirmSignal> biConfirms,
+  int barX,
+) {
+  BiSegment? ended;
+  for (final s in biSegments) {
+    if (s.endConfirmX == barX) {
+      ended = s;
+      break;
+    }
+  }
+  if (ended == null || (!ended.isBootstrap && !ended.isPromotedDefault)) {
+    return false;
+  }
+  var cnt = 0;
+  for (final c in biConfirms) {
+    if ((c.fx == 'TOP' || c.fx == 'BOTTOM') && c.x <= barX) cnt++;
+  }
+  return cnt <= 1;
+}
+
+/// 十字线笔 K：K线合并分型确认当步优先新起 provisional，首笔冻结步除外。
+BiVirtualBar? _crosshairActiveBiAt(
   List<KlineBar> bars,
   List<BiSegment> biSegments,
   List<BiConfirmSignal> biConfirms,
   int barX,
   int nextBi,
 ) {
-  return _segmentVbEndedAtBar(bars, biSegments, barX) ??
-      _provisionalBiAt(bars, biSegments, biConfirms, barX, nextBi) ??
-      _confirmedBiAt(bars, biSegments, barX);
+  final prov = _provisionalBiAt(bars, biSegments, biConfirms, barX, nextBi);
+  final ended = _segmentVbEndedAtBar(bars, biSegments, barX);
+  if (prov != null && ended != null) {
+    if (_isFirstBiFreezeStep(biSegments, biConfirms, barX)) {
+      return ended;
+    }
+    return prov;
+  }
+  return prov ?? ended ?? _confirmedBiAt(bars, biSegments, barX);
 }
 
 BarCrosshairFeature _copyWithBi(
@@ -424,19 +453,28 @@ List<BarCrosshairFeature> enrichBiCrosshairFields(
       nextBi++;
     }
 
-    var active = _activeBiAt(bars, biSegments, biConfirms, barX, nextBi);
+    var active = _crosshairActiveBiAt(
+      bars,
+      biSegments,
+      biConfirms,
+      barX,
+      nextBi,
+    );
     if (active == null && defaultBiPolicy == 'pending') {
       active = buildPreConfirmDefaultBi(bars, barX);
     }
-    final snapState = mergeState.clone();
     final prov = _provisionalBiAt(bars, biSegments, biConfirms, barX, nextBi);
-    if (prov != null) {
-      snapState.updateProvisional(_unitFromVb(prov), prov.idx);
-    }
 
     final f = features[barX];
     if (active != null) {
-      final snap = snapState.crosshairSnapshot(active.idx);
+      _BiCombineSnap snap;
+      if (prov != null && prov.idx == active.idx) {
+        final snapState = mergeState.clone();
+        snapState.updateProvisional(_unitFromVb(prov), prov.idx);
+        snap = snapState.crosshairSnapshot(active.idx);
+      } else {
+        snap = mergeState.crosshairSnapshot(active.idx);
+      }
       out.add(
         _copyWithBi(
           f,
@@ -458,7 +496,7 @@ List<BarCrosshairFeature> enrichBiCrosshairFields(
         _copyWithBi(
           f,
           clearBiIdx: true,
-          biMergeInnerSeq: 1,
+          biMergeInnerSeq: 0,
           biMergeCount: 1,
           biOpen: 0,
           biHigh: 0,

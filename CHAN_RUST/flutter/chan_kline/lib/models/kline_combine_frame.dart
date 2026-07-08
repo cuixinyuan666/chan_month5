@@ -1,4 +1,4 @@
-/// 合并 K 线线框（Rust `KlineCombineFrame`）。
+/// K线合并线框（Rust `KlineCombineFrame`）。
 class KlineCombineFrame {
   final int x1;
   final int x2;
@@ -47,8 +47,8 @@ enum MainChartIndicator {
   kline('K线'),
   biLine('笔连线'),
   segLine('段连线'),
-  klineCombine('合并K线'),
-  biKlineCombine('合并笔K线');
+  klineCombine('K线合并'),
+  biKlineCombine('笔K线合并');
 
   const MainChartIndicator(this.label);
   final String label;
@@ -57,9 +57,9 @@ enum MainChartIndicator {
 /// 副图指标类型。
 enum SubChartIndicator {
   volume('成交量'),
-  klineCombine('合并K线'),
-  biKlineCombine('合并笔K线'),
-  biConfirm('笔确认'),
+  klineCombine('K线合并'),
+  biKlineCombine('笔K线合并'),
+  biConfirm('K线合并分型确认'),
   segConfirm('段确认'),
   firstSegDir('首段方向'),
   fractalPeakDist('K线分型极点距');

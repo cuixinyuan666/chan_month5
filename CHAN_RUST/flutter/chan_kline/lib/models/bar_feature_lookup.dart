@@ -62,7 +62,7 @@ class BarFeatureLookup {
 
         'weekday': feat?.weekday ?? '-',
 
-        'merge_inner_seq': feat?.mergeInnerSeq ?? 1,
+        'merge_inner_seq': feat?.mergeInnerSeq ?? 0,
 
         'merge_count': feat?.mergeCount ?? 1,
 
@@ -74,7 +74,7 @@ class BarFeatureLookup {
 
         'bi_idx': feat?.biIdx,
 
-        'bi_merge_inner_seq': feat?.biMergeInnerSeq ?? 1,
+        'bi_merge_inner_seq': feat?.biMergeInnerSeq ?? 0,
 
         'bi_merge_count': feat?.biMergeCount ?? 1,
 
@@ -325,6 +325,74 @@ class BarFeatureLookup {
 
 
 
+  /// 星期中文 → w1..w7（周一=w1 … 周六=w6，周日=w7）。
+  static String weekdayToW(String weekday) {
+    const map = {
+      '周一': 'w1',
+      '周二': 'w2',
+      '周三': 'w3',
+      '周四': 'w4',
+      '周五': 'w5',
+      '周六': 'w6',
+      '周日': 'w7',
+    };
+    return map[weekday] ?? weekday;
+  }
+
+  static String _fmtPrice(double v) => v.toStringAsFixed(2);
+
+  static String _fmtVol(num vol) => vol == vol.roundToDouble()
+      ? vol.toInt().toString()
+      : vol.toStringAsFixed(2);
+
+  static String _fmtOhlcv({
+    required double open,
+    required double high,
+    required double low,
+    required double close,
+    required num volume,
+  }) {
+    return 'O${_fmtPrice(open)}/H${_fmtPrice(high)}/L${_fmtPrice(low)}/C${_fmtPrice(close)}/VOL${_fmtVol(volume)}';
+  }
+
+  /// 十字线主 tooltip（K 线 + 笔 K 线，与示例排序一致）。
+  List<String> crosshairTooltipLines(int idx, {required String timePart}) {
+    final row = byIdx[idx];
+    if (row == null) return const [];
+
+    final weekday = weekdayToW(row['weekday'] as String? ?? '-');
+    final mergeInner = row['merge_inner_seq'] ?? 0;
+
+    final open = (row['open'] as num?)?.toDouble() ?? 0;
+    final high = (row['high'] as num?)?.toDouble() ?? 0;
+    final low = (row['low'] as num?)?.toDouble() ?? 0;
+    final close = (row['close'] as num?)?.toDouble() ?? 0;
+    final volume = (row['volume'] as num?) ?? 0;
+    final combineHigh = (row['combine_high'] as num?)?.toDouble() ?? high;
+    final combineLow = (row['combine_low'] as num?)?.toDouble() ?? low;
+
+    // K线合并分型确认：仅 1 / -1 显示数值，0 或空显示空值
+    var combineFxConfirm = '';
+    final biConfirm = row['bi_confirm'];
+    if (biConfirm is Map) {
+      final v = biConfirm['value'];
+      if (v is num && (v == 1 || v == -1)) {
+        combineFxConfirm = '$v';
+      }
+    }
+
+    final lines = <String>[
+      '日期时间:$timePart $weekday',
+      'K线[序号]:${row['idx']}',
+      'K线:${_fmtOhlcv(open: open, high: high, low: low, close: close, volume: volume)}',
+      'K线合并:H${_fmtPrice(combineHigh)}/L${_fmtPrice(combineLow)}',
+      'K线合并K线序:$mergeInner',
+      'K线合并分型确认:$combineFxConfirm',
+      ...crosshairBiLines(idx),
+    ];
+    return lines;
+  }
+
   List<String> crosshairSubLines(int idx, Set<SubChartIndicator> active) {
 
     final row = byIdx[idx];
@@ -350,8 +418,6 @@ class BarFeatureLookup {
       lines.add('$label: $v');
 
     }
-
-    if (active.contains(SubChartIndicator.biConfirm)) add('笔确认', sub['bi_confirm_value']);
 
     if (active.contains(SubChartIndicator.segConfirm)) add('段确认', sub['seg_confirm']);
 
@@ -383,83 +449,45 @@ class BarFeatureLookup {
 
       return const [
 
-        '笔K线[序号]：首笔确认前',
+        '笔K线[序号]:首笔确认前',
 
-        '笔K线[合并内序]：—',
+        '笔K线:—',
 
-        '笔K线[O/H/L/C/VOL]：—',
+        '笔K线合并笔K线序:—',
 
-        '合并笔K线[H/L]：—',
+        '笔K线合并:—',
 
       ];
 
     }
 
-    String fmt(double v) => v.toStringAsFixed(2);
-
-    final vol = row['bi_volume'];
-
-    final volText = vol is num && vol == vol.roundToDouble()
-
-        ? vol.toInt().toString()
-
-        : (vol as num?)?.toStringAsFixed(2) ?? '0';
-
-    final inner = row['bi_merge_inner_seq'] ?? 1;
-
-    final mergeCnt = row['bi_merge_count'] ?? 1;
+    final inner = row['bi_merge_inner_seq'] ?? 0;
 
     final lines = <String>[
 
-      '笔K线[序号]：#${(biIdx as num).toInt() + 1}',
+      '笔K线[序号]:${(biIdx as num).toInt()}',
 
-      '笔K线[合并内序]：$inner/$mergeCnt',
+      '笔K线:${_fmtOhlcv(
 
-      '笔K线[O/H/L/C/VOL]：'
+        open: (row['bi_open'] as num?)?.toDouble() ?? 0,
 
-          '${fmt((row['bi_open'] as num?)?.toDouble() ?? 0)}/'
+        high: (row['bi_high'] as num?)?.toDouble() ?? 0,
 
-          '${fmt((row['bi_high'] as num?)?.toDouble() ?? 0)}/'
+        low: (row['bi_low'] as num?)?.toDouble() ?? 0,
 
-          '${fmt((row['bi_low'] as num?)?.toDouble() ?? 0)}/'
+        close: (row['bi_close'] as num?)?.toDouble() ?? 0,
 
-          '${fmt((row['bi_close'] as num?)?.toDouble() ?? 0)}/'
+        volume: (row['bi_volume'] as num?) ?? 0,
 
-          '$volText',
+      )}',
 
-      '合并笔K线[H/L]：'
+      '笔K线合并笔K线序:$inner',
 
-          '${fmt((row['bi_combine_high'] as num?)?.toDouble() ?? 0)}/'
+      '笔K线合并:H${_fmtPrice((row['bi_combine_high'] as num?)?.toDouble() ?? 0)}/'
 
-          '${fmt((row['bi_combine_low'] as num?)?.toDouble() ?? 0)}',
+          'L${_fmtPrice((row['bi_combine_low'] as num?)?.toDouble() ?? 0)}',
 
     ];
-
-    final biFx = row['bi_combine_fx'];
-
-    if (biFx is String && biFx != 'UNKNOWN') {
-
-      lines.add('合并笔K线[分型]：$biFx');
-
-    }
-
-    final biConfirm = row['bi_confirm'];
-
-    if (biConfirm is Map) {
-
-      final v = biConfirm['value'];
-
-      final fx = biConfirm['fx'];
-
-      if (v is num && v != 0 && fx is String) {
-
-        final sign = v > 0 ? '+$v' : '$v';
-
-        lines.add('笔确认当步：$fx $sign（冻结）');
-
-      }
-
-    }
 
     return lines;
 

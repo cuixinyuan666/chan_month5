@@ -58,13 +58,70 @@ void main() {
       biSegments: segments,
     );
 
-    final before = lookup.crosshairBiLines(0);
-    expect(before.first, contains('首笔确认前'));
+    final before = lookup.crosshairTooltipLines(0, timePart: '2024/01/01 09:00');
+    expect(before.any((l) => l.contains('首笔确认前')), isTrue);
+    expect(before.any((l) => l.startsWith('K线合并K线序:')), isTrue);
+    expect(before.any((l) => l.startsWith('K线合并分型确认:')), isTrue);
+    expect(BarFeatureLookup.weekdayToW('周五'), 'w5');
+    expect(BarFeatureLookup.weekdayToW('周日'), 'w7');
+    expect(before.first, '日期时间:2024/01/01 09:00 w1');
 
-    final atConfirm = lookup.crosshairBiLines(1);
-    expect(atConfirm.any((l) => l.startsWith('笔K线[序号]：#1')), isTrue);
-    expect(atConfirm.any((l) => l.contains('笔确认当步')), isTrue);
-    expect(atConfirm.any((l) => l.startsWith('笔K线[合并内序]：')), isTrue);
+    final atConfirm = lookup.crosshairTooltipLines(1, timePart: '2024/01/01 09:01');
+    final biSeqIdx = atConfirm.indexWhere((l) => l.startsWith('笔K线[序号]:'));
+    final biOhlcvIdx = atConfirm.indexWhere((l) => l.startsWith('笔K线:O'));
+    final biMergeSeqIdx = atConfirm.indexWhere((l) => l.startsWith('笔K线合并笔K线序:'));
+    expect(biSeqIdx, lessThan(biOhlcvIdx));
+    expect(biOhlcvIdx, lessThan(biMergeSeqIdx));
+    expect(atConfirm.any((l) => l.startsWith('笔K线[序号]:0')), isTrue);
+    expect(atConfirm.any((l) => l.startsWith('K线合并分型确认:1')), isTrue);
+    expect(atConfirm.any((l) => l.startsWith('K线合并:H')), isTrue);
+    expect(atConfirm.any((l) => l.startsWith('笔K线合并:H')), isTrue);
+  });
+
+  test('第二笔 K线合并分型确认当步展示新起 provisional 笔K字段', () {
+    final bars = _bars(10);
+    final confirms = [
+      const BiConfirmSignal(
+        x: 2,
+        fx: 'BOTTOM',
+        value: 1,
+        fractalX1: 1,
+        fractalX2: 1,
+      ),
+      const BiConfirmSignal(
+        x: 5,
+        fx: 'TOP',
+        value: -1,
+        fractalX1: 4,
+        fractalX2: 4,
+      ),
+    ];
+    final segments = computeBiSegments(bars, confirms);
+    var features = computeBarCrosshairFeatures(bars, const []);
+    features = enrichBiCrosshairFields(
+      bars,
+      features,
+      segments,
+      confirms,
+      'purged',
+    );
+    expect(features[5].biIdx, 1);
+    expect(features[5].biHigh, greaterThan(0));
+    expect(features[5].biCombineHigh, greaterThan(0));
+
+    final lookup = BarFeatureLookup.build(
+      bars: bars,
+      combineFrames: const [],
+      biConfirms: confirms,
+      barFeatures: features,
+      biSegments: segments,
+    );
+    final atSecond = lookup.crosshairTooltipLines(5, timePart: '2024/01/01 09:05');
+    expect(atSecond.any((l) => l.startsWith('K线合并分型确认:-1')), isTrue);
+    expect(atSecond.any((l) => l.startsWith('笔K线[序号]:1')), isTrue);
+    expect(atSecond.any((l) => l.startsWith('笔K线:O')), isTrue);
+    expect(atSecond.any((l) => l.startsWith('笔K线合并笔K线序:')), isTrue);
+    expect(atSecond.any((l) => l.startsWith('笔K线合并:H')), isTrue);
   });
 
   test('pending 展示策略不影响 purged 十字线笔K字段', () {

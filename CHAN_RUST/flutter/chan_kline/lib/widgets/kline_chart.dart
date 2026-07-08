@@ -171,7 +171,7 @@ class _KlineChartState extends State<KlineChart> {
     return buildBiVirtualBarViews(asOfBars);
   }
 
-  /// 十字线开启时按当步笔 K 重建合并笔 K 框（与 bi_combine 逐步口径对齐）。
+  /// 十字线开启时按当步笔 K 重建笔K线合并框（与 bi_combine 逐步口径对齐）。
   List<KlineCombineFrame> get _effectiveBiCombineFrames {
     if (!_crosshairEnabled || _crosshairBarIdx == null) {
       return widget.biCombineFrames;
@@ -492,7 +492,7 @@ class _KlineChartState extends State<KlineChart> {
               height: hintH,
               child: Center(
                 child: Text(
-                  '主图: $_mainLabel  |  副图: $_subLabel  |  笔K ${widget.biVirtualBarViews.length}  合并笔K ${widget.biCombineFrames.length}  段确认 ${widget.segAnalysis.segConfirms.length}  段连线 ${widget.segAnalysis.segLines.length}  |  双击十字线  |  ${widget.bars.length}根',
+                  '主图: $_mainLabel  |  副图: $_subLabel  |  笔K ${widget.biVirtualBarViews.length}  笔K线合并 ${widget.biCombineFrames.length}  段确认 ${widget.segAnalysis.segConfirms.length}  段连线 ${widget.segAnalysis.segLines.length}  |  双击十字线  |  ${widget.bars.length}根',
                   style: const TextStyle(color: Color(0x99FFFFFF), fontSize: 11),
                   textAlign: TextAlign.center,
                 ),
@@ -763,7 +763,7 @@ class _KlineCompositePainter extends CustomPainter {
   }) {
     if (biVirtualBarViews.isEmpty) return;
 
-    // faint：主图合并笔K底层，低不透明度以免压住 1 分钟 K
+    // faint：主图笔K线合并底层，低不透明度以免压住 1 分钟 K
     final upBody = faint ? const Color(0x38E53935) : const Color(0x88E53935);
     final dnBody = faint ? const Color(0x3826A69A) : const Color(0x8826A69A);
     final upStroke = faint ? const Color(0x55E53935) : const Color(0xFFE53935);
@@ -1140,7 +1140,7 @@ class _KlineCompositePainter extends CustomPainter {
     }
   }
 
-  /// 主图合并线框：按真实价格坐标叠加（合并 K / 合并笔 K 共用）。
+  /// 主图 K线合并 / 笔K线合并线框：按真实价格坐标叠加。
   void _drawCombineFramesOnMainChart(
     Canvas canvas,
     double w,
@@ -1201,7 +1201,7 @@ class _KlineCompositePainter extends CustomPainter {
     }
   }
 
-  /// 主图合并笔 K：先铺淡笔 K 底层，再描合并框。
+  /// 主图笔K线合并：先铺淡笔 K 底层，再描笔K线合并框。
   void _drawBiCombineOnMainChart(
     Canvas canvas,
     double w,
@@ -1336,7 +1336,7 @@ class _KlineCompositePainter extends CustomPainter {
     }
   }
 
-  /// 合并笔 K 线副图：底层铺淡「笔 K 线」，再描合并笔框（与合并 K 线副图同构：单元→合并框）。
+  /// 笔K线合并副图：底层铺淡「笔 K 线」，再描笔K线合并框（与 K线合并副图同构：单元→合并框）。
   void _drawBiKlineCombineSubChart(
     Canvas canvas,
     double w,
@@ -1354,7 +1354,7 @@ class _KlineCompositePainter extends CustomPainter {
         .toList();
     if (visibleFrames.isEmpty) return;
 
-    // 底层单元改为「笔 K 线」：与合并 K 线副图「1 分钟 K → 合并框」严格同构
+    // 底层单元改为「笔 K 线」：与 K线合并副图「1 分钟 K → 合并框」严格同构
     final visibleBiBars = biVirtualBarViews
         .where(
           (v) =>
@@ -1405,7 +1405,7 @@ class _KlineCompositePainter extends CustomPainter {
       );
     }
 
-    // 上层：合并笔 K 线框——仅描边为主，填充极淡（相邻框 x 区间交叠时不会叠成实心）
+    // 上层：笔K线合并框——仅描边为主，填充极淡（相邻框 x 区间交叠时不会叠成实心）
     const strokeColor = Color(0xAAF59E0B);
     const fillColor = Color(0x0CF59E0B);
     const minFramePx = 8.0;
@@ -1525,7 +1525,7 @@ class _KlineCompositePainter extends CustomPainter {
     }
   }
 
-  /// 副图 ±1 方向柱（笔确认 / 段确认共用）：0 轴 + 确认当步 K 索引处画柱。
+  /// 副图 ±1 方向柱（K线合并分型确认 / 段确认共用）：0 轴 + 确认当步 K 索引处画柱。
   void _drawSignedConfirmBars(
     Canvas canvas,
     double w,
@@ -1598,7 +1598,7 @@ class _KlineCompositePainter extends CustomPainter {
   ) {
     if (segAnalysis.segConfirms.isEmpty) return;
 
-    // 与笔确认一致：展示全部已冻结段确认，仅按视窗裁剪（不用十字线二次截断）
+    // 与 K线合并分型确认一致：展示全部已冻结段确认，仅按视窗裁剪（不用十字线二次截断）
     _drawSignedConfirmBars(
       canvas,
       w,
@@ -1811,7 +1811,6 @@ class _KlineCompositePainter extends CustomPainter {
     final price = pr.priceFromY(y, plotTop, plotH);
     final barIdx = crosshairBarIdx ?? viewport.nearestBarIndex(bars, viewport.xToIndex(x, size.width));
     final bar = bars[barIdx.clamp(0, bars.length - 1)];
-    final feat = _featureAt(bar.idx);
 
     final labelBg = Paint()..color = const Color(0xF0FFFFFF);
     final labelBorder = Paint()
@@ -1834,24 +1833,8 @@ class _KlineCompositePainter extends CustomPainter {
 
   final minuteLike = KlineAxisFormat.isMinuteLike(bars);
     final timePart = KlineAxisFormat.xLabel(bar.timeText, minuteLike: minuteLike);
-    final weekday = feat?.weekday ?? '-';
-    final volText = bar.volume == bar.volume.roundToDouble()
-        ? bar.volume.toInt().toString()
-        : bar.volume.toStringAsFixed(2);
-    final combineHigh = feat?.combineHigh ?? bar.high;
-    final combineLow = feat?.combineLow ?? bar.low;
     final info = [
-      '日期时间：$timePart $weekday',
-      'K线[序号]：#${bar.idx}',
-      'K线[合并内序]：${feat?.mergeInnerSeq ?? 1}',
-      'K线[O/H/L/C/VOL]：'
-          '${bar.open.toStringAsFixed(2)}/'
-          '${bar.high.toStringAsFixed(2)}/'
-          '${bar.low.toStringAsFixed(2)}/'
-          '${bar.close.toStringAsFixed(2)}/'
-          '$volText',
-      '合并K线[H/L]:${combineHigh.toStringAsFixed(2)}/${combineLow.toStringAsFixed(2)}',
-      ...featureLookup.crosshairBiLines(bar.idx),
+      ...featureLookup.crosshairTooltipLines(bar.idx, timePart: timePart),
       ...featureLookup.crosshairSubLines(bar.idx, subIndicators),
     ];
     var maxW = 0.0;

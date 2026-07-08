@@ -196,7 +196,7 @@ pub fn build_combine_frames_from_hl_units(units: &[HlMergeUnit]) -> Vec<KlineCom
         .collect()
 }
 
-/// 笔 K 线序列 → 合并笔 K 线线框（副图「合并笔K线」）。
+/// 笔 K 线序列 → 笔K线合并线框（副图「笔K线合并」）。
 /// 多根包含合并：x1/x2 为首尾 view 索引，外侧框按分钟 K 中轴（同合并 K 线）。
 /// 仅一根笔 K（count=1）：保留半侧锚定，与笔 K 蜡烛衔接一致。
 pub fn build_bi_combine_frames(bars: &[KlineBar], bi_bars: &[BiVirtualBar]) -> Vec<KlineCombineFrame> {
@@ -268,7 +268,7 @@ pub struct HlCombineStepState {
     provisional: bool,
 }
 
-/// 合并笔 K 线当步十字线快照。
+/// 笔K线合并当步十字线快照。
 #[derive(Debug, Clone)]
 pub struct BiCombineCrosshairSnap {
     pub bi_merge_inner_seq: i32,
@@ -279,11 +279,11 @@ pub struct BiCombineCrosshairSnap {
 }
 
 impl HlCombineStepState {
-    /// 十字线：末合并笔 K 线框当步 H/L 与笔 K 合并内序。
+    /// 十字线：笔K线合并当步 H/L 与笔K线合并笔K线序。
     pub fn crosshair_snapshot(&self, active_bi_idx: i32) -> BiCombineCrosshairSnap {
         if self.klcs.is_empty() {
             return BiCombineCrosshairSnap {
-                bi_merge_inner_seq: 1,
+                bi_merge_inner_seq: 0,
                 bi_merge_count: 1,
                 bi_combine_high: 0.0,
                 bi_combine_low: 0.0,
@@ -293,11 +293,11 @@ impl HlCombineStepState {
         let last_klc = self.klcs.len() - 1;
         let cnt = self.unit_counts.get(last_klc).copied().unwrap_or(1).max(1);
         let unit_start: usize = self.unit_counts.iter().take(last_klc).sum();
-        let mut inner_seq = cnt as i32;
+        let mut inner_seq = (cnt as i32).saturating_sub(1);
         for j in 0..cnt {
             let ui = unit_start + j;
             if ui < self.unit_bi_idxs.len() && self.unit_bi_idxs[ui] == active_bi_idx {
-                inner_seq = (j + 1) as i32;
+                inner_seq = j as i32;
                 break;
             }
         }
@@ -464,7 +464,7 @@ impl HlCombineStepState {
     }
 }
 
-/// 笔确认柱：合并 K 线顶/底分型确认当步 K（分型连接即笔，逐K当下冻结）。
+/// K线合并分型确认柱：合并 K 线顶/底分型确认当步 K（分型连接即笔，逐K当下冻结）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BiConfirmSignal {
     /// 分型确认当步 K 线索引（第三元素进入当步）
@@ -481,7 +481,7 @@ pub struct BiConfirmSignal {
 pub struct KlineCombineBundle {
     pub frames: Vec<KlineCombineFrame>,
     pub bi_confirms: Vec<BiConfirmSignal>,
-    /// 每根 K 十字线特征（星期、合并内序号）
+    /// 每根 K 十字线特征（星期 w1..w7、K线合并K线序）
     #[serde(default)]
     pub bar_features: Vec<BarCrosshairFeature>,
     /// 相邻异向分型配对笔段，含 prev/next 连续关联
@@ -493,7 +493,7 @@ pub struct KlineCombineBundle {
     /// 笔确认后包装笔 K 线（主图展示）
     #[serde(default)]
     pub bi_virtual_bars: Vec<BiVirtualBar>,
-    /// 笔 K 线包含合并线框（副图「合并笔K线」）
+    /// 笔 K 线笔K线合并线框（副图「笔K线合并」）
     #[serde(default)]
     pub bi_combine_frames: Vec<KlineCombineFrame>,
     /// 默认笔策略：pending / retained / purged
@@ -556,7 +556,7 @@ pub fn build_bar_combine_step_states(bars: &[KlineBar]) -> Vec<BarCombineStepSta
 
         let klc_idx = klcs.len() - 1;
         let merge_count = unit_counts[klc_idx] as i32;
-        let merge_inner_seq = merge_count;
+        let merge_inner_seq = merge_count - 1;
         let combine_fx = match fx_confirm_at[klc_idx] {
             Some(confirm_i) if confirm_i <= i => klcs[klc_idx].fx.as_str().to_string(),
             _ => FxType::Unknown.as_str().to_string(),
@@ -590,7 +590,7 @@ pub fn build_bar_crosshair_features_stepwise(bars: &[KlineBar]) -> Vec<BarCrossh
                 combine_low: st.combine_low,
                 fractal_peak_dist: 0,
                 bi_idx: None,
-                bi_merge_inner_seq: 1,
+                bi_merge_inner_seq: 0,
                 bi_merge_count: 1,
                 bi_open: 0.0,
                 bi_high: 0.0,
@@ -694,7 +694,7 @@ fn push_bi_confirm_if_fx(
     }
 }
 
-/// 对已喂入 K 线做增量合并，输出线框 + 笔确认柱。
+/// 对已喂入 K 线做增量合并，输出 K线合并线框 + K线合并分型确认柱。
 pub fn build_kline_combine_bundle(bars: &[KlineBar]) -> KlineCombineBundle {
     if bars.is_empty() {
         return KlineCombineBundle {

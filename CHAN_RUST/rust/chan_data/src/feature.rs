@@ -8,13 +8,13 @@ use crate::kline::KlineBar;
 
 const WEEKDAY_CN: [&str; 7] = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
 
-/// 单根 K 十字线基础特征（星期 + 合并内序号 + 逐K合并态）。
+/// 单根 K 十字线基础特征（星期 w1..w7 + K线合并K线序 + 逐K合并态）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BarCrosshairFeature {
     pub idx: i32,
-    /// 当前 K 所属星期（周一…周日）
+    /// 当前 K 所属星期（周一…周日；tooltip 显示 w1..w7）
     pub weekday: String,
-    /// 合并 K 线内部排序：单根=1，同区间后续依次 2、3…
+    /// K线合并K线序：合并 K 线框内排序，单根=0，同区间后续依次 1、2…
     pub merge_inner_seq: i32,
     /// 截至当步所在合并区间已合并根数（逐K当下，非末态）
     #[serde(default)]
@@ -22,10 +22,10 @@ pub struct BarCrosshairFeature {
     /// 截至当步分型：未确认=UNKNOWN（逐K当下）
     #[serde(default = "default_unknown")]
     pub combine_fx: String,
-    /// 截至当步所在合并区间最高价（逐K当下，非末态回写）
+    /// 截至当步 K线合并区间最高价（逐K当下，非末态回写）
     #[serde(default)]
     pub combine_high: f64,
-    /// 截至当步所在合并区间最低价（逐K当下，非末态回写）
+    /// 截至当步 K线合并区间最低价（逐K当下，非末态回写）
     #[serde(default)]
     pub combine_low: f64,
     /// 距最近冻结笔确认分型极点间隔根数（不含极点 K）；首笔确认前=0
@@ -34,10 +34,10 @@ pub struct BarCrosshairFeature {
     /// 当步所属笔 K 序号；首笔确认前=None
     #[serde(default)]
     pub bi_idx: Option<i32>,
-    /// 当步笔 K 在合并笔 K 线框内序号（1 起）
-    #[serde(default = "default_one")]
+    /// 笔K线合并笔K线序：当步笔 K 在笔K线合并框内序号（0 起）
+    #[serde(default = "default_zero")]
     pub bi_merge_inner_seq: i32,
-    /// 当步所在合并笔 K 线框已含笔 K 根数（逐K当下）
+    /// 当步所在笔K线合并框已含笔 K 根数（逐K当下）
     #[serde(default = "default_one")]
     pub bi_merge_count: i32,
     #[serde(default)]
@@ -50,19 +50,23 @@ pub struct BarCrosshairFeature {
     pub bi_close: f64,
     #[serde(default)]
     pub bi_volume: f64,
-    /// 当步合并笔 K 线区间最高价（逐K当下）
+    /// 当步笔K线合并区间最高价（逐K当下）
     #[serde(default)]
     pub bi_combine_high: f64,
-    /// 当步合并笔 K 线区间最低价（逐K当下）
+    /// 当步笔K线合并区间最低价（逐K当下）
     #[serde(default)]
     pub bi_combine_low: f64,
-    /// 当步合并笔 K 分型：未确认=UNKNOWN
+    /// 当步笔K线合并分型：未确认=UNKNOWN
     #[serde(default = "default_unknown")]
     pub bi_combine_fx: String,
 }
 
 fn default_one() -> i32 {
     1
+}
+
+fn default_zero() -> i32 {
+    0
 }
 
 fn default_unknown() -> String {
@@ -160,15 +164,15 @@ fn weekday_from_time_text(text: &str) -> String {
     "-".to_string()
 }
 
-/// 合并线框 → 每根原始 K 的合并内序号（1 起）。
+/// K线合并线框 → 每根原始 K 的 K线合并K线序（0 起）。
 pub fn merge_inner_seq_map(frames: &[KlineCombineFrame]) -> Vec<i32> {
     let mut max_idx = 0usize;
     for f in frames {
         max_idx = max_idx.max(f.x2 as usize);
     }
-    let mut seq = vec![1i32; max_idx + 1];
+    let mut seq = vec![0i32; max_idx + 1];
     for f in frames {
-        let mut inner = 1i32;
+        let mut inner = 0i32;
         for x in f.x1..=f.x2 {
             let ui = x as usize;
             if ui < seq.len() {
@@ -389,17 +393,44 @@ fn segment_vb_ended_at_bar(
     None
 }
 
-fn active_bi_at(
+/// 首笔确认当步：引导/升格笔刚冻结，仍展示该笔而非同日新起的 provisional。
+fn is_first_bi_freeze_step(
+    bi_segments: &[BiSegment],
+    bi_confirms: &[BiConfirmSignal],
+    bar_x: usize,
+) -> bool {
+    let bx = bar_x as i32;
+    let Some(seg) = bi_segments.iter().find(|s| s.end_confirm_x == bx) else {
+        return false;
+    };
+    if !seg.is_bootstrap && !seg.is_promoted_default {
+        return false;
+    }
+    bi_confirms
+        .iter()
+        .filter(|c| (c.fx == "TOP" || c.fx == "BOTTOM") && c.x <= bx)
+        .count()
+        <= 1
+}
+
+/// 十字线笔 K：K线合并分型确认当步优先新起 provisional，首笔冻结步除外。
+fn crosshair_active_bi_at(
     bars: &[KlineBar],
     bi_segments: &[BiSegment],
     bi_confirms: &[BiConfirmSignal],
     bar_x: usize,
     next_bi: usize,
 ) -> Option<BiVirtualBar> {
-    segment_vb_ended_at_bar(bars, bi_segments, bar_x).or_else(|| {
-        provisional_bi_at(bars, bi_segments, bi_confirms, bar_x, next_bi)
-            .or_else(|| confirmed_bi_at(bars, bi_segments, bar_x))
-    })
+    let prov = provisional_bi_at(bars, bi_segments, bi_confirms, bar_x, next_bi);
+    let ended = segment_vb_ended_at_bar(bars, bi_segments, bar_x);
+    if let (Some(_), Some(_)) = (&prov, &ended) {
+        if is_first_bi_freeze_step(bi_segments, bi_confirms, bar_x) {
+            return ended;
+        }
+        return prov;
+    }
+    prov.or(ended)
+        .or_else(|| confirmed_bi_at(bars, bi_segments, bar_x))
 }
 
 /// 逐 K 填充笔 K 十字线字段（与 1 分钟 K 特征同向量，逐K当下冻结）。
@@ -427,19 +458,25 @@ pub fn enrich_bi_crosshair_fields(
             next_bi += 1;
         }
 
-        let mut active = active_bi_at(bars, bi_segments, bi_confirms, bar_x, next_bi);
+        let prov = provisional_bi_at(bars, bi_segments, bi_confirms, bar_x, next_bi);
+        let mut active =
+            crosshair_active_bi_at(bars, bi_segments, bi_confirms, bar_x, next_bi);
         if active.is_none() && default_bi_policy == "pending" {
             active = build_pre_confirm_default_bi(bars, bar_x);
-        }
-        let mut snap_state = merge_state.clone();
-        if let Some(vb) = provisional_bi_at(bars, bi_segments, bi_confirms, bar_x, next_bi) {
-            let unit = hl_unit_from_vb(bars, &vb);
-            snap_state.update_provisional(&unit, vb.idx);
         }
 
         let feat = &mut features[bar_x];
         if let Some(vb) = active {
-            let snap = snap_state.crosshair_snapshot(vb.idx);
+            let snap = if prov.as_ref().map(|p| p.idx) == Some(vb.idx) {
+                let mut snap_state = merge_state.clone();
+                if let Some(p) = &prov {
+                    let unit = hl_unit_from_vb(bars, p);
+                    snap_state.update_provisional(&unit, p.idx);
+                }
+                snap_state.crosshair_snapshot(vb.idx)
+            } else {
+                merge_state.crosshair_snapshot(vb.idx)
+            };
             feat.bi_idx = Some(vb.idx);
             feat.bi_merge_inner_seq = snap.bi_merge_inner_seq;
             feat.bi_merge_count = snap.bi_merge_count;
@@ -453,7 +490,7 @@ pub fn enrich_bi_crosshair_fields(
             feat.bi_combine_fx = snap.bi_combine_fx;
         } else {
             feat.bi_idx = None;
-            feat.bi_merge_inner_seq = 1;
+            feat.bi_merge_inner_seq = 0;
             feat.bi_merge_count = 1;
             feat.bi_open = 0.0;
             feat.bi_high = 0.0;
@@ -991,6 +1028,7 @@ pub fn build_bi_virtual_bar_views(bars: &[BiVirtualBar]) -> Vec<BiVirtualBarView
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::combine::build_bar_crosshair_features_stepwise;
     use crate::combine::BiConfirmSignal;
     use crate::kline::KlineBar;
     use crate::combine::KlineCombineFrame;
@@ -1093,14 +1131,14 @@ mod tests {
             .map(|i| BarCrosshairFeature {
                 idx: i as i32,
                 weekday: "-".into(),
-                merge_inner_seq: 1,
+                merge_inner_seq: 0,
                 merge_count: 1,
                 combine_fx: "UNKNOWN".into(),
                 combine_high: 0.0,
                 combine_low: 0.0,
                 fractal_peak_dist: 0,
                 bi_idx: None,
-                bi_merge_inner_seq: 1,
+                bi_merge_inner_seq: 0,
                 bi_merge_count: 1,
                 bi_open: 0.0,
                 bi_high: 0.0,
@@ -1153,6 +1191,49 @@ mod tests {
         assert!(feats[1].bi_high > 0.0);
         assert!(feats[1].bi_volume > 0.0);
         assert_eq!(feats[0].bi_idx, None);
+    }
+
+    #[test]
+    fn bi_crosshair_fields_on_second_confirm_prefers_new_provisional() {
+        let bars: Vec<KlineBar> = (0..10)
+            .map(|i| KlineBar {
+                idx: i,
+                time_ms: i as i64,
+                time_text: format!("2024/01/01 09:{i:02}"),
+                open: 10.0 + i as f64 * 0.1,
+                high: 10.5 + i as f64 * 0.1,
+                low: 9.5 + i as f64 * 0.1,
+                close: 10.2 + i as f64 * 0.1,
+                volume: 100.0 + i as f64,
+                amount: 1.0,
+                metrics: serde_json::Map::new(),
+            })
+            .collect();
+        let confirms = vec![
+            BiConfirmSignal {
+                x: 2,
+                fx: "BOTTOM".to_string(),
+                value: 1,
+                fractal_x1: 1,
+                fractal_x2: 1,
+            },
+            BiConfirmSignal {
+                x: 5,
+                fx: "TOP".to_string(),
+                value: -1,
+                fractal_x1: 4,
+                fractal_x2: 4,
+            },
+        ];
+        let segs = build_bi_segments(&bars, &confirms);
+        assert_eq!(segs.len(), 1);
+        let mut feats = build_bar_crosshair_features_stepwise(&bars);
+        enrich_bi_crosshair_fields(&bars, &mut feats, &segs, &confirms, "purged");
+        // 第二笔 K线合并分型确认当步：应展示新起 provisional（idx=1），非刚冻结笔（idx=0）
+        assert_eq!(feats[5].bi_idx, Some(1));
+        assert!(feats[5].bi_high > 0.0);
+        assert!(feats[5].bi_combine_high > 0.0);
+        assert!(feats[5].bi_merge_inner_seq >= 0);
     }
 
     #[test]
@@ -1307,9 +1388,9 @@ mod tests {
             start_at_right_half: false,
         }];
         let map = merge_inner_seq_map(&frames);
-        assert_eq!(map[0], 1);
-        assert_eq!(map[1], 2);
-        assert_eq!(map[2], 3);
+        assert_eq!(map[0], 0);
+        assert_eq!(map[1], 1);
+        assert_eq!(map[2], 2);
     }
 
     #[test]

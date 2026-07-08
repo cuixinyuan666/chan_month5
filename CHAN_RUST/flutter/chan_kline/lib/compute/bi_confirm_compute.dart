@@ -22,7 +22,7 @@ class _MergedKlc {
   }) : fx = _FxType.unknown;
 }
 
-/// Dart 回退：与 Rust `build_kline_combine_bundle` 同逻辑的笔确认柱。
+/// Dart 回退：与 Rust `build_kline_combine_bundle` 同逻辑的 K线合并分型确认柱。
 List<BiConfirmSignal> computeBiConfirmSignals(List<KlineBar> bars) {
   if (bars.isEmpty) return const [];
 
