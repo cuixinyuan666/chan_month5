@@ -17,6 +17,15 @@ class KlineCombineBundle {
   final List<KlineCombineFrame> biCombineFrames;
   final String defaultBiPolicy;
 
+  /// 全层首段策略（index 0=1段/笔，1=2段/线段，…）
+  final List<String> defaultSegmentPolicies;
+
+  /// 全层冻结段链
+  final List<List<BiSegment>> levelSegments;
+
+  /// 全层展示用虚拟段 K（pending + 冻结 + 进行中）
+  final List<List<BiVirtualBar>> levelVirtualUnits;
+
   /// N 段流水线全量输出（levels[0]=1段/笔，levels[1]=2段/线段，…穷尽）
   final List<LevelBundle> levels;
 
@@ -29,6 +38,9 @@ class KlineCombineBundle {
     this.biVirtualBars = const [],
     this.biCombineFrames = const [],
     this.defaultBiPolicy = 'pending',
+    this.defaultSegmentPolicies = const [],
+    this.levelSegments = const [],
+    this.levelVirtualUnits = const [],
     this.levels = const [],
   });
 
@@ -82,6 +94,31 @@ class KlineCombineBundle {
           )
           .toList(),
       defaultBiPolicy: json['default_bi_policy'] as String? ?? 'pending',
+      defaultSegmentPolicies: (json['default_segment_policies'] as List? ?? const [])
+          .map((e) => e.toString())
+          .toList(),
+      levelSegments: (json['level_segments'] as List? ?? const [])
+          .map(
+            (layer) => (layer as List)
+                .map(
+                  (e) => BiSegment.fromJson(
+                    Map<String, dynamic>.from(e as Map),
+                  ),
+                )
+                .toList(),
+          )
+          .toList(),
+      levelVirtualUnits: (json['level_virtual_units'] as List? ?? const [])
+          .map(
+            (layer) => (layer as List)
+                .map(
+                  (e) => BiVirtualBar.fromJson(
+                    Map<String, dynamic>.from(e as Map),
+                  ),
+                )
+                .toList(),
+          )
+          .toList(),
       levels: (json['levels'] as List? ?? const [])
           .map((e) => LevelBundle.fromJson(Map<String, dynamic>.from(e as Map)))
           .toList(),
@@ -97,6 +134,9 @@ class KlineCombineBundle {
         biVirtualBars: [],
         biCombineFrames: [],
         defaultBiPolicy: 'pending',
+        defaultSegmentPolicies: [],
+        levelSegments: [],
+        levelVirtualUnits: [],
         levels: [],
       );
 }

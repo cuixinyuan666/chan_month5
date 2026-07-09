@@ -1,5 +1,5 @@
-//! 十字辅助线 / ML 训练特征 + 1段（笔）首段策略（逐K当下，禁止未来函数）。
-//! 合并/分型内核见 engine.rs；N 段递归见 pipeline.rs；本文件保留笔层特有逻辑与展示视图。
+//! 十字辅助线 / ML 训练特征 + 笔 K 展示视图（逐K当下，禁止未来函数）。
+//! 全层首段策略见 segment_first.rs；合并/分型内核见 engine.rs。
 
 use chrono::{Datelike, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
@@ -124,7 +124,7 @@ pub struct BiSegment {
     pub end_fractal_x2: i32,
     pub prev_idx: Option<i32>,
     pub next_idx: Option<i32>,
-    /// 首笔确认引导笔：虚拟起点=区间极值法，第二次笔确认后丢弃
+    /// 已废弃：新方案无 bootstrap 引导段，固定 false
     #[serde(default)]
     pub is_bootstrap: bool,
     /// 首笔确认审判 PASS：升格默认笔为第一笔，≥2 次确认仍保留
@@ -204,43 +204,6 @@ pub fn fractal_extreme_bar_idx(bars: &[KlineBar], conf: &BiConfirmSignal) -> Opt
     None
 }
 
-/// 首笔确认引导：在 [0..=首次分型极点K] 内取反向极值 K（TOP→最低 low，BOTTOM→最高 high）。
-pub fn bootstrap_reverse_extreme_bar_idx(
-    bars: &[KlineBar],
-    end_conf: &BiConfirmSignal,
-) -> Option<i32> {
-    let end_i = fractal_extreme_bar_idx(bars, end_conf)? as usize;
-    if bars.is_empty() || end_i >= bars.len() {
-        return None;
-    }
-    match end_conf.fx.as_str() {
-        "TOP" => {
-            let mut trough = f64::INFINITY;
-            for j in 0..=end_i {
-                trough = trough.min(bars[j].low);
-            }
-            for j in 0..=end_i {
-                if (bars[j].low - trough).abs() < 1e-12 {
-                    return Some(j as i32);
-                }
-            }
-        }
-        "BOTTOM" => {
-            let mut peak = f64::NEG_INFINITY;
-            for j in 0..=end_i {
-                peak = peak.max(bars[j].high);
-            }
-            for j in 0..=end_i {
-                if (bars[j].high - peak).abs() < 1e-12 {
-                    return Some(j as i32);
-                }
-            }
-        }
-        _ => {}
-    }
-    None
-}
-
 /// 逐 K 填充 K线分型极点距：基准=最近冻结笔确认分型框；确认当步起算；不含极点 K。
 pub fn enrich_fractal_peak_dist(
     bars: &[KlineBar],
@@ -262,198 +225,6 @@ pub fn enrich_fractal_peak_dist(
             Some(ext) => (i as i32) - ext,
             None => 0,
         };
-    }
-}
-
-fn bar_hl_range(bars: &[KlineBar], x1: usize, x2: usize) -> (f64, f64, f64, f64) {
-    if bars.is_empty() {
-        return (0.0, 0.0, 0.0, 0.0);
-    }
-    let a = x1.min(x2).min(bars.len() - 1);
-    let b = x1.max(x2).min(bars.len() - 1);
-    let mut hi = f64::NEG_INFINITY;
-    let mut lo = f64::INFINITY;
-    for i in a..=b {
-        hi = hi.max(bars[i].high);
-        lo = lo.min(bars[i].low);
-    }
-    let open = bars[a].open;
-    let close = bars[b].close;
-    (open, hi, lo, close)
-}
-
-/// 笔确认前展示用默认笔：首根 K → 当步末 K（仅 pending 策略下展示/十字线）。
-pub fn build_pre_confirm_default_bi(bars: &[KlineBar], end_bar_x: usize) -> Option<BiVirtualBar> {
-    if bars.is_empty() || end_bar_x >= bars.len() {
-        return None;
-    }
-    let x1 = 0usize;
-    let x2 = end_bar_x;
-    let dir = if bars[x2].close >= bars[x1].open {
-        1
-    } else {
-        -1
-    };
-    let (open, high, low, close) = bar_hl_range(bars, x1, x2);
-    Some(BiVirtualBar {
-        idx: 0,
-        dir,
-        x1: 0,
-        x2: x2 as i32,
-        open,
-        high,
-        low,
-        close,
-        confirm_x: x2 as i32,
-    })
-}
-
-fn dir_from_confirm_fx(fx: &str) -> i32 {
-    if fx == "TOP" {
-        1
-    } else {
-        -1
-    }
-}
-
-/// 首确认当步冻结默认笔：virtual_k → 分型极点 K（审判用，终点非 confirm_x）。
-fn build_frozen_default_bi_at_first_confirm(
-    bars: &[KlineBar],
-    first: &BiConfirmSignal,
-    virtual_k: i32,
-) -> Option<BiVirtualBar> {
-    let pole = fractal_extreme_bar_idx(bars, first)? as usize;
-    let x1 = virtual_k.max(0) as usize;
-    let x2 = pole;
-    if x1 >= bars.len() || x2 >= bars.len() || x1 > x2 {
-        return None;
-    }
-    let dir = if bars[x2].close >= bars[x1].open {
-        1
-    } else {
-        -1
-    };
-    let (open, high, low, close) = bar_hl_range(bars, x1, x2);
-    Some(BiVirtualBar {
-        idx: 0,
-        dir,
-        x1: x1 as i32,
-        x2: x2 as i32,
-        open,
-        high,
-        low,
-        close,
-        confirm_x: first.x,
-    })
-}
-
-/// 首确认 bootstrap 对照笔 K：virtual_k → 极点（F8 几何等价参照）。
-fn bootstrap_vb_at_first_confirm(
-    bars: &[KlineBar],
-    first: &BiConfirmSignal,
-    virtual_k: i32,
-) -> Option<BiVirtualBar> {
-    let pole = fractal_extreme_bar_idx(bars, first)? as usize;
-    let x1 = virtual_k.max(0) as usize;
-    let x2 = pole;
-    if x1 >= bars.len() || x2 >= bars.len() || x1 > x2 {
-        return None;
-    }
-    let dir = dir_from_confirm_fx(&first.fx);
-    let (open, high, low, close) = bar_hl_range(bars, x1, x2);
-    Some(BiVirtualBar {
-        idx: 0,
-        dir,
-        x1: x1 as i32,
-        x2: x2 as i32,
-        open,
-        high,
-        low,
-        close,
-        confirm_x: first.x,
-    })
-}
-
-fn end_is_directional_peak(bars: &[KlineBar], vb: &BiVirtualBar, first: &BiConfirmSignal) -> bool {
-    let pole = match fractal_extreme_bar_idx(bars, first) {
-        Some(p) => p as usize,
-        None => return false,
-    };
-    let x1 = vb.x1.max(0) as usize;
-    let x2 = vb.x2.max(0) as usize;
-    if pole < x1 || pole > x2 {
-        return false;
-    }
-    if vb.dir > 0 {
-        let peak = bars[x1..=x2]
-            .iter()
-            .map(|b| b.high)
-            .fold(f64::NEG_INFINITY, f64::max);
-        (bars[pole].high - peak).abs() < 1e-9
-    } else {
-        let trough = bars[x1..=x2]
-            .iter()
-            .map(|b| b.low)
-            .fold(f64::INFINITY, f64::min);
-        (bars[pole].low - trough).abs() < 1e-9
-    }
-}
-
-fn geom_equiv_vb(a: &BiVirtualBar, b: &BiVirtualBar) -> bool {
-    a.x1 == b.x1
-        && a.x2 == b.x2
-        && a.dir == b.dir
-        && (a.high - b.high).abs() < 1e-9
-        && (a.low - b.low).abs() < 1e-9
-}
-
-/// 首笔确认当步审判默认笔：F1∧F2∧F3∧F8（终点=分型极点 K，与 bootstrap 几何等价）。
-pub fn trial_default_bi(bars: &[KlineBar], first: &BiConfirmSignal) -> bool {
-    let confirm_x = first.x as usize;
-    if confirm_x >= bars.len() {
-        return false;
-    }
-    let virtual_k = match bootstrap_reverse_extreme_bar_idx(bars, first) {
-        Some(v) => v,
-        None => return false,
-    };
-    let frozen = match build_frozen_default_bi_at_first_confirm(bars, first, virtual_k) {
-        Some(v) => v,
-        None => return false,
-    };
-    if frozen.dir != dir_from_confirm_fx(&first.fx) {
-        return false;
-    }
-    if frozen.x1 != virtual_k {
-        return false;
-    }
-    if !end_is_directional_peak(bars, &frozen, first) {
-        return false;
-    }
-    let bootstrap_vb = match bootstrap_vb_at_first_confirm(bars, first, virtual_k) {
-        Some(v) => v,
-        None => return false,
-    };
-    geom_equiv_vb(&frozen, &bootstrap_vb)
-}
-
-/// 默认笔策略：pending=首确认未入前缀；retained=审判PASS；purged=审判FAIL。
-pub fn resolve_default_bi_policy(bars: &[KlineBar], confirms: &[BiConfirmSignal]) -> String {
-    let valid: Vec<&BiConfirmSignal> = confirms
-        .iter()
-        .filter(|c| c.fx == "TOP" || c.fx == "BOTTOM")
-        .collect();
-    if valid.is_empty() {
-        return "pending".to_string();
-    }
-    let first = valid[0];
-    if first.x as usize >= bars.len() {
-        return "pending".to_string();
-    }
-    if trial_default_bi(bars, first) {
-        "retained".to_string()
-    } else {
-        "purged".to_string()
     }
 }
 
@@ -525,7 +296,7 @@ mod tests {
     }
 
     #[test]
-    fn fractal_extreme_and_trial_default_bi() {
+    fn fractal_extreme_bar_idx_top() {
         // 分型框 K0-K2（3根），极点在 K0（high 最大），笔确认在 K3 当步
         let mk = |i: i32, o: f64, h: f64, l: f64, c: f64| KlineBar {
             idx: i,
@@ -553,8 +324,6 @@ mod tests {
             fractal_x2: 2,
         };
         assert_eq!(fractal_extreme_bar_idx(&bars, &conf), Some(0));
-        assert_eq!(bootstrap_reverse_extreme_bar_idx(&bars, &conf), Some(0));
-        assert!(trial_default_bi(&bars, &conf));
     }
 
     #[test]

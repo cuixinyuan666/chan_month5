@@ -45,10 +45,10 @@ class KlineCombineFrame {
 /// 主图指标类型（可多选叠加）。
 enum MainChartIndicator {
   kline('K线'),
-  biLine('笔连线'),
-  segLine('段连线'),
+  biLine('1段K线'),
+  segLine('2段及以上K线'),
   klineCombine('K线合并'),
-  biKlineCombine('笔K线合并');
+  biKlineCombine('1段K线合并');
 
   const MainChartIndicator(this.label);
   final String label;
@@ -58,10 +58,10 @@ enum MainChartIndicator {
 enum SubChartIndicator {
   volume('成交量'),
   klineCombine('K线合并'),
-  biKlineCombine('笔K线合并'),
+  biKlineCombine('1段K线合并'),
   biConfirm('K线合并分型确认'),
   segConfirm('段确认'),
-  firstSegDir('首段方向'),
+  firstSegDir('首段向'),
   fractalPeakDist('K线分型极点距');
 
   const SubChartIndicator(this.label);

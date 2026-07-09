@@ -5,12 +5,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::engine::{CombineEngine, MergeUnit};
 use crate::feature::{
-    build_bi_virtual_bar_views, build_pre_confirm_default_bi, enrich_fractal_peak_dist,
-    resolve_default_bi_policy, weekday_from_bar, BarCrosshairFeature, BiSegment, BiVirtualBar,
+    build_bi_virtual_bar_views, enrich_fractal_peak_dist, weekday_from_bar, BarCrosshairFeature,
+    BiSegment, BiVirtualBar,
 };
 use crate::kline::KlineBar;
 use crate::pipeline::{
-    run_pipeline, LevelBundleOut, LevelSegment, PipelineOptions, PipelineResult,
+    run_pipeline, LevelBundleOut, LevelSegment, LevelUnitBar, PipelineOptions, PipelineResult,
 };
 use crate::seg_eigen::{
     BarSubSnapshot, FirstSegDirSignal, SegAnalysisBundle, SegConfirmSignal, SegLine,
@@ -67,9 +67,18 @@ pub struct KlineCombineBundle {
     /// 笔 K 线笔K线合并线框（副图「笔K线合并」）
     #[serde(default)]
     pub bi_combine_frames: Vec<KlineCombineFrame>,
-    /// 默认笔策略：pending / retained / purged
+    /// 默认笔策略：pending / retained / purged（= default_segment_policies[0] 兼容别名）
     #[serde(default = "default_bi_policy_pending")]
     pub default_bi_policy: String,
+    /// 全层首段策略（levels[0]=1段，levels[1]=2段，…）
+    #[serde(default)]
+    pub default_segment_policies: Vec<String>,
+    /// 全层冻结段链（按层）
+    #[serde(default)]
+    pub level_segments: Vec<Vec<BiSegment>>,
+    /// 全层展示用虚拟段 K（pending + 冻结 + 进行中）
+    #[serde(default)]
+    pub level_virtual_units: Vec<Vec<BiVirtualBar>>,
     /// N 段流水线全量输出（1=笔，2=线段，…穷尽）
     #[serde(default)]
     pub levels: Vec<LevelBundleOut>,
@@ -90,12 +99,82 @@ impl KlineCombineBundle {
             bi_virtual_bars: Vec::new(),
             bi_combine_frames: Vec::new(),
             default_bi_policy: default_bi_policy_pending(),
+            default_segment_policies: Vec::new(),
+            level_segments: Vec::new(),
+            level_virtual_units: Vec::new(),
             levels: Vec::new(),
         }
     }
 }
 
-/// N 段 → 笔 K 线映射（OHLC 冻结时已算好，零重复计算）
+/// LevelSegment → BiSegment（导出映射）
+fn level_seg_to_bi_segment(s: &LevelSegment) -> BiSegment {
+    BiSegment {
+        idx: s.idx as i32,
+        dir: s.dir,
+        begin_confirm_x: s.begin_confirm_x,
+        end_confirm_x: s.end_confirm_x,
+        begin_fractal_x1: s.begin_fractal_x1,
+        begin_fractal_x2: s.begin_fractal_x2,
+        end_fractal_x1: s.end_fractal_x1,
+        end_fractal_x2: s.end_fractal_x2,
+        prev_idx: None,
+        next_idx: None,
+        is_bootstrap: false,
+        is_promoted_default: s.is_promoted_default,
+    }
+}
+
+fn link_bi_segments(chain: &mut [BiSegment]) {
+    for i in 0..chain.len().saturating_sub(1) {
+        chain[i].next_idx = Some(chain[i + 1].idx);
+        chain[i + 1].prev_idx = Some(chain[i].idx);
+    }
+}
+
+fn unit_to_virtual_bar(u: &LevelUnitBar) -> BiVirtualBar {
+    BiVirtualBar {
+        idx: u.idx as i32,
+        dir: u.dir,
+        x1: u.x1.min(u.x2),
+        x2: u.x1.max(u.x2),
+        open: u.open,
+        high: u.high,
+        low: u.low,
+        close: u.close,
+        confirm_x: u.confirm_x,
+    }
+}
+
+/// 单层虚拟段 K：冻结段 + 进行中 + pending 占位
+fn build_level_virtual_units(level: &LevelBundleOut) -> Vec<BiVirtualBar> {
+    let mut v: Vec<BiVirtualBar> = level
+        .segments
+        .iter()
+        .map(|s| seg_to_virtual_bar(s))
+        .collect();
+    if let Some(active) = &level.active_unit {
+        v.push(unit_to_virtual_bar(active));
+    } else if level.segment_policy == "pending" {
+        if let Some(p) = &level.pending_unit {
+            v.push(unit_to_virtual_bar(p));
+        }
+    }
+    v
+}
+
+/// 每层段链映射
+fn map_level_segments(level: &LevelBundleOut) -> Vec<BiSegment> {
+    let mut segs: Vec<BiSegment> = level
+        .segments
+        .iter()
+        .map(level_seg_to_bi_segment)
+        .collect();
+    link_bi_segments(&mut segs);
+    segs
+}
+
+/// N 段 → 虚拟段 K 线（OHLC 冻结时已算好）
 fn seg_to_virtual_bar(seg: &LevelSegment) -> BiVirtualBar {
     BiVirtualBar {
         idx: seg.idx as i32,
@@ -276,52 +355,32 @@ pub fn build_kline_combine_bundle_with(
         })
         .collect();
 
-    // 笔段链映射（顺序建链）
-    let mut bi_segments: Vec<BiSegment> = l1
-        .segments
+    // 全层段链 / 策略 / 虚拟段 K
+    let default_segment_policies: Vec<String> = pr
+        .levels
         .iter()
-        .map(|s| BiSegment {
-            idx: s.idx as i32,
-            dir: s.dir,
-            begin_confirm_x: s.begin_confirm_x,
-            end_confirm_x: s.end_confirm_x,
-            begin_fractal_x1: s.begin_fractal_x1,
-            begin_fractal_x2: s.begin_fractal_x2,
-            end_fractal_x1: s.end_fractal_x1,
-            end_fractal_x2: s.end_fractal_x2,
-            prev_idx: None,
-            next_idx: None,
-            is_bootstrap: s.is_bootstrap,
-            is_promoted_default: s.is_promoted_default,
-        })
+        .map(|lv| lv.segment_policy.clone())
         .collect();
-    for i in 0..bi_segments.len().saturating_sub(1) {
-        bi_segments[i].next_idx = Some(bi_segments[i + 1].idx);
-        bi_segments[i + 1].prev_idx = Some(bi_segments[i].idx);
-    }
+    let level_segments: Vec<Vec<BiSegment>> =
+        pr.levels.iter().map(map_level_segments).collect();
+    let level_virtual_units: Vec<Vec<BiVirtualBar>> = pr
+        .levels
+        .iter()
+        .map(build_level_virtual_units)
+        .collect();
 
-    let default_bi_policy = resolve_default_bi_policy(bars, &bi_confirms);
-
-    // 主图展示笔 K：已冻结段 + 末步进行中笔；首确认前按 pending 策略给默认笔
-    let mut bi_virtual_bars: Vec<BiVirtualBar> = l1.segments.iter().map(seg_to_virtual_bar).collect();
-    if let Some(active) = &l1.active_unit {
-        bi_virtual_bars.push(BiVirtualBar {
-            idx: active.idx as i32,
-            dir: active.dir,
-            x1: active.x1,
-            x2: active.x2,
-            open: active.open,
-            high: active.high,
-            low: active.low,
-            close: active.close,
-            confirm_x: active.confirm_x,
-        });
-    }
-    if default_bi_policy == "pending" && bi_virtual_bars.is_empty() {
-        if let Some(d) = build_pre_confirm_default_bi(bars, bars.len() - 1) {
-            bi_virtual_bars.push(d);
-        }
-    }
+    let bi_segments = level_segments
+        .first()
+        .cloned()
+        .unwrap_or_default();
+    let default_bi_policy = default_segment_policies
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "pending".to_string());
+    let bi_virtual_bars = level_virtual_units
+        .first()
+        .cloned()
+        .unwrap_or_default();
 
     let bi_combine_frames = build_bi_combine_frames(bars, &bi_virtual_bars);
 
@@ -372,6 +431,9 @@ pub fn build_kline_combine_bundle_with(
         bi_virtual_bars,
         bi_combine_frames,
         default_bi_policy,
+        default_segment_policies,
+        level_segments,
+        level_virtual_units,
         levels: pr.levels,
     }
 }
@@ -455,7 +517,33 @@ mod tests {
         let bundle = build_kline_combine_bundle(&bars);
         assert!(!bundle.levels.is_empty());
         assert_eq!(bundle.levels[0].level, 1);
-        // frames 与 Level1 合并框一致
         assert_eq!(bundle.frames.len(), bundle.levels[0].combine_frames.len());
+    }
+
+    #[test]
+    fn bundle_per_level_export() {
+        let bars: Vec<KlineBar> = (0..40)
+            .map(|i| {
+                let up = (i / 4) % 2 == 0;
+                let base = 10.0 + (i % 4) as f64 * 0.5;
+                let h = if up { base + 1.0 } else { 16.0 - base };
+                bar(i, h, h - 0.8)
+            })
+            .collect();
+        let bundle = build_kline_combine_bundle(&bars);
+        assert_eq!(
+            bundle.default_segment_policies.len(),
+            bundle.levels.len()
+        );
+        assert_eq!(bundle.level_segments.len(), bundle.levels.len());
+        assert_eq!(bundle.level_virtual_units.len(), bundle.levels.len());
+        assert_eq!(
+            bundle.default_bi_policy,
+            bundle
+                .default_segment_policies
+                .first()
+                .cloned()
+                .unwrap_or_default()
+        );
     }
 }

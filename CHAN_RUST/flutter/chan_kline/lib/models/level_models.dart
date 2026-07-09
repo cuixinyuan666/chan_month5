@@ -236,6 +236,12 @@ class LevelBundle {
   /// 末步进行中 N 段K线（尚未冻结）
   final LevelUnitBar? activeUnit;
 
+  /// 首段策略：pending / retained / purged
+  final String segmentPolicy;
+
+  /// 首确认前 pending 占位段
+  final LevelUnitBar? pendingUnit;
+
   const LevelBundle({
     required this.level,
     this.confirms = const [],
@@ -245,6 +251,8 @@ class LevelBundle {
     this.firstDir = 0,
     this.firstDirX = -1,
     this.activeUnit,
+    this.segmentPolicy = 'pending',
+    this.pendingUnit,
   });
 
   factory LevelBundle.fromJson(Map<String, dynamic> json) {
@@ -268,6 +276,12 @@ class LevelBundle {
       activeUnit: json['active_unit'] is Map
           ? LevelUnitBar.fromJson(
               Map<String, dynamic>.from(json['active_unit'] as Map),
+            )
+          : null,
+      segmentPolicy: json['segment_policy'] as String? ?? 'pending',
+      pendingUnit: json['pending_unit'] is Map
+          ? LevelUnitBar.fromJson(
+              Map<String, dynamic>.from(json['pending_unit'] as Map),
             )
           : null,
     );

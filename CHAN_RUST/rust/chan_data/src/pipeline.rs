@@ -2,8 +2,8 @@
 //!
 //! 三层语义（勿混为一谈）：
 //! 1. **判定内核同构**（全层）：`CombineEngine` 包含合并 + 三元素分型；
-//! 2. **成段机制同构**（L2+ 与 L1 共用 `on_confirm`）：锚定配对 + 有效性校验 + 冻结去重；
-//! 3. **首段业务策略**（仅 L1）：bootstrap/审判默认笔（`feature.rs`），不属于 N 段通用判定。
+//! 2. **成段机制同构**（全层）：锚定配对 + 有效性校验 + 冻结去重；
+//! 3. **首段业务策略同构**（全层）：pending 占位 + 反向极值 trial + retained/purged（`segment_first.rs`）。
 //!
 //! 每层递归：输入单元包含合并 → 三元素分型确认（冻结不回写）→ 锚定配对 → N段K线 → 喂上层。
 //! 进行中单元（anchor 极点 → 当步K 区间）逐层向上只读探测，段确认可早于整段冻结（方案A）。
@@ -12,10 +12,13 @@ use std::collections::{HashSet, VecDeque};
 
 use serde::{Deserialize, Serialize};
 
-use crate::combine::{BiConfirmSignal, KlineCombineFrame};
+use crate::combine::KlineCombineFrame;
 use crate::engine::{CombineEngine, FxEvent, FxKind, MergeUnit};
-use crate::feature::{bootstrap_reverse_extreme_bar_idx, trial_default_bi};
 use crate::kline::KlineBar;
+use crate::segment_first::{
+    build_pending_default_unit, resolve_segment_policy, reverse_pole_x, trial_first_segment,
+    POLICY_PENDING, POLICY_PURGED, POLICY_RETAINED,
+};
 
 /// 流水线选项
 #[derive(Debug, Clone)]
@@ -24,6 +27,8 @@ pub struct PipelineOptions {
     pub validity_check: bool,
     /// 层数安全上限（穷尽通常远达不到）
     pub max_levels: usize,
+    /// 全层首段构造：pending + 反向极值 trial（默认开启）
+    pub first_segment_bootstrap: bool,
 }
 
 impl Default for PipelineOptions {
@@ -31,6 +36,7 @@ impl Default for PipelineOptions {
         Self {
             validity_check: true,
             max_levels: 16,
+            first_segment_bootstrap: true,
         }
     }
 }
@@ -90,10 +96,10 @@ pub struct LevelSegment {
     pub end_fractal_high: f64,
     #[serde(default)]
     pub end_fractal_low: f64,
-    /// 首确认引导段（审判 FAIL 时临时展示，第二有效端点出现即移除）
+    /// 已废弃：新方案无 bootstrap 引导段，固定 false（JSON 兼容）
     #[serde(default)]
     pub is_bootstrap: bool,
-    /// 首确认审判 PASS 升格默认段
+    /// 首确认 trial PASS 升格默认段
     #[serde(default)]
     pub is_promoted_default: bool,
 }
@@ -186,6 +192,16 @@ pub struct LevelBundleOut {
     /// 末步进行中 N 段K线（锚点极点 → 末K；尚未冻结）
     #[serde(default)]
     pub active_unit: Option<LevelUnitBar>,
+    /// 首段策略：pending / retained / purged
+    #[serde(default = "default_policy_pending")]
+    pub segment_policy: String,
+    /// 首确认前 pending 占位段（仅展示）
+    #[serde(default)]
+    pub pending_unit: Option<LevelUnitBar>,
+}
+
+fn default_policy_pending() -> String {
+    POLICY_PENDING.to_string()
 }
 
 /// K线合并逐步快照（兼容 merge_* / combine_* 字段）
@@ -322,9 +338,13 @@ struct ProvCache {
 struct LevelState {
     level: i32,
     validity_check: bool,
-    /// Level1 首段策略：bootstrap 审判（升格默认笔）；其余层仅锚定
-    bootstrap_trial: bool,
+    /// 全层首段 trial 开关
+    first_segment_bootstrap: bool,
     engine: CombineEngine,
+    /// 已喂入本层引擎的 N-1 段输入单元前缀（首段反向极值 / pending 用）
+    input_prefix: Vec<LevelUnitBar>,
+    /// 首段策略三态
+    segment_policy: String,
     confirms: Vec<LevelConfirm>,
     /// 冻结去重 key=(中组首单元uid, 是否顶)：组吸收扩展只改末端，首单元唯一标识组；
     /// 同组分型方向不可翻转（Up组只升不可能转BOTTOM），故一组至多冻结一次
@@ -338,7 +358,7 @@ struct LevelState {
     prov: Option<ProvCache>,
     /// 当步确认柱值（快照用；同步多确认保留最后）
     confirm_val_this_bar: i32,
-    /// 当步刚冻结首段（bootstrap/promoted），快照优先展示该段
+    /// 当步刚冻结首段（promoted），快照优先展示该段
     freshly_first_seg: bool,
 }
 
@@ -352,12 +372,14 @@ fn validity_ok(anchor: &Anchor, fx: FxKind, ev_high: f64, ev_low: f64) -> bool {
 }
 
 impl LevelState {
-    fn new(level: i32, validity_check: bool, bootstrap_trial: bool) -> Self {
+    fn new(level: i32, validity_check: bool, first_segment_bootstrap: bool) -> Self {
         Self {
             level,
             validity_check,
-            bootstrap_trial,
+            first_segment_bootstrap,
             engine: CombineEngine::new(),
+            input_prefix: Vec::new(),
+            segment_policy: POLICY_PENDING.to_string(),
             confirms: Vec::new(),
             frozen: HashSet::new(),
             anchor: None,
@@ -398,6 +420,7 @@ impl LevelState {
         bar_x: i32,
         trigger_uid: i64,
         bars: &[KlineBar],
+        trigger_ub: Option<LevelUnitBar>,
     ) -> Vec<LevelUnitBar> {
         let fx = ev.fx;
         let (ev_x1, ev_x2, ev_high, ev_low) = (ev.x1, ev.x2, ev.high, ev.low);
@@ -421,6 +444,14 @@ impl LevelState {
         let mut used = false;
         let mut outs = Vec::new();
 
+        // trial 输入：已喂入前缀 + 探测触发单元（probe 路径可能尚未永久 feed）
+        let mut trial_inputs = self.input_prefix.clone();
+        if let Some(t) = trigger_ub {
+            if trial_inputs.iter().all(|u| u.idx != t.idx) {
+                trial_inputs.push(t);
+            }
+        }
+
         enum Action {
             First,
             Drop,
@@ -441,54 +472,46 @@ impl LevelState {
         match action {
             Action::First => {
                 used = true;
-                if self.bootstrap_trial {
-                    // Level1 首确认：引导/审判默认笔（与旧工程一致）
-                    let sig = BiConfirmSignal {
-                        x: bar_x,
-                        fx: fx.as_str().to_string(),
-                        value,
-                        fractal_x1: ev_x1,
-                        fractal_x2: ev_x2,
-                    };
-                    if let Some(virtual_k) = bootstrap_reverse_extreme_bar_idx(bars, &sig) {
-                        let promoted = trial_default_bi(bars, &sig);
+                if self.first_segment_bootstrap {
+                    // 全层首确认：反向极值 trial（放宽：合法区间即 PASS）
+                    if let Some((vi, _pi)) =
+                        trial_first_segment(&trial_inputs, pole_x, fx)
+                    {
+                        let virtual_u = &trial_inputs[vi];
+                        let begin_pole = reverse_pole_x(bars, virtual_u, fx);
                         let dir = if fx == FxKind::Top { 1 } else { -1 };
-                        let vk = virtual_k.max(0) as usize;
-                        let (vk_high, vk_low) = bars
-                            .get(vk)
-                            .map(|b| (b.high, b.low))
-                            .unwrap_or((0.0, 0.0));
-                        let (o, h, l, c, v) = range_ohlcv(bars, virtual_k, pole_x);
+                        let (vk_high, vk_low) = (virtual_u.high, virtual_u.low);
+                        let (o, h, l, c, v) = range_ohlcv(bars, begin_pole, pole_x);
+                        self.segment_policy = POLICY_RETAINED.to_string();
                         self.segments.push(LevelSegment {
                             idx: 0,
                             dir,
                             begin_confirm_x: bar_x,
                             end_confirm_x: bar_x,
-                            begin_pole_x: virtual_k,
+                            begin_pole_x: begin_pole,
                             end_pole_x: pole_x,
                             open: o,
                             high: h,
                             low: l,
                             close: c,
                             volume: v,
-                            begin_fractal_x1: virtual_k,
-                            begin_fractal_x2: virtual_k,
+                            begin_fractal_x1: virtual_u.x1,
+                            begin_fractal_x2: virtual_u.x2,
                             end_fractal_x1: ev_x1,
                             end_fractal_x2: ev_x2,
                             begin_fractal_high: vk_high,
                             begin_fractal_low: vk_low,
                             end_fractal_high: ev_high,
                             end_fractal_low: ev_low,
-                            is_bootstrap: !promoted,
-                            is_promoted_default: promoted,
+                            is_bootstrap: false,
+                            is_promoted_default: true,
                         });
                         self.freshly_first_seg = true;
-                        if promoted {
-                            // 升格默认笔为正式首段：喂上层
-                            let ub = make_unit_bar(bars, 0, dir, virtual_k, pole_x, bar_x);
-                            self.unit_bars.push(ub.clone());
-                            outs.push(ub);
-                        }
+                        let ub = make_unit_bar(bars, 0, dir, begin_pole, pole_x, bar_x);
+                        self.unit_bars.push(ub.clone());
+                        outs.push(ub);
+                    } else {
+                        self.segment_policy = POLICY_PURGED.to_string();
                     }
                 }
                 self.set_anchor(fx, ev_x1, ev_x2, ev_high, ev_low, pole_x, bar_x);
@@ -496,10 +519,6 @@ impl LevelState {
             Action::Drop => {}
             Action::Pair => {
                 used = true;
-                // bootstrap 临时首段：第二个有效端点出现即移除（历史快照不回写）
-                if self.segments.len() == 1 && self.segments[0].is_bootstrap {
-                    self.segments.clear();
-                }
                 let a = self.anchor.clone().expect("Pair 必有锚点");
                 let idx = self.segments.len() as i64;
                 let dir = if a.fx == FxKind::Bottom { 1 } else { -1 };
@@ -596,7 +615,7 @@ impl LevelState {
         upper: Option<&CombineEngine>,
         prov: Option<&(MergeUnit, f64, f64, f64)>,
     ) -> LevelSnap {
-        // 首段（bootstrap/promoted）冻结当步：展示刚冻结段而非同步新起进行中段
+        // 首段 promoted 冻结当步：展示刚冻结段而非同步新起进行中段
         if self.freshly_first_seg {
             if let Some(seg) = self.segments.first() {
                 let ub = make_unit_bar(bars, seg.idx, seg.dir, seg.begin_pole_x, seg.end_pole_x, seg.end_confirm_x);
@@ -626,6 +645,28 @@ impl LevelState {
                         snap.combine_x1 = ub.x1;
                     }
                 }
+                return snap;
+            }
+        }
+        // pending 占位：尚无锚点、首确认前
+        if self.anchor.is_none()
+            && self.segment_policy == POLICY_PENDING
+            && !self.input_prefix.is_empty()
+        {
+            if let Some(pu) = build_pending_default_unit(&self.input_prefix) {
+                let mut snap = LevelSnap::empty(self.level);
+                snap.unit_idx = Some(0);
+                snap.unit_dir = pu.dir;
+                snap.unit_x1 = pu.x1;
+                snap.unit_x2 = pu.x2;
+                snap.unit_open = pu.open;
+                snap.unit_high = pu.high;
+                snap.unit_low = pu.low;
+                snap.unit_close = pu.close;
+                snap.unit_volume = pu.volume;
+                snap.combine_high = pu.high;
+                snap.combine_low = pu.low;
+                snap.combine_x1 = pu.x1;
                 return snap;
             }
         }
@@ -682,6 +723,17 @@ impl LevelState {
             }
             _ => None,
         };
+        let has_promoted = self.segments.iter().any(|s| s.is_promoted_default);
+        let segment_policy = if self.segment_policy == POLICY_PENDING {
+            resolve_segment_policy(&self.confirms, has_promoted)
+        } else {
+            self.segment_policy.clone()
+        };
+        let pending_unit = if segment_policy == POLICY_PENDING {
+            build_pending_default_unit(&self.input_prefix)
+        } else {
+            None
+        };
         LevelBundleOut {
             level: self.level,
             confirms: self.confirms.clone(),
@@ -691,6 +743,8 @@ impl LevelState {
             first_dir: self.first_dir,
             first_dir_x: self.first_dir_x,
             active_unit,
+            segment_policy,
+            pending_unit,
         }
     }
 }
@@ -737,8 +791,13 @@ fn propagate(
             continue;
         }
         if li == levels.len() {
-            levels.push(LevelState::new((li + 1) as i32, opt.validity_check, false));
+            levels.push(LevelState::new(
+                (li + 1) as i32,
+                opt.validity_check,
+                opt.first_segment_bootstrap,
+            ));
         }
+        levels[li].input_prefix.push(ub.clone());
         let mu = MergeUnit {
             uid: ub.idx,
             x1: ub.x1,
@@ -747,7 +806,7 @@ fn propagate(
             low: ub.low,
         };
         if let Some(ev) = levels[li].engine.feed(&mu) {
-            let outs = levels[li].on_confirm(&ev, bar_x, mu.uid, bars);
+            let outs = levels[li].on_confirm(&ev, bar_x, mu.uid, bars, Some(ub));
             for o in outs {
                 queue.push_back((li + 1, o));
             }
@@ -757,7 +816,11 @@ fn propagate(
 
 /// 全量入口：对已喂入 K 线前缀跑穷尽 N 段流水线（内部单遍逐K，无未来函数）
 pub fn run_pipeline(bars: &[KlineBar], opt: &PipelineOptions) -> PipelineResult {
-    let mut levels: Vec<LevelState> = vec![LevelState::new(1, opt.validity_check, true)];
+    let mut levels: Vec<LevelState> = vec![LevelState::new(
+        1,
+        opt.validity_check,
+        opt.first_segment_bootstrap,
+    )];
     let mut bar_level_snaps: Vec<Vec<LevelSnap>> = Vec::with_capacity(bars.len());
     let mut bar_k_snaps: Vec<BarCombineSnap> = Vec::with_capacity(bars.len());
     let mut bar_seg_rows: Vec<BarSegRow> = Vec::with_capacity(bars.len());
@@ -786,11 +849,25 @@ pub fn run_pipeline(bars: &[KlineBar], opt: &PipelineOptions) -> PipelineResult 
         // 2) 探测流：li 层进行中 N段K线 → li+1 层引擎只读探测（提前段确认，方案A）
         let mut li = 0usize;
         while li + 1 < levels.len() {
-            let pu_opt = levels[li].provisional_unit(bars, i).map(|(u, _, _, _)| u);
+            let pu_opt = levels[li].provisional_unit(bars, i);
             if let Some(pu) = pu_opt {
-                let ev_opt = levels[li + 1].engine.probe(&pu).fx_event;
+                let ev_opt = levels[li + 1].engine.probe(&pu.0).fx_event;
                 if let Some(ev) = ev_opt {
-                    let outs = levels[li + 1].on_confirm(&ev, bar_x, pu.uid, bars);
+                    let probe_ub = {
+                        let dir = levels[li]
+                            .anchor
+                            .as_ref()
+                            .map(|a| if a.fx == FxKind::Bottom { 1 } else { -1 })
+                            .unwrap_or(0);
+                        make_unit_bar(bars, pu.0.uid, dir, pu.0.x1, pu.0.x2, bar_x)
+                    };
+                    let outs = levels[li + 1].on_confirm(
+                        &ev,
+                        bar_x,
+                        pu.0.uid,
+                        bars,
+                        Some(probe_ub),
+                    );
                     if !outs.is_empty() {
                         propagate(&mut levels, li + 2, outs, bar_x, bars, opt);
                     }
@@ -908,9 +985,6 @@ mod tests {
         let pr = run_pipeline(&bars, &PipelineOptions::default());
         let segs = &pr.levels[0].segments;
         for w in segs.windows(2) {
-            if w[0].is_bootstrap || w[1].is_bootstrap {
-                continue;
-            }
             assert_eq!(
                 w[0].end_pole_x, w[1].begin_pole_x,
                 "相邻段端点应无缝衔接"
@@ -956,6 +1030,7 @@ mod tests {
             &PipelineOptions {
                 validity_check: true,
                 max_levels: 16,
+                first_segment_bootstrap: true,
             },
         );
         let without_check = run_pipeline(
@@ -963,13 +1038,14 @@ mod tests {
             &PipelineOptions {
                 validity_check: false,
                 max_levels: 16,
+                first_segment_bootstrap: true,
             },
         );
         let pair_count = |pr: &PipelineResult| {
             pr.levels[0]
                 .segments
                 .iter()
-                .filter(|s| !s.is_bootstrap && !s.is_promoted_default)
+                .filter(|s| !s.is_promoted_default)
                 .count()
         };
         assert!(pair_count(&with_check) <= pair_count(&without_check));
@@ -984,6 +1060,22 @@ mod tests {
         if let Some(top) = pr.levels.last() {
             // 最高层要么无段（穷尽终止），要么是刚建仍在积累
             assert!(top.segments.len() <= 1 || pr.levels.len() == 16);
+        }
+    }
+
+    #[test]
+    fn all_levels_have_segment_policy() {
+        let bars = zigzag(80);
+        let pr = run_pipeline(&bars, &PipelineOptions::default());
+        for lv in &pr.levels {
+            assert!(
+                lv.segment_policy == "pending"
+                    || lv.segment_policy == "retained"
+                    || lv.segment_policy == "purged",
+                "level {} policy={}",
+                lv.level,
+                lv.segment_policy
+            );
         }
     }
 }

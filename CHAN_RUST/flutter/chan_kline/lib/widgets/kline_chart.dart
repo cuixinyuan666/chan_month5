@@ -190,20 +190,20 @@ class _KlineChartState extends State<KlineChart> {
   int _crosshairAsOfIdx() =>
       widget.bars[_crosshairBarIdx!.clamp(0, widget.bars.length - 1)].idx;
 
-  /// N≥2 段连线分层统计（状态栏）
+  /// N≥2 段K线分层统计（状态栏，对齐十字线 tooltip）
   String get _levelSegHint {
     if (widget.levels.length < 2) {
-      return '段连线 ${widget.segAnalysis.segLines.length}';
+      return '2段K线 ${widget.segAnalysis.segLines.length}';
     }
     final parts = <String>[];
     for (final b in widget.levels) {
       if (b.level < 2) continue;
       if (b.segments.isEmpty && b.confirms.isEmpty) continue;
       parts.add(
-        '${ChartLevelLineStyle.shortLabel(b.level)}连线${b.segments.length}',
+        '${b.level}段K线${b.segments.length}',
       );
     }
-    if (parts.isEmpty) return '段连线 0';
+    if (parts.isEmpty) return '2段K线 0';
     return parts.join('  ');
   }
 
@@ -519,7 +519,7 @@ class _KlineChartState extends State<KlineChart> {
               height: hintH,
               child: Center(
                 child: Text(
-                  '主图: $_mainLabel  |  副图: $_subLabel  |  笔K ${widget.biVirtualBarViews.length}  笔K线合并 ${widget.biCombineFrames.length}  $_levelSegHint  |  双击十字线  |  ${widget.bars.length}根',
+                  '主图: $_mainLabel  |  副图: $_subLabel  |  1段K线 ${widget.biVirtualBarViews.length}  1段K线合并 ${widget.biCombineFrames.length}  $_levelSegHint  |  双击十字线  |  ${widget.bars.length}根',
                   style: const TextStyle(color: Color(0x99FFFFFF), fontSize: 11),
                   textAlign: TextAlign.center,
                 ),
