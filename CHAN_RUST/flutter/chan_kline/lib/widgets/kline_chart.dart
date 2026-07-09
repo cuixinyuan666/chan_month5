@@ -17,16 +17,17 @@ import '../models/kline_combine_frame.dart';
 import '../models/bar_feature_lookup.dart';
 import '../models/level_models.dart';
 import '../models/seg_analysis.dart';
+import 'chart_level_line_style.dart';
 import 'kline_axis_format.dart';
 import 'kline_viewport.dart';
 import 'main_indicator_picker.dart';
 import 'sub_indicator_picker.dart';
 
-/// 主图同级别连线配色（笔 / 段 各一种；段含二/三/四级展示层）。
+/// 主图同级别连线配色（笔 + 各 N 段见 [ChartLevelLineStyle]）。
 abstract final class ChartLineColors {
   /// 全部笔统一色
   static const bi = Color(0xCC94A3B8);
-  /// 全部线段统一色（上涨/下跌段同色，仅展示）
+  /// 2 段（线段）默认色（与 ChartLevelLineStyle level=2 一致）
   static const seg = Color(0xCCF59E0B);
 }
 
@@ -188,6 +189,23 @@ class _KlineChartState extends State<KlineChart> {
 
   int _crosshairAsOfIdx() =>
       widget.bars[_crosshairBarIdx!.clamp(0, widget.bars.length - 1)].idx;
+
+  /// N≥2 段连线分层统计（状态栏）
+  String get _levelSegHint {
+    if (widget.levels.length < 2) {
+      return '段连线 ${widget.segAnalysis.segLines.length}';
+    }
+    final parts = <String>[];
+    for (final b in widget.levels) {
+      if (b.level < 2) continue;
+      if (b.segments.isEmpty && b.confirms.isEmpty) continue;
+      parts.add(
+        '${ChartLevelLineStyle.shortLabel(b.level)}连线${b.segments.length}',
+      );
+    }
+    if (parts.isEmpty) return '段连线 0';
+    return parts.join('  ');
+  }
 
   /// as-of 笔 K 重建：Rust 冻结段 + 当步快照查表组装，Dart 端零缠论计算。
   List<BiVirtualBar> _asOfBiVirtualBars() {
@@ -391,6 +409,9 @@ class _KlineChartState extends State<KlineChart> {
                       crosshairX: _crosshairX,
                       crosshairY: _crosshairY,
                       crosshairBarIdx: _crosshairBarIdx,
+                      segAsOf: _crosshairEnabled && _crosshairBarIdx != null
+                          ? _crosshairAsOfIdx()
+                          : null,
                     ),
                   ),
                   Positioned(
@@ -498,7 +519,7 @@ class _KlineChartState extends State<KlineChart> {
               height: hintH,
               child: Center(
                 child: Text(
-                  '主图: $_mainLabel  |  副图: $_subLabel  |  笔K ${widget.biVirtualBarViews.length}  笔K线合并 ${widget.biCombineFrames.length}  段确认 ${widget.segAnalysis.segConfirms.length}  段连线 ${widget.segAnalysis.segLines.length}  |  双击十字线  |  ${widget.bars.length}根',
+                  '主图: $_mainLabel  |  副图: $_subLabel  |  笔K ${widget.biVirtualBarViews.length}  笔K线合并 ${widget.biCombineFrames.length}  $_levelSegHint  |  双击十字线  |  ${widget.bars.length}根',
                   style: const TextStyle(color: Color(0x99FFFFFF), fontSize: 11),
                   textAlign: TextAlign.center,
                 ),
@@ -533,6 +554,7 @@ class _KlineCompositePainter extends CustomPainter {
     required this.crosshairX,
     required this.crosshairY,
     required this.crosshairBarIdx,
+    this.segAsOf,
   }) : featureLookup = BarFeatureLookup.build(
           bars: bars,
           combineFrames: combineFrames,
@@ -565,6 +587,8 @@ class _KlineCompositePainter extends CustomPainter {
   final double? crosshairX;
   final double? crosshairY;
   final int? crosshairBarIdx;
+  /// 十字线 as-of 2 段连线截止 K（null=末态全量）
+  final int? segAsOf;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -966,7 +990,7 @@ class _KlineCompositePainter extends CustomPainter {
     return 0;
   }
 
-  /// 线段主图连线：已确认段实线 + 构建中段虚线（展示专用，不参与 ML）。
+  /// N≥2 段主图连线：各层独立色/线型/粗细；已冻结 + 构建中虚线。
   void _drawSegLines(
     Canvas canvas,
     double w,
@@ -974,70 +998,209 @@ class _KlineCompositePainter extends CustomPainter {
     double plotH,
     double slotW,
   ) {
-    final lines = segAnalysis.segLines;
-    if (lines.isNotEmpty) {
-      final paint = Paint()
-        ..color = ChartLineColors.seg
-        ..strokeWidth = 2.4
-        ..style = PaintingStyle.stroke;
+    final tailIdx = segAsOf ?? (bars.isEmpty ? -1 : bars.last.idx);
 
-      for (final seg in lines) {
-        final bx1 = seg.beginFractalX1 != 0 || seg.beginFractalX2 != 0
-            ? seg.beginFractalX1
-            : seg.beginX;
-        final bx2 = seg.beginFractalX1 != 0 || seg.beginFractalX2 != 0
-            ? seg.beginFractalX2
-            : seg.beginX;
-        final ex1 = seg.endFractalX1 != 0 || seg.endFractalX2 != 0
-            ? seg.endFractalX1
-            : seg.endX;
-        final ex2 = seg.endFractalX1 != 0 || seg.endFractalX2 != 0
-            ? seg.endFractalX2
-            : seg.endX;
-        if (ex2 < viewport.viewXMin - 1 || bx1 > viewport.viewXMax + 1) {
+    if (levels.length >= 2) {
+      // 低层先画、高层后画，避免粗线被遮挡
+      final bundles = levels.where((b) => b.level >= 2).toList()
+        ..sort((a, b) => a.level.compareTo(b.level));
+      for (final bundle in bundles) {
+        _drawOneLevelLines(
+          canvas,
+          w,
+          plotTop,
+          plotH,
+          slotW,
+          bundle: bundle,
+          tailIdx: tailIdx,
+        );
+      }
+    } else {
+      final style = ChartLevelLineStyle.forLevel(2);
+      final paint = Paint()
+        ..color = style.color
+        ..strokeWidth = style.strokeWidth
+        ..style = PaintingStyle.stroke;
+      for (final seg in segAnalysis.segLines) {
+        final beginIdx = seg.beginX;
+        final endIdx = seg.endX;
+        if (endIdx < viewport.viewXMin - 1 || beginIdx > viewport.viewXMax + 1) {
           continue;
         }
-        final x1 = _fractalCenterX(bx1, bx2, w, slotW);
-        final x2 = _fractalCenterX(ex1, ex2, w, slotW);
-        final y1 = priceRange.yOf(seg.beginPrice, plotTop, plotH);
-        final y2 = priceRange.yOf(seg.endPrice, plotTop, plotH);
-        canvas.drawLine(Offset(x1, y1), Offset(x2, y2), paint);
+        final beginFx = seg.dir < 0 ? 'TOP' : 'BOTTOM';
+        final endFx = seg.dir > 0 ? 'TOP' : 'BOTTOM';
+        final beginPrice = poleBarPrice(bars, beginIdx, beginFx);
+        final endPrice = poleBarPrice(bars, endIdx, endFx);
+        if (beginPrice == null || endPrice == null) continue;
+        final a = Offset(_barCenterX(beginIdx, w, slotW), priceRange.yOf(beginPrice, plotTop, plotH));
+        final b = Offset(_barCenterX(endIdx, w, slotW), priceRange.yOf(endPrice, plotTop, plotH));
+        _drawStyledSegmentLine(canvas, a, b, paint, style, building: false);
+      }
+      if (tailIdx >= 0) {
+        _drawBuildingLevelLine(
+          canvas,
+          w,
+          plotTop,
+          plotH,
+          slotW,
+          level: 2,
+          style: style,
+          tailIdx: tailIdx,
+          confirms: const [],
+          useLegacySegAnalysis: true,
+        );
       }
     }
-
-    _drawBuildingSegLine(canvas, w, plotTop, plotH, slotW);
   }
 
-  /// 构建中线段：末次段确认分型 → 当前末根 K 极值（虚线）。
-  void _drawBuildingSegLine(
+  /// 单层 N 段（level≥2）已冻结段 + 构建中段。
+  void _drawOneLevelLines(
     Canvas canvas,
     double w,
     double plotTop,
     double plotH,
-    double slotW,
-  ) {
-    if (bars.isEmpty || segAnalysis.segConfirms.isEmpty) return;
+    double slotW, {
+    required LevelBundle bundle,
+    required int tailIdx,
+  }) {
+    final level = bundle.level;
+    if (level < 2) return;
+    final style = ChartLevelLineStyle.forLevel(level);
+    final paint = Paint()
+      ..color = style.color
+      ..strokeWidth = style.strokeWidth
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
 
-    final buildingDir = segAnalysis.buildingSegDir;
+    final segments = segAsOf != null
+        ? asOfLevelSegments(levels: levels, level: level, asOf: segAsOf!)
+        : bundle.segments;
+
+    for (final seg in segments) {
+      final begin = levelSegmentEndpoint(
+        bars: bars,
+        seg: seg,
+        confirms: bundle.confirms,
+        isBegin: true,
+      );
+      final end = levelSegmentEndpoint(
+        bars: bars,
+        seg: seg,
+        confirms: bundle.confirms,
+        isBegin: false,
+      );
+      if (begin == null || end == null) continue;
+      final xMin = math.min(begin.barIdx, end.barIdx);
+      final xMax = math.max(begin.barIdx, end.barIdx);
+      if (xMax < viewport.viewXMin - 1 || xMin > viewport.viewXMax + 1) {
+        continue;
+      }
+      final a = Offset(
+        _barCenterX(begin.barIdx, w, slotW),
+        priceRange.yOf(begin.price, plotTop, plotH),
+      );
+      final b = Offset(
+        _barCenterX(end.barIdx, w, slotW),
+        priceRange.yOf(end.price, plotTop, plotH),
+      );
+      _drawStyledSegmentLine(canvas, a, b, paint, style, building: false);
+    }
+
+    if (tailIdx >= 0) {
+      _drawBuildingLevelLine(
+        canvas,
+        w,
+        plotTop,
+        plotH,
+        slotW,
+        level: level,
+        style: style,
+        tailIdx: tailIdx,
+        confirms: bundle.confirms,
+        useLegacySegAnalysis: false,
+      );
+    }
+  }
+
+  /// 按层级样式画线段（实线或 pattern 虚线）。
+  void _drawStyledSegmentLine(
+    Canvas canvas,
+    Offset a,
+    Offset b,
+    Paint paint,
+    ChartLevelLineStyle style, {
+    required bool building,
+  }) {
+    if (building) {
+      final p = Paint()
+        ..color = style.color.withValues(alpha: style.buildingAlpha)
+        ..strokeWidth = style.buildingStrokeWidth
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round;
+      _drawPatternLine(canvas, a, b, p, style.buildingDashPattern);
+      return;
+    }
+    if (style.frozenDashPattern == null) {
+      canvas.drawLine(a, b, paint);
+    } else {
+      _drawPatternLine(canvas, a, b, paint, style.frozenDashPattern!);
+    }
+  }
+
+  /// 构建中 N 段：末次确认极点 → as-of/末 K 方向极值。
+  void _drawBuildingLevelLine(
+    Canvas canvas,
+    double w,
+    double plotTop,
+    double plotH,
+    double slotW, {
+    required int level,
+    required ChartLevelLineStyle style,
+    required int tailIdx,
+    required List<LevelConfirm> confirms,
+    required bool useLegacySegAnalysis,
+  }) {
+    if (bars.isEmpty || tailIdx < 0 || tailIdx >= bars.length) return;
+
+    final buildingDir = useLegacySegAnalysis
+        ? segAnalysis.buildingSegDir
+        : buildingLevelDirAt(
+            levels: levels,
+            barFeatures: barFeatures,
+            level: level,
+            asOf: tailIdx,
+          );
     if (buildingDir == 0) return;
 
-    final lastConfirm = segAnalysis.segConfirms.last;
-    final tail = bars.last;
-    if (lastConfirm.x > tail.idx) return;
+    LevelConfirm? lastConfirm;
+    if (useLegacySegAnalysis) {
+      final sc = segAnalysis.segConfirms
+          .where((c) => c.x <= tailIdx && (c.fx == 'TOP' || c.fx == 'BOTTOM'))
+          .toList();
+      if (sc.isNotEmpty) {
+        final c = sc.last;
+        lastConfirm = LevelConfirm(
+          x: c.x,
+          fx: c.fx,
+          value: c.value,
+          fractalX1: c.fractalX1,
+          fractalX2: c.fractalX2,
+          fractalHigh: c.fractalHigh,
+          fractalLow: c.fractalLow,
+        );
+      }
+    } else {
+      lastConfirm = lastLevelConfirmAt(confirms, tailIdx);
+    }
+    if (lastConfirm == null || lastConfirm.x > tailIdx) return;
 
-    final fx1 = lastConfirm.fractalX1;
-    final fx2 = lastConfirm.fractalX2;
-    if (fx1 == 0 && fx2 == 0) return;
+    final begin = levelConfirmEndpoint(bars, lastConfirm);
+    if (begin == null) return;
 
-    final beginX = _fractalCenterX(fx1, fx2, w, slotW);
-    final endX = _barCenterX(tail.idx, w, slotW);
-    final beginPrice = lastConfirm.fx == 'BOTTOM'
-        ? lastConfirm.fractalLow
-        : lastConfirm.fractalHigh;
-
+    final tail = bars[tailIdx];
     var endPrice = buildingDir > 0 ? tail.high : tail.low;
     for (final b in bars) {
-      if (b.idx < lastConfirm.x) continue;
+      if (b.idx < lastConfirm.x || b.idx > tailIdx) continue;
       if (buildingDir > 0) {
         endPrice = math.max(endPrice, b.high);
       } else {
@@ -1045,14 +1208,25 @@ class _KlineCompositePainter extends CustomPainter {
       }
     }
 
-    final y1 = priceRange.yOf(beginPrice, plotTop, plotH);
-    final y2 = priceRange.yOf(endPrice, plotTop, plotH);
-    final paint = Paint()
-      ..color = ChartLineColors.seg.withValues(alpha: 0.65)
-      ..strokeWidth = 2.0
-      ..style = PaintingStyle.stroke;
+    final geomMin = math.min(begin.barIdx, tail.idx);
+    final geomMax = math.max(begin.barIdx, tail.idx);
+    if (geomMax < viewport.viewXMin - 1 || geomMin > viewport.viewXMax + 1) {
+      return;
+    }
 
-    _drawDashedLine(canvas, Offset(beginX, y1), Offset(endX, y2), paint);
+    final a = Offset(
+      _barCenterX(begin.barIdx, w, slotW),
+      priceRange.yOf(begin.price, plotTop, plotH),
+    );
+    final b = Offset(
+      _barCenterX(tail.idx, w, slotW),
+      priceRange.yOf(endPrice, plotTop, plotH),
+    );
+    final paint = Paint()
+      ..color = style.color
+      ..strokeWidth = style.buildingStrokeWidth
+      ..style = PaintingStyle.stroke;
+    _drawStyledSegmentLine(canvas, a, b, paint, style, building: true);
   }
 
   /// 构建中笔：末次笔确认分型极点 → 当前末根 K 方向极值（虚线，展示专用）。
@@ -1882,21 +2056,36 @@ class _KlineCompositePainter extends CustomPainter {
     return null;
   }
 
-  void _drawDashedLine(Canvas canvas, Offset a, Offset b, Paint paint) {
+  /// 通用 pattern 虚线（pattern=[画,空,画,空,…] 像素）。
+  void _drawPatternLine(
+    Canvas canvas,
+    Offset a,
+    Offset b,
+    Paint paint,
+    List<double> pattern,
+  ) {
+    if (pattern.isEmpty) {
+      canvas.drawLine(a, b, paint);
+      return;
+    }
     final total = (b - a).distance;
     if (total <= 0) return;
     final dir = (b - a) / total;
-    const dash = 4.0;
     var dist = 0.0;
-    var draw = true;
+    var patIdx = 0;
     while (dist < total) {
-      final next = math.min(dist + dash, total);
-      if (draw) {
+      final segLen = pattern[patIdx % pattern.length];
+      final next = math.min(dist + segLen, total);
+      if (patIdx % 2 == 0) {
         canvas.drawLine(a + dir * dist, a + dir * next, paint);
       }
       dist = next;
-      draw = !draw;
+      patIdx++;
     }
+  }
+
+  void _drawDashedLine(Canvas canvas, Offset a, Offset b, Paint paint) {
+    _drawPatternLine(canvas, a, b, paint, const [4, 4]);
   }
 
   @override
@@ -1909,6 +2098,8 @@ class _KlineCompositePainter extends CustomPainter {
         oldDelegate.biVirtualBarViews != biVirtualBarViews ||
         oldDelegate.biCombineFrames != biCombineFrames ||
         oldDelegate.segAnalysis != segAnalysis ||
+        oldDelegate.levels != levels ||
+        oldDelegate.segAsOf != segAsOf ||
         oldDelegate.mainIndicators != mainIndicators ||
         oldDelegate.subIndicators != subIndicators ||
         oldDelegate.mainH != mainH ||

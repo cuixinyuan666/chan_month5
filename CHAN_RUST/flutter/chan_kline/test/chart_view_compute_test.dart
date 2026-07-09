@@ -1,5 +1,6 @@
 import 'package:chan_kline/compute/bi_virtual_bar_view_compute.dart';
 import 'package:chan_kline/compute/chart_view_compute.dart';
+import 'package:chan_kline/models/bi_confirm_signal.dart';
 import 'package:chan_kline/models/bar_crosshair_feature.dart';
 import 'package:chan_kline/models/kline_bar.dart';
 import 'package:chan_kline/models/level_models.dart';
@@ -87,6 +88,131 @@ void main() {
     expect(views[0].endAtLeftHalf, isTrue);
     expect(views[1].startAtRightHalf, isTrue);
     expect(views[0].viewX2, views[1].viewX1);
+  });
+
+  test('fractalExtremeBarIdxRaw 与 BiConfirmSignal 包装同口径', () {
+    final bars = _bars(6);
+    bars[2] = KlineBar(
+      idx: 2,
+      timeMs: 2,
+      timeText: 't2',
+      open: 12,
+      high: 15,
+      low: 11,
+      close: 14,
+      volume: 100,
+      amount: 1,
+      metrics: const {},
+    );
+    const conf = BiConfirmSignal(
+      x: 4,
+      fx: 'TOP',
+      value: -1,
+      fractalX1: 1,
+      fractalX2: 3,
+    );
+    expect(
+      fractalExtremeBarIdxRaw(bars, fx: 'TOP', fractalX1: 1, fractalX2: 3),
+      2,
+    );
+    expect(fractalExtremeBarIdx(bars, conf), 2);
+  });
+
+  test('levelSegmentEndpoint 优先 Rust poleX', () {
+    final bars = _bars(8);
+    const seg = LevelSegmentN(
+      idx: 0,
+      dir: 1,
+      beginConfirmX: 2,
+      endConfirmX: 5,
+      beginPoleX: 1,
+      endPoleX: 4,
+      open: 10,
+      high: 11,
+      low: 9,
+      close: 10.5,
+      volume: 100,
+      beginFractalX1: 1,
+      beginFractalX2: 1,
+      endFractalX1: 3,
+      endFractalX2: 4,
+    );
+    const confirms = [
+      LevelConfirm(
+        x: 2,
+        fx: 'BOTTOM',
+        value: 1,
+        fractalX1: 1,
+        fractalX2: 1,
+        poleX: 1,
+      ),
+      LevelConfirm(
+        x: 5,
+        fx: 'TOP',
+        value: -1,
+        fractalX1: 3,
+        fractalX2: 4,
+        poleX: 4,
+      ),
+    ];
+    final begin = levelSegmentEndpoint(
+      bars: bars,
+      seg: seg,
+      confirms: confirms,
+      isBegin: true,
+    );
+    final end = levelSegmentEndpoint(
+      bars: bars,
+      seg: seg,
+      confirms: confirms,
+      isBegin: false,
+    );
+    expect(begin?.barIdx, 1);
+    expect(begin?.price, bars[1].low);
+    expect(end?.barIdx, 4);
+    expect(end?.price, bars[4].high);
+  });
+
+  test('asOfLevelSegments 仅含 endConfirmX<=asOf 的冻结段', () {
+    const levels = [
+      LevelBundle(level: 1),
+      LevelBundle(
+        level: 2,
+        segments: [
+          LevelSegmentN(
+            idx: 0,
+            dir: 1,
+            beginConfirmX: 2,
+            endConfirmX: 5,
+            beginPoleX: 1,
+            endPoleX: 4,
+            open: 10,
+            high: 11,
+            low: 9,
+            close: 10.5,
+            volume: 100,
+          ),
+          LevelSegmentN(
+            idx: 1,
+            dir: -1,
+            beginConfirmX: 5,
+            endConfirmX: 8,
+            beginPoleX: 4,
+            endPoleX: 7,
+            open: 10.5,
+            high: 11,
+            low: 9,
+            close: 9.5,
+            volume: 120,
+          ),
+        ],
+      ),
+    ];
+    final at5 = asOfLevelSegments(levels: levels, level: 2, asOf: 5);
+    expect(at5.length, 1);
+    expect(at5.first.idx, 0);
+    final at8 = asOfLevelSegments(levels: levels, level: 2, asOf: 8);
+    expect(at8.length, 2);
   });
 
   test('首笔确认前：pending 给默认笔，purged 为空', () {
