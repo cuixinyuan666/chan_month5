@@ -1,6 +1,11 @@
 //! N 段递归流水线：1分钟K → 1段(笔) → 2段(线段) → … → N段，穷尽到无法再生成新层。
-//! 每层完全同构：输入单元包含合并（CombineEngine）→ 三元素分型确认（冻结不回写）
-//! → 锚定配对（最近已用端点分型，链条无缝）→ N段K线 → 作为上一层输入单元。
+//!
+//! 三层语义（勿混为一谈）：
+//! 1. **判定内核同构**（全层）：`CombineEngine` 包含合并 + 三元素分型；
+//! 2. **成段机制同构**（L2+ 与 L1 共用 `on_confirm`）：锚定配对 + 有效性校验 + 冻结去重；
+//! 3. **首段业务策略**（仅 L1）：bootstrap/审判默认笔（`feature.rs`），不属于 N 段通用判定。
+//!
+//! 每层递归：输入单元包含合并 → 三元素分型确认（冻结不回写）→ 锚定配对 → N段K线 → 喂上层。
 //! 进行中单元（anchor 极点 → 当步K 区间）逐层向上只读探测，段确认可早于整段冻结（方案A）。
 
 use std::collections::{HashSet, VecDeque};
@@ -110,7 +115,7 @@ pub struct LevelUnitBar {
 }
 
 /// 每根 1 分钟 K × 每层的十字线快照（逐K当下冻结，ML/tooltip 同源）
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LevelSnap {
     /// 段层级：1=笔，2=线段，…
     pub level: i32,
@@ -916,7 +921,7 @@ mod tests {
 
     #[test]
     fn snapshots_frozen_per_bar_no_future() {
-        // 前缀重放：任意前缀的历史快照与全量一致（逐K当下冻结，无未来函数）
+        // 前缀重放：任意前缀的 LevelSnap 与全量逐字段一致（逐K当下冻结，无未来函数）
         let bars = zigzag(40);
         let full = run_pipeline(&bars, &PipelineOptions::default());
         for cut in [10usize, 20, 30] {
@@ -926,8 +931,10 @@ mod tests {
                 let b = &part.bar_level_snaps[i];
                 let common = a.len().min(b.len());
                 for li in 0..common {
-                    assert_eq!(a[li].unit_idx, b[li].unit_idx, "bar {i} level {li} unit_idx 回写");
-                    assert_eq!(a[li].merge_count, b[li].merge_count, "bar {i} level {li} merge_count 回写");
+                    assert_eq!(
+                        a[li], b[li],
+                        "bar {i} level {li} LevelSnap 前缀重放不一致"
+                    );
                 }
             }
         }
