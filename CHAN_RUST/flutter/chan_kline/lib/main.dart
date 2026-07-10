@@ -2,9 +2,12 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'bridge/chan_bridge.dart';
 import 'compute/bi_virtual_bar_view_compute.dart';
+import 'debug/app_debug_snapshot.dart';
+import 'debug/msg_history.dart';
 import 'models/kline_bar.dart';
 import 'models/bi_confirm_signal.dart';
 import 'models/bar_crosshair_feature.dart';
@@ -13,6 +16,7 @@ import 'models/bi_virtual_bar_view.dart';
 import 'models/kline_combine_frame.dart';
 import 'models/level_models.dart';
 import 'models/seg_analysis.dart';
+import 'widgets/datetime_picker_dialog.dart';
 import 'widgets/kline_chart.dart';
 
 void main() {
@@ -50,8 +54,9 @@ class KlineHomePage extends StatefulWidget {
 
 class _KlineHomePageState extends State<KlineHomePage> {
   final _bridge = ChanBridge.instance;
-  DateTime _beginDate = DateTime(2004, 6, 25);
-  DateTime _endDate = DateTime(2004, 7, 29);
+  final _msgHistory = MsgHistory.instance;
+  DateTime _beginDate = _standardBeginDate;
+  DateTime _endDate = _standardEndDate;
 
   List<String> _codes = [];
   String? _selectedCode;
@@ -99,6 +104,30 @@ class _KlineHomePageState extends State<KlineHomePage> {
   };
 
   static const _defaultCode = '002003';
+  static const _testCode = 'test';
+  static final _standardBeginDate = DateTime(2004, 7, 19, 10, 47, 0);
+  static final _standardEndDate = DateTime(2004, 7, 20, 13, 9, 0);
+  static final _testBeginDate = DateTime(2026, 7, 10, 9, 30, 0);
+  static final _testEndDate = DateTime(2026, 7, 10, 9, 33, 59);
+
+  /// 切换股票时对齐各自默认加载区间。
+  void _syncDateRangeForCode(String code) {
+    if (code == _testCode) {
+      _beginDate = _testBeginDate;
+      _endDate = _testEndDate;
+      _period = '1m';
+    } else if (code == _defaultCode) {
+      _beginDate = _standardBeginDate;
+      _endDate = _standardEndDate;
+      _period = '1m';
+    }
+  }
+
+  String _preferredCode(List<String> codes) {
+    if (codes.contains(_testCode)) return _testCode;
+    if (codes.contains(_defaultCode)) return _defaultCode;
+    return codes.first;
+  }
 
   @override
   void initState() {
@@ -112,17 +141,20 @@ class _KlineHomePageState extends State<KlineHomePage> {
     super.dispose();
   }
 
-  String _fmtDate(DateTime d) =>
-      '${d.year}/${d.month.toString().padLeft(2, '0')}/${d.day.toString().padLeft(2, '0')}';
+  String _fmtDateTime(DateTime d) =>
+      '${d.year}/${d.month.toString().padLeft(2, '0')}/${d.day.toString().padLeft(2, '0')} '
+      '${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}:${d.second.toString().padLeft(2, '0')}';
 
-  Future<void> _pickDate({required bool isBegin}) async {
+  Future<void> _pickDateTime({required bool isBegin}) async {
     final initial = isBegin ? _beginDate : _endDate;
-    final picked = await showDatePicker(
+    final first = DateTime(1990);
+    final last = DateTime(2100, 12, 31, 23, 59, 59);
+    final picked = await showDateTimePickerDialog(
       context: context,
-      initialDate: initial,
-      firstDate: DateTime(1990),
-      lastDate: DateTime(2100),
-      helpText: isBegin ? '选择开始日期' : '选择结束日期',
+      initial: initial,
+      firstDate: first,
+      lastDate: last,
+      title: isBegin ? '选择加载起始时间' : '选择加载截止时间',
     );
     if (picked == null || !mounted) return;
     setState(() {
@@ -134,6 +166,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
         if (_endDate.isBefore(_beginDate)) _beginDate = _endDate;
       }
     });
+    // 选定加载区间后立即按时间从 a_Data 重载，而非仅改参数等手动点「加载」
+    await _loadKlines();
   }
 
   Future<void> _bootstrap() async {
@@ -151,11 +185,14 @@ class _KlineHomePageState extends State<KlineHomePage> {
       setState(() {
         _dataRoot = root;
         _codes = codes;
-        _selectedCode = codes.contains(_defaultCode) ? _defaultCode : codes.first;
+        _selectedCode = _preferredCode(codes);
+        _syncDateRangeForCode(_selectedCode!);
       });
       await _loadKlines();
+      _msgHistory.append('初始化完成：代码=$_selectedCode 周期=$_period 根目录=$_dataRoot');
     } catch (e) {
       setState(() => _error = e.toString());
+      _msgHistory.append('启动失败：$e');
     } finally {
       if (mounted) setState(() => _bootstrapping = false);
     }
@@ -176,8 +213,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
       final bars = _bridge.loadKlines(
         dataRoot: _dataRoot,
         code: code,
-        beginDate: _fmtDate(_beginDate),
-        endDate: _fmtDate(_endDate),
+        beginDate: _fmtDateTime(_beginDate),
+        endDate: _fmtDateTime(_endDate),
         period: _period,
       );
       setState(() {
@@ -185,6 +222,10 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _stepIdx = bars.isEmpty ? -1 : 0;
         _defaultBiPurged = false;
       });
+      _msgHistory.append(
+        '加载K线：$code ${_fmtDateTime(_beginDate)}~${_fmtDateTime(_endDate)} '
+        '${_periods[_period] ?? _period} 共${bars.length}根',
+      );
       _rebuildCombine();
     } catch (e) {
       setState(() {
@@ -200,6 +241,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _levels = [];
         _stepIdx = -1;
       });
+      _msgHistory.append('加载K线失败：$e');
     } finally {
       if (mounted) setState(() => _loadingChart = false);
     }
@@ -246,7 +288,67 @@ class _KlineHomePageState extends State<KlineHomePage> {
       });
     } catch (e) {
       setState(() => _error = e.toString());
+      _msgHistory.append('合并计算失败：$e');
     }
+  }
+
+  void _logCombineSummary({String prefix = '逐K汇总'}) {
+    if (_visibleBars.isEmpty) return;
+    final tail = _visibleBars.last;
+    final levelCount = _levels.length;
+    final segCount = _levels.isNotEmpty ? _levels.last.segments.length : _biSegments.length;
+    _msgHistory.append(
+      '$prefix @${_visibleCount}/${_allBars.length} idx=${tail.idx} '
+      '层数=$levelCount 末层段=$segCount 1段=${_biSegments.length} '
+      'policy=$_defaultBiPolicy',
+    );
+  }
+
+  String _buildDebugSnapshotText() {
+    return AppDebugSnapshot.build(
+      dataRoot: _dataRoot,
+      code: _selectedCode,
+      period: _period,
+      periodLabel: _periods[_period] ?? _period,
+      beginDate: _fmtDateTime(_beginDate),
+      endDate: _fmtDateTime(_endDate),
+      stepIdx: _stepIdx,
+      totalBars: _allBars.length,
+      visibleCount: _visibleCount,
+      playing: _playing,
+      defaultBiPolicy: _defaultBiPolicy,
+      subIndicatorLabels: _subIndicators.map((e) => e.label).toSet(),
+      mainIndicatorLabels: _mainIndicators.map((e) => e.label).toSet(),
+      visibleBars: _visibleBars,
+      combineFrames: _combineFrames,
+      biConfirms: _biConfirmSignals,
+      barFeatures: _barFeatures,
+      biSegments: _biSegments,
+      biCombineFrames: _biCombineFrames,
+      segAnalysis: _segAnalysis,
+      levels: _levels,
+      lastError: _error,
+    );
+  }
+
+  Future<void> _copyDebugSnapshot() async {
+    final text = _buildDebugSnapshotText();
+    if (text.trim().isEmpty) {
+      _showSnack('没有可复制的内容');
+      return;
+    }
+    await Clipboard.setData(ClipboardData(text: text));
+    _msgHistory.append(
+      '已复制页面调试快照（step=$_stepIdx 可见=$_visibleCount 层=${_levels.length}）',
+    );
+    _showSnack('页面调试信息已复制，可粘贴给调试方');
+  }
+
+  void _showSnack(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(msg), duration: const Duration(seconds: 2)),
+    );
   }
 
   void _stopPlay() {
@@ -301,6 +403,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
     _stopPlay();
     setState(() => _stepIdx = _allBars.length - 1);
     _rebuildCombine();
+    _logCombineSummary(prefix: '一次性走完');
   }
 
   @override
@@ -309,6 +412,16 @@ class _KlineHomePageState extends State<KlineHomePage> {
       appBar: AppBar(
         title: const Text('CHAN_RUST · K线图（Rust 计算）'),
         actions: [
+          IconButton(
+            tooltip: '复制页面调试信息',
+            onPressed: _copyDebugSnapshot,
+            icon: const Icon(Icons.content_copy),
+          ),
+          IconButton(
+            tooltip: '历史记录',
+            onPressed: () => _msgHistory.showDialog(context),
+            icon: const Icon(Icons.history),
+          ),
           IconButton(
             tooltip: '刷新股票列表',
             onPressed: _busy ? null : _bootstrap,
@@ -328,7 +441,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
             child: Text(
-              '数据目录: $_dataRoot  |  逐K: ${_visibleCount}/${_allBars.length}',
+              '数据目录: $_dataRoot\n'
+              '加载区间: ${_fmtDateTime(_beginDate)} ~ ${_fmtDateTime(_endDate)}  |  逐K: ${_visibleCount}/${_allBars.length}',
               style: Theme.of(context).textTheme.bodySmall,
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
@@ -417,7 +531,10 @@ class _KlineHomePageState extends State<KlineHomePage> {
                     ? null
                     : (v) {
                         if (v == null) return;
-                        setState(() => _selectedCode = v);
+                        setState(() {
+                          _selectedCode = v;
+                          _syncDateRangeForCode(v);
+                        });
                         _loadKlines();
                       },
               ),
@@ -444,19 +561,19 @@ class _KlineHomePageState extends State<KlineHomePage> {
               ),
             ),
             _datePickerField(
-              label: '开始日期',
-              value: _fmtDate(_beginDate),
-              onTap: _busy ? null : () => _pickDate(isBegin: true),
+              label: '加载起始时间',
+              value: _fmtDateTime(_beginDate),
+              onTap: _busy ? null : () => _pickDateTime(isBegin: true),
             ),
             _datePickerField(
-              label: '结束日期',
-              value: _fmtDate(_endDate),
-              onTap: _busy ? null : () => _pickDate(isBegin: false),
+              label: '加载截止时间',
+              value: _fmtDateTime(_endDate),
+              onTap: _busy ? null : () => _pickDateTime(isBegin: false),
             ),
             FilledButton.icon(
               onPressed: _busy ? null : _loadKlines,
               icon: const Icon(Icons.candlestick_chart),
-              label: const Text('加载 K 线'),
+              label: const Text('重新加载'),
             ),
             const SizedBox(width: 8, height: 1),
             IconButton.filledTonal(
@@ -484,6 +601,16 @@ class _KlineHomePageState extends State<KlineHomePage> {
               icon: const Icon(Icons.last_page, size: 18),
               label: const Text('一次性走完'),
             ),
+            OutlinedButton.icon(
+              onPressed: _copyDebugSnapshot,
+              icon: const Icon(Icons.copy_all, size: 18),
+              label: const Text('复制页面信息'),
+            ),
+            OutlinedButton.icon(
+              onPressed: () => _msgHistory.showDialog(context),
+              icon: const Icon(Icons.history, size: 18),
+              label: const Text('历史记录'),
+            ),
           ],
         ),
       ),
@@ -496,7 +623,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
     required VoidCallback? onTap,
   }) {
     return SizedBox(
-      width: 148,
+      width: 220,
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(4),
@@ -507,7 +634,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
             border: const OutlineInputBorder(),
             suffixIcon: const Icon(Icons.calendar_today, size: 18),
           ),
-          child: Text(value, style: const TextStyle(fontSize: 13)),
+          child: Text(value, style: const TextStyle(fontSize: 12)),
         ),
       ),
     );
