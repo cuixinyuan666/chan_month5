@@ -93,6 +93,93 @@ fn trunc_hit(last: &MergedGroup, u: &MergeUnit, g: &TruncGuard) -> bool {
     }
 }
 
+/// 末态/离线重放用截断状态机（与 LevelState 锚点+参照价口径同构）。
+/// 供 1段K线合并副图等「只喂单元、不跑完整段配对」场景复用。
+#[derive(Debug, Clone)]
+pub struct TruncReplayState {
+    truncation_check: bool,
+    validity_check: bool,
+    anchor_fx: Option<FxKind>,
+    anchor_high: f64,
+    anchor_low: f64,
+    last_bottom_low: Option<f64>,
+    last_top_high: Option<f64>,
+}
+
+impl TruncReplayState {
+    pub fn new(truncation_check: bool, validity_check: bool) -> Self {
+        Self {
+            truncation_check,
+            validity_check,
+            anchor_fx: None,
+            anchor_high: 0.0,
+            anchor_low: 0.0,
+            last_bottom_low: None,
+            last_top_high: None,
+        }
+    }
+
+    /// 当步截断监察参数（首确认前=None；同向丢弃/校验失败不翻锚点）
+    pub fn guard(&self) -> Option<TruncGuard> {
+        if !self.truncation_check {
+            return None;
+        }
+        match self.anchor_fx? {
+            FxKind::Bottom => self
+                .last_bottom_low
+                .map(|p| TruncGuard {
+                    up_leg: true,
+                    ref_price: p,
+                }),
+            FxKind::Top => self
+                .last_top_high
+                .map(|p| TruncGuard {
+                    up_leg: false,
+                    ref_price: p,
+                }),
+            FxKind::Unknown => None,
+        }
+    }
+
+    /// 消化一次分型事件：更新破坏参照价；仅首确认/异向配对翻锚点
+    pub fn on_event(&mut self, ev: &FxEvent) {
+        if ev.fx == FxKind::Unknown {
+            return;
+        }
+        match ev.fx {
+            FxKind::Bottom => self.last_bottom_low = Some(ev.low),
+            FxKind::Top => self.last_top_high = Some(ev.high),
+            FxKind::Unknown => {}
+        }
+        match self.anchor_fx {
+            None => {
+                self.anchor_fx = Some(ev.fx);
+                self.anchor_high = ev.high;
+                self.anchor_low = ev.low;
+            }
+            Some(a) if a == ev.fx => {
+                // 同向丢弃：锚点不回写
+            }
+            Some(a) => {
+                let ok = if !self.validity_check {
+                    true
+                } else {
+                    match (a, ev.fx) {
+                        (FxKind::Bottom, FxKind::Top) => ev.high > self.anchor_low,
+                        (FxKind::Top, FxKind::Bottom) => ev.low < self.anchor_high,
+                        _ => false,
+                    }
+                };
+                if ok {
+                    self.anchor_fx = Some(ev.fx);
+                    self.anchor_high = ev.high;
+                    self.anchor_low = ev.low;
+                }
+            }
+        }
+    }
+}
+
 /// 进行中单元只读探测结果（十字线快照 + 可能的分型事件）
 #[derive(Debug, Clone)]
 pub struct ProbeState {

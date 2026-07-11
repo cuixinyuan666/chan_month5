@@ -14,11 +14,13 @@ mod segment_first;
 mod tick;
 
 pub use combine::{
-    build_bi_combine_frames, build_kline_combine_bundle, build_kline_combine_bundle_with,
-    build_kline_combine_frames, BiConfirmSignal, KlineCombineBundle, KlineCombineFrame,
+    build_bi_combine_frames, build_bi_combine_frames_with, build_kline_combine_bundle,
+    build_kline_combine_bundle_with, build_kline_combine_frames, BiConfirmSignal,
+    KlineCombineBundle, KlineCombineFrame,
 };
 pub use engine::{
     CombineEngine, FxEvent, FxKind, MergeDir, MergeUnit, MergedGroup, ProbeState, TruncGuard,
+    TruncReplayState,
 };
 pub use error::{ChanDataError, Result};
 pub use feature::{

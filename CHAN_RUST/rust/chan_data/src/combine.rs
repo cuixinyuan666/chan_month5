@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::engine::{CombineEngine, MergeUnit};
+use crate::engine::{CombineEngine, MergeUnit, TruncReplayState};
 use crate::feature::{
     build_bi_virtual_bar_views, enrich_fractal_peak_dist, weekday_from_bar, BarCrosshairFeature,
     BiSegment, BiVirtualBar,
@@ -192,22 +192,39 @@ fn seg_to_virtual_bar(seg: &LevelSegment) -> BiVirtualBar {
     }
 }
 
-/// 笔 K 线序列 → 笔K线合并线框（副图「笔K线合并」，末态展示口径）。
-/// 多根包含合并：外侧框按分钟 K 中轴；仅一根笔 K（count=1）保留半侧锚定。
+/// 笔 K 线序列 → 笔K线合并线框（副图「1段K线合并」，末态展示口径）。
+/// 默认开启截断监察+有效性校验，与流水线 L2 同构。
 pub fn build_bi_combine_frames(bars: &[KlineBar], bi_bars: &[BiVirtualBar]) -> Vec<KlineCombineFrame> {
+    build_bi_combine_frames_with(bars, bi_bars, true, true)
+}
+
+/// 笔 K 线序列 → 1段K线合并线框（可关截断/校验，对照排查用）。
+/// 多根包含合并：外侧框按分钟 K 中轴；仅一根笔 K（count=1）保留半侧锚定。
+pub fn build_bi_combine_frames_with(
+    bars: &[KlineBar],
+    bi_bars: &[BiVirtualBar],
+    truncation_check: bool,
+    validity_check: bool,
+) -> Vec<KlineCombineFrame> {
     if bi_bars.is_empty() {
         return Vec::new();
     }
     let views = build_bi_virtual_bar_views(bi_bars);
     let mut engine = CombineEngine::new();
+    // 截断状态机与 LevelState 同构：保证副图框与 L2 合并链一致
+    let mut trunc = TruncReplayState::new(truncation_check, validity_check);
     for (i, v) in views.iter().enumerate() {
-        engine.feed(&MergeUnit {
+        let mu = MergeUnit {
             uid: i as i64,
             x1: v.view_x1,
             x2: v.view_x2,
             high: v.bar.high,
             low: v.bar.low,
-        });
+        };
+        let guard = trunc.guard();
+        if let Some(ev) = engine.feed_guarded(&mu, guard.as_ref()) {
+            trunc.on_event(&ev);
+        }
     }
     engine
         .groups()
@@ -387,7 +404,13 @@ pub fn build_kline_combine_bundle_with(
         .cloned()
         .unwrap_or_default();
 
-    let bi_combine_frames = build_bi_combine_frames(bars, &bi_virtual_bars);
+    // 1段K线合并框：截断/校验开关与流水线一致，避免副图与 L2 结构分叉
+    let bi_combine_frames = build_bi_combine_frames_with(
+        bars,
+        &bi_virtual_bars,
+        opt.truncation_check,
+        opt.validity_check,
+    );
 
     // 十字线/ML 特征：K线合并快照 + 各层 N 段快照（固定 purged：首笔确认前不填 bi_*）
     let mut bar_features: Vec<BarCrosshairFeature> = bars
@@ -550,5 +573,64 @@ mod tests {
                 .cloned()
                 .unwrap_or_default()
         );
+    }
+
+    fn bi(i: i32, h: f64, l: f64) -> BiVirtualBar {
+        BiVirtualBar {
+            idx: i,
+            dir: 1,
+            x1: i,
+            x2: i,
+            open: l,
+            high: h,
+            low: l,
+            close: h,
+            confirm_x: i,
+        }
+    }
+
+    /// 1段K线合并副图：底分型后第4根暴力反转应截断断开（与 L2/engine 同构）
+    #[test]
+    fn bi_combine_frames_up_truncation_splits() {
+        let bars: Vec<_> = (0..5).map(|i| bar(i, 12.0, 7.0)).collect();
+        let bi_bars = vec![
+            bi(0, 10.0, 9.0),
+            bi(1, 9.0, 8.0),   // 底分型中组
+            bi(2, 10.5, 9.5),  // 底确认=左框
+            bi(3, 11.0, 7.5),  // 上升截断
+            bi(4, 10.2, 9.2),
+        ];
+        let frames = build_bi_combine_frames_with(&bars, &bi_bars, true, true);
+        assert!(
+            frames.iter().any(|f| f.x1 == 3),
+            "截断笔K应强制断开成新框: {:?}",
+            frames
+        );
+        // 左框高低不被截断K改写：含 x 覆盖到 2 的框高应为 10.5
+        let left = frames
+            .iter()
+            .find(|f| f.x1 == 2 && f.x2 == 2)
+            .expect("应有左框=确认元素独立组");
+        assert!((left.high - 10.5).abs() < 1e-9);
+        assert!((left.low - 9.5).abs() < 1e-9);
+        assert_eq!(left.fx, "TOP");
+    }
+
+    /// 关闭截断 → 旧行为：暴力反转笔K被吸收
+    #[test]
+    fn bi_combine_frames_truncation_off_absorbs() {
+        let bars: Vec<_> = (0..5).map(|i| bar(i, 12.0, 7.0)).collect();
+        let bi_bars = vec![
+            bi(0, 10.0, 9.0),
+            bi(1, 9.0, 8.0),
+            bi(2, 10.5, 9.5),
+            bi(3, 11.0, 7.5),
+            bi(4, 10.2, 9.2),
+        ];
+        let frames = build_bi_combine_frames_with(&bars, &bi_bars, false, true);
+        assert!(frames.iter().all(|f| f.x1 != 3));
+        let absorbed = frames.iter().find(|f| f.x1 <= 2 && f.x2 >= 3);
+        assert!(absorbed.is_some());
+        assert!((absorbed.unwrap().high - 11.0).abs() < 1e-9);
     }
 }
