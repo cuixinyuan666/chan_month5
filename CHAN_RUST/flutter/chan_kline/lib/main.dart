@@ -2,12 +2,9 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import 'bridge/chan_bridge.dart';
 import 'compute/bi_virtual_bar_view_compute.dart';
-import 'debug/app_debug_snapshot.dart';
-import 'debug/msg_history.dart';
 import 'models/kline_bar.dart';
 import 'models/bi_confirm_signal.dart';
 import 'models/bar_crosshair_feature.dart';
@@ -54,7 +51,6 @@ class KlineHomePage extends StatefulWidget {
 
 class _KlineHomePageState extends State<KlineHomePage> {
   final _bridge = ChanBridge.instance;
-  final _msgHistory = MsgHistory.instance;
   DateTime _beginDate = _standardBeginDate;
   DateTime _endDate = _standardEndDate;
 
@@ -189,10 +185,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _syncDateRangeForCode(_selectedCode!);
       });
       await _loadKlines();
-      _msgHistory.append('初始化完成：代码=$_selectedCode 周期=$_period 根目录=$_dataRoot');
     } catch (e) {
       setState(() => _error = e.toString());
-      _msgHistory.append('启动失败：$e');
     } finally {
       if (mounted) setState(() => _bootstrapping = false);
     }
@@ -222,10 +216,6 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _stepIdx = bars.isEmpty ? -1 : 0;
         _defaultBiPurged = false;
       });
-      _msgHistory.append(
-        '加载K线：$code ${_fmtDateTime(_beginDate)}~${_fmtDateTime(_endDate)} '
-        '${_periods[_period] ?? _period} 共${bars.length}根',
-      );
       _rebuildCombine();
     } catch (e) {
       setState(() {
@@ -241,7 +231,6 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _levels = [];
         _stepIdx = -1;
       });
-      _msgHistory.append('加载K线失败：$e');
     } finally {
       if (mounted) setState(() => _loadingChart = false);
     }
@@ -288,67 +277,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       });
     } catch (e) {
       setState(() => _error = e.toString());
-      _msgHistory.append('合并计算失败：$e');
     }
-  }
-
-  void _logCombineSummary({String prefix = '逐K汇总'}) {
-    if (_visibleBars.isEmpty) return;
-    final tail = _visibleBars.last;
-    final levelCount = _levels.length;
-    final segCount = _levels.isNotEmpty ? _levels.last.segments.length : _biSegments.length;
-    _msgHistory.append(
-      '$prefix @${_visibleCount}/${_allBars.length} idx=${tail.idx} '
-      '层数=$levelCount 末层段=$segCount 1段=${_biSegments.length} '
-      'policy=$_defaultBiPolicy',
-    );
-  }
-
-  String _buildDebugSnapshotText() {
-    return AppDebugSnapshot.build(
-      dataRoot: _dataRoot,
-      code: _selectedCode,
-      period: _period,
-      periodLabel: _periods[_period] ?? _period,
-      beginDate: _fmtDateTime(_beginDate),
-      endDate: _fmtDateTime(_endDate),
-      stepIdx: _stepIdx,
-      totalBars: _allBars.length,
-      visibleCount: _visibleCount,
-      playing: _playing,
-      defaultBiPolicy: _defaultBiPolicy,
-      subIndicatorLabels: _subIndicators.map((e) => e.label).toSet(),
-      mainIndicatorLabels: _mainIndicators.map((e) => e.label).toSet(),
-      visibleBars: _visibleBars,
-      combineFrames: _combineFrames,
-      biConfirms: _biConfirmSignals,
-      barFeatures: _barFeatures,
-      biSegments: _biSegments,
-      biCombineFrames: _biCombineFrames,
-      segAnalysis: _segAnalysis,
-      levels: _levels,
-      lastError: _error,
-    );
-  }
-
-  Future<void> _copyDebugSnapshot() async {
-    final text = _buildDebugSnapshotText();
-    if (text.trim().isEmpty) {
-      _showSnack('没有可复制的内容');
-      return;
-    }
-    await Clipboard.setData(ClipboardData(text: text));
-    _msgHistory.append(
-      '已复制页面调试快照（step=$_stepIdx 可见=$_visibleCount 层=${_levels.length}）',
-    );
-    _showSnack('页面调试信息已复制，可粘贴给调试方');
-  }
-
-  void _showSnack(String msg) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(msg), duration: const Duration(seconds: 2)),
-    );
   }
 
   void _stopPlay() {
@@ -403,7 +332,6 @@ class _KlineHomePageState extends State<KlineHomePage> {
     _stopPlay();
     setState(() => _stepIdx = _allBars.length - 1);
     _rebuildCombine();
-    _logCombineSummary(prefix: '一次性走完');
   }
 
   @override
@@ -412,16 +340,6 @@ class _KlineHomePageState extends State<KlineHomePage> {
       appBar: AppBar(
         title: const Text('CHAN_RUST · K线图（Rust 计算）'),
         actions: [
-          IconButton(
-            tooltip: '复制页面调试信息',
-            onPressed: _copyDebugSnapshot,
-            icon: const Icon(Icons.content_copy),
-          ),
-          IconButton(
-            tooltip: '历史记录',
-            onPressed: () => _msgHistory.showDialog(context),
-            icon: const Icon(Icons.history),
-          ),
           IconButton(
             tooltip: '刷新股票列表',
             onPressed: _busy ? null : _bootstrap,
@@ -600,16 +518,6 @@ class _KlineHomePageState extends State<KlineHomePage> {
               onPressed: _hasSession && !_busy ? _runToEnd : null,
               icon: const Icon(Icons.last_page, size: 18),
               label: const Text('一次性走完'),
-            ),
-            OutlinedButton.icon(
-              onPressed: _copyDebugSnapshot,
-              icon: const Icon(Icons.copy_all, size: 18),
-              label: const Text('复制页面信息'),
-            ),
-            OutlinedButton.icon(
-              onPressed: () => _msgHistory.showDialog(context),
-              icon: const Icon(Icons.history, size: 18),
-              label: const Text('历史记录'),
             ),
           ],
         ),
