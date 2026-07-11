@@ -57,14 +57,15 @@ cargo test -p chan_data
 
 `period` 支持：`1m` `5m` `15m` `60m` `day` `week` `month` 等。
 
-## N 段递归流水线（历史记录：配置项与层级语义）
+## Kn 递归流水线（历史记录：配置项与层级语义）
 
-- 层级命名：**笔=1段，线段=2段，…**；递归链：`N-1段K线 → 包含合并 → 三元素分型确认 → 锚定配对 → N段K线`，直到某层再无产出（穷尽），层数动态。
-- **「1 段判定适用 N 段」三层语义**（评审口径，避免与 bootstrap 混淆）：
+- **命名历史**：旧「1段/2段/n段K线」→「K1/K2/Kn」；原始周期K=K0；旧「笔连线」=K1连线。内部字段 `bi_*` / `level` 序号不变。
+- 层级：**K0=原始K，K1=笔，K2=线段，…**；递归链：`K(n-1) → 包含合并 → 三元素分型确认 → 锚定配对 → Kn`，穷尽为止。
+- **「K1 判定适用 Kn」三层语义**（评审口径，避免与 bootstrap 混淆）：
 
   | 层次 | 是否全层同构 | 说明 |
   |------|-------------|------|
-  | 判定内核（包含合并 + 三元素分型） | ✅ | `engine.rs` 唯一实现；L1 合并 1 分钟 K，L2 合并 1 段 K，… |
+  | 判定内核（包含合并 + 三元素分型） | ✅ | `engine.rs` 唯一实现；K1 合并 K0，K2 合并 K1，… |
   | 成段机制（锚定配对 + 有效性校验 + 冻结去重） | ✅ | `pipeline.rs` 的 `on_confirm` 全层共用 |
   | 首段业务策略（pending + 反向极值 trial） | ✅ | `segment_first.rs` 全层同构；`default_segment_policies[]` |
 
@@ -76,7 +77,7 @@ cargo test -p chan_data
 - **锚定配对**：段端点锚定"最近已用端点分型"；同向分型直接丢弃（不回写历史端点），链条无缝（上一段终点=下一段起点，测试保证）。
 - **有效性校验（可配置）**：`PipelineOptions.validity_check`（默认 `true`）＝最低限度"顶极值>底极值"：上段要求顶分型组 high > 底分型组 low，倒挂分型跳过不配对。关闭后任意异向分型即配对。FFI 入口固定用默认值；如需暴露到 UI 再加参数。
 - **逐K当下性**：分型确认/段冻结均在当步写入即冻结，未来结构不回写；`bar_features[i].levels` 为该 K 当步的各层快照（ML/tooltip 同源）；前缀重放一致性有测试（`snapshots_frozen_per_bar_no_future`，全量 `LevelSnap` 逐字段相等）。
-- **进行中段探测（方案A）**：N 层进行中段K线（锚点极点→当步K 区间）只读探测 N+1 层分型（`probe`，与 `feed` 语义一致），可提前段确认，不污染永久合并链。
+- **进行中段探测（方案A）**：Kn 进行中单元（锚点极点→当步K）只读探测 K(n+1) 分型（`probe`），可提前段确认，不污染永久合并链。
 - **截断确认（全层同构，`PipelineOptions.truncation_check` 默认开启）**：救"暴力反转单元被包含吸收吃掉信号"的场景。
   - 上升截断：上行阶段（锚点=底分型）新单元 `最高价>=左框最高价 且 最低价<上个底分型中组最低价`（参照=本层最近一次底分型确认，含同向丢弃/校验失败的）→ 左框=顶分型中组当场确认（高低不被改写，端点=左框峰值K，非截断K），截断K强制断开成新下行组并参与后续三元素监控（监控范围>=第四根）；下降截断镜像。
   - 监控按锚点方向分工：上行只监控上升截断、下行只监控下降截断，首分型确认前不监控；`feed_guarded`/`probe_guarded` 语义一致（engine.rs 唯一实现）。
@@ -89,7 +90,7 @@ cargo test -p chan_data
   - **trial FAIL → purged**：只设锚点不产段，等第二异向端点配对；无 bootstrap 引导段；
   - 导出：`default_segment_policies[]`、`level_segments[]`、`level_virtual_units[]`；`default_bi_policy`=`[0]` 兼容别名。
 - **PipelineOptions**：`first_segment_bootstrap`（默认 `true`）控制全层首段 trial；`validity_check` 仍仅作用于 Pair。
-- **Dart 端纯 FFI**：Flutter 无缠论回退实现；`compute/` 仅剩视图组装（半侧衔接、十字线 as-of 查表重绘）。tooltip 按 K 线块模板逐层输出 N 段全量信息（`{n}段K线[序号] / OHLCV / 合并序 / 合并H:L / 合并分型确认`，其中 n 段块的确认=n+1 层端点确认）。
+- **Dart 端纯 FFI**：Flutter 无缠论回退实现；`compute/` 仅剩视图组装。tooltip 按 K0/Kn 块模板输出（`Kn[序号] / OHLCV / 合并序 / 合并H:L / 合并分型确认`，Kn 确认=K(n+1) 端点）。
 
 ## 后续规划
 

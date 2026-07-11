@@ -25,7 +25,7 @@ List<KlineBar> _bars(int n) => List.generate(
 void main() {
   test('as-of 组装：冻结段查表 + 当步快照进行中笔（含半侧衔接）', () {
     final bars = _bars(10);
-    // Rust 冻结段：1段#0（K1 极点 → K4 极点，x=5 冻结）
+    // Rust 冻结段：K1#0（极点 → 极点，x=5 冻结）
     const levels = [
       LevelBundle(
         level: 1,

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-/// N 段主图连线样式（level≥2：2 段=线段，3 段及以上用色/线型/粗细区分）。
+/// Kn 主图连线样式（level≥2：K2=线段，K3+ 用色/线型/粗细区分；旧称「n段」）。
 class ChartLevelLineStyle {
   /// 连线颜色（含 alpha）
   final Color color;
@@ -30,15 +30,15 @@ class ChartLevelLineStyle {
   });
 
   static const _colors = <Color>[
-    Color(0xCCF59E0B), // 2 段：琥珀
-    Color(0xCCEC4899), // 3 段：玫红
-    Color(0xCC10B981), // 4 段：翠绿
-    Color(0xCC8B5CF6), // 5 段：紫
-    Color(0xCC06B6D4), // 6 段：青
-    Color(0xCCF97316), // 7 段：橙
+    Color(0xCCF59E0B), // K2：琥珀
+    Color(0xCCEC4899), // K3：玫红
+    Color(0xCC10B981), // K4：翠绿
+    Color(0xCC8B5CF6), // K5：紫
+    Color(0xCC06B6D4), // K6：青
+    Color(0xCCF97316), // K7：橙
   ];
 
-  /// 按 N 段层级取样式（level=2 线段，3=3 段，…）。
+  /// 按 Kn 层级取样式（level=2→K2，3→K3，…）。
   static ChartLevelLineStyle forLevel(int level) {
     assert(level >= 2);
     final i = (level - 2).clamp(0, _colors.length - 1);
@@ -94,5 +94,5 @@ class ChartLevelLineStyle {
   }
 
   /// 图例短标签（状态栏用）
-  static String shortLabel(int level) => '$level段';
+  static String shortLabel(int level) => 'K$level';
 }

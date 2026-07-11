@@ -1,11 +1,12 @@
-//! N 段递归流水线：1分钟K → 1段(笔) → 2段(线段) → … → N段，穷尽到无法再生成新层。
+//! Kn 递归流水线：K0(原始K) → K1(笔) → K2(线段) → … → Kn，穷尽到无法再生成新层。
+//! 命名历史：旧「1段/2段/n段」→「K1/K2/Kn」；内部 level 序号不变（1=K1）。
 //!
 //! 三层语义（勿混为一谈）：
 //! 1. **判定内核同构**（全层）：`CombineEngine` 包含合并 + 三元素分型；
 //! 2. **成段机制同构**（全层）：锚定配对 + 有效性校验 + 冻结去重；
 //! 3. **首段业务策略同构**（全层）：pending 占位 + 反向极值 trial + retained/purged（`segment_first.rs`）。
 //!
-//! 每层递归：输入单元包含合并 → 三元素分型确认（冻结不回写）→ 锚定配对 → N段K线 → 喂上层。
+//! 每层递归：输入单元包含合并 → 三元素分型确认（冻结不回写）→ 锚定配对 → Kn → 喂上层。
 //! 进行中单元（anchor 极点 → 当步K 区间）逐层向上只读探测，段确认可早于整段冻结（方案A）。
 
 use std::collections::{HashSet, VecDeque};
@@ -127,15 +128,15 @@ pub struct LevelUnitBar {
     pub confirm_x: i32,
 }
 
-/// 每根 1 分钟 K × 每层的十字线快照（逐K当下冻结，ML/tooltip 同源）
+/// 每根 K0 × 每层 Kn 的十字线快照（逐K当下冻结，ML/tooltip 同源）
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LevelSnap {
-    /// 段层级：1=笔，2=线段，…
+    /// 层级：1=K1(笔)，2=K2(线段)，…（旧称 n段）
     pub level: i32,
-    /// 当步所属 N 段K线序号（进行中或刚冻结；首确认前=None）
+    /// 当步所属 Kn 序号（进行中或刚冻结；首确认前=None）
     pub unit_idx: Option<i64>,
     pub unit_dir: i32,
-    /// 当步 N 段K线 1 分钟 K 区间（进行中段 x2=当步K；查表重绘用）
+    /// 当步 Kn 的 K0 区间（进行中段 x2=当步K；查表重绘用）
     #[serde(default)]
     pub unit_x1: i32,
     #[serde(default)]
@@ -145,14 +146,14 @@ pub struct LevelSnap {
     pub unit_low: f64,
     pub unit_close: f64,
     pub unit_volume: f64,
-    /// 该 N 段K线在 N段K线合并框内序号（0 起）
+    /// 该 Kn 在 Kn合并框内序号（0 起）
     pub merge_inner_seq: i32,
-    /// 所在合并框已含 N 段K线根数（逐K当下）
+    /// 所在合并框已含 Kn 根数（逐K当下）
     pub merge_count: i32,
     pub combine_high: f64,
     pub combine_low: f64,
     pub combine_fx: String,
-    /// 当步所在 N段K线合并框 1 分钟 K 起点（as-of 查表重绘用；-1=无）
+    /// 当步所在 Kn合并框 K0 起点（as-of 查表重绘用；-1=无）
     #[serde(default = "neg_one")]
     pub combine_x1: i32,
 }
@@ -191,7 +192,7 @@ pub struct LevelBundleOut {
     pub confirms: Vec<LevelConfirm>,
     pub segments: Vec<LevelSegment>,
     pub unit_bars: Vec<LevelUnitBar>,
-    /// 本层输入单元（N-1段K线）的包含合并线框
+    /// 本层输入单元（K(n-1)；n=1 时为 K0）的包含合并线框
     pub combine_frames: Vec<KlineCombineFrame>,
     /// 首 N 段方向：0 未定
     pub first_dir: i32,
@@ -897,7 +898,7 @@ pub fn run_pipeline(bars: &[KlineBar], opt: &PipelineOptions) -> PipelineResult 
         };
         propagate(&mut levels, 0, vec![ku], bar_x, bars, opt);
 
-        // 2) 探测流：li 层进行中 N段K线 → li+1 层引擎只读探测（提前段确认，方案A）
+        // 2) 探测流：li 层进行中 Kn → li+1 层引擎只读探测（提前段确认，方案A）
         let mut li = 0usize;
         while li + 1 < levels.len() {
             let pu_opt = levels[li].provisional_unit(bars, i);
@@ -1031,7 +1032,7 @@ mod tests {
         let pr = run_pipeline(&bars, &PipelineOptions::default());
         assert_eq!(pr.bar_level_snaps.len(), bars.len());
         assert!(!pr.levels.is_empty());
-        assert!(!pr.levels[0].confirms.is_empty(), "应有1段分型确认");
+        assert!(!pr.levels[0].confirms.is_empty(), "应有K1分型确认");
     }
 
     #[test]

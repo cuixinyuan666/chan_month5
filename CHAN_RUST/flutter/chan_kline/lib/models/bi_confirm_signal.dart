@@ -1,4 +1,4 @@
-/// K线合并分型确认柱：合并 K 线顶/底分型确认当步 K（分型连接即笔，逐K当下冻结）。
+/// K0合并分型确认柱：合并框顶/底分型确认当步 K（连接即 K1/笔，逐K当下冻结）。
 class BiConfirmSignal {
   final int x;
   final String fx;

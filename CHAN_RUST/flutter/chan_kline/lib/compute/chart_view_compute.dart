@@ -8,6 +8,7 @@ import '../models/level_models.dart';
 /// Dart 端不做缠论计算（无回退实现）。
 
 /// 段/笔连线端点（极点 K 索引 + 极点价；展示专用，与 Rust `pole_x` 同口径）。
+/// 主图「K1连线」即旧「笔连线」。
 class LevelLineEndpoint {
   final int barIdx;
   final double price;
@@ -96,7 +97,7 @@ LevelConfirm? levelConfirmAt(
   return null;
 }
 
-/// N 段连线端点：极点 K + 极点价（与 1 段笔连线同逻辑；方案 A 优先查表 `poleX`）。
+/// Kn 连线端点：极点 K + 极点价（与 K1 连线同逻辑；方案 A 优先查表 `poleX`）。
 LevelLineEndpoint? levelSegmentEndpoint({
   required List<KlineBar> bars,
   required LevelSegmentN seg,

@@ -53,8 +53,8 @@ class BarFeatureLookup {
 
     final featureByIdx = {for (final f in barFeatures) f.idx: f};
 
-    // 各层确认查表：level_confirms[n][x] = 确认记录（n段K线合并分型确认，当步冻结；含截断标记）
-    // n 段块显示 n+1 层确认（K线块显示 levels[1] 即笔确认，与旧"K线合并分型确认"一致）
+    // 各层确认查表：level_confirms[n][x] = Kn 合并分型确认（当步冻结；含截断）
+    // Kn 块显示 K(n+1) 端点确认（K0 块显示 levels[1]=K1 确认，旧称「K线合并分型确认」）
     final levelConfirmByX = <int, Map<int, LevelConfirm>>{};
     for (final lv in levels) {
       final m = <int, LevelConfirm>{};
@@ -382,7 +382,7 @@ class BarFeatureLookup {
     return 'O${_fmtPrice(open)}/H${_fmtPrice(high)}/L${_fmtPrice(low)}/C${_fmtPrice(close)}/VOL${_fmtVol(volume)}';
   }
 
-  /// 十字线主 tooltip：K 线块 + 全部 N 段块（1段=笔，2段=线段，…穷尽层全量输出）。
+  /// 十字线主 tooltip：K0 块 + 全部 Kn 块（K1=笔，K2=线段，…穷尽）。
   List<String> crosshairTooltipLines(int idx, {required String timePart}) {
     final row = byIdx[idx];
     if (row == null) return const [];
@@ -398,7 +398,7 @@ class BarFeatureLookup {
     final combineHigh = (row['combine_high'] as num?)?.toDouble() ?? high;
     final combineLow = (row['combine_low'] as num?)?.toDouble() ?? low;
 
-    // K线合并分型确认（=1段端点确认）：仅 1 / -1 显示数值，0 或空显示空值；截断确认加"(截断)"
+    // K0合并分型确认（=K1 端点确认）：仅 ±1 显示；截断加"(截断)"
     var combineFxConfirm = '';
     final biConfirm = row['bi_confirm'];
     if (biConfirm is Map) {
@@ -410,11 +410,11 @@ class BarFeatureLookup {
 
     final lines = <String>[
       '日期时间:$timePart $weekday',
-      'K线[序号]:${row['idx']}',
-      'K线:${_fmtOhlcv(open: open, high: high, low: low, close: close, volume: volume)}',
-      'K线合并:H${_fmtPrice(combineHigh)}/L${_fmtPrice(combineLow)}',
-      'K线合并K线序:$mergeInner',
-      'K线合并分型确认:$combineFxConfirm',
+      'K0[序号]:${row['idx']}',
+      'K0:${_fmtOhlcv(open: open, high: high, low: low, close: close, volume: volume)}',
+      'K0合并:H${_fmtPrice(combineHigh)}/L${_fmtPrice(combineLow)}',
+      'K0合并K0序:$mergeInner',
+      'K0合并分型确认:$combineFxConfirm',
       ...crosshairLevelLines(idx),
     ];
     return lines;
@@ -436,7 +436,7 @@ class BarFeatureLookup {
 
       if (v == null) return;
 
-      if (v == 0 && (label == '段确认' || label == '首段向')) {
+      if (v == 0 && (label == 'K2确认' || label == '首K1向')) {
 
         return;
 
@@ -446,13 +446,13 @@ class BarFeatureLookup {
 
     }
 
-    if (active.contains(SubChartIndicator.segConfirm)) add('段确认', sub['seg_confirm']);
+    if (active.contains(SubChartIndicator.segConfirm)) add('K2确认', sub['seg_confirm']);
 
-    if (active.contains(SubChartIndicator.firstSegDir)) add('首段向', sub['first_seg_dir']);
+    if (active.contains(SubChartIndicator.firstSegDir)) add('首K1向', sub['first_seg_dir']);
 
     if (active.contains(SubChartIndicator.fractalPeakDist)) {
 
-      add('K线分型极点距', sub['fractal_peak_dist']);
+      add('K0分型极点距', sub['fractal_peak_dist']);
 
     }
 
@@ -462,9 +462,8 @@ class BarFeatureLookup {
 
 
 
-  /// N 段十字线行（与 ML 同源：逐步冻结 levels 快照；1段=笔，2段=线段，…）。
-  /// 每层块模板与 K 线块同构：[序号] / OHLCV / 合并序 / 合并H:L / 合并分型确认。
-  /// 未诞生层输出占位行（当时当下历史，不回写）。
+  /// Kn 十字线行（与 ML 同源；K1=笔，K2=线段，…）。
+  /// 块模板与 K0 同构：[序号] / OHLCV / 合并序 / 合并H:L / 合并分型确认。
   List<String> crosshairLevelLines(int idx) {
 
     final row = byIdx[idx];
@@ -485,7 +484,7 @@ class BarFeatureLookup {
 
       final snap = n - 1 < snapList.length ? snapList[n - 1] : null;
 
-      // n 段块的"合并分型确认"= n+1 层端点确认（当步冻结，n+1 层不存在则空；截断确认带标注）
+      // Kn 块「合并分型确认」= K(n+1) 端点确认（当步冻结）
       int? confirmVal;
 
       var confirmTruncated = false;
@@ -521,7 +520,7 @@ class BarFeatureLookup {
     bool confirmTruncated,
   ) {
 
-    final label = '$n段K线';
+    final label = 'K$n';
 
     final confirmText = confirmVal == null
         ? ''
@@ -531,7 +530,7 @@ class BarFeatureLookup {
 
       return [
 
-        '$label[序号]:首$n段确认前',
+        '$label[序号]:首K$n确认前',
 
         '$label:—',
 

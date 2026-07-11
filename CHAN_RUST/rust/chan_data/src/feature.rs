@@ -10,13 +10,13 @@ use crate::pipeline::LevelSnap;
 
 const WEEKDAY_CN: [&str; 7] = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
 
-/// 单根 K 十字线基础特征（星期 w1..w7 + K线合并K线序 + 各层 N 段快照）。
+/// 单根 K 十字线基础特征（星期 w1..w7 + K0合并序 + 各层 Kn 快照）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BarCrosshairFeature {
     pub idx: i32,
     /// 当前 K 所属星期（周一…周日；tooltip 显示 w1..w7）
     pub weekday: String,
-    /// K线合并K线序：合并 K 线框内排序，单根=0，同区间后续依次 1、2…
+    /// K0合并K0序：合并框内排序，单根=0，同区间后续依次 1、2…
     pub merge_inner_seq: i32,
     /// 截至当步所在合并区间已合并根数（逐K当下，非末态）
     #[serde(default)]
@@ -24,22 +24,22 @@ pub struct BarCrosshairFeature {
     /// 截至当步分型：未确认=UNKNOWN（逐K当下）
     #[serde(default = "default_unknown")]
     pub combine_fx: String,
-    /// 截至当步 K线合并区间最高价（逐K当下，非末态回写）
+    /// 截至当步 K0合并区间最高价（逐K当下，非末态回写）
     #[serde(default)]
     pub combine_high: f64,
-    /// 截至当步 K线合并区间最低价（逐K当下，非末态回写）
+    /// 截至当步 K0合并区间最低价（逐K当下，非末态回写）
     #[serde(default)]
     pub combine_low: f64,
     /// 距最近冻结笔确认分型极点间隔根数（不含极点 K）；首笔确认前=0
     #[serde(default)]
     pub fractal_peak_dist: i32,
-    /// 当步所属笔 K 序号；首笔确认前=None（levels[0] 冗余镜像，ML 兼容）
+    /// 当步所属 K1 序号；首 K1 确认前=None（levels[0] 冗余镜像，ML 兼容）
     #[serde(default)]
     pub bi_idx: Option<i32>,
-    /// 笔K线合并笔K线序：当步笔 K 在笔K线合并框内序号（0 起）
+    /// K1合并K1序：当步 K1 在 K1合并框内序号（0 起；旧称笔K线合并序）
     #[serde(default = "default_zero")]
     pub bi_merge_inner_seq: i32,
-    /// 当步所在笔K线合并框已含笔 K 根数（逐K当下）
+    /// 当步所在 K1合并框已含 K1 根数（逐K当下）
     #[serde(default = "default_one")]
     pub bi_merge_count: i32,
     #[serde(default)]
@@ -52,16 +52,16 @@ pub struct BarCrosshairFeature {
     pub bi_close: f64,
     #[serde(default)]
     pub bi_volume: f64,
-    /// 当步笔K线合并区间最高价（逐K当下）
+    /// 当步 K1合并区间最高价（逐K当下）
     #[serde(default)]
     pub bi_combine_high: f64,
-    /// 当步笔K线合并区间最低价（逐K当下）
+    /// 当步 K1合并区间最低价（逐K当下）
     #[serde(default)]
     pub bi_combine_low: f64,
-    /// 当步笔K线合并分型：未确认=UNKNOWN
+    /// 当步 K1合并分型：未确认=UNKNOWN
     #[serde(default = "default_unknown")]
     pub bi_combine_fx: String,
-    /// 各层 N 段快照（levels[0]=1段/笔，levels[1]=2段/线段，…穷尽）
+    /// 各层 Kn 快照（levels[0]=K1/笔，levels[1]=K2/线段，…穷尽）
     #[serde(default)]
     pub levels: Vec<LevelSnap>,
 }

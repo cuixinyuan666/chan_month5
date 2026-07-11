@@ -1,4 +1,5 @@
-//! 2段（线段）序列化兼容类型：计算已统一到 pipeline（N 段流水线），
+//! K2（线段）序列化兼容类型：计算已统一到 pipeline（Kn 流水线），
+//! 本模块仅保留旧 JSON 字段名以便 Flutter 兼容读取。
 //! 本文件仅保留旧 JSON 字段结构，由 combine::map_seg_analysis 从 Level2 映射。
 
 use serde::{Deserialize, Serialize};
@@ -85,7 +86,7 @@ pub struct BarSubSnapshot {
     pub eigen_frames: Vec<EigenFrame>,
 }
 
-/// 段分析整包（2段兼容）。
+/// 段分析整包（K2 兼容；旧称2段）。
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SegAnalysisBundle {
     /// 已弃用（特征序列），恒为空

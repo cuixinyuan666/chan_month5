@@ -5,7 +5,7 @@ import 'level_models.dart';
 class BarCrosshairFeature {
   final int idx;
   final String weekday;
-  /// K线合并K线序（合并 K 线框内 0 起）
+  /// K0合并K0序（合并框内 0 起）
   final int mergeInnerSeq;
 
   /// 截至当步合并根数（逐K当下）
@@ -14,22 +14,22 @@ class BarCrosshairFeature {
   /// 截至当步分型（未确认=UNKNOWN）
   final String combineFx;
 
-  /// 截至当步 K线合并区间最高价（逐K当下）
+  /// 截至当步 K0合并区间最高价（逐K当下）
   final double combineHigh;
 
-  /// 截至当步 K线合并区间最低价（逐K当下）
+  /// 截至当步 K0合并区间最低价（逐K当下）
   final double combineLow;
 
   /// 距最近冻结笔确认分型极点间隔根数（不含极点 K）；首笔确认前=0
   final int fractalPeakDist;
 
-  /// 当步所属笔 K 序号；首笔确认前=null
+  /// 当步所属 K1 序号；首 K1 确认前=null
   final int? biIdx;
 
-  /// 当步笔 K 在笔K线合并框内序号（tooltip: 笔K线合并笔K线序，0 起）
+  /// 当步 K1 在 K1合并框内序号（0 起；旧称笔K线合并序）
   final int biMergeInnerSeq;
 
-  /// 当步所在笔K线合并框已含笔 K 根数（逐K当下）
+  /// 当步所在 K1合并框已含 K1 根数（逐K当下）
   final int biMergeCount;
 
   final double biOpen;
@@ -38,16 +38,16 @@ class BarCrosshairFeature {
   final double biClose;
   final double biVolume;
 
-  /// 当步笔K线合并区间最高价（逐K当下）
+  /// 当步 K1合并区间最高价（逐K当下）
   final double biCombineHigh;
 
-  /// 当步笔K线合并区间最低价（逐K当下）
+  /// 当步 K1合并区间最低价（逐K当下）
   final double biCombineLow;
 
-  /// 当步笔K线合并分型（未确认=UNKNOWN）
+  /// 当步 K1合并分型（未确认=UNKNOWN）
   final String biCombineFx;
 
-  /// 各层 N 段快照（levels[0]=1段/笔，levels[1]=2段/线段，…穷尽）
+  /// 各层 Kn 快照（levels[0]=K1/笔，levels[1]=K2/线段，…穷尽）
   final List<LevelSnap> levels;
 
   const BarCrosshairFeature({

@@ -1,4 +1,4 @@
-//! 包含合并 + 三元素分型统一内核（K线合并 / 1段K线合并 / N段K线合并共用，全工程唯一实现）。
+//! 包含合并 + 三元素分型统一内核（K0合并 / K1合并 / Kn合并共用；旧称「K线合并/n段K线合并」）。
 //! 自洽性质：新组诞生瞬间即可判定中组分型且后续吸收不破坏（Down 组只降、Up 组只升），
 //! 因此"确认即冻结"与末态等价，天然满足逐K当下、禁止未来函数。
 
@@ -94,7 +94,7 @@ fn trunc_hit(last: &MergedGroup, u: &MergeUnit, g: &TruncGuard) -> bool {
 }
 
 /// 末态/离线重放用截断状态机（与 LevelState 锚点+参照价口径同构）。
-/// 供 1段K线合并副图等「只喂单元、不跑完整段配对」场景复用。
+/// 供 K1合并副图等「只喂单元、不跑完整段配对」场景复用。
 #[derive(Debug, Clone)]
 pub struct TruncReplayState {
     truncation_check: bool,

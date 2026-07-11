@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  test('各 N 段层级样式：色/粗细/线型互异', () {
+  test('各 Kn 层级样式：色/粗细/线型互异', () {
     final s2 = ChartLevelLineStyle.forLevel(2);
     final s3 = ChartLevelLineStyle.forLevel(3);
     final s4 = ChartLevelLineStyle.forLevel(4);
@@ -18,8 +18,8 @@ void main() {
     expect(s2.buildingDashPattern, isNot(equals(s3.buildingDashPattern)));
   });
 
-  test('shortLabel 输出 N段', () {
-    expect(ChartLevelLineStyle.shortLabel(2), '2段');
-    expect(ChartLevelLineStyle.shortLabel(5), '5段');
+  test('shortLabel 输出 Kn', () {
+    expect(ChartLevelLineStyle.shortLabel(2), 'K2');
+    expect(ChartLevelLineStyle.shortLabel(5), 'K5');
   });
 }

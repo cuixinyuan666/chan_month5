@@ -1,4 +1,4 @@
-//! a_Data 离线分笔 → K 线聚合 → N 段递归流水线（1段=笔，2段=线段，…穷尽）。
+//! a_Data 离线分笔 → K 线聚合 → Kn 递归流水线（K0=原始K，K1=笔，K2=线段，…穷尽；旧称「n段」）。
 //! 模块分工：engine=包含合并+分型唯一内核；pipeline=N 段递归；
 //! combine/feature/seg_eigen=旧字段兼容映射；segment_first=全层首段策略。
 

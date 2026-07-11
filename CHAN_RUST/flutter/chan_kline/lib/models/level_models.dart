@@ -1,15 +1,15 @@
 import 'kline_combine_frame.dart';
 
-/// 每根 1 分钟 K × 每层 N 段十字线快照（Rust `LevelSnap`，逐K当下冻结）。
+/// 每根 K0 × 每层 Kn 十字线快照（Rust `LevelSnap`，逐K当下冻结）。
 class LevelSnap {
-  /// 段层级：1=笔，2=线段，…
+  /// 层级：1=K1(笔)，2=K2(线段)，…（旧称 n段）
   final int level;
 
-  /// 当步所属 N 段K线序号（进行中或刚冻结；首段确认前=null）
+  /// 当步所属 Kn 序号（进行中或刚冻结；首段确认前=null）
   final int? unitIdx;
   final int unitDir;
 
-  /// 当步 N 段K线 1 分钟 K 区间（进行中段 x2=当步K）
+  /// 当步 Kn 的 K0 区间（进行中段 x2=当步K）
   final int unitX1;
   final int unitX2;
   final double unitOpen;
@@ -18,10 +18,10 @@ class LevelSnap {
   final double unitClose;
   final double unitVolume;
 
-  /// 该 N 段K线在 N段K线合并框内序号（0 起）
+  /// 该 Kn 在 Kn合并框内序号（0 起）
   final int mergeInnerSeq;
 
-  /// 所在合并框已含 N 段K线根数（逐K当下）
+  /// 所在合并框已含 Kn 根数（逐K当下）
   final int mergeCount;
   final double combineHigh;
   final double combineLow;
@@ -72,7 +72,7 @@ class LevelSnap {
   }
 }
 
-/// N 段分型确认（Rust `LevelConfirm`，冻结历史）。
+/// Kn 分型确认（Rust `LevelConfirm`，冻结历史）。
 class LevelConfirm {
   final int x;
   final String fx;
@@ -123,7 +123,7 @@ class LevelConfirm {
   }
 }
 
-/// N 段（Rust `LevelSegment`，端点=分型极点 1 分钟 K，OHLCV 冻结时已算好）。
+/// Kn 段（Rust `LevelSegment`，端点=分型极点 K0，OHLCV 冻结时已算好）。
 class LevelSegmentN {
   final int idx;
   final int dir;
@@ -186,7 +186,7 @@ class LevelSegmentN {
   }
 }
 
-/// N 段K线（Rust `LevelUnitBar`）。
+/// Kn 单元（Rust `LevelUnitBar`；旧称 N段K线）。
 class LevelUnitBar {
   final int idx;
   final int dir;
@@ -228,7 +228,7 @@ class LevelUnitBar {
   }
 }
 
-/// 每层 N 段全量输出（Rust `LevelBundleOut`）。
+/// 每层 Kn 全量输出（Rust `LevelBundleOut`）。
 class LevelBundle {
   final int level;
   final List<LevelConfirm> confirms;
@@ -238,7 +238,7 @@ class LevelBundle {
   final int firstDir;
   final int firstDirX;
 
-  /// 末步进行中 N 段K线（尚未冻结）
+  /// 末步进行中 Kn（尚未冻结）
   final LevelUnitBar? activeUnit;
 
   /// 首段策略：pending / retained / purged

@@ -6,7 +6,7 @@ import 'kline_combine_frame.dart';
 import 'level_models.dart';
 import 'seg_analysis.dart';
 
-/// Rust `KlineCombineBundle`：合并线框 + 笔确认 + 十字线特征 + 笔段链 + N段流水线。
+/// Rust `KlineCombineBundle`：合并线框 + 笔确认 + 十字线特征 + 笔段链 + Kn 流水线。
 class KlineCombineBundle {
   final List<KlineCombineFrame> frames;
   final List<BiConfirmSignal> biConfirms;
@@ -17,7 +17,7 @@ class KlineCombineBundle {
   final List<KlineCombineFrame> biCombineFrames;
   final String defaultBiPolicy;
 
-  /// 全层首段策略（index 0=1段/笔，1=2段/线段，…）
+  /// 全层首段策略（index 0=K1/笔，1=K2/线段，…）
   final List<String> defaultSegmentPolicies;
 
   /// 全层冻结段链
@@ -26,7 +26,7 @@ class KlineCombineBundle {
   /// 全层展示用虚拟段 K（pending + 冻结 + 进行中）
   final List<List<BiVirtualBar>> levelVirtualUnits;
 
-  /// N 段流水线全量输出（levels[0]=1段/笔，levels[1]=2段/线段，…穷尽）
+  /// Kn 流水线全量输出（levels[0]=K1/笔，levels[1]=K2/线段，…穷尽）
   final List<LevelBundle> levels;
 
   const KlineCombineBundle({

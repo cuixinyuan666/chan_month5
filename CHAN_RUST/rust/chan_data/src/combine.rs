@@ -1,4 +1,5 @@
-//! K线合并 bundle：由 N 段流水线（pipeline）驱动，本文件只做旧字段兼容映射。
+//! K0合并 bundle：由 Kn 流水线（pipeline）驱动，本文件只做旧字段兼容映射。
+//! 命名：K0=原始K，K1=笔，K2=线段（旧「1段/2段」）；字段名 bi_*/seg_* 保留兼容。
 //! 合并/分型内核唯一实现见 engine.rs；递归 N 段见 pipeline.rs。
 
 use serde::{Deserialize, Serialize};
@@ -35,7 +36,7 @@ pub struct KlineCombineFrame {
     pub start_at_right_half: bool,
 }
 
-/// K线合并分型确认柱：合并 K 线顶/底分型确认当步 K（分型连接即笔，逐K当下冻结）。
+/// K0合并分型确认柱：合并框顶/底分型确认当步 K（连接即 K1/笔，逐K当下冻结）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BiConfirmSignal {
     /// 分型确认当步 K 线索引（第三元素进入当步）
@@ -50,30 +51,30 @@ pub struct BiConfirmSignal {
     pub truncated: bool,
 }
 
-/// 合并线框 + 笔确认 + 十字线特征 + 笔段链 + N段流水线（一次遍历产出，逐K当下）。
+/// 合并线框 + 笔确认 + 十字线特征 + 笔段链 + Kn 流水线（一次遍历产出，逐K当下）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KlineCombineBundle {
     pub frames: Vec<KlineCombineFrame>,
     pub bi_confirms: Vec<BiConfirmSignal>,
-    /// 每根 K 十字线特征（星期 w1..w7、K线合并K线序、各层 N 段快照）
+    /// 每根 K 十字线特征（星期 w1..w7、K0合并序、各层 Kn 快照）
     #[serde(default)]
     pub bar_features: Vec<BarCrosshairFeature>,
-    /// 1段（笔）链：锚定配对，链条无缝
+    /// K1（笔）链：锚定配对，链条无缝
     #[serde(default)]
     pub bi_segments: Vec<BiSegment>,
-    /// 2段（线段）兼容包（由流水线 Level2 映射）
+    /// K2（线段）兼容包（由流水线 Level2 映射）
     #[serde(default)]
     pub seg_analysis: SegAnalysisBundle,
     /// 笔确认后包装笔 K 线（主图展示，含末步进行中笔）
     #[serde(default)]
     pub bi_virtual_bars: Vec<BiVirtualBar>,
-    /// 笔 K 线笔K线合并线框（副图「笔K线合并」）
+    /// K1合并线框（副图「K1合并」；旧称笔K线合并）
     #[serde(default)]
     pub bi_combine_frames: Vec<KlineCombineFrame>,
     /// 默认笔策略：pending / retained / purged（= default_segment_policies[0] 兼容别名）
     #[serde(default = "default_bi_policy_pending")]
     pub default_bi_policy: String,
-    /// 全层首段策略（levels[0]=1段，levels[1]=2段，…）
+    /// 全层首段策略（levels[0]=K1，levels[1]=K2，…）
     #[serde(default)]
     pub default_segment_policies: Vec<String>,
     /// 全层冻结段链（按层）
@@ -82,7 +83,7 @@ pub struct KlineCombineBundle {
     /// 全层展示用虚拟段 K（pending + 冻结 + 进行中）
     #[serde(default)]
     pub level_virtual_units: Vec<Vec<BiVirtualBar>>,
-    /// N 段流水线全量输出（1=笔，2=线段，…穷尽）
+    /// Kn 流水线全量输出（1=K1/笔，2=K2/线段，…穷尽）
     #[serde(default)]
     pub levels: Vec<LevelBundleOut>,
 }
@@ -192,13 +193,13 @@ fn seg_to_virtual_bar(seg: &LevelSegment) -> BiVirtualBar {
     }
 }
 
-/// 笔 K 线序列 → 笔K线合并线框（副图「1段K线合并」，末态展示口径）。
+/// 笔 K 线序列 → K1合并线框（副图「K1合并」，末态展示口径；旧称1段K线合并）。
 /// 默认开启截断监察+有效性校验，与流水线 L2 同构。
 pub fn build_bi_combine_frames(bars: &[KlineBar], bi_bars: &[BiVirtualBar]) -> Vec<KlineCombineFrame> {
     build_bi_combine_frames_with(bars, bi_bars, true, true)
 }
 
-/// 笔 K 线序列 → 1段K线合并线框（可关截断/校验，对照排查用）。
+/// 笔 K 线序列 → K1合并线框（可关截断/校验，对照排查用）。
 /// 多根包含合并：外侧框按分钟 K 中轴；仅一根笔 K（count=1）保留半侧锚定。
 pub fn build_bi_combine_frames_with(
     bars: &[KlineBar],
@@ -404,7 +405,7 @@ pub fn build_kline_combine_bundle_with(
         .cloned()
         .unwrap_or_default();
 
-    // 1段K线合并框：截断/校验开关与流水线一致，避免副图与 L2 结构分叉
+    // K1合并框：截断/校验开关与流水线一致，避免副图与 L2 结构分叉
     let bi_combine_frames = build_bi_combine_frames_with(
         bars,
         &bi_virtual_bars,
@@ -589,7 +590,7 @@ mod tests {
         }
     }
 
-    /// 1段K线合并副图：底分型后第4根暴力反转应截断断开（与 L2/engine 同构）
+    /// K1合并副图：底分型后第4根暴力反转应截断断开（与 L2/engine 同构）
     #[test]
     fn bi_combine_frames_up_truncation_splits() {
         let bars: Vec<_> = (0..5).map(|i| bar(i, 12.0, 7.0)).collect();
