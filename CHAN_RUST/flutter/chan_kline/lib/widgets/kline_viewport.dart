@@ -6,15 +6,18 @@ import '../models/kline_bar.dart';
 class KlineViewport {
   /// 左侧留白（K 线最大化：仅留极小边距）
   static const double padL = 4;
-  /// 右侧价格轴宽度（单侧刻度）
-  static const double padR = 38;
+  /// 右侧几乎不留白：主/副图画到价格数字处，价格标签叠在图上
+  static const double padR = 2;
   static const double padT = 6;
   /// 主图底边距（与副图分隔）
   static const double padB = 4;
   /// 底部 X 轴时间刻度带高度
   static const double xAxisH = 24;
   static const double zoomFactor = 1.15;
+  /// 放大时最少可见约几根（仍可按 barCount 再放宽）
   static const double minSpan = 5;
+  /// 缩小时最多可扩到「全量跨度」的倍数（越大蜡烛越小、空白越多）
+  static const double maxZoomOutFactor = 8.0;
   static const double maxYShift = 3.0;
 
   double allXMin = 0;
@@ -103,7 +106,9 @@ class KlineViewport {
     }
 
     var newSpan = span / factor;
-    final maxSpan = allXMax - allXMin + 1;
+    final dataSpan = math.max(1.0, allXMax - allXMin + 1);
+    // 缩小：允许视窗大于全量，蜡烛继续变细
+    final maxSpan = dataSpan * maxZoomOutFactor;
     newSpan = newSpan.clamp(minSpanFor(barCount), maxSpan);
 
     final usableW = math.max(1, canvasWidth - padL - padR);

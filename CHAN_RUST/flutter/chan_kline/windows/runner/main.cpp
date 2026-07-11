@@ -27,10 +27,16 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   FlutterWindow window(project);
   Win32Window::Point origin(10, 10);
   Win32Window::Size size(1280, 720);
-  if (!window.Create(L"chan_kline", origin, size)) {
+  // Empty title: Flutter hides caption text; custom min/max/close only.
+  if (!window.Create(L"", origin, size)) {
     return EXIT_FAILURE;
   }
   window.SetQuitOnClose(true);
+  // Start maximized so first paint is already full-screen.
+  HWND hwnd = window.GetHandle();
+  if (hwnd != nullptr) {
+    ShowWindow(hwnd, SW_SHOWMAXIMIZED);
+  }
 
   ::MSG msg;
   while (::GetMessage(&msg, nullptr, 0, 0)) {

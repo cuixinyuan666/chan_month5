@@ -91,6 +91,7 @@ cargo test -p chan_data
   - 导出：`default_segment_policies[]`、`level_segments[]`、`level_virtual_units[]`；`default_bi_policy`=`[0]` 兼容别名。
 - **PipelineOptions**：`first_segment_bootstrap`（默认 `true`）控制全层首段 trial；`validity_check` 仍仅作用于 Pair。
 - **Dart 端纯 FFI**：Flutter 无缠论回退实现；`compute/` 仅剩视图组装。tooltip 按 K0/Kn 块模板输出（`Kn[序号] / OHLCV / 合并序 / 合并H:L / 合并分型确认`，Kn 确认=K(n+1) 端点）。
+- **历史记录常驻**：设置面板「一键复制历史记录 / 查看历史记录 / 复制页面快照」与 `lib/history/`；合并到 main 时不得当调试入口删除。
 
 ## 后续规划
 

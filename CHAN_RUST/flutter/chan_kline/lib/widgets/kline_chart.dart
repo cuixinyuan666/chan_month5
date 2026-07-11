@@ -50,6 +50,12 @@ class KlineChart extends StatefulWidget {
     this.onMainIndicatorsChanged,
     this.onSubIndicatorsChanged,
     this.autoFollowLatest = false,
+    this.onTapStepBack,
+    this.onTapPlay,
+    this.onTapStepForward,
+    this.onLongPressReset,
+    this.onLongPressReload,
+    this.onLongPressRunToEnd,
   });
 
   final List<KlineBar> bars;
@@ -69,6 +75,16 @@ class KlineChart extends StatefulWidget {
   final ValueChanged<Set<MainChartIndicator>>? onMainIndicatorsChanged;
   final ValueChanged<Set<SubChartIndicator>>? onSubIndicatorsChanged;
   final bool autoFollowLatest;
+
+  /// 点击左/中/右：后退 / 播放暂停 / 前进
+  final VoidCallback? onTapStepBack;
+  final VoidCallback? onTapPlay;
+  final VoidCallback? onTapStepForward;
+
+  /// 长按左/中/右：首K / 重新加载 / 一次性走完
+  final VoidCallback? onLongPressReset;
+  final VoidCallback? onLongPressReload;
+  final VoidCallback? onLongPressRunToEnd;
 
   @override
   State<KlineChart> createState() => _KlineChartState();
@@ -113,12 +129,6 @@ class _KlineChartState extends State<KlineChart> {
     }
     return widget.mainIndicators;
   }
-
-  String get _subLabel =>
-      _activeSubs.map((e) => e.label).join(' + ');
-
-  String get _mainLabel =>
-      _activeMains.map((e) => e.label).join(' + ');
 
   @override
   void initState() {
@@ -190,23 +200,6 @@ class _KlineChartState extends State<KlineChart> {
   int _crosshairAsOfIdx() =>
       widget.bars[_crosshairBarIdx!.clamp(0, widget.bars.length - 1)].idx;
 
-  /// K2+ 分层统计（状态栏；旧称「n段K线」）
-  String get _levelSegHint {
-    if (widget.levels.length < 2) {
-      return 'K2 ${widget.segAnalysis.segLines.length}';
-    }
-    final parts = <String>[];
-    for (final b in widget.levels) {
-      if (b.level < 2) continue;
-      if (b.segments.isEmpty && b.confirms.isEmpty) continue;
-      parts.add(
-        'K${b.level} ${b.segments.length}',
-      );
-    }
-    if (parts.isEmpty) return 'K2 0';
-    return parts.join('  ');
-  }
-
   /// as-of 笔 K 重建：Rust 冻结段 + 当步快照查表组装，Dart 端零缠论计算。
   List<BiVirtualBar> _asOfBiVirtualBars() {
     return asOfBiVirtualBars(
@@ -240,16 +233,6 @@ class _KlineChartState extends State<KlineChart> {
       _viewport.zoomXAt(factor, e.localPosition.dx, _chartSize.width);
     }
     _scheduleRedraw();
-  }
-
-  void _onPointerDown(PointerDownEvent e) {
-    if (e.buttons != kPrimaryMouseButton || widget.bars.isEmpty) return;
-    if (_splitDragging) return;
-    _panning = true;
-    _panStart = e.localPosition;
-    _panStartViewMin = _viewport.viewXMin;
-    _panStartViewMax = _viewport.viewXMax;
-    _panStartYShift = _viewport.yShiftRatio;
   }
 
   void _onPointerMove(PointerMoveEvent e, double mainPlotH, double contentBottom) {
@@ -312,6 +295,65 @@ class _KlineChartState extends State<KlineChart> {
     });
   }
 
+  /// 左/中/右三等分热区
+  int _hotZone(Offset local) {
+    final w = math.max(1.0, _chartSize.width);
+    final t = local.dx / w;
+    if (t < 1 / 3) return 0;
+    if (t < 2 / 3) return 1;
+    return 2;
+  }
+
+  void _onZoneTap(TapUpDetails d) {
+    if (widget.bars.isEmpty) return;
+    switch (_hotZone(d.localPosition)) {
+      case 0:
+        widget.onTapStepBack?.call();
+      case 1:
+        widget.onTapPlay?.call();
+      default:
+        widget.onTapStepForward?.call();
+    }
+  }
+
+  void _onZoneLongPress(LongPressStartDetails d) {
+    if (widget.bars.isEmpty && _hotZone(d.localPosition) != 1) return;
+    switch (_hotZone(d.localPosition)) {
+      case 0:
+        widget.onLongPressReset?.call();
+      case 1:
+        widget.onLongPressReload?.call();
+      default:
+        widget.onLongPressRunToEnd?.call();
+    }
+  }
+
+  void _onPanStart(DragStartDetails d, double mainPlotH) {
+    if (widget.bars.isEmpty || _splitDragging) return;
+    _panning = true;
+    _panStart = d.localPosition;
+    _panStartViewMin = _viewport.viewXMin;
+    _panStartViewMax = _viewport.viewXMax;
+    _panStartYShift = _viewport.yShiftRatio;
+  }
+
+  void _onPanUpdate(DragUpdateDetails d, double mainPlotH) {
+    if (!_panning || _panStart == null || _splitDragging) return;
+    final dx = d.localPosition.dx - _panStart!.dx;
+    final dy = d.localPosition.dy - _panStart!.dy;
+    _viewport.viewXMin = _panStartViewMin;
+    _viewport.viewXMax = _panStartViewMax;
+    _viewport.yShiftRatio = _panStartYShift;
+    _viewport.markUserAdjusted();
+    _viewport.panByPixels(dx, dy, _chartSize.width, mainPlotH);
+    _scheduleRedraw();
+  }
+
+  void _onPanEnd(DragEndDetails d) {
+    _panning = false;
+    _panStart = null;
+  }
+
   void _onSplitDown(PointerDownEvent e) {
     if (e.buttons != kPrimaryMouseButton) return;
     _splitDragging = true;
@@ -364,8 +406,7 @@ class _KlineChartState extends State<KlineChart> {
       builder: (context, constraints) {
         final w = constraints.maxWidth;
         final h = constraints.maxHeight;
-        final hintH = math.max(22.0, h * 0.06);
-        _chartBodyH = math.max(1.0, h - hintH);
+        _chartBodyH = math.max(1.0, h);
         final mainH = _chartBodyH * _mainFraction;
         final volH = _chartBodyH - mainH;
         final xAxisTop = mainH + volH - KlineViewport.xAxisH;
@@ -380,148 +421,147 @@ class _KlineChartState extends State<KlineChart> {
             : (_panning ? SystemMouseCursors.grabbing : SystemMouseCursors.grab);
         final plotTop = KlineViewport.padT;
 
-        return Column(
+        return Stack(
+          clipBehavior: Clip.none,
           children: [
-            Expanded(
-              child: Stack(
-                clipBehavior: Clip.none,
-                children: [
-                  CustomPaint(
-                    size: Size(w, mainH + volH),
-                    painter: _KlineCompositePainter(
-                      bars: widget.bars,
-                      combineFrames: widget.combineFrames,
-                      biConfirmSignals: widget.biConfirmSignals,
-                      barFeatures: widget.barFeatures,
-                      biSegments: widget.biSegments,
-                      biVirtualBarViews: _effectiveBiVirtualBarViews,
-                      biCombineFrames: _effectiveBiCombineFrames,
-                      segAnalysis: widget.segAnalysis,
-                      levels: widget.levels,
-                      mainIndicators: _activeMains,
-                      subIndicators: _activeSubs,
-                      viewport: _viewport,
-                      priceRange: priceRange,
-                      visible: visible,
-                      mainH: mainH,
-                      volH: volH,
-                      crosshairEnabled: _crosshairEnabled,
-                      crosshairX: _crosshairX,
-                      crosshairY: _crosshairY,
-                      crosshairBarIdx: _crosshairBarIdx,
-                      segAsOf: _crosshairEnabled && _crosshairBarIdx != null
-                          ? _crosshairAsOfIdx()
-                          : null,
-                    ),
-                  ),
-                  Positioned(
-                    left: KlineViewport.padL,
-                    right: KlineViewport.padR,
-                    top: mainH - 4,
-                    height: 8,
-                    child: MouseRegion(
-                      cursor: SystemMouseCursors.resizeUpDown,
-                      child: Listener(
-                        behavior: HitTestBehavior.translucent,
-                        onPointerDown: _onSplitDown,
-                        onPointerMove: _onSplitMove,
-                        onPointerUp: _onSplitUp,
-                        child: Center(
-                          child: Container(
-                            height: _splitDragging ? 3 : 2,
-                            decoration: BoxDecoration(
-                              color: _splitDragging
-                                  ? const Color(0xAA42A5F5)
-                                  : const Color(0x55FFFFFF),
-                              borderRadius: BorderRadius.circular(2),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                  Positioned.fill(
-                    child: MouseRegion(
-                      cursor: cursor,
-                      onExit: (_) => _onPointerLeave(),
-                      onHover: (e) {
-                        if (!_panning) {
-                          _updateCrosshairAt(e.localPosition, plotTop, contentBottom);
-                        }
-                      },
-                      child: Listener(
-                        behavior: HitTestBehavior.opaque,
-                        onPointerSignal: (e) {
-                          if (e is PointerScrollEvent) {
-                            _onWheel(
-                              e,
-                              mainH - KlineViewport.padT - KlineViewport.padB,
-                            );
-                          }
-                        },
-                        onPointerDown: _onPointerDown,
-                        onPointerMove: (e) => _onPointerMove(
-                          e,
-                          mainH - KlineViewport.padT - KlineViewport.padB,
-                          contentBottom,
-                        ),
-                        onPointerUp: _onPointerUp,
-                        child: GestureDetector(
-                          behavior: HitTestBehavior.opaque,
-                          onDoubleTapDown: (d) => _onDoubleTap(d, plotTop, contentBottom),
-                          child: const SizedBox.expand(),
-                        ),
-                      ),
-                    ),
-                  ),
-                  Positioned(
-                    left: KlineViewport.padL,
-                    top: 2,
-                    child: Material(
-                      color: const Color(0xCC1A1A1A),
-                      borderRadius: BorderRadius.circular(4),
-                      child: InkWell(
-                        borderRadius: BorderRadius.circular(4),
-                        onTap: () => _pickMainIndicators(context),
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                          child: Text(
-                            '主图指标选择',
-                            style: const TextStyle(color: Color(0xFFE2E8F0), fontSize: 11),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                  Positioned(
-                    left: KlineViewport.padL,
-                    top: mainH + 2,
-                    child: Material(
-                      color: const Color(0xCC1A1A1A),
-                      borderRadius: BorderRadius.circular(4),
-                      child: InkWell(
-                        borderRadius: BorderRadius.circular(4),
-                        onTap: () => _pickSubIndicators(context),
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                          child: Text(
-                            '副图指标选择',
-                            style: const TextStyle(color: Color(0xFFE2E8F0), fontSize: 11),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
+            CustomPaint(
+              size: Size(w, mainH + volH),
+              painter: _KlineCompositePainter(
+                bars: widget.bars,
+                combineFrames: widget.combineFrames,
+                biConfirmSignals: widget.biConfirmSignals,
+                barFeatures: widget.barFeatures,
+                biSegments: widget.biSegments,
+                biVirtualBarViews: _effectiveBiVirtualBarViews,
+                biCombineFrames: _effectiveBiCombineFrames,
+                segAnalysis: widget.segAnalysis,
+                levels: widget.levels,
+                mainIndicators: _activeMains,
+                subIndicators: _activeSubs,
+                viewport: _viewport,
+                priceRange: priceRange,
+                visible: visible,
+                mainH: mainH,
+                volH: volH,
+                crosshairEnabled: _crosshairEnabled,
+                crosshairX: _crosshairX,
+                crosshairY: _crosshairY,
+                crosshairBarIdx: _crosshairBarIdx,
+                segAsOf: _crosshairEnabled && _crosshairBarIdx != null
+                    ? _crosshairAsOfIdx()
+                    : null,
               ),
             ),
-            SizedBox(
-              height: hintH,
-              child: Center(
-                child: Text(
-                  '主图: $_mainLabel  |  副图: $_subLabel  |  K1 ${widget.biVirtualBarViews.length}  K1合并 ${widget.biCombineFrames.length}  $_levelSegHint  |  双击十字线  |  ${widget.bars.length}根',
-                  style: const TextStyle(color: Color(0x99FFFFFF), fontSize: 11),
-                  textAlign: TextAlign.center,
+            Positioned.fill(
+              child: MouseRegion(
+                cursor: cursor,
+                onExit: (_) => _onPointerLeave(),
+                onHover: (e) {
+                  if (!_panning) {
+                    _updateCrosshairAt(e.localPosition, plotTop, contentBottom);
+                  }
+                },
+                child: Listener(
+                  behavior: HitTestBehavior.opaque,
+                  onPointerSignal: (e) {
+                    if (e is PointerScrollEvent) {
+                      _onWheel(
+                        e,
+                        mainH - KlineViewport.padT - KlineViewport.padB,
+                      );
+                    }
+                  },
+                  onPointerMove: (e) => _onPointerMove(
+                    e,
+                    mainH - KlineViewport.padT - KlineViewport.padB,
+                    contentBottom,
+                  ),
+                  onPointerUp: _onPointerUp,
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onDoubleTapDown: (d) => _onDoubleTap(d, plotTop, contentBottom),
+                    onTapUp: _onZoneTap,
+                    onLongPressStart: _onZoneLongPress,
+                    onPanStart: (d) => _onPanStart(
+                      d,
+                      mainH - KlineViewport.padT - KlineViewport.padB,
+                    ),
+                    onPanUpdate: (d) => _onPanUpdate(
+                      d,
+                      mainH - KlineViewport.padT - KlineViewport.padB,
+                    ),
+                    onPanEnd: _onPanEnd,
+                    child: const SizedBox.expand(),
+                  ),
+                ),
+              ),
+            ),
+            // 主副图分割条叠在手势层之上，才能上下拖调高度
+            Positioned(
+              left: KlineViewport.padL,
+              right: KlineViewport.padR,
+              top: mainH - 4,
+              height: 8,
+              child: MouseRegion(
+                cursor: SystemMouseCursors.resizeUpDown,
+                child: Listener(
+                  behavior: HitTestBehavior.opaque,
+                  onPointerDown: _onSplitDown,
+                  onPointerMove: _onSplitMove,
+                  onPointerUp: _onSplitUp,
+                  child: Center(
+                    child: Container(
+                      height: _splitDragging ? 3 : 2,
+                      decoration: BoxDecoration(
+                        color: _splitDragging
+                            ? const Color(0xAA42A5F5)
+                            : const Color(0x55FFFFFF),
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            Positioned(
+              left: 0,
+              top: 0,
+              child: Material(
+                color: const Color(0xCC1A1A1A),
+                borderRadius: const BorderRadius.only(
+                  bottomRight: Radius.circular(4),
+                ),
+                child: InkWell(
+                  borderRadius: const BorderRadius.only(
+                    bottomRight: Radius.circular(4),
+                  ),
+                  onTap: () => _pickMainIndicators(context),
+                  child: const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    child: Text(
+                      '主图指标选择',
+                      style: TextStyle(color: Color(0xFFE2E8F0), fontSize: 11),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            Positioned(
+              left: KlineViewport.padL,
+              top: mainH + 2,
+              child: Material(
+                color: const Color(0xCC1A1A1A),
+                borderRadius: BorderRadius.circular(4),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(4),
+                  onTap: () => _pickSubIndicators(context),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    child: Text(
+                      '副图指标选择',
+                      style: const TextStyle(color: Color(0xFFE2E8F0), fontSize: 11),
+                    ),
+                  ),
                 ),
               ),
             ),
@@ -601,7 +641,6 @@ class _KlineCompositePainter extends CustomPainter {
     final barW = _candleBodyW(slotW);
     final xAxisTop = contentBottom;
 
-    _drawGrid(canvas, size.width, plotTop, plotBottom);
     if (mainIndicators.contains(MainChartIndicator.kline)) {
       _drawCandles(canvas, size.width, plotTop, plotH, barW, slotW);
     }
@@ -769,20 +808,7 @@ class _KlineCompositePainter extends CustomPainter {
   double _barCenterX(int barIdx, double w, double slotW) =>
       viewport.indexToX(barIdx.toDouble(), w) + slotW / 2;
 
-  void _drawGrid(Canvas canvas, double w, double top, double bottom) {
-    final grid = Paint()
-      ..color = const Color(0x22FFFFFF)
-      ..strokeWidth = 1;
-    for (var i = 0; i <= 4; i++) {
-      final y = top + (bottom - top) * i / 4;
-      canvas.drawLine(Offset(KlineViewport.padL, y), Offset(w - KlineViewport.padR, y), grid);
-    }
-    final border = Paint()
-      ..color = const Color(0x44FFFFFF)
-      ..strokeWidth = 1;
-    canvas.drawLine(Offset(KlineViewport.padL, top), Offset(KlineViewport.padL, bottom), border);
-    canvas.drawLine(Offset(w - KlineViewport.padR, top), Offset(w - KlineViewport.padR, contentBottom), border);
-  }
+  // 主/副图不再绘制网格横线与右侧封口竖线（价格标签仍保留）
 
   /// 笔 K 线（展示层 view 区间）：横向 [_biVirtualBarHSpan]，与合并笔框 [_biCombineFrameSpan] 同口径。
   void _drawBiVirtualCandles(
@@ -1428,8 +1454,6 @@ class _KlineCompositePainter extends CustomPainter {
     double barW,
     double slotW,
   ) {
-    _drawSubSeparator(canvas, w, volTop);
-
     final innerTop = volTop + 6;
     final innerBottom = contentBottom - 4;
     final innerH = math.max(12.0, innerBottom - innerTop);
@@ -1725,15 +1749,6 @@ class _KlineCompositePainter extends CustomPainter {
     double subY(double v) => innerTop + (maxV - v) / span * innerH;
     final y0 = subY(0);
 
-    final zeroLine = Paint()
-      ..color = const Color(0x88FFFFFF)
-      ..strokeWidth = 1;
-    canvas.drawLine(
-      Offset(KlineViewport.padL, y0),
-      Offset(w - KlineViewport.padR, y0),
-      zeroLine,
-    );
-
     final barWClamped = math.max(2.0, math.min(barW, 8.0));
     for (final (x, value) in points) {
       if (x < viewport.viewXMin - 1 || x > viewport.viewXMax + 1) continue;
@@ -1815,16 +1830,7 @@ class _KlineCompositePainter extends CustomPainter {
     }
     final span = math.max(1.0, maxV);
     double subY(double v) => innerTop + (span - v) / span * innerH;
-
-    final zeroLine = Paint()
-      ..color = const Color(0x55FFFFFF)
-      ..strokeWidth = 1;
     final y0 = subY(0);
-    canvas.drawLine(
-      Offset(KlineViewport.padL, y0),
-      Offset(w - KlineViewport.padR, y0),
-      zeroLine,
-    );
 
     const lineColor = Color(0xFF38BDF8);
     final linePaint = Paint()
@@ -1897,17 +1903,6 @@ class _KlineCompositePainter extends CustomPainter {
     }
   }
 
-  void _drawSubSeparator(Canvas canvas, double w, double volTop) {
-    final sep = Paint()
-      ..color = const Color(0x33FFFFFF)
-      ..strokeWidth = 1;
-    canvas.drawLine(
-      Offset(KlineViewport.padL, volTop),
-      Offset(w - KlineViewport.padR, volTop),
-      sep,
-    );
-  }
-
   void _drawYLabels(Canvas canvas, double w, double plotTop, double plotH, PriceRange pr) {
     const style = TextStyle(color: Color(0x99FFFFFF), fontSize: 9);
     for (var i = 0; i <= 4; i++) {
@@ -1930,15 +1925,6 @@ class _KlineCompositePainter extends CustomPainter {
     final i0 = viewport.viewXMin.floor().clamp(0, bars.length - 1);
     final sample = KlineAxisFormat.xLabel(bars[i0].timeText, minuteLike: minuteLike);
     final interval = KlineAxisFormat.xTickInterval(plotW, span, sample);
-
-    final axisLine = Paint()
-      ..color = const Color(0x44FFFFFF)
-      ..strokeWidth = 1;
-    canvas.drawLine(
-      Offset(KlineViewport.padL, axisTop),
-      Offset(w - KlineViewport.padR, axisTop),
-      axisLine,
-    );
 
     final startX = ((viewport.viewXMin / interval).ceil() * interval).toInt();
     final endX = viewport.viewXMax.ceil().clamp(0, bars.length - 1);
