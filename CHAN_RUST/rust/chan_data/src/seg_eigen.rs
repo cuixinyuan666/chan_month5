@@ -34,6 +34,9 @@ pub struct SegConfirmSignal {
     pub fractal_high: f64,
     #[serde(default)]
     pub fractal_low: f64,
+    /// 截断确认（上升/下降截断触发，非常规三元素路径）
+    #[serde(default)]
+    pub truncated: bool,
 }
 
 /// 首段方向锁定信号。

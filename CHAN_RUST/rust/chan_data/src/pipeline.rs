@@ -13,7 +13,7 @@ use std::collections::{HashSet, VecDeque};
 use serde::{Deserialize, Serialize};
 
 use crate::combine::KlineCombineFrame;
-use crate::engine::{CombineEngine, FxEvent, FxKind, MergeUnit};
+use crate::engine::{CombineEngine, FxEvent, FxKind, MergeUnit, TruncGuard};
 use crate::kline::KlineBar;
 use crate::segment_first::{
     build_pending_default_unit, resolve_segment_policy, reverse_pole_x, trial_first_segment,
@@ -29,6 +29,9 @@ pub struct PipelineOptions {
     pub max_levels: usize,
     /// 全层首段构造：pending + 反向极值 trial（默认开启）
     pub first_segment_bootstrap: bool,
+    /// 截断监察开关（默认开启）：上行阶段暴力反转单元（最高价>=左框高 且 最低价<上个底分型低）
+    /// 不被包含吸收，左框当场顶分型确认；下降截断镜像；全层同构
+    pub truncation_check: bool,
 }
 
 impl Default for PipelineOptions {
@@ -37,6 +40,7 @@ impl Default for PipelineOptions {
             validity_check: true,
             max_levels: 16,
             first_segment_bootstrap: true,
+            truncation_check: true,
         }
     }
 }
@@ -60,6 +64,9 @@ pub struct LevelConfirm {
     pub trigger_uid: i64,
     /// 是否被用作段端点（同向丢弃 / 校验失败 = false；当下冻结不回写）
     pub used: bool,
+    /// 截断确认：暴力反转单元触发（非常规三元素路径；上升截断=TOP，下降截断=BOTTOM）
+    #[serde(default)]
+    pub truncated: bool,
 }
 
 /// N 段（锚定配对产物；端点=分型极点 1 分钟 K）
@@ -340,6 +347,8 @@ struct LevelState {
     validity_check: bool,
     /// 全层首段 trial 开关
     first_segment_bootstrap: bool,
+    /// 截断监察开关
+    truncation_check: bool,
     engine: CombineEngine,
     /// 已喂入本层引擎的 N-1 段输入单元前缀（首段反向极值 / pending 用）
     input_prefix: Vec<LevelUnitBar>,
@@ -360,6 +369,10 @@ struct LevelState {
     confirm_val_this_bar: i32,
     /// 当步刚冻结首段（promoted），快照优先展示该段
     freshly_first_seg: bool,
+    /// 最近一次底分型确认中组最低价（含同向丢弃/校验失败的；上升截断破坏参照价）
+    last_bottom_low: Option<f64>,
+    /// 最近一次顶分型确认中组最高价（含同向丢弃/校验失败的；下降截断破坏参照价）
+    last_top_high: Option<f64>,
 }
 
 /// 有效性校验：顶极值 > 底极值（最低限度，可配置关闭）
@@ -372,11 +385,12 @@ fn validity_ok(anchor: &Anchor, fx: FxKind, ev_high: f64, ev_low: f64) -> bool {
 }
 
 impl LevelState {
-    fn new(level: i32, validity_check: bool, first_segment_bootstrap: bool) -> Self {
+    fn new(level: i32, opt: &PipelineOptions) -> Self {
         Self {
             level,
-            validity_check,
-            first_segment_bootstrap,
+            validity_check: opt.validity_check,
+            first_segment_bootstrap: opt.first_segment_bootstrap,
+            truncation_check: opt.truncation_check,
             engine: CombineEngine::new(),
             input_prefix: Vec::new(),
             segment_policy: POLICY_PENDING.to_string(),
@@ -391,12 +405,46 @@ impl LevelState {
             prov: None,
             confirm_val_this_bar: 0,
             freshly_first_seg: false,
+            last_bottom_low: None,
+            last_top_high: None,
         }
     }
 
     fn begin_bar(&mut self) {
         self.confirm_val_this_bar = 0;
         self.freshly_first_seg = false;
+    }
+
+    /// 当步截断监察参数（Q4口径：按锚点方向分工，首确认前不监控）。
+    /// 末组已被探测先行冻结分型时沿用该方向：永久喂入只作物理断开+去重重放，
+    /// 禁止锚点翻向后对同一组镜像误触发（同组分型方向不可翻转）。
+    fn trunc_guard(&self) -> Option<TruncGuard> {
+        if !self.truncation_check {
+            return None;
+        }
+        if let Some(last) = self.engine.last_group() {
+            if self.frozen.contains(&(last.first_uid, true)) {
+                return self
+                    .last_bottom_low
+                    .map(|p| TruncGuard { up_leg: true, ref_price: p });
+            }
+            if self.frozen.contains(&(last.first_uid, false)) {
+                return self
+                    .last_top_high
+                    .map(|p| TruncGuard { up_leg: false, ref_price: p });
+            }
+        }
+        match self.anchor.as_ref()?.fx {
+            // 上行阶段（锚点=底分型）：监察上升截断，参照上个底分型中组最低价
+            FxKind::Bottom => self
+                .last_bottom_low
+                .map(|p| TruncGuard { up_leg: true, ref_price: p }),
+            // 下行阶段（锚点=顶分型）：监察下降截断，参照上个顶分型中组最高价
+            FxKind::Top => self
+                .last_top_high
+                .map(|p| TruncGuard { up_leg: false, ref_price: p }),
+            FxKind::Unknown => None,
+        }
     }
 
     fn set_anchor(&mut self, fx: FxKind, ev_x1: i32, ev_x2: i32, high: f64, low: f64, pole_x: i32, confirm_x: i32) {
@@ -430,6 +478,12 @@ impl LevelState {
         let key = (ev.first_uid, fx == FxKind::Top);
         if !self.frozen.insert(key) {
             return Vec::new();
+        }
+        // 截断破坏参照价（Q2口径）：最近一次顶/底分型确认中组极值（含未用作端点的），当步冻结
+        match fx {
+            FxKind::Bottom => self.last_bottom_low = Some(ev_low),
+            FxKind::Top => self.last_top_high = Some(ev_high),
+            FxKind::Unknown => {}
         }
         let value = fx.confirm_value();
         let pole_x = fx_pole_x(bars, ev_x1, ev_x2, fx);
@@ -564,6 +618,7 @@ impl LevelState {
             pole_x,
             trigger_uid,
             used,
+            truncated: ev.truncated,
         });
         outs
     }
@@ -613,6 +668,7 @@ impl LevelState {
         &self,
         bars: &[KlineBar],
         upper: Option<&CombineEngine>,
+        upper_guard: Option<TruncGuard>,
         prov: Option<&(MergeUnit, f64, f64, f64)>,
     ) -> LevelSnap {
         // 首段 promoted 冻结当步：展示刚冻结段而非同步新起进行中段
@@ -684,7 +740,8 @@ impl LevelState {
             snap.unit_volume = *volume;
             match upper {
                 Some(e) => {
-                    let ps = e.probe(unit);
+                    // 与探测流同口径：带上层截断监察，命中时按"断开成新组"视角展示
+                    let ps = e.probe_guarded(unit, upper_guard.as_ref());
                     snap.merge_inner_seq = ps.inner_seq;
                     snap.merge_count = ps.group_count;
                     snap.combine_high = ps.group_high;
@@ -791,11 +848,7 @@ fn propagate(
             continue;
         }
         if li == levels.len() {
-            levels.push(LevelState::new(
-                (li + 1) as i32,
-                opt.validity_check,
-                opt.first_segment_bootstrap,
-            ));
+            levels.push(LevelState::new((li + 1) as i32, opt));
         }
         levels[li].input_prefix.push(ub.clone());
         let mu = MergeUnit {
@@ -805,7 +858,9 @@ fn propagate(
             high: ub.high,
             low: ub.low,
         };
-        if let Some(ev) = levels[li].engine.feed(&mu) {
+        // 截断监察随喂随判：命中则左框当场分型确认 + 单元强制断开成新组
+        let guard = levels[li].trunc_guard();
+        if let Some(ev) = levels[li].engine.feed_guarded(&mu, guard.as_ref()) {
             let outs = levels[li].on_confirm(&ev, bar_x, mu.uid, bars, Some(ub));
             for o in outs {
                 queue.push_back((li + 1, o));
@@ -816,11 +871,7 @@ fn propagate(
 
 /// 全量入口：对已喂入 K 线前缀跑穷尽 N 段流水线（内部单遍逐K，无未来函数）
 pub fn run_pipeline(bars: &[KlineBar], opt: &PipelineOptions) -> PipelineResult {
-    let mut levels: Vec<LevelState> = vec![LevelState::new(
-        1,
-        opt.validity_check,
-        opt.first_segment_bootstrap,
-    )];
+    let mut levels: Vec<LevelState> = vec![LevelState::new(1, opt)];
     let mut bar_level_snaps: Vec<Vec<LevelSnap>> = Vec::with_capacity(bars.len());
     let mut bar_k_snaps: Vec<BarCombineSnap> = Vec::with_capacity(bars.len());
     let mut bar_seg_rows: Vec<BarSegRow> = Vec::with_capacity(bars.len());
@@ -851,7 +902,12 @@ pub fn run_pipeline(bars: &[KlineBar], opt: &PipelineOptions) -> PipelineResult 
         while li + 1 < levels.len() {
             let pu_opt = levels[li].provisional_unit(bars, i);
             if let Some(pu) = pu_opt {
-                let ev_opt = levels[li + 1].engine.probe(&pu.0).fx_event;
+                // 探测流同样带截断监察（与 feed_guarded 语义一致，不写状态）
+                let guard = levels[li + 1].trunc_guard();
+                let ev_opt = levels[li + 1]
+                    .engine
+                    .probe_guarded(&pu.0, guard.as_ref())
+                    .fx_event;
                 if let Some(ev) = ev_opt {
                     let probe_ub = {
                         let dir = levels[li]
@@ -904,12 +960,12 @@ pub fn run_pipeline(bars: &[KlineBar], opt: &PipelineOptions) -> PipelineResult 
         }
         let mut snaps = Vec::with_capacity(levels.len());
         for li in 0..levels.len() {
-            let upper = if li + 1 < levels.len() {
-                Some(&levels[li + 1].engine)
+            let (upper, upper_guard) = if li + 1 < levels.len() {
+                (Some(&levels[li + 1].engine), levels[li + 1].trunc_guard())
             } else {
-                None
+                (None, None)
             };
-            snaps.push(levels[li].snapshot(bars, upper, provs[li].as_ref()));
+            snaps.push(levels[li].snapshot(bars, upper, upper_guard, provs[li].as_ref()));
         }
         bar_level_snaps.push(snaps);
 
@@ -1029,16 +1085,14 @@ mod tests {
             &bars,
             &PipelineOptions {
                 validity_check: true,
-                max_levels: 16,
-                first_segment_bootstrap: true,
+                ..PipelineOptions::default()
             },
         );
         let without_check = run_pipeline(
             &bars,
             &PipelineOptions {
                 validity_check: false,
-                max_levels: 16,
-                first_segment_bootstrap: true,
+                ..PipelineOptions::default()
             },
         );
         let pair_count = |pr: &PipelineResult| {
@@ -1060,6 +1114,137 @@ mod tests {
         if let Some(top) = pr.levels.last() {
             // 最高层要么无段（穷尽终止），要么是刚建仍在积累
             assert!(top.segments.len() <= 1 || pr.levels.len() == 16);
+        }
+    }
+
+    /// 以 test 数据结构为例：底分型(低8)确认后第4根 K(11/7.5) 命中上升截断 →
+    /// 左框K2(10.5/9.5)=顶分型中组当步确认，上升段终点=左框峰值K2（非截断K）
+    #[test]
+    fn up_truncation_confirms_top_at_fourth_bar() {
+        let bars = vec![
+            bar(0, 10.0, 9.0),
+            bar(1, 9.0, 8.0),   // 底分型中组（最低点8）
+            bar(2, 10.5, 9.5),  // 底分型确认元素=左框
+            bar(3, 11.0, 7.5),  // 第4根：高>=10.5 且 低<8 → 上升截断
+            bar(4, 10.2, 9.2),
+        ];
+        let pr = run_pipeline(&bars, &PipelineOptions::default());
+        let l1 = &pr.levels[0];
+        let trunc: Vec<_> = l1.confirms.iter().filter(|c| c.truncated).collect();
+        assert_eq!(trunc.len(), 1, "应有且仅有一次截断确认: {:?}", l1.confirms);
+        let t = trunc[0];
+        assert_eq!(t.fx, "TOP");
+        assert_eq!(t.x, 3); // 确认落在第4根当步
+        assert_eq!((t.fractal_x1, t.fractal_x2), (2, 2)); // 中组=左框K2
+        assert!((t.fractal_high - 10.5).abs() < 1e-9); // 左框高低未被截断K改写
+        assert!((t.fractal_low - 9.5).abs() < 1e-9);
+        assert_eq!(t.pole_x, 2);
+        assert!(t.used, "截断顶分型应用作段端点");
+        // 上升段：底分型极点K1 → 左框峰值K2（终点不落在截断K3上）
+        let up_seg = l1
+            .segments
+            .iter()
+            .find(|s| s.dir == 1)
+            .expect("应有上升段");
+        assert_eq!(up_seg.begin_pole_x, 1);
+        assert_eq!(up_seg.end_pole_x, 2);
+        // 截断K独立成组：合并框链中 K3 起新框（监控范围>=第四根）
+        assert!(l1
+            .combine_frames
+            .iter()
+            .any(|f| f.x1 == 3), "截断K应强制断开成新组: {:?}", l1.combine_frames);
+    }
+
+    /// 开关关闭 → 旧行为：暴力反转K被吸收，无截断确认（对照排查用）
+    #[test]
+    fn truncation_off_keeps_legacy_absorb() {
+        let bars = vec![
+            bar(0, 10.0, 9.0),
+            bar(1, 9.0, 8.0),
+            bar(2, 10.5, 9.5),
+            bar(3, 11.0, 7.5),
+            bar(4, 10.2, 9.2),
+        ];
+        let pr = run_pipeline(
+            &bars,
+            &PipelineOptions {
+                truncation_check: false,
+                ..PipelineOptions::default()
+            },
+        );
+        let l1 = &pr.levels[0];
+        assert!(l1.confirms.iter().all(|c| !c.truncated));
+        // K3 被吸收进左框（框高改写为11），不另起新框
+        assert!(l1.combine_frames.iter().all(|f| f.x1 != 3));
+    }
+
+    /// 下降截断镜像：顶分型(高11)确认后，第4根低<=左框低 且 高>11 → 底分型截断确认
+    #[test]
+    fn down_truncation_mirror_confirms_bottom() {
+        let bars = vec![
+            bar(0, 10.0, 9.0),
+            bar(1, 11.0, 10.5), // 顶分型中组（最高点11）
+            bar(2, 9.5, 8.5),   // 顶分型确认元素=左框
+            bar(3, 11.5, 8.0),  // 第4根：低<=8.5 且 高>11 → 下降截断
+            bar(4, 9.8, 9.0),
+        ];
+        let pr = run_pipeline(&bars, &PipelineOptions::default());
+        let l1 = &pr.levels[0];
+        let trunc: Vec<_> = l1.confirms.iter().filter(|c| c.truncated).collect();
+        assert_eq!(trunc.len(), 1, "应有且仅有一次截断确认: {:?}", l1.confirms);
+        let t = trunc[0];
+        assert_eq!(t.fx, "BOTTOM");
+        assert_eq!(t.x, 3);
+        assert_eq!((t.fractal_x1, t.fractal_x2), (2, 2));
+        assert!((t.fractal_high - 9.5).abs() < 1e-9);
+        assert!((t.fractal_low - 8.5).abs() < 1e-9);
+        // 下降段：顶分型极点K1 → 左框谷值K2
+        let down_seg = l1
+            .segments
+            .iter()
+            .find(|s| s.dir == -1 && !s.is_promoted_default)
+            .expect("应有下降段");
+        assert_eq!(down_seg.begin_pole_x, 1);
+        assert_eq!(down_seg.end_pole_x, 2);
+    }
+
+    /// 含截断行情的前缀重放一致性：逐K当下冻结、无未来函数（LevelSnap 逐字段相等）
+    #[test]
+    fn truncation_snapshots_frozen_no_future() {
+        let mut bars = vec![
+            bar(0, 10.0, 9.0),
+            bar(1, 9.0, 8.0),
+            bar(2, 10.5, 9.5),
+            bar(3, 11.0, 7.5), // 上升截断
+        ];
+        bars.extend(zigzag(36).into_iter().skip(4));
+        let bars: Vec<KlineBar> = bars
+            .into_iter()
+            .enumerate()
+            .map(|(i, mut b)| {
+                b.idx = i as i32;
+                b
+            })
+            .collect();
+        let full = run_pipeline(&bars, &PipelineOptions::default());
+        for cut in [4usize, 5, 10, 20, 30] {
+            let part = run_pipeline(&bars[..cut], &PipelineOptions::default());
+            for i in 0..cut {
+                let a = &full.bar_level_snaps[i];
+                let b = &part.bar_level_snaps[i];
+                let common = a.len().min(b.len());
+                for li in 0..common {
+                    assert_eq!(a[li], b[li], "bar {i} level {li} 截断前缀重放不一致");
+                }
+            }
+            // 确认历史前缀也一致（冻结不回写）
+            let fc = &full.levels[0].confirms;
+            let pc = &part.levels[0].confirms;
+            for (j, c) in pc.iter().enumerate() {
+                assert_eq!(c.x, fc[j].x);
+                assert_eq!(c.fx, fc[j].fx);
+                assert_eq!(c.truncated, fc[j].truncated);
+            }
         }
     }
 

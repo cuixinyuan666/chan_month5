@@ -71,6 +71,26 @@ pub struct FxEvent {
     pub low: f64,
     pub first_uid: i64,
     pub last_uid: i64,
+    /// 截断确认：暴力反转单元触发（非常规三元素路径）
+    pub truncated: bool,
+}
+
+/// 截断监察参数（上升/下降截断；由调用方按当前锚点方向提供，全层同构）
+#[derive(Debug, Clone, Copy)]
+pub struct TruncGuard {
+    /// true=上行阶段监察上升截断（左框发 TOP）；false=下行阶段监察下降截断（左框发 BOTTOM）
+    pub up_leg: bool,
+    /// 破坏参照价：上行=上个底分型中组最低价；下行=上个顶分型中组最高价
+    pub ref_price: f64,
+}
+
+/// 截断命中判定：上升截断=新单元最高价>=左框最高价 且 最低价<上个底分型低；下降截断镜像
+fn trunc_hit(last: &MergedGroup, u: &MergeUnit, g: &TruncGuard) -> bool {
+    if g.up_leg {
+        u.high >= last.high && u.low < g.ref_price
+    } else {
+        u.low <= last.low && u.high > g.ref_price
+    }
 }
 
 /// 进行中单元只读探测结果（十字线快照 + 可能的分型事件）
@@ -159,6 +179,7 @@ impl MergedGroup {
             low: self.low,
             first_uid: self.first_uid,
             last_uid: self.last_uid,
+            truncated: false,
         }
     }
 
@@ -199,6 +220,14 @@ impl CombineEngine {
 
     /// 永久喂入单元；三组成立时返回中组分型事件（当步冻结，后续吸收不破坏）
     pub fn feed(&mut self, u: &MergeUnit) -> Option<FxEvent> {
+        self.feed_guarded(u, None)
+    }
+
+    /// 永久喂入 + 截断监察：本应被包含吸收的暴力反转单元命中截断时，
+    /// 左框保持原高低并当场冻结分型（上行=TOP/下行=BOTTOM），该单元强制断开成新组
+    /// （上升截断开下行组 / 下降截断开上行组），并参与后续三元素监控（监控范围>=第四根）。
+    /// 非包含关系不拦截：常规三元素路径本身能正确判定，截断只救"信号被吸收吃掉"的场景。
+    pub fn feed_guarded(&mut self, u: &MergeUnit, guard: Option<&TruncGuard>) -> Option<FxEvent> {
         if self.groups.is_empty() {
             self.groups.push(MergedGroup::new_first(u, MergeDir::Up));
             return None;
@@ -207,6 +236,17 @@ impl CombineEngine {
         let dir =
             test_combine_range(self.groups[last].high, self.groups[last].low, u.high, u.low);
         if dir == MergeDir::Combine {
+            if let Some(g) = guard {
+                if trunc_hit(&self.groups[last], u, g) {
+                    // 截断确认：左框=分型中组（高低不被改写），当步冻结
+                    self.groups[last].fx = if g.up_leg { FxKind::Top } else { FxKind::Bottom };
+                    let mut ev = self.groups[last].to_event();
+                    ev.truncated = true;
+                    let forced = if g.up_leg { MergeDir::Down } else { MergeDir::Up };
+                    self.groups.push(MergedGroup::new_first(u, forced));
+                    return Some(ev);
+                }
+            }
             self.groups[last].absorb(u);
             return None;
         }
@@ -232,6 +272,12 @@ impl CombineEngine {
     /// 进行中单元只读探测：语义与 feed 完全一致（包含并入 → 无分型判定；成新组 → 判原末组），
     /// 但不写入引擎状态；分型事件的冻结去重由调用方管理。
     pub fn probe(&self, u: &MergeUnit) -> ProbeState {
+        self.probe_guarded(u, None)
+    }
+
+    /// 只读探测 + 截断监察（与 feed_guarded 语义一致，不写状态）：
+    /// 命中截断时返回左框分型事件（truncated），组快照按"断开成新组"视角。
+    pub fn probe_guarded(&self, u: &MergeUnit, guard: Option<&TruncGuard>) -> ProbeState {
         if self.groups.is_empty() {
             return ProbeState {
                 fx_event: None,
@@ -248,6 +294,23 @@ impl CombineEngine {
         let last = &self.groups[n - 1];
         let dir = test_combine_range(last.high, last.low, u.high, u.low);
         if dir == MergeDir::Combine {
+            if let Some(g) = guard {
+                if trunc_hit(last, u, g) {
+                    let mut ev = last.to_event();
+                    ev.fx = if g.up_leg { FxKind::Top } else { FxKind::Bottom };
+                    ev.truncated = true;
+                    return ProbeState {
+                        fx_event: Some(ev),
+                        group_high: u.high,
+                        group_low: u.low,
+                        group_fx: FxKind::Unknown,
+                        inner_seq: 0,
+                        group_count: 1,
+                        group_first_uid: u.uid,
+                        group_x1: u.x1,
+                    };
+                }
+            }
             let mut g = last.clone();
             g.absorb(u);
             return ProbeState {
@@ -359,5 +422,77 @@ mod tests {
         let ps2 = eng.probe(&unit(2, 9.5, 7.5));
         assert!(ps2.fx_event.is_none());
         assert_eq!(ps2.group_count, 2);
+    }
+
+    /// 底分型确认后（监控范围>=第四根），第4根暴力反转命中上升截断：
+    /// 左框=顶分型中组高低保持原样，截断K强制断开成新下行组
+    #[test]
+    fn feed_guarded_up_truncation_splits_and_confirms_top() {
+        let mut eng = CombineEngine::new();
+        eng.feed(&unit(0, 10.0, 9.0));
+        eng.feed(&unit(1, 9.0, 8.0));
+        let ev = eng.feed(&unit(2, 10.5, 9.5)).unwrap();
+        assert_eq!(ev.fx, FxKind::Bottom); // 上个底分型最低点=8
+        let guard = TruncGuard { up_leg: true, ref_price: 8.0 };
+        // 第4根：高11>=左框高10.5 且 低7.5<8 → 上升截断
+        let ev = eng.feed_guarded(&unit(3, 11.0, 7.5), Some(&guard)).unwrap();
+        assert_eq!(ev.fx, FxKind::Top);
+        assert!(ev.truncated);
+        assert!((ev.high - 10.5).abs() < 1e-9); // 左框高低不被截断K改写
+        assert!((ev.low - 9.5).abs() < 1e-9);
+        assert_eq!(eng.groups().len(), 4); // 截断K独立成新组
+        assert_eq!(eng.groups()[2].fx, FxKind::Top);
+        assert_eq!(eng.groups()[3].dir, MergeDir::Down);
+        assert_eq!(eng.groups()[3].unit_count, 1);
+    }
+
+    /// 对照：无截断监察时暴力反转K被包含吸收，左框高被改写、信号丢失（旧行为）
+    #[test]
+    fn feed_without_guard_absorbs_violent_bar() {
+        let mut eng = CombineEngine::new();
+        eng.feed(&unit(0, 10.0, 9.0));
+        eng.feed(&unit(1, 9.0, 8.0));
+        eng.feed(&unit(2, 10.5, 9.5));
+        assert!(eng.feed(&unit(3, 11.0, 7.5)).is_none());
+        assert_eq!(eng.groups().len(), 3);
+        assert!((eng.groups()[2].high - 11.0).abs() < 1e-9);
+    }
+
+    /// probe 与 feed 截断语义一致：返回同一事件但不写引擎状态
+    #[test]
+    fn probe_guarded_matches_feed_truncation() {
+        let mut eng = CombineEngine::new();
+        eng.feed(&unit(0, 10.0, 9.0));
+        eng.feed(&unit(1, 9.0, 8.0));
+        eng.feed(&unit(2, 10.5, 9.5));
+        let guard = TruncGuard { up_leg: true, ref_price: 8.0 };
+        let ps = eng.probe_guarded(&unit(3, 11.0, 7.5), Some(&guard));
+        let ev = ps.fx_event.expect("探测应命中截断");
+        assert_eq!(ev.fx, FxKind::Top);
+        assert!(ev.truncated);
+        // 只读：引擎未被修改
+        assert_eq!(eng.groups().len(), 3);
+        assert_eq!(eng.groups()[2].fx, FxKind::Unknown);
+        // 断开成新组视角
+        assert_eq!(ps.group_count, 1);
+        assert_eq!(ps.inner_seq, 0);
+    }
+
+    /// 下降截断镜像：低<=左框低 且 高>上个顶分型最高点 → 左框底分型确认，新组向上
+    #[test]
+    fn feed_guarded_down_truncation_mirror() {
+        let mut eng = CombineEngine::new();
+        eng.feed(&unit(0, 10.0, 9.0));
+        eng.feed(&unit(1, 11.0, 10.5));
+        let ev = eng.feed(&unit(2, 9.5, 8.5)).unwrap();
+        assert_eq!(ev.fx, FxKind::Top); // 上个顶分型最高点=11
+        let guard = TruncGuard { up_leg: false, ref_price: 11.0 };
+        let ev = eng.feed_guarded(&unit(3, 11.5, 8.0), Some(&guard)).unwrap();
+        assert_eq!(ev.fx, FxKind::Bottom);
+        assert!(ev.truncated);
+        assert!((ev.high - 9.5).abs() < 1e-9);
+        assert!((ev.low - 8.5).abs() < 1e-9);
+        assert_eq!(eng.groups().len(), 4);
+        assert_eq!(eng.groups()[3].dir, MergeDir::Up);
     }
 }

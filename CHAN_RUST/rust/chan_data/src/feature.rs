@@ -322,6 +322,7 @@ mod tests {
             value: -1,
             fractal_x1: 0,
             fractal_x2: 2,
+            truncated: false,
         };
         assert_eq!(fractal_extreme_bar_idx(&bars, &conf), Some(0));
     }

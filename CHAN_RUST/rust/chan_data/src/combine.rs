@@ -45,6 +45,9 @@ pub struct BiConfirmSignal {
     pub value: i32,
     pub fractal_x1: i32,
     pub fractal_x2: i32,
+    /// 截断确认（上升/下降截断触发，非常规三元素路径）
+    #[serde(default)]
+    pub truncated: bool,
 }
 
 /// 合并线框 + 笔确认 + 十字线特征 + 笔段链 + N段流水线（一次遍历产出，逐K当下）。
@@ -268,6 +271,7 @@ fn map_seg_analysis(pr: &PipelineResult) -> SegAnalysisBundle {
             fractal_x2: c.fractal_x2,
             fractal_high: c.fractal_high,
             fractal_low: c.fractal_low,
+            truncated: c.truncated,
         })
         .collect();
     let first_seg_dir_signals = if l2.first_dir != 0 {
@@ -352,6 +356,7 @@ pub fn build_kline_combine_bundle_with(
             value: c.value,
             fractal_x1: c.fractal_x1,
             fractal_x2: c.fractal_x2,
+            truncated: c.truncated,
         })
         .collect();
 

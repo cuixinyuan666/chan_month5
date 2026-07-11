@@ -89,6 +89,9 @@ class LevelConfirm {
   /// 是否被用作段端点（同向丢弃/校验失败=false）
   final bool used;
 
+  /// 截断确认（上升/下降截断触发，非常规三元素路径）
+  final bool truncated;
+
   const LevelConfirm({
     required this.x,
     required this.fx,
@@ -100,6 +103,7 @@ class LevelConfirm {
     this.poleX = -1,
     this.triggerUid = -1,
     this.used = false,
+    this.truncated = false,
   });
 
   factory LevelConfirm.fromJson(Map<String, dynamic> json) {
@@ -114,6 +118,7 @@ class LevelConfirm {
       poleX: (json['pole_x'] as num?)?.toInt() ?? -1,
       triggerUid: (json['trigger_uid'] as num?)?.toInt() ?? -1,
       used: json['used'] as bool? ?? false,
+      truncated: json['truncated'] as bool? ?? false,
     );
   }
 }

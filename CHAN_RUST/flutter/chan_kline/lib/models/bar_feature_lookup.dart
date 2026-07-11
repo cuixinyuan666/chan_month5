@@ -53,13 +53,13 @@ class BarFeatureLookup {
 
     final featureByIdx = {for (final f in barFeatures) f.idx: f};
 
-    // 各层确认查表：level_confirms[n][x] = 确认柱值（n段K线合并分型确认，当步冻结）
+    // 各层确认查表：level_confirms[n][x] = 确认记录（n段K线合并分型确认，当步冻结；含截断标记）
     // n 段块显示 n+1 层确认（K线块显示 levels[1] 即笔确认，与旧"K线合并分型确认"一致）
-    final levelConfirmByX = <int, Map<int, int>>{};
+    final levelConfirmByX = <int, Map<int, LevelConfirm>>{};
     for (final lv in levels) {
-      final m = <int, int>{};
+      final m = <int, LevelConfirm>{};
       for (final c in lv.confirms) {
-        if (c.value == 1 || c.value == -1) m[c.x] = c.value;
+        if (c.value == 1 || c.value == -1) m[c.x] = c;
       }
       levelConfirmByX[lv.level] = m;
     }
@@ -202,6 +202,8 @@ class BarFeatureLookup {
         'fractal_x1': sig.fractalX1,
 
         'fractal_x2': sig.fractalX2,
+
+        'truncated': sig.truncated,
 
       };
 
@@ -396,13 +398,13 @@ class BarFeatureLookup {
     final combineHigh = (row['combine_high'] as num?)?.toDouble() ?? high;
     final combineLow = (row['combine_low'] as num?)?.toDouble() ?? low;
 
-    // K线合并分型确认（=1段端点确认）：仅 1 / -1 显示数值，0 或空显示空值
+    // K线合并分型确认（=1段端点确认）：仅 1 / -1 显示数值，0 或空显示空值；截断确认加"(截断)"
     var combineFxConfirm = '';
     final biConfirm = row['bi_confirm'];
     if (biConfirm is Map) {
       final v = biConfirm['value'];
       if (v is num && (v == 1 || v == -1)) {
-        combineFxConfirm = '$v';
+        combineFxConfirm = biConfirm['truncated'] == true ? '$v(截断)' : '$v';
       }
     }
 
@@ -483,18 +485,26 @@ class BarFeatureLookup {
 
       final snap = n - 1 < snapList.length ? snapList[n - 1] : null;
 
-      // n 段块的"合并分型确认"= n+1 层端点确认（当步冻结，n+1 层不存在则空）
+      // n 段块的"合并分型确认"= n+1 层端点确认（当步冻结，n+1 层不存在则空；截断确认带标注）
       int? confirmVal;
+
+      var confirmTruncated = false;
 
       if (confirms is Map) {
 
         final v = confirms[n + 1];
 
-        if (v is int && (v == 1 || v == -1)) confirmVal = v;
+        if (v is LevelConfirm && (v.value == 1 || v.value == -1)) {
+
+          confirmVal = v.value;
+
+          confirmTruncated = v.truncated;
+
+        }
 
       }
 
-      lines.addAll(_levelBlockLines(n, snap, confirmVal));
+      lines.addAll(_levelBlockLines(n, snap, confirmVal, confirmTruncated));
 
     }
 
@@ -504,11 +514,18 @@ class BarFeatureLookup {
 
 
 
-  List<String> _levelBlockLines(int n, LevelSnap? snap, int? confirmVal) {
+  List<String> _levelBlockLines(
+    int n,
+    LevelSnap? snap,
+    int? confirmVal,
+    bool confirmTruncated,
+  ) {
 
     final label = '$n段K线';
 
-    final confirmText = confirmVal == null ? '' : '$confirmVal';
+    final confirmText = confirmVal == null
+        ? ''
+        : (confirmTruncated ? '$confirmVal(截断)' : '$confirmVal');
 
     if (snap == null || snap.unitIdx == null) {
 

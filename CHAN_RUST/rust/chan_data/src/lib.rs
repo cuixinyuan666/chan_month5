@@ -17,7 +17,9 @@ pub use combine::{
     build_bi_combine_frames, build_kline_combine_bundle, build_kline_combine_bundle_with,
     build_kline_combine_frames, BiConfirmSignal, KlineCombineBundle, KlineCombineFrame,
 };
-pub use engine::{CombineEngine, FxEvent, FxKind, MergeDir, MergeUnit, MergedGroup, ProbeState};
+pub use engine::{
+    CombineEngine, FxEvent, FxKind, MergeDir, MergeUnit, MergedGroup, ProbeState, TruncGuard,
+};
 pub use error::{ChanDataError, Result};
 pub use feature::{
     build_bi_virtual_bar_views, enrich_fractal_peak_dist, fractal_extreme_bar_idx,
