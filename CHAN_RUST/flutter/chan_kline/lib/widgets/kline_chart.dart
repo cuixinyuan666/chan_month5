@@ -1975,8 +1975,11 @@ class _KlineCompositePainter extends CustomPainter {
   }
 
   void _drawCrosshair(Canvas canvas, Size size, double contentBottom, double plotTop, PriceRange pr) {
-    final x = crosshairX!.clamp(KlineViewport.padL, size.width - KlineViewport.padR).toDouble();
-    final y = crosshairY!.clamp(plotTop, contentBottom).toDouble();
+    // 绘图区高度不足时避免 clamp 下界>上界
+    final safeRight = math.max(KlineViewport.padL, size.width - KlineViewport.padR);
+    final safeBottom = math.max(plotTop, contentBottom);
+    final x = crosshairX!.clamp(KlineViewport.padL, safeRight).toDouble();
+    final y = crosshairY!.clamp(plotTop, safeBottom).toDouble();
     final plotH = math.max(1.0, mainH - KlineViewport.padT - KlineViewport.padB);
 
     final paint = Paint()
@@ -2014,7 +2017,7 @@ class _KlineCompositePainter extends CustomPainter {
     canvas.drawRect(Rect.fromLTWH(lx, ly, lw, lh), labelBorder);
     tp.paint(canvas, Offset(lx + 6, ly + 4));
 
-  final minuteLike = KlineAxisFormat.isMinuteLike(bars);
+    final minuteLike = KlineAxisFormat.isMinuteLike(bars);
     final timePart = KlineAxisFormat.xLabel(bar.timeText, minuteLike: minuteLike);
     final info = [
       ...featureLookup.crosshairTooltipLines(bar.idx, timePart: timePart),
@@ -2037,9 +2040,14 @@ class _KlineCompositePainter extends CustomPainter {
     final boxH = rows.length * 16.0 + 12;
     var boxX = x + 12;
     if (boxX + boxW > size.width - KlineViewport.padR - 4) boxX = x - boxW - 12;
-    boxX = boxX.clamp(KlineViewport.padL + 4, size.width - KlineViewport.padR - boxW - 4);
+    // N段 tooltip 过宽/过高时上下界可能颠倒，clamp 前先保证 min<=max
+    final minBoxX = KlineViewport.padL + 4;
+    final maxBoxX = size.width - KlineViewport.padR - boxW - 4;
+    boxX = boxX.clamp(minBoxX, math.max(minBoxX, maxBoxX));
     var boxY = y - boxH - 10;
-    boxY = boxY.clamp(plotTop + 4, contentBottom - boxH - 4);
+    final minBoxY = plotTop + 4;
+    final maxBoxY = contentBottom - boxH - 4;
+    boxY = boxY.clamp(minBoxY, math.max(minBoxY, maxBoxY));
     canvas.drawRect(Rect.fromLTWH(boxX, boxY, boxW, boxH), labelBg);
     canvas.drawRect(Rect.fromLTWH(boxX, boxY, boxW, boxH), labelBorder);
     var ry = boxY + 6;
