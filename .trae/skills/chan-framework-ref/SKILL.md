@@ -175,7 +175,7 @@ class CMyAPI(CCommonStockApi):
 | 东方财富 | `CEastmoneyInline` | `EASTMONEY_INLINE_SRC` |
 | 离线数据 | `COfflineInline` | `OFFLINE_INLINE_SRC` |
 
-**数据源优先级链**：`DATA_SOURCE_CHAIN_KLINE` 和 `DATA_SOURCE_CHAIN_CHIP` 分别控制 K 线和筹码全历史的数据源回退链。
+**数据源优先级链**：`DATA_SOURCE_CHAIN_KLINE` 和 `DATA_SOURCE_CHAIN_CHIP` 分别控制 K 线和筹码全历史的数据源回退链。筹码分布的详细设计参见 `chan-chip-distribution` Skill。
 
 ---
 

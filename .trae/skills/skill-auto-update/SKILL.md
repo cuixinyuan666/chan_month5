@@ -92,6 +92,9 @@ skill: <name>
 | `chan-framework-ref` | `.trae/skills/chan-framework-ref/SKILL.md` | `DataAPI/`、`Common/CEnum.py`、`ChanConfig.py`、`Chan.py`、`a_replay_trainer.py`（数据源注册）、数据源常量和优先级链 |
 | `chan-cross-ref-impact` | `.trae/skills/chan-cross-ref-impact/SKILL.md` | 所有核心模块（Bi/、Seg/、ZS/、KLine/、BuySellPoint/、Math/、Common/） |
 | `chan-rust-rewrite` | `.trae/skills/chan-rust-rewrite/SKILL.md` | `chan-core/`（Rust 项目）、核心计算模块（Bi/Seg/ZS/KLine/Combiner/BuySellPoint/Math）、PyO3 绑定、JNI 绑定 |
+| `chan-chip-distribution` | `.trae/skills/chan-chip-distribution/SKILL.md` | `a_replay_trainer.py`（筹码数据源选择、kline_all 管理、chip_tick_bins 注入/下发）、`a_replay_core/a_perf_engine.py`（chip_profile 分桶）、`a_rust_core/src/lib.rs`（Rust 侧 chip_profile）、`a_replay_core/a_replay_kline_view.py`（volume_chip 视图）、前端筹码渲染/筹码峰指标 |
+| `chan-step-rhythm` | `.trae/skills/chan-step-rhythm/SKILL.md` | `a_replay_trainer.py`（节奏线副图计算、bundle 构建、前端渲染）、`chart_lazy_layers`（step_rhythm 懒加载）、`rhythm_calc_mode` 三种计算模式 |
+| `chan-adjacent-bi-ratio` | `.trae/skills/chan-adjacent-bi-ratio/SKILL.md` | `a_replay_trainer.py`（相邻笔比例副图计算、前端渲染）、`chart_lazy_layers`（adjacent_bi_ratio 懒加载）、旧版 `retrace_ratio/trend_ratio` 兼容映射 |
 | `skill-auto-update` | `.trae/skills/skill-auto-update/SKILL.md` | 所有 `SKILL.md` 文件（自身） |
 
 ---

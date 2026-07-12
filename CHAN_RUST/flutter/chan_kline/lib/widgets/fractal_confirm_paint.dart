@@ -6,6 +6,8 @@ import 'package:flutter/material.dart';
 abstract final class FractalConfirmColors {
   static const up = Color(0xFFE53935);
   static const down = Color(0xFF26A69A);
+  /// 浅描边，叠画时从下层标记里“抠”出来
+  static const outline = Color(0xCC121212);
 
   static Color of(int value) => value > 0 ? up : down;
 }
@@ -28,6 +30,17 @@ ConfirmMarkerShape confirmMarkerShapeForKn(int labelKn) {
   }
 }
 
+/// 叠画横向扇形错位：rank=在已选层中的序号(0起)，count=叠层数。
+double confirmStackOffsetX({
+  required int rank,
+  required int count,
+  required double barW,
+}) {
+  if (count <= 1) return 0;
+  final step = math.max(3.0, math.min(barW * 0.45, 7.0));
+  return (rank - (count - 1) / 2.0) * step;
+}
+
 /// 极点距折线：按 Kn 换线型/粗细，叠画可辨。
 ({List<double> dash, double stroke}) peakDistLineStyleForKn(int labelKn) {
   switch (labelKn % 4) {
@@ -42,7 +55,7 @@ ConfirmMarkerShape confirmMarkerShapeForKn(int labelKn) {
   }
 }
 
-/// 在副图画一个 ±1 确认标记（颜色按方向，形状按 Kn）。
+/// 在副图画一个 ±1 确认标记（颜色按方向，形状按 Kn；可描边防叠盖）。
 void paintFractalConfirmMarker(
   Canvas canvas, {
   required double cx,
@@ -51,28 +64,52 @@ void paintFractalConfirmMarker(
   required int value,
   required ConfirmMarkerShape shape,
   required double barW,
+  bool withOutline = true,
 }) {
   if (value == 0) return;
   final color = FractalConfirmColors.of(value);
-  final paint = Paint()
-    ..color = color
-    ..style = PaintingStyle.fill
-    ..strokeWidth = 1.6
-    ..strokeCap = StrokeCap.round;
-
   final tip = Offset(cx, yp);
   final mid = Offset(cx, (y0 + yp) / 2);
   final half = math.max(2.5, barW * 0.55);
+
+  void strokeThenFill(Path path) {
+    if (withOutline) {
+      canvas.drawPath(
+        path,
+        Paint()
+          ..color = FractalConfirmColors.outline
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2.4
+          ..strokeJoin = StrokeJoin.round,
+      );
+    }
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = color
+        ..style = PaintingStyle.fill,
+    );
+  }
+
+  void strokeThenFillRect(Rect rect) {
+    if (withOutline) {
+      canvas.drawRect(
+        rect.inflate(1.0),
+        Paint()
+          ..color = FractalConfirmColors.outline
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2.2,
+      );
+    }
+    canvas.drawRect(rect, Paint()..color = color);
+  }
 
   switch (shape) {
     case ConfirmMarkerShape.bar:
       final top = math.min(yp, y0);
       final height = math.max(1.0, (yp - y0).abs());
       final bw = math.max(2.0, math.min(barW, 8.0));
-      canvas.drawRect(
-        Rect.fromLTWH(cx - bw / 2, top, bw, height),
-        paint,
-      );
+      strokeThenFillRect(Rect.fromLTWH(cx - bw / 2, top, bw, height));
     case ConfirmMarkerShape.diamond:
       final path = Path()
         ..moveTo(mid.dx, mid.dy - half)
@@ -80,28 +117,53 @@ void paintFractalConfirmMarker(
         ..lineTo(mid.dx, mid.dy + half)
         ..lineTo(mid.dx - half, mid.dy)
         ..close();
-      canvas.drawPath(path, paint);
+      strokeThenFill(path);
     case ConfirmMarkerShape.triangle:
-      final path = Path();
-      if (value > 0) {
-        // 向上三角（顶在 tip）
-        path
-          ..moveTo(tip.dx, tip.dy)
-          ..lineTo(tip.dx - half, y0)
-          ..lineTo(tip.dx + half, y0)
-          ..close();
-      } else {
-        path
-          ..moveTo(tip.dx, tip.dy)
-          ..lineTo(tip.dx - half, y0)
-          ..lineTo(tip.dx + half, y0)
-          ..close();
-      }
-      canvas.drawPath(path, paint);
+      final path = Path()
+        ..moveTo(tip.dx, tip.dy)
+        ..lineTo(tip.dx - half, y0)
+        ..lineTo(tip.dx + half, y0)
+        ..close();
+      strokeThenFill(path);
     case ConfirmMarkerShape.circle:
-      canvas.drawCircle(mid, half * 0.85, paint);
+      if (withOutline) {
+        canvas.drawCircle(
+          mid,
+          half * 0.85 + 1.0,
+          Paint()
+            ..color = FractalConfirmColors.outline
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 2.2,
+        );
+      }
+      canvas.drawCircle(
+        mid,
+        half * 0.85,
+        Paint()..color = color,
+      );
     case ConfirmMarkerShape.cross:
-      paint.style = PaintingStyle.stroke;
+      final paint = Paint()
+        ..color = color
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.8
+        ..strokeCap = StrokeCap.round;
+      if (withOutline) {
+        final outline = Paint()
+          ..color = FractalConfirmColors.outline
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 3.2
+          ..strokeCap = StrokeCap.round;
+        canvas.drawLine(
+          Offset(mid.dx - half, mid.dy - half),
+          Offset(mid.dx + half, mid.dy + half),
+          outline,
+        );
+        canvas.drawLine(
+          Offset(mid.dx + half, mid.dy - half),
+          Offset(mid.dx - half, mid.dy + half),
+          outline,
+        );
+      }
       canvas.drawLine(
         Offset(mid.dx - half, mid.dy - half),
         Offset(mid.dx + half, mid.dy + half),

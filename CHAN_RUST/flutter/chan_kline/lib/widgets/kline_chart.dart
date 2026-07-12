@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import '../compute/bi_combine_compute.dart';
 import '../compute/bi_virtual_bar_view_compute.dart';
 import '../compute/chart_view_compute.dart';
+import '../compute/level_unit_bar_view_compute.dart';
 import '../models/bi_confirm_signal.dart';
 import '../models/bar_crosshair_feature.dart';
 import '../models/bi_segment.dart';
@@ -1145,7 +1146,7 @@ class _KlineCompositePainter extends CustomPainter {
     }
   }
 
-  /// 主图 Kn 合并框（kn≥2）：用该层 combineFrames。
+  /// 主图 Kn 合并（kn≥2）：先铺淡 KN 单元线，再描该层合并框（对齐 K1合并）。
   void _drawLevelCombineOnMainChart(
     Canvas canvas,
     double w,
@@ -1162,19 +1163,164 @@ class _KlineCompositePainter extends CustomPainter {
         break;
       }
     }
-    if (bundle == null || bundle.combineFrames.isEmpty) return;
-    final style = ChartLevelLineStyle.forLevel(kn);
-    _drawCombineFramesOnMainChart(
-      canvas,
-      w,
-      plotTop,
-      plotH,
-      barW,
-      slotW,
-      bundle.combineFrames,
-      style.color.withValues(alpha: 0.85),
-      style.color.withValues(alpha: 0.08),
+    if (bundle == null) return;
+    if (bundle.combineFrames.isEmpty &&
+        bundle.unitBars.isEmpty &&
+        bundle.activeUnit == null) {
+      return;
+    }
+
+    final views = buildLevelUnitBarViews(
+      bundle.unitBars,
+      activeUnit: bundle.activeUnit,
     );
+    if (views.isNotEmpty) {
+      _drawLevelUnitCandles(
+        canvas,
+        w,
+        plotTop,
+        plotH,
+        barW,
+        slotW,
+        views,
+        faint: true,
+      );
+    }
+
+    if (bundle.combineFrames.isNotEmpty) {
+      final style = ChartLevelLineStyle.forLevel(kn);
+      _drawCombineFramesOnMainChart(
+        canvas,
+        w,
+        plotTop,
+        plotH,
+        barW,
+        slotW,
+        bundle.combineFrames,
+        style.color.withValues(alpha: 0.85),
+        style.color.withValues(alpha: 0.08),
+        // 有单元 view 时按半侧衔接框对齐（同 K1合并）
+        levelUnitViews: views,
+      );
+    }
+  }
+
+  /// Kn 单元线（淡色底层，仿笔 K [_drawBiVirtualCandles]）。
+  void _drawLevelUnitCandles(
+    Canvas canvas,
+    double w,
+    double plotTop,
+    double plotH,
+    double barW,
+    double slotW,
+    List<LevelUnitBarView> views, {
+    bool faint = false,
+  }) {
+    if (views.isEmpty) return;
+    final upBody = faint ? const Color(0x38E53935) : const Color(0x88E53935);
+    final dnBody = faint ? const Color(0x3826A69A) : const Color(0x8826A69A);
+    final upStroke = faint ? const Color(0x55E53935) : const Color(0xFFE53935);
+    final dnStroke = faint ? const Color(0x5526A69A) : const Color(0xFF26A69A);
+
+    for (final v in views) {
+      if (v.viewX2 < viewport.viewXMin - 1 || v.viewX1 > viewport.viewXMax + 1) {
+        continue;
+      }
+      final (left, right) = _levelUnitBarHSpan(v, w, slotW, barW);
+      final cx = (left + right) / 2;
+      final spanW = math.max(2.0, right - left);
+      final isUp = v.isUp;
+      final stroke = Paint()
+        ..color = isUp ? upStroke : dnStroke
+        ..strokeWidth = 1.6;
+      final fill = Paint()..color = isUp ? upBody : dnBody;
+
+      final yH = priceRange.yOf(v.high, plotTop, plotH);
+      final yL = priceRange.yOf(v.low, plotTop, plotH);
+      final yO = priceRange.yOf(v.open, plotTop, plotH);
+      final yC = priceRange.yOf(v.close, plotTop, plotH);
+
+      canvas.drawLine(Offset(cx, yH), Offset(cx, yL), stroke);
+      final top = math.min(yO, yC);
+      final bottom = math.max(yO, yC);
+      final rect = Rect.fromLTWH(left, top, spanW, math.max(1.0, bottom - top));
+      canvas.drawRect(rect, fill);
+      canvas.drawRect(rect, stroke);
+    }
+  }
+
+  /// Kn 单元线横向半侧锚定（同 [_biVirtualBarHSpan]）。
+  (double left, double right) _levelUnitBarHSpan(
+    LevelUnitBarView v,
+    double w,
+    double slotW,
+    double barW,
+  ) {
+    var (left, right) = _combineFrameHSpan(v.viewX1, v.viewX2, w, slotW, barW);
+    if (v.endAtLeftHalf) {
+      right = math.min(right, _barCenterX(v.viewX2, w, slotW));
+    }
+    if (v.startAtRightHalf) {
+      left = math.max(left, _barCenterX(v.viewX1, w, slotW));
+    }
+    if (right - left < 2.0) {
+      final mid = (left + right) / 2;
+      left = mid - 1.0;
+      right = mid + 1.0;
+    }
+    return (left, right);
+  }
+
+  /// 按 frame.x1 + count 取层内单元 view（仿 [_biViewsForCombineFrame]）。
+  List<LevelUnitBarView> _levelViewsForCombineFrame(
+    KlineCombineFrame f,
+    List<LevelUnitBarView> views,
+  ) {
+    final startIdx = views.indexWhere((v) => v.viewX1 == f.x1);
+    if (startIdx < 0) return const [];
+    final end = math.min(startIdx + f.count, views.length);
+    if (end <= startIdx) return const [];
+    return views.sublist(startIdx, end);
+  }
+
+  /// Kn 合并框横向：有单元 view 时对齐半侧衔接（同 [_biCombineFrameSpan]）。
+  (double left, double right) _levelCombineFrameSpan(
+    KlineCombineFrame f,
+    double w,
+    double slotW,
+    double barW,
+    List<LevelUnitBarView> views,
+  ) {
+    final related = _levelViewsForCombineFrame(f, views);
+    if (related.isEmpty) {
+      return _combineFrameSpan(f, w, slotW, barW);
+    }
+    final first = related.first;
+    final last = related.last;
+    var (left, right) = _combineFrameHSpan(
+      first.viewX1,
+      last.viewX2,
+      w,
+      slotW,
+      barW,
+    );
+    if (f.count <= 1) {
+      final v = first;
+      if (v.endAtLeftHalf) {
+        right = math.min(right, _barCenterX(v.viewX2, w, slotW));
+      }
+      if (v.startAtRightHalf) {
+        left = math.max(left, _barCenterX(v.viewX1, w, slotW));
+      }
+      if (v.endAtLeftHalf || v.startAtRightHalf) {
+        if (right - left < 2.0) {
+          final mid = (left + right) / 2;
+          left = mid - 1.0;
+          right = mid + 1.0;
+        }
+      }
+    }
+    return (left, right);
   }
 
   /// 单层 N 段（level≥2）已冻结段 + 构建中段。
@@ -1491,6 +1637,7 @@ class _KlineCompositePainter extends CustomPainter {
     Color strokeColor,
     Color fillColor, {
     bool alignBiCombineWithViews = false,
+    List<LevelUnitBarView>? levelUnitViews,
   }) {
     if (frames.isEmpty) return;
 
@@ -1508,7 +1655,9 @@ class _KlineCompositePainter extends CustomPainter {
 
       final (xLeft, xRight) = alignBiCombineWithViews
           ? _biCombineFrameSpan(f, w, slotW, barW)
-          : _combineFrameSpan(f, w, slotW, barW);
+          : (levelUnitViews != null && levelUnitViews.isNotEmpty)
+              ? _levelCombineFrameSpan(f, w, slotW, barW, levelUnitViews)
+              : _combineFrameSpan(f, w, slotW, barW);
       var yTop = priceRange.yOf(f.high, plotTop, plotH);
       var yBottom = priceRange.yOf(f.low, plotTop, plotH);
       var height = (yBottom - yTop).abs();
@@ -1592,15 +1741,24 @@ class _KlineCompositePainter extends CustomPainter {
     if (subIndicators.any((e) => e.kind == SubIndicatorKind.volume)) {
       _drawVolume(canvas, w, innerTop, innerBottom, innerH, barW, slotW);
     }
-    // 勾哪层画哪层；叠加时多层叠画
+    // 勾哪层画哪层；叠加时横向错位+描边，避免同 x 盖住
     final confirmKns = subIndicators
         .where((e) => e.kind == SubIndicatorKind.fractalConfirm)
         .map((e) => e.kn)
         .toList()
       ..sort();
-    for (final kn in confirmKns) {
+    for (var i = 0; i < confirmKns.length; i++) {
       _drawKnFractalConfirmSubChart(
-          canvas, w, innerTop, innerH, barW, slotW, kn);
+        canvas,
+        w,
+        innerTop,
+        innerH,
+        barW,
+        slotW,
+        confirmKns[i],
+        stackRank: i,
+        stackCount: confirmKns.length,
+      );
     }
     final peakKns = subIndicators
         .where((e) => e.kind == SubIndicatorKind.fractalPeakDist)
@@ -1641,7 +1799,7 @@ class _KlineCompositePainter extends CustomPainter {
     }
   }
 
-  /// 单层 Kn 分型确认：红涨绿跌；不同 Kn 用不同标记形状。
+  /// 单层 Kn 分型确认：红涨绿跌；形状按 Kn；叠画时横向扇形错位 + 描边。
   void _drawKnFractalConfirmSubChart(
     Canvas canvas,
     double w,
@@ -1649,8 +1807,10 @@ class _KlineCompositePainter extends CustomPainter {
     double innerH,
     double barW,
     double slotW,
-    int labelKn,
-  ) {
+    int labelKn, {
+    int stackRank = 0,
+    int stackCount = 1,
+  }) {
     const minV = -1.0;
     const maxV = 1.0;
     final span = maxV - minV;
@@ -1658,11 +1818,16 @@ class _KlineCompositePainter extends CustomPainter {
     final y0 = subY(0);
     final shape = confirmMarkerShapeForKn(labelKn);
     final level = labelKn + 1;
+    final dx = confirmStackOffsetX(
+      rank: stackRank,
+      count: stackCount,
+      barW: barW,
+    );
 
     void paintPoint(int x, int value) {
       if (x < viewport.viewXMin - 1 || x > viewport.viewXMax + 1) return;
       if (value == 0) return;
-      final cx = _barCenterX(x, w, slotW);
+      final cx = _barCenterX(x, w, slotW) + dx;
       final yp = subY(value.toDouble());
       paintFractalConfirmMarker(
         canvas,
@@ -1672,6 +1837,7 @@ class _KlineCompositePainter extends CustomPainter {
         value: value,
         shape: shape,
         barW: barW,
+        withOutline: stackCount > 1,
       );
     }
 

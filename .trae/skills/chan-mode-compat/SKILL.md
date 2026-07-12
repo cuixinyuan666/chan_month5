@@ -181,7 +181,7 @@ description: "缠论复盘系统多模式兼容性检查。当修改 a_replay_tr
 
 - [ ] 新增逻辑是否依赖原始 K 线数量？quantity 模式下数量会变
 - [ ] 是否依赖在线数据源？tick_traditional/tick_quantity 仅离线
-- [ ] 筹码分布逻辑是否兼容 4 种形态？
+- [ ] 筹码分布逻辑是否兼容 4 种形态？（详见 `chan-chip-distribution` Skill）
 - [ ] reconfig 时是否需要重建会话？（quantity/tick_* 需要）
 
 ### ✅ 数据喂入兼容
@@ -189,6 +189,7 @@ description: "缠论复盘系统多模式兼容性检查。当修改 a_replay_tr
 - [ ] unified 模式下不可用的功能是否做了 `if feed_mode == "unified": return` 防护？
 - [ ] unified 模式下步进相关操作是否被正确禁用？
 - [ ] step 模式下的增量计算逻辑是否在 unified 模式下被跳过？
+- [ ] 节奏线副图（step_rhythm）是否仅在 step 模式下输出？（详见 `chan-step-rhythm` Skill）
 
 ### ✅ K线呈现兼容
 
