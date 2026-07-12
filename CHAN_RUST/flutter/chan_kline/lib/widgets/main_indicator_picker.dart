@@ -2,14 +2,12 @@ import 'package:flutter/material.dart';
 
 import '../models/chart_indicator.dart';
 
-/// 主图指标选择：支持单选 / 叠加；点遮罩外关闭并保存；可全不选。
-/// [available] 由当前数据 maxKn 动态生成。
+/// 主图指标选择：大类 Divider；过长可滚轮滚动；点遮罩外关闭并保存。
 Future<Set<MainChartIndicator>?> showMainIndicatorPicker({
   required BuildContext context,
   required Set<MainChartIndicator> selected,
   required List<MainChartIndicator> available,
 }) {
-  // 点外部关闭时 dialog 返回 null，用 holder 带回最新草稿
   final draftHolder = <Set<MainChartIndicator>>[
     Set<MainChartIndicator>.from(selected),
   ];
@@ -43,6 +41,7 @@ class _MainIndicatorPickerDialog extends StatefulWidget {
 class _MainIndicatorPickerDialogState extends State<_MainIndicatorPickerDialog> {
   late Set<MainChartIndicator> _draft;
   late bool _stackMode;
+  final _scrollCtrl = ScrollController();
 
   @override
   void initState() {
@@ -50,6 +49,12 @@ class _MainIndicatorPickerDialogState extends State<_MainIndicatorPickerDialog> 
     _draft = Set<MainChartIndicator>.from(widget.initial);
     _stackMode = _draft.length > 1;
     widget.onDraftChanged(_draft);
+  }
+
+  @override
+  void dispose() {
+    _scrollCtrl.dispose();
+    super.dispose();
   }
 
   void _setDraft(Set<MainChartIndicator> next) {
@@ -82,8 +87,56 @@ class _MainIndicatorPickerDialogState extends State<_MainIndicatorPickerDialog> 
     });
   }
 
+  List<Widget> _buildTiles() {
+    final tiles = <Widget>[];
+    MainIndicatorKind? prevKind;
+    for (final item in widget.available) {
+      // 大类切换处加 Divider（如 K4合并 | K1连线）
+      if (prevKind != null && prevKind != item.kind) {
+        tiles.add(
+          const Divider(
+            height: 16,
+            thickness: 1,
+            color: Color(0x44FFFFFF),
+          ),
+        );
+      }
+      prevKind = item.kind;
+      if (_stackMode) {
+        tiles.add(
+          CheckboxListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            controlAffinity: ListTileControlAffinity.trailing,
+            activeColor: const Color(0xFF42A5F5),
+            title: Text(item.label, style: const TextStyle(fontSize: 14)),
+            value: _draft.contains(item),
+            onChanged: (v) => _toggleStackItem(item, v),
+          ),
+        );
+      } else {
+        final picked = _draft.contains(item);
+        tiles.add(
+          ListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            title: Text(item.label),
+            trailing: Icon(
+              picked ? Icons.radio_button_checked : Icons.radio_button_off,
+              size: 18,
+              color: picked ? const Color(0xFF42A5F5) : const Color(0x66FFFFFF),
+            ),
+            onTap: () => _pickSingle(item),
+          ),
+        );
+      }
+    }
+    return tiles;
+  }
+
   @override
   Widget build(BuildContext context) {
+    final maxH = MediaQuery.sizeOf(context).height * 0.55;
     return AlertDialog(
       backgroundColor: const Color(0xFF1E1E1E),
       title: const Text('主图指标', style: TextStyle(color: Colors.white)),
@@ -116,37 +169,27 @@ class _MainIndicatorPickerDialogState extends State<_MainIndicatorPickerDialog> 
             if (widget.available.isEmpty)
               const Padding(
                 padding: EdgeInsets.symmetric(vertical: 12),
-                child: Text('暂无可选指标', style: TextStyle(color: Color(0x99FFFFFF))),
-              ),
-            ...widget.available.map((item) {
-              if (_stackMode) {
-                return CheckboxListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  controlAffinity: ListTileControlAffinity.trailing,
-                  activeColor: const Color(0xFF42A5F5),
-                  title: Text(item.label, style: const TextStyle(fontSize: 14)),
-                  value: _draft.contains(item),
-                  onChanged: (v) => _toggleStackItem(item, v),
-                );
-              }
-              final picked = _draft.contains(item);
-              return ListTile(
-                dense: true,
-                contentPadding: EdgeInsets.zero,
-                title: Text(item.label),
-                trailing: Icon(
-                  picked ? Icons.radio_button_checked : Icons.radio_button_off,
-                  size: 18,
-                  color: picked ? const Color(0xFF42A5F5) : const Color(0x66FFFFFF),
+                child: Text('暂无可选指标',
+                    style: TextStyle(color: Color(0x99FFFFFF))),
+              )
+            else
+              ConstrainedBox(
+                constraints: BoxConstraints(maxHeight: maxH),
+                child: Scrollbar(
+                  controller: _scrollCtrl,
+                  thumbVisibility: true,
+                  child: SingleChildScrollView(
+                    controller: _scrollCtrl,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: _buildTiles(),
+                    ),
+                  ),
                 ),
-                onTap: () => _pickSingle(item),
-              );
-            }),
+              ),
           ],
         ),
       ),
-      // 无取消/确定：点遮罩外即关闭并保存
       actions: const [],
     );
   }

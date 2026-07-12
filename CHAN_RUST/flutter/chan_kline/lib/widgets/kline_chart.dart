@@ -19,6 +19,7 @@ import '../models/bar_feature_lookup.dart';
 import '../models/level_models.dart';
 import '../models/seg_analysis.dart';
 import 'chart_level_line_style.dart';
+import 'fractal_confirm_paint.dart';
 import 'indicator_picker_chip.dart';
 import 'kline_axis_format.dart';
 import 'kline_viewport.dart';
@@ -1640,14 +1641,7 @@ class _KlineCompositePainter extends CustomPainter {
     }
   }
 
-  /// KN 分型确认柱颜色：labelKn=0→K0分型确认（level=1），以此类推
-  Color _knConfirmColor(int labelKn) {
-    final level = labelKn + 1;
-    if (level <= 1) return const Color(0xFFE53935);
-    return ChartLevelLineStyle.forLevel(level).color;
-  }
-
-  /// 单层 Kn 分型确认柱（labelKn → level=labelKn+1）。
+  /// 单层 Kn 分型确认：红涨绿跌；不同 Kn 用不同标记形状。
   void _drawKnFractalConfirmSubChart(
     Canvas canvas,
     double w,
@@ -1662,8 +1656,7 @@ class _KlineCompositePainter extends CustomPainter {
     final span = maxV - minV;
     double subY(double v) => innerTop + (maxV - v) / span * innerH;
     final y0 = subY(0);
-    final barWClamped = math.max(2.0, math.min(barW, 8.0));
-    final color = _knConfirmColor(labelKn);
+    final shape = confirmMarkerShapeForKn(labelKn);
     final level = labelKn + 1;
 
     void paintPoint(int x, int value) {
@@ -1671,11 +1664,14 @@ class _KlineCompositePainter extends CustomPainter {
       if (value == 0) return;
       final cx = _barCenterX(x, w, slotW);
       final yp = subY(value.toDouble());
-      final top = math.min(yp, y0);
-      final height = math.max(1.0, (yp - y0).abs());
-      canvas.drawRect(
-        Rect.fromLTWH(cx - barWClamped / 2, top, barWClamped, height),
-        Paint()..color = color,
+      paintFractalConfirmMarker(
+        canvas,
+        cx: cx,
+        y0: y0,
+        yp: yp,
+        value: value,
+        shape: shape,
+        barW: barW,
       );
     }
 
@@ -1721,7 +1717,7 @@ class _KlineCompositePainter extends CustomPainter {
     return out;
   }
 
-  /// 单层 Kn 分型极点距折线（labelKn → level=labelKn+1）。
+  /// 单层 Kn 分型极点距：不同 Kn 换线型/粗细，叠画可辨。
   void _drawKnFractalPeakDistSubChart(
     Canvas canvas,
     double w,
@@ -1766,25 +1762,30 @@ class _KlineCompositePainter extends CustomPainter {
     final span = math.max(1.0, maxV);
     double subY(double v) => innerTop + (span - v) / span * innerH;
 
+    final style = peakDistLineStyleForKn(labelKn);
     final linePaint = Paint()
       ..color = color
-      ..strokeWidth = 1.2
-      ..style = PaintingStyle.stroke;
-    final path = Path();
-    var started = false;
+      ..strokeWidth = style.stroke
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+
+    Offset? prev;
     for (var i = 0; i < series.length; i++) {
       final idx = bars[i].idx;
-      if (idx < viewport.viewXMin - 1 || idx > viewport.viewXMax + 1) continue;
-      final x = _barCenterX(idx, w, slotW);
-      final y = subY(series[i].toDouble());
-      if (!started) {
-        path.moveTo(x, y);
-        started = true;
-      } else {
-        path.lineTo(x, y);
+      if (idx < viewport.viewXMin - 1 || idx > viewport.viewXMax + 1) {
+        prev = null;
+        continue;
       }
+      final p = Offset(_barCenterX(idx, w, slotW), subY(series[i].toDouble()));
+      if (prev != null) {
+        if (style.dash.isEmpty) {
+          canvas.drawLine(prev, p, linePaint);
+        } else {
+          _drawPatternLine(canvas, prev, p, linePaint, style.dash);
+        }
+      }
+      prev = p;
     }
-    if (started) canvas.drawPath(path, linePaint);
   }
 
   void _drawYLabels(Canvas canvas, double w, double plotTop, double plotH, PriceRange pr) {
