@@ -53,10 +53,13 @@ class AppDebugSnapshot {
       '层级：K0=原始K，K1=笔，K2=线段，Kn=第n层；旧「n段」=Kn；旧「笔连线」=K1连线。',
     );
     buf.writeln(
-      'Kn流水线：K(n-1)→包含合并→三元素分型确认→锚定配对→Kn；逐K当下冻结，未来结构不回写旧标签。',
+      'Kn流水线：K(n-1)→包含合并→三元素分型确认→锚定配对→Kn；'
+      '全层同构：必须等下层单元确认冻结后才能参与上层；'
+      '逐K当下冻结，未来结构不回写旧标签。',
     );
     buf.writeln(
-      '十字线 tooltip 走 bar_features.levels[] 各层 LevelSnap；主图连线可含末态展示修正。',
+      '十字线 tooltip 走 bar_features.levels[] 各层 LevelSnap；'
+      '进行中单元可只读探测上层合并态（仅展示）；主图连线可含末态展示修正。',
     );
     buf.writeln(
       '首段策略 default_bi_policy=$defaultBiPolicy（pending/retained/purged）；'

@@ -7,7 +7,8 @@
 //! 3. **首段业务策略同构**（全层）：pending 占位 + 反向极值 trial + retained/purged（`segment_first.rs`）。
 //!
 //! 每层递归：输入单元包含合并 → 三元素分型确认（冻结不回写）→ 锚定配对 → Kn → 喂上层。
-//! 进行中单元（anchor 极点 → 当步K 区间）逐层向上只读探测，段确认可早于整段冻结（方案A）。
+//! 全层同构约束：**必须等 K(n-1) 单元永久冻结后才能参与 Kn**（禁止行进中下层提前确认上层）。
+//! 进行中单元仍可只读探测上层合并态，但仅用于十字线/展示快照，不触发 `on_confirm`。
 
 use std::collections::{HashSet, VecDeque};
 
@@ -499,7 +500,7 @@ impl LevelState {
         let mut used = false;
         let mut outs = Vec::new();
 
-        // trial 输入：已喂入前缀 + 探测触发单元（probe 路径可能尚未永久 feed）
+        // trial 输入：已喂入前缀（上层只接受永久冻结的下层单元）
         let mut trial_inputs = self.input_prefix.clone();
         if let Some(t) = trigger_ub {
             if trial_inputs.iter().all(|u| u.idx != t.idx) {
@@ -898,42 +899,8 @@ pub fn run_pipeline(bars: &[KlineBar], opt: &PipelineOptions) -> PipelineResult 
         };
         propagate(&mut levels, 0, vec![ku], bar_x, bars, opt);
 
-        // 2) 探测流：li 层进行中 Kn → li+1 层引擎只读探测（提前段确认，方案A）
-        let mut li = 0usize;
-        while li + 1 < levels.len() {
-            let pu_opt = levels[li].provisional_unit(bars, i);
-            if let Some(pu) = pu_opt {
-                // 探测流同样带截断监察（与 feed_guarded 语义一致，不写状态）
-                let guard = levels[li + 1].trunc_guard();
-                let ev_opt = levels[li + 1]
-                    .engine
-                    .probe_guarded(&pu.0, guard.as_ref())
-                    .fx_event;
-                if let Some(ev) = ev_opt {
-                    let probe_ub = {
-                        let dir = levels[li]
-                            .anchor
-                            .as_ref()
-                            .map(|a| if a.fx == FxKind::Bottom { 1 } else { -1 })
-                            .unwrap_or(0);
-                        make_unit_bar(bars, pu.0.uid, dir, pu.0.x1, pu.0.x2, bar_x)
-                    };
-                    let outs = levels[li + 1].on_confirm(
-                        &ev,
-                        bar_x,
-                        pu.0.uid,
-                        bars,
-                        Some(probe_ub),
-                    );
-                    if !outs.is_empty() {
-                        propagate(&mut levels, li + 2, outs, bar_x, bars, opt);
-                    }
-                }
-            }
-            li += 1;
-        }
-
-        // 3) 快照（逐K当下冻结）
+        // 2) 快照（逐K当下冻结）
+        // 进行中单元只读探测仅发生在 snapshot 内（展示用），不在此提前 on_confirm。
         // K线合并快照：当步K必在 Level1 引擎末组
         let ksnap = levels[0]
             .engine
@@ -1263,5 +1230,90 @@ mod tests {
                 lv.segment_policy
             );
         }
+    }
+
+    /// 全层同构：Kn 确认的 trigger 必须是已永久冻结的 K(n-1) 单元
+    /// （禁止用行进中下层探测提前确认）。
+    fn assert_upper_confirms_use_frozen_lower(pr: &PipelineResult) {
+        for li in 1..pr.levels.len() {
+            let lower = &pr.levels[li - 1];
+            let upper = &pr.levels[li];
+            for c in &upper.confirms {
+                let u = lower
+                    .unit_bars
+                    .iter()
+                    .find(|u| u.idx == c.trigger_uid)
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "K{} 确认 x={} trigger_uid={} 在 K{} 冻结单元中不存在（疑似行进中探测）",
+                            upper.level, c.x, c.trigger_uid, lower.level
+                        )
+                    });
+                assert!(
+                    u.confirm_x <= c.x,
+                    "K{} 确认 x={} 早于触发单元 K{}#{} 的冻结步 confirm_x={}（禁止未确认下层参与上层）",
+                    upper.level,
+                    c.x,
+                    lower.level,
+                    u.idx,
+                    u.confirm_x
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn upper_confirm_requires_frozen_lower_unit_zigzag() {
+        let bars = zigzag(120);
+        let pr = run_pipeline(
+            &bars,
+            &PipelineOptions {
+                truncation_check: false,
+                ..PipelineOptions::default()
+            },
+        );
+        if pr.levels.len() >= 2 {
+            assert_upper_confirms_use_frozen_lower(&pr);
+        }
+    }
+
+    /// 实盘样本：旧方案A 会在 K1 未冻结时提前确认 K2（如 10:37 用进行中 K1#93）。
+    #[test]
+    fn upper_confirm_requires_frozen_lower_unit_688687() {
+        let data_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../a_Data");
+        if !data_root.join("688687").exists() {
+            eprintln!("skip: a_Data/688687 不存在");
+            return;
+        }
+        let root = crate::resolve_data_root(Some(data_root.to_str().unwrap()));
+        let bars = crate::load_klines(
+            &root,
+            "688687",
+            "2024/01/01 09:30:00",
+            "2024/01/30 15:00:00",
+            crate::KlinePeriod::M1,
+        )
+        .expect("load 688687");
+        let pr = run_pipeline(
+            &bars,
+            &PipelineOptions {
+                truncation_check: false,
+                ..PipelineOptions::default()
+            },
+        );
+        assert!(pr.levels.len() >= 2);
+        // 旧行为对照锚点：K2 顶曾在 x=307、trigger=未冻结的 K1#93
+        if let Some(c) = pr.levels[1].confirms.iter().find(|c| c.pole_x == 303) {
+            if let Some(u) = pr.levels[0].unit_bars.iter().find(|u| u.idx == c.trigger_uid) {
+                assert!(
+                    u.confirm_x <= c.x,
+                    "回归锚点：K2 顶 pole=303 确认 x={} 不得早于触发 K1#{} 冻结 confirm_x={}",
+                    c.x,
+                    u.idx,
+                    u.confirm_x
+                );
+            }
+        }
+        assert_upper_confirms_use_frozen_lower(&pr);
     }
 }
