@@ -39,7 +39,13 @@ Future<void> main() async {
       await windowManager.focus();
     });
   }
-  runApp(const ChanKlineApp());
+  // Windows 无障碍桥在 Tooltip/设置面板开关等场景会刷 AXTree 报错（引擎已知问题），
+  // K 线桌面端不依赖读屏，直接关掉 Semantics 避免干扰排查。
+  Widget app = const ChanKlineApp();
+  if (Platform.isWindows) {
+    app = ExcludeSemantics(child: app);
+  }
+  runApp(app);
 }
 
 class ChanKlineApp extends StatelessWidget {
@@ -106,6 +112,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
   bool _loadingChart = false;
   bool _panelExpanded = false;
   int _panelEdge = 1; // 默认右贴边（设置按钮在右上）
+  /// 截断监察：开=当前口径；关=添加截断前旧行为（暴力反转被吸收）
+  bool _truncationCheck = true;
 
   bool get _busy => _bootstrapping || _loadingChart;
   bool get _hasSession => _allBars.isNotEmpty;
@@ -214,7 +222,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
       await _loadKlines();
       _msgHistory.append(
         '初始化完成：代码=$_selectedCode 周期=${_periods[_period] ?? _period} '
-        '根目录=$_dataRoot；口径=K0原始K/K1笔/K2线段/Kn第n层',
+        '根目录=$_dataRoot；口径=K0原始K/K1笔/K2线段/Kn第n层；'
+        '截断=${_truncationCheck ? "开" : "关"}',
       );
     } catch (e) {
       setState(() => _error = e.toString());
@@ -289,7 +298,10 @@ class _KlineHomePageState extends State<KlineHomePage> {
       return;
     }
     try {
-      final bundle = _bridge.buildKlineCombineBundle(_visibleBars);
+      final bundle = _bridge.buildKlineCombineBundle(
+        _visibleBars,
+        truncationCheck: _truncationCheck,
+      );
       if (bundle.defaultBiPolicy == 'purged') {
         _defaultBiPurged = true;
       }
@@ -328,7 +340,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
     _msgHistory.append(
       '$prefix @$_visibleCount/${_allBars.length} idx=${tail.idx} '
       '层数=$levelCount 末层Kn段=$lastLevelSegs K1段=${_biSegments.length} '
-      'policy=$_defaultBiPolicy',
+      'policy=$_defaultBiPolicy 截断=${_truncationCheck ? "开" : "关"}',
     );
   }
 
@@ -345,6 +357,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       visibleCount: _visibleCount,
       playing: _playing,
       defaultBiPolicy: _defaultBiPolicy,
+      truncationCheck: _truncationCheck,
       subIndicatorLabels: _subIndicators.map((e) => e.label).toSet(),
       mainIndicatorLabels: _mainIndicators.map((e) => e.label).toSet(),
       visibleBars: _visibleBars,
@@ -472,6 +485,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
                   segAnalysis: _segAnalysis,
                   levels: _levels,
                   defaultBiPolicy: _defaultBiPolicy,
+                  truncationCheck: _truncationCheck,
                   mainIndicators: _mainIndicators,
                   onMainIndicatorsChanged: (v) =>
                       setState(() => _mainIndicators = v),
@@ -538,10 +552,15 @@ class _KlineHomePageState extends State<KlineHomePage> {
     );
   }
 
-  /// 透明标题条：左侧拖动；右侧设置紧贴最小化。
+  /// 透明标题条：中部拖动；右侧设置紧贴最小化。
+  /// 左侧开孔穿透，避免挡住 K 线区「主图指标选择」。
   Widget _buildCaptionBar() {
     return Row(
       children: [
+        // 与「主图指标选择」按钮同宽留白，点击穿透到下层 InkWell
+        const IgnorePointer(
+          child: SizedBox(width: 100, height: 36),
+        ),
         Expanded(
           child: DragToMoveArea(
             child: Container(color: Colors.transparent),
@@ -645,6 +664,34 @@ class _KlineHomePageState extends State<KlineHomePage> {
           value: _fmtDateTime(_endDate),
           onTap: _busy ? null : () => _pickDateTime(isBegin: false),
         ),
+        const SizedBox(height: 8),
+        // 截断监察开关：对照「加截断前」旧行为
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          dense: true,
+          title: const Text('截断机制', style: TextStyle(fontSize: 13)),
+          subtitle: Text(
+            _truncationCheck ? '已开启（当前口径）' : '已关闭（旧吸收行为）',
+            style: const TextStyle(fontSize: 11),
+          ),
+          value: _truncationCheck,
+          onChanged: _busy
+              ? null
+              : (v) {
+                  setState(() {
+                    _truncationCheck = v;
+                    _defaultBiPurged = false;
+                  });
+                  _msgHistory.append('截断机制=${v ? "开" : "关"}，重算当前步进');
+                  _rebuildCombine();
+                  _logCombineSummary(prefix: '截断开关后汇总');
+                },
+          secondary: IconButton(
+            tooltip: '截断机制说明',
+            icon: const Icon(Icons.help_outline, size: 18),
+            onPressed: _showTruncationHelp,
+          ),
+        ),
         const SizedBox(height: 12),
         OutlinedButton.icon(
           onPressed: _busy ? null : _bootstrap,
@@ -690,6 +737,37 @@ class _KlineHomePageState extends State<KlineHomePage> {
           suffixIcon: const Icon(Icons.calendar_today, size: 18),
         ),
         child: Text(value, style: const TextStyle(fontSize: 12)),
+      ),
+    );
+  }
+
+  /// 截断开关说明弹窗（操作逻辑 + 开关含义）。
+  void _showTruncationHelp() {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('截断机制说明'),
+        content: const SingleChildScrollView(
+          child: Text(
+            '作用：控制 Kn 流水线是否启用「截断监察」。\n\n'
+            '开启（默认）\n'
+            '· 暴力反转单元命中截断条件时，左框当场确认分型，截断K强制断开成新组。\n'
+            '· 确认带 truncated 标记，tooltip 显示「值(截断)」。\n\n'
+            '关闭\n'
+            '· 回到添加截断机制之前的旧行为：暴力反转K可被包含吸收，无截断确认。\n'
+            '· 便于与旧口径对照排查。\n\n'
+            '操作步骤\n'
+            '1. 打开右上角设置；\n'
+            '2. 拨动「截断机制」开关；\n'
+            '3. 当前已喂入的步进会立刻按新开关重算并刷新主/副图。',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('知道了'),
+          ),
+        ],
       ),
     );
   }

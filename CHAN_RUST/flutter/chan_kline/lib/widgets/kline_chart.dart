@@ -47,6 +47,7 @@ class KlineChart extends StatefulWidget {
     required this.subIndicators,
     this.levels = const [],
     this.defaultBiPolicy = 'pending',
+    this.truncationCheck = true,
     this.onMainIndicatorsChanged,
     this.onSubIndicatorsChanged,
     this.autoFollowLatest = false,
@@ -72,6 +73,8 @@ class KlineChart extends StatefulWidget {
   final Set<MainChartIndicator> mainIndicators;
   final Set<SubChartIndicator> subIndicators;
   final String defaultBiPolicy;
+  /// 截断监察：十字线 as-of 本地重算笔K合并时与 Rust 同开关
+  final bool truncationCheck;
   final ValueChanged<Set<MainChartIndicator>>? onMainIndicatorsChanged;
   final ValueChanged<Set<SubChartIndicator>>? onSubIndicatorsChanged;
   final bool autoFollowLatest;
@@ -194,7 +197,11 @@ class _KlineChartState extends State<KlineChart> {
     final asOf = _crosshairAsOfIdx();
     final barsSlice = widget.bars.where((b) => b.idx <= asOf).toList();
     if (barsSlice.isEmpty) return const [];
-    return computeBiCombineFrames(barsSlice, _asOfBiVirtualBars());
+    return computeBiCombineFrames(
+      barsSlice,
+      _asOfBiVirtualBars(),
+      truncationCheck: widget.truncationCheck,
+    );
   }
 
   int _crosshairAsOfIdx() =>

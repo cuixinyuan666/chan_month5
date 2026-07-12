@@ -161,12 +161,19 @@ class ChanBridge {
     }
   }
 
-  /// 对当前已喂入 K 线跑 Rust N 段流水线（逐K：传入前缀 bars 即可）。
+  /// 对当前已喂入 K 线跑 Rust Kn 流水线（逐K：传入前缀 bars 即可）。
+  /// [truncationCheck]：截断监察开关；关=添加截断机制前的旧吸收行为。
   /// 纯 FFI：旧 DLL 只返回 frames 数组时直接报错，提示重新构建。
-  KlineCombineBundle buildKlineCombineBundle(List<KlineBar> bars) {
+  KlineCombineBundle buildKlineCombineBundle(
+    List<KlineBar> bars, {
+    bool truncationCheck = true,
+  }) {
     ensureInitialized();
-    final jsonBars = jsonEncode(bars.map((b) => b.toJson()).toList());
-    final ptr = _toNative(jsonBars);
+    final payload = <String, dynamic>{
+      'bars': bars.map((b) => b.toJson()).toList(),
+      'truncation_check': truncationCheck,
+    };
+    final ptr = _toNative(jsonEncode(payload));
     try {
       final data = _decode(_takeJson(_klineCombineFrames(ptr)));
       if (data is! Map) {
@@ -181,7 +188,10 @@ class ChanBridge {
   }
 
   /// 兼容旧调用：仅返回合并线框。
-  List<KlineCombineFrame> buildKlineCombineFrames(List<KlineBar> bars) {
-    return buildKlineCombineBundle(bars).frames;
+  List<KlineCombineFrame> buildKlineCombineFrames(
+    List<KlineBar> bars, {
+    bool truncationCheck = true,
+  }) {
+    return buildKlineCombineBundle(bars, truncationCheck: truncationCheck).frames;
   }
 }

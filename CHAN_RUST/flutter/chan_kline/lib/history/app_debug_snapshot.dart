@@ -25,6 +25,7 @@ class AppDebugSnapshot {
     required int visibleCount,
     required bool playing,
     required String defaultBiPolicy,
+    required bool truncationCheck,
     required Set<String> subIndicatorLabels,
     required Set<String> mainIndicatorLabels,
     required List<KlineBar> visibleBars,
@@ -58,7 +59,8 @@ class AppDebugSnapshot {
       '十字线 tooltip 走 bar_features.levels[] 各层 LevelSnap；主图连线可含末态展示修正。',
     );
     buf.writeln(
-      '首段策略 default_bi_policy=$defaultBiPolicy（pending/retained/purged）。',
+      '首段策略 default_bi_policy=$defaultBiPolicy（pending/retained/purged）；'
+      '截断机制 truncation_check=${truncationCheck ? "开" : "关"}。',
     );
     buf.writeln();
 

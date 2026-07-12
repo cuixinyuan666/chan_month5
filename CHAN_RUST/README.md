@@ -75,10 +75,11 @@ cargo test -p chan_data
   - `rust/chan_data/src/pipeline.rs`：单遍逐K驱动的 N 段递归 + 每K每层十字线快照（`LevelSnap`）；
   - `rust/chan_data/src/combine.rs`：旧字段兼容映射（`frames/bi_*/seg_analysis` + `level_segments`/`level_virtual_units`）。
 - **锚定配对**：段端点锚定"最近已用端点分型"；同向分型直接丢弃（不回写历史端点），链条无缝（上一段终点=下一段起点，测试保证）。
-- **有效性校验（可配置）**：`PipelineOptions.validity_check`（默认 `true`）＝最低限度"顶极值>底极值"：上段要求顶分型组 high > 底分型组 low，倒挂分型跳过不配对。关闭后任意异向分型即配对。FFI 入口固定用默认值；如需暴露到 UI 再加参数。
+- **有效性校验（可配置）**：`PipelineOptions.validity_check`（默认 `true`）＝最低限度"顶极值>底极值"：上段要求顶分型组 high > 底分型组 low，倒挂分型跳过不配对。关闭后任意异向分型即配对。FFI 目前仅暴露 `truncation_check`；`validity_check` 仍用默认。
 - **逐K当下性**：分型确认/段冻结均在当步写入即冻结，未来结构不回写；`bar_features[i].levels` 为该 K 当步的各层快照（ML/tooltip 同源）；前缀重放一致性有测试（`snapshots_frozen_per_bar_no_future`，全量 `LevelSnap` 逐字段相等）。
 - **进行中段探测（方案A）**：Kn 进行中单元（锚点极点→当步K）只读探测 K(n+1) 分型（`probe`），可提前段确认，不污染永久合并链。
 - **截断确认（全层同构，`PipelineOptions.truncation_check` 默认开启）**：救"暴力反转单元被包含吸收吃掉信号"的场景。
+  - Flutter 设置面板「截断机制」开关可关：关=添加截断前旧吸收行为；开=当前截断口径。FFI 入参 `{bars, truncation_check}`（纯数组仍兼容，默认开）。
   - 上升截断：上行阶段（锚点=底分型）新单元 `最高价>=左框最高价 且 最低价<上个底分型中组最低价`（参照=本层最近一次底分型确认，含同向丢弃/校验失败的）→ 左框=顶分型中组当场确认（高低不被改写，端点=左框峰值K，非截断K），截断K强制断开成新下行组并参与后续三元素监控（监控范围>=第四根）；下降截断镜像。
   - 监控按锚点方向分工：上行只监控上升截断、下行只监控下降截断，首分型确认前不监控；`feed_guarded`/`probe_guarded` 语义一致（engine.rs 唯一实现）。
   - 确认事件带 `truncated` 标记（`LevelConfirm`/`BiConfirmSignal`/`SegConfirmSignal`，serde 默认 false 向后兼容）；tooltip 确认行显示 `值(截断)`，确认柱样式不变。
