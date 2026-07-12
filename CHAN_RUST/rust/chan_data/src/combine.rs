@@ -200,6 +200,7 @@ pub fn build_bi_combine_frames(bars: &[KlineBar], bi_bars: &[BiVirtualBar]) -> V
 }
 
 /// 笔 K 线序列 → K1合并线框（可关截断/校验，对照排查用）。
+/// 调用方应只传入**已确认冻结**的笔 K（与 L2 永久 feed 同构）；进行中笔不参与截断合并。
 /// 多根包含合并：外侧框按分钟 K 中轴；仅一根笔 K（count=1）保留半侧锚定。
 pub fn build_bi_combine_frames_with(
     bars: &[KlineBar],
@@ -405,10 +406,15 @@ pub fn build_kline_combine_bundle_with(
         .cloned()
         .unwrap_or_default();
 
-    // K1合并框：截断/校验开关与流水线一致，避免副图与 L2 结构分叉
+    // K1合并框：只喂已冻结笔（与 L2 feed 输入同构）；进行中/pending 不参与截断合并
+    let bi_for_combine: Vec<BiVirtualBar> = pr
+        .levels
+        .first()
+        .map(|l| l.segments.iter().map(seg_to_virtual_bar).collect())
+        .unwrap_or_default();
     let bi_combine_frames = build_bi_combine_frames_with(
         bars,
-        &bi_virtual_bars,
+        &bi_for_combine,
         opt.truncation_check,
         opt.validity_check,
     );
@@ -633,5 +639,58 @@ mod tests {
         let absorbed = frames.iter().find(|f| f.x1 <= 2 && f.x2 >= 3);
         assert!(absorbed.is_some());
         assert!((absorbed.unwrap().high - 11.0).abs() < 1e-9);
+    }
+
+    /// all_confirm：K1合并框只认已冻结笔，与带进行中笔的合并结果可分叉时以冻结为准
+    #[test]
+    fn bi_combine_bundle_matches_frozen_segments_only() {
+        let bars: Vec<KlineBar> = (0..80)
+            .map(|i| {
+                let up = (i / 4) % 2 == 0;
+                let base = 10.0 + (i % 4) as f64 * 0.5;
+                let h = if up { base + 1.0 } else { 16.0 - base };
+                bar(i, h, h - 0.8)
+            })
+            .collect();
+        for trunc in [false, true] {
+            let opt = PipelineOptions {
+                truncation_check: trunc,
+                ..PipelineOptions::default()
+            };
+            let bundle = build_kline_combine_bundle_with(&bars, &opt);
+            let frozen: Vec<BiVirtualBar> = bundle
+                .levels
+                .first()
+                .map(|l| l.segments.iter().map(seg_to_virtual_bar).collect())
+                .unwrap_or_default();
+            let expect = build_bi_combine_frames_with(
+                &bars,
+                &frozen,
+                trunc,
+                true,
+            );
+            assert_eq!(
+                bundle.bi_combine_frames.len(),
+                expect.len(),
+                "trunc={trunc} 框数量应与仅冻结笔一致"
+            );
+            for (i, (a, b)) in bundle
+                .bi_combine_frames
+                .iter()
+                .zip(expect.iter())
+                .enumerate()
+            {
+                assert_eq!((a.x1, a.x2, &a.fx), (b.x1, b.x2, &b.fx), "trunc={trunc} frame {i}");
+                assert!((a.high - b.high).abs() < 1e-9);
+                assert!((a.low - b.low).abs() < 1e-9);
+            }
+            // 进行中笔可仍出现在 bi_virtual_bars，但不进合并框输入
+            if bundle.levels.first().and_then(|l| l.active_unit.as_ref()).is_some() {
+                assert!(
+                    bundle.bi_virtual_bars.len() > frozen.len(),
+                    "trunc={trunc} 展示用虚拟笔应含进行中"
+                );
+            }
+        }
     }
 }

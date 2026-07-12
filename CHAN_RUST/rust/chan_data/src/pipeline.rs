@@ -670,7 +670,6 @@ impl LevelState {
         &self,
         bars: &[KlineBar],
         upper: Option<&CombineEngine>,
-        upper_guard: Option<TruncGuard>,
         prov: Option<&(MergeUnit, f64, f64, f64)>,
     ) -> LevelSnap {
         // 首段 promoted 冻结当步：展示刚冻结段而非同步新起进行中段
@@ -742,8 +741,8 @@ impl LevelState {
             snap.unit_volume = *volume;
             match upper {
                 Some(e) => {
-                    // 与探测流同口径：带上层截断监察，命中时按"断开成新组"视角展示
-                    let ps = e.probe_guarded(unit, upper_guard.as_ref());
+                    // 进行中单元只读探测合并态；截断只对已确认下层永久 feed 生效（all_confirm）
+                    let ps = e.probe_guarded(unit, None);
                     snap.merge_inner_seq = ps.inner_seq;
                     snap.merge_count = ps.group_count;
                     snap.combine_high = ps.group_high;
@@ -928,12 +927,12 @@ pub fn run_pipeline(bars: &[KlineBar], opt: &PipelineOptions) -> PipelineResult 
         }
         let mut snaps = Vec::with_capacity(levels.len());
         for li in 0..levels.len() {
-            let (upper, upper_guard) = if li + 1 < levels.len() {
-                (Some(&levels[li + 1].engine), levels[li + 1].trunc_guard())
+            let upper = if li + 1 < levels.len() {
+                Some(&levels[li + 1].engine)
             } else {
-                (None, None)
+                None
             };
-            snaps.push(levels[li].snapshot(bars, upper, upper_guard, provs[li].as_ref()));
+            snaps.push(levels[li].snapshot(bars, upper, provs[li].as_ref()));
         }
         bar_level_snaps.push(snaps);
 

@@ -232,13 +232,15 @@ BiVirtualBar? preConfirmDefaultBi(List<KlineBar> bars, int endBarX) {
   );
 }
 
-/// 十字线 as-of 笔 K 列表：已冻结段（Rust 冻结时算好 OHLC，查表）+ 当步快照进行中笔。
+/// 十字线 as-of 笔 K 列表：已冻结段（Rust 冻结时算好 OHLC，查表）+ 可选当步进行中笔。
+/// [includeBuilding]：主图笔K展示可含进行中；K1合并/截断必须为 false（只认已确认笔）。
 List<BiVirtualBar> asOfBiVirtualBars({
   required List<KlineBar> bars,
   required List<LevelBundle> levels,
   required List<BarCrosshairFeature> barFeatures,
   required String defaultBiPolicy,
   required int asOf,
+  bool includeBuilding = true,
 }) {
   if (bars.isEmpty) return const [];
   final bx = asOf.clamp(0, bars.length - 1);
@@ -287,6 +289,8 @@ List<BiVirtualBar> asOfBiVirtualBars({
     }
     return frozen;
   }
+
+  if (!includeBuilding) return frozen;
 
   // 快照单元未包含在冻结列表 → 追加进行中笔（unit_x 区间与 OHLC 均来自快照）
   final s = snap!;

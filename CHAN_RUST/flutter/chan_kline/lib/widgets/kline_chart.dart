@@ -199,7 +199,8 @@ class _KlineChartState extends State<KlineChart> {
     if (barsSlice.isEmpty) return const [];
     return computeBiCombineFrames(
       barsSlice,
-      _asOfBiVirtualBars(),
+      // 截断/合并只认已确认笔（与 Rust L2 feed、all_confirm 同构）
+      _asOfBiVirtualBars(includeBuilding: false),
       truncationCheck: widget.truncationCheck,
     );
   }
@@ -207,14 +208,15 @@ class _KlineChartState extends State<KlineChart> {
   int _crosshairAsOfIdx() =>
       widget.bars[_crosshairBarIdx!.clamp(0, widget.bars.length - 1)].idx;
 
-  /// as-of 笔 K 重建：Rust 冻结段 + 当步快照查表组装，Dart 端零缠论计算。
-  List<BiVirtualBar> _asOfBiVirtualBars() {
+  /// as-of 笔 K 重建：Rust 冻结段 + 可选当步进行中笔。
+  List<BiVirtualBar> _asOfBiVirtualBars({bool includeBuilding = true}) {
     return asOfBiVirtualBars(
       bars: widget.bars,
       levels: widget.levels,
       barFeatures: widget.barFeatures,
       defaultBiPolicy: widget.defaultBiPolicy,
       asOf: _crosshairAsOfIdx(),
+      includeBuilding: includeBuilding,
     );
   }
 

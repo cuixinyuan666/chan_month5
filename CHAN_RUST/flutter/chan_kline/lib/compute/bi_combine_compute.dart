@@ -6,8 +6,8 @@ import '../models/kline_combine_frame.dart';
 import 'bi_virtual_bar_view_compute.dart';
 
 /// 十字线 as-of 视图重建专用：与 Rust `build_bi_combine_frames_with` 同口径
-/// （view 坐标 + 半侧锚定 + 截断监察）。末态口径由 Rust bundle 直供，此处仅服务
-/// 十字线指向历史 K 时的本地重绘，避免高频跨 FFI。
+/// （view 坐标 + 半侧锚定 + 截断监察）。调用方应只传入**已确认冻结**笔 K
+/// （`asOfBiVirtualBars(includeBuilding: false)`），进行中笔不参与截断合并。
 
 List<KlineCombineFrame> computeBiCombineFrames(
   List<KlineBar> bars,
