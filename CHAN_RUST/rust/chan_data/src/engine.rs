@@ -93,6 +93,47 @@ fn trunc_hit(last: &MergedGroup, u: &MergeUnit, g: &TruncGuard) -> bool {
     }
 }
 
+/// 价格微调步长（保证严格大于/小于左框极值，便于后续三元素双高/双低）
+fn trunc_price_step(last: &MergedGroup) -> f64 {
+    let span = (last.high - last.low).abs();
+    let scale = last.low.abs().max(last.high.abs()).max(1.0);
+    (span * 1e-4).max(scale * 1e-8).max(1e-8)
+}
+
+/// 截断触发单元改写为「可作第三元素」形态（全层同构）：
+/// - 下降截断（左框 BOTTOM）：保留触发高点，抬低点至左框低之上（仿正常底分型右元素）
+/// - 上升截断（左框 TOP）：保留破位低点，压高点至左框高之下（镜像）
+fn trunc_rewrite_trigger_unit(last: &MergedGroup, u: &MergeUnit, up_leg: bool) -> MergeUnit {
+    let step = trunc_price_step(last);
+    let mut out = u.clone();
+    if up_leg {
+        // 上升截断 → 左框 TOP：第三元素应 high<mid.high 且 low<mid.low
+        if out.high >= last.high {
+            out.high = last.high - step;
+        }
+        if out.low >= last.low {
+            out.low = last.low - step;
+        }
+    } else {
+        // 下降截断 → 左框 BOTTOM：第三元素应 high>mid.high 且 low>mid.low
+        if out.low <= last.low {
+            out.low = last.low + step;
+        }
+        if out.high <= last.high {
+            out.high = last.high + step;
+        }
+    }
+    // 保序：高 >= 低
+    if out.high < out.low {
+        if up_leg {
+            out.high = out.low;
+        } else {
+            out.low = out.high;
+        }
+    }
+    out
+}
+
 /// 末态/离线重放用截断状态机（与 LevelState 锚点+参照价口径同构）。
 /// 供 K1合并副图等「只喂单元、不跑完整段配对」场景复用。
 #[derive(Debug, Clone)]
@@ -313,6 +354,7 @@ impl CombineEngine {
     /// 永久喂入 + 截断监察：本应被包含吸收的暴力反转单元命中截断时，
     /// 左框保持原高低并当场冻结分型（上行=TOP/下行=BOTTOM），该单元强制断开成新组
     /// （上升截断开下行组 / 下降截断开上行组），并参与后续三元素监控（监控范围>=第四根）。
+    /// 触发单元高低改写为「可作第三元素」形态（下降截断抬低点/上升截断压高点），便于后续双高双低。
     /// 非包含关系不拦截：常规三元素路径本身能正确判定，截断只救"信号被吸收吃掉"的场景。
     pub fn feed_guarded(&mut self, u: &MergeUnit, guard: Option<&TruncGuard>) -> Option<FxEvent> {
         if self.groups.is_empty() {
@@ -330,7 +372,8 @@ impl CombineEngine {
                     let mut ev = self.groups[last].to_event();
                     ev.truncated = true;
                     let forced = if g.up_leg { MergeDir::Down } else { MergeDir::Up };
-                    self.groups.push(MergedGroup::new_first(u, forced));
+                    let rewritten = trunc_rewrite_trigger_unit(&self.groups[last], u, g.up_leg);
+                    self.groups.push(MergedGroup::new_first(&rewritten, forced));
                     return Some(ev);
                 }
             }
@@ -386,10 +429,11 @@ impl CombineEngine {
                     let mut ev = last.to_event();
                     ev.fx = if g.up_leg { FxKind::Top } else { FxKind::Bottom };
                     ev.truncated = true;
+                    let rewritten = trunc_rewrite_trigger_unit(last, u, g.up_leg);
                     return ProbeState {
                         fx_event: Some(ev),
-                        group_high: u.high,
-                        group_low: u.low,
+                        group_high: rewritten.high,
+                        group_low: rewritten.low,
                         group_fx: FxKind::Unknown,
                         inner_seq: 0,
                         group_count: 1,
@@ -581,5 +625,59 @@ mod tests {
         assert!((ev.low - 8.5).abs() < 1e-9);
         assert_eq!(eng.groups().len(), 4);
         assert_eq!(eng.groups()[3].dir, MergeDir::Up);
+    }
+
+    /// 截断后触发单元改写为「可作第三元素」形态：下降截断抬低点，便于后续双高顶
+    #[test]
+    fn trunc_rewrite_allows_following_dual_high_top() {
+        // 模拟 10:02 底框 / 10:03 外破触发下降截断 / 10:04 回落
+        let mut eng = CombineEngine::new();
+        eng.feed(&unit(0, 33.55, 33.51)); // 前
+        eng.feed(&unit(1, 33.53, 33.50)); // 10:02 左框（将成截断底）
+        // 先不成三元素；用下降截断确认左框底
+        let guard = TruncGuard {
+            up_leg: false,
+            ref_price: 33.55,
+        };
+        // 10:03 外破：更高高+更低低，本应被吸收
+        let ev = eng
+            .feed_guarded(&unit(2, 33.57, 33.48), Some(&guard))
+            .expect("应命中下降截断");
+        assert_eq!(ev.fx, FxKind::Bottom);
+        assert!(ev.truncated);
+        let trig = &eng.groups()[2];
+        assert!(
+            trig.low > eng.groups()[1].low,
+            "触发单元改写后低点应高于左框低: trig.L={} left.L={}",
+            trig.low,
+            eng.groups()[1].low
+        );
+        assert!((trig.high - 33.57).abs() < 1e-9, "高点保留触发值");
+        // 10:04 回落 → 应对改写后的 10:03 确认顶分型（双高）
+        let ev = eng.feed(&unit(3, 33.44, 33.28)).expect("应确认顶分型");
+        assert_eq!(ev.fx, FxKind::Top);
+        assert!(!ev.truncated);
+        assert!((ev.high - 33.57).abs() < 1e-9);
+        assert!(ev.low > 33.50, "顶中组低点应高于前底框低");
+    }
+
+    /// 上升截断镜像改写：压高点，保留破位低点
+    #[test]
+    fn trunc_rewrite_up_leg_clamps_high() {
+        let mut eng = CombineEngine::new();
+        eng.feed(&unit(0, 10.0, 9.0));
+        eng.feed(&unit(1, 9.0, 8.0));
+        eng.feed(&unit(2, 10.5, 9.5));
+        let guard = TruncGuard { up_leg: true, ref_price: 8.0 };
+        eng.feed_guarded(&unit(3, 11.0, 7.5), Some(&guard)).unwrap();
+        let trig = &eng.groups()[3];
+        let left = &eng.groups()[2];
+        assert!(
+            trig.high < left.high,
+            "上升截断触发单元高点应压到左框高之下: trig.H={} left.H={}",
+            trig.high,
+            left.high
+        );
+        assert!((trig.low - 7.5).abs() < 1e-9, "破位低点保留");
     }
 }

@@ -68,6 +68,40 @@ List<KlineCombineFrame> computeBiCombineFrames(
     return ul <= lastL && uh > refPrice;
   }
 
+  /// 与 Rust `trunc_price_step` / `trunc_rewrite_trigger_unit` 同构
+  double truncPriceStep(double lastH, double lastL) {
+    final span = (lastH - lastL).abs();
+    final scale = math.max(math.max(lastL.abs(), lastH.abs()), 1.0);
+    return math.max(math.max(span * 1e-4, scale * 1e-8), 1e-8);
+  }
+
+  ({double high, double low}) truncRewriteTrigger({
+    required bool upLeg,
+    required double lastH,
+    required double lastL,
+    required double uh,
+    required double ul,
+  }) {
+    final step = truncPriceStep(lastH, lastL);
+    var high = uh;
+    var low = ul;
+    if (upLeg) {
+      if (high >= lastH) high = lastH - step;
+      if (low >= lastL) low = lastL - step;
+    } else {
+      if (low <= lastL) low = lastL + step;
+      if (high <= lastH) high = lastH + step;
+    }
+    if (high < low) {
+      if (upLeg) {
+        high = low;
+      } else {
+        low = high;
+      }
+    }
+    return (high: high, low: low);
+  }
+
   ({bool upLeg, double refPrice})? truncGuard() {
     if (!truncationCheck || anchorFx == null) return null;
     if (anchorFx == 'BOTTOM' && lastBottomLow != null) {
@@ -154,13 +188,20 @@ List<KlineCombineFrame> computeBiCombineFrames(
             uh: b.high,
             ul: b.low,
           )) {
-        // 截断：左框当场分型，本单元强制断开成新组
+        // 截断：左框当场分型，本单元改写为第三元素形态后强制断开成新组
         final truncFx = g.upLeg ? 'TOP' : 'BOTTOM';
         fxAt[last] = truncFx;
         onFxEvent(truncFx, highs[last], lows[last]);
         final forced = g.upLeg ? 'DOWN' : 'UP';
-        highs.add(b.high);
-        lows.add(b.low);
+        final rw = truncRewriteTrigger(
+          upLeg: g.upLeg,
+          lastH: highs[last],
+          lastL: lows[last],
+          uh: b.high,
+          ul: b.low,
+        );
+        highs.add(rw.high);
+        lows.add(rw.low);
         dirs.add(forced);
         x1s.add(v.viewX1);
         x2s.add(v.viewX2);
