@@ -1,0 +1,15 @@
+# Rust / 本地编译产物（勿再提交）
+/target/
+/rust/target/
+/rust/target_alt/
+**/target/
+**/target_alt/
+
+# 动态库与调试符号
+**/*.dll
+**/*.so
+**/*.dylib
+**/*.pdb
+**/*.exe
+**/*.lib
+**/*.exp
