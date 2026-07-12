@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../models/kline_combine_frame.dart';
 
-/// 主图指标选择：支持单选 / 多选叠加（逻辑对齐副图选择器）。
+/// 主图指标选择：支持单选 / 叠加（逻辑对齐副图选择器）。
 Future<Set<MainChartIndicator>?> showMainIndicatorPicker({
   required BuildContext context,
   required Set<MainChartIndicator> selected,
@@ -25,7 +25,7 @@ class _MainIndicatorPickerDialog extends StatefulWidget {
 
 class _MainIndicatorPickerDialogState extends State<_MainIndicatorPickerDialog> {
   late Set<MainChartIndicator> _draft;
-  late bool _multiMode;
+  late bool _stackMode; // 叠加（原多选）
 
   @override
   void initState() {
@@ -34,13 +34,13 @@ class _MainIndicatorPickerDialogState extends State<_MainIndicatorPickerDialog> 
     if (_draft.isEmpty) {
       _draft = {MainChartIndicator.kline};
     }
-    _multiMode = _draft.length > 1;
+    _stackMode = _draft.length > 1;
   }
 
-  void _toggleMulti(bool v) {
+  void _toggleStack(bool v) {
     setState(() {
-      _multiMode = v;
-      if (!_multiMode && _draft.length > 1) {
+      _stackMode = v;
+      if (!_stackMode && _draft.length > 1) {
         _draft = {_draft.first};
       }
     });
@@ -50,7 +50,7 @@ class _MainIndicatorPickerDialogState extends State<_MainIndicatorPickerDialog> 
     Navigator.of(context).pop(<MainChartIndicator>{item});
   }
 
-  void _toggleMultiItem(MainChartIndicator item, bool? checked) {
+  void _toggleStackItem(MainChartIndicator item, bool? checked) {
     setState(() {
       if (checked == true) {
         _draft.add(item);
@@ -63,7 +63,7 @@ class _MainIndicatorPickerDialogState extends State<_MainIndicatorPickerDialog> 
     });
   }
 
-  void _confirmMulti() {
+  void _confirmStack() {
     Navigator.of(context).pop(Set<MainChartIndicator>.from(_draft));
   }
 
@@ -75,16 +75,16 @@ class _MainIndicatorPickerDialogState extends State<_MainIndicatorPickerDialog> 
       title: Row(
         children: [
           TextButton.icon(
-            onPressed: () => _toggleMulti(!_multiMode),
+            onPressed: () => _toggleStack(!_stackMode),
             icon: Icon(
-              _multiMode ? Icons.check_box : Icons.check_box_outline_blank,
+              _stackMode ? Icons.check_box : Icons.check_box_outline_blank,
               size: 18,
-              color: _multiMode ? const Color(0xFF42A5F5) : const Color(0x99FFFFFF),
+              color: _stackMode ? const Color(0xFF42A5F5) : const Color(0x99FFFFFF),
             ),
             label: Text(
-              '多选',
+              '叠加',
               style: TextStyle(
-                color: _multiMode ? const Color(0xFF42A5F5) : const Color(0xFFE2E8F0),
+                color: _stackMode ? const Color(0xFF42A5F5) : const Color(0xFFE2E8F0),
                 fontSize: 13,
               ),
             ),
@@ -96,7 +96,7 @@ class _MainIndicatorPickerDialogState extends State<_MainIndicatorPickerDialog> 
           ),
           const Spacer(),
           Text(
-            _multiMode ? '勾选后点确定' : '点选即切换',
+            _stackMode ? '勾选后点确定' : '点选即切换',
             style: const TextStyle(color: Color(0x99FFFFFF), fontSize: 11),
           ),
         ],
@@ -109,26 +109,28 @@ class _MainIndicatorPickerDialogState extends State<_MainIndicatorPickerDialog> 
           children: [
             const SizedBox(height: 4),
             ...MainChartIndicator.values.map((item) {
-              if (_multiMode) {
+              // 单选/叠加：选择框统一靠右
+              if (_stackMode) {
                 return CheckboxListTile(
                   dense: true,
                   contentPadding: EdgeInsets.zero,
+                  controlAffinity: ListTileControlAffinity.trailing,
                   activeColor: const Color(0xFF42A5F5),
                   title: Text(item.label, style: const TextStyle(fontSize: 14)),
                   value: _draft.contains(item),
-                  onChanged: (v) => _toggleMultiItem(item, v),
+                  onChanged: (v) => _toggleStackItem(item, v),
                 );
               }
               final picked = _draft.contains(item);
               return ListTile(
                 dense: true,
                 contentPadding: EdgeInsets.zero,
-                leading: Icon(
+                title: Text(item.label),
+                trailing: Icon(
                   picked ? Icons.radio_button_checked : Icons.radio_button_off,
                   size: 18,
                   color: picked ? const Color(0xFF42A5F5) : const Color(0x66FFFFFF),
                 ),
-                title: Text(item.label),
                 onTap: () => _pickSingle(item),
               );
             }),
@@ -140,9 +142,9 @@ class _MainIndicatorPickerDialogState extends State<_MainIndicatorPickerDialog> 
           onPressed: () => Navigator.of(context).pop(),
           child: const Text('取消'),
         ),
-        if (_multiMode)
+        if (_stackMode)
           FilledButton(
-            onPressed: _confirmMulti,
+            onPressed: _confirmStack,
             child: Text('确定 (${_draft.length})'),
           ),
       ],

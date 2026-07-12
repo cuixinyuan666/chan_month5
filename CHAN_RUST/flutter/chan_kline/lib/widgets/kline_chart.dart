@@ -18,6 +18,7 @@ import '../models/bar_feature_lookup.dart';
 import '../models/level_models.dart';
 import '../models/seg_analysis.dart';
 import 'chart_level_line_style.dart';
+import 'indicator_picker_chip.dart';
 import 'kline_axis_format.dart';
 import 'kline_viewport.dart';
 import 'main_indicator_picker.dart';
@@ -405,6 +406,20 @@ class _KlineChartState extends State<KlineChart> {
     }
   }
 
+  /// 双击关闭某一主图指标；至少保留一个。
+  void _closeMainIndicator(MainChartIndicator item) {
+    final next = Set<MainChartIndicator>.from(_activeMains)..remove(item);
+    if (next.isEmpty) return;
+    widget.onMainIndicatorsChanged?.call(next);
+  }
+
+  /// 双击关闭某一副图指标；至少保留一个。
+  void _closeSubIndicator(SubChartIndicator item) {
+    final next = Set<SubChartIndicator>.from(_activeSubs)..remove(item);
+    if (next.isEmpty) return;
+    widget.onSubIndicatorsChanged?.call(next);
+  }
+
   @override
   Widget build(BuildContext context) {
     if (widget.bars.isEmpty) {
@@ -532,46 +547,40 @@ class _KlineChartState extends State<KlineChart> {
                 ),
               ),
             ),
+            // 主图：↓ + 已选指标名（悬停提亮；双击名称关闭）
             Positioned(
               left: 0,
               top: 0,
-              child: Material(
-                color: const Color(0xCC1A1A1A),
-                borderRadius: const BorderRadius.only(
-                  bottomRight: Radius.circular(4),
-                ),
-                child: InkWell(
-                  borderRadius: const BorderRadius.only(
-                    bottomRight: Radius.circular(4),
-                  ),
-                  onTap: () => _pickMainIndicators(context),
-                  child: const Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    child: Text(
-                      '主图指标选择',
-                      style: TextStyle(color: Color(0xFFE2E8F0), fontSize: 11),
-                    ),
-                  ),
-                ),
+              child: IndicatorPickerChip(
+                entries: MainChartIndicator.values
+                    .where(_activeMains.contains)
+                    .map(
+                      (e) => IndicatorChipEntry(
+                        label: e.label,
+                        onDoubleTapClose: () => _closeMainIndicator(e),
+                      ),
+                    )
+                    .toList(),
+                onTapDropdown: () => _pickMainIndicators(context),
+                maxWidth: math.min(280, w * 0.55),
               ),
             ),
+            // 副图：↓ + 已选指标名（悬停提亮；双击名称关闭）
             Positioned(
               left: KlineViewport.padL,
               top: mainH + 2,
-              child: Material(
-                color: const Color(0xCC1A1A1A),
-                borderRadius: BorderRadius.circular(4),
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(4),
-                  onTap: () => _pickSubIndicators(context),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    child: Text(
-                      '副图指标选择',
-                      style: const TextStyle(color: Color(0xFFE2E8F0), fontSize: 11),
-                    ),
-                  ),
-                ),
+              child: IndicatorPickerChip(
+                entries: SubChartIndicator.values
+                    .where(_activeSubs.contains)
+                    .map(
+                      (e) => IndicatorChipEntry(
+                        label: e.label,
+                        onDoubleTapClose: () => _closeSubIndicator(e),
+                      ),
+                    )
+                    .toList(),
+                onTapDropdown: () => _pickSubIndicators(context),
+                maxWidth: math.min(280, w * 0.55),
               ),
             ),
           ],

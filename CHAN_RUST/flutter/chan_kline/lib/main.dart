@@ -553,13 +553,13 @@ class _KlineHomePageState extends State<KlineHomePage> {
   }
 
   /// 透明标题条：中部拖动；右侧设置紧贴最小化。
-  /// 左侧开孔穿透，避免挡住 K 线区「主图指标选择」。
+  /// 左侧开孔穿透，避免挡住 K 线区主图指标入口（↓+已选名）。
   Widget _buildCaptionBar() {
     return Row(
       children: [
-        // 与「主图指标选择」按钮同宽留白，点击穿透到下层 InkWell
+        // 与主图指标 chip 最大宽度对齐，点击穿透到下层
         const IgnorePointer(
-          child: SizedBox(width: 100, height: 36),
+          child: SizedBox(width: 280, height: 36),
         ),
         Expanded(
           child: DragToMoveArea(
