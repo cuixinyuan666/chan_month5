@@ -126,7 +126,7 @@ class _KlineChartState extends State<KlineChart> {
   Set<MainChartIndicator> get _activeMains {
     if (widget.mainIndicators.isEmpty) {
       return {
-        MainChartIndicator.kline,
+        MainChartIndicator.klineCombine,
         MainChartIndicator.biLine,
         MainChartIndicator.segLine,
       };
@@ -659,21 +659,9 @@ class _KlineCompositePainter extends CustomPainter {
     final barW = _candleBodyW(slotW);
     final xAxisTop = contentBottom;
 
-    if (mainIndicators.contains(MainChartIndicator.kline)) {
-      _drawCandles(canvas, size.width, plotTop, plotH, barW, slotW);
-    }
     if (mainIndicators.contains(MainChartIndicator.klineCombine)) {
-      _drawCombineFramesOnMainChart(
-        canvas,
-        size.width,
-        plotTop,
-        plotH,
-        barW,
-        slotW,
-        combineFrames,
-        const Color(0xFF6366F1),
-        const Color(0x226366F1),
-      );
+      // 仿 K1合并：先铺淡 K0 线，再描 K0合并框
+      _drawKlineCombineOnMainChart(canvas, size.width, plotTop, plotH, barW, slotW);
     }
     if (mainIndicators.contains(MainChartIndicator.biKlineCombine)) {
       _drawBiCombineOnMainChart(canvas, size.width, plotTop, plotH, barW, slotW);
@@ -1338,10 +1326,19 @@ class _KlineCompositePainter extends CustomPainter {
     return (cx1 + cx2) / 2;
   }
 
-  void _drawCandles(Canvas canvas, double w, double plotTop, double plotH, double barW, double slotW) {
-    final up = const Color(0xFFE53935);
-    final down = const Color(0xFF26A69A);
-    final wick = Paint()..strokeWidth = 1.2;
+  void _drawCandles(
+    Canvas canvas,
+    double w,
+    double plotTop,
+    double plotH,
+    double barW,
+    double slotW, {
+    bool faint = false,
+  }) {
+    // faint：作 K0合并底层时压低透明度，避免盖住合并框
+    final up = faint ? const Color(0x38E53935) : const Color(0xFFE53935);
+    final down = faint ? const Color(0x3826A69A) : const Color(0xFF26A69A);
+    final wick = Paint()..strokeWidth = faint ? 1.0 : 1.2;
 
     for (var i = 0; i < bars.length; i++) {
       final idx = bars[i].idx;
@@ -1365,6 +1362,30 @@ class _KlineCompositePainter extends CustomPainter {
         Paint()..color = color,
       );
     }
+  }
+
+  /// 主图 K0合并：先铺淡 K0 线，再描 K0合并框（对齐 K1合并画法）。
+  void _drawKlineCombineOnMainChart(
+    Canvas canvas,
+    double w,
+    double plotTop,
+    double plotH,
+    double barW,
+    double slotW,
+  ) {
+    _drawCandles(canvas, w, plotTop, plotH, barW, slotW, faint: true);
+    if (combineFrames.isEmpty) return;
+    _drawCombineFramesOnMainChart(
+      canvas,
+      w,
+      plotTop,
+      plotH,
+      barW,
+      slotW,
+      combineFrames,
+      const Color(0xFF6366F1),
+      const Color(0x226366F1),
+    );
   }
 
   /// 主图 K线合并 / 笔K线合并线框：按真实价格坐标叠加。
@@ -1480,29 +1501,6 @@ class _KlineCompositePainter extends CustomPainter {
     if (subIndicators.contains(SubChartIndicator.volume)) {
       _drawVolume(canvas, w, innerTop, innerBottom, innerH, barW, slotW);
     }
-    if (subIndicators.contains(SubChartIndicator.klineCombine)) {
-      _drawCombineFrameSubChart(
-        canvas,
-        w,
-        innerTop,
-        innerH,
-        barW,
-        slotW,
-        combineFrames,
-        const Color(0xFF6366F1),
-        const Color(0x226366F1),
-      );
-    }
-    if (subIndicators.contains(SubChartIndicator.biKlineCombine)) {
-      _drawBiKlineCombineSubChart(
-        canvas,
-        w,
-        innerTop,
-        innerH,
-        barW,
-        slotW,
-      );
-    }
     if (subIndicators.contains(SubChartIndicator.biConfirm)) {
       _drawBiConfirmSubChart(canvas, w, innerTop, innerH, barW, slotW);
     }
@@ -1558,195 +1556,6 @@ class _KlineCompositePainter extends CustomPainter {
           ? const Color(0x66E53935)
           : const Color(0x6626A69A);
       canvas.drawRect(Rect.fromLTWH(x, innerBottom - bh, barW, bh), Paint()..color = color);
-    }
-  }
-
-  /// 笔K线合并副图：底层铺淡「笔 K 线」，再描笔K线合并框（与 K线合并副图同构：单元→合并框）。
-  void _drawBiKlineCombineSubChart(
-    Canvas canvas,
-    double w,
-    double innerTop,
-    double innerH,
-    double barW,
-    double slotW,
-  ) {
-    if (biCombineFrames.isEmpty) return;
-
-    final visibleFrames = biCombineFrames
-        .where(
-          (f) => f.x2 >= viewport.viewXMin - 1 && f.x1 <= viewport.viewXMax + 1,
-        )
-        .toList();
-    if (visibleFrames.isEmpty) return;
-
-    // 底层单元改为「笔 K 线」：与 K线合并副图「1 分钟 K → 合并框」严格同构
-    final visibleBiBars = biVirtualBarViews
-        .where(
-          (v) =>
-              v.viewX2 >= viewport.viewXMin - 1 &&
-              v.viewX1 <= viewport.viewXMax + 1,
-        )
-        .toList();
-
-    var minP = visibleFrames.first.low;
-    var maxP = visibleFrames.first.high;
-    for (final f in visibleFrames) {
-      minP = math.min(minP, f.low);
-      maxP = math.max(maxP, f.high);
-    }
-    // 刻度同时纳入笔 K 线，保证底层笔 K 落在副图纵轴内
-    for (final v in visibleBiBars) {
-      minP = math.min(minP, v.low);
-      maxP = math.max(maxP, v.high);
-    }
-    var span = math.max(1e-9, maxP - minP);
-    final pad = span * 0.18;
-    minP -= pad;
-    maxP += pad;
-    span = math.max(1e-9, maxP - minP);
-
-    double subY(double price) => innerTop + (maxP - price) / span * innerH;
-
-    // 底层：笔 K 线（中轴口径，与合并框对齐）
-    final wick = Paint()..strokeWidth = 1.0;
-    for (final v in visibleBiBars) {
-      final (left, right) = _biVirtualBarHSpan(v, w, slotW, barW);
-      final cx = (left + right) / 2;
-      final spanW = math.max(1.5, right - left);
-      final color = v.isUp
-          ? const Color(0x55E53935)
-          : const Color(0x5526A69A);
-      wick.color = color;
-      final yH = subY(v.high);
-      final yL = subY(v.low);
-      final yO = subY(v.open);
-      final yC = subY(v.close);
-      canvas.drawLine(Offset(cx, yH), Offset(cx, yL), wick);
-      final top = math.min(yO, yC);
-      final bottom = math.max(yO, yC);
-      canvas.drawRect(
-        Rect.fromLTWH(left, top, spanW, math.max(1.0, bottom - top)),
-        Paint()..color = color.withValues(alpha: 0.22),
-      );
-    }
-
-    // 上层：笔K线合并框——仅描边为主，填充极淡（相邻框 x 区间交叠时不会叠成实心）
-    const strokeColor = Color(0xAAF59E0B);
-    const fillColor = Color(0x0CF59E0B);
-    const minFramePx = 8.0;
-    final framePaint = Paint()
-      ..color = strokeColor
-      ..strokeWidth = 1.3
-      ..style = PaintingStyle.stroke;
-    final fillPaint = Paint()
-      ..color = fillColor
-      ..style = PaintingStyle.fill;
-
-    for (final f in visibleFrames) {
-      final (xLeft, xRight) = _biCombineFrameSpan(f, w, slotW, barW);
-      var yTop = subY(f.high);
-      var yBottom = subY(f.low);
-      var height = (yBottom - yTop).abs();
-      if (height < minFramePx) {
-        final mid = (yTop + yBottom) / 2;
-        yTop = mid - minFramePx / 2;
-        yBottom = mid + minFramePx / 2;
-        height = minFramePx;
-      }
-      final rect = Rect.fromLTRB(
-        math.min(xLeft, xRight),
-        math.min(yTop, yBottom),
-        math.max(xLeft, xRight),
-        math.max(yTop, yBottom),
-      );
-      canvas.drawRect(rect, fillPaint);
-      canvas.drawRect(rect, framePaint);
-
-      if (f.fx == 'TOP' || f.fx == 'BOTTOM') {
-        final tp = TextPainter(
-          text: TextSpan(
-            text: f.fx == 'TOP' ? '顶' : '底',
-            style: const TextStyle(color: strokeColor, fontSize: 9),
-          ),
-          textDirection: TextDirection.ltr,
-        )..layout();
-        tp.paint(canvas, Offset(rect.left + 2, rect.top + 1));
-      }
-    }
-  }
-
-  /// 合并线框副图（1 分钟 K 合并；笔 K 合并见 [_drawBiKlineCombineSubChart]）。
-  void _drawCombineFrameSubChart(
-    Canvas canvas,
-    double w,
-    double innerTop,
-    double innerH,
-    double barW,
-    double slotW,
-    List<KlineCombineFrame> frames,
-    Color strokeColor,
-    Color fillColor,
-  ) {
-    if (frames.isEmpty) return;
-
-    final visibleFrames = frames
-        .where(
-          (f) => f.x2 >= viewport.viewXMin - 1 && f.x1 <= viewport.viewXMax + 1,
-        )
-        .toList();
-    if (visibleFrames.isEmpty) return;
-
-    var minP = visibleFrames.first.low;
-    var maxP = visibleFrames.first.high;
-    for (final f in visibleFrames) {
-      minP = math.min(minP, f.low);
-      maxP = math.max(maxP, f.high);
-    }
-    var span = math.max(1e-9, maxP - minP);
-    final pad = span * 0.18;
-    minP -= pad;
-    maxP += pad;
-    span = math.max(1e-9, maxP - minP);
-
-    const minFramePx = 8.0;
-    final framePaint = Paint()
-      ..color = strokeColor
-      ..strokeWidth = 1.4
-      ..style = PaintingStyle.stroke;
-    final fillPaint = Paint()
-      ..color = fillColor
-      ..style = PaintingStyle.fill;
-
-    for (final f in visibleFrames) {
-      final (xLeft, xRight) = _combineFrameSpan(f, w, slotW, barW);
-      var yTop = innerTop + (maxP - f.high) / span * innerH;
-      var yBottom = innerTop + (maxP - f.low) / span * innerH;
-      var height = (yBottom - yTop).abs();
-      if (height < minFramePx) {
-        final mid = (yTop + yBottom) / 2;
-        yTop = mid - minFramePx / 2;
-        yBottom = mid + minFramePx / 2;
-        height = minFramePx;
-      }
-      final rect = Rect.fromLTRB(
-        math.min(xLeft, xRight),
-        math.min(yTop, yBottom),
-        math.max(xLeft, xRight),
-        math.max(yTop, yBottom),
-      );
-      canvas.drawRect(rect, fillPaint);
-      canvas.drawRect(rect, framePaint);
-
-      if (f.fx == 'TOP' || f.fx == 'BOTTOM') {
-        final tp = TextPainter(
-          text: TextSpan(
-            text: f.fx == 'TOP' ? '顶' : '底',
-            style: TextStyle(color: strokeColor, fontSize: 9),
-          ),
-          textDirection: TextDirection.ltr,
-        )..layout();
-        tp.paint(canvas, Offset(rect.left + 2, rect.top + 1));
-      }
     }
   }
 

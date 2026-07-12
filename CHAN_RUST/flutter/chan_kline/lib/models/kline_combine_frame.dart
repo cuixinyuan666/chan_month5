@@ -45,7 +45,6 @@ class KlineCombineFrame {
 /// 主图指标类型（可多选叠加）。
 /// 命名：K0=原始K，K1=笔，K2=线段，Kn=第n层（旧称「n段」）。
 enum MainChartIndicator {
-  kline('K0'),
   biLine('K1连线'),
   segLine('K2及以上连线'),
   klineCombine('K0合并'),
@@ -58,8 +57,6 @@ enum MainChartIndicator {
 /// 副图指标类型。
 enum SubChartIndicator {
   volume('成交量'),
-  klineCombine('K0合并'),
-  biKlineCombine('K1合并'),
   biConfirm('K0合并分型确认'),
   segConfirm('K2确认'),
   firstSegDir('首K1向'),

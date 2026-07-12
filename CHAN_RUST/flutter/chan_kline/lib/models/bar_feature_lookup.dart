@@ -173,20 +173,6 @@ class BarFeatureLookup {
 
 
 
-    if (subIndicators.contains(SubChartIndicator.klineCombine)) {
-
-      for (final row in byIdx.values) {
-
-        (row['sub'] as Map<String, dynamic>)['combine_fx'] = row['combine_fx'];
-
-        (row['sub'] as Map<String, dynamic>)['combine_count'] = row['merge_count'];
-
-      }
-
-    }
-
-
-
     for (final sig in biConfirms) {
 
       final row = byIdx.putIfAbsent(sig.x, () => {'idx': sig.x});

@@ -96,7 +96,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
   SegAnalysisBundle _segAnalysis = SegAnalysisBundle.empty();
   List<LevelBundle> _levels = [];
   Set<MainChartIndicator> _mainIndicators = {
-    MainChartIndicator.kline,
+    MainChartIndicator.klineCombine,
     MainChartIndicator.biLine,
     MainChartIndicator.segLine,
     MainChartIndicator.biKlineCombine,

@@ -32,7 +32,7 @@ class _MainIndicatorPickerDialogState extends State<_MainIndicatorPickerDialog> 
     super.initState();
     _draft = Set<MainChartIndicator>.from(widget.initial);
     if (_draft.isEmpty) {
-      _draft = {MainChartIndicator.kline};
+      _draft = {MainChartIndicator.klineCombine};
     }
     _stackMode = _draft.length > 1;
   }
@@ -58,7 +58,7 @@ class _MainIndicatorPickerDialogState extends State<_MainIndicatorPickerDialog> 
         _draft.remove(item);
       }
       if (_draft.isEmpty) {
-        _draft.add(MainChartIndicator.kline);
+        _draft.add(MainChartIndicator.klineCombine);
       }
     });
   }
