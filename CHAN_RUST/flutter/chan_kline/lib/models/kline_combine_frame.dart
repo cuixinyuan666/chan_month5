@@ -42,26 +42,4 @@ class KlineCombineFrame {
   }
 }
 
-/// 主图指标类型（可多选叠加）。
-/// 命名：K0=原始K，K1=笔，K2=线段，Kn=第n层（旧称「n段」）。
-enum MainChartIndicator {
-  biLine('K1连线'),
-  segLine('K2及以上连线'),
-  klineCombine('K0合并'),
-  biKlineCombine('K1合并');
-
-  const MainChartIndicator(this.label);
-  final String label;
-}
-
-/// 副图指标类型。
-enum SubChartIndicator {
-  volume('成交量'),
-  biConfirm('K0合并分型确认'),
-  segConfirm('K2确认'),
-  firstSegDir('首K1向'),
-  fractalPeakDist('K0分型极点距');
-
-  const SubChartIndicator(this.label);
-  final String label;
-}
+// 主/副图指标定义见 chart_indicator.dart（按加载后 maxKn 动态生成）

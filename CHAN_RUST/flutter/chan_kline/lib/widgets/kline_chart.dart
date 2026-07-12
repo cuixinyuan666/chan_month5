@@ -13,6 +13,7 @@ import '../models/bi_segment.dart';
 import '../models/bi_virtual_bar.dart';
 import '../models/bi_virtual_bar_view.dart';
 import '../models/kline_bar.dart';
+import '../models/chart_indicator.dart';
 import '../models/kline_combine_frame.dart';
 import '../models/bar_feature_lookup.dart';
 import '../models/level_models.dart';
@@ -51,6 +52,7 @@ class KlineChart extends StatefulWidget {
     this.truncationCheck = true,
     this.onMainIndicatorsChanged,
     this.onSubIndicatorsChanged,
+    this.indicatorsEnabled = true,
     this.autoFollowLatest = false,
     this.onTapStepBack,
     this.onTapPlay,
@@ -78,6 +80,8 @@ class KlineChart extends StatefulWidget {
   final bool truncationCheck;
   final ValueChanged<Set<MainChartIndicator>>? onMainIndicatorsChanged;
   final ValueChanged<Set<SubChartIndicator>>? onSubIndicatorsChanged;
+  /// 无数据时禁止点主/副图指标入口
+  final bool indicatorsEnabled;
   final bool autoFollowLatest;
 
   /// 点击左/中/右：后退 / 播放暂停 / 前进
@@ -116,23 +120,24 @@ class _KlineChartState extends State<KlineChart> {
   double _splitDragStartFraction = 0.79;
   double _chartBodyH = 1;
 
-  Set<SubChartIndicator> get _activeSubs {
-    if (widget.subIndicators.isEmpty) {
-      return {SubChartIndicator.biConfirm};
-    }
-    return widget.subIndicators;
-  }
+  Set<SubChartIndicator> get _activeSubs => widget.subIndicators;
 
-  Set<MainChartIndicator> get _activeMains {
-    if (widget.mainIndicators.isEmpty) {
-      return {
-        MainChartIndicator.klineCombine,
-        MainChartIndicator.biLine,
-        MainChartIndicator.segLine,
-      };
-    }
-    return widget.mainIndicators;
-  }
+  Set<MainChartIndicator> get _activeMains => widget.mainIndicators;
+
+  /// 当前数据最高 Kn → 动态生成可选指标
+  int get _maxKn => chartMaxKn(
+        levels: widget.levels,
+        biSegments: widget.biSegments,
+      );
+
+  List<MainChartIndicator> get _mainCatalog =>
+      buildMainIndicatorCatalog(_maxKn);
+
+  List<SubChartIndicator> get _subCatalog =>
+      buildSubIndicatorCatalog(_maxKn);
+
+  /// 副图是否展开（无勾选副图指标则收起整块副图区）
+  bool get _showSubPane => _activeSubs.isNotEmpty;
 
   @override
   void initState() {
@@ -387,36 +392,39 @@ class _KlineChartState extends State<KlineChart> {
   }
 
   Future<void> _pickMainIndicators(BuildContext context) async {
+    if (!widget.indicatorsEnabled) return;
     final picked = await showMainIndicatorPicker(
       context: context,
       selected: _activeMains,
+      available: _mainCatalog,
     );
-    if (picked != null && picked.isNotEmpty) {
+    // null 已在 picker 内转成草稿；此处仍可能为 Set（含空）
+    if (picked != null) {
       widget.onMainIndicatorsChanged?.call(picked);
     }
   }
 
   Future<void> _pickSubIndicators(BuildContext context) async {
+    if (!widget.indicatorsEnabled) return;
     final picked = await showSubIndicatorPicker(
       context: context,
       selected: _activeSubs,
+      available: _subCatalog,
     );
-    if (picked != null && picked.isNotEmpty) {
+    if (picked != null) {
       widget.onSubIndicatorsChanged?.call(picked);
     }
   }
 
-  /// 双击关闭某一主图指标；至少保留一个。
+  /// 双击关闭某一主图指标（可关到空=只留 K0 线）。
   void _closeMainIndicator(MainChartIndicator item) {
     final next = Set<MainChartIndicator>.from(_activeMains)..remove(item);
-    if (next.isEmpty) return;
     widget.onMainIndicatorsChanged?.call(next);
   }
 
-  /// 双击关闭某一副图指标；至少保留一个。
+  /// 双击关闭某一副图指标（可关到空=收起副图）。
   void _closeSubIndicator(SubChartIndicator item) {
     final next = Set<SubChartIndicator>.from(_activeSubs)..remove(item);
-    if (next.isEmpty) return;
     widget.onSubIndicatorsChanged?.call(next);
   }
 
@@ -431,8 +439,16 @@ class _KlineChartState extends State<KlineChart> {
         final w = constraints.maxWidth;
         final h = constraints.maxHeight;
         _chartBodyH = math.max(1.0, h);
-        final mainH = _chartBodyH * _mainFraction;
-        final volH = _chartBodyH - mainH;
+        // 无副图指标：收起副图，主图吃满（底部只留 X 轴）
+        final double mainH;
+        final double volH;
+        if (_showSubPane) {
+          mainH = _chartBodyH * _mainFraction;
+          volH = _chartBodyH - mainH;
+        } else {
+          volH = KlineViewport.xAxisH;
+          mainH = math.max(1.0, _chartBodyH - volH);
+        }
         final xAxisTop = mainH + volH - KlineViewport.xAxisH;
         final contentBottom = xAxisTop;
         _chartSize = Size(w, mainH + volH);
@@ -520,67 +536,82 @@ class _KlineChartState extends State<KlineChart> {
                 ),
               ),
             ),
-            // 主副图分割条叠在手势层之上，才能上下拖调高度
-            Positioned(
-              left: KlineViewport.padL,
-              right: KlineViewport.padR,
-              top: mainH - 4,
-              height: 8,
-              child: MouseRegion(
-                cursor: SystemMouseCursors.resizeUpDown,
-                child: Listener(
-                  behavior: HitTestBehavior.opaque,
-                  onPointerDown: _onSplitDown,
-                  onPointerMove: _onSplitMove,
-                  onPointerUp: _onSplitUp,
-                  child: Center(
-                    child: Container(
-                      height: _splitDragging ? 3 : 2,
-                      decoration: BoxDecoration(
-                        color: _splitDragging
-                            ? const Color(0xAA42A5F5)
-                            : const Color(0x55FFFFFF),
-                        borderRadius: BorderRadius.circular(2),
+            // 主副图分割条（副图收起时不显示）
+            if (_showSubPane)
+              Positioned(
+                left: KlineViewport.padL,
+                right: KlineViewport.padR,
+                top: mainH - 4,
+                height: 8,
+                child: MouseRegion(
+                  cursor: SystemMouseCursors.resizeUpDown,
+                  child: Listener(
+                    behavior: HitTestBehavior.opaque,
+                    onPointerDown: _onSplitDown,
+                    onPointerMove: _onSplitMove,
+                    onPointerUp: _onSplitUp,
+                    child: Center(
+                      child: Container(
+                        height: _splitDragging ? 3 : 2,
+                        decoration: BoxDecoration(
+                          color: _splitDragging
+                              ? const Color(0xAA42A5F5)
+                              : const Color(0x55FFFFFF),
+                          borderRadius: BorderRadius.circular(2),
+                        ),
                       ),
                     ),
                   ),
                 ),
               ),
-            ),
-            // 主图：↓ + 已选指标名（悬停提亮；双击名称关闭）
+            // 主图：↓ + 已选指标名（无数据不可点）
             Positioned(
               left: 0,
               top: 0,
-              child: IndicatorPickerChip(
-                entries: MainChartIndicator.values
-                    .where(_activeMains.contains)
-                    .map(
-                      (e) => IndicatorChipEntry(
-                        label: e.label,
-                        onDoubleTapClose: () => _closeMainIndicator(e),
-                      ),
-                    )
-                    .toList(),
-                onTapDropdown: () => _pickMainIndicators(context),
-                maxWidth: math.min(280, w * 0.55),
+              child: IgnorePointer(
+                ignoring: !widget.indicatorsEnabled,
+                child: Opacity(
+                  opacity: widget.indicatorsEnabled ? 1 : 0.35,
+                  child: IndicatorPickerChip(
+                    entries: _mainCatalog
+                        .where(_activeMains.contains)
+                        .map(
+                          (e) => IndicatorChipEntry(
+                            label: e.label,
+                            onDoubleTapClose: () => _closeMainIndicator(e),
+                          ),
+                        )
+                        .toList(),
+                    onTapDropdown: () => _pickMainIndicators(context),
+                    maxWidth: math.min(280, w * 0.55),
+                    emptyHint: 'K0',
+                  ),
+                ),
               ),
             ),
-            // 副图：↓ + 已选指标名（悬停提亮；双击名称关闭）
+            // 副图入口
             Positioned(
               left: KlineViewport.padL,
-              top: mainH + 2,
-              child: IndicatorPickerChip(
-                entries: SubChartIndicator.values
-                    .where(_activeSubs.contains)
-                    .map(
-                      (e) => IndicatorChipEntry(
-                        label: e.label,
-                        onDoubleTapClose: () => _closeSubIndicator(e),
-                      ),
-                    )
-                    .toList(),
-                onTapDropdown: () => _pickSubIndicators(context),
-                maxWidth: math.min(280, w * 0.55),
+              top: _showSubPane ? mainH + 2 : math.max(0.0, mainH - 26),
+              child: IgnorePointer(
+                ignoring: !widget.indicatorsEnabled,
+                child: Opacity(
+                  opacity: widget.indicatorsEnabled ? 1 : 0.35,
+                  child: IndicatorPickerChip(
+                    entries: _subCatalog
+                        .where(_activeSubs.contains)
+                        .map(
+                          (e) => IndicatorChipEntry(
+                            label: e.label,
+                            onDoubleTapClose: () => _closeSubIndicator(e),
+                          ),
+                        )
+                        .toList(),
+                    onTapDropdown: () => _pickSubIndicators(context),
+                    maxWidth: math.min(280, w * 0.55),
+                    emptyHint: '未选',
+                  ),
+                ),
               ),
             ),
           ],
@@ -659,20 +690,42 @@ class _KlineCompositePainter extends CustomPainter {
     final barW = _candleBodyW(slotW);
     final xAxisTop = contentBottom;
 
-    if (mainIndicators.contains(MainChartIndicator.klineCombine)) {
-      // 仿 K1合并：先铺淡 K0 线，再描 K0合并框
-      _drawKlineCombineOnMainChart(canvas, size.width, plotTop, plotH, barW, slotW);
+    if (mainIndicators.isEmpty) {
+      // 关闭全部主图指标：只画 K0 线
+      _drawCandles(canvas, size.width, plotTop, plotH, barW, slotW);
+    } else {
+      final hasK0Combine =
+          mainIndicators.contains(const MainChartIndicator.combine(0));
+      // 未勾 K0合并时仍铺底层 K0 蜡烛，避免只选连线时空白
+      if (!hasK0Combine) {
+        _drawCandles(canvas, size.width, plotTop, plotH, barW, slotW);
+      }
+      // 按勾选项逐层画：勾哪层画哪层（不再一项自动叠全部）
+      for (final ind in mainIndicators) {
+        if (ind.kind == MainIndicatorKind.combine) {
+          if (ind.kn == 0) {
+            _drawKlineCombineOnMainChart(
+                canvas, size.width, plotTop, plotH, barW, slotW);
+          } else if (ind.kn == 1) {
+            _drawBiCombineOnMainChart(
+                canvas, size.width, plotTop, plotH, barW, slotW);
+          } else {
+            _drawLevelCombineOnMainChart(
+                canvas, size.width, plotTop, plotH, barW, slotW, ind.kn);
+          }
+        } else if (ind.kind == MainIndicatorKind.line) {
+          if (ind.kn == 1) {
+            _drawBiSegments(canvas, size.width, plotTop, plotH, slotW);
+          } else {
+            _drawSegLinesForLevel(
+                canvas, size.width, plotTop, plotH, slotW, ind.kn);
+          }
+        }
+      }
     }
-    if (mainIndicators.contains(MainChartIndicator.biKlineCombine)) {
-      _drawBiCombineOnMainChart(canvas, size.width, plotTop, plotH, barW, slotW);
+    if (subIndicators.isNotEmpty) {
+      _drawSubCharts(canvas, size.width, mainH, barW, slotW);
     }
-    if (mainIndicators.contains(MainChartIndicator.biLine)) {
-      _drawBiSegments(canvas, size.width, plotTop, plotH, slotW);
-    }
-    if (mainIndicators.contains(MainChartIndicator.segLine)) {
-      _drawSegLines(canvas, size.width, plotTop, plotH, slotW);
-    }
-    _drawSubCharts(canvas, size.width, mainH, barW, slotW);
 
     _drawYLabels(canvas, size.width, plotTop, plotH, priceRange);
     _drawXAxis(canvas, size.width, xAxisTop);
@@ -1022,67 +1075,105 @@ class _KlineCompositePainter extends CustomPainter {
     return 0;
   }
 
-  /// N≥2 段主图连线：各层独立色/线型/粗细；已冻结 + 构建中虚线。
-  void _drawSegLines(
+  /// 指定层 Kn 连线（kn≥2）；勾哪层画哪层。
+  void _drawSegLinesForLevel(
     Canvas canvas,
     double w,
     double plotTop,
     double plotH,
     double slotW,
+    int kn,
   ) {
+    if (kn < 2) return;
     final tailIdx = segAsOf ?? (bars.isEmpty ? -1 : bars.last.idx);
 
-    if (levels.length >= 2) {
-      // 低层先画、高层后画，避免粗线被遮挡
-      final bundles = levels.where((b) => b.level >= 2).toList()
-        ..sort((a, b) => a.level.compareTo(b.level));
-      for (final bundle in bundles) {
-        _drawOneLevelLines(
-          canvas,
-          w,
-          plotTop,
-          plotH,
-          slotW,
-          bundle: bundle,
-          tailIdx: tailIdx,
-        );
-      }
-    } else {
-      final style = ChartLevelLineStyle.forLevel(2);
-      final paint = Paint()
-        ..color = style.color
-        ..strokeWidth = style.strokeWidth
-        ..style = PaintingStyle.stroke;
-      for (final seg in segAnalysis.segLines) {
-        final beginIdx = seg.beginX;
-        final endIdx = seg.endX;
-        if (endIdx < viewport.viewXMin - 1 || beginIdx > viewport.viewXMax + 1) {
-          continue;
-        }
-        final beginFx = seg.dir < 0 ? 'TOP' : 'BOTTOM';
-        final endFx = seg.dir > 0 ? 'TOP' : 'BOTTOM';
-        final beginPrice = poleBarPrice(bars, beginIdx, beginFx);
-        final endPrice = poleBarPrice(bars, endIdx, endFx);
-        if (beginPrice == null || endPrice == null) continue;
-        final a = Offset(_barCenterX(beginIdx, w, slotW), priceRange.yOf(beginPrice, plotTop, plotH));
-        final b = Offset(_barCenterX(endIdx, w, slotW), priceRange.yOf(endPrice, plotTop, plotH));
-        _drawStyledSegmentLine(canvas, a, b, paint, style, building: false);
-      }
-      if (tailIdx >= 0) {
-        _drawBuildingLevelLine(
-          canvas,
-          w,
-          plotTop,
-          plotH,
-          slotW,
-          level: 2,
-          style: style,
-          tailIdx: tailIdx,
-          confirms: const [],
-          useLegacySegAnalysis: true,
-        );
+    LevelBundle? bundle;
+    for (final b in levels) {
+      if (b.level == kn) {
+        bundle = b;
+        break;
       }
     }
+    if (bundle != null) {
+      _drawOneLevelLines(
+        canvas,
+        w,
+        plotTop,
+        plotH,
+        slotW,
+        bundle: bundle,
+        tailIdx: tailIdx,
+      );
+      return;
+    }
+    // 回退：仅 K2 且无 levels 时用旧 segAnalysis
+    if (kn != 2) return;
+    final style = ChartLevelLineStyle.forLevel(2);
+    final paint = Paint()
+      ..color = style.color
+      ..strokeWidth = style.strokeWidth
+      ..style = PaintingStyle.stroke;
+    for (final seg in segAnalysis.segLines) {
+      final beginIdx = seg.beginX;
+      final endIdx = seg.endX;
+      if (endIdx < viewport.viewXMin - 1 || beginIdx > viewport.viewXMax + 1) {
+        continue;
+      }
+      final beginFx = seg.dir < 0 ? 'TOP' : 'BOTTOM';
+      final endFx = seg.dir > 0 ? 'TOP' : 'BOTTOM';
+      final beginPrice = poleBarPrice(bars, beginIdx, beginFx);
+      final endPrice = poleBarPrice(bars, endIdx, endFx);
+      if (beginPrice == null || endPrice == null) continue;
+      final a = Offset(_barCenterX(beginIdx, w, slotW), priceRange.yOf(beginPrice, plotTop, plotH));
+      final b = Offset(_barCenterX(endIdx, w, slotW), priceRange.yOf(endPrice, plotTop, plotH));
+      _drawStyledSegmentLine(canvas, a, b, paint, style, building: false);
+    }
+    if (tailIdx >= 0) {
+      _drawBuildingLevelLine(
+        canvas,
+        w,
+        plotTop,
+        plotH,
+        slotW,
+        level: 2,
+        style: style,
+        tailIdx: tailIdx,
+        confirms: const [],
+        useLegacySegAnalysis: true,
+      );
+    }
+  }
+
+  /// 主图 Kn 合并框（kn≥2）：用该层 combineFrames。
+  void _drawLevelCombineOnMainChart(
+    Canvas canvas,
+    double w,
+    double plotTop,
+    double plotH,
+    double barW,
+    double slotW,
+    int kn,
+  ) {
+    LevelBundle? bundle;
+    for (final b in levels) {
+      if (b.level == kn) {
+        bundle = b;
+        break;
+      }
+    }
+    if (bundle == null || bundle.combineFrames.isEmpty) return;
+    final style = ChartLevelLineStyle.forLevel(kn);
+    _drawCombineFramesOnMainChart(
+      canvas,
+      w,
+      plotTop,
+      plotH,
+      barW,
+      slotW,
+      bundle.combineFrames,
+      style.color.withValues(alpha: 0.85),
+      style.color.withValues(alpha: 0.08),
+    );
   }
 
   /// 单层 N 段（level≥2）已冻结段 + 构建中段。
@@ -1332,13 +1423,12 @@ class _KlineCompositePainter extends CustomPainter {
     double plotTop,
     double plotH,
     double barW,
-    double slotW, {
-    bool faint = false,
-  }) {
-    // faint：作 K0合并底层时压低透明度，避免盖住合并框
-    final up = faint ? const Color(0x38E53935) : const Color(0xFFE53935);
-    final down = faint ? const Color(0x3826A69A) : const Color(0xFF26A69A);
-    final wick = Paint()..strokeWidth = faint ? 1.0 : 1.2;
+    double slotW,
+  ) {
+    // 沿用原主图「K0」蜡烛样式（红涨绿跌实体+影线）
+    const up = Color(0xFFE53935);
+    const down = Color(0xFF26A69A);
+    final wick = Paint()..strokeWidth = 1.2;
 
     for (var i = 0; i < bars.length; i++) {
       final idx = bars[i].idx;
@@ -1364,7 +1454,7 @@ class _KlineCompositePainter extends CustomPainter {
     }
   }
 
-  /// 主图 K0合并：先铺淡 K0 线，再描 K0合并框（对齐 K1合并画法）。
+  /// 主图 K0合并：底层用原「K0」蜡烛样式，再描 K0合并框。
   void _drawKlineCombineOnMainChart(
     Canvas canvas,
     double w,
@@ -1373,7 +1463,7 @@ class _KlineCompositePainter extends CustomPainter {
     double barW,
     double slotW,
   ) {
-    _drawCandles(canvas, w, plotTop, plotH, barW, slotW, faint: true);
+    _drawCandles(canvas, w, plotTop, plotH, barW, slotW);
     if (combineFrames.isEmpty) return;
     _drawCombineFramesOnMainChart(
       canvas,
@@ -1498,36 +1588,27 @@ class _KlineCompositePainter extends CustomPainter {
     final innerH = math.max(12.0, innerBottom - innerTop);
     if (innerH <= 0) return;
 
-    if (subIndicators.contains(SubChartIndicator.volume)) {
+    if (subIndicators.any((e) => e.kind == SubIndicatorKind.volume)) {
       _drawVolume(canvas, w, innerTop, innerBottom, innerH, barW, slotW);
     }
-    if (subIndicators.contains(SubChartIndicator.biConfirm)) {
-      _drawBiConfirmSubChart(canvas, w, innerTop, innerH, barW, slotW);
+    // 勾哪层画哪层；叠加时多层叠画
+    final confirmKns = subIndicators
+        .where((e) => e.kind == SubIndicatorKind.fractalConfirm)
+        .map((e) => e.kn)
+        .toList()
+      ..sort();
+    for (final kn in confirmKns) {
+      _drawKnFractalConfirmSubChart(
+          canvas, w, innerTop, innerH, barW, slotW, kn);
     }
-    if (subIndicators.contains(SubChartIndicator.segConfirm)) {
-      _drawSegConfirmSubChart(canvas, w, innerTop, innerH, barW, slotW);
-    }
-    if (subIndicators.contains(SubChartIndicator.firstSegDir)) {
-      _drawDirStepSubChart(
-        canvas,
-        w,
-        innerTop,
-        innerH,
-        barW,
-        slotW,
-        (i) => segAnalysis.snapshotAt(bars[i].idx)?.firstSegDir ?? 0,
-        const Color(0xFF8B5CF6),
-      );
-    }
-    if (subIndicators.contains(SubChartIndicator.fractalPeakDist)) {
-      _drawFractalPeakDistSubChart(
-        canvas,
-        w,
-        innerTop,
-        innerH,
-        barW,
-        slotW,
-      );
+    final peakKns = subIndicators
+        .where((e) => e.kind == SubIndicatorKind.fractalPeakDist)
+        .map((e) => e.kn)
+        .toList()
+      ..sort();
+    for (final kn in peakKns) {
+      _drawKnFractalPeakDistSubChart(
+          canvas, w, innerTop, innerH, barW, slotW, kn);
     }
   }
 
@@ -1559,32 +1640,37 @@ class _KlineCompositePainter extends CustomPainter {
     }
   }
 
-  /// 副图 ±1 方向柱（K线合并分型确认 / 段确认共用）：0 轴 + 确认当步 K 索引处画柱。
-  void _drawSignedConfirmBars(
+  /// KN 分型确认柱颜色：labelKn=0→K0分型确认（level=1），以此类推
+  Color _knConfirmColor(int labelKn) {
+    final level = labelKn + 1;
+    if (level <= 1) return const Color(0xFFE53935);
+    return ChartLevelLineStyle.forLevel(level).color;
+  }
+
+  /// 单层 Kn 分型确认柱（labelKn → level=labelKn+1）。
+  void _drawKnFractalConfirmSubChart(
     Canvas canvas,
     double w,
     double innerTop,
     double innerH,
     double barW,
-    double slotW, {
-    required Iterable<(int x, int value)> points,
-  }) {
+    double slotW,
+    int labelKn,
+  ) {
     const minV = -1.0;
     const maxV = 1.0;
     final span = maxV - minV;
-
     double subY(double v) => innerTop + (maxV - v) / span * innerH;
     final y0 = subY(0);
-
     final barWClamped = math.max(2.0, math.min(barW, 8.0));
-    for (final (x, value) in points) {
-      if (x < viewport.viewXMin - 1 || x > viewport.viewXMax + 1) continue;
-      if (value == 0) continue;
+    final color = _knConfirmColor(labelKn);
+    final level = labelKn + 1;
+
+    void paintPoint(int x, int value) {
+      if (x < viewport.viewXMin - 1 || x > viewport.viewXMax + 1) return;
+      if (value == 0) return;
       final cx = _barCenterX(x, w, slotW);
       final yp = subY(value.toDouble());
-      final color = value > 0
-          ? const Color(0xFFE53935)
-          : const Color(0xFF26A69A);
       final top = math.min(yp, y0);
       final height = math.max(1.0, (yp - y0).abs());
       canvas.drawRect(
@@ -1592,142 +1678,113 @@ class _KlineCompositePainter extends CustomPainter {
         Paint()..color = color,
       );
     }
+
+    LevelBundle? bundle;
+    for (final b in levels) {
+      if (b.level == level) {
+        bundle = b;
+        break;
+      }
+    }
+    if (bundle != null) {
+      for (final c in bundle.confirms) {
+        if ((c.fx == 'TOP' || c.fx == 'BOTTOM') && c.value != 0) {
+          paintPoint(c.x, c.value);
+        }
+      }
+      return;
+    }
+    // 回退：K0 层用旧 bi_confirms
+    if (labelKn == 0) {
+      for (final s in biConfirmSignals) {
+        paintPoint(s.x, s.value);
+      }
+    }
   }
 
-  void _drawBiConfirmSubChart(
+  /// 由确认列表生成逐 K 极点距（确认当步起算；不含极点 K；对齐 Rust enrich）。
+  List<int> _peakDistSeries(int barCount, List<LevelConfirm> confirms) {
+    final out = List<int>.filled(barCount, 0);
+    if (barCount <= 0) return out;
+    var ptr = 0;
+    int? extreme;
+    for (var i = 0; i < barCount; i++) {
+      while (ptr < confirms.length && confirms[ptr].x <= i) {
+        final c = confirms[ptr];
+        if ((c.fx == 'TOP' || c.fx == 'BOTTOM') && c.poleX >= 0) {
+          extreme = c.poleX;
+        }
+        ptr++;
+      }
+      out[i] = extreme == null ? 0 : i - extreme;
+    }
+    return out;
+  }
+
+  /// 单层 Kn 分型极点距折线（labelKn → level=labelKn+1）。
+  void _drawKnFractalPeakDistSubChart(
     Canvas canvas,
     double w,
     double innerTop,
     double innerH,
     double barW,
     double slotW,
+    int labelKn,
   ) {
-    _drawSignedConfirmBars(
-      canvas,
-      w,
-      innerTop,
-      innerH,
-      barW,
-      slotW,
-      points: biConfirmSignals.map((s) => (s.x, s.value)),
-    );
-  }
+    if (bars.isEmpty) return;
+    final n = bars.length;
+    final level = labelKn + 1;
 
-  void _drawSegConfirmSubChart(
-    Canvas canvas,
-    double w,
-    double innerTop,
-    double innerH,
-    double barW,
-    double slotW,
-  ) {
-    if (segAnalysis.segConfirms.isEmpty) return;
-
-    // 与 K线合并分型确认一致：展示全部已冻结段确认，仅按视窗裁剪（不用十字线二次截断）
-    _drawSignedConfirmBars(
-      canvas,
-      w,
-      innerTop,
-      innerH,
-      barW,
-      slotW,
-      points: segAnalysis.segConfirms
-          .where(
-            (s) =>
-                (s.fx == 'TOP' || s.fx == 'BOTTOM') && s.value != 0,
-          )
-          .map((s) => (s.x, s.value)),
-    );
-  }
-
-  /// 副图 K线分型极点距：折线 + 柱，0=首笔确认前。
-  void _drawFractalPeakDistSubChart(
-    Canvas canvas,
-    double w,
-    double innerTop,
-    double innerH,
-    double barW,
-    double slotW,
-  ) {
-    if (bars.isEmpty || barFeatures.isEmpty) return;
+    List<int> series;
+    Color color;
+    LevelBundle? bundle;
+    for (final b in levels) {
+      if (b.level == level) {
+        bundle = b;
+        break;
+      }
+    }
+    if (bundle != null) {
+      series = _peakDistSeries(n, bundle.confirms);
+      color = labelKn <= 0
+          ? const Color(0xFF38BDF8)
+          : ChartLevelLineStyle.forLevel(level).color;
+    } else if (labelKn == 0 && barFeatures.isNotEmpty) {
+      series = List<int>.generate(
+        n,
+        (i) => i < barFeatures.length ? barFeatures[i].fractalPeakDist : 0,
+      );
+      color = const Color(0xFF38BDF8);
+    } else {
+      return;
+    }
 
     var maxV = 1.0;
-    for (final f in barFeatures) {
-      if (f.fractalPeakDist > maxV) maxV = f.fractalPeakDist.toDouble();
+    for (final v in series) {
+      if (v > maxV) maxV = v.toDouble();
     }
     final span = math.max(1.0, maxV);
     double subY(double v) => innerTop + (span - v) / span * innerH;
-    final y0 = subY(0);
 
-    const lineColor = Color(0xFF38BDF8);
     final linePaint = Paint()
-      ..color = lineColor
-      ..strokeWidth = 1.4
+      ..color = color
+      ..strokeWidth = 1.2
       ..style = PaintingStyle.stroke;
-    final barPaint = Paint()..color = lineColor.withValues(alpha: 0.45);
-    final barWClamped = math.max(1.5, math.min(barW, 6.0));
-
-    Offset? prev;
-    for (var i = 0; i < bars.length; i++) {
+    final path = Path();
+    var started = false;
+    for (var i = 0; i < series.length; i++) {
       final idx = bars[i].idx;
       if (idx < viewport.viewXMin - 1 || idx > viewport.viewXMax + 1) continue;
-      final feat = _featureAt(idx);
-      final dist = feat?.fractalPeakDist ?? 0;
-      if (dist <= 0) {
-        prev = null;
-        continue;
-      }
-      final cx = _barCenterX(idx, w, slotW);
-      final y = subY(dist.toDouble());
-      final top = math.min(y, y0);
-      final height = math.max(1.0, (y - y0).abs());
-      canvas.drawRect(
-        Rect.fromLTWH(cx - barWClamped / 2, top, barWClamped, height),
-        barPaint,
-      );
-      final pt = Offset(cx, y);
-      if (prev != null) {
-        canvas.drawLine(prev, pt, linePaint);
-      }
-      prev = pt;
-    }
-  }
-
-  void _drawDirStepSubChart(
-    Canvas canvas,
-    double w,
-    double innerTop,
-    double innerH,
-    double barW,
-    double slotW,
-    int Function(int barIdx) dirAt,
-    Color color,
-  ) {
-    if (bars.isEmpty) return;
-    final yMid = innerTop + innerH / 2;
-    final yUp = innerTop + innerH * 0.22;
-    final yDn = innerTop + innerH * 0.78;
-    final barWClamped = math.max(1.0, barW);
-    final paint = Paint()..color = color.withValues(alpha: 0.85);
-
-    for (var i = 0; i < bars.length; i++) {
-      final idx = bars[i].idx;
-      if (idx < viewport.viewXMin - 1 || idx > viewport.viewXMax + 1) continue;
-      final d = dirAt(i);
-      if (d == 0) continue;
-      final cx = _barCenterX(idx, w, slotW);
-      if (d > 0) {
-        canvas.drawRect(
-          Rect.fromLTWH(cx - barWClamped / 2, yUp, barWClamped, math.max(2.0, yMid - yUp)),
-          paint,
-        );
+      final x = _barCenterX(idx, w, slotW);
+      final y = subY(series[i].toDouble());
+      if (!started) {
+        path.moveTo(x, y);
+        started = true;
       } else {
-        canvas.drawRect(
-          Rect.fromLTWH(cx - barWClamped / 2, yMid, barWClamped, math.max(2.0, yDn - yMid)),
-          paint,
-        );
+        path.lineTo(x, y);
       }
     }
+    if (started) canvas.drawPath(path, linePaint);
   }
 
   void _drawYLabels(Canvas canvas, double w, double plotTop, double plotH, PriceRange pr) {
@@ -1868,13 +1925,6 @@ class _KlineCompositePainter extends CustomPainter {
       row.paint(canvas, Offset(boxX + 8, ry));
       ry += 16;
     }
-  }
-
-  BarCrosshairFeature? _featureAt(int idx) {
-    for (final f in barFeatures) {
-      if (f.idx == idx) return f;
-    }
-    return null;
   }
 
   /// 通用 pattern 虚线（pattern=[画,空,画,空,…] 像素）。

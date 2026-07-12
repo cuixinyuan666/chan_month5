@@ -1,22 +1,39 @@
 import 'package:flutter/material.dart';
 
-import '../models/kline_combine_frame.dart';
+import '../models/chart_indicator.dart';
 
-/// 主图指标选择：支持单选 / 叠加（逻辑对齐副图选择器）。
+/// 主图指标选择：支持单选 / 叠加；点遮罩外关闭并保存；可全不选。
+/// [available] 由当前数据 maxKn 动态生成。
 Future<Set<MainChartIndicator>?> showMainIndicatorPicker({
   required BuildContext context,
   required Set<MainChartIndicator> selected,
+  required List<MainChartIndicator> available,
 }) {
+  // 点外部关闭时 dialog 返回 null，用 holder 带回最新草稿
+  final draftHolder = <Set<MainChartIndicator>>[
+    Set<MainChartIndicator>.from(selected),
+  ];
   return showDialog<Set<MainChartIndicator>>(
     context: context,
-    builder: (ctx) => _MainIndicatorPickerDialog(initial: selected),
-  );
+    barrierDismissible: true,
+    builder: (ctx) => _MainIndicatorPickerDialog(
+      initial: selected,
+      available: available,
+      onDraftChanged: (d) => draftHolder[0] = d,
+    ),
+  ).then((r) => r ?? draftHolder[0]);
 }
 
 class _MainIndicatorPickerDialog extends StatefulWidget {
-  const _MainIndicatorPickerDialog({required this.initial});
+  const _MainIndicatorPickerDialog({
+    required this.initial,
+    required this.available,
+    required this.onDraftChanged,
+  });
 
   final Set<MainChartIndicator> initial;
+  final List<MainChartIndicator> available;
+  final ValueChanged<Set<MainChartIndicator>> onDraftChanged;
 
   @override
   State<_MainIndicatorPickerDialog> createState() =>
@@ -25,23 +42,26 @@ class _MainIndicatorPickerDialog extends StatefulWidget {
 
 class _MainIndicatorPickerDialogState extends State<_MainIndicatorPickerDialog> {
   late Set<MainChartIndicator> _draft;
-  late bool _stackMode; // 叠加（原多选）
+  late bool _stackMode;
 
   @override
   void initState() {
     super.initState();
     _draft = Set<MainChartIndicator>.from(widget.initial);
-    if (_draft.isEmpty) {
-      _draft = {MainChartIndicator.klineCombine};
-    }
     _stackMode = _draft.length > 1;
+    widget.onDraftChanged(_draft);
+  }
+
+  void _setDraft(Set<MainChartIndicator> next) {
+    _draft = next;
+    widget.onDraftChanged(_draft);
   }
 
   void _toggleStack(bool v) {
     setState(() {
       _stackMode = v;
       if (!_stackMode && _draft.length > 1) {
-        _draft = {_draft.first};
+        _setDraft({_draft.first});
       }
     });
   }
@@ -52,64 +72,53 @@ class _MainIndicatorPickerDialogState extends State<_MainIndicatorPickerDialog> 
 
   void _toggleStackItem(MainChartIndicator item, bool? checked) {
     setState(() {
+      final next = Set<MainChartIndicator>.from(_draft);
       if (checked == true) {
-        _draft.add(item);
+        next.add(item);
       } else {
-        _draft.remove(item);
+        next.remove(item);
       }
-      if (_draft.isEmpty) {
-        _draft.add(MainChartIndicator.klineCombine);
-      }
+      _setDraft(next);
     });
-  }
-
-  void _confirmStack() {
-    Navigator.of(context).pop(Set<MainChartIndicator>.from(_draft));
   }
 
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
       backgroundColor: const Color(0xFF1E1E1E),
-      titlePadding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-      title: Row(
-        children: [
-          TextButton.icon(
-            onPressed: () => _toggleStack(!_stackMode),
-            icon: Icon(
-              _stackMode ? Icons.check_box : Icons.check_box_outline_blank,
-              size: 18,
-              color: _stackMode ? const Color(0xFF42A5F5) : const Color(0x99FFFFFF),
-            ),
-            label: Text(
-              '叠加',
-              style: TextStyle(
-                color: _stackMode ? const Color(0xFF42A5F5) : const Color(0xFFE2E8F0),
-                fontSize: 13,
-              ),
-            ),
-            style: TextButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              minimumSize: Size.zero,
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            ),
-          ),
-          const Spacer(),
-          Text(
-            _stackMode ? '勾选后点确定' : '点选即切换',
-            style: const TextStyle(color: Color(0x99FFFFFF), fontSize: 11),
-          ),
-        ],
-      ),
+      title: const Text('主图指标', style: TextStyle(color: Colors.white)),
       content: SizedBox(
-        width: 260,
+        width: 320,
         child: Column(
           mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            Row(
+              children: [
+                const Spacer(),
+                TextButton.icon(
+                  onPressed: () => _toggleStack(!_stackMode),
+                  icon: Icon(
+                    _stackMode ? Icons.check_box : Icons.check_box_outline_blank,
+                    size: 18,
+                    color: const Color(0xFF42A5F5),
+                  ),
+                  label: const Text('叠加', style: TextStyle(fontSize: 13)),
+                  style: TextButton.styleFrom(
+                    foregroundColor: const Color(0xFF42A5F5),
+                    padding: EdgeInsets.zero,
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                ),
+              ],
+            ),
             const SizedBox(height: 4),
-            ...MainChartIndicator.values.map((item) {
-              // 单选/叠加：选择框统一靠右
+            if (widget.available.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 12),
+                child: Text('暂无可选指标', style: TextStyle(color: Color(0x99FFFFFF))),
+              ),
+            ...widget.available.map((item) {
               if (_stackMode) {
                 return CheckboxListTile(
                   dense: true,
@@ -137,17 +146,8 @@ class _MainIndicatorPickerDialogState extends State<_MainIndicatorPickerDialog> 
           ],
         ),
       ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('取消'),
-        ),
-        if (_stackMode)
-          FilledButton(
-            onPressed: _confirmStack,
-            child: Text('确定 (${_draft.length})'),
-          ),
-      ],
+      // 无取消/确定：点遮罩外即关闭并保存
+      actions: const [],
     );
   }
 }

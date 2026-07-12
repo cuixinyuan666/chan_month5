@@ -100,10 +100,10 @@ class AppDebugSnapshot {
     );
     buf.writeln();
 
-    buf.writeln('【合并/K1/K2统计（兼容层字段名仍为 bi_*/seg_*）】');
+    buf.writeln('【合并/K1/KN统计（兼容层字段名仍为 bi_*/seg_*）】');
     buf.writeln(
       'K0合并框 combine_frames=${combineFrames.length}；'
-      'K0合并分型确认 bi_confirms=${biConfirms.length}；'
+      'K0分型确认 bi_confirms=${biConfirms.length}；'
       'K1段 bi_segments=${biSegments.length}；'
       'bar_features=${barFeatures.length}',
     );
@@ -111,8 +111,8 @@ class AppDebugSnapshot {
         biCombineFrames.where((f) => f.fx == 'TOP' || f.fx == 'BOTTOM').length;
     buf.writeln(
       'K1合并框 bi_combine_frames=${biCombineFrames.length}（顶底分型=$biFxFrames）；'
-      'K2确认 seg_confirms=${segAnalysis.segConfirms.length}；'
-      'K2连线 seg_lines=${segAnalysis.segLines.length}',
+      'KN连线 seg_lines=${segAnalysis.segLines.length}；'
+      'levels=${levels.length}',
     );
     buf.writeln();
 
@@ -253,7 +253,7 @@ class AppDebugSnapshot {
   }
 
   static void _writeBiConfirms(StringBuffer buf, List<BiConfirmSignal> signals) {
-    buf.writeln('【K0合并分型确认最近8条】');
+    buf.writeln('【K0分型确认最近8条】');
     if (signals.isEmpty) {
       buf.writeln('（无）');
       buf.writeln();

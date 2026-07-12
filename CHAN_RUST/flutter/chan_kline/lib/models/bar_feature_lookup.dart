@@ -6,6 +6,7 @@ import 'bi_segment.dart';
 
 import 'kline_bar.dart';
 
+import 'chart_indicator.dart';
 import 'kline_combine_frame.dart';
 
 import 'level_models.dart';
@@ -193,10 +194,9 @@ class BarFeatureLookup {
 
       };
 
-      if (subIndicators.contains(SubChartIndicator.biConfirm)) {
-
+      if (subIndicators.any((e) =>
+          e.kind == SubIndicatorKind.fractalConfirm && e.kn == 0)) {
         (row['sub'] as Map<String, dynamic>)['bi_confirm_value'] = sig.value;
-
       }
 
     }
@@ -226,12 +226,6 @@ class BarFeatureLookup {
         'fractal_x2': sig.fractalX2,
 
       };
-
-      if (subIndicators.contains(SubChartIndicator.segConfirm)) {
-
-        (row['sub'] as Map<String, dynamic>)['seg_confirm'] = sig.value;
-
-      }
 
     }
 
@@ -278,50 +272,27 @@ class BarFeatureLookup {
         'seg_confirm': snap.segConfirm,
       };
 
-      if (subIndicators.contains(SubChartIndicator.firstSegDir) &&
-
-          snap.firstSegDir != 0) {
-
-        (row['sub'] as Map<String, dynamic>)['first_seg_dir'] = snap.firstSegDir;
-
-      }
-
-      if (subIndicators.contains(SubChartIndicator.segConfirm) &&
-
-          snap.segConfirm != 0) {
-
-        (row['sub'] as Map<String, dynamic>)['seg_confirm'] = snap.segConfirm;
-
-      }
+      // 已删副图「首K1向 / K2确认」：快照字段仍保留供其它用途
 
     }
 
 
 
-    if (subIndicators.contains(SubChartIndicator.volume)) {
-
+    if (subIndicators.any((e) => e.kind == SubIndicatorKind.volume)) {
       for (final row in byIdx.values) {
-
         (row['sub'] as Map<String, dynamic>)['volume'] = row['volume'];
-
       }
-
     }
 
 
 
-    if (subIndicators.contains(SubChartIndicator.fractalPeakDist)) {
-
+    if (subIndicators.any((e) =>
+        e.kind == SubIndicatorKind.fractalPeakDist && e.kn == 0)) {
       for (final f in barFeatures) {
-
         final row = byIdx.putIfAbsent(f.idx, () => {'idx': f.idx});
-
         (row['sub'] as Map<String, dynamic>)['fractal_peak_dist'] =
-
             f.fractalPeakDist;
-
       }
-
     }
 
 
@@ -419,27 +390,36 @@ class BarFeatureLookup {
     final lines = <String>[];
 
     void add(String label, dynamic v) {
-
       if (v == null) return;
-
-      if (v == 0 && (label == 'K2确认' || label == '首K1向')) {
-
-        return;
-
-      }
-
       lines.add('$label: $v');
-
     }
 
-    if (active.contains(SubChartIndicator.segConfirm)) add('K2确认', sub['seg_confirm']);
-
-    if (active.contains(SubChartIndicator.firstSegDir)) add('首K1向', sub['first_seg_dir']);
-
-    if (active.contains(SubChartIndicator.fractalPeakDist)) {
-
-      add('K0分型极点距', sub['fractal_peak_dist']);
-
+    for (final ind in active) {
+      if (ind.kind == SubIndicatorKind.fractalConfirm) {
+        if (ind.kn == 0) {
+          add('K0分型确认', sub['bi_confirm_value']);
+        } else {
+          // labelKn → level=kn+1，从 level_confirms 取当步值
+          final confirms = row['level_confirms'];
+          dynamic v;
+          if (confirms is Map) {
+            final c = confirms[ind.kn + 1];
+            if (c is LevelConfirm) {
+              v = c.value;
+            } else if (c is Map) {
+              v = c['value'];
+            }
+          }
+          add(ind.label, v);
+        }
+      }
+      if (ind.kind == SubIndicatorKind.fractalPeakDist) {
+        if (ind.kn == 0) {
+          add('K0分型极点距', sub['fractal_peak_dist']);
+        } else {
+          add(ind.label, sub['fractal_peak_dist_${ind.kn}']);
+        }
+      }
     }
 
     return lines;

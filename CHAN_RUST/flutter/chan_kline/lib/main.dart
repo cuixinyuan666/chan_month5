@@ -15,6 +15,7 @@ import 'models/bi_confirm_signal.dart';
 import 'models/bar_crosshair_feature.dart';
 import 'models/bi_segment.dart';
 import 'models/bi_virtual_bar_view.dart';
+import 'models/chart_indicator.dart';
 import 'models/kline_combine_frame.dart';
 import 'models/level_models.dart';
 import 'models/seg_analysis.dart';
@@ -96,12 +97,11 @@ class _KlineHomePageState extends State<KlineHomePage> {
   SegAnalysisBundle _segAnalysis = SegAnalysisBundle.empty();
   List<LevelBundle> _levels = [];
   Set<MainChartIndicator> _mainIndicators = {
-    MainChartIndicator.klineCombine,
-    MainChartIndicator.biLine,
-    MainChartIndicator.segLine,
-    MainChartIndicator.biKlineCombine,
+    const MainChartIndicator.combine(0),
   };
-  Set<SubChartIndicator> _subIndicators = {SubChartIndicator.biConfirm};
+  Set<SubChartIndicator> _subIndicators = {
+    const SubChartIndicator.fractalConfirm(0),
+  };
   int _stepIdx = -1; // -1 表示尚未步进
   bool _playing = false;
   Timer? _playTimer;
@@ -323,6 +323,19 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _segAnalysis = bundle.segAnalysis;
         _defaultBiPolicy = bundle.defaultBiPolicy;
         _levels = bundle.levels;
+        // 按当前最高 Kn 动态裁剪已选指标（层变少时去掉失效项）
+        final maxKn = chartMaxKn(
+          levels: _levels,
+          biSegments: _biSegments,
+        );
+        _mainIndicators = pruneIndicators(
+          _mainIndicators,
+          buildMainIndicatorCatalog(maxKn),
+        );
+        _subIndicators = pruneIndicators(
+          _subIndicators,
+          buildSubIndicatorCatalog(maxKn),
+        );
       });
     } catch (e) {
       setState(() => _error = e.toString());
@@ -492,6 +505,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
                   subIndicators: _subIndicators,
                   onSubIndicatorsChanged: (v) =>
                       setState(() => _subIndicators = v),
+                  indicatorsEnabled: _hasSession,
                   autoFollowLatest: true,
                   onTapStepBack: _hasSession && !_busy ? _stepBack : null,
                   onTapPlay: _hasSession && !_busy ? _togglePlay : null,

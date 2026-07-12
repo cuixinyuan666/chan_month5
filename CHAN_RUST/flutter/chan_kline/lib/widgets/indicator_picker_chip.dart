@@ -18,11 +18,14 @@ class IndicatorPickerChip extends StatefulWidget {
     required this.entries,
     required this.onTapDropdown,
     this.maxWidth = 280,
+    this.emptyHint = '未选',
   });
 
   final List<IndicatorChipEntry> entries;
   final VoidCallback onTapDropdown;
   final double maxWidth;
+  /// 无勾选时右侧提示（主图关全部≈只留K0；副图关全部=收起）
+  final String emptyHint;
 
   @override
   State<IndicatorPickerChip> createState() => _IndicatorPickerChipState();
@@ -66,11 +69,11 @@ class _IndicatorPickerChipState extends State<IndicatorPickerChip> {
                     ),
                   ),
                   if (entries.isEmpty)
-                    const Padding(
-                      padding: EdgeInsets.only(right: 4),
+                    Padding(
+                      padding: const EdgeInsets.only(right: 4),
                       child: Text(
-                        '未选',
-                        style: TextStyle(
+                        widget.emptyHint,
+                        style: const TextStyle(
                           color: Color(0xFFE2E8F0),
                           fontSize: 11,
                           height: 1,
