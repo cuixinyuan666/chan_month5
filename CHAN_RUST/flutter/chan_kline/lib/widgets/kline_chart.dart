@@ -39,11 +39,11 @@ enum CrosshairMode {
   linesOnly,
 }
 
-/// 主图同级别连线配色（笔 + 各 N 段见 [ChartLevelLineStyle]）。
+/// 主图同级别连线配色（K0连线/笔 + 更高层见 [ChartLevelLineStyle]）。
 abstract final class ChartLineColors {
-  /// 全部笔统一色
+  /// K0连线（笔）统一色
   static const bi = Color(0xCC94A3B8);
-  /// 2 段（线段）默认色（与 ChartLevelLineStyle level=2 一致）
+  /// K1连线（线段，内部 level=2）默认色（与 ChartLevelLineStyle 一致）
   static const seg = Color(0xCCF59E0B);
 }
 
@@ -934,6 +934,7 @@ class _KlineCompositePainter extends CustomPainter {
                 canvas, size.width, plotTop, plotH, barW, slotW, ind.kn);
           }
         } else if (ind.kind == MainIndicatorKind.line) {
+          // 内部 kn：1=笔→展示 K0连线；≥2→展示 K(kn-1)连线
           if (ind.kn == 1) {
             _drawBiSegments(canvas, size.width, plotTop, plotH, slotW);
           } else {
@@ -1259,7 +1260,7 @@ class _KlineCompositePainter extends CustomPainter {
     return null;
   }
 
-  /// 笔连线端点：极点 K 中轴 + 极点价（与 K线分型极点距同口径，仅展示用）。
+  /// K0连线（笔）端点：极点 K 中轴 + 极点价（与 K线分型极点距同口径，仅展示用）。
   (double, double) _biExtremeAnchorPoint(
     BiConfirmSignal? conf,
     int fractalX1,
@@ -1295,7 +1296,7 @@ class _KlineCompositePainter extends CustomPainter {
     return 0;
   }
 
-  /// 指定层 Kn 连线（kn≥2）；勾哪层画哪层。
+  /// 指定层连线（内部 kn≥2 → 展示名 K(kn-1)连线）；勾哪层画哪层。
   void _drawSegLinesForLevel(
     Canvas canvas,
     double w,

@@ -91,7 +91,7 @@ class _MainIndicatorPickerDialogState extends State<_MainIndicatorPickerDialog> 
     final tiles = <Widget>[];
     MainIndicatorKind? prevKind;
     for (final item in widget.available) {
-      // 大类切换处加 Divider（如 K4合并 | K1连线）
+      // 大类切换处加 Divider（如 K4合并 | K0连线）
       if (prevKind != null && prevKind != item.kind) {
         tiles.add(
           const Divider(

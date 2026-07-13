@@ -8,7 +8,7 @@ import '../models/level_models.dart';
 /// Dart 端不做缠论计算（无回退实现）。
 
 /// 段/笔连线端点（极点 K 索引 + 极点价；展示专用，与 Rust `pole_x` 同口径）。
-/// 主图「K1连线」即旧「笔连线」。
+/// 主图「K0连线」即旧「笔连线」（曾称 K1连线）。
 class LevelLineEndpoint {
   final int barIdx;
   final double price;

@@ -4,17 +4,18 @@ import 'level_models.dart';
 /// 主图指标种类：连线 / 合并框。
 enum MainIndicatorKind { line, combine }
 
-/// 主图一项指标（按加载后 maxKn 动态生成，如 3 段 → K1/K2/K3 连线）。
+/// 主图一项指标（按加载后 maxKn 动态生成，如 3 层 → K0/K1/K2 连线）。
 class MainChartIndicator {
   final MainIndicatorKind kind;
-  /// 连线：1..maxKn；合并：0..maxKn
+  /// 内部层号：连线 1..maxKn（展示名 K(n-1)连线）；合并 0..maxKn（展示名 Kn合并）
   final int kn;
 
   const MainChartIndicator.line(this.kn) : kind = MainIndicatorKind.line;
   const MainChartIndicator.combine(this.kn) : kind = MainIndicatorKind.combine;
 
+  /// 连线展示名比内部层号小 1：笔=K0连线，线段=K1连线；合并仍按层号。
   String get label =>
-      kind == MainIndicatorKind.line ? 'K$kn连线' : 'K$kn合并';
+      kind == MainIndicatorKind.line ? 'K${kn - 1}连线' : 'K$kn合并';
 
   @override
   bool operator ==(Object other) =>
@@ -73,7 +74,7 @@ int chartMaxKn({
   return m;
 }
 
-/// 主图可选列表：Kn合并(0..maxKn) + Kn连线(1..maxKn)；maxKn=0 仅 K0合并。
+/// 主图可选列表：Kn合并(0..maxKn) + 连线展示 K0..K(maxKn-1)（内部层号 1..maxKn）；maxKn=0 仅 K0合并。
 List<MainChartIndicator> buildMainIndicatorCatalog(int maxKn) {
   final out = <MainChartIndicator>[];
   final maxCombine = maxKn < 0 ? 0 : maxKn;

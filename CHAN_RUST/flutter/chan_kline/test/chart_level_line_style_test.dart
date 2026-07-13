@@ -18,8 +18,8 @@ void main() {
     expect(s2.buildingDashPattern, isNot(equals(s3.buildingDashPattern)));
   });
 
-  test('shortLabel 输出 Kn', () {
-    expect(ChartLevelLineStyle.shortLabel(2), 'K2');
-    expect(ChartLevelLineStyle.shortLabel(5), 'K5');
+  test('shortLabel 输出连线展示名 K(level-1)', () {
+    expect(ChartLevelLineStyle.shortLabel(2), 'K1');
+    expect(ChartLevelLineStyle.shortLabel(5), 'K4');
   });
 }

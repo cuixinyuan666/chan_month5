@@ -50,7 +50,8 @@ class AppDebugSnapshot {
 
     buf.writeln('【命名与口径】');
     buf.writeln(
-      '层级：K0=原始K，K1=笔，K2=线段，Kn=第n层；旧「n段」=Kn；旧「笔连线」=K1连线。',
+      '层级：K0=原始K，K1=笔，K2=线段，Kn=第n层；旧「n段」=Kn；'
+      '主图连线展示名比层号小1：旧「笔连线」=K0连线（曾称K1连线），线段=K1连线；合并不偏移。',
     );
     buf.writeln(
       'Kn流水线：K(n-1)→包含合并→三元素分型确认→锚定配对→Kn；'
