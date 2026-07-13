@@ -355,6 +355,41 @@ class _KlineChartState extends State<KlineChart> {
   void _onZoneTap(TapUpDetails d, double plotTop, double contentBottom) {
     if (widget.bars.isEmpty) return;
     final zone = _hotZone(d.localPosition);
+
+    // 十字线激活：屏蔽步退/步进/播放，只保留中间双击切三态 + 点击跟线
+    if (_crosshairEnabled) {
+      if (zone != 1) {
+        _middleTapTimer?.cancel();
+        _lastMiddleTapAt = null;
+        _lastMiddleTapPos = null;
+        _updateCrosshairAt(d.localPosition, plotTop, contentBottom);
+        return;
+      }
+      final now = DateTime.now();
+      final last = _lastMiddleTapAt;
+      final lastPos = _lastMiddleTapPos;
+      if (last != null &&
+          lastPos != null &&
+          now.difference(last).inMilliseconds <= _doubleTapMs &&
+          (d.localPosition - lastPos).distance < 48) {
+        _middleTapTimer?.cancel();
+        _lastMiddleTapAt = null;
+        _lastMiddleTapPos = null;
+        _cycleCrosshair(d.localPosition, plotTop, contentBottom);
+        return;
+      }
+      _lastMiddleTapAt = now;
+      _lastMiddleTapPos = d.localPosition;
+      _middleTapTimer?.cancel();
+      // 单击只跟线，不触发播放
+      _updateCrosshairAt(d.localPosition, plotTop, contentBottom);
+      _middleTapTimer = Timer(const Duration(milliseconds: _doubleTapMs), () {
+        _lastMiddleTapAt = null;
+        _lastMiddleTapPos = null;
+      });
+      return;
+    }
+
     // 左/右：每次点击立刻步退/步进，连点即加速（不走系统双击）
     if (zone == 0) {
       _middleTapTimer?.cancel();
@@ -395,6 +430,8 @@ class _KlineChartState extends State<KlineChart> {
   }
 
   void _onZoneLongPress(LongPressStartDetails d) {
+    // 十字线激活时屏蔽长按：复位/重载/跑到末尾
+    if (_crosshairEnabled) return;
     if (widget.bars.isEmpty && _hotZone(d.localPosition) != 1) return;
     switch (_hotZone(d.localPosition)) {
       case 0:

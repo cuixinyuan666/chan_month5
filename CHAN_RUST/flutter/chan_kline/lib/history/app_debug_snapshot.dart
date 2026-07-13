@@ -65,7 +65,8 @@ class AppDebugSnapshot {
       '十字线双击三态（仅中间1/3热区自管双击；左右不走系统双击）：'
       '①开十字线+价格标签+tooltip；'
       '②关 tooltip（线与价格标签保留）；③全关并恢复鼠标抓取。'
-      '左/右每次点击立刻步退/步进，连点即加速。',
+      '十字线激活期间：屏蔽左步退/右步进/中播放及长按复位·重载·跑到末尾，'
+      '点击仅跟线；仅中间双击可切三态。非十字线态：左/右点击立刻步退/步进，连点即加速。',
     );
     buf.writeln(
       '首段策略 default_bi_policy=$defaultBiPolicy（pending/retained/purged）；'
