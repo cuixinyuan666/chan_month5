@@ -21,6 +21,7 @@ import '../models/bar_feature_lookup.dart';
 import '../models/level_models.dart';
 import '../models/seg_analysis.dart';
 import 'chart_level_line_style.dart';
+import 'crosshair_tooltip_panel.dart';
 import 'fractal_confirm_paint.dart';
 import 'indicator_picker_chip.dart';
 import 'kline_axis_format.dart';
@@ -121,6 +122,9 @@ class _KlineChartState extends State<KlineChart> {
 
   bool get _crosshairEnabled => _crosshairMode != CrosshairMode.off;
   bool get _crosshairShowTooltip => _crosshairMode == CrosshairMode.withTooltip;
+  /// tooltip 滚轮下翻（显示 tooltip 时接管滚轮，不缩放）
+  final _tooltipScroll = ScrollController();
+  int? _tooltipScrollBarIdx;
   bool _panning = false;
   Offset? _panStart;
   double _panStartYShift = 0;
@@ -171,6 +175,7 @@ class _KlineChartState extends State<KlineChart> {
   @override
   void dispose() {
     _middleTapTimer?.cancel();
+    _tooltipScroll.dispose();
     super.dispose();
   }
 
@@ -203,7 +208,6 @@ class _KlineChartState extends State<KlineChart> {
   /// 十字线跟随鼠标：竖线吸附 K 线中心，横线跟价格。
   void _updateCrosshairAt(Offset pos, double plotTop, double contentBottom) {
     if (!_crosshairEnabled || widget.bars.isEmpty || _chartSize.width <= 0) return;
-
     final barIdx = _viewport.barIndexAtCanvasX(
       pos.dx,
       _chartSize.width,
@@ -212,6 +216,9 @@ class _KlineChartState extends State<KlineChart> {
     _crosshairBarIdx = barIdx;
     _crosshairX = _viewport.barCenterX(barIdx, _chartSize.width);
     _crosshairY = pos.dy.clamp(plotTop, contentBottom);
+    if (_crosshairShowTooltip) {
+      _resetTooltipScrollIfNeeded(barIdx);
+    }
     _scheduleRedraw();
   }
 
@@ -266,6 +273,12 @@ class _KlineChartState extends State<KlineChart> {
   void _onWheel(PointerScrollEvent e, double mainPlotH) {
     if (widget.bars.isEmpty || !_viewport.ready || _chartSize.width <= 0) return;
 
+    // 显示 tooltip：滚轮只翻信息框，不缩放 K 线；仅线(关tooltip)时仍可缩放
+    if (_crosshairShowTooltip) {
+      _scrollTooltipBy(e.scrollDelta.dy);
+      return;
+    }
+
     final ctrl = HardwareKeyboard.instance.isControlPressed ||
         HardwareKeyboard.instance.isMetaPressed;
     if (ctrl) {
@@ -277,6 +290,78 @@ class _KlineChartState extends State<KlineChart> {
       _viewport.zoomXAt(factor, e.localPosition.dx, _chartSize.width);
     }
     _scheduleRedraw();
+  }
+
+  void _scrollTooltipBy(double dy) {
+    if (!_tooltipScroll.hasClients) return;
+    final pos = _tooltipScroll.position;
+    final next = (pos.pixels + dy).clamp(0.0, pos.maxScrollExtent);
+    if (next != pos.pixels) {
+      _tooltipScroll.jumpTo(next);
+    }
+  }
+
+  void _resetTooltipScrollIfNeeded(int? barIdx) {
+    if (barIdx != _tooltipScrollBarIdx) {
+      _tooltipScrollBarIdx = barIdx;
+      if (_tooltipScroll.hasClients) {
+        _tooltipScroll.jumpTo(0);
+      } else {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (_tooltipScroll.hasClients) _tooltipScroll.jumpTo(0);
+        });
+      }
+    }
+  }
+
+  /// 组装当前十字线 tooltip 行（含副图）
+  List<CrosshairTooltipRow> _tooltipRowsForBar(int barIdx) {
+    final bar = widget.bars[barIdx.clamp(0, widget.bars.length - 1)];
+    final minuteLike = KlineAxisFormat.isMinuteLike(widget.bars);
+    final timePart = KlineAxisFormat.xLabel(bar.timeText, minuteLike: minuteLike);
+    final lookup = BarFeatureLookup.build(
+      bars: widget.bars,
+      combineFrames: widget.combineFrames,
+      biConfirms: widget.biConfirmSignals,
+      barFeatures: widget.barFeatures,
+      biSegments: widget.biSegments,
+      segAnalysis: widget.segAnalysis,
+      levels: widget.levels,
+      subIndicators: _activeSubs,
+    );
+    return lookup.crosshairTooltipRows(
+      bar.idx,
+      timePart: timePart,
+      subIndicators: _activeSubs,
+    );
+  }
+
+  /// tooltip 锚点：十字线旁，尽量不挡价签
+  Offset _tooltipAnchor({
+    required double chartW,
+    required double contentBottom,
+    required double plotTop,
+    required double maxW,
+    required double maxH,
+  }) {
+    final x = (_crosshairX ?? chartW / 2)
+        .clamp(KlineViewport.padL, math.max(KlineViewport.padL, chartW - KlineViewport.padR))
+        .toDouble();
+    final y = (_crosshairY ?? plotTop + 40)
+        .clamp(plotTop, math.max(plotTop, contentBottom))
+        .toDouble();
+    var boxX = x + 12;
+    if (boxX + maxW > chartW - KlineViewport.padR - 4) {
+      boxX = x - maxW - 12;
+    }
+    final minBoxX = KlineViewport.padL + 4.0;
+    final maxBoxX = chartW - KlineViewport.padR - maxW - 4;
+    boxX = boxX.clamp(minBoxX, math.max(minBoxX, maxBoxX));
+    var boxY = y - math.min(maxH, 220) - 10;
+    final minBoxY = plotTop + 4.0;
+    final maxBoxY = contentBottom - 40;
+    boxY = boxY.clamp(minBoxY, math.max(minBoxY, maxBoxY));
+    return Offset(boxX, boxY);
   }
 
   void _onPointerMove(PointerMoveEvent e, double mainPlotH, double contentBottom) {
@@ -331,6 +416,7 @@ class _KlineChartState extends State<KlineChart> {
       switch (_crosshairMode) {
         case CrosshairMode.off:
           _crosshairMode = CrosshairMode.withTooltip;
+          _tooltipScrollBarIdx = null;
           _updateCrosshairAt(pos, plotTop, contentBottom);
         case CrosshairMode.withTooltip:
           _crosshairMode = CrosshairMode.linesOnly;
@@ -339,6 +425,7 @@ class _KlineChartState extends State<KlineChart> {
           _crosshairX = null;
           _crosshairY = null;
           _crosshairBarIdx = null;
+          _tooltipScrollBarIdx = null;
       }
     });
   }
@@ -636,6 +723,36 @@ class _KlineChartState extends State<KlineChart> {
                 ),
               ),
             ),
+            // 十字线 tooltip 盖在手势层之上（IgnorePointer 保证点击/滚轮仍由下层接管）
+            if (_crosshairShowTooltip &&
+                _crosshairX != null &&
+                _crosshairY != null &&
+                _crosshairBarIdx != null)
+              Builder(builder: (context) {
+                final barIdx = _crosshairBarIdx!;
+                final rows = _tooltipRowsForBar(barIdx);
+                final maxW = math.min(420.0, w * 0.55);
+                final maxH = math.min(contentBottom - plotTop - 16, h * 0.55);
+                final anchor = _tooltipAnchor(
+                  chartW: w,
+                  contentBottom: contentBottom,
+                  plotTop: plotTop,
+                  maxW: maxW,
+                  maxH: maxH,
+                );
+                return Positioned(
+                  left: anchor.dx,
+                  top: anchor.dy,
+                  child: IgnorePointer(
+                    child: CrosshairTooltipPanel(
+                      rows: rows,
+                      scrollController: _tooltipScroll,
+                      maxWidth: maxW,
+                      maxHeight: maxH,
+                    ),
+                  ),
+                );
+              }),
             // 主副图分割条（副图收起时不显示）
             if (_showSubPane)
               Positioned(
@@ -2133,8 +2250,6 @@ class _KlineCompositePainter extends CustomPainter {
     );
 
     final price = pr.priceFromY(y, plotTop, plotH);
-    final barIdx = crosshairBarIdx ?? viewport.nearestBarIndex(bars, viewport.xToIndex(x, size.width));
-    final bar = bars[barIdx.clamp(0, bars.length - 1)];
 
     final labelBg = Paint()..color = const Color(0xF0FFFFFF);
     final labelBorder = Paint()
@@ -2155,47 +2270,7 @@ class _KlineCompositePainter extends CustomPainter {
     canvas.drawRect(Rect.fromLTWH(lx, ly, lw, lh), labelBorder);
     tp.paint(canvas, Offset(lx + 6, ly + 4));
 
-    // 第二次双击后只留十字线+价格标签，不画信息框
-    if (!crosshairShowTooltip) return;
-
-    final minuteLike = KlineAxisFormat.isMinuteLike(bars);
-    final timePart = KlineAxisFormat.xLabel(bar.timeText, minuteLike: minuteLike);
-    final info = [
-      ...featureLookup.crosshairTooltipLines(bar.idx, timePart: timePart),
-      ...featureLookup.crosshairSubLines(bar.idx, subIndicators),
-    ];
-    var maxW = 0.0;
-    final rows = <TextPainter>[];
-    for (final line in info) {
-      final row = TextPainter(
-        text: TextSpan(
-          text: line,
-          style: const TextStyle(color: Colors.black, fontSize: 11, fontWeight: FontWeight.bold),
-        ),
-        textDirection: TextDirection.ltr,
-      )..layout();
-      rows.add(row);
-      if (row.width > maxW) maxW = row.width;
-    }
-    final boxW = maxW + 16;
-    final boxH = rows.length * 16.0 + 12;
-    var boxX = x + 12;
-    if (boxX + boxW > size.width - KlineViewport.padR - 4) boxX = x - boxW - 12;
-    // N段 tooltip 过宽/过高时上下界可能颠倒，clamp 前先保证 min<=max
-    final minBoxX = KlineViewport.padL + 4;
-    final maxBoxX = size.width - KlineViewport.padR - boxW - 4;
-    boxX = boxX.clamp(minBoxX, math.max(minBoxX, maxBoxX));
-    var boxY = y - boxH - 10;
-    final minBoxY = plotTop + 4;
-    final maxBoxY = contentBottom - boxH - 4;
-    boxY = boxY.clamp(minBoxY, math.max(minBoxY, maxBoxY));
-    canvas.drawRect(Rect.fromLTWH(boxX, boxY, boxW, boxH), labelBg);
-    canvas.drawRect(Rect.fromLTWH(boxX, boxY, boxW, boxH), labelBorder);
-    var ry = boxY + 6;
-    for (final row in rows) {
-      row.paint(canvas, Offset(boxX + 8, ry));
-      ry += 16;
-    }
+    // tooltip 改由 Flutter 覆盖层绘制（表格对齐 + 可滚动半透明）
   }
 
   /// 通用 pattern 虚线（pattern=[画,空,画,空,…] 像素）。

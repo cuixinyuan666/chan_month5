@@ -76,10 +76,12 @@ void main() {
       levels: const [LevelBundle(level: 1), LevelBundle(level: 2)],
     );
     final lines = lookup.crosshairTooltipLines(0, timePart: '2024/01/01 09:00');
-    expect(lines.first, '日期时间:2024/01/01 09:00 w1');
-    expect(lines.any((l) => l == 'K1[序号]:首K1确认前'), isTrue);
-    expect(lines.any((l) => l == 'K2[序号]:首K2确认前'), isTrue);
-    expect(lines.any((l) => l.startsWith('K0合并分型确认:')), isTrue);
+    expect(lines.first, startsWith('日期时间:2024/01/01 09:00'));
+    expect(lines.first, contains('w1'));
+    expect(lines.any((l) => l == '==============================='), isTrue);
+    expect(lines.any((l) => l == 'K1[No.]:首K1确认前'), isTrue);
+    expect(lines.any((l) => l == 'K2[No.]:首K2确认前'), isTrue);
+    expect(lines.any((l) => l.startsWith('K0分型确认:')), isTrue);
   });
 
   test('K1/K2 快照齐全时：Kn 块按模板输出序号/OHLCV/合并/确认', () {
@@ -103,10 +105,10 @@ void main() {
     );
 
     final atConfirm = lookup.crosshairTooltipLines(2, timePart: '2024/01/01 09:02');
-    // K0合并分型确认 = K1 端点确认（旧口径 bi_confirm）
-    expect(atConfirm.any((l) => l == 'K0合并分型确认:1'), isTrue);
-    // K1 块顺序：序号 → OHLCV → 合并序 → 合并H/L → 合并分型确认
-    final seqIdx = atConfirm.indexWhere((l) => l.startsWith('K1[序号]:0'));
+    // K0分型确认 = K1 端点确认（旧口径 bi_confirm）
+    expect(atConfirm.any((l) => l == 'K0分型确认:1'), isTrue);
+    // K1 块顺序：No → OHLCV → 合并序 → 合并H/L → 分型确认
+    final seqIdx = atConfirm.indexWhere((l) => l.startsWith('K1[No.]:0'));
     final ohlcvIdx = atConfirm.indexWhere((l) => l.startsWith('K1:O'));
     final mergeSeqIdx = atConfirm.indexWhere((l) => l.startsWith('K1合并K1序:'));
     final mergeHlIdx = atConfirm.indexWhere((l) => l.startsWith('K1合并:H'));
@@ -115,10 +117,10 @@ void main() {
     expect(ohlcvIdx, lessThan(mergeSeqIdx));
     expect(mergeSeqIdx, lessThan(mergeHlIdx));
 
-    // x=4 当步：K1 块「合并分型确认」= K2 确认值 -1
+    // x=4 当步：K1 块「分型确认」= K2 确认值 -1
     final at2 = lookup.crosshairTooltipLines(4, timePart: '2024/01/01 09:04');
-    expect(at2.any((l) => l == 'K1合并分型确认:-1'), isTrue);
-    expect(at2.any((l) => l.startsWith('K2[序号]:0')), isTrue);
+    expect(at2.any((l) => l == 'K1分型确认:-1'), isTrue);
+    expect(at2.any((l) => l.startsWith('K2[No.]:0')), isTrue);
     expect(at2.any((l) => l.startsWith('K2合并K2序:1')), isTrue);
   });
 }

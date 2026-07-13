@@ -15,6 +15,25 @@ import 'seg_analysis.dart';
 
 
 
+/// 十字线 tooltip 一行：键值 或 层级分隔线。
+class CrosshairTooltipRow {
+  const CrosshairTooltipRow.kv(this.label, this.value) : isSeparator = false;
+  const CrosshairTooltipRow.separator()
+      : label = '',
+        value = '',
+        isSeparator = true;
+
+  final String label;
+  final String value;
+  final bool isSeparator;
+
+  /// 扁平字符串（测试/历史快照用）
+  String get flat {
+    if (isSeparator) return '===============================';
+    return '$label:$value';
+  }
+}
+
 /// 逐 K 字典式特征索引（ML / 十字线 tooltip 同源，均用 barFeatures 逐步冻结快照）。
 
 class BarFeatureLookup {
@@ -339,8 +358,12 @@ class BarFeatureLookup {
     return 'O${_fmtPrice(open)}/H${_fmtPrice(high)}/L${_fmtPrice(low)}/C${_fmtPrice(close)}/VOL${_fmtVol(volume)}';
   }
 
-  /// 十字线主 tooltip：K0 块 + 全部 Kn 块（K1=笔，K2=线段，…穷尽）。
-  List<String> crosshairTooltipLines(int idx, {required String timePart}) {
+  /// 十字线主 tooltip 结构化行（表格渲染用）。
+  List<CrosshairTooltipRow> crosshairTooltipRows(
+    int idx, {
+    required String timePart,
+    Set<SubChartIndicator> subIndicators = const {},
+  }) {
     final row = byIdx[idx];
     if (row == null) return const [];
 
@@ -355,7 +378,7 @@ class BarFeatureLookup {
     final combineHigh = (row['combine_high'] as num?)?.toDouble() ?? high;
     final combineLow = (row['combine_low'] as num?)?.toDouble() ?? low;
 
-    // K0合并分型确认（=K1 端点确认）：仅 ±1 显示；截断加"(截断)"
+    // K0分型确认（=K1 端点确认）：仅 ±1 显示；截断加"(截断)"
     var combineFxConfirm = '';
     final biConfirm = row['bi_confirm'];
     if (biConfirm is Map) {
@@ -365,33 +388,53 @@ class BarFeatureLookup {
       }
     }
 
-    final lines = <String>[
-      '日期时间:$timePart $weekday',
-      'K0[序号]:${row['idx']}',
-      'K0:${_fmtOhlcv(open: open, high: high, low: low, close: close, volume: volume)}',
-      'K0合并:H${_fmtPrice(combineHigh)}/L${_fmtPrice(combineLow)}',
-      'K0合并K0序:$mergeInner',
-      'K0合并分型确认:$combineFxConfirm',
-      ...crosshairLevelLines(idx),
+    final out = <CrosshairTooltipRow>[
+      CrosshairTooltipRow.kv('日期时间', '$timePart     $weekday'),
+      const CrosshairTooltipRow.separator(),
+      CrosshairTooltipRow.kv('K0[No.]', '${row['idx']}'),
+      CrosshairTooltipRow.kv(
+        'K0',
+        _fmtOhlcv(open: open, high: high, low: low, close: close, volume: volume),
+      ),
+      CrosshairTooltipRow.kv(
+        'K0合并',
+        'H${_fmtPrice(combineHigh)}/L${_fmtPrice(combineLow)}',
+      ),
+      CrosshairTooltipRow.kv('K0合并K0序', '$mergeInner'),
+      CrosshairTooltipRow.kv('K0分型确认', combineFxConfirm),
+      ..._levelBlockRows(idx),
     ];
-    return lines;
+
+    final subs = crosshairSubRows(idx, subIndicators);
+    if (subs.isNotEmpty) {
+      out.add(const CrosshairTooltipRow.separator());
+      out.addAll(subs);
+    }
+    return out;
+  }
+
+  /// 扁平字符串列表（测试/历史快照兼容）。
+  List<String> crosshairTooltipLines(int idx, {required String timePart}) {
+    return crosshairTooltipRows(idx, timePart: timePart).map((e) => e.flat).toList();
   }
 
   List<String> crosshairSubLines(int idx, Set<SubChartIndicator> active) {
+    return crosshairSubRows(idx, active).map((e) => e.flat).toList();
+  }
 
+  List<CrosshairTooltipRow> crosshairSubRows(
+    int idx,
+    Set<SubChartIndicator> active,
+  ) {
     final row = byIdx[idx];
-
     if (row == null) return const [];
-
     final sub = row['sub'];
-
     if (sub is! Map || sub.isEmpty) return const [];
 
-    final lines = <String>[];
-
+    final lines = <CrosshairTooltipRow>[];
     void add(String label, dynamic v) {
       if (v == null) return;
-      lines.add('$label: $v');
+      lines.add(CrosshairTooltipRow.kv(label, '$v'));
     }
 
     for (final ind in active) {
@@ -399,7 +442,6 @@ class BarFeatureLookup {
         if (ind.kn == 0) {
           add('K0分型确认', sub['bi_confirm_value']);
         } else {
-          // labelKn → level=kn+1，从 level_confirms 取当步值
           final confirms = row['level_confirms'];
           dynamic v;
           if (confirms is Map) {
@@ -421,123 +463,87 @@ class BarFeatureLookup {
         }
       }
     }
-
     return lines;
-
   }
 
-
-
-  /// Kn 十字线行（与 ML 同源；K1=笔，K2=线段，…）。
-  /// 块模板与 K0 同构：[序号] / OHLCV / 合并序 / 合并H:L / 合并分型确认。
-  List<String> crosshairLevelLines(int idx) {
-
+  /// Kn 块（K1=笔，K2=线段，…）；每层前加分隔线。
+  List<CrosshairTooltipRow> _levelBlockRows(int idx) {
     final row = byIdx[idx];
-
     if (row == null) return const [];
 
     final snaps = row['levels'];
-
     final confirms = row['level_confirms'];
-
     final snapList = snaps is List<LevelSnap> ? snaps : const <LevelSnap>[];
-
     final total = totalLevels > snapList.length ? totalLevels : snapList.length;
 
-    final lines = <String>[];
-
+    final lines = <CrosshairTooltipRow>[];
     for (var n = 1; n <= total; n++) {
-
       final snap = n - 1 < snapList.length ? snapList[n - 1] : null;
-
-      // Kn 块「合并分型确认」= K(n+1) 端点确认（当步冻结）
+      // Kn 块「分型确认」= K(n+1) 端点确认（当步冻结）
       int? confirmVal;
-
       var confirmTruncated = false;
-
       if (confirms is Map) {
-
         final v = confirms[n + 1];
-
         if (v is LevelConfirm && (v.value == 1 || v.value == -1)) {
-
           confirmVal = v.value;
-
           confirmTruncated = v.truncated;
-
         }
-
       }
-
-      lines.addAll(_levelBlockLines(n, snap, confirmVal, confirmTruncated));
-
+      lines.add(const CrosshairTooltipRow.separator());
+      lines.addAll(_levelBlockRowsFor(n, snap, confirmVal, confirmTruncated));
     }
-
     return lines;
-
   }
 
+  /// 兼容旧调用：扁平 Kn 行。
+  List<String> crosshairLevelLines(int idx) {
+    return _levelBlockRows(idx)
+        .where((e) => !e.isSeparator)
+        .map((e) => e.flat)
+        .toList();
+  }
 
-
-  List<String> _levelBlockLines(
+  List<CrosshairTooltipRow> _levelBlockRowsFor(
     int n,
     LevelSnap? snap,
     int? confirmVal,
     bool confirmTruncated,
   ) {
-
     final label = 'K$n';
-
     final confirmText = confirmVal == null
         ? ''
         : (confirmTruncated ? '$confirmVal(截断)' : '$confirmVal');
 
     if (snap == null || snap.unitIdx == null) {
-
       return [
-
-        '$label[序号]:首K$n确认前',
-
-        '$label:—',
-
-        '$label合并$label序:—',
-
-        '$label合并:—',
-
-        '$label合并分型确认:$confirmText',
-
+        CrosshairTooltipRow.kv('$label[No.]', '首K$n确认前'),
+        CrosshairTooltipRow.kv(label, '—'),
+        CrosshairTooltipRow.kv('$label合并$label序', '—'),
+        CrosshairTooltipRow.kv('$label合并', '—'),
+        CrosshairTooltipRow.kv('$label分型确认', confirmText),
       ];
-
     }
 
     return [
-
-      '$label[序号]:${snap.unitIdx}',
-
-      '$label:${_fmtOhlcv(
-
-        open: snap.unitOpen,
-
-        high: snap.unitHigh,
-
-        low: snap.unitLow,
-
-        close: snap.unitClose,
-
-        volume: snap.unitVolume,
-
-      )}',
-
-      '$label合并$label序:${snap.mergeInnerSeq}',
-
-      '$label合并:H${_fmtPrice(snap.combineHigh)}/L${_fmtPrice(snap.combineLow)}',
-
-      '$label合并分型确认:$confirmText',
-
+      CrosshairTooltipRow.kv('$label[No.]', '${snap.unitIdx}'),
+      CrosshairTooltipRow.kv(
+        label,
+        _fmtOhlcv(
+          open: snap.unitOpen,
+          high: snap.unitHigh,
+          low: snap.unitLow,
+          close: snap.unitClose,
+          volume: snap.unitVolume,
+        ),
+      ),
+      CrosshairTooltipRow.kv('$label合并$label序', '${snap.mergeInnerSeq}'),
+      CrosshairTooltipRow.kv(
+        '$label合并',
+        'H${_fmtPrice(snap.combineHigh)}/L${_fmtPrice(snap.combineLow)}',
+      ),
+      CrosshairTooltipRow.kv('$label分型确认', confirmText),
     ];
-
   }
-
 }
 
 
