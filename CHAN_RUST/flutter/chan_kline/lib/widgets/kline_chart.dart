@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/gestures.dart';
@@ -127,6 +128,12 @@ class _KlineChartState extends State<KlineChart> {
   double _panStartViewMax = 0;
   Size _chartSize = Size.zero;
 
+  /// 中间区自管双击：避免左/右连点被系统双击手势吞掉
+  static const _doubleTapMs = 280;
+  Timer? _middleTapTimer;
+  DateTime? _lastMiddleTapAt;
+  Offset? _lastMiddleTapPos;
+
   /// 主图占「主+副」区域比例，可拖动分割线调整。
   double _mainFraction = 0.79;
   static const _minMainFraction = 0.22;
@@ -159,6 +166,12 @@ class _KlineChartState extends State<KlineChart> {
   void initState() {
     super.initState();
     _resetViewport();
+  }
+
+  @override
+  void dispose() {
+    _middleTapTimer?.cancel();
+    super.dispose();
   }
 
   @override
@@ -312,14 +325,13 @@ class _KlineChartState extends State<KlineChart> {
     }
   }
 
-  void _onDoubleTap(TapDownDetails d, double plotTop, double contentBottom) {
-    if (widget.bars.isEmpty) return;
+  void _cycleCrosshair(Offset pos, double plotTop, double contentBottom) {
     setState(() {
       // 第一次开十字线+tooltip；第二次只关 tooltip；第三次全关恢复鼠标
       switch (_crosshairMode) {
         case CrosshairMode.off:
           _crosshairMode = CrosshairMode.withTooltip;
-          _updateCrosshairAt(d.localPosition, plotTop, contentBottom);
+          _updateCrosshairAt(pos, plotTop, contentBottom);
         case CrosshairMode.withTooltip:
           _crosshairMode = CrosshairMode.linesOnly;
         case CrosshairMode.linesOnly:
@@ -340,16 +352,46 @@ class _KlineChartState extends State<KlineChart> {
     return 2;
   }
 
-  void _onZoneTap(TapUpDetails d) {
+  void _onZoneTap(TapUpDetails d, double plotTop, double contentBottom) {
     if (widget.bars.isEmpty) return;
-    switch (_hotZone(d.localPosition)) {
-      case 0:
-        widget.onTapStepBack?.call();
-      case 1:
-        widget.onTapPlay?.call();
-      default:
-        widget.onTapStepForward?.call();
+    final zone = _hotZone(d.localPosition);
+    // 左/右：每次点击立刻步退/步进，连点即加速（不走系统双击）
+    if (zone == 0) {
+      _middleTapTimer?.cancel();
+      _lastMiddleTapAt = null;
+      _lastMiddleTapPos = null;
+      widget.onTapStepBack?.call();
+      return;
     }
+    if (zone == 2) {
+      _middleTapTimer?.cancel();
+      _lastMiddleTapAt = null;
+      _lastMiddleTapPos = null;
+      widget.onTapStepForward?.call();
+      return;
+    }
+    // 中间：自管双击=十字线三态；单击延迟后播放
+    final now = DateTime.now();
+    final last = _lastMiddleTapAt;
+    final lastPos = _lastMiddleTapPos;
+    if (last != null &&
+        lastPos != null &&
+        now.difference(last).inMilliseconds <= _doubleTapMs &&
+        (d.localPosition - lastPos).distance < 48) {
+      _middleTapTimer?.cancel();
+      _lastMiddleTapAt = null;
+      _lastMiddleTapPos = null;
+      _cycleCrosshair(d.localPosition, plotTop, contentBottom);
+      return;
+    }
+    _lastMiddleTapAt = now;
+    _lastMiddleTapPos = d.localPosition;
+    _middleTapTimer?.cancel();
+    _middleTapTimer = Timer(const Duration(milliseconds: _doubleTapMs), () {
+      _lastMiddleTapAt = null;
+      _lastMiddleTapPos = null;
+      widget.onTapPlay?.call();
+    });
   }
 
   void _onZoneLongPress(LongPressStartDetails d) {
@@ -541,8 +583,7 @@ class _KlineChartState extends State<KlineChart> {
                   onPointerUp: _onPointerUp,
                   child: GestureDetector(
                     behavior: HitTestBehavior.opaque,
-                    onDoubleTapDown: (d) => _onDoubleTap(d, plotTop, contentBottom),
-                    onTapUp: _onZoneTap,
+                    onTapUp: (d) => _onZoneTap(d, plotTop, contentBottom),
                     onLongPressStart: _onZoneLongPress,
                     onPanStart: (d) => _onPanStart(
                       d,
