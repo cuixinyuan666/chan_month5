@@ -279,7 +279,8 @@ fn fx_pole_x(bars: &[KlineBar], x1: i32, x2: i32, fx: FxKind) -> i32 {
     }
 }
 
-/// 区间 OHLCV（x 越界自动收缩）
+/// 区间高低收量（调试/兼容；Kn 单元请用 kn_unit_ohlcv）
+#[allow(dead_code)]
 fn range_ohlcv(bars: &[KlineBar], x1: i32, x2: i32) -> (f64, f64, f64, f64, f64) {
     if bars.is_empty() {
         return (0.0, 0.0, 0.0, 0.0, 0.0);
@@ -298,6 +299,63 @@ fn range_ohlcv(bars: &[KlineBar], x1: i32, x2: i32) -> (f64, f64, f64, f64, f64)
     (bars[a].open, hi, lo, bars[b].close, vol)
 }
 
+/// Kn 段开盘价（全层同构）：上升取起点底分型最低价，下降取起点顶分型最高价
+/// （与连线 begin_price 同口径；禁止用极点 K 的 open/low 冒充）
+fn kn_segment_open(dir: i32, begin_fx_high: f64, begin_fx_low: f64) -> f64 {
+    if dir > 0 {
+        begin_fx_low
+    } else {
+        begin_fx_high
+    }
+}
+
+/// 段身 H/L/C/V：从起点极点**下一根**到终点（不含极点 K，避免顶分型那根的低价污染下降段等）
+fn range_body_hlcv(bars: &[KlineBar], begin_pole: i32, end_x: i32) -> (f64, f64, f64, f64) {
+    if bars.is_empty() {
+        return (f64::NEG_INFINITY, f64::INFINITY, 0.0, 0.0);
+    }
+    let start = (begin_pole.max(0) as usize).saturating_add(1);
+    let end = (end_x.max(0) as usize).min(bars.len() - 1);
+    if start > end || start >= bars.len() {
+        return (f64::NEG_INFINITY, f64::INFINITY, 0.0, 0.0);
+    }
+    let mut hi = f64::NEG_INFINITY;
+    let mut lo = f64::INFINITY;
+    let mut vol = 0.0;
+    for x in start..=end {
+        hi = hi.max(bars[x].high);
+        lo = lo.min(bars[x].low);
+        vol += bars[x].volume;
+    }
+    (hi, lo, bars[end].close, vol)
+}
+
+/// Kn 单元 OHLCV（全层同构）：开盘=起点分型极值；高低收只取极点后段身，再与开盘合成合法蜡烛
+fn kn_unit_ohlcv(
+    bars: &[KlineBar],
+    dir: i32,
+    begin_pole: i32,
+    end_x: i32,
+    begin_fx_high: f64,
+    begin_fx_low: f64,
+) -> (f64, f64, f64, f64, f64) {
+    let open = kn_segment_open(dir, begin_fx_high, begin_fx_low);
+    let begin_i = (begin_pole.max(0) as usize).min(bars.len().saturating_sub(1));
+    let (bh, bl, body_close, body_vol) = range_body_hlcv(bars, begin_pole, end_x);
+    let begin_vol = bars.get(begin_i).map(|b| b.volume).unwrap_or(0.0);
+    if !bh.is_finite() {
+        // 尚无段身（仍停在极点当根）：OHLC 退化为开盘价
+        return (open, open, open, open, begin_vol);
+    }
+    (
+        open,
+        bh.max(open),
+        bl.min(open),
+        body_close,
+        begin_vol + body_vol,
+    )
+}
+
 fn make_unit_bar(
     bars: &[KlineBar],
     idx: i64,
@@ -305,8 +363,11 @@ fn make_unit_bar(
     x1: i32,
     x2: i32,
     confirm_x: i32,
+    begin_fx_high: f64,
+    begin_fx_low: f64,
 ) -> LevelUnitBar {
-    let (open, high, low, close, volume) = range_ohlcv(bars, x1, x2);
+    let (open, high, low, close, volume) =
+        kn_unit_ohlcv(bars, dir, x1, x2, begin_fx_high, begin_fx_low);
     LevelUnitBar {
         idx,
         dir,
@@ -537,7 +598,9 @@ impl LevelState {
                         let begin_pole = reverse_pole_x(bars, virtual_u, fx);
                         let dir = if fx == FxKind::Top { 1 } else { -1 };
                         let (vk_high, vk_low) = (virtual_u.high, virtual_u.low);
-                        let (o, h, l, c, v) = range_ohlcv(bars, begin_pole, pole_x);
+                        // 开盘=分型极值；高低收取极点后段身（全层同构）
+                        let (o, h, l, c, v) =
+                            kn_unit_ohlcv(bars, dir, begin_pole, pole_x, vk_high, vk_low);
                         self.segment_policy = POLICY_RETAINED.to_string();
                         self.segments.push(LevelSegment {
                             idx: 0,
@@ -563,7 +626,7 @@ impl LevelState {
                             is_promoted_default: true,
                         });
                         self.freshly_first_seg = true;
-                        let ub = make_unit_bar(bars, 0, dir, begin_pole, pole_x, bar_x);
+                        let ub = make_unit_bar(bars, 0, dir, begin_pole, pole_x, bar_x, vk_high, vk_low);
                         self.unit_bars.push(ub.clone());
                         outs.push(ub);
                     } else {
@@ -578,7 +641,9 @@ impl LevelState {
                 let a = self.anchor.clone().expect("Pair 必有锚点");
                 let idx = self.segments.len() as i64;
                 let dir = if a.fx == FxKind::Bottom { 1 } else { -1 };
-                let (o, h, l, c, v) = range_ohlcv(bars, a.pole_x, pole_x);
+                // 开盘=锚点分型极值；高低收取极点后段身
+                let (o, h, l, c, v) =
+                    kn_unit_ohlcv(bars, dir, a.pole_x, pole_x, a.high, a.low);
                 self.segments.push(LevelSegment {
                     idx,
                     dir,
@@ -602,7 +667,7 @@ impl LevelState {
                     is_bootstrap: false,
                     is_promoted_default: false,
                 });
-                let ub = make_unit_bar(bars, idx, dir, a.pole_x, pole_x, bar_x);
+                let ub = make_unit_bar(bars, idx, dir, a.pole_x, pole_x, bar_x, a.high, a.low);
                 self.unit_bars.push(ub.clone());
                 outs.push(ub);
                 self.set_anchor(fx, ev_x1, ev_x2, ev_high, ev_low, pole_x, bar_x);
@@ -625,30 +690,42 @@ impl LevelState {
         outs
     }
 
-    /// 进行中 N 段单元（anchor 极点 → 当步K 区间；增量维护极值）
+    /// 进行中 N 段单元（anchor 极点 → 当步K；段身极值不含起点极点 K）
     fn provisional_unit(&mut self, bars: &[KlineBar], bar_i: usize) -> Option<(MergeUnit, f64, f64, f64)> {
-        let a = self.anchor.as_ref()?;
-        let x1 = a.pole_x.max(0) as usize;
+        let (pole_x, fx, fx_high, fx_low) = {
+            let a = self.anchor.as_ref()?;
+            (a.pole_x, a.fx, a.high, a.low)
+        };
+        let x1 = pole_x.max(0) as usize;
         if x1 >= bars.len() || bar_i >= bars.len() || bar_i < x1 {
             return None;
         }
+        let dir = if fx == FxKind::Bottom { 1 } else { -1 };
+        let open = kn_segment_open(dir, fx_high, fx_low);
         let need_rebuild = match &self.prov {
             Some(c) => c.x1 != x1 || c.last_x > bar_i,
             None => true,
         };
         if need_rebuild {
-            let (_, hi, lo, _, vol) = range_ohlcv(bars, x1 as i32, bar_i as i32);
+            // 段身从极点下一根起算；尚无段身时高低退化为开盘价
+            let (bh, bl, _, body_vol) = range_body_hlcv(bars, x1 as i32, bar_i as i32);
+            let begin_vol = bars[x1].volume;
+            let (high, low, vol) = if bh.is_finite() {
+                (bh.max(open), bl.min(open), begin_vol + body_vol)
+            } else {
+                (open, open, begin_vol)
+            };
             self.prov = Some(ProvCache {
                 x1,
                 last_x: bar_i,
-                high: hi,
-                low: lo,
+                high,
+                low,
                 volume: vol,
             });
         } else if let Some(c) = &mut self.prov {
             for x in (c.last_x + 1)..=bar_i {
-                c.high = c.high.max(bars[x].high);
-                c.low = c.low.min(bars[x].low);
+                c.high = c.high.max(bars[x].high).max(open);
+                c.low = c.low.min(bars[x].low).min(open);
                 c.volume += bars[x].volume;
             }
             c.last_x = bar_i;
@@ -662,7 +739,7 @@ impl LevelState {
             high: c.high,
             low: c.low,
         };
-        Some((unit, bars[x1].open, bars[bar_i].close, c.volume))
+        Some((unit, open, bars[bar_i].close, c.volume))
     }
 
     /// 当步十字线快照（active 单元：首段冻结步优先刚冻结段，否则进行中段）
@@ -675,7 +752,16 @@ impl LevelState {
         // 首段 promoted 冻结当步：展示刚冻结段而非同步新起进行中段
         if self.freshly_first_seg {
             if let Some(seg) = self.segments.first() {
-                let ub = make_unit_bar(bars, seg.idx, seg.dir, seg.begin_pole_x, seg.end_pole_x, seg.end_confirm_x);
+                let ub = make_unit_bar(
+                    bars,
+                    seg.idx,
+                    seg.dir,
+                    seg.begin_pole_x,
+                    seg.end_pole_x,
+                    seg.end_confirm_x,
+                    seg.begin_fractal_high,
+                    seg.begin_fractal_low,
+                );
                 let merge = upper.and_then(|e| e.snapshot_for(seg.idx));
                 let mut snap = LevelSnap::empty(self.level);
                 snap.unit_idx = Some(seg.idx);
@@ -766,16 +852,18 @@ impl LevelState {
         let active_unit = match (&self.anchor, &self.prov) {
             (Some(a), Some(c)) if c.last_x < bars.len() => {
                 let dir = if a.fx == FxKind::Bottom { 1 } else { -1 };
+                let (open, high, low, close, volume) =
+                    kn_unit_ohlcv(bars, dir, a.pole_x, c.last_x as i32, a.high, a.low);
                 Some(LevelUnitBar {
                     idx: self.segments.len() as i64,
                     dir,
                     x1: c.x1 as i32,
                     x2: c.last_x as i32,
-                    open: bars[c.x1].open,
-                    high: c.high,
-                    low: c.low,
-                    close: bars[c.last_x].close,
-                    volume: c.volume,
+                    open,
+                    high,
+                    low,
+                    close,
+                    volume,
                     confirm_x: c.last_x as i32,
                 })
             }
@@ -1314,5 +1402,115 @@ mod tests {
             }
         }
         assert_upper_confirms_use_frozen_lower(&pr);
+    }
+
+    /// Kn 开盘价：上升取起点底分型最低价，下降取起点顶分型最高价；
+    /// 故意污染 bars[].open，防止回归到「用极点 K 的 open/low」。
+    #[test]
+    fn kn_open_uses_begin_fractal_extreme_not_bar_open() {
+        let mut bars = zigzag(80);
+        for b in &mut bars {
+            b.open = 1.23; // 与分型高低无关
+        }
+        let pr = run_pipeline(&bars, &PipelineOptions::default());
+        for lv in &pr.levels {
+            for s in &lv.segments {
+                let expect = if s.dir > 0 {
+                    s.begin_fractal_low
+                } else {
+                    s.begin_fractal_high
+                };
+                assert!(
+                    (s.open - expect).abs() < 1e-9,
+                    "K{} seg#{} open={} 应为起点分型极值 {}（dir={}）",
+                    lv.level,
+                    s.idx,
+                    s.open,
+                    expect,
+                    s.dir
+                );
+            }
+            for u in &lv.unit_bars {
+                let seg = lv
+                    .segments
+                    .iter()
+                    .find(|s| s.idx == u.idx)
+                    .expect("unit_bar 应对齐已冻结段");
+                let expect = if seg.dir > 0 {
+                    seg.begin_fractal_low
+                } else {
+                    seg.begin_fractal_high
+                };
+                assert!(
+                    (u.open - expect).abs() < 1e-9,
+                    "K{} unit#{} open={} 应为起点分型极值 {}",
+                    lv.level,
+                    u.idx,
+                    u.open,
+                    expect
+                );
+            }
+            if let Some(u) = &lv.active_unit {
+                let expect = if u.dir > 0 {
+                    lv.confirms
+                        .iter()
+                        .rev()
+                        .find(|c| c.used && c.fx == "BOTTOM")
+                        .map(|c| c.fractal_low)
+                } else {
+                    lv.confirms
+                        .iter()
+                        .rev()
+                        .find(|c| c.used && c.fx == "TOP")
+                        .map(|c| c.fractal_high)
+                };
+                if let Some(e) = expect {
+                    assert!(
+                        (u.open - e).abs() < 1e-9,
+                        "K{} active#{} open={} 应为锚点分型极值 {}",
+                        lv.level,
+                        u.idx,
+                        u.open,
+                        e
+                    );
+                }
+            }
+        }
+    }
+
+    /// 回归：002003 顶分型极点 11:08 后，进行中 K1 的 L/H/C 不得吃进极点 K 的低价 11.84
+    #[test]
+    fn kn_body_excludes_begin_pole_bar_002003() {
+        let data_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../a_Data");
+        if !data_root.join("002003").exists() {
+            eprintln!("skip: a_Data/002003 不存在");
+            return;
+        }
+        let root = crate::resolve_data_root(Some(data_root.to_str().unwrap()));
+        let bars = crate::load_klines(
+            &root,
+            "002003",
+            "2004/07/19 10:47:00",
+            "2004/07/19 11:11:00",
+            crate::KlinePeriod::M1,
+        )
+        .expect("load 002003");
+        let pr = run_pipeline(&bars, &PipelineOptions::default());
+        let l1 = &pr.levels[0];
+        let u = l1.active_unit.as_ref().expect("应有进行中 K1");
+        assert_eq!(u.idx, 3);
+        assert_eq!(u.dir, -1);
+        assert_eq!(u.x1, 21); // 11:08 极点
+        assert_eq!(u.x2, 24); // 11:11
+        assert!((u.open - 11.89).abs() < 1e-9, "开盘=顶分型高 open={}", u.open);
+        assert!((u.high - 11.89).abs() < 1e-9, "高=段身高 high={}", u.high);
+        assert!((u.low - 11.86).abs() < 1e-9, "低=11:09~11:11 最低 low={}", u.low);
+        assert!((u.close - 11.86).abs() < 1e-9, "收=11:11 close={}", u.close);
+        // 极点 K 低价 11.84 不得污染
+        assert!(u.low > 11.84 + 1e-9);
+        let snap = &pr.bar_level_snaps.last().unwrap()[0];
+        assert!((snap.unit_open - 11.89).abs() < 1e-9);
+        assert!((snap.unit_low - 11.86).abs() < 1e-9);
+        assert!((snap.unit_close - 11.86).abs() < 1e-9);
     }
 }
