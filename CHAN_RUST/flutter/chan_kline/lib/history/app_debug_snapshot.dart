@@ -62,6 +62,10 @@ class AppDebugSnapshot {
       '进行中单元可只读探测上层合并态（仅展示）；主图连线可含末态展示修正。',
     );
     buf.writeln(
+      '十字线双击三态：①开十字线+价格标签+tooltip；'
+      '②关 tooltip（线与价格标签保留）；③全关并恢复鼠标抓取。',
+    );
+    buf.writeln(
       '首段策略 default_bi_policy=$defaultBiPolicy（pending/retained/purged）；'
       '截断机制 truncation_check=${truncationCheck ? "开" : "关"}。',
     );

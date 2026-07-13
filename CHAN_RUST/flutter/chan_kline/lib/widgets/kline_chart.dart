@@ -27,6 +27,16 @@ import 'kline_viewport.dart';
 import 'main_indicator_picker.dart';
 import 'sub_indicator_picker.dart';
 
+/// 十字线三态：双击循环 off → 全开(含tooltip) → 仅线(关tooltip) → off。
+enum CrosshairMode {
+  /// 关闭：恢复抓取光标与普通拖拽观感
+  off,
+  /// 十字线 + 价格标签 + K0/Kn 信息框
+  withTooltip,
+  /// 十字线 + 价格标签，隐藏信息框
+  linesOnly,
+}
+
 /// 主图同级别连线配色（笔 + 各 N 段见 [ChartLevelLineStyle]）。
 abstract final class ChartLineColors {
   /// 全部笔统一色
@@ -102,10 +112,14 @@ class KlineChart extends StatefulWidget {
 
 class _KlineChartState extends State<KlineChart> {
   final _viewport = KlineViewport();
-  bool _crosshairEnabled = false;
+  /// 双击三态：开十字线 → 关 tooltip → 全关
+  CrosshairMode _crosshairMode = CrosshairMode.off;
   double? _crosshairX;
   double? _crosshairY;
   int? _crosshairBarIdx;
+
+  bool get _crosshairEnabled => _crosshairMode != CrosshairMode.off;
+  bool get _crosshairShowTooltip => _crosshairMode == CrosshairMode.withTooltip;
   bool _panning = false;
   Offset? _panStart;
   double _panStartYShift = 0;
@@ -301,13 +315,18 @@ class _KlineChartState extends State<KlineChart> {
   void _onDoubleTap(TapDownDetails d, double plotTop, double contentBottom) {
     if (widget.bars.isEmpty) return;
     setState(() {
-      _crosshairEnabled = !_crosshairEnabled;
-      if (_crosshairEnabled) {
-        _updateCrosshairAt(d.localPosition, plotTop, contentBottom);
-      } else {
-        _crosshairX = null;
-        _crosshairY = null;
-        _crosshairBarIdx = null;
+      // 第一次开十字线+tooltip；第二次只关 tooltip；第三次全关恢复鼠标
+      switch (_crosshairMode) {
+        case CrosshairMode.off:
+          _crosshairMode = CrosshairMode.withTooltip;
+          _updateCrosshairAt(d.localPosition, plotTop, contentBottom);
+        case CrosshairMode.withTooltip:
+          _crosshairMode = CrosshairMode.linesOnly;
+        case CrosshairMode.linesOnly:
+          _crosshairMode = CrosshairMode.off;
+          _crosshairX = null;
+          _crosshairY = null;
+          _crosshairBarIdx = null;
       }
     });
   }
@@ -486,6 +505,7 @@ class _KlineChartState extends State<KlineChart> {
                 mainH: mainH,
                 volH: volH,
                 crosshairEnabled: _crosshairEnabled,
+                crosshairShowTooltip: _crosshairShowTooltip,
                 crosshairX: _crosshairX,
                 crosshairY: _crosshairY,
                 crosshairBarIdx: _crosshairBarIdx,
@@ -642,6 +662,7 @@ class _KlineCompositePainter extends CustomPainter {
     required this.mainH,
     required this.volH,
     required this.crosshairEnabled,
+    required this.crosshairShowTooltip,
     required this.crosshairX,
     required this.crosshairY,
     required this.crosshairBarIdx,
@@ -675,6 +696,8 @@ class _KlineCompositePainter extends CustomPainter {
   final double mainH;
   final double volH;
   final bool crosshairEnabled;
+  /// false=仅画十字线与价格标签，不画 K0/Kn 信息框
+  final bool crosshairShowTooltip;
   final double? crosshairX;
   final double? crosshairY;
   final int? crosshairBarIdx;
@@ -2054,6 +2077,9 @@ class _KlineCompositePainter extends CustomPainter {
     canvas.drawRect(Rect.fromLTWH(lx, ly, lw, lh), labelBorder);
     tp.paint(canvas, Offset(lx + 6, ly + 4));
 
+    // 第二次双击后只留十字线+价格标签，不画信息框
+    if (!crosshairShowTooltip) return;
+
     final minuteLike = KlineAxisFormat.isMinuteLike(bars);
     final timePart = KlineAxisFormat.xLabel(bar.timeText, minuteLike: minuteLike);
     final info = [
@@ -2147,6 +2173,7 @@ class _KlineCompositePainter extends CustomPainter {
         oldDelegate.viewport.yZoomRatio != viewport.yZoomRatio ||
         oldDelegate.viewport.yShiftRatio != viewport.yShiftRatio ||
         oldDelegate.crosshairEnabled != crosshairEnabled ||
+        oldDelegate.crosshairShowTooltip != crosshairShowTooltip ||
         oldDelegate.crosshairX != crosshairX ||
         oldDelegate.crosshairY != crosshairY ||
         oldDelegate.crosshairBarIdx != crosshairBarIdx;
