@@ -2064,7 +2064,7 @@ class _KlineCompositePainter extends CustomPainter {
     double subY(double v) => innerTop + (maxV - v) / span * innerH;
     final y0 = subY(0);
     final shape = confirmMarkerShapeForKn(labelKn);
-    final level = labelKn + 1;
+    final level = labelKn;
     final dx = confirmStackOffsetX(
       rank: stackRank,
       count: stackCount,
@@ -2103,8 +2103,8 @@ class _KlineCompositePainter extends CustomPainter {
       }
       return;
     }
-    // 回退：K0 层用旧 bi_confirms
-    if (labelKn == 0) {
+    // 回退：K0 层（kn=1，无 LevelBundle）用旧 bi_confirms
+    if (labelKn == 1) {
       for (final s in biConfirmSignals) {
         paintPoint(s.x, s.value);
       }
@@ -2142,7 +2142,7 @@ class _KlineCompositePainter extends CustomPainter {
   ) {
     if (bars.isEmpty) return;
     final n = bars.length;
-    final level = labelKn + 1;
+    final level = labelKn;
 
     List<int> series;
     Color color;
@@ -2155,10 +2155,9 @@ class _KlineCompositePainter extends CustomPainter {
     }
     if (bundle != null) {
       series = _peakDistSeries(n, bundle.confirms);
-      color = labelKn <= 0
-          ? const Color(0xFF38BDF8)
-          : ChartLevelLineStyle.forLevel(level).color;
-    } else if (labelKn == 0 && barFeatures.isNotEmpty) {
+      color = ChartLevelLineStyle.forLevel(level).color;
+    } else if (labelKn == 1 && barFeatures.isNotEmpty) {
+      // 回退：K0 层（kn=1，无 LevelBundle）用旧 bi 极点距
       series = List<int>.generate(
         n,
         (i) => i < barFeatures.length ? barFeatures[i].fractalPeakDist : 0,
@@ -2219,7 +2218,7 @@ class _KlineCompositePainter extends CustomPainter {
     double subY(double v) => innerTop + (maxV - v) / span * innerH;
     final y0 = subY(0);
     final shape = confirmMarkerShapeForKn(labelKn);
-    final level = labelKn + 1;
+    final level = labelKn;
     final dx = confirmStackOffsetX(
       rank: stackRank,
       count: stackCount,
@@ -2258,8 +2257,8 @@ class _KlineCompositePainter extends CustomPainter {
       }
       return;
     }
-    // 回退：K0 层用旧 bi_confirms
-    if (labelKn == 0) {
+    // 回退：K0 层（kn=1，无 LevelBundle）用旧 bi_confirms
+    if (labelKn == 1) {
       for (final s in biConfirmSignals) {
         if (!s.truncated) continue;
         paintPoint(s.x, s.value);
@@ -2429,7 +2428,7 @@ class _KlineCompositePainter extends CustomPainter {
   int? _peakDistValueAt(int barX, int labelKn) {
     if (bars.isEmpty) return null;
     final n = bars.length;
-    final level = labelKn + 1;
+    final level = labelKn;
     List<int> series;
     LevelBundle? bundle;
     for (final b in levels) {
@@ -2440,7 +2439,8 @@ class _KlineCompositePainter extends CustomPainter {
     }
     if (bundle != null) {
       series = _peakDistSeries(n, bundle.confirms);
-    } else if (labelKn == 0 && barFeatures.isNotEmpty) {
+    } else if (labelKn == 1 && barFeatures.isNotEmpty) {
+      // 回退：K0 层（kn=1，无 LevelBundle）用旧 bi 极点距
       series = List<int>.generate(
         n,
         (i) => i < barFeatures.length ? barFeatures[i].fractalPeakDist : 0,

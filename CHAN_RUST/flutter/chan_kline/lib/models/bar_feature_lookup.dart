@@ -214,7 +214,8 @@ class BarFeatureLookup {
       };
 
       if (subIndicators.any((e) =>
-          e.kind == SubIndicatorKind.fractalConfirm && e.kn == 0)) {
+          e.kind == SubIndicatorKind.fractalConfirm && e.kn == 1)) {
+        // kn=1（最低层）回退源：旧 bi_confirm（K0 原始K分型）
         (row['sub'] as Map<String, dynamic>)['bi_confirm_value'] = sig.value;
       }
 
@@ -306,7 +307,8 @@ class BarFeatureLookup {
 
 
     if (subIndicators.any((e) =>
-        e.kind == SubIndicatorKind.fractalPeakDist && e.kn == 0)) {
+        e.kind == SubIndicatorKind.fractalPeakDist && e.kn == 1)) {
+      // kn=1（最低层）回退源：旧 bi 极点距（barFeatures）
       for (final f in barFeatures) {
         final row = byIdx.putIfAbsent(f.idx, () => {'idx': f.idx});
         (row['sub'] as Map<String, dynamic>)['fractal_peak_dist'] =
@@ -314,14 +316,14 @@ class BarFeatureLookup {
       }
     }
 
-    // Kn>0 极点距：由该层 confirms 当步起算（与副图折线同口径）
+    // Kn>=1 极点距：由该层 confirms 当步起算（与副图折线同口径；level=kn）
     for (final ind in subIndicators) {
-      if (ind.kind != SubIndicatorKind.fractalPeakDist || ind.kn <= 0) {
+      if (ind.kind != SubIndicatorKind.fractalPeakDist || ind.kn < 1) {
         continue;
       }
       LevelBundle? bundle;
       for (final lv in levels) {
-        if (lv.level == ind.kn + 1) {
+        if (lv.level == ind.kn) {
           bundle = lv;
           break;
         }
@@ -458,49 +460,49 @@ class BarFeatureLookup {
 
     for (final ind in active) {
       if (ind.kind == SubIndicatorKind.fractalConfirm) {
-        if (ind.kn == 0) {
-          add('K0分型确认', sub['bi_confirm_value']);
-        } else {
-          final confirms = row['level_confirms'];
-          dynamic v;
-          if (confirms is Map) {
-            final c = confirms[ind.kn + 1];
-            if (c is LevelConfirm) {
-              v = c.value;
-            } else if (c is Map) {
-              v = c['value'];
-            }
+        final confirms = row['level_confirms'];
+        dynamic v;
+        if (confirms is Map && confirms.containsKey(ind.kn)) {
+          // 主路径：level=kn 的确认（K1/笔=level1，K2/线段=level2…）
+          final c = confirms[ind.kn];
+          if (c is LevelConfirm) {
+            v = c.value;
+          } else if (c is Map) {
+            v = c['value'];
           }
-          add(ind.label, v);
+        } else if (ind.kn == 1) {
+          // 回退：无 levels 时用旧 bi_confirm（K0 原始K分型）
+          v = sub['bi_confirm_value'];
         }
+        add(ind.label, v);
       }
       if (ind.kind == SubIndicatorKind.fractalPeakDist) {
-        if (ind.kn == 0) {
-          add('K0分型极点距', sub['fractal_peak_dist']);
-        } else {
+        if (sub.containsKey('fractal_peak_dist_${ind.kn}')) {
           add(ind.label, sub['fractal_peak_dist_${ind.kn}']);
+        } else if (ind.kn == 1) {
+          // 回退：无 levels 时用旧 bi 极点距
+          add(ind.label, sub['fractal_peak_dist']);
         }
       }
       if (ind.kind == SubIndicatorKind.truncation) {
-        // 截断触发当步：有 truncated 确认才显示方向值
-        if (ind.kn == 0) {
+        // 截断触发当步：有 truncated 确认才显示方向值（level=kn）
+        final confirms = row['level_confirms'];
+        dynamic v;
+        if (confirms is Map && confirms.containsKey(ind.kn)) {
+          final c = confirms[ind.kn];
+          if (c is LevelConfirm && c.truncated) {
+            v = c.value;
+          } else if (c is Map && c['truncated'] == true) {
+            v = c['value'];
+          }
+        } else if (ind.kn == 1) {
+          // 回退：无 levels 时用旧 bi_confirm 截断
           final bc = row['bi_confirm'];
           if (bc is Map && bc['truncated'] == true) {
-            add('K0截断', bc['value']);
+            v = bc['value'];
           }
-        } else {
-          final confirms = row['level_confirms'];
-          dynamic v;
-          if (confirms is Map) {
-            final c = confirms[ind.kn + 1];
-            if (c is LevelConfirm && c.truncated) {
-              v = c.value;
-            } else if (c is Map && c['truncated'] == true) {
-              v = c['value'];
-            }
-          }
-          add(ind.label, v);
         }
+        add(ind.label, v);
       }
     }
     return lines;

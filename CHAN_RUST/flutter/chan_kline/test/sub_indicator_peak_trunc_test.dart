@@ -32,13 +32,13 @@ void main() {
     final pruned = pruneIndicators(
       {
         const SubChartIndicator.volume(),
-        const SubChartIndicator.truncation(0),
-        const SubChartIndicator.fractalPeakDist(0),
+        const SubChartIndicator.truncation(1),
+        const SubChartIndicator.fractalPeakDist(1),
       },
       off,
     );
-    expect(pruned.contains(const SubChartIndicator.truncation(0)), isFalse);
-    expect(pruned.contains(const SubChartIndicator.fractalPeakDist(0)), isTrue);
+    expect(pruned.contains(const SubChartIndicator.truncation(1)), isFalse);
+    expect(pruned.contains(const SubChartIndicator.fractalPeakDist(1)), isTrue);
   });
 
   test('副图目录大类顺序：确认 < 极点距 < 截断', () {
@@ -98,20 +98,20 @@ void main() {
       ],
       levels: levels,
       subIndicators: {
-        const SubChartIndicator.truncation(0),
-        const SubChartIndicator.fractalPeakDist(0),
+        const SubChartIndicator.truncation(1),
+        const SubChartIndicator.fractalPeakDist(1),
       },
     );
 
     final atTrunc = lookup.crosshairSubLines(3, {
-      const SubChartIndicator.truncation(0),
-      const SubChartIndicator.fractalPeakDist(0),
+      const SubChartIndicator.truncation(1),
+      const SubChartIndicator.fractalPeakDist(1),
     });
     expect(atTrunc.any((l) => l == 'K0截断:-1'), isTrue);
     expect(atTrunc.any((l) => l.startsWith('K0分型极点距:')), isTrue);
 
     final atNormal = lookup.crosshairSubLines(2, {
-      const SubChartIndicator.truncation(0),
+      const SubChartIndicator.truncation(1),
     });
     expect(atNormal.any((l) => l.startsWith('K0截断:')), isFalse);
   });

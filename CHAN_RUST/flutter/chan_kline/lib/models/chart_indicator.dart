@@ -32,7 +32,7 @@ enum SubIndicatorKind { volume, fractalConfirm, fractalPeakDist, truncation }
 /// 副图一项指标（分型确认/极点距/截断按层动态生成）。
 class SubChartIndicator {
   final SubIndicatorKind kind;
-  /// 分型确认/极点距/截断：0..maxKn-1（对应 level=kn+1 的 confirms）
+  /// 分型确认/极点距/截断：1..maxKn（对应 level=kn 的 confirms；与主图 combine/line 同号=层号）
   final int kn;
 
   const SubChartIndicator.volume()
@@ -50,11 +50,11 @@ class SubChartIndicator {
       case SubIndicatorKind.volume:
         return '成交量';
       case SubIndicatorKind.fractalConfirm:
-        return 'K$kn分型确认';
+        return 'K${kn - 1}分型确认';
       case SubIndicatorKind.fractalPeakDist:
-        return 'K$kn分型极点距';
+        return 'K${kn - 1}分型极点距';
       case SubIndicatorKind.truncation:
-        return 'K$kn截断';
+        return 'K${kn - 1}截断';
     }
   }
 
@@ -94,22 +94,21 @@ List<MainChartIndicator> buildMainIndicatorCatalog(int maxKn) {
   return out;
 }
 
-/// 副图可选列表：成交量 + Kn分型确认/极点距(0..maxKn-1)；
+/// 副图可选列表：成交量 + Kn分型确认/极点距/截断（1..maxKn，与主图 combine/line 同号=层号）；
 /// 截断项仅在 [truncationCheck]=true 时出现。
 List<SubChartIndicator> buildSubIndicatorCatalog(
   int maxKn, {
   bool truncationCheck = true,
 }) {
   final out = <SubChartIndicator>[const SubChartIndicator.volume()];
-  final maxFx = maxKn > 0 ? maxKn - 1 : -1;
-  for (var n = 0; n <= maxFx; n++) {
+  for (var n = 1; n <= maxKn; n++) {
     out.add(SubChartIndicator.fractalConfirm(n));
   }
-  for (var n = 0; n <= maxFx; n++) {
+  for (var n = 1; n <= maxKn; n++) {
     out.add(SubChartIndicator.fractalPeakDist(n));
   }
   if (truncationCheck) {
-    for (var n = 0; n <= maxFx; n++) {
+    for (var n = 1; n <= maxKn; n++) {
       out.add(SubChartIndicator.truncation(n));
     }
   }

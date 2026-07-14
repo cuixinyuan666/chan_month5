@@ -100,7 +100,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
     const MainChartIndicator.combine(1),
   };
   Set<SubChartIndicator> _subIndicators = {
-    const SubChartIndicator.fractalConfirm(0),
+    const SubChartIndicator.fractalConfirm(1),
   };
   int _stepIdx = -1; // -1 表示尚未步进
   bool _playing = false;
