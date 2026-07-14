@@ -31,7 +31,7 @@ class ChartLevelLineStyle {
   });
 
   static const _colors = <Color>[
-    Color(0xCCF59E0B), // 展示 K1连线（内部 level=2/线段）：琥珀
+    Color(0xCCF59E0B), // 展示 K1连线（内部 level=2）：琥珀
     Color(0xCCEC4899), // 展示 K2连线（内部 level=3）：玫红
     Color(0xCC10B981), // 展示 K3连线（内部 level=4）：翠绿
     Color(0xCC8B5CF6), // 展示 K4连线（内部 level=5）：紫
@@ -40,11 +40,11 @@ class ChartLevelLineStyle {
   ];
 
   /// 按内部 level 取样式（level=1→K0跨段中枢框；2→展示 K1连线，3→K2连线，…）。
-  /// KuaDuan(n) 复用本函数与合并/连线同层同色系；level=1 为笔跨段中枢，独立取蓝靛色以区别于 K1连线(琥珀)。
+  /// KuaDuan(n) 复用本函数与合并/连线同层同色系；level=1 为 K0跨段中枢，独立取蓝靛色以区别于 K1连线(琥珀)。
   static ChartLevelLineStyle forLevel(int level) {
     assert(level >= 1);
     if (level == 1) {
-      // 笔跨段中枢框（K0跨段中枢）：独立蓝靛色，不与 K1连线(琥珀 level=2)撞色
+      // K0跨段中枢框：独立蓝靛色，不与 K1连线(琥珀 level=2)撞色
       return const ChartLevelLineStyle(
         color: Color(0xCC3B82F6),
         strokeWidth: 1.9,

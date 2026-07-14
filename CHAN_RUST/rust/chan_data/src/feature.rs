@@ -1,10 +1,10 @@
-//! 十字辅助线 / ML 训练特征 + 笔 K 展示视图（逐K当下，禁止未来函数）。
+//! 十字辅助线 / ML 训练特征 + K1 bar 展示视图（逐K当下，禁止未来函数）。
 //! 全层首段策略见 segment_first.rs；合并/分型内核见 engine.rs。
 
 use chrono::{Datelike, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::combine::BiConfirmSignal;
+use crate::combine::K0ConfirmSignal;
 use crate::kline::KlineBar;
 use crate::pipeline::LevelSnap;
 
@@ -30,38 +30,38 @@ pub struct BarCrosshairFeature {
     /// 截至当步 K0合并区间最低价（逐K当下，非末态回写）
     #[serde(default)]
     pub combine_low: f64,
-    /// 距最近冻结笔确认分型极点间隔根数（不含极点 K）；首笔确认前=0
+    /// 距最近冻结K0连线确认分型极点间隔根数（不含极点 K）；首K0连线确认前=0
     #[serde(default)]
     pub fractal_peak_dist: i32,
     /// 当步所属 K1 序号；首 K1 确认前=None（levels[0] 冗余镜像，ML 兼容）
     #[serde(default)]
-    pub bi_idx: Option<i32>,
-    /// K1合并K1序：当步 K1 在 K1合并框内序号（0 起；旧称笔K线合并序）
+    pub k1_idx: Option<i32>,
+    /// K1合并K1序：当步 K1 在 K1合并框内序号（0 起）
     #[serde(default = "default_zero")]
-    pub bi_merge_inner_seq: i32,
+    pub k1_merge_inner_seq: i32,
     /// 当步所在 K1合并框已含 K1 根数（逐K当下）
     #[serde(default = "default_one")]
-    pub bi_merge_count: i32,
+    pub k1_merge_count: i32,
     #[serde(default)]
-    pub bi_open: f64,
+    pub k1_open: f64,
     #[serde(default)]
-    pub bi_high: f64,
+    pub k1_high: f64,
     #[serde(default)]
-    pub bi_low: f64,
+    pub k1_low: f64,
     #[serde(default)]
-    pub bi_close: f64,
+    pub k1_close: f64,
     #[serde(default)]
-    pub bi_volume: f64,
+    pub k1_volume: f64,
     /// 当步 K1合并区间最高价（逐K当下）
     #[serde(default)]
-    pub bi_combine_high: f64,
+    pub k1_combine_high: f64,
     /// 当步 K1合并区间最低价（逐K当下）
     #[serde(default)]
-    pub bi_combine_low: f64,
+    pub k1_combine_low: f64,
     /// 当步 K1合并分型：未确认=UNKNOWN
     #[serde(default = "default_unknown")]
-    pub bi_combine_fx: String,
-    /// 各层 Kn 快照（levels[0]=K1/笔，levels[1]=K2/线段，…穷尽）
+    pub k1_combine_fx: String,
+    /// 各层 Kn 快照（levels[0]=K1/K0连线，levels[1]=K2/K1连线，…穷尽）
     #[serde(default)]
     pub levels: Vec<LevelSnap>,
 }
@@ -78,11 +78,11 @@ fn default_unknown() -> String {
     "UNKNOWN".to_string()
 }
 
-/// 笔确认后包装成的笔 K 线（区间内最高/最低 + 起止开收，主图展示）。
+/// K0连线确认后包装成的 K1 bar（区间内最高/最低 + 起止开收，主图展示）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BiVirtualBar {
+pub struct K1Bar {
     pub idx: i32,
-    /// 向上笔=1，向下笔=-1
+    /// 向上K0连线=1，向下K0连线=-1
     pub dir: i32,
     pub x1: i32,
     pub x2: i32,
@@ -90,16 +90,16 @@ pub struct BiVirtualBar {
     pub high: f64,
     pub low: f64,
     pub close: f64,
-    /// 笔结束确认 K 索引
+    /// K0连线结束确认 K 索引
     pub confirm_x: i32,
 }
 
-/// 笔 K 线展示视图：计算层区间的 x 裁剪，仅用于绘制。
-/// 相邻笔在共享分钟 K 上：上一笔末端占左半侧，下一笔起始占右半侧，于中轴无缝衔接。
+/// K1 bar 展示视图：计算层区间的 x 裁剪，仅用于绘制。
+/// 相邻 K0连线在共享分钟 K 上：上一根末端占左半侧，下一根起始占右半侧，于中轴无缝衔接。
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BiVirtualBarView {
+pub struct K1BarView {
     #[serde(flatten)]
-    pub bar: BiVirtualBar,
+    pub bar: K1Bar,
     pub view_x1: i32,
     pub view_x2: i32,
     /// 末端落在 view_x2 对应分钟 K 左半侧（右边界=该 K 中轴）
@@ -110,11 +110,11 @@ pub struct BiVirtualBarView {
     pub start_at_right_half: bool,
 }
 
-/// 笔段：锚定配对（最近已用端点分型）产物，链条无缝，带前后关联索引。
+/// K0连线：锚定配对（最近已用端点分型）产物，链条无缝，带前后关联索引。
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BiSegment {
+pub struct K0Line {
     pub idx: i32,
-    /// 向上笔=1，向下笔=-1
+    /// 向上K0连线=1，向下K0连线=-1
     pub dir: i32,
     pub begin_confirm_x: i32,
     pub end_confirm_x: i32,
@@ -127,7 +127,7 @@ pub struct BiSegment {
     /// 已废弃：新方案无 bootstrap 引导段，固定 false
     #[serde(default)]
     pub is_bootstrap: bool,
-    /// 首笔确认审判 PASS：升格默认笔为第一笔，≥2 次确认仍保留
+    /// 首K0连线确认审判 PASS：升格默认K0连线为第一根，≥2 次确认仍保留
     #[serde(default)]
     pub is_promoted_default: bool,
 }
@@ -170,7 +170,7 @@ fn weekday_from_time_text(text: &str) -> String {
 }
 
 /// 分型合并框内极点 K 索引：TOP 取首个 high 极值，BOTTOM 取首个 low 极值。
-pub fn fractal_extreme_bar_idx(bars: &[KlineBar], conf: &BiConfirmSignal) -> Option<i32> {
+pub fn fractal_extreme_bar_idx(bars: &[KlineBar], conf: &K0ConfirmSignal) -> Option<i32> {
     let x1 = conf.fractal_x1.max(0) as usize;
     let x2 = conf.fractal_x2.max(0) as usize;
     if bars.is_empty() || x1 > x2 || x2 >= bars.len() {
@@ -204,11 +204,11 @@ pub fn fractal_extreme_bar_idx(bars: &[KlineBar], conf: &BiConfirmSignal) -> Opt
     None
 }
 
-/// 逐 K 填充 K线分型极点距：基准=最近冻结笔确认分型框；确认当步起算；不含极点 K。
+/// 逐 K 填充 K线分型极点距：基准=最近冻结K0连线确认分型框；确认当步起算；不含极点 K。
 pub fn enrich_fractal_peak_dist(
     bars: &[KlineBar],
     features: &mut [BarCrosshairFeature],
-    bi_confirms: &[BiConfirmSignal],
+    k0_confirms: &[K0ConfirmSignal],
 ) {
     if features.is_empty() {
         return;
@@ -217,8 +217,8 @@ pub fn enrich_fractal_peak_dist(
     let mut extreme_idx: Option<i32> = None;
 
     for i in 0..features.len() {
-        while confirm_ptr < bi_confirms.len() && bi_confirms[confirm_ptr].x as usize <= i {
-            extreme_idx = fractal_extreme_bar_idx(bars, &bi_confirms[confirm_ptr]);
+        while confirm_ptr < k0_confirms.len() && k0_confirms[confirm_ptr].x as usize <= i {
+            extreme_idx = fractal_extreme_bar_idx(bars, &k0_confirms[confirm_ptr]);
             confirm_ptr += 1;
         }
         features[i].fractal_peak_dist = match extreme_idx {
@@ -228,8 +228,8 @@ pub fn enrich_fractal_peak_dist(
     }
 }
 
-/// 由计算层笔 K 生成展示视图：相邻笔在共享分钟 K 上左/右半侧衔接，view 横向无缝。
-pub fn build_bi_virtual_bar_views(bars: &[BiVirtualBar]) -> Vec<BiVirtualBarView> {
+/// 由计算层 K1 bar 生成展示视图：相邻 K0连线在共享分钟 K 上左/右半侧衔接，view 横向无缝。
+pub fn build_k1_bar_views(bars: &[K1Bar]) -> Vec<K1BarView> {
     if bars.is_empty() {
         return Vec::new();
     }
@@ -242,7 +242,7 @@ pub fn build_bi_virtual_bar_views(bars: &[BiVirtualBar]) -> Vec<BiVirtualBarView
     for i in 0..n - 1 {
         let cur = &bars[i];
         let next = &bars[i + 1];
-        // 相邻笔 x 区间交叠：衔接 K = 上一笔末端分钟 K，两端同索引、半侧锚定
+        // 相邻 K0连线 x 区间交叠：衔接 K = 上一根末端分钟 K，两端同索引、半侧锚定
         if next.x1 <= cur.x2 {
             let junction = cur.x2.clamp(cur.x1, next.x2);
             view_x2[i] = junction;
@@ -260,7 +260,7 @@ pub fn build_bi_virtual_bar_views(bars: &[BiVirtualBar]) -> Vec<BiVirtualBarView
 
     bars.iter()
         .enumerate()
-        .map(|(i, bar)| BiVirtualBarView {
+        .map(|(i, bar)| K1BarView {
             bar: bar.clone(),
             view_x1: view_x1[i],
             view_x2: view_x2[i],
@@ -297,7 +297,7 @@ mod tests {
 
     #[test]
     fn fractal_extreme_bar_idx_top() {
-        // 分型框 K0-K2（3根），极点在 K0（high 最大），笔确认在 K3 当步
+        // 分型框 K0-K2（3根），极点在 K0（high 最大），K0连线确认在 K3 当步
         let mk = |i: i32, o: f64, h: f64, l: f64, c: f64| KlineBar {
             idx: i,
             time_ms: i as i64,
@@ -316,7 +316,7 @@ mod tests {
             mk(2, 9.0, 9.5, 8.5, 9.0),
             mk(3, 8.0, 8.5, 7.0, 7.5),
         ];
-        let conf = BiConfirmSignal {
+        let conf = K0ConfirmSignal {
             x: 3,
             fx: "TOP".to_string(),
             value: -1,
@@ -328,9 +328,9 @@ mod tests {
     }
 
     #[test]
-    fn bi_virtual_bar_view_half_bar_junction() {
+    fn k1_bar_view_half_bar_junction() {
         let bars = vec![
-            BiVirtualBar {
+            K1Bar {
                 idx: 0,
                 dir: 1,
                 x1: 1,
@@ -341,7 +341,7 @@ mod tests {
                 close: 1.5,
                 confirm_x: 8,
             },
-            BiVirtualBar {
+            K1Bar {
                 idx: 1,
                 dir: -1,
                 x1: 6,
@@ -353,7 +353,7 @@ mod tests {
                 confirm_x: 12,
             },
         ];
-        let views = build_bi_virtual_bar_views(&bars);
+        let views = build_k1_bar_views(&bars);
         assert_eq!(views.len(), 2);
         assert_eq!(views[0].view_x2, 8);
         assert_eq!(views[1].view_x1, 8);

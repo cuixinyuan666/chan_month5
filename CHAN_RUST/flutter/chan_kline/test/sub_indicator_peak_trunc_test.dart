@@ -1,4 +1,4 @@
-import 'package:chan_kline/models/bi_confirm_signal.dart';
+import 'package:chan_kline/models/k0_confirm_signal.dart';
 import 'package:chan_kline/models/bar_crosshair_feature.dart';
 import 'package:chan_kline/models/bar_feature_lookup.dart';
 import 'package:chan_kline/models/chart_indicator.dart';
@@ -50,15 +50,15 @@ void main() {
 
   test('十字线副图：截断触发步显示 Kn截断值', () {
     final bars = List.generate(5, _bar);
-    final biConfirms = [
-      const BiConfirmSignal(
+    final k0Confirms = [
+      const K0ConfirmSignal(
         x: 2,
         fx: 'BOTTOM',
         value: 1,
         fractalX1: 1,
         fractalX2: 1,
       ),
-      const BiConfirmSignal(
+      const K0ConfirmSignal(
         x: 3,
         fx: 'TOP',
         value: -1,
@@ -86,7 +86,7 @@ void main() {
     final lookup = BarFeatureLookup.build(
       bars: bars,
       combineFrames: const [],
-      biConfirms: biConfirms,
+      k0Confirms: k0Confirms,
       barFeatures: [
         for (var i = 0; i < 5; i++)
           BarCrosshairFeature(

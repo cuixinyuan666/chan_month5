@@ -1,23 +1,23 @@
 import 'dart:math' as math;
 
-import '../models/bi_virtual_bar.dart';
+import '../models/k1_bar.dart';
 import '../models/kline_bar.dart';
 import '../models/kline_combine_frame.dart';
-import 'bi_virtual_bar_view_compute.dart';
+import 'k1_bar_view_compute.dart';
 
-/// 十字线 as-of 视图重建专用：与 Rust `build_bi_combine_frames_with` 同口径
-/// （view 坐标 + 半侧锚定 + 截断监察）。调用方应只传入**已确认冻结**笔 K
-/// （`asOfBiVirtualBars(includeBuilding: false)`），进行中笔不参与截断合并。
+/// 十字线 as-of 视图重建专用：与 Rust `build_k1_combine_frames_with` 同口径
+/// （view 坐标 + 半侧锚定 + 截断监察）。调用方应只传入**已确认冻结** K1 bar
+/// （`asOfK1Bars(includeBuilding: false)`），进行中 K0连线不参与截断合并。
 
-List<KlineCombineFrame> computeBiCombineFrames(
+List<KlineCombineFrame> computeK1CombineFrames(
   List<KlineBar> bars,
-  List<BiVirtualBar> biBars, {
+  List<K1Bar> k1Bars, {
   bool truncationCheck = true,
   bool validityCheck = true,
 }) {
-  if (biBars.isEmpty) return const [];
+  if (k1Bars.isEmpty) return const [];
 
-  final views = buildBiVirtualBarViews(biBars);
+  final views = buildK1BarViews(k1Bars);
 
   String combineDir(double ha, double la, double hb, double lb) {
     if (ha >= hb && la <= lb) return 'COMBINE';

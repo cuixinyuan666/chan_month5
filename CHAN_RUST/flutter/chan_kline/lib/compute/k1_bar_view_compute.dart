@@ -1,8 +1,8 @@
-import '../models/bi_virtual_bar.dart';
-import '../models/bi_virtual_bar_view.dart';
+import '../models/k1_bar.dart';
+import '../models/k1_bar_view.dart';
 
-/// 由计算层笔 K 生成展示视图：相邻笔在共享分钟 K 上左/右半侧衔接，view 横向无缝。
-List<BiVirtualBarView> buildBiVirtualBarViews(List<BiVirtualBar> bars) {
+/// 由计算层 K1 bar 生成展示视图：相邻 K0连线在共享分钟 K 上左/右半侧衔接，view 横向无缝。
+List<K1BarView> buildK1BarViews(List<K1Bar> bars) {
   if (bars.isEmpty) return const [];
 
   final n = bars.length;
@@ -14,7 +14,7 @@ List<BiVirtualBarView> buildBiVirtualBarViews(List<BiVirtualBar> bars) {
   for (var i = 0; i < n - 1; i++) {
     final cur = bars[i];
     final next = bars[i + 1];
-    // 相邻笔 x 区间交叠：衔接 K = 上一笔末端分钟 K，两端同索引、半侧锚定
+    // 相邻 K0连线 x 区间交叠：衔接 K = 上一根末端分钟 K，两端同索引、半侧锚定
     if (next.x1 <= cur.x2) {
       final junction = cur.x2.clamp(cur.x1, next.x2);
       viewX2[i] = junction;
@@ -32,7 +32,7 @@ List<BiVirtualBarView> buildBiVirtualBarViews(List<BiVirtualBar> bars) {
 
   return List.generate(
     n,
-    (i) => BiVirtualBarView(
+    (i) => K1BarView(
       bar: bars[i],
       viewX1: viewX1[i],
       viewX2: viewX2[i],

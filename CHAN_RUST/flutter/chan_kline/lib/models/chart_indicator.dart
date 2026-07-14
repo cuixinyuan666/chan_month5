@@ -1,4 +1,4 @@
-import 'bi_segment.dart';
+import 'k0_line.dart';
 import 'level_models.dart';
 
 /// 主图指标种类：连线 / 合并框 / 跨段中枢框。
@@ -15,7 +15,7 @@ class MainChartIndicator {
   const MainChartIndicator.combine(this.kn) : kind = MainIndicatorKind.combine;
   const MainChartIndicator.kuaduan(this.kn) : kind = MainIndicatorKind.kuaduan;
 
-  /// 展示名比内部层号小 1：笔=K0连线、合并=K0合并、跨段中枢=K0跨段中枢，… 三者同号对齐。
+  /// 展示名比内部层号小 1：K0连线、K0合并、K0跨段中枢，… 三者同号对齐。
   String get label {
     switch (kind) {
       case MainIndicatorKind.line:
@@ -75,21 +75,21 @@ class SubChartIndicator {
   int get hashCode => Object.hash(kind, kn);
 }
 
-/// 当前数据最高 Kn（levels 最大 level；无 levels 但有笔段时为 1）。
+/// 当前数据最高 Kn（levels 最大 level；无 levels 但有 K0连线时为 1）。
 int chartMaxKn({
   required List<LevelBundle> levels,
-  List<BiSegment> biSegments = const [],
+  List<K0Line> k0Lines = const [],
 }) {
   var m = 0;
   for (final lv in levels) {
     if (lv.level > m) m = lv.level;
   }
-  if (m == 0 && biSegments.isNotEmpty) m = 1;
+  if (m == 0 && k0Lines.isNotEmpty) m = 1;
   return m;
 }
 
 /// 主图可选列表：合并与连线统一按层号 1..maxKn 生成（展示名 K(n-1)）。
-/// maxKn=0（无笔段）时仍保留 K0合并（combine(1)）可勾。
+/// maxKn=0（无 K0连线）时仍保留 K0合并（combine(1)）可勾。
 List<MainChartIndicator> buildMainIndicatorCatalog(int maxKn) {
   final out = <MainChartIndicator>[];
   // 合并与连线统一层号：combine(n)=Kn-1合并；maxKn=0 仍保留 K0合并
@@ -100,7 +100,7 @@ List<MainChartIndicator> buildMainIndicatorCatalog(int maxKn) {
   for (var n = 1; n <= maxKn; n++) {
     out.add(MainChartIndicator.line(n));
   }
-  // 跨段中枢框与合并/连线同号：kuaduan(n)=K(n-1)跨段中枢（笔跨段中枢=K0跨段中枢、线段跨段中枢=K1跨段中枢）
+  // 跨段中枢框与合并/连线同号：kuaduan(n)=K(n-1)跨段中枢（K0跨段中枢、K1跨段中枢）
   for (var n = 1; n <= maxKn; n++) {
     out.add(MainChartIndicator.kuaduan(n));
   }

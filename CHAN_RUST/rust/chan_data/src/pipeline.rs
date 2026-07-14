@@ -1,4 +1,4 @@
-//! Kn 递归流水线：K0(原始K) → K1(笔) → K2(线段) → … → Kn，穷尽到无法再生成新层。
+//! Kn 递归流水线：K0(原始K) → K1(K0连线) → K2(K1连线) → … → Kn，穷尽到无法再生成新层。
 //! 命名历史：旧「1段/2段/n段」→「K1/K2/Kn」；内部 level 序号不变（1=K1）。
 //!
 //! 三层语义（勿混为一谈）：
@@ -97,7 +97,7 @@ pub struct LevelSegment {
     pub begin_fractal_x2: i32,
     pub end_fractal_x1: i32,
     pub end_fractal_x2: i32,
-    /// 起止分型组高低（合并框口径，映射 SegLine 价格用）
+    /// 起止分型组高低（合并框口径，映射 K1Line 价格用）
     #[serde(default)]
     pub begin_fractal_high: f64,
     #[serde(default)]
@@ -133,7 +133,7 @@ pub struct LevelUnitBar {
 /// 每根 K0 × 每层 Kn 的十字线快照（逐K当下冻结，ML/tooltip 同源）
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LevelSnap {
-    /// 层级：1=K1(笔)，2=K2(线段)，…（旧称 n段）
+    /// 层级：1=K1(K0连线)，2=K2(K1连线)，…（旧称 n段）
     pub level: i32,
     /// 当步所属 Kn 序号（进行中或刚冻结；首确认前=None）
     pub unit_idx: Option<i64>,
@@ -196,7 +196,7 @@ pub struct LevelBundleOut {
     pub unit_bars: Vec<LevelUnitBar>,
     /// 本层输入单元（K(n-1)；n=1 时为 K0）的包含合并线框
     pub combine_frames: Vec<KlineCombineFrame>,
-    /// 本层跨段中枢镜像框（笔跨段中枢 level=1 / 线段跨段中枢 level=2 …；由 `kuaduan` 模块松重叠吸收器产出）
+    /// 本层跨段中枢镜像框（K0跨段中枢 level=1 / K1跨段中枢 level=2 …；由 `kuaduan` 模块松重叠吸收器产出）
     #[serde(default)]
     pub kuaduan_frames: Vec<KuaDuanFrame>,
     /// 首 N 段方向：0 未定
@@ -227,7 +227,7 @@ pub struct BarCombineSnap {
     pub fx: String,
 }
 
-/// 2段（线段）逐K兼容行
+/// K1连线逐K兼容行
 #[derive(Debug, Clone, Copy, Default)]
 pub struct BarSegRow {
     pub building_dir: i32,
@@ -1029,7 +1029,7 @@ pub fn run_pipeline(bars: &[KlineBar], opt: &PipelineOptions) -> PipelineResult 
         }
         bar_level_snaps.push(snaps);
 
-        // 2段（线段）兼容行
+        // K1连线兼容行
         let row = levels
             .get(1)
             .map(|l| BarSegRow {

@@ -3,7 +3,7 @@ import 'kuaduan_frame.dart';
 
 /// 每根 K0 × 每层 Kn 十字线快照（Rust `LevelSnap`，逐K当下冻结）。
 class LevelSnap {
-  /// 层级：1=K1(笔)，2=K2(线段)，…（旧称 n段）
+  /// 层级：1=K1(K0连线)，2=K2(K1连线)，…（旧称 n段）
   final int level;
 
   /// 当步所属 Kn 序号（进行中或刚冻结；首段确认前=null）

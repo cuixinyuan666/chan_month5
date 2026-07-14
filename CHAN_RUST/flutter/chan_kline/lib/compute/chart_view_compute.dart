@@ -1,13 +1,13 @@
 import '../models/bar_crosshair_feature.dart';
-import '../models/bi_confirm_signal.dart';
-import '../models/bi_virtual_bar.dart';
+import '../models/k0_confirm_signal.dart';
+import '../models/k1_bar.dart';
 import '../models/kline_bar.dart';
 import '../models/level_models.dart';
 
 /// 纯视图组装（十字线 as-of 重绘）：全部数据来自 Rust 冻结产物 + 逐K快照，
 /// Dart 端不做缠论计算（无回退实现）。
 
-/// 段/笔连线端点（极点 K 索引 + 极点价；展示专用，与 Rust `pole_x` 同口径）。
+/// 段/K0连线端点（极点 K 索引 + 极点价；展示专用，与 Rust `pole_x` 同口径）。
 /// 主图「K0连线」即旧「笔连线」（曾称 K1连线）。
 class LevelLineEndpoint {
   final int barIdx;
@@ -45,8 +45,8 @@ int? fractalExtremeBarIdxRaw(
   return null;
 }
 
-/// 1 段笔确认包装（兼容旧调用方）。
-int? fractalExtremeBarIdx(List<KlineBar> bars, BiConfirmSignal conf) {
+/// K0连线确认包装（兼容旧调用方）。
+int? fractalExtremeBarIdx(List<KlineBar> bars, K0ConfirmSignal conf) {
   return fractalExtremeBarIdxRaw(
     bars,
     fx: conf.fx,
@@ -139,7 +139,7 @@ LevelLineEndpoint? levelSegmentEndpoint({
   return LevelLineEndpoint(barIdx: poleIdx, price: price);
 }
 
-/// N 段确认分型极点端点（构建中虚线起点；与 1 段 `_drawBuildingBiLine` 同口径）。
+/// N 段确认分型极点端点（构建中虚线起点；与 1 段 `_drawBuildingK0Line` 同口径）。
 LevelLineEndpoint? levelConfirmEndpoint(
   List<KlineBar> bars,
   LevelConfirm conf,
@@ -210,8 +210,8 @@ int buildingLevelDirAt({
   return last.fx == 'BOTTOM' ? 1 : -1;
 }
 
-/// 笔确认前展示用默认笔：首根 K → asOf 末 K（仅 pending 策略；纯展示）。
-BiVirtualBar? preConfirmDefaultBi(List<KlineBar> bars, int endBarX) {
+/// K0连线确认前展示用默认 K1 bar：首根 K → asOf 末 K（仅 pending 策略；纯展示）。
+K1Bar? preConfirmDefaultK1Bar(List<KlineBar> bars, int endBarX) {
   if (bars.isEmpty || endBarX < 0 || endBarX >= bars.length) return null;
   var hi = double.negativeInfinity;
   var lo = double.infinity;
@@ -219,7 +219,7 @@ BiVirtualBar? preConfirmDefaultBi(List<KlineBar> bars, int endBarX) {
     if (bars[i].high > hi) hi = bars[i].high;
     if (bars[i].low < lo) lo = bars[i].low;
   }
-  return BiVirtualBar(
+  return K1Bar(
     idx: 0,
     dir: bars[endBarX].close >= bars[0].open ? 1 : -1,
     x1: 0,
@@ -232,13 +232,13 @@ BiVirtualBar? preConfirmDefaultBi(List<KlineBar> bars, int endBarX) {
   );
 }
 
-/// 十字线 as-of 笔 K 列表：已冻结段（Rust 冻结时算好 OHLC，查表）+ 可选当步进行中笔。
-/// [includeBuilding]：主图笔K展示可含进行中；K1合并/截断必须为 false（只认已确认笔）。
-List<BiVirtualBar> asOfBiVirtualBars({
+/// 十字线 as-of K1 bar 列表：已冻结段（Rust 冻结时算好 OHLC，查表）+ 可选当步进行中 K0连线。
+/// [includeBuilding]：主图 K1 bar 展示可含进行中；K1合并/截断必须为 false（只认已确认 K0连线）。
+List<K1Bar> asOfK1Bars({
   required List<KlineBar> bars,
   required List<LevelBundle> levels,
   required List<BarCrosshairFeature> barFeatures,
-  required String defaultBiPolicy,
+  required String defaultK0Policy,
   required int asOf,
   bool includeBuilding = true,
 }) {
@@ -246,13 +246,13 @@ List<BiVirtualBar> asOfBiVirtualBars({
   final bx = asOf.clamp(0, bars.length - 1);
 
   final l1 = levels.isNotEmpty ? levels.first : null;
-  final frozen = <BiVirtualBar>[];
+  final frozen = <K1Bar>[];
   if (l1 != null) {
     for (final s in l1.segments) {
       if (s.endConfirmX > bx) continue;
       final x1 = s.beginPoleX < s.endPoleX ? s.beginPoleX : s.endPoleX;
       final x2 = s.beginPoleX > s.endPoleX ? s.beginPoleX : s.endPoleX;
-      frozen.add(BiVirtualBar(
+      frozen.add(K1Bar(
         idx: s.idx,
         dir: s.dir,
         x1: x1,
@@ -266,7 +266,7 @@ List<BiVirtualBar> asOfBiVirtualBars({
     }
   }
 
-  // 当步快照（逐K当下冻结）：进行中笔或刚冻结首笔
+  // 当步快照（逐K当下冻结）：进行中 K0连线或刚冻结首根
   LevelSnap? snap;
   if (bx < barFeatures.length && barFeatures[bx].idx == bx) {
     final ls = barFeatures[bx].levels;
@@ -282,9 +282,9 @@ List<BiVirtualBar> asOfBiVirtualBars({
 
   final unitIdx = snap?.unitIdx;
   if (unitIdx == null) {
-    // 首笔确认前：pending 策略给默认笔展示
-    if (defaultBiPolicy == 'pending' && frozen.isEmpty) {
-      final d = preConfirmDefaultBi(bars, bx);
+    // 首K0连线确认前：pending 策略给默认 K1 bar 展示
+    if (defaultK0Policy == 'pending' && frozen.isEmpty) {
+      final d = preConfirmDefaultK1Bar(bars, bx);
       if (d != null) frozen.add(d);
     }
     return frozen;
@@ -292,11 +292,11 @@ List<BiVirtualBar> asOfBiVirtualBars({
 
   if (!includeBuilding) return frozen;
 
-  // 快照单元未包含在冻结列表 → 追加进行中笔（unit_x 区间与 OHLC 均来自快照）
+  // 快照单元未包含在冻结列表 → 追加进行中 K0连线（unit_x 区间与 OHLC 均来自快照）
   final s = snap!;
   final contained = frozen.any((v) => v.idx == unitIdx && v.x2 >= s.unitX2);
   if (!contained && s.unitX1 >= 0 && s.unitX2 >= s.unitX1) {
-    frozen.add(BiVirtualBar(
+    frozen.add(K1Bar(
       idx: unitIdx,
       dir: s.unitDir,
       x1: s.unitX1,

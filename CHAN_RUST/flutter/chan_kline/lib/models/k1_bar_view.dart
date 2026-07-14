@@ -1,11 +1,11 @@
-import 'bi_virtual_bar.dart';
+import 'k1_bar.dart';
 
-/// 笔 K 线展示视图：计算层 [BiVirtualBar] 的 x 裁剪，仅用于绘制。
+/// K1 bar 展示视图：计算层 [K1Bar] 的 x 裁剪，仅用于绘制。
 ///
-/// OHLC / dir / confirmX 仍取自完整笔区间，不参与合并笔 K、段分析、ML。
-/// 相邻笔在共享分钟 K 上：上一笔末端占左半侧，下一笔起始占右半侧，于中轴无缝衔接。
-class BiVirtualBarView {
-  final BiVirtualBar bar;
+/// OHLC / dir / confirmX 仍取自完整 K0连线区间，不参与合并 K1 bar、K1连线分析、ML。
+/// 相邻 K0连线在共享分钟 K 上：上一根末端占左半侧，下一根起始占右半侧，于中轴无缝衔接。
+class K1BarView {
+  final K1Bar bar;
   final int viewX1;
   final int viewX2;
   /// 末端落在 viewX2 对应分钟 K 左半侧（右边界=该 K 中轴）
@@ -13,7 +13,7 @@ class BiVirtualBarView {
   /// 起始落在 viewX1 对应分钟 K 右半侧（左边界=该 K 中轴）
   final bool startAtRightHalf;
 
-  const BiVirtualBarView({
+  const K1BarView({
     required this.bar,
     required this.viewX1,
     required this.viewX2,

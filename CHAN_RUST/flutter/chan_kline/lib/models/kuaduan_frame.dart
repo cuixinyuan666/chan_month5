@@ -5,7 +5,7 @@ class KuaDuanFrame {
   final int x2;
   final double high; // ZD 上沿（更高价）
   final double low; // ZG 下沿（更低价）
-  final int level; // 所属层号（与 combine/line 同号：1=笔跨段中枢, 2=线段跨段中枢…）
+  final int level; // 所属层号（与 combine/line 同号：1=K0跨段中枢, 2=K1跨段中枢…）
   final int count; // 覆盖段数（种子3 + 延伸）
 
   const KuaDuanFrame({

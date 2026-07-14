@@ -7,25 +7,25 @@ import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'bridge/chan_bridge.dart';
-import 'compute/bi_virtual_bar_view_compute.dart';
+import 'compute/k1_bar_view_compute.dart';
 import 'history/app_debug_snapshot.dart';
 import 'history/msg_history.dart';
 import 'models/kline_bar.dart';
-import 'models/bi_confirm_signal.dart';
+import 'models/k0_confirm_signal.dart';
 import 'models/bar_crosshair_feature.dart';
-import 'models/bi_segment.dart';
-import 'models/bi_virtual_bar_view.dart';
+import 'models/k0_line.dart';
+import 'models/k1_bar_view.dart';
 import 'models/chart_indicator.dart';
 import 'models/kline_combine_frame.dart';
 import 'models/level_models.dart';
-import 'models/seg_analysis.dart';
+import 'models/k1_analysis.dart';
 import 'widgets/datetime_picker_dialog.dart';
 import 'widgets/edge_control_panel.dart';
 import 'widgets/kline_chart.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // 命名变更追踪：中枢(ZS) → 跨段中枢(KuaDuan)，便于调试时从历史记录追溯完整更名过程
+  // 命名变更追踪：中枢(ZS) → 跨段中枢(KuaDuan)、笔/线段 → K0连线/K1连线，便于调试时从历史记录追溯完整更名过程
   MsgHistory.instance.appendNamingRename();
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     await windowManager.ensureInitialized();
@@ -91,12 +91,12 @@ class _KlineHomePageState extends State<KlineHomePage> {
   String _dataRoot = '';
   List<KlineBar> _allBars = [];
   List<KlineCombineFrame> _combineFrames = [];
-  List<BiConfirmSignal> _biConfirmSignals = [];
+  List<K0ConfirmSignal> _k0ConfirmSignals = [];
   List<BarCrosshairFeature> _barFeatures = [];
-  List<BiSegment> _biSegments = [];
-  List<BiVirtualBarView> _biVirtualBarViews = [];
-  List<KlineCombineFrame> _biCombineFrames = [];
-  SegAnalysisBundle _segAnalysis = SegAnalysisBundle.empty();
+  List<K0Line> _k0Lines = [];
+  List<K1BarView> _k1BarViews = [];
+  List<KlineCombineFrame> _k1CombineFrames = [];
+  K1AnalysisBundle _k1Analysis = K1AnalysisBundle.empty();
   List<LevelBundle> _levels = [];
   Set<MainChartIndicator> _mainIndicators = {
     const MainChartIndicator.combine(1),
@@ -109,8 +109,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
   bool _playing = false;
   Timer? _playTimer;
   String? _error;
-  bool _defaultBiPurged = false;
-  String _defaultBiPolicy = 'pending';
+  bool _defaultK0Purged = false;
+  String _defaultK0Policy = 'pending';
   bool _bootstrapping = false;
   bool _loadingChart = false;
   bool _panelExpanded = false;
@@ -225,7 +225,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       await _loadKlines();
       _msgHistory.append(
         '初始化完成：代码=$_selectedCode 周期=${_periods[_period] ?? _period} '
-        '根目录=$_dataRoot；口径=K0原始K/K1笔/K2线段/Kn第n层；'
+        '根目录=$_dataRoot；口径=K0原始K/K1=K0连线/K2=K1连线/Kn第n层；'
         '截断=${_truncationCheck ? "开" : "关"}',
       );
     } catch (e) {
@@ -258,7 +258,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       setState(() {
         _allBars = bars;
         _stepIdx = bars.isEmpty ? -1 : 0;
-        _defaultBiPurged = false;
+        _defaultK0Purged = false;
       });
       _msgHistory.append(
         '加载K0：$code ${_fmtDateTime(_beginDate)}~${_fmtDateTime(_endDate)} '
@@ -271,12 +271,12 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _error = e.toString();
         _allBars = [];
         _combineFrames = [];
-        _biConfirmSignals = [];
+        _k0ConfirmSignals = [];
         _barFeatures = [];
-        _biSegments = [];
-        _biVirtualBarViews = [];
-        _biCombineFrames = [];
-        _segAnalysis = SegAnalysisBundle.empty();
+        _k0Lines = [];
+        _k1BarViews = [];
+        _k1CombineFrames = [];
+        _k1Analysis = K1AnalysisBundle.empty();
         _levels = [];
         _stepIdx = -1;
       });
@@ -290,12 +290,12 @@ class _KlineHomePageState extends State<KlineHomePage> {
     if (_visibleBars.isEmpty) {
       setState(() {
         _combineFrames = [];
-        _biConfirmSignals = [];
+        _k0ConfirmSignals = [];
         _barFeatures = [];
-        _biSegments = [];
-        _biVirtualBarViews = [];
-        _biCombineFrames = [];
-        _segAnalysis = SegAnalysisBundle.empty();
+        _k0Lines = [];
+        _k1BarViews = [];
+        _k1CombineFrames = [];
+        _k1Analysis = K1AnalysisBundle.empty();
         _levels = [];
       });
       return;
@@ -305,31 +305,31 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _visibleBars,
         truncationCheck: _truncationCheck,
       );
-      if (bundle.defaultBiPolicy == 'purged') {
-        _defaultBiPurged = true;
+      if (bundle.defaultK0Policy == 'purged') {
+        _defaultK0Purged = true;
       }
-      var virtualBars = bundle.biVirtualBars;
-      // 会话级 purge：审判 FAIL 出现过后，步退回首笔确认前也不再展示默认笔
-      if (_defaultBiPurged &&
-          bundle.defaultBiPolicy == 'pending' &&
-          bundle.biSegments.isEmpty) {
+      var virtualBars = bundle.k1Bars;
+      // 会话级 purge：审判 FAIL 出现过后，步退回首K0连线确认前也不再展示默认 K1 bar
+      if (_defaultK0Purged &&
+          bundle.defaultK0Policy == 'pending' &&
+          bundle.k0Lines.isEmpty) {
         virtualBars = const [];
       }
-      final biViews = buildBiVirtualBarViews(virtualBars);
+      final k1Views = buildK1BarViews(virtualBars);
       setState(() {
         _combineFrames = bundle.frames;
-        _biConfirmSignals = bundle.biConfirms;
+        _k0ConfirmSignals = bundle.k0Confirms;
         _barFeatures = bundle.barFeatures;
-        _biSegments = bundle.biSegments;
-        _biVirtualBarViews = biViews;
-        _biCombineFrames = bundle.biCombineFrames;
-        _segAnalysis = bundle.segAnalysis;
-        _defaultBiPolicy = bundle.defaultBiPolicy;
+        _k0Lines = bundle.k0Lines;
+        _k1BarViews = k1Views;
+        _k1CombineFrames = bundle.k1CombineFrames;
+        _k1Analysis = bundle.k1Analysis;
+        _defaultK0Policy = bundle.defaultK0Policy;
         _levels = bundle.levels;
         // 按当前最高 Kn 动态裁剪已选指标（层变少时去掉失效项）
         final maxKn = chartMaxKn(
           levels: _levels,
-          biSegments: _biSegments,
+          k0Lines: _k0Lines,
         );
         _mainIndicators = pruneIndicators(
           _mainIndicators,
@@ -352,11 +352,11 @@ class _KlineHomePageState extends State<KlineHomePage> {
     final tail = _visibleBars.last;
     final levelCount = _levels.length;
     final lastLevelSegs =
-        _levels.isNotEmpty ? _levels.last.segments.length : _biSegments.length;
+        _levels.isNotEmpty ? _levels.last.segments.length : _k0Lines.length;
     _msgHistory.append(
       '$prefix @$_visibleCount/${_allBars.length} idx=${tail.idx} '
-      '层数=$levelCount 末层Kn段=$lastLevelSegs K1段=${_biSegments.length} '
-      'policy=$_defaultBiPolicy 截断=${_truncationCheck ? "开" : "关"}',
+      '层数=$levelCount 末层Kn段=$lastLevelSegs K1段=${_k0Lines.length} '
+      'policy=$_defaultK0Policy 截断=${_truncationCheck ? "开" : "关"}',
     );
   }
 
@@ -372,17 +372,17 @@ class _KlineHomePageState extends State<KlineHomePage> {
       totalBars: _allBars.length,
       visibleCount: _visibleCount,
       playing: _playing,
-      defaultBiPolicy: _defaultBiPolicy,
+      defaultK0Policy: _defaultK0Policy,
       truncationCheck: _truncationCheck,
       subIndicatorLabels: _subIndicators.map((e) => e.label).toSet(),
       mainIndicatorLabels: _mainIndicators.map((e) => e.label).toSet(),
       visibleBars: _visibleBars,
       combineFrames: _combineFrames,
-      biConfirms: _biConfirmSignals,
+      k0Confirms: _k0ConfirmSignals,
       barFeatures: _barFeatures,
-      biSegments: _biSegments,
-      biCombineFrames: _biCombineFrames,
-      segAnalysis: _segAnalysis,
+      k0Lines: _k0Lines,
+      k1CombineFrames: _k1CombineFrames,
+      k1Analysis: _k1Analysis,
       levels: _levels,
       lastError: _error,
     );
@@ -493,14 +493,14 @@ class _KlineHomePageState extends State<KlineHomePage> {
                 child: KlineChart(
                   bars: _visibleBars,
                   combineFrames: _combineFrames,
-                  biConfirmSignals: _biConfirmSignals,
+                  k0ConfirmSignals: _k0ConfirmSignals,
                   barFeatures: _barFeatures,
-                  biSegments: _biSegments,
-                  biVirtualBarViews: _biVirtualBarViews,
-                  biCombineFrames: _biCombineFrames,
-                  segAnalysis: _segAnalysis,
+                  k0Lines: _k0Lines,
+                  k1BarViews: _k1BarViews,
+                  k1CombineFrames: _k1CombineFrames,
+                  k1Analysis: _k1Analysis,
                   levels: _levels,
-                  defaultBiPolicy: _defaultBiPolicy,
+                  defaultK0Policy: _defaultK0Policy,
                   truncationCheck: _truncationCheck,
                   mainIndicators: _mainIndicators,
                   onMainIndicatorsChanged: (v) =>
@@ -697,11 +697,11 @@ class _KlineHomePageState extends State<KlineHomePage> {
               : (v) {
                   setState(() {
                     _truncationCheck = v;
-                    _defaultBiPurged = false;
+                    _defaultK0Purged = false;
                     // 关截断时从副图勾选里摘掉 Kn截断（目录也不可选）
                     final maxKn = chartMaxKn(
                       levels: _levels,
-                      biSegments: _biSegments,
+                      k0Lines: _k0Lines,
                     );
                     _subIndicators = pruneIndicators(
                       _subIndicators,
@@ -784,7 +784,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
             '· 确认带 truncated 标记，tooltip 显示「值(截断)」。\n'
             '· 副图「Kn截断」仅在本开关开启时可选；关闭后自动从已勾选里移除。\n'
             '· 与「下层确认后才能参与上层」同构：截断只对已冻结下层单元生效，'
-            '进行中笔不参与 K1合并/截断判定。\n'
+            '进行中 K0连线不参与 K1合并/截断判定。\n'
             '· 触发截断后，触发K在合并引擎内改写为可作第三元素的形态'
             '（下降截断抬低点/上升截断压高点），便于后续双高双低接续；'
             '原始K0不变。\n\n'

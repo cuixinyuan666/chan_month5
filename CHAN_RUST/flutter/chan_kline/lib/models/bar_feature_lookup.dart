@@ -1,19 +1,11 @@
-import 'bi_confirm_signal.dart';
-
+import 'k0_confirm_signal.dart';
 import 'bar_crosshair_feature.dart';
-
-import 'bi_segment.dart';
-
+import 'k0_line.dart';
 import 'kline_bar.dart';
-
 import 'chart_indicator.dart';
 import 'kline_combine_frame.dart';
-
 import 'level_models.dart';
-
-import 'seg_analysis.dart';
-
-
+import 'k1_analysis.dart';
 
 /// 十字线 tooltip 一行：键值 或 层级分隔线。
 class CrosshairTooltipRow {
@@ -35,40 +27,24 @@ class CrosshairTooltipRow {
 }
 
 /// 逐 K 字典式特征索引（ML / 十字线 tooltip 同源，均用 barFeatures 逐步冻结快照）。
-
 class BarFeatureLookup {
-
   BarFeatureLookup._({required this.byIdx, this.totalLevels = 0});
-
-
 
   final Map<int, Map<String, dynamic>> byIdx;
 
   /// 穷尽后的 N 段总层数（tooltip 对未诞生层输出占位行）
   final int totalLevels;
 
-
-
   factory BarFeatureLookup.build({
-
     required List<KlineBar> bars,
-
     required List<KlineCombineFrame> combineFrames,
-
-    required List<BiConfirmSignal> biConfirms,
-
+    required List<K0ConfirmSignal> k0Confirms,
     List<BarCrosshairFeature> barFeatures = const [],
-
-    List<BiSegment> biSegments = const [],
-
-    SegAnalysisBundle segAnalysis = const SegAnalysisBundle(),
-
+    List<K0Line> k0Lines = const [],
+    K1AnalysisBundle k1Analysis = const K1AnalysisBundle(),
     List<LevelBundle> levels = const [],
-
     Set<SubChartIndicator> subIndicators = const {},
-
   }) {
-
     final byIdx = <int, Map<String, dynamic>>{};
 
     final featureByIdx = {for (final f in barFeatures) f.idx: f};
@@ -84,219 +60,115 @@ class BarFeatureLookup {
       levelConfirmByX[lv.level] = m;
     }
 
-
-
     for (final b in bars) {
-
       final feat = featureByIdx[b.idx];
-
       byIdx[b.idx] = {
-
         'idx': b.idx,
-
         'time_ms': b.timeMs,
-
         'time_text': b.timeText,
-
         'weekday': feat?.weekday ?? '-',
-
         'merge_inner_seq': feat?.mergeInnerSeq ?? 0,
-
         'merge_count': feat?.mergeCount ?? 1,
-
         'combine_fx': feat?.combineFx ?? 'UNKNOWN',
-
         'combine_high': feat?.combineHigh ?? b.high,
-
         'combine_low': feat?.combineLow ?? b.low,
-
-        'bi_idx': feat?.biIdx,
-
-        'bi_merge_inner_seq': feat?.biMergeInnerSeq ?? 0,
-
-        'bi_merge_count': feat?.biMergeCount ?? 1,
-
-        'bi_open': feat?.biOpen ?? 0,
-
-        'bi_high': feat?.biHigh ?? 0,
-
-        'bi_low': feat?.biLow ?? 0,
-
-        'bi_close': feat?.biClose ?? 0,
-
-        'bi_volume': feat?.biVolume ?? 0,
-
-        'bi_combine_high': feat?.biCombineHigh ?? 0,
-
-        'bi_combine_low': feat?.biCombineLow ?? 0,
-
-        'bi_combine_fx': feat?.biCombineFx ?? 'UNKNOWN',
-
+        'k1_idx': feat?.k1Idx,
+        'k1_merge_inner_seq': feat?.k1MergeInnerSeq ?? 0,
+        'k1_merge_count': feat?.k1MergeCount ?? 1,
+        'k1_open': feat?.k1Open ?? 0,
+        'k1_high': feat?.k1High ?? 0,
+        'k1_low': feat?.k1Low ?? 0,
+        'k1_close': feat?.k1Close ?? 0,
+        'k1_volume': feat?.k1Volume ?? 0,
+        'k1_combine_high': feat?.k1CombineHigh ?? 0,
+        'k1_combine_low': feat?.k1CombineLow ?? 0,
+        'k1_combine_fx': feat?.k1CombineFx ?? 'UNKNOWN',
         'levels': feat?.levels ?? const <LevelSnap>[],
-
         'level_confirms': {
           for (final e in levelConfirmByX.entries)
             if (e.value.containsKey(b.idx)) e.key: e.value[b.idx]!,
         },
-
         'open': b.open,
-
         'high': b.high,
-
         'low': b.low,
-
         'close': b.close,
-
         'volume': b.volume,
-
         'amount': b.amount,
-
         if (b.metrics.isNotEmpty) 'metrics': Map<String, dynamic>.from(b.metrics),
-
         'sub': <String, dynamic>{},
-
       };
-
     }
-
-
 
     // 合并线框仅结构展示；十字线/ML 的 fx、count 取自 barFeatures 逐步口径
-
     for (final f in combineFrames) {
-
       for (var x = f.x1; x <= f.x2; x++) {
-
         final row = byIdx.putIfAbsent(x, () => {'idx': x});
-
         row['combine'] = {
-
           'x1': f.x1,
-
           'x2': f.x2,
-
           'high': f.high,
-
           'low': f.low,
-
           'fx': f.fx,
-
           'count': f.count,
-
           'in_merge': f.count > 1,
-
         };
-
       }
-
     }
 
-
-
-    for (final sig in biConfirms) {
-
+    for (final sig in k0Confirms) {
       final row = byIdx.putIfAbsent(sig.x, () => {'idx': sig.x});
-
-      row['bi_confirm'] = {
-
+      row['k0_confirm'] = {
         'x': sig.x,
-
         'fx': sig.fx,
-
         'value': sig.value,
-
         'fractal_x1': sig.fractalX1,
-
         'fractal_x2': sig.fractalX2,
-
         'truncated': sig.truncated,
-
       };
-
       if (subIndicators.any((e) =>
           e.kind == SubIndicatorKind.fractalConfirm && e.kn == 1)) {
-        // kn=1（最低层）回退源：旧 bi_confirm（K0 原始K分型）
-        (row['sub'] as Map<String, dynamic>)['bi_confirm_value'] = sig.value;
+        // kn=1（最低层）回退源：旧 k0_confirm（K0 原始K分型）
+        (row['sub'] as Map<String, dynamic>)['k0_confirm_value'] = sig.value;
       }
-
     }
 
-
-
-    for (final sig in segAnalysis.segConfirms) {
-
+    for (final sig in k1Analysis.k1Confirms) {
       if (sig.fx != 'TOP' && sig.fx != 'BOTTOM') continue;
-
       if (sig.value == 0) continue;
-
       final row = byIdx.putIfAbsent(sig.x, () => {'idx': sig.x});
-
-      row['seg_confirm_signal'] = {
-
+      row['k1_confirm_signal'] = {
         'x': sig.x,
-
         'fx': sig.fx,
-
         'value': sig.value,
-
-        'peak_bi_idx': sig.peakBiIdx,
-
+        'peak_k1_idx': sig.peakK1Idx,
         'fractal_x1': sig.fractalX1,
-
         'fractal_x2': sig.fractalX2,
-
       };
-
     }
 
-
-
-    for (final seg in biSegments) {
-
+    for (final seg in k0Lines) {
       for (var x = seg.beginConfirmX; x <= seg.endConfirmX; x++) {
-
         final row = byIdx.putIfAbsent(x, () => {'idx': x});
-
-        row['bi_segment'] = {
-
+        row['k0_line'] = {
           'idx': seg.idx,
-
           'dir': seg.dir,
-
           'begin_confirm_x': seg.beginConfirmX,
-
           'end_confirm_x': seg.endConfirmX,
-
           'prev_idx': seg.prevIdx,
-
           'next_idx': seg.nextIdx,
-
         };
-
       }
-
     }
 
-
-
-    for (final snap in segAnalysis.barSubSnapshots) {
-
+    for (final snap in k1Analysis.barSubSnapshots) {
       final row = byIdx.putIfAbsent(snap.idx, () => {'idx': snap.idx});
-
-      row['seg_snapshot'] = {
-
+      row['k1_snapshot'] = {
         'building_seg_dir': snap.buildingSegDir,
-
         'first_seg_dir': snap.firstSegDir,
-
-        'seg_confirm': snap.segConfirm,
+        'k1_confirm': snap.k1Confirm,
       };
-
       // 已删副图「首K1向 / K2确认」：快照字段仍保留供其它用途
-
     }
-
-
 
     if (subIndicators.any((e) => e.kind == SubIndicatorKind.volume)) {
       for (final row in byIdx.values) {
@@ -304,11 +176,9 @@ class BarFeatureLookup {
       }
     }
 
-
-
     if (subIndicators.any((e) =>
         e.kind == SubIndicatorKind.fractalPeakDist && e.kn == 1)) {
-      // kn=1（最低层）回退源：旧 bi 极点距（barFeatures）
+      // kn=1（最低层）回退源：旧 K0连线极点距（barFeatures）
       for (final f in barFeatures) {
         final row = byIdx.putIfAbsent(f.idx, () => {'idx': f.idx});
         (row['sub'] as Map<String, dynamic>)['fractal_peak_dist'] =
@@ -338,16 +208,11 @@ class BarFeatureLookup {
     }
 
     return BarFeatureLookup._(byIdx: byIdx, totalLevels: levels.length);
-
   }
-
-
 
   Map<String, dynamic>? operator [](int idx) => byIdx[idx];
 
   Map<String, dynamic>? at(int idx) => byIdx[idx];
-
-
 
   /// 星期中文 → w1..w7（周一=w1 … 周六=w6，周日=w7）。
   static String weekdayToW(String weekday) {
@@ -401,11 +266,11 @@ class BarFeatureLookup {
 
     // K0分型确认（=K1 端点确认）：仅 ±1 显示；截断加"(截断)"
     var combineFxConfirm = '';
-    final biConfirm = row['bi_confirm'];
-    if (biConfirm is Map) {
-      final v = biConfirm['value'];
+    final k0Confirm = row['k0_confirm'];
+    if (k0Confirm is Map) {
+      final v = k0Confirm['value'];
       if (v is num && (v == 1 || v == -1)) {
-        combineFxConfirm = biConfirm['truncated'] == true ? '$v(截断)' : '$v';
+        combineFxConfirm = k0Confirm['truncated'] == true ? '$v(截断)' : '$v';
       }
     }
 
@@ -463,7 +328,7 @@ class BarFeatureLookup {
         final confirms = row['level_confirms'];
         dynamic v;
         if (confirms is Map && confirms.containsKey(ind.kn)) {
-          // 主路径：level=kn 的确认（K1/笔=level1，K2/线段=level2…）
+          // 主路径：level=kn 的确认（K1/K0连线=level1，K2/K1连线=level2…）
           final c = confirms[ind.kn];
           if (c is LevelConfirm) {
             v = c.value;
@@ -471,8 +336,8 @@ class BarFeatureLookup {
             v = c['value'];
           }
         } else if (ind.kn == 1) {
-          // 回退：无 levels 时用旧 bi_confirm（K0 原始K分型）
-          v = sub['bi_confirm_value'];
+          // 回退：无 levels 时用旧 k0_confirm（K0 原始K分型）
+          v = sub['k0_confirm_value'];
         }
         add(ind.label, v);
       }
@@ -480,7 +345,7 @@ class BarFeatureLookup {
         if (sub.containsKey('fractal_peak_dist_${ind.kn}')) {
           add(ind.label, sub['fractal_peak_dist_${ind.kn}']);
         } else if (ind.kn == 1) {
-          // 回退：无 levels 时用旧 bi 极点距
+          // 回退：无 levels 时用旧 K0连线极点距
           add(ind.label, sub['fractal_peak_dist']);
         }
       }
@@ -496,8 +361,8 @@ class BarFeatureLookup {
             v = c['value'];
           }
         } else if (ind.kn == 1) {
-          // 回退：无 levels 时用旧 bi_confirm 截断
-          final bc = row['bi_confirm'];
+          // 回退：无 levels 时用旧 k0_confirm 截断
+          final bc = row['k0_confirm'];
           if (bc is Map && bc['truncated'] == true) {
             v = bc['value'];
           }
@@ -508,7 +373,7 @@ class BarFeatureLookup {
     return lines;
   }
 
-  /// Kn 块（K1=笔，K2=线段，…）；每层前加分隔线。
+  /// Kn 块（K1=K0连线，K2=K1连线，…）；每层前加分隔线。
   List<CrosshairTooltipRow> _levelBlockRows(int idx) {
     final row = byIdx[idx];
     if (row == null) return const [];
@@ -606,5 +471,3 @@ class BarFeatureLookup {
     return out;
   }
 }
-
-

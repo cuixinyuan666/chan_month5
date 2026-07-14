@@ -6,8 +6,8 @@
 //! 因此 KuaDuan 不新造数据结构，直接吃每层 `segments`；判定只看已冻结段，天然无未来函数
 //! （与「逐K当下性」同源：段端点冻结后才进 KuaDuan 计算）。
 //!
-//! 与「统一层号」对齐：笔跨段中枢建立在 level=1 的段上（展示名 K0跨段中枢），
-//! 线段跨段中枢建立在 level=2 的段上（展示名 K1跨段中枢），与其余 combine/line/fractal 同号。
+//! 与「统一层号」对齐：K0跨段中枢建立在 level=1 的段上（展示名 K0跨段中枢），
+//! K1跨段中枢建立在 level=2 的段上（展示名 K1跨段中枢），与其余 combine/line/fractal 同号。
 
 use serde::{Deserialize, Serialize};
 
@@ -107,7 +107,7 @@ pub fn find_kuaduan(segs: &[LevelSegment], level: i32) -> Vec<KuaDuan> {
 }
 
 /// 接入 `run_pipeline` 产物：每层段序列 → 该层跨段中枢（复用全层输出，零重算）。
-/// 与「统一层号」一致：笔跨段中枢 level=1 → 展示名 K0跨段中枢；线段跨段中枢 level=2 → K1跨段中枢。
+/// 与「统一层号」一致：K0跨段中枢 level=1 → 展示名 K0跨段中枢；K1跨段中枢 level=2 → K1跨段中枢。
 pub fn build_kuaduan_for_levels(levels: &[LevelBundleOut]) -> Vec<Vec<KuaDuan>> {
     levels
         .iter()
@@ -134,12 +134,12 @@ pub struct KuaDuanFrame {
 }
 
 /// 跨段中枢 → 镜像框（Flutter 直接复用合并框渲染管线）。
-pub fn kuaduan_to_frames(kuaduan_list: &[KuaDuan], seg_by_idx: &std::collections::HashMap<i64, &LevelSegment>) -> Vec<KuaDuanFrame> {
+pub fn kuaduan_to_frames(kuaduan_list: &[KuaDuan], segment_by_idx: &std::collections::HashMap<i64, &LevelSegment>) -> Vec<KuaDuanFrame> {
     kuaduan_list
         .iter()
         .filter_map(|kuaduan| {
-            let s = seg_by_idx.get(&kuaduan.start_idx)?;
-            let e = seg_by_idx.get(&kuaduan.end_idx)?;
+            let s = segment_by_idx.get(&kuaduan.start_idx)?;
+            let e = segment_by_idx.get(&kuaduan.end_idx)?;
             Some(KuaDuanFrame {
                 x1: s.begin_pole_x.min(e.begin_pole_x),
                 x2: s.end_pole_x.max(e.end_pole_x),
@@ -159,12 +159,12 @@ pub fn level_kuaduan_frames(segments: &[LevelSegment], level: i32) -> Vec<KuaDua
     if segments.len() < 3 {
         return Vec::new();
     }
-    let seg_by_idx: std::collections::HashMap<i64, &LevelSegment> = segments
+    let segment_by_idx: std::collections::HashMap<i64, &LevelSegment> = segments
         .iter()
         .map(|s| (s.idx, s))
         .collect();
     let kuaduan = find_kuaduan(segments, level);
-    kuaduan_to_frames(&kuaduan, &seg_by_idx)
+    kuaduan_to_frames(&kuaduan, &segment_by_idx)
 }
 
 #[cfg(test)]
@@ -200,7 +200,7 @@ mod tests {
 
     #[test]
     fn find_kuaduan_two_disjoint_groups() {
-        // 笔跨段中枢（level=1）：两组各 3 段互相重叠，中间被一段隔开
+        // K0跨段中枢（level=1）：两组各 3 段互相重叠，中间被一段隔开
         let segs = vec![
             mk_seg(0, 1, 20.0, 10.0),
             mk_seg(1, 1, 22.0, 12.0),
@@ -211,7 +211,7 @@ mod tests {
             mk_seg(6, 1, 41.0, 31.0),
         ];
         let kuaduan = find_kuaduan(&segs, 1);
-        assert_eq!(kuaduan.len(), 2, "应检出 2 个笔跨段中枢");
+        assert_eq!(kuaduan.len(), 2, "应检出 2 个K0跨段中枢");
         assert_eq!(kuaduan[0].zg, 12.0); // max(low)=12
         assert_eq!(kuaduan[0].zd, 20.0); // min(high)=20
         assert_eq!(kuaduan[0].extend, 0);
@@ -248,7 +248,7 @@ mod tests {
 
     #[test]
     fn build_kuaduan_for_levels_maps_each_level() {
-        // 笔层（level=1）给一组重叠段；线段层（level=2）给另一组
+        // K0连线层（level=1）给一组重叠段；K1连线层（level=2）给另一组
         let lv1 = LevelBundleOut {
             level: 1,
             confirms: vec![],
@@ -285,14 +285,14 @@ mod tests {
         };
         let kuaduan_by_level = build_kuaduan_for_levels(&[lv1, lv2]);
         assert_eq!(kuaduan_by_level.len(), 2);
-        assert_eq!(kuaduan_by_level[0].len(), 1, "笔跨段中枢应命中");
+        assert_eq!(kuaduan_by_level[0].len(), 1, "K0跨段中枢应命中");
         assert_eq!(kuaduan_by_level[0][0].level, 1);
-        assert_eq!(kuaduan_by_level[1].len(), 1, "线段跨段中枢应命中");
+        assert_eq!(kuaduan_by_level[1].len(), 1, "K1跨段中枢应命中");
         assert_eq!(kuaduan_by_level[1][0].level, 2);
     }
 
     #[test]
-    fn pipeline_end_to_end_builds_bi_and_segment_kuaduan() {
+    fn pipeline_end_to_end_builds_k0_and_k1_kuaduan() {
         // 离线接 run_pipeline：构造清晰交替涨跌腿（转折点留 gap）的合成 K 线。
         let bars = synthetic_zigzag_legs(16, 8, 2.0, 0.1);
         let opt = crate::pipeline::PipelineOptions::default();
@@ -309,10 +309,10 @@ mod tests {
             );
         }
 
-        // 1) 笔跨段中枢：直接对真实 run_pipeline 产物（level=1 笔段）跑 KuaDuan
+        // 1) K0跨段中枢：直接对真实 run_pipeline 产物（level=1 K0连线段）跑 KuaDuan
         let kuaduan_by_level = build_kuaduan_for_levels(&res.levels);
         assert_eq!(kuaduan_by_level.len(), res.levels.len());
-        assert!(!kuaduan_by_level[0].is_empty(), "笔跨段中枢应跑通（真实 run_pipeline 产物）");
+        assert!(!kuaduan_by_level[0].is_empty(), "K0跨段中枢应跑通（真实 run_pipeline 产物）");
 
         // 1b) 验证 export() 已把跨段中枢框逐层挂到 LevelBundleOut.kuaduan_frames
         //     （即 Flutter 实际收到的数据路径，而非仅 build_kuaduan_for_levels 离线计算）
@@ -321,19 +321,19 @@ mod tests {
             "level=1 的 kuaduan_frames 应非空（export 已挂载跨段中枢框）",
         );
         println!(
-            "笔跨段中枢数={} 首跨段中枢[ZG={:.2},ZD={:.2},extend={}]",
+            "K0跨段中枢数={} 首跨段中枢[ZG={:.2},ZD={:.2},extend={}]",
             kuaduan_by_level[0].len(),
             kuaduan_by_level[0].first().unwrap().zg,
             kuaduan_by_level[0].first().unwrap().zd,
             kuaduan_by_level[0].first().unwrap().extend,
         );
 
-        // 2) 线段跨段中枢：把真实 run_pipeline 产出的笔段（LevelSegment）直接作为「线段层」输入，
+        // 2) K1跨段中枢：把真实 run_pipeline 产出的K0连线段（LevelSegment）直接作为「K1连线层」输入，
         //    验证 KuaDuan 模块对 level=2 段序列的离线处理（与 build_kuaduan_for_levels 同构路径）。
-        //    注：本合成序列下，run_pipeline 的线段层因笔单元端点精确相等、合并退化为单组而未自产
-        //    线段（属流水线 segment 层行为，非 KuaDuan 模块问题）；此处用真实类型验证线段跨段中枢链路。
+        //    注：本合成序列下，run_pipeline 的K1连线层因K0连线单元端点精确相等、合并退化为单组而未自产
+        //    K1连线（属流水线 segment 层行为，非 KuaDuan 模块问题）；此处用真实类型验证K1跨段中枢链路。
         let lv1_segs = res.levels[0].segments.clone();
-        assert!(lv1_segs.len() >= 3, "需足够笔段以构成线段跨段中枢");
+        assert!(lv1_segs.len() >= 3, "需足够K0连线段以构成K1跨段中枢");
         let lv2_bundle = LevelBundleOut {
             level: 2,
             confirms: vec![],
@@ -348,9 +348,9 @@ mod tests {
             pending_unit: None,
         };
         let kuaduan2 = build_kuaduan_for_levels(&[lv2_bundle]);
-        assert!(!kuaduan2[0].is_empty(), "线段跨段中枢应跑通（复用真实笔段作为线段层输入）");
+        assert!(!kuaduan2[0].is_empty(), "K1跨段中枢应跑通（复用真实K0连线段作为K1连线层输入）");
         println!(
-            "线段跨段中枢数={} 首跨段中枢[ZG={:.2},ZD={:.2},extend={}]",
+            "K1跨段中枢数={} 首跨段中枢[ZG={:.2},ZD={:.2},extend={}]",
             kuaduan2[0].len(),
             kuaduan2[0].first().unwrap().zg,
             kuaduan2[0].first().unwrap().zd,
@@ -359,8 +359,8 @@ mod tests {
     }
 
     /// 确定性「幅度递增锯齿 + 转折点 gap」：每段腿高低点不断抬高（模拟上涨趋势中的回调），
-    /// 且在每个拐点留 gap（下腿起点低于上腿顶点、上腿起点低于下腿谷底），避免相邻笔单元
-    /// high/low 完全相等 → 防止 level-2 合并组退化为点 → 线段分型得以形成 → 线段跨段中枢。
+    /// 且在每个拐点留 gap（下腿起点低于上腿顶点、上腿起点低于下腿谷底），避免相邻K0连线单元
+    /// high/low 完全相等 → 防止 level-2 合并组退化为点 → K1连线分型得以形成 → K1跨段中枢。
     fn synthetic_zigzag_legs(_legs: usize, leg_len: usize, _step: f64, wick: f64) -> Vec<crate::kline::KlineBar> {
         // (start, end) 每段腿；相邻腿之间留 ~6 点 gap
         let legs: Vec<(f64, f64)> = vec![

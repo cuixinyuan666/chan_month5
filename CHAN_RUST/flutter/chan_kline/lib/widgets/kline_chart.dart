@@ -5,21 +5,21 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import '../compute/bi_combine_compute.dart';
-import '../compute/bi_virtual_bar_view_compute.dart';
+import '../compute/k1_combine_compute.dart';
+import '../compute/k1_bar_view_compute.dart';
 import '../compute/chart_view_compute.dart';
 import '../compute/level_unit_bar_view_compute.dart';
-import '../models/bi_confirm_signal.dart';
+import '../models/k0_confirm_signal.dart';
 import '../models/bar_crosshair_feature.dart';
-import '../models/bi_segment.dart';
-import '../models/bi_virtual_bar.dart';
-import '../models/bi_virtual_bar_view.dart';
+import '../models/k0_line.dart';
+import '../models/k1_bar.dart';
+import '../models/k1_bar_view.dart';
 import '../models/kline_bar.dart';
 import '../models/chart_indicator.dart';
 import '../models/kline_combine_frame.dart';
 import '../models/bar_feature_lookup.dart';
 import '../models/level_models.dart';
-import '../models/seg_analysis.dart';
+import '../models/k1_analysis.dart';
 import 'chart_level_line_style.dart';
 import 'crosshair_tooltip_panel.dart';
 import 'fractal_confirm_paint.dart';
@@ -39,11 +39,11 @@ enum CrosshairMode {
   linesOnly,
 }
 
-/// 主图同级别连线配色（K0连线/笔 + 更高层见 [ChartLevelLineStyle]）。
+/// 主图同级别连线配色（K0连线 + 更高层见 [ChartLevelLineStyle]）。
 abstract final class ChartLineColors {
-  /// K0连线（笔）统一色
+  /// K0连线统一色
   static const bi = Color(0xCC94A3B8);
-  /// K1连线（线段，内部 level=2）默认色（与 ChartLevelLineStyle 一致）
+  /// K1连线（内部 level=2）默认色（与 ChartLevelLineStyle 一致）
   static const seg = Color(0xCCF59E0B);
 }
 
@@ -53,16 +53,16 @@ class KlineChart extends StatefulWidget {
     super.key,
     required this.bars,
     required this.combineFrames,
-    required this.biConfirmSignals,
+    required this.k0ConfirmSignals,
     required this.barFeatures,
-    required this.biSegments,
-    required this.biVirtualBarViews,
-    required this.biCombineFrames,
-    required this.segAnalysis,
+    required this.k0Lines,
+    required this.k1BarViews,
+    required this.k1CombineFrames,
+    required this.k1Analysis,
     required this.mainIndicators,
     required this.subIndicators,
     this.levels = const [],
-    this.defaultBiPolicy = 'pending',
+    this.defaultK0Policy = 'pending',
     this.truncationCheck = true,
     this.onMainIndicatorsChanged,
     this.onSubIndicatorsChanged,
@@ -78,19 +78,19 @@ class KlineChart extends StatefulWidget {
 
   final List<KlineBar> bars;
   final List<KlineCombineFrame> combineFrames;
-  final List<BiConfirmSignal> biConfirmSignals;
+  final List<K0ConfirmSignal> k0ConfirmSignals;
   final List<BarCrosshairFeature> barFeatures;
-  final List<BiSegment> biSegments;
-  final List<BiVirtualBarView> biVirtualBarViews;
-  final List<KlineCombineFrame> biCombineFrames;
-  final SegAnalysisBundle segAnalysis;
+  final List<K0Line> k0Lines;
+  final List<K1BarView> k1BarViews;
+  final List<KlineCombineFrame> k1CombineFrames;
+  final K1AnalysisBundle k1Analysis;
 
   /// N 段流水线全量输出（十字线 as-of 重绘与 tooltip N 段块查表用）
   final List<LevelBundle> levels;
   final Set<MainChartIndicator> mainIndicators;
   final Set<SubChartIndicator> subIndicators;
-  final String defaultBiPolicy;
-  /// 截断监察：十字线 as-of 本地重算笔K合并时与 Rust 同开关
+  final String defaultK0Policy;
+  /// 截断监察：十字线 as-of 本地重算K1合并时与 Rust 同开关
   final bool truncationCheck;
   final ValueChanged<Set<MainChartIndicator>>? onMainIndicatorsChanged;
   final ValueChanged<Set<SubChartIndicator>>? onSubIndicatorsChanged;
@@ -154,7 +154,7 @@ class _KlineChartState extends State<KlineChart> {
   /// 当前数据最高 Kn → 动态生成可选指标
   int get _maxKn => chartMaxKn(
         levels: widget.levels,
-        biSegments: widget.biSegments,
+        k0Lines: widget.k0Lines,
       );
 
   List<MainChartIndicator> get _mainCatalog =>
@@ -222,27 +222,27 @@ class _KlineChartState extends State<KlineChart> {
     _scheduleRedraw();
   }
 
-  /// 十字线开启时按当步 K 重建笔 K view，与 bar_features 逐步冻结口径对齐。
-  List<BiVirtualBarView> get _effectiveBiVirtualBarViews {
+  /// 十字线开启时按当步 K 重建K1 bar view，与 bar_features 逐步冻结口径对齐。
+  List<K1BarView> get _effectiveK1BarViews {
     if (!_crosshairEnabled || _crosshairBarIdx == null) {
-      return widget.biVirtualBarViews;
+      return widget.k1BarViews;
     }
-    final asOfBars = _asOfBiVirtualBars();
-    return buildBiVirtualBarViews(asOfBars);
+    final asOfBars = _asOfK1Bars();
+    return buildK1BarViews(asOfBars);
   }
 
-  /// 十字线开启时按当步笔 K 重建笔K线合并框（与 bi_combine 逐步口径对齐）。
-  List<KlineCombineFrame> get _effectiveBiCombineFrames {
+  /// 十字线开启时按当步K1 bar 重建K1合并框（与 k1_combine 逐步口径对齐）。
+  List<KlineCombineFrame> get _effectiveK1CombineFrames {
     if (!_crosshairEnabled || _crosshairBarIdx == null) {
-      return widget.biCombineFrames;
+      return widget.k1CombineFrames;
     }
     final asOf = _crosshairAsOfIdx();
     final barsSlice = widget.bars.where((b) => b.idx <= asOf).toList();
     if (barsSlice.isEmpty) return const [];
-    return computeBiCombineFrames(
+    return computeK1CombineFrames(
       barsSlice,
-      // 截断/合并只认已确认笔（与 Rust L2 feed、all_confirm 同构）
-      _asOfBiVirtualBars(includeBuilding: false),
+      // 截断/合并只认已确认 K0连线（与 Rust L2 feed、all_confirm 同构）
+      _asOfK1Bars(includeBuilding: false),
       truncationCheck: widget.truncationCheck,
     );
   }
@@ -250,13 +250,13 @@ class _KlineChartState extends State<KlineChart> {
   int _crosshairAsOfIdx() =>
       widget.bars[_crosshairBarIdx!.clamp(0, widget.bars.length - 1)].idx;
 
-  /// as-of 笔 K 重建：Rust 冻结段 + 可选当步进行中笔。
-  List<BiVirtualBar> _asOfBiVirtualBars({bool includeBuilding = true}) {
-    return asOfBiVirtualBars(
+  /// as-of K1 bar 重建：Rust 冻结段 + 可选当步进行中 K0连线。
+  List<K1Bar> _asOfK1Bars({bool includeBuilding = true}) {
+    return asOfK1Bars(
       bars: widget.bars,
       levels: widget.levels,
       barFeatures: widget.barFeatures,
-      defaultBiPolicy: widget.defaultBiPolicy,
+      defaultK0Policy: widget.defaultK0Policy,
       asOf: _crosshairAsOfIdx(),
       includeBuilding: includeBuilding,
     );
@@ -322,10 +322,10 @@ class _KlineChartState extends State<KlineChart> {
     final lookup = BarFeatureLookup.build(
       bars: widget.bars,
       combineFrames: widget.combineFrames,
-      biConfirms: widget.biConfirmSignals,
+      k0Confirms: widget.k0ConfirmSignals,
       barFeatures: widget.barFeatures,
-      biSegments: widget.biSegments,
-      segAnalysis: widget.segAnalysis,
+      k0Lines: widget.k0Lines,
+      k1Analysis: widget.k1Analysis,
       levels: widget.levels,
       subIndicators: _activeSubs,
     );
@@ -656,12 +656,12 @@ class _KlineChartState extends State<KlineChart> {
               painter: _KlineCompositePainter(
                 bars: widget.bars,
                 combineFrames: widget.combineFrames,
-                biConfirmSignals: widget.biConfirmSignals,
+                k0ConfirmSignals: widget.k0ConfirmSignals,
                 barFeatures: widget.barFeatures,
-                biSegments: widget.biSegments,
-                biVirtualBarViews: _effectiveBiVirtualBarViews,
-                biCombineFrames: _effectiveBiCombineFrames,
-                segAnalysis: widget.segAnalysis,
+                k0Lines: widget.k0Lines,
+                k1BarViews: _effectiveK1BarViews,
+                k1CombineFrames: _effectiveK1CombineFrames,
+                k1Analysis: widget.k1Analysis,
                 levels: widget.levels,
                 mainIndicators: _activeMains,
                 subIndicators: _activeSubs,
@@ -843,12 +843,12 @@ class _KlineCompositePainter extends CustomPainter {
   _KlineCompositePainter({
     required this.bars,
     required this.combineFrames,
-    required this.biConfirmSignals,
+    required this.k0ConfirmSignals,
     required this.barFeatures,
-    required this.biSegments,
-    required this.biVirtualBarViews,
-    required this.biCombineFrames,
-    required this.segAnalysis,
+    required this.k0Lines,
+    required this.k1BarViews,
+    required this.k1CombineFrames,
+    required this.k1Analysis,
     required this.levels,
     required this.mainIndicators,
     required this.subIndicators,
@@ -867,22 +867,22 @@ class _KlineCompositePainter extends CustomPainter {
   }) : featureLookup = BarFeatureLookup.build(
           bars: bars,
           combineFrames: combineFrames,
-          biConfirms: biConfirmSignals,
+          k0Confirms: k0ConfirmSignals,
           barFeatures: barFeatures,
-          biSegments: biSegments,
-          segAnalysis: segAnalysis,
+          k0Lines: k0Lines,
+          k1Analysis: k1Analysis,
           levels: levels,
           subIndicators: subIndicators,
         );
 
   final List<KlineBar> bars;
   final List<KlineCombineFrame> combineFrames;
-  final List<BiConfirmSignal> biConfirmSignals;
+  final List<K0ConfirmSignal> k0ConfirmSignals;
   final List<BarCrosshairFeature> barFeatures;
-  final List<BiSegment> biSegments;
-  final List<BiVirtualBarView> biVirtualBarViews;
-  final List<KlineCombineFrame> biCombineFrames;
-  final SegAnalysisBundle segAnalysis;
+  final List<K0Line> k0Lines;
+  final List<K1BarView> k1BarViews;
+  final List<KlineCombineFrame> k1CombineFrames;
+  final K1AnalysisBundle k1Analysis;
   final List<LevelBundle> levels;
   final Set<MainChartIndicator> mainIndicators;
   final Set<SubChartIndicator> subIndicators;
@@ -932,22 +932,22 @@ class _KlineCompositePainter extends CustomPainter {
             _drawKlineCombineOnMainChart(
                 canvas, size.width, plotTop, plotH, barW, slotW);
           } else if (ind.kn == 2) {
-            _drawBiCombineOnMainChart(
+            _drawK1CombineOnMainChart(
                 canvas, size.width, plotTop, plotH, barW, slotW);
           } else {
             _drawLevelCombineOnMainChart(
                 canvas, size.width, plotTop, plotH, barW, slotW, ind.kn);
           }
         } else if (ind.kind == MainIndicatorKind.line) {
-          // 内部 kn：1=笔→展示 K0连线；≥2→展示 K(kn-1)连线
+          // 内部 kn：1=K0连线→展示 K0连线；≥2→展示 K(kn-1)连线
           if (ind.kn == 1) {
-            _drawBiSegments(canvas, size.width, plotTop, plotH, slotW);
+            _drawK0Lines(canvas, size.width, plotTop, plotH, slotW);
           } else {
-            _drawSegLinesForLevel(
+            _drawK1LinesForLevel(
                 canvas, size.width, plotTop, plotH, slotW, ind.kn);
           }
         } else if (ind.kind == MainIndicatorKind.kuaduan) {
-          // 跨段中枢框：与合并/连线同号，kuaduan(n)=K(n-1)跨段中枢（笔跨段中枢=K0跨段中枢）
+          // 跨段中枢框：与合并/连线同号，kuaduan(n)=K(n-1)跨段中枢（K0跨段中枢）
           _drawKuaduanOnMainChart(
               canvas, size.width, plotTop, plotH, barW, slotW, ind.kn);
         }
@@ -992,7 +992,7 @@ class _KlineCompositePainter extends CustomPainter {
     return (left, right);
   }
 
-  /// 线框横向：合并 K 中轴口径 + 笔合并框半侧锚定（与笔 K [_biVirtualBarHSpan] 同逻辑）。
+  /// 线框横向：合并 K 中轴口径 + K1合并框半侧锚定（与K1 bar [_k1BarHSpan] 同逻辑）。
   (double left, double right) _combineFrameSpan(
     KlineCombineFrame f,
     double w,
@@ -1018,9 +1018,9 @@ class _KlineCompositePainter extends CustomPainter {
     return (left, right);
   }
 
-  /// 笔 K 横向：衔接 K 左/右半侧锚定，避免相邻笔在中轴处留空。
-  (double left, double right) _biVirtualBarHSpan(
-    BiVirtualBarView v,
+  /// K1 bar 横向：衔接 K 左/右半侧锚定，避免相邻K0连线在中轴处留空。
+  (double left, double right) _k1BarHSpan(
+    K1BarView v,
     double w,
     double slotW,
     double barW,
@@ -1042,29 +1042,29 @@ class _KlineCompositePainter extends CustomPainter {
     return (left, right);
   }
 
-  /// 按 frame.x1 + count 精确取合并框内含的笔 K view（避免衔接 K 误入下一框）。
-  List<BiVirtualBarView> _biViewsForCombineFrame(KlineCombineFrame f) {
-    final startIdx = biVirtualBarViews.indexWhere((v) => v.viewX1 == f.x1);
+  /// 按 frame.x1 + count 精确取合并框内含的K1 bar view（避免衔接 K 误入下一框）。
+  List<K1BarView> _k1ViewsForCombineFrame(KlineCombineFrame f) {
+    final startIdx = k1BarViews.indexWhere((v) => v.viewX1 == f.x1);
     if (startIdx >= 0 && f.count > 0) {
-      final endIdx = math.min(startIdx + f.count, biVirtualBarViews.length);
+      final endIdx = math.min(startIdx + f.count, k1BarViews.length);
       if (endIdx > startIdx) {
-        return biVirtualBarViews.sublist(startIdx, endIdx);
+        return k1BarViews.sublist(startIdx, endIdx);
       }
     }
-    return biVirtualBarViews
+    return k1BarViews
         .where((v) => v.viewX1 >= f.x1 && v.viewX2 <= f.x2)
         .toList();
   }
 
-  /// 合并笔外线框横向：与 [_combineFrameSpan] 同构——单元换笔 K view，首尾 view 中轴起止。
-  /// count>1：纯中轴（同合并 K 对 1 分钟 K）；count==1：半侧与 [_biVirtualBarHSpan] 一致。
-  (double left, double right) _biCombineFrameSpan(
+  /// 合并框外线框横向：与 [_combineFrameSpan] 同构——单元换K1 bar view，首尾 view 中轴起止。
+  /// count>1：纯中轴（同合并 K 对 1 分钟 K）；count==1：半侧与 [_k1BarHSpan] 一致。
+  (double left, double right) _k1CombineFrameSpan(
     KlineCombineFrame f,
     double w,
     double slotW,
     double barW,
   ) {
-    final related = _biViewsForCombineFrame(f);
+    final related = _k1ViewsForCombineFrame(f);
     if (related.isEmpty) {
       return _combineFrameSpan(f, w, slotW, barW);
     }
@@ -1101,8 +1101,8 @@ class _KlineCompositePainter extends CustomPainter {
 
   // 主/副图不再绘制网格横线与右侧封口竖线（价格标签仍保留）
 
-  /// 笔 K 线（展示层 view 区间）：横向 [_biVirtualBarHSpan]，与合并笔框 [_biCombineFrameSpan] 同口径。
-  void _drawBiVirtualCandles(
+  /// K1 bar（展示层 view 区间）：横向 [_k1BarHSpan]，与K1合并框 [_k1CombineFrameSpan] 同口径。
+  void _drawK1Candles(
     Canvas canvas,
     double w,
     double plotTop,
@@ -1111,20 +1111,20 @@ class _KlineCompositePainter extends CustomPainter {
     double slotW, {
     bool faint = false,
   }) {
-    if (biVirtualBarViews.isEmpty) return;
+    if (k1BarViews.isEmpty) return;
 
-    // faint：主图笔K线合并底层，低不透明度以免压住 1 分钟 K
+    // faint：主图K1合并底层，低不透明度以免压住 1 分钟 K
     final upBody = faint ? const Color(0x38E53935) : const Color(0x88E53935);
     final dnBody = faint ? const Color(0x3826A69A) : const Color(0x8826A69A);
     final upStroke = faint ? const Color(0x55E53935) : const Color(0xFFE53935);
     final dnStroke = faint ? const Color(0x5526A69A) : const Color(0xFF26A69A);
 
-    for (final v in biVirtualBarViews) {
+    for (final v in k1BarViews) {
       if (v.viewX2 < viewport.viewXMin - 1 || v.viewX1 > viewport.viewXMax + 1) {
         continue;
       }
 
-      final (left, right) = _biVirtualBarHSpan(v, w, slotW, barW);
+      final (left, right) = _k1BarHSpan(v, w, slotW, barW);
       final cx = (left + right) / 2;
       final spanW = math.max(2.0, right - left);
       final isUp = v.isUp;
@@ -1148,20 +1148,20 @@ class _KlineCompositePainter extends CustomPainter {
     }
   }
 
-  void _drawBiSegments(
+  void _drawK0Lines(
     Canvas canvas,
     double w,
     double plotTop,
     double plotH,
     double slotW,
   ) {
-    if (biSegments.isEmpty && biConfirmSignals.isEmpty) return;
+    if (k0Lines.isEmpty && k0ConfirmSignals.isEmpty) return;
 
     final paint = Paint()
       ..strokeWidth = 1.6
       ..style = PaintingStyle.stroke;
 
-    for (final seg in biSegments) {
+    for (final seg in k0Lines) {
       final xMin = [
         seg.beginFractalX1,
         seg.beginFractalX2,
@@ -1178,9 +1178,9 @@ class _KlineCompositePainter extends CustomPainter {
         continue;
       }
       final (beginX, beginPrice) =
-          _biSegmentEndpoint(seg, isBegin: true, w: w, slotW: slotW);
+          _k0LineEndpoint(seg, isBegin: true, w: w, slotW: slotW);
       final (endX, endPrice) =
-          _biSegmentEndpoint(seg, isBegin: false, w: w, slotW: slotW);
+          _k0LineEndpoint(seg, isBegin: false, w: w, slotW: slotW);
       final y1 = priceRange.yOf(beginPrice, plotTop, plotH);
       final y2 = priceRange.yOf(endPrice, plotTop, plotH);
       paint.color = seg.isBootstrap
@@ -1189,12 +1189,12 @@ class _KlineCompositePainter extends CustomPainter {
       canvas.drawLine(Offset(beginX, y1), Offset(endX, y2), paint);
     }
 
-    _drawBuildingBiLine(canvas, w, plotTop, plotH, slotW);
+    _drawBuildingK0Line(canvas, w, plotTop, plotH, slotW);
   }
 
-  /// 笔段端点：引导笔起点走分型框极值；其余严格匹配笔确认信号。
-  (double, double) _biSegmentEndpoint(
-    BiSegment seg, {
+  /// K0连线端点：引导K0连线起点走分型框极值；其余严格匹配K0连线确认信号。
+  (double, double) _k0LineEndpoint(
+    K0Line seg, {
     required bool isBegin,
     required double w,
     required double slotW,
@@ -1208,9 +1208,9 @@ class _KlineCompositePainter extends CustomPainter {
     }
 
     final confirmX = isBegin ? seg.beginConfirmX : seg.endConfirmX;
-    final conf = _biConfirmAt(confirmX, fx1, fx2);
+    final conf = _k0ConfirmAt(confirmX, fx1, fx2);
     if (conf != null) {
-      return _biExtremeAnchorPoint(
+      return _k0ExtremeAnchorPoint(
         conf,
         fx1,
         fx2,
@@ -1222,7 +1222,7 @@ class _KlineCompositePainter extends CustomPainter {
     return _fractalBoxExtremeAnchor(fx1, fx2, wantHigh, w, slotW);
   }
 
-  /// 分型框内极点 K 锚点（无笔确认信号时用，如引导笔虚拟起点）。
+  /// 分型框内极点 K 锚点（无K0连线确认信号时用，如引导K0连线虚拟起点）。
   (double, double) _fractalBoxExtremeAnchor(
     int fractalX1,
     int fractalX2,
@@ -1259,9 +1259,9 @@ class _KlineCompositePainter extends CustomPainter {
     return (_barCenterX(extremeIdx, w, slotW), bars[extremeIdx].low);
   }
 
-  /// 按确认步 + 分型框严格匹配笔确认信号（禁止仅按 x 退化匹配，避免引导笔起终点重合）。
-  BiConfirmSignal? _biConfirmAt(int confirmX, int fractalX1, int fractalX2) {
-    for (final c in biConfirmSignals) {
+  /// 按确认步 + 分型框严格匹配K0连线确认信号（禁止仅按 x 退化匹配，避免引导K0连线起终点重合）。
+  K0ConfirmSignal? _k0ConfirmAt(int confirmX, int fractalX1, int fractalX2) {
+    for (final c in k0ConfirmSignals) {
       if (c.x == confirmX &&
           c.fractalX1 == fractalX1 &&
           c.fractalX2 == fractalX2) {
@@ -1271,9 +1271,9 @@ class _KlineCompositePainter extends CustomPainter {
     return null;
   }
 
-  /// K0连线（笔）端点：极点 K 中轴 + 极点价（与 K线分型极点距同口径，仅展示用）。
-  (double, double) _biExtremeAnchorPoint(
-    BiConfirmSignal? conf,
+  /// K0连线端点：极点 K 中轴 + 极点价（与 K线分型极点距同口径，仅展示用）。
+  (double, double) _k0ExtremeAnchorPoint(
+    K0ConfirmSignal? conf,
     int fractalX1,
     int fractalX2,
     double w,
@@ -1308,7 +1308,7 @@ class _KlineCompositePainter extends CustomPainter {
   }
 
   /// 指定层连线（内部 kn≥2 → 展示名 K(kn-1)连线）；勾哪层画哪层。
-  void _drawSegLinesForLevel(
+  void _drawK1LinesForLevel(
     Canvas canvas,
     double w,
     double plotTop,
@@ -1338,14 +1338,14 @@ class _KlineCompositePainter extends CustomPainter {
       );
       return;
     }
-    // 回退：仅 K2 且无 levels 时用旧 segAnalysis
+    // 回退：仅 K2 且无 levels 时用旧 k1Analysis
     if (kn != 2) return;
     final style = ChartLevelLineStyle.forLevel(2);
     final paint = Paint()
       ..color = style.color
       ..strokeWidth = style.strokeWidth
       ..style = PaintingStyle.stroke;
-    for (final seg in segAnalysis.segLines) {
+    for (final seg in k1Analysis.k1Lines) {
       final beginIdx = seg.beginX;
       final endIdx = seg.endX;
       if (endIdx < viewport.viewXMin - 1 || beginIdx > viewport.viewXMax + 1) {
@@ -1371,7 +1371,7 @@ class _KlineCompositePainter extends CustomPainter {
         style: style,
         tailIdx: tailIdx,
         confirms: const [],
-        useLegacySegAnalysis: true,
+        useLegacyK1Analysis: true,
       );
     }
   }
@@ -1498,7 +1498,7 @@ class _KlineCompositePainter extends CustomPainter {
     }
   }
 
-  /// Kn 单元线（淡色底层，仿笔 K [_drawBiVirtualCandles]）。
+  /// Kn 单元线（淡色底层，仿K1 bar [_drawK1Candles]）。
   void _drawLevelUnitCandles(
     Canvas canvas,
     double w,
@@ -1542,7 +1542,7 @@ class _KlineCompositePainter extends CustomPainter {
     }
   }
 
-  /// Kn 单元线横向半侧锚定（同 [_biVirtualBarHSpan]）。
+  /// Kn 单元线横向半侧锚定（同 [_k1BarHSpan]）。
   (double left, double right) _levelUnitBarHSpan(
     LevelUnitBarView v,
     double w,
@@ -1564,7 +1564,7 @@ class _KlineCompositePainter extends CustomPainter {
     return (left, right);
   }
 
-  /// 按 frame.x1 + count 取层内单元 view（仿 [_biViewsForCombineFrame]）。
+  /// 按 frame.x1 + count 取层内单元 view（仿 [_k1ViewsForCombineFrame]）。
   List<LevelUnitBarView> _levelViewsForCombineFrame(
     KlineCombineFrame f,
     List<LevelUnitBarView> views,
@@ -1576,7 +1576,7 @@ class _KlineCompositePainter extends CustomPainter {
     return views.sublist(startIdx, end);
   }
 
-  /// Kn 合并框横向：有单元 view 时对齐半侧衔接（同 [_biCombineFrameSpan]）。
+  /// Kn 合并框横向：有单元 view 时对齐半侧衔接（同 [_k1CombineFrameSpan]）。
   (double left, double right) _levelCombineFrameSpan(
     KlineCombineFrame f,
     double w,
@@ -1680,12 +1680,12 @@ class _KlineCompositePainter extends CustomPainter {
         style: style,
         tailIdx: tailIdx,
         confirms: bundle.confirms,
-        useLegacySegAnalysis: false,
+        useLegacyK1Analysis: false,
       );
     }
   }
 
-  /// 按层级样式画线段（实线或 pattern 虚线）。
+  /// 按层级样式画K1连线（实线或 pattern 虚线）。
   void _drawStyledSegmentLine(
     Canvas canvas,
     Offset a,
@@ -1721,12 +1721,12 @@ class _KlineCompositePainter extends CustomPainter {
     required ChartLevelLineStyle style,
     required int tailIdx,
     required List<LevelConfirm> confirms,
-    required bool useLegacySegAnalysis,
+    required bool useLegacyK1Analysis,
   }) {
     if (bars.isEmpty || tailIdx < 0 || tailIdx >= bars.length) return;
 
-    final buildingDir = useLegacySegAnalysis
-        ? segAnalysis.buildingSegDir
+    final buildingDir = useLegacyK1Analysis
+        ? k1Analysis.buildingSegDir
         : buildingLevelDirAt(
             levels: levels,
             barFeatures: barFeatures,
@@ -1736,8 +1736,8 @@ class _KlineCompositePainter extends CustomPainter {
     if (buildingDir == 0) return;
 
     LevelConfirm? lastConfirm;
-    if (useLegacySegAnalysis) {
-      final sc = segAnalysis.segConfirms
+    if (useLegacyK1Analysis) {
+      final sc = k1Analysis.k1Confirms
           .where((c) => c.x <= tailIdx && (c.fx == 'TOP' || c.fx == 'BOTTOM'))
           .toList();
       if (sc.isNotEmpty) {
@@ -1792,18 +1792,18 @@ class _KlineCompositePainter extends CustomPainter {
     _drawStyledSegmentLine(canvas, a, b, paint, style, building: true);
   }
 
-  /// 构建中笔：末次笔确认分型极点 → 当前末根 K 方向极值（虚线，展示专用）。
-  void _drawBuildingBiLine(
+  /// 构建中 K0连线：末次K0连线确认分型极点 → 当前末根 K 方向极值（虚线，展示专用）。
+  void _drawBuildingK0Line(
     Canvas canvas,
     double w,
     double plotTop,
     double plotH,
     double slotW,
   ) {
-    if (bars.isEmpty || biConfirmSignals.isEmpty) return;
+    if (bars.isEmpty || k0ConfirmSignals.isEmpty) return;
 
-    BiConfirmSignal? last;
-    for (final c in biConfirmSignals) {
+    K0ConfirmSignal? last;
+    for (final c in k0ConfirmSignals) {
       if (c.fx == 'TOP' || c.fx == 'BOTTOM') last = c;
     }
     if (last == null) return;
@@ -1918,7 +1918,7 @@ class _KlineCompositePainter extends CustomPainter {
     );
   }
 
-  /// 主图 K线合并 / 笔K线合并线框：按真实价格坐标叠加。
+  /// 主图 K线合并 / K1合并线框：按真实价格坐标叠加。
   void _drawCombineFramesOnMainChart(
     Canvas canvas,
     double w,
@@ -1929,7 +1929,7 @@ class _KlineCompositePainter extends CustomPainter {
     List<KlineCombineFrame> frames,
     Color strokeColor,
     Color fillColor, {
-    bool alignBiCombineWithViews = false,
+    bool alignK1CombineWithViews = false,
     List<LevelUnitBarView>? levelUnitViews,
   }) {
     if (frames.isEmpty) return;
@@ -1946,8 +1946,8 @@ class _KlineCompositePainter extends CustomPainter {
     for (final f in frames) {
       if (f.x2 < viewport.viewXMin - 1 || f.x1 > viewport.viewXMax + 1) continue;
 
-      final (xLeft, xRight) = alignBiCombineWithViews
-          ? _biCombineFrameSpan(f, w, slotW, barW)
+      final (xLeft, xRight) = alignK1CombineWithViews
+          ? _k1CombineFrameSpan(f, w, slotW, barW)
           : (levelUnitViews != null && levelUnitViews.isNotEmpty)
               ? _levelCombineFrameSpan(f, w, slotW, barW, levelUnitViews)
               : _combineFrameSpan(f, w, slotW, barW);
@@ -1982,8 +1982,8 @@ class _KlineCompositePainter extends CustomPainter {
     }
   }
 
-  /// 主图笔K线合并：先铺淡笔 K 底层，再描笔K线合并框。
-  void _drawBiCombineOnMainChart(
+  /// 主图K1合并：先铺淡K1 bar 底层，再描K1合并框。
+  void _drawK1CombineOnMainChart(
     Canvas canvas,
     double w,
     double plotTop,
@@ -1991,9 +1991,9 @@ class _KlineCompositePainter extends CustomPainter {
     double barW,
     double slotW,
   ) {
-    if (biCombineFrames.isEmpty && biVirtualBarViews.isEmpty) return;
+    if (k1CombineFrames.isEmpty && k1BarViews.isEmpty) return;
 
-    _drawBiVirtualCandles(
+    _drawK1Candles(
       canvas,
       w,
       plotTop,
@@ -2003,7 +2003,7 @@ class _KlineCompositePainter extends CustomPainter {
       faint: true,
     );
 
-    if (biCombineFrames.isNotEmpty) {
+    if (k1CombineFrames.isNotEmpty) {
       _drawCombineFramesOnMainChart(
         canvas,
         w,
@@ -2011,10 +2011,10 @@ class _KlineCompositePainter extends CustomPainter {
         plotH,
         barW,
         slotW,
-        biCombineFrames,
+        k1CombineFrames,
         const Color(0xAAF59E0B),
         const Color(0x0CF59E0B),
-        alignBiCombineWithViews: true,
+        alignK1CombineWithViews: true,
       );
     }
   }
@@ -2170,9 +2170,9 @@ class _KlineCompositePainter extends CustomPainter {
       }
       return;
     }
-    // 回退：K0 层（kn=1，无 LevelBundle）用旧 bi_confirms
+    // 回退：K0 层（kn=1，无 LevelBundle）用旧 k0_confirms
     if (labelKn == 1) {
-      for (final s in biConfirmSignals) {
+      for (final s in k0ConfirmSignals) {
         paintPoint(s.x, s.value);
       }
     }
@@ -2324,9 +2324,9 @@ class _KlineCompositePainter extends CustomPainter {
       }
       return;
     }
-    // 回退：K0 层（kn=1，无 LevelBundle）用旧 bi_confirms
+    // 回退：K0 层（kn=1，无 LevelBundle）用旧 k0_confirms
     if (labelKn == 1) {
-      for (final s in biConfirmSignals) {
+      for (final s in k0ConfirmSignals) {
         if (!s.truncated) continue;
         paintPoint(s.x, s.value);
       }
@@ -2555,12 +2555,12 @@ class _KlineCompositePainter extends CustomPainter {
   bool shouldRepaint(covariant _KlineCompositePainter oldDelegate) {
     return oldDelegate.bars != bars ||
         oldDelegate.combineFrames != combineFrames ||
-        oldDelegate.biConfirmSignals != biConfirmSignals ||
+        oldDelegate.k0ConfirmSignals != k0ConfirmSignals ||
         oldDelegate.barFeatures != barFeatures ||
-        oldDelegate.biSegments != biSegments ||
-        oldDelegate.biVirtualBarViews != biVirtualBarViews ||
-        oldDelegate.biCombineFrames != biCombineFrames ||
-        oldDelegate.segAnalysis != segAnalysis ||
+        oldDelegate.k0Lines != k0Lines ||
+        oldDelegate.k1BarViews != k1BarViews ||
+        oldDelegate.k1CombineFrames != k1CombineFrames ||
+        oldDelegate.k1Analysis != k1Analysis ||
         oldDelegate.levels != levels ||
         oldDelegate.segAsOf != segAsOf ||
         oldDelegate.mainIndicators != mainIndicators ||

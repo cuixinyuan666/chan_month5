@@ -1,43 +1,43 @@
-import 'bi_confirm_signal.dart';
+import 'k0_confirm_signal.dart';
 import 'bar_crosshair_feature.dart';
-import 'bi_segment.dart';
-import 'bi_virtual_bar.dart';
+import 'k0_line.dart';
+import 'k1_bar.dart';
 import 'kline_combine_frame.dart';
 import 'level_models.dart';
-import 'seg_analysis.dart';
+import 'k1_analysis.dart';
 
-/// Rust `KlineCombineBundle`：合并线框 + 笔确认 + 十字线特征 + 笔段链 + Kn 流水线。
+/// Rust `KlineCombineBundle`：合并线框 + K0连线确认 + 十字线特征 + K0连线链 + Kn 流水线。
 class KlineCombineBundle {
   final List<KlineCombineFrame> frames;
-  final List<BiConfirmSignal> biConfirms;
+  final List<K0ConfirmSignal> k0Confirms;
   final List<BarCrosshairFeature> barFeatures;
-  final List<BiSegment> biSegments;
-  final SegAnalysisBundle segAnalysis;
-  final List<BiVirtualBar> biVirtualBars;
-  final List<KlineCombineFrame> biCombineFrames;
-  final String defaultBiPolicy;
+  final List<K0Line> k0Lines;
+  final K1AnalysisBundle k1Analysis;
+  final List<K1Bar> k1Bars;
+  final List<KlineCombineFrame> k1CombineFrames;
+  final String defaultK0Policy;
 
-  /// 全层首段策略（index 0=K1/笔，1=K2/线段，…）
+  /// 全层首段策略（index 0=K1/K0连线，1=K2/K1连线，…）
   final List<String> defaultSegmentPolicies;
 
   /// 全层冻结段链
-  final List<List<BiSegment>> levelSegments;
+  final List<List<K0Line>> levelSegments;
 
   /// 全层展示用虚拟段 K（pending + 冻结 + 进行中）
-  final List<List<BiVirtualBar>> levelVirtualUnits;
+  final List<List<K1Bar>> levelVirtualUnits;
 
-  /// Kn 流水线全量输出（levels[0]=K1/笔，levels[1]=K2/线段，…穷尽）
+  /// Kn 流水线全量输出（levels[0]=K1/K0连线，levels[1]=K2/K1连线，…穷尽）
   final List<LevelBundle> levels;
 
   const KlineCombineBundle({
     required this.frames,
-    required this.biConfirms,
+    required this.k0Confirms,
     this.barFeatures = const [],
-    this.biSegments = const [],
-    this.segAnalysis = const SegAnalysisBundle(),
-    this.biVirtualBars = const [],
-    this.biCombineFrames = const [],
-    this.defaultBiPolicy = 'pending',
+    this.k0Lines = const [],
+    this.k1Analysis = const K1AnalysisBundle(),
+    this.k1Bars = const [],
+    this.k1CombineFrames = const [],
+    this.defaultK0Policy = 'pending',
     this.defaultSegmentPolicies = const [],
     this.levelSegments = const [],
     this.levelVirtualUnits = const [],
@@ -53,9 +53,9 @@ class KlineCombineBundle {
             ),
           )
           .toList(),
-      biConfirms: (json['bi_confirms'] as List? ?? const [])
+      k0Confirms: (json['k0_confirms'] as List? ?? const [])
           .map(
-            (e) => BiConfirmSignal.fromJson(
+            (e) => K0ConfirmSignal.fromJson(
               Map<String, dynamic>.from(e as Map),
             ),
           )
@@ -67,33 +67,33 @@ class KlineCombineBundle {
             ),
           )
           .toList(),
-      biSegments: (json['bi_segments'] as List? ?? const [])
+      k0Lines: (json['k0_lines'] as List? ?? const [])
           .map(
-            (e) => BiSegment.fromJson(
+            (e) => K0Line.fromJson(
               Map<String, dynamic>.from(e as Map),
             ),
           )
           .toList(),
-      segAnalysis: json['seg_analysis'] is Map
-          ? SegAnalysisBundle.fromJson(
-              Map<String, dynamic>.from(json['seg_analysis'] as Map),
+      k1Analysis: json['k1_analysis'] is Map
+          ? K1AnalysisBundle.fromJson(
+              Map<String, dynamic>.from(json['k1_analysis'] as Map),
             )
-          : SegAnalysisBundle.empty(),
-      biVirtualBars: (json['bi_virtual_bars'] as List? ?? const [])
+          : K1AnalysisBundle.empty(),
+      k1Bars: (json['k1_bars'] as List? ?? const [])
           .map(
-            (e) => BiVirtualBar.fromJson(
+            (e) => K1Bar.fromJson(
               Map<String, dynamic>.from(e as Map),
             ),
           )
           .toList(),
-      biCombineFrames: (json['bi_combine_frames'] as List? ?? const [])
+      k1CombineFrames: (json['k1_combine_frames'] as List? ?? const [])
           .map(
             (e) => KlineCombineFrame.fromJson(
               Map<String, dynamic>.from(e as Map),
             ),
           )
           .toList(),
-      defaultBiPolicy: json['default_bi_policy'] as String? ?? 'pending',
+      defaultK0Policy: json['default_k0_policy'] as String? ?? 'pending',
       defaultSegmentPolicies: (json['default_segment_policies'] as List? ?? const [])
           .map((e) => e.toString())
           .toList(),
@@ -101,7 +101,7 @@ class KlineCombineBundle {
           .map(
             (layer) => (layer as List)
                 .map(
-                  (e) => BiSegment.fromJson(
+                  (e) => K0Line.fromJson(
                     Map<String, dynamic>.from(e as Map),
                   ),
                 )
@@ -112,7 +112,7 @@ class KlineCombineBundle {
           .map(
             (layer) => (layer as List)
                 .map(
-                  (e) => BiVirtualBar.fromJson(
+                  (e) => K1Bar.fromJson(
                     Map<String, dynamic>.from(e as Map),
                   ),
                 )
@@ -127,13 +127,13 @@ class KlineCombineBundle {
 
   static KlineCombineBundle empty() => const KlineCombineBundle(
         frames: [],
-        biConfirms: [],
+        k0Confirms: [],
         barFeatures: [],
-        biSegments: [],
-        segAnalysis: SegAnalysisBundle(),
-        biVirtualBars: [],
-        biCombineFrames: [],
-        defaultBiPolicy: 'pending',
+        k0Lines: [],
+        k1Analysis: K1AnalysisBundle(),
+        k1Bars: [],
+        k1CombineFrames: [],
+        defaultK0Policy: 'pending',
         defaultSegmentPolicies: [],
         levelSegments: [],
         levelVirtualUnits: [],

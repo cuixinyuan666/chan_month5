@@ -1,5 +1,5 @@
 import 'package:chan_kline/models/bar_crosshair_feature.dart';
-import 'package:chan_kline/models/bi_confirm_signal.dart';
+import 'package:chan_kline/models/k0_confirm_signal.dart';
 import 'package:chan_kline/models/kline_bar.dart';
 import 'package:chan_kline/models/bar_feature_lookup.dart';
 import 'package:chan_kline/models/level_models.dart';
@@ -71,7 +71,7 @@ void main() {
     final lookup = BarFeatureLookup.build(
       bars: bars,
       combineFrames: const [],
-      biConfirms: const [],
+      k0Confirms: const [],
       barFeatures: [for (var i = 0; i < 3; i++) _feat(i)],
       levels: const [LevelBundle(level: 1), LevelBundle(level: 2)],
     );
@@ -90,8 +90,8 @@ void main() {
     final lookup = BarFeatureLookup.build(
       bars: bars,
       combineFrames: const [],
-      biConfirms: const [
-        BiConfirmSignal(x: 2, fx: 'BOTTOM', value: 1, fractalX1: 1, fractalX2: 1),
+      k0Confirms: const [
+        K0ConfirmSignal(x: 2, fx: 'BOTTOM', value: 1, fractalX1: 1, fractalX2: 1),
       ],
       barFeatures: feats,
       levels: [

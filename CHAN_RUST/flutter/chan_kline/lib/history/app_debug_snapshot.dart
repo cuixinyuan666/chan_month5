@@ -2,12 +2,12 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../models/bar_crosshair_feature.dart';
-import '../models/bi_confirm_signal.dart';
-import '../models/bi_segment.dart';
+import '../models/k0_confirm_signal.dart';
+import '../models/k0_line.dart';
 import '../models/kline_bar.dart';
 import '../models/kline_combine_frame.dart';
 import '../models/level_models.dart';
-import '../models/seg_analysis.dart';
+import '../models/k1_analysis.dart';
 import 'msg_history.dart';
 
 /// 生成可复制页面快照（含最近历史记录，便于粘贴排查）。
@@ -24,17 +24,17 @@ class AppDebugSnapshot {
     required int totalBars,
     required int visibleCount,
     required bool playing,
-    required String defaultBiPolicy,
+    required String defaultK0Policy,
     required bool truncationCheck,
     required Set<String> subIndicatorLabels,
     required Set<String> mainIndicatorLabels,
     required List<KlineBar> visibleBars,
     required List<KlineCombineFrame> combineFrames,
-    required List<BiConfirmSignal> biConfirms,
+    required List<K0ConfirmSignal> k0Confirms,
     required List<BarCrosshairFeature> barFeatures,
-    required List<BiSegment> biSegments,
-    required List<KlineCombineFrame> biCombineFrames,
-    required SegAnalysisBundle segAnalysis,
+    required List<K0Line> k0Lines,
+    required List<KlineCombineFrame> k1CombineFrames,
+    required K1AnalysisBundle k1Analysis,
     required List<LevelBundle> levels,
     String? lastError,
   }) {
@@ -50,7 +50,7 @@ class AppDebugSnapshot {
 
     buf.writeln('【命名与口径】');
     buf.writeln(
-      '层级：K0=原始K，K1=笔，K2=线段，Kn=第n层；旧「n段」=Kn；'
+      '层级：K0=原始K，K1=K0连线，K2=K1连线，Kn=第n层；旧「n段」=Kn；'
       '主图/副图统一层号：指标 kn=层号(1..maxKn)，展示名比层号小1（主图 K(n-1)连线/K(n-1)合并；'
       '副图 K(n-1)分型确认/K(n-1)分型极点距/K(n-1)截断）；旧「笔连线」=K0连线（曾称K1连线），线段=K1连线；合并不偏移。',
     );
@@ -78,13 +78,20 @@ class AppDebugSnapshot {
       '极点距数值不画在折线上，十字线激活时在副图右上角固定读数。',
     );
     buf.writeln(
-      '首段策略 default_bi_policy=$defaultBiPolicy（pending/retained/purged）；'
+      '首段策略 default_k0_policy=$defaultK0Policy（pending/retained/purged）；'
       '截断机制 truncation_check=${truncationCheck ? "开" : "关"}。',
     );
     buf.writeln(
       '命名变更（2026-07-15）：中枢(ZS) 已统一更名为跨段中枢(KuaDuan)；'
       '主图指标 ZS→跨段中枢框，展示名 K(n-1)跨段中枢（笔跨段中枢=K0跨段中枢，线段跨段中枢=K1跨段中枢）；'
       'Rust 模块 zs→kuaduan（ZS→KuaDuan、ZSFrame→KuaDuanFrame、zs_frames→kuaduan_frames），已重建 chan_ffi.dll；JSON key 同步变更。',
+    );
+    buf.writeln(
+      '命名变更（2026-07-15）：代码取消「笔/线段」概念，统一 K0/K1/…/KN。'
+      '笔=K0连线、线段=K1连线；笔虚拟K=K1、线段虚拟K=K2。'
+      '字段 bi_*→k0_*/k1_*、seg_*→k1_*（如 bi_segments→k0_lines、bi_combine_frames→k1_combine_frames、seg_lines→k1_lines）；'
+      'Rust 类型 BiSegment→K0Line、BiVirtualBar→K1Bar、SegLine→K1Line、SegAnalysisBundle→K1AnalysisBundle 等；'
+      '已重建 chan_ffi.dll；JSON key 同步变更。内部 level 1-based 不变；泛用 segment 英文词（LevelSegment/segments/segment_policy）保留。',
     );
     buf.writeln();
 
@@ -121,18 +128,18 @@ class AppDebugSnapshot {
     );
     buf.writeln();
 
-    buf.writeln('【合并/K1/KN统计（兼容层字段名仍为 bi_*/seg_*）】');
+    buf.writeln('【合并/K1/KN统计（字段名 k0_*/k1_*）】');
     buf.writeln(
       'K0合并框 combine_frames=${combineFrames.length}；'
-      'K0分型确认 bi_confirms=${biConfirms.length}；'
-      'K1段 bi_segments=${biSegments.length}；'
+      'K0分型确认 k0_confirms=${k0Confirms.length}；'
+      'K0连线 k0_lines=${k0Lines.length}；'
       'bar_features=${barFeatures.length}',
     );
-    final biFxFrames =
-        biCombineFrames.where((f) => f.fx == 'TOP' || f.fx == 'BOTTOM').length;
+    final k1FxFrames =
+        k1CombineFrames.where((f) => f.fx == 'TOP' || f.fx == 'BOTTOM').length;
     buf.writeln(
-      'K1合并框 bi_combine_frames=${biCombineFrames.length}（顶底分型=$biFxFrames）；'
-      'KN连线 seg_lines=${segAnalysis.segLines.length}；'
+      'K1合并框 k1_combine_frames=${k1CombineFrames.length}（顶底分型=$k1FxFrames）；'
+      'KN连线 k1_lines=${k1Analysis.k1Lines.length}；'
       'levels=${levels.length}',
     );
     buf.writeln();
@@ -141,8 +148,8 @@ class AppDebugSnapshot {
     _writeKuaDuan(buf, levels);
     _writeDllDiag(buf, barFeatures, levels);
     _writeTailBarFeature(buf, visibleBars, barFeatures);
-    _writeBiConfirms(buf, biConfirms);
-    _writeBiSegments(buf, biSegments);
+    _writeK0Confirms(buf, k0Confirms);
+    _writeK0Lines(buf, k0Lines);
 
     if (lastError != null && lastError.trim().isNotEmpty) {
       buf.writeln('【最近错误】');
@@ -274,7 +281,7 @@ class AppDebugSnapshot {
         'idx=${feat.idx}；weekday=${feat.weekday}；merge_inner_seq=${feat.mergeInnerSeq}；'
         'merge_count=${feat.mergeCount}；combine_fx=${feat.combineFx}；'
         'combine_h/l=${feat.combineHigh}/${feat.combineLow}；'
-        'bi_idx=${feat.biIdx}；bi_combine_fx=${feat.biCombineFx}',
+        'k1_idx=${feat.k1Idx}；k1_combine_fx=${feat.k1CombineFx}',
       );
       if (feat.levels.isNotEmpty) {
         buf.writeln('  levels快照:');
@@ -289,7 +296,7 @@ class AppDebugSnapshot {
     buf.writeln();
   }
 
-  static void _writeBiConfirms(StringBuffer buf, List<BiConfirmSignal> signals) {
+  static void _writeK0Confirms(StringBuffer buf, List<K0ConfirmSignal> signals) {
     buf.writeln('【K0分型确认最近8条】');
     if (signals.isEmpty) {
       buf.writeln('（无）');
@@ -306,8 +313,8 @@ class AppDebugSnapshot {
     buf.writeln();
   }
 
-  static void _writeBiSegments(StringBuffer buf, List<BiSegment> segments) {
-    buf.writeln('【K1段最近5条】');
+  static void _writeK0Lines(StringBuffer buf, List<K0Line> segments) {
+    buf.writeln('【K0连线最近5条】');
     if (segments.isEmpty) {
       buf.writeln('（无）');
       buf.writeln();

@@ -1,6 +1,6 @@
-/// 笔段：相邻异向分型配对，含 prev/next 连续关联（Rust `BiSegment`）。
+/// K0连线：相邻异向分型配对，含 prev/next 连续关联（Rust `K0Line`）。
 
-class BiSegment {
+class K0Line {
   final int idx;
   final int dir;
   final int beginConfirmX;
@@ -11,12 +11,12 @@ class BiSegment {
   final int endFractalX2;
   final int? prevIdx;
   final int? nextIdx;
-  /// 首笔确认引导笔：虚拟起点=区间极值法，第二次笔确认后丢弃
+  /// 首K0连线确认引导：虚拟起点=区间极值法，第二次K0连线确认后丢弃
   final bool isBootstrap;
-  /// 首笔确认审判 PASS：升格默认笔为第一笔，≥2 次确认仍保留
+  /// 首K0连线确认审判 PASS：升格默认K0连线为第一根，≥2 次确认仍保留
   final bool isPromotedDefault;
 
-  const BiSegment({
+  const K0Line({
     required this.idx,
     required this.dir,
     required this.beginConfirmX,
@@ -31,8 +31,8 @@ class BiSegment {
     this.isPromotedDefault = false,
   });
 
-  factory BiSegment.fromJson(Map<String, dynamic> json) {
-    return BiSegment(
+  factory K0Line.fromJson(Map<String, dynamic> json) {
+    return K0Line(
       idx: (json['idx'] as num).toInt(),
       dir: (json['dir'] as num).toInt(),
       beginConfirmX: (json['begin_confirm_x'] as num).toInt(),

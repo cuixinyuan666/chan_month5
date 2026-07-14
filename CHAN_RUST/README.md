@@ -81,8 +81,9 @@ cargo test -p chan_data
 
 ## Kn 递归流水线（历史记录：配置项与层级语义）
 
-- **命名历史**：旧「1段/2段/n段K线」→「K1/K2/Kn」；原始周期K=K0；主图/副图统一层号：指标 `kn`=层号（1..maxKn），展示名比层号小 1。主图：`K(n-1)连线` / `K(n-1)合并`（旧「笔连线」=K0连线，曾称 K1连线；线段=K1连线；`K0合并` 等合并不偏移）。副图：`K(n-1)分型确认` / `K(n-1)分型极点距` / `K(n-1)截断`（对应 `level=kn` 的 confirms）。三组指标 kn 口径完全一致。内部字段 `bi_*` / `level` 序号不变。
-- 层级：**K0=原始K，K1=笔，K2=线段，…**；递归链：`K(n-1) → 包含合并 → 三元素分型确认 → 锚定配对 → Kn`，穷尽为止。
+- **命名历史**：旧「1段/2段/n段K线」→「K1/K2/Kn」；原始周期K=K0；主图/副图统一层号：指标 `kn`=层号（1..maxKn），展示名比层号小 1。主图：`K(n-1)连线` / `K(n-1)合并`（旧「笔连线」=K0连线，曾称 K1连线；线段=K1连线；`K0合并` 等合并不偏移）。副图：`K(n-1)分型确认` / `K(n-1)分型极点距` / `K(n-1)截断`（对应 `level=kn` 的 confirms）。三组指标 kn 口径完全一致。
+- **命名历史（2026-07-15，取消「笔/线段」概念）**：代码统一 K0/K1/…/KN，不再用「笔/线段」叫法（仅本节历史记录保留旧名）。笔=K0连线、线段=K1连线；笔虚拟K=K1、线段虚拟K=K2。字段 `bi_*`→`k0_*`/`k1_*`、`seg_*`→`k1_*`（如 `bi_segments`→`k0_lines`、`bi_combine_frames`→`k1_combine_frames`、`seg_lines`→`k1_lines`）；Rust 类型 `BiSegment`→`K0Line`、`BiVirtualBar`→`K1Bar`、`SegLine`→`K1Line`、`SegAnalysisBundle`→`K1AnalysisBundle` 等；JSON key 同步变更并重建 `chan_ffi.dll`。内部 `level` 1-based 不变；泛用 `segment` 英文词（`LevelSegment`/`segments`/`segment_policy`）与模块文件名 `seg_eigen.rs`/`segment_first.rs` 保留。
+- 层级：**K0=原始K，K1=K0连线(笔)，K2=K1连线(线段)，…**（旧名作括注）；递归链：`K(n-1) → 包含合并 → 三元素分型确认 → 锚定配对 → Kn`，穷尽为止。
 - **「K1 判定适用 Kn」三层语义**（评审口径，避免与 bootstrap 混淆）：
 
   | 层次 | 是否全层同构 | 说明 |

@@ -1,8 +1,8 @@
-/// K0合并分型确认柱：合并框顶/底分型确认当步 K（连接即 K1/笔，逐K当下冻结）。
-class BiConfirmSignal {
+/// K0合并分型确认柱：合并框顶/底分型确认当步 K（连接即 K0连线，逐K当下冻结）。
+class K0ConfirmSignal {
   final int x;
   final String fx;
-  /// 向上笔=1，向下笔=-1
+  /// 向上K0连线=1，向下K0连线=-1
   final int value;
   final int fractalX1;
   final int fractalX2;
@@ -10,7 +10,7 @@ class BiConfirmSignal {
   /// 截断确认（上升/下降截断触发，非常规三元素路径）
   final bool truncated;
 
-  const BiConfirmSignal({
+  const K0ConfirmSignal({
     required this.x,
     required this.fx,
     required this.value,
@@ -19,8 +19,8 @@ class BiConfirmSignal {
     this.truncated = false,
   });
 
-  factory BiConfirmSignal.fromJson(Map<String, dynamic> json) {
-    return BiConfirmSignal(
+  factory K0ConfirmSignal.fromJson(Map<String, dynamic> json) {
+    return K0ConfirmSignal(
       x: (json['x'] as num).toInt(),
       fx: json['fx'] as String? ?? 'UNKNOWN',
       value: (json['value'] as num?)?.toInt() ?? 0,

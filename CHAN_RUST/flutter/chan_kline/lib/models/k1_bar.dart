@@ -1,6 +1,6 @@
-/// 笔确认后包装成的笔 K 线（Rust `BiVirtualBar`）。
+/// K0连线确认后包装成的 K1 bar（Rust `K1Bar`）。
 
-class BiVirtualBar {
+class K1Bar {
   final int idx;
   final int dir;
   final int x1;
@@ -11,7 +11,7 @@ class BiVirtualBar {
   final double close;
   final int confirmX;
 
-  const BiVirtualBar({
+  const K1Bar({
     required this.idx,
     required this.dir,
     required this.x1,
@@ -23,8 +23,8 @@ class BiVirtualBar {
     required this.confirmX,
   });
 
-  factory BiVirtualBar.fromJson(Map<String, dynamic> json) {
-    return BiVirtualBar(
+  factory K1Bar.fromJson(Map<String, dynamic> json) {
+    return K1Bar(
       idx: (json['idx'] as num).toInt(),
       dir: (json['dir'] as num).toInt(),
       x1: (json['x1'] as num).toInt(),

@@ -1,6 +1,6 @@
 import '../models/level_models.dart';
 
-/// Kn 单元线展示视图：与笔 K [BiVirtualBarView] 同构（半侧衔接）。
+/// Kn 单元线展示视图：与 K1 bar [K1BarView] 同构（半侧衔接）。
 class LevelUnitBarView {
   final LevelUnitBar bar;
   final int viewX1;
@@ -25,7 +25,7 @@ class LevelUnitBarView {
   bool get isUp => close >= open;
 }
 
-/// 由层内 unitBars（+可选 active）生成半侧衔接视图，仿笔 K 合并底层。
+/// 由层内 unitBars（+可选 active）生成半侧衔接视图，仿 K1 bar 合并底层。
 List<LevelUnitBarView> buildLevelUnitBarViews(
   List<LevelUnitBar> unitBars, {
   LevelUnitBar? activeUnit,

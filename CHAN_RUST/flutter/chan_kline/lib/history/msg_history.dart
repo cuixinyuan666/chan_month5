@@ -45,7 +45,14 @@ class MsgHistory {
     append(
       '【命名变更】中枢(ZS) → 跨段中枢(KuaDuan)：'
       'Rust 模块 zs→kuaduan（ZS→KuaDuan、ZSFrame→KuaDuanFrame、zs_frames→kuaduan_frames），'
-      '已重建 chan_ffi.dll；主图指标展示名 K(n-1)跨段中枢（笔跨段中枢=K0跨段中枢）。',
+      '已重建 chan_ffi.dll；主图指标展示名 K(n-1)跨段中枢（K0跨段中枢、K1跨段中枢）。',
+    );
+    append(
+      '【命名变更】笔/线段 → K0连线/K1连线：代码取消「笔/线段」概念，统一 K0/K1/…/KN。'
+      '笔=K0连线、线段=K1连线、笔虚拟K=K1；字段 bi_*→k0_*/k1_*、seg_*→k1_*'
+      '（bi_segments→k0_lines、bi_combine_frames→k1_combine_frames、seg_lines→k1_lines）；'
+      'Rust 类型 BiSegment→K0Line、BiVirtualBar→K1Bar、SegLine→K1Line、SegAnalysisBundle→K1AnalysisBundle；'
+      '已重建 chan_ffi.dll；JSON key 同步变更。',
     );
   }
 
