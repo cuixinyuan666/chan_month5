@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::combine::KlineCombineFrame;
 use crate::engine::{CombineEngine, FxEvent, FxKind, MergeUnit, TruncGuard};
+use crate::kuaduan::KuaDuanFrame;
 use crate::kline::KlineBar;
 use crate::segment_first::{
     build_pending_default_unit, resolve_segment_policy, reverse_pole_x, trial_first_segment,
@@ -195,6 +196,9 @@ pub struct LevelBundleOut {
     pub unit_bars: Vec<LevelUnitBar>,
     /// 本层输入单元（K(n-1)；n=1 时为 K0）的包含合并线框
     pub combine_frames: Vec<KlineCombineFrame>,
+    /// 本层跨段中枢镜像框（笔跨段中枢 level=1 / 线段跨段中枢 level=2 …；由 `kuaduan` 模块松重叠吸收器产出）
+    #[serde(default)]
+    pub kuaduan_frames: Vec<KuaDuanFrame>,
     /// 首 N 段方向：0 未定
     pub first_dir: i32,
     pub first_dir_x: i32,
@@ -886,6 +890,7 @@ impl LevelState {
             segments: self.segments.clone(),
             unit_bars: self.unit_bars.clone(),
             combine_frames: frames_from_engine(&self.engine, bars),
+            kuaduan_frames: crate::kuaduan::level_kuaduan_frames(&self.segments, self.level),
             first_dir: self.first_dir,
             first_dir_x: self.first_dir_x,
             active_unit,

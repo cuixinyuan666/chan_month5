@@ -10,6 +10,9 @@ class MsgHistory {
 
   static const int _maxRows = 500;
 
+  /// 命名变更是否已记录（进程内只记一次，便于从历史记录追溯完整更名过程）
+  static bool _namingRenameLogged = false;
+
   final List<MsgHistoryEntry> _rows = [];
 
   List<MsgHistoryEntry> get rows => List.unmodifiable(_rows);
@@ -32,6 +35,18 @@ class MsgHistory {
     if (reason != null && reason.trim().isNotEmpty) {
       append('历史记录已清空：$reason');
     }
+  }
+
+  /// 记录「中枢(ZS) → 跨段中枢(KuaDuan)」命名变更（进程内去重一次），
+  /// 便于调试时从历史记录追溯名称演进的完整过程。
+  void appendNamingRename() {
+    if (_namingRenameLogged) return;
+    _namingRenameLogged = true;
+    append(
+      '【命名变更】中枢(ZS) → 跨段中枢(KuaDuan)：'
+      'Rust 模块 zs→kuaduan（ZS→KuaDuan、ZSFrame→KuaDuanFrame、zs_frames→kuaduan_frames），'
+      '已重建 chan_ffi.dll；主图指标展示名 K(n-1)跨段中枢（笔跨段中枢=K0跨段中枢）。',
+    );
   }
 
   String asText([List<MsgHistoryEntry>? source]) {

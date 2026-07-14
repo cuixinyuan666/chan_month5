@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
-/// Kn 主图连线样式（内部 level≥2；展示名 K(level-1)连线，如 level=2→K1连线；旧称「n段」）。
+/// Kn 主图连线样式（内部 level≥1；level=1 仅跨段中枢框 K0跨段中枢使用，连线/合并≥2）。
+/// 展示名 K(level-1)：level=2→K1连线，3→K2连线，…；level=1→K0跨段中枢框。旧称「n段」。
 class ChartLevelLineStyle {
   /// 连线颜色（含 alpha）
   final Color color;
@@ -38,9 +39,19 @@ class ChartLevelLineStyle {
     Color(0xCCF97316), // 展示 K6连线（内部 level=7）：橙
   ];
 
-  /// 按内部 level 取样式（level=2→展示 K1连线，3→K2连线，…）。
+  /// 按内部 level 取样式（level=1→K0跨段中枢框；2→展示 K1连线，3→K2连线，…）。
+  /// KuaDuan(n) 复用本函数与合并/连线同层同色系；level=1 为笔跨段中枢，独立取蓝靛色以区别于 K1连线(琥珀)。
   static ChartLevelLineStyle forLevel(int level) {
-    assert(level >= 2);
+    assert(level >= 1);
+    if (level == 1) {
+      // 笔跨段中枢框（K0跨段中枢）：独立蓝靛色，不与 K1连线(琥珀 level=2)撞色
+      return const ChartLevelLineStyle(
+        color: Color(0xCC3B82F6),
+        strokeWidth: 1.9,
+        buildingStrokeWidth: 1.5,
+        buildingDashPattern: const [5, 4],
+      );
+    }
     final i = (level - 2).clamp(0, _colors.length - 1);
     final w = 2.2 + (level - 2) * 0.5;
     switch (level) {

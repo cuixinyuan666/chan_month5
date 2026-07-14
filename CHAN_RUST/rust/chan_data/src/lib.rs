@@ -12,6 +12,7 @@ mod pipeline;
 mod seg_eigen;
 mod segment_first;
 mod tick;
+mod kuaduan;
 
 pub use combine::{
     build_bi_combine_frames, build_bi_combine_frames_with, build_kline_combine_bundle,
@@ -40,3 +41,4 @@ pub use segment_first::{
 pub use seg_eigen::{
     BarSubSnapshot, EigenFrame, FirstSegDirSignal, SegAnalysisBundle, SegConfirmSignal, SegLine,
 };
+pub use kuaduan::{build_kuaduan_for_levels, find_kuaduan, kuaduan_to_frames, KuaDuan, KuaDuanFrame};

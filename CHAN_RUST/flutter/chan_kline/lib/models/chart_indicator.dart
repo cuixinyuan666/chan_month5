@@ -1,22 +1,31 @@
 import 'bi_segment.dart';
 import 'level_models.dart';
 
-/// 主图指标种类：连线 / 合并框。
-enum MainIndicatorKind { line, combine }
+/// 主图指标种类：连线 / 合并框 / 跨段中枢框。
+enum MainIndicatorKind { line, combine, kuaduan }
 
-/// 主图一项指标（按加载后 maxKn 动态生成，如 3 层 → K0/K1/K2 连线）。
+/// 主图一项指标（按加载后 maxKn 动态生成，如 3 层 → K0/K1/K2 连线/合并/跨段中枢）。
 class MainChartIndicator {
   final MainIndicatorKind kind;
-  /// 内部层号（合并与连线统一用层号）：1..maxKn。
-  /// 展示名比层号小 1：连线=K(n-1)连线，合并=K(n-1)合并，两者同号对齐。
+  /// 内部层号（合并/连线/跨段中枢统一用层号）：1..maxKn。
+  /// 展示名比层号小 1：连线=K(n-1)连线，合并=K(n-1)合并，跨段中枢=K(n-1)跨段中枢，三者同号对齐。
   final int kn;
 
   const MainChartIndicator.line(this.kn) : kind = MainIndicatorKind.line;
   const MainChartIndicator.combine(this.kn) : kind = MainIndicatorKind.combine;
+  const MainChartIndicator.kuaduan(this.kn) : kind = MainIndicatorKind.kuaduan;
 
-  /// 展示名比内部层号小 1：笔=K0连线、合并=K0合并，… 两者同号对齐。
-  String get label =>
-      kind == MainIndicatorKind.line ? 'K${kn - 1}连线' : 'K${kn - 1}合并';
+  /// 展示名比内部层号小 1：笔=K0连线、合并=K0合并、跨段中枢=K0跨段中枢，… 三者同号对齐。
+  String get label {
+    switch (kind) {
+      case MainIndicatorKind.line:
+        return 'K${kn - 1}连线';
+      case MainIndicatorKind.combine:
+        return 'K${kn - 1}合并';
+      case MainIndicatorKind.kuaduan:
+        return 'K${kn - 1}跨段中枢';
+    }
+  }
 
   @override
   bool operator ==(Object other) =>
@@ -90,6 +99,10 @@ List<MainChartIndicator> buildMainIndicatorCatalog(int maxKn) {
   }
   for (var n = 1; n <= maxKn; n++) {
     out.add(MainChartIndicator.line(n));
+  }
+  // 跨段中枢框与合并/连线同号：kuaduan(n)=K(n-1)跨段中枢（笔跨段中枢=K0跨段中枢、线段跨段中枢=K1跨段中枢）
+  for (var n = 1; n <= maxKn; n++) {
+    out.add(MainChartIndicator.kuaduan(n));
   }
   return out;
 }

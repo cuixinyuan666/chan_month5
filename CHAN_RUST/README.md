@@ -119,6 +119,7 @@ cargo test -p chan_data
 
 ## 后续规划
 
-- [ ] 中枢 Rust 核心
+- [x] 跨段中枢 Rust 核心：`chan_data/src/kuaduan.rs`（`KuaDuan`/`KuaDuanFrame`/`find_kuaduan`/`build_kuaduan_for_levels`/`level_kuaduan_frames`，松重叠吸收器，全层同构；`run_pipeline` 的 `LevelBundleOut.kuaduan_frames` 逐层挂载，无未来函数）
+- [x] 跨段中枢 Flutter 可视化：主图指标新增 `跨段中枢(kuaduan)`，展示名 `K(n-1)跨段中枢`（笔跨段中枢=K0跨段中枢），复用合并框横向渲染画 ZD/ZG 半透明框 + 标签；默认勾选 `kuaduan(1)`
 - [ ] Android JNI 复用 `chan_data`
 - [ ] 逐 K 步进增量 API（复用 pipeline 状态，免前缀全量重算）

@@ -81,6 +81,11 @@ class AppDebugSnapshot {
       '首段策略 default_bi_policy=$defaultBiPolicy（pending/retained/purged）；'
       '截断机制 truncation_check=${truncationCheck ? "开" : "关"}。',
     );
+    buf.writeln(
+      '命名变更（2026-07-15）：中枢(ZS) 已统一更名为跨段中枢(KuaDuan)；'
+      '主图指标 ZS→跨段中枢框，展示名 K(n-1)跨段中枢（笔跨段中枢=K0跨段中枢，线段跨段中枢=K1跨段中枢）；'
+      'Rust 模块 zs→kuaduan（ZS→KuaDuan、ZSFrame→KuaDuanFrame、zs_frames→kuaduan_frames），已重建 chan_ffi.dll；JSON key 同步变更。',
+    );
     buf.writeln();
 
     buf.writeln('【基础参数】');
@@ -133,6 +138,7 @@ class AppDebugSnapshot {
     buf.writeln();
 
     _writeLevels(buf, levels);
+    _writeKuaDuan(buf, levels);
     _writeDllDiag(buf, barFeatures, levels);
     _writeTailBarFeature(buf, visibleBars, barFeatures);
     _writeBiConfirms(buf, biConfirms);
@@ -200,6 +206,21 @@ class AppDebugSnapshot {
           'promoted=${s.isPromotedDefault}',
         );
       }
+    }
+    buf.writeln();
+  }
+
+  static void _writeKuaDuan(StringBuffer buf, List<LevelBundle> levels) {
+    buf.writeln('【跨段中枢统计】');
+    if (levels.isEmpty) {
+      buf.writeln('（无 levels 输出）');
+      buf.writeln();
+      return;
+    }
+    for (final lv in levels) {
+      buf.writeln(
+        'K${lv.level}：跨段中枢框 kuaduan_frames=${lv.kuaduanFrames.length}',
+      );
     }
     buf.writeln();
   }

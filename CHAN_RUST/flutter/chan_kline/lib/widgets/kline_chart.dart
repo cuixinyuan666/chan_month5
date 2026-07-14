@@ -946,6 +946,10 @@ class _KlineCompositePainter extends CustomPainter {
             _drawSegLinesForLevel(
                 canvas, size.width, plotTop, plotH, slotW, ind.kn);
           }
+        } else if (ind.kind == MainIndicatorKind.kuaduan) {
+          // 跨段中枢框：与合并/连线同号，kuaduan(n)=K(n-1)跨段中枢（笔跨段中枢=K0跨段中枢）
+          _drawKuaduanOnMainChart(
+              canvas, size.width, plotTop, plotH, barW, slotW, ind.kn);
         }
       }
     }
@@ -1428,6 +1432,69 @@ class _KlineCompositePainter extends CustomPainter {
         // 有单元 view 时按半侧衔接框对齐（同 K1合并）
         levelUnitViews: views,
       );
+    }
+  }
+
+  /// 主图跨段中枢框：复用合并框横向 [_combineFrameHSpan]，按层号取该层段序列产出的 KuaDuanFrame，
+  /// 画 ZD/ZG 半透明框 + 「K(n-1)跨段中枢·段数」标签。与合并框同层号、同色系。
+  /// 仅勾选时绘制；数据来自 Rust 已冻结段（无未来函数）。
+  void _drawKuaduanOnMainChart(
+    Canvas canvas,
+    double w,
+    double plotTop,
+    double plotH,
+    double barW,
+    double slotW,
+    int kn,
+  ) {
+    LevelBundle? bundle;
+    for (final b in levels) {
+      if (b.level == kn) {
+        bundle = b;
+        break;
+      }
+    }
+    if (bundle == null) return;
+    final frames = bundle.kuaduanFrames;
+    if (frames.isEmpty) return;
+
+    final style = ChartLevelLineStyle.forLevel(kn);
+    final stroke = Paint()
+      ..color = style.color.withValues(alpha: 0.9)
+      ..strokeWidth = 1.4
+      ..style = PaintingStyle.stroke;
+    final fill = Paint()..color = style.color.withValues(alpha: 0.12);
+    final labelStyle = TextStyle(
+      color: style.color.withValues(alpha: 0.95),
+      fontSize: 9,
+    );
+
+    for (final f in frames) {
+      if (f.x2 < viewport.viewXMin - 1 || f.x1 > viewport.viewXMax + 1) {
+        continue;
+      }
+      final (xLeft, xRight) = _combineFrameHSpan(f.x1, f.x2, w, slotW, barW);
+      final yHigh = priceRange.yOf(f.high, plotTop, plotH); // ZD 上沿
+      final yLow = priceRange.yOf(f.low, plotTop, plotH); // ZG 下沿
+      final top = math.min(yHigh, yLow);
+      final bottom = math.max(yHigh, yLow);
+      final rect = Rect.fromLTRB(
+        math.min(xLeft, xRight),
+        top,
+        math.max(xLeft, xRight),
+        bottom,
+      );
+      canvas.drawRect(rect, fill);
+      canvas.drawRect(rect, stroke);
+
+      final tp = TextPainter(
+        text: TextSpan(
+          text: 'K${kn - 1}跨段中枢·${f.count}',
+          style: labelStyle,
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      tp.paint(canvas, Offset(rect.left + 2, rect.top + 1));
     }
   }
 

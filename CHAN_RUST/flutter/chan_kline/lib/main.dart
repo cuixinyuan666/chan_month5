@@ -25,6 +25,8 @@ import 'widgets/kline_chart.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // 命名变更追踪：中枢(ZS) → 跨段中枢(KuaDuan)，便于调试时从历史记录追溯完整更名过程
+  MsgHistory.instance.appendNamingRename();
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     await windowManager.ensureInitialized();
     const opts = WindowOptions(
@@ -98,6 +100,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
   List<LevelBundle> _levels = [];
   Set<MainChartIndicator> _mainIndicators = {
     const MainChartIndicator.combine(1),
+    const MainChartIndicator.kuaduan(1),
   };
   Set<SubChartIndicator> _subIndicators = {
     const SubChartIndicator.fractalConfirm(1),
