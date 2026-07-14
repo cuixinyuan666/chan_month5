@@ -7,15 +7,16 @@ enum MainIndicatorKind { line, combine }
 /// 主图一项指标（按加载后 maxKn 动态生成，如 3 层 → K0/K1/K2 连线）。
 class MainChartIndicator {
   final MainIndicatorKind kind;
-  /// 内部层号：连线 1..maxKn（展示名 K(n-1)连线）；合并 0..maxKn（展示名 Kn合并）
+  /// 内部层号（合并与连线统一用层号）：1..maxKn。
+  /// 展示名比层号小 1：连线=K(n-1)连线，合并=K(n-1)合并，两者同号对齐。
   final int kn;
 
   const MainChartIndicator.line(this.kn) : kind = MainIndicatorKind.line;
   const MainChartIndicator.combine(this.kn) : kind = MainIndicatorKind.combine;
 
-  /// 连线展示名比内部层号小 1：笔=K0连线，线段=K1连线；合并仍按层号。
+  /// 展示名比内部层号小 1：笔=K0连线、合并=K0合并，… 两者同号对齐。
   String get label =>
-      kind == MainIndicatorKind.line ? 'K${kn - 1}连线' : 'K$kn合并';
+      kind == MainIndicatorKind.line ? 'K${kn - 1}连线' : 'K${kn - 1}合并';
 
   @override
   bool operator ==(Object other) =>
@@ -78,11 +79,13 @@ int chartMaxKn({
   return m;
 }
 
-/// 主图可选列表：Kn合并(0..maxKn) + 连线展示 K0..K(maxKn-1)（内部层号 1..maxKn）；maxKn=0 仅 K0合并。
+/// 主图可选列表：合并与连线统一按层号 1..maxKn 生成（展示名 K(n-1)）。
+/// maxKn=0（无笔段）时仍保留 K0合并（combine(1)）可勾。
 List<MainChartIndicator> buildMainIndicatorCatalog(int maxKn) {
   final out = <MainChartIndicator>[];
-  final maxCombine = maxKn < 0 ? 0 : maxKn;
-  for (var n = 0; n <= maxCombine; n++) {
+  // 合并与连线统一层号：combine(n)=Kn-1合并；maxKn=0 仍保留 K0合并
+  final combineMax = maxKn < 1 ? 1 : maxKn;
+  for (var n = 1; n <= combineMax; n++) {
     out.add(MainChartIndicator.combine(n));
   }
   for (var n = 1; n <= maxKn; n++) {

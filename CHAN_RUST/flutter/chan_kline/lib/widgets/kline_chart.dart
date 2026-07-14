@@ -919,7 +919,7 @@ class _KlineCompositePainter extends CustomPainter {
       _drawCandles(canvas, size.width, plotTop, plotH, barW, slotW);
     } else {
       final hasK0Combine =
-          mainIndicators.contains(const MainChartIndicator.combine(0));
+          mainIndicators.contains(const MainChartIndicator.combine(1));
       // 未勾 K0合并时仍铺底层 K0 蜡烛，避免只选连线时空白
       if (!hasK0Combine) {
         _drawCandles(canvas, size.width, plotTop, plotH, barW, slotW);
@@ -927,10 +927,11 @@ class _KlineCompositePainter extends CustomPainter {
       // 按勾选项逐层画：勾哪层画哪层（不再一项自动叠全部）
       for (final ind in mainIndicators) {
         if (ind.kind == MainIndicatorKind.combine) {
-          if (ind.kn == 0) {
+          // 合并与连线统一层号：combine(1)=K0合并，combine(2)=K1合并，combine(>=3)=K(n-1)合并
+          if (ind.kn == 1) {
             _drawKlineCombineOnMainChart(
                 canvas, size.width, plotTop, plotH, barW, slotW);
-          } else if (ind.kn == 1) {
+          } else if (ind.kn == 2) {
             _drawBiCombineOnMainChart(
                 canvas, size.width, plotTop, plotH, barW, slotW);
           } else {

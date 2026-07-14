@@ -97,7 +97,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
   SegAnalysisBundle _segAnalysis = SegAnalysisBundle.empty();
   List<LevelBundle> _levels = [];
   Set<MainChartIndicator> _mainIndicators = {
-    const MainChartIndicator.combine(0),
+    const MainChartIndicator.combine(1),
   };
   Set<SubChartIndicator> _subIndicators = {
     const SubChartIndicator.fractalConfirm(0),
