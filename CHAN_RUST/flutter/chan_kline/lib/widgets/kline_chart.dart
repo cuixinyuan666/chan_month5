@@ -161,7 +161,7 @@ class _KlineChartState extends State<KlineChart> {
       buildMainIndicatorCatalog(_maxKn);
 
   List<SubChartIndicator> get _subCatalog =>
-      buildSubIndicatorCatalog(_maxKn);
+      buildSubIndicatorCatalog(_maxKn, truncationCheck: widget.truncationCheck);
 
   /// 副图是否展开（无勾选副图指标则收起整块副图区）
   bool get _showSubPane => _activeSubs.isNotEmpty;
@@ -675,6 +675,7 @@ class _KlineChartState extends State<KlineChart> {
                 crosshairX: _crosshairX,
                 crosshairY: _crosshairY,
                 crosshairBarIdx: _crosshairBarIdx,
+                truncationCheck: widget.truncationCheck,
                 segAsOf: _crosshairEnabled && _crosshairBarIdx != null
                     ? _crosshairAsOfIdx()
                     : null,
@@ -861,6 +862,7 @@ class _KlineCompositePainter extends CustomPainter {
     required this.crosshairX,
     required this.crosshairY,
     required this.crosshairBarIdx,
+    this.truncationCheck = true,
     this.segAsOf,
   }) : featureLookup = BarFeatureLookup.build(
           bars: bars,
@@ -896,6 +898,8 @@ class _KlineCompositePainter extends CustomPainter {
   final double? crosshairX;
   final double? crosshairY;
   final int? crosshairBarIdx;
+  /// 截断机制开关：关则不画 Kn截断副图
+  final bool truncationCheck;
   /// 十字线 as-of 2 段连线截止 K（null=末态全量）
   final int? segAsOf;
 
@@ -953,6 +957,8 @@ class _KlineCompositePainter extends CustomPainter {
 
     if (crosshairEnabled && crosshairX != null && crosshairY != null) {
       _drawCrosshair(canvas, size, contentBottom, plotTop, priceRange);
+      // 极点距数值：不画在折线上，十字线激活时在副图右上角固定读数
+      _drawPeakDistCrosshairReadout(canvas, size.width);
     }
   }
 
@@ -1988,6 +1994,27 @@ class _KlineCompositePainter extends CustomPainter {
       _drawKnFractalPeakDistSubChart(
           canvas, w, innerTop, innerH, barW, slotW, kn);
     }
+    // Kn截断：只画 truncated=true；且仅截断机制开启时绘制
+    final truncKns = truncationCheck
+        ? (subIndicators
+            .where((e) => e.kind == SubIndicatorKind.truncation)
+            .map((e) => e.kn)
+            .toList()
+          ..sort())
+        : <int>[];
+    for (var i = 0; i < truncKns.length; i++) {
+      _drawKnTruncationSubChart(
+        canvas,
+        w,
+        innerTop,
+        innerH,
+        barW,
+        slotW,
+        truncKns[i],
+        stackRank: i,
+        stackCount: truncKns.length,
+      );
+    }
   }
 
   void _drawVolume(
@@ -2173,6 +2200,72 @@ class _KlineCompositePainter extends CustomPainter {
     }
   }
 
+  /// 单层 Kn 截断：只画 truncated 确认点（x=触发截断当步 K）。
+  void _drawKnTruncationSubChart(
+    Canvas canvas,
+    double w,
+    double innerTop,
+    double innerH,
+    double barW,
+    double slotW,
+    int labelKn, {
+    int stackRank = 0,
+    int stackCount = 1,
+  }) {
+    const minV = -1.0;
+    const maxV = 1.0;
+    final span = maxV - minV;
+    double subY(double v) => innerTop + (maxV - v) / span * innerH;
+    final y0 = subY(0);
+    final shape = confirmMarkerShapeForKn(labelKn);
+    final level = labelKn + 1;
+    final dx = confirmStackOffsetX(
+      rank: stackRank,
+      count: stackCount,
+      barW: barW,
+    );
+
+    void paintPoint(int x, int value) {
+      if (x < viewport.viewXMin - 1 || x > viewport.viewXMax + 1) return;
+      if (value == 0) return;
+      final cx = _barCenterX(x, w, slotW) + dx;
+      final yp = subY(value.toDouble());
+      paintTruncationMarker(
+        canvas,
+        cx: cx,
+        y0: y0,
+        yp: yp,
+        value: value,
+        shape: shape,
+        barW: barW,
+      );
+    }
+
+    LevelBundle? bundle;
+    for (final b in levels) {
+      if (b.level == level) {
+        bundle = b;
+        break;
+      }
+    }
+    if (bundle != null) {
+      for (final c in bundle.confirms) {
+        if (!c.truncated) continue;
+        if ((c.fx == 'TOP' || c.fx == 'BOTTOM') && c.value != 0) {
+          paintPoint(c.x, c.value);
+        }
+      }
+      return;
+    }
+    // 回退：K0 层用旧 bi_confirms
+    if (labelKn == 0) {
+      for (final s in biConfirmSignals) {
+        if (!s.truncated) continue;
+        paintPoint(s.x, s.value);
+      }
+    }
+  }
+
   void _drawYLabels(Canvas canvas, double w, double plotTop, double plotH, PriceRange pr) {
     const style = TextStyle(color: Color(0x99FFFFFF), fontSize: 9);
     for (var i = 0; i <= 4; i++) {
@@ -2274,6 +2367,90 @@ class _KlineCompositePainter extends CustomPainter {
     // tooltip 改由 Flutter 覆盖层绘制（表格对齐 + 可滚动半透明）
   }
 
+  /// 十字线激活时：副图右上角固定显示已勾选层的极点距当前值。
+  void _drawPeakDistCrosshairReadout(Canvas canvas, double w) {
+    if (crosshairBarIdx == null || bars.isEmpty || subIndicators.isEmpty) {
+      return;
+    }
+    final peakKns = subIndicators
+        .where((e) => e.kind == SubIndicatorKind.fractalPeakDist)
+        .map((e) => e.kn)
+        .toList()
+      ..sort();
+    if (peakKns.isEmpty) return;
+
+    final barX = bars[crosshairBarIdx!.clamp(0, bars.length - 1)].idx;
+    final parts = <String>[];
+    for (final kn in peakKns) {
+      final v = _peakDistValueAt(barX, kn);
+      if (v == null) continue;
+      parts.add('K$kn极点距:$v');
+    }
+    if (parts.isEmpty) return;
+
+    final tp = TextPainter(
+      text: TextSpan(
+        text: parts.join('  '),
+        style: const TextStyle(
+          color: Color(0xFF38BDF8),
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    final pad = 6.0;
+    final boxW = tp.width + pad * 2;
+    final boxH = tp.height + pad;
+    // 固定：副图区右上角（主图下方）
+    final lx = (w - KlineViewport.padR - boxW)
+        .clamp(KlineViewport.padL, w - boxW)
+        .toDouble();
+    final ly = mainH + 4;
+    final bg = Paint()..color = const Color(0xCC121212);
+    final border = Paint()
+      ..color = const Color(0x6638BDF8)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1;
+    final rect = Rect.fromLTWH(lx, ly, boxW, boxH);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(rect, const Radius.circular(3)),
+      bg,
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(rect, const Radius.circular(3)),
+      border,
+    );
+    tp.paint(canvas, Offset(lx + pad, ly + pad / 2));
+  }
+
+  /// 十字线当步某层极点距（与副图折线同口径）。
+  int? _peakDistValueAt(int barX, int labelKn) {
+    if (bars.isEmpty) return null;
+    final n = bars.length;
+    final level = labelKn + 1;
+    List<int> series;
+    LevelBundle? bundle;
+    for (final b in levels) {
+      if (b.level == level) {
+        bundle = b;
+        break;
+      }
+    }
+    if (bundle != null) {
+      series = _peakDistSeries(n, bundle.confirms);
+    } else if (labelKn == 0 && barFeatures.isNotEmpty) {
+      series = List<int>.generate(
+        n,
+        (i) => i < barFeatures.length ? barFeatures[i].fractalPeakDist : 0,
+      );
+    } else {
+      return null;
+    }
+    final i = barX.clamp(0, series.length - 1);
+    return series[i];
+  }
+
   /// 通用 pattern 虚线（pattern=[画,空,画,空,…] 像素）。
   void _drawPatternLine(
     Canvas canvas,
@@ -2330,6 +2507,7 @@ class _KlineCompositePainter extends CustomPainter {
         oldDelegate.crosshairShowTooltip != crosshairShowTooltip ||
         oldDelegate.crosshairX != crosshairX ||
         oldDelegate.crosshairY != crosshairY ||
-        oldDelegate.crosshairBarIdx != crosshairBarIdx;
+        oldDelegate.crosshairBarIdx != crosshairBarIdx ||
+        oldDelegate.truncationCheck != truncationCheck;
   }
 }

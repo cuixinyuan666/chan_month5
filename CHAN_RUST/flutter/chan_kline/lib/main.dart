@@ -334,7 +334,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         );
         _subIndicators = pruneIndicators(
           _subIndicators,
-          buildSubIndicatorCatalog(maxKn),
+          buildSubIndicatorCatalog(maxKn, truncationCheck: _truncationCheck),
         );
       });
     } catch (e) {
@@ -695,6 +695,18 @@ class _KlineHomePageState extends State<KlineHomePage> {
                   setState(() {
                     _truncationCheck = v;
                     _defaultBiPurged = false;
+                    // 关截断时从副图勾选里摘掉 Kn截断（目录也不可选）
+                    final maxKn = chartMaxKn(
+                      levels: _levels,
+                      biSegments: _biSegments,
+                    );
+                    _subIndicators = pruneIndicators(
+                      _subIndicators,
+                      buildSubIndicatorCatalog(
+                        maxKn,
+                        truncationCheck: v,
+                      ),
+                    );
                   });
                   _msgHistory.append('截断机制=${v ? "开" : "关"}，重算当前步进');
                   _rebuildCombine();
@@ -767,6 +779,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
             '开启（默认）\n'
             '· 暴力反转单元命中截断条件时，左框当场确认分型，截断K强制断开成新组。\n'
             '· 确认带 truncated 标记，tooltip 显示「值(截断)」。\n'
+            '· 副图「Kn截断」仅在本开关开启时可选；关闭后自动从已勾选里移除。\n'
             '· 与「下层确认后才能参与上层」同构：截断只对已冻结下层单元生效，'
             '进行中笔不参与 K1合并/截断判定。\n'
             '· 触发截断后，触发K在合并引擎内改写为可作第三元素的形态'

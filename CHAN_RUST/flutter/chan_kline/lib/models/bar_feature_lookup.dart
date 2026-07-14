@@ -314,7 +314,26 @@ class BarFeatureLookup {
       }
     }
 
-
+    // Kn>0 极点距：由该层 confirms 当步起算（与副图折线同口径）
+    for (final ind in subIndicators) {
+      if (ind.kind != SubIndicatorKind.fractalPeakDist || ind.kn <= 0) {
+        continue;
+      }
+      LevelBundle? bundle;
+      for (final lv in levels) {
+        if (lv.level == ind.kn + 1) {
+          bundle = lv;
+          break;
+        }
+      }
+      if (bundle == null || bars.isEmpty) continue;
+      final series = _peakDistSeries(bars.length, bundle.confirms);
+      for (var i = 0; i < bars.length; i++) {
+        final row = byIdx.putIfAbsent(bars[i].idx, () => {'idx': bars[i].idx});
+        (row['sub'] as Map<String, dynamic>)['fractal_peak_dist_${ind.kn}'] =
+            series[i];
+      }
+    }
 
     return BarFeatureLookup._(byIdx: byIdx, totalLevels: levels.length);
 
@@ -462,6 +481,27 @@ class BarFeatureLookup {
           add(ind.label, sub['fractal_peak_dist_${ind.kn}']);
         }
       }
+      if (ind.kind == SubIndicatorKind.truncation) {
+        // 截断触发当步：有 truncated 确认才显示方向值
+        if (ind.kn == 0) {
+          final bc = row['bi_confirm'];
+          if (bc is Map && bc['truncated'] == true) {
+            add('K0截断', bc['value']);
+          }
+        } else {
+          final confirms = row['level_confirms'];
+          dynamic v;
+          if (confirms is Map) {
+            final c = confirms[ind.kn + 1];
+            if (c is LevelConfirm && c.truncated) {
+              v = c.value;
+            } else if (c is Map && c['truncated'] == true) {
+              v = c['value'];
+            }
+          }
+          add(ind.label, v);
+        }
+      }
     }
     return lines;
   }
@@ -543,6 +583,25 @@ class BarFeatureLookup {
       ),
       CrosshairTooltipRow.kv('$label分型确认', confirmText),
     ];
+  }
+
+  /// 由确认列表生成逐 K 极点距（确认当步起算；不含极点 K；对齐副图/Rust）。
+  static List<int> _peakDistSeries(int barCount, List<LevelConfirm> confirms) {
+    final out = List<int>.filled(barCount, 0);
+    if (barCount <= 0) return out;
+    var ptr = 0;
+    int? extreme;
+    for (var i = 0; i < barCount; i++) {
+      while (ptr < confirms.length && confirms[ptr].x <= i) {
+        final c = confirms[ptr];
+        if ((c.fx == 'TOP' || c.fx == 'BOTTOM') && c.poleX >= 0) {
+          extreme = c.poleX;
+        }
+        ptr++;
+      }
+      out[i] = extreme == null ? 0 : i - extreme;
+    }
+    return out;
   }
 }
 

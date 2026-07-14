@@ -73,6 +73,10 @@ class AppDebugSnapshot {
       '点击仅跟线；仅中间双击可切三态。非十字线态：左/右点击立刻步退/步进，连点即加速。',
     );
     buf.writeln(
+      '副图目录：成交量 + Kn分型确认/极点距；Kn截断仅 truncation_check=开 时可选；'
+      '极点距数值不画在折线上，十字线激活时在副图右上角固定读数。',
+    );
+    buf.writeln(
       '首段策略 default_bi_policy=$defaultBiPolicy（pending/retained/purged）；'
       '截断机制 truncation_check=${truncationCheck ? "开" : "关"}。',
     );

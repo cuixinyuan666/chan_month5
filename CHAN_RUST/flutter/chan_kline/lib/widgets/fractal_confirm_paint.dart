@@ -55,6 +55,45 @@ double confirmStackOffsetX({
   }
 }
 
+/// 截断标记色（与分型确认同红绿，另加描边区分）。
+abstract final class TruncationMarkerColors {
+  static const accent = Color(0xFFFFB74D); // 橙描边：截断专属
+}
+
+/// 在副图画一个截断触发点：方向色填充 + 橙色描边，形状按 Kn。
+void paintTruncationMarker(
+  Canvas canvas, {
+  required double cx,
+  required double y0,
+  required double yp,
+  required int value,
+  required ConfirmMarkerShape shape,
+  required double barW,
+}) {
+  if (value == 0) return;
+  // 先画确认形态，再加一圈橙描边标「截断」
+  paintFractalConfirmMarker(
+    canvas,
+    cx: cx,
+    y0: y0,
+    yp: yp,
+    value: value,
+    shape: shape,
+    barW: barW,
+    withOutline: false,
+  );
+  final mid = Offset(cx, (y0 + yp) / 2);
+  final r = math.max(4.0, barW * 0.7);
+  canvas.drawCircle(
+    mid,
+    r,
+    Paint()
+      ..color = TruncationMarkerColors.accent
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.0,
+  );
+}
+
 /// 在副图画一个 ±1 确认标记（颜色按方向，形状按 Kn；可描边防叠盖）。
 void paintFractalConfirmMarker(
   Canvas canvas, {
