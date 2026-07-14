@@ -8,7 +8,8 @@
 CHAN_RUST/
 ├── README.md
 ├── scripts/
-│   └── build_rust.ps1      # 编译 Rust 并复制 DLL 到 Flutter Windows
+│   ├── build_rust.ps1      # 编译 Rust 并复制 DLL 到 Flutter Windows
+│   └── build_rust.sh       # 编译 Rust 并复制 .so 到 Flutter Linux（WSL 通用）
 ├── rust/
 │   ├── chan_data/          # a_Data 分笔解析 + K 线聚合（纯 Rust）
 │   └── chan_ffi/           # Flutter FFI（JSON 桥）
@@ -26,6 +27,10 @@ CHAN_RUST/
 - Flutter 3.x（已测 Windows 桌面）
 - 数据源：`../a_Data` 下已有分笔 txt
 
+> **本机支持 WSL**：本机可在 WSL（Windows Subsystem for Linux）中直接编译运行。
+> WSL 下 Rust 产物为 Linux 动态库 `libchan_ffi.so`（而非 Windows 的 `.dll`），
+> 对应构建脚本为 `scripts/build_rust.sh`，Flutter 以 Linux 桌面目标运行。
+
 ## 构建与运行（Windows）
 
 ```powershell
@@ -37,6 +42,23 @@ cd CHAN_RUST\flutter\chan_kline
 flutter pub get
 flutter run -d windows
 ```
+
+## 构建与运行（WSL / Linux）
+
+```bash
+# 1. 编译 Rust 并复制 libchan_ffi.so 到 Flutter Linux 目录
+bash CHAN_RUST/scripts/build_rust.sh
+# 或先赋予执行权限后直接运行：
+# chmod +x CHAN_RUST/scripts/build_rust.sh && ./CHAN_RUST/scripts/build_rust.sh
+
+# 2. 启动 Flutter 桌面（Linux 目标）
+cd CHAN_RUST/flutter/chan_kline
+flutter pub get
+flutter run -d linux
+```
+
+> WSL 首次运行 Flutter Linux 桌面需安装依赖：`clang cmake ninja-build pkg-config libgtk-3-dev`
+> 以及 GUI 环境（Windows 11 的 WSLg 已内置图形支持）。
 
 ## Rust 本地测试
 

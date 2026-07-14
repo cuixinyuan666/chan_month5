@@ -160,13 +160,42 @@ fn chip_profile(session_id, cutoff_x, bucket_step):
 
 **三角分摊算法**：假设每根 K 线成交量在 [low, high] 区间呈三角分布，收盘价为峰值。
 
-### 4.2 筹码峰指标（chip_peak）
+### 4.2 引擎优先渲染路径
+
+**函数**：`tryDrawChipProfileFromEngine()`（~L20268）
+
+`drawChips()` 首先尝试走引擎优先路径，成功则直接返回，否则回退到前端手动计算：
+
+```javascript
+function drawChips(chart, s) {
+  if (!chartConfig.chip.enabled) return;
+  if (tryDrawChipProfileFromEngine(chart, s)) return;  // 引擎优先
+  // 回退：前端手动计算 chip_profile
+}
+```
+
+**引擎路径跳过条件**（任一满足则回退）：
+- 双周期模式且非主图
+- `chip_basis === "tick_accum_driver"`（分笔累计有 chip_tick_bins，需保留 B/S 颜色）
+- 十字光标悬停（需实时按锚点重算）
+- 无 `chip_profile` 数据
+- `performanceEngineMode === "python_legacy"`
+- bucket_step 配置不匹配
+
+**关键辅助函数**：
+| 函数 | 行号 | 作用 |
+|------|------|------|
+| `mapChartBarToKsAll()` | ~L19451 | 将主图 K 线映射到 kline_all 筹码底座 |
+| `chipTimeComparable()` | ~L19486 | 将时间字符串解析为可比毫秒（UTC） |
+| `chipTimeLe()` | ~L19500+ | 时间小于等于比较（支持毫秒和字符串回退） |
+
+### 4.3 筹码峰指标（chip_peak）
 
 - 局部最大值检测（严格大于左右邻居）
 - 延长线从筹码区左边缘画到 K 线图左边缘
 - 配置项：`peakLineEnabled`、`peakLineColor`、`peakLineWidth`、`peakLineStyle`
 
-### 4.3 参考锚点（peakRefMode）
+### 4.4 参考锚点（peakRefMode）
 
 | 值 | 说明 |
 |----|------|
@@ -184,11 +213,15 @@ fn chip_profile(session_id, cutoff_x, bucket_step):
 | `chipBucketStep` | float | 0.1 | 价格桶宽度（元） |
 | `chipStretchLevel` | int (1-20) | 5 | 对比度拉伸强度 |
 | `chipColor` | color | rgba(59,130,246,0.45) | 筹码填充色 |
+| `sColor` | color | rgba(34,197,94,0.78) | 左侧 S（绿）颜色 |
+| `bColor` | color | rgba(220,38,38,0.78) | 右侧 B（红）颜色 |
 | `peakLineEnabled` | bool | true | 筹码峰延长线开关 |
 | `peakRefMode` | string | latest_visible | 锚点参考模式 |
 | `peakLineColor` | color | #2563eb | 延长线颜色 |
 | `peakLineWidth` | float | 1.2 | 延长线粗细(px) |
 | `peakLineStyle` | string | dashed | 延长线线型 |
+| `chipPeakIndicatorDotColor` | color | #f59e0b | 筹码峰圆点颜色 |
+| `chipPeakIndicatorDotRadius` | float | 2.5 | 筹码峰圆点半径 |
 
 ---
 
