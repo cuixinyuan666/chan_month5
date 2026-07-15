@@ -1436,7 +1436,7 @@ class _KlineCompositePainter extends CustomPainter {
   }
 
   /// 主图跨段中枢框：复用合并框横向 [_combineFrameHSpan]，按层号取该层段序列产出的 KuaDuanFrame，
-  /// 画 ZD/ZG 半透明框 + 「K(n-1)跨段中枢·段数」标签。与合并框同层号、同色系。
+  /// 画 ZD/ZG 半透明框 + 「K(n-1)跨段中枢{序号}·段数」标签。与合并框同层号、同色系。
   /// 仅勾选时绘制；数据来自 Rust 已冻结段（无未来函数）。
   void _drawKuaduanOnMainChart(
     Canvas canvas,
@@ -1469,7 +1469,8 @@ class _KlineCompositePainter extends CustomPainter {
       fontSize: 9,
     );
 
-    for (final f in frames) {
+    for (var i = 0; i < frames.length; i++) {
+      final f = frames[i];
       if (f.x2 < viewport.viewXMin - 1 || f.x1 > viewport.viewXMax + 1) {
         continue;
       }
@@ -1487,9 +1488,11 @@ class _KlineCompositePainter extends CustomPainter {
       canvas.drawRect(rect, fill);
       canvas.drawRect(rect, stroke);
 
+      // 序号优先用 Rust seq（1-based）；缺省时用列表下标兜底
+      final seq = f.seq > 0 ? f.seq : (i + 1);
       final tp = TextPainter(
         text: TextSpan(
-          text: 'K${kn - 1}跨段中枢·${f.count}',
+          text: 'K${kn - 1}跨段中枢$seq·${f.count}',
           style: labelStyle,
         ),
         textDirection: TextDirection.ltr,

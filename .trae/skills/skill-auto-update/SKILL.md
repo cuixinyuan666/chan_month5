@@ -95,6 +95,7 @@ skill: <name>
 | `chan-chip-distribution` | `.trae/skills/chan-chip-distribution/SKILL.md` | `a_replay_trainer.py`（筹码数据源选择、kline_all 管理、chip_tick_bins 注入/下发）、`a_replay_core/a_perf_engine.py`（chip_profile 分桶）、`a_rust_core/src/lib.rs`（Rust 侧 chip_profile）、`a_replay_core/a_replay_kline_view.py`（volume_chip 视图）、前端筹码渲染/筹码峰指标 |
 | `chan-step-rhythm` | `.trae/skills/chan-step-rhythm/SKILL.md` | `a_replay_trainer.py`（节奏线副图计算、bundle 构建、前端渲染）、`chart_lazy_layers`（step_rhythm 懒加载）、`rhythm_calc_mode` 三种计算模式 |
 | `chan-adjacent-bi-ratio` | `.trae/skills/chan-adjacent-bi-ratio/SKILL.md` | `a_replay_trainer.py`（相邻笔比例副图计算、前端渲染）、`chart_lazy_layers`（adjacent_bi_ratio 懒加载）、旧版 `retrace_ratio/trend_ratio` 兼容映射 |
+| `chan-zhongshu` | `.trae/skills/chan-zhongshu/SKILL.md` | `ZS/ZS.py`（CZS 数据结构）、`ZS/ZSList.py`（CZSList 计算主流程 cal_bi_zs）、`ZS/ZSConfig.py`（CZSConfig 配置）、`KLine/KLine_List.py`（cal_seg_and_zs / update_zs_in_seg）、`a_replay_trainer.py`（build_level_zs / serialize_zs_collection / chart_lazy_zs_enabled / zs_levels）、`a_rust_core/chan-core/src/zs.rs`（Rust 侧 Zs/ZsList）、前端 drawZsRects 渲染、payload 字段 fract_zs/bi_zs/seg_zs/segseg_zs/extra_zs |
 | `skill-auto-update` | `.trae/skills/skill-auto-update/SKILL.md` | 所有 `SKILL.md` 文件（自身） |
 
 ---

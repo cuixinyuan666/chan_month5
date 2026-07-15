@@ -228,6 +228,14 @@ class AppDebugSnapshot {
       buf.writeln(
         'K${lv.level}：跨段中枢框 kuaduan_frames=${lv.kuaduanFrames.length}',
       );
+      // 列出本层各框序号·段数与 x 区间，便于核对合并/延伸
+      for (var i = 0; i < lv.kuaduanFrames.length; i++) {
+        final f = lv.kuaduanFrames[i];
+        final seq = f.seq > 0 ? f.seq : (i + 1);
+        buf.writeln(
+          '  #${seq} count=${f.count} x=[${f.x1},${f.x2}] ZD/ZG=${f.high}/${f.low}',
+        );
+      }
     }
     buf.writeln();
   }

@@ -39,9 +39,10 @@ pub struct KuaDuan {
 }
 
 impl KuaDuan {
-    /// 与「合并框」同构的 overlap 判定：段 u 的价格区间与 [ZD, ZG] 相交即重叠。
+    /// 段 u 与中枢价格区间 [ZG, ZD] 相交即重叠（ZG=下沿=max(low)，ZD=上沿=min(high)）。
+    /// 标准区间相交：u.high ≥ ZG 且 u.low ≤ ZD（切勿写成包住中枢）。
     fn overlaps(&self, u: &LevelSegment) -> bool {
-        u.high >= self.zd && u.low <= self.zg
+        u.high >= self.zg && u.low <= self.zd
     }
 
     /// 跨段中枢宽度（ZG - ZD），统一 ML 特征（与分型确认/极点距/截断同列）。
@@ -56,7 +57,7 @@ impl KuaDuan {
 }
 
 /// 吸收器 B（跨段中枢）：种子 = 连续 3 段互相重叠（max(low) ≤ min(high)）；
-/// 后续段仍与 [ZD, ZG] 重叠则延伸 `end`，重算 ZG/ZD/GG/DD。
+/// 后续段仍与 [ZG, ZD] 相交则延伸 `end`，重算 ZG/ZD/GG/DD。
 /// 镜像 `MergedGroup::absorb`，只换判定函数。无未来函数：只看已冻结段。
 ///
 /// 段序列应已排除未冻结占位（pending/active），调用方传入 `lv.segments` 即可。
@@ -85,7 +86,7 @@ pub fn find_kuaduan(segs: &[LevelSegment], level: i32) -> Vec<KuaDuan> {
                 extend: 0,
             };
             let mut j = i + 3;
-            // 延伸：下一段仍与 [ZD, ZG] 重叠则纳入，重算极值
+            // 延伸：下一段仍与 [ZG, ZD] 相交则纳入，重算极值
             while j < segs.len() && kuaduan.overlaps(&segs[j]) {
                 kuaduan.zg = kuaduan.zg.max(segs[j].low);
                 kuaduan.zd = kuaduan.zd.min(segs[j].high);
@@ -120,6 +121,8 @@ pub fn build_kuaduan_for_levels(levels: &[LevelBundleOut]) -> Vec<Vec<KuaDuan>> 
 /// 跨段中枢上沿 ZD=min(各段 high) 为更高价，下沿 ZG=max(各段 low) 为更低价 → high=ZD, low=ZG。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct KuaDuanFrame {
+    /// 本层跨段中枢序号（1-based，按时间先后）
+    pub seq: i32,
     /// 主图 x 区间（已锚定 1 分钟 K）：取首/末段极点 K
     pub x1: i32,
     pub x2: i32,
@@ -137,10 +140,12 @@ pub struct KuaDuanFrame {
 pub fn kuaduan_to_frames(kuaduan_list: &[KuaDuan], segment_by_idx: &std::collections::HashMap<i64, &LevelSegment>) -> Vec<KuaDuanFrame> {
     kuaduan_list
         .iter()
-        .filter_map(|kuaduan| {
+        .enumerate()
+        .filter_map(|(i, kuaduan)| {
             let s = segment_by_idx.get(&kuaduan.start_idx)?;
             let e = segment_by_idx.get(&kuaduan.end_idx)?;
             Some(KuaDuanFrame {
+                seq: (i + 1) as i32,
                 x1: s.begin_pole_x.min(e.begin_pole_x),
                 x2: s.end_pole_x.max(e.end_pole_x),
                 high: kuaduan.zd,
@@ -238,6 +243,33 @@ mod tests {
         assert_eq!(kuaduan[0].zd, 20.0); // min(20,22,21,25,26)
         assert_eq!(kuaduan[0].gg, 26.0);
         assert_eq!(kuaduan[0].dd, 10.0);
+    }
+
+    /// 回归：段与中枢「部分相交」也应延伸（勿要求段包住整个 [ZG,ZD]）。
+    /// 复现 002003 上「·3 与 ·4 误拆」：种子 [12.13,12.25]，下一段 H=12.18 L=12.08 相交但不包住。
+    #[test]
+    fn find_kuaduan_extends_on_partial_overlap() {
+        let segs = vec![
+            mk_seg(11, -1, 12.25, 12.13),
+            mk_seg(12, 1, 12.33, 12.13),
+            mk_seg(13, -1, 12.33, 12.08),
+            // 与种子 [ZG=12.13,ZD=12.25] 相交于 [12.13,12.18]，但不包住上沿
+            mk_seg(14, 1, 12.18, 12.08),
+            mk_seg(15, -1, 12.18, 12.10),
+            mk_seg(16, 1, 12.17, 12.10),
+            mk_seg(17, -1, 12.17, 11.98),
+            // 脱离：与收窄后的中枢不再相交
+            mk_seg(18, 1, 12.08, 11.98),
+        ];
+        let kuaduan = find_kuaduan(&segs, 1);
+        assert_eq!(kuaduan.len(), 1, "部分相交应并成一个跨段中枢，不得拆成 ·3+·4");
+        assert_eq!(kuaduan[0].start_idx, 11);
+        assert_eq!(kuaduan[0].end_idx, 17);
+        assert_eq!(kuaduan[0].extend, 4);
+        let frames = level_kuaduan_frames(&segs, 1);
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].seq, 1);
+        assert_eq!(frames[0].count, 7);
     }
 
     #[test]

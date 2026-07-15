@@ -1,6 +1,8 @@
 /// 跨段中枢镜像框（Rust `KuaDuanFrame`；展示名「K(n-1)跨段中枢」）。
 /// 字段与 `KlineCombineFrame` 对齐：x 锚定 1 分钟 K，`high`=ZD 上沿(更高价)、`low`=ZG 下沿(更低价)。
 class KuaDuanFrame {
+  /// 本层跨段中枢序号（1-based，按时间先后）
+  final int seq;
   final int x1;
   final int x2;
   final double high; // ZD 上沿（更高价）
@@ -9,6 +11,7 @@ class KuaDuanFrame {
   final int count; // 覆盖段数（种子3 + 延伸）
 
   const KuaDuanFrame({
+    this.seq = 0,
     required this.x1,
     required this.x2,
     required this.high,
@@ -19,6 +22,7 @@ class KuaDuanFrame {
 
   factory KuaDuanFrame.fromJson(Map<String, dynamic> json) {
     return KuaDuanFrame(
+      seq: (json['seq'] as num?)?.toInt() ?? 0,
       x1: (json['x1'] as num?)?.toInt() ?? 0,
       x2: (json['x2'] as num?)?.toInt() ?? 0,
       high: (json['high'] as num?)?.toDouble() ?? 0,
