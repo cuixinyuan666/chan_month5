@@ -280,18 +280,14 @@ impl MergedGroup {
         }
     }
 
-    /// 包含吸收（一字线特殊口径与旧实现一致）
+    /// 包含吸收：Up 取高高/高低，Down 取低高/低低（一字线不再特殊跳过）
     fn absorb(&mut self, u: &MergeUnit) {
         if self.dir == MergeDir::Up {
-            if (u.high - u.low).abs() > 1e-12 || (u.high - self.high).abs() > 1e-12 {
-                self.high = self.high.max(u.high);
-                self.low = self.low.max(u.low);
-            }
+            self.high = self.high.max(u.high);
+            self.low = self.low.max(u.low);
         } else if self.dir == MergeDir::Down {
-            if (u.high - u.low).abs() > 1e-12 || (u.low - self.low).abs() > 1e-12 {
-                self.high = self.high.min(u.high);
-                self.low = self.low.min(u.low);
-            }
+            self.high = self.high.min(u.high);
+            self.low = self.low.min(u.low);
         }
         self.x2 = u.x2;
         self.last_uid = u.uid;
@@ -536,6 +532,32 @@ mod tests {
         let snap = eng.snapshot_for(1).unwrap();
         assert_eq!(snap.inner_seq, 1);
         assert_eq!(snap.group_count, 2);
+    }
+
+    /// Up 组合并同高一字线：应按高低=max 抬低点（不再跳过一字线）
+    #[test]
+    fn up_absorb_same_high_doji_lifts_low() {
+        let mut eng = CombineEngine::new();
+        eng.feed(&unit(0, 11.93, 11.92)); // Down 前缀
+        eng.feed(&unit(1, 11.96, 11.95)); // Up 新组
+        eng.feed(&unit(2, 11.96, 11.96)); // 同高一字线
+        let g = &eng.groups()[1];
+        assert_eq!((g.x1, g.x2), (1, 2));
+        assert!((g.high - 11.96).abs() < 1e-12);
+        assert!((g.low - 11.96).abs() < 1e-12, "应抬成一字价 low={}", g.low);
+    }
+
+    /// Down 组合并同低一字线：应按高低=min 压高点
+    #[test]
+    fn down_absorb_same_low_doji_lowers_high() {
+        let mut eng = CombineEngine::new();
+        eng.feed(&unit(0, 12.0, 11.9));
+        eng.feed(&unit(1, 11.8, 11.7)); // Down 新组
+        eng.feed(&unit(2, 11.7, 11.7)); // 同低一字线
+        let g = &eng.groups()[1];
+        assert_eq!((g.x1, g.x2), (1, 2));
+        assert!((g.high - 11.7).abs() < 1e-12, "应压成一字价 high={}", g.high);
+        assert!((g.low - 11.7).abs() < 1e-12);
     }
 
     #[test]

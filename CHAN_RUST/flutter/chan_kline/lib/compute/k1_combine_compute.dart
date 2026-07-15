@@ -214,19 +214,13 @@ List<KlineCombineFrame> computeK1CombineFrames(
         continue;
       }
 
-      // 常规包含吸收（doji 保护与 Rust absorb 一致）
+      // 常规包含吸收：Up 高高/高低，Down 低高/低低（与 Rust absorb 一致，一字线不特殊跳过）
       if (dirs[last] == 'DOWN') {
-        if ((b.high - b.low).abs() > 1e-12 ||
-            (b.low - lows[last]).abs() > 1e-12) {
-          highs[last] = math.min(highs[last], b.high);
-          lows[last] = math.min(lows[last], b.low);
-        }
+        highs[last] = math.min(highs[last], b.high);
+        lows[last] = math.min(lows[last], b.low);
       } else {
-        if ((b.high - b.low).abs() > 1e-12 ||
-            (b.high - highs[last]).abs() > 1e-12) {
-          highs[last] = math.max(highs[last], b.high);
-          lows[last] = math.max(lows[last], b.low);
-        }
+        highs[last] = math.max(highs[last], b.high);
+        lows[last] = math.max(lows[last], b.low);
       }
       x2s[last] = v.viewX2;
       t2s[last] = t2;
