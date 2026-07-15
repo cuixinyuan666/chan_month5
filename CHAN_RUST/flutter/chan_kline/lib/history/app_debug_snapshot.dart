@@ -61,7 +61,9 @@ class AppDebugSnapshot {
     );
     buf.writeln(
       '十字线 tooltip 走 bar_features.levels[] 各层 LevelSnap；'
-      '进行中单元可只读探测上层合并态（仅展示）；主图连线可含末态展示修正。',
+      '进行中单元可只读探测上层合并态（仅展示）；主图连线可含末态展示修正。'
+      '十字线开启时：K0合并/K1合并/Kn跨段中枢与逐步口径对齐，本地 as-of 重算框；'
+      '关闭十字线仍画 Rust 末态 frames。',
     );
     buf.writeln(
       '十字线 tooltip：两列表格对齐（日期时间/K0/Kn 分层，==== 分隔）；'
@@ -233,7 +235,7 @@ class AppDebugSnapshot {
         final f = lv.kuaduanFrames[i];
         final seq = f.seq > 0 ? f.seq : (i + 1);
         buf.writeln(
-          '  #${seq} count=${f.count} x=[${f.x1},${f.x2}] ZD/ZG=${f.high}/${f.low}',
+          '  #$seq count=${f.count} x=[${f.x1},${f.x2}] ZD/ZG=${f.high}/${f.low}',
         );
       }
     }

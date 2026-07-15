@@ -5,10 +5,13 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../compute/k0_combine_compute.dart';
 import '../compute/k1_combine_compute.dart';
 import '../compute/k1_bar_view_compute.dart';
 import '../compute/chart_view_compute.dart';
+import '../compute/kuaduan_compute.dart';
 import '../compute/level_unit_bar_view_compute.dart';
+import '../models/kuaduan_frame.dart';
 import '../models/k0_confirm_signal.dart';
 import '../models/bar_crosshair_feature.dart';
 import '../models/k0_line.dart';
@@ -229,6 +232,20 @@ class _KlineChartState extends State<KlineChart> {
     }
     final asOfBars = _asOfK1Bars();
     return buildK1BarViews(asOfBars);
+  }
+
+  /// 十字线开启时按当步分钟 K 重建K0合并框（与 k0_combine 逐步口径对齐）。
+  List<KlineCombineFrame> get _effectiveK0CombineFrames {
+    if (!_crosshairEnabled || _crosshairBarIdx == null) {
+      return widget.combineFrames;
+    }
+    final asOf = _crosshairAsOfIdx();
+    final barsSlice = widget.bars.where((b) => b.idx <= asOf).toList();
+    if (barsSlice.isEmpty) return const [];
+    return computeK0CombineFrames(
+      barsSlice,
+      truncationCheck: widget.truncationCheck,
+    );
   }
 
   /// 十字线开启时按当步K1 bar 重建K1合并框（与 k1_combine 逐步口径对齐）。
@@ -655,7 +672,7 @@ class _KlineChartState extends State<KlineChart> {
               size: Size(w, mainH + volH),
               painter: _KlineCompositePainter(
                 bars: widget.bars,
-                combineFrames: widget.combineFrames,
+                combineFrames: _effectiveK0CombineFrames,
                 k0ConfirmSignals: widget.k0ConfirmSignals,
                 barFeatures: widget.barFeatures,
                 k0Lines: widget.k0Lines,
@@ -1437,7 +1454,7 @@ class _KlineCompositePainter extends CustomPainter {
 
   /// 主图跨段中枢框：复用合并框横向 [_combineFrameHSpan]，按层号取该层段序列产出的 KuaDuanFrame，
   /// 画 ZD/ZG 半透明框 + 「K(n-1)跨段中枢{序号}·段数」标签。与合并框同层号、同色系。
-  /// 仅勾选时绘制；数据来自 Rust 已冻结段（无未来函数）。
+  /// 十字线 as-of：只认已冻结段本地重算；关十字线用 Rust 末态框。
   void _drawKuaduanOnMainChart(
     Canvas canvas,
     double w,
@@ -1455,7 +1472,18 @@ class _KlineCompositePainter extends CustomPainter {
       }
     }
     if (bundle == null) return;
-    final frames = bundle.kuaduanFrames;
+    final List<KuaDuanFrame> frames;
+    if (segAsOf != null) {
+      // as-of：只喂 endConfirmX<=asOf 的已冻结段，重跑松重叠吸收器
+      final segs = asOfLevelSegments(
+        levels: levels,
+        level: kn,
+        asOf: segAsOf!,
+      );
+      frames = computeKuaduanFrames(segs, kn);
+    } else {
+      frames = bundle.kuaduanFrames;
+    }
     if (frames.isEmpty) return;
 
     final style = ChartLevelLineStyle.forLevel(kn);
