@@ -148,6 +148,8 @@ class AppDebugSnapshot {
 
     _writeLevels(buf, levels);
     _writeKuaDuan(buf, levels);
+    _writeZS(buf, levels);
+    _writeBSP(buf, levels);
     _writeDllDiag(buf, barFeatures, levels);
     _writeTailBarFeature(buf, visibleBars, barFeatures);
     _writeK0Confirms(buf, k0Confirms);
@@ -236,6 +238,53 @@ class AppDebugSnapshot {
         final seq = f.seq > 0 ? f.seq : (i + 1);
         buf.writeln(
           '  #$seq count=${f.count} x=[${f.x1},${f.x2}] ZD/ZG=${f.high}/${f.low}',
+        );
+      }
+    }
+    buf.writeln();
+  }
+
+  static void _writeZS(StringBuffer buf, List<LevelBundle> levels) {
+    buf.writeln('【原生中枢统计】');
+    if (levels.isEmpty) {
+      buf.writeln('（无 levels 输出）');
+      buf.writeln();
+      return;
+    }
+    for (final lv in levels) {
+      buf.writeln(
+        'K${lv.level}：原生中枢框 zs_frames=${lv.zsFrames.length}',
+      );
+      // 列出本层各框序号·段数与 x 区间，便于核对原生中枢成区/延伸/九段升级
+      for (var i = 0; i < lv.zsFrames.length; i++) {
+        final f = lv.zsFrames[i];
+        final seq = f.seq > 0 ? f.seq : (i + 1);
+        buf.writeln(
+          '  #$seq count=${f.count} x=[${f.x1},${f.x2}] ZD/ZG=${f.high}/${f.low}'
+          '${f.isNineSegUpgrade ? ' 9段升级' : ''}${f.isOneBiZs ? ' 单段' : ''}',
+        );
+      }
+    }
+    buf.writeln();
+  }
+
+  static void _writeBSP(StringBuffer buf, List<LevelBundle> levels) {
+    buf.writeln('【三类买卖点统计】');
+    if (levels.isEmpty) {
+      buf.writeln('（无 levels 输出）');
+      buf.writeln();
+      return;
+    }
+    for (final lv in levels) {
+      buf.writeln(
+        'K${lv.level}：买卖点 bsp_frames=${lv.bspFrames.length}',
+      );
+      // 列出本层各买卖点：类/买卖/价位/x/段idx/关联一类段idx，便于核对与中枢、段端点对齐
+      for (final f in lv.bspFrames) {
+        final kind = '${f.isBuy ? "买" : "卖"}${f.cls}';
+        final rel = f.relateSegIdx == null ? '—' : f.relateSegIdx.toString();
+        buf.writeln(
+          '  $kind 价=${f.price} x=${f.x} seg=${f.segIdx} 关联一类seg=$rel',
         );
       }
     }

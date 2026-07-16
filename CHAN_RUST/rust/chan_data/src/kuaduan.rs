@@ -1,10 +1,10 @@
-//! 跨段中枢（KuaDuan）模块：复用流水线 `LevelSegment` 区间，用「松重叠吸收器」找到全层跨段中枢。
+//! 跨段中枢（KuaDuanV1）模块：复用流水线 `LevelSegment` 区间，用「松重叠吸收器」找到全层跨段中枢。
 //!
 //! 设计理念（与现有 combine/line 全层同构）：
 //! 现有包含合并 `CombineEngine` 本质是一台「区间吸收器」——判定函数=严格包含 → 产出下一层段。
 //! 跨段中枢是同一台吸收器的「松重叠孪生」——判定函数换成「≥3 连续段区间互相重叠」→ 产出跨段中枢。
-//! 因此 KuaDuan 不新造数据结构，直接吃每层 `segments`；判定只看已冻结段，天然无未来函数
-//! （与「逐K当下性」同源：段端点冻结后才进 KuaDuan 计算）。
+//! 因此 KuaDuanV1 不新造数据结构，直接吃每层 `segments`；判定只看已冻结段，天然无未来函数
+//! （与「逐K当下性」同源：段端点冻结后才进 KuaDuanV1 计算）。
 //!
 //! 与「统一层号」对齐：K0跨段中枢建立在 level=1 的段上（展示名 K0跨段中枢），
 //! K1跨段中枢建立在 level=2 的段上（展示名 K1跨段中枢），与其余 combine/line/fractal 同号。
@@ -15,7 +15,7 @@ use crate::pipeline::{LevelBundleOut, LevelSegment};
 
 /// 跨段中枢：由某层 ≥3 连续重叠段聚合（段区间即 `LevelSegment.high/low`）。
 #[derive(Debug, Clone, PartialEq)]
-pub struct KuaDuan {
+pub struct KuaDuanV1 {
     /// 建立在第 n 层段之上（= 输入 segments 的 level，与 combine/line/fractal 同号）
     pub level: i32,
     /// 首段 idx（锚定上层单元序号，便于 Flutter/ML 回查）
@@ -38,7 +38,7 @@ pub struct KuaDuan {
     pub extend: usize,
 }
 
-impl KuaDuan {
+impl KuaDuanV1 {
     /// 段 u 与中枢价格区间 [ZG, ZD] 相交即重叠（ZG=下沿=max(low)，ZD=上沿=min(high)）。
     /// 标准区间相交：u.high ≥ ZG 且 u.low ≤ ZD（切勿写成包住中枢）。
     fn overlaps(&self, u: &LevelSegment) -> bool {
@@ -61,7 +61,7 @@ impl KuaDuan {
 /// 镜像 `MergedGroup::absorb`，只换判定函数。无未来函数：只看已冻结段。
 ///
 /// 段序列应已排除未冻结占位（pending/active），调用方传入 `lv.segments` 即可。
-pub fn find_kuaduan(segs: &[LevelSegment], level: i32) -> Vec<KuaDuan> {
+pub fn find_kuaduan_v1(segs: &[LevelSegment], level: i32) -> Vec<KuaDuanV1> {
     let mut out = Vec::new();
     if segs.len() < 3 {
         return out;
@@ -73,7 +73,7 @@ pub fn find_kuaduan(segs: &[LevelSegment], level: i32) -> Vec<KuaDuan> {
         let zg = a.low.max(b.low).max(c.low); // 最高的低
         let zd = a.high.min(b.high).min(c.high); // 最低的高
         if zg <= zd {
-            let mut kuaduan = KuaDuan {
+            let mut kuaduan = KuaDuanV1 {
                 level,
                 start_idx: a.idx,
                 end_idx: c.idx,
@@ -109,10 +109,10 @@ pub fn find_kuaduan(segs: &[LevelSegment], level: i32) -> Vec<KuaDuan> {
 
 /// 接入 `run_pipeline` 产物：每层段序列 → 该层跨段中枢（复用全层输出，零重算）。
 /// 与「统一层号」一致：K0跨段中枢 level=1 → 展示名 K0跨段中枢；K1跨段中枢 level=2 → K1跨段中枢。
-pub fn build_kuaduan_for_levels(levels: &[LevelBundleOut]) -> Vec<Vec<KuaDuan>> {
+pub fn build_kuaduan_v1_for_levels(levels: &[LevelBundleOut]) -> Vec<Vec<KuaDuanV1>> {
     levels
         .iter()
-        .map(|lv| find_kuaduan(&lv.segments, lv.level))
+        .map(|lv| find_kuaduan_v1(&lv.segments, lv.level))
         .collect()
 }
 
@@ -120,7 +120,7 @@ pub fn build_kuaduan_for_levels(levels: &[LevelBundleOut]) -> Vec<Vec<KuaDuan>> 
 /// `high`/`low` 沿用合并框的「价格轴约定」：high ≥ low（更高价=上沿）。
 /// 跨段中枢上沿 ZD=min(各段 high) 为更高价，下沿 ZG=max(各段 low) 为更低价 → high=ZD, low=ZG。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct KuaDuanFrame {
+pub struct KuaDuanV1Frame {
     /// 本层跨段中枢序号（1-based，按时间先后）
     pub seq: i32,
     /// 主图 x 区间（已锚定 1 分钟 K）：取首/末段极点 K
@@ -137,14 +137,14 @@ pub struct KuaDuanFrame {
 }
 
 /// 跨段中枢 → 镜像框（Flutter 直接复用合并框渲染管线）。
-pub fn kuaduan_to_frames(kuaduan_list: &[KuaDuan], segment_by_idx: &std::collections::HashMap<i64, &LevelSegment>) -> Vec<KuaDuanFrame> {
+pub fn kuaduan_v1_to_frames(kuaduan_list: &[KuaDuanV1], segment_by_idx: &std::collections::HashMap<i64, &LevelSegment>) -> Vec<KuaDuanV1Frame> {
     kuaduan_list
         .iter()
         .enumerate()
         .filter_map(|(i, kuaduan)| {
             let s = segment_by_idx.get(&kuaduan.start_idx)?;
             let e = segment_by_idx.get(&kuaduan.end_idx)?;
-            Some(KuaDuanFrame {
+            Some(KuaDuanV1Frame {
                 seq: (i + 1) as i32,
                 x1: s.begin_pole_x.min(e.begin_pole_x),
                 x2: s.end_pole_x.max(e.end_pole_x),
@@ -158,9 +158,9 @@ pub fn kuaduan_to_frames(kuaduan_list: &[KuaDuan], segment_by_idx: &std::collect
 }
 
 /// 由单层段序列直接产出该层跨段中枢镜像框。
-/// 复用 `find_kuaduan` + `kuaduan_to_frames`，只吃已冻结段 → 无未来函数（与「逐K当下性」同源）。
+/// 复用 `find_kuaduan_v1` + `kuaduan_v1_to_frames`，只吃已冻结段 → 无未来函数（与「逐K当下性」同源）。
 /// 供 `run_pipeline` 的 `export()` 逐层挂载，Flutter 直接渲染。
-pub fn level_kuaduan_frames(segments: &[LevelSegment], level: i32) -> Vec<KuaDuanFrame> {
+pub fn level_kuaduan_v1_frames(segments: &[LevelSegment], level: i32) -> Vec<KuaDuanV1Frame> {
     if segments.len() < 3 {
         return Vec::new();
     }
@@ -168,8 +168,8 @@ pub fn level_kuaduan_frames(segments: &[LevelSegment], level: i32) -> Vec<KuaDua
         .iter()
         .map(|s| (s.idx, s))
         .collect();
-    let kuaduan = find_kuaduan(segments, level);
-    kuaduan_to_frames(&kuaduan, &segment_by_idx)
+    let kuaduan = find_kuaduan_v1(segments, level);
+    kuaduan_v1_to_frames(&kuaduan, &segment_by_idx)
 }
 
 #[cfg(test)]
@@ -204,7 +204,7 @@ mod tests {
     }
 
     #[test]
-    fn find_kuaduan_two_disjoint_groups() {
+    fn find_kuaduan_v1_two_disjoint_groups() {
         // K0跨段中枢（level=1）：两组各 3 段互相重叠，中间被一段隔开
         let segs = vec![
             mk_seg(0, 1, 20.0, 10.0),
@@ -215,7 +215,7 @@ mod tests {
             mk_seg(5, 1, 42.0, 32.0),
             mk_seg(6, 1, 41.0, 31.0),
         ];
-        let kuaduan = find_kuaduan(&segs, 1);
+        let kuaduan = find_kuaduan_v1(&segs, 1);
         assert_eq!(kuaduan.len(), 2, "应检出 2 个K0跨段中枢");
         assert_eq!(kuaduan[0].zg, 12.0); // max(low)=12
         assert_eq!(kuaduan[0].zd, 20.0); // min(high)=20
@@ -225,7 +225,7 @@ mod tests {
     }
 
     #[test]
-    fn find_kuaduan_extend_counts_extra_segments() {
+    fn find_kuaduan_v1_extend_counts_extra_segments() {
         // 5 段连续重叠 → 1 个跨段中枢，extend=2
         let segs = vec![
             mk_seg(0, 1, 20.0, 10.0),
@@ -235,7 +235,7 @@ mod tests {
             mk_seg(4, 1, 26.0, 10.0), // 重叠 → 延伸
             mk_seg(5, 1, 40.0, 30.0), // 脱离
         ];
-        let kuaduan = find_kuaduan(&segs, 1);
+        let kuaduan = find_kuaduan_v1(&segs, 1);
         assert_eq!(kuaduan.len(), 1);
         assert_eq!(kuaduan[0].extend, 2, "种子外应有 2 段延伸");
         assert_eq!(kuaduan[0].end_idx, 4);
@@ -248,7 +248,7 @@ mod tests {
     /// 回归：段与中枢「部分相交」也应延伸（勿要求段包住整个 [ZG,ZD]）。
     /// 复现 002003 上「·3 与 ·4 误拆」：种子 [12.13,12.25]，下一段 H=12.18 L=12.08 相交但不包住。
     #[test]
-    fn find_kuaduan_extends_on_partial_overlap() {
+    fn find_kuaduan_v1_extends_on_partial_overlap() {
         let segs = vec![
             mk_seg(11, -1, 12.25, 12.13),
             mk_seg(12, 1, 12.33, 12.13),
@@ -261,25 +261,25 @@ mod tests {
             // 脱离：与收窄后的中枢不再相交
             mk_seg(18, 1, 12.08, 11.98),
         ];
-        let kuaduan = find_kuaduan(&segs, 1);
+        let kuaduan = find_kuaduan_v1(&segs, 1);
         assert_eq!(kuaduan.len(), 1, "部分相交应并成一个跨段中枢，不得拆成 ·3+·4");
         assert_eq!(kuaduan[0].start_idx, 11);
         assert_eq!(kuaduan[0].end_idx, 17);
         assert_eq!(kuaduan[0].extend, 4);
-        let frames = level_kuaduan_frames(&segs, 1);
+        let frames = level_kuaduan_v1_frames(&segs, 1);
         assert_eq!(frames.len(), 1);
         assert_eq!(frames[0].seq, 1);
         assert_eq!(frames[0].count, 7);
     }
 
     #[test]
-    fn find_kuaduan_less_than_three_returns_empty() {
+    fn find_kuaduan_v1_less_than_three_returns_empty() {
         let segs = vec![mk_seg(0, 1, 20.0, 10.0), mk_seg(1, 1, 22.0, 12.0)];
-        assert!(find_kuaduan(&segs, 1).is_empty());
+        assert!(find_kuaduan_v1(&segs, 1).is_empty());
     }
 
     #[test]
-    fn build_kuaduan_for_levels_maps_each_level() {
+    fn build_kuaduan_v1_for_levels_maps_each_level() {
         // K0连线层（level=1）给一组重叠段；K1连线层（level=2）给另一组
         let lv1 = LevelBundleOut {
             level: 1,
@@ -292,6 +292,8 @@ mod tests {
             unit_bars: vec![],
             combine_frames: vec![],
             kuaduan_frames: vec![],
+            zs_frames: vec![],
+            bsp_frames: vec![],
             first_dir: 0,
             first_dir_x: 0,
             active_unit: None,
@@ -309,13 +311,15 @@ mod tests {
             unit_bars: vec![],
             combine_frames: vec![],
             kuaduan_frames: vec![],
+            zs_frames: vec![],
+            bsp_frames: vec![],
             first_dir: 0,
             first_dir_x: 0,
             active_unit: None,
             segment_policy: "pending".to_string(),
             pending_unit: None,
         };
-        let kuaduan_by_level = build_kuaduan_for_levels(&[lv1, lv2]);
+        let kuaduan_by_level = build_kuaduan_v1_for_levels(&[lv1, lv2]);
         assert_eq!(kuaduan_by_level.len(), 2);
         assert_eq!(kuaduan_by_level[0].len(), 1, "K0跨段中枢应命中");
         assert_eq!(kuaduan_by_level[0][0].level, 1);
@@ -341,13 +345,13 @@ mod tests {
             );
         }
 
-        // 1) K0跨段中枢：直接对真实 run_pipeline 产物（level=1 K0连线段）跑 KuaDuan
-        let kuaduan_by_level = build_kuaduan_for_levels(&res.levels);
+        // 1) K0跨段中枢：直接对真实 run_pipeline 产物（level=1 K0连线段）跑 KuaDuanV1
+        let kuaduan_by_level = build_kuaduan_v1_for_levels(&res.levels);
         assert_eq!(kuaduan_by_level.len(), res.levels.len());
         assert!(!kuaduan_by_level[0].is_empty(), "K0跨段中枢应跑通（真实 run_pipeline 产物）");
 
         // 1b) 验证 export() 已把跨段中枢框逐层挂到 LevelBundleOut.kuaduan_frames
-        //     （即 Flutter 实际收到的数据路径，而非仅 build_kuaduan_for_levels 离线计算）
+        //     （即 Flutter 实际收到的数据路径，而非仅 build_kuaduan_v1_for_levels 离线计算）
         assert!(
             !res.levels[0].kuaduan_frames.is_empty(),
             "level=1 的 kuaduan_frames 应非空（export 已挂载跨段中枢框）",
@@ -361,9 +365,9 @@ mod tests {
         );
 
         // 2) K1跨段中枢：把真实 run_pipeline 产出的K0连线段（LevelSegment）直接作为「K1连线层」输入，
-        //    验证 KuaDuan 模块对 level=2 段序列的离线处理（与 build_kuaduan_for_levels 同构路径）。
+        //    验证 KuaDuanV1 模块对 level=2 段序列的离线处理（与 build_kuaduan_v1_for_levels 同构路径）。
         //    注：本合成序列下，run_pipeline 的K1连线层因K0连线单元端点精确相等、合并退化为单组而未自产
-        //    K1连线（属流水线 segment 层行为，非 KuaDuan 模块问题）；此处用真实类型验证K1跨段中枢链路。
+        //    K1连线（属流水线 segment 层行为，非 KuaDuanV1 模块问题）；此处用真实类型验证K1跨段中枢链路。
         let lv1_segs = res.levels[0].segments.clone();
         assert!(lv1_segs.len() >= 3, "需足够K0连线段以构成K1跨段中枢");
         let lv2_bundle = LevelBundleOut {
@@ -373,13 +377,15 @@ mod tests {
             unit_bars: vec![],
             combine_frames: vec![],
             kuaduan_frames: vec![],
+            zs_frames: vec![],
+            bsp_frames: vec![],
             first_dir: 0,
             first_dir_x: 0,
             active_unit: None,
             segment_policy: "pending".to_string(),
             pending_unit: None,
         };
-        let kuaduan2 = build_kuaduan_for_levels(&[lv2_bundle]);
+        let kuaduan2 = build_kuaduan_v1_for_levels(&[lv2_bundle]);
         assert!(!kuaduan2[0].is_empty(), "K1跨段中枢应跑通（复用真实K0连线段作为K1连线层输入）");
         println!(
             "K1跨段中枢数={} 首跨段中枢[ZG={:.2},ZD={:.2},extend={}]",

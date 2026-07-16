@@ -1,5 +1,7 @@
+import 'bsp_frame.dart';
 import 'kline_combine_frame.dart';
 import 'kuaduan_frame.dart';
+import 'zs_frame.dart';
 
 /// 每根 K0 × 每层 Kn 十字线快照（Rust `LevelSnap`，逐K当下冻结）。
 class LevelSnap {
@@ -237,6 +239,8 @@ class LevelBundle {
   final List<LevelUnitBar> unitBars;
   final List<KlineCombineFrame> combineFrames;
   final List<KuaDuanFrame> kuaduanFrames;
+  final List<ZSFrame> zsFrames;
+  final List<BSPFrame> bspFrames;
   final int firstDir;
   final int firstDirX;
 
@@ -256,6 +260,8 @@ class LevelBundle {
     this.unitBars = const [],
     this.combineFrames = const [],
     this.kuaduanFrames = const [],
+    this.zsFrames = const [],
+    this.bspFrames = const [],
     this.firstDir = 0,
     this.firstDirX = -1,
     this.activeUnit,
@@ -281,6 +287,12 @@ class LevelBundle {
           .toList(),
       kuaduanFrames: (json['kuaduan_frames'] as List? ?? const [])
           .map((e) => KuaDuanFrame.fromJson(Map<String, dynamic>.from(e as Map)))
+          .toList(),
+      zsFrames: (json['zs_frames'] as List? ?? const [])
+          .map((e) => ZSFrame.fromJson(Map<String, dynamic>.from(e as Map)))
+          .toList(),
+      bspFrames: (json['bsp_frames'] as List? ?? const [])
+          .map((e) => BSPFrame.fromJson(Map<String, dynamic>.from(e as Map)))
           .toList(),
       firstDir: (json['first_dir'] as num?)?.toInt() ?? 0,
       firstDirX: (json['first_dir_x'] as num?)?.toInt() ?? -1,

@@ -106,4 +106,47 @@ class ChartLevelLineStyle {
 
   /// 图例短标签（连线展示名：内部 level → K(level-1)）
   static String shortLabel(int level) => 'K${level - 1}';
+
+  /// 原生中枢（ZS）专属配色（区别于跨段中枢 v1 蓝、连线色系），与合并/连线/跨段中枢同层同号。
+  static const _zsColors = <Color>[
+    Color(0xCCE11D48), // 展示 K0原生中枢（内部 level=1）：玫红
+    Color(0xCC0D9488), // 展示 K1原生中枢（内部 level=2）：青
+    Color(0xCC4F46E5), // 展示 K2原生中枢（内部 level=3）：靛
+    Color(0xCCEA580C), // 展示 K3原生中枢（内部 level=4）：赤橙
+    Color(0xCCDB2777), // 展示 K4原生中枢（内部 level=5）：品红
+    Color(0xCCA3E635), // 展示 K5原生中枢（内部 level=6）：黄绿
+  ];
+
+  /// 按内部 level 取原生中枢样式（level=1→K0原生中枢，2→K1原生中枢，…）。
+  static ChartLevelLineStyle forZS(int level) {
+    assert(level >= 1);
+    final i = (level - 1).clamp(0, _zsColors.length - 1);
+    final w = 1.9 + (level - 1) * 0.25;
+    return ChartLevelLineStyle(
+      color: _zsColors[i],
+      strokeWidth: w,
+      buildingStrokeWidth: w - 0.3,
+      buildingAlpha: 0.7,
+      buildingDashPattern: const [6, 4],
+    );
+  }
+
+  /// 三类买卖点（BSP）专属配色：买=红、卖=绿（涨红跌绿），三类用不同色阶区分。
+  /// cls=1/2/3 与 isBuy 组合出 6 色；主图点标记按类用不同形状（圆/三角/菱形）增强辨识。
+  static const _bspBuyColors = <Color>[
+    Color(0xFFE53935), // 一类买：红
+    Color(0xFFFB8C00), // 二类买：橙红
+    Color(0xFFFDD835), // 三类买：黄
+  ];
+  static const _bspSellColors = <Color>[
+    Color(0xFF43A047), // 一类卖：绿
+    Color(0xFF00ACC1), // 二类卖：青
+    Color(0xFF8E24AA), // 三类卖：紫
+  ];
+
+  /// 按类与买卖取买卖点颜色（cls 越界时夹到 1..3）。
+  static Color forBSP(int cls, bool isBuy) {
+    final i = (cls.clamp(1, 3) - 1);
+    return isBuy ? _bspBuyColors[i] : _bspSellColors[i];
+  }
 }

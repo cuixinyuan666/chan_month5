@@ -101,6 +101,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
   Set<MainChartIndicator> _mainIndicators = {
     const MainChartIndicator.combine(1),
     const MainChartIndicator.kuaduan(1),
+    const MainChartIndicator.zs(1),
+    const MainChartIndicator.bsp(1),
   };
   Set<SubChartIndicator> _subIndicators = {
     const SubChartIndicator.fractalConfirm(1),

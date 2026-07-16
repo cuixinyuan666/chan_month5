@@ -967,6 +967,14 @@ class _KlineCompositePainter extends CustomPainter {
           // 跨段中枢框：与合并/连线同号，kuaduan(n)=K(n-1)跨段中枢（K0跨段中枢）
           _drawKuaduanOnMainChart(
               canvas, size.width, plotTop, plotH, barW, slotW, ind.kn);
+        } else if (ind.kind == MainIndicatorKind.zs) {
+          // 原生中枢框：与合并/连线/跨段中枢同号，zs(n)=K(n-1)原生中枢（K0原生中枢）
+          _drawZSOnMainChart(
+              canvas, size.width, plotTop, plotH, barW, slotW, ind.kn);
+        } else if (ind.kind == MainIndicatorKind.bsp) {
+          // 三类买卖点：与合并/连线/跨段中枢/原生中枢同号，bsp(n)=K(n-1)买卖点（K0买卖点）
+          _drawBSPOnMainChart(
+              canvas, size.width, plotTop, plotH, barW, slotW, ind.kn);
         }
       }
     }
@@ -1527,6 +1535,174 @@ class _KlineCompositePainter extends CustomPainter {
       )..layout();
       tp.paint(canvas, Offset(rect.left + 2, rect.top + 1));
     }
+  }
+
+  /// 主图原生中枢框：复用合并框横向 [_combineFrameHSpan]，直接用 Rust 逐K末态产出的 ZSFrame
+  /// （pipeline export 每步都基于冻结段重算 zs_frames，已是「as-of 冻结」版本，无需 Dart 本地重算），
+  /// 画 ZD/ZG 半透明框 + 「K(n-1)原生中枢{序号}·段数」标签，九段升级追加标记。与跨段中枢同层号、独立色系。
+  void _drawZSOnMainChart(
+    Canvas canvas,
+    double w,
+    double plotTop,
+    double plotH,
+    double barW,
+    double slotW,
+    int kn,
+  ) {
+    LevelBundle? bundle;
+    for (final b in levels) {
+      if (b.level == kn) {
+        bundle = b;
+        break;
+      }
+    }
+    if (bundle == null) return;
+    // 原生中枢直接消费 Rust 末态框（逐K已重算），不做本地重算
+    final frames = bundle.zsFrames;
+    if (frames.isEmpty) return;
+
+    final style = ChartLevelLineStyle.forZS(kn);
+    final stroke = Paint()
+      ..color = style.color.withValues(alpha: 0.9)
+      ..strokeWidth = 1.4
+      ..style = PaintingStyle.stroke;
+    final fill = Paint()..color = style.color.withValues(alpha: 0.12);
+    final labelStyle = TextStyle(
+      color: style.color.withValues(alpha: 0.95),
+      fontSize: 9,
+    );
+
+    for (var i = 0; i < frames.length; i++) {
+      final f = frames[i];
+      if (f.x2 < viewport.viewXMin - 1 || f.x1 > viewport.viewXMax + 1) {
+        continue;
+      }
+      final (xLeft, xRight) = _combineFrameHSpan(f.x1, f.x2, w, slotW, barW);
+      final yHigh = priceRange.yOf(f.high, plotTop, plotH); // ZD 上沿
+      final yLow = priceRange.yOf(f.low, plotTop, plotH); // ZG 下沿
+      final top = math.min(yHigh, yLow);
+      final bottom = math.max(yHigh, yLow);
+
+      final rect = Rect.fromLTRB(
+        math.min(xLeft, xRight),
+        top,
+        math.max(xLeft, xRight),
+        bottom,
+      );
+      canvas.drawRect(rect, fill);
+      canvas.drawRect(rect, stroke);
+
+      // 序号优先用 Rust seq（1-based）；缺省时用列表下标兜底
+      final seq = f.seq > 0 ? f.seq : (i + 1);
+      final dirMark = f.dir > 0 ? '↑' : (f.dir < 0 ? '↓' : '');
+      final upgradeMark = f.isNineSegUpgrade ? '·9段升级' : '';
+      final tp = TextPainter(
+        text: TextSpan(
+          text: 'K${kn - 1}原生中枢$seq·${f.count}$dirMark$upgradeMark',
+          style: labelStyle,
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      tp.paint(canvas, Offset(rect.left + 2, rect.top + 1));
+    }
+  }
+
+  /// 主图三类买卖点：直接在 Rust 末态 `bsp_frames` 上画点标记（不做 Dart 本地重算）。
+  /// 买=红、卖=绿（涨红跌绿）；类用不同形状：一类圆、二类三角、三类菱形，并在旁标注「买N/卖N」与价位。
+  /// 与合并/连线/跨段中枢/原生中枢同层号。
+  void _drawBSPOnMainChart(
+    Canvas canvas,
+    double w,
+    double plotTop,
+    double plotH,
+    double barW,
+    double slotW,
+    int kn,
+  ) {
+    LevelBundle? bundle;
+    for (final b in levels) {
+      if (b.level == kn) {
+        bundle = b;
+        break;
+      }
+    }
+    if (bundle == null) return;
+    final frames = bundle.bspFrames;
+    if (frames.isEmpty) return;
+
+    const markerR = 4.5;
+    const labelStyle = TextStyle(fontSize: 9, fontWeight: FontWeight.w600);
+    for (final f in frames) {
+      if (f.x < viewport.viewXMin - 1 || f.x > viewport.viewXMax + 1) {
+        continue;
+      }
+      final cx = _barCenterX(f.x, w, slotW);
+      final cy = priceRange.yOf(f.price, plotTop, plotH);
+      final color = ChartLevelLineStyle.forBSP(f.cls, f.isBuy);
+      // 标签：买N/卖N + 价位，放点位右上方避免压住 K 线
+      final tag = '${f.isBuy ? "买" : "卖"}${f.cls}';
+      final tp = TextPainter(
+        text: TextSpan(
+          text: '$tag ${f.price.toStringAsFixed(2)}',
+          style: labelStyle.copyWith(color: color),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+
+      final fill = Paint()..color = color;
+      final stroke = Paint()
+        ..color = Colors.black.withValues(alpha: 0.55)
+        ..strokeWidth = 1.0;
+      final c = Offset(cx, cy);
+      switch (f.cls) {
+        case 1:
+          // 一类：实心圆
+          canvas.drawCircle(c, markerR, fill);
+          canvas.drawCircle(c, markerR, stroke);
+          break;
+        case 2:
+          // 二类：实心三角（买卖决定朝向）
+          _drawTriangle(canvas, c, markerR + 0.5, f.isBuy, fill, stroke);
+          break;
+        default:
+          // 三类：实心菱形
+          _drawDiamond(canvas, c, markerR + 0.5, fill, stroke);
+          break;
+      }
+
+      tp.paint(canvas, Offset(cx + markerR + 2, cy - tp.height - 1));
+    }
+  }
+
+  /// 画向上/向下实心三角（买卖点二类标记）。
+  void _drawTriangle(
+    Canvas canvas,
+    Offset c,
+    double r,
+    bool isUp,
+    Paint fill,
+    Paint stroke,
+  ) {
+    final dy = isUp ? -r : r;
+    final path = Path()
+      ..moveTo(c.dx, c.dy + dy)
+      ..lineTo(c.dx - r, c.dy - dy)
+      ..lineTo(c.dx + r, c.dy - dy)
+      ..close();
+    canvas.drawPath(path, fill);
+    canvas.drawPath(path, stroke);
+  }
+
+  /// 画实心菱形（买卖点三类标记）。
+  void _drawDiamond(Canvas canvas, Offset c, double r, Paint fill, Paint stroke) {
+    final path = Path()
+      ..moveTo(c.dx, c.dy - r)
+      ..lineTo(c.dx + r, c.dy)
+      ..lineTo(c.dx, c.dy + r)
+      ..lineTo(c.dx - r, c.dy)
+      ..close();
+    canvas.drawPath(path, fill);
+    canvas.drawPath(path, stroke);
   }
 
   /// Kn 单元线（淡色底层，仿K1 bar [_drawK1Candles]）。

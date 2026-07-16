@@ -16,8 +16,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::combine::KlineCombineFrame;
 use crate::engine::{CombineEngine, FxEvent, FxKind, MergeUnit, TruncGuard};
-use crate::kuaduan::KuaDuanFrame;
+use crate::kuaduan::KuaDuanV1Frame;
 use crate::kline::KlineBar;
+use crate::bsp::{BSPConfig, BSPFrame};
+use crate::zs::{ZSConfig, ZSFrame};
 use crate::segment_first::{
     build_pending_default_unit, resolve_segment_policy, reverse_pole_x, trial_first_segment,
     POLICY_PENDING, POLICY_PURGED, POLICY_RETAINED,
@@ -35,6 +37,10 @@ pub struct PipelineOptions {
     /// 截断监察开关（默认开启）：上行阶段暴力反转单元（最高价>=左框高 且 最低价<上个底分型低）
     /// 不被包含吸收，左框当场顶分型确认；下降截断镜像；全层同构
     pub truncation_check: bool,
+    /// 原生缠论中枢（ZS）配置：控制是否合并、合并模式、单段中枢、成中枢算法
+    pub zs_config: ZSConfig,
+    /// 三类买卖点（BSP）配置：趋势最少中枢数、二类回踩幅度、三类是否依附一类等
+    pub bsp_config: BSPConfig,
 }
 
 impl Default for PipelineOptions {
@@ -44,6 +50,8 @@ impl Default for PipelineOptions {
             max_levels: 16,
             first_segment_bootstrap: true,
             truncation_check: true,
+            zs_config: ZSConfig::default(),
+            bsp_config: BSPConfig::default(),
         }
     }
 }
@@ -198,7 +206,13 @@ pub struct LevelBundleOut {
     pub combine_frames: Vec<KlineCombineFrame>,
     /// 本层跨段中枢镜像框（K0跨段中枢 level=1 / K1跨段中枢 level=2 …；由 `kuaduan` 模块松重叠吸收器产出）
     #[serde(default)]
-    pub kuaduan_frames: Vec<KuaDuanFrame>,
+    pub kuaduan_frames: Vec<KuaDuanV1Frame>,
+    /// 本层原生缠论中枢镜像框（全层同构，建立在 `LevelSegment` 上；由 `zs` 模块产出）
+    #[serde(default)]
+    pub zs_frames: Vec<ZSFrame>,
+    /// 本层三类买卖点镜像框（全层同构，建立在 `LevelSegment`+`ZS` 上；由 `bsp` 模块产出）
+    #[serde(default)]
+    pub bsp_frames: Vec<BSPFrame>,
     /// 首 N 段方向：0 未定
     pub first_dir: i32,
     pub first_dir_x: i32,
@@ -440,6 +454,10 @@ struct LevelState {
     last_bottom_low: Option<f64>,
     /// 最近一次顶分型确认中组最高价（含同向丢弃/校验失败的；下降截断破坏参照价）
     last_top_high: Option<f64>,
+    /// 原生缠论中枢（ZS）配置（从 opt 拷贝，只读冻结段计算，不改动其它元素逻辑）
+    zs_config: ZSConfig,
+    /// 三类买卖点（BSP）配置（从 opt 拷贝，只读冻结段计算，不改动其它元素逻辑）
+    bsp_config: BSPConfig,
 }
 
 /// 有效性校验：顶极值 > 底极值（最低限度，可配置关闭）
@@ -458,6 +476,8 @@ impl LevelState {
             validity_check: opt.validity_check,
             first_segment_bootstrap: opt.first_segment_bootstrap,
             truncation_check: opt.truncation_check,
+            zs_config: opt.zs_config,
+            bsp_config: opt.bsp_config,
             engine: CombineEngine::new(),
             input_prefix: Vec::new(),
             segment_policy: POLICY_PENDING.to_string(),
@@ -884,13 +904,22 @@ impl LevelState {
         } else {
             None
         };
+        // 原生中枢列表只算一次，zs_frames 与 bsp_frames 共用（均只读冻结段，无未来函数）
+        let zs_list = crate::zs::find_zs(&self.segments, self.level, &self.zs_config);
         LevelBundleOut {
             level: self.level,
             confirms: self.confirms.clone(),
             segments: self.segments.clone(),
             unit_bars: self.unit_bars.clone(),
             combine_frames: frames_from_engine(&self.engine, bars),
-            kuaduan_frames: crate::kuaduan::level_kuaduan_frames(&self.segments, self.level),
+            kuaduan_frames: crate::kuaduan::level_kuaduan_v1_frames(&self.segments, self.level),
+            zs_frames: crate::zs::zs_frames_from_list(&zs_list, &self.segments, self.level),
+            bsp_frames: crate::bsp::level_bsp_frames(
+                &self.segments,
+                &zs_list,
+                self.level,
+                &self.bsp_config,
+            ),
             first_dir: self.first_dir,
             first_dir_x: self.first_dir_x,
             active_unit,

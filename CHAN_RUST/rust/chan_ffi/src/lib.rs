@@ -5,7 +5,7 @@ use std::ptr;
 
 use chan_data::{
     build_kline_combine_bundle_with, default_data_root, list_stock_codes, load_klines,
-    resolve_data_root, KlineBar, KlinePeriod, PipelineOptions,
+    resolve_data_root, BSPConfig, KlineBar, KlinePeriod, PipelineOptions, ZSConfig,
 };
 use serde::{Deserialize, Serialize};
 
@@ -136,6 +136,12 @@ struct CombineRequest {
     /// 缺省=开启截断（与 PipelineOptions::default 一致）
     #[serde(default)]
     truncation_check: Option<bool>,
+    /// 缺省=原生中枢默认配置（need_combine=true, zs 模式, 非单段, normal 算法）
+    #[serde(default)]
+    zs_config: Option<ZSConfig>,
+    /// 缺省=三类买卖点默认配置（趋势≥2中枢, 二类依附一类, 三类依附一类）
+    #[serde(default)]
+    bsp_config: Option<BSPConfig>,
 }
 
 fn parse_combine_request(raw: &str) -> Result<(Vec<KlineBar>, PipelineOptions), String> {
@@ -150,6 +156,12 @@ fn parse_combine_request(raw: &str) -> Result<(Vec<KlineBar>, PipelineOptions), 
     let mut opt = PipelineOptions::default();
     if let Some(v) = req.truncation_check {
         opt.truncation_check = v;
+    }
+    if let Some(z) = req.zs_config {
+        opt.zs_config = z;
+    }
+    if let Some(b) = req.bsp_config {
+        opt.bsp_config = b;
     }
     Ok((req.bars, opt))
 }

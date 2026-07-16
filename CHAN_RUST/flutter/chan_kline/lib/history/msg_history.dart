@@ -37,15 +37,18 @@ class MsgHistory {
     }
   }
 
-  /// 记录「中枢(ZS) → 跨段中枢(KuaDuan)」命名变更（进程内去重一次），
+  /// 记录「跨段中枢 v1 + 原生中枢(ZS)」命名变更（进程内去重一次），
   /// 便于调试时从历史记录追溯名称演进的完整过程。
   void appendNamingRename() {
     if (_namingRenameLogged) return;
     _namingRenameLogged = true;
     append(
-      '【命名变更】中枢(ZS) → 跨段中枢(KuaDuan)：'
-      'Rust 模块 zs→kuaduan（ZS→KuaDuan、ZSFrame→KuaDuanFrame、zs_frames→kuaduan_frames），'
-      '已重建 chan_ffi.dll；主图指标展示名 K(n-1)跨段中枢（K0跨段中枢、K1跨段中枢）。',
+      '【命名变更】跨段中枢 v1 + 原生中枢(ZS)：'
+      'Rust 模块跨段中枢 KuaDuan→KuaDuanV1（KuaDuan→KuaDuanV1、KuaDuanFrame→KuaDuanV1Frame，'
+      'kuaduan_frames JSON key 保持不变）；新增原生缠论中枢 ZS（ZS/ZSFrame，JSON key zs_frames），'
+      '由 Rust find_zs 在每层已冻结段上全层同构计算（≥3 连续重叠成中枢、离开-返回延伸、九段升级、combine 合并），'
+      '不引入 Python 式「笔」、不改动已有形态学元素逻辑；已重建 chan_ffi.dll；'
+      '主图指标新增「K(n-1)原生中枢」（K0原生中枢、K1原生中枢），与跨段中枢同层同号、独立色系。',
     );
     append(
       '【命名变更】笔/线段 → K0连线/K1连线：代码取消「笔/线段」概念，统一 K0/K1/…/KN。'
@@ -53,6 +56,15 @@ class MsgHistory {
       '（bi_segments→k0_lines、bi_combine_frames→k1_combine_frames、seg_lines→k1_lines）；'
       'Rust 类型 BiSegment→K0Line、BiVirtualBar→K1Bar、SegLine→K1Line、SegAnalysisBundle→K1AnalysisBundle；'
       '已重建 chan_ffi.dll；JSON key 同步变更。',
+    );
+    append(
+      '【命名变更】三类买卖点（BSP）：新增 Rust 模块 bsp（BSP/BSPConfig/BSPFrame，JSON key bsp_frames），'
+      '由 find_bsp 在每层已冻结段 + 同层原生中枢(ZS) 上全层同构计算；'
+      '背驰策略（用户决策）：纯结构趋势末端，不做 MACD/力度背驰——'
+      '一类=≥min_zs_cnt 个中枢构成趋势的末段端点，二类=一类后回踩不破一类极值，三类=一类后离开返回但不回中枢带[ZG,ZD]；'
+      '不引入 Python 式「笔」、不改动已有形态学元素逻辑；已重建 chan_ffi.dll；'
+      '主图指标新增「K(n-1)买卖点」（K0买卖点、K1买卖点），与跨段中枢/原生中枢同层同号、买红卖绿、'
+      '一类圆/二类三角/三类菱形区分。',
     );
   }
 
