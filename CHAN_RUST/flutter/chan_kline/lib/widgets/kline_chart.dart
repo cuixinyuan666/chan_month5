@@ -67,6 +67,7 @@ class KlineChart extends StatefulWidget {
     this.levels = const [],
     this.defaultK0Policy = 'pending',
     this.truncationCheck = true,
+    this.showBuildingCombine = true,
     this.onMainIndicatorsChanged,
     this.onSubIndicatorsChanged,
     this.indicatorsEnabled = true,
@@ -95,6 +96,8 @@ class KlineChart extends StatefulWidget {
   final String defaultK0Policy;
   /// 截断监察：十字线 as-of 本地重算K1合并时与 Rust 同开关
   final bool truncationCheck;
+  /// 构建中合并框（虚线）开关：开=末组合并画虚线（与构建中连线同口径）；关=全部实线
+  final bool showBuildingCombine;
   final ValueChanged<Set<MainChartIndicator>>? onMainIndicatorsChanged;
   final ValueChanged<Set<SubChartIndicator>>? onSubIndicatorsChanged;
   /// 无数据时禁止点主/副图指标入口
@@ -693,6 +696,7 @@ class _KlineChartState extends State<KlineChart> {
                 crosshairY: _crosshairY,
                 crosshairBarIdx: _crosshairBarIdx,
                 truncationCheck: widget.truncationCheck,
+                showBuildingCombine: widget.showBuildingCombine,
                 segAsOf: _crosshairEnabled && _crosshairBarIdx != null
                     ? _crosshairAsOfIdx()
                     : null,
@@ -880,6 +884,7 @@ class _KlineCompositePainter extends CustomPainter {
     required this.crosshairY,
     required this.crosshairBarIdx,
     this.truncationCheck = true,
+    this.showBuildingCombine = true,
     this.segAsOf,
   }) : featureLookup = BarFeatureLookup.build(
           bars: bars,
@@ -917,6 +922,8 @@ class _KlineCompositePainter extends CustomPainter {
   final int? crosshairBarIdx;
   /// 截断机制开关：关则不画 Kn截断副图
   final bool truncationCheck;
+  /// 构建中合并框（虚线）开关：开=末组合并画虚线；关=全部实线
+  final bool showBuildingCombine;
   /// 十字线 as-of 2 段连线截止 K（null=末态全量）
   final int? segAsOf;
 
@@ -1462,8 +1469,8 @@ class _KlineCompositePainter extends CustomPainter {
         style.color.withValues(alpha: 0.08),
         // 有单元 view 时按半侧衔接框对齐（同 K1合并）
         levelUnitViews: views,
-        // 末组=构建中合并（虚线）；前组=已冻结合并（实线）
-        lastAsBuilding: true,
+        // 末组=构建中合并（虚线）；前组=已冻结合并（实线）；showBuildingCombine 关则全实线
+        lastAsBuilding: showBuildingCombine,
         buildingDashPattern: style.buildingDashPattern,
       );
     }
@@ -2143,7 +2150,7 @@ class _KlineCompositePainter extends CustomPainter {
       combineFrames,
       const Color(0xFF6366F1),
       const Color(0x226366F1),
-      lastAsBuilding: true,
+      lastAsBuilding: showBuildingCombine,
       buildingDashPattern:
           ChartLevelLineStyle.forLevel(1).buildingDashPattern,
     );
@@ -2259,8 +2266,8 @@ class _KlineCompositePainter extends CustomPainter {
         const Color(0xAAF59E0B),
         const Color(0x0CF59E0B),
         alignK1CombineWithViews: true,
-        // 末组=构建中合并（虚线）；前组=已冻结合并（实线）
-        lastAsBuilding: true,
+        // 末组=构建中合并（虚线）；前组=已冻结合并（实线）；showBuildingCombine 关则全实线
+        lastAsBuilding: showBuildingCombine,
         buildingDashPattern:
             ChartLevelLineStyle.forLevel(2).buildingDashPattern,
       );
@@ -2846,6 +2853,7 @@ class _KlineCompositePainter extends CustomPainter {
         oldDelegate.crosshairX != crosshairX ||
         oldDelegate.crosshairY != crosshairY ||
         oldDelegate.crosshairBarIdx != crosshairBarIdx ||
-        oldDelegate.truncationCheck != truncationCheck;
+        oldDelegate.truncationCheck != truncationCheck ||
+        oldDelegate.showBuildingCombine != showBuildingCombine;
   }
 }

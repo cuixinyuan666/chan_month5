@@ -121,6 +121,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
   int _panelEdge = 1; // 默认右贴边（设置按钮在右上）
   /// 截断监察：开=当前口径；关=添加截断前旧行为（暴力反转被吸收）
   bool _truncationCheck = true;
+  /// 构建中合并框（虚线）开关：开=末组合并画虚线；关=全部实线（默认开）
+  bool _showBuildingCombine = true;
 
   bool get _busy => _bootstrapping || _loadingChart;
   bool get _hasSession => _allBars.isNotEmpty;
@@ -506,6 +508,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
                   levels: _levels,
                   defaultK0Policy: _defaultK0Policy,
                   truncationCheck: _truncationCheck,
+                  showBuildingCombine: _showBuildingCombine,
                   mainIndicators: _mainIndicators,
                   onMainIndicatorsChanged: (v) =>
                       setState(() => _mainIndicators = v),
@@ -725,6 +728,31 @@ class _KlineHomePageState extends State<KlineHomePage> {
             onPressed: _showTruncationHelp,
           ),
         ),
+        const SizedBox(height: 8),
+        // 构建中合并框开关：末组合并画虚线（与构建中连线同口径），默认开
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          dense: true,
+          title: const Text('构建中合并框', style: TextStyle(fontSize: 13)),
+          subtitle: Text(
+            _showBuildingCombine ? '已开启（末组合并虚线）' : '已关闭（全部实线）',
+            style: const TextStyle(fontSize: 11),
+          ),
+          value: _showBuildingCombine,
+          onChanged: _busy
+              ? null
+              : (v) {
+                  setState(() {
+                    _showBuildingCombine = v;
+                  });
+                  _msgHistory.append('构建中合并框=${v ? "开" : "关"}');
+                },
+          secondary: IconButton(
+            tooltip: '构建中合并框说明',
+            icon: const Icon(Icons.help_outline, size: 18),
+            onPressed: _showBuildingCombineHelp,
+          ),
+        ),
         const SizedBox(height: 12),
         OutlinedButton.icon(
           onPressed: _busy ? null : _bootstrap,
@@ -799,6 +827,38 @@ class _KlineHomePageState extends State<KlineHomePage> {
             '1. 打开右上角设置；\n'
             '2. 拨动「截断机制」开关；\n'
             '3. 当前已喂入的步进会立刻按新开关重算并刷新主/副图。',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('知道了'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 构建中合并框开关说明弹窗（操作逻辑 + 开关含义）。
+  void _showBuildingCombineHelp() {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('构建中合并框说明'),
+        content: const SingleChildScrollView(
+          child: Text(
+            '作用：控制主图合并框是否标出「正在生长、可能继续延伸的合并」。\n\n'
+            '开启（默认）\n'
+            '· 主图 K0/K1/…/KN 每层的末组合并框画虚线，代表当前进行中、尚未冻结的合并；\n'
+            '· 其余已冻结合并框画实线；与「构建中连线=虚线」同口径，区分未确认 vs 已确认。\n'
+            '· 全层同构：每层（K0/K1/…/KN）由该层末组合并驱动，颜色与该层已确认合并框一致。\n'
+            '· 十字线（as-of）激活时，合并框按当时当下重算，末组虚线即那一刻的进行中合并，不泄露未来。\n\n'
+            '关闭\n'
+            '· 所有合并框一律实线，不标构建中状态。\n\n'
+            '操作步骤\n'
+            '1. 打开右上角设置；\n'
+            '2. 拨动「构建中合并框」开关；\n'
+            '3. 当前图表立刻按开关刷新（无需重算步进）。',
           ),
         ),
         actions: [

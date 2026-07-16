@@ -88,7 +88,6 @@ class ChartLevelLineStyle {
           color: _colors[4],
           strokeWidth: w,
           buildingStrokeWidth: w - 0.45,
-          frozenDashPattern: const [12, 4, 2, 4],
           buildingDashPattern: const [6, 4],
         );
       default:
