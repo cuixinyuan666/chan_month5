@@ -74,7 +74,6 @@ class ChartLevelLineStyle {
           color: _colors[2],
           strokeWidth: w,
           buildingStrokeWidth: w - 0.4,
-          frozenDashPattern: const [10, 4],
           buildingDashPattern: const [5, 5],
         );
       case 5:
@@ -93,12 +92,10 @@ class ChartLevelLineStyle {
           buildingDashPattern: const [6, 4],
         );
       default:
-        final parity = (level - 2) % 2 == 0;
         return ChartLevelLineStyle(
           color: _colors[i],
           strokeWidth: w,
           buildingStrokeWidth: w - 0.45,
-          frozenDashPattern: parity ? null : const [8, 4],
           buildingDashPattern: [8.0 + (level % 3), 5.0],
         );
     }

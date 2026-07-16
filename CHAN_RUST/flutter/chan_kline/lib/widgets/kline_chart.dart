@@ -2625,9 +2625,8 @@ class _KlineCompositePainter extends CustomPainter {
       ..color = const Color(0xFFE2E8F0)
       ..strokeWidth = 1.2;
 
-    _drawDashedLine(canvas, Offset(x, plotTop), Offset(x, contentBottom), paint);
-    _drawDashedLine(
-      canvas,
+    canvas.drawLine(Offset(x, plotTop), Offset(x, contentBottom), paint);
+    canvas.drawLine(
       Offset(KlineViewport.padL, y),
       Offset(size.width - KlineViewport.padR, y),
       paint,
