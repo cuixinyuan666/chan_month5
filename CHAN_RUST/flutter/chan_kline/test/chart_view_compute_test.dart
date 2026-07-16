@@ -243,4 +243,69 @@ void main() {
     );
     expect(purged, isEmpty);
   });
+
+  test('构建中虚线尾端：取区间内首次方向极值所在 K0（非 as-of 末根）', () {
+    // 确认在 0；区间 (0,4]：K2 先创 high=20，K4 high=19 更低 → 尾端应落 K2
+    final bars = <KlineBar>[
+      for (var i = 0; i <= 4; i++)
+        KlineBar(
+          idx: i,
+          timeMs: i,
+          timeText: 't$i',
+          open: 10,
+          high: i == 2 ? 20 : (i == 4 ? 19 : 11 + i * 0.1),
+          low: 9,
+          close: 10,
+          volume: 1,
+          amount: 1,
+          metrics: const {},
+        ),
+    ];
+    final up = buildingTailEndpoint(
+      bars: bars,
+      afterConfirmX: 0,
+      asOfX: 4,
+      buildingDir: 1,
+    );
+    expect(up, isNotNull);
+    expect(up!.barIdx, 2);
+    expect(up.price, 20);
+
+    // 降：K1 先创 low=5，K4 low=5.5 → 尾端落 K1
+    final downBars = <KlineBar>[
+      for (var i = 0; i <= 4; i++)
+        KlineBar(
+          idx: i,
+          timeMs: i,
+          timeText: 't$i',
+          open: 10,
+          high: 12,
+          low: i == 1 ? 5 : (i == 4 ? 5.5 : 8),
+          close: 10,
+          volume: 1,
+          amount: 1,
+          metrics: const {},
+        ),
+    ];
+    final down = buildingTailEndpoint(
+      bars: downBars,
+      afterConfirmX: 0,
+      asOfX: 4,
+      buildingDir: -1,
+    );
+    expect(down, isNotNull);
+    expect(down!.barIdx, 1);
+    expect(down.price, 5);
+
+    // 空区间：确认==asOf → 退化为 asOf 本根
+    final empty = buildingTailEndpoint(
+      bars: bars,
+      afterConfirmX: 4,
+      asOfX: 4,
+      buildingDir: 1,
+    );
+    expect(empty, isNotNull);
+    expect(empty!.barIdx, 4);
+    expect(empty.price, 19);
+  });
 }

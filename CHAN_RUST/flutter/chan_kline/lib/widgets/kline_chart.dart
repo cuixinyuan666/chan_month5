@@ -1933,7 +1933,7 @@ class _KlineCompositePainter extends CustomPainter {
     }
   }
 
-  /// 构建中 N 段：末次确认极点 → as-of/末 K 方向极值。
+  /// 构建中 N 段：末次确认极点 → 扫价区间内方向极值首次出现的 K0（虚线尾端同构）。
   void _drawBuildingLevelLine(
     Canvas canvas,
     double w,
@@ -1983,19 +1983,17 @@ class _KlineCompositePainter extends CustomPainter {
     final begin = levelConfirmEndpoint(bars, lastConfirm);
     if (begin == null) return;
 
-    final tail = bars[tailIdx];
-    var endPrice = buildingDir > 0 ? tail.high : tail.low;
-    for (final b in bars) {
-      if (b.idx < lastConfirm.x || b.idx > tailIdx) continue;
-      if (buildingDir > 0) {
-        endPrice = math.max(endPrice, b.high);
-      } else {
-        endPrice = math.min(endPrice, b.low);
-      }
-    }
+    // 尾端：区间内首次创极值的 K0（X/Y 同根；不再钉 as-of 末根）
+    final end = buildingTailEndpoint(
+      bars: bars,
+      afterConfirmX: lastConfirm.x,
+      asOfX: tailIdx,
+      buildingDir: buildingDir,
+    );
+    if (end == null) return;
 
-    final geomMin = math.min(begin.barIdx, tail.idx);
-    final geomMax = math.max(begin.barIdx, tail.idx);
+    final geomMin = math.min(begin.barIdx, end.barIdx);
+    final geomMax = math.max(begin.barIdx, end.barIdx);
     if (geomMax < viewport.viewXMin - 1 || geomMin > viewport.viewXMax + 1) {
       return;
     }
@@ -2005,8 +2003,8 @@ class _KlineCompositePainter extends CustomPainter {
       priceRange.yOf(begin.price, plotTop, plotH),
     );
     final b = Offset(
-      _barCenterX(tail.idx, w, slotW),
-      priceRange.yOf(endPrice, plotTop, plotH),
+      _barCenterX(end.barIdx, w, slotW),
+      priceRange.yOf(end.price, plotTop, plotH),
     );
     final paint = Paint()
       ..color = style.color
@@ -2015,7 +2013,7 @@ class _KlineCompositePainter extends CustomPainter {
     _drawStyledSegmentLine(canvas, a, b, paint, style, building: showBuildingDash);
   }
 
-  /// 构建中 K0连线：末次K0连线确认分型极点 → 当步K(as-of)/末根 方向极值（虚线，展示专用）。
+  /// 构建中 K0连线：末次确认极点 → 扫价区间内方向极值首次出现的 K0（虚线，与 KN 同构）。
   void _drawBuildingK0Line(
     Canvas canvas,
     double w,
@@ -2025,7 +2023,7 @@ class _KlineCompositePainter extends CustomPainter {
   ) {
     if (bars.isEmpty || k0ConfirmSignals.isEmpty) return;
 
-    // 十字线 as-of：未激活走末根；激活走当步 K（与 K1 构建线同口径动态延伸）
+    // 十字线 as-of：未激活走末根；激活走当步 K（与 KN 构建线同口径动态延伸）
     // 先拷到局部，避免类字段 int? 在比较时无法提升
     final asOf = segAsOf;
     final tailIdx = asOf ?? (bars.isEmpty ? -1 : bars.last.idx);
@@ -2040,9 +2038,7 @@ class _KlineCompositePainter extends CustomPainter {
       }
     }
     if (last == null) return;
-
-    final tail = bars[tailIdx];
-    if (last.x > tail.idx) return;
+    if (last.x > tailIdx) return;
 
     final buildingDir = last.fx == 'BOTTOM' ? 1 : -1;
     final extremeIdx = fractalExtremeBarIdx(bars, last);
@@ -2056,26 +2052,25 @@ class _KlineCompositePainter extends CustomPainter {
     final beginBar = bars[extremeIdx];
     final beginPrice = last.fx == 'TOP' ? beginBar.high : beginBar.low;
 
-    final endX = _barCenterX(tail.idx, w, slotW);
-    var endPrice = buildingDir > 0 ? tail.high : tail.low;
-    for (final b in bars) {
-      if (b.idx <= last.x || b.idx > tail.idx) continue;
-      if (buildingDir > 0) {
-        endPrice = math.max(endPrice, b.high);
-      } else {
-        endPrice = math.min(endPrice, b.low);
-      }
-    }
+    // 尾端：区间内首次创极值的 K0（X/Y 同根；与 KN 构建中虚线同构）
+    final end = buildingTailEndpoint(
+      bars: bars,
+      afterConfirmX: last.x,
+      asOfX: tailIdx,
+      buildingDir: buildingDir,
+    );
+    if (end == null) return;
 
-    final geomMin = math.min(extremeIdx, tail.idx);
-    final geomMax = math.max(extremeIdx, tail.idx);
+    final geomMin = math.min(extremeIdx, end.barIdx);
+    final geomMax = math.max(extremeIdx, end.barIdx);
     if (geomMax < viewport.viewXMin - 1 ||
         geomMin > viewport.viewXMax + 1) {
       return;
     }
 
+    final endX = _barCenterX(end.barIdx, w, slotW);
     final y1 = priceRange.yOf(beginPrice, plotTop, plotH);
-    final y2 = priceRange.yOf(endPrice, plotTop, plotH);
+    final y2 = priceRange.yOf(end.price, plotTop, plotH);
     final paint = Paint()
       ..color = ChartLineColors.bi.withValues(alpha: 0.45)
       ..strokeWidth = 1.4

@@ -15,6 +15,53 @@ class LevelLineEndpoint {
   const LevelLineEndpoint({required this.barIdx, required this.price});
 }
 
+/// 构建中虚线尾端「价」(X,Y)：扫价区间 `(afterConfirmX, asOfX]` 内方向极值
+/// **首次**出现的那根 K0（升=首个 max(high)，降=首个 min(low)）。
+/// 区间仅 1 根时自然落在该根；空区间退化为 asOf 本根方向价。全层同构展示口径。
+LevelLineEndpoint? buildingTailEndpoint({
+  required List<KlineBar> bars,
+  required int afterConfirmX,
+  required int asOfX,
+  required int buildingDir,
+}) {
+  if (bars.isEmpty || buildingDir == 0) return null;
+  if (asOfX < 0 || asOfX >= bars.length) return null;
+
+  int? extremeIdx;
+  double? extremePrice;
+  if (buildingDir > 0) {
+    var peak = double.negativeInfinity;
+    for (final b in bars) {
+      if (b.idx <= afterConfirmX || b.idx > asOfX) continue;
+      if (b.high > peak) {
+        peak = b.high;
+        extremeIdx = b.idx;
+        extremePrice = b.high;
+      }
+    }
+  } else {
+    var trough = double.infinity;
+    for (final b in bars) {
+      if (b.idx <= afterConfirmX || b.idx > asOfX) continue;
+      if (b.low < trough) {
+        trough = b.low;
+        extremeIdx = b.idx;
+        extremePrice = b.low;
+      }
+    }
+  }
+
+  if (extremeIdx != null && extremePrice != null) {
+    return LevelLineEndpoint(barIdx: extremeIdx, price: extremePrice);
+  }
+  // 确认当步==asOf 或区间无 K：尾端退化为 asOf 本根
+  final tail = bars[asOfX];
+  return LevelLineEndpoint(
+    barIdx: tail.idx,
+    price: buildingDir > 0 ? tail.high : tail.low,
+  );
+}
+
 /// 分型合并框内极点 K（raw；TOP 取首个 high 极大，BOTTOM 取首个 low 极小，与 Rust `fx_pole_x` 同口径）。
 int? fractalExtremeBarIdxRaw(
   List<KlineBar> bars, {

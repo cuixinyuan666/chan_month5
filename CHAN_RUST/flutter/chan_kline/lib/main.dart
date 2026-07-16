@@ -29,6 +29,8 @@ Future<void> main() async {
   MsgHistory.instance.appendNamingRename();
   // 新特性追踪：构建中合并框（虚线），便于调试时从历史记录追溯口径演进
   MsgHistory.instance.appendBuildingCombineFrame();
+  // 画线口径：构建中虚线尾端取区间内首次方向极值所在 K0（全层同构）
+  MsgHistory.instance.appendBuildingDashTailFirstExtreme();
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     await windowManager.ensureInitialized();
     const opts = WindowOptions(
@@ -850,9 +852,9 @@ class _KlineHomePageState extends State<KlineHomePage> {
             '作用：统一控制主图所有「构建中 / 未确认」的画线是否用虚线区分（与已确认的实线区分）。\n\n'
             '覆盖范围（开=虚线，关=全部实线）\n'
             '· 主图 K0/K1/…/KN 每层的末组合并框：末组=进行中、可继续延伸的合并，画虚线；前组=已冻结，画实线；\n'
-            '· K0 构建中连线：末次确认分型极点 → 当步/末根方向极值，画虚线；\n'
-            '· K1/…/KN 构建中连线：末次确认极点 → as-of/末根方向极值，画虚线；\n'
-            '· 与「构建中连线=虚线、已确认=实线」同口径，区分未确认 vs 已确认；全层同构（K0/K1/…/KN 行为一致）。\n\n'
+            '· K0 构建中连线：末次确认分型极点 → 扫价区间内方向极值首次出现的 K0（X/Y 同根），画虚线；\n'
+            '· K1/…/KN 构建中连线：末次确认极点 → 同上口径（buildingTailEndpoint），画虚线；\n'
+            '· 尾端不再把 X 钉在 as-of/末根；与「构建中=虚线、已确认=实线」同口径；全层同构（K0/K1/…/KN）。\n\n'
             '关闭\n'
             '· 上述所有元素一律实线，不区分构建中状态（合并框、各层构建中连线均实线）。\n\n'
             '操作步骤\n'

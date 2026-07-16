@@ -81,6 +81,17 @@ class MsgHistory {
     );
   }
 
+  /// 构建中连线虚线尾端：扫价区间内首次方向极值所在 K0（全层同构）。
+  void appendBuildingDashTailFirstExtreme() {
+    append(
+      '【画线口径】KN/K0 构建中虚线尾端「价」(X,Y)：取扫价区间 (确认当步, as-of] 内'
+      '方向极值首次出现的那根 K0（升=首个 max(high)，降=首个 min(low)；'
+      '区间仅1根则落该根；空区间退化为 asOf 本根）。'
+      '不再把 X 钉在 as-of/末根而 Y 取区间极值。全层同构（K0/K1/…/KN 共用 buildingTailEndpoint）。'
+      '冻结实线端点仍走 fx_pole_x/pole_x，未改。',
+    );
+  }
+
   String asText([List<MsgHistoryEntry>? source]) {
     final src = source ?? _rows;
     return src
