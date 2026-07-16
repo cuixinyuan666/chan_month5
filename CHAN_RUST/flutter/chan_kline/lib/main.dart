@@ -122,7 +122,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
   /// 截断监察：开=当前口径；关=添加截断前旧行为（暴力反转被吸收）
   bool _truncationCheck = true;
   /// 构建中合并框（虚线）开关：开=末组合并画虚线；关=全部实线（默认开）
-  bool _showBuildingCombine = true;
+  bool _showBuildingDash = true;
 
   bool get _busy => _bootstrapping || _loadingChart;
   bool get _hasSession => _allBars.isNotEmpty;
@@ -508,7 +508,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
                   levels: _levels,
                   defaultK0Policy: _defaultK0Policy,
                   truncationCheck: _truncationCheck,
-                  showBuildingCombine: _showBuildingCombine,
+                  showBuildingDash: _showBuildingDash,
                   mainIndicators: _mainIndicators,
                   onMainIndicatorsChanged: (v) =>
                       setState(() => _mainIndicators = v),
@@ -729,28 +729,28 @@ class _KlineHomePageState extends State<KlineHomePage> {
           ),
         ),
         const SizedBox(height: 8),
-        // 构建中合并框开关：末组合并画虚线（与构建中连线同口径），默认开
+        // 构建中/未确认虚线开关：末组合并框 + K0/K1/KN 构建中连线统一用虚线区分，默认开
         SwitchListTile(
           contentPadding: EdgeInsets.zero,
           dense: true,
-          title: const Text('构建中合并框', style: TextStyle(fontSize: 13)),
+          title: const Text('构建中/未确认虚线', style: TextStyle(fontSize: 13)),
           subtitle: Text(
-            _showBuildingCombine ? '已开启（末组合并虚线）' : '已关闭（全部实线）',
+            _showBuildingDash ? '已开启（构建中元素虚线）' : '已关闭（全部实线）',
             style: const TextStyle(fontSize: 11),
           ),
-          value: _showBuildingCombine,
+          value: _showBuildingDash,
           onChanged: _busy
               ? null
               : (v) {
                   setState(() {
-                    _showBuildingCombine = v;
+                    _showBuildingDash = v;
                   });
-                  _msgHistory.append('构建中合并框=${v ? "开" : "关"}');
+                  _msgHistory.append('构建中虚线=${v ? "开" : "关"}');
                 },
           secondary: IconButton(
-            tooltip: '构建中合并框说明',
+            tooltip: '构建中/未确认虚线说明',
             icon: const Icon(Icons.help_outline, size: 18),
-            onPressed: _showBuildingCombineHelp,
+            onPressed: _showBuildingDashHelp,
           ),
         ),
         const SizedBox(height: 12),
@@ -839,25 +839,25 @@ class _KlineHomePageState extends State<KlineHomePage> {
     );
   }
 
-  /// 构建中合并框开关说明弹窗（操作逻辑 + 开关含义）。
-  void _showBuildingCombineHelp() {
+  /// 构建中/未确认虚线开关说明弹窗（操作逻辑 + 开关含义）。
+  void _showBuildingDashHelp() {
     showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('构建中合并框说明'),
+        title: const Text('构建中/未确认虚线说明'),
         content: const SingleChildScrollView(
           child: Text(
-            '作用：控制主图合并框是否标出「正在生长、可能继续延伸的合并」。\n\n'
-            '开启（默认）\n'
-            '· 主图 K0/K1/…/KN 每层的末组合并框画虚线，代表当前进行中、尚未冻结的合并；\n'
-            '· 其余已冻结合并框画实线；与「构建中连线=虚线」同口径，区分未确认 vs 已确认。\n'
-            '· 全层同构：每层（K0/K1/…/KN）由该层末组合并驱动，颜色与该层已确认合并框一致。\n'
-            '· 十字线（as-of）激活时，合并框按当时当下重算，末组虚线即那一刻的进行中合并，不泄露未来。\n\n'
+            '作用：统一控制主图所有「构建中 / 未确认」的画线是否用虚线区分（与已确认的实线区分）。\n\n'
+            '覆盖范围（开=虚线，关=全部实线）\n'
+            '· 主图 K0/K1/…/KN 每层的末组合并框：末组=进行中、可继续延伸的合并，画虚线；前组=已冻结，画实线；\n'
+            '· K0 构建中连线：末次确认分型极点 → 当步/末根方向极值，画虚线；\n'
+            '· K1/…/KN 构建中连线：末次确认极点 → as-of/末根方向极值，画虚线；\n'
+            '· 与「构建中连线=虚线、已确认=实线」同口径，区分未确认 vs 已确认；全层同构（K0/K1/…/KN 行为一致）。\n\n'
             '关闭\n'
-            '· 所有合并框一律实线，不标构建中状态。\n\n'
+            '· 上述所有元素一律实线，不区分构建中状态（合并框、各层构建中连线均实线）。\n\n'
             '操作步骤\n'
             '1. 打开右上角设置；\n'
-            '2. 拨动「构建中合并框」开关；\n'
+            '2. 拨动「构建中/未确认虚线」开关；\n'
             '3. 当前图表立刻按开关刷新（无需重算步进）。',
           ),
         ),
