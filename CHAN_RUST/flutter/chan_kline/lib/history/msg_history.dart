@@ -68,6 +68,19 @@ class MsgHistory {
     );
   }
 
+  /// 记录「构建中合并框（虚线）」特性：每层 combineFrames 末组=仍可 absorb 的构建中合并（虚线），
+  /// 前组=已冻结合并（实线）；全层同构。注意：信号是合并引擎末组，不是 activeUnit（那是进行中段）。
+  void appendBuildingCombineFrame() {
+    append(
+      '【新增特性】构建中合并框（虚线）：主图每层合并框把 CombineEngine.groups 末组画成虚线，'
+      '表示「仍可能继续包含合并、尚未被下一组顶掉的构建中合并」；前组实线=已冻结。'
+      '全层同构（K0/K1/…/KN 均对应该层 combineFrames 末项）；'
+      '虚线语言与构建中连线一致。口径纠正：不取 activeUnit（activeUnit=进行中段/连线单元，不是合并组）；'
+      '十字线 as-of 时用当步重建的 combineFrames，末组仍虚线（当下性由 as-of 重建保证）。'
+      '【排障】首屏仅 1 根 K 时若 xSpan 塌成 1e-6，虚线描边会循环卡死白屏——已将 xSpan 下限改为 1.0。',
+    );
+  }
+
   String asText([List<MsgHistoryEntry>? source]) {
     final src = source ?? _rows;
     return src

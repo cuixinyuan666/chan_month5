@@ -1462,6 +1462,9 @@ class _KlineCompositePainter extends CustomPainter {
         style.color.withValues(alpha: 0.08),
         // 有单元 view 时按半侧衔接框对齐（同 K1合并）
         levelUnitViews: views,
+        // 末组=构建中合并（虚线）；前组=已冻结合并（实线）
+        lastAsBuilding: true,
+        buildingDashPattern: style.buildingDashPattern,
       );
     }
   }
@@ -2128,6 +2131,8 @@ class _KlineCompositePainter extends CustomPainter {
   ) {
     _drawCandles(canvas, w, plotTop, plotH, barW, slotW);
     if (combineFrames.isEmpty) return;
+    // 末组=构建中合并（虚线）；前组=已冻结合并（实线）。
+    // 信号取 CombineEngine.groups 末项（已在 combineFrames 末尾），不是 activeUnit（那是进行中段）。
     _drawCombineFramesOnMainChart(
       canvas,
       w,
@@ -2138,10 +2143,15 @@ class _KlineCompositePainter extends CustomPainter {
       combineFrames,
       const Color(0xFF6366F1),
       const Color(0x226366F1),
+      lastAsBuilding: true,
+      buildingDashPattern:
+          ChartLevelLineStyle.forLevel(1).buildingDashPattern,
     );
   }
 
   /// 主图 K线合并 / K1合并线框：按真实价格坐标叠加。
+  /// [lastAsBuilding]=true 时：末框虚线（构建中合并），前框实线（已冻结）；虚线框不画顶/底标签。
+  /// 口径：CombineEngine 末组仍可继续 absorb，即「构建中合并框」；与构建中连线同「虚线=未确认」。
   void _drawCombineFramesOnMainChart(
     Canvas canvas,
     double w,
@@ -2154,6 +2164,8 @@ class _KlineCompositePainter extends CustomPainter {
     Color fillColor, {
     bool alignK1CombineWithViews = false,
     List<LevelUnitBarView>? levelUnitViews,
+    bool lastAsBuilding = false,
+    List<double> buildingDashPattern = const <double>[5, 4],
   }) {
     if (frames.isEmpty) return;
 
@@ -2166,8 +2178,12 @@ class _KlineCompositePainter extends CustomPainter {
       ..color = fillColor
       ..style = PaintingStyle.fill;
 
-    for (final f in frames) {
-      if (f.x2 < viewport.viewXMin - 1 || f.x1 > viewport.viewXMax + 1) continue;
+    final last = frames.length - 1;
+    for (var i = 0; i < frames.length; i++) {
+      final f = frames[i];
+      if (f.x2 < viewport.viewXMin - 1 || f.x1 > viewport.viewXMax + 1) {
+        continue;
+      }
 
       final (xLeft, xRight) = alignK1CombineWithViews
           ? _k1CombineFrameSpan(f, w, slotW, barW)
@@ -2190,17 +2206,22 @@ class _KlineCompositePainter extends CustomPainter {
         math.max(yTop, yBottom),
       );
       canvas.drawRect(rect, fillPaint);
-      canvas.drawRect(rect, framePaint);
-
-      if (f.fx == 'TOP' || f.fx == 'BOTTOM') {
-        final tp = TextPainter(
-          text: TextSpan(
-            text: f.fx == 'TOP' ? '顶' : '底',
-            style: TextStyle(color: strokeColor, fontSize: 9),
-          ),
-          textDirection: TextDirection.ltr,
-        )..layout();
-        tp.paint(canvas, Offset(rect.left + 2, rect.top + 1));
+      // 末组虚线=构建中；其余实线=已冻结（可标顶/底）
+      final building = lastAsBuilding && i == last;
+      if (building) {
+        _strokeDashedRect(canvas, rect, framePaint, buildingDashPattern);
+      } else {
+        canvas.drawRect(rect, framePaint);
+        if (f.fx == 'TOP' || f.fx == 'BOTTOM') {
+          final tp = TextPainter(
+            text: TextSpan(
+              text: f.fx == 'TOP' ? '顶' : '底',
+              style: TextStyle(color: strokeColor, fontSize: 9),
+            ),
+            textDirection: TextDirection.ltr,
+          )..layout();
+          tp.paint(canvas, Offset(rect.left + 2, rect.top + 1));
+        }
       }
     }
   }
@@ -2238,6 +2259,10 @@ class _KlineCompositePainter extends CustomPainter {
         const Color(0xAAF59E0B),
         const Color(0x0CF59E0B),
         alignK1CombineWithViews: true,
+        // 末组=构建中合并（虚线）；前组=已冻结合并（实线）
+        lastAsBuilding: true,
+        buildingDashPattern:
+            ChartLevelLineStyle.forLevel(2).buildingDashPattern,
       );
     }
   }
@@ -2754,14 +2779,20 @@ class _KlineCompositePainter extends CustomPainter {
       return;
     }
     final total = (b - a).distance;
-    if (total <= 0) return;
+    if (total <= 0 || !total.isFinite) return;
     final dir = (b - a) / total;
     var dist = 0.0;
     var patIdx = 0;
-    while (dist < total) {
+    // 硬上限：防止异常坐标导致虚线循环卡死 UI
+    final maxIter = (total / 0.5).ceil().clamp(1, 100000) + pattern.length;
+    var iter = 0;
+    while (dist < total && iter < maxIter) {
+      iter++;
       final segLen = pattern[patIdx % pattern.length];
-      final next = math.min(dist + segLen, total);
-      if (patIdx % 2 == 0) {
+      // segLen<=0 会死循环卡死 UI（白屏），强制前进
+      final step = segLen > 0 ? segLen : 1.0;
+      final next = math.min(dist + step, total);
+      if (patIdx % 2 == 0 && segLen > 0) {
         canvas.drawLine(a + dir * dist, a + dir * next, paint);
       }
       dist = next;
@@ -2771,6 +2802,23 @@ class _KlineCompositePainter extends CustomPainter {
 
   void _drawDashedLine(Canvas canvas, Offset a, Offset b, Paint paint) {
     _drawPatternLine(canvas, a, b, paint, const [4, 4]);
+  }
+
+  /// 虚线矩形描边（构建中合并框用）：四边各画一段 pattern 虚线。
+  void _strokeDashedRect(
+    Canvas canvas,
+    Rect rect,
+    Paint paint,
+    List<double> pattern,
+  ) {
+    _drawPatternLine(
+        canvas, Offset(rect.left, rect.top), Offset(rect.right, rect.top), paint, pattern);
+    _drawPatternLine(
+        canvas, Offset(rect.right, rect.top), Offset(rect.right, rect.bottom), paint, pattern);
+    _drawPatternLine(canvas, Offset(rect.right, rect.bottom),
+        Offset(rect.left, rect.bottom), paint, pattern);
+    _drawPatternLine(canvas, Offset(rect.left, rect.bottom),
+        Offset(rect.left, rect.top), paint, pattern);
   }
 
   @override

@@ -27,6 +27,8 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   // 命名变更追踪：中枢(ZS) → 跨段中枢(KuaDuan)、笔/线段 → K0连线/K1连线，便于调试时从历史记录追溯完整更名过程
   MsgHistory.instance.appendNamingRename();
+  // 新特性追踪：构建中合并框（虚线），便于调试时从历史记录追溯口径演进
+  MsgHistory.instance.appendBuildingCombineFrame();
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     await windowManager.ensureInitialized();
     const opts = WindowOptions(

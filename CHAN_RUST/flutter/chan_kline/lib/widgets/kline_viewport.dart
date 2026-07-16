@@ -31,7 +31,9 @@ class KlineViewport {
   bool userAdjustedView = false;
 
   /// 当前视窗跨度（bar 索引，可为小数）。
-  double get xSpan => math.max(1e-6, viewXMax - viewXMin);
+  /// 下限 1.0：单根 K 时 viewXMin==viewXMax，若用 1e-6 会让 slotW 变成天文数字，
+  /// 虚线描边（构建中合并框等）循环上亿次 → 白屏卡死。
+  double get xSpan => math.max(1.0, viewXMax - viewXMin);
 
   /// 允许缩到多窄：全量 bar 少时放宽，避免 minSpan=5 卡死缩放。
   double minSpanFor(int barCount) {
@@ -46,8 +48,14 @@ class KlineViewport {
   void resetForBarCount(int count) {
     allXMin = 0;
     allXMax = math.max(0, count - 1).toDouble();
-    viewXMin = allXMin;
-    viewXMax = allXMax;
+    if (count <= 1) {
+      // 单根：视窗跨度至少 1 个 slot，避免 xSpan 塌成 0
+      viewXMin = 0;
+      viewXMax = 1;
+    } else {
+      viewXMin = allXMin;
+      viewXMax = allXMax;
+    }
     yZoomRatio = 1.0;
     yShiftRatio = 0.0;
     userAdjustedView = false;
