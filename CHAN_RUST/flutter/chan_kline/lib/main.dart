@@ -31,6 +31,8 @@ Future<void> main() async {
   MsgHistory.instance.appendBuildingCombineFrame();
   // 画线口径：构建中虚线尾端取区间内首次方向极值所在 K0（全层同构）
   MsgHistory.instance.appendBuildingDashTailFirstExtreme();
+  // 展示轨动态 KN 合并框：冻+进行中重算，永久结构不回写
+  MsgHistory.instance.appendDisplayTrackDynamicKnCombine();
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     await windowManager.ensureInitialized();
     const opts = WindowOptions(

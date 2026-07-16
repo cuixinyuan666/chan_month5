@@ -92,6 +92,18 @@ class MsgHistory {
     );
   }
 
+  /// 展示轨动态 KN 合并框：冻+进行中/pending 喂合并引擎；永久结构不回写。
+  void appendDisplayTrackDynamicKnCombine() {
+    append(
+      '【画线口径】展示轨动态 KN 合并框（方案2）：主图 K1/Kn 合并框由'
+      '冻结单元+进行中/pending 虚拟单元重算（与 level_virtual_units / '
+      'asOfLevelVirtualK1Bars 同输入）；末组虚线=构建中合并可继续 absorb。'
+      '永久 feed/propagate/ZS/BSP 仍只认冻结，不回写旧标签。'
+      'K0 合并本就整段入框，行为同构。十字线 as-of 同步含进行中。'
+      '本步未接动态连线/动态K(N+1)/确认态比对。',
+    );
+  }
+
   String asText([List<MsgHistoryEntry>? source]) {
     final src = source ?? _rows;
     return src

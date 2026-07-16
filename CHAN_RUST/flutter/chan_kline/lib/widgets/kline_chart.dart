@@ -251,7 +251,7 @@ class _KlineChartState extends State<KlineChart> {
     );
   }
 
-  /// 十字线开启时按当步K1 bar 重建K1合并框（与 k1_combine 逐步口径对齐）。
+  /// 十字线开启时按当步K1 bar 重建K1合并框（展示轨：含进行中，与 Rust k1_combine_frames 同构）。
   List<KlineCombineFrame> get _effectiveK1CombineFrames {
     if (!_crosshairEnabled || _crosshairBarIdx == null) {
       return widget.k1CombineFrames;
@@ -261,8 +261,8 @@ class _KlineChartState extends State<KlineChart> {
     if (barsSlice.isEmpty) return const [];
     return computeK1CombineFrames(
       barsSlice,
-      // 截断/合并只认已确认 K0连线（与 Rust L2 feed、all_confirm 同构）
-      _asOfK1Bars(includeBuilding: false),
+      // 展示轨：冻+进行中；永久结构仍只认冻结
+      _asOfK1Bars(includeBuilding: true),
       truncationCheck: widget.truncationCheck,
     );
   }
@@ -1414,7 +1414,7 @@ class _KlineCompositePainter extends CustomPainter {
     }
   }
 
-  /// 主图 Kn 合并（kn≥2）：先铺淡 KN 单元线，再描该层合并框（对齐 K1合并）。
+  /// 主图 Kn 合并（kn≥2）：先铺淡 KN 单元线，再描该层**展示轨**合并框（冻+进行中）。
   void _drawLevelCombineOnMainChart(
     Canvas canvas,
     double w,
@@ -1432,16 +1432,48 @@ class _KlineCompositePainter extends CustomPainter {
       }
     }
     if (bundle == null) return;
-    if (bundle.combineFrames.isEmpty &&
+
+    final asOf = segAsOf;
+    final barsForCombine =
+        asOf != null ? bars.where((b) => b.idx <= asOf).toList() : bars;
+    final virtualUnits = asOf != null
+        ? asOfLevelVirtualK1Bars(
+            levels: levels,
+            barFeatures: barFeatures,
+            level: kn,
+            asOf: asOf,
+            includeBuilding: true,
+          )
+        : levelBundleVirtualK1Bars(bundle);
+
+    if (virtualUnits.isEmpty &&
         bundle.unitBars.isEmpty &&
-        bundle.activeUnit == null) {
+        bundle.activeUnit == null &&
+        bundle.pendingUnit == null) {
       return;
     }
 
-    final views = buildLevelUnitBarViews(
-      bundle.unitBars,
-      activeUnit: bundle.activeUnit,
-    );
+    // 半侧单元 view：末态用 bundle；as-of 由虚拟单元拆冻/进行中
+    final List<LevelUnitBarView> views;
+    if (asOf != null) {
+      views = _levelUnitViewsFromVirtualK1Bars(
+        virtualUnits,
+        frozenIdx: {
+          for (final s in asOfLevelSegments(
+            levels: levels,
+            level: kn,
+            asOf: asOf,
+          ))
+            s.idx,
+        },
+      );
+    } else {
+      views = buildLevelUnitBarViews(
+        bundle.unitBars,
+        activeUnit: bundle.activeUnit ??
+            (bundle.segmentPolicy == 'pending' ? bundle.pendingUnit : null),
+      );
+    }
     if (views.isNotEmpty) {
       _drawLevelUnitCandles(
         canvas,
@@ -1455,25 +1487,59 @@ class _KlineCompositePainter extends CustomPainter {
       );
     }
 
-    if (bundle.combineFrames.isNotEmpty) {
-      final style = ChartLevelLineStyle.forLevel(kn);
-      _drawCombineFramesOnMainChart(
-        canvas,
-        w,
-        plotTop,
-        plotH,
-        barW,
-        slotW,
-        bundle.combineFrames,
-        style.color.withValues(alpha: 0.85),
-        style.color.withValues(alpha: 0.08),
-        // 有单元 view 时按半侧衔接框对齐（同 K1合并）
-        levelUnitViews: views,
-        // 末组=构建中合并（虚线）；前组=已冻结合并（实线）；showBuildingDash 关则全实线
-        lastAsBuilding: showBuildingDash,
-        buildingDashPattern: style.buildingDashPattern,
+    // 展示轨合并框：不画永久 combineFrames，改由虚拟单元重算
+    if (virtualUnits.isEmpty || barsForCombine.isEmpty) return;
+    final displayFrames = computeK1CombineFrames(
+      barsForCombine,
+      virtualUnits,
+      truncationCheck: truncationCheck,
+    );
+    if (displayFrames.isEmpty) return;
+
+    final style = ChartLevelLineStyle.forLevel(kn);
+    _drawCombineFramesOnMainChart(
+      canvas,
+      w,
+      plotTop,
+      plotH,
+      barW,
+      slotW,
+      displayFrames,
+      style.color.withValues(alpha: 0.85),
+      style.color.withValues(alpha: 0.08),
+      levelUnitViews: views.isNotEmpty ? views : null,
+      lastAsBuilding: showBuildingDash,
+      buildingDashPattern: style.buildingDashPattern,
+    );
+  }
+
+  /// 虚拟 K1 bar → LevelUnitBarView（冻在 unitBars，未冻当 active）。
+  List<LevelUnitBarView> _levelUnitViewsFromVirtualK1Bars(
+    List<K1Bar> units, {
+    required Set<int> frozenIdx,
+  }) {
+    if (units.isEmpty) return const [];
+    final frozenBars = <LevelUnitBar>[];
+    LevelUnitBar? active;
+    for (final u in units) {
+      final bar = LevelUnitBar(
+        idx: u.idx,
+        dir: u.dir,
+        x1: u.x1,
+        x2: u.x2,
+        open: u.open,
+        high: u.high,
+        low: u.low,
+        close: u.close,
+        confirmX: u.confirmX,
       );
+      if (frozenIdx.contains(u.idx)) {
+        frozenBars.add(bar);
+      } else {
+        active = bar;
+      }
     }
+    return buildLevelUnitBarViews(frozenBars, activeUnit: active);
   }
 
   /// 主图跨段中枢框：复用合并框横向 [_combineFrameHSpan]，按层号取该层段序列产出的 KuaDuanFrame，

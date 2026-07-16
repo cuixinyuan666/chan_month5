@@ -308,4 +308,99 @@ void main() {
     expect(empty!.barIdx, 4);
     expect(empty.price, 19);
   });
+
+  test('展示轨虚拟单元：levelBundle 含 active；asOf 含进行中', () {
+    const bundle = LevelBundle(
+      level: 2,
+      unitBars: [
+        LevelUnitBar(
+          idx: 0,
+          dir: 1,
+          x1: 1,
+          x2: 4,
+          open: 10,
+          high: 11,
+          low: 9,
+          close: 10.5,
+          confirmX: 5,
+        ),
+      ],
+      activeUnit: LevelUnitBar(
+        idx: 1,
+        dir: -1,
+        x1: 4,
+        x2: 7,
+        open: 10.5,
+        high: 11,
+        low: 9.5,
+        close: 9.8,
+        confirmX: 7,
+      ),
+      segments: [
+        LevelSegmentN(
+          idx: 0,
+          dir: 1,
+          beginConfirmX: 2,
+          endConfirmX: 5,
+          beginPoleX: 1,
+          endPoleX: 4,
+          open: 10,
+          high: 11,
+          low: 9,
+          close: 10.5,
+        ),
+      ],
+    );
+    final v = levelBundleVirtualK1Bars(bundle);
+    expect(v.length, 2);
+    expect(v.last.idx, 1);
+    expect(v.last.x2, 7);
+
+    final levels = [
+      const LevelBundle(level: 1),
+      bundle,
+    ];
+    final feats = [
+      for (var i = 0; i <= 7; i++)
+        BarCrosshairFeature(
+          idx: i,
+          weekday: '周一',
+          mergeInnerSeq: 0,
+          levels: [
+            if (i >= 5)
+              LevelSnap(
+                level: 2,
+                unitIdx: 1,
+                unitDir: -1,
+                unitX1: 4,
+                unitX2: i,
+                unitOpen: 10.5,
+                unitHigh: 11,
+                unitLow: 9.5,
+                unitClose: 9.8,
+              ),
+          ],
+        ),
+    ];
+    final at7 = asOfLevelVirtualK1Bars(
+      levels: levels,
+      barFeatures: feats,
+      level: 2,
+      asOf: 7,
+      includeBuilding: true,
+    );
+    expect(at7.length, 2);
+    expect(at7.last.idx, 1);
+    expect(at7.last.x2, 7);
+
+    final frozenOnly = asOfLevelVirtualK1Bars(
+      levels: levels,
+      barFeatures: feats,
+      level: 2,
+      asOf: 7,
+      includeBuilding: false,
+    );
+    expect(frozenOnly.length, 1);
+    expect(frozenOnly.first.idx, 0);
+  });
 }

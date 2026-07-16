@@ -280,7 +280,7 @@ K1Bar? preConfirmDefaultK1Bar(List<KlineBar> bars, int endBarX) {
 }
 
 /// 十字线 as-of K1 bar 列表：已冻结段（Rust 冻结时算好 OHLC，查表）+ 可选当步进行中 K0连线。
-/// [includeBuilding]：主图 K1 bar 展示可含进行中；K1合并/截断必须为 false（只认已确认 K0连线）。
+/// [includeBuilding]：展示轨（主图 K1 bar / K1合并）可含进行中；永久结构仍只认冻结。
 List<K1Bar> asOfK1Bars({
   required List<KlineBar> bars,
   required List<LevelBundle> levels,
@@ -353,6 +353,128 @@ List<K1Bar> asOfK1Bars({
       low: s.unitLow,
       close: s.unitClose,
       confirmX: bx,
+    ));
+  }
+  return frozen;
+}
+
+/// LevelUnitBar → 展示用虚拟 K1 bar（与 Rust `unit_to_virtual_bar` 同口径）。
+K1Bar levelUnitToK1Bar(LevelUnitBar u) {
+  final x1 = u.x1 < u.x2 ? u.x1 : u.x2;
+  final x2 = u.x1 > u.x2 ? u.x1 : u.x2;
+  return K1Bar(
+    idx: u.idx,
+    dir: u.dir,
+    x1: x1,
+    x2: x2,
+    open: u.open,
+    high: u.high,
+    low: u.low,
+    close: u.close,
+    confirmX: u.confirmX,
+  );
+}
+
+/// LevelSegmentN → 展示用虚拟 K1 bar（与 Rust `segment_to_virtual_bar` 同口径）。
+K1Bar levelSegmentToK1Bar(LevelSegmentN s) {
+  final x1 = s.beginPoleX < s.endPoleX ? s.beginPoleX : s.endPoleX;
+  final x2 = s.beginPoleX > s.endPoleX ? s.beginPoleX : s.endPoleX;
+  return K1Bar(
+    idx: s.idx,
+    dir: s.dir,
+    x1: x1,
+    x2: x2,
+    open: s.open,
+    high: s.high,
+    low: s.low,
+    close: s.close,
+    confirmX: s.endConfirmX,
+  );
+}
+
+/// 单层展示轨虚拟单元：unitBars + active（或 pending），与 Rust `build_level_virtual_units` 同构。
+List<K1Bar> levelBundleVirtualK1Bars(LevelBundle bundle) {
+  final v = bundle.unitBars.map(levelUnitToK1Bar).toList();
+  final active = bundle.activeUnit;
+  if (active != null) {
+    final last = v.isEmpty ? null : v.last;
+    if (last == null ||
+        active.idx != last.idx ||
+        active.x2 != last.x2 ||
+        active.high != last.high ||
+        active.low != last.low) {
+      if (last != null && active.idx == last.idx) {
+        v[v.length - 1] = levelUnitToK1Bar(active);
+      } else {
+        v.add(levelUnitToK1Bar(active));
+      }
+    }
+  } else if (bundle.segmentPolicy == 'pending' && bundle.pendingUnit != null) {
+    v.add(levelUnitToK1Bar(bundle.pendingUnit!));
+  }
+  return v;
+}
+
+/// as-of 展示轨虚拟单元（全层同构）：冻结段 + 可选当步进行中（LevelSnap）。
+List<K1Bar> asOfLevelVirtualK1Bars({
+  required List<LevelBundle> levels,
+  required List<BarCrosshairFeature> barFeatures,
+  required int level,
+  required int asOf,
+  bool includeBuilding = true,
+}) {
+  if (level < 1 || levels.length < level) return const [];
+  final bundle = levels[level - 1];
+  final frozen = asOfLevelSegments(levels: levels, level: level, asOf: asOf)
+      .map(levelSegmentToK1Bar)
+      .toList();
+
+  LevelSnap? snap;
+  if (asOf < barFeatures.length && barFeatures[asOf].idx == asOf) {
+    for (final ls in barFeatures[asOf].levels) {
+      if (ls.level == level) {
+        snap = ls;
+        break;
+      }
+    }
+  } else {
+    for (final f in barFeatures) {
+      if (f.idx != asOf) continue;
+      for (final ls in f.levels) {
+        if (ls.level == level) {
+          snap = ls;
+          break;
+        }
+      }
+      if (snap != null) break;
+    }
+  }
+
+  final unitIdx = snap?.unitIdx;
+  if (unitIdx == null) {
+    if (bundle.segmentPolicy == 'pending' &&
+        frozen.isEmpty &&
+        bundle.pendingUnit != null &&
+        includeBuilding) {
+      return [levelUnitToK1Bar(bundle.pendingUnit!)];
+    }
+    return frozen;
+  }
+  if (!includeBuilding) return frozen;
+
+  final s = snap!;
+  final contained = frozen.any((v) => v.idx == unitIdx && v.x2 >= s.unitX2);
+  if (!contained && s.unitX1 >= 0 && s.unitX2 >= s.unitX1) {
+    frozen.add(K1Bar(
+      idx: unitIdx,
+      dir: s.unitDir,
+      x1: s.unitX1,
+      x2: s.unitX2,
+      open: s.unitOpen,
+      high: s.unitHigh,
+      low: s.unitLow,
+      close: s.unitClose,
+      confirmX: asOf,
     ));
   }
   return frozen;

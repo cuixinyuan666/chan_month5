@@ -5,9 +5,10 @@ import '../models/kline_bar.dart';
 import '../models/kline_combine_frame.dart';
 import 'k1_bar_view_compute.dart';
 
-/// 十字线 as-of 视图重建专用：与 Rust `build_k1_combine_frames_with` 同口径
-/// （view 坐标 + 半侧锚定 + 截断监察）。调用方应只传入**已确认冻结** K1 bar
-/// （`asOfK1Bars(includeBuilding: false)`），进行中 K0连线不参与截断合并。
+/// 十字线 as-of / 主图展示轨：与 Rust `build_k1_combine_frames_with` 同口径
+/// （view 坐标 + 半侧锚定 + 截断监察）。
+/// 展示轨可含冻结 + 进行中/pending（`asOfK1Bars(includeBuilding: true)` 或
+/// `asOfLevelVirtualK1Bars`）；永久 L2 feed 仍只认冻结，本函数不回写结构。
 
 List<KlineCombineFrame> computeK1CombineFrames(
   List<KlineBar> bars,

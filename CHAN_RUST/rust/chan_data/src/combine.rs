@@ -200,7 +200,8 @@ pub fn build_k1_combine_frames(bars: &[KlineBar], k1_bars: &[K1Bar]) -> Vec<Klin
 }
 
 /// K1 bar 序列 → K1合并线框（可关截断/校验，对照排查用）。
-/// 调用方应只传入**已确认冻结**的 K1 bar（与 L2 永久 feed 同构）；进行中 K0连线不参与截断合并。
+/// **展示轨**：可含冻结 + 进行中/pending 虚拟单元（与 `build_level_virtual_units` 同输入集）。
+/// 永久 L2/`propagate` feed 仍只认冻结段，本函数不参与上层确认、不回写结构。
 /// 多根包含合并：外侧框按分钟 K 中轴；仅一根 K1 bar（count=1）保留半侧锚定。
 pub fn build_k1_combine_frames_with(
     bars: &[KlineBar],
@@ -406,15 +407,10 @@ pub fn build_kline_combine_bundle_with(
         .cloned()
         .unwrap_or_default();
 
-    // K1合并框：只喂已冻结 K0连线（与 L2 feed 输入同构）；进行中/pending 不参与截断合并
-    let k1_bars_for_combine: Vec<K1Bar> = pr
-        .levels
-        .first()
-        .map(|l| l.segments.iter().map(segment_to_virtual_bar).collect())
-        .unwrap_or_default();
+    // K1合并框（展示轨）：冻+进行中+pending，与 level_virtual_units[0] 同构；永久 L2 feed 仍只冻
     let k1_combine_frames = build_k1_combine_frames_with(
         bars,
-        &k1_bars_for_combine,
+        &k1_bars,
         opt.truncation_check,
         opt.validity_check,
     );
@@ -641,9 +637,9 @@ mod tests {
         assert!((absorbed.unwrap().high - 11.0).abs() < 1e-9);
     }
 
-    /// all_confirm：K1合并框只认已冻结 K0连线，与带进行中 K0连线的合并结果可分叉时以冻结为准
+    /// 展示轨：K1合并框与 level_virtual_units（冻+进行中+pending）同输入
     #[test]
-    fn k1_combine_bundle_matches_frozen_segments_only() {
+    fn k1_combine_bundle_matches_virtual_units_display() {
         let bars: Vec<KlineBar> = (0..80)
             .map(|i| {
                 let up = (i / 4) % 2 == 0;
@@ -658,21 +654,21 @@ mod tests {
                 ..PipelineOptions::default()
             };
             let bundle = build_kline_combine_bundle_with(&bars, &opt);
-            let frozen: Vec<K1Bar> = bundle
-                .levels
+            let virtual_units = bundle
+                .level_virtual_units
                 .first()
-                .map(|l| l.segments.iter().map(segment_to_virtual_bar).collect())
+                .cloned()
                 .unwrap_or_default();
             let expect = build_k1_combine_frames_with(
                 &bars,
-                &frozen,
+                &virtual_units,
                 trunc,
                 true,
             );
             assert_eq!(
                 bundle.k1_combine_frames.len(),
                 expect.len(),
-                "trunc={trunc} 框数量应与仅冻结K0连线一致"
+                "trunc={trunc} 框数量应与虚拟单元展示轨一致"
             );
             for (i, (a, b)) in bundle
                 .k1_combine_frames
@@ -684,12 +680,18 @@ mod tests {
                 assert!((a.high - b.high).abs() < 1e-9);
                 assert!((a.low - b.low).abs() < 1e-9);
             }
-            // 进行中 K0连线可仍出现在 k1_bars，但不进合并框输入
+            // 进行中应进入展示轨输入（k1_bars == virtual，合并框同源）
             if bundle.levels.first().and_then(|l| l.active_unit.as_ref()).is_some() {
+                let frozen_n = bundle
+                    .levels
+                    .first()
+                    .map(|l| l.segments.len())
+                    .unwrap_or(0);
                 assert!(
-                    bundle.k1_bars.len() > frozen.len(),
+                    bundle.k1_bars.len() > frozen_n,
                     "trunc={trunc} 展示用虚拟K1 bar应含进行中"
                 );
+                assert_eq!(bundle.k1_bars.len(), virtual_units.len());
             }
         }
     }
