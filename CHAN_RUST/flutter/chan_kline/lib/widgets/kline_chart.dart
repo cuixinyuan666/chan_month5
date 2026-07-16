@@ -1182,11 +1182,17 @@ class _KlineCompositePainter extends CustomPainter {
   ) {
     if (k0Lines.isEmpty && k0ConfirmSignals.isEmpty) return;
 
+    // 十字线 as-of：只展示已确认且 <= asOf 的 K0连线，与 K1 逐K当下冻结口径对齐
+    final asOf = segAsOf;
+    final segs = (asOf == null)
+        ? k0Lines
+        : k0Lines.where((s) => s.endConfirmX <= asOf).toList();
+
     final paint = Paint()
       ..strokeWidth = 1.6
       ..style = PaintingStyle.stroke;
 
-    for (final seg in k0Lines) {
+    for (final seg in segs) {
       final xMin = [
         seg.beginFractalX1,
         seg.beginFractalX2,
@@ -1999,7 +2005,7 @@ class _KlineCompositePainter extends CustomPainter {
     _drawStyledSegmentLine(canvas, a, b, paint, style, building: true);
   }
 
-  /// 构建中 K0连线：末次K0连线确认分型极点 → 当前末根 K 方向极值（虚线，展示专用）。
+  /// 构建中 K0连线：末次K0连线确认分型极点 → 当步K(as-of)/末根 方向极值（虚线，展示专用）。
   void _drawBuildingK0Line(
     Canvas canvas,
     double w,
@@ -2009,13 +2015,23 @@ class _KlineCompositePainter extends CustomPainter {
   ) {
     if (bars.isEmpty || k0ConfirmSignals.isEmpty) return;
 
+    // 十字线 as-of：未激活走末根；激活走当步 K（与 K1 构建线同口径动态延伸）
+    // 先拷到局部，避免类字段 int? 在比较时无法提升
+    final asOf = segAsOf;
+    final tailIdx = asOf ?? (bars.isEmpty ? -1 : bars.last.idx);
+    if (tailIdx < 0) return;
+
+    // 只认 <= asOf 的已确认分型极点（as-of 之外不回画）
     K0ConfirmSignal? last;
     for (final c in k0ConfirmSignals) {
-      if (c.fx == 'TOP' || c.fx == 'BOTTOM') last = c;
+      if (c.fx == 'TOP' || c.fx == 'BOTTOM') {
+        if (asOf != null && c.x > asOf) continue;
+        last = c;
+      }
     }
     if (last == null) return;
 
-    final tail = bars.last;
+    final tail = bars[tailIdx];
     if (last.x > tail.idx) return;
 
     final buildingDir = last.fx == 'BOTTOM' ? 1 : -1;
