@@ -104,13 +104,14 @@ class MsgHistory {
     );
   }
 
-  /// 展示轨分型判断副图：确认式打点（成立当步），禁止整框向前赋值。
+  /// 展示轨分型判断副图：确认式打点 + 会话事件日志累积全部历史点。
   void appendDisplayTrackFractalJudgment() {
     append(
-      '【口径纠正】K(n-1)分型判断：由「合并框 fx 整段回填」改为「确认式打点」——'
-      '仅在三元素/截断使分型成立的当步 K0 打点（与分型确认 x 同语义），'
-      '禁止 [x1,x2] 整框向前赋值/未来函数。展示轨仍走 computeK0/K1CombineFrames'
-      '（含 truncationCheck）；半透明空心，与冻结 LevelConfirm 分行对照；不回写结构。',
+      '【口径纠正】K(n-1)分型判断：确认式打点（成立当步，禁止整框回填）；'
+      '步进/播放/一次性走完均逐 K 追加事件日志（x+fx 去重），绘制扫全部历史点，'
+      '禁止只保留末态重算结果；换股/重载才清空。'
+      '十字线 as-of 仅过滤 x>asOf；展示轨仍走 computeK0/K1CombineFrames'
+      '（含 truncationCheck）；半透明空心；不回写结构。',
     );
   }
 

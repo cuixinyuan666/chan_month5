@@ -46,6 +46,8 @@ class BarFeatureLookup {
     List<LevelBundle> levels = const [],
     Set<SubChartIndicator> subIndicators = const {},
     bool truncationCheck = true,
+    /// 分型判断会话事件日志（有则优先；扫全部历史点）
+    Map<int, List<FractalJudgmentEvent>> judgmentHistoryByKn = const {},
   }) {
     final byIdx = <int, Map<String, dynamic>>{};
 
@@ -209,19 +211,28 @@ class BarFeatureLookup {
       }
     }
 
-    // 展示轨分型判断：勾选层写入当步 fx（与副图同口径，含 truncationCheck）
+    // 展示轨分型判断：优先用会话事件日志（曾经出现过的点全部保留）
     for (final ind in subIndicators) {
       if (ind.kind != SubIndicatorKind.fractalJudgment || ind.kn < 1) {
         continue;
       }
       if (bars.isEmpty) continue;
-      final fxSeries = computeFractalJudgmentSeries(
-        kn: ind.kn,
-        bars: bars,
-        levels: levels,
-        barFeatures: barFeatures,
-        truncationCheck: truncationCheck,
-      );
+      final history = judgmentHistoryByKn[ind.kn];
+      final List<String> fxSeries;
+      if (history != null && history.isNotEmpty) {
+        fxSeries = expandJudgmentEventsToSeries(
+          history,
+          bars.last.idx + 1,
+        );
+      } else {
+        fxSeries = computeFractalJudgmentSeries(
+          kn: ind.kn,
+          bars: bars,
+          levels: levels,
+          barFeatures: barFeatures,
+          truncationCheck: truncationCheck,
+        );
+      }
       for (final b in bars) {
         final row = byIdx.putIfAbsent(b.idx, () => {'idx': b.idx});
         final fx = b.idx >= 0 && b.idx < fxSeries.length

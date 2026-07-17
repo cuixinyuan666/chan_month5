@@ -23,6 +23,33 @@ void main() {
     expect(fxToSigned('UNKNOWN'), 0);
   });
 
+  test('mergeFractalJudgmentEventLog：追加保留全部历史，后续重算不抹掉', () {
+    final history = <FractalJudgmentEvent>[];
+    mergeFractalJudgmentEventLog(history, [
+      const FractalJudgmentEvent(x: 1, fx: 'TOP'),
+    ]);
+    expect(history.length, 1);
+    // 后续步重算不再含 x=1，但含新点 x=4 —— 旧点仍在
+    mergeFractalJudgmentEventLog(history, [
+      const FractalJudgmentEvent(x: 4, fx: 'BOTTOM'),
+    ]);
+    expect(history.length, 2);
+    expect(history[0].x, 1);
+    expect(history[1].x, 4);
+    // 同 x+fx 去重，不重复追加
+    mergeFractalJudgmentEventLog(history, [
+      const FractalJudgmentEvent(x: 4, fx: 'BOTTOM'),
+      const FractalJudgmentEvent(x: 7, fx: 'TOP'),
+    ]);
+    expect(history.length, 3);
+    expect(history.last.x, 7);
+
+    final drawn = expandJudgmentEventsToSeries(history, 8, maxX: 5);
+    expect(drawn[1], 'TOP');
+    expect(drawn[4], 'BOTTOM');
+    expect(drawn[7], 'UNKNOWN', reason: 'as-of 过滤未来');
+  });
+
   test('computeFractalJudgmentSeries kn=1：稀疏打点，非整框铺满', () {
     // 构造易出分型的上下交错高低
     final bars = <KlineBar>[

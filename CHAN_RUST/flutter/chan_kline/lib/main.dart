@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'bridge/chan_bridge.dart';
+import 'compute/fractal_judgment_compute.dart';
 import 'compute/k1_bar_view_compute.dart';
 import 'history/app_debug_snapshot.dart';
 import 'history/msg_history.dart';
@@ -129,6 +130,9 @@ class _KlineHomePageState extends State<KlineHomePage> {
   bool _truncationCheck = true;
   /// 构建中合并框（虚线）开关：开=末组合并画虚线；关=全部实线（默认开）
   bool _showBuildingDash = true;
+
+  /// 分型判断步进事件日志：kn → 追加式历史（换股/重载才清空；不因重算丢点）
+  Map<int, List<FractalJudgmentEvent>> _judgmentHistoryByKn = {};
 
   bool get _busy => _bootstrapping || _loadingChart;
   bool get _hasSession => _allBars.isNotEmpty;
@@ -271,6 +275,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _allBars = bars;
         _stepIdx = bars.isEmpty ? -1 : 0;
         _defaultK0Purged = false;
+        _judgmentHistoryByKn.clear();
       });
       _msgHistory.append(
         '加载K0：$code ${_fmtDateTime(_beginDate)}~${_fmtDateTime(_endDate)} '
@@ -291,11 +296,42 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _k1Analysis = K1AnalysisBundle.empty();
         _levels = [];
         _stepIdx = -1;
+        _judgmentHistoryByKn.clear();
       });
       _msgHistory.append('加载K0失败：$e');
     } finally {
       if (mounted) setState(() => _loadingChart = false);
     }
+  }
+
+  /// 把当前可见窗口的展示轨分型判断并入会话日志（追加去重，不删旧点）。
+  void _mergeJudgmentHistory({
+    required List<KlineBar> bars,
+    required List<LevelBundle> levels,
+    required List<BarCrosshairFeature> barFeatures,
+    required List<K0Line> k0Lines,
+  }) {
+    if (bars.isEmpty) return;
+    final maxKnProbe = chartMaxKn(levels: levels, k0Lines: k0Lines);
+    final knHi = maxKnProbe < 1 ? 1 : maxKnProbe;
+    final nextHistory = <int, List<FractalJudgmentEvent>>{
+      for (final e in _judgmentHistoryByKn.entries)
+        e.key: List<FractalJudgmentEvent>.from(e.value),
+    };
+    for (var kn = 1; kn <= knHi; kn++) {
+      final log = nextHistory.putIfAbsent(kn, () => <FractalJudgmentEvent>[]);
+      mergeFractalJudgmentEventLog(
+        log,
+        collectFractalJudgmentEvents(
+          kn: kn,
+          bars: bars,
+          levels: levels,
+          barFeatures: barFeatures,
+          truncationCheck: _truncationCheck,
+        ),
+      );
+    }
+    _judgmentHistoryByKn = nextHistory;
   }
 
   void _rebuildCombine() {
@@ -309,6 +345,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _k1CombineFrames = [];
         _k1Analysis = K1AnalysisBundle.empty();
         _levels = [];
+        _judgmentHistoryByKn.clear();
       });
       return;
     }
@@ -328,6 +365,13 @@ class _KlineHomePageState extends State<KlineHomePage> {
         virtualBars = const [];
       }
       final k1Views = buildK1BarViews(virtualBars);
+      // 本步展示轨判断事件 → 追加进会话日志
+      _mergeJudgmentHistory(
+        bars: _visibleBars,
+        levels: bundle.levels,
+        barFeatures: bundle.barFeatures,
+        k0Lines: bundle.k0Lines,
+      );
       setState(() {
         _combineFrames = bundle.frames;
         _k0ConfirmSignals = bundle.k0Confirms;
@@ -480,7 +524,32 @@ class _KlineHomePageState extends State<KlineHomePage> {
   void _runToEnd() {
     if (!_hasSession) return;
     _stopPlay();
-    setState(() => _stepIdx = _allBars.length - 1);
+    final end = _allBars.length - 1;
+    final start = _stepIdx < 0 ? 0 : _stepIdx;
+    // 一次性走完也必须逐 K 合并判断日志，否则中间态曾出现的点会丢（只剩末态）
+    for (var i = start; i <= end; i++) {
+      _stepIdx = i;
+      final visible = _allBars.sublist(0, i + 1);
+      try {
+        final bundle = _bridge.buildKlineCombineBundle(
+          visible,
+          truncationCheck: _truncationCheck,
+        );
+        if (bundle.defaultK0Policy == 'purged') {
+          _defaultK0Purged = true;
+        }
+        _mergeJudgmentHistory(
+          bars: visible,
+          levels: bundle.levels,
+          barFeatures: bundle.barFeatures,
+          k0Lines: bundle.k0Lines,
+        );
+      } catch (e) {
+        _msgHistory.append('一次性走完@step=$i 失败：$e');
+        break;
+      }
+    }
+    // 末态刷新图面（merge 幂等，不会删旧点）
     _rebuildCombine();
     _logCombineSummary(prefix: '一次性走完');
   }
@@ -515,6 +584,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
                   defaultK0Policy: _defaultK0Policy,
                   truncationCheck: _truncationCheck,
                   showBuildingDash: _showBuildingDash,
+                  judgmentHistoryByKn: _judgmentHistoryByKn,
                   mainIndicators: _mainIndicators,
                   onMainIndicatorsChanged: (v) =>
                       setState(() => _mainIndicators = v),

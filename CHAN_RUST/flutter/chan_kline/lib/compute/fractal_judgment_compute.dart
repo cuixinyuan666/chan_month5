@@ -9,21 +9,6 @@ import 'k1_combine_compute.dart';
 
 export '../models/fractal_judgment_event.dart';
 
-/// 判断事件 → 逐 K0 稀疏序列（仅成立当步有 TOP/BOTTOM，其余 UNKNOWN；禁止整框回填）。
-List<String> expandJudgmentEventsToSeries(
-  List<FractalJudgmentEvent> events,
-  int barCount,
-) {
-  if (barCount <= 0) return const [];
-  final out = List<String>.filled(barCount, 'UNKNOWN');
-  for (final e in events) {
-    if (e.x < 0 || e.x >= barCount) continue;
-    if (e.fx != 'TOP' && e.fx != 'BOTTOM') continue;
-    out[e.x] = e.fx;
-  }
-  return out;
-}
-
 /// TOP=-1，BOTTOM=+1，其它=0（与分型确认 value 同号约定）。
 int fxToSigned(String fx) {
   if (fx == 'TOP') return -1;
@@ -31,9 +16,28 @@ int fxToSigned(String fx) {
   return 0;
 }
 
-/// 全层同构：展示轨分型判断（确认式打点，不回写 LevelConfirm）。
-/// 只在三元素/截断使分型成立的当步打点；无合并框整段向前赋值。
-List<String> computeFractalJudgmentSeries({
+String _eventKey(FractalJudgmentEvent e) =>
+    '${e.x}|${e.fx}|${e.truncated ? 1 : 0}';
+
+/// 步进累积：把本步事件追加进历史日志（按 x+fx+截断 去重；绝不删旧点）。
+void mergeFractalJudgmentEventLog(
+  List<FractalJudgmentEvent> history,
+  List<FractalJudgmentEvent> fresh,
+) {
+  if (fresh.isEmpty) return;
+  final seen = <String>{for (final e in history) _eventKey(e)};
+  for (final e in fresh) {
+    if (e.fx != 'TOP' && e.fx != 'BOTTOM') continue;
+    if (e.x < 0) continue;
+    final k = _eventKey(e);
+    if (seen.add(k)) {
+      history.add(e);
+    }
+  }
+}
+
+/// 采集本步展示轨分型判断事件（确认式；不回写 LevelConfirm）。
+List<FractalJudgmentEvent> collectFractalJudgmentEvents({
   required int kn,
   required List<KlineBar> bars,
   required List<LevelBundle> levels,
@@ -82,12 +86,48 @@ List<String> computeFractalJudgmentSeries({
       judgmentEvents: events,
     );
   }
-
-  final maxIdx = bars.last.idx;
-  return expandJudgmentEventsToSeries(events, maxIdx + 1);
+  return events;
 }
 
-/// 判断序列 → 副图 ±1 值（按 bars 顺序；越界 idx 跳过）。
+/// 事件 → 稀疏序列（同 x 后者覆盖；[maxX] 藏未来；绘制优先直接扫事件列表）。
+List<String> expandJudgmentEventsToSeries(
+  List<FractalJudgmentEvent> events,
+  int barCount, {
+  int? maxX,
+}) {
+  if (barCount <= 0) return const [];
+  final out = List<String>.filled(barCount, 'UNKNOWN');
+  for (final e in events) {
+    if (e.x < 0 || e.x >= barCount) continue;
+    if (maxX != null && e.x > maxX) continue;
+    if (e.fx != 'TOP' && e.fx != 'BOTTOM') continue;
+    out[e.x] = e.fx;
+  }
+  return out;
+}
+
+/// @Deprecated 请用 [collectFractalJudgmentEvents] + 事件日志累积
+List<String> computeFractalJudgmentSeries({
+  required int kn,
+  required List<KlineBar> bars,
+  required List<LevelBundle> levels,
+  required List<BarCrosshairFeature> barFeatures,
+  int? asOf,
+  bool truncationCheck = true,
+}) {
+  if (bars.isEmpty) return const [];
+  final events = collectFractalJudgmentEvents(
+    kn: kn,
+    bars: bars,
+    levels: levels,
+    barFeatures: barFeatures,
+    asOf: asOf,
+    truncationCheck: truncationCheck,
+  );
+  return expandJudgmentEventsToSeries(events, bars.last.idx + 1);
+}
+
+/// 判断序列 → 副图 ±1 值（按 bars 顺序）。
 List<int> fractalJudgmentSignedSeries(
   List<String> fxSeries,
   List<KlineBar> bars,

@@ -69,6 +69,7 @@ class KlineChart extends StatefulWidget {
     this.defaultK0Policy = 'pending',
     this.truncationCheck = true,
     this.showBuildingDash = true,
+    this.judgmentHistoryByKn = const {},
     this.onMainIndicatorsChanged,
     this.onSubIndicatorsChanged,
     this.indicatorsEnabled = true,
@@ -99,6 +100,8 @@ class KlineChart extends StatefulWidget {
   final bool truncationCheck;
   /// 构建中/未确认元素虚线开关：开=末组合并框虚线 + K0/K1/KN 构建中连线虚线；关=全部实线（不区分构建中）
   final bool showBuildingDash;
+  /// 分型判断会话事件日志（main 步进累积；换股才清空）
+  final Map<int, List<FractalJudgmentEvent>> judgmentHistoryByKn;
   final ValueChanged<Set<MainChartIndicator>>? onMainIndicatorsChanged;
   final ValueChanged<Set<SubChartIndicator>>? onSubIndicatorsChanged;
   /// 无数据时禁止点主/副图指标入口
@@ -350,6 +353,7 @@ class _KlineChartState extends State<KlineChart> {
       levels: widget.levels,
       subIndicators: _activeSubs,
       truncationCheck: widget.truncationCheck,
+      judgmentHistoryByKn: widget.judgmentHistoryByKn,
     );
     return lookup.crosshairTooltipRows(
       bar.idx,
@@ -702,6 +706,7 @@ class _KlineChartState extends State<KlineChart> {
                 segAsOf: _crosshairEnabled && _crosshairBarIdx != null
                     ? _crosshairAsOfIdx()
                     : null,
+                judgmentHistoryByKn: widget.judgmentHistoryByKn,
               ),
             ),
             Positioned.fill(
@@ -888,6 +893,7 @@ class _KlineCompositePainter extends CustomPainter {
     this.truncationCheck = true,
     this.showBuildingDash = true,
     this.segAsOf,
+    this.judgmentHistoryByKn = const {},
   }) : featureLookup = BarFeatureLookup.build(
           bars: bars,
           combineFrames: combineFrames,
@@ -898,6 +904,7 @@ class _KlineCompositePainter extends CustomPainter {
           levels: levels,
           subIndicators: subIndicators,
           truncationCheck: truncationCheck,
+          judgmentHistoryByKn: judgmentHistoryByKn,
         );
 
   final List<KlineBar> bars;
@@ -929,6 +936,9 @@ class _KlineCompositePainter extends CustomPainter {
   final bool showBuildingDash;
   /// 十字线 as-of 2 段连线截止 K（null=末态全量）
   final int? segAsOf;
+
+  /// 分型判断会话事件日志（步进追加；绘制扫全部历史点）
+  final Map<int, List<FractalJudgmentEvent>> judgmentHistoryByKn;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -2521,7 +2531,7 @@ class _KlineCompositePainter extends CustomPainter {
     }
   }
 
-  /// 副图 Kn 分型判断：展示轨确认式打点（成立当步；半透明空心；与确认区分）。
+  /// 副图 Kn 分型判断：展示轨确认式打点（成立当步；半透明空心；扫会话历史事件）。
   void _drawKnFractalJudgmentSubChart(
     Canvas canvas,
     double w,
@@ -2546,22 +2556,15 @@ class _KlineCompositePainter extends CustomPainter {
       barW: barW,
     );
 
-    final fxSeries = computeFractalJudgmentSeries(
-      kn: labelKn,
-      bars: bars,
-      levels: levels,
-      barFeatures: barFeatures,
-      asOf: segAsOf,
-      truncationCheck: truncationCheck,
-    );
-    final signed = fractalJudgmentSignedSeries(fxSeries, bars);
-
-    for (var i = 0; i < bars.length; i++) {
-      final value = signed[i];
+    final history = judgmentHistoryByKn[labelKn] ?? const <FractalJudgmentEvent>[];
+    final maxX = segAsOf ?? bars.last.idx;
+    // 直接扫事件列表：每个曾经出现过的点都画，不经 Map-by-x 折叠成「只剩末点」
+    for (final e in history) {
+      if (e.x < 0 || e.x > maxX) continue;
+      final value = fxToSigned(e.fx);
       if (value == 0) continue;
-      final x = bars[i].idx;
-      if (x < viewport.viewXMin - 1 || x > viewport.viewXMax + 1) continue;
-      final cx = _barCenterX(x, w, slotW) + dx;
+      if (e.x < viewport.viewXMin - 1 || e.x > viewport.viewXMax + 1) continue;
+      final cx = _barCenterX(e.x, w, slotW) + dx;
       final yp = subY(value.toDouble());
       paintFractalConfirmMarker(
         canvas,
@@ -2999,6 +3002,7 @@ class _KlineCompositePainter extends CustomPainter {
         oldDelegate.crosshairY != crosshairY ||
         oldDelegate.crosshairBarIdx != crosshairBarIdx ||
         oldDelegate.truncationCheck != truncationCheck ||
-        oldDelegate.showBuildingDash != showBuildingDash;
+        oldDelegate.showBuildingDash != showBuildingDash ||
+        oldDelegate.judgmentHistoryByKn != judgmentHistoryByKn;
   }
 }
