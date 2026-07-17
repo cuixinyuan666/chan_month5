@@ -33,6 +33,8 @@ Future<void> main() async {
   MsgHistory.instance.appendBuildingDashTailFirstExtreme();
   // 展示轨动态 KN 合并框：冻+进行中重算，永久结构不回写
   MsgHistory.instance.appendDisplayTrackDynamicKnCombine();
+  // 展示轨动态分型判断副图（全层同构）
+  MsgHistory.instance.appendDisplayTrackFractalJudgment();
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     await windowManager.ensureInitialized();
     const opts = WindowOptions(

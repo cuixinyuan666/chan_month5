@@ -95,6 +95,7 @@ void paintTruncationMarker(
 }
 
 /// 在副图画一个 ±1 确认标记（颜色按方向，形状按 Kn；可描边防叠盖）。
+/// [fillAlpha]：填充透明度（分型判断用半透明）；[hollow]：空心描边（与确认实心区分）。
 void paintFractalConfirmMarker(
   Canvas canvas, {
   required double cx,
@@ -104,9 +105,12 @@ void paintFractalConfirmMarker(
   required ConfirmMarkerShape shape,
   required double barW,
   bool withOutline = true,
+  double fillAlpha = 1.0,
+  bool hollow = false,
 }) {
   if (value == 0) return;
-  final color = FractalConfirmColors.of(value);
+  final base = FractalConfirmColors.of(value);
+  final color = base.withValues(alpha: (fillAlpha.clamp(0.0, 1.0)) * base.a);
   final tip = Offset(cx, yp);
   final mid = Offset(cx, (y0 + yp) / 2);
   final half = math.max(2.5, barW * 0.55);
@@ -126,7 +130,8 @@ void paintFractalConfirmMarker(
       path,
       Paint()
         ..color = color
-        ..style = PaintingStyle.fill,
+        ..style = hollow ? PaintingStyle.stroke : PaintingStyle.fill
+        ..strokeWidth = hollow ? 1.8 : 0,
     );
   }
 
@@ -140,7 +145,13 @@ void paintFractalConfirmMarker(
           ..strokeWidth = 2.2,
       );
     }
-    canvas.drawRect(rect, Paint()..color = color);
+    canvas.drawRect(
+      rect,
+      Paint()
+        ..color = color
+        ..style = hollow ? PaintingStyle.stroke : PaintingStyle.fill
+        ..strokeWidth = hollow ? 1.8 : 0,
+    );
   }
 
   switch (shape) {
@@ -178,13 +189,16 @@ void paintFractalConfirmMarker(
       canvas.drawCircle(
         mid,
         half * 0.85,
-        Paint()..color = color,
+        Paint()
+          ..color = color
+          ..style = hollow ? PaintingStyle.stroke : PaintingStyle.fill
+          ..strokeWidth = hollow ? 1.8 : 0,
       );
     case ConfirmMarkerShape.cross:
       final paint = Paint()
         ..color = color
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.8
+        ..strokeWidth = hollow ? 1.5 : 1.8
         ..strokeCap = StrokeCap.round;
       if (withOutline) {
         final outline = Paint()

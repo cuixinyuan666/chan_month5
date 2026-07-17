@@ -6,6 +6,7 @@ import 'chart_indicator.dart';
 import 'kline_combine_frame.dart';
 import 'level_models.dart';
 import 'k1_analysis.dart';
+import '../compute/fractal_judgment_compute.dart';
 
 /// 十字线 tooltip 一行：键值 或 层级分隔线。
 class CrosshairTooltipRow {
@@ -44,6 +45,7 @@ class BarFeatureLookup {
     K1AnalysisBundle k1Analysis = const K1AnalysisBundle(),
     List<LevelBundle> levels = const [],
     Set<SubChartIndicator> subIndicators = const {},
+    bool truncationCheck = true,
   }) {
     final byIdx = <int, Map<String, dynamic>>{};
 
@@ -207,6 +209,28 @@ class BarFeatureLookup {
       }
     }
 
+    // 展示轨分型判断：勾选层写入当步 fx（与副图同口径，含 truncationCheck）
+    for (final ind in subIndicators) {
+      if (ind.kind != SubIndicatorKind.fractalJudgment || ind.kn < 1) {
+        continue;
+      }
+      if (bars.isEmpty) continue;
+      final fxSeries = computeFractalJudgmentSeries(
+        kn: ind.kn,
+        bars: bars,
+        levels: levels,
+        barFeatures: barFeatures,
+        truncationCheck: truncationCheck,
+      );
+      for (final b in bars) {
+        final row = byIdx.putIfAbsent(b.idx, () => {'idx': b.idx});
+        final fx = b.idx >= 0 && b.idx < fxSeries.length
+            ? fxSeries[b.idx]
+            : 'UNKNOWN';
+        (row['sub'] as Map<String, dynamic>)['fractal_judgment_${ind.kn}'] = fx;
+      }
+    }
+
     return BarFeatureLookup._(byIdx: byIdx, totalLevels: levels.length);
   }
 
@@ -340,6 +364,13 @@ class BarFeatureLookup {
           v = sub['k0_confirm_value'];
         }
         add(ind.label, v);
+      }
+      if (ind.kind == SubIndicatorKind.fractalJudgment) {
+        final fx = sub['fractal_judgment_${ind.kn}'];
+        // 确认式：仅成立当步显示 TOP/BOTTOM，不展示整框回填的 UNKNOWN
+        if (fx == 'TOP' || fx == 'BOTTOM') {
+          add(ind.label, fx);
+        }
       }
       if (ind.kind == SubIndicatorKind.fractalPeakDist) {
         if (sub.containsKey('fractal_peak_dist_${ind.kn}')) {

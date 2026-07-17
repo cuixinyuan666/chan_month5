@@ -9,6 +9,7 @@ import '../compute/k0_combine_compute.dart';
 import '../compute/k1_combine_compute.dart';
 import '../compute/k1_bar_view_compute.dart';
 import '../compute/chart_view_compute.dart';
+import '../compute/fractal_judgment_compute.dart';
 import '../compute/kuaduan_compute.dart';
 import '../compute/level_unit_bar_view_compute.dart';
 import '../models/kuaduan_frame.dart';
@@ -348,6 +349,7 @@ class _KlineChartState extends State<KlineChart> {
       k1Analysis: widget.k1Analysis,
       levels: widget.levels,
       subIndicators: _activeSubs,
+      truncationCheck: widget.truncationCheck,
     );
     return lookup.crosshairTooltipRows(
       bar.idx,
@@ -895,6 +897,7 @@ class _KlineCompositePainter extends CustomPainter {
           k1Analysis: k1Analysis,
           levels: levels,
           subIndicators: subIndicators,
+          truncationCheck: truncationCheck,
         );
 
   final List<KlineBar> bars;
@@ -2374,6 +2377,25 @@ class _KlineCompositePainter extends CustomPainter {
         stackCount: confirmKns.length,
       );
     }
+    // 分型判断：确认式打点（成立当步）；半透明空心，可与确认叠画
+    final judgmentKns = subIndicators
+        .where((e) => e.kind == SubIndicatorKind.fractalJudgment)
+        .map((e) => e.kn)
+        .toList()
+      ..sort();
+    for (var i = 0; i < judgmentKns.length; i++) {
+      _drawKnFractalJudgmentSubChart(
+        canvas,
+        w,
+        innerTop,
+        innerH,
+        barW,
+        slotW,
+        judgmentKns[i],
+        stackRank: i,
+        stackCount: judgmentKns.length,
+      );
+    }
     final peakKns = subIndicators
         .where((e) => e.kind == SubIndicatorKind.fractalPeakDist)
         .map((e) => e.kn)
@@ -2496,6 +2518,63 @@ class _KlineCompositePainter extends CustomPainter {
       for (final s in k0ConfirmSignals) {
         paintPoint(s.x, s.value);
       }
+    }
+  }
+
+  /// 副图 Kn 分型判断：展示轨确认式打点（成立当步；半透明空心；与确认区分）。
+  void _drawKnFractalJudgmentSubChart(
+    Canvas canvas,
+    double w,
+    double innerTop,
+    double innerH,
+    double barW,
+    double slotW,
+    int labelKn, {
+    int stackRank = 0,
+    int stackCount = 1,
+  }) {
+    if (bars.isEmpty || labelKn < 1) return;
+    const minV = -1.0;
+    const maxV = 1.0;
+    final span = maxV - minV;
+    double subY(double v) => innerTop + (maxV - v) / span * innerH;
+    final y0 = subY(0);
+    final shape = confirmMarkerShapeForKn(labelKn);
+    final dx = confirmStackOffsetX(
+      rank: stackRank,
+      count: stackCount,
+      barW: barW,
+    );
+
+    final fxSeries = computeFractalJudgmentSeries(
+      kn: labelKn,
+      bars: bars,
+      levels: levels,
+      barFeatures: barFeatures,
+      asOf: segAsOf,
+      truncationCheck: truncationCheck,
+    );
+    final signed = fractalJudgmentSignedSeries(fxSeries, bars);
+
+    for (var i = 0; i < bars.length; i++) {
+      final value = signed[i];
+      if (value == 0) continue;
+      final x = bars[i].idx;
+      if (x < viewport.viewXMin - 1 || x > viewport.viewXMax + 1) continue;
+      final cx = _barCenterX(x, w, slotW) + dx;
+      final yp = subY(value.toDouble());
+      paintFractalConfirmMarker(
+        canvas,
+        cx: cx,
+        y0: y0,
+        yp: yp,
+        value: value,
+        shape: shape,
+        barW: barW,
+        withOutline: stackCount > 1,
+        fillAlpha: 0.45,
+        hollow: true,
+      );
     }
   }
 

@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import '../models/fractal_judgment_event.dart';
 import '../models/k1_bar.dart';
 import '../models/kline_bar.dart';
 import '../models/kline_combine_frame.dart';
@@ -15,6 +16,8 @@ List<KlineCombineFrame> computeK1CombineFrames(
   List<K1Bar> k1Bars, {
   bool truncationCheck = true,
   bool validityCheck = true,
+  /// 非空时：分型判断成立当步写入（x=触发单元 viewX2，无整框回填）
+  List<FractalJudgmentEvent>? judgmentEvents,
 }) {
   if (k1Bars.isEmpty) return const [];
 
@@ -193,6 +196,11 @@ List<KlineCombineFrame> computeK1CombineFrames(
         final truncFx = g.upLeg ? 'TOP' : 'BOTTOM';
         fxAt[last] = truncFx;
         onFxEvent(truncFx, highs[last], lows[last]);
+        judgmentEvents?.add(FractalJudgmentEvent(
+          x: v.viewX2,
+          fx: truncFx,
+          truncated: true,
+        ));
         final forced = g.upLeg ? 'DOWN' : 'UP';
         final rw = truncRewriteTrigger(
           upLeg: g.upLeg,
@@ -245,6 +253,8 @@ List<KlineCombineFrame> computeK1CombineFrames(
         final fx = fxAt[mid];
         if (fx == 'TOP' || fx == 'BOTTOM') {
           onFxEvent(fx, highs[mid], lows[mid]);
+          // 判断成立当步 = 第三元素单元右端 K0（与确认 x 同语义）
+          judgmentEvents?.add(FractalJudgmentEvent(x: v.viewX2, fx: fx));
         }
       }
     }

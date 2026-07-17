@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import '../models/fractal_judgment_event.dart';
 import '../models/kline_bar.dart';
 import '../models/kline_combine_frame.dart';
 
@@ -11,6 +12,8 @@ List<KlineCombineFrame> computeK0CombineFrames(
   List<KlineBar> bars, {
   bool truncationCheck = true,
   bool validityCheck = true,
+  /// 非空时：分型判断成立当步写入（x=触发当步 K0，无整框回填）
+  List<FractalJudgmentEvent>? judgmentEvents,
 }) {
   if (bars.isEmpty) return const [];
 
@@ -178,6 +181,11 @@ List<KlineCombineFrame> computeK0CombineFrames(
         final truncFx = g.upLeg ? 'TOP' : 'BOTTOM';
         fxAt[last] = truncFx;
         onFxEvent(truncFx, highs[last], lows[last]);
+        judgmentEvents?.add(FractalJudgmentEvent(
+          x: x,
+          fx: truncFx,
+          truncated: true,
+        ));
         final forced = g.upLeg ? 'DOWN' : 'UP';
         final rw = truncRewriteTrigger(
           upLeg: g.upLeg,
@@ -225,6 +233,8 @@ List<KlineCombineFrame> computeK0CombineFrames(
         final fx = fxAt[mid];
         if (fx == 'TOP' || fx == 'BOTTOM') {
           onFxEvent(fx, highs[mid], lows[mid]);
+          // 判断成立当步 = 第三元素刚入场的这根 K（与确认 x 同语义）
+          judgmentEvents?.add(FractalJudgmentEvent(x: x, fx: fx));
         }
       }
     }

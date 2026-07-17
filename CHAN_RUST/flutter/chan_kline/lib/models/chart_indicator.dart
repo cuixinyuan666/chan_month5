@@ -42,12 +42,18 @@ class MainChartIndicator {
 }
 
 /// 副图指标种类。
-enum SubIndicatorKind { volume, fractalConfirm, fractalPeakDist, truncation }
+enum SubIndicatorKind {
+  volume,
+  fractalConfirm,
+  fractalJudgment,
+  fractalPeakDist,
+  truncation,
+}
 
-/// 副图一项指标（分型确认/极点距/截断按层动态生成）。
+/// 副图一项指标（分型确认/判断/极点距/截断按层动态生成）。
 class SubChartIndicator {
   final SubIndicatorKind kind;
-  /// 分型确认/极点距/截断：1..maxKn（对应 level=kn 的 confirms；与主图 combine/line 同号=层号）
+  /// 分型确认/判断/极点距/截断：1..maxKn（与主图 combine/line 同号=层号）
   final int kn;
 
   const SubChartIndicator.volume()
@@ -55,6 +61,8 @@ class SubChartIndicator {
         kn = 0;
   const SubChartIndicator.fractalConfirm(this.kn)
       : kind = SubIndicatorKind.fractalConfirm;
+  const SubChartIndicator.fractalJudgment(this.kn)
+      : kind = SubIndicatorKind.fractalJudgment;
   const SubChartIndicator.fractalPeakDist(this.kn)
       : kind = SubIndicatorKind.fractalPeakDist;
   const SubChartIndicator.truncation(this.kn)
@@ -66,6 +74,8 @@ class SubChartIndicator {
         return '成交量';
       case SubIndicatorKind.fractalConfirm:
         return 'K${kn - 1}分型确认';
+      case SubIndicatorKind.fractalJudgment:
+        return 'K${kn - 1}分型判断';
       case SubIndicatorKind.fractalPeakDist:
         return 'K${kn - 1}分型极点距';
       case SubIndicatorKind.truncation:
@@ -121,7 +131,7 @@ List<MainChartIndicator> buildMainIndicatorCatalog(int maxKn) {
   return out;
 }
 
-/// 副图可选列表：成交量 + Kn分型确认/极点距/截断（1..maxKn，与主图 combine/line 同号=层号）；
+/// 副图可选列表：成交量 + Kn分型确认/判断/极点距/截断（1..maxKn，与主图同号=层号）；
 /// 截断项仅在 [truncationCheck]=true 时出现。
 List<SubChartIndicator> buildSubIndicatorCatalog(
   int maxKn, {
@@ -130,6 +140,9 @@ List<SubChartIndicator> buildSubIndicatorCatalog(
   final out = <SubChartIndicator>[const SubChartIndicator.volume()];
   for (var n = 1; n <= maxKn; n++) {
     out.add(SubChartIndicator.fractalConfirm(n));
+  }
+  for (var n = 1; n <= maxKn; n++) {
+    out.add(SubChartIndicator.fractalJudgment(n));
   }
   for (var n = 1; n <= maxKn; n++) {
     out.add(SubChartIndicator.fractalPeakDist(n));

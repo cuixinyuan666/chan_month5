@@ -41,10 +41,11 @@ void main() {
     expect(pruned.contains(const SubChartIndicator.fractalPeakDist(1)), isTrue);
   });
 
-  test('副图目录大类顺序：确认 < 极点距 < 截断', () {
+  test('副图目录大类顺序：确认 < 判断 < 极点距 < 截断', () {
     final cat = buildSubIndicatorCatalog(3, truncationCheck: true);
     final labels = cat.map((e) => e.label).toList();
-    expect(labels.indexOf('K0分型确认'), lessThan(labels.indexOf('K0分型极点距')));
+    expect(labels.indexOf('K0分型确认'), lessThan(labels.indexOf('K0分型判断')));
+    expect(labels.indexOf('K0分型判断'), lessThan(labels.indexOf('K0分型极点距')));
     expect(labels.indexOf('K0分型极点距'), lessThan(labels.indexOf('K0截断')));
   });
 

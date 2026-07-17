@@ -91,7 +91,7 @@ class _SubIndicatorPickerDialogState extends State<_SubIndicatorPickerDialog> {
     final tiles = <Widget>[];
     SubIndicatorKind? prevKind;
     for (final item in widget.available) {
-      // 大类切换处加 Divider（成交量 | 分型确认 | 极点距 | 截断）
+      // 大类切换处加 Divider（成交量 | 分型确认 | 分型判断 | 极点距 | 截断）
       if (prevKind != null && prevKind != item.kind) {
         tiles.add(
           const Divider(
