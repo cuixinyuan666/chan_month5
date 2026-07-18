@@ -36,6 +36,8 @@ Future<void> main() async {
   MsgHistory.instance.appendDisplayTrackDynamicKnCombine();
   // 展示轨动态分型判断副图（全层同构）
   MsgHistory.instance.appendDisplayTrackFractalJudgment();
+  // 展示轨：动态KN当确认段画虚线；确认优先纠正/改实线
+  MsgHistory.instance.appendDisplayTrackDynamicKnBuildingLines();
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     await windowManager.ensureInitialized();
     const opts = WindowOptions(
@@ -926,9 +928,10 @@ class _KlineHomePageState extends State<KlineHomePage> {
             '作用：统一控制主图所有「构建中 / 未确认」的画线是否用虚线区分（与已确认的实线区分）。\n\n'
             '覆盖范围（开=虚线，关=全部实线）\n'
             '· 主图 K0/K1/…/KN 每层的末组合并框：末组=进行中、可继续延伸的合并，画虚线；前组=已冻结，画实线；\n'
-            '· K0 构建中连线：末次确认分型极点 → 扫价区间内方向极值首次出现的 K0（X/Y 同根），画虚线；\n'
-            '· K1/…/KN 构建中连线：末次确认极点 → 同上口径（buildingTailEndpoint），画虚线；\n'
-            '· 尾端不再把 X 钉在 as-of/末根；与「构建中=虚线、已确认=实线」同口径；全层同构（K0/K1/…/KN）。\n\n'
+            '· K0/K1/…/KN 构建中连线：与动态KN合并同输入的未冻结虚拟单元，'
+            '按确认段几何画虚线（动态KN当确认KN）；\n'
+            '· 分型确认优先：纠正虚线端点，或单元冻结后虚线改实线；不回写永久结构；\n'
+            '· 尾端取动态单元 x2/close（确认可纠正），不再用判断链/首极值替代；全层同构。\n\n'
             '关闭\n'
             '· 上述所有元素一律实线，不区分构建中状态（合并框、各层构建中连线均实线）。\n\n'
             '操作步骤\n'

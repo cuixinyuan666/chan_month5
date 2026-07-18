@@ -12,6 +12,7 @@ import '../compute/chart_view_compute.dart';
 import '../compute/fractal_judgment_compute.dart';
 import '../compute/kuaduan_compute.dart';
 import '../compute/level_unit_bar_view_compute.dart';
+import '../history/msg_history.dart';
 import '../models/kuaduan_frame.dart';
 import '../models/k0_confirm_signal.dart';
 import '../models/bar_crosshair_feature.dart';
@@ -703,6 +704,7 @@ class _KlineChartState extends State<KlineChart> {
                 crosshairBarIdx: _crosshairBarIdx,
                 truncationCheck: widget.truncationCheck,
                 showBuildingDash: widget.showBuildingDash,
+                defaultK0Policy: widget.defaultK0Policy,
                 segAsOf: _crosshairEnabled && _crosshairBarIdx != null
                     ? _crosshairAsOfIdx()
                     : null,
@@ -892,6 +894,7 @@ class _KlineCompositePainter extends CustomPainter {
     required this.crosshairBarIdx,
     this.truncationCheck = true,
     this.showBuildingDash = true,
+    this.defaultK0Policy = 'pending',
     this.segAsOf,
     this.judgmentHistoryByKn = const {},
   }) : featureLookup = BarFeatureLookup.build(
@@ -934,6 +937,8 @@ class _KlineCompositePainter extends CustomPainter {
   final bool truncationCheck;
   /// 构建中/未确认元素虚线开关：开=末组合并框虚线 + K0/K1/KN 构建中连线虚线；关=全部实线（不区分构建中）
   final bool showBuildingDash;
+  /// 与 asOfK1Bars 同构的默认 K0 策略（pending/purged）
+  final String defaultK0Policy;
   /// 十字线 as-of 2 段连线截止 K（null=末态全量）
   final int? segAsOf;
 
@@ -1241,6 +1246,73 @@ class _KlineCompositePainter extends CustomPainter {
     }
 
     _drawBuildingK0Line(canvas, w, plotTop, plotH, slotW);
+  }
+
+  /// K0 构建中虚线：动态 K1 bar（asOfK1Bars）当确认段画虚线；确认纠正/改实线。
+  void _drawBuildingK0Line(
+    Canvas canvas,
+    double w,
+    double plotTop,
+    double plotH,
+    double slotW,
+  ) {
+    if (bars.isEmpty) return;
+    final asOf = segAsOf;
+    final tailIdx = asOf ?? bars.last.idx;
+    if (tailIdx < 0 || tailIdx >= bars.length) return;
+
+    // 与动态合并同输入：冻+进行中虚拟单元
+    final virtualUnits = asOfK1Bars(
+      bars: bars,
+      levels: levels,
+      barFeatures: barFeatures,
+      defaultK0Policy: defaultK0Policy,
+      asOf: tailIdx,
+      includeBuilding: true,
+    );
+    final frozenIdx = <int>{
+      for (final s in asOfLevelSegments(
+        levels: levels,
+        level: 1,
+        asOf: tailIdx,
+      ))
+        s.idx,
+    };
+    final liveJudgments = collectFractalJudgmentEvents(
+      kn: 1,
+      bars: bars,
+      levels: levels,
+      barFeatures: barFeatures,
+      asOf: tailIdx,
+      truncationCheck: truncationCheck,
+    );
+    final lines = computeDisplayBuildingLines(
+      bars: bars,
+      asOf: tailIdx,
+      virtualUnits: virtualUnits,
+      frozenIdx: frozenIdx,
+      k0Confirms: k0ConfirmSignals,
+      liveJudgments: liveJudgments,
+      debugKn: 1,
+    );
+    // 历史记录调试摘要（内容变才追加，便于复制排查）
+    MsgHistory.instance.appendDisplayBuildingLinesRuntime(
+      kn: 1,
+      asOf: tailIdx,
+      virtualUnits: virtualUnits,
+      frozenIdx: frozenIdx,
+      lines: lines,
+      liveJudgments: liveJudgments,
+    );
+    _paintDisplayBuildingLines(
+      canvas,
+      w,
+      plotTop,
+      plotH,
+      slotW,
+      lines: lines,
+      style: null,
+    );
   }
 
   /// K0连线端点：引导K0连线起点走分型框极值；其余严格匹配K0连线确认信号。
@@ -2012,7 +2084,7 @@ class _KlineCompositePainter extends CustomPainter {
     }
   }
 
-  /// 构建中 N 段：末次确认极点 → 扫价区间内方向极值首次出现的 K0（虚线尾端同构）。
+  /// 构建中 N 段虚线：动态 KN 虚拟单元当确认段画虚线（确认纠正/改实线；全层同构）。
   void _drawBuildingLevelLine(
     Canvas canvas,
     double w,
@@ -2027,139 +2099,150 @@ class _KlineCompositePainter extends CustomPainter {
   }) {
     if (bars.isEmpty || tailIdx < 0 || tailIdx >= bars.length) return;
 
-    final buildingDir = useLegacyK1Analysis
-        ? k1Analysis.buildingSegDir
-        : buildingLevelDirAt(
-            levels: levels,
-            barFeatures: barFeatures,
-            level: level,
-            asOf: tailIdx,
-          );
-    if (buildingDir == 0) return;
+    List<LevelConfirm> levelConfirms = confirms;
+    if (useLegacyK1Analysis && confirms.isEmpty) {
+      levelConfirms = [
+        for (final c in k1Analysis.k1Confirms)
+          if (c.x <= tailIdx && (c.fx == 'TOP' || c.fx == 'BOTTOM'))
+            LevelConfirm(
+              x: c.x,
+              fx: c.fx,
+              value: c.value,
+              fractalX1: c.fractalX1,
+              fractalX2: c.fractalX2,
+              fractalHigh: c.fractalHigh,
+              fractalLow: c.fractalLow,
+            ),
+      ];
+    }
 
-    LevelConfirm? lastConfirm;
+    // 与动态 KN 合并框同输入
+    final List<K1Bar> virtualUnits;
+    final Set<int> frozenIdx;
     if (useLegacyK1Analysis) {
-      final sc = k1Analysis.k1Confirms
-          .where((c) => c.x <= tailIdx && (c.fx == 'TOP' || c.fx == 'BOTTOM'))
-          .toList();
-      if (sc.isNotEmpty) {
-        final c = sc.last;
-        lastConfirm = LevelConfirm(
-          x: c.x,
-          fx: c.fx,
-          value: c.value,
-          fractalX1: c.fractalX1,
-          fractalX2: c.fractalX2,
-          fractalHigh: c.fractalHigh,
-          fractalLow: c.fractalLow,
-        );
-      }
+      // 旧 K1Analysis 回退：无 levels 时用已确认 k1Lines 当冻 + 无进行中则无虚线单元
+      virtualUnits = [
+        for (final seg in k1Analysis.k1Lines)
+          if (seg.endX <= tailIdx)
+            K1Bar(
+              idx: seg.idx,
+              dir: seg.dir,
+              x1: seg.beginX < seg.endX ? seg.beginX : seg.endX,
+              x2: seg.beginX > seg.endX ? seg.beginX : seg.endX,
+              open: seg.beginPrice,
+              high: math.max(seg.beginPrice, seg.endPrice),
+              low: math.min(seg.beginPrice, seg.endPrice),
+              close: seg.endPrice,
+              confirmX: seg.endX,
+            ),
+      ];
+      // 旧路径无进行中动态单元：全部当冻结，虚线跳过（实线已画）
+      frozenIdx = {for (final u in virtualUnits) u.idx};
     } else {
-      lastConfirm = lastLevelConfirmAt(confirms, tailIdx);
+      virtualUnits = asOfLevelVirtualK1Bars(
+        levels: levels,
+        barFeatures: barFeatures,
+        level: level,
+        asOf: tailIdx,
+        includeBuilding: true,
+      );
+      frozenIdx = {
+        for (final s in asOfLevelSegments(
+          levels: levels,
+          level: level,
+          asOf: tailIdx,
+        ))
+          s.idx,
+      };
     }
-    if (lastConfirm == null || lastConfirm.x > tailIdx) return;
 
-    final begin = levelConfirmEndpoint(bars, lastConfirm);
-    if (begin == null) return;
-
-    // 尾端：区间内首次创极值的 K0（X/Y 同根；不再钉 as-of 末根）
-    final end = buildingTailEndpoint(
+    final liveJudgments = collectFractalJudgmentEvents(
+      kn: level,
       bars: bars,
-      afterConfirmX: lastConfirm.x,
-      asOfX: tailIdx,
-      buildingDir: buildingDir,
+      levels: levels,
+      barFeatures: barFeatures,
+      asOf: tailIdx,
+      truncationCheck: truncationCheck,
     );
-    if (end == null) return;
-
-    final geomMin = math.min(begin.barIdx, end.barIdx);
-    final geomMax = math.max(begin.barIdx, end.barIdx);
-    if (geomMax < viewport.viewXMin - 1 || geomMin > viewport.viewXMax + 1) {
-      return;
-    }
-
-    final a = Offset(
-      _barCenterX(begin.barIdx, w, slotW),
-      priceRange.yOf(begin.price, plotTop, plotH),
+    final lines = computeDisplayBuildingLines(
+      bars: bars,
+      asOf: tailIdx,
+      virtualUnits: virtualUnits,
+      frozenIdx: frozenIdx,
+      levelConfirms: levelConfirms,
+      liveJudgments: liveJudgments,
+      debugKn: level,
     );
-    final b = Offset(
-      _barCenterX(end.barIdx, w, slotW),
-      priceRange.yOf(end.price, plotTop, plotH),
+    MsgHistory.instance.appendDisplayBuildingLinesRuntime(
+      kn: level,
+      asOf: tailIdx,
+      virtualUnits: virtualUnits,
+      frozenIdx: frozenIdx,
+      lines: lines,
+      liveJudgments: liveJudgments,
     );
-    final paint = Paint()
-      ..color = style.color
-      ..strokeWidth = style.buildingStrokeWidth
-      ..style = PaintingStyle.stroke;
-    _drawStyledSegmentLine(canvas, a, b, paint, style, building: showBuildingDash);
+    _paintDisplayBuildingLines(
+      canvas,
+      w,
+      plotTop,
+      plotH,
+      slotW,
+      lines: lines,
+      style: style,
+    );
   }
 
-  /// 构建中 K0连线：末次确认极点 → 扫价区间内方向极值首次出现的 K0（虚线，与 KN 同构）。
-  void _drawBuildingK0Line(
+  /// 绘制展示轨构建中虚线列表（style=null 时用 K0 连线色）。
+  void _paintDisplayBuildingLines(
     Canvas canvas,
     double w,
     double plotTop,
     double plotH,
-    double slotW,
-  ) {
-    if (bars.isEmpty || k0ConfirmSignals.isEmpty) return;
-
-    // 十字线 as-of：未激活走末根；激活走当步 K（与 KN 构建线同口径动态延伸）
-    // 先拷到局部，避免类字段 int? 在比较时无法提升
-    final asOf = segAsOf;
-    final tailIdx = asOf ?? (bars.isEmpty ? -1 : bars.last.idx);
-    if (tailIdx < 0) return;
-
-    // 只认 <= asOf 的已确认分型极点（as-of 之外不回画）
-    K0ConfirmSignal? last;
-    for (final c in k0ConfirmSignals) {
-      if (c.fx == 'TOP' || c.fx == 'BOTTOM') {
-        if (asOf != null && c.x > asOf) continue;
-        last = c;
+    double slotW, {
+    required List<DisplayBuildingLine> lines,
+    required ChartLevelLineStyle? style,
+  }) {
+    for (final line in lines) {
+      final geomMin = math.min(line.begin.barIdx, line.end.barIdx);
+      final geomMax = math.max(line.begin.barIdx, line.end.barIdx);
+      if (geomMax < viewport.viewXMin - 1 || geomMin > viewport.viewXMax + 1) {
+        continue;
       }
-    }
-    if (last == null) return;
-    if (last.x > tailIdx) return;
-
-    final buildingDir = last.fx == 'BOTTOM' ? 1 : -1;
-    final extremeIdx = fractalExtremeBarIdx(bars, last);
-    if (extremeIdx == null ||
-        extremeIdx < 0 ||
-        extremeIdx >= bars.length) {
-      return;
-    }
-
-    final beginX = _barCenterX(extremeIdx, w, slotW);
-    final beginBar = bars[extremeIdx];
-    final beginPrice = last.fx == 'TOP' ? beginBar.high : beginBar.low;
-
-    // 尾端：区间内首次创极值的 K0（X/Y 同根；与 KN 构建中虚线同构）
-    final end = buildingTailEndpoint(
-      bars: bars,
-      afterConfirmX: last.x,
-      asOfX: tailIdx,
-      buildingDir: buildingDir,
-    );
-    if (end == null) return;
-
-    final geomMin = math.min(extremeIdx, end.barIdx);
-    final geomMax = math.max(extremeIdx, end.barIdx);
-    if (geomMax < viewport.viewXMin - 1 ||
-        geomMin > viewport.viewXMax + 1) {
-      return;
-    }
-
-    final endX = _barCenterX(end.barIdx, w, slotW);
-    final y1 = priceRange.yOf(beginPrice, plotTop, plotH);
-    final y2 = priceRange.yOf(end.price, plotTop, plotH);
-    final paint = Paint()
-      ..color = ChartLineColors.bi.withValues(alpha: 0.45)
-      ..strokeWidth = 1.4
-      ..style = PaintingStyle.stroke;
-
-    // 统一受「构建中/未确认虚线」开关控制：开=虚线（默认），关=实线（不区分构建中）
-    if (showBuildingDash) {
-      _drawDashedLine(canvas, Offset(beginX, y1), Offset(endX, y2), paint);
-    } else {
-      canvas.drawLine(Offset(beginX, y1), Offset(endX, y2), paint);
+      final a = Offset(
+        _barCenterX(line.begin.barIdx, w, slotW),
+        priceRange.yOf(line.begin.price, plotTop, plotH),
+      );
+      final b = Offset(
+        _barCenterX(line.end.barIdx, w, slotW),
+        priceRange.yOf(line.end.price, plotTop, plotH),
+      );
+      if (style != null) {
+        final paint = Paint()
+          ..color = style.color
+          ..strokeWidth = style.buildingStrokeWidth
+          ..style = PaintingStyle.stroke;
+        // asSolid：判断↔判断定格/确认段 → 实线；其余受虚线开关控制
+        final useDash = showBuildingDash && !line.asSolid;
+        _drawStyledSegmentLine(
+          canvas,
+          a,
+          b,
+          paint,
+          style,
+          building: useDash,
+        );
+      } else {
+        final paint = Paint()
+          ..color = ChartLineColors.bi.withValues(alpha: 0.45)
+          ..strokeWidth = 1.4
+          ..style = PaintingStyle.stroke;
+        final useDash = showBuildingDash && !line.asSolid;
+        if (useDash) {
+          _drawDashedLine(canvas, a, b, paint);
+        } else {
+          canvas.drawLine(a, b, paint);
+        }
+      }
     }
   }
 
@@ -3003,6 +3086,7 @@ class _KlineCompositePainter extends CustomPainter {
         oldDelegate.crosshairBarIdx != crosshairBarIdx ||
         oldDelegate.truncationCheck != truncationCheck ||
         oldDelegate.showBuildingDash != showBuildingDash ||
+        oldDelegate.defaultK0Policy != defaultK0Policy ||
         oldDelegate.judgmentHistoryByKn != judgmentHistoryByKn;
   }
 }

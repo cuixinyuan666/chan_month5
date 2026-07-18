@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../compute/chart_view_compute.dart';
+import '../models/fractal_judgment_event.dart';
+import '../models/k1_bar.dart';
+
 /// 消息历史（对齐 a_replay_trainer 的 appendMsgHistory / 一键复制）。
 /// 常驻功能：放在 lib/history/，合并到 main / 清理 UI 时不得删除。
 class MsgHistory {
@@ -100,7 +104,7 @@ class MsgHistory {
       'asOfLevelVirtualK1Bars 同输入）；末组虚线=构建中合并可继续 absorb。'
       '永久 feed/propagate/ZS/BSP 仍只认冻结，不回写旧标签。'
       'K0 合并本就整段入框，行为同构。十字线 as-of 同步含进行中。'
-      '本步未接动态连线/动态K(N+1)/确认态比对。',
+      '动态连线见 appendDisplayTrackDynamicKnBuildingLines（同虚拟单元输入）。',
     );
   }
 
@@ -112,6 +116,51 @@ class MsgHistory {
       '禁止只保留末态重算结果；换股/重载才清空。'
       '十字线 as-of 仅过滤 x>asOf；展示轨仍走 computeK0/K1CombineFrames'
       '（含 truncationCheck）；半透明空心；不回写结构。',
+    );
+  }
+
+  /// 展示轨：动态 KN 当确认段画虚线；分型确认优先纠正/改实线；不回写。
+  void appendDisplayTrackDynamicKnBuildingLines() {
+    append(
+      '【画线口径·改版v2】KN/K0 构建中连线=动态KN几何 + 当下分型判断拆段：'
+      'liveJudgments=asOf 重算（禁止会话历史，失效判断自动回退）；'
+      '判断极点钉在 judgment.x 扫价（buildingTailEndpoint），不随 asOf 拉长；'
+      '开口尖端仅末判断 triggerX==asOf，或无判断时末确认→asOf；'
+      '确认↔确认(未冻覆盖)实线；判断↔判断实线定格；确认↔判断虚线；'
+      '确认优先；不回写永久结构。对照预期：46/47 拆段→48 确认实线→49~57 钉44→58 多段→59 回退。',
+    );
+    append(
+      '【调试·任务口径v2】日志字段：liveJ / poles / allowOpen / solid|open；'
+      '复制历史看【调试·动态KN虚线】核对 asOf=46..59。',
+    );
+  }
+
+  /// 运行时虚线摘要（内容变才追加；复制历史记录排查用）。
+  void appendDisplayBuildingLinesRuntime({
+    required int kn,
+    required int asOf,
+    required List<K1Bar> virtualUnits,
+    required Set<int> frozenIdx,
+    required List<DisplayBuildingLine> lines,
+    List<FractalJudgmentEvent> liveJudgments = const [],
+  }) {
+    final jPart = liveJudgments.map((j) => '${j.x}:${j.fx}').join(',');
+    final unitPart = virtualUnits
+        .map((u) =>
+            '#${u.idx}dir${u.dir}[${u.x1},${u.x2}]'
+            '${frozenIdx.contains(u.idx) ? "冻" : "动"}')
+        .join(',');
+    final linePart = lines
+        .map((l) =>
+            '${l.begin.barIdx}→${l.end.barIdx}'
+            '(${l.beginSrc}/${l.endSrc}'
+            '${l.asSolid ? ",实" : ",虚"}'
+            '${l.isOpenTip ? ",开" : ""})')
+        .join(';');
+    append(
+      '【调试·动态KN虚线】kn=$kn asOf=$asOf '
+      'liveJ=[$jPart] 虚拟=${virtualUnits.length} 冻=${frozenIdx.length} '
+      '线=${lines.length} | 单元=[$unitPart] | 线=[$linePart]',
     );
   }
 

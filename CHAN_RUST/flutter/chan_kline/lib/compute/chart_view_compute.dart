@@ -1,4 +1,8 @@
+import 'dart:convert';
+import 'dart:io';
+
 import '../models/bar_crosshair_feature.dart';
+import '../models/fractal_judgment_event.dart';
 import '../models/k0_confirm_signal.dart';
 import '../models/k1_bar.dart';
 import '../models/kline_bar.dart';
@@ -478,4 +482,370 @@ List<K1Bar> asOfLevelVirtualK1Bars({
     ));
   }
   return frozen;
+}
+
+
+/// 展示轨构建中连线：动态KN几何 + 当下分型判断拆段；
+/// 确认优先改实线/纠端点；判断失效（live 不再出现）则自动合并回退；不回写结构。
+class DisplayBuildingLine {
+  final LevelLineEndpoint begin;
+  final LevelLineEndpoint end;
+  /// 升=+1，降=-1
+  final int dir;
+  /// 调试用：关联虚拟单元 idx（无则 -1）
+  final int unitIdx;
+  /// 起点锚点 x
+  final int anchorX;
+  /// 端点是否被确认纠正
+  final bool corrected;
+  /// begin/end 来源：confirm | judgment | open | dynamic
+  final String beginSrc;
+  final String endSrc;
+  /// true=本段画实线（确认段或判断↔判断定格）；false=虚线
+  final bool asSolid;
+  /// 开口到 asOf 的尖端段
+  final bool isOpenTip;
+
+  const DisplayBuildingLine({
+    required this.begin,
+    required this.end,
+    required this.dir,
+    required this.unitIdx,
+    required this.anchorX,
+    this.corrected = false,
+    this.beginSrc = 'dynamic',
+    this.endSrc = 'dynamic',
+    this.asSolid = false,
+    this.isOpenTip = false,
+  });
+}
+
+class _DashPole {
+  final int poleX;
+  final String fx;
+  final LevelLineEndpoint endpoint;
+  /// confirm | judgment
+  final String src;
+  /// 判断触发步（confirm 时=确认 x）
+  final int triggerX;
+
+  const _DashPole({
+    required this.poleX,
+    required this.fx,
+    required this.endpoint,
+    required this.src,
+    required this.triggerX,
+  });
+}
+
+LevelLineEndpoint? _k0ConfirmEndpoint(
+  List<KlineBar> bars,
+  K0ConfirmSignal conf,
+) {
+  final poleIdx = fractalExtremeBarIdx(bars, conf);
+  if (poleIdx == null) return null;
+  final price = poleBarPrice(bars, poleIdx, conf.fx);
+  if (price == null) return null;
+  return LevelLineEndpoint(barIdx: poleIdx, price: price);
+}
+
+/// as-of 内全部确认极点（按确认步排序；同 fx 后者覆盖）。
+List<_DashPole> _collectConfirmPoles({
+  required List<KlineBar> bars,
+  required int asOf,
+  required List<LevelConfirm> levelConfirms,
+  required List<K0ConfirmSignal> k0Confirms,
+}) {
+  final raw = <_DashPole>[];
+  for (final c in levelConfirms) {
+    if (c.x > asOf) continue;
+    if (c.fx != 'TOP' && c.fx != 'BOTTOM') continue;
+    final ep = levelConfirmEndpoint(bars, c);
+    if (ep == null) continue;
+    raw.add(_DashPole(
+      poleX: ep.barIdx,
+      fx: c.fx,
+      endpoint: ep,
+      src: 'confirm',
+      triggerX: c.x,
+    ));
+  }
+  if (raw.isEmpty) {
+    for (final c in k0Confirms) {
+      if (c.x > asOf) continue;
+      if (c.fx != 'TOP' && c.fx != 'BOTTOM') continue;
+      final ep = _k0ConfirmEndpoint(bars, c);
+      if (ep == null) continue;
+      raw.add(_DashPole(
+        poleX: ep.barIdx,
+        fx: c.fx,
+        endpoint: ep,
+        src: 'confirm',
+        triggerX: c.x,
+      ));
+    }
+  }
+  raw.sort((a, b) => a.triggerX.compareTo(b.triggerX));
+  // 交替：同向连续只留后者
+  final out = <_DashPole>[];
+  for (final p in raw) {
+    if (out.isNotEmpty && out.last.fx == p.fx) {
+      out[out.length - 1] = p;
+    } else {
+      out.add(p);
+    }
+  }
+  return out;
+}
+
+/// 判断极点：扫 (prevPole, judgment.x] 内方向首极值（钉在判断触发步，不随 asOf 拉长）。
+_DashPole? _judgmentPole({
+  required List<KlineBar> bars,
+  required _DashPole prev,
+  required FractalJudgmentEvent j,
+}) {
+  if (j.fx != 'TOP' && j.fx != 'BOTTOM') return null;
+  if (j.x <= prev.poleX) return null;
+  final dir = j.fx == 'TOP' ? 1 : -1;
+  final ep = buildingTailEndpoint(
+    bars: bars,
+    afterConfirmX: prev.poleX,
+    asOfX: j.x,
+    buildingDir: dir,
+  );
+  if (ep == null) return null;
+  return _DashPole(
+    poleX: ep.barIdx,
+    fx: j.fx,
+    endpoint: ep,
+    src: 'judgment',
+    triggerX: j.x,
+  );
+}
+
+bool _frozenCoversPoles({
+  required List<K1Bar> virtualUnits,
+  required Set<int> frozenIdx,
+  required int a,
+  required int b,
+}) {
+  final lo = a < b ? a : b;
+  final hi = a > b ? a : b;
+  for (final u in virtualUnits) {
+    if (!frozenIdx.contains(u.idx)) continue;
+    if (u.x1 == lo && u.x2 == hi) return true;
+    if (u.x1 == hi && u.x2 == lo) return true;
+  }
+  return false;
+}
+
+// #region agent log
+void _agentLogBuildingLines({
+  required String location,
+  required String hypothesisId,
+  required String message,
+  required Map<String, Object?> data,
+}) {
+  try {
+    final payload = <String, Object?>{
+      'sessionId': 'c3b7e6',
+      'runId': 'dyn-kn-dash-v2',
+      'hypothesisId': hypothesisId,
+      'location': location,
+      'message': message,
+      'data': data,
+      'timestamp': DateTime.now().millisecondsSinceEpoch,
+    };
+    File(
+      r'c:\Users\Administrator\Desktop\my_file1\my_file\3\chan.py\debug-c3b7e6.log',
+    ).writeAsStringSync('${jsonEncode(payload)}\n', mode: FileMode.append);
+  } catch (_) {}
+}
+// #endregion
+
+/// 动态KN + 当下分型判断拆段的构建中连线（全层同构）。
+///
+/// [liveJudgments]：as-of 当下重算的有效判断（禁止用会话历史，否则失效判断无法回退）。
+/// 口径：
+/// - 判断极点钉在 judgment.x 扫价，不随 asOf 拉长（故 49~57 仍 32→44）；
+/// - 开口尖端仅当末判断 triggerX==asOf，或无判断时从末确认→asOf；
+/// - 确认↔确认且未被冻结实线覆盖 → 实线；判断↔判断 → 实线定格；确认↔判断 → 虚线。
+List<DisplayBuildingLine> computeDisplayBuildingLines({
+  required List<KlineBar> bars,
+  required int asOf,
+  required List<K1Bar> virtualUnits,
+  required Set<int> frozenIdx,
+  List<LevelConfirm> levelConfirms = const [],
+  List<K0ConfirmSignal> k0Confirms = const [],
+  List<FractalJudgmentEvent> liveJudgments = const [],
+  int debugKn = -1,
+}) {
+  if (bars.isEmpty || asOf < 0 || asOf >= bars.length) return const [];
+
+  final confirmPoles = _collectConfirmPoles(
+    bars: bars,
+    asOf: asOf,
+    levelConfirms: levelConfirms,
+    k0Confirms: k0Confirms,
+  );
+
+  // 无确认时：退化为未冻虚拟单元整段虚线（引导段）
+  if (confirmPoles.isEmpty) {
+    final out = <DisplayBuildingLine>[];
+    for (final u in virtualUnits) {
+      if (frozenIdx.contains(u.idx) || u.x1 > asOf || u.dir == 0) continue;
+      out.add(DisplayBuildingLine(
+        begin: LevelLineEndpoint(barIdx: u.x1, price: u.open),
+        end: LevelLineEndpoint(barIdx: u.x2, price: u.close),
+        dir: u.dir,
+        unitIdx: u.idx,
+        anchorX: u.x1,
+        beginSrc: 'dynamic',
+        endSrc: 'dynamic',
+        asSolid: false,
+        isOpenTip: true,
+      ));
+    }
+    _agentLogBuildingLines(
+      location: 'chart_view_compute.dart:computeDisplayBuildingLines',
+      hypothesisId: 'H-fallback',
+      message: 'no confirm → dynamic units only',
+      data: {
+        'kn': debugKn,
+        'asOf': asOf,
+        'dashN': out.length,
+        'liveJ': liveJudgments.map((j) => '${j.x}:${j.fx}').toList(),
+      },
+    );
+    return out;
+  }
+
+  final poles = <_DashPole>[...confirmPoles];
+  final lastConfirmTrig = confirmPoles.last.triggerX;
+  final js = [
+    for (final j in liveJudgments)
+      if (j.x <= asOf &&
+          j.x > lastConfirmTrig &&
+          (j.fx == 'TOP' || j.fx == 'BOTTOM'))
+        j,
+  ]..sort((a, b) => a.x.compareTo(b.x));
+
+  // 交替方向：同 fx 连续则后者覆盖前者（判断失效/改写由 live 列表保证）
+  for (final j in js) {
+    final prev = poles.last;
+    if (j.fx == prev.fx) {
+      if (prev.src == 'judgment') poles.removeLast();
+      final refreshedPrev = poles.isEmpty ? confirmPoles.last : poles.last;
+      final p = _judgmentPole(bars: bars, prev: refreshedPrev, j: j);
+      if (p != null) poles.add(p);
+      continue;
+    }
+    final p = _judgmentPole(bars: bars, prev: prev, j: j);
+    if (p != null) poles.add(p);
+  }
+
+  final out = <DisplayBuildingLine>[];
+  for (var i = 0; i + 1 < poles.length; i++) {
+    final a = poles[i];
+    final b = poles[i + 1];
+    if (a.poleX == b.poleX) continue;
+
+    final bothConfirm = a.src == 'confirm' && b.src == 'confirm';
+    if (bothConfirm &&
+        _frozenCoversPoles(
+          virtualUnits: virtualUnits,
+          frozenIdx: frozenIdx,
+          a: a.poleX,
+          b: b.poleX,
+        )) {
+      continue; // 冻结实线已画
+    }
+
+    final bothJudgment = a.src == 'judgment' && b.src == 'judgment';
+    final asSolid = bothConfirm || bothJudgment;
+    final dir = b.fx == 'TOP' ? 1 : -1;
+    out.add(DisplayBuildingLine(
+      begin: a.endpoint,
+      end: b.endpoint,
+      dir: dir,
+      unitIdx: -1,
+      anchorX: a.poleX,
+      corrected: a.src == 'confirm' || b.src == 'confirm',
+      beginSrc: a.src,
+      endSrc: b.src,
+      asSolid: asSolid,
+      isOpenTip: false,
+    ));
+  }
+
+  // 开口尖端
+  final last = poles.last;
+  final bool allowOpen;
+  if (last.src == 'confirm') {
+    allowOpen = poles.length == 1 || js.isEmpty;
+  } else {
+    // 末判断仅在「本步刚成立」时画开口（triggerX==asOf）；否则钉死不拉长
+    allowOpen = last.triggerX == asOf;
+  }
+  if (allowOpen) {
+    final openDir = last.fx == 'BOTTOM' ? 1 : -1;
+    final tip = buildingTailEndpoint(
+      bars: bars,
+      afterConfirmX: last.poleX,
+      asOfX: asOf,
+      buildingDir: openDir,
+    );
+    if (tip != null && tip.barIdx != last.poleX) {
+      out.add(DisplayBuildingLine(
+        begin: last.endpoint,
+        end: tip,
+        dir: openDir,
+        unitIdx: -1,
+        anchorX: last.poleX,
+        corrected: last.src == 'confirm',
+        beginSrc: last.src,
+        endSrc: 'open',
+        asSolid: false,
+        isOpenTip: true,
+      ));
+    }
+  }
+
+  // #region agent log
+  _agentLogBuildingLines(
+    location: 'chart_view_compute.dart:computeDisplayBuildingLines',
+    hypothesisId: 'H1-H5',
+    message: 'judgment-split dynKN lines',
+    data: {
+      'kn': debugKn,
+      'asOf': asOf,
+      'virtualN': virtualUnits.length,
+      'frozenN': frozenIdx.length,
+      'liveJ': [for (final j in js) '${j.x}:${j.fx}'],
+      'poles': [
+        for (final p in poles)
+          {
+            'pole': p.poleX,
+            'fx': p.fx,
+            'src': p.src,
+            'trig': p.triggerX,
+          },
+      ],
+      'allowOpen': allowOpen,
+      'lines': [
+        for (final l in out)
+          {
+            'b': l.begin.barIdx,
+            'e': l.end.barIdx,
+            'solid': l.asSolid,
+            'open': l.isOpenTip,
+            'bs': l.beginSrc,
+            'es': l.endSrc,
+          },
+      ],
+    },
+  );
+  // #endregion
+
+  return out;
 }

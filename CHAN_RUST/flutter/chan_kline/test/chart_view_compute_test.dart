@@ -1,7 +1,9 @@
 import 'package:chan_kline/compute/k1_bar_view_compute.dart';
 import 'package:chan_kline/compute/chart_view_compute.dart';
+import 'package:chan_kline/models/fractal_judgment_event.dart';
 import 'package:chan_kline/models/k0_confirm_signal.dart';
 import 'package:chan_kline/models/bar_crosshair_feature.dart';
+import 'package:chan_kline/models/k1_bar.dart';
 import 'package:chan_kline/models/kline_bar.dart';
 import 'package:chan_kline/models/level_models.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -402,5 +404,193 @@ void main() {
     );
     expect(frozenOnly.length, 1);
     expect(frozenOnly.first.idx, 0);
+  });
+
+  test('computeDisplayBuildingLines：无确认时画未冻动态单元', () {
+    final bars = _bars(10);
+    final lines = computeDisplayBuildingLines(
+      bars: bars,
+      asOf: 9,
+      virtualUnits: const [
+        K1Bar(
+          idx: 0,
+          dir: 1,
+          x1: 1,
+          x2: 5,
+          open: 9.6,
+          high: 10.9,
+          low: 9.6,
+          close: 10.9,
+          confirmX: 5,
+        ),
+      ],
+      frozenIdx: const {},
+      liveJudgments: const [],
+    );
+    expect(lines.length, 1);
+    expect(lines.first.begin.barIdx, 1);
+    expect(lines.first.end.barIdx, 5);
+    expect(lines.first.asSolid, isFalse);
+  });
+
+  test('computeDisplayBuildingLines：判断钉死端点不随 asOf 拉长；确认↔判断虚线', () {
+    final bars = _bars(20);
+    bars[5] = KlineBar(
+      idx: 5,
+      timeMs: 5,
+      timeText: 't5',
+      open: 10,
+      high: 14,
+      low: 9.5,
+      close: 13,
+      volume: 1,
+      amount: 1,
+      metrics: const {},
+    );
+    bars[8] = KlineBar(
+      idx: 8,
+      timeMs: 8,
+      timeText: 't8',
+      open: 10,
+      high: 11,
+      low: 8,
+      close: 9,
+      volume: 1,
+      amount: 1,
+      metrics: const {},
+    );
+
+    const bottomConfirm = LevelConfirm(
+      x: 3,
+      fx: 'BOTTOM',
+      value: 1,
+      fractalX1: 1,
+      fractalX2: 3,
+      poleX: 2,
+    );
+    // 判断成立于 x=8：钉死扫价区间 (2,8]，首高在 5
+    const topJudgment = FractalJudgmentEvent(x: 8, fx: 'TOP');
+
+    final at8 = computeDisplayBuildingLines(
+      bars: bars,
+      asOf: 8,
+      virtualUnits: const [],
+      frozenIdx: const {},
+      levelConfirms: const [bottomConfirm],
+      liveJudgments: const [topJudgment],
+    );
+    expect(at8, isNotEmpty);
+    // 确认→判断虚线；开口 tip（triggerX==asOf）
+    final closed = at8.where((l) => !l.isOpenTip).toList();
+    expect(closed.length, 1);
+    expect(closed.first.beginSrc, 'confirm');
+    expect(closed.first.endSrc, 'judgment');
+    expect(closed.first.asSolid, isFalse);
+    expect(closed.first.end.barIdx, 5); // 钉在首极值 5，不是 8
+
+    // asOf 前进到 15，判断仍在 live → 端点仍钉 5，无开口
+    final at15 = computeDisplayBuildingLines(
+      bars: bars,
+      asOf: 15,
+      virtualUnits: const [],
+      frozenIdx: const {},
+      levelConfirms: const [bottomConfirm],
+      liveJudgments: const [topJudgment],
+    );
+    final closed15 = at15.where((l) => !l.isOpenTip).toList();
+    expect(closed15.length, 1);
+    expect(closed15.first.end.barIdx, 5);
+    expect(at15.any((l) => l.isOpenTip), isFalse);
+  });
+
+  test('computeDisplayBuildingLines：判断失效回退；开口从确认→asOf', () {
+    final bars = _bars(12);
+    bars[5] = KlineBar(
+      idx: 5,
+      timeMs: 5,
+      timeText: 't5',
+      open: 10,
+      high: 14,
+      low: 9.5,
+      close: 13,
+      volume: 1,
+      amount: 1,
+      metrics: const {},
+    );
+    const bottomConfirm = LevelConfirm(
+      x: 3,
+      fx: 'BOTTOM',
+      value: 1,
+      fractalX1: 1,
+      fractalX2: 3,
+      poleX: 2,
+    );
+
+    // 判断已从 live 消失 → 仅开口 confirm→asOf
+    final lines = computeDisplayBuildingLines(
+      bars: bars,
+      asOf: 10,
+      virtualUnits: const [],
+      frozenIdx: const {},
+      levelConfirms: const [bottomConfirm],
+      liveJudgments: const [],
+    );
+    expect(lines.length, 1);
+    expect(lines.first.isOpenTip, isTrue);
+    expect(lines.first.beginSrc, 'confirm');
+    expect(lines.first.endSrc, 'open');
+    expect(lines.first.asSolid, isFalse);
+  });
+
+  test('computeDisplayBuildingLines：判断↔判断定格为实线', () {
+    final bars = _bars(20);
+    bars[5] = KlineBar(
+      idx: 5,
+      timeMs: 5,
+      timeText: 't5',
+      open: 10,
+      high: 14,
+      low: 9.5,
+      close: 13,
+      volume: 1,
+      amount: 1,
+      metrics: const {},
+    );
+    bars[10] = KlineBar(
+      idx: 10,
+      timeMs: 10,
+      timeText: 't10',
+      open: 10,
+      high: 11,
+      low: 7,
+      close: 8,
+      volume: 1,
+      amount: 1,
+      metrics: const {},
+    );
+    const bottomConfirm = LevelConfirm(
+      x: 2,
+      fx: 'BOTTOM',
+      value: 1,
+      fractalX1: 0,
+      fractalX2: 2,
+      poleX: 1,
+    );
+    final lines = computeDisplayBuildingLines(
+      bars: bars,
+      asOf: 15,
+      virtualUnits: const [],
+      frozenIdx: const {},
+      levelConfirms: const [bottomConfirm],
+      liveJudgments: const [
+        FractalJudgmentEvent(x: 8, fx: 'TOP'),
+        FractalJudgmentEvent(x: 12, fx: 'BOTTOM'),
+      ],
+    );
+    final jj = lines.where(
+      (l) => l.beginSrc == 'judgment' && l.endSrc == 'judgment',
+    );
+    expect(jj.isNotEmpty, isTrue);
+    expect(jj.every((l) => l.asSolid), isTrue);
   });
 }
