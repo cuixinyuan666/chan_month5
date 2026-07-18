@@ -1,8 +1,8 @@
 import 'k0_line.dart';
 import 'level_models.dart';
 
-/// 主图指标种类：连线 / 合并框 / 跨段中枢框 / 原生中枢框 / 三类买卖点。
-enum MainIndicatorKind { line, combine, kuaduan, zs, bsp }
+/// 主图指标种类：连线 / 合并框 / KN线(合并拆出) / 跨段中枢框 / 原生中枢框 / 三类买卖点。
+enum MainIndicatorKind { line, combine, kn, kuaduan, zs, bsp }
 
 /// 主图一项指标（按加载后 maxKn 动态生成，如 3 层 → K0/K1/K2 连线/合并/跨段中枢）。
 class MainChartIndicator {
@@ -13,6 +13,7 @@ class MainChartIndicator {
 
   const MainChartIndicator.line(this.kn) : kind = MainIndicatorKind.line;
   const MainChartIndicator.combine(this.kn) : kind = MainIndicatorKind.combine;
+  const MainChartIndicator.kn(this.kn) : kind = MainIndicatorKind.kn;
   const MainChartIndicator.kuaduan(this.kn) : kind = MainIndicatorKind.kuaduan;
   const MainChartIndicator.zs(this.kn) : kind = MainIndicatorKind.zs;
   const MainChartIndicator.bsp(this.kn) : kind = MainIndicatorKind.bsp;
@@ -24,6 +25,9 @@ class MainChartIndicator {
         return 'K${kn - 1}连线';
       case MainIndicatorKind.combine:
         return 'K${kn - 1}合并';
+      case MainIndicatorKind.kn:
+        // 按层命名：K0/K1/K2…（层号与合并/连线同号对齐），不再统一叫「KN」
+        return 'K${kn - 1}';
       case MainIndicatorKind.kuaduan:
         return 'K${kn - 1}跨段中枢';
       case MainIndicatorKind.zs:
@@ -112,6 +116,12 @@ List<MainChartIndicator> buildMainIndicatorCatalog(int maxKn) {
   final combineMax = maxKn < 1 ? 1 : maxKn;
   for (var n = 1; n <= combineMax; n++) {
     out.add(MainChartIndicator.combine(n));
+  }
+  // KN 合并拆出的「KN 线」：按层独立成项（K0/K1/K2…，层号与合并/连线同号），
+  // 勾选单层只画该层淡实体，避免单一 KN 一次画出所有层导致与合并框不对齐。
+  final knMax = maxKn < 1 ? 1 : maxKn;
+  for (var n = 1; n <= knMax; n++) {
+    out.add(MainChartIndicator.kn(n));
   }
   for (var n = 1; n <= maxKn; n++) {
     out.add(MainChartIndicator.line(n));

@@ -34,6 +34,8 @@ Future<void> main() async {
   MsgHistory.instance.appendBuildingDashTailFirstExtreme();
   // 展示轨动态 KN 合并框：冻+进行中重算，永久结构不回写
   MsgHistory.instance.appendDisplayTrackDynamicKnCombine();
+  // 主图「KN合并」拆出「KN线」指标（合并框 / 淡实体线分开控制）
+  MsgHistory.instance.appendKnSplit();
   // 展示轨动态分型判断副图（全层同构）
   MsgHistory.instance.appendDisplayTrackFractalJudgment();
   // 展示轨：动态KN当确认段画虚线；确认优先纠正/改实线
@@ -110,6 +112,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
   K1AnalysisBundle _k1Analysis = K1AnalysisBundle.empty();
   List<LevelBundle> _levels = [];
   Set<MainChartIndicator> _mainIndicators = {
+    const MainChartIndicator.kn(1), // K0：默认显示原生 K0 蜡烛（可在面板关闭）
     const MainChartIndicator.combine(1),
     const MainChartIndicator.kuaduan(1),
     const MainChartIndicator.zs(1),

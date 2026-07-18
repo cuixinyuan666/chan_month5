@@ -956,20 +956,18 @@ class _KlineCompositePainter extends CustomPainter {
     final barW = _candleBodyW(slotW);
     final xAxisTop = contentBottom;
 
-    if (mainIndicators.isEmpty) {
-      // 关闭全部主图指标：只画 K0 线
+    // K0 原始蜡烛改为由 KN 的「K0」项独立控制（可关闭/显示），不再是恒显底图；
+    // 合并框/连线/各层淡实体均叠加其上。
+    final showK0 = mainIndicators.contains(const MainChartIndicator.kn(1));
+    if (showK0) {
       _drawCandles(canvas, size.width, plotTop, plotH, barW, slotW);
-    } else {
-      final hasK0Combine =
-          mainIndicators.contains(const MainChartIndicator.combine(1));
-      // 未勾 K0合并时仍铺底层 K0 蜡烛，避免只选连线时空白
-      if (!hasK0Combine) {
-        _drawCandles(canvas, size.width, plotTop, plotH, barW, slotW);
-      }
+    }
+    if (mainIndicators.isNotEmpty) {
       // 按勾选项逐层画：勾哪层画哪层（不再一项自动叠全部）
       for (final ind in mainIndicators) {
         if (ind.kind == MainIndicatorKind.combine) {
           // 合并与连线统一层号：combine(1)=K0合并，combine(2)=K1合并，combine(>=3)=K(n-1)合并
+          // 合并指标只画合并框；淡实体线已拆出到 KN 指标
           if (ind.kn == 1) {
             _drawKlineCombineOnMainChart(
                 canvas, size.width, plotTop, plotH, barW, slotW);
@@ -980,6 +978,17 @@ class _KlineCompositePainter extends CustomPainter {
             _drawLevelCombineOnMainChart(
                 canvas, size.width, plotTop, plotH, barW, slotW, ind.kn);
           }
+        } else if (ind.kind == MainIndicatorKind.kn) {
+          // KN 线（由 KN合并 拆出）按层独立：kn(1)=K0 实体由顶层 showK0 绘制；
+          // kn(2)=K1 淡蜡烛；kn(>=3)=K(n-1) 单元淡蜡烛。各层独立开关、与对应合并框对齐。
+          if (ind.kn == 2) {
+            _drawK1Candles(
+                canvas, size.width, plotTop, plotH, barW, slotW, faint: true);
+          } else if (ind.kn >= 3) {
+            _drawLevelUnitCandlesOnMainChart(
+                canvas, size.width, plotTop, plotH, barW, slotW, ind.kn);
+          }
+          // ind.kn == 1 的 K0 实体由顶层 showK0 统一绘制，避免重复
         } else if (ind.kind == MainIndicatorKind.line) {
           // 内部 kn：1=K0连线→展示 K0连线；≥2→展示 K(kn-1)连线
           if (ind.kn == 1) {
@@ -1499,7 +1508,7 @@ class _KlineCompositePainter extends CustomPainter {
     }
   }
 
-  /// 主图 Kn 合并（kn≥2）：先铺淡 KN 单元线，再描该层**展示轨**合并框（冻+进行中）。
+  /// 主图 Kn 合并（kn≥2）：只描该层**展示轨**合并框（冻+进行中）；淡实体线已拆出到 KN 指标。
   void _drawLevelCombineOnMainChart(
     Canvas canvas,
     double w,
@@ -1538,39 +1547,8 @@ class _KlineCompositePainter extends CustomPainter {
       return;
     }
 
-    // 半侧单元 view：末态用 bundle；as-of 由虚拟单元拆冻/进行中
-    final List<LevelUnitBarView> views;
-    if (asOf != null) {
-      views = _levelUnitViewsFromVirtualK1Bars(
-        virtualUnits,
-        frozenIdx: {
-          for (final s in asOfLevelSegments(
-            levels: levels,
-            level: kn,
-            asOf: asOf,
-          ))
-            s.idx,
-        },
-      );
-    } else {
-      views = buildLevelUnitBarViews(
-        bundle.unitBars,
-        activeUnit: bundle.activeUnit ??
-            (bundle.segmentPolicy == 'pending' ? bundle.pendingUnit : null),
-      );
-    }
-    if (views.isNotEmpty) {
-      _drawLevelUnitCandles(
-        canvas,
-        w,
-        plotTop,
-        plotH,
-        barW,
-        slotW,
-        views,
-        faint: true,
-      );
-    }
+    // 单元 view 仅用于合并框横向对齐（不再在此画淡实体；淡实体由 KN 指标统一控制）
+    final views = _levelUnitViewsForLevel(kn);
 
     // 展示轨合并框：不画永久 combineFrames，改由虚拟单元重算
     if (virtualUnits.isEmpty || barsForCombine.isEmpty) return;
@@ -1596,6 +1574,78 @@ class _KlineCompositePainter extends CustomPainter {
       lastAsBuilding: showBuildingDash,
       buildingDashPattern: style.buildingDashPattern,
     );
+  }
+
+  /// 取某层（kn≥2）的单元 view（用于合并框横向对齐 / KN 指标画淡实体），含十字线 as-of 重算。
+  List<LevelUnitBarView> _levelUnitViewsForLevel(int kn) {
+    LevelBundle? bundle;
+    for (final b in levels) {
+      if (b.level == kn) {
+        bundle = b;
+        break;
+      }
+    }
+    if (bundle == null) return const [];
+    final asOf = segAsOf;
+    final virtualUnits = asOf != null
+        ? asOfLevelVirtualK1Bars(
+            levels: levels,
+            barFeatures: barFeatures,
+            level: kn,
+            asOf: asOf,
+            includeBuilding: true,
+          )
+        : levelBundleVirtualK1Bars(bundle);
+    if (virtualUnits.isEmpty &&
+        bundle.unitBars.isEmpty &&
+        bundle.activeUnit == null &&
+        bundle.pendingUnit == null) {
+      return const [];
+    }
+    if (asOf != null) {
+      return _levelUnitViewsFromVirtualK1Bars(
+        virtualUnits,
+        frozenIdx: {
+          for (final s in asOfLevelSegments(
+            levels: levels,
+            level: kn,
+            asOf: asOf,
+          ))
+            s.idx,
+        },
+      );
+    } else {
+      return buildLevelUnitBarViews(
+        bundle.unitBars,
+        activeUnit: bundle.activeUnit ??
+            (bundle.segmentPolicy == 'pending' ? bundle.pendingUnit : null),
+      );
+    }
+  }
+
+  /// KN 指标用的单层淡实体蜡烛（原内嵌于 KN合并；拆出后由 KN 指标统一控制）。
+  void _drawLevelUnitCandlesOnMainChart(
+    Canvas canvas,
+    double w,
+    double plotTop,
+    double plotH,
+    double barW,
+    double slotW,
+    int kn,
+  ) {
+    final views = _levelUnitViewsForLevel(kn);
+    if (views.isNotEmpty) {
+      _drawLevelUnitCandles(
+        canvas,
+        w,
+        plotTop,
+        plotH,
+        barW,
+        slotW,
+        views,
+        faint: true,
+      );
+    }
   }
 
   /// 虚拟 K1 bar → LevelUnitBarView（冻在 unitBars，未冻当 active）。
@@ -2289,7 +2339,7 @@ class _KlineCompositePainter extends CustomPainter {
     }
   }
 
-  /// 主图 K0合并：底层用原「K0」蜡烛样式，再描 K0合并框。
+  /// 主图 K0合并：只描 K0合并框（K0 原始蜡烛已由底图始终绘制，不再在此附带）。
   void _drawKlineCombineOnMainChart(
     Canvas canvas,
     double w,
@@ -2298,7 +2348,6 @@ class _KlineCompositePainter extends CustomPainter {
     double barW,
     double slotW,
   ) {
-    _drawCandles(canvas, w, plotTop, plotH, barW, slotW);
     if (combineFrames.isEmpty) return;
     // 末组=构建中合并（虚线）；前组=已冻结合并（实线）。
     // 信号取 CombineEngine.groups 末项（已在 combineFrames 末尾），不是 activeUnit（那是进行中段）。
@@ -2395,7 +2444,7 @@ class _KlineCompositePainter extends CustomPainter {
     }
   }
 
-  /// 主图K1合并：先铺淡K1 bar 底层，再描K1合并框。
+  /// 主图K1合并：只描K1合并框（淡K1 bar 实体已拆出到 KN 指标统一控制）。
   void _drawK1CombineOnMainChart(
     Canvas canvas,
     double w,
@@ -2405,16 +2454,6 @@ class _KlineCompositePainter extends CustomPainter {
     double slotW,
   ) {
     if (k1CombineFrames.isEmpty && k1BarViews.isEmpty) return;
-
-    _drawK1Candles(
-      canvas,
-      w,
-      plotTop,
-      plotH,
-      barW,
-      slotW,
-      faint: true,
-    );
 
     if (k1CombineFrames.isNotEmpty) {
       _drawCombineFramesOnMainChart(
