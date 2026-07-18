@@ -20,3 +20,9 @@ a_replay_record/*/*.meta.json
 a_rust_core/target/
 CHAN_RUST/rust/target/
 CHAN_RUST/rust/target_alt/
+
+# IDE 快照/备份（如 *.dart.head）
+*.dart.head
+
+# CodeBuddy 运行时数据（含工作记忆，非源码，勿删但勿提交）
+.codebuddy/
