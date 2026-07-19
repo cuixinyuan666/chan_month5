@@ -334,17 +334,6 @@ mod tests {
         let opt = crate::pipeline::PipelineOptions::default();
         let res = crate::pipeline::run_pipeline(&bars, &opt);
 
-        // 诊断：打印每层段数 / 分型确认数 / 合并框数
-        for lv in &res.levels {
-            println!(
-                "[diag] level={} 段数={} 分型确认数={} 合并框数={}",
-                lv.level,
-                lv.segments.len(),
-                lv.confirms.len(),
-                lv.combine_frames.len(),
-            );
-        }
-
         // 1) K0跨段中枢：直接对真实 run_pipeline 产物（level=1 K0连线段）跑 KuaDuanV1
         let kuaduan_by_level = build_kuaduan_v1_for_levels(&res.levels);
         assert_eq!(kuaduan_by_level.len(), res.levels.len());
@@ -356,14 +345,6 @@ mod tests {
             !res.levels[0].kuaduan_frames.is_empty(),
             "level=1 的 kuaduan_frames 应非空（export 已挂载跨段中枢框）",
         );
-        println!(
-            "K0跨段中枢数={} 首跨段中枢[ZG={:.2},ZD={:.2},extend={}]",
-            kuaduan_by_level[0].len(),
-            kuaduan_by_level[0].first().unwrap().zg,
-            kuaduan_by_level[0].first().unwrap().zd,
-            kuaduan_by_level[0].first().unwrap().extend,
-        );
-
         // 2) K1跨段中枢：把真实 run_pipeline 产出的K0连线段（LevelSegment）直接作为「K1连线层」输入，
         //    验证 KuaDuanV1 模块对 level=2 段序列的离线处理（与 build_kuaduan_v1_for_levels 同构路径）。
         //    注：本合成序列下，run_pipeline 的K1连线层因K0连线单元端点精确相等、合并退化为单组而未自产
@@ -387,13 +368,6 @@ mod tests {
         };
         let kuaduan2 = build_kuaduan_v1_for_levels(&[lv2_bundle]);
         assert!(!kuaduan2[0].is_empty(), "K1跨段中枢应跑通（复用真实K0连线段作为K1连线层输入）");
-        println!(
-            "K1跨段中枢数={} 首跨段中枢[ZG={:.2},ZD={:.2},extend={}]",
-            kuaduan2[0].len(),
-            kuaduan2[0].first().unwrap().zg,
-            kuaduan2[0].first().unwrap().zd,
-            kuaduan2[0].first().unwrap().extend,
-        );
     }
 
     /// 确定性「幅度递增锯齿 + 转折点 gap」：每段腿高低点不断抬高（模拟上涨趋势中的回调），

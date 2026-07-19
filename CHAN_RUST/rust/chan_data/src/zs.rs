@@ -631,12 +631,7 @@ mod tests {
             !res.levels[0].zs_frames.is_empty(),
             "level=1 的 zs_frames 应非空（export 已挂载原生中枢框）",
         );
-        println!(
-            "K0原生中枢数={} 首中枢[ZG={:.2},ZD={:.2}]",
-            res.levels[0].zs_frames.len(),
-            res.levels[0].zs_frames.first().unwrap().low,
-            res.levels[0].zs_frames.first().unwrap().high,
-        );
+
     }
 
     /// 确定性「幅度递增锯齿 + 转折点 gap」合成 K 线（与 v1 测试同款）
