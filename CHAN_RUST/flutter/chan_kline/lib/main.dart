@@ -36,6 +36,8 @@ Future<void> main() async {
   MsgHistory.instance.appendDisplayTrackDynamicKnCombine();
   // 主图「KN合并」拆出「KN线」指标（合并框 / 淡实体线分开控制）
   MsgHistory.instance.appendKnSplit();
+  // 主图键盘交互：方向键←/→（十字线态=十字线左右移；非十字线态=步退/步进）
+  MsgHistory.instance.appendKeyboardNav();
   // 展示轨动态分型判断副图（全层同构）
   MsgHistory.instance.appendDisplayTrackFractalJudgment();
   // 展示轨：动态KN当确认段画虚线；确认优先纠正/改实线

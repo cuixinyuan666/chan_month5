@@ -130,6 +130,10 @@ class _KlineChartState extends State<KlineChart> {
   double? _crosshairX;
   double? _crosshairY;
   int? _crosshairBarIdx;
+  /// 十字线“贴最右端步进”标记：十字线态按→到最右端转步进后，bars 变长，
+  /// didUpdateWidget 会重置十字线，故用此标记在重建后把十字线重新吸附到新最右端，
+  /// 实现“按住→连续步进”。左移/手动移线即解除（见 _moveCrosshairBy/_updateCrosshairAt）。
+  bool _crosshairPinRightmost = false;
 
   bool get _crosshairEnabled => _crosshairMode != CrosshairMode.off;
   bool get _crosshairShowTooltip => _crosshairMode == CrosshairMode.withTooltip;
@@ -181,12 +185,17 @@ class _KlineChartState extends State<KlineChart> {
   void initState() {
     super.initState();
     _resetViewport();
+    // 全局键盘监听：方向键←/→（十字线态=十字线左右移；非十字线态=步退/步进）
+    HardwareKeyboard.instance.addHandler(_handleHardwareKey);
   }
 
   @override
   void dispose() {
     _middleTapTimer?.cancel();
+    _arrowStartTimer?.cancel();
+    _arrowRepeatTimer?.cancel();
     _tooltipScroll.dispose();
+    HardwareKeyboard.instance.removeHandler(_handleHardwareKey);
     super.dispose();
   }
 
@@ -210,14 +219,22 @@ class _KlineChartState extends State<KlineChart> {
     }
 
     if (lenChanged || seriesChanged) {
-      _crosshairX = null;
-      _crosshairY = null;
-      _crosshairBarIdx = null;
+      // 贴右步进：bars 变长后把十字线吸附到“新最右端”，保持按住→连续步进
+      if (_crosshairPinRightmost && _crosshairEnabled && widget.bars.isNotEmpty) {
+        _crosshairBarIdx = widget.bars.length - 1;
+        _crosshairX = _viewport.barCenterX(_crosshairBarIdx!, _chartSize.width);
+        _crosshairY ??= KlineViewport.padT + 40;
+      } else {
+        _crosshairX = null;
+        _crosshairY = null;
+        _crosshairBarIdx = null;
+      }
     }
   }
 
-  /// 十字线跟随鼠标：竖线吸附 K 线中心，横线跟价格。
+  /// 十字线跟随鼠标：竖线吸附 K 线中心，横线跟价格。鼠标移线解除贴右步进标记。
   void _updateCrosshairAt(Offset pos, double plotTop, double contentBottom) {
+    _crosshairPinRightmost = false;
     if (!_crosshairEnabled || widget.bars.isEmpty || _chartSize.width <= 0) return;
     final barIdx = _viewport.barIndexAtCanvasX(
       pos.dx,
@@ -227,6 +244,117 @@ class _KlineChartState extends State<KlineChart> {
     _crosshairBarIdx = barIdx;
     _crosshairX = _viewport.barCenterX(barIdx, _chartSize.width);
     _crosshairY = pos.dy.clamp(plotTop, contentBottom);
+    if (_crosshairShowTooltip) {
+      _resetTooltipScrollIfNeeded(barIdx);
+    }
+    _scheduleRedraw();
+  }
+
+  /// 键盘方向键“按住连发加速”：单次 keydown 触发一次，按住超过阈值后按加速节奏连发；
+  /// 同时吞掉系统自带重复（event.repeat），避免与自管连发叠加成双倍速度。
+  static const _arrowStartMs = 300; // 按住多久后开始连发
+  static const _arrowSlowMs = 110; // 连发起始间隔
+  static const _arrowMidMs = 70; // 加速中段间隔
+  static const _arrowFastMs = 40; // 最快间隔（越小越快）
+  Timer? _arrowStartTimer; // 等待进入连发的计时
+  Timer? _arrowRepeatTimer; // 连发计时
+  int _arrowDir = 0; // 当前按住方向：-1 左 / +1 右
+  int _arrowRepeatCount = 0; // 连发次数（用于节奏加速）
+
+  /// 键盘方向键交互（HardwareKeyboard 全局监听）：
+  /// 十字线激活时 → 左/右方向键移动十字线（竖线吸附相邻 K 线中心）；
+  /// 未激活时 → 左=步退、右=步进（与点击左/右热区同义）。
+  /// 返回 true 表示已处理（拦截该方向键，避免页面默认滚动等）。
+  bool _handleHardwareKey(KeyEvent event) {
+    final key = event.logicalKey;
+    final isLeft = key == LogicalKeyboardKey.arrowLeft;
+    final isRight = key == LogicalKeyboardKey.arrowRight;
+    if (!isLeft && !isRight) return false;
+
+    if (event is KeyDownEvent) {
+      if (event is KeyRepeatEvent) return true; // 系统自带重复：吞掉，改由自管连发避免双倍
+      _startArrowRepeat(isRight ? 1 : -1);
+      return true;
+    }
+    if (event is KeyUpEvent) {
+      _stopArrowRepeat();
+      return true;
+    }
+    return false;
+  }
+
+  /// 方向键按下：立即触发一次，随后自管加速连发。
+  void _startArrowRepeat(int dir) {
+    _arrowDir = dir;
+    _arrowRepeatCount = 0;
+    _fireArrowAction();
+    _arrowStartTimer?.cancel();
+    _arrowStartTimer = Timer(Duration(milliseconds: _arrowStartMs), _arrowTick);
+  }
+
+  void _arrowTick() {
+    _arrowRepeatCount++;
+    _fireArrowAction();
+    final delay = _arrowRepeatCount < 8
+        ? _arrowSlowMs
+        : (_arrowRepeatCount < 20 ? _arrowMidMs : _arrowFastMs);
+    _arrowRepeatTimer = Timer(Duration(milliseconds: delay), _arrowTick);
+  }
+
+  /// 十字线是否已吸附到最右端那根 K（再往右无 K 可移）。
+  bool _isCrosshairAtRightmost() {
+    if (!_crosshairEnabled || _crosshairBarIdx == null || widget.bars.isEmpty) {
+      return false;
+    }
+    return _crosshairBarIdx! >= widget.bars.length - 1;
+  }
+
+  /// 执行一次方向键动作：
+  /// 十字线态 → 右移到最右端后继续按→转为“步进”（喂入下一根 K，绝步退）；
+  ///           左/右非最右端 → 竖线吸附相邻 K；左到最左端已 clamp，永不步退。
+  /// 非十字线态 → 左=步退、右=步进（与点击左/右热区同义）。
+  /// 重要：十字线态下方向键永不触发步退，仅最右端→可步进。
+  void _fireArrowAction() {
+    if (!_crosshairEnabled) {
+      if (_arrowDir > 0) {
+        widget.onTapStepForward?.call();
+      } else {
+        widget.onTapStepBack?.call();
+      }
+      return;
+    }
+    // 十字线态：向右且已到最右端 → 贴右步进（长按连发同理，节奏同见 _arrowTick）
+    if (_arrowDir > 0 && _isCrosshairAtRightmost()) {
+      _crosshairPinRightmost = true; // 重建后由 didUpdateWidget 吸附新最右端
+      widget.onTapStepForward?.call();
+      return;
+    }
+    // 其余情况：左右移线（左移会解除贴右标记）；永不步退
+    _moveCrosshairBy(_arrowDir);
+  }
+
+  /// 方向键抬起/失焦：停止连发。
+  void _stopArrowRepeat() {
+    _arrowStartTimer?.cancel();
+    _arrowRepeatTimer?.cancel();
+    _arrowRepeatTimer = null;
+  }
+
+  /// 十字线按方向键左移/右移一格（dir=-1 左 / +1 右），竖线吸附相邻 K 线中心。
+  /// 任何手动移线都解除“贴右步进”标记（左移到非最右端即恢复普通移线）。
+  void _moveCrosshairBy(int dir) {
+    _crosshairPinRightmost = false;
+    if (widget.bars.isEmpty || _chartSize.width <= 0) return;
+    int barIdx = _crosshairBarIdx ??
+        _viewport.barIndexAtCanvasX(
+          _crosshairX ?? _chartSize.width / 2,
+          _chartSize.width,
+          widget.bars.length,
+        );
+    barIdx = (barIdx + dir).clamp(0, widget.bars.length - 1);
+    _crosshairBarIdx = barIdx;
+    _crosshairX = _viewport.barCenterX(barIdx, _chartSize.width);
+    _crosshairY ??= KlineViewport.padT + 40;
     if (_crosshairShowTooltip) {
       _resetTooltipScrollIfNeeded(barIdx);
     }
@@ -452,6 +580,7 @@ class _KlineChartState extends State<KlineChart> {
           _crosshairX = null;
           _crosshairY = null;
           _crosshairBarIdx = null;
+          _crosshairPinRightmost = false;
           _tooltipScrollBarIdx = null;
       }
     });

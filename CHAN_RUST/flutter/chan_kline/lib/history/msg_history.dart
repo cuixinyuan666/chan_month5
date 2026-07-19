@@ -124,6 +124,18 @@ class MsgHistory {
     );
   }
 
+  /// 键盘方向键交互：十字线态=十字线左右移；非十字线态=左步退/右步进。
+  void appendKeyboardNav() {
+    append(
+      '【键盘交互】主图支持方向键 ←/→：'
+      '十字线激活时 → 左/右方向键令十字线竖线吸附相邻 K 线中心（左右移一格）；'
+      '未激活时 → 左=步退、右=步进（与点击左/右热区同义）。'
+      '实现：KlineChart 用 HardwareKeyboard.instance.addHandler(_handleHardwareKey) '
+      '全局监听（initState 注册、dispose 注销）；十字线激活→_moveCrosshairBy 左右移，'
+      '未激活→调用现有 onTapStepBack/onTapStepForward；方向键返回 true 拦截默认滚动。',
+    );
+  }
+
   /// 展示轨分型判断副图：确认式打点 + 会话事件日志累积全部历史点。
   void appendDisplayTrackFractalJudgment() {
     append(
