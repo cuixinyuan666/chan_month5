@@ -48,6 +48,9 @@ class BarFeatureLookup {
     bool truncationCheck = true,
     /// 分型判断会话事件日志（有则优先；扫全部历史点）
     Map<int, List<FractalJudgmentEvent>> judgmentHistoryByKn = const {},
+    /// 当步截断位（idx）：与副图指标 _drawKnFractalJudgmentSubChart 的 maxX=segAsOf 一致，
+    /// 十字线激活时传入 widget.segAsOf，使 tooltip 分型判断与副图同源同截断。
+    int? asOf,
   }) {
     final byIdx = <int, Map<String, dynamic>>{};
 
@@ -212,34 +215,37 @@ class BarFeatureLookup {
       }
     }
 
-    // 展示轨分型判断：优先用会话事件日志（曾经出现过的点全部保留）
-    for (final ind in subIndicators) {
-      if (ind.kind != SubIndicatorKind.fractalJudgment || ind.kn < 1) {
-        continue;
-      }
-      if (bars.isEmpty) continue;
-      final history = judgmentHistoryByKn[ind.kn];
-      final List<String> fxSeries;
-      if (history != null && history.isNotEmpty) {
-        fxSeries = expandJudgmentEventsToSeries(
-          history,
-          bars.last.idx + 1,
-        );
-      } else {
-        fxSeries = computeFractalJudgmentSeries(
-          kn: ind.kn,
-          bars: bars,
-          levels: levels,
-          barFeatures: barFeatures,
-          truncationCheck: truncationCheck,
-        );
-      }
-      for (final b in bars) {
-        final row = byIdx.putIfAbsent(b.idx, () => {'idx': b.idx});
-        final fx = b.idx >= 0 && b.idx < fxSeries.length
-            ? fxSeries[b.idx]
-            : 'UNKNOWN';
-        (row['sub'] as Map<String, dynamic>)['fractal_judgment_${ind.kn}'] = fx;
+    // 展示轨分型判断：为每个层级(kn=1..N)计算，供副图指标与十字线 tooltip「Kn分型判断」共用；
+    // 与「Kn分型确认」同口径：仅成立后当步有点，不整框回填。
+    // tooltip 与副图「indicator Kn分型判断」完全同源：两端都用 judgmentHistoryByKn[kn]
+    // 事件列表、都按 segAsOf 截断(maxX: asOf)、都取 per-x 末态(后者覆盖)。
+    // 不再用 collectFractalJudgmentEvents 兜底——否则 history 缺失的层 tooltip 显示末态、
+    // 副图却无点，造成两端不对应。history 为空则全 UNKNOWN(显示 0)，与副图一致。
+    // 写到 levels.length + 1：tooltip「K{N}块分型判断」需读 fractal_judgment_{N+1}
+    // （对最高层连线做的分型判断），与副图指标 K{N}分型判断(kn=N+1) 同口径。
+    if (bars.isNotEmpty) {
+      for (var kn = 1; kn <= levels.length + 1; kn++) {
+        final history = judgmentHistoryByKn[kn];
+        final fxSeries = history != null && history.isNotEmpty
+            ? expandJudgmentEventsToSeries(history, bars.last.idx + 1,
+                maxX: asOf)
+            : const <String>[];
+        final truncSeries = history != null && history.isNotEmpty
+            ? expandJudgmentEventsToTruncSeries(history, bars.last.idx + 1,
+                maxX: asOf)
+            : const <bool>[];
+        for (final b in bars) {
+          final row = byIdx.putIfAbsent(b.idx, () => {'idx': b.idx});
+          final fx = b.idx >= 0 && b.idx < fxSeries.length
+              ? fxSeries[b.idx]
+              : 'UNKNOWN';
+          (row['sub'] as Map<String, dynamic>)['fractal_judgment_$kn'] = fx;
+          final trunc = b.idx >= 0 && b.idx < truncSeries.length
+              ? truncSeries[b.idx]
+              : false;
+          (row['sub'] as Map<String, dynamic>)['fractal_judgment_trunc_$kn'] =
+              trunc;
+        }
       }
     }
 
@@ -301,8 +307,8 @@ class BarFeatureLookup {
     final combineHigh = (row['combine_high'] as num?)?.toDouble() ?? high;
     final combineLow = (row['combine_low'] as num?)?.toDouble() ?? low;
 
-    // K0分型确认（=K1 端点确认）：仅 ±1 显示；截断加"(截断)"
-    var combineFxConfirm = '';
+    // K0分型确认（=K1 端点确认）：仅 ±1 显示；截断加"(截断)"；未确认为 0（与 Kn 同口径）
+    var combineFxConfirm = '0';
     final k0Confirm = row['k0_confirm'];
     if (k0Confirm is Map) {
       final v = k0Confirm['value'];
@@ -425,6 +431,7 @@ class BarFeatureLookup {
 
     final snaps = row['levels'];
     final confirms = row['level_confirms'];
+    final sub = row['sub'];
     final snapList = snaps is List<LevelSnap> ? snaps : const <LevelSnap>[];
     final total = totalLevels > snapList.length ? totalLevels : snapList.length;
 
@@ -441,8 +448,29 @@ class BarFeatureLookup {
           confirmTruncated = v.truncated;
         }
       }
+      // Kn 块「分型判断」：来自副图指标 indicator Kn分型判断（展示轨确认式打点）；
+      // 照搬 分型确认 呈现（TOP→-1 / BOTTOM→+1，截断加"(截断)"，未确认为 0）
+      // 须与副图指标「K{n}分型判断」同值：副图 kn=n+1，故读 fractal_judgment_${n+1}，非低一层的 $n
+      int? judgeVal;
+      var judgeTruncated = false;
+      final fx = (sub is Map) ? sub['fractal_judgment_${n + 1}'] : null;
+      if (fx == 'TOP') {
+        judgeVal = -1;
+      } else if (fx == 'BOTTOM') {
+        judgeVal = 1;
+      }
+      if (judgeVal != null && sub is Map) {
+        judgeTruncated = sub['fractal_judgment_trunc_${n + 1}'] == true;
+      }
       lines.add(const CrosshairTooltipRow.separator());
-      lines.addAll(_levelBlockRowsFor(n, snap, confirmVal, confirmTruncated));
+      lines.addAll(_levelBlockRowsFor(
+        n,
+        snap,
+        confirmVal,
+        confirmTruncated,
+        judgeVal,
+        judgeTruncated,
+      ));
     }
     return lines;
   }
@@ -460,11 +488,17 @@ class BarFeatureLookup {
     LevelSnap? snap,
     int? confirmVal,
     bool confirmTruncated,
+    int? judgeVal,
+    bool judgeTruncated,
   ) {
     final label = 'K$n';
+    // 分型确认 / 分型判断 同一套呈现：±1(截断) / ±1 / 0（未确认）
     final confirmText = confirmVal == null
-        ? ''
+        ? '0'
         : (confirmTruncated ? '$confirmVal(截断)' : '$confirmVal');
+    final judgeText = judgeVal == null
+        ? '0'
+        : (judgeTruncated ? '$judgeVal(截断)' : '$judgeVal');
 
     if (snap == null || snap.unitIdx == null) {
       return [
@@ -473,6 +507,7 @@ class BarFeatureLookup {
         CrosshairTooltipRow.kv('$label合并$label序', '—'),
         CrosshairTooltipRow.kv('$label合并', '—'),
         CrosshairTooltipRow.kv('$label分型确认', confirmText),
+        CrosshairTooltipRow.kv('$label分型判断', judgeText),
       ];
     }
 
@@ -495,6 +530,7 @@ class BarFeatureLookup {
         'H${_fmtPrice(snap.combineHigh)}/L${_fmtPrice(snap.combineLow)}',
       ),
       CrosshairTooltipRow.kv('$label分型确认', confirmText),
+      CrosshairTooltipRow.kv('$label分型判断', judgeText),
     ];
   }
 

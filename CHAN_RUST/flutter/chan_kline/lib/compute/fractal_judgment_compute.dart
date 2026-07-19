@@ -106,6 +106,24 @@ List<String> expandJudgmentEventsToSeries(
   return out;
 }
 
+/// 事件 → 截断标记序列（与 [expandJudgmentEventsToSeries] 同布局；仅 TOP/BOTTOM 生效）。
+/// 供十字线 tooltip「Kn分型判断」呈现 "(截断)" 后缀（与 Kn分型确认 同源口径）。
+List<bool> expandJudgmentEventsToTruncSeries(
+  List<FractalJudgmentEvent> events,
+  int barCount, {
+  int? maxX,
+}) {
+  if (barCount <= 0) return const [];
+  final out = List.filled(barCount, false);
+  for (final e in events) {
+    if (e.x < 0 || e.x >= barCount) continue;
+    if (maxX != null && e.x > maxX) continue;
+    if (e.fx != 'TOP' && e.fx != 'BOTTOM') continue;
+    out[e.x] = e.truncated;
+  }
+  return out;
+}
+
 /// @Deprecated 请用 [collectFractalJudgmentEvents] + 事件日志累积
 List<String> computeFractalJudgmentSeries({
   required int kn,

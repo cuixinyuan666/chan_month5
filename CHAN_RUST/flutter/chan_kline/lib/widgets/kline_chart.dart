@@ -483,6 +483,11 @@ class _KlineChartState extends State<KlineChart> {
       subIndicators: _activeSubs,
       truncationCheck: widget.truncationCheck,
       judgmentHistoryByKn: widget.judgmentHistoryByKn,
+      // 与传给 _KlineCompositePainter 的 segAsOf 完全一致：十字线激活时按当步 idx 截断，
+      // 使 tooltip 分型判断与副图同源同截断（KlineChart 无 segAsOf 字段，须在此现算）。
+      asOf: _crosshairEnabled && _crosshairBarIdx != null
+          ? _crosshairAsOfIdx()
+          : null,
     );
     return lookup.crosshairTooltipRows(
       bar.idx,
