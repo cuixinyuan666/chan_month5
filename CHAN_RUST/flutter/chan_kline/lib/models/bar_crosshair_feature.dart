@@ -10,6 +10,9 @@ class BarCrosshairFeature {
   /// 截至当步合并根数（逐K当下）
   final int mergeCount;
 
+  /// 截至当步 K0 合并框序号（第几个合并框，1 起；0=未成框）
+  final int mergeBoxSeq;
+
   /// 截至当步分型（未确认=UNKNOWN）
   final String combineFx;
 
@@ -54,6 +57,7 @@ class BarCrosshairFeature {
     required this.weekday,
     required this.mergeInnerSeq,
     this.mergeCount = 1,
+    this.mergeBoxSeq = 0,
     this.combineFx = 'UNKNOWN',
     this.combineHigh = 0,
     this.combineLow = 0,
@@ -79,6 +83,7 @@ class BarCrosshairFeature {
       weekday: json['weekday'] as String? ?? '-',
       mergeInnerSeq: (json['merge_inner_seq'] as num?)?.toInt() ?? 0,
       mergeCount: (json['merge_count'] as num?)?.toInt() ?? 1,
+      mergeBoxSeq: (json['merge_box_seq'] as num?)?.toInt() ?? 0,
       combineFx: json['combine_fx'] as String? ?? 'UNKNOWN',
       combineHigh: (json['combine_high'] as num?)?.toDouble() ?? 0,
       combineLow: (json['combine_low'] as num?)?.toDouble() ?? 0,

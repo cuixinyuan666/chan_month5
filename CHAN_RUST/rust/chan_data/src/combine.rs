@@ -428,6 +428,7 @@ pub fn build_kline_combine_bundle_with(
                 weekday: weekday_from_bar(b),
                 merge_inner_seq: k.inner_seq,
                 merge_count: k.count,
+                merge_box_seq: k.group_seq,
                 combine_fx: k.fx.clone(),
                 combine_high: k.high,
                 combine_low: k.low,

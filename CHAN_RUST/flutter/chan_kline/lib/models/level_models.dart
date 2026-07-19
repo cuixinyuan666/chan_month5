@@ -33,6 +33,9 @@ class LevelSnap {
   /// 当步所在合并框 1 分钟 K 起点（-1=无）
   final int combineX1;
 
+  /// 当步所在 Kn 合并框序号（第几个合并框，1 起；0=未成框）
+  final int mergeBoxSeq;
+
   const LevelSnap({
     required this.level,
     this.unitIdx,
@@ -50,6 +53,7 @@ class LevelSnap {
     this.combineLow = 0,
     this.combineFx = 'UNKNOWN',
     this.combineX1 = -1,
+    this.mergeBoxSeq = 0,
   });
 
   factory LevelSnap.fromJson(Map<String, dynamic> json) {
@@ -71,6 +75,7 @@ class LevelSnap {
       combineLow: (json['combine_low'] as num?)?.toDouble() ?? 0,
       combineFx: json['combine_fx'] as String? ?? 'UNKNOWN',
       combineX1: (json['combine_x1'] as num?)?.toInt() ?? -1,
+      mergeBoxSeq: (json['merge_box_seq'] as num?)?.toInt() ?? 0,
     );
   }
 }

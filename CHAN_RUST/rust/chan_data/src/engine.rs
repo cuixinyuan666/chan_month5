@@ -234,6 +234,8 @@ pub struct ProbeState {
     pub group_first_uid: i64,
     /// 当步所在合并组 x 起点（1 分钟 K）
     pub group_x1: i32,
+    /// 当步所在合并框序号（第几个合并框，1 起；0=未成框）
+    pub group_seq: i32,
 }
 
 /// 包含关系判定（与旧 test_combine 默认口径一致）
@@ -308,7 +310,7 @@ impl MergedGroup {
     }
 
     /// 组内快照（uid 连续递增 → 组内序号 = uid - first_uid）
-    fn snapshot(&self, uid: i64) -> ProbeState {
+    fn snapshot(&self, uid: i64, seq: i32) -> ProbeState {
         let inner = (uid - self.first_uid).clamp(0, (self.unit_count - 1) as i64) as i32;
         ProbeState {
             fx_event: None,
@@ -319,6 +321,7 @@ impl MergedGroup {
             group_count: self.unit_count,
             group_first_uid: self.first_uid,
             group_x1: self.x1,
+            group_seq: seq,
         }
     }
 }
@@ -414,6 +417,7 @@ impl CombineEngine {
                 group_count: 1,
                 group_first_uid: u.uid,
                 group_x1: u.x1,
+                group_seq: 1,
             };
         }
         let n = self.groups.len();
@@ -435,6 +439,7 @@ impl CombineEngine {
                         group_count: 1,
                         group_first_uid: u.uid,
                         group_x1: u.x1,
+                        group_seq: n as i32 + 1,
                     };
                 }
             }
@@ -449,6 +454,7 @@ impl CombineEngine {
                 group_count: g.unit_count,
                 group_first_uid: g.first_uid,
                 group_x1: g.x1,
+                group_seq: n as i32,
             };
         }
         // u 成新组 → 原末组成为中组，可判分型
@@ -473,6 +479,7 @@ impl CombineEngine {
             group_count: 1,
             group_first_uid: u.uid,
             group_x1: u.x1,
+            group_seq: n as i32 + 1,
         }
     }
 
@@ -489,7 +496,7 @@ impl CombineEngine {
         if uid > g.last_uid {
             return None;
         }
-        Some(g.snapshot(uid))
+        Some(g.snapshot(uid, (pos + 1) as i32))
     }
 
     /// 末组快照（无锚定 uid 时的当前状态）

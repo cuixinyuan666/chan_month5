@@ -73,6 +73,7 @@ class BarFeatureLookup {
         'weekday': feat?.weekday ?? '-',
         'merge_inner_seq': feat?.mergeInnerSeq ?? 0,
         'merge_count': feat?.mergeCount ?? 1,
+        'merge_box_seq': feat?.mergeBoxSeq ?? 0,
         'combine_fx': feat?.combineFx ?? 'UNKNOWN',
         'combine_high': feat?.combineHigh ?? b.high,
         'combine_low': feat?.combineLow ?? b.low,
@@ -290,6 +291,7 @@ class BarFeatureLookup {
 
     final weekday = weekdayToW(row['weekday'] as String? ?? '-');
     final mergeInner = row['merge_inner_seq'] ?? 0;
+    final mergeBoxSeq = row['merge_box_seq'] ?? 0;
 
     final open = (row['open'] as num?)?.toDouble() ?? 0;
     final high = (row['high'] as num?)?.toDouble() ?? 0;
@@ -322,6 +324,7 @@ class BarFeatureLookup {
         'H${_fmtPrice(combineHigh)}/L${_fmtPrice(combineLow)}',
       ),
       CrosshairTooltipRow.kv('K0合并K0序', '$mergeInner'),
+      CrosshairTooltipRow.kv('K0合并组No.', '$mergeBoxSeq'),
       CrosshairTooltipRow.kv('K0分型确认', combineFxConfirm),
       ..._levelBlockRows(idx),
     ];
@@ -486,6 +489,7 @@ class BarFeatureLookup {
         ),
       ),
       CrosshairTooltipRow.kv('$label合并$label序', '${snap.mergeInnerSeq}'),
+      CrosshairTooltipRow.kv('$label合并组No.', '${snap.mergeBoxSeq}'),
       CrosshairTooltipRow.kv(
         '$label合并',
         'H${_fmtPrice(snap.combineHigh)}/L${_fmtPrice(snap.combineLow)}',

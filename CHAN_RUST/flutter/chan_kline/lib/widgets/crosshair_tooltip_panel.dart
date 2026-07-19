@@ -18,21 +18,21 @@ class CrosshairTooltipPanel extends StatelessWidget {
   final double maxHeight;
 
   static const _labelStyle = TextStyle(
-    color: Color(0xFF0F172A),
+    color: Color(0xFFE2E8F0),
     fontSize: 11,
     fontWeight: FontWeight.w600,
     fontFamily: 'Consolas',
     height: 1.35,
   );
   static const _valueStyle = TextStyle(
-    color: Color(0xFF0F172A),
+    color: Color(0xFFE2E8F0),
     fontSize: 11,
     fontWeight: FontWeight.w500,
     fontFamily: 'Consolas',
     height: 1.35,
   );
   static const _sepStyle = TextStyle(
-    color: Color(0x990F172A),
+    color: Color(0x99E2E8F0),
     fontSize: 10,
     fontFamily: 'Consolas',
     height: 1.1,
@@ -45,9 +45,9 @@ class CrosshairTooltipPanel extends StatelessWidget {
       child: Container(
         constraints: BoxConstraints(maxWidth: maxWidth, maxHeight: maxHeight),
         decoration: BoxDecoration(
-          // 半透明：后方 K 线仍可见
-          color: const Color(0x66F8FAFC),
-          border: Border.all(color: const Color(0xCC0F172A), width: 1),
+          // 深色实底（近不透明）：与图表价签同调，浅色字对比强、不再黑白混色
+          color: const Color(0xEE121212),
+          border: Border.all(color: const Color(0x55E2E8F0), width: 1),
           borderRadius: BorderRadius.circular(2),
         ),
         child: ScrollConfiguration(
@@ -61,15 +61,27 @@ class CrosshairTooltipPanel extends StatelessWidget {
               children: [
                 for (final row in rows)
                   if (row.isSeparator)
-                    const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 3),
-                      child: Text(
-                        '===============================',
-                        style: _sepStyle,
-                        maxLines: 1,
-                        softWrap: false,
-                        overflow: TextOverflow.clip,
-                      ),
+                    // 分隔线「=」铺满 tooltip 内容区（左右内边距之间），而非固定长度
+                    LayoutBuilder(
+                      builder: (context, constraints) {
+                        const eq = '=';
+                        final tp = TextPainter(
+                          text: const TextSpan(text: eq, style: _sepStyle),
+                          textDirection: TextDirection.ltr,
+                        )..layout();
+                        final count =
+                            tp.width > 0 ? (constraints.maxWidth / tp.width).ceil() : 0;
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 3),
+                          child: Text(
+                            eq * count,
+                            style: _sepStyle,
+                            maxLines: 1,
+                            softWrap: false,
+                            overflow: TextOverflow.clip,
+                          ),
+                        );
+                      },
                     )
                   else
                     Padding(
