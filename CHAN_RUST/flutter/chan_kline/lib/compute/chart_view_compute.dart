@@ -1,6 +1,3 @@
-import 'dart:convert';
-import 'dart:io';
-
 import '../models/bar_crosshair_feature.dart';
 import '../models/fractal_judgment_event.dart';
 import '../models/k0_confirm_signal.dart';
@@ -639,29 +636,7 @@ bool _frozenCoversPoles({
   return false;
 }
 
-// #region agent log
-void _agentLogBuildingLines({
-  required String location,
-  required String hypothesisId,
-  required String message,
-  required Map<String, Object?> data,
-}) {
-  try {
-    final payload = <String, Object?>{
-      'sessionId': 'c3b7e6',
-      'runId': 'dyn-kn-dash-v2',
-      'hypothesisId': hypothesisId,
-      'location': location,
-      'message': message,
-      'data': data,
-      'timestamp': DateTime.now().millisecondsSinceEpoch,
-    };
-    File(
-      r'c:\Users\Administrator\Desktop\my_file1\my_file\3\chan.py\debug-c3b7e6.log',
-    ).writeAsStringSync('${jsonEncode(payload)}\n', mode: FileMode.append);
-  } catch (_) {}
-}
-// #endregion
+
 
 /// 动态KN + 当下分型判断拆段的构建中连线（全层同构）。
 ///
@@ -678,7 +653,6 @@ List<DisplayBuildingLine> computeDisplayBuildingLines({
   List<LevelConfirm> levelConfirms = const [],
   List<K0ConfirmSignal> k0Confirms = const [],
   List<FractalJudgmentEvent> liveJudgments = const [],
-  int debugKn = -1,
 }) {
   if (bars.isEmpty || asOf < 0 || asOf >= bars.length) return const [];
 
@@ -706,17 +680,6 @@ List<DisplayBuildingLine> computeDisplayBuildingLines({
         isOpenTip: true,
       ));
     }
-    _agentLogBuildingLines(
-      location: 'chart_view_compute.dart:computeDisplayBuildingLines',
-      hypothesisId: 'H-fallback',
-      message: 'no confirm → dynamic units only',
-      data: {
-        'kn': debugKn,
-        'asOf': asOf,
-        'dashN': out.length,
-        'liveJ': liveJudgments.map((j) => '${j.x}:${j.fx}').toList(),
-      },
-    );
     return out;
   }
 
@@ -811,41 +774,7 @@ List<DisplayBuildingLine> computeDisplayBuildingLines({
     }
   }
 
-  // #region agent log
-  _agentLogBuildingLines(
-    location: 'chart_view_compute.dart:computeDisplayBuildingLines',
-    hypothesisId: 'H1-H5',
-    message: 'judgment-split dynKN lines',
-    data: {
-      'kn': debugKn,
-      'asOf': asOf,
-      'virtualN': virtualUnits.length,
-      'frozenN': frozenIdx.length,
-      'liveJ': [for (final j in js) '${j.x}:${j.fx}'],
-      'poles': [
-        for (final p in poles)
-          {
-            'pole': p.poleX,
-            'fx': p.fx,
-            'src': p.src,
-            'trig': p.triggerX,
-          },
-      ],
-      'allowOpen': allowOpen,
-      'lines': [
-        for (final l in out)
-          {
-            'b': l.begin.barIdx,
-            'e': l.end.barIdx,
-            'solid': l.asSolid,
-            'open': l.isOpenTip,
-            'bs': l.beginSrc,
-            'es': l.endSrc,
-          },
-      ],
-    },
-  );
-  // #endregion
+
 
   return out;
 }

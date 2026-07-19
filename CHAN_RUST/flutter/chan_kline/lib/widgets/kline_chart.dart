@@ -1436,7 +1436,6 @@ class _KlineCompositePainter extends CustomPainter {
       frozenIdx: frozenIdx,
       k0Confirms: k0ConfirmSignals,
       liveJudgments: liveJudgments,
-      debugKn: 1,
     );
     // 历史记录调试摘要（内容变才追加，便于复制排查）
     MsgHistory.instance.appendDisplayBuildingLinesRuntime(
@@ -2355,7 +2354,6 @@ class _KlineCompositePainter extends CustomPainter {
       frozenIdx: frozenIdx,
       levelConfirms: levelConfirms,
       liveJudgments: liveJudgments,
-      debugKn: level,
     );
     MsgHistory.instance.appendDisplayBuildingLinesRuntime(
       kn: level,
