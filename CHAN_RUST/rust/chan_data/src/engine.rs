@@ -234,7 +234,7 @@ pub struct ProbeState {
     pub group_first_uid: i64,
     /// 当步所在合并组 x 起点（1 分钟 K）
     pub group_x1: i32,
-    /// 当步所在合并框序号（第几个合并框，1 起；0=未成框）
+    /// 当步所在合并框序号（0 起；-1=未成框）
     pub group_seq: i32,
 }
 
@@ -417,7 +417,7 @@ impl CombineEngine {
                 group_count: 1,
                 group_first_uid: u.uid,
                 group_x1: u.x1,
-                group_seq: 1,
+                group_seq: 0,
             };
         }
         let n = self.groups.len();
@@ -439,7 +439,7 @@ impl CombineEngine {
                         group_count: 1,
                         group_first_uid: u.uid,
                         group_x1: u.x1,
-                        group_seq: n as i32 + 1,
+                        group_seq: n as i32,
                     };
                 }
             }
@@ -454,7 +454,7 @@ impl CombineEngine {
                 group_count: g.unit_count,
                 group_first_uid: g.first_uid,
                 group_x1: g.x1,
-                group_seq: n as i32,
+                group_seq: n as i32 - 1,
             };
         }
         // u 成新组 → 原末组成为中组，可判分型
@@ -479,7 +479,7 @@ impl CombineEngine {
             group_count: 1,
             group_first_uid: u.uid,
             group_x1: u.x1,
-            group_seq: n as i32 + 1,
+            group_seq: n as i32,
         }
     }
 
@@ -496,7 +496,7 @@ impl CombineEngine {
         if uid > g.last_uid {
             return None;
         }
-        Some(g.snapshot(uid, (pos + 1) as i32))
+        Some(g.snapshot(uid, pos as i32))
     }
 
     /// 末组快照（无锚定 uid 时的当前状态）

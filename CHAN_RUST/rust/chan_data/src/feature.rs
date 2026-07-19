@@ -21,8 +21,8 @@ pub struct BarCrosshairFeature {
     /// 截至当步所在合并区间已合并根数（逐K当下，非末态）
     #[serde(default)]
     pub merge_count: i32,
-    /// 截至当步 K0合并框序号（第几个合并框，1 起；0=未成框）
-    #[serde(default)]
+    /// 截至当步 K0合并框序号（0 起；-1=未成框）
+    #[serde(default = "neg_one")]
     pub merge_box_seq: i32,
     /// 截至当步分型：未确认=UNKNOWN（逐K当下）
     #[serde(default = "default_unknown")]
@@ -75,6 +75,10 @@ fn default_one() -> i32 {
 
 fn default_zero() -> i32 {
     0
+}
+
+fn neg_one() -> i32 {
+    -1
 }
 
 fn default_unknown() -> String {

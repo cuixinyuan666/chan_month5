@@ -53,7 +53,7 @@ class LevelSnap {
     this.combineLow = 0,
     this.combineFx = 'UNKNOWN',
     this.combineX1 = -1,
-    this.mergeBoxSeq = 0,
+    this.mergeBoxSeq = -1,
   });
 
   factory LevelSnap.fromJson(Map<String, dynamic> json) {
@@ -75,7 +75,7 @@ class LevelSnap {
       combineLow: (json['combine_low'] as num?)?.toDouble() ?? 0,
       combineFx: json['combine_fx'] as String? ?? 'UNKNOWN',
       combineX1: (json['combine_x1'] as num?)?.toInt() ?? -1,
-      mergeBoxSeq: (json['merge_box_seq'] as num?)?.toInt() ?? 0,
+      mergeBoxSeq: (json['merge_box_seq'] as num?)?.toInt() ?? -1,
     );
   }
 }

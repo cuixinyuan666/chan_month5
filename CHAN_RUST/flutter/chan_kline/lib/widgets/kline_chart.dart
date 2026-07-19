@@ -2446,6 +2446,9 @@ class _KlineCompositePainter extends CustomPainter {
 
     for (var i = 0; i < bars.length; i++) {
       final idx = bars[i].idx;
+      // 十字线激活时，按当步截断：右侧(idx>segAsOf)的 K0 蜡烛不绘制，与 K1/K2/.../Kn 各层一致
+      final asOf = segAsOf;
+      if (asOf != null && idx > asOf) continue;
       if (idx < viewport.viewXMin - 1 || idx > viewport.viewXMax + 1) continue;
       final b = bars[i];
       final cx = _barCenterX(idx, w, slotW);
@@ -2703,8 +2706,11 @@ class _KlineCompositePainter extends CustomPainter {
     for (final b in bars) {
       if (b.volume > maxV) maxV = b.volume;
     }
+    final asOf = segAsOf;
     for (var i = 0; i < bars.length; i++) {
       final idx = bars[i].idx;
+      // 十字线激活时，按当步截断：右侧(idx>asOf)的成交量不绘制，与 K0 蜡烛/K1../Kn 各层一致
+      if (asOf != null && idx > asOf) continue;
       if (idx < viewport.viewXMin - 1 || idx > viewport.viewXMax + 1) continue;
       final b = bars[i];
       final cx = _barCenterX(idx, w, slotW);

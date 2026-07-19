@@ -166,7 +166,7 @@ pub struct LevelSnap {
     /// 当步所在 Kn合并框 K0 起点（as-of 查表重绘用；-1=无）
     #[serde(default = "neg_one")]
     pub combine_x1: i32,
-    /// 当步所在 Kn 合并框序号（第几个合并框，1 起；0=未成框）
+    /// 当步所在 Kn 合并框序号（0 起；-1=未成框）
     pub merge_box_seq: i32,
 }
 
@@ -193,7 +193,7 @@ impl LevelSnap {
             combine_low: 0.0,
             combine_fx: "UNKNOWN".to_string(),
             combine_x1: -1,
-            merge_box_seq: 0,
+            merge_box_seq: -1,
         }
     }
 }
@@ -242,7 +242,7 @@ pub struct BarCombineSnap {
     pub high: f64,
     pub low: f64,
     pub fx: String,
-    /// 当步所在 K0 合并框序号（第几个合并框，1 起；0=未成框）
+    /// 当步所在 K0 合并框序号（0 起；-1=未成框）
     pub group_seq: i32,
 }
 
@@ -1046,7 +1046,7 @@ pub fn run_pipeline(bars: &[KlineBar], opt: &PipelineOptions) -> PipelineResult 
                 high: bar.high,
                 low: bar.low,
                 fx: "UNKNOWN".to_string(),
-                group_seq: 0,
+                group_seq: -1,
             });
         bar_k_snaps.push(ksnap);
 
