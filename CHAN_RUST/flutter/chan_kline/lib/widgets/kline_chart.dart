@@ -1155,8 +1155,9 @@ class _KlineCompositePainter extends CustomPainter {
 
     if (crosshairEnabled && crosshairX != null && crosshairY != null) {
       _drawCrosshair(canvas, size, contentBottom, plotTop, priceRange);
-      // 极点距数值：不画在折线上，十字线激活时在副图右上角固定读数
-      _drawPeakDistCrosshairReadout(canvas, size.width);
+      // 副图指标当前值：不画在折线/打点上，十字线激活时在副图右上角固定读数；
+      // 含分型确认/判断/极点距/截断（与副图折线、主 tooltip 同源同口径）
+      _drawSubCrosshairReadout(canvas, size.width);
     }
   }
 
@@ -3096,24 +3097,23 @@ class _KlineCompositePainter extends CustomPainter {
     // tooltip 改由 Flutter 覆盖层绘制（表格对齐 + 可滚动半透明）
   }
 
-  /// 十字线激活时：副图右上角固定显示已勾选层的极点距当前值。
-  void _drawPeakDistCrosshairReadout(Canvas canvas, double w) {
+  /// 十字线激活时：副图右上角固定显示已勾选副图指标的当前值。
+  /// 原仅显示极点距，现扩展到分型确认/判断/截断（与副图折线打点、主 tooltip 同源同口径）。
+  /// 展示名用 SubIndicatorKind.label（比层号小 1，与全 UI 同口径）。
+  void _drawSubCrosshairReadout(Canvas canvas, double w) {
     if (crosshairBarIdx == null || bars.isEmpty || subIndicators.isEmpty) {
       return;
     }
-    final peakKns = subIndicators
-        .where((e) => e.kind == SubIndicatorKind.fractalPeakDist)
-        .map((e) => e.kn)
-        .toList()
-      ..sort();
-    if (peakKns.isEmpty) return;
-
     final barX = bars[crosshairBarIdx!.clamp(0, bars.length - 1)].idx;
     final parts = <String>[];
-    for (final kn in peakKns) {
-      final v = _peakDistValueAt(barX, kn);
-      if (v == null) continue;
-      parts.add('K$kn极点距:$v');
+    for (final ind in subIndicators) {
+      // 成交量数值大且已有独立副图坐标轴，不进紧凑读数框
+      if (ind.kind == SubIndicatorKind.volume) continue;
+      // 与主 tooltip 对齐：每个已勾选指标都显示，其值为 tooltip 当步值；
+      // tooltip 未取到的（无值/空闲）按 "0" 显示，避免读数框随 K 跳进跳出。
+      final rows = featureLookup.crosshairSubRows(barX, {ind});
+      final value = rows.isNotEmpty ? rows.first.value : '0';
+      parts.add('${ind.label}:$value');
     }
     if (parts.isEmpty) return;
 
@@ -3142,43 +3142,12 @@ class _KlineCompositePainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1;
     final rect = Rect.fromLTWH(lx, ly, boxW, boxH);
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(rect, const Radius.circular(3)),
-      bg,
-    );
+    canvas.drawRRect(RRect.fromRectAndRadius(rect, const Radius.circular(3)), bg);
     canvas.drawRRect(
       RRect.fromRectAndRadius(rect, const Radius.circular(3)),
       border,
     );
     tp.paint(canvas, Offset(lx + pad, ly + pad / 2));
-  }
-
-  /// 十字线当步某层极点距（与副图折线同口径）。
-  int? _peakDistValueAt(int barX, int labelKn) {
-    if (bars.isEmpty) return null;
-    final n = bars.length;
-    final level = labelKn;
-    List<int> series;
-    LevelBundle? bundle;
-    for (final b in levels) {
-      if (b.level == level) {
-        bundle = b;
-        break;
-      }
-    }
-    if (bundle != null) {
-      series = _peakDistSeries(n, bundle.confirms);
-    } else if (labelKn == 1 && barFeatures.isNotEmpty) {
-      // 回退：K0 层（kn=1，无 LevelBundle）用旧 bi 极点距
-      series = List<int>.generate(
-        n,
-        (i) => i < barFeatures.length ? barFeatures[i].fractalPeakDist : 0,
-      );
-    } else {
-      return null;
-    }
-    final i = barX.clamp(0, series.length - 1);
-    return series[i];
   }
 
   /// 通用 pattern 虚线（pattern=[画,空,画,空,…] 像素）。

@@ -371,26 +371,40 @@ class BarFeatureLookup {
       if (ind.kind == SubIndicatorKind.fractalConfirm) {
         final confirms = row['level_confirms'];
         dynamic v;
+        var truncated = false;
         if (confirms is Map && confirms.containsKey(ind.kn)) {
           // 主路径：level=kn 的确认（K1/K0连线=level1，K2/K1连线=level2…）
           final c = confirms[ind.kn];
           if (c is LevelConfirm) {
             v = c.value;
+            truncated = c.truncated;
           } else if (c is Map) {
             v = c['value'];
+            truncated = c['truncated'] == true;
           }
         } else if (ind.kn == 1) {
           // 回退：无 levels 时用旧 k0_confirm（K0 原始K分型）
           v = sub['k0_confirm_value'];
+          final bc = row['k0_confirm'];
+          if (bc is Map) truncated = bc['truncated'] == true;
         }
-        add(ind.label, v);
+        // 与主 K 块同口径：±1(截断)/±1/0（未确认）。使副图 tooltip 行/读数框与 K 块一致。
+        add(ind.label, v == null ? '0' : (truncated ? '$v(截断)' : '$v'));
       }
       if (ind.kind == SubIndicatorKind.fractalJudgment) {
         final fx = sub['fractal_judgment_${ind.kn}'];
-        // 确认式：仅成立当步显示 TOP/BOTTOM，不展示整框回填的 UNKNOWN
-        if (fx == 'TOP' || fx == 'BOTTOM') {
-          add(ind.label, fx);
+        // 与主 tooltip K 块同口径：TOP→-1，BOTTOM→+1，未确认(UNKNOWN)→0；
+        // 截断加"(截断)"。使副图 tooltip 行 / 副图读数框 与主 K 块一致（不再用 TOP/BOTTOM 串）。
+        String v;
+        if (fx == 'TOP') {
+          v = '-1';
+        } else if (fx == 'BOTTOM') {
+          v = '1';
+        } else {
+          v = '0';
         }
+        final truncated = sub['fractal_judgment_trunc_${ind.kn}'] == true;
+        add(ind.label, truncated ? '$v(截断)' : v);
       }
       if (ind.kind == SubIndicatorKind.fractalPeakDist) {
         if (sub.containsKey('fractal_peak_dist_${ind.kn}')) {
