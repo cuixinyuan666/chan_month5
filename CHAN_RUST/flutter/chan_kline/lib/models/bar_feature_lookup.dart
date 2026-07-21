@@ -307,7 +307,7 @@ class BarFeatureLookup {
     final combineHigh = (row['combine_high'] as num?)?.toDouble() ?? high;
     final combineLow = (row['combine_low'] as num?)?.toDouble() ?? low;
 
-    // K0分型确认（=K1 端点确认）：仅 ±1 显示；截断加"(截断)"；未确认为 0（与 Kn 同口径）
+    // 原始K分型确认（=k0_confirms=levels[0].confirms；合并原始K顶/底分型，其端点连即 K0连线/K1，并被重铸为 K1Bar 供 K2）。仅 ±1 显示，截断加"(截断)"，未确认为 0，与 Kn 同口径
     var combineFxConfirm = '0';
     final k0Confirm = row['k0_confirm'];
     if (k0Confirm is Map) {
