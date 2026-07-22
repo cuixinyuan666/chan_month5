@@ -651,72 +651,67 @@ bool _frozenCoversPoles({
 
 
 
-/// 动态KN + 当下分型判断拆段的构建中连线（全层同构）。
-///
-/// [liveJudgments]：as-of 当下重算的有效判断（禁止用会话历史，否则失效判断自动回退）。
-/// 口径（全层同构）：
-/// - 判断极点钉在 (上一极点, judgment.x] 扫价（buildingTailEndpoint），不随 asOf 拉长；
-/// - 右组=分型第三元素的 K0 跨度 [rightX1,rightX2]
-///   （K0 例确认@8 → [8,8]；K1 例判断@58 → [55,58]）；
-/// - 判断刚成立开口：起点=判断极点；终点=右组内方向首极值
-///   （扫 (rightX1-1, min(asOf,rightX2)]；禁止扫进中组如 44→47）；
-/// - 确认刚成立（triggerX==asOf）开口：终点=右组首极值（K0 右组=[x,x]）；
-///   确认后随 asOf 延伸仍从确认极点扫价；
-/// - 确认↔确认(未冻覆盖)实线；判断↔判断实线定格；确认↔判断虚线。
-List<DisplayBuildingLine> computeDisplayBuildingLines({
+/// 首个判断极点（尚无确认时）：钉在中组 [fractalX1,fractalX2] 内方向极值；
+/// 无中组则扫 (0, j.x]。与有确认时 `_judgmentPole` 同钉死语义。
+_DashPole? _firstJudgmentPole({
   required List<KlineBar> bars,
-  required int asOf,
-  required List<K1Bar> virtualUnits,
-  required Set<int> frozenIdx,
-  List<LevelConfirm> levelConfirms = const [],
-  List<K0ConfirmSignal> k0Confirms = const [],
-  List<FractalJudgmentEvent> liveJudgments = const [],
+  required FractalJudgmentEvent j,
 }) {
-  if (bars.isEmpty || asOf < 0 || asOf >= bars.length) return const [];
-
-  final confirmPoles = _collectConfirmPoles(
-    bars: bars,
-    asOf: asOf,
-    levelConfirms: levelConfirms,
-    k0Confirms: k0Confirms,
-  );
-
-  // 无确认时：退化为未冻虚拟单元整段虚线（引导段）
-  if (confirmPoles.isEmpty) {
-    final out = <DisplayBuildingLine>[];
-    for (final u in virtualUnits) {
-      if (frozenIdx.contains(u.idx) || u.x1 > asOf || u.dir == 0) continue;
-      out.add(DisplayBuildingLine(
-        begin: LevelLineEndpoint(barIdx: u.x1, price: u.open),
-        end: LevelLineEndpoint(barIdx: u.x2, price: u.close),
-        dir: u.dir,
-        unitIdx: u.idx,
-        anchorX: u.x1,
-        beginSrc: 'dynamic',
-        endSrc: 'dynamic',
-        asSolid: false,
-        isOpenTip: true,
-      ));
-    }
-    return out;
+  if (j.fx != 'TOP' && j.fx != 'BOTTOM') return null;
+  final dir = j.fx == 'TOP' ? 1 : -1;
+  final int after;
+  final int asOfScan;
+  if (j.fractalX1 >= 0 && j.fractalX2 >= j.fractalX1) {
+    after = j.fractalX1 - 1;
+    asOfScan = j.fractalX2;
+  } else {
+    after = -1;
+    asOfScan = j.x;
   }
+  if (asOfScan < 0) return null;
+  final ep = buildingTailEndpoint(
+    bars: bars,
+    afterConfirmX: after,
+    asOfX: asOfScan,
+    buildingDir: dir,
+  );
+  if (ep == null) return null;
+  return _DashPole(
+    poleX: ep.barIdx,
+    fx: j.fx,
+    endpoint: ep,
+    src: 'judgment',
+    triggerX: j.x,
+    fractalX2: j.fractalX2,
+    rightX1: j.rightX1,
+    rightX2: j.rightX2,
+  );
+}
 
-  final poles = <_DashPole>[...confirmPoles];
-  final lastConfirmTrig = confirmPoles.last.triggerX;
-  final js = [
-    for (final j in liveJudgments)
-      if (j.x <= asOf &&
-          j.x > lastConfirmTrig &&
-          (j.fx == 'TOP' || j.fx == 'BOTTOM'))
-        j,
-  ]..sort((a, b) => a.x.compareTo(b.x));
-
-  // 交替方向：同 fx 连续则后者覆盖前者（判断失效/改写由 live 列表保证）
+/// 把判断列表并入极点链（同 fx 后者覆盖）；[seedFirst]=尚无确认时用中组首极点。
+void _appendJudgmentPoles({
+  required List<KlineBar> bars,
+  required List<_DashPole> poles,
+  required List<FractalJudgmentEvent> js,
+  required bool seedFirst,
+}) {
   for (final j in js) {
+    if (poles.isEmpty) {
+      if (!seedFirst) continue;
+      final p = _firstJudgmentPole(bars: bars, j: j);
+      if (p != null) poles.add(p);
+      continue;
+    }
     final prev = poles.last;
     if (j.fx == prev.fx) {
       if (prev.src == 'judgment') poles.removeLast();
-      final refreshedPrev = poles.isEmpty ? confirmPoles.last : poles.last;
+      if (poles.isEmpty) {
+        if (!seedFirst) continue;
+        final p = _firstJudgmentPole(bars: bars, j: j);
+        if (p != null) poles.add(p);
+        continue;
+      }
+      final refreshedPrev = poles.last;
       final p = _judgmentPole(bars: bars, prev: refreshedPrev, j: j);
       if (p != null) poles.add(p);
       continue;
@@ -724,6 +719,18 @@ List<DisplayBuildingLine> computeDisplayBuildingLines({
     final p = _judgmentPole(bars: bars, prev: prev, j: j);
     if (p != null) poles.add(p);
   }
+}
+
+/// 极点链 → 闭段 + 开口尖端（确认↔确认/判断↔判断实；确认↔判断虚；开口虚）。
+List<DisplayBuildingLine> _linesFromPoles({
+  required List<KlineBar> bars,
+  required int asOf,
+  required List<_DashPole> poles,
+  required List<K1Bar> virtualUnits,
+  required Set<int> frozenIdx,
+  required List<FractalJudgmentEvent> js,
+}) {
+  if (poles.isEmpty) return const [];
 
   final out = <DisplayBuildingLine>[];
   for (var i = 0; i + 1 < poles.length; i++) {
@@ -819,4 +826,98 @@ List<DisplayBuildingLine> computeDisplayBuildingLines({
   }
 
   return out;
+}
+
+/// 动态KN + 当下分型判断拆段的构建中连线（全层同构）。
+///
+/// [liveJudgments]：as-of 当下重算的有效判断（禁止用会话历史，否则失效判断自动回退）。
+/// 口径（全层同构）：
+/// - 判断极点钉在 (上一极点, judgment.x] 扫价（buildingTailEndpoint），不随 asOf 拉长；
+/// - 尚无确认时：首判断用中组极点起链，画判断↔判断实 / 判断开口虚（与有确认同构）；
+/// - 右组=分型第三元素的 K0 跨度 [rightX1,rightX2]
+///   （K0 例确认@8 → [8,8]；K1 例判断@58 → [55,58]）；
+/// - 判断刚成立开口：起点=判断极点；终点=右组内方向首极值
+///   （扫 (rightX1-1, min(asOf,rightX2)]；禁止扫进中组如 44→47）；
+/// - 确认刚成立（triggerX==asOf）开口：终点=右组首极值（K0 右组=[x,x]）；
+///   确认后随 asOf 延伸仍从确认极点扫价；
+/// - 确认↔确认(未冻覆盖)实线；判断↔判断实线定格；确认↔判断虚线。
+List<DisplayBuildingLine> computeDisplayBuildingLines({
+  required List<KlineBar> bars,
+  required int asOf,
+  required List<K1Bar> virtualUnits,
+  required Set<int> frozenIdx,
+  List<LevelConfirm> levelConfirms = const [],
+  List<K0ConfirmSignal> k0Confirms = const [],
+  List<FractalJudgmentEvent> liveJudgments = const [],
+}) {
+  if (bars.isEmpty || asOf < 0 || asOf >= bars.length) return const [];
+
+  final confirmPoles = _collectConfirmPoles(
+    bars: bars,
+    asOf: asOf,
+    levelConfirms: levelConfirms,
+    k0Confirms: k0Confirms,
+  );
+
+  final List<FractalJudgmentEvent> js;
+  final List<_DashPole> poles;
+
+  if (confirmPoles.isEmpty) {
+    // 尚无确认：仍消费 live 判断（全层同构）；无判断才退化到未冻虚拟单元
+    js = [
+      for (final j in liveJudgments)
+        if (j.x <= asOf && (j.fx == 'TOP' || j.fx == 'BOTTOM')) j,
+    ]..sort((a, b) => a.x.compareTo(b.x));
+    poles = <_DashPole>[];
+    _appendJudgmentPoles(
+      bars: bars,
+      poles: poles,
+      js: js,
+      seedFirst: true,
+    );
+
+    if (poles.isEmpty) {
+      final out = <DisplayBuildingLine>[];
+      for (final u in virtualUnits) {
+        if (frozenIdx.contains(u.idx) || u.x1 > asOf || u.dir == 0) continue;
+        out.add(DisplayBuildingLine(
+          begin: LevelLineEndpoint(barIdx: u.x1, price: u.open),
+          end: LevelLineEndpoint(barIdx: u.x2, price: u.close),
+          dir: u.dir,
+          unitIdx: u.idx,
+          anchorX: u.x1,
+          beginSrc: 'dynamic',
+          endSrc: 'dynamic',
+          asSolid: false,
+          isOpenTip: true,
+        ));
+      }
+      return out;
+    }
+  } else {
+    poles = <_DashPole>[...confirmPoles];
+    final lastConfirmTrig = confirmPoles.last.triggerX;
+    js = [
+      for (final j in liveJudgments)
+        if (j.x <= asOf &&
+            j.x > lastConfirmTrig &&
+            (j.fx == 'TOP' || j.fx == 'BOTTOM'))
+          j,
+    ]..sort((a, b) => a.x.compareTo(b.x));
+    _appendJudgmentPoles(
+      bars: bars,
+      poles: poles,
+      js: js,
+      seedFirst: false,
+    );
+  }
+
+  return _linesFromPoles(
+    bars: bars,
+    asOf: asOf,
+    poles: poles,
+    virtualUnits: virtualUnits,
+    frozenIdx: frozenIdx,
+    js: js,
+  );
 }

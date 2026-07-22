@@ -433,6 +433,71 @@ void main() {
     expect(lines.first.asSolid, isFalse);
   });
 
+  test('computeDisplayBuildingLines：无确认但有判断→中组极点开口虚线（K1@26 同构）', () {
+    // 复现：asOf=26 / liveJ=26:TOP(fx6-25|r25-26) / confirmPoles 空 / virtualUnits 空
+    final bars = _bars(30);
+    bars[10] = KlineBar(
+      idx: 10,
+      timeMs: 10,
+      timeText: 't10',
+      open: 10,
+      high: 15,
+      low: 9.5,
+      close: 14,
+      volume: 1,
+      amount: 1,
+      metrics: const {},
+    );
+    bars[25] = KlineBar(
+      idx: 25,
+      timeMs: 25,
+      timeText: 't25',
+      open: 10,
+      high: 11,
+      low: 8,
+      close: 9,
+      volume: 1,
+      amount: 1,
+      metrics: const {},
+    );
+    bars[26] = KlineBar(
+      idx: 26,
+      timeMs: 26,
+      timeText: 't26',
+      open: 10,
+      high: 11,
+      low: 7.5,
+      close: 8,
+      volume: 1,
+      amount: 1,
+      metrics: const {},
+    );
+    const topJudgment = FractalJudgmentEvent(
+      x: 26,
+      fx: 'TOP',
+      fractalX1: 6,
+      fractalX2: 25,
+      rightX1: 25,
+      rightX2: 26,
+    );
+    final lines = computeDisplayBuildingLines(
+      bars: bars,
+      asOf: 26,
+      virtualUnits: const [],
+      frozenIdx: const {},
+      liveJudgments: const [topJudgment],
+    );
+    expect(lines, isNotEmpty);
+    final open = lines.where((l) => l.isOpenTip).toList();
+    expect(open, isNotEmpty);
+    expect(open.first.beginSrc, 'judgment');
+    expect(open.first.endSrc, 'open');
+    expect(open.first.asSolid, isFalse);
+    expect(open.first.begin.barIdx, 10); // 中组首高
+    // 右组 [25,26] 降段首低：25.low=8 → 26.low=7.5，极小在 26
+    expect(open.first.end.barIdx, 26);
+  });
+
   test('computeDisplayBuildingLines：判断钉死端点不随 asOf 拉长；确认↔判断虚线', () {
     final bars = _bars(20);
     bars[5] = KlineBar(
