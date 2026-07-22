@@ -1390,8 +1390,8 @@ class _KlineCompositePainter extends CustomPainter {
     }
 
     _drawBuildingK0Line(canvas, w, plotTop, plotH, slotW);
-    // 种子框首段 A→B→C（level=1 / K0连线层）
-    _drawSeedAbcLines(canvas, w, plotTop, plotH, slotW, level: 1, style: null);
+    // 种子框首段：UNKNOWN 开口 / JUDGE·CONFIRM ABC（level=1，与 Kn 同构）
+    _drawSeedPhaseLines(canvas, w, plotTop, plotH, slotW, level: 1, style: null);
   }
 
   /// 取 as-of 当下该层种子框快照（逐K冻结，与 tooltip/ML 同源）
@@ -1412,6 +1412,72 @@ class _KlineCompositePainter extends CustomPainter {
   double _polePriceAt(int x, {required bool useHigh}) {
     if (x < 0 || x >= bars.length) return 0;
     return useHigh ? bars[x].high : bars[x].low;
+  }
+
+  /// 种子框画线全层同构入口：UNKNOWN→开口虚线；JUDGE/CONFIRM→ABC（互斥）。
+  void _drawSeedPhaseLines(
+    Canvas canvas,
+    double w,
+    double plotTop,
+    double plotH,
+    double slotW, {
+    required int level,
+    required ChartLevelLineStyle? style,
+  }) {
+    _drawSeedUnknownOpenTip(
+      canvas,
+      w,
+      plotTop,
+      plotH,
+      slotW,
+      level: level,
+      style: style,
+    );
+    _drawSeedAbcLines(
+      canvas,
+      w,
+      plotTop,
+      plotH,
+      slotW,
+      level: level,
+      style: style,
+    );
+  }
+
+  /// 种子 UNKNOWN 开口虚线（方案2·D2·S-b，全层同构）：有 group1 才画。
+  void _drawSeedUnknownOpenTip(
+    Canvas canvas,
+    double w,
+    double plotTop,
+    double plotH,
+    double slotW, {
+    required int level,
+    required ChartLevelLineStyle? style,
+  }) {
+    final snap = _asOfSeedSnap(level);
+    if (snap == null) return;
+    final asOf = segAsOf ?? (bars.isEmpty ? -1 : bars.last.idx);
+    final line = computeSeedUnknownOpenTip(
+      bars: bars,
+      asOf: asOf,
+      seedBoxX1: snap.seedBoxX1,
+      seedBoxX2: snap.seedBoxX2,
+      seedBoxHigh: snap.seedBoxHigh,
+      seedBoxLow: snap.seedBoxLow,
+      seedLeaveDir: snap.seedLeaveDir,
+      firstFxState: snap.firstFxState,
+      seedConfirmed: snap.seedConfirmed,
+    );
+    if (line == null) return;
+    _paintDisplayBuildingLines(
+      canvas,
+      w,
+      plotTop,
+      plotH,
+      slotW,
+      lines: [line],
+      style: style,
+    );
   }
 
   /// 种子框画线：JUDGE→两线虚；CONFIRM→A→B 由冻结段承担，仅画 B→C 虚线
@@ -1742,7 +1808,7 @@ class _KlineCompositePainter extends CustomPainter {
         bundle: bundle,
         tailIdx: tailIdx,
       );
-      _drawSeedAbcLines(
+      _drawSeedPhaseLines(
         canvas,
         w,
         plotTop,

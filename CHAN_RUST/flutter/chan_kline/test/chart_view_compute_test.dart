@@ -847,4 +847,182 @@ void main() {
     expect(jj.isNotEmpty, isTrue);
     expect(jj.every((l) => l.asSolid), isTrue);
   });
+
+  // ---- 种子 UNKNOWN 开口虚线（方案2·D2·S-b）----
+
+  test('种子UNKNOWN开口：仅group0(leaveDir=0)不画连线', () {
+    final bars = <KlineBar>[
+      for (var i = 0; i <= 5; i++)
+        KlineBar(
+          idx: i,
+          timeMs: i,
+          timeText: 't$i',
+          open: 10,
+          high: 11,
+          low: 9,
+          close: 10,
+          volume: 1,
+          amount: 1,
+          metrics: const {},
+        ),
+    ];
+    final line = computeSeedUnknownOpenTip(
+      bars: bars,
+      asOf: 5,
+      seedBoxX1: 0,
+      seedBoxX2: 0,
+      seedBoxHigh: 11,
+      seedBoxLow: 9,
+      seedLeaveDir: 0,
+      firstFxState: 'UNKNOWN',
+      seedConfirmed: false,
+    );
+    expect(line, isNull);
+  });
+
+  test('种子UNKNOWN开口：有group1后升段·begin=框低·尾端扫价落首次极值', () {
+    // 种子框 [0,1] high=12 low=8；leaveDir=+1 → begin 落 K1(low=8)
+    // (seed_x2=1, asOf=6]：K3 先创 high=20，K5 high=19 → 尾端钉 K3
+    final bars = <KlineBar>[
+      KlineBar(
+        idx: 0,
+        timeMs: 0,
+        timeText: 't0',
+        open: 10,
+        high: 12,
+        low: 9,
+        close: 10,
+        volume: 1,
+        amount: 1,
+        metrics: const {},
+      ),
+      KlineBar(
+        idx: 1,
+        timeMs: 1,
+        timeText: 't1',
+        open: 10,
+        high: 11,
+        low: 8,
+        close: 9,
+        volume: 1,
+        amount: 1,
+        metrics: const {},
+      ),
+      for (var i = 2; i <= 6; i++)
+        KlineBar(
+          idx: i,
+          timeMs: i,
+          timeText: 't$i',
+          open: 10,
+          high: i == 3 ? 20 : (i == 5 ? 19 : 12),
+          low: 9,
+          close: 10,
+          volume: 1,
+          amount: 1,
+          metrics: const {},
+        ),
+    ];
+    final line = computeSeedUnknownOpenTip(
+      bars: bars,
+      asOf: 6,
+      seedBoxX1: 0,
+      seedBoxX2: 1,
+      seedBoxHigh: 12,
+      seedBoxLow: 8,
+      seedLeaveDir: 1,
+      firstFxState: 'UNKNOWN',
+      seedConfirmed: false,
+    );
+    expect(line, isNotNull);
+    expect(line!.isOpenTip, isTrue);
+    expect(line.asSolid, isFalse);
+    expect(line.dir, 1);
+    expect(line.beginSrc, 'seed');
+    expect(line.endSrc, 'open');
+    expect(line.begin.barIdx, 1);
+    expect(line.begin.price, 8);
+    expect(line.end.barIdx, 3);
+    expect(line.end.price, 20);
+  });
+
+  test('种子UNKNOWN开口：降段·begin=框高·asOf<=seedX2不画', () {
+    final bars = <KlineBar>[
+      for (var i = 0; i <= 4; i++)
+        KlineBar(
+          idx: i,
+          timeMs: i,
+          timeText: 't$i',
+          open: 10,
+          high: i == 0 ? 15 : 12,
+          low: 8,
+          close: 10,
+          volume: 1,
+          amount: 1,
+          metrics: const {},
+        ),
+    ];
+    expect(
+      computeSeedUnknownOpenTip(
+        bars: bars,
+        asOf: 1,
+        seedBoxX1: 0,
+        seedBoxX2: 1,
+        seedBoxHigh: 15,
+        seedBoxLow: 8,
+        seedLeaveDir: -1,
+        firstFxState: 'UNKNOWN',
+        seedConfirmed: false,
+      ),
+      isNull,
+    );
+    final line = computeSeedUnknownOpenTip(
+      bars: bars,
+      asOf: 4,
+      seedBoxX1: 0,
+      seedBoxX2: 1,
+      seedBoxHigh: 15,
+      seedBoxLow: 8,
+      seedLeaveDir: -1,
+      firstFxState: 'UNKNOWN',
+      seedConfirmed: false,
+    );
+    expect(line, isNotNull);
+    expect(line!.dir, -1);
+    expect(line.begin.barIdx, 0);
+    expect(line.begin.price, 15);
+  });
+
+  test('种子UNKNOWN开口：JUDGE/CONFIRM/已确认不画（让位ABC）', () {
+    final bars = _bars(8);
+    for (final state in ['JUDGE', 'CONFIRM']) {
+      expect(
+        computeSeedUnknownOpenTip(
+          bars: bars,
+          asOf: 7,
+          seedBoxX1: 0,
+          seedBoxX2: 1,
+          seedBoxHigh: 11,
+          seedBoxLow: 9,
+          seedLeaveDir: 1,
+          firstFxState: state,
+          seedConfirmed: false,
+        ),
+        isNull,
+      );
+    }
+    expect(
+      computeSeedUnknownOpenTip(
+        bars: bars,
+        asOf: 7,
+        seedBoxX1: 0,
+        seedBoxX2: 1,
+        seedBoxHigh: 11,
+        seedBoxLow: 9,
+        seedLeaveDir: 1,
+        firstFxState: 'UNKNOWN',
+        seedConfirmed: true,
+      ),
+      isNull,
+    );
+  });
 }

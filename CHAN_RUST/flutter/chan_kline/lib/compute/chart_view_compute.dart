@@ -482,6 +482,95 @@ List<K1Bar> asOfLevelVirtualK1Bars({
 }
 
 
+/// 种子框内「出发极值」端点：升=框内首次最低 low；降=框内首次最高 high。
+LevelLineEndpoint? seedBoxDepartEndpoint({
+  required List<KlineBar> bars,
+  required int seedBoxX1,
+  required int seedBoxX2,
+  required double seedBoxHigh,
+  required double seedBoxLow,
+  required int leaveDir,
+}) {
+  if (bars.isEmpty || leaveDir == 0) return null;
+  final x1 = seedBoxX1 < 0 ? 0 : seedBoxX1;
+  final x2 = seedBoxX2 < 0 ? 0 : seedBoxX2;
+  if (x1 > x2 || x2 >= bars.length) return null;
+  if (leaveDir > 0) {
+    // 升段起点=框低（与 kn_segment_open 同口径）
+    for (var j = x1; j <= x2; j++) {
+      if ((bars[j].low - seedBoxLow).abs() < 1e-12) {
+        return LevelLineEndpoint(barIdx: j, price: seedBoxLow);
+      }
+    }
+  } else {
+    for (var j = x1; j <= x2; j++) {
+      if ((bars[j].high - seedBoxHigh).abs() < 1e-12) {
+        return LevelLineEndpoint(barIdx: j, price: seedBoxHigh);
+      }
+    }
+  }
+  return null;
+}
+
+/// 种子 UNKNOWN 开口虚线（方案2·D2·S-b，**全层同构**：K1/K2/…/Kn 同一函数、同口径）：
+/// - 仅 `firstFxState==UNKNOWN` 且 `seedLeaveDir!=0`（已有 group1，「离开种子」方向）；
+/// - 仅 group0 时 leaveDir=0 → 不画连线，只留虚线种子框；
+/// - begin=框内出发极值（升=框低，降=框高）；
+/// - 尾端从 `seed_box_x2` **外**扫 `(seed_x2, asOf]` 首次同向极值（buildingTailEndpoint）；
+/// - 进入 JUDGE/CONFIRM 后本函数返回 null，让位种子 ABC。
+DisplayBuildingLine? computeSeedUnknownOpenTip({
+  required List<KlineBar> bars,
+  required int asOf,
+  required int seedBoxX1,
+  required int seedBoxX2,
+  required double seedBoxHigh,
+  required double seedBoxLow,
+  required int seedLeaveDir,
+  required String firstFxState,
+  required bool seedConfirmed,
+}) {
+  if (seedConfirmed || firstFxState != 'UNKNOWN') return null;
+  if (seedLeaveDir == 0) return null;
+  if (seedBoxX1 < 0 || seedBoxX2 < 0) return null;
+  if (!seedBoxHigh.isFinite || !seedBoxLow.isFinite) return null;
+  if (bars.isEmpty || asOf < 0 || asOf >= bars.length) return null;
+  // S-b：必须扫到框右沿之外；asOf 仍在框内则无开口
+  if (asOf <= seedBoxX2) return null;
+
+  final begin = seedBoxDepartEndpoint(
+    bars: bars,
+    seedBoxX1: seedBoxX1,
+    seedBoxX2: seedBoxX2,
+    seedBoxHigh: seedBoxHigh,
+    seedBoxLow: seedBoxLow,
+    leaveDir: seedLeaveDir,
+  );
+  if (begin == null) return null;
+
+  final end = buildingTailEndpoint(
+    bars: bars,
+    afterConfirmX: seedBoxX2,
+    asOfX: asOf,
+    buildingDir: seedLeaveDir,
+  );
+  if (end == null) return null;
+  if (begin.barIdx == end.barIdx && (begin.price - end.price).abs() < 1e-12) {
+    return null;
+  }
+
+  return DisplayBuildingLine(
+    begin: begin,
+    end: end,
+    dir: seedLeaveDir,
+    unitIdx: -1,
+    anchorX: begin.barIdx,
+    beginSrc: 'seed',
+    endSrc: 'open',
+    asSolid: false,
+    isOpenTip: true,
+  );
+}
+
 /// 展示轨构建中连线：动态KN几何 + 当下分型判断拆段；
 /// 确认优先改实线/纠端点；判断失效（live 不再出现）则自动合并回退；不回写结构。
 class DisplayBuildingLine {

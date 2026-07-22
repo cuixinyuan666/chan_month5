@@ -55,6 +55,8 @@ class LevelSnap {
   final int drawCX;
   /// 首个 Kn 分型状态：JUDGE=判断(线虚) / CONFIRM=确认(A→B实,B→C虚) / UNKNOWN=未就绪
   final String firstFxState;
+  /// 离开种子方向（全层同构·方案2·D2）：0=仅 group0 不画开口；+1/-1=已有 group1
+  final int seedLeaveDir;
 
   const LevelSnap({
     required this.level,
@@ -85,6 +87,7 @@ class LevelSnap {
     this.drawBX = -1,
     this.drawCX = -1,
     this.firstFxState = 'UNKNOWN',
+    this.seedLeaveDir = 0,
   });
 
   factory LevelSnap.fromJson(Map<String, dynamic> json) {
@@ -118,6 +121,7 @@ class LevelSnap {
       drawBX: (json['draw_b_x'] as num?)?.toInt() ?? -1,
       drawCX: (json['draw_c_x'] as num?)?.toInt() ?? -1,
       firstFxState: json['first_fx_state'] as String? ?? 'UNKNOWN',
+      seedLeaveDir: (json['seed_leave_dir'] as num?)?.toInt() ?? 0,
     );
   }
 }

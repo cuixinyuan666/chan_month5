@@ -43,7 +43,7 @@ Future<void> main() async {
   MsgHistory.instance.appendDisplayTrackFractalJudgment();
   // 展示轨：动态KN当确认段画虚线；确认优先纠正/改实线
   MsgHistory.instance.appendDisplayTrackDynamicKnBuildingLines();
-  // 种子框首段口径 A（删审判；首两单元不做包含；JUDGE/CONFIRM 虚实）
+  // 种子框首段口径 A（删审判；UNKNOWN开口D2·S-b全层同构；JUDGE/CONFIRM 虚实）
   MsgHistory.instance.appendSeedBoxFirstSeg();
   // test 自定义 OHLC：前端编辑 → custom.ohlc.csv 直读上图
   MsgHistory.instance.appendTestCustomOhlc();
@@ -1081,8 +1081,10 @@ class _KlineHomePageState extends State<KlineHomePage> {
             '· 主图 K0/K1/…/KN 每层的末组合并框：末组=进行中、可继续延伸的合并，画虚线；前组=已冻结，画实线；\n'
             '· K0/K1/…/KN 构建中连线：与动态KN合并同输入的未冻结虚拟单元，'
             '按确认段几何画虚线（动态KN当确认KN）；\n'
+            '· 种子框 UNKNOWN 开口（全层同构）：仅有 group1 后，从框内出发极值扫到 '
+            '(seed_x2,asOf] 首次同向极值；仅 group0 只留虚线框；JUDGE/CONFIRM 让位 ABC；\n'
             '· 分型确认优先：纠正虚线端点，或单元冻结后虚线改实线；不回写永久结构；\n'
-            '· 尾端取动态单元 x2/close（确认可纠正），不再用判断链/首极值替代；全层同构。\n\n'
+            '· 尾端取区间内首次方向极值所在 K0（非 as-of 末根钉 X）；全层同构。\n\n'
             '关闭\n'
             '· 上述所有元素一律实线，不区分构建中状态（合并框、各层构建中连线均实线）。\n\n'
             '操作步骤\n'

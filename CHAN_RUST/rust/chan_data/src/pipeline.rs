@@ -4,7 +4,7 @@
 //! 三层语义（勿混为一谈）：
 //! 1. **判定内核同构**（全层）：`CombineEngine` 包含合并 + 三元素分型（首两单元不做包含，见种子框例外）；
 //! 2. **成段机制同构**（全层）：锚定配对 + 有效性校验 + 冻结去重；
-//! 3. **首段业务策略同构**（全层）：种子合并框（group0）+ A→B 首段 + B→C 第二段（虚实见 `first_fx_state`）。
+//! 3. **首段业务策略同构**（全层）：种子合并框（group0）+ UNKNOWN 开口虚线（D2·S-b）+ A→B 首段 + B→C 第二段（虚实见 `first_fx_state`）。
 //!
 //! 每层递归：输入单元包含合并 → 三元素分型确认（冻结不回写）→ 锚定配对 → Kn → 喂上层。
 //! 全层同构约束：**必须等 K(n-1) 单元永久冻结后才能参与 Kn**（禁止行进中下层提前确认上层）。
@@ -15,7 +15,9 @@ use std::collections::{HashSet, VecDeque};
 use serde::{Deserialize, Serialize};
 
 use crate::combine::KlineCombineFrame;
-use crate::engine::{CombineEngine, FxEvent, FxKind, MergeUnit, TruncGuard};
+use crate::engine::{
+    test_combine_range, CombineEngine, FxEvent, FxKind, MergeDir, MergeUnit, TruncGuard,
+};
 use crate::kuaduan::KuaDuanV1Frame;
 use crate::kline::KlineBar;
 use crate::bsp::{BSPConfig, BSPFrame};
@@ -181,6 +183,10 @@ pub struct LevelSnap {
     pub draw_c_x: i32,
     /// 首个 Kn 分型状态：JUDGE=判断(线虚) / CONFIRM=确认(A→B实,B→C虚) / UNKNOWN=未就绪
     pub first_fx_state: String,
+    /// 离开种子方向（方案2·D2）：0=仅 group0 不画开口虚线；+1/-1=已有 group1，开口方向
+    /// （= test_combine_range(g0,g1)；互含退化与引擎一致取 +1）
+    #[serde(default)]
+    pub seed_leave_dir: i32,
 }
 
 fn neg_one() -> i32 {
@@ -218,6 +224,7 @@ impl LevelSnap {
             draw_b_x: -1,
             draw_c_x: -1,
             first_fx_state: "UNKNOWN".to_string(),
+            seed_leave_dir: 0,
         }
     }
 }
@@ -896,7 +903,8 @@ impl LevelState {
         snap
     }
 
-    /// 填充种子框快照（口径 A）：确认前可随 pending 动态刷新；JUDGE/CONFIRM 填 A/B/C
+    /// 填充种子框快照（口径 A，全层同构）：确认前可随 pending 动态刷新；JUDGE/CONFIRM 填 A/B/C；
+    /// UNKNOWN 且已有 group1 时写 `seed_leave_dir`（开口虚线方向，各层同一套）。
     fn fill_seed_snap(
         &self,
         snap: &mut LevelSnap,
@@ -924,6 +932,8 @@ impl LevelState {
             snap.draw_b_x = self.seed_b_x;
             snap.draw_c_x = self.seed_c_x;
             snap.first_fx_state = "CONFIRM".to_string();
+            // 确认后不再画 UNKNOWN 开口；leave_dir 清零（全层同构）
+            snap.seed_leave_dir = 0;
             // 次分型尚在判断：probe 下层进行中单元，补 C（不改冻结 A/B）
             if snap.draw_c_x < 0 {
                 if let Some(c_x) = self.probe_draw_c(bars, pending_input) {
@@ -939,6 +949,7 @@ impl LevelState {
         snap.draw_b_x = -1;
         snap.draw_c_x = -1;
         snap.seed_fx = "UNKNOWN".to_string();
+        snap.seed_leave_dir = 0;
 
         if let Some(g0) = self.engine.groups().first() {
             snap.seed_box_seq = 0;
@@ -946,6 +957,18 @@ impl LevelState {
             snap.seed_box_x2 = g0.x2;
             snap.seed_box_high = g0.high;
             snap.seed_box_low = g0.low;
+
+            // D2：有 group1 后写「离开种子」方向（全层同构；互含退化=+1，对齐引擎）
+            let gs = self.engine.groups();
+            if gs.len() >= 2 {
+                let g1 = &gs[1];
+                snap.seed_leave_dir = match test_combine_range(g0.high, g0.low, g1.high, g1.low)
+                {
+                    MergeDir::Up => 1,
+                    MergeDir::Down => -1,
+                    MergeDir::Combine => 1,
+                };
+            }
 
             // JUDGE：只读探测第三单元，中组(group1)分型≠0 且尚未 on_confirm
             if let Some(ev) = self.probe_first_fx(pending_input) {
@@ -962,11 +985,11 @@ impl LevelState {
                 snap.draw_a_x = fx_pole_x(bars, g0.x1, g0.x2, seed_fx);
                 snap.draw_b_x = fx_pole_x(bars, ev.x1, ev.x2, ev.fx);
                 snap.first_fx_state = "JUDGE".to_string();
+                // JUDGE 让位 ABC 虚线；开口 leave_dir 保留供排查，绘制侧看 first_fx_state
                 return;
             }
 
             // 引擎已有三组且中组已标分型（同 bar 确认前的兜底；通常 on_confirm 已跑）
-            let gs = self.engine.groups();
             if gs.len() >= 3 && gs[1].fx != FxKind::Unknown && self.seed_phase == 0 {
                 let mid = &gs[1];
                 let seed_fx = if mid.fx == FxKind::Top {
@@ -986,7 +1009,7 @@ impl LevelState {
             return;
         }
 
-        // 引擎空：下层进行中首单元 → 动态种子框预览（口径 A）
+        // 引擎空：下层进行中首单元 → 动态种子框预览（口径 A）；尚无 group1 → leave_dir=0
         if let Some(u) = pending_input {
             snap.seed_box_seq = 0;
             snap.seed_box_x1 = u.x1;
@@ -1509,6 +1532,48 @@ mod tests {
                 lv.level,
                 lv.segment_policy
             );
+        }
+    }
+
+    /// 全层同构：UNKNOWN 且已有 group1 时 seed_leave_dir≠0；仅 group0 时为 0
+    #[test]
+    fn seed_leave_dir_d2_before_first_fx_isomorphic() {
+        // group0 后下行离开 → leave_dir=-1；尚未第三组 → 仍 UNKNOWN
+        let bars = vec![
+            bar(0, 10.0, 9.0), // 种子
+            bar(1, 8.5, 7.5), // group1 Down
+        ];
+        let pr = run_pipeline(&bars, &PipelineOptions::default());
+        assert!(!pr.bar_level_snaps.is_empty());
+        let s0 = &pr.bar_level_snaps[0][0];
+        assert_eq!(s0.first_fx_state, "UNKNOWN");
+        assert_eq!(s0.seed_leave_dir, 0, "仅 group0 不画开口");
+        assert_eq!(s0.seed_box_seq, 0);
+
+        let s1 = &pr.bar_level_snaps[1][0];
+        assert_eq!(s1.first_fx_state, "UNKNOWN");
+        assert_eq!(s1.seed_leave_dir, -1, "离开种子 Down");
+        assert_eq!(s1.seed_box_x1, 0);
+        assert_eq!(s1.seed_box_x2, 0);
+
+        // 长序列：凡 UNKNOWN 且 leave_dir≠0 的层，口径一致（|dir|==1）
+        let long = zigzag(100);
+        let pr2 = run_pipeline(&long, &PipelineOptions::default());
+        for (bi, snaps) in pr2.bar_level_snaps.iter().enumerate() {
+            for (li, s) in snaps.iter().enumerate() {
+                if s.first_fx_state == "UNKNOWN" && s.seed_leave_dir != 0 {
+                    assert!(
+                        s.seed_leave_dir == 1 || s.seed_leave_dir == -1,
+                        "bar{bi} L{li} leave_dir={}",
+                        s.seed_leave_dir
+                    );
+                    assert_eq!(s.seed_box_seq, 0);
+                    assert!(!s.seed_confirmed);
+                }
+                if s.seed_confirmed {
+                    assert_eq!(s.seed_leave_dir, 0, "确认后 leave_dir 清零 bar{bi} L{li}");
+                }
+            }
         }
     }
 

@@ -117,9 +117,10 @@ cargo test -p chan_data
   - 首个真实分型出现时，反推种子框方向（=首个真实分型反向），发射：
     - **A→B 首段**（种子极值→首个分型极值，正式入库，作为本层第一个 `LevelSegment`）；
     - **B→C 第二段**（首个分型极值→次分型极值；配对确认入库，判断态仅快照端点）。
-  - 虚实线（`LevelSnap.first_fx_state`）：
-    - `JUDGE`（下层进行中单元 probe 出首分型、尚未 `on_confirm`）：有 C 则两线均虚，仅 B 则 A→B 虚；
-    - `CONFIRM`：A→B 实（冻结段），B→C 虚（进行中/次分型判断）。
+  - 虚实线（`LevelSnap.first_fx_state` / `seed_leave_dir`，**全层同构**）：
+    - `UNKNOWN`：仅 group0 → 只画虚线种子框；有 group1 → `seed_leave_dir`=离开种子方向，开口虚线 begin=框内出发极值（升框低/降框高），尾端从 `seed_box_x2` 外扫 `(seed_x2,asOf]` 首次同向极值；
+    - `JUDGE`（下层进行中单元 probe 出首分型、尚未 `on_confirm`）：有 C 则两线均虚，仅 B 则 A→B 虚（让位 ABC，不再画 UNKNOWN 开口）；
+    - `CONFIRM`：A→B 实（冻结段），B→C 虚（进行中/次分型判断）；`seed_leave_dir` 清零。
   - 种子框快照（`LevelSnap.seed_*` / `draw_a/b/c_x`）：逐K当下冻结，供 Flutter 渲染与 ML/tooltip 同源。
   - 导出：`segment_policy`=`seed`（未确认）/`retained`（已确认）；`pending_unit` 恒空（JSON 兼容壳）。
 - **例外记录（首两单元不做包含）**：全层同构要求每层 Kn 合并内核一致，但按本设计"第二个 Kn 不再与第一个 Kn 做包含关系"，本层产出 Kn 的前两个单元之间不做包含合并（K1 层首两笔、K2 层首两段…各自独立）。这是对"合并内核同构"的字面偏离，因属用户明确设计（首元素=种子框、不与次元素合并；口径 A 下 group0 不吸收第二根），故登记为已知例外；其余包含合并与三元素分型判定全层一致。

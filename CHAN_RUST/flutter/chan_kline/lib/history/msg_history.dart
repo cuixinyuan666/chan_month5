@@ -167,7 +167,8 @@ class MsgHistory {
     );
   }
 
-  /// 种子框首段（口径 A）：删审判；首两单元不做包含；JUDGE/CONFIRM 虚实线。
+  /// 种子框首段（口径 A）：删审判；首两单元不做包含；JUDGE/CONFIRM 虚实线；
+  /// UNKNOWN 开口虚线（方案2·D2·S-b，全层同构）。
   void appendSeedBoxFirstSeg() {
     if (_seedBoxFirstLogged) return;
     _seedBoxFirstLogged = true;
@@ -176,7 +177,11 @@ class MsgHistory {
       '每层第一个 Kn=种子合并框：group0 单元素永不吸收第二根；'
       'n>0 确认前可随下层进行中单元 probe 动态刷新高低，首分型确认后冻结。'
       '第二 Kn 不与种子框做包含，只与后续 Kn 关系。'
-      '画线：首分型 JUDGE→A→B(/B→C)虚线；CONFIRM→A→B实(冻结段)、B→C虚。'
+      '【UNKNOWN开口·方案2·D2·S-b·全层同构】仅 group0：只虚线种子框、不画连线；'
+      '有 group1 后 seed_leave_dir=离开种子方向（test_combine_range(g0,g1)，互含=+1）；'
+      'begin=框内出发极值（升=框低/降=框高）；尾端从 seed_box_x2 外扫'
+      '(seed_x2,asOf] 首次同向极值（buildingTailEndpoint）；'
+      'JUDGE/CONFIRM 让位 ABC：JUDGE→A→B(/B→C)虚；CONFIRM→A→B实、B→C虚。'
       '例外：首两单元不做包含（全层同构字面例外，登记 README）。'
       '历史记录按钮与 lib/history/ 常驻不得删。',
     );
@@ -191,6 +196,8 @@ class MsgHistory {
       '表格录入时间+OHLC(+量) → 保存到 a_Data/test/custom.ohlc.csv；'
       '有 CSV 时 load_klines 优先直读（不做分笔/周期聚合，行即最终K线）；'
       '无 CSV 时回退原 test 分笔文件。仅改 K0 数据源，K1/Kn 流水线不变。'
+      '默认 custom.ohlc.csv=100 根强复杂性样本（包含合并/一字线/种子离开长 UNKNOWN/'
+      '暴力下杀截断雏形/中枢震荡/多层波浪），便于全层同构排查开口虚线与递归层。'
       '历史记录按钮与 lib/history/ 常驻不得删。',
     );
   }
