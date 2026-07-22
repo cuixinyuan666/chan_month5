@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::combine::KlineCombineFrame;
 use crate::engine::{
-    test_combine_range, CombineEngine, FxEvent, FxKind, MergeDir, MergeUnit, TruncGuard,
+    seed_leave_dir, CombineEngine, FxEvent, FxKind, MergeUnit, TruncGuard,
 };
 use crate::kuaduan::KuaDuanV1Frame;
 use crate::kline::KlineBar;
@@ -183,8 +183,8 @@ pub struct LevelSnap {
     pub draw_c_x: i32,
     /// 首个 Kn 分型状态：JUDGE=判断(线虚) / CONFIRM=确认(A→B实,B→C虚) / UNKNOWN=未就绪
     pub first_fx_state: String,
-    /// 离开种子方向（方案2·D2）：0=仅 group0 不画开口虚线；+1/-1=已有 group1，开口方向
-    /// （= test_combine_range(g0,g1)；互含退化与引擎一致取 +1）
+    /// 离开种子方向（全层同构）：0=不画开口虚线；
+    /// +1/-1=首分型前末组 hn,ln 相对种子 sit1/sit2；含/重叠为 0
     #[serde(default)]
     pub seed_leave_dir: i32,
 }
@@ -958,16 +958,12 @@ impl LevelState {
             snap.seed_box_high = g0.high;
             snap.seed_box_low = g0.low;
 
-            // D2：有 group1 后写「离开种子」方向（全层同构；互含退化=+1，对齐引擎）
+            // D2 收紧：有非种子组后，对照末组 hn,ln 写 leave_dir（全层同构；含/重叠=0 不画）
             let gs = self.engine.groups();
             if gs.len() >= 2 {
-                let g1 = &gs[1];
-                snap.seed_leave_dir = match test_combine_range(g0.high, g0.low, g1.high, g1.low)
-                {
-                    MergeDir::Up => 1,
-                    MergeDir::Down => -1,
-                    MergeDir::Combine => 1,
-                };
+                let gn = gs.last().expect("len>=2");
+                snap.seed_leave_dir =
+                    seed_leave_dir(g0.high, g0.low, gn.high, gn.low);
             }
 
             // JUDGE：只读探测第三单元，中组(group1)分型≠0 且尚未 on_confirm
@@ -1025,10 +1021,11 @@ impl LevelState {
         }
     }
 
-    /// 只读探测首个真实分型（种子未确认时；不写引擎）
+    /// 只读探测首个真实分型（种子未确认时；不写引擎）。
+    /// 含：groups==1 时动态 Kn 非 leave 截断 → JUDGE（确认仍只走 feed/on_confirm）。
     fn probe_first_fx(&self, pending_input: Option<&MergeUnit>) -> Option<FxEvent> {
         let u = pending_input?;
-        if self.engine.groups().len() < 2 {
+        if self.engine.groups().is_empty() {
             return None;
         }
         let ps = self.engine.probe_guarded(u, None);
@@ -1535,13 +1532,30 @@ mod tests {
         }
     }
 
-    /// 全层同构：UNKNOWN 且已有 group1 时 seed_leave_dir≠0；仅 group0 时为 0
+    /// 种子包含截断：有 truncated 确认并产出首段（端点走常规 First，不另定 A/B）
+    #[test]
+    fn seed_contain_trunc_first_seg_poles_debug() {
+        let bars = vec![bar(0, 10.0, 9.0), bar(1, 12.0, 8.5)];
+        let pr = run_pipeline(&bars, &PipelineOptions::default());
+        let l1 = &pr.levels[0];
+        assert!(
+            l1.confirms.iter().any(|c| c.truncated),
+            "应有种子包含截断确认"
+        );
+        assert!(!l1.segments.is_empty(), "截断应产出首段");
+        let bars_up = vec![bar(0, 10.0, 9.0), bar(1, 10.5, 7.0)];
+        let pr_up = run_pipeline(&bars_up, &PipelineOptions::default());
+        assert!(pr_up.levels[0].confirms.iter().any(|c| c.truncated));
+        assert!(!pr_up.levels[0].segments.is_empty());
+    }
+
+    /// 全层同构：UNKNOWN 时 leave_dir 对照末组 hn,ln（非仅 group1）
     #[test]
     fn seed_leave_dir_d2_before_first_fx_isomorphic() {
         // group0 后下行离开 → leave_dir=-1；尚未第三组 → 仍 UNKNOWN
         let bars = vec![
             bar(0, 10.0, 9.0), // 种子
-            bar(1, 8.5, 7.5), // group1 Down
+            bar(1, 8.5, 7.5), // group1 Down sit2
         ];
         let pr = run_pipeline(&bars, &PipelineOptions::default());
         assert!(!pr.bar_level_snaps.is_empty());
@@ -1552,9 +1566,27 @@ mod tests {
 
         let s1 = &pr.bar_level_snaps[1][0];
         assert_eq!(s1.first_fx_state, "UNKNOWN");
-        assert_eq!(s1.seed_leave_dir, -1, "离开种子 Down");
+        assert_eq!(s1.seed_leave_dir, -1, "离开种子 Down sit2");
         assert_eq!(s1.seed_box_x1, 0);
         assert_eq!(s1.seed_box_x2, 0);
+
+        // 第一框含第二框 → leave_dir=0
+        let bars_in = vec![bar(0, 10.0, 8.0), bar(1, 9.5, 8.5)];
+        let pr_in = run_pipeline(&bars_in, &PipelineOptions::default());
+        let s_in = &pr_in.bar_level_snaps[1][0];
+        assert_eq!(s_in.seed_leave_dir, 0, "第一含第二不画第一条虚线");
+
+        // 语义：对照末组 hn（与仅对照 g1 区分）：末组 sit2 而「假想 g1 sit1」时取末组
+        assert_eq!(
+            crate::engine::seed_leave_dir(10.0, 9.0, 11.0, 10.0),
+            1,
+            "假想 g1 sit1"
+        );
+        assert_eq!(
+            crate::engine::seed_leave_dir(10.0, 9.0, 8.5, 7.5),
+            -1,
+            "末组 sit2 → leave_dir 应以末组为准"
+        );
 
         // 长序列：凡 UNKNOWN 且 leave_dir≠0 的层，口径一致（|dir|==1）
         let long = zigzag(100);

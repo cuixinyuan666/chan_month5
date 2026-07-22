@@ -255,6 +255,55 @@ pub fn test_combine_range(high_a: f64, low_a: f64, high_b: f64, low_b: f64) -> M
     MergeDir::Combine
 }
 
+/// 种子开口虚线方向（全层同构）：仅 sit1/sit2 非零。
+/// 对照框为当前末组 hn,ln（n>0；fill_seed_snap 取 groups.last()），与种子 h1,l1 比较。
+/// sit1: hn>h1 && ln>l1 → +1；sit2: hn<h1 && ln<l1 → -1；
+/// 种子含末组（hn<=h1 && ln>=l1，含全等）及其它重叠 → 0（不画第一条虚线）。
+pub fn seed_leave_dir(h1: f64, l1: f64, h2: f64, l2: f64) -> i32 {
+    if h2 > h1 && l2 > l1 {
+        1
+    } else if h2 < h1 && l2 < l1 {
+        -1
+    } else {
+        0
+    }
+}
+
+/// 第二框严格包含第一框（全等除外）。历史兼容；截断门控改见 `seed_nonleave_may_trunc`。
+pub fn seed_second_contains_first(h1: f64, l1: f64, h2: f64, l2: f64) -> bool {
+    h2 >= h1 && l2 <= l1 && !(h2 == h1 && l2 == l1)
+}
+
+/// 相对种子是否 sit1/sit2 离开（第一条虚线方向成立）。
+pub fn seed_is_leave(h1: f64, l1: f64, hn: f64, ln: f64) -> bool {
+    seed_leave_dir(h1, l1, hn, ln) != 0
+}
+
+/// 非 leave 截断方向（全层同构）：比较 abs(hn-h1) 与 abs(ln-l1)。
+/// dh>dl 或 dh==dl → 向下截断（返回 false=up_leg 下降截断，左框 BOTTOM）；
+/// dh<dl → 向上截断（返回 true，左框 TOP）。
+pub fn seed_contain_trunc_up_leg(h1: f64, l1: f64, h2: f64, l2: f64) -> bool {
+    let dh = (h2 - h1).abs();
+    let dl = (l2 - l1).abs();
+    dl > dh
+}
+
+/// 第一条虚线期截断门控（全层同构）：
+/// sit1/sit2（leave）→ 不截；非 leave → 整层引擎内至多一次。
+pub fn seed_nonleave_may_trunc(
+    leave_seen: bool,
+    trunc_used: bool,
+    h1: f64,
+    l1: f64,
+    hn: f64,
+    ln: f64,
+) -> bool {
+    if leave_seen || trunc_used {
+        return false;
+    }
+    !seed_is_leave(h1, l1, hn, ln)
+}
+
 /// 三元素分型判定（pre/mid 已定组，next 允许用虚拟高低）
 fn fx_of(pre: &MergedGroup, mid: &MergedGroup, next_high: f64, next_low: f64) -> FxKind {
     if pre.high < mid.high && next_high < mid.high && pre.low < mid.low && next_low < mid.low {
@@ -334,6 +383,10 @@ pub struct CombineEngine {
     /// group1 强制自成新组）。确认前种子框高低可由下层进行中单元 probe 刷新（见 pipeline 快照）。
     /// 全层同构启用；仅首两单元例外，其余包含合并与三元素分型全层一致。
     pub seed_skip_first: bool,
+    /// 相对种子已出现 sit1/sit2 → 之后不再触发截断（第一条虚线口径）
+    seed_leave_seen: bool,
+    /// 非 leave 截断已用过一次（种子非 leave / TruncGuard 共用额度）
+    nonleave_trunc_used: bool,
 }
 
 impl Default for CombineEngine {
@@ -341,6 +394,8 @@ impl Default for CombineEngine {
         Self {
             groups: Vec::new(),
             seed_skip_first: true,
+            seed_leave_seen: false,
+            nonleave_trunc_used: false,
         }
     }
 }
@@ -350,6 +405,8 @@ impl CombineEngine {
         Self {
             groups: Vec::new(),
             seed_skip_first: true,
+            seed_leave_seen: false,
+            nonleave_trunc_used: false,
         }
     }
 
@@ -359,6 +416,34 @@ impl CombineEngine {
 
     pub fn is_empty(&self) -> bool {
         self.groups.is_empty()
+    }
+
+    /// 对照种子更新 leave 锁；返回当前是否允许再做一次非 leave 截断。
+    /// `seed_skip_first=false` 时不做第一条虚线门控（TruncGuard 单测等）。
+    fn allow_nonleave_trunc(&mut self, hn: f64, ln: f64) -> bool {
+        if !self.seed_skip_first {
+            return true;
+        }
+        let (h1, l1) = match self.groups.first() {
+            Some(g) => (g.high, g.low),
+            None => return false,
+        };
+        if seed_is_leave(h1, l1, hn, ln) {
+            self.seed_leave_seen = true;
+            return false;
+        }
+        seed_nonleave_may_trunc(
+            self.seed_leave_seen,
+            self.nonleave_trunc_used,
+            h1,
+            l1,
+            hn,
+            ln,
+        )
+    }
+
+    fn mark_nonleave_trunc_used(&mut self) {
+        self.nonleave_trunc_used = true;
     }
 
     /// 永久喂入单元；三组成立时返回中组分型事件（当步冻结，后续吸收不破坏）
@@ -376,13 +461,39 @@ impl CombineEngine {
             self.groups.push(MergedGroup::new_first(u, MergeDir::Up));
             return None;
         }
-        // 种子框模式：首两单元不做包含合并（group0=种子框单元素，group1 强制自成新组）
+        // 种子框模式：首两单元不做包含合并（group0=种子框单元素）；
+        // leave(sit1/sit2)→不截；非 leave 且第二框严格包含种子 → 第一条虚线窗口内至多截一次
+        // （首个分型确认/判断之后的 TruncGuard 不受本门控）
         if self.groups.len() == 1 && self.seed_skip_first {
-            let dir = match test_combine_range(self.groups[0].high, self.groups[0].low, u.high, u.low) {
-                MergeDir::Combine => MergeDir::Up, // 互含退化：继承种子框方向
+            let (h1, l1) = (self.groups[0].high, self.groups[0].low);
+            let leave = seed_leave_dir(h1, l1, u.high, u.low);
+            let is_leave = leave != 0;
+            let contains = seed_second_contains_first(h1, l1, u.high, u.low);
+            let may = self.allow_nonleave_trunc(u.high, u.low);
+            if may && contains {
+                let up_leg = seed_contain_trunc_up_leg(h1, l1, u.high, u.low);
+                self.groups[0].fx = if up_leg {
+                    FxKind::Top
+                } else {
+                    FxKind::Bottom
+                };
+                let mut ev = self.groups[0].to_event();
+                ev.truncated = true;
+                let forced = if up_leg { MergeDir::Down } else { MergeDir::Up };
+                let rewritten = trunc_rewrite_trigger_unit(&self.groups[0], u, up_leg);
+                self.groups.push(MergedGroup::new_first(&rewritten, forced));
+                self.mark_nonleave_trunc_used();
+                return Some(ev);
+            }
+            let dir = match test_combine_range(h1, l1, u.high, u.low) {
+                MergeDir::Combine => MergeDir::Up, // 第一框含第二/互含：组方向占位，leave_dir 另行判定
                 other => other,
             };
             self.groups.push(MergedGroup::new_first(u, dir));
+            // 仅种子第二单元成组时锁 leave（首分型前第一条虚线口径）
+            if is_leave {
+                self.seed_leave_seen = true;
+            }
             return None; // 仅两组，尚不足中组，无分型
         }
         let last = self.groups.len() - 1;
@@ -391,7 +502,7 @@ impl CombineEngine {
         if dir == MergeDir::Combine {
             if let Some(g) = guard {
                 if trunc_hit(&self.groups[last], u, g) {
-                    // 截断确认：左框=分型中组（高低不被改写），当步冻结
+                    // 首个 Kn 分型确认/判断之后：TruncGuard 保持原实现（不受第一条虚线 leave/一次额度约束）
                     self.groups[last].fx = if g.up_leg { FxKind::Top } else { FxKind::Bottom };
                     let mut ev = self.groups[last].to_event();
                     ev.truncated = true;
@@ -445,8 +556,40 @@ impl CombineEngine {
                 group_seq: 0,
             };
         }
-        // 种子框模式（只读探测）：首两单元不合并，第二单元强制新组视角
+        // 种子框模式（只读探测）：非 leave → 至多一次截断视角；leave → 不截（与 feed 同构）
         if self.groups.len() == 1 && self.seed_skip_first {
+            let g0 = &self.groups[0];
+            let may = seed_nonleave_may_trunc(
+                self.seed_leave_seen,
+                self.nonleave_trunc_used,
+                g0.high,
+                g0.low,
+                u.high,
+                u.low,
+            );
+            let contains = seed_second_contains_first(g0.high, g0.low, u.high, u.low);
+            if may && contains {
+                let up_leg = seed_contain_trunc_up_leg(g0.high, g0.low, u.high, u.low);
+                let mut ev = g0.to_event();
+                ev.fx = if up_leg {
+                    FxKind::Top
+                } else {
+                    FxKind::Bottom
+                };
+                ev.truncated = true;
+                let rewritten = trunc_rewrite_trigger_unit(g0, u, up_leg);
+                return ProbeState {
+                    fx_event: Some(ev),
+                    group_high: rewritten.high,
+                    group_low: rewritten.low,
+                    group_fx: FxKind::Unknown,
+                    inner_seq: 0,
+                    group_count: 1,
+                    group_first_uid: u.uid,
+                    group_x1: u.x1,
+                    group_seq: 1,
+                };
+            }
             return ProbeState {
                 fx_event: None,
                 group_high: u.high,
@@ -464,6 +607,7 @@ impl CombineEngine {
         let dir = test_combine_range(last.high, last.low, u.high, u.low);
         if dir == MergeDir::Combine {
             if let Some(g) = guard {
+                // 首个 Kn 分型确认/判断之后：TruncGuard 原实现（不受第一条虚线门控）
                 if trunc_hit(last, u, g) {
                     let mut ev = last.to_event();
                     ev.fx = if g.up_leg { FxKind::Top } else { FxKind::Bottom };
@@ -630,6 +774,7 @@ mod tests {
     #[test]
     fn feed_guarded_up_truncation_splits_and_confirms_top() {
         let mut eng = CombineEngine::new();
+        eng.seed_skip_first = false; // 本测专测 TruncGuard，关闭种子额度以免 leave/一次锁干扰
         eng.feed(&unit(0, 10.0, 9.0));
         eng.feed(&unit(1, 9.0, 8.0));
         let ev = eng.feed(&unit(2, 10.5, 9.5)).unwrap();
@@ -651,6 +796,7 @@ mod tests {
     #[test]
     fn feed_without_guard_absorbs_violent_bar() {
         let mut eng = CombineEngine::new();
+        eng.seed_skip_first = false;
         eng.feed(&unit(0, 10.0, 9.0));
         eng.feed(&unit(1, 9.0, 8.0));
         eng.feed(&unit(2, 10.5, 9.5));
@@ -663,6 +809,7 @@ mod tests {
     #[test]
     fn probe_guarded_matches_feed_truncation() {
         let mut eng = CombineEngine::new();
+        eng.seed_skip_first = false;
         eng.feed(&unit(0, 10.0, 9.0));
         eng.feed(&unit(1, 9.0, 8.0));
         eng.feed(&unit(2, 10.5, 9.5));
@@ -683,6 +830,7 @@ mod tests {
     #[test]
     fn feed_guarded_down_truncation_mirror() {
         let mut eng = CombineEngine::new();
+        eng.seed_skip_first = false;
         eng.feed(&unit(0, 10.0, 9.0));
         eng.feed(&unit(1, 11.0, 10.5));
         let ev = eng.feed(&unit(2, 9.5, 8.5)).unwrap();
@@ -702,6 +850,7 @@ mod tests {
     fn trunc_rewrite_allows_following_dual_high_top() {
         // 模拟 10:02 底框 / 10:03 外破触发下降截断 / 10:04 回落
         let mut eng = CombineEngine::new();
+        eng.seed_skip_first = false;
         eng.feed(&unit(0, 33.55, 33.51)); // 前
         eng.feed(&unit(1, 33.53, 33.50)); // 10:02 左框（将成截断底）
         // 先不成三元素；用下降截断确认左框底
@@ -735,6 +884,7 @@ mod tests {
     #[test]
     fn trunc_rewrite_up_leg_clamps_high() {
         let mut eng = CombineEngine::new();
+        eng.seed_skip_first = false;
         eng.feed(&unit(0, 10.0, 9.0));
         eng.feed(&unit(1, 9.0, 8.0));
         eng.feed(&unit(2, 10.5, 9.5));
@@ -749,5 +899,82 @@ mod tests {
             left.high
         );
         assert!((trig.low - 7.5).abs() < 1e-9, "破位低点保留");
+    }
+
+    #[test]
+    fn seed_leave_dir_only_sit1_sit2() {
+        assert_eq!(seed_leave_dir(10.0, 9.0, 11.0, 9.5), 1); // sit1
+        assert_eq!(seed_leave_dir(10.0, 9.0, 9.0, 8.0), -1); // sit2
+        assert_eq!(seed_leave_dir(10.0, 9.0, 9.5, 9.2), 0); // 第一含第二
+        assert_eq!(seed_leave_dir(10.0, 9.0, 10.0, 9.0), 0); // 全等
+        assert_eq!(seed_leave_dir(10.0, 9.0, 11.0, 8.0), 0); // 第二严格包含→不画虚线
+    }
+
+    /// 第一条虚线期：sit1 leave 不触发种子截断（与严格包含互斥，且锁 leave_seen）
+    #[test]
+    fn seed_leave_does_not_trunc() {
+        let mut eng = CombineEngine::new();
+        eng.feed(&unit(0, 10.0, 9.0));
+        assert!(eng.feed(&unit(1, 11.0, 10.0)).is_none());
+        assert_eq!(eng.groups().len(), 2);
+        assert_eq!(eng.groups()[0].fx, FxKind::Unknown);
+    }
+
+    /// 第一条虚线期：严格包含截断一次后，种子路径不再二次截（groups 已>=2）
+    #[test]
+    fn seed_contain_trunc_only_once_in_seed_window() {
+        let mut eng = CombineEngine::new();
+        eng.feed(&unit(0, 10.0, 9.0));
+        let ev = eng.feed(&unit(1, 12.0, 8.5)).unwrap();
+        assert!(ev.truncated);
+        assert_eq!(ev.fx, FxKind::Bottom);
+        // 再喂不走种子路径；首分型后 TruncGuard 另论（本测不盖）
+        assert!(eng.groups().len() >= 2);
+    }
+
+    /// 第二框严格包含种子：dh>dl → 向下截断（左框 BOTTOM）
+    #[test]
+    fn seed_contain_trunc_down_when_dh_ge_dl() {
+        let mut eng = CombineEngine::new();
+        eng.feed(&unit(0, 10.0, 9.0));
+        // h2=12(+2), l2=8.5(-0.5) → dh>dl → 向下
+        let ev = eng.feed(&unit(1, 12.0, 8.5)).unwrap();
+        assert!(ev.truncated);
+        assert_eq!(ev.fx, FxKind::Bottom);
+        assert_eq!(eng.groups().len(), 2);
+        assert_eq!(eng.groups()[0].fx, FxKind::Bottom);
+        assert_eq!(eng.groups()[1].dir, MergeDir::Up);
+    }
+
+    /// 第二框严格包含种子：dh<dl → 向上截断（左框 TOP）
+    #[test]
+    fn seed_contain_trunc_up_when_dl_gt_dh() {
+        let mut eng = CombineEngine::new();
+        eng.feed(&unit(0, 10.0, 9.0));
+        // h2=10.5(+0.5), l2=7.0(-2) → dl>dh → 向上
+        let ev = eng.feed(&unit(1, 10.5, 7.0)).unwrap();
+        assert!(ev.truncated);
+        assert_eq!(ev.fx, FxKind::Top);
+        assert_eq!(eng.groups()[0].fx, FxKind::Top);
+        assert_eq!(eng.groups()[1].dir, MergeDir::Down);
+    }
+
+    /// dh==dl 默认向下截断
+    #[test]
+    fn seed_contain_trunc_tie_defaults_down() {
+        assert!(!seed_contain_trunc_up_leg(10.0, 9.0, 11.0, 8.0)); // dh=1,dl=1
+        assert!(seed_second_contains_first(10.0, 9.0, 11.0, 8.0));
+    }
+
+    /// probe 与 feed 同构：包含截断只读返回 truncated 事件
+    #[test]
+    fn seed_contain_trunc_probe_isomorphic() {
+        let mut eng = CombineEngine::new();
+        eng.feed(&unit(0, 10.0, 9.0));
+        let ps = eng.probe(&unit(1, 12.0, 8.5));
+        let ev = ps.fx_event.expect("应有截断探测");
+        assert!(ev.truncated);
+        assert_eq!(ev.fx, FxKind::Bottom);
+        assert_eq!(eng.groups().len(), 1, "probe 不写引擎");
     }
 }

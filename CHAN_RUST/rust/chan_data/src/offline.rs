@@ -669,6 +669,7 @@ mod tests {
         let codes = list_stock_codes(&root).unwrap();
         assert!(codes.iter().any(|c| c == TEST_STOCK_FOLDER));
 
+        // 有 custom.ohlc.csv 时直读（行即 K），区间内根数随 CSV 变化；无 CSV 时回退分笔聚合为 4 根
         let bars = load_klines(
             &root,
             TEST_STOCK_FOLDER,
@@ -677,15 +678,23 @@ mod tests {
             KlinePeriod::M1,
         )
         .unwrap();
-        assert_eq!(bars.len(), 4);
-        let ohlc: Vec<(f64, f64, f64, f64)> = bars
-            .iter()
-            .map(|b| (b.open, b.high, b.low, b.close))
-            .collect();
-        assert_eq!(
-            ohlc,
-            vec![(3.0, 4.0, 3.0, 4.0), (2.0, 3.0, 2.0, 3.0), (3.0, 4.0, 3.0, 4.0), (1.0, 4.0, 1.0, 4.0)]
-        );
+        assert!(!bars.is_empty(), "test 区间应至少有一根K");
+        if !test_ohlc_csv_path(&root).is_file() {
+            assert_eq!(bars.len(), 4);
+            let ohlc: Vec<(f64, f64, f64, f64)> = bars
+                .iter()
+                .map(|b| (b.open, b.high, b.low, b.close))
+                .collect();
+            assert_eq!(
+                ohlc,
+                vec![
+                    (3.0, 4.0, 3.0, 4.0),
+                    (2.0, 3.0, 2.0, 3.0),
+                    (3.0, 4.0, 3.0, 4.0),
+                    (1.0, 4.0, 1.0, 4.0)
+                ]
+            );
+        }
     }
 
     #[test]

@@ -17,8 +17,14 @@ class MsgHistory {
   /// 命名变更是否已记录（进程内只记一次，便于从历史记录追溯完整更名过程）
   static bool _namingRenameLogged = false;
 
-  /// 种子框首段口径是否已记录（进程内去重）
+  /// 种子框首段是否已记录（进程内去重）
   static bool _seedBoxFirstLogged = false;
+
+  /// 第一条虚线 sit1/sit2 限制是否已记录
+  static bool _seedFirstDashRulesLogged = false;
+
+  /// 种子相对第二框截断是否已记录
+  static bool _seedContainTruncLogged = false;
 
   /// test 自定义 OHLC 口径是否已记录（进程内去重）
   static bool _testCustomOhlcLogged = false;
@@ -167,22 +173,46 @@ class MsgHistory {
     );
   }
 
-  /// 种子框首段（口径 A）：删审判；首两单元不做包含；JUDGE/CONFIRM 虚实线；
-  /// UNKNOWN 开口虚线（方案2·D2·S-b，全层同构）。
+  /// 第一个分型合并框（种子框）逻辑（全层同构，常驻）。
   void appendSeedBoxFirstSeg() {
     if (_seedBoxFirstLogged) return;
     _seedBoxFirstLogged = true;
     append(
-      '【首段策略·种子框口径A】已删除 trial/审判/bootstrap。'
-      '每层第一个 Kn=种子合并框：group0 单元素永不吸收第二根；'
-      'n>0 确认前可随下层进行中单元 probe 动态刷新高低，首分型确认后冻结。'
-      '第二 Kn 不与种子框做包含，只与后续 Kn 关系。'
-      '【UNKNOWN开口·方案2·D2·S-b·全层同构】仅 group0：只虚线种子框、不画连线；'
-      '有 group1 后 seed_leave_dir=离开种子方向（test_combine_range(g0,g1)，互含=+1）；'
-      'begin=框内出发极值（升=框低/降=框高）；尾端从 seed_box_x2 外扫'
-      '(seed_x2,asOf] 首次同向极值（buildingTailEndpoint）；'
-      'JUDGE/CONFIRM 让位 ABC：JUDGE→A→B(/B→C)虚；CONFIRM→A→B实、B→C虚。'
-      '例外：首两单元不做包含（全层同构字面例外，登记 README）。'
+      '【种子框·第一个分型合并框·全层同构】每层第一个 Kn=种子合并框 group0：'
+      '单元素永不吸收第二根；第二 Kn 强制自成 group1（首两单元不做包含，字面例外见 README）。'
+      'n>0 确认前可随下层进行中单元 probe 动态刷新高低；首个 Kn 分型确认后 seed_confirmed 冻结。'
+      '画线阶段：UNKNOWN→开口虚线（见第一条虚线限制）；JUDGE→A→B(/B→C)虚；'
+      'CONFIRM→A→B实(冻结段)、B→C虚。历史记录按钮与 lib/history/ 常驻不得删。',
+    );
+  }
+
+  /// 第一条虚线（种子 UNKNOWN 开口）sit1/sit2 限制（全层同构，常驻）。
+  void appendSeedFirstDashRules() {
+    if (_seedFirstDashRulesLogged) return;
+    _seedFirstDashRulesLogged = true;
+    append(
+      '【第一条虚线限制·全层同构】首分型确认/判断前：种子框 h1/l1 对照末组合并框 hn/ln'
+      '（n>0，非仅第二框 h2/l2）：'
+      'sit1(hn>h1且ln>l1)→seed_leave_dir=+1 画开口虚线；'
+      'sit2(hn<h1且ln<l1)→seed_leave_dir=-1 画开口虚线；'
+      'hn<=h1且ln>=l1（含全等）→leave_dir=0 不画；其它重叠亦不画。'
+      '几何：begin=框内出发极值（升框低/降框高）；尾端从 seed_box_x2 外扫'
+      '(seed_x2,asOf] 首次同向极值；JUDGE/CONFIRM 让位 ABC。'
+      '（曾误修截断首段端点已撤销，截断首段仍走常规 First。）'
+      '历史记录按钮与 lib/history/ 常驻不得删。',
+    );
+  }
+
+  /// 种子相对第二框包含截断（全层同构，常驻）。
+  void appendSeedContainTruncation() {
+    if (_seedContainTruncLogged) return;
+    _seedContainTruncLogged = true;
+    append(
+      '【第一条虚线·截断门控·全层同构】仅「第一个Kn后→第一个Kn分型确认/判断前」：'
+      'sit1/sit2 leave → 该窗口内不再触发截断；'
+      '非 leave 且第二框严格包含种子 → 该窗口内截断至多一次；'
+      '方向 dh/dl 同前；动态Kn截断→Kn分型判断(probe)；确认Kn截断→Kn分型确认(feed)。'
+      '首个分型确认/判断之后的 TruncGuard 等保持原实现，不受本门控。'
       '历史记录按钮与 lib/history/ 常驻不得删。',
     );
   }

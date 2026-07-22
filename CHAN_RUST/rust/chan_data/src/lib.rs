@@ -22,8 +22,9 @@ pub use combine::{
     KlineCombineBundle, KlineCombineFrame,
 };
 pub use engine::{
-    CombineEngine, FxEvent, FxKind, MergeDir, MergeUnit, MergedGroup, ProbeState, TruncGuard,
-    TruncReplayState,
+    seed_contain_trunc_up_leg, seed_is_leave, seed_leave_dir, seed_nonleave_may_trunc,
+    seed_second_contains_first, CombineEngine, FxEvent, FxKind, MergeDir, MergeUnit, MergedGroup,
+    ProbeState, TruncGuard, TruncReplayState,
 };
 pub use error::{ChanDataError, Result};
 pub use feature::{

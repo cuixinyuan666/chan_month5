@@ -146,6 +146,26 @@ List<KlineCombineFrame> computeK0CombineFrames(
   final unitCounts = <int>[];
   final fxAt = <String>[];
 
+  // 第一条虚线口径（与 Rust CombineEngine 同构）：leave 后不截；非 leave 至多一次
+  var seedLeaveSeen = false;
+  var nonleaveTruncUsed = false;
+
+  int seedLeaveDir(double h1, double l1, double hn, double ln) {
+    if (hn > h1 && ln > l1) return 1;
+    if (hn < h1 && ln < l1) return -1;
+    return 0;
+  }
+
+  bool seedNonleaveMayTrunc(double h1, double l1, double hn, double ln) {
+    if (seedLeaveSeen || nonleaveTruncUsed) return false;
+    final leave = seedLeaveDir(h1, l1, hn, ln);
+    if (leave != 0) {
+      seedLeaveSeen = true;
+      return false;
+    }
+    return true;
+  }
+
   for (final b in bars) {
     final x = b.idx;
     final t = b.timeText;
@@ -166,8 +186,48 @@ List<KlineCombineFrame> computeK0CombineFrames(
     final last = highs.length - 1;
     final dir = combineDir(highs[last], lows[last], b.high, b.low);
 
-    // 种子框口径 A：首两根 K0 强制独立，不做包含吸收（对齐 Rust seed_skip_first）
+    // 种子框口径 A：首两根 K0 强制独立；非 leave 且第二框严格包含种子 → 至多截断一次
     if (highs.length == 1) {
+      final h1 = highs[0];
+      final l1 = lows[0];
+      final contains =
+          b.high >= h1 && b.low <= l1 && !(b.high == h1 && b.low == l1);
+      if (contains && seedNonleaveMayTrunc(h1, l1, b.high, b.low)) {
+        final dh = (b.high - h1).abs();
+        final dl = (b.low - l1).abs();
+        final upLeg = dl > dh;
+        final truncFx = upLeg ? 'TOP' : 'BOTTOM';
+        fxAt[0] = truncFx;
+        onFxEvent(truncFx, h1, l1);
+        judgmentEvents?.add(FractalJudgmentEvent(
+          x: x,
+          fx: truncFx,
+          truncated: true,
+          fractalX1: x1s[0],
+          fractalX2: x2s[0],
+          rightX1: x,
+          rightX2: x,
+        ));
+        final forced = upLeg ? 'DOWN' : 'UP';
+        final rw = truncRewriteTrigger(
+          upLeg: upLeg,
+          lastH: h1,
+          lastL: l1,
+          uh: b.high,
+          ul: b.low,
+        );
+        highs.add(rw.high);
+        lows.add(rw.low);
+        dirs.add(forced);
+        x1s.add(x);
+        x2s.add(x);
+        t1s.add(t);
+        t2s.add(t);
+        unitCounts.add(1);
+        fxAt.add('UNKNOWN');
+        nonleaveTruncUsed = true;
+        continue;
+      }
       final forcedDir = dir == 'COMBINE' ? 'UP' : dir;
       highs.add(b.high);
       lows.add(b.low);
@@ -178,11 +238,15 @@ List<KlineCombineFrame> computeK0CombineFrames(
       t2s.add(t);
       unitCounts.add(1);
       fxAt.add('UNKNOWN');
+      if (seedLeaveDir(h1, l1, b.high, b.low) != 0) {
+        seedLeaveSeen = true;
+      }
       continue;
     }
 
     if (dir == 'COMBINE') {
       final g = truncGuard();
+      // 首个分型确认后 TruncGuard：原实现，不受第一条虚线 leave/一次额度约束
       if (g != null &&
           truncHit(
             upLeg: g.upLeg,
