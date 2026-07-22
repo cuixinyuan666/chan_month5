@@ -23,6 +23,7 @@ import 'models/k1_analysis.dart';
 import 'widgets/datetime_picker_dialog.dart';
 import 'widgets/edge_control_panel.dart';
 import 'widgets/kline_chart.dart';
+import 'widgets/test_ohlc_editor_dialog.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -44,6 +45,8 @@ Future<void> main() async {
   MsgHistory.instance.appendDisplayTrackDynamicKnBuildingLines();
   // 种子框首段口径 A（删审判；首两单元不做包含；JUDGE/CONFIRM 虚实）
   MsgHistory.instance.appendSeedBoxFirstSeg();
+  // test 自定义 OHLC：前端编辑 → custom.ohlc.csv 直读上图
+  MsgHistory.instance.appendTestCustomOhlc();
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     await windowManager.ensureInitialized();
     const opts = WindowOptions(
@@ -184,6 +187,29 @@ class _KlineHomePageState extends State<KlineHomePage> {
 
   /// 切换股票时对齐各自默认加载区间。
   void _syncDateRangeForCode(String code) {
+    // test + 已有 custom.ohlc.csv：用文件首末时间填区间
+    if (code == 'test' && _hasTestOhlcCsv()) {
+      try {
+        final bars = _bridge.loadKlines(
+          dataRoot: _dataRoot,
+          code: 'test',
+          beginDate: '1990/01/01 00:00:00',
+          endDate: '2100/12/31 23:59:59',
+          period: _period,
+        );
+        if (bars.isNotEmpty) {
+          final b0 = _tryParseBarTime(bars.first.timeText);
+          final b1 = _tryParseBarTime(bars.last.timeText);
+          if (b0 != null && b1 != null) {
+            _beginDate = b0;
+            _endDate = b1;
+            return;
+          }
+        }
+      } catch (_) {
+        // 回落标准区间
+      }
+    }
     final range = _codeDefaultRanges[code];
     if (range != null) {
       _beginDate = range.$1;
@@ -192,6 +218,29 @@ class _KlineHomePageState extends State<KlineHomePage> {
       _beginDate = _standardBeginDate;
       _endDate = _standardEndDate;
     }
+  }
+
+  bool _hasTestOhlcCsv() {
+    if (_dataRoot.isEmpty) return false;
+    final path =
+        '$_dataRoot${Platform.pathSeparator}test${Platform.pathSeparator}custom.ohlc.csv';
+    return File(path).existsSync();
+  }
+
+  DateTime? _tryParseBarTime(String raw) {
+    final s = raw.trim().replaceAll('-', '/');
+    final m = RegExp(
+      r'^(\d{4})/(\d{2})/(\d{2}) (\d{2}):(\d{2})(?::(\d{2}))?$',
+    ).firstMatch(s);
+    if (m == null) return null;
+    return DateTime(
+      int.parse(m.group(1)!),
+      int.parse(m.group(2)!),
+      int.parse(m.group(3)!),
+      int.parse(m.group(4)!),
+      int.parse(m.group(5)!),
+      m.group(6) != null ? int.parse(m.group(6)!) : 0,
+    );
   }
 
   String? _preferredCode(List<String> codes) {
@@ -286,9 +335,11 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _defaultK0Purged = false;
         _judgmentHistoryByKn.clear();
       });
+      final directOhlc = code == 'test' && _hasTestOhlcCsv();
       _msgHistory.append(
         '加载K0：$code ${_fmtDateTime(_beginDate)}~${_fmtDateTime(_endDate)} '
-        '${_periods[_period] ?? _period} 共${bars.length}根',
+        '${_periods[_period] ?? _period} 共${bars.length}根'
+        '${directOhlc ? "（直读custom.ohlc.csv，忽略周期聚合）" : ""}',
       );
       _rebuildCombine();
       _logCombineSummary(prefix: '加载后汇总');
@@ -743,6 +794,25 @@ class _KlineHomePageState extends State<KlineHomePage> {
                   _loadKlines();
                 },
         ),
+        if (_selectedCode == 'test') ...[
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: _busy ? null : _openTestOhlcEditor,
+                  icon: const Icon(Icons.edit_note, size: 18),
+                  label: const Text('编辑/加载自定义 OHLC'),
+                ),
+              ),
+              IconButton(
+                tooltip: '自定义 OHLC 说明',
+                icon: const Icon(Icons.help_outline, size: 18),
+                onPressed: _showTestOhlcHelp,
+              ),
+            ],
+          ),
+        ],
         const SizedBox(height: 10),
         DropdownButtonFormField<String>(
           isExpanded: true,
@@ -923,6 +993,79 @@ class _KlineHomePageState extends State<KlineHomePage> {
         ],
       ),
     );
+  }
+
+  void _showTestOhlcHelp() {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('自定义 OHLC 说明'),
+        content: const SingleChildScrollView(
+          child: Text(
+            '操作步骤：\n'
+            '1. 股票选择 test；\n'
+            '2. 点「编辑/加载自定义 OHLC」填写时间与开高低收；\n'
+            '3. 「仅保存」或「保存并加载」写入 a_Data/test/custom.ohlc.csv。\n\n'
+            '口径：行即最终 K 线（忽略周期聚合）；有 CSV 优先直读，无则回退分笔。',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('知道了'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _openTestOhlcEditor() async {
+    // 预填：优先 CSV 全量；否则当前图上 bars；再否则空表模板
+    List<KlineBar> seed = _allBars;
+    if (_hasTestOhlcCsv()) {
+      try {
+        seed = _bridge.loadKlines(
+          dataRoot: _dataRoot,
+          code: 'test',
+          beginDate: '1990/01/01 00:00:00',
+          endDate: '2100/12/31 23:59:59',
+          period: _period,
+        );
+      } catch (_) {
+        // 保持 seed=_allBars
+      }
+    }
+    final result = await showTestOhlcEditorDialog(
+      context: context,
+      initialBars: seed,
+    );
+    if (result == null || !mounted) return;
+    try {
+      final saved = _bridge.saveTestOhlc(
+        dataRoot: _dataRoot,
+        bars: result.bars,
+      );
+      _msgHistory.append(
+        'test 自定义OHLC：保存${saved.count}根 → ${saved.path}',
+      );
+      // 保存后对齐区间到文件首末
+      if (result.bars.isNotEmpty) {
+        final b0 = _tryParseBarTime(result.bars.first.timeText);
+        final b1 = _tryParseBarTime(result.bars.last.timeText);
+        if (b0 != null && b1 != null) {
+          setState(() {
+            _beginDate = b0;
+            _endDate = b1;
+          });
+        }
+      }
+      if (result.loadAfterSave) {
+        await _loadKlines();
+      }
+    } catch (e) {
+      setState(() => _error = e.toString());
+      _msgHistory.append('test 自定义OHLC 保存失败：$e');
+    }
   }
 
   /// 构建中/未确认虚线开关说明弹窗（操作逻辑 + 开关含义）。

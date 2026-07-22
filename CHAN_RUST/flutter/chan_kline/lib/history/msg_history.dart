@@ -20,6 +20,9 @@ class MsgHistory {
   /// 种子框首段口径是否已记录（进程内去重）
   static bool _seedBoxFirstLogged = false;
 
+  /// test 自定义 OHLC 口径是否已记录（进程内去重）
+  static bool _testCustomOhlcLogged = false;
+
   final List<MsgHistoryEntry> _rows = [];
 
   List<MsgHistoryEntry> get rows => List.unmodifiable(_rows);
@@ -175,6 +178,19 @@ class MsgHistory {
       '第二 Kn 不与种子框做包含，只与后续 Kn 关系。'
       '画线：首分型 JUDGE→A→B(/B→C)虚线；CONFIRM→A→B实(冻结段)、B→C虚。'
       '例外：首两单元不做包含（全层同构字面例外，登记 README）。'
+      '历史记录按钮与 lib/history/ 常驻不得删。',
+    );
+  }
+
+  /// test 股票：前端可编辑 OHLC，落盘 custom.ohlc.csv，加载时直读（忽略周期聚合）。
+  void appendTestCustomOhlc() {
+    if (_testCustomOhlcLogged) return;
+    _testCustomOhlcLogged = true;
+    append(
+      '【test 自定义OHLC】股票选 test 后可「编辑/加载自定义 OHLC」：'
+      '表格录入时间+OHLC(+量) → 保存到 a_Data/test/custom.ohlc.csv；'
+      '有 CSV 时 load_klines 优先直读（不做分笔/周期聚合，行即最终K线）；'
+      '无 CSV 时回退原 test 分笔文件。仅改 K0 数据源，K1/Kn 流水线不变。'
       '历史记录按钮与 lib/history/ 常驻不得删。',
     );
   }

@@ -5,7 +5,7 @@ use std::ptr;
 
 use chan_data::{
     build_kline_combine_bundle_with, default_data_root, list_stock_codes, load_klines,
-    resolve_data_root, BSPConfig, KlineBar, KlinePeriod, PipelineOptions, ZSConfig,
+    resolve_data_root, save_test_ohlc, BSPConfig, KlineBar, KlinePeriod, PipelineOptions, ZSConfig,
 };
 use serde::{Deserialize, Serialize};
 
@@ -111,6 +111,41 @@ pub extern "C" fn chan_load_klines(
         period_enum,
     ) {
         Ok(bars) => to_json_ok(bars),
+        Err(e) => to_json_err(&e.to_string()),
+    }
+}
+
+/// 保存 test 自定义 OHLC 到 `a_Data/test/custom.ohlc.csv`。
+/// 入参 JSON：`{ "data_root": "...?", "bars": [KlineBar...] }`
+#[no_mangle]
+pub extern "C" fn chan_save_test_ohlc(req_json: *const c_char) -> *mut c_char {
+    let Some(raw) = cstr_to_str(req_json) else {
+        return to_json_err("req_json 不能为空");
+    };
+    #[derive(Deserialize)]
+    struct SaveReq {
+        #[serde(default)]
+        data_root: Option<String>,
+        bars: Vec<KlineBar>,
+    }
+    #[derive(Serialize)]
+    struct SaveOut {
+        path: String,
+        count: usize,
+    }
+    let req: SaveReq = match serde_json::from_str(raw) {
+        Ok(v) => v,
+        Err(e) => return to_json_err(&format!("save_test_ohlc 解析失败: {e}")),
+    };
+    let root = resolve_data_root(req.data_root.as_deref());
+    match save_test_ohlc(&root, &req.bars) {
+        Ok(()) => {
+            let path = root.join("test").join("custom.ohlc.csv");
+            to_json_ok(SaveOut {
+                path: path.to_string_lossy().to_string(),
+                count: req.bars.len(),
+            })
+        }
         Err(e) => to_json_err(&e.to_string()),
     }
 }

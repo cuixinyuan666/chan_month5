@@ -31,7 +31,10 @@ pub use feature::{
     weekday_from_bar, BarCrosshairFeature, K0Line, K1Bar, K1BarView,
 };
 pub use kline::{KlineBar, KlinePeriod};
-pub use offline::{default_data_root, list_stock_codes, load_klines, resolve_data_root};
+pub use offline::{
+    default_data_root, list_stock_codes, load_klines, load_test_ohlc_csv, resolve_data_root,
+    save_test_ohlc, save_test_ohlc_csv, test_ohlc_csv_path,
+};
 pub use pipeline::{
     run_pipeline, LevelBundleOut, LevelConfirm, LevelSegment, LevelSnap, LevelUnitBar,
     PipelineOptions, PipelineResult,

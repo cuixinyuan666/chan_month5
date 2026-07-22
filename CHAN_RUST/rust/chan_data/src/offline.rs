@@ -32,9 +32,17 @@ pub fn resolve_data_root(raw: Option<&str>) -> PathBuf {
 /// 测试股白名单目录（非六位数字代码）。
 const TEST_STOCK_FOLDER: &str = "test";
 
+/// test 自定义 OHLC 固定文件名（直读，跳过分笔/周期聚合）。
+const TEST_OHLC_CSV: &str = "custom.ohlc.csv";
+
 /// 是否允许作为 a_Data 子目录的证券标识。
 fn is_allowed_stock_key(key: &str) -> bool {
     (key.len() == 6 && key.chars().all(|c| c.is_ascii_digit())) || key == TEST_STOCK_FOLDER
+}
+
+/// `a_Data/test/custom.ohlc.csv` 路径。
+pub fn test_ohlc_csv_path(data_root: &Path) -> PathBuf {
+    data_root.join(TEST_STOCK_FOLDER).join(TEST_OHLC_CSV)
 }
 
 /// 证券代码 → 目录名（六位数字或测试白名单 `test`）。
@@ -154,7 +162,6 @@ pub fn load_klines(
     period: KlinePeriod,
 ) -> Result<Vec<KlineBar>> {
     let code_key = folder_from_code(code);
-    let folder = data_root.join(&code_key);
     let begin_dt = parse_datetime_bound(begin_date, BoundKind::Begin)?;
     let end_dt = parse_datetime_bound(end_date, BoundKind::End)?;
     if end_dt < begin_dt {
@@ -162,6 +169,24 @@ pub fn load_klines(
             "结束时间不能早于开始时间：{begin_date}~{end_date}"
         )));
     }
+
+    // test：若有 custom.ohlc.csv 则直读（忽略 period 聚合）
+    if code_key == TEST_STOCK_FOLDER {
+        let ohlc_path = test_ohlc_csv_path(data_root);
+        if ohlc_path.is_file() {
+            let bars = load_test_ohlc_csv(&ohlc_path)?;
+            let bars = filter_bars_by_datetime(bars, begin_dt, end_dt);
+            if bars.is_empty() {
+                return Err(ChanDataError::msg(format!(
+                    "区间内无 K 线：{begin_date}~{end_date}"
+                )));
+            }
+            let _ = period; // 自定义 OHLC 不做周期重采样
+            return Ok(bars);
+        }
+    }
+
+    let folder = data_root.join(&code_key);
     let b8 = date8_from_datetime(begin_dt);
     let e8 = date8_from_datetime(end_dt);
     let paths = list_tick_paths(&folder, &code_key, b8, e8)?;
@@ -189,6 +214,164 @@ pub fn load_klines(
         )));
     }
     Ok(bars)
+}
+
+/// 校验单根 OHLC：high/low 包住 open/close。
+fn validate_ohlc_bar(bar: &KlineBar, row: usize) -> Result<()> {
+    let body_hi = bar.open.max(bar.close);
+    let body_lo = bar.open.min(bar.close);
+    if bar.high < body_hi {
+        return Err(ChanDataError::msg(format!(
+            "第{}行 high 必须 >= max(open,close)",
+            row + 1
+        )));
+    }
+    if bar.low > body_lo {
+        return Err(ChanDataError::msg(format!(
+            "第{}行 low 必须 <= min(open,close)",
+            row + 1
+        )));
+    }
+    Ok(())
+}
+
+fn validate_ohlc_bars(bars: &[KlineBar]) -> Result<()> {
+    if bars.is_empty() {
+        return Err(ChanDataError::msg("自定义 OHLC 不能为空"));
+    }
+    for (i, b) in bars.iter().enumerate() {
+        validate_ohlc_bar(b, i)?;
+        if i > 0 && bars[i].time_ms <= bars[i - 1].time_ms {
+            return Err(ChanDataError::msg(format!(
+                "第{}行时间必须严格晚于前一行",
+                i + 1
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// 由 time 文本生成 KlineBar（amount 默认 0）。
+fn bar_from_ohlc_fields(
+    time_raw: &str,
+    open: f64,
+    high: f64,
+    low: f64,
+    close: f64,
+    volume: f64,
+    idx: i32,
+) -> Result<KlineBar> {
+    let dt = parse_datetime_bound(time_raw, BoundKind::Begin)?;
+    let time_ms = Utc.from_utc_datetime(&dt).timestamp_millis();
+    let time_text = format!(
+        "{:04}/{:02}/{:02} {:02}:{:02}:{:02}",
+        dt.year(),
+        dt.month(),
+        dt.day(),
+        dt.hour(),
+        dt.minute(),
+        dt.second()
+    );
+    Ok(KlineBar {
+        idx,
+        time_ms,
+        time_text,
+        open,
+        high,
+        low,
+        close,
+        volume,
+        amount: 0.0,
+        metrics: serde_json::Map::new(),
+    })
+}
+
+/// 读取 test 自定义 OHLC CSV（表头 time,open,high,low,close,volume）。
+pub fn load_test_ohlc_csv(path: &Path) -> Result<Vec<KlineBar>> {
+    let text = std::fs::read_to_string(path).map_err(|e| {
+        ChanDataError::msg(format!("读取自定义 OHLC 失败 {}: {e}", path.display()))
+    })?;
+    let mut bars = Vec::new();
+    for (line_no, raw) in text.lines().enumerate() {
+        let line = raw.trim();
+        if line.is_empty() {
+            continue;
+        }
+        // 跳过表头
+        if line_no == 0 && line.to_ascii_lowercase().starts_with("time") {
+            continue;
+        }
+        let cols: Vec<&str> = line.split(',').map(|s| s.trim()).collect();
+        if cols.len() < 5 {
+            return Err(ChanDataError::msg(format!(
+                "第{}行列数不足（需 time,open,high,low,close[,volume]）",
+                line_no + 1
+            )));
+        }
+        let open: f64 = cols[1]
+            .parse()
+            .map_err(|_| ChanDataError::msg(format!("第{}行 open 非法", line_no + 1)))?;
+        let high: f64 = cols[2]
+            .parse()
+            .map_err(|_| ChanDataError::msg(format!("第{}行 high 非法", line_no + 1)))?;
+        let low: f64 = cols[3]
+            .parse()
+            .map_err(|_| ChanDataError::msg(format!("第{}行 low 非法", line_no + 1)))?;
+        let close: f64 = cols[4]
+            .parse()
+            .map_err(|_| ChanDataError::msg(format!("第{}行 close 非法", line_no + 1)))?;
+        let volume: f64 = if cols.len() >= 6 && !cols[5].is_empty() {
+            cols[5]
+                .parse()
+                .map_err(|_| ChanDataError::msg(format!("第{}行 volume 非法", line_no + 1)))?
+        } else {
+            0.0
+        };
+        let bar = bar_from_ohlc_fields(cols[0], open, high, low, close, volume, bars.len() as i32)?;
+        bars.push(bar);
+    }
+    validate_ohlc_bars(&bars)?;
+    Ok(bars)
+}
+
+/// 写入 test 自定义 OHLC CSV（覆盖）。
+pub fn save_test_ohlc_csv(path: &Path, bars: &[KlineBar]) -> Result<()> {
+    // 保存前按 time_text 规范化 time_ms，保证校验口径一致
+    let mut normalized = Vec::with_capacity(bars.len());
+    for (i, b) in bars.iter().enumerate() {
+        let nb = bar_from_ohlc_fields(
+            &b.time_text,
+            b.open,
+            b.high,
+            b.low,
+            b.close,
+            b.volume,
+            i as i32,
+        )?;
+        normalized.push(nb);
+    }
+    validate_ohlc_bars(&normalized)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            ChanDataError::msg(format!("创建目录失败 {}: {e}", parent.display()))
+        })?;
+    }
+    let mut out = String::from("time,open,high,low,close,volume\n");
+    for b in &normalized {
+        out.push_str(&format!(
+            "{},{},{},{},{},{}\n",
+            b.time_text, b.open, b.high, b.low, b.close, b.volume
+        ));
+    }
+    std::fs::write(path, out).map_err(|e| {
+        ChanDataError::msg(format!("写入自定义 OHLC 失败 {}: {e}", path.display()))
+    })?;
+    Ok(())
+}
+
+/// 保存到 `data_root/test/custom.ohlc.csv`。
+pub fn save_test_ohlc(data_root: &Path, bars: &[KlineBar]) -> Result<()> {
+    save_test_ohlc_csv(&test_ohlc_csv_path(data_root), bars)
 }
 
 #[derive(Clone)]
@@ -503,5 +686,93 @@ mod tests {
             ohlc,
             vec![(3.0, 4.0, 3.0, 4.0), (2.0, 3.0, 2.0, 3.0), (3.0, 4.0, 3.0, 4.0), (1.0, 4.0, 1.0, 4.0)]
         );
+    }
+
+    #[test]
+    fn test_ohlc_csv_roundtrip_and_validation() {
+        let dir = std::env::temp_dir().join(format!("chan_ohlc_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("custom.ohlc.csv");
+
+        let bars = vec![
+            KlineBar {
+                idx: 0,
+                time_ms: 0,
+                time_text: "2026/07/10 09:30:00".into(),
+                open: 3.0,
+                high: 4.0,
+                low: 3.0,
+                close: 4.0,
+                volume: 100.0,
+                amount: 0.0,
+                metrics: Default::default(),
+            },
+            KlineBar {
+                idx: 1,
+                time_ms: 0,
+                time_text: "2026/07/10 09:31:00".into(),
+                open: 2.0,
+                high: 3.0,
+                low: 2.0,
+                close: 3.0,
+                volume: 0.0,
+                amount: 0.0,
+                metrics: Default::default(),
+            },
+        ];
+        save_test_ohlc_csv(&path, &bars).unwrap();
+        let loaded = load_test_ohlc_csv(&path).unwrap();
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[0].open, 3.0);
+        assert_eq!(loaded[1].close, 3.0);
+        assert!(loaded[0].time_ms > 0);
+
+        let bad = vec![KlineBar {
+            idx: 0,
+            time_ms: 0,
+            time_text: "2026/07/10 09:30:00".into(),
+            open: 5.0,
+            high: 4.0,
+            low: 3.0,
+            close: 4.0,
+            volume: 0.0,
+            amount: 0.0,
+            metrics: Default::default(),
+        }];
+        assert!(save_test_ohlc_csv(&path, &bad).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_klines_prefers_custom_ohlc_for_test() {
+        let root = std::env::temp_dir().join(format!("chan_ohlc_root_{}", std::process::id()));
+        let test_dir = root.join("test");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&test_dir).unwrap();
+        let bars = vec![KlineBar {
+            idx: 0,
+            time_ms: 0,
+            time_text: "2026/07/10 09:30:00".into(),
+            open: 1.0,
+            high: 2.0,
+            low: 1.0,
+            close: 2.0,
+            volume: 10.0,
+            amount: 0.0,
+            metrics: Default::default(),
+        }];
+        save_test_ohlc(&root, &bars).unwrap();
+        let out = load_klines(
+            &root,
+            "test",
+            "2026/07/10 09:00:00",
+            "2026/07/10 10:00:00",
+            KlinePeriod::Day,
+        )
+        .unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].high, 2.0);
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
