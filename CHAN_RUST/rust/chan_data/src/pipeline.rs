@@ -2,9 +2,9 @@
 //! 命名历史：旧「1段/2段/n段」→「K1/K2/Kn」；内部 level 序号不变（1=K1）。
 //!
 //! 三层语义（勿混为一谈）：
-//! 1. **判定内核同构**（全层）：`CombineEngine` 包含合并 + 三元素分型；
+//! 1. **判定内核同构**（全层）：`CombineEngine` 包含合并 + 三元素分型（首两单元不做包含，见种子框例外）；
 //! 2. **成段机制同构**（全层）：锚定配对 + 有效性校验 + 冻结去重；
-//! 3. **首段业务策略同构**（全层）：pending 占位 + 反向极值 trial + retained/purged（`segment_first.rs`）。
+//! 3. **首段业务策略同构**（全层）：种子合并框（group0）+ A→B 首段 + B→C 第二段（虚实见 `first_fx_state`）。
 //!
 //! 每层递归：输入单元包含合并 → 三元素分型确认（冻结不回写）→ 锚定配对 → Kn → 喂上层。
 //! 全层同构约束：**必须等 K(n-1) 单元永久冻结后才能参与 Kn**（禁止行进中下层提前确认上层）。
@@ -20,10 +20,7 @@ use crate::kuaduan::KuaDuanV1Frame;
 use crate::kline::KlineBar;
 use crate::bsp::{BSPConfig, BSPFrame};
 use crate::zs::{ZSConfig, ZSFrame};
-use crate::segment_first::{
-    build_pending_default_unit, resolve_segment_policy, reverse_pole_x, trial_first_segment,
-    POLICY_PENDING, POLICY_PURGED, POLICY_RETAINED,
-};
+
 
 /// 流水线选项
 #[derive(Debug, Clone)]
@@ -32,8 +29,6 @@ pub struct PipelineOptions {
     pub validity_check: bool,
     /// 层数安全上限（穷尽通常远达不到）
     pub max_levels: usize,
-    /// 全层首段构造：pending + 反向极值 trial（默认开启）
-    pub first_segment_bootstrap: bool,
     /// 截断监察开关（默认开启）：上行阶段暴力反转单元（最高价>=左框高 且 最低价<上个底分型低）
     /// 不被包含吸收，左框当场顶分型确认；下降截断镜像；全层同构
     pub truncation_check: bool,
@@ -48,7 +43,6 @@ impl Default for PipelineOptions {
         Self {
             validity_check: true,
             max_levels: 16,
-            first_segment_bootstrap: true,
             truncation_check: true,
             zs_config: ZSConfig::default(),
             bsp_config: BSPConfig::default(),
@@ -114,10 +108,10 @@ pub struct LevelSegment {
     pub end_fractal_high: f64,
     #[serde(default)]
     pub end_fractal_low: f64,
-    /// 已废弃：新方案无 bootstrap 引导段，固定 false（JSON 兼容）
+    /// 已废弃：无 bootstrap 引导段，固定 false（JSON 兼容）
     #[serde(default)]
     pub is_bootstrap: bool,
-    /// 首确认 trial PASS 升格默认段
+    /// 已废弃：首段改为种子框 A→B，固定 false（JSON 兼容）
     #[serde(default)]
     pub is_promoted_default: bool,
 }
@@ -168,6 +162,25 @@ pub struct LevelSnap {
     pub combine_x1: i32,
     /// 当步所在 Kn 合并框序号（0 起；-1=未成框）
     pub merge_box_seq: i32,
+    // ---- 种子框（首 Kn 合并框）快照：逐K当下冻结，供 Flutter 渲染与 ML/tooltip 同源 ----
+    /// 种子框是否确定态（首个真实分型确认后冻结）
+    pub seed_confirmed: bool,
+    /// 种子框序号（=0；-1=无种子框）
+    pub seed_box_seq: i32,
+    /// 种子框区间 [x1,x2]
+    pub seed_box_x1: i32,
+    pub seed_box_x2: i32,
+    /// 种子框极值（high/low）
+    pub seed_box_high: f64,
+    pub seed_box_low: f64,
+    /// 种子框分型方向（首个真实分型反向推断；UNKNOWN=未定）
+    pub seed_fx: String,
+    /// 画线端点：A=种子极值, B=首个分型, C=次分型；-1=未就绪
+    pub draw_a_x: i32,
+    pub draw_b_x: i32,
+    pub draw_c_x: i32,
+    /// 首个 Kn 分型状态：JUDGE=判断(线虚) / CONFIRM=确认(A→B实,B→C虚) / UNKNOWN=未就绪
+    pub first_fx_state: String,
 }
 
 fn neg_one() -> i32 {
@@ -194,6 +207,17 @@ impl LevelSnap {
             combine_fx: "UNKNOWN".to_string(),
             combine_x1: -1,
             merge_box_seq: -1,
+            seed_confirmed: false,
+            seed_box_seq: -1,
+            seed_box_x1: -1,
+            seed_box_x2: -1,
+            seed_box_high: f64::NAN,
+            seed_box_low: f64::NAN,
+            seed_fx: "UNKNOWN".to_string(),
+            draw_a_x: -1,
+            draw_b_x: -1,
+            draw_c_x: -1,
+            first_fx_state: "UNKNOWN".to_string(),
         }
     }
 }
@@ -222,16 +246,17 @@ pub struct LevelBundleOut {
     /// 末步进行中 N 段K线（锚点极点 → 末K；尚未冻结）
     #[serde(default)]
     pub active_unit: Option<LevelUnitBar>,
-    /// 首段策略：pending / retained / purged
-    #[serde(default = "default_policy_pending")]
+    /// 首段策略：seed=种子框未确认 / retained=已有锚点成段（JSON 兼容，不再有 trial 三态）
+    #[serde(default = "default_policy_seed")]
     pub segment_policy: String,
-    /// 首确认前 pending 占位段（仅展示）
+    /// 已废弃：种子框由 snapshot.seed_box 展示，恒为 None（JSON 兼容）
     #[serde(default)]
     pub pending_unit: Option<LevelUnitBar>,
 }
 
-fn default_policy_pending() -> String {
-    POLICY_PENDING.to_string()
+/// 兼容默认：种子框未确认
+fn default_policy_seed() -> String {
+    "seed".to_string()
 }
 
 /// K线合并逐步快照（兼容 merge_* / combine_* 字段）
@@ -431,15 +456,18 @@ struct ProvCache {
 struct LevelState {
     level: i32,
     validity_check: bool,
-    /// 全层首段 trial 开关
-    first_segment_bootstrap: bool,
     /// 截断监察开关
     truncation_check: bool,
     engine: CombineEngine,
-    /// 已喂入本层引擎的 N-1 段输入单元前缀（首段反向极值 / pending 用）
-    input_prefix: Vec<LevelUnitBar>,
-    /// 首段策略三态
-    segment_policy: String,
+    /// 种子框首段状态：0=未, 1=A→B已发射, 2=B→C已发射
+    seed_phase: u8,
+    /// 种子框方向（首个真实分型反向推断）
+    seed_fx: FxKind,
+    /// 画线端点 A/B/C 的 1 分钟 K 索引（-1=未就绪）
+    seed_a_x: i32,
+    seed_b_x: i32,
+    seed_c_x: i32,
+    seed_confirmed: bool,
     confirms: Vec<LevelConfirm>,
     /// 冻结去重 key=(中组首单元uid, 是否顶)：组吸收扩展只改末端，首单元唯一标识组；
     /// 同组分型方向不可翻转（Up组只升不可能转BOTTOM），故一组至多冻结一次
@@ -453,7 +481,7 @@ struct LevelState {
     prov: Option<ProvCache>,
     /// 当步确认柱值（快照用；同步多确认保留最后）
     confirm_val_this_bar: i32,
-    /// 当步刚冻结首段（promoted），快照优先展示该段
+    /// 当步刚冻结种子框首段 A→B，快照优先展示该段
     freshly_first_seg: bool,
     /// 最近一次底分型确认中组最低价（含同向丢弃/校验失败的；上升截断破坏参照价）
     last_bottom_low: Option<f64>,
@@ -479,13 +507,16 @@ impl LevelState {
         Self {
             level,
             validity_check: opt.validity_check,
-            first_segment_bootstrap: opt.first_segment_bootstrap,
             truncation_check: opt.truncation_check,
             zs_config: opt.zs_config,
             bsp_config: opt.bsp_config,
             engine: CombineEngine::new(),
-            input_prefix: Vec::new(),
-            segment_policy: POLICY_PENDING.to_string(),
+            seed_phase: 0,
+            seed_fx: FxKind::Unknown,
+            seed_a_x: -1,
+            seed_b_x: -1,
+            seed_c_x: -1,
+            seed_confirmed: false,
             confirms: Vec::new(),
             frozen: HashSet::new(),
             anchor: None,
@@ -560,7 +591,8 @@ impl LevelState {
         bar_x: i32,
         trigger_uid: i64,
         bars: &[KlineBar],
-        trigger_ub: Option<LevelUnitBar>,
+        _trigger_ub: Option<LevelUnitBar>,
+
     ) -> Vec<LevelUnitBar> {
         let fx = ev.fx;
         let (ev_x1, ev_x2, ev_high, ev_low) = (ev.x1, ev.x2, ev.high, ev.low);
@@ -590,14 +622,6 @@ impl LevelState {
         let mut used = false;
         let mut outs = Vec::new();
 
-        // trial 输入：已喂入前缀（上层只接受永久冻结的下层单元）
-        let mut trial_inputs = self.input_prefix.clone();
-        if let Some(t) = trigger_ub {
-            if trial_inputs.iter().all(|u| u.idx != t.idx) {
-                trial_inputs.push(t);
-            }
-        }
-
         enum Action {
             First,
             Drop,
@@ -618,50 +642,50 @@ impl LevelState {
         match action {
             Action::First => {
                 used = true;
-                if self.first_segment_bootstrap {
-                    // 全层首确认：反向极值 trial（放宽：合法区间即 PASS）
-                    if let Some((vi, _pi)) =
-                        trial_first_segment(&trial_inputs, pole_x, fx)
-                    {
-                        let virtual_u = &trial_inputs[vi];
-                        let begin_pole = reverse_pole_x(bars, virtual_u, fx);
-                        let dir = if fx == FxKind::Top { 1 } else { -1 };
-                        let (vk_high, vk_low) = (virtual_u.high, virtual_u.low);
-                        // 开盘=分型极值；高低收取极点后段身（全层同构）
-                        let (o, h, l, c, v) =
-                            kn_unit_ohlcv(bars, dir, begin_pole, pole_x, vk_high, vk_low);
-                        self.segment_policy = POLICY_RETAINED.to_string();
-                        self.segments.push(LevelSegment {
-                            idx: 0,
-                            dir,
-                            begin_confirm_x: bar_x,
-                            end_confirm_x: bar_x,
-                            begin_pole_x: begin_pole,
-                            end_pole_x: pole_x,
-                            open: o,
-                            high: h,
-                            low: l,
-                            close: c,
-                            volume: v,
-                            begin_fractal_x1: virtual_u.x1,
-                            begin_fractal_x2: virtual_u.x2,
-                            end_fractal_x1: ev_x1,
-                            end_fractal_x2: ev_x2,
-                            begin_fractal_high: vk_high,
-                            begin_fractal_low: vk_low,
-                            end_fractal_high: ev_high,
-                            end_fractal_low: ev_low,
-                            is_bootstrap: false,
-                            is_promoted_default: true,
-                        });
-                        self.freshly_first_seg = true;
-                        let ub = make_unit_bar(bars, 0, dir, begin_pole, pole_x, bar_x, vk_high, vk_low);
-                        self.unit_bars.push(ub.clone());
-                        outs.push(ub);
-                    } else {
-                        self.segment_policy = POLICY_PURGED.to_string();
-                    }
-                }
+                // 种子框首段 A→B：A=首合并组(种子框)极值首K，B=首个真实分型极点
+                // 口径 A：种子方向=首分型反向；group0 永不吸收第二根
+                let g0 = &self.engine.groups()[0];
+                let seed_fx = if fx == FxKind::Top {
+                    FxKind::Bottom
+                } else {
+                    FxKind::Top
+                };
+                let begin_pole = fx_pole_x(bars, g0.x1, g0.x2, seed_fx);
+                let dir = if fx == FxKind::Top { 1 } else { -1 };
+                let (o, h, l, c, v) =
+                    kn_unit_ohlcv(bars, dir, begin_pole, pole_x, g0.high, g0.low);
+                self.segments.push(LevelSegment {
+                    idx: 0,
+                    dir,
+                    begin_confirm_x: bar_x,
+                    end_confirm_x: bar_x,
+                    begin_pole_x: begin_pole,
+                    end_pole_x: pole_x,
+                    open: o,
+                    high: h,
+                    low: l,
+                    close: c,
+                    volume: v,
+                    begin_fractal_x1: g0.x1,
+                    begin_fractal_x2: g0.x2,
+                    end_fractal_x1: ev_x1,
+                    end_fractal_x2: ev_x2,
+                    begin_fractal_high: g0.high,
+                    begin_fractal_low: g0.low,
+                    end_fractal_high: ev_high,
+                    end_fractal_low: ev_low,
+                    is_bootstrap: false,
+                    is_promoted_default: false,
+                });
+                self.seed_phase = 1;
+                self.seed_fx = seed_fx;
+                self.seed_a_x = begin_pole;
+                self.seed_b_x = pole_x;
+                self.seed_confirmed = true;
+                self.freshly_first_seg = true;
+                let ub = make_unit_bar(bars, 0, dir, begin_pole, pole_x, bar_x, g0.high, g0.low);
+                self.unit_bars.push(ub.clone());
+                outs.push(ub);
                 self.set_anchor(fx, ev_x1, ev_x2, ev_high, ev_low, pole_x, bar_x);
             }
             Action::Drop => {}
@@ -699,6 +723,11 @@ impl LevelState {
                 let ub = make_unit_bar(bars, idx, dir, a.pole_x, pole_x, bar_x, a.high, a.low);
                 self.unit_bars.push(ub.clone());
                 outs.push(ub);
+                // 种子框次分型：首个配对即 B→C 的 C 点
+                if self.seed_phase == 1 {
+                    self.seed_c_x = pole_x;
+                    self.seed_phase = 2;
+                }
                 self.set_anchor(fx, ev_x1, ev_x2, ev_high, ev_low, pole_x, bar_x);
             }
         }
@@ -772,13 +801,15 @@ impl LevelState {
     }
 
     /// 当步十字线快照（active 单元：首段冻结步优先刚冻结段，否则进行中段）
+    /// `pending_input`：下层尚未永久喂入的进行中单元（只读探测 JUDGE / 动态种子框；不触发 on_confirm）
     fn snapshot(
         &self,
         bars: &[KlineBar],
         upper: Option<&CombineEngine>,
         prov: Option<&(MergeUnit, f64, f64, f64)>,
+        pending_input: Option<&MergeUnit>,
     ) -> LevelSnap {
-        // 首段 promoted 冻结当步：展示刚冻结段而非同步新起进行中段
+        // 种子框首段 A→B 冻结当步：展示刚冻结段而非同步新起进行中段
         if self.freshly_first_seg {
             if let Some(seg) = self.segments.first() {
                 let ub = make_unit_bar(
@@ -817,30 +848,15 @@ impl LevelState {
                         snap.combine_x1 = ub.x1;
                     }
                 }
+                self.fill_seed_snap(&mut snap, bars, pending_input);
                 return snap;
             }
         }
-        // pending 占位：尚无锚点、首确认前
-        if self.anchor.is_none()
-            && self.segment_policy == POLICY_PENDING
-            && !self.input_prefix.is_empty()
-        {
-            if let Some(pu) = build_pending_default_unit(&self.input_prefix) {
-                let mut snap = LevelSnap::empty(self.level);
-                snap.unit_idx = Some(0);
-                snap.unit_dir = pu.dir;
-                snap.unit_x1 = pu.x1;
-                snap.unit_x2 = pu.x2;
-                snap.unit_open = pu.open;
-                snap.unit_high = pu.high;
-                snap.unit_low = pu.low;
-                snap.unit_close = pu.close;
-                snap.unit_volume = pu.volume;
-                snap.combine_high = pu.high;
-                snap.combine_low = pu.low;
-                snap.combine_x1 = pu.x1;
-                return snap;
-            }
+        // 种子框动态展示：尚无锚点、首段未确认前
+        if self.anchor.is_none() {
+            let mut snap = LevelSnap::empty(self.level);
+            self.fill_seed_snap(&mut snap, bars, pending_input);
+            return snap;
         }
         if let (Some(a), Some((unit, open, close, volume))) = (&self.anchor, prov) {
             let dir = if a.fx == FxKind::Bottom { 1 } else { -1 };
@@ -872,9 +888,151 @@ impl LevelState {
                     snap.combine_x1 = unit.x1;
                 }
             }
+            self.fill_seed_snap(&mut snap, bars, pending_input);
             return snap;
         }
-        LevelSnap::empty(self.level)
+        let mut snap = LevelSnap::empty(self.level);
+        self.fill_seed_snap(&mut snap, bars, pending_input);
+        snap
+    }
+
+    /// 填充种子框快照（口径 A）：确认前可随 pending 动态刷新；JUDGE/CONFIRM 填 A/B/C
+    fn fill_seed_snap(
+        &self,
+        snap: &mut LevelSnap,
+        bars: &[KlineBar],
+        pending_input: Option<&MergeUnit>,
+    ) {
+        // ---- 已确认：几何冻结，端点取缓存；次分型未入库时可 probe 填 C ----
+        if self.seed_confirmed {
+            if let Some(g0) = self.engine.groups().first() {
+                snap.seed_box_seq = 0;
+                snap.seed_box_x1 = g0.x1;
+                snap.seed_box_x2 = g0.x2;
+                snap.seed_box_high = g0.high;
+                snap.seed_box_low = g0.low;
+            } else {
+                snap.seed_box_seq = -1;
+            }
+            snap.seed_confirmed = true;
+            snap.seed_fx = match self.seed_fx {
+                FxKind::Top => "TOP".to_string(),
+                FxKind::Bottom => "BOTTOM".to_string(),
+                FxKind::Unknown => "UNKNOWN".to_string(),
+            };
+            snap.draw_a_x = self.seed_a_x;
+            snap.draw_b_x = self.seed_b_x;
+            snap.draw_c_x = self.seed_c_x;
+            snap.first_fx_state = "CONFIRM".to_string();
+            // 次分型尚在判断：probe 下层进行中单元，补 C（不改冻结 A/B）
+            if snap.draw_c_x < 0 {
+                if let Some(c_x) = self.probe_draw_c(bars, pending_input) {
+                    snap.draw_c_x = c_x;
+                }
+            }
+            return;
+        }
+
+        snap.seed_confirmed = false;
+        snap.first_fx_state = "UNKNOWN".to_string();
+        snap.draw_a_x = -1;
+        snap.draw_b_x = -1;
+        snap.draw_c_x = -1;
+        snap.seed_fx = "UNKNOWN".to_string();
+
+        if let Some(g0) = self.engine.groups().first() {
+            snap.seed_box_seq = 0;
+            snap.seed_box_x1 = g0.x1;
+            snap.seed_box_x2 = g0.x2;
+            snap.seed_box_high = g0.high;
+            snap.seed_box_low = g0.low;
+
+            // JUDGE：只读探测第三单元，中组(group1)分型≠0 且尚未 on_confirm
+            if let Some(ev) = self.probe_first_fx(pending_input) {
+                let seed_fx = if ev.fx == FxKind::Top {
+                    FxKind::Bottom
+                } else {
+                    FxKind::Top
+                };
+                snap.seed_fx = match seed_fx {
+                    FxKind::Top => "TOP".to_string(),
+                    FxKind::Bottom => "BOTTOM".to_string(),
+                    FxKind::Unknown => "UNKNOWN".to_string(),
+                };
+                snap.draw_a_x = fx_pole_x(bars, g0.x1, g0.x2, seed_fx);
+                snap.draw_b_x = fx_pole_x(bars, ev.x1, ev.x2, ev.fx);
+                snap.first_fx_state = "JUDGE".to_string();
+                return;
+            }
+
+            // 引擎已有三组且中组已标分型（同 bar 确认前的兜底；通常 on_confirm 已跑）
+            let gs = self.engine.groups();
+            if gs.len() >= 3 && gs[1].fx != FxKind::Unknown && self.seed_phase == 0 {
+                let mid = &gs[1];
+                let seed_fx = if mid.fx == FxKind::Top {
+                    FxKind::Bottom
+                } else {
+                    FxKind::Top
+                };
+                snap.seed_fx = match seed_fx {
+                    FxKind::Top => "TOP".to_string(),
+                    FxKind::Bottom => "BOTTOM".to_string(),
+                    FxKind::Unknown => "UNKNOWN".to_string(),
+                };
+                snap.draw_a_x = fx_pole_x(bars, g0.x1, g0.x2, seed_fx);
+                snap.draw_b_x = fx_pole_x(bars, mid.x1, mid.x2, mid.fx);
+                snap.first_fx_state = "JUDGE".to_string();
+            }
+            return;
+        }
+
+        // 引擎空：下层进行中首单元 → 动态种子框预览（口径 A）
+        if let Some(u) = pending_input {
+            snap.seed_box_seq = 0;
+            snap.seed_box_x1 = u.x1;
+            snap.seed_box_x2 = u.x2;
+            snap.seed_box_high = u.high;
+            snap.seed_box_low = u.low;
+        } else {
+            snap.seed_box_seq = -1;
+            snap.seed_box_x1 = -1;
+            snap.seed_box_x2 = -1;
+            snap.seed_box_high = f64::NAN;
+            snap.seed_box_low = f64::NAN;
+        }
+    }
+
+    /// 只读探测首个真实分型（种子未确认时；不写引擎）
+    fn probe_first_fx(&self, pending_input: Option<&MergeUnit>) -> Option<FxEvent> {
+        let u = pending_input?;
+        if self.engine.groups().len() < 2 {
+            return None;
+        }
+        let ps = self.engine.probe_guarded(u, None);
+        let ev = ps.fx_event?;
+        if ev.fx == FxKind::Unknown {
+            None
+        } else {
+            Some(ev)
+        }
+    }
+
+    /// 首段已确认、次分型未入库：probe 下层进行中单元取 C 极点
+    fn probe_draw_c(&self, bars: &[KlineBar], pending_input: Option<&MergeUnit>) -> Option<i32> {
+        let u = pending_input?;
+        if self.seed_phase != 1 {
+            return None;
+        }
+        let a = self.anchor.as_ref()?;
+        let ps = self.engine.probe_guarded(u, None);
+        let ev = ps.fx_event?;
+        if ev.fx == FxKind::Unknown || ev.fx == a.fx {
+            return None;
+        }
+        if self.validity_check && !validity_ok(a, ev.fx, ev.high, ev.low) {
+            return None;
+        }
+        Some(fx_pole_x(bars, ev.x1, ev.x2, ev.fx))
     }
 
     fn export(&self, bars: &[KlineBar]) -> LevelBundleOut {
@@ -899,17 +1057,6 @@ impl LevelState {
             }
             _ => None,
         };
-        let has_promoted = self.segments.iter().any(|s| s.is_promoted_default);
-        let segment_policy = if self.segment_policy == POLICY_PENDING {
-            resolve_segment_policy(&self.confirms, has_promoted)
-        } else {
-            self.segment_policy.clone()
-        };
-        let pending_unit = if segment_policy == POLICY_PENDING {
-            build_pending_default_unit(&self.input_prefix)
-        } else {
-            None
-        };
         // 原生中枢列表只算一次，zs_frames 与 bsp_frames 共用（均只读冻结段，无未来函数）
         let zs_list = crate::zs::find_zs(&self.segments, self.level, &self.zs_config);
         LevelBundleOut {
@@ -929,8 +1076,12 @@ impl LevelState {
             first_dir: self.first_dir,
             first_dir_x: self.first_dir_x,
             active_unit,
-            segment_policy,
-            pending_unit,
+            segment_policy: if self.seed_confirmed {
+                "retained".to_string()
+            } else {
+                "seed".to_string()
+            },
+            pending_unit: None,
         }
     }
 }
@@ -979,7 +1130,6 @@ fn propagate(
         if li == levels.len() {
             levels.push(LevelState::new((li + 1) as i32, opt));
         }
-        levels[li].input_prefix.push(ub.clone());
         let mu = MergeUnit {
             uid: ub.idx,
             x1: ub.x1,
@@ -1062,7 +1212,13 @@ pub fn run_pipeline(bars: &[KlineBar], opt: &PipelineOptions) -> PipelineResult 
             } else {
                 None
             };
-            snaps.push(levels[li].snapshot(bars, upper, provs[li].as_ref()));
+            // 下层进行中单元 → 本层只读探测（JUDGE / 动态种子框）；L1 输入为逐K永久喂入，无 pending
+            let pending_input = if li == 0 {
+                None
+            } else {
+                provs[li - 1].as_ref().map(|(u, _, _, _)| u)
+            };
+            snaps.push(levels[li].snapshot(bars, upper, provs[li].as_ref(), pending_input));
         }
         bar_level_snaps.push(snaps);
 
@@ -1089,6 +1245,7 @@ pub fn run_pipeline(bars: &[KlineBar], opt: &PipelineOptions) -> PipelineResult 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::{CombineEngine, MergeUnit};
 
     fn bar(i: usize, h: f64, l: f64) -> KlineBar {
         KlineBar {
@@ -1192,13 +1349,7 @@ mod tests {
                 ..PipelineOptions::default()
             },
         );
-        let pair_count = |pr: &PipelineResult| {
-            pr.levels[0]
-                .segments
-                .iter()
-                .filter(|s| !s.is_promoted_default)
-                .count()
-        };
+        let pair_count = |pr: &PipelineResult| pr.levels[0].segments.len();
         assert!(pair_count(&with_check) <= pair_count(&without_check));
     }
 
@@ -1299,7 +1450,7 @@ mod tests {
         let down_seg = l1
             .segments
             .iter()
-            .find(|s| s.dir == -1 && !s.is_promoted_default)
+            .find(|s| s.dir == -1)
             .expect("应有下降段");
         assert_eq!(down_seg.begin_pole_x, 1);
         assert_eq!(down_seg.end_pole_x, 2);
@@ -1351,14 +1502,83 @@ mod tests {
         let pr = run_pipeline(&bars, &PipelineOptions::default());
         for lv in &pr.levels {
             assert!(
-                lv.segment_policy == "pending"
+                lv.segment_policy == "seed"
                     || lv.segment_policy == "retained"
-                    || lv.segment_policy == "purged",
+                    || lv.segment_policy == "pending", // 旧 JSON 兼容值
                 "level {} policy={}",
                 lv.level,
                 lv.segment_policy
             );
         }
+    }
+
+    /// 口径 A：首两单元不做包含 → 两组各 1；首分型确认后种子框冻结 + A→B 入库
+    #[test]
+    fn seed_box_first_seg_confirm_and_endpoints() {
+        // 构造：K0 三根形成 group0/1/2，中组出分型 → Action::First
+        let bars = vec![
+            bar(0, 10.0, 9.0),  // group0 种子
+            bar(1, 8.5, 7.5),  // group1（不与种子合并）
+            bar(2, 11.0, 10.0), // group2 → mid(group1) 底分型（低点更低）
+            bar(3, 12.0, 11.0),
+            bar(4, 9.0, 8.0),
+            bar(5, 13.0, 12.0),
+            bar(6, 8.0, 7.0),
+            bar(7, 14.0, 13.0),
+            bar(8, 7.5, 6.5),
+            bar(9, 15.0, 14.0),
+        ];
+        let pr = run_pipeline(&bars, &PipelineOptions::default());
+        let l1 = &pr.levels[0];
+        assert!(
+            !l1.segments.is_empty(),
+            "首分型确认应产出 A→B 首段"
+        );
+        let seg0 = &l1.segments[0];
+        assert!(!seg0.is_promoted_default);
+        assert!(!seg0.is_bootstrap);
+        // 末态快照：种子已确认，A/B 就绪
+        let last = pr.bar_level_snaps.last().expect("有快照");
+        let s0 = &last[0];
+        assert!(s0.seed_confirmed, "确认后种子框确定态");
+        assert_eq!(s0.first_fx_state, "CONFIRM");
+        assert!(s0.draw_a_x >= 0, "A=种子极值");
+        assert!(s0.draw_b_x >= 0, "B=首分型极值");
+        assert_eq!(s0.seed_box_seq, 0);
+        // 引擎首两单元独立
+        assert!(
+            l1.combine_frames.len() >= 2,
+            "至少两组（种子+次元素）"
+        );
+        if l1.combine_frames.len() >= 2 {
+            assert_eq!(l1.combine_frames[0].count, 1, "种子框单元素");
+        }
+    }
+
+    /// seed_skip_first：两单元强制两组
+    #[test]
+    fn seed_skip_first_two_units_two_groups() {
+        let mut eng = CombineEngine::new();
+        assert!(eng.seed_skip_first);
+        let u0 = MergeUnit {
+            uid: 0,
+            x1: 0,
+            x2: 0,
+            high: 10.0,
+            low: 9.0,
+        };
+        let u1 = MergeUnit {
+            uid: 1,
+            x1: 1,
+            x2: 1,
+            high: 9.5,
+            low: 8.5, // 本可被包含，但种子模式跳过
+        };
+        assert!(eng.feed(&u0).is_none());
+        assert!(eng.feed(&u1).is_none());
+        assert_eq!(eng.groups().len(), 2);
+        assert_eq!(eng.groups()[0].unit_count, 1);
+        assert_eq!(eng.groups()[1].unit_count, 1);
     }
 
     /// 全层同构：Kn 确认的 trigger 必须是已永久冻结的 K(n-1) 单元

@@ -13,7 +13,7 @@ class K0Line {
   final int? nextIdx;
   /// 首K0连线确认引导：虚拟起点=区间极值法，第二次K0连线确认后丢弃
   final bool isBootstrap;
-  /// 首K0连线确认审判 PASS：升格默认K0连线为第一根，≥2 次确认仍保留
+  /// 已废弃：首段改为种子框 A→B，固定 false
   final bool isPromotedDefault;
 
   const K0Line({

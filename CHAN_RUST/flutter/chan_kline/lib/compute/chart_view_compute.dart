@@ -525,6 +525,12 @@ class _DashPole {
   final String src;
   /// 判断触发步（confirm 时=确认 x）
   final int triggerX;
+  /// 判断中组右沿（confirm=-1）
+  final int fractalX2;
+  /// 右组左沿（confirm=-1；刚确认时可用 triggerX 充当）
+  final int rightX1;
+  /// 右组右沿
+  final int rightX2;
 
   const _DashPole({
     required this.poleX,
@@ -532,6 +538,9 @@ class _DashPole {
     required this.endpoint,
     required this.src,
     required this.triggerX,
+    this.fractalX2 = -1,
+    this.rightX1 = -1,
+    this.rightX2 = -1,
   });
 }
 
@@ -596,6 +605,7 @@ List<_DashPole> _collectConfirmPoles({
 }
 
 /// 判断极点：扫 (prevPole, judgment.x] 内方向首极值（钉在判断触发步，不随 asOf 拉长）。
+/// 对齐提交 10ead1f 画线口径·改版v2（出现分型判断时的虚线拆段）。
 _DashPole? _judgmentPole({
   required List<KlineBar> bars,
   required _DashPole prev,
@@ -617,6 +627,9 @@ _DashPole? _judgmentPole({
     endpoint: ep,
     src: 'judgment',
     triggerX: j.x,
+    fractalX2: j.fractalX2,
+    rightX1: j.rightX1,
+    rightX2: j.rightX2,
   );
 }
 
@@ -640,11 +653,16 @@ bool _frozenCoversPoles({
 
 /// 动态KN + 当下分型判断拆段的构建中连线（全层同构）。
 ///
-/// [liveJudgments]：as-of 当下重算的有效判断（禁止用会话历史，否则失效判断无法回退）。
-/// 口径：
-/// - 判断极点钉在 judgment.x 扫价，不随 asOf 拉长（故 49~57 仍 32→44）；
-/// - 开口尖端仅当末判断 triggerX==asOf，或无判断时从末确认→asOf；
-/// - 确认↔确认且未被冻结实线覆盖 → 实线；判断↔判断 → 实线定格；确认↔判断 → 虚线。
+/// [liveJudgments]：as-of 当下重算的有效判断（禁止用会话历史，否则失效判断自动回退）。
+/// 口径（全层同构）：
+/// - 判断极点钉在 (上一极点, judgment.x] 扫价（buildingTailEndpoint），不随 asOf 拉长；
+/// - 右组=分型第三元素的 K0 跨度 [rightX1,rightX2]
+///   （K0 例确认@8 → [8,8]；K1 例判断@58 → [55,58]）；
+/// - 判断刚成立开口：起点=判断极点；终点=右组内方向首极值
+///   （扫 (rightX1-1, min(asOf,rightX2)]；禁止扫进中组如 44→47）；
+/// - 确认刚成立（triggerX==asOf）开口：终点=右组首极值（K0 右组=[x,x]）；
+///   确认后随 asOf 延伸仍从确认极点扫价；
+/// - 确认↔确认(未冻覆盖)实线；判断↔判断实线定格；确认↔判断虚线。
 List<DisplayBuildingLine> computeDisplayBuildingLines({
   required List<KlineBar> bars,
   required int asOf,
@@ -752,19 +770,45 @@ List<DisplayBuildingLine> computeDisplayBuildingLines({
   }
   if (allowOpen) {
     final openDir = last.fx == 'BOTTOM' ? 1 : -1;
-    final tip = buildingTailEndpoint(
-      bars: bars,
-      afterConfirmX: last.poleX,
-      asOfX: asOf,
-      buildingDir: openDir,
-    );
-    if (tip != null && tip.barIdx != last.poleX) {
+    LevelLineEndpoint? tip;
+    final beginEp = last.endpoint;
+
+    if (last.src == 'judgment' && last.rightX1 >= 0) {
+      // 判断开口：右组 [rightX1,rightX2] 内方向首极值
+      final rightEnd =
+          last.rightX2 >= last.rightX1 ? last.rightX2 : last.rightX1;
+      final asOfCap = asOf < rightEnd ? asOf : rightEnd;
+      tip = buildingTailEndpoint(
+        bars: bars,
+        afterConfirmX: last.rightX1 - 1,
+        asOfX: asOfCap,
+        buildingDir: openDir,
+      );
+    } else if (last.src == 'confirm' && last.triggerX == asOf) {
+      // 确认刚成立：K0 右组=[confirm.x,confirm.x]；终点=该组内首极值
+      tip = buildingTailEndpoint(
+        bars: bars,
+        afterConfirmX: last.triggerX - 1,
+        asOfX: last.triggerX,
+        buildingDir: openDir,
+      );
+    } else {
+      // 确认后延伸：从极点扫到 asOf
+      tip = buildingTailEndpoint(
+        bars: bars,
+        afterConfirmX: last.poleX,
+        asOfX: asOf,
+        buildingDir: openDir,
+      );
+    }
+
+    if (tip != null && tip.barIdx != beginEp.barIdx) {
       out.add(DisplayBuildingLine(
-        begin: last.endpoint,
+        begin: beginEp,
         end: tip,
         dir: openDir,
         unitIdx: -1,
-        anchorX: last.poleX,
+        anchorX: beginEp.barIdx,
         corrected: last.src == 'confirm',
         beginSrc: last.src,
         endSrc: 'open',
@@ -773,8 +817,6 @@ List<DisplayBuildingLine> computeDisplayBuildingLines({
       ));
     }
   }
-
-
 
   return out;
 }

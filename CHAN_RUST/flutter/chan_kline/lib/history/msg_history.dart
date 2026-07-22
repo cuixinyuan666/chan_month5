@@ -17,6 +17,9 @@ class MsgHistory {
   /// 命名变更是否已记录（进程内只记一次，便于从历史记录追溯完整更名过程）
   static bool _namingRenameLogged = false;
 
+  /// 种子框首段口径是否已记录（进程内去重）
+  static bool _seedBoxFirstLogged = false;
+
   final List<MsgHistoryEntry> _rows = [];
 
   List<MsgHistoryEntry> get rows => List.unmodifiable(_rows);
@@ -150,16 +153,26 @@ class MsgHistory {
   /// 展示轨：动态 KN 当确认段画虚线；分型确认优先纠正/改实线；不回写。
   void appendDisplayTrackDynamicKnBuildingLines() {
     append(
-      '【画线口径·改版v2】KN/K0 构建中连线=动态KN几何 + 当下分型判断拆段：'
-      'liveJudgments=asOf 重算（禁止会话历史，失效判断自动回退）；'
-      '判断极点钉在 judgment.x 扫价（buildingTailEndpoint），不随 asOf 拉长；'
-      '开口尖端仅末判断 triggerX==asOf，或无判断时末确认→asOf；'
-      '确认↔确认(未冻覆盖)实线；判断↔判断实线定格；确认↔判断虚线；'
-      '确认优先；不回写永久结构。对照预期：46/47 拆段→48 确认实线→49~57 钉44→58 多段→59 回退。',
+      '【画线口径·改版v2+右组跨度首极值开口】KN/K0 构建中连线=动态KN几何 + 当下分型判断拆段：'
+      '右组=分型第三元素 K0 跨度[rightX1,rightX2]全层同构'
+      '（K0 确认@8→[8,8]；K1 判断@58→[55,58]）；'
+      '判断刚成立开口：极点→右组内方向首极值；确认刚成立开口：右组=[x,x] 内首极值；'
+      '禁止中组内扫价（如 44→47）；确认后延伸仍从确认极点扫 asOf。',
     );
+  }
+
+  /// 种子框首段（口径 A）：删审判；首两单元不做包含；JUDGE/CONFIRM 虚实线。
+  void appendSeedBoxFirstSeg() {
+    if (_seedBoxFirstLogged) return;
+    _seedBoxFirstLogged = true;
     append(
-      '【调试·任务口径v2】日志字段：liveJ / poles / allowOpen / solid|open；'
-      '复制历史看【调试·动态KN虚线】核对 asOf=46..59。',
+      '【首段策略·种子框口径A】已删除 trial/审判/bootstrap。'
+      '每层第一个 Kn=种子合并框：group0 单元素永不吸收第二根；'
+      'n>0 确认前可随下层进行中单元 probe 动态刷新高低，首分型确认后冻结。'
+      '第二 Kn 不与种子框做包含，只与后续 Kn 关系。'
+      '画线：首分型 JUDGE→A→B(/B→C)虚线；CONFIRM→A→B实(冻结段)、B→C虚。'
+      '例外：首两单元不做包含（全层同构字面例外，登记 README）。'
+      '历史记录按钮与 lib/history/ 常驻不得删。',
     );
   }
 
@@ -172,7 +185,10 @@ class MsgHistory {
     required List<DisplayBuildingLine> lines,
     List<FractalJudgmentEvent> liveJudgments = const [],
   }) {
-    final jPart = liveJudgments.map((j) => '${j.x}:${j.fx}').join(',');
+    final jPart = liveJudgments
+        .map((j) =>
+            '${j.x}:${j.fx}(${j.fractalX1},${j.fractalX2}|r${j.rightX1}-${j.rightX2})')
+        .join(',');
     final unitPart = virtualUnits
         .map((u) =>
             '#${u.idx}dir${u.dir}[${u.x1},${u.x2}]'

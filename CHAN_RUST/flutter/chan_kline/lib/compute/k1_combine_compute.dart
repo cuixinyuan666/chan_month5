@@ -7,7 +7,7 @@ import '../models/kline_combine_frame.dart';
 import 'k1_bar_view_compute.dart';
 
 /// 十字线 as-of / 主图展示轨：与 Rust `build_k1_combine_frames_with` 同口径
-/// （view 坐标 + 半侧锚定 + 截断监察）。
+/// （view 坐标 + 半侧锚定 + 截断监察 + 种子框首两单元不做包含）。
 /// 展示轨可含冻结 + 进行中/pending（`asOfK1Bars(includeBuilding: true)` 或
 /// `asOfLevelVirtualK1Bars`）；永久 L2 feed 仍只认冻结，本函数不回写结构。
 
@@ -181,6 +181,23 @@ List<KlineCombineFrame> computeK1CombineFrames(
     final last = highs.length - 1;
     final dir = combineDir(highs[last], lows[last], b.high, b.low);
 
+    // 种子框口径 A：首两单元强制独立，不做包含吸收（对齐 Rust seed_skip_first）
+    if (highs.length == 1) {
+      final forcedDir = dir == 'COMBINE' ? 'UP' : dir;
+      highs.add(b.high);
+      lows.add(b.low);
+      dirs.add(forcedDir);
+      x1s.add(v.viewX1);
+      x2s.add(v.viewX2);
+      t1s.add(t1);
+      t2s.add(t2);
+      unitCounts.add(1);
+      fxAt.add('UNKNOWN');
+      endAtLeftHalf.add(v.endAtLeftHalf);
+      startAtRightHalf.add(v.startAtRightHalf);
+      continue;
+    }
+
     if (dir == 'COMBINE') {
       final g = truncGuard();
       if (g != null &&
@@ -196,10 +213,15 @@ List<KlineCombineFrame> computeK1CombineFrames(
         final truncFx = g.upLeg ? 'TOP' : 'BOTTOM';
         fxAt[last] = truncFx;
         onFxEvent(truncFx, highs[last], lows[last]);
+        // 截断：分型框=被标分型的左组（与确认 fractal_x1/x2 同口径）
         judgmentEvents?.add(FractalJudgmentEvent(
           x: v.viewX2,
           fx: truncFx,
           truncated: true,
+          fractalX1: x1s[last],
+          fractalX2: x2s[last],
+          rightX1: v.viewX1,
+          rightX2: v.viewX2,
         ));
         final forced = g.upLeg ? 'DOWN' : 'UP';
         final rw = truncRewriteTrigger(
@@ -253,8 +275,16 @@ List<KlineCombineFrame> computeK1CombineFrames(
         final fx = fxAt[mid];
         if (fx == 'TOP' || fx == 'BOTTOM') {
           onFxEvent(fx, highs[mid], lows[mid]);
-          // 判断成立当步 = 第三元素单元右端 K0（与确认 x 同语义）
-          judgmentEvents?.add(FractalJudgmentEvent(x: v.viewX2, fx: fx));
+          // 判断成立当步 = 第三元素单元右端 K0；框=中组（与确认同口径）
+          judgmentEvents?.add(FractalJudgmentEvent(
+            x: v.viewX2,
+            fx: fx,
+            fractalX1: x1s[mid],
+            fractalX2: x2s[mid],
+            // 第三元素组 K0 跨度（例 asOf=58 → [55,58]）
+            rightX1: x1s[highs.length - 1],
+            rightX2: x2s[highs.length - 1],
+          ));
         }
       }
     }

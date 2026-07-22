@@ -36,10 +36,7 @@ pub use pipeline::{
     run_pipeline, LevelBundleOut, LevelConfirm, LevelSegment, LevelSnap, LevelUnitBar,
     PipelineOptions, PipelineResult,
 };
-pub use segment_first::{
-    build_pending_default_unit, resolve_segment_policy, trial_first_segment, POLICY_PENDING,
-    POLICY_PURGED, POLICY_RETAINED,
-};
+pub use segment_first::{aggregate_unit_range, pole_x_in_range};
 pub use seg_eigen::{
     BarSubSnapshot, EigenFrame, FirstSegDirSignal, K1AnalysisBundle, K1ConfirmSignal, K1Line,
 };

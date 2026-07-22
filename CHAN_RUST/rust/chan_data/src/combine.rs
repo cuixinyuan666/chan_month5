@@ -153,7 +153,7 @@ fn unit_to_virtual_bar(u: &LevelUnitBar) -> K1Bar {
     }
 }
 
-/// 单层虚拟段 K：冻结段 + 进行中 + pending 占位
+/// 单层虚拟段 K：冻结段 + 进行中（种子框方案下 pending_unit 恒空）
 fn build_level_virtual_units(level: &LevelBundleOut) -> Vec<K1Bar> {
     let mut v: Vec<K1Bar> = level
         .segments
@@ -162,7 +162,7 @@ fn build_level_virtual_units(level: &LevelBundleOut) -> Vec<K1Bar> {
         .collect();
     if let Some(active) = &level.active_unit {
         v.push(unit_to_virtual_bar(active));
-    } else if level.segment_policy == "pending" {
+    } else if level.segment_policy == "pending" || level.segment_policy == "seed" {
         if let Some(p) = &level.pending_unit {
             v.push(unit_to_virtual_bar(p));
         }
@@ -513,7 +513,8 @@ mod tests {
 
     #[test]
     fn merge_included_bars() {
-        let bars = vec![bar(0, 10.0, 9.0), bar(1, 9.5, 9.2), bar(2, 11.0, 10.0)];
+        // 种子模式仅首两单元不合并；此处让 #1/#2 互含以验证包含合并仍产生 count>=2 的帧
+        let bars = vec![bar(0, 10.0, 9.0), bar(1, 10.5, 9.6), bar(2, 10.4, 9.7)];
         let bundle = build_kline_combine_bundle(&bars);
         assert!(!bundle.frames.is_empty());
         assert!(bundle.frames.iter().any(|f| f.count >= 2));

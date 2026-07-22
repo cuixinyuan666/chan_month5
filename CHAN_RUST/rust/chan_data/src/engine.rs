@@ -327,14 +327,30 @@ impl MergedGroup {
 }
 
 /// 包含合并引擎：增量喂入单元，产出合并组与三元素分型事件
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct CombineEngine {
     groups: Vec<MergedGroup>,
+    /// 种子框模式（口径 A）：首两单元不做包含合并（group0=种子框单元素，永不吸收第二根；
+    /// group1 强制自成新组）。确认前种子框高低可由下层进行中单元 probe 刷新（见 pipeline 快照）。
+    /// 全层同构启用；仅首两单元例外，其余包含合并与三元素分型全层一致。
+    pub seed_skip_first: bool,
+}
+
+impl Default for CombineEngine {
+    fn default() -> Self {
+        Self {
+            groups: Vec::new(),
+            seed_skip_first: true,
+        }
+    }
 }
 
 impl CombineEngine {
     pub fn new() -> Self {
-        Self { groups: Vec::new() }
+        Self {
+            groups: Vec::new(),
+            seed_skip_first: true,
+        }
     }
 
     pub fn groups(&self) -> &[MergedGroup] {
@@ -359,6 +375,15 @@ impl CombineEngine {
         if self.groups.is_empty() {
             self.groups.push(MergedGroup::new_first(u, MergeDir::Up));
             return None;
+        }
+        // 种子框模式：首两单元不做包含合并（group0=种子框单元素，group1 强制自成新组）
+        if self.groups.len() == 1 && self.seed_skip_first {
+            let dir = match test_combine_range(self.groups[0].high, self.groups[0].low, u.high, u.low) {
+                MergeDir::Combine => MergeDir::Up, // 互含退化：继承种子框方向
+                other => other,
+            };
+            self.groups.push(MergedGroup::new_first(u, dir));
+            return None; // 仅两组，尚不足中组，无分型
         }
         let last = self.groups.len() - 1;
         let dir =
@@ -418,6 +443,20 @@ impl CombineEngine {
                 group_first_uid: u.uid,
                 group_x1: u.x1,
                 group_seq: 0,
+            };
+        }
+        // 种子框模式（只读探测）：首两单元不合并，第二单元强制新组视角
+        if self.groups.len() == 1 && self.seed_skip_first {
+            return ProbeState {
+                fx_event: None,
+                group_high: u.high,
+                group_low: u.low,
+                group_fx: FxKind::Unknown,
+                inner_seq: 0,
+                group_count: 1,
+                group_first_uid: u.uid,
+                group_x1: u.x1,
+                group_seq: 1,
             };
         }
         let n = self.groups.len();
@@ -533,12 +572,14 @@ mod tests {
     fn combine_absorbs_and_counts() {
         let mut eng = CombineEngine::new();
         eng.feed(&unit(0, 10.0, 9.0));
-        eng.feed(&unit(1, 9.5, 9.2)); // 被包含
-        assert_eq!(eng.groups().len(), 1);
-        assert_eq!(eng.groups()[0].unit_count, 2);
+        // 种子模式：首两单元不合并（group0=种子框单元素；group1 强制自成新组）
+        eng.feed(&unit(1, 9.5, 9.2)); // 与首组互含，但不再吸收
+        assert_eq!(eng.groups().len(), 2);
+        assert_eq!(eng.groups()[0].unit_count, 1);
+        assert_eq!(eng.groups()[1].unit_count, 1);
         let snap = eng.snapshot_for(1).unwrap();
-        assert_eq!(snap.inner_seq, 1);
-        assert_eq!(snap.group_count, 2);
+        assert_eq!(snap.inner_seq, 0);
+        assert_eq!(snap.group_count, 1);
     }
 
     /// Up 组合并同高一字线：应按高低=max 抬低点（不再跳过一字线）

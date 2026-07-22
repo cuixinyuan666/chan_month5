@@ -36,6 +36,26 @@ class LevelSnap {
   /// 当步所在 Kn 合并框序号（第几个合并框，1 起；0=未成框）
   final int mergeBoxSeq;
 
+  // ---- 种子框（首 Kn 合并框）快照：逐K当下冻结 ----
+  /// 种子框是否确定态（首个真实分型确认后冻结）
+  final bool seedConfirmed;
+  /// 种子框序号（=0；-1=无种子框）
+  final int seedBoxSeq;
+  /// 种子框区间 [x1,x2]
+  final int seedBoxX1;
+  final int seedBoxX2;
+  /// 种子框极值（high/low）
+  final double seedBoxHigh;
+  final double seedBoxLow;
+  /// 种子框分型方向（首个真实分型反向推断；UNKNOWN=未定）
+  final String seedFx;
+  /// 画线端点：A=种子极值, B=首个分型, C=次分型；-1=未就绪
+  final int drawAX;
+  final int drawBX;
+  final int drawCX;
+  /// 首个 Kn 分型状态：JUDGE=判断(线虚) / CONFIRM=确认(A→B实,B→C虚) / UNKNOWN=未就绪
+  final String firstFxState;
+
   const LevelSnap({
     required this.level,
     this.unitIdx,
@@ -54,6 +74,17 @@ class LevelSnap {
     this.combineFx = 'UNKNOWN',
     this.combineX1 = -1,
     this.mergeBoxSeq = -1,
+    this.seedConfirmed = false,
+    this.seedBoxSeq = -1,
+    this.seedBoxX1 = -1,
+    this.seedBoxX2 = -1,
+    this.seedBoxHigh = 0,
+    this.seedBoxLow = 0,
+    this.seedFx = 'UNKNOWN',
+    this.drawAX = -1,
+    this.drawBX = -1,
+    this.drawCX = -1,
+    this.firstFxState = 'UNKNOWN',
   });
 
   factory LevelSnap.fromJson(Map<String, dynamic> json) {
@@ -76,6 +107,17 @@ class LevelSnap {
       combineFx: json['combine_fx'] as String? ?? 'UNKNOWN',
       combineX1: (json['combine_x1'] as num?)?.toInt() ?? -1,
       mergeBoxSeq: (json['merge_box_seq'] as num?)?.toInt() ?? -1,
+      seedConfirmed: json['seed_confirmed'] as bool? ?? false,
+      seedBoxSeq: (json['seed_box_seq'] as num?)?.toInt() ?? -1,
+      seedBoxX1: (json['seed_box_x1'] as num?)?.toInt() ?? -1,
+      seedBoxX2: (json['seed_box_x2'] as num?)?.toInt() ?? -1,
+      seedBoxHigh: (json['seed_box_high'] as num?)?.toDouble() ?? 0,
+      seedBoxLow: (json['seed_box_low'] as num?)?.toDouble() ?? 0,
+      seedFx: json['seed_fx'] as String? ?? 'UNKNOWN',
+      drawAX: (json['draw_a_x'] as num?)?.toInt() ?? -1,
+      drawBX: (json['draw_b_x'] as num?)?.toInt() ?? -1,
+      drawCX: (json['draw_c_x'] as num?)?.toInt() ?? -1,
+      firstFxState: json['first_fx_state'] as String? ?? 'UNKNOWN',
     );
   }
 }
@@ -252,10 +294,10 @@ class LevelBundle {
   /// 末步进行中 Kn（尚未冻结）
   final LevelUnitBar? activeUnit;
 
-  /// 首段策略：pending / retained / purged
+  /// 首段策略：seed=种子框未确认 / retained=已成段（兼容旧 pending）
   final String segmentPolicy;
 
-  /// 首确认前 pending 占位段
+  /// 已废弃：种子框由 LevelSnap.seed_* 展示，恒为 null
   final LevelUnitBar? pendingUnit;
 
   const LevelBundle({
@@ -270,7 +312,7 @@ class LevelBundle {
     this.firstDir = 0,
     this.firstDirX = -1,
     this.activeUnit,
-    this.segmentPolicy = 'pending',
+    this.segmentPolicy = 'seed',
     this.pendingUnit,
   });
 
@@ -306,7 +348,7 @@ class LevelBundle {
               Map<String, dynamic>.from(json['active_unit'] as Map),
             )
           : null,
-      segmentPolicy: json['segment_policy'] as String? ?? 'pending',
+      segmentPolicy: json['segment_policy'] as String? ?? 'seed',
       pendingUnit: json['pending_unit'] is Map
           ? LevelUnitBar.fromJson(
               Map<String, dynamic>.from(json['pending_unit'] as Map),

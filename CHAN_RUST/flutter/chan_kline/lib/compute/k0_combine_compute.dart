@@ -166,6 +166,21 @@ List<KlineCombineFrame> computeK0CombineFrames(
     final last = highs.length - 1;
     final dir = combineDir(highs[last], lows[last], b.high, b.low);
 
+    // 种子框口径 A：首两根 K0 强制独立，不做包含吸收（对齐 Rust seed_skip_first）
+    if (highs.length == 1) {
+      final forcedDir = dir == 'COMBINE' ? 'UP' : dir;
+      highs.add(b.high);
+      lows.add(b.low);
+      dirs.add(forcedDir);
+      x1s.add(x);
+      x2s.add(x);
+      t1s.add(t);
+      t2s.add(t);
+      unitCounts.add(1);
+      fxAt.add('UNKNOWN');
+      continue;
+    }
+
     if (dir == 'COMBINE') {
       final g = truncGuard();
       if (g != null &&
@@ -181,10 +196,15 @@ List<KlineCombineFrame> computeK0CombineFrames(
         final truncFx = g.upLeg ? 'TOP' : 'BOTTOM';
         fxAt[last] = truncFx;
         onFxEvent(truncFx, highs[last], lows[last]);
+        // 截断：分型框=被标分型的左组（与确认 fractal_x1/x2 同口径）
         judgmentEvents?.add(FractalJudgmentEvent(
           x: x,
           fx: truncFx,
           truncated: true,
+          fractalX1: x1s[last],
+          fractalX2: x2s[last],
+          rightX1: x,
+          rightX2: x,
         ));
         final forced = g.upLeg ? 'DOWN' : 'UP';
         final rw = truncRewriteTrigger(
@@ -233,8 +253,16 @@ List<KlineCombineFrame> computeK0CombineFrames(
         final fx = fxAt[mid];
         if (fx == 'TOP' || fx == 'BOTTOM') {
           onFxEvent(fx, highs[mid], lows[mid]);
-          // 判断成立当步 = 第三元素刚入场的这根 K（与确认 x 同语义）
-          judgmentEvents?.add(FractalJudgmentEvent(x: x, fx: fx));
+          // 判断成立当步 = 第三元素刚入场的这根 K；框=中组（与确认同口径）
+          judgmentEvents?.add(FractalJudgmentEvent(
+            x: x,
+            fx: fx,
+            fractalX1: x1s[mid],
+            fractalX2: x2s[mid],
+            // 第三元素组：K0 单根，右组=[x,x]，不与中组共用
+            rightX1: x1s[highs.length - 1],
+            rightX2: x2s[highs.length - 1],
+          ));
         }
       }
     }

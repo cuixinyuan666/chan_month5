@@ -83,8 +83,10 @@ class AppDebugSnapshot {
       '极点距数值不画在折线上，十字线激活时在副图右上角固定读数。',
     );
     buf.writeln(
-      '首段策略 default_k0_policy=$defaultK0Policy（pending/retained/purged）；'
-      '截断机制 truncation_check=${truncationCheck ? "开" : "关"}。',
+      '首段策略：种子合并框（口径A，首两单元不做包含）；'
+      'default_k0_policy=$defaultK0Policy；'
+      '截断机制 truncation_check=${truncationCheck ? "开" : "关"}。'
+      '画线：JUDGE两线虚 / CONFIRM则A→B实(冻结段)、B→C虚。',
     );
     buf.writeln(
       '命名变更（2026-07-15）：中枢(ZS) 已统一更名为跨段中枢(KuaDuan)；'
@@ -204,12 +206,6 @@ class AppDebugSnapshot {
           '  active_unit idx=${u.idx} dir=${u.dir} x=[${u.x1},${u.x2}]',
         );
       }
-      if (lv.pendingUnit != null) {
-        final u = lv.pendingUnit!;
-        buf.writeln(
-          '  pending_unit idx=${u.idx} dir=${u.dir} x=[${u.x1},${u.x2}]',
-        );
-      }
       final tailSeg = lv.segments.length <= 3
           ? lv.segments
           : lv.segments.sublist(lv.segments.length - 3);
@@ -217,7 +213,7 @@ class AppDebugSnapshot {
         buf.writeln(
           '  seg idx=${s.idx} dir=${s.dir} '
           'begin=${s.beginConfirmX} end=${s.endConfirmX} '
-          'promoted=${s.isPromotedDefault}',
+          'seed_first=${s.idx == 0}',
         );
       }
     }

@@ -42,6 +42,8 @@ Future<void> main() async {
   MsgHistory.instance.appendDisplayTrackFractalJudgment();
   // 展示轨：动态KN当确认段画虚线；确认优先纠正/改实线
   MsgHistory.instance.appendDisplayTrackDynamicKnBuildingLines();
+  // 种子框首段口径 A（删审判；首两单元不做包含；JUDGE/CONFIRM 虚实）
+  MsgHistory.instance.appendSeedBoxFirstSeg();
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     await windowManager.ensureInitialized();
     const opts = WindowOptions(
@@ -365,9 +367,10 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _defaultK0Purged = true;
       }
       var virtualBars = bundle.k1Bars;
-      // 会话级 purge：审判 FAIL 出现过后，步退回首K0连线确认前也不再展示默认 K1 bar
+      // 会话级 purge：种子框首段为 A→B；步退回首K0连线确认前不再展示默认 K1 bar
       if (_defaultK0Purged &&
-          bundle.defaultK0Policy == 'pending' &&
+          (bundle.defaultK0Policy == 'pending' ||
+              bundle.defaultK0Policy == 'seed') &&
           bundle.k0Lines.isEmpty) {
         virtualBars = const [];
       }

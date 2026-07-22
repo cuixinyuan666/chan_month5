@@ -50,6 +50,43 @@ void main() {
     expect(drawn[7], 'UNKNOWN', reason: 'as-of 过滤未来');
   });
 
+  test('collectFractalJudgmentEvents kn=1：事件带中组 fractalX1/X2', () {
+    final bars = <KlineBar>[
+      for (var i = 0; i < 12; i++)
+        KlineBar(
+          idx: i,
+          timeMs: i,
+          timeText: 't$i',
+          open: 10,
+          high: (i % 4 == 1) ? 12.0 : 10.5,
+          low: (i % 4 == 3) ? 8.0 : 9.5,
+          close: 10.1,
+          volume: 1,
+          amount: 1,
+          metrics: const {},
+        ),
+    ];
+    final events = collectFractalJudgmentEvents(
+      kn: 1,
+      bars: bars,
+      levels: const [],
+      barFeatures: const [],
+      truncationCheck: true,
+    );
+    expect(events, isNotEmpty);
+    for (final e in events) {
+      expect(e.fractalX1, greaterThanOrEqualTo(0));
+      expect(e.fractalX2, greaterThanOrEqualTo(e.fractalX1));
+      expect(e.fractalX2, lessThanOrEqualTo(e.x));
+      expect(e.rightX1, greaterThanOrEqualTo(0));
+      expect(e.rightX2, greaterThanOrEqualTo(e.rightX1));
+      // K0：右组不与中组共用 → rightX1 > fractalX2
+      expect(e.rightX1, greaterThan(e.fractalX2));
+      // K0 第三元素单根
+      expect(e.rightX2, e.rightX1);
+    }
+  });
+
   test('computeFractalJudgmentSeries kn=1：稀疏打点，非整框铺满', () {
     // 构造易出分型的上下交错高低
     final bars = <KlineBar>[

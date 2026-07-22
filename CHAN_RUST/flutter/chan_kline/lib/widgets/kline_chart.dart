@@ -1390,6 +1390,146 @@ class _KlineCompositePainter extends CustomPainter {
     }
 
     _drawBuildingK0Line(canvas, w, plotTop, plotH, slotW);
+    // 种子框首段 A→B→C（level=1 / K0连线层）
+    _drawSeedAbcLines(canvas, w, plotTop, plotH, slotW, level: 1, style: null);
+  }
+
+  /// 取 as-of 当下该层种子框快照（逐K冻结，与 tooltip/ML 同源）
+  LevelSnap? _asOfSeedSnap(int level) {
+    if (barFeatures.isEmpty || bars.isEmpty) return null;
+    final asOf = segAsOf ?? bars.last.idx;
+    if (asOf < 0) return null;
+    final idx = asOf.clamp(0, barFeatures.length - 1);
+    final feat = barFeatures[idx];
+    for (final s in feat.levels) {
+      if (s.level == level) return s;
+    }
+    final li = level - 1;
+    if (li >= 0 && li < feat.levels.length) return feat.levels[li];
+    return null;
+  }
+
+  double _polePriceAt(int x, {required bool useHigh}) {
+    if (x < 0 || x >= bars.length) return 0;
+    return useHigh ? bars[x].high : bars[x].low;
+  }
+
+  /// 种子框画线：JUDGE→两线虚；CONFIRM→A→B 由冻结段承担，仅画 B→C 虚线
+  void _drawSeedAbcLines(
+    Canvas canvas,
+    double w,
+    double plotTop,
+    double plotH,
+    double slotW, {
+    required int level,
+    required ChartLevelLineStyle? style,
+  }) {
+    final snap = _asOfSeedSnap(level);
+    if (snap == null) return;
+    final state = snap.firstFxState;
+    if (state != 'JUDGE' && state != 'CONFIRM') return;
+    if (snap.drawAX < 0 || snap.drawBX < 0) return;
+    if (snap.seedFx != 'TOP' && snap.seedFx != 'BOTTOM') return;
+
+    final seedTop = snap.seedFx == 'TOP';
+    final aPrice = _polePriceAt(snap.drawAX, useHigh: seedTop);
+    final bPrice = _polePriceAt(snap.drawBX, useHigh: !seedTop);
+
+    void paintSeg(int x0, double p0, int x1, double p1, {required bool dashed}) {
+      final geomMin = math.min(x0, x1);
+      final geomMax = math.max(x0, x1);
+      if (geomMax < viewport.viewXMin - 1 || geomMin > viewport.viewXMax + 1) {
+        return;
+      }
+      final a = Offset(
+        _barCenterX(x0, w, slotW),
+        priceRange.yOf(p0, plotTop, plotH),
+      );
+      final b = Offset(
+        _barCenterX(x1, w, slotW),
+        priceRange.yOf(p1, plotTop, plotH),
+      );
+      if (style != null) {
+        final paint = Paint()
+          ..color = style.color
+          ..strokeWidth = dashed ? style.buildingStrokeWidth : style.strokeWidth
+          ..style = PaintingStyle.stroke;
+        _drawStyledSegmentLine(
+          canvas,
+          a,
+          b,
+          paint,
+          style,
+          building: dashed && showBuildingDash,
+        );
+      } else {
+        final paint = Paint()
+          ..color = ChartLineColors.bi.withValues(alpha: dashed ? 0.55 : 1.0)
+          ..strokeWidth = dashed ? 1.4 : 1.6
+          ..style = PaintingStyle.stroke;
+        if (dashed && showBuildingDash) {
+          _drawDashedLine(canvas, a, b, paint);
+        } else {
+          canvas.drawLine(a, b, paint);
+        }
+      }
+    }
+
+    if (state == 'JUDGE') {
+      paintSeg(snap.drawAX, aPrice, snap.drawBX, bPrice, dashed: true);
+      if (snap.drawCX >= 0) {
+        final cPrice = _polePriceAt(snap.drawCX, useHigh: seedTop);
+        paintSeg(snap.drawBX, bPrice, snap.drawCX, cPrice, dashed: true);
+      }
+    } else {
+      // CONFIRM：A→B 实线由已冻结 LevelSegment 绘制；此处只补 B→C 虚线
+      if (snap.drawCX >= 0) {
+        final cPrice = _polePriceAt(snap.drawCX, useHigh: seedTop);
+        paintSeg(snap.drawBX, bPrice, snap.drawCX, cPrice, dashed: true);
+      }
+    }
+  }
+
+  /// 种子合并框叠加（口径 A：确认前可虚线，确认后实线金色）
+  void _drawSeedBoxOverlay(
+    Canvas canvas,
+    double w,
+    double plotTop,
+    double plotH,
+    double barW,
+    double slotW, {
+    required int level,
+    List<double> buildingDashPattern = const [4, 3],
+  }) {
+    final snap = _asOfSeedSnap(level);
+    if (snap == null || snap.seedBoxSeq < 0) return;
+    if (snap.seedBoxX1 < 0 || snap.seedBoxX2 < 0) return;
+    if (!snap.seedBoxHigh.isFinite || !snap.seedBoxLow.isFinite) return;
+
+    final frame = KlineCombineFrame(
+      x1: snap.seedBoxX1,
+      x2: snap.seedBoxX2,
+      t1: '',
+      t2: '',
+      high: snap.seedBoxHigh,
+      low: snap.seedBoxLow,
+      fx: snap.seedFx == 'UNKNOWN' ? 'UNKNOWN' : snap.seedFx,
+      count: 1,
+    );
+    const gold = Color(0xFFD4A017);
+    _drawCombineFramesOnMainChart(
+      canvas,
+      w,
+      plotTop,
+      plotH,
+      barW,
+      slotW,
+      [frame],
+      gold,
+      gold.withValues(alpha: 0.12),
+      lastAsBuilding: !snap.seedConfirmed && showBuildingDash,
+      buildingDashPattern: buildingDashPattern,
+    );
   }
 
   /// K0 构建中虚线：动态 K1 bar（asOfK1Bars）当确认段画虚线；确认纠正/改实线。
@@ -1602,6 +1742,15 @@ class _KlineCompositePainter extends CustomPainter {
         bundle: bundle,
         tailIdx: tailIdx,
       );
+      _drawSeedAbcLines(
+        canvas,
+        w,
+        plotTop,
+        plotH,
+        slotW,
+        level: kn,
+        style: ChartLevelLineStyle.forLevel(kn),
+      );
       return;
     }
     // 回退：仅 K2 且无 levels 时用旧 k1Analysis
@@ -1706,6 +1855,17 @@ class _KlineCompositePainter extends CustomPainter {
       style.color.withValues(alpha: 0.08),
       levelUnitViews: views.isNotEmpty ? views : null,
       lastAsBuilding: showBuildingDash,
+      buildingDashPattern: style.buildingDashPattern,
+    );
+    // 种子合并框：用 LevelSnap.seed_box_*（全层同构，不限 displayFrames.first）
+    _drawSeedBoxOverlay(
+      canvas,
+      w,
+      plotTop,
+      plotH,
+      barW,
+      slotW,
+      level: kn,
       buildingDashPattern: style.buildingDashPattern,
     );
   }
@@ -2501,6 +2661,17 @@ class _KlineCompositePainter extends CustomPainter {
       buildingDashPattern:
           ChartLevelLineStyle.forLevel(1).buildingDashPattern,
     );
+    // 种子框（K0合并层=level1）
+    _drawSeedBoxOverlay(
+      canvas,
+      w,
+      plotTop,
+      plotH,
+      barW,
+      slotW,
+      level: 1,
+      buildingDashPattern: ChartLevelLineStyle.forLevel(1).buildingDashPattern,
+    );
   }
 
   /// 主图 K线合并 / K1合并线框：按真实价格坐标叠加。
@@ -2609,6 +2780,17 @@ class _KlineCompositePainter extends CustomPainter {
             ChartLevelLineStyle.forLevel(2).buildingDashPattern,
       );
     }
+    // 种子框（K1合并层=level2）
+    _drawSeedBoxOverlay(
+      canvas,
+      w,
+      plotTop,
+      plotH,
+      barW,
+      slotW,
+      level: 2,
+      buildingDashPattern: ChartLevelLineStyle.forLevel(2).buildingDashPattern,
+    );
   }
 
   void _drawSubCharts(

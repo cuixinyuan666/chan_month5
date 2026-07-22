@@ -468,8 +468,15 @@ void main() {
       fractalX2: 3,
       poleX: 2,
     );
-    // 判断成立于 x=8：钉死扫价区间 (2,8]，首高在 5
-    const topJudgment = FractalJudgmentEvent(x: 8, fx: 'TOP');
+    // 判断成立于 x=8：钉死扫价区间 (2,8]，首高在 5；右组=[8,8]
+    const topJudgment = FractalJudgmentEvent(
+      x: 8,
+      fx: 'TOP',
+      fractalX1: 6,
+      fractalX2: 7,
+      rightX1: 8,
+      rightX2: 8,
+    );
 
     final at8 = computeDisplayBuildingLines(
       bars: bars,
@@ -480,13 +487,17 @@ void main() {
       liveJudgments: const [topJudgment],
     );
     expect(at8, isNotEmpty);
-    // 确认→判断虚线；开口 tip（triggerX==asOf）
+    // 确认→判断虚线；开口 tip（triggerX==asOf）→ 右组首根 8
     final closed = at8.where((l) => !l.isOpenTip).toList();
     expect(closed.length, 1);
     expect(closed.first.beginSrc, 'confirm');
     expect(closed.first.endSrc, 'judgment');
     expect(closed.first.asSolid, isFalse);
-    expect(closed.first.end.barIdx, 5); // 钉在首极值 5，不是 8
+    expect(closed.first.end.barIdx, 5); // 钉在扫价首极值 5，不是 8
+    final open = at8.where((l) => l.isOpenTip).toList();
+    expect(open.length, 1);
+    expect(open.first.begin.barIdx, 5);
+    expect(open.first.end.barIdx, 8);
 
     // asOf 前进到 15，判断仍在 live → 端点仍钉 5，无开口
     final at15 = computeDisplayBuildingLines(
@@ -501,6 +512,184 @@ void main() {
     expect(closed15.length, 1);
     expect(closed15.first.end.barIdx, 5);
     expect(at15.any((l) => l.isOpenTip), isFalse);
+  });
+
+  test('判断开口：极点→右组[55,58]内首极值（例 44→55）', () {
+    final bars = _bars(60);
+    for (var i = 33; i <= 58; i++) {
+      bars[i] = KlineBar(
+        idx: i,
+        timeMs: i,
+        timeText: 't$i',
+        open: 10,
+        high: 11.0,
+        low: 9.0,
+        close: 10,
+        volume: 1,
+        amount: 1,
+        metrics: const {},
+      );
+    }
+    bars[44] = KlineBar(
+      idx: 44,
+      timeMs: 44,
+      timeText: 't44',
+      open: 10,
+      high: 14.0,
+      low: 9.0,
+      close: 10,
+      volume: 1,
+      amount: 1,
+      metrics: const {},
+    );
+    bars[47] = KlineBar(
+      idx: 47,
+      timeMs: 47,
+      timeText: 't47',
+      open: 10,
+      high: 11.0,
+      low: 7.0,
+      close: 10,
+      volume: 1,
+      amount: 1,
+      metrics: const {},
+    );
+    // 右组内 55 为方向首低（openDir 在 TOP 后向下）
+    bars[55] = KlineBar(
+      idx: 55,
+      timeMs: 55,
+      timeText: 't55',
+      open: 10,
+      high: 11.0,
+      low: 6.0,
+      close: 10,
+      volume: 1,
+      amount: 1,
+      metrics: const {},
+    );
+    const bottomConfirm = LevelConfirm(
+      x: 30,
+      fx: 'BOTTOM',
+      value: 1,
+      fractalX1: 28,
+      fractalX2: 30,
+      poleX: 32,
+    );
+    const topJudgment = FractalJudgmentEvent(
+      x: 58,
+      fx: 'TOP',
+      fractalX1: 32,
+      fractalX2: 55,
+      rightX1: 55,
+      rightX2: 58,
+    );
+    final lines = computeDisplayBuildingLines(
+      bars: bars,
+      asOf: 58,
+      virtualUnits: const [],
+      frozenIdx: const {},
+      levelConfirms: const [bottomConfirm],
+      liveJudgments: const [topJudgment],
+    );
+    final open = lines.where((l) => l.isOpenTip).toList();
+    expect(open, isNotEmpty);
+    expect(open.first.begin.barIdx, 44);
+    expect(open.first.end.barIdx, 55);
+    expect(
+      open.any((l) => l.begin.barIdx == 44 && l.end.barIdx == 47),
+      isFalse,
+    );
+  });
+
+  test('确认刚成立开口：K0 右组=[confirm.x,confirm.x]（例 @8 → 终点 8）', () {
+    final bars = _bars(12);
+    bars[6] = KlineBar(
+      idx: 6,
+      timeMs: 6,
+      timeText: 't6',
+      open: 10,
+      high: 11,
+      low: 8.0,
+      close: 9,
+      volume: 1,
+      amount: 1,
+      metrics: const {},
+    );
+    bars[7] = KlineBar(
+      idx: 7,
+      timeMs: 7,
+      timeText: 't7',
+      open: 10,
+      high: 12,
+      low: 9.0,
+      close: 11,
+      volume: 1,
+      amount: 1,
+      metrics: const {},
+    );
+    const bottomConfirm = LevelConfirm(
+      x: 8,
+      fx: 'BOTTOM',
+      value: 1,
+      fractalX1: 6,
+      fractalX2: 7,
+      poleX: 6,
+    );
+    final lines = computeDisplayBuildingLines(
+      bars: bars,
+      asOf: 8,
+      virtualUnits: const [],
+      frozenIdx: const {},
+      levelConfirms: const [bottomConfirm],
+      liveJudgments: const [],
+    );
+    final open = lines.where((l) => l.isOpenTip).toList();
+    expect(open, isNotEmpty);
+    // 刚确认：右组=[8,8]，开口终点钉 8（不再扫 (6,8] 落在 7）
+    expect(open.first.end.barIdx, 8);
+  });
+
+  test('判断开口：K0 右组不共用中组（right=[8,8]）', () {
+    final bars = _bars(20);
+    bars[5] = KlineBar(
+      idx: 5,
+      timeMs: 5,
+      timeText: 't5',
+      open: 10,
+      high: 14,
+      low: 9.5,
+      close: 13,
+      volume: 1,
+      amount: 1,
+      metrics: const {},
+    );
+    const bottomConfirm = LevelConfirm(
+      x: 3,
+      fx: 'BOTTOM',
+      value: 1,
+      fractalX1: 1,
+      fractalX2: 3,
+      poleX: 2,
+    );
+    const topJudgment = FractalJudgmentEvent(
+      x: 8,
+      fx: 'TOP',
+      fractalX1: 6,
+      fractalX2: 7,
+      rightX1: 8,
+      rightX2: 8,
+    );
+    final lines = computeDisplayBuildingLines(
+      bars: bars,
+      asOf: 8,
+      virtualUnits: const [],
+      frozenIdx: const {},
+      levelConfirms: const [bottomConfirm],
+      liveJudgments: const [topJudgment],
+    );
+    final open = lines.where((l) => l.isOpenTip).toList();
+    expect(open.single.begin.barIdx, 5);
+    expect(open.single.end.barIdx, 8);
   });
 
   test('computeDisplayBuildingLines：判断失效回退；开口从确认→asOf', () {
@@ -583,8 +772,8 @@ void main() {
       frozenIdx: const {},
       levelConfirms: const [bottomConfirm],
       liveJudgments: const [
-        FractalJudgmentEvent(x: 8, fx: 'TOP'),
-        FractalJudgmentEvent(x: 12, fx: 'BOTTOM'),
+        FractalJudgmentEvent(x: 8, fx: 'TOP', fractalX1: 5, fractalX2: 5),
+        FractalJudgmentEvent(x: 12, fx: 'BOTTOM', fractalX1: 10, fractalX2: 10),
       ],
     );
     final jj = lines.where(

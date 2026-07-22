@@ -17,9 +17,9 @@ int fxToSigned(String fx) {
 }
 
 String _eventKey(FractalJudgmentEvent e) =>
-    '${e.x}|${e.fx}|${e.truncated ? 1 : 0}';
+    '${e.x}|${e.fx}|${e.truncated ? 1 : 0}|${e.fractalX1}|${e.fractalX2}|${e.rightX1}|${e.rightX2}';
 
-/// 步进累积：把本步事件追加进历史日志（按 x+fx+截断 去重；绝不删旧点）。
+/// 步进累积：把本步事件追加进历史日志（按 x+fx+截断+分型框 去重；绝不删旧点）。
 void mergeFractalJudgmentEventLog(
   List<FractalJudgmentEvent> history,
   List<FractalJudgmentEvent> fresh,

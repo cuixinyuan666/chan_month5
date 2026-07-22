@@ -134,7 +134,7 @@ pub struct K0Line {
     /// 已废弃：新方案无 bootstrap 引导段，固定 false
     #[serde(default)]
     pub is_bootstrap: bool,
-    /// 首K0连线确认审判 PASS：升格默认K0连线为第一根，≥2 次确认仍保留
+    /// 已废弃：首段改为种子框 A→B，固定 false
     #[serde(default)]
     pub is_promoted_default: bool,
 }
