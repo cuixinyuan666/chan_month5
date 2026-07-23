@@ -41,6 +41,8 @@ Future<void> main() async {
   MsgHistory.instance.appendKeyboardNav();
   // 展示轨动态分型判断副图（全层同构）
   MsgHistory.instance.appendDisplayTrackFractalJudgment();
+  // 副图十字 as-of：确认/极点距/截断与成交量/判断同构
+  MsgHistory.instance.appendSubChartCrosshairAsOf();
   // 展示轨：动态KN当确认段画虚线；确认优先纠正/改实线
   MsgHistory.instance.appendDisplayTrackDynamicKnBuildingLines();
   // 种子框 / 第一条虚线限制 / 种子包含截断（全层同构，常驻历史）

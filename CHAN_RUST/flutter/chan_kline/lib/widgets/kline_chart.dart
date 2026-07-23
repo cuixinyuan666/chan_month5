@@ -3000,7 +3000,10 @@ class _KlineCompositePainter extends CustomPainter {
       barW: barW,
     );
 
+    // 十字线激活时按当步截断：右侧(x>asOf)确认点不画，与成交量/分型判断同构
+    final asOf = segAsOf;
     void paintPoint(int x, int value) {
+      if (asOf != null && x > asOf) return;
       if (x < viewport.viewXMin - 1 || x > viewport.viewXMax + 1) return;
       if (value == 0) return;
       final cx = _barCenterX(x, w, slotW) + dx;
@@ -3160,9 +3163,15 @@ class _KlineCompositePainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round;
 
+    // 十字线激活时按当步截断：右侧(idx>asOf)极点距折线不画，与主图/成交量同构
+    final asOf = segAsOf;
     Offset? prev;
     for (var i = 0; i < series.length; i++) {
       final idx = bars[i].idx;
+      if (asOf != null && idx > asOf) {
+        prev = null;
+        continue;
+      }
       if (idx < viewport.viewXMin - 1 || idx > viewport.viewXMax + 1) {
         prev = null;
         continue;
@@ -3204,7 +3213,10 @@ class _KlineCompositePainter extends CustomPainter {
       barW: barW,
     );
 
+    // 十字线激活时按当步截断：右侧(x>asOf)截断点不画，与分型确认/成交量同构
+    final asOf = segAsOf;
     void paintPoint(int x, int value) {
+      if (asOf != null && x > asOf) return;
       if (x < viewport.viewXMin - 1 || x > viewport.viewXMax + 1) return;
       if (value == 0) return;
       final cx = _barCenterX(x, w, slotW) + dx;
@@ -3379,9 +3391,11 @@ class _KlineCompositePainter extends CustomPainter {
     final pad = 6.0;
     final boxW = tp.width + pad * 2;
     final boxH = tp.height + pad;
-    // 固定：副图区右上角（主图下方）
+    // 固定：副图区右上角（主图下方）；
+    // 勾选指标多、读数框宽于画布时，避免 clamp 下界>上界崩画（Invalid argument: 4.0）
+    final maxLx = math.max(KlineViewport.padL, w - boxW);
     final lx = (w - KlineViewport.padR - boxW)
-        .clamp(KlineViewport.padL, w - boxW)
+        .clamp(KlineViewport.padL, maxLx)
         .toDouble();
     final ly = mainH + 4;
     final bg = Paint()..color = const Color(0xCC121212);

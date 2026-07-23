@@ -159,6 +159,15 @@ class MsgHistory {
     );
   }
 
+  /// 副图十字 as-of：确认/极点距/截断与成交量/判断同构，仅过滤 x>asOf。
+  void appendSubChartCrosshairAsOf() {
+    append(
+      '【副图十字 as-of】十字线激活时副图与主图同构：只画十字当下及之前结果；'
+      '成交量/分型判断/分型确认/极点距/截断均按 segAsOf 过滤 x>asOf（右侧不画）；'
+      '关闭十字线仍画会话末态全量；不重算确认序列、不回写结构。',
+    );
+  }
+
   /// 展示轨：动态 KN 当确认段画虚线；分型确认优先纠正/改实线；不回写。
   void appendDisplayTrackDynamicKnBuildingLines() {
     append(
