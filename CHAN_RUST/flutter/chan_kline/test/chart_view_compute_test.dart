@@ -666,7 +666,7 @@ void main() {
     );
   });
 
-  test('确认刚成立开口：K0 右组=[confirm.x,confirm.x]（例 @8 → 终点 8）', () {
+  test('确认开口（含刚成立）：从极点扫 asOf，取方向极值首次出现（取消 [x,x]）', () {
     final bars = _bars(12);
     bars[6] = KlineBar(
       idx: 6,
@@ -710,8 +710,99 @@ void main() {
     );
     final open = lines.where((l) => l.isOpenTip).toList();
     expect(open, isNotEmpty);
-    // 刚确认：右组=[8,8]，开口终点钉 8（不再扫 (6,8] 落在 7）
-    expect(open.first.end.barIdx, 8);
+    // BOTTOM 后升：扫 (6,8] 最高首次在 7（high=12），不再钉确认本根 8
+    expect(open.first.begin.barIdx, 6);
+    expect(open.first.end.barIdx, 7);
+  });
+
+  test('确认当步不跳点：TOP 极点后降向首低与下一步一致', () {
+    // 近似 002003：极点@21，确认@39；区间首低@32，确认当步不得跳到 39
+    final bars = _bars(45);
+    bars[21] = KlineBar(
+      idx: 21,
+      timeMs: 21,
+      timeText: 't21',
+      open: 11.8,
+      high: 11.89,
+      low: 11.84,
+      close: 11.88,
+      volume: 1,
+      amount: 1,
+      metrics: const {},
+    );
+    // (21,39] 内除 32 外抬高低点，保证降向首极值锁定 32
+    for (var i = 22; i <= 38; i++) {
+      if (i == 32) continue;
+      final b = bars[i];
+      bars[i] = KlineBar(
+        idx: b.idx,
+        timeMs: b.timeMs,
+        timeText: b.timeText,
+        open: b.open,
+        high: b.high < 11.9 ? 11.9 : b.high,
+        low: 11.82,
+        close: b.close,
+        volume: b.volume,
+        amount: b.amount,
+        metrics: b.metrics,
+      );
+    }
+    bars[32] = KlineBar(
+      idx: 32,
+      timeMs: 32,
+      timeText: 't32',
+      open: 11.82,
+      high: 11.83,
+      low: 11.80,
+      close: 11.81,
+      volume: 1,
+      amount: 1,
+      metrics: const {},
+    );
+    bars[39] = KlineBar(
+      idx: 39,
+      timeMs: 39,
+      timeText: 't39',
+      open: 11.86,
+      high: 11.86,
+      low: 11.85,
+      close: 11.85,
+      volume: 1,
+      amount: 1,
+      metrics: const {},
+    );
+    const topConfirm = LevelConfirm(
+      x: 39,
+      fx: 'TOP',
+      value: -1,
+      fractalX1: 20,
+      fractalX2: 22,
+      poleX: 21,
+    );
+    final at39 = computeDisplayBuildingLines(
+      bars: bars,
+      asOf: 39,
+      virtualUnits: const [],
+      frozenIdx: const {},
+      levelConfirms: const [topConfirm],
+      liveJudgments: const [],
+    );
+    final at40 = computeDisplayBuildingLines(
+      bars: bars,
+      asOf: 40,
+      virtualUnits: const [],
+      frozenIdx: const {},
+      levelConfirms: const [topConfirm],
+      liveJudgments: const [],
+    );
+    final open39 = at39.where((l) => l.isOpenTip).toList();
+    final open40 = at40.where((l) => l.isOpenTip).toList();
+    expect(open39, isNotEmpty);
+    expect(open40, isNotEmpty);
+    expect(open39.first.begin.barIdx, 21);
+    expect(open39.first.end.barIdx, 32);
+    expect(open40.first.end.barIdx, 32);
+    expect(open39.first.end.barIdx, isNot(39));
   });
 
   test('判断开口：K0 右组不共用中组（right=[8,8]）', () {

@@ -7,9 +7,14 @@
 
 # 动态库与调试符号
 **/*.dll
+**/*.dll.new
 **/*.so
 **/*.dylib
 **/*.pdb
 **/*.exe
 **/*.lib
 **/*.exp
+
+# Agent/本地调试会话日志（勿提交）
+**/debug-*.log
+debug-*.log

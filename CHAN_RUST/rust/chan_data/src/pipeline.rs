@@ -958,12 +958,26 @@ impl LevelState {
             snap.seed_box_high = g0.high;
             snap.seed_box_low = g0.low;
 
-            // D2 收紧：有非种子组后，对照末组 hn,ln 写 leave_dir（全层同构；含/重叠=0 不画）
+            // D2：对照「动态末组」hn,ln 写 leave_dir（全层同构）
+            // 动态末组=引擎已有末组；若有下层进行中 pending，则 probe 吸收/成新组后的末组高低
+            // （与展示轨动态Kn合并同口径；确认后本函数早退 leave=0，优先级：确认>动态/判断）
             let gs = self.engine.groups();
             if gs.len() >= 2 {
                 let gn = gs.last().expect("len>=2");
-                snap.seed_leave_dir =
-                    seed_leave_dir(g0.high, g0.low, gn.high, gn.low);
+                let (hn, ln) = match pending_input {
+                    Some(u) => {
+                        let ps = self.engine.probe(u);
+                        (ps.group_high, ps.group_low)
+                    }
+                    None => (gn.high, gn.low),
+                };
+                snap.seed_leave_dir = seed_leave_dir(g0.high, g0.low, hn, ln);
+            } else if gs.len() == 1 {
+                // 仅种子组：下层进行中即动态第二组（尚未永久 feed）
+                if let Some(u) = pending_input {
+                    snap.seed_leave_dir =
+                        seed_leave_dir(g0.high, g0.low, u.high, u.low);
+                }
             }
 
             // JUDGE：只读探测第三单元，中组(group1)分型≠0 且尚未 on_confirm
@@ -1871,5 +1885,46 @@ mod tests {
         assert!((snap.unit_open - 11.89).abs() < 1e-9);
         assert!((snap.unit_low - 11.86).abs() < 1e-9);
         assert!((snap.unit_close - 11.86).abs() < 1e-9);
+    }
+
+    /// 回归：002003 动态末组 leave 与展示轨 sit1 对齐（K0=19）
+    #[test]
+    fn seed_leave_dynamic_pending_aligns_display_002003() {
+        use crate::combine::{build_k1_combine_frames_with, build_kline_combine_bundle_with};
+        use crate::engine::seed_leave_dir;
+        let data_root =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../a_Data");
+        if !data_root.join("002003").exists() {
+            eprintln!("skip: a_Data/002003 不存在");
+            return;
+        }
+        let root = crate::resolve_data_root(Some(data_root.to_str().unwrap()));
+        let bars = crate::load_klines(
+            &root,
+            "002003",
+            "2004/07/19 10:47:00",
+            "2004/07/20 13:09:00",
+            crate::KlinePeriod::M1,
+        )
+        .expect("load 002003");
+        let as_of = 19usize;
+        let prefix = &bars[..=as_of];
+        let opt = PipelineOptions::default();
+        let pr = run_pipeline(prefix, &opt);
+        let bundle = build_kline_combine_bundle_with(prefix, &opt);
+        let vu = bundle.level_virtual_units.first().cloned().unwrap_or_default();
+        let disp = build_k1_combine_frames_with(prefix, &vu, true, true);
+        assert!(disp.len() >= 2);
+        let d0 = &disp[0];
+        let dn = disp.last().unwrap();
+        let disp_leave = seed_leave_dir(d0.high, d0.low, dn.high, dn.low);
+        assert_eq!(disp_leave, 1, "展示轨 K1合并@19 应 sit1");
+        assert!(pr.bar_level_snaps[as_of].len() > 1);
+        let snap = &pr.bar_level_snaps[as_of][1];
+        assert_eq!(snap.first_fx_state, "UNKNOWN");
+        assert_eq!(
+            snap.seed_leave_dir, 1,
+            "动态末组 probe 后 leave 应与展示轨对齐"
+        );
     }
 }

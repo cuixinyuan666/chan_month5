@@ -880,16 +880,9 @@ List<DisplayBuildingLine> _linesFromPoles({
         asOfX: asOfCap,
         buildingDir: openDir,
       );
-    } else if (last.src == 'confirm' && last.triggerX == asOf) {
-      // 确认刚成立：K0 右组=[confirm.x,confirm.x]；终点=该组内首极值
-      tip = buildingTailEndpoint(
-        bars: bars,
-        afterConfirmX: last.triggerX - 1,
-        asOfX: last.triggerX,
-        buildingDir: openDir,
-      );
     } else {
-      // 确认后延伸：从极点扫到 asOf
+      // 确认开口（含刚成立当步）：一律从极点扫到 asOf，取方向极值首次出现根
+      // （取消确认刚成立右组=[x,x] 特例，避免终点跳到确认本根）
       tip = buildingTailEndpoint(
         bars: bars,
         afterConfirmX: last.poleX,
@@ -927,8 +920,8 @@ List<DisplayBuildingLine> _linesFromPoles({
 ///   （K0 例确认@8 → [8,8]；K1 例判断@58 → [55,58]）；
 /// - 判断刚成立开口：起点=判断极点；终点=右组内方向首极值
 ///   （扫 (rightX1-1, min(asOf,rightX2)]；禁止扫进中组如 44→47）；
-/// - 确认刚成立（triggerX==asOf）开口：终点=右组首极值（K0 右组=[x,x]）；
-///   确认后随 asOf 延伸仍从确认极点扫价；
+/// - 确认开口（含刚成立当步）：一律从确认极点扫到 asOf，取方向极值首次出现根
+///   （取消右组=[confirm.x,confirm.x] 特例，避免确认当步终点跳到本根）；
 /// - 确认↔确认(未冻覆盖)实线；判断↔判断实线定格；确认↔判断虚线。
 List<DisplayBuildingLine> computeDisplayBuildingLines({
   required List<KlineBar> bars,

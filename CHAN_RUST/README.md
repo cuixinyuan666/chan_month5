@@ -119,7 +119,8 @@ cargo test -p chan_data
     - **A→B 首段**（种子极值→首个分型极值，正式入库，作为本层第一个 `LevelSegment`）；
     - **B→C 第二段**（首个分型极值→次分型极值；配对确认入库，判断态仅快照端点）。
   - 虚实线（`LevelSnap.first_fx_state` / `seed_leave_dir`，**全层同构**）：
-    - `UNKNOWN` 第一条虚线限制：首分型确认/判断前对照**末组** `hn,ln`（`groups.last()`，非仅第二框）：sit1(`hn>h1&&ln>l1`)→`+1` 画；sit2(`hn<h1&&ln<l1`)→`-1` 画；`hn<=h1&&ln>=l1`（含全等）及其它→`0` 不画；几何 begin=框内出发极值，尾端从 `seed_box_x2` 外扫；
+    - `UNKNOWN` 第一条虚线限制：首分型确认/判断前对照**动态末组** `hn,ln`（冻组合并 + 下层进行中 pending 的 probe 吸收/成组，与展示轨动态Kn合并同口径；非仅第二框）：sit1(`hn>h1&&ln>l1`)→`+1` 画；sit2(`hn<h1&&ln<l1`)→`-1` 画；`hn<=h1&&ln>=l1`（含全等）及其它→`0` 不画；几何 begin=框内出发极值，尾端从 `seed_box_x2` 外扫；
+    - 虚实线优先级：动态Kn/动态Kn合并/Kn分型判断→虚线；确认Kn/确认Kn合并/Kn分型确认→实线；**确认 > 动态/判断**；
     - `JUDGE`（下层进行中单元 probe 出首分型、尚未 `on_confirm`）：有 C 则两线均虚，仅 B 则 A→B 虚（让位 ABC，不再画 UNKNOWN 开口）；
     - `CONFIRM`：A→B 实（冻结段），B→C 虚（进行中/次分型判断）；`seed_leave_dir` 清零。
   - 种子框快照（`LevelSnap.seed_*` / `draw_a/b/c_x`）：逐K当下冻结，供 Flutter 渲染与 ML/tooltip 同源。
