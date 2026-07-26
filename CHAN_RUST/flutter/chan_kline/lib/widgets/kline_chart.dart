@@ -12,8 +12,10 @@ import '../compute/chart_view_compute.dart';
 import '../compute/fractal_judgment_compute.dart';
 import '../compute/kuaduan_compute.dart';
 import '../compute/level_unit_bar_view_compute.dart';
+import '../compute/zs_compute.dart';
 import '../history/msg_history.dart';
 import '../models/kuaduan_frame.dart';
+import '../models/zs_frame.dart';
 import '../models/k0_confirm_signal.dart';
 import '../models/bar_crosshair_feature.dart';
 import '../models/k0_line.dart';
@@ -2114,9 +2116,9 @@ class _KlineCompositePainter extends CustomPainter {
     }
   }
 
-  /// 主图原生中枢框：复用合并框横向 [_combineFrameHSpan]，直接用 Rust 逐K末态产出的 ZSFrame
-  /// （pipeline export 每步都基于冻结段重算 zs_frames，已是「as-of 冻结」版本，无需 Dart 本地重算），
+  /// 主图原生中枢框：复用合并框横向 [_combineFrameHSpan]，按层号取该层段序列产出的 ZSFrame，
   /// 画 ZD/ZG 半透明框 + 「K(n-1)原生中枢{序号}·段数」标签，九段升级追加标记。与跨段中枢同层号、独立色系。
+  /// 十字线 as-of：只认已冻结段本地重算（与跨段中枢同构）；关十字线用 Rust 末态框。
   void _drawZSOnMainChart(
     Canvas canvas,
     double w,
@@ -2134,8 +2136,18 @@ class _KlineCompositePainter extends CustomPainter {
       }
     }
     if (bundle == null) return;
-    // 原生中枢直接消费 Rust 末态框（逐K已重算），不做本地重算
-    final frames = bundle.zsFrames;
+    final List<ZSFrame> frames;
+    if (segAsOf != null) {
+      // as-of：只喂 endConfirmX<=asOf 的已冻结段，重跑原生中枢（无未来、不回写）
+      final segs = asOfLevelSegments(
+        levels: levels,
+        level: kn,
+        asOf: segAsOf!,
+      );
+      frames = computeZSFrames(segs, kn);
+    } else {
+      frames = bundle.zsFrames;
+    }
     if (frames.isEmpty) return;
 
     final style = ChartLevelLineStyle.forZS(kn);

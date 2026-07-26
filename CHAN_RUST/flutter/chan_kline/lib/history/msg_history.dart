@@ -97,13 +97,16 @@ class MsgHistory {
     );
   }
 
-  /// 构建中连线虚线尾端：扫价区间内首次方向极值所在 K0（全层同构）。
+  /// 构建中连线虚线尾端：判断极点=分型框极值（与确认同构），开口尖端=右组跨度内首极值（全层同构）。
   void appendBuildingDashTailFirstExtreme() {
     append(
-      '【画线口径】KN/K0 构建中虚线尾端「价」(X,Y)：取扫价区间 (确认当步, as-of] 内'
-      '方向极值首次出现的那根 K0（升=首个 max(high)，降=首个 min(low)；'
-      '区间仅1根则落该根；空区间退化为 asOf 本根）。'
-      '不再把 X 钉在 as-of/末根而 Y 取区间极值。全层同构（K0/K1/…/KN 共用 buildingTailEndpoint）。'
+      '【画线口径·判断极点修正】KN/K0 构建中虚线的「判断极点」已改为与确认同构：'
+      '取该 Kn 分型合并框 [fractalX1,fractalX2] 内首次方向极值（TOP=首高，BOTTOM=首低），'
+      '不再用 buildingTailEndpoint 从上一极点往 asOf 扫价。'
+      '确认极点仍为分型框极值，两者取点公式一致。'
+      '开口尖端（判断刚成立时的虚拟下一方向预览）：'
+      '起点=判断极点，终点=右组 [rightX1,rightX2]（Flutter 侧 FractalJudgmentEvent 计算，Rust LevelSnap 不直接携带）'
+      '内方向首极值（禁止扫进中组如 44→47）。'
       '冻结实线端点仍走 fx_pole_x/pole_x，未改。',
     );
   }
@@ -168,12 +171,24 @@ class MsgHistory {
     );
   }
 
+  /// 主图 Kn原生中枢：十字线 as-of 本地重算（与跨段中枢同构）；无未来、不回写。
+  void appendZSCrosshairAsOf() {
+    append(
+      '【主图十字 as-of】K(n-1)原生中枢：十字线开启时与跨段中枢同构——'
+      '只喂 endConfirmX<=asOf 的已冻结段，由 computeZSFrames（对齐 Rust find_zs 默认口径：'
+      '≥3 重叠种子、离开-返回延伸、相邻中枢 combine）本地重算框；'
+      '关闭十字线仍画 Rust 末态 zs_frames；全层同号、结果不回写、无未来数据。',
+    );
+  }
+
   /// 展示轨：动态 KN 当确认段画虚线；分型确认优先纠正/改实线；不回写。
   void appendDisplayTrackDynamicKnBuildingLines() {
     append(
       '【画线口径·改版v2+右组跨度首极值开口】KN/K0 构建中连线=动态KN几何 + 当下分型判断拆段：'
-      '右组=分型第三元素 K0 跨度[rightX1,rightX2]全层同构'
-      '（K0 确认@8→[8,8]；K1 判断@58→[55,58]）；'
+      // 注：右组 [rightX1,rightX2] 由 Flutter 侧 FractalJudgmentEvent 根据 K0/K1 合并框计算得出（非 Rust LevelSnap 直接传入），
+      // 各层合并采集（k0_combine_compute.dart / k1_combine_compute.dart）在写入 FractalJudgmentEvent 时均带齐此字段，
+      // 故画线公式一层一套、各层共用，仍为全层同构。
+      '右组=分型第三元素 K0 跨度[rightX1,rightX2]（Flutter 侧全层同构：K0 确认@8→[8,8]；K1 判断@58→[55,58]）；'
       '判断刚成立开口：极点→右组内方向首极值；'
       '确认开口（含刚成立当步）：一律从确认极点扫 (pole,asOf] 方向极值首次出现根'
       '（取消确认刚成立右组=[x,x] 特例，避免终点跳到确认本根；并列极值取先出现）；'
@@ -185,13 +200,14 @@ class MsgHistory {
   }
 
   /// 第一个分型合并框（种子框）逻辑（全层同构，常驻）。
+  /// 引擎入口：engine.rs CombineEngine.seed_skip_first flag；LevelSnap.seed_* 快照字段。
   void appendSeedBoxFirstSeg() {
     if (_seedBoxFirstLogged) return;
     _seedBoxFirstLogged = true;
     append(
       '【种子框·第一个分型合并框·全层同构】每层第一个 Kn=种子合并框 group0：'
-      '单元素永不吸收第二根；第二 Kn 强制自成 group1（首两单元不做包含，字面例外见 README）。'
-      'n>0 确认前可随下层进行中单元 probe 动态刷新高低；首个 Kn 分型确认后 seed_confirmed 冻结。'
+      'CombineEngine.seed_skip_first=true → 单元素永不吸收第二根；第二 Kn 强制自成 group1（首两单元不做包含，字面例外见 README）。'
+      'n>0 确认前可随下层进行中单元 probe 动态刷新高低；首个 Kn 分型确认后 LevelSnap.seed_confirmed 冻结。'
       '画线阶段：UNKNOWN→开口虚线（见第一条虚线限制）；JUDGE→A→B(/B→C)虚；'
       'CONFIRM→A→B实(冻结段)、B→C虚。历史记录按钮与 lib/history/ 常驻不得删。',
     );

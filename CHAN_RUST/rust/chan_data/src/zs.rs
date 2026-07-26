@@ -452,6 +452,7 @@ pub fn build_zs_for_levels(levels: &[LevelBundleOut], cfg: &ZSConfig) -> Vec<Vec
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::kuaduan::find_kuaduan_v1;
     use crate::pipeline::LevelBundleOut;
 
     fn mk_seg(idx: i64, dir: i32, high: f64, low: f64) -> LevelSegment {
@@ -685,5 +686,106 @@ mod tests {
             }
         }
         bars
+    }
+
+    /// 原生中枢 vs 跨段中枢：同一组 21 段数据，验证三个差异点
+    /// 1) 离开-返回：ZS 通过 leave-return 吸收段4/8，KuaDuan 关闭旧中枢另起
+    /// 2) 相邻合并：ZS 合并 [ZG,ZD] 重叠的相邻中枢，KuaDuan 保留独立
+    /// 3) 最终中枢数：ZS=2，KuaDuan=5
+    #[test]
+    fn zs_vs_kuaduan_shows_difference() {
+        // seg 0-2:  种子1 [ZG=12, ZD=21]
+        // seg 3:    离开 hub1 (L=25>21)
+        // seg 4:    返回 hub1 (leave-return)
+        // seg 5-6:  延伸 hub1
+        // seg 7:    离开 hub1 (L=30>21)
+        // seg 8:    返回 hub1 (leave-return)
+        // seg 9-10: 延伸 hub1
+        // seg 11:   离开 hub1 且无返回 → 闭合 (ZS count=9)
+        // seg 12-14: 种子2 [ZG=52, ZD=60]
+        // seg 15-16: 不重叠 → hub2 闭合 (count=3)
+        // seg 17-19: 种子3 [ZG=51, ZD=59]
+        // seg 20:   不重叠 → hub3 闭合 (count=3)
+        // ZS try_combine: hub2 [52,60] 与 hub3 [51,59] 重叠 → 合并 (count=6)
+        let segs = vec![
+            mk_seg(0, 1, 20.0, 10.0),
+            mk_seg(1, -1, 22.0, 12.0),
+            mk_seg(2, 1, 21.0, 11.0),
+            mk_seg(3, -1, 35.0, 25.0), // 离开 hub1
+            mk_seg(4, 1, 22.0, 13.0),  // 返回 hub1 (leave-return)
+            mk_seg(5, -1, 23.0, 14.0), // 延伸
+            mk_seg(6, 1, 24.0, 15.0),  // 延伸
+            mk_seg(7, -1, 40.0, 30.0), // 离开 hub1
+            mk_seg(8, 1, 22.0, 12.0),  // 返回 hub1 (leave-return)
+            mk_seg(9, -1, 23.0, 13.0), // 延伸
+            mk_seg(10, 1, 24.0, 14.0), // 延伸
+            mk_seg(11, -1, 50.0, 40.0), // 离开，无返回 → hub1 闭合
+            mk_seg(12, 1, 60.0, 50.0),
+            mk_seg(13, -1, 62.0, 52.0),
+            mk_seg(14, 1, 61.0, 51.0),
+            mk_seg(15, -1, 70.0, 62.0), // 不重叠 → hub2 闭合
+            mk_seg(16, 1, 70.0, 63.0),  // 不重叠 → 跳过
+            mk_seg(17, -1, 60.0, 50.0),
+            mk_seg(18, 1, 61.0, 51.0),
+            mk_seg(19, -1, 59.0, 49.0),
+            mk_seg(20, 1, 70.0, 62.0),  // 不重叠 → hub3 闭合
+        ];
+
+        // === 原生中枢（ZS）：离开-返回 + 相邻合并 → 2 个中枢 ===
+        let zs = find_zs(&segs, 1, &ZSConfig::default());
+        assert_eq!(zs.len(), 2, "ZS 应检出 2 个中枢（leave-return 吸收 + 相邻合并）");
+
+        // hub1: leave-return 吸收 seg4/8，成员=[0,1,2,4,5,6,8,9,10]，count=9
+        // ZG=max(10,12,11,13,14,15,12,13,14)=15（seg6 L=15 最高）
+        // ZD=min(20,22,21,22,23,24,22,23,24)=20（seg0 H=20 最低）
+        assert_eq!(zs[0].member_segs.len(), 9, "hub1 应含 9 段（跳过离开段 3,7,11）");
+        assert_eq!(zs[0].member_segs, vec![0, 1, 2, 4, 5, 6, 8, 9, 10]);
+        assert_eq!(zs[0].zg, 15.0, "hub1 ZG = max(low) = 15");
+        assert_eq!(zs[0].zd, 20.0, "hub1 ZD = min(high) = 20");
+        assert!(zs[0].is_nine_seg_upgrade, "hub1 覆盖 9 段应标记九段升级");
+
+        // hub2+3 合并：成员=[12,13,14,17,18,19]，count=6
+        assert_eq!(zs[1].member_segs.len(), 6, "hub2 应含 6 段（hub2+hub3 合并）");
+        assert_eq!(zs[1].zg, 52.0, "合并后 ZG = max(50,52,51,50,51,49)=52");
+        assert_eq!(zs[1].zd, 59.0, "合并后 ZD = min(60,62,61,60,61,59)=59");
+
+        // === 跨段中枢（KuaDuan）：无 leave-return，无合并 → 5 个中枢 ===
+        let kd = find_kuaduan_v1(&segs, 1);
+        assert_eq!(kd.len(), 5, "KuaDuan 应检出 5 个中枢（无 leave-return，无合并）");
+
+        // 各中枢 count=3，无延伸
+        for (i, k) in kd.iter().enumerate() {
+            assert_eq!(k.extend, 0, "KuaDuan hub{} 不应有延伸", i);
+        }
+
+        // hub1: [0,1,2]
+        assert_eq!(kd[0].zg, 12.0);
+        assert_eq!(kd[0].zd, 20.0, "KuaDuan hub1 ZD=min(20,22,21)=20");
+        assert_eq!(kd[0].start_idx, 0);
+        assert_eq!(kd[0].end_idx, 2);
+
+        // hub2: [4,5,6]（ZS 通过 leave-return 吸收了这些段，KuaDuan 没有）
+        assert_eq!(kd[1].zg, 15.0, "KuaDuan hub2 ZG=max(13,14,15)=15");
+        assert_eq!(kd[1].zd, 22.0, "KuaDuan hub2 ZD=min(22,23,24)=22");
+        assert_eq!(kd[1].start_idx, 4);
+        assert_eq!(kd[1].end_idx, 6);
+
+        // hub3: [8,9,10]
+        assert_eq!(kd[2].zg, 14.0, "KuaDuan hub3 ZG=max(12,13,14)=14");
+        assert_eq!(kd[2].zd, 22.0, "KuaDuan hub3 ZD=min(22,23,24)=22");
+        assert_eq!(kd[2].start_idx, 8);
+        assert_eq!(kd[2].end_idx, 10);
+
+        // hub4: [12,13,14]
+        assert_eq!(kd[3].zg, 52.0);
+        assert_eq!(kd[3].zd, 60.0);
+        assert_eq!(kd[3].start_idx, 12);
+        assert_eq!(kd[3].end_idx, 14);
+
+        // hub5: [17,18,19]（ZS 合并了 hub4+hub5，KuaDuan 保留独立）
+        assert_eq!(kd[4].zg, 51.0, "KuaDuan hub5 ZG=max(50,51,49)=51");
+        assert_eq!(kd[4].zd, 59.0, "KuaDuan hub5 ZD=min(60,61,59)=59");
+        assert_eq!(kd[4].start_idx, 17);
+        assert_eq!(kd[4].end_idx, 19);
     }
 }

@@ -108,7 +108,7 @@ cargo test -p chan_data
   - 上升截断：上行阶段（锚点=底分型）新单元 `最高价>=左框最高价 且 最低价<上个底分型中组最低价`（参照=本层最近一次底分型确认，含同向丢弃/校验失败的）→ 左框=顶分型中组当场确认（高低不被改写，端点=左框峰值K，非截断K），截断K强制断开成新下行组并参与后续三元素监控（监控范围>=第四根）；下降截断镜像。
   - **触发单元改写**：断开成新组时，将触发K高低改写为「可作第三元素」形态——下降截断抬低点（保留触发高）、上升截断压高点（保留破位低），便于后续双高/双低三元素接续；原始K0行情不变，仅合并引擎内几何改写。
   - 监控按锚点方向分工：上行只监控上升截断、下行只监控下降截断；常规截断在首分型确认后监察。另：**种子相对第二框包含截断**（见首段策略）在 `seed_skip_first` 路径、首分型前即可触发，`feed_guarded`/`probe_guarded` 同构。
-  - 确认事件带 `truncated` 标记（`LevelConfirm`/`BiConfirmSignal`/`SegConfirmSignal`，serde 默认 false 向后兼容）；tooltip 确认行显示 `值(截断)`，确认柱样式不变。
+  - 确认事件带 `truncated` 标记（`LevelConfirm`，serde 默认 false 向后兼容）；tooltip 确认行显示 `值(截断)`，确认柱样式不变。
   - 后续步骤同常规确认：`on_confirm` 锚定配对/有效性校验/冻结去重全流程；关闭开关=旧行为（吸收，便于新旧对比排查）。
   - 已知口径现象（评审确认）：截断场景下行段起点=左框峰值K，区间真实极值可能在截断K上（设计内，Q7=B）；分型极点取合并框语义，个别K的被吸收影线可能低/高于端点价（与截断无关的既有合并口径）。
 - **首段策略（种子框，口径 A，全层同构）**：
@@ -134,5 +134,6 @@ cargo test -p chan_data
 
 - [x] 跨段中枢 Rust 核心：`chan_data/src/kuaduan.rs`（`KuaDuan`/`KuaDuanFrame`/`find_kuaduan`/`build_kuaduan_for_levels`/`level_kuaduan_frames`，松重叠吸收器，全层同构；`run_pipeline` 的 `LevelBundleOut.kuaduan_frames` 逐层挂载，无未来函数）
 - [x] 跨段中枢 Flutter 可视化：主图指标新增 `跨段中枢(kuaduan)`，展示名 `K(n-1)跨段中枢`（笔跨段中枢=K0跨段中枢），复用合并框横向渲染画 ZD/ZG 半透明框 + 标签；默认勾选 `kuaduan(1)`
+- [x] 原生中枢 Flutter 十字线 as-of：主图 `K(n-1)原生中枢` 与跨段中枢同构——十字线开启时用 `asOfLevelSegments` + `computeZSFrames`（对齐 Rust `find_zs` 默认口径）本地重算；关闭十字线仍画 Rust 末态 `zs_frames`；全层同号、不回写、无未来
 - [ ] Android JNI 复用 `chan_data`
 - [ ] 逐 K 步进增量 API（复用 pipeline 状态，免前缀全量重算）

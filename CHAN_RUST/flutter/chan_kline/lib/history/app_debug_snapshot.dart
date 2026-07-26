@@ -62,7 +62,7 @@ class AppDebugSnapshot {
     buf.writeln(
       '十字线 tooltip 走 bar_features.levels[] 各层 LevelSnap；'
       '进行中单元可只读探测上层合并态（仅展示）；主图连线可含末态展示修正。'
-      '十字线开启时：K0合并/K1合并/Kn跨段中枢与逐步口径对齐，本地 as-of 重算框；'
+      '十字线开启时：K0合并/K1合并/Kn跨段中枢/Kn原生中枢与逐步口径对齐，本地 as-of 重算框；'
       '关闭十字线仍画 Rust 末态 frames。',
     );
     buf.writeln(
@@ -90,9 +90,7 @@ class AppDebugSnapshot {
       '画线：JUDGE两线虚 / CONFIRM则A→B实(冻结段)、B→C虚。',
     );
     buf.writeln(
-      '命名变更（2026-07-15）：中枢(ZS) 已统一更名为跨段中枢(KuaDuan)；'
-      '主图指标 ZS→跨段中枢框，展示名 K(n-1)跨段中枢（笔跨段中枢=K0跨段中枢，线段跨段中枢=K1跨段中枢）；'
-      'Rust 模块 zs→kuaduan（ZS→KuaDuan、ZSFrame→KuaDuanFrame、zs_frames→kuaduan_frames），已重建 chan_ffi.dll；JSON key 同步变更。',
+      '模块说明：Rust 两中枢模块并存——zs.rs（原生缠论中枢，ZS/ZSConfig/ZSFrame，JSON key zs_frames）与 kuaduan.rs（松重叠吸收器跨段中枢，KuaDuan/KuaDuanV1，JSON key kuaduan_frames）；主图指标各有"K(n-1)原生中枢"和"K(n-1)跨段中枢"，不同实现不同色系。',
     );
     buf.writeln(
       '命名变更（2026-07-15）：代码取消「笔/线段」概念，统一 K0/K1/…/KN。'
