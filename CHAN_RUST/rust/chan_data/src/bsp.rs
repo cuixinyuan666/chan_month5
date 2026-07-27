@@ -496,16 +496,14 @@ mod tests {
 
     #[test]
     fn build_bsp_end_to_end_from_bundle() {
-        // 离线接 run_pipeline：构造清晰交替涨跌腿的合成 K 线，验证 export 会挂 bsp_frames
+        // 离线接 run_pipeline：验证 export 会挂双套 bsp_*_frames
         let bars = synthetic_zigzag_legs(16, 8, 2.0, 0.1);
         let opt = crate::pipeline::PipelineOptions::default();
         let res = crate::pipeline::run_pipeline(&bars, &opt);
-        // 合成锯齿含多个中枢，至少有一层能检出买卖点（或至少不报错、字段存在）
-        // 这里只断言结构存在：每个 level 的 bsp_frames 字段可访问
         for lv in &res.levels {
-            let _ = &lv.bsp_frames; // 编译期字段存在即可
+            let _ = &lv.bsp_normal_frames;
+            let _ = &lv.bsp_over_seg_frames;
         }
-        // 直接对 K0 段序列 + 其 ZS 跑一次，确认函数可产出（合成数据未必有完整趋势，允许为空）
         let zs = find_zs(&res.levels[0].segments, 1, &ZSConfig::default());
         let _bsps = find_bsp(&res.levels[0].segments, &zs, 1, &BSPConfig::default());
     }

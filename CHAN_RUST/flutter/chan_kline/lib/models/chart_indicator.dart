@@ -1,24 +1,37 @@
 import 'k0_line.dart';
 import 'level_models.dart';
 
-/// 主图指标种类：连线 / 合并框 / KN线(合并拆出) / 跨段中枢框 / 原生中枢框 / 三类买卖点。
-enum MainIndicatorKind { line, combine, kn, kuaduan, zs, bsp }
+/// 主图指标种类：连线 / 合并框 / KN线 / Normal中枢 / OverSeg中枢 / 双套买卖点。
+enum MainIndicatorKind {
+  line,
+  combine,
+  kn,
+  zsNormal,
+  zsOverSeg,
+  bspNormal,
+  bspOverSeg,
+}
 
-/// 主图一项指标（按加载后 maxKn 动态生成，如 3 层 → K0/K1/K2 连线/合并/跨段中枢）。
+/// 主图一项指标（按加载后 maxKn 动态生成）。
 class MainChartIndicator {
   final MainIndicatorKind kind;
-  /// 内部层号（合并/连线/跨段中枢统一用层号）：1..maxKn。
-  /// 展示名比层号小 1：连线=K(n-1)连线，合并=K(n-1)合并，跨段中枢=K(n-1)跨段中枢，三者同号对齐。
+  /// 内部层号（合并/连线/中枢/买卖点统一用层号）：1..maxKn。
+  /// 展示名比层号小 1：连线=K(n-1)连线，中枢=K(n-1)中枢(Normal|OverSeg)。
   final int kn;
 
   const MainChartIndicator.line(this.kn) : kind = MainIndicatorKind.line;
   const MainChartIndicator.combine(this.kn) : kind = MainIndicatorKind.combine;
   const MainChartIndicator.kn(this.kn) : kind = MainIndicatorKind.kn;
-  const MainChartIndicator.kuaduan(this.kn) : kind = MainIndicatorKind.kuaduan;
-  const MainChartIndicator.zs(this.kn) : kind = MainIndicatorKind.zs;
-  const MainChartIndicator.bsp(this.kn) : kind = MainIndicatorKind.bsp;
+  const MainChartIndicator.zsNormal(this.kn)
+      : kind = MainIndicatorKind.zsNormal;
+  const MainChartIndicator.zsOverSeg(this.kn)
+      : kind = MainIndicatorKind.zsOverSeg;
+  const MainChartIndicator.bspNormal(this.kn)
+      : kind = MainIndicatorKind.bspNormal;
+  const MainChartIndicator.bspOverSeg(this.kn)
+      : kind = MainIndicatorKind.bspOverSeg;
 
-  /// 展示名比内部层号小 1：K0连线、K0合并、K0跨段中枢，… 三者同号对齐。
+  /// 展示名比内部层号小 1。
   String get label {
     switch (kind) {
       case MainIndicatorKind.line:
@@ -26,14 +39,15 @@ class MainChartIndicator {
       case MainIndicatorKind.combine:
         return 'K${kn - 1}合并';
       case MainIndicatorKind.kn:
-        // 按层命名：K0/K1/K2…（层号与合并/连线同号对齐），不再统一叫「KN」
         return 'K${kn - 1}';
-      case MainIndicatorKind.kuaduan:
-        return 'K${kn - 1}跨段中枢';
-      case MainIndicatorKind.zs:
-        return 'K${kn - 1}原生中枢';
-      case MainIndicatorKind.bsp:
-        return 'K${kn - 1}买卖点';
+      case MainIndicatorKind.zsNormal:
+        return 'K${kn - 1}中枢(Normal)';
+      case MainIndicatorKind.zsOverSeg:
+        return 'K${kn - 1}中枢(OverSeg)';
+      case MainIndicatorKind.bspNormal:
+        return 'K${kn - 1}买卖点(Normal)';
+      case MainIndicatorKind.bspOverSeg:
+        return 'K${kn - 1}买卖点(OverSeg)';
     }
   }
 
@@ -112,13 +126,10 @@ int chartMaxKn({
 /// maxKn=0（无 K0连线）时仍保留 K0合并（combine(1)）可勾。
 List<MainChartIndicator> buildMainIndicatorCatalog(int maxKn) {
   final out = <MainChartIndicator>[];
-  // 合并与连线统一层号：combine(n)=Kn-1合并；maxKn=0 仍保留 K0合并
   final combineMax = maxKn < 1 ? 1 : maxKn;
   for (var n = 1; n <= combineMax; n++) {
     out.add(MainChartIndicator.combine(n));
   }
-  // KN 合并拆出的「KN 线」：按层独立成项（K0/K1/K2…，层号与合并/连线同号），
-  // 勾选单层只画该层淡实体，避免单一 KN 一次画出所有层导致与合并框不对齐。
   final knMax = maxKn < 1 ? 1 : maxKn;
   for (var n = 1; n <= knMax; n++) {
     out.add(MainChartIndicator.kn(n));
@@ -126,17 +137,19 @@ List<MainChartIndicator> buildMainIndicatorCatalog(int maxKn) {
   for (var n = 1; n <= maxKn; n++) {
     out.add(MainChartIndicator.line(n));
   }
-  // 跨段中枢框与合并/连线同号：kuaduan(n)=K(n-1)跨段中枢（K0跨段中枢、K1跨段中枢）
+  // Normal / OverSeg 中枢与合并/连线同号
   for (var n = 1; n <= maxKn; n++) {
-    out.add(MainChartIndicator.kuaduan(n));
+    out.add(MainChartIndicator.zsNormal(n));
   }
-  // 原生中枢框与合并/连线/跨段中枢同号：zs(n)=K(n-1)原生中枢（K0原生中枢、K1原生中枢）
   for (var n = 1; n <= maxKn; n++) {
-    out.add(MainChartIndicator.zs(n));
+    out.add(MainChartIndicator.zsOverSeg(n));
   }
-  // 三类买卖点与合并/连线/跨段中枢/原生中枢同号：bsp(n)=K(n-1)买卖点（K0买卖点、K1买卖点…）
+  // 双套买卖点与中枢同号
   for (var n = 1; n <= maxKn; n++) {
-    out.add(MainChartIndicator.bsp(n));
+    out.add(MainChartIndicator.bspNormal(n));
+  }
+  for (var n = 1; n <= maxKn; n++) {
+    out.add(MainChartIndicator.bspOverSeg(n));
   }
   return out;
 }

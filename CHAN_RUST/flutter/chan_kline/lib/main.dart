@@ -27,7 +27,7 @@ import 'widgets/test_ohlc_editor_dialog.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // 命名变更追踪：中枢(ZS) → 跨段中枢(KuaDuan)、笔/线段 → K0连线/K1连线，便于调试时从历史记录追溯完整更名过程
+  // 命名变更追踪：笔/线段 → K0连线/K1连线；中枢/买卖点口径见 appendZSSplitNormalOverSeg
   MsgHistory.instance.appendNamingRename();
   // 新特性追踪：构建中合并框（虚线），便于调试时从历史记录追溯口径演进
   MsgHistory.instance.appendBuildingCombineFrame();
@@ -43,8 +43,10 @@ Future<void> main() async {
   MsgHistory.instance.appendDisplayTrackFractalJudgment();
   // 副图十字 as-of：确认/极点距/截断与成交量/判断同构
   MsgHistory.instance.appendSubChartCrosshairAsOf();
-  // 主图 Kn原生中枢：十字线 as-of 本地重算（与跨段中枢同构）
+  // 主图中枢十字 as-of（Normal/OverSeg 双算法）
   MsgHistory.instance.appendZSCrosshairAsOf();
+  // 删除跨段中枢；原生拆 Normal/OverSeg；买卖点双套；放弃 Auto
+  MsgHistory.instance.appendZSSplitNormalOverSeg();
   // 展示轨：动态KN当确认段画虚线；确认优先纠正/改实线
   MsgHistory.instance.appendDisplayTrackDynamicKnBuildingLines();
   // 种子框 / 第一条虚线限制 / 种子包含截断（全层同构，常驻历史）
@@ -127,9 +129,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
   Set<MainChartIndicator> _mainIndicators = {
     const MainChartIndicator.kn(1), // K0：默认显示原生 K0 蜡烛（可在面板关闭）
     const MainChartIndicator.combine(1),
-    const MainChartIndicator.kuaduan(1),
-    const MainChartIndicator.zs(1),
-    const MainChartIndicator.bsp(1),
+    const MainChartIndicator.zsNormal(1),
+    const MainChartIndicator.bspNormal(1),
   };
   Set<SubChartIndicator> _subIndicators = {
     const SubChartIndicator.fractalConfirm(1),
@@ -555,14 +556,17 @@ class _KlineHomePageState extends State<KlineHomePage> {
       return;
     }
     setState(() => _playing = true);
-    _playTimer = Timer.periodic(const Duration(milliseconds: 120), (_) {
-      if (!mounted) return;
+    // 异步步进：先让出事件循环，优先消化左/中/右点击（尤其暂停），再做重算
+    _playTimer = Timer.periodic(const Duration(milliseconds: 120), (_) async {
+      if (!mounted || !_playing) return;
       if (_stepIdx >= _allBars.length - 1) {
         _stopPlay();
         setState(() {});
         return;
       }
       setState(() => _stepIdx += 1);
+      await Future<void>.delayed(Duration.zero);
+      if (!mounted || !_playing) return;
       _rebuildCombine();
     });
   }
@@ -660,8 +664,12 @@ class _KlineHomePageState extends State<KlineHomePage> {
                       setState(() => _subIndicators = v),
                   indicatorsEnabled: _hasSession,
                   autoFollowLatest: true,
+                  isPlaying: _playing,
+                  // 左中右热区：会话内始终可点（尤其播放中暂停优先）；加载中才屏蔽
                   onTapStepBack: _hasSession && !_busy ? _stepBack : null,
-                  onTapPlay: _hasSession && !_busy ? _togglePlay : null,
+                  onTapPlay: _hasSession
+                      ? (_busy && !_playing ? null : _togglePlay)
+                      : null,
                   onTapStepForward:
                       _hasSession && !_busy ? _stepForward : null,
                   onLongPressReset:

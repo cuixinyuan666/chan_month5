@@ -22,4 +22,12 @@ void main() {
     expect(ChartLevelLineStyle.shortLabel(2), 'K1');
     expect(ChartLevelLineStyle.shortLabel(5), 'K4');
   });
+
+  test('同层 Normal/OverSeg 中枢配色不同', () {
+    for (var lv = 1; lv <= 6; lv++) {
+      final n = ChartLevelLineStyle.forZS(lv);
+      final o = ChartLevelLineStyle.forZSOverSeg(lv);
+      expect(n.color, isNot(o.color), reason: 'K${lv - 1} 同层中枢应异色');
+    }
+  });
 }

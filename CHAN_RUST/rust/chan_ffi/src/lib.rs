@@ -171,7 +171,7 @@ struct CombineRequest {
     /// 缺省=开启截断（与 PipelineOptions::default 一致）
     #[serde(default)]
     truncation_check: Option<bool>,
-    /// 缺省=原生中枢默认配置（need_combine=true, zs 模式, 非单段, normal 算法）
+    /// 缺省=中枢共用配置（need_combine/combine_mode/one_bi；流水线始终双算 Normal+OverSeg）
     #[serde(default)]
     zs_config: Option<ZSConfig>,
     /// 缺省=三类买卖点默认配置（趋势≥2中枢, 二类依附一类, 三类依附一类）

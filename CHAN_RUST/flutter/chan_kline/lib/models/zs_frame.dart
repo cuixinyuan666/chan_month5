@@ -1,14 +1,14 @@
-/// 原生缠论中枢镜像框（Rust `ZSFrame`；展示名「K(n-1)原生中枢」）。
+/// 缠论中枢镜像框（Rust `ZSFrame`；展示名「K(n-1)中枢(Normal|OverSeg)」）。
 /// 字段对齐合并框坐标系：`high`=ZD 上沿(更高价)、`low`=ZG 下沿(更低价)；
 /// 额外携带方向 dir、进出段 idx(biInIdx/biOutIdx)、单段/九段升级/末态确认标记。
 class ZSFrame {
-  /// 本层原生中枢序号（1-based，按时间先后）
+  /// 本层中枢序号（1-based，按时间先后）
   final int seq;
   final int x1;
   final int x2;
   final double high; // ZD 上沿（更高价）
   final double low; // ZG 下沿（更低价）
-  final int level; // 所属层号（与 combine/line/跨段中枢同号：1=K0原生中枢, 2=K1原生中枢…）
+  final int level; // 所属层号（与 combine/line 同号：1=K0中枢, 2=K1中枢…）
   final int count; // 覆盖段数（种子3 + 延伸；combine 合并后可能更多）
   final int dir; // 中枢方向（首段方向：1 向上，-1 向下）
   final bool isOneBiZs; // 是否单段（单笔）中枢

@@ -171,13 +171,29 @@ class MsgHistory {
     );
   }
 
-  /// 主图 Kn原生中枢：十字线 as-of 本地重算（与跨段中枢同构）；无未来、不回写。
+  /// 主图中枢十字 as-of：Normal/OverSeg 本地重算；无未来、不回写。
   void appendZSCrosshairAsOf() {
     append(
-      '【主图十字 as-of】K(n-1)原生中枢：十字线开启时与跨段中枢同构——'
-      '只喂 endConfirmX<=asOf 的已冻结段，由 computeZSFrames（对齐 Rust find_zs 默认口径：'
-      '≥3 重叠种子、离开-返回延伸、相邻中枢 combine）本地重算框；'
-      '关闭十字线仍画 Rust 末态 zs_frames；全层同号、结果不回写、无未来数据。',
+      '【主图十字 as-of】K(n-1)中枢(Normal|OverSeg)：十字线开启时只喂 endConfirmX<=asOf 的已冻结段，'
+      '由 computeZSFrames(algo)（对齐 Rust find_zs：Normal=≥3 互叠 / OverSeg=首末重叠，'
+      '离开-返回延伸、相邻中枢 combine）本地重算框；'
+      '关闭十字线仍画 Rust 末态 zs_normal_frames / zs_over_seg_frames；全层同号、不回写、无未来。',
+    );
+  }
+
+  /// 删除跨段中枢；原生拆 Normal/OverSeg；买卖点双套；放弃 Auto（进程内去重）。
+  static bool _zsSplitLogged = false;
+  void appendZSSplitNormalOverSeg() {
+    if (_zsSplitLogged) return;
+    _zsSplitLogged = true;
+    append(
+      '【口径变更】删除跨段中枢(KuaDuan)全部逻辑与呈现；'
+      '原生中枢拆为独立主图指标「K(n-1)中枢(Normal)」「K(n-1)中枢(OverSeg)」；'
+      '买卖点同步拆「K(n-1)买卖点(Normal)」「K(n-1)买卖点(OverSeg)」；'
+      '流水线每层双算双输出 JSON：zs_normal_frames / zs_over_seg_frames / '
+      'bsp_normal_frames / bsp_over_seg_frames；'
+      '放弃 Auto（旧工程「确定用 normal / 不确定用 over_seg」不移植）；'
+      '呈现方式对齐原原生中枢框（半透明 ZD/ZG + 标签）；全层同构、无未来、不回写。',
     );
   }
 

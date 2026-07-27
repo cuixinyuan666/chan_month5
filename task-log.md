@@ -30,6 +30,14 @@
 
 ---
 
+### 2026-07-27 — 删除跨段中枢(KuaDuan)功能并更新文档
+
+- **要点**：彻底移除跨段中枢计算与展示逻辑，清理 Rust 计算层、Flutter 展示层及测试代码；在 README.md 后续规划中记录变更。
+- **关键路径**：`CHAN_RUST/README.md`, `CHAN_RUST/rust/chan_data/src/kuaduan.rs`, `CHAN_RUST/flutter/chan_kline/lib/models/kuaduan_frame.dart`, `CHAN_RUST/flutter/chan_kline/lib/compute/kuaduan_compute.dart`, `CHAN_RUST/flutter/chan_kline/test/kuaduan_compute_test.dart`
+- **注意**：推送含文件删除的变更到 main 分支需人工确认，以免被自动拦截
+
+---
+
 ### 2026-07-27 13:59 — 清理构建产物与 IDE 缓存
 
 - **执行者**：opencode

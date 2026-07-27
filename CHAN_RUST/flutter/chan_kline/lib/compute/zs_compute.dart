@@ -1,14 +1,22 @@
 import '../models/level_models.dart';
 import '../models/zs_frame.dart';
 
-/// 十字线 as-of 视图重建专用：与 Rust `find_zs` + `zs_to_frames` 同口径（默认 ZSConfig）。
+/// 中枢算法（对齐 Rust `ZSAlgo`；Auto 已放弃）
+enum ZSAlgoKind {
+  /// ≥3 连续段互相重叠
+  normal,
+  /// 首末段重叠即可（中段可跨越）
+  overSeg,
+}
+
+/// 十字线 as-of 视图重建专用：与 Rust `find_zs` + `zs_to_frames` 同口径。
 /// 调用方应只传入**已确认冻结**段（`asOfLevelSegments`，`endConfirmX <= asOf`）。
 ///
-/// 默认口径（对齐 Rust `ZSConfig::default`）：
-/// - ≥3 连续段互相重叠成中枢（`min(high) > max(low)`）
-/// - 离开-返回延伸（离开段不重叠、返回段重叠则纳入，离开段跳过）
-/// - 相邻中枢 [ZG,ZD] 重叠则 combine 合并
-/// - 不做 one_bi_zs / over_seg
+/// 默认口径（对齐 Rust `ZSConfig::default` + 指定 algo）：
+/// - Normal：≥3 连续段互相重叠（`min(high) > max(low)`）
+/// - OverSeg：首末段重叠即可
+/// - 离开-返回延伸 + 相邻 [ZG,ZD] combine 合并
+/// - 不做 one_bi_zs
 
 class _ZS {
   int startIdx;
@@ -34,14 +42,18 @@ class _ZS {
   });
 }
 
-List<ZSFrame> computeZSFrames(List<LevelSegmentN> segs, int level) {
+List<ZSFrame> computeZSFrames(
+  List<LevelSegmentN> segs,
+  int level, {
+  ZSAlgoKind algo = ZSAlgoKind.normal,
+}) {
   if (segs.length < 3) return const [];
 
-  final zsList = _findZs(segs);
+  final zsList = _findZs(segs, algo);
   return _zsToFrames(zsList, segs, level);
 }
 
-List<_ZS> _findZs(List<LevelSegmentN> segs) {
+List<_ZS> _findZs(List<LevelSegmentN> segs, ZSAlgoKind algo) {
   final n = segs.length;
   final zsList = <_ZS>[];
   _ZS? cur;
@@ -68,7 +80,7 @@ List<_ZS> _findZs(List<LevelSegmentN> segs) {
       cur = null;
       // segs[i]（离开段）作为新候选起点，不前进
     }
-    final z = _tryConstructFrom(segs, i);
+    final z = _tryConstructFrom(segs, i, algo);
     if (z != null) {
       final len = z.memberSegs.length;
       cur = z;
@@ -126,15 +138,27 @@ void _extendZs(_ZS z, List<LevelSegmentN> segs, int pos) {
   z.isNineSegUpgrade = z.memberSegs.length >= 9;
 }
 
-_ZS? _tryConstructFrom(List<LevelSegmentN> segs, int start) {
+_ZS? _tryConstructFrom(List<LevelSegmentN> segs, int start, ZSAlgoKind algo) {
   if (start + 3 > segs.length) return null;
   final a = segs[start];
   final b = segs[start + 1];
   final c = segs[start + 2];
-  // 三者互相重叠：min(high) > max(low)（与 Rust Normal 严格大于一致）
-  final minHigh = _min3(a.high, b.high, c.high);
-  final maxLow = _max3(a.low, b.low, c.low);
-  if (minHigh <= maxLow) return null;
+  final bool ok;
+  switch (algo) {
+    case ZSAlgoKind.normal:
+      // 三者互相重叠：min(high) > max(low)
+      final minHigh = _min3(a.high, b.high, c.high);
+      final maxLow = _max3(a.low, b.low, c.low);
+      ok = minHigh > maxLow;
+      break;
+    case ZSAlgoKind.overSeg:
+      // 首末重叠即可
+      final minHigh = a.high < c.high ? a.high : c.high;
+      final maxLow = a.low > c.low ? a.low : c.low;
+      ok = minHigh > maxLow;
+      break;
+  }
+  if (!ok) return null;
   return _makeZs([start, start + 1, start + 2], segs);
 }
 

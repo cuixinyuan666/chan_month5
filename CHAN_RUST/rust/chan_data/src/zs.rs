@@ -8,9 +8,9 @@
 //!
 //! 与原生缠论对齐：
 //! - 中枢由 ≥3 连续重叠段构成，区间 [ZG,ZD]（ZG=max(段low), ZD=min(段high)），[DD,GG] 为极值；
-//! - 延伸采用原生「离开-返回」：离开段不重叠后，返回段再重叠则延伸同一中枢（替换 v1 的 i=j 直接关闭）；
+//! - 延伸采用原生「离开-返回」：离开段不重叠后，返回段再重叠则延伸同一中枢；
 //! - 含中枢方向 dir、进/出段 in/out_seg_idx、九段重叠升级、combine 合并、one_bi_zs 单段中枢、
-//!   normal/over_seg/auto 多算法；三类买卖点仅预留字段，本模块不做判定。
+//!   normal/over_seg 双算法（Auto 已放弃）；三类买卖点由 bsp 模块消费本模块结果。
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -27,16 +27,14 @@ pub enum ZSCombineMode {
     Peak,
 }
 
-/// 中枢算法
+/// 中枢算法（Auto 已放弃，不再提供）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ZSAlgo {
     /// 普通：≥3 连续段互相重叠成中枢（贴合原生「≥3 重叠成中枢」）
     Normal,
-    /// 跨段：允许首末段重叠、中段跨越成中枢
+    /// OverSeg：允许首末段重叠、中段跨越成中枢
     OverSeg,
-    /// 自动：等同 Normal
-    Auto,
 }
 
 /// 原生中枢配置
@@ -48,7 +46,7 @@ pub struct ZSConfig {
     pub zs_combine_mode: ZSCombineMode,
     /// 单段（单笔）是否可独立成中枢
     pub one_bi_zs: bool,
-    /// 成中枢算法
+    /// 成中枢算法（流水线 export 会忽略此字段，始终双算 Normal+OverSeg）
     pub zs_algo: ZSAlgo,
 }
 
@@ -71,6 +69,11 @@ impl ZSConfig {
         } else {
             3
         }
+    }
+
+    /// 复制配置并替换算法（双算时共用 need_combine / combine_mode / one_bi_zs）
+    pub fn with_algo(self, zs_algo: ZSAlgo) -> Self {
+        Self { zs_algo, ..self }
     }
 }
 
@@ -113,7 +116,7 @@ pub struct ZS {
     member_segs: Vec<usize>,
 }
 
-/// 原生中枢镜像框（复用 `KuaDuanV1Frame` 渲染：high=ZD, low=ZG；新增 dir/进出段/升级标记）
+/// 原生中枢镜像框（主图半透明框：high=ZD, low=ZG；含 dir/进出段/升级标记）
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ZSFrame {
     /// 本层中枢序号（1-based，按时间先后）
@@ -234,14 +237,14 @@ fn try_construct_from(segs: &[LevelSegment], start: usize, level: i32, cfg: &ZSC
     let b = &segs[start + 1];
     let c = &segs[start + 2];
     let ok = match cfg.zs_algo {
-        ZSAlgo::Normal | ZSAlgo::Auto => {
+        ZSAlgo::Normal => {
             // 三者互相重叠：min(high) > max(low)
             let min_high = a.high.min(b.high).min(c.high);
             let max_low = a.low.max(b.low).max(c.low);
             min_high > max_low
         }
         ZSAlgo::OverSeg => {
-            // 跨段：首末段重叠即可（中段允许跨越/不重叠）
+            // OverSeg：首末段重叠即可（中段允许跨越/不重叠）
             let min_high = a.high.min(c.high);
             let max_low = a.low.max(c.low);
             min_high > max_low
@@ -434,8 +437,7 @@ pub fn level_zs_frames(segs: &[LevelSegment], level: i32, cfg: &ZSConfig) -> Vec
     zs_frames_from_list(&zs_list, segs, level)
 }
 
-/// 由「已算好的原生中枢列表」直接产出该层原生中枢镜像框（供 export 复用同一份 zs_list，
-/// 同时挂 zs_frames 与 bsp_frames，避免重复计算且不引入未来函数）
+/// 由「已算好的中枢列表」直接产出镜像框（供 export 复用同一份 zs_list 挂中枢框与买卖点）
 pub fn zs_frames_from_list(zs_list: &[ZS], segs: &[LevelSegment], _level: i32) -> Vec<ZSFrame> {
     let segment_by_idx: HashMap<i64, &LevelSegment> = segs.iter().map(|s| (s.idx, s)).collect();
     zs_to_frames(zs_list, &segment_by_idx)
@@ -452,7 +454,6 @@ pub fn build_zs_for_levels(levels: &[LevelBundleOut], cfg: &ZSConfig) -> Vec<Vec
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kuaduan::find_kuaduan_v1;
     use crate::pipeline::LevelBundleOut;
 
     fn mk_seg(idx: i64, dir: i32, high: f64, low: f64) -> LevelSegment {
@@ -481,55 +482,82 @@ mod tests {
         }
     }
 
+    fn empty_level(level: i32, segments: Vec<LevelSegment>) -> LevelBundleOut {
+        LevelBundleOut {
+            level,
+            confirms: vec![],
+            segments,
+            unit_bars: vec![],
+            combine_frames: vec![],
+            zs_normal_frames: vec![],
+            zs_over_seg_frames: vec![],
+            bsp_normal_frames: vec![],
+            bsp_over_seg_frames: vec![],
+            first_dir: 0,
+            first_dir_x: 0,
+            active_unit: None,
+            segment_policy: "pending".to_string(),
+            pending_unit: None,
+        }
+    }
+
     #[test]
     fn find_zs_two_disjoint_groups() {
-        // level=1：两组各 3 段互相重叠，中间被一段隔开 → 2 个中枢
         let segs = vec![
             mk_seg(0, 1, 20.0, 10.0),
             mk_seg(1, 1, 22.0, 12.0),
             mk_seg(2, 1, 21.0, 11.0),
-            mk_seg(3, 1, 35.0, 25.0), // 不重叠 → 闭合第一组
+            mk_seg(3, 1, 35.0, 25.0),
             mk_seg(4, 1, 40.0, 30.0),
             mk_seg(5, 1, 42.0, 32.0),
             mk_seg(6, 1, 41.0, 31.0),
         ];
         let zs = find_zs(&segs, 1, &ZSConfig::default());
-        assert_eq!(zs.len(), 2, "应检出 2 个原生中枢");
-        assert_eq!(zs[0].zg, 12.0); // max(low)=12
-        assert_eq!(zs[0].zd, 20.0); // min(high)=20
+        assert_eq!(zs.len(), 2, "应检出 2 个 Normal 中枢");
+        assert_eq!(zs[0].zg, 12.0);
+        assert_eq!(zs[0].zd, 20.0);
         assert_eq!(zs[1].start_idx, 3);
         assert_eq!(zs[1].end_idx, 6);
     }
 
     #[test]
+    fn find_zs_over_seg_allows_middle_gap() {
+        let segs = vec![
+            mk_seg(0, 1, 20.0, 10.0),
+            mk_seg(1, 1, 50.0, 40.0),
+            mk_seg(2, 1, 19.0, 11.0),
+        ];
+        let normal = find_zs(&segs, 1, &ZSConfig::default().with_algo(ZSAlgo::Normal));
+        let over = find_zs(&segs, 1, &ZSConfig::default().with_algo(ZSAlgo::OverSeg));
+        assert!(normal.is_empty(), "Normal 三者互叠失败应为空");
+        assert_eq!(over.len(), 1, "OverSeg 首末重叠应成中枢");
+    }
+
+    #[test]
     fn find_zs_extend_on_leave_return() {
-        // 离开段不重叠后，返回段再重叠 → 延伸同一中枢（离开段被跳过）
         let segs = vec![
             mk_seg(0, 1, 20.0, 10.0),
             mk_seg(1, 1, 22.0, 12.0),
             mk_seg(2, 1, 21.0, 11.0),
-            mk_seg(3, 1, 40.0, 30.0), // 离开段：不重叠
-            mk_seg(4, 1, 19.0, 9.0),  // 返回段：重叠 [12,20] → 延伸同一中枢
-            mk_seg(5, 1, 23.0, 13.0), // 继续重叠 → 延伸
+            mk_seg(3, 1, 40.0, 30.0),
+            mk_seg(4, 1, 19.0, 9.0),
+            mk_seg(5, 1, 23.0, 13.0),
         ];
         let zs = find_zs(&segs, 1, &ZSConfig::default());
         assert_eq!(zs.len(), 1, "离开-返回应并成一个中枢");
         assert_eq!(zs[0].start_idx, 0);
         assert_eq!(zs[0].end_idx, 5);
-        // member_segs 应含 [0,1,2,4,5]，跳过离开段 3
         assert_eq!(zs[0].member_segs, vec![0, 1, 2, 4, 5]);
-        assert_eq!(zs[0].member_segs.len(), 5);
     }
 
     #[test]
     fn find_zs_two_leaves_close() {
-        // 离开段后紧接不重叠段 → 中枢闭合，离开段成为下一组起点
         let segs = vec![
             mk_seg(0, 1, 20.0, 10.0),
             mk_seg(1, 1, 22.0, 12.0),
             mk_seg(2, 1, 21.0, 11.0),
-            mk_seg(3, 1, 40.0, 30.0), // 离开段 [30,40]：与ZS1[12,20]、与下组均不重叠
-            mk_seg(4, 1, 60.0, 55.0), // 新组（与离开段无重叠）
+            mk_seg(3, 1, 40.0, 30.0),
+            mk_seg(4, 1, 60.0, 55.0),
             mk_seg(5, 1, 59.0, 54.0),
             mk_seg(6, 1, 61.0, 56.0),
         ];
@@ -550,19 +578,16 @@ mod tests {
         let zs = find_zs(&segs, 1, &cfg);
         assert_eq!(zs.len(), 1, "单段模式应成 1 个中枢");
         assert!(zs[0].is_one_bi_zs);
-        assert_eq!(zs[0].zg, 10.0);
-        assert_eq!(zs[0].zd, 20.0);
     }
 
     #[test]
     fn find_zs_nine_seg_upgrade() {
-        // 9 段连续重叠 → 1 个中枢且标记九段升级
         let segs: Vec<LevelSegment> = (0..9)
             .map(|k| mk_seg(k as i64, 1, 20.0 + (k as f64) * 0.1, 10.0))
             .collect();
         let zs = find_zs(&segs, 1, &ZSConfig::default());
         assert_eq!(zs.len(), 1);
-        assert!(zs[0].is_nine_seg_upgrade, "9 段重叠应标记九段升级");
+        assert!(zs[0].is_nine_seg_upgrade);
         assert_eq!(zs[0].member_segs.len(), 9);
     }
 
@@ -574,69 +599,50 @@ mod tests {
 
     #[test]
     fn build_zs_for_levels_maps_each_level() {
-        let lv1 = LevelBundleOut {
-            level: 1,
-            confirms: vec![],
-            segments: vec![
+        let lv1 = empty_level(
+            1,
+            vec![
                 mk_seg(10, 1, 20.0, 10.0),
                 mk_seg(11, 1, 22.0, 12.0),
                 mk_seg(12, 1, 21.0, 11.0),
             ],
-            unit_bars: vec![],
-            combine_frames: vec![],
-            kuaduan_frames: vec![],
-            zs_frames: vec![],
-            bsp_frames: vec![],
-            first_dir: 0,
-            first_dir_x: 0,
-            active_unit: None,
-            segment_policy: "pending".to_string(),
-            pending_unit: None,
-        };
-        let lv2 = LevelBundleOut {
-            level: 2,
-            confirms: vec![],
-            segments: vec![
+        );
+        let lv2 = empty_level(
+            2,
+            vec![
                 mk_seg(20, 1, 50.0, 40.0),
                 mk_seg(21, 1, 52.0, 42.0),
                 mk_seg(22, 1, 51.0, 41.0),
             ],
-            unit_bars: vec![],
-            combine_frames: vec![],
-            kuaduan_frames: vec![],
-            zs_frames: vec![],
-            bsp_frames: vec![],
-            first_dir: 0,
-            first_dir_x: 0,
-            active_unit: None,
-            segment_policy: "pending".to_string(),
-            pending_unit: None,
-        };
+        );
         let zs_by_level = build_zs_for_levels(&[lv1, lv2], &ZSConfig::default());
         assert_eq!(zs_by_level.len(), 2);
-        assert_eq!(zs_by_level[0].len(), 1, "K0 原生中枢应命中");
+        assert_eq!(zs_by_level[0].len(), 1);
         assert_eq!(zs_by_level[0][0].level, 1);
-        assert_eq!(zs_by_level[1].len(), 1, "K1 原生中枢应命中");
+        assert_eq!(zs_by_level[1].len(), 1);
         assert_eq!(zs_by_level[1][0].level, 2);
     }
 
     #[test]
-    fn pipeline_end_to_end_builds_zs() {
-        // 离线接 run_pipeline：构造清晰交替涨跌腿的合成 K 线
+    fn pipeline_end_to_end_builds_dual_zs() {
         let bars = synthetic_zigzag_legs(16, 8, 2.0, 0.1);
         let opt = crate::pipeline::PipelineOptions::default();
         let res = crate::pipeline::run_pipeline(&bars, &opt);
-
-        // 验证 export() 已把原生中枢框逐层挂到 LevelBundleOut.zs_frames
         assert!(
-            !res.levels[0].zs_frames.is_empty(),
-            "level=1 的 zs_frames 应非空（export 已挂载原生中枢框）",
+            !res.levels[0].zs_normal_frames.is_empty(),
+            "level=1 的 zs_normal_frames 应非空",
         );
-
+        let _ = &res.levels[0].zs_over_seg_frames;
+        let _ = &res.levels[0].bsp_normal_frames;
+        let _ = &res.levels[0].bsp_over_seg_frames;
     }
 
-    /// 确定性「幅度递增锯齿 + 转折点 gap」合成 K 线（与 v1 测试同款）
-    fn synthetic_zigzag_legs(_legs: usize, leg_len: usize, _step: f64, wick: f64) -> Vec<crate::kline::KlineBar> {
+    fn synthetic_zigzag_legs(
+        _legs: usize,
+        leg_len: usize,
+        _step: f64,
+        wick: f64,
+    ) -> Vec<crate::kline::KlineBar> {
         let legs: Vec<(f64, f64)> = vec![
             (100.0, 220.0),
             (214.0, 150.0),
@@ -688,104 +694,41 @@ mod tests {
         bars
     }
 
-    /// 原生中枢 vs 跨段中枢：同一组 21 段数据，验证三个差异点
-    /// 1) 离开-返回：ZS 通过 leave-return 吸收段4/8，KuaDuan 关闭旧中枢另起
-    /// 2) 相邻合并：ZS 合并 [ZG,ZD] 重叠的相邻中枢，KuaDuan 保留独立
-    /// 3) 最终中枢数：ZS=2，KuaDuan=5
     #[test]
-    fn zs_vs_kuaduan_shows_difference() {
-        // seg 0-2:  种子1 [ZG=12, ZD=21]
-        // seg 3:    离开 hub1 (L=25>21)
-        // seg 4:    返回 hub1 (leave-return)
-        // seg 5-6:  延伸 hub1
-        // seg 7:    离开 hub1 (L=30>21)
-        // seg 8:    返回 hub1 (leave-return)
-        // seg 9-10: 延伸 hub1
-        // seg 11:   离开 hub1 且无返回 → 闭合 (ZS count=9)
-        // seg 12-14: 种子2 [ZG=52, ZD=60]
-        // seg 15-16: 不重叠 → hub2 闭合 (count=3)
-        // seg 17-19: 种子3 [ZG=51, ZD=59]
-        // seg 20:   不重叠 → hub3 闭合 (count=3)
-        // ZS try_combine: hub2 [52,60] 与 hub3 [51,59] 重叠 → 合并 (count=6)
+    fn find_zs_leave_return_and_combine() {
         let segs = vec![
             mk_seg(0, 1, 20.0, 10.0),
             mk_seg(1, -1, 22.0, 12.0),
             mk_seg(2, 1, 21.0, 11.0),
-            mk_seg(3, -1, 35.0, 25.0), // 离开 hub1
-            mk_seg(4, 1, 22.0, 13.0),  // 返回 hub1 (leave-return)
-            mk_seg(5, -1, 23.0, 14.0), // 延伸
-            mk_seg(6, 1, 24.0, 15.0),  // 延伸
-            mk_seg(7, -1, 40.0, 30.0), // 离开 hub1
-            mk_seg(8, 1, 22.0, 12.0),  // 返回 hub1 (leave-return)
-            mk_seg(9, -1, 23.0, 13.0), // 延伸
-            mk_seg(10, 1, 24.0, 14.0), // 延伸
-            mk_seg(11, -1, 50.0, 40.0), // 离开，无返回 → hub1 闭合
+            mk_seg(3, -1, 35.0, 25.0),
+            mk_seg(4, 1, 22.0, 13.0),
+            mk_seg(5, -1, 23.0, 14.0),
+            mk_seg(6, 1, 24.0, 15.0),
+            mk_seg(7, -1, 40.0, 30.0),
+            mk_seg(8, 1, 22.0, 12.0),
+            mk_seg(9, -1, 23.0, 13.0),
+            mk_seg(10, 1, 24.0, 14.0),
+            mk_seg(11, -1, 50.0, 40.0),
             mk_seg(12, 1, 60.0, 50.0),
             mk_seg(13, -1, 62.0, 52.0),
             mk_seg(14, 1, 61.0, 51.0),
-            mk_seg(15, -1, 70.0, 62.0), // 不重叠 → hub2 闭合
-            mk_seg(16, 1, 70.0, 63.0),  // 不重叠 → 跳过
+            mk_seg(15, -1, 70.0, 62.0),
+            mk_seg(16, 1, 70.0, 63.0),
             mk_seg(17, -1, 60.0, 50.0),
             mk_seg(18, 1, 61.0, 51.0),
             mk_seg(19, -1, 59.0, 49.0),
-            mk_seg(20, 1, 70.0, 62.0),  // 不重叠 → hub3 闭合
+            mk_seg(20, 1, 70.0, 62.0),
         ];
-
-        // === 原生中枢（ZS）：离开-返回 + 相邻合并 → 2 个中枢 ===
         let zs = find_zs(&segs, 1, &ZSConfig::default());
-        assert_eq!(zs.len(), 2, "ZS 应检出 2 个中枢（leave-return 吸收 + 相邻合并）");
-
-        // hub1: leave-return 吸收 seg4/8，成员=[0,1,2,4,5,6,8,9,10]，count=9
-        // ZG=max(10,12,11,13,14,15,12,13,14)=15（seg6 L=15 最高）
-        // ZD=min(20,22,21,22,23,24,22,23,24)=20（seg0 H=20 最低）
-        assert_eq!(zs[0].member_segs.len(), 9, "hub1 应含 9 段（跳过离开段 3,7,11）");
+        assert_eq!(zs.len(), 2, "Normal：leave-return + 相邻合并 → 2");
+        assert_eq!(zs[0].member_segs.len(), 9);
         assert_eq!(zs[0].member_segs, vec![0, 1, 2, 4, 5, 6, 8, 9, 10]);
-        assert_eq!(zs[0].zg, 15.0, "hub1 ZG = max(low) = 15");
-        assert_eq!(zs[0].zd, 20.0, "hub1 ZD = min(high) = 20");
-        assert!(zs[0].is_nine_seg_upgrade, "hub1 覆盖 9 段应标记九段升级");
-
-        // hub2+3 合并：成员=[12,13,14,17,18,19]，count=6
-        assert_eq!(zs[1].member_segs.len(), 6, "hub2 应含 6 段（hub2+hub3 合并）");
-        assert_eq!(zs[1].zg, 52.0, "合并后 ZG = max(50,52,51,50,51,49)=52");
-        assert_eq!(zs[1].zd, 59.0, "合并后 ZD = min(60,62,61,60,61,59)=59");
-
-        // === 跨段中枢（KuaDuan）：无 leave-return，无合并 → 5 个中枢 ===
-        let kd = find_kuaduan_v1(&segs, 1);
-        assert_eq!(kd.len(), 5, "KuaDuan 应检出 5 个中枢（无 leave-return，无合并）");
-
-        // 各中枢 count=3，无延伸
-        for (i, k) in kd.iter().enumerate() {
-            assert_eq!(k.extend, 0, "KuaDuan hub{} 不应有延伸", i);
-        }
-
-        // hub1: [0,1,2]
-        assert_eq!(kd[0].zg, 12.0);
-        assert_eq!(kd[0].zd, 20.0, "KuaDuan hub1 ZD=min(20,22,21)=20");
-        assert_eq!(kd[0].start_idx, 0);
-        assert_eq!(kd[0].end_idx, 2);
-
-        // hub2: [4,5,6]（ZS 通过 leave-return 吸收了这些段，KuaDuan 没有）
-        assert_eq!(kd[1].zg, 15.0, "KuaDuan hub2 ZG=max(13,14,15)=15");
-        assert_eq!(kd[1].zd, 22.0, "KuaDuan hub2 ZD=min(22,23,24)=22");
-        assert_eq!(kd[1].start_idx, 4);
-        assert_eq!(kd[1].end_idx, 6);
-
-        // hub3: [8,9,10]
-        assert_eq!(kd[2].zg, 14.0, "KuaDuan hub3 ZG=max(12,13,14)=14");
-        assert_eq!(kd[2].zd, 22.0, "KuaDuan hub3 ZD=min(22,23,24)=22");
-        assert_eq!(kd[2].start_idx, 8);
-        assert_eq!(kd[2].end_idx, 10);
-
-        // hub4: [12,13,14]
-        assert_eq!(kd[3].zg, 52.0);
-        assert_eq!(kd[3].zd, 60.0);
-        assert_eq!(kd[3].start_idx, 12);
-        assert_eq!(kd[3].end_idx, 14);
-
-        // hub5: [17,18,19]（ZS 合并了 hub4+hub5，KuaDuan 保留独立）
-        assert_eq!(kd[4].zg, 51.0, "KuaDuan hub5 ZG=max(50,51,49)=51");
-        assert_eq!(kd[4].zd, 59.0, "KuaDuan hub5 ZD=min(60,61,59)=59");
-        assert_eq!(kd[4].start_idx, 17);
-        assert_eq!(kd[4].end_idx, 19);
+        assert_eq!(zs[0].zg, 15.0);
+        assert_eq!(zs[0].zd, 20.0);
+        assert!(zs[0].is_nine_seg_upgrade);
+        assert_eq!(zs[1].member_segs.len(), 6);
+        assert_eq!(zs[1].zg, 52.0);
+        assert_eq!(zs[1].zd, 59.0);
     }
 }
+

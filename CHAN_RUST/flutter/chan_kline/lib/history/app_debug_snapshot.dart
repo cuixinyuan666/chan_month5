@@ -2,12 +2,14 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../models/bar_crosshair_feature.dart';
+import '../models/bsp_frame.dart';
 import '../models/k0_confirm_signal.dart';
 import '../models/k0_line.dart';
 import '../models/kline_bar.dart';
 import '../models/kline_combine_frame.dart';
 import '../models/level_models.dart';
 import '../models/k1_analysis.dart';
+import '../models/zs_frame.dart';
 import 'msg_history.dart';
 
 /// 生成可复制页面快照（含最近历史记录，便于粘贴排查）。
@@ -62,7 +64,7 @@ class AppDebugSnapshot {
     buf.writeln(
       '十字线 tooltip 走 bar_features.levels[] 各层 LevelSnap；'
       '进行中单元可只读探测上层合并态（仅展示）；主图连线可含末态展示修正。'
-      '十字线开启时：K0合并/K1合并/Kn跨段中枢/Kn原生中枢与逐步口径对齐，本地 as-of 重算框；'
+      '十字线开启时：K0合并/K1合并/Kn中枢(Normal|OverSeg)与逐步口径对齐，本地 as-of 重算框；'
       '关闭十字线仍画 Rust 末态 frames。',
     );
     buf.writeln(
@@ -90,7 +92,9 @@ class AppDebugSnapshot {
       '画线：JUDGE两线虚 / CONFIRM则A→B实(冻结段)、B→C虚。',
     );
     buf.writeln(
-      '模块说明：Rust 两中枢模块并存——zs.rs（原生缠论中枢，ZS/ZSConfig/ZSFrame，JSON key zs_frames）与 kuaduan.rs（松重叠吸收器跨段中枢，KuaDuan/KuaDuanV1，JSON key kuaduan_frames）；主图指标各有"K(n-1)原生中枢"和"K(n-1)跨段中枢"，不同实现不同色系。',
+      '模块说明：已删除跨段中枢(KuaDuan)；zs.rs 双算 Normal/OverSeg（JSON：zs_normal_frames / zs_over_seg_frames）；'
+      'bsp 双套买卖点（bsp_normal_frames / bsp_over_seg_frames）；Auto 已放弃；'
+      '主图指标「K(n-1)中枢(Normal|OverSeg)」「K(n-1)买卖点(Normal|OverSeg)」，同层同号、独立色系。',
     );
     buf.writeln(
       '命名变更（2026-07-15）：代码取消「笔/线段」概念，统一 K0/K1/…/KN。'
@@ -151,7 +155,6 @@ class AppDebugSnapshot {
     buf.writeln();
 
     _writeLevels(buf, levels);
-    _writeKuaDuan(buf, levels);
     _writeZS(buf, levels);
     _writeBSP(buf, levels);
     _writeDllDiag(buf, barFeatures, levels);
@@ -219,31 +222,8 @@ class AppDebugSnapshot {
     buf.writeln();
   }
 
-  static void _writeKuaDuan(StringBuffer buf, List<LevelBundle> levels) {
-    buf.writeln('【跨段中枢统计】');
-    if (levels.isEmpty) {
-      buf.writeln('（无 levels 输出）');
-      buf.writeln();
-      return;
-    }
-    for (final lv in levels) {
-      buf.writeln(
-        'K${lv.level}：跨段中枢框 kuaduan_frames=${lv.kuaduanFrames.length}',
-      );
-      // 列出本层各框序号·段数与 x 区间，便于核对合并/延伸
-      for (var i = 0; i < lv.kuaduanFrames.length; i++) {
-        final f = lv.kuaduanFrames[i];
-        final seq = f.seq > 0 ? f.seq : (i + 1);
-        buf.writeln(
-          '  #$seq count=${f.count} x=[${f.x1},${f.x2}] ZD/ZG=${f.high}/${f.low}',
-        );
-      }
-    }
-    buf.writeln();
-  }
-
   static void _writeZS(StringBuffer buf, List<LevelBundle> levels) {
-    buf.writeln('【原生中枢统计】');
+    buf.writeln('【中枢统计（Normal / OverSeg）】');
     if (levels.isEmpty) {
       buf.writeln('（无 levels 输出）');
       buf.writeln();
@@ -251,23 +231,29 @@ class AppDebugSnapshot {
     }
     for (final lv in levels) {
       buf.writeln(
-        'K${lv.level}：原生中枢框 zs_frames=${lv.zsFrames.length}',
+        'K${lv.level}：Normal=${lv.zsNormalFrames.length}；'
+        'OverSeg=${lv.zsOverSegFrames.length}',
       );
-      // 列出本层各框序号·段数与 x 区间，便于核对原生中枢成区/延伸/九段升级
-      for (var i = 0; i < lv.zsFrames.length; i++) {
-        final f = lv.zsFrames[i];
-        final seq = f.seq > 0 ? f.seq : (i + 1);
-        buf.writeln(
-          '  #$seq count=${f.count} x=[${f.x1},${f.x2}] ZD/ZG=${f.high}/${f.low}'
-          '${f.isNineSegUpgrade ? ' 9段升级' : ''}${f.isOneBiZs ? ' 单段' : ''}',
-        );
+      void dumpZS(String tag, List<ZSFrame> frames) {
+        for (var i = 0; i < frames.length; i++) {
+          final f = frames[i];
+          final seq = f.seq > 0 ? f.seq : (i + 1);
+          buf.writeln(
+            '  [$tag] #$seq count=${f.count} x=[${f.x1},${f.x2}] '
+            'ZD/ZG=${f.high}/${f.low}'
+            '${f.isNineSegUpgrade ? ' 9段升级' : ''}${f.isOneBiZs ? ' 单段' : ''}',
+          );
+        }
       }
+
+      dumpZS('Normal', lv.zsNormalFrames);
+      dumpZS('OverSeg', lv.zsOverSegFrames);
     }
     buf.writeln();
   }
 
   static void _writeBSP(StringBuffer buf, List<LevelBundle> levels) {
-    buf.writeln('【三类买卖点统计】');
+    buf.writeln('【三类买卖点统计（Normal / OverSeg）】');
     if (levels.isEmpty) {
       buf.writeln('（无 levels 输出）');
       buf.writeln();
@@ -275,16 +261,21 @@ class AppDebugSnapshot {
     }
     for (final lv in levels) {
       buf.writeln(
-        'K${lv.level}：买卖点 bsp_frames=${lv.bspFrames.length}',
+        'K${lv.level}：Normal=${lv.bspNormalFrames.length}；'
+        'OverSeg=${lv.bspOverSegFrames.length}',
       );
-      // 列出本层各买卖点：类/买卖/价位/x/段idx/关联一类段idx，便于核对与中枢、段端点对齐
-      for (final f in lv.bspFrames) {
-        final kind = '${f.isBuy ? "买" : "卖"}${f.cls}';
-        final rel = f.relateSegIdx == null ? '—' : f.relateSegIdx.toString();
-        buf.writeln(
-          '  $kind 价=${f.price} x=${f.x} seg=${f.segIdx} 关联一类seg=$rel',
-        );
+      void dumpBSP(String tag, List<BSPFrame> frames) {
+        for (final f in frames) {
+          final kind = '${f.isBuy ? "买" : "卖"}${f.cls}';
+          final rel = f.relateSegIdx == null ? '—' : f.relateSegIdx.toString();
+          buf.writeln(
+            '  [$tag] $kind 价=${f.price} x=${f.x} seg=${f.segIdx} 关联一类seg=$rel',
+          );
+        }
       }
+
+      dumpBSP('Normal', lv.bspNormalFrames);
+      dumpBSP('OverSeg', lv.bspOverSegFrames);
     }
     buf.writeln();
   }

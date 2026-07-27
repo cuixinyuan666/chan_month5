@@ -1,5 +1,5 @@
 /// 三类买卖点（BSP）镜像框（Rust `BSPFrame`；展示名「K(n-1)买卖点」）。
-/// 字段对齐合并框坐标系：直接在 Rust 末态逐K产出的 `bsp_frames` 上消费，Flutter 不做本地重算。
+/// 字段对齐合并框坐标系：直接在 Rust 末态逐K产出的 `bsp_*_frames` 上消费，Flutter 不做本地重算。
 ///
 /// 口径（纯结构趋势末端，无背驰）：
 /// - cls=1 → 一类买卖点（≥min_zs_cnt 个中枢构成趋势的末段端点）；
@@ -19,7 +19,7 @@ class BSPFrame {
   /// 主图 x（端点段 end_pole_x，锚定 1 分钟 K）
   final int x;
 
-  /// 所属层号（与 combine/line/跨段中枢/原生中枢同号：1=K0买卖点, 2=K1买卖点…）
+  /// 所属层号（与 combine/line/中枢同号：1=K0买卖点, 2=K1买卖点…）
   final int level;
 
   /// 端点 LevelSegment.idx

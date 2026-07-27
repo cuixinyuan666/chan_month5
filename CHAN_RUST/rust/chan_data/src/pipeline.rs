@@ -18,10 +18,9 @@ use crate::combine::KlineCombineFrame;
 use crate::engine::{
     seed_leave_dir, CombineEngine, FxEvent, FxKind, MergeUnit, TruncGuard,
 };
-use crate::kuaduan::KuaDuanV1Frame;
 use crate::kline::KlineBar;
 use crate::bsp::{BSPConfig, BSPFrame};
-use crate::zs::{ZSConfig, ZSFrame};
+use crate::zs::{ZSAlgo, ZSConfig, ZSFrame};
 
 
 /// 流水线选项
@@ -238,15 +237,18 @@ pub struct LevelBundleOut {
     pub unit_bars: Vec<LevelUnitBar>,
     /// 本层输入单元（K(n-1)；n=1 时为 K0）的包含合并线框
     pub combine_frames: Vec<KlineCombineFrame>,
-    /// 本层跨段中枢镜像框（K0跨段中枢 level=1 / K1跨段中枢 level=2 …；由 `kuaduan` 模块松重叠吸收器产出）
+    /// 本层 Normal 中枢框（全层同构；种子=≥3 连续互叠）
     #[serde(default)]
-    pub kuaduan_frames: Vec<KuaDuanV1Frame>,
-    /// 本层原生缠论中枢镜像框（全层同构，建立在 `LevelSegment` 上；由 `zs` 模块产出）
+    pub zs_normal_frames: Vec<ZSFrame>,
+    /// 本层 OverSeg 中枢框（全层同构；种子=首末段重叠即可）
     #[serde(default)]
-    pub zs_frames: Vec<ZSFrame>,
-    /// 本层三类买卖点镜像框（全层同构，建立在 `LevelSegment`+`ZS` 上；由 `bsp` 模块产出）
+    pub zs_over_seg_frames: Vec<ZSFrame>,
+    /// 本层基于 Normal 中枢的三类买卖点
     #[serde(default)]
-    pub bsp_frames: Vec<BSPFrame>,
+    pub bsp_normal_frames: Vec<BSPFrame>,
+    /// 本层基于 OverSeg 中枢的三类买卖点
+    #[serde(default)]
+    pub bsp_over_seg_frames: Vec<BSPFrame>,
     /// 首 N 段方向：0 未定
     pub first_dir: i32,
     pub first_dir_x: i32,
@@ -1091,19 +1093,37 @@ impl LevelState {
             }
             _ => None,
         };
-        // 原生中枢列表只算一次，zs_frames 与 bsp_frames 共用（均只读冻结段，无未来函数）
-        let zs_list = crate::zs::find_zs(&self.segments, self.level, &self.zs_config);
+        // 双算双输出：Normal / OverSeg 各算一份中枢，再各挂一份买卖点（只读冻结段，无未来）
+        // zs_config 的 need_combine / combine_mode / one_bi_zs 两套共用；zs_algo 字段忽略（始终双算）
+        let cfg_normal = self.zs_config.with_algo(ZSAlgo::Normal);
+        let cfg_over = self.zs_config.with_algo(ZSAlgo::OverSeg);
+        let zs_normal = crate::zs::find_zs(&self.segments, self.level, &cfg_normal);
+        let zs_over = crate::zs::find_zs(&self.segments, self.level, &cfg_over);
         LevelBundleOut {
             level: self.level,
             confirms: self.confirms.clone(),
             segments: self.segments.clone(),
             unit_bars: self.unit_bars.clone(),
             combine_frames: frames_from_engine(&self.engine, bars),
-            kuaduan_frames: crate::kuaduan::level_kuaduan_v1_frames(&self.segments, self.level),
-            zs_frames: crate::zs::zs_frames_from_list(&zs_list, &self.segments, self.level),
-            bsp_frames: crate::bsp::level_bsp_frames(
+            zs_normal_frames: crate::zs::zs_frames_from_list(
+                &zs_normal,
                 &self.segments,
-                &zs_list,
+                self.level,
+            ),
+            zs_over_seg_frames: crate::zs::zs_frames_from_list(
+                &zs_over,
+                &self.segments,
+                self.level,
+            ),
+            bsp_normal_frames: crate::bsp::level_bsp_frames(
+                &self.segments,
+                &zs_normal,
+                self.level,
+                &self.bsp_config,
+            ),
+            bsp_over_seg_frames: crate::bsp::level_bsp_frames(
+                &self.segments,
+                &zs_over,
                 self.level,
                 &self.bsp_config,
             ),

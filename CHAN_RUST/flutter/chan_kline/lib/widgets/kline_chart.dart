@@ -10,11 +10,9 @@ import '../compute/k1_combine_compute.dart';
 import '../compute/k1_bar_view_compute.dart';
 import '../compute/chart_view_compute.dart';
 import '../compute/fractal_judgment_compute.dart';
-import '../compute/kuaduan_compute.dart';
 import '../compute/level_unit_bar_view_compute.dart';
 import '../compute/zs_compute.dart';
 import '../history/msg_history.dart';
-import '../models/kuaduan_frame.dart';
 import '../models/zs_frame.dart';
 import '../models/k0_confirm_signal.dart';
 import '../models/bar_crosshair_feature.dart';
@@ -77,6 +75,7 @@ class KlineChart extends StatefulWidget {
     this.onSubIndicatorsChanged,
     this.indicatorsEnabled = true,
     this.autoFollowLatest = false,
+    this.isPlaying = false,
     this.onTapStepBack,
     this.onTapPlay,
     this.onTapStepForward,
@@ -110,6 +109,8 @@ class KlineChart extends StatefulWidget {
   /// 无数据时禁止点主/副图指标入口
   final bool indicatorsEnabled;
   final bool autoFollowLatest;
+  /// 是否正在逐K播放（中间区单击立即暂停，不走双击延迟）
+  final bool isPlaying;
 
   /// 点击左/中/右：后退 / 播放暂停 / 前进
   final VoidCallback? onTapStepBack;
@@ -148,6 +149,15 @@ class _KlineChartState extends State<KlineChart> {
   double _panStartViewMin = 0;
   double _panStartViewMax = 0;
   Size _chartSize = Size.zero;
+
+  /// 左中右热区：用 Listener 优先吃点击（避免卡顿时被 GestureDetector 拖拽抢走）
+  Offset? _zonePointerDown;
+  int? _zonePointerId;
+  bool _zoneMoved = false;
+  static const _zoneTapSlop = 18.0;
+  /// 最近一帧主图上下界（供 pointer 热区回调）
+  double _zonePlotTop = KlineViewport.padT;
+  double _zoneContentBottom = 0;
 
   /// 中间区自管双击：避免左/右连点被系统双击手势吞掉
   static const _doubleTapMs = 280;
@@ -526,7 +536,18 @@ class _KlineChartState extends State<KlineChart> {
     return Offset(boxX, boxY);
   }
 
+  void _onPointerDown(PointerDownEvent e) {
+    _zonePointerDown = e.localPosition;
+    _zonePointerId = e.pointer;
+    _zoneMoved = false;
+  }
+
   void _onPointerMove(PointerMoveEvent e, double mainPlotH, double contentBottom) {
+    if (_zonePointerId == e.pointer &&
+        _zonePointerDown != null &&
+        (e.localPosition - _zonePointerDown!).distance > _zoneTapSlop) {
+      _zoneMoved = true;
+    }
     if (_splitDragging) {
       _onSplitMove(e);
       return;
@@ -555,15 +576,31 @@ class _KlineChartState extends State<KlineChart> {
   void _onPointerUp(PointerUpEvent e) {
     if (_splitDragging) {
       _onSplitUp(e);
+      _zonePointerDown = null;
+      _zonePointerId = null;
       return;
     }
     _panning = false;
     _panStart = null;
+
+    // 高优先：位移小于 slop 视为左/中/右热区点击（不依赖 GestureDetector 胜出）
+    final down = _zonePointerDown;
+    final isZoneTap = _zonePointerId == e.pointer &&
+        down != null &&
+        !_zoneMoved &&
+        (e.localPosition - down).distance <= _zoneTapSlop;
+    _zonePointerDown = null;
+    _zonePointerId = null;
+    if (isZoneTap) {
+      _onZoneTapAt(e.localPosition, _zonePlotTop, _zoneContentBottom);
+    }
   }
 
   void _onPointerLeave() {
     _panning = false;
     _panStart = null;
+    _zonePointerDown = null;
+    _zonePointerId = null;
     if (!_crosshairEnabled) {
       _crosshairX = null;
       _crosshairY = null;
@@ -602,9 +639,9 @@ class _KlineChartState extends State<KlineChart> {
     return 2;
   }
 
-  void _onZoneTap(TapUpDetails d, double plotTop, double contentBottom) {
+  void _onZoneTapAt(Offset local, double plotTop, double contentBottom) {
     if (widget.bars.isEmpty) return;
-    final zone = _hotZone(d.localPosition);
+    final zone = _hotZone(local);
 
     // 十字线激活：屏蔽步退/步进/播放，只保留中间双击切三态 + 点击跟线
     if (_crosshairEnabled) {
@@ -612,7 +649,7 @@ class _KlineChartState extends State<KlineChart> {
         _middleTapTimer?.cancel();
         _lastMiddleTapAt = null;
         _lastMiddleTapPos = null;
-        _updateCrosshairAt(d.localPosition, plotTop, contentBottom);
+        _updateCrosshairAt(local, plotTop, contentBottom);
         return;
       }
       final now = DateTime.now();
@@ -621,18 +658,18 @@ class _KlineChartState extends State<KlineChart> {
       if (last != null &&
           lastPos != null &&
           now.difference(last).inMilliseconds <= _doubleTapMs &&
-          (d.localPosition - lastPos).distance < 48) {
+          (local - lastPos).distance < 48) {
         _middleTapTimer?.cancel();
         _lastMiddleTapAt = null;
         _lastMiddleTapPos = null;
-        _cycleCrosshair(d.localPosition, plotTop, contentBottom);
+        _cycleCrosshair(local, plotTop, contentBottom);
         return;
       }
       _lastMiddleTapAt = now;
-      _lastMiddleTapPos = d.localPosition;
+      _lastMiddleTapPos = local;
       _middleTapTimer?.cancel();
       // 单击只跟线，不触发播放
-      _updateCrosshairAt(d.localPosition, plotTop, contentBottom);
+      _updateCrosshairAt(local, plotTop, contentBottom);
       _middleTapTimer = Timer(const Duration(milliseconds: _doubleTapMs), () {
         _lastMiddleTapAt = null;
         _lastMiddleTapPos = null;
@@ -655,22 +692,32 @@ class _KlineChartState extends State<KlineChart> {
       widget.onTapStepForward?.call();
       return;
     }
-    // 中间：自管双击=十字线三态；单击延迟后播放
+
+    // 中间：播放中 → 立即暂停（高优先，不等双击窗口）
+    if (widget.isPlaying) {
+      _middleTapTimer?.cancel();
+      _lastMiddleTapAt = null;
+      _lastMiddleTapPos = null;
+      widget.onTapPlay?.call();
+      return;
+    }
+
+    // 中间未播放：自管双击=十字线三态；单击延迟后播放
     final now = DateTime.now();
     final last = _lastMiddleTapAt;
     final lastPos = _lastMiddleTapPos;
     if (last != null &&
         lastPos != null &&
         now.difference(last).inMilliseconds <= _doubleTapMs &&
-        (d.localPosition - lastPos).distance < 48) {
+        (local - lastPos).distance < 48) {
       _middleTapTimer?.cancel();
       _lastMiddleTapAt = null;
       _lastMiddleTapPos = null;
-      _cycleCrosshair(d.localPosition, plotTop, contentBottom);
+      _cycleCrosshair(local, plotTop, contentBottom);
       return;
     }
     _lastMiddleTapAt = now;
-    _lastMiddleTapPos = d.localPosition;
+    _lastMiddleTapPos = local;
     _middleTapTimer?.cancel();
     _middleTapTimer = Timer(const Duration(milliseconds: _doubleTapMs), () {
       _lastMiddleTapAt = null;
@@ -810,6 +857,8 @@ class _KlineChartState extends State<KlineChart> {
             ? SystemMouseCursors.precise
             : (_panning ? SystemMouseCursors.grabbing : SystemMouseCursors.grab);
         final plotTop = KlineViewport.padT;
+        _zonePlotTop = plotTop;
+        _zoneContentBottom = contentBottom;
 
         return Stack(
           clipBehavior: Clip.none,
@@ -866,6 +915,7 @@ class _KlineChartState extends State<KlineChart> {
                       );
                     }
                   },
+                  onPointerDown: _onPointerDown,
                   onPointerMove: (e) => _onPointerMove(
                     e,
                     mainH - KlineViewport.padT - KlineViewport.padB,
@@ -874,7 +924,7 @@ class _KlineChartState extends State<KlineChart> {
                   onPointerUp: _onPointerUp,
                   child: GestureDetector(
                     behavior: HitTestBehavior.opaque,
-                    onTapUp: (d) => _onZoneTap(d, plotTop, contentBottom),
+                    // 左中右点击已由 Listener 高优先处理；此处只保留长按与拖拽
                     onLongPressStart: _onZoneLongPress,
                     onPanStart: (d) => _onPanStart(
                       d,
@@ -1133,18 +1183,54 @@ class _KlineCompositePainter extends CustomPainter {
             _drawK1LinesForLevel(
                 canvas, size.width, plotTop, plotH, slotW, ind.kn);
           }
-        } else if (ind.kind == MainIndicatorKind.kuaduan) {
-          // 跨段中枢框：与合并/连线同号，kuaduan(n)=K(n-1)跨段中枢（K0跨段中枢）
-          _drawKuaduanOnMainChart(
-              canvas, size.width, plotTop, plotH, barW, slotW, ind.kn);
-        } else if (ind.kind == MainIndicatorKind.zs) {
-          // 原生中枢框：与合并/连线/跨段中枢同号，zs(n)=K(n-1)原生中枢（K0原生中枢）
+        } else if (ind.kind == MainIndicatorKind.zsNormal) {
+          // Normal 中枢框：与合并/连线同号，zsNormal(n)=K(n-1)中枢(Normal)
           _drawZSOnMainChart(
-              canvas, size.width, plotTop, plotH, barW, slotW, ind.kn);
-        } else if (ind.kind == MainIndicatorKind.bsp) {
-          // 三类买卖点：与合并/连线/跨段中枢/原生中枢同号，bsp(n)=K(n-1)买卖点（K0买卖点）
+            canvas,
+            size.width,
+            plotTop,
+            plotH,
+            barW,
+            slotW,
+            ind.kn,
+            algo: ZSAlgoKind.normal,
+          );
+        } else if (ind.kind == MainIndicatorKind.zsOverSeg) {
+          // OverSeg 中枢框：与合并/连线同号，zsOverSeg(n)=K(n-1)中枢(OverSeg)
+          _drawZSOnMainChart(
+            canvas,
+            size.width,
+            plotTop,
+            plotH,
+            barW,
+            slotW,
+            ind.kn,
+            algo: ZSAlgoKind.overSeg,
+          );
+        } else if (ind.kind == MainIndicatorKind.bspNormal) {
+          // Normal 买卖点：与合并/连线/中枢同号
           _drawBSPOnMainChart(
-              canvas, size.width, plotTop, plotH, barW, slotW, ind.kn);
+            canvas,
+            size.width,
+            plotTop,
+            plotH,
+            barW,
+            slotW,
+            ind.kn,
+            overSeg: false,
+          );
+        } else if (ind.kind == MainIndicatorKind.bspOverSeg) {
+          // OverSeg 买卖点：与合并/连线/中枢同号
+          _drawBSPOnMainChart(
+            canvas,
+            size.width,
+            plotTop,
+            plotH,
+            barW,
+            slotW,
+            ind.kn,
+            overSeg: true,
+          );
         }
       }
     }
@@ -2039,86 +2125,9 @@ class _KlineCompositePainter extends CustomPainter {
     return buildLevelUnitBarViews(frozenBars, activeUnit: active);
   }
 
-  /// 主图跨段中枢框：复用合并框横向 [_combineFrameHSpan]，按层号取该层段序列产出的 KuaDuanFrame，
-  /// 画 ZD/ZG 半透明框 + 「K(n-1)跨段中枢{序号}·段数」标签。与合并框同层号、同色系。
+  /// 主图中枢框（Normal / OverSeg）：复用合并框横向 [_combineFrameHSpan]，
+  /// 画 ZD/ZG 半透明框 + 「K(n-1)中枢(Algo){序号}·段数」标签，九段升级追加标记。
   /// 十字线 as-of：只认已冻结段本地重算；关十字线用 Rust 末态框。
-  void _drawKuaduanOnMainChart(
-    Canvas canvas,
-    double w,
-    double plotTop,
-    double plotH,
-    double barW,
-    double slotW,
-    int kn,
-  ) {
-    LevelBundle? bundle;
-    for (final b in levels) {
-      if (b.level == kn) {
-        bundle = b;
-        break;
-      }
-    }
-    if (bundle == null) return;
-    final List<KuaDuanFrame> frames;
-    if (segAsOf != null) {
-      // as-of：只喂 endConfirmX<=asOf 的已冻结段，重跑松重叠吸收器
-      final segs = asOfLevelSegments(
-        levels: levels,
-        level: kn,
-        asOf: segAsOf!,
-      );
-      frames = computeKuaduanFrames(segs, kn);
-    } else {
-      frames = bundle.kuaduanFrames;
-    }
-    if (frames.isEmpty) return;
-
-    final style = ChartLevelLineStyle.forLevel(kn);
-    final stroke = Paint()
-      ..color = style.color.withValues(alpha: 0.9)
-      ..strokeWidth = 1.4
-      ..style = PaintingStyle.stroke;
-    final fill = Paint()..color = style.color.withValues(alpha: 0.12);
-    final labelStyle = TextStyle(
-      color: style.color.withValues(alpha: 0.95),
-      fontSize: 9,
-    );
-
-    for (var i = 0; i < frames.length; i++) {
-      final f = frames[i];
-      if (f.x2 < viewport.viewXMin - 1 || f.x1 > viewport.viewXMax + 1) {
-        continue;
-      }
-      final (xLeft, xRight) = _combineFrameHSpan(f.x1, f.x2, w, slotW, barW);
-      final yHigh = priceRange.yOf(f.high, plotTop, plotH); // ZD 上沿
-      final yLow = priceRange.yOf(f.low, plotTop, plotH); // ZG 下沿
-      final top = math.min(yHigh, yLow);
-      final bottom = math.max(yHigh, yLow);
-      final rect = Rect.fromLTRB(
-        math.min(xLeft, xRight),
-        top,
-        math.max(xLeft, xRight),
-        bottom,
-      );
-      canvas.drawRect(rect, fill);
-      canvas.drawRect(rect, stroke);
-
-      // 序号优先用 Rust seq（1-based）；缺省时用列表下标兜底
-      final seq = f.seq > 0 ? f.seq : (i + 1);
-      final tp = TextPainter(
-        text: TextSpan(
-          text: 'K${kn - 1}跨段中枢$seq·${f.count}',
-          style: labelStyle,
-        ),
-        textDirection: TextDirection.ltr,
-      )..layout();
-      tp.paint(canvas, Offset(rect.left + 2, rect.top + 1));
-    }
-  }
-
-  /// 主图原生中枢框：复用合并框横向 [_combineFrameHSpan]，按层号取该层段序列产出的 ZSFrame，
-  /// 画 ZD/ZG 半透明框 + 「K(n-1)原生中枢{序号}·段数」标签，九段升级追加标记。与跨段中枢同层号、独立色系。
-  /// 十字线 as-of：只认已冻结段本地重算（与跨段中枢同构）；关十字线用 Rust 末态框。
   void _drawZSOnMainChart(
     Canvas canvas,
     double w,
@@ -2126,8 +2135,9 @@ class _KlineCompositePainter extends CustomPainter {
     double plotH,
     double barW,
     double slotW,
-    int kn,
-  ) {
+    int kn, {
+    required ZSAlgoKind algo,
+  }) {
     LevelBundle? bundle;
     for (final b in levels) {
       if (b.level == kn) {
@@ -2137,20 +2147,26 @@ class _KlineCompositePainter extends CustomPainter {
     }
     if (bundle == null) return;
     final List<ZSFrame> frames;
+    final algoLabel = algo == ZSAlgoKind.normal ? 'Normal' : 'OverSeg';
     if (segAsOf != null) {
-      // as-of：只喂 endConfirmX<=asOf 的已冻结段，重跑原生中枢（无未来、不回写）
+      // as-of：只喂 endConfirmX<=asOf 的已冻结段，重跑对应算法中枢（无未来、不回写）
       final segs = asOfLevelSegments(
         levels: levels,
         level: kn,
         asOf: segAsOf!,
       );
-      frames = computeZSFrames(segs, kn);
+      frames = computeZSFrames(segs, kn, algo: algo);
     } else {
-      frames = bundle.zsFrames;
+      frames = algo == ZSAlgoKind.normal
+          ? bundle.zsNormalFrames
+          : bundle.zsOverSegFrames;
     }
     if (frames.isEmpty) return;
 
-    final style = ChartLevelLineStyle.forZS(kn);
+    // Normal 玫红系；OverSeg 蓝青系（同层不同色）
+    final style = algo == ZSAlgoKind.normal
+        ? ChartLevelLineStyle.forZS(kn)
+        : ChartLevelLineStyle.forZSOverSeg(kn);
     final stroke = Paint()
       ..color = style.color.withValues(alpha: 0.9)
       ..strokeWidth = 1.4
@@ -2181,13 +2197,13 @@ class _KlineCompositePainter extends CustomPainter {
       canvas.drawRect(rect, fill);
       canvas.drawRect(rect, stroke);
 
-      // 序号优先用 Rust seq（1-based）；缺省时用列表下标兜底
       final seq = f.seq > 0 ? f.seq : (i + 1);
       final dirMark = f.dir > 0 ? '↑' : (f.dir < 0 ? '↓' : '');
       final upgradeMark = f.isNineSegUpgrade ? '·9段升级' : '';
       final tp = TextPainter(
         text: TextSpan(
-          text: 'K${kn - 1}原生中枢$seq·${f.count}$dirMark$upgradeMark',
+          text:
+              'K${kn - 1}中枢($algoLabel)$seq·${f.count}$dirMark$upgradeMark',
           style: labelStyle,
         ),
         textDirection: TextDirection.ltr,
@@ -2196,9 +2212,9 @@ class _KlineCompositePainter extends CustomPainter {
     }
   }
 
-  /// 主图三类买卖点：直接在 Rust 末态 `bsp_frames` 上画点标记（不做 Dart 本地重算）。
-  /// 买=红、卖=绿（涨红跌绿）；类用不同形状：一类圆、二类三角、三类菱形，并在旁标注「买N/卖N」与价位。
-  /// 与合并/连线/跨段中枢/原生中枢同层号。
+  /// 主图三类买卖点：直接在 Rust 末态 `bsp_*_frames` 上画点标记（不做 Dart 本地重算）。
+  /// 买=红、卖=绿；类用不同形状：一类圆、二类三角、三类菱形。
+  /// overSeg=false 吃 bsp_normal_frames；true 吃 bsp_over_seg_frames。
   void _drawBSPOnMainChart(
     Canvas canvas,
     double w,
@@ -2206,8 +2222,9 @@ class _KlineCompositePainter extends CustomPainter {
     double plotH,
     double barW,
     double slotW,
-    int kn,
-  ) {
+    int kn, {
+    required bool overSeg,
+  }) {
     LevelBundle? bundle;
     for (final b in levels) {
       if (b.level == kn) {
@@ -2216,11 +2233,13 @@ class _KlineCompositePainter extends CustomPainter {
       }
     }
     if (bundle == null) return;
-    final frames = bundle.bspFrames;
+    final frames =
+        overSeg ? bundle.bspOverSegFrames : bundle.bspNormalFrames;
     if (frames.isEmpty) return;
 
     const markerR = 4.5;
     const labelStyle = TextStyle(fontSize: 9, fontWeight: FontWeight.w600);
+    final algoTag = overSeg ? 'O' : 'N';
     for (final f in frames) {
       if (f.x < viewport.viewXMin - 1 || f.x > viewport.viewXMax + 1) {
         continue;
@@ -2228,8 +2247,7 @@ class _KlineCompositePainter extends CustomPainter {
       final cx = _barCenterX(f.x, w, slotW);
       final cy = priceRange.yOf(f.price, plotTop, plotH);
       final color = ChartLevelLineStyle.forBSP(f.cls, f.isBuy);
-      // 标签：买N/卖N + 价位，放点位右上方避免压住 K 线
-      final tag = '${f.isBuy ? "买" : "卖"}${f.cls}';
+      final tag = '${f.isBuy ? "买" : "卖"}${f.cls}$algoTag';
       final tp = TextPainter(
         text: TextSpan(
           text: '$tag ${f.price.toStringAsFixed(2)}',
@@ -2245,16 +2263,13 @@ class _KlineCompositePainter extends CustomPainter {
       final c = Offset(cx, cy);
       switch (f.cls) {
         case 1:
-          // 一类：实心圆
           canvas.drawCircle(c, markerR, fill);
           canvas.drawCircle(c, markerR, stroke);
           break;
         case 2:
-          // 二类：实心三角（买卖决定朝向）
           _drawTriangle(canvas, c, markerR + 0.5, f.isBuy, fill, stroke);
           break;
         default:
-          // 三类：实心菱形
           _drawDiamond(canvas, c, markerR + 0.5, fill, stroke);
           break;
       }
@@ -2262,7 +2277,6 @@ class _KlineCompositePainter extends CustomPainter {
       tp.paint(canvas, Offset(cx + markerR + 2, cy - tp.height - 1));
     }
   }
-
   /// 画向上/向下实心三角（买卖点二类标记）。
   void _drawTriangle(
     Canvas canvas,
