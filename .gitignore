@@ -21,6 +21,11 @@ a_rust_core/target/
 CHAN_RUST/rust/target/
 CHAN_RUST/rust/target_alt/
 
+# Flutter 构建与 IDE 缓存
+CHAN_RUST/flutter/chan_kline/build/
+CHAN_RUST/flutter/chan_kline/.dart_tool/
+CHAN_RUST/flutter/chan_kline/.idea/
+
 # IDE 快照/备份（如 *.dart.head）
 *.dart.head
 
