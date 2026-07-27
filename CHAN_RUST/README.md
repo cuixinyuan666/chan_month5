@@ -81,7 +81,7 @@ cargo test -p chan_data
 
 ## Kn 递归流水线（历史记录：配置项与层级语义）
 
-- **设计约束（新增功能全层同构）**：所有新增功能要全层同构（K0/K1/…/KN 递归链上每一层行为一致），除非当前逻辑无法全层自洽；新增指标/中枢/连线/副图等须与合并/连线/跨段中枢/原生中枢同层同号、同口径、同冻结语义。确实无法全层自洽而例外的，必须在「历史记录」中写明原因，便于复制排查。
+- **设计约束（新增功能全层同构）**：所有新增功能要全层同构（K0/K1/…/KN 递归链上每一层行为一致），除非当前逻辑无法全层自洽；新增指标/中枢/连线/副图等须与合并/连线/中枢(Normal|OverSeg)/买卖点同层同号、同口径、同冻结语义。确实无法全层自洽而例外的，必须在「历史记录」中写明原因，便于复制排查。
 - **增删改查约束**：所有增/删/改/查功能必须基于当前功能的实现，不允许设计新的逻辑来显性或隐性地替代现有功能；所有增/删/改/查功能必须基于当前功能的格式与呈现逻辑，不允许设计新的逻辑使其与当前的操作和呈现逻辑相突兀。
 - **命名历史**：旧「1段/2段/n段K线」→「K1/K2/Kn」；原始周期K=K0；主图/副图统一层号：指标 `kn`=层号（1..maxKn），展示名比层号小 1。主图：`K(n-1)连线` / `K(n-1)合并`（旧「笔连线」=K0连线，曾称 K1连线；线段=K1连线；`K0合并` 等合并不偏移）。副图：`K(n-1)分型确认` / `K(n-1)分型极点距` / `K(n-1)截断`（对应 `level=kn` 的 confirms）。三组指标 kn 口径完全一致。
 - **命名历史（2026-07-15，取消「笔/线段」概念）**：代码统一 K0/K1/…/KN，不再用「笔/线段」叫法（仅本节历史记录保留旧名）。笔=K0连线、线段=K1连线；笔虚拟K=K1、线段虚拟K=K2。字段 `bi_*`→`k0_*`/`k1_*`、`seg_*`→`k1_*`（如 `bi_segments`→`k0_lines`、`bi_combine_frames`→`k1_combine_frames`、`seg_lines`→`k1_lines`）；Rust 类型 `BiSegment`→`K0Line`、`BiVirtualBar`→`K1Bar`、`SegLine`→`K1Line`、`SegAnalysisBundle`→`K1AnalysisBundle` 等；JSON key 同步变更并重建 `chan_ffi.dll`。内部 `level` 1-based 不变；泛用 `segment` 英文词（`LevelSegment`/`segments`/`segment_policy`）与模块文件名 `seg_eigen.rs`/`segment_first.rs` 保留。
@@ -132,8 +132,7 @@ cargo test -p chan_data
 
 ## 后续规划
 
-- [x] 跨段中枢 Rust 核心：`chan_data/src/kuaduan.rs`（`KuaDuan`/`KuaDuanFrame`/`find_kuaduan`/`build_kuaduan_for_levels`/`level_kuaduan_frames`，松重叠吸收器，全层同构；`run_pipeline` 的 `LevelBundleOut.kuaduan_frames` 逐层挂载，无未来函数）
-- [x] 跨段中枢 Flutter 可视化：主图指标新增 `跨段中枢(kuaduan)`，展示名 `K(n-1)跨段中枢`（笔跨段中枢=K0跨段中枢），复用合并框横向渲染画 ZD/ZG 半透明框 + 标签；默认勾选 `kuaduan(1)`
-- [x] 原生中枢 Flutter 十字线 as-of：主图 `K(n-1)原生中枢` 与跨段中枢同构——十字线开启时用 `asOfLevelSegments` + `computeZSFrames`（对齐 Rust `find_zs` 默认口径）本地重算；关闭十字线仍画 Rust 末态 `zs_frames`；全层同号、不回写、无未来
+- [x] ~~跨段中枢(KuaDuan)~~：已于 2026-07-27 **彻底移除**（计算/JSON/主图指标/as-of 全清）——删除 `CHAN_RUST/rust/chan_data/src/kuaduan.rs`、`CHAN_RUST/flutter/chan_kline/lib/models/kuaduan_frame.dart`、`CHAN_RUST/flutter/chan_kline/lib/compute/kuaduan_compute.dart`、`CHAN_RUST/flutter/chan_kline/test/kuaduan_compute_test.dart`，清理相关引用与展示逻辑
+- [x] Normal/OverSeg 双中枢双买卖点：流水线每层双算；JSON `zs_normal_frames`/`zs_over_seg_frames`/`bsp_normal_frames`/`bsp_over_seg_frames`；主图 `K(n-1)中枢(Normal|OverSeg)` / `K(n-1)买卖点(Normal|OverSeg)`；十字 as-of 本地重算对齐；Auto 放弃
 - [ ] Android JNI 复用 `chan_data`
 - [ ] 逐 K 步进增量 API（复用 pipeline 状态，免前缀全量重算）
