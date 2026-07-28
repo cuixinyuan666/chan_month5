@@ -29,6 +29,9 @@ class MsgHistory {
   /// test 自定义 OHLC 口径是否已记录（进程内去重）
   static bool _testCustomOhlcLogged = false;
 
+  /// 工作区全屏 + tooltip 分隔线口径是否已记录
+  static bool _desktopWorkAreaLogged = false;
+
   final List<MsgHistoryEntry> _rows = [];
 
   List<MsgHistoryEntry> get rows => List.unmodifiable(_rows);
@@ -311,6 +314,17 @@ class MsgHistory {
       '默认 custom.ohlc.csv=100 根强复杂性样本（包含合并/一字线/种子离开长 UNKNOWN/'
       '暴力下杀截断雏形/中枢震荡/多层波浪），便于全层同构排查开口虚线与递归层。'
       '历史记录按钮与 lib/history/ 常驻不得删。',
+    );
+  }
+
+  /// 桌面窗体：铺满工作区不盖任务栏；十字线 tooltip 分隔线贴边框。
+  void appendDesktopWorkAreaAndTooltipSep() {
+    if (_desktopWorkAreaLogged) return;
+    _desktopWorkAreaLogged = true;
+    append(
+      '【桌面窗体】启动/最大化按钮铺满当前屏工作区（screen_retriever.visibleSize），'
+      '不覆盖任务栏；TitleBarStyle.hidden 下禁用原生 maximize（会盖任务栏）。'
+      '【十字线 tooltip】==== / 。-。 分隔线超量重复后 ClipRect 裁切，贴齐左右边框。',
     );
   }
 

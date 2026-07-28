@@ -32,10 +32,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     return EXIT_FAILURE;
   }
   window.SetQuitOnClose(true);
-  // Start maximized so first paint is already full-screen.
+  // Show normal; Flutter fills work area (keeps taskbar visible).
   HWND hwnd = window.GetHandle();
   if (hwnd != nullptr) {
-    ShowWindow(hwnd, SW_SHOWMAXIMIZED);
+    ShowWindow(hwnd, SW_SHOW);
   }
 
   ::MSG msg;

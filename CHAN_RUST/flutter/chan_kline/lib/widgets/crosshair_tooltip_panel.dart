@@ -38,6 +38,9 @@ class CrosshairTooltipPanel extends StatelessWidget {
     height: 1.1,
   );
 
+  /// 超量重复后裁切，保证贴齐左右边框（避免 TextPainter 测宽偏短留缝）
+  static const _sepRepeat = 256;
+
   @override
   Widget build(BuildContext context) {
     return Material(
@@ -62,29 +65,23 @@ class CrosshairTooltipPanel extends StatelessWidget {
               children: [
                 for (final row in rows)
                   if (row.isSeparator || row.isStar)
-                    // 分隔线铺满 tooltip 宽度（不受左右内边距约束），触达边框
-                    LayoutBuilder(
-                      builder: (context, constraints) {
-                        final ch = row.isSeparator ? '=' : '-';
-                        final unit = row.isSeparator ? '' : '。-。';
-                        final tp = TextPainter(
-                          text: TextSpan(text: row.isSeparator ? ch : unit, style: _sepStyle),
-                          textDirection: TextDirection.ltr,
-                        )..layout();
-                        final count = tp.width > 0
-                            ? (constraints.maxWidth / tp.width).ceil()
-                            : 0;
-                        return Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 3),
+                    // 分隔线铺满 tooltip 宽度，触达左右边框
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 3),
+                      child: SizedBox(
+                        width: double.infinity,
+                        child: ClipRect(
                           child: Text(
-                            row.isSeparator ? ch * count : unit * count,
+                            row.isSeparator
+                                ? '=' * _sepRepeat
+                                : '。-。' * _sepRepeat,
                             style: _sepStyle,
                             maxLines: 1,
                             softWrap: false,
                             overflow: TextOverflow.clip,
                           ),
-                        );
-                      },
+                        ),
+                      ),
                     )
                   else
                     Padding(

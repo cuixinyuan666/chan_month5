@@ -25,6 +25,7 @@ import 'widgets/datetime_picker_dialog.dart';
 import 'widgets/edge_control_panel.dart';
 import 'widgets/kline_chart.dart';
 import 'widgets/test_ohlc_editor_dialog.dart';
+import 'window_work_area.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -61,6 +62,8 @@ Future<void> main() async {
   MsgHistory.instance.appendSeedContainTruncation();
   // test 自定义 OHLC：前端编辑 → custom.ohlc.csv 直读上图
   MsgHistory.instance.appendTestCustomOhlc();
+  // 桌面：工作区全屏不盖任务栏；tooltip 分隔线贴边框
+  MsgHistory.instance.appendDesktopWorkAreaAndTooltipSep();
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     await windowManager.ensureInitialized();
     const opts = WindowOptions(
@@ -70,9 +73,9 @@ Future<void> main() async {
     );
     await windowManager.waitUntilReadyToShow(opts, () async {
       await windowManager.setTitle('');
-      // 先显示再最大化，避免 show 把最大化冲掉
+      // 先显示再铺满工作区（不盖任务栏；hidden 标题栏下原生 maximize 会盖住）
       await windowManager.show();
-      await windowManager.maximize();
+      await fillDesktopWorkArea();
       await windowManager.focus();
     });
   }
@@ -116,6 +119,8 @@ class KlineHomePage extends StatefulWidget {
 class _KlineHomePageState extends State<KlineHomePage> {
   final _bridge = ChanBridge.instance;
   final _msgHistory = MsgHistory.instance;
+  /// 工作区全屏前的窗口矩形（还原用）
+  Rect? _preWorkAreaBounds;
   DateTime _beginDate = _standardBeginDate;
   DateTime _endDate = _standardEndDate;
 
@@ -772,10 +777,20 @@ class _KlineHomePageState extends State<KlineHomePage> {
         WindowCaptionButton.maximize(
           brightness: Brightness.dark,
           onPressed: () async {
-            if (await windowManager.isMaximized()) {
-              await windowManager.unmaximize();
+            // 铺满工作区 ↔ 还原；不走原生 maximize（会盖任务栏）
+            if (await isFillingWorkArea()) {
+              if (await windowManager.isMaximized()) {
+                await windowManager.unmaximize();
+              } else if (_preWorkAreaBounds != null) {
+                await windowManager.setBounds(_preWorkAreaBounds!);
+              } else {
+                await windowManager.setSize(const Size(1280, 720));
+                await windowManager.center();
+              }
+              _preWorkAreaBounds = null;
             } else {
-              await windowManager.maximize();
+              _preWorkAreaBounds = await windowManager.getBounds();
+              await fillDesktopWorkArea();
             }
           },
         ),
