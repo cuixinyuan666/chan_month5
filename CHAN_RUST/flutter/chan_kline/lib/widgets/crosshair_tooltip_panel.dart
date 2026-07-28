@@ -55,13 +55,14 @@ class CrosshairTooltipPanel extends StatelessWidget {
           child: SingleChildScrollView(
             controller: scrollController,
             physics: const ClampingScrollPhysics(),
-            padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
+            // 仅上下内边距；左右内边距下放到各数据行，使分隔线铺满 tooltip 边框
+            padding: const EdgeInsets.only(top: 6, bottom: 6),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 for (final row in rows)
                   if (row.isSeparator || row.isStar)
-                    // 分隔线铺满 tooltip 内容区（左右内边距之间），而非固定长度
+                    // 分隔线铺满 tooltip 宽度（不受左右内边距约束），触达边框
                     LayoutBuilder(
                       builder: (context, constraints) {
                         final ch = row.isSeparator ? '=' : '-';
@@ -87,7 +88,7 @@ class CrosshairTooltipPanel extends StatelessWidget {
                     )
                   else
                     Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 1),
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
                       child: Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
