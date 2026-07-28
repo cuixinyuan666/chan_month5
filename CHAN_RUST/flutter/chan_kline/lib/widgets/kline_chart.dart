@@ -69,8 +69,7 @@ class KlineChart extends StatefulWidget {
     required this.mainIndicators,
     required this.subIndicators,
     this.levels = const [],
-    this.zsK0NormalFrames = const [],
-    this.zsK0OverSegFrames = const [],
+    this.zsK0Frames = const [],
     this.defaultK0Policy = 'pending',
     this.truncationCheck = true,
     this.showBuildingDash = true,
@@ -99,9 +98,8 @@ class KlineChart extends StatefulWidget {
 
   /// N 段流水线全量输出（十字线 as-of 重绘与 tooltip N 段块查表用）
   final List<LevelBundle> levels;
-  /// K0中枢（原生分钟K段；Rust zs_k0_*）
-  final List<ZSFrame> zsK0NormalFrames;
-  final List<ZSFrame> zsK0OverSegFrames;
+  /// K0中枢（原生分钟K段；Rust zs_k0_frames）
+  final List<ZSFrame> zsK0Frames;
   final Set<MainChartIndicator> mainIndicators;
   final Set<SubChartIndicator> subIndicators;
   final String defaultK0Policy;
@@ -528,15 +526,13 @@ class _KlineChartState extends State<KlineChart> {
       asOf: asOf,
       bars: widget.bars,
       truncationCheck: widget.truncationCheck,
-      zsK0NormalFrames: widget.zsK0NormalFrames,
-      zsK0OverSegFrames: widget.zsK0OverSegFrames,
+      zsK0Frames: widget.zsK0Frames,
       asOfBundle: asOfBundle,
     );
     final k0Zs = zsRows.where((r) => r.label.startsWith('K0中枢')).toList();
     final knZs = <int, List<CrosshairTooltipRow>>{};
     for (final ind in widget.mainIndicators) {
-      if (ind.kind != MainIndicatorKind.zsNormal &&
-          ind.kind != MainIndicatorKind.zsOverSeg) {
+      if (ind.kind != MainIndicatorKind.zs) {
         continue;
       }
       if (ind.kn <= 0) continue;
@@ -940,8 +936,7 @@ class _KlineChartState extends State<KlineChart> {
                 k1CombineFrames: _effectiveK1CombineFrames,
                 k1Analysis: widget.k1Analysis,
                 levels: widget.levels,
-                zsK0NormalFrames: widget.zsK0NormalFrames,
-                zsK0OverSegFrames: widget.zsK0OverSegFrames,
+                zsK0Frames: widget.zsK0Frames,
                 zsAsOfBundle: zsAsOfBundle,
                 mainIndicators: _activeMains,
                 subIndicators: _activeSubs,
@@ -1132,8 +1127,7 @@ class _KlineCompositePainter extends CustomPainter {
     required this.k1CombineFrames,
     required this.k1Analysis,
     required this.levels,
-    this.zsK0NormalFrames = const [],
-    this.zsK0OverSegFrames = const [],
+    this.zsK0Frames = const [],
     this.zsAsOfBundle,
     required this.mainIndicators,
     required this.subIndicators,
@@ -1174,8 +1168,7 @@ class _KlineCompositePainter extends CustomPainter {
   final List<KlineCombineFrame> k1CombineFrames;
   final K1AnalysisBundle k1Analysis;
   final List<LevelBundle> levels;
-  final List<ZSFrame> zsK0NormalFrames;
-  final List<ZSFrame> zsK0OverSegFrames;
+  final List<ZSFrame> zsK0Frames;
   final KlineCombineBundle? zsAsOfBundle;
   final Set<MainChartIndicator> mainIndicators;
   final Set<SubChartIndicator> subIndicators;
@@ -1255,8 +1248,8 @@ class _KlineCompositePainter extends CustomPainter {
             _drawK1LinesForLevel(
                 canvas, size.width, plotTop, plotH, slotW, ind.kn);
           }
-        } else if (ind.kind == MainIndicatorKind.zsNormal) {
-          // Normal 中枢：kn=0→K0中枢(合并框)；kn≥1→Kn中枢(Kn段)
+        } else if (ind.kind == MainIndicatorKind.zs) {
+          // 中枢：kn=0→K0中枢；kn≥1→Kn中枢
           _drawZSOnMainChart(
             canvas,
             size.width,
@@ -1265,19 +1258,6 @@ class _KlineCompositePainter extends CustomPainter {
             barW,
             slotW,
             ind.kn,
-            algo: ZSAlgoKind.normal,
-          );
-        } else if (ind.kind == MainIndicatorKind.zsOverSeg) {
-          // OverSeg 中枢：同上，展示名 Kn
-          _drawZSOnMainChart(
-            canvas,
-            size.width,
-            plotTop,
-            plotH,
-            barW,
-            slotW,
-            ind.kn,
-            algo: ZSAlgoKind.overSeg,
           );
         }
       }
@@ -2181,28 +2161,22 @@ class _KlineCompositePainter extends CustomPainter {
     double plotH,
     double barW,
     double slotW,
-    int kn, {
-    required ZSAlgoKind algo,
-  }) {
-    final algoLabel = algo == ZSAlgoKind.normal ? 'Normal' : 'OverSeg';
+    int kn,
+  ) {
     final frames = computeZsFramesAtAsOf(
       kn: kn,
-      algo: algo,
       combineFrames: combineFrames,
       levels: levels,
       barFeatures: barFeatures,
       asOf: zsAsOfBundle != null ? segAsOf : null,
       bars: bars,
       truncationCheck: truncationCheck,
-      zsK0NormalFrames: zsK0NormalFrames,
-      zsK0OverSegFrames: zsK0OverSegFrames,
+      zsK0Frames: zsK0Frames,
       asOfBundle: zsAsOfBundle,
     );
     if (frames.isEmpty) return;
 
-    final style = algo == ZSAlgoKind.normal
-        ? ChartLevelLineStyle.forZS(kn)
-        : ChartLevelLineStyle.forZSOverSeg(kn);
+    final style = ChartLevelLineStyle.forZS(kn);
     final stroke = Paint()
       ..color = style.color.withValues(alpha: 0.9)
       ..strokeWidth = 1.4
@@ -2247,7 +2221,7 @@ class _KlineCompositePainter extends CustomPainter {
       final dirMark = f.dir > 0 ? '↑' : (f.dir < 0 ? '↓' : '');
       final tp = TextPainter(
         text: TextSpan(
-          text: 'K$kn中枢($algoLabel)$seq·${f.count}$dirMark',
+          text: 'K$kn中枢$seq·${f.count}$dirMark',
           style: labelStyle,
         ),
         textDirection: TextDirection.ltr,
@@ -3452,8 +3426,7 @@ class _KlineCompositePainter extends CustomPainter {
         oldDelegate.k1CombineFrames != k1CombineFrames ||
         oldDelegate.k1Analysis != k1Analysis ||
         oldDelegate.levels != levels ||
-        oldDelegate.zsK0NormalFrames != zsK0NormalFrames ||
-        oldDelegate.zsK0OverSegFrames != zsK0OverSegFrames ||
+        oldDelegate.zsK0Frames != zsK0Frames ||
         oldDelegate.zsAsOfBundle != zsAsOfBundle ||
         oldDelegate.segAsOf != segAsOf ||
         oldDelegate.mainIndicators != mainIndicators ||

@@ -132,13 +132,12 @@ class _KlineHomePageState extends State<KlineHomePage> {
   List<KlineCombineFrame> _k1CombineFrames = [];
   K1AnalysisBundle _k1Analysis = K1AnalysisBundle.empty();
   List<LevelBundle> _levels = [];
-  List<ZSFrame> _zsK0NormalFrames = [];
-  List<ZSFrame> _zsK0OverSegFrames = [];
+  List<ZSFrame> _zsK0Frames = [];
   Set<MainChartIndicator> _mainIndicators = {
     const MainChartIndicator.kn(1),
     const MainChartIndicator.combine(1),
-    const MainChartIndicator.zsNormal(0),
-    const MainChartIndicator.zsNormal(1),
+    const MainChartIndicator.zs(0),
+    const MainChartIndicator.zs(1),
   };
   Set<SubChartIndicator> _subIndicators = {
     const SubChartIndicator.fractalConfirm(1),
@@ -370,8 +369,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _k1CombineFrames = [];
         _k1Analysis = K1AnalysisBundle.empty();
         _levels = [];
-        _zsK0NormalFrames = [];
-        _zsK0OverSegFrames = [];
+        _zsK0Frames = [];
         _stepIdx = -1;
         _judgmentHistoryByKn.clear();
       });
@@ -422,8 +420,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _k1CombineFrames = [];
         _k1Analysis = K1AnalysisBundle.empty();
         _levels = [];
-        _zsK0NormalFrames = [];
-        _zsK0OverSegFrames = [];
+        _zsK0Frames = [];
         _judgmentHistoryByKn.clear();
       });
       return;
@@ -462,8 +459,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _k1Analysis = bundle.k1Analysis;
         _defaultK0Policy = bundle.defaultK0Policy;
         _levels = bundle.levels;
-        _zsK0NormalFrames = bundle.zsK0NormalFrames;
-        _zsK0OverSegFrames = bundle.zsK0OverSegFrames;
+        _zsK0Frames = bundle.zsK0Frames;
         // 按当前最高 Kn 动态裁剪已选指标（层变少时去掉失效项）
         final maxKn = chartMaxKn(
           levels: _levels,
@@ -666,8 +662,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
                   k1CombineFrames: _k1CombineFrames,
                   k1Analysis: _k1Analysis,
                   levels: _levels,
-                  zsK0NormalFrames: _zsK0NormalFrames,
-                  zsK0OverSegFrames: _zsK0OverSegFrames,
+                  zsK0Frames: _zsK0Frames,
                   defaultK0Policy: _defaultK0Policy,
                   truncationCheck: _truncationCheck,
                   showBuildingDash: _showBuildingDash,

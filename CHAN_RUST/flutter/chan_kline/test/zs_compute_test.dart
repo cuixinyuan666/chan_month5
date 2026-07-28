@@ -8,13 +8,11 @@ import 'package:chan_kline/models/zs_frame.dart';
 
 LevelBundle _levelWithZs({
   required int level,
-  required List<ZSFrame> normal,
-  List<ZSFrame> overSeg = const [],
+  required List<ZSFrame> frames,
 }) {
   return LevelBundle(
     level: level,
-    zsNormalFrames: normal,
-    zsOverSegFrames: overSeg,
+    zsFrames: frames,
   );
 }
 
@@ -26,13 +24,11 @@ void main() {
     final k1 = [
       const ZSFrame(x1: 0, x2: 2, high: 20, low: 10, level: 1, count: 2),
     ];
-    final levels = [_levelWithZs(level: 1, normal: k1)];
+    final levels = [_levelWithZs(level: 1, frames: k1)];
     expect(
       rustZsFramesForKn(
         kn: 0,
-        algo: ZSAlgoKind.normal,
-        zsK0NormalFrames: k0,
-        zsK0OverSegFrames: const [],
+        zsK0Frames: k0,
         levels: levels,
       ),
       k0,
@@ -40,9 +36,7 @@ void main() {
     expect(
       rustZsFramesForKn(
         kn: 1,
-        algo: ZSAlgoKind.normal,
-        zsK0NormalFrames: k0,
-        zsK0OverSegFrames: const [],
+        zsK0Frames: k0,
         levels: levels,
       ),
       k1,
@@ -53,7 +47,7 @@ void main() {
     final bundle = KlineCombineBundle(
       frames: const [],
       k0Confirms: const [],
-      zsK0NormalFrames: [
+      zsK0Frames: [
         const ZSFrame(
           x1: 0,
           x2: 1,
@@ -66,11 +60,11 @@ void main() {
     );
     final rows = zsCrosshairTooltipRows(
       asOfIdx: 0,
-      mainIndicators: {const MainChartIndicator.zsNormal(0)},
+      mainIndicators: {const MainChartIndicator.zs(0)},
       combineFrames: const [],
       levels: const [],
       barFeatures: const [],
-      zsK0NormalFrames: bundle.zsK0NormalFrames,
+      zsK0Frames: bundle.zsK0Frames,
       asOfBundle: bundle,
       asOf: 0,
     );
@@ -86,25 +80,23 @@ void main() {
     final asOfBundle = KlineCombineBundle(
       frames: const [],
       k0Confirms: const [],
-      zsK0NormalFrames: tail,
+      zsK0Frames: tail,
       levels: const [],
     );
     final tailFrames = rustZsFramesFromBundle(
       bundle: asOfBundle,
       kn: 0,
-      algo: ZSAlgoKind.normal,
     );
     expect(tailFrames, tail);
     expect(
       computeZsFramesAtAsOf(
         kn: 0,
-        algo: ZSAlgoKind.normal,
         combineFrames: const [],
         levels: const [],
         barFeatures: const [],
         asOf: 7,
         asOfBundle: asOfBundle,
-        zsK0NormalFrames: [
+        zsK0Frames: [
           const ZSFrame(x1: 8, x2: 11, high: 11.7, low: 11.7, level: 0),
         ],
       ),

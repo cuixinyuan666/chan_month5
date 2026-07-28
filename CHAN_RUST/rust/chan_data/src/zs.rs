@@ -14,20 +14,11 @@ pub enum ZSCombineMode {
     Peak,
 }
 
-/// 中枢算法枚举（Normal/OverSeg 双指标；种子与生长口径统一）
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ZSAlgo {
-    Normal,
-    OverSeg,
-}
-
 /// 中枢配置
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct ZSConfig {
     pub need_combine: bool,
     pub zs_combine_mode: ZSCombineMode,
-    pub zs_algo: ZSAlgo,
 }
 
 impl Default for ZSConfig {
@@ -35,14 +26,7 @@ impl Default for ZSConfig {
         Self {
             need_combine: true,
             zs_combine_mode: ZSCombineMode::Zs,
-            zs_algo: ZSAlgo::Normal,
         }
-    }
-}
-
-impl ZSConfig {
-    pub fn with_algo(self, zs_algo: ZSAlgo) -> Self {
-        Self { zs_algo, ..self }
     }
 }
 
@@ -461,8 +445,7 @@ mod tests {
             segments,
             unit_bars: vec![],
             combine_frames: vec![],
-            zs_normal_frames: vec![],
-            zs_over_seg_frames: vec![],
+            zs_frames: vec![],
             first_dir: 0,
             first_dir_x: 0,
             active_unit: None,
@@ -568,12 +551,11 @@ mod tests {
     }
 
     #[test]
-    fn pipeline_end_to_end_builds_dual_zs() {
+    fn pipeline_end_to_end_builds_zs() {
         let bars = synthetic_zigzag_legs(16, 8, 2.0, 0.1);
         let opt = crate::pipeline::PipelineOptions::default();
         let res = crate::pipeline::run_pipeline(&bars, &opt);
-        assert!(!res.levels[0].zs_normal_frames.is_empty());
-        let _ = &res.levels[0].zs_over_seg_frames;
+        assert!(!res.levels[0].zs_frames.is_empty());
     }
 
     fn synthetic_zigzag_legs(

@@ -44,5 +44,5 @@ pub use seg_eigen::{
 };
 pub use zs::{
     build_zs_for_levels, find_zs, level_zs_frames, zs_frames_from_list, zs_to_frames, ZS, ZSConfig,
-    ZSFrame, ZSAlgo, ZSCombineMode, ZSIncEngine,
+    ZSFrame, ZSCombineMode, ZSIncEngine,
 };

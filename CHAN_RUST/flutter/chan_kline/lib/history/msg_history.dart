@@ -174,7 +174,7 @@ class MsgHistory {
   /// 主图中枢十字 as-of：Rust 重算 bundle；与主图强制同源。
   void appendZSCrosshairAsOf() {
     append(
-      '【主图十字 as-of】K(n)中枢(Normal|OverSeg)：十字线开启时对 bars[idx<=asOf] '
+      '【主图十字 as-of】K(n)中枢：十字线开启时对 bars[idx<=asOf] '
       '调用 buildKlineCombineBundle 取 Rust zs_* 帧（缓存 as-of bundle）；'
       '主图/tooltip 均消费 JSON，Flutter 不做本地 find_zs；'
       'isSure：离开闭合=true 实线，末开放=false 虚线（受构建中虚线开关）；'
@@ -221,15 +221,15 @@ class MsgHistory {
     );
   }
 
-  /// 删除跨段中枢；原生拆 Normal/OverSeg；买卖点双套；放弃 Auto（进程内去重）。
+  /// 删除跨段中枢；原生中枢统一；放弃 Auto（进程内去重）。
   static bool _zsSplitLogged = false;
   void appendZSSplitNormalOverSeg() {
     if (_zsSplitLogged) return;
     _zsSplitLogged = true;
     append(
       '【口径变更】删除跨段中枢(KuaDuan)与三类买卖点(BSP)全部逻辑；'
-      '原生中枢拆「K(n)中枢(Normal)」「K(n)中枢(OverSeg)」；'
-      '流水线每层双算 JSON：zs_normal_frames / zs_over_seg_frames；'
+      '原生中枢统一为「K(n)中枢」；'
+      '流水线每层输出 JSON：zs_frames；'
       '放弃 Auto；呈现=半透明 ZD/ZG 框+标签；全层同构、无未来、不回写。',
     );
   }

@@ -287,8 +287,7 @@ class LevelBundle {
   final List<LevelSegmentN> segments;
   final List<LevelUnitBar> unitBars;
   final List<KlineCombineFrame> combineFrames;
-  final List<ZSFrame> zsNormalFrames;
-  final List<ZSFrame> zsOverSegFrames;
+  final List<ZSFrame> zsFrames;
   final int firstDir;
   final int firstDirX;
 
@@ -307,8 +306,7 @@ class LevelBundle {
     this.segments = const [],
     this.unitBars = const [],
     this.combineFrames = const [],
-    this.zsNormalFrames = const [],
-    this.zsOverSegFrames = const [],
+    this.zsFrames = const [],
     this.firstDir = 0,
     this.firstDirX = -1,
     this.activeUnit,
@@ -332,10 +330,7 @@ class LevelBundle {
           .map((e) =>
               KlineCombineFrame.fromJson(Map<String, dynamic>.from(e as Map)))
           .toList(),
-      zsNormalFrames: (json['zs_normal_frames'] as List? ?? const [])
-          .map((e) => ZSFrame.fromJson(Map<String, dynamic>.from(e as Map)))
-          .toList(),
-      zsOverSegFrames: (json['zs_over_seg_frames'] as List? ?? const [])
+      zsFrames: (json['zs_frames'] as List? ?? const [])
           .map((e) => ZSFrame.fromJson(Map<String, dynamic>.from(e as Map)))
           .toList(),
       firstDir: (json['first_dir'] as num?)?.toInt() ?? 0,

@@ -1,13 +1,12 @@
 import 'k0_line.dart';
 import 'level_models.dart';
 
-/// 主图指标：连线 / 合并框 / KN线 / Normal中枢 / OverSeg中枢。
+/// 主图指标：连线 / 合并框 / KN线 / 中枢。
 enum MainIndicatorKind {
   line,
   combine,
   kn,
-  zsNormal,
-  zsOverSeg,
+  zs,
 }
 
 /// 主图一项指标（按加载后 maxKn 动态生成）。
@@ -19,10 +18,7 @@ class MainChartIndicator {
   const MainChartIndicator.line(this.kn) : kind = MainIndicatorKind.line;
   const MainChartIndicator.combine(this.kn) : kind = MainIndicatorKind.combine;
   const MainChartIndicator.kn(this.kn) : kind = MainIndicatorKind.kn;
-  const MainChartIndicator.zsNormal(this.kn)
-      : kind = MainIndicatorKind.zsNormal;
-  const MainChartIndicator.zsOverSeg(this.kn)
-      : kind = MainIndicatorKind.zsOverSeg;
+  const MainChartIndicator.zs(this.kn) : kind = MainIndicatorKind.zs;
 
   String get label {
     switch (kind) {
@@ -32,10 +28,8 @@ class MainChartIndicator {
         return 'K${kn - 1}合并';
       case MainIndicatorKind.kn:
         return 'K${kn - 1}';
-      case MainIndicatorKind.zsNormal:
-        return 'K$kn中枢(Normal)';
-      case MainIndicatorKind.zsOverSeg:
-        return 'K$kn中枢(OverSeg)';
+      case MainIndicatorKind.zs:
+        return 'K$kn中枢';
     }
   }
 
@@ -121,13 +115,8 @@ List<MainChartIndicator> buildMainIndicatorCatalog(int maxKn) {
   for (var n = 1; n <= maxKn; n++) {
     out.add(MainChartIndicator.line(n));
   }
-  out.add(const MainChartIndicator.zsNormal(0));
-  out.add(const MainChartIndicator.zsOverSeg(0));
-  for (var n = 1; n <= maxKn; n++) {
-    out.add(MainChartIndicator.zsNormal(n));
-  }
-  for (var n = 1; n <= maxKn; n++) {
-    out.add(MainChartIndicator.zsOverSeg(n));
+  for (var n = 0; n <= maxKn; n++) {
+    out.add(MainChartIndicator.zs(n));
   }
   return out;
 }

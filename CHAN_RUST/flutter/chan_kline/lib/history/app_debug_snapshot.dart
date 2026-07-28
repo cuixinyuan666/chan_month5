@@ -64,7 +64,7 @@ class AppDebugSnapshot {
     buf.writeln(
       '十字线 tooltip 走 bar_features.levels[] 各层 LevelSnap；'
       '进行中单元可只读探测上层合并态（仅展示）；主图连线可含末态展示修正。'
-      '十字线开启时：K0合并/K1合并/Kn中枢(Normal|OverSeg)与逐步口径对齐，本地 as-of 重算框；'
+      '十字线开启时：K0合并/K1合并/Kn中枢与逐步口径对齐，本地 as-of 重算框；'
       '关闭十字线仍画 Rust 末态 frames。',
     );
     buf.writeln(
@@ -92,9 +92,8 @@ class AppDebugSnapshot {
       '画线：JUDGE两线虚 / CONFIRM则A→B实(冻结段)、B→C虚。',
     );
     buf.writeln(
-      '模块说明：已删除跨段中枢(KuaDuan)；zs.rs 双算 Normal/OverSeg（JSON：zs_normal_frames / zs_over_seg_frames）；'
-      'zs 双套中枢（zs_normal_frames / zs_over_seg_frames）；Auto 已放弃；'
-      '主图指标「K(n-1)中枢(Normal|OverSeg)」「K(n-1)买卖点(Normal|OverSeg)」，同层同号、独立色系。',
+      '模块说明：已删除跨段中枢(KuaDuan)；zs.rs 统一中枢（JSON：zs_frames）；'
+      '主图指标「K(n)中枢」，全层同构、独立色系。',
     );
     buf.writeln(
       '命名变更（2026-07-15）：代码取消「笔/线段」概念，统一 K0/K1/…/KN。'
@@ -222,7 +221,7 @@ class AppDebugSnapshot {
   }
 
   static void _writeZS(StringBuffer buf, List<LevelBundle> levels) {
-    buf.writeln('【中枢统计（Normal / OverSeg）】');
+    buf.writeln('【中枢统计】');
     if (levels.isEmpty) {
       buf.writeln('（无 levels 输出）');
       buf.writeln();
@@ -230,8 +229,7 @@ class AppDebugSnapshot {
     }
     for (final lv in levels) {
       buf.writeln(
-        'K${lv.level}：Normal=${lv.zsNormalFrames.length}；'
-        'OverSeg=${lv.zsOverSegFrames.length}',
+        'K${lv.level}：中枢=${lv.zsFrames.length}',
       );
       void dumpZS(String tag, List<ZSFrame> frames) {
         for (var i = 0; i < frames.length; i++) {
@@ -245,8 +243,7 @@ class AppDebugSnapshot {
         }
       }
 
-      dumpZS('Normal', lv.zsNormalFrames);
-      dumpZS('OverSeg', lv.zsOverSegFrames);
+      dumpZS('ZS', lv.zsFrames);
     }
     buf.writeln();
   }

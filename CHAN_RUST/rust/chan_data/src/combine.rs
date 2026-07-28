@@ -16,7 +16,7 @@ use crate::pipeline::{
 use crate::seg_eigen::{
     BarSubSnapshot, FirstSegDirSignal, K1AnalysisBundle, K1ConfirmSignal, K1Line,
 };
-use crate::zs::{find_zs, zs_frames_from_list, ZSAlgo, ZSConfig, ZSFrame};
+use crate::zs::{find_zs, zs_frames_from_list, ZSConfig, ZSFrame};
 
 /// 合并 K 线线框（对齐 serialize_kline_combine）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,12 +90,9 @@ pub struct KlineCombineBundle {
     /// Kn 流水线全量输出（1=K1/K0连线，2=K2/K1连线，…穷尽）
     #[serde(default)]
     pub levels: Vec<LevelBundleOut>,
-    /// K0中枢 Normal（合并框实体，level=0）
+    /// K0中枢（分钟K段，level=0）
     #[serde(default)]
-    pub zs_k0_normal_frames: Vec<ZSFrame>,
-    /// K0中枢 OverSeg（分钟K段，level=0）
-    #[serde(default)]
-    pub zs_k0_over_seg_frames: Vec<ZSFrame>,
+    pub zs_k0_frames: Vec<ZSFrame>,
 }
 
 fn default_k0_policy_pending() -> String {
@@ -117,8 +114,7 @@ impl KlineCombineBundle {
             level_segments: Vec::new(),
             level_virtual_units: Vec::new(),
             levels: Vec::new(),
-            zs_k0_normal_frames: Vec::new(),
-            zs_k0_over_seg_frames: Vec::new(),
+            zs_k0_frames: Vec::new(),
         }
     }
 }
@@ -192,16 +188,11 @@ fn kline_bars_to_segments(bars: &[KlineBar]) -> Vec<LevelSegment> {
     out
 }
 
-/// K0 中枢：在原生分钟 K 段上双算 Normal/OverSeg
-fn build_k0_zs(bars: &[KlineBar], zs_cfg: &ZSConfig) -> (Vec<ZSFrame>, Vec<ZSFrame>) {
+/// K0 中枢：在原生分钟 K 段上计算
+fn build_k0_zs(bars: &[KlineBar], zs_cfg: &ZSConfig) -> Vec<ZSFrame> {
     let segs = kline_bars_to_segments(bars);
-    let cfg_n = zs_cfg.with_algo(ZSAlgo::Normal);
-    let cfg_o = zs_cfg.with_algo(ZSAlgo::OverSeg);
-    let zs_n = find_zs(&segs, 0, &cfg_n);
-    let zs_o = find_zs(&segs, 0, &cfg_o);
-    let frames_n = zs_frames_from_list(&zs_n, &segs, 0);
-    let frames_o = zs_frames_from_list(&zs_o, &segs, 0);
-    (frames_n, frames_o)
+    let zs_list = find_zs(&segs, 0, zs_cfg);
+    zs_frames_from_list(&zs_list, &segs, 0)
 }
 
 /// K0 合并框 → 伪 LevelSegment（合并指标等仍用；非 K0 中枢段源）
@@ -565,8 +556,7 @@ pub fn build_kline_combine_bundle_with(
 
     let k1_analysis = map_k1_analysis(&pr);
 
-    let (zs_k0_normal_frames, zs_k0_over_seg_frames) =
-        build_k0_zs(bars, &opt.zs_config);
+    let zs_k0_frames = build_k0_zs(bars, &opt.zs_config);
 
     KlineCombineBundle {
         frames: l1.combine_frames.clone(),
@@ -581,8 +571,7 @@ pub fn build_kline_combine_bundle_with(
         level_segments,
         level_virtual_units,
         levels: pr.levels,
-        zs_k0_normal_frames,
-        zs_k0_over_seg_frames,
+        zs_k0_frames,
     }
 }
 

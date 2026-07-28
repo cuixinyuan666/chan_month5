@@ -19,7 +19,7 @@ use crate::engine::{
     seed_leave_dir, CombineEngine, FxEvent, FxKind, MergeUnit, TruncGuard,
 };
 use crate::kline::KlineBar;
-use crate::zs::{find_zs, ZSAlgo, ZSConfig, ZSFrame, ZSIncEngine};
+use crate::zs::{find_zs, ZSConfig, ZSFrame, ZSIncEngine};
 
 
 /// 流水线选项
@@ -233,12 +233,9 @@ pub struct LevelBundleOut {
     pub unit_bars: Vec<LevelUnitBar>,
     /// 本层输入单元（K(n-1)；n=1 时为 K0）的包含合并线框
     pub combine_frames: Vec<KlineCombineFrame>,
-    /// 本层 Normal 中枢框（全层同构；种子=≥3 连续互叠）
+    /// 本层中枢框（全层同构；种子=≥3 连续互叠）
     #[serde(default)]
-    pub zs_normal_frames: Vec<ZSFrame>,
-    /// 本层 OverSeg 中枢框
-    #[serde(default)]
-    pub zs_over_seg_frames: Vec<ZSFrame>,
+    pub zs_frames: Vec<ZSFrame>,
     /// 首 N 段方向：0 未定
     pub first_dir: i32,
     pub first_dir_x: i32,
@@ -489,10 +486,8 @@ struct LevelState {
     /// 原生缠论中枢（ZS）配置（从 opt 拷贝；增量引擎初始化用）
     #[allow(dead_code)]
     zs_config: ZSConfig,
-    /// 增量中枢引擎 Normal
-    zs_inc_normal: ZSIncEngine,
-    /// 增量中枢引擎 OverSeg（逐段 feed，对齐动态 Kn 的 CombineEngine 模式）
-    zs_inc_over: ZSIncEngine,
+    /// 增量中枢引擎（逐段 feed，对齐动态 Kn 的 CombineEngine 模式）
+    zs_inc: ZSIncEngine,
 }
 
 /// 有效性校验：顶极值 > 底极值（最低限度，可配置关闭）
@@ -511,8 +506,7 @@ impl LevelState {
             validity_check: opt.validity_check,
             truncation_check: opt.truncation_check,
             zs_config: opt.zs_config,
-            zs_inc_normal: ZSIncEngine::new(level, opt.zs_config.with_algo(ZSAlgo::Normal)),
-            zs_inc_over: ZSIncEngine::new(level, opt.zs_config.with_algo(ZSAlgo::OverSeg)),
+            zs_inc: ZSIncEngine::new(level, opt.zs_config),
             engine: CombineEngine::new(),
             seed_phase: 0,
             seed_fx: FxKind::Unknown,
@@ -680,10 +674,9 @@ impl LevelState {
                     is_bootstrap: false,
                     is_promoted_default: false,
                 });
-                // 增量中枢：新段永久冻结后 feed（Normal + OverSeg 双算）
+                // 增量中枢：新段永久冻结后 feed
                 let seg_idx = self.segments.len() - 1;
-                self.zs_inc_normal.on_new_seg(&self.segments, seg_idx);
-                self.zs_inc_over.on_new_seg(&self.segments, seg_idx);
+                self.zs_inc.on_new_seg(&self.segments, seg_idx);
                 self.seed_phase = 1;
                 self.seed_fx = seed_fx;
                 self.seed_a_x = begin_pole;
@@ -727,10 +720,9 @@ impl LevelState {
                     is_bootstrap: false,
                     is_promoted_default: false,
                 });
-                // 增量中枢：新段永久冻结后 feed（Normal + OverSeg 双算）
+                // 增量中枢：新段永久冻结后 feed
                 let seg_idx = self.segments.len() - 1;
-                self.zs_inc_normal.on_new_seg(&self.segments, seg_idx);
-                self.zs_inc_over.on_new_seg(&self.segments, seg_idx);
+                self.zs_inc.on_new_seg(&self.segments, seg_idx);
                 let ub = make_unit_bar(bars, idx, dir, a.pole_x, pole_x, bar_x, a.high, a.low);
                 self.unit_bars.push(ub.clone());
                 outs.push(ub);
@@ -1098,32 +1090,14 @@ impl LevelState {
         // 展示轨：冻段 + 进行中 active_unit 喂 find_zs（末开放 is_sure=false 虚框）
         let segs_for_zs =
             crate::zs::segments_with_optional_active(&self.segments, active_unit.as_ref());
-        let zs_normal = find_zs(
-            &segs_for_zs,
-            self.level,
-            &self.zs_config.with_algo(ZSAlgo::Normal),
-        );
-        let zs_over = find_zs(
-            &segs_for_zs,
-            self.level,
-            &self.zs_config.with_algo(ZSAlgo::OverSeg),
-        );
+        let zs_list = find_zs(&segs_for_zs, self.level, &self.zs_config);
         LevelBundleOut {
             level: self.level,
             confirms: self.confirms.clone(),
             segments: self.segments.clone(),
             unit_bars: self.unit_bars.clone(),
             combine_frames: frames_from_engine(&self.engine, bars),
-            zs_normal_frames: crate::zs::zs_frames_from_list(
-                &zs_normal,
-                &segs_for_zs,
-                self.level,
-            ),
-            zs_over_seg_frames: crate::zs::zs_frames_from_list(
-                &zs_over,
-                &segs_for_zs,
-                self.level,
-            ),
+            zs_frames: crate::zs::zs_frames_from_list(&zs_list, &segs_for_zs, self.level),
             first_dir: self.first_dir,
             first_dir_x: self.first_dir_x,
             active_unit,

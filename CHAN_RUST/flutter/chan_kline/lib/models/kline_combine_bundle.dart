@@ -31,8 +31,7 @@ class KlineCombineBundle {
   final List<LevelBundle> levels;
 
   /// K0中枢（原生分钟K段，level=0）
-  final List<ZSFrame> zsK0NormalFrames;
-  final List<ZSFrame> zsK0OverSegFrames;
+  final List<ZSFrame> zsK0Frames;
 
   const KlineCombineBundle({
     required this.frames,
@@ -47,8 +46,7 @@ class KlineCombineBundle {
     this.levelSegments = const [],
     this.levelVirtualUnits = const [],
     this.levels = const [],
-    this.zsK0NormalFrames = const [],
-    this.zsK0OverSegFrames = const [],
+    this.zsK0Frames = const [],
   });
 
   factory KlineCombineBundle.fromJson(Map<String, dynamic> json) {
@@ -129,10 +127,7 @@ class KlineCombineBundle {
       levels: (json['levels'] as List? ?? const [])
           .map((e) => LevelBundle.fromJson(Map<String, dynamic>.from(e as Map)))
           .toList(),
-      zsK0NormalFrames: (json['zs_k0_normal_frames'] as List? ?? const [])
-          .map((e) => ZSFrame.fromJson(Map<String, dynamic>.from(e as Map)))
-          .toList(),
-      zsK0OverSegFrames: (json['zs_k0_over_seg_frames'] as List? ?? const [])
+      zsK0Frames: (json['zs_k0_frames'] as List? ?? const [])
           .map((e) => ZSFrame.fromJson(Map<String, dynamic>.from(e as Map)))
           .toList(),
     );
@@ -151,7 +146,6 @@ class KlineCombineBundle {
         levelSegments: [],
         levelVirtualUnits: [],
         levels: [],
-        zsK0NormalFrames: [],
-        zsK0OverSegFrames: [],
+        zsK0Frames: [],
       );
 }

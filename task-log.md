@@ -30,6 +30,18 @@
 
 ---
 
+### 2026-07-28 — 添加 K0 中枢设计优化方案与样张
+
+- **要点**：新增 K0 中枢设计文档与可视化样张，引入设计令牌体系，记录命名纠偏与单段虚框展示逻辑，提升用户体验与界面美观度。
+- **关键路径**：`CHAN_RUST/docs/DESIGN_OPTIMIZATION.md`, `CHAN_RUST/docs/design_mockup.html`, `CHAN_RUST/flutter/chan_kline/lib/compute/zs_compute.dart`, `CHAN_RUST/rust/chan_data/src/zs.rs`, `CHAN_RUST/rust/chan_data/src/combine.rs`
+- **注意**：引入设计令牌体系需后续协调统一颜色、排版和组件规范；与 Rust 端口径保持一致
+
+### 2026-07-26 — Kn原生中枢十字线 as-of 动态显示，并补 ZS vs 跨段差异测试
+
+- **要点**：实现十字线 as-of 动态显示功能（端段冻结时本地重算原生中枢），增加离开-返回与相邻合并对比测试，对齐 Rust find_zs 默认口径。
+- **关键路径**：`CHAN_RUST/README.md`, `CHAN_RUST/flutter/chan_kline/lib/compute/zs_compute.dart`, `CHAN_RUST/rust/chan_data/src/zs.rs`, `CHAN_RUST/flutter/chan_kline/lib/widgets/kline_chart.dart`
+- **注意**：需确保关闭十字线时仍绘制 Rust 末态逻辑；测试覆盖跨段差异场景
+
 ### 2026-07-27 — 删除跨段中枢(KuaDuan)功能并更新文档
 
 - **要点**：彻底移除跨段中枢计算与展示逻辑，清理 Rust 计算层、Flutter 展示层及测试代码；在 README.md 后续规划中记录变更。
