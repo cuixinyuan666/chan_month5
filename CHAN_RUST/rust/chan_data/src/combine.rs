@@ -16,6 +16,7 @@ use crate::pipeline::{
 use crate::seg_eigen::{
     BarSubSnapshot, FirstSegDirSignal, K1AnalysisBundle, K1ConfirmSignal, K1Line,
 };
+use crate::zs::{find_zs, zs_frames_from_list, ZSAlgo, ZSConfig, ZSFrame};
 
 /// 合并 K 线线框（对齐 serialize_kline_combine）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,6 +90,12 @@ pub struct KlineCombineBundle {
     /// Kn 流水线全量输出（1=K1/K0连线，2=K2/K1连线，…穷尽）
     #[serde(default)]
     pub levels: Vec<LevelBundleOut>,
+    /// K0中枢 Normal（合并框实体，level=0）
+    #[serde(default)]
+    pub zs_k0_normal_frames: Vec<ZSFrame>,
+    /// K0中枢 OverSeg（分钟K段，level=0）
+    #[serde(default)]
+    pub zs_k0_over_seg_frames: Vec<ZSFrame>,
 }
 
 fn default_k0_policy_pending() -> String {
@@ -110,6 +117,8 @@ impl KlineCombineBundle {
             level_segments: Vec::new(),
             level_virtual_units: Vec::new(),
             levels: Vec::new(),
+            zs_k0_normal_frames: Vec::new(),
+            zs_k0_over_seg_frames: Vec::new(),
         }
     }
 }
@@ -137,6 +146,105 @@ fn link_k0_lines(chain: &mut [K0Line]) {
         chain[i].next_idx = Some(chain[i + 1].idx);
         chain[i + 1].prev_idx = Some(chain[i].idx);
     }
+}
+
+/// 原生分钟 K → LevelSegment（每根 K 一段；K0 中枢段实体）
+fn kline_bars_to_segments(bars: &[KlineBar]) -> Vec<LevelSegment> {
+    let mut out = Vec::with_capacity(bars.len());
+    for (i, b) in bars.iter().enumerate() {
+        let dir = if i == 0 {
+            1
+        } else {
+            let p = &bars[i - 1];
+            let mid = (b.high + b.low) / 2.0;
+            let p_mid = (p.high + p.low) / 2.0;
+            if mid >= p_mid {
+                1
+            } else {
+                -1
+            }
+        };
+        let x = b.idx;
+        out.push(LevelSegment {
+            idx: i as i64,
+            dir,
+            begin_confirm_x: x,
+            end_confirm_x: x,
+            begin_pole_x: x,
+            end_pole_x: x,
+            open: b.open,
+            high: b.high,
+            low: b.low,
+            close: b.close,
+            volume: b.volume,
+            begin_fractal_x1: x,
+            begin_fractal_x2: x,
+            end_fractal_x1: x,
+            end_fractal_x2: x,
+            begin_fractal_high: b.high,
+            begin_fractal_low: b.low,
+            end_fractal_high: b.high,
+            end_fractal_low: b.low,
+            is_bootstrap: false,
+            is_promoted_default: false,
+        });
+    }
+    out
+}
+
+/// K0 中枢：在原生分钟 K 段上双算 Normal/OverSeg
+fn build_k0_zs(bars: &[KlineBar], zs_cfg: &ZSConfig) -> (Vec<ZSFrame>, Vec<ZSFrame>) {
+    let segs = kline_bars_to_segments(bars);
+    let cfg_n = zs_cfg.with_algo(ZSAlgo::Normal);
+    let cfg_o = zs_cfg.with_algo(ZSAlgo::OverSeg);
+    let zs_n = find_zs(&segs, 0, &cfg_n);
+    let zs_o = find_zs(&segs, 0, &cfg_o);
+    let frames_n = zs_frames_from_list(&zs_n, &segs, 0);
+    let frames_o = zs_frames_from_list(&zs_o, &segs, 0);
+    (frames_n, frames_o)
+}
+
+/// K0 合并框 → 伪 LevelSegment（合并指标等仍用；非 K0 中枢段源）
+fn combine_frames_to_segments(frames: &[KlineCombineFrame]) -> Vec<LevelSegment> {
+    let mut out = Vec::with_capacity(frames.len());
+    for (i, f) in frames.iter().enumerate() {
+        let dir = if i == 0 {
+            1
+        } else {
+            let p = &frames[i - 1];
+            let mid = (f.high + f.low) / 2.0;
+            let p_mid = (p.high + p.low) / 2.0;
+            if mid >= p_mid {
+                1
+            } else {
+                -1
+            }
+        };
+        out.push(LevelSegment {
+            idx: i as i64,
+            dir,
+            begin_confirm_x: f.x1,
+            end_confirm_x: f.x2,
+            begin_pole_x: f.x1,
+            end_pole_x: f.x2,
+            open: f.low,
+            high: f.high,
+            low: f.low,
+            close: f.high,
+            volume: 0.0,
+            begin_fractal_x1: f.x1,
+            begin_fractal_x2: f.x1,
+            end_fractal_x1: f.x2,
+            end_fractal_x2: f.x2,
+            begin_fractal_high: f.high,
+            begin_fractal_low: f.low,
+            end_fractal_high: f.high,
+            end_fractal_low: f.low,
+            is_bootstrap: false,
+            is_promoted_default: false,
+        });
+    }
+    out
 }
 
 fn unit_to_virtual_bar(u: &LevelUnitBar) -> K1Bar {
@@ -457,6 +565,9 @@ pub fn build_kline_combine_bundle_with(
 
     let k1_analysis = map_k1_analysis(&pr);
 
+    let (zs_k0_normal_frames, zs_k0_over_seg_frames) =
+        build_k0_zs(bars, &opt.zs_config);
+
     KlineCombineBundle {
         frames: l1.combine_frames.clone(),
         k0_confirms,
@@ -470,6 +581,8 @@ pub fn build_kline_combine_bundle_with(
         level_segments,
         level_virtual_units,
         levels: pr.levels,
+        zs_k0_normal_frames,
+        zs_k0_over_seg_frames,
     }
 }
 

@@ -1,52 +1,32 @@
-//! 原生缠论中枢（ZS）模块：复用流水线 `LevelSegment`（段/连线，已是当前 Rust 版
-//! 缠论「形态学元素」），在每层（K0=level1 / K1=level2 … 全层同构）上计算原生中枢。
-//!
-//! 设计红线（最高优先级约束，来自用户）：
-//! - 只读已冻结段 `segs`（调用方传入 `LevelState.segments`，排除 `active_unit`），天然无未来函数；
-//! - 不修改任何已实现元素逻辑（合并引擎 / 分型 / 段构造 / 层级递归），只新增、不改动；
-//! - 中枢的进/出段引用相邻 `LevelSegment.idx`（Rust「段」），不引入 Python 式「笔(bi)」。
-//!
-//! 与原生缠论对齐：
-//! - 中枢由 ≥3 连续重叠段构成，区间 [ZG,ZD]（ZG=max(段low), ZD=min(段high)），[DD,GG] 为极值；
-//! - 延伸采用原生「离开-返回」：离开段不重叠后，返回段再重叠则延伸同一中枢；
-//! - 含中枢方向 dir、进/出段 in/out_seg_idx、九段重叠升级、combine 合并、one_bi_zs 单段中枢、
-//!   normal/over_seg 双算法（Auto 已放弃）；三类买卖点由 bsp 模块消费本模块结果。
+//! 原生缠论中枢（ZS）：全层同构 `find_zs`，输入为各层原生段序列。
+//! K0=分钟K每根一段；K1+=该层连线段。单段成枢、重叠延伸、离开闭合实线、末开放虚线。
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::pipeline::{LevelBundleOut, LevelSegment};
+use crate::pipeline::{LevelBundleOut, LevelSegment, LevelUnitBar};
 
-/// 中枢合并模式
+/// 相邻中枢合并模式（peak 按 DD/GG）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ZSCombineMode {
-    /// 以 [ZG,ZD] 区间重叠判定合并
     Zs,
-    /// 以 [DD,GG] 极值区间重叠判定合并
     Peak,
 }
 
-/// 中枢算法（Auto 已放弃，不再提供）
+/// 中枢算法枚举（Normal/OverSeg 双指标；种子与生长口径统一）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ZSAlgo {
-    /// 普通：≥3 连续段互相重叠成中枢（贴合原生「≥3 重叠成中枢」）
     Normal,
-    /// OverSeg：允许首末段重叠、中段跨越成中枢
     OverSeg,
 }
 
-/// 原生中枢配置
+/// 中枢配置
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct ZSConfig {
-    /// 是否对相邻重叠中枢做合并
     pub need_combine: bool,
-    /// 合并判定所用的区间
     pub zs_combine_mode: ZSCombineMode,
-    /// 单段（单笔）是否可独立成中枢
-    pub one_bi_zs: bool,
-    /// 成中枢算法（流水线 export 会忽略此字段，始终双算 Normal+OverSeg）
     pub zs_algo: ZSAlgo,
 }
 
@@ -55,104 +35,81 @@ impl Default for ZSConfig {
         Self {
             need_combine: true,
             zs_combine_mode: ZSCombineMode::Zs,
-            one_bi_zs: false,
             zs_algo: ZSAlgo::Normal,
         }
     }
 }
 
 impl ZSConfig {
-    /// 成中枢所需的最小种子段数（贴合原生「≥3 重叠成中枢」；单段模式为 1）
-    fn seed_len(&self) -> usize {
-        if self.one_bi_zs {
-            1
-        } else {
-            3
-        }
-    }
-
-    /// 复制配置并替换算法（双算时共用 need_combine / combine_mode / one_bi_zs）
     pub fn with_algo(self, zs_algo: ZSAlgo) -> Self {
         Self { zs_algo, ..self }
     }
 }
 
-/// 原生缠论中枢（内部计算态，不序列化；序列化镜像见 `ZSFrame`）
+/// 运行时中枢（member_segs 为 segs 下标）
 #[derive(Debug, Clone)]
 pub struct ZS {
-    /// 所属层号（与 combine/line/fractal 同号：K0=1, K1=2 …）
     pub level: i32,
-    /// 首段逻辑 idx（锚定上层单元序号，便于 Flutter/ML 回查）
     pub start_idx: i64,
-    /// 末段逻辑 idx（延伸/离开-返回后）
     pub end_idx: i64,
-    /// 首段在 `segs` 中的下标
     pub start_seg: usize,
-    /// 末段在 `segs` 中的下标（离开-返回后可能为回返段）
     pub end_seg: usize,
-    /// 上沿 ZG = max(覆盖段 low)  ← 最高的低
     pub zg: f64,
-    /// 下沿 ZD = min(覆盖段 high) ← 最低的高
     pub zd: f64,
-    /// 区间最高点 GG（三类买卖点包络）
     pub gg: f64,
-    /// 区间最低点 DD
     pub dd: f64,
-    /// 中轴 mid = (ZG+ZD)/2
     pub mid: f64,
-    /// 中枢方向：取首段 LevelSegment.dir（预留三类买卖点）
     pub dir: i32,
-    /// 进段 idx = 首段前一段的 LevelSegment.idx（相邻段，非「笔」；预留）
     pub in_seg_idx: Option<i64>,
-    /// 出段 idx = 末段后一段的 LevelSegment.idx（相邻段，预留三类买卖点）
     pub out_seg_idx: Option<i64>,
-    /// 是否单段中枢
-    pub is_one_bi_zs: bool,
-    /// 是否九段重叠升级（覆盖段数 ≥9）
-    pub is_nine_seg_upgrade: bool,
-    /// 末态确认（step 模式下逐步为 true）
     pub is_sure: bool,
-    /// 实际构成中枢的段下标（可能因「离开-返回」跳过离开段，非连续），仅内部用于区间重算
-    member_segs: Vec<usize>,
+    pub(crate) member_segs: Vec<usize>,
 }
 
-/// 原生中枢镜像框（主图半透明框：high=ZD, low=ZG；含 dir/进出段/升级标记）
+/// 中枢框（high=ZD, low=ZG）
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ZSFrame {
-    /// 本层中枢序号（1-based，按时间先后）
     pub seq: i32,
-    /// 主图 x 区间（已锚定 1 分钟 K）：取首/末段极点 K
     pub x1: i32,
     pub x2: i32,
-    /// 上沿（更高价，=ZD=min(high_i)）
     pub high: f64,
-    /// 下沿（更低价，=ZG=max(low_i)）
     pub low: f64,
-    /// 所属层号（与 combine/line 同号）
     pub level: i32,
-    /// 覆盖段数（种子3 + 延伸）
     pub count: usize,
-    /// 中枢方向（首段方向）
     pub dir: i32,
-    /// 是否单段中枢
-    pub is_one_bi_zs: bool,
-    /// 是否九段重叠升级
-    pub is_nine_seg_upgrade: bool,
-    /// 是否末态确认
     pub is_sure: bool,
-    /// 进段 idx（相邻 LevelSegment.idx）
     pub in_seg_idx: Option<i64>,
-    /// 出段 idx（相邻 LevelSegment.idx）
     pub out_seg_idx: Option<i64>,
 }
 
-/// 段 u 与中枢区间 [ZG,ZD] 相交即重叠（标准区间相交：u.high ≥ ZG 且 u.low ≤ ZD）
 #[inline]
 fn seg_overlaps(zg: f64, zd: f64, u: &LevelSegment) -> bool {
     u.high >= zg && u.low <= zd
 }
 
-/// 由若干段重算中枢区间几何
+fn price_tick(segs: &[LevelSegment]) -> f64 {
+    let mut tick = 0.01;
+    for s in segs {
+        let d = (s.high - s.low).abs();
+        if d > 1e-12 && d < tick {
+            tick = d;
+        }
+    }
+    tick
+}
+
+fn is_flat_zs(zg: f64, zd: f64, tick: f64) -> bool {
+    (zd - zg).abs() <= tick + 1e-12
+}
+
+fn near_one_line_price(s: &LevelSegment, tick: f64) -> Option<f64> {
+    let w = s.high - s.low;
+    if w.abs() <= 1e-12 || w <= tick + 1e-12 {
+        return Some(s.low);
+    }
+    None
+}
+
 fn range_of(segs: &[LevelSegment], members: &[usize]) -> (f64, f64, f64, f64) {
     let mut zg = f64::NEG_INFINITY;
     let mut zd = f64::INFINITY;
@@ -168,12 +125,32 @@ fn range_of(segs: &[LevelSegment], members: &[usize]) -> (f64, f64, f64, f64) {
     (zg, zd, gg, dd)
 }
 
-/// 由已确定的成员段构造中枢（区间/方向/进出段均由此推导）
-fn make_zs(level: i32, members: &[usize], segs: &[LevelSegment], is_one_bi: bool) -> ZS {
-    let (zg, zd, gg, dd) = range_of(segs, members);
+fn zs_overlap_range(z: &ZS, segs: &[LevelSegment], tick: f64) -> (f64, f64) {
+    if is_flat_zs(z.zg, z.zd, tick) {
+        return (z.zg, z.zd);
+    }
+    if z.member_segs.is_empty() {
+        return (z.zg, z.zd);
+    }
+    let (zg, zd, _, _) = range_of(segs, &z.member_segs);
+    (zg, zd)
+}
+
+fn make_zs(
+    level: i32,
+    members: &[usize],
+    segs: &[LevelSegment],
+    is_sure: bool,
+) -> ZS {
+    let (mut zg, mut zd, gg, dd) = range_of(segs, members);
     let start_seg = members[0];
     let end_seg = *members.last().unwrap();
     let first = &segs[start_seg];
+    let tick = price_tick(segs);
+    if let Some(anchor) = near_one_line_price(first, tick) {
+        zg = anchor;
+        zd = anchor;
+    }
     let n = segs.len();
     ZS {
         level,
@@ -197,120 +174,74 @@ fn make_zs(level: i32, members: &[usize], segs: &[LevelSegment], is_one_bi: bool
         } else {
             None
         },
-        is_one_bi_zs: is_one_bi,
-        is_nine_seg_upgrade: members.len() >= 9,
-        is_sure: true,
+        is_sure,
         member_segs: members.to_vec(),
     }
 }
 
-/// 将段（下标 pos）延伸进开放中枢，重算区间几何与末态
-fn extend_zs(z: &mut ZS, segs: &[LevelSegment], pos: usize) {
+fn extend_zs(z: &mut ZS, segs: &[LevelSegment], pos: usize, tick: f64) {
     z.member_segs.push(pos);
     let s = &segs[pos];
-    z.zg = z.zg.max(s.low);
-    z.zd = z.zd.min(s.high);
+    if !is_flat_zs(z.zg, z.zd, tick) {
+        if s.low > z.zg {
+            z.zg = s.low;
+        }
+        if s.high < z.zd {
+            z.zd = s.high;
+        }
+    }
     z.gg = z.gg.max(s.high);
     z.dd = z.dd.min(s.low);
     z.mid = (z.zg + z.zd) / 2.0;
     z.end_seg = pos;
     z.end_idx = s.idx;
-    z.is_nine_seg_upgrade = z.member_segs.len() >= 9;
 }
 
-/// 从 `segs[start]` 起尝试构成新中枢；命中返回 Some(ZS)，否则 None。
-/// 仅检测种子窗口（普通=3 连续互相重叠；跨段=首末重叠；单段=1）。
-fn try_construct_from(segs: &[LevelSegment], start: usize, level: i32, cfg: &ZSConfig) -> Option<ZS> {
-    let n = segs.len();
-    if cfg.one_bi_zs {
-        if start >= n {
-            return None;
-        }
-        let members = vec![start];
-        return Some(make_zs(level, &members, segs, true));
-    }
-    let w = 3usize;
-    if start + w > n {
+/// 单段成枢（雏形 is_sure=false）
+fn try_construct_from(segs: &[LevelSegment], start: usize, level: i32) -> Option<ZS> {
+    if start >= segs.len() {
         return None;
     }
-    let a = &segs[start];
-    let b = &segs[start + 1];
-    let c = &segs[start + 2];
-    let ok = match cfg.zs_algo {
-        ZSAlgo::Normal => {
-            // 三者互相重叠：min(high) > max(low)
-            let min_high = a.high.min(b.high).min(c.high);
-            let max_low = a.low.max(b.low).max(c.low);
-            min_high > max_low
-        }
-        ZSAlgo::OverSeg => {
-            // OverSeg：首末段重叠即可（中段允许跨越/不重叠）
-            let min_high = a.high.min(c.high);
-            let max_low = a.low.max(c.low);
-            min_high > max_low
-        }
-    };
-    if !ok {
-        return None;
-    }
-    let members = vec![start, start + 1, start + 2];
-    Some(make_zs(level, &members, segs, false))
+    Some(make_zs(level, &[start], segs, false))
 }
 
-/// 在单层段序列上计算原生中枢（全层同构：每层调用同一函数）。
-/// 只读已冻结段 `segs`，无未来函数。
+/// 全层同构：重叠延伸；不重叠=离开闭合实线；无离开-返回桥接。
 pub fn find_zs(segs: &[LevelSegment], level: i32, cfg: &ZSConfig) -> Vec<ZS> {
     let n = segs.len();
-    if n < cfg.seed_len() {
+    if n == 0 {
         return Vec::new();
     }
+    let tick = price_tick(segs);
     let mut zs_list: Vec<ZS> = Vec::new();
     let mut cur: Option<ZS> = None;
     let mut i = 0usize;
     while i < n {
-        // 1) 尝试延伸当前开放中枢
-        let mut extended = false;
-        if let Some(z) = cur.as_mut() {
-            if seg_overlaps(z.zg, z.zd, &segs[i]) {
-                // 普通延伸：本段与 [ZG,ZD] 重叠
-                extend_zs(z, segs, i);
-                extended = true;
-            } else if i + 1 < n && seg_overlaps(z.zg, z.zd, &segs[i + 1]) {
-                // 离开-返回：离开段(segs[i])不重叠，但返回段(segs[i+1])重叠
-                // → 延伸同一中枢，离开段被跳过（不含入 member_segs）
-                extend_zs(z, segs, i + 1);
-                i += 1; // 消耗返回段（离开段已在流程中跳过）
-                extended = true;
+        if let Some(ref mut z) = cur {
+            let (ozg, ozd) = zs_overlap_range(z, segs, tick);
+            if seg_overlaps(ozg, ozd, &segs[i]) {
+                extend_zs(z, segs, i, tick);
+                i += 1;
+                continue;
             }
-        }
-        if extended {
-            i += 1;
+            // 离开：闭合为实线，不在此处看 i+1
+            z.is_sure = true;
+            zs_list.push(cur.take().unwrap());
             continue;
         }
-        // 2) 当前无开放中枢 或 中枢已因「离开段后无返回段」而闭合
-        if cur.is_some() {
-            zs_list.push(cur.take().unwrap());
-            // segs[i]（离开段）作为新候选起点继续，不前进
-        }
-        match try_construct_from(segs, i, level, cfg) {
-            Some(z) => {
-                let len = z.member_segs.len();
-                cur = Some(z);
-                i += len;
-            }
-            None => {
-                i += 1;
-            }
+        if let Some(z) = try_construct_from(segs, i, level) {
+            cur = Some(z);
+            i += 1;
+        } else {
+            i += 1;
         }
     }
-    if let Some(z) = cur.take() {
+    if let Some(mut z) = cur.take() {
+        z.is_sure = false;
         zs_list.push(z);
     }
-    // 3) 收尾：重算进/出段、九段升级，并按需合并相邻重叠中枢
     finalize(zs_list, segs, cfg)
 }
 
-/// 收尾处理：重算进/出段与九段升级，并按需合并相邻重叠中枢
 fn finalize(mut zs_list: Vec<ZS>, segs: &[LevelSegment], cfg: &ZSConfig) -> Vec<ZS> {
     let n = segs.len();
     for z in zs_list.iter_mut() {
@@ -324,7 +255,6 @@ fn finalize(mut zs_list: Vec<ZS>, segs: &[LevelSegment], cfg: &ZSConfig) -> Vec<
         } else {
             None
         };
-        z.is_nine_seg_upgrade = z.member_segs.len() >= 9;
     }
     if cfg.need_combine {
         try_combine(&mut zs_list, segs);
@@ -332,33 +262,26 @@ fn finalize(mut zs_list: Vec<ZS>, segs: &[LevelSegment], cfg: &ZSConfig) -> Vec<
     zs_list
 }
 
-/// 两区间 [lo1,hi1] 与 [lo2,hi2] 是否相交（lo ≤ hi）
 #[inline]
 fn ranges_overlap(lo1: f64, hi1: f64, lo2: f64, hi2: f64) -> bool {
     lo1 <= hi2 && lo2 <= hi1
 }
 
-/// 合并相邻重叠中枢（zs 模式比 [ZG,ZD]，peak 模式比 [DD,GG]；单段中枢不参与合并）
 fn try_combine(zs_list: &mut Vec<ZS>, segs: &[LevelSegment]) {
     let mut changed = true;
     while changed {
         changed = false;
         let mut k = 0;
         while k + 1 < zs_list.len() {
-            let overlap = ranges_overlap(
-                zs_list[k].zg,
-                zs_list[k].zd,
-                zs_list[k + 1].zg,
-                zs_list[k + 1].zd,
-            );
-            // 单段中枢不参与合并
-            let one_bi = zs_list[k].is_one_bi_zs || zs_list[k + 1].is_one_bi_zs;
-            if overlap && !one_bi {
-                let merged = merge_two(&zs_list[k], &zs_list[k + 1], segs);
+            let a = &zs_list[k];
+            let b = &zs_list[k + 1];
+            let overlap = ranges_overlap(a.zg, a.zd, b.zg, b.zd);
+            let block = a.is_sure && b.member_segs.len() == 1;
+            if overlap && !block {
+                let merged = merge_two(a, b, segs);
                 zs_list[k] = merged;
                 zs_list.remove(k + 1);
                 changed = true;
-                // 不前进 k，重新检查合并后的与新后继
             } else {
                 k += 1;
             }
@@ -366,45 +289,23 @@ fn try_combine(zs_list: &mut Vec<ZS>, segs: &[LevelSegment]) {
     }
 }
 
-/// 合并两个中枢为成员段并集
 fn merge_two(a: &ZS, b: &ZS, segs: &[LevelSegment]) -> ZS {
-    let mut members: Vec<usize> = a.member_segs.iter().chain(b.member_segs.iter()).copied().collect();
+    let mut members: Vec<usize> = a
+        .member_segs
+        .iter()
+        .chain(b.member_segs.iter())
+        .copied()
+        .collect();
     members.sort_unstable();
     members.dedup();
-    let (zg, zd, gg, dd) = range_of(segs, &members);
-    let start_seg = *members.first().unwrap();
-    let end_seg = *members.last().unwrap();
-    let n = segs.len();
+    let z = make_zs(a.level, &members, segs, a.is_sure && b.is_sure);
     ZS {
-        level: a.level,
-        start_idx: segs[start_seg].idx,
-        end_idx: segs[end_seg].idx,
-        start_seg,
-        end_seg,
-        zg,
-        zd,
-        gg,
-        dd,
-        mid: (zg + zd) / 2.0,
-        dir: a.dir, // 取前者方向
-        in_seg_idx: if start_seg > 0 {
-            Some(segs[start_seg - 1].idx)
-        } else {
-            None
-        },
-        out_seg_idx: if end_seg + 1 < n {
-            Some(segs[end_seg + 1].idx)
-        } else {
-            None
-        },
-        is_one_bi_zs: false,
-        is_nine_seg_upgrade: members.len() >= 9,
-        is_sure: true,
-        member_segs: members,
+        dir: a.dir,
+        is_sure: a.is_sure && b.is_sure,
+        ..z
     }
 }
 
-/// 原生中枢 → 镜像框（Flutter 直接复用合并框渲染管线）
 pub fn zs_to_frames(zs_list: &[ZS], segment_by_idx: &HashMap<i64, &LevelSegment>) -> Vec<ZSFrame> {
     zs_list
         .iter()
@@ -421,8 +322,6 @@ pub fn zs_to_frames(zs_list: &[ZS], segment_by_idx: &HashMap<i64, &LevelSegment>
                 level: z.level,
                 count: z.member_segs.len(),
                 dir: z.dir,
-                is_one_bi_zs: z.is_one_bi_zs,
-                is_nine_seg_upgrade: z.is_nine_seg_upgrade,
                 is_sure: z.is_sure,
                 in_seg_idx: z.in_seg_idx,
                 out_seg_idx: z.out_seg_idx,
@@ -431,48 +330,121 @@ pub fn zs_to_frames(zs_list: &[ZS], segment_by_idx: &HashMap<i64, &LevelSegment>
         .collect()
 }
 
-/// 由单层段序列直接产出该层原生中枢镜像框（只读冻结段，无未来函数）
+/// 进行中 Kn 单元 → 伪段（展示轨喂中枢；不回写冻结段链）。
+pub fn unit_to_segment(u: &LevelUnitBar) -> LevelSegment {
+    let (px1, px2) = if u.x1 <= u.x2 {
+        (u.x1, u.x2)
+    } else {
+        (u.x2, u.x1)
+    };
+    LevelSegment {
+        idx: u.idx,
+        dir: u.dir,
+        begin_confirm_x: u.confirm_x,
+        end_confirm_x: u.confirm_x,
+        begin_pole_x: px1,
+        end_pole_x: px2,
+        open: u.open,
+        high: u.high,
+        low: u.low,
+        close: u.close,
+        volume: u.volume,
+        begin_fractal_x1: u.x1,
+        begin_fractal_x2: u.x2,
+        end_fractal_x1: u.x1,
+        end_fractal_x2: u.x2,
+        begin_fractal_high: u.high,
+        begin_fractal_low: u.low,
+        end_fractal_high: u.high,
+        end_fractal_low: u.low,
+        is_bootstrap: false,
+        is_promoted_default: false,
+    }
+}
+
+/// 冻结段 + 可选进行中（idx 未在冻结列表中则追加）。
+pub fn segments_with_optional_active(
+    frozen: &[LevelSegment],
+    active: Option<&LevelUnitBar>,
+) -> Vec<LevelSegment> {
+    let mut out = frozen.to_vec();
+    if let Some(u) = active {
+        if !out.iter().any(|s| s.idx == u.idx) {
+            out.push(unit_to_segment(u));
+        }
+    }
+    out
+}
+
 pub fn level_zs_frames(segs: &[LevelSegment], level: i32, cfg: &ZSConfig) -> Vec<ZSFrame> {
     let zs_list = find_zs(segs, level, cfg);
     zs_frames_from_list(&zs_list, segs, level)
 }
 
-/// 由「已算好的中枢列表」直接产出镜像框（供 export 复用同一份 zs_list 挂中枢框与买卖点）
 pub fn zs_frames_from_list(zs_list: &[ZS], segs: &[LevelSegment], _level: i32) -> Vec<ZSFrame> {
     let segment_by_idx: HashMap<i64, &LevelSegment> = segs.iter().map(|s| (s.idx, s)).collect();
     zs_to_frames(zs_list, &segment_by_idx)
 }
 
-/// 每层段序列 → 该层原生中枢框（全层同构，复用 find_zs + zs_to_frames）
 pub fn build_zs_for_levels(levels: &[LevelBundleOut], cfg: &ZSConfig) -> Vec<Vec<ZSFrame>> {
     levels
         .iter()
-        .map(|lv| level_zs_frames(&lv.segments, lv.level, cfg))
+        .map(|lv| {
+            let segs = segments_with_optional_active(&lv.segments, lv.active_unit.as_ref());
+            level_zs_frames(&segs, lv.level, cfg)
+        })
         .collect()
+}
+
+/// 增量引擎占位：batch `find_zs` 与 export 对齐
+pub struct ZSIncEngine {
+    level: i32,
+    cfg: ZSConfig,
+}
+
+impl ZSIncEngine {
+    pub fn new(level: i32, cfg: ZSConfig) -> Self {
+        Self { level, cfg }
+    }
+
+    pub fn on_new_seg(&mut self, _segs: &[LevelSegment], _seg_idx: usize) {}
+
+    pub fn into_completed(self, segs: &[LevelSegment]) -> Vec<ZS> {
+        find_zs(segs, self.level, &self.cfg)
+    }
+}
+
+#[cfg(test)]
+pub fn make_zs_for_test(
+    level: i32,
+    members: &[usize],
+    segs: &[LevelSegment],
+    is_sure: bool,
+) -> ZS {
+    make_zs(level, members, segs, is_sure)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pipeline::LevelBundleOut;
 
     fn mk_seg(idx: i64, dir: i32, high: f64, low: f64) -> LevelSegment {
         LevelSegment {
             idx,
             dir,
-            begin_confirm_x: 0,
-            end_confirm_x: 0,
-            begin_pole_x: 0,
-            end_pole_x: 0,
+            begin_confirm_x: idx as i32,
+            end_confirm_x: idx as i32,
+            begin_pole_x: idx as i32,
+            end_pole_x: idx as i32,
             open: low,
             high,
             low,
             close: high,
             volume: 0.0,
-            begin_fractal_x1: 0,
-            begin_fractal_x2: 0,
-            end_fractal_x1: 0,
-            end_fractal_x2: 0,
+            begin_fractal_x1: idx as i32,
+            begin_fractal_x2: idx as i32,
+            end_fractal_x1: idx as i32,
+            end_fractal_x2: idx as i32,
             begin_fractal_high: high,
             begin_fractal_low: low,
             end_fractal_high: high,
@@ -491,8 +463,6 @@ mod tests {
             combine_frames: vec![],
             zs_normal_frames: vec![],
             zs_over_seg_frames: vec![],
-            bsp_normal_frames: vec![],
-            bsp_over_seg_frames: vec![],
             first_dir: 0,
             first_dir_x: 0,
             active_unit: None,
@@ -502,7 +472,43 @@ mod tests {
     }
 
     #[test]
-    fn find_zs_two_disjoint_groups() {
+    fn single_seg_seed_prototype() {
+        let segs = vec![mk_seg(0, 1, 20.0, 10.0)];
+        let zs = find_zs(&segs, 1, &ZSConfig::default());
+        assert_eq!(zs.len(), 1);
+        assert!(!zs[0].is_sure);
+        assert_eq!(zs[0].member_segs, vec![0]);
+    }
+
+    #[test]
+    fn leave_closes_sure_no_bridge() {
+        let segs = vec![
+            mk_seg(0, 1, 11.7, 11.7),
+            mk_seg(1, 1, 11.7, 11.7),
+            mk_seg(2, 1, 11.73, 11.72),
+            mk_seg(3, 1, 11.7, 11.7),
+        ];
+        let zs = find_zs(&segs, 0, &ZSConfig::default());
+        assert!(zs.len() >= 2, "离开不桥接，应拆成多枢");
+        assert!(zs[0].is_sure);
+        let last = zs.last().unwrap();
+        assert!(!last.is_sure);
+    }
+
+    #[test]
+    fn overlap_extends() {
+        let segs = vec![
+            mk_seg(0, 1, 22.0, 12.0),
+            mk_seg(1, 1, 21.0, 11.0),
+            mk_seg(2, 1, 20.0, 10.0),
+        ];
+        let zs = find_zs(&segs, 1, &ZSConfig::default());
+        assert_eq!(zs.len(), 1);
+        assert_eq!(zs[0].member_segs.len(), 3);
+    }
+
+    #[test]
+    fn two_disjoint_groups() {
         let segs = vec![
             mk_seg(0, 1, 20.0, 10.0),
             mk_seg(1, 1, 22.0, 12.0),
@@ -513,88 +519,37 @@ mod tests {
             mk_seg(6, 1, 41.0, 31.0),
         ];
         let zs = find_zs(&segs, 1, &ZSConfig::default());
-        assert_eq!(zs.len(), 2, "应检出 2 个 Normal 中枢");
+        assert_eq!(zs.len(), 2);
         assert_eq!(zs[0].zg, 12.0);
         assert_eq!(zs[0].zd, 20.0);
-        assert_eq!(zs[1].start_idx, 3);
-        assert_eq!(zs[1].end_idx, 6);
     }
 
     #[test]
-    fn find_zs_over_seg_allows_middle_gap() {
-        let segs = vec![
-            mk_seg(0, 1, 20.0, 10.0),
-            mk_seg(1, 1, 50.0, 40.0),
-            mk_seg(2, 1, 19.0, 11.0),
+    fn active_unit_included_for_open_zs() {
+        use crate::pipeline::LevelUnitBar;
+
+        let frozen = vec![
+            mk_seg(0, 1, 22.0, 12.0),
+            mk_seg(1, 1, 21.0, 11.0),
         ];
-        let normal = find_zs(&segs, 1, &ZSConfig::default().with_algo(ZSAlgo::Normal));
-        let over = find_zs(&segs, 1, &ZSConfig::default().with_algo(ZSAlgo::OverSeg));
-        assert!(normal.is_empty(), "Normal 三者互叠失败应为空");
-        assert_eq!(over.len(), 1, "OverSeg 首末重叠应成中枢");
-    }
-
-    #[test]
-    fn find_zs_extend_on_leave_return() {
-        let segs = vec![
-            mk_seg(0, 1, 20.0, 10.0),
-            mk_seg(1, 1, 22.0, 12.0),
-            mk_seg(2, 1, 21.0, 11.0),
-            mk_seg(3, 1, 40.0, 30.0),
-            mk_seg(4, 1, 19.0, 9.0),
-            mk_seg(5, 1, 23.0, 13.0),
-        ];
-        let zs = find_zs(&segs, 1, &ZSConfig::default());
-        assert_eq!(zs.len(), 1, "离开-返回应并成一个中枢");
-        assert_eq!(zs[0].start_idx, 0);
-        assert_eq!(zs[0].end_idx, 5);
-        assert_eq!(zs[0].member_segs, vec![0, 1, 2, 4, 5]);
-    }
-
-    #[test]
-    fn find_zs_two_leaves_close() {
-        let segs = vec![
-            mk_seg(0, 1, 20.0, 10.0),
-            mk_seg(1, 1, 22.0, 12.0),
-            mk_seg(2, 1, 21.0, 11.0),
-            mk_seg(3, 1, 40.0, 30.0),
-            mk_seg(4, 1, 60.0, 55.0),
-            mk_seg(5, 1, 59.0, 54.0),
-            mk_seg(6, 1, 61.0, 56.0),
-        ];
-        let zs = find_zs(&segs, 1, &ZSConfig::default());
-        assert_eq!(zs.len(), 2, "离开段后无返回 → 应闭合并起新中枢");
-        assert_eq!(zs[0].end_idx, 2);
-        assert_eq!(zs[1].start_idx, 4);
-        assert_eq!(zs[1].end_idx, 6);
-    }
-
-    #[test]
-    fn find_zs_one_bi_zs() {
-        let cfg = ZSConfig {
-            one_bi_zs: true,
-            ..ZSConfig::default()
+        let active = LevelUnitBar {
+            idx: 2,
+            dir: 1,
+            x1: 2,
+            x2: 3,
+            open: 11.0,
+            high: 20.5,
+            low: 11.0,
+            close: 20.0,
+            volume: 0.0,
+            confirm_x: 3,
         };
-        let segs = vec![mk_seg(0, 1, 20.0, 10.0)];
-        let zs = find_zs(&segs, 1, &cfg);
-        assert_eq!(zs.len(), 1, "单段模式应成 1 个中枢");
-        assert!(zs[0].is_one_bi_zs);
-    }
-
-    #[test]
-    fn find_zs_nine_seg_upgrade() {
-        let segs: Vec<LevelSegment> = (0..9)
-            .map(|k| mk_seg(k as i64, 1, 20.0 + (k as f64) * 0.1, 10.0))
-            .collect();
+        let segs = segments_with_optional_active(&frozen, Some(&active));
+        assert_eq!(segs.len(), 3);
         let zs = find_zs(&segs, 1, &ZSConfig::default());
         assert_eq!(zs.len(), 1);
-        assert!(zs[0].is_nine_seg_upgrade);
-        assert_eq!(zs[0].member_segs.len(), 9);
-    }
-
-    #[test]
-    fn find_zs_less_than_three_returns_empty() {
-        let segs = vec![mk_seg(0, 1, 20.0, 10.0), mk_seg(1, 1, 22.0, 12.0)];
-        assert!(find_zs(&segs, 1, &ZSConfig::default()).is_empty());
+        assert_eq!(zs[0].member_segs.len(), 3);
+        assert!(!zs[0].is_sure);
     }
 
     #[test]
@@ -607,20 +562,9 @@ mod tests {
                 mk_seg(12, 1, 21.0, 11.0),
             ],
         );
-        let lv2 = empty_level(
-            2,
-            vec![
-                mk_seg(20, 1, 50.0, 40.0),
-                mk_seg(21, 1, 52.0, 42.0),
-                mk_seg(22, 1, 51.0, 41.0),
-            ],
-        );
-        let zs_by_level = build_zs_for_levels(&[lv1, lv2], &ZSConfig::default());
-        assert_eq!(zs_by_level.len(), 2);
+        let zs_by_level = build_zs_for_levels(&[lv1], &ZSConfig::default());
+        assert_eq!(zs_by_level.len(), 1);
         assert_eq!(zs_by_level[0].len(), 1);
-        assert_eq!(zs_by_level[0][0].level, 1);
-        assert_eq!(zs_by_level[1].len(), 1);
-        assert_eq!(zs_by_level[1][0].level, 2);
     }
 
     #[test]
@@ -628,13 +572,8 @@ mod tests {
         let bars = synthetic_zigzag_legs(16, 8, 2.0, 0.1);
         let opt = crate::pipeline::PipelineOptions::default();
         let res = crate::pipeline::run_pipeline(&bars, &opt);
-        assert!(
-            !res.levels[0].zs_normal_frames.is_empty(),
-            "level=1 的 zs_normal_frames 应非空",
-        );
+        assert!(!res.levels[0].zs_normal_frames.is_empty());
         let _ = &res.levels[0].zs_over_seg_frames;
-        let _ = &res.levels[0].bsp_normal_frames;
-        let _ = &res.levels[0].bsp_over_seg_frames;
     }
 
     fn synthetic_zigzag_legs(
@@ -693,42 +632,4 @@ mod tests {
         }
         bars
     }
-
-    #[test]
-    fn find_zs_leave_return_and_combine() {
-        let segs = vec![
-            mk_seg(0, 1, 20.0, 10.0),
-            mk_seg(1, -1, 22.0, 12.0),
-            mk_seg(2, 1, 21.0, 11.0),
-            mk_seg(3, -1, 35.0, 25.0),
-            mk_seg(4, 1, 22.0, 13.0),
-            mk_seg(5, -1, 23.0, 14.0),
-            mk_seg(6, 1, 24.0, 15.0),
-            mk_seg(7, -1, 40.0, 30.0),
-            mk_seg(8, 1, 22.0, 12.0),
-            mk_seg(9, -1, 23.0, 13.0),
-            mk_seg(10, 1, 24.0, 14.0),
-            mk_seg(11, -1, 50.0, 40.0),
-            mk_seg(12, 1, 60.0, 50.0),
-            mk_seg(13, -1, 62.0, 52.0),
-            mk_seg(14, 1, 61.0, 51.0),
-            mk_seg(15, -1, 70.0, 62.0),
-            mk_seg(16, 1, 70.0, 63.0),
-            mk_seg(17, -1, 60.0, 50.0),
-            mk_seg(18, 1, 61.0, 51.0),
-            mk_seg(19, -1, 59.0, 49.0),
-            mk_seg(20, 1, 70.0, 62.0),
-        ];
-        let zs = find_zs(&segs, 1, &ZSConfig::default());
-        assert_eq!(zs.len(), 2, "Normal：leave-return + 相邻合并 → 2");
-        assert_eq!(zs[0].member_segs.len(), 9);
-        assert_eq!(zs[0].member_segs, vec![0, 1, 2, 4, 5, 6, 8, 9, 10]);
-        assert_eq!(zs[0].zg, 15.0);
-        assert_eq!(zs[0].zd, 20.0);
-        assert!(zs[0].is_nine_seg_upgrade);
-        assert_eq!(zs[1].member_segs.len(), 6);
-        assert_eq!(zs[1].zg, 52.0);
-        assert_eq!(zs[1].zd, 59.0);
-    }
 }
-

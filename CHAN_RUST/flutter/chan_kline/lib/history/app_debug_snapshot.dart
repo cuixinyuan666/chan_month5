@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../models/bar_crosshair_feature.dart';
-import '../models/bsp_frame.dart';
+import '../models/zs_frame.dart';
 import '../models/k0_confirm_signal.dart';
 import '../models/k0_line.dart';
 import '../models/kline_bar.dart';
@@ -93,7 +93,7 @@ class AppDebugSnapshot {
     );
     buf.writeln(
       '模块说明：已删除跨段中枢(KuaDuan)；zs.rs 双算 Normal/OverSeg（JSON：zs_normal_frames / zs_over_seg_frames）；'
-      'bsp 双套买卖点（bsp_normal_frames / bsp_over_seg_frames）；Auto 已放弃；'
+      'zs 双套中枢（zs_normal_frames / zs_over_seg_frames）；Auto 已放弃；'
       '主图指标「K(n-1)中枢(Normal|OverSeg)」「K(n-1)买卖点(Normal|OverSeg)」，同层同号、独立色系。',
     );
     buf.writeln(
@@ -156,7 +156,6 @@ class AppDebugSnapshot {
 
     _writeLevels(buf, levels);
     _writeZS(buf, levels);
-    _writeBSP(buf, levels);
     _writeDllDiag(buf, barFeatures, levels);
     _writeTailBarFeature(buf, visibleBars, barFeatures);
     _writeK0Confirms(buf, k0Confirms);
@@ -241,41 +240,13 @@ class AppDebugSnapshot {
           buf.writeln(
             '  [$tag] #$seq count=${f.count} x=[${f.x1},${f.x2}] '
             'ZD/ZG=${f.high}/${f.low}'
-            '${f.isNineSegUpgrade ? ' 9段升级' : ''}${f.isOneBiZs ? ' 单段' : ''}',
+            '${f.isSure ? '' : ' 不确定'}',
           );
         }
       }
 
       dumpZS('Normal', lv.zsNormalFrames);
       dumpZS('OverSeg', lv.zsOverSegFrames);
-    }
-    buf.writeln();
-  }
-
-  static void _writeBSP(StringBuffer buf, List<LevelBundle> levels) {
-    buf.writeln('【三类买卖点统计（Normal / OverSeg）】');
-    if (levels.isEmpty) {
-      buf.writeln('（无 levels 输出）');
-      buf.writeln();
-      return;
-    }
-    for (final lv in levels) {
-      buf.writeln(
-        'K${lv.level}：Normal=${lv.bspNormalFrames.length}；'
-        'OverSeg=${lv.bspOverSegFrames.length}',
-      );
-      void dumpBSP(String tag, List<BSPFrame> frames) {
-        for (final f in frames) {
-          final kind = '${f.isBuy ? "买" : "卖"}${f.cls}';
-          final rel = f.relateSegIdx == null ? '—' : f.relateSegIdx.toString();
-          buf.writeln(
-            '  [$tag] $kind 价=${f.price} x=${f.x} seg=${f.segIdx} 关联一类seg=$rel',
-          );
-        }
-      }
-
-      dumpBSP('Normal', lv.bspNormalFrames);
-      dumpBSP('OverSeg', lv.bspOverSegFrames);
     }
     buf.writeln();
   }

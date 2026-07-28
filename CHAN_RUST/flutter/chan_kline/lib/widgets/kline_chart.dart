@@ -13,6 +13,8 @@ import '../compute/fractal_judgment_compute.dart';
 import '../compute/level_unit_bar_view_compute.dart';
 import '../compute/zs_compute.dart';
 import '../history/msg_history.dart';
+import '../bridge/chan_bridge.dart';
+import '../models/kline_combine_bundle.dart';
 import '../models/zs_frame.dart';
 import '../models/k0_confirm_signal.dart';
 import '../models/bar_crosshair_feature.dart';
@@ -67,6 +69,8 @@ class KlineChart extends StatefulWidget {
     required this.mainIndicators,
     required this.subIndicators,
     this.levels = const [],
+    this.zsK0NormalFrames = const [],
+    this.zsK0OverSegFrames = const [],
     this.defaultK0Policy = 'pending',
     this.truncationCheck = true,
     this.showBuildingDash = true,
@@ -95,6 +99,9 @@ class KlineChart extends StatefulWidget {
 
   /// N 段流水线全量输出（十字线 as-of 重绘与 tooltip N 段块查表用）
   final List<LevelBundle> levels;
+  /// K0中枢（原生分钟K段；Rust zs_k0_*）
+  final List<ZSFrame> zsK0NormalFrames;
+  final List<ZSFrame> zsK0OverSegFrames;
   final Set<MainChartIndicator> mainIndicators;
   final Set<SubChartIndicator> subIndicators;
   final String defaultK0Policy;
@@ -173,6 +180,30 @@ class _KlineChartState extends State<KlineChart> {
   double _splitDragStartY = 0;
   double _splitDragStartFraction = 0.79;
   double _chartBodyH = 1;
+
+  /// 十字线 as-of 中枢 bundle 缓存（逐K当下 Rust 重算）
+  int? _zsAsOfCacheKey;
+  KlineCombineBundle? _zsAsOfBundle;
+
+  KlineCombineBundle? _bundleForZsAsOf(int? asOf) {
+    if (asOf == null) return null;
+    if (_zsAsOfCacheKey == asOf && _zsAsOfBundle != null) {
+      return _zsAsOfBundle;
+    }
+    final slice = widget.bars.where((b) => b.idx <= asOf).toList();
+    if (slice.isEmpty) return null;
+    try {
+      final bundle = ChanBridge.instance.buildKlineCombineBundle(
+        slice,
+        truncationCheck: widget.truncationCheck,
+      );
+      _zsAsOfCacheKey = asOf;
+      _zsAsOfBundle = bundle;
+      return bundle;
+    } catch (_) {
+      return null;
+    }
+  }
 
   Set<SubChartIndicator> get _activeSubs => widget.subIndicators;
 
@@ -484,6 +515,36 @@ class _KlineChartState extends State<KlineChart> {
     final bar = widget.bars[barIdx.clamp(0, widget.bars.length - 1)];
     final minuteLike = KlineAxisFormat.isMinuteLike(widget.bars);
     final timePart = KlineAxisFormat.xLabel(bar.timeText, minuteLike: minuteLike);
+    final asOf = _crosshairEnabled && _crosshairBarIdx != null
+        ? _crosshairAsOfIdx()
+        : null;
+    final asOfBundle = _bundleForZsAsOf(asOf);
+    final zsRows = zsCrosshairTooltipRows(
+      asOfIdx: bar.idx,
+      mainIndicators: widget.mainIndicators,
+      combineFrames: widget.combineFrames,
+      levels: widget.levels,
+      barFeatures: widget.barFeatures,
+      asOf: asOf,
+      bars: widget.bars,
+      truncationCheck: widget.truncationCheck,
+      zsK0NormalFrames: widget.zsK0NormalFrames,
+      zsK0OverSegFrames: widget.zsK0OverSegFrames,
+      asOfBundle: asOfBundle,
+    );
+    final k0Zs = zsRows.where((r) => r.label.startsWith('K0中枢')).toList();
+    final knZs = <int, List<CrosshairTooltipRow>>{};
+    for (final ind in widget.mainIndicators) {
+      if (ind.kind != MainIndicatorKind.zsNormal &&
+          ind.kind != MainIndicatorKind.zsOverSeg) {
+        continue;
+      }
+      if (ind.kn <= 0) continue;
+      final prefix = 'K${ind.kn}中枢';
+      final part = zsRows.where((r) => r.label.startsWith(prefix)).toList();
+      if (part.isEmpty) continue;
+      knZs[ind.kn] = [...(knZs[ind.kn] ?? []), ...part];
+    }
     final lookup = BarFeatureLookup.build(
       bars: widget.bars,
       combineFrames: widget.combineFrames,
@@ -495,17 +556,16 @@ class _KlineChartState extends State<KlineChart> {
       subIndicators: _activeSubs,
       truncationCheck: widget.truncationCheck,
       judgmentHistoryByKn: widget.judgmentHistoryByKn,
-      // 与传给 _KlineCompositePainter 的 segAsOf 完全一致：十字线激活时按当步 idx 截断，
-      // 使 tooltip 分型判断与副图同源同截断（KlineChart 无 segAsOf 字段，须在此现算）。
-      asOf: _crosshairEnabled && _crosshairBarIdx != null
-          ? _crosshairAsOfIdx()
-          : null,
+      asOf: asOf,
+      zsAfterK0: k0Zs,
+      knZsAfterKn: knZs,
     );
-    return lookup.crosshairTooltipRows(
+    final out = lookup.crosshairTooltipRows(
       bar.idx,
       timePart: timePart,
       subIndicators: _activeSubs,
     );
+    return out;
   }
 
   /// tooltip 锚点：十字线旁，尽量不挡价签
@@ -860,6 +920,11 @@ class _KlineChartState extends State<KlineChart> {
         _zonePlotTop = plotTop;
         _zoneContentBottom = contentBottom;
 
+        final segAsOf = _crosshairEnabled && _crosshairBarIdx != null
+            ? _crosshairAsOfIdx()
+            : null;
+        final zsAsOfBundle = _bundleForZsAsOf(segAsOf);
+
         return Stack(
           clipBehavior: Clip.none,
           children: [
@@ -875,6 +940,9 @@ class _KlineChartState extends State<KlineChart> {
                 k1CombineFrames: _effectiveK1CombineFrames,
                 k1Analysis: widget.k1Analysis,
                 levels: widget.levels,
+                zsK0NormalFrames: widget.zsK0NormalFrames,
+                zsK0OverSegFrames: widget.zsK0OverSegFrames,
+                zsAsOfBundle: zsAsOfBundle,
                 mainIndicators: _activeMains,
                 subIndicators: _activeSubs,
                 viewport: _viewport,
@@ -890,9 +958,7 @@ class _KlineChartState extends State<KlineChart> {
                 truncationCheck: widget.truncationCheck,
                 showBuildingDash: widget.showBuildingDash,
                 defaultK0Policy: widget.defaultK0Policy,
-                segAsOf: _crosshairEnabled && _crosshairBarIdx != null
-                    ? _crosshairAsOfIdx()
-                    : null,
+                segAsOf: segAsOf,
                 judgmentHistoryByKn: widget.judgmentHistoryByKn,
               ),
             ),
@@ -1066,6 +1132,9 @@ class _KlineCompositePainter extends CustomPainter {
     required this.k1CombineFrames,
     required this.k1Analysis,
     required this.levels,
+    this.zsK0NormalFrames = const [],
+    this.zsK0OverSegFrames = const [],
+    this.zsAsOfBundle,
     required this.mainIndicators,
     required this.subIndicators,
     required this.viewport,
@@ -1105,6 +1174,9 @@ class _KlineCompositePainter extends CustomPainter {
   final List<KlineCombineFrame> k1CombineFrames;
   final K1AnalysisBundle k1Analysis;
   final List<LevelBundle> levels;
+  final List<ZSFrame> zsK0NormalFrames;
+  final List<ZSFrame> zsK0OverSegFrames;
+  final KlineCombineBundle? zsAsOfBundle;
   final Set<MainChartIndicator> mainIndicators;
   final Set<SubChartIndicator> subIndicators;
   final BarFeatureLookup featureLookup;
@@ -1184,7 +1256,7 @@ class _KlineCompositePainter extends CustomPainter {
                 canvas, size.width, plotTop, plotH, slotW, ind.kn);
           }
         } else if (ind.kind == MainIndicatorKind.zsNormal) {
-          // Normal 中枢框：与合并/连线同号，zsNormal(n)=K(n-1)中枢(Normal)
+          // Normal 中枢：kn=0→K0中枢(合并框)；kn≥1→Kn中枢(Kn段)
           _drawZSOnMainChart(
             canvas,
             size.width,
@@ -1196,7 +1268,7 @@ class _KlineCompositePainter extends CustomPainter {
             algo: ZSAlgoKind.normal,
           );
         } else if (ind.kind == MainIndicatorKind.zsOverSeg) {
-          // OverSeg 中枢框：与合并/连线同号，zsOverSeg(n)=K(n-1)中枢(OverSeg)
+          // OverSeg 中枢：同上，展示名 Kn
           _drawZSOnMainChart(
             canvas,
             size.width,
@@ -1206,30 +1278,6 @@ class _KlineCompositePainter extends CustomPainter {
             slotW,
             ind.kn,
             algo: ZSAlgoKind.overSeg,
-          );
-        } else if (ind.kind == MainIndicatorKind.bspNormal) {
-          // Normal 买卖点：与合并/连线/中枢同号
-          _drawBSPOnMainChart(
-            canvas,
-            size.width,
-            plotTop,
-            plotH,
-            barW,
-            slotW,
-            ind.kn,
-            overSeg: false,
-          );
-        } else if (ind.kind == MainIndicatorKind.bspOverSeg) {
-          // OverSeg 买卖点：与合并/连线/中枢同号
-          _drawBSPOnMainChart(
-            canvas,
-            size.width,
-            plotTop,
-            plotH,
-            barW,
-            slotW,
-            ind.kn,
-            overSeg: true,
           );
         }
       }
@@ -2125,9 +2173,7 @@ class _KlineCompositePainter extends CustomPainter {
     return buildLevelUnitBarViews(frozenBars, activeUnit: active);
   }
 
-  /// 主图中枢框（Normal / OverSeg）：复用合并框横向 [_combineFrameHSpan]，
-  /// 画 ZD/ZG 半透明框 + 「K(n-1)中枢(Algo){序号}·段数」标签，九段升级追加标记。
-  /// 十字线 as-of：只认已冻结段本地重算；关十字线用 Rust 末态框。
+  /// 主图中枢框：强制消费 Rust zs_* JSON（K0=分钟K段；Kn=连线段）。
   void _drawZSOnMainChart(
     Canvas canvas,
     double w,
@@ -2138,32 +2184,22 @@ class _KlineCompositePainter extends CustomPainter {
     int kn, {
     required ZSAlgoKind algo,
   }) {
-    LevelBundle? bundle;
-    for (final b in levels) {
-      if (b.level == kn) {
-        bundle = b;
-        break;
-      }
-    }
-    if (bundle == null) return;
-    final List<ZSFrame> frames;
     final algoLabel = algo == ZSAlgoKind.normal ? 'Normal' : 'OverSeg';
-    if (segAsOf != null) {
-      // as-of：只喂 endConfirmX<=asOf 的已冻结段，重跑对应算法中枢（无未来、不回写）
-      final segs = asOfLevelSegments(
-        levels: levels,
-        level: kn,
-        asOf: segAsOf!,
-      );
-      frames = computeZSFrames(segs, kn, algo: algo);
-    } else {
-      frames = algo == ZSAlgoKind.normal
-          ? bundle.zsNormalFrames
-          : bundle.zsOverSegFrames;
-    }
+    final frames = computeZsFramesAtAsOf(
+      kn: kn,
+      algo: algo,
+      combineFrames: combineFrames,
+      levels: levels,
+      barFeatures: barFeatures,
+      asOf: zsAsOfBundle != null ? segAsOf : null,
+      bars: bars,
+      truncationCheck: truncationCheck,
+      zsK0NormalFrames: zsK0NormalFrames,
+      zsK0OverSegFrames: zsK0OverSegFrames,
+      asOfBundle: zsAsOfBundle,
+    );
     if (frames.isEmpty) return;
 
-    // Normal 玫红系；OverSeg 蓝青系（同层不同色）
     final style = algo == ZSAlgoKind.normal
         ? ChartLevelLineStyle.forZS(kn)
         : ChartLevelLineStyle.forZSOverSeg(kn);
@@ -2183,10 +2219,15 @@ class _KlineCompositePainter extends CustomPainter {
         continue;
       }
       final (xLeft, xRight) = _combineFrameHSpan(f.x1, f.x2, w, slotW, barW);
-      final yHigh = priceRange.yOf(f.high, plotTop, plotH); // ZD 上沿
-      final yLow = priceRange.yOf(f.low, plotTop, plotH); // ZG 下沿
-      final top = math.min(yHigh, yLow);
-      final bottom = math.max(yHigh, yLow);
+      final yHigh = priceRange.yOf(f.high, plotTop, plotH);
+      final yLow = priceRange.yOf(f.low, plotTop, plotH);
+      var top = math.min(yHigh, yLow);
+      var bottom = math.max(yHigh, yLow);
+      if ((bottom - top).abs() < 3.0) {
+        final mid = (top + bottom) / 2;
+        top = mid - 1.5;
+        bottom = mid + 1.5;
+      }
 
       final rect = Rect.fromLTRB(
         math.min(xLeft, xRight),
@@ -2195,117 +2236,24 @@ class _KlineCompositePainter extends CustomPainter {
         bottom,
       );
       canvas.drawRect(rect, fill);
-      canvas.drawRect(rect, stroke);
+      final useDash = !f.isSure && showBuildingDash;
+      if (useDash) {
+        _strokeDashedRect(canvas, rect, stroke, const [4, 4]);
+      } else {
+        canvas.drawRect(rect, stroke);
+      }
 
       final seq = f.seq > 0 ? f.seq : (i + 1);
       final dirMark = f.dir > 0 ? '↑' : (f.dir < 0 ? '↓' : '');
-      final upgradeMark = f.isNineSegUpgrade ? '·9段升级' : '';
       final tp = TextPainter(
         text: TextSpan(
-          text:
-              'K${kn - 1}中枢($algoLabel)$seq·${f.count}$dirMark$upgradeMark',
+          text: 'K$kn中枢($algoLabel)$seq·${f.count}$dirMark',
           style: labelStyle,
         ),
         textDirection: TextDirection.ltr,
       )..layout();
       tp.paint(canvas, Offset(rect.left + 2, rect.top + 1));
     }
-  }
-
-  /// 主图三类买卖点：直接在 Rust 末态 `bsp_*_frames` 上画点标记（不做 Dart 本地重算）。
-  /// 买=红、卖=绿；类用不同形状：一类圆、二类三角、三类菱形。
-  /// overSeg=false 吃 bsp_normal_frames；true 吃 bsp_over_seg_frames。
-  void _drawBSPOnMainChart(
-    Canvas canvas,
-    double w,
-    double plotTop,
-    double plotH,
-    double barW,
-    double slotW,
-    int kn, {
-    required bool overSeg,
-  }) {
-    LevelBundle? bundle;
-    for (final b in levels) {
-      if (b.level == kn) {
-        bundle = b;
-        break;
-      }
-    }
-    if (bundle == null) return;
-    final frames =
-        overSeg ? bundle.bspOverSegFrames : bundle.bspNormalFrames;
-    if (frames.isEmpty) return;
-
-    const markerR = 4.5;
-    const labelStyle = TextStyle(fontSize: 9, fontWeight: FontWeight.w600);
-    final algoTag = overSeg ? 'O' : 'N';
-    for (final f in frames) {
-      if (f.x < viewport.viewXMin - 1 || f.x > viewport.viewXMax + 1) {
-        continue;
-      }
-      final cx = _barCenterX(f.x, w, slotW);
-      final cy = priceRange.yOf(f.price, plotTop, plotH);
-      final color = ChartLevelLineStyle.forBSP(f.cls, f.isBuy);
-      final tag = '${f.isBuy ? "买" : "卖"}${f.cls}$algoTag';
-      final tp = TextPainter(
-        text: TextSpan(
-          text: '$tag ${f.price.toStringAsFixed(2)}',
-          style: labelStyle.copyWith(color: color),
-        ),
-        textDirection: TextDirection.ltr,
-      )..layout();
-
-      final fill = Paint()..color = color;
-      final stroke = Paint()
-        ..color = Colors.black.withValues(alpha: 0.55)
-        ..strokeWidth = 1.0;
-      final c = Offset(cx, cy);
-      switch (f.cls) {
-        case 1:
-          canvas.drawCircle(c, markerR, fill);
-          canvas.drawCircle(c, markerR, stroke);
-          break;
-        case 2:
-          _drawTriangle(canvas, c, markerR + 0.5, f.isBuy, fill, stroke);
-          break;
-        default:
-          _drawDiamond(canvas, c, markerR + 0.5, fill, stroke);
-          break;
-      }
-
-      tp.paint(canvas, Offset(cx + markerR + 2, cy - tp.height - 1));
-    }
-  }
-  /// 画向上/向下实心三角（买卖点二类标记）。
-  void _drawTriangle(
-    Canvas canvas,
-    Offset c,
-    double r,
-    bool isUp,
-    Paint fill,
-    Paint stroke,
-  ) {
-    final dy = isUp ? -r : r;
-    final path = Path()
-      ..moveTo(c.dx, c.dy + dy)
-      ..lineTo(c.dx - r, c.dy - dy)
-      ..lineTo(c.dx + r, c.dy - dy)
-      ..close();
-    canvas.drawPath(path, fill);
-    canvas.drawPath(path, stroke);
-  }
-
-  /// 画实心菱形（买卖点三类标记）。
-  void _drawDiamond(Canvas canvas, Offset c, double r, Paint fill, Paint stroke) {
-    final path = Path()
-      ..moveTo(c.dx, c.dy - r)
-      ..lineTo(c.dx + r, c.dy)
-      ..lineTo(c.dx, c.dy + r)
-      ..lineTo(c.dx - r, c.dy)
-      ..close();
-    canvas.drawPath(path, fill);
-    canvas.drawPath(path, stroke);
   }
 
   /// Kn 单元线（淡色底层，仿K1 bar [_drawK1Candles]）。
@@ -3504,6 +3452,9 @@ class _KlineCompositePainter extends CustomPainter {
         oldDelegate.k1CombineFrames != k1CombineFrames ||
         oldDelegate.k1Analysis != k1Analysis ||
         oldDelegate.levels != levels ||
+        oldDelegate.zsK0NormalFrames != zsK0NormalFrames ||
+        oldDelegate.zsK0OverSegFrames != zsK0OverSegFrames ||
+        oldDelegate.zsAsOfBundle != zsAsOfBundle ||
         oldDelegate.segAsOf != segAsOf ||
         oldDelegate.mainIndicators != mainIndicators ||
         oldDelegate.subIndicators != subIndicators ||

@@ -29,12 +29,23 @@ class CrosshairTooltipRow {
 
 /// 逐 K 字典式特征索引（ML / 十字线 tooltip 同源，均用 barFeatures 逐步冻结快照）。
 class BarFeatureLookup {
-  BarFeatureLookup._({required this.byIdx, this.totalLevels = 0});
+  BarFeatureLookup._({
+    required this.byIdx,
+    this.totalLevels = 0,
+    this.zsAfterK0 = const [],
+    this.knZsAfterKn = const {},
+  });
 
   final Map<int, Map<String, dynamic>> byIdx;
 
   /// 穷尽后的 N 段总层数（tooltip 对未诞生层输出占位行）
   final int totalLevels;
+
+  /// 十字线：K0 块后追加的中枢 ZG/ZD 行
+  final List<CrosshairTooltipRow> zsAfterK0;
+
+  /// 十字线：各 Kn 块后追加的中枢 ZG/ZD 行
+  final Map<int, List<CrosshairTooltipRow>> knZsAfterKn;
 
   factory BarFeatureLookup.build({
     required List<KlineBar> bars,
@@ -51,6 +62,8 @@ class BarFeatureLookup {
     /// 当步截断位（idx）：与副图指标 _drawKnFractalJudgmentSubChart 的 maxX=segAsOf 一致，
     /// 十字线激活时传入 widget.segAsOf，使 tooltip 分型判断与副图同源同截断。
     int? asOf,
+    List<CrosshairTooltipRow> zsAfterK0 = const [],
+    Map<int, List<CrosshairTooltipRow>> knZsAfterKn = const {},
   }) {
     final byIdx = <int, Map<String, dynamic>>{};
 
@@ -249,7 +262,12 @@ class BarFeatureLookup {
       }
     }
 
-    return BarFeatureLookup._(byIdx: byIdx, totalLevels: levels.length);
+    return BarFeatureLookup._(
+      byIdx: byIdx,
+      totalLevels: levels.length,
+      zsAfterK0: zsAfterK0,
+      knZsAfterKn: knZsAfterKn,
+    );
   }
 
   Map<String, dynamic>? operator [](int idx) => byIdx[idx];
@@ -332,6 +350,7 @@ class BarFeatureLookup {
       CrosshairTooltipRow.kv('K0合并K0序', '$mergeInner'),
       CrosshairTooltipRow.kv('K0合并组No.', mergeBoxSeq >= 0 ? '$mergeBoxSeq' : '未成框'),
       CrosshairTooltipRow.kv('K0分型确认', combineFxConfirm),
+      ...zsAfterK0,
       ..._levelBlockRows(idx),
     ];
 
@@ -522,6 +541,7 @@ class BarFeatureLookup {
         CrosshairTooltipRow.kv('$label合并', '—'),
         CrosshairTooltipRow.kv('$label分型确认', confirmText),
         CrosshairTooltipRow.kv('$label分型判断', judgeText),
+        ...knZsAfterKn[n] ?? const [],
       ];
     }
 
@@ -545,6 +565,7 @@ class BarFeatureLookup {
       ),
       CrosshairTooltipRow.kv('$label分型确认', confirmText),
       CrosshairTooltipRow.kv('$label分型判断', judgeText),
+      ...knZsAfterKn[n] ?? const [],
     ];
   }
 

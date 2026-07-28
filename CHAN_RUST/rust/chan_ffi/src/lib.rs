@@ -5,7 +5,7 @@ use std::ptr;
 
 use chan_data::{
     build_kline_combine_bundle_with, default_data_root, list_stock_codes, load_klines,
-    resolve_data_root, save_test_ohlc, BSPConfig, KlineBar, KlinePeriod, PipelineOptions, ZSConfig,
+    resolve_data_root, save_test_ohlc, KlineBar, KlinePeriod, PipelineOptions, ZSConfig,
 };
 use serde::{Deserialize, Serialize};
 
@@ -174,9 +174,6 @@ struct CombineRequest {
     /// 缺省=中枢共用配置（need_combine/combine_mode/one_bi；流水线始终双算 Normal+OverSeg）
     #[serde(default)]
     zs_config: Option<ZSConfig>,
-    /// 缺省=三类买卖点默认配置（趋势≥2中枢, 二类依附一类, 三类依附一类）
-    #[serde(default)]
-    bsp_config: Option<BSPConfig>,
 }
 
 fn parse_combine_request(raw: &str) -> Result<(Vec<KlineBar>, PipelineOptions), String> {
@@ -194,9 +191,6 @@ fn parse_combine_request(raw: &str) -> Result<(Vec<KlineBar>, PipelineOptions), 
     }
     if let Some(z) = req.zs_config {
         opt.zs_config = z;
-    }
-    if let Some(b) = req.bsp_config {
-        opt.bsp_config = b;
     }
     Ok((req.bars, opt))
 }

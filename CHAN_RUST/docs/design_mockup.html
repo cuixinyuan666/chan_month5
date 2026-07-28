@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CHAN_RUST K线 · 设计优化样张（优化后）</title>
+<style>
+  :root{
+    /* === Design Tokens（提案统一令牌，替代全工程 94 处裸色） === */
+    --bg-base:#0E1116;      --bg-surface:#161B22;   --bg-raised:#1C2230;  --bg-elevated:#222B3D;
+    --border:rgba(255,255,255,.12);  --border-subtle:rgba(255,255,255,.08);
+    --text-1:#E6EDF3;       --text-2:#9DA7B3;        --text-3:#6B7585;
+    --accent:#4C9AFF;       --accent-soft:rgba(76,154,255,.16);
+    --danger:#F0616D;       --warning:#E5A03B;       --success:#3FB950;
+    --r-sm:4px; --r-md:6px; --r-lg:8px; --r-xl:12px;
+    --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:20px; --s6:24px;
+    /* 图表语义色（直接接管 ChartLevelLineStyle 现有值） */
+    --l1:#F59E0B; --l2:#EC4899; --l3:#10B981; --l4:#8B5CF6; --l5:#06B6D4; --l6:#F97316;
+    --zsN:#E11D48; --zsN2:#0D9488; --bspBuy:#E53935; --bspSell:#43A047;
+    --font-ui:'Inter',system-ui,-apple-system,'Segoe UI',sans-serif;
+    --font-mono:'JetBrains Mono','Consolas',ui-monospace,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{background:#07090C;color:var(--text-1);font-family:var(--font-ui);
+       -webkit-font-smoothing:antialiased;padding:var(--s6);}
+  .page{max-width:1180px;margin:0 auto;}
+  header.top{display:flex;align-items:center;justify-content:space-between;
+             margin-bottom:var(--s4);flex-wrap:wrap;gap:var(--s3);}
+  h1{font-size:20px;font-weight:700;letter-spacing:.2px;}
+  h1 small{display:block;font-size:12px;font-weight:400;color:var(--text-3);margin-top:4px;}
+  .legend-tokens{display:flex;gap:6px;flex-wrap:wrap;}
+  .sw{width:22px;height:22px;border-radius:var(--r-sm);border:1px solid var(--border);}
+  .hint{font-size:12px;color:var(--text-3);margin:2px 0 var(--s4);}
+
+  /* ===== 应用窗口外框 ===== */
+  .window{background:var(--bg-base);border:1px solid var(--border);border-radius:var(--r-xl);
+          overflow:hidden;box-shadow:0 24px 60px rgba(0,0,0,.55);}
+  .caption{height:40px;display:flex;align-items:center;gap:var(--s1);
+           padding:0 var(--s2);border-bottom:1px solid var(--border-subtle);
+           background:linear-gradient(180deg,#141923,#10141B);}
+  .caption .drag{flex:1;}
+  .caption .ico{width:32px;height:32px;display:grid;place-items:center;border-radius:var(--r-sm);
+                color:var(--text-2);cursor:pointer;font-size:15px;transition:.15s;}
+  .caption .ico:hover{background:var(--bg-raised);color:var(--text-1);}
+  .caption .ico.set{color:var(--accent);border:1px solid rgba(76,154,255,.4);background:var(--accent-soft);}
+  .body{display:flex;height:560px;}
+  .chart-area{flex:1;position:relative;padding:var(--s2);min-width:0;}
+  .chart-card{height:100%;background:var(--bg-base);border:1px solid var(--border-subtle);
+              border-radius:var(--r-lg);position:relative;overflow:hidden;}
+
+  /* ===== 指标芯片（优化后：胶囊组 + 色点 + 高可发现） ===== */
+  .chips{position:absolute;left:8px;top:8px;display:flex;gap:6px;flex-wrap:wrap;max-width:60%;z-index:3;}
+  .chip{display:inline-flex;align-items:center;gap:6px;background:var(--bg-raised);
+        border:1px solid var(--border);border-radius:20px;padding:4px 10px;font-size:11px;
+        color:var(--text-1);opacity:.9;transition:.15s;}
+  .chip:hover{opacity:1;transform:translateY(-1px);border-color:rgba(255,255,255,.2);}
+  .chip .dot{width:8px;height:8px;border-radius:50%;}
+  .chip .x{color:var(--text-3);font-size:12px;cursor:pointer;}
+  .chip-add{background:transparent;border:1px dashed var(--border);color:var(--text-2);}
+
+  /* ===== 十字线信息框（优化后：卡片化 + 语义色条） ===== */
+  .tooltip{position:absolute;right:14px;top:14px;width:300px;background:var(--bg-elevated);
+           border:1px solid var(--border);border-radius:var(--r-lg);padding:var(--s3);
+           font-size:11px;z-index:4;box-shadow:0 12px 30px rgba(0,0,0,.5);}
+  .tt-group{border-left:2px solid var(--accent);padding-left:8px;margin-bottom:var(--s2);}
+  .tt-group.zs{border-color:var(--zsN);} .tt-group.kn{border-color:var(--l3);}
+  .tt-title{color:var(--text-2);font-size:10px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;}
+  .tt-row{display:flex;justify-content:space-between;padding:1px 0;line-height:1.5;}
+  .tt-row .k{color:var(--text-2);} .tt-row .v{color:var(--text-1);font-family:var(--font-mono);}
+
+  /* ===== 设置面板（优化后：分区 + 分区标题 + 统一控件） ===== */
+  .panel{width:300px;background:var(--bg-surface);border-left:1px solid var(--border);
+         display:flex;flex-direction:column;}
+  .panel-head{height:44px;display:flex;align-items:center;gap:var(--s2);padding:0 var(--s3);
+              border-bottom:1px solid var(--border-subtle);}
+  .panel-head .t{font-weight:600;font-size:13px;flex:1;}
+  .panel-head .ico{width:30px;height:30px;display:grid;place-items:center;border-radius:var(--r-sm);
+                   color:var(--text-2);cursor:pointer;} .panel-head .ico:hover{background:var(--bg-raised);}
+  .panel-body{overflow:auto;padding:var(--s3);}
+  .section{margin-bottom:var(--s5);}
+  .section h4{font-size:11px;color:var(--text-3);text-transform:uppercase;letter-spacing:.6px;
+              margin-bottom:var(--s2);font-weight:600;}
+  .field{margin-bottom:var(--s3);}
+  .field label{display:block;font-size:12px;color:var(--text-2);margin-bottom:6px;}
+  .input{width:100%;background:var(--bg-raised);border:1px solid var(--border);border-radius:var(--r-sm);
+         padding:8px 10px;color:var(--text-1);font-size:12px;display:flex;justify-content:space-between;
+         align-items:center;cursor:pointer;}
+  .input:hover{border-color:rgba(255,255,255,.22);}
+  .input .chev{color:var(--text-3);}
+  .switch-row{display:flex;align-items:center;gap:var(--s2);padding:var(--s2) 0;}
+  .switch-row .lab{flex:1;} .switch-row .lab .t{font-size:13px;} .switch-row .lab .s{font-size:11px;color:var(--text-3);}
+  .switch{width:38px;height:22px;border-radius:20px;background:var(--bg-raised);border:1px solid var(--border);
+          position:relative;transition:.18s;cursor:pointer;flex-shrink:0;}
+  .switch.on{background:var(--accent);border-color:var(--accent);}
+  .switch::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;
+                 background:#fff;transition:.18s;} .switch.on::after{left:18px;}
+  .btn{width:100%;background:var(--bg-raised);border:1px solid var(--border);border-radius:var(--r-sm);
+       padding:9px;color:var(--text-1);font-size:13px;cursor:pointer;display:flex;align-items:center;
+       justify-content:center;gap:6px;transition:.15s;margin-bottom:var(--s2);}
+  .btn:hover{border-color:rgba(255,255,255,.25);background:#222B3D;}
+  .btn.accent{border-color:rgba(76,154,255,.45);background:var(--accent-soft);color:var(--accent);}
+  .btn.ghost{background:transparent;}
+
+  /* 状态条 */
+  .statusbar{height:26px;display:flex;align-items:center;gap:var(--s4);padding:0 var(--s3);
+             border-top:1px solid var(--border-subtle);background:#10141B;font-size:11px;color:var(--text-3);
+             font-family:var(--font-mono);}
+
+  /* ===== 对比区 ===== */
+  .compare{margin-top:var(--s6);}
+  .compare h2{font-size:16px;margin-bottom:var(--s3);}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:var(--s4);}
+  .card-cmp{background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--r-lg);padding:var(--s4);}
+  .card-cmp h3{font-size:13px;margin-bottom:var(--s2);display:flex;align-items:center;gap:8px;}
+  .tag{font-size:10px;padding:2px 8px;border-radius:20px;}
+  .tag.before{background:rgba(240,97,109,.16);color:var(--danger);}
+  .tag.after{background:rgba(63,185,80,.16);color:var(--success);}
+  .card-cmp ul{list-style:none;font-size:12px;color:var(--text-2);line-height:1.7;}
+  .card-cmp ul li::before{content:"•";color:var(--text-3);margin-right:8px;}
+  .card-cmp ul li b{color:var(--text-1);font-weight:600;}
+  footer{margin-top:var(--s5);font-size:11px;color:var(--text-3);text-align:center;}
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="top">
+    <h1>CHAN_RUST · K线 App 设计优化样张
+      <small>UI Designer 提案 · 优化后（Proposed）· 仅改界面外壳，不动缠论计算/渲染逻辑</small>
+    </h1>
+    <div class="legend-tokens" title="统一设计令牌（替代散落裸色）">
+      <div class="sw" style="background:var(--bg-base)"></div>
+      <div class="sw" style="background:var(--bg-surface)"></div>
+      <div class="sw" style="background:var(--bg-raised)"></div>
+      <div class="sw" style="background:var(--bg-elevated)"></div>
+      <div class="sw" style="background:var(--accent)"></div>
+      <div class="sw" style="background:var(--text-1)"></div>
+      <div class="sw" style="background:var(--l1)"></div>
+      <div class="sw" style="background:var(--zsN)"></div>
+      <div class="sw" style="background:var(--bspBuy)"></div>
+    </div>
+  </header>
+  <p class="hint">下方为「优化后」界面重建（标题栏 / 设置面板 / 指标芯片 / 十字线信息框 / 状态条）。图表内核语义色沿用现有 <code>ChartLevelLineStyle</code> 调色板。底部为「当前 → 优化后」逐件对比。</p>
+
+  <!-- ===== 应用窗口 ===== -->
+  <div class="window">
+    <div class="caption">
+      <div class="drag"></div>
+      <div class="ico set" title="设置">⚙</div>
+      <div class="ico" title="最小化">—</div>
+      <div class="ico" title="最大化">▢</div>
+      <div class="ico" title="关闭">✕</div>
+    </div>
+    <div class="body">
+      <!-- 图表区 -->
+      <div class="chart-area">
+        <div class="chart-card">
+          <!-- 静态示意图表（语义色） -->
+          <svg width="100%" height="100%" viewBox="0 0 700 520" preserveAspectRatio="none" style="display:block">
+            <rect width="700" height="520" fill="#0E1116"/>
+            <!-- 网格 -->
+            <g stroke="rgba(255,255,255,.05)">
+              <line x1="0" y1="130" x2="700" y2="130"/><line x1="0" y1="260" x2="700" y2="260"/>
+              <line x1="0" y1="390" x2="700" y2="390"/>
+            </g>
+            <!-- 蜡烛 -->
+            <g>
+              <!-- 用简单矩形模拟若干 K 线 -->
+              <g fill="#26A69A"><rect x="20" y="300" width="8" height="40"/><rect x="50" y="280" width="8" height="55"/></g>
+              <g fill="#E53935"><rect x="80" y="250" width="8" height="60"/><rect x="110" y="270" width="8" height="45"/></g>
+              <g fill="#26A69A"><rect x="140" y="240" width="8" height="70"/><rect x="170" y="210" width="8" height="85"/></g>
+              <g fill="#E53935"><rect x="200" y="230" width="8" height="50"/><rect x="230" y="200" width="8" height="65"/></g>
+              <g fill="#26A69A"><rect x="260" y="180" width="8" height="80"/><rect x="290" y="160" width="8" height="95"/></g>
+              <g fill="#E53935"><rect x="320" y="190" width="8" height="60"/><rect x="350" y="170" width="8" height="75"/></g>
+              <g fill="#26A69A"><rect x="380" y="150" width="8" height="90"/></g>
+            </g>
+            <!-- K1 连线（琥珀） -->
+            <polyline points="24,320 84,260 144,230 204,210 264,180 324,160 384,150"
+              fill="none" stroke="var(--l1)" stroke-width="2"/>
+            <!-- K2 连线（玫红） -->
+            <polyline points="24,330 144,250 264,190 384,160"
+              fill="none" stroke="var(--l2)" stroke-width="2"/>
+            <!-- 中枢框 Normal（玫红半透明） -->
+            <rect x="160" y="195" width="200" height="55" fill="rgba(225,29,72,.12)" stroke="var(--zsN)" stroke-width="1.5"/>
+            <!-- 买卖点（红买圆 / 绿卖三角） -->
+            <circle cx="144" cy="230" r="5" fill="var(--bspBuy)"/>
+            <polygon points="324,160 319,170 329,170" fill="var(--bspSell)"/>
+            <!-- 十字线 -->
+            <line x1="384" y1="0" x2="384" y2="520" stroke="rgba(230,237,243,.4)" stroke-dasharray="3 3"/>
+            <line x1="0" y1="150" x2="700" y2="150" stroke="rgba(230,237,243,.4)" stroke-dasharray="3 3"/>
+          </svg>
+
+          <!-- 指标芯片（优化后） -->
+          <div class="chips">
+            <span class="chip"><span class="dot" style="background:var(--text-2)"></span>K0<span class="x">×</span></span>
+            <span class="chip"><span class="dot" style="background:var(--l1)"></span>K0合并<span class="x">×</span></span>
+            <span class="chip"><span class="dot" style="background:var(--zsN)"></span>K0中枢<span class="x">×</span></span>
+            <span class="chip"><span class="dot" style="background:var(--l2)"></span>K1中枢<span class="x">×</span></span>
+            <span class="chip"><span class="dot" style="background:var(--bspBuy)"></span>买卖点<span class="x">×</span></span>
+            <span class="chip chip-add">＋ 指标</span>
+          </div>
+
+          <!-- 十字线信息框（优化后） -->
+          <div class="tooltip">
+            <div class="tt-group">
+              <div class="tt-title">K线</div>
+              <div class="tt-row"><span class="k">时间</span><span class="v">2024/03/12 14:30</span></div>
+              <div class="tt-row"><span class="k">开/高/低/收</span><span class="v">10.2/10.5/10.1/10.4</span></div>
+            </div>
+            <div class="tt-group kn">
+              <div class="tt-title">K1 连线</div>
+              <div class="tt-row"><span class="k">方向</span><span class="v">↑ 上升段</span></div>
+              <div class="tt-row"><span class="k">确认</span><span class="v">已冻结</span></div>
+            </div>
+            <div class="tt-group zs">
+              <div class="tt-title">K0中枢(Normal)</div>
+              <div class="tt-row"><span class="k">ZG/ZD</span><span class="v">10.45/10.18</span></div>
+              <div class="tt-row"><span class="k">状态</span><span class="v">确定</span></div>
+            </div>
+            <div class="tt-group">
+              <div class="tt-title">买卖点</div>
+              <div class="tt-row"><span class="k">一类买</span><span class="v" style="color:var(--bspBuy)">● 10.20</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 设置面板（优化后） -->
+      <div class="panel">
+        <div class="panel-head">
+          <span class="t">加载设置</span>
+          <span class="ico" title="换边">⇄</span>
+          <span class="ico" title="关闭">✕</span>
+        </div>
+        <div class="panel-body">
+          <div class="section">
+            <h4>数据</h4>
+            <div class="field">
+              <label>股票 (2)</label>
+              <div class="input">002003 <span class="chev">▾</span></div>
+            </div>
+            <div class="field">
+              <label>周期</label>
+              <div class="input">TICK-1MIN <span class="chev">▾</span></div>
+            </div>
+            <div class="field">
+              <label>加载起始时间</label>
+              <div class="input">2024/01/01 09:30 <span class="chev">📅</span></div>
+            </div>
+            <div class="field">
+              <label>加载截止时间</label>
+              <div class="input">2024/12/31 15:00 <span class="chev">📅</span></div>
+            </div>
+          </div>
+
+          <div class="section">
+            <h4>显示</h4>
+            <div class="switch-row">
+              <div class="lab"><div class="t">截断机制</div><div class="s">已开启（当前口径）</div></div>
+              <div class="switch on"></div>
+            </div>
+            <div class="switch-row">
+              <div class="lab"><div class="t">构建中/未确认虚线</div><div class="s">已开启（构建中元素虚线）</div></div>
+              <div class="switch on"></div>
+            </div>
+          </div>
+
+          <div class="section">
+            <h4>调试（常驻）</h4>
+            <button class="btn ghost">↻ 刷新股票列表</button>
+            <button class="btn">⧉ 一键复制历史记录</button>
+            <button class="btn">🕘 查看历史记录</button>
+            <button class="btn accent">⧉ 复制页面快照</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="statusbar">
+      <span>步进 1,284 / 2,560</span><span>当前层 Kn=3</span><span style="color:var(--accent)">● 播放中</span><span>截断:开</span>
+    </div>
+  </div>
+
+  <!-- ===== 对比 ===== -->
+  <div class="compare">
+    <h2>逐件对比：当前 → 优化后</h2>
+    <div class="grid">
+      <div class="card-cmp">
+        <h3>指标芯片 <span class="tag before">当前</span></h3>
+        <ul>
+          <li>整组默认 <b>透明度 0.38</b>，需 hover 才显形 → 可发现性差</li>
+          <li>多项用 <b>/ 斜杠</b> 挤一行，多选时难解析</li>
+          <li>裸色 <code>0xFFE2E8F0</code> 散落，无层类型语义</li>
+        </ul>
+      </div>
+      <div class="card-cmp">
+        <h3>指标芯片 <span class="tag after">优化后</span></h3>
+        <ul>
+          <li><b>胶囊组</b>：每项独立 pill，默认 0.9 可发现，hover 微抬升</li>
+          <li>左侧 <b>色点</b> 对应层类型语义色（连线/中枢/买卖点）</li>
+          <li>「＋ 指标」独立入口，双击 × 关闭单项</li>
+        </ul>
+      </div>
+
+      <div class="card-cmp">
+        <h3>设置面板 <span class="tag before">当前</span></h3>
+        <ul>
+          <li>控件 <b>一长条平铺</b>，无分组无层级</li>
+          <li>表面色 <code>0xF01A1A1A</code> 与画布无梯度关系</li>
+          <li>三常驻复制按钮与数据控件混排</li>
+        </ul>
+      </div>
+      <div class="card-cmp">
+        <h3>设置面板 <span class="tag after">优化后</span></h3>
+        <ul>
+          <li><b>三个分区</b>：数据 / 显示 / 调试，各有小标题</li>
+          <li>统一令牌表面梯度 + 统一输入/开关/按钮样式</li>
+          <li>调试按钮归组，主操作（复制快照）用 accent 强调</li>
+        </ul>
+      </div>
+
+      <div class="card-cmp">
+        <h3>十字线信息框 <span class="tag before">当前</span></h3>
+        <ul>
+          <li><code>0xEE121212</code> 半透明 + 1px 描边，无分区</li>
+          <li>分隔用 <b>= 铺满</b>，略显粗糙</li>
+          <li>标签/数值无来源语义区分</li>
+        </ul>
+      </div>
+      <div class="card-cmp">
+        <h3>十字线信息框 <span class="tag after">优化后</span></h3>
+        <ul>
+          <li><b>卡片化</b> + 圆角 8 + 描边 + 底色 <code>bgElevated</code></li>
+          <li>按来源（K线/K1/中枢/买卖点）<b>左侧语义色条</b>分区</li>
+          <li>数值统一等宽字体，标签/值两列对齐</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <footer>设计令牌与落地路线图详见同目录 DESIGN_OPTIMIZATION.md · 待确认范围后逐步改 Flutter 代码</footer>
+</div>
+</body>
+</html>

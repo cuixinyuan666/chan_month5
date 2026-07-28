@@ -103,7 +103,7 @@ class ChartLevelLineStyle {
   /// 图例短标签（连线展示名：内部 level → K(level-1)）
   static String shortLabel(int level) => 'K${level - 1}';
 
-  /// Normal 中枢专属配色（玫红系），与合并/连线同层同号。
+  /// Normal 中枢专属配色（玫红系）；下标=展示 Kn（0=K0中枢）。
   static const _zsColors = <Color>[
     Color(0xCCE11D48), // K0中枢(Normal)
     Color(0xCC0D9488), // K1中枢(Normal)
@@ -123,11 +123,11 @@ class ChartLevelLineStyle {
     Color(0xCC22D3EE), // K5中枢(OverSeg)：亮青
   ];
 
-  /// 按内部 level 取 Normal 中枢样式（level=1→K0中枢(Normal)，…）。
-  static ChartLevelLineStyle forZS(int level) {
-    assert(level >= 1);
-    final i = (level - 1).clamp(0, _zsColors.length - 1);
-    final w = 1.9 + (level - 1) * 0.25;
+  /// 按展示 Kn 取 Normal 中枢样式（0=K0中枢，1=K1中枢，…）。
+  static ChartLevelLineStyle forZS(int kn) {
+    assert(kn >= 0);
+    final i = kn.clamp(0, _zsColors.length - 1);
+    final w = 1.9 + kn * 0.25;
     return ChartLevelLineStyle(
       color: _zsColors[i],
       strokeWidth: w,
@@ -137,11 +137,11 @@ class ChartLevelLineStyle {
     );
   }
 
-  /// 按内部 level 取 OverSeg 中枢样式（同层色 ≠ Normal）。
-  static ChartLevelLineStyle forZSOverSeg(int level) {
-    assert(level >= 1);
-    final i = (level - 1).clamp(0, _zsOverSegColors.length - 1);
-    final w = 1.9 + (level - 1) * 0.25;
+  /// 按展示 Kn 取 OverSeg 中枢样式（0=K0，同层色 ≠ Normal）。
+  static ChartLevelLineStyle forZSOverSeg(int kn) {
+    assert(kn >= 0);
+    final i = kn.clamp(0, _zsOverSegColors.length - 1);
+    final w = 1.9 + kn * 0.25;
     return ChartLevelLineStyle(
       color: _zsOverSegColors[i],
       strokeWidth: w,

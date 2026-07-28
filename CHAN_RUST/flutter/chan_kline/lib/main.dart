@@ -11,6 +11,7 @@ import 'compute/fractal_judgment_compute.dart';
 import 'compute/k1_bar_view_compute.dart';
 import 'history/app_debug_snapshot.dart';
 import 'history/msg_history.dart';
+import 'models/zs_frame.dart';
 import 'models/kline_bar.dart';
 import 'models/k0_confirm_signal.dart';
 import 'models/bar_crosshair_feature.dart';
@@ -47,6 +48,11 @@ Future<void> main() async {
   MsgHistory.instance.appendZSCrosshairAsOf();
   // 删除跨段中枢；原生拆 Normal/OverSeg；买卖点双套；放弃 Auto
   MsgHistory.instance.appendZSSplitNormalOverSeg();
+  // 中枢确定/不确定虚实线（对齐动态Kn）
+  MsgHistory.instance.appendZSSureDashFrames();
+  // K0中枢命名纠偏 + 单段雏形
+  MsgHistory.instance.appendK0ZsRenameAndPrototype();
+  MsgHistory.instance.appendZsSingleSeedIsomorphic();
   // 展示轨：动态KN当确认段画虚线；确认优先纠正/改实线
   MsgHistory.instance.appendDisplayTrackDynamicKnBuildingLines();
   // 种子框 / 第一条虚线限制 / 种子包含截断（全层同构，常驻历史）
@@ -126,11 +132,13 @@ class _KlineHomePageState extends State<KlineHomePage> {
   List<KlineCombineFrame> _k1CombineFrames = [];
   K1AnalysisBundle _k1Analysis = K1AnalysisBundle.empty();
   List<LevelBundle> _levels = [];
+  List<ZSFrame> _zsK0NormalFrames = [];
+  List<ZSFrame> _zsK0OverSegFrames = [];
   Set<MainChartIndicator> _mainIndicators = {
-    const MainChartIndicator.kn(1), // K0：默认显示原生 K0 蜡烛（可在面板关闭）
+    const MainChartIndicator.kn(1),
     const MainChartIndicator.combine(1),
+    const MainChartIndicator.zsNormal(0),
     const MainChartIndicator.zsNormal(1),
-    const MainChartIndicator.bspNormal(1),
   };
   Set<SubChartIndicator> _subIndicators = {
     const SubChartIndicator.fractalConfirm(1),
@@ -362,6 +370,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _k1CombineFrames = [];
         _k1Analysis = K1AnalysisBundle.empty();
         _levels = [];
+        _zsK0NormalFrames = [];
+        _zsK0OverSegFrames = [];
         _stepIdx = -1;
         _judgmentHistoryByKn.clear();
       });
@@ -412,6 +422,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _k1CombineFrames = [];
         _k1Analysis = K1AnalysisBundle.empty();
         _levels = [];
+        _zsK0NormalFrames = [];
+        _zsK0OverSegFrames = [];
         _judgmentHistoryByKn.clear();
       });
       return;
@@ -450,6 +462,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _k1Analysis = bundle.k1Analysis;
         _defaultK0Policy = bundle.defaultK0Policy;
         _levels = bundle.levels;
+        _zsK0NormalFrames = bundle.zsK0NormalFrames;
+        _zsK0OverSegFrames = bundle.zsK0OverSegFrames;
         // 按当前最高 Kn 动态裁剪已选指标（层变少时去掉失效项）
         final maxKn = chartMaxKn(
           levels: _levels,
@@ -652,6 +666,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
                   k1CombineFrames: _k1CombineFrames,
                   k1Analysis: _k1Analysis,
                   levels: _levels,
+                  zsK0NormalFrames: _zsK0NormalFrames,
+                  zsK0OverSegFrames: _zsK0OverSegFrames,
                   defaultK0Policy: _defaultK0Policy,
                   truncationCheck: _truncationCheck,
                   showBuildingDash: _showBuildingDash,
@@ -1100,9 +1116,10 @@ class _KlineHomePageState extends State<KlineHomePage> {
             '虚线=动态Kn/动态合并/分型判断，实线=确认Kn/确认合并/分型确认，确认优先；'
             '第一条虚线期内非leave严格包含至多截一次；确认后TruncGuard原样；\n'
             '· 分型确认优先：纠正虚线端点，或单元冻结后虚线改实线；不回写永久结构；\n'
-            '· 尾端取区间内首次方向极值所在 K0（非 as-of 末根钉 X）；全层同构。\n\n'
+            '· 尾端取区间内首次方向极值所在 K0（非 as-of 末根钉 X）；全层同构；\n'
+            '· K0/K1/…/Kn中枢(Normal|OverSeg)：确定态实线；不确定/单段雏形虚线；K0=合并框实体。\n\n'
             '关闭\n'
-            '· 上述所有元素一律实线，不区分构建中状态（合并框、各层构建中连线均实线）。\n\n'
+            '· 上述所有元素一律实线，不区分构建中状态（合并框、各层构建中连线、中枢框均实线）。\n\n'
             '操作步骤\n'
             '1. 打开右上角设置；\n'
             '2. 拨动「构建中/未确认虚线」开关；\n'

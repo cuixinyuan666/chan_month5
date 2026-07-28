@@ -1,22 +1,19 @@
 import 'k0_line.dart';
 import 'level_models.dart';
 
-/// 主图指标种类：连线 / 合并框 / KN线 / Normal中枢 / OverSeg中枢 / 双套买卖点。
+/// 主图指标：连线 / 合并框 / KN线 / Normal中枢 / OverSeg中枢。
 enum MainIndicatorKind {
   line,
   combine,
   kn,
   zsNormal,
   zsOverSeg,
-  bspNormal,
-  bspOverSeg,
 }
 
 /// 主图一项指标（按加载后 maxKn 动态生成）。
 class MainChartIndicator {
   final MainIndicatorKind kind;
-  /// 内部层号（合并/连线/中枢/买卖点统一用层号）：1..maxKn。
-  /// 展示名比层号小 1：连线=K(n-1)连线，中枢=K(n-1)中枢(Normal|OverSeg)。
+  /// kn=0：K0中枢（原生分钟K）；kn≥1：Kn中枢（连线段）。
   final int kn;
 
   const MainChartIndicator.line(this.kn) : kind = MainIndicatorKind.line;
@@ -26,12 +23,7 @@ class MainChartIndicator {
       : kind = MainIndicatorKind.zsNormal;
   const MainChartIndicator.zsOverSeg(this.kn)
       : kind = MainIndicatorKind.zsOverSeg;
-  const MainChartIndicator.bspNormal(this.kn)
-      : kind = MainIndicatorKind.bspNormal;
-  const MainChartIndicator.bspOverSeg(this.kn)
-      : kind = MainIndicatorKind.bspOverSeg;
 
-  /// 展示名比内部层号小 1。
   String get label {
     switch (kind) {
       case MainIndicatorKind.line:
@@ -41,13 +33,9 @@ class MainChartIndicator {
       case MainIndicatorKind.kn:
         return 'K${kn - 1}';
       case MainIndicatorKind.zsNormal:
-        return 'K${kn - 1}中枢(Normal)';
+        return 'K$kn中枢(Normal)';
       case MainIndicatorKind.zsOverSeg:
-        return 'K${kn - 1}中枢(OverSeg)';
-      case MainIndicatorKind.bspNormal:
-        return 'K${kn - 1}买卖点(Normal)';
-      case MainIndicatorKind.bspOverSeg:
-        return 'K${kn - 1}买卖点(OverSeg)';
+        return 'K$kn中枢(OverSeg)';
     }
   }
 
@@ -68,10 +56,9 @@ enum SubIndicatorKind {
   truncation,
 }
 
-/// 副图一项指标（分型确认/判断/极点距/截断按层动态生成）。
+/// 副图一项指标。
 class SubChartIndicator {
   final SubIndicatorKind kind;
-  /// 分型确认/判断/极点距/截断：1..maxKn（与主图 combine/line 同号=层号）
   final int kn;
 
   const SubChartIndicator.volume()
@@ -109,7 +96,6 @@ class SubChartIndicator {
   int get hashCode => Object.hash(kind, kn);
 }
 
-/// 当前数据最高 Kn（levels 最大 level；无 levels 但有 K0连线时为 1）。
 int chartMaxKn({
   required List<LevelBundle> levels,
   List<K0Line> k0Lines = const [],
@@ -122,8 +108,6 @@ int chartMaxKn({
   return m;
 }
 
-/// 主图可选列表：合并与连线统一按层号 1..maxKn 生成（展示名 K(n-1)）。
-/// maxKn=0（无 K0连线）时仍保留 K0合并（combine(1)）可勾。
 List<MainChartIndicator> buildMainIndicatorCatalog(int maxKn) {
   final out = <MainChartIndicator>[];
   final combineMax = maxKn < 1 ? 1 : maxKn;
@@ -137,25 +121,17 @@ List<MainChartIndicator> buildMainIndicatorCatalog(int maxKn) {
   for (var n = 1; n <= maxKn; n++) {
     out.add(MainChartIndicator.line(n));
   }
-  // Normal / OverSeg 中枢与合并/连线同号
+  out.add(const MainChartIndicator.zsNormal(0));
+  out.add(const MainChartIndicator.zsOverSeg(0));
   for (var n = 1; n <= maxKn; n++) {
     out.add(MainChartIndicator.zsNormal(n));
   }
   for (var n = 1; n <= maxKn; n++) {
     out.add(MainChartIndicator.zsOverSeg(n));
   }
-  // 双套买卖点与中枢同号
-  for (var n = 1; n <= maxKn; n++) {
-    out.add(MainChartIndicator.bspNormal(n));
-  }
-  for (var n = 1; n <= maxKn; n++) {
-    out.add(MainChartIndicator.bspOverSeg(n));
-  }
   return out;
 }
 
-/// 副图可选列表：成交量 + Kn分型确认/判断/极点距/截断（1..maxKn，与主图同号=层号）；
-/// 截断项仅在 [truncationCheck]=true 时出现。
 List<SubChartIndicator> buildSubIndicatorCatalog(
   int maxKn, {
   bool truncationCheck = true,
@@ -178,7 +154,6 @@ List<SubChartIndicator> buildSubIndicatorCatalog(
   return out;
 }
 
-/// 裁掉当前目录里已不存在的已选项。
 Set<T> pruneIndicators<T>(Set<T> selected, List<T> catalog) {
   final allow = catalog.toSet();
   return selected.where(allow.contains).toSet();

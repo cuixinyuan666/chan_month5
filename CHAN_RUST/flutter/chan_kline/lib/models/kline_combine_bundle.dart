@@ -5,6 +5,7 @@ import 'k1_bar.dart';
 import 'kline_combine_frame.dart';
 import 'level_models.dart';
 import 'k1_analysis.dart';
+import 'zs_frame.dart';
 
 /// Rust `KlineCombineBundle`：合并线框 + K0连线确认 + 十字线特征 + K0连线链 + Kn 流水线。
 class KlineCombineBundle {
@@ -29,6 +30,10 @@ class KlineCombineBundle {
   /// Kn 流水线全量输出（levels[0]=K1/K0连线，levels[1]=K2/K1连线，…穷尽）
   final List<LevelBundle> levels;
 
+  /// K0中枢（原生分钟K段，level=0）
+  final List<ZSFrame> zsK0NormalFrames;
+  final List<ZSFrame> zsK0OverSegFrames;
+
   const KlineCombineBundle({
     required this.frames,
     required this.k0Confirms,
@@ -42,6 +47,8 @@ class KlineCombineBundle {
     this.levelSegments = const [],
     this.levelVirtualUnits = const [],
     this.levels = const [],
+    this.zsK0NormalFrames = const [],
+    this.zsK0OverSegFrames = const [],
   });
 
   factory KlineCombineBundle.fromJson(Map<String, dynamic> json) {
@@ -122,6 +129,12 @@ class KlineCombineBundle {
       levels: (json['levels'] as List? ?? const [])
           .map((e) => LevelBundle.fromJson(Map<String, dynamic>.from(e as Map)))
           .toList(),
+      zsK0NormalFrames: (json['zs_k0_normal_frames'] as List? ?? const [])
+          .map((e) => ZSFrame.fromJson(Map<String, dynamic>.from(e as Map)))
+          .toList(),
+      zsK0OverSegFrames: (json['zs_k0_over_seg_frames'] as List? ?? const [])
+          .map((e) => ZSFrame.fromJson(Map<String, dynamic>.from(e as Map)))
+          .toList(),
     );
   }
 
@@ -138,5 +151,7 @@ class KlineCombineBundle {
         levelSegments: [],
         levelVirtualUnits: [],
         levels: [],
+        zsK0NormalFrames: [],
+        zsK0OverSegFrames: [],
       );
 }

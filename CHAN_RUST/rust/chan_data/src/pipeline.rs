@@ -19,8 +19,7 @@ use crate::engine::{
     seed_leave_dir, CombineEngine, FxEvent, FxKind, MergeUnit, TruncGuard,
 };
 use crate::kline::KlineBar;
-use crate::bsp::{BSPConfig, BSPFrame};
-use crate::zs::{ZSAlgo, ZSConfig, ZSFrame};
+use crate::zs::{find_zs, ZSAlgo, ZSConfig, ZSFrame, ZSIncEngine};
 
 
 /// 流水线选项
@@ -33,10 +32,8 @@ pub struct PipelineOptions {
     /// 截断监察开关（默认开启）：上行阶段暴力反转单元（最高价>=左框高 且 最低价<上个底分型低）
     /// 不被包含吸收，左框当场顶分型确认；下降截断镜像；全层同构
     pub truncation_check: bool,
-    /// 原生缠论中枢（ZS）配置：控制是否合并、合并模式、单段中枢、成中枢算法
+    /// 原生缠论中枢（ZS）配置
     pub zs_config: ZSConfig,
-    /// 三类买卖点（BSP）配置：趋势最少中枢数、二类回踩幅度、三类是否依附一类等
-    pub bsp_config: BSPConfig,
 }
 
 impl Default for PipelineOptions {
@@ -46,7 +43,6 @@ impl Default for PipelineOptions {
             max_levels: 16,
             truncation_check: true,
             zs_config: ZSConfig::default(),
-            bsp_config: BSPConfig::default(),
         }
     }
 }
@@ -240,15 +236,9 @@ pub struct LevelBundleOut {
     /// 本层 Normal 中枢框（全层同构；种子=≥3 连续互叠）
     #[serde(default)]
     pub zs_normal_frames: Vec<ZSFrame>,
-    /// 本层 OverSeg 中枢框（全层同构；种子=首末段重叠即可）
+    /// 本层 OverSeg 中枢框
     #[serde(default)]
     pub zs_over_seg_frames: Vec<ZSFrame>,
-    /// 本层基于 Normal 中枢的三类买卖点
-    #[serde(default)]
-    pub bsp_normal_frames: Vec<BSPFrame>,
-    /// 本层基于 OverSeg 中枢的三类买卖点
-    #[serde(default)]
-    pub bsp_over_seg_frames: Vec<BSPFrame>,
     /// 首 N 段方向：0 未定
     pub first_dir: i32,
     pub first_dir_x: i32,
@@ -496,10 +486,13 @@ struct LevelState {
     last_bottom_low: Option<f64>,
     /// 最近一次顶分型确认中组最高价（含同向丢弃/校验失败的；下降截断破坏参照价）
     last_top_high: Option<f64>,
-    /// 原生缠论中枢（ZS）配置（从 opt 拷贝，只读冻结段计算，不改动其它元素逻辑）
+    /// 原生缠论中枢（ZS）配置（从 opt 拷贝；增量引擎初始化用）
+    #[allow(dead_code)]
     zs_config: ZSConfig,
-    /// 三类买卖点（BSP）配置（从 opt 拷贝，只读冻结段计算，不改动其它元素逻辑）
-    bsp_config: BSPConfig,
+    /// 增量中枢引擎 Normal
+    zs_inc_normal: ZSIncEngine,
+    /// 增量中枢引擎 OverSeg（逐段 feed，对齐动态 Kn 的 CombineEngine 模式）
+    zs_inc_over: ZSIncEngine,
 }
 
 /// 有效性校验：顶极值 > 底极值（最低限度，可配置关闭）
@@ -518,7 +511,8 @@ impl LevelState {
             validity_check: opt.validity_check,
             truncation_check: opt.truncation_check,
             zs_config: opt.zs_config,
-            bsp_config: opt.bsp_config,
+            zs_inc_normal: ZSIncEngine::new(level, opt.zs_config.with_algo(ZSAlgo::Normal)),
+            zs_inc_over: ZSIncEngine::new(level, opt.zs_config.with_algo(ZSAlgo::OverSeg)),
             engine: CombineEngine::new(),
             seed_phase: 0,
             seed_fx: FxKind::Unknown,
@@ -686,6 +680,10 @@ impl LevelState {
                     is_bootstrap: false,
                     is_promoted_default: false,
                 });
+                // 增量中枢：新段永久冻结后 feed（Normal + OverSeg 双算）
+                let seg_idx = self.segments.len() - 1;
+                self.zs_inc_normal.on_new_seg(&self.segments, seg_idx);
+                self.zs_inc_over.on_new_seg(&self.segments, seg_idx);
                 self.seed_phase = 1;
                 self.seed_fx = seed_fx;
                 self.seed_a_x = begin_pole;
@@ -729,6 +727,10 @@ impl LevelState {
                     is_bootstrap: false,
                     is_promoted_default: false,
                 });
+                // 增量中枢：新段永久冻结后 feed（Normal + OverSeg 双算）
+                let seg_idx = self.segments.len() - 1;
+                self.zs_inc_normal.on_new_seg(&self.segments, seg_idx);
+                self.zs_inc_over.on_new_seg(&self.segments, seg_idx);
                 let ub = make_unit_bar(bars, idx, dir, a.pole_x, pole_x, bar_x, a.high, a.low);
                 self.unit_bars.push(ub.clone());
                 outs.push(ub);
@@ -1071,7 +1073,7 @@ impl LevelState {
         Some(fx_pole_x(bars, ev.x1, ev.x2, ev.fx))
     }
 
-    fn export(&self, bars: &[KlineBar]) -> LevelBundleOut {
+    fn export(self, bars: &[KlineBar]) -> LevelBundleOut {
         // 末步进行中单元：prov 缓存（快照阶段已推进到末K）
         let active_unit = match (&self.anchor, &self.prov) {
             (Some(a), Some(c)) if c.last_x < bars.len() => {
@@ -1093,12 +1095,19 @@ impl LevelState {
             }
             _ => None,
         };
-        // 双算双输出：Normal / OverSeg 各算一份中枢，再各挂一份买卖点（只读冻结段，无未来）
-        // zs_config 的 need_combine / combine_mode / one_bi_zs 两套共用；zs_algo 字段忽略（始终双算）
-        let cfg_normal = self.zs_config.with_algo(ZSAlgo::Normal);
-        let cfg_over = self.zs_config.with_algo(ZSAlgo::OverSeg);
-        let zs_normal = crate::zs::find_zs(&self.segments, self.level, &cfg_normal);
-        let zs_over = crate::zs::find_zs(&self.segments, self.level, &cfg_over);
+        // 展示轨：冻段 + 进行中 active_unit 喂 find_zs（末开放 is_sure=false 虚框）
+        let segs_for_zs =
+            crate::zs::segments_with_optional_active(&self.segments, active_unit.as_ref());
+        let zs_normal = find_zs(
+            &segs_for_zs,
+            self.level,
+            &self.zs_config.with_algo(ZSAlgo::Normal),
+        );
+        let zs_over = find_zs(
+            &segs_for_zs,
+            self.level,
+            &self.zs_config.with_algo(ZSAlgo::OverSeg),
+        );
         LevelBundleOut {
             level: self.level,
             confirms: self.confirms.clone(),
@@ -1107,25 +1116,13 @@ impl LevelState {
             combine_frames: frames_from_engine(&self.engine, bars),
             zs_normal_frames: crate::zs::zs_frames_from_list(
                 &zs_normal,
-                &self.segments,
+                &segs_for_zs,
                 self.level,
             ),
             zs_over_seg_frames: crate::zs::zs_frames_from_list(
                 &zs_over,
-                &self.segments,
+                &segs_for_zs,
                 self.level,
-            ),
-            bsp_normal_frames: crate::bsp::level_bsp_frames(
-                &self.segments,
-                &zs_normal,
-                self.level,
-                &self.bsp_config,
-            ),
-            bsp_over_seg_frames: crate::bsp::level_bsp_frames(
-                &self.segments,
-                &zs_over,
-                self.level,
-                &self.bsp_config,
             ),
             first_dir: self.first_dir,
             first_dir_x: self.first_dir_x,
@@ -1289,7 +1286,7 @@ pub fn run_pipeline(bars: &[KlineBar], opt: &PipelineOptions) -> PipelineResult 
     }
 
     PipelineResult {
-        levels: levels.iter().map(|l| l.export(bars)).collect(),
+        levels: levels.into_iter().map(|l| l.export(bars)).collect(),
         bar_level_snaps,
         bar_k_snaps,
         bar_seg_rows,

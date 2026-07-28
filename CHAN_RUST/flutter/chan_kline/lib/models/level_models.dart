@@ -1,4 +1,3 @@
-import 'bsp_frame.dart';
 import 'kline_combine_frame.dart';
 import 'zs_frame.dart';
 
@@ -290,8 +289,6 @@ class LevelBundle {
   final List<KlineCombineFrame> combineFrames;
   final List<ZSFrame> zsNormalFrames;
   final List<ZSFrame> zsOverSegFrames;
-  final List<BSPFrame> bspNormalFrames;
-  final List<BSPFrame> bspOverSegFrames;
   final int firstDir;
   final int firstDirX;
 
@@ -312,8 +309,6 @@ class LevelBundle {
     this.combineFrames = const [],
     this.zsNormalFrames = const [],
     this.zsOverSegFrames = const [],
-    this.bspNormalFrames = const [],
-    this.bspOverSegFrames = const [],
     this.firstDir = 0,
     this.firstDirX = -1,
     this.activeUnit,
@@ -342,12 +337,6 @@ class LevelBundle {
           .toList(),
       zsOverSegFrames: (json['zs_over_seg_frames'] as List? ?? const [])
           .map((e) => ZSFrame.fromJson(Map<String, dynamic>.from(e as Map)))
-          .toList(),
-      bspNormalFrames: (json['bsp_normal_frames'] as List? ?? const [])
-          .map((e) => BSPFrame.fromJson(Map<String, dynamic>.from(e as Map)))
-          .toList(),
-      bspOverSegFrames: (json['bsp_over_seg_frames'] as List? ?? const [])
-          .map((e) => BSPFrame.fromJson(Map<String, dynamic>.from(e as Map)))
           .toList(),
       firstDir: (json['first_dir'] as num?)?.toInt() ?? 0,
       firstDirX: (json['first_dir_x'] as num?)?.toInt() ?? -1,

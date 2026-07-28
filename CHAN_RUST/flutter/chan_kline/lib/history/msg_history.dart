@@ -171,13 +171,53 @@ class MsgHistory {
     );
   }
 
-  /// 主图中枢十字 as-of：Normal/OverSeg 本地重算；无未来、不回写。
+  /// 主图中枢十字 as-of：Rust 重算 bundle；与主图强制同源。
   void appendZSCrosshairAsOf() {
     append(
-      '【主图十字 as-of】K(n-1)中枢(Normal|OverSeg)：十字线开启时只喂 endConfirmX<=asOf 的已冻结段，'
-      '由 computeZSFrames(algo)（对齐 Rust find_zs：Normal=≥3 互叠 / OverSeg=首末重叠，'
-      '离开-返回延伸、相邻中枢 combine）本地重算框；'
-      '关闭十字线仍画 Rust 末态 zs_normal_frames / zs_over_seg_frames；全层同号、不回写、无未来。',
+      '【主图十字 as-of】K(n)中枢(Normal|OverSeg)：十字线开启时对 bars[idx<=asOf] '
+      '调用 buildKlineCombineBundle 取 Rust zs_* 帧（缓存 as-of bundle）；'
+      '主图/tooltip 均消费 JSON，Flutter 不做本地 find_zs；'
+      'isSure：离开闭合=true 实线，末开放=false 虚线（受构建中虚线开关）；'
+      '关闭十字线画会话末态 zs_k0_* / levels[].zs_*；全层同号、不回写、无未来。',
+    );
+  }
+
+  /// 中枢确定/不确定虚实线（对齐动态Kn；进程内去重）。
+  static bool _zsSureDashLogged = false;
+  void appendZSSureDashFrames() {
+    if (_zsSureDashLogged) return;
+    _zsSureDashLogged = true;
+    append(
+      '【中枢虚实线·全层同构】对齐动态Kn：确定态实线框、不确定态虚线框（受「构建中/未确认虚线」开关）。'
+      '口径：离开闭合 → is_sure=true 实线；末开放 → is_sure=false 虚线。'
+      'Rust find_zs 单段种子、无离开-返回、无九段升级；'
+      'Flutter 主图/tooltip 强制消费 Rust zs_* JSON（末态或 as-of bundle）。',
+    );
+  }
+
+  /// K0中枢命名纠偏 + 单段雏形虚框（进程内去重）。
+  static bool _k0ZsRenameLogged = false;
+  void appendK0ZsRenameAndPrototype() {
+    if (_k0ZsRenameLogged) return;
+    _k0ZsRenameLogged = true;
+    append(
+      '【口径变更】真·K0中枢=原生分钟K段（每根K一段，JSON zs_k0_*）；'
+      'Kn中枢=Kn连线段（levels[].zs_*）。买卖点(BSP)已全删。',
+    );
+  }
+
+  /// 中枢全层同构：单段即可成中枢（进程内去重）。
+  static bool _zsSingleSeedIsoLogged = false;
+  void appendZsSingleSeedIsomorphic() {
+    if (_zsSingleSeedIsoLogged) return;
+    _zsSingleSeedIsoLogged = true;
+    append(
+      '【中枢·全层同构·单段成枢】K0/K1/…/Kn 算法同构 find_zs：'
+      '单段种子(isSure=false)→重叠延伸→不重叠离开闭合(isSure=true)；'
+      '一字/近一字锚定最低价；无离开-返回、无九段升级、无≥3段种子门槛。'
+      '段实体按层：K0=分钟K，K1=K0连线段…'
+      '【展示轨】主图/tooltip 强制 Rust zs_* 同源；十字线 as-of=buildKlineCombineBundle 切片。'
+      'Kn 中枢喂入=冻结段+进行中 active_unit（末开放 is_sure=false 虚框，闭合后实线）。',
     );
   }
 
@@ -187,13 +227,10 @@ class MsgHistory {
     if (_zsSplitLogged) return;
     _zsSplitLogged = true;
     append(
-      '【口径变更】删除跨段中枢(KuaDuan)全部逻辑与呈现；'
-      '原生中枢拆为独立主图指标「K(n-1)中枢(Normal)」「K(n-1)中枢(OverSeg)」；'
-      '买卖点同步拆「K(n-1)买卖点(Normal)」「K(n-1)买卖点(OverSeg)」；'
-      '流水线每层双算双输出 JSON：zs_normal_frames / zs_over_seg_frames / '
-      'bsp_normal_frames / bsp_over_seg_frames；'
-      '放弃 Auto（旧工程「确定用 normal / 不确定用 over_seg」不移植）；'
-      '呈现方式对齐原原生中枢框（半透明 ZD/ZG + 标签）；全层同构、无未来、不回写。',
+      '【口径变更】删除跨段中枢(KuaDuan)与三类买卖点(BSP)全部逻辑；'
+      '原生中枢拆「K(n)中枢(Normal)」「K(n)中枢(OverSeg)」；'
+      '流水线每层双算 JSON：zs_normal_frames / zs_over_seg_frames；'
+      '放弃 Auto；呈现=半透明 ZD/ZG 框+标签；全层同构、无未来、不回写。',
     );
   }
 

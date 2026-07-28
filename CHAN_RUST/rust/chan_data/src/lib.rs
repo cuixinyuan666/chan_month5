@@ -13,7 +13,6 @@ mod seg_eigen;
 mod segment_first;
 mod tick;
 mod zs;
-mod bsp;
 
 pub use combine::{
     build_k1_combine_frames, build_k1_combine_frames_with, build_kline_combine_bundle,
@@ -45,8 +44,5 @@ pub use seg_eigen::{
 };
 pub use zs::{
     build_zs_for_levels, find_zs, level_zs_frames, zs_frames_from_list, zs_to_frames, ZS, ZSConfig,
-    ZSFrame, ZSAlgo, ZSCombineMode,
-};
-pub use bsp::{
-    build_bsp_for_levels, find_bsp, level_bsp_frames, bsp_to_frames, BSP, BSPConfig, BSPFrame,
+    ZSFrame, ZSAlgo, ZSCombineMode, ZSIncEngine,
 };
