@@ -60,21 +60,23 @@ class CrosshairTooltipPanel extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 for (final row in rows)
-                  if (row.isSeparator)
-                    // 分隔线「=」铺满 tooltip 内容区（左右内边距之间），而非固定长度
+                  if (row.isSeparator || row.isStar)
+                    // 分隔线铺满 tooltip 内容区（左右内边距之间），而非固定长度
                     LayoutBuilder(
                       builder: (context, constraints) {
-                        const eq = '=';
+                        final ch = row.isSeparator ? '=' : '-';
+                        final unit = row.isSeparator ? '' : '。-。';
                         final tp = TextPainter(
-                          text: const TextSpan(text: eq, style: _sepStyle),
+                          text: TextSpan(text: row.isSeparator ? ch : unit, style: _sepStyle),
                           textDirection: TextDirection.ltr,
                         )..layout();
-                        final count =
-                            tp.width > 0 ? (constraints.maxWidth / tp.width).ceil() : 0;
+                        final count = tp.width > 0
+                            ? (constraints.maxWidth / tp.width).ceil()
+                            : 0;
                         return Padding(
                           padding: const EdgeInsets.symmetric(vertical: 3),
                           child: Text(
-                            eq * count,
+                            row.isSeparator ? ch * count : unit * count,
                             style: _sepStyle,
                             maxLines: 1,
                             softWrap: false,

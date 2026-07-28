@@ -50,7 +50,7 @@ pub struct ZS {
     pub(crate) member_segs: Vec<usize>,
 }
 
-/// 中枢框（high=ZD, low=ZG）
+/// 中枢框（high=ZD, low=ZG, gg=GG, dd=DD）
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ZSFrame {
     pub seq: i32,
@@ -58,6 +58,8 @@ pub struct ZSFrame {
     pub x2: i32,
     pub high: f64,
     pub low: f64,
+    pub gg: f64,
+    pub dd: f64,
     pub level: i32,
     pub count: usize,
     pub dir: i32,
@@ -309,11 +311,13 @@ pub fn zs_to_frames(zs_list: &[ZS], segment_by_idx: &HashMap<i64, &LevelSegment>
             let s = segment_by_idx.get(&z.start_idx)?;
             let e = segment_by_idx.get(&z.end_idx)?;
             Some(ZSFrame {
-                seq: (i + 1) as i32,
+                seq: i as i32,
                 x1: s.begin_pole_x.min(e.begin_pole_x),
                 x2: s.end_pole_x.max(e.end_pole_x),
                 high: z.zd,
                 low: z.zg,
+                gg: z.gg,
+                dd: z.dd,
                 level: z.level,
                 count: z.member_segs.len(),
                 dir: z.dir,

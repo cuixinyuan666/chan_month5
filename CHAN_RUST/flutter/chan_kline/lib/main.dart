@@ -72,7 +72,7 @@ Future<void> main() async {
       await windowManager.setTitle('');
       // 先显示再最大化，避免 show 把最大化冲掉
       await windowManager.show();
-      await windowManager.maximize();
+      await windowManager.setFullScreen(true);
       await windowManager.focus();
     });
   }
@@ -772,10 +772,10 @@ class _KlineHomePageState extends State<KlineHomePage> {
         WindowCaptionButton.maximize(
           brightness: Brightness.dark,
           onPressed: () async {
-            if (await windowManager.isMaximized()) {
-              await windowManager.unmaximize();
+            if (await windowManager.isFullScreen()) {
+              await windowManager.setFullScreen(false);
             } else {
-              await windowManager.maximize();
+              await windowManager.setFullScreen(true);
             }
           },
         ),

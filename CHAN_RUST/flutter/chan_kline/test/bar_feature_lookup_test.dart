@@ -106,11 +106,11 @@ void main() {
 
     final atConfirm = lookup.crosshairTooltipLines(2, timePart: '2024/01/01 09:02');
     // K0分型确认 = K1 端点确认（旧口径 bi_confirm）
-    expect(atConfirm.any((l) => l == 'K0分型确认:1'), isTrue);
+    expect(atConfirm.any((l) => l == 'K0分型确认:【1】'), isTrue);
     // K1 块顺序：No → OHLCV → 合并序 → 合并H/L → 分型确认
-    final seqIdx = atConfirm.indexWhere((l) => l.startsWith('K1[No.]:0'));
+    final seqIdx = atConfirm.indexWhere((l) => l.startsWith('K1[No.]:【0】'));
     final ohlcvIdx = atConfirm.indexWhere((l) => l.startsWith('K1:O'));
-    final mergeSeqIdx = atConfirm.indexWhere((l) => l.startsWith('K1合并K1序:'));
+    final mergeSeqIdx = atConfirm.indexWhere((l) => l.startsWith('K1合并K1序:【'));
     final mergeHlIdx = atConfirm.indexWhere((l) => l.startsWith('K1合并:H'));
     expect(seqIdx, greaterThanOrEqualTo(0));
     expect(seqIdx, lessThan(ohlcvIdx));
@@ -119,8 +119,8 @@ void main() {
 
     // x=4 当步：K1 块「分型确认」= K2 确认值 -1
     final at2 = lookup.crosshairTooltipLines(4, timePart: '2024/01/01 09:04');
-    expect(at2.any((l) => l == 'K1分型确认:-1'), isTrue);
-    expect(at2.any((l) => l.startsWith('K2[No.]:0')), isTrue);
-    expect(at2.any((l) => l.startsWith('K2合并K2序:1')), isTrue);
+    expect(at2.any((l) => l == 'K1分型确认:【-1】'), isTrue);
+    expect(at2.any((l) => l.startsWith('K2[No.]:【0】')), isTrue);
+    expect(at2.any((l) => l.startsWith('K2合并K2序:【1】')), isTrue);
   });
 }

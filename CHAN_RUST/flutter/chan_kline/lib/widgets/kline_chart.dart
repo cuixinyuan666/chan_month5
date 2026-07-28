@@ -529,14 +529,14 @@ class _KlineChartState extends State<KlineChart> {
       zsK0Frames: widget.zsK0Frames,
       asOfBundle: asOfBundle,
     );
-    final k0Zs = zsRows.where((r) => r.label.startsWith('K0中枢')).toList();
+    final k0Zs = zsRows.where((r) => r.label.startsWith('K0连续中枢')).toList();
     final knZs = <int, List<CrosshairTooltipRow>>{};
     for (final ind in widget.mainIndicators) {
       if (ind.kind != MainIndicatorKind.zs) {
         continue;
       }
       if (ind.kn <= 0) continue;
-      final prefix = 'K${ind.kn}中枢';
+      final prefix = 'K${ind.kn}连续中枢';
       final part = zsRows.where((r) => r.label.startsWith(prefix)).toList();
       if (part.isEmpty) continue;
       knZs[ind.kn] = [...(knZs[ind.kn] ?? []), ...part];

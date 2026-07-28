@@ -8,23 +8,42 @@ import 'level_models.dart';
 import 'k1_analysis.dart';
 import '../compute/fractal_judgment_compute.dart';
 
-/// 十字线 tooltip 一行：键值 或 层级分隔线。
+/// 十字线 tooltip 一行：键值 / 层级分隔线 / 同层内容分隔线。
 class CrosshairTooltipRow {
-  const CrosshairTooltipRow.kv(this.label, this.value) : isSeparator = false;
+  const CrosshairTooltipRow.kv(this.label, this.value)
+      : isSeparator = false,
+        isStar = false;
   const CrosshairTooltipRow.separator()
       : label = '',
         value = '',
-        isSeparator = true;
+        isSeparator = true,
+        isStar = false;
+  const CrosshairTooltipRow.starSeparator()
+      : label = '',
+        value = '',
+        isSeparator = false,
+        isStar = true;
 
   final String label;
   final String value;
   final bool isSeparator;
+  final bool isStar;
 
   /// 扁平字符串（测试/历史快照用）
   String get flat {
     if (isSeparator) return '===============================';
+    if (isStar) return '-。-。-。-。-。-。-。-。-。-';
     return '$label:$value';
   }
+
+  /// 数字值外接方形框，便于与字符串区分
+  static String boxNum(dynamic v) => v == null ? '【—】' : '【$v】';
+
+  /// 复合字符串中所有数字（含小数）外接方形框
+  /// 例：O11.89/H11.90 → O【11.89】/H【11.90】
+  static final _numRe = RegExp(r'(\d+\.?\d*)');
+  static String boxNumInString(String s) =>
+      s.replaceAllMapped(_numRe, (m) => '【${m.group(0)}】');
 }
 
 /// 逐 K 字典式特征索引（ML / 十字线 tooltip 同源，均用 barFeatures 逐步冻结快照）。
@@ -338,18 +357,20 @@ class BarFeatureLookup {
     final out = <CrosshairTooltipRow>[
       CrosshairTooltipRow.kv('日期时间', '$timePart     $weekday'),
       const CrosshairTooltipRow.separator(),
-      CrosshairTooltipRow.kv('K0[No.]', '${row['idx']}'),
+      CrosshairTooltipRow.kv('K0[No.]', CrosshairTooltipRow.boxNum(row['idx'])),
       CrosshairTooltipRow.kv(
         'K0',
-        _fmtOhlcv(open: open, high: high, low: low, close: close, volume: volume),
+        CrosshairTooltipRow.boxNumInString(_fmtOhlcv(open: open, high: high, low: low, close: close, volume: volume)),
       ),
+      const CrosshairTooltipRow.starSeparator(),
       CrosshairTooltipRow.kv(
         'K0合并',
-        'H${_fmtPrice(combineHigh)}/L${_fmtPrice(combineLow)}',
+        CrosshairTooltipRow.boxNumInString('H${_fmtPrice(combineHigh)}/L${_fmtPrice(combineLow)}'),
       ),
-      CrosshairTooltipRow.kv('K0合并K0序', '$mergeInner'),
-      CrosshairTooltipRow.kv('K0合并组No.', mergeBoxSeq >= 0 ? '$mergeBoxSeq' : '未成框'),
-      CrosshairTooltipRow.kv('K0分型确认', combineFxConfirm),
+      CrosshairTooltipRow.kv('K0合并K0序', CrosshairTooltipRow.boxNum(mergeInner)),
+      CrosshairTooltipRow.kv('K0合并组No.', mergeBoxSeq >= 0 ? CrosshairTooltipRow.boxNum(mergeBoxSeq) : '未成框'),
+      CrosshairTooltipRow.kv('K0分型确认', CrosshairTooltipRow.boxNum(combineFxConfirm)),
+      const CrosshairTooltipRow.starSeparator(),
       ...zsAfterK0,
       ..._levelBlockRows(idx),
     ];
@@ -388,6 +409,8 @@ class BarFeatureLookup {
 
     for (final ind in active) {
       if (ind.kind == SubIndicatorKind.fractalConfirm) {
+        // kn=1（K0分型确认）已在 K0 块中输出，副图不再重复
+        if (ind.kn == 1) continue;
         final confirms = row['level_confirms'];
         dynamic v;
         var truncated = false;
@@ -537,34 +560,38 @@ class BarFeatureLookup {
       return [
         CrosshairTooltipRow.kv('$label[No.]', '首K$n确认前'),
         CrosshairTooltipRow.kv(label, '—'),
+        const CrosshairTooltipRow.starSeparator(),
         CrosshairTooltipRow.kv('$label合并$label序', '—'),
         CrosshairTooltipRow.kv('$label合并', '—'),
-        CrosshairTooltipRow.kv('$label分型确认', confirmText),
-        CrosshairTooltipRow.kv('$label分型判断', judgeText),
+        CrosshairTooltipRow.kv('$label分型确认', CrosshairTooltipRow.boxNum(confirmText)),
+        CrosshairTooltipRow.kv('$label分型判断', CrosshairTooltipRow.boxNum(judgeText)),
+        const CrosshairTooltipRow.starSeparator(),
         ...knZsAfterKn[n] ?? const [],
       ];
     }
 
     return [
-      CrosshairTooltipRow.kv('$label[No.]', '${snap.unitIdx}'),
+      CrosshairTooltipRow.kv('$label[No.]', CrosshairTooltipRow.boxNum(snap.unitIdx)),
       CrosshairTooltipRow.kv(
         label,
-        _fmtOhlcv(
+        CrosshairTooltipRow.boxNumInString(_fmtOhlcv(
           open: snap.unitOpen,
           high: snap.unitHigh,
           low: snap.unitLow,
           close: snap.unitClose,
           volume: snap.unitVolume,
-        ),
+        )),
       ),
-      CrosshairTooltipRow.kv('$label合并$label序', '${snap.mergeInnerSeq}'),
-      CrosshairTooltipRow.kv('$label合并组No.', snap.mergeBoxSeq >= 0 ? '${snap.mergeBoxSeq}' : '未成框'),
+      const CrosshairTooltipRow.starSeparator(),
+      CrosshairTooltipRow.kv('$label合并$label序', CrosshairTooltipRow.boxNum(snap.mergeInnerSeq)),
+      CrosshairTooltipRow.kv('$label合并组No.', snap.mergeBoxSeq >= 0 ? CrosshairTooltipRow.boxNum(snap.mergeBoxSeq) : '未成框'),
       CrosshairTooltipRow.kv(
         '$label合并',
-        'H${_fmtPrice(snap.combineHigh)}/L${_fmtPrice(snap.combineLow)}',
+        CrosshairTooltipRow.boxNumInString('H${_fmtPrice(snap.combineHigh)}/L${_fmtPrice(snap.combineLow)}'),
       ),
-      CrosshairTooltipRow.kv('$label分型确认', confirmText),
-      CrosshairTooltipRow.kv('$label分型判断', judgeText),
+      CrosshairTooltipRow.kv('$label分型确认', CrosshairTooltipRow.boxNum(confirmText)),
+      CrosshairTooltipRow.kv('$label分型判断', CrosshairTooltipRow.boxNum(judgeText)),
+      const CrosshairTooltipRow.starSeparator(),
       ...knZsAfterKn[n] ?? const [],
     ];
   }

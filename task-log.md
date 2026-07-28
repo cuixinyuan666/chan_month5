@@ -103,4 +103,28 @@
   1. Rust `pipeline.rs` `export()`：`find_zs()` 返回后，若 `active_unit.is_none()` 则强制末 ZS `is_sure=true`（所有段已冻结，中枢定型）
   2. Flutter `kline_chart.dart` `_drawZSOnMainChart()`：新增 `hasActive` 判断——有 active_unit 时所有中枢框强制虚线，无 active_unit 时由 `is_sure` 控制
 - **结果**：2 个文件改动；Rust `cargo test` 64/64 通过，Flutter `dart analyze` 0 errors，`flutter test` 3/3 通过
-- **注意事项**：K0 无 active_unit 概念，虚实完全由 `is_sure` 控制（全层同构）
+- **注意事项**：K0 无 active_unit 概念，虚实完全由 `is_sure` 控制（全层同构）### 2026-07-28 — 统一中枢框架，移除 Normal/OverSeg 概念
+
+- **要点**：删除冗余的 Normal 中枢算法，统一使用 OverSeg 并命名为「中枢(ZS)」；修复中枢虚实线判定逻辑，确保无 active_unit 时末 ZS 正确定型为实线。
+- **关键路径**：`CHAN_RUST/rust/chan_data/src/zs.rs`, `pipeline.rs`, `lib.rs`, `CHAN_RUST/flutter/chan_kline/lib/widgets/kline_chart.dart`, `lib/history/msg_history.dart`, `task-log.md`
+- **注意**：Rust `cargo test` 64/64 通过，Flutter `dart analyze` 0 errors，`flutter test` 3/3 通过
+---
+
+### 2026-07-28 — Tooltip 中枢内容重构：连续中枢4行格式 + 数字方形框 + 分隔线 + 全屏启动
+
+- **执行者**：opencode (big-pickle)
+- **任务类型**：功能开发
+- **上下文**：tooltip 中枢部分原为单行 `Kn中枢seq·count dir ZG/ZD`，需仿照 Kn合并 模式拆为4行；数字值需加方形框区分；同层内容用 `-。-` 分隔线；App 默认全屏启动。
+- **关键操作**：
+  1. Rust `zs.rs`：`ZSFrame` 新增 `gg`/`dd` 字段，`zs_to_frames` 从 `ZS` 赋值；`seq` 改从 0 起
+  2. Dart `zs_frame.dart`：新增 `gg`/`dd` 字段 + `fromJson` 兼容
+  3. Dart `zs_compute.dart`：中枢行拆为4行——价格(GG/DD/ZG/ZD)/Kn序(count)/组No.(seq)/确认(上一帧isSure，仅首根K检测)
+  4. Dart `bar_feature_lookup.dart`：新增 `starSeparator` 工厂 + `boxNum()`/`boxNumInString()` 静态方法；K0/Kn块插入 `-。-` 分隔线；所有数字值加 `【】`
+  5. Dart `crosshair_tooltip_panel.dart`：渲染 `-。-。` 分隔线
+  6. Dart `bar_feature_lookup.dart`：副图区域跳过 `fractalConfirm` kn=1（已在 K0 块输出，消除重复）
+  7. Dart `main.dart`：`maximize()` → `setFullScreen(true)`；全屏按钮同步切换
+  8. 测试更新：`zs_compute_test.dart` 5个用例 + `bar_feature_lookup_test.dart` 2个用例全部通过
+- **结果**：Rust 8个ZS测试通过，Dart 7个tooltip测试通过；6个文件修改
+- **注意事项**：全层同构（K0/Kn 行为一致）；`确认`语义=上一中枢首次确认（isSure）；`boxNumInString` 用正则 `(\d+\.?\d*)` 匹配数字
+---
+
