@@ -19,7 +19,7 @@ use crate::engine::{
     seed_leave_dir, CombineEngine, FxEvent, FxKind, MergeUnit, TruncGuard,
 };
 use crate::kline::KlineBar;
-use crate::zs::{find_zs, ZSConfig, ZSFrame, ZSIncEngine};
+use crate::zs::{ZSConfig, ZSFrame, ZSIncEngine};
 
 
 /// 流水线选项
@@ -1087,10 +1087,22 @@ impl LevelState {
             }
             _ => None,
         };
-        // 展示轨：冻段 + 进行中 active_unit 喂 find_zs（末开放 is_sure=false 虚框）
+        // 展示轨：冻段 + 进行中 active_unit 喂 find_zs（动态离开不定型，禁未来）
+        let n_confirmed = self.segments.len();
         let segs_for_zs =
             crate::zs::segments_with_optional_active(&self.segments, active_unit.as_ref());
-        let zs_list = find_zs(&segs_for_zs, self.level, &self.zs_config);
+        let mut zs_list = crate::zs::find_zs_with_confirmed(
+            &segs_for_zs,
+            self.level,
+            &self.zs_config,
+            n_confirmed,
+        );
+        // 无 active_unit 时末个中枢也定型（实线）：所有段已冻结，无动态 Kn
+        if active_unit.is_none() {
+            if let Some(last) = zs_list.last_mut() {
+                last.is_sure = true;
+            }
+        }
         LevelBundleOut {
             level: self.level,
             confirms: self.confirms.clone(),

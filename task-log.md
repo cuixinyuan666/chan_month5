@@ -30,6 +30,12 @@
 
 ---
 
+### 2026-07-28 — 修复中枢虚框定型的未来函数
+
+- **要点**：离开 Kn 仅在确认态且与上一中枢不重叠时，上一虚框才变实线定型；动态 Kn 离开不得定型。新增 `find_zs_with_confirmed(n_confirmed)`，绘制跟 `is_sure`。
+- **关键路径**：`CHAN_RUST/rust/chan_data/src/zs.rs`、`pipeline.rs`、`CHAN_RUST/flutter/chan_kline/lib/widgets/kline_chart.dart`、`lib/history/msg_history.dart`
+- **注意**：改 Rust 后需 `build_rust.ps1` 重载 DLL；全层同构。
+
 ### 2026-07-28 — 添加 K0 中枢设计优化方案与样张
 
 - **要点**：新增 K0 中枢设计文档与可视化样张，引入设计令牌体系，记录命名纠偏与单段虚框展示逻辑，提升用户体验与界面美观度。
@@ -65,3 +71,36 @@
   7. 更新 `.gitignore`，补充 `build/`、`.dart_tool/`、`.idea/` 条目
 - **结果**：所有目标已删除；`.gitignore` 已更新，防止下次误提交
 - **注意事项**：下次执行 `cargo build` 或 `flutter run` 时，相关目录会自动重新生成
+
+### 2026-07-28 22:30 — 删除 Normal 中枢，统一 ZS 指标
+
+- **执行者**：opencode
+- **任务类型**：重构
+- **上下文**：调查发现 `ZSAlgo::Normal` 与 `ZSAlgo::OverSeg` 在 `find_zs()` 中从未产生分支，两套输出数据完全相同。删除冗余的 Normal，保留 OverSeg 并统一命名为「中枢(ZS)」。
+- **关键操作**：
+  1. Rust `zs.rs`：删除 `ZSAlgo` 枚举、`ZSConfig.zs_algo` 字段、`with_algo()` 方法
+  2. Rust `pipeline.rs`：删除 `zs_inc_normal` / `zs_normal_frames`，`zs_inc_over` → `zs_inc`，`zs_over_seg_frames` → `zs_frames`
+  3. Rust `combine.rs`：删除 `zs_k0_normal_frames`，`build_k0_zs()` 返回单套，`zs_k0_over_seg_frames` → `zs_k0_frames`
+  4. Rust `lib.rs`：删除 `ZSAlgo` re-export
+  5. Flutter `chart_indicator.dart`：删除 `zsNormal`，`zsOverSeg` → `zs`，label 改为 `'K$kn中枢'`，catalog 四类严格分组（合并→KN→连线→中枢）
+  6. Flutter `chart_level_line_style.dart`：删除 Normal 玫红配色，OverSeg 蓝青配色统一为 `_zsColors` + `forZS()`
+  7. Flutter `kline_chart.dart`：删除 `zsK0NormalFrames`、Normal 绘制分支，`_drawZSOnMainChart` 去掉 algo 参数
+  8. Flutter `zs_compute.dart`：删除 `ZSAlgoKind` 枚举，所有函数去掉 algo 参数
+  9. Flutter `main.dart`：删除 `_zsK0NormalFrames`，默认指标改为 `MainChartIndicator.zs(0/1)`
+  10. Flutter `level_models.dart` / `kline_combine_bundle.dart`：字段重命名 + JSON key 更新
+  11. Flutter `msg_history.dart` / `app_debug_snapshot.dart`：调试文本更新
+  12. Flutter `zs_compute_test.dart`：对齐新 API
+  13. Rust FFI `chan_ffi/src/lib.rs`：更新注释
+- **结果**：16 个文件改动；Rust `cargo test` 64/64 通过，Flutter `dart analyze` 0 errors，`flutter test` 3/3 通过
+- **注意事项**：中枢配色 K0=蓝色 `#3B82F6`（非红色）；主图指标 picker 分隔线按类别（合并/KN/连线/中枢）严格分隔
+
+### 2026-07-28 23:10 — 中枢虚线框变实线框时机修正
+
+- **执行者**：opencode
+- **任务类型**：Bug修复
+- **上下文**：中枢虚线→实线的判定逻辑不完整。动态 Kn 时末 ZS 可能被误判为实线；无 active_unit 时末 ZS 始终为虚线（应实线）。
+- **关键操作**：
+  1. Rust `pipeline.rs` `export()`：`find_zs()` 返回后，若 `active_unit.is_none()` 则强制末 ZS `is_sure=true`（所有段已冻结，中枢定型）
+  2. Flutter `kline_chart.dart` `_drawZSOnMainChart()`：新增 `hasActive` 判断——有 active_unit 时所有中枢框强制虚线，无 active_unit 时由 `is_sure` 控制
+- **结果**：2 个文件改动；Rust `cargo test` 64/64 通过，Flutter `dart analyze` 0 errors，`flutter test` 3/3 通过
+- **注意事项**：K0 无 active_unit 概念，虚实完全由 `is_sure` 控制（全层同构）

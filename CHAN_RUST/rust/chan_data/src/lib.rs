@@ -43,6 +43,6 @@ pub use seg_eigen::{
     BarSubSnapshot, EigenFrame, FirstSegDirSignal, K1AnalysisBundle, K1ConfirmSignal, K1Line,
 };
 pub use zs::{
-    build_zs_for_levels, find_zs, level_zs_frames, zs_frames_from_list, zs_to_frames, ZS, ZSConfig,
-    ZSFrame, ZSCombineMode, ZSIncEngine,
+    build_zs_for_levels, find_zs, find_zs_with_confirmed, level_zs_frames, zs_frames_from_list,
+    zs_to_frames, ZS, ZSConfig, ZSFrame, ZSCombineMode, ZSIncEngine,
 };

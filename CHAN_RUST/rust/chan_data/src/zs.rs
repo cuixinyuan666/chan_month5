@@ -189,8 +189,19 @@ fn try_construct_from(segs: &[LevelSegment], start: usize, level: i32) -> Option
     Some(make_zs(level, &[start], segs, false))
 }
 
-/// 全层同构：重叠延伸；不重叠=离开闭合实线；无离开-返回桥接。
+/// 全层同构：重叠延伸；确认态离开→实线定型；动态离开→仍虚线（禁未来函数）。
 pub fn find_zs(segs: &[LevelSegment], level: i32, cfg: &ZSConfig) -> Vec<ZS> {
+    find_zs_with_confirmed(segs, level, cfg, segs.len())
+}
+
+/// `n_confirmed`=已冻结段数；其后为进行中 active 伪段。
+/// 离开段下标 `i < n_confirmed` 才把上一枢定型为实线；动态离开保持虚线。
+pub fn find_zs_with_confirmed(
+    segs: &[LevelSegment],
+    level: i32,
+    cfg: &ZSConfig,
+    n_confirmed: usize,
+) -> Vec<ZS> {
     let n = segs.len();
     if n == 0 {
         return Vec::new();
@@ -207,8 +218,8 @@ pub fn find_zs(segs: &[LevelSegment], level: i32, cfg: &ZSConfig) -> Vec<ZS> {
                 i += 1;
                 continue;
             }
-            // 离开：闭合为实线，不在此处看 i+1
-            z.is_sure = true;
+            // 离开：仅确认Kn不重叠→定型实线；动态Kn离开→仍虚线（不用未来）
+            z.is_sure = i < n_confirmed;
             zs_list.push(cur.take().unwrap());
             continue;
         }
@@ -374,8 +385,10 @@ pub fn build_zs_for_levels(levels: &[LevelBundleOut], cfg: &ZSConfig) -> Vec<Vec
     levels
         .iter()
         .map(|lv| {
+            let n_confirmed = lv.segments.len();
             let segs = segments_with_optional_active(&lv.segments, lv.active_unit.as_ref());
-            level_zs_frames(&segs, lv.level, cfg)
+            let zs_list = find_zs_with_confirmed(&segs, lv.level, cfg, n_confirmed);
+            zs_frames_from_list(&zs_list, &segs, lv.level)
         })
         .collect()
 }
@@ -529,10 +542,46 @@ mod tests {
         };
         let segs = segments_with_optional_active(&frozen, Some(&active));
         assert_eq!(segs.len(), 3);
-        let zs = find_zs(&segs, 1, &ZSConfig::default());
+        let zs = find_zs_with_confirmed(&segs, 1, &ZSConfig::default(), frozen.len());
         assert_eq!(zs.len(), 1);
         assert_eq!(zs[0].member_segs.len(), 3);
         assert!(!zs[0].is_sure);
+    }
+
+    /// 动态Kn离开不重叠：上一枢仍虚线（禁未来）；确认离开才定型
+    #[test]
+    fn active_leave_keeps_previous_unsure_until_confirm() {
+        use crate::pipeline::LevelUnitBar;
+
+        let frozen = vec![
+            mk_seg(0, 1, 20.0, 10.0),
+            mk_seg(1, 1, 22.0, 12.0),
+            mk_seg(2, 1, 21.0, 11.0),
+        ];
+        let active = LevelUnitBar {
+            idx: 3,
+            dir: 1,
+            x1: 3,
+            x2: 4,
+            open: 30.0,
+            high: 40.0,
+            low: 30.0,
+            close: 35.0,
+            volume: 0.0,
+            confirm_x: 4,
+        };
+        let segs = segments_with_optional_active(&frozen, Some(&active));
+        let zs_dyn = find_zs_with_confirmed(&segs, 1, &ZSConfig::default(), frozen.len());
+        assert_eq!(zs_dyn.len(), 2);
+        assert!(!zs_dyn[0].is_sure, "动态离开不得定型上一枢");
+        assert!(!zs_dyn[1].is_sure);
+
+        let mut confirmed = frozen.clone();
+        confirmed.push(mk_seg(3, 1, 40.0, 30.0));
+        let zs_cfm = find_zs(&confirmed, 1, &ZSConfig::default());
+        assert_eq!(zs_cfm.len(), 2);
+        assert!(zs_cfm[0].is_sure, "确认离开才定型");
+        assert!(!zs_cfm[1].is_sure);
     }
 
     #[test]

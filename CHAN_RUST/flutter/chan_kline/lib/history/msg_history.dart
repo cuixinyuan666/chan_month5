@@ -188,10 +188,10 @@ class MsgHistory {
     if (_zsSureDashLogged) return;
     _zsSureDashLogged = true;
     append(
-      '【中枢虚实线·全层同构】对齐动态Kn：确定态实线框、不确定态虚线框（受「构建中/未确认虚线」开关）。'
-      '口径：离开闭合 → is_sure=true 实线；末开放 → is_sure=false 虚线。'
-      'Rust find_zs 单段种子、无离开-返回、无九段升级；'
-      'Flutter 主图/tooltip 强制消费 Rust zs_* JSON（末态或 as-of bundle）。',
+      '【中枢虚实线·全层同构】确定态实线框、不确定态虚线框（受「构建中/未确认虚线」开关）。'
+      '口径：与上一中枢虚框不重叠的离开Kn，仅当该Kn为确认态时，上一虚框→实线定型；'
+      '动态Kn离开即使不重叠也不得定型（禁未来函数）。绘制跟 is_sure，不用 active_unit 一刀切全虚。'
+      'Rust find_zs_with_confirmed(n_confirmed)；Flutter 主图/tooltip 消费 Rust zs_* JSON。',
     );
   }
 

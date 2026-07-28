@@ -2210,6 +2210,7 @@ class _KlineCompositePainter extends CustomPainter {
         bottom,
       );
       canvas.drawRect(rect, fill);
+      // 虚实线跟 is_sure：确认离开定型→实线；动态离开/末开放→虚线（禁未来）
       final useDash = !f.isSure && showBuildingDash;
       if (useDash) {
         _strokeDashedRect(canvas, rect, stroke, const [4, 4]);
