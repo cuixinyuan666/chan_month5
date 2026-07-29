@@ -328,6 +328,57 @@ class MsgHistory {
     );
   }
 
+  /// 主/副图指标 UI：连续中枢命名、层全选、Kn成交量归属、chip 单击关闭（进程内去重）。
+  static bool _indicatorUiKnVolumeLogged = false;
+  void appendIndicatorUiAndKnVolume() {
+    if (_indicatorUiKnVolumeLogged) return;
+    _indicatorUiKnVolumeLogged = true;
+    append(
+      '【主/副图指标 UI】主图选择名「Kn连续中枢」与 tooltip 对齐；'
+      '主图中枢框/合并框只画框，取消框内「Kn中枢…」「顶/底」文字。'
+      '选择栏默认叠加，取消「叠加」单选；最上新增「Kn指标」层全选'
+      '（主图=Kn/Kn合并/Kn连线/Kn连续中枢；副图=Kn成交量+分型确认/判断/极点距/截断）。'
+      '左上角已选：同层 /、跨层 ※、自动换行不压字、单击关闭；'
+      '避让主图右上窗控与副图右上读数。',
+    );
+    append(
+      '【Kn成交量·全层同构】成交量按层为 K0/K1/…/Kn成交量；'
+      'K0=原生 bars.volume；Kn(n>0)=按 LevelBundle 单元投影到 K0 槽。'
+      '相邻 Kn 共享 end_pole(junction)：该 K0 量归已确认段；'
+      '新动态 Kn 从 junction+1 起计，不占刚确认末根成交量；'
+      '不回写 LevelUnitBar.volume（单元 OHLCV 总量语义保持）。',
+    );
+  }
+
+  /// 左上角灰度开关 + Kn成交量进副图读数（进程内去重）。
+  static bool _indicatorMuteToggleLogged = false;
+  void appendIndicatorMuteToggleAndVolReadout() {
+    if (_indicatorMuteToggleLogged) return;
+    _indicatorMuteToggleLogged = true;
+    append(
+      '【指标左上角】单击名称=灰度关闭（不绘制，名称灰+删除线），再点打开；'
+      '不从选择集移除；选择栏取消勾选才真正移除。开启态白字加粗提高对比度，'
+      '灰度态 #6B7280 易区分；芯片静止透明度约 0.88。'
+      '【副图读数】十字线右上读数含 Kn成交量（与其它副图指标同框）。'
+      '【主 tooltip】各层 OHLCV 预留 VOL 槽改为填 Kn成交量序列（K0=原生，Kn=累加）；'
+      '不在 tooltip 底部再追加 Kn成交量行。',
+    );
+  }
+
+  /// 动态 Kn 成交量 = 下层增量步进累加（进程内去重）。
+  static bool _knVolCumStepLogged = false;
+  void appendKnVolumeCumulativeStep() {
+    if (_knVolCumStepLogged) return;
+    _knVolCumStepLogged = true;
+    append(
+      '【Kn成交量·累加步进】K0=原生 bars.volume；'
+      'Kn：确认态终点落位 end_pole(x2)，confirmX 为确认步；'
+      '确认前画面可画到 confirmX-1（可越过极点）；确认步起新动态画面。'
+      '共享 K0=上一单元 end_pole(x2)：归已确认段，动态累加从 x2+1 起（不再纳入）；'
+      '画面从上一 confirmX 起写，避免确认前未来切段；全层同构。不回写 unit.volume。',
+    );
+  }
+
   /// 运行时虚线摘要（内容变才追加；复制历史记录排查用）。
   void appendDisplayBuildingLinesRuntime({
     required int kn,

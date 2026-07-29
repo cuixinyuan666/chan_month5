@@ -10,6 +10,7 @@ import '../compute/k1_combine_compute.dart';
 import '../compute/k1_bar_view_compute.dart';
 import '../compute/chart_view_compute.dart';
 import '../compute/fractal_judgment_compute.dart';
+import '../compute/kn_volume_series_compute.dart';
 import '../compute/level_unit_bar_view_compute.dart';
 import '../compute/zs_compute.dart';
 import '../history/msg_history.dart';
@@ -207,6 +208,15 @@ class _KlineChartState extends State<KlineChart> {
 
   Set<MainChartIndicator> get _activeMains => widget.mainIndicators;
 
+  /// 左上角单击灰度关闭的指标（仍在选择集中，再点可打开）
+  Set<MainChartIndicator> _mutedMains = {};
+  Set<SubChartIndicator> _mutedSubs = {};
+
+  /// 实际绘制/读数用：已选减去灰度关闭
+  Set<MainChartIndicator> get _drawnMains =>
+      _activeMains.difference(_mutedMains);
+  Set<SubChartIndicator> get _drawnSubs => _activeSubs.difference(_mutedSubs);
+
   /// 当前数据最高 Kn → 动态生成可选指标
   int get _maxKn => chartMaxKn(
         levels: widget.levels,
@@ -221,6 +231,11 @@ class _KlineChartState extends State<KlineChart> {
 
   /// 副图是否展开（无勾选副图指标则收起整块副图区）
   bool get _showSubPane => _activeSubs.isNotEmpty;
+
+  void _pruneMuted() {
+    _mutedMains = _mutedMains.intersection(_activeMains);
+    _mutedSubs = _mutedSubs.intersection(_activeSubs);
+  }
 
   @override
   void initState() {
@@ -270,6 +285,12 @@ class _KlineChartState extends State<KlineChart> {
         _crosshairY = null;
         _crosshairBarIdx = null;
       }
+    }
+
+    // 选择栏增删后，灰度关闭集只保留仍在勾选中的项
+    if (oldWidget.mainIndicators != widget.mainIndicators ||
+        oldWidget.subIndicators != widget.subIndicators) {
+      _pruneMuted();
     }
   }
 
@@ -519,7 +540,7 @@ class _KlineChartState extends State<KlineChart> {
     final asOfBundle = _bundleForZsAsOf(asOf);
     final zsRows = zsCrosshairTooltipRows(
       asOfIdx: bar.idx,
-      mainIndicators: widget.mainIndicators,
+      mainIndicators: _drawnMains,
       combineFrames: widget.combineFrames,
       levels: widget.levels,
       barFeatures: widget.barFeatures,
@@ -531,7 +552,7 @@ class _KlineChartState extends State<KlineChart> {
     );
     final k0Zs = zsRows.where((r) => r.label.startsWith('K0连续中枢')).toList();
     final knZs = <int, List<CrosshairTooltipRow>>{};
-    for (final ind in widget.mainIndicators) {
+    for (final ind in _drawnMains) {
       if (ind.kind != MainIndicatorKind.zs) {
         continue;
       }
@@ -549,7 +570,7 @@ class _KlineChartState extends State<KlineChart> {
       k0Lines: widget.k0Lines,
       k1Analysis: widget.k1Analysis,
       levels: widget.levels,
-      subIndicators: _activeSubs,
+      subIndicators: _drawnSubs,
       truncationCheck: widget.truncationCheck,
       judgmentHistoryByKn: widget.judgmentHistoryByKn,
       asOf: asOf,
@@ -559,7 +580,7 @@ class _KlineChartState extends State<KlineChart> {
     final out = lookup.crosshairTooltipRows(
       bar.idx,
       timePart: timePart,
-      subIndicators: _activeSubs,
+      subIndicators: _drawnSubs,
     );
     return out;
   }
@@ -869,16 +890,26 @@ class _KlineChartState extends State<KlineChart> {
     }
   }
 
-  /// 双击关闭某一主图指标（可关到空=只留 K0 线）。
-  void _closeMainIndicator(MainChartIndicator item) {
-    final next = Set<MainChartIndicator>.from(_activeMains)..remove(item);
-    widget.onMainIndicatorsChanged?.call(next);
+  /// 单击左上角名称：灰度关闭 / 再点打开（不从选择集移除）。
+  void _toggleMuteMain(MainChartIndicator item) {
+    setState(() {
+      if (_mutedMains.contains(item)) {
+        _mutedMains = Set<MainChartIndicator>.from(_mutedMains)..remove(item);
+      } else {
+        _mutedMains = Set<MainChartIndicator>.from(_mutedMains)..add(item);
+      }
+    });
   }
 
-  /// 双击关闭某一副图指标（可关到空=收起副图）。
-  void _closeSubIndicator(SubChartIndicator item) {
-    final next = Set<SubChartIndicator>.from(_activeSubs)..remove(item);
-    widget.onSubIndicatorsChanged?.call(next);
+  /// 单击左上角名称：灰度关闭 / 再点打开。
+  void _toggleMuteSub(SubChartIndicator item) {
+    setState(() {
+      if (_mutedSubs.contains(item)) {
+        _mutedSubs = Set<SubChartIndicator>.from(_mutedSubs)..remove(item);
+      } else {
+        _mutedSubs = Set<SubChartIndicator>.from(_mutedSubs)..add(item);
+      }
+    });
   }
 
   @override
@@ -938,8 +969,8 @@ class _KlineChartState extends State<KlineChart> {
                 levels: widget.levels,
                 zsK0Frames: widget.zsK0Frames,
                 zsAsOfBundle: zsAsOfBundle,
-                mainIndicators: _activeMains,
-                subIndicators: _activeSubs,
+                mainIndicators: _drawnMains,
+                subIndicators: _drawnSubs,
                 viewport: _viewport,
                 priceRange: priceRange,
                 visible: visible,
@@ -1059,7 +1090,7 @@ class _KlineChartState extends State<KlineChart> {
                   ),
                 ),
               ),
-            // 主图：↓ + 已选指标名（无数据不可点）
+            // 主图：↓ + 已选指标名（无数据不可点）；避让右上窗控
             Positioned(
               left: 0,
               top: 0,
@@ -1068,23 +1099,37 @@ class _KlineChartState extends State<KlineChart> {
                 child: Opacity(
                   opacity: widget.indicatorsEnabled ? 1 : 0.35,
                   child: IndicatorPickerChip(
-                    entries: _mainCatalog
-                        .where(_activeMains.contains)
-                        .map(
-                          (e) => IndicatorChipEntry(
+                    entries: () {
+                      final list = _mainCatalog
+                          .where(_activeMains.contains)
+                          .toList()
+                        ..sort((a, b) {
+                          final c =
+                              a.displayLevel.compareTo(b.displayLevel);
+                          if (c != 0) return c;
+                          return _mainCatalog
+                              .indexOf(a)
+                              .compareTo(_mainCatalog.indexOf(b));
+                        });
+                      return [
+                        for (final e in list)
+                          IndicatorChipEntry(
                             label: e.label,
-                            onDoubleTapClose: () => _closeMainIndicator(e),
+                            displayLevel: e.displayLevel,
+                            muted: _mutedMains.contains(e),
+                            onTapToggle: () => _toggleMuteMain(e),
                           ),
-                        )
-                        .toList(),
+                      ];
+                    }(),
                     onTapDropdown: () => _pickMainIndicators(context),
-                    maxWidth: math.min(280, w * 0.55),
+                    // 避开右上设置/最小化/最大化/关闭
+                    maxWidth: math.max(120.0, w - 140),
                     emptyHint: 'K0',
                   ),
                 ),
               ),
             ),
-            // 副图入口
+            // 副图入口；避让右上变量读数
             Positioned(
               left: KlineViewport.padL,
               top: _showSubPane ? mainH + 2 : math.max(0.0, mainH - 26),
@@ -1093,17 +1138,30 @@ class _KlineChartState extends State<KlineChart> {
                 child: Opacity(
                   opacity: widget.indicatorsEnabled ? 1 : 0.35,
                   child: IndicatorPickerChip(
-                    entries: _subCatalog
-                        .where(_activeSubs.contains)
-                        .map(
-                          (e) => IndicatorChipEntry(
+                    entries: () {
+                      final list = _subCatalog
+                          .where(_activeSubs.contains)
+                          .toList()
+                        ..sort((a, b) {
+                          final c =
+                              a.displayLevel.compareTo(b.displayLevel);
+                          if (c != 0) return c;
+                          return _subCatalog
+                              .indexOf(a)
+                              .compareTo(_subCatalog.indexOf(b));
+                        });
+                      return [
+                        for (final e in list)
+                          IndicatorChipEntry(
                             label: e.label,
-                            onDoubleTapClose: () => _closeSubIndicator(e),
+                            displayLevel: e.displayLevel,
+                            muted: _mutedSubs.contains(e),
+                            onTapToggle: () => _toggleMuteSub(e),
                           ),
-                        )
-                        .toList(),
+                      ];
+                    }(),
                     onTapDropdown: () => _pickSubIndicators(context),
-                    maxWidth: math.min(280, w * 0.55),
+                    maxWidth: math.max(100.0, w - KlineViewport.padL - 200),
                     emptyHint: '未选',
                   ),
                 ),
@@ -2182,10 +2240,6 @@ class _KlineCompositePainter extends CustomPainter {
       ..strokeWidth = 1.4
       ..style = PaintingStyle.stroke;
     final fill = Paint()..color = style.color.withValues(alpha: 0.12);
-    final labelStyle = TextStyle(
-      color: style.color.withValues(alpha: 0.95),
-      fontSize: 9,
-    );
 
     for (var i = 0; i < frames.length; i++) {
       final f = frames[i];
@@ -2211,23 +2265,13 @@ class _KlineCompositePainter extends CustomPainter {
       );
       canvas.drawRect(rect, fill);
       // 虚实线跟 is_sure：确认离开定型→实线；动态离开/末开放→虚线（禁未来）
+      // 只画框，不画「Kn中枢xx」文字（与 tooltip「连续中枢」对齐、减遮挡）
       final useDash = !f.isSure && showBuildingDash;
       if (useDash) {
         _strokeDashedRect(canvas, rect, stroke, const [4, 4]);
       } else {
         canvas.drawRect(rect, stroke);
       }
-
-      final seq = f.seq > 0 ? f.seq : (i + 1);
-      final dirMark = f.dir > 0 ? '↑' : (f.dir < 0 ? '↓' : '');
-      final tp = TextPainter(
-        text: TextSpan(
-          text: 'K$kn中枢$seq·${f.count}$dirMark',
-          style: labelStyle,
-        ),
-        textDirection: TextDirection.ltr,
-      )..layout();
-      tp.paint(canvas, Offset(rect.left + 2, rect.top + 1));
     }
   }
 
@@ -2690,7 +2734,7 @@ class _KlineCompositePainter extends CustomPainter {
   }
 
   /// 主图 K线合并 / K1合并线框：按真实价格坐标叠加。
-  /// [lastAsBuilding]=true 时：末框虚线（构建中合并），前框实线（已冻结）；虚线框不画顶/底标签。
+  /// [lastAsBuilding]=true 时：末框虚线（构建中合并），前框实线（已冻结）；只画框不标「顶/底」。
   /// 口径：CombineEngine 末组仍可继续 absorb，即「构建中合并框」；与构建中连线同「虚线=未确认」。
   void _drawCombineFramesOnMainChart(
     Canvas canvas,
@@ -2746,22 +2790,12 @@ class _KlineCompositePainter extends CustomPainter {
         math.max(yTop, yBottom),
       );
       canvas.drawRect(rect, fillPaint);
-      // 末组虚线=构建中；其余实线=已冻结（可标顶/底）
+      // 末组虚线=构建中；其余实线=已冻结；主图合并框只画框，不标「顶/底」
       final building = lastAsBuilding && i == last;
       if (building) {
         _strokeDashedRect(canvas, rect, framePaint, buildingDashPattern);
       } else {
         canvas.drawRect(rect, framePaint);
-        if (f.fx == 'TOP' || f.fx == 'BOTTOM') {
-          final tp = TextPainter(
-            text: TextSpan(
-              text: f.fx == 'TOP' ? '顶' : '底',
-              style: TextStyle(color: strokeColor, fontSize: 9),
-            ),
-            textDirection: TextDirection.ltr,
-          )..layout();
-          tp.paint(canvas, Offset(rect.left + 2, rect.top + 1));
-        }
       }
     }
   }
@@ -2821,7 +2855,30 @@ class _KlineCompositePainter extends CustomPainter {
     if (innerH <= 0) return;
 
     if (subIndicators.any((e) => e.kind == SubIndicatorKind.volume)) {
-      _drawVolume(canvas, w, innerTop, innerBottom, innerH, barW, slotW);
+      final volKns = subIndicators
+          .where((e) => e.kind == SubIndicatorKind.volume)
+          .map((e) => e.kn)
+          .toList()
+        ..sort();
+      // 全层一次算：K0 原生；K(n+1)=下层增量在本层单元上累加步进
+      final allVol = computeAllKnVolumeSeries(
+        bars: bars,
+        levels: levels,
+        barFeatures: barFeatures,
+      );
+      for (final kn in volKns) {
+        _drawVolume(
+          canvas,
+          w,
+          innerTop,
+          innerBottom,
+          innerH,
+          barW,
+          slotW,
+          kn: kn,
+          allVolSeries: allVol,
+        );
+      }
     }
     // 勾哪层画哪层；叠加时横向错位+描边，避免同 x 盖住
     final confirmKns = subIndicators
@@ -2893,6 +2950,7 @@ class _KlineCompositePainter extends CustomPainter {
     }
   }
 
+  /// 副图成交量：K0=原生；Kn=下层增量在本层单元上动态累加（共享极点归已确认段）。
   void _drawVolume(
     Canvas canvas,
     double w,
@@ -2900,27 +2958,45 @@ class _KlineCompositePainter extends CustomPainter {
     double innerBottom,
     double innerH,
     double barW,
-    double slotW,
-  ) {
+    double slotW, {
+    required int kn,
+    required Map<int, List<double>> allVolSeries,
+  }) {
     if (bars.isEmpty) return;
+    final series = allVolSeries[kn];
+    if (series == null || series.isEmpty) return;
     var maxV = 1.0;
-    for (final b in bars) {
-      if (b.volume > maxV) maxV = b.volume;
+    for (final v in series) {
+      if (v > maxV) maxV = v;
     }
+    // 多层叠画时用层色；K0 仍涨红跌绿半透明
+    final levelTint = kn <= 0
+        ? null
+        : ChartLevelLineStyle.forZS(kn).color.withValues(alpha: 0.55);
     final asOf = segAsOf;
     for (var i = 0; i < bars.length; i++) {
       final idx = bars[i].idx;
-      // 十字线激活时，按当步截断：右侧(idx>asOf)的成交量不绘制，与 K0 蜡烛/K1../Kn 各层一致
+      // 十字线激活时，按当步截断：右侧(idx>asOf)的成交量不绘制
       if (asOf != null && idx > asOf) continue;
       if (idx < viewport.viewXMin - 1 || idx > viewport.viewXMax + 1) continue;
+      final vol = series[i];
+      if (vol <= 0) continue;
       final b = bars[i];
       final cx = _barCenterX(idx, w, slotW);
       final x = cx - barW / 2;
-      final bh = b.volume / maxV * innerH;
-      final color = b.isUp
-          ? const Color(0x66E53935)
-          : const Color(0x6626A69A);
-      canvas.drawRect(Rect.fromLTWH(x, innerBottom - bh, barW, bh), Paint()..color = color);
+      final bh = vol / maxV * innerH;
+      final Color color;
+      if (levelTint != null) {
+        color = levelTint;
+      } else {
+        color = b.isUp
+            ? const Color(0x66E53935)
+            : const Color(0x6626A69A);
+      }
+      canvas.drawRect(
+        Rect.fromLTWH(x, innerBottom - bh, barW, bh),
+        Paint()..color = color,
+      );
     }
   }
 
@@ -3307,8 +3383,7 @@ class _KlineCompositePainter extends CustomPainter {
   }
 
   /// 十字线激活时：副图右上角固定显示已勾选副图指标的当前值。
-  /// 原仅显示极点距，现扩展到分型确认/判断/截断（与副图折线打点、主 tooltip 同源同口径）。
-  /// 展示名用 SubIndicatorKind.label（比层号小 1，与全 UI 同口径）。
+  /// 含 Kn成交量 / 分型确认/判断/极点距/截断（与副图打点、主 tooltip 同源）。
   void _drawSubCrosshairReadout(Canvas canvas, double w) {
     if (crosshairBarIdx == null || bars.isEmpty || subIndicators.isEmpty) {
       return;
@@ -3316,9 +3391,7 @@ class _KlineCompositePainter extends CustomPainter {
     final barX = bars[crosshairBarIdx!.clamp(0, bars.length - 1)].idx;
     final parts = <String>[];
     for (final ind in subIndicators) {
-      // 成交量数值大且已有独立副图坐标轴，不进紧凑读数框
-      if (ind.kind == SubIndicatorKind.volume) continue;
-      // 与主 tooltip 对齐：每个已勾选指标都显示，其值为 tooltip 当步值；
+      // 与主 tooltip 对齐：每个已勾选（且未灰度关闭）指标都显示；
       // tooltip 未取到的（无值/空闲）按 "0" 显示，避免读数框随 K 跳进跳出。
       final rows = featureLookup.crosshairSubRows(barX, {ind});
       final value = rows.isNotEmpty ? rows.first.value : '0';

@@ -64,6 +64,10 @@ Future<void> main() async {
   MsgHistory.instance.appendTestCustomOhlc();
   // 桌面：工作区全屏不盖任务栏；tooltip 分隔线贴边框
   MsgHistory.instance.appendDesktopWorkAreaAndTooltipSep();
+  // 主/副图指标 UI + Kn成交量归属口径
+  MsgHistory.instance.appendIndicatorUiAndKnVolume();
+  MsgHistory.instance.appendIndicatorMuteToggleAndVolReadout();
+  MsgHistory.instance.appendKnVolumeCumulativeStep();
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     await windowManager.ensureInitialized();
     const opts = WindowOptions(

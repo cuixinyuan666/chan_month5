@@ -31,7 +31,7 @@ void main() {
     // 关截断后 prune 掉已勾选的截断项
     final pruned = pruneIndicators(
       {
-        const SubChartIndicator.volume(),
+        const SubChartIndicator.volume(0),
         const SubChartIndicator.truncation(1),
         const SubChartIndicator.fractalPeakDist(1),
       },
@@ -41,9 +41,13 @@ void main() {
     expect(pruned.contains(const SubChartIndicator.fractalPeakDist(1)), isTrue);
   });
 
-  test('副图目录大类顺序：确认 < 判断 < 极点距 < 截断', () {
+  test('副图目录含 Kn成交量且大类顺序：成交量 < 确认 < 判断 < 极点距 < 截断', () {
     final cat = buildSubIndicatorCatalog(3, truncationCheck: true);
     final labels = cat.map((e) => e.label).toList();
+    expect(labels.contains('K0成交量'), isTrue);
+    expect(labels.contains('K1成交量'), isTrue);
+    expect(labels.contains('K3成交量'), isTrue);
+    expect(labels.indexOf('K0成交量'), lessThan(labels.indexOf('K0分型确认')));
     expect(labels.indexOf('K0分型确认'), lessThan(labels.indexOf('K0分型判断')));
     expect(labels.indexOf('K0分型判断'), lessThan(labels.indexOf('K0分型极点距')));
     expect(labels.indexOf('K0分型极点距'), lessThan(labels.indexOf('K0截断')));

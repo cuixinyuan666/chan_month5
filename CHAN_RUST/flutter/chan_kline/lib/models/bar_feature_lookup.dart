@@ -7,6 +7,7 @@ import 'kline_combine_frame.dart';
 import 'level_models.dart';
 import 'k1_analysis.dart';
 import '../compute/fractal_judgment_compute.dart';
+import '../compute/kn_volume_series_compute.dart';
 
 /// 十字线 tooltip 一行：键值 / 层级分隔线 / 同层内容分隔线。
 class CrosshairTooltipRow {
@@ -210,9 +211,23 @@ class BarFeatureLookup {
       // 已删副图「首K1向 / K2确认」：快照字段仍保留供其它用途
     }
 
-    if (subIndicators.any((e) => e.kind == SubIndicatorKind.volume)) {
-      for (final row in byIdx.values) {
-        (row['sub'] as Map<String, dynamic>)['volume'] = row['volume'];
+    // Kn成交量：K0=原生；Kn=下层增量累加步进（与副图绘制同源）。
+    // 写入 sub 供：① tooltip 各层 OHLCV 的 VOL 槽；② 副图读数。
+    {
+      final allVol = computeAllKnVolumeSeries(
+        bars: bars,
+        levels: levels,
+        barFeatures: barFeatures,
+      );
+      for (final e in allVol.entries) {
+        final series = e.value;
+        for (var i = 0; i < bars.length; i++) {
+          final row =
+              byIdx.putIfAbsent(bars[i].idx, () => {'idx': bars[i].idx});
+          final sub = row.putIfAbsent('sub', () => <String, dynamic>{})
+              as Map<String, dynamic>;
+          sub['volume_${e.key}'] = i < series.length ? series[i] : 0.0;
+        }
       }
     }
 
@@ -340,7 +355,11 @@ class BarFeatureLookup {
     final high = (row['high'] as num?)?.toDouble() ?? 0;
     final low = (row['low'] as num?)?.toDouble() ?? 0;
     final close = (row['close'] as num?)?.toDouble() ?? 0;
-    final volume = (row['volume'] as num?) ?? 0;
+    // K0 的 VOL 槽：用 K0成交量序列（原生量）替换预留位
+    final subMap = row['sub'];
+    final volume = (subMap is Map && subMap['volume_0'] is num)
+        ? subMap['volume_0'] as num
+        : ((row['volume'] as num?) ?? 0);
     final combineHigh = (row['combine_high'] as num?)?.toDouble() ?? high;
     final combineLow = (row['combine_low'] as num?)?.toDouble() ?? low;
 
@@ -375,7 +394,15 @@ class BarFeatureLookup {
       ..._levelBlockRows(idx),
     ];
 
-    final subs = crosshairSubRows(idx, subIndicators);
+    final subs = crosshairSubRows(
+      idx,
+      // K0分型确认已在 K0 块；成交量已写入各层 OHLCV 的 VOL 槽——主 tooltip 底部不再重复
+      subIndicators
+          .where((e) =>
+              !(e.kind == SubIndicatorKind.fractalConfirm && e.kn == 1) &&
+              e.kind != SubIndicatorKind.volume)
+          .toSet(),
+    );
     if (subs.isNotEmpty) {
       out.add(const CrosshairTooltipRow.separator());
       out.addAll(subs);
@@ -408,29 +435,36 @@ class BarFeatureLookup {
     }
 
     for (final ind in active) {
+      if (ind.kind == SubIndicatorKind.volume) {
+        final key = 'volume_${ind.kn}';
+        if (sub.containsKey(key)) {
+          add(ind.label, sub[key]);
+        } else if (ind.kn <= 0) {
+          // 回退：旧 volume 字段
+          add(ind.label, sub['volume'] ?? row['volume']);
+        }
+      }
       if (ind.kind == SubIndicatorKind.fractalConfirm) {
-        // kn=1（K0分型确认）已在 K0 块中输出，副图不再重复
-        if (ind.kn == 1) continue;
-        final confirms = row['level_confirms'];
         dynamic v;
         var truncated = false;
-        if (confirms is Map && confirms.containsKey(ind.kn)) {
-          // 主路径：level=kn 的确认（K1/K0连线=level1，K2/K1连线=level2…）
-          final c = confirms[ind.kn];
-          if (c is LevelConfirm) {
-            v = c.value;
-            truncated = c.truncated;
-          } else if (c is Map) {
-            v = c['value'];
-            truncated = c['truncated'] == true;
-          }
-        } else if (ind.kn == 1) {
-          // 回退：无 levels 时用旧 k0_confirm（K0 原始K分型）
+        if (ind.kn == 1) {
+          // K0分型确认：与 tooltip K0 块同源（勿用 level_confirms[1]）
           v = sub['k0_confirm_value'];
           final bc = row['k0_confirm'];
           if (bc is Map) truncated = bc['truncated'] == true;
+        } else {
+          final confirms = row['level_confirms'];
+          if (confirms is Map && confirms.containsKey(ind.kn)) {
+            final c = confirms[ind.kn];
+            if (c is LevelConfirm) {
+              v = c.value;
+              truncated = c.truncated;
+            } else if (c is Map) {
+              v = c['value'];
+              truncated = c['truncated'] == true;
+            }
+          }
         }
-        // 与主 K 块同口径：±1(截断)/±1/0（未确认）。使副图 tooltip 行/读数框与 K 块一致。
         add(ind.label, v == null ? '0' : (truncated ? '$v(截断)' : '$v'));
       }
       if (ind.kind == SubIndicatorKind.fractalJudgment) {
@@ -518,6 +552,10 @@ class BarFeatureLookup {
       if (judgeVal != null && sub is Map) {
         judgeTruncated = sub['fractal_judgment_trunc_${n + 1}'] == true;
       }
+      // Kn 的 VOL 槽：用同层成交量序列替换预留位（不关心旧 unitVolume 是否对齐）
+      final knVol = (sub is Map && sub['volume_$n'] is num)
+          ? sub['volume_$n'] as num
+          : null;
       lines.add(const CrosshairTooltipRow.separator());
       lines.addAll(_levelBlockRowsFor(
         n,
@@ -526,6 +564,7 @@ class BarFeatureLookup {
         confirmTruncated,
         judgeVal,
         judgeTruncated,
+        volumeOverride: knVol,
       ));
     }
     return lines;
@@ -545,8 +584,9 @@ class BarFeatureLookup {
     int? confirmVal,
     bool confirmTruncated,
     int? judgeVal,
-    bool judgeTruncated,
-  ) {
+    bool judgeTruncated, {
+    num? volumeOverride,
+  }) {
     final label = 'K$n';
     // 分型确认 / 分型判断 同一套呈现：±1(截断) / ±1 / 0（未确认）
     final confirmText = confirmVal == null
@@ -579,7 +619,8 @@ class BarFeatureLookup {
           high: snap.unitHigh,
           low: snap.unitLow,
           close: snap.unitClose,
-          volume: snap.unitVolume,
+          // 预留 VOL 槽：优先用 Kn成交量序列，否则回退 unitVolume
+          volume: volumeOverride ?? snap.unitVolume,
         )),
       ),
       const CrosshairTooltipRow.starSeparator(),

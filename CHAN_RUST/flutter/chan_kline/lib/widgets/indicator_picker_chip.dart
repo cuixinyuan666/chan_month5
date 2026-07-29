@@ -1,17 +1,23 @@
 import 'package:flutter/material.dart';
 
-/// 单个已选指标条目（双击名称可关闭）。
+/// 单个已选指标条目（单击：灰度关闭 / 再点打开）。
 class IndicatorChipEntry {
   const IndicatorChipEntry({
     required this.label,
-    required this.onDoubleTapClose,
+    required this.onTapToggle,
+    required this.displayLevel,
+    this.muted = false,
   });
 
   final String label;
-  final VoidCallback onDoubleTapClose;
+  final VoidCallback onTapToggle;
+  /// 显示层号：同层用 /，跨层用 ※ 分隔
+  final int displayLevel;
+  /// true=灰度关闭（不绘制），再点恢复
+  final bool muted;
 }
 
-/// 主/副图指标选择入口：↓ 打开选择；右侧名称双击关闭；悬停提高透明度。
+/// 主/副图指标选择入口：↓ 打开选择；右侧名称单击灰度开关；自动换行。
 class IndicatorPickerChip extends StatefulWidget {
   const IndicatorPickerChip({
     super.key,
@@ -34,11 +40,17 @@ class IndicatorPickerChip extends StatefulWidget {
 class _IndicatorPickerChipState extends State<IndicatorPickerChip> {
   bool _hovered = false;
 
+  // 开启态高对比；灰度态明显变暗以便区分
+  static const _activeColor = Color(0xFFFFFFFF);
+  static const _mutedColor = Color(0xFF6B7280);
+  static const _sepActive = Color(0xAAFFFFFF);
+  static const _sepMuted = Color(0x556B7280);
+
   @override
   Widget build(BuildContext context) {
     final entries = widget.entries;
-    // 平时压低透明度，鼠标移入恢复
-    final opacity = _hovered ? 1.0 : 0.38;
+    // 平时略压透明度（仍可读），悬停拉满；避免过低导致灰度难辨
+    final opacity = _hovered ? 1.0 : 0.88;
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
@@ -53,9 +65,9 @@ class _IndicatorPickerChipState extends State<IndicatorPickerChip> {
             child: Padding(
               padding: const EdgeInsets.fromLTRB(0, 2, 4, 2),
               child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // ↓：点击打开主/副图指标选择
                   InkWell(
                     borderRadius: BorderRadius.circular(4),
                     onTap: widget.onTapDropdown,
@@ -64,61 +76,74 @@ class _IndicatorPickerChipState extends State<IndicatorPickerChip> {
                       child: Icon(
                         Icons.arrow_drop_down,
                         size: 18,
-                        color: Color(0xFFE2E8F0),
+                        color: Color(0xFFFFFFFF),
                       ),
                     ),
                   ),
                   if (entries.isEmpty)
                     Padding(
-                      padding: const EdgeInsets.only(right: 4),
+                      padding: const EdgeInsets.only(right: 4, top: 3),
                       child: Text(
                         widget.emptyHint,
                         style: const TextStyle(
-                          color: Color(0xFFE2E8F0),
-                          fontSize: 11,
-                          height: 1,
+                          color: _activeColor,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          height: 1.2,
                         ),
                       ),
                     )
                   else
                     Flexible(
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
+                      child: Wrap(
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        spacing: 0,
+                        runSpacing: 2,
                         children: [
                           for (var i = 0; i < entries.length; i++) ...[
                             if (i > 0)
-                              const Padding(
-                                padding: EdgeInsets.symmetric(horizontal: 2),
+                              Padding(
+                                padding:
+                                    const EdgeInsets.symmetric(horizontal: 2),
                                 child: Text(
-                                  '/',
+                                  entries[i].displayLevel !=
+                                          entries[i - 1].displayLevel
+                                      ? ' ※ '
+                                      : '/',
                                   style: TextStyle(
-                                    color: Color(0x66FFFFFF),
-                                    fontSize: 11,
-                                    height: 1,
+                                    color: (entries[i].muted &&
+                                            entries[i - 1].muted)
+                                        ? _sepMuted
+                                        : _sepActive,
+                                    fontSize: 12,
+                                    height: 1.2,
                                   ),
                                 ),
                               ),
-                            // 双击名称关闭该指标；超宽时均分压字
-                            Flexible(
-                              child: GestureDetector(
-                                behavior: HitTestBehavior.opaque,
-                                onDoubleTap: entries[i].onDoubleTapClose,
-                                child: Tooltip(
-                                  message: '双击关闭「${entries[i].label}」',
-                                  waitDuration: const Duration(milliseconds: 500),
-                                  child: FittedBox(
-                                    fit: BoxFit.scaleDown,
-                                    alignment: Alignment.centerLeft,
-                                    child: Text(
-                                      entries[i].label,
-                                      maxLines: 1,
-                                      softWrap: false,
-                                      style: const TextStyle(
-                                        color: Color(0xFFE2E8F0),
-                                        fontSize: 11,
-                                        height: 1,
-                                      ),
-                                    ),
+                            GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              onTap: entries[i].onTapToggle,
+                              child: Tooltip(
+                                message: entries[i].muted
+                                    ? '单击打开「${entries[i].label}」'
+                                    : '单击关闭「${entries[i].label}」',
+                                waitDuration:
+                                    const Duration(milliseconds: 500),
+                                child: Text(
+                                  entries[i].label,
+                                  style: TextStyle(
+                                    color: entries[i].muted
+                                        ? _mutedColor
+                                        : _activeColor,
+                                    fontSize: 12,
+                                    fontWeight: entries[i].muted
+                                        ? FontWeight.w400
+                                        : FontWeight.w600,
+                                    height: 1.2,
+                                    decoration: entries[i].muted
+                                        ? TextDecoration.lineThrough
+                                        : TextDecoration.none,
+                                    decorationColor: _mutedColor,
                                   ),
                                 ),
                               ),

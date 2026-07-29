@@ -1,4 +1,5 @@
 import 'package:chan_kline/models/bar_crosshair_feature.dart';
+import 'package:chan_kline/models/chart_indicator.dart';
 import 'package:chan_kline/models/k0_confirm_signal.dart';
 import 'package:chan_kline/models/kline_bar.dart';
 import 'package:chan_kline/models/bar_feature_lookup.dart';
@@ -122,5 +123,33 @@ void main() {
     expect(at2.any((l) => l == 'K1分型确认:【-1】'), isTrue);
     expect(at2.any((l) => l.startsWith('K2[No.]:【0】')), isTrue);
     expect(at2.any((l) => l.startsWith('K2合并K2序:【1】')), isTrue);
+  });
+
+  test('tooltip OHLCV 的 VOL 槽用 Kn成交量序列，不追加底部成交量行', () {
+    final bars = _bars(4); // vol = 100,101,102,103
+    final feats = [for (var i = 0; i < 4; i++) _feat(i, unitIdx: 0)];
+    final lookup = BarFeatureLookup.build(
+      bars: bars,
+      combineFrames: const [],
+      k0Confirms: const [],
+      barFeatures: feats,
+      levels: [
+        const LevelBundle(
+          level: 1,
+          unitBars: [
+            LevelUnitBar(idx: 0, dir: 1, x1: 0, x2: 2, confirmX: 3, volume: 303),
+          ],
+        ),
+      ],
+      subIndicators: {
+        const SubChartIndicator.volume(0),
+        const SubChartIndicator.volume(1),
+      },
+    );
+    // 确认前最后一根：K0=原生102；K1 累加 0..2 = 303
+    final lines = lookup.crosshairTooltipLines(2, timePart: 't');
+    expect(lines.any((l) => l.startsWith('K0:') && l.contains('VOL【102】')), isTrue);
+    expect(lines.any((l) => l.startsWith('K1:') && l.contains('VOL【303】')), isTrue);
+    expect(lines.any((l) => l.contains('成交量')), isFalse);
   });
 }

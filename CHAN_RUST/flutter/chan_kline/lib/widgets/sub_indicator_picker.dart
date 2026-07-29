@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../models/chart_indicator.dart';
 
-/// 副图指标选择：大类 Divider；过长可滚轮滚动；点遮罩外关闭并保存。
+/// 副图指标选择：默认叠加多选；最上「Kn指标」层全选；点遮罩外关闭并保存。
 Future<Set<SubChartIndicator>?> showSubIndicatorPicker({
   required BuildContext context,
   required Set<SubChartIndicator> selected,
@@ -40,14 +40,12 @@ class _SubIndicatorPickerDialog extends StatefulWidget {
 
 class _SubIndicatorPickerDialogState extends State<_SubIndicatorPickerDialog> {
   late Set<SubChartIndicator> _draft;
-  late bool _stackMode;
   final _scrollCtrl = ScrollController();
 
   @override
   void initState() {
     super.initState();
     _draft = Set<SubChartIndicator>.from(widget.initial);
-    _stackMode = _draft.length > 1;
     widget.onDraftChanged(_draft);
   }
 
@@ -62,20 +60,7 @@ class _SubIndicatorPickerDialogState extends State<_SubIndicatorPickerDialog> {
     widget.onDraftChanged(_draft);
   }
 
-  void _toggleStack(bool v) {
-    setState(() {
-      _stackMode = v;
-      if (!_stackMode && _draft.length > 1) {
-        _setDraft({_draft.first});
-      }
-    });
-  }
-
-  void _pickSingle(SubChartIndicator item) {
-    Navigator.of(context).pop(<SubChartIndicator>{item});
-  }
-
-  void _toggleStackItem(SubChartIndicator item, bool? checked) {
+  void _toggleItem(SubChartIndicator item, bool? checked) {
     setState(() {
       final next = Set<SubChartIndicator>.from(_draft);
       if (checked == true) {
@@ -87,11 +72,60 @@ class _SubIndicatorPickerDialogState extends State<_SubIndicatorPickerDialog> {
     });
   }
 
+  void _toggleLevel(int displayLevel, bool? checked) {
+    final members = subIndicatorsForLevel(displayLevel, widget.available);
+    if (members.isEmpty) return;
+    setState(() {
+      final next = Set<SubChartIndicator>.from(_draft);
+      if (checked == true) {
+        next.addAll(members);
+      } else {
+        next.removeAll(members);
+      }
+      _setDraft(next);
+    });
+  }
+
+  bool? _levelTriState(int displayLevel) {
+    final members = subIndicatorsForLevel(displayLevel, widget.available);
+    if (members.isEmpty) return false;
+    final n = members.where(_draft.contains).length;
+    if (n == 0) return false;
+    if (n == members.length) return true;
+    return null;
+  }
+
   List<Widget> _buildTiles() {
     final tiles = <Widget>[];
+    final levels = subDisplayLevels(widget.available);
+    for (final lv in levels) {
+      final members = subIndicatorsForLevel(lv, widget.available);
+      if (members.isEmpty) continue;
+      tiles.add(
+        CheckboxListTile(
+          dense: true,
+          contentPadding: EdgeInsets.zero,
+          controlAffinity: ListTileControlAffinity.trailing,
+          activeColor: const Color(0xFF42A5F5),
+          tristate: true,
+          title: Text('K$lv指标', style: const TextStyle(fontSize: 14)),
+          value: _levelTriState(lv),
+          onChanged: (v) => _toggleLevel(lv, v == true),
+        ),
+      );
+    }
+    if (levels.isNotEmpty && widget.available.isNotEmpty) {
+      tiles.add(
+        const Divider(
+          height: 16,
+          thickness: 1,
+          color: Color(0x44FFFFFF),
+        ),
+      );
+    }
+
     SubIndicatorKind? prevKind;
     for (final item in widget.available) {
-      // 大类切换处加 Divider（成交量 | 分型确认 | 分型判断 | 极点距 | 截断）
       if (prevKind != null && prevKind != item.kind) {
         tiles.add(
           const Divider(
@@ -102,34 +136,17 @@ class _SubIndicatorPickerDialogState extends State<_SubIndicatorPickerDialog> {
         );
       }
       prevKind = item.kind;
-      if (_stackMode) {
-        tiles.add(
-          CheckboxListTile(
-            dense: true,
-            contentPadding: EdgeInsets.zero,
-            controlAffinity: ListTileControlAffinity.trailing,
-            activeColor: const Color(0xFF42A5F5),
-            title: Text(item.label, style: const TextStyle(fontSize: 14)),
-            value: _draft.contains(item),
-            onChanged: (v) => _toggleStackItem(item, v),
-          ),
-        );
-      } else {
-        final picked = _draft.contains(item);
-        tiles.add(
-          ListTile(
-            dense: true,
-            contentPadding: EdgeInsets.zero,
-            title: Text(item.label),
-            trailing: Icon(
-              picked ? Icons.radio_button_checked : Icons.radio_button_off,
-              size: 18,
-              color: picked ? const Color(0xFF42A5F5) : const Color(0x66FFFFFF),
-            ),
-            onTap: () => _pickSingle(item),
-          ),
-        );
-      }
+      tiles.add(
+        CheckboxListTile(
+          dense: true,
+          contentPadding: EdgeInsets.zero,
+          controlAffinity: ListTileControlAffinity.trailing,
+          activeColor: const Color(0xFF42A5F5),
+          title: Text(item.label, style: const TextStyle(fontSize: 14)),
+          value: _draft.contains(item),
+          onChanged: (v) => _toggleItem(item, v),
+        ),
+      );
     }
     return tiles;
   }
@@ -142,38 +159,13 @@ class _SubIndicatorPickerDialogState extends State<_SubIndicatorPickerDialog> {
       title: const Text('副图指标', style: TextStyle(color: Colors.white)),
       content: SizedBox(
         width: 320,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Row(
-              children: [
-                const Spacer(),
-                TextButton.icon(
-                  onPressed: () => _toggleStack(!_stackMode),
-                  icon: Icon(
-                    _stackMode ? Icons.check_box : Icons.check_box_outline_blank,
-                    size: 18,
-                    color: const Color(0xFF42A5F5),
-                  ),
-                  label: const Text('叠加', style: TextStyle(fontSize: 13)),
-                  style: TextButton.styleFrom(
-                    foregroundColor: const Color(0xFF42A5F5),
-                    padding: EdgeInsets.zero,
-                    minimumSize: Size.zero,
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 4),
-            if (widget.available.isEmpty)
-              const Padding(
+        child: widget.available.isEmpty
+            ? const Padding(
                 padding: EdgeInsets.symmetric(vertical: 12),
                 child: Text('暂无可选指标',
                     style: TextStyle(color: Color(0x99FFFFFF))),
               )
-            else
-              ConstrainedBox(
+            : ConstrainedBox(
                 constraints: BoxConstraints(maxHeight: maxH),
                 child: Scrollbar(
                   controller: _scrollCtrl,
@@ -187,8 +179,6 @@ class _SubIndicatorPickerDialogState extends State<_SubIndicatorPickerDialog> {
                   ),
                 ),
               ),
-          ],
-        ),
       ),
       actions: const [],
     );
