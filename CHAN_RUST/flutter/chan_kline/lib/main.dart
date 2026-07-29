@@ -143,13 +143,12 @@ class _KlineHomePageState extends State<KlineHomePage> {
   List<LevelBundle> _levels = [];
   List<ZSFrame> _zsK0Frames = [];
   Set<MainChartIndicator> _mainIndicators = {
-    const MainChartIndicator.kn(1),
-    const MainChartIndicator.combine(1),
-    const MainChartIndicator.zs(0),
+    const MainChartIndicator.kn(2),
+    const MainChartIndicator.combine(2),
     const MainChartIndicator.zs(1),
   };
   Set<SubChartIndicator> _subIndicators = {
-    const SubChartIndicator.fractalConfirm(1),
+    const SubChartIndicator.fractalConfirm(2),
   };
   int _stepIdx = -1; // -1 表示尚未步进
   bool _playing = false;
