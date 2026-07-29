@@ -227,3 +227,17 @@ Set<T> pruneIndicators<T>(Set<T> selected, List<T> catalog) {
   final allow = catalog.toSet();
   return selected.where(allow.contains).toSet();
 }
+
+/// 启动默认：勾选「K0指标」层全选（与选择栏层全选同口径）。
+/// 用 catalog(maxKn=1) 生成，保证含 K0连线 / 副图分型类。
+Set<MainChartIndicator> defaultMainIndicatorsK0() {
+  return mainIndicatorsForLevel(0, buildMainIndicatorCatalog(1)).toSet();
+}
+
+/// 启动默认：副图「K0指标」层全选（成交量+分型确认/判断/极点距/截断）。
+Set<SubChartIndicator> defaultSubIndicatorsK0({bool truncationCheck = true}) {
+  return subIndicatorsForLevel(
+    0,
+    buildSubIndicatorCatalog(1, truncationCheck: truncationCheck),
+  ).toSet();
+}

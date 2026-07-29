@@ -68,6 +68,8 @@ Future<void> main() async {
   MsgHistory.instance.appendIndicatorUiAndKnVolume();
   MsgHistory.instance.appendIndicatorMuteToggleAndVolReadout();
   MsgHistory.instance.appendKnVolumeCumulativeStep();
+  // 主/副图启动默认=「K0指标」层全选（与选择栏同口径）
+  MsgHistory.instance.appendDefaultIndicatorsK0();
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     await windowManager.ensureInitialized();
     const opts = WindowOptions(
@@ -142,14 +144,9 @@ class _KlineHomePageState extends State<KlineHomePage> {
   K1AnalysisBundle _k1Analysis = K1AnalysisBundle.empty();
   List<LevelBundle> _levels = [];
   List<ZSFrame> _zsK0Frames = [];
-  Set<MainChartIndicator> _mainIndicators = {
-    const MainChartIndicator.kn(2),
-    const MainChartIndicator.combine(2),
-    const MainChartIndicator.zs(1),
-  };
-  Set<SubChartIndicator> _subIndicators = {
-    const SubChartIndicator.fractalConfirm(2),
-  };
+  // 默认=选择栏「K0指标」层全选（主图 K0/K0合并/K0连线/K0连续中枢；副图同层）
+  Set<MainChartIndicator> _mainIndicators = defaultMainIndicatorsK0();
+  Set<SubChartIndicator> _subIndicators = defaultSubIndicatorsK0();
   int _stepIdx = -1; // -1 表示尚未步进
   bool _playing = false;
   Timer? _playTimer;

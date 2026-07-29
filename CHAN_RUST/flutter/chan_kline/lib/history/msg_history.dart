@@ -379,6 +379,20 @@ class MsgHistory {
     );
   }
 
+  /// 启动默认勾选「K0指标」层全选（进程内去重；配置易混写入历史便于复制排查）。
+  static bool _defaultIndicatorsK0Logged = false;
+  void appendDefaultIndicatorsK0() {
+    if (_defaultIndicatorsK0Logged) return;
+    _defaultIndicatorsK0Logged = true;
+    append(
+      '【默认指标】主/副图启动默认勾选「K0指标」层全选，'
+      '与选择栏最上「Kn指标」同口径：'
+      '主图=K0/K0合并/K0连线/K0连续中枢；'
+      '副图=K0成交量+K0分型确认/判断/极点距/截断（截断随截断开关 prune）。'
+      '非 K1 层；加载后仅 prune 超出 catalog 的项，不改层。',
+    );
+  }
+
   /// 运行时虚线摘要（内容变才追加；复制历史记录排查用）。
   void appendDisplayBuildingLinesRuntime({
     required int kn,
