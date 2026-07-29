@@ -2,6 +2,7 @@
 //! 模块分工：engine=包含合并+分型唯一内核；pipeline=N 段递归；
 //! combine/feature/seg_eigen=旧字段兼容映射；segment_first=全层首段策略。
 
+mod buy1;
 mod combine;
 mod engine;
 mod error;
@@ -14,6 +15,7 @@ mod segment_first;
 mod tick;
 mod zs;
 
+pub use buy1::{find_buy1, zs_below_prev, Buy1Frame};
 pub use combine::{
     build_k1_combine_frames, build_k1_combine_frames_with, build_kline_combine_bundle,
     build_kline_combine_bundle_with, build_kline_combine_frames, K0ConfirmSignal,

@@ -12,6 +12,7 @@ import 'compute/k1_bar_view_compute.dart';
 import 'history/app_debug_snapshot.dart';
 import 'history/msg_history.dart';
 import 'models/zs_frame.dart';
+import 'models/buy1_frame.dart';
 import 'models/kline_bar.dart';
 import 'models/k0_confirm_signal.dart';
 import 'models/bar_crosshair_feature.dart';
@@ -54,6 +55,8 @@ Future<void> main() async {
   // K0中枢命名纠偏 + 单段雏形
   MsgHistory.instance.appendK0ZsRenameAndPrototype();
   MsgHistory.instance.appendZsSingleSeedIsomorphic();
+  // ZG/ZD 常见命名 + Kn一买
+  MsgHistory.instance.appendBuy1AndZgZdCommonNaming();
   // 展示轨：动态KN当确认段画虚线；确认优先纠正/改实线
   MsgHistory.instance.appendDisplayTrackDynamicKnBuildingLines();
   // 种子框 / 第一条虚线限制 / 种子包含截断（全层同构，常驻历史）
@@ -144,6 +147,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
   K1AnalysisBundle _k1Analysis = K1AnalysisBundle.empty();
   List<LevelBundle> _levels = [];
   List<ZSFrame> _zsK0Frames = [];
+  List<Buy1Frame> _buy1K0Frames = [];
   // 默认=选择栏「K0指标」层全选（主图 K0/K0合并/K0连线/K0连续中枢；副图同层）
   Set<MainChartIndicator> _mainIndicators = defaultMainIndicatorsK0();
   Set<SubChartIndicator> _subIndicators = defaultSubIndicatorsK0();
@@ -375,6 +379,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _k1Analysis = K1AnalysisBundle.empty();
         _levels = [];
         _zsK0Frames = [];
+        _buy1K0Frames = [];
         _stepIdx = -1;
         _judgmentHistoryByKn.clear();
       });
@@ -426,6 +431,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _k1Analysis = K1AnalysisBundle.empty();
         _levels = [];
         _zsK0Frames = [];
+        _buy1K0Frames = [];
         _judgmentHistoryByKn.clear();
       });
       return;
@@ -465,6 +471,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _defaultK0Policy = bundle.defaultK0Policy;
         _levels = bundle.levels;
         _zsK0Frames = bundle.zsK0Frames;
+        _buy1K0Frames = bundle.buy1K0Frames;
         // 按当前最高 Kn 动态裁剪已选指标（层变少时去掉失效项）
         final maxKn = chartMaxKn(
           levels: _levels,
@@ -668,6 +675,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
                   k1Analysis: _k1Analysis,
                   levels: _levels,
                   zsK0Frames: _zsK0Frames,
+                  buy1K0Frames: _buy1K0Frames,
                   defaultK0Policy: _defaultK0Policy,
                   truncationCheck: _truncationCheck,
                   showBuildingDash: _showBuildingDash,

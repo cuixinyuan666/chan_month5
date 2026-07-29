@@ -74,7 +74,7 @@ void main() {
     );
     expect(rows.length, 4);
     expect(rows[0].label, 'K0连续中枢价格');
-    expect(rows[0].value, 'GG【11.73】/DD【11.70】/ZG【11.71】/ZD【11.72】');
+    expect(rows[0].value, 'GG【11.73】/DD【11.70】/ZG【11.72】/ZD【11.71】');
     expect(rows[1].label, 'K0连续中枢Kn序');
     expect(rows[1].value, '【2】');
     expect(rows[2].label, 'K0连续中枢组No.');

@@ -9,7 +9,6 @@ import '../models/kline_bar.dart';
 import '../models/kline_combine_frame.dart';
 import '../models/level_models.dart';
 import '../models/k1_analysis.dart';
-import '../models/zs_frame.dart';
 import 'msg_history.dart';
 
 /// 生成可复制页面快照（含最近历史记录，便于粘贴排查）。
@@ -81,13 +80,14 @@ class AppDebugSnapshot {
       '十字线态方向键永不步退。非十字线态=左步退/右步进（按住连发加速，与点击同义）。',
     );
     buf.writeln(
-      '副图目录：Kn成交量(K0=原生；Kn=归属序列) + Kn分型确认/极点距；'
+      '副图目录：Kn成交量(K0=原生；Kn=归属序列) + Kn分型确认/极点距 + Kn一买；'
       'Kn截断仅 truncation_check=开 时可选；'
       '极点距数值不画在折线上，十字线激活时在副图右上角固定读数。'
-      '十字线激活时副图与主图同构：确认/判断/极点距/截断/成交量均按 segAsOf 过滤 x>asOf，右侧不画。'
+      '十字线激活时副图与主图同构：确认/判断/极点距/截断/成交量/一买均按 segAsOf 过滤 x>asOf，右侧不画。'
       'Kn成交量：K0原生；K(n+1)=下层增量在本层单元上动态累加步进；'
       '共享极点归已确认段，新动态不占末根；不回写 unit.volume；'
       '十字线副图右上读数含 Kn成交量。'
+      'Kn一买：与连续中枢同层同号；当前枢整体在上个枢下方触发；1a/1b…不回写。'
       '选择栏默认叠加+「Kn指标」层全选；左上角同层/跨层※、单击灰度开关（再点打开）。',
     );
     buf.writeln(
@@ -242,7 +242,7 @@ class AppDebugSnapshot {
           final seq = f.seq > 0 ? f.seq : (i + 1);
           buf.writeln(
             '  [$tag] #$seq count=${f.count} x=[${f.x1},${f.x2}] '
-            'ZD/ZG=${f.high}/${f.low}'
+            'ZG/ZD=${f.high}/${f.low}'
             '${f.isSure ? '' : ' 不确定'}',
           );
         }

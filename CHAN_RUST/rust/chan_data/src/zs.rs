@@ -38,7 +38,9 @@ pub struct ZS {
     pub end_idx: i64,
     pub start_seg: usize,
     pub end_seg: usize,
+    /// 中枢高（重叠区间上沿，常见命名 ZG）
     pub zg: f64,
+    /// 中枢低（重叠区间下沿，常见命名 ZD）
     pub zd: f64,
     pub gg: f64,
     pub dd: f64,
@@ -50,7 +52,7 @@ pub struct ZS {
     pub(crate) member_segs: Vec<usize>,
 }
 
-/// 中枢框（high=ZD, low=ZG, gg=GG, dd=DD）
+/// 中枢框（high=ZG 上沿, low=ZD 下沿, gg=GG, dd=DD）
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ZSFrame {
     pub seq: i32,
@@ -68,9 +70,10 @@ pub struct ZSFrame {
     pub out_seg_idx: Option<i64>,
 }
 
+/// 段与中枢重叠带 [ZD, ZG] 是否相交（ZG=上沿，ZD=下沿）。
 #[inline]
 fn seg_overlaps(zg: f64, zd: f64, u: &LevelSegment) -> bool {
-    u.high >= zg && u.low <= zd
+    u.high >= zd && u.low <= zg
 }
 
 fn price_tick(segs: &[LevelSegment]) -> f64 {
@@ -85,26 +88,27 @@ fn price_tick(segs: &[LevelSegment]) -> f64 {
 }
 
 fn is_flat_zs(zg: f64, zd: f64, tick: f64) -> bool {
-    (zd - zg).abs() <= tick + 1e-12
+    (zg - zd).abs() <= tick + 1e-12
 }
 
-fn near_one_line_price(s: &LevelSegment, tick: f64) -> Option<f64> {
-    let w = s.high - s.low;
-    if w.abs() <= 1e-12 || w <= tick + 1e-12 {
-        return Some(s.low);
+/// 一字线：仅 open==close（勿用 high-low/tick 近一字误判）。
+fn one_line_price(s: &LevelSegment) -> Option<f64> {
+    if (s.open - s.close).abs() <= 1e-12 {
+        return Some(s.open);
     }
     None
 }
 
+/// 返回 (ZG上沿, ZD下沿, GG, DD)。
 fn range_of(segs: &[LevelSegment], members: &[usize]) -> (f64, f64, f64, f64) {
-    let mut zg = f64::NEG_INFINITY;
-    let mut zd = f64::INFINITY;
+    let mut zg = f64::INFINITY;
+    let mut zd = f64::NEG_INFINITY;
     let mut gg = f64::NEG_INFINITY;
     let mut dd = f64::INFINITY;
     for &m in members {
         let s = &segs[m];
-        zg = zg.max(s.low);
-        zd = zd.min(s.high);
+        zg = zg.min(s.high);
+        zd = zd.max(s.low);
         gg = gg.max(s.high);
         dd = dd.min(s.low);
     }
@@ -132,8 +136,8 @@ fn make_zs(
     let start_seg = members[0];
     let end_seg = *members.last().unwrap();
     let first = &segs[start_seg];
-    let tick = price_tick(segs);
-    if let Some(anchor) = near_one_line_price(first, tick) {
+    // 仅真·一字线(open=close)锚定 ZG=ZD；近一字/小振幅不塌缩
+    if let Some(anchor) = one_line_price(first) {
         zg = anchor;
         zd = anchor;
     }
@@ -169,11 +173,12 @@ fn extend_zs(z: &mut ZS, segs: &[LevelSegment], pos: usize, tick: f64) {
     z.member_segs.push(pos);
     let s = &segs[pos];
     if !is_flat_zs(z.zg, z.zd, tick) {
-        if s.low > z.zg {
-            z.zg = s.low;
+        // ZD 下沿上抬；ZG 上沿下压
+        if s.low > z.zd {
+            z.zd = s.low;
         }
-        if s.high < z.zd {
-            z.zd = s.high;
+        if s.high < z.zg {
+            z.zg = s.high;
         }
     }
     z.gg = z.gg.max(s.high);
@@ -272,7 +277,8 @@ fn try_combine(zs_list: &mut Vec<ZS>, segs: &[LevelSegment]) {
         while k + 1 < zs_list.len() {
             let a = &zs_list[k];
             let b = &zs_list[k + 1];
-            let overlap = ranges_overlap(a.zg, a.zd, b.zg, b.zd);
+            // ranges_overlap(lo, hi, …)：ZD=下沿、ZG=上沿
+            let overlap = ranges_overlap(a.zd, a.zg, b.zd, b.zg);
             let block = a.is_sure && b.member_segs.len() == 1;
             if overlap && !block {
                 let merged = merge_two(a, b, segs);
@@ -314,8 +320,8 @@ pub fn zs_to_frames(zs_list: &[ZS], segment_by_idx: &HashMap<i64, &LevelSegment>
                 seq: i as i32,
                 x1: s.begin_pole_x.min(e.begin_pole_x),
                 x2: s.end_pole_x.max(e.end_pole_x),
-                high: z.zd,
-                low: z.zg,
+                high: z.zg,
+                low: z.zd,
                 gg: z.gg,
                 dd: z.dd,
                 level: z.level,
@@ -430,6 +436,17 @@ mod tests {
     use super::*;
 
     fn mk_seg(idx: i64, dir: i32, high: f64, low: f64) -> LevelSegment {
+        mk_seg_ohlc(idx, dir, high, low, low, high)
+    }
+
+    fn mk_seg_ohlc(
+        idx: i64,
+        dir: i32,
+        high: f64,
+        low: f64,
+        open: f64,
+        close: f64,
+    ) -> LevelSegment {
         LevelSegment {
             idx,
             dir,
@@ -437,10 +454,10 @@ mod tests {
             end_confirm_x: idx as i32,
             begin_pole_x: idx as i32,
             end_pole_x: idx as i32,
-            open: low,
+            open,
             high,
             low,
-            close: high,
+            close,
             volume: 0.0,
             begin_fractal_x1: idx as i32,
             begin_fractal_x2: idx as i32,
@@ -463,6 +480,7 @@ mod tests {
             unit_bars: vec![],
             combine_frames: vec![],
             zs_frames: vec![],
+            buy1_frames: vec![],
             first_dir: 0,
             first_dir_x: 0,
             active_unit: None,
@@ -478,6 +496,30 @@ mod tests {
         assert_eq!(zs.len(), 1);
         assert!(!zs[0].is_sure);
         assert_eq!(zs[0].member_segs, vec![0]);
+    }
+
+    /// open==close → 一字线锚定 ZG=ZD；仅小振幅但 open!=close 不塌缩。
+    #[test]
+    fn one_line_only_when_open_equals_close() {
+        // 真一字：open=close=11.71，即便有影线也不另判
+        let true_one = vec![mk_seg_ohlc(17, 1, 11.72, 11.70, 11.71, 11.71)];
+        let zs1 = find_zs(&true_one, 0, &ZSConfig::default());
+        assert_eq!(zs1.len(), 1);
+        assert!((zs1[0].zg - 11.71).abs() < 1e-12);
+        assert!((zs1[0].zd - 11.71).abs() < 1e-12);
+
+        // 假近一字：high-low 很小但 open!=close → 不塌成 ZG=ZD
+        let fake = vec![mk_seg_ohlc(18, 1, 11.73, 11.72, 11.72, 11.73)];
+        let zs2 = find_zs(&fake, 0, &ZSConfig::default());
+        assert_eq!(zs2.len(), 1);
+        assert!(
+            (zs2[0].zg - zs2[0].zd).abs() > 1e-12,
+            "open!=close 不得 ZG=ZD: zg={} zd={}",
+            zs2[0].zg,
+            zs2[0].zd
+        );
+        assert!((zs2[0].zg - 11.73).abs() < 1e-12);
+        assert!((zs2[0].zd - 11.72).abs() < 1e-12);
     }
 
     #[test]
@@ -520,8 +562,9 @@ mod tests {
         ];
         let zs = find_zs(&segs, 1, &ZSConfig::default());
         assert_eq!(zs.len(), 2);
-        assert_eq!(zs[0].zg, 12.0);
-        assert_eq!(zs[0].zd, 20.0);
+        // 常见命名：ZG=上沿、ZD=下沿
+        assert_eq!(zs[0].zg, 20.0);
+        assert_eq!(zs[0].zd, 12.0);
     }
 
     #[test]

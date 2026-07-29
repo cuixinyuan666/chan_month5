@@ -1,5 +1,6 @@
 import 'k0_confirm_signal.dart';
 import 'bar_crosshair_feature.dart';
+import 'buy1_frame.dart';
 import 'k0_line.dart';
 import 'k1_bar.dart';
 import 'kline_combine_frame.dart';
@@ -33,6 +34,9 @@ class KlineCombineBundle {
   /// K0中枢（原生分钟K段，level=0）
   final List<ZSFrame> zsK0Frames;
 
+  /// K0一买（与 K0中枢同层）
+  final List<Buy1Frame> buy1K0Frames;
+
   const KlineCombineBundle({
     required this.frames,
     required this.k0Confirms,
@@ -47,6 +51,7 @@ class KlineCombineBundle {
     this.levelVirtualUnits = const [],
     this.levels = const [],
     this.zsK0Frames = const [],
+    this.buy1K0Frames = const [],
   });
 
   factory KlineCombineBundle.fromJson(Map<String, dynamic> json) {
@@ -130,6 +135,9 @@ class KlineCombineBundle {
       zsK0Frames: (json['zs_k0_frames'] as List? ?? const [])
           .map((e) => ZSFrame.fromJson(Map<String, dynamic>.from(e as Map)))
           .toList(),
+      buy1K0Frames: (json['buy1_k0_frames'] as List? ?? const [])
+          .map((e) => Buy1Frame.fromJson(Map<String, dynamic>.from(e as Map)))
+          .toList(),
     );
   }
 
@@ -147,5 +155,6 @@ class KlineCombineBundle {
         levelVirtualUnits: [],
         levels: [],
         zsK0Frames: [],
+        buy1K0Frames: [],
       );
 }
