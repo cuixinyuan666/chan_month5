@@ -1,5 +1,5 @@
 /// 缠论中枢框（Rust `ZSFrame`；K0=原生分钟K段，K1+=连线段）。
-/// high=ZD 上沿，low=ZG 下沿，gg=GG 极高，dd=DD 极低；level：0=K0，1=K1…
+/// high=ZG 上沿，low=ZD 下沿，gg=GG 极高，dd=DD 极低；level：0=K0，1=K1…
 class ZSFrame {
   final int seq;
   final int x1;

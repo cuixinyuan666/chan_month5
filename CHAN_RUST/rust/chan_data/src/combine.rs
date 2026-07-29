@@ -16,6 +16,7 @@ use crate::pipeline::{
 use crate::seg_eigen::{
     BarSubSnapshot, FirstSegDirSignal, K1AnalysisBundle, K1ConfirmSignal, K1Line,
 };
+use crate::buy1::{find_buy1, Buy1Frame};
 use crate::zs::{find_zs, zs_frames_from_list, ZSConfig, ZSFrame};
 
 /// 合并 K 线线框（对齐 serialize_kline_combine）。
@@ -93,6 +94,9 @@ pub struct KlineCombineBundle {
     /// K0中枢（分钟K段，level=0）
     #[serde(default)]
     pub zs_k0_frames: Vec<ZSFrame>,
+    /// K0一买（与 K0中枢同层）
+    #[serde(default)]
+    pub buy1_k0_frames: Vec<Buy1Frame>,
 }
 
 fn default_k0_policy_pending() -> String {
@@ -115,6 +119,7 @@ impl KlineCombineBundle {
             level_virtual_units: Vec::new(),
             levels: Vec::new(),
             zs_k0_frames: Vec::new(),
+            buy1_k0_frames: Vec::new(),
         }
     }
 }
@@ -188,11 +193,13 @@ fn kline_bars_to_segments(bars: &[KlineBar]) -> Vec<LevelSegment> {
     out
 }
 
-/// K0 中枢：在原生分钟 K 段上计算
-fn build_k0_zs(bars: &[KlineBar], zs_cfg: &ZSConfig) -> Vec<ZSFrame> {
+/// K0 中枢 + 一买：在原生分钟 K 段上计算
+fn build_k0_zs_and_buy1(bars: &[KlineBar], zs_cfg: &ZSConfig) -> (Vec<ZSFrame>, Vec<Buy1Frame>) {
     let segs = kline_bars_to_segments(bars);
     let zs_list = find_zs(&segs, 0, zs_cfg);
-    zs_frames_from_list(&zs_list, &segs, 0)
+    let frames = zs_frames_from_list(&zs_list, &segs, 0);
+    let buy1 = find_buy1(&zs_list, &segs, 0);
+    (frames, buy1)
 }
 
 /// K0 合并框 → 伪 LevelSegment（合并指标等仍用；非 K0 中枢段源）
@@ -556,7 +563,7 @@ pub fn build_kline_combine_bundle_with(
 
     let k1_analysis = map_k1_analysis(&pr);
 
-    let zs_k0_frames = build_k0_zs(bars, &opt.zs_config);
+    let (zs_k0_frames, buy1_k0_frames) = build_k0_zs_and_buy1(bars, &opt.zs_config);
 
     KlineCombineBundle {
         frames: l1.combine_frames.clone(),
@@ -572,6 +579,7 @@ pub fn build_kline_combine_bundle_with(
         level_virtual_units,
         levels: pr.levels,
         zs_k0_frames,
+        buy1_k0_frames,
     }
 }
 

@@ -75,6 +75,7 @@ class ChartLevelLineStyle {
           strokeWidth: w,
           buildingStrokeWidth: w - 0.4,
           buildingDashPattern: const [5, 5],
+          frozenDashPattern: const [8, 4],
         );
       case 5:
         return ChartLevelLineStyle(
@@ -82,6 +83,7 @@ class ChartLevelLineStyle {
           strokeWidth: w,
           buildingStrokeWidth: w - 0.4,
           buildingDashPattern: const [10, 6],
+          frozenDashPattern: const [10, 5],
         );
       case 6:
         return ChartLevelLineStyle(
@@ -89,6 +91,7 @@ class ChartLevelLineStyle {
           strokeWidth: w,
           buildingStrokeWidth: w - 0.45,
           buildingDashPattern: const [6, 4],
+          frozenDashPattern: const [8, 4],
         );
       default:
         return ChartLevelLineStyle(
@@ -96,6 +99,7 @@ class ChartLevelLineStyle {
           strokeWidth: w,
           buildingStrokeWidth: w - 0.45,
           buildingDashPattern: [8.0 + (level % 3), 5.0],
+          frozenDashPattern: level >= 4 ? const [8, 4] : null,
         );
     }
   }
@@ -103,7 +107,7 @@ class ChartLevelLineStyle {
   /// 图例短标签（连线展示名：内部 level → K(level-1)）
   static String shortLabel(int level) => 'K${level - 1}';
 
-  /// 中枢专属配色（蓝青系）；下标=展示 Kn（0=K0中枢）。
+  /// 中枢专属配色（蓝青系，Normal）；下标=展示 Kn（0=K0中枢）。
   static const _zsColors = <Color>[
     Color(0xCC3B82F6), // K0中枢：蓝
     Color(0xCC06B6D4), // K1中枢：青
@@ -113,6 +117,17 @@ class ChartLevelLineStyle {
     Color(0xCC22D3EE), // K5中枢：亮青
   ];
 
+  /// 中枢专属配色（紫红系，OverSeg）；下标=展示 Kn（0=K0中枢）。
+  /// 与 Normal 同层不同色，用于区分不同类型的中枢段。
+  static const _zsOverSegColors = <Color>[
+    Color(0xFF9B59B6), // K0中枢：紫
+    Color(0xFFE74C3C), // K1中枢：红
+    Color(0xFF3498DB), // K2中枢：蓝
+    Color(0xFF2ECC71), // K3中枢：绿
+    Color(0xFFD35400), // K4中枢：橙
+    Color(0xFF1ABC9C), // K5中枢：青绿
+  ];
+
   /// 按展示 Kn 取中枢样式（0=K0中枢，1=K1中枢，…）。
   static ChartLevelLineStyle forZS(int kn) {
     assert(kn >= 0);
@@ -120,6 +135,21 @@ class ChartLevelLineStyle {
     final w = 1.9 + kn * 0.25;
     return ChartLevelLineStyle(
       color: _zsColors[i],
+      strokeWidth: w,
+      buildingStrokeWidth: w - 0.3,
+      buildingAlpha: 0.7,
+      buildingDashPattern: const [4, 3],
+    );
+  }
+
+  /// 按展示 Kn 取 OverSeg 中枢样式（0=K0中枢，1=K1中枢，…）。
+  /// 同层中枢与 Normal 配色不同，用于区分不同类型的中枢段。
+  static ChartLevelLineStyle forZSOverSeg(int kn) {
+    assert(kn >= 0);
+    final i = kn.clamp(0, _zsOverSegColors.length - 1);
+    final w = 1.9 + kn * 0.25;
+    return ChartLevelLineStyle(
+      color: _zsOverSegColors[i],
       strokeWidth: w,
       buildingStrokeWidth: w - 0.3,
       buildingAlpha: 0.7,

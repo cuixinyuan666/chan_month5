@@ -1,5 +1,6 @@
 import 'k0_confirm_signal.dart';
 import 'bar_crosshair_feature.dart';
+import 'buy1_frame.dart';
 import 'k0_line.dart';
 import 'kline_bar.dart';
 import 'chart_indicator.dart';
@@ -75,6 +76,7 @@ class BarFeatureLookup {
     List<K0Line> k0Lines = const [],
     K1AnalysisBundle k1Analysis = const K1AnalysisBundle(),
     List<LevelBundle> levels = const [],
+    List<Buy1Frame> buy1K0Frames = const [],
     Set<SubChartIndicator> subIndicators = const {},
     bool truncationCheck = true,
     /// 分型判断会话事件日志（有则优先；扫全部历史点）
@@ -228,6 +230,24 @@ class BarFeatureLookup {
               as Map<String, dynamic>;
           sub['volume_${e.key}'] = i < series.length ? series[i] : 0.0;
         }
+      }
+    }
+
+    // Kn一买：按打点 x 写入 sub（与副图同源）
+    {
+      void putBuy1(int kn, List<Buy1Frame> frames) {
+        for (final p in frames) {
+          if (asOf != null && p.x > asOf) continue;
+          final row = byIdx.putIfAbsent(p.x, () => {'idx': p.x});
+          final sub = row.putIfAbsent('sub', () => <String, dynamic>{})
+              as Map<String, dynamic>;
+          // 同 x 多点时后者覆盖（少见）；读数取 label
+          sub['buy1_$kn'] = p.label;
+        }
+      }
+      putBuy1(0, buy1K0Frames);
+      for (final lv in levels) {
+        putBuy1(lv.level, lv.buy1Frames);
       }
     }
 
@@ -509,6 +529,9 @@ class BarFeatureLookup {
           }
         }
         add(ind.label, v);
+      }
+      if (ind.kind == SubIndicatorKind.buy1) {
+        add(ind.label, sub['buy1_${ind.kn}']);
       }
     }
     return lines;

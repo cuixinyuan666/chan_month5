@@ -1,5 +1,6 @@
 import 'kline_combine_frame.dart';
 import 'zs_frame.dart';
+import 'buy1_frame.dart';
 
 /// 每根 K0 × 每层 Kn 十字线快照（Rust `LevelSnap`，逐K当下冻结）。
 class LevelSnap {
@@ -288,6 +289,8 @@ class LevelBundle {
   final List<LevelUnitBar> unitBars;
   final List<KlineCombineFrame> combineFrames;
   final List<ZSFrame> zsFrames;
+  /// 本层一买（当前枢在上个枢下方）
+  final List<Buy1Frame> buy1Frames;
   final int firstDir;
   final int firstDirX;
 
@@ -307,6 +310,7 @@ class LevelBundle {
     this.unitBars = const [],
     this.combineFrames = const [],
     this.zsFrames = const [],
+    this.buy1Frames = const [],
     this.firstDir = 0,
     this.firstDirX = -1,
     this.activeUnit,
@@ -332,6 +336,9 @@ class LevelBundle {
           .toList(),
       zsFrames: (json['zs_frames'] as List? ?? const [])
           .map((e) => ZSFrame.fromJson(Map<String, dynamic>.from(e as Map)))
+          .toList(),
+      buy1Frames: (json['buy1_frames'] as List? ?? const [])
+          .map((e) => Buy1Frame.fromJson(Map<String, dynamic>.from(e as Map)))
           .toList(),
       firstDir: (json['first_dir'] as num?)?.toInt() ?? 0,
       firstDirX: (json['first_dir_x'] as num?)?.toInt() ?? -1,

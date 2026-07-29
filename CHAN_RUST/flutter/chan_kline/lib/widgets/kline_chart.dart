@@ -17,6 +17,7 @@ import '../history/msg_history.dart';
 import '../bridge/chan_bridge.dart';
 import '../models/kline_combine_bundle.dart';
 import '../models/zs_frame.dart';
+import '../models/buy1_frame.dart';
 import '../models/k0_confirm_signal.dart';
 import '../models/bar_crosshair_feature.dart';
 import '../models/k0_line.dart';
@@ -71,6 +72,7 @@ class KlineChart extends StatefulWidget {
     required this.subIndicators,
     this.levels = const [],
     this.zsK0Frames = const [],
+    this.buy1K0Frames = const [],
     this.defaultK0Policy = 'pending',
     this.truncationCheck = true,
     this.showBuildingDash = true,
@@ -101,6 +103,8 @@ class KlineChart extends StatefulWidget {
   final List<LevelBundle> levels;
   /// K0中枢（原生分钟K段；Rust zs_k0_frames）
   final List<ZSFrame> zsK0Frames;
+  /// K0一买（Rust buy1_k0_frames）
+  final List<Buy1Frame> buy1K0Frames;
   final Set<MainChartIndicator> mainIndicators;
   final Set<SubChartIndicator> subIndicators;
   final String defaultK0Policy;
@@ -968,6 +972,7 @@ class _KlineChartState extends State<KlineChart> {
                 k1Analysis: widget.k1Analysis,
                 levels: widget.levels,
                 zsK0Frames: widget.zsK0Frames,
+                buy1K0Frames: widget.buy1K0Frames,
                 zsAsOfBundle: zsAsOfBundle,
                 mainIndicators: _drawnMains,
                 subIndicators: _drawnSubs,
@@ -1186,6 +1191,7 @@ class _KlineCompositePainter extends CustomPainter {
     required this.k1Analysis,
     required this.levels,
     this.zsK0Frames = const [],
+    this.buy1K0Frames = const [],
     this.zsAsOfBundle,
     required this.mainIndicators,
     required this.subIndicators,
@@ -1211,10 +1217,13 @@ class _KlineCompositePainter extends CustomPainter {
           barFeatures: barFeatures,
           k0Lines: k0Lines,
           k1Analysis: k1Analysis,
-          levels: levels,
+          // 十字 as-of：优先用 as-of bundle 的层/一买，与中枢当下同构
+          levels: zsAsOfBundle?.levels ?? levels,
+          buy1K0Frames: zsAsOfBundle?.buy1K0Frames ?? buy1K0Frames,
           subIndicators: subIndicators,
           truncationCheck: truncationCheck,
           judgmentHistoryByKn: judgmentHistoryByKn,
+          asOf: segAsOf,
         );
 
   final List<KlineBar> bars;
@@ -1227,6 +1236,7 @@ class _KlineCompositePainter extends CustomPainter {
   final K1AnalysisBundle k1Analysis;
   final List<LevelBundle> levels;
   final List<ZSFrame> zsK0Frames;
+  final List<Buy1Frame> buy1K0Frames;
   final KlineCombineBundle? zsAsOfBundle;
   final Set<MainChartIndicator> mainIndicators;
   final Set<SubChartIndicator> subIndicators;
@@ -2849,7 +2859,7 @@ class _KlineCompositePainter extends CustomPainter {
     double barW,
     double slotW,
   ) {
-    final innerTop = volTop + 6;
+    final innerTop = volTop + KlineViewport.subIndicatorChipBand;
     final innerBottom = contentBottom - 4;
     final innerH = math.max(12.0, innerBottom - innerTop);
     if (innerH <= 0) return;
@@ -2947,6 +2957,103 @@ class _KlineCompositePainter extends CustomPainter {
         stackRank: i,
         stackCount: truncKns.length,
       );
+    }
+    // Kn一买：与中枢同层同号；副图打点+标签
+    final buy1Kns = subIndicators
+        .where((e) => e.kind == SubIndicatorKind.buy1)
+        .map((e) => e.kn)
+        .toList()
+      ..sort();
+    for (var i = 0; i < buy1Kns.length; i++) {
+      _drawKnBuy1SubChart(
+        canvas,
+        w,
+        innerTop,
+        innerH,
+        barW,
+        slotW,
+        buy1Kns[i],
+        stackRank: i,
+        stackCount: buy1Kns.length,
+      );
+    }
+  }
+
+  /// 取某层一买帧（as-of 优先读 zsAsOfBundle）。
+  List<Buy1Frame> _buy1FramesForKn(int kn) {
+    final asOfBundle = zsAsOfBundle;
+    if (asOfBundle != null) {
+      if (kn == 0) return asOfBundle.buy1K0Frames;
+      for (final b in asOfBundle.levels) {
+        if (b.level == kn) return b.buy1Frames;
+      }
+      return const [];
+    }
+    if (kn == 0) return buy1K0Frames;
+    for (final b in levels) {
+      if (b.level == kn) return b.buy1Frames;
+    }
+    return const [];
+  }
+
+  /// 副图 Kn一买：在 ±1 标尺上画买点（y=+1），标签 1a/1b…；十字 as-of 右侧不画。
+  void _drawKnBuy1SubChart(
+    Canvas canvas,
+    double w,
+    double innerTop,
+    double innerH,
+    double barW,
+    double slotW,
+    int kn, {
+    int stackRank = 0,
+    int stackCount = 1,
+  }) {
+    const minV = -1.0;
+    const maxV = 1.0;
+    final span = maxV - minV;
+    double subY(double v) => innerTop + (maxV - v) / span * innerH;
+    final yMark = subY(1.0);
+    final color = ChartLevelLineStyle.forBSP(1, true);
+    final dx = confirmStackOffsetX(
+      rank: stackRank,
+      count: stackCount,
+      barW: barW,
+    );
+    final asOf = segAsOf;
+    final frames = _buy1FramesForKn(kn);
+    final tp = TextPainter(
+      textAlign: TextAlign.center,
+      textDirection: TextDirection.ltr,
+    );
+    for (final p in frames) {
+      if (asOf != null && p.x > asOf) continue;
+      if (p.x < viewport.viewXMin - 1 || p.x > viewport.viewXMax + 1) {
+        continue;
+      }
+      final cx = _barCenterX(p.x, w, slotW) + dx;
+      final r = math.max(2.5, barW * 0.28);
+      canvas.drawCircle(Offset(cx, yMark), r, Paint()..color = color);
+      if (stackCount > 1) {
+        canvas.drawCircle(
+          Offset(cx, yMark),
+          r,
+          Paint()
+            ..color = const Color(0xFF111111)
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 1,
+        );
+      }
+      tp.text = TextSpan(
+        text: p.label,
+        style: TextStyle(
+          color: color,
+          fontSize: math.max(8.0, barW * 0.55),
+          fontWeight: FontWeight.w600,
+        ),
+      );
+      tp.layout();
+      // 点在副图顶档(+1)，标签画下方以免伸进指标条
+      tp.paint(canvas, Offset(cx - tp.width / 2, yMark + r + 1));
     }
   }
 
@@ -3501,6 +3608,7 @@ class _KlineCompositePainter extends CustomPainter {
         oldDelegate.k1Analysis != k1Analysis ||
         oldDelegate.levels != levels ||
         oldDelegate.zsK0Frames != zsK0Frames ||
+        oldDelegate.buy1K0Frames != buy1K0Frames ||
         oldDelegate.zsAsOfBundle != zsAsOfBundle ||
         oldDelegate.segAsOf != segAsOf ||
         oldDelegate.mainIndicators != mainIndicators ||

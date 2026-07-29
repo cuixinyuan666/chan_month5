@@ -95,7 +95,7 @@ List<CrosshairTooltipRow> zsCrosshairTooltipRows({
       rows.add(CrosshairTooltipRow.kv(
         '$prefix价格',
         CrosshairTooltipRow.boxNumInString(
-            'GG${f.gg.toStringAsFixed(2)}/DD${f.dd.toStringAsFixed(2)}/ZG${f.low.toStringAsFixed(2)}/ZD${f.high.toStringAsFixed(2)}'),
+            'GG${f.gg.toStringAsFixed(2)}/DD${f.dd.toStringAsFixed(2)}/ZG${f.high.toStringAsFixed(2)}/ZD${f.low.toStringAsFixed(2)}'),
       ));
       rows.add(CrosshairTooltipRow.kv(
         '${prefix}Kn序',

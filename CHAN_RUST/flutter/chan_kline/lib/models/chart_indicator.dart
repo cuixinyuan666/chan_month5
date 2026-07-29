@@ -61,6 +61,7 @@ enum SubIndicatorKind {
   fractalJudgment,
   fractalPeakDist,
   truncation,
+  buy1,
 }
 
 /// 副图一项指标。
@@ -78,6 +79,8 @@ class SubChartIndicator {
       : kind = SubIndicatorKind.fractalPeakDist;
   const SubChartIndicator.truncation(this.kn)
       : kind = SubIndicatorKind.truncation;
+  /// kn 与中枢同号：K0一买…Kn一买
+  const SubChartIndicator.buy1(this.kn) : kind = SubIndicatorKind.buy1;
 
   String get label {
     switch (kind) {
@@ -91,13 +94,16 @@ class SubChartIndicator {
         return 'K${kn - 1}分型极点距';
       case SubIndicatorKind.truncation:
         return 'K${kn - 1}截断';
+      case SubIndicatorKind.buy1:
+        return 'K$kn一买';
     }
   }
 
-  /// 显示层号（成交量 kn 直接；分型类 kn-1）。
+  /// 显示层号（成交量/一买 kn 直接；分型类 kn-1）。
   int get displayLevel {
     switch (kind) {
       case SubIndicatorKind.volume:
+      case SubIndicatorKind.buy1:
         return kn;
       case SubIndicatorKind.fractalConfirm:
       case SubIndicatorKind.fractalJudgment:
@@ -169,6 +175,10 @@ List<SubChartIndicator> buildSubIndicatorCatalog(
       out.add(SubChartIndicator.truncation(n));
     }
   }
+  // Kn一买：与连续中枢同层同号（K0..Kn）
+  for (var n = 0; n <= maxKn; n++) {
+    out.add(SubChartIndicator.buy1(n));
+  }
   return out;
 }
 
@@ -199,6 +209,7 @@ List<SubChartIndicator> subIndicatorsForLevel(
     SubChartIndicator.fractalJudgment(displayLevel + 1),
     SubChartIndicator.fractalPeakDist(displayLevel + 1),
     SubChartIndicator.truncation(displayLevel + 1),
+    SubChartIndicator.buy1(displayLevel),
   ];
   return candidates.where(allow.contains).toList();
 }

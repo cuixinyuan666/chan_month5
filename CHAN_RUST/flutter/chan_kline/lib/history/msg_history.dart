@@ -32,6 +32,9 @@ class MsgHistory {
   /// 工作区全屏 + tooltip 分隔线口径是否已记录
   static bool _desktopWorkAreaLogged = false;
 
+  /// ZG/ZD 常见命名 + Kn一买
+  static bool _buy1ZgZdLogged = false;
+
   final List<MsgHistoryEntry> _rows = [];
 
   List<MsgHistoryEntry> get rows => List.unmodifiable(_rows);
@@ -217,7 +220,8 @@ class MsgHistory {
     append(
       '【中枢·全层同构·单段成枢】K0/K1/…/Kn 算法同构 find_zs：'
       '单段种子(isSure=false)→重叠延伸→不重叠离开闭合(isSure=true)；'
-      '一字/近一字锚定最低价；无离开-返回、无九段升级、无≥3段种子门槛。'
+      '一字线仅 open=close 锚定 ZG=ZD（近一字/小振幅不塌缩）；'
+      '无离开-返回、无九段升级、无≥3段种子门槛。'
       '段实体按层：K0=分钟K，K1=K0连线段…'
       '【展示轨】主图/tooltip 强制 Rust zs_* 同源；十字线 as-of=buildKlineCombineBundle 切片。'
       'Kn 中枢喂入=冻结段+进行中 active_unit（末开放 is_sure=false 虚框，闭合后实线）。',
@@ -314,6 +318,20 @@ class MsgHistory {
       '默认 custom.ohlc.csv=100 根强复杂性样本（包含合并/一字线/种子离开长 UNKNOWN/'
       '暴力下杀截断雏形/中枢震荡/多层波浪），便于全层同构排查开口虚线与递归层。'
       '历史记录按钮与 lib/history/ 常驻不得删。',
+    );
+  }
+
+  /// ZG/ZD common naming + Kn buy1 (dedupe in-process).
+  void appendBuy1AndZgZdCommonNaming() {
+    if (_buy1ZgZdLogged) return;
+    _buy1ZgZdLogged = true;
+    append(
+      '【口径·ZG/ZD常见命名】Rust/Flutter 中枢字段互换为常见缠论命名：'
+      'ZG=重叠上沿(=框 high)、ZD=重叠下沿(=框 low)；算法数值与框几何不变，仅名称对齐。'
+      '【新增·Kn一买·全层同构】当前中枢框整体在上个中枢框下方（ZG_curr < ZD_prev）触发；'
+      '框内成员Kn按最低价标1a/1b/…；同低顺序字母；更低新标1a不回写旧标签；'
+      '各层第一个Kn(segs下标0)不参与。JSON：buy1_k0_frames / levels[].buy1_frames；'
+      '副图指标「Kn一买」与中枢同层同号；无未来、不回写。',
     );
   }
 
