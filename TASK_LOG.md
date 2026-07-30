@@ -2,6 +2,13 @@
 
 ## 最新记录
 
+### 2026-07-30 — 二类BS字母随一类复位（收紧）
+
+- **要点**：同资格中枢框内，一类建框/严格新极值更新 `box_min_low`/`box_max_high` 时，二类字母序 `letter_ord` 同步复位为 `None`（后续从 2Ba/2Sa 重起）。之前仅一类字母复位，二类在极值后继续续字母（2Bc/2Sc），现在改为 2Ba/2Sa。
+- **涉及文件**：`buy2.rs`（find_buy2_with_active/find_sell2_with_active 的 `None`/新极值分支追加 `letter_ord=None`）；`buy2.rs` 测试同步更新；`AGENTS.md`/`README.md`/`msg_history.dart`/`TASK_LOG.md` 文档同步。
+- **镜像**：全层同构；B/S 镜像。
+- **注意**：关占用冷启后须连续单步验收；测试已覆盖复位场景。
+
 ### 2026-07-30 — 二类BS（方案A）全层同构落地（最终总结）
 
 - **要点**：一类收紧为仅建框/严格新极值；同资格中枢框内等高/更弱标二类 2Ba…/2Sa…（镜像）。

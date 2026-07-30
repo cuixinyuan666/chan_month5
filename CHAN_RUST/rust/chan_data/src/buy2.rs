@@ -2,6 +2,7 @@
 //! (below/above prev). Scheme A: after box extreme is established, members with
 //! low >= box_min (buy) or high <= box_max (sell) get 2Ba…/2Sa…; establish/new
 //! extreme stay class-1 only. Running ref same as class-1 (skip does not raise/lower).
+//! When class-1 establishes or resets (new extreme), class-2 letter also resets to 2Ba/2Sa.
 //! Active-unit mark x: if prior class-2 label exists in ZS, pin to begin_pole+1.
 use crate::buy1::{zs_above_prev, zs_below_prev};
 use crate::pipeline::LevelSegment;
@@ -114,12 +115,14 @@ pub fn find_buy2_with_active(
             let low = s.low;
             match box_min_low {
                 None => {
-                    // 建框：一类占用，刷新参照
+                    // 建框：一类占用，刷新参照；重置二类字母序（后续从 2Ba 起）
                     box_min_low = Some(low);
+                    letter_ord = None;
                 }
                 Some(bmin) if low < bmin && !approx_eq(low, bmin) => {
-                    // 新低：一类占用，刷新参照
+                    // 新低：一类占用，刷新参照；重置二类字母序
                     box_min_low = Some(low);
+                    letter_ord = None;
                 }
                 Some(bmin) => {
                     // 等高或更高 → 二类（参照不抬）
@@ -181,10 +184,14 @@ pub fn find_sell2_with_active(
             let high = s.high;
             match box_max_high {
                 None => {
+                    // 建框：一类占用；重置二类字母序
                     box_max_high = Some(high);
+                    letter_ord = None;
                 }
                 Some(bmax) if high > bmax && !approx_eq(high, bmax) => {
+                    // 新高：一类占用；重置二类字母序
                     box_max_high = Some(high);
+                    letter_ord = None;
                 }
                 Some(bmax) => {
                     debug_assert!(high < bmax || approx_eq(high, bmax));
@@ -319,14 +326,15 @@ mod tests {
     }
 
     #[test]
-    fn higher_and_equal_low_get_2ba_2bb_new_low_stays_class1() {
+    fn higher_and_equal_low_get_2ba_2bb_new_low_resets_2ba() {
+        // 新低复位一类字母，二类也从 2Ba 重起
         let segs = vec![
             mk_seg(0, 1, 20.0, 10.0),
-            mk_seg(1, 1, 15.0, 5.0), // 1Ba 建框
-            mk_seg(2, 1, 14.0, 5.0), // 等高 → 2Ba
-            mk_seg(3, 1, 16.0, 6.0), // 更高 → 2Bb
-            mk_seg(4, 1, 13.0, 3.0), // 新低 → 一类
-            mk_seg(5, 1, 12.0, 4.0), // 高于新低 → 2Bc
+            mk_seg(1, 1, 15.0, 5.0),  // 1Ba 建框
+            mk_seg(2, 1, 14.0, 5.0),  // 等高 → 2Ba
+            mk_seg(3, 1, 16.0, 6.0),  // 更高 → 2Bb
+            mk_seg(4, 1, 13.0, 3.0),  // 新低 → 一类 1Ba（复位）
+            mk_seg(5, 1, 12.0, 4.0),  // 高于新低 → 二类从 2Ba 重起
         ];
         let (prev, curr) = below_pair(vec![1, 2, 3, 4, 5]);
         let zs = [prev, curr];
@@ -340,7 +348,7 @@ mod tests {
         assert_eq!(b2[0].seg_idx, 2);
         assert_eq!(b2[1].label, "2Bb");
         assert_eq!(b2[1].seg_idx, 3);
-        assert_eq!(b2[2].label, "2Bc");
+        assert_eq!(b2[2].label, "2Ba");
         assert_eq!(b2[2].seg_idx, 5);
     }
 
@@ -385,11 +393,11 @@ mod tests {
     fn sell2_equal_and_lower_high_mirror() {
         let segs = vec![
             mk_seg(0, 1, 10.0, 2.0),
-            mk_seg(1, 1, 20.0, 10.0), // 1Sa
+            mk_seg(1, 1, 20.0, 10.0), // 1Sa 建框
             mk_seg(2, 1, 20.0, 11.0), // 等高 → 2Sa
             mk_seg(3, 1, 18.0, 9.0),  // 更低 → 2Sb
-            mk_seg(4, 1, 25.0, 12.0), // 新高 → 一类
-            mk_seg(5, 1, 22.0, 10.0), // 低于新高 → 2Sc
+            mk_seg(4, 1, 25.0, 12.0), // 新高 → 一类 1Sa（复位）
+            mk_seg(5, 1, 22.0, 10.0), // 低于新高 → 二类从 2Sa 重起
         ];
         let (prev, curr) = above_pair(vec![1, 2, 3, 4, 5]);
         let zs = [prev, curr];
@@ -403,7 +411,7 @@ mod tests {
         assert_eq!(s2[0].seg_idx, 2);
         assert_eq!(s2[1].label, "2Sb");
         assert_eq!(s2[1].seg_idx, 3);
-        assert_eq!(s2[2].label, "2Sc");
+        assert_eq!(s2[2].label, "2Sa");
         assert_eq!(s2[2].seg_idx, 5);
     }
 
