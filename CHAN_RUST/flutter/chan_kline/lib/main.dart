@@ -7,12 +7,14 @@ import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'bridge/chan_bridge.dart';
+import 'compute/class1_bs_compute.dart';
 import 'compute/fractal_judgment_compute.dart';
 import 'compute/k1_bar_view_compute.dart';
 import 'history/app_debug_snapshot.dart';
 import 'history/msg_history.dart';
 import 'models/zs_frame.dart';
 import 'models/buy1_frame.dart';
+import 'models/sell1_frame.dart';
 import 'models/kline_bar.dart';
 import 'models/k0_confirm_signal.dart';
 import 'models/bar_crosshair_feature.dart';
@@ -22,6 +24,7 @@ import 'models/chart_indicator.dart';
 import 'models/kline_combine_frame.dart';
 import 'models/level_models.dart';
 import 'models/k1_analysis.dart';
+import 'models/kline_combine_bundle.dart';
 import 'widgets/datetime_picker_dialog.dart';
 import 'widgets/edge_control_panel.dart';
 import 'widgets/kline_chart.dart';
@@ -55,7 +58,7 @@ Future<void> main() async {
   // K0中枢命名纠偏 + 单段雏形
   MsgHistory.instance.appendK0ZsRenameAndPrototype();
   MsgHistory.instance.appendZsSingleSeedIsomorphic();
-  // ZG/ZD 常见命名 + Kn一买
+  // ZG/ZD 常见命名 + Kn一类BS
   MsgHistory.instance.appendBuy1AndZgZdCommonNaming();
   // 展示轨：动态KN当确认段画虚线；确认优先纠正/改实线
   MsgHistory.instance.appendDisplayTrackDynamicKnBuildingLines();
@@ -148,6 +151,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
   List<LevelBundle> _levels = [];
   List<ZSFrame> _zsK0Frames = [];
   List<Buy1Frame> _buy1K0Frames = [];
+  List<Sell1Frame> _sell1K0Frames = [];
   // 默认=选择栏「K0指标」层全选（主图 K0/K0合并/K0连线/K0连续中枢；副图同层）
   Set<MainChartIndicator> _mainIndicators = defaultMainIndicatorsK0();
   Set<SubChartIndicator> _subIndicators = defaultSubIndicatorsK0();
@@ -168,6 +172,11 @@ class _KlineHomePageState extends State<KlineHomePage> {
 
   /// 分型判断步进事件日志：kn → 追加式历史（换股/重载才清空；不因重算丢点）
   Map<int, List<FractalJudgmentEvent>> _judgmentHistoryByKn = {};
+
+  /// 一类BS 会话历史：对齐分型判断（K0 步进颗粒度 + 动态 Kn）；换股/重载清空。
+  /// 踩坑：禁止只用「层|段|标签」去重——同动态 active 延伸时下一步会无新 x。
+  Map<int, List<Buy1Frame>> _buy1HistoryByKn = {};
+  Map<int, List<Sell1Frame>> _sell1HistoryByKn = {};
 
   bool get _busy => _bootstrapping || _loadingChart;
   bool get _hasSession => _allBars.isNotEmpty;
@@ -357,6 +366,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _stepIdx = bars.isEmpty ? -1 : 0;
         _defaultK0Purged = false;
         _judgmentHistoryByKn.clear();
+        _buy1HistoryByKn.clear();
+        _sell1HistoryByKn.clear();
       });
       final directOhlc = code == 'test' && _hasTestOhlcCsv();
       _msgHistory.append(
@@ -380,8 +391,11 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _levels = [];
         _zsK0Frames = [];
         _buy1K0Frames = [];
+        _sell1K0Frames = [];
         _stepIdx = -1;
         _judgmentHistoryByKn.clear();
+        _buy1HistoryByKn.clear();
+        _sell1HistoryByKn.clear();
       });
       _msgHistory.append('加载K0失败：$e');
     } finally {
@@ -419,6 +433,57 @@ class _KlineHomePageState extends State<KlineHomePage> {
     _judgmentHistoryByKn = nextHistory;
   }
 
+  /// Kn≥1：本步动态 active 段 idx；K0 无 active（分钟K段不延伸）。
+  int? _activeSegIdxForKn(KlineCombineBundle bundle, int kn) {
+    if (kn <= 0) return null;
+    for (final lv in bundle.levels) {
+      if (lv.level == kn) return lv.activeUnit?.idx;
+    }
+    return null;
+  }
+
+  /// 把本步 Rust 一类BS 并入会话历史。
+  /// 对齐分型判断：K0 步进颗粒度；传 activeSegIdx 使动态 Kn 延伸步仍追加本步 x。
+  void _mergeBsHistory(KlineCombineBundle bundle) {
+    final discoveryX = _stepIdx < 0 ? 0 : _stepIdx;
+    final nextBuy = <int, List<Buy1Frame>>{
+      for (final e in _buy1HistoryByKn.entries)
+        e.key: List<Buy1Frame>.from(e.value),
+    };
+    final nextSell = <int, List<Sell1Frame>>{
+      for (final e in _sell1HistoryByKn.entries)
+        e.key: List<Sell1Frame>.from(e.value),
+    };
+    for (final e in collectBuy1EventsByKn(bundle).entries) {
+      final log = nextBuy.putIfAbsent(e.key, () => <Buy1Frame>[]);
+      mergeBuy1EventLog(
+        log,
+        e.value,
+        discoveryX: discoveryX,
+        activeSegIdx: _activeSegIdxForKn(bundle, e.key),
+      );
+    }
+    for (final e in collectSell1EventsByKn(bundle).entries) {
+      final log = nextSell.putIfAbsent(e.key, () => <Sell1Frame>[]);
+      mergeSell1EventLog(
+        log,
+        e.value,
+        discoveryX: discoveryX,
+        activeSegIdx: _activeSegIdxForKn(bundle, e.key),
+      );
+    }
+    _buy1HistoryByKn = nextBuy;
+    _sell1HistoryByKn = nextSell;
+  }
+
+  List<LevelBundle> _levelsWithFrozenBs(List<LevelBundle> levels) {
+    return levelsWithFrozenClass1Bs(
+      levels,
+      buy1HistoryByKn: _buy1HistoryByKn,
+      sell1HistoryByKn: _sell1HistoryByKn,
+    );
+  }
+
   void _rebuildCombine() {
     if (_visibleBars.isEmpty) {
       setState(() {
@@ -432,7 +497,10 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _levels = [];
         _zsK0Frames = [];
         _buy1K0Frames = [];
+        _sell1K0Frames = [];
         _judgmentHistoryByKn.clear();
+        _buy1HistoryByKn.clear();
+        _sell1HistoryByKn.clear();
       });
       return;
     }
@@ -460,6 +528,9 @@ class _KlineHomePageState extends State<KlineHomePage> {
         barFeatures: bundle.barFeatures,
         k0Lines: bundle.k0Lines,
       );
+      // 会话冻结：并入本步一类BS，禁止下一步整表覆盖消掉上步显示
+      _mergeBsHistory(bundle);
+      final frozenLevels = _levelsWithFrozenBs(bundle.levels);
       setState(() {
         _combineFrames = bundle.frames;
         _k0ConfirmSignals = bundle.k0Confirms;
@@ -469,9 +540,10 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _k1CombineFrames = bundle.k1CombineFrames;
         _k1Analysis = bundle.k1Analysis;
         _defaultK0Policy = bundle.defaultK0Policy;
-        _levels = bundle.levels;
+        _levels = frozenLevels;
         _zsK0Frames = bundle.zsK0Frames;
-        _buy1K0Frames = bundle.buy1K0Frames;
+        _buy1K0Frames = _buy1HistoryByKn[0] ?? const [];
+        _sell1K0Frames = _sell1HistoryByKn[0] ?? const [];
         // 按当前最高 Kn 动态裁剪已选指标（层变少时去掉失效项）
         final maxKn = chartMaxKn(
           levels: _levels,
@@ -530,6 +602,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
       k1CombineFrames: _k1CombineFrames,
       k1Analysis: _k1Analysis,
       levels: _levels,
+      buy1K0Frames: _buy1K0Frames,
+      sell1K0Frames: _sell1K0Frames,
       lastError: _error,
     );
   }
@@ -637,6 +711,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
           barFeatures: bundle.barFeatures,
           k0Lines: bundle.k0Lines,
         );
+        // 一类BS 也逐K并入会话冻结，避免一次性走完只剩末态
+        _mergeBsHistory(bundle);
       } catch (e) {
         _msgHistory.append('一次性走完@step=$i 失败：$e');
         break;
@@ -676,10 +752,13 @@ class _KlineHomePageState extends State<KlineHomePage> {
                   levels: _levels,
                   zsK0Frames: _zsK0Frames,
                   buy1K0Frames: _buy1K0Frames,
+                  sell1K0Frames: _sell1K0Frames,
                   defaultK0Policy: _defaultK0Policy,
                   truncationCheck: _truncationCheck,
                   showBuildingDash: _showBuildingDash,
                   judgmentHistoryByKn: _judgmentHistoryByKn,
+                  buy1HistoryByKn: _buy1HistoryByKn,
+                  sell1HistoryByKn: _sell1HistoryByKn,
                   mainIndicators: _mainIndicators,
                   onMainIndicatorsChanged: (v) =>
                       setState(() => _mainIndicators = v),

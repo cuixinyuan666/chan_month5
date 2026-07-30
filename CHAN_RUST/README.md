@@ -102,6 +102,8 @@ cargo test -p chan_data
 - **锚定配对**：段端点锚定"最近已用端点分型"；同向分型直接丢弃（不回写历史端点），链条无缝（上一段终点=下一段起点，测试保证）。
 - **有效性校验（可配置）**：`PipelineOptions.validity_check`（默认 `true`）＝最低限度"顶极值>底极值"：上段要求顶分型组 high > 底分型组 low，倒挂分型跳过不配对。关闭后任意异向分型即配对。FFI 目前仅暴露 `truncation_check`；`validity_check` 仍用默认。
 - **逐K当下性**：分型确认/段冻结均在当步写入即冻结，未来结构不回写；`bar_features[i].levels` 为该 K 当步的各层快照（ML/tooltip 同源）；前缀重放一致性有测试（`snapshots_frozen_per_bar_no_future`，全量 `LevelSnap` 逐字段相等）。
+- **Kn一类BS（Flutter 展示踩坑·2026-07-30）**：Rust 判定与动态中枢同构（冻段+`active_unit`）。对齐分型判断=**K0 步进颗粒度 + 动态 Kn 作判断元素**：会话历史稳定键`层|段|标签` + 颗粒度键含`x`；active 延伸步 Rust 仍输出时须追加本步`x=stepIdx`。勿只用稳定键去重（否则副图/十字当前步空，而 Rust 仍有点）。
+- **Kn一类BS 同枢极值（全层同构+镜像）**：同一中枢框内 B 比本枢已见最低 low、S 比已见最高 high；跳过更高低/更低高时**不**改参照。
 - **下层确认后才能参与上层（全层同构，`all_confirm`）**：只有永久冻结的 K(n-1) 单元才能 `feed` 进 Kn 并触发分型/成段；进行中单元仍可 `probe` 上层合并态，但仅用于十字线/展示快照，**不再提前 `on_confirm`**。
 - **截断确认（全层同构，`PipelineOptions.truncation_check` 默认开启）**：救"暴力反转单元被包含吸收吃掉信号"的场景。截断同样只对**已确认冻结**的下层单元生效（K1合并框/as-of 合并不喂进行中笔；进行中探测不加截断 guard）。
   - Flutter 设置面板「截断机制」开关可关：关=添加截断前旧吸收行为；开=当前截断口径。FFI 入参 `{bars, truncation_check}`（纯数组仍兼容，默认开）。

@@ -1,6 +1,7 @@
 import 'k0_confirm_signal.dart';
 import 'bar_crosshair_feature.dart';
 import 'buy1_frame.dart';
+import 'sell1_frame.dart';
 import 'k0_line.dart';
 import 'kline_bar.dart';
 import 'chart_indicator.dart';
@@ -8,6 +9,7 @@ import 'kline_combine_frame.dart';
 import 'level_models.dart';
 import 'k1_analysis.dart';
 import '../compute/fractal_judgment_compute.dart';
+import '../compute/class1_bs_compute.dart';
 import '../compute/kn_volume_series_compute.dart';
 
 /// 十字线 tooltip 一行：键值 / 层级分隔线 / 同层内容分隔线。
@@ -76,7 +78,10 @@ class BarFeatureLookup {
     List<K0Line> k0Lines = const [],
     K1AnalysisBundle k1Analysis = const K1AnalysisBundle(),
     List<LevelBundle> levels = const [],
+    Map<int, List<Buy1Frame>> buy1HistoryByKn = const {},
+    Map<int, List<Sell1Frame>> sell1HistoryByKn = const {},
     List<Buy1Frame> buy1K0Frames = const [],
+    List<Sell1Frame> sell1K0Frames = const [],
     Set<SubChartIndicator> subIndicators = const {},
     bool truncationCheck = true,
     /// 分型判断会话事件日志（有则优先；扫全部历史点）
@@ -233,21 +238,54 @@ class BarFeatureLookup {
       }
     }
 
-    // Kn一买：按打点 x 写入 sub（与副图同源）
+    // Kn一类BS：只扫会话历史（含动态 active 各 K0 颗粒度点）；禁止 asOf 重算消点。
+    // 踩坑：history 若缺本步 x，十字 asOf=当前步会 sellAtAsOf=null（26有点、27空）。
     {
-      void putBuy1(int kn, List<Buy1Frame> frames) {
-        for (final p in frames) {
-          if (asOf != null && p.x > asOf) continue;
-          final row = byIdx.putIfAbsent(p.x, () => {'idx': p.x});
-          final sub = row.putIfAbsent('sub', () => <String, dynamic>{})
-              as Map<String, dynamic>;
-          // 同 x 多点时后者覆盖（少见）；读数取 label
-          sub['buy1_$kn'] = p.label;
+      // 兼容：未传 history 时回退 K0 帧（旧调用）
+      final buyHist = Map<int, List<Buy1Frame>>.from(buy1HistoryByKn);
+      final sellHist = Map<int, List<Sell1Frame>>.from(sell1HistoryByKn);
+      if (buyHist.isEmpty && buy1K0Frames.isNotEmpty) {
+        buyHist[0] = buy1K0Frames;
+      }
+      if (sellHist.isEmpty && sell1K0Frames.isNotEmpty) {
+        sellHist[0] = sell1K0Frames;
+      }
+      // 若仍无 history，回退 levels 内帧（末态；仅兜底）
+      if (buyHist.isEmpty && sellHist.isEmpty) {
+        for (final lv in levels) {
+          if (lv.buy1Frames.isNotEmpty) buyHist[lv.level] = lv.buy1Frames;
+          if (lv.sell1Frames.isNotEmpty) sellHist[lv.level] = lv.sell1Frames;
         }
       }
-      putBuy1(0, buy1K0Frames);
-      for (final lv in levels) {
-        putBuy1(lv.level, lv.buy1Frames);
+
+      final barCount = bars.isEmpty ? 0 : bars.last.idx + 1;
+      final kns = <int>{...buyHist.keys, ...sellHist.keys};
+      for (final kn in kns) {
+        final buySeries = expandBuy1LabelsToSeries(
+          buyHist[kn] ?? const [],
+          barCount,
+          maxX: asOf,
+        );
+        final sellSeries = expandSell1LabelsToSeries(
+          sellHist[kn] ?? const [],
+          barCount,
+          maxX: asOf,
+        );
+        for (final b in bars) {
+          final row = byIdx.putIfAbsent(b.idx, () => {'idx': b.idx});
+          final sub = row.putIfAbsent('sub', () => <String, dynamic>{})
+              as Map<String, dynamic>;
+          if (b.idx >= 0 &&
+              b.idx < buySeries.length &&
+              buySeries[b.idx] != null) {
+            sub['buy1_$kn'] = buySeries[b.idx];
+          }
+          if (b.idx >= 0 &&
+              b.idx < sellSeries.length &&
+              sellSeries[b.idx] != null) {
+            sub['sell1_$kn'] = sellSeries[b.idx];
+          }
+        }
       }
     }
 
@@ -531,7 +569,17 @@ class BarFeatureLookup {
         add(ind.label, v);
       }
       if (ind.kind == SubIndicatorKind.buy1) {
-        add(ind.label, sub['buy1_${ind.kn}']);
+        final buy = sub['buy1_${ind.kn}'];
+        final sell = sub['sell1_${ind.kn}'];
+        if (buy != null || sell != null) {
+          final parts = <String>[
+            if (buy != null) '$buy',
+            if (sell != null) '$sell',
+          ];
+          add(ind.label, parts.join(' '));
+        } else {
+          add(ind.label, null);
+        }
       }
     }
     return lines;

@@ -16,7 +16,7 @@ use crate::pipeline::{
 use crate::seg_eigen::{
     BarSubSnapshot, FirstSegDirSignal, K1AnalysisBundle, K1ConfirmSignal, K1Line,
 };
-use crate::buy1::{find_buy1, Buy1Frame};
+use crate::buy1::{find_buy1, find_sell1, Buy1Frame, Sell1Frame};
 use crate::zs::{find_zs, zs_frames_from_list, ZSConfig, ZSFrame};
 
 /// 合并 K 线线框（对齐 serialize_kline_combine）。
@@ -97,6 +97,9 @@ pub struct KlineCombineBundle {
     /// K0一买（与 K0中枢同层）
     #[serde(default)]
     pub buy1_k0_frames: Vec<Buy1Frame>,
+    /// K0一卖（一买镜像；与 K0中枢同层）
+    #[serde(default)]
+    pub sell1_k0_frames: Vec<Sell1Frame>,
 }
 
 fn default_k0_policy_pending() -> String {
@@ -120,6 +123,7 @@ impl KlineCombineBundle {
             levels: Vec::new(),
             zs_k0_frames: Vec::new(),
             buy1_k0_frames: Vec::new(),
+            sell1_k0_frames: Vec::new(),
         }
     }
 }
@@ -193,13 +197,17 @@ fn kline_bars_to_segments(bars: &[KlineBar]) -> Vec<LevelSegment> {
     out
 }
 
-/// K0 中枢 + 一买：在原生分钟 K 段上计算
-fn build_k0_zs_and_buy1(bars: &[KlineBar], zs_cfg: &ZSConfig) -> (Vec<ZSFrame>, Vec<Buy1Frame>) {
+/// K0 中枢 + 一类买/卖：在原生分钟 K 段上计算
+fn build_k0_zs_and_bs1(
+    bars: &[KlineBar],
+    zs_cfg: &ZSConfig,
+) -> (Vec<ZSFrame>, Vec<Buy1Frame>, Vec<Sell1Frame>) {
     let segs = kline_bars_to_segments(bars);
     let zs_list = find_zs(&segs, 0, zs_cfg);
     let frames = zs_frames_from_list(&zs_list, &segs, 0);
     let buy1 = find_buy1(&zs_list, &segs, 0);
-    (frames, buy1)
+    let sell1 = find_sell1(&zs_list, &segs, 0);
+    (frames, buy1, sell1)
 }
 
 /// K0 合并框 → 伪 LevelSegment（合并指标等仍用；非 K0 中枢段源）
@@ -563,7 +571,8 @@ pub fn build_kline_combine_bundle_with(
 
     let k1_analysis = map_k1_analysis(&pr);
 
-    let (zs_k0_frames, buy1_k0_frames) = build_k0_zs_and_buy1(bars, &opt.zs_config);
+    let (zs_k0_frames, buy1_k0_frames, sell1_k0_frames) =
+        build_k0_zs_and_bs1(bars, &opt.zs_config);
 
     KlineCombineBundle {
         frames: l1.combine_frames.clone(),
@@ -580,6 +589,7 @@ pub fn build_kline_combine_bundle_with(
         levels: pr.levels,
         zs_k0_frames,
         buy1_k0_frames,
+        sell1_k0_frames,
     }
 }
 

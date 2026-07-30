@@ -1,6 +1,76 @@
-# ����Ҫ����־
+# 任务要点日志
 
 ## 最新记录
+
+### 2026-07-30 — 一类BS同枢框极值 + K0颗粒度：用户确认达标
+
+- **要点**：①同枢 B 比已见最低 low、S 比已见最高 high（跳过不改参照；全层镜像）。②对齐分型判断：动态 active 延伸按 stepIdx 追加颗粒度点（键含 x）。用户确认完成预期。
+- **相关路径**：`buy1.rs`、`class1_bs_compute.dart`、`main.dart`、`kline_chart.dart`、`bar_feature_lookup.dart`、`msg_history.dart`、`AGENTS.md`
+- **注意**：关占用重载 `chan_ffi.dll` 后冷启；一键跳末≠步进验收。
+
+### 2026-07-30 — 一类BS同枢：B比框最低 / S比框最高（全层镜像）
+
+- **要点**：同中枢内后续极值一律与「本枢已见最低low / 最高high」比，跳过时不抬高/压低参照（禁止与上一成员比）。B/S镜像、K0..Kn同构。002003：26/27 active high低于框最高故不新标卖，保留更早1Sa。
+- **相关路径**：`buy1.rs`；`msg_history.dart`、`app_debug_snapshot.dart`、`AGENTS.md`
+- **注意**：须重载 `chan_ffi.dll` 后冷启；旧「等于未标成员即重开」口径已废。
+
+### 2026-07-30 — 一类BS：动态Kn按K0颗粒度追加点 + 清埋点落坑
+
+- **要点**：对齐分型判断≠只冻首次发现x。稳定键`层|段|标签` + 颗粒度键含x；Kn≥1 active本步仍成立则追加`x=stepIdx`（002003：26与27各有1Sa）。误用稳定键去重→Rust仍出、Flutter skip→副图/十字当前步空。已清调试埋点。
+- **相关路径**：`class1_bs_compute.dart`、`main.dart`、`kline_chart.dart`、`bar_feature_lookup.dart`、`msg_history.dart`、`AGENTS.md`
+- **注意**：勿再把「去掉尾柱回显」当成对齐分型判断；验收须连续单步看当前尾柱/十字读数。
+
+### 2026-07-30 — 一类BS对齐Kn分型判断会话日志
+
+- **要点**：按分型判断同构：`class1_bs_compute` 追加去重；副图/十字只扫 `buy1HistoryByKn`/`sell1HistoryByKn`（`x<=maxX`）；去掉尾柱重复画与读数铺展。
+- **相关路径**：`class1_bs_compute.dart`、`main.dart`、`kline_chart.dart`、`bar_feature_lookup.dart`
+- **注意**：**已被上条纠正**——仅冻发现x不够；动态active延伸须按K0步追加颗粒度点。
+
+### 2026-07-30 — 页面快照补一类BS字段
+
+- **要点**：用户末态快照(step=288)无法核对 25–27；快照原先不输出 buy1/sell1。现增加【一类BS·会话冻结】段。
+- **相关路径**：`app_debug_snapshot.dart`、`main.dart`
+- **注意**：请热重载/冷启后，复位再**连续单步到 26/27** 再复制快照（不要一键跳末）。
+
+### 2026-07-30 — Kn一类BS 步进/十字：同动态尾柱仍显示
+
+- **要点**：上次 Rust 计算已对但 UI 仍丢：步进后十字线未跟末柱、副图只画发现 x、tooltip 未 overlay 冻结帧。现步进吸附末柱；active 段在尾柱重复画点+铺读数（冻结 x 仍停在发现步）。
+- **相关路径**：`kline_chart.dart`、`bar_feature_lookup.dart`
+- **注意**：展示层方案后演进为「history 按K0步追加颗粒度点」（见最新条），非尾柱回显。
+
+### 2026-07-30 — Kn一类BS：未标后同高从1Sa重起 + active不消点
+
+- **要点**：002003 在 idx=25 上涨段不出新卖；26 与未标的 25 同高应从 `1Sa`（非 `1Sb`）；27 同动态 K1 仍输出且 x 钉在发现步。Rust 未标成员后同极值重起字母；active 且本枢已有前序标签时 x=begin+1。Flutter 十字读数从发现 x 铺到 active.x2。
+- **相关路径**：`buy1.rs`、`pipeline.rs`；`bar_feature_lookup.dart`；`msg_history.dart`
+- **注意**：已重载 `chan_ffi.dll`；请冷启动后连续单步 25→27 验收（一键跳末≠步进验收）。
+
+### 2026-07-29 — 一类BS步进消值：会话冻结 + 禁asOf覆盖
+
+- **要点**：日志证实 rawLostN>0 而 histLostN=0；`_rebuildCombine` 改为会话追加冻结。十字 as-of 不得用重算 buy1/sell1 覆盖冻结历史（overlay + 绘制改读会话帧）。
+- **相关路径**：`main.dart` `_mergeBsHistory`；`kline_chart.dart` `_overlayFrozenClass1Bs` / `_buy1FramesForKn`
+
+### 2026-07-29 — 一类BS：动态Kn参与 + 步进显示消值（未达标复盘）
+
+- **要点**：①Kn≥1 一类BS须与动态中枢同喂入（冻段+active_unit），仅补极点/单测不算验收完成，须冷启动逐步验证副图标记随进行中Kn出现。②步进时曾出现的一类BS/副图读数不得在下一步被整表替换清掉（须像分型判断一样会话级追加冻结；当前 `_rebuildCombine` 直接覆盖 `_buy1*`/`levels` 是高危根因）。③多次「宣称完成」但用户可见行为未达标：DLL未覆盖、标签仍1a、动态段未真正参与显示——验收以画面步进为准，不以单测绿为准。
+- **相关路径**：`pipeline.rs` export；`buy1.rs`；`main.dart` `_rebuildCombine`；`msg_history.dart`
+- **注意**：此后同类任务完成前必须：关占用重载DLL + 冷启动 + 至少连续步进观察「出现→下一步仍在」。
+
+### 2026-07-29 — Kn≥1 动态Kn参与一类BS
+
+- **要点**：一类BS与动态中枢同喂入（冻段+active_unit）；`unit_to_segment` 按 dir 锚定买卖极点；回归锁死 active 可出 1Ba/1Sa。
+- **相关路径**：`zs.rs` unit_to_segment、`buy1.rs` 测试、`msg_history.dart`
+- **注意**：已重载 chan_ffi.dll，需冷启动查看副图
+
+### 2026-07-29 — 一类BS副图标签色与DLL重载
+
+- **要点**：关掉占用中的 chan_kline 后重编并复制 chan_ffi.dll，使副图标签切到 1Ba/1Sa；买点固定红、卖点固定绿。
+- **相关路径**：`scripts/build_rust.ps1`、`kline_chart.dart` `_drawKnClass1BsSubChart`
+
+### 2026-07-29 — Kn一类BS 全层同构收尾
+
+- **要点**：一买同枢更高低不标；标签改 `1Ba/1Bb…`；镜像落地一卖 `1Sa…`（ZD_curr>ZG_prev）；副图改名「Kn一类BS」买卖同画（+1/-1）。
+- **相关路径**：`buy1.rs`、`pipeline.rs`、`combine.rs`；Flutter `sell1_frame.dart`、`chart_indicator.dart`、`kline_chart.dart`、`msg_history.dart`
+- **注意**：native `chan_ffi.dll` 若被占用需关应用后重跑 `build_rust.ps1`；Debug 目录 DLL 已更新。
 
 ### 2026-07-29 — 一字线仅 open=close；指标条避让标记
 

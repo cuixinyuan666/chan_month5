@@ -79,7 +79,7 @@ class SubChartIndicator {
       : kind = SubIndicatorKind.fractalPeakDist;
   const SubChartIndicator.truncation(this.kn)
       : kind = SubIndicatorKind.truncation;
-  /// kn 与中枢同号：K0一买…Kn一买
+  /// kn 与中枢同号：K0一类BS…Kn一类BS（买+卖同槽）
   const SubChartIndicator.buy1(this.kn) : kind = SubIndicatorKind.buy1;
 
   String get label {
@@ -95,7 +95,7 @@ class SubChartIndicator {
       case SubIndicatorKind.truncation:
         return 'K${kn - 1}截断';
       case SubIndicatorKind.buy1:
-        return 'K$kn一买';
+        return 'K$kn一类BS';
     }
   }
 
@@ -175,7 +175,7 @@ List<SubChartIndicator> buildSubIndicatorCatalog(
       out.add(SubChartIndicator.truncation(n));
     }
   }
-  // Kn一买：与连续中枢同层同号（K0..Kn）
+  // Kn一类BS：与连续中枢同层同号（K0..Kn）
   for (var n = 0; n <= maxKn; n++) {
     out.add(SubChartIndicator.buy1(n));
   }
