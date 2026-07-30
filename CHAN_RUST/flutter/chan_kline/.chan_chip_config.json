@@ -1,0 +1,9 @@
+{
+  "enabled": true,
+  "bucketStep": 0.38,
+  "stretchLevel": 5,
+  "paneWidth": 88.0,
+  "peakLineEnabled": false,
+  "peakLineWidth": 1.2,
+  "peakLineDashed": true
+}

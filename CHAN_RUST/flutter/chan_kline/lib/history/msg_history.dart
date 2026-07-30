@@ -469,6 +469,8 @@ class MsgHistory {
       '主图右侧水平柱（左绿S/右红B），峰延长线横穿主图。'
       '数据：离线分笔注入 chip_tick_bins（p/s/b/w）；无 bins 时 OHLC 三角兜底。'
       '计算：Rust chan_chip_profile（cutoff_x 含）；Kn cutoff=该层单元覆盖到的最大 K0 idx。'
+      '性能：Flutter 前缀索引（步进增量/十字 as-of 秒查）+ 底图/筹码/十字三层 RepaintBoundary；'
+      '大序列 Isolate 后台预热前缀（跳末/加载），计算口径不变。'
       '逐K当下性：只累加已喂入 bars；十字 as-of 回滚到该日累积，不回写历史桶。'
       '配置：chipEnabled/bucketStep/stretch/peakLine；落盘 .chan_chip_config.json。',
     );

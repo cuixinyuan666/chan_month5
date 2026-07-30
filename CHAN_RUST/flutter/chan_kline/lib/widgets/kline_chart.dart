@@ -242,6 +242,14 @@ class _KlineChartState extends State<KlineChart> {
 
   KlineCombineBundle? _bundleForZsAsOf(int? asOf) {
     if (asOf == null) return null;
+    // chip 分支无缠论数据：禁止 as-of 全量 FFI（日志：2.6万根≈13–18s 卡死）
+    // 踩坑：chipOnlyMode 下 _bundleForZsAsOf 必须返回 null，
+    // 否则 paint() → zsAsOfBundle 非空 → BarFeatureLookup.build() 触发的
+    // ChanBridge FFI 会序列化全量 bars（5.6万根）做 JSON 传输，单次 1.5-1.8s；
+    // 十字线每帧移动都会触发，导致 UI 卡死 13-18s。
+    if (widget.chipOnlyMode) {
+      return null;
+    }
     if (_zsAsOfCacheKey == asOf && _zsAsOfBundle != null) {
       return _zsAsOfBundle;
     }
@@ -370,6 +378,18 @@ class _KlineChartState extends State<KlineChart> {
         oldWidget.subIndicators != widget.subIndicators) {
       _pruneMuted();
     }
+
+    // C：大序列跳末/换股后后台预热筹码前缀（不堵 UI；口径同同步 build）
+    if ((lenChanged || seriesChanged) &&
+        widget.bars.length >= 2048 &&
+        widget.chipConfig.enabled) {
+      unawaited(
+        ChipProfileCompute.warmUpInBackground(
+          widget.bars,
+          bucketStep: widget.chipConfig.bucketStep,
+        ),
+      );
+    }
   }
 
   /// 十字线跟随鼠标：竖线吸附 K 线中心，横线跟价格。鼠标移线解除贴右步进标记。
@@ -381,9 +401,16 @@ class _KlineChartState extends State<KlineChart> {
       _chartSize.width,
       widget.bars.length,
     );
+    final y = pos.dy.clamp(plotTop, contentBottom);
+    // 同 K 且 Y 几乎不变：跳过 setState，提升跟手
+    if (barIdx == _crosshairBarIdx &&
+        _crosshairY != null &&
+        (_crosshairY! - y).abs() < 0.75) {
+      return;
+    }
     _crosshairBarIdx = barIdx;
     _crosshairX = _viewport.barCenterX(barIdx, _chartSize.width);
-    _crosshairY = pos.dy.clamp(plotTop, contentBottom);
+    _crosshairY = y;
     if (_crosshairShowTooltip) {
       _resetTooltipScrollIfNeeded(barIdx);
     }
@@ -612,6 +639,27 @@ class _KlineChartState extends State<KlineChart> {
     final bar = widget.bars[barIdx.clamp(0, widget.bars.length - 1)];
     final minuteLike = KlineAxisFormat.isMinuteLike(widget.bars);
     final timePart = KlineAxisFormat.xLabel(bar.timeText, minuteLike: minuteLike);
+
+    // chip 分支：只拼 OHLC 轻量行，禁止全表 BarFeatureLookup / 缠论 as-of
+    if (widget.chipOnlyMode) {
+      final out = <CrosshairTooltipRow>[
+        CrosshairTooltipRow.kv('日期时间', timePart),
+        const CrosshairTooltipRow.separator(),
+        CrosshairTooltipRow.kv('K0[No.]', CrosshairTooltipRow.boxNum(bar.idx)),
+        CrosshairTooltipRow.kv(
+          'K0',
+          CrosshairTooltipRow.boxNumInString(
+            'O${bar.open.toStringAsFixed(2)} '
+            'H${bar.high.toStringAsFixed(2)} '
+            'L${bar.low.toStringAsFixed(2)} '
+            'C${bar.close.toStringAsFixed(2)} '
+            'V${bar.volume}',
+          ),
+        ),
+      ];
+      return out;
+    }
+
     final asOf = _crosshairEnabled && _crosshairBarIdx != null
         ? _crosshairAsOfIdx()
         : null;
@@ -1034,59 +1082,80 @@ class _KlineChartState extends State<KlineChart> {
         final segAsOf = _crosshairEnabled && _crosshairBarIdx != null
             ? _crosshairAsOfIdx()
             : null;
-        final zsAsOfBundle = _bundleForZsAsOf(segAsOf);
+        final zsAsOfBundle =
+            widget.chipOnlyMode ? null : _bundleForZsAsOf(segAsOf);
 
         WidgetsBinding.instance.addPostFrameCallback((_) => _measureSubChipBar());
 
+        _KlineCompositePainter paintLayer(_ChartPaintLayer layer) =>
+            _KlineCompositePainter(
+              bars: widget.bars,
+              combineFrames: _effectiveK0CombineFrames,
+              k0ConfirmSignals: widget.k0ConfirmSignals,
+              barFeatures: widget.barFeatures,
+              k0Lines: widget.k0Lines,
+              k1BarViews: _effectiveK1BarViews,
+              k1CombineFrames: _effectiveK1CombineFrames,
+              k1Analysis: widget.k1Analysis,
+              levels: widget.levels,
+              zsK0Frames: widget.zsK0Frames,
+              buy1K0Frames: widget.buy1K0Frames,
+              sell1K0Frames: widget.sell1K0Frames,
+              buy2K0Frames: widget.buy2K0Frames,
+              sell2K0Frames: widget.sell2K0Frames,
+              buyNK0Frames: widget.buyNK0Frames,
+              sellNK0Frames: widget.sellNK0Frames,
+              zsAsOfBundle: zsAsOfBundle,
+              mainIndicators: _drawnMains,
+              subIndicators: _drawnSubs,
+              viewport: _viewport,
+              priceRange: priceRange,
+              visible: visible,
+              mainH: mainH,
+              volH: volH,
+              crosshairEnabled: _crosshairEnabled,
+              crosshairShowTooltip: _crosshairShowTooltip,
+              crosshairX: _crosshairX,
+              crosshairY: _crosshairY,
+              crosshairBarIdx: _crosshairBarIdx,
+              truncationCheck: widget.truncationCheck,
+              showBuildingDash: widget.showBuildingDash,
+              subChipBarHeight: _subChipBarHeight,
+              defaultK0Policy: widget.defaultK0Policy,
+              segAsOf: segAsOf,
+              judgmentHistoryByKn: widget.judgmentHistoryByKn,
+              buy1HistoryByKn: widget.buy1HistoryByKn,
+              sell1HistoryByKn: widget.sell1HistoryByKn,
+              buy2HistoryByKn: widget.buy2HistoryByKn,
+              sell2HistoryByKn: widget.sell2HistoryByKn,
+              buyNHistoryByKn: widget.buyNHistoryByKn,
+              sellNHistoryByKn: widget.sellNHistoryByKn,
+              chipConfig: widget.chipConfig,
+              chipOnlyMode: widget.chipOnlyMode,
+              layer: layer,
+            );
+
+        final chartSize = Size(w, mainH + volH);
         return Stack(
           clipBehavior: Clip.none,
           children: [
-            CustomPaint(
-              size: Size(w, mainH + volH),
-              painter: _KlineCompositePainter(
-                bars: widget.bars,
-                combineFrames: _effectiveK0CombineFrames,
-                k0ConfirmSignals: widget.k0ConfirmSignals,
-                barFeatures: widget.barFeatures,
-                k0Lines: widget.k0Lines,
-                k1BarViews: _effectiveK1BarViews,
-                k1CombineFrames: _effectiveK1CombineFrames,
-                k1Analysis: widget.k1Analysis,
-                levels: widget.levels,
-                zsK0Frames: widget.zsK0Frames,
-                buy1K0Frames: widget.buy1K0Frames,
-                sell1K0Frames: widget.sell1K0Frames,
-                buy2K0Frames: widget.buy2K0Frames,
-                sell2K0Frames: widget.sell2K0Frames,
-                buyNK0Frames: widget.buyNK0Frames,
-                sellNK0Frames: widget.sellNK0Frames,
-                zsAsOfBundle: zsAsOfBundle,
-                mainIndicators: _drawnMains,
-                subIndicators: _drawnSubs,
-                viewport: _viewport,
-                priceRange: priceRange,
-                visible: visible,
-                mainH: mainH,
-                volH: volH,
-                crosshairEnabled: _crosshairEnabled,
-                crosshairShowTooltip: _crosshairShowTooltip,
-                crosshairX: _crosshairX,
-                crosshairY: _crosshairY,
-                crosshairBarIdx: _crosshairBarIdx,
-                truncationCheck: widget.truncationCheck,
-                showBuildingDash: widget.showBuildingDash,
-                subChipBarHeight: _subChipBarHeight,
-                defaultK0Policy: widget.defaultK0Policy,
-                segAsOf: segAsOf,
-                judgmentHistoryByKn: widget.judgmentHistoryByKn,
-                buy1HistoryByKn: widget.buy1HistoryByKn,
-                sell1HistoryByKn: widget.sell1HistoryByKn,
-                buy2HistoryByKn: widget.buy2HistoryByKn,
-                sell2HistoryByKn: widget.sell2HistoryByKn,
-                buyNHistoryByKn: widget.buyNHistoryByKn,
-                sellNHistoryByKn: widget.sellNHistoryByKn,
-                chipConfig: widget.chipConfig,
-                chipOnlyMode: widget.chipOnlyMode,
+            // A：底图 / 筹码 / 十字 三层独立重绘
+            RepaintBoundary(
+              child: CustomPaint(
+                size: chartSize,
+                painter: paintLayer(_ChartPaintLayer.base),
+              ),
+            ),
+            RepaintBoundary(
+              child: CustomPaint(
+                size: chartSize,
+                painter: paintLayer(_ChartPaintLayer.chip),
+              ),
+            ),
+            RepaintBoundary(
+              child: CustomPaint(
+                size: chartSize,
+                painter: paintLayer(_ChartPaintLayer.crosshair),
               ),
             ),
             Positioned.fill(
@@ -1278,6 +1347,14 @@ class _KlineChartState extends State<KlineChart> {
   }
 }
 
+/// 图表分层：底图（蜡烛/缠论/轴）/筹码/十字线，互不拖累重绘。
+/// 踩坑：之前所有绘制都在一个 CustomPaint 里，十字线移动时 shouldRepaint=true
+/// 导致蜡烛和筹码也要重绘（尤其 5 万根 K 线 + 前缀索引查找）。拆三层后：
+///   — base：只有蜡烛/缠论/坐标轴变动时重绘
+///   — chip：只有筹码数据/几何变动时重绘
+///   — crosshair：纯鼠标移动，只重绘十字线（极轻量）
+enum _ChartPaintLayer { base, chip, crosshair }
+
 class _KlineCompositePainter extends CustomPainter {
   _KlineCompositePainter({
     required this.bars,
@@ -1323,27 +1400,32 @@ class _KlineCompositePainter extends CustomPainter {
     this.sellNHistoryByKn = const {},
     this.chipConfig = const ChipConfig(),
     this.chipOnlyMode = false,
-  }) : featureLookup = BarFeatureLookup.build(
-          bars: bars,
-          combineFrames: combineFrames,
-          k0Confirms: k0ConfirmSignals,
-          barFeatures: barFeatures,
-          k0Lines: k0Lines,
-          k1Analysis: k1Analysis,
-          // 十字 as-of：层结构可用 asOf；BS 用会话历史（禁止 asOf 重算消点）
-          levels: zsAsOfBundle?.levels ?? levels,
-          buy1HistoryByKn: buy1HistoryByKn,
-          sell1HistoryByKn: sell1HistoryByKn,
-          buy2HistoryByKn: buy2HistoryByKn,
-          sell2HistoryByKn: sell2HistoryByKn,
-          buyNHistoryByKn: buyNHistoryByKn,
-          sellNHistoryByKn: sellNHistoryByKn,
-          subIndicators: subIndicators,
-          truncationCheck: truncationCheck,
-          judgmentHistoryByKn: judgmentHistoryByKn,
-          asOf: segAsOf,
-        );
+    this.layer = _ChartPaintLayer.base,
+  }) : featureLookup = (chipOnlyMode || layer == _ChartPaintLayer.chip)
+            ? BarFeatureLookup.empty()
+            : BarFeatureLookup.build(
+                bars: bars,
+                combineFrames: combineFrames,
+                k0Confirms: k0ConfirmSignals,
+                barFeatures: barFeatures,
+                k0Lines: k0Lines,
+                k1Analysis: k1Analysis,
+                // 十字 as-of：层结构可用 asOf；BS 用会话历史（禁止 asOf 重算消点）
+                levels: zsAsOfBundle?.levels ?? levels,
+                buy1HistoryByKn: buy1HistoryByKn,
+                sell1HistoryByKn: sell1HistoryByKn,
+                buy2HistoryByKn: buy2HistoryByKn,
+                sell2HistoryByKn: sell2HistoryByKn,
+                buyNHistoryByKn: buyNHistoryByKn,
+                sellNHistoryByKn: sellNHistoryByKn,
+                subIndicators: subIndicators,
+                truncationCheck: truncationCheck,
+                judgmentHistoryByKn: judgmentHistoryByKn,
+                asOf: segAsOf,
+              );
 
+  /// 分层绘制：底图/筹码/十字 独立 shouldRepaint（计算口径不变）
+  final _ChartPaintLayer layer;
   final List<KlineBar> bars;
   final List<KlineCombineFrame> combineFrames;
   final List<K0ConfirmSignal> k0ConfirmSignals;
@@ -1426,21 +1508,57 @@ class _KlineCompositePainter extends CustomPainter {
     final plotLeft = KlineViewport.padL;
     final plotRight = math.max(plotLeft + 40, size.width - chipPaneW);
 
-    // chip 分支：跳过所有缠论渲染，仅画筹码
-    final chanDraw = !chipOnlyMode;
-
-    if (chanDraw) {
-      final showK0 = mainIndicators.contains(const MainChartIndicator.kn(1));
-      if (showK0) {
-        _drawCandles(canvas, size.width, plotTop, plotH, barW, slotW);
+    if (layer == _ChartPaintLayer.crosshair) {
+      if (crosshairEnabled && crosshairX != null && crosshairY != null) {
+        _drawCrosshair(canvas, size, contentBottom, plotTop, priceRange);
+        _drawSubCrosshairReadout(canvas, size.width);
       }
+      return;
+    }
+
+    if (layer == _ChartPaintLayer.chip) {
+      if (showChip && bars.isNotEmpty) {
+        final asOfK0 = bars.last.idx;
+        final kn = chipKns.last;
+        final cutBase = segAsOf ?? asOfK0;
+        final cut = chipOnlyMode || kn <= 0
+            ? cutBase
+            : ChipProfileCompute.cutoffForKn(
+                kn: kn,
+                asOfK0: cutBase,
+                levels: zsAsOfBundle?.levels ?? levels,
+              );
+        final profile = ChipProfileCompute.compute(
+          bars: bars,
+          cutoffX: cut,
+          bucketStep: chipConfig.bucketStep,
+        );
+        ChipProfilePainter.draw(
+          canvas: canvas,
+          profile: profile,
+          config: chipConfig,
+          plotLeft: plotLeft,
+          plotRight: plotRight,
+          plotTop: plotTop,
+          plotBottom: plotBottom,
+          yOfPrice: (p) => priceRange.yOf(p, plotTop, plotH),
+          highlightKn: kn,
+        );
+      }
+      return;
+    }
+
+    // —— base：蜡烛 / 缠论 / 坐标轴（不含筹码与十字）——
+    final chanDraw = !chipOnlyMode;
+    final showK0 = !chipOnlyMode
+        ? mainIndicators.contains(const MainChartIndicator.kn(1))
+        : true;
+    if (showK0) {
+      _drawCandles(canvas, size.width, plotTop, plotH, barW, slotW);
     }
     if (chanDraw && mainIndicators.isNotEmpty) {
-      // 按勾选项逐层画：勾哪层画哪层（不再一项自动叠全部）
       for (final ind in mainIndicators) {
         if (ind.kind == MainIndicatorKind.combine) {
-          // 合并与连线统一层号：combine(1)=K0合并，combine(2)=K1合并，combine(>=3)=K(n-1)合并
-          // 合并指标只画合并框；淡实体线已拆出到 KN 指标
           if (ind.kn == 1) {
             _drawKlineCombineOnMainChart(
                 canvas, size.width, plotTop, plotH, barW, slotW);
@@ -1452,8 +1570,6 @@ class _KlineCompositePainter extends CustomPainter {
                 canvas, size.width, plotTop, plotH, barW, slotW, ind.kn);
           }
         } else if (ind.kind == MainIndicatorKind.kn) {
-          // KN 线（由 KN合并 拆出）按层独立：kn(1)=K0 实体由顶层 showK0 绘制；
-          // kn(2)=K1 淡蜡烛；kn(>=3)=K(n-1) 单元淡蜡烛。各层独立开关、与对应合并框对齐。
           if (ind.kn == 2) {
             _drawK1Candles(
                 canvas, size.width, plotTop, plotH, barW, slotW, faint: true);
@@ -1461,9 +1577,7 @@ class _KlineCompositePainter extends CustomPainter {
             _drawLevelUnitCandlesOnMainChart(
                 canvas, size.width, plotTop, plotH, barW, slotW, ind.kn);
           }
-          // ind.kn == 1 的 K0 实体由顶层 showK0 统一绘制，避免重复
         } else if (ind.kind == MainIndicatorKind.line) {
-          // 内部 kn：1=K0连线→展示 K0连线；≥2→展示 K(kn-1)连线
           if (ind.kn == 1) {
             _drawK0Lines(canvas, size.width, plotTop, plotH, slotW);
           } else {
@@ -1471,7 +1585,6 @@ class _KlineCompositePainter extends CustomPainter {
                 canvas, size.width, plotTop, plotH, slotW, ind.kn);
           }
         } else if (ind.kind == MainIndicatorKind.zs) {
-          // 中枢：kn=0→K0中枢；kn≥1→Kn中枢
           _drawZSOnMainChart(
             canvas,
             size.width,
@@ -1488,45 +1601,8 @@ class _KlineCompositePainter extends CustomPainter {
       _drawSubCharts(canvas, size.width, mainH, barW, slotW);
     }
 
-    // 筹码：主图右侧水平柱；十字 as-of 截断；多 Kn 取最高层 cutoff（同底层 bins）
-    if (showChip && bars.isNotEmpty) {
-      final asOfK0 = bars.last.idx;
-      // chip 分支无缠论数据，Kn cutoff 直接用 asOfK0
-      final kn = chipKns.last;
-      final cut = chipOnlyMode
-          ? asOfK0
-          : ChipProfileCompute.cutoffForKn(
-              kn: kn,
-              asOfK0: segAsOf ?? asOfK0,
-              levels: zsAsOfBundle?.levels ?? levels,
-            );
-      final profile = ChipProfileCompute.compute(
-        bars: bars,
-        cutoffX: cut,
-        bucketStep: chipConfig.bucketStep,
-      );
-      ChipProfilePainter.draw(
-        canvas: canvas,
-        profile: profile,
-        config: chipConfig,
-        plotLeft: plotLeft,
-        plotRight: plotRight,
-        plotTop: plotTop,
-        plotBottom: plotBottom,
-        yOfPrice: (p) => priceRange.yOf(p, plotTop, plotH),
-        highlightKn: kn,
-      );
-    }
-
     _drawYLabels(canvas, size.width, plotTop, plotH, priceRange, showChip ? plotRight : null);
     _drawXAxis(canvas, size.width, xAxisTop);
-
-    if (crosshairEnabled && crosshairX != null && crosshairY != null) {
-      _drawCrosshair(canvas, size, contentBottom, plotTop, priceRange);
-      // 副图指标当前值：不画在折线/打点上，十字线激活时在副图右上角固定读数；
-      // 含分型确认/判断/极点距/截断（与副图折线、主 tooltip 同源同口径）
-      _drawSubCrosshairReadout(canvas, size.width);
-    }
   }
 
   double get contentBottom => mainH + volH - KlineViewport.xAxisH;
@@ -2861,7 +2937,11 @@ class _KlineCompositePainter extends CustomPainter {
     const down = Color(0xFF26A69A);
     final wick = Paint()..strokeWidth = 1.2;
 
-    for (var i = 0; i < bars.length; i++) {
+    // 踩坑：之前 _drawCandles 遍历 bars 全部索引（5 万+），每帧都在空转循环；
+    // 改为只扫视口附近 ±2 根，大幅降低滚动/缩放时的 CPU 开销。
+    final i0 = (viewport.viewXMin.floor() - 2).clamp(0, bars.length - 1);
+    final i1 = (viewport.viewXMax.ceil() + 2).clamp(0, bars.length - 1);
+    for (var i = i0; i <= i1; i++) {
       final idx = bars[i].idx;
       // 十字线激活时，按当步截断：右侧(idx>segAsOf)的 K0 蜡烛不绘制，与 K1/K2/.../Kn 各层一致
       final asOf = segAsOf;
@@ -3957,7 +4037,16 @@ class _KlineCompositePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _KlineCompositePainter oldDelegate) {
-    return oldDelegate.bars != bars ||
+    if (oldDelegate.layer != layer) return true;
+    final geomChanged = oldDelegate.mainH != mainH ||
+        oldDelegate.volH != volH ||
+        oldDelegate.viewport.viewXMin != viewport.viewXMin ||
+        oldDelegate.viewport.viewXMax != viewport.viewXMax ||
+        oldDelegate.viewport.yZoomRatio != viewport.yZoomRatio ||
+        oldDelegate.viewport.yShiftRatio != viewport.yShiftRatio ||
+        oldDelegate.priceRange.min != priceRange.min ||
+        oldDelegate.priceRange.max != priceRange.max;
+    final dataChanged = oldDelegate.bars != bars ||
         oldDelegate.combineFrames != combineFrames ||
         oldDelegate.k0ConfirmSignals != k0ConfirmSignals ||
         oldDelegate.barFeatures != barFeatures ||
@@ -3974,20 +4063,8 @@ class _KlineCompositePainter extends CustomPainter {
         oldDelegate.buyNK0Frames != buyNK0Frames ||
         oldDelegate.sellNK0Frames != sellNK0Frames ||
         oldDelegate.zsAsOfBundle != zsAsOfBundle ||
-        oldDelegate.segAsOf != segAsOf ||
         oldDelegate.mainIndicators != mainIndicators ||
         oldDelegate.subIndicators != subIndicators ||
-        oldDelegate.mainH != mainH ||
-        oldDelegate.volH != volH ||
-        oldDelegate.viewport.viewXMin != viewport.viewXMin ||
-        oldDelegate.viewport.viewXMax != viewport.viewXMax ||
-        oldDelegate.viewport.yZoomRatio != viewport.yZoomRatio ||
-        oldDelegate.viewport.yShiftRatio != viewport.yShiftRatio ||
-        oldDelegate.crosshairEnabled != crosshairEnabled ||
-        oldDelegate.crosshairShowTooltip != crosshairShowTooltip ||
-        oldDelegate.crosshairX != crosshairX ||
-        oldDelegate.crosshairY != crosshairY ||
-        oldDelegate.crosshairBarIdx != crosshairBarIdx ||
         oldDelegate.truncationCheck != truncationCheck ||
         oldDelegate.showBuildingDash != showBuildingDash ||
         oldDelegate.subChipBarHeight != subChipBarHeight ||
@@ -3999,7 +4076,30 @@ class _KlineCompositePainter extends CustomPainter {
         oldDelegate.sell2HistoryByKn != sell2HistoryByKn ||
         oldDelegate.buyNHistoryByKn != buyNHistoryByKn ||
         oldDelegate.sellNHistoryByKn != sellNHistoryByKn ||
-        oldDelegate.chipConfig != chipConfig ||
         oldDelegate.chipOnlyMode != chipOnlyMode;
+
+    switch (layer) {
+      case _ChartPaintLayer.base:
+        // 不含 crosshairX/Y：纯移价位线不重画蜡烛
+        return dataChanged ||
+            geomChanged ||
+            oldDelegate.segAsOf != segAsOf ||
+            oldDelegate.crosshairEnabled != crosshairEnabled;
+      case _ChartPaintLayer.chip:
+        return dataChanged ||
+            geomChanged ||
+            oldDelegate.segAsOf != segAsOf ||
+            oldDelegate.chipConfig != chipConfig;
+      case _ChartPaintLayer.crosshair:
+        return geomChanged ||
+            oldDelegate.crosshairEnabled != crosshairEnabled ||
+            oldDelegate.crosshairShowTooltip != crosshairShowTooltip ||
+            oldDelegate.crosshairX != crosshairX ||
+            oldDelegate.crosshairY != crosshairY ||
+            oldDelegate.crosshairBarIdx != crosshairBarIdx ||
+            oldDelegate.segAsOf != segAsOf ||
+            oldDelegate.subIndicators != subIndicators ||
+            oldDelegate.bars != bars;
+    }
   }
 }

@@ -76,6 +76,9 @@ class BarFeatureLookup {
   /// 十字线：各 Kn 块后追加的中枢 ZG/ZD 行
   final Map<int, List<CrosshairTooltipRow>> knZsAfterKn;
 
+  factory BarFeatureLookup.empty() =>
+      BarFeatureLookup._(byIdx: const <int, Map<String, dynamic>>{});
+
   factory BarFeatureLookup.build({
     required List<KlineBar> bars,
     required List<KlineCombineFrame> combineFrames,

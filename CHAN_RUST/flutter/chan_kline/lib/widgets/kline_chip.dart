@@ -84,9 +84,7 @@ abstract final class ChipProfilePainter {
     final paneW = math.max(24.0, config.paneWidth);
     final chipLeft = plotRight;
     final chipRight = plotRight + paneW;
-    final midX = (chipLeft + chipRight) / 2;
-    final halfW = (chipRight - chipLeft) / 2 - 2;
-    if (halfW <= 1) return;
+    if (paneW <= 4) return;
 
     // 拉伸：gamma = 1 / (1 + stretch*0.08)
     final stretch = config.stretchLevel.clamp(1, 20);
@@ -103,7 +101,8 @@ abstract final class ChipProfilePainter {
       final t = profile.total[i];
       if (t <= 0) continue;
       final ratio = math.pow(t / maxT, gamma).toDouble().clamp(0.0, 1.0);
-      final barHalf = halfW * ratio;
+      final barTotalW = (paneW - 4) * ratio;
+      if (barTotalW <= 0.5) continue;
       final halfStep = profile.bucketStep / 2;
       final bucketH = (yOfPrice(price - halfStep) - yOfPrice(price + halfStep)).abs().clamp(1.0, 60.0);
       final y0 = y - bucketH / 2;
@@ -112,23 +111,27 @@ abstract final class ChipProfilePainter {
       final bv = i < profile.b.length ? profile.b[i] : 0.0;
       final sum = sv + bv;
       if (sum <= 0) continue;
-      // 左绿 S / 右红 B，按两侧占比分配半宽
-      final sShare = sv / sum;
+      // 都从右向左：红在右，绿在左，右对齐
+      // 踩坑：之前用 midX +/- 中心分裂方案，与 Rust chip profile draw 右对齐不一致；
+      // 改为 chipRight 向右对齐后两侧水平柱视觉连续，不再有中间空隙。
       final bShare = bv / sum;
-      final sW = barHalf * (sShare * 2).clamp(0.0, 2.0);
-      final bW = barHalf * (bShare * 2).clamp(0.0, 2.0);
-      if (sW > 0.3) {
-        canvas.drawRect(Rect.fromLTRB(midX - sW, y0, midX, y1), sPaint);
-      }
+      final sShare = sv / sum;
+      final bW = (barTotalW * bShare).clamp(0.0, barTotalW - 0.3);
+      final sW = barTotalW - bW;
+      // 红柱：从右边缘向左
       if (bW > 0.3) {
-        canvas.drawRect(Rect.fromLTRB(midX, y0, midX + bW, y1), bPaint);
+        canvas.drawRect(Rect.fromLTRB(chipRight - bW, y0, chipRight, y1), bPaint);
+      }
+      // 绿柱：接在红柱左侧向左
+      if (sW > 0.3) {
+        canvas.drawRect(Rect.fromLTRB(chipRight - bW - sW, y0, chipRight - bW, y1), sPaint);
       }
     }
 
-    // 分隔中轴
+    // 右边缘竖线
     canvas.drawLine(
-      Offset(midX, plotTop),
-      Offset(midX, plotBottom),
+      Offset(chipRight - 1, plotTop),
+      Offset(chipRight - 1, plotBottom),
       Paint()
         ..color = const Color(0x33FFFFFF)
         ..strokeWidth = 0.8,

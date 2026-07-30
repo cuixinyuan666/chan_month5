@@ -2,6 +2,26 @@
 
 ## 最新记录
 
+### 2026-07-31 — 筹码性能：三层分层绘制 + 前缀索引 + Isolate 预热
+
+- **要点**：
+  1. **三层 `RepaintBoundary` 分层**（`_ChartPaintLayer.base/chip/crosshair`）：十字移线不再触发蜡烛/筹码重绘；`shouldRepaint` 按层独立判断。
+  2. **前缀索引 `_ChipPrefixIndex`**：每 256 根 K 打快照，`profileAt(cutoffX)` 二分定位+从最近快照重算至 cutoff，避免每次从头累加；支持步进增量 append/truncateTo。
+  3. **Isolate 后台预热 `warmUpInBackground`**：跳末/换股/加载大序列时在后台线程构建前缀索引，不堵 UI。
+  4. **`_drawCandles` 可见范围优化**：不再遍历全部 5 万+ bars，改为只扫视口 ±2 根。
+  5. **筹码柱右对齐**：从中心分裂改为 `chipRight` 向右对齐（S 绿左/B 红右），与 Rust 渲染口径一致。
+  6. **chipOnlyMode 轻量十字 tooltip**：只显示 OHLC，跳过全表 `BarFeatureLookup` 和缠论 as-of（避免 13–18s 卡死）。
+- **关键路径**：`chip_profile_compute.dart`（前缀索引+Isolate 预热+缓存）、`kline_chart.dart`（三层分层+十字 tooltip 分支+可见范围优化）、`kline_chip.dart`（右对齐绘制）、`main.dart`（清缓存+预热）、`bar_feature_lookup.dart`（empty factory）、`msg_history.dart`
+- **踩坑**：
+  - Isolate 传输只支持基本类型，`KlineBar` 不能跨边界；必须用 compact Map 序列化。
+  - 反序列化 `Map<int,double>` 时 JSON 会把 int key 转为 String，必须 `int.parse(k.toString())` 转回。
+  - `_warmGen` 版本号防慢 Isolate 结果覆盖新股票前缀（换股时序竞争）。
+  - `chipOnlyMode` 下 `_bundleForZsAsOf` 必须返回 null，否则 `BarFeatureLookup.build()` 触发全量 FFI 传输全量 bars（5.6 万根约 1.5–1.8s 一次，十字线每帧触发 → 13–18s 卡死）。
+  - `_drawCandles` 原遍历 5 万+ bars 空转每帧；改为视口范围后滚动/缩放大幅流畅。
+  - 筹码柱从 `midX +/- halfW` 中心分裂改 `chipRight` 右对齐，否则与 Rust 渲染不一致产生视觉间隙。
+  - 十字线鼠标移动跳过 `setState` 的条件必须宽松（Y 差 <0.75px），否则轻微抖动也会触发全 setState。
+- **注意**：关占用后热重启即可，无需重编 DLL。
+
 ### 2026-07-30 — CHAN_RUST 筹码分布图全层同构落地
 
 - **要点**：按 `chan-chip-distribution` 口径为 Flutter+Rust 新增 Kn筹码分布：离线分笔注入 `chip_tick_bins`，Rust `chip_profile`/`chan_chip_profile` 按 cutoff 分桶；主图右侧水平柱（S绿/B红）+ 峰延长线；副图 catalog `Kn筹码分布` 全层同构；十字 as-of 截断；配置落盘 `.chan_chip_config.json`。

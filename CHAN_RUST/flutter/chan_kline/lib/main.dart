@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'bridge/chan_bridge.dart';
+import 'compute/chip_profile_compute.dart';
 import 'compute/class1_bs_compute.dart';
 import 'compute/class2_bs_compute.dart';
 import 'compute/class_n_bs_compute.dart';
@@ -429,6 +430,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       );
       if (_chipOnlyMode) {
         // 仅筹码分布：跳过缠论合并/线段/中枢/BS 计算，清空相关数据
+        ChipProfileCompute.clearCache();
         setState(() {
           _combineFrames = const [];
           _k0ConfirmSignals = const [];
@@ -448,7 +450,15 @@ class _KlineHomePageState extends State<KlineHomePage> {
           _mainIndicators = {};
           _subIndicators = {const SubChartIndicator.chip(0)};
         });
+        // 预热全量前缀（即便当前只显示首根，跳末后即可秒切）
+        unawaited(
+          ChipProfileCompute.warmUpInBackground(
+            bars,
+            bucketStep: _chipConfig.bucketStep,
+          ),
+        );
       } else {
+        ChipProfileCompute.clearCache();
         _rebuildCombine();
         _logCombineSummary(prefix: '加载后汇总');
       }
@@ -866,6 +876,13 @@ class _KlineHomePageState extends State<KlineHomePage> {
     if (_chipOnlyMode) {
       // 仅筹码：直接跳到末尾，跳过缠论逻辑
       setState(() => _stepIdx = end);
+      // 后台预热前缀索引，避免首帧主线程 build 卡一下
+      unawaited(
+        ChipProfileCompute.warmUpInBackground(
+          _allBars,
+          bucketStep: _chipConfig.bucketStep,
+        ),
+      );
       return;
     }
     for (var i = start; i <= end; i++) {
