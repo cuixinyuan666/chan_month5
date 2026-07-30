@@ -164,6 +164,8 @@ List<LevelBundle> levelsWithFrozenClass2Bs(
           sell1Frames: lv.sell1Frames,
           buy2Frames: buy2HistoryByKn[lv.level] ?? lv.buy2Frames,
           sell2Frames: sell2HistoryByKn[lv.level] ?? lv.sell2Frames,
+          buyNFrames: lv.buyNFrames,
+          sellNFrames: lv.sellNFrames,
           firstDir: lv.firstDir,
           firstDirX: lv.firstDirX,
           activeUnit: lv.activeUnit,

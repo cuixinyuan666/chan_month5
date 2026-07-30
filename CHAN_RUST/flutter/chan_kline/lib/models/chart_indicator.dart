@@ -63,27 +63,60 @@ enum SubIndicatorKind {
   truncation,
   buy1,
   buy2,
+  /// 三类及以上（bsClass=3..）
+  buyN,
+}
+
+/// 类号中文（副图命名：三类/四类…）
+String bsClassChinese(int cls) {
+  const names = <int, String>{
+    1: '一',
+    2: '二',
+    3: '三',
+    4: '四',
+    5: '五',
+    6: '六',
+    7: '七',
+    8: '八',
+    9: '九',
+  };
+  return names[cls] ?? '$cls';
 }
 
 /// 副图一项指标。
 class SubChartIndicator {
   final SubIndicatorKind kind;
   final int kn;
+  /// 仅 buyN：类号 ≥3；其它 kind 为 null
+  final int? bsClass;
 
   /// kn=0：K0成交量；kn≥1：Kn成交量（LevelBundle.level==kn）。
-  const SubChartIndicator.volume(this.kn) : kind = SubIndicatorKind.volume;
+  const SubChartIndicator.volume(this.kn)
+      : kind = SubIndicatorKind.volume,
+        bsClass = null;
   const SubChartIndicator.fractalConfirm(this.kn)
-      : kind = SubIndicatorKind.fractalConfirm;
+      : kind = SubIndicatorKind.fractalConfirm,
+        bsClass = null;
   const SubChartIndicator.fractalJudgment(this.kn)
-      : kind = SubIndicatorKind.fractalJudgment;
+      : kind = SubIndicatorKind.fractalJudgment,
+        bsClass = null;
   const SubChartIndicator.fractalPeakDist(this.kn)
-      : kind = SubIndicatorKind.fractalPeakDist;
+      : kind = SubIndicatorKind.fractalPeakDist,
+        bsClass = null;
   const SubChartIndicator.truncation(this.kn)
-      : kind = SubIndicatorKind.truncation;
+      : kind = SubIndicatorKind.truncation,
+        bsClass = null;
   /// kn 与中枢同号：K0一类BS…Kn一类BS（买+卖同槽）
-  const SubChartIndicator.buy1(this.kn) : kind = SubIndicatorKind.buy1;
+  const SubChartIndicator.buy1(this.kn)
+      : kind = SubIndicatorKind.buy1,
+        bsClass = null;
   /// kn 与中枢同号：K0二类BS…Kn二类BS（买+卖同槽）
-  const SubChartIndicator.buy2(this.kn) : kind = SubIndicatorKind.buy2;
+  const SubChartIndicator.buy2(this.kn)
+      : kind = SubIndicatorKind.buy2,
+        bsClass = null;
+  /// kn 与中枢同号：K0三类BS…；bsClass≥3
+  const SubChartIndicator.buyN(this.kn, this.bsClass)
+      : kind = SubIndicatorKind.buyN;
 
   String get label {
     switch (kind) {
@@ -101,15 +134,18 @@ class SubChartIndicator {
         return 'K$kn一类BS';
       case SubIndicatorKind.buy2:
         return 'K$kn二类BS';
+      case SubIndicatorKind.buyN:
+        return 'K$kn${bsClassChinese(bsClass ?? 3)}类BS';
     }
   }
 
-  /// 显示层号（成交量/一类/二类 kn 直接；分型类 kn-1）。
+  /// 显示层号（成交量/BS kn 直接；分型类 kn-1）。
   int get displayLevel {
     switch (kind) {
       case SubIndicatorKind.volume:
       case SubIndicatorKind.buy1:
       case SubIndicatorKind.buy2:
+      case SubIndicatorKind.buyN:
         return kn;
       case SubIndicatorKind.fractalConfirm:
       case SubIndicatorKind.fractalJudgment:
@@ -121,10 +157,13 @@ class SubChartIndicator {
 
   @override
   bool operator ==(Object other) =>
-      other is SubChartIndicator && other.kind == kind && other.kn == kn;
+      other is SubChartIndicator &&
+      other.kind == kind &&
+      other.kn == kn &&
+      other.bsClass == bsClass;
 
   @override
-  int get hashCode => Object.hash(kind, kn);
+  int get hashCode => Object.hash(kind, kn, bsClass);
 }
 
 int chartMaxKn({
@@ -158,9 +197,11 @@ List<MainChartIndicator> buildMainIndicatorCatalog(int maxKn) {
   return out;
 }
 
+/// 副图 catalog；[maxBsClass] 默认至少 9，数据更高时调用方传入扩大。
 List<SubChartIndicator> buildSubIndicatorCatalog(
   int maxKn, {
   bool truncationCheck = true,
+  int maxBsClass = 9,
 }) {
   final out = <SubChartIndicator>[];
   // Kn成交量：K0=原生量；K1..=对应 LevelBundle.level
@@ -189,6 +230,13 @@ List<SubChartIndicator> buildSubIndicatorCatalog(
   for (var n = 0; n <= maxKn; n++) {
     out.add(SubChartIndicator.buy2(n));
   }
+  // Kn三类..N类BS：固定 3..maxBsClass
+  final hi = maxBsClass < 3 ? 3 : maxBsClass;
+  for (var cls = 3; cls <= hi; cls++) {
+    for (var n = 0; n <= maxKn; n++) {
+      out.add(SubChartIndicator.buyN(n, cls));
+    }
+  }
   return out;
 }
 
@@ -210,8 +258,9 @@ List<MainChartIndicator> mainIndicatorsForLevel(
 /// 副图「K{displayLevel}指标」层全选成员。
 List<SubChartIndicator> subIndicatorsForLevel(
   int displayLevel,
-  List<SubChartIndicator> catalog,
-) {
+  List<SubChartIndicator> catalog, {
+  int maxBsClass = 9,
+}) {
   final allow = catalog.toSet();
   final candidates = <SubChartIndicator>[
     SubChartIndicator.volume(displayLevel),
@@ -222,6 +271,10 @@ List<SubChartIndicator> subIndicatorsForLevel(
     SubChartIndicator.buy1(displayLevel),
     SubChartIndicator.buy2(displayLevel),
   ];
+  final hi = maxBsClass < 3 ? 3 : maxBsClass;
+  for (var cls = 3; cls <= hi; cls++) {
+    candidates.add(SubChartIndicator.buyN(displayLevel, cls));
+  }
   return candidates.where(allow.contains).toList();
 }
 
@@ -256,7 +309,7 @@ Set<MainChartIndicator> defaultMainIndicatorsK0() {
   return mainIndicatorsForLevel(0, buildMainIndicatorCatalog(1)).toSet();
 }
 
-/// 启动默认：副图「K0指标」层全选（成交量+分型确认/判断/极点距/截断）。
+/// 启动默认：副图「K0指标」层全选（成交量+分型确认/判断/极点距/截断+一类/二类/三类..九类BS）。
 Set<SubChartIndicator> defaultSubIndicatorsK0({bool truncationCheck = true}) {
   return subIndicatorsForLevel(
     0,

@@ -6,6 +6,8 @@ import '../models/buy1_frame.dart';
 import '../models/sell1_frame.dart';
 import '../models/buy2_frame.dart';
 import '../models/sell2_frame.dart';
+import '../models/buy_n_frame.dart';
+import '../models/sell_n_frame.dart';
 import '../models/zs_frame.dart';
 import '../models/k0_confirm_signal.dart';
 import '../models/k0_line.dart';
@@ -45,6 +47,8 @@ class AppDebugSnapshot {
     List<Sell1Frame> sell1K0Frames = const [],
     List<Buy2Frame> buy2K0Frames = const [],
     List<Sell2Frame> sell2K0Frames = const [],
+    List<BuyNFrame> buyNK0Frames = const [],
+    List<SellNFrame> sellNK0Frames = const [],
     String? lastError,
   }) {
     final now = DateTime.now();
@@ -172,6 +176,7 @@ class AppDebugSnapshot {
     _writeLevels(buf, levels);
     _writeClass1Bs(buf, levels, buy1K0Frames, sell1K0Frames);
     _writeClass2Bs(buf, levels, buy2K0Frames, sell2K0Frames);
+    _writeClassNBs(buf, levels, buyNK0Frames, sellNK0Frames);
     _writeZS(buf, levels);
     _writeDllDiag(buf, barFeatures, levels);
     _writeTailBarFeature(buf, visibleBars, barFeatures);
@@ -300,6 +305,39 @@ class AppDebugSnapshot {
     dump('K0', buy2K0, sell2K0);
     for (final lv in levels) {
       dump('K${lv.level}', lv.buy2Frames, lv.sell2Frames);
+    }
+    buf.writeln();
+  }
+
+  /// 三类+BS：会话冻结帧
+  static void _writeClassNBs(
+    StringBuffer buf,
+    List<LevelBundle> levels,
+    List<BuyNFrame> buyNK0,
+    List<SellNFrame> sellNK0,
+  ) {
+    buf.writeln('【三类+BS·会话冻结】');
+    void dump(String kn, List<BuyNFrame> buys, List<SellNFrame> sells) {
+      if (buys.isEmpty && sells.isEmpty) {
+        buf.writeln('$kn：buy=0 sell=0');
+        return;
+      }
+      buf.writeln('$kn：buy=${buys.length} sell=${sells.length}');
+      for (final p in buys) {
+        buf.writeln(
+          '  ${p.label} cls=${p.cls} x=${p.x} price=${p.price} seg=${p.segIdx} zs=${p.zsSeq}',
+        );
+      }
+      for (final p in sells) {
+        buf.writeln(
+          '  ${p.label} cls=${p.cls} x=${p.x} price=${p.price} seg=${p.segIdx} zs=${p.zsSeq}',
+        );
+      }
+    }
+
+    dump('K0', buyNK0, sellNK0);
+    for (final lv in levels) {
+      dump('K${lv.level}', lv.buyNFrames, lv.sellNFrames);
     }
     buf.writeln();
   }

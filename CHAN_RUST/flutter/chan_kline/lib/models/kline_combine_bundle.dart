@@ -4,6 +4,8 @@ import 'buy1_frame.dart';
 import 'sell1_frame.dart';
 import 'buy2_frame.dart';
 import 'sell2_frame.dart';
+import 'buy_n_frame.dart';
+import 'sell_n_frame.dart';
 import 'k0_line.dart';
 import 'k1_bar.dart';
 import 'kline_combine_frame.dart';
@@ -49,6 +51,12 @@ class KlineCombineBundle {
   /// K0二卖（二买镜像）
   final List<Sell2Frame> sell2K0Frames;
 
+  /// K0三类+买（链升类）
+  final List<BuyNFrame> buyNK0Frames;
+
+  /// K0三类+卖（买镜像）
+  final List<SellNFrame> sellNK0Frames;
+
   const KlineCombineBundle({
     required this.frames,
     required this.k0Confirms,
@@ -67,6 +75,8 @@ class KlineCombineBundle {
     this.sell1K0Frames = const [],
     this.buy2K0Frames = const [],
     this.sell2K0Frames = const [],
+    this.buyNK0Frames = const [],
+    this.sellNK0Frames = const [],
   });
 
   factory KlineCombineBundle.fromJson(Map<String, dynamic> json) {
@@ -162,6 +172,12 @@ class KlineCombineBundle {
       sell2K0Frames: (json['sell2_k0_frames'] as List? ?? const [])
           .map((e) => Sell2Frame.fromJson(Map<String, dynamic>.from(e as Map)))
           .toList(),
+      buyNK0Frames: (json['buy_n_k0_frames'] as List? ?? const [])
+          .map((e) => BuyNFrame.fromJson(Map<String, dynamic>.from(e as Map)))
+          .toList(),
+      sellNK0Frames: (json['sell_n_k0_frames'] as List? ?? const [])
+          .map((e) => SellNFrame.fromJson(Map<String, dynamic>.from(e as Map)))
+          .toList(),
     );
   }
 
@@ -183,5 +199,7 @@ class KlineCombineBundle {
         sell1K0Frames: [],
         buy2K0Frames: [],
         sell2K0Frames: [],
+        buyNK0Frames: [],
+        sellNK0Frames: [],
       );
 }

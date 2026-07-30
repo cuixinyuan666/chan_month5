@@ -37,6 +37,8 @@ class MsgHistory {
 
   /// Kn二类BS 口径（进程内去重）
   static bool _buy2Logged = false;
+  /// Kn三类+BS 口径（进程内去重）
+  static bool _buyNLogged = false;
 
   final List<MsgHistoryEntry> _rows = [];
 
@@ -361,7 +363,23 @@ class MsgHistory {
       '同段互斥分区。'
       '喂入/打点x/active钉点/Flutter双键会话冻结与一类同构；'
       'JSON：buy2_k0_frames/sell2_k0_frames、levels[].buy2_frames/sell2_frames；'
-      '副图「Kn二类BS」买+1橙、卖-1青；K0颗粒度可多点；无未来、不回写。',
+      '副图「Kn二类BS」；K0颗粒度可多点；无未来、不回写。',
+    );
+  }
+
+  /// Kn三类及以上BS（链升类；全层同构）
+  void appendBuyNClass3PlusNaming() {
+    if (_buyNLogged) return;
+    _buyNLogged = true;
+    append(
+      '【新增·Kn三类+BS·全层同构】以一类/二类资格中枢为链起点；'
+      '买：相邻框连续 zd_k>zg_{k-1} → 三类/四类…；卖镜像 zg_k<zd_{k-1}；'
+      '中间环不满足则该起点链断开，后续新资格框可开新链。'
+      '同框每个成员（跳过层首）按序 3Ba/3Bb… 字母只递增不复位。'
+      '打点x/active钉点/Flutter双键会话冻结与一类同构；K0颗粒度同柱可多类叠标。'
+      'JSON：buy_n_k0_frames/sell_n_k0_frames、levels[].buy_n_frames/sell_n_frames（含 cls）；'
+      '副图分槽「Kn三类BS」…「Kn九类BS」（更高类动态扩）；'
+      '全类副图 S 在上(+1)冷色、B 在下(-1)暖色，同族内按类分档。',
     );
   }
 

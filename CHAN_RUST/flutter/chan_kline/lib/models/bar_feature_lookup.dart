@@ -4,6 +4,8 @@ import 'buy1_frame.dart';
 import 'sell1_frame.dart';
 import 'buy2_frame.dart';
 import 'sell2_frame.dart';
+import 'buy_n_frame.dart';
+import 'sell_n_frame.dart';
 import 'k0_line.dart';
 import 'kline_bar.dart';
 import 'chart_indicator.dart';
@@ -13,6 +15,7 @@ import 'k1_analysis.dart';
 import '../compute/fractal_judgment_compute.dart';
 import '../compute/class1_bs_compute.dart';
 import '../compute/class2_bs_compute.dart';
+import '../compute/class_n_bs_compute.dart';
 import '../compute/kn_volume_series_compute.dart';
 
 /// 十字线 tooltip 一行：键值 / 层级分隔线 / 同层内容分隔线。
@@ -85,10 +88,14 @@ class BarFeatureLookup {
     Map<int, List<Sell1Frame>> sell1HistoryByKn = const {},
     Map<int, List<Buy2Frame>> buy2HistoryByKn = const {},
     Map<int, List<Sell2Frame>> sell2HistoryByKn = const {},
+    Map<int, List<BuyNFrame>> buyNHistoryByKn = const {},
+    Map<int, List<SellNFrame>> sellNHistoryByKn = const {},
     List<Buy1Frame> buy1K0Frames = const [],
     List<Sell1Frame> sell1K0Frames = const [],
     List<Buy2Frame> buy2K0Frames = const [],
     List<Sell2Frame> sell2K0Frames = const [],
+    List<BuyNFrame> buyNK0Frames = const [],
+    List<SellNFrame> sellNK0Frames = const [],
     Set<SubChartIndicator> subIndicators = const {},
     bool truncationCheck = true,
     /// 分型判断会话事件日志（有则优先；扫全部历史点）
@@ -339,6 +346,74 @@ class BarFeatureLookup {
               b.idx < sellSeries.length &&
               sellSeries[b.idx] != null) {
             sub['sell2_$kn'] = sellSeries[b.idx];
+          }
+        }
+      }
+    }
+
+    // Kn三类+BS：按 cls 分键 buyN_${kn}_$cls
+    {
+      final buyHist = Map<int, List<BuyNFrame>>.from(buyNHistoryByKn);
+      final sellHist = Map<int, List<SellNFrame>>.from(sellNHistoryByKn);
+      if (buyHist.isEmpty && buyNK0Frames.isNotEmpty) {
+        buyHist[0] = buyNK0Frames;
+      }
+      if (sellHist.isEmpty && sellNK0Frames.isNotEmpty) {
+        sellHist[0] = sellNK0Frames;
+      }
+      if (buyHist.isEmpty && sellHist.isEmpty) {
+        for (final lv in levels) {
+          if (lv.buyNFrames.isNotEmpty) buyHist[lv.level] = lv.buyNFrames;
+          if (lv.sellNFrames.isNotEmpty) sellHist[lv.level] = lv.sellNFrames;
+        }
+      }
+
+      final barCount = bars.isEmpty ? 0 : bars.last.idx + 1;
+      final kns = <int>{...buyHist.keys, ...sellHist.keys};
+      final classes = <int>{};
+      for (final list in buyHist.values) {
+        for (final e in list) {
+          classes.add(e.cls);
+        }
+      }
+      for (final list in sellHist.values) {
+        for (final e in list) {
+          classes.add(e.cls);
+        }
+      }
+      for (final ind in subIndicators) {
+        if (ind.kind == SubIndicatorKind.buyN && ind.bsClass != null) {
+          classes.add(ind.bsClass!);
+        }
+      }
+      for (final kn in kns) {
+        for (final cls in classes) {
+          final buySeries = expandBuyNLabelsToSeries(
+            buyHist[kn] ?? const [],
+            barCount,
+            maxX: asOf,
+            cls: cls,
+          );
+          final sellSeries = expandSellNLabelsToSeries(
+            sellHist[kn] ?? const [],
+            barCount,
+            maxX: asOf,
+            cls: cls,
+          );
+          for (final b in bars) {
+            final row = byIdx.putIfAbsent(b.idx, () => {'idx': b.idx});
+            final sub = row.putIfAbsent('sub', () => <String, dynamic>{})
+                as Map<String, dynamic>;
+            if (b.idx >= 0 &&
+                b.idx < buySeries.length &&
+                buySeries[b.idx] != null) {
+              sub['buyN_${kn}_$cls'] = buySeries[b.idx];
+            }
+            if (b.idx >= 0 &&
+                b.idx < sellSeries.length &&
+                sellSeries[b.idx] != null) {
+              sub['sellN_${kn}_$cls'] = sellSeries[b.idx];
+            }
           }
         }
       }
@@ -639,6 +714,20 @@ class BarFeatureLookup {
       if (ind.kind == SubIndicatorKind.buy2) {
         final buy = sub['buy2_${ind.kn}'];
         final sell = sub['sell2_${ind.kn}'];
+        if (buy != null || sell != null) {
+          final parts = <String>[
+            if (buy != null) '$buy',
+            if (sell != null) '$sell',
+          ];
+          add(ind.label, parts.join(' '));
+        } else {
+          add(ind.label, null);
+        }
+      }
+      if (ind.kind == SubIndicatorKind.buyN) {
+        final cls = ind.bsClass ?? 3;
+        final buy = sub['buyN_${ind.kn}_$cls'];
+        final sell = sub['sellN_${ind.kn}_$cls'];
         if (buy != null || sell != null) {
           final parts = <String>[
             if (buy != null) '$buy',

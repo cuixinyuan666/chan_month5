@@ -9,6 +9,7 @@ import 'package:window_manager/window_manager.dart';
 import 'bridge/chan_bridge.dart';
 import 'compute/class1_bs_compute.dart';
 import 'compute/class2_bs_compute.dart';
+import 'compute/class_n_bs_compute.dart';
 import 'compute/fractal_judgment_compute.dart';
 import 'compute/k1_bar_view_compute.dart';
 import 'history/app_debug_snapshot.dart';
@@ -18,6 +19,8 @@ import 'models/buy1_frame.dart';
 import 'models/sell1_frame.dart';
 import 'models/buy2_frame.dart';
 import 'models/sell2_frame.dart';
+import 'models/buy_n_frame.dart';
+import 'models/sell_n_frame.dart';
 import 'models/kline_bar.dart';
 import 'models/k0_confirm_signal.dart';
 import 'models/bar_crosshair_feature.dart';
@@ -64,6 +67,7 @@ Future<void> main() async {
   // ZG/ZD 常见命名 + Kn一类BS
   MsgHistory.instance.appendBuy1AndZgZdCommonNaming();
   MsgHistory.instance.appendBuy2Class2Naming();
+  MsgHistory.instance.appendBuyNClass3PlusNaming();
   // 展示轨：动态KN当确认段画虚线；确认优先纠正/改实线
   MsgHistory.instance.appendDisplayTrackDynamicKnBuildingLines();
   // 种子框 / 第一条虚线限制 / 种子包含截断（全层同构，常驻历史）
@@ -158,6 +162,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
   List<Sell1Frame> _sell1K0Frames = [];
   List<Buy2Frame> _buy2K0Frames = [];
   List<Sell2Frame> _sell2K0Frames = [];
+  List<BuyNFrame> _buyNK0Frames = [];
+  List<SellNFrame> _sellNK0Frames = [];
   // 默认=选择栏「K0指标」层全选（主图 K0/K0合并/K0连线/K0连续中枢；副图同层）
   Set<MainChartIndicator> _mainIndicators = defaultMainIndicatorsK0();
   Set<SubChartIndicator> _subIndicators = defaultSubIndicatorsK0();
@@ -187,6 +193,19 @@ class _KlineHomePageState extends State<KlineHomePage> {
   /// 二类BS 会话历史（与一类同框同构冻结）。
   Map<int, List<Buy2Frame>> _buy2HistoryByKn = {};
   Map<int, List<Sell2Frame>> _sell2HistoryByKn = {};
+
+  /// 三类+BS 会话历史（链升类；双键冻结同构）。
+  Map<int, List<BuyNFrame>> _buyNHistoryByKn = {};
+  Map<int, List<SellNFrame>> _sellNHistoryByKn = {};
+
+  /// catalog 三类..N 类上限（至少 9；随会话观察到的更高类扩大）
+  int get _maxBsClass => math.max(
+        9,
+        maxBuyNClassObserved(
+          buyNHistoryByKn: _buyNHistoryByKn,
+          sellNHistoryByKn: _sellNHistoryByKn,
+        ),
+      );
 
   bool get _busy => _bootstrapping || _loadingChart;
   bool get _hasSession => _allBars.isNotEmpty;
@@ -380,6 +399,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _sell1HistoryByKn.clear();
         _buy2HistoryByKn.clear();
         _sell2HistoryByKn.clear();
+        _buyNHistoryByKn.clear();
+        _sellNHistoryByKn.clear();
       });
       final directOhlc = code == 'test' && _hasTestOhlcCsv();
       _msgHistory.append(
@@ -406,12 +427,16 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _sell1K0Frames = [];
         _buy2K0Frames = [];
         _sell2K0Frames = [];
+        _buyNK0Frames = [];
+        _sellNK0Frames = [];
         _stepIdx = -1;
         _judgmentHistoryByKn.clear();
         _buy1HistoryByKn.clear();
         _sell1HistoryByKn.clear();
         _buy2HistoryByKn.clear();
         _sell2HistoryByKn.clear();
+        _buyNHistoryByKn.clear();
+        _sellNHistoryByKn.clear();
       });
       _msgHistory.append('加载K0失败：$e');
     } finally {
@@ -458,7 +483,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
     return null;
   }
 
-  /// 把本步 Rust 一类/二类BS 并入会话历史。
+  /// 把本步 Rust 一类/二类/三类+BS 并入会话历史。
   /// 对齐分型判断：K0 步进颗粒度；传 activeSegIdx 使动态 Kn 延伸步仍追加本步 x。
   void _mergeBsHistory(KlineCombineBundle bundle) {
     final discoveryX = _stepIdx < 0 ? 0 : _stepIdx;
@@ -477,6 +502,14 @@ class _KlineHomePageState extends State<KlineHomePage> {
     final nextSell2 = <int, List<Sell2Frame>>{
       for (final e in _sell2HistoryByKn.entries)
         e.key: List<Sell2Frame>.from(e.value),
+    };
+    final nextBuyN = <int, List<BuyNFrame>>{
+      for (final e in _buyNHistoryByKn.entries)
+        e.key: List<BuyNFrame>.from(e.value),
+    };
+    final nextSellN = <int, List<SellNFrame>>{
+      for (final e in _sellNHistoryByKn.entries)
+        e.key: List<SellNFrame>.from(e.value),
     };
     for (final e in collectBuy1EventsByKn(bundle).entries) {
       final log = nextBuy.putIfAbsent(e.key, () => <Buy1Frame>[]);
@@ -514,10 +547,30 @@ class _KlineHomePageState extends State<KlineHomePage> {
         activeSegIdx: _activeSegIdxForKn(bundle, e.key),
       );
     }
+    for (final e in collectBuyNEventsByKn(bundle).entries) {
+      final log = nextBuyN.putIfAbsent(e.key, () => <BuyNFrame>[]);
+      mergeBuyNEventLog(
+        log,
+        e.value,
+        discoveryX: discoveryX,
+        activeSegIdx: _activeSegIdxForKn(bundle, e.key),
+      );
+    }
+    for (final e in collectSellNEventsByKn(bundle).entries) {
+      final log = nextSellN.putIfAbsent(e.key, () => <SellNFrame>[]);
+      mergeSellNEventLog(
+        log,
+        e.value,
+        discoveryX: discoveryX,
+        activeSegIdx: _activeSegIdxForKn(bundle, e.key),
+      );
+    }
     _buy1HistoryByKn = nextBuy;
     _sell1HistoryByKn = nextSell;
     _buy2HistoryByKn = nextBuy2;
     _sell2HistoryByKn = nextSell2;
+    _buyNHistoryByKn = nextBuyN;
+    _sellNHistoryByKn = nextSellN;
   }
 
   List<LevelBundle> _levelsWithFrozenBs(List<LevelBundle> levels) {
@@ -526,10 +579,15 @@ class _KlineHomePageState extends State<KlineHomePage> {
       buy1HistoryByKn: _buy1HistoryByKn,
       sell1HistoryByKn: _sell1HistoryByKn,
     );
-    return levelsWithFrozenClass2Bs(
+    final with2 = levelsWithFrozenClass2Bs(
       with1,
       buy2HistoryByKn: _buy2HistoryByKn,
       sell2HistoryByKn: _sell2HistoryByKn,
+    );
+    return levelsWithFrozenClassNBs(
+      with2,
+      buyNHistoryByKn: _buyNHistoryByKn,
+      sellNHistoryByKn: _sellNHistoryByKn,
     );
   }
 
@@ -549,11 +607,15 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _sell1K0Frames = [];
         _buy2K0Frames = [];
         _sell2K0Frames = [];
+        _buyNK0Frames = [];
+        _sellNK0Frames = [];
         _judgmentHistoryByKn.clear();
         _buy1HistoryByKn.clear();
         _sell1HistoryByKn.clear();
         _buy2HistoryByKn.clear();
         _sell2HistoryByKn.clear();
+        _buyNHistoryByKn.clear();
+        _sellNHistoryByKn.clear();
       });
       return;
     }
@@ -599,6 +661,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _sell1K0Frames = _sell1HistoryByKn[0] ?? const [];
         _buy2K0Frames = _buy2HistoryByKn[0] ?? const [];
         _sell2K0Frames = _sell2HistoryByKn[0] ?? const [];
+        _buyNK0Frames = _buyNHistoryByKn[0] ?? const [];
+        _sellNK0Frames = _sellNHistoryByKn[0] ?? const [];
         // 按当前最高 Kn 动态裁剪已选指标（层变少时去掉失效项）
         final maxKn = chartMaxKn(
           levels: _levels,
@@ -610,7 +674,11 @@ class _KlineHomePageState extends State<KlineHomePage> {
         );
         _subIndicators = pruneIndicators(
           _subIndicators,
-          buildSubIndicatorCatalog(maxKn, truncationCheck: _truncationCheck),
+          buildSubIndicatorCatalog(
+            maxKn,
+            truncationCheck: _truncationCheck,
+            maxBsClass: _maxBsClass,
+          ),
         );
       });
     } catch (e) {
@@ -661,6 +729,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
       sell1K0Frames: _sell1K0Frames,
       buy2K0Frames: _buy2K0Frames,
       sell2K0Frames: _sell2K0Frames,
+      buyNK0Frames: _buyNK0Frames,
+      sellNK0Frames: _sellNK0Frames,
       lastError: _error,
     );
   }
@@ -812,6 +882,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
                   sell1K0Frames: _sell1K0Frames,
                   buy2K0Frames: _buy2K0Frames,
                   sell2K0Frames: _sell2K0Frames,
+                  buyNK0Frames: _buyNK0Frames,
+                  sellNK0Frames: _sellNK0Frames,
                   defaultK0Policy: _defaultK0Policy,
                   truncationCheck: _truncationCheck,
                   showBuildingDash: _showBuildingDash,
@@ -820,6 +892,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
                   sell1HistoryByKn: _sell1HistoryByKn,
                   buy2HistoryByKn: _buy2HistoryByKn,
                   sell2HistoryByKn: _sell2HistoryByKn,
+                  buyNHistoryByKn: _buyNHistoryByKn,
+                  sellNHistoryByKn: _sellNHistoryByKn,
                   mainIndicators: _mainIndicators,
                   onMainIndicatorsChanged: (v) =>
                       setState(() => _mainIndicators = v),
@@ -1059,6 +1133,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
                       buildSubIndicatorCatalog(
                         maxKn,
                         truncationCheck: v,
+                        maxBsClass: _maxBsClass,
                       ),
                     );
                   });

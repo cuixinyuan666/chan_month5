@@ -4,6 +4,7 @@
 
 mod buy1;
 mod buy2;
+mod buy_n;
 mod combine;
 mod engine;
 mod error;
@@ -22,6 +23,9 @@ pub use buy1::{
 };
 pub use buy2::{
     find_buy2, find_buy2_with_active, find_sell2, find_sell2_with_active, Buy2Frame, Sell2Frame,
+};
+pub use buy_n::{
+    find_buy_n, find_buy_n_with_active, find_sell_n, find_sell_n_with_active, BuyNFrame, SellNFrame,
 };
 pub use combine::{
     build_k1_combine_frames, build_k1_combine_frames_with, build_kline_combine_bundle,
