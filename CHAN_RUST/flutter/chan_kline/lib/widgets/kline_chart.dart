@@ -111,6 +111,7 @@ class KlineChart extends StatefulWidget {
     this.onLongPressReload,
     this.onLongPressRunToEnd,
     this.chipConfig = const ChipConfig(),
+    this.chipOnlyMode = false,
   });
 
   final List<KlineBar> bars;
@@ -168,6 +169,8 @@ class KlineChart extends StatefulWidget {
   final bool isPlaying;
   /// 筹码分布配置（总开关/桶宽/峰线等）
   final ChipConfig chipConfig;
+  /// chip 分支：仅显示筹码分布，关闭所有缠论渲染
+  final bool chipOnlyMode;
 
   /// 点击左/中/右：后退 / 播放暂停 / 前进
   final VoidCallback? onTapStepBack;
@@ -1083,6 +1086,7 @@ class _KlineChartState extends State<KlineChart> {
                 buyNHistoryByKn: widget.buyNHistoryByKn,
                 sellNHistoryByKn: widget.sellNHistoryByKn,
                 chipConfig: widget.chipConfig,
+                chipOnlyMode: widget.chipOnlyMode,
               ),
             ),
             Positioned.fill(
@@ -1318,6 +1322,7 @@ class _KlineCompositePainter extends CustomPainter {
     this.buyNHistoryByKn = const {},
     this.sellNHistoryByKn = const {},
     this.chipConfig = const ChipConfig(),
+    this.chipOnlyMode = false,
   }) : featureLookup = BarFeatureLookup.build(
           bars: bars,
           combineFrames: combineFrames,
@@ -1397,6 +1402,8 @@ class _KlineCompositePainter extends CustomPainter {
   final Map<int, List<SellNFrame>> sellNHistoryByKn;
   /// 筹码分布配置
   final ChipConfig chipConfig;
+  /// chip 分支：仅显示筹码分布，关闭所有缠论渲染
+  final bool chipOnlyMode;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -1419,13 +1426,16 @@ class _KlineCompositePainter extends CustomPainter {
     final plotLeft = KlineViewport.padL;
     final plotRight = math.max(plotLeft + 40, size.width - chipPaneW);
 
-    // K0 原始蜡烛改为由 KN 的「K0」项独立控制（可关闭/显示），不再是恒显底图；
-    // 合并框/连线/各层淡实体均叠加其上。
-    final showK0 = mainIndicators.contains(const MainChartIndicator.kn(1));
-    if (showK0) {
-      _drawCandles(canvas, size.width, plotTop, plotH, barW, slotW);
+    // chip 分支：跳过所有缠论渲染，仅画筹码
+    final chanDraw = !chipOnlyMode;
+
+    if (chanDraw) {
+      final showK0 = mainIndicators.contains(const MainChartIndicator.kn(1));
+      if (showK0) {
+        _drawCandles(canvas, size.width, plotTop, plotH, barW, slotW);
+      }
     }
-    if (mainIndicators.isNotEmpty) {
+    if (chanDraw && mainIndicators.isNotEmpty) {
       // 按勾选项逐层画：勾哪层画哪层（不再一项自动叠全部）
       for (final ind in mainIndicators) {
         if (ind.kind == MainIndicatorKind.combine) {
@@ -1474,20 +1484,22 @@ class _KlineCompositePainter extends CustomPainter {
         }
       }
     }
-    if (subIndicators.isNotEmpty) {
+    if (chanDraw && subIndicators.isNotEmpty) {
       _drawSubCharts(canvas, size.width, mainH, barW, slotW);
     }
 
     // 筹码：主图右侧水平柱；十字 as-of 截断；多 Kn 取最高层 cutoff（同底层 bins）
     if (showChip && bars.isNotEmpty) {
-      final asOfK0 = segAsOf ?? bars.last.idx;
-      // 多选时取最大 kn 的 cutoff（更高层更「粗」的当下截止）
+      final asOfK0 = bars.last.idx;
+      // chip 分支无缠论数据，Kn cutoff 直接用 asOfK0
       final kn = chipKns.last;
-      final cut = ChipProfileCompute.cutoffForKn(
-        kn: kn,
-        asOfK0: asOfK0,
-        levels: zsAsOfBundle?.levels ?? levels,
-      );
+      final cut = chipOnlyMode
+          ? asOfK0
+          : ChipProfileCompute.cutoffForKn(
+              kn: kn,
+              asOfK0: segAsOf ?? asOfK0,
+              levels: zsAsOfBundle?.levels ?? levels,
+            );
       final profile = ChipProfileCompute.compute(
         bars: bars,
         cutoffX: cut,
@@ -3987,6 +3999,7 @@ class _KlineCompositePainter extends CustomPainter {
         oldDelegate.sell2HistoryByKn != sell2HistoryByKn ||
         oldDelegate.buyNHistoryByKn != buyNHistoryByKn ||
         oldDelegate.sellNHistoryByKn != sellNHistoryByKn ||
-        oldDelegate.chipConfig != chipConfig;
+        oldDelegate.chipConfig != chipConfig ||
+        oldDelegate.chipOnlyMode != chipOnlyMode;
   }
 }

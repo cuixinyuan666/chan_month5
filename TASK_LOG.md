@@ -2,6 +2,12 @@
 
 ## 最新记录
 
+### 2026-07-30 — CHAN_RUST 筹码分布图全层同构落地
+
+- **要点**：按 `chan-chip-distribution` 口径为 Flutter+Rust 新增 Kn筹码分布：离线分笔注入 `chip_tick_bins`，Rust `chip_profile`/`chan_chip_profile` 按 cutoff 分桶；主图右侧水平柱（S绿/B红）+ 峰延长线；副图 catalog `Kn筹码分布` 全层同构；十字 as-of 截断；配置落盘 `.chan_chip_config.json`。
+- **关键路径**：`CHAN_RUST/rust/chan_data/src/chip.rs`（新）、`offline.rs`、`chan_ffi`；Flutter `chart_indicator.dart`、`kline_chip.dart`、`chip_profile_compute.dart`、`chip_config.dart`、`chip_settings_store.dart`、`kline_chart.dart`、`main.dart`、`msg_history.dart`、`test/chip_profile_test.dart`
+- **注意**：关占用后需重编/替换 `chan_ffi.dll`；验收勾选 K0筹码分布 + 连续单步/十字回滚，勿只用一键跳末。
+
 ### 2026-07-30 — 副图chip bar动态高度 + BS标记对齐主图
 
 - **要点**：

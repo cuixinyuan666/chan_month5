@@ -186,6 +186,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
   bool _showBuildingDash = true;
   /// 筹码分布配置（落盘 .chan_chip_config.json）
   ChipConfig _chipConfig = const ChipConfig();
+  /// chip 分支：仅显示筹码分布，关闭所有缠论渲染
+  final bool _chipOnlyMode = true;
 
   /// 分型判断步进事件日志：kn → 追加式历史（换股/重载才清空；不因重算丢点）
   Map<int, List<FractalJudgmentEvent>> _judgmentHistoryByKn = {};
@@ -425,8 +427,31 @@ class _KlineHomePageState extends State<KlineHomePage> {
         '${_periods[_period] ?? _period} 共${bars.length}根'
         '${directOhlc ? "（直读custom.ohlc.csv，忽略周期聚合）" : ""}',
       );
-      _rebuildCombine();
-      _logCombineSummary(prefix: '加载后汇总');
+      if (_chipOnlyMode) {
+        // 仅筹码分布：跳过缠论合并/线段/中枢/BS 计算，清空相关数据
+        setState(() {
+          _combineFrames = const [];
+          _k0ConfirmSignals = const [];
+          _barFeatures = const [];
+          _k0Lines = const [];
+          _k1BarViews = const [];
+          _k1CombineFrames = const [];
+          _k1Analysis = K1AnalysisBundle.empty();
+          _levels = const [];
+          _zsK0Frames = const [];
+          _buy1K0Frames = const [];
+          _sell1K0Frames = const [];
+          _buy2K0Frames = const [];
+          _sell2K0Frames = const [];
+          _buyNK0Frames = const [];
+          _sellNK0Frames = const [];
+          _mainIndicators = {};
+          _subIndicators = {const SubChartIndicator.chip(0)};
+        });
+      } else {
+        _rebuildCombine();
+        _logCombineSummary(prefix: '加载后汇总');
+      }
     } catch (e) {
       setState(() {
         _error = e.toString();
@@ -609,6 +634,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
   }
 
   void _rebuildCombine() {
+    if (_chipOnlyMode) return;
     if (_visibleBars.isEmpty) {
       setState(() {
         _combineFrames = [];
@@ -837,7 +863,11 @@ class _KlineHomePageState extends State<KlineHomePage> {
     _stopPlay();
     final end = _allBars.length - 1;
     final start = _stepIdx < 0 ? 0 : _stepIdx;
-    // 一次性走完也必须逐 K 合并判断日志，否则中间态曾出现的点会丢（只剩末态）
+    if (_chipOnlyMode) {
+      // 仅筹码：直接跳到末尾，跳过缠论逻辑
+      setState(() => _stepIdx = end);
+      return;
+    }
     for (var i = start; i <= end; i++) {
       _stepIdx = i;
       final visible = _allBars.sublist(0, i + 1);
@@ -904,6 +934,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
                   defaultK0Policy: _defaultK0Policy,
                   truncationCheck: _truncationCheck,
                   showBuildingDash: _showBuildingDash,
+                  chipOnlyMode: _chipOnlyMode,
                   chipConfig: _chipConfig,
                   judgmentHistoryByKn: _judgmentHistoryByKn,
                   buy1HistoryByKn: _buy1HistoryByKn,
