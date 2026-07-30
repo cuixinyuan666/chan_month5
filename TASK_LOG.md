@@ -2,6 +2,24 @@
 
 ## 最新记录
 
+### 2026-07-30 — 副图chip bar动态高度 + BS标记对齐主图
+
+- **要点**：
+  1. 副图指标开关按钮(ChipBar)的 `innerTop` 原固定 `26px`，选多行指标后会遮挡副图画布内容。改为 `GlobalKey` 测量实际渲染高度 + `addPostFrameCallback` 动态更新。
+  2. BS 副图标记（一类/二类/N类）的 `cx` 去掉 `+dx`（`confirmStackOffsetX` 水平偏移），圆点精确落在 `_barCenterX` 上，与主图 K0 蜡烛和十字线竖线对齐。
+  3. 之前尝试全局 BS stack 计数分散水平位置防止重叠，但与"对齐主图"需求冲突——对齐优先，重叠靠颜色/标签文字区分。
+- **踩坑**：BS 标记用 `dx` 做水平扇出虽然视觉上不重叠，但步进/十字线时圆点偏离 K 线中轴，用户感知为"没对齐"。最后方案是去掉全部 `dx`/`stackRank`/`stackCount`。
+- **涉及文件**：`kline_chart.dart`（`_KlineChartState` 新增 `_subChipBarKey`/`_subChipBarHeight`/`_measureSubChipBar`；`_KlineCompositePainter` 新增 `subChipBarHeight` 参数；三类 BS 方法去掉 `dx` 和 `stackRank`/`stackCount`/轮廓描边）
+
+### 2026-07-30 — 三类+N类BS全层同构落地 + catalog/副图绘制
+
+- **要点**：Rust `buy_n.rs`（新）→ pipeline/combine → Flutter `buy_n_frame.dart`/`sell_n_frame.dart`（新数据模型）、`class_n_bs_compute.dart`（新·会话冻结/合并）、`chart_indicator.dart`（`SubIndicatorKind.buyN` + `bsClass` 字段 + catalog `maxBsClass`）、`kline_chart.dart`（副图 `_drawKnClassNBsSubChart`）、`bar_feature_lookup.dart`（十字 tooltip）、`chart_level_line_style.dart`（色阶扩展至 9 类暖/冷族）。默认 catalog 含 K0..Kn 三类..九类 BS。
+- **架构说明**：
+  - `buyN` 与 `buy1`/`buy2` 全层全口径同构：会话双键冻结、S上B下、副图同一套 `paintMark` 逻辑。
+  - `bsClass` 用于区分 ≥3 的类号；最多到 `maxBsClass`（默认 9，随数据观察自动扩大）。
+  - 色阶：买=暖族（深红→浅暖黄），卖=冷族（深蓝→浅冷），类越大色越浅。
+- **涉及文件**：`buy_n.rs`（新）、`lib.rs`、`combine.rs`、`pipeline.rs`、`zs.rs`；Flutter 侧 `buy_n_frame.dart`/`sell_n_frame.dart`（新）、`class_n_bs_compute.dart`（新）、`chart_indicator.dart`、`main.dart`、`kline_chart.dart`、`chart_level_line_style.dart`、`bar_feature_lookup.dart`、`msg_history.dart`、`app_debug_snapshot.dart`
+
 ### 2026-07-30 — 二类BS字母随一类复位（收紧）
 
 - **要点**：同资格中枢框内，一类建框/严格新极值更新 `box_min_low`/`box_max_high` 时，二类字母序 `letter_ord` 同步复位为 `None`（后续从 2Ba/2Sa 重起）。之前仅一类字母复位，二类在极值后继续续字母（2Bc/2Sc），现在改为 2Ba/2Sa。
