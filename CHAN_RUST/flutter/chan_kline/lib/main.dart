@@ -27,10 +27,12 @@ import 'models/bar_crosshair_feature.dart';
 import 'models/k0_line.dart';
 import 'models/k1_bar_view.dart';
 import 'models/chart_indicator.dart';
+import 'models/chip_config.dart';
 import 'models/kline_combine_frame.dart';
 import 'models/level_models.dart';
 import 'models/k1_analysis.dart';
 import 'models/kline_combine_bundle.dart';
+import 'settings/chip_settings_store.dart';
 import 'widgets/datetime_picker_dialog.dart';
 import 'widgets/edge_control_panel.dart';
 import 'widgets/kline_chart.dart';
@@ -84,6 +86,7 @@ Future<void> main() async {
   MsgHistory.instance.appendKnVolumeCumulativeStep();
   // 主/副图启动默认=「K0指标」层全选（与选择栏同口径）
   MsgHistory.instance.appendDefaultIndicatorsK0();
+  MsgHistory.instance.appendChipDistribution();
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     await windowManager.ensureInitialized();
     const opts = WindowOptions(
@@ -181,6 +184,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
   bool _truncationCheck = true;
   /// 构建中合并框（虚线）开关：开=末组合并画虚线；关=全部实线（默认开）
   bool _showBuildingDash = true;
+  /// 筹码分布配置（落盘 .chan_chip_config.json）
+  ChipConfig _chipConfig = const ChipConfig();
 
   /// 分型判断步进事件日志：kn → 追加式历史（换股/重载才清空；不因重算丢点）
   Map<int, List<FractalJudgmentEvent>> _judgmentHistoryByKn = {};
@@ -237,7 +242,19 @@ class _KlineHomePageState extends State<KlineHomePage> {
   @override
   void initState() {
     super.initState();
+    _loadChipConfig();
     _bootstrap();
+  }
+
+  Future<void> _loadChipConfig() async {
+    final cfg = await ChipSettingsStore.load();
+    if (!mounted) return;
+    setState(() => _chipConfig = cfg);
+  }
+
+  Future<void> _updateChipConfig(ChipConfig cfg) async {
+    setState(() => _chipConfig = cfg);
+    await ChipSettingsStore.save(cfg);
   }
 
   @override
@@ -887,6 +904,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
                   defaultK0Policy: _defaultK0Policy,
                   truncationCheck: _truncationCheck,
                   showBuildingDash: _showBuildingDash,
+                  chipConfig: _chipConfig,
                   judgmentHistoryByKn: _judgmentHistoryByKn,
                   buy1HistoryByKn: _buy1HistoryByKn,
                   sell1HistoryByKn: _sell1HistoryByKn,
@@ -1172,6 +1190,71 @@ class _KlineHomePageState extends State<KlineHomePage> {
             onPressed: _showBuildingDashHelp,
           ),
         ),
+        const SizedBox(height: 8),
+        // 筹码分布：总开关 + 峰线；桶宽/拉伸见说明弹窗
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          dense: true,
+          title: const Text('筹码分布', style: TextStyle(fontSize: 13)),
+          subtitle: Text(
+            _chipConfig.enabled
+                ? '已开启（副图勾选 Kn筹码分布后主图右侧绘制）'
+                : '已关闭（即使勾选也不绘制）',
+            style: const TextStyle(fontSize: 11),
+          ),
+          value: _chipConfig.enabled,
+          onChanged: _busy
+              ? null
+              : (v) {
+                  _updateChipConfig(_chipConfig.copyWith(enabled: v));
+                  _msgHistory.append('筹码分布总开关=${v ? "开" : "关"}');
+                },
+          secondary: IconButton(
+            tooltip: '筹码分布说明',
+            icon: const Icon(Icons.help_outline, size: 18),
+            onPressed: _showChipHelp,
+          ),
+        ),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          dense: true,
+          title: const Text('筹码峰延长线', style: TextStyle(fontSize: 13)),
+          subtitle: Text(
+            _chipConfig.peakLineEnabled ? '已开启' : '已关闭',
+            style: const TextStyle(fontSize: 11),
+          ),
+          value: _chipConfig.peakLineEnabled,
+          onChanged: !_chipConfig.enabled || _busy
+              ? null
+              : (v) {
+                  _updateChipConfig(_chipConfig.copyWith(peakLineEnabled: v));
+                  _msgHistory.append('筹码峰延长线=${v ? "开" : "关"}');
+                },
+        ),
+        ListTile(
+          contentPadding: EdgeInsets.zero,
+          dense: true,
+          title: const Text('筹码桶宽（元）', style: TextStyle(fontSize: 13)),
+          subtitle: Text(
+            _chipConfig.bucketStep.toStringAsFixed(2),
+            style: const TextStyle(fontSize: 11),
+          ),
+          trailing: SizedBox(
+            width: 120,
+            child: Slider(
+              min: 0.01,
+              max: 1.0,
+              divisions: 99,
+              value: _chipConfig.bucketStep.clamp(0.01, 1.0),
+              onChanged: !_chipConfig.enabled || _busy
+                  ? null
+                  : (v) {
+                      final step = (v * 100).round() / 100.0;
+                      _updateChipConfig(_chipConfig.copyWith(bucketStep: step));
+                    },
+            ),
+          ),
+        ),
         const SizedBox(height: 12),
         OutlinedButton.icon(
           onPressed: _busy ? null : _bootstrap,
@@ -1357,6 +1440,41 @@ class _KlineHomePageState extends State<KlineHomePage> {
             '1. 打开右上角设置；\n'
             '2. 拨动「构建中/未确认虚线」开关；\n'
             '3. 当前图表立刻按开关刷新（无需重算步进）。',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('知道了'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 筹码分布说明弹窗。
+  void _showChipHelp() {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('筹码分布说明'),
+        content: const SingleChildScrollView(
+          child: Text(
+            '作用：展示历史成交量在价格维度上的累积分布'
+            '（上市/区间首根 → 当前步进/十字 as-of）。\n\n'
+            '怎么看\n'
+            '· 主图右侧水平柱：左绿=S（卖），右红=B（买）；\n'
+            '· 筹码峰：局部量峰打点，虚线延长到主图左侧；\n'
+            '· 副图勾选「Kn筹码分布」才绘制；设置里总开关可一键关。\n\n'
+            '数据与当下性\n'
+            '· 离线分笔写入 chip_tick_bins（价量直加）；无分笔时 OHLC 三角估算；\n'
+            '· 逐K只累加已喂入 K 线；十字悬停回滚到该日累积，不回写历史；\n'
+            '· K0/K1/…/Kn 全层同构：Kn 用该层单元覆盖到的最大 K0 序号作 cutoff。\n\n'
+            '操作步骤\n'
+            '1. 设置里打开「筹码分布」；\n'
+            '2. 副图选择栏勾选「K0筹码分布」（或 Kn）；\n'
+            '3. 可调「筹码桶宽」「筹码峰延长线」；\n'
+            '4. 配置写入 .chan_chip_config.json，下次启动恢复。',
           ),
         ),
         actions: [

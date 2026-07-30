@@ -5,6 +5,7 @@
 mod buy1;
 mod buy2;
 mod buy_n;
+mod chip;
 mod combine;
 mod engine;
 mod error;
@@ -26,6 +27,9 @@ pub use buy2::{
 };
 pub use buy_n::{
     find_buy_n, find_buy_n_with_active, find_sell_n, find_sell_n_with_active, BuyNFrame, SellNFrame,
+};
+pub use chip::{
+    chip_peaks, chip_profile, enrich_bars_with_chip_tick_bins, ChipProfile, ChipTickBins,
 };
 pub use combine::{
     build_k1_combine_frames, build_k1_combine_frames_with, build_kline_combine_bundle,

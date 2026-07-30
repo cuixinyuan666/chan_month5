@@ -454,8 +454,23 @@ class MsgHistory {
       '【默认指标】主/副图启动默认勾选「K0指标」层全选，'
       '与选择栏最上「Kn指标」同口径：'
       '主图=K0/K0合并/K0连线/K0连续中枢；'
-      '副图=K0成交量+K0分型确认/判断/极点距/截断（截断随截断开关 prune）。'
+      '副图=K0成交量+K0筹码分布+K0分型确认/判断/极点距/截断（截断随截断开关 prune）。'
       '非 K1 层；加载后仅 prune 超出 catalog 的项，不改层。',
+    );
+  }
+
+  /// 筹码分布：全层同构 + 分笔 bins + 十字 as-of 截断（进程内去重）。
+  static bool _chipDistributionLogged = false;
+  void appendChipDistribution() {
+    if (_chipDistributionLogged) return;
+    _chipDistributionLogged = true;
+    append(
+      '【Kn筹码分布·全层同构】副图勾选 K0/K1/…/Kn筹码分布；'
+      '主图右侧水平柱（左绿S/右红B），峰延长线横穿主图。'
+      '数据：离线分笔注入 chip_tick_bins（p/s/b/w）；无 bins 时 OHLC 三角兜底。'
+      '计算：Rust chan_chip_profile（cutoff_x 含）；Kn cutoff=该层单元覆盖到的最大 K0 idx。'
+      '逐K当下性：只累加已喂入 bars；十字 as-of 回滚到该日累积，不回写历史桶。'
+      '配置：chipEnabled/bucketStep/stretch/peakLine；落盘 .chan_chip_config.json。',
     );
   }
 

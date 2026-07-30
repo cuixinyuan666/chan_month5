@@ -57,6 +57,8 @@ class MainChartIndicator {
 /// 副图指标种类。
 enum SubIndicatorKind {
   volume,
+  /// Kn筹码分布（主图右侧水平柱；全层同构）
+  chip,
   fractalConfirm,
   fractalJudgment,
   fractalPeakDist,
@@ -94,6 +96,10 @@ class SubChartIndicator {
   const SubChartIndicator.volume(this.kn)
       : kind = SubIndicatorKind.volume,
         bsClass = null;
+  /// kn 与中枢同号：K0筹码分布…Kn筹码分布（同底层分笔 bins，as-of 按层截断）
+  const SubChartIndicator.chip(this.kn)
+      : kind = SubIndicatorKind.chip,
+        bsClass = null;
   const SubChartIndicator.fractalConfirm(this.kn)
       : kind = SubIndicatorKind.fractalConfirm,
         bsClass = null;
@@ -122,6 +128,8 @@ class SubChartIndicator {
     switch (kind) {
       case SubIndicatorKind.volume:
         return 'K$kn成交量';
+      case SubIndicatorKind.chip:
+        return 'K$kn筹码分布';
       case SubIndicatorKind.fractalConfirm:
         return 'K${kn - 1}分型确认';
       case SubIndicatorKind.fractalJudgment:
@@ -139,10 +147,11 @@ class SubChartIndicator {
     }
   }
 
-  /// 显示层号（成交量/BS kn 直接；分型类 kn-1）。
+  /// 显示层号（成交量/筹码/BS kn 直接；分型类 kn-1）。
   int get displayLevel {
     switch (kind) {
       case SubIndicatorKind.volume:
+      case SubIndicatorKind.chip:
       case SubIndicatorKind.buy1:
       case SubIndicatorKind.buy2:
       case SubIndicatorKind.buyN:
@@ -208,6 +217,10 @@ List<SubChartIndicator> buildSubIndicatorCatalog(
   for (var n = 0; n <= maxKn; n++) {
     out.add(SubChartIndicator.volume(n));
   }
+  // Kn筹码分布：与成交量/中枢同层同号（K0..Kn）
+  for (var n = 0; n <= maxKn; n++) {
+    out.add(SubChartIndicator.chip(n));
+  }
   for (var n = 1; n <= maxKn; n++) {
     out.add(SubChartIndicator.fractalConfirm(n));
   }
@@ -264,6 +277,7 @@ List<SubChartIndicator> subIndicatorsForLevel(
   final allow = catalog.toSet();
   final candidates = <SubChartIndicator>[
     SubChartIndicator.volume(displayLevel),
+    SubChartIndicator.chip(displayLevel),
     SubChartIndicator.fractalConfirm(displayLevel + 1),
     SubChartIndicator.fractalJudgment(displayLevel + 1),
     SubChartIndicator.fractalPeakDist(displayLevel + 1),

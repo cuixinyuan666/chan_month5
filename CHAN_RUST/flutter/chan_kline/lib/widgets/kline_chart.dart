@@ -16,6 +16,7 @@ import '../compute/class_n_bs_compute.dart';
 import '../compute/kn_volume_series_compute.dart';
 import '../compute/level_unit_bar_view_compute.dart';
 import '../compute/zs_compute.dart';
+import '../compute/chip_profile_compute.dart';
 import '../history/msg_history.dart';
 import '../bridge/chan_bridge.dart';
 import '../models/kline_combine_bundle.dart';
@@ -33,6 +34,7 @@ import '../models/k1_bar.dart';
 import '../models/k1_bar_view.dart';
 import '../models/kline_bar.dart';
 import '../models/chart_indicator.dart';
+import '../models/chip_config.dart';
 import '../models/kline_combine_frame.dart';
 import '../models/bar_feature_lookup.dart';
 import '../models/level_models.dart';
@@ -42,6 +44,7 @@ import 'crosshair_tooltip_panel.dart';
 import 'fractal_confirm_paint.dart';
 import 'indicator_picker_chip.dart';
 import 'kline_axis_format.dart';
+import 'kline_chip.dart';
 import 'kline_viewport.dart';
 import 'main_indicator_picker.dart';
 import 'sub_indicator_picker.dart';
@@ -107,6 +110,7 @@ class KlineChart extends StatefulWidget {
     this.onLongPressReset,
     this.onLongPressReload,
     this.onLongPressRunToEnd,
+    this.chipConfig = const ChipConfig(),
   });
 
   final List<KlineBar> bars;
@@ -162,6 +166,8 @@ class KlineChart extends StatefulWidget {
   final bool autoFollowLatest;
   /// 是否正在逐K播放（中间区单击立即暂停，不走双击延迟）
   final bool isPlaying;
+  /// 筹码分布配置（总开关/桶宽/峰线等）
+  final ChipConfig chipConfig;
 
   /// 点击左/中/右：后退 / 播放暂停 / 前进
   final VoidCallback? onTapStepBack;
@@ -225,7 +231,6 @@ class _KlineChartState extends State<KlineChart> {
   double _splitDragStartFraction = 0.79;
   double _chartBodyH = 1;
   final _subChipBarKey = GlobalKey();
-  // 踩坑：subIndicatorChipBand=26 固定值，选多行指标后按钮盖画布 → 动态测量覆盖
   double _subChipBarHeight = KlineViewport.subIndicatorChipBand;
 
   /// 十字线 as-of 中枢 bundle 缓存（逐K当下 Rust 重算）
@@ -278,15 +283,14 @@ class _KlineChartState extends State<KlineChart> {
       buildSubIndicatorCatalog(_maxKn, truncationCheck: widget.truncationCheck);
 
   /// 副图是否展开（无勾选副图指标则收起整块副图区）
-  bool get _showSubPane => _activeSubs.isNotEmpty;
+  bool get _showSubPane =>
+      _activeSubs.any((e) => e.kind != SubIndicatorKind.chip);
 
   void _pruneMuted() {
     _mutedMains = _mutedMains.intersection(_activeMains);
     _mutedSubs = _mutedSubs.intersection(_activeSubs);
   }
 
-  /// 踩坑：subIndicatorChipBand=26 固定值，选多行指标后指标名按钮会盖住副图画布。
-  /// 改用 GlobalKey 实测 + addPostFrameCallback 在下帧更新 innerTop。
   void _measureSubChipBar() {
     if (!mounted) return;
     final renderBox =
@@ -1078,6 +1082,7 @@ class _KlineChartState extends State<KlineChart> {
                 sell2HistoryByKn: widget.sell2HistoryByKn,
                 buyNHistoryByKn: widget.buyNHistoryByKn,
                 sellNHistoryByKn: widget.sellNHistoryByKn,
+                chipConfig: widget.chipConfig,
               ),
             ),
             Positioned.fill(
@@ -1312,6 +1317,7 @@ class _KlineCompositePainter extends CustomPainter {
     this.sell2HistoryByKn = const {},
     this.buyNHistoryByKn = const {},
     this.sellNHistoryByKn = const {},
+    this.chipConfig = const ChipConfig(),
   }) : featureLookup = BarFeatureLookup.build(
           bars: bars,
           combineFrames: combineFrames,
@@ -1389,17 +1395,29 @@ class _KlineCompositePainter extends CustomPainter {
   final Map<int, List<BuyNFrame>> buyNHistoryByKn;
   /// 三类+卖会话事件日志
   final Map<int, List<SellNFrame>> sellNHistoryByKn;
+  /// 筹码分布配置
+  final ChipConfig chipConfig;
 
   @override
   void paint(Canvas canvas, Size size) {
     final plotTop = KlineViewport.padT;
     final plotBottom = mainH - KlineViewport.padB;
     final plotH = math.max(1.0, plotBottom - plotTop);
+    final chipKns = subIndicators
+        .where((e) => e.kind == SubIndicatorKind.chip)
+        .map((e) => e.kn)
+        .toList()
+      ..sort();
+    final showChip = chipConfig.enabled && chipKns.isNotEmpty;
+    final chipPaneW = showChip ? math.max(24.0, chipConfig.paneWidth) : 0.0;
+    // 蜡烛坐标系不变：筹码叠在主图右侧（盖住价签区），避免 slotW 错位
     final plotW = math.max(1.0, size.width - KlineViewport.padL - KlineViewport.padR);
     final span = math.max(viewport.xSpan, 1e-6);
     final slotW = plotW / span;
     final barW = _candleBodyW(slotW);
     final xAxisTop = contentBottom;
+    final plotLeft = KlineViewport.padL;
+    final plotRight = math.max(plotLeft + 40, size.width - chipPaneW);
 
     // K0 原始蜡烛改为由 KN 的「K0」项独立控制（可关闭/显示），不再是恒显底图；
     // 合并框/连线/各层淡实体均叠加其上。
@@ -1460,7 +1478,35 @@ class _KlineCompositePainter extends CustomPainter {
       _drawSubCharts(canvas, size.width, mainH, barW, slotW);
     }
 
-    _drawYLabels(canvas, size.width, plotTop, plotH, priceRange);
+    // 筹码：主图右侧水平柱；十字 as-of 截断；多 Kn 取最高层 cutoff（同底层 bins）
+    if (showChip && bars.isNotEmpty) {
+      final asOfK0 = segAsOf ?? bars.last.idx;
+      // 多选时取最大 kn 的 cutoff（更高层更「粗」的当下截止）
+      final kn = chipKns.last;
+      final cut = ChipProfileCompute.cutoffForKn(
+        kn: kn,
+        asOfK0: asOfK0,
+        levels: zsAsOfBundle?.levels ?? levels,
+      );
+      final profile = ChipProfileCompute.compute(
+        bars: bars,
+        cutoffX: cut,
+        bucketStep: chipConfig.bucketStep,
+      );
+      ChipProfilePainter.draw(
+        canvas: canvas,
+        profile: profile,
+        config: chipConfig,
+        plotLeft: plotLeft,
+        plotRight: plotRight,
+        plotTop: plotTop,
+        plotBottom: plotBottom,
+        yOfPrice: (p) => priceRange.yOf(p, plotTop, plotH),
+        highlightKn: kn,
+      );
+    }
+
+    _drawYLabels(canvas, size.width, plotTop, plotH, priceRange, showChip ? plotRight : null);
     _drawXAxis(canvas, size.width, xAxisTop);
 
     if (crosshairEnabled && crosshairX != null && crosshairY != null) {
@@ -2985,7 +3031,6 @@ class _KlineCompositePainter extends CustomPainter {
     double barW,
     double slotW,
   ) {
-    // 用 subChipBarHeight（动态测量，非固定 26），避免多行指标名按钮盖画布。
     final innerTop = volTop + subChipBarHeight;
     final innerBottom = contentBottom - 4;
     final innerH = math.max(12.0, innerBottom - innerTop);
@@ -3085,7 +3130,7 @@ class _KlineCompositePainter extends CustomPainter {
         stackCount: truncKns.length,
       );
     }
-    // 踩坑：之前用全局 stack 水平分散防重叠，但步进/十字线时圆点偏离 K 线中轴 → 去掉所有 dx。
+    // BS标记全局 stack：所有类型/kns/classes 共用计数，避免文字重叠
     final class1Kns = subIndicators
         .where((e) => e.kind == SubIndicatorKind.buy1)
         .map((e) => e.kn)
@@ -3140,10 +3185,8 @@ class _KlineCompositePainter extends CustomPainter {
           .toList();
 
   /// 副图 Kn一类BS：扫会话历史；S 在上(+1)、B 在下(-1)；暖B冷S。
-  /// 踩坑①：只画「首次发现 x」不够——同动态 Kn 延伸步必须已在 history 里有本步 x。
-  /// 踩坑②：cx 不能用 `+dx`（`confirmStackOffsetX` 水平扇出）—
-  ///   之前全局 BS stack 计数水平分散防止重叠，但步进/十字线时圆点偏离 K 线中轴，
-  ///   用户感知为"没对齐"。去掉所有 dx/stackRank/stackCount，靠颜色/标签区分。
+  /// 踩坑：只画「首次发现 x」不够——同动态 Kn 延伸步必须已在 history 里有本步 x。
+  /// 注意：cx 不加 dx — BS标记必须与主图 K0 / 十字线严格对齐。
   void _drawKnClass1BsSubChart(
     Canvas canvas,
     double w,
@@ -3177,7 +3220,8 @@ class _KlineCompositePainter extends CustomPainter {
       required Color color,
       required bool labelBelow,
     }) {
-      if (x < 0 || x > maxX) return;
+      if (x < 0
+       || x > maxX) return;
       if (x < viewport.viewXMin - 1 || x > viewport.viewXMax + 1) return;
       final cx = _barCenterX(x, w, slotW);
       final r = math.max(2.5, barW * 0.28);
@@ -3216,7 +3260,6 @@ class _KlineCompositePainter extends CustomPainter {
   }
 
   /// 副图 Kn二类BS：S上B下；二类暖/冷色阶。
-  /// 踩坑：同 class1 — cx 不加 dx，确保对齐主图 K0 / 十字线。
   void _drawKnClass2BsSubChart(
     Canvas canvas,
     double w,
@@ -3288,7 +3331,6 @@ class _KlineCompositePainter extends CustomPainter {
   }
 
   /// 副图 Kn N类BS（cls≥3）：同框按序标；S上B下；冷暖分族。
-  /// 踩坑：同 class1 — cx 不加 dx，确保对齐主图 K0 / 十字线。
   void _drawKnClassNBsSubChart(
     Canvas canvas,
     double w,
@@ -3692,7 +3734,8 @@ class _KlineCompositePainter extends CustomPainter {
     }
   }
 
-  void _drawYLabels(Canvas canvas, double w, double plotTop, double plotH, PriceRange pr) {
+  void _drawYLabels(Canvas canvas, double w, double plotTop, double plotH, PriceRange pr,
+      [double? rightBound]) {
     const style = TextStyle(color: Color(0x99FFFFFF), fontSize: 9);
     for (var i = 0; i <= 4; i++) {
       final p = pr.max - pr.span * i / 4;
@@ -3701,7 +3744,8 @@ class _KlineCompositePainter extends CustomPainter {
         text: TextSpan(text: p.toStringAsFixed(2), style: style),
         textDirection: TextDirection.ltr,
       )..layout();
-      tp.paint(canvas, Offset(w - tp.width - 3, y - tp.height / 2));
+      final rx = rightBound ?? w;
+      tp.paint(canvas, Offset(rx - tp.width - 3, y - tp.height / 2));
     }
   }
 
@@ -3942,6 +3986,7 @@ class _KlineCompositePainter extends CustomPainter {
         oldDelegate.buy2HistoryByKn != buy2HistoryByKn ||
         oldDelegate.sell2HistoryByKn != sell2HistoryByKn ||
         oldDelegate.buyNHistoryByKn != buyNHistoryByKn ||
-        oldDelegate.sellNHistoryByKn != sellNHistoryByKn;
+        oldDelegate.sellNHistoryByKn != sellNHistoryByKn ||
+        oldDelegate.chipConfig != chipConfig;
   }
 }

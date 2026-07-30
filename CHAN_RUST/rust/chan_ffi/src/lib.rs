@@ -4,7 +4,7 @@ use std::ffi::{c_char, CStr, CString};
 use std::ptr;
 
 use chan_data::{
-    build_kline_combine_bundle_with, default_data_root, list_stock_codes, load_klines,
+    build_kline_combine_bundle_with, chip_profile, default_data_root, list_stock_codes, load_klines,
     resolve_data_root, save_test_ohlc, KlineBar, KlinePeriod, PipelineOptions, ZSConfig,
 };
 use serde::{Deserialize, Serialize};
@@ -193,4 +193,26 @@ fn parse_combine_request(raw: &str) -> Result<(Vec<KlineBar>, PipelineOptions), 
         opt.zs_config = z;
     }
     Ok((req.bars, opt))
+}
+
+/// 筹码分桶 profile。
+/// 入参 JSON：`{ "bars": [...], "cutoff_x": N?, "bucket_step": 0.1? }`
+#[no_mangle]
+pub extern "C" fn chan_chip_profile(req_json: *const c_char) -> *mut c_char {
+    let Some(raw) = cstr_to_str(req_json) else {
+        return to_json_err("req_json 不能为空");
+    };
+    #[derive(Deserialize)]
+    struct ChipReq {
+        bars: Vec<KlineBar>,
+        #[serde(default)]
+        cutoff_x: Option<i64>,
+        #[serde(default)]
+        bucket_step: Option<f64>,
+    }
+    let req: ChipReq = match serde_json::from_str(raw) {
+        Ok(v) => v,
+        Err(e) => return to_json_err(&format!("chip_profile 解析失败: {e}")),
+    };
+    to_json_ok(chip_profile(&req.bars, req.cutoff_x, req.bucket_step))
 }
