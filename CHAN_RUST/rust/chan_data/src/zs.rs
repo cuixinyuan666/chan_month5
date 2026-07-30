@@ -489,6 +489,8 @@ mod tests {
             zs_frames: vec![],
             buy1_frames: vec![],
             sell1_frames: vec![],
+            buy2_frames: vec![],
+            sell2_frames: vec![],
             first_dir: 0,
             first_dir_x: 0,
             active_unit: None,

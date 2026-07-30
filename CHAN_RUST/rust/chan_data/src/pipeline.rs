@@ -242,6 +242,12 @@ pub struct LevelBundleOut {
     /// 本层一卖（一买镜像：当前枢在上个枢上方；与中枢同层同号）
     #[serde(default)]
     pub sell1_frames: Vec<crate::buy1::Sell1Frame>,
+    /// 本层二买（与一类同框；等高/更高低；与中枢同层同号）
+    #[serde(default)]
+    pub buy2_frames: Vec<crate::buy2::Buy2Frame>,
+    /// 本层二卖（二买镜像；与中枢同层同号）
+    #[serde(default)]
+    pub sell2_frames: Vec<crate::buy2::Sell2Frame>,
     /// 首 N 段方向：0 未定
     pub first_dir: i32,
     pub first_dir_x: i32,
@@ -1123,6 +1129,18 @@ impl LevelState {
                 active_unit.as_ref().map(|u| u.idx),
             ),
             sell1_frames: crate::buy1::find_sell1_with_active(
+                &zs_list,
+                &segs_for_zs,
+                self.level,
+                active_unit.as_ref().map(|u| u.idx),
+            ),
+            buy2_frames: crate::buy2::find_buy2_with_active(
+                &zs_list,
+                &segs_for_zs,
+                self.level,
+                active_unit.as_ref().map(|u| u.idx),
+            ),
+            sell2_frames: crate::buy2::find_sell2_with_active(
                 &zs_list,
                 &segs_for_zs,
                 self.level,

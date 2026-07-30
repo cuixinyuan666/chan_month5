@@ -35,6 +35,9 @@ class MsgHistory {
   /// ZG/ZD 常见命名 + Kn一类BS
   static bool _buy1ZgZdLogged = false;
 
+  /// Kn二类BS 口径（进程内去重）
+  static bool _buy2Logged = false;
+
   final List<MsgHistoryEntry> _rows = [];
 
   List<MsgHistoryEntry> get rows => List.unmodifiable(_rows);
@@ -329,10 +332,10 @@ class MsgHistory {
       '【口径·ZG/ZD常见命名】Rust/Flutter 中枢字段互换为常见缠论命名：'
       'ZG=重叠上沿(=框 high)、ZD=重叠下沿(=框 low)；算法数值与框几何不变，仅名称对齐。'
       '【新增·Kn一类BS·全层同构】买：当前中枢框整体在上个下方（ZG_curr < ZD_prev）；'
-      '卖：镜像（ZD_curr > ZG_prev）。框内成员按序标 1Ba/1Bb…、1Sa/1Sb…；'
-      '同低/同高递字母；买侧高于本枢框最低不标、卖侧低于本枢框最高不标（全层同构；'
+      '卖：镜像（ZD_curr > ZG_prev）。框内成员按序标 1Ba…、1Sa…；'
+      '同枢仅建框/严格新极值标一类（等高/更弱不再标一类，改归二类）；'
+      '买侧高于或等于本枢框最低不标一类、卖侧低于或等于本枢框最高不标一类（全层同构；'
       '参照=本枢已见最低/最高，跳过时不抬高/压低参照——禁止与「上一成员」比）；'
-      '未标成员之后再遇同框极值则从 1Ba/1Sa 重起（不续成 1Bb/1Sb）；'
       '更极值重置字母不回写旧标签；'
       '各层第一个Kn(segs下标0)不参与。Kn≥1 与动态中枢同构：喂入=冻段+active_unit（segments_with_optional_active / find_zs_with_confirmed）；动态伪段按 dir 锚定极点（跌低/涨高在 end）；打点 x=极值极点与段右端取 max（禁止回写到段起点）；'
       '若本 ZS 已有前序标签且点落在 active 伪段，x 钉在 begin_pole+1（首段身），不把旧点挪到新右端；'
@@ -343,6 +346,21 @@ class MsgHistory {
       '副图/十字只扫历史 x<=maxX；K0 无 active 仍用分钟K段。JSON：buy1_k0_frames/sell1_k0_frames、'
       'levels[].buy1_frames/sell1_frames；副图指标「Kn一类BS」与中枢同层同号'
       '（买点副图+1红、卖点-1绿）；无未来、不回写。步退按可见尾柱裁切。',
+    );
+  }
+
+  /// Kn二类BS（与一类同框；方案A）
+  void appendBuy2Class2Naming() {
+    if (_buy2Logged) return;
+    _buy2Logged = true;
+    append(
+      '【新增·Kn二类BS·全层同构·方案A】与一类同一资格中枢框（买下移/卖上移）；'
+      '按成员序维护已见最低/最高：建框与严格新极值只标一类；'
+      '买侧 low≥已见最低 → 2Ba/2Bb…；卖侧 high≤已见最高 → 2Sa…（镜像）；'
+      '字母一类/二类各自独立；同段互斥分区。'
+      '喂入/打点x/active钉点/Flutter双键会话冻结与一类同构；'
+      'JSON：buy2_k0_frames/sell2_k0_frames、levels[].buy2_frames/sell2_frames；'
+      '副图「Kn二类BS」买+1橙、卖-1青；K0颗粒度可多点；无未来、不回写。',
     );
   }
 

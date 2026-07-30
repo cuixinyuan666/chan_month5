@@ -2,6 +2,21 @@
 
 ## 最新记录
 
+### 2026-07-30 — 二类BS（方案A）全层同构落地（最终总结）
+
+- **要点**：一类收紧为仅建框/严格新极值；同资格中枢框内等高/更弱标二类 2Ba…/2Sa…（镜像）。
+Rust `buy2.rs`（新）→ pipeline/combine → Flutter 会话双键冻结（`class2_bs_compute.dart` 新）+ 副图「Kn二类BS」橙/青 + 十字 tooltip + 快照；DLL 已重编拷贝。
+- **波及文件**：
+  - **Rust**：`buy1.rs`（一类收紧）、`buy2.rs`（新·二类判定）、`lib.rs`（导出buy2）、`combine.rs`（K0二类字段）、`pipeline.rs`（Kn二类字段）
+  - **Flutter**：`buy2_frame.dart`/`sell2_frame.dart`（新·数据模型）、`class2_bs_compute.dart`（新·会话冻结/合并/扩展）、`main.dart`（二类状态管理）、`kline_chart.dart`（副图渲染+十字）、`bar_feature_lookup.dart`（十字tooltip）、`chart_indicator.dart`（`SubIndicatorKind.buy2`）、`level_models.dart`/`kline_combine_bundle.dart`（二类字段）、`msg_history.dart`（口径记录）、`app_debug_snapshot.dart`（快照）
+  - **文档**：`AGENTS.md`、`CHAN_RUST/README.md`、`TASK_LOG.md`
+- **架构说明**：
+  - 同资格中枢框 → 建框/严格新极值：一类独占；等高/更弱：二类（同框同序）。
+  - 运行参照（`box_min_low`/`box_max_high`）一类/二类共享，两类均不抬高/压低参照。
+  - 字母序：一类/二类各自独立（`1Ba…`/`2Ba…`）；同段互斥分区（一类已标则不标二类）。
+  - 会话冻结双键（稳定键`层|段|标签` + 颗粒度键含`x`）与一类完全同构；`asOf` 只读冻结，禁覆盖消点。
+- **注意**：关占用冷启后须连续单步验收；一键跳末≠步进验收。
+
 ### 2026-07-30 — 一类BS同枢框极值 + K0颗粒度：用户确认达标
 
 - **要点**：①同枢 B 比已见最低 low、S 比已见最高 high（跳过不改参照；全层镜像）。②对齐分型判断：动态 active 延伸按 stepIdx 追加颗粒度点（键含 x）。用户确认完成预期。

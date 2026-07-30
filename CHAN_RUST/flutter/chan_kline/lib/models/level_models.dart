@@ -2,6 +2,8 @@ import 'kline_combine_frame.dart';
 import 'zs_frame.dart';
 import 'buy1_frame.dart';
 import 'sell1_frame.dart';
+import 'buy2_frame.dart';
+import 'sell2_frame.dart';
 
 /// 每根 K0 × 每层 Kn 十字线快照（Rust `LevelSnap`，逐K当下冻结）。
 class LevelSnap {
@@ -294,6 +296,10 @@ class LevelBundle {
   final List<Buy1Frame> buy1Frames;
   /// 本层一卖（当前枢在上个枢上方；一买镜像）
   final List<Sell1Frame> sell1Frames;
+  /// 本层二买（与一类同框；等高/更高低）
+  final List<Buy2Frame> buy2Frames;
+  /// 本层二卖（二买镜像）
+  final List<Sell2Frame> sell2Frames;
   final int firstDir;
   final int firstDirX;
 
@@ -315,6 +321,8 @@ class LevelBundle {
     this.zsFrames = const [],
     this.buy1Frames = const [],
     this.sell1Frames = const [],
+    this.buy2Frames = const [],
+    this.sell2Frames = const [],
     this.firstDir = 0,
     this.firstDirX = -1,
     this.activeUnit,
@@ -346,6 +354,12 @@ class LevelBundle {
           .toList(),
       sell1Frames: (json['sell1_frames'] as List? ?? const [])
           .map((e) => Sell1Frame.fromJson(Map<String, dynamic>.from(e as Map)))
+          .toList(),
+      buy2Frames: (json['buy2_frames'] as List? ?? const [])
+          .map((e) => Buy2Frame.fromJson(Map<String, dynamic>.from(e as Map)))
+          .toList(),
+      sell2Frames: (json['sell2_frames'] as List? ?? const [])
+          .map((e) => Sell2Frame.fromJson(Map<String, dynamic>.from(e as Map)))
           .toList(),
       firstDir: (json['first_dir'] as num?)?.toInt() ?? 0,
       firstDirX: (json['first_dir_x'] as num?)?.toInt() ?? -1,

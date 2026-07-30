@@ -62,6 +62,7 @@ enum SubIndicatorKind {
   fractalPeakDist,
   truncation,
   buy1,
+  buy2,
 }
 
 /// 副图一项指标。
@@ -81,6 +82,8 @@ class SubChartIndicator {
       : kind = SubIndicatorKind.truncation;
   /// kn 与中枢同号：K0一类BS…Kn一类BS（买+卖同槽）
   const SubChartIndicator.buy1(this.kn) : kind = SubIndicatorKind.buy1;
+  /// kn 与中枢同号：K0二类BS…Kn二类BS（买+卖同槽）
+  const SubChartIndicator.buy2(this.kn) : kind = SubIndicatorKind.buy2;
 
   String get label {
     switch (kind) {
@@ -96,14 +99,17 @@ class SubChartIndicator {
         return 'K${kn - 1}截断';
       case SubIndicatorKind.buy1:
         return 'K$kn一类BS';
+      case SubIndicatorKind.buy2:
+        return 'K$kn二类BS';
     }
   }
 
-  /// 显示层号（成交量/一买 kn 直接；分型类 kn-1）。
+  /// 显示层号（成交量/一类/二类 kn 直接；分型类 kn-1）。
   int get displayLevel {
     switch (kind) {
       case SubIndicatorKind.volume:
       case SubIndicatorKind.buy1:
+      case SubIndicatorKind.buy2:
         return kn;
       case SubIndicatorKind.fractalConfirm:
       case SubIndicatorKind.fractalJudgment:
@@ -179,6 +185,10 @@ List<SubChartIndicator> buildSubIndicatorCatalog(
   for (var n = 0; n <= maxKn; n++) {
     out.add(SubChartIndicator.buy1(n));
   }
+  // Kn二类BS：与一类同层同号（K0..Kn）
+  for (var n = 0; n <= maxKn; n++) {
+    out.add(SubChartIndicator.buy2(n));
+  }
   return out;
 }
 
@@ -210,6 +220,7 @@ List<SubChartIndicator> subIndicatorsForLevel(
     SubChartIndicator.fractalPeakDist(displayLevel + 1),
     SubChartIndicator.truncation(displayLevel + 1),
     SubChartIndicator.buy1(displayLevel),
+    SubChartIndicator.buy2(displayLevel),
   ];
   return candidates.where(allow.contains).toList();
 }

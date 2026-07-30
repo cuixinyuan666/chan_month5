@@ -2,6 +2,8 @@ import 'k0_confirm_signal.dart';
 import 'bar_crosshair_feature.dart';
 import 'buy1_frame.dart';
 import 'sell1_frame.dart';
+import 'buy2_frame.dart';
+import 'sell2_frame.dart';
 import 'k0_line.dart';
 import 'kline_bar.dart';
 import 'chart_indicator.dart';
@@ -10,6 +12,7 @@ import 'level_models.dart';
 import 'k1_analysis.dart';
 import '../compute/fractal_judgment_compute.dart';
 import '../compute/class1_bs_compute.dart';
+import '../compute/class2_bs_compute.dart';
 import '../compute/kn_volume_series_compute.dart';
 
 /// 十字线 tooltip 一行：键值 / 层级分隔线 / 同层内容分隔线。
@@ -80,8 +83,12 @@ class BarFeatureLookup {
     List<LevelBundle> levels = const [],
     Map<int, List<Buy1Frame>> buy1HistoryByKn = const {},
     Map<int, List<Sell1Frame>> sell1HistoryByKn = const {},
+    Map<int, List<Buy2Frame>> buy2HistoryByKn = const {},
+    Map<int, List<Sell2Frame>> sell2HistoryByKn = const {},
     List<Buy1Frame> buy1K0Frames = const [],
     List<Sell1Frame> sell1K0Frames = const [],
+    List<Buy2Frame> buy2K0Frames = const [],
+    List<Sell2Frame> sell2K0Frames = const [],
     Set<SubChartIndicator> subIndicators = const {},
     bool truncationCheck = true,
     /// 分型判断会话事件日志（有则优先；扫全部历史点）
@@ -284,6 +291,54 @@ class BarFeatureLookup {
               b.idx < sellSeries.length &&
               sellSeries[b.idx] != null) {
             sub['sell1_$kn'] = sellSeries[b.idx];
+          }
+        }
+      }
+    }
+
+    // Kn二类BS：与一类同构冻结（会话历史优先）
+    {
+      final buyHist = Map<int, List<Buy2Frame>>.from(buy2HistoryByKn);
+      final sellHist = Map<int, List<Sell2Frame>>.from(sell2HistoryByKn);
+      if (buyHist.isEmpty && buy2K0Frames.isNotEmpty) {
+        buyHist[0] = buy2K0Frames;
+      }
+      if (sellHist.isEmpty && sell2K0Frames.isNotEmpty) {
+        sellHist[0] = sell2K0Frames;
+      }
+      if (buyHist.isEmpty && sellHist.isEmpty) {
+        for (final lv in levels) {
+          if (lv.buy2Frames.isNotEmpty) buyHist[lv.level] = lv.buy2Frames;
+          if (lv.sell2Frames.isNotEmpty) sellHist[lv.level] = lv.sell2Frames;
+        }
+      }
+
+      final barCount = bars.isEmpty ? 0 : bars.last.idx + 1;
+      final kns = <int>{...buyHist.keys, ...sellHist.keys};
+      for (final kn in kns) {
+        final buySeries = expandBuy2LabelsToSeries(
+          buyHist[kn] ?? const [],
+          barCount,
+          maxX: asOf,
+        );
+        final sellSeries = expandSell2LabelsToSeries(
+          sellHist[kn] ?? const [],
+          barCount,
+          maxX: asOf,
+        );
+        for (final b in bars) {
+          final row = byIdx.putIfAbsent(b.idx, () => {'idx': b.idx});
+          final sub = row.putIfAbsent('sub', () => <String, dynamic>{})
+              as Map<String, dynamic>;
+          if (b.idx >= 0 &&
+              b.idx < buySeries.length &&
+              buySeries[b.idx] != null) {
+            sub['buy2_$kn'] = buySeries[b.idx];
+          }
+          if (b.idx >= 0 &&
+              b.idx < sellSeries.length &&
+              sellSeries[b.idx] != null) {
+            sub['sell2_$kn'] = sellSeries[b.idx];
           }
         }
       }
@@ -571,6 +626,19 @@ class BarFeatureLookup {
       if (ind.kind == SubIndicatorKind.buy1) {
         final buy = sub['buy1_${ind.kn}'];
         final sell = sub['sell1_${ind.kn}'];
+        if (buy != null || sell != null) {
+          final parts = <String>[
+            if (buy != null) '$buy',
+            if (sell != null) '$sell',
+          ];
+          add(ind.label, parts.join(' '));
+        } else {
+          add(ind.label, null);
+        }
+      }
+      if (ind.kind == SubIndicatorKind.buy2) {
+        final buy = sub['buy2_${ind.kn}'];
+        final sell = sub['sell2_${ind.kn}'];
         if (buy != null || sell != null) {
           final parts = <String>[
             if (buy != null) '$buy',

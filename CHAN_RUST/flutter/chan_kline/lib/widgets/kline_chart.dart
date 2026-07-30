@@ -11,6 +11,7 @@ import '../compute/k1_bar_view_compute.dart';
 import '../compute/chart_view_compute.dart';
 import '../compute/fractal_judgment_compute.dart';
 import '../compute/class1_bs_compute.dart';
+import '../compute/class2_bs_compute.dart';
 import '../compute/kn_volume_series_compute.dart';
 import '../compute/level_unit_bar_view_compute.dart';
 import '../compute/zs_compute.dart';
@@ -20,6 +21,8 @@ import '../models/kline_combine_bundle.dart';
 import '../models/zs_frame.dart';
 import '../models/buy1_frame.dart';
 import '../models/sell1_frame.dart';
+import '../models/buy2_frame.dart';
+import '../models/sell2_frame.dart';
 import '../models/k0_confirm_signal.dart';
 import '../models/bar_crosshair_feature.dart';
 import '../models/k0_line.dart';
@@ -76,12 +79,16 @@ class KlineChart extends StatefulWidget {
     this.zsK0Frames = const [],
     this.buy1K0Frames = const [],
     this.sell1K0Frames = const [],
+    this.buy2K0Frames = const [],
+    this.sell2K0Frames = const [],
     this.defaultK0Policy = 'pending',
     this.truncationCheck = true,
     this.showBuildingDash = true,
     this.judgmentHistoryByKn = const {},
     this.buy1HistoryByKn = const {},
     this.sell1HistoryByKn = const {},
+    this.buy2HistoryByKn = const {},
+    this.sell2HistoryByKn = const {},
     this.onMainIndicatorsChanged,
     this.onSubIndicatorsChanged,
     this.indicatorsEnabled = true,
@@ -112,6 +119,10 @@ class KlineChart extends StatefulWidget {
   final List<Buy1Frame> buy1K0Frames;
   /// K0一卖（Rust sell1_k0_frames）
   final List<Sell1Frame> sell1K0Frames;
+  /// K0二买（Rust buy2_k0_frames）
+  final List<Buy2Frame> buy2K0Frames;
+  /// K0二卖（Rust sell2_k0_frames）
+  final List<Sell2Frame> sell2K0Frames;
   final Set<MainChartIndicator> mainIndicators;
   final Set<SubChartIndicator> subIndicators;
   final String defaultK0Policy;
@@ -125,6 +136,10 @@ class KlineChart extends StatefulWidget {
   final Map<int, List<Buy1Frame>> buy1HistoryByKn;
   /// 一类卖会话事件日志
   final Map<int, List<Sell1Frame>> sell1HistoryByKn;
+  /// 二类买会话事件日志
+  final Map<int, List<Buy2Frame>> buy2HistoryByKn;
+  /// 二类卖会话事件日志
+  final Map<int, List<Sell2Frame>> sell2HistoryByKn;
   final ValueChanged<Set<MainChartIndicator>>? onMainIndicatorsChanged;
   final ValueChanged<Set<SubChartIndicator>>? onSubIndicatorsChanged;
   /// 无数据时禁止点主/副图指标入口
@@ -596,6 +611,8 @@ class _KlineChartState extends State<KlineChart> {
       levels: asOfBundle?.levels ?? widget.levels,
       buy1HistoryByKn: widget.buy1HistoryByKn,
       sell1HistoryByKn: widget.sell1HistoryByKn,
+      buy2HistoryByKn: widget.buy2HistoryByKn,
+      sell2HistoryByKn: widget.sell2HistoryByKn,
       subIndicators: _drawnSubs,
       truncationCheck: widget.truncationCheck,
       judgmentHistoryByKn: widget.judgmentHistoryByKn,
@@ -996,6 +1013,8 @@ class _KlineChartState extends State<KlineChart> {
                 zsK0Frames: widget.zsK0Frames,
                 buy1K0Frames: widget.buy1K0Frames,
                 sell1K0Frames: widget.sell1K0Frames,
+                buy2K0Frames: widget.buy2K0Frames,
+                sell2K0Frames: widget.sell2K0Frames,
                 zsAsOfBundle: zsAsOfBundle,
                 mainIndicators: _drawnMains,
                 subIndicators: _drawnSubs,
@@ -1016,6 +1035,8 @@ class _KlineChartState extends State<KlineChart> {
                 judgmentHistoryByKn: widget.judgmentHistoryByKn,
                 buy1HistoryByKn: widget.buy1HistoryByKn,
                 sell1HistoryByKn: widget.sell1HistoryByKn,
+                buy2HistoryByKn: widget.buy2HistoryByKn,
+                sell2HistoryByKn: widget.sell2HistoryByKn,
               ),
             ),
             Positioned.fill(
@@ -1218,6 +1239,8 @@ class _KlineCompositePainter extends CustomPainter {
     this.zsK0Frames = const [],
     this.buy1K0Frames = const [],
     this.sell1K0Frames = const [],
+    this.buy2K0Frames = const [],
+    this.sell2K0Frames = const [],
     this.zsAsOfBundle,
     required this.mainIndicators,
     required this.subIndicators,
@@ -1238,6 +1261,8 @@ class _KlineCompositePainter extends CustomPainter {
     this.judgmentHistoryByKn = const {},
     this.buy1HistoryByKn = const {},
     this.sell1HistoryByKn = const {},
+    this.buy2HistoryByKn = const {},
+    this.sell2HistoryByKn = const {},
   }) : featureLookup = BarFeatureLookup.build(
           bars: bars,
           combineFrames: combineFrames,
@@ -1245,10 +1270,12 @@ class _KlineCompositePainter extends CustomPainter {
           barFeatures: barFeatures,
           k0Lines: k0Lines,
           k1Analysis: k1Analysis,
-          // 十字 as-of：层结构可用 asOf；一类BS 用会话历史（对齐分型判断，禁止 asOf 重算消点）
+          // 十字 as-of：层结构可用 asOf；一类/二类BS 用会话历史（禁止 asOf 重算消点）
           levels: zsAsOfBundle?.levels ?? levels,
           buy1HistoryByKn: buy1HistoryByKn,
           sell1HistoryByKn: sell1HistoryByKn,
+          buy2HistoryByKn: buy2HistoryByKn,
+          sell2HistoryByKn: sell2HistoryByKn,
           subIndicators: subIndicators,
           truncationCheck: truncationCheck,
           judgmentHistoryByKn: judgmentHistoryByKn,
@@ -1267,6 +1294,8 @@ class _KlineCompositePainter extends CustomPainter {
   final List<ZSFrame> zsK0Frames;
   final List<Buy1Frame> buy1K0Frames;
   final List<Sell1Frame> sell1K0Frames;
+  final List<Buy2Frame> buy2K0Frames;
+  final List<Sell2Frame> sell2K0Frames;
   final KlineCombineBundle? zsAsOfBundle;
   final Set<MainChartIndicator> mainIndicators;
   final Set<SubChartIndicator> subIndicators;
@@ -1297,6 +1326,10 @@ class _KlineCompositePainter extends CustomPainter {
   final Map<int, List<Buy1Frame>> buy1HistoryByKn;
   /// 一类卖会话事件日志
   final Map<int, List<Sell1Frame>> sell1HistoryByKn;
+  /// 二类买会话事件日志
+  final Map<int, List<Buy2Frame>> buy2HistoryByKn;
+  /// 二类卖会话事件日志
+  final Map<int, List<Sell2Frame>> sell2HistoryByKn;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -3011,6 +3044,25 @@ class _KlineCompositePainter extends CustomPainter {
         stackCount: buy1Kns.length,
       );
     }
+    // Kn二类BS：与一类同层同号；副图买(+1橙)/卖(-1青)
+    final buy2Kns = subIndicators
+        .where((e) => e.kind == SubIndicatorKind.buy2)
+        .map((e) => e.kn)
+        .toList()
+      ..sort();
+    for (var i = 0; i < buy2Kns.length; i++) {
+      _drawKnClass2BsSubChart(
+        canvas,
+        w,
+        innerTop,
+        innerH,
+        barW,
+        slotW,
+        buy2Kns[i],
+        stackRank: i,
+        stackCount: buy2Kns.length,
+      );
+    }
   }
 
   /// 取某层一买：只扫会话历史（对齐分型判断；禁止 asOf/末态覆盖消点）。
@@ -3020,6 +3072,12 @@ class _KlineCompositePainter extends CustomPainter {
   /// 取某层一卖：同上。
   List<Sell1Frame> _sell1FramesForKn(int kn) =>
       sell1HistoryForKn(sell1HistoryByKn, kn);
+
+  List<Buy2Frame> _buy2FramesForKn(int kn) =>
+      buy2HistoryForKn(buy2HistoryByKn, kn);
+
+  List<Sell2Frame> _sell2FramesForKn(int kn) =>
+      sell2HistoryForKn(sell2HistoryByKn, kn);
 
   /// 副图 Kn一类BS：扫会话历史（含动态 active 延伸各 K0 步的颗粒度点）；as-of 右侧不画。
   /// 踩坑：只画「首次发现 x」不够——同动态 Kn 延伸步必须已在 history 里有本步 x。
@@ -3093,6 +3151,94 @@ class _KlineCompositePainter extends CustomPainter {
     }
 
     // 直接扫事件列表：每个曾经出现过的点都画（对齐分型判断，不经「只剩末点」折叠）
+    for (final p in buyFrames) {
+      paintMark(
+        x: p.x,
+        label: p.label,
+        yMark: yBuy,
+        color: buyColor,
+        labelBelow: true,
+      );
+    }
+    for (final p in sellFrames) {
+      paintMark(
+        x: p.x,
+        label: p.label,
+        yMark: ySell,
+        color: sellColor,
+        labelBelow: false,
+      );
+    }
+  }
+
+  /// 副图 Kn二类BS：扫会话历史；配色用二类橙/青。
+  void _drawKnClass2BsSubChart(
+    Canvas canvas,
+    double w,
+    double innerTop,
+    double innerH,
+    double barW,
+    double slotW,
+    int kn, {
+    int stackRank = 0,
+    int stackCount = 1,
+  }) {
+    const minV = -1.0;
+    const maxV = 1.0;
+    final span = maxV - minV;
+    double subY(double v) => innerTop + (maxV - v) / span * innerH;
+    final yBuy = subY(1.0);
+    final ySell = subY(-1.0);
+    final buyColor = ChartLevelLineStyle.forBSP(2, true);
+    final sellColor = ChartLevelLineStyle.forBSP(2, false);
+    final dx = confirmStackOffsetX(
+      rank: stackRank,
+      count: stackCount,
+      barW: barW,
+    );
+    final maxX = segAsOf ?? (bars.isEmpty ? -1 : bars.last.idx);
+    final buyFrames = _buy2FramesForKn(kn);
+    final sellFrames = _sell2FramesForKn(kn);
+    final tp = TextPainter(
+      textAlign: TextAlign.center,
+      textDirection: TextDirection.ltr,
+    );
+
+    void paintMark({
+      required int x,
+      required String label,
+      required double yMark,
+      required Color color,
+      required bool labelBelow,
+    }) {
+      if (x < 0 || x > maxX) return;
+      if (x < viewport.viewXMin - 1 || x > viewport.viewXMax + 1) return;
+      final cx = _barCenterX(x, w, slotW) + dx;
+      final r = math.max(2.5, barW * 0.28);
+      canvas.drawCircle(Offset(cx, yMark), r, Paint()..color = color);
+      if (stackCount > 1) {
+        canvas.drawCircle(
+          Offset(cx, yMark),
+          r,
+          Paint()
+            ..color = const Color(0xFF111111)
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 1,
+        );
+      }
+      tp.text = TextSpan(
+        text: label,
+        style: TextStyle(
+          color: color,
+          fontSize: math.max(8.0, barW * 0.55),
+          fontWeight: FontWeight.w600,
+        ),
+      );
+      tp.layout();
+      final ty = labelBelow ? yMark + r + 1 : yMark - r - 1 - tp.height;
+      tp.paint(canvas, Offset(cx - tp.width / 2, ty));
+    }
+
     for (final p in buyFrames) {
       paintMark(
         x: p.x,
@@ -3666,6 +3812,8 @@ class _KlineCompositePainter extends CustomPainter {
         oldDelegate.zsK0Frames != zsK0Frames ||
         oldDelegate.buy1K0Frames != buy1K0Frames ||
         oldDelegate.sell1K0Frames != sell1K0Frames ||
+        oldDelegate.buy2K0Frames != buy2K0Frames ||
+        oldDelegate.sell2K0Frames != sell2K0Frames ||
         oldDelegate.zsAsOfBundle != zsAsOfBundle ||
         oldDelegate.segAsOf != segAsOf ||
         oldDelegate.mainIndicators != mainIndicators ||
@@ -3686,6 +3834,8 @@ class _KlineCompositePainter extends CustomPainter {
         oldDelegate.defaultK0Policy != defaultK0Policy ||
         oldDelegate.judgmentHistoryByKn != judgmentHistoryByKn ||
         oldDelegate.buy1HistoryByKn != buy1HistoryByKn ||
-        oldDelegate.sell1HistoryByKn != sell1HistoryByKn;
+        oldDelegate.sell1HistoryByKn != sell1HistoryByKn ||
+        oldDelegate.buy2HistoryByKn != buy2HistoryByKn ||
+        oldDelegate.sell2HistoryByKn != sell2HistoryByKn;
   }
 }
