@@ -1,4 +1,4 @@
-import 'package:chan_kline/widgets/chart_level_line_style.dart';
+﻿import 'package:chan_kline/widgets/chart_level_line_style.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -23,11 +23,26 @@ void main() {
     expect(ChartLevelLineStyle.shortLabel(5), 'K4');
   });
 
-  test('同层 Normal/OverSeg 中枢配色不同', () {
-    for (var lv = 1; lv <= 6; lv++) {
-      final n = ChartLevelLineStyle.forZS(lv);
-      final o = ChartLevelLineStyle.forZSOverSeg(lv);
-      expect(n.color, isNot(o.color), reason: 'K${lv - 1} 同层中枢应异色');
+  test('同层连线与中枢同色', () {
+    for (var displayKn = 0; displayKn <= 5; displayKn++) {
+      final line = ChartLevelLineStyle.forLevel(displayKn + 1);
+      final zs = ChartLevelLineStyle.forZS(displayKn);
+      expect(line.color, zs.color, reason: 'K$displayKn 连线/中枢应同色');
     }
+  });
+
+  test('K0蓝 / K1黄 / K2粉', () {
+    expect(
+      ChartLevelLineStyle.colorForDisplayKn(0),
+      const Color(0xCC6366F1),
+    );
+    expect(
+      ChartLevelLineStyle.colorForDisplayKn(1),
+      const Color(0xCCF59E0B),
+    );
+    expect(
+      ChartLevelLineStyle.colorForDisplayKn(2),
+      const Color(0xCCEC4899),
+    );
   });
 }

@@ -240,9 +240,35 @@ class MsgHistory {
     _zsSplitLogged = true;
     append(
       '【口径变更】删除跨段中枢(KuaDuan)与三类买卖点(BSP)全部逻辑；'
-      '原生中枢统一为「K(n)中枢」；'
+      '原生中枢统一为「K(n)连续中枢」（单套 zs_frames，无 Normal/OverSeg 双轨）；'
       '流水线每层输出 JSON：zs_frames；'
-      '放弃 Auto；呈现=半透明 ZD/ZG 框+标签；全层同构、无未来、不回写。',
+      '放弃 Auto；呈现=半透明 ZD/ZG 框；全层同构、无未来、不回写。',
+    );
+  }
+
+  /// 主图层色统一：同层合并/连线/中枢同色（进程内去重）。
+  static bool _mainLevelColorLogged = false;
+  void appendMainLevelUnifiedColors() {
+    if (_mainLevelColorLogged) return;
+    _mainLevelColorLogged = true;
+    append(
+      '【主图层色·同层同色】主图指标（Kn合并/Kn连线/Kn中枢，含构建中虚线、种子框）'
+      '按展示层共用一色：K0蓝(0x6366F1)、K1黄(0xF59E0B)、K2粉(0xEC4899)、'
+      'K3翠绿/K4紫/K5青/K6橙；原始 Kn 蜡烛仍红绿涨跌；副图/买卖点色不变。'
+      '已删除未使用的 forZSOverSeg 遗留配色。',
+    );
+  }
+
+  /// 主图「Kn中枢」命名/层序 + 副图顶底色（进程内去重）。
+  static bool _mainZsRenameOrderFxLogged = false;
+  void appendMainZsRenameOrderAndFxColors() {
+    if (_mainZsRenameOrderFxLogged) return;
+    _mainZsRenameOrderFxLogged = true;
+    append(
+      '【主图·Kn中枢命名与层序·全层同构】展示名「Kn连续中枢」→「Kn中枢」；'
+      '同层指标序=Kn→Kn合并→Kn中枢→Kn连线；Kn中枢框内斜线填充以区分合并框。'
+      '【副图·顶底色自定义】分型确认/判断：底分型红、顶分型蓝；'
+      '截断：向下截断(=底分型截断)红、顶分型截断蓝（另加橙描边）。',
     );
   }
 
@@ -423,18 +449,18 @@ class MsgHistory {
     );
   }
 
-  /// 主/副图指标 UI：连续中枢命名、层全选、Kn成交量归属、chip 单击关闭（进程内去重）。
+  /// 主/副图指标 UI：Kn中枢命名、层全选、Kn成交量归属、chip 单击关闭（进程内去重）。
   static bool _indicatorUiKnVolumeLogged = false;
   void appendIndicatorUiAndKnVolume() {
     if (_indicatorUiKnVolumeLogged) return;
     _indicatorUiKnVolumeLogged = true;
     append(
-      '【主/副图指标 UI】主图选择名「Kn连续中枢」与 tooltip 对齐；'
+      '【主/副图指标 UI】主图选择名「Kn中枢」与 tooltip 对齐；'
       '主图中枢框/合并框只画框，取消框内「Kn中枢…」「顶/底」文字。'
       '选择栏默认叠加，取消「叠加」单选；最上新增「Kn指标」层全选'
-      '（主图=Kn/Kn合并/Kn连线/Kn连续中枢；副图=Kn成交量+分型确认/判断/极点距/截断）。'
+      '（主图层内序=Kn/Kn合并/Kn中枢/Kn连线；副图=Kn成交量+分型确认/判断/极点距/截断）。'
       '左上角已选：同层 /、跨层 ※、自动换行不压字、单击关闭；'
-      '避让主图右上窗控与副图右上读数。',
+      '副图读数跟在指标名后方；避让主图右上窗控。',
     );
     append(
       '【Kn成交量·全层同构】成交量按层为 K0/K1/…/Kn成交量；'
@@ -454,7 +480,8 @@ class MsgHistory {
       '【指标左上角】单击名称=灰度关闭（不绘制，名称灰+删除线），再点打开；'
       '不从选择集移除；选择栏取消勾选才真正移除。开启态白字加粗提高对比度，'
       '灰度态 #6B7280 易区分；芯片静止透明度约 0.88。'
-      '【副图读数】十字线右上读数含 Kn成交量（与其它副图指标同框）。'
+      '【副图读数】已选副图指标名称后方直接挂当前值（十字当步/否则末根）；'
+      '取消副图右上角独立读数框。'
       '【主 tooltip】各层 OHLCV 预留 VOL 槽改为填 Kn成交量序列（K0=原生，Kn=累加）；'
       '不在 tooltip 底部再追加 Kn成交量行。',
     );
@@ -482,8 +509,9 @@ class MsgHistory {
     append(
       '【默认指标】主/副图启动默认勾选「K0指标」层全选，'
       '与选择栏最上「Kn指标」同口径：'
-      '主图=K0/K0合并/K0连线/K0连续中枢；'
-      '副图=K0成交量+K0筹码分布+K0分型确认/判断/极点距/截断（截断随截断开关 prune）。'
+      '主图=K0/K0合并/K0中枢/K0连线/K0筹码分布；'
+      '副图=K0成交量+分型确认/判断/极点距/截断+一类/二类BS+K0相邻比例/步进节奏'
+      '（截断随截断开关 prune）。'
       '非 K1 层；加载后仅 prune 超出 catalog 的项，不改层。',
     );
   }
@@ -494,14 +522,28 @@ class MsgHistory {
     if (_chipDistributionLogged) return;
     _chipDistributionLogged = true;
     append(
-      '【Kn筹码分布·全层同构】副图勾选 K0/K1/…/Kn筹码分布；'
+      '【Kn筹码分布·全层同构】主图勾选 K0/K1/…/Kn筹码分布（进「Kn指标」层全选）；'
       '主图右侧水平柱（左绿S/右红B），峰延长线横穿主图。'
       '数据：离线分笔注入 chip_tick_bins（p/s/b/w）；无 bins 时 OHLC 三角兜底。'
       '计算：Rust chan_chip_profile（cutoff_x 含）；Kn cutoff=该层单元覆盖到的最大 K0 idx。'
       '性能：Flutter 前缀索引（步进增量/十字 as-of 秒查）+ 底图/筹码/十字三层 RepaintBoundary；'
       '大序列 Isolate 后台预热前缀（跳末/加载），计算口径不变。'
       '逐K当下性：只累加已喂入 bars；十字 as-of 回滚到该日累积，不回写历史桶。'
-      '配置：chipEnabled/bucketStep/stretch/peakLine；落盘 .chan_chip_config.json。',
+      '配置：chipEnabled/bucketStep/stretch/peakLine；落盘 .chan_chip_config.json。'
+      '【优化】开启筹码分布时主图 Y 轴价签与十字价格标签改左侧，避免被右侧筹码挡住。',
+    );
+  }
+
+  /// 筹码迁主图 + 副图比例/节奏进 Kn指标（进程内去重）。
+  static bool _chipMainRatioLevelLogged = false;
+  void appendChipToMainAndRatioInSubLevel() {
+    if (_chipMainRatioLevelLogged) return;
+    _chipMainRatioLevelLogged = true;
+    append(
+      '【指标归属·全层同构】Kn筹码分布改主图指标，进「Kn指标」层全选'
+      '（层内序末项：Kn→合并→中枢→连线→筹码）。'
+      '副图「Kn相邻比例」「Kn步进节奏」纳入「Kn指标」层全选与默认 K0 全选；'
+      '副图 catalog 按显示层交错排列。',
     );
   }
 

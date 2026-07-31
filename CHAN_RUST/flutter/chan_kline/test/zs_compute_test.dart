@@ -1,4 +1,4 @@
-import 'package:flutter_test/flutter_test.dart';
+﻿import 'package:flutter_test/flutter_test.dart';
 
 import 'package:chan_kline/compute/zs_compute.dart';
 import 'package:chan_kline/models/chart_indicator.dart';
@@ -43,7 +43,7 @@ void main() {
     );
   });
 
-  test('zs crosshair tooltip 命中坐标显示连续中枢4行', () {
+  test('zs crosshair tooltip 命中坐标显示中枢4行', () {
     final bundle = KlineCombineBundle(
       frames: const [],
       k0Confirms: const [],
@@ -73,17 +73,17 @@ void main() {
       asOf: 0,
     );
     expect(rows.length, 4);
-    expect(rows[0].label, 'K0连续中枢价格');
+    expect(rows[0].label, 'K0中枢价格');
     expect(rows[0].value, 'GG【11.73】/DD【11.70】/ZG【11.72】/ZD【11.71】');
-    expect(rows[1].label, 'K0连续中枢Kn序');
+    expect(rows[1].label, 'K0中枢Kn序');
     expect(rows[1].value, '【2】');
-    expect(rows[2].label, 'K0连续中枢组No.');
+    expect(rows[2].label, 'K0中枢组No.');
     expect(rows[2].value, '【0】');
-    expect(rows[3].label, 'K0连续中枢确认');
+    expect(rows[3].label, 'K0中枢确认');
     expect(rows[3].value, '【0】');
   });
 
-  test('连续中枢确认：仅首根K检测上一中枢isSure', () {
+  test('中枢确认：仅首根K检测上一中枢isSure', () {
     final bundle = KlineCombineBundle(
       frames: const [],
       k0Confirms: const [],
@@ -110,7 +110,7 @@ void main() {
       asOf: 4,
     );
     expect(rowsFirst.length, 4);
-    expect(rowsFirst[3].label, 'K0连续中枢确认');
+    expect(rowsFirst[3].label, 'K0中枢确认');
     expect(rowsFirst[3].value, '【1】');
 
     // ZS[1] 非首根K（x1+1=5）→ 确认=0
@@ -128,7 +128,7 @@ void main() {
     expect(rowsMid[3].value, '【0】');
   });
 
-  test('连续中枢确认：上一中枢未确认时显示0', () {
+  test('中枢确认：上一中枢未确认时显示0', () {
     final bundle = KlineCombineBundle(
       frames: const [],
       k0Confirms: const [],

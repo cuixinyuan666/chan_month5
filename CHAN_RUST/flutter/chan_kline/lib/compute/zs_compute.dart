@@ -91,7 +91,7 @@ List<CrosshairTooltipRow> zsCrosshairTooltipRows({
     for (var fi = 0; fi < frames.length; fi++) {
       final f = frames[fi];
       if (asOfIdx < f.x1 || asOfIdx > f.x2) continue;
-      final prefix = 'K${ind.kn}连续中枢';
+      final prefix = 'K${ind.kn}中枢';
       rows.add(CrosshairTooltipRow.kv(
         '$prefix价格',
         CrosshairTooltipRow.boxNumInString(

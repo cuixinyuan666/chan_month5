@@ -2,6 +2,44 @@
 
 ## 最新记录
 
+### 2026-07-31 — UI配色/指标归属/读数一轮总览（rate→tick）
+
+- **要点**：本轮在 `rate` 落地：主图层色同层同色；Kn中枢命名与层序；筹码迁主图；副图比例/节奏进 Kn指标；分型/截断顶蓝底红；中枢斜线加深；副图读数跟 chip；筹码开时 Y 轴改左。无残留 NDJSON 调试埋点（层色埋点已拆）。随后 commit+push，切新分支 `tick`。
+- **关键路径**：`chart_indicator.dart`、`chart_level_line_style.dart`、`kline_chart.dart`、`fractal_confirm_paint.dart`、`indicator_picker_chip.dart`、`msg_history.dart`、相关 picker/单测
+- **踩坑/经验**：
+  1. **中枢不是 Normal/OverSeg 双轨**：主图只画 `forZS`；`forZSOverSeg` 是死代码，勿当两套逻辑（已删）。
+  2. **「去掉中枢二字」实为去掉「连续」**：展示名 `Kn连续中枢`→`Kn中枢`，与层内序「Kn中枢」一致。
+  3. **层内序靠 catalog 交错 + kindOrderInLevel**：chip/层全选/选择栏分隔按 `displayLevel`，勿再按 kind 切 divider。
+  4. **相邻比例/节奏进 Kn指标**：须同时进 `subIndicatorsForLevel`、默认全选、且 catalog 按层交错；只改默认不够。
+  5. **筹码是主图指标**：绘制仍在右侧 pane；勾选看 `MainIndicatorKind.chip`，设置文案勿再写「副图勾选」。
+  6. **副图读数跟 chip**：`IndicatorChipEntry.valueText`；取消 `_drawSubCrosshairReadout`；`msg_history` 相邻字符串拼接勿多写逗号（否则 `append` 两参编译挂）。
+  7. **验收**：热重启/冷启；层全选与目视配色/填充；一键跳末≠步进验收（本轮多为 UI）。
+
+### 2026-07-31 — 中枢填充加深 + 副图读数跟 chip
+
+- **要点**：Kn中枢斜线/底色加深便于与合并框区分；副图变量值显示在已选指标名后方（青字），取消右上独立读数框。
+- **关键路径**：`kline_chart.dart`、`indicator_picker_chip.dart`、`msg_history.dart`
+
+### 2026-07-31 — 筹码迁主图 + 相邻比例/节奏进副图 Kn指标
+
+- **要点**：Kn筹码分布改主图指标并进「Kn指标」层全选（层内序末项）；副图 Kn相邻比例/步进节奏纳入「Kn指标」层全选与默认 K0 全选；副图 catalog 按显示层交错。
+- **关键路径**：`chart_indicator.dart`、`kline_chart.dart`、`main.dart`、`sub_indicator_picker.dart`、`msg_history.dart`、相关单测
+
+### 2026-07-31 — Kn中枢命名/层序 + 副图顶底色 + 中枢斜线填充
+
+- **要点**：展示名「Kn连续中枢」→「Kn中枢」；同层序 Kn→合并→中枢→连线；中枢框斜线填充区分合并；副图分型确认/判断与截断：底/向下截断红、顶蓝（全层同构，注释已写清自定义口径）。
+- **关键路径**：`chart_indicator.dart`、`kline_chart.dart`、`fractal_confirm_paint.dart`、`zs_compute.dart`、`main_indicator_picker.dart`、`msg_history.dart`
+
+### 2026-07-31 — 筹码开启时 Y 轴价签改左侧 + 拆除层色调试埋点
+
+- **要点**：勾选筹码分布后，主图 Y 轴刻度与十字价格标签移到左侧（避让右侧筹码）；拆除 `chart_level_line_style` NDJSON 调试埋点。
+- **关键路径**：`kline_chart.dart`、`chart_level_line_style.dart`、`msg_history.dart`
+
+### 2026-07-31 — 主图层色同层同色 + 删 OverSeg 遗留配色
+
+- **要点**：主图 Kn合并/连线/连续中枢（含构建中虚线、种子框）按展示层共用一色：K0蓝、K1黄、K2粉、K3+自定；Kn蜡烛仍红绿。删除未使用的 `forZSOverSeg`/`_zsOverSegColors`（此前误导为双套中枢逻辑）。
+- **关键路径**：`chart_level_line_style.dart`、`kline_chart.dart`、`msg_history.dart`、`main.dart`、`app_debug_snapshot.dart`、`test/chart_level_line_style_test.dart`
+
 ### 2026-07-31 — Kn相邻比例 + Kn步进节奏：总览、踩坑与经验（rate）
 
 - **要点**：关闭 `_chipOnlyMode`；落地全层同构副图「Kn相邻比例」「Kn步进节奏」（仅副图 normal，主图水平节奏线未做）。比例按主图连线出现链（虚实不论、`beginX` 序、末两根比值、K0 颗粒度）。节奏按父分型切组（0-0 起算）、子分型开/关窗、组锚=父极值；绘制点线/左侧名/同父级同色/升暖降冷。

@@ -26,6 +26,9 @@ CHAN_RUST/flutter/chan_kline/build/
 CHAN_RUST/flutter/chan_kline/.dart_tool/
 CHAN_RUST/flutter/chan_kline/.idea/
 
+# 筹码分布本机偏好（bucketStep 等；运行时落盘，勿提交）
+CHAN_RUST/flutter/chan_kline/.chan_chip_config.json
+
 # IDE 快照/备份（如 *.dart.head）
 *.dart.head
 

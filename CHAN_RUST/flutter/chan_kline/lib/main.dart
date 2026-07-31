@@ -60,12 +60,16 @@ Future<void> main() async {
   MsgHistory.instance.appendDisplayTrackFractalJudgment();
   // 副图十字 as-of：确认/极点距/截断与成交量/判断同构
   MsgHistory.instance.appendSubChartCrosshairAsOf();
-  // 主图中枢十字 as-of（Normal/OverSeg 双算法）
+  // 主图中枢十字 as-of（消费 Rust zs_* JSON）
   MsgHistory.instance.appendZSCrosshairAsOf();
-  // 删除跨段中枢；原生拆 Normal/OverSeg；买卖点双套；放弃 Auto
+  // 删除跨段中枢；原生统一为 Kn中枢；放弃 Auto
   MsgHistory.instance.appendZSSplitNormalOverSeg();
   // 中枢确定/不确定虚实线（对齐动态Kn）
   MsgHistory.instance.appendZSSureDashFrames();
+  // 主图层色：同层合并/连线/中枢同色
+  MsgHistory.instance.appendMainLevelUnifiedColors();
+  // 主图命名/层序 + 副图顶底色自定义
+  MsgHistory.instance.appendMainZsRenameOrderAndFxColors();
   // K0中枢命名纠偏 + 单段雏形
   MsgHistory.instance.appendK0ZsRenameAndPrototype();
   MsgHistory.instance.appendZsSingleSeedIsomorphic();
@@ -92,6 +96,7 @@ Future<void> main() async {
   // 主/副图启动默认=「K0指标」层全选（与选择栏同口径）
   MsgHistory.instance.appendDefaultIndicatorsK0();
   MsgHistory.instance.appendChipDistribution();
+  MsgHistory.instance.appendChipToMainAndRatioInSubLevel();
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     await windowManager.ensureInitialized();
     const opts = WindowOptions(
@@ -172,7 +177,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
   List<Sell2Frame> _sell2K0Frames = [];
   List<BuyNFrame> _buyNK0Frames = [];
   List<SellNFrame> _sellNK0Frames = [];
-  // 默认=选择栏「K0指标」层全选（主图 K0/K0合并/K0连线/K0连续中枢；副图同层）
+  // 默认=选择栏「K0指标」层全选（主图 K0/K0合并/K0中枢/K0连线；副图同层）
   Set<MainChartIndicator> _mainIndicators = defaultMainIndicatorsK0();
   Set<SubChartIndicator> _subIndicators = defaultSubIndicatorsK0();
   int _stepIdx = -1; // -1 表示尚未步进
@@ -464,8 +469,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
           _sell2K0Frames = const [];
           _buyNK0Frames = const [];
           _sellNK0Frames = const [];
-          _mainIndicators = {};
-          _subIndicators = {const SubChartIndicator.chip(0)};
+          _mainIndicators = {const MainChartIndicator.chip(0)};
+          _subIndicators = {};
         });
         // 预热全量前缀（即便当前只显示首根，跳末后即可秒切）
         unawaited(
@@ -1317,7 +1322,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
           title: const Text('筹码分布', style: TextStyle(fontSize: 13)),
           subtitle: Text(
             _chipConfig.enabled
-                ? '已开启（副图勾选 Kn筹码分布后主图右侧绘制）'
+                ? '已开启（主图勾选 Kn筹码分布后右侧绘制）'
                 : '已关闭（即使勾选也不绘制）',
             style: const TextStyle(fontSize: 11),
           ),
@@ -1552,7 +1557,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
             '第一条虚线期内非leave严格包含至多截一次；确认后TruncGuard原样；\n'
             '· 分型确认优先：纠正虚线端点，或单元冻结后虚线改实线；不回写永久结构；\n'
             '· 尾端取区间内首次方向极值所在 K0（非 as-of 末根钉 X）；全层同构；\n'
-            '· K0/K1/…/Kn中枢(Normal|OverSeg)：确定态实线；不确定/单段雏形虚线；K0=合并框实体。\n\n'
+            '· K0/K1/…/Kn中枢：确定态实线；不确定/单段雏形虚线；框内斜线填充（与合并框区分）。\n\n'
             '关闭\n'
             '· 上述所有元素一律实线，不区分构建中状态（合并框、各层构建中连线、中枢框均实线）。\n\n'
             '操作步骤\n'
@@ -1584,14 +1589,14 @@ class _KlineHomePageState extends State<KlineHomePage> {
             '怎么看\n'
             '· 主图右侧水平柱：左绿=S（卖），右红=B（买）；\n'
             '· 筹码峰：局部量峰打点，虚线延长到主图左侧；\n'
-            '· 副图勾选「Kn筹码分布」才绘制；设置里总开关可一键关。\n\n'
+            '· 主图勾选「Kn筹码分布」才绘制；设置里总开关可一键关。\n\n'
             '数据与当下性\n'
             '· 离线分笔写入 chip_tick_bins（价量直加）；无分笔时 OHLC 三角估算；\n'
             '· 逐K只累加已喂入 K 线；十字悬停回滚到该日累积，不回写历史；\n'
             '· K0/K1/…/Kn 全层同构：Kn 用该层单元覆盖到的最大 K0 序号作 cutoff。\n\n'
             '操作步骤\n'
             '1. 设置里打开「筹码分布」；\n'
-            '2. 副图选择栏勾选「K0筹码分布」（或 Kn）；\n'
+            '2. 主图选择栏勾选「K0筹码分布」（或 Kn / 「Kn指标」层全选）；\n'
             '3. 可调「筹码桶宽」「筹码峰延长线」；\n'
             '4. 配置写入 .chan_chip_config.json，下次启动恢复。',
           ),

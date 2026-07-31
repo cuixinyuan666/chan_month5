@@ -667,20 +667,7 @@ class BarFeatureLookup {
           add(ind.label, sub['volume'] ?? row['volume']);
         }
       }
-      if (ind.kind == SubIndicatorKind.chip) {
-        // 筹码：十字读数显示截止 x + 峰价（若有预计算）
-        final cut = sub['chip_cutoff_${ind.kn}'];
-        final peak = sub['chip_peak_${ind.kn}'];
-        if (cut != null || peak != null) {
-          final parts = <String>[
-            if (cut != null) '截止x=$cut',
-            if (peak != null) '峰=$peak',
-          ];
-          add(ind.label, parts.join(' '));
-        } else {
-          add(ind.label, '已勾选');
-        }
-      }
+      // 筹码已迁主图指标，不再走副图读数
       if (ind.kind == SubIndicatorKind.fractalConfirm) {
         dynamic v;
         var truncated = false;

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
-/// Kn 主图连线样式（内部 level≥1；level=1 也可被 OverSeg 中枢框复用配色）。
-/// 展示名 K(level-1)：level=2→K1连线，3→K2连线，…。旧称「n段」。
+/// Kn 主图层样式：连线 / 合并 / 中枢 **同层同色**（展示名 K(level-1)）。
+/// 原始 Kn 蜡烛仍红绿涨跌，不走本表。
 class ChartLevelLineStyle {
   /// 连线颜色（含 alpha）
   final Color color;
@@ -30,48 +30,56 @@ class ChartLevelLineStyle {
     this.buildingDashPattern = const [5, 4],
   });
 
-  static const _colors = <Color>[
-    Color(0xCCF59E0B), // 展示 K1连线（内部 level=2）：琥珀
-    Color(0xCCEC4899), // 展示 K2连线（内部 level=3）：玫红
-    Color(0xCC10B981), // 展示 K3连线（内部 level=4）：翠绿
-    Color(0xCC8B5CF6), // 展示 K4连线（内部 level=5）：紫
-    Color(0xCC06B6D4), // 展示 K5连线（内部 level=6）：青
-    Color(0xCCF97316), // 展示 K6连线（内部 level=7）：橙
+  /// 展示层色表：下标=displayKn（0=K0…）；合并/连线/中枢共用。
+  static const _displayKnColors = <Color>[
+    Color(0xCC6366F1), // K0：蓝（原 K0 合并色）
+    Color(0xCCF59E0B), // K1：黄/琥珀
+    Color(0xCCEC4899), // K2：粉
+    Color(0xCC10B981), // K3：翠绿
+    Color(0xCC8B5CF6), // K4：紫
+    Color(0xCC06B6D4), // K5：青
+    Color(0xCCF97316), // K6：橙
   ];
 
-  /// 按内部 level 取样式（2→展示 K1连线，3→K2连线，…；level=1 蓝靛供中枢框）。
-  /// 中枢复用本函数与合并/连线同层同色系；level=1 独立取蓝靛色以区别于 K1连线(琥珀)。
+  /// 按展示 Kn 取层色（0=K0，1=K1，…）。
+  static Color colorForDisplayKn(int kn) {
+    final i = kn < 0
+        ? 0
+        : (kn >= _displayKnColors.length ? _displayKnColors.length - 1 : kn);
+    return _displayKnColors[i];
+  }
+
+  /// 按内部 level 取样式（2→展示 K1连线，3→K2连线，…；level=1→K0）。
   static ChartLevelLineStyle forLevel(int level) {
     assert(level >= 1);
+    final color = colorForDisplayKn(level - 1);
     if (level == 1) {
-      // K0 中枢框：独立蓝靛色，不与 K1连线(琥珀 level=2)撞色
-      return const ChartLevelLineStyle(
-        color: Color(0xCC3B82F6),
+      return ChartLevelLineStyle(
+        color: color,
         strokeWidth: 1.9,
         buildingStrokeWidth: 1.5,
         buildingDashPattern: const [5, 4],
       );
     }
-    final i = (level - 2).clamp(0, _colors.length - 1);
     final w = 2.2 + (level - 2) * 0.5;
     switch (level) {
       case 2:
         return ChartLevelLineStyle(
-          color: _colors[0],
+          color: color,
           strokeWidth: w,
           buildingStrokeWidth: w - 0.35,
           buildingDashPattern: const [5, 4],
         );
       case 3:
         return ChartLevelLineStyle(
-          color: _colors[1],
+          color: color,
           strokeWidth: w,
           buildingStrokeWidth: w - 0.35,
           buildingDashPattern: const [7, 5],
         );
       case 4:
         return ChartLevelLineStyle(
-          color: _colors[2],
+          color: color,
           strokeWidth: w,
           buildingStrokeWidth: w - 0.4,
           buildingDashPattern: const [5, 5],
@@ -79,7 +87,7 @@ class ChartLevelLineStyle {
         );
       case 5:
         return ChartLevelLineStyle(
-          color: _colors[3],
+          color: color,
           strokeWidth: w,
           buildingStrokeWidth: w - 0.4,
           buildingDashPattern: const [10, 6],
@@ -87,7 +95,7 @@ class ChartLevelLineStyle {
         );
       case 6:
         return ChartLevelLineStyle(
-          color: _colors[4],
+          color: color,
           strokeWidth: w,
           buildingStrokeWidth: w - 0.45,
           buildingDashPattern: const [6, 4],
@@ -95,7 +103,7 @@ class ChartLevelLineStyle {
         );
       default:
         return ChartLevelLineStyle(
-          color: _colors[i],
+          color: color,
           strokeWidth: w,
           buildingStrokeWidth: w - 0.45,
           buildingDashPattern: [8.0 + (level % 3), 5.0],
@@ -107,49 +115,13 @@ class ChartLevelLineStyle {
   /// 图例短标签（连线展示名：内部 level → K(level-1)）
   static String shortLabel(int level) => 'K${level - 1}';
 
-  /// 中枢专属配色（蓝青系，Normal）；下标=展示 Kn（0=K0中枢）。
-  static const _zsColors = <Color>[
-    Color(0xCC3B82F6), // K0中枢：蓝
-    Color(0xCC06B6D4), // K1中枢：青
-    Color(0xCC6366F1), // K2中枢：靛紫
-    Color(0xCC14B8A6), // K3中枢：青绿
-    Color(0xCC0EA5E9), // K4中枢：天蓝
-    Color(0xCC22D3EE), // K5中枢：亮青
-  ];
-
-  /// 中枢专属配色（紫红系，OverSeg）；下标=展示 Kn（0=K0中枢）。
-  /// 与 Normal 同层不同色，用于区分不同类型的中枢段。
-  static const _zsOverSegColors = <Color>[
-    Color(0xFF9B59B6), // K0中枢：紫
-    Color(0xFFE74C3C), // K1中枢：红
-    Color(0xFF3498DB), // K2中枢：蓝
-    Color(0xFF2ECC71), // K3中枢：绿
-    Color(0xFFD35400), // K4中枢：橙
-    Color(0xFF1ABC9C), // K5中枢：青绿
-  ];
-
-  /// 按展示 Kn 取中枢样式（0=K0中枢，1=K1中枢，…）。
+  /// 按展示 Kn 取中枢样式（0=K0中枢，1=K1…）；色与同层合并/连线一致。
   static ChartLevelLineStyle forZS(int kn) {
     assert(kn >= 0);
-    final i = kn.clamp(0, _zsColors.length - 1);
+    final color = colorForDisplayKn(kn);
     final w = 1.9 + kn * 0.25;
     return ChartLevelLineStyle(
-      color: _zsColors[i],
-      strokeWidth: w,
-      buildingStrokeWidth: w - 0.3,
-      buildingAlpha: 0.7,
-      buildingDashPattern: const [4, 3],
-    );
-  }
-
-  /// 按展示 Kn 取 OverSeg 中枢样式（0=K0中枢，1=K1中枢，…）。
-  /// 同层中枢与 Normal 配色不同，用于区分不同类型的中枢段。
-  static ChartLevelLineStyle forZSOverSeg(int kn) {
-    assert(kn >= 0);
-    final i = kn.clamp(0, _zsOverSegColors.length - 1);
-    final w = 1.9 + kn * 0.25;
-    return ChartLevelLineStyle(
-      color: _zsOverSegColors[i],
+      color: color,
       strokeWidth: w,
       buildingStrokeWidth: w - 0.3,
       buildingAlpha: 0.7,
@@ -158,7 +130,7 @@ class ChartLevelLineStyle {
   }
 
   /// 买卖点配色：B=暖色族、S=冷色族；cls 越大同族内更浅。
-  /// cls=1..9 分档；越界夹到 1..9。
+  /// cls=1..9 分档；越界夹到 1..9。副图 BS，不跟主图层色。
   static const _bspBuyColors = <Color>[
     Color(0xFFC62828), // 一类买：深红
     Color(0xFFE53935), // 二类买：红

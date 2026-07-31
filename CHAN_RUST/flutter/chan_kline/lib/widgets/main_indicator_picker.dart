@@ -125,9 +125,10 @@ class _MainIndicatorPickerDialogState extends State<_MainIndicatorPickerDialog> 
       );
     }
 
-    MainIndicatorKind? prevKind;
+    int? prevDisplay;
     for (final item in widget.available) {
-      if (prevKind != null && prevKind != item.kind) {
+      // 按显示层分隔（catalog 已按层内序交错：Kn→合并→中枢→连线）
+      if (prevDisplay != null && prevDisplay != item.displayLevel) {
         tiles.add(
           const Divider(
             height: 16,
@@ -136,7 +137,7 @@ class _MainIndicatorPickerDialogState extends State<_MainIndicatorPickerDialog> 
           ),
         );
       }
-      prevKind = item.kind;
+      prevDisplay = item.displayLevel;
       tiles.add(
         CheckboxListTile(
           dense: true,

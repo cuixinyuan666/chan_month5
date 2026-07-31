@@ -344,10 +344,13 @@ void main() {
       expect(ratios.every((e) => e.label.contains('相邻比例')), isTrue);
     });
 
-    test('默认 K0 副图不含相邻比例/节奏', () {
+    test('默认 K0 副图含相邻比例/节奏（进 Kn指标层全选）', () {
       final d = defaultSubIndicatorsK0();
-      expect(d.any((e) => e.kind == SubIndicatorKind.adjacentRatio), isFalse);
-      expect(d.any((e) => e.kind == SubIndicatorKind.stepRhythm), isFalse);
+      expect(d.any((e) => e.kind == SubIndicatorKind.adjacentRatio), isTrue);
+      expect(d.any((e) => e.kind == SubIndicatorKind.stepRhythm), isTrue);
+      final lv0 = subIndicatorsForLevel(0, buildSubIndicatorCatalog(1));
+      expect(lv0.any((e) => e.kind == SubIndicatorKind.adjacentRatio), isTrue);
+      expect(lv0.any((e) => e.kind == SubIndicatorKind.stepRhythm), isTrue);
     });
   });
 }

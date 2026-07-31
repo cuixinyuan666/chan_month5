@@ -1,18 +1,22 @@
+import 'dart:math' as math;
+
 import 'k0_line.dart';
 import 'level_models.dart';
 
-/// 主图指标：连线 / 合并框 / KN线 / 连续中枢。
+/// 主图指标：连线 / 合并框 / KN线 / 中枢 / 筹码分布。
 enum MainIndicatorKind {
   line,
   combine,
   kn,
   zs,
+  /// Kn筹码分布（主图右侧水平柱；全层同构）
+  chip,
 }
 
 /// 主图一项指标（按加载后 maxKn 动态生成）。
 class MainChartIndicator {
   final MainIndicatorKind kind;
-  /// kn=0：K0连续中枢（原生分钟K）；kn≥1：Kn连续中枢（连线段）。
+  /// kn=0：K0中枢 / K0筹码（原生分钟K）；kn≥1：Kn中枢 / Kn筹码（连线段）。
   /// combine/line/kn：内部 kn≥1，显示层 = kn-1。
   final int kn;
 
@@ -20,6 +24,7 @@ class MainChartIndicator {
   const MainChartIndicator.combine(this.kn) : kind = MainIndicatorKind.combine;
   const MainChartIndicator.kn(this.kn) : kind = MainIndicatorKind.kn;
   const MainChartIndicator.zs(this.kn) : kind = MainIndicatorKind.zs;
+  const MainChartIndicator.chip(this.kn) : kind = MainIndicatorKind.chip;
 
   String get label {
     switch (kind) {
@@ -30,7 +35,10 @@ class MainChartIndicator {
       case MainIndicatorKind.kn:
         return 'K${kn - 1}';
       case MainIndicatorKind.zs:
-        return 'K$kn连续中枢';
+        // 自定义命名：去掉「连续」，展示为「Kn中枢」
+        return 'K$kn中枢';
+      case MainIndicatorKind.chip:
+        return 'K$kn筹码分布';
     }
   }
 
@@ -38,11 +46,28 @@ class MainChartIndicator {
   int get displayLevel {
     switch (kind) {
       case MainIndicatorKind.zs:
+      case MainIndicatorKind.chip:
         return kn;
       case MainIndicatorKind.line:
       case MainIndicatorKind.combine:
       case MainIndicatorKind.kn:
         return kn - 1;
+    }
+  }
+
+  /// 同层内展示序：Kn → Kn合并 → Kn中枢 → Kn连线 → Kn筹码分布（自定义·全层同构）。
+  int get kindOrderInLevel {
+    switch (kind) {
+      case MainIndicatorKind.kn:
+        return 0;
+      case MainIndicatorKind.combine:
+        return 1;
+      case MainIndicatorKind.zs:
+        return 2;
+      case MainIndicatorKind.line:
+        return 3;
+      case MainIndicatorKind.chip:
+        return 4;
     }
   }
 
@@ -57,8 +82,6 @@ class MainChartIndicator {
 /// 副图指标种类。
 enum SubIndicatorKind {
   volume,
-  /// Kn筹码分布（主图右侧水平柱；全层同构）
-  chip,
   fractalConfirm,
   fractalJudgment,
   fractalPeakDist,
@@ -100,10 +123,6 @@ class SubChartIndicator {
   const SubChartIndicator.volume(this.kn)
       : kind = SubIndicatorKind.volume,
         bsClass = null;
-  /// kn 与中枢同号：K0筹码分布…Kn筹码分布（同底层分笔 bins，as-of 按层截断）
-  const SubChartIndicator.chip(this.kn)
-      : kind = SubIndicatorKind.chip,
-        bsClass = null;
   const SubChartIndicator.fractalConfirm(this.kn)
       : kind = SubIndicatorKind.fractalConfirm,
         bsClass = null;
@@ -140,8 +159,6 @@ class SubChartIndicator {
     switch (kind) {
       case SubIndicatorKind.volume:
         return 'K$kn成交量';
-      case SubIndicatorKind.chip:
-        return 'K$kn筹码分布';
       case SubIndicatorKind.fractalConfirm:
         return 'K${kn - 1}分型确认';
       case SubIndicatorKind.fractalJudgment:
@@ -163,11 +180,10 @@ class SubChartIndicator {
     }
   }
 
-  /// 显示层号（成交量/筹码/BS/相邻比例/节奏 kn 直接；分型类 kn-1）。
+  /// 显示层号（成交量/BS/相邻比例/节奏 kn 直接；分型类 kn-1）。
   int get displayLevel {
     switch (kind) {
       case SubIndicatorKind.volume:
-      case SubIndicatorKind.chip:
       case SubIndicatorKind.buy1:
       case SubIndicatorKind.buy2:
       case SubIndicatorKind.buyN:
@@ -208,79 +224,68 @@ int chartMaxKn({
 List<MainChartIndicator> buildMainIndicatorCatalog(int maxKn) {
   final out = <MainChartIndicator>[];
   final combineMax = maxKn < 1 ? 1 : maxKn;
-  for (var n = 1; n <= combineMax; n++) {
-    out.add(MainChartIndicator.combine(n));
-  }
   final knMax = maxKn < 1 ? 1 : maxKn;
-  for (var n = 1; n <= knMax; n++) {
-    out.add(MainChartIndicator.kn(n));
-  }
-  for (var n = 1; n <= maxKn; n++) {
-    out.add(MainChartIndicator.line(n));
-  }
-  for (var n = 0; n <= maxKn; n++) {
-    out.add(MainChartIndicator.zs(n));
+  // 按显示层交错：Kn→合并→中枢→连线→筹码（与 chip/层全选同构）
+  final maxDisplay = math.max(knMax - 1, maxKn);
+  for (var d = 0; d <= maxDisplay; d++) {
+    if (d + 1 <= knMax) {
+      out.add(MainChartIndicator.kn(d + 1));
+    }
+    if (d + 1 <= combineMax) {
+      out.add(MainChartIndicator.combine(d + 1));
+    }
+    if (d <= maxKn) {
+      out.add(MainChartIndicator.zs(d));
+    }
+    if (d + 1 <= maxKn) {
+      out.add(MainChartIndicator.line(d + 1));
+    }
+    // 筹码与中枢同层同号（K0..Kn）
+    if (d <= maxKn) {
+      out.add(MainChartIndicator.chip(d));
+    }
   }
   return out;
 }
 
 /// 副图 catalog；[maxBsClass] 默认至少 9，数据更高时调用方传入扩大。
+/// 按显示层交错生成，保证「Kn相邻比例 / Kn步进节奏」落在对应「Kn指标」层内。
 List<SubChartIndicator> buildSubIndicatorCatalog(
   int maxKn, {
   bool truncationCheck = true,
   int maxBsClass = 9,
 }) {
   final out = <SubChartIndicator>[];
-  // Kn成交量：K0=原生量；K1..=对应 LevelBundle.level
-  for (var n = 0; n <= maxKn; n++) {
-    out.add(SubChartIndicator.volume(n));
-  }
-  // Kn筹码分布：与成交量/中枢同层同号（K0..Kn）
-  for (var n = 0; n <= maxKn; n++) {
-    out.add(SubChartIndicator.chip(n));
-  }
-  for (var n = 1; n <= maxKn; n++) {
-    out.add(SubChartIndicator.fractalConfirm(n));
-  }
-  for (var n = 1; n <= maxKn; n++) {
-    out.add(SubChartIndicator.fractalJudgment(n));
-  }
-  for (var n = 1; n <= maxKn; n++) {
-    out.add(SubChartIndicator.fractalPeakDist(n));
-  }
-  if (truncationCheck) {
-    for (var n = 1; n <= maxKn; n++) {
-      out.add(SubChartIndicator.truncation(n));
-    }
-  }
-  // Kn一类BS：与连续中枢同层同号（K0..Kn）
-  for (var n = 0; n <= maxKn; n++) {
-    out.add(SubChartIndicator.buy1(n));
-  }
-  // Kn二类BS：与一类同层同号（K0..Kn）
-  for (var n = 0; n <= maxKn; n++) {
-    out.add(SubChartIndicator.buy2(n));
-  }
-  // Kn三类..N类BS：固定 3..maxBsClass
   final hi = maxBsClass < 3 ? 3 : maxBsClass;
-  for (var cls = 3; cls <= hi; cls++) {
-    for (var n = 0; n <= maxKn; n++) {
-      out.add(SubChartIndicator.buyN(n, cls));
+  // 显示层覆盖：成交量/BS 到 maxKn；分型类到 maxKn-1；相邻比例/节奏到 maxKn-1
+  final maxDisplay = maxKn;
+  for (var d = 0; d <= maxDisplay; d++) {
+    out.add(SubChartIndicator.volume(d));
+    // 分型类内部 kn = displayLevel+1，且仅当 maxKn>=1
+    if (d + 1 <= maxKn) {
+      out.add(SubChartIndicator.fractalConfirm(d + 1));
+      out.add(SubChartIndicator.fractalJudgment(d + 1));
+      out.add(SubChartIndicator.fractalPeakDist(d + 1));
+      if (truncationCheck) {
+        out.add(SubChartIndicator.truncation(d + 1));
+      }
     }
-  }
-  // Kn相邻比例 
-  /// 步进节奏：
-  /// 与 Kn连线同号（显示层 0..maxKn-1）；出现链虚实不论、K0 颗粒度
-  for (var n = 0; n < maxKn; n++) {
-    out.add(SubChartIndicator.adjacentRatio(n));
-  }
-  for (var n = 0; n < maxKn; n++) {
-    out.add(SubChartIndicator.stepRhythm(n));
+    out.add(SubChartIndicator.buy1(d));
+    out.add(SubChartIndicator.buy2(d));
+    for (var cls = 3; cls <= hi; cls++) {
+      out.add(SubChartIndicator.buyN(d, cls));
+    }
+    // 相邻比例 / 步进节奏：与 Kn连线同号（显示层 0..maxKn-1）
+    if (d < maxKn) {
+      out.add(SubChartIndicator.adjacentRatio(d));
+      out.add(SubChartIndicator.stepRhythm(d));
+    }
   }
   return out;
 }
 
 /// 主图「K{displayLevel}指标」层全选成员（仅返回 catalog 内存在的项）。
+/// 层内序：Kn → Kn合并 → Kn中枢 → Kn连线 → Kn筹码分布。
 List<MainChartIndicator> mainIndicatorsForLevel(
   int displayLevel,
   List<MainChartIndicator> catalog,
@@ -289,13 +294,15 @@ List<MainChartIndicator> mainIndicatorsForLevel(
   final candidates = <MainChartIndicator>[
     MainChartIndicator.kn(displayLevel + 1),
     MainChartIndicator.combine(displayLevel + 1),
-    MainChartIndicator.line(displayLevel + 1),
     MainChartIndicator.zs(displayLevel),
+    MainChartIndicator.line(displayLevel + 1),
+    MainChartIndicator.chip(displayLevel),
   ];
   return candidates.where(allow.contains).toList();
 }
 
 /// 副图「K{displayLevel}指标」层全选成员。
+/// 含 Kn相邻比例 / Kn步进节奏（与连线同号；catalog 有才入选）。
 List<SubChartIndicator> subIndicatorsForLevel(
   int displayLevel,
   List<SubChartIndicator> catalog, {
@@ -304,13 +311,13 @@ List<SubChartIndicator> subIndicatorsForLevel(
   final allow = catalog.toSet();
   final candidates = <SubChartIndicator>[
     SubChartIndicator.volume(displayLevel),
-    SubChartIndicator.chip(displayLevel),
     SubChartIndicator.fractalConfirm(displayLevel + 1),
     SubChartIndicator.fractalJudgment(displayLevel + 1),
     SubChartIndicator.fractalPeakDist(displayLevel + 1),
     SubChartIndicator.truncation(displayLevel + 1),
     SubChartIndicator.buy1(displayLevel),
     SubChartIndicator.buy2(displayLevel),
+    // 必须进「Kn指标」层全选（与连线同显示层）
     SubChartIndicator.adjacentRatio(displayLevel),
     SubChartIndicator.stepRhythm(displayLevel),
   ];
@@ -347,20 +354,15 @@ Set<T> pruneIndicators<T>(Set<T> selected, List<T> catalog) {
 }
 
 /// 启动默认：勾选「K0指标」层全选（与选择栏层全选同口径）。
-/// 用 catalog(maxKn=1) 生成，保证含 K0连线 / 副图分型类。
+/// 用 catalog(maxKn=1) 生成，保证含 K0连线 / K0筹码 / 副图分型类与相邻比例/节奏。
 Set<MainChartIndicator> defaultMainIndicatorsK0() {
   return mainIndicatorsForLevel(0, buildMainIndicatorCatalog(1)).toSet();
 }
 
-/// 启动默认：副图「K0指标」层全选（成交量+分型+BS）；不含相邻比例/步进节奏（避免副图过挤，需手动勾选）。
+/// 启动默认：副图「K0指标」层全选（含相邻比例/步进节奏，与层全选同口径）。
 Set<SubChartIndicator> defaultSubIndicatorsK0({bool truncationCheck = true}) {
-  final all = subIndicatorsForLevel(
+  return subIndicatorsForLevel(
     0,
     buildSubIndicatorCatalog(1, truncationCheck: truncationCheck),
-  );
-  return all
-      .where((e) =>
-          e.kind != SubIndicatorKind.adjacentRatio &&
-          e.kind != SubIndicatorKind.stepRhythm)
-      .toSet();
+  ).toSet();
 }

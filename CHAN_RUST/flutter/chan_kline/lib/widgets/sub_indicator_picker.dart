@@ -124,9 +124,10 @@ class _SubIndicatorPickerDialogState extends State<_SubIndicatorPickerDialog> {
       );
     }
 
-    SubIndicatorKind? prevKind;
+    int? prevDisplay;
     for (final item in widget.available) {
-      if (prevKind != null && prevKind != item.kind) {
+      // 按显示层分隔，使相邻比例/步进节奏落在对应 Kn 组内
+      if (prevDisplay != null && prevDisplay != item.displayLevel) {
         tiles.add(
           const Divider(
             height: 16,
@@ -135,7 +136,7 @@ class _SubIndicatorPickerDialogState extends State<_SubIndicatorPickerDialog> {
           ),
         );
       }
-      prevKind = item.kind;
+      prevDisplay = item.displayLevel;
       tiles.add(
         CheckboxListTile(
           dense: true,
