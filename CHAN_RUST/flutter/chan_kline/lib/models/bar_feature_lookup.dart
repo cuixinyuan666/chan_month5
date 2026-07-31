@@ -17,6 +17,8 @@ import '../compute/class1_bs_compute.dart';
 import '../compute/class2_bs_compute.dart';
 import '../compute/class_n_bs_compute.dart';
 import '../compute/kn_volume_series_compute.dart';
+import '../compute/adjacent_ratio_compute.dart';
+import '../compute/step_rhythm_compute.dart';
 
 /// 十字线 tooltip 一行：键值 / 层级分隔线 / 同层内容分隔线。
 class CrosshairTooltipRow {
@@ -93,6 +95,8 @@ class BarFeatureLookup {
     Map<int, List<Sell2Frame>> sell2HistoryByKn = const {},
     Map<int, List<BuyNFrame>> buyNHistoryByKn = const {},
     Map<int, List<SellNFrame>> sellNHistoryByKn = const {},
+    Map<int, List<AdjacentRatioPoint>> adjacentRatioHistoryByKn = const {},
+    Map<int, List<StepRhythmLinePoint>> stepRhythmHistoryByKn = const {},
     List<Buy1Frame> buy1K0Frames = const [],
     List<Sell1Frame> sell1K0Frames = const [],
     List<Buy2Frame> buy2K0Frames = const [],
@@ -487,6 +491,34 @@ class BarFeatureLookup {
       }
     }
 
+    // Kn相邻比例 / 步进节奏：会话历史写入 sub（与副图同源；动态计算口径）
+    if (bars.isNotEmpty) {
+      final barCount = bars.last.idx + 1;
+      for (final e in adjacentRatioHistoryByKn.entries) {
+        final series = expandAdjacentRatioToSeries(e.value, barCount, maxX: asOf);
+        for (final b in bars) {
+          final row = byIdx.putIfAbsent(b.idx, () => {'idx': b.idx});
+          final sub = row.putIfAbsent('sub', () => <String, dynamic>{})
+              as Map<String, dynamic>;
+          if (b.idx >= 0 &&
+              b.idx < series.length &&
+              series[b.idx] != null) {
+            sub['adjacent_ratio_${e.key}'] = series[b.idx];
+          }
+        }
+      }
+      for (final e in stepRhythmHistoryByKn.entries) {
+        for (final b in bars) {
+          if (asOf != null && b.idx > asOf) continue;
+          final row = byIdx.putIfAbsent(b.idx, () => {'idx': b.idx});
+          final sub = row.putIfAbsent('sub', () => <String, dynamic>{})
+              as Map<String, dynamic>;
+          sub['step_rhythm_${e.key}'] =
+              formatStepRhythmReadout(e.value, b.idx);
+        }
+      }
+    }
+
     return BarFeatureLookup._(
       byIdx: byIdx,
       totalLevels: levels.length,
@@ -754,6 +786,17 @@ class BarFeatureLookup {
         } else {
           add(ind.label, null);
         }
+      }
+      if (ind.kind == SubIndicatorKind.adjacentRatio) {
+        final v = sub['adjacent_ratio_${ind.kn}'];
+        if (v is num) {
+          add(ind.label, v.toStringAsFixed(3));
+        } else {
+          add(ind.label, '0');
+        }
+      }
+      if (ind.kind == SubIndicatorKind.stepRhythm) {
+        add(ind.label, sub['step_rhythm_${ind.kn}'] ?? '0');
       }
     }
     return lines;

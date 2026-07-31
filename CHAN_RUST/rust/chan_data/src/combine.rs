@@ -240,49 +240,6 @@ fn build_k0_zs_and_bs1(
     (frames, buy1, sell1, buy2, sell2, buy_n, sell_n)
 }
 
-/// K0 合并框 → 伪 LevelSegment（合并指标等仍用；非 K0 中枢段源）
-fn combine_frames_to_segments(frames: &[KlineCombineFrame]) -> Vec<LevelSegment> {
-    let mut out = Vec::with_capacity(frames.len());
-    for (i, f) in frames.iter().enumerate() {
-        let dir = if i == 0 {
-            1
-        } else {
-            let p = &frames[i - 1];
-            let mid = (f.high + f.low) / 2.0;
-            let p_mid = (p.high + p.low) / 2.0;
-            if mid >= p_mid {
-                1
-            } else {
-                -1
-            }
-        };
-        out.push(LevelSegment {
-            idx: i as i64,
-            dir,
-            begin_confirm_x: f.x1,
-            end_confirm_x: f.x2,
-            begin_pole_x: f.x1,
-            end_pole_x: f.x2,
-            open: f.low,
-            high: f.high,
-            low: f.low,
-            close: f.high,
-            volume: 0.0,
-            begin_fractal_x1: f.x1,
-            begin_fractal_x2: f.x1,
-            end_fractal_x1: f.x2,
-            end_fractal_x2: f.x2,
-            begin_fractal_high: f.high,
-            begin_fractal_low: f.low,
-            end_fractal_high: f.high,
-            end_fractal_low: f.low,
-            is_bootstrap: false,
-            is_promoted_default: false,
-        });
-    }
-    out
-}
-
 fn unit_to_virtual_bar(u: &LevelUnitBar) -> K1Bar {
     K1Bar {
         idx: u.idx as i32,

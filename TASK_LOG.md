@@ -2,6 +2,57 @@
 
 ## 最新记录
 
+### 2026-07-31 — Kn相邻比例 + Kn步进节奏：总览、踩坑与经验（rate）
+
+- **要点**：关闭 `_chipOnlyMode`；落地全层同构副图「Kn相邻比例」「Kn步进节奏」（仅副图 normal，主图水平节奏线未做）。比例按主图连线出现链（虚实不论、`beginX` 序、末两根比值、K0 颗粒度）。节奏按父分型切组（0-0 起算）、子分型开/关窗、组锚=父极值；绘制点线/左侧名/同父级同色/升暖降冷。
+- **关键路径**：`adjacent_ratio_compute.dart`、`step_rhythm_compute.dart`、`main.dart`、`chart_indicator.dart`、`kline_chart.dart`、`bar_feature_lookup.dart`、`msg_history.dart`、`level_models.dart`、`test/adjacent_ratio_step_rhythm_test.dart`；顺手删 `combine_frames_to_segments` dead_code
+- **踩坑/经验（以后必读）**：
+  1. **显示层↔数据层**：`displayKn` 的 Kn连线 = `LevelBundle.level==displayKn+1`；节奏子分型=`level+1` confirms，父分型=`level+2` confirms——勿把「父段 end_confirm」当成「父分型确认」。
+  2. **虚实一视同仁**：idx=26 时 L2 可无冻段，但主图已有展示轨虚线/种子；只读 `segments` 会读成 0。子线必须与主图同源（冻段+`computeDisplayBuildingLines`+种子）。
+  3. **出现序≠确认序**：按 `endConfirmX` 排序会把「后确认的长冻段」错当成当前线；应按起点极点 `beginX`（连线出现时机）。
+  4. **节奏命名**：旧 skill 从 `1-0` 起；本轮改为 **`0-0`**（`roundCurrent=(evenIdx/2)-1`，`roundRef` 从 0）。
+  5. **单点不连后**：子反向分型确认当步关窗（如 25 出点、26 顶确认→26–38 无产出）；副图同 key 仅 `Δx==1` 点线续连，禁止跨缺口自动连。
+  6. **切组锚点**：父顶→降组 `a0=fractalHigh`；父底→升组 `a0=fractalLow`；key 含 `groupId` 防跨组串线。同棒先 bootstrap→子窗→父切组（父优先开新组）。
+  7. **验收**：002003 `1m` 连续单步看 K0节奏 @25/@26/@39；一键跳末≠步进验收。指标默认不勾选。
+  8. **调试后必删**：临时 dump 测试与 NDJSON 埋点；`lib/history/` 与历史记录按钮常驻勿删。
+
+### 2026-07-31 — 去掉未用 combine_frames_to_segments
+
+- **要点**：删除 `combine.rs` 中已无引用的私有函数，消除 `dead_code` warning（K0 中枢已改用 `kline_bars_to_segments`）。
+- **关键路径**：`CHAN_RUST/rust/chan_data/src/combine.rs`
+
+### 2026-07-31 — 拆除步进节奏调试埋点
+
+- **要点**：移除 `step_rhythm_compute` 内 NDJSON 埋点；删除临时 dump 测试与 `debug-2e4a01.log`。
+- **关键路径**：`step_rhythm_compute.dart`；已删 `test/dump_rhythm_debug_tmp_test.dart`
+
+### 2026-07-31 — 步进节奏副图：点线/左侧名/同父级冷暖色
+
+- **要点**：同 key 仅 Δx==1 点线续连（缺口不自动连）；打点对准 K0 柱心；名称标在系列最左点左侧；同 roundRef 同色，升暖降冷。
+- **关键路径**：`kline_chart.dart`、`msg_history.dart`
+
+### 2026-07-31 — 步进节奏：0-0组 + 父分型切组 + 子分型停窗
+
+- **要点**：仅 normal；命名从 0-0；组锚=父分型极值；子反向分型确认后停写（25 的点不连到 26+）；父分型确认切组（39 起降组 a0=极高）。002003 日志验收：26–38 无产出，39 起 `0-0 down` a0=11.89。
+- **关键路径**：`step_rhythm_compute.dart`、`kline_chart.dart`、`msg_history.dart`、`test/adjacent_ratio_step_rhythm_test.dart`
+
+### 2026-07-31 — 相邻比例按主图连线出现链（虚实不论·K0颗粒度）
+
+- **要点**：全层同构；子线=主图出现链（冻段+展示轨虚线/种子）；按 `beginX` 排序取末两根 `ratio=|cur|/|prev|`，无视虚实；每步 K0 `displayX` 写入。002003 实测 K1@26≈0.217、@39≈0.391、@42≈1.111。
+- **关键路径**：`adjacent_ratio_compute.dart`、`step_rhythm_compute.dart`、`msg_history.dart`
+- **注意**：禁止用 isSure/endConfirmX 过滤或排序。
+
+### 2026-07-31 — 相邻比例/节奏改为动态子线（不要求已确认）
+
+- **要点**：`K$n相邻比例`/`K$n步进节奏` 子线改为冻段+展示轨虚线/种子（与主图同源）；prev/cur 不要求 isSure；原则注释：指标默认动态计算。实测 step26/42 的 K1相邻比例均有值。
+- **关键路径**：`adjacent_ratio_compute.dart`、`step_rhythm_compute.dart`、`main.dart`、`msg_history.dart`、`chart_indicator.dart`、`kline_chart.dart`、`bar_feature_lookup.dart`
+
+### 2026-07-31 — 接入 Kn相邻比例 + Kn步进节奏副图
+
+- **要点**：关闭 `_chipOnlyMode` 恢复缠论步进；按 skill 口径落地全层同构副图「Kn相邻比例」「Kn步进节奏」（Dart 会话冻结，不做主图水平节奏线）；默认不勾选，catalog 可选手选。
+- **关键路径**：`adjacent_ratio_compute.dart`、`step_rhythm_compute.dart`、`chart_indicator.dart`、`main.dart`、`kline_chart.dart`、`bar_feature_lookup.dart`、`msg_history.dart`、`level_models.dart`、`test/adjacent_ratio_step_rhythm_test.dart`
+- **注意**：验收须连续单步（非一键跳末）。
+
 ### 2026-07-31 — 筹码性能：三层分层绘制 + 前缀索引 + Isolate 预热
 
 - **要点**：

@@ -383,6 +383,35 @@ class MsgHistory {
     );
   }
 
+  /// Kn相邻比例 + Kn步进节奏副图（进程内去重）
+  static bool _adjacentRatioRhythmAppearLogged = false;
+  void appendAdjacentRatioAndStepRhythm() {
+    if (_adjacentRatioRhythmAppearLogged) return;
+    _adjacentRatioRhythmAppearLogged = true;
+    append(
+      '【Kn相邻比例·全层同构·动态·K0颗粒度】'
+      '【口径】指标设计遵循动态计算（除非明确指示其它逻辑）：'
+      '子线=主图连线出现链（冻段实线+展示轨虚线/种子），虚实一视同仁；'
+      '按起点极点 beginX 出现时机排序，取末两根 ratio=|cur|/|prev|；'
+      '不要求 isSure；每步按 K0 idx 写入；denom≤1e-12 跳过；默认不勾选。',
+    );
+    append(
+      '【Kn步进节奏·副图·normal·K0颗粒度·0-0组】'
+      '仅 normal；全层同构；子线=出现链虚实不论；'
+      '组锚=父分型极值（底→极低升组/顶→极高降组）；命名从 0-0；'
+      '子同向分型开窗逐K续写，子反向分型确认后停写（单点不连后）；'
+      '父分型确认本组停、下组重置自确认步绘；不回写无未来；'
+      '绘制：同父级(roundRef)同色，升暖降冷；K0 对齐点线，Δx≠1 不跨缺口续连；名在左侧；默认不勾选。',
+    );
+    append(
+      '【踩坑·比例/节奏·2026-07-31】'
+      '①显示层 displayKn→数据 level=kn+1；节奏父切组用 level+2 的分型 confirms，勿用父段 end_confirm；'
+      '②比例子线须含展示轨虚线/种子，勿只读冻段；按 beginX 出现序勿按 endConfirmX；'
+      '③节奏命名 0-0 起；关窗后不续写；key 含 groupId；同棒 bootstrap→子窗→父切组；'
+      '④验收连续单步非跳末。详见 TASK_LOG / AGENTS.md。',
+    );
+  }
+
   /// 桌面窗体：铺满工作区不盖任务栏；十字线 tooltip 分隔线贴边框。
   void appendDesktopWorkAreaAndTooltipSep() {
     if (_desktopWorkAreaLogged) return;

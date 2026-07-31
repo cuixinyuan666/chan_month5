@@ -198,6 +198,11 @@ class LevelSegmentN {
   final int beginFractalX2;
   final int endFractalX1;
   final int endFractalX2;
+  /// 起止分型组高低（相邻比例/节奏幅度用）
+  final double beginFractalHigh;
+  final double beginFractalLow;
+  final double endFractalHigh;
+  final double endFractalLow;
   final bool isBootstrap;
   final bool isPromotedDefault;
 
@@ -217,6 +222,10 @@ class LevelSegmentN {
     this.beginFractalX2 = -1,
     this.endFractalX1 = -1,
     this.endFractalX2 = -1,
+    this.beginFractalHigh = 0,
+    this.beginFractalLow = 0,
+    this.endFractalHigh = 0,
+    this.endFractalLow = 0,
     this.isBootstrap = false,
     this.isPromotedDefault = false,
   });
@@ -238,6 +247,10 @@ class LevelSegmentN {
       beginFractalX2: (json['begin_fractal_x2'] as num?)?.toInt() ?? -1,
       endFractalX1: (json['end_fractal_x1'] as num?)?.toInt() ?? -1,
       endFractalX2: (json['end_fractal_x2'] as num?)?.toInt() ?? -1,
+      beginFractalHigh: (json['begin_fractal_high'] as num?)?.toDouble() ?? 0,
+      beginFractalLow: (json['begin_fractal_low'] as num?)?.toDouble() ?? 0,
+      endFractalHigh: (json['end_fractal_high'] as num?)?.toDouble() ?? 0,
+      endFractalLow: (json['end_fractal_low'] as num?)?.toDouble() ?? 0,
       isBootstrap: json['is_bootstrap'] as bool? ?? false,
       isPromotedDefault: json['is_promoted_default'] as bool? ?? false,
     );

@@ -14,6 +14,8 @@ import '../compute/class1_bs_compute.dart';
 import '../compute/class2_bs_compute.dart';
 import '../compute/class_n_bs_compute.dart';
 import '../compute/kn_volume_series_compute.dart';
+import '../compute/adjacent_ratio_compute.dart';
+import '../compute/step_rhythm_compute.dart';
 import '../compute/level_unit_bar_view_compute.dart';
 import '../compute/zs_compute.dart';
 import '../compute/chip_profile_compute.dart';
@@ -99,6 +101,8 @@ class KlineChart extends StatefulWidget {
     this.sell2HistoryByKn = const {},
     this.buyNHistoryByKn = const {},
     this.sellNHistoryByKn = const {},
+    this.adjacentRatioHistoryByKn = const {},
+    this.stepRhythmHistoryByKn = const {},
     this.onMainIndicatorsChanged,
     this.onSubIndicatorsChanged,
     this.indicatorsEnabled = true,
@@ -160,6 +164,10 @@ class KlineChart extends StatefulWidget {
   final Map<int, List<BuyNFrame>> buyNHistoryByKn;
   /// 三类+卖会话事件日志
   final Map<int, List<SellNFrame>> sellNHistoryByKn;
+  /// Kn相邻比例会话历史（显示层 → 点列）
+  final Map<int, List<AdjacentRatioPoint>> adjacentRatioHistoryByKn;
+  /// Kn步进节奏会话历史
+  final Map<int, List<StepRhythmLinePoint>> stepRhythmHistoryByKn;
   final ValueChanged<Set<MainChartIndicator>>? onMainIndicatorsChanged;
   final ValueChanged<Set<SubChartIndicator>>? onSubIndicatorsChanged;
   /// 无数据时禁止点主/副图指标入口
@@ -702,6 +710,8 @@ class _KlineChartState extends State<KlineChart> {
       sell2HistoryByKn: widget.sell2HistoryByKn,
       buyNHistoryByKn: widget.buyNHistoryByKn,
       sellNHistoryByKn: widget.sellNHistoryByKn,
+      adjacentRatioHistoryByKn: widget.adjacentRatioHistoryByKn,
+      stepRhythmHistoryByKn: widget.stepRhythmHistoryByKn,
       subIndicators: _drawnSubs,
       truncationCheck: widget.truncationCheck,
       judgmentHistoryByKn: widget.judgmentHistoryByKn,
@@ -1130,6 +1140,8 @@ class _KlineChartState extends State<KlineChart> {
               sell2HistoryByKn: widget.sell2HistoryByKn,
               buyNHistoryByKn: widget.buyNHistoryByKn,
               sellNHistoryByKn: widget.sellNHistoryByKn,
+              adjacentRatioHistoryByKn: widget.adjacentRatioHistoryByKn,
+              stepRhythmHistoryByKn: widget.stepRhythmHistoryByKn,
               chipConfig: widget.chipConfig,
               chipOnlyMode: widget.chipOnlyMode,
               layer: layer,
@@ -1398,6 +1410,8 @@ class _KlineCompositePainter extends CustomPainter {
     this.sell2HistoryByKn = const {},
     this.buyNHistoryByKn = const {},
     this.sellNHistoryByKn = const {},
+    this.adjacentRatioHistoryByKn = const {},
+    this.stepRhythmHistoryByKn = const {},
     this.chipConfig = const ChipConfig(),
     this.chipOnlyMode = false,
     this.layer = _ChartPaintLayer.base,
@@ -1418,6 +1432,8 @@ class _KlineCompositePainter extends CustomPainter {
                 sell2HistoryByKn: sell2HistoryByKn,
                 buyNHistoryByKn: buyNHistoryByKn,
                 sellNHistoryByKn: sellNHistoryByKn,
+                adjacentRatioHistoryByKn: adjacentRatioHistoryByKn,
+                stepRhythmHistoryByKn: stepRhythmHistoryByKn,
                 subIndicators: subIndicators,
                 truncationCheck: truncationCheck,
                 judgmentHistoryByKn: judgmentHistoryByKn,
@@ -1482,6 +1498,10 @@ class _KlineCompositePainter extends CustomPainter {
   final Map<int, List<BuyNFrame>> buyNHistoryByKn;
   /// 三类+卖会话事件日志
   final Map<int, List<SellNFrame>> sellNHistoryByKn;
+  /// Kn相邻比例会话历史
+  final Map<int, List<AdjacentRatioPoint>> adjacentRatioHistoryByKn;
+  /// Kn步进节奏会话历史
+  final Map<int, List<StepRhythmLinePoint>> stepRhythmHistoryByKn;
   /// 筹码分布配置
   final ChipConfig chipConfig;
   /// chip 分支：仅显示筹码分布，关闭所有缠论渲染
@@ -3252,6 +3272,203 @@ class _KlineCompositePainter extends CustomPainter {
         canvas, w, innerTop, innerH, barW, slotW, ind.kn, ind.bsClass!,
       );
     }
+    // Kn相邻比例：折线 + 1.000/1.382 参考线（动态计算：冻段+展示轨虚线）
+    final ratioKns = subIndicators
+        .where((e) => e.kind == SubIndicatorKind.adjacentRatio)
+        .map((e) => e.kn)
+        .toList()
+      ..sort();
+    for (final kn in ratioKns) {
+      _drawAdjacentRatioSubChart(canvas, w, innerTop, innerH, barW, slotW, kn);
+    }
+    // Kn步进节奏：按 key 折线（动态子线，不要求已确认）
+    final rhythmKns = subIndicators
+        .where((e) => e.kind == SubIndicatorKind.stepRhythm)
+        .map((e) => e.kn)
+        .toList()
+      ..sort();
+    for (final kn in rhythmKns) {
+      _drawStepRhythmSubChart(canvas, w, innerTop, innerH, barW, slotW, kn);
+    }
+  }
+
+  /// 副图 Kn相邻比例。
+  void _drawAdjacentRatioSubChart(
+    Canvas canvas,
+    double w,
+    double innerTop,
+    double innerH,
+    double barW,
+    double slotW,
+    int displayKn,
+  ) {
+    final hist = adjacentRatioHistoryByKn[displayKn] ?? const [];
+    if (hist.isEmpty || bars.isEmpty) return;
+    final asOf = segAsOf ?? bars.last.idx;
+    var minV = 0.0;
+    var maxV = 1.382;
+    for (final p in hist) {
+      if (p.x > asOf) continue;
+      if (p.ratio < minV) minV = p.ratio;
+      if (p.ratio > maxV) maxV = p.ratio;
+    }
+    final span = math.max(1e-9, maxV - minV);
+    double subY(double v) => innerTop + (maxV - v) / span * innerH;
+
+    // 参考线 1.000 / 1.382
+    final refPaint = Paint()
+      ..color = const Color(0x6694A3B8)
+      ..strokeWidth = 1
+      ..style = PaintingStyle.stroke;
+    for (final ref in [1.0, 1.382]) {
+      if (ref < minV || ref > maxV) continue;
+      final y = subY(ref);
+      _drawDashedLine(
+        canvas,
+        Offset(KlineViewport.padL, y),
+        Offset(w - KlineViewport.padR, y),
+        refPaint,
+      );
+    }
+
+    final linePaint = Paint()
+      ..color = const Color(0xFF2563EB)
+      ..strokeWidth = 1.5
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+    Offset? prev;
+    final sorted = [...hist]..sort((a, b) => a.x.compareTo(b.x));
+    for (final p in sorted) {
+      if (p.x > asOf) {
+        prev = null;
+        continue;
+      }
+      if (p.x < viewport.viewXMin - 1 || p.x > viewport.viewXMax + 1) {
+        prev = null;
+        continue;
+      }
+      final pt = Offset(_barCenterX(p.x, w, slotW), subY(p.ratio));
+      if (prev != null) canvas.drawLine(prev, pt, linePaint);
+      prev = pt;
+    }
+  }
+
+  /// 升组暖色（同父级 roundRef 共用一色：0-0/0-1/0-2…）
+  static const _rhythmWarmColors = <Color>[
+    Color(0xFFE11D48), // 玫红
+    Color(0xFFF59E0B), // 琥珀
+    Color(0xFFF97316), // 橙
+    Color(0xFFEF4444), // 红
+    Color(0xFFD97706), // 深琥珀
+    Color(0xFFFB7185), // 浅玫
+    Color(0xFFEA580C), // 深橙
+    Color(0xFFB45309), // 棕橙
+    Color(0xFFF43F5E), // 玫
+  ];
+
+  /// 降组冷色（同父级 roundRef 共用一色）
+  static const _rhythmCoolColors = <Color>[
+    Color(0xFF2563EB), // 蓝
+    Color(0xFF0EA5E9), // 天蓝
+    Color(0xFF14B8A6), // 青
+    Color(0xFF6366F1), // 靛
+    Color(0xFF06B6D4), // 青蓝
+    Color(0xFF3B82F6), // 亮蓝
+    Color(0xFF8B5CF6), // 紫（偏冷）
+    Color(0xFF0284C7), // 深蓝
+    Color(0xFF0D9488), // 深青
+  ];
+
+  Color _rhythmColorFor(StepRhythmLinePoint p) {
+    final palette = p.dir == 'up' ? _rhythmWarmColors : _rhythmCoolColors;
+    return palette[p.roundRef.clamp(0, palette.length - 1)];
+  }
+
+  /// 副图 Kn步进节奏：点线、K0 对齐；缺口不续连；名在左侧；同父级同色；升暖降冷。
+  void _drawStepRhythmSubChart(
+    Canvas canvas,
+    double w,
+    double innerTop,
+    double innerH,
+    double barW,
+    double slotW,
+    int displayKn,
+  ) {
+    final hist = stepRhythmHistoryByKn[displayKn] ?? const [];
+    if (hist.isEmpty || bars.isEmpty) return;
+    final asOf = segAsOf ?? bars.last.idx;
+    final visible = hist.where((e) => e.x <= asOf).toList();
+    if (visible.isEmpty) return;
+    var minV = visible.first.value;
+    var maxV = visible.first.value;
+    for (final p in visible) {
+      if (p.value < minV) minV = p.value;
+      if (p.value > maxV) maxV = p.value;
+    }
+    if ((maxV - minV).abs() < 1e-12) {
+      minV -= 1;
+      maxV += 1;
+    }
+    final span = maxV - minV;
+    double subY(double v) => innerTop + (maxV - v) / span * innerH;
+
+    // 按 key 分组（不同 label/组不混连）
+    final byKey = <String, List<StepRhythmLinePoint>>{};
+    for (final p in visible) {
+      byKey.putIfAbsent(p.key, () => []).add(p);
+    }
+    final tp = TextPainter(
+      textAlign: TextAlign.right,
+      textDirection: TextDirection.ltr,
+    );
+    for (final entry in byKey.entries) {
+      final pts = entry.value..sort((a, b) => a.x.compareTo(b.x));
+      if (pts.isEmpty) continue;
+      final color = _rhythmColorFor(pts.first);
+      final linePaint = Paint()
+        ..color = color.withValues(alpha: 0.85)
+        ..strokeWidth = 1.2
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round;
+      final dotPaint = Paint()
+        ..color = color
+        ..style = PaintingStyle.fill;
+
+      StepRhythmLinePoint? prevP;
+      Offset? prevPt;
+      Offset? labelAnchor; // 左侧标名：取视口内最左点
+      for (final p in pts) {
+        if (p.x < viewport.viewXMin - 1 || p.x > viewport.viewXMax + 1) {
+          prevP = null;
+          prevPt = null;
+          continue;
+        }
+        final pt = Offset(_barCenterX(p.x, w, slotW), subY(p.value));
+        // 仅相邻 K0（Δx==1）点线续连；中间无值则断开（不自动跨缺口）
+        if (prevP != null && prevPt != null && p.x - prevP.x == 1) {
+          _drawDashedLine(canvas, prevPt, pt, linePaint);
+        }
+        // K0 颗粒度打点（对准柱心）
+        canvas.drawCircle(pt, 2.2, dotPaint);
+        labelAnchor ??= pt;
+        prevP = p;
+        prevPt = pt;
+      }
+      // 名称显示在左侧（相对该系列视口内最左点）
+      if (labelAnchor != null) {
+        tp.text = TextSpan(
+          text: pts.first.label,
+          style: TextStyle(
+            color: color,
+            fontSize: 9,
+            fontWeight: FontWeight.w600,
+          ),
+        );
+        tp.layout();
+        final lx = (labelAnchor.dx - tp.width - 4).clamp(2.0, w - tp.width);
+        tp.paint(canvas, Offset(lx, labelAnchor.dy - tp.height / 2));
+      }
+    }
   }
 
   /// 取某层一买：只扫会话历史（对齐分型判断；禁止 asOf/末态覆盖消点）。
@@ -4076,6 +4293,8 @@ class _KlineCompositePainter extends CustomPainter {
         oldDelegate.sell2HistoryByKn != sell2HistoryByKn ||
         oldDelegate.buyNHistoryByKn != buyNHistoryByKn ||
         oldDelegate.sellNHistoryByKn != sellNHistoryByKn ||
+        oldDelegate.adjacentRatioHistoryByKn != adjacentRatioHistoryByKn ||
+        oldDelegate.stepRhythmHistoryByKn != stepRhythmHistoryByKn ||
         oldDelegate.chipOnlyMode != chipOnlyMode;
 
     switch (layer) {

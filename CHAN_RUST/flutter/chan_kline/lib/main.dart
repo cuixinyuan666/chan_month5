@@ -7,12 +7,14 @@ import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'bridge/chan_bridge.dart';
+import 'compute/adjacent_ratio_compute.dart';
 import 'compute/chip_profile_compute.dart';
 import 'compute/class1_bs_compute.dart';
 import 'compute/class2_bs_compute.dart';
 import 'compute/class_n_bs_compute.dart';
 import 'compute/fractal_judgment_compute.dart';
 import 'compute/k1_bar_view_compute.dart';
+import 'compute/step_rhythm_compute.dart';
 import 'history/app_debug_snapshot.dart';
 import 'history/msg_history.dart';
 import 'models/zs_frame.dart';
@@ -71,6 +73,8 @@ Future<void> main() async {
   MsgHistory.instance.appendBuy1AndZgZdCommonNaming();
   MsgHistory.instance.appendBuy2Class2Naming();
   MsgHistory.instance.appendBuyNClass3PlusNaming();
+  // Kn相邻比例 + Kn步进节奏副图
+  MsgHistory.instance.appendAdjacentRatioAndStepRhythm();
   // 展示轨：动态KN当确认段画虚线；确认优先纠正/改实线
   MsgHistory.instance.appendDisplayTrackDynamicKnBuildingLines();
   // 种子框 / 第一条虚线限制 / 种子包含截断（全层同构，常驻历史）
@@ -187,8 +191,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
   bool _showBuildingDash = true;
   /// 筹码分布配置（落盘 .chan_chip_config.json）
   ChipConfig _chipConfig = const ChipConfig();
-  /// chip 分支：仅显示筹码分布，关闭所有缠论渲染
-  final bool _chipOnlyMode = true;
+  /// chip 分支：仅显示筹码分布，关闭所有缠论渲染（关=正常缠论+筹码可并存）
+  final bool _chipOnlyMode = false;
 
   /// 分型判断步进事件日志：kn → 追加式历史（换股/重载才清空；不因重算丢点）
   Map<int, List<FractalJudgmentEvent>> _judgmentHistoryByKn = {};
@@ -205,6 +209,13 @@ class _KlineHomePageState extends State<KlineHomePage> {
   /// 三类+BS 会话历史（链升类；双键冻结同构）。
   Map<int, List<BuyNFrame>> _buyNHistoryByKn = {};
   Map<int, List<SellNFrame>> _sellNHistoryByKn = {};
+
+  /// Kn相邻比例会话历史（按显示层；换股/重载清空）。
+  Map<int, List<AdjacentRatioPoint>> _adjacentRatioHistoryByKn = {};
+
+  /// Kn步进节奏会话历史 + 每层方向状态。
+  Map<int, List<StepRhythmLinePoint>> _stepRhythmHistoryByKn = {};
+  final Map<int, StepRhythmState> _stepRhythmStateByKn = {};
 
   /// catalog 三类..N 类上限（至少 9；随会话观察到的更高类扩大）
   int get _maxBsClass => math.max(
@@ -421,6 +432,12 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _sell2HistoryByKn.clear();
         _buyNHistoryByKn.clear();
         _sellNHistoryByKn.clear();
+        _adjacentRatioHistoryByKn.clear();
+        _stepRhythmHistoryByKn.clear();
+        for (final s in _stepRhythmStateByKn.values) {
+          s.reset();
+        }
+        _stepRhythmStateByKn.clear();
       });
       final directOhlc = code == 'test' && _hasTestOhlcCsv();
       _msgHistory.append(
@@ -489,6 +506,12 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _sell2HistoryByKn.clear();
         _buyNHistoryByKn.clear();
         _sellNHistoryByKn.clear();
+        _adjacentRatioHistoryByKn.clear();
+        _stepRhythmHistoryByKn.clear();
+        for (final s in _stepRhythmStateByKn.values) {
+          s.reset();
+        }
+        _stepRhythmStateByKn.clear();
       });
       _msgHistory.append('加载K0失败：$e');
     } finally {
@@ -625,6 +648,44 @@ class _KlineHomePageState extends State<KlineHomePage> {
     _sellNHistoryByKn = nextSellN;
   }
 
+  /// 本步相邻比例 + 步进节奏并入会话（全层；禁止整表覆盖消点）。
+  /// 指标遵循动态计算：传入 bars/barFeatures，子线含展示轨虚线。
+  void _mergeRatioAndRhythm(KlineCombineBundle bundle) {
+    final displayX = _stepIdx < 0 ? 0 : _stepIdx;
+    final maxKn = chartMaxKn(levels: bundle.levels, k0Lines: bundle.k0Lines);
+    // 连线显示层 0..maxKn-1
+    final maxDisplayKn = maxKn <= 0 ? -1 : maxKn - 1;
+    if (maxDisplayKn < 0) return;
+    mergeAdjacentRatioForStep(
+      historyByKn: _adjacentRatioHistoryByKn,
+      levels: bundle.levels,
+      displayX: displayX,
+      maxDisplayKn: maxDisplayKn,
+      bars: _visibleBars,
+      barFeatures: bundle.barFeatures,
+      truncationCheck: _truncationCheck,
+    );
+    mergeStepRhythmForStep(
+      historyByKn: _stepRhythmHistoryByKn,
+      stateByKn: _stepRhythmStateByKn,
+      levels: bundle.levels,
+      displayX: displayX,
+      maxDisplayKn: maxDisplayKn,
+      bars: _visibleBars,
+      barFeatures: bundle.barFeatures,
+      truncationCheck: _truncationCheck,
+    );
+    // 新 Map 引用，便于 painter shouldRepaint 感知
+    _adjacentRatioHistoryByKn = {
+      for (final e in _adjacentRatioHistoryByKn.entries)
+        e.key: List<AdjacentRatioPoint>.from(e.value),
+    };
+    _stepRhythmHistoryByKn = {
+      for (final e in _stepRhythmHistoryByKn.entries)
+        e.key: List<StepRhythmLinePoint>.from(e.value),
+    };
+  }
+
   List<LevelBundle> _levelsWithFrozenBs(List<LevelBundle> levels) {
     final with1 = levelsWithFrozenClass1Bs(
       levels,
@@ -669,6 +730,12 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _sell2HistoryByKn.clear();
         _buyNHistoryByKn.clear();
         _sellNHistoryByKn.clear();
+        _adjacentRatioHistoryByKn.clear();
+        _stepRhythmHistoryByKn.clear();
+        for (final s in _stepRhythmStateByKn.values) {
+          s.reset();
+        }
+        _stepRhythmStateByKn.clear();
       });
       return;
     }
@@ -698,6 +765,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       );
       // 会话冻结：并入本步一类BS，禁止下一步整表覆盖消掉上步显示
       _mergeBsHistory(bundle);
+      _mergeRatioAndRhythm(bundle);
       final frozenLevels = _levelsWithFrozenBs(bundle.levels);
       setState(() {
         _combineFrames = bundle.frames;
@@ -904,6 +972,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         );
         // 一类/二类BS 也逐K并入会话冻结，避免一次性走完只剩末态
         _mergeBsHistory(bundle);
+        _mergeRatioAndRhythm(bundle);
       } catch (e) {
         _msgHistory.append('一次性走完@step=$i 失败：$e');
         break;
@@ -960,6 +1029,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
                   sell2HistoryByKn: _sell2HistoryByKn,
                   buyNHistoryByKn: _buyNHistoryByKn,
                   sellNHistoryByKn: _sellNHistoryByKn,
+                  adjacentRatioHistoryByKn: _adjacentRatioHistoryByKn,
+                  stepRhythmHistoryByKn: _stepRhythmHistoryByKn,
                   mainIndicators: _mainIndicators,
                   onMainIndicatorsChanged: (v) =>
                       setState(() => _mainIndicators = v),
