@@ -239,6 +239,21 @@ pub struct LevelBundleOut {
     /// 本层一买（当前枢在上个枢下方触发；与中枢同层同号）
     #[serde(default)]
     pub buy1_frames: Vec<crate::buy1::Buy1Frame>,
+    /// 本层一卖（一买镜像：当前枢在上个枢上方；与中枢同层同号）
+    #[serde(default)]
+    pub sell1_frames: Vec<crate::buy1::Sell1Frame>,
+    /// 本层二买（与一类同框；等高/更高低；与中枢同层同号）
+    #[serde(default)]
+    pub buy2_frames: Vec<crate::buy2::Buy2Frame>,
+    /// 本层二卖（二买镜像；与中枢同层同号）
+    #[serde(default)]
+    pub sell2_frames: Vec<crate::buy2::Sell2Frame>,
+    /// 本层三类+买（链升类；与中枢同层同号）
+    #[serde(default)]
+    pub buy_n_frames: Vec<crate::buy_n::BuyNFrame>,
+    /// 本层三类+卖（买镜像）
+    #[serde(default)]
+    pub sell_n_frames: Vec<crate::buy_n::SellNFrame>,
     /// 首 N 段方向：0 未定
     pub first_dir: i32,
     pub first_dir_x: i32,
@@ -1113,7 +1128,42 @@ impl LevelState {
             unit_bars: self.unit_bars.clone(),
             combine_frames: frames_from_engine(&self.engine, bars),
             zs_frames: crate::zs::zs_frames_from_list(&zs_list, &segs_for_zs, self.level),
-            buy1_frames: crate::buy1::find_buy1(&zs_list, &segs_for_zs, self.level),
+            buy1_frames: crate::buy1::find_buy1_with_active(
+                &zs_list,
+                &segs_for_zs,
+                self.level,
+                active_unit.as_ref().map(|u| u.idx),
+            ),
+            sell1_frames: crate::buy1::find_sell1_with_active(
+                &zs_list,
+                &segs_for_zs,
+                self.level,
+                active_unit.as_ref().map(|u| u.idx),
+            ),
+            buy2_frames: crate::buy2::find_buy2_with_active(
+                &zs_list,
+                &segs_for_zs,
+                self.level,
+                active_unit.as_ref().map(|u| u.idx),
+            ),
+            sell2_frames: crate::buy2::find_sell2_with_active(
+                &zs_list,
+                &segs_for_zs,
+                self.level,
+                active_unit.as_ref().map(|u| u.idx),
+            ),
+            buy_n_frames: crate::buy_n::find_buy_n_with_active(
+                &zs_list,
+                &segs_for_zs,
+                self.level,
+                active_unit.as_ref().map(|u| u.idx),
+            ),
+            sell_n_frames: crate::buy_n::find_sell_n_with_active(
+                &zs_list,
+                &segs_for_zs,
+                self.level,
+                active_unit.as_ref().map(|u| u.idx),
+            ),
             first_dir: self.first_dir,
             first_dir_x: self.first_dir_x,
             active_unit,

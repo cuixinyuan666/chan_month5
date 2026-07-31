@@ -1,6 +1,11 @@
 import 'k0_confirm_signal.dart';
 import 'bar_crosshair_feature.dart';
 import 'buy1_frame.dart';
+import 'sell1_frame.dart';
+import 'buy2_frame.dart';
+import 'sell2_frame.dart';
+import 'buy_n_frame.dart';
+import 'sell_n_frame.dart';
 import 'k0_line.dart';
 import 'kline_bar.dart';
 import 'chart_indicator.dart';
@@ -8,7 +13,12 @@ import 'kline_combine_frame.dart';
 import 'level_models.dart';
 import 'k1_analysis.dart';
 import '../compute/fractal_judgment_compute.dart';
+import '../compute/class1_bs_compute.dart';
+import '../compute/class2_bs_compute.dart';
+import '../compute/class_n_bs_compute.dart';
 import '../compute/kn_volume_series_compute.dart';
+import '../compute/adjacent_ratio_compute.dart';
+import '../compute/step_rhythm_compute.dart';
 
 /// 十字线 tooltip 一行：键值 / 层级分隔线 / 同层内容分隔线。
 class CrosshairTooltipRow {
@@ -68,6 +78,9 @@ class BarFeatureLookup {
   /// 十字线：各 Kn 块后追加的中枢 ZG/ZD 行
   final Map<int, List<CrosshairTooltipRow>> knZsAfterKn;
 
+  factory BarFeatureLookup.empty() =>
+      BarFeatureLookup._(byIdx: const <int, Map<String, dynamic>>{});
+
   factory BarFeatureLookup.build({
     required List<KlineBar> bars,
     required List<KlineCombineFrame> combineFrames,
@@ -76,7 +89,20 @@ class BarFeatureLookup {
     List<K0Line> k0Lines = const [],
     K1AnalysisBundle k1Analysis = const K1AnalysisBundle(),
     List<LevelBundle> levels = const [],
+    Map<int, List<Buy1Frame>> buy1HistoryByKn = const {},
+    Map<int, List<Sell1Frame>> sell1HistoryByKn = const {},
+    Map<int, List<Buy2Frame>> buy2HistoryByKn = const {},
+    Map<int, List<Sell2Frame>> sell2HistoryByKn = const {},
+    Map<int, List<BuyNFrame>> buyNHistoryByKn = const {},
+    Map<int, List<SellNFrame>> sellNHistoryByKn = const {},
+    Map<int, List<AdjacentRatioPoint>> adjacentRatioHistoryByKn = const {},
+    Map<int, List<StepRhythmLinePoint>> stepRhythmHistoryByKn = const {},
     List<Buy1Frame> buy1K0Frames = const [],
+    List<Sell1Frame> sell1K0Frames = const [],
+    List<Buy2Frame> buy2K0Frames = const [],
+    List<Sell2Frame> sell2K0Frames = const [],
+    List<BuyNFrame> buyNK0Frames = const [],
+    List<SellNFrame> sellNK0Frames = const [],
     Set<SubChartIndicator> subIndicators = const {},
     bool truncationCheck = true,
     /// 分型判断会话事件日志（有则优先；扫全部历史点）
@@ -233,21 +259,170 @@ class BarFeatureLookup {
       }
     }
 
-    // Kn一买：按打点 x 写入 sub（与副图同源）
+    // Kn一类BS：只扫会话历史（含动态 active 各 K0 颗粒度点）；禁止 asOf 重算消点。
+    // 踩坑：history 若缺本步 x，十字 asOf=当前步会 sellAtAsOf=null（26有点、27空）。
     {
-      void putBuy1(int kn, List<Buy1Frame> frames) {
-        for (final p in frames) {
-          if (asOf != null && p.x > asOf) continue;
-          final row = byIdx.putIfAbsent(p.x, () => {'idx': p.x});
-          final sub = row.putIfAbsent('sub', () => <String, dynamic>{})
-              as Map<String, dynamic>;
-          // 同 x 多点时后者覆盖（少见）；读数取 label
-          sub['buy1_$kn'] = p.label;
+      // 兼容：未传 history 时回退 K0 帧（旧调用）
+      final buyHist = Map<int, List<Buy1Frame>>.from(buy1HistoryByKn);
+      final sellHist = Map<int, List<Sell1Frame>>.from(sell1HistoryByKn);
+      if (buyHist.isEmpty && buy1K0Frames.isNotEmpty) {
+        buyHist[0] = buy1K0Frames;
+      }
+      if (sellHist.isEmpty && sell1K0Frames.isNotEmpty) {
+        sellHist[0] = sell1K0Frames;
+      }
+      // 若仍无 history，回退 levels 内帧（末态；仅兜底）
+      if (buyHist.isEmpty && sellHist.isEmpty) {
+        for (final lv in levels) {
+          if (lv.buy1Frames.isNotEmpty) buyHist[lv.level] = lv.buy1Frames;
+          if (lv.sell1Frames.isNotEmpty) sellHist[lv.level] = lv.sell1Frames;
         }
       }
-      putBuy1(0, buy1K0Frames);
-      for (final lv in levels) {
-        putBuy1(lv.level, lv.buy1Frames);
+
+      final barCount = bars.isEmpty ? 0 : bars.last.idx + 1;
+      final kns = <int>{...buyHist.keys, ...sellHist.keys};
+      for (final kn in kns) {
+        final buySeries = expandBuy1LabelsToSeries(
+          buyHist[kn] ?? const [],
+          barCount,
+          maxX: asOf,
+        );
+        final sellSeries = expandSell1LabelsToSeries(
+          sellHist[kn] ?? const [],
+          barCount,
+          maxX: asOf,
+        );
+        for (final b in bars) {
+          final row = byIdx.putIfAbsent(b.idx, () => {'idx': b.idx});
+          final sub = row.putIfAbsent('sub', () => <String, dynamic>{})
+              as Map<String, dynamic>;
+          if (b.idx >= 0 &&
+              b.idx < buySeries.length &&
+              buySeries[b.idx] != null) {
+            sub['buy1_$kn'] = buySeries[b.idx];
+          }
+          if (b.idx >= 0 &&
+              b.idx < sellSeries.length &&
+              sellSeries[b.idx] != null) {
+            sub['sell1_$kn'] = sellSeries[b.idx];
+          }
+        }
+      }
+    }
+
+    // Kn二类BS：与一类同构冻结（会话历史优先）
+    {
+      final buyHist = Map<int, List<Buy2Frame>>.from(buy2HistoryByKn);
+      final sellHist = Map<int, List<Sell2Frame>>.from(sell2HistoryByKn);
+      if (buyHist.isEmpty && buy2K0Frames.isNotEmpty) {
+        buyHist[0] = buy2K0Frames;
+      }
+      if (sellHist.isEmpty && sell2K0Frames.isNotEmpty) {
+        sellHist[0] = sell2K0Frames;
+      }
+      if (buyHist.isEmpty && sellHist.isEmpty) {
+        for (final lv in levels) {
+          if (lv.buy2Frames.isNotEmpty) buyHist[lv.level] = lv.buy2Frames;
+          if (lv.sell2Frames.isNotEmpty) sellHist[lv.level] = lv.sell2Frames;
+        }
+      }
+
+      final barCount = bars.isEmpty ? 0 : bars.last.idx + 1;
+      final kns = <int>{...buyHist.keys, ...sellHist.keys};
+      for (final kn in kns) {
+        final buySeries = expandBuy2LabelsToSeries(
+          buyHist[kn] ?? const [],
+          barCount,
+          maxX: asOf,
+        );
+        final sellSeries = expandSell2LabelsToSeries(
+          sellHist[kn] ?? const [],
+          barCount,
+          maxX: asOf,
+        );
+        for (final b in bars) {
+          final row = byIdx.putIfAbsent(b.idx, () => {'idx': b.idx});
+          final sub = row.putIfAbsent('sub', () => <String, dynamic>{})
+              as Map<String, dynamic>;
+          if (b.idx >= 0 &&
+              b.idx < buySeries.length &&
+              buySeries[b.idx] != null) {
+            sub['buy2_$kn'] = buySeries[b.idx];
+          }
+          if (b.idx >= 0 &&
+              b.idx < sellSeries.length &&
+              sellSeries[b.idx] != null) {
+            sub['sell2_$kn'] = sellSeries[b.idx];
+          }
+        }
+      }
+    }
+
+    // Kn三类+BS：按 cls 分键 buyN_${kn}_$cls
+    {
+      final buyHist = Map<int, List<BuyNFrame>>.from(buyNHistoryByKn);
+      final sellHist = Map<int, List<SellNFrame>>.from(sellNHistoryByKn);
+      if (buyHist.isEmpty && buyNK0Frames.isNotEmpty) {
+        buyHist[0] = buyNK0Frames;
+      }
+      if (sellHist.isEmpty && sellNK0Frames.isNotEmpty) {
+        sellHist[0] = sellNK0Frames;
+      }
+      if (buyHist.isEmpty && sellHist.isEmpty) {
+        for (final lv in levels) {
+          if (lv.buyNFrames.isNotEmpty) buyHist[lv.level] = lv.buyNFrames;
+          if (lv.sellNFrames.isNotEmpty) sellHist[lv.level] = lv.sellNFrames;
+        }
+      }
+
+      final barCount = bars.isEmpty ? 0 : bars.last.idx + 1;
+      final kns = <int>{...buyHist.keys, ...sellHist.keys};
+      final classes = <int>{};
+      for (final list in buyHist.values) {
+        for (final e in list) {
+          classes.add(e.cls);
+        }
+      }
+      for (final list in sellHist.values) {
+        for (final e in list) {
+          classes.add(e.cls);
+        }
+      }
+      for (final ind in subIndicators) {
+        if (ind.kind == SubIndicatorKind.buyN && ind.bsClass != null) {
+          classes.add(ind.bsClass!);
+        }
+      }
+      for (final kn in kns) {
+        for (final cls in classes) {
+          final buySeries = expandBuyNLabelsToSeries(
+            buyHist[kn] ?? const [],
+            barCount,
+            maxX: asOf,
+            cls: cls,
+          );
+          final sellSeries = expandSellNLabelsToSeries(
+            sellHist[kn] ?? const [],
+            barCount,
+            maxX: asOf,
+            cls: cls,
+          );
+          for (final b in bars) {
+            final row = byIdx.putIfAbsent(b.idx, () => {'idx': b.idx});
+            final sub = row.putIfAbsent('sub', () => <String, dynamic>{})
+                as Map<String, dynamic>;
+            if (b.idx >= 0 &&
+                b.idx < buySeries.length &&
+                buySeries[b.idx] != null) {
+              sub['buyN_${kn}_$cls'] = buySeries[b.idx];
+            }
+            if (b.idx >= 0 &&
+                b.idx < sellSeries.length &&
+                sellSeries[b.idx] != null) {
+              sub['sellN_${kn}_$cls'] = sellSeries[b.idx];
+            }
+          }
+        }
       }
     }
 
@@ -312,6 +487,34 @@ class BarFeatureLookup {
               : false;
           (row['sub'] as Map<String, dynamic>)['fractal_judgment_trunc_$kn'] =
               trunc;
+        }
+      }
+    }
+
+    // Kn相邻比例 / 步进节奏：会话历史写入 sub（与副图同源；动态计算口径）
+    if (bars.isNotEmpty) {
+      final barCount = bars.last.idx + 1;
+      for (final e in adjacentRatioHistoryByKn.entries) {
+        final series = expandAdjacentRatioToSeries(e.value, barCount, maxX: asOf);
+        for (final b in bars) {
+          final row = byIdx.putIfAbsent(b.idx, () => {'idx': b.idx});
+          final sub = row.putIfAbsent('sub', () => <String, dynamic>{})
+              as Map<String, dynamic>;
+          if (b.idx >= 0 &&
+              b.idx < series.length &&
+              series[b.idx] != null) {
+            sub['adjacent_ratio_${e.key}'] = series[b.idx];
+          }
+        }
+      }
+      for (final e in stepRhythmHistoryByKn.entries) {
+        for (final b in bars) {
+          if (asOf != null && b.idx > asOf) continue;
+          final row = byIdx.putIfAbsent(b.idx, () => {'idx': b.idx});
+          final sub = row.putIfAbsent('sub', () => <String, dynamic>{})
+              as Map<String, dynamic>;
+          sub['step_rhythm_${e.key}'] =
+              formatStepRhythmReadout(e.value, b.idx);
         }
       }
     }
@@ -464,6 +667,20 @@ class BarFeatureLookup {
           add(ind.label, sub['volume'] ?? row['volume']);
         }
       }
+      if (ind.kind == SubIndicatorKind.chip) {
+        // 筹码：十字读数显示截止 x + 峰价（若有预计算）
+        final cut = sub['chip_cutoff_${ind.kn}'];
+        final peak = sub['chip_peak_${ind.kn}'];
+        if (cut != null || peak != null) {
+          final parts = <String>[
+            if (cut != null) '截止x=$cut',
+            if (peak != null) '峰=$peak',
+          ];
+          add(ind.label, parts.join(' '));
+        } else {
+          add(ind.label, '已勾选');
+        }
+      }
       if (ind.kind == SubIndicatorKind.fractalConfirm) {
         dynamic v;
         var truncated = false;
@@ -531,7 +748,55 @@ class BarFeatureLookup {
         add(ind.label, v);
       }
       if (ind.kind == SubIndicatorKind.buy1) {
-        add(ind.label, sub['buy1_${ind.kn}']);
+        final buy = sub['buy1_${ind.kn}'];
+        final sell = sub['sell1_${ind.kn}'];
+        if (buy != null || sell != null) {
+          final parts = <String>[
+            if (buy != null) '$buy',
+            if (sell != null) '$sell',
+          ];
+          add(ind.label, parts.join(' '));
+        } else {
+          add(ind.label, null);
+        }
+      }
+      if (ind.kind == SubIndicatorKind.buy2) {
+        final buy = sub['buy2_${ind.kn}'];
+        final sell = sub['sell2_${ind.kn}'];
+        if (buy != null || sell != null) {
+          final parts = <String>[
+            if (buy != null) '$buy',
+            if (sell != null) '$sell',
+          ];
+          add(ind.label, parts.join(' '));
+        } else {
+          add(ind.label, null);
+        }
+      }
+      if (ind.kind == SubIndicatorKind.buyN) {
+        final cls = ind.bsClass ?? 3;
+        final buy = sub['buyN_${ind.kn}_$cls'];
+        final sell = sub['sellN_${ind.kn}_$cls'];
+        if (buy != null || sell != null) {
+          final parts = <String>[
+            if (buy != null) '$buy',
+            if (sell != null) '$sell',
+          ];
+          add(ind.label, parts.join(' '));
+        } else {
+          add(ind.label, null);
+        }
+      }
+      if (ind.kind == SubIndicatorKind.adjacentRatio) {
+        final v = sub['adjacent_ratio_${ind.kn}'];
+        if (v is num) {
+          add(ind.label, v.toStringAsFixed(3));
+        } else {
+          add(ind.label, '0');
+        }
+      }
+      if (ind.kind == SubIndicatorKind.stepRhythm) {
+        add(ind.label, sub['step_rhythm_${ind.kn}'] ?? '0');
       }
     }
     return lines;

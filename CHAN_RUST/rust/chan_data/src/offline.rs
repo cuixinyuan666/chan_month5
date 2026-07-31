@@ -206,13 +206,15 @@ pub fn load_klines(
         return Err(ChanDataError::msg("分笔文件在日期区间内无有效成交行"));
     }
     let bars_1m = ticks_to_1m(&rows);
-    let bars = rows_to_period(bars_1m, period)?;
-    let bars = filter_bars_by_datetime(bars, begin_dt, end_dt);
+    let mut bars = rows_to_period(bars_1m, period)?;
+    bars = filter_bars_by_datetime(bars, begin_dt, end_dt);
     if bars.is_empty() {
         return Err(ChanDataError::msg(format!(
             "区间内无 K 线：{begin_date}~{end_date}"
         )));
     }
+    // 筹码：分笔价量直加写入 chip_tick_bins（无则前端/profile 走三角兜底）
+    crate::chip::enrich_bars_with_chip_tick_bins(&mut bars, &rows, period);
     Ok(bars)
 }
 

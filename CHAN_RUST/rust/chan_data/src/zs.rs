@@ -335,12 +335,19 @@ pub fn zs_to_frames(zs_list: &[ZS], segment_by_idx: &HashMap<i64, &LevelSegment>
         .collect()
 }
 
-/// 进行中 Kn 单元 → 伪段（展示轨喂中枢；不回写冻结段链）。
+/// 进行中 Kn 单元 → 伪段（展示轨喂中枢/一类BS；不回写冻结段链）。
+/// dir 锚定极点：上涨段低在 begin、高在 end；下跌段高在 begin、低在 end（供 buy1/sell1 打点）。
 pub fn unit_to_segment(u: &LevelUnitBar) -> LevelSegment {
     let (px1, px2) = if u.x1 <= u.x2 {
         (u.x1, u.x2)
     } else {
         (u.x2, u.x1)
+    };
+    // 上涨：起点底、终点顶；下跌：起点顶、终点底
+    let (bh, bl, eh, el) = if u.dir >= 0 {
+        (u.low, u.low, u.high, u.high)
+    } else {
+        (u.high, u.high, u.low, u.low)
     };
     LevelSegment {
         idx: u.idx,
@@ -358,10 +365,10 @@ pub fn unit_to_segment(u: &LevelUnitBar) -> LevelSegment {
         begin_fractal_x2: u.x2,
         end_fractal_x1: u.x1,
         end_fractal_x2: u.x2,
-        begin_fractal_high: u.high,
-        begin_fractal_low: u.low,
-        end_fractal_high: u.high,
-        end_fractal_low: u.low,
+        begin_fractal_high: bh,
+        begin_fractal_low: bl,
+        end_fractal_high: eh,
+        end_fractal_low: el,
         is_bootstrap: false,
         is_promoted_default: false,
     }
@@ -481,6 +488,11 @@ mod tests {
             combine_frames: vec![],
             zs_frames: vec![],
             buy1_frames: vec![],
+            sell1_frames: vec![],
+            buy2_frames: vec![],
+            sell2_frames: vec![],
+            buy_n_frames: vec![],
+            sell_n_frames: vec![],
             first_dir: 0,
             first_dir_x: 0,
             active_unit: None,

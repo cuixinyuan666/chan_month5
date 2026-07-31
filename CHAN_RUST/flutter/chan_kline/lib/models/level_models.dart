@@ -1,6 +1,11 @@
 import 'kline_combine_frame.dart';
 import 'zs_frame.dart';
 import 'buy1_frame.dart';
+import 'sell1_frame.dart';
+import 'buy2_frame.dart';
+import 'sell2_frame.dart';
+import 'buy_n_frame.dart';
+import 'sell_n_frame.dart';
 
 /// 每根 K0 × 每层 Kn 十字线快照（Rust `LevelSnap`，逐K当下冻结）。
 class LevelSnap {
@@ -193,6 +198,11 @@ class LevelSegmentN {
   final int beginFractalX2;
   final int endFractalX1;
   final int endFractalX2;
+  /// 起止分型组高低（相邻比例/节奏幅度用）
+  final double beginFractalHigh;
+  final double beginFractalLow;
+  final double endFractalHigh;
+  final double endFractalLow;
   final bool isBootstrap;
   final bool isPromotedDefault;
 
@@ -212,6 +222,10 @@ class LevelSegmentN {
     this.beginFractalX2 = -1,
     this.endFractalX1 = -1,
     this.endFractalX2 = -1,
+    this.beginFractalHigh = 0,
+    this.beginFractalLow = 0,
+    this.endFractalHigh = 0,
+    this.endFractalLow = 0,
     this.isBootstrap = false,
     this.isPromotedDefault = false,
   });
@@ -233,6 +247,10 @@ class LevelSegmentN {
       beginFractalX2: (json['begin_fractal_x2'] as num?)?.toInt() ?? -1,
       endFractalX1: (json['end_fractal_x1'] as num?)?.toInt() ?? -1,
       endFractalX2: (json['end_fractal_x2'] as num?)?.toInt() ?? -1,
+      beginFractalHigh: (json['begin_fractal_high'] as num?)?.toDouble() ?? 0,
+      beginFractalLow: (json['begin_fractal_low'] as num?)?.toDouble() ?? 0,
+      endFractalHigh: (json['end_fractal_high'] as num?)?.toDouble() ?? 0,
+      endFractalLow: (json['end_fractal_low'] as num?)?.toDouble() ?? 0,
       isBootstrap: json['is_bootstrap'] as bool? ?? false,
       isPromotedDefault: json['is_promoted_default'] as bool? ?? false,
     );
@@ -291,6 +309,16 @@ class LevelBundle {
   final List<ZSFrame> zsFrames;
   /// 本层一买（当前枢在上个枢下方）
   final List<Buy1Frame> buy1Frames;
+  /// 本层一卖（当前枢在上个枢上方；一买镜像）
+  final List<Sell1Frame> sell1Frames;
+  /// 本层二买（与一类同框；等高/更高低）
+  final List<Buy2Frame> buy2Frames;
+  /// 本层二卖（二买镜像）
+  final List<Sell2Frame> sell2Frames;
+  /// 本层三类+买（链升类）
+  final List<BuyNFrame> buyNFrames;
+  /// 本层三类+卖（买镜像）
+  final List<SellNFrame> sellNFrames;
   final int firstDir;
   final int firstDirX;
 
@@ -311,6 +339,11 @@ class LevelBundle {
     this.combineFrames = const [],
     this.zsFrames = const [],
     this.buy1Frames = const [],
+    this.sell1Frames = const [],
+    this.buy2Frames = const [],
+    this.sell2Frames = const [],
+    this.buyNFrames = const [],
+    this.sellNFrames = const [],
     this.firstDir = 0,
     this.firstDirX = -1,
     this.activeUnit,
@@ -339,6 +372,21 @@ class LevelBundle {
           .toList(),
       buy1Frames: (json['buy1_frames'] as List? ?? const [])
           .map((e) => Buy1Frame.fromJson(Map<String, dynamic>.from(e as Map)))
+          .toList(),
+      sell1Frames: (json['sell1_frames'] as List? ?? const [])
+          .map((e) => Sell1Frame.fromJson(Map<String, dynamic>.from(e as Map)))
+          .toList(),
+      buy2Frames: (json['buy2_frames'] as List? ?? const [])
+          .map((e) => Buy2Frame.fromJson(Map<String, dynamic>.from(e as Map)))
+          .toList(),
+      sell2Frames: (json['sell2_frames'] as List? ?? const [])
+          .map((e) => Sell2Frame.fromJson(Map<String, dynamic>.from(e as Map)))
+          .toList(),
+      buyNFrames: (json['buy_n_frames'] as List? ?? const [])
+          .map((e) => BuyNFrame.fromJson(Map<String, dynamic>.from(e as Map)))
+          .toList(),
+      sellNFrames: (json['sell_n_frames'] as List? ?? const [])
+          .map((e) => SellNFrame.fromJson(Map<String, dynamic>.from(e as Map)))
           .toList(),
       firstDir: (json['first_dir'] as num?)?.toInt() ?? 0,
       firstDirX: (json['first_dir_x'] as num?)?.toInt() ?? -1,

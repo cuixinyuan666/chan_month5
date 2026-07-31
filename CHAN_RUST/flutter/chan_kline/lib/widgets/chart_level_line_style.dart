@@ -157,22 +157,34 @@ class ChartLevelLineStyle {
     );
   }
 
-  /// 三类买卖点（BSP）专属配色：买=红、卖=绿（涨红跌绿），三类用不同色阶区分。
-  /// cls=1/2/3 与 isBuy 组合出 6 色；主图点标记按类用不同形状（圆/三角/菱形）增强辨识。
+  /// 买卖点配色：B=暖色族、S=冷色族；cls 越大同族内更浅。
+  /// cls=1..9 分档；越界夹到 1..9。
   static const _bspBuyColors = <Color>[
-    Color(0xFFE53935), // 一类买：红
-    Color(0xFFFB8C00), // 二类买：橙红
-    Color(0xFFFDD835), // 三类买：黄
+    Color(0xFFC62828), // 一类买：深红
+    Color(0xFFE53935), // 二类买：红
+    Color(0xFFFB8C00), // 三类买：橙
+    Color(0xFFFFA726), // 四类买：浅橙
+    Color(0xFFFFB74D), // 五类买
+    Color(0xFFFFCC80), // 六类买
+    Color(0xFFFFD54F), // 七类买：琥珀
+    Color(0xFFFFE082), // 八类买
+    Color(0xFFFFF59D), // 九类买：浅暖黄
   ];
   static const _bspSellColors = <Color>[
-    Color(0xFF43A047), // 一类卖：绿
-    Color(0xFF00ACC1), // 二类卖：青
-    Color(0xFF8E24AA), // 三类卖：紫
+    Color(0xFF1565C0), // 一类卖：深蓝
+    Color(0xFF1E88E5), // 二类卖：蓝
+    Color(0xFF00ACC1), // 三类卖：青
+    Color(0xFF26C6DA), // 四类卖
+    Color(0xFF4DD0E1), // 五类卖
+    Color(0xFF80DEEA), // 六类卖
+    Color(0xFF5C6BC0), // 七类卖：靛蓝
+    Color(0xFF7986CB), // 八类卖
+    Color(0xFF9FA8DA), // 九类卖：浅冷
   ];
 
-  /// 按类与买卖取买卖点颜色（cls 越界时夹到 1..3）。
+  /// 按类与买卖取买卖点颜色（cls 越界时夹到 1..9）。
   static Color forBSP(int cls, bool isBuy) {
-    final i = (cls.clamp(1, 3) - 1);
+    final i = (cls.clamp(1, 9) - 1);
     return isBuy ? _bspBuyColors[i] : _bspSellColors[i];
   }
 }

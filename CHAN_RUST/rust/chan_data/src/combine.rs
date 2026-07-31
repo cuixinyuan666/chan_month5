@@ -16,7 +16,9 @@ use crate::pipeline::{
 use crate::seg_eigen::{
     BarSubSnapshot, FirstSegDirSignal, K1AnalysisBundle, K1ConfirmSignal, K1Line,
 };
-use crate::buy1::{find_buy1, Buy1Frame};
+use crate::buy1::{find_buy1, find_sell1, Buy1Frame, Sell1Frame};
+use crate::buy2::{find_buy2, find_sell2, Buy2Frame, Sell2Frame};
+use crate::buy_n::{find_buy_n, find_sell_n, BuyNFrame, SellNFrame};
 use crate::zs::{find_zs, zs_frames_from_list, ZSConfig, ZSFrame};
 
 /// 合并 K 线线框（对齐 serialize_kline_combine）。
@@ -97,6 +99,21 @@ pub struct KlineCombineBundle {
     /// K0一买（与 K0中枢同层）
     #[serde(default)]
     pub buy1_k0_frames: Vec<Buy1Frame>,
+    /// K0一卖（一买镜像；与 K0中枢同层）
+    #[serde(default)]
+    pub sell1_k0_frames: Vec<Sell1Frame>,
+    /// K0二买（与一类同框；等高/更高低）
+    #[serde(default)]
+    pub buy2_k0_frames: Vec<Buy2Frame>,
+    /// K0二卖（二买镜像）
+    #[serde(default)]
+    pub sell2_k0_frames: Vec<Sell2Frame>,
+    /// K0三类+买（链升类）
+    #[serde(default)]
+    pub buy_n_k0_frames: Vec<BuyNFrame>,
+    /// K0三类+卖（买镜像）
+    #[serde(default)]
+    pub sell_n_k0_frames: Vec<SellNFrame>,
 }
 
 fn default_k0_policy_pending() -> String {
@@ -120,6 +137,11 @@ impl KlineCombineBundle {
             levels: Vec::new(),
             zs_k0_frames: Vec::new(),
             buy1_k0_frames: Vec::new(),
+            sell1_k0_frames: Vec::new(),
+            buy2_k0_frames: Vec::new(),
+            sell2_k0_frames: Vec::new(),
+            buy_n_k0_frames: Vec::new(),
+            sell_n_k0_frames: Vec::new(),
         }
     }
 }
@@ -193,56 +215,29 @@ fn kline_bars_to_segments(bars: &[KlineBar]) -> Vec<LevelSegment> {
     out
 }
 
-/// K0 中枢 + 一买：在原生分钟 K 段上计算
-fn build_k0_zs_and_buy1(bars: &[KlineBar], zs_cfg: &ZSConfig) -> (Vec<ZSFrame>, Vec<Buy1Frame>) {
+/// K0 中枢 + 一类/二类买/卖：在原生分钟 K 段上计算
+fn build_k0_zs_and_bs1(
+    bars: &[KlineBar],
+    zs_cfg: &ZSConfig,
+) -> (
+    Vec<ZSFrame>,
+    Vec<Buy1Frame>,
+    Vec<Sell1Frame>,
+    Vec<Buy2Frame>,
+    Vec<Sell2Frame>,
+    Vec<BuyNFrame>,
+    Vec<SellNFrame>,
+) {
     let segs = kline_bars_to_segments(bars);
     let zs_list = find_zs(&segs, 0, zs_cfg);
     let frames = zs_frames_from_list(&zs_list, &segs, 0);
     let buy1 = find_buy1(&zs_list, &segs, 0);
-    (frames, buy1)
-}
-
-/// K0 合并框 → 伪 LevelSegment（合并指标等仍用；非 K0 中枢段源）
-fn combine_frames_to_segments(frames: &[KlineCombineFrame]) -> Vec<LevelSegment> {
-    let mut out = Vec::with_capacity(frames.len());
-    for (i, f) in frames.iter().enumerate() {
-        let dir = if i == 0 {
-            1
-        } else {
-            let p = &frames[i - 1];
-            let mid = (f.high + f.low) / 2.0;
-            let p_mid = (p.high + p.low) / 2.0;
-            if mid >= p_mid {
-                1
-            } else {
-                -1
-            }
-        };
-        out.push(LevelSegment {
-            idx: i as i64,
-            dir,
-            begin_confirm_x: f.x1,
-            end_confirm_x: f.x2,
-            begin_pole_x: f.x1,
-            end_pole_x: f.x2,
-            open: f.low,
-            high: f.high,
-            low: f.low,
-            close: f.high,
-            volume: 0.0,
-            begin_fractal_x1: f.x1,
-            begin_fractal_x2: f.x1,
-            end_fractal_x1: f.x2,
-            end_fractal_x2: f.x2,
-            begin_fractal_high: f.high,
-            begin_fractal_low: f.low,
-            end_fractal_high: f.high,
-            end_fractal_low: f.low,
-            is_bootstrap: false,
-            is_promoted_default: false,
-        });
-    }
-    out
+    let sell1 = find_sell1(&zs_list, &segs, 0);
+    let buy2 = find_buy2(&zs_list, &segs, 0);
+    let sell2 = find_sell2(&zs_list, &segs, 0);
+    let buy_n = find_buy_n(&zs_list, &segs, 0);
+    let sell_n = find_sell_n(&zs_list, &segs, 0);
+    (frames, buy1, sell1, buy2, sell2, buy_n, sell_n)
 }
 
 fn unit_to_virtual_bar(u: &LevelUnitBar) -> K1Bar {
@@ -563,7 +558,15 @@ pub fn build_kline_combine_bundle_with(
 
     let k1_analysis = map_k1_analysis(&pr);
 
-    let (zs_k0_frames, buy1_k0_frames) = build_k0_zs_and_buy1(bars, &opt.zs_config);
+    let (
+        zs_k0_frames,
+        buy1_k0_frames,
+        sell1_k0_frames,
+        buy2_k0_frames,
+        sell2_k0_frames,
+        buy_n_k0_frames,
+        sell_n_k0_frames,
+    ) = build_k0_zs_and_bs1(bars, &opt.zs_config);
 
     KlineCombineBundle {
         frames: l1.combine_frames.clone(),
@@ -580,6 +583,11 @@ pub fn build_kline_combine_bundle_with(
         levels: pr.levels,
         zs_k0_frames,
         buy1_k0_frames,
+        sell1_k0_frames,
+        buy2_k0_frames,
+        sell2_k0_frames,
+        buy_n_k0_frames,
+        sell_n_k0_frames,
     }
 }
 

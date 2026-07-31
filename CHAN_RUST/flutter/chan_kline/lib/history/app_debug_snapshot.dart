@@ -2,6 +2,12 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../models/bar_crosshair_feature.dart';
+import '../models/buy1_frame.dart';
+import '../models/sell1_frame.dart';
+import '../models/buy2_frame.dart';
+import '../models/sell2_frame.dart';
+import '../models/buy_n_frame.dart';
+import '../models/sell_n_frame.dart';
 import '../models/zs_frame.dart';
 import '../models/k0_confirm_signal.dart';
 import '../models/k0_line.dart';
@@ -37,6 +43,12 @@ class AppDebugSnapshot {
     required List<KlineCombineFrame> k1CombineFrames,
     required K1AnalysisBundle k1Analysis,
     required List<LevelBundle> levels,
+    List<Buy1Frame> buy1K0Frames = const [],
+    List<Sell1Frame> sell1K0Frames = const [],
+    List<Buy2Frame> buy2K0Frames = const [],
+    List<Sell2Frame> sell2K0Frames = const [],
+    List<BuyNFrame> buyNK0Frames = const [],
+    List<SellNFrame> sellNK0Frames = const [],
     String? lastError,
   }) {
     final now = DateTime.now();
@@ -80,14 +92,17 @@ class AppDebugSnapshot {
       '十字线态方向键永不步退。非十字线态=左步退/右步进（按住连发加速，与点击同义）。',
     );
     buf.writeln(
-      '副图目录：Kn成交量(K0=原生；Kn=归属序列) + Kn分型确认/极点距 + Kn一买；'
+      '副图目录：Kn成交量(K0=原生；Kn=归属序列) + Kn分型确认/极点距 + Kn一类BS + Kn二类BS；'
       'Kn截断仅 truncation_check=开 时可选；'
       '极点距数值不画在折线上，十字线激活时在副图右上角固定读数。'
-      '十字线激活时副图与主图同构：确认/判断/极点距/截断/成交量/一买均按 segAsOf 过滤 x>asOf，右侧不画。'
+      '十字线激活时副图与主图同构：确认/判断/极点距/截断/成交量/一类BS/二类BS均按 segAsOf 过滤 x>asOf，右侧不画。'
       'Kn成交量：K0原生；K(n+1)=下层增量在本层单元上动态累加步进；'
       '共享极点归已确认段，新动态不占末根；不回写 unit.volume；'
       '十字线副图右上读数含 Kn成交量。'
-      'Kn一买：与连续中枢同层同号；当前枢整体在上个枢下方触发；1a/1b…不回写。'
+      'Kn一类BS：与连续中枢同层同号；买=枢下移标1Ba…、卖=镜像标1Sa…；'
+      '同枢仅建框/新极值标一类（等高/更弱归二类）；B比框最低、S比框最高（跳过不改参照）；'
+      'Kn二类BS：与一类同框；买=low≥已见最低标2Ba…、卖镜像2Sa…；'
+      '对齐分型判断=K0颗粒度+动态Kn；稳定键+颗粒度键含x；不回写。'
       '选择栏默认叠加+「Kn指标」层全选；左上角同层/跨层※、单击灰度开关（再点打开）。',
     );
     buf.writeln(
@@ -159,6 +174,9 @@ class AppDebugSnapshot {
     buf.writeln();
 
     _writeLevels(buf, levels);
+    _writeClass1Bs(buf, levels, buy1K0Frames, sell1K0Frames);
+    _writeClass2Bs(buf, levels, buy2K0Frames, sell2K0Frames);
+    _writeClassNBs(buf, levels, buyNK0Frames, sellNK0Frames);
     _writeZS(buf, levels);
     _writeDllDiag(buf, barFeatures, levels);
     _writeTailBarFeature(buf, visibleBars, barFeatures);
@@ -221,6 +239,105 @@ class AppDebugSnapshot {
           'seed_first=${s.idx == 0}',
         );
       }
+    }
+    buf.writeln();
+  }
+
+  /// 一类BS：会话冻结帧（排查步进消点 / 1Sa 口径）
+  static void _writeClass1Bs(
+    StringBuffer buf,
+    List<LevelBundle> levels,
+    List<Buy1Frame> buy1K0,
+    List<Sell1Frame> sell1K0,
+  ) {
+    buf.writeln('【一类BS·会话冻结】');
+    void dump(String kn, List<Buy1Frame> buys, List<Sell1Frame> sells) {
+      if (buys.isEmpty && sells.isEmpty) {
+        buf.writeln('$kn：buy=0 sell=0');
+        return;
+      }
+      buf.writeln('$kn：buy=${buys.length} sell=${sells.length}');
+      for (final p in buys) {
+        buf.writeln(
+          '  ${p.label} x=${p.x} price=${p.price} seg=${p.segIdx} zs=${p.zsSeq}',
+        );
+      }
+      for (final p in sells) {
+        buf.writeln(
+          '  ${p.label} x=${p.x} price=${p.price} seg=${p.segIdx} zs=${p.zsSeq}',
+        );
+      }
+    }
+
+    dump('K0', buy1K0, sell1K0);
+    for (final lv in levels) {
+      dump('K${lv.level}', lv.buy1Frames, lv.sell1Frames);
+    }
+    buf.writeln();
+  }
+
+  /// 二类BS：会话冻结帧（与一类同框）
+  static void _writeClass2Bs(
+    StringBuffer buf,
+    List<LevelBundle> levels,
+    List<Buy2Frame> buy2K0,
+    List<Sell2Frame> sell2K0,
+  ) {
+    buf.writeln('【二类BS·会话冻结】');
+    void dump(String kn, List<Buy2Frame> buys, List<Sell2Frame> sells) {
+      if (buys.isEmpty && sells.isEmpty) {
+        buf.writeln('$kn：buy=0 sell=0');
+        return;
+      }
+      buf.writeln('$kn：buy=${buys.length} sell=${sells.length}');
+      for (final p in buys) {
+        buf.writeln(
+          '  ${p.label} x=${p.x} price=${p.price} seg=${p.segIdx} zs=${p.zsSeq}',
+        );
+      }
+      for (final p in sells) {
+        buf.writeln(
+          '  ${p.label} x=${p.x} price=${p.price} seg=${p.segIdx} zs=${p.zsSeq}',
+        );
+      }
+    }
+
+    dump('K0', buy2K0, sell2K0);
+    for (final lv in levels) {
+      dump('K${lv.level}', lv.buy2Frames, lv.sell2Frames);
+    }
+    buf.writeln();
+  }
+
+  /// 三类+BS：会话冻结帧
+  static void _writeClassNBs(
+    StringBuffer buf,
+    List<LevelBundle> levels,
+    List<BuyNFrame> buyNK0,
+    List<SellNFrame> sellNK0,
+  ) {
+    buf.writeln('【三类+BS·会话冻结】');
+    void dump(String kn, List<BuyNFrame> buys, List<SellNFrame> sells) {
+      if (buys.isEmpty && sells.isEmpty) {
+        buf.writeln('$kn：buy=0 sell=0');
+        return;
+      }
+      buf.writeln('$kn：buy=${buys.length} sell=${sells.length}');
+      for (final p in buys) {
+        buf.writeln(
+          '  ${p.label} cls=${p.cls} x=${p.x} price=${p.price} seg=${p.segIdx} zs=${p.zsSeq}',
+        );
+      }
+      for (final p in sells) {
+        buf.writeln(
+          '  ${p.label} cls=${p.cls} x=${p.x} price=${p.price} seg=${p.segIdx} zs=${p.zsSeq}',
+        );
+      }
+    }
+
+    dump('K0', buyNK0, sellNK0);
+    for (final lv in levels) {
+      dump('K${lv.level}', lv.buyNFrames, lv.sellNFrames);
     }
     buf.writeln();
   }

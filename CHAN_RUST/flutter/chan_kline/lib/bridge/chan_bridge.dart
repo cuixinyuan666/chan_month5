@@ -7,6 +7,7 @@ import 'package:ffi/ffi.dart';
 import '../models/kline_bar.dart';
 import '../models/kline_combine_bundle.dart';
 import '../models/kline_combine_frame.dart';
+import '../widgets/kline_chip.dart';
 
 /// Rust `chan_ffi` 动态库桥接（纯 FFI：全部计算在 Rust，Dart 无回退实现）。
 class ChanBridge {
@@ -111,6 +112,12 @@ class ChanBridge {
       )
       .asFunction();
 
+  late final Pointer<Utf8> Function(Pointer<Utf8>) _chipProfile = _lib
+      .lookup<NativeFunction<Pointer<Utf8> Function(Pointer<Utf8>)>>(
+        'chan_chip_profile',
+      )
+      .asFunction();
+
   dynamic _decode(String jsonText) {
     final obj = jsonDecode(jsonText);
     if (obj is! Map<String, dynamic>) {
@@ -211,6 +218,27 @@ class ChanBridge {
         );
       }
       return KlineCombineBundle.fromJson(Map<String, dynamic>.from(data));
+    } finally {
+      if (ptr != nullptr) calloc.free(ptr);
+    }
+  }
+
+  /// 筹码分桶：截止到 [cutoffX]（含）累加 chip_tick_bins / 三角兜底。
+  ChipProfileData chipProfile({
+    required List<KlineBar> bars,
+    int? cutoffX,
+    double bucketStep = 0.1,
+  }) {
+    ensureInitialized();
+    final payload = <String, dynamic>{
+      'bars': bars.map((b) => b.toJson()).toList(),
+      if (cutoffX != null) 'cutoff_x': cutoffX,
+      'bucket_step': bucketStep,
+    };
+    final ptr = _toNative(jsonEncode(payload));
+    try {
+      final data = _decode(_takeJson(_chipProfile(ptr)));
+      return ChipProfileData.fromJson(Map<String, dynamic>.from(data as Map));
     } finally {
       if (ptr != nullptr) calloc.free(ptr);
     }

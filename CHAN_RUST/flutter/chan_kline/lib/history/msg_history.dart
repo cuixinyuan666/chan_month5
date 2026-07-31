@@ -32,8 +32,13 @@ class MsgHistory {
   /// 工作区全屏 + tooltip 分隔线口径是否已记录
   static bool _desktopWorkAreaLogged = false;
 
-  /// ZG/ZD 常见命名 + Kn一买
+  /// ZG/ZD 常见命名 + Kn一类BS
   static bool _buy1ZgZdLogged = false;
+
+  /// Kn二类BS 口径（进程内去重）
+  static bool _buy2Logged = false;
+  /// Kn三类+BS 口径（进程内去重）
+  static bool _buyNLogged = false;
 
   final List<MsgHistoryEntry> _rows = [];
 
@@ -321,17 +326,89 @@ class MsgHistory {
     );
   }
 
-  /// ZG/ZD common naming + Kn buy1 (dedupe in-process).
+  /// ZG/ZD common naming + Kn class-1 BS (dedupe in-process).
   void appendBuy1AndZgZdCommonNaming() {
     if (_buy1ZgZdLogged) return;
     _buy1ZgZdLogged = true;
     append(
       '【口径·ZG/ZD常见命名】Rust/Flutter 中枢字段互换为常见缠论命名：'
       'ZG=重叠上沿(=框 high)、ZD=重叠下沿(=框 low)；算法数值与框几何不变，仅名称对齐。'
-      '【新增·Kn一买·全层同构】当前中枢框整体在上个中枢框下方（ZG_curr < ZD_prev）触发；'
-      '框内成员Kn按最低价标1a/1b/…；同低顺序字母；更低新标1a不回写旧标签；'
-      '各层第一个Kn(segs下标0)不参与。JSON：buy1_k0_frames / levels[].buy1_frames；'
-      '副图指标「Kn一买」与中枢同层同号；无未来、不回写。',
+      '【新增·Kn一类BS·全层同构】买：当前中枢框整体在上个下方（ZG_curr < ZD_prev）；'
+      '卖：镜像（ZD_curr > ZG_prev）。框内成员按序标 1Ba…、1Sa…；'
+      '同枢仅建框/严格新极值标一类（等高/更弱不再标一类，改归二类）；'
+      '买侧高于或等于本枢框最低不标一类、卖侧低于或等于本枢框最高不标一类（全层同构；'
+      '参照=本枢已见最低/最高，跳过时不抬高/压低参照——禁止与「上一成员」比）；'
+      '更极值重置字母不回写旧标签；'
+      '各层第一个Kn(segs下标0)不参与。Kn≥1 与动态中枢同构：喂入=冻段+active_unit（segments_with_optional_active / find_zs_with_confirmed）；动态伪段按 dir 锚定极点（跌低/涨高在 end）；打点 x=极值极点与段右端取 max（禁止回写到段起点）；'
+      '若本 ZS 已有前序标签且点落在 active 伪段，x 钉在 begin_pole+1（首段身），不把旧点挪到新右端；'
+      'Flutter：对齐 Kn分型判断=「K0步进颗粒度 + 动态Kn作判断元素」：会话追加不删旧；首次 x=stepIdx；'
+      'Kn≥1 动态 active 本步仍成立则再追加本步 x（稳定键层|段|标签 + 颗粒度键含x；同 seg/label 可多 x）；'
+      '【踩坑·2026-07-30】勿把「对齐分型判断」做成只用稳定键去重/只留发现点：'
+      '002003 step27 Rust仍出1Sa、Flutter dedup_skip→副图尾柱无点、十字 sellAtAsOf=null；'
+      '副图/十字只扫历史 x<=maxX；K0 无 active 仍用分钟K段。JSON：buy1_k0_frames/sell1_k0_frames、'
+      'levels[].buy1_frames/sell1_frames；副图指标「Kn一类BS」与中枢同层同号'
+      '（买点副图+1红、卖点-1绿）；无未来、不回写。步退按可见尾柱裁切。',
+    );
+  }
+
+  /// Kn二类BS（与一类同框；方案A）
+  void appendBuy2Class2Naming() {
+    if (_buy2Logged) return;
+    _buy2Logged = true;
+    append(
+      '【新增·Kn二类BS·全层同构·方案A】与一类同一资格中枢框（买下移/卖上移）；'
+      '按成员序维护已见最低/最高：建框与严格新极值只标一类；'
+      '买侧 low≥已见最低 → 2Ba/2Bb…；卖侧 high≤已见最高 → 2Sa…（镜像）；'
+      '字母一类/二类各自独立；一类建框/新极值复位时二类字母同步重起（2Ba/2Sa）。'
+      '同段互斥分区。'
+      '喂入/打点x/active钉点/Flutter双键会话冻结与一类同构；'
+      'JSON：buy2_k0_frames/sell2_k0_frames、levels[].buy2_frames/sell2_frames；'
+      '副图「Kn二类BS」；K0颗粒度可多点；无未来、不回写。',
+    );
+  }
+
+  /// Kn三类及以上BS（链升类；全层同构）
+  void appendBuyNClass3PlusNaming() {
+    if (_buyNLogged) return;
+    _buyNLogged = true;
+    append(
+      '【新增·Kn三类+BS·全层同构】以一类/二类资格中枢为链起点；'
+      '买：相邻框连续 zd_k>zg_{k-1} → 三类/四类…；卖镜像 zg_k<zd_{k-1}；'
+      '中间环不满足则该起点链断开，后续新资格框可开新链。'
+      '同框每个成员（跳过层首）按序 3Ba/3Bb… 字母只递增不复位。'
+      '打点x/active钉点/Flutter双键会话冻结与一类同构；K0颗粒度同柱可多类叠标。'
+      'JSON：buy_n_k0_frames/sell_n_k0_frames、levels[].buy_n_frames/sell_n_frames（含 cls）；'
+      '副图分槽「Kn三类BS」…「Kn九类BS」（更高类动态扩）；'
+      '全类副图 S 在上(+1)冷色、B 在下(-1)暖色，同族内按类分档。',
+    );
+  }
+
+  /// Kn相邻比例 + Kn步进节奏副图（进程内去重）
+  static bool _adjacentRatioRhythmAppearLogged = false;
+  void appendAdjacentRatioAndStepRhythm() {
+    if (_adjacentRatioRhythmAppearLogged) return;
+    _adjacentRatioRhythmAppearLogged = true;
+    append(
+      '【Kn相邻比例·全层同构·动态·K0颗粒度】'
+      '【口径】指标设计遵循动态计算（除非明确指示其它逻辑）：'
+      '子线=主图连线出现链（冻段实线+展示轨虚线/种子），虚实一视同仁；'
+      '按起点极点 beginX 出现时机排序，取末两根 ratio=|cur|/|prev|；'
+      '不要求 isSure；每步按 K0 idx 写入；denom≤1e-12 跳过；默认不勾选。',
+    );
+    append(
+      '【Kn步进节奏·副图·normal·K0颗粒度·0-0组】'
+      '仅 normal；全层同构；子线=出现链虚实不论；'
+      '组锚=父分型极值（底→极低升组/顶→极高降组）；命名从 0-0；'
+      '子同向分型开窗逐K续写，子反向分型确认后停写（单点不连后）；'
+      '父分型确认本组停、下组重置自确认步绘；不回写无未来；'
+      '绘制：同父级(roundRef)同色，升暖降冷；K0 对齐点线，Δx≠1 不跨缺口续连；名在左侧；默认不勾选。',
+    );
+    append(
+      '【踩坑·比例/节奏·2026-07-31】'
+      '①显示层 displayKn→数据 level=kn+1；节奏父切组用 level+2 的分型 confirms，勿用父段 end_confirm；'
+      '②比例子线须含展示轨虚线/种子，勿只读冻段；按 beginX 出现序勿按 endConfirmX；'
+      '③节奏命名 0-0 起；关窗后不续写；key 含 groupId；同棒 bootstrap→子窗→父切组；'
+      '④验收连续单步非跳末。详见 TASK_LOG / AGENTS.md。',
     );
   }
 
@@ -406,8 +483,25 @@ class MsgHistory {
       '【默认指标】主/副图启动默认勾选「K0指标」层全选，'
       '与选择栏最上「Kn指标」同口径：'
       '主图=K0/K0合并/K0连线/K0连续中枢；'
-      '副图=K0成交量+K0分型确认/判断/极点距/截断（截断随截断开关 prune）。'
+      '副图=K0成交量+K0筹码分布+K0分型确认/判断/极点距/截断（截断随截断开关 prune）。'
       '非 K1 层；加载后仅 prune 超出 catalog 的项，不改层。',
+    );
+  }
+
+  /// 筹码分布：全层同构 + 分笔 bins + 十字 as-of 截断（进程内去重）。
+  static bool _chipDistributionLogged = false;
+  void appendChipDistribution() {
+    if (_chipDistributionLogged) return;
+    _chipDistributionLogged = true;
+    append(
+      '【Kn筹码分布·全层同构】副图勾选 K0/K1/…/Kn筹码分布；'
+      '主图右侧水平柱（左绿S/右红B），峰延长线横穿主图。'
+      '数据：离线分笔注入 chip_tick_bins（p/s/b/w）；无 bins 时 OHLC 三角兜底。'
+      '计算：Rust chan_chip_profile（cutoff_x 含）；Kn cutoff=该层单元覆盖到的最大 K0 idx。'
+      '性能：Flutter 前缀索引（步进增量/十字 as-of 秒查）+ 底图/筹码/十字三层 RepaintBoundary；'
+      '大序列 Isolate 后台预热前缀（跳末/加载），计算口径不变。'
+      '逐K当下性：只累加已喂入 bars；十字 as-of 回滚到该日累积，不回写历史桶。'
+      '配置：chipEnabled/bucketStep/stretch/peakLine；落盘 .chan_chip_config.json。',
     );
   }
 

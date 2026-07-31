@@ -3,6 +3,9 @@
 //! combine/feature/seg_eigen=旧字段兼容映射；segment_first=全层首段策略。
 
 mod buy1;
+mod buy2;
+mod buy_n;
+mod chip;
 mod combine;
 mod engine;
 mod error;
@@ -15,7 +18,19 @@ mod segment_first;
 mod tick;
 mod zs;
 
-pub use buy1::{find_buy1, zs_below_prev, Buy1Frame};
+pub use buy1::{
+    find_buy1, find_buy1_with_active, find_sell1, find_sell1_with_active, zs_above_prev,
+    zs_below_prev, Buy1Frame, Sell1Frame,
+};
+pub use buy2::{
+    find_buy2, find_buy2_with_active, find_sell2, find_sell2_with_active, Buy2Frame, Sell2Frame,
+};
+pub use buy_n::{
+    find_buy_n, find_buy_n_with_active, find_sell_n, find_sell_n_with_active, BuyNFrame, SellNFrame,
+};
+pub use chip::{
+    chip_peaks, chip_profile, enrich_bars_with_chip_tick_bins, ChipProfile, ChipTickBins,
+};
 pub use combine::{
     build_k1_combine_frames, build_k1_combine_frames_with, build_kline_combine_bundle,
     build_kline_combine_bundle_with, build_kline_combine_frames, K0ConfirmSignal,
