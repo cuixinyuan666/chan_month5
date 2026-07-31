@@ -1,4 +1,4 @@
-use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
+use chrono::{Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
 
 use crate::error::{ChanDataError, Result};
 
@@ -141,6 +141,39 @@ pub fn normalize_native(mut rows: Vec<TickRow>) -> Vec<TickRow> {
     rows
 }
 
+fn minute_key(dt: NaiveDateTime) -> (i32, u32, u32, u32, u32) {
+    use chrono::Datelike;
+    (dt.year(), dt.month(), dt.day(), dt.hour(), dt.minute())
+}
+
+/// 同分钟多笔：分钟起点 + 序内毫秒偏移（+i ms），保证 time 严格递增、不撞戳。
+/// 源文件只有 HH:MM；约 20 笔/分完全够用（最多约 6 万笔/分）。
+pub fn assign_intramute_times(rows: &mut [TickRow]) {
+    if rows.is_empty() {
+        return;
+    }
+    let mut i = 0;
+    while i < rows.len() {
+        let key = minute_key(rows[i].dt);
+        let mut j = i + 1;
+        while j < rows.len() && minute_key(rows[j].dt) == key {
+            j += 1;
+        }
+        let n = j - i;
+        let base = {
+            let dt = rows[i].dt;
+            NaiveDateTime::new(
+                dt.date(),
+                NaiveTime::from_hms_opt(dt.hour(), dt.minute(), 0).unwrap_or(dt.time()),
+            )
+        };
+        for k in 0..n {
+            rows[i + k].dt = base + Duration::milliseconds(k as i64);
+        }
+        i = j;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -167,5 +200,20 @@ mod tests {
         .unwrap();
         assert!((row.price - 10.5).abs() < 1e-9);
         assert_eq!(row.side, "B");
+    }
+
+    #[test]
+    fn assign_intramute_spreads_same_minute() {
+        let mk = |price| {
+            let mut r = parse_tick_line("09:30\t10.00\t1\t1\tB", 2026, 4, 21).unwrap();
+            r.price = price;
+            r
+        };
+        let mut rows = vec![mk(1.0), mk(2.0), mk(3.0)];
+        assign_intramute_times(&mut rows);
+        assert!(rows[0].dt < rows[1].dt && rows[1].dt < rows[2].dt);
+        // 分钟起点 + i ms
+        assert_eq!((rows[1].dt - rows[0].dt).num_milliseconds(), 1);
+        assert_eq!((rows[2].dt - rows[0].dt).num_milliseconds(), 2);
     }
 }

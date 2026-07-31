@@ -74,6 +74,7 @@ class KlineChart extends StatefulWidget {
   const KlineChart({
     super.key,
     required this.bars,
+    this.period = 'tick',
     required this.combineFrames,
     required this.k0ConfirmSignals,
     required this.barFeatures,
@@ -119,6 +120,8 @@ class KlineChart extends StatefulWidget {
   });
 
   final List<KlineBar> bars;
+  /// 加载周期键（tick=分笔画点；其它画蜡烛）
+  final String period;
   final List<KlineCombineFrame> combineFrames;
   final List<K0ConfirmSignal> k0ConfirmSignals;
   final List<BarCrosshairFeature> barFeatures;
@@ -1141,6 +1144,7 @@ class _KlineChartState extends State<KlineChart> {
         _KlineCompositePainter paintLayer(_ChartPaintLayer layer) =>
             _KlineCompositePainter(
               bars: widget.bars,
+              period: widget.period,
               combineFrames: _effectiveK0CombineFrames,
               k0ConfirmSignals: widget.k0ConfirmSignals,
               barFeatures: widget.barFeatures,
@@ -1413,6 +1417,7 @@ enum _ChartPaintLayer { base, chip, crosshair }
 class _KlineCompositePainter extends CustomPainter {
   _KlineCompositePainter({
     required this.bars,
+    this.period = 'tick',
     required this.combineFrames,
     required this.k0ConfirmSignals,
     required this.barFeatures,
@@ -1486,6 +1491,7 @@ class _KlineCompositePainter extends CustomPainter {
   /// 分层绘制：底图/筹码/十字 独立 shouldRepaint（计算口径不变）
   final _ChartPaintLayer layer;
   final List<KlineBar> bars;
+  final String period;
   final List<KlineCombineFrame> combineFrames;
   final List<K0ConfirmSignal> k0ConfirmSignals;
   final List<BarCrosshairFeature> barFeatures;
@@ -3020,10 +3026,12 @@ class _KlineCompositePainter extends CustomPainter {
     double barW,
     double slotW,
   ) {
-    // 沿用原主图「K0」蜡烛样式（红涨绿跌实体+影线）
+    // tick：一字线画点；其它周期：红涨绿跌实体+影线
     const up = Color(0xFFE53935);
     const down = Color(0xFF26A69A);
     final wick = Paint()..strokeWidth = 1.2;
+    final drawDots = period == 'tick';
+    final dotR = math.max(1.2, math.min(barW * 0.45, slotW * 0.35));
 
     // 踩坑：之前 _drawCandles 遍历 bars 全部索引（5 万+），每帧都在空转循环；
     // 改为只扫视口附近 ±2 根，大幅降低滚动/缩放时的 CPU 开销。
@@ -3037,8 +3045,25 @@ class _KlineCompositePainter extends CustomPainter {
       if (idx < viewport.viewXMin - 1 || idx > viewport.viewXMax + 1) continue;
       final b = bars[i];
       final cx = _barCenterX(idx, w, slotW);
+      // 一字线 open==close：相对前收着色，避免全红
+      final Color color;
+      if (drawDots) {
+        if (i > 0 && b.close != bars[i - 1].close) {
+          color = b.close > bars[i - 1].close ? up : down;
+        } else {
+          color = up;
+        }
+      } else {
+        color = b.isUp ? up : down;
+      }
+
+      if (drawDots) {
+        final y = priceRange.yOf(b.close, plotTop, plotH);
+        canvas.drawCircle(Offset(cx, y), dotR, Paint()..color = color);
+        continue;
+      }
+
       final x = cx - barW / 2;
-      final color = b.isUp ? up : down;
       wick.color = color;
 
       final yH = priceRange.yOf(b.high, plotTop, plotH);
@@ -4293,6 +4318,7 @@ class _KlineCompositePainter extends CustomPainter {
         oldDelegate.priceRange.min != priceRange.min ||
         oldDelegate.priceRange.max != priceRange.max;
     final dataChanged = oldDelegate.bars != bars ||
+        oldDelegate.period != period ||
         oldDelegate.combineFrames != combineFrames ||
         oldDelegate.k0ConfirmSignals != k0ConfirmSignals ||
         oldDelegate.barFeatures != barFeatures ||

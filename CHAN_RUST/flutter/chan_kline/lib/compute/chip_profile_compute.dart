@@ -101,16 +101,27 @@ class _ChipPrefixIndex {
               .toList() ??
           const <double>[];
       if (p.isEmpty) {
-        _triangleInto(
-          low: low,
-          high: high,
-          close: close,
-          volume: volume,
-          step: step,
-          keys: keys,
-          s: s,
-          b: b,
-        );
+        if ((high - low).abs() < 1e-12) {
+          _pointInto(
+            price: close,
+            volume: volume,
+            step: step,
+            keys: keys,
+            s: s,
+            b: b,
+          );
+        } else {
+          _triangleInto(
+            low: low,
+            high: high,
+            close: close,
+            volume: volume,
+            step: step,
+            keys: keys,
+            s: s,
+            b: b,
+          );
+        }
       } else {
         for (var i = 0; i < p.length; i++) {
           final price = p[i];
@@ -125,6 +136,16 @@ class _ChipPrefixIndex {
           b.add(bb > 0 ? bb : 0.0);
         }
       }
+    } else if ((high - low).abs() < 1e-12) {
+      // 一字线/tick：单点落量，禁止三角
+      _pointInto(
+        price: close,
+        volume: volume,
+        step: step,
+        keys: keys,
+        s: s,
+        b: b,
+      );
     } else {
       _triangleInto(
         low: low,
@@ -138,6 +159,21 @@ class _ChipPrefixIndex {
       );
     }
     return _BarChipDelta(idx, keys, s, b);
+  }
+
+  static void _pointInto({
+    required double price,
+    required double volume,
+    required double step,
+    required List<int> keys,
+    required List<double> s,
+    required List<double> b,
+  }) {
+    final vol = volume < 0 ? 0.0 : volume;
+    if (!price.isFinite || vol <= 0) return;
+    keys.add((price / step).floor());
+    s.add(0);
+    b.add(vol);
   }
 
   static void _triangleInto({

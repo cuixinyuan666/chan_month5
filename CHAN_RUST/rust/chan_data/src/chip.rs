@@ -103,6 +103,10 @@ fn json_f64_vec(v: &serde_json::Value) -> Option<Vec<f64>> {
 /// 分笔时刻 → 周期 K 线桶键（与 offline 合成 K 一致）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 enum ChipBucketKey {
+    /// 逐笔：合成后的精确毫秒
+    Instant {
+        time_ms: i64,
+    },
     Minute {
         y: i32,
         mo: u32,
@@ -122,23 +126,36 @@ enum ChipBucketKey {
         y: i32,
         mo: u32,
     },
-    Quarter {
+    /// 多月槽：年内 floor((m-1)/span)
+    MonthSlot {
         y: i32,
-        q: u32,
+        slot: u32,
+        span: u32,
     },
     Year {
         y: i32,
     },
+    YearSlot {
+        y0: i32,
+        span: u32,
+    },
 }
 
 fn chip_bar_bucket_key(dt: NaiveDateTime, period: KlinePeriod) -> Option<ChipBucketKey> {
+    use chrono::{TimeZone, Utc};
     match period {
+        KlinePeriod::Tick => {
+            let time_ms = Utc.from_utc_datetime(&dt).timestamp_millis();
+            Some(ChipBucketKey::Instant { time_ms })
+        }
         KlinePeriod::M1
         | KlinePeriod::M3
         | KlinePeriod::M5
         | KlinePeriod::M15
         | KlinePeriod::M30
-        | KlinePeriod::M60 => {
+        | KlinePeriod::M60
+        | KlinePeriod::H2
+        | KlinePeriod::H4 => {
             let pm = period.minute_slot()?;
             let slot = (dt.hour() * 60 + dt.minute()) / pm;
             Some(ChipBucketKey::Minute {
@@ -153,6 +170,8 @@ fn chip_bar_bucket_key(dt: NaiveDateTime, period: KlinePeriod) -> Option<ChipBuc
             mo: dt.month(),
             d: dt.day(),
         }),
+        // 3 日=连续交易日分桶，单靠日历无法对齐 → enrich 里走 BarEnd 窗口
+        KlinePeriod::Day3 => None,
         KlinePeriod::Week => {
             let iso = dt.date().iso_week();
             Some(ChipBucketKey::Week {
@@ -164,14 +183,25 @@ fn chip_bar_bucket_key(dt: NaiveDateTime, period: KlinePeriod) -> Option<ChipBuc
             y: dt.year(),
             mo: dt.month(),
         }),
-        KlinePeriod::Quarter => {
-            let q = (dt.month() - 1) / 3 + 1;
-            Some(ChipBucketKey::Quarter {
+        KlinePeriod::Month3
+        | KlinePeriod::Month6
+        | KlinePeriod::Month9
+        | KlinePeriod::Month12
+        | KlinePeriod::Quarter => {
+            let span = period.month_span()?;
+            let slot = (dt.month() - 1) / span;
+            Some(ChipBucketKey::MonthSlot {
                 y: dt.year(),
-                q,
+                slot,
+                span,
             })
         }
         KlinePeriod::Year => Some(ChipBucketKey::Year { y: dt.year() }),
+        KlinePeriod::Year3 | KlinePeriod::Year6 => {
+            let span = period.year_span()?;
+            let y0 = (dt.year().div_euclid(span as i32)) * span as i32;
+            Some(ChipBucketKey::YearSlot { y0, span })
+        }
     }
 }
 
@@ -190,6 +220,16 @@ pub fn enrich_bars_with_chip_tick_bins(
     period: KlinePeriod,
 ) {
     if bars.is_empty() || ticks.is_empty() {
+        return;
+    }
+    // tick：一笔一根 K0，按分笔序/idx 对齐写入（不靠可能碰撞的 time_ms）
+    if period.is_tick() {
+        enrich_tick_by_bar_idx(bars, ticks);
+        return;
+    }
+    // 3 日连续交易日：用 bar 时间窗对齐（日历键对不齐）
+    if period == KlinePeriod::Day3 {
+        enrich_by_bar_end_windows(bars, ticks);
         return;
     }
     let mut key_to_rows: BTreeMap<ChipBucketKey, Vec<(f64, f64, String)>> = BTreeMap::new();
@@ -217,6 +257,60 @@ pub fn enrich_bars_with_chip_tick_bins(
             continue;
         };
         if let Some(bins) = key_to_bins.get(&bk) {
+            bar.metrics
+                .insert("chip_tick_bins".to_string(), bins.to_json_value());
+        }
+    }
+}
+
+/// tick 周期：第 i 笔 → bars[i] 的 chip_tick_bins（含 B/S）。
+fn enrich_tick_by_bar_idx(bars: &mut [KlineBar], ticks: &[TickRow]) {
+    let n = bars.len().min(ticks.len());
+    for i in 0..n {
+        let t = &ticks[i];
+        let refs = [(t.price, t.vol, t.side.as_str())];
+        if let Some(bins) = ChipTickBins::from_side_rows(&refs) {
+            bars[i]
+                .metrics
+                .insert("chip_tick_bins".to_string(), bins.to_json_value());
+        }
+    }
+}
+
+/// 按 bar 结束时刻划分：tick 落入 (prev_end, bar_end] 写入该 bar。
+fn enrich_by_bar_end_windows(bars: &mut [KlineBar], ticks: &[TickRow]) {
+    use chrono::{TimeZone, Utc};
+    let mut key_to_rows: BTreeMap<i64, Vec<(f64, f64, String)>> = BTreeMap::new();
+    for t in ticks {
+        let t_ms = Utc.from_utc_datetime(&t.dt).timestamp_millis();
+        // 找第一个 bar.time_ms >= t_ms
+        let mut chosen = None;
+        for b in bars.iter() {
+            if b.time_ms >= t_ms {
+                chosen = Some(b.time_ms);
+                break;
+            }
+        }
+        let Some(end_ms) = chosen.or_else(|| bars.last().map(|b| b.time_ms)) else {
+            continue;
+        };
+        key_to_rows
+            .entry(end_ms)
+            .or_default()
+            .push((t.price, t.vol, t.side.clone()));
+    }
+    let mut key_to_bins: BTreeMap<i64, ChipTickBins> = BTreeMap::new();
+    for (k, rows) in &key_to_rows {
+        let refs: Vec<(f64, f64, &str)> = rows
+            .iter()
+            .map(|(p, v, s)| (*p, *v, s.as_str()))
+            .collect();
+        if let Some(bins) = ChipTickBins::from_side_rows(&refs) {
+            key_to_bins.insert(*k, bins);
+        }
+    }
+    for bar in bars.iter_mut() {
+        if let Some(bins) = key_to_bins.get(&bar.time_ms) {
             bar.metrics
                 .insert("chip_tick_bins".to_string(), bins.to_json_value());
         }
@@ -281,7 +375,8 @@ fn accumulate_ohlc_triangle(bar: &KlineBar, step: f64, buckets_b: &mut BTreeMap<
     }
 }
 
-/// 按 cutoff_x（含）累加筹码：优先 chip_tick_bins 直加，否则 OHLC 三角分摊兜底。
+/// 按 cutoff_x（含）累加筹码：优先 chip_tick_bins 直加；
+/// 一字线/无 bins：收盘价单点落量（禁三角）；其余 OHLC 才三角兜底。
 pub fn chip_profile(bars: &[KlineBar], cutoff_x: Option<i64>, bucket_step: Option<f64>) -> ChipProfile {
     let step = bucket_step.unwrap_or(0.1).max(0.001);
     let cut = cutoff_x.unwrap_or_else(|| bars.last().map(|b| b.idx as i64).unwrap_or(-1));
@@ -309,6 +404,11 @@ pub fn chip_profile(bars: &[KlineBar], cutoff_x: Option<i64>, bucket_step: Optio
                 }
                 continue;
             }
+        }
+        // 一字线（tick）：单点落量，禁止三角分摊
+        if (bar.high - bar.low).abs() < 1e-12 {
+            accumulate_point_volume(bar, step, &mut buckets_b);
+            continue;
         }
         accumulate_ohlc_triangle(bar, step, &mut buckets_b);
     }
@@ -347,6 +447,16 @@ pub fn chip_profile(bars: &[KlineBar], cutoff_x: Option<i64>, bucket_step: Optio
         max_total,
         source: "rust".to_string(),
     }
+}
+
+/// 一字线无 bins：收盘价单点 + 全量记 B。
+fn accumulate_point_volume(bar: &KlineBar, step: f64, buckets_b: &mut BTreeMap<i64, f64>) {
+    let vol = bar.volume.max(0.0);
+    if vol <= 0.0 || !bar.close.is_finite() {
+        return;
+    }
+    let key = (bar.close / step).floor() as i64;
+    *buckets_b.entry(key).or_insert(0.0) += vol;
 }
 
 /// 局部筹码峰：v >= 左邻 && v > 右邻（平顶峰取右端，对齐 Dart peakIndices）。
@@ -484,5 +594,55 @@ mod tests {
         }];
         enrich_bars_with_chip_tick_bins(&mut bars, &ticks, KlinePeriod::Day);
         assert!(bars[0].metrics.contains_key("chip_tick_bins"));
+    }
+
+    #[test]
+    fn enrich_tick_writes_bins_per_bar_idx() {
+        use chrono::NaiveTime;
+        let base = NaiveDate::from_ymd_opt(2026, 4, 21)
+            .unwrap()
+            .and_time(NaiveTime::from_hms_opt(9, 30, 0).unwrap());
+        let ticks = vec![
+            TickRow {
+                dt: base,
+                price: 10.0,
+                vol: 100.0,
+                side: "B".into(),
+                has_bs: true,
+                price_lo: None,
+                price_hi: None,
+            },
+            TickRow {
+                dt: base + chrono::Duration::milliseconds(1),
+                price: 10.1,
+                vol: 50.0,
+                side: "S".into(),
+                has_bs: true,
+                price_lo: None,
+                price_hi: None,
+            },
+        ];
+        let mut bars: Vec<KlineBar> = ticks
+            .iter()
+            .enumerate()
+            .map(|(i, t)| {
+                let p = t.price;
+                bar(i as i32, p, p, p, p, t.vol)
+            })
+            .collect();
+        enrich_bars_with_chip_tick_bins(&mut bars, &ticks, KlinePeriod::Tick);
+        assert!(bars[0].metrics.contains_key("chip_tick_bins"));
+        assert!(bars[1].metrics.contains_key("chip_tick_bins"));
+        let b0 = ChipTickBins::from_json_value(bars[0].metrics.get("chip_tick_bins").unwrap())
+            .unwrap();
+        let b1 = ChipTickBins::from_json_value(bars[1].metrics.get("chip_tick_bins").unwrap())
+            .unwrap();
+        assert!((b0.b[0] - 100.0).abs() < 1e-9);
+        assert!((b1.s[0] - 50.0).abs() < 1e-9);
+        // 一字无 bins：单点而非三角
+        let plain = bar(0, 9.0, 9.0, 9.0, 9.0, 80.0);
+        let profile = chip_profile(&[plain], Some(0), Some(0.1));
+        assert_eq!(profile.total.len(), 1);
+        assert!((profile.total[0] - 80.0).abs() < 1e-9);
     }
 }

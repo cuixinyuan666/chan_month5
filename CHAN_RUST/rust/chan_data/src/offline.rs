@@ -5,7 +5,7 @@ use chrono::{Datelike, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Timelike, 
 
 use crate::error::{ChanDataError, Result};
 use crate::kline::{KlineBar, KlinePeriod};
-use crate::tick::{normalize_native, read_tick_file, TickRow};
+use crate::tick::{assign_intramute_times, normalize_native, read_tick_file, TickRow};
 
 /// 默认 a_Data：优先 `chan.py/a_Data`（CHAN_RUST 的上一级），其次 `CHAN_RUST/a_Data`。
 pub fn default_data_root() -> PathBuf {
@@ -199,14 +199,23 @@ pub fn load_klines(
     for p in paths {
         rows.extend(read_tick_file(&p)?);
     }
+    // 稳定排序：同分钟保留文件行序，便于合成秒
     rows.sort_by_key(|r| r.dt);
     let mut rows = normalize_native(rows);
+    // 先按分钟精度滤区间，再合成秒（合成后仍可能被 filter_bars 收紧）
     rows.retain(|r| r.dt >= begin_dt && r.dt <= end_dt);
     if rows.is_empty() {
         return Err(ChanDataError::msg("分笔文件在日期区间内无有效成交行"));
     }
-    let bars_1m = ticks_to_1m(&rows);
-    let mut bars = rows_to_period(bars_1m, period)?;
+    assign_intramute_times(&mut rows);
+
+    let mut bars = if period.is_tick() {
+        // 默认：每笔一字线 K0（O=H=L=C）
+        ticks_to_bars(&rows)
+    } else {
+        let bars_1m = ticks_to_1m(&rows);
+        rows_to_period(bars_1m, period)?
+    };
     bars = filter_bars_by_datetime(bars, begin_dt, end_dt);
     if bars.is_empty() {
         return Err(ChanDataError::msg(format!(
@@ -388,7 +397,7 @@ struct Bar1m {
 }
 
 fn ticks_to_1m(rows: &[TickRow]) -> Vec<Bar1m> {
-    // 分钟桶：首价开、末价收、高低扩、量额累加
+    // 分钟桶：首价开、末价收、高低扩、量额累加（合成秒不影响分钟键）
     let mut buck: BTreeMap<(i32, u32, u32, u32, u32), [f64; 6]> = BTreeMap::new();
     for row in rows {
         let key = (
@@ -429,6 +438,19 @@ fn ticks_to_1m(rows: &[TickRow]) -> Vec<Bar1m> {
         });
     }
     out
+}
+
+/// 逐笔 → 一字线 K0（O=H=L=C=价）。
+fn ticks_to_bars(rows: &[TickRow]) -> Vec<KlineBar> {
+    rows.iter()
+        .enumerate()
+        .map(|(i, r)| {
+            let p = r.price;
+            let mut k = datetime_to_kline(r.dt, p, p, p, p, r.vol, p * r.vol, true);
+            k.idx = i as i32;
+            k
+        })
+        .collect()
 }
 
 fn merge_bars(bars: &[Bar1m]) -> Bar1m {
@@ -530,11 +552,51 @@ fn yearly_from_daily(bars: &[Bar1m]) -> Vec<Bar1m> {
         .collect()
 }
 
-fn quarterly_from_daily(bars: &[Bar1m]) -> Vec<Bar1m> {
+/// 连续交易日每 n 根合并（日 K 已按交易日排序）。
+fn nday_from_daily(bars: &[Bar1m], n: usize) -> Vec<Bar1m> {
+    if n <= 1 {
+        return bars.to_vec();
+    }
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < bars.len() {
+        let end = (i + n).min(bars.len());
+        out.push(merge_bars(&bars[i..end]));
+        i = end;
+    }
+    out
+}
+
+/// 日历多月：年内 floor((m-1)/span)。
+fn multi_month_from_daily(bars: &[Bar1m], span: u32) -> Vec<Bar1m> {
+    if span <= 1 {
+        return monthly_from_daily(bars);
+    }
     let mut buck: BTreeMap<(i32, u32), Vec<Bar1m>> = BTreeMap::new();
     for b in bars {
-        let q = (b.dt.month() - 1) / 3 + 1;
-        buck.entry((b.dt.year(), q)).or_default().push(b.clone());
+        let slot = (b.dt.month() - 1) / span;
+        buck.entry((b.dt.year(), slot))
+            .or_default()
+            .push(b.clone());
+    }
+    buck.values()
+        .map(|lst| {
+            let mut sorted = lst.clone();
+            sorted.sort_by_key(|b| b.dt);
+            merge_bars(&sorted)
+        })
+        .collect()
+}
+
+/// 日历多年：floor(y/span)*span 对齐。
+fn multi_year_from_daily(bars: &[Bar1m], span: u32) -> Vec<Bar1m> {
+    if span <= 1 {
+        return yearly_from_daily(bars);
+    }
+    let mut buck: BTreeMap<i32, Vec<Bar1m>> = BTreeMap::new();
+    for b in bars {
+        let y0 = (b.dt.year().div_euclid(span as i32)) * span as i32;
+        buck.entry(y0).or_default().push(b.clone());
     }
     buck.values()
         .map(|lst| {
@@ -546,16 +608,30 @@ fn quarterly_from_daily(bars: &[Bar1m]) -> Vec<Bar1m> {
 }
 
 fn rows_to_period(bars_1m: Vec<Bar1m>, period: KlinePeriod) -> Result<Vec<KlineBar>> {
+    if period.is_tick() {
+        return Err(ChanDataError::msg("tick 周期不应走 1m 升周期"));
+    }
     let bars = if let Some(pm) = period.minute_slot() {
         resample_minutes(&bars_1m, pm)
     } else {
         let daily = daily_from_1m(&bars_1m);
         match period {
             KlinePeriod::Day => daily,
+            KlinePeriod::Day3 => nday_from_daily(&daily, 3),
             KlinePeriod::Week => weekly_from_daily(&daily),
-            KlinePeriod::Month => monthly_from_daily(&daily),
-            KlinePeriod::Year => yearly_from_daily(&daily),
-            KlinePeriod::Quarter => quarterly_from_daily(&daily),
+            KlinePeriod::Month
+            | KlinePeriod::Month3
+            | KlinePeriod::Month6
+            | KlinePeriod::Month9
+            | KlinePeriod::Month12
+            | KlinePeriod::Quarter => {
+                let span = period.month_span().unwrap_or(1);
+                multi_month_from_daily(&daily, span)
+            }
+            KlinePeriod::Year | KlinePeriod::Year3 | KlinePeriod::Year6 => {
+                let span = period.year_span().unwrap_or(1);
+                multi_year_from_daily(&daily, span)
+            }
             _ => daily,
         }
     };
@@ -588,25 +664,52 @@ fn filter_bars_by_datetime(
 }
 
 fn bar_to_kline(b: Bar1m) -> KlineBar {
-    let time_ms = Utc.from_utc_datetime(&b.dt).timestamp_millis();
-    let time_text = format!(
-        "{:04}/{:02}/{:02} {:02}:{:02}",
-        b.dt.year(),
-        b.dt.month(),
-        b.dt.day(),
-        b.dt.hour(),
-        b.dt.minute()
-    );
+    datetime_to_kline(
+        b.dt, b.open, b.high, b.low, b.close, b.volume, b.amount, false,
+    )
+}
+
+fn datetime_to_kline(
+    dt: NaiveDateTime,
+    open: f64,
+    high: f64,
+    low: f64,
+    close: f64,
+    volume: f64,
+    amount: f64,
+    with_seconds: bool,
+) -> KlineBar {
+    let time_ms = Utc.from_utc_datetime(&dt).timestamp_millis();
+    let time_text = if with_seconds {
+        format!(
+            "{:04}/{:02}/{:02} {:02}:{:02}:{:02}",
+            dt.year(),
+            dt.month(),
+            dt.day(),
+            dt.hour(),
+            dt.minute(),
+            dt.second()
+        )
+    } else {
+        format!(
+            "{:04}/{:02}/{:02} {:02}:{:02}",
+            dt.year(),
+            dt.month(),
+            dt.day(),
+            dt.hour(),
+            dt.minute()
+        )
+    };
     KlineBar {
         idx: 0,
         time_ms,
         time_text,
-        open: b.open,
-        high: b.high,
-        low: b.low,
-        close: b.close,
-        volume: b.volume,
-        amount: b.amount,
+        open,
+        high,
+        low,
+        close,
+        volume,
+        amount,
         metrics: serde_json::Map::new(),
     }
 }
@@ -696,6 +799,51 @@ mod tests {
                     (1.0, 4.0, 1.0, 4.0)
                 ]
             );
+        }
+    }
+
+    #[test]
+    fn kline_period_parse_tick_and_extended() {
+        assert_eq!(KlinePeriod::parse("tick"), Some(KlinePeriod::Tick));
+        assert_eq!(KlinePeriod::parse("2h"), Some(KlinePeriod::H2));
+        assert_eq!(KlinePeriod::parse("3d"), Some(KlinePeriod::Day3));
+        assert_eq!(KlinePeriod::parse("3mon"), Some(KlinePeriod::Month3));
+        assert_eq!(KlinePeriod::parse("3y"), Some(KlinePeriod::Year3));
+        assert_eq!(KlinePeriod::H2.minute_slot(), Some(120));
+    }
+
+    #[test]
+    fn load_001312_tick_more_bars_than_1m() {
+        let root = default_data_root();
+        let folder = root.join("001312");
+        if !folder.is_dir() {
+            return;
+        }
+        let tick = load_klines(
+            &root,
+            "001312",
+            "2026/04/21 09:25:00",
+            "2026/04/21 09:35:00",
+            KlinePeriod::Tick,
+        )
+        .unwrap();
+        let m1 = load_klines(
+            &root,
+            "001312",
+            "2026/04/21 09:25:00",
+            "2026/04/21 09:35:00",
+            KlinePeriod::M1,
+        )
+        .unwrap();
+        assert!(tick.len() > m1.len(), "tick={} m1={}", tick.len(), m1.len());
+        // 一字线
+        assert!((tick[0].open - tick[0].close).abs() < 1e-12);
+        assert!((tick[0].high - tick[0].low).abs() < 1e-12);
+        // 同分钟合成秒：time_text 含秒
+        assert!(tick.iter().any(|b| b.time_text.matches(':').count() >= 2));
+        // time_ms 递增
+        for w in tick.windows(2) {
+            assert!(w[0].time_ms < w[1].time_ms);
         }
     }
 

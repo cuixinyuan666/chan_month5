@@ -438,6 +438,22 @@ class MsgHistory {
     );
   }
 
+  /// 默认 K0=原生分笔一字线（进程内去重）
+  static bool _tickK0NativeLogged = false;
+  void appendTickK0NativePeriod() {
+    if (_tickK0NativeLogged) return;
+    _tickK0NativeLogged = true;
+    append(
+      '【K0·原生分笔·默认】period=tick：每行分笔=一根K0，O=H=L=C=成交价（一字线）；'
+      '同分钟多笔=分钟起点+序内毫秒（+i ms）保证不撞戳；主图底图画点不画蜡烛；'
+      '缠论合并/分型公式不变（吃 high/low），与同区间1m结构不可直接对比；'
+      'x 锚点=K0下标（tick 下即分笔序）。聚合周期仍 ticks→1m→升周期，主图恢复蜡烛。'
+      '可选：1/5/15/30/60m、2h/4h、1d/3d、1w、1/3/6/9/12mon、1/3/6y。'
+      '【筹码】tick 按分笔序写入 chip_tick_bins（B/S 直加），禁止 OHLC 三角兜底；'
+      '【踩坑】标题条左开孔须与 chip maxWidth=屏宽-140 对齐，写死280会挡右侧指标单击。',
+    );
+  }
+
   /// 桌面窗体：铺满工作区不盖任务栏；十字线 tooltip 分隔线贴边框。
   void appendDesktopWorkAreaAndTooltipSep() {
     if (_desktopWorkAreaLogged) return;
@@ -524,7 +540,8 @@ class MsgHistory {
     append(
       '【Kn筹码分布·全层同构】主图勾选 K0/K1/…/Kn筹码分布（进「Kn指标」层全选）；'
       '主图右侧水平柱（左绿S/右红B），峰延长线横穿主图。'
-      '数据：离线分笔注入 chip_tick_bins（p/s/b/w）；无 bins 时 OHLC 三角兜底。'
+      '数据：离线分笔注入 chip_tick_bins（p/s/b/w）；'
+      'tick/一字线无 bins 时收盘价单点落量（禁三角）；其余无 bins 才 OHLC 三角兜底。'
       '计算：Rust chan_chip_profile（cutoff_x 含）；Kn cutoff=该层单元覆盖到的最大 K0 idx。'
       '性能：Flutter 前缀索引（步进增量/十字 as-of 秒查）+ 底图/筹码/十字三层 RepaintBoundary；'
       '大序列 Isolate 后台预热前缀（跳末/加载），计算口径不变。'

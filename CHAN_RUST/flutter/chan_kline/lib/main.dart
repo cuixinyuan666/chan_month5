@@ -79,6 +79,7 @@ Future<void> main() async {
   MsgHistory.instance.appendBuyNClass3PlusNaming();
   // Kn相邻比例 + Kn步进节奏副图
   MsgHistory.instance.appendAdjacentRatioAndStepRhythm();
+  MsgHistory.instance.appendTickK0NativePeriod();
   // 展示轨：动态KN当确认段画虚线；确认优先纠正/改实线
   MsgHistory.instance.appendDisplayTrackDynamicKnBuildingLines();
   // 种子框 / 第一条虚线限制 / 种子包含截断（全层同构，常驻历史）
@@ -159,7 +160,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
 
   List<String> _codes = [];
   String? _selectedCode;
-  String _period = '1m';
+  String _period = 'tick';
   String _dataRoot = '';
   List<KlineBar> _allBars = [];
   List<KlineCombineFrame> _combineFrames = [];
@@ -237,14 +238,27 @@ class _KlineHomePageState extends State<KlineHomePage> {
   List<KlineBar> get _visibleBars =>
       _visibleCount <= 0 ? const [] : _allBars.sublist(0, _visibleCount);
 
+  /// 默认 tick=原生分笔一字线；其余先聚 1m 再升周期。
   static const _periods = <String, String>{
-    '1m': 'TICK-1MIN',
+    'tick': '分笔',
+    '1m': '1分钟',
     '5m': '5分钟',
     '15m': '15分钟',
+    '30m': '30分钟',
     '60m': '60分钟',
-    'day': '日线',
-    'week': '周线',
-    'month': '月线',
+    '2h': '2小时',
+    '4h': '4小时',
+    '1d': '1日',
+    '3d': '3日',
+    '1w': '1周',
+    '1mon': '1月',
+    '3mon': '3月',
+    '6mon': '6月',
+    '9mon': '9月',
+    '12mon': '12月',
+    '1y': '1年',
+    '3y': '3年',
+    '6y': '6年',
   };
 
   /// 002003 专用默认区间；其它代码回落到标准区间。
@@ -1007,6 +1021,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
                 ),
                 child: KlineChart(
                   bars: _visibleBars,
+                  period: _period,
                   combineFrames: _combineFrames,
                   k0ConfirmSignals: _k0ConfirmSignals,
                   barFeatures: _barFeatures,
@@ -1109,60 +1124,69 @@ class _KlineHomePageState extends State<KlineHomePage> {
 
   /// 透明标题条：中部拖动；右侧设置紧贴最小化。
   /// 左侧开孔穿透，避免挡住 K 线区主图指标入口（↓+已选名）。
+  /// 踩坑：开孔曾写死 280，而 chip maxWidth=屏宽-140，右侧名称被 DragToMoveArea 吃掉。
   Widget _buildCaptionBar() {
-    return Row(
-      children: [
-        // 与主图指标 chip 最大宽度对齐，点击穿透到下层
-        const IgnorePointer(
-          child: SizedBox(width: 280, height: 36),
-        ),
-        Expanded(
-          child: DragToMoveArea(
-            child: Container(color: Colors.transparent),
-          ),
-        ),
-        Tooltip(
-          message: '设置',
-          child: IconButton(
-            onPressed: () => setState(() => _panelExpanded = !_panelExpanded),
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints.tightFor(width: 36, height: 36),
-            icon: Icon(
-              _panelExpanded ? Icons.close : Icons.settings,
-              size: 18,
-              color: const Color(0xFFE2E8F0),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // 与 kline_chart 主图 IndicatorPickerChip maxWidth 同口径；右侧约 140 留给窗控
+        const rightControls = 140.0;
+        final holeW = math.max(120.0, constraints.maxWidth - rightControls);
+        return Row(
+          children: [
+            IgnorePointer(
+              child: SizedBox(width: holeW, height: 36),
             ),
-          ),
-        ),
-        WindowCaptionButton.minimize(
-          brightness: Brightness.dark,
-          onPressed: () => windowManager.minimize(),
-        ),
-        WindowCaptionButton.maximize(
-          brightness: Brightness.dark,
-          onPressed: () async {
-            // 铺满工作区 ↔ 还原；不走原生 maximize（会盖任务栏）
-            if (await isFillingWorkArea()) {
-              if (await windowManager.isMaximized()) {
-                await windowManager.unmaximize();
-              } else if (_preWorkAreaBounds != null) {
-                await windowManager.setBounds(_preWorkAreaBounds!);
-              } else {
-                await windowManager.setSize(const Size(1280, 720));
-                await windowManager.center();
-              }
-              _preWorkAreaBounds = null;
-            } else {
-              _preWorkAreaBounds = await windowManager.getBounds();
-              await fillDesktopWorkArea();
-            }
-          },
-        ),
-        WindowCaptionButton.close(
-          brightness: Brightness.dark,
-          onPressed: () => windowManager.close(),
-        ),
-      ],
+            Expanded(
+              child: DragToMoveArea(
+                child: Container(color: Colors.transparent),
+              ),
+            ),
+            Tooltip(
+              message: '设置',
+              child: IconButton(
+                onPressed: () =>
+                    setState(() => _panelExpanded = !_panelExpanded),
+                padding: EdgeInsets.zero,
+                constraints:
+                    const BoxConstraints.tightFor(width: 36, height: 36),
+                icon: Icon(
+                  _panelExpanded ? Icons.close : Icons.settings,
+                  size: 18,
+                  color: const Color(0xFFE2E8F0),
+                ),
+              ),
+            ),
+            WindowCaptionButton.minimize(
+              brightness: Brightness.dark,
+              onPressed: () => windowManager.minimize(),
+            ),
+            WindowCaptionButton.maximize(
+              brightness: Brightness.dark,
+              onPressed: () async {
+                // 铺满工作区 ↔ 还原；不走原生 maximize（会盖任务栏）
+                if (await isFillingWorkArea()) {
+                  if (await windowManager.isMaximized()) {
+                    await windowManager.unmaximize();
+                  } else if (_preWorkAreaBounds != null) {
+                    await windowManager.setBounds(_preWorkAreaBounds!);
+                  } else {
+                    await windowManager.setSize(const Size(1280, 720));
+                    await windowManager.center();
+                  }
+                  _preWorkAreaBounds = null;
+                } else {
+                  _preWorkAreaBounds = await windowManager.getBounds();
+                  await fillDesktopWorkArea();
+                }
+              },
+            ),
+            WindowCaptionButton.close(
+              brightness: Brightness.dark,
+              onPressed: () => windowManager.close(),
+            ),
+          ],
+        );
+      },
     );
   }
 
@@ -1218,23 +1242,41 @@ class _KlineHomePageState extends State<KlineHomePage> {
           ),
         ],
         const SizedBox(height: 10),
-        DropdownButtonFormField<String>(
-          isExpanded: true,
-          value: _period,
-          decoration: const InputDecoration(
-            labelText: '周期',
-            isDense: true,
-            border: OutlineInputBorder(),
-          ),
-          items: _periods.entries
-              .map(
-                (e) => DropdownMenuItem(
-                  value: e.key,
-                  child: Text(e.value, overflow: TextOverflow.ellipsis),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: DropdownButtonFormField<String>(
+                isExpanded: true,
+                value: _periods.containsKey(_period) ? _period : 'tick',
+                decoration: const InputDecoration(
+                  labelText: '周期',
+                  isDense: true,
+                  border: OutlineInputBorder(),
                 ),
-              )
-              .toList(),
-          onChanged: _bootstrapping ? null : (v) => setState(() => _period = v ?? '1m'),
+                items: _periods.entries
+                    .map(
+                      (e) => DropdownMenuItem(
+                        value: e.key,
+                        child: Text(e.value, overflow: TextOverflow.ellipsis),
+                      ),
+                    )
+                    .toList(),
+                onChanged: _bootstrapping
+                    ? null
+                    : (v) {
+                        final next = v ?? 'tick';
+                        setState(() => _period = next);
+                        _showPeriodHelp();
+                      },
+              ),
+            ),
+            IconButton(
+              tooltip: '周期说明',
+              icon: const Icon(Icons.help_outline, size: 18),
+              onPressed: _showPeriodHelp,
+            ),
+          ],
         ),
         const SizedBox(height: 10),
         _datePickerField(
@@ -1465,6 +1507,39 @@ class _KlineHomePageState extends State<KlineHomePage> {
     );
   }
 
+  void _showPeriodHelp() {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('周期说明'),
+        content: const SingleChildScrollView(
+          child: Text(
+            '默认：分笔（逐笔 K0）\n'
+            '· 每一行分笔 = 一根 K0，O=H=L=C=成交价（一字线）。\n'
+            '· 同分钟多笔=分钟起点+序内毫秒（+i ms），time 含秒/毫秒语义。\n'
+            '· 主图底图画「点」不画蜡烛；缠论内核公式不变（吃 high/low）。\n'
+            '· 与同区间 1 分钟缠论结构不可直接对比；结构更碎属预期。\n'
+            '· 长区间根数很大，建议收窄加载起止时间。\n\n'
+            '聚合周期（1分钟…多年）\n'
+            '· 仍先 ticks→1 分钟，再升到所选周期；主图恢复蜡烛。\n'
+            '· 可选：1/5/15/30/60 分钟，2/4 小时，1/3 日，1 周，'
+            '1/3/6/9/12 月，1/3/6 年。\n\n'
+            '操作步骤\n'
+            '1. 设置里选周期；\n'
+            '2. 点加载 / 长按中区重载，才会按新周期拉数；\n'
+            '3. test+custom.ohlc.csv 仍直读行即 K，忽略周期。',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('知道了'),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _showTestOhlcHelp() {
     showDialog<void>(
       context: context,
@@ -1591,7 +1666,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
             '· 筹码峰：局部量峰打点，虚线延长到主图左侧；\n'
             '· 主图勾选「Kn筹码分布」才绘制；设置里总开关可一键关。\n\n'
             '数据与当下性\n'
-            '· 离线分笔写入 chip_tick_bins（价量直加）；无分笔时 OHLC 三角估算；\n'
+            '· 离线分笔写入 chip_tick_bins（价量直加）；tick 禁止三角；'
+            '非一字且无 bins 时才 OHLC 三角估算；\n'
             '· 逐K只累加已喂入 K 线；十字悬停回滚到该日累积，不回写历史；\n'
             '· K0/K1/…/Kn 全层同构：Kn 用该层单元覆盖到的最大 K0 序号作 cutoff。\n\n'
             '操作步骤\n'

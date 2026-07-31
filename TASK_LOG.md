@@ -2,6 +2,12 @@
 
 ## 最新记录
 
+### 2026-07-31 — 指标开孔 + tick 真实筹码 + 默认分笔 K0
+
+- **要点**：默认 `period=tick` 一字线画点；同分钟 `+i ms` 不撞戳；聚合周期仍 ticks→1m 并扩展多周期。标题条左开孔改为屏宽-140（修右侧指标单击被拖动区挡住）。tick 筹码按分笔序写 bins、禁三角。
+- **相关路径**：`chan_data/{kline,tick,offline,chip}.rs`、`main.dart`、`kline_chart.dart`、`chip_profile_compute.dart`、`msg_history.dart`
+- **注意**：冷启；native `chan_ffi.dll` 若占用需关进程后再 `build_rust.ps1`；长区间建议收窄日期。
+
 ### 2026-07-31 — UI配色/指标归属/读数一轮总览（rate→tick）
 
 - **要点**：本轮在 `rate` 落地：主图层色同层同色；Kn中枢命名与层序；筹码迁主图；副图比例/节奏进 Kn指标；分型/截断顶蓝底红；中枢斜线加深；副图读数跟 chip；筹码开时 Y 轴改左。无残留 NDJSON 调试埋点（层色埋点已拆）。随后 commit+push，切新分支 `tick`。
