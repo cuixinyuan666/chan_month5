@@ -94,6 +94,8 @@ Future<void> main() async {
   MsgHistory.instance.appendIndicatorUiAndKnVolume();
   MsgHistory.instance.appendIndicatorMuteToggleAndVolReadout();
   MsgHistory.instance.appendKnVolumeCumulativeStep();
+  // Kn笔数：Rust 分笔第4列真实笔数（任务前必读·常驻）
+  MsgHistory.instance.appendKnTickCountRealTicks();
   // 主/副图启动默认=「K0指标」层全选（与选择栏同口径）
   MsgHistory.instance.appendDefaultIndicatorsK0();
   MsgHistory.instance.appendChipDistribution();

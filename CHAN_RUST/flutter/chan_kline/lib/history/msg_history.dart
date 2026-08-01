@@ -523,6 +523,26 @@ class MsgHistory {
     );
   }
 
+  /// Kn笔数真实口径：Rust 分笔第4列笔数直加，替代 bins 数组长度（进程内去重）。
+  /// 踩坑：bins['b'/'s'/'w'] 每个价位恒各 push 1 元素（缺方向补 0），长度≠笔数——
+  /// tick 恒 3、日线=3×价位数（202→606）。真实笔数在分笔第 4 列（`09:30 35.10 60 10 B` 的 10）。
+  static bool _knTickCountRealLogged = false;
+  void appendKnTickCountRealTicks() {
+    if (_knTickCountRealLogged) return;
+    _knTickCountRealLogged = true;
+    append(
+      '【Kn笔数·真实笔数】Rust 分笔解析第 4 列笔数（HH:MM 价格 量 笔数 [B/S]；'
+      '无列/非法按 1 笔），tick/Day3/普通周期三路径均写 bar.metrics：'
+      'tick_count（总，含灰度 w）、buy_tick_count（B）、sell_tick_count（S）；'
+      '非法行（价格/量）不计，与 from_side_rows 同口径。'
+      'Flutter K0 笔数优先读 metrics.tick_count / buy_tick_count，旧数据回退 bins 长度、'
+      '再回退 tick_side；Kn=下层增量累加步进与成交量同构。'
+      '【踩坑】勿用 bins 数组长度当笔数（每价位三数组各 push 1，长度恒=3×价位数）；'
+      '笔数 metrics 键存在即用（可为 0，勿用 >0 判断），无键才回退。'
+      'crosshairSubRows 新增 tickCount 分支 → 副图读数/十字 tooltip 显示真实笔数。',
+    );
+  }
+
   /// 启动默认勾选「K0指标」层全选（进程内去重；配置易混写入历史便于复制排查）。
   static bool _defaultIndicatorsK0Logged = false;
   void appendDefaultIndicatorsK0() {

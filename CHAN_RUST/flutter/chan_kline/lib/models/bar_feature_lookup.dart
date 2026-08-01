@@ -259,6 +259,35 @@ class BarFeatureLookup {
       }
     }
 
+    // Kn笔数：与成交量同结构（K0=Rust 真实笔数 metrics.tick_count，旧数据回退 bins 长度；
+    // Kn=下层增量累加步进）。写入 sub 供：① 副图读数；② 十字 tooltip 副图行。
+    {
+      final allTick = computeAllKnTickCountSeries(
+        bars: bars,
+        levels: levels,
+        barFeatures: barFeatures,
+      );
+      final allBuyTick = computeAllKnBuyTickCountSeries(
+        bars: bars,
+        levels: levels,
+        barFeatures: barFeatures,
+      );
+      for (final e in allTick.entries) {
+        final series = e.value;
+        final buySeries = allBuyTick[e.key] ?? const <double>[];
+        for (var i = 0; i < bars.length; i++) {
+          final row =
+              byIdx.putIfAbsent(bars[i].idx, () => {'idx': bars[i].idx});
+          final sub = row.putIfAbsent('sub', () => <String, dynamic>{})
+              as Map<String, dynamic>;
+          sub['tick_count_${e.key}'] =
+              i < series.length ? series[i] : 0.0;
+          sub['buy_tick_count_${e.key}'] =
+              i < buySeries.length ? buySeries[i] : 0.0;
+        }
+      }
+    }
+
     // Kn一类BS：只扫会话历史（含动态 active 各 K0 颗粒度点）；禁止 asOf 重算消点。
     // 踩坑：history 若缺本步 x，十字 asOf=当前步会 sellAtAsOf=null（26有点、27空）。
     {
@@ -665,6 +694,14 @@ class BarFeatureLookup {
         } else if (ind.kn <= 0) {
           // 回退：旧 volume 字段
           add(ind.label, sub['volume'] ?? row['volume']);
+        }
+      }
+      // Kn笔数：优先真实 tick_count（Rust 第4列求和）；无则回退买笔数标记不显示
+      if (ind.kind == SubIndicatorKind.tickCount) {
+        final key = 'tick_count_${ind.kn}';
+        if (sub.containsKey(key)) {
+          final v = sub[key];
+          add(ind.label, v);
         }
       }
       // 筹码已迁主图指标，不再走副图读数

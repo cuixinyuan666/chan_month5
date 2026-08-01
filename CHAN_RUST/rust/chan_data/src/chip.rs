@@ -219,6 +219,7 @@ fn bar_bucket_key_from_ms(time_ms: i64, period: KlinePeriod) -> Option<ChipBucke
 }
 
 /// 将分笔按周期桶聚合为 chip_tick_bins，写入对应 K 线 metrics。
+/// 同时按第 4 列笔数写 tick_count / buy_tick_count / sell_tick_count（Kn笔数副图真实数据源）。
 pub fn enrich_bars_with_chip_tick_bins(
     bars: &mut [KlineBar],
     ticks: &[TickRow],
@@ -238,6 +239,8 @@ pub fn enrich_bars_with_chip_tick_bins(
         return;
     }
     let mut key_to_rows: BTreeMap<ChipBucketKey, Vec<(f64, f64, String)>> = BTreeMap::new();
+    // 每桶笔数累计：(总笔数, 买笔数, 卖笔数)；灰度仅进总笔数
+    let mut key_to_ticks: BTreeMap<ChipBucketKey, (f64, f64, f64)> = BTreeMap::new();
     for t in ticks {
         let Some(bk) = chip_bar_bucket_key(t.dt, period) else {
             continue;
@@ -246,6 +249,18 @@ pub fn enrich_bars_with_chip_tick_bins(
             .entry(bk)
             .or_default()
             .push((t.price, t.vol, t.side.clone()));
+        // 与 from_side_rows 同口径：价格/量非法行不计
+        if !(t.price > 0.0) || !(t.vol > 0.0) || !t.price.is_finite() || !t.vol.is_finite() {
+            continue;
+        }
+        let acc = key_to_ticks.entry(bk).or_default();
+        acc.0 += t.ticks;
+        let s = t.side.trim().to_ascii_uppercase();
+        if s == "B" {
+            acc.1 += t.ticks;
+        } else if s == "S" {
+            acc.2 += t.ticks;
+        }
     }
     let mut key_to_bins: BTreeMap<ChipBucketKey, ChipTickBins> = BTreeMap::new();
     for (bk, rows) in &key_to_rows {
@@ -265,10 +280,18 @@ pub fn enrich_bars_with_chip_tick_bins(
             bar.metrics
                 .insert("chip_tick_bins".to_string(), bins.to_json_value());
         }
+        if let Some((total, buy, sell)) = key_to_ticks.get(&bk) {
+            bar.metrics
+                .insert("tick_count".to_string(), serde_json::json!(total));
+            bar.metrics
+                .insert("buy_tick_count".to_string(), serde_json::json!(buy));
+            bar.metrics
+                .insert("sell_tick_count".to_string(), serde_json::json!(sell));
+        }
     }
 }
 
-/// tick 周期：第 i 笔 → bars[i] 的 chip_tick_bins（含 B/S）。
+/// tick 周期：第 i 笔 → bars[i] 的 chip_tick_bins（含 B/S）+ 笔数 metrics。
 fn enrich_tick_by_bar_idx(bars: &mut [KlineBar], ticks: &[TickRow]) {
     let n = bars.len().min(ticks.len());
     for i in 0..n {
@@ -279,6 +302,24 @@ fn enrich_tick_by_bar_idx(bars: &mut [KlineBar], ticks: &[TickRow]) {
                 .metrics
                 .insert("chip_tick_bins".to_string(), bins.to_json_value());
         }
+        // 单笔行笔数：B→买、S→卖、无方向→仅总笔数
+        if t.price > 0.0 && t.vol > 0.0 && t.price.is_finite() && t.vol.is_finite() {
+            let s = t.side.trim().to_ascii_uppercase();
+            let (buy, sell) = match s.as_str() {
+                "B" => (t.ticks, 0.0),
+                "S" => (0.0, t.ticks),
+                _ => (0.0, 0.0),
+            };
+            bars[i]
+                .metrics
+                .insert("tick_count".to_string(), serde_json::json!(t.ticks));
+            bars[i]
+                .metrics
+                .insert("buy_tick_count".to_string(), serde_json::json!(buy));
+            bars[i]
+                .metrics
+                .insert("sell_tick_count".to_string(), serde_json::json!(sell));
+        }
     }
 }
 
@@ -286,6 +327,8 @@ fn enrich_tick_by_bar_idx(bars: &mut [KlineBar], ticks: &[TickRow]) {
 fn enrich_by_bar_end_windows(bars: &mut [KlineBar], ticks: &[TickRow]) {
     use chrono::{TimeZone, Utc};
     let mut key_to_rows: BTreeMap<i64, Vec<(f64, f64, String)>> = BTreeMap::new();
+    // 每窗笔数累计：(总笔数, 买笔数, 卖笔数)
+    let mut key_to_ticks: BTreeMap<i64, (f64, f64, f64)> = BTreeMap::new();
     for t in ticks {
         let t_ms = Utc.from_utc_datetime(&t.dt).timestamp_millis();
         // 找第一个 bar.time_ms >= t_ms
@@ -303,6 +346,17 @@ fn enrich_by_bar_end_windows(bars: &mut [KlineBar], ticks: &[TickRow]) {
             .entry(end_ms)
             .or_default()
             .push((t.price, t.vol, t.side.clone()));
+        if !(t.price > 0.0) || !(t.vol > 0.0) || !t.price.is_finite() || !t.vol.is_finite() {
+            continue;
+        }
+        let acc = key_to_ticks.entry(end_ms).or_default();
+        acc.0 += t.ticks;
+        let s = t.side.trim().to_ascii_uppercase();
+        if s == "B" {
+            acc.1 += t.ticks;
+        } else if s == "S" {
+            acc.2 += t.ticks;
+        }
     }
     let mut key_to_bins: BTreeMap<i64, ChipTickBins> = BTreeMap::new();
     for (k, rows) in &key_to_rows {
@@ -318,6 +372,14 @@ fn enrich_by_bar_end_windows(bars: &mut [KlineBar], ticks: &[TickRow]) {
         if let Some(bins) = key_to_bins.get(&bar.time_ms) {
             bar.metrics
                 .insert("chip_tick_bins".to_string(), bins.to_json_value());
+        }
+        if let Some((total, buy, sell)) = key_to_ticks.get(&bar.time_ms) {
+            bar.metrics
+                .insert("tick_count".to_string(), serde_json::json!(total));
+            bar.metrics
+                .insert("buy_tick_count".to_string(), serde_json::json!(buy));
+            bar.metrics
+                .insert("sell_tick_count".to_string(), serde_json::json!(sell));
         }
     }
 }
@@ -602,6 +664,7 @@ mod tests {
             has_bs: true,
             price_lo: None,
             price_hi: None,
+            ticks: 25.0,
         }];
         let mut bars = vec![KlineBar {
             idx: 0,
@@ -617,6 +680,10 @@ mod tests {
         }];
         enrich_bars_with_chip_tick_bins(&mut bars, &ticks, KlinePeriod::Day);
         assert!(bars[0].metrics.contains_key("chip_tick_bins"));
+        // 真实笔数：总 25、买 25（B）、卖 0
+        assert_eq!(bars[0].metrics["tick_count"].as_f64(), Some(25.0));
+        assert_eq!(bars[0].metrics["buy_tick_count"].as_f64(), Some(25.0));
+        assert_eq!(bars[0].metrics["sell_tick_count"].as_f64(), Some(0.0));
     }
 
     #[test]
@@ -634,6 +701,7 @@ mod tests {
                 has_bs: true,
                 price_lo: None,
                 price_hi: None,
+                ticks: 7.0,
             },
             TickRow {
                 dt: base + chrono::Duration::milliseconds(1),
@@ -643,6 +711,7 @@ mod tests {
                 has_bs: true,
                 price_lo: None,
                 price_hi: None,
+                ticks: 3.0,
             },
         ];
         let mut bars: Vec<KlineBar> = ticks
@@ -662,6 +731,13 @@ mod tests {
             .unwrap();
         assert!((b0.b[0] - 100.0).abs() < 1e-9);
         assert!((b1.s[0] - 50.0).abs() < 1e-9);
+        // 真实笔数：bar0 B=7 笔、bar1 S=3 笔
+        assert_eq!(bars[0].metrics["tick_count"].as_f64(), Some(7.0));
+        assert_eq!(bars[0].metrics["buy_tick_count"].as_f64(), Some(7.0));
+        assert_eq!(bars[0].metrics["sell_tick_count"].as_f64(), Some(0.0));
+        assert_eq!(bars[1].metrics["tick_count"].as_f64(), Some(3.0));
+        assert_eq!(bars[1].metrics["buy_tick_count"].as_f64(), Some(0.0));
+        assert_eq!(bars[1].metrics["sell_tick_count"].as_f64(), Some(3.0));
         // 一字无 bins：单点而非三角
         let plain = bar(0, 9.0, 9.0, 9.0, 9.0, 80.0);
         let profile = chip_profile(&[plain], Some(0), Some(0.1));

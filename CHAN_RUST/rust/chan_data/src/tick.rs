@@ -12,6 +12,8 @@ pub struct TickRow {
     pub has_bs: bool,
     pub price_lo: Option<f64>,
     pub price_hi: Option<f64>,
+    /// 第 4 列成交笔数（`HH:MM 价格 量 笔数 [B/S]`；无列或非法时按 1 笔）
+    pub ticks: f64,
 }
 
 impl TickRow {
@@ -59,6 +61,15 @@ pub fn parse_tick_line(line: &str, y: i32, mo: u32, d: u32) -> Option<TickRow> {
             break;
         }
     }
+    // 第 4 列为笔数（B/S 前的那一列）；解析失败（如老文件无列）按 1 笔
+    let mut ticks = 1.0;
+    if let Some(tok) = parts.get(3) {
+        if let Some(v) = parse_float(tok) {
+            if v > 0.0 {
+                ticks = v;
+            }
+        }
+    }
 
     let date = NaiveDate::from_ymd_opt(y, mo, d)?;
     let time = NaiveTime::from_hms_opt(hh, mm, 0)?;
@@ -72,6 +83,7 @@ pub fn parse_tick_line(line: &str, y: i32, mo: u32, d: u32) -> Option<TickRow> {
         has_bs,
         price_lo: None,
         price_hi: None,
+        ticks,
     })
 }
 
@@ -191,6 +203,20 @@ mod tests {
         assert!((row.price - 25.24).abs() < 1e-9);
         assert_eq!(row.side, "S");
         assert!(row.has_bs);
+    }
+
+    #[test]
+    fn parse_tick_column_ticks() {
+        // 带笔数列：第 4 列 10
+        let row = parse_tick_line("09:30\t35.10\t60\t10\tB", 2024, 1, 2).unwrap();
+        assert!((row.ticks - 10.0).abs() < 1e-9);
+        // 集合竞价行：无 B/S 也有笔数
+        let row = parse_tick_line("09:25\t35.07\t144\t25", 2024, 1, 2).unwrap();
+        assert!((row.ticks - 25.0).abs() < 1e-9);
+        assert!(!row.has_bs);
+        // 老文件无笔数列：按 1 笔
+        let row = parse_tick_line("09:30\t35.10\t60\tB", 2024, 1, 2).unwrap();
+        assert!((row.ticks - 1.0).abs() < 1e-9);
     }
 
     #[test]

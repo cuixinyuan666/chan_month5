@@ -2,6 +2,17 @@
 
 ## 最新记录
 
+### 2026-08-01 — Kn笔数：Rust 分笔第4列真实笔数（方案B）
+
+- **要点**：修复 688687/20240102 上 Kn笔数副图变量恒 0（根因①查表缺 tickCount 分支→读数恒 0；根因② bins 数组长度≠笔数，tick 恒 3/日线=3×价位数）。Rust `parse_tick_line` 解析第 4 列笔数（无列/非法按 1 笔），`TickRow` 增 `ticks` 字段；chip.rs 三路径（tick/Day3/普通桶）写 `tick_count`/`buy_tick_count`（B）/`sell_tick_count`（S），灰度 w 仅进总数，非法行（价/量）不计。Flutter K0 笔数优先读 `metrics.tick_count`/`buy_tick_count`（键存在即用、可为 0），旧数据回退 bins 长度再回退 tick_side；`BarFeatureLookup` 写 `tick_count_${kn}`/`buy_tick_count_${kn}` 系列，`crosshairSubRows` 增 tickCount 分支 → 副图读数/十字 tooltip 出真实笔数。
+- **相关路径**：`chan_data/src/{tick,chip}.rs`、`chan_kline/lib/{compute/kn_volume_series_compute,models/bar_feature_lookup,main,history/msg_history}.dart`、`TASK_LOG.md`
+- **踩坑/经验**：
+  1. bins 三数组每价位恒各 push 1（缺方向补 0.0）——长度只能当「价位数」，不能当笔数。
+  2. 笔数 metrics 判断须用「键存在」，不用「值>0」（灰度行 buy=0 合法）。
+  3. 老格式行 `HH:MM 价格 量 B`（第4列即方向）parse_float 失败→默认 1 笔。
+- **验收**：关占用重载 `chan_ffi.dll` → 冷启动 → 688687/20240102 tick 周期副图「K0笔数」读数=分笔第4列（如 10），日线=当日笔数求和（非 3×价位数）；十字 tooltip 副图行含笔数。
+- **注意**：`chan_ffi.dll` 已重建替换（15:36）；进程 15296 已结束待冷启。
+
 ### 2026-08-01 — 筹码角标：十字悬停高亮单根 B/S/灰
 
 - **要点**：`_drawCornerSums` 累计行（B/S/灰度）下，十字悬停时追加「当前」行——按该根 `chip_tick_bins` 求和分色（B 红/S 绿/灰），与累计区分。chip 层 `shouldRepaint` 已含 `segAsOf`（=bars[crosshairBarIdx].idx），十字移动即重画。纯 Dart 改动，无 DLL。
