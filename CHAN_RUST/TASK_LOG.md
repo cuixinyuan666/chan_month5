@@ -6,7 +6,8 @@
 
 - **合并 GG/DD ≠ 框体高低**：Rust `MergeEngine` 向上合并取「高高/高低」，框体低点会被抬高；tooltip 的 GG/DD 必须在合并组内按原始K（Kn 用当步单元）重算 max(high)/min(low)。框体高低点只配 MG/MD。勿再把 `combine_high/low` 当 GG/DD。
 - **切周期一字线 ≠ 聚合坏了**：Rust 聚合产出真 OHLC；前端若只 `setState(_period)` 不重载，会用「新周期蜡烛画法」画内存里仍是 tick 的数据（O=H=L=C）→ 整屏一字线。下拉选周期后必须立刻 `_loadKlines()`。排查先分清后端/前端，可用 ctypes 直调 `chan_ffi.dll` 证聚合。
-- **DLL 复制仍失败**：`build_rust.ps1` 会杀 `chan_kline` 进程并重试复制；若终端里仍挂着 `flutter run`，`windows/native/chan_ffi.dll` 可能继续被占用。应先在该终端 `q` 退出 `flutter run`（或结束整个 Flutter/Dart 树）再跑脚本。脚本本身须保持 UTF-16 LE，勿存成无 BOM UTF-8。
+- **DLL 复制仍失败**：`build_rust.ps1` 会杀 `chan_kline` 进程并重试复制；若终端里仍挂着 `flutter run`，`windows/native/chan_ffi.dll` 可能继续被占用。应先在该终端 `q` 退出 `flutter run`（或结束整个 Flutter/Dart 树）再跑脚本。
+- **build_rust.ps1 编码（再踩）**：必须 **UTF-16 LE + BOM（FF FE）**。无 BOM 的 UTF-16 会被 PS 按系统码页误读 → 中文乱码 + `Missing closing ')'`（`$($App.Id)` 被拆坏）。编辑后应用解析检查确认 `PARSE_OK`，勿只看文件「看起来像 UTF-16」。
 - **落盘位置**：口径正文见下方 2026-08-01 两条；UI 常驻历史见 `msg_history.appendMergeRangeExtreme` / `appendPeriodAutoReload`。
 
 ## 2026-08-01 K0/Kn合并 GG/DD 口径修正：组内原始区间极值
