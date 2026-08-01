@@ -113,6 +113,8 @@ class MainChartIndicator {
 /// 副图指标种类。
 enum SubIndicatorKind {
   volume,
+  /// Kn笔数：逐笔离线数据，与成交量同设计逻辑（B/S 红绿着色）
+  tickCount,
   fractalConfirm,
   fractalJudgment,
   fractalPeakDist,
@@ -123,7 +125,7 @@ enum SubIndicatorKind {
   buyN,
   /// Kn相邻连线比例（旧 adjacent_bi_ratio；与 Kn连线同号；动态计算）
   adjacentRatio,
-  /// Kn步进节奏副图（旧 step_rhythm；与 Kn连线同号；动态计算）
+  /// Kn步进节奏副图（old step_rhythm；与 Kn连线同号；动态计算）
   stepRhythm,
 }
 
@@ -133,6 +135,8 @@ extension SubIndicatorKindMeta on SubIndicatorKind {
     switch (this) {
       case SubIndicatorKind.volume:
         return '成交量';
+      case SubIndicatorKind.tickCount:
+        return '笔数';
       case SubIndicatorKind.fractalConfirm:
         return '分型确认';
       case SubIndicatorKind.fractalJudgment:
@@ -158,24 +162,26 @@ extension SubIndicatorKindMeta on SubIndicatorKind {
     switch (this) {
       case SubIndicatorKind.volume:
         return 0;
-      case SubIndicatorKind.fractalConfirm:
+      case SubIndicatorKind.tickCount:
         return 1;
-      case SubIndicatorKind.fractalJudgment:
+      case SubIndicatorKind.fractalConfirm:
         return 2;
-      case SubIndicatorKind.fractalPeakDist:
+      case SubIndicatorKind.fractalJudgment:
         return 3;
-      case SubIndicatorKind.truncation:
+      case SubIndicatorKind.fractalPeakDist:
         return 4;
-      case SubIndicatorKind.buy1:
+      case SubIndicatorKind.truncation:
         return 5;
-      case SubIndicatorKind.buy2:
+      case SubIndicatorKind.buy1:
         return 6;
-      case SubIndicatorKind.buyN:
+      case SubIndicatorKind.buy2:
         return 7;
-      case SubIndicatorKind.adjacentRatio:
+      case SubIndicatorKind.buyN:
         return 8;
-      case SubIndicatorKind.stepRhythm:
+      case SubIndicatorKind.adjacentRatio:
         return 9;
+      case SubIndicatorKind.stepRhythm:
+        return 10;
     }
   }
 }
@@ -206,6 +212,10 @@ class SubChartIndicator {
   /// kn=0：K0成交量；kn≥1：Kn成交量（LevelBundle.level==kn）。
   const SubChartIndicator.volume(this.kn)
       : kind = SubIndicatorKind.volume,
+        bsClass = null;
+  /// kn=0：K0笔数；kn≥1：Kn笔数（逐笔离线数据，与成交量同设计逻辑）。
+  const SubChartIndicator.tickCount(this.kn)
+      : kind = SubIndicatorKind.tickCount,
         bsClass = null;
   const SubChartIndicator.fractalConfirm(this.kn)
       : kind = SubIndicatorKind.fractalConfirm,
@@ -243,6 +253,8 @@ class SubChartIndicator {
     switch (kind) {
       case SubIndicatorKind.volume:
         return 'K$kn成交量';
+      case SubIndicatorKind.tickCount:
+        return 'K$kn笔数';
       case SubIndicatorKind.fractalConfirm:
         return 'K${kn - 1}分型确认';
       case SubIndicatorKind.fractalJudgment:
@@ -268,6 +280,7 @@ class SubChartIndicator {
   int get displayLevel {
     switch (kind) {
       case SubIndicatorKind.volume:
+      case SubIndicatorKind.tickCount:
       case SubIndicatorKind.buy1:
       case SubIndicatorKind.buy2:
       case SubIndicatorKind.buyN:
@@ -342,6 +355,10 @@ List<SubChartIndicator> buildSubIndicatorCatalog(
   for (var d = 0; d <= maxD; d++) {
     out.add(SubChartIndicator.volume(d));
   }
+  // 笔数 (0..maxKn)
+  for (var d = 0; d <= maxD; d++) {
+    out.add(SubChartIndicator.tickCount(d));
+  }
   // 分型确认 (1..maxKn, internal kn)
   for (var d = 1; d <= maxKn; d++) {
     out.add(SubChartIndicator.fractalConfirm(d));
@@ -412,6 +429,7 @@ List<SubChartIndicator> subIndicatorsForLevel(
   final allow = catalog.toSet();
   final candidates = <SubChartIndicator>[
     SubChartIndicator.volume(displayLevel),
+    SubChartIndicator.tickCount(displayLevel),
     SubChartIndicator.fractalConfirm(displayLevel + 1),
     SubChartIndicator.fractalJudgment(displayLevel + 1),
     SubChartIndicator.fractalPeakDist(displayLevel + 1),

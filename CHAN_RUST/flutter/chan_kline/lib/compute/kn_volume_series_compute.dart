@@ -36,6 +36,41 @@ double _sumBins(dynamic binData) {
   return 0;
 }
 
+/// K0 tick count: 从 chip_tick_bins 数组长度统计笔数。
+List<double> computeK0TickCountSeries(List<KlineBar> bars) {
+  double tickCount(KlineBar b) {
+    final bins = b.metrics['chip_tick_bins'];
+    if (bins is Map) {
+      final bLen = _listLen(bins['b']);
+      final sLen = _listLen(bins['s']);
+      return (bLen + sLen).toDouble();
+    }
+    final side = b.metrics['tick_side'];
+    if (side == 'B' || side == 'S') return 1;
+    return 0;
+  }
+  return [for (final b in bars) tickCount(b)];
+}
+
+/// K0 buy tick count: 从 chip_tick_bins 数组长度统计买入笔数。
+List<double> computeK0BuyTickCountSeries(List<KlineBar> bars) {
+  double buyTick(KlineBar b) {
+    final bins = b.metrics['chip_tick_bins'];
+    if (bins is Map) {
+      return _listLen(bins['b']).toDouble();
+    }
+    final side = b.metrics['tick_side'];
+    if (side == 'B') return 1;
+    return 0;
+  }
+  return [for (final b in bars) buyTick(b)];
+}
+
+int _listLen(dynamic binData) {
+  if (binData is List) return binData.length;
+  return 0;
+}
+
 /// 内部复用：从 K0 系列出发，逐一累积各层确认门控系列。
 Map<int, List<double>> _computeAllKnFromK0({
   required List<double> k0Series,
@@ -86,6 +121,32 @@ Map<int, List<double>> computeAllKnBuyVolumeSeries({
 }) {
   return _computeAllKnFromK0(
     k0Series: computeK0BuyVolumeSeries(bars),
+    levels: levels,
+    bars: bars,
+  );
+}
+
+/// All Kn 总笔数系列（key = display kn: 0=K0, 1=K1, ...）。
+Map<int, List<double>> computeAllKnTickCountSeries({
+  required List<KlineBar> bars,
+  required List<LevelBundle> levels,
+  List<BarCrosshairFeature> barFeatures = const [],
+}) {
+  return _computeAllKnFromK0(
+    k0Series: computeK0TickCountSeries(bars),
+    levels: levels,
+    bars: bars,
+  );
+}
+
+/// All Kn 买入笔数系列，用于红绿叠柱。
+Map<int, List<double>> computeAllKnBuyTickCountSeries({
+  required List<KlineBar> bars,
+  required List<LevelBundle> levels,
+  List<BarCrosshairFeature> barFeatures = const [],
+}) {
+  return _computeAllKnFromK0(
+    k0Series: computeK0BuyTickCountSeries(bars),
     levels: levels,
     bars: bars,
   );

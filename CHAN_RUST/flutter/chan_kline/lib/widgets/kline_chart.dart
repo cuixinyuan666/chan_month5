@@ -3285,6 +3285,40 @@ class _KlineCompositePainter extends CustomPainter {
         );
       }
     }
+    // Kn笔数：与成交量同设计逻辑，复用 _drawVolume
+    if (subIndicators.any((e) => e.kind == SubIndicatorKind.tickCount)) {
+      final tickKns = subIndicators
+          .where((e) => e.kind == SubIndicatorKind.tickCount)
+          .map((e) => e.kn)
+          .toList()
+        ..sort();
+      final allTick = computeAllKnTickCountSeries(
+        bars: bars,
+        levels: levels,
+        barFeatures: barFeatures,
+      );
+      final allBuyTick = computeAllKnBuyTickCountSeries(
+        bars: bars,
+        levels: levels,
+        barFeatures: barFeatures,
+      );
+      for (final kn in tickKns) {
+        _drawVolume(
+          canvas,
+          w,
+          innerTop,
+          innerBottom,
+          innerH,
+          barW,
+          slotW,
+          kn: kn,
+          allVolSeries: allTick,
+          allBuyVolSeries: allBuyTick,
+          buy1Frames: kn > 0 ? _buy1FramesForKn(kn) : null,
+          sell1Frames: kn > 0 ? _sell1FramesForKn(kn) : null,
+        );
+      }
+    }
     // 勾哪层画哪层；叠加时横向错位+描边，避免同 x 盖住
     final confirmKns = subIndicators
         .where((e) => e.kind == SubIndicatorKind.fractalConfirm)
