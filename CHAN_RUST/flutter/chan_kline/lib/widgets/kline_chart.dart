@@ -3265,6 +3265,12 @@ class _KlineCompositePainter extends CustomPainter {
         levels: levels,
         barFeatures: barFeatures,
       );
+      // Kn>0 买入量系列，用于红绿叠柱
+      final allBuyVol = computeAllKnBuyVolumeSeries(
+        bars: bars,
+        levels: levels,
+        barFeatures: barFeatures,
+      );
       for (final kn in volKns) {
         _drawVolume(
           canvas,
@@ -3276,6 +3282,10 @@ class _KlineCompositePainter extends CustomPainter {
           slotW,
           kn: kn,
           allVolSeries: allVol,
+          allBuyVolSeries: allBuyVol,
+          // Kn>0 传入该层 B/S 历史打点，用于 B/S 方向着色；K0 传 null 保持原逻辑
+          buy1Frames: kn > 0 ? _buy1FramesForKn(kn) : null,
+          sell1Frames: kn > 0 ? _sell1FramesForKn(kn) : null,
         );
       }
     }
@@ -3817,6 +3827,7 @@ class _KlineCompositePainter extends CustomPainter {
   }
 
   /// 副图成交量：K0=原生；Kn=下层增量在本层单元上动态累加（共享极点归已确认段）。
+  /// Kn>0 时用 allBuyVolSeries 做红绿叠柱：下绿（卖出）上红（买入）。
   void _drawVolume(
     Canvas canvas,
     double w,
@@ -3827,6 +3838,9 @@ class _KlineCompositePainter extends CustomPainter {
     double slotW, {
     required int kn,
     required Map<int, List<double>> allVolSeries,
+    Map<int, List<double>>? allBuyVolSeries,
+    List<Buy1Frame>? buy1Frames,
+    List<Sell1Frame>? sell1Frames,
   }) {
     if (bars.isEmpty) return;
     final series = allVolSeries[kn];
@@ -3839,9 +3853,31 @@ class _KlineCompositePainter extends CustomPainter {
     final levelTint = kn <= 0
         ? null
         : ChartLevelLineStyle.forZS(kn).color.withValues(alpha: 0.55);
-    // K0 逐笔：按分笔方向着色（B 红 / S 绿 / 无 BS 灰），不再看涨跌
-    final tickColored = kn <= 0 && period == 'tick';
+    // tick 周期：所有层都按 K0 分笔方向着色（B 红 / S 绿 / 无 BS 灰），不再看涨跌
+    final tickColored = period == 'tick';
+    // Kn>0 买入量系列，用于红绿叠柱
+    final List<double>? buySeries;
+    if (kn > 0 && allBuyVolSeries != null) {
+      buySeries = allBuyVolSeries[kn];
+    } else {
+      buySeries = null;
+    }
+    final hasStacked = buySeries != null && buySeries.isNotEmpty;
+    // Kn>0 B/S 着色：用该层 buy1HistoryByKn / sell1HistoryByKn 历史打点
     final asOf = segAsOf;
+    final maxX = asOf ?? bars.last.idx;
+    final Set<int> buyIdxs;
+    final Set<int> sellIdxs;
+    final b1 = buy1Frames;
+    final s1 = sell1Frames;
+    final hasBsColored = kn > 0 && b1 != null && s1 != null;
+    if (hasBsColored) {
+      buyIdxs = b1.where((f) => f.x <= maxX).map((f) => f.x).toSet();
+      sellIdxs = s1.where((f) => f.x <= maxX).map((f) => f.x).toSet();
+    } else {
+      buyIdxs = const <int>{};
+      sellIdxs = const <int>{};
+    }
     for (var i = 0; i < bars.length; i++) {
       final idx = bars[i].idx;
       // 十字线激活时，按当步截断：右侧(idx>asOf)的成交量不绘制
@@ -3853,20 +3889,50 @@ class _KlineCompositePainter extends CustomPainter {
       final cx = _barCenterX(idx, w, slotW);
       final x = cx - barW / 2;
       final bh = vol / maxV * innerH;
-      final Color color;
-      if (levelTint != null) {
-        color = levelTint;
-      } else if (tickColored) {
-        color = _tickSideColor(b);
+      if (hasStacked) {
+        // Kn>0 红绿叠柱：下绿（卖出）上红（买入）
+        final buyVol = buySeries[i].clamp(0.0, vol);
+        final sellVol = vol - buyVol;
+        final buyH = buyVol / maxV * innerH;
+        final sellH = sellVol / maxV * innerH;
+        if (sellH > 0) {
+          canvas.drawRect(
+            Rect.fromLTWH(x, innerBottom - sellH, barW, sellH),
+            Paint()..color = const Color(0x6626A69A),
+          );
+        }
+        if (buyH > 0) {
+          canvas.drawRect(
+            Rect.fromLTWH(x, innerBottom - sellH - buyH, barW, buyH),
+            Paint()..color = const Color(0x66E53935),
+          );
+        }
       } else {
-        color = b.isUp
-            ? const Color(0x66E53935)
-            : const Color(0x6626A69A);
+        final Color color;
+        // 颜色优先级：tickColored（B红/S绿/灰）> bsColored > levelTint > K0涨跌
+        if (tickColored) {
+          // tick 周期：所有层继承 K0 分笔方向色
+          color = _tickSideColor(b);
+        } else if (hasBsColored) {
+          if (buyIdxs.contains(idx)) {
+            color = const Color(0x66E53935);
+          } else if (sellIdxs.contains(idx)) {
+            color = const Color(0x6626A69A);
+          } else {
+            color = const Color(0x669CA3AF);
+          }
+        } else if (levelTint != null) {
+          color = levelTint;
+        } else {
+          color = b.isUp
+              ? const Color(0x66E53935)
+              : const Color(0x6626A69A);
+        }
+        canvas.drawRect(
+          Rect.fromLTWH(x, innerBottom - bh, barW, bh),
+          Paint()..color = color,
+        );
       }
-      canvas.drawRect(
-        Rect.fromLTWH(x, innerBottom - bh, barW, bh),
-        Paint()..color = color,
-      );
     }
   }
 

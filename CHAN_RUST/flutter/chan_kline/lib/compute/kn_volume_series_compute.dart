@@ -7,24 +7,46 @@ List<double> computeK0VolumeSeries(List<KlineBar> bars) {
   return [for (final b in bars) b.volume];
 }
 
-/// All Kn volume series (key = display kn: 0=K0, 1=K1, ...).
-///
-/// Full-layer isomorphic; aligns with Rust confirm ��λ:
-/// - Confirmed Kn endpoint settles at end_pole (unit.x2), confirm at confirmX.
-/// - Shared K0 between confirmed and next dynamic = prev.x2 (end_pole);
-///   next dynamic sum starts at prev.x2+1 (does NOT include shared vol).
-/// - Display: unit writes through confirmX-1 (building may pass pole);
-///   next unit display starts at prev.confirmX (no look-ahead before confirm).
-Map<int, List<double>> computeAllKnVolumeSeries({
-  required List<KlineBar> bars,
+/// K0 buy volume: 从 chip_tick_bins 或 tick_side 估算买入量。
+List<double> computeK0BuyVolumeSeries(List<KlineBar> bars) {
+  double buyVol(KlineBar b) {
+    final bins = b.metrics['chip_tick_bins'];
+    if (bins is Map) {
+      final bQty = _sumBins(bins['b']);
+      final sQty = _sumBins(bins['s']);
+      final total = bQty + sQty;
+      if (total > 0) return b.volume * bQty / total;
+    }
+    final side = b.metrics['tick_side'];
+    if (side == 'B') return b.volume;
+    if (side == 'S') return 0;
+    return b.volume * 0.5;
+  }
+  return [for (final b in bars) buyVol(b)];
+}
+
+double _sumBins(dynamic binData) {
+  if (binData is List) {
+    double sum = 0;
+    for (final e in binData) {
+      sum += (e as num).toDouble();
+    }
+    return sum;
+  }
+  return 0;
+}
+
+/// 内部复用：从 K0 系列出发，逐一累积各层确认门控系列。
+Map<int, List<double>> _computeAllKnFromK0({
+  required List<double> k0Series,
   required List<LevelBundle> levels,
-  List<BarCrosshairFeature> barFeatures = const [],
+  required List<KlineBar> bars,
 }) {
   final n = bars.length;
   final out = <int, List<double>>{};
   if (n == 0) return out;
 
-  var increments = computeK0VolumeSeries(bars);
+  var increments = List<double>.from(k0Series);
   out[0] = List<double>.from(increments);
 
   final sorted = [...levels]..sort((a, b) => a.level.compareTo(b.level));
@@ -40,6 +62,33 @@ Map<int, List<double>> computeAllKnVolumeSeries({
     increments = _cumulativeToIncrements(series);
   }
   return out;
+}
+
+/// All Kn 总成交量系列（key = display kn: 0=K0, 1=K1, ...）。
+Map<int, List<double>> computeAllKnVolumeSeries({
+  required List<KlineBar> bars,
+  required List<LevelBundle> levels,
+  List<BarCrosshairFeature> barFeatures = const [],
+}) {
+  return _computeAllKnFromK0(
+    k0Series: computeK0VolumeSeries(bars),
+    levels: levels,
+    bars: bars,
+  );
+}
+
+/// All Kn 买入量系列（key = display kn: 0=K0, 1=K1, ...）。
+/// 与总成交量同结构，用于红绿叠柱绘制。
+Map<int, List<double>> computeAllKnBuyVolumeSeries({
+  required List<KlineBar> bars,
+  required List<LevelBundle> levels,
+  List<BarCrosshairFeature> barFeatures = const [],
+}) {
+  return _computeAllKnFromK0(
+    k0Series: computeK0BuyVolumeSeries(bars),
+    levels: levels,
+    bars: bars,
+  );
 }
 
 List<double> computeKnVolumeSeries({
@@ -82,9 +131,7 @@ List<double> _accumulateConfirmGated({
       sumStart = u.x1 >= 0 ? u.x1 : 0;
       displayStart = sumStart;
     } else {
-      // ���� K0 = ȷ�Ϻ���λ�յ� end_pole(prev.x2)����̬�β�������
       sumStart = prev.x2 + 1;
-      // �������һȷ�ϲ��𣬱���ȷ��ǰ��δ���ж�
       displayStart =
           prev.confirmX >= 0 ? prev.confirmX : (prev.x2 + 1);
     }
@@ -93,7 +140,6 @@ List<double> _accumulateConfirmGated({
     if (isActiveTail) {
       endX = lastIdx;
     } else if (u.confirmX >= 0) {
-      // ȷ��ǰ��̬��Խ�����㻭�� confirmX-1
       endX = u.confirmX - 1;
     } else {
       endX = u.x2;
@@ -115,6 +161,22 @@ List<double> _accumulateConfirmGated({
     prev = u;
   }
   return out;
+}
+
+/// 构建 K0 idx → Kn unit bar index 映射。
+Map<int, int> buildKnUnitIdxMap(LevelBundle bundle) {
+  final map = <int, int>{};
+  final units = <LevelUnitBar>[
+    ...bundle.unitBars,
+    if (bundle.activeUnit != null) bundle.activeUnit!,
+  ];
+  for (var ui = 0; ui < units.length; ui++) {
+    final u = units[ui];
+    for (var x = u.x1; x <= u.x2; x++) {
+      map[x] = ui;
+    }
+  }
+  return map;
 }
 
 List<double> _cumulativeToIncrements(List<double> series) {
