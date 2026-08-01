@@ -2,7 +2,6 @@ import 'dart:isolate';
 
 import '../bridge/chan_bridge.dart';
 import '../models/kline_bar.dart';
-import '../models/level_models.dart';
 import '../widgets/kline_chip.dart';
 
 /// 单根 K 的筹码分摊增量（稀疏桶）。
@@ -487,40 +486,12 @@ Map<String, Object?> _isolateBuildPrefix(Map<String, Object?> req) {
 }
 
 /// 筹码 profile：前缀索引（步进增量 + 十字 as-of）；口径不变。
+/// 仅 K0 分支：cutoff=步进末根 / 十字 as-of 所在 K0（Kn 层映射已随筹码迁设置移除）。
 class ChipProfileCompute {
   static ChipProfileData? _cached;
   static String? _cachedKey;
   static _ChipPrefixIndex? _prefix;
   static int _warmGen = 0;
-
-  static int cutoffForKn({
-    required int kn,
-    required int asOfK0,
-    required List<LevelBundle> levels,
-  }) {
-    if (kn <= 0) return asOfK0;
-    LevelBundle? lv;
-    for (final e in levels) {
-      if (e.level == kn) {
-        lv = e;
-        break;
-      }
-    }
-    if (lv == null) return asOfK0;
-    var maxX = -1;
-    for (final u in lv.unitBars) {
-      final x2 = u.x2;
-      if (x2 <= asOfK0 && x2 > maxX) maxX = x2;
-    }
-    final active = lv.activeUnit;
-    if (active != null) {
-      if (active.x2 <= asOfK0 && active.x2 > maxX) {
-        maxX = active.x2;
-      }
-      if (asOfK0 > maxX) maxX = asOfK0;
-    }
-    return maxX < 0 ? asOfK0 : maxX;
-  }
 
   static String _cacheKey(List<KlineBar> bars, int cutoffX, double bucketStep) {
     if (bars.isEmpty) return '0|$cutoffX|$bucketStep';

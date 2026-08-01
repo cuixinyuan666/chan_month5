@@ -35,15 +35,11 @@ Map<String, dynamic> _bins({
 }
 
 void main() {
-  test('主图 catalog 含 Kn筹码分布 全层同构', () {
+  test('主图 catalog 不再含筹码分布（已迁设置·仅K0）', () {
     final cat = buildMainIndicatorCatalog(2);
-    expect(cat.contains(const MainChartIndicator.chip(0)), isTrue);
-    expect(cat.contains(const MainChartIndicator.chip(1)), isTrue);
-    expect(cat.contains(const MainChartIndicator.chip(2)), isTrue);
-    expect(const MainChartIndicator.chip(0).label, 'K0筹码分布');
-    expect(const MainChartIndicator.chip(1).displayLevel, 1);
+    expect(cat.any((e) => e.label.contains('筹码')), isFalse);
     final lv0 = mainIndicatorsForLevel(0, cat);
-    expect(lv0.contains(const MainChartIndicator.chip(0)), isTrue);
+    expect(lv0.any((e) => e.label.contains('筹码')), isFalse);
   });
 
   test('副图 catalog 不再含筹码', () {
@@ -51,9 +47,9 @@ void main() {
     expect(cat.any((e) => e.label.contains('筹码')), isFalse);
   });
 
-  test('defaultMainIndicatorsK0 含筹码', () {
+  test('defaultMainIndicatorsK0 不再含筹码', () {
     final d = defaultMainIndicatorsK0();
-    expect(d.contains(const MainChartIndicator.chip(0)), isTrue);
+    expect(d.any((e) => e.label.contains('筹码')), isFalse);
   });
 
   test('Dart 兜底：cutoff 冻结当下性', () {

@@ -704,7 +704,7 @@ class BarFeatureLookup {
           add(ind.label, v);
         }
       }
-      // 筹码已迁主图指标，不再走副图读数
+      // 筹码已迁设置面板控制（仅K0），不走副图读数
       if (ind.kind == SubIndicatorKind.fractalConfirm) {
         dynamic v;
         var truncated = false;

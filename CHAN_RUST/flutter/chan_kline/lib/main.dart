@@ -485,7 +485,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
           _sell2K0Frames = const [];
           _buyNK0Frames = const [];
           _sellNK0Frames = const [];
-          _mainIndicators = {const MainChartIndicator.chip(0)};
+          // 筹码已迁设置控制（仅K0），不再进主图指标选择集
+          _mainIndicators = {};
           _subIndicators = {};
         });
         // 预热全量前缀（即便当前只显示首根，跳末后即可秒切）
@@ -1354,15 +1355,15 @@ class _KlineHomePageState extends State<KlineHomePage> {
           ),
         ),
         const SizedBox(height: 8),
-        // 筹码分布：总开关 + 峰线；桶宽/拉伸见说明弹窗
+        // 筹码分布：总开关 + 峰线；桶宽/拉伸见说明弹窗（已迁设置·仅K0，不参与主图指标勾选）
         SwitchListTile(
           contentPadding: EdgeInsets.zero,
           dense: true,
           title: const Text('筹码分布', style: TextStyle(fontSize: 13)),
           subtitle: Text(
             _chipConfig.enabled
-                ? '已开启（主图勾选 Kn筹码分布后右侧绘制）'
-                : '已关闭（即使勾选也不绘制）',
+                ? '已开启（主图右侧绘制 K0筹码）'
+                : '已关闭（主图右侧不绘制）',
             style: const TextStyle(fontSize: 11),
           ),
           value: _chipConfig.enabled,
@@ -1661,15 +1662,15 @@ class _KlineHomePageState extends State<KlineHomePage> {
             '怎么看\n'
             '· 主图右侧水平柱：左绿=S（卖），右红=B（买）；\n'
             '· 筹码峰：局部量峰打点，虚线延长到主图左侧；\n'
-            '· 主图勾选「Kn筹码分布」才绘制；设置里总开关可一键关。\n\n'
+            '· 由设置面板总开关控制，不参与主图指标勾选；仅 K0 分支。\n\n'
             '数据与当下性\n'
             '· 离线分笔写入 chip_tick_bins（价量直加）；tick 禁止三角；'
             '非一字且无 bins 时才 OHLC 三角估算；\n'
             '· 逐K只累加已喂入 K 线；十字悬停回滚到该日累积，不回写历史；\n'
-            '· K0/K1/…/Kn 全层同构：Kn 用该层单元覆盖到的最大 K0 序号作 cutoff。\n\n'
+            '· 仅 K0：cutoff=当前步进末根 / 十字 as-of 所在 K0。\n\n'
             '操作步骤\n'
-            '1. 设置里打开「筹码分布」；\n'
-            '2. 主图选择栏勾选「K0筹码分布」（或 Kn / 「Kn指标」层全选）；\n'
+            '1. 设置里打开「筹码分布」总开关；\n'
+            '2. 主图右侧立即绘制 K0 筹码；\n'
             '3. 可调「筹码桶宽」「筹码峰延长线」；\n'
             '4. 配置写入 .chan_chip_config.json，下次启动恢复。',
           ),

@@ -1560,12 +1560,8 @@ class _KlineCompositePainter extends CustomPainter {
     final plotTop = KlineViewport.padT;
     final plotBottom = mainH - KlineViewport.padB;
     final plotH = math.max(1.0, plotBottom - plotTop);
-    final chipKns = mainIndicators
-        .where((e) => e.kind == MainIndicatorKind.chip)
-        .map((e) => e.kn)
-        .toList()
-      ..sort();
-    final showChip = chipConfig.enabled && chipKns.isNotEmpty;
+    // 筹码分布已迁设置面板控制：开关开启即绘制，仅 K0 分支（不参与主图指标勾选）
+    final showChip = chipConfig.enabled && bars.isNotEmpty;
     final chipPaneW = showChip ? math.max(24.0, chipConfig.paneWidth) : 0.0;
     // 蜡烛坐标系不变：筹码叠在主图右侧；开启时价签改左侧以免被盖
     final plotW = math.max(1.0, size.width - KlineViewport.padL - KlineViewport.padR);
@@ -1584,17 +1580,10 @@ class _KlineCompositePainter extends CustomPainter {
     }
 
     if (layer == _ChartPaintLayer.chip) {
-      if (showChip && bars.isNotEmpty) {
-        final asOfK0 = bars.last.idx;
-        final kn = chipKns.last;
-        final cutBase = segAsOf ?? asOfK0;
-        final cut = chipOnlyMode || kn <= 0
-            ? cutBase
-            : ChipProfileCompute.cutoffForKn(
-                kn: kn,
-                asOfK0: cutBase,
-                levels: zsAsOfBundle?.levels ?? levels,
-              );
+      if (showChip) {
+        // 仅 K0 分支：cutoff=步进末根 / 十字 as-of 所在 K0（不映射 Kn 层）
+        final kn = 0;
+        final cut = segAsOf ?? bars.last.idx;
         final profile = ChipProfileCompute.compute(
           bars: bars,
           cutoffX: cut,
@@ -4385,9 +4374,8 @@ class _KlineCompositePainter extends CustomPainter {
     final lw = tp.width + 12;
     final lh = tp.height + 8;
     final ly = y - lh / 2;
-    // 筹码开启：价签改左侧，避免被右侧筹码挡住
-    final chipOn = chipConfig.enabled &&
-        mainIndicators.any((e) => e.kind == MainIndicatorKind.chip);
+    // 筹码开启：价签改左侧，避免被右侧筹码挡住（设置总开关控制，仅K0）
+    final chipOn = chipConfig.enabled;
     final lx = chipOn ? KlineViewport.padL + 2 : size.width - lw - 3;
     canvas.drawRect(Rect.fromLTWH(lx, ly, lw, lh), labelBg);
     canvas.drawRect(Rect.fromLTWH(lx, ly, lw, lh), labelBorder);

@@ -551,24 +551,26 @@ class MsgHistory {
     append(
       '【默认指标】主/副图启动默认勾选「K0指标」层全选，'
       '与选择栏最上「Kn指标」同口径：'
-      '主图=K0/K0合并/K0中枢/K0连线/K0筹码分布；'
+      '主图=K0/K0合并/K0中枢/K0连线（筹码迁设置·仅K0，不在指标栏）；'
       '副图=K0成交量+分型确认/判断/极点距/截断+一类/二类BS+K0相邻比例/步进节奏'
       '（截断随截断开关 prune）。'
       '非 K1 层；加载后仅 prune 超出 catalog 的项，不改层。',
     );
   }
 
-  /// 筹码分布：全层同构 + 分笔 bins + 十字 as-of 截断（进程内去重）。
+  /// 筹码分布：迁设置控制·仅K0 + 分笔 bins + 十字 as-of 截断（进程内去重）。
   static bool _chipDistributionLogged = false;
   void appendChipDistribution() {
     if (_chipDistributionLogged) return;
     _chipDistributionLogged = true;
     append(
-      '【Kn筹码分布·全层同构】主图勾选 K0/K1/…/Kn筹码分布（进「Kn指标」层全选）；'
+      '【筹码分布·迁设置·仅K0】筹码迁出主图指标（目录/层全选/默认勾选均移除），'
+      '改由设置面板总开关控制，仅保留 K0 分支；'
+      'cutoff=当前步进末根 / 十字 as-of 所在 K0（不再映射 Kn 层）。'
       '主图右侧水平柱（左绿S/右红B），峰延长线横穿主图。'
       '数据：离线分笔注入 chip_tick_bins（p/s/b/w）；'
       'tick/一字线无 bins 时收盘价单点落量（禁三角）；其余无 bins 才 OHLC 三角兜底。'
-      '计算：Rust chan_chip_profile（cutoff_x 含）；Kn cutoff=该层单元覆盖到的最大 K0 idx。'
+      '计算：Rust chan_chip_profile（cutoff_x 含）。'
       '性能：Flutter 前缀索引（步进增量/十字 as-of 秒查）+ 底图/筹码/十字三层 RepaintBoundary；'
       '大序列 Isolate 后台预热前缀（跳末/加载），计算口径不变。'
       '逐K当下性：只累加已喂入 bars；十字 as-of 回滚到该日累积，不回写历史桶。'
@@ -577,15 +579,15 @@ class MsgHistory {
     );
   }
 
-  /// 筹码迁主图 + 副图比例/节奏进 Kn指标（进程内去重）。
+  /// 筹码迁设置（仅K0）+ 副图比例/节奏进 Kn指标（进程内去重）。
   static bool _chipMainRatioLevelLogged = false;
   void appendChipToMainAndRatioInSubLevel() {
     if (_chipMainRatioLevelLogged) return;
     _chipMainRatioLevelLogged = true;
     append(
-      '【指标归属·全层同构】Kn筹码分布改主图指标，进「Kn指标」层全选'
-      '（层内序末项：Kn→合并→中枢→连线→筹码）。'
-      '副图「Kn相邻比例」「Kn步进节奏」纳入「Kn指标」层全选与默认 K0 全选；'
+      '【指标归属·筹码迁设置】Kn筹码分布从主图指标迁出，不再进「Kn指标」层全选，'
+      '只保留 K0 分支、由设置面板「筹码分布」总开关控制（K1/…/Kn 筹码分支移除）。'
+      '副图「Kn相邻比例」「Kn步进节奏」仍纳入「Kn指标」层全选与默认 K0 全选；'
       '副图 catalog 按显示层交错排列。',
     );
   }

@@ -1,14 +1,13 @@
 import 'k0_line.dart';
 import 'level_models.dart';
 
-/// 主图指标：连线 / 合并框 / KN线 / 中枢 / 筹码分布。
+/// 主图指标：连线 / 合并框 / KN线 / 中枢。
+/// （筹码分布已迁出主图指标，改由设置面板总开关控制，仅保留 K0 分支）
 enum MainIndicatorKind {
   line,
   combine,
   kn,
   zs,
-  /// Kn筹码分布（主图右侧水平柱；全层同构）
-  chip,
 }
 
 /// 主图指标类别元数据。
@@ -23,8 +22,6 @@ extension MainIndicatorKindMeta on MainIndicatorKind {
         return '中枢';
       case MainIndicatorKind.line:
         return '连线';
-      case MainIndicatorKind.chip:
-        return '筹码分布';
     }
   }
 
@@ -38,8 +35,6 @@ extension MainIndicatorKindMeta on MainIndicatorKind {
         return 2;
       case MainIndicatorKind.line:
         return 3;
-      case MainIndicatorKind.chip:
-        return 4;
     }
   }
 }
@@ -47,7 +42,7 @@ extension MainIndicatorKindMeta on MainIndicatorKind {
 /// 主图一项指标（按加载后 maxKn 动态生成）。
 class MainChartIndicator {
   final MainIndicatorKind kind;
-  /// kn=0：K0中枢 / K0筹码（原生分钟K）；kn≥1：Kn中枢 / Kn筹码（连线段）。
+  /// kn=0：K0中枢（原生分钟K）；kn≥1：Kn中枢（连线段）。
   /// combine/line/kn：内部 kn≥1，显示层 = kn-1。
   final int kn;
 
@@ -55,7 +50,6 @@ class MainChartIndicator {
   const MainChartIndicator.combine(this.kn) : kind = MainIndicatorKind.combine;
   const MainChartIndicator.kn(this.kn) : kind = MainIndicatorKind.kn;
   const MainChartIndicator.zs(this.kn) : kind = MainIndicatorKind.zs;
-  const MainChartIndicator.chip(this.kn) : kind = MainIndicatorKind.chip;
 
   String get label {
     switch (kind) {
@@ -68,16 +62,13 @@ class MainChartIndicator {
       case MainIndicatorKind.zs:
         // 自定义命名：去掉「连续」，展示为「Kn中枢」
         return 'K$kn中枢';
-      case MainIndicatorKind.chip:
-        return 'K$kn筹码分布';
     }
   }
 
-  /// 显示层号（K0/K1/…），用于「Kn指标」全选与 chip 分隔。
+  /// 显示层号（K0/K1/…），用于「Kn指标」全选。
   int get displayLevel {
     switch (kind) {
       case MainIndicatorKind.zs:
-      case MainIndicatorKind.chip:
         return kn;
       case MainIndicatorKind.line:
       case MainIndicatorKind.combine:
@@ -86,7 +77,7 @@ class MainChartIndicator {
     }
   }
 
-  /// 同层内展示序：Kn → Kn合并 → Kn中枢 → Kn连线 → Kn筹码分布（自定义·全层同构）。
+  /// 同层内展示序：Kn → Kn合并 → Kn中枢 → Kn连线。
   int get kindOrderInLevel {
     switch (kind) {
       case MainIndicatorKind.kn:
@@ -97,8 +88,6 @@ class MainChartIndicator {
         return 2;
       case MainIndicatorKind.line:
         return 3;
-      case MainIndicatorKind.chip:
-        return 4;
     }
   }
 
@@ -322,7 +311,7 @@ List<MainChartIndicator> buildMainIndicatorCatalog(int maxKn) {
   final out = <MainChartIndicator>[];
   final combineMax = maxKn < 1 ? 1 : maxKn;
   final knMax = maxKn < 1 ? 1 : maxKn;
-  // 按类别分组：K线 → 合并 → 中枢 → 连线 → 筹码分布
+  // 按类别分组：K线 → 合并 → 中枢 → 连线（筹码分布已迁设置·仅K0，不在目录）
   for (var d = 1; d <= knMax; d++) {
     out.add(MainChartIndicator.kn(d));
   }
@@ -334,9 +323,6 @@ List<MainChartIndicator> buildMainIndicatorCatalog(int maxKn) {
   }
   for (var d = 1; d <= maxKn; d++) {
     out.add(MainChartIndicator.line(d));
-  }
-  for (var d = 0; d <= maxKn; d++) {
-    out.add(MainChartIndicator.chip(d));
   }
   return out;
 }
@@ -403,7 +389,7 @@ List<SubChartIndicator> buildSubIndicatorCatalog(
 }
 
 /// 主图「K{displayLevel}指标」层全选成员（仅返回 catalog 内存在的项）。
-/// 层内序：Kn → Kn合并 → Kn中枢 → Kn连线 → Kn筹码分布。
+/// 层内序：Kn → Kn合并 → Kn中枢 → Kn连线。
 List<MainChartIndicator> mainIndicatorsForLevel(
   int displayLevel,
   List<MainChartIndicator> catalog,
@@ -414,7 +400,6 @@ List<MainChartIndicator> mainIndicatorsForLevel(
     MainChartIndicator.combine(displayLevel + 1),
     MainChartIndicator.zs(displayLevel),
     MainChartIndicator.line(displayLevel + 1),
-    MainChartIndicator.chip(displayLevel),
   ];
   return candidates.where(allow.contains).toList();
 }
@@ -473,7 +458,8 @@ Set<T> pruneIndicators<T>(Set<T> selected, List<T> catalog) {
 }
 
 /// 启动默认：勾选「K0指标」层全选（与选择栏层全选同口径）。
-/// 用 catalog(maxKn=1) 生成，保证含 K0连线 / K0筹码 / 副图分型类与相邻比例/节奏。
+/// 用 catalog(maxKn=1) 生成，保证含 K0连线 / 副图分型类与相邻比例/节奏。
+/// （筹码分布由设置面板控制，不在默认指标内）
 Set<MainChartIndicator> defaultMainIndicatorsK0() {
   return mainIndicatorsForLevel(0, buildMainIndicatorCatalog(1)).toSet();
 }
