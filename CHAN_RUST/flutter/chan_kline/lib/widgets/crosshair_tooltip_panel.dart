@@ -89,7 +89,7 @@ class CrosshairTooltipPanel extends StatelessWidget {
                       child: Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          // 左列标签定宽，便于各层对齐（含「K0合并K0序」）
+                          // 左列标签定宽，便于各层对齐（含「K0中枢K0 idx」）
                           SizedBox(
                             width: 108,
                             child: Text(

@@ -59,7 +59,7 @@ List<ZSFrame> computeZsFramesAtAsOf({
 }
 
 /// 十字线 tooltip：命中 asOf 坐标的中枢 GG/DD/ZG/ZD（与主图框同源）。
-/// 仿照 Kn合并 模式：每帧输出 4 行（GG/DD/ZG/ZD / Kn序 / 组No. / 确认）。
+/// 仿照 Kn合并 模式：每帧输出 4 行（GG/DD/ZG/ZD / K{层} idx / idx / 确认）。
 List<CrosshairTooltipRow> zsCrosshairTooltipRows({
   required int asOfIdx,
   required Set<MainChartIndicator> mainIndicators,
@@ -92,24 +92,26 @@ List<CrosshairTooltipRow> zsCrosshairTooltipRows({
       final f = frames[fi];
       if (asOfIdx < f.x1 || asOfIdx > f.x2) continue;
       final prefix = 'K${ind.kn}中枢';
+      // 价格行：标签只留「K{n}中枢」，值仍为 GG/DD/ZG/ZD
       rows.add(CrosshairTooltipRow.kv(
-        '$prefix价格',
+        prefix,
         CrosshairTooltipRow.boxNumInString(
             'GG${f.gg.toStringAsFixed(2)}/DD${f.dd.toStringAsFixed(2)}/ZG${f.high.toStringAsFixed(2)}/ZD${f.low.toStringAsFixed(2)}'),
       ));
+      // 中枢内数量行：「Kn序」里的 Kn 换为对应层级（K0中枢K0 idx / K1中枢K1 idx）
       rows.add(CrosshairTooltipRow.kv(
-        '${prefix}Kn序',
+        '${prefix}K${ind.kn} idx',
         CrosshairTooltipRow.boxNum(f.count),
       ));
       rows.add(CrosshairTooltipRow.kv(
-        '${prefix}组No.',
+        '$prefix idx',
         CrosshairTooltipRow.boxNum(f.seq),
       ));
       // 确认：仅当当前K为本中枢首根K（x1）时，检测上一中枢是否已确认（首次确认）
       final isFirstBar = asOfIdx == f.x1;
       final prevSure = (isFirstBar && fi > 0) ? (frames[fi - 1].isSure ? 1 : 0) : 0;
       rows.add(CrosshairTooltipRow.kv(
-        '${prefix}确认',
+        '$prefix确认',
         CrosshairTooltipRow.boxNum(prevSure),
       ));
     }

@@ -100,6 +100,8 @@ Future<void> main() async {
   MsgHistory.instance.appendDefaultIndicatorsK0();
   MsgHistory.instance.appendChipDistribution();
   MsgHistory.instance.appendChipToMainAndRatioInSubLevel();
+  // 十字 tooltip 标签格式化：idx 统一命名 + 合并 GG/DD（全层同构）
+  MsgHistory.instance.appendTooltipFormatting();
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     await windowManager.ensureInitialized();
     const opts = WindowOptions(

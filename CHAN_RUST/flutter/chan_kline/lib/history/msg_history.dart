@@ -592,6 +592,23 @@ class MsgHistory {
     );
   }
 
+  /// 十字 tooltip 标签格式化（进程内去重）：K{n}[No.]/…序/…组No. → … idx；合并取 GG/DD + MG/MD。
+  static bool _tooltipFormatLogged = false;
+  void appendTooltipFormatting() {
+    if (_tooltipFormatLogged) return;
+    _tooltipFormatLogged = true;
+    append(
+      '【tooltip 格式化·全层同构】十字线各层行标签统一：'
+      'K{n}[No.]→「K{n} idx」、K{n}合并K{n}序→「K{n}合并K{n} idx」、K{n}合并组No.→「K{n}合并 idx」；'
+      '「K{n}合并」取值仿照中枢改显 GG/DD（逐K当下区间极值，原 H/L），并保留原 H/L 改名为 MG/MD'
+      '（M=merge，取该合并框框体高低点，as-of 框体与主图框同源、无未来函数；未闭合构建中与 GG/DD 不同，'
+      '无框体时回退同值）；'
+      '中枢价格行去掉「价格」后缀只留「K{n}中枢」，'
+      '「K{n}中枢Kn序」中 Kn 换为对应层级（K0中枢K0 idx / K1中枢K1 idx），'
+      '「K{n}中枢组No.」→「K{n}中枢 idx」；Kn 块行序与 K0 块同构：合并(GG/DD/MG/MD)→合并K序→合并idx→分型确认/判断。',
+    );
+  }
+
   /// 运行时虚线摘要（内容变才追加；复制历史记录排查用）。
   void appendDisplayBuildingLinesRuntime({
     required int kn,

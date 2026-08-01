@@ -73,11 +73,11 @@ void main() {
       asOf: 0,
     );
     expect(rows.length, 4);
-    expect(rows[0].label, 'K0中枢价格');
+    expect(rows[0].label, 'K0中枢');
     expect(rows[0].value, 'GG【11.73】/DD【11.70】/ZG【11.72】/ZD【11.71】');
-    expect(rows[1].label, 'K0中枢Kn序');
+    expect(rows[1].label, 'K0中枢K0 idx');
     expect(rows[1].value, '【2】');
-    expect(rows[2].label, 'K0中枢组No.');
+    expect(rows[2].label, 'K0中枢 idx');
     expect(rows[2].value, '【0】');
     expect(rows[3].label, 'K0中枢确认');
     expect(rows[3].value, '【0】');

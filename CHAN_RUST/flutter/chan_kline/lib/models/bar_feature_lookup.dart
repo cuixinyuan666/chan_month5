@@ -184,6 +184,16 @@ class BarFeatureLookup {
       }
     }
 
+    // 各层 Kn合并框框体高低点（tooltip「MG/MD」用，与主图框同源；as-of bundle 时为当下框，无未来函数）
+    for (final lv in levels) {
+      for (final f in lv.combineFrames) {
+        for (var x = f.x1; x <= f.x2; x++) {
+          final row = byIdx.putIfAbsent(x, () => {'idx': x});
+          row['combine_box_${lv.level}'] = {'high': f.high, 'low': f.low};
+        }
+      }
+    }
+
     for (final sig in k0Confirms) {
       final row = byIdx.putIfAbsent(sig.x, () => {'idx': sig.x});
       row['k0_confirm'] = {
@@ -628,18 +638,22 @@ class BarFeatureLookup {
     final out = <CrosshairTooltipRow>[
       CrosshairTooltipRow.kv('日期时间', '$timePart     $weekday'),
       const CrosshairTooltipRow.separator(),
-      CrosshairTooltipRow.kv('K0[No.]', CrosshairTooltipRow.boxNum(row['idx'])),
+      CrosshairTooltipRow.kv('K0 idx', CrosshairTooltipRow.boxNum(row['idx'])),
       CrosshairTooltipRow.kv(
         'K0',
         CrosshairTooltipRow.boxNumInString(_fmtOhlcv(open: open, high: high, low: low, close: close, volume: volume)),
       ),
       const CrosshairTooltipRow.starSeparator(),
-      CrosshairTooltipRow.kv(
-        'K0合并',
-        CrosshairTooltipRow.boxNumInString('H${_fmtPrice(combineHigh)}/L${_fmtPrice(combineLow)}'),
+      // K0合并：GG/DD=逐K当下区间极值；MG/MD=该合并框框体高低点（frame box，未闭合构建中与极值不同）
+      ..._mergeRows(
+        label: 'K0合并',
+        gg: combineHigh,
+        dd: combineLow,
+        mg: _frameBox(row['combine'], fallback: combineHigh),
+        md: _frameBox(row['combine'], fallback: combineLow, useLow: true),
       ),
-      CrosshairTooltipRow.kv('K0合并K0序', CrosshairTooltipRow.boxNum(mergeInner)),
-      CrosshairTooltipRow.kv('K0合并组No.', mergeBoxSeq >= 0 ? CrosshairTooltipRow.boxNum(mergeBoxSeq) : '未成框'),
+      CrosshairTooltipRow.kv('K0合并K0 idx', CrosshairTooltipRow.boxNum(mergeInner)),
+      CrosshairTooltipRow.kv('K0合并 idx', mergeBoxSeq >= 0 ? CrosshairTooltipRow.boxNum(mergeBoxSeq) : '未成框'),
       CrosshairTooltipRow.kv('K0分型确认', CrosshairTooltipRow.boxNum(combineFxConfirm)),
       const CrosshairTooltipRow.starSeparator(),
       ...zsAfterK0,
@@ -869,6 +883,8 @@ class BarFeatureLookup {
           ? sub['volume_$n'] as num
           : null;
       lines.add(const CrosshairTooltipRow.separator());
+      // MG/MD=该层合并框框体高低点（frame box）；无框体时回退逐K当下极值
+      final box = row['combine_box_$n'];
       lines.addAll(_levelBlockRowsFor(
         n,
         snap,
@@ -877,6 +893,8 @@ class BarFeatureLookup {
         judgeVal,
         judgeTruncated,
         volumeOverride: knVol,
+        combineBoxHigh: _frameBox(box, fallback: snap?.combineHigh ?? 0),
+        combineBoxLow: _frameBox(box, fallback: snap?.combineLow ?? 0, useLow: true),
       ));
     }
     return lines;
@@ -898,6 +916,8 @@ class BarFeatureLookup {
     int? judgeVal,
     bool judgeTruncated, {
     num? volumeOverride,
+    double? combineBoxHigh,
+    double? combineBoxLow,
   }) {
     final label = 'K$n';
     // 分型确认 / 分型判断 同一套呈现：±1(截断) / ±1 / 0（未确认）
@@ -910,11 +930,13 @@ class BarFeatureLookup {
 
     if (snap == null || snap.unitIdx == null) {
       return [
-        CrosshairTooltipRow.kv('$label[No.]', '首K$n确认前'),
+        CrosshairTooltipRow.kv('$label idx', '首K$n确认前'),
         CrosshairTooltipRow.kv(label, '—'),
         const CrosshairTooltipRow.starSeparator(),
-        CrosshairTooltipRow.kv('$label合并$label序', '—'),
+        // 占位块与实体块同构：合并(GG/DD/MG/MD)→合并K序→合并idx→分型确认/判断
         CrosshairTooltipRow.kv('$label合并', '—'),
+        CrosshairTooltipRow.kv('$label合并$label idx', '—'),
+        CrosshairTooltipRow.kv('$label合并 idx', '—'),
         CrosshairTooltipRow.kv('$label分型确认', CrosshairTooltipRow.boxNum(confirmText)),
         CrosshairTooltipRow.kv('$label分型判断', CrosshairTooltipRow.boxNum(judgeText)),
         const CrosshairTooltipRow.starSeparator(),
@@ -923,7 +945,7 @@ class BarFeatureLookup {
     }
 
     return [
-      CrosshairTooltipRow.kv('$label[No.]', CrosshairTooltipRow.boxNum(snap.unitIdx)),
+      CrosshairTooltipRow.kv('$label idx', CrosshairTooltipRow.boxNum(snap.unitIdx)),
       CrosshairTooltipRow.kv(
         label,
         CrosshairTooltipRow.boxNumInString(_fmtOhlcv(
@@ -936,17 +958,47 @@ class BarFeatureLookup {
         )),
       ),
       const CrosshairTooltipRow.starSeparator(),
-      CrosshairTooltipRow.kv('$label合并$label序', CrosshairTooltipRow.boxNum(snap.mergeInnerSeq)),
-      CrosshairTooltipRow.kv('$label合并组No.', snap.mergeBoxSeq >= 0 ? CrosshairTooltipRow.boxNum(snap.mergeBoxSeq) : '未成框'),
-      CrosshairTooltipRow.kv(
-        '$label合并',
-        CrosshairTooltipRow.boxNumInString('H${_fmtPrice(snap.combineHigh)}/L${_fmtPrice(snap.combineLow)}'),
+      // 顺序与 K0 块同构：合并(GG/DD/MG/MD)→合并K序→合并idx→分型确认/判断
+      ..._mergeRows(
+        label: '$label合并',
+        gg: snap.combineHigh,
+        dd: snap.combineLow,
+        mg: combineBoxHigh ?? snap.combineHigh,
+        md: combineBoxLow ?? snap.combineLow,
       ),
+      CrosshairTooltipRow.kv('$label合并$label idx', CrosshairTooltipRow.boxNum(snap.mergeInnerSeq)),
+      CrosshairTooltipRow.kv('$label合并 idx', snap.mergeBoxSeq >= 0 ? CrosshairTooltipRow.boxNum(snap.mergeBoxSeq) : '未成框'),
       CrosshairTooltipRow.kv('$label分型确认', CrosshairTooltipRow.boxNum(confirmText)),
       CrosshairTooltipRow.kv('$label分型判断', CrosshairTooltipRow.boxNum(judgeText)),
       const CrosshairTooltipRow.starSeparator(),
       ...knZsAfterKn[n] ?? const [],
     ];
+  }
+
+  /// 合并行：GG/DD=合并框区间极值（逐K当下）；MG/MD=合并框框体高低点（M=merge）。
+  List<CrosshairTooltipRow> _mergeRows({
+    required String label,
+    required double gg,
+    required double dd,
+    required double mg,
+    required double md,
+  }) {
+    return [
+      CrosshairTooltipRow.kv(
+        label,
+        CrosshairTooltipRow.boxNumInString(
+            'GG${_fmtPrice(gg)}/DD${_fmtPrice(dd)}/MG${_fmtPrice(mg)}/MD${_fmtPrice(md)}'),
+      ),
+    ];
+  }
+
+  /// 取合并框框体高低点（row['combine'] / row['combine_box_n']）；无框体时回退极值。
+  static double _frameBox(dynamic box, {required double fallback, bool useLow = false}) {
+    if (box is Map) {
+      final v = box[useLow ? 'low' : 'high'];
+      if (v is num) return v.toDouble();
+    }
+    return fallback;
   }
 
   /// 由确认列表生成逐 K 极点距（确认当步起算；不含极点 K；对齐副图/Rust）。

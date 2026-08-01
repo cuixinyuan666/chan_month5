@@ -658,7 +658,7 @@ class _KlineChartState extends State<KlineChart> {
       final out = <CrosshairTooltipRow>[
         CrosshairTooltipRow.kv('日期时间', timePart),
         const CrosshairTooltipRow.separator(),
-        CrosshairTooltipRow.kv('K0[No.]', CrosshairTooltipRow.boxNum(bar.idx)),
+        CrosshairTooltipRow.kv('K0 idx', CrosshairTooltipRow.boxNum(bar.idx)),
         CrosshairTooltipRow.kv(
           'K0',
           CrosshairTooltipRow.boxNumInString(
@@ -703,7 +703,8 @@ class _KlineChartState extends State<KlineChart> {
     }
     final lookup = BarFeatureLookup.build(
       bars: widget.bars,
-      combineFrames: widget.combineFrames,
+      // K0合并框体用 as-of 重建（十字线当下性；MG/MD 框体高低点与主图框同源）
+      combineFrames: _effectiveK0CombineFrames,
       k0Confirms: widget.k0ConfirmSignals,
       barFeatures: widget.barFeatures,
       k0Lines: widget.k0Lines,
