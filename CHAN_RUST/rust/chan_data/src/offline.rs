@@ -448,6 +448,9 @@ fn ticks_to_bars(rows: &[TickRow]) -> Vec<KlineBar> {
             let p = r.price;
             let mut k = datetime_to_kline(r.dt, p, p, p, p, r.vol, p * r.vol, true);
             k.idx = i as i32;
+            // 逐笔方向（""|"B"|"S"），Flutter K0 成交量直接着色（涨红跌绿之外灰）
+            k.metrics
+                .insert("tick_side".to_string(), serde_json::json!(r.side));
             k
         })
         .collect()

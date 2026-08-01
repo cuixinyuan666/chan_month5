@@ -9,13 +9,15 @@ import '../widgets/kline_chip.dart';
 /// 踩坑：toWire/fromWire 用 List<int>/List<double> 而非 Map，
 /// 因为 Isolate 传输只支持基本类型的深拷贝，KlineBar 等对象不能跨 Isolate 边界。
 class _BarChipDelta {
-  _BarChipDelta(this.idx, this.keys, this.s, this.b);
+  _BarChipDelta(this.idx, this.keys, this.s, this.b, this.w);
   final int idx;
   final List<int> keys;
   final List<double> s;
   final List<double> b;
+  /// 灰度（无方向分笔）
+  final List<double> w;
 
-  List<Object?> toWire() => [idx, keys, s, b];
+  List<Object?> toWire() => [idx, keys, s, b, w];
 
   static _BarChipDelta fromWire(List<Object?> w) {
     return _BarChipDelta(
@@ -23,6 +25,7 @@ class _BarChipDelta {
       List<int>.from(w[1] as List),
       List<double>.from((w[2] as List).map((e) => (e as num).toDouble())),
       List<double>.from((w[3] as List).map((e) => (e as num).toDouble())),
+      List<double>.from((w[4] as List).map((e) => (e as num).toDouble())),
     );
   }
 }
@@ -39,6 +42,7 @@ class _ChipPrefixIndex {
     required this.deltas,
     required this.checkS,
     required this.checkB,
+    required this.checkW,
   });
 
   static const checkpointEvery = 256;
@@ -48,6 +52,7 @@ class _ChipPrefixIndex {
   final List<_BarChipDelta> deltas;
   final List<Map<int, double>> checkS;
   final List<Map<int, double>> checkB;
+  final List<Map<int, double>> checkW;
 
   int get n => deltas.length;
 
@@ -83,6 +88,7 @@ class _ChipPrefixIndex {
     final keys = <int>[];
     final s = <double>[];
     final b = <double>[];
+    final w = <double>[];
     if (bins is Map) {
       final p = (bins['p'] as List?)
               ?.map((e) => (e as num).toDouble())
@@ -96,7 +102,7 @@ class _ChipPrefixIndex {
               ?.map((e) => (e as num).toDouble())
               .toList() ??
           const <double>[];
-      final w = (bins['w'] as List?)
+      final wv = (bins['w'] as List?)
               ?.map((e) => (e as num).toDouble())
               .toList() ??
           const <double>[];
@@ -109,6 +115,7 @@ class _ChipPrefixIndex {
             keys: keys,
             s: s,
             b: b,
+            w: w,
           );
         } else {
           _triangleInto(
@@ -120,6 +127,7 @@ class _ChipPrefixIndex {
             keys: keys,
             s: s,
             b: b,
+            w: w,
           );
         }
       } else {
@@ -128,12 +136,14 @@ class _ChipPrefixIndex {
           if (!price.isFinite) continue;
           final key = (price / step).floor();
           final ss = i < sv.length ? sv[i] : 0.0;
-          var bb = i < bv.length ? bv[i] : 0.0;
-          if (bv.isEmpty && i < w.length) bb = w[i];
-          if (ss <= 0 && bb <= 0) continue;
+          final bb = i < bv.length ? bv[i] : 0.0;
+          // 灰度独立分量；删除旧「b 空则用 w 当买」兜底
+          final ww = i < wv.length ? wv[i] : 0.0;
+          if (ss <= 0 && bb <= 0 && ww <= 0) continue;
           keys.add(key);
           s.add(ss > 0 ? ss : 0.0);
           b.add(bb > 0 ? bb : 0.0);
+          w.add(ww > 0 ? ww : 0.0);
         }
       }
     } else if ((high - low).abs() < 1e-12) {
@@ -145,6 +155,7 @@ class _ChipPrefixIndex {
         keys: keys,
         s: s,
         b: b,
+        w: w,
       );
     } else {
       _triangleInto(
@@ -156,9 +167,10 @@ class _ChipPrefixIndex {
         keys: keys,
         s: s,
         b: b,
+        w: w,
       );
     }
-    return _BarChipDelta(idx, keys, s, b);
+    return _BarChipDelta(idx, keys, s, b, w);
   }
 
   static void _pointInto({
@@ -168,12 +180,14 @@ class _ChipPrefixIndex {
     required List<int> keys,
     required List<double> s,
     required List<double> b,
+    required List<double> w,
   }) {
     final vol = volume < 0 ? 0.0 : volume;
     if (!price.isFinite || vol <= 0) return;
     keys.add((price / step).floor());
     s.add(0);
     b.add(vol);
+    w.add(0);
   }
 
   static void _triangleInto({
@@ -185,6 +199,7 @@ class _ChipPrefixIndex {
     required List<int> keys,
     required List<double> s,
     required List<double> b,
+    required List<double> w,
   }) {
     final lo = low < high ? low : high;
     final hi = low > high ? low : high;
@@ -198,6 +213,7 @@ class _ChipPrefixIndex {
       keys.add(i0);
       s.add(0);
       b.add(vol);
+      w.add(0);
       return;
     }
     final weights = <MapEntry<int, double>>[];
@@ -224,6 +240,7 @@ class _ChipPrefixIndex {
       keys.add(e.key);
       s.add(0);
       b.add(e.value / totalW * vol);
+      w.add(0);
     }
   }
 
@@ -265,13 +282,16 @@ class _ChipPrefixIndex {
   ) {
     final checkS = <Map<int, double>>[{}];
     final checkB = <Map<int, double>>[{}];
+    final checkW = <Map<int, double>>[{}];
     final runS = <int, double>{};
     final runB = <int, double>{};
+    final runW = <int, double>{};
     for (var i = 0; i < deltas.length; i++) {
-      _apply(deltas[i], runS, runB);
+      _apply(deltas[i], runS, runB, runW);
       if ((i + 1) % checkpointEvery == 0) {
         checkS.add(Map<int, double>.from(runS));
         checkB.add(Map<int, double>.from(runB));
+        checkW.add(Map<int, double>.from(runW));
       }
     }
     return _ChipPrefixIndex(
@@ -280,6 +300,7 @@ class _ChipPrefixIndex {
       deltas: deltas,
       checkS: checkS,
       checkB: checkB,
+      checkW: checkW,
     );
   }
 
@@ -289,6 +310,7 @@ class _ChipPrefixIndex {
         'deltas': [for (final d in deltas) d.toWire()],
         'checkS': checkS,
         'checkB': checkB,
+        'checkW': checkW,
       };
 
   static _ChipPrefixIndex fromWire(Map<String, Object?> w) {
@@ -297,15 +319,7 @@ class _ChipPrefixIndex {
         .toList();
     // 踩坑：JSON 序列化会把 Map<int,double> 的 key 变 String；
     // 反序列时必须 int.parse(k.toString()) 转回 int。
-    final rawCs = (w['checkS'] as List)
-        .map((e) => Map<int, double>.from(
-              (e as Map).map((k, v) => MapEntry(
-                    k is int ? k : int.parse(k.toString()),
-                    (v as num).toDouble(),
-                  )),
-            ))
-        .toList();
-    final rawCb = (w['checkB'] as List)
+    List<Map<int, double>> parseChecks(dynamic raw) => (raw as List)
         .map((e) => Map<int, double>.from(
               (e as Map).map((k, v) => MapEntry(
                     k is int ? k : int.parse(k.toString()),
@@ -317,19 +331,23 @@ class _ChipPrefixIndex {
       seriesKey: w['seriesKey'] as String,
       step: (w['step'] as num).toDouble(),
       deltas: rawD,
-      checkS: rawCs,
-      checkB: rawCb,
+      checkS: parseChecks(w['checkS']),
+      checkB: parseChecks(w['checkB']),
+      checkW: parseChecks(w['checkW']),
     );
   }
 
   static void _apply(
-      _BarChipDelta d, Map<int, double> runS, Map<int, double> runB) {
+      _BarChipDelta d, Map<int, double> runS, Map<int, double> runB,
+      Map<int, double> runW) {
     for (var i = 0; i < d.keys.length; i++) {
       final k = d.keys[i];
       final sv = d.s[i];
       final bv = d.b[i];
+      final wv = d.w[i];
       if (sv > 0) runS[k] = (runS[k] ?? 0) + sv;
       if (bv > 0) runB[k] = (runB[k] ?? 0) + bv;
+      if (wv > 0) runW[k] = (runW[k] ?? 0) + wv;
     }
   }
 
@@ -340,12 +358,14 @@ class _ChipPrefixIndex {
       if (deltas.length % checkpointEvery == 0) {
         final runS = Map<int, double>.from(checkS.last);
         final runB = Map<int, double>.from(checkB.last);
+        final runW = Map<int, double>.from(checkW.last);
         final from = (checkS.length - 1) * checkpointEvery;
         for (var i = from; i < deltas.length; i++) {
-          _apply(deltas[i], runS, runB);
+          _apply(deltas[i], runS, runB, runW);
         }
         checkS.add(runS);
         checkB.add(runB);
+        checkW.add(runW);
       }
     }
   }
@@ -360,6 +380,9 @@ class _ChipPrefixIndex {
       checkB
         ..clear()
         ..add({});
+      checkW
+        ..clear()
+        ..add({});
       return;
     }
     deltas.removeRange(newN, deltas.length);
@@ -367,6 +390,7 @@ class _ChipPrefixIndex {
     if (checkS.length > keepChecks) {
       checkS.removeRange(keepChecks, checkS.length);
       checkB.removeRange(keepChecks, checkB.length);
+      checkW.removeRange(keepChecks, checkW.length);
     }
   }
 
@@ -391,6 +415,7 @@ class _ChipPrefixIndex {
         prices: const [],
         s: const [],
         b: const [],
+        w: const [],
         total: const [],
         maxTotal: 0,
         source: 'prefix',
@@ -400,11 +425,12 @@ class _ChipPrefixIndex {
     final safeCp = cp.clamp(0, checkS.length - 1);
     final runS = Map<int, double>.from(checkS[safeCp]);
     final runB = Map<int, double>.from(checkB[safeCp]);
+    final runW = Map<int, double>.from(checkW[safeCp]);
     final from = safeCp * checkpointEvery;
     for (var i = from; i <= end; i++) {
-      _apply(deltas[i], runS, runB);
+      _apply(deltas[i], runS, runB, runW);
     }
-    return _mapsToProfile(cutoffX, step, runS, runB);
+    return _mapsToProfile(cutoffX, step, runS, runB, runW);
   }
 
   static ChipProfileData _mapsToProfile(
@@ -412,21 +438,26 @@ class _ChipPrefixIndex {
     double step,
     Map<int, double> bucketsS,
     Map<int, double> bucketsB,
+    Map<int, double> bucketsW,
   ) {
-    final keys = {...bucketsS.keys, ...bucketsB.keys}.toList()..sort();
+    final keys = {...bucketsS.keys, ...bucketsB.keys, ...bucketsW.keys}.toList()
+      ..sort();
     final prices = <double>[];
     final sVals = <double>[];
     final bVals = <double>[];
+    final wVals = <double>[];
     final totals = <double>[];
     var maxTotal = 0.0;
     for (final k in keys) {
       final sv = bucketsS[k] ?? 0.0;
       final bv = bucketsB[k] ?? 0.0;
-      final t = sv + bv;
+      final wv = bucketsW[k] ?? 0.0;
+      final t = sv + bv + wv;
       if (t > maxTotal) maxTotal = t;
       prices.add(k * step);
       sVals.add(sv);
       bVals.add(bv);
+      wVals.add(wv);
       totals.add(t);
     }
     return ChipProfileData(
@@ -436,6 +467,7 @@ class _ChipPrefixIndex {
       prices: prices,
       s: sVals,
       b: bVals,
+      w: wVals,
       total: totals,
       maxTotal: maxTotal,
       source: 'prefix',

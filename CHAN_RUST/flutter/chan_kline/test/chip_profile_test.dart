@@ -1,17 +1,18 @@
 import 'package:chan_kline/compute/chip_profile_compute.dart';
 import 'package:chan_kline/models/chart_indicator.dart';
 import 'package:chan_kline/models/kline_bar.dart';
-import 'package:chan_kline/widgets/kline_chip.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 KlineBar _bar({
   required int idx,
   required Map<String, dynamic> metrics,
+  int? timeMs,
+  String? timeText,
 }) {
   return KlineBar(
     idx: idx,
-    timeMs: idx * 60000,
-    timeText: '2024/01/0${idx + 1} 10:00',
+    timeMs: timeMs ?? idx * 60000,
+    timeText: timeText ?? '2024/01/0${idx + 1} 10:00',
     open: 10,
     high: 11,
     low: 9,
@@ -26,13 +27,10 @@ Map<String, dynamic> _bins({
   required List<double> p,
   required List<double> s,
   required List<double> b,
+  List<double>? w,
 }) {
-  final w = <double>[];
-  for (var i = 0; i < p.length; i++) {
-    w.add((i < s.length ? s[i] : 0) + (i < b.length ? b[i] : 0));
-  }
   return {
-    'chip_tick_bins': {'p': p, 's': s, 'b': b, 'w': w},
+    'chip_tick_bins': {'p': p, 's': s, 'b': b, 'w': w ?? const <double>[]},
   };
 }
 
@@ -75,5 +73,36 @@ void main() {
     expect(b.maxTotal, greaterThanOrEqualTo(a.maxTotal));
     expect(a.cutoffX, 0);
     expect(b.cutoffX, 1);
+  });
+
+  test('灰度 w 独立分量：total=s+b+w', () {
+    final bars = [
+      _bar(
+        idx: 0,
+        timeMs: 1000,
+        timeText: '2024/01/02 10:00',
+        metrics: _bins(p: [10.0], s: [10.0], b: [5.0], w: [3.0]),
+      ),
+    ];
+    final p = ChipProfileCompute.compute(bars: bars, cutoffX: 0, bucketStep: 1);
+    expect(p.w, [3.0]);
+    expect(p.total, [18.0]);
+    expect(p.s, [10.0]);
+    expect(p.b, [5.0]);
+  });
+
+  test('旧「b 空用 w 当买」已删除：w 只进灰度', () {
+    final bars = [
+      _bar(
+        idx: 0,
+        timeMs: 2000,
+        timeText: '2024/01/03 10:00',
+        metrics: _bins(p: [10.0], s: const [], b: const [], w: [7.0]),
+      ),
+    ];
+    final p = ChipProfileCompute.compute(bars: bars, cutoffX: 0, bucketStep: 1);
+    expect(p.b, [0.0]);
+    expect(p.w, [7.0]);
+    expect(p.total, [7.0]);
   });
 }

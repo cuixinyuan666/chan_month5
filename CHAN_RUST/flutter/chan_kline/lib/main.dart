@@ -1122,71 +1122,66 @@ class _KlineHomePageState extends State<KlineHomePage> {
     );
   }
 
-  /// 透明标题条：中部拖动；右侧设置紧贴最小化。
-  /// 左侧开孔穿透，避免挡住 K 线区主图指标入口（↓+已选名）。
-  /// 踩坑：开孔曾写死 280，而 chip maxWidth=屏宽-140，右侧名称被 DragToMoveArea 吃掉。
+  /// 透明标题条：左侧穿透点击主图指标；窗控前窄条拖窗；右侧设置/最小化/最大化/关闭。
+  /// 踩坑：勿用「屏宽-140 固定开孔 + Expanded」——窗控实际约 174px，会 RIGHT OVERFLOW。
   Widget _buildCaptionBar() {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        // 与 kline_chart 主图 IndicatorPickerChip maxWidth 同口径；右侧约 140 留给窗控
-        const rightControls = 140.0;
-        final holeW = math.max(120.0, constraints.maxWidth - rightControls);
-        return Row(
-          children: [
-            IgnorePointer(
-              child: SizedBox(width: holeW, height: 36),
+    const dragGripW = 28.0;
+    return Row(
+      children: [
+        const Expanded(
+          child: IgnorePointer(
+            child: SizedBox(height: 36),
+          ),
+        ),
+        DragToMoveArea(
+          child: SizedBox(
+            width: dragGripW,
+            height: 36,
+            child: Container(color: Colors.transparent),
+          ),
+        ),
+        Tooltip(
+          message: '设置',
+          child: IconButton(
+            onPressed: () => setState(() => _panelExpanded = !_panelExpanded),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints.tightFor(width: 36, height: 36),
+            icon: Icon(
+              _panelExpanded ? Icons.close : Icons.settings,
+              size: 18,
+              color: const Color(0xFFE2E8F0),
             ),
-            Expanded(
-              child: DragToMoveArea(
-                child: Container(color: Colors.transparent),
-              ),
-            ),
-            Tooltip(
-              message: '设置',
-              child: IconButton(
-                onPressed: () =>
-                    setState(() => _panelExpanded = !_panelExpanded),
-                padding: EdgeInsets.zero,
-                constraints:
-                    const BoxConstraints.tightFor(width: 36, height: 36),
-                icon: Icon(
-                  _panelExpanded ? Icons.close : Icons.settings,
-                  size: 18,
-                  color: const Color(0xFFE2E8F0),
-                ),
-              ),
-            ),
-            WindowCaptionButton.minimize(
-              brightness: Brightness.dark,
-              onPressed: () => windowManager.minimize(),
-            ),
-            WindowCaptionButton.maximize(
-              brightness: Brightness.dark,
-              onPressed: () async {
-                // 铺满工作区 ↔ 还原；不走原生 maximize（会盖任务栏）
-                if (await isFillingWorkArea()) {
-                  if (await windowManager.isMaximized()) {
-                    await windowManager.unmaximize();
-                  } else if (_preWorkAreaBounds != null) {
-                    await windowManager.setBounds(_preWorkAreaBounds!);
-                  } else {
-                    await windowManager.setSize(const Size(1280, 720));
-                    await windowManager.center();
-                  }
-                  _preWorkAreaBounds = null;
-                } else {
-                  _preWorkAreaBounds = await windowManager.getBounds();
-                  await fillDesktopWorkArea();
-                }
-              },
-            ),
-            WindowCaptionButton.close(
-              brightness: Brightness.dark,
-              onPressed: () => windowManager.close(),
-            ),
-          ],
-        );
-      },
+          ),
+        ),
+        WindowCaptionButton.minimize(
+          brightness: Brightness.dark,
+          onPressed: () => windowManager.minimize(),
+        ),
+        WindowCaptionButton.maximize(
+          brightness: Brightness.dark,
+          onPressed: () async {
+            // 铺满工作区 ↔ 还原；不走原生 maximize（会盖任务栏）
+            if (await isFillingWorkArea()) {
+              if (await windowManager.isMaximized()) {
+                await windowManager.unmaximize();
+              } else if (_preWorkAreaBounds != null) {
+                await windowManager.setBounds(_preWorkAreaBounds!);
+              } else {
+                await windowManager.setSize(const Size(1280, 720));
+                await windowManager.center();
+              }
+              _preWorkAreaBounds = null;
+            } else {
+              _preWorkAreaBounds = await windowManager.getBounds();
+              await fillDesktopWorkArea();
+            }
+          },
+        ),
+        WindowCaptionButton.close(
+          brightness: Brightness.dark,
+          onPressed: () => windowManager.close(),
+        ),
+      ],
     );
   }
 

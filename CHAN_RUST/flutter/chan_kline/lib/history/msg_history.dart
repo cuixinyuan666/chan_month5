@@ -445,12 +445,18 @@ class MsgHistory {
     _tickK0NativeLogged = true;
     append(
       '【K0·原生分笔·默认】period=tick：每行分笔=一根K0，O=H=L=C=成交价（一字线）；'
-      '同分钟多笔=分钟起点+序内毫秒（+i ms）保证不撞戳；主图底图画点不画蜡烛；'
+      '【合成秒】同分钟 n 笔均分到 60s（base+k*60000/n ms，n=1 即0），time_text 秒位随序递进，'
+      'X 轴/十字时间到秒，不再整屏 :00。源文件仅 HH:MM（如集合竞价行无 B/S）。'
       '缠论合并/分型公式不变（吃 high/low），与同区间1m结构不可直接对比；'
       'x 锚点=K0下标（tick 下即分笔序）。聚合周期仍 ticks→1m→升周期，主图恢复蜡烛。'
       '可选：1/5/15/30/60m、2h/4h、1d/3d、1w、1/3/6/9/12mon、1/3/6y。'
-      '【筹码】tick 按分笔序写入 chip_tick_bins（B/S 直加），禁止 OHLC 三角兜底；'
-      '【踩坑】标题条左开孔须与 chip maxWidth=屏宽-140 对齐，写死280会挡右侧指标单击。',
+      '【筹码】tick 按分笔序写入 chip_tick_bins 三分量：B→b 红、S→s 绿、无BS→w 灰；'
+      '无 BS 不再默认当 B（normalize_native 保持 has_bs=false）；w 不再是 s+b 合计，total=s+b+w；'
+      '禁止 OHLC 三角兜底。副图 K0 成交量按 tick_side 着色（B红/S绿/灰），非 K0/聚合周期仍涨红跌绿；'
+      '筹码柱右对齐三段（右B红/中S绿/左灰），右上角 B/S/灰度 累计角标随十字 as-of 与步进末根变化；'
+      '十字悬停时角标下方另起「当前」行，分色高亮该单根 B/S/灰 量（区别于累计）；'
+      '【踩坑】标题条勿用「屏宽-140固定开孔+Expanded」——窗控约174px会 RIGHT OVERFLOW；'
+      '应用 Expanded(IgnorePointer) 穿透 + 窄条 DragToMoveArea。',
     );
   }
 

@@ -131,11 +131,12 @@ fn strip_utf8_bom(bytes: &[u8]) -> &[u8] {
     }
 }
 
-/// 无 B/S 分笔默认按 B 处理（native 模式）。
+/// 保留无 B/S 分笔（不强行改为 B），让筹码与成交量能区分灰度。
+/// 原行为会丢灰度语义。
 pub fn normalize_native(mut rows: Vec<TickRow>) -> Vec<TickRow> {
     for r in rows.iter_mut() {
         if !r.has_bs {
-            r.side = "B".into();
+            r.side.clear();
         }
     }
     rows
@@ -146,8 +147,9 @@ fn minute_key(dt: NaiveDateTime) -> (i32, u32, u32, u32, u32) {
     (dt.year(), dt.month(), dt.day(), dt.hour(), dt.minute())
 }
 
-/// 同分钟多笔：分钟起点 + 序内毫秒偏移（+i ms），保证 time 严格递增、不撞戳。
-/// 源文件只有 HH:MM；约 20 笔/分完全够用（最多约 6 万笔/分）。
+/// 同分钟多笔：均分到 60 秒内，保证 time 严格递增、`time_text` 秒位有变化。
+/// 旧版用 `+i ms` 会让秒位永远 0，X 轴看起来一整屏 `…:00`，分不出笔序。
+/// `n` 笔时序：`base + floor(k * 60000 / n) ms`，n=1 即 0。
 pub fn assign_intramute_times(rows: &mut [TickRow]) {
     if rows.is_empty() {
         return;
@@ -167,8 +169,13 @@ pub fn assign_intramute_times(rows: &mut [TickRow]) {
                 NaiveTime::from_hms_opt(dt.hour(), dt.minute(), 0).unwrap_or(dt.time()),
             )
         };
-        for k in 0..n {
-            rows[i + k].dt = base + Duration::milliseconds(k as i64);
+        if n <= 1 {
+            rows[i].dt = base;
+        } else {
+            for k in 0..n {
+                let off_ms = (k as i64 * 60_000 / n as i64) as i32;
+                rows[i + k].dt = base + Duration::milliseconds(off_ms as i64);
+            }
         }
         i = j;
     }
@@ -211,9 +218,23 @@ mod tests {
         };
         let mut rows = vec![mk(1.0), mk(2.0), mk(3.0)];
         assign_intramute_times(&mut rows);
+        // 均分到 60s：0s / 20s / 40s，严格递增且秒位可区分
         assert!(rows[0].dt < rows[1].dt && rows[1].dt < rows[2].dt);
-        // 分钟起点 + i ms
-        assert_eq!((rows[1].dt - rows[0].dt).num_milliseconds(), 1);
-        assert_eq!((rows[2].dt - rows[0].dt).num_milliseconds(), 2);
+        assert_eq!((rows[1].dt - rows[0].dt).num_milliseconds(), 20_000);
+        assert_eq!((rows[2].dt - rows[0].dt).num_milliseconds(), 40_000);
+        assert_eq!(rows[0].dt.second(), 0);
+        assert_eq!(rows[1].dt.second(), 20);
+        assert_eq!(rows[2].dt.second(), 40);
+    }
+
+    #[test]
+    fn parse_row_without_bs_keeps_empty_side() {
+        // 集合竞价行：仅 HH:MM 价格 量 笔数，无 B/S
+        let row = parse_tick_line("09:25\t36.51\t10184\t4755", 2026, 4, 21).unwrap();
+        assert!(!row.has_bs);
+        assert!(row.side.is_empty());
+        // normalize_native 不得把无 BS 改成 B（灰度语义来源）
+        let rows = normalize_native(vec![row]);
+        assert!(rows[0].side.is_empty());
     }
 }

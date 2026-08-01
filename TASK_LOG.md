@@ -2,6 +2,27 @@
 
 ## 最新记录
 
+### 2026-08-01 — 筹码角标：十字悬停高亮单根 B/S/灰
+
+- **要点**：`_drawCornerSums` 累计行（B/S/灰度）下，十字悬停时追加「当前」行——按该根 `chip_tick_bins` 求和分色（B 红/S 绿/灰），与累计区分。chip 层 `shouldRepaint` 已含 `segAsOf`（=bars[crosshairBarIdx].idx），十字移动即重画。纯 Dart 改动，无 DLL。
+- **相关路径**：`chan_kline/lib/widgets/{kline_chip,kline_chart}.dart`、`history/msg_history.dart`
+
+### 2026-08-01 — K0 逐笔：合成秒 + 成交量三分色 + 筹码灰度 w + 角标
+
+- **要点**：X 轴真正走到秒（同分钟 n 笔均分 `base+k*60000/n ms`，替换无效的 +i ms 全卡 :00）；`normalize_native` 不再把无 BS 改 B（`has_bs=false` 保留）。筹码三分量：S→s 绿、B→b 红、无 BS→w 灰（w 不再= s+b 合计，`total=s+b+w`，`ChipProfile`/前缀索引/Isolate wire 全链路带 w）。K0 tick 成交量按 `metrics.tick_side` 着色（B红/S绿/灰），聚合周期与 Kn≥1 仍涨红跌绿。筹码柱右对齐三段（右B/中S/左灰），右上角 `B:xx, S:xx, 灰度:xx` 角标（十字 as-of/步进末根共用 profile）。X 轴与十字时间 `secondLike` 到秒。
+- **相关路径**：`chan_data/src/{tick,chip,offline}.rs`、`chan_kline/lib/{compute/chip_profile_compute,widgets/kline_chart,widgets/kline_chip,models/chip_config,history/msg_history}.dart`、`test/chip_profile_test.dart`
+- **踩坑/经验**：
+  1. Rust 测试 `chip_profile_cutoff_freezes_history`：同价位两 bar 同桶累加，p1 total=110 而非 100。
+  2. Dart 前缀索引 `_cacheKey` 只含首末 bar 时间/idx：单测两用例同构 bar 会缓存命中串结果，测试须用不同 timeMs。
+  3. `_tooltipRowsForBar` 在 `_KlineChartState` 内，period 须 `widget.period`；painter 内才是字段。
+- **验收**：冷启分笔周期——同分钟秒位递进；09:25 无 BS 量灰/B红/S绿；筹码含灰段+角标随步进与十字变化；1m 量恢复涨跌色。
+- **注意**：关占用重载 `chan_ffi.dll` → 冷启动 → 连续单步验收（一键跳末≠验收）。
+
+### 2026-07-31 — 标题条 RIGHT OVERFLOW 修复
+
+- **要点**：固定开孔 `屏宽-140` + 窗控实测约 174px 导致溢出 34px。改为 `Expanded(IgnorePointer)` 穿透指标点击，窗控前窄条拖窗。
+- **相关路径**：`chan_kline/lib/main.dart` `_buildCaptionBar`
+
 ### 2026-07-31 — 指标开孔 + tick 真实筹码 + 默认分笔 K0
 
 - **要点**：默认 `period=tick` 一字线画点；同分钟 `+i ms` 不撞戳；聚合周期仍 ticks→1m 并扩展多周期。标题条左开孔改为屏宽-140（修右侧指标单击被拖动区挡住）。tick 筹码按分笔序写 bins、禁三角。

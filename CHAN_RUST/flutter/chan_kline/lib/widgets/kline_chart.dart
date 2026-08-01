@@ -648,7 +648,10 @@ class _KlineChartState extends State<KlineChart> {
   List<CrosshairTooltipRow> _tooltipRowsForBar(int barIdx) {
     final bar = widget.bars[barIdx.clamp(0, widget.bars.length - 1)];
     final minuteLike = KlineAxisFormat.isMinuteLike(widget.bars);
-    final timePart = KlineAxisFormat.xLabel(bar.timeText, minuteLike: minuteLike);
+    // tick 周期十字时间也到秒
+    final secondLike = widget.period == 'tick' || KlineAxisFormat.isSecondLike(widget.bars);
+    final timePart = KlineAxisFormat.xLabel(bar.timeText,
+        minuteLike: minuteLike, secondLike: secondLike);
 
     // chip 分支：只拼 OHLC 轻量行，禁止全表 BarFeatureLookup / 缠论 as-of
     if (widget.chipOnlyMode) {
@@ -1601,6 +1604,14 @@ class _KlineCompositePainter extends CustomPainter {
           cutoffX: cut,
           bucketStep: chipConfig.bucketStep,
         );
+        // 十字悬停：取悬停单根 B/S/灰 量，角标高亮（区别于累计）
+        ({double b, double s, double w})? hoverBar;
+        if (crosshairEnabled &&
+            crosshairBarIdx != null &&
+            crosshairBarIdx! >= 0 &&
+            crosshairBarIdx! < bars.length) {
+          hoverBar = _singleBarChipSums(bars[crosshairBarIdx!]);
+        }
         ChipProfilePainter.draw(
           canvas: canvas,
           profile: profile,
@@ -1611,6 +1622,7 @@ class _KlineCompositePainter extends CustomPainter {
           plotBottom: plotBottom,
           yOfPrice: (p) => priceRange.yOf(p, plotTop, plotH),
           highlightKn: kn,
+          hoverBar: hoverBar,
         );
       }
       return;
@@ -3827,6 +3839,8 @@ class _KlineCompositePainter extends CustomPainter {
     final levelTint = kn <= 0
         ? null
         : ChartLevelLineStyle.forZS(kn).color.withValues(alpha: 0.55);
+    // K0 逐笔：按分笔方向着色（B 红 / S 绿 / 无 BS 灰），不再看涨跌
+    final tickColored = kn <= 0 && period == 'tick';
     final asOf = segAsOf;
     for (var i = 0; i < bars.length; i++) {
       final idx = bars[i].idx;
@@ -3842,6 +3856,8 @@ class _KlineCompositePainter extends CustomPainter {
       final Color color;
       if (levelTint != null) {
         color = levelTint;
+      } else if (tickColored) {
+        color = _tickSideColor(b);
       } else {
         color = b.isUp
             ? const Color(0x66E53935)
@@ -3852,6 +3868,34 @@ class _KlineCompositePainter extends CustomPainter {
         Paint()..color = color,
       );
     }
+  }
+
+  /// 逐笔方向色：优先 metrics.tick_side（""|"B"|"S"）；老数据兜底按 bins 推断。
+  Color _tickSideColor(KlineBar b) {
+    final side = b.metrics['tick_side'];
+    if (side is String) {
+      if (side == 'B') return const Color(0x66E53935);
+      if (side == 'S') return const Color(0x6626A69A);
+      return const Color(0x669CA3AF);
+    }
+    bool hasQty(List<dynamic>? v) {
+      if (v == null) return false;
+      for (final e in v) {
+        if ((e as num).toDouble() > 0) return true;
+      }
+      return false;
+    }
+
+    final bins = b.metrics['chip_tick_bins'];
+    if (bins is Map) {
+      if (hasQty(bins['b'] as List<dynamic>?)) {
+        return const Color(0x66E53935);
+      }
+      if (hasQty(bins['s'] as List<dynamic>?)) {
+        return const Color(0x6626A69A);
+      }
+    }
+    return const Color(0x669CA3AF);
   }
 
   /// 单层 Kn 分型确认（自定义色：底分型红 / 顶分型蓝；形状按 Kn）。
@@ -4167,8 +4211,12 @@ class _KlineCompositePainter extends CustomPainter {
     final plotW = math.max(1.0, w - KlineViewport.padL - KlineViewport.padR);
     final span = math.max(viewport.xSpan, 1e-6);
     final minuteLike = KlineAxisFormat.isMinuteLike(visible.isNotEmpty ? visible : bars);
+    // tick 周期：X 轴标签到秒（同分钟秒位有递进，分钟切换自然变化）
+    final secondLike = period == 'tick' ||
+        KlineAxisFormat.isSecondLike(visible.isNotEmpty ? visible : bars);
     final i0 = viewport.viewXMin.floor().clamp(0, bars.length - 1);
-    final sample = KlineAxisFormat.xLabel(bars[i0].timeText, minuteLike: minuteLike);
+    final sample = KlineAxisFormat.xLabel(bars[i0].timeText,
+        minuteLike: minuteLike, secondLike: secondLike);
     final interval = KlineAxisFormat.xTickInterval(plotW, span, sample);
 
     final startX = ((viewport.viewXMin / interval).ceil() * interval).toInt();
@@ -4183,7 +4231,8 @@ class _KlineCompositePainter extends CustomPainter {
       final cx = viewport.barCenterX(xi, w);
       canvas.drawLine(Offset(cx, axisTop), Offset(cx, axisTop + 4), tickPaint);
 
-      final label = KlineAxisFormat.xLabel(bars[xi].timeText, minuteLike: minuteLike);
+      final label = KlineAxisFormat.xLabel(bars[xi].timeText,
+          minuteLike: minuteLike, secondLike: secondLike);
       final tp = TextPainter(
         text: TextSpan(text: label, style: labelStyle),
         textDirection: TextDirection.ltr,
@@ -4304,6 +4353,27 @@ class _KlineCompositePainter extends CustomPainter {
         Offset(rect.left, rect.bottom), paint, pattern);
     _drawPatternLine(canvas, Offset(rect.left, rect.bottom),
         Offset(rect.left, rect.top), paint, pattern);
+  }
+
+  /// 十字悬停单根筹码量：取该根 chip_tick_bins 的 B/S/灰 累计（无 bins 返回 null）。
+  ({double b, double s, double w})? _singleBarChipSums(KlineBar bar) {
+    final bins = bar.metrics['chip_tick_bins'];
+    if (bins is! Map) return null;
+    double qty(String key) {
+      final v = bins[key];
+      if (v is! List) return 0.0;
+      var s = 0.0;
+      for (final e in v) {
+        s += (e as num).toDouble();
+      }
+      return s;
+    }
+
+    final bsum = qty('b');
+    final ssum = qty('s');
+    final wsum = qty('w');
+    if (bsum <= 0 && ssum <= 0 && wsum <= 0) return null;
+    return (b: bsum, s: ssum, w: wsum);
   }
 
   @override

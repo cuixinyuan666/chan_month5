@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::kline::{KlineBar, KlinePeriod};
 use crate::tick::TickRow;
 
-/// 单根 K 的分笔价量桶（左侧 S 绿 / 右侧 B 红）。
+/// 单根 K 的分笔价量桶（三分量：S 绿 / B 红 / 无方向灰）。
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct ChipTickBins {
     /// 价格（升序，4 位精度）
@@ -18,7 +18,7 @@ pub struct ChipTickBins {
     pub s: Vec<f64>,
     /// 右侧 B（买）累计量
     pub b: Vec<f64>,
-    /// 兼容字段 s+b
+    /// 灰度 w（无 B/S 分笔累计量），不再是 s+b 合计
     pub w: Vec<f64>,
 }
 
@@ -30,6 +30,7 @@ impl ChipTickBins {
     pub fn from_side_rows(rows: &[(f64, f64, &str)]) -> Option<Self> {
         let mut acc_s: BTreeMap<i64, f64> = BTreeMap::new();
         let mut acc_b: BTreeMap<i64, f64> = BTreeMap::new();
+        let mut acc_w: BTreeMap<i64, f64> = BTreeMap::new();
         for &(price, vol, side) in rows {
             if !(price > 0.0) || !(vol > 0.0) || !price.is_finite() || !vol.is_finite() {
                 continue;
@@ -39,14 +40,17 @@ impl ChipTickBins {
             let s = side.trim().to_ascii_uppercase();
             if s == "S" {
                 *acc_s.entry(key).or_insert(0.0) += vol;
-            } else {
-                // 方向缺失/异常 → 当作 B（右红）
+            } else if s == "B" {
                 *acc_b.entry(key).or_insert(0.0) += vol;
+            } else {
+                // 方向缺失 → 灰度 w（不再默认当 B）
+                *acc_w.entry(key).or_insert(0.0) += vol;
             }
         }
         let keys: Vec<i64> = acc_s
             .keys()
             .chain(acc_b.keys())
+            .chain(acc_w.keys())
             .copied()
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
@@ -61,10 +65,11 @@ impl ChipTickBins {
         for k in keys {
             let sv = *acc_s.get(&k).unwrap_or(&0.0);
             let bv = *acc_b.get(&k).unwrap_or(&0.0);
+            let wv = *acc_w.get(&k).unwrap_or(&0.0);
             p.push(k as f64 / 10000.0);
             s.push(sv);
             b.push(bv);
-            w.push(sv + bv);
+            w.push(wv);
         }
         Some(Self { p, s, b, w })
     }
@@ -326,6 +331,8 @@ pub struct ChipProfile {
     pub prices: Vec<f64>,
     pub s: Vec<f64>,
     pub b: Vec<f64>,
+    /// 灰度（无方向分笔）
+    pub w: Vec<f64>,
     pub total: Vec<f64>,
     pub max_total: f64,
     pub source: String,
@@ -382,6 +389,7 @@ pub fn chip_profile(bars: &[KlineBar], cutoff_x: Option<i64>, bucket_step: Optio
     let cut = cutoff_x.unwrap_or_else(|| bars.last().map(|b| b.idx as i64).unwrap_or(-1));
     let mut buckets_s: BTreeMap<i64, f64> = BTreeMap::new();
     let mut buckets_b: BTreeMap<i64, f64> = BTreeMap::new();
+    let mut buckets_w: BTreeMap<i64, f64> = BTreeMap::new();
     for bar in bars.iter().filter(|b| (b.idx as i64) <= cut) {
         if let Some(v) = bar.metrics.get("chip_tick_bins") {
             if let Some(bins) = ChipTickBins::from_json_value(v) {
@@ -391,15 +399,16 @@ pub fn chip_profile(bars: &[KlineBar], cutoff_x: Option<i64>, bucket_step: Optio
                     }
                     let key = (*price / step).floor() as i64;
                     let sv = bins.s.get(idx).copied().unwrap_or(0.0);
-                    let mut bv = bins.b.get(idx).copied().unwrap_or(0.0);
-                    if bins.b.is_empty() {
-                        bv = bins.w.get(idx).copied().unwrap_or(0.0);
-                    }
+                    let bv = bins.b.get(idx).copied().unwrap_or(0.0);
+                    let wv = bins.w.get(idx).copied().unwrap_or(0.0);
                     if sv > 0.0 {
                         *buckets_s.entry(key).or_insert(0.0) += sv;
                     }
                     if bv > 0.0 {
                         *buckets_b.entry(key).or_insert(0.0) += bv;
+                    }
+                    if wv > 0.0 {
+                        *buckets_w.entry(key).or_insert(0.0) += wv;
                     }
                 }
                 continue;
@@ -415,6 +424,7 @@ pub fn chip_profile(bars: &[KlineBar], cutoff_x: Option<i64>, bucket_step: Optio
     let keys: Vec<i64> = buckets_s
         .keys()
         .chain(buckets_b.keys())
+        .chain(buckets_w.keys())
         .copied()
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
@@ -422,18 +432,21 @@ pub fn chip_profile(bars: &[KlineBar], cutoff_x: Option<i64>, bucket_step: Optio
     let mut prices = Vec::with_capacity(keys.len());
     let mut s_vals = Vec::with_capacity(keys.len());
     let mut b_vals = Vec::with_capacity(keys.len());
+    let mut w_vals = Vec::with_capacity(keys.len());
     let mut totals = Vec::with_capacity(keys.len());
     let mut max_total = 0.0;
     for key in keys {
         let sv = *buckets_s.get(&key).unwrap_or(&0.0);
         let bv = *buckets_b.get(&key).unwrap_or(&0.0);
-        let total = sv + bv;
+        let wv = *buckets_w.get(&key).unwrap_or(&0.0);
+        let total = sv + bv + wv;
         if total > max_total {
             max_total = total;
         }
         prices.push(key as f64 * step);
         s_vals.push(sv);
         b_vals.push(bv);
+        w_vals.push(wv);
         totals.push(total);
     }
     ChipProfile {
@@ -443,6 +456,7 @@ pub fn chip_profile(bars: &[KlineBar], cutoff_x: Option<i64>, bucket_step: Optio
         prices,
         s: s_vals,
         b: b_vals,
+        w: w_vals,
         total: totals,
         max_total,
         source: "rust".to_string(),
@@ -501,17 +515,19 @@ mod tests {
     }
 
     #[test]
-    fn fold_side_rows_splits_s_and_b() {
+    fn fold_side_rows_splits_s_and_b_and_w() {
         let bins = ChipTickBins::from_side_rows(&[
             (10.0, 100.0, "S"),
             (10.0, 50.0, "B"),
             (10.1, 200.0, "B"),
+            // 无方向 → 灰度 w，不再当 B
+            (10.0, 30.0, ""),
         ])
         .unwrap();
         assert_eq!(bins.p, vec![10.0, 10.1]);
         assert_eq!(bins.s, vec![100.0, 0.0]);
         assert_eq!(bins.b, vec![50.0, 200.0]);
-        assert_eq!(bins.w, vec![150.0, 200.0]);
+        assert_eq!(bins.w, vec![30.0, 0.0]);
     }
 
     #[test]
@@ -521,7 +537,8 @@ mod tests {
             p: vec![10.0, 10.1],
             s: vec![30.0, 0.0],
             b: vec![70.0, 40.0],
-            w: vec![100.0, 40.0],
+            // 灰度独立分量：10.0 价位 20
+            w: vec![20.0, 0.0],
         };
         b0.metrics
             .insert("chip_tick_bins".to_string(), bins.to_json_value());
@@ -529,9 +546,12 @@ mod tests {
         let profile = chip_profile(&[b0, b1], Some(0), Some(0.1));
         assert_eq!(profile.cutoff_x, 0);
         assert!(profile.max_total > 0.0);
-        // cutoff=0 不应吃进 idx=1
+        // cutoff=0 不应吃进 idx=1；total=s+b+w=30+70+20+40=160
         let sum: f64 = profile.total.iter().sum();
-        assert!((sum - 140.0).abs() < 1e-6);
+        assert!((sum - 160.0).abs() < 1e-6);
+        // 灰度进 profile.w
+        let w_sum: f64 = profile.w.iter().sum();
+        assert!((w_sum - 20.0).abs() < 1e-6);
     }
 
     #[test]
@@ -544,7 +564,7 @@ mod tests {
                 p: vec![10.0],
                 s: vec![10.0],
                 b: vec![0.0],
-                w: vec![10.0],
+                w: vec![0.0],
             }
             .to_json_value(),
         );
@@ -554,14 +574,17 @@ mod tests {
                 p: vec![10.0],
                 s: vec![0.0],
                 b: vec![90.0],
-                w: vec![90.0],
+                w: vec![10.0],
             }
             .to_json_value(),
         );
         let p0 = chip_profile(&[b0.clone(), b1.clone()], Some(0), Some(0.1));
         let p1 = chip_profile(&[b0, b1], Some(1), Some(0.1));
         assert!((p0.total.iter().sum::<f64>() - 10.0).abs() < 1e-6);
-        assert!((p1.total.iter().sum::<f64>() - 100.0).abs() < 1e-6);
+        // 同价位 10.0：b0(10) + b1(s0+b90+w10)=110
+        assert!((p1.total.iter().sum::<f64>() - 110.0).abs() < 1e-6);
+        // b1 的灰度 10 进 w 分量
+        assert!((p1.w.iter().sum::<f64>() - 10.0).abs() < 1e-6);
     }
 
     #[test]
