@@ -2,6 +2,82 @@
 
 ## 最新记录
 
+### 2026-08-01 — Kn笔数：Rust 分笔第4列真实笔数（方案B）
+
+- **要点**：修复 688687/20240102 上 Kn笔数副图变量恒 0（根因①查表缺 tickCount 分支→读数恒 0；根因② bins 数组长度≠笔数，tick 恒 3/日线=3×价位数）。Rust `parse_tick_line` 解析第 4 列笔数（无列/非法按 1 笔），`TickRow` 增 `ticks` 字段；chip.rs 三路径（tick/Day3/普通桶）写 `tick_count`/`buy_tick_count`（B）/`sell_tick_count`（S），灰度 w 仅进总数，非法行（价/量）不计。Flutter K0 笔数优先读 `metrics.tick_count`/`buy_tick_count`（键存在即用、可为 0），旧数据回退 bins 长度再回退 tick_side；`BarFeatureLookup` 写 `tick_count_${kn}`/`buy_tick_count_${kn}` 系列，`crosshairSubRows` 增 tickCount 分支 → 副图读数/十字 tooltip 出真实笔数。
+- **相关路径**：`chan_data/src/{tick,chip}.rs`、`chan_kline/lib/{compute/kn_volume_series_compute,models/bar_feature_lookup,main,history/msg_history}.dart`、`TASK_LOG.md`
+- **踩坑/经验**：
+  1. bins 三数组每价位恒各 push 1（缺方向补 0.0）——长度只能当「价位数」，不能当笔数。
+  2. 笔数 metrics 判断须用「键存在」，不用「值>0」（灰度行 buy=0 合法）。
+  3. 老格式行 `HH:MM 价格 量 B`（第4列即方向）parse_float 失败→默认 1 笔。
+- **验收**：关占用重载 `chan_ffi.dll` → 冷启动 → 688687/20240102 tick 周期副图「K0笔数」读数=分笔第4列（如 10），日线=当日笔数求和（非 3×价位数）；十字 tooltip 副图行含笔数。
+- **注意**：`chan_ffi.dll` 已重建替换（15:36）；进程 15296 已结束待冷启。
+
+### 2026-08-01 — 筹码角标：十字悬停高亮单根 B/S/灰
+
+- **要点**：`_drawCornerSums` 累计行（B/S/灰度）下，十字悬停时追加「当前」行——按该根 `chip_tick_bins` 求和分色（B 红/S 绿/灰），与累计区分。chip 层 `shouldRepaint` 已含 `segAsOf`（=bars[crosshairBarIdx].idx），十字移动即重画。纯 Dart 改动，无 DLL。
+- **相关路径**：`chan_kline/lib/widgets/{kline_chip,kline_chart}.dart`、`history/msg_history.dart`
+
+### 2026-08-01 — K0 逐笔：合成秒 + 成交量三分色 + 筹码灰度 w + 角标
+
+- **要点**：X 轴真正走到秒（同分钟 n 笔均分 `base+k*60000/n ms`，替换无效的 +i ms 全卡 :00）；`normalize_native` 不再把无 BS 改 B（`has_bs=false` 保留）。筹码三分量：S→s 绿、B→b 红、无 BS→w 灰（w 不再= s+b 合计，`total=s+b+w`，`ChipProfile`/前缀索引/Isolate wire 全链路带 w）。K0 tick 成交量按 `metrics.tick_side` 着色（B红/S绿/灰），聚合周期与 Kn≥1 仍涨红跌绿。筹码柱右对齐三段（右B/中S/左灰），右上角 `B:xx, S:xx, 灰度:xx` 角标（十字 as-of/步进末根共用 profile）。X 轴与十字时间 `secondLike` 到秒。
+- **相关路径**：`chan_data/src/{tick,chip,offline}.rs`、`chan_kline/lib/{compute/chip_profile_compute,widgets/kline_chart,widgets/kline_chip,models/chip_config,history/msg_history}.dart`、`test/chip_profile_test.dart`
+- **踩坑/经验**：
+  1. Rust 测试 `chip_profile_cutoff_freezes_history`：同价位两 bar 同桶累加，p1 total=110 而非 100。
+  2. Dart 前缀索引 `_cacheKey` 只含首末 bar 时间/idx：单测两用例同构 bar 会缓存命中串结果，测试须用不同 timeMs。
+  3. `_tooltipRowsForBar` 在 `_KlineChartState` 内，period 须 `widget.period`；painter 内才是字段。
+- **验收**：冷启分笔周期——同分钟秒位递进；09:25 无 BS 量灰/B红/S绿；筹码含灰段+角标随步进与十字变化；1m 量恢复涨跌色。
+- **注意**：关占用重载 `chan_ffi.dll` → 冷启动 → 连续单步验收（一键跳末≠验收）。
+
+### 2026-07-31 — 标题条 RIGHT OVERFLOW 修复
+
+- **要点**：固定开孔 `屏宽-140` + 窗控实测约 174px 导致溢出 34px。改为 `Expanded(IgnorePointer)` 穿透指标点击，窗控前窄条拖窗。
+- **相关路径**：`chan_kline/lib/main.dart` `_buildCaptionBar`
+
+### 2026-07-31 — 指标开孔 + tick 真实筹码 + 默认分笔 K0
+
+- **要点**：默认 `period=tick` 一字线画点；同分钟 `+i ms` 不撞戳；聚合周期仍 ticks→1m 并扩展多周期。标题条左开孔改为屏宽-140（修右侧指标单击被拖动区挡住）。tick 筹码按分笔序写 bins、禁三角。
+- **相关路径**：`chan_data/{kline,tick,offline,chip}.rs`、`main.dart`、`kline_chart.dart`、`chip_profile_compute.dart`、`msg_history.dart`
+- **注意**：冷启；native `chan_ffi.dll` 若占用需关进程后再 `build_rust.ps1`；长区间建议收窄日期。
+
+### 2026-07-31 — UI配色/指标归属/读数一轮总览（rate→tick）
+
+- **要点**：本轮在 `rate` 落地：主图层色同层同色；Kn中枢命名与层序；筹码迁主图；副图比例/节奏进 Kn指标；分型/截断顶蓝底红；中枢斜线加深；副图读数跟 chip；筹码开时 Y 轴改左。无残留 NDJSON 调试埋点（层色埋点已拆）。随后 commit+push，切新分支 `tick`。
+- **关键路径**：`chart_indicator.dart`、`chart_level_line_style.dart`、`kline_chart.dart`、`fractal_confirm_paint.dart`、`indicator_picker_chip.dart`、`msg_history.dart`、相关 picker/单测
+- **踩坑/经验**：
+  1. **中枢不是 Normal/OverSeg 双轨**：主图只画 `forZS`；`forZSOverSeg` 是死代码，勿当两套逻辑（已删）。
+  2. **「去掉中枢二字」实为去掉「连续」**：展示名 `Kn连续中枢`→`Kn中枢`，与层内序「Kn中枢」一致。
+  3. **层内序靠 catalog 交错 + kindOrderInLevel**：chip/层全选/选择栏分隔按 `displayLevel`，勿再按 kind 切 divider。
+  4. **相邻比例/节奏进 Kn指标**：须同时进 `subIndicatorsForLevel`、默认全选、且 catalog 按层交错；只改默认不够。
+  5. **筹码是主图指标**：绘制仍在右侧 pane；勾选看 `MainIndicatorKind.chip`，设置文案勿再写「副图勾选」。
+  6. **副图读数跟 chip**：`IndicatorChipEntry.valueText`；取消 `_drawSubCrosshairReadout`；`msg_history` 相邻字符串拼接勿多写逗号（否则 `append` 两参编译挂）。
+  7. **验收**：热重启/冷启；层全选与目视配色/填充；一键跳末≠步进验收（本轮多为 UI）。
+
+### 2026-07-31 — 中枢填充加深 + 副图读数跟 chip
+
+- **要点**：Kn中枢斜线/底色加深便于与合并框区分；副图变量值显示在已选指标名后方（青字），取消右上独立读数框。
+- **关键路径**：`kline_chart.dart`、`indicator_picker_chip.dart`、`msg_history.dart`
+
+### 2026-07-31 — 筹码迁主图 + 相邻比例/节奏进副图 Kn指标
+
+- **要点**：Kn筹码分布改主图指标并进「Kn指标」层全选（层内序末项）；副图 Kn相邻比例/步进节奏纳入「Kn指标」层全选与默认 K0 全选；副图 catalog 按显示层交错。
+- **关键路径**：`chart_indicator.dart`、`kline_chart.dart`、`main.dart`、`sub_indicator_picker.dart`、`msg_history.dart`、相关单测
+
+### 2026-07-31 — Kn中枢命名/层序 + 副图顶底色 + 中枢斜线填充
+
+- **要点**：展示名「Kn连续中枢」→「Kn中枢」；同层序 Kn→合并→中枢→连线；中枢框斜线填充区分合并；副图分型确认/判断与截断：底/向下截断红、顶蓝（全层同构，注释已写清自定义口径）。
+- **关键路径**：`chart_indicator.dart`、`kline_chart.dart`、`fractal_confirm_paint.dart`、`zs_compute.dart`、`main_indicator_picker.dart`、`msg_history.dart`
+
+### 2026-07-31 — 筹码开启时 Y 轴价签改左侧 + 拆除层色调试埋点
+
+- **要点**：勾选筹码分布后，主图 Y 轴刻度与十字价格标签移到左侧（避让右侧筹码）；拆除 `chart_level_line_style` NDJSON 调试埋点。
+- **关键路径**：`kline_chart.dart`、`chart_level_line_style.dart`、`msg_history.dart`
+
+### 2026-07-31 — 主图层色同层同色 + 删 OverSeg 遗留配色
+
+- **要点**：主图 Kn合并/连线/连续中枢（含构建中虚线、种子框）按展示层共用一色：K0蓝、K1黄、K2粉、K3+自定；Kn蜡烛仍红绿。删除未使用的 `forZSOverSeg`/`_zsOverSegColors`（此前误导为双套中枢逻辑）。
+- **关键路径**：`chart_level_line_style.dart`、`kline_chart.dart`、`msg_history.dart`、`main.dart`、`app_debug_snapshot.dart`、`test/chart_level_line_style_test.dart`
+
 ### 2026-07-31 — Kn相邻比例 + Kn步进节奏：总览、踩坑与经验（rate）
 
 - **要点**：关闭 `_chipOnlyMode`；落地全层同构副图「Kn相邻比例」「Kn步进节奏」（仅副图 normal，主图水平节奏线未做）。比例按主图连线出现链（虚实不论、`beginX` 序、末两根比值、K0 颗粒度）。节奏按父分型切组（0-0 起算）、子分型开/关窗、组锚=父极值；绘制点线/左侧名/同父级同色/升暖降冷。

@@ -130,7 +130,7 @@ cargo test -p chan_data
   - 导出：`segment_policy`=`seed`（未确认）/`retained`（已确认）；`pending_unit` 恒空（JSON 兼容壳）。
 - **例外记录（首两单元不做包含）**：全层同构要求每层 Kn 合并内核一致，但按本设计"第二个 Kn 不再与第一个 Kn 做包含关系"，本层产出 Kn 的前两个单元之间不做包含合并（K1 层首两笔、K2 层首两段…各自独立）。例外之例外：第二框严格包含种子时走截断而非强制 push。其余包含合并与三元素分型判定全层一致。
 - （已删除）`PipelineOptions.first_segment_bootstrap` / trial 反向极值 / pending·retained·purged 三态：本设计以种子框取代。
-- **Dart 端纯 FFI**：Flutter 无缠论回退实现；`compute/` 仅剩视图组装。tooltip 按 K0/Kn 块模板输出（`Kn[序号] / OHLCV / 合并序 / 合并H:L / 合并分型确认`，Kn 确认=K(n+1) 端点）。
+- **Dart 端纯 FFI**：Flutter 无缠论回退实现；`compute/` 仅剩视图组装。tooltip 按 K0/Kn 块模板输出（`K{层} idx / OHLCV / 合并GG:DD:MG:MD / 合并K序 idx / 合并 idx / 分型确认/判断 / 中枢GG:DD:ZG:ZD / 中枢K{层} idx / 中枢 idx / 中枢确认`，GG/DD=逐K当下区间极值、MG/MD=合并框框体高低点；Kn 确认=K(n+1) 端点；K0/Kn 全层同构）。
 - **历史记录常驻**：设置面板「一键复制历史记录 / 查看历史记录 / 复制页面快照」与 `lib/history/`；合并到 main 时不得当调试入口删除。
 
 ## 后续规划

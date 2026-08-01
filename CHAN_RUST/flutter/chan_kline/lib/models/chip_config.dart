@@ -9,6 +9,7 @@ class ChipConfig {
     this.paneWidth = 88,
     this.sColor = const Color(0xC722C55E),
     this.bColor = const Color(0xC7DC2626),
+    this.wColor = const Color(0xC79CA3AF),
     this.peakLineEnabled = true,
     this.peakLineColor = const Color(0xFF2563EB),
     this.peakLineWidth = 1.2,
@@ -27,6 +28,8 @@ class ChipConfig {
   final double paneWidth;
   final Color sColor;
   final Color bColor;
+  /// 灰度（无方向分笔）柱色
+  final Color wColor;
   final bool peakLineEnabled;
   final Color peakLineColor;
   final double peakLineWidth;
@@ -41,6 +44,7 @@ class ChipConfig {
     double? paneWidth,
     Color? sColor,
     Color? bColor,
+    Color? wColor,
     bool? peakLineEnabled,
     Color? peakLineColor,
     double? peakLineWidth,
@@ -55,6 +59,7 @@ class ChipConfig {
       paneWidth: paneWidth ?? this.paneWidth,
       sColor: sColor ?? this.sColor,
       bColor: bColor ?? this.bColor,
+      wColor: wColor ?? this.wColor,
       peakLineEnabled: peakLineEnabled ?? this.peakLineEnabled,
       peakLineColor: peakLineColor ?? this.peakLineColor,
       peakLineWidth: peakLineWidth ?? this.peakLineWidth,
@@ -96,6 +101,7 @@ class ChipConfig {
       other.paneWidth == paneWidth &&
       other.sColor == sColor &&
       other.bColor == bColor &&
+      other.wColor == wColor &&
       other.peakLineEnabled == peakLineEnabled &&
       other.peakLineColor == peakLineColor &&
       other.peakLineWidth == peakLineWidth &&
@@ -111,6 +117,7 @@ class ChipConfig {
         paneWidth,
         sColor,
         bColor,
+        wColor,
         peakLineEnabled,
         peakLineColor,
         peakLineWidth,

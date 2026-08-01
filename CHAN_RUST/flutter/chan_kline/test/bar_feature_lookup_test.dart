@@ -2,6 +2,7 @@ import 'package:chan_kline/models/bar_crosshair_feature.dart';
 import 'package:chan_kline/models/chart_indicator.dart';
 import 'package:chan_kline/models/k0_confirm_signal.dart';
 import 'package:chan_kline/models/kline_bar.dart';
+import 'package:chan_kline/models/kline_combine_frame.dart';
 import 'package:chan_kline/models/bar_feature_lookup.dart';
 import 'package:chan_kline/models/level_models.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -80,8 +81,8 @@ void main() {
     expect(lines.first, startsWith('日期时间:2024/01/01 09:00'));
     expect(lines.first, contains('w1'));
     expect(lines.any((l) => l == '==============================='), isTrue);
-    expect(lines.any((l) => l == 'K1[No.]:首K1确认前'), isTrue);
-    expect(lines.any((l) => l == 'K2[No.]:首K2确认前'), isTrue);
+    expect(lines.any((l) => l == 'K1 idx:首K1确认前'), isTrue);
+    expect(lines.any((l) => l == 'K2 idx:首K2确认前'), isTrue);
     expect(lines.any((l) => l.startsWith('K0分型确认:')), isTrue);
   });
 
@@ -108,21 +109,83 @@ void main() {
     final atConfirm = lookup.crosshairTooltipLines(2, timePart: '2024/01/01 09:02');
     // K0分型确认 = K1 端点确认（旧口径 bi_confirm）
     expect(atConfirm.any((l) => l == 'K0分型确认:【1】'), isTrue);
-    // K1 块顺序：No → OHLCV → 合并序 → 合并H/L → 分型确认
-    final seqIdx = atConfirm.indexWhere((l) => l.startsWith('K1[No.]:【0】'));
+    // K1 块顺序：idx → OHLCV → 合并GG/DD/MG/MD → 合并K序 → 分型确认
+    final seqIdx = atConfirm.indexWhere((l) => l.startsWith('K1 idx:【0】'));
     final ohlcvIdx = atConfirm.indexWhere((l) => l.startsWith('K1:O'));
-    final mergeSeqIdx = atConfirm.indexWhere((l) => l.startsWith('K1合并K1序:【'));
-    final mergeHlIdx = atConfirm.indexWhere((l) => l.startsWith('K1合并:H'));
+    final mergeHlIdx = atConfirm.indexWhere((l) => l.startsWith('K1合并:GG'));
+    final mergeSeqIdx = atConfirm.indexWhere((l) => l.startsWith('K1合并K1 idx:【'));
     expect(seqIdx, greaterThanOrEqualTo(0));
     expect(seqIdx, lessThan(ohlcvIdx));
-    expect(ohlcvIdx, lessThan(mergeSeqIdx));
-    expect(mergeSeqIdx, lessThan(mergeHlIdx));
+    expect(ohlcvIdx, lessThan(mergeHlIdx));
+    expect(mergeHlIdx, lessThan(mergeSeqIdx));
+    // 合并行：GG/DD=逐K当下区间极值；MG/MD=合并框框体高低点（无框体时回退同值）
+    expect(
+      atConfirm.any((l) => l == 'K1合并:GG【11.00】/DD【9.50】/MG【11.00】/MD【9.50】'),
+      isTrue,
+      reason: '无 combineFrames 时 MG/MD 应回退为区间极值',
+    );
 
     // x=4 当步：K1 块「分型确认」= K2 确认值 -1
     final at2 = lookup.crosshairTooltipLines(4, timePart: '2024/01/01 09:04');
     expect(at2.any((l) => l == 'K1分型确认:【-1】'), isTrue);
-    expect(at2.any((l) => l.startsWith('K2[No.]:【0】')), isTrue);
-    expect(at2.any((l) => l.startsWith('K2合并K2序:【1】')), isTrue);
+    expect(at2.any((l) => l.startsWith('K2 idx:【0】')), isTrue);
+    expect(at2.any((l) => l.startsWith('K2合并K2 idx:【1】')), isTrue);
+  });
+
+  test('Kn合并 MG/MD 取合并框框体高低点（无框体回退极值）', () {
+    final bars = _bars(6);
+    final feats = [for (var i = 0; i < 6; i++) _feat(i, unitIdx: i >= 2 ? 0 : null)];
+    final lookup = BarFeatureLookup.build(
+      bars: bars,
+      combineFrames: const [],
+      k0Confirms: const [],
+      barFeatures: feats,
+      levels: [
+        const LevelBundle(
+          level: 1,
+          combineFrames: [
+            KlineCombineFrame(
+                x1: 0, x2: 5, t1: '', t2: '', high: 12.0, low: 8.0, fx: 'UNKNOWN', count: 3),
+          ],
+        ),
+      ],
+    );
+    final lines = lookup.crosshairTooltipLines(3, timePart: 't');
+    // snap 区间极值 GG/DD=11.00/9.50；框体高低点 MG/MD=12.00/8.00（取 combineFrames 框体）
+    expect(
+      lines.any((l) => l == 'K1合并:GG【11.00】/DD【9.50】/MG【12.00】/MD【8.00】'),
+      isTrue,
+    );
+  });
+
+  test('K0合并 GG/DD=组内原始区间极值（区别于框体 MG/MD：向上包含取高低）', () {
+    // 10:47 11.66/11.66、10:48 H11.70 L11.68、10:49 11.70/11.70：后两根向上包含合并
+    final bars = [
+      KlineBar(idx: 0, timeMs: 0, timeText: '2004/07/19 10:47', open: 11.66, high: 11.66, low: 11.66, close: 11.66, volume: 1, amount: 1, metrics: const {}),
+      KlineBar(idx: 1, timeMs: 1, timeText: '2004/07/19 10:48', open: 11.68, high: 11.70, low: 11.68, close: 11.70, volume: 1, amount: 1, metrics: const {}),
+      KlineBar(idx: 2, timeMs: 2, timeText: '2004/07/19 10:49', open: 11.70, high: 11.70, low: 11.70, close: 11.70, volume: 1, amount: 1, metrics: const {}),
+    ];
+    final feats = [
+      BarCrosshairFeature(idx: 0, weekday: '周一', mergeInnerSeq: 0, combineHigh: 11.66, combineLow: 11.66),
+      BarCrosshairFeature(idx: 1, weekday: '周一', mergeInnerSeq: 0, combineHigh: 11.70, combineLow: 11.68),
+      BarCrosshairFeature(idx: 2, weekday: '周一', mergeInnerSeq: 1, combineHigh: 11.70, combineLow: 11.70),
+    ];
+    final lookup = BarFeatureLookup.build(
+      bars: bars,
+      combineFrames: const [
+        KlineCombineFrame(x1: 0, x2: 0, t1: '', t2: '', high: 11.66, low: 11.66, fx: 'UNKNOWN', count: 1),
+        KlineCombineFrame(x1: 1, x2: 2, t1: '', t2: '', high: 11.70, low: 11.70, fx: 'UNKNOWN', count: 2),
+      ],
+      k0Confirms: const [],
+      barFeatures: feats,
+    );
+    final lines = lookup.crosshairTooltipLines(2, timePart: '2004/07/19 10:49');
+    // GG/DD=组内原始K极值：DD=min(11.68,11.70)=11.68；MG/MD=合并框框体高低点=11.70（Rust 向上合并取「高低」）
+    expect(
+      lines.any((l) => l == 'K0合并:GG【11.70】/DD【11.68】/MG【11.70】/MD【11.70】'),
+      isTrue,
+      reason: '向上包含时 DD 应为组内最低 low=11.68，非框体低点 11.70',
+    );
   });
 
   test('tooltip OHLCV 的 VOL 槽用 Kn成交量序列，不追加底部成交量行', () {

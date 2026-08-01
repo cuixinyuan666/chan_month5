@@ -60,12 +60,16 @@ Future<void> main() async {
   MsgHistory.instance.appendDisplayTrackFractalJudgment();
   // 副图十字 as-of：确认/极点距/截断与成交量/判断同构
   MsgHistory.instance.appendSubChartCrosshairAsOf();
-  // 主图中枢十字 as-of（Normal/OverSeg 双算法）
+  // 主图中枢十字 as-of（消费 Rust zs_* JSON）
   MsgHistory.instance.appendZSCrosshairAsOf();
-  // 删除跨段中枢；原生拆 Normal/OverSeg；买卖点双套；放弃 Auto
+  // 删除跨段中枢；原生统一为 Kn中枢；放弃 Auto
   MsgHistory.instance.appendZSSplitNormalOverSeg();
   // 中枢确定/不确定虚实线（对齐动态Kn）
   MsgHistory.instance.appendZSSureDashFrames();
+  // 主图层色：同层合并/连线/中枢同色
+  MsgHistory.instance.appendMainLevelUnifiedColors();
+  // 主图命名/层序 + 副图顶底色自定义
+  MsgHistory.instance.appendMainZsRenameOrderAndFxColors();
   // K0中枢命名纠偏 + 单段雏形
   MsgHistory.instance.appendK0ZsRenameAndPrototype();
   MsgHistory.instance.appendZsSingleSeedIsomorphic();
@@ -75,6 +79,7 @@ Future<void> main() async {
   MsgHistory.instance.appendBuyNClass3PlusNaming();
   // Kn相邻比例 + Kn步进节奏副图
   MsgHistory.instance.appendAdjacentRatioAndStepRhythm();
+  MsgHistory.instance.appendTickK0NativePeriod();
   // 展示轨：动态KN当确认段画虚线；确认优先纠正/改实线
   MsgHistory.instance.appendDisplayTrackDynamicKnBuildingLines();
   // 种子框 / 第一条虚线限制 / 种子包含截断（全层同构，常驻历史）
@@ -89,9 +94,16 @@ Future<void> main() async {
   MsgHistory.instance.appendIndicatorUiAndKnVolume();
   MsgHistory.instance.appendIndicatorMuteToggleAndVolReadout();
   MsgHistory.instance.appendKnVolumeCumulativeStep();
+  // Kn笔数：Rust 分笔第4列真实笔数（任务前必读·常驻）
+  MsgHistory.instance.appendKnTickCountRealTicks();
   // 主/副图启动默认=「K0指标」层全选（与选择栏同口径）
   MsgHistory.instance.appendDefaultIndicatorsK0();
   MsgHistory.instance.appendChipDistribution();
+  MsgHistory.instance.appendChipToMainAndRatioInSubLevel();
+  // 十字 tooltip 标签格式化：idx 统一命名 + 合并 GG/DD（全层同构）
+  MsgHistory.instance.appendTooltipFormatting();
+  // 合并 GG/DD 口径修正：GG/DD=组内原始区间极值，MG/MD=合并框框体高低点
+  MsgHistory.instance.appendMergeRangeExtreme();
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     await windowManager.ensureInitialized();
     const opts = WindowOptions(
@@ -154,7 +166,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
 
   List<String> _codes = [];
   String? _selectedCode;
-  String _period = '1m';
+  String _period = 'tick';
   String _dataRoot = '';
   List<KlineBar> _allBars = [];
   List<KlineCombineFrame> _combineFrames = [];
@@ -172,7 +184,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
   List<Sell2Frame> _sell2K0Frames = [];
   List<BuyNFrame> _buyNK0Frames = [];
   List<SellNFrame> _sellNK0Frames = [];
-  // 默认=选择栏「K0指标」层全选（主图 K0/K0合并/K0连线/K0连续中枢；副图同层）
+  // 默认=选择栏「K0指标」层全选（主图 K0/K0合并/K0中枢/K0连线；副图同层）
   Set<MainChartIndicator> _mainIndicators = defaultMainIndicatorsK0();
   Set<SubChartIndicator> _subIndicators = defaultSubIndicatorsK0();
   int _stepIdx = -1; // -1 表示尚未步进
@@ -232,14 +244,27 @@ class _KlineHomePageState extends State<KlineHomePage> {
   List<KlineBar> get _visibleBars =>
       _visibleCount <= 0 ? const [] : _allBars.sublist(0, _visibleCount);
 
+  /// 默认 tick=原生分笔一字线；其余先聚 1m 再升周期。
   static const _periods = <String, String>{
-    '1m': 'TICK-1MIN',
+    'tick': '分笔',
+    '1m': '1分钟',
     '5m': '5分钟',
     '15m': '15分钟',
+    '30m': '30分钟',
     '60m': '60分钟',
-    'day': '日线',
-    'week': '周线',
-    'month': '月线',
+    '2h': '2小时',
+    '4h': '4小时',
+    '1d': '1日',
+    '3d': '3日',
+    '1w': '1周',
+    '1mon': '1月',
+    '3mon': '3月',
+    '6mon': '6月',
+    '9mon': '9月',
+    '12mon': '12月',
+    '1y': '1年',
+    '3y': '3年',
+    '6y': '6年',
   };
 
   /// 002003 专用默认区间；其它代码回落到标准区间。
@@ -464,8 +489,9 @@ class _KlineHomePageState extends State<KlineHomePage> {
           _sell2K0Frames = const [];
           _buyNK0Frames = const [];
           _sellNK0Frames = const [];
+          // 筹码已迁设置控制（仅K0），不再进主图指标选择集
           _mainIndicators = {};
-          _subIndicators = {const SubChartIndicator.chip(0)};
+          _subIndicators = {};
         });
         // 预热全量前缀（即便当前只显示首根，跳末后即可秒切）
         unawaited(
@@ -1002,6 +1028,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
                 ),
                 child: KlineChart(
                   bars: _visibleBars,
+                  period: _period,
                   combineFrames: _combineFrames,
                   k0ConfirmSignals: _k0ConfirmSignals,
                   barFeatures: _barFeatures,
@@ -1102,17 +1129,21 @@ class _KlineHomePageState extends State<KlineHomePage> {
     );
   }
 
-  /// 透明标题条：中部拖动；右侧设置紧贴最小化。
-  /// 左侧开孔穿透，避免挡住 K 线区主图指标入口（↓+已选名）。
+  /// 透明标题条：左侧穿透点击主图指标；窗控前窄条拖窗；右侧设置/最小化/最大化/关闭。
+  /// 踩坑：勿用「屏宽-140 固定开孔 + Expanded」——窗控实际约 174px，会 RIGHT OVERFLOW。
   Widget _buildCaptionBar() {
+    const dragGripW = 28.0;
     return Row(
       children: [
-        // 与主图指标 chip 最大宽度对齐，点击穿透到下层
-        const IgnorePointer(
-          child: SizedBox(width: 280, height: 36),
+        const Expanded(
+          child: IgnorePointer(
+            child: SizedBox(height: 36),
+          ),
         ),
-        Expanded(
-          child: DragToMoveArea(
+        DragToMoveArea(
+          child: SizedBox(
+            width: dragGripW,
+            height: 36,
             child: Container(color: Colors.transparent),
           ),
         ),
@@ -1213,23 +1244,45 @@ class _KlineHomePageState extends State<KlineHomePage> {
           ),
         ],
         const SizedBox(height: 10),
-        DropdownButtonFormField<String>(
-          isExpanded: true,
-          value: _period,
-          decoration: const InputDecoration(
-            labelText: '周期',
-            isDense: true,
-            border: OutlineInputBorder(),
-          ),
-          items: _periods.entries
-              .map(
-                (e) => DropdownMenuItem(
-                  value: e.key,
-                  child: Text(e.value, overflow: TextOverflow.ellipsis),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: DropdownButtonFormField<String>(
+                isExpanded: true,
+                value: _periods.containsKey(_period) ? _period : 'tick',
+                decoration: const InputDecoration(
+                  labelText: '周期',
+                  isDense: true,
+                  border: OutlineInputBorder(),
                 ),
-              )
-              .toList(),
-          onChanged: _bootstrapping ? null : (v) => setState(() => _period = v ?? '1m'),
+                items: _periods.entries
+                    .map(
+                      (e) => DropdownMenuItem(
+                        value: e.key,
+                        child: Text(e.value, overflow: TextOverflow.ellipsis),
+                      ),
+                    )
+                    .toList(),
+                onChanged: _bootstrapping
+                    ? null
+                    : (v) {
+                        final next = v ?? 'tick';
+                        setState(() => _period = next);
+                        // 切周期立即按新周期重载：否则图表用「新周期蜡烛画法」重绘
+                        // 仍停留在内存的 tick 数据（每根 O=H=L=C），会全部显示成一字线
+                        if (_selectedCode != null) _loadKlines();
+                        _msgHistory.appendPeriodAutoReload();
+                        _showPeriodHelp();
+                      },
+              ),
+            ),
+            IconButton(
+              tooltip: '周期说明',
+              icon: const Icon(Icons.help_outline, size: 18),
+              onPressed: _showPeriodHelp,
+            ),
+          ],
         ),
         const SizedBox(height: 10),
         _datePickerField(
@@ -1310,15 +1363,15 @@ class _KlineHomePageState extends State<KlineHomePage> {
           ),
         ),
         const SizedBox(height: 8),
-        // 筹码分布：总开关 + 峰线；桶宽/拉伸见说明弹窗
+        // 筹码分布：总开关 + 峰线；桶宽/拉伸见说明弹窗（已迁设置·仅K0，不参与主图指标勾选）
         SwitchListTile(
           contentPadding: EdgeInsets.zero,
           dense: true,
           title: const Text('筹码分布', style: TextStyle(fontSize: 13)),
           subtitle: Text(
             _chipConfig.enabled
-                ? '已开启（副图勾选 Kn筹码分布后主图右侧绘制）'
-                : '已关闭（即使勾选也不绘制）',
+                ? '已开启（主图右侧绘制 K0筹码）'
+                : '已关闭（主图右侧不绘制）',
             style: const TextStyle(fontSize: 11),
           ),
           value: _chipConfig.enabled,
@@ -1460,6 +1513,39 @@ class _KlineHomePageState extends State<KlineHomePage> {
     );
   }
 
+  void _showPeriodHelp() {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('周期说明'),
+        content: const SingleChildScrollView(
+          child: Text(
+            '默认：分笔（逐笔 K0）\n'
+            '· 每一行分笔 = 一根 K0，O=H=L=C=成交价（一字线）。\n'
+            '· 同分钟多笔=分钟起点+序内毫秒（+i ms），time 含秒/毫秒语义。\n'
+            '· 主图底图画「点」不画蜡烛；缠论内核公式不变（吃 high/low）。\n'
+            '· 与同区间 1 分钟缠论结构不可直接对比；结构更碎属预期。\n'
+            '· 长区间根数很大，建议收窄加载起止时间。\n\n'
+            '聚合周期（1分钟…多年）\n'
+            '· 仍先 ticks→1 分钟，再升到所选周期；主图恢复蜡烛。\n'
+            '· 可选：1/5/15/30/60 分钟，2/4 小时，1/3 日，1 周，'
+            '1/3/6/9/12 月，1/3/6 年。\n\n'
+            '操作步骤\n'
+            '1. 设置里选周期，立即自动按新周期重载（无需手动加载）；\n'
+            '2. 也可改加载起止时间 / 长按中区重载；\n'
+            '3. test+custom.ohlc.csv 仍直读行即 K，忽略周期。',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('知道了'),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _showTestOhlcHelp() {
     showDialog<void>(
       context: context,
@@ -1552,7 +1638,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
             '第一条虚线期内非leave严格包含至多截一次；确认后TruncGuard原样；\n'
             '· 分型确认优先：纠正虚线端点，或单元冻结后虚线改实线；不回写永久结构；\n'
             '· 尾端取区间内首次方向极值所在 K0（非 as-of 末根钉 X）；全层同构；\n'
-            '· K0/K1/…/Kn中枢(Normal|OverSeg)：确定态实线；不确定/单段雏形虚线；K0=合并框实体。\n\n'
+            '· K0/K1/…/Kn中枢：确定态实线；不确定/单段雏形虚线；框内斜线填充（与合并框区分）。\n\n'
             '关闭\n'
             '· 上述所有元素一律实线，不区分构建中状态（合并框、各层构建中连线、中枢框均实线）。\n\n'
             '操作步骤\n'
@@ -1584,14 +1670,15 @@ class _KlineHomePageState extends State<KlineHomePage> {
             '怎么看\n'
             '· 主图右侧水平柱：左绿=S（卖），右红=B（买）；\n'
             '· 筹码峰：局部量峰打点，虚线延长到主图左侧；\n'
-            '· 副图勾选「Kn筹码分布」才绘制；设置里总开关可一键关。\n\n'
+            '· 由设置面板总开关控制，不参与主图指标勾选；仅 K0 分支。\n\n'
             '数据与当下性\n'
-            '· 离线分笔写入 chip_tick_bins（价量直加）；无分笔时 OHLC 三角估算；\n'
+            '· 离线分笔写入 chip_tick_bins（价量直加）；tick 禁止三角；'
+            '非一字且无 bins 时才 OHLC 三角估算；\n'
             '· 逐K只累加已喂入 K 线；十字悬停回滚到该日累积，不回写历史；\n'
-            '· K0/K1/…/Kn 全层同构：Kn 用该层单元覆盖到的最大 K0 序号作 cutoff。\n\n'
+            '· 仅 K0：cutoff=当前步进末根 / 十字 as-of 所在 K0。\n\n'
             '操作步骤\n'
-            '1. 设置里打开「筹码分布」；\n'
-            '2. 副图选择栏勾选「K0筹码分布」（或 Kn）；\n'
+            '1. 设置里打开「筹码分布」总开关；\n'
+            '2. 主图右侧立即绘制 K0 筹码；\n'
             '3. 可调「筹码桶宽」「筹码峰延长线」；\n'
             '4. 配置写入 .chan_chip_config.json，下次启动恢复。',
           ),

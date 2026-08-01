@@ -7,6 +7,7 @@ class IndicatorChipEntry {
     required this.onTapToggle,
     required this.displayLevel,
     this.muted = false,
+    this.valueText,
   });
 
   final String label;
@@ -15,6 +16,8 @@ class IndicatorChipEntry {
   final int displayLevel;
   /// true=灰度关闭（不绘制），再点恢复
   final bool muted;
+  /// 副图变量读数（跟在名称后方，如 "12.3"；无则只显示名称）
+  final String? valueText;
 }
 
 /// 主/副图指标选择入口：↓ 打开选择；右侧名称单击灰度开关；自动换行。
@@ -45,6 +48,7 @@ class _IndicatorPickerChipState extends State<IndicatorPickerChip> {
   static const _mutedColor = Color(0xFF6B7280);
   static const _sepActive = Color(0xAAFFFFFF);
   static const _sepMuted = Color(0x556B7280);
+  static const _valueColor = Color(0xFF38BDF8);
 
   @override
   Widget build(BuildContext context) {
@@ -129,21 +133,40 @@ class _IndicatorPickerChipState extends State<IndicatorPickerChip> {
                                     : '单击关闭「${entries[i].label}」',
                                 waitDuration:
                                     const Duration(milliseconds: 500),
-                                child: Text(
-                                  entries[i].label,
-                                  style: TextStyle(
-                                    color: entries[i].muted
-                                        ? _mutedColor
-                                        : _activeColor,
-                                    fontSize: 12,
-                                    fontWeight: entries[i].muted
-                                        ? FontWeight.w400
-                                        : FontWeight.w600,
-                                    height: 1.2,
-                                    decoration: entries[i].muted
-                                        ? TextDecoration.lineThrough
-                                        : TextDecoration.none,
-                                    decorationColor: _mutedColor,
+                                child: Text.rich(
+                                  TextSpan(
+                                    children: [
+                                      TextSpan(
+                                        text: entries[i].label,
+                                        style: TextStyle(
+                                          color: entries[i].muted
+                                              ? _mutedColor
+                                              : _activeColor,
+                                          fontSize: 12,
+                                          fontWeight: entries[i].muted
+                                              ? FontWeight.w400
+                                              : FontWeight.w600,
+                                          height: 1.2,
+                                          decoration: entries[i].muted
+                                              ? TextDecoration.lineThrough
+                                              : TextDecoration.none,
+                                          decorationColor: _mutedColor,
+                                        ),
+                                      ),
+                                      if (entries[i].valueText != null &&
+                                          entries[i].valueText!.isNotEmpty)
+                                        TextSpan(
+                                          text: ':${entries[i].valueText}',
+                                          style: TextStyle(
+                                            color: entries[i].muted
+                                                ? _mutedColor
+                                                : _valueColor,
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w600,
+                                            height: 1.2,
+                                          ),
+                                        ),
+                                    ],
                                   ),
                                 ),
                               ),

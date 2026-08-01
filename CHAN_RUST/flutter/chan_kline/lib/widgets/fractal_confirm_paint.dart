@@ -2,14 +2,17 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
-/// 分型确认上升/下降色（红涨绿跌，与历史确认柱一致）
+/// 副图分型确认/判断配色（自定义·全层同构）。
+/// - 底分型（BOTTOM，value>0）= 红
+/// - 顶分型（TOP，value<0）= 蓝
+/// 踩坑：旧口径「红涨绿跌」已废；截断同色相 + 橙描边区分。
 abstract final class FractalConfirmColors {
-  static const up = Color(0xFFE53935);
-  static const down = Color(0xFF26A69A);
+  static const bottom = Color(0xFFE53935); // 底分型：红
+  static const top = Color(0xFF1E88E5); // 顶分型：蓝
   /// 浅描边，叠画时从下层标记里“抠”出来
   static const outline = Color(0xCC121212);
 
-  static Color of(int value) => value > 0 ? up : down;
+  static Color of(int value) => value > 0 ? bottom : top;
 }
 
 /// 同类不同 Kn 用不同标记，叠画时易区分。
@@ -55,9 +58,13 @@ double confirmStackOffsetX({
   }
 }
 
-/// 截断标记色（与分型确认同红绿，另加描边区分）。
+/// 截断标记色（自定义·全层同构）。
+/// - 向下截断 = 底分型截断（value>0）= 红
+/// - 顶分型截断（value<0）= 蓝
+/// 另加橙描边，与「分型确认」实心点区分。
 abstract final class TruncationMarkerColors {
   static const accent = Color(0xFFFFB74D); // 橙描边：截断专属
+  static Color of(int value) => FractalConfirmColors.of(value);
 }
 
 /// 在副图画一个截断触发点：方向色填充 + 橙色描边，形状按 Kn。
@@ -71,7 +78,7 @@ void paintTruncationMarker(
   required double barW,
 }) {
   if (value == 0) return;
-  // 先画确认形态，再加一圈橙描边标「截断」
+  // 先画确认形态（顶蓝底红），再加一圈橙描边标「截断」
   paintFractalConfirmMarker(
     canvas,
     cx: cx,
@@ -94,7 +101,7 @@ void paintTruncationMarker(
   );
 }
 
-/// 在副图画一个 ±1 确认标记（颜色按方向，形状按 Kn；可描边防叠盖）。
+/// 在副图画一个 ±1 确认标记（颜色按顶/底，形状按 Kn；可描边防叠盖）。
 /// [fillAlpha]：填充透明度（分型判断用半透明）；[hollow]：空心描边（与确认实心区分）。
 void paintFractalConfirmMarker(
   Canvas canvas, {

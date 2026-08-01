@@ -240,9 +240,35 @@ class MsgHistory {
     _zsSplitLogged = true;
     append(
       '【口径变更】删除跨段中枢(KuaDuan)与三类买卖点(BSP)全部逻辑；'
-      '原生中枢统一为「K(n)中枢」；'
+      '原生中枢统一为「K(n)连续中枢」（单套 zs_frames，无 Normal/OverSeg 双轨）；'
       '流水线每层输出 JSON：zs_frames；'
-      '放弃 Auto；呈现=半透明 ZD/ZG 框+标签；全层同构、无未来、不回写。',
+      '放弃 Auto；呈现=半透明 ZD/ZG 框；全层同构、无未来、不回写。',
+    );
+  }
+
+  /// 主图层色统一：同层合并/连线/中枢同色（进程内去重）。
+  static bool _mainLevelColorLogged = false;
+  void appendMainLevelUnifiedColors() {
+    if (_mainLevelColorLogged) return;
+    _mainLevelColorLogged = true;
+    append(
+      '【主图层色·同层同色】主图指标（Kn合并/Kn连线/Kn中枢，含构建中虚线、种子框）'
+      '按展示层共用一色：K0蓝(0x6366F1)、K1黄(0xF59E0B)、K2粉(0xEC4899)、'
+      'K3翠绿/K4紫/K5青/K6橙；原始 Kn 蜡烛仍红绿涨跌；副图/买卖点色不变。'
+      '已删除未使用的 forZSOverSeg 遗留配色。',
+    );
+  }
+
+  /// 主图「Kn中枢」命名/层序 + 副图顶底色（进程内去重）。
+  static bool _mainZsRenameOrderFxLogged = false;
+  void appendMainZsRenameOrderAndFxColors() {
+    if (_mainZsRenameOrderFxLogged) return;
+    _mainZsRenameOrderFxLogged = true;
+    append(
+      '【主图·Kn中枢命名与层序·全层同构】展示名「Kn连续中枢」→「Kn中枢」；'
+      '同层指标序=Kn→Kn合并→Kn中枢→Kn连线；Kn中枢框内斜线填充以区分合并框。'
+      '【副图·顶底色自定义】分型确认/判断：底分型红、顶分型蓝；'
+      '截断：向下截断(=底分型截断)红、顶分型截断蓝（另加橙描边）。',
     );
   }
 
@@ -412,6 +438,44 @@ class MsgHistory {
     );
   }
 
+  /// 默认 K0=原生分笔一字线（进程内去重）
+  static bool _tickK0NativeLogged = false;
+  void appendTickK0NativePeriod() {
+    if (_tickK0NativeLogged) return;
+    _tickK0NativeLogged = true;
+    append(
+      '【K0·原生分笔·默认】period=tick：每行分笔=一根K0，O=H=L=C=成交价（一字线）；'
+      '【合成秒】同分钟 n 笔均分到 60s（base+k*60000/n ms，n=1 即0），time_text 秒位随序递进，'
+      'X 轴/十字时间到秒，不再整屏 :00。源文件仅 HH:MM（如集合竞价行无 B/S）。'
+      '缠论合并/分型公式不变（吃 high/low），与同区间1m结构不可直接对比；'
+      'x 锚点=K0下标（tick 下即分笔序）。聚合周期仍 ticks→1m→升周期，主图恢复蜡烛。'
+      '可选：1/5/15/30/60m、2h/4h、1d/3d、1w、1/3/6/9/12mon、1/3/6y。'
+      '【筹码】tick 按分笔序写入 chip_tick_bins 三分量：B→b 红、S→s 绿、无BS→w 灰；'
+      '无 BS 不再默认当 B（normalize_native 保持 has_bs=false）；w 不再是 s+b 合计，total=s+b+w；'
+      '禁止 OHLC 三角兜底。副图 K0 成交量按 tick_side 着色（B红/S绿/灰），非 K0/聚合周期仍涨红跌绿；'
+      '筹码柱右对齐三段（右B红/中S绿/左灰），右上角 B/S/灰度 累计角标随十字 as-of 与步进末根变化；'
+      '十字悬停时角标下方另起「当前」行，分色高亮该单根 B/S/灰 量（区别于累计）；'
+      '【踩坑】标题条勿用「屏宽-140固定开孔+Expanded」——窗控约174px会 RIGHT OVERFLOW；'
+      '应用 Expanded(IgnorePointer) 穿透 + 窄条 DragToMoveArea。',
+    );
+  }
+
+  /// 切周期立即自动重载口径是否已记录（进程内去重）
+  static bool _periodAutoReloadLogged = false;
+  /// 周期切换行为：下拉选周期 → 立即按新周期自动重载（2026-08-01 修复一字线误读）。
+  /// 踩坑：改周期若只 setState 不重载，图表会用「新周期蜡烛画法」重绘内存中仍为 tick 的数据
+  /// （每根 O=H=L=C），全部显示成一字线，误判为聚合错误；Rust 聚合本身产出真 OHLC 蜡烛。
+  void appendPeriodAutoReload() {
+    if (_periodAutoReloadLogged) return;
+    _periodAutoReloadLogged = true;
+    append(
+      '【周期切换·自动重载】下拉选周期立即调用 _loadKlines 按新周期拉数，无需手动加载。'
+      '背景：改周期只改 _period 会令图表用新周期蜡烛画法重绘未重载的 tick 数据'
+      '（O=H=L=C），整屏一字线；已改为选中即自动重载，并同步更新周期说明弹窗。'
+      '聚合口径不变：仍 ticks→1m→升周期，主图恢复蜡烛。',
+    );
+  }
+
   /// 桌面窗体：铺满工作区不盖任务栏；十字线 tooltip 分隔线贴边框。
   void appendDesktopWorkAreaAndTooltipSep() {
     if (_desktopWorkAreaLogged) return;
@@ -423,18 +487,18 @@ class MsgHistory {
     );
   }
 
-  /// 主/副图指标 UI：连续中枢命名、层全选、Kn成交量归属、chip 单击关闭（进程内去重）。
+  /// 主/副图指标 UI：Kn中枢命名、层全选、Kn成交量归属、chip 单击关闭（进程内去重）。
   static bool _indicatorUiKnVolumeLogged = false;
   void appendIndicatorUiAndKnVolume() {
     if (_indicatorUiKnVolumeLogged) return;
     _indicatorUiKnVolumeLogged = true;
     append(
-      '【主/副图指标 UI】主图选择名「Kn连续中枢」与 tooltip 对齐；'
+      '【主/副图指标 UI】主图选择名「Kn中枢」与 tooltip 对齐；'
       '主图中枢框/合并框只画框，取消框内「Kn中枢…」「顶/底」文字。'
       '选择栏默认叠加，取消「叠加」单选；最上新增「Kn指标」层全选'
-      '（主图=Kn/Kn合并/Kn连线/Kn连续中枢；副图=Kn成交量+分型确认/判断/极点距/截断）。'
+      '（主图层内序=Kn/Kn合并/Kn中枢/Kn连线；副图=Kn成交量+分型确认/判断/极点距/截断）。'
       '左上角已选：同层 /、跨层 ※、自动换行不压字、单击关闭；'
-      '避让主图右上窗控与副图右上读数。',
+      '副图读数跟在指标名后方；避让主图右上窗控。',
     );
     append(
       '【Kn成交量·全层同构】成交量按层为 K0/K1/…/Kn成交量；'
@@ -454,7 +518,8 @@ class MsgHistory {
       '【指标左上角】单击名称=灰度关闭（不绘制，名称灰+删除线），再点打开；'
       '不从选择集移除；选择栏取消勾选才真正移除。开启态白字加粗提高对比度，'
       '灰度态 #6B7280 易区分；芯片静止透明度约 0.88。'
-      '【副图读数】十字线右上读数含 Kn成交量（与其它副图指标同框）。'
+      '【副图读数】已选副图指标名称后方直接挂当前值（十字当步/否则末根）；'
+      '取消副图右上角独立读数框。'
       '【主 tooltip】各层 OHLCV 预留 VOL 槽改为填 Kn成交量序列（K0=原生，Kn=累加）；'
       '不在 tooltip 底部再追加 Kn成交量行。',
     );
@@ -474,6 +539,26 @@ class MsgHistory {
     );
   }
 
+  /// Kn笔数真实口径：Rust 分笔第4列笔数直加，替代 bins 数组长度（进程内去重）。
+  /// 踩坑：bins['b'/'s'/'w'] 每个价位恒各 push 1 元素（缺方向补 0），长度≠笔数——
+  /// tick 恒 3、日线=3×价位数（202→606）。真实笔数在分笔第 4 列（`09:30 35.10 60 10 B` 的 10）。
+  static bool _knTickCountRealLogged = false;
+  void appendKnTickCountRealTicks() {
+    if (_knTickCountRealLogged) return;
+    _knTickCountRealLogged = true;
+    append(
+      '【Kn笔数·真实笔数】Rust 分笔解析第 4 列笔数（HH:MM 价格 量 笔数 [B/S]；'
+      '无列/非法按 1 笔），tick/Day3/普通周期三路径均写 bar.metrics：'
+      'tick_count（总，含灰度 w）、buy_tick_count（B）、sell_tick_count（S）；'
+      '非法行（价格/量）不计，与 from_side_rows 同口径。'
+      'Flutter K0 笔数优先读 metrics.tick_count / buy_tick_count，旧数据回退 bins 长度、'
+      '再回退 tick_side；Kn=下层增量累加步进与成交量同构。'
+      '【踩坑】勿用 bins 数组长度当笔数（每价位三数组各 push 1，长度恒=3×价位数）；'
+      '笔数 metrics 键存在即用（可为 0，勿用 >0 判断），无键才回退。'
+      'crosshairSubRows 新增 tickCount 分支 → 副图读数/十字 tooltip 显示真实笔数。',
+    );
+  }
+
   /// 启动默认勾选「K0指标」层全选（进程内去重；配置易混写入历史便于复制排查）。
   static bool _defaultIndicatorsK0Logged = false;
   void appendDefaultIndicatorsK0() {
@@ -482,26 +567,76 @@ class MsgHistory {
     append(
       '【默认指标】主/副图启动默认勾选「K0指标」层全选，'
       '与选择栏最上「Kn指标」同口径：'
-      '主图=K0/K0合并/K0连线/K0连续中枢；'
-      '副图=K0成交量+K0筹码分布+K0分型确认/判断/极点距/截断（截断随截断开关 prune）。'
+      '主图=K0/K0合并/K0中枢/K0连线（筹码迁设置·仅K0，不在指标栏）；'
+      '副图=K0成交量+分型确认/判断/极点距/截断+一类/二类BS+K0相邻比例/步进节奏'
+      '（截断随截断开关 prune）。'
       '非 K1 层；加载后仅 prune 超出 catalog 的项，不改层。',
     );
   }
 
-  /// 筹码分布：全层同构 + 分笔 bins + 十字 as-of 截断（进程内去重）。
+  /// 筹码分布：迁设置控制·仅K0 + 分笔 bins + 十字 as-of 截断（进程内去重）。
   static bool _chipDistributionLogged = false;
   void appendChipDistribution() {
     if (_chipDistributionLogged) return;
     _chipDistributionLogged = true;
     append(
-      '【Kn筹码分布·全层同构】副图勾选 K0/K1/…/Kn筹码分布；'
+      '【筹码分布·迁设置·仅K0】筹码迁出主图指标（目录/层全选/默认勾选均移除），'
+      '改由设置面板总开关控制，仅保留 K0 分支；'
+      'cutoff=当前步进末根 / 十字 as-of 所在 K0（不再映射 Kn 层）。'
       '主图右侧水平柱（左绿S/右红B），峰延长线横穿主图。'
-      '数据：离线分笔注入 chip_tick_bins（p/s/b/w）；无 bins 时 OHLC 三角兜底。'
-      '计算：Rust chan_chip_profile（cutoff_x 含）；Kn cutoff=该层单元覆盖到的最大 K0 idx。'
+      '数据：离线分笔注入 chip_tick_bins（p/s/b/w）；'
+      'tick/一字线无 bins 时收盘价单点落量（禁三角）；其余无 bins 才 OHLC 三角兜底。'
+      '计算：Rust chan_chip_profile（cutoff_x 含）。'
       '性能：Flutter 前缀索引（步进增量/十字 as-of 秒查）+ 底图/筹码/十字三层 RepaintBoundary；'
       '大序列 Isolate 后台预热前缀（跳末/加载），计算口径不变。'
       '逐K当下性：只累加已喂入 bars；十字 as-of 回滚到该日累积，不回写历史桶。'
-      '配置：chipEnabled/bucketStep/stretch/peakLine；落盘 .chan_chip_config.json。',
+      '配置：chipEnabled/bucketStep/stretch/peakLine；落盘 .chan_chip_config.json。'
+      '【优化】开启筹码分布时主图 Y 轴价签与十字价格标签改左侧，避免被右侧筹码挡住。',
+    );
+  }
+
+  /// 筹码迁设置（仅K0）+ 副图比例/节奏进 Kn指标（进程内去重）。
+  static bool _chipMainRatioLevelLogged = false;
+  void appendChipToMainAndRatioInSubLevel() {
+    if (_chipMainRatioLevelLogged) return;
+    _chipMainRatioLevelLogged = true;
+    append(
+      '【指标归属·筹码迁设置】Kn筹码分布从主图指标迁出，不再进「Kn指标」层全选，'
+      '只保留 K0 分支、由设置面板「筹码分布」总开关控制（K1/…/Kn 筹码分支移除）。'
+      '副图「Kn相邻比例」「Kn步进节奏」仍纳入「Kn指标」层全选与默认 K0 全选；'
+      '副图 catalog 按显示层交错排列。',
+    );
+  }
+
+  /// 十字 tooltip 标签格式化（进程内去重）：K{n}[No.]/…序/…组No. → … idx；合并取 GG/DD + MG/MD。
+  static bool _tooltipFormatLogged = false;
+  void appendTooltipFormatting() {
+    if (_tooltipFormatLogged) return;
+    _tooltipFormatLogged = true;
+    append(
+      '【tooltip 格式化·全层同构】十字线各层行标签统一：'
+      'K{n}[No.]→「K{n} idx」、K{n}合并K{n}序→「K{n}合并K{n} idx」、K{n}合并组No.→「K{n}合并 idx」；'
+      '「K{n}合并」取值仿照中枢改显 GG/DD（逐K当下区间极值，原 H/L），并保留原 H/L 改名为 MG/MD'
+      '（M=merge，取该合并框框体高低点，as-of 框体与主图框同源、无未来函数；未闭合构建中与 GG/DD 不同，'
+      '无框体时回退同值）；'
+      '中枢价格行去掉「价格」后缀只留「K{n}中枢」，'
+      '「K{n}中枢Kn序」中 Kn 换为对应层级（K0中枢K0 idx / K1中枢K1 idx），'
+      '「K{n}中枢组No.」→「K{n}中枢 idx」；Kn 块行序与 K0 块同构：合并(GG/DD/MG/MD)→合并K序→合并idx→分型确认/判断。',
+    );
+  }
+
+  /// 合并 GG/DD 口径修正（进程内去重）：GG/DD=组内原始K高低极值，MG/MD=合并框框体高低点。
+  static bool _mergeRangeExtremeLogged = false;
+  void appendMergeRangeExtreme() {
+    if (_mergeRangeExtremeLogged) return;
+    _mergeRangeExtremeLogged = true;
+    append(
+      '【K{n}合并 GG/DD 口径·2026-08-01】GG/DD 由「合并框高低点」修正为「组内原始区间极值」：'
+      '在悬停合并组 x1..x2 内取各原始K的 max(high)/min(low)，逐K当下、无未来函数；'
+      'K0 用原始K高低跑（如向上包含时 idx=2 显示 DD=11.68=组内 idx1 的 low，而非框体低点 11.70）；'
+      'Kn 用当步单元高低跑、combineX1 变则切组重算，与 K0 全层同构。'
+      'MG/MD 仍为该合并框框体高低点（构建中虚线框悬停框内中段时与 GG/DD 不同，闭合时同值）。'
+      '踩坑：勿把「合并」的 GG/DD 当框体取——框体高低点是 MG/MD 的语义。',
     );
   }
 

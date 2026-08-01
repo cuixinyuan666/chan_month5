@@ -125,14 +125,35 @@ class _MainIndicatorPickerDialogState extends State<_MainIndicatorPickerDialog> 
       );
     }
 
+    // 按类别分组
     MainIndicatorKind? prevKind;
     for (final item in widget.available) {
       if (prevKind != null && prevKind != item.kind) {
         tiles.add(
-          const Divider(
-            height: 16,
-            thickness: 1,
-            color: Color(0x44FFFFFF),
+          Container(
+            padding: const EdgeInsets.only(top: 10, bottom: 2),
+            child: Text(
+              item.kind.categoryLabel,
+              style: const TextStyle(
+                color: Color(0xFF42A5F5),
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+        );
+      } else if (prevKind == null) {
+        tiles.add(
+          Container(
+            padding: const EdgeInsets.only(top: 4, bottom: 2),
+            child: Text(
+              item.kind.categoryLabel,
+              style: const TextStyle(
+                color: Color(0xFF42A5F5),
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
           ),
         );
       }

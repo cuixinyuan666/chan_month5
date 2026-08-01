@@ -2,7 +2,7 @@ import 'dart:math' as math;
 
 import '../models/kline_bar.dart';
 
-/// X 轴时间标签格式化（分钟周期统一到分钟精度）。
+/// X 轴时间标签格式化。
 class KlineAxisFormat {
   /// 是否分钟级行情（time_text 含时分）。
   static bool isMinuteLike(Iterable<KlineBar> bars) {
@@ -12,10 +12,23 @@ class KlineAxisFormat {
     return false;
   }
 
-  /// 对齐 a_replay toDateLabel：分钟 → YYYY/MM/DD HH:MM；日线 → YYYY/MM/DD。
-  static String xLabel(String timeText, {required bool minuteLike}) {
+  /// 是否含秒（分笔 tick 合成时间）。
+  static bool isSecondLike(Iterable<KlineBar> bars) {
+    for (final b in bars) {
+      final t = b.timeText.trim();
+      // YYYY/MM/DD HH:MM:SS → 至少两处冒号
+      if (':'.allMatches(t).length >= 2) return true;
+    }
+    return false;
+  }
+
+  /// 对齐 a_replay toDateLabel：分笔→到秒；分钟→到分；日线→日期。
+  static String xLabel(String timeText, {required bool minuteLike, bool secondLike = false}) {
     final text = timeText.trim();
     if (text.isEmpty) return '-';
+    if (secondLike || (minuteLike && ':'.allMatches(text).length >= 2)) {
+      return text.length >= 19 ? text.substring(0, 19) : text;
+    }
     if (minuteLike) {
       return text.length >= 16 ? text.substring(0, 16) : text;
     }

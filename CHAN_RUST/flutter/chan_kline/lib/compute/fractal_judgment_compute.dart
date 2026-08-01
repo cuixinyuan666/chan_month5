@@ -9,7 +9,8 @@ import 'k1_combine_compute.dart';
 
 export '../models/fractal_judgment_event.dart';
 
-/// TOP=-1，BOTTOM=+1，其它=0（与分型确认 value 同号约定）。
+/// TOP=-1（顶分型），BOTTOM=+1（底分型），其它=0（与分型确认 value 同号约定）。
+/// 副图配色自定义：底分型/向下截断=红，顶分型/顶截断=蓝。
 int fxToSigned(String fx) {
   if (fx == 'TOP') return -1;
   if (fx == 'BOTTOM') return 1;

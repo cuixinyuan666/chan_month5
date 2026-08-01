@@ -75,7 +75,7 @@ pub extern "C" fn chan_list_stock_codes(data_root: *const c_char) -> *mut c_char
     }
 }
 
-/// 加载 K 线。period 示例：day / 5m / 1m。
+/// 加载 K 线。period 示例：tick / 1m / 5m / 2h / 3d / 1mon / 3y。
 #[no_mangle]
 pub extern "C" fn chan_load_klines(
     data_root: *const c_char,
