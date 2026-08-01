@@ -102,6 +102,8 @@ Future<void> main() async {
   MsgHistory.instance.appendChipToMainAndRatioInSubLevel();
   // 十字 tooltip 标签格式化：idx 统一命名 + 合并 GG/DD（全层同构）
   MsgHistory.instance.appendTooltipFormatting();
+  // 合并 GG/DD 口径修正：GG/DD=组内原始区间极值，MG/MD=合并框框体高低点
+  MsgHistory.instance.appendMergeRangeExtreme();
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     await windowManager.ensureInitialized();
     const opts = WindowOptions(
@@ -1267,6 +1269,10 @@ class _KlineHomePageState extends State<KlineHomePage> {
                     : (v) {
                         final next = v ?? 'tick';
                         setState(() => _period = next);
+                        // 切周期立即按新周期重载：否则图表用「新周期蜡烛画法」重绘
+                        // 仍停留在内存的 tick 数据（每根 O=H=L=C），会全部显示成一字线
+                        if (_selectedCode != null) _loadKlines();
+                        _msgHistory.appendPeriodAutoReload();
                         _showPeriodHelp();
                       },
               ),
@@ -1525,8 +1531,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
             '· 可选：1/5/15/30/60 分钟，2/4 小时，1/3 日，1 周，'
             '1/3/6/9/12 月，1/3/6 年。\n\n'
             '操作步骤\n'
-            '1. 设置里选周期；\n'
-            '2. 点加载 / 长按中区重载，才会按新周期拉数；\n'
+            '1. 设置里选周期，立即自动按新周期重载（无需手动加载）；\n'
+            '2. 也可改加载起止时间 / 长按中区重载；\n'
             '3. test+custom.ohlc.csv 仍直读行即 K，忽略周期。',
           ),
         ),

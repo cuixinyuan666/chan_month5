@@ -460,6 +460,22 @@ class MsgHistory {
     );
   }
 
+  /// 切周期立即自动重载口径是否已记录（进程内去重）
+  static bool _periodAutoReloadLogged = false;
+  /// 周期切换行为：下拉选周期 → 立即按新周期自动重载（2026-08-01 修复一字线误读）。
+  /// 踩坑：改周期若只 setState 不重载，图表会用「新周期蜡烛画法」重绘内存中仍为 tick 的数据
+  /// （每根 O=H=L=C），全部显示成一字线，误判为聚合错误；Rust 聚合本身产出真 OHLC 蜡烛。
+  void appendPeriodAutoReload() {
+    if (_periodAutoReloadLogged) return;
+    _periodAutoReloadLogged = true;
+    append(
+      '【周期切换·自动重载】下拉选周期立即调用 _loadKlines 按新周期拉数，无需手动加载。'
+      '背景：改周期只改 _period 会令图表用新周期蜡烛画法重绘未重载的 tick 数据'
+      '（O=H=L=C），整屏一字线；已改为选中即自动重载，并同步更新周期说明弹窗。'
+      '聚合口径不变：仍 ticks→1m→升周期，主图恢复蜡烛。',
+    );
+  }
+
   /// 桌面窗体：铺满工作区不盖任务栏；十字线 tooltip 分隔线贴边框。
   void appendDesktopWorkAreaAndTooltipSep() {
     if (_desktopWorkAreaLogged) return;
@@ -606,6 +622,21 @@ class MsgHistory {
       '中枢价格行去掉「价格」后缀只留「K{n}中枢」，'
       '「K{n}中枢Kn序」中 Kn 换为对应层级（K0中枢K0 idx / K1中枢K1 idx），'
       '「K{n}中枢组No.」→「K{n}中枢 idx」；Kn 块行序与 K0 块同构：合并(GG/DD/MG/MD)→合并K序→合并idx→分型确认/判断。',
+    );
+  }
+
+  /// 合并 GG/DD 口径修正（进程内去重）：GG/DD=组内原始K高低极值，MG/MD=合并框框体高低点。
+  static bool _mergeRangeExtremeLogged = false;
+  void appendMergeRangeExtreme() {
+    if (_mergeRangeExtremeLogged) return;
+    _mergeRangeExtremeLogged = true;
+    append(
+      '【K{n}合并 GG/DD 口径·2026-08-01】GG/DD 由「合并框高低点」修正为「组内原始区间极值」：'
+      '在悬停合并组 x1..x2 内取各原始K的 max(high)/min(low)，逐K当下、无未来函数；'
+      'K0 用原始K高低跑（如向上包含时 idx=2 显示 DD=11.68=组内 idx1 的 low，而非框体低点 11.70）；'
+      'Kn 用当步单元高低跑、combineX1 变则切组重算，与 K0 全层同构。'
+      'MG/MD 仍为该合并框框体高低点（构建中虚线框悬停框内中段时与 GG/DD 不同，闭合时同值）。'
+      '踩坑：勿把「合并」的 GG/DD 当框体取——框体高低点是 MG/MD 的语义。',
     );
   }
 

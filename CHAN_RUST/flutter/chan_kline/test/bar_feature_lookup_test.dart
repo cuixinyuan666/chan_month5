@@ -158,6 +158,36 @@ void main() {
     );
   });
 
+  test('K0合并 GG/DD=组内原始区间极值（区别于框体 MG/MD：向上包含取高低）', () {
+    // 10:47 11.66/11.66、10:48 H11.70 L11.68、10:49 11.70/11.70：后两根向上包含合并
+    final bars = [
+      KlineBar(idx: 0, timeMs: 0, timeText: '2004/07/19 10:47', open: 11.66, high: 11.66, low: 11.66, close: 11.66, volume: 1, amount: 1, metrics: const {}),
+      KlineBar(idx: 1, timeMs: 1, timeText: '2004/07/19 10:48', open: 11.68, high: 11.70, low: 11.68, close: 11.70, volume: 1, amount: 1, metrics: const {}),
+      KlineBar(idx: 2, timeMs: 2, timeText: '2004/07/19 10:49', open: 11.70, high: 11.70, low: 11.70, close: 11.70, volume: 1, amount: 1, metrics: const {}),
+    ];
+    final feats = [
+      BarCrosshairFeature(idx: 0, weekday: '周一', mergeInnerSeq: 0, combineHigh: 11.66, combineLow: 11.66),
+      BarCrosshairFeature(idx: 1, weekday: '周一', mergeInnerSeq: 0, combineHigh: 11.70, combineLow: 11.68),
+      BarCrosshairFeature(idx: 2, weekday: '周一', mergeInnerSeq: 1, combineHigh: 11.70, combineLow: 11.70),
+    ];
+    final lookup = BarFeatureLookup.build(
+      bars: bars,
+      combineFrames: const [
+        KlineCombineFrame(x1: 0, x2: 0, t1: '', t2: '', high: 11.66, low: 11.66, fx: 'UNKNOWN', count: 1),
+        KlineCombineFrame(x1: 1, x2: 2, t1: '', t2: '', high: 11.70, low: 11.70, fx: 'UNKNOWN', count: 2),
+      ],
+      k0Confirms: const [],
+      barFeatures: feats,
+    );
+    final lines = lookup.crosshairTooltipLines(2, timePart: '2004/07/19 10:49');
+    // GG/DD=组内原始K极值：DD=min(11.68,11.70)=11.68；MG/MD=合并框框体高低点=11.70（Rust 向上合并取「高低」）
+    expect(
+      lines.any((l) => l == 'K0合并:GG【11.70】/DD【11.68】/MG【11.70】/MD【11.70】'),
+      isTrue,
+      reason: '向上包含时 DD 应为组内最低 low=11.68，非框体低点 11.70',
+    );
+  });
+
   test('tooltip OHLCV 的 VOL 槽用 Kn成交量序列，不追加底部成交量行', () {
     final bars = _bars(4); // vol = 100,101,102,103
     final feats = [for (var i = 0; i < 4; i++) _feat(i, unitIdx: 0)];

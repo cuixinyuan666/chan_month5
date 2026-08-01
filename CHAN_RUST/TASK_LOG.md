@@ -2,6 +2,34 @@
 
 > 口径/行为变更记录（复制排查用）；与 `lib/history/msg_history.dart` 常驻历史同步维护。
 
+## 2026-08-02 经验汇总（GG/DD 口径 + 切周期重载 + DLL 占用）
+
+- **合并 GG/DD ≠ 框体高低**：Rust `MergeEngine` 向上合并取「高高/高低」，框体低点会被抬高；tooltip 的 GG/DD 必须在合并组内按原始K（Kn 用当步单元）重算 max(high)/min(low)。框体高低点只配 MG/MD。勿再把 `combine_high/low` 当 GG/DD。
+- **切周期一字线 ≠ 聚合坏了**：Rust 聚合产出真 OHLC；前端若只 `setState(_period)` 不重载，会用「新周期蜡烛画法」画内存里仍是 tick 的数据（O=H=L=C）→ 整屏一字线。下拉选周期后必须立刻 `_loadKlines()`。排查先分清后端/前端，可用 ctypes 直调 `chan_ffi.dll` 证聚合。
+- **DLL 复制仍失败**：`build_rust.ps1` 会杀 `chan_kline` 进程并重试复制；若终端里仍挂着 `flutter run`，`windows/native/chan_ffi.dll` 可能继续被占用。应先在该终端 `q` 退出 `flutter run`（或结束整个 Flutter/Dart 树）再跑脚本。脚本本身须保持 UTF-16 LE，勿存成无 BOM UTF-8。
+- **落盘位置**：口径正文见下方 2026-08-01 两条；UI 常驻历史见 `msg_history.appendMergeRangeExtreme` / `appendPeriodAutoReload`。
+
+## 2026-08-01 K0/Kn合并 GG/DD 口径修正：组内原始区间极值
+
+- **需求**：K0 idx=2（10:47 11.66/11.66、10:48 H11.70 L11.68、10:49 11.70/11.70，后两根向上包含合并）tooltip「K0合并」的 **DD** 应为 **11.68**（组内 idx1 的 low），而非当时显示 11.70。
+- **根因**：GG/DD 此前取 Rust 快照 `combine_high/combine_low`，而 `MergeEngine` 向上合并取「高高/高低」（`absorb`：Up 分支 `self.low = self.low.max(u.low)`，见 `engine.rs:335-341`），框体低点=11.70；框体高低点实为 MG/MD 语义。
+- **变更**（`bar_feature_lookup.dart`）：
+  - `build`：K0 合并循环内按悬停合并组 x1..x2 切原始K重算 `combine_range_high/low`（max(high)/min(low)，逐K当下、无未来函数）；各层 Kn 以当步单元高低跑组内极值（`combineX1` 变则切组重算），写入 `combine_range_high_$n/low_$n`，与 K0 全层同构。
+  - `crosshairTooltipRows` / `_levelBlockRowsFor`：GG/DD 改取原始区间极值（无则回退快照合并值）；MG/MD 仍为合并框框体高低点。
+  - `msg_history.dart`：新增 `appendMergeRangeExtreme`（进程内去重）；`main.dart` 启动时调用。
+- **口径**：`K{n}合并` GG/DD=组内原始区间极值；MG/MD=合并框框体高低点（闭合时同值，构建中虚线框悬停中段时不同）。
+- **验证**：`flutter test` 中 `bar_feature_lookup_test` 新增 K0 用例（idx=2 断言 `K0合并:GG【11.70】/DD【11.68】/MG【11.70】/MD【11.70】`）；旧用例（无 combineFrames / 框体 MG/MD）不受影响。
+
+## 2026-08-01 切周期立即自动重载（修复聚合显示为一字线）
+
+- **问题**：App 周期下拉选 1min 及以上时，图表整屏一字线，疑似聚合错误。
+- **定位**：后端 Rust 聚合正确（经 ctypes 直调 `chan_ffi.dll` 验证：1m/5m/1d/1mon/1y 均产出真 OHLC 蜡烛，`load_klines` 单测亦通过）。根因在 Flutter 前端：切换周期只 `setState(_period)` 触发重绘，并不重载数据；于是图表用「新周期蜡烛画法」去画内存中仍为 tick 的旧数据（每根 O=H=L=C），整屏一字线；须手动重载（长按中区/改日期）后才显示正确蜡烛。
+- **变更**：
+  - `main.dart`：周期下拉 `onChanged` 选中后立即 `_loadKlines()` 按新周期自动重载（选中代码非空时）；周期说明弹窗操作步骤同步更新（无需再手动加载）。
+  - `msg_history.dart`：新增 `appendPeriodAutoReload`（进程内去重），记录该口径变更。
+- **口径**：聚合逻辑不变（仍 ticks→1m→升周期，主图恢复蜡烛）；仅切换周期时自动重载，图表始终与所选周期一致。
+- **验证**：`flutter analyze` 无新增问题；聚合正确性由 Rust 单测 + FFI 直调验证（见上）。
+
 ## 2026-08-01 十字 tooltip 标签格式化·全层同构
 
 - **需求**：tooltip 内容格式化——各层标签统一「idx」命名；K0合并 仿照 K0中枢 取 GG/DD；中枢行「Kn」换为对应层级；另保留原 H/L 命名 MG/MD。

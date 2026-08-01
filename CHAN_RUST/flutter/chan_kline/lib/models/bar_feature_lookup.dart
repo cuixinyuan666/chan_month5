@@ -169,8 +169,17 @@ class BarFeatureLookup {
     }
 
     // 合并线框仅结构展示；十字线/ML 的 fx、count 取自 barFeatures 逐步口径
+    // GG/DD=组内原始区间极值（原始K高低，逐K当下、无未来函数）；MG/MD=合并框框体高低点
+    final barByIdx = {for (final b in bars) b.idx: b};
     for (final f in combineFrames) {
+      var rangeHigh = double.negativeInfinity;
+      var rangeLow = double.infinity;
       for (var x = f.x1; x <= f.x2; x++) {
+        final b = barByIdx[x];
+        if (b != null) {
+          if (b.high > rangeHigh) rangeHigh = b.high;
+          if (b.low < rangeLow) rangeLow = b.low;
+        }
         final row = byIdx.putIfAbsent(x, () => {'idx': x});
         row['combine'] = {
           'x1': f.x1,
@@ -181,6 +190,10 @@ class BarFeatureLookup {
           'count': f.count,
           'in_merge': f.count > 1,
         };
+        if (rangeHigh.isFinite && rangeLow.isFinite) {
+          row['combine_range_high'] = rangeHigh;
+          row['combine_range_low'] = rangeLow;
+        }
       }
     }
 
@@ -191,6 +204,36 @@ class BarFeatureLookup {
           final row = byIdx.putIfAbsent(x, () => {'idx': x});
           row['combine_box_${lv.level}'] = {'high': f.high, 'low': f.low};
         }
+      }
+    }
+
+    // 各层 Kn合并 GG/DD=组内原始区间极值：以当步 Kn 单元高低跑组内 max/min（逐K当下、无未来函数）；
+    // combineX1 为组起点，变化即切组；与 K0 的 combine_range_* 全层同构
+    for (final lv in levels) {
+      final n = lv.level;
+      var curStart = -2;
+      var rangeHigh = double.negativeInfinity;
+      var rangeLow = double.infinity;
+      for (final b in bars) {
+        final row = byIdx[b.idx];
+        if (row == null) continue;
+        final snaps = row['levels'];
+        final snap = (snaps is List<LevelSnap> && n - 1 < snaps.length)
+            ? snaps[n - 1]
+            : null;
+        if (snap == null || snap.unitIdx == null || snap.combineX1 < 0) {
+          curStart = -2;
+          continue;
+        }
+        if (snap.combineX1 != curStart) {
+          curStart = snap.combineX1;
+          rangeHigh = double.negativeInfinity;
+          rangeLow = double.infinity;
+        }
+        if (snap.unitHigh > rangeHigh) rangeHigh = snap.unitHigh;
+        if (snap.unitLow < rangeLow) rangeLow = snap.unitLow;
+        row['combine_range_high_$n'] = rangeHigh;
+        row['combine_range_low_$n'] = rangeLow;
       }
     }
 
@@ -624,6 +667,9 @@ class BarFeatureLookup {
         : ((row['volume'] as num?) ?? 0);
     final combineHigh = (row['combine_high'] as num?)?.toDouble() ?? high;
     final combineLow = (row['combine_low'] as num?)?.toDouble() ?? low;
+    // GG/DD=组内原始区间极值（combine_range_*，逐K当下）；MG/MD=合并框框体高低点（row['combine']）
+    final rangeHigh = (row['combine_range_high'] as num?)?.toDouble();
+    final rangeLow = (row['combine_range_low'] as num?)?.toDouble();
 
     // 原始K分型确认（=k0_confirms=levels[0].confirms；合并原始K顶/底分型，其端点连即 K0连线/K1，并被重铸为 K1Bar 供 K2）。仅 ±1 显示，截断加"(截断)"，未确认为 0，与 Kn 同口径
     var combineFxConfirm = '0';
@@ -644,11 +690,11 @@ class BarFeatureLookup {
         CrosshairTooltipRow.boxNumInString(_fmtOhlcv(open: open, high: high, low: low, close: close, volume: volume)),
       ),
       const CrosshairTooltipRow.starSeparator(),
-      // K0合并：GG/DD=逐K当下区间极值；MG/MD=该合并框框体高低点（frame box，未闭合构建中与极值不同）
+      // K0合并：GG/DD=组内原始区间极值（逐K当下，如向上包含时 DD=组内最低 low）；MG/MD=该合并框框体高低点
       ..._mergeRows(
         label: 'K0合并',
-        gg: combineHigh,
-        dd: combineLow,
+        gg: rangeHigh ?? combineHigh,
+        dd: rangeLow ?? combineLow,
         mg: _frameBox(row['combine'], fallback: combineHigh),
         md: _frameBox(row['combine'], fallback: combineLow, useLow: true),
       ),
@@ -895,6 +941,8 @@ class BarFeatureLookup {
         volumeOverride: knVol,
         combineBoxHigh: _frameBox(box, fallback: snap?.combineHigh ?? 0),
         combineBoxLow: _frameBox(box, fallback: snap?.combineLow ?? 0, useLow: true),
+        gg: (row['combine_range_high_$n'] as num?)?.toDouble(),
+        dd: (row['combine_range_low_$n'] as num?)?.toDouble(),
       ));
     }
     return lines;
@@ -918,6 +966,8 @@ class BarFeatureLookup {
     num? volumeOverride,
     double? combineBoxHigh,
     double? combineBoxLow,
+    double? gg,
+    double? dd,
   }) {
     final label = 'K$n';
     // 分型确认 / 分型判断 同一套呈现：±1(截断) / ±1 / 0（未确认）
@@ -961,8 +1011,8 @@ class BarFeatureLookup {
       // 顺序与 K0 块同构：合并(GG/DD/MG/MD)→合并K序→合并idx→分型确认/判断
       ..._mergeRows(
         label: '$label合并',
-        gg: snap.combineHigh,
-        dd: snap.combineLow,
+        gg: gg ?? snap.combineHigh,
+        dd: dd ?? snap.combineLow,
         mg: combineBoxHigh ?? snap.combineHigh,
         md: combineBoxLow ?? snap.combineLow,
       ),
@@ -975,7 +1025,7 @@ class BarFeatureLookup {
     ];
   }
 
-  /// 合并行：GG/DD=合并框区间极值（逐K当下）；MG/MD=合并框框体高低点（M=merge）。
+  /// 合并行：GG/DD=组内原始区间极值（原始K高低 max/min，逐K当下、无未来函数）；MG/MD=合并框框体高低点（M=merge）。
   List<CrosshairTooltipRow> _mergeRows({
     required String label,
     required double gg,
