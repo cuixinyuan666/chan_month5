@@ -293,27 +293,47 @@ class BarFeatureLookup {
     }
 
     // Kn成交量：K0=原生；Kn=下层增量累加步进（与副图绘制同源）。
-    // 写入 sub 供：① tooltip 各层 OHLCV 的 VOL 槽；② 副图读数。
+    // 另写 B/S/G 三分解供 tooltip（G=gray）；副图叠柱仍用 volume_/既有 buy 系列。
     {
       final allVol = computeAllKnVolumeSeries(
         bars: bars,
         levels: levels,
         barFeatures: barFeatures,
       );
+      final allBuy = computeAllKnBuyVolumeBsgSeries(
+        bars: bars,
+        levels: levels,
+        barFeatures: barFeatures,
+      );
+      final allSell = computeAllKnSellVolumeSeries(
+        bars: bars,
+        levels: levels,
+        barFeatures: barFeatures,
+      );
+      final allGray = computeAllKnGrayVolumeSeries(
+        bars: bars,
+        levels: levels,
+        barFeatures: barFeatures,
+      );
       for (final e in allVol.entries) {
         final series = e.value;
+        final buyS = allBuy[e.key] ?? const <double>[];
+        final sellS = allSell[e.key] ?? const <double>[];
+        final grayS = allGray[e.key] ?? const <double>[];
         for (var i = 0; i < bars.length; i++) {
           final row =
               byIdx.putIfAbsent(bars[i].idx, () => {'idx': bars[i].idx});
           final sub = row.putIfAbsent('sub', () => <String, dynamic>{})
               as Map<String, dynamic>;
           sub['volume_${e.key}'] = i < series.length ? series[i] : 0.0;
+          sub['buy_volume_${e.key}'] = i < buyS.length ? buyS[i] : 0.0;
+          sub['sell_volume_${e.key}'] = i < sellS.length ? sellS[i] : 0.0;
+          sub['gray_volume_${e.key}'] = i < grayS.length ? grayS[i] : 0.0;
         }
       }
     }
 
-    // Kn笔数：与成交量同结构（K0=Rust 真实笔数 metrics.tick_count，旧数据回退 bins 长度；
-    // Kn=下层增量累加步进）。写入 sub 供：① 副图读数；② 十字 tooltip 副图行。
+    // Kn笔数：与成交量同结构；另写 B/S/G 供 tooltip（应显尽显，不依赖副图勾选）。
     {
       final allTick = computeAllKnTickCountSeries(
         bars: bars,
@@ -325,9 +345,21 @@ class BarFeatureLookup {
         levels: levels,
         barFeatures: barFeatures,
       );
+      final allSellTick = computeAllKnSellTickCountSeries(
+        bars: bars,
+        levels: levels,
+        barFeatures: barFeatures,
+      );
+      final allGrayTick = computeAllKnGrayTickCountSeries(
+        bars: bars,
+        levels: levels,
+        barFeatures: barFeatures,
+      );
       for (final e in allTick.entries) {
         final series = e.value;
         final buySeries = allBuyTick[e.key] ?? const <double>[];
+        final sellSeries = allSellTick[e.key] ?? const <double>[];
+        final graySeries = allGrayTick[e.key] ?? const <double>[];
         for (var i = 0; i < bars.length; i++) {
           final row =
               byIdx.putIfAbsent(bars[i].idx, () => {'idx': bars[i].idx});
@@ -337,6 +369,10 @@ class BarFeatureLookup {
               i < series.length ? series[i] : 0.0;
           sub['buy_tick_count_${e.key}'] =
               i < buySeries.length ? buySeries[i] : 0.0;
+          sub['sell_tick_count_${e.key}'] =
+              i < sellSeries.length ? sellSeries[i] : 0.0;
+          sub['gray_tick_count_${e.key}'] =
+              i < graySeries.length ? graySeries[i] : 0.0;
         }
       }
     }
@@ -470,6 +506,10 @@ class BarFeatureLookup {
           classes.add(e.cls);
         }
       }
+      // tooltip 应显尽显：N类至少算到 9，不依赖副图勾选
+      for (var cls = 3; cls <= 9; cls++) {
+        classes.add(cls);
+      }
       for (final ind in subIndicators) {
         if (ind.kind == SubIndicatorKind.buyN && ind.bsClass != null) {
           classes.add(ind.bsClass!);
@@ -508,33 +548,20 @@ class BarFeatureLookup {
       }
     }
 
-    if (subIndicators.any((e) =>
-        e.kind == SubIndicatorKind.fractalPeakDist && e.kn == 1)) {
-      // kn=1（最低层）回退源：旧 K0连线极点距（barFeatures）
-      for (final f in barFeatures) {
-        final row = byIdx.putIfAbsent(f.idx, () => {'idx': f.idx});
-        (row['sub'] as Map<String, dynamic>)['fractal_peak_dist'] =
-            f.fractalPeakDist;
-      }
+    // 极点距：tooltip 应显尽显，全层始终计算（不依赖副图勾选）
+    for (final f in barFeatures) {
+      final row = byIdx.putIfAbsent(f.idx, () => {'idx': f.idx});
+      final sub = row.putIfAbsent('sub', () => <String, dynamic>{})
+          as Map<String, dynamic>;
+      sub['fractal_peak_dist'] = f.fractalPeakDist;
+      sub['fractal_peak_dist_1'] = f.fractalPeakDist;
     }
-
-    // Kn>=1 极点距：由该层 confirms 当步起算（与副图折线同口径；level=kn）
-    for (final ind in subIndicators) {
-      if (ind.kind != SubIndicatorKind.fractalPeakDist || ind.kn < 1) {
-        continue;
-      }
-      LevelBundle? bundle;
-      for (final lv in levels) {
-        if (lv.level == ind.kn) {
-          bundle = lv;
-          break;
-        }
-      }
-      if (bundle == null || bars.isEmpty) continue;
+    for (final bundle in levels) {
+      if (bundle.level < 1 || bars.isEmpty) continue;
       final series = _peakDistSeries(bars.length, bundle.confirms);
       for (var i = 0; i < bars.length; i++) {
         final row = byIdx.putIfAbsent(bars[i].idx, () => {'idx': bars[i].idx});
-        (row['sub'] as Map<String, dynamic>)['fractal_peak_dist_${ind.kn}'] =
+        (row['sub'] as Map<String, dynamic>)['fractal_peak_dist_${bundle.level}'] =
             series[i];
       }
     }
@@ -633,17 +660,55 @@ class BarFeatureLookup {
       ? vol.toInt().toString()
       : vol.toStringAsFixed(2);
 
+  /// VOL/笔数 B/S/G 片段（G=gray）；经 boxNumInString 后为 B【】/S【】/G【】。
+  static String _fmtBsg({required num b, required num s, required num g}) =>
+      'B${_fmtVol(b)}/S${_fmtVol(s)}/G${_fmtVol(g)}';
+
   static String _fmtOhlcv({
     required double open,
     required double high,
     required double low,
     required double close,
-    required num volume,
+    required num buyVol,
+    required num sellVol,
+    required num grayVol,
   }) {
-    return 'O${_fmtPrice(open)}/H${_fmtPrice(high)}/L${_fmtPrice(low)}/C${_fmtPrice(close)}/VOL${_fmtVol(volume)}';
+    return 'O${_fmtPrice(open)}/H${_fmtPrice(high)}/L${_fmtPrice(low)}/C${_fmtPrice(close)}'
+        '/VOL ${_fmtBsg(b: buyVol, s: sellVol, g: grayVol)}';
+  }
+
+  /// 同层类别块用 `-。-` 拼接；层末不挂尾分隔（下一层只用 ===）。
+  static List<CrosshairTooltipRow> _joinCategories(
+      List<List<CrosshairTooltipRow>> cats) {
+    final nonempty = [for (final c in cats) if (c.isNotEmpty) c];
+    final out = <CrosshairTooltipRow>[];
+    for (var i = 0; i < nonempty.length; i++) {
+      if (i > 0) out.add(const CrosshairTooltipRow.starSeparator());
+      out.addAll(nonempty[i]);
+    }
+    return out;
+  }
+
+  ({num b, num s, num g}) _volBsg(Map? sub, int kn, {num? totalFallback}) {
+    final b = (sub?['buy_volume_$kn'] as num?) ?? 0;
+    final s = (sub?['sell_volume_$kn'] as num?) ?? 0;
+    final g = (sub?['gray_volume_$kn'] as num?) ?? 0;
+    if (b == 0 && s == 0 && g == 0 && totalFallback != null) {
+      return (b: 0, s: 0, g: totalFallback);
+    }
+    return (b: b, s: s, g: g);
+  }
+
+  ({num b, num s, num g}) _tickBsg(Map? sub, int kn) {
+    return (
+      b: (sub?['buy_tick_count_$kn'] as num?) ?? 0,
+      s: (sub?['sell_tick_count_$kn'] as num?) ?? 0,
+      g: (sub?['gray_tick_count_$kn'] as num?) ?? 0,
+    );
   }
 
   /// 十字线主 tooltip 结构化行（表格渲染用）。
+  /// 应显尽显：不按副图/主图勾选过滤；层内用 `-。-`，层间只用 `===`。
   List<CrosshairTooltipRow> crosshairTooltipRows(
     int idx, {
     required String timePart,
@@ -660,18 +725,16 @@ class BarFeatureLookup {
     final high = (row['high'] as num?)?.toDouble() ?? 0;
     final low = (row['low'] as num?)?.toDouble() ?? 0;
     final close = (row['close'] as num?)?.toDouble() ?? 0;
-    // K0 的 VOL 槽：用 K0成交量序列（原生量）替换预留位
-    final subMap = row['sub'];
-    final volume = (subMap is Map && subMap['volume_0'] is num)
-        ? subMap['volume_0'] as num
-        : ((row['volume'] as num?) ?? 0);
+    final subMap = row['sub'] is Map ? row['sub'] as Map : null;
+    final vol0 = (subMap?['volume_0'] as num?) ?? ((row['volume'] as num?) ?? 0);
+    final vBsg = _volBsg(subMap, 0, totalFallback: vol0);
+    final tBsg = _tickBsg(subMap, 0);
     final combineHigh = (row['combine_high'] as num?)?.toDouble() ?? high;
     final combineLow = (row['combine_low'] as num?)?.toDouble() ?? low;
-    // GG/DD=组内原始区间极值（combine_range_*，逐K当下）；MG/MD=合并框框体高低点（row['combine']）
     final rangeHigh = (row['combine_range_high'] as num?)?.toDouble();
     final rangeLow = (row['combine_range_low'] as num?)?.toDouble();
 
-    // 原始K分型确认（=k0_confirms=levels[0].confirms；合并原始K顶/底分型，其端点连即 K0连线/K1，并被重铸为 K1Bar 供 K2）。仅 ±1 显示，截断加"(截断)"，未确认为 0，与 Kn 同口径
+    // 原始K分型确认（=k0_confirms）；仅 ±1 显示，截断加"(截断)"，未确认为 0
     var combineFxConfirm = '0';
     final k0Confirm = row['k0_confirm'];
     if (k0Confirm is Map) {
@@ -680,17 +743,38 @@ class BarFeatureLookup {
         combineFxConfirm = k0Confirm['truncated'] == true ? '$v(截断)' : '$v';
       }
     }
+    // K0分型判断：与副图 kn=1 同源
+    var combineFxJudge = '0';
+    final fx0 = subMap?['fractal_judgment_1'];
+    if (fx0 == 'TOP') {
+      combineFxJudge =
+          subMap?['fractal_judgment_trunc_1'] == true ? '-1(截断)' : '-1';
+    } else if (fx0 == 'BOTTOM') {
+      combineFxJudge =
+          subMap?['fractal_judgment_trunc_1'] == true ? '1(截断)' : '1';
+    }
 
-    final out = <CrosshairTooltipRow>[
-      CrosshairTooltipRow.kv('日期时间', '$timePart     $weekday'),
-      const CrosshairTooltipRow.separator(),
+    final k0Core = <CrosshairTooltipRow>[
       CrosshairTooltipRow.kv('K0 idx', CrosshairTooltipRow.boxNum(row['idx'])),
       CrosshairTooltipRow.kv(
         'K0',
-        CrosshairTooltipRow.boxNumInString(_fmtOhlcv(open: open, high: high, low: low, close: close, volume: volume)),
+        CrosshairTooltipRow.boxNumInString(_fmtOhlcv(
+          open: open,
+          high: high,
+          low: low,
+          close: close,
+          buyVol: vBsg.b,
+          sellVol: vBsg.s,
+          grayVol: vBsg.g,
+        )),
       ),
-      const CrosshairTooltipRow.starSeparator(),
-      // K0合并：GG/DD=组内原始区间极值（逐K当下，如向上包含时 DD=组内最低 low）；MG/MD=该合并框框体高低点
+      CrosshairTooltipRow.kv(
+        'K0笔数',
+        CrosshairTooltipRow.boxNumInString(
+            _fmtBsg(b: tBsg.b, s: tBsg.s, g: tBsg.g)),
+      ),
+    ];
+    final k0Merge = <CrosshairTooltipRow>[
       ..._mergeRows(
         label: 'K0合并',
         gg: rangeHigh ?? combineHigh,
@@ -698,27 +782,29 @@ class BarFeatureLookup {
         mg: _frameBox(row['combine'], fallback: combineHigh),
         md: _frameBox(row['combine'], fallback: combineLow, useLow: true),
       ),
-      CrosshairTooltipRow.kv('K0合并K0 idx', CrosshairTooltipRow.boxNum(mergeInner)),
-      CrosshairTooltipRow.kv('K0合并 idx', mergeBoxSeq >= 0 ? CrosshairTooltipRow.boxNum(mergeBoxSeq) : '未成框'),
-      CrosshairTooltipRow.kv('K0分型确认', CrosshairTooltipRow.boxNum(combineFxConfirm)),
-      const CrosshairTooltipRow.starSeparator(),
-      ...zsAfterK0,
+      CrosshairTooltipRow.kv(
+          'K0合并K0 idx', CrosshairTooltipRow.boxNum(mergeInner)),
+      CrosshairTooltipRow.kv('K0合并 idx',
+          mergeBoxSeq >= 0 ? CrosshairTooltipRow.boxNum(mergeBoxSeq) : '未成框'),
+      CrosshairTooltipRow.kv(
+          'K0分型确认', CrosshairTooltipRow.boxNum(combineFxConfirm)),
+      CrosshairTooltipRow.kv(
+          'K0分型判断', CrosshairTooltipRow.boxNum(combineFxJudge)),
+    ];
+    // subIndicators 参数保留兼容；显示侧忽略勾选，按层应显尽显
+    final k0Extra = _levelExtraRows(idx, 0);
+
+    final out = <CrosshairTooltipRow>[
+      CrosshairTooltipRow.kv('日期时间', '$timePart     $weekday'),
+      const CrosshairTooltipRow.separator(),
+      ..._joinCategories([
+        k0Core,
+        k0Merge,
+        zsAfterK0,
+        k0Extra,
+      ]),
       ..._levelBlockRows(idx),
     ];
-
-    final subs = crosshairSubRows(
-      idx,
-      // K0分型确认已在 K0 块；成交量已写入各层 OHLCV 的 VOL 槽——主 tooltip 底部不再重复
-      subIndicators
-          .where((e) =>
-              !(e.kind == SubIndicatorKind.fractalConfirm && e.kn == 1) &&
-              e.kind != SubIndicatorKind.volume)
-          .toSet(),
-    );
-    if (subs.isNotEmpty) {
-      out.add(const CrosshairTooltipRow.separator());
-      out.addAll(subs);
-    }
     return out;
   }
 
@@ -886,7 +972,7 @@ class BarFeatureLookup {
     return lines;
   }
 
-  /// Kn 块（K1=K0连线，K2=K1连线，…）；每层前加分隔线。
+  /// Kn 块（K1=K0连线，K2=K1连线，…）；每层前仅 `===`（不挂类别尾分隔）。
   List<CrosshairTooltipRow> _levelBlockRows(int idx) {
     final row = byIdx[idx];
     if (row == null) return const [];
@@ -896,11 +982,11 @@ class BarFeatureLookup {
     final sub = row['sub'];
     final snapList = snaps is List<LevelSnap> ? snaps : const <LevelSnap>[];
     final total = totalLevels > snapList.length ? totalLevels : snapList.length;
+    final subMap = sub is Map ? sub : null;
 
     final lines = <CrosshairTooltipRow>[];
     for (var n = 1; n <= total; n++) {
       final snap = n - 1 < snapList.length ? snapList[n - 1] : null;
-      // Kn 块「分型确认」= K(n+1) 端点确认（当步冻结）
       int? confirmVal;
       var confirmTruncated = false;
       if (confirms is Map) {
@@ -910,26 +996,21 @@ class BarFeatureLookup {
           confirmTruncated = v.truncated;
         }
       }
-      // Kn 块「分型判断」：来自副图指标 indicator Kn分型判断（展示轨确认式打点）；
-      // 照搬 分型确认 呈现（TOP→-1 / BOTTOM→+1，截断加"(截断)"，未确认为 0）
-      // 须与副图指标「K{n}分型判断」同值：副图 kn=n+1，故读 fractal_judgment_${n+1}，非低一层的 $n
       int? judgeVal;
       var judgeTruncated = false;
-      final fx = (sub is Map) ? sub['fractal_judgment_${n + 1}'] : null;
+      final fx = subMap?['fractal_judgment_${n + 1}'];
       if (fx == 'TOP') {
         judgeVal = -1;
       } else if (fx == 'BOTTOM') {
         judgeVal = 1;
       }
-      if (judgeVal != null && sub is Map) {
-        judgeTruncated = sub['fractal_judgment_trunc_${n + 1}'] == true;
+      if (judgeVal != null) {
+        judgeTruncated = subMap?['fractal_judgment_trunc_${n + 1}'] == true;
       }
-      // Kn 的 VOL 槽：用同层成交量序列替换预留位（不关心旧 unitVolume 是否对齐）
-      final knVol = (sub is Map && sub['volume_$n'] is num)
-          ? sub['volume_$n'] as num
-          : null;
+      final knVol = (subMap?['volume_$n'] as num?) ?? snap?.unitVolume;
+      final vBsg = _volBsg(subMap, n, totalFallback: knVol);
+      final tBsg = _tickBsg(subMap, n);
       lines.add(const CrosshairTooltipRow.separator());
-      // MG/MD=该层合并框框体高低点（frame box）；无框体时回退逐K当下极值
       final box = row['combine_box_$n'];
       lines.addAll(_levelBlockRowsFor(
         n,
@@ -938,11 +1019,18 @@ class BarFeatureLookup {
         confirmTruncated,
         judgeVal,
         judgeTruncated,
-        volumeOverride: knVol,
+        buyVol: vBsg.b,
+        sellVol: vBsg.s,
+        grayVol: vBsg.g,
+        buyTick: tBsg.b,
+        sellTick: tBsg.s,
+        grayTick: tBsg.g,
         combineBoxHigh: _frameBox(box, fallback: snap?.combineHigh ?? 0),
-        combineBoxLow: _frameBox(box, fallback: snap?.combineLow ?? 0, useLow: true),
+        combineBoxLow:
+            _frameBox(box, fallback: snap?.combineLow ?? 0, useLow: true),
         gg: (row['combine_range_high_$n'] as num?)?.toDouble(),
         dd: (row['combine_range_low_$n'] as num?)?.toDouble(),
+        extras: _levelExtraRows(idx, n),
       ));
     }
     return lines;
@@ -963,14 +1051,19 @@ class BarFeatureLookup {
     bool confirmTruncated,
     int? judgeVal,
     bool judgeTruncated, {
-    num? volumeOverride,
+    required num buyVol,
+    required num sellVol,
+    required num grayVol,
+    required num buyTick,
+    required num sellTick,
+    required num grayTick,
     double? combineBoxHigh,
     double? combineBoxLow,
     double? gg,
     double? dd,
+    List<CrosshairTooltipRow> extras = const [],
   }) {
     final label = 'K$n';
-    // 分型确认 / 分型判断 同一套呈现：±1(截断) / ±1 / 0（未确认）
     final confirmText = confirmVal == null
         ? '0'
         : (confirmTruncated ? '$confirmVal(截断)' : '$confirmVal');
@@ -978,51 +1071,149 @@ class BarFeatureLookup {
         ? '0'
         : (judgeTruncated ? '$judgeVal(截断)' : '$judgeVal');
 
+    final List<CrosshairTooltipRow> core;
+    final List<CrosshairTooltipRow> merge;
     if (snap == null || snap.unitIdx == null) {
-      return [
+      core = [
         CrosshairTooltipRow.kv('$label idx', '首K$n确认前'),
         CrosshairTooltipRow.kv(label, '—'),
-        const CrosshairTooltipRow.starSeparator(),
-        // 占位块与实体块同构：合并(GG/DD/MG/MD)→合并K序→合并idx→分型确认/判断
+        CrosshairTooltipRow.kv(
+          '$label笔数',
+          CrosshairTooltipRow.boxNumInString(
+              _fmtBsg(b: buyTick, s: sellTick, g: grayTick)),
+        ),
+      ];
+      merge = [
         CrosshairTooltipRow.kv('$label合并', '—'),
         CrosshairTooltipRow.kv('$label合并$label idx', '—'),
         CrosshairTooltipRow.kv('$label合并 idx', '—'),
-        CrosshairTooltipRow.kv('$label分型确认', CrosshairTooltipRow.boxNum(confirmText)),
-        CrosshairTooltipRow.kv('$label分型判断', CrosshairTooltipRow.boxNum(judgeText)),
-        const CrosshairTooltipRow.starSeparator(),
-        ...knZsAfterKn[n] ?? const [],
+        CrosshairTooltipRow.kv(
+            '$label分型确认', CrosshairTooltipRow.boxNum(confirmText)),
+        CrosshairTooltipRow.kv(
+            '$label分型判断', CrosshairTooltipRow.boxNum(judgeText)),
+      ];
+    } else {
+      core = [
+        CrosshairTooltipRow.kv(
+            '$label idx', CrosshairTooltipRow.boxNum(snap.unitIdx)),
+        CrosshairTooltipRow.kv(
+          label,
+          CrosshairTooltipRow.boxNumInString(_fmtOhlcv(
+            open: snap.unitOpen,
+            high: snap.unitHigh,
+            low: snap.unitLow,
+            close: snap.unitClose,
+            buyVol: buyVol,
+            sellVol: sellVol,
+            grayVol: grayVol,
+          )),
+        ),
+        CrosshairTooltipRow.kv(
+          '$label笔数',
+          CrosshairTooltipRow.boxNumInString(
+              _fmtBsg(b: buyTick, s: sellTick, g: grayTick)),
+        ),
+      ];
+      merge = [
+        ..._mergeRows(
+          label: '$label合并',
+          gg: gg ?? snap.combineHigh,
+          dd: dd ?? snap.combineLow,
+          mg: combineBoxHigh ?? snap.combineHigh,
+          md: combineBoxLow ?? snap.combineLow,
+        ),
+        CrosshairTooltipRow.kv('$label合并$label idx',
+            CrosshairTooltipRow.boxNum(snap.mergeInnerSeq)),
+        CrosshairTooltipRow.kv(
+            '$label合并 idx',
+            snap.mergeBoxSeq >= 0
+                ? CrosshairTooltipRow.boxNum(snap.mergeBoxSeq)
+                : '未成框'),
+        CrosshairTooltipRow.kv(
+            '$label分型确认', CrosshairTooltipRow.boxNum(confirmText)),
+        CrosshairTooltipRow.kv(
+            '$label分型判断', CrosshairTooltipRow.boxNum(judgeText)),
       ];
     }
 
-    return [
-      CrosshairTooltipRow.kv('$label idx', CrosshairTooltipRow.boxNum(snap.unitIdx)),
-      CrosshairTooltipRow.kv(
-        label,
-        CrosshairTooltipRow.boxNumInString(_fmtOhlcv(
-          open: snap.unitOpen,
-          high: snap.unitHigh,
-          low: snap.unitLow,
-          close: snap.unitClose,
-          // 预留 VOL 槽：优先用 Kn成交量序列，否则回退 unitVolume
-          volume: volumeOverride ?? snap.unitVolume,
-        )),
-      ),
-      const CrosshairTooltipRow.starSeparator(),
-      // 顺序与 K0 块同构：合并(GG/DD/MG/MD)→合并K序→合并idx→分型确认/判断
-      ..._mergeRows(
-        label: '$label合并',
-        gg: gg ?? snap.combineHigh,
-        dd: dd ?? snap.combineLow,
-        mg: combineBoxHigh ?? snap.combineHigh,
-        md: combineBoxLow ?? snap.combineLow,
-      ),
-      CrosshairTooltipRow.kv('$label合并$label idx', CrosshairTooltipRow.boxNum(snap.mergeInnerSeq)),
-      CrosshairTooltipRow.kv('$label合并 idx', snap.mergeBoxSeq >= 0 ? CrosshairTooltipRow.boxNum(snap.mergeBoxSeq) : '未成框'),
-      CrosshairTooltipRow.kv('$label分型确认', CrosshairTooltipRow.boxNum(confirmText)),
-      CrosshairTooltipRow.kv('$label分型判断', CrosshairTooltipRow.boxNum(judgeText)),
-      const CrosshairTooltipRow.starSeparator(),
-      ...knZsAfterKn[n] ?? const [],
-    ];
+    return _joinCategories([
+      core,
+      merge,
+      knZsAfterKn[n] ?? const [],
+      extras,
+    ]);
+  }
+
+  /// 某显示层的其它特征行（极点距/截断/BS/比例/节奏）；应显尽显，缺省写 0。
+  /// 成交量/笔数/分型确认/判断已在层内主槽，此处不再重复。
+  List<CrosshairTooltipRow> _levelExtraRows(int idx, int displayKn) {
+    final row = byIdx[idx];
+    if (row == null) return const [];
+    final sub = row['sub'] is Map ? row['sub'] as Map : null;
+    final out = <CrosshairTooltipRow>[];
+
+    void addKv(String label, String value) {
+      out.add(CrosshairTooltipRow.kv(label, value));
+    }
+
+    // 分型极点距 / 截断：副图 internal kn = displayKn+1
+    final peakKn = displayKn + 1;
+    dynamic peak = sub == null ? null : sub['fractal_peak_dist_$peakKn'];
+    if (peak == null && peakKn == 1 && sub != null) {
+      peak = sub['fractal_peak_dist'];
+    }
+    addKv('K$displayKn分型极点距', CrosshairTooltipRow.boxNum(peak ?? 0));
+
+    dynamic truncV;
+    final confirms = row['level_confirms'];
+    if (confirms is Map && confirms.containsKey(peakKn)) {
+      final c = confirms[peakKn];
+      if (c is LevelConfirm && c.truncated) {
+        truncV = c.value;
+      } else if (c is Map && c['truncated'] == true) {
+        truncV = c['value'];
+      }
+    } else if (peakKn == 1) {
+      final bc = row['k0_confirm'];
+      if (bc is Map && bc['truncated'] == true) truncV = bc['value'];
+    }
+    addKv('K$displayKn截断', CrosshairTooltipRow.boxNum(truncV ?? 0));
+
+    String bsVal(dynamic buy, dynamic sell) {
+      if (buy == null && sell == null) return '0';
+      final parts = <String>[
+        if (buy != null) '$buy',
+        if (sell != null) '$sell',
+      ];
+      return parts.join(' ');
+    }
+
+    addKv(
+      'K$displayKn一类BS',
+      bsVal(sub?['buy1_$displayKn'], sub?['sell1_$displayKn']),
+    );
+    addKv(
+      'K$displayKn二类BS',
+      bsVal(sub?['buy2_$displayKn'], sub?['sell2_$displayKn']),
+    );
+    for (var cls = 3; cls <= 9; cls++) {
+      addKv(
+        'K$displayKn${bsClassChinese(cls)}类BS',
+        bsVal(sub?['buyN_${displayKn}_$cls'], sub?['sellN_${displayKn}_$cls']),
+      );
+    }
+
+    // 相邻比例 / 步进节奏：catalog 到 maxKn-1；最高层仍占位 0
+    final ar = sub?['adjacent_ratio_$displayKn'];
+    addKv(
+      'K$displayKn相邻比例',
+      ar is num ? ar.toStringAsFixed(3) : '0',
+    );
+    addKv(
+      'K$displayKn步进节奏',
+      '${sub?['step_rhythm_$displayKn'] ?? '0'}',
+    );
+    return out;
   }
 
   /// 合并行：GG/DD=组内原始区间极值（原始K高低 max/min，逐K当下、无未来函数）；MG/MD=合并框框体高低点（M=merge）。

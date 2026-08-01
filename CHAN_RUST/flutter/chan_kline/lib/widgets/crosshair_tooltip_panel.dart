@@ -74,7 +74,8 @@ class CrosshairTooltipPanel extends StatelessWidget {
                           child: Text(
                             row.isSeparator
                                 ? '=' * _sepRepeat
-                                : '。-。' * _sepRepeat,
+                                // 类别分隔与 flat 同源：-。-。-。-。-
+                                : '-。-' * _sepRepeat,
                             style: _sepStyle,
                             maxLines: 1,
                             softWrap: false,

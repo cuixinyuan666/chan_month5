@@ -677,9 +677,14 @@ class _KlineChartState extends State<KlineChart> {
         ? _crosshairAsOfIdx()
         : null;
     final asOfBundle = _bundleForZsAsOf(asOf);
+    // tooltip 应显尽显：中枢不按主图勾选过滤，按 maxKn 全层输出
+    final maxKn = chartMaxKn(levels: widget.levels, k0Lines: widget.k0Lines);
+    final allZs = buildMainIndicatorCatalog(maxKn)
+        .where((e) => e.kind == MainIndicatorKind.zs)
+        .toSet();
     final zsRows = zsCrosshairTooltipRows(
       asOfIdx: bar.idx,
-      mainIndicators: _drawnMains,
+      mainIndicators: allZs,
       combineFrames: widget.combineFrames,
       levels: widget.levels,
       barFeatures: widget.barFeatures,
@@ -691,16 +696,18 @@ class _KlineChartState extends State<KlineChart> {
     );
     final k0Zs = zsRows.where((r) => r.label.startsWith('K0中枢')).toList();
     final knZs = <int, List<CrosshairTooltipRow>>{};
-    for (final ind in _drawnMains) {
-      if (ind.kind != MainIndicatorKind.zs) {
-        continue;
-      }
+    for (final ind in allZs) {
       if (ind.kn <= 0) continue;
       final prefix = 'K${ind.kn}中枢';
       final part = zsRows.where((r) => r.label.startsWith(prefix)).toList();
       if (part.isEmpty) continue;
       knZs[ind.kn] = [...(knZs[ind.kn] ?? []), ...part];
     }
+    // 副图计算全 catalog 喂入（tooltip 不按勾选门控）
+    final allSubs = buildSubIndicatorCatalog(
+      maxKn,
+      truncationCheck: widget.truncationCheck,
+    ).toSet();
     final lookup = BarFeatureLookup.build(
       bars: widget.bars,
       // K0合并框体用 as-of 重建（十字线当下性；MG/MD 框体高低点与主图框同源）
@@ -718,7 +725,7 @@ class _KlineChartState extends State<KlineChart> {
       sellNHistoryByKn: widget.sellNHistoryByKn,
       adjacentRatioHistoryByKn: widget.adjacentRatioHistoryByKn,
       stepRhythmHistoryByKn: widget.stepRhythmHistoryByKn,
-      subIndicators: _drawnSubs,
+      subIndicators: allSubs,
       truncationCheck: widget.truncationCheck,
       judgmentHistoryByKn: widget.judgmentHistoryByKn,
       asOf: asOf,
@@ -728,7 +735,7 @@ class _KlineChartState extends State<KlineChart> {
     final out = lookup.crosshairTooltipRows(
       bar.idx,
       timePart: timePart,
-      subIndicators: _drawnSubs,
+      subIndicators: allSubs,
     );
     return out;
   }

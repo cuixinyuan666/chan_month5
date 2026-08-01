@@ -8,6 +8,7 @@ List<double> computeK0VolumeSeries(List<KlineBar> bars) {
 }
 
 /// K0 buy volume: 从 chip_tick_bins 或 tick_side 估算买入量。
+/// 副图叠柱仍用「买 vs 非买」；tooltip B/S/G 三分解见 [computeK0VolumeBsgSeries]。
 List<double> computeK0BuyVolumeSeries(List<KlineBar> bars) {
   double buyVol(KlineBar b) {
     final bins = b.metrics['chip_tick_bins'];
@@ -24,6 +25,43 @@ List<double> computeK0BuyVolumeSeries(List<KlineBar> bars) {
   }
   return [for (final b in bars) buyVol(b)];
 }
+
+/// K0 成交量 B/S/G 三分解（G=gray/灰度）；有 bins 时按 b+s+w 占比分 volume，否则按 tick_side；无方向则全归 G。
+List<({double b, double s, double g})> computeK0VolumeBsgSeries(
+    List<KlineBar> bars) {
+  return [for (final bar in bars) _k0VolumeBsg(bar)];
+}
+
+({double b, double s, double g}) _k0VolumeBsg(KlineBar bar) {
+  final bins = bar.metrics['chip_tick_bins'];
+  if (bins is Map) {
+    final bQty = _sumBins(bins['b']);
+    final sQty = _sumBins(bins['s']);
+    final wQty = _sumBins(bins['w']);
+    final total = bQty + sQty + wQty;
+    if (total > 0) {
+      return (
+        b: bar.volume * bQty / total,
+        s: bar.volume * sQty / total,
+        g: bar.volume * wQty / total,
+      );
+    }
+  }
+  final side = bar.metrics['tick_side'];
+  if (side == 'B') return (b: bar.volume, s: 0, g: 0);
+  if (side == 'S') return (b: 0, s: bar.volume, g: 0);
+  return (b: 0, s: 0, g: bar.volume);
+}
+
+List<double> computeK0SellVolumeSeries(List<KlineBar> bars) =>
+    [for (final e in computeK0VolumeBsgSeries(bars)) e.s];
+
+List<double> computeK0GrayVolumeSeries(List<KlineBar> bars) =>
+    [for (final e in computeK0VolumeBsgSeries(bars)) e.g];
+
+/// tooltip 用买入量（与 B/S/G 同源三分解的 B，可与副图 buy 略异）。
+List<double> computeK0BuyVolumeBsgSeries(List<KlineBar> bars) =>
+    [for (final e in computeK0VolumeBsgSeries(bars)) e.b];
 
 double _sumBins(dynamic binData) {
   if (binData is List) {
@@ -76,6 +114,45 @@ List<double> computeK0BuyTickCountSeries(List<KlineBar> bars) {
     return 0;
   }
   return [for (final b in bars) buyTick(b)];
+}
+
+/// K0 卖出笔数：优先 metrics.sell_tick_count；回退 bins['s'] 长度 / tick_side。
+List<double> computeK0SellTickCountSeries(List<KlineBar> bars) {
+  double sellTick(KlineBar b) {
+    final m = b.metrics['sell_tick_count'];
+    if (m is num) return m.toDouble();
+    final bins = b.metrics['chip_tick_bins'];
+    if (bins is Map) {
+      final sLen = _listLen(bins['s']);
+      if (sLen > 0) return sLen.toDouble();
+    }
+    final side = b.metrics['tick_side'];
+    if (side == 'S') return 1;
+    return 0;
+  }
+  return [for (final b in bars) sellTick(b)];
+}
+
+/// K0 灰笔数：优先 bins['w']；否则 total−buy−sell（夹到 ≥0）。
+List<double> computeK0GrayTickCountSeries(List<KlineBar> bars) {
+  final total = computeK0TickCountSeries(bars);
+  final buy = computeK0BuyTickCountSeries(bars);
+  final sell = computeK0SellTickCountSeries(bars);
+  final out = <double>[];
+  for (var i = 0; i < bars.length; i++) {
+    final bins = bars[i].metrics['chip_tick_bins'];
+    if (bins is Map) {
+      final wLen = _listLen(bins['w']);
+      if (wLen > 0 ||
+          _listLen(bins['b']) + _listLen(bins['s']) + wLen > 0) {
+        out.add(wLen.toDouble());
+        continue;
+      }
+    }
+    final g = total[i] - buy[i] - sell[i];
+    out.add(g > 0 ? g : 0);
+  }
+  return out;
 }
 
 int _listLen(dynamic binData) {
@@ -138,6 +215,45 @@ Map<int, List<double>> computeAllKnBuyVolumeSeries({
   );
 }
 
+/// All Kn tooltip 用买入量（B/S/G 三分解的 B）。
+Map<int, List<double>> computeAllKnBuyVolumeBsgSeries({
+  required List<KlineBar> bars,
+  required List<LevelBundle> levels,
+  List<BarCrosshairFeature> barFeatures = const [],
+}) {
+  return _computeAllKnFromK0(
+    k0Series: computeK0BuyVolumeBsgSeries(bars),
+    levels: levels,
+    bars: bars,
+  );
+}
+
+/// All Kn 卖出量系列（tooltip B/S/G）。
+Map<int, List<double>> computeAllKnSellVolumeSeries({
+  required List<KlineBar> bars,
+  required List<LevelBundle> levels,
+  List<BarCrosshairFeature> barFeatures = const [],
+}) {
+  return _computeAllKnFromK0(
+    k0Series: computeK0SellVolumeSeries(bars),
+    levels: levels,
+    bars: bars,
+  );
+}
+
+/// All Kn 灰量系列（tooltip G）。
+Map<int, List<double>> computeAllKnGrayVolumeSeries({
+  required List<KlineBar> bars,
+  required List<LevelBundle> levels,
+  List<BarCrosshairFeature> barFeatures = const [],
+}) {
+  return _computeAllKnFromK0(
+    k0Series: computeK0GrayVolumeSeries(bars),
+    levels: levels,
+    bars: bars,
+  );
+}
+
 /// All Kn 总笔数系列（key = display kn: 0=K0, 1=K1, ...）。
 Map<int, List<double>> computeAllKnTickCountSeries({
   required List<KlineBar> bars,
@@ -159,6 +275,32 @@ Map<int, List<double>> computeAllKnBuyTickCountSeries({
 }) {
   return _computeAllKnFromK0(
     k0Series: computeK0BuyTickCountSeries(bars),
+    levels: levels,
+    bars: bars,
+  );
+}
+
+/// All Kn 卖出笔数系列（tooltip B/S/G）。
+Map<int, List<double>> computeAllKnSellTickCountSeries({
+  required List<KlineBar> bars,
+  required List<LevelBundle> levels,
+  List<BarCrosshairFeature> barFeatures = const [],
+}) {
+  return _computeAllKnFromK0(
+    k0Series: computeK0SellTickCountSeries(bars),
+    levels: levels,
+    bars: bars,
+  );
+}
+
+/// All Kn 灰笔数系列（tooltip G）。
+Map<int, List<double>> computeAllKnGrayTickCountSeries({
+  required List<KlineBar> bars,
+  required List<LevelBundle> levels,
+  List<BarCrosshairFeature> barFeatures = const [],
+}) {
+  return _computeAllKnFromK0(
+    k0Series: computeK0GrayTickCountSeries(bars),
     levels: levels,
     bars: bars,
   );

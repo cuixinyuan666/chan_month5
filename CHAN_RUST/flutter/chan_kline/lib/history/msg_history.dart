@@ -640,6 +640,20 @@ class MsgHistory {
     );
   }
 
+  /// tooltip VOL/笔数 B/S/G + 应显尽显槽位（进程内去重）。
+  static bool _tooltipVolBsgLogged = false;
+  void appendTooltipVolBsgAndSlots() {
+    if (_tooltipVolBsgLogged) return;
+    _tooltipVolBsgLogged = true;
+    append(
+      '【tooltip VOL/笔数 B/S/G·应显尽显·2026-08-02】'
+      '各层 OHLCV 的 VOL 改为 B/S/G（G=gray/灰度）；Kn笔数同行式 B/S/G，与副图同源累加。'
+      '十字信息不按主/副图勾选过滤，按层（===）与类别（-。-。-。-。-）固定槽位应显尽显；'
+      '类别块之后若是下一层级则只保留 ===，不挂类别尾分隔。'
+      '层内序：价量笔→合并/分型→中枢→极点距/截断/BS/比例/节奏。',
+    );
+  }
+
   /// 运行时虚线摘要（内容变才追加；复制历史记录排查用）。
   void appendDisplayBuildingLinesRuntime({
     required int kn,

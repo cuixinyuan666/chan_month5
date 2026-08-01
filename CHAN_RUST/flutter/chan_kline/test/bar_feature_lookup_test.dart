@@ -188,8 +188,8 @@ void main() {
     );
   });
 
-  test('tooltip OHLCV 的 VOL 槽用 Kn成交量序列，不追加底部成交量行', () {
-    final bars = _bars(4); // vol = 100,101,102,103
+  test('tooltip OHLCV 的 VOL 槽为 B/S/G，并含笔数行；不按副图勾选门控', () {
+    final bars = _bars(4); // vol = 100,101,102,103；无 tick → 全归 G
     final feats = [for (var i = 0; i < 4; i++) _feat(i, unitIdx: 0)];
     final lookup = BarFeatureLookup.build(
       bars: bars,
@@ -204,15 +204,81 @@ void main() {
           ],
         ),
       ],
-      subIndicators: {
-        const SubChartIndicator.volume(0),
-        const SubChartIndicator.volume(1),
-      },
+      // 故意不勾选任何副图——仍应显尽显
+      subIndicators: const {},
     );
-    // 确认前最后一根：K0=原生102；K1 累加 0..2 = 303
     final lines = lookup.crosshairTooltipLines(2, timePart: 't');
-    expect(lines.any((l) => l.startsWith('K0:') && l.contains('VOL【102】')), isTrue);
-    expect(lines.any((l) => l.startsWith('K1:') && l.contains('VOL【303】')), isTrue);
+    // 无 chip_tick_bins：B=0/S=0/G=总量；K0=102，K1 累加 0..2=303
+    expect(
+      lines.any((l) =>
+          l.startsWith('K0:') && l.contains('VOL B【0】/S【0】/G【102】')),
+      isTrue,
+    );
+    expect(
+      lines.any((l) =>
+          l.startsWith('K1:') && l.contains('VOL B【0】/S【0】/G【303】')),
+      isTrue,
+    );
+    expect(lines.any((l) => l.startsWith('K0笔数:')), isTrue);
+    expect(lines.any((l) => l.startsWith('K1笔数:')), isTrue);
+    expect(lines.any((l) => l.startsWith('K0一类BS:')), isTrue);
     expect(lines.any((l) => l.contains('成交量')), isFalse);
+    // 类别之后若下一层：只见 ===，不见 star 紧贴 ===
+    final sep = '===============================';
+    final star = '-。-。-。-。-。-。-。-。-。-';
+    for (var i = 1; i < lines.length; i++) {
+      if (lines[i] == sep) {
+        expect(lines[i - 1], isNot(star),
+            reason: '层切换前不应挂类别尾分隔');
+      }
+    }
+  });
+
+  test('tooltip VOL B/S/G 按 chip_tick_bins 三分解', () {
+    final bars = [
+      KlineBar(
+        idx: 0,
+        timeMs: 0,
+        timeText: 't0',
+        open: 10,
+        high: 10,
+        low: 10,
+        close: 10,
+        volume: 100,
+        amount: 1,
+        metrics: {
+          'chip_tick_bins': {
+            'b': [30.0],
+            's': [50.0],
+            'w': [20.0],
+          },
+          'tick_count': 3,
+          'buy_tick_count': 1,
+          'sell_tick_count': 1,
+        },
+      ),
+    ];
+    final lookup = BarFeatureLookup.build(
+      bars: bars,
+      combineFrames: const [],
+      k0Confirms: const [],
+      barFeatures: [
+        BarCrosshairFeature(idx: 0, weekday: '周一', mergeInnerSeq: 0),
+      ],
+    );
+    final lines = lookup.crosshairTooltipLines(0, timePart: 't0');
+    expect(
+      lines.any((l) =>
+          l.startsWith('K0:') && l.contains('VOL B【30】/S【50】/G【20】')),
+      isTrue,
+    );
+    expect(
+      lines.any((l) => l == 'K0笔数:B【1】/S【1】/G【1】' ||
+          (l.startsWith('K0笔数:') &&
+              l.contains('B【1】') &&
+              l.contains('S【1】') &&
+              l.contains('G【1】'))),
+      isTrue,
+    );
   });
 }

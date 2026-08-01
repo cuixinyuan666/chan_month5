@@ -2,6 +2,17 @@
 
 > 口径/行为变更记录（复制排查用）；与 `lib/history/msg_history.dart` 常驻历史同步维护。
 
+## 2026-08-02 tooltip VOL/笔数 B/S/G + 应显尽显槽位
+
+- **需求**：各层 VOL 分 B/S/G（G=gray）；笔数同设计；`-。-` 分类别、`===` 分层；不按指标勾选过滤；类别后接下一层时只留 `===`。
+- **变更**：
+  - `kn_volume_series_compute.dart`：K0/Kn 成交量与笔数 B/S/G 序列（bins 三分解 / metrics 笔数）。
+  - `bar_feature_lookup.dart`：OHLCV→`VOL B/S/G`，新增 `Kn笔数`；层内 `_joinCategories`；层末不挂 star；极点距/截断/BS/比例/节奏固定槽位。
+  - `kline_chart.dart`：tooltip 中枢/副图计算喂全 catalog。
+  - `crosshair_tooltip_panel.dart`：类别分隔改为 `-。-` 重复。
+- **口径**：无 tick 数据时量全归 G；有 bins 时按 b+s+w 占比分 volume。
+- **验证**：`bar_feature_lookup_test` 覆盖 B/S/G、笔数、无勾选仍显、层前无 star。
+
 ## 2026-08-02 经验汇总（GG/DD 口径 + 切周期重载 + DLL 占用）
 
 - **合并 GG/DD ≠ 框体高低**：Rust `MergeEngine` 向上合并取「高高/高低」，框体低点会被抬高；tooltip 的 GG/DD 必须在合并组内按原始K（Kn 用当步单元）重算 max(high)/min(low)。框体高低点只配 MG/MD。勿再把 `combine_high/low` 当 GG/DD。

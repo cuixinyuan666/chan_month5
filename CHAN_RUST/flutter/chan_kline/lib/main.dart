@@ -104,6 +104,8 @@ Future<void> main() async {
   MsgHistory.instance.appendTooltipFormatting();
   // 合并 GG/DD 口径修正：GG/DD=组内原始区间极值，MG/MD=合并框框体高低点
   MsgHistory.instance.appendMergeRangeExtreme();
+  // tooltip VOL/笔数 B/S/G + 应显尽显槽位（不按指标勾选）
+  MsgHistory.instance.appendTooltipVolBsgAndSlots();
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     await windowManager.ensureInitialized();
     const opts = WindowOptions(
