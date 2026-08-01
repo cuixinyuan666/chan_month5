@@ -97,6 +97,7 @@ class _SubIndicatorPickerDialogState extends State<_SubIndicatorPickerDialog> {
 
   List<Widget> _buildTiles() {
     final tiles = <Widget>[];
+    // 最上：Kn指标层全选（按层快速选/取消）
     final levels = subDisplayLevels(widget.available);
     for (final lv in levels) {
       final members = subIndicatorsForLevel(lv, widget.available);
@@ -124,19 +125,40 @@ class _SubIndicatorPickerDialogState extends State<_SubIndicatorPickerDialog> {
       );
     }
 
-    int? prevDisplay;
+    // 按类别分组
+    SubIndicatorKind? prevKind;
     for (final item in widget.available) {
-      // 按显示层分隔，使相邻比例/步进节奏落在对应 Kn 组内
-      if (prevDisplay != null && prevDisplay != item.displayLevel) {
+      if (prevKind != null && prevKind != item.kind) {
         tiles.add(
-          const Divider(
-            height: 16,
-            thickness: 1,
-            color: Color(0x44FFFFFF),
+          Container(
+            padding: const EdgeInsets.only(top: 10, bottom: 2),
+            child: Text(
+              item.kind.categoryLabel,
+              style: const TextStyle(
+                color: Color(0xFF42A5F5),
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+        );
+      } else if (prevKind == null) {
+        // 第一个类别前加标题
+        tiles.add(
+          Container(
+            padding: const EdgeInsets.only(top: 4, bottom: 2),
+            child: Text(
+              item.kind.categoryLabel,
+              style: const TextStyle(
+                color: Color(0xFF42A5F5),
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
           ),
         );
       }
-      prevDisplay = item.displayLevel;
+      prevKind = item.kind;
       tiles.add(
         CheckboxListTile(
           dense: true,

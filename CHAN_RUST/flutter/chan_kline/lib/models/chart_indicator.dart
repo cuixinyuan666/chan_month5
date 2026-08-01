@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 import 'k0_line.dart';
 import 'level_models.dart';
 
@@ -11,6 +9,39 @@ enum MainIndicatorKind {
   zs,
   /// Kn筹码分布（主图右侧水平柱；全层同构）
   chip,
+}
+
+/// 主图指标类别元数据。
+extension MainIndicatorKindMeta on MainIndicatorKind {
+  String get categoryLabel {
+    switch (this) {
+      case MainIndicatorKind.kn:
+        return 'K线';
+      case MainIndicatorKind.combine:
+        return '合并';
+      case MainIndicatorKind.zs:
+        return '中枢';
+      case MainIndicatorKind.line:
+        return '连线';
+      case MainIndicatorKind.chip:
+        return '筹码分布';
+    }
+  }
+
+  int get categoryOrder {
+    switch (this) {
+      case MainIndicatorKind.kn:
+        return 0;
+      case MainIndicatorKind.combine:
+        return 1;
+      case MainIndicatorKind.zs:
+        return 2;
+      case MainIndicatorKind.line:
+        return 3;
+      case MainIndicatorKind.chip:
+        return 4;
+    }
+  }
 }
 
 /// 主图一项指标（按加载后 maxKn 动态生成）。
@@ -94,6 +125,59 @@ enum SubIndicatorKind {
   adjacentRatio,
   /// Kn步进节奏副图（旧 step_rhythm；与 Kn连线同号；动态计算）
   stepRhythm,
+}
+
+/// 副图指标类别元数据。
+extension SubIndicatorKindMeta on SubIndicatorKind {
+  String get categoryLabel {
+    switch (this) {
+      case SubIndicatorKind.volume:
+        return '成交量';
+      case SubIndicatorKind.fractalConfirm:
+        return '分型确认';
+      case SubIndicatorKind.fractalJudgment:
+        return '分型判断';
+      case SubIndicatorKind.fractalPeakDist:
+        return '分型极点距';
+      case SubIndicatorKind.truncation:
+        return '截断';
+      case SubIndicatorKind.buy1:
+        return '一类BS';
+      case SubIndicatorKind.buy2:
+        return '二类BS';
+      case SubIndicatorKind.buyN:
+        return 'N类BS';
+      case SubIndicatorKind.adjacentRatio:
+        return '相邻比例';
+      case SubIndicatorKind.stepRhythm:
+        return '步进节奏';
+    }
+  }
+
+  int get categoryOrder {
+    switch (this) {
+      case SubIndicatorKind.volume:
+        return 0;
+      case SubIndicatorKind.fractalConfirm:
+        return 1;
+      case SubIndicatorKind.fractalJudgment:
+        return 2;
+      case SubIndicatorKind.fractalPeakDist:
+        return 3;
+      case SubIndicatorKind.truncation:
+        return 4;
+      case SubIndicatorKind.buy1:
+        return 5;
+      case SubIndicatorKind.buy2:
+        return 6;
+      case SubIndicatorKind.buyN:
+        return 7;
+      case SubIndicatorKind.adjacentRatio:
+        return 8;
+      case SubIndicatorKind.stepRhythm:
+        return 9;
+    }
+  }
 }
 
 /// 类号中文（副图命名：三类/四类…）
@@ -225,31 +309,27 @@ List<MainChartIndicator> buildMainIndicatorCatalog(int maxKn) {
   final out = <MainChartIndicator>[];
   final combineMax = maxKn < 1 ? 1 : maxKn;
   final knMax = maxKn < 1 ? 1 : maxKn;
-  // 按显示层交错：Kn→合并→中枢→连线→筹码（与 chip/层全选同构）
-  final maxDisplay = math.max(knMax - 1, maxKn);
-  for (var d = 0; d <= maxDisplay; d++) {
-    if (d + 1 <= knMax) {
-      out.add(MainChartIndicator.kn(d + 1));
-    }
-    if (d + 1 <= combineMax) {
-      out.add(MainChartIndicator.combine(d + 1));
-    }
-    if (d <= maxKn) {
-      out.add(MainChartIndicator.zs(d));
-    }
-    if (d + 1 <= maxKn) {
-      out.add(MainChartIndicator.line(d + 1));
-    }
-    // 筹码与中枢同层同号（K0..Kn）
-    if (d <= maxKn) {
-      out.add(MainChartIndicator.chip(d));
-    }
+  // 按类别分组：K线 → 合并 → 中枢 → 连线 → 筹码分布
+  for (var d = 1; d <= knMax; d++) {
+    out.add(MainChartIndicator.kn(d));
+  }
+  for (var d = 1; d <= combineMax; d++) {
+    out.add(MainChartIndicator.combine(d));
+  }
+  for (var d = 0; d <= maxKn; d++) {
+    out.add(MainChartIndicator.zs(d));
+  }
+  for (var d = 1; d <= maxKn; d++) {
+    out.add(MainChartIndicator.line(d));
+  }
+  for (var d = 0; d <= maxKn; d++) {
+    out.add(MainChartIndicator.chip(d));
   }
   return out;
 }
 
 /// 副图 catalog；[maxBsClass] 默认至少 9，数据更高时调用方传入扩大。
-/// 按显示层交错生成，保证「Kn相邻比例 / Kn步进节奏」落在对应「Kn指标」层内。
+/// 按类别分组：成交量 → 分型确认 → 分型判断 → 分型极点距 → 截断 → 一类BS → 二类BS → N类BS → 相邻比例 → 步进节奏。
 List<SubChartIndicator> buildSubIndicatorCatalog(
   int maxKn, {
   bool truncationCheck = true,
@@ -257,29 +337,50 @@ List<SubChartIndicator> buildSubIndicatorCatalog(
 }) {
   final out = <SubChartIndicator>[];
   final hi = maxBsClass < 3 ? 3 : maxBsClass;
-  // 显示层覆盖：成交量/BS 到 maxKn；分型类到 maxKn-1；相邻比例/节奏到 maxKn-1
-  final maxDisplay = maxKn;
-  for (var d = 0; d <= maxDisplay; d++) {
+  final maxD = maxKn;
+  // 成交量 (0..maxKn)
+  for (var d = 0; d <= maxD; d++) {
     out.add(SubChartIndicator.volume(d));
-    // 分型类内部 kn = displayLevel+1，且仅当 maxKn>=1
-    if (d + 1 <= maxKn) {
-      out.add(SubChartIndicator.fractalConfirm(d + 1));
-      out.add(SubChartIndicator.fractalJudgment(d + 1));
-      out.add(SubChartIndicator.fractalPeakDist(d + 1));
-      if (truncationCheck) {
-        out.add(SubChartIndicator.truncation(d + 1));
-      }
+  }
+  // 分型确认 (1..maxKn, internal kn)
+  for (var d = 1; d <= maxKn; d++) {
+    out.add(SubChartIndicator.fractalConfirm(d));
+  }
+  // 分型判断 (1..maxKn)
+  for (var d = 1; d <= maxKn; d++) {
+    out.add(SubChartIndicator.fractalJudgment(d));
+  }
+  // 分型极点距 (1..maxKn)
+  for (var d = 1; d <= maxKn; d++) {
+    out.add(SubChartIndicator.fractalPeakDist(d));
+  }
+  // 截断 (1..maxKn)
+  if (truncationCheck) {
+    for (var d = 1; d <= maxKn; d++) {
+      out.add(SubChartIndicator.truncation(d));
     }
+  }
+  // 一类BS (0..maxKn)
+  for (var d = 0; d <= maxD; d++) {
     out.add(SubChartIndicator.buy1(d));
+  }
+  // 二类BS (0..maxKn)
+  for (var d = 0; d <= maxD; d++) {
     out.add(SubChartIndicator.buy2(d));
+  }
+  // N类BS (0..maxKn, cls 3..hi)
+  for (var d = 0; d <= maxD; d++) {
     for (var cls = 3; cls <= hi; cls++) {
       out.add(SubChartIndicator.buyN(d, cls));
     }
-    // 相邻比例 / 步进节奏：与 Kn连线同号（显示层 0..maxKn-1）
-    if (d < maxKn) {
-      out.add(SubChartIndicator.adjacentRatio(d));
-      out.add(SubChartIndicator.stepRhythm(d));
-    }
+  }
+  // 相邻比例 (0..maxKn-1)
+  for (var d = 0; d < maxKn; d++) {
+    out.add(SubChartIndicator.adjacentRatio(d));
+  }
+  // 步进节奏 (0..maxKn-1)
+  for (var d = 0; d < maxKn; d++) {
+    out.add(SubChartIndicator.stepRhythm(d));
   }
   return out;
 }

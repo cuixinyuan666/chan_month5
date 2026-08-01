@@ -1334,12 +1334,10 @@ class _KlineChartState extends State<KlineChart> {
                           .where(_activeMains.contains)
                           .toList()
                         ..sort((a, b) {
-                          final c =
-                              a.displayLevel.compareTo(b.displayLevel);
+                          final c = a.kind.categoryOrder
+                              .compareTo(b.kind.categoryOrder);
                           if (c != 0) return c;
-                          // 同层：Kn→合并→中枢→连线
-                          return a.kindOrderInLevel
-                              .compareTo(b.kindOrderInLevel);
+                          return a.kn.compareTo(b.kn);
                         });
                       return [
                         for (final e in list)
@@ -1376,12 +1374,10 @@ class _KlineChartState extends State<KlineChart> {
                             .where(_activeSubs.contains)
                             .toList()
                           ..sort((a, b) {
-                            final c =
-                                a.displayLevel.compareTo(b.displayLevel);
+                            final c = a.kind.categoryOrder
+                                .compareTo(b.kind.categoryOrder);
                             if (c != 0) return c;
-                            return _subCatalog
-                                .indexOf(a)
-                                .compareTo(_subCatalog.indexOf(b));
+                            return a.kn.compareTo(b.kn);
                           });
                         return [
                           for (final e in list)
