@@ -141,9 +141,9 @@ extension SubIndicatorKindMeta on SubIndicatorKind {
       case SubIndicatorKind.buyN:
         return 'N类BS';
       case SubIndicatorKind.adjacentRatio:
-        return '相邻比例';
+        return '比例';
       case SubIndicatorKind.stepRhythm:
-        return '步进节奏';
+        return '节奏';
     }
   }
 
@@ -259,9 +259,9 @@ class SubChartIndicator {
       case SubIndicatorKind.buyN:
         return 'K$kn${bsClassChinese(bsClass ?? 3)}类BS';
       case SubIndicatorKind.adjacentRatio:
-        return 'K$kn相邻比例';
+        return 'K$kn比例';
       case SubIndicatorKind.stepRhythm:
-        return 'K$kn步进节奏';
+        return 'K$kn节奏';
     }
   }
 

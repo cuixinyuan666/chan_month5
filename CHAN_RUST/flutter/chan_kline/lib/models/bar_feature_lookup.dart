@@ -19,6 +19,7 @@ import '../compute/class_n_bs_compute.dart';
 import '../compute/kn_volume_series_compute.dart';
 import '../compute/adjacent_ratio_compute.dart';
 import '../compute/step_rhythm_compute.dart';
+import '../compute/profile_peak_classify.dart';
 
 /// 十字线 tooltip 一行：键值 / 层级分隔线 / 同层内容分隔线。
 class CrosshairTooltipRow {
@@ -622,6 +623,17 @@ class BarFeatureLookup {
           final row = byIdx.putIfAbsent(b.idx, () => {'idx': b.idx});
           final sub = row.putIfAbsent('sub', () => <String, dynamic>{})
               as Map<String, dynamic>;
+          // 同 K0 可多条节奏（0-0/0-1…）；tooltip 按动态名逐行显
+          final at = e.value.where((p) => p.x == b.idx).toList();
+          sub['step_rhythm_lines_${e.key}'] = [
+            for (final p in at)
+              {
+                'label': p.label,
+                'value': p.value,
+                'ratio': p.ratio,
+                'dir': p.dir,
+              },
+          ];
           sub['step_rhythm_${e.key}'] =
               formatStepRhythmReadout(e.value, b.idx);
         }
@@ -664,17 +676,14 @@ class BarFeatureLookup {
   static String _fmtBsg({required num b, required num s, required num g}) =>
       'B${_fmtVol(b)}/S${_fmtVol(s)}/G${_fmtVol(g)}';
 
-  static String _fmtOhlcv({
+  /// OHLC 独立；成交量另起「Kn成交量」行（B/S/G）。
+  static String _fmtOhlc({
     required double open,
     required double high,
     required double low,
     required double close,
-    required num buyVol,
-    required num sellVol,
-    required num grayVol,
   }) {
-    return 'O${_fmtPrice(open)}/H${_fmtPrice(high)}/L${_fmtPrice(low)}/C${_fmtPrice(close)}'
-        '/VOL ${_fmtBsg(b: buyVol, s: sellVol, g: grayVol)}';
+    return 'O${_fmtPrice(open)}/H${_fmtPrice(high)}/L${_fmtPrice(low)}/C${_fmtPrice(close)}';
   }
 
   /// 同层类别块用 `-。-` 拼接；层末不挂尾分隔（下一层只用 ===）。
@@ -707,12 +716,26 @@ class BarFeatureLookup {
     );
   }
 
+  static List<CrosshairTooltipRow> _peakCategoryRows(
+    String prefix,
+    List<ProfilePeakRow> peaks,
+  ) {
+    if (peaks.isEmpty) return const [];
+    return [
+      for (final p in peaks)
+        CrosshairTooltipRow.kv(p.label(prefix), p.valueText()),
+    ];
+  }
+
   /// 十字线主 tooltip 结构化行（表格渲染用）。
   /// 应显尽显：不按副图/主图勾选过滤；层内用 `-。-`，层间只用 `===`。
+  /// [chipPeaks]/[tickPeaks] 仅 K0：筹码峰 / 笔数峰动态名。
   List<CrosshairTooltipRow> crosshairTooltipRows(
     int idx, {
     required String timePart,
     Set<SubChartIndicator> subIndicators = const {},
+    List<ProfilePeakRow> chipPeaks = const [],
+    List<ProfilePeakRow> tickPeaks = const [],
   }) {
     final row = byIdx[idx];
     if (row == null) return const [];
@@ -758,15 +781,17 @@ class BarFeatureLookup {
       CrosshairTooltipRow.kv('K0 idx', CrosshairTooltipRow.boxNum(row['idx'])),
       CrosshairTooltipRow.kv(
         'K0',
-        CrosshairTooltipRow.boxNumInString(_fmtOhlcv(
+        CrosshairTooltipRow.boxNumInString(_fmtOhlc(
           open: open,
           high: high,
           low: low,
           close: close,
-          buyVol: vBsg.b,
-          sellVol: vBsg.s,
-          grayVol: vBsg.g,
         )),
+      ),
+      CrosshairTooltipRow.kv(
+        'K0成交量',
+        CrosshairTooltipRow.boxNumInString(
+            _fmtBsg(b: vBsg.b, s: vBsg.s, g: vBsg.g)),
       ),
       CrosshairTooltipRow.kv(
         'K0笔数',
@@ -792,16 +817,22 @@ class BarFeatureLookup {
           'K0分型判断', CrosshairTooltipRow.boxNum(combineFxJudge)),
     ];
     // subIndicators 参数保留兼容；显示侧忽略勾选，按层应显尽显
-    final k0Extra = _levelExtraRows(idx, 0);
+    final k0Cats = _levelCategoryExtras(idx, 0);
+    final chipPeakRows = _peakCategoryRows('K0筹码峰', chipPeaks);
+    final tickPeakRows = _peakCategoryRows('K0笔数峰', tickPeaks);
 
     final out = <CrosshairTooltipRow>[
       CrosshairTooltipRow.kv('日期时间', '$timePart     $weekday'),
       const CrosshairTooltipRow.separator(),
       ..._joinCategories([
         k0Core,
+        chipPeakRows,
+        tickPeakRows,
         k0Merge,
         zsAfterK0,
-        k0Extra,
+        k0Cats.fxExtra,
+        k0Cats.bs,
+        k0Cats.ratioRhythm,
       ]),
       ..._levelBlockRows(idx),
     ];
@@ -1012,6 +1043,7 @@ class BarFeatureLookup {
       final tBsg = _tickBsg(subMap, n);
       lines.add(const CrosshairTooltipRow.separator());
       final box = row['combine_box_$n'];
+      final cats = _levelCategoryExtras(idx, n);
       lines.addAll(_levelBlockRowsFor(
         n,
         snap,
@@ -1030,7 +1062,9 @@ class BarFeatureLookup {
             _frameBox(box, fallback: snap?.combineLow ?? 0, useLow: true),
         gg: (row['combine_range_high_$n'] as num?)?.toDouble(),
         dd: (row['combine_range_low_$n'] as num?)?.toDouble(),
-        extras: _levelExtraRows(idx, n),
+        fxExtra: cats.fxExtra,
+        bs: cats.bs,
+        ratioRhythm: cats.ratioRhythm,
       ));
     }
     return lines;
@@ -1061,7 +1095,9 @@ class BarFeatureLookup {
     double? combineBoxLow,
     double? gg,
     double? dd,
-    List<CrosshairTooltipRow> extras = const [],
+    List<CrosshairTooltipRow> fxExtra = const [],
+    List<CrosshairTooltipRow> bs = const [],
+    List<CrosshairTooltipRow> ratioRhythm = const [],
   }) {
     final label = 'K$n';
     final confirmText = confirmVal == null
@@ -1077,6 +1113,11 @@ class BarFeatureLookup {
       core = [
         CrosshairTooltipRow.kv('$label idx', '首K$n确认前'),
         CrosshairTooltipRow.kv(label, '—'),
+        CrosshairTooltipRow.kv(
+          '$label成交量',
+          CrosshairTooltipRow.boxNumInString(
+              _fmtBsg(b: buyVol, s: sellVol, g: grayVol)),
+        ),
         CrosshairTooltipRow.kv(
           '$label笔数',
           CrosshairTooltipRow.boxNumInString(
@@ -1098,15 +1139,17 @@ class BarFeatureLookup {
             '$label idx', CrosshairTooltipRow.boxNum(snap.unitIdx)),
         CrosshairTooltipRow.kv(
           label,
-          CrosshairTooltipRow.boxNumInString(_fmtOhlcv(
+          CrosshairTooltipRow.boxNumInString(_fmtOhlc(
             open: snap.unitOpen,
             high: snap.unitHigh,
             low: snap.unitLow,
             close: snap.unitClose,
-            buyVol: buyVol,
-            sellVol: sellVol,
-            grayVol: grayVol,
           )),
+        ),
+        CrosshairTooltipRow.kv(
+          '$label成交量',
+          CrosshairTooltipRow.boxNumInString(
+              _fmtBsg(b: buyVol, s: sellVol, g: grayVol)),
         ),
         CrosshairTooltipRow.kv(
           '$label笔数',
@@ -1140,29 +1183,39 @@ class BarFeatureLookup {
       core,
       merge,
       knZsAfterKn[n] ?? const [],
-      extras,
+      fxExtra,
+      bs,
+      ratioRhythm,
     ]);
   }
 
-  /// 某显示层的其它特征行（极点距/截断/BS/比例/节奏）；应显尽显，缺省写 0。
-  /// 成交量/笔数/分型确认/判断已在层内主槽，此处不再重复。
-  List<CrosshairTooltipRow> _levelExtraRows(int idx, int displayKn) {
+  /// 层内其它类别：极点距/截断 | X类BS | 比例+节奏（应显尽显，数值一律【】）。
+  ({
+    List<CrosshairTooltipRow> fxExtra,
+    List<CrosshairTooltipRow> bs,
+    List<CrosshairTooltipRow> ratioRhythm,
+  }) _levelCategoryExtras(int idx, int displayKn) {
+    final empty = (
+      fxExtra: const <CrosshairTooltipRow>[],
+      bs: const <CrosshairTooltipRow>[],
+      ratioRhythm: const <CrosshairTooltipRow>[],
+    );
     final row = byIdx[idx];
-    if (row == null) return const [];
+    if (row == null) return empty;
     final sub = row['sub'] is Map ? row['sub'] as Map : null;
-    final out = <CrosshairTooltipRow>[];
 
-    void addKv(String label, String value) {
-      out.add(CrosshairTooltipRow.kv(label, value));
-    }
+    CrosshairTooltipRow kv(String label, String value) =>
+        CrosshairTooltipRow.kv(label, value);
 
-    // 分型极点距 / 截断：副图 internal kn = displayKn+1
+    // —— 极点距 / 截断 ——
+    final fxExtra = <CrosshairTooltipRow>[];
     final peakKn = displayKn + 1;
     dynamic peak = sub == null ? null : sub['fractal_peak_dist_$peakKn'];
     if (peak == null && peakKn == 1 && sub != null) {
       peak = sub['fractal_peak_dist'];
     }
-    addKv('K$displayKn分型极点距', CrosshairTooltipRow.boxNum(peak ?? 0));
+    fxExtra.add(kv(
+        'K$displayKn分型极点距', CrosshairTooltipRow.boxNum(peak ?? 0)));
 
     dynamic truncV;
     final confirms = row['level_confirms'];
@@ -1177,43 +1230,58 @@ class BarFeatureLookup {
       final bc = row['k0_confirm'];
       if (bc is Map && bc['truncated'] == true) truncV = bc['value'];
     }
-    addKv('K$displayKn截断', CrosshairTooltipRow.boxNum(truncV ?? 0));
+    fxExtra.add(
+        kv('K$displayKn截断', CrosshairTooltipRow.boxNum(truncV ?? 0)));
 
+    // —— X类BS（独立类别）——
     String bsVal(dynamic buy, dynamic sell) {
-      if (buy == null && sell == null) return '0';
+      if (buy == null && sell == null) return CrosshairTooltipRow.boxNum(0);
       final parts = <String>[
-        if (buy != null) '$buy',
-        if (sell != null) '$sell',
+        if (buy != null) CrosshairTooltipRow.boxNum(buy),
+        if (sell != null) CrosshairTooltipRow.boxNum(sell),
       ];
       return parts.join(' ');
     }
 
-    addKv(
-      'K$displayKn一类BS',
-      bsVal(sub?['buy1_$displayKn'], sub?['sell1_$displayKn']),
-    );
-    addKv(
-      'K$displayKn二类BS',
-      bsVal(sub?['buy2_$displayKn'], sub?['sell2_$displayKn']),
-    );
-    for (var cls = 3; cls <= 9; cls++) {
-      addKv(
-        'K$displayKn${bsClassChinese(cls)}类BS',
-        bsVal(sub?['buyN_${displayKn}_$cls'], sub?['sellN_${displayKn}_$cls']),
-      );
+    final bs = <CrosshairTooltipRow>[
+      kv('K$displayKn一类BS',
+          bsVal(sub?['buy1_$displayKn'], sub?['sell1_$displayKn'])),
+      kv('K$displayKn二类BS',
+          bsVal(sub?['buy2_$displayKn'], sub?['sell2_$displayKn'])),
+      for (var cls = 3; cls <= 9; cls++)
+        kv(
+          'K$displayKn${bsClassChinese(cls)}类BS',
+          bsVal(sub?['buyN_${displayKn}_$cls'],
+              sub?['sellN_${displayKn}_$cls']),
+        ),
+    ];
+
+    // —— 比例 / 节奏（独立类别；节奏按 0-0 动态多行）——
+    final ratioRhythm = <CrosshairTooltipRow>[];
+    final ar = sub?['adjacent_ratio_$displayKn'];
+    ratioRhythm.add(kv(
+      'K$displayKn比例',
+      CrosshairTooltipRow.boxNum(
+          ar is num ? ar.toStringAsFixed(3) : 0),
+    ));
+    final rhythmLines = sub?['step_rhythm_lines_$displayKn'];
+    if (rhythmLines is List && rhythmLines.isNotEmpty) {
+      for (final raw in rhythmLines) {
+        if (raw is! Map) continue;
+        final name = '${raw['label'] ?? '0-0'}';
+        final v = raw['value'];
+        final text = v is num ? v.toStringAsFixed(3) : '$v';
+        ratioRhythm.add(kv(
+          'K$displayKn节奏$name',
+          CrosshairTooltipRow.boxNum(text),
+        ));
+      }
+    } else {
+      ratioRhythm.add(
+          kv('K$displayKn节奏', CrosshairTooltipRow.boxNum(0)));
     }
 
-    // 相邻比例 / 步进节奏：catalog 到 maxKn-1；最高层仍占位 0
-    final ar = sub?['adjacent_ratio_$displayKn'];
-    addKv(
-      'K$displayKn相邻比例',
-      ar is num ? ar.toStringAsFixed(3) : '0',
-    );
-    addKv(
-      'K$displayKn步进节奏',
-      '${sub?['step_rhythm_$displayKn'] ?? '0'}',
-    );
-    return out;
+    return (fxExtra: fxExtra, bs: bs, ratioRhythm: ratioRhythm);
   }
 
   /// 合并行：GG/DD=组内原始区间极值（原始K高低 max/min，逐K当下、无未来函数）；MG/MD=合并框框体高低点（M=merge）。

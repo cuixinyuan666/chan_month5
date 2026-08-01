@@ -28,23 +28,32 @@ impl ChipTickBins {
     }
 
     pub fn from_side_rows(rows: &[(f64, f64, &str)]) -> Option<Self> {
+        Self::from_side_qty_rows(rows)
+    }
+
+    /// 笔数分布桶：rows=(price, ticks, side)，结构同成交量 bins（s/b/w）。
+    pub fn from_side_tick_rows(rows: &[(f64, f64, &str)]) -> Option<Self> {
+        Self::from_side_qty_rows(rows)
+    }
+
+    fn from_side_qty_rows(rows: &[(f64, f64, &str)]) -> Option<Self> {
         let mut acc_s: BTreeMap<i64, f64> = BTreeMap::new();
         let mut acc_b: BTreeMap<i64, f64> = BTreeMap::new();
         let mut acc_w: BTreeMap<i64, f64> = BTreeMap::new();
-        for &(price, vol, side) in rows {
-            if !(price > 0.0) || !(vol > 0.0) || !price.is_finite() || !vol.is_finite() {
+        for &(price, qty, side) in rows {
+            if !(price > 0.0) || !(qty > 0.0) || !price.is_finite() || !qty.is_finite() {
                 continue;
             }
             // 价位四位小数：乘 10000 取整作键
             let key = (price * 10000.0).round() as i64;
             let s = side.trim().to_ascii_uppercase();
             if s == "S" {
-                *acc_s.entry(key).or_insert(0.0) += vol;
+                *acc_s.entry(key).or_insert(0.0) += qty;
             } else if s == "B" {
-                *acc_b.entry(key).or_insert(0.0) += vol;
+                *acc_b.entry(key).or_insert(0.0) += qty;
             } else {
                 // 方向缺失 → 灰度 w（不再默认当 B）
-                *acc_w.entry(key).or_insert(0.0) += vol;
+                *acc_w.entry(key).or_insert(0.0) += qty;
             }
         }
         let keys: Vec<i64> = acc_s
@@ -220,6 +229,7 @@ fn bar_bucket_key_from_ms(time_ms: i64, period: KlinePeriod) -> Option<ChipBucke
 
 /// 将分笔按周期桶聚合为 chip_tick_bins，写入对应 K 线 metrics。
 /// 同时按第 4 列笔数写 tick_count / buy_tick_count / sell_tick_count（Kn笔数副图真实数据源）。
+/// 笔数=0：仍写 metrics=0，但不写 chip_tick_count_bins（分布/副图全无柱）。
 pub fn enrich_bars_with_chip_tick_bins(
     bars: &mut [KlineBar],
     ticks: &[TickRow],
@@ -239,6 +249,8 @@ pub fn enrich_bars_with_chip_tick_bins(
         return;
     }
     let mut key_to_rows: BTreeMap<ChipBucketKey, Vec<(f64, f64, String)>> = BTreeMap::new();
+    // 笔数分布：按价累加 ticks（与成交量 bins 同价键）
+    let mut key_to_tick_rows: BTreeMap<ChipBucketKey, Vec<(f64, f64, String)>> = BTreeMap::new();
     // 每桶笔数累计：(总笔数, 买笔数, 卖笔数)；灰度仅进总笔数
     let mut key_to_ticks: BTreeMap<ChipBucketKey, (f64, f64, f64)> = BTreeMap::new();
     for t in ticks {
@@ -252,6 +264,13 @@ pub fn enrich_bars_with_chip_tick_bins(
         // 与 from_side_rows 同口径：价格/量非法行不计
         if !(t.price > 0.0) || !(t.vol > 0.0) || !t.price.is_finite() || !t.vol.is_finite() {
             continue;
+        }
+        // 显式 0 不入 count bins（与 parse：0 保留 0、缺列才默认 1 一致）
+        if t.ticks > 0.0 && t.ticks.is_finite() {
+            key_to_tick_rows
+                .entry(bk)
+                .or_default()
+                .push((t.price, t.ticks, t.side.clone()));
         }
         let acc = key_to_ticks.entry(bk).or_default();
         acc.0 += t.ticks;
@@ -272,6 +291,16 @@ pub fn enrich_bars_with_chip_tick_bins(
             key_to_bins.insert(*bk, bins);
         }
     }
+    let mut key_to_count_bins: BTreeMap<ChipBucketKey, ChipTickBins> = BTreeMap::new();
+    for (bk, rows) in &key_to_tick_rows {
+        let refs: Vec<(f64, f64, &str)> = rows
+            .iter()
+            .map(|(p, tk, s)| (*p, *tk, s.as_str()))
+            .collect();
+        if let Some(bins) = ChipTickBins::from_side_tick_rows(&refs) {
+            key_to_count_bins.insert(*bk, bins);
+        }
+    }
     for bar in bars.iter_mut() {
         let Some(bk) = bar_bucket_key_from_ms(bar.time_ms, period) else {
             continue;
@@ -279,6 +308,10 @@ pub fn enrich_bars_with_chip_tick_bins(
         if let Some(bins) = key_to_bins.get(&bk) {
             bar.metrics
                 .insert("chip_tick_bins".to_string(), bins.to_json_value());
+        }
+        if let Some(bins) = key_to_count_bins.get(&bk) {
+            bar.metrics
+                .insert("chip_tick_count_bins".to_string(), bins.to_json_value());
         }
         if let Some((total, buy, sell)) = key_to_ticks.get(&bk) {
             bar.metrics
@@ -302,7 +335,16 @@ fn enrich_tick_by_bar_idx(bars: &mut [KlineBar], ticks: &[TickRow]) {
                 .metrics
                 .insert("chip_tick_bins".to_string(), bins.to_json_value());
         }
-        // 单笔行笔数：B→买、S→卖、无方向→仅总笔数
+        // 单笔笔数分布桶（与成交量 bins 同价）；ticks=0 不写桶
+        if t.ticks > 0.0 && t.ticks.is_finite() {
+            let trefs = [(t.price, t.ticks, t.side.as_str())];
+            if let Some(bins) = ChipTickBins::from_side_tick_rows(&trefs) {
+                bars[i]
+                    .metrics
+                    .insert("chip_tick_count_bins".to_string(), bins.to_json_value());
+            }
+        }
+        // 单笔行笔数（含显式 0）：B→买、S→卖、无方向→仅总笔数
         if t.price > 0.0 && t.vol > 0.0 && t.price.is_finite() && t.vol.is_finite() {
             let s = t.side.trim().to_ascii_uppercase();
             let (buy, sell) = match s.as_str() {
@@ -327,6 +369,7 @@ fn enrich_tick_by_bar_idx(bars: &mut [KlineBar], ticks: &[TickRow]) {
 fn enrich_by_bar_end_windows(bars: &mut [KlineBar], ticks: &[TickRow]) {
     use chrono::{TimeZone, Utc};
     let mut key_to_rows: BTreeMap<i64, Vec<(f64, f64, String)>> = BTreeMap::new();
+    let mut key_to_tick_rows: BTreeMap<i64, Vec<(f64, f64, String)>> = BTreeMap::new();
     // 每窗笔数累计：(总笔数, 买笔数, 卖笔数)
     let mut key_to_ticks: BTreeMap<i64, (f64, f64, f64)> = BTreeMap::new();
     for t in ticks {
@@ -349,6 +392,12 @@ fn enrich_by_bar_end_windows(bars: &mut [KlineBar], ticks: &[TickRow]) {
         if !(t.price > 0.0) || !(t.vol > 0.0) || !t.price.is_finite() || !t.vol.is_finite() {
             continue;
         }
+        if t.ticks > 0.0 && t.ticks.is_finite() {
+            key_to_tick_rows
+                .entry(end_ms)
+                .or_default()
+                .push((t.price, t.ticks, t.side.clone()));
+        }
         let acc = key_to_ticks.entry(end_ms).or_default();
         acc.0 += t.ticks;
         let s = t.side.trim().to_ascii_uppercase();
@@ -368,10 +417,24 @@ fn enrich_by_bar_end_windows(bars: &mut [KlineBar], ticks: &[TickRow]) {
             key_to_bins.insert(*k, bins);
         }
     }
+    let mut key_to_count_bins: BTreeMap<i64, ChipTickBins> = BTreeMap::new();
+    for (k, rows) in &key_to_tick_rows {
+        let refs: Vec<(f64, f64, &str)> = rows
+            .iter()
+            .map(|(p, tk, s)| (*p, *tk, s.as_str()))
+            .collect();
+        if let Some(bins) = ChipTickBins::from_side_tick_rows(&refs) {
+            key_to_count_bins.insert(*k, bins);
+        }
+    }
     for bar in bars.iter_mut() {
         if let Some(bins) = key_to_bins.get(&bar.time_ms) {
             bar.metrics
                 .insert("chip_tick_bins".to_string(), bins.to_json_value());
+        }
+        if let Some(bins) = key_to_count_bins.get(&bar.time_ms) {
+            bar.metrics
+                .insert("chip_tick_count_bins".to_string(), bins.to_json_value());
         }
         if let Some((total, buy, sell)) = key_to_ticks.get(&bar.time_ms) {
             bar.metrics

@@ -19,6 +19,8 @@ import '../compute/step_rhythm_compute.dart';
 import '../compute/level_unit_bar_view_compute.dart';
 import '../compute/zs_compute.dart';
 import '../compute/chip_profile_compute.dart';
+import '../compute/tick_dist_profile_compute.dart';
+import '../compute/profile_peak_classify.dart';
 import '../history/msg_history.dart';
 import '../bridge/chan_bridge.dart';
 import '../models/kline_combine_bundle.dart';
@@ -37,6 +39,7 @@ import '../models/k1_bar_view.dart';
 import '../models/kline_bar.dart';
 import '../models/chart_indicator.dart';
 import '../models/chip_config.dart';
+import '../models/tick_dist_config.dart';
 import '../models/kline_combine_frame.dart';
 import '../models/bar_feature_lookup.dart';
 import '../models/level_models.dart';
@@ -116,6 +119,7 @@ class KlineChart extends StatefulWidget {
     this.onLongPressReload,
     this.onLongPressRunToEnd,
     this.chipConfig = const ChipConfig(),
+    this.tickDistConfig = const TickDistConfig(),
     this.chipOnlyMode = false,
   });
 
@@ -180,6 +184,8 @@ class KlineChart extends StatefulWidget {
   final bool isPlaying;
   /// 筹码分布配置（总开关/桶宽/峰线等）
   final ChipConfig chipConfig;
+  /// 笔数分布配置（主图左侧；仅 K0）
+  final TickDistConfig tickDistConfig;
   /// chip 分支：仅显示筹码分布，关闭所有缠论渲染
   final bool chipOnlyMode;
 
@@ -732,10 +738,33 @@ class _KlineChartState extends State<KlineChart> {
       zsAfterK0: k0Zs,
       knZsAfterKn: knZs,
     );
+    // K0 筹码峰 / 笔数峰：与主图 profile 同 cutoff，按本根高低编号
+    final cut = asOf ?? bar.idx;
+    final step = widget.chipConfig.bucketStep;
+    final chipPeaks = classifyProfilePeaks(
+      profile: ChipProfileCompute.compute(
+        bars: widget.bars,
+        cutoffX: cut,
+        bucketStep: step,
+      ),
+      low: bar.low,
+      high: bar.high,
+    );
+    final tickPeaks = classifyProfilePeaks(
+      profile: TickDistProfileCompute.compute(
+        bars: widget.bars,
+        cutoffX: cut,
+        bucketStep: step,
+      ),
+      low: bar.low,
+      high: bar.high,
+    );
     final out = lookup.crosshairTooltipRows(
       bar.idx,
       timePart: timePart,
       subIndicators: allSubs,
+      chipPeaks: chipPeaks,
+      tickPeaks: tickPeaks,
     );
     return out;
   }
@@ -1199,6 +1228,7 @@ class _KlineChartState extends State<KlineChart> {
               adjacentRatioHistoryByKn: widget.adjacentRatioHistoryByKn,
               stepRhythmHistoryByKn: widget.stepRhythmHistoryByKn,
               chipConfig: widget.chipConfig,
+              tickDistConfig: widget.tickDistConfig,
               chipOnlyMode: widget.chipOnlyMode,
               layer: layer,
             );
@@ -1468,6 +1498,7 @@ class _KlineCompositePainter extends CustomPainter {
     this.adjacentRatioHistoryByKn = const {},
     this.stepRhythmHistoryByKn = const {},
     this.chipConfig = const ChipConfig(),
+    this.tickDistConfig = const TickDistConfig(),
     this.chipOnlyMode = false,
     this.layer = _ChartPaintLayer.base,
   }) : featureLookup = (chipOnlyMode || layer == _ChartPaintLayer.chip)
@@ -1560,6 +1591,8 @@ class _KlineCompositePainter extends CustomPainter {
   final Map<int, List<StepRhythmLinePoint>> stepRhythmHistoryByKn;
   /// 筹码分布配置
   final ChipConfig chipConfig;
+  /// 笔数分布配置（主图左侧）
+  final TickDistConfig tickDistConfig;
   /// chip 分支：仅显示筹码分布，关闭所有缠论渲染
   final bool chipOnlyMode;
 
@@ -1568,16 +1601,18 @@ class _KlineCompositePainter extends CustomPainter {
     final plotTop = KlineViewport.padT;
     final plotBottom = mainH - KlineViewport.padB;
     final plotH = math.max(1.0, plotBottom - plotTop);
-    // 筹码分布已迁设置面板控制：开关开启即绘制，仅 K0 分支（不参与主图指标勾选）
+    // 筹码右 / 笔数左：叠在主图两侧；蜡烛坐标系不变
     final showChip = chipConfig.enabled && bars.isNotEmpty;
+    final showTickDist = tickDistConfig.enabled && bars.isNotEmpty;
     final chipPaneW = showChip ? math.max(24.0, chipConfig.paneWidth) : 0.0;
-    // 蜡烛坐标系不变：筹码叠在主图右侧；开启时价签改左侧以免被盖
+    final tickPaneW =
+        showTickDist ? math.max(24.0, tickDistConfig.paneWidth) : 0.0;
     final plotW = math.max(1.0, size.width - KlineViewport.padL - KlineViewport.padR);
     final span = math.max(viewport.xSpan, 1e-6);
     final slotW = plotW / span;
     final barW = _candleBodyW(slotW);
     final xAxisTop = contentBottom;
-    final plotLeft = KlineViewport.padL;
+    final plotLeft = KlineViewport.padL + tickPaneW;
     final plotRight = math.max(plotLeft + 40, size.width - chipPaneW);
 
     if (layer == _ChartPaintLayer.crosshair) {
@@ -1588,16 +1623,35 @@ class _KlineCompositePainter extends CustomPainter {
     }
 
     if (layer == _ChartPaintLayer.chip) {
+      final cut = bars.isEmpty ? 0 : (segAsOf ?? bars.last.idx);
+      final yOf = (double p) => priceRange.yOf(p, plotTop, plotH);
+      if (showTickDist) {
+        // 笔数分布：主图左侧；桶宽与筹码共用，价轴对齐
+        final step = chipConfig.bucketStep;
+        final profile = TickDistProfileCompute.compute(
+          bars: bars,
+          cutoffX: cut,
+          bucketStep: step,
+        );
+        ChipProfilePainter.draw(
+          canvas: canvas,
+          profile: profile,
+          config: tickDistConfig.toChipConfig().copyWith(bucketStep: step),
+          plotLeft: plotLeft,
+          plotRight: plotRight,
+          plotTop: plotTop,
+          plotBottom: plotBottom,
+          yOfPrice: yOf,
+          highlightKn: 0,
+          alignLeft: true,
+        );
+      }
       if (showChip) {
-        // 仅 K0 分支：cutoff=步进末根 / 十字 as-of 所在 K0（不映射 Kn 层）
-        final kn = 0;
-        final cut = segAsOf ?? bars.last.idx;
         final profile = ChipProfileCompute.compute(
           bars: bars,
           cutoffX: cut,
           bucketStep: chipConfig.bucketStep,
         );
-        // 十字悬停：取悬停单根 B/S/灰 量，角标高亮（区别于累计）
         ({double b, double s, double w})? hoverBar;
         if (crosshairEnabled &&
             crosshairBarIdx != null &&
@@ -1613,8 +1667,8 @@ class _KlineCompositePainter extends CustomPainter {
           plotRight: plotRight,
           plotTop: plotTop,
           plotBottom: plotBottom,
-          yOfPrice: (p) => priceRange.yOf(p, plotTop, plotH),
-          highlightKn: kn,
+          yOfPrice: yOf,
+          highlightKn: 0,
           hoverBar: hoverBar,
         );
       }
@@ -1674,7 +1728,16 @@ class _KlineCompositePainter extends CustomPainter {
       _drawSubCharts(canvas, size.width, mainH, barW, slotW);
     }
 
-    _drawYLabels(canvas, size.width, plotTop, plotH, priceRange, onLeft: showChip);
+    // 价签：笔数分布开启时画在其右侧（分布图「下方/之后」）；仅筹码时仍靠左避让
+    _drawYLabels(
+      canvas,
+      size.width,
+      plotTop,
+      plotH,
+      priceRange,
+      onLeft: showChip || showTickDist,
+      leftX: showTickDist ? plotLeft + 2 : null,
+    );
     _drawXAxis(canvas, size.width, xAxisTop);
   }
 
@@ -4274,7 +4337,7 @@ class _KlineCompositePainter extends CustomPainter {
     }
   }
 
-  /// 主图 Y 轴价签；[onLeft]=true 时画在左侧（筹码开启，避让右侧筹码区）。
+  /// 主图 Y 轴价签；[onLeft]=true 时画在左侧（避让右侧筹码）；[leftX] 可指定左锚（笔数分布右侧）。
   void _drawYLabels(
     Canvas canvas,
     double w,
@@ -4282,6 +4345,7 @@ class _KlineCompositePainter extends CustomPainter {
     double plotH,
     PriceRange pr, {
     bool onLeft = false,
+    double? leftX,
   }) {
     const style = TextStyle(color: Color(0x99FFFFFF), fontSize: 9);
     for (var i = 0; i <= 4; i++) {
@@ -4292,7 +4356,7 @@ class _KlineCompositePainter extends CustomPainter {
         textDirection: TextDirection.ltr,
       )..layout();
       final lx = onLeft
-          ? KlineViewport.padL + 2
+          ? (leftX ?? (KlineViewport.padL + 2))
           : w - tp.width - 3;
       tp.paint(canvas, Offset(lx, y - tp.height / 2));
     }
@@ -4513,7 +4577,8 @@ class _KlineCompositePainter extends CustomPainter {
         oldDelegate.adjacentRatioHistoryByKn != adjacentRatioHistoryByKn ||
         oldDelegate.stepRhythmHistoryByKn != stepRhythmHistoryByKn ||
         oldDelegate.chipOnlyMode != chipOnlyMode ||
-        oldDelegate.chipConfig != chipConfig;
+        oldDelegate.chipConfig != chipConfig ||
+        oldDelegate.tickDistConfig != tickDistConfig;
 
     switch (layer) {
       case _ChartPaintLayer.base:

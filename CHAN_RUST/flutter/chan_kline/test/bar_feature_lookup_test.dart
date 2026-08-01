@@ -1,3 +1,4 @@
+import 'package:chan_kline/compute/step_rhythm_compute.dart';
 import 'package:chan_kline/models/bar_crosshair_feature.dart';
 import 'package:chan_kline/models/chart_indicator.dart';
 import 'package:chan_kline/models/k0_confirm_signal.dart';
@@ -188,7 +189,7 @@ void main() {
     );
   });
 
-  test('tooltip OHLCV 的 VOL 槽为 B/S/G，并含笔数行；不按副图勾选门控', () {
+  test('tooltip 成交量独立行 B/S/G，并含笔数/比例/节奏；不按副图勾选门控', () {
     final bars = _bars(4); // vol = 100,101,102,103；无 tick → 全归 G
     final feats = [for (var i = 0; i < 4; i++) _feat(i, unitIdx: 0)];
     final lookup = BarFeatureLookup.build(
@@ -208,21 +209,21 @@ void main() {
       subIndicators: const {},
     );
     final lines = lookup.crosshairTooltipLines(2, timePart: 't');
-    // 无 chip_tick_bins：B=0/S=0/G=总量；K0=102，K1 累加 0..2=303
+    // Kn OHLC 不含 VOL；成交量独立行
+    expect(lines.any((l) => l.startsWith('K0:') && !l.contains('VOL')), isTrue);
     expect(
-      lines.any((l) =>
-          l.startsWith('K0:') && l.contains('VOL B【0】/S【0】/G【102】')),
+      lines.any((l) => l == 'K0成交量:B【0】/S【0】/G【102】'),
       isTrue,
     );
     expect(
-      lines.any((l) =>
-          l.startsWith('K1:') && l.contains('VOL B【0】/S【0】/G【303】')),
+      lines.any((l) => l == 'K1成交量:B【0】/S【0】/G【303】'),
       isTrue,
     );
     expect(lines.any((l) => l.startsWith('K0笔数:')), isTrue);
     expect(lines.any((l) => l.startsWith('K1笔数:')), isTrue);
-    expect(lines.any((l) => l.startsWith('K0一类BS:')), isTrue);
-    expect(lines.any((l) => l.contains('成交量')), isFalse);
+    expect(lines.any((l) => l.startsWith('K0一类BS:【')), isTrue);
+    expect(lines.any((l) => l.startsWith('K0比例:【')), isTrue);
+    expect(lines.any((l) => l.startsWith('K0节奏')), isTrue);
     // 类别之后若下一层：只见 ===，不见 star 紧贴 ===
     final sep = '===============================';
     final star = '-。-。-。-。-。-。-。-。-。-';
@@ -234,7 +235,7 @@ void main() {
     }
   });
 
-  test('tooltip VOL B/S/G 按 chip_tick_bins 三分解', () {
+  test('tooltip 成交量 B/S/G 按 chip_tick_bins 三分解；节奏动态多行', () {
     final bars = [
       KlineBar(
         idx: 0,
@@ -265,20 +266,52 @@ void main() {
       barFeatures: [
         BarCrosshairFeature(idx: 0, weekday: '周一', mergeInnerSeq: 0),
       ],
+      stepRhythmHistoryByKn: {
+        0: const [
+          StepRhythmLinePoint(
+            x: 0,
+            displayKn: 0,
+            key: 'k1',
+            value: 11.5,
+            ratio: 0.5,
+            dir: 'up',
+            roundCurrent: 0,
+            roundRef: 0,
+            layer: 0,
+            label: '0-0',
+            currentBiIdx: 0,
+            refBiIdx: 0,
+            retraceBiIdx: 0,
+          ),
+          StepRhythmLinePoint(
+            x: 0,
+            displayKn: 0,
+            key: 'k2',
+            value: 12.25,
+            ratio: 0.8,
+            dir: 'up',
+            roundCurrent: 0,
+            roundRef: 0,
+            layer: 1,
+            label: '0-1',
+            currentBiIdx: 0,
+            refBiIdx: 0,
+            retraceBiIdx: 0,
+          ),
+        ],
+      },
     );
     final lines = lookup.crosshairTooltipLines(0, timePart: 't0');
+    expect(lines.any((l) => l == 'K0成交量:B【30】/S【50】/G【20】'), isTrue);
     expect(
       lines.any((l) =>
-          l.startsWith('K0:') && l.contains('VOL B【30】/S【50】/G【20】')),
+          l.startsWith('K0笔数:') &&
+          l.contains('B【1】') &&
+          l.contains('S【1】') &&
+          l.contains('G【1】')),
       isTrue,
     );
-    expect(
-      lines.any((l) => l == 'K0笔数:B【1】/S【1】/G【1】' ||
-          (l.startsWith('K0笔数:') &&
-              l.contains('B【1】') &&
-              l.contains('S【1】') &&
-              l.contains('G【1】'))),
-      isTrue,
-    );
+    expect(lines.any((l) => l == 'K0节奏0-0:【11.500】'), isTrue);
+    expect(lines.any((l) => l == 'K0节奏0-1:【12.250】'), isTrue);
   });
 }

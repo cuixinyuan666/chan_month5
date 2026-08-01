@@ -340,8 +340,8 @@ void main() {
       expect(ratios.map((e) => e.kn), [0, 1]);
       expect(rhythms.map((e) => e.kn), [0, 1]);
       expect(ratios.every((e) => e.displayLevel == e.kn), isTrue);
-      expect(rhythms.every((e) => e.label.contains('步进节奏')), isTrue);
-      expect(ratios.every((e) => e.label.contains('相邻比例')), isTrue);
+      expect(rhythms.every((e) => e.label.contains('节奏')), isTrue);
+      expect(ratios.every((e) => e.label.contains('比例')), isTrue);
     });
 
     test('默认 K0 副图含相邻比例/节奏（进 Kn指标层全选）', () {

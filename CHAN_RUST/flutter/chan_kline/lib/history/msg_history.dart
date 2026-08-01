@@ -548,7 +548,7 @@ class MsgHistory {
     _knTickCountRealLogged = true;
     append(
       '【Kn笔数·真实笔数】Rust 分笔解析第 4 列笔数（HH:MM 价格 量 笔数 [B/S]；'
-      '无列/非法按 1 笔），tick/Day3/普通周期三路径均写 bar.metrics：'
+      '无列/非数字按 1 笔；显式 0 保留 0），tick/Day3/普通周期三路径均写 bar.metrics：'
       'tick_count（总，含灰度 w）、buy_tick_count（B）、sell_tick_count（S）；'
       '非法行（价格/量）不计，与 from_side_rows 同口径。'
       'Flutter K0 笔数优先读 metrics.tick_count / buy_tick_count，旧数据回退 bins 长度、'
@@ -556,6 +556,18 @@ class MsgHistory {
       '【踩坑】勿用 bins 数组长度当笔数（每价位三数组各 push 1，长度恒=3×价位数）；'
       '笔数 metrics 键存在即用（可为 0，勿用 >0 判断），无键才回退。'
       'crosshairSubRows 新增 tickCount 分支 → 副图读数/十字 tooltip 显示真实笔数。',
+    );
+  }
+
+  /// 分笔第4列显式 0 ≠ 缺列默认 1（进程内去重）。
+  static bool _tickCountZeroLiteralLogged = false;
+  void appendTickCountZeroLiteral() {
+    if (_tickCountZeroLiteralLogged) return;
+    _tickCountZeroLiteralLogged = true;
+    append(
+      '【Kn笔数·显式0·2026-08-02】分笔第4列写 0 时 ticks=0（副图/笔数分布全无柱）；'
+      '仅无笔数列或第4列为 B/S 时默认 1。勿把 0 当成非法再默认成 1。'
+      '须重编 chan_ffi.dll 后冷启。',
     );
   }
 
@@ -651,6 +663,35 @@ class MsgHistory {
       '十字信息不按主/副图勾选过滤，按层（===）与类别（-。-。-。-。-）固定槽位应显尽显；'
       '类别块之后若是下一层级则只保留 ===，不挂类别尾分隔。'
       '层内序：价量笔→合并/分型→中枢→极点距/截断/BS/比例/节奏。',
+    );
+  }
+
+  /// tooltip 成交量独立行 + 比例/节奏命名与多节奏动态行（进程内去重）。
+  static bool _tooltipVolIndepLogged = false;
+  void appendTooltipVolIndepAndRhythm() {
+    if (_tooltipVolIndepLogged) return;
+    _tooltipVolIndepLogged = true;
+    append(
+      '【tooltip 成交量独立·比例/节奏·2026-08-02】'
+      'Kn OHLC 与成交量拆行：Kn=O/H/L/C，Kn成交量=B/S/G；有数值一律【】。'
+      '命名：Kn相邻比例→Kn比例、Kn步进节奏→Kn节奏；X类BS 独立类别；比例+节奏独立类别。'
+      '节奏颗粒度 K0，同棒可多值：动态行名「K{n}节奏{label}」如 K0节奏0-0：【价】；无点时占位 K{n}节奏【0】。'
+      '层内序：价量笔→合并/分型→中枢→极点距/截断→X类BS→比例/节奏。',
+    );
+  }
+
+  /// K0 筹码峰/笔数峰 tooltip + 左侧笔数分布（进程内去重）。
+  static bool _chipTickPeakLogged = false;
+  void appendChipTickPeaksAndTickDist() {
+    if (_chipTickPeakLogged) return;
+    _chipTickPeakLogged = true;
+    append(
+      '【K0筹码峰/笔数峰·笔数分布·2026-08-02】'
+      'tooltip 仅 K0 增加独立类别：K0筹码峰、K0笔数峰；动态名 -/＋n：'
+      '-1=当前低价之下最近峰，+2=高价之上且中间还有一峰；落在高低之间无 -/＋。'
+      '格式：K0筹码峰-1：【价】/B：【】S：【】G：【】（笔数峰同）。'
+      '笔数分布：主图左侧、与筹码同构（chip_tick_count_bins）；价签画在分布右侧；'
+      '桶宽与筹码共用。',
     );
   }
 

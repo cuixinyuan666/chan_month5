@@ -2,6 +2,27 @@
 
 > 口径/行为变更记录（复制排查用）；与 `lib/history/msg_history.dart` 常驻历史同步维护。
 
+## 2026-08-02 分笔第4列显式0保留0（副图/笔数分布全无柱）
+
+- **需求**：离线写笔数=0 时，Kn笔数副图与左侧笔数分布应全无柱；勿显示成每根 1。
+- **根因**：`parse_tick_line` 仅 `v>0` 才采纳，显式 `0` 被当成非法仍默认 1。
+- **变更**：数字且 `v>=0` 原样用（含 0）；仅无列或第4列为 B/S 时默认 1；`chip_tick_count_bins` 仅 `ticks>0` 才写。
+- **相关**：`tick.rs` / `chip.rs` 注释、`msg_history.appendTickCountZeroLiteral`、根 `TASK_LOG.md`。
+- **注意**：须重编 `chan_ffi.dll` 后冷启；002003 等旧文件笔数列全 0 → 预期全无柱。
+
+## 2026-08-02 K0筹码峰/笔数峰 tooltip + 左侧笔数分布
+
+- **需求**：tooltip 仅 K0 增加筹码峰/笔数峰独立类别（动态 -/＋n）；笔数分布主图左侧同构筹码；价签在分布右侧。
+- **变更**：`profile_peak_classify.dart`；Rust `chip_tick_count_bins`；`TickDistProfileCompute` + `TickDistConfig`；`ChipProfilePainter.alignLeft`；设置面板「笔数分布」。
+- **口径**：-1=低价下最近峰，+n=高价上第 n 峰；框内无号。格式 `K0筹码峰-1：【价】/B：【】S：【】G：【】`。
+- **注意**：须重编 DLL 后冷启；旧数据无 count bins 时回退收盘价落笔数。
+
+## 2026-08-02 tooltip 成交量独立行 + 比例/节奏动态名
+
+- **需求**：VOL 从 Kn OHLC 拆出为 `Kn成交量`；数值一律【】；相邻比例→比例、步进节奏→节奏；X类BS 与 比例/节奏 各成独立类别；同 K0 多节奏显示为 `K0节奏0-0` 动态行。
+- **变更**：`bar_feature_lookup` 层内序=价量笔→合并/分型→中枢→极点距/截断→BS→比例/节奏；`step_rhythm_lines_*` 存多点；`chart_indicator` 标签缩短。
+- **验证**：`bar_feature_lookup_test`（独立成交量/多节奏行）、`adjacent_ratio_step_rhythm_test` 标签断言。
+
 ## 2026-08-02 tooltip VOL/笔数 B/S/G + 应显尽显槽位
 
 - **需求**：各层 VOL 分 B/S/G（G=gray）；笔数同设计；`-。-` 分类别、`===` 分层；不按指标勾选过滤；类别后接下一层时只留 `===`。

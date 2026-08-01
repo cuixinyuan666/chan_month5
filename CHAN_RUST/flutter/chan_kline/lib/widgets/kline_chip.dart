@@ -69,9 +69,10 @@ class ChipProfileData {
   }
 }
 
-/// 主图右侧筹码分布 + 峰延长线。
+/// 主图筹码/笔数分布 + 峰延长线（右对齐或左对齐）。
 abstract final class ChipProfilePainter {
-  /// [plotLeft]/[plotRight] 为 K 线主图区；筹码画在右侧 [paneWidth]。
+  /// [plotLeft]/[plotRight] 为 K 线主图区。
+  /// [alignLeft]=false：画在右侧 [plotRight, plotRight+pane]；true：画在左侧 [plotLeft-pane, plotLeft]。
   /// Y 与主图价格对齐：yOfPrice(price)。
   static void draw({
     required Canvas canvas,
@@ -85,12 +86,13 @@ abstract final class ChipProfilePainter {
     int? highlightKn,
     // 十字悬停的单根 B/S/灰度 量（区别于累计角标）
     ({double b, double s, double w})? hoverBar,
+    bool alignLeft = false,
   }) {
     if (!config.enabled || profile.isEmpty) return;
     final paneW = math.max(24.0, config.paneWidth);
-    final chipLeft = plotRight;
-    final chipRight = plotRight + paneW;
     if (paneW <= 4) return;
+    final chipLeft = alignLeft ? plotLeft - paneW : plotRight;
+    final chipRight = alignLeft ? plotLeft : plotRight + paneW;
 
     // 拉伸：gamma = 1 / (1 + stretch*0.08)
     final stretch = config.stretchLevel.clamp(1, 20);
@@ -119,12 +121,8 @@ abstract final class ChipProfilePainter {
       final wv = i < profile.w.length ? profile.w[i] : 0.0;
       final sum = sv + bv + wv;
       if (sum <= 0) continue;
-      // 三段都从右向左：右 B 红 → 中 S 绿 → 左灰，右对齐
-      // 踩坑：之前用 midX +/- 中心分裂方案，与 Rust chip profile draw 右对齐不一致；
-      // 改为 chipRight 向右对齐后两侧水平柱视觉连续，不再有中间空隙。
       final bShare = bv / sum;
       final sShare = sv / sum;
-      // 踩坑：clamp 上限不能为负（份额小时 barTotalW*share-0.3 < 0 会抛 ArgumentError）
       final bW = (barTotalW * bShare)
           .clamp(0.0, math.max(0.0, barTotalW - 0.3))
           .toDouble();
@@ -132,30 +130,47 @@ abstract final class ChipProfilePainter {
           .clamp(0.0, math.max(0.0, barTotalW - bW - 0.3))
           .toDouble();
       final wW = math.max(0.0, barTotalW - bW - sW);
-      // 红柱：从右边缘向左
-      if (bW > 0.3) {
-        canvas.drawRect(Rect.fromLTRB(chipRight - bW, y0, chipRight, y1), bPaint);
-      }
-      // 绿柱：接在红柱左侧向左
-      if (sW > 0.3) {
-        canvas.drawRect(Rect.fromLTRB(chipRight - bW - sW, y0, chipRight - bW, y1), sPaint);
-      }
-      // 灰柱：最左侧（无方向分笔）
-      if (wW > 0.3) {
-        canvas.drawRect(Rect.fromLTRB(chipRight - bW - sW - wW, y0, chipRight - bW - sW, y1), wPaint);
+      if (alignLeft) {
+        // 左栏：外缘 B → S → 灰，向右朝主图生长
+        if (bW > 0.3) {
+          canvas.drawRect(Rect.fromLTRB(chipLeft, y0, chipLeft + bW, y1), bPaint);
+        }
+        if (sW > 0.3) {
+          canvas.drawRect(
+              Rect.fromLTRB(chipLeft + bW, y0, chipLeft + bW + sW, y1), sPaint);
+        }
+        if (wW > 0.3) {
+          canvas.drawRect(
+              Rect.fromLTRB(chipLeft + bW + sW, y0, chipLeft + bW + sW + wW, y1),
+              wPaint);
+        }
+      } else {
+        // 右栏：右 B → 中 S → 左灰，右对齐
+        if (bW > 0.3) {
+          canvas.drawRect(Rect.fromLTRB(chipRight - bW, y0, chipRight, y1), bPaint);
+        }
+        if (sW > 0.3) {
+          canvas.drawRect(
+              Rect.fromLTRB(chipRight - bW - sW, y0, chipRight - bW, y1), sPaint);
+        }
+        if (wW > 0.3) {
+          canvas.drawRect(
+              Rect.fromLTRB(chipRight - bW - sW - wW, y0, chipRight - bW - sW, y1),
+              wPaint);
+        }
       }
     }
 
-    // 右边缘竖线
+    // 靠主图一侧竖线
+    final edgeX = alignLeft ? chipRight : chipRight - 1;
     canvas.drawLine(
-      Offset(chipRight - 1, plotTop),
-      Offset(chipRight - 1, plotBottom),
+      Offset(edgeX, plotTop),
+      Offset(edgeX, plotBottom),
       Paint()
         ..color = const Color(0x33FFFFFF)
         ..strokeWidth = 0.8,
     );
 
-    // 右上角：B/S/灰度 累计角标（十字 as-of / 步进末根共用同一 profile 口径）
     _drawCornerSums(canvas, profile, chipLeft, chipRight, plotTop,
         config: config, hoverBar: hoverBar);
 
@@ -170,17 +185,26 @@ abstract final class ChipProfilePainter {
       final price = profile.prices[i];
       final y = yOfPrice(price);
       if (y < plotTop || y > plotBottom) continue;
-      final from = Offset(plotLeft, y);
-      final to = Offset(chipLeft, y);
+      final Offset from;
+      final Offset to;
+      final Offset dot;
+      if (alignLeft) {
+        from = Offset(chipRight, y);
+        to = Offset(plotRight, y);
+        dot = Offset(chipRight - 3, y);
+      } else {
+        from = Offset(plotLeft, y);
+        to = Offset(chipLeft, y);
+        dot = Offset(chipLeft + 3, y);
+      }
       if (config.peakLineDashed) {
         _drawDashed(canvas, from, to, linePaint);
       } else {
         canvas.drawLine(from, to, linePaint);
       }
-      canvas.drawCircle(Offset(chipLeft + 3, y), config.peakDotRadius, dotPaint);
+      canvas.drawCircle(dot, config.peakDotRadius, dotPaint);
     }
 
-    // 层号小标（多 Kn 叠选时区分）
     if (highlightKn != null) {
       final tp = TextPainter(
         text: TextSpan(

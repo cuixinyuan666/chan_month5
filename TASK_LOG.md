@@ -2,14 +2,31 @@
 
 ## 最新记录
 
+### 2026-08-02 — 分笔第4列显式0保留0（副图/笔数分布全无柱）
+
+- **要点**：`parse_tick_line` 对显式笔数 `0` 不再默认成 1；仅无列或第4列为 B/S 时按 1 笔。002003 等笔数列全 0 时，Kn笔数副图与左侧笔数分布应全无柱。
+- **相关路径**：`chan_data/src/{tick,chip}.rs`、`msg_history.dart`、`main.dart`、`kn_volume_series_compute.dart`、`tick_dist_profile_compute.dart`、`CHAN_RUST/TASK_LOG.md`
+- **注意**：须重编 `chan_ffi.dll` 后冷启；metrics 键存在即用（含 0），勿回退成 bins 长度/1。
+
+### 2026-08-02 — K0筹码峰/笔数峰 tooltip + 左侧笔数分布
+
+- **要点**：tooltip 仅 K0 增加筹码峰/笔数峰（动态 -/＋n）；主图左侧笔数分布同构筹码（`chip_tick_count_bins`）；价签在分布右侧；设置面板「笔数分布」。
+- **相关路径**：`profile_peak_classify.dart`、`tick_dist_*`、`chip.rs`、`kline_chip.dart`、`kline_chart.dart`、`chip_settings_store.dart`、`msg_history.dart`
+- **注意**：须重编 DLL；无 count bins 时回退收盘价落笔数。
+
+### 2026-08-02 — tooltip 成交量独立行 + 比例/节奏动态名
+
+- **要点**：VOL 从 Kn OHLC 拆为 `Kn成交量`；相邻比例→比例、步进节奏→节奏；X类BS 与比例/节奏独立类别；多节奏动态行如 `K0节奏0-0`。
+- **相关路径**：`bar_feature_lookup.dart`、`chart_indicator.dart`、相关 test、`msg_history.dart`
+
 ### 2026-08-01 — Kn笔数：Rust 分笔第4列真实笔数（方案B）
 
-- **要点**：修复 688687/20240102 上 Kn笔数副图变量恒 0（根因①查表缺 tickCount 分支→读数恒 0；根因② bins 数组长度≠笔数，tick 恒 3/日线=3×价位数）。Rust `parse_tick_line` 解析第 4 列笔数（无列/非法按 1 笔），`TickRow` 增 `ticks` 字段；chip.rs 三路径（tick/Day3/普通桶）写 `tick_count`/`buy_tick_count`（B）/`sell_tick_count`（S），灰度 w 仅进总数，非法行（价/量）不计。Flutter K0 笔数优先读 `metrics.tick_count`/`buy_tick_count`（键存在即用、可为 0），旧数据回退 bins 长度再回退 tick_side；`BarFeatureLookup` 写 `tick_count_${kn}`/`buy_tick_count_${kn}` 系列，`crosshairSubRows` 增 tickCount 分支 → 副图读数/十字 tooltip 出真实笔数。
+- **要点**：修复 688687/20240102 上 Kn笔数副图变量恒 0（根因①查表缺 tickCount 分支→读数恒 0；根因② bins 数组长度≠笔数，tick 恒 3/日线=3×价位数）。Rust `parse_tick_line` 解析第 4 列笔数（无列/非数字按 1 笔；显式 0 见 2026-08-02 条），`TickRow` 增 `ticks` 字段；chip.rs 三路径（tick/Day3/普通桶）写 `tick_count`/`buy_tick_count`（B）/`sell_tick_count`（S），灰度 w 仅进总数，非法行（价/量）不计。Flutter K0 笔数优先读 `metrics.tick_count`/`buy_tick_count`（键存在即用、可为 0），旧数据回退 bins 长度再回退 tick_side；`BarFeatureLookup` 写 `tick_count_${kn}`/`buy_tick_count_${kn}` 系列，`crosshairSubRows` 增 tickCount 分支 → 副图读数/十字 tooltip 出真实笔数。
 - **相关路径**：`chan_data/src/{tick,chip}.rs`、`chan_kline/lib/{compute/kn_volume_series_compute,models/bar_feature_lookup,main,history/msg_history}.dart`、`TASK_LOG.md`
 - **踩坑/经验**：
   1. bins 三数组每价位恒各 push 1（缺方向补 0.0）——长度只能当「价位数」，不能当笔数。
-  2. 笔数 metrics 判断须用「键存在」，不用「值>0」（灰度行 buy=0 合法）。
-  3. 老格式行 `HH:MM 价格 量 B`（第4列即方向）parse_float 失败→默认 1 笔。
+  2. 笔数 metrics 判断须用「键存在」，不用「值>0」（灰度行 buy=0 合法；显式总笔数 0 亦合法）。
+  3. 老格式行 `HH:MM 价格 量 B`（第4列即方向）parse_float 失败→默认 1 笔；显式写 `0` 不得默认成 1。
 - **验收**：关占用重载 `chan_ffi.dll` → 冷启动 → 688687/20240102 tick 周期副图「K0笔数」读数=分笔第4列（如 10），日线=当日笔数求和（非 3×价位数）；十字 tooltip 副图行含笔数。
 - **注意**：`chan_ffi.dll` 已重建替换（15:36）；进程 15296 已结束待冷启。
 

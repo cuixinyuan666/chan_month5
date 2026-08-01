@@ -12,7 +12,7 @@ pub struct TickRow {
     pub has_bs: bool,
     pub price_lo: Option<f64>,
     pub price_hi: Option<f64>,
-    /// 第 4 列成交笔数（`HH:MM 价格 量 笔数 [B/S]`；无列或非法时按 1 笔）
+    /// 第 4 列成交笔数（`HH:MM 价格 量 笔数 [B/S]`；无列/非数字按 1 笔；显式 0 保留 0）
     pub ticks: f64,
 }
 
@@ -61,11 +61,12 @@ pub fn parse_tick_line(line: &str, y: i32, mo: u32, d: u32) -> Option<TickRow> {
             break;
         }
     }
-    // 第 4 列为笔数（B/S 前的那一列）；解析失败（如老文件无列）按 1 笔
+    // 第 4 列为笔数（B/S 前的那一列）：
+    // 显式数字（含 0）原样用；无列或第 4 列是 B/S（老文件）按 1 笔
     let mut ticks = 1.0;
     if let Some(tok) = parts.get(3) {
         if let Some(v) = parse_float(tok) {
-            if v > 0.0 {
+            if v.is_finite() && v >= 0.0 {
                 ticks = v;
             }
         }
@@ -217,6 +218,10 @@ mod tests {
         // 老文件无笔数列：按 1 笔
         let row = parse_tick_line("09:30\t35.10\t60\tB", 2024, 1, 2).unwrap();
         assert!((row.ticks - 1.0).abs() < 1e-9);
+        // 显式 0：保留 0（勿当成缺列默认 1）
+        let row = parse_tick_line("09:30\t11.72\t33\t0\tS", 2004, 7, 19).unwrap();
+        assert!((row.ticks - 0.0).abs() < 1e-9);
+        assert_eq!(row.side, "S");
     }
 
     #[test]

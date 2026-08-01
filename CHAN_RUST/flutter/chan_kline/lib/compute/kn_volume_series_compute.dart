@@ -74,12 +74,13 @@ double _sumBins(dynamic binData) {
   return 0;
 }
 
-/// K0 tick count: 优先 Rust 真实笔数 metrics.tick_count（分笔第4列求和）；
+/// K0 tick count: 优先 Rust 真实笔数 metrics.tick_count（分笔第4列；显式0即为0）；
 /// 旧数据回退 chip_tick_bins 数组长度；再无 tick 数据时回退到 tick_side。
 /// 含 w（灰度）笔，与 _tickSideColor 三态一致。
 List<double> computeK0TickCountSeries(List<KlineBar> bars) {
   double tickCount(KlineBar b) {
     final m = b.metrics['tick_count'];
+    // 键存在即用（含 0）；勿用 >0 判断，否则显式0会误回退成 bins 长度/1
     if (m is num) return m.toDouble();
     final bins = b.metrics['chip_tick_bins'];
     if (bins is Map) {
@@ -96,13 +97,13 @@ List<double> computeK0TickCountSeries(List<KlineBar> bars) {
   return [for (final b in bars) tickCount(b)];
 }
 
-/// K0 buy tick count: 优先 Rust 真实买入笔数 metrics.buy_tick_count；
+/// K0 buy tick count: 优先 Rust 真实买入笔数 metrics.buy_tick_count（含显式 0）；
 /// 旧数据回退 chip_tick_bins 数组长度；再无 tick 数据时回退到 tick_side。
 /// 灰笔 (w) 不计入买入笔数。
 List<double> computeK0BuyTickCountSeries(List<KlineBar> bars) {
   double buyTick(KlineBar b) {
     final m = b.metrics['buy_tick_count'];
-    if (m is num) return m.toDouble();
+    if (m is num) return m.toDouble(); // 含 0，勿 >0 再回退
     final bins = b.metrics['chip_tick_bins'];
     if (bins is Map) {
       final bLen = _listLen(bins['b']);

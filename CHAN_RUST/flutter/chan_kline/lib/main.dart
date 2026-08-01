@@ -9,6 +9,7 @@ import 'package:window_manager/window_manager.dart';
 import 'bridge/chan_bridge.dart';
 import 'compute/adjacent_ratio_compute.dart';
 import 'compute/chip_profile_compute.dart';
+import 'compute/tick_dist_profile_compute.dart';
 import 'compute/class1_bs_compute.dart';
 import 'compute/class2_bs_compute.dart';
 import 'compute/class_n_bs_compute.dart';
@@ -31,6 +32,7 @@ import 'models/k0_line.dart';
 import 'models/k1_bar_view.dart';
 import 'models/chart_indicator.dart';
 import 'models/chip_config.dart';
+import 'models/tick_dist_config.dart';
 import 'models/kline_combine_frame.dart';
 import 'models/level_models.dart';
 import 'models/k1_analysis.dart';
@@ -96,6 +98,8 @@ Future<void> main() async {
   MsgHistory.instance.appendKnVolumeCumulativeStep();
   // Kn笔数：Rust 分笔第4列真实笔数（任务前必读·常驻）
   MsgHistory.instance.appendKnTickCountRealTicks();
+  // 分笔第4列显式 0 → 副图/笔数分布全无柱（勿默认成 1）
+  MsgHistory.instance.appendTickCountZeroLiteral();
   // 主/副图启动默认=「K0指标」层全选（与选择栏同口径）
   MsgHistory.instance.appendDefaultIndicatorsK0();
   MsgHistory.instance.appendChipDistribution();
@@ -106,6 +110,10 @@ Future<void> main() async {
   MsgHistory.instance.appendMergeRangeExtreme();
   // tooltip VOL/笔数 B/S/G + 应显尽显槽位（不按指标勾选）
   MsgHistory.instance.appendTooltipVolBsgAndSlots();
+  // tooltip 成交量独立行 + Kn比例/节奏命名与多节奏动态行
+  MsgHistory.instance.appendTooltipVolIndepAndRhythm();
+  // K0 筹码峰/笔数峰 + 左侧笔数分布
+  MsgHistory.instance.appendChipTickPeaksAndTickDist();
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     await windowManager.ensureInitialized();
     const opts = WindowOptions(
@@ -205,6 +213,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
   bool _showBuildingDash = true;
   /// 筹码分布配置（落盘 .chan_chip_config.json）
   ChipConfig _chipConfig = const ChipConfig();
+  /// 笔数分布配置（主图左侧；同 JSON 嵌套 tickDist）
+  TickDistConfig _tickDistConfig = const TickDistConfig();
   /// chip 分支：仅显示筹码分布，关闭所有缠论渲染（关=正常缠论+筹码可并存）
   final bool _chipOnlyMode = false;
 
@@ -288,14 +298,22 @@ class _KlineHomePageState extends State<KlineHomePage> {
   }
 
   Future<void> _loadChipConfig() async {
-    final cfg = await ChipSettingsStore.load();
+    final both = await ChipSettingsStore.loadBoth();
     if (!mounted) return;
-    setState(() => _chipConfig = cfg);
+    setState(() {
+      _chipConfig = both.$1;
+      _tickDistConfig = both.$2;
+    });
   }
 
   Future<void> _updateChipConfig(ChipConfig cfg) async {
     setState(() => _chipConfig = cfg);
-    await ChipSettingsStore.save(cfg);
+    await ChipSettingsStore.save(cfg, tickDist: _tickDistConfig);
+  }
+
+  Future<void> _updateTickDistConfig(TickDistConfig cfg) async {
+    setState(() => _tickDistConfig = cfg);
+    await ChipSettingsStore.save(_chipConfig, tickDist: cfg);
   }
 
   @override
@@ -475,6 +493,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       if (_chipOnlyMode) {
         // 仅筹码分布：跳过缠论合并/线段/中枢/BS 计算，清空相关数据
         ChipProfileCompute.clearCache();
+        TickDistProfileCompute.clearCache();
         setState(() {
           _combineFrames = const [];
           _k0ConfirmSignals = const [];
@@ -504,6 +523,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         );
       } else {
         ChipProfileCompute.clearCache();
+        TickDistProfileCompute.clearCache();
         _rebuildCombine();
         _logCombineSummary(prefix: '加载后汇总');
       }
@@ -1051,6 +1071,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
                   showBuildingDash: _showBuildingDash,
                   chipOnlyMode: _chipOnlyMode,
                   chipConfig: _chipConfig,
+                  tickDistConfig: _tickDistConfig,
                   judgmentHistoryByKn: _judgmentHistoryByKn,
                   buy1HistoryByKn: _buy1HistoryByKn,
                   sell1HistoryByKn: _sell1HistoryByKn,
@@ -1410,7 +1431,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
           dense: true,
           title: const Text('筹码桶宽（元）', style: TextStyle(fontSize: 13)),
           subtitle: Text(
-            _chipConfig.bucketStep.toStringAsFixed(2),
+            '${_chipConfig.bucketStep.toStringAsFixed(2)}（笔数分布共用）',
             style: const TextStyle(fontSize: 11),
           ),
           trailing: SizedBox(
@@ -1420,14 +1441,57 @@ class _KlineHomePageState extends State<KlineHomePage> {
               max: 1.0,
               divisions: 99,
               value: _chipConfig.bucketStep.clamp(0.01, 1.0),
-              onChanged: !_chipConfig.enabled || _busy
+              onChanged: (!_chipConfig.enabled && !_tickDistConfig.enabled) ||
+                      _busy
                   ? null
                   : (v) {
                       final step = (v * 100).round() / 100.0;
                       _updateChipConfig(_chipConfig.copyWith(bucketStep: step));
+                      _updateTickDistConfig(
+                          _tickDistConfig.copyWith(bucketStep: step));
                     },
             ),
           ),
+        ),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          dense: true,
+          title: const Text('笔数分布', style: TextStyle(fontSize: 13)),
+          subtitle: Text(
+            _tickDistConfig.enabled
+                ? '已开启（主图左侧绘制 K0笔数分布）'
+                : '已关闭（主图左侧不绘制）',
+            style: const TextStyle(fontSize: 11),
+          ),
+          value: _tickDistConfig.enabled,
+          onChanged: _busy
+              ? null
+              : (v) {
+                  _updateTickDistConfig(_tickDistConfig.copyWith(enabled: v));
+                  _msgHistory.append('笔数分布总开关=${v ? "开" : "关"}');
+                },
+          secondary: IconButton(
+            tooltip: '笔数分布说明',
+            icon: const Icon(Icons.help_outline, size: 18),
+            onPressed: _showTickDistHelp,
+          ),
+        ),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          dense: true,
+          title: const Text('笔数峰延长线', style: TextStyle(fontSize: 13)),
+          subtitle: Text(
+            _tickDistConfig.peakLineEnabled ? '已开启' : '已关闭',
+            style: const TextStyle(fontSize: 11),
+          ),
+          value: _tickDistConfig.peakLineEnabled,
+          onChanged: !_tickDistConfig.enabled || _busy
+              ? null
+              : (v) {
+                  _updateTickDistConfig(
+                      _tickDistConfig.copyWith(peakLineEnabled: v));
+                  _msgHistory.append('笔数峰延长线=${v ? "开" : "关"}');
+                },
         ),
         const SizedBox(height: 12),
         OutlinedButton.icon(
@@ -1683,6 +1747,38 @@ class _KlineHomePageState extends State<KlineHomePage> {
             '2. 主图右侧立即绘制 K0 筹码；\n'
             '3. 可调「筹码桶宽」「筹码峰延长线」；\n'
             '4. 配置写入 .chan_chip_config.json，下次启动恢复。',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('知道了'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showTickDistHelp() {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('笔数分布说明'),
+        content: const SingleChildScrollView(
+          child: Text(
+            '作用：与筹码分布同构，按价格累计分笔笔数（第4列），'
+            '画在主图左侧；价签画在笔数分布右侧。\n\n'
+            '怎么看\n'
+            '· 水平柱 B/S/G 着色同筹码；\n'
+            '· 笔数峰：局部笔数峰打点，虚线延长进主图；\n'
+            '· 十字 tooltip：K0笔数峰-/+n（编号规则同筹码峰）。\n\n'
+            '数据\n'
+            '· Rust 写入 chip_tick_count_bins（按价累加 ticks）；'
+            '桶宽与筹码共用。\n\n'
+            '操作步骤\n'
+            '1. 设置打开「笔数分布」；\n'
+            '2. 主图左侧绘制；可开「笔数峰延长线」；\n'
+            '3. 重编 DLL 后冷启以载入笔数桶（旧数据无 bins 时回退收盘价落笔数）。',
           ),
         ),
         actions: [
