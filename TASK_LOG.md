@@ -2,6 +2,35 @@
 
 ## 最新记录
 
+### 2026-08-02 — 清理三型/四型调试埋点
+
+- **要点**：移除 `kline_chart` / `bar_feature_lookup` 中 debug-5fbfa5 文件埋点及仅用于埋点的 `dart:io`/`dart:convert` 引用。
+- **相关路径**：`kline_chart.dart`、`bar_feature_lookup.dart`
+
+### 2026-08-02 — tip 三型/四型改为延长线落点价
+
+- **要点**：tooltip「Kn三型平移线/四型对线」改为延长线落到该根 K0 的价格（y0+slope·Δx）；四型分顶/底价。
+- **相关路径**：`fx_extend_line_compute.dart`、`bar_feature_lookup.dart`、`msg_history.dart`
+- **注意**：与主图近邻窗筛选同口径；非斜率。
+
+### 2026-08-02 — 三型/四型：最新/十字近邻 + tip
+
+- **要点**：无十字只画最新窗；开十字画焦点近邻窗；tooltip 增「Kn三型平移线」「Kn四型对线」斜率读数，与主图筛选同口径。
+- **相关路径**：`fx_extend_line_compute.dart`、`kline_chart.dart`、`bar_feature_lookup.dart`、`msg_history.dart`
+- **注意**：tip 按柱 asOf 取近邻窗，非勾选门控。
+
+### 2026-08-02 — 三型/四型改为滑动窗多组（K0步进）
+
+- **要点**：修复「只出一组」：确认序滑动窗（三型窗3、四型窗4）每窗合格即画一组，随步进累积；asOf 用 confirms 前缀。
+- **相关路径**：`fx_extend_line_compute.dart`、`kline_chart.dart`、`fx_extend_line_compute_test.dart`、`msg_history.dart`
+- **注意**：勿再只取全图最早前 N。
+
+### 2026-08-02 — 主图 Kn三型平移线 / Kn四型对线（v1）
+
+- **要点**：新增主图延伸指标「K{n}三型平移线」「K{n}四型对线」；确认分型前 N 锚点；三型两同斜率过异型向右，四型两顶+两底弦线向右；十字 asOf 禁末态；层全选/默认 K0。纯 Flutter。
+- **相关路径**：`fx_extend_line_compute.dart`、`chart_indicator.dart`、`kline_chart.dart`、`fx_extend_line_compute_test.dart`、`msg_history.dart`、`main.dart`
+- **注意**：前 N 按确认序冻结；延伸画到视口右缘；验收连续单步。
+
 ### 2026-08-02 — 副图 Kn连线斜率（全层同构）
 
 - **要点**：新增副图「K{n}连线斜率」；复用比例出现链末根算 slope=dP/dX；K0 颗粒度会话冻结；折线+0轴；tip/层全选/默认K0与比例同口径。纯 Flutter。

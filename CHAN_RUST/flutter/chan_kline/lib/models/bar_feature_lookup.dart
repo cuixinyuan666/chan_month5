@@ -19,6 +19,7 @@ import '../compute/class_n_bs_compute.dart';
 import '../compute/kn_volume_series_compute.dart';
 import '../compute/adjacent_ratio_compute.dart';
 import '../compute/line_slope_compute.dart';
+import '../compute/fx_extend_line_compute.dart';
 import '../compute/step_rhythm_compute.dart';
 import '../compute/profile_peak_classify.dart';
 
@@ -639,6 +640,44 @@ class BarFeatureLookup {
               series[b.idx] != null) {
             sub['line_slope_${e.key}'] = series[b.idx];
           }
+        }
+      }
+    }
+
+    // Kn三型平移 / 四型对线：按柱 asOf 取近邻窗读数（与主图十字筛选同口径）
+    if (bars.isNotEmpty && (k0Confirms.isNotEmpty || levels.isNotEmpty)) {
+      var maxD = 0;
+      for (final lv in levels) {
+        final d = lv.level - 1;
+        if (d > maxD) maxD = d;
+      }
+      for (var dkn = 0; dkn <= maxD; dkn++) {
+        for (final b in bars) {
+          if (asOf != null && b.idx > asOf) continue;
+          final poles = collectLevelFxPoles(
+            displayKn: dkn,
+            bars: bars,
+            k0Confirms: k0Confirms,
+            levels: levels,
+            asOf: b.idx,
+          );
+          // tip 读数=延长线落到本根 K0 的价格（非斜率）
+          final tPx = triplePriceReadout(
+            calcAllTripleGroups(poles),
+            atX: b.idx,
+            focusX: b.idx,
+          );
+          final q = quadPriceReadout(
+            calcAllQuadGroups(poles),
+            atX: b.idx,
+            focusX: b.idx,
+          );
+          final row = byIdx.putIfAbsent(b.idx, () => {'idx': b.idx});
+          final sub = row.putIfAbsent('sub', () => <String, dynamic>{})
+              as Map<String, dynamic>;
+          if (tPx != null) sub['fx_triple_price_$dkn'] = tPx;
+          if (q.top != null) sub['fx_quad_top_price_$dkn'] = q.top;
+          if (q.bottom != null) sub['fx_quad_bottom_price_$dkn'] = q.bottom;
         }
       }
     }
@@ -1306,6 +1345,28 @@ class BarFeatureLookup {
       CrosshairTooltipRow.boxNum(
           slope is num ? slope.toStringAsFixed(4) : 0),
     ));
+    // 三型平移 / 四型对线：延长线落到本根 K0 的价格
+    final triple = sub?['fx_triple_price_$displayKn'];
+    ratioRhythm.add(kv(
+      'K$displayKn三型平移线',
+      CrosshairTooltipRow.boxNum(
+          triple is num ? triple.toStringAsFixed(2) : 0),
+    ));
+    final qTop = sub?['fx_quad_top_price_$displayKn'];
+    final qBot = sub?['fx_quad_bottom_price_$displayKn'];
+    if (qTop is num || qBot is num) {
+      final parts = <String>[
+        if (qTop is num) '顶${qTop.toStringAsFixed(2)}',
+        if (qBot is num) '底${qBot.toStringAsFixed(2)}',
+      ];
+      ratioRhythm.add(kv(
+        'K$displayKn四型对线',
+        CrosshairTooltipRow.boxNum(parts.join(' ')),
+      ));
+    } else {
+      ratioRhythm.add(
+          kv('K$displayKn四型对线', CrosshairTooltipRow.boxNum(0)));
+    }
 
     return (fxExtra: fxExtra, bs: bs, ratioRhythm: ratioRhythm);
   }

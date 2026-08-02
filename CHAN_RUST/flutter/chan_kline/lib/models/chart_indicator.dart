@@ -1,13 +1,17 @@
 import 'k0_line.dart';
 import 'level_models.dart';
 
-/// 主图指标：连线 / 合并框 / KN线 / 中枢。
+/// 主图指标：连线 / 合并框 / KN线 / 中枢 / 三型平移 / 四型对线。
 /// （筹码分布已迁出主图指标，改由设置面板总开关控制，仅保留 K0 分支）
 enum MainIndicatorKind {
   line,
   combine,
   kn,
   zs,
+  /// Kn三型平移线（前三确认分型：两同定斜率，过异型向右）
+  fxTripleParallel,
+  /// Kn四型对线（前四确认分型：两顶线+两底线向右）
+  fxQuadPair,
 }
 
 /// 主图指标类别元数据。
@@ -22,6 +26,9 @@ extension MainIndicatorKindMeta on MainIndicatorKind {
         return '中枢';
       case MainIndicatorKind.line:
         return '连线';
+      case MainIndicatorKind.fxTripleParallel:
+      case MainIndicatorKind.fxQuadPair:
+        return '延伸';
     }
   }
 
@@ -35,6 +42,9 @@ extension MainIndicatorKindMeta on MainIndicatorKind {
         return 2;
       case MainIndicatorKind.line:
         return 3;
+      case MainIndicatorKind.fxTripleParallel:
+      case MainIndicatorKind.fxQuadPair:
+        return 4;
     }
   }
 }
@@ -43,13 +53,17 @@ extension MainIndicatorKindMeta on MainIndicatorKind {
 class MainChartIndicator {
   final MainIndicatorKind kind;
   /// kn=0：K0中枢（原生分钟K）；kn≥1：Kn中枢（连线段）。
-  /// combine/line/kn：内部 kn≥1，显示层 = kn-1。
+  /// combine/line/kn/延伸：内部 kn≥1，显示层 = kn-1。
   final int kn;
 
   const MainChartIndicator.line(this.kn) : kind = MainIndicatorKind.line;
   const MainChartIndicator.combine(this.kn) : kind = MainIndicatorKind.combine;
   const MainChartIndicator.kn(this.kn) : kind = MainIndicatorKind.kn;
   const MainChartIndicator.zs(this.kn) : kind = MainIndicatorKind.zs;
+  const MainChartIndicator.fxTripleParallel(this.kn)
+      : kind = MainIndicatorKind.fxTripleParallel;
+  const MainChartIndicator.fxQuadPair(this.kn)
+      : kind = MainIndicatorKind.fxQuadPair;
 
   String get label {
     switch (kind) {
@@ -62,6 +76,10 @@ class MainChartIndicator {
       case MainIndicatorKind.zs:
         // 自定义命名：去掉「连续」，展示为「Kn中枢」
         return 'K$kn中枢';
+      case MainIndicatorKind.fxTripleParallel:
+        return 'K${kn - 1}三型平移线';
+      case MainIndicatorKind.fxQuadPair:
+        return 'K${kn - 1}四型对线';
     }
   }
 
@@ -73,11 +91,13 @@ class MainChartIndicator {
       case MainIndicatorKind.line:
       case MainIndicatorKind.combine:
       case MainIndicatorKind.kn:
+      case MainIndicatorKind.fxTripleParallel:
+      case MainIndicatorKind.fxQuadPair:
         return kn - 1;
     }
   }
 
-  /// 同层内展示序：Kn → Kn合并 → Kn中枢 → Kn连线。
+  /// 同层内展示序：Kn → Kn合并 → Kn中枢 → Kn连线 → 三型 → 四型。
   int get kindOrderInLevel {
     switch (kind) {
       case MainIndicatorKind.kn:
@@ -88,6 +108,10 @@ class MainChartIndicator {
         return 2;
       case MainIndicatorKind.line:
         return 3;
+      case MainIndicatorKind.fxTripleParallel:
+        return 4;
+      case MainIndicatorKind.fxQuadPair:
+        return 5;
     }
   }
 
@@ -325,7 +349,7 @@ List<MainChartIndicator> buildMainIndicatorCatalog(int maxKn) {
   final out = <MainChartIndicator>[];
   final combineMax = maxKn < 1 ? 1 : maxKn;
   final knMax = maxKn < 1 ? 1 : maxKn;
-  // 按类别分组：K线 → 合并 → 中枢 → 连线（筹码分布已迁设置·仅K0，不在目录）
+  // 按类别分组：K线 → 合并 → 中枢 → 连线 → 延伸（筹码分布已迁设置·仅K0，不在目录）
   for (var d = 1; d <= knMax; d++) {
     out.add(MainChartIndicator.kn(d));
   }
@@ -337,6 +361,13 @@ List<MainChartIndicator> buildMainIndicatorCatalog(int maxKn) {
   }
   for (var d = 1; d <= maxKn; d++) {
     out.add(MainChartIndicator.line(d));
+  }
+  // 三型平移 / 四型对线（与连线同号：d=1→K0）
+  for (var d = 1; d <= maxKn; d++) {
+    out.add(MainChartIndicator.fxTripleParallel(d));
+  }
+  for (var d = 1; d <= maxKn; d++) {
+    out.add(MainChartIndicator.fxQuadPair(d));
   }
   return out;
 }
@@ -407,7 +438,7 @@ List<SubChartIndicator> buildSubIndicatorCatalog(
 }
 
 /// 主图「K{displayLevel}指标」层全选成员（仅返回 catalog 内存在的项）。
-/// 层内序：Kn → Kn合并 → Kn中枢 → Kn连线。
+/// 层内序：Kn → Kn合并 → Kn中枢 → Kn连线 → 三型平移 → 四型对线。
 List<MainChartIndicator> mainIndicatorsForLevel(
   int displayLevel,
   List<MainChartIndicator> catalog,
@@ -418,6 +449,8 @@ List<MainChartIndicator> mainIndicatorsForLevel(
     MainChartIndicator.combine(displayLevel + 1),
     MainChartIndicator.zs(displayLevel),
     MainChartIndicator.line(displayLevel + 1),
+    MainChartIndicator.fxTripleParallel(displayLevel + 1),
+    MainChartIndicator.fxQuadPair(displayLevel + 1),
   ];
   return candidates.where(allow.contains).toList();
 }

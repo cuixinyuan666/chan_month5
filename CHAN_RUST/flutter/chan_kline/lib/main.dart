@@ -84,6 +84,8 @@ Future<void> main() async {
   MsgHistory.instance.appendAdjacentRatioAndStepRhythm();
   // Kn连线斜率副图（全层同构；复用比例出现链）
   MsgHistory.instance.appendKnLineSlope();
+  // 主图 Kn三型平移线 / Kn四型对线
+  MsgHistory.instance.appendKnFxExtendLines();
   MsgHistory.instance.appendTickK0NativePeriod();
   // 展示轨：动态KN当确认段画虚线；确认优先纠正/改实线
   MsgHistory.instance.appendDisplayTrackDynamicKnBuildingLines();

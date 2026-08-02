@@ -16,6 +16,7 @@ import '../compute/class_n_bs_compute.dart';
 import '../compute/kn_volume_series_compute.dart';
 import '../compute/adjacent_ratio_compute.dart';
 import '../compute/line_slope_compute.dart';
+import '../compute/fx_extend_line_compute.dart';
 import '../compute/step_rhythm_compute.dart';
 import '../compute/level_unit_bar_view_compute.dart';
 import '../compute/zs_compute.dart';
@@ -720,11 +721,14 @@ class _KlineChartState extends State<KlineChart> {
     final tipLevels = asOf != null
         ? (asOfBundle?.levels ?? const <LevelBundle>[])
         : widget.levels;
+    final tipK0Confirms = asOf != null
+        ? (asOfBundle?.k0Confirms ?? const <K0ConfirmSignal>[])
+        : widget.k0ConfirmSignals;
     final lookup = BarFeatureLookup.build(
       bars: widget.bars,
       // K0合并框：十字 as-of=Rust frames；MG/MD 与合并序同源
       combineFrames: _effectiveK0CombineFrames,
-      k0Confirms: widget.k0ConfirmSignals,
+      k0Confirms: tipK0Confirms,
       barFeatures: widget.barFeatures,
       k0Lines: widget.k0Lines,
       k1Analysis: widget.k1Analysis,
@@ -1738,6 +1742,24 @@ class _KlineCompositePainter extends CustomPainter {
             slotW,
             ind.kn,
           );
+        } else if (ind.kind == MainIndicatorKind.fxTripleParallel) {
+          _drawFxTripleParallel(
+            canvas,
+            size.width,
+            plotTop,
+            plotH,
+            slotW,
+            ind.kn,
+          );
+        } else if (ind.kind == MainIndicatorKind.fxQuadPair) {
+          _drawFxQuadPair(
+            canvas,
+            size.width,
+            plotTop,
+            plotH,
+            slotW,
+            ind.kn,
+          );
         }
       }
     }
@@ -2633,6 +2655,143 @@ class _KlineCompositePainter extends CustomPainter {
       }
     }
     return buildLevelUnitBarViews(frozenBars, activeUnit: active);
+  }
+
+  /// 主图 Kn三型平移线（internal kn≥1 → 显示 K(kn-1)）。
+  void _drawFxTripleParallel(
+    Canvas canvas,
+    double w,
+    double plotTop,
+    double plotH,
+    double slotW,
+    int kn,
+  ) {
+    if (kn < 1 || bars.isEmpty) return;
+    final displayKn = kn - 1;
+    final asOf = segAsOf;
+    // 十字 asOf：层/确认只认 asOfBundle（失败=空，禁末态）
+    final lv = asOf != null
+        ? (zsAsOfBundle?.levels ?? const <LevelBundle>[])
+        : levels;
+    final k0 = asOf != null
+        ? (zsAsOfBundle?.k0Confirms ?? const <K0ConfirmSignal>[])
+        : k0ConfirmSignals;
+    final poles = collectLevelFxPoles(
+      displayKn: displayKn,
+      bars: bars,
+      k0Confirms: k0,
+      levels: lv,
+      asOf: asOf,
+    );
+    // 无十字：仅最新窗；有十字：近邻窗（与 tip 同口径）
+    final focusX = asOf;
+    final rays = selectFxExtendRays(
+      calcAllTripleGroups(poles),
+      focusX: focusX,
+    );
+    for (final ray in rays) {
+      _paintFxExtendRay(
+        canvas,
+        w,
+        plotTop,
+        plotH,
+        slotW,
+        ray: ray,
+        displayKn: displayKn,
+      );
+    }
+  }
+
+  /// 主图 Kn四型对线（两顶线 + 两底线）。
+  void _drawFxQuadPair(
+    Canvas canvas,
+    double w,
+    double plotTop,
+    double plotH,
+    double slotW,
+    int kn,
+  ) {
+    if (kn < 1 || bars.isEmpty) return;
+    final displayKn = kn - 1;
+    final asOf = segAsOf;
+    final lv = asOf != null
+        ? (zsAsOfBundle?.levels ?? const <LevelBundle>[])
+        : levels;
+    final k0 = asOf != null
+        ? (zsAsOfBundle?.k0Confirms ?? const <K0ConfirmSignal>[])
+        : k0ConfirmSignals;
+    final poles = collectLevelFxPoles(
+      displayKn: displayKn,
+      bars: bars,
+      k0Confirms: k0,
+      levels: lv,
+      asOf: asOf,
+    );
+    final focusX = asOf;
+    final rays = selectFxExtendRays(
+      calcAllQuadGroups(poles),
+      focusX: focusX,
+    );
+    for (final ray in rays) {
+      _paintFxExtendRay(
+        canvas,
+        w,
+        plotTop,
+        plotH,
+        slotW,
+        ray: ray,
+        displayKn: displayKn,
+      );
+    }
+  }
+
+  /// 画延伸射线：可选弦 (x1,y1)→(x0,y0)，再自 (x0,y0) 外推到视口右缘。
+  void _paintFxExtendRay(
+    Canvas canvas,
+    double w,
+    double plotTop,
+    double plotH,
+    double slotW, {
+    required FxExtendRay ray,
+    required int displayKn,
+  }) {
+    final style = ChartLevelLineStyle.forLevel(displayKn + 1);
+    final paint = Paint()
+      ..color = style.color.withValues(alpha: style.buildingAlpha)
+      ..strokeWidth = style.buildingStrokeWidth
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+
+    // 弦：左锚 → 右锚
+    if (ray.x1 != null && ray.y1 != null) {
+      final ax = _barCenterX(ray.x1!.round(), w, slotW);
+      final ay = priceRange.yOf(ray.y1!, plotTop, plotH);
+      final bx = _barCenterX(ray.x0.round(), w, slotW);
+      final by = priceRange.yOf(ray.y0, plotTop, plotH);
+      _drawPatternLine(
+        canvas,
+        Offset(ax, ay),
+        Offset(bx, by),
+        paint,
+        style.buildingDashPattern,
+      );
+    }
+
+    // 向右外推至绘图区右缘（价由斜率连续外推）
+    final endBarF = viewport.xToIndex(w - KlineViewport.padR, w);
+    if (endBarF <= ray.x0) return;
+    final endPrice = ray.y0 + ray.slope * (endBarF - ray.x0);
+    final sx = _barCenterX(ray.x0.round(), w, slotW);
+    final sy = priceRange.yOf(ray.y0, plotTop, plotH);
+    final ex = w - KlineViewport.padR;
+    final ey = priceRange.yOf(endPrice, plotTop, plotH);
+    _drawPatternLine(
+      canvas,
+      Offset(sx, sy),
+      Offset(ex, ey),
+      paint,
+      style.buildingDashPattern,
+    );
   }
 
   /// 主图 Kn中枢框：强制消费 Rust zs_* JSON（K0=分钟K段；Kn=连线段）。
