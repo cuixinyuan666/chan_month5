@@ -108,7 +108,7 @@ void main() {
     );
 
     final atConfirm = lookup.crosshairTooltipLines(2, timePart: '2024/01/01 09:02');
-    // K0分型确认 = K1 端点确认（旧口径 bi_confirm）
+    // K0分型确认 = 原始K分型 k0_confirm（与峰距/截断同宗；非「K1端点」旧口径）
     expect(atConfirm.any((l) => l == 'K0分型确认:【1】'), isTrue);
     // K1 块顺序：idx → OHLCV → 合并GG/DD/MG/MD → 合并K序 → 分型确认
     final seqIdx = atConfirm.indexWhere((l) => l.startsWith('K1 idx:【0】'));

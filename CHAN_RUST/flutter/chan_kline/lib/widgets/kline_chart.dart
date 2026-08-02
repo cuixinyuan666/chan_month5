@@ -4099,6 +4099,14 @@ class _KlineCompositePainter extends CustomPainter {
       );
     }
 
+    // 【语义统一·K0】labelKn==1（显示 K0分型确认）只画 k0ConfirmSignals；
+    // level==1.confirms 与 k0 同源，但禁止优先走 bundle（易误读成 K1）。
+    if (labelKn == 1) {
+      for (final s in k0ConfirmSignals) {
+        paintPoint(s.x, s.value);
+      }
+      return;
+    }
     LevelBundle? bundle;
     for (final b in levels) {
       if (b.level == level) {
@@ -4111,13 +4119,6 @@ class _KlineCompositePainter extends CustomPainter {
         if ((c.fx == 'TOP' || c.fx == 'BOTTOM') && c.value != 0) {
           paintPoint(c.x, c.value);
         }
-      }
-      return;
-    }
-    // 回退：K0 层（kn=1，无 LevelBundle）用旧 k0_confirms
-    if (labelKn == 1) {
-      for (final s in k0ConfirmSignals) {
-        paintPoint(s.x, s.value);
       }
     }
   }
@@ -4214,16 +4215,17 @@ class _KlineCompositePainter extends CustomPainter {
         break;
       }
     }
-    if (bundle != null) {
-      series = _peakDistSeries(n, bundle.confirms);
-      color = ChartLevelLineStyle.forLevel(level).color;
-    } else if (labelKn == 1 && barFeatures.isNotEmpty) {
-      // 回退：K0 层（kn=1，无 LevelBundle）用旧 bi 极点距
+    // 【语义统一·K0】labelKn==1（显示 K0分型极点距）只读 barFeatures（=k0 极点距）；
+    // level==1.confirms 虽与 k0 同源，禁止优先走 bundle，避免误判为「K1 层」。
+    if (labelKn == 1 && barFeatures.isNotEmpty) {
       series = List<int>.generate(
         n,
         (i) => i < barFeatures.length ? barFeatures[i].fractalPeakDist : 0,
       );
       color = const Color(0xFF38BDF8);
+    } else if (bundle != null) {
+      series = _peakDistSeries(n, bundle.confirms);
+      color = ChartLevelLineStyle.forLevel(level).color;
     } else {
       return;
     }
@@ -4319,20 +4321,20 @@ class _KlineCompositePainter extends CustomPainter {
         break;
       }
     }
+    // 【语义统一·K0】labelKn==1 只画 k0ConfirmSignals；Kn≥2 才用 LevelBundle
+    if (labelKn == 1) {
+      for (final s in k0ConfirmSignals) {
+        if (!s.truncated) continue;
+        paintPoint(s.x, s.value);
+      }
+      return;
+    }
     if (bundle != null) {
       for (final c in bundle.confirms) {
         if (!c.truncated) continue;
         if ((c.fx == 'TOP' || c.fx == 'BOTTOM') && c.value != 0) {
           paintPoint(c.x, c.value);
         }
-      }
-      return;
-    }
-    // 回退：K0 层（kn=1，无 LevelBundle）用旧 k0_confirms
-    if (labelKn == 1) {
-      for (final s in k0ConfirmSignals) {
-        if (!s.truncated) continue;
-        paintPoint(s.x, s.value);
       }
     }
   }

@@ -695,6 +695,23 @@ class MsgHistory {
     );
   }
 
+  /// K0 分型确认/极点距/截断语义统一（进程内去重；防误读 level==1 为 K1）。
+  static bool _k0FxSrcUnifiedLogged = false;
+  void appendK0FractalSourceUnified() {
+    if (_k0FxSrcUnifiedLogged) return;
+    _k0FxSrcUnifiedLogged = true;
+    append(
+      '【K0分型确认/极点距/截断·语义统一·2026-08-02】'
+      '显示名 K0分型确认 / K0分型极点距 / K0截断 一律读同一宗：'
+      'k0_confirm + barFeatures.fractalPeakDist（Rust enrich 自 k0_confirm）。'
+      '说明：pipeline levels[level==1].confirms 的「输入」是原始 K0，与 k0_confirm 数值同源；'
+      'level==1 的 units/segments 才是 K1（K0连线）。'
+      '禁止再优先走 LevelBundle(level==1) 再回退 k0——双轨易被误判为「读的是 K1 层」。'
+      '副图/tooltip/crosshairSubRows 同构：kn==1→k0/feat；kn≥2→level_confirms[kn]。'
+      '旧测试注释「K0分型确认=K1端点确认」已废止。',
+    );
+  }
+
   /// 运行时虚线摘要（内容变才追加；复制历史记录排查用）。
   void appendDisplayBuildingLinesRuntime({
     required int kn,

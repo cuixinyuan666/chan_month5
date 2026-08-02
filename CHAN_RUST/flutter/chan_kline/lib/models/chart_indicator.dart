@@ -248,6 +248,7 @@ class SubChartIndicator {
         return 'K${kn - 1}分型确认';
       case SubIndicatorKind.fractalJudgment:
         return 'K${kn - 1}分型判断';
+      // kn=1→显示 K0：数据源=k0_confirm/feat（勿把 level==1 当成 K1）
       case SubIndicatorKind.fractalPeakDist:
         return 'K${kn - 1}分型极点距';
       case SubIndicatorKind.truncation:

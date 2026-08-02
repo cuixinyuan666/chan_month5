@@ -549,7 +549,10 @@ class BarFeatureLookup {
       }
     }
 
-    // 极点距：tooltip 应显尽显，全层始终计算（不依赖副图勾选）
+    // 极点距：tooltip 应显尽显，全层始终计算（不依赖副图勾选）。
+    // 【语义统一·K0】fractal_peak_dist_1 只认 barFeatures（=k0_confirm 极点距）；
+    // level==1.confirms 与 k0 同源，但禁止再覆盖，避免读成「K1 层」双轨。
+    // Kn≥1 显示名对应 catalog kn=displayKn+1 → 写 fractal_peak_dist_{level≥2}。
     for (final f in barFeatures) {
       final row = byIdx.putIfAbsent(f.idx, () => {'idx': f.idx});
       final sub = row.putIfAbsent('sub', () => <String, dynamic>{})
@@ -558,7 +561,8 @@ class BarFeatureLookup {
       sub['fractal_peak_dist_1'] = f.fractalPeakDist;
     }
     for (final bundle in levels) {
-      if (bundle.level < 1 || bars.isEmpty) continue;
+      // level==1 = K0 分型确认（输入为原始K），K0 峰距已由 barFeatures 写好，跳过覆盖
+      if (bundle.level < 2 || bars.isEmpty) continue;
       final series = _peakDistSeries(bars.length, bundle.confirms);
       for (var i = 0; i < bars.length; i++) {
         final row = byIdx.putIfAbsent(bars[i].idx, () => {'idx': bars[i].idx});
@@ -921,29 +925,31 @@ class BarFeatureLookup {
         add(ind.label, truncated ? '$v(截断)' : v);
       }
       if (ind.kind == SubIndicatorKind.fractalPeakDist) {
-        if (sub.containsKey('fractal_peak_dist_${ind.kn}')) {
+        // 【语义统一·K0】kn==1 优先 feat；kn≥2 读 fractal_peak_dist_{kn}
+        if (ind.kn == 1) {
+          add(ind.label, sub['fractal_peak_dist_1'] ?? sub['fractal_peak_dist']);
+        } else if (sub.containsKey('fractal_peak_dist_${ind.kn}')) {
           add(ind.label, sub['fractal_peak_dist_${ind.kn}']);
-        } else if (ind.kn == 1) {
-          // 回退：无 levels 时用旧 K0连线极点距
-          add(ind.label, sub['fractal_peak_dist']);
         }
       }
       if (ind.kind == SubIndicatorKind.truncation) {
-        // 截断触发当步：有 truncated 确认才显示方向值（level=kn）
-        final confirms = row['level_confirms'];
+        // 截断触发当步：有 truncated 确认才显示方向值
+        // 【语义统一·K0】kn==1 只读 k0_confirm；kn≥2 读 level_confirms[kn]
         dynamic v;
-        if (confirms is Map && confirms.containsKey(ind.kn)) {
-          final c = confirms[ind.kn];
-          if (c is LevelConfirm && c.truncated) {
-            v = c.value;
-          } else if (c is Map && c['truncated'] == true) {
-            v = c['value'];
-          }
-        } else if (ind.kn == 1) {
-          // 回退：无 levels 时用旧 k0_confirm 截断
+        if (ind.kn == 1) {
           final bc = row['k0_confirm'];
           if (bc is Map && bc['truncated'] == true) {
             v = bc['value'];
+          }
+        } else {
+          final confirms = row['level_confirms'];
+          if (confirms is Map && confirms.containsKey(ind.kn)) {
+            final c = confirms[ind.kn];
+            if (c is LevelConfirm && c.truncated) {
+              v = c.value;
+            } else if (c is Map && c['truncated'] == true) {
+              v = c['value'];
+            }
           }
         }
         add(ind.label, v);
@@ -1208,27 +1214,34 @@ class BarFeatureLookup {
         CrosshairTooltipRow.kv(label, value);
 
     // —— 极点距 / 截断 ——
+    // catalog：显示 Kn → 内部 kn=displayKn+1；K0(display=0) 一律 k0/feat，Kn≥1 用 level_confirms
     final fxExtra = <CrosshairTooltipRow>[];
     final peakKn = displayKn + 1;
-    dynamic peak = sub == null ? null : sub['fractal_peak_dist_$peakKn'];
-    if (peak == null && peakKn == 1 && sub != null) {
-      peak = sub['fractal_peak_dist'];
+    dynamic peak;
+    if (displayKn == 0) {
+      // 【语义统一·K0】与 K0分型确认同宗：barFeatures 峰距（enrich 自 k0_confirm）
+      peak = sub?['fractal_peak_dist_1'] ?? sub?['fractal_peak_dist'];
+    } else {
+      peak = sub == null ? null : sub['fractal_peak_dist_$peakKn'];
     }
     fxExtra.add(kv(
         'K$displayKn分型极点距', CrosshairTooltipRow.boxNum(peak ?? 0)));
 
     dynamic truncV;
     final confirms = row['level_confirms'];
-    if (confirms is Map && confirms.containsKey(peakKn)) {
+    if (displayKn == 0) {
+      // 【语义统一·K0】截断只读 k0_confirm，不绕 level_confirms[1]
+      final bc = row['k0_confirm'];
+      if (bc is Map && bc['truncated'] == true) {
+        truncV = bc['value'];
+      }
+    } else if (confirms is Map && confirms.containsKey(peakKn)) {
       final c = confirms[peakKn];
       if (c is LevelConfirm && c.truncated) {
         truncV = c.value;
       } else if (c is Map && c['truncated'] == true) {
         truncV = c['value'];
       }
-    } else if (peakKn == 1) {
-      final bc = row['k0_confirm'];
-      if (bc is Map && bc['truncated'] == true) truncV = bc['value'];
     }
     fxExtra.add(
         kv('K$displayKn截断', CrosshairTooltipRow.boxNum(truncV ?? 0)));

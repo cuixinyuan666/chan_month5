@@ -114,6 +114,8 @@ Future<void> main() async {
   MsgHistory.instance.appendTooltipVolIndepAndRhythm();
   // K0 筹码峰/笔数峰 + 左侧笔数分布
   MsgHistory.instance.appendChipTickPeaksAndTickDist();
+  // K0 分型确认/极点距/截断：统一读 k0/feat，禁 level==1 双轨误判
+  MsgHistory.instance.appendK0FractalSourceUnified();
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     await windowManager.ensureInitialized();
     const opts = WindowOptions(

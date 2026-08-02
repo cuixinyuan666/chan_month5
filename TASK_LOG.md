@@ -2,6 +2,12 @@
 
 ## 最新记录
 
+### 2026-08-02 — K0分型确认/极点距/截断语义统一
+
+- **要点**：显示名 K0分型确认/极点距/截断一律读 `k0_confirm` + `barFeatures.fractalPeakDist`；副图/tooltip 不再优先 `LevelBundle(level==1)`。`level==1.confirms` 与 k0 同源（输入=原始K），units 才是 K1——双轨易误判为「读 K1」。
+- **相关路径**：`bar_feature_lookup.dart`、`kline_chart.dart`、`msg_history.dart`、`bar_feature_lookup_test.dart`
+- **注意**：勿再写「K0分型确认=K1端点」；kn==1→k0/feat，kn≥2→level_confirms。
+
 ### 2026-08-02 — 分笔第4列显式0保留0（副图/笔数分布全无柱）
 
 - **要点**：`parse_tick_line` 对显式笔数 `0` 不再默认成 1；仅无列或第4列为 B/S 时按 1 笔。002003 等笔数列全 0 时，Kn笔数副图与左侧笔数分布应全无柱。
