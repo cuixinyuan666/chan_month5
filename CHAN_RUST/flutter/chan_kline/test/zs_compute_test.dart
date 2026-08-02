@@ -79,11 +79,11 @@ void main() {
     expect(rows[1].value, '【2】');
     expect(rows[2].label, 'K0中枢 idx');
     expect(rows[2].value, '【0】');
-    expect(rows[3].label, 'K0中枢确认');
+    expect(rows[3].label, 'K0上一中枢确认');
     expect(rows[3].value, '【0】');
   });
 
-  test('中枢确认：仅首根K检测上一中枢isSure', () {
+  test('上一中枢确认：仅首根K检测上一中枢isSure', () {
     final bundle = KlineCombineBundle(
       frames: const [],
       k0Confirms: const [],
@@ -110,7 +110,7 @@ void main() {
       asOf: 4,
     );
     expect(rowsFirst.length, 4);
-    expect(rowsFirst[3].label, 'K0中枢确认');
+    expect(rowsFirst[3].label, 'K0上一中枢确认');
     expect(rowsFirst[3].value, '【1】');
 
     // ZS[1] 非首根K（x1+1=5）→ 确认=0
@@ -128,7 +128,7 @@ void main() {
     expect(rowsMid[3].value, '【0】');
   });
 
-  test('中枢确认：上一中枢未确认时显示0', () {
+  test('上一中枢确认：上一中枢未确认时显示0', () {
     final bundle = KlineCombineBundle(
       frames: const [],
       k0Confirms: const [],
@@ -186,6 +186,24 @@ void main() {
         ],
       ),
       tail,
+    );
+  });
+
+  test('asOf 有值但 asOfBundle 缺失：空列表（禁回落末态）', () {
+    final endState = [
+      const ZSFrame(x1: 8, x2: 11, high: 11.7, low: 11.7, gg: 11.7, dd: 11.7, level: 0),
+    ];
+    expect(
+      computeZsFramesAtAsOf(
+        kn: 0,
+        combineFrames: const [],
+        levels: const [],
+        barFeatures: const [],
+        asOf: 7,
+        asOfBundle: null,
+        zsK0Frames: endState,
+      ),
+      isEmpty,
     );
   });
 }

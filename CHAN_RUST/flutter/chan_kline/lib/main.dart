@@ -116,6 +116,8 @@ Future<void> main() async {
   MsgHistory.instance.appendChipTickPeaksAndTickDist();
   // K0 分型确认/极点距/截断：统一读 k0/feat，禁 level==1 双轨误判
   MsgHistory.instance.appendK0FractalSourceUnified();
+  // tooltip 四准则：asOf禁末态 / K0合并Rust / 上一中枢确认 / BS禁兜底
+  MsgHistory.instance.appendTooltipFourRulesMlReady();
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     await windowManager.ensureInitialized();
     const opts = WindowOptions(

@@ -390,13 +390,7 @@ class BarFeatureLookup {
       if (sellHist.isEmpty && sell1K0Frames.isNotEmpty) {
         sellHist[0] = sell1K0Frames;
       }
-      // 若仍无 history，回退 levels 内帧（末态；仅兜底）
-      if (buyHist.isEmpty && sellHist.isEmpty) {
-        for (final lv in levels) {
-          if (lv.buy1Frames.isNotEmpty) buyHist[lv.level] = lv.buy1Frames;
-          if (lv.sell1Frames.isNotEmpty) sellHist[lv.level] = lv.sell1Frames;
-        }
-      }
+      // 禁 levels 末态帧兜底（会破「不回写」）；history 空 → tip 【0】
 
       final barCount = bars.isEmpty ? 0 : bars.last.idx + 1;
       final kns = <int>{...buyHist.keys, ...sellHist.keys};
@@ -439,12 +433,7 @@ class BarFeatureLookup {
       if (sellHist.isEmpty && sell2K0Frames.isNotEmpty) {
         sellHist[0] = sell2K0Frames;
       }
-      if (buyHist.isEmpty && sellHist.isEmpty) {
-        for (final lv in levels) {
-          if (lv.buy2Frames.isNotEmpty) buyHist[lv.level] = lv.buy2Frames;
-          if (lv.sell2Frames.isNotEmpty) sellHist[lv.level] = lv.sell2Frames;
-        }
-      }
+      // 禁 levels 末态帧兜底
 
       final barCount = bars.isEmpty ? 0 : bars.last.idx + 1;
       final kns = <int>{...buyHist.keys, ...sellHist.keys};
@@ -487,12 +476,7 @@ class BarFeatureLookup {
       if (sellHist.isEmpty && sellNK0Frames.isNotEmpty) {
         sellHist[0] = sellNK0Frames;
       }
-      if (buyHist.isEmpty && sellHist.isEmpty) {
-        for (final lv in levels) {
-          if (lv.buyNFrames.isNotEmpty) buyHist[lv.level] = lv.buyNFrames;
-          if (lv.sellNFrames.isNotEmpty) sellHist[lv.level] = lv.sellNFrames;
-        }
-      }
+      // 禁 levels 末态帧兜底
 
       final barCount = bars.isEmpty ? 0 : bars.last.idx + 1;
       final kns = <int>{...buyHist.keys, ...sellHist.keys};

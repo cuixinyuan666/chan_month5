@@ -712,6 +712,22 @@ class MsgHistory {
     );
   }
 
+  /// tooltip 四准则：无未来/不回写/自洽/可作 ML（进程内去重）。
+  static bool _tooltipFourRulesLogged = false;
+  void appendTooltipFourRulesMlReady() {
+    if (_tooltipFourRulesLogged) return;
+    _tooltipFourRulesLogged = true;
+    append(
+      '【tooltip 四准则·2026-08-02】无未来/不回写/自洽/可作 ML：'
+      '①十字 asOf 时中枢/levels 必须 asOfBundle；bundle 失败→空，禁回落会话末态；'
+      '②十字 as-of K0合并框=Rust asOfBundle.frames（与合并序同源），禁 Dart 本地重建冒充；'
+      '③标签「Kn上一中枢确认」=本框首根K时上一框 isSure（算法未改，仅正名）；'
+      '④一类/二类/N类 BS 只扫会话 history（+显式 K0 帧入参），禁 levels 末态帧兜底；'
+      '⑤副图叠柱买量≠tip B/S/G 三分解（bins→tick_side→全G）；ML 以 tip/metrics 三分解为准；'
+      '⑥筹码峰/笔数峰动态后缀、节奏多行仅人对齐；ML 用底层 profile/history 固定键，勿解析 tip 动态行名。',
+    );
+  }
+
   /// 运行时虚线摘要（内容变才追加；复制历史记录排查用）。
   void appendDisplayBuildingLinesRuntime({
     required int kn,

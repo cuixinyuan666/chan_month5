@@ -8,7 +8,8 @@ List<double> computeK0VolumeSeries(List<KlineBar> bars) {
 }
 
 /// K0 buy volume: 从 chip_tick_bins 或 tick_side 估算买入量。
-/// 副图叠柱仍用「买 vs 非买」；tooltip B/S/G 三分解见 [computeK0VolumeBsgSeries]。
+/// 副图叠柱仍用「买 vs 非买」（无 bins 时可 50%）；与 tip B/S/G 三分解不同源——
+/// ML 以 [computeK0VolumeBsgSeries] / metrics 为准，勿把副图买柱当 tip B。
 List<double> computeK0BuyVolumeSeries(List<KlineBar> bars) {
   double buyVol(KlineBar b) {
     final bins = b.metrics['chip_tick_bins'];

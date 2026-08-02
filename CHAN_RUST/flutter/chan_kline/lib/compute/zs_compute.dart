@@ -36,7 +36,8 @@ List<ZSFrame> rustZsFramesFromBundle({
   );
 }
 
-/// 十字 as-of / 末态：读 Rust 帧；asOf!=null 时须传入对应 as-of bundle。
+/// 十字 as-of / 末态：读 Rust 帧。
+/// asOf!=null 时必须有 asOfBundle；失败/缺失则空列表（禁回落会话末态，无未来）。
 List<ZSFrame> computeZsFramesAtAsOf({
   required int kn,
   required List<KlineCombineFrame> combineFrames,
@@ -48,7 +49,8 @@ List<ZSFrame> computeZsFramesAtAsOf({
   List<ZSFrame> zsK0Frames = const [],
   KlineCombineBundle? asOfBundle,
 }) {
-  if (asOf != null && asOfBundle != null) {
+  if (asOf != null) {
+    if (asOfBundle == null) return const [];
     return rustZsFramesFromBundle(bundle: asOfBundle, kn: kn);
   }
   return rustZsFramesForKn(
@@ -107,11 +109,11 @@ List<CrosshairTooltipRow> zsCrosshairTooltipRows({
         '$prefix idx',
         CrosshairTooltipRow.boxNum(f.seq),
       ));
-      // 确认：仅当当前K为本中枢首根K（x1）时，检测上一中枢是否已确认（首次确认）
+      // 上一中枢确认：仅当当前K为本中枢首根K（x1）时，检测上一框 isSure（算法不变，标签正名）
       final isFirstBar = asOfIdx == f.x1;
       final prevSure = (isFirstBar && fi > 0) ? (frames[fi - 1].isSure ? 1 : 0) : 0;
       rows.add(CrosshairTooltipRow.kv(
-        '$prefix确认',
+        'K${ind.kn}上一中枢确认',
         CrosshairTooltipRow.boxNum(prevSure),
       ));
     }

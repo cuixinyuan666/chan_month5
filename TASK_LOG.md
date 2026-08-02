@@ -2,6 +2,12 @@
 
 ## 最新记录
 
+### 2026-08-02 — Tooltip 四准则全修（1B+2A）
+
+- **要点**：十字 asOf 时中枢/levels 禁回落末态；K0合并改用 Rust `asOfBundle.frames`；标签改为「Kn上一中枢确认」（算法不变）；BS 删 levels 末态兜底。量能双轨与动态峰/节奏仅文档化。
+- **相关路径**：`zs_compute.dart`、`kline_chart.dart`、`bar_feature_lookup.dart`、`zs_compute_test.dart`、`msg_history.dart`、`main.dart`
+- **注意**：asOf bundle 失败→空结构；ML 用 feat/history 固定键，勿解析 tip 动态行。
+
 ### 2026-08-02 — K0分型确认/极点距/截断语义统一
 
 - **要点**：显示名 K0分型确认/极点距/截断一律读 `k0_confirm` + `barFeatures.fractalPeakDist`；副图/tooltip 不再优先 `LevelBundle(level==1)`。`level==1.confirms` 与 k0 同源（输入=原始K），units 才是 K1——双轨易误判为「读 K1」。

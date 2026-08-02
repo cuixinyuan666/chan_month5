@@ -553,18 +553,16 @@ class _KlineChartState extends State<KlineChart> {
     return buildK1BarViews(asOfBars);
   }
 
-  /// 十字线开启时按当步分钟 K 重建K0合并框（与 k0_combine 逐步口径对齐）。
+  /// 十字线开启时 K0合并框：优先 Rust asOfBundle.frames（与合并序同源）；
+  /// bundle 失败→空（禁 Dart 本地重建冒充、禁末态框）；非十字用会话帧。
   List<KlineCombineFrame> get _effectiveK0CombineFrames {
     if (!_crosshairEnabled || _crosshairBarIdx == null) {
       return widget.combineFrames;
     }
     final asOf = _crosshairAsOfIdx();
-    final barsSlice = widget.bars.where((b) => b.idx <= asOf).toList();
-    if (barsSlice.isEmpty) return const [];
-    return computeK0CombineFrames(
-      barsSlice,
-      truncationCheck: widget.truncationCheck,
-    );
+    final bundle = _bundleForZsAsOf(asOf);
+    if (bundle == null) return const [];
+    return bundle.frames;
   }
 
   /// 十字线开启时按当步K1 bar 重建K1合并框（展示轨：含进行中，与 Rust k1_combine_frames 同构）。
@@ -714,15 +712,19 @@ class _KlineChartState extends State<KlineChart> {
       maxKn,
       truncationCheck: widget.truncationCheck,
     ).toSet();
+    // 十字 asOf：levels 仅认 asOfBundle（失败=空，禁回落末态）；非十字用会话末态
+    final tipLevels = asOf != null
+        ? (asOfBundle?.levels ?? const <LevelBundle>[])
+        : widget.levels;
     final lookup = BarFeatureLookup.build(
       bars: widget.bars,
-      // K0合并框体用 as-of 重建（十字线当下性；MG/MD 框体高低点与主图框同源）
+      // K0合并框：十字 as-of=Rust frames；MG/MD 与合并序同源
       combineFrames: _effectiveK0CombineFrames,
       k0Confirms: widget.k0ConfirmSignals,
       barFeatures: widget.barFeatures,
       k0Lines: widget.k0Lines,
       k1Analysis: widget.k1Analysis,
-      levels: asOfBundle?.levels ?? widget.levels,
+      levels: tipLevels,
       buy1HistoryByKn: widget.buy1HistoryByKn,
       sell1HistoryByKn: widget.sell1HistoryByKn,
       buy2HistoryByKn: widget.buy2HistoryByKn,
@@ -1109,6 +1111,10 @@ class _KlineChartState extends State<KlineChart> {
         : null;
     final asOfBundle =
         widget.chipOnlyMode ? null : _bundleForZsAsOf(asOf);
+    // 十字 asOf：levels 仅认 asOfBundle（失败=空，禁回落末态）
+    final chipLevels = asOf != null
+        ? (asOfBundle?.levels ?? const <LevelBundle>[])
+        : widget.levels;
     final lookup = BarFeatureLookup.build(
       bars: widget.bars,
       combineFrames: widget.combineFrames,
@@ -1116,7 +1122,7 @@ class _KlineChartState extends State<KlineChart> {
       barFeatures: widget.barFeatures,
       k0Lines: widget.k0Lines,
       k1Analysis: widget.k1Analysis,
-      levels: asOfBundle?.levels ?? widget.levels,
+      levels: chipLevels,
       buy1HistoryByKn: widget.buy1HistoryByKn,
       sell1HistoryByKn: widget.sell1HistoryByKn,
       buy2HistoryByKn: widget.buy2HistoryByKn,
