@@ -2,6 +2,12 @@
 
 ## 最新记录
 
+### 2026-08-02 — 副图 Kn连线斜率（全层同构）
+
+- **要点**：新增副图「K{n}连线斜率」；复用比例出现链末根算 slope=dP/dX；K0 颗粒度会话冻结；折线+0轴；tip/层全选/默认K0与比例同口径。纯 Flutter。
+- **相关路径**：`line_slope_compute.dart`、`chart_indicator.dart`、`main.dart`、`kline_chart.dart`、`bar_feature_lookup.dart`、`line_slope_compute_test.dart`、`msg_history.dart`
+- **注意**：虚线延伸步 slope 随终点变；验收连续单步，非一键跳末。
+
 ### 2026-08-02 — Tooltip 四准则全修（1B+2A）
 
 - **要点**：十字 asOf 时中枢/levels 禁回落末态；K0合并改用 Rust `asOfBundle.frames`；标签改为「Kn上一中枢确认」（算法不变）；BS 删 levels 末态兜底。量能双轨与动态峰/节奏仅文档化。

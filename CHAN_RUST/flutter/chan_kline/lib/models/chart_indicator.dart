@@ -116,6 +116,8 @@ enum SubIndicatorKind {
   adjacentRatio,
   /// Kn步进节奏副图（old step_rhythm；与 Kn连线同号；动态计算）
   stepRhythm,
+  /// Kn连线斜率（与 Kn连线同号；动态：冻段+展示轨）
+  lineSlope,
 }
 
 /// 副图指标类别元数据。
@@ -144,6 +146,8 @@ extension SubIndicatorKindMeta on SubIndicatorKind {
         return '比例';
       case SubIndicatorKind.stepRhythm:
         return '节奏';
+      case SubIndicatorKind.lineSlope:
+        return '斜率';
     }
   }
 
@@ -171,6 +175,8 @@ extension SubIndicatorKindMeta on SubIndicatorKind {
         return 9;
       case SubIndicatorKind.stepRhythm:
         return 10;
+      case SubIndicatorKind.lineSlope:
+        return 11;
     }
   }
 }
@@ -237,6 +243,10 @@ class SubChartIndicator {
   const SubChartIndicator.stepRhythm(this.kn)
       : kind = SubIndicatorKind.stepRhythm,
         bsClass = null;
+  /// kn=连线显示层：K0连线斜率…（动态：冻段+展示轨；数据 level==kn+1）
+  const SubChartIndicator.lineSlope(this.kn)
+      : kind = SubIndicatorKind.lineSlope,
+        bsClass = null;
 
   String get label {
     switch (kind) {
@@ -263,10 +273,12 @@ class SubChartIndicator {
         return 'K$kn比例';
       case SubIndicatorKind.stepRhythm:
         return 'K$kn节奏';
+      case SubIndicatorKind.lineSlope:
+        return 'K$kn连线斜率';
     }
   }
 
-  /// 显示层号（成交量/BS/相邻比例/节奏 kn 直接；分型类 kn-1）。
+  /// 显示层号（成交量/BS/相邻比例/节奏/斜率 kn 直接；分型类 kn-1）。
   int get displayLevel {
     switch (kind) {
       case SubIndicatorKind.volume:
@@ -276,6 +288,7 @@ class SubChartIndicator {
       case SubIndicatorKind.buyN:
       case SubIndicatorKind.adjacentRatio:
       case SubIndicatorKind.stepRhythm:
+      case SubIndicatorKind.lineSlope:
         return kn;
       case SubIndicatorKind.fractalConfirm:
       case SubIndicatorKind.fractalJudgment:
@@ -329,7 +342,7 @@ List<MainChartIndicator> buildMainIndicatorCatalog(int maxKn) {
 }
 
 /// 副图 catalog；[maxBsClass] 默认至少 9，数据更高时调用方传入扩大。
-/// 按类别分组：成交量 → 分型确认 → 分型判断 → 分型极点距 → 截断 → 一类BS → 二类BS → N类BS → 相邻比例 → 步进节奏。
+/// 按类别分组：成交量 → … → 相邻比例 → 步进节奏 → 连线斜率。
 List<SubChartIndicator> buildSubIndicatorCatalog(
   int maxKn, {
   bool truncationCheck = true,
@@ -386,6 +399,10 @@ List<SubChartIndicator> buildSubIndicatorCatalog(
   for (var d = 0; d < maxKn; d++) {
     out.add(SubChartIndicator.stepRhythm(d));
   }
+  // 连线斜率 (0..maxKn-1)
+  for (var d = 0; d < maxKn; d++) {
+    out.add(SubChartIndicator.lineSlope(d));
+  }
   return out;
 }
 
@@ -406,7 +423,7 @@ List<MainChartIndicator> mainIndicatorsForLevel(
 }
 
 /// 副图「K{displayLevel}指标」层全选成员。
-/// 含 Kn相邻比例 / Kn步进节奏（与连线同号；catalog 有才入选）。
+/// 含 Kn相邻比例 / Kn步进节奏 / Kn连线斜率（与连线同号；catalog 有才入选）。
 List<SubChartIndicator> subIndicatorsForLevel(
   int displayLevel,
   List<SubChartIndicator> catalog, {
@@ -425,6 +442,7 @@ List<SubChartIndicator> subIndicatorsForLevel(
     // 必须进「Kn指标」层全选（与连线同显示层）
     SubChartIndicator.adjacentRatio(displayLevel),
     SubChartIndicator.stepRhythm(displayLevel),
+    SubChartIndicator.lineSlope(displayLevel),
   ];
   final hi = maxBsClass < 3 ? 3 : maxBsClass;
   for (var cls = 3; cls <= hi; cls++) {
@@ -465,7 +483,7 @@ Set<MainChartIndicator> defaultMainIndicatorsK0() {
   return mainIndicatorsForLevel(0, buildMainIndicatorCatalog(1)).toSet();
 }
 
-/// 启动默认：副图「K0指标」层全选（含相邻比例/步进节奏，与层全选同口径）。
+/// 启动默认：副图「K0指标」层全选（含相邻比例/步进节奏/连线斜率，与层全选同口径）。
 Set<SubChartIndicator> defaultSubIndicatorsK0({bool truncationCheck = true}) {
   return subIndicatorsForLevel(
     0,

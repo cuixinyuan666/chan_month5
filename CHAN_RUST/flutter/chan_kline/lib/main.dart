@@ -8,6 +8,7 @@ import 'package:window_manager/window_manager.dart';
 
 import 'bridge/chan_bridge.dart';
 import 'compute/adjacent_ratio_compute.dart';
+import 'compute/line_slope_compute.dart';
 import 'compute/chip_profile_compute.dart';
 import 'compute/tick_dist_profile_compute.dart';
 import 'compute/class1_bs_compute.dart';
@@ -81,6 +82,8 @@ Future<void> main() async {
   MsgHistory.instance.appendBuyNClass3PlusNaming();
   // Kn相邻比例 + Kn步进节奏副图
   MsgHistory.instance.appendAdjacentRatioAndStepRhythm();
+  // Kn连线斜率副图（全层同构；复用比例出现链）
+  MsgHistory.instance.appendKnLineSlope();
   MsgHistory.instance.appendTickK0NativePeriod();
   // 展示轨：动态KN当确认段画虚线；确认优先纠正/改实线
   MsgHistory.instance.appendDisplayTrackDynamicKnBuildingLines();
@@ -240,6 +243,9 @@ class _KlineHomePageState extends State<KlineHomePage> {
 
   /// Kn相邻比例会话历史（按显示层；换股/重载清空）。
   Map<int, List<AdjacentRatioPoint>> _adjacentRatioHistoryByKn = {};
+
+  /// Kn连线斜率会话历史（按显示层；换股/重载清空）。
+  Map<int, List<LineSlopePoint>> _lineSlopeHistoryByKn = {};
 
   /// Kn步进节奏会话历史 + 每层方向状态。
   Map<int, List<StepRhythmLinePoint>> _stepRhythmHistoryByKn = {};
@@ -482,6 +488,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _buyNHistoryByKn.clear();
         _sellNHistoryByKn.clear();
         _adjacentRatioHistoryByKn.clear();
+        _lineSlopeHistoryByKn.clear();
         _stepRhythmHistoryByKn.clear();
         for (final s in _stepRhythmStateByKn.values) {
           s.reset();
@@ -559,6 +566,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _buyNHistoryByKn.clear();
         _sellNHistoryByKn.clear();
         _adjacentRatioHistoryByKn.clear();
+        _lineSlopeHistoryByKn.clear();
         _stepRhythmHistoryByKn.clear();
         for (final s in _stepRhythmStateByKn.values) {
           s.reset();
@@ -700,7 +708,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
     _sellNHistoryByKn = nextSellN;
   }
 
-  /// 本步相邻比例 + 步进节奏并入会话（全层；禁止整表覆盖消点）。
+  /// 本步相邻比例 + 步进节奏 + 连线斜率并入会话（全层；禁止整表覆盖消点）。
   /// 指标遵循动态计算：传入 bars/barFeatures，子线含展示轨虚线。
   void _mergeRatioAndRhythm(KlineCombineBundle bundle) {
     final displayX = _stepIdx < 0 ? 0 : _stepIdx;
@@ -727,6 +735,15 @@ class _KlineHomePageState extends State<KlineHomePage> {
       barFeatures: bundle.barFeatures,
       truncationCheck: _truncationCheck,
     );
+    mergeLineSlopeForStep(
+      historyByKn: _lineSlopeHistoryByKn,
+      levels: bundle.levels,
+      displayX: displayX,
+      maxDisplayKn: maxDisplayKn,
+      bars: _visibleBars,
+      barFeatures: bundle.barFeatures,
+      truncationCheck: _truncationCheck,
+    );
     // 新 Map 引用，便于 painter shouldRepaint 感知
     _adjacentRatioHistoryByKn = {
       for (final e in _adjacentRatioHistoryByKn.entries)
@@ -735,6 +752,10 @@ class _KlineHomePageState extends State<KlineHomePage> {
     _stepRhythmHistoryByKn = {
       for (final e in _stepRhythmHistoryByKn.entries)
         e.key: List<StepRhythmLinePoint>.from(e.value),
+    };
+    _lineSlopeHistoryByKn = {
+      for (final e in _lineSlopeHistoryByKn.entries)
+        e.key: List<LineSlopePoint>.from(e.value),
     };
   }
 
@@ -783,6 +804,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _buyNHistoryByKn.clear();
         _sellNHistoryByKn.clear();
         _adjacentRatioHistoryByKn.clear();
+        _lineSlopeHistoryByKn.clear();
         _stepRhythmHistoryByKn.clear();
         for (final s in _stepRhythmStateByKn.values) {
           s.reset();
@@ -1085,6 +1107,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
                   sellNHistoryByKn: _sellNHistoryByKn,
                   adjacentRatioHistoryByKn: _adjacentRatioHistoryByKn,
                   stepRhythmHistoryByKn: _stepRhythmHistoryByKn,
+                  lineSlopeHistoryByKn: _lineSlopeHistoryByKn,
                   mainIndicators: _mainIndicators,
                   onMainIndicatorsChanged: (v) =>
                       setState(() => _mainIndicators = v),

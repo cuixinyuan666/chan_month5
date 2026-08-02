@@ -15,6 +15,7 @@ import '../compute/class2_bs_compute.dart';
 import '../compute/class_n_bs_compute.dart';
 import '../compute/kn_volume_series_compute.dart';
 import '../compute/adjacent_ratio_compute.dart';
+import '../compute/line_slope_compute.dart';
 import '../compute/step_rhythm_compute.dart';
 import '../compute/level_unit_bar_view_compute.dart';
 import '../compute/zs_compute.dart';
@@ -107,6 +108,7 @@ class KlineChart extends StatefulWidget {
     this.sellNHistoryByKn = const {},
     this.adjacentRatioHistoryByKn = const {},
     this.stepRhythmHistoryByKn = const {},
+    this.lineSlopeHistoryByKn = const {},
     this.onMainIndicatorsChanged,
     this.onSubIndicatorsChanged,
     this.indicatorsEnabled = true,
@@ -175,6 +177,8 @@ class KlineChart extends StatefulWidget {
   final Map<int, List<AdjacentRatioPoint>> adjacentRatioHistoryByKn;
   /// Kn步进节奏会话历史
   final Map<int, List<StepRhythmLinePoint>> stepRhythmHistoryByKn;
+  /// Kn连线斜率会话历史
+  final Map<int, List<LineSlopePoint>> lineSlopeHistoryByKn;
   final ValueChanged<Set<MainChartIndicator>>? onMainIndicatorsChanged;
   final ValueChanged<Set<SubChartIndicator>>? onSubIndicatorsChanged;
   /// 无数据时禁止点主/副图指标入口
@@ -733,6 +737,7 @@ class _KlineChartState extends State<KlineChart> {
       sellNHistoryByKn: widget.sellNHistoryByKn,
       adjacentRatioHistoryByKn: widget.adjacentRatioHistoryByKn,
       stepRhythmHistoryByKn: widget.stepRhythmHistoryByKn,
+      lineSlopeHistoryByKn: widget.lineSlopeHistoryByKn,
       subIndicators: allSubs,
       truncationCheck: widget.truncationCheck,
       judgmentHistoryByKn: widget.judgmentHistoryByKn,
@@ -1131,6 +1136,7 @@ class _KlineChartState extends State<KlineChart> {
       sellNHistoryByKn: widget.sellNHistoryByKn,
       adjacentRatioHistoryByKn: widget.adjacentRatioHistoryByKn,
       stepRhythmHistoryByKn: widget.stepRhythmHistoryByKn,
+      lineSlopeHistoryByKn: widget.lineSlopeHistoryByKn,
       subIndicators: _activeSubs,
       truncationCheck: widget.truncationCheck,
       judgmentHistoryByKn: widget.judgmentHistoryByKn,
@@ -1233,6 +1239,7 @@ class _KlineChartState extends State<KlineChart> {
               sellNHistoryByKn: widget.sellNHistoryByKn,
               adjacentRatioHistoryByKn: widget.adjacentRatioHistoryByKn,
               stepRhythmHistoryByKn: widget.stepRhythmHistoryByKn,
+              lineSlopeHistoryByKn: widget.lineSlopeHistoryByKn,
               chipConfig: widget.chipConfig,
               tickDistConfig: widget.tickDistConfig,
               chipOnlyMode: widget.chipOnlyMode,
@@ -1503,6 +1510,7 @@ class _KlineCompositePainter extends CustomPainter {
     this.sellNHistoryByKn = const {},
     this.adjacentRatioHistoryByKn = const {},
     this.stepRhythmHistoryByKn = const {},
+    this.lineSlopeHistoryByKn = const {},
     this.chipConfig = const ChipConfig(),
     this.tickDistConfig = const TickDistConfig(),
     this.chipOnlyMode = false,
@@ -1526,6 +1534,7 @@ class _KlineCompositePainter extends CustomPainter {
                 sellNHistoryByKn: sellNHistoryByKn,
                 adjacentRatioHistoryByKn: adjacentRatioHistoryByKn,
                 stepRhythmHistoryByKn: stepRhythmHistoryByKn,
+                lineSlopeHistoryByKn: lineSlopeHistoryByKn,
                 subIndicators: subIndicators,
                 truncationCheck: truncationCheck,
                 judgmentHistoryByKn: judgmentHistoryByKn,
@@ -1595,6 +1604,8 @@ class _KlineCompositePainter extends CustomPainter {
   final Map<int, List<AdjacentRatioPoint>> adjacentRatioHistoryByKn;
   /// Kn步进节奏会话历史
   final Map<int, List<StepRhythmLinePoint>> stepRhythmHistoryByKn;
+  /// Kn连线斜率会话历史
+  final Map<int, List<LineSlopePoint>> lineSlopeHistoryByKn;
   /// 筹码分布配置
   final ChipConfig chipConfig;
   /// 笔数分布配置（主图左侧）
@@ -3501,6 +3512,15 @@ class _KlineCompositePainter extends CustomPainter {
     for (final kn in rhythmKns) {
       _drawStepRhythmSubChart(canvas, w, innerTop, innerH, barW, slotW, kn);
     }
+    // Kn连线斜率：折线 + 0 轴虚线（动态：冻段+展示轨）
+    final slopeKns = subIndicators
+        .where((e) => e.kind == SubIndicatorKind.lineSlope)
+        .map((e) => e.kn)
+        .toList()
+      ..sort();
+    for (final kn in slopeKns) {
+      _drawLineSlopeSubChart(canvas, w, innerTop, innerH, barW, slotW, kn);
+    }
   }
 
   /// 副图 Kn相邻比例。
@@ -3560,6 +3580,86 @@ class _KlineCompositePainter extends CustomPainter {
       }
       final pt = Offset(_barCenterX(p.x, w, slotW), subY(p.ratio));
       if (prev != null) canvas.drawLine(prev, pt, linePaint);
+      prev = pt;
+    }
+  }
+
+  /// 副图 Kn连线斜率：折线连相邻有点 K0；仅画 0 轴虚线；升/降点色区分。
+  void _drawLineSlopeSubChart(
+    Canvas canvas,
+    double w,
+    double innerTop,
+    double innerH,
+    double barW,
+    double slotW,
+    int displayKn,
+  ) {
+    final hist = lineSlopeHistoryByKn[displayKn] ?? const [];
+    if (hist.isEmpty || bars.isEmpty) return;
+    final asOf = segAsOf ?? bars.last.idx;
+    var minV = 0.0;
+    var maxV = 0.0;
+    var any = false;
+    for (final p in hist) {
+      if (p.x > asOf) continue;
+      if (!any) {
+        minV = p.slope;
+        maxV = p.slope;
+        any = true;
+      } else {
+        if (p.slope < minV) minV = p.slope;
+        if (p.slope > maxV) maxV = p.slope;
+      }
+    }
+    if (!any) return;
+    // 保证 0 轴落在可视内
+    if (minV > 0) minV = 0;
+    if (maxV < 0) maxV = 0;
+    if ((maxV - minV).abs() < 1e-12) {
+      minV -= 1e-6;
+      maxV += 1e-6;
+    }
+    final span = math.max(1e-9, maxV - minV);
+    double subY(double v) => innerTop + (maxV - v) / span * innerH;
+
+    final zeroPaint = Paint()
+      ..color = const Color(0x6694A3B8)
+      ..strokeWidth = 1
+      ..style = PaintingStyle.stroke;
+    _drawDashedLine(
+      canvas,
+      Offset(KlineViewport.padL, subY(0)),
+      Offset(w - KlineViewport.padR, subY(0)),
+      zeroPaint,
+    );
+
+    final layerColor = ChartLevelLineStyle.colorForDisplayKn(displayKn);
+    final linePaint = Paint()
+      ..color = layerColor
+      ..strokeWidth = 1.5
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+    final upDot = Paint()
+      ..color = const Color(0xFFE11D48)
+      ..style = PaintingStyle.fill;
+    final downDot = Paint()
+      ..color = const Color(0xFF2563EB)
+      ..style = PaintingStyle.fill;
+
+    Offset? prev;
+    final sorted = [...hist]..sort((a, b) => a.x.compareTo(b.x));
+    for (final p in sorted) {
+      if (p.x > asOf) {
+        prev = null;
+        continue;
+      }
+      if (p.x < viewport.viewXMin - 1 || p.x > viewport.viewXMax + 1) {
+        prev = null;
+        continue;
+      }
+      final pt = Offset(_barCenterX(p.x, w, slotW), subY(p.slope));
+      if (prev != null) canvas.drawLine(prev, pt, linePaint);
+      canvas.drawCircle(pt, 2.2, p.dir == 'up' ? upDot : downDot);
       prev = pt;
     }
   }
@@ -4584,6 +4684,7 @@ class _KlineCompositePainter extends CustomPainter {
         oldDelegate.sellNHistoryByKn != sellNHistoryByKn ||
         oldDelegate.adjacentRatioHistoryByKn != adjacentRatioHistoryByKn ||
         oldDelegate.stepRhythmHistoryByKn != stepRhythmHistoryByKn ||
+        oldDelegate.lineSlopeHistoryByKn != lineSlopeHistoryByKn ||
         oldDelegate.chipOnlyMode != chipOnlyMode ||
         oldDelegate.chipConfig != chipConfig ||
         oldDelegate.tickDistConfig != tickDistConfig;

@@ -18,6 +18,7 @@ import '../compute/class2_bs_compute.dart';
 import '../compute/class_n_bs_compute.dart';
 import '../compute/kn_volume_series_compute.dart';
 import '../compute/adjacent_ratio_compute.dart';
+import '../compute/line_slope_compute.dart';
 import '../compute/step_rhythm_compute.dart';
 import '../compute/profile_peak_classify.dart';
 
@@ -98,6 +99,7 @@ class BarFeatureLookup {
     Map<int, List<SellNFrame>> sellNHistoryByKn = const {},
     Map<int, List<AdjacentRatioPoint>> adjacentRatioHistoryByKn = const {},
     Map<int, List<StepRhythmLinePoint>> stepRhythmHistoryByKn = const {},
+    Map<int, List<LineSlopePoint>> lineSlopeHistoryByKn = const {},
     List<Buy1Frame> buy1K0Frames = const [],
     List<Sell1Frame> sell1K0Frames = const [],
     List<Buy2Frame> buy2K0Frames = const [],
@@ -589,7 +591,7 @@ class BarFeatureLookup {
       }
     }
 
-    // Kn相邻比例 / 步进节奏：会话历史写入 sub（与副图同源；动态计算口径）
+    // Kn相邻比例 / 步进节奏 / 连线斜率：会话历史写入 sub（与副图同源；动态计算口径）
     if (bars.isNotEmpty) {
       final barCount = bars.last.idx + 1;
       for (final e in adjacentRatioHistoryByKn.entries) {
@@ -624,6 +626,19 @@ class BarFeatureLookup {
           ];
           sub['step_rhythm_${e.key}'] =
               formatStepRhythmReadout(e.value, b.idx);
+        }
+      }
+      for (final e in lineSlopeHistoryByKn.entries) {
+        final series = expandLineSlopeToSeries(e.value, barCount, maxX: asOf);
+        for (final b in bars) {
+          final row = byIdx.putIfAbsent(b.idx, () => {'idx': b.idx});
+          final sub = row.putIfAbsent('sub', () => <String, dynamic>{})
+              as Map<String, dynamic>;
+          if (b.idx >= 0 &&
+              b.idx < series.length &&
+              series[b.idx] != null) {
+            sub['line_slope_${e.key}'] = series[b.idx];
+          }
         }
       }
     }
@@ -989,6 +1004,14 @@ class BarFeatureLookup {
       if (ind.kind == SubIndicatorKind.stepRhythm) {
         add(ind.label, sub['step_rhythm_${ind.kn}'] ?? '0');
       }
+      if (ind.kind == SubIndicatorKind.lineSlope) {
+        final v = sub['line_slope_${ind.kn}'];
+        if (v is num) {
+          add(ind.label, v.toStringAsFixed(4));
+        } else {
+          add(ind.label, '0');
+        }
+      }
     }
     return lines;
   }
@@ -1253,7 +1276,7 @@ class BarFeatureLookup {
         ),
     ];
 
-    // —— 比例 / 节奏（独立类别；节奏按 0-0 动态多行）——
+    // —— 比例 / 节奏 / 连线斜率（独立类别；节奏按 0-0 动态多行）——
     final ratioRhythm = <CrosshairTooltipRow>[];
     final ar = sub?['adjacent_ratio_$displayKn'];
     ratioRhythm.add(kv(
@@ -1277,6 +1300,12 @@ class BarFeatureLookup {
       ratioRhythm.add(
           kv('K$displayKn节奏', CrosshairTooltipRow.boxNum(0)));
     }
+    final slope = sub?['line_slope_$displayKn'];
+    ratioRhythm.add(kv(
+      'K$displayKn连线斜率',
+      CrosshairTooltipRow.boxNum(
+          slope is num ? slope.toStringAsFixed(4) : 0),
+    ));
 
     return (fxExtra: fxExtra, bs: bs, ratioRhythm: ratioRhythm);
   }

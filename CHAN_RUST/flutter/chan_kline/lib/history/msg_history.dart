@@ -438,6 +438,22 @@ class MsgHistory {
     );
   }
 
+  /// Kn连线斜率副图（进程内去重）
+  static bool _knLineSlopeLogged = false;
+  void appendKnLineSlope() {
+    if (_knLineSlopeLogged) return;
+    _knLineSlopeLogged = true;
+    append(
+      '【Kn连线斜率·全层同构·动态·K0颗粒度】'
+      '显示名 K{n}连线斜率；映射 displayKn→LevelBundle.level==displayKn+1（与比例/节奏/主图 Kn连线同号）。'
+      '子线复用比例出现链（冻段实线+展示轨虚线/种子），虚实不论，按 beginX 出现序取末根；'
+      'slope=(endVal-beginVal)/(endX-beginX)，endX=子线终点极点/开口 x；|dx|<1 或尚无子线不写点（tip【0】）。'
+      '颗粒度 K0：每步 displayX=stepIdx 覆盖写入，不回写旧 x；虚线延伸步 slope 随终点变（当下性）。'
+      '副图折线+0 轴虚线；升/降点色区分；十字 tip 固定槽位「K{n}连线斜率」。'
+      '默认勾选：进 catalog +「Kn指标」层全选 + 启动默认 K0（与比例/节奏同口径）。纯 Flutter，不改 Rust。',
+    );
+  }
+
   /// 默认 K0=原生分笔一字线（进程内去重）
   static bool _tickK0NativeLogged = false;
   void appendTickK0NativePeriod() {
