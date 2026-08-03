@@ -499,6 +499,7 @@ class MsgHistory {
       '输入：K0=bars.close；Kn≥1=levels[level==n].unitBars(+active).close；滑窗 MEAN/MAX/MIN（不足T用已有长度）。'
       '展开到K0：按单元 endX 阶梯铺柱；十字 asOf 截断样本。'
       '当下性：会话 MathSeriesFreezeStore 格点首次非空写入后冻结，禁 activeUnit 整表回写；主图/十字读仓。'
+      '十字 asOf：_paintPriceSeries 对 x>asOf 右侧不画（与蜡烛同构）。'
       '周期：设置面板「数学指标参数」（默认均线5,10,20；通道20,60），落盘 .chan_trend_model_config.json。'
       '呈现：主图连续折线（多T分色）；tooltip「K{n}均线」「K{n}通道」=各T读数。'
       '默认：进 catalog +「Kn指标」层全选 + 启动默认 K0。纯 Flutter，不改 Rust。'
@@ -512,17 +513,17 @@ class MsgHistory {
     if (_knMathClassicLogged) return;
     _knMathClassicLogged = true;
     append(
-      '【Kn MACD/BOLL/RSI/KDJ/Demark·全层同构·v2·当下冻结】'
-      '主图：K{n}布林(MID/UP/DOWN)、K{n}Demark(setup/countdown 小字，如 S↑9 C↓3)。'
-      '副图：K{n}MACD(DIF/DEA线+柱)、K{n}RSI(0–100+30/70参考)、K{n}KDJ(K/D/J三线)。'
+      '【Kn MACD/BOLL/RSI/KDJ/Demark·全层同构·v3·Demark副图】'
+      '主图：K{n}布林(MID/UP/DOWN)。'
+      '副图：K{n}MACD(DIF/DEA线+柱)、K{n}RSI、K{n}KDJ、K{n}Demark(setup/countdown 小字)。'
       '输入：collectKnOhlcSamples(displayKn, unitBars+activeUnit)；K0 颗粒度 expandPointsToK0；asOf 截断。'
       '当下性：会话 MathSeriesFreezeStore 格点首次非空写入后冻结（含 Demark 标记内容），'
       '禁 Kn≥1 因 activeUnit/EMA 整表回写；主图/副图/十字读仓；参数变更清空并 0..当前步重冻。'
+      '十字 asOf：均线/通道/布林/_paintPriceSeries 与副图 Math 一律 x>asOf 右侧不画（与蜡烛同构）。'
+      'Kn绑定：MACD/RSI/KDJ/Demark/背驰12算法 进副图「Kn指标」层全选；启动默认仍不勾背驰。'
       '参数：设置面板「数学指标参数」统一落盘 .chan_trend_model_config.json（兼容旧均线/通道字段）。'
-      'tooltip 比例/节奏块追加槽位：K{n}MACD、K{n}布林、K{n}RSI、K{n}KDJ、K{n}Demark（应显尽显）。'
-      '副图读数框同源 sub 键 macd_dif/dea/hist、boll_mid/up/down、rsi、kdj_k/d/j、demark_text。'
-      '默认：进 catalog +「Kn指标」层全选；纯 Flutter，不改 Rust。'
-      '审计：K0 本就不回写；成交量/背驰(本样本)未回写故未冻；背驰力度用 K0 MACD。',
+      'tooltip/副图读数：macd_dif/dea/hist、boll_mid/up/down、rsi、kdj_k/d/j、demark_text。'
+      '默认：进 catalog +「Kn指标」层全选；纯 Flutter，不改 Rust。',
     );
   }
 
@@ -532,9 +533,10 @@ class MsgHistory {
     if (_knDivergenceLogged) return;
     _knDivergenceLogged = true;
     append(
-      '【Kn背驰·副图分算法·v2·非买卖点】'
+      '【Kn背驰·副图分算法·v3·进Kn指标】'
       '副图类别「背驰」：K{n}背驰_area/peak/full_area/diff/slope/amp/amount/volumn/'
-      'amount_avg/volumn_avg/turnrate_avg/rsi（12 算法分类×层分层；默认不勾、不进层全选）。'
+      'amount_avg/volumn_avg/turnrate_avg/rsi（12 算法分类×层分层）。'
+      '绑定：进「Kn指标」层全选；启动默认不勾（defaultSubIndicatorsK0 过滤 divergence）。'
       '副图绘制：ratio 折线 + diver±1 短柱；读数框/chip 同源 sub 键。'
       '口径：CZS.is_divergence——离开段须突破中枢(ZG/ZD)；in/out=进出段力度；'
       'ratio=out/in；diver：背离=1、未背离=-1、无值=0（未突破/缺力度/非有限/in=0）。'

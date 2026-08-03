@@ -21,8 +21,6 @@ enum MainIndicatorKind {
   trendChannel,
   /// Kn布林带（MID/UP/DOWN；kn 同中枢）
   boll,
-  /// Kn Demark（setup/countdown 标记；kn 同中枢）
-  demark,
 }
 
 /// 主图指标类别元数据。
@@ -45,8 +43,6 @@ extension MainIndicatorKindMeta on MainIndicatorKind {
       case MainIndicatorKind.trendChannel:
       case MainIndicatorKind.boll:
         return '均线';
-      case MainIndicatorKind.demark:
-        return 'Demark';
     }
   }
 
@@ -68,8 +64,6 @@ extension MainIndicatorKindMeta on MainIndicatorKind {
       case MainIndicatorKind.trendChannel:
       case MainIndicatorKind.boll:
         return 5;
-      case MainIndicatorKind.demark:
-        return 6;
     }
   }
 }
@@ -96,7 +90,6 @@ class MainChartIndicator {
   const MainChartIndicator.trendChannel(this.kn)
       : kind = MainIndicatorKind.trendChannel;
   const MainChartIndicator.boll(this.kn) : kind = MainIndicatorKind.boll;
-  const MainChartIndicator.demark(this.kn) : kind = MainIndicatorKind.demark;
 
   String get label {
     switch (kind) {
@@ -121,8 +114,6 @@ class MainChartIndicator {
         return 'K$kn通道';
       case MainIndicatorKind.boll:
         return 'K$kn布林';
-      case MainIndicatorKind.demark:
-        return 'K${kn}Demark';
     }
   }
 
@@ -133,7 +124,6 @@ class MainChartIndicator {
       case MainIndicatorKind.meanLine:
       case MainIndicatorKind.trendChannel:
       case MainIndicatorKind.boll:
-      case MainIndicatorKind.demark:
         return kn;
       case MainIndicatorKind.line:
       case MainIndicatorKind.combine:
@@ -145,7 +135,7 @@ class MainChartIndicator {
     }
   }
 
-  /// 同层内展示序：… → 均线 → 通道 → 布林 → Demark。
+  /// 同层内展示序：… → 均线 → 通道 → 布林。
   int get kindOrderInLevel {
     switch (kind) {
       case MainIndicatorKind.kn:
@@ -168,8 +158,6 @@ class MainChartIndicator {
         return 8;
       case MainIndicatorKind.boll:
         return 9;
-      case MainIndicatorKind.demark:
-        return 10;
     }
   }
 
@@ -206,6 +194,8 @@ enum SubIndicatorKind {
   rsi,
   /// Kn KDJ
   kdj,
+  /// Kn Demark（setup/countdown；kn 同中枢）
+  demark,
   /// Kn背驰（分算法；kn 同中枢；输出 in/out/ratio/diver）
   divergence,
 }
@@ -244,6 +234,8 @@ extension SubIndicatorKindMeta on SubIndicatorKind {
         return 'RSI';
       case SubIndicatorKind.kdj:
         return 'KDJ';
+      case SubIndicatorKind.demark:
+        return 'Demark';
       case SubIndicatorKind.divergence:
         return '背驰';
     }
@@ -281,8 +273,10 @@ extension SubIndicatorKindMeta on SubIndicatorKind {
         return 13;
       case SubIndicatorKind.kdj:
         return 14;
-      case SubIndicatorKind.divergence:
+      case SubIndicatorKind.demark:
         return 15;
+      case SubIndicatorKind.divergence:
+        return 16;
     }
   }
 }
@@ -379,6 +373,10 @@ class SubChartIndicator {
       : kind = SubIndicatorKind.kdj,
         bsClass = null,
         diverAlgo = null;
+  const SubChartIndicator.demark(this.kn)
+      : kind = SubIndicatorKind.demark,
+        bsClass = null,
+        diverAlgo = null;
   /// kn 同中枢；algo=力度算法
   const SubChartIndicator.divergence(this.kn, DivergenceAlgo algo)
       : kind = SubIndicatorKind.divergence,
@@ -418,12 +416,14 @@ class SubChartIndicator {
         return 'K${kn}RSI';
       case SubIndicatorKind.kdj:
         return 'K${kn}KDJ';
+      case SubIndicatorKind.demark:
+        return 'K${kn}Demark';
       case SubIndicatorKind.divergence:
         return 'K$kn背驰_${diverAlgo?.key ?? "?"}';
     }
   }
 
-  /// 显示层号（成交量/BS/相邻比例/节奏/斜率/MACD/RSI/KDJ/背驰 kn 直接；分型类 kn-1）。
+  /// 显示层号（成交量/BS/相邻比例/节奏/斜率/MACD/RSI/KDJ/Demark/背驰 kn 直接；分型类 kn-1）。
   int get displayLevel {
     switch (kind) {
       case SubIndicatorKind.volume:
@@ -437,6 +437,7 @@ class SubChartIndicator {
       case SubIndicatorKind.macd:
       case SubIndicatorKind.rsi:
       case SubIndicatorKind.kdj:
+      case SubIndicatorKind.demark:
       case SubIndicatorKind.divergence:
         return kn;
       case SubIndicatorKind.fractalConfirm:
@@ -509,9 +510,6 @@ List<MainChartIndicator> buildMainIndicatorCatalog(int maxKn) {
   }
   for (var d = 0; d <= maxKn; d++) {
     out.add(MainChartIndicator.boll(d));
-  }
-  for (var d = 0; d <= maxKn; d++) {
-    out.add(MainChartIndicator.demark(d));
   }
   return out;
 }
@@ -588,6 +586,10 @@ List<SubChartIndicator> buildSubIndicatorCatalog(
   for (var d = 0; d <= maxD; d++) {
     out.add(SubChartIndicator.kdj(d));
   }
+  // Demark (0..maxKn，与中枢同号；进 Kn指标层全选)
+  for (var d = 0; d <= maxD; d++) {
+    out.add(SubChartIndicator.demark(d));
+  }
   // 背驰：按算法分类，层内 0..maxKn（默认不勾、不进层全选）
   for (final algo in DivergenceAlgoMeta.all) {
     for (var d = 0; d <= maxD; d++) {
@@ -615,13 +617,12 @@ List<MainChartIndicator> mainIndicatorsForLevel(
     MainChartIndicator.meanLine(displayLevel),
     MainChartIndicator.trendChannel(displayLevel),
     MainChartIndicator.boll(displayLevel),
-    MainChartIndicator.demark(displayLevel),
   ];
   return candidates.where(allow.contains).toList();
 }
 
 /// 副图「K{displayLevel}指标」层全选成员。
-/// 含 Kn相邻比例 / Kn步进节奏 / Kn连线斜率（与连线同号；catalog 有才入选）。
+/// 含比例/节奏/斜率/MACD/RSI/KDJ/Demark/背驰12算法（catalog 有才入选）。
 List<SubChartIndicator> subIndicatorsForLevel(
   int displayLevel,
   List<SubChartIndicator> catalog, {
@@ -644,10 +645,15 @@ List<SubChartIndicator> subIndicatorsForLevel(
     SubChartIndicator.macd(displayLevel),
     SubChartIndicator.rsi(displayLevel),
     SubChartIndicator.kdj(displayLevel),
+    SubChartIndicator.demark(displayLevel),
   ];
   final hi = maxBsClass < 3 ? 3 : maxBsClass;
   for (var cls = 3; cls <= hi; cls++) {
     candidates.add(SubChartIndicator.buyN(displayLevel, cls));
+  }
+  // 背驰 12 算法：进「Kn指标」层全选（默认启动仍不勾，见 defaultSubIndicatorsK0）
+  for (final algo in DivergenceAlgoMeta.all) {
+    candidates.add(SubChartIndicator.divergence(displayLevel, algo));
   }
   return candidates.where(allow.contains).toList();
 }
@@ -684,10 +690,10 @@ Set<MainChartIndicator> defaultMainIndicatorsK0() {
   return mainIndicatorsForLevel(0, buildMainIndicatorCatalog(1)).toSet();
 }
 
-/// 启动默认：副图「K0指标」层全选（含相邻比例/步进节奏/连线斜率，与层全选同口径）。
+/// 启动默认：副图「K0指标」层全选，但背驰 12 项默认不勾（可在选择栏「K0指标」里一键勾上）。
 Set<SubChartIndicator> defaultSubIndicatorsK0({bool truncationCheck = true}) {
   return subIndicatorsForLevel(
     0,
     buildSubIndicatorCatalog(1, truncationCheck: truncationCheck),
-  ).toSet();
+  ).where((e) => e.kind != SubIndicatorKind.divergence).toSet();
 }

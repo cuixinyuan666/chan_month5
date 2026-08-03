@@ -1836,15 +1836,6 @@ class _KlineCompositePainter extends CustomPainter {
             slotW,
             ind.kn,
           );
-        } else if (ind.kind == MainIndicatorKind.demark) {
-          _drawDemark(
-            canvas,
-            size.width,
-            plotTop,
-            plotH,
-            slotW,
-            ind.kn,
-          );
         }
       }
     }
@@ -2936,7 +2927,7 @@ class _KlineCompositePainter extends CustomPainter {
     }
   }
 
-  /// 按 K0 下标连价序列（null 段断开）。
+  /// 按 K0 下标连价序列（null 段断开；十字 asOf 时右侧 x>asOf 不画）。
   void _paintPriceSeries(
     Canvas canvas,
     double w,
@@ -2953,14 +2944,24 @@ class _KlineCompositePainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round;
+    final maxX = segAsOf ?? (bars.isEmpty ? -1 : bars.last.idx);
     Offset? prev;
     for (var i = 0; i < bars.length && i < series.length; i++) {
+      final idx = bars[i].idx;
+      // 十字开启：右侧(idx>asOf)不画，与蜡烛/成交量同构
+      if (idx > maxX) {
+        prev = null;
+        continue;
+      }
       final v = series[i];
       if (v == null) {
         prev = null;
         continue;
       }
-      final idx = bars[i].idx;
+      if (idx < viewport.viewXMin - 1 || idx > viewport.viewXMax + 1) {
+        prev = null;
+        continue;
+      }
       final pt = Offset(
         _barCenterX(idx, w, slotW),
         priceRange.yOf(v, plotTop, plotH),
@@ -3026,20 +3027,21 @@ class _KlineCompositePainter extends CustomPainter {
     );
   }
 
-  /// 主图 Kn Demark：柱心小字标记 setup/countdown。
-  void _drawDemark(
+  /// 副图 Kn Demark：时间轴小字标记 setup/countdown（与主图旧呈现同文案）。
+  void _drawDemarkSubChart(
     Canvas canvas,
     double w,
-    double plotTop,
-    double plotH,
+    double innerTop,
+    double innerH,
+    double barW,
     double slotW,
-    int kn,
+    int displayKn,
   ) {
     if (bars.isEmpty) return;
     final asOf = segAsOf;
-    final DemarkK0Series demark = mathFreezeStore?.demark(kn) ??
+    final DemarkK0Series demark = mathFreezeStore?.demark(displayKn) ??
         computeDemarkForLevel(
-          displayKn: kn,
+          displayKn: displayKn,
           bars: bars,
           levels: asOf != null
               ? (zsAsOfBundle?.levels ?? const <LevelBundle>[])
@@ -3048,11 +3050,12 @@ class _KlineCompositePainter extends CustomPainter {
           asOf: asOf,
         );
     final maxX = asOf ?? bars.last.idx;
-    final color = ChartLevelLineStyle.colorForDisplayKn(kn);
+    final color = ChartLevelLineStyle.colorForDisplayKn(displayKn);
     final tp = TextPainter(
       textAlign: TextAlign.center,
       textDirection: TextDirection.ltr,
     );
+    final cy = innerTop + innerH * 0.35;
     for (var i = 0; i < bars.length && i < demark.marksAt.length; i++) {
       final marks = demark.marksAt[i];
       if (marks == null || marks.isEmpty) continue;
@@ -3070,8 +3073,7 @@ class _KlineCompositePainter extends CustomPainter {
       );
       tp.layout();
       final cx = _barCenterX(x, w, slotW);
-      final cy = plotTop + plotH * 0.12;
-      tp.paint(canvas, Offset(cx - tp.width / 2, cy));
+      tp.paint(canvas, Offset(cx - tp.width / 2, cy - tp.height / 2));
     }
   }
 
@@ -4071,6 +4073,15 @@ class _KlineCompositePainter extends CustomPainter {
       ..sort();
     for (final kn in kdjKns) {
       _drawKdjSubChart(canvas, w, innerTop, innerH, barW, slotW, kn);
+    }
+    // Kn Demark：时间轴小字
+    final demarkKns = subIndicators
+        .where((e) => e.kind == SubIndicatorKind.demark)
+        .map((e) => e.kn)
+        .toList()
+      ..sort();
+    for (final kn in demarkKns) {
+      _drawDemarkSubChart(canvas, w, innerTop, innerH, barW, slotW, kn);
     }
     // Kn背驰：ratio 折线 + diver 柱（1/-1/0）
     final diverItems = subIndicators

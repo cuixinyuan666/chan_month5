@@ -1930,7 +1930,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
             '· 背驰：进出段力度比 + diver∈{1,-1,0}；12 算法分项；\n'
             '· K0 颗粒度展开；无未来函数；十字 asOf 截断。\n\n'
             '操作步骤\n'
-            '1. 主图勾选布林/Demark；副图勾选 MACD/RSI/KDJ/背驰_*；\n'
+            '1. 主图勾选布林；副图勾选 MACD/RSI/KDJ/Demark/背驰_*；\n'
             '2. 点本项或「?」编辑参数（含背驰率）；\n'
             '3. 写入 .chan_trend_model_config.json，下次启动恢复。',
           ),

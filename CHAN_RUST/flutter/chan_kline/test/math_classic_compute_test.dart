@@ -4,6 +4,7 @@ import 'package:chan_kline/compute/demark_compute.dart';
 import 'package:chan_kline/compute/math_classic_compute.dart';
 import 'package:chan_kline/models/bar_feature_lookup.dart';
 import 'package:chan_kline/models/chart_indicator.dart';
+import 'package:chan_kline/models/divergence_algo.dart';
 import 'package:chan_kline/models/kline_bar.dart';
 import 'package:chan_kline/models/math_indicator_config.dart';
 
@@ -106,24 +107,31 @@ void main() {
         mainCat.any((e) => e.kind == MainIndicatorKind.boll),
         isTrue,
       );
-      expect(
-        mainCat.any((e) => e.kind == MainIndicatorKind.demark),
-        isTrue,
-      );
 
       final subCat = buildSubIndicatorCatalog(1, maxBsClass: 9);
       expect(subCat.any((e) => e.kind == SubIndicatorKind.macd), isTrue);
       expect(subCat.any((e) => e.kind == SubIndicatorKind.rsi), isTrue);
       expect(subCat.any((e) => e.kind == SubIndicatorKind.kdj), isTrue);
+      expect(subCat.any((e) => e.kind == SubIndicatorKind.demark), isTrue);
 
       final dMain = defaultMainIndicatorsK0();
       expect(dMain.any((e) => e.kind == MainIndicatorKind.boll), isTrue);
-      expect(dMain.any((e) => e.kind == MainIndicatorKind.demark), isTrue);
 
       final dSub = defaultSubIndicatorsK0();
       expect(dSub.any((e) => e.kind == SubIndicatorKind.macd), isTrue);
       expect(dSub.any((e) => e.kind == SubIndicatorKind.rsi), isTrue);
       expect(dSub.any((e) => e.kind == SubIndicatorKind.kdj), isTrue);
+      expect(dSub.any((e) => e.kind == SubIndicatorKind.demark), isTrue);
+
+      // Kn指标层全选含 Demark + 背驰
+      final lvl0 = subIndicatorsForLevel(0, subCat);
+      expect(lvl0.any((e) => e.kind == SubIndicatorKind.demark), isTrue);
+      expect(
+        lvl0.where((e) => e.kind == SubIndicatorKind.divergence).length,
+        DivergenceAlgoMeta.all.length,
+      );
+      // 启动默认：背驰仍不勾
+      expect(dSub.any((e) => e.kind == SubIndicatorKind.divergence), isFalse);
     });
   });
 }

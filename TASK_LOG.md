@@ -2,6 +2,16 @@
 
 ## 最新记录
 
+### 2026-08-04 — 背驰12算法进「Kn指标」层全选
+
+- **要点**：`subIndicatorsForLevel` 纳入全部背驰算法；启动默认仍不勾（`defaultSubIndicatorsK0` 过滤）。修正「默认不勾≠不进层全选」口径。
+- **相关路径**：`chart_indicator.dart`、`AGENTS.md`、`msg_history.dart`、`math_classic_compute_test.dart`
+
+### 2026-08-04 — Demark迁副图 + Math十字asOf + Kn绑定补齐
+
+- **要点**：Demark 从主图迁副图并进「Kn指标」层全选；均线/通道/布林 `_paintPriceSeries` 十字 asOf 右侧不画；副图 chip/crosshairSubRows 接 Demark；坑点写入 `AGENTS.md` 常驻节。
+- **相关路径**：`chart_indicator.dart`、`kline_chart.dart`、`bar_feature_lookup.dart`、`msg_history.dart`、`AGENTS.md`、`math_classic_compute_test.dart`
+
 ### 2026-08-04 — 清理 Math 当下冻结调试埋点
 
 - **要点**：用户确认修复后移除 `math_series_freeze_store` 文件埋点；审计 dump 测试改为正规回归 `math_series_freeze_store_test.dart`。

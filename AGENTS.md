@@ -58,3 +58,11 @@ CHAN_RUST项目：项目定位：全新项目，用于行情回测、机器学�
 - **相邻比例**：子线=主图出现链（冻段+展示轨虚线/种子），**虚实不论**；按 `beginX` 出现序取末两根 `ratio=|cur|/|prev|`；K0 颗粒度写入会话。踩坑：勿只读冻段（动态虚线步会变 0）；勿按 `endConfirmX`/`isSure` 过滤排序。
 - **步进节奏**：组锚=父分型极值；命名从 **0-0**；子同向分型开窗、反向分型关窗（关窗后单点不向后连）；父分型确认切组并 `groupId++`；key 含 groupId。绘制：Δx==1 才点线续连、名在左侧、同 `roundRef` 同色、升暖降冷。
 - **验收**：连续单步（非一键跳末）；口径变更写 `lib/history/msg_history.dart` 与 `TASK_LOG.md`。
+
+### CHAN_RUST Math 指标 / 副图绑定 / 十字 asOf（2026-08-04·常驻）
+- **Demark**：副图（非主图）；`SubIndicatorKind.demark`；文案 `S↑9 C↓3`；进「Kn指标」层全选与默认 K0。
+- **Kn绑定清单（副图层全选必须含）**：volume/tickCount/分型类/BS/比例/节奏/斜率/MACD/RSI/KDJ/Demark/**背驰12算法**。启动默认仍不勾背驰（`defaultSubIndicatorsK0` 过滤）；点「Kn指标」可一层全选。
+- **主图 Math 仍绑层全选**：均线/通道/布林（与中枢同号）。
+- **十字 asOf 右侧不画**：蜡烛/成交量/分型/BS/Math 副图已截断；主图均线/通道/布林必须走 `_paintPriceSeries` 的 `x>asOf` 截断，禁止只算 asOf 却仍把冻结仓全长画完。
+- **当下冻结**：`MathSeriesFreezeStore` 格点首次非空写入后冻结；参数变更清空并 0..当前步重冻。验收：连续单步（非一键跳末）。
+- **踩坑**：新增副图指标时同步改 ①catalog ②`subIndicatorsForLevel` ③绘制分支 ④`crosshairSubRows` ⑤`msg_history`；漏任一环=「没和 Kn指标绑定」或「十字右侧读数空白」。默认不勾≠不进层全选——背驰即此例。
