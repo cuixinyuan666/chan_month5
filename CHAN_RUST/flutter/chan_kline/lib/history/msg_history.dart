@@ -471,6 +471,57 @@ class MsgHistory {
     );
   }
 
+  /// 主图 Kn趋势线（进程内去重）
+  static bool _knTrendLineLogged = false;
+  void appendKnTrendLine() {
+    if (_knTrendLineLogged) return;
+    _knTrendLineLogged = true;
+    append(
+      '【Kn趋势线·主图·子线层同号·v1】'
+      '显示名 K{n}趋势线；内部 kn 同连线（1→K0）；类别「延伸」；移植旧 Math/TrendLine.py。'
+      '映射：子线=levels[level==n+1]，父段=levels[level==n+2]（含 active）；K0≈旧工程（父K1连线/子K0连线）。'
+      '父段内子线≥3：隔笔取样→峰值斜率→点到线距离和最小；INSIDE=支撑、OUTSIDE=压力。'
+      '例外：依赖父层，最高层不作显示名；maxKn<2 目录仍挂 K0 占位（计算空）。'
+      '呈现对齐三型/四型：无十字最新父段组；十字近邻组；父段弦+向右外推；层色构建虚线。'
+      'tooltip「K{n}趋势线」=撑/压延长线落到该根K0价格；十字 asOf 只认 asOfBundle（禁末态）。'
+      '默认：进 catalog +「Kn指标」层全选 + 启动默认 K0。纯 Flutter，不改 Rust。',
+    );
+  }
+
+  /// 主图 Kn均线 / Kn通道（进程内去重）
+  static bool _knTrendModelLogged = false;
+  void appendKnTrendModel() {
+    if (_knTrendModelLogged) return;
+    _knTrendModelLogged = true;
+    append(
+      '【Kn均线/Kn通道·主图·全层同构·v1】'
+      '显示名 K{n}均线、K{n}通道；kn 同中枢（0→K0）；类别「均线」；移植旧 Math/TrendModel.py。'
+      '输入：K0=bars.close；Kn≥1=levels[level==n].unitBars(+active).close；滑窗 MEAN/MAX/MIN（不足T用已有长度）。'
+      '展开到K0：按单元 endX 阶梯铺柱；十字 asOf 截断样本。'
+      '周期：设置面板「数学指标参数」（默认均线5,10,20；通道20,60），落盘 .chan_trend_model_config.json。'
+      '呈现：主图连续折线（多T分色）；tooltip「K{n}均线」「K{n}通道」=各T读数。'
+      '默认：进 catalog +「Kn指标」层全选 + 启动默认 K0。纯 Flutter，不改 Rust。'
+      '与Kn趋势线/三型四型无关（序列统计≠段内拟合/分型几何）。',
+    );
+  }
+
+  /// MACD/BOLL/RSI/KDJ/Demark（进程内去重）
+  static bool _knMathClassicLogged = false;
+  void appendKnMathClassicIndicators() {
+    if (_knMathClassicLogged) return;
+    _knMathClassicLogged = true;
+    append(
+      '【Kn MACD/BOLL/RSI/KDJ/Demark·全层同构·v1】'
+      '主图：K{n}布林(MID/UP/DOWN)、K{n}Demark(setup/countdown 小字，如 S↑9 C↓3)。'
+      '副图：K{n}MACD(DIF/DEA线+柱)、K{n}RSI(0–100+30/70参考)、K{n}KDJ(K/D/J三线)。'
+      '输入：collectKnOhlcSamples(displayKn, unitBars+activeUnit)；K0 颗粒度 expandPointsToK0；asOf 截断。'
+      '参数：设置面板「数学指标参数」统一落盘 .chan_trend_model_config.json（兼容旧均线/通道字段）。'
+      'tooltip 比例/节奏块追加槽位：K{n}MACD、K{n}布林、K{n}RSI、K{n}KDJ、K{n}Demark（应显尽显）。'
+      '副图读数框同源 sub 键 macd_dif/dea/hist、boll_mid/up/down、rsi、kdj_k/d/j、demark_text。'
+      '默认：进 catalog +「Kn指标」层全选；纯 Flutter，不改 Rust。',
+    );
+  }
+
   /// 默认 K0=原生分笔一字线（进程内去重）
   static bool _tickK0NativeLogged = false;
   void appendTickK0NativePeriod() {

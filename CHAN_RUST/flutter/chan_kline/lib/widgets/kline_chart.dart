@@ -17,7 +17,12 @@ import '../compute/kn_volume_series_compute.dart';
 import '../compute/adjacent_ratio_compute.dart';
 import '../compute/line_slope_compute.dart';
 import '../compute/fx_extend_line_compute.dart';
+import '../compute/trend_line_compute.dart';
+import '../compute/trend_model_compute.dart';
+import '../compute/math_classic_compute.dart';
+import '../compute/demark_compute.dart';
 import '../compute/step_rhythm_compute.dart';
+import '../models/math_indicator_config.dart';
 import '../compute/level_unit_bar_view_compute.dart';
 import '../compute/zs_compute.dart';
 import '../compute/chip_profile_compute.dart';
@@ -123,6 +128,7 @@ class KlineChart extends StatefulWidget {
     this.onLongPressRunToEnd,
     this.chipConfig = const ChipConfig(),
     this.tickDistConfig = const TickDistConfig(),
+    this.mathIndicatorConfig = const MathIndicatorConfig(),
     this.chipOnlyMode = false,
   });
 
@@ -191,6 +197,8 @@ class KlineChart extends StatefulWidget {
   final ChipConfig chipConfig;
   /// 笔数分布配置（主图左侧；仅 K0）
   final TickDistConfig tickDistConfig;
+  /// 数学指标参数（均线/通道/MACD/BOLL/RSI/KDJ/Demark）
+  final MathIndicatorConfig mathIndicatorConfig;
   /// chip 分支：仅显示筹码分布，关闭所有缠论渲染
   final bool chipOnlyMode;
 
@@ -748,6 +756,7 @@ class _KlineChartState extends State<KlineChart> {
       asOf: asOf,
       zsAfterK0: k0Zs,
       knZsAfterKn: knZs,
+      mathIndicatorConfig: widget.mathIndicatorConfig,
     );
     // K0 筹码峰 / 笔数峰：与主图 profile 同 cutoff，按本根高低编号
     final cut = asOf ?? bar.idx;
@@ -1145,6 +1154,7 @@ class _KlineChartState extends State<KlineChart> {
       truncationCheck: widget.truncationCheck,
       judgmentHistoryByKn: widget.judgmentHistoryByKn,
       asOf: asOf,
+      mathIndicatorConfig: widget.mathIndicatorConfig,
     );
     final out = <SubChartIndicator, String>{};
     for (final e in _activeSubs) {
@@ -1246,6 +1256,7 @@ class _KlineChartState extends State<KlineChart> {
               lineSlopeHistoryByKn: widget.lineSlopeHistoryByKn,
               chipConfig: widget.chipConfig,
               tickDistConfig: widget.tickDistConfig,
+              mathIndicatorConfig: widget.mathIndicatorConfig,
               chipOnlyMode: widget.chipOnlyMode,
               layer: layer,
             );
@@ -1517,6 +1528,7 @@ class _KlineCompositePainter extends CustomPainter {
     this.lineSlopeHistoryByKn = const {},
     this.chipConfig = const ChipConfig(),
     this.tickDistConfig = const TickDistConfig(),
+    this.mathIndicatorConfig = const MathIndicatorConfig(),
     this.chipOnlyMode = false,
     this.layer = _ChartPaintLayer.base,
   }) : featureLookup = (chipOnlyMode || layer == _ChartPaintLayer.chip)
@@ -1543,6 +1555,7 @@ class _KlineCompositePainter extends CustomPainter {
                 truncationCheck: truncationCheck,
                 judgmentHistoryByKn: judgmentHistoryByKn,
                 asOf: segAsOf,
+                mathIndicatorConfig: mathIndicatorConfig,
               );
 
   /// 分层绘制：底图/筹码/十字 独立 shouldRepaint（计算口径不变）
@@ -1614,6 +1627,8 @@ class _KlineCompositePainter extends CustomPainter {
   final ChipConfig chipConfig;
   /// 笔数分布配置（主图左侧）
   final TickDistConfig tickDistConfig;
+  /// 数学指标参数
+  final MathIndicatorConfig mathIndicatorConfig;
   /// chip 分支：仅显示筹码分布，关闭所有缠论渲染
   final bool chipOnlyMode;
 
@@ -1753,6 +1768,51 @@ class _KlineCompositePainter extends CustomPainter {
           );
         } else if (ind.kind == MainIndicatorKind.fxQuadPair) {
           _drawFxQuadPair(
+            canvas,
+            size.width,
+            plotTop,
+            plotH,
+            slotW,
+            ind.kn,
+          );
+        } else if (ind.kind == MainIndicatorKind.trendLine) {
+          _drawTrendLine(
+            canvas,
+            size.width,
+            plotTop,
+            plotH,
+            slotW,
+            ind.kn,
+          );
+        } else if (ind.kind == MainIndicatorKind.meanLine) {
+          _drawMeanLine(
+            canvas,
+            size.width,
+            plotTop,
+            plotH,
+            slotW,
+            ind.kn,
+          );
+        } else if (ind.kind == MainIndicatorKind.trendChannel) {
+          _drawTrendChannel(
+            canvas,
+            size.width,
+            plotTop,
+            plotH,
+            slotW,
+            ind.kn,
+          );
+        } else if (ind.kind == MainIndicatorKind.boll) {
+          _drawBoll(
+            canvas,
+            size.width,
+            plotTop,
+            plotH,
+            slotW,
+            ind.kn,
+          );
+        } else if (ind.kind == MainIndicatorKind.demark) {
+          _drawDemark(
             canvas,
             size.width,
             plotTop,
@@ -2745,6 +2805,276 @@ class _KlineCompositePainter extends CustomPainter {
     }
   }
 
+  /// 主图 Kn均线（kn=显示层；收盘价滑窗 MEAN）。
+  void _drawMeanLine(
+    Canvas canvas,
+    double w,
+    double plotTop,
+    double plotH,
+    double slotW,
+    int kn,
+  ) {
+    if (bars.isEmpty) return;
+    final asOf = segAsOf;
+    final lv = asOf != null
+        ? (zsAsOfBundle?.levels ?? const <LevelBundle>[])
+        : levels;
+    final seriesMap = computeMeanSeriesForLevel(
+      displayKn: kn,
+      bars: bars,
+      levels: lv,
+      periods: mathIndicatorConfig.meanPeriods,
+      asOf: asOf,
+    );
+    final periods = seriesMap.keys.toList()..sort();
+    for (var i = 0; i < periods.length; i++) {
+      final t = periods[i];
+      final series = seriesMap[t];
+      if (series == null) continue;
+      final hue = (i * 0.17) % 1.0;
+      final color = HSVColor.fromAHSV(1, hue * 360, 0.75, 0.95).toColor();
+      _paintPriceSeries(
+        canvas,
+        w,
+        plotTop,
+        plotH,
+        slotW,
+        series: series,
+        color: color,
+        strokeWidth: 1.2,
+      );
+    }
+  }
+
+  /// 主图 Kn通道（MAX 上轨 + MIN 下轨）。
+  void _drawTrendChannel(
+    Canvas canvas,
+    double w,
+    double plotTop,
+    double plotH,
+    double slotW,
+    int kn,
+  ) {
+    if (bars.isEmpty) return;
+    final asOf = segAsOf;
+    final lv = asOf != null
+        ? (zsAsOfBundle?.levels ?? const <LevelBundle>[])
+        : levels;
+    final seriesMap = computeChannelSeriesForLevel(
+      displayKn: kn,
+      bars: bars,
+      levels: lv,
+      periods: mathIndicatorConfig.channelPeriods,
+      asOf: asOf,
+    );
+    final periods = seriesMap.keys.toList()..sort();
+    for (var i = 0; i < periods.length; i++) {
+      final t = periods[i];
+      final pair = seriesMap[t];
+      if (pair == null) continue;
+      final hue = (0.05 + i * 0.21) % 1.0;
+      final top = HSVColor.fromAHSV(1, hue * 360, 0.8, 0.95).toColor();
+      final bot = HSVColor.fromAHSV(1, ((hue + 0.45) % 1.0) * 360, 0.8, 0.9)
+          .toColor();
+      _paintPriceSeries(
+        canvas,
+        w,
+        plotTop,
+        plotH,
+        slotW,
+        series: pair.max,
+        color: top,
+        strokeWidth: 1.4,
+      );
+      _paintPriceSeries(
+        canvas,
+        w,
+        plotTop,
+        plotH,
+        slotW,
+        series: pair.min,
+        color: bot,
+        strokeWidth: 1.4,
+      );
+    }
+  }
+
+  /// 按 K0 下标连价序列（null 段断开）。
+  void _paintPriceSeries(
+    Canvas canvas,
+    double w,
+    double plotTop,
+    double plotH,
+    double slotW, {
+    required List<double?> series,
+    required Color color,
+    double strokeWidth = 1.2,
+  }) {
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = strokeWidth
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    Offset? prev;
+    for (var i = 0; i < bars.length && i < series.length; i++) {
+      final v = series[i];
+      if (v == null) {
+        prev = null;
+        continue;
+      }
+      final idx = bars[i].idx;
+      final pt = Offset(
+        _barCenterX(idx, w, slotW),
+        priceRange.yOf(v, plotTop, plotH),
+      );
+      if (prev != null) {
+        canvas.drawLine(prev, pt, paint);
+      }
+      prev = pt;
+    }
+  }
+
+  /// 主图 Kn布林带（MID/UP/DOWN）。
+  void _drawBoll(
+    Canvas canvas,
+    double w,
+    double plotTop,
+    double plotH,
+    double slotW,
+    int kn,
+  ) {
+    if (bars.isEmpty) return;
+    final asOf = segAsOf;
+    final lv = asOf != null
+        ? (zsAsOfBundle?.levels ?? const <LevelBundle>[])
+        : levels;
+    final boll = computeBollForLevel(
+      displayKn: kn,
+      bars: bars,
+      levels: lv,
+      n: mathIndicatorConfig.bollN,
+      asOf: asOf,
+    );
+    final midColor = ChartLevelLineStyle.colorForDisplayKn(kn);
+    _paintPriceSeries(
+      canvas,
+      w,
+      plotTop,
+      plotH,
+      slotW,
+      series: boll.mid,
+      color: midColor,
+      strokeWidth: 1.4,
+    );
+    _paintPriceSeries(
+      canvas,
+      w,
+      plotTop,
+      plotH,
+      slotW,
+      series: boll.up,
+      color: midColor.withValues(alpha: 0.55),
+      strokeWidth: 1.0,
+    );
+    _paintPriceSeries(
+      canvas,
+      w,
+      plotTop,
+      plotH,
+      slotW,
+      series: boll.down,
+      color: midColor.withValues(alpha: 0.55),
+      strokeWidth: 1.0,
+    );
+  }
+
+  /// 主图 Kn Demark：柱心小字标记 setup/countdown。
+  void _drawDemark(
+    Canvas canvas,
+    double w,
+    double plotTop,
+    double plotH,
+    double slotW,
+    int kn,
+  ) {
+    if (bars.isEmpty) return;
+    final asOf = segAsOf;
+    final lv = asOf != null
+        ? (zsAsOfBundle?.levels ?? const <LevelBundle>[])
+        : levels;
+    final demark = computeDemarkForLevel(
+      displayKn: kn,
+      bars: bars,
+      levels: lv,
+      config: mathIndicatorConfig,
+      asOf: asOf,
+    );
+    final maxX = asOf ?? bars.last.idx;
+    final color = ChartLevelLineStyle.colorForDisplayKn(kn);
+    final tp = TextPainter(
+      textAlign: TextAlign.center,
+      textDirection: TextDirection.ltr,
+    );
+    for (var i = 0; i < bars.length && i < demark.marksAt.length; i++) {
+      final marks = demark.marksAt[i];
+      if (marks == null || marks.isEmpty) continue;
+      final x = bars[i].idx;
+      if (x > maxX) continue;
+      if (x < viewport.viewXMin - 1 || x > viewport.viewXMax + 1) continue;
+      final text = BarFeatureLookup.formatDemarkMarks(marks);
+      tp.text = TextSpan(
+        text: text,
+        style: TextStyle(
+          color: color,
+          fontSize: math.max(7.0, slotW * 0.42),
+          fontWeight: FontWeight.w600,
+        ),
+      );
+      tp.layout();
+      final cx = _barCenterX(x, w, slotW);
+      final cy = plotTop + plotH * 0.12;
+      tp.paint(canvas, Offset(cx - tp.width / 2, cy));
+    }
+  }
+
+  /// 主图 Kn趋势线（父段内支撑/压力；子线层同号）。
+  void _drawTrendLine(
+    Canvas canvas,
+    double w,
+    double plotTop,
+    double plotH,
+    double slotW,
+    int kn,
+  ) {
+    if (kn < 1 || bars.isEmpty) return;
+    final displayKn = kn - 1;
+    final asOf = segAsOf;
+    // 十字 asOf：只认 asOfBundle（失败=空，禁末态）
+    final lv = asOf != null
+        ? (zsAsOfBundle?.levels ?? const <LevelBundle>[])
+        : levels;
+    final rays = selectFxExtendRays(
+      calcTrendLineGroupsForLevel(
+        displayKn: displayKn,
+        levels: lv,
+        asOf: asOf,
+      ),
+      focusX: asOf,
+    );
+    for (final ray in rays) {
+      _paintFxExtendRay(
+        canvas,
+        w,
+        plotTop,
+        plotH,
+        slotW,
+        ray: ray,
+        displayKn: displayKn,
+      );
+    }
+  }
+
   /// 画延伸射线：可选弦 (x1,y1)→(x0,y0)，再自 (x0,y0) 外推到视口右缘。
   void _paintFxExtendRay(
     Canvas canvas,
@@ -3680,6 +4010,31 @@ class _KlineCompositePainter extends CustomPainter {
     for (final kn in slopeKns) {
       _drawLineSlopeSubChart(canvas, w, innerTop, innerH, barW, slotW, kn);
     }
+    // Kn MACD / RSI / KDJ
+    final macdKns = subIndicators
+        .where((e) => e.kind == SubIndicatorKind.macd)
+        .map((e) => e.kn)
+        .toList()
+      ..sort();
+    for (final kn in macdKns) {
+      _drawMacdSubChart(canvas, w, innerTop, innerH, barW, slotW, kn);
+    }
+    final rsiKns = subIndicators
+        .where((e) => e.kind == SubIndicatorKind.rsi)
+        .map((e) => e.kn)
+        .toList()
+      ..sort();
+    for (final kn in rsiKns) {
+      _drawRsiSubChart(canvas, w, innerTop, innerH, barW, slotW, kn);
+    }
+    final kdjKns = subIndicators
+        .where((e) => e.kind == SubIndicatorKind.kdj)
+        .map((e) => e.kn)
+        .toList()
+      ..sort();
+    for (final kn in kdjKns) {
+      _drawKdjSubChart(canvas, w, innerTop, innerH, barW, slotW, kn);
+    }
   }
 
   /// 副图 Kn相邻比例。
@@ -3820,6 +4175,270 @@ class _KlineCompositePainter extends CustomPainter {
       if (prev != null) canvas.drawLine(prev, pt, linePaint);
       canvas.drawCircle(pt, 2.2, p.dir == 'up' ? upDot : downDot);
       prev = pt;
+    }
+  }
+
+  /// 副图 Kn MACD：DIF/DEA 线 + MACD 柱。
+  void _drawMacdSubChart(
+    Canvas canvas,
+    double w,
+    double innerTop,
+    double innerH,
+    double barW,
+    double slotW,
+    int displayKn,
+  ) {
+    if (bars.isEmpty) return;
+    final asOf = segAsOf;
+    final lv = asOf != null
+        ? (zsAsOfBundle?.levels ?? const <LevelBundle>[])
+        : levels;
+    final macd = computeMacdForLevel(
+      displayKn: displayKn,
+      bars: bars,
+      levels: lv,
+      fast: mathIndicatorConfig.macdFast,
+      slow: mathIndicatorConfig.macdSlow,
+      signal: mathIndicatorConfig.macdSignal,
+      asOf: asOf,
+    );
+    final maxX = asOf ?? bars.last.idx;
+    var minV = 0.0;
+    var maxV = 0.0;
+    var any = false;
+    for (var i = 0; i < bars.length; i++) {
+      if (bars[i].idx > maxX) continue;
+      for (final v in [macd.dif[i], macd.dea[i], macd.macd[i]]) {
+        if (v == null) continue;
+        if (!any) {
+          minV = v;
+          maxV = v;
+          any = true;
+        } else {
+          if (v < minV) minV = v;
+          if (v > maxV) maxV = v;
+        }
+      }
+    }
+    if (!any) return;
+    if (minV > 0) minV = 0;
+    if (maxV < 0) maxV = 0;
+    if ((maxV - minV).abs() < 1e-12) {
+      minV -= 1e-6;
+      maxV += 1e-6;
+    }
+    final span = math.max(1e-9, maxV - minV);
+    double subY(double v) => innerTop + (maxV - v) / span * innerH;
+
+    final zeroPaint = Paint()
+      ..color = const Color(0x6694A3B8)
+      ..strokeWidth = 1
+      ..style = PaintingStyle.stroke;
+    _drawDashedLine(
+      canvas,
+      Offset(KlineViewport.padL, subY(0)),
+      Offset(w - KlineViewport.padR, subY(0)),
+      zeroPaint,
+    );
+
+    final upBar = Paint()..color = const Color(0xCCDC2626);
+    final dnBar = Paint()..color = const Color(0xCC16A34A);
+    final halfW = math.max(1.0, barW * 0.35);
+    for (var i = 0; i < bars.length; i++) {
+      final x = bars[i].idx;
+      if (x > maxX) continue;
+      if (x < viewport.viewXMin - 1 || x > viewport.viewXMax + 1) continue;
+      final hist = macd.macd[i];
+      if (hist == null) continue;
+      final cx = _barCenterX(x, w, slotW);
+      final y0 = subY(0);
+      final y1 = subY(hist);
+      final top = math.min(y0, y1);
+      final bot = math.max(y0, y1);
+      canvas.drawRect(
+        Rect.fromLTRB(cx - halfW, top, cx + halfW, bot < top + 1 ? top + 1 : bot),
+        hist >= 0 ? upBar : dnBar,
+      );
+    }
+
+    final difPaint = Paint()
+      ..color = const Color(0xFF2563EB)
+      ..strokeWidth = 1.2
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+    final deaPaint = Paint()
+      ..color = const Color(0xFFF59E0B)
+      ..strokeWidth = 1.2
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+    Offset? prevDif;
+    Offset? prevDea;
+    for (var i = 0; i < bars.length; i++) {
+      final x = bars[i].idx;
+      if (x > maxX) {
+        prevDif = null;
+        prevDea = null;
+        continue;
+      }
+      if (x < viewport.viewXMin - 1 || x > viewport.viewXMax + 1) {
+        prevDif = null;
+        prevDea = null;
+        continue;
+      }
+      final cx = _barCenterX(x, w, slotW);
+      final dif = macd.dif[i];
+      if (dif != null) {
+        final pt = Offset(cx, subY(dif));
+        if (prevDif != null) canvas.drawLine(prevDif, pt, difPaint);
+        prevDif = pt;
+      } else {
+        prevDif = null;
+      }
+      final dea = macd.dea[i];
+      if (dea != null) {
+        final pt = Offset(cx, subY(dea));
+        if (prevDea != null) canvas.drawLine(prevDea, pt, deaPaint);
+        prevDea = pt;
+      } else {
+        prevDea = null;
+      }
+    }
+  }
+
+  /// 副图 Kn RSI：0–100 折线 + 30/70 参考线。
+  void _drawRsiSubChart(
+    Canvas canvas,
+    double w,
+    double innerTop,
+    double innerH,
+    double barW,
+    double slotW,
+    int displayKn,
+  ) {
+    if (bars.isEmpty) return;
+    final asOf = segAsOf;
+    final lv = asOf != null
+        ? (zsAsOfBundle?.levels ?? const <LevelBundle>[])
+        : levels;
+    final rsi = computeRsiForLevel(
+      displayKn: displayKn,
+      bars: bars,
+      levels: lv,
+      period: mathIndicatorConfig.rsiPeriod,
+      asOf: asOf,
+    );
+    const minV = 0.0;
+    const maxV = 100.0;
+    final span = maxV - minV;
+    double subY(double v) => innerTop + (maxV - v) / span * innerH;
+    final refPaint = Paint()
+      ..color = const Color(0x6694A3B8)
+      ..strokeWidth = 1
+      ..style = PaintingStyle.stroke;
+    for (final ref in [30.0, 70.0]) {
+      final y = subY(ref);
+      _drawDashedLine(
+        canvas,
+        Offset(KlineViewport.padL, y),
+        Offset(w - KlineViewport.padR, y),
+        refPaint,
+      );
+    }
+    final linePaint = Paint()
+      ..color = ChartLevelLineStyle.colorForDisplayKn(displayKn)
+      ..strokeWidth = 1.5
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+    final maxX = asOf ?? bars.last.idx;
+    Offset? prev;
+    for (var i = 0; i < bars.length; i++) {
+      final x = bars[i].idx;
+      if (x > maxX) {
+        prev = null;
+        continue;
+      }
+      if (x < viewport.viewXMin - 1 || x > viewport.viewXMax + 1) {
+        prev = null;
+        continue;
+      }
+      final v = rsi[i];
+      if (v == null) {
+        prev = null;
+        continue;
+      }
+      final pt = Offset(_barCenterX(x, w, slotW), subY(v));
+      if (prev != null) canvas.drawLine(prev, pt, linePaint);
+      prev = pt;
+    }
+  }
+
+  /// 副图 Kn KDJ：K/D/J 三线。
+  void _drawKdjSubChart(
+    Canvas canvas,
+    double w,
+    double innerTop,
+    double innerH,
+    double barW,
+    double slotW,
+    int displayKn,
+  ) {
+    if (bars.isEmpty) return;
+    final asOf = segAsOf;
+    final lv = asOf != null
+        ? (zsAsOfBundle?.levels ?? const <LevelBundle>[])
+        : levels;
+    final kdj = computeKdjForLevel(
+      displayKn: displayKn,
+      bars: bars,
+      levels: lv,
+      period: mathIndicatorConfig.kdjPeriod,
+      asOf: asOf,
+    );
+    const minV = 0.0;
+    const maxV = 100.0;
+    final span = maxV - minV;
+    double subY(double v) => innerTop + (maxV - v) / span * innerH;
+    final maxX = asOf ?? bars.last.idx;
+    final paints = <Paint>[
+      Paint()
+        ..color = const Color(0xFF2563EB)
+        ..strokeWidth = 1.2
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round,
+      Paint()
+        ..color = const Color(0xFFF59E0B)
+        ..strokeWidth = 1.2
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round,
+      Paint()
+        ..color = const Color(0xFF9333EA)
+        ..strokeWidth = 1.2
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round,
+    ];
+    final series = [kdj.k, kdj.d, kdj.j];
+    for (var si = 0; si < series.length; si++) {
+      final s = series[si];
+      Offset? prev;
+      for (var i = 0; i < bars.length; i++) {
+        final x = bars[i].idx;
+        if (x > maxX) {
+          prev = null;
+          continue;
+        }
+        if (x < viewport.viewXMin - 1 || x > viewport.viewXMax + 1) {
+          prev = null;
+          continue;
+        }
+        final v = s[i];
+        if (v == null) {
+          prev = null;
+          continue;
+        }
+        final pt = Offset(_barCenterX(x, w, slotW), subY(v.clamp(minV, maxV)));
+        if (prev != null) canvas.drawLine(prev, pt, paints[si]);
+        prev = pt;
+      }
     }
   }
 
@@ -4846,7 +5465,8 @@ class _KlineCompositePainter extends CustomPainter {
         oldDelegate.lineSlopeHistoryByKn != lineSlopeHistoryByKn ||
         oldDelegate.chipOnlyMode != chipOnlyMode ||
         oldDelegate.chipConfig != chipConfig ||
-        oldDelegate.tickDistConfig != tickDistConfig;
+        oldDelegate.tickDistConfig != tickDistConfig ||
+        oldDelegate.mathIndicatorConfig != mathIndicatorConfig;
 
     switch (layer) {
       case _ChartPaintLayer.base:

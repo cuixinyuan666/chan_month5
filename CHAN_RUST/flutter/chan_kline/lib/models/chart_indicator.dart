@@ -1,7 +1,7 @@
 import 'k0_line.dart';
 import 'level_models.dart';
 
-/// 主图指标：连线 / 合并框 / KN线 / 中枢 / 三型平移 / 四型对线。
+/// 主图指标：连线 / 合并框 / KN线 / 中枢 / 延伸类 / 均线通道。
 /// （筹码分布已迁出主图指标，改由设置面板总开关控制，仅保留 K0 分支）
 enum MainIndicatorKind {
   line,
@@ -12,6 +12,16 @@ enum MainIndicatorKind {
   fxTripleParallel,
   /// Kn四型对线（前四确认分型：两顶线+两底线向右）
   fxQuadPair,
+  /// Kn趋势线（父段内子线端点拟合支撑/压力；子线层同号）
+  trendLine,
+  /// Kn均线（收盘价滑窗 MEAN；kn 同中枢显示层）
+  meanLine,
+  /// Kn通道（收盘价滑窗 MAX/MIN；kn 同中枢显示层）
+  trendChannel,
+  /// Kn布林带（MID/UP/DOWN；kn 同中枢）
+  boll,
+  /// Kn Demark（setup/countdown 标记；kn 同中枢）
+  demark,
 }
 
 /// 主图指标类别元数据。
@@ -28,7 +38,14 @@ extension MainIndicatorKindMeta on MainIndicatorKind {
         return '连线';
       case MainIndicatorKind.fxTripleParallel:
       case MainIndicatorKind.fxQuadPair:
+      case MainIndicatorKind.trendLine:
         return '延伸';
+      case MainIndicatorKind.meanLine:
+      case MainIndicatorKind.trendChannel:
+      case MainIndicatorKind.boll:
+        return '均线';
+      case MainIndicatorKind.demark:
+        return 'Demark';
     }
   }
 
@@ -44,7 +61,14 @@ extension MainIndicatorKindMeta on MainIndicatorKind {
         return 3;
       case MainIndicatorKind.fxTripleParallel:
       case MainIndicatorKind.fxQuadPair:
+      case MainIndicatorKind.trendLine:
         return 4;
+      case MainIndicatorKind.meanLine:
+      case MainIndicatorKind.trendChannel:
+      case MainIndicatorKind.boll:
+        return 5;
+      case MainIndicatorKind.demark:
+        return 6;
     }
   }
 }
@@ -52,7 +76,7 @@ extension MainIndicatorKindMeta on MainIndicatorKind {
 /// 主图一项指标（按加载后 maxKn 动态生成）。
 class MainChartIndicator {
   final MainIndicatorKind kind;
-  /// kn=0：K0中枢（原生分钟K）；kn≥1：Kn中枢（连线段）。
+  /// kn=0：K0中枢/均线/通道（原生分钟K）；kn≥1：Kn中枢/均线/通道。
   /// combine/line/kn/延伸：内部 kn≥1，显示层 = kn-1。
   final int kn;
 
@@ -64,6 +88,14 @@ class MainChartIndicator {
       : kind = MainIndicatorKind.fxTripleParallel;
   const MainChartIndicator.fxQuadPair(this.kn)
       : kind = MainIndicatorKind.fxQuadPair;
+  const MainChartIndicator.trendLine(this.kn)
+      : kind = MainIndicatorKind.trendLine;
+  const MainChartIndicator.meanLine(this.kn)
+      : kind = MainIndicatorKind.meanLine;
+  const MainChartIndicator.trendChannel(this.kn)
+      : kind = MainIndicatorKind.trendChannel;
+  const MainChartIndicator.boll(this.kn) : kind = MainIndicatorKind.boll;
+  const MainChartIndicator.demark(this.kn) : kind = MainIndicatorKind.demark;
 
   String get label {
     switch (kind) {
@@ -80,6 +112,16 @@ class MainChartIndicator {
         return 'K${kn - 1}三型平移线';
       case MainIndicatorKind.fxQuadPair:
         return 'K${kn - 1}四型对线';
+      case MainIndicatorKind.trendLine:
+        return 'K${kn - 1}趋势线';
+      case MainIndicatorKind.meanLine:
+        return 'K$kn均线';
+      case MainIndicatorKind.trendChannel:
+        return 'K$kn通道';
+      case MainIndicatorKind.boll:
+        return 'K$kn布林';
+      case MainIndicatorKind.demark:
+        return 'K${kn}Demark';
     }
   }
 
@@ -87,17 +129,22 @@ class MainChartIndicator {
   int get displayLevel {
     switch (kind) {
       case MainIndicatorKind.zs:
+      case MainIndicatorKind.meanLine:
+      case MainIndicatorKind.trendChannel:
+      case MainIndicatorKind.boll:
+      case MainIndicatorKind.demark:
         return kn;
       case MainIndicatorKind.line:
       case MainIndicatorKind.combine:
       case MainIndicatorKind.kn:
       case MainIndicatorKind.fxTripleParallel:
       case MainIndicatorKind.fxQuadPair:
+      case MainIndicatorKind.trendLine:
         return kn - 1;
     }
   }
 
-  /// 同层内展示序：Kn → Kn合并 → Kn中枢 → Kn连线 → 三型 → 四型。
+  /// 同层内展示序：… → 均线 → 通道 → 布林 → Demark。
   int get kindOrderInLevel {
     switch (kind) {
       case MainIndicatorKind.kn:
@@ -112,6 +159,16 @@ class MainChartIndicator {
         return 4;
       case MainIndicatorKind.fxQuadPair:
         return 5;
+      case MainIndicatorKind.trendLine:
+        return 6;
+      case MainIndicatorKind.meanLine:
+        return 7;
+      case MainIndicatorKind.trendChannel:
+        return 8;
+      case MainIndicatorKind.boll:
+        return 9;
+      case MainIndicatorKind.demark:
+        return 10;
     }
   }
 
@@ -142,6 +199,12 @@ enum SubIndicatorKind {
   stepRhythm,
   /// Kn连线斜率（与 Kn连线同号；动态：冻段+展示轨）
   lineSlope,
+  /// Kn MACD（动态 Kn close；kn 同中枢）
+  macd,
+  /// Kn RSI
+  rsi,
+  /// Kn KDJ
+  kdj,
 }
 
 /// 副图指标类别元数据。
@@ -172,6 +235,12 @@ extension SubIndicatorKindMeta on SubIndicatorKind {
         return '节奏';
       case SubIndicatorKind.lineSlope:
         return '斜率';
+      case SubIndicatorKind.macd:
+        return 'MACD';
+      case SubIndicatorKind.rsi:
+        return 'RSI';
+      case SubIndicatorKind.kdj:
+        return 'KDJ';
     }
   }
 
@@ -201,6 +270,12 @@ extension SubIndicatorKindMeta on SubIndicatorKind {
         return 10;
       case SubIndicatorKind.lineSlope:
         return 11;
+      case SubIndicatorKind.macd:
+        return 12;
+      case SubIndicatorKind.rsi:
+        return 13;
+      case SubIndicatorKind.kdj:
+        return 14;
     }
   }
 }
@@ -271,6 +346,15 @@ class SubChartIndicator {
   const SubChartIndicator.lineSlope(this.kn)
       : kind = SubIndicatorKind.lineSlope,
         bsClass = null;
+  const SubChartIndicator.macd(this.kn)
+      : kind = SubIndicatorKind.macd,
+        bsClass = null;
+  const SubChartIndicator.rsi(this.kn)
+      : kind = SubIndicatorKind.rsi,
+        bsClass = null;
+  const SubChartIndicator.kdj(this.kn)
+      : kind = SubIndicatorKind.kdj,
+        bsClass = null;
 
   String get label {
     switch (kind) {
@@ -299,10 +383,16 @@ class SubChartIndicator {
         return 'K$kn节奏';
       case SubIndicatorKind.lineSlope:
         return 'K$kn连线斜率';
+      case SubIndicatorKind.macd:
+        return 'K${kn}MACD';
+      case SubIndicatorKind.rsi:
+        return 'K${kn}RSI';
+      case SubIndicatorKind.kdj:
+        return 'K${kn}KDJ';
     }
   }
 
-  /// 显示层号（成交量/BS/相邻比例/节奏/斜率 kn 直接；分型类 kn-1）。
+  /// 显示层号（成交量/BS/相邻比例/节奏/斜率/MACD/RSI/KDJ kn 直接；分型类 kn-1）。
   int get displayLevel {
     switch (kind) {
       case SubIndicatorKind.volume:
@@ -313,6 +403,9 @@ class SubChartIndicator {
       case SubIndicatorKind.adjacentRatio:
       case SubIndicatorKind.stepRhythm:
       case SubIndicatorKind.lineSlope:
+      case SubIndicatorKind.macd:
+      case SubIndicatorKind.rsi:
+      case SubIndicatorKind.kdj:
         return kn;
       case SubIndicatorKind.fractalConfirm:
       case SubIndicatorKind.fractalJudgment:
@@ -368,6 +461,24 @@ List<MainChartIndicator> buildMainIndicatorCatalog(int maxKn) {
   }
   for (var d = 1; d <= maxKn; d++) {
     out.add(MainChartIndicator.fxQuadPair(d));
+  }
+  // 趋势线：子线层同号；需父层 level=n+2。maxKn<2 仍挂 K0 占位（计算空）
+  final trendMax = maxKn < 2 ? 1 : maxKn - 1;
+  for (var d = 1; d <= trendMax; d++) {
+    out.add(MainChartIndicator.trendLine(d));
+  }
+  // 均线 / 通道（与中枢同号：d=0→K0）
+  for (var d = 0; d <= maxKn; d++) {
+    out.add(MainChartIndicator.meanLine(d));
+  }
+  for (var d = 0; d <= maxKn; d++) {
+    out.add(MainChartIndicator.trendChannel(d));
+  }
+  for (var d = 0; d <= maxKn; d++) {
+    out.add(MainChartIndicator.boll(d));
+  }
+  for (var d = 0; d <= maxKn; d++) {
+    out.add(MainChartIndicator.demark(d));
   }
   return out;
 }
@@ -434,11 +545,21 @@ List<SubChartIndicator> buildSubIndicatorCatalog(
   for (var d = 0; d < maxKn; d++) {
     out.add(SubChartIndicator.lineSlope(d));
   }
+  // MACD / RSI / KDJ (0..maxKn，与中枢同号)
+  for (var d = 0; d <= maxD; d++) {
+    out.add(SubChartIndicator.macd(d));
+  }
+  for (var d = 0; d <= maxD; d++) {
+    out.add(SubChartIndicator.rsi(d));
+  }
+  for (var d = 0; d <= maxD; d++) {
+    out.add(SubChartIndicator.kdj(d));
+  }
   return out;
 }
 
 /// 主图「K{displayLevel}指标」层全选成员（仅返回 catalog 内存在的项）。
-/// 层内序：Kn → Kn合并 → Kn中枢 → Kn连线 → 三型平移 → 四型对线。
+/// 层内序：… → 趋势线 → 均线 → 通道。
 List<MainChartIndicator> mainIndicatorsForLevel(
   int displayLevel,
   List<MainChartIndicator> catalog,
@@ -451,6 +572,11 @@ List<MainChartIndicator> mainIndicatorsForLevel(
     MainChartIndicator.line(displayLevel + 1),
     MainChartIndicator.fxTripleParallel(displayLevel + 1),
     MainChartIndicator.fxQuadPair(displayLevel + 1),
+    MainChartIndicator.trendLine(displayLevel + 1),
+    MainChartIndicator.meanLine(displayLevel),
+    MainChartIndicator.trendChannel(displayLevel),
+    MainChartIndicator.boll(displayLevel),
+    MainChartIndicator.demark(displayLevel),
   ];
   return candidates.where(allow.contains).toList();
 }
@@ -476,6 +602,9 @@ List<SubChartIndicator> subIndicatorsForLevel(
     SubChartIndicator.adjacentRatio(displayLevel),
     SubChartIndicator.stepRhythm(displayLevel),
     SubChartIndicator.lineSlope(displayLevel),
+    SubChartIndicator.macd(displayLevel),
+    SubChartIndicator.rsi(displayLevel),
+    SubChartIndicator.kdj(displayLevel),
   ];
   final hi = maxBsClass < 3 ? 3 : maxBsClass;
   for (var cls = 3; cls <= hi; cls++) {

@@ -2,6 +2,24 @@
 
 ## 最新记录
 
+### 2026-08-03 — Kn MACD/BOLL/RSI/KDJ/Demark 接线
+
+- **要点**：主图 K{n}布林/Demark、副图 K{n}MACD/RSI/KDJ 全层同构接线完成；`MathIndicatorConfig` 统一参数落盘；十字 tooltip 增 MACD/布林/RSI/KDJ/Demark 槽位；修复 catalog 标签插值编译错误。
+- **关键路径**：`kline_chart.dart`、`bar_feature_lookup.dart`、`main.dart`、`msg_history.dart`、`math_classic_compute_test.dart`、`chart_indicator.dart`
+- **注意**：动态 Kn=unitBars+active OHLC；asOf 截断；设置面板「数学指标参数」兼容旧 `.chan_trend_model_config.json`。
+
+### 2026-08-03 — 主图 Kn均线 / Kn通道（TrendModel）
+
+- **要点**：移植旧 `Math/TrendModel.py` 为「K{n}均线」(MEAN)与「K{n}通道」(MAX/MIN)；kn 同中枢；K0=bars.close、Kn=unitBars.close；周期可配并落盘；tip/层全选/默认 K0。
+- **相关路径**：`trend_model_compute.dart`、`trend_model_config.dart`、`chart_indicator.dart`、`kline_chart.dart`、`bar_feature_lookup.dart`、`main.dart`、`msg_history.dart`
+- **注意**：与 Kn趋势线无关；设置面板改周期；热重启加载。
+
+### 2026-08-03 — 主图 Kn趋势线（段内支撑/压力）
+
+- **要点**：移植旧 `Math/TrendLine.py` 为延伸类主图指标「K{n}趋势线」；子线层同号（子=level n+1、父=level n+2，K0≈旧工程）；呈现/tip 对齐三型四型（最新/近邻窗、延长线落点价撑/压）。
+- **相关路径**：`trend_line_compute.dart`、`chart_indicator.dart`、`kline_chart.dart`、`bar_feature_lookup.dart`、`msg_history.dart`、`trend_line_compute_test.dart`
+- **注意**：依赖父层；最高层不作显示名；maxKn<2 目录挂 K0 占位（计算空）；纯 Flutter。
+
 ### 2026-08-02 — 清理三型/四型调试埋点
 
 - **要点**：移除 `kline_chart` / `bar_feature_lookup` 中 debug-5fbfa5 文件埋点及仅用于埋点的 `dart:io`/`dart:convert` 引用。

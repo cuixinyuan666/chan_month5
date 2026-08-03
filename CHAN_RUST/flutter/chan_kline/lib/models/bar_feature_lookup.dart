@@ -20,8 +20,13 @@ import '../compute/kn_volume_series_compute.dart';
 import '../compute/adjacent_ratio_compute.dart';
 import '../compute/line_slope_compute.dart';
 import '../compute/fx_extend_line_compute.dart';
+import '../compute/trend_line_compute.dart';
+import '../compute/trend_model_compute.dart';
+import '../compute/math_classic_compute.dart';
+import '../compute/demark_compute.dart';
 import '../compute/step_rhythm_compute.dart';
 import '../compute/profile_peak_classify.dart';
+import 'math_indicator_config.dart';
 
 /// 十字线 tooltip 一行：键值 / 层级分隔线 / 同层内容分隔线。
 class CrosshairTooltipRow {
@@ -116,7 +121,9 @@ class BarFeatureLookup {
     int? asOf,
     List<CrosshairTooltipRow> zsAfterK0 = const [],
     Map<int, List<CrosshairTooltipRow>> knZsAfterKn = const {},
+    MathIndicatorConfig mathIndicatorConfig = const MathIndicatorConfig(),
   }) {
+    final trendModelConfig = mathIndicatorConfig.asTrendModel;
     final byIdx = <int, Map<String, dynamic>>{};
 
     final featureByIdx = {for (final f in barFeatures) f.idx: f};
@@ -644,12 +651,14 @@ class BarFeatureLookup {
       }
     }
 
-    // Kn三型平移 / 四型对线：按柱 asOf 取近邻窗读数（与主图十字筛选同口径）
+    // Kn三型平移 / 四型对线 / 趋势线：按柱 asOf 取近邻窗读数（与主图十字筛选同口径）
     if (bars.isNotEmpty && (k0Confirms.isNotEmpty || levels.isNotEmpty)) {
       var maxD = 0;
+      var maxLevel = 0;
       for (final lv in levels) {
         final d = lv.level - 1;
         if (d > maxD) maxD = d;
+        if (lv.level > maxLevel) maxLevel = lv.level;
       }
       for (var dkn = 0; dkn <= maxD; dkn++) {
         for (final b in bars) {
@@ -678,6 +687,144 @@ class BarFeatureLookup {
           if (tPx != null) sub['fx_triple_price_$dkn'] = tPx;
           if (q.top != null) sub['fx_quad_top_price_$dkn'] = q.top;
           if (q.bottom != null) sub['fx_quad_bottom_price_$dkn'] = q.bottom;
+        }
+      }
+      // 趋势线：需父层 level=dkn+2，故 dkn 最大 maxLevel-2
+      final trendMaxD = maxLevel >= 2 ? maxLevel - 2 : -1;
+      for (var dkn = 0; dkn <= trendMaxD; dkn++) {
+        for (final b in bars) {
+          if (asOf != null && b.idx > asOf) continue;
+          final tl = trendLinePriceReadout(
+            calcTrendLineGroupsForLevel(
+              displayKn: dkn,
+              levels: levels,
+              asOf: b.idx,
+            ),
+            atX: b.idx,
+            focusX: b.idx,
+          );
+          final row = byIdx.putIfAbsent(b.idx, () => {'idx': b.idx});
+          final sub = row.putIfAbsent('sub', () => <String, dynamic>{})
+              as Map<String, dynamic>;
+          if (tl.support != null) {
+            sub['trend_support_price_$dkn'] = tl.support;
+          }
+          if (tl.resistance != null) {
+            sub['trend_resist_price_$dkn'] = tl.resistance;
+          }
+        }
+      }
+
+      // 均线 / 通道：按全局 asOf 算一次再填柱（与主图同口径）
+      final meanMaxD = maxLevel;
+      for (var dkn = 0; dkn <= meanMaxD; dkn++) {
+        final means = computeMeanSeriesForLevel(
+          displayKn: dkn,
+          bars: bars,
+          levels: levels,
+          periods: trendModelConfig.meanPeriods,
+          asOf: asOf,
+        );
+        final chans = computeChannelSeriesForLevel(
+          displayKn: dkn,
+          bars: bars,
+          levels: levels,
+          periods: trendModelConfig.channelPeriods,
+          asOf: asOf,
+        );
+        for (final b in bars) {
+          if (asOf != null && b.idx > asOf) continue;
+          final row = byIdx.putIfAbsent(b.idx, () => {'idx': b.idx});
+          final sub = row.putIfAbsent('sub', () => <String, dynamic>{})
+              as Map<String, dynamic>;
+          final meanParts = <String>[];
+          for (final t in (means.keys.toList()..sort())) {
+            final series = means[t]!;
+            if (b.idx >= 0 && b.idx < series.length && series[b.idx] != null) {
+              final v = series[b.idx]!;
+              sub['mean_${dkn}_$t'] = v;
+              meanParts.add('$t:${v.toStringAsFixed(2)}');
+            }
+          }
+          if (meanParts.isNotEmpty) {
+            sub['mean_text_$dkn'] = meanParts.join(' ');
+          }
+          final chanParts = <String>[];
+          for (final t in (chans.keys.toList()..sort())) {
+            final pair = chans[t]!;
+            final hi = b.idx < pair.max.length ? pair.max[b.idx] : null;
+            final lo = b.idx < pair.min.length ? pair.min[b.idx] : null;
+            if (hi != null) sub['channel_max_${dkn}_$t'] = hi;
+            if (lo != null) sub['channel_min_${dkn}_$t'] = lo;
+            if (hi != null || lo != null) {
+              chanParts.add(
+                '$t:${hi != null ? hi.toStringAsFixed(2) : "-"}/'
+                '${lo != null ? lo.toStringAsFixed(2) : "-"}',
+              );
+            }
+          }
+          if (chanParts.isNotEmpty) {
+            sub['channel_text_$dkn'] = chanParts.join(' ');
+          }
+        }
+      }
+
+      // MACD/BOLL/RSI/KDJ/Demark：按 asOf 算一次再填柱（全层同构·K0颗粒度）
+      for (var dkn = 0; dkn <= maxLevel; dkn++) {
+        final classic = computeClassicMathForLevel(
+          displayKn: dkn,
+          bars: bars,
+          levels: levels,
+          config: mathIndicatorConfig,
+          asOf: asOf,
+        );
+        final demark = computeDemarkForLevel(
+          displayKn: dkn,
+          bars: bars,
+          levels: levels,
+          config: mathIndicatorConfig,
+          asOf: asOf,
+        );
+        for (final b in bars) {
+          if (asOf != null && b.idx > asOf) continue;
+          final i = b.idx;
+          final row = byIdx.putIfAbsent(i, () => {'idx': i});
+          final sub = row.putIfAbsent('sub', () => <String, dynamic>{})
+              as Map<String, dynamic>;
+          if (i >= 0 && i < classic.macd.dif.length) {
+            final dif = classic.macd.dif[i];
+            final dea = classic.macd.dea[i];
+            final hist = classic.macd.macd[i];
+            if (dif != null) sub['macd_dif_$dkn'] = dif;
+            if (dea != null) sub['macd_dea_$dkn'] = dea;
+            if (hist != null) sub['macd_hist_$dkn'] = hist;
+          }
+          if (i >= 0 && i < classic.boll.mid.length) {
+            final mid = classic.boll.mid[i];
+            final up = classic.boll.up[i];
+            final down = classic.boll.down[i];
+            if (mid != null) sub['boll_mid_$dkn'] = mid;
+            if (up != null) sub['boll_up_$dkn'] = up;
+            if (down != null) sub['boll_down_$dkn'] = down;
+          }
+          if (i >= 0 && i < classic.rsi.length) {
+            final rsi = classic.rsi[i];
+            if (rsi != null) sub['rsi_$dkn'] = rsi;
+          }
+          if (i >= 0 && i < classic.kdj.k.length) {
+            final k = classic.kdj.k[i];
+            final d = classic.kdj.d[i];
+            final j = classic.kdj.j[i];
+            if (k != null) sub['kdj_k_$dkn'] = k;
+            if (d != null) sub['kdj_d_$dkn'] = d;
+            if (j != null) sub['kdj_j_$dkn'] = j;
+          }
+          if (i >= 0 && i < demark.marksAt.length) {
+            final marks = demark.marksAt[i];
+            if (marks != null && marks.isNotEmpty) {
+              sub['demark_text_$dkn'] = formatDemarkMarks(marks);
+            }
+          }
         }
       }
     }
@@ -713,6 +860,17 @@ class BarFeatureLookup {
   static String _fmtVol(num vol) => vol == vol.roundToDouble()
       ? vol.toInt().toString()
       : vol.toStringAsFixed(2);
+
+  /// Demark 标记文案：如 S↑9 C↓3
+  static String formatDemarkMarks(List<DemarkMark> marks) {
+    final parts = <String>[];
+    for (final m in marks) {
+      final arrow = m.dir > 0 ? '↑' : '↓';
+      final prefix = m.type == 'setup' ? 'S' : 'C';
+      parts.add('$prefix$arrow${m.idx}');
+    }
+    return parts.join(' ');
+  }
 
   /// VOL/笔数 B/S/G 片段（G=gray）；经 boxNumInString 后为 B【】/S【】/G【】。
   static String _fmtBsg({required num b, required num s, required num g}) =>
@@ -1051,6 +1209,40 @@ class BarFeatureLookup {
           add(ind.label, '0');
         }
       }
+      if (ind.kind == SubIndicatorKind.macd) {
+        final dif = sub['macd_dif_${ind.kn}'];
+        final dea = sub['macd_dea_${ind.kn}'];
+        final hist = sub['macd_hist_${ind.kn}'];
+        if (dif is num || dea is num || hist is num) {
+          final parts = <String>[
+            if (dif is num) 'DIF${dif.toStringAsFixed(3)}',
+            if (dea is num) 'DEA${dea.toStringAsFixed(3)}',
+            if (hist is num) 'MACD${hist.toStringAsFixed(3)}',
+          ];
+          add(ind.label, parts.join('/'));
+        } else {
+          add(ind.label, '0');
+        }
+      }
+      if (ind.kind == SubIndicatorKind.rsi) {
+        final v = sub['rsi_${ind.kn}'];
+        add(ind.label, v is num ? v.toStringAsFixed(2) : '0');
+      }
+      if (ind.kind == SubIndicatorKind.kdj) {
+        final k = sub['kdj_k_${ind.kn}'];
+        final d = sub['kdj_d_${ind.kn}'];
+        final j = sub['kdj_j_${ind.kn}'];
+        if (k is num || d is num || j is num) {
+          final parts = <String>[
+            if (k is num) 'K${k.toStringAsFixed(2)}',
+            if (d is num) 'D${d.toStringAsFixed(2)}',
+            if (j is num) 'J${j.toStringAsFixed(2)}',
+          ];
+          add(ind.label, parts.join('/'));
+        } else {
+          add(ind.label, '0');
+        }
+      }
     }
     return lines;
   }
@@ -1367,6 +1559,82 @@ class BarFeatureLookup {
       ratioRhythm.add(
           kv('K$displayKn四型对线', CrosshairTooltipRow.boxNum(0)));
     }
+    // 趋势线：支撑/压力延长线落到本根 K0 的价格
+    final tSup = sub?['trend_support_price_$displayKn'];
+    final tRes = sub?['trend_resist_price_$displayKn'];
+    if (tSup is num || tRes is num) {
+      final parts = <String>[
+        if (tSup is num) '撑${tSup.toStringAsFixed(2)}',
+        if (tRes is num) '压${tRes.toStringAsFixed(2)}',
+      ];
+      ratioRhythm.add(kv(
+        'K$displayKn趋势线',
+        CrosshairTooltipRow.boxNum(parts.join(' ')),
+      ));
+    } else {
+      ratioRhythm.add(
+          kv('K$displayKn趋势线', CrosshairTooltipRow.boxNum(0)));
+    }
+    final meanText = sub?['mean_text_$displayKn'];
+    ratioRhythm.add(kv(
+      'K$displayKn均线',
+      CrosshairTooltipRow.boxNum(meanText is String ? meanText : 0),
+    ));
+    final chanText = sub?['channel_text_$displayKn'];
+    ratioRhythm.add(kv(
+      'K$displayKn通道',
+      CrosshairTooltipRow.boxNum(chanText is String ? chanText : 0),
+    ));
+    // MACD / 布林 / RSI / KDJ / Demark
+    final macdDif = sub?['macd_dif_$displayKn'];
+    final macdDea = sub?['macd_dea_$displayKn'];
+    final macdHist = sub?['macd_hist_$displayKn'];
+    if (macdDif is num || macdDea is num || macdHist is num) {
+      final parts = <String>[
+        if (macdDif is num) 'DIF${macdDif.toStringAsFixed(3)}',
+        if (macdDea is num) 'DEA${macdDea.toStringAsFixed(3)}',
+        if (macdHist is num) 'MACD${macdHist.toStringAsFixed(3)}',
+      ];
+      ratioRhythm.add(kv('K$displayKn MACD', CrosshairTooltipRow.boxNum(parts.join('/'))));
+    } else {
+      ratioRhythm.add(kv('K$displayKn MACD', CrosshairTooltipRow.boxNum(0)));
+    }
+    final bMid = sub?['boll_mid_$displayKn'];
+    final bUp = sub?['boll_up_$displayKn'];
+    final bDn = sub?['boll_down_$displayKn'];
+    if (bMid is num || bUp is num || bDn is num) {
+      final parts = <String>[
+        if (bMid is num) 'M${bMid.toStringAsFixed(2)}',
+        if (bUp is num) 'U${bUp.toStringAsFixed(2)}',
+        if (bDn is num) 'D${bDn.toStringAsFixed(2)}',
+      ];
+      ratioRhythm.add(kv('K$displayKn布林', CrosshairTooltipRow.boxNum(parts.join('/'))));
+    } else {
+      ratioRhythm.add(kv('K$displayKn布林', CrosshairTooltipRow.boxNum(0)));
+    }
+    final rsi = sub?['rsi_$displayKn'];
+    ratioRhythm.add(kv(
+      'K$displayKn RSI',
+      CrosshairTooltipRow.boxNum(rsi is num ? rsi.toStringAsFixed(2) : 0),
+    ));
+    final kdjK = sub?['kdj_k_$displayKn'];
+    final kdjD = sub?['kdj_d_$displayKn'];
+    final kdjJ = sub?['kdj_j_$displayKn'];
+    if (kdjK is num || kdjD is num || kdjJ is num) {
+      final parts = <String>[
+        if (kdjK is num) 'K${kdjK.toStringAsFixed(2)}',
+        if (kdjD is num) 'D${kdjD.toStringAsFixed(2)}',
+        if (kdjJ is num) 'J${kdjJ.toStringAsFixed(2)}',
+      ];
+      ratioRhythm.add(kv('K$displayKn KDJ', CrosshairTooltipRow.boxNum(parts.join('/'))));
+    } else {
+      ratioRhythm.add(kv('K$displayKn KDJ', CrosshairTooltipRow.boxNum(0)));
+    }
+    final demarkText = sub?['demark_text_$displayKn'];
+    ratioRhythm.add(kv(
+      'K$displayKn Demark',
+      CrosshairTooltipRow.boxNum(demarkText is String ? demarkText : 0),
+    ));
 
     return (fxExtra: fxExtra, bs: bs, ratioRhythm: ratioRhythm);
   }

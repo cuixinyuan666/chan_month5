@@ -39,6 +39,9 @@ import 'models/level_models.dart';
 import 'models/k1_analysis.dart';
 import 'models/kline_combine_bundle.dart';
 import 'settings/chip_settings_store.dart';
+import 'settings/math_indicator_settings_store.dart';
+import 'models/math_indicator_config.dart';
+import 'models/trend_model_config.dart';
 import 'widgets/datetime_picker_dialog.dart';
 import 'widgets/edge_control_panel.dart';
 import 'widgets/kline_chart.dart';
@@ -86,6 +89,11 @@ Future<void> main() async {
   MsgHistory.instance.appendKnLineSlope();
   // 主图 Kn三型平移线 / Kn四型对线
   MsgHistory.instance.appendKnFxExtendLines();
+  // 主图 Kn趋势线（段内支撑/压力）
+  MsgHistory.instance.appendKnTrendLine();
+  // 主图 Kn均线 / Kn通道 + MACD/BOLL/RSI/KDJ/Demark
+  MsgHistory.instance.appendKnTrendModel();
+  MsgHistory.instance.appendKnMathClassicIndicators();
   MsgHistory.instance.appendTickK0NativePeriod();
   // 展示轨：动态KN当确认段画虚线；确认优先纠正/改实线
   MsgHistory.instance.appendDisplayTrackDynamicKnBuildingLines();
@@ -224,6 +232,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
   ChipConfig _chipConfig = const ChipConfig();
   /// 笔数分布配置（主图左侧；同 JSON 嵌套 tickDist）
   TickDistConfig _tickDistConfig = const TickDistConfig();
+  /// 数学指标参数（均线/通道/MACD/BOLL/RSI/KDJ/Demark）
+  MathIndicatorConfig _mathIndicatorConfig = const MathIndicatorConfig();
   /// chip 分支：仅显示筹码分布，关闭所有缠论渲染（关=正常缠论+筹码可并存）
   final bool _chipOnlyMode = false;
 
@@ -306,6 +316,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
   void initState() {
     super.initState();
     _loadChipConfig();
+    _loadMathIndicatorConfig();
     _bootstrap();
   }
 
@@ -316,6 +327,17 @@ class _KlineHomePageState extends State<KlineHomePage> {
       _chipConfig = both.$1;
       _tickDistConfig = both.$2;
     });
+  }
+
+  Future<void> _loadMathIndicatorConfig() async {
+    final cfg = await MathIndicatorSettingsStore.load();
+    if (!mounted) return;
+    setState(() => _mathIndicatorConfig = cfg);
+  }
+
+  Future<void> _updateMathIndicatorConfig(MathIndicatorConfig cfg) async {
+    setState(() => _mathIndicatorConfig = cfg);
+    await MathIndicatorSettingsStore.save(cfg);
   }
 
   Future<void> _updateChipConfig(ChipConfig cfg) async {
@@ -1100,6 +1122,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
                   chipOnlyMode: _chipOnlyMode,
                   chipConfig: _chipConfig,
                   tickDistConfig: _tickDistConfig,
+                  mathIndicatorConfig: _mathIndicatorConfig,
                   judgmentHistoryByKn: _judgmentHistoryByKn,
                   buy1HistoryByKn: _buy1HistoryByKn,
                   sell1HistoryByKn: _sell1HistoryByKn,
@@ -1416,6 +1439,25 @@ class _KlineHomePageState extends State<KlineHomePage> {
         ),
         const SizedBox(height: 8),
         // 筹码分布：总开关 + 峰线；桶宽/拉伸见说明弹窗（已迁设置·仅K0，不参与主图指标勾选）
+        ListTile(
+          contentPadding: EdgeInsets.zero,
+          dense: true,
+          title: const Text('数学指标参数', style: TextStyle(fontSize: 13)),
+          subtitle: Text(
+            '均线 ${_mathIndicatorConfig.meanPeriods.join(',')}；'
+            '通道 ${_mathIndicatorConfig.channelPeriods.join(',')}；'
+            'MACD ${_mathIndicatorConfig.macdFast}/${_mathIndicatorConfig.macdSlow}/${_mathIndicatorConfig.macdSignal}；'
+            'BOLL ${_mathIndicatorConfig.bollN}；RSI ${_mathIndicatorConfig.rsiPeriod}；'
+            'KDJ ${_mathIndicatorConfig.kdjPeriod}；Demark ${_mathIndicatorConfig.demarkLen}',
+            style: const TextStyle(fontSize: 11),
+          ),
+          trailing: IconButton(
+            tooltip: '数学指标说明与设置',
+            icon: const Icon(Icons.help_outline, size: 18),
+            onPressed: _showMathIndicatorHelp,
+          ),
+          onTap: _busy ? null : _editMathIndicatorParams,
+        ),
         SwitchListTile(
           contentPadding: EdgeInsets.zero,
           dense: true,
@@ -1817,6 +1859,220 @@ class _KlineHomePageState extends State<KlineHomePage> {
           ),
         ],
       ),
+    );
+  }
+
+  /// 数学指标说明弹窗。
+  void _showMathIndicatorHelp() {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('数学指标参数'),
+        content: const SingleChildScrollView(
+          child: Text(
+            '作用：移植旧工程 Math——均线/通道/MACD/BOLL/RSI/KDJ/Demark。\n'
+            '口径（全层同构）\n'
+            '· K0：原生 K 线 OHLC；Kn≥1：unitBars+active；\n'
+            '· K0 颗粒度展开；无未来函数；十字 asOf 截断。\n\n'
+            '操作步骤\n'
+            '1. 主/副图勾选 K{n}布林/Demark/MACD/RSI/KDJ；\n'
+            '2. 点本项或「?」编辑参数；\n'
+            '3. 写入 .chan_trend_model_config.json，下次启动恢复。',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              _editMathIndicatorParams();
+            },
+            child: const Text('编辑参数'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('知道了'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 编辑数学指标参数。
+  Future<void> _editMathIndicatorParams() async {
+    final meanCtl = TextEditingController(
+        text: _mathIndicatorConfig.meanPeriods.join(','));
+    final chanCtl = TextEditingController(
+        text: _mathIndicatorConfig.channelPeriods.join(','));
+    final macdFastCtl =
+        TextEditingController(text: '${_mathIndicatorConfig.macdFast}');
+    final macdSlowCtl =
+        TextEditingController(text: '${_mathIndicatorConfig.macdSlow}');
+    final macdSigCtl =
+        TextEditingController(text: '${_mathIndicatorConfig.macdSignal}');
+    final bollCtl = TextEditingController(text: '${_mathIndicatorConfig.bollN}');
+    final rsiCtl =
+        TextEditingController(text: '${_mathIndicatorConfig.rsiPeriod}');
+    final kdjCtl =
+        TextEditingController(text: '${_mathIndicatorConfig.kdjPeriod}');
+    final demarkLenCtl =
+        TextEditingController(text: '${_mathIndicatorConfig.demarkLen}');
+    final demarkSetupCtl =
+        TextEditingController(text: '${_mathIndicatorConfig.demarkSetupBias}');
+    final demarkCdCtl = TextEditingController(
+        text: '${_mathIndicatorConfig.demarkCountdownBias}');
+    final demarkMaxCtl = TextEditingController(
+        text: '${_mathIndicatorConfig.demarkMaxCountdown}');
+    int parseInt(String s, int fb) => int.tryParse(s.trim()) ?? fb;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('设置数学指标参数'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: meanCtl,
+                decoration: const InputDecoration(
+                  labelText: '均线周期',
+                  hintText: '如 5,10,20',
+                ),
+              ),
+              TextField(
+                controller: chanCtl,
+                decoration: const InputDecoration(
+                  labelText: '通道周期',
+                  hintText: '如 20,60',
+                ),
+              ),
+              TextField(
+                controller: macdFastCtl,
+                decoration: const InputDecoration(labelText: 'MACD 快线'),
+                keyboardType: TextInputType.number,
+              ),
+              TextField(
+                controller: macdSlowCtl,
+                decoration: const InputDecoration(labelText: 'MACD 慢线'),
+                keyboardType: TextInputType.number,
+              ),
+              TextField(
+                controller: macdSigCtl,
+                decoration: const InputDecoration(labelText: 'MACD 信号线'),
+                keyboardType: TextInputType.number,
+              ),
+              TextField(
+                controller: bollCtl,
+                decoration: const InputDecoration(labelText: 'BOLL N'),
+                keyboardType: TextInputType.number,
+              ),
+              TextField(
+                controller: rsiCtl,
+                decoration: const InputDecoration(labelText: 'RSI 周期'),
+                keyboardType: TextInputType.number,
+              ),
+              TextField(
+                controller: kdjCtl,
+                decoration: const InputDecoration(labelText: 'KDJ 周期'),
+                keyboardType: TextInputType.number,
+              ),
+              TextField(
+                controller: demarkLenCtl,
+                decoration: const InputDecoration(labelText: 'Demark setup 长度'),
+                keyboardType: TextInputType.number,
+              ),
+              TextField(
+                controller: demarkSetupCtl,
+                decoration:
+                    const InputDecoration(labelText: 'Demark setup bias'),
+                keyboardType: TextInputType.number,
+              ),
+              TextField(
+                controller: demarkCdCtl,
+                decoration:
+                    const InputDecoration(labelText: 'Demark countdown bias'),
+                keyboardType: TextInputType.number,
+              ),
+              TextField(
+                controller: demarkMaxCtl,
+                decoration:
+                    const InputDecoration(labelText: 'Demark max countdown'),
+                keyboardType: TextInputType.number,
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) {
+      for (final c in [
+        meanCtl,
+        chanCtl,
+        macdFastCtl,
+        macdSlowCtl,
+        macdSigCtl,
+        bollCtl,
+        rsiCtl,
+        kdjCtl,
+        demarkLenCtl,
+        demarkSetupCtl,
+        demarkCdCtl,
+        demarkMaxCtl,
+      ]) {
+        c.dispose();
+      }
+      return;
+    }
+    final cfg = MathIndicatorConfig(
+      meanPeriods: TrendModelConfig.parsePeriodsText(
+        meanCtl.text,
+        TrendModelConfig.defaultMeanPeriods,
+      ),
+      channelPeriods: TrendModelConfig.parsePeriodsText(
+        chanCtl.text,
+        TrendModelConfig.defaultChannelPeriods,
+      ),
+      macdFast: parseInt(macdFastCtl.text, 12),
+      macdSlow: parseInt(macdSlowCtl.text, 26),
+      macdSignal: parseInt(macdSigCtl.text, 9),
+      bollN: parseInt(bollCtl.text, 20),
+      rsiPeriod: parseInt(rsiCtl.text, 14),
+      kdjPeriod: parseInt(kdjCtl.text, 9),
+      demarkLen: parseInt(demarkLenCtl.text, 9),
+      demarkSetupBias: parseInt(demarkSetupCtl.text, 4),
+      demarkCountdownBias: parseInt(demarkCdCtl.text, 2),
+      demarkMaxCountdown: parseInt(demarkMaxCtl.text, 13),
+    );
+    for (final c in [
+      meanCtl,
+      chanCtl,
+      macdFastCtl,
+      macdSlowCtl,
+      macdSigCtl,
+      bollCtl,
+      rsiCtl,
+      kdjCtl,
+      demarkLenCtl,
+      demarkSetupCtl,
+      demarkCdCtl,
+      demarkMaxCtl,
+    ]) {
+      c.dispose();
+    }
+    await _updateMathIndicatorConfig(cfg);
+    _msgHistory.append(
+      '数学指标：均线=${cfg.meanPeriods.join(",")}；通道=${cfg.channelPeriods.join(",")}；'
+      'MACD=${cfg.macdFast}/${cfg.macdSlow}/${cfg.macdSignal}；BOLL=${cfg.bollN}；'
+      'RSI=${cfg.rsiPeriod}；KDJ=${cfg.kdjPeriod}；Demark=${cfg.demarkLen}',
     );
   }
 }
