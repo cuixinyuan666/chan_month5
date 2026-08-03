@@ -2,6 +2,29 @@
 
 ## 最新记录
 
+### 2026-08-04 — 清理 Math 当下冻结调试埋点
+
+- **要点**：用户确认修复后移除 `math_series_freeze_store` 文件埋点；审计 dump 测试改为正规回归 `math_series_freeze_store_test.dart`。
+- **相关路径**：`math_series_freeze_store.dart`、`math_series_freeze_store_test.dart`
+
+### 2026-08-03 — Kn Math/均线/通道/Demark 当下冻结
+
+- **要点**：审计确认 K1 上 MACD/BOLL/RSI/KDJ/Demark内容/均线/通道会步进回写；成交量与背驰本样本不回写。新增 `MathSeriesFreezeStore` 会话格点冻结，主图/副图/十字读仓。
+- **相关路径**：`math_series_freeze_store.dart`、`main.dart`、`kline_chart.dart`、`bar_feature_lookup.dart`、`msg_history.dart`、`dump_indicator_rewrite_audit.dart`
+- **注意**：参数变更清空并 0..当前步重冻；冻结 instrumentation 暂留待 UI 验收。
+
+### 2026-08-03 — Kn背驰迁副图并修变量清空
+
+- **要点**：背驰 12 项从主图迁到副图「背驰」类（算法分子标题×层分层）；副图画 ratio 折线+diver 柱；修复 diver=0 时 in/out/ratio 仍 hold 旧值；过滤非有限 ratio。
+- **相关路径**：`chart_indicator.dart`、`sub_indicator_picker.dart`、`kline_chart.dart`、`divergence_compute.dart`、`kn_ohlc_sample_compute.dart`、`bar_feature_lookup.dart`、`msg_history.dart`
+- **注意**：默认不勾、不进副图层全选；特征键不变。
+
+### 2026-08-03 — Kn背驰 12 算法分项输出
+
+- **要点**：先提交 Math/趋势线等改动；再实现 K{n}背驰_{algo}（12 种力度分项），输出 in/out/ratio 与 diver∈{1,-1,0}；非买卖点；默认不勾。
+- **相关路径**：`divergence_compute.dart`、`divergence_algo.dart`、`chart_indicator.dart`、`bar_feature_lookup.dart`、`kline_chart.dart`、`math_indicator_config.dart`、`msg_history.dart`、`divergence_compute_test.dart`
+- **注意**：K0 进出段=分钟K段 idx；力度用 K0 MACD/RSI；turnrate 缺字段 diver=0；`divergenceRate>100` 保送。
+
 ### 2026-08-03 — Kn MACD/BOLL/RSI/KDJ/Demark 接线
 
 - **要点**：主图 K{n}布林/Demark、副图 K{n}MACD/RSI/KDJ 全层同构接线完成；`MathIndicatorConfig` 统一参数落盘；十字 tooltip 增 MACD/布林/RSI/KDJ/Demark 槽位；修复 catalog 标签插值编译错误。

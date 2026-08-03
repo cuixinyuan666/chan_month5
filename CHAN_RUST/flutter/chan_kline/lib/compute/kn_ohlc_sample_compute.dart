@@ -110,6 +110,29 @@ List<double?> expandPointsToK0(
   return out;
 }
 
+/// 可空阶梯：事件可把 cur 置 null（背驰无值时清掉旧 in/out/ratio）。
+List<double?> expandNullablePointsToK0(
+  List<({int x, double? v})> points,
+  int barCount, {
+  int? asOf,
+}) {
+  if (barCount <= 0) return const [];
+  final out = List<double?>.filled(barCount, null);
+  if (points.isEmpty) return out;
+  final sorted = [...points]..sort((a, b) => a.x.compareTo(b.x));
+  var pi = 0;
+  double? cur;
+  final last = asOf ?? (barCount - 1);
+  for (var i = 0; i < barCount && i <= last; i++) {
+    while (pi < sorted.length && sorted[pi].x <= i) {
+      cur = sorted[pi].v;
+      pi++;
+    }
+    out[i] = cur;
+  }
+  return out;
+}
+
 /// 事件点按 endX 阶梯铺到 K0（同 x 后写覆盖）。
 List<T?> expandEventsToK0<T>(
   List<({int x, T v})> events,

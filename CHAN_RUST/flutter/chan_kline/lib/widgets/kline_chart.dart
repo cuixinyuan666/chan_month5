@@ -21,7 +21,10 @@ import '../compute/trend_line_compute.dart';
 import '../compute/trend_model_compute.dart';
 import '../compute/math_classic_compute.dart';
 import '../compute/demark_compute.dart';
+import '../compute/divergence_compute.dart';
+import '../compute/math_series_freeze_store.dart';
 import '../compute/step_rhythm_compute.dart';
+import '../models/divergence_algo.dart';
 import '../models/math_indicator_config.dart';
 import '../compute/level_unit_bar_view_compute.dart';
 import '../compute/zs_compute.dart';
@@ -129,6 +132,7 @@ class KlineChart extends StatefulWidget {
     this.chipConfig = const ChipConfig(),
     this.tickDistConfig = const TickDistConfig(),
     this.mathIndicatorConfig = const MathIndicatorConfig(),
+    this.mathFreezeStore,
     this.chipOnlyMode = false,
   });
 
@@ -199,6 +203,8 @@ class KlineChart extends StatefulWidget {
   final TickDistConfig tickDistConfig;
   /// 数学指标参数（均线/通道/MACD/BOLL/RSI/KDJ/Demark）
   final MathIndicatorConfig mathIndicatorConfig;
+  /// Math 会话冻结仓（有则主图/副图/十字读仓，禁整表回写）
+  final MathSeriesFreezeStore? mathFreezeStore;
   /// chip 分支：仅显示筹码分布，关闭所有缠论渲染
   final bool chipOnlyMode;
 
@@ -732,6 +738,9 @@ class _KlineChartState extends State<KlineChart> {
     final tipK0Confirms = asOf != null
         ? (asOfBundle?.k0Confirms ?? const <K0ConfirmSignal>[])
         : widget.k0ConfirmSignals;
+    final tipZsK0 = asOf != null
+        ? (asOfBundle?.zsK0Frames ?? const <ZSFrame>[])
+        : widget.zsK0Frames;
     final lookup = BarFeatureLookup.build(
       bars: widget.bars,
       // K0合并框：十字 as-of=Rust frames；MG/MD 与合并序同源
@@ -757,6 +766,8 @@ class _KlineChartState extends State<KlineChart> {
       zsAfterK0: k0Zs,
       knZsAfterKn: knZs,
       mathIndicatorConfig: widget.mathIndicatorConfig,
+      mathFreezeStore: widget.mathFreezeStore,
+      zsK0Frames: tipZsK0,
     );
     // K0 筹码峰 / 笔数峰：与主图 profile 同 cutoff，按本根高低编号
     final cut = asOf ?? bar.idx;
@@ -1133,6 +1144,9 @@ class _KlineChartState extends State<KlineChart> {
     final chipLevels = asOf != null
         ? (asOfBundle?.levels ?? const <LevelBundle>[])
         : widget.levels;
+    final tipZsK0 = asOf != null
+        ? (asOfBundle?.zsK0Frames ?? const <ZSFrame>[])
+        : widget.zsK0Frames;
     final lookup = BarFeatureLookup.build(
       bars: widget.bars,
       combineFrames: widget.combineFrames,
@@ -1155,6 +1169,8 @@ class _KlineChartState extends State<KlineChart> {
       judgmentHistoryByKn: widget.judgmentHistoryByKn,
       asOf: asOf,
       mathIndicatorConfig: widget.mathIndicatorConfig,
+      mathFreezeStore: widget.mathFreezeStore,
+      zsK0Frames: tipZsK0,
     );
     final out = <SubChartIndicator, String>{};
     for (final e in _activeSubs) {
@@ -1257,6 +1273,7 @@ class _KlineChartState extends State<KlineChart> {
               chipConfig: widget.chipConfig,
               tickDistConfig: widget.tickDistConfig,
               mathIndicatorConfig: widget.mathIndicatorConfig,
+              mathFreezeStore: widget.mathFreezeStore,
               chipOnlyMode: widget.chipOnlyMode,
               layer: layer,
             );
@@ -1443,6 +1460,9 @@ class _KlineChartState extends State<KlineChart> {
                             final c = a.kind.categoryOrder
                                 .compareTo(b.kind.categoryOrder);
                             if (c != 0) return c;
+                            final ai = a.diverAlgo?.index ?? -1;
+                            final bi = b.diverAlgo?.index ?? -1;
+                            if (ai != bi) return ai.compareTo(bi);
                             return a.kn.compareTo(b.kn);
                           });
                         return [
@@ -1529,6 +1549,7 @@ class _KlineCompositePainter extends CustomPainter {
     this.chipConfig = const ChipConfig(),
     this.tickDistConfig = const TickDistConfig(),
     this.mathIndicatorConfig = const MathIndicatorConfig(),
+    this.mathFreezeStore,
     this.chipOnlyMode = false,
     this.layer = _ChartPaintLayer.base,
   }) : featureLookup = (chipOnlyMode || layer == _ChartPaintLayer.chip)
@@ -1556,6 +1577,8 @@ class _KlineCompositePainter extends CustomPainter {
                 judgmentHistoryByKn: judgmentHistoryByKn,
                 asOf: segAsOf,
                 mathIndicatorConfig: mathIndicatorConfig,
+                mathFreezeStore: mathFreezeStore,
+                zsK0Frames: zsAsOfBundle?.zsK0Frames ?? zsK0Frames,
               );
 
   /// 分层绘制：底图/筹码/十字 独立 shouldRepaint（计算口径不变）
@@ -1629,6 +1652,8 @@ class _KlineCompositePainter extends CustomPainter {
   final TickDistConfig tickDistConfig;
   /// 数学指标参数
   final MathIndicatorConfig mathIndicatorConfig;
+  /// Math 会话冻结仓（有则读仓）
+  final MathSeriesFreezeStore? mathFreezeStore;
   /// chip 分支：仅显示筹码分布，关闭所有缠论渲染
   final bool chipOnlyMode;
 
@@ -2816,16 +2841,22 @@ class _KlineCompositePainter extends CustomPainter {
   ) {
     if (bars.isEmpty) return;
     final asOf = segAsOf;
-    final lv = asOf != null
-        ? (zsAsOfBundle?.levels ?? const <LevelBundle>[])
-        : levels;
-    final seriesMap = computeMeanSeriesForLevel(
-      displayKn: kn,
-      bars: bars,
-      levels: lv,
-      periods: mathIndicatorConfig.meanPeriods,
-      asOf: asOf,
-    );
+    final frozen = mathFreezeStore?.mean(kn);
+    final Map<int, List<double?>> seriesMap;
+    if (frozen != null) {
+      seriesMap = frozen;
+    } else {
+      final lv = asOf != null
+          ? (zsAsOfBundle?.levels ?? const <LevelBundle>[])
+          : levels;
+      seriesMap = computeMeanSeriesForLevel(
+        displayKn: kn,
+        bars: bars,
+        levels: lv,
+        periods: mathIndicatorConfig.meanPeriods,
+        asOf: asOf,
+      );
+    }
     final periods = seriesMap.keys.toList()..sort();
     for (var i = 0; i < periods.length; i++) {
       final t = periods[i];
@@ -2857,16 +2888,22 @@ class _KlineCompositePainter extends CustomPainter {
   ) {
     if (bars.isEmpty) return;
     final asOf = segAsOf;
-    final lv = asOf != null
-        ? (zsAsOfBundle?.levels ?? const <LevelBundle>[])
-        : levels;
-    final seriesMap = computeChannelSeriesForLevel(
-      displayKn: kn,
-      bars: bars,
-      levels: lv,
-      periods: mathIndicatorConfig.channelPeriods,
-      asOf: asOf,
-    );
+    final frozen = mathFreezeStore?.channel(kn);
+    final Map<int, ({List<double?> max, List<double?> min})> seriesMap;
+    if (frozen != null) {
+      seriesMap = frozen;
+    } else {
+      final lv = asOf != null
+          ? (zsAsOfBundle?.levels ?? const <LevelBundle>[])
+          : levels;
+      seriesMap = computeChannelSeriesForLevel(
+        displayKn: kn,
+        bars: bars,
+        levels: lv,
+        periods: mathIndicatorConfig.channelPeriods,
+        asOf: asOf,
+      );
+    }
     final periods = seriesMap.keys.toList()..sort();
     for (var i = 0; i < periods.length; i++) {
       final t = periods[i];
@@ -2946,16 +2983,16 @@ class _KlineCompositePainter extends CustomPainter {
   ) {
     if (bars.isEmpty) return;
     final asOf = segAsOf;
-    final lv = asOf != null
-        ? (zsAsOfBundle?.levels ?? const <LevelBundle>[])
-        : levels;
-    final boll = computeBollForLevel(
-      displayKn: kn,
-      bars: bars,
-      levels: lv,
-      n: mathIndicatorConfig.bollN,
-      asOf: asOf,
-    );
+    final BollK0Series boll = mathFreezeStore?.boll(kn) ??
+        computeBollForLevel(
+          displayKn: kn,
+          bars: bars,
+          levels: asOf != null
+              ? (zsAsOfBundle?.levels ?? const <LevelBundle>[])
+              : levels,
+          n: mathIndicatorConfig.bollN,
+          asOf: asOf,
+        );
     final midColor = ChartLevelLineStyle.colorForDisplayKn(kn);
     _paintPriceSeries(
       canvas,
@@ -3000,16 +3037,16 @@ class _KlineCompositePainter extends CustomPainter {
   ) {
     if (bars.isEmpty) return;
     final asOf = segAsOf;
-    final lv = asOf != null
-        ? (zsAsOfBundle?.levels ?? const <LevelBundle>[])
-        : levels;
-    final demark = computeDemarkForLevel(
-      displayKn: kn,
-      bars: bars,
-      levels: lv,
-      config: mathIndicatorConfig,
-      asOf: asOf,
-    );
+    final DemarkK0Series demark = mathFreezeStore?.demark(kn) ??
+        computeDemarkForLevel(
+          displayKn: kn,
+          bars: bars,
+          levels: asOf != null
+              ? (zsAsOfBundle?.levels ?? const <LevelBundle>[])
+              : levels,
+          config: mathIndicatorConfig,
+          asOf: asOf,
+        );
     final maxX = asOf ?? bars.last.idx;
     final color = ChartLevelLineStyle.colorForDisplayKn(kn);
     final tp = TextPainter(
@@ -4035,6 +4072,145 @@ class _KlineCompositePainter extends CustomPainter {
     for (final kn in kdjKns) {
       _drawKdjSubChart(canvas, w, innerTop, innerH, barW, slotW, kn);
     }
+    // Kn背驰：ratio 折线 + diver 柱（1/-1/0）
+    final diverItems = subIndicators
+        .where((e) =>
+            e.kind == SubIndicatorKind.divergence && e.diverAlgo != null)
+        .toList()
+      ..sort((a, b) {
+        final c = a.kn.compareTo(b.kn);
+        if (c != 0) return c;
+        return (a.diverAlgo?.index ?? 0).compareTo(b.diverAlgo?.index ?? 0);
+      });
+    for (final ind in diverItems) {
+      _drawDivergenceSubChart(
+        canvas,
+        w,
+        innerTop,
+        innerH,
+        barW,
+        slotW,
+        ind.kn,
+        ind.diverAlgo!,
+      );
+    }
+  }
+
+  /// 副图 Kn背驰：ratio 折线；diver 在事件变化点画 ±1 短柱。
+  void _drawDivergenceSubChart(
+    Canvas canvas,
+    double w,
+    double innerTop,
+    double innerH,
+    double barW,
+    double slotW,
+    int displayKn,
+    DivergenceAlgo algo,
+  ) {
+    if (bars.isEmpty) return;
+    final asOf = segAsOf;
+    final lv = asOf != null
+        ? (zsAsOfBundle?.levels ?? const <LevelBundle>[])
+        : levels;
+    final zsK0 = asOf != null
+        ? (zsAsOfBundle?.zsK0Frames ?? const <ZSFrame>[])
+        : zsK0Frames;
+    final map = computeDivergenceForLevel(
+      displayKn: displayKn,
+      bars: bars,
+      levels: lv,
+      zsK0Frames: zsK0,
+      config: mathIndicatorConfig,
+      asOf: asOf,
+    );
+    final series = map[algo];
+    if (series == null) return;
+    final maxX = asOf ?? bars.last.idx;
+    var minV = -1.0;
+    var maxV = 1.0;
+    var any = false;
+    for (var i = 0; i < bars.length && i < series.ratioAt.length; i++) {
+      if (bars[i].idx > maxX) continue;
+      final r = series.ratioAt[i];
+      if (r == null || !r.isFinite) continue;
+      if (!any) {
+        minV = r;
+        maxV = r;
+        any = true;
+      } else {
+        if (r < minV) minV = r;
+        if (r > maxV) maxV = r;
+      }
+    }
+    if (minV > -1) minV = -1;
+    if (maxV < 1) maxV = 1;
+    if ((maxV - minV).abs() < 1e-12) {
+      minV -= 1e-6;
+      maxV += 1e-6;
+    }
+    final span = math.max(1e-9, maxV - minV);
+    double subY(double v) => innerTop + (maxV - v) / span * innerH;
+
+    final zeroPaint = Paint()
+      ..color = const Color(0x6694A3B8)
+      ..strokeWidth = 1
+      ..style = PaintingStyle.stroke;
+    _drawDashedLine(
+      canvas,
+      Offset(KlineViewport.padL, subY(0)),
+      Offset(w - KlineViewport.padR, subY(0)),
+      zeroPaint,
+    );
+
+    final upBar = Paint()..color = const Color(0xCCDC2626);
+    final dnBar = Paint()..color = const Color(0xCC16A34A);
+    final halfW = math.max(1.0, barW * 0.3);
+    var prevFlag = 0;
+    for (var i = 0; i < bars.length && i < series.diverAt.length; i++) {
+      final x = bars[i].idx;
+      if (x > maxX) continue;
+      final flag = series.diverAt[i];
+      final changed = flag != prevFlag;
+      prevFlag = flag;
+      if (!changed || flag == 0) continue;
+      if (x < viewport.viewXMin - 1 || x > viewport.viewXMax + 1) continue;
+      final cx = _barCenterX(x, w, slotW);
+      final y0 = subY(0);
+      final y1 = subY(flag.toDouble());
+      final top = math.min(y0, y1);
+      final bot = math.max(y0, y1);
+      canvas.drawRect(
+        Rect.fromLTRB(
+            cx - halfW, top, cx + halfW, bot < top + 1 ? top + 1 : bot),
+        flag > 0 ? upBar : dnBar,
+      );
+    }
+
+    final linePaint = Paint()
+      ..color = ChartLevelLineStyle.colorForDisplayKn(displayKn)
+      ..strokeWidth = 1.2
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+    Offset? prev;
+    for (var i = 0; i < bars.length && i < series.ratioAt.length; i++) {
+      final x = bars[i].idx;
+      if (x > maxX) {
+        prev = null;
+        continue;
+      }
+      final r = series.ratioAt[i];
+      if (r == null || !r.isFinite) {
+        prev = null;
+        continue;
+      }
+      if (x < viewport.viewXMin - 1 || x > viewport.viewXMax + 1) {
+        prev = null;
+        continue;
+      }
+      final pt = Offset(_barCenterX(x, w, slotW), subY(r));
+      if (prev != null) canvas.drawLine(prev, pt, linePaint);
+      prev = pt;
+    }
   }
 
   /// 副图 Kn相邻比例。
@@ -4190,18 +4366,18 @@ class _KlineCompositePainter extends CustomPainter {
   ) {
     if (bars.isEmpty) return;
     final asOf = segAsOf;
-    final lv = asOf != null
-        ? (zsAsOfBundle?.levels ?? const <LevelBundle>[])
-        : levels;
-    final macd = computeMacdForLevel(
-      displayKn: displayKn,
-      bars: bars,
-      levels: lv,
-      fast: mathIndicatorConfig.macdFast,
-      slow: mathIndicatorConfig.macdSlow,
-      signal: mathIndicatorConfig.macdSignal,
-      asOf: asOf,
-    );
+    final MacdK0Series macd = mathFreezeStore?.macd(displayKn) ??
+        computeMacdForLevel(
+          displayKn: displayKn,
+          bars: bars,
+          levels: asOf != null
+              ? (zsAsOfBundle?.levels ?? const <LevelBundle>[])
+              : levels,
+          fast: mathIndicatorConfig.macdFast,
+          slow: mathIndicatorConfig.macdSlow,
+          signal: mathIndicatorConfig.macdSignal,
+          asOf: asOf,
+        );
     final maxX = asOf ?? bars.last.idx;
     var minV = 0.0;
     var maxV = 0.0;
@@ -4317,16 +4493,16 @@ class _KlineCompositePainter extends CustomPainter {
   ) {
     if (bars.isEmpty) return;
     final asOf = segAsOf;
-    final lv = asOf != null
-        ? (zsAsOfBundle?.levels ?? const <LevelBundle>[])
-        : levels;
-    final rsi = computeRsiForLevel(
-      displayKn: displayKn,
-      bars: bars,
-      levels: lv,
-      period: mathIndicatorConfig.rsiPeriod,
-      asOf: asOf,
-    );
+    final List<double?> rsi = mathFreezeStore?.rsi(displayKn) ??
+        computeRsiForLevel(
+          displayKn: displayKn,
+          bars: bars,
+          levels: asOf != null
+              ? (zsAsOfBundle?.levels ?? const <LevelBundle>[])
+              : levels,
+          period: mathIndicatorConfig.rsiPeriod,
+          asOf: asOf,
+        );
     const minV = 0.0;
     const maxV = 100.0;
     final span = maxV - minV;
@@ -4384,16 +4560,16 @@ class _KlineCompositePainter extends CustomPainter {
   ) {
     if (bars.isEmpty) return;
     final asOf = segAsOf;
-    final lv = asOf != null
-        ? (zsAsOfBundle?.levels ?? const <LevelBundle>[])
-        : levels;
-    final kdj = computeKdjForLevel(
-      displayKn: displayKn,
-      bars: bars,
-      levels: lv,
-      period: mathIndicatorConfig.kdjPeriod,
-      asOf: asOf,
-    );
+    final KdjK0Series kdj = mathFreezeStore?.kdj(displayKn) ??
+        computeKdjForLevel(
+          displayKn: displayKn,
+          bars: bars,
+          levels: asOf != null
+              ? (zsAsOfBundle?.levels ?? const <LevelBundle>[])
+              : levels,
+          period: mathIndicatorConfig.kdjPeriod,
+          asOf: asOf,
+        );
     const minV = 0.0;
     const maxV = 100.0;
     final span = maxV - minV;

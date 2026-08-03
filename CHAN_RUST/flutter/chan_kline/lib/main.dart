@@ -17,6 +17,7 @@ import 'compute/class_n_bs_compute.dart';
 import 'compute/fractal_judgment_compute.dart';
 import 'compute/k1_bar_view_compute.dart';
 import 'compute/step_rhythm_compute.dart';
+import 'compute/math_series_freeze_store.dart';
 import 'history/app_debug_snapshot.dart';
 import 'history/msg_history.dart';
 import 'models/zs_frame.dart';
@@ -94,6 +95,7 @@ Future<void> main() async {
   // 主图 Kn均线 / Kn通道 + MACD/BOLL/RSI/KDJ/Demark
   MsgHistory.instance.appendKnTrendModel();
   MsgHistory.instance.appendKnMathClassicIndicators();
+  MsgHistory.instance.appendKnDivergenceIndicators();
   MsgHistory.instance.appendTickK0NativePeriod();
   // 展示轨：动态KN当确认段画虚线；确认优先纠正/改实线
   MsgHistory.instance.appendDisplayTrackDynamicKnBuildingLines();
@@ -234,6 +236,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
   TickDistConfig _tickDistConfig = const TickDistConfig();
   /// 数学指标参数（均线/通道/MACD/BOLL/RSI/KDJ/Demark）
   MathIndicatorConfig _mathIndicatorConfig = const MathIndicatorConfig();
+  /// Math/均线/通道/Demark 会话冻结（Kn≥1 禁整表回写）
+  final MathSeriesFreezeStore _mathFreezeStore = MathSeriesFreezeStore();
   /// chip 分支：仅显示筹码分布，关闭所有缠论渲染（关=正常缠论+筹码可并存）
   final bool _chipOnlyMode = false;
 
@@ -338,6 +342,29 @@ class _KlineHomePageState extends State<KlineHomePage> {
   Future<void> _updateMathIndicatorConfig(MathIndicatorConfig cfg) async {
     setState(() => _mathIndicatorConfig = cfg);
     await MathIndicatorSettingsStore.save(cfg);
+    // 参数变了：清空冻结仓，再从 0 步进重冻到当前（避免旧参数残值）
+    _mathFreezeStore.clear();
+    if (_hasSession && !_chipOnlyMode && _stepIdx >= 0) {
+      _refreezeMathFromStart();
+    }
+  }
+
+  /// 参数变更后：0..当前步逐K重冻 Math 序列。
+  void _refreezeMathFromStart() {
+    final end = _stepIdx;
+    if (end < 0 || _allBars.isEmpty) return;
+    for (var i = 0; i <= end; i++) {
+      final visible = _allBars.sublist(0, i + 1);
+      try {
+        final bundle = _bridge.buildKlineCombineBundle(
+          visible,
+          truncationCheck: _truncationCheck,
+        );
+        _mergeMathFreeze(bundle, bars: visible, asOf: i);
+      } catch (_) {
+        break;
+      }
+    }
   }
 
   Future<void> _updateChipConfig(ChipConfig cfg) async {
@@ -518,6 +545,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
           s.reset();
         }
         _stepRhythmStateByKn.clear();
+        _mathFreezeStore.clear();
       });
       final directOhlc = code == 'test' && _hasTestOhlcCsv();
       _msgHistory.append(
@@ -596,6 +624,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
           s.reset();
         }
         _stepRhythmStateByKn.clear();
+        _mathFreezeStore.clear();
       });
       _msgHistory.append('加载K0失败：$e');
     } finally {
@@ -783,6 +812,26 @@ class _KlineHomePageState extends State<KlineHomePage> {
     };
   }
 
+  /// 本步 Math/均线/通道/Demark 并入会话冻结（禁 activeUnit 整表回写）。
+  void _mergeMathFreeze(
+    KlineCombineBundle bundle, {
+    List<KlineBar>? bars,
+    int? asOf,
+  }) {
+    final visible = bars ?? _visibleBars;
+    if (visible.isEmpty) return;
+    final displayX = asOf ?? (_stepIdx < 0 ? 0 : _stepIdx);
+    final maxKn = chartMaxKn(levels: bundle.levels, k0Lines: bundle.k0Lines);
+    mergeMathSeriesForStep(
+      store: _mathFreezeStore,
+      bars: visible,
+      levels: bundle.levels,
+      config: _mathIndicatorConfig,
+      maxDisplayKn: maxKn,
+      asOf: displayX,
+    );
+  }
+
   List<LevelBundle> _levelsWithFrozenBs(List<LevelBundle> levels) {
     final with1 = levelsWithFrozenClass1Bs(
       levels,
@@ -834,6 +883,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
           s.reset();
         }
         _stepRhythmStateByKn.clear();
+        _mathFreezeStore.clear();
       });
       return;
     }
@@ -864,6 +914,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       // 会话冻结：并入本步一类BS，禁止下一步整表覆盖消掉上步显示
       _mergeBsHistory(bundle);
       _mergeRatioAndRhythm(bundle);
+      _mergeMathFreeze(bundle);
       final frozenLevels = _levelsWithFrozenBs(bundle.levels);
       setState(() {
         _combineFrames = bundle.frames;
@@ -1071,6 +1122,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         // 一类/二类BS 也逐K并入会话冻结，避免一次性走完只剩末态
         _mergeBsHistory(bundle);
         _mergeRatioAndRhythm(bundle);
+        _mergeMathFreeze(bundle, bars: visible, asOf: i);
       } catch (e) {
         _msgHistory.append('一次性走完@step=$i 失败：$e');
         break;
@@ -1123,6 +1175,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
                   chipConfig: _chipConfig,
                   tickDistConfig: _tickDistConfig,
                   mathIndicatorConfig: _mathIndicatorConfig,
+                  mathFreezeStore: _mathFreezeStore,
                   judgmentHistoryByKn: _judgmentHistoryByKn,
                   buy1HistoryByKn: _buy1HistoryByKn,
                   sell1HistoryByKn: _sell1HistoryByKn,
@@ -1448,7 +1501,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
             '通道 ${_mathIndicatorConfig.channelPeriods.join(',')}；'
             'MACD ${_mathIndicatorConfig.macdFast}/${_mathIndicatorConfig.macdSlow}/${_mathIndicatorConfig.macdSignal}；'
             'BOLL ${_mathIndicatorConfig.bollN}；RSI ${_mathIndicatorConfig.rsiPeriod}；'
-            'KDJ ${_mathIndicatorConfig.kdjPeriod}；Demark ${_mathIndicatorConfig.demarkLen}',
+            'KDJ ${_mathIndicatorConfig.kdjPeriod}；Demark ${_mathIndicatorConfig.demarkLen}；'
+            '背驰率 ${_mathIndicatorConfig.divergenceRate}',
             style: const TextStyle(fontSize: 11),
           ),
           trailing: IconButton(
@@ -1870,13 +1924,14 @@ class _KlineHomePageState extends State<KlineHomePage> {
         title: const Text('数学指标参数'),
         content: const SingleChildScrollView(
           child: Text(
-            '作用：移植旧工程 Math——均线/通道/MACD/BOLL/RSI/KDJ/Demark。\n'
+            '作用：移植旧工程 Math——均线/通道/MACD/BOLL/RSI/KDJ/Demark/背驰。\n'
             '口径（全层同构）\n'
             '· K0：原生 K 线 OHLC；Kn≥1：unitBars+active；\n'
+            '· 背驰：进出段力度比 + diver∈{1,-1,0}；12 算法分项；\n'
             '· K0 颗粒度展开；无未来函数；十字 asOf 截断。\n\n'
             '操作步骤\n'
-            '1. 主/副图勾选 K{n}布林/Demark/MACD/RSI/KDJ；\n'
-            '2. 点本项或「?」编辑参数；\n'
+            '1. 主图勾选布林/Demark；副图勾选 MACD/RSI/KDJ/背驰_*；\n'
+            '2. 点本项或「?」编辑参数（含背驰率）；\n'
             '3. 写入 .chan_trend_model_config.json，下次启动恢复。',
           ),
         ),
@@ -1922,7 +1977,11 @@ class _KlineHomePageState extends State<KlineHomePage> {
         text: '${_mathIndicatorConfig.demarkCountdownBias}');
     final demarkMaxCtl = TextEditingController(
         text: '${_mathIndicatorConfig.demarkMaxCountdown}');
+    final diverRateCtl = TextEditingController(
+        text: '${_mathIndicatorConfig.divergenceRate}');
     int parseInt(String s, int fb) => int.tryParse(s.trim()) ?? fb;
+    double parseDouble(String s, double fb) =>
+        double.tryParse(s.trim()) ?? fb;
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -1998,6 +2057,15 @@ class _KlineHomePageState extends State<KlineHomePage> {
                     const InputDecoration(labelText: 'Demark max countdown'),
                 keyboardType: TextInputType.number,
               ),
+              TextField(
+                controller: diverRateCtl,
+                decoration: const InputDecoration(
+                  labelText: '背驰率 divergence_rate',
+                  hintText: '>100 保送；如 0.8 / 1e9',
+                ),
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+              ),
             ],
           ),
         ),
@@ -2027,6 +2095,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         demarkSetupCtl,
         demarkCdCtl,
         demarkMaxCtl,
+        diverRateCtl,
       ]) {
         c.dispose();
       }
@@ -2051,6 +2120,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       demarkSetupBias: parseInt(demarkSetupCtl.text, 4),
       demarkCountdownBias: parseInt(demarkCdCtl.text, 2),
       demarkMaxCountdown: parseInt(demarkMaxCtl.text, 13),
+      divergenceRate: parseDouble(diverRateCtl.text, 1e9),
     );
     for (final c in [
       meanCtl,
@@ -2065,6 +2135,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       demarkSetupCtl,
       demarkCdCtl,
       demarkMaxCtl,
+      diverRateCtl,
     ]) {
       c.dispose();
     }
@@ -2072,7 +2143,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
     _msgHistory.append(
       '数学指标：均线=${cfg.meanPeriods.join(",")}；通道=${cfg.channelPeriods.join(",")}；'
       'MACD=${cfg.macdFast}/${cfg.macdSlow}/${cfg.macdSignal}；BOLL=${cfg.bollN}；'
-      'RSI=${cfg.rsiPeriod}；KDJ=${cfg.kdjPeriod}；Demark=${cfg.demarkLen}',
+      'RSI=${cfg.rsiPeriod}；KDJ=${cfg.kdjPeriod}；Demark=${cfg.demarkLen}；'
+      '背驰率=${cfg.divergenceRate}',
     );
   }
 }

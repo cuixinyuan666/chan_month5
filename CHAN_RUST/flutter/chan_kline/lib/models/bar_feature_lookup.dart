@@ -24,9 +24,13 @@ import '../compute/trend_line_compute.dart';
 import '../compute/trend_model_compute.dart';
 import '../compute/math_classic_compute.dart';
 import '../compute/demark_compute.dart';
+import '../compute/divergence_compute.dart';
+import '../compute/math_series_freeze_store.dart';
 import '../compute/step_rhythm_compute.dart';
 import '../compute/profile_peak_classify.dart';
+import 'divergence_algo.dart';
 import 'math_indicator_config.dart';
+import 'zs_frame.dart';
 
 /// 十字线 tooltip 一行：键值 / 层级分隔线 / 同层内容分隔线。
 class CrosshairTooltipRow {
@@ -122,6 +126,8 @@ class BarFeatureLookup {
     List<CrosshairTooltipRow> zsAfterK0 = const [],
     Map<int, List<CrosshairTooltipRow>> knZsAfterKn = const {},
     MathIndicatorConfig mathIndicatorConfig = const MathIndicatorConfig(),
+    MathSeriesFreezeStore? mathFreezeStore,
+    List<ZSFrame> zsK0Frames = const [],
   }) {
     final trendModelConfig = mathIndicatorConfig.asTrendModel;
     final byIdx = <int, Map<String, dynamic>>{};
@@ -651,8 +657,11 @@ class BarFeatureLookup {
       }
     }
 
-    // Kn三型平移 / 四型对线 / 趋势线：按柱 asOf 取近邻窗读数（与主图十字筛选同口径）
-    if (bars.isNotEmpty && (k0Confirms.isNotEmpty || levels.isNotEmpty)) {
+    // Kn三型平移 / 四型对线 / 趋势线 / 数学 / 背驰：按柱 asOf 取近邻窗读数
+    if (bars.isNotEmpty &&
+        (k0Confirms.isNotEmpty ||
+            levels.isNotEmpty ||
+            zsK0Frames.isNotEmpty)) {
       var maxD = 0;
       var maxLevel = 0;
       for (final lv in levels) {
@@ -715,23 +724,25 @@ class BarFeatureLookup {
         }
       }
 
-      // 均线 / 通道：按全局 asOf 算一次再填柱（与主图同口径）
+      // 均线 / 通道：优先读会话冻结仓（Kn≥1 禁整表回写）
       final meanMaxD = maxLevel;
       for (var dkn = 0; dkn <= meanMaxD; dkn++) {
-        final means = computeMeanSeriesForLevel(
-          displayKn: dkn,
-          bars: bars,
-          levels: levels,
-          periods: trendModelConfig.meanPeriods,
-          asOf: asOf,
-        );
-        final chans = computeChannelSeriesForLevel(
-          displayKn: dkn,
-          bars: bars,
-          levels: levels,
-          periods: trendModelConfig.channelPeriods,
-          asOf: asOf,
-        );
+        final means = mathFreezeStore?.mean(dkn) ??
+            computeMeanSeriesForLevel(
+              displayKn: dkn,
+              bars: bars,
+              levels: levels,
+              periods: trendModelConfig.meanPeriods,
+              asOf: asOf,
+            );
+        final chans = mathFreezeStore?.channel(dkn) ??
+            computeChannelSeriesForLevel(
+              displayKn: dkn,
+              bars: bars,
+              levels: levels,
+              periods: trendModelConfig.channelPeriods,
+              asOf: asOf,
+            );
         for (final b in bars) {
           if (asOf != null && b.idx > asOf) continue;
           final row = byIdx.putIfAbsent(b.idx, () => {'idx': b.idx});
@@ -769,22 +780,37 @@ class BarFeatureLookup {
         }
       }
 
-      // MACD/BOLL/RSI/KDJ/Demark：按 asOf 算一次再填柱（全层同构·K0颗粒度）
+      // MACD/BOLL/RSI/KDJ/Demark：优先读会话冻结仓
       for (var dkn = 0; dkn <= maxLevel; dkn++) {
-        final classic = computeClassicMathForLevel(
-          displayKn: dkn,
-          bars: bars,
-          levels: levels,
-          config: mathIndicatorConfig,
-          asOf: asOf,
-        );
-        final demark = computeDemarkForLevel(
-          displayKn: dkn,
-          bars: bars,
-          levels: levels,
-          config: mathIndicatorConfig,
-          asOf: asOf,
-        );
+        final classicFrozenMacd = mathFreezeStore?.macd(dkn);
+        final classicFrozenBoll = mathFreezeStore?.boll(dkn);
+        final classicFrozenRsi = mathFreezeStore?.rsi(dkn);
+        final classicFrozenKdj = mathFreezeStore?.kdj(dkn);
+        final classic = (classicFrozenMacd != null &&
+                classicFrozenBoll != null &&
+                classicFrozenRsi != null &&
+                classicFrozenKdj != null)
+            ? (
+                macd: classicFrozenMacd,
+                boll: classicFrozenBoll,
+                rsi: classicFrozenRsi,
+                kdj: classicFrozenKdj,
+              )
+            : computeClassicMathForLevel(
+                displayKn: dkn,
+                bars: bars,
+                levels: levels,
+                config: mathIndicatorConfig,
+                asOf: asOf,
+              );
+        final demark = mathFreezeStore?.demark(dkn) ??
+            computeDemarkForLevel(
+              displayKn: dkn,
+              bars: bars,
+              levels: levels,
+              config: mathIndicatorConfig,
+              asOf: asOf,
+            );
         for (final b in bars) {
           if (asOf != null && b.idx > asOf) continue;
           final i = b.idx;
@@ -823,6 +849,43 @@ class BarFeatureLookup {
             final marks = demark.marksAt[i];
             if (marks != null && marks.isNotEmpty) {
               sub['demark_text_$dkn'] = formatDemarkMarks(marks);
+            }
+          }
+        }
+
+        // 背驰：12 算法分键（in/out/ratio/flag）
+        final diverMap = computeDivergenceForLevel(
+          displayKn: dkn,
+          bars: bars,
+          levels: levels,
+          zsK0Frames: zsK0Frames,
+          config: mathIndicatorConfig,
+          asOf: asOf,
+        );
+        for (final algo in DivergenceAlgoMeta.all) {
+          final series = diverMap[algo];
+          if (series == null) continue;
+          for (final b in bars) {
+            if (asOf != null && b.idx > asOf) continue;
+            final i = b.idx;
+            final row = byIdx.putIfAbsent(i, () => {'idx': i});
+            final sub = row.putIfAbsent('sub', () => <String, dynamic>{})
+                as Map<String, dynamic>;
+            if (i >= 0 && i < series.inAt.length) {
+              final vin = series.inAt[i];
+              final vout = series.outAt[i];
+              final vr = series.ratioAt[i];
+              final vf = series.diverAt[i];
+              if (vin != null) {
+                sub[diverFeatureKey(algo, 'in', dkn)] = vin;
+              }
+              if (vout != null) {
+                sub[diverFeatureKey(algo, 'out', dkn)] = vout;
+              }
+              if (vr != null) {
+                sub[diverFeatureKey(algo, 'ratio', dkn)] = vr;
+              }
+              sub[diverFeatureKey(algo, 'flag', dkn)] = vf;
             }
           }
         }
@@ -1227,6 +1290,24 @@ class BarFeatureLookup {
       if (ind.kind == SubIndicatorKind.rsi) {
         final v = sub['rsi_${ind.kn}'];
         add(ind.label, v is num ? v.toStringAsFixed(2) : '0');
+      }
+      if (ind.kind == SubIndicatorKind.divergence && ind.diverAlgo != null) {
+        final algo = ind.diverAlgo!;
+        final vin = sub[diverFeatureKey(algo, 'in', ind.kn)];
+        final vout = sub[diverFeatureKey(algo, 'out', ind.kn)];
+        final vr = sub[diverFeatureKey(algo, 'ratio', ind.kn)];
+        final vf = sub[diverFeatureKey(algo, 'flag', ind.kn)];
+        if (vin is num || vout is num || vr is num || vf is num) {
+          final parts = <String>[
+            if (vin is num) 'in${vin.toStringAsFixed(4)}',
+            if (vout is num) 'out${vout.toStringAsFixed(4)}',
+            if (vr is num) 'r${vr.toStringAsFixed(4)}',
+            'd${vf is num ? vf.toInt() : 0}',
+          ];
+          add(ind.label, parts.join('/'));
+        } else {
+          add(ind.label, '0');
+        }
       }
       if (ind.kind == SubIndicatorKind.kdj) {
         final k = sub['kdj_k_${ind.kn}'];
@@ -1635,6 +1716,30 @@ class BarFeatureLookup {
       'K$displayKn Demark',
       CrosshairTooltipRow.boxNum(demarkText is String ? demarkText : 0),
     ));
+    // 背驰 12 算法：in/out/ratio/diver(1|-1|0)
+    for (final algo in DivergenceAlgoMeta.all) {
+      final vin = sub?[diverFeatureKey(algo, 'in', displayKn)];
+      final vout = sub?[diverFeatureKey(algo, 'out', displayKn)];
+      final vr = sub?[diverFeatureKey(algo, 'ratio', displayKn)];
+      final vf = sub?[diverFeatureKey(algo, 'flag', displayKn)];
+      if (vin is num || vout is num || vr is num || vf is num) {
+        final parts = <String>[
+          if (vin is num) 'in${vin.toStringAsFixed(4)}',
+          if (vout is num) 'out${vout.toStringAsFixed(4)}',
+          if (vr is num) 'r${vr.toStringAsFixed(4)}',
+          'd${vf is num ? vf.toInt() : 0}',
+        ];
+        ratioRhythm.add(kv(
+          'K$displayKn背驰_${algo.key}',
+          CrosshairTooltipRow.boxNum(parts.join('/')),
+        ));
+      } else {
+        ratioRhythm.add(kv(
+          'K$displayKn背驰_${algo.key}',
+          CrosshairTooltipRow.boxNum(0),
+        ));
+      }
+    }
 
     return (fxExtra: fxExtra, bs: bs, ratioRhythm: ratioRhythm);
   }

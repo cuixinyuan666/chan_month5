@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/chart_indicator.dart';
+import '../models/divergence_algo.dart';
 
 /// 副图指标选择：默认叠加多选；最上「Kn指标」层全选；点遮罩外关闭并保存。
 Future<Set<SubChartIndicator>?> showSubIndicatorPicker({
@@ -125,8 +126,9 @@ class _SubIndicatorPickerDialogState extends State<_SubIndicatorPickerDialog> {
       );
     }
 
-    // 按类别分组
+    // 按类别分组；背驰类内再按算法分子标题（分层：K0/K1…）
     SubIndicatorKind? prevKind;
+    DivergenceAlgo? prevDiverAlgo;
     for (final item in widget.available) {
       if (prevKind != null && prevKind != item.kind) {
         tiles.add(
@@ -142,8 +144,8 @@ class _SubIndicatorPickerDialogState extends State<_SubIndicatorPickerDialog> {
             ),
           ),
         );
+        prevDiverAlgo = null;
       } else if (prevKind == null) {
-        // 第一个类别前加标题
         tiles.add(
           Container(
             padding: const EdgeInsets.only(top: 4, bottom: 2),
@@ -159,6 +161,23 @@ class _SubIndicatorPickerDialogState extends State<_SubIndicatorPickerDialog> {
         );
       }
       prevKind = item.kind;
+      if (item.kind == SubIndicatorKind.divergence &&
+          item.diverAlgo != null &&
+          item.diverAlgo != prevDiverAlgo) {
+        prevDiverAlgo = item.diverAlgo;
+        tiles.add(
+          Container(
+            padding: const EdgeInsets.only(top: 6, bottom: 1, left: 4),
+            child: Text(
+              '· ${item.diverAlgo!.key}',
+              style: const TextStyle(
+                color: Color(0xFF94A3B8),
+                fontSize: 12,
+              ),
+            ),
+          ),
+        );
+      }
       tiles.add(
         CheckboxListTile(
           dense: true,

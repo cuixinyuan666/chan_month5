@@ -1,3 +1,4 @@
+import 'divergence_algo.dart';
 import 'k0_line.dart';
 import 'level_models.dart';
 
@@ -205,6 +206,8 @@ enum SubIndicatorKind {
   rsi,
   /// Kn KDJ
   kdj,
+  /// Kn背驰（分算法；kn 同中枢；输出 in/out/ratio/diver）
+  divergence,
 }
 
 /// 副图指标类别元数据。
@@ -241,6 +244,8 @@ extension SubIndicatorKindMeta on SubIndicatorKind {
         return 'RSI';
       case SubIndicatorKind.kdj:
         return 'KDJ';
+      case SubIndicatorKind.divergence:
+        return '背驰';
     }
   }
 
@@ -276,6 +281,8 @@ extension SubIndicatorKindMeta on SubIndicatorKind {
         return 13;
       case SubIndicatorKind.kdj:
         return 14;
+      case SubIndicatorKind.divergence:
+        return 15;
     }
   }
 }
@@ -302,59 +309,81 @@ class SubChartIndicator {
   final int kn;
   /// 仅 buyN：类号 ≥3；其它 kind 为 null
   final int? bsClass;
+  /// 仅 divergence：12 力度算法分项
+  final DivergenceAlgo? diverAlgo;
 
   /// kn=0：K0成交量；kn≥1：Kn成交量（LevelBundle.level==kn）。
   const SubChartIndicator.volume(this.kn)
       : kind = SubIndicatorKind.volume,
-        bsClass = null;
+        bsClass = null,
+        diverAlgo = null;
   /// kn=0：K0笔数；kn≥1：Kn笔数（逐笔离线数据，与成交量同设计逻辑）。
   const SubChartIndicator.tickCount(this.kn)
       : kind = SubIndicatorKind.tickCount,
-        bsClass = null;
+        bsClass = null,
+        diverAlgo = null;
   const SubChartIndicator.fractalConfirm(this.kn)
       : kind = SubIndicatorKind.fractalConfirm,
-        bsClass = null;
+        bsClass = null,
+        diverAlgo = null;
   const SubChartIndicator.fractalJudgment(this.kn)
       : kind = SubIndicatorKind.fractalJudgment,
-        bsClass = null;
+        bsClass = null,
+        diverAlgo = null;
   const SubChartIndicator.fractalPeakDist(this.kn)
       : kind = SubIndicatorKind.fractalPeakDist,
-        bsClass = null;
+        bsClass = null,
+        diverAlgo = null;
   const SubChartIndicator.truncation(this.kn)
       : kind = SubIndicatorKind.truncation,
-        bsClass = null;
+        bsClass = null,
+        diverAlgo = null;
   /// kn 与中枢同号：K0一类BS…Kn一类BS（买+卖同槽）
   const SubChartIndicator.buy1(this.kn)
       : kind = SubIndicatorKind.buy1,
-        bsClass = null;
+        bsClass = null,
+        diverAlgo = null;
   /// kn 与中枢同号：K0二类BS…Kn二类BS（买+卖同槽）
   const SubChartIndicator.buy2(this.kn)
       : kind = SubIndicatorKind.buy2,
-        bsClass = null;
+        bsClass = null,
+        diverAlgo = null;
   /// kn 与中枢同号：K0三类BS…；bsClass≥3
   const SubChartIndicator.buyN(this.kn, this.bsClass)
-      : kind = SubIndicatorKind.buyN;
+      : kind = SubIndicatorKind.buyN,
+        diverAlgo = null;
   /// kn=连线显示层：K0相邻比例…（动态：冻段+展示轨虚线；数据 level==kn+1）
   const SubChartIndicator.adjacentRatio(this.kn)
       : kind = SubIndicatorKind.adjacentRatio,
-        bsClass = null;
+        bsClass = null,
+        diverAlgo = null;
   /// kn=连线显示层：K0步进节奏…（动态子线，不要求已确认）
   const SubChartIndicator.stepRhythm(this.kn)
       : kind = SubIndicatorKind.stepRhythm,
-        bsClass = null;
+        bsClass = null,
+        diverAlgo = null;
   /// kn=连线显示层：K0连线斜率…（动态：冻段+展示轨；数据 level==kn+1）
   const SubChartIndicator.lineSlope(this.kn)
       : kind = SubIndicatorKind.lineSlope,
-        bsClass = null;
+        bsClass = null,
+        diverAlgo = null;
   const SubChartIndicator.macd(this.kn)
       : kind = SubIndicatorKind.macd,
-        bsClass = null;
+        bsClass = null,
+        diverAlgo = null;
   const SubChartIndicator.rsi(this.kn)
       : kind = SubIndicatorKind.rsi,
-        bsClass = null;
+        bsClass = null,
+        diverAlgo = null;
   const SubChartIndicator.kdj(this.kn)
       : kind = SubIndicatorKind.kdj,
-        bsClass = null;
+        bsClass = null,
+        diverAlgo = null;
+  /// kn 同中枢；algo=力度算法
+  const SubChartIndicator.divergence(this.kn, DivergenceAlgo algo)
+      : kind = SubIndicatorKind.divergence,
+        bsClass = null,
+        diverAlgo = algo;
 
   String get label {
     switch (kind) {
@@ -389,10 +418,12 @@ class SubChartIndicator {
         return 'K${kn}RSI';
       case SubIndicatorKind.kdj:
         return 'K${kn}KDJ';
+      case SubIndicatorKind.divergence:
+        return 'K$kn背驰_${diverAlgo?.key ?? "?"}';
     }
   }
 
-  /// 显示层号（成交量/BS/相邻比例/节奏/斜率/MACD/RSI/KDJ kn 直接；分型类 kn-1）。
+  /// 显示层号（成交量/BS/相邻比例/节奏/斜率/MACD/RSI/KDJ/背驰 kn 直接；分型类 kn-1）。
   int get displayLevel {
     switch (kind) {
       case SubIndicatorKind.volume:
@@ -406,6 +437,7 @@ class SubChartIndicator {
       case SubIndicatorKind.macd:
       case SubIndicatorKind.rsi:
       case SubIndicatorKind.kdj:
+      case SubIndicatorKind.divergence:
         return kn;
       case SubIndicatorKind.fractalConfirm:
       case SubIndicatorKind.fractalJudgment:
@@ -420,10 +452,11 @@ class SubChartIndicator {
       other is SubChartIndicator &&
       other.kind == kind &&
       other.kn == kn &&
-      other.bsClass == bsClass;
+      other.bsClass == bsClass &&
+      other.diverAlgo == diverAlgo;
 
   @override
-  int get hashCode => Object.hash(kind, kn, bsClass);
+  int get hashCode => Object.hash(kind, kn, bsClass, diverAlgo);
 }
 
 int chartMaxKn({
@@ -554,6 +587,12 @@ List<SubChartIndicator> buildSubIndicatorCatalog(
   }
   for (var d = 0; d <= maxD; d++) {
     out.add(SubChartIndicator.kdj(d));
+  }
+  // 背驰：按算法分类，层内 0..maxKn（默认不勾、不进层全选）
+  for (final algo in DivergenceAlgoMeta.all) {
+    for (var d = 0; d <= maxD; d++) {
+      out.add(SubChartIndicator.divergence(d, algo));
+    }
   }
   return out;
 }

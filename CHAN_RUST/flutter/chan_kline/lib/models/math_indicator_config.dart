@@ -1,6 +1,6 @@
 import 'trend_model_config.dart';
 
-/// 数学指标参数（均线/通道/MACD/BOLL/RSI/KDJ/Demark）。
+/// 数学指标参数（均线/通道/MACD/BOLL/RSI/KDJ/Demark/背驰）。
 class MathIndicatorConfig {
   const MathIndicatorConfig({
     this.meanPeriods = TrendModelConfig.defaultMeanPeriods,
@@ -15,6 +15,8 @@ class MathIndicatorConfig {
     this.demarkSetupBias = 4,
     this.demarkCountdownBias = 2,
     this.demarkMaxCountdown = 13,
+    /// >100 保送背驰（突破即 diver=1）；默认很大
+    this.divergenceRate = 1e9,
   });
 
   final List<int> meanPeriods;
@@ -29,6 +31,7 @@ class MathIndicatorConfig {
   final int demarkSetupBias;
   final int demarkCountdownBias;
   final int demarkMaxCountdown;
+  final double divergenceRate;
 
   TrendModelConfig get asTrendModel => TrendModelConfig(
         meanPeriods: meanPeriods,
@@ -48,6 +51,7 @@ class MathIndicatorConfig {
     int? demarkSetupBias,
     int? demarkCountdownBias,
     int? demarkMaxCountdown,
+    double? divergenceRate,
   }) {
     return MathIndicatorConfig(
       meanPeriods: meanPeriods ?? this.meanPeriods,
@@ -62,6 +66,7 @@ class MathIndicatorConfig {
       demarkSetupBias: demarkSetupBias ?? this.demarkSetupBias,
       demarkCountdownBias: demarkCountdownBias ?? this.demarkCountdownBias,
       demarkMaxCountdown: demarkMaxCountdown ?? this.demarkMaxCountdown,
+      divergenceRate: divergenceRate ?? this.divergenceRate,
     );
   }
 
@@ -78,6 +83,7 @@ class MathIndicatorConfig {
         'demarkSetupBias': demarkSetupBias,
         'demarkCountdownBias': demarkCountdownBias,
         'demarkMaxCountdown': demarkMaxCountdown,
+        'divergenceRate': divergenceRate,
       };
 
   factory MathIndicatorConfig.fromJson(Map<String, dynamic>? map) {
@@ -97,6 +103,11 @@ class MathIndicatorConfig {
       return out.isEmpty ? fallback : out;
     }
 
+    double d(dynamic v, double fb) {
+      if (v is num) return v.toDouble();
+      return double.tryParse('$v') ?? fb;
+    }
+
     return MathIndicatorConfig(
       meanPeriods:
           parseList(map['meanPeriods'], TrendModelConfig.defaultMeanPeriods),
@@ -112,6 +123,7 @@ class MathIndicatorConfig {
       demarkSetupBias: i(map['demarkSetupBias'], 4),
       demarkCountdownBias: i(map['demarkCountdownBias'], 2),
       demarkMaxCountdown: i(map['demarkMaxCountdown'], 13),
+      divergenceRate: d(map['divergenceRate'], 1e9),
     );
   }
 
@@ -129,7 +141,8 @@ class MathIndicatorConfig {
       demarkLen == other.demarkLen &&
       demarkSetupBias == other.demarkSetupBias &&
       demarkCountdownBias == other.demarkCountdownBias &&
-      demarkMaxCountdown == other.demarkMaxCountdown;
+      demarkMaxCountdown == other.demarkMaxCountdown &&
+      divergenceRate == other.divergenceRate;
 
   @override
   int get hashCode => Object.hash(
@@ -144,7 +157,7 @@ class MathIndicatorConfig {
         demarkLen,
         demarkSetupBias,
         demarkCountdownBias,
-        demarkMaxCountdown,
+        Object.hash(demarkMaxCountdown, divergenceRate),
       );
 
   static bool _listEq(List<int> a, List<int> b) {
