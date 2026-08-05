@@ -12,7 +12,7 @@ class IndicatorChipEntry {
 
   final String label;
   final VoidCallback onTapToggle;
-  /// 显示层号：同层用 /，跨层用 ※ 分隔
+  /// 显示层号：同层用 /，跨层用 ※ 分隔（chip 须先按 displayLevel 排序）
   final int displayLevel;
   /// true=灰度关闭（不绘制），再点恢复
   final bool muted;

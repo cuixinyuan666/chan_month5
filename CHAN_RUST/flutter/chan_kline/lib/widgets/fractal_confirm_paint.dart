@@ -15,6 +15,15 @@ abstract final class FractalConfirmColors {
   static Color of(int value) => value > 0 ? bottom : top;
 }
 
+/// 中枢判断/确认配色（与分型顶蓝底红区分）。
+/// 统一口径：对「上个中枢」——相对前一中枢中轴抬高=升红，下移=降绿。
+/// （勿用框 first.dir：常与位置升降相反，例 85 确认抬高却 dir=-1）
+abstract final class ZsSignalColors {
+  static const rise = Color(0xFFE53935); // 上升中枢（抬高）
+  static const fall = Color(0xFF16A34A); // 下降中枢（下移）
+  static Color of(int value) => value > 0 ? rise : fall;
+}
+
 /// 同类不同 Kn 用不同标记，叠画时易区分。
 enum ConfirmMarkerShape { bar, diamond, triangle, circle, cross }
 
@@ -114,9 +123,10 @@ void paintFractalConfirmMarker(
   bool withOutline = true,
   double fillAlpha = 1.0,
   bool hollow = false,
+  Color? colorOverride,
 }) {
   if (value == 0) return;
-  final base = FractalConfirmColors.of(value);
+  final base = colorOverride ?? FractalConfirmColors.of(value);
   final color = base.withValues(alpha: (fillAlpha.clamp(0.0, 1.0)) * base.a);
   final tip = Offset(cx, yp);
   final mid = Offset(cx, (y0 + yp) / 2);

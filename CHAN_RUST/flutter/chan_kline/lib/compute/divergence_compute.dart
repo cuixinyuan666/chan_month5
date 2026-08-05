@@ -6,6 +6,7 @@ import '../models/level_models.dart';
 import '../models/math_indicator_config.dart';
 import '../models/zs_frame.dart';
 import 'math_classic_compute.dart';
+import 'math_series_freeze_store.dart';
 import 'kn_ohlc_sample_compute.dart';
 import 'zs_compute.dart';
 
@@ -70,6 +71,7 @@ class _SegView {
 }
 
 /// 计算某 displayKn、全部 12 算法的背驰特征（K0 阶梯展开）。
+/// 力度与 Math 同号：本层 MACD/RSI（优先读冻结仓，禁 live EMA 回写晃动）。
 Map<DivergenceAlgo, DivergenceAlgoK0Series> computeDivergenceForLevel({
   required int displayKn,
   required List<KlineBar> bars,
@@ -77,6 +79,7 @@ Map<DivergenceAlgo, DivergenceAlgoK0Series> computeDivergenceForLevel({
   List<ZSFrame> zsK0Frames = const [],
   MathIndicatorConfig config = const MathIndicatorConfig(),
   int? asOf,
+  MathSeriesFreezeStore? mathFreezeStore,
 }) {
   final n = bars.length;
   final empty = {
@@ -97,25 +100,27 @@ Map<DivergenceAlgo, DivergenceAlgoK0Series> computeDivergenceForLevel({
   );
   if (zsList.isEmpty) return empty;
 
-  // 力度用 K0 MACD/RSI（对齐旧笔内 klu 序列，非 Kn 采样）
-  final macdK0 = computeMacdForLevel(
-    displayKn: 0,
-    bars: bars,
-    levels: levels,
-    fast: config.macdFast,
-    slow: config.macdSlow,
-    signal: config.macdSignal,
-    asOf: asOf,
-  );
-  final rsiK0 = computeRsiForLevel(
-    displayKn: 0,
-    bars: bars,
-    levels: levels,
-    period: config.rsiPeriod,
-    asOf: asOf,
-  );
-  final macdHist = macdK0.macd;
-  final rsiArr = rsiK0;
+  // 本层力度：优先读 Math 冻结仓；无仓再现场算本层采样
+  final frozenMacd = mathFreezeStore?.macd(displayKn);
+  final frozenRsi = mathFreezeStore?.rsi(displayKn);
+  final macdHist = frozenMacd?.macd ??
+      computeMacdForLevel(
+        displayKn: displayKn,
+        bars: bars,
+        levels: levels,
+        fast: config.macdFast,
+        slow: config.macdSlow,
+        signal: config.macdSignal,
+        asOf: asOf,
+      ).macd;
+  final rsiArr = frozenRsi ??
+      computeRsiForLevel(
+        displayKn: displayKn,
+        bars: bars,
+        levels: levels,
+        period: config.rsiPeriod,
+        asOf: asOf,
+      );
 
   final eventsByAlgo = {
     for (final a in DivergenceAlgoMeta.all) a: <DivergenceSample>[],

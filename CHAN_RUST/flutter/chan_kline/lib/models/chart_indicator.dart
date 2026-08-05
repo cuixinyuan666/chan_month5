@@ -178,6 +178,10 @@ enum SubIndicatorKind {
   fractalJudgment,
   fractalPeakDist,
   truncation,
+  /// Kn中枢确认（is_sure=true 首次当步；与中枢同号）
+  zsConfirm,
+  /// Kn中枢判断（is_sure=false；离开窗≥2不确定可逐K；单开放只首次）
+  zsJudgment,
   buy1,
   buy2,
   /// 三类及以上（bsClass=3..）
@@ -216,6 +220,10 @@ extension SubIndicatorKindMeta on SubIndicatorKind {
         return '分型极点距';
       case SubIndicatorKind.truncation:
         return '截断';
+      case SubIndicatorKind.zsConfirm:
+        return '中枢确认';
+      case SubIndicatorKind.zsJudgment:
+        return '中枢判断';
       case SubIndicatorKind.buy1:
         return '一类BS';
       case SubIndicatorKind.buy2:
@@ -255,28 +263,32 @@ extension SubIndicatorKindMeta on SubIndicatorKind {
         return 4;
       case SubIndicatorKind.truncation:
         return 5;
-      case SubIndicatorKind.buy1:
+      case SubIndicatorKind.zsConfirm:
         return 6;
-      case SubIndicatorKind.buy2:
+      case SubIndicatorKind.zsJudgment:
         return 7;
-      case SubIndicatorKind.buyN:
+      case SubIndicatorKind.buy1:
         return 8;
-      case SubIndicatorKind.adjacentRatio:
+      case SubIndicatorKind.buy2:
         return 9;
-      case SubIndicatorKind.stepRhythm:
+      case SubIndicatorKind.buyN:
         return 10;
-      case SubIndicatorKind.lineSlope:
+      case SubIndicatorKind.adjacentRatio:
         return 11;
-      case SubIndicatorKind.macd:
+      case SubIndicatorKind.stepRhythm:
         return 12;
-      case SubIndicatorKind.rsi:
+      case SubIndicatorKind.lineSlope:
         return 13;
-      case SubIndicatorKind.kdj:
+      case SubIndicatorKind.macd:
         return 14;
-      case SubIndicatorKind.demark:
+      case SubIndicatorKind.rsi:
         return 15;
-      case SubIndicatorKind.divergence:
+      case SubIndicatorKind.kdj:
         return 16;
+      case SubIndicatorKind.demark:
+        return 17;
+      case SubIndicatorKind.divergence:
+        return 18;
     }
   }
 }
@@ -330,6 +342,16 @@ class SubChartIndicator {
         diverAlgo = null;
   const SubChartIndicator.truncation(this.kn)
       : kind = SubIndicatorKind.truncation,
+        bsClass = null,
+        diverAlgo = null;
+  /// kn 与中枢同号：K0中枢确认…Kn中枢确认
+  const SubChartIndicator.zsConfirm(this.kn)
+      : kind = SubIndicatorKind.zsConfirm,
+        bsClass = null,
+        diverAlgo = null;
+  /// kn 与中枢同号：K0中枢判断…Kn中枢判断
+  const SubChartIndicator.zsJudgment(this.kn)
+      : kind = SubIndicatorKind.zsJudgment,
         bsClass = null,
         diverAlgo = null;
   /// kn 与中枢同号：K0一类BS…Kn一类BS（买+卖同槽）
@@ -398,6 +420,10 @@ class SubChartIndicator {
         return 'K${kn - 1}分型极点距';
       case SubIndicatorKind.truncation:
         return 'K${kn - 1}截断';
+      case SubIndicatorKind.zsConfirm:
+        return 'K$kn中枢确认';
+      case SubIndicatorKind.zsJudgment:
+        return 'K$kn中枢判断';
       case SubIndicatorKind.buy1:
         return 'K$kn一类BS';
       case SubIndicatorKind.buy2:
@@ -423,11 +449,13 @@ class SubChartIndicator {
     }
   }
 
-  /// 显示层号（成交量/BS/相邻比例/节奏/斜率/MACD/RSI/KDJ/Demark/背驰 kn 直接；分型类 kn-1）。
+  /// 显示层号（成交量/中枢判断确定/BS/比例/节奏/斜率/Math/背驰 kn 直接；分型类 kn-1）。
   int get displayLevel {
     switch (kind) {
       case SubIndicatorKind.volume:
       case SubIndicatorKind.tickCount:
+      case SubIndicatorKind.zsConfirm:
+      case SubIndicatorKind.zsJudgment:
       case SubIndicatorKind.buy1:
       case SubIndicatorKind.buy2:
       case SubIndicatorKind.buyN:
@@ -550,6 +578,13 @@ List<SubChartIndicator> buildSubIndicatorCatalog(
       out.add(SubChartIndicator.truncation(d));
     }
   }
+  // 中枢确认 / 中枢判断 (0..maxKn，与中枢同号)
+  for (var d = 0; d <= maxD; d++) {
+    out.add(SubChartIndicator.zsConfirm(d));
+  }
+  for (var d = 0; d <= maxD; d++) {
+    out.add(SubChartIndicator.zsJudgment(d));
+  }
   // 一类BS (0..maxKn)
   for (var d = 0; d <= maxD; d++) {
     out.add(SubChartIndicator.buy1(d));
@@ -636,6 +671,8 @@ List<SubChartIndicator> subIndicatorsForLevel(
     SubChartIndicator.fractalJudgment(displayLevel + 1),
     SubChartIndicator.fractalPeakDist(displayLevel + 1),
     SubChartIndicator.truncation(displayLevel + 1),
+    SubChartIndicator.zsConfirm(displayLevel),
+    SubChartIndicator.zsJudgment(displayLevel),
     SubChartIndicator.buy1(displayLevel),
     SubChartIndicator.buy2(displayLevel),
     // 必须进「Kn指标」层全选（与连线同显示层）
@@ -696,4 +733,52 @@ Set<SubChartIndicator> defaultSubIndicatorsK0({bool truncationCheck = true}) {
     0,
     buildSubIndicatorCatalog(1, truncationCheck: truncationCheck),
   ).where((e) => e.kind != SubIndicatorKind.divergence).toSet();
+}
+
+/// 层全选关联后默认「实际绘制」的主图（其余关联项默认删除线静音）。
+/// 重要：关联≠全画——「Kn指标」仍勾全集，但启动/新层只亮：
+/// Kn / Kn合并 / Kn中枢 / Kn连线；其它进 `_mutedMains`，单击 chip 可打开。
+bool isDefaultDrawnMain(MainChartIndicator e) {
+  switch (e.kind) {
+    case MainIndicatorKind.kn:
+    case MainIndicatorKind.combine:
+    case MainIndicatorKind.zs:
+    case MainIndicatorKind.line:
+      return true;
+    case MainIndicatorKind.fxTripleParallel:
+    case MainIndicatorKind.fxQuadPair:
+    case MainIndicatorKind.trendLine:
+    case MainIndicatorKind.meanLine:
+    case MainIndicatorKind.trendChannel:
+    case MainIndicatorKind.boll:
+      return false;
+  }
+}
+
+/// 层全选关联后默认「实际绘制」的副图（其余关联项默认删除线静音）。
+/// 重要：只亮分型确认/判断、截断、中枢确认/判断；成交量/BS/Math/背驰等默认 muted。
+bool isDefaultDrawnSub(SubChartIndicator e) {
+  switch (e.kind) {
+    case SubIndicatorKind.fractalConfirm:
+    case SubIndicatorKind.fractalJudgment:
+    case SubIndicatorKind.truncation:
+    case SubIndicatorKind.zsConfirm:
+    case SubIndicatorKind.zsJudgment:
+      return true;
+    case SubIndicatorKind.volume:
+    case SubIndicatorKind.tickCount:
+    case SubIndicatorKind.fractalPeakDist:
+    case SubIndicatorKind.buy1:
+    case SubIndicatorKind.buy2:
+    case SubIndicatorKind.buyN:
+    case SubIndicatorKind.adjacentRatio:
+    case SubIndicatorKind.stepRhythm:
+    case SubIndicatorKind.lineSlope:
+    case SubIndicatorKind.macd:
+    case SubIndicatorKind.rsi:
+    case SubIndicatorKind.kdj:
+    case SubIndicatorKind.demark:
+    case SubIndicatorKind.divergence:
+      return false;
+  }
 }

@@ -1,7 +1,9 @@
 import 'package:chan_kline/compute/divergence_compute.dart';
+import 'package:chan_kline/compute/divergence_freeze_store.dart';
 import 'package:chan_kline/models/chart_indicator.dart';
 import 'package:chan_kline/models/divergence_algo.dart';
 import 'package:chan_kline/models/kline_bar.dart';
+import 'package:chan_kline/models/level_models.dart';
 import 'package:chan_kline/models/math_indicator_config.dart';
 import 'package:chan_kline/models/zs_frame.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -28,6 +30,54 @@ List<KlineBar> _breakoutBars() {
     _bar(3, c: 9.4, h: 9.9, l: 9.0),
     _bar(4, c: 8.0, h: 9.0, l: 7.0),
   ];
+}
+
+/// K1：进入段 + 动态离开段破枢（active 右端可延伸）。
+({List<KlineBar> bars, List<LevelBundle> levels}) _kn1Breakout({
+  required int activeX2,
+}) {
+  final bars = [
+    _bar(0, c: 10, h: 11, l: 9.5),
+    _bar(1, c: 10.2, h: 11.2, l: 9.8),
+    _bar(2, c: 9.8, h: 10.2, l: 9.2),
+    _bar(3, c: 9.7, h: 10.0, l: 9.1),
+    _bar(4, c: 8.5, h: 9.0, l: 7.5),
+    _bar(5, c: 8.0, h: 8.8, l: 7.0),
+  ];
+  final inSeg = const LevelSegmentN(
+    idx: 0,
+    dir: 1,
+    beginConfirmX: 0,
+    endConfirmX: 1,
+    beginPoleX: 0,
+    endPoleX: 1,
+    high: 11.2,
+    low: 9.5,
+  );
+  final zs = const ZSFrame(
+    x1: 1,
+    x2: 3,
+    high: 10.0,
+    low: 9.0,
+    level: 1,
+    inSegIdx: 0,
+    outSegIdx: 2,
+  );
+  final active = LevelUnitBar(
+    idx: 2,
+    dir: -1,
+    x1: 4,
+    x2: activeX2,
+    high: 9.0,
+    low: 7.0,
+  );
+  final lv = LevelBundle(
+    level: 1,
+    segments: [inSeg],
+    zsFrames: [zs],
+    activeUnit: active,
+  );
+  return (bars: bars, levels: [lv]);
 }
 
 void main() {
@@ -185,5 +235,77 @@ void main() {
     }
     expect(map[DivergenceAlgo.turnrateAvg]!.diverAt[4], 0);
     expect(map[DivergenceAlgo.turnrateAvg]!.ratioAt[4], isNull);
+  });
+
+  test('Kn≥1：破枢后 amp 非0（本层进出段）', () {
+    final fixture = _kn1Breakout(activeX2: 4);
+    final map = computeDivergenceForLevel(
+      displayKn: 1,
+      bars: fixture.bars,
+      levels: fixture.levels,
+      config: const MathIndicatorConfig(divergenceRate: 1e9),
+      asOf: 4,
+    );
+    final amp = map[DivergenceAlgo.amp]!;
+    expect(amp.diverAt[4], isNot(0));
+    expect(amp.inAt[4], isNotNull);
+    expect(amp.outAt[4], isNotNull);
+    expect(amp.ratioAt[4], isNotNull);
+  });
+
+  test('背驰冻结：active endX 右移旧点仍在、新 x 追加', () {
+    final store = DivergenceFreezeStore();
+    final step4 = _kn1Breakout(activeX2: 4);
+    final fresh4 = computeDivergenceForLevel(
+      displayKn: 1,
+      bars: step4.bars,
+      levels: step4.levels,
+      config: const MathIndicatorConfig(divergenceRate: 1e9),
+      asOf: 4,
+    );
+    store.mergeLevel(displayKn: 1, fresh: fresh4);
+    final s4 = store.series(1, DivergenceAlgo.amp)!;
+    expect(s4.diverAt[4], isNot(0));
+    expect(s4.ratioAt[4], isNotNull);
+    final ratioAt4 = s4.ratioAt[4];
+
+    // 下一步：离开段延伸到 x=5；整表 fresh 在 4 处可能清空，仓应保留
+    final step5 = _kn1Breakout(activeX2: 5);
+    final fresh5 = computeDivergenceForLevel(
+      displayKn: 1,
+      bars: step5.bars,
+      levels: step5.levels,
+      config: const MathIndicatorConfig(divergenceRate: 1e9),
+      asOf: 5,
+    );
+    store.mergeLevel(displayKn: 1, fresh: fresh5);
+    final s5 = store.series(1, DivergenceAlgo.amp)!;
+    expect(s5.diverAt[4], isNot(0));
+    expect(s5.ratioAt[4], ratioAt4);
+    expect(s5.diverAt[5], isNot(0));
+    expect(s5.ratioAt[5], isNotNull);
+  });
+
+  test('asOf 截断仓视图：右侧无未来读数', () {
+    final store = DivergenceFreezeStore();
+    final step5 = _kn1Breakout(activeX2: 5);
+    final fresh5 = computeDivergenceForLevel(
+      displayKn: 1,
+      bars: step5.bars,
+      levels: step5.levels,
+      config: const MathIndicatorConfig(divergenceRate: 1e9),
+      asOf: 5,
+    );
+    store.mergeLevel(displayKn: 1, fresh: fresh5);
+    final truncated = truncateDivergenceMap(
+      store.level(1)!,
+      step5.bars.length,
+      asOf: 3,
+    );
+    final amp = truncated[DivergenceAlgo.amp]!;
+    expect(amp.diverAt[3], 0);
+    expect(amp.ratioAt[3], isNull);
+    expect(amp.diverAt[5], 0);
+    expect(amp.ratioAt[5], isNull);
   });
 }

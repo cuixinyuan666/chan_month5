@@ -13,6 +13,7 @@ import 'kline_combine_frame.dart';
 import 'level_models.dart';
 import 'k1_analysis.dart';
 import '../compute/fractal_judgment_compute.dart';
+import '../compute/zs_signal_compute.dart';
 import '../compute/class1_bs_compute.dart';
 import '../compute/class2_bs_compute.dart';
 import '../compute/class_n_bs_compute.dart';
@@ -25,6 +26,7 @@ import '../compute/trend_model_compute.dart';
 import '../compute/math_classic_compute.dart';
 import '../compute/demark_compute.dart';
 import '../compute/divergence_compute.dart';
+import '../compute/divergence_freeze_store.dart';
 import '../compute/math_series_freeze_store.dart';
 import '../compute/step_rhythm_compute.dart';
 import '../compute/profile_peak_classify.dart';
@@ -120,6 +122,9 @@ class BarFeatureLookup {
     bool truncationCheck = true,
     /// 分型判断会话事件日志（有则优先；扫全部历史点）
     Map<int, List<FractalJudgmentEvent>> judgmentHistoryByKn = const {},
+    /// 中枢判断/确定会话历史（与中枢同号）
+    Map<int, List<ZsSignalEvent>> zsJudgmentHistoryByKn = const {},
+    Map<int, List<ZsSignalEvent>> zsConfirmHistoryByKn = const {},
     /// 当步截断位（idx）：与副图指标 _drawKnFractalJudgmentSubChart 的 maxX=segAsOf 一致，
     /// 十字线激活时传入 widget.segAsOf，使 tooltip 分型判断与副图同源同截断。
     int? asOf,
@@ -127,6 +132,7 @@ class BarFeatureLookup {
     Map<int, List<CrosshairTooltipRow>> knZsAfterKn = const {},
     MathIndicatorConfig mathIndicatorConfig = const MathIndicatorConfig(),
     MathSeriesFreezeStore? mathFreezeStore,
+    DivergenceFreezeStore? diverFreezeStore,
     List<ZSFrame> zsK0Frames = const [],
   }) {
     final trendModelConfig = mathIndicatorConfig.asTrendModel;
@@ -605,6 +611,33 @@ class BarFeatureLookup {
       }
     }
 
+    // Kn中枢判断/确定：会话历史写入 sub（与副图同源；asOf 截断）
+    if (bars.isNotEmpty) {
+      final barCount = bars.last.idx + 1;
+      for (final e in zsJudgmentHistoryByKn.entries) {
+        final series =
+            expandZsSignalToSeries(e.value, barCount, maxX: asOf);
+        for (final b in bars) {
+          final row = byIdx.putIfAbsent(b.idx, () => {'idx': b.idx});
+          final sub = row.putIfAbsent('sub', () => <String, dynamic>{})
+              as Map<String, dynamic>;
+          sub['zs_judgment_${e.key}'] =
+              b.idx >= 0 && b.idx < series.length ? series[b.idx] : 0;
+        }
+      }
+      for (final e in zsConfirmHistoryByKn.entries) {
+        final series =
+            expandZsSignalToSeries(e.value, barCount, maxX: asOf);
+        for (final b in bars) {
+          final row = byIdx.putIfAbsent(b.idx, () => {'idx': b.idx});
+          final sub = row.putIfAbsent('sub', () => <String, dynamic>{})
+              as Map<String, dynamic>;
+          sub['zs_confirm_${e.key}'] =
+              b.idx >= 0 && b.idx < series.length ? series[b.idx] : 0;
+        }
+      }
+    }
+
     // Kn相邻比例 / 步进节奏 / 连线斜率：会话历史写入 sub（与副图同源；动态计算口径）
     if (bars.isNotEmpty) {
       final barCount = bars.last.idx + 1;
@@ -853,15 +886,19 @@ class BarFeatureLookup {
           }
         }
 
-        // 背驰：12 算法分键（in/out/ratio/flag）
-        final diverMap = computeDivergenceForLevel(
-          displayKn: dkn,
-          bars: bars,
-          levels: levels,
-          zsK0Frames: zsK0Frames,
-          config: mathIndicatorConfig,
-          asOf: asOf,
-        );
+        // 背驰：优先读冻结仓；无仓再现场算（本层力度）
+        final frozenDiver = diverFreezeStore?.level(dkn);
+        final diverMap = frozenDiver != null
+            ? truncateDivergenceMap(frozenDiver, bars.length, asOf: asOf)
+            : computeDivergenceForLevel(
+                displayKn: dkn,
+                bars: bars,
+                levels: levels,
+                zsK0Frames: zsK0Frames,
+                config: mathIndicatorConfig,
+                asOf: asOf,
+                mathFreezeStore: mathFreezeStore,
+              );
         for (final algo in DivergenceAlgoMeta.all) {
           final series = diverMap[algo];
           if (series == null) continue;
@@ -1182,6 +1219,12 @@ class BarFeatureLookup {
         }
         final truncated = sub['fractal_judgment_trunc_${ind.kn}'] == true;
         add(ind.label, truncated ? '$v(截断)' : v);
+      }
+      if (ind.kind == SubIndicatorKind.zsConfirm) {
+        add(ind.label, sub['zs_confirm_${ind.kn}'] ?? 0);
+      }
+      if (ind.kind == SubIndicatorKind.zsJudgment) {
+        add(ind.label, sub['zs_judgment_${ind.kn}'] ?? 0);
       }
       if (ind.kind == SubIndicatorKind.fractalPeakDist) {
         // 【语义统一·K0】kn==1 优先 feat；kn≥2 读 fractal_peak_dist_{kn}

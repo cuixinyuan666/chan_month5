@@ -2,6 +2,59 @@
 
 ## 最新记录
 
+### 2026-08-06 — Kn中枢确认/判断：空间升降色 + 默认静音绘制（提交）
+
+- **要点**：①中枢确认/判断对「上个中枢」：相对前一枢中轴抬高红、下移绿（禁 first.dir）；②`中枢确定`→`中枢确认`；③层全选关联全集但默认只画主图四类+副图五类，其余 muted；④RSI/KDJ/成交量越界保护；⑤背驰全层同构冻结仓等同批落地。
+- **相关路径**：`zs_signal_compute.dart`、`zs_signal_event.dart`、`chart_indicator.dart`、`kline_chart.dart`、`divergence_*`、`msg_history.dart`、`AGENTS.md`、`TASK_LOG.md`
+- **注意**：验收连续单步对照 77/84/85/90/91；Cursor 内嵌 localhost 预览须在 Tools&MCP 关「Show Localhost Links in Browser」
+
+### 2026-08-06 — 中枢确认/判断改空间升降色（抬高红下移绿）
+
+- **要点**：确认/判断色不再用框 `first.dir`，改为上个中枢相对前一枢中轴抬高=红、下移=绿（实证 77/84 判断红、85 确认红、90 判断绿、91 确认绿）；并加 `cursor.browser.autoOpenLocalhostUrls=false` 试图禁 Cursor 内嵌打开 localhost。
+- **相关路径**：`zs_signal_compute.dart`、`fractal_confirm_paint.dart`、`msg_history.dart`、用户/`\.vscode` settings
+- **注意**：若仍弹内嵌预览，到 Settings → Tools & MCP 关闭「Show Localhost Links in Browser」
+
+### 2026-08-06 — 中枢判断跟「上个中枢」同色 + 禁自动开 DevTools
+
+- **要点**：判断离开窗值/色改跟被离开旧框 dir（与确认统一：升红降绿；例 52/57 红、85 确认红、90 判断绿）；`dart.openDevTools=never`，并关闭 `cursor.terminal.usePreviewBox`，避免终端 DevTools 链接默认开网页。
+- **相关路径**：`zs_signal_compute.dart`、`fractal_confirm_paint.dart`、`msg_history.dart`、`.vscode/settings.json`、用户 `settings.json`
+- **注意**：打点身份仍用离开候选 x1；热重载后连续单步复验
+
+### 2026-08-06 — 中枢确认配色口径（上个中枢方向）
+
+- **要点**：锁定确认色语义——绿=上个下降中枢被确认，红=上个上升中枢被确认（跟确认框自身 dir；例 K0 idx=54 绿、85 红）；非价格涨跌、非新虚框/分型符号。
+- **相关路径**：`fractal_confirm_paint.dart`、`zs_signal_compute.dart`、`msg_history.dart`
+
+### 2026-08-06 — 中枢确认改名 + 默认绘制静音 + RSI/KDJ 越界
+
+- **要点**：`Kn中枢确定`→`Kn中枢确认`（确认/判断同升红降绿）；层全选仍关联全集，默认只绘制主图 Kn/合并/中枢/连线与副图分型确认/判断/截断/中枢确认/判断，其余删除线静音；RSI/KDJ/成交量副图对冻结仓长度做边界保护。
+- **相关路径**：`chart_indicator.dart`、`kline_chart.dart`、`msg_history.dart`、`zs_signal_compute_test.dart`
+- **注意**：新层全选新增的非核心项同样默认静音；单击 chip 可打开绘制
+
+### 2026-08-06 — 中枢红绿配色 + 十字交互与 MACD 越界修复
+
+- **要点**：中枢判断/确定升红降绿；MACD 副图对冻结仓长度做边界保护；左右键吞系统 repeat 防双步进；上下键滚 tooltip；中键切换 tooltip（不关十字）；chip ※ 按层级排序。
+- **相关路径**：`fractal_confirm_paint.dart`、`kline_chart.dart`、`zs_signal_compute.dart`、`indicator_picker_chip.dart`
+- **注意**：已移除中枢调试埋点
+
+### 2026-08-06 — Kn中枢判断对齐分型稀疏度
+
+- **要点**：单开放枢只首次打点；≥2 不确定（离开窗）才逐步追加末候选；重叠合回归零。确定仍 `isSure` 首次冻结。日志证实旧口径对单开放逐步刷点过密。
+- **相关路径**：`zs_signal_compute.dart`、`zs_signal_compute_test.dart`、`msg_history.dart`、`chart_indicator.dart`
+- **注意**：验收连续单步对照 52–85；埋点暂留待复验
+
+### 2026-08-05 — Kn中枢判断/确定副图（对齐分型）
+
+- **要点**：新增副图「Kn中枢判断」「Kn中枢确定」全层同构；会话冻结打点（稳定键层|x1，开放枢可逐K追加；确定首次 is_sure 冻结）；catalog/层全选/绘制/十字 asOf 齐套。
+- **相关路径**：`zs_signal_compute.dart`、`chart_indicator.dart`、`main.dart`、`kline_chart.dart`、`bar_feature_lookup.dart`、`msg_history.dart`、`AGENTS.md`
+- **注意**：验收须连续单步；值=dir 符号；勿用 seq 作稳定键
+
+### 2026-08-04 — Kn背驰全层同构：本层力度+冻结仓
+
+- **要点**：背驰力度改跟 `displayKn`（优先读 Math 仓）；新增 `DivergenceFreezeStore` 格点冻结，动态离开段只追加不挪旧点；副图/十字读仓+asOf 截断。BSP 不动。
+- **相关路径**：`divergence_compute.dart`、`divergence_freeze_store.dart`、`main.dart`、`kline_chart.dart`、`bar_feature_lookup.dart`、`msg_history.dart`、`AGENTS.md`
+- **注意**：验收须连续单步；默认仍不勾背驰
+
 ### 2026-08-04 — 背驰12算法进「Kn指标」层全选
 
 - **要点**：`subIndicatorsForLevel` 纳入全部背驰算法；启动默认仍不勾（`defaultSubIndicatorsK0` 过滤）。修正「默认不勾≠不进层全选」口径。

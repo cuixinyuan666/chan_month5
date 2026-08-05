@@ -173,6 +173,23 @@ class MsgHistory {
     );
   }
 
+  /// Kn中枢判断/确认副图（对齐分型判断/确认；进程内去重）。
+  static bool _knZsJudgeConfirmLoggedV6 = false;
+  void appendKnZsJudgeConfirm() {
+    if (_knZsJudgeConfirmLoggedV6) return;
+    _knZsJudgeConfirmLoggedV6 = true;
+    append(
+      '【Kn中枢判断/确认·副图·v6·空间升降色】'
+      '类别「中枢确认」「中枢判断」：与中枢同号；对「上个中枢」确认/判断。'
+      '色/值：相对前一中枢中轴抬高→升红(+1)，下移→降绿(-1)；无前枢回退 first.dir。'
+      '禁止用框自身 first.dir 上色（常与位置升降相反：如 x1=51 dir=-1 却抬高=红）。'
+      '判断离开窗：身份=新候选，色=被离开上个框之空间趋势；单开放跟该框相对上一枢。'
+      '确认：刚定型框相对前一枢之空间趋势。'
+      '例：77/84 判断红、85 确认红、90 判断绿、91 确认绿。'
+      '稀疏：单开放只首次；≥2 不确定逐步追加末候选；重叠合回归零；无未来不回写。',
+    );
+  }
+
   /// 副图十字 as-of：确认/极点距/截断与成交量/判断同构，仅过滤 x>asOf。
   void appendSubChartCrosshairAsOf() {
     append(
@@ -528,21 +545,26 @@ class MsgHistory {
   }
 
   /// Kn背驰 12 算法分项（进程内去重；非买卖点）
-  static bool _knDivergenceLogged = false;
+  static bool _knDivergenceLoggedV4 = false;
   void appendKnDivergenceIndicators() {
-    if (_knDivergenceLogged) return;
-    _knDivergenceLogged = true;
+    if (_knDivergenceLoggedV4) return;
+    _knDivergenceLoggedV4 = true;
     append(
-      '【Kn背驰·副图分算法·v3·进Kn指标】'
+      '【Kn背驰·副图分算法·v4·全层同构+冻结】'
       '副图类别「背驰」：K{n}背驰_area/peak/full_area/diff/slope/amp/amount/volumn/'
       'amount_avg/volumn_avg/turnrate_avg/rsi（12 算法分类×层分层）。'
       '绑定：进「Kn指标」层全选；启动默认不勾（defaultSubIndicatorsK0 过滤 divergence）。'
       '副图绘制：ratio 折线 + diver±1 短柱；读数框/chip 同源 sub 键。'
       '口径：CZS.is_divergence——离开段须突破中枢(ZG/ZD)；in/out=进出段力度；'
       'ratio=out/in；diver：背离=1、未背离=-1、无值=0（未突破/缺力度/非有限/in=0）。'
-      '事件 diver=0 时 in/out/ratio 同步清空（expandNullable，禁 hold 旧值）。'
+      '事件 diver=0 时 in/out/ratio 同步清空（expandNullable，禁 hold 旧值·fresh）。'
       'divergence_rate>100 保送；设置落盘 .chan_trend_model_config.json。'
-      'K0 进出段=分钟K段 idx；Kn=冻段+activeUnit；力度用 K0 MACD/RSI/成交。'
+      'K0 进出段=分钟K段 idx；Kn=冻段+activeUnit；'
+      '力度=本层 MACD/RSI（与 Math 同号，优先读 MathSeriesFreezeStore）；'
+      '成交/振幅仍在进出段 K0 时间窗聚合。'
+      '当下冻结：DivergenceFreezeStore 格点首次非空/非0 写入后冻结；'
+      '动态离开段 endX 右移只追加新 x，禁止挪旧点/整表消点；'
+      '参数变更清空并 0..当前步重冻。十字 asOf 截断仓视图（禁回落末态 ZS）。'
       'turnrate_avg 读 metrics.turnrate（纠正旧误映射 AMOUNT_AVG）。'
       '特征键 diver_{algo}_{in|out|ratio|flag}_{dkn}；tooltip 应显尽显。',
     );
@@ -681,18 +703,19 @@ class MsgHistory {
     );
   }
 
-  /// 启动默认勾选「K0指标」层全选（进程内去重；配置易混写入历史便于复制排查）。
-  static bool _defaultIndicatorsK0Logged = false;
+  /// 启动默认勾选「K0指标」层全选 + 非核心默认静音（进程内去重）。
+  static bool _defaultIndicatorsK0LoggedV2 = false;
   void appendDefaultIndicatorsK0() {
-    if (_defaultIndicatorsK0Logged) return;
-    _defaultIndicatorsK0Logged = true;
+    if (_defaultIndicatorsK0LoggedV2) return;
+    _defaultIndicatorsK0LoggedV2 = true;
     append(
-      '【默认指标】主/副图启动默认勾选「K0指标」层全选，'
-      '与选择栏最上「Kn指标」同口径：'
-      '主图=K0/K0合并/K0中枢/K0连线（筹码迁设置·仅K0，不在指标栏）；'
-      '副图=K0成交量+分型确认/判断/极点距/截断+一类/二类BS+K0相邻比例/步进节奏'
-      '（截断随截断开关 prune）。'
-      '非 K1 层；加载后仅 prune 超出 catalog 的项，不改层。',
+      '【默认指标·v2】主/副图启动仍勾选「K0指标」层全选（关联全集），'
+      '与选择栏「Kn指标」同口径；但默认实际绘制仅：'
+      '主图=Kn/Kn合并/Kn中枢/Kn连线；'
+      '副图=Kn分型确认/Kn分型判断/Kn截断/Kn中枢确认/Kn中枢判断；'
+      '其余关联项默认删除线灰度（muted，再点可打开绘制）；'
+      '背驰 12 项启动仍不勾。新层全选新增的非核心项同样默认静音。'
+      '截断随截断开关 prune。',
     );
   }
 

@@ -41,7 +41,7 @@ void main() {
     expect(pruned.contains(const SubChartIndicator.fractalPeakDist(1)), isTrue);
   });
 
-  test('副图目录含 Kn成交量且大类顺序：成交量 < 确认 < 判断 < 极点距 < 截断', () {
+  test('副图目录含 Kn成交量且大类顺序：成交量 < 确认 < 判断 < 极点距 < 截断 < 中枢确认 < 中枢判断', () {
     final cat = buildSubIndicatorCatalog(3, truncationCheck: true);
     final labels = cat.map((e) => e.label).toList();
     expect(labels.contains('K0成交量'), isTrue);
@@ -51,6 +51,8 @@ void main() {
     expect(labels.indexOf('K0分型确认'), lessThan(labels.indexOf('K0分型判断')));
     expect(labels.indexOf('K0分型判断'), lessThan(labels.indexOf('K0分型极点距')));
     expect(labels.indexOf('K0分型极点距'), lessThan(labels.indexOf('K0截断')));
+    expect(labels.indexOf('K0截断'), lessThan(labels.indexOf('K0中枢确认')));
+    expect(labels.indexOf('K0中枢确认'), lessThan(labels.indexOf('K0中枢判断')));
   });
 
   test('十字线副图：截断触发步显示 Kn截断值', () {

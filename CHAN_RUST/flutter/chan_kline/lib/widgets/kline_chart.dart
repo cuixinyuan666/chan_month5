@@ -10,6 +10,7 @@ import '../compute/k1_combine_compute.dart';
 import '../compute/k1_bar_view_compute.dart';
 import '../compute/chart_view_compute.dart';
 import '../compute/fractal_judgment_compute.dart';
+import '../compute/zs_signal_compute.dart';
 import '../compute/class1_bs_compute.dart';
 import '../compute/class2_bs_compute.dart';
 import '../compute/class_n_bs_compute.dart';
@@ -22,6 +23,7 @@ import '../compute/trend_model_compute.dart';
 import '../compute/math_classic_compute.dart';
 import '../compute/demark_compute.dart';
 import '../compute/divergence_compute.dart';
+import '../compute/divergence_freeze_store.dart';
 import '../compute/math_series_freeze_store.dart';
 import '../compute/step_rhythm_compute.dart';
 import '../models/divergence_algo.dart';
@@ -109,6 +111,8 @@ class KlineChart extends StatefulWidget {
     this.truncationCheck = true,
     this.showBuildingDash = true,
     this.judgmentHistoryByKn = const {},
+    this.zsJudgmentHistoryByKn = const {},
+    this.zsConfirmHistoryByKn = const {},
     this.buy1HistoryByKn = const {},
     this.sell1HistoryByKn = const {},
     this.buy2HistoryByKn = const {},
@@ -133,6 +137,7 @@ class KlineChart extends StatefulWidget {
     this.tickDistConfig = const TickDistConfig(),
     this.mathIndicatorConfig = const MathIndicatorConfig(),
     this.mathFreezeStore,
+    this.diverFreezeStore,
     this.chipOnlyMode = false,
   });
 
@@ -172,6 +177,10 @@ class KlineChart extends StatefulWidget {
   final bool showBuildingDash;
   /// 分型判断会话事件日志（main 步进累积；换股才清空）
   final Map<int, List<FractalJudgmentEvent>> judgmentHistoryByKn;
+  /// 中枢判断会话历史（与中枢同号）
+  final Map<int, List<ZsSignalEvent>> zsJudgmentHistoryByKn;
+  /// 中枢确认会话历史（与中枢同号）
+  final Map<int, List<ZsSignalEvent>> zsConfirmHistoryByKn;
   /// 一类买会话事件日志（对齐分型判断：成立当步冻结 x）
   final Map<int, List<Buy1Frame>> buy1HistoryByKn;
   /// 一类卖会话事件日志
@@ -205,6 +214,8 @@ class KlineChart extends StatefulWidget {
   final MathIndicatorConfig mathIndicatorConfig;
   /// Math 会话冻结仓（有则主图/副图/十字读仓，禁整表回写）
   final MathSeriesFreezeStore? mathFreezeStore;
+  /// 背驰会话冻结仓（本层力度；旧格不改）
+  final DivergenceFreezeStore? diverFreezeStore;
   /// chip 分支：仅显示筹码分布，关闭所有缠论渲染
   final bool chipOnlyMode;
 
@@ -332,9 +343,27 @@ class _KlineChartState extends State<KlineChart> {
   /// 副图是否展开（无勾选副图指标则收起整块副图区）
   bool get _showSubPane => _activeSubs.isNotEmpty;
 
-  void _pruneMuted() {
-    _mutedMains = _mutedMains.intersection(_activeMains);
-    _mutedSubs = _mutedSubs.intersection(_activeSubs);
+  /// 选择集增删后同步静音集。
+  /// 重要：新勾选且非 [isDefaultDrawnMain]/[isDefaultDrawnSub] 的项默认进 muted
+  ///（左上角删除线灰度，仍在选择集；再点才绘制）。已静音项取消勾选后从集里摘掉。
+  void _syncMutedWithSelection({
+    Set<MainChartIndicator>? previousMains,
+    Set<SubChartIndicator>? previousSubs,
+  }) {
+    final oldM = previousMains ?? <MainChartIndicator>{};
+    final oldS = previousSubs ?? <SubChartIndicator>{};
+    final addedM = _activeMains.difference(oldM);
+    final addedS = _activeSubs.difference(oldS);
+    _mutedMains = {
+      ..._mutedMains.intersection(_activeMains),
+      for (final e in addedM)
+        if (!isDefaultDrawnMain(e)) e,
+    };
+    _mutedSubs = {
+      ..._mutedSubs.intersection(_activeSubs),
+      for (final e in addedS)
+        if (!isDefaultDrawnSub(e)) e,
+    };
   }
 
   void _measureSubChipBar() {
@@ -353,6 +382,8 @@ class _KlineChartState extends State<KlineChart> {
   void initState() {
     super.initState();
     _resetViewport();
+    // 层全选关联项默认静音非核心绘制项（删除线灰度）
+    _syncMutedWithSelection();
     // 全局键盘监听：方向键←/→（十字线态=十字线左右移；非十字线态=步退/步进）
     HardwareKeyboard.instance.addHandler(_handleHardwareKey);
   }
@@ -408,10 +439,13 @@ class _KlineChartState extends State<KlineChart> {
       }
     }
 
-    // 选择栏增删后，灰度关闭集只保留仍在勾选中的项
+    // 选择栏增删后：保留仍勾选的静音态；新关联非默认绘制项默认静音
     if (oldWidget.mainIndicators != widget.mainIndicators ||
         oldWidget.subIndicators != widget.subIndicators) {
-      _pruneMuted();
+      _syncMutedWithSelection(
+        previousMains: oldWidget.mainIndicators,
+        previousSubs: oldWidget.subIndicators,
+      );
     }
 
     // C：大序列跳末/换股后后台预热筹码前缀（不堵 UI；口径同同步 build）
@@ -464,17 +498,33 @@ class _KlineChartState extends State<KlineChart> {
   int _arrowRepeatCount = 0; // 连发次数（用于节奏加速）
 
   /// 键盘方向键交互（HardwareKeyboard 全局监听）：
-  /// 十字线激活时 → 左/右方向键移动十字线（竖线吸附相邻 K 线中心）；
-  /// 未激活时 → 左=步退、右=步进（与点击左/右热区同义）。
-  /// 返回 true 表示已处理（拦截该方向键，避免页面默认滚动等）。
+  /// 十字线+tooltip：上/下滚动 tooltip；左/右移十字线（自管连发，吞系统 repeat）。
+  /// 十字线无 tooltip：左/右移线；未激活：左=步退、右=步进。
   bool _handleHardwareKey(KeyEvent event) {
     final key = event.logicalKey;
     final isLeft = key == LogicalKeyboardKey.arrowLeft;
     final isRight = key == LogicalKeyboardKey.arrowRight;
+    final isUp = key == LogicalKeyboardKey.arrowUp;
+    final isDown = key == LogicalKeyboardKey.arrowDown;
+
+    // tooltip 上下滚动（允许系统 repeat）
+    if (isUp || isDown) {
+      if (!_crosshairShowTooltip) return false;
+      if (event is KeyUpEvent) return true;
+      if (event is KeyDownEvent || event is KeyRepeatEvent) {
+        _scrollTooltipBy(isDown ? 48.0 : -48.0);
+        return true;
+      }
+      return false;
+    }
+
     if (!isLeft && !isRight) return false;
 
+    // 左/右：吞掉系统 KeyRepeatEvent，改由自管连发，避免双步进
+    if (event is KeyRepeatEvent) {
+      return true;
+    }
     if (event is KeyDownEvent) {
-      if (event is KeyRepeatEvent) return true; // 系统自带重复：吞掉，改由自管连发避免双倍
       _startArrowRepeat(isRight ? 1 : -1);
       return true;
     }
@@ -762,11 +812,14 @@ class _KlineChartState extends State<KlineChart> {
       subIndicators: allSubs,
       truncationCheck: widget.truncationCheck,
       judgmentHistoryByKn: widget.judgmentHistoryByKn,
+      zsJudgmentHistoryByKn: widget.zsJudgmentHistoryByKn,
+      zsConfirmHistoryByKn: widget.zsConfirmHistoryByKn,
       asOf: asOf,
       zsAfterK0: k0Zs,
       knZsAfterKn: knZs,
       mathIndicatorConfig: widget.mathIndicatorConfig,
       mathFreezeStore: widget.mathFreezeStore,
+      diverFreezeStore: widget.diverFreezeStore,
       zsK0Frames: tipZsK0,
     );
     // K0 筹码峰 / 笔数峰：与主图 profile 同 cutoff，按本根高低编号
@@ -829,6 +882,14 @@ class _KlineChartState extends State<KlineChart> {
   }
 
   void _onPointerDown(PointerDownEvent e) {
+    // 鼠标中键：快速显示(含十字)/隐藏 tooltip（不关十字线）
+    if (e.buttons & kMiddleMouseButton != 0) {
+      _toggleTooltipKeepCrosshair(e.localPosition);
+      _zonePointerDown = null;
+      _zonePointerId = null;
+      _zoneMoved = false;
+      return;
+    }
     _zonePointerDown = e.localPosition;
     _zonePointerId = e.pointer;
     _zoneMoved = false;
@@ -918,6 +979,27 @@ class _KlineChartState extends State<KlineChart> {
           _crosshairBarIdx = null;
           _crosshairPinRightmost = false;
           _tooltipScrollBarIdx = null;
+      }
+    });
+  }
+
+  /// 中键：无十字→开十字+tooltip；有 tooltip→只藏 tooltip；仅线→再显 tooltip。
+  void _toggleTooltipKeepCrosshair(Offset pos) {
+    final plotTop = _zonePlotTop;
+    final contentBottom = _zoneContentBottom > 0
+        ? _zoneContentBottom
+        : math.max(plotTop + 40, _chartSize.height - 8);
+    setState(() {
+      switch (_crosshairMode) {
+        case CrosshairMode.off:
+          _crosshairMode = CrosshairMode.withTooltip;
+          _tooltipScrollBarIdx = null;
+          _updateCrosshairAt(pos, plotTop, contentBottom);
+        case CrosshairMode.withTooltip:
+          _crosshairMode = CrosshairMode.linesOnly;
+        case CrosshairMode.linesOnly:
+          _crosshairMode = CrosshairMode.withTooltip;
+          _resetTooltipScrollIfNeeded(_crosshairBarIdx);
       }
     });
   }
@@ -1167,9 +1249,12 @@ class _KlineChartState extends State<KlineChart> {
       subIndicators: _activeSubs,
       truncationCheck: widget.truncationCheck,
       judgmentHistoryByKn: widget.judgmentHistoryByKn,
+      zsJudgmentHistoryByKn: widget.zsJudgmentHistoryByKn,
+      zsConfirmHistoryByKn: widget.zsConfirmHistoryByKn,
       asOf: asOf,
       mathIndicatorConfig: widget.mathIndicatorConfig,
       mathFreezeStore: widget.mathFreezeStore,
+      diverFreezeStore: widget.diverFreezeStore,
       zsK0Frames: tipZsK0,
     );
     final out = <SubChartIndicator, String>{};
@@ -1261,6 +1346,8 @@ class _KlineChartState extends State<KlineChart> {
               defaultK0Policy: widget.defaultK0Policy,
               segAsOf: segAsOf,
               judgmentHistoryByKn: widget.judgmentHistoryByKn,
+              zsJudgmentHistoryByKn: widget.zsJudgmentHistoryByKn,
+              zsConfirmHistoryByKn: widget.zsConfirmHistoryByKn,
               buy1HistoryByKn: widget.buy1HistoryByKn,
               sell1HistoryByKn: widget.sell1HistoryByKn,
               buy2HistoryByKn: widget.buy2HistoryByKn,
@@ -1274,6 +1361,7 @@ class _KlineChartState extends State<KlineChart> {
               tickDistConfig: widget.tickDistConfig,
               mathIndicatorConfig: widget.mathIndicatorConfig,
               mathFreezeStore: widget.mathFreezeStore,
+              diverFreezeStore: widget.diverFreezeStore,
               chipOnlyMode: widget.chipOnlyMode,
               layer: layer,
             );
@@ -1417,6 +1505,9 @@ class _KlineChartState extends State<KlineChart> {
                           .where(_activeMains.contains)
                           .toList()
                         ..sort((a, b) {
+                          // ※ 按层级分隔：先 displayLevel，再类别/kn
+                          final lv = a.displayLevel.compareTo(b.displayLevel);
+                          if (lv != 0) return lv;
                           final c = a.kind.categoryOrder
                               .compareTo(b.kind.categoryOrder);
                           if (c != 0) return c;
@@ -1457,6 +1548,9 @@ class _KlineChartState extends State<KlineChart> {
                             .where(_activeSubs.contains)
                             .toList()
                           ..sort((a, b) {
+                            // ※ 按层级分隔：先 displayLevel，再类别/算法/kn
+                            final lv = a.displayLevel.compareTo(b.displayLevel);
+                            if (lv != 0) return lv;
                             final c = a.kind.categoryOrder
                                 .compareTo(b.kind.categoryOrder);
                             if (c != 0) return c;
@@ -1537,6 +1631,8 @@ class _KlineCompositePainter extends CustomPainter {
     this.defaultK0Policy = 'pending',
     this.segAsOf,
     this.judgmentHistoryByKn = const {},
+    this.zsJudgmentHistoryByKn = const {},
+    this.zsConfirmHistoryByKn = const {},
     this.buy1HistoryByKn = const {},
     this.sell1HistoryByKn = const {},
     this.buy2HistoryByKn = const {},
@@ -1550,6 +1646,7 @@ class _KlineCompositePainter extends CustomPainter {
     this.tickDistConfig = const TickDistConfig(),
     this.mathIndicatorConfig = const MathIndicatorConfig(),
     this.mathFreezeStore,
+    this.diverFreezeStore,
     this.chipOnlyMode = false,
     this.layer = _ChartPaintLayer.base,
   }) : featureLookup = (chipOnlyMode || layer == _ChartPaintLayer.chip)
@@ -1575,9 +1672,12 @@ class _KlineCompositePainter extends CustomPainter {
                 subIndicators: subIndicators,
                 truncationCheck: truncationCheck,
                 judgmentHistoryByKn: judgmentHistoryByKn,
+                zsJudgmentHistoryByKn: zsJudgmentHistoryByKn,
+                zsConfirmHistoryByKn: zsConfirmHistoryByKn,
                 asOf: segAsOf,
                 mathIndicatorConfig: mathIndicatorConfig,
                 mathFreezeStore: mathFreezeStore,
+                diverFreezeStore: diverFreezeStore,
                 zsK0Frames: zsAsOfBundle?.zsK0Frames ?? zsK0Frames,
               );
 
@@ -1628,6 +1728,10 @@ class _KlineCompositePainter extends CustomPainter {
 
   /// 分型判断会话事件日志（步进追加；绘制扫全部历史点）
   final Map<int, List<FractalJudgmentEvent>> judgmentHistoryByKn;
+  /// 中枢判断会话历史
+  final Map<int, List<ZsSignalEvent>> zsJudgmentHistoryByKn;
+  /// 中枢确认会话历史
+  final Map<int, List<ZsSignalEvent>> zsConfirmHistoryByKn;
   /// 一类买会话事件日志（对齐分型判断）
   final Map<int, List<Buy1Frame>> buy1HistoryByKn;
   /// 一类卖会话事件日志
@@ -1654,6 +1758,8 @@ class _KlineCompositePainter extends CustomPainter {
   final MathIndicatorConfig mathIndicatorConfig;
   /// Math 会话冻结仓（有则读仓）
   final MathSeriesFreezeStore? mathFreezeStore;
+  /// 背驰会话冻结仓（有则读仓）
+  final DivergenceFreezeStore? diverFreezeStore;
   /// chip 分支：仅显示筹码分布，关闭所有缠论渲染
   final bool chipOnlyMode;
 
@@ -3992,6 +4098,48 @@ class _KlineCompositePainter extends CustomPainter {
         stackCount: truncKns.length,
       );
     }
+    // Kn中枢确认：实心；色=上个框相对前一枢抬高红/下移绿
+    final zsConfirmKns = subIndicators
+        .where((e) => e.kind == SubIndicatorKind.zsConfirm)
+        .map((e) => e.kn)
+        .toList()
+      ..sort();
+    for (var i = 0; i < zsConfirmKns.length; i++) {
+      _drawKnZsSignalSubChart(
+        canvas,
+        w,
+        innerTop,
+        innerH,
+        barW,
+        slotW,
+        zsConfirmKns[i],
+        historyByKn: zsConfirmHistoryByKn,
+        hollow: false,
+        stackRank: i,
+        stackCount: zsConfirmKns.length,
+      );
+    }
+    // Kn中枢判断：空心；色=被离开上个框之空间抬高/下移
+    final zsJudgeKns = subIndicators
+        .where((e) => e.kind == SubIndicatorKind.zsJudgment)
+        .map((e) => e.kn)
+        .toList()
+      ..sort();
+    for (var i = 0; i < zsJudgeKns.length; i++) {
+      _drawKnZsSignalSubChart(
+        canvas,
+        w,
+        innerTop,
+        innerH,
+        barW,
+        slotW,
+        zsJudgeKns[i],
+        historyByKn: zsJudgmentHistoryByKn,
+        hollow: true,
+        stackRank: i,
+        stackCount: zsJudgeKns.length,
+      );
+    }
     // BS标记全局 stack：所有类型/kns/classes 共用计数，避免文字重叠
     final class1Kns = subIndicators
         .where((e) => e.kind == SubIndicatorKind.buy1)
@@ -4126,14 +4274,22 @@ class _KlineCompositePainter extends CustomPainter {
     final zsK0 = asOf != null
         ? (zsAsOfBundle?.zsK0Frames ?? const <ZSFrame>[])
         : zsK0Frames;
-    final map = computeDivergenceForLevel(
-      displayKn: displayKn,
-      bars: bars,
-      levels: lv,
-      zsK0Frames: zsK0,
-      config: mathIndicatorConfig,
-      asOf: asOf,
-    );
+    // 优先读会话冻结仓；无仓再现场算（单测/冷启动）
+    Map<DivergenceAlgo, DivergenceAlgoK0Series> map;
+    final frozen = diverFreezeStore?.level(displayKn);
+    if (frozen != null) {
+      map = truncateDivergenceMap(frozen, bars.length, asOf: asOf);
+    } else {
+      map = computeDivergenceForLevel(
+        displayKn: displayKn,
+        bars: bars,
+        levels: lv,
+        zsK0Frames: zsK0,
+        config: mathIndicatorConfig,
+        asOf: asOf,
+        mathFreezeStore: mathFreezeStore,
+      );
+    }
     final series = map[algo];
     if (series == null) return;
     final maxX = asOf ?? bars.last.idx;
@@ -4393,9 +4549,13 @@ class _KlineCompositePainter extends CustomPainter {
     var minV = 0.0;
     var maxV = 0.0;
     var any = false;
-    for (var i = 0; i < bars.length; i++) {
+    final dif = macd.dif;
+    final dea = macd.dea;
+    final histArr = macd.macd;
+    final nMacd = math.min(bars.length, math.min(dif.length, math.min(dea.length, histArr.length)));
+    for (var i = 0; i < nMacd; i++) {
       if (bars[i].idx > maxX) continue;
-      for (final v in [macd.dif[i], macd.dea[i], macd.macd[i]]) {
+      for (final v in [dif[i], dea[i], histArr[i]]) {
         if (v == null) continue;
         if (!any) {
           minV = v;
@@ -4431,11 +4591,11 @@ class _KlineCompositePainter extends CustomPainter {
     final upBar = Paint()..color = const Color(0xCCDC2626);
     final dnBar = Paint()..color = const Color(0xCC16A34A);
     final halfW = math.max(1.0, barW * 0.35);
-    for (var i = 0; i < bars.length; i++) {
+    for (var i = 0; i < nMacd; i++) {
       final x = bars[i].idx;
       if (x > maxX) continue;
       if (x < viewport.viewXMin - 1 || x > viewport.viewXMax + 1) continue;
-      final hist = macd.macd[i];
+      final hist = histArr[i];
       if (hist == null) continue;
       final cx = _barCenterX(x, w, slotW);
       final y0 = subY(0);
@@ -4460,7 +4620,7 @@ class _KlineCompositePainter extends CustomPainter {
       ..strokeCap = StrokeCap.round;
     Offset? prevDif;
     Offset? prevDea;
-    for (var i = 0; i < bars.length; i++) {
+    for (var i = 0; i < nMacd; i++) {
       final x = bars[i].idx;
       if (x > maxX) {
         prevDif = null;
@@ -4473,17 +4633,17 @@ class _KlineCompositePainter extends CustomPainter {
         continue;
       }
       final cx = _barCenterX(x, w, slotW);
-      final dif = macd.dif[i];
-      if (dif != null) {
-        final pt = Offset(cx, subY(dif));
+      final d = dif[i];
+      if (d != null) {
+        final pt = Offset(cx, subY(d));
         if (prevDif != null) canvas.drawLine(prevDif, pt, difPaint);
         prevDif = pt;
       } else {
         prevDif = null;
       }
-      final dea = macd.dea[i];
-      if (dea != null) {
-        final pt = Offset(cx, subY(dea));
+      final e = dea[i];
+      if (e != null) {
+        final pt = Offset(cx, subY(e));
         if (prevDea != null) canvas.drawLine(prevDea, pt, deaPaint);
         prevDea = pt;
       } else {
@@ -4537,8 +4697,9 @@ class _KlineCompositePainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round;
     final maxX = asOf ?? bars.last.idx;
+    final nRsi = math.min(bars.length, rsi.length);
     Offset? prev;
-    for (var i = 0; i < bars.length; i++) {
+    for (var i = 0; i < nRsi; i++) {
       final x = bars[i].idx;
       if (x > maxX) {
         prev = null;
@@ -4606,8 +4767,9 @@ class _KlineCompositePainter extends CustomPainter {
     final series = [kdj.k, kdj.d, kdj.j];
     for (var si = 0; si < series.length; si++) {
       final s = series[si];
+      final nKdj = math.min(bars.length, s.length);
       Offset? prev;
-      for (var i = 0; i < bars.length; i++) {
+      for (var i = 0; i < nKdj; i++) {
         final x = bars[i].idx;
         if (x > maxX) {
           prev = null;
@@ -5039,7 +5201,8 @@ class _KlineCompositePainter extends CustomPainter {
       buyIdxs = const <int>{};
       sellIdxs = const <int>{};
     }
-    for (var i = 0; i < bars.length; i++) {
+    final nVol = math.min(bars.length, series.length);
+    for (var i = 0; i < nVol; i++) {
       final idx = bars[i].idx;
       // 十字线激活时，按当步截断：右侧(idx>asOf)的成交量不绘制
       if (asOf != null && idx > asOf) continue;
@@ -5052,7 +5215,8 @@ class _KlineCompositePainter extends CustomPainter {
       final bh = vol / maxV * innerH;
       if (hasStacked) {
         // Kn>0 红绿叠柱：下绿（卖出）上红（买入）
-        final buyVol = buySeries[i].clamp(0.0, vol);
+        final buyVol =
+            (i < buySeries!.length ? buySeries[i] : 0.0).clamp(0.0, vol);
         final sellVol = vol - buyVol;
         final buyH = buyVol / maxV * innerH;
         final sellH = sellVol / maxV * innerH;
@@ -5240,6 +5404,56 @@ class _KlineCompositePainter extends CustomPainter {
         withOutline: stackCount > 1,
         fillAlpha: 0.45,
         hollow: true,
+      );
+    }
+  }
+
+  /// Kn中枢判断/确认副图（与分型同标记；确认实心、判断空心；升红降绿同色）。
+  void _drawKnZsSignalSubChart(
+    Canvas canvas,
+    double w,
+    double innerTop,
+    double innerH,
+    double barW,
+    double slotW,
+    int kn, {
+    required Map<int, List<ZsSignalEvent>> historyByKn,
+    required bool hollow,
+    int stackRank = 0,
+    int stackCount = 1,
+  }) {
+    if (bars.isEmpty) return;
+    const minV = -1.0;
+    const maxV = 1.0;
+    final span = maxV - minV;
+    double subY(double v) => innerTop + (maxV - v) / span * innerH;
+    final y0 = subY(0);
+    final shape = confirmMarkerShapeForKn(kn);
+    final dx = confirmStackOffsetX(
+      rank: stackRank,
+      count: stackCount,
+      barW: barW,
+    );
+    final history = historyByKn[kn] ?? const <ZsSignalEvent>[];
+    final maxX = segAsOf ?? bars.last.idx;
+    for (final e in history) {
+      if (e.x < 0 || e.x > maxX) continue;
+      if (e.value == 0) continue;
+      if (e.x < viewport.viewXMin - 1 || e.x > viewport.viewXMax + 1) continue;
+      final cx = _barCenterX(e.x, w, slotW) + dx;
+      final yp = subY(e.value.toDouble());
+      paintFractalConfirmMarker(
+        canvas,
+        cx: cx,
+        y0: y0,
+        yp: yp,
+        value: e.value,
+        shape: shape,
+        barW: barW,
+        withOutline: stackCount > 1,
+        fillAlpha: hollow ? 0.45 : 1.0,
+        hollow: hollow,
+        colorOverride: ZsSignalColors.of(e.value),
       );
     }
   }
@@ -5641,6 +5855,8 @@ class _KlineCompositePainter extends CustomPainter {
         oldDelegate.subChipBarHeight != subChipBarHeight ||
         oldDelegate.defaultK0Policy != defaultK0Policy ||
         oldDelegate.judgmentHistoryByKn != judgmentHistoryByKn ||
+        oldDelegate.zsJudgmentHistoryByKn != zsJudgmentHistoryByKn ||
+        oldDelegate.zsConfirmHistoryByKn != zsConfirmHistoryByKn ||
         oldDelegate.buy1HistoryByKn != buy1HistoryByKn ||
         oldDelegate.sell1HistoryByKn != sell1HistoryByKn ||
         oldDelegate.buy2HistoryByKn != buy2HistoryByKn ||

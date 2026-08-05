@@ -15,9 +15,11 @@ import 'compute/class1_bs_compute.dart';
 import 'compute/class2_bs_compute.dart';
 import 'compute/class_n_bs_compute.dart';
 import 'compute/fractal_judgment_compute.dart';
+import 'compute/zs_signal_compute.dart';
 import 'compute/k1_bar_view_compute.dart';
 import 'compute/step_rhythm_compute.dart';
 import 'compute/math_series_freeze_store.dart';
+import 'compute/divergence_freeze_store.dart';
 import 'history/app_debug_snapshot.dart';
 import 'history/msg_history.dart';
 import 'models/zs_frame.dart';
@@ -65,6 +67,8 @@ Future<void> main() async {
   MsgHistory.instance.appendKeyboardNav();
   // 展示轨动态分型判断副图（全层同构）
   MsgHistory.instance.appendDisplayTrackFractalJudgment();
+  // Kn中枢判断/确定副图（对齐分型判断/确认；会话冻结）
+  MsgHistory.instance.appendKnZsJudgeConfirm();
   // 副图十字 as-of：确认/极点距/截断与成交量/判断同构
   MsgHistory.instance.appendSubChartCrosshairAsOf();
   // 主图中枢十字 as-of（消费 Rust zs_* JSON）
@@ -238,11 +242,16 @@ class _KlineHomePageState extends State<KlineHomePage> {
   MathIndicatorConfig _mathIndicatorConfig = const MathIndicatorConfig();
   /// Math/均线/通道/Demark 会话冻结（Kn≥1 禁整表回写）
   final MathSeriesFreezeStore _mathFreezeStore = MathSeriesFreezeStore();
+  final DivergenceFreezeStore _diverFreezeStore = DivergenceFreezeStore();
   /// chip 分支：仅显示筹码分布，关闭所有缠论渲染（关=正常缠论+筹码可并存）
   final bool _chipOnlyMode = false;
 
   /// 分型判断步进事件日志：kn → 追加式历史（换股/重载才清空；不因重算丢点）
   Map<int, List<FractalJudgmentEvent>> _judgmentHistoryByKn = {};
+
+  /// 中枢判断/确定会话历史（与中枢同号；换股/重载清空）。
+  Map<int, List<ZsSignalEvent>> _zsJudgmentHistoryByKn = {};
+  Map<int, List<ZsSignalEvent>> _zsConfirmHistoryByKn = {};
 
   /// 一类BS 会话历史：对齐分型判断（K0 步进颗粒度 + 动态 Kn）；换股/重载清空。
   /// 踩坑：禁止只用「层|段|标签」去重——同动态 active 延伸时下一步会无新 x。
@@ -342,14 +351,15 @@ class _KlineHomePageState extends State<KlineHomePage> {
   Future<void> _updateMathIndicatorConfig(MathIndicatorConfig cfg) async {
     setState(() => _mathIndicatorConfig = cfg);
     await MathIndicatorSettingsStore.save(cfg);
-    // 参数变了：清空冻结仓，再从 0 步进重冻到当前（避免旧参数残值）
+    // 参数变了：清空 Math/背驰冻结仓，再从 0 步进重冻到当前（避免旧参数残值）
     _mathFreezeStore.clear();
+    _diverFreezeStore.clear();
     if (_hasSession && !_chipOnlyMode && _stepIdx >= 0) {
       _refreezeMathFromStart();
     }
   }
 
-  /// 参数变更后：0..当前步逐K重冻 Math 序列。
+  /// 参数变更后：0..当前步逐K重冻 Math + 背驰序列。
   void _refreezeMathFromStart() {
     final end = _stepIdx;
     if (end < 0 || _allBars.isEmpty) return;
@@ -361,6 +371,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
           truncationCheck: _truncationCheck,
         );
         _mergeMathFreeze(bundle, bars: visible, asOf: i);
+        _mergeDivergenceFreeze(bundle, bars: visible, asOf: i);
       } catch (_) {
         break;
       }
@@ -532,6 +543,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _stepIdx = bars.isEmpty ? -1 : 0;
         _defaultK0Purged = false;
         _judgmentHistoryByKn.clear();
+        _zsJudgmentHistoryByKn.clear();
+        _zsConfirmHistoryByKn.clear();
         _buy1HistoryByKn.clear();
         _sell1HistoryByKn.clear();
         _buy2HistoryByKn.clear();
@@ -546,6 +559,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         }
         _stepRhythmStateByKn.clear();
         _mathFreezeStore.clear();
+        _diverFreezeStore.clear();
       });
       final directOhlc = code == 'test' && _hasTestOhlcCsv();
       _msgHistory.append(
@@ -611,6 +625,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _sellNK0Frames = [];
         _stepIdx = -1;
         _judgmentHistoryByKn.clear();
+        _zsJudgmentHistoryByKn.clear();
+        _zsConfirmHistoryByKn.clear();
         _buy1HistoryByKn.clear();
         _sell1HistoryByKn.clear();
         _buy2HistoryByKn.clear();
@@ -625,6 +641,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         }
         _stepRhythmStateByKn.clear();
         _mathFreezeStore.clear();
+        _diverFreezeStore.clear();
       });
       _msgHistory.append('加载K0失败：$e');
     } finally {
@@ -660,6 +677,37 @@ class _KlineHomePageState extends State<KlineHomePage> {
       );
     }
     _judgmentHistoryByKn = nextHistory;
+  }
+
+  /// 本步中枢帧 → 判断/确定会话历史（对齐分型：当步打点、不回写）。
+  void _mergeZsSignalHistory(KlineCombineBundle bundle) {
+    final discoveryX = _stepIdx < 0 ? 0 : _stepIdx;
+    final nextJudge = <int, List<ZsSignalEvent>>{
+      for (final e in _zsJudgmentHistoryByKn.entries)
+        e.key: List<ZsSignalEvent>.from(e.value),
+    };
+    final nextConfirm = <int, List<ZsSignalEvent>>{
+      for (final e in _zsConfirmHistoryByKn.entries)
+        e.key: List<ZsSignalEvent>.from(e.value),
+    };
+    for (final e in collectZsFramesByKn(bundle).entries) {
+      final jLog = nextJudge.putIfAbsent(e.key, () => <ZsSignalEvent>[]);
+      mergeZsJudgmentEventLog(
+        jLog,
+        e.value,
+        kn: e.key,
+        discoveryX: discoveryX,
+      );
+      final cLog = nextConfirm.putIfAbsent(e.key, () => <ZsSignalEvent>[]);
+      mergeZsConfirmEventLog(
+        cLog,
+        e.value,
+        kn: e.key,
+        discoveryX: discoveryX,
+      );
+    }
+    _zsJudgmentHistoryByKn = nextJudge;
+    _zsConfirmHistoryByKn = nextConfirm;
   }
 
   /// Kn≥1：本步动态 active 段 idx；K0 无 active（分钟K段不延伸）。
@@ -832,6 +880,28 @@ class _KlineHomePageState extends State<KlineHomePage> {
     );
   }
 
+  /// 本步背驰并入会话冻结（本层力度；旧格不改、新 x 追加）。
+  void _mergeDivergenceFreeze(
+    KlineCombineBundle bundle, {
+    List<KlineBar>? bars,
+    int? asOf,
+  }) {
+    final visible = bars ?? _visibleBars;
+    if (visible.isEmpty) return;
+    final displayX = asOf ?? (_stepIdx < 0 ? 0 : _stepIdx);
+    final maxKn = chartMaxKn(levels: bundle.levels, k0Lines: bundle.k0Lines);
+    mergeDivergenceForStep(
+      store: _diverFreezeStore,
+      mathStore: _mathFreezeStore,
+      bars: visible,
+      levels: bundle.levels,
+      zsK0Frames: bundle.zsK0Frames,
+      config: _mathIndicatorConfig,
+      maxDisplayKn: maxKn,
+      asOf: displayX,
+    );
+  }
+
   List<LevelBundle> _levelsWithFrozenBs(List<LevelBundle> levels) {
     final with1 = levelsWithFrozenClass1Bs(
       levels,
@@ -870,6 +940,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _buyNK0Frames = [];
         _sellNK0Frames = [];
         _judgmentHistoryByKn.clear();
+        _zsJudgmentHistoryByKn.clear();
+        _zsConfirmHistoryByKn.clear();
         _buy1HistoryByKn.clear();
         _sell1HistoryByKn.clear();
         _buy2HistoryByKn.clear();
@@ -884,6 +956,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         }
         _stepRhythmStateByKn.clear();
         _mathFreezeStore.clear();
+        _diverFreezeStore.clear();
       });
       return;
     }
@@ -913,8 +986,10 @@ class _KlineHomePageState extends State<KlineHomePage> {
       );
       // 会话冻结：并入本步一类BS，禁止下一步整表覆盖消掉上步显示
       _mergeBsHistory(bundle);
+      _mergeZsSignalHistory(bundle);
       _mergeRatioAndRhythm(bundle);
       _mergeMathFreeze(bundle);
+      _mergeDivergenceFreeze(bundle);
       final frozenLevels = _levelsWithFrozenBs(bundle.levels);
       setState(() {
         _combineFrames = bundle.frames;
@@ -1121,8 +1196,10 @@ class _KlineHomePageState extends State<KlineHomePage> {
         );
         // 一类/二类BS 也逐K并入会话冻结，避免一次性走完只剩末态
         _mergeBsHistory(bundle);
+        _mergeZsSignalHistory(bundle);
         _mergeRatioAndRhythm(bundle);
         _mergeMathFreeze(bundle, bars: visible, asOf: i);
+        _mergeDivergenceFreeze(bundle, bars: visible, asOf: i);
       } catch (e) {
         _msgHistory.append('一次性走完@step=$i 失败：$e');
         break;
@@ -1176,7 +1253,10 @@ class _KlineHomePageState extends State<KlineHomePage> {
                   tickDistConfig: _tickDistConfig,
                   mathIndicatorConfig: _mathIndicatorConfig,
                   mathFreezeStore: _mathFreezeStore,
+                  diverFreezeStore: _diverFreezeStore,
                   judgmentHistoryByKn: _judgmentHistoryByKn,
+                  zsJudgmentHistoryByKn: _zsJudgmentHistoryByKn,
+                  zsConfirmHistoryByKn: _zsConfirmHistoryByKn,
                   buy1HistoryByKn: _buy1HistoryByKn,
                   sell1HistoryByKn: _sell1HistoryByKn,
                   buy2HistoryByKn: _buy2HistoryByKn,
