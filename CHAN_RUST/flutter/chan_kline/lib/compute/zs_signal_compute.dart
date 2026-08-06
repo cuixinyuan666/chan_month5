@@ -5,12 +5,26 @@ import '../models/zs_signal_event.dart';
 export '../models/zs_signal_event.dart';
 
 // =============================================================================
-// Kn中枢确认 / Kn中枢判断（副图·全层同构）
+// Kn中枢确认 / Kn中枢判断（副图·全层无差别同构）
 //
-// 语义：都是对「上个中枢」的确认或判断（对齐分型确认/判断的稀疏打点）。
-// 色/值：相对前一中枢中轴——抬高=升红(+1)，下移=降绿(-1)。
-// 踩坑：禁止用框 first.dir 上色（常与位置升降相反，如 85 确认 dir=-1 却抬高=红）。
-// 冻结：写入会话后不回写；十字 asOf 只滤 x>asOf。
+// 【口径】对象=尚未确认的中枢，不是新芽/新中枢（与分型判断/确认同一精神）。
+// K0 无动态 Kn：离开常与定型同拍 → 判断与确认同 x、同 x1 → 副图标记重叠（预期）。
+// Kn≥1 动态离开可多步打判断；定型当步仍与确认共点。规则无层特例。
+//
+// 判断：
+// - ≥2 不确定（离开窗/动态离开）：对尚未确认的上个框（倒数第二）可逐K打点。
+// - 本步刚确认的框：同拍再打一点判断（身份=刚定型的原先未确认框）→ 与确认重叠。
+// - 禁止单开放给新种子/唯一新芽打「首次可判」。
+// 确认：is_sure 首次当步。
+// 色/值：相对前一中枢中轴抬高红、下移绿；禁 first.dir。
+// 冻结：写入后不回写；十字 asOf 只滤 x>asOf。
+//
+// 【经验/踩坑·2026-08-06】
+// 1) 勿用 first.dir 配色——常与空间升降相反。
+// 2) 勿给同拍新芽打判断（idx=7：确认 x1=6 / 误判 x1=7）——对象永远是未确认上个。
+// 3) 勿把「对齐分型首次可判」套到中枢新芽：会破坏 K0「判断=确认重叠」预期。
+// 4) 「只离开窗、确认当步不共点」→ K0 判断易全 0；须确认同拍对刚定型框补判断。
+// 5) 先 merge 确认再判断，把 confirmedX1ThisStep 传入判断。
 // =============================================================================
 
 /// 符号：升 +1 / 降 -1。
@@ -45,11 +59,11 @@ ZSFrame? zsFrameBefore(List<ZSFrame> all, ZSFrame target) {
 /// 稳定身份：层|中枢左端（seq 合并会变号，勿用）。
 String zsSignalStableKey(int kn, int x1) => '$kn|$x1';
 
-/// 颗粒度键：含 x（离开窗内可多点；单开放只首次）。
+/// 颗粒度键：含 x（离开窗内可多点；确认同拍与确认共点）。
 String zsSignalEventKey(ZsSignalEvent e) =>
     '${zsSignalStableKey(e.kn, e.x1)}|${e.x}';
 
-/// 打点身份用 [anchor]；值/色用 [refDir]（上个中枢空间趋势）。
+/// 打点身份用 [anchor]；值/色用 [refDir]（空间趋势）。
 ZsSignalEvent _eventFromFrame({
   required ZSFrame anchor,
   required int refDir,
@@ -66,50 +80,18 @@ ZsSignalEvent _eventFromFrame({
   );
 }
 
-/// 中枢判断：对齐分型判断的稀疏呈现。
-/// - 仅 1 个不确定框：稳定键首次出现打一点；已见过不再刷。
-/// - ≥2 个不确定：末个=离开候选可逐K追加；色/值跟被离开的上个框之空间趋势。
-/// - 禁止对「单独开放枢」逐步刷点。
-void mergeZsJudgmentEventLog(
+void _tryAppendJudgment(
   List<ZsSignalEvent> history,
-  List<ZSFrame> fresh, {
+  Set<String> seen, {
+  required ZSFrame anchor,
+  required List<ZSFrame> fresh,
   required int kn,
   required int discoveryX,
 }) {
-  final unsure = [for (final f in fresh) if (!f.isSure) f];
-  if (unsure.isEmpty) return;
-  final seen = <String>{for (final e in history) zsSignalEventKey(e)};
-  final seenStable = <String>{
-    for (final e in history) zsSignalStableKey(e.kn, e.x1),
-  };
-
-  if (unsure.length >= 2) {
-    // 离开窗：身份=新候选；色=被离开上个框相对再前一框的抬高/下移
-    final old = unsure[unsure.length - 2];
-    final f = unsure.last;
-    if (f.x1 < 0) return;
-    final refDir = zsSpatialTrendDir(old, zsFrameBefore(fresh, old));
-    final ev = _eventFromFrame(
-      anchor: f,
-      refDir: refDir,
-      kn: kn,
-      discoveryX: discoveryX,
-    );
-    if (seen.add(zsSignalEventKey(ev))) {
-      history.add(ev);
-      seenStable.add(zsSignalStableKey(kn, f.x1));
-    }
-    return;
-  }
-
-  // 单开放：色=该框相对上一枢的空间趋势
-  final f = unsure.first;
-  if (f.x1 < 0) return;
-  final stable = zsSignalStableKey(kn, f.x1);
-  if (seenStable.contains(stable)) return;
-  final refDir = zsSpatialTrendDir(f, zsFrameBefore(fresh, f));
+  if (anchor.x1 < 0) return;
+  final refDir = zsSpatialTrendDir(anchor, zsFrameBefore(fresh, anchor));
   final ev = _eventFromFrame(
-    anchor: f,
+    anchor: anchor,
     refDir: refDir,
     kn: kn,
     discoveryX: discoveryX,
@@ -119,14 +101,62 @@ void mergeZsJudgmentEventLog(
   }
 }
 
-/// 中枢确认：is_sure 首次当步打点；色/值=刚定型上个框相对前一枢的空间趋势。
-void mergeZsConfirmEventLog(
+/// 中枢判断（全层同构）：
+/// - 离开窗：对尚未确认的上个框打点。
+/// - [confirmedX1ThisStep]：对刚确认的框同拍打判断 → 与确认重叠。
+/// - 不打新芽/单开放首次。
+void mergeZsJudgmentEventLog(
+  List<ZsSignalEvent> history,
+  List<ZSFrame> fresh, {
+  required int kn,
+  required int discoveryX,
+  Set<int> confirmedX1ThisStep = const {},
+}) {
+  final seen = <String>{for (final e in history) zsSignalEventKey(e)};
+  final unsure = [for (final f in fresh) if (!f.isSure) f];
+
+  // 离开窗 / 动态离开：对尚未确认的上个框（倒数第二）
+  if (unsure.length >= 2) {
+    _tryAppendJudgment(
+      history,
+      seen,
+      anchor: unsure[unsure.length - 2],
+      fresh: fresh,
+      kn: kn,
+      discoveryX: discoveryX,
+    );
+  }
+
+  // 确认同拍：判断身份=刚定型的原先未确认框（与确认同 x/x1 → 重叠）
+  for (final x1 in confirmedX1ThisStep) {
+    ZSFrame? anchor;
+    for (final f in fresh) {
+      if (f.isSure && f.x1 == x1) {
+        anchor = f;
+        break;
+      }
+    }
+    if (anchor == null) continue;
+    _tryAppendJudgment(
+      history,
+      seen,
+      anchor: anchor,
+      fresh: fresh,
+      kn: kn,
+      discoveryX: discoveryX,
+    );
+  }
+}
+
+/// 中枢确认：is_sure 首次当步打点；返回本步新确认的 x1 集合。
+Set<int> mergeZsConfirmEventLog(
   List<ZsSignalEvent> history,
   List<ZSFrame> fresh, {
   required int kn,
   required int discoveryX,
 }) {
-  if (fresh.isEmpty) return;
+  final addedX1 = <int>{};
+  if (fresh.isEmpty) return addedX1;
   final seen = <String>{for (final e in history) zsSignalEventKey(e)};
   final seenStable = <String>{
     for (final e in history) zsSignalStableKey(e.kn, e.x1),
@@ -145,8 +175,10 @@ void mergeZsConfirmEventLog(
     if (seen.add(zsSignalEventKey(ev))) {
       history.add(ev);
       seenStable.add(stable);
+      addedX1.add(f.x1);
     }
   }
+  return addedX1;
 }
 
 /// 本步各层中枢帧（K0 + levels）。

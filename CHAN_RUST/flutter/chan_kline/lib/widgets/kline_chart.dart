@@ -4119,7 +4119,7 @@ class _KlineCompositePainter extends CustomPainter {
         stackCount: zsConfirmKns.length,
       );
     }
-    // Kn中枢判断：空心；色=被离开上个框之空间抬高/下移
+    // Kn中枢判断：空心；离开窗上个 + 确认同拍共点（对象=未确认框，非新芽）
     final zsJudgeKns = subIndicators
         .where((e) => e.kind == SubIndicatorKind.zsJudgment)
         .map((e) => e.kn)

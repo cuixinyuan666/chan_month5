@@ -63,8 +63,9 @@ void main() {
     expect(zsSpatialTrendDir(low, null), 1);
   });
 
-  test('中枢判断：单开放只首次；离开窗逐步追加；合回归零', () {
+  test('中枢判断：单开放不打新芽；离开窗对上个框逐K；合回归零', () {
     final hist = <ZsSignalEvent>[];
+    // 单开放（唯一未确认框）→ 不打（不是新芽首次可判）
     mergeZsJudgmentEventLog(
       hist,
       const [
@@ -82,9 +83,9 @@ void main() {
       kn: 0,
       discoveryX: 0,
     );
-    expect(hist.length, 1);
-    expect(hist.first.value, 1);
+    expect(hist, isEmpty);
 
+    // 仍单开放 → 仍不打
     mergeZsJudgmentEventLog(
       hist,
       const [
@@ -102,9 +103,9 @@ void main() {
       kn: 0,
       discoveryX: 1,
     );
-    expect(hist.length, 1);
+    expect(hist, isEmpty);
 
-    // 离开窗：身份=新候选；色=上个框相对再前一框（此处上个无前框，回退 dir）
+    // 离开窗：对上个未确认框 x1=0 打点（非新候选）
     mergeZsJudgmentEventLog(
       hist,
       const [
@@ -132,10 +133,10 @@ void main() {
       kn: 0,
       discoveryX: 2,
     );
-    expect(hist.where((e) => e.x1 == 3).length, 1);
-    expect(hist.last.value, 1);
-    expect(hist.last.x, 2);
+    expect(hist.where((e) => e.x1 == 0 && e.x == 2).length, 1);
+    expect(hist.where((e) => e.x1 == 3).length, 0);
 
+    // 动态离开续步：上个框再追加
     mergeZsJudgmentEventLog(
       hist,
       const [
@@ -163,8 +164,9 @@ void main() {
       kn: 0,
       discoveryX: 3,
     );
-    expect(hist.where((e) => e.x1 == 3).length, 2);
+    expect(hist.where((e) => e.x1 == 0).length, 2); // x=2,3
 
+    // 合回单开放 → 不追加
     mergeZsJudgmentEventLog(
       hist,
       const [
@@ -183,12 +185,69 @@ void main() {
       discoveryX: 4,
     );
     expect(hist.where((e) => e.x == 4).length, 0);
-    expect(hist.length, 3);
+    expect(hist.length, 2);
   });
 
-  test('离开窗/确认：色跟空间抬高下移，不跟 first.dir', () {
+  test('确认同拍：判断与确认同 x/x1 重叠；不打新芽', () {
+    // 复现 K0 idx=7：sure(x1=6) + 新芽(x1=7) → 判断/确认都打 x1=6
+    final confirm = <ZsSignalEvent>[];
+    final frames = const [
+      ZSFrame(
+        x1: 6,
+        x2: 6,
+        high: 12,
+        low: 11,
+        level: 0,
+        dir: 1,
+        isSure: true,
+        seq: 0,
+      ),
+      ZSFrame(
+        x1: 7,
+        x2: 7,
+        high: 11,
+        low: 10,
+        level: 0,
+        dir: -1,
+        isSure: false,
+        seq: 1,
+      ),
+    ];
+    final added = mergeZsConfirmEventLog(
+      confirm,
+      frames,
+      kn: 0,
+      discoveryX: 7,
+    );
+    expect(added, {6});
+    expect(confirm.single.x1, 6);
+    expect(confirm.single.x, 7);
+
     final judge = <ZsSignalEvent>[];
-    // 前枢低位 + 上个抬高(dir=-1) + 新候选 → 判断红
+    mergeZsJudgmentEventLog(
+      judge,
+      frames,
+      kn: 0,
+      discoveryX: 7,
+      confirmedX1ThisStep: added,
+    );
+    expect(judge.single.x1, 6);
+    expect(judge.single.x, 7);
+    expect(judge.single.value, confirm.single.value); // 同框同色 → 副图重叠
+
+    // 下一步仍单开放、无新确认 → 仍不打新芽
+    mergeZsJudgmentEventLog(
+      judge,
+      frames,
+      kn: 0,
+      discoveryX: 8,
+    );
+    expect(judge.length, 1);
+  });
+
+  test('离开窗对上个框空间色；确认后不打新种子', () {
+    final judge = <ZsSignalEvent>[];
+    // 离开窗：上个抬高 → 红，身份 x1=3
     mergeZsJudgmentEventLog(
       judge,
       const [
@@ -227,9 +286,49 @@ void main() {
       discoveryX: 77,
     );
     expect(judge.single.value, 1);
-    expect(judge.single.x1, 6);
+    expect(judge.single.x1, 3);
 
-    // 确认抬高枢：dir=-1 仍红（对齐 85）；先冻结前枢再确认抬高枢
+    // 确认后仅新种子：不打（对象不是新芽）
+    mergeZsJudgmentEventLog(
+      judge,
+      const [
+        ZSFrame(
+          x1: 0,
+          x2: 2,
+          high: 10,
+          low: 9,
+          level: 1,
+          dir: 1,
+          isSure: true,
+          seq: 0,
+        ),
+        ZSFrame(
+          x1: 3,
+          x2: 5,
+          high: 12,
+          low: 11,
+          level: 1,
+          dir: -1,
+          isSure: true,
+          seq: 1,
+        ),
+        ZSFrame(
+          x1: 6,
+          x2: 6,
+          high: 11,
+          low: 10,
+          level: 1,
+          dir: 1,
+          isSure: false,
+          seq: 2,
+        ),
+      ],
+      kn: 1,
+      discoveryX: 85,
+    );
+    expect(judge.length, 1);
+
+    // 确认抬高枢仍红
     final confirm = <ZsSignalEvent>[];
     mergeZsConfirmEventLog(
       confirm,
@@ -275,11 +374,10 @@ void main() {
       kn: 1,
       discoveryX: 85,
     );
-    expect(confirm.length, 2);
     expect(confirm.last.x1, 3);
     expect(confirm.last.value, 1);
 
-    // 离开下移枢：dir=1 仍绿（对齐 90）
+    // 离开下移：上个绿
     judge.clear();
     mergeZsJudgmentEventLog(
       judge,
@@ -319,6 +417,7 @@ void main() {
       discoveryX: 90,
     );
     expect(judge.single.value, -1);
+    expect(judge.single.x1, 3);
   });
 
   test('中枢确认：首次 is_sure 打点后冻结', () {

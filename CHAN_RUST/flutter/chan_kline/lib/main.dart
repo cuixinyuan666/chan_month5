@@ -67,8 +67,9 @@ Future<void> main() async {
   MsgHistory.instance.appendKeyboardNav();
   // 展示轨动态分型判断副图（全层同构）
   MsgHistory.instance.appendDisplayTrackFractalJudgment();
-  // Kn中枢判断/确定副图（对齐分型判断/确认；会话冻结）
+  // Kn中枢判断/确认；对象=未确认结构（非新芽）
   MsgHistory.instance.appendKnZsJudgeConfirm();
+  MsgHistory.instance.appendFxZsJudgeConfirmTarget();
   // 副图十字 as-of：确认/极点距/截断与成交量/判断同构
   MsgHistory.instance.appendSubChartCrosshairAsOf();
   // 主图中枢十字 as-of（消费 Rust zs_* JSON）
@@ -679,7 +680,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
     _judgmentHistoryByKn = nextHistory;
   }
 
-  /// 本步中枢帧 → 判断/确定会话历史（对齐分型：当步打点、不回写）。
+  /// 本步中枢帧 → 判断/确认会话历史（先确认后判断；确认同拍共点）。
   void _mergeZsSignalHistory(KlineCombineBundle bundle) {
     final discoveryX = _stepIdx < 0 ? 0 : _stepIdx;
     final nextJudge = <int, List<ZsSignalEvent>>{
@@ -691,19 +692,21 @@ class _KlineHomePageState extends State<KlineHomePage> {
         e.key: List<ZsSignalEvent>.from(e.value),
     };
     for (final e in collectZsFramesByKn(bundle).entries) {
+      final cLog = nextConfirm.putIfAbsent(e.key, () => <ZsSignalEvent>[]);
+      final confirmed = mergeZsConfirmEventLog(
+        cLog,
+        e.value,
+        kn: e.key,
+        discoveryX: discoveryX,
+      );
       final jLog = nextJudge.putIfAbsent(e.key, () => <ZsSignalEvent>[]);
       mergeZsJudgmentEventLog(
         jLog,
         e.value,
         kn: e.key,
         discoveryX: discoveryX,
-      );
-      final cLog = nextConfirm.putIfAbsent(e.key, () => <ZsSignalEvent>[]);
-      mergeZsConfirmEventLog(
-        cLog,
-        e.value,
-        kn: e.key,
-        discoveryX: discoveryX,
+        // 刚确认的未确认框 → 同拍打判断，与确认重叠（K0 无动态Kn 时常处处重叠）
+        confirmedX1ThisStep: confirmed,
       );
     }
     _zsJudgmentHistoryByKn = nextJudge;

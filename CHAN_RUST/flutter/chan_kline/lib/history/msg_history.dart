@@ -166,6 +166,7 @@ class MsgHistory {
   void appendDisplayTrackFractalJudgment() {
     append(
       '【口径纠正】K(n-1)分型判断：确认式打点（成立当步，禁止整框回填）；'
+      '对象=尚未确认的分型（非新芽/新分型）；与 Kn分型确认、Kn中枢判断/确认同一精神。'
       '步进/播放/一次性走完均逐 K 追加事件日志（x+fx 去重），绘制扫全部历史点，'
       '禁止只保留末态重算结果；换股/重载才清空。'
       '十字线 as-of 仅过滤 x>asOf；展示轨仍走 computeK0/K1CombineFrames'
@@ -173,20 +174,34 @@ class MsgHistory {
     );
   }
 
-  /// Kn中枢判断/确认副图（对齐分型判断/确认；进程内去重）。
-  static bool _knZsJudgeConfirmLoggedV6 = false;
+  /// Kn中枢判断/确认副图（全层无差别同构；进程内去重）。
+  static bool _knZsJudgeConfirmLoggedV11 = false;
   void appendKnZsJudgeConfirm() {
-    if (_knZsJudgeConfirmLoggedV6) return;
-    _knZsJudgeConfirmLoggedV6 = true;
+    if (_knZsJudgeConfirmLoggedV11) return;
+    _knZsJudgeConfirmLoggedV11 = true;
     append(
-      '【Kn中枢判断/确认·副图·v6·空间升降色】'
-      '类别「中枢确认」「中枢判断」：与中枢同号；对「上个中枢」确认/判断。'
-      '色/值：相对前一中枢中轴抬高→升红(+1)，下移→降绿(-1)；无前枢回退 first.dir。'
-      '禁止用框自身 first.dir 上色（常与位置升降相反：如 x1=51 dir=-1 却抬高=红）。'
-      '判断离开窗：身份=新候选，色=被离开上个框之空间趋势；单开放跟该框相对上一枢。'
-      '确认：刚定型框相对前一枢之空间趋势。'
-      '例：77/84 判断红、85 确认红、90 判断绿、91 确认绿。'
-      '稀疏：单开放只首次；≥2 不确定逐步追加末候选；重叠合回归零；无未来不回写。',
+      '【Kn中枢判断/确认·副图·v11·未确认共点】'
+      '【口径】对象=尚未确认的中枢，不是新芽/新中枢；与分型判断/确认同一精神。'
+      '全层同一 merge，无 K0 特例。'
+      'K0 无动态 Kn：离开常与定型同拍 → 判断与确认同 x/x1 → 副图标记重叠（预期）。'
+      '判断：①离开窗对尚未确认上个框可逐K；②本步刚确认的框同拍打判断（与确认重叠）；'
+      '③禁止单开放给新芽首次可判。'
+      '确认：is_sure 首次。色：空间抬高红下移绿。不回写；十字 asOf 截断。'
+      '【经验】勿 first.dir 配色；勿同拍打新芽（idx=7 异框）；'
+      '勿套分型新芽首次可判；确认同拍须补判断（否则 K0 判断易全0）。',
+    );
+  }
+
+  /// 分型/中枢判断·确认对象口径（与 AGENTS 常驻条同步；进程内去重）。
+  static bool _fxZsTargetUnconfirmedLogged = false;
+  void appendFxZsJudgeConfirmTarget() {
+    if (_fxZsTargetUnconfirmedLogged) return;
+    _fxZsTargetUnconfirmedLogged = true;
+    append(
+      '【口径纠正·分型/中枢判断确认对象】'
+      'Kn分型判断、Kn分型确认、Kn中枢判断、Kn中枢确认：'
+      '对象=尚未确认的分型/中枢；禁止当成对新芽/新分型/新中枢的判断或确认。'
+      'K0 中枢判断与确认副图标记应重叠（无动态Kn、确认同拍共点）。',
     );
   }
 
