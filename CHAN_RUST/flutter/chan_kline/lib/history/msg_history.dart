@@ -540,21 +540,27 @@ class MsgHistory {
   }
 
   /// MACD/BOLL/RSI/KDJ/Demark（进程内去重）
-  static bool _knMathClassicLogged = false;
+  static bool _knMathClassicLoggedV5 = false;
   void appendKnMathClassicIndicators() {
-    if (_knMathClassicLogged) return;
-    _knMathClassicLogged = true;
+    if (_knMathClassicLoggedV5) return;
+    _knMathClassicLoggedV5 = true;
     append(
-      '【Kn MACD/BOLL/RSI/KDJ/Demark·全层同构·v3·Demark副图】'
-      '主图：K{n}布林(MID/UP/DOWN)。'
-      '副图：K{n}MACD(DIF/DEA线+柱)、K{n}RSI、K{n}KDJ、K{n}Demark(setup/countdown 小字)。'
+      '【Kn MACD/BOLL/RSI/KDJ/Demark·全层同构·v5·Demark主图+设置三项】'
+      '主图：K{n}布林(MID/UP/DOWN)；K{n}Demark（锚K0低点向上垂直排：S1…S9/C1…C13/完成买|完成卖）。'
+      '副图：K{n}MACD(DIF/DEA线+柱)、K{n}RSI、K{n}KDJ（Demark已迁主图）。'
+      'Demark完成信号：Setup满9 与 Countdown满13 都算完整信号（各打「完成买/卖」）。'
+      '设置（数学指标参数·Demark下拉）：'
+      '①Countdown比较 宽松closevsclose[i-2]（默认）/原版严closevs低高[i-2]；'
+      '②完美9 默认关（开则未Perfected不启Countdown、不打Setup完成）；'
+      '③反向Setup打断Countdown 严=打断（默认）/宽松=不打断仅TDST或数满13。'
+      '分色：买红/橙、卖绿/青；完成信号更深加粗。'
       '输入：collectKnOhlcSamples(displayKn, unitBars+activeUnit)；K0 颗粒度 expandPointsToK0；asOf 截断。'
       '当下性：会话 MathSeriesFreezeStore 格点首次非空写入后冻结（含 Demark 标记内容），'
       '禁 Kn≥1 因 activeUnit/EMA 整表回写；主图/副图/十字读仓；参数变更清空并 0..当前步重冻。'
       '十字 asOf：均线/通道/布林/_paintPriceSeries 与副图 Math 一律 x>asOf 右侧不画（与蜡烛同构）。'
-      'Kn绑定：MACD/RSI/KDJ/Demark/背驰12算法 进副图「Kn指标」层全选；启动默认仍不勾背驰。'
+      'Kn绑定：Demark进主图「Kn指标」层全选（默认静音）；MACD/RSI/KDJ/背驰进副图「Kn指标」；启动默认仍不勾背驰。'
       '参数：设置面板「数学指标参数」统一落盘 .chan_trend_model_config.json（兼容旧均线/通道字段）。'
-      'tooltip/副图读数：macd_dif/dea/hist、boll_mid/up/down、rsi、kdj_k/d/j、demark_text。'
+      'tooltip：macd_dif/dea/hist、boll_mid/up/down、rsi、kdj_k/d/j、demark_text（含完成买/卖）。'
       '默认：进 catalog +「Kn指标」层全选；纯 Flutter，不改 Rust。',
     );
   }

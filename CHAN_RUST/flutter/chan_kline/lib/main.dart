@@ -2040,11 +2040,12 @@ class _KlineHomePageState extends State<KlineHomePage> {
             '作用：移植旧工程 Math——均线/通道/MACD/BOLL/RSI/KDJ/Demark/背驰。\n'
             '口径（全层同构）\n'
             '· K0：原生 K 线 OHLC；Kn≥1：unitBars+active；\n'
-            '· 背驰：进出段力度比 + diver∈{1,-1,0}；12 算法分项；\n'
+            '· Demark：主图标注；Countdown 宽松/严、完美9、反向打断可配；\n'
+            '· 背驰：进出段力度比 + diver∈{1,-1,0}；算法分项；\n'
             '· K0 颗粒度展开；无未来函数；十字 asOf 截断。\n\n'
             '操作步骤\n'
-            '1. 主图勾选布林；副图勾选 MACD/RSI/KDJ/Demark/背驰_*；\n'
-            '2. 点本项或「?」编辑参数（含背驰率）；\n'
+            '1. 主图勾选布林/Demark；副图勾选 MACD/RSI/KDJ/背驰_*；\n'
+            '2. 点本项或「?」编辑参数（含 Demark 三项下拉与背驰率）；\n'
             '3. 写入 .chan_trend_model_config.json，下次启动恢复。',
           ),
         ),
@@ -2092,6 +2093,10 @@ class _KlineHomePageState extends State<KlineHomePage> {
         text: '${_mathIndicatorConfig.demarkMaxCountdown}');
     final diverRateCtl = TextEditingController(
         text: '${_mathIndicatorConfig.divergenceRate}');
+    var demarkCdMode = _mathIndicatorConfig.demarkCountdownMode;
+    var demarkPerfect9 = _mathIndicatorConfig.demarkPerfect9;
+    var demarkInterruptCd =
+        _mathIndicatorConfig.demarkInterruptCountdownOnReverse;
     int parseInt(String s, int fb) => int.tryParse(s.trim()) ?? fb;
     double parseDouble(String s, double fb) =>
         double.tryParse(s.trim()) ?? fb;
@@ -2099,87 +2104,150 @@ class _KlineHomePageState extends State<KlineHomePage> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('设置数学指标参数'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: meanCtl,
-                decoration: const InputDecoration(
-                  labelText: '均线周期',
-                  hintText: '如 5,10,20',
+        content: StatefulBuilder(
+          builder: (ctx, setLocal) => SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: meanCtl,
+                  decoration: const InputDecoration(
+                    labelText: '均线周期',
+                    hintText: '如 5,10,20',
+                  ),
                 ),
-              ),
-              TextField(
-                controller: chanCtl,
-                decoration: const InputDecoration(
-                  labelText: '通道周期',
-                  hintText: '如 20,60',
+                TextField(
+                  controller: chanCtl,
+                  decoration: const InputDecoration(
+                    labelText: '通道周期',
+                    hintText: '如 20,60',
+                  ),
                 ),
-              ),
-              TextField(
-                controller: macdFastCtl,
-                decoration: const InputDecoration(labelText: 'MACD 快线'),
-                keyboardType: TextInputType.number,
-              ),
-              TextField(
-                controller: macdSlowCtl,
-                decoration: const InputDecoration(labelText: 'MACD 慢线'),
-                keyboardType: TextInputType.number,
-              ),
-              TextField(
-                controller: macdSigCtl,
-                decoration: const InputDecoration(labelText: 'MACD 信号线'),
-                keyboardType: TextInputType.number,
-              ),
-              TextField(
-                controller: bollCtl,
-                decoration: const InputDecoration(labelText: 'BOLL N'),
-                keyboardType: TextInputType.number,
-              ),
-              TextField(
-                controller: rsiCtl,
-                decoration: const InputDecoration(labelText: 'RSI 周期'),
-                keyboardType: TextInputType.number,
-              ),
-              TextField(
-                controller: kdjCtl,
-                decoration: const InputDecoration(labelText: 'KDJ 周期'),
-                keyboardType: TextInputType.number,
-              ),
-              TextField(
-                controller: demarkLenCtl,
-                decoration: const InputDecoration(labelText: 'Demark setup 长度'),
-                keyboardType: TextInputType.number,
-              ),
-              TextField(
-                controller: demarkSetupCtl,
-                decoration:
-                    const InputDecoration(labelText: 'Demark setup bias'),
-                keyboardType: TextInputType.number,
-              ),
-              TextField(
-                controller: demarkCdCtl,
-                decoration:
-                    const InputDecoration(labelText: 'Demark countdown bias'),
-                keyboardType: TextInputType.number,
-              ),
-              TextField(
-                controller: demarkMaxCtl,
-                decoration:
-                    const InputDecoration(labelText: 'Demark max countdown'),
-                keyboardType: TextInputType.number,
-              ),
-              TextField(
-                controller: diverRateCtl,
-                decoration: const InputDecoration(
-                  labelText: '背驰率 divergence_rate',
-                  hintText: '>100 保送；默认 1.0；如 0.8',
+                TextField(
+                  controller: macdFastCtl,
+                  decoration: const InputDecoration(labelText: 'MACD 快线'),
+                  keyboardType: TextInputType.number,
                 ),
-                keyboardType:
-                    const TextInputType.numberWithOptions(decimal: true),
-              ),
-            ],
+                TextField(
+                  controller: macdSlowCtl,
+                  decoration: const InputDecoration(labelText: 'MACD 慢线'),
+                  keyboardType: TextInputType.number,
+                ),
+                TextField(
+                  controller: macdSigCtl,
+                  decoration: const InputDecoration(labelText: 'MACD 信号线'),
+                  keyboardType: TextInputType.number,
+                ),
+                TextField(
+                  controller: bollCtl,
+                  decoration: const InputDecoration(labelText: 'BOLL N'),
+                  keyboardType: TextInputType.number,
+                ),
+                TextField(
+                  controller: rsiCtl,
+                  decoration: const InputDecoration(labelText: 'RSI 周期'),
+                  keyboardType: TextInputType.number,
+                ),
+                TextField(
+                  controller: kdjCtl,
+                  decoration: const InputDecoration(labelText: 'KDJ 周期'),
+                  keyboardType: TextInputType.number,
+                ),
+                const SizedBox(height: 8),
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text('Demark',
+                      style: TextStyle(fontWeight: FontWeight.w600)),
+                ),
+                TextField(
+                  controller: demarkLenCtl,
+                  decoration:
+                      const InputDecoration(labelText: 'Demark setup 长度'),
+                  keyboardType: TextInputType.number,
+                ),
+                TextField(
+                  controller: demarkSetupCtl,
+                  decoration:
+                      const InputDecoration(labelText: 'Demark setup bias'),
+                  keyboardType: TextInputType.number,
+                ),
+                TextField(
+                  controller: demarkCdCtl,
+                  decoration: const InputDecoration(
+                      labelText: 'Demark countdown bias'),
+                  keyboardType: TextInputType.number,
+                ),
+                TextField(
+                  controller: demarkMaxCtl,
+                  decoration: const InputDecoration(
+                      labelText: 'Demark max countdown'),
+                  keyboardType: TextInputType.number,
+                ),
+                DropdownButtonFormField<DemarkCountdownMode>(
+                  value: demarkCdMode,
+                  decoration: const InputDecoration(
+                    labelText: 'Countdown 比较',
+                  ),
+                  items: const [
+                    DropdownMenuItem(
+                      value: DemarkCountdownMode.looseClose,
+                      child: Text('宽松：买close<close[i-2] / 卖close>close[i-2]'),
+                    ),
+                    DropdownMenuItem(
+                      value: DemarkCountdownMode.strictExtreme,
+                      child: Text('原版严：买close≤low[i-2] / 卖close≥high[i-2]'),
+                    ),
+                  ],
+                  onChanged: (v) {
+                    if (v == null) return;
+                    setLocal(() => demarkCdMode = v);
+                  },
+                ),
+                DropdownButtonFormField<bool>(
+                  value: demarkPerfect9,
+                  decoration: const InputDecoration(
+                    labelText: '完美 9（Perfected）',
+                  ),
+                  items: const [
+                    DropdownMenuItem(value: false, child: Text('不启用（默认）')),
+                    DropdownMenuItem(value: true, child: Text('启用')),
+                  ],
+                  onChanged: (v) {
+                    if (v == null) return;
+                    setLocal(() => demarkPerfect9 = v);
+                  },
+                ),
+                DropdownButtonFormField<bool>(
+                  value: demarkInterruptCd,
+                  decoration: const InputDecoration(
+                    labelText: '反向 Setup 打断 Countdown',
+                  ),
+                  items: const [
+                    DropdownMenuItem(
+                      value: false,
+                      child: Text('宽松：不打断（仅 TDST/数满13）'),
+                    ),
+                    DropdownMenuItem(
+                      value: true,
+                      child: Text('严：反向 Setup 即废倒计时（默认）'),
+                    ),
+                  ],
+                  onChanged: (v) {
+                    if (v == null) return;
+                    setLocal(() => demarkInterruptCd = v);
+                  },
+                ),
+                TextField(
+                  controller: diverRateCtl,
+                  decoration: const InputDecoration(
+                    labelText: '背驰率 divergence_rate',
+                    hintText: '>100 保送；默认 1.0；如 0.8',
+                  ),
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                ),
+              ],
+            ),
           ),
         ),
         actions: [
@@ -2233,6 +2301,9 @@ class _KlineHomePageState extends State<KlineHomePage> {
       demarkSetupBias: parseInt(demarkSetupCtl.text, 4),
       demarkCountdownBias: parseInt(demarkCdCtl.text, 2),
       demarkMaxCountdown: parseInt(demarkMaxCtl.text, 13),
+      demarkCountdownMode: demarkCdMode,
+      demarkPerfect9: demarkPerfect9,
+      demarkInterruptCountdownOnReverse: demarkInterruptCd,
       divergenceRate: parseDouble(diverRateCtl.text, 1.0),
     );
     for (final c in [
@@ -2256,7 +2327,10 @@ class _KlineHomePageState extends State<KlineHomePage> {
     _msgHistory.append(
       '数学指标：均线=${cfg.meanPeriods.join(",")}；通道=${cfg.channelPeriods.join(",")}；'
       'MACD=${cfg.macdFast}/${cfg.macdSlow}/${cfg.macdSignal}；BOLL=${cfg.bollN}；'
-      'RSI=${cfg.rsiPeriod}；KDJ=${cfg.kdjPeriod}；Demark=${cfg.demarkLen}；'
+      'RSI=${cfg.rsiPeriod}；KDJ=${cfg.kdjPeriod}；Demark=${cfg.demarkLen}'
+      '/${cfg.demarkCountdownMode.name}'
+      '/完美9=${cfg.demarkPerfect9}'
+      '/反向打断=${cfg.demarkInterruptCountdownOnReverse}；'
       '背驰率=${cfg.divergenceRate}',
     );
   }

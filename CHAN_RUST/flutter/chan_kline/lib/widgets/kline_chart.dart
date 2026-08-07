@@ -1953,6 +1953,15 @@ class _KlineCompositePainter extends CustomPainter {
             slotW,
             ind.kn,
           );
+        } else if (ind.kind == MainIndicatorKind.demark) {
+          _drawDemarkMain(
+            canvas,
+            size.width,
+            plotTop,
+            plotH,
+            slotW,
+            ind.kn,
+          );
         }
       }
     }
@@ -3144,13 +3153,12 @@ class _KlineCompositePainter extends CustomPainter {
     );
   }
 
-  /// 副图 Kn Demark：时间轴小字标记 setup/countdown（与主图旧呈现同文案）。
-  void _drawDemarkSubChart(
+  /// 主图 Kn Demark：锚在 K0 最低价上方；多标记垂直排；买/卖与类型分色。
+  void _drawDemarkMain(
     Canvas canvas,
     double w,
-    double innerTop,
-    double innerH,
-    double barW,
+    double plotTop,
+    double plotH,
     double slotW,
     int displayKn,
   ) {
@@ -3167,31 +3175,53 @@ class _KlineCompositePainter extends CustomPainter {
           asOf: asOf,
         );
     final maxX = asOf ?? bars.last.idx;
-    final color = ChartLevelLineStyle.colorForDisplayKn(displayKn);
+    final fontSize = math.max(8.0, slotW * 0.45);
+    final lineH = fontSize + 1.5;
     final tp = TextPainter(
       textAlign: TextAlign.center,
       textDirection: TextDirection.ltr,
     );
-    final cy = innerTop + innerH * 0.35;
     for (var i = 0; i < bars.length && i < demark.marksAt.length; i++) {
-      final marks = demark.marksAt[i];
-      if (marks == null || marks.isEmpty) continue;
-      final x = bars[i].idx;
+      final raw = demark.marksAt[i];
+      if (raw == null || raw.isEmpty) continue;
+      final bar = bars[i];
+      final x = bar.idx;
       if (x > maxX) continue;
       if (x < viewport.viewXMin - 1 || x > viewport.viewXMax + 1) continue;
-      final text = BarFeatureLookup.formatDemarkMarks(marks);
-      tp.text = TextSpan(
-        text: text,
-        style: TextStyle(
-          color: color,
-          fontSize: math.max(7.0, slotW * 0.42),
-          fontWeight: FontWeight.w600,
-        ),
-      );
-      tp.layout();
+      final marks = BarFeatureLookup.orderDemarkMarksForPaint(raw);
       final cx = _barCenterX(x, w, slotW);
-      tp.paint(canvas, Offset(cx - tp.width / 2, cy - tp.height / 2));
+      // 锚 K0 最低价，文字自低点向上叠
+      var y = priceRange.yOf(bar.low, plotTop, plotH) - 2;
+      for (final m in marks) {
+        final isComplete = m.type == 'complete';
+        tp.text = TextSpan(
+          text: BarFeatureLookup.formatDemarkMark(m),
+          style: TextStyle(
+            color: _demarkMarkColor(m),
+            fontSize: isComplete ? fontSize + 0.5 : fontSize,
+            fontWeight: isComplete || m.type == 'setup'
+                ? FontWeight.w700
+                : FontWeight.w500,
+          ),
+        );
+        tp.layout();
+        y -= tp.height;
+        tp.paint(canvas, Offset(cx - tp.width / 2, y));
+        y -= (lineH - tp.height).clamp(0.0, lineH);
+      }
     }
+  }
+
+  /// Demark：买(dir<0)红系、卖(dir>0)绿系；完成信号最醒目；countdown 换档区分。
+  Color _demarkMarkColor(DemarkMark m) {
+    final isBuy = m.dir < 0;
+    if (m.type == 'complete') {
+      return isBuy ? const Color(0xFFB91C1C) : const Color(0xFF15803D);
+    }
+    if (m.type == 'setup') {
+      return isBuy ? const Color(0xFFDC2626) : const Color(0xFF16A34A);
+    }
+    return isBuy ? const Color(0xFFF97316) : const Color(0xFF0D9488);
   }
 
   /// 主图 Kn趋势线（父段内支撑/压力；子线层同号）。
@@ -4233,15 +4263,7 @@ class _KlineCompositePainter extends CustomPainter {
     for (final kn in kdjKns) {
       _drawKdjSubChart(canvas, w, innerTop, innerH, barW, slotW, kn);
     }
-    // Kn Demark：时间轴小字
-    final demarkKns = subIndicators
-        .where((e) => e.kind == SubIndicatorKind.demark)
-        .map((e) => e.kn)
-        .toList()
-      ..sort();
-    for (final kn in demarkKns) {
-      _drawDemarkSubChart(canvas, w, innerTop, innerH, barW, slotW, kn);
-    }
+    // Kn Demark 已迁主图
     // Kn背驰：ratio 折线 + diver 柱（1/-1/0）
     final diverItems = subIndicators
         .where((e) =>

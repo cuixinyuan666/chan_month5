@@ -2,6 +2,18 @@
 
 ## 最新记录
 
+### 2026-08-08 — KnDemark 主图标注 + 设置三项（宽松Countdown/完美9/反向打断）
+
+- **要点**：Demark 从副图迁主图，锚 K0 低点垂直排 S/C 与「完成买/卖」（Setup9 与 Countdown13 均算完整信号）。设置增加 Countdown 宽松/原版严（默认宽松）、完美9（默认关）、反向 Setup 打断 Countdown（默认严=打断）。
+- **相关路径**：`demark_compute.dart`、`math_indicator_config.dart`、`chart_indicator.dart`、`kline_chart.dart`、`main.dart`、`msg_history.dart`、`AGENTS.md`
+- **注意**：旧会话若仍勾副图 Demark 会被 prune；需在主图「Kn指标」打开 Demark（默认静音）
+
+### 2026-08-07 — KnDemark 同柱上下排 + 买卖/类型分色
+
+- **要点**：同 K0 多标记改为上下排列（setup 上、countdown 下）；买(dir<0)红/橙、卖(dir>0)绿/青，setup 加粗。
+- **相关路径**：`kline_chart.dart`、`bar_feature_lookup.dart`、`msg_history.dart`
+- **注意**：十字 tip 仍空格拼接；配色不跟层色
+
 ### 2026-08-07 — 全体背驰副图整段高亮（补 amp/成交量/RSI 等）
 
 - **要点**：十字 asOf 下，所有 Kn背驰_* 副图均蓝/琥珀高亮比较两段整 Kn；此前仅 slope/斜率。MACD 四算法仍额外在 MACD 副图按贡献柱高亮。

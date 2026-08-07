@@ -961,15 +961,35 @@ class BarFeatureLookup {
       ? vol.toInt().toString()
       : vol.toStringAsFixed(2);
 
-  /// Demark 标记文案：如 S↑9 C↓3
-  static String formatDemarkMarks(List<DemarkMark> marks) {
-    final parts = <String>[];
-    for (final m in marks) {
-      final arrow = m.dir > 0 ? '↑' : '↓';
-      final prefix = m.type == 'setup' ? 'S' : 'C';
-      parts.add('$prefix$arrow${m.idx}');
+  /// Demark 单标记文案：S1…S9 / C1…C13 / 完成买|完成卖
+  static String formatDemarkMark(DemarkMark m) {
+    if (m.type == 'complete') {
+      return m.dir < 0 ? '完成买' : '完成卖';
     }
-    return parts.join(' ');
+    final prefix = m.type == 'setup' ? 'S' : 'C';
+    return '$prefix${m.idx}';
+  }
+
+  /// Demark 标记文案：多标记空格拼接（十字 tip）。
+  static String formatDemarkMarks(List<DemarkMark> marks) {
+    return orderDemarkMarksForPaint(marks).map(formatDemarkMark).join(' ');
+  }
+
+  /// setup → countdown → 完成信号（同 K0 多标记上下排）。
+  static List<DemarkMark> orderDemarkMarksForPaint(List<DemarkMark> marks) {
+    int rank(String t) {
+      if (t == 'setup') return 0;
+      if (t == 'countdown') return 1;
+      return 2;
+    }
+
+    final out = List<DemarkMark>.from(marks);
+    out.sort((a, b) {
+      final c = rank(a.type).compareTo(rank(b.type));
+      if (c != 0) return c;
+      return a.idx.compareTo(b.idx);
+    });
+    return out;
   }
 
   /// VOL/笔数 B/S/G 片段（G=gray）；经 boxNumInString 后为 B【】/S【】/G【】。

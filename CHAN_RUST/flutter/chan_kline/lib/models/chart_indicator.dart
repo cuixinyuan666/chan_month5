@@ -21,6 +21,8 @@ enum MainIndicatorKind {
   trendChannel,
   /// Kn布林带（MID/UP/DOWN；kn 同中枢）
   boll,
+  /// Kn Demark（setup/countdown/完成信号；kn 同中枢；主图标注）
+  demark,
 }
 
 /// 主图指标类别元数据。
@@ -43,6 +45,8 @@ extension MainIndicatorKindMeta on MainIndicatorKind {
       case MainIndicatorKind.trendChannel:
       case MainIndicatorKind.boll:
         return '均线';
+      case MainIndicatorKind.demark:
+        return 'Demark';
     }
   }
 
@@ -64,6 +68,8 @@ extension MainIndicatorKindMeta on MainIndicatorKind {
       case MainIndicatorKind.trendChannel:
       case MainIndicatorKind.boll:
         return 5;
+      case MainIndicatorKind.demark:
+        return 6;
     }
   }
 }
@@ -90,6 +96,7 @@ class MainChartIndicator {
   const MainChartIndicator.trendChannel(this.kn)
       : kind = MainIndicatorKind.trendChannel;
   const MainChartIndicator.boll(this.kn) : kind = MainIndicatorKind.boll;
+  const MainChartIndicator.demark(this.kn) : kind = MainIndicatorKind.demark;
 
   String get label {
     switch (kind) {
@@ -114,6 +121,8 @@ class MainChartIndicator {
         return 'K$kn通道';
       case MainIndicatorKind.boll:
         return 'K$kn布林';
+      case MainIndicatorKind.demark:
+        return 'K${kn}Demark';
     }
   }
 
@@ -124,6 +133,7 @@ class MainChartIndicator {
       case MainIndicatorKind.meanLine:
       case MainIndicatorKind.trendChannel:
       case MainIndicatorKind.boll:
+      case MainIndicatorKind.demark:
         return kn;
       case MainIndicatorKind.line:
       case MainIndicatorKind.combine:
@@ -158,6 +168,8 @@ class MainChartIndicator {
         return 8;
       case MainIndicatorKind.boll:
         return 9;
+      case MainIndicatorKind.demark:
+        return 10;
     }
   }
 
@@ -539,6 +551,10 @@ List<MainChartIndicator> buildMainIndicatorCatalog(int maxKn) {
   for (var d = 0; d <= maxKn; d++) {
     out.add(MainChartIndicator.boll(d));
   }
+  // Demark（与中枢同号；主图标注）
+  for (var d = 0; d <= maxKn; d++) {
+    out.add(MainChartIndicator.demark(d));
+  }
   return out;
 }
 
@@ -621,10 +637,7 @@ List<SubChartIndicator> buildSubIndicatorCatalog(
   for (var d = 0; d <= maxD; d++) {
     out.add(SubChartIndicator.kdj(d));
   }
-  // Demark (0..maxKn，与中枢同号；进 Kn指标层全选)
-  for (var d = 0; d <= maxD; d++) {
-    out.add(SubChartIndicator.demark(d));
-  }
+  // Demark 已迁主图（MainIndicatorKind.demark）
   // 背驰：按算法分类，层内 0..maxKn（默认不勾、不进层全选）
   for (final algo in DivergenceAlgoMeta.all) {
     for (var d = 0; d <= maxD; d++) {
@@ -652,12 +665,13 @@ List<MainChartIndicator> mainIndicatorsForLevel(
     MainChartIndicator.meanLine(displayLevel),
     MainChartIndicator.trendChannel(displayLevel),
     MainChartIndicator.boll(displayLevel),
+    MainChartIndicator.demark(displayLevel),
   ];
   return candidates.where(allow.contains).toList();
 }
 
 /// 副图「K{displayLevel}指标」层全选成员。
-/// 含比例/节奏/斜率/MACD/RSI/KDJ/Demark/背驰12算法（catalog 有才入选）。
+/// 含比例/节奏/斜率/MACD/RSI/KDJ/背驰算法（catalog 有才入选；Demark 已迁主图）。
 List<SubChartIndicator> subIndicatorsForLevel(
   int displayLevel,
   List<SubChartIndicator> catalog, {
@@ -682,7 +696,6 @@ List<SubChartIndicator> subIndicatorsForLevel(
     SubChartIndicator.macd(displayLevel),
     SubChartIndicator.rsi(displayLevel),
     SubChartIndicator.kdj(displayLevel),
-    SubChartIndicator.demark(displayLevel),
   ];
   final hi = maxBsClass < 3 ? 3 : maxBsClass;
   for (var cls = 3; cls <= hi; cls++) {
@@ -751,6 +764,7 @@ bool isDefaultDrawnMain(MainChartIndicator e) {
     case MainIndicatorKind.meanLine:
     case MainIndicatorKind.trendChannel:
     case MainIndicatorKind.boll:
+    case MainIndicatorKind.demark:
       return false;
   }
 }

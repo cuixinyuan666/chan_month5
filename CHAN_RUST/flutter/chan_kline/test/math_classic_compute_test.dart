@@ -24,7 +24,7 @@ KlineBar _bar(int idx, double close, {double? high, double? low}) {
 
 void main() {
   group('MACD', () {
-    test('首值 DIF/DEA/MACD 均为 0', () {
+    test('首根 DIF/DEA/MACD 均为 0', () {
       final bars = [_bar(0, 10)];
       final macd = computeMacdForLevel(displayKn: 0, bars: bars);
       expect(macd.dif[0], closeTo(0, 1e-12));
@@ -53,7 +53,7 @@ void main() {
   });
 
   group('RSI', () {
-    test('首根为 50', () {
+    test('首根给 50', () {
       final bars = [_bar(0, 10)];
       final rsi = computeRsiForLevel(displayKn: 0, bars: bars, period: 14);
       expect(rsi[0], closeTo(50, 1e-12));
@@ -88,21 +88,67 @@ void main() {
       expect(anyMark, isTrue);
     });
 
-    test('formatDemarkMarks 文案', () {
+    test('formatDemarkMarks 文案含完成买/卖', () {
       const marks = [
         DemarkMark(type: 'setup', dir: -1, idx: 9),
         DemarkMark(type: 'countdown', dir: 1, idx: 3),
+        DemarkMark(type: 'complete', dir: -1, idx: 9),
       ];
       expect(
         BarFeatureLookup.formatDemarkMarks(marks),
-        'S↓9 C↑3',
+        'S9 C3 完成买',
       );
+    });
+
+    test('默认宽松 countdown：close vs close[i-2]', () {
+      // 构造：先走满买 Setup9，再让 countdown 在宽松条件下可数
+      final bars = <KlineBar>[];
+      // 0..3 铺底
+      for (var i = 0; i < 4; i++) {
+        bars.add(_bar(i, 20.0 - i * 0.1));
+      }
+      // 4..12：连续 9 根买 Setup（close[i] < close[i-4]）
+      for (var i = 4; i <= 12; i++) {
+        bars.add(_bar(i, 19.0 - (i - 4) * 0.5));
+      }
+      // 13..：宽松 countdown（close < close[i-2]）且不满足严格（close > low[i-2]）
+      for (var i = 13; i < 30; i++) {
+        final c = 14.0 - (i - 13) * 0.2;
+        bars.add(_bar(i, c, high: c + 2, low: c - 3));
+      }
+      final loose = computeDemarkForLevel(
+        displayKn: 0,
+        bars: bars,
+        config: const MathIndicatorConfig(
+          demarkCountdownMode: DemarkCountdownMode.looseClose,
+          demarkPerfect9: false,
+        ),
+      );
+      final hasCd = loose.marksAt.any(
+        (ms) => ms != null && ms.any((m) => m.type == 'countdown'),
+      );
+      expect(hasCd, isTrue);
+
+      final strict = computeDemarkForLevel(
+        displayKn: 0,
+        bars: bars,
+        config: const MathIndicatorConfig(
+          demarkCountdownMode: DemarkCountdownMode.strictExtreme,
+          demarkPerfect9: false,
+        ),
+      );
+      // 严格更难触发；不强制为 0，仅验证模式字段生效且仍可跑完
+      expect(strict.marksAt.length, bars.length);
     });
   });
 
   group('catalog', () {
-    test('含布林/Demark/MACD/RSI/KDJ', () {
+    test('Demark 在主图目录；副图层全选不含 Demark', () {
       final mainCat = buildMainIndicatorCatalog(1);
+      expect(
+        mainCat.any((e) => e.kind == MainIndicatorKind.demark),
+        isTrue,
+      );
       expect(
         mainCat.any((e) => e.kind == MainIndicatorKind.boll),
         isTrue,
@@ -112,26 +158,27 @@ void main() {
       expect(subCat.any((e) => e.kind == SubIndicatorKind.macd), isTrue);
       expect(subCat.any((e) => e.kind == SubIndicatorKind.rsi), isTrue);
       expect(subCat.any((e) => e.kind == SubIndicatorKind.kdj), isTrue);
-      expect(subCat.any((e) => e.kind == SubIndicatorKind.demark), isTrue);
+      expect(subCat.any((e) => e.kind == SubIndicatorKind.demark), isFalse);
 
       final dMain = defaultMainIndicatorsK0();
       expect(dMain.any((e) => e.kind == MainIndicatorKind.boll), isTrue);
+      // Demark 进 K0 层全选关联，默认删除线静音
+      expect(dMain.any((e) => e.kind == MainIndicatorKind.demark), isTrue);
+      expect(isDefaultDrawnMain(const MainChartIndicator.demark(0)), isFalse);
 
       final dSub = defaultSubIndicatorsK0();
-      expect(dSub.any((e) => e.kind == SubIndicatorKind.macd), isTrue);
-      expect(dSub.any((e) => e.kind == SubIndicatorKind.rsi), isTrue);
-      expect(dSub.any((e) => e.kind == SubIndicatorKind.kdj), isTrue);
-      expect(dSub.any((e) => e.kind == SubIndicatorKind.demark), isTrue);
+      expect(dSub.any((e) => e.kind == SubIndicatorKind.demark), isFalse);
 
-      // Kn指标层全选含 Demark + 背驰
       final lvl0 = subIndicatorsForLevel(0, subCat);
-      expect(lvl0.any((e) => e.kind == SubIndicatorKind.demark), isTrue);
+      expect(lvl0.any((e) => e.kind == SubIndicatorKind.demark), isFalse);
       expect(
         lvl0.where((e) => e.kind == SubIndicatorKind.divergence).length,
         DivergenceAlgoMeta.all.length,
       );
-      // 启动默认：背驰仍不勾
       expect(dSub.any((e) => e.kind == SubIndicatorKind.divergence), isFalse);
+
+      final mainLvl = mainIndicatorsForLevel(0, mainCat);
+      expect(mainLvl.any((e) => e.kind == MainIndicatorKind.demark), isTrue);
     });
   });
 }

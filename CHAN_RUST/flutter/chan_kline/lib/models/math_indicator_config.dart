@@ -1,4 +1,12 @@
-import 'trend_model_config.dart';
+import '../models/trend_model_config.dart';
+
+/// Demark Countdown 比较模式。
+enum DemarkCountdownMode {
+  /// 宽松：买 close[i]<close[i-2]，卖 close[i]>close[i-2]
+  looseClose,
+  /// 原版严：买 close≤low[i-2]，卖 close≥high[i-2]
+  strictExtreme,
+}
 
 /// 数学指标参数（均线/通道/MACD/BOLL/RSI/KDJ/Demark/背驰）。
 class MathIndicatorConfig {
@@ -15,6 +23,9 @@ class MathIndicatorConfig {
     this.demarkSetupBias = 4,
     this.demarkCountdownBias = 2,
     this.demarkMaxCountdown = 13,
+    this.demarkCountdownMode = DemarkCountdownMode.looseClose,
+    this.demarkPerfect9 = false,
+    this.demarkInterruptCountdownOnReverse = true,
     /// >100 保送背驰；正常比例如 0.9/1.0（默认 1.0=等力度阈值）
     this.divergenceRate = 1.0,
   });
@@ -31,6 +42,11 @@ class MathIndicatorConfig {
   final int demarkSetupBias;
   final int demarkCountdownBias;
   final int demarkMaxCountdown;
+  final DemarkCountdownMode demarkCountdownMode;
+  /// 完美 9 过滤；默认关
+  final bool demarkPerfect9;
+  /// 反向 Setup 是否打断 Countdown；默认严=打断
+  final bool demarkInterruptCountdownOnReverse;
   final double divergenceRate;
 
   TrendModelConfig get asTrendModel => TrendModelConfig(
@@ -51,6 +67,9 @@ class MathIndicatorConfig {
     int? demarkSetupBias,
     int? demarkCountdownBias,
     int? demarkMaxCountdown,
+    DemarkCountdownMode? demarkCountdownMode,
+    bool? demarkPerfect9,
+    bool? demarkInterruptCountdownOnReverse,
     double? divergenceRate,
   }) {
     return MathIndicatorConfig(
@@ -66,6 +85,10 @@ class MathIndicatorConfig {
       demarkSetupBias: demarkSetupBias ?? this.demarkSetupBias,
       demarkCountdownBias: demarkCountdownBias ?? this.demarkCountdownBias,
       demarkMaxCountdown: demarkMaxCountdown ?? this.demarkMaxCountdown,
+      demarkCountdownMode: demarkCountdownMode ?? this.demarkCountdownMode,
+      demarkPerfect9: demarkPerfect9 ?? this.demarkPerfect9,
+      demarkInterruptCountdownOnReverse: demarkInterruptCountdownOnReverse ??
+          this.demarkInterruptCountdownOnReverse,
       divergenceRate: divergenceRate ?? this.divergenceRate,
     );
   }
@@ -83,6 +106,9 @@ class MathIndicatorConfig {
         'demarkSetupBias': demarkSetupBias,
         'demarkCountdownBias': demarkCountdownBias,
         'demarkMaxCountdown': demarkMaxCountdown,
+        'demarkCountdownMode': demarkCountdownMode.name,
+        'demarkPerfect9': demarkPerfect9,
+        'demarkInterruptCountdownOnReverse': demarkInterruptCountdownOnReverse,
         'divergenceRate': divergenceRate,
       };
 
@@ -108,6 +134,27 @@ class MathIndicatorConfig {
       return double.tryParse('$v') ?? fb;
     }
 
+    bool b(dynamic v, bool fb) {
+      if (v is bool) return v;
+      if (v is num) return v != 0;
+      if (v is String) {
+        final s = v.toLowerCase();
+        if (s == 'true' || s == '1') return true;
+        if (s == 'false' || s == '0') return false;
+      }
+      return fb;
+    }
+
+    DemarkCountdownMode parseCdMode(dynamic v) {
+      final s = '$v';
+      if (s == DemarkCountdownMode.strictExtreme.name ||
+          s == 'strict' ||
+          s == 'strictExtreme') {
+        return DemarkCountdownMode.strictExtreme;
+      }
+      return DemarkCountdownMode.looseClose;
+    }
+
     return MathIndicatorConfig(
       meanPeriods:
           parseList(map['meanPeriods'], TrendModelConfig.defaultMeanPeriods),
@@ -123,6 +170,10 @@ class MathIndicatorConfig {
       demarkSetupBias: i(map['demarkSetupBias'], 4),
       demarkCountdownBias: i(map['demarkCountdownBias'], 2),
       demarkMaxCountdown: i(map['demarkMaxCountdown'], 13),
+      demarkCountdownMode: parseCdMode(map['demarkCountdownMode']),
+      demarkPerfect9: b(map['demarkPerfect9'], false),
+      demarkInterruptCountdownOnReverse:
+          b(map['demarkInterruptCountdownOnReverse'], true),
       divergenceRate: d(map['divergenceRate'], 1.0),
     );
   }
@@ -142,6 +193,10 @@ class MathIndicatorConfig {
       demarkSetupBias == other.demarkSetupBias &&
       demarkCountdownBias == other.demarkCountdownBias &&
       demarkMaxCountdown == other.demarkMaxCountdown &&
+      demarkCountdownMode == other.demarkCountdownMode &&
+      demarkPerfect9 == other.demarkPerfect9 &&
+      demarkInterruptCountdownOnReverse ==
+          other.demarkInterruptCountdownOnReverse &&
       divergenceRate == other.divergenceRate;
 
   @override
@@ -157,7 +212,13 @@ class MathIndicatorConfig {
         demarkLen,
         demarkSetupBias,
         demarkCountdownBias,
-        Object.hash(demarkMaxCountdown, divergenceRate),
+        Object.hash(
+          demarkMaxCountdown,
+          demarkCountdownMode,
+          demarkPerfect9,
+          demarkInterruptCountdownOnReverse,
+          divergenceRate,
+        ),
       );
 
   static bool _listEq(List<int> a, List<int> b) {
