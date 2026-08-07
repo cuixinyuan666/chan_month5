@@ -412,3 +412,32 @@ List<double?> expandAdjacentRatioToSeries(
   }
   return out;
 }
+
+/// 与「Kn连线斜率」同一公式：`(endVal-beginVal)/(endX-beginX)`（有符号）。
+/// [level] = LevelBundle.level（背驰 displayKn；连线斜率侧为 displayKn+1）。
+/// 冻段 endX=endConfirmX；动态 active endX=min(x2,asOf)。|dx|<1 → null。
+double? calcUnitLineSlope({
+  required List<LevelBundle> levels,
+  required int level,
+  required int unitIdx,
+  int? asOf,
+}) {
+  final lv = _bundleAtLevel(levels, level);
+  if (lv == null) return null;
+  for (final s in lv.segments) {
+    if (s.idx != unitIdx) continue;
+    if (s.dir != 1 && s.dir != -1) return null;
+    final dx = s.endConfirmX - s.beginPoleX;
+    if (dx.abs() < 1) return null;
+    return (_segEndVal(s) - _segBeginVal(s)) / dx;
+  }
+  final a = lv.activeUnit;
+  if (a == null || a.idx != unitIdx) return null;
+  if (a.dir != 1 && a.dir != -1) return null;
+  final x2 = asOf != null ? (a.x2 < asOf ? a.x2 : asOf) : a.x2;
+  final dx = x2 - a.x1;
+  if (dx.abs() < 1) return null;
+  final begin = a.dir > 0 ? a.low : a.high;
+  final end = a.dir > 0 ? a.high : a.low;
+  return (end - begin) / dx;
+}

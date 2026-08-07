@@ -782,3 +782,51 @@ bool isDefaultDrawnSub(SubChartIndicator e) {
       return false;
   }
 }
+
+/// 学习观察：勾选 MACD 类背驰（area/peak/full_area/diff）时自动并入同号 Kn MACD。
+Set<SubChartIndicator> ensureMacdForDivergenceArea(
+  Set<SubChartIndicator> selected,
+) {
+  final next = Set<SubChartIndicator>.from(selected);
+  for (final e in selected) {
+    if (e.kind == SubIndicatorKind.divergence &&
+        isMacdDivergenceAlgo(e.diverAlgo)) {
+      next.add(SubChartIndicator.macd(e.kn));
+    }
+  }
+  return next;
+}
+
+/// 某层是否勾选了 MACD 类背驰（用于强制绘制同号 MACD）。
+bool hasMacdDivergenceForKn(Set<SubChartIndicator> selected, int kn) {
+  return selected.any((e) =>
+      e.kind == SubIndicatorKind.divergence &&
+      isMacdDivergenceAlgo(e.diverAlgo) &&
+      e.kn == kn);
+}
+
+/// 某层用于 MACD 高亮的背驰算法（多选时优先级 area→peak→full_area→diff）。
+DivergenceAlgo? macdDivergenceAlgoForKn(
+  Set<SubChartIndicator> selected,
+  int kn,
+) {
+  const order = [
+    DivergenceAlgo.area,
+    DivergenceAlgo.peak,
+    DivergenceAlgo.fullArea,
+    DivergenceAlgo.diff,
+  ];
+  for (final a in order) {
+    if (selected.any((e) =>
+        e.kind == SubIndicatorKind.divergence &&
+        e.diverAlgo == a &&
+        e.kn == kn)) {
+      return a;
+    }
+  }
+  return null;
+}
+
+/// 兼容旧名。
+bool hasDivergenceAreaForKn(Set<SubChartIndicator> selected, int kn) =>
+    hasMacdDivergenceForKn(selected, kn);

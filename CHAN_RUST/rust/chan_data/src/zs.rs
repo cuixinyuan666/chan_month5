@@ -66,6 +66,8 @@ pub struct ZSFrame {
     pub count: usize,
     pub dir: i32,
     pub is_sure: bool,
+    /// 本中枢最后一个成员段 idx（member_segs.last → segs[].idx）
+    pub end_idx: i64,
     pub in_seg_idx: Option<i64>,
     pub out_seg_idx: Option<i64>,
 }
@@ -328,6 +330,7 @@ pub fn zs_to_frames(zs_list: &[ZS], segment_by_idx: &HashMap<i64, &LevelSegment>
                 count: z.member_segs.len(),
                 dir: z.dir,
                 is_sure: z.is_sure,
+                end_idx: z.end_idx,
                 in_seg_idx: z.in_seg_idx,
                 out_seg_idx: z.out_seg_idx,
             })

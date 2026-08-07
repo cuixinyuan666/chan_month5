@@ -22,74 +22,105 @@ KlineBar _bar(int i, {double c = 10, double h = 11, double l = 9, double v = 100
   );
 }
 
-List<KlineBar> _breakoutBars() {
-  return [
-    _bar(0, c: 10, h: 10.5, l: 8.0),
-    _bar(1, c: 9.5, h: 10.0, l: 9.0),
-    _bar(2, c: 9.6, h: 10.1, l: 9.1),
-    _bar(3, c: 9.4, h: 9.9, l: 9.0),
-    _bar(4, c: 8.0, h: 9.0, l: 7.0),
+List<KlineBar> _bars(int n) => [for (var i = 0; i < n; i++) _bar(i)];
+
+/// K0：确认上枢 + 两未确认 → 离开窗本枢=倒数第二未确认。
+({List<KlineBar> bars, List<ZSFrame> zs}) _k0TwoZsLeaveWindow() {
+  final bars = _bars(8);
+  // unsure=[x1=1,x1=2] → 本=x1=1 endIdx=5；上=x1=0 endIdx=3
+  final zs = [
+    const ZSFrame(
+      x1: 0,
+      x2: 3,
+      high: 11,
+      low: 9,
+      level: 0,
+      isSure: true,
+      endIdx: 3,
+    ),
+    const ZSFrame(
+      x1: 1,
+      x2: 5,
+      high: 12,
+      low: 8,
+      level: 0,
+      isSure: false,
+      endIdx: 5,
+    ),
+    const ZSFrame(
+      x1: 2,
+      x2: 6,
+      high: 12.5,
+      low: 7.5,
+      level: 0,
+      isSure: false,
+      endIdx: 6,
+    ),
   ];
+  return (bars: bars, zs: zs);
 }
 
-/// K1：进入段 + 动态离开段破枢（active 右端可延伸）。
-({List<KlineBar> bars, List<LevelBundle> levels}) _kn1Breakout({
+/// K1：可配置 active 包中/破枢；末段 idx 与 zs endIdx 对齐。
+({List<KlineBar> bars, List<LevelBundle> levels}) _kn1Dyn({
   required int activeX2,
+  required List<ZSFrame> zsFrames,
+  double activeHigh = 9.5,
+  double activeLow = 8.0,
+  int activeIdx = 12,
+  List<LevelSegmentN> extraSegs = const [],
 }) {
-  final bars = [
-    _bar(0, c: 10, h: 11, l: 9.5),
-    _bar(1, c: 10.2, h: 11.2, l: 9.8),
-    _bar(2, c: 9.8, h: 10.2, l: 9.2),
-    _bar(3, c: 9.7, h: 10.0, l: 9.1),
-    _bar(4, c: 8.5, h: 9.0, l: 7.5),
-    _bar(5, c: 8.0, h: 8.8, l: 7.0),
+  final bars = _bars(activeX2 + 1);
+  final segs = <LevelSegmentN>[
+    const LevelSegmentN(
+      idx: 10,
+      dir: -1,
+      beginConfirmX: 0,
+      endConfirmX: 2,
+      beginPoleX: 0,
+      endPoleX: 2,
+      high: 11.0,
+      low: 9.0,
+    ),
+    const LevelSegmentN(
+      idx: 11,
+      dir: 1,
+      beginConfirmX: 2,
+      endConfirmX: 3,
+      beginPoleX: 2,
+      endPoleX: 3,
+      high: 10.5,
+      low: 9.2,
+    ),
+    ...extraSegs,
   ];
-  final inSeg = const LevelSegmentN(
-    idx: 0,
-    dir: 1,
-    beginConfirmX: 0,
-    endConfirmX: 1,
-    beginPoleX: 0,
-    endPoleX: 1,
-    high: 11.2,
-    low: 9.5,
-  );
-  final zs = const ZSFrame(
-    x1: 1,
-    x2: 3,
-    high: 10.0,
-    low: 9.0,
-    level: 1,
-    inSegIdx: 0,
-    outSegIdx: 2,
-  );
   final active = LevelUnitBar(
-    idx: 2,
+    idx: activeIdx,
     dir: -1,
-    x1: 4,
+    x1: 3,
     x2: activeX2,
-    high: 9.0,
-    low: 7.0,
+    high: activeHigh,
+    low: activeLow,
   );
   final lv = LevelBundle(
     level: 1,
-    segments: [inSeg],
-    zsFrames: [zs],
+    segments: segs,
+    zsFrames: zsFrames,
     activeUnit: active,
   );
   return (bars: bars, levels: [lv]);
 }
 
 void main() {
-  test('副图 catalog 含 12 背驰算法×层；主图无背驰', () {
+  test('副图 catalog 含 13 背驰算法×层；主图无背驰', () {
     final sub = buildSubIndicatorCatalog(1);
     final divers = sub.where((e) => e.kind == SubIndicatorKind.divergence);
-    expect(divers.length, 12 * 2);
+    expect(divers.length, DivergenceAlgoMeta.all.length * 2);
     expect(
       divers.any((e) => e.diverAlgo == DivergenceAlgo.peak && e.kn == 0),
       isTrue,
     );
     expect(divers.any((e) => e.label == 'K0背驰_turnrate_avg'), isTrue);
+    expect(divers.any((e) => e.label == 'K1背驰_斜率'), isTrue);
     expect(
       SubIndicatorKind.divergence.categoryLabel,
       '背驰',
@@ -110,135 +141,184 @@ void main() {
     );
   });
 
-  test('未突破 → diver=0 且 in/out/ratio 清空', () {
-    final bars = _breakoutBars();
-    final zsBreak = [
+  test('单开放（无中枢判断）不启动背驰', () {
+    final bars = _bars(6);
+    final zs = [
       const ZSFrame(
-        x1: 1,
-        x2: 3,
-        high: 10.0,
-        low: 9.0,
+        x1: 0,
+        x2: 4,
+        high: 11,
+        low: 9,
         level: 0,
-        inSegIdx: 0,
-        outSegIdx: 4,
+        isSure: false,
+        endIdx: 4,
       ),
     ];
-    final zsNoBreak = [
-      const ZSFrame(
-        x1: 1,
-        x2: 3,
-        high: 10.0,
-        low: 6.0,
-        level: 0,
-        inSegIdx: 0,
-        outSegIdx: 4,
-      ),
-    ];
-
-    final pass = computeDivergenceForLevel(
+    final map = computeDivergenceForLevel(
       displayKn: 0,
       bars: bars,
-      zsK0Frames: zsBreak,
+      zsK0Frames: zs,
+      asOf: 4,
       config: const MathIndicatorConfig(divergenceRate: 1e9),
     );
-    final peakPass = pass[DivergenceAlgo.peak]!;
-    expect(peakPass.diverAt[4], 1);
-    expect(peakPass.ratioAt[4], isNotNull);
-    expect(peakPass.inAt[4], isNotNull);
+    final amp = map[DivergenceAlgo.amp]!;
+    expect(amp.diverAt[4], 0);
+    expect(amp.ratioAt[4], isNull);
+  });
 
-    // 同 x 未突破事件：diver=0，变量同步清空（不 hold 旧值）
-    final fail = computeDivergenceForLevel(
+  test('离开窗激活后：包中则上/上上末有 diver/ratio', () {
+    final f = _k0TwoZsLeaveWindow();
+    final map = computeDivergenceForLevel(
       displayKn: 0,
-      bars: bars,
-      zsK0Frames: zsNoBreak,
+      bars: f.bars,
+      zsK0Frames: f.zs,
+      asOf: 5,
       config: const MathIndicatorConfig(divergenceRate: 1e9),
     );
-    final peakFail = fail[DivergenceAlgo.peak]!;
-    expect(peakFail.diverAt[4], 0);
-    expect(peakFail.ratioAt[4], isNull);
-    expect(peakFail.inAt[4], isNull);
-    expect(peakFail.outAt[4], isNull);
+    final amp = map[DivergenceAlgo.amp]!;
+    expect(amp.diverAt[5], isNot(0));
+    expect(amp.inAt[5], isNotNull);
+    expect(amp.outAt[5], isNotNull);
+    expect(amp.ratioAt[5], isNotNull);
   });
 
   test('严格背驰率：力度不弱 → diver=-1', () {
-    final bars = _breakoutBars();
-    final zs = [
-      const ZSFrame(
-        x1: 1,
-        x2: 3,
-        high: 10.0,
-        low: 9.0,
-        level: 0,
-        inSegIdx: 0,
-        outSegIdx: 4,
-      ),
-    ];
+    final f = _k0TwoZsLeaveWindow();
     final map = computeDivergenceForLevel(
       displayKn: 0,
-      bars: bars,
-      zsK0Frames: zs,
+      bars: f.bars,
+      zsK0Frames: f.zs,
+      asOf: 5,
       config: const MathIndicatorConfig(divergenceRate: 0.0001),
     );
     final amp = map[DivergenceAlgo.amp]!;
-    expect(amp.diverAt[4], -1);
-    expect(amp.ratioAt[4], isNotNull);
-    expect(amp.ratioAt[4]!.isFinite, isTrue);
+    expect(amp.diverAt[5], -1);
+    expect(amp.ratioAt[5], isNotNull);
   });
 
-  test('asOf 截断：事件后不可见', () {
-    final bars = _breakoutBars();
-    final zs = [
-      const ZSFrame(
-        x1: 1,
-        x2: 3,
-        high: 10.0,
-        low: 9.0,
-        level: 0,
-        inSegIdx: 0,
-        outSegIdx: 4,
-      ),
-    ];
+  test('asOf 早于事件步：无值', () {
+    final f = _k0TwoZsLeaveWindow();
     final map = computeDivergenceForLevel(
       displayKn: 0,
-      bars: bars,
-      zsK0Frames: zs,
+      bars: f.bars,
+      zsK0Frames: f.zs,
+      asOf: 2,
       config: const MathIndicatorConfig(divergenceRate: 1e9),
-      asOf: 3,
     );
-    final peak = map[DivergenceAlgo.peak]!;
-    expect(peak.diverAt[3], 0);
-    expect(peak.ratioAt[3], isNull);
+    // 离开窗仍可激活，但 endIdx=5 > asOf=2 → 本枢末段不可解析 → 无值
+    final amp = map[DivergenceAlgo.amp]!;
+    expect(amp.diverAt[2], 0);
+    expect(amp.ratioAt[2], isNull);
   });
 
-  test('12 算法均有序列；缺 turnrate 时 turnrate_avg diver=0', () {
-    final bars = _breakoutBars();
-    final zs = [
-      const ZSFrame(
-        x1: 1,
-        x2: 3,
-        high: 10.0,
-        low: 9.0,
-        level: 0,
-        inSegIdx: 0,
-        outSegIdx: 4,
-      ),
-    ];
+  test('13 算法均有序列；缺 turnrate 时 turnrate_avg diver=0', () {
+    final f = _k0TwoZsLeaveWindow();
     final map = computeDivergenceForLevel(
       displayKn: 0,
-      bars: bars,
-      zsK0Frames: zs,
+      bars: f.bars,
+      zsK0Frames: f.zs,
+      asOf: 5,
     );
-    expect(map.length, 12);
+    expect(map.length, DivergenceAlgoMeta.all.length);
     for (final a in DivergenceAlgoMeta.all) {
       expect(map[a], isNotNull);
-      expect(map[a]!.diverAt.length, bars.length);
+      expect(map[a]!.diverAt.length, f.bars.length);
     }
-    expect(map[DivergenceAlgo.turnrateAvg]!.diverAt[4], 0);
-    expect(map[DivergenceAlgo.turnrateAvg]!.ratioAt[4], isNull);
+    expect(map[DivergenceAlgo.turnrateAvg]!.diverAt[5], 0);
+    expect(map[DivergenceAlgo.turnrateAvg]!.ratioAt[5], isNull);
   });
 
-  test('Kn≥1：破枢后 amp 非0（本层进出段）', () {
-    final fixture = _kn1Breakout(activeX2: 4);
+  test('选段：包中→上/上上 endIdx；突破→本/上 endIdx', () {
+    final zs = [
+      const ZSFrame(
+        x1: 0,
+        x2: 2,
+        high: 11,
+        low: 9,
+        level: 1,
+        isSure: true,
+        endIdx: 10,
+      ),
+      const ZSFrame(
+        x1: 3,
+        x2: 4,
+        high: 10,
+        low: 8,
+        level: 1,
+        isSure: true,
+        endIdx: 11,
+      ),
+      const ZSFrame(
+        x1: 5,
+        x2: 6,
+        high: 9.5,
+        low: 7.5,
+        level: 1,
+        isSure: false,
+        endIdx: 12,
+      ),
+    ];
+    final contained = selectDivergenceEndPair(
+      zsList: zs,
+      dynZs: zs.last,
+      knHigh: 9.5,
+      knLow: 8.0,
+      dynKnEndIdx: 12,
+    );
+    expect(contained?.mode, 'contained');
+    expect(contained?.inEnd, 10);
+    expect(contained?.outEnd, 11);
+
+    final broke = selectDivergenceEndPair(
+      zsList: zs,
+      dynZs: zs.last,
+      knHigh: 11.0,
+      knLow: 8.0,
+      dynKnEndIdx: 12,
+    );
+    expect(broke?.mode, 'broke');
+    expect(broke?.inEnd, 11);
+    expect(broke?.outEnd, 12);
+  });
+
+  test('Kn≥1 包中：比较上枢末 vs 上上枢末（不用动态中枢末）', () {
+    final zs = [
+      const ZSFrame(
+        x1: 0,
+        x2: 2,
+        high: 11,
+        low: 9,
+        level: 1,
+        isSure: true,
+        endIdx: 10,
+      ),
+      const ZSFrame(
+        x1: 3,
+        x2: 4,
+        high: 10,
+        low: 8,
+        level: 1,
+        isSure: false,
+        endIdx: 11,
+      ),
+      const ZSFrame(
+        x1: 5,
+        x2: 6,
+        high: 9.5,
+        low: 7.5,
+        level: 1,
+        isSure: false,
+        endIdx: 12,
+      ),
+    ];
+    // active 包在 dynZs 内 → pair 10 vs 11
+    final fixture = _kn1Dyn(
+      activeX2: 4,
+      zsFrames: zs,
+      activeHigh: 9.5,
+      activeLow: 8.0,
+      activeIdx: 12,
+    );
     final map = computeDivergenceForLevel(
       displayKn: 1,
       bars: fixture.bars,
@@ -250,35 +330,127 @@ void main() {
     expect(amp.diverAt[4], isNot(0));
     expect(amp.inAt[4], isNotNull);
     expect(amp.outAt[4], isNotNull);
-    expect(amp.ratioAt[4], isNotNull);
   });
 
-  test('背驰冻结：active endX 右移旧点仍在、新 x 追加', () {
-    final store = DivergenceFreezeStore();
-    final step4 = _kn1Breakout(activeX2: 4);
-    final fresh4 = computeDivergenceForLevel(
+  test('Kn≥1 突破：比较动态中枢末(active) vs 上枢末', () {
+    final zs = [
+      const ZSFrame(
+        x1: 0,
+        x2: 2,
+        high: 11,
+        low: 9,
+        level: 1,
+        isSure: true,
+        endIdx: 10,
+      ),
+      const ZSFrame(
+        x1: 3,
+        x2: 4,
+        high: 10,
+        low: 8,
+        level: 1,
+        isSure: false,
+        endIdx: 11,
+      ),
+      const ZSFrame(
+        x1: 5,
+        x2: 6,
+        high: 9.5,
+        low: 7.5,
+        level: 1,
+        isSure: false,
+        endIdx: 12,
+      ),
+    ];
+    // active 上破 dynZs → pair 11 vs 12
+    final fixture = _kn1Dyn(
+      activeX2: 4,
+      zsFrames: zs,
+      activeHigh: 11.0,
+      activeLow: 8.0,
+      activeIdx: 12,
+    );
+    final map = computeDivergenceForLevel(
       displayKn: 1,
-      bars: step4.bars,
-      levels: step4.levels,
+      bars: fixture.bars,
+      levels: fixture.levels,
       config: const MathIndicatorConfig(divergenceRate: 1e9),
       asOf: 4,
     );
-    store.mergeLevel(displayKn: 1, fresh: fresh4);
+    final amp = map[DivergenceAlgo.amp]!;
+    expect(amp.diverAt[4], isNot(0));
+    expect(amp.inAt[4], isNotNull);
+    expect(amp.outAt[4], isNotNull);
+  });
+
+  test('背驰冻结：包中态步进旧点仍在、新 x 追加', () {
+    final zs = [
+      const ZSFrame(
+        x1: 0,
+        x2: 2,
+        high: 11,
+        low: 9,
+        level: 1,
+        isSure: true,
+        endIdx: 10,
+      ),
+      const ZSFrame(
+        x1: 3,
+        x2: 4,
+        high: 10,
+        low: 8,
+        level: 1,
+        isSure: false,
+        endIdx: 11,
+      ),
+      const ZSFrame(
+        x1: 5,
+        x2: 6,
+        high: 9.5,
+        low: 7.5,
+        level: 1,
+        isSure: false,
+        endIdx: 12,
+      ),
+    ];
+    final store = DivergenceFreezeStore();
+    final step4 = _kn1Dyn(
+      activeX2: 4,
+      zsFrames: zs,
+      activeHigh: 9.5,
+      activeLow: 8.0,
+    );
+    mergeDivergenceForStep(
+      store: store,
+      mathStore: null,
+      bars: step4.bars,
+      levels: step4.levels,
+      zsK0Frames: const [],
+      config: const MathIndicatorConfig(divergenceRate: 1e9),
+      maxDisplayKn: 1,
+      asOf: 4,
+    );
     final s4 = store.series(1, DivergenceAlgo.amp)!;
     expect(s4.diverAt[4], isNot(0));
-    expect(s4.ratioAt[4], isNotNull);
     final ratioAt4 = s4.ratioAt[4];
+    expect(ratioAt4, isNotNull);
 
-    // 下一步：离开段延伸到 x=5；整表 fresh 在 4 处可能清空，仓应保留
-    final step5 = _kn1Breakout(activeX2: 5);
-    final fresh5 = computeDivergenceForLevel(
-      displayKn: 1,
+    final step5 = _kn1Dyn(
+      activeX2: 5,
+      zsFrames: zs,
+      activeHigh: 9.5,
+      activeLow: 8.0,
+    );
+    mergeDivergenceForStep(
+      store: store,
+      mathStore: null,
       bars: step5.bars,
       levels: step5.levels,
+      zsK0Frames: const [],
       config: const MathIndicatorConfig(divergenceRate: 1e9),
+      maxDisplayKn: 1,
       asOf: 5,
     );
-    store.mergeLevel(displayKn: 1, fresh: fresh5);
     final s5 = store.series(1, DivergenceAlgo.amp)!;
     expect(s5.diverAt[4], isNot(0));
     expect(s5.ratioAt[4], ratioAt4);
@@ -286,20 +458,169 @@ void main() {
     expect(s5.ratioAt[5], isNotNull);
   });
 
+  test('两动态枢合并：本枢重映射后仍可算；历史格不变', () {
+    final store = DivergenceFreezeStore();
+    final zsBefore = [
+      const ZSFrame(
+        x1: 0,
+        x2: 2,
+        high: 11,
+        low: 9,
+        level: 1,
+        isSure: true,
+        endIdx: 10,
+      ),
+      const ZSFrame(
+        x1: 3,
+        x2: 4,
+        high: 10,
+        low: 8,
+        level: 1,
+        isSure: false,
+        endIdx: 11,
+      ),
+      const ZSFrame(
+        x1: 5,
+        x2: 6,
+        high: 9.5,
+        low: 7.5,
+        level: 1,
+        isSure: false,
+        endIdx: 12,
+      ),
+    ];
+    final step4 = _kn1Dyn(
+      activeX2: 4,
+      zsFrames: zsBefore,
+      activeHigh: 9.5,
+      activeLow: 8.0,
+    );
+    mergeDivergenceForStep(
+      store: store,
+      mathStore: null,
+      bars: step4.bars,
+      levels: step4.levels,
+      zsK0Frames: const [],
+      config: const MathIndicatorConfig(divergenceRate: 1e9),
+      maxDisplayKn: 1,
+      asOf: 4,
+    );
+    expect(store.ownSession(1).activeOwnX1, 3);
+    final ratioAt4 = store.series(1, DivergenceAlgo.amp)!.ratioAt[4];
+
+    store.setOwnSession(
+      1,
+      DivergenceOwnSession(
+        activeOwnX1: 5,
+        activeOwnRangeX1: 5,
+        activeOwnRangeX2: 6,
+      ),
+    );
+    final zsMerged = [
+      const ZSFrame(
+        x1: 0,
+        x2: 2,
+        high: 11,
+        low: 9,
+        level: 1,
+        isSure: true,
+        endIdx: 10,
+      ),
+      const ZSFrame(
+        x1: 3,
+        x2: 6,
+        high: 10,
+        low: 7.5,
+        level: 1,
+        isSure: false,
+        endIdx: 12,
+      ),
+    ];
+    // 合并后仅两框：包中需要上上 → dynIdx<2 无对；改用突破
+    final step6 = _kn1Dyn(
+      activeX2: 6,
+      zsFrames: zsMerged,
+      activeHigh: 11.0,
+      activeLow: 8.0,
+      activeIdx: 12,
+    );
+    mergeDivergenceForStep(
+      store: store,
+      mathStore: null,
+      bars: step6.bars,
+      levels: step6.levels,
+      zsK0Frames: const [],
+      config: const MathIndicatorConfig(divergenceRate: 1e9),
+      maxDisplayKn: 1,
+      asOf: 6,
+    );
+    expect(store.ownSession(1).activeOwnX1, 3);
+    final s6 = store.series(1, DivergenceAlgo.amp)!;
+    expect(s6.ratioAt[4], ratioAt4);
+    expect(s6.diverAt[6], isNot(0));
+    expect(s6.inAt[6], isNotNull);
+  });
+
+  test('确认同拍可启动本枢（突破态）', () {
+    final bars = _bars(6);
+    final zs = [
+      const ZSFrame(
+        x1: 0,
+        x2: 2,
+        high: 11,
+        low: 9,
+        level: 0,
+        isSure: true,
+        endIdx: 2,
+      ),
+      const ZSFrame(
+        x1: 1,
+        x2: 3,
+        high: 10.5,
+        low: 8.5,
+        level: 0,
+        isSure: true,
+        endIdx: 3,
+      ),
+      const ZSFrame(
+        x1: 3,
+        x2: 5,
+        high: 10,
+        low: 9.5,
+        level: 0,
+        isSure: true,
+        endIdx: 5,
+      ),
+    ];
+    // K0 末 bar high=11 > dynZs high=10 → 突破；pair end 3 vs 5
+    final map = computeDivergenceForLevel(
+      displayKn: 0,
+      bars: bars,
+      zsK0Frames: zs,
+      asOf: 5,
+      confirmedX1ThisStep: {3},
+      config: const MathIndicatorConfig(divergenceRate: 1e9),
+    );
+    final amp = map[DivergenceAlgo.amp]!;
+    expect(amp.diverAt[5], isNot(0));
+  });
+
   test('asOf 截断仓视图：右侧无未来读数', () {
     final store = DivergenceFreezeStore();
-    final step5 = _kn1Breakout(activeX2: 5);
-    final fresh5 = computeDivergenceForLevel(
-      displayKn: 1,
-      bars: step5.bars,
-      levels: step5.levels,
+    final f = _k0TwoZsLeaveWindow();
+    mergeDivergenceForStep(
+      store: store,
+      mathStore: null,
+      bars: f.bars,
+      levels: const [],
+      zsK0Frames: f.zs,
       config: const MathIndicatorConfig(divergenceRate: 1e9),
+      maxDisplayKn: 0,
       asOf: 5,
     );
-    store.mergeLevel(displayKn: 1, fresh: fresh5);
     final truncated = truncateDivergenceMap(
-      store.level(1)!,
-      step5.bars.length,
+      store.level(0)!,
+      f.bars.length,
       asOf: 3,
     );
     final amp = truncated[DivergenceAlgo.amp]!;
@@ -307,5 +628,127 @@ void main() {
     expect(amp.ratioAt[3], isNull);
     expect(amp.diverAt[5], 0);
     expect(amp.ratioAt[5], isNull);
+  });
+
+  /// MACD：+ + 0 - - + + -；in 段 [0,4] dir↑；out 段 [5,7] dir↓
+  group('buildDivergenceMacdHighlight 四算法差异', () {
+    const span = DivergenceCompareSpan(
+      inSegIdx: 0,
+      outSegIdx: 1,
+      inLoX: 0,
+      inHiX: 4,
+      outLoX: 5,
+      outHiX: 7,
+      inBeginX: 0,
+      inEndX: 4,
+      outBeginX: 5,
+      outEndX: 7,
+      inDir: 1,
+      outDir: -1,
+      mode: 'broke',
+    );
+    // index: 0:+2, 1:+1, 2:0, 3:-1, 4:-2, 5:+3, 6:+1, 7:-4
+    final macd = <double?>[2, 1, 0, -1, -2, 3, 1, -4];
+
+    test('area：从端点同号连续，短于整段', () {
+      final hl = buildDivergenceMacdHighlight(
+        algo: DivergenceAlgo.area,
+        span: span,
+        macdHist: macd,
+      )!;
+      // in 从 begin=0 向右：2,1 同号后遇 0 断
+      expect(hl.inXs, [0, 1]);
+      // out 从 end=7 向左：-4 同号后遇 +1 断
+      expect(hl.outXs, [7]);
+      expect(hl.inPeakX, isNull);
+      expect(hl.outPeakX, isNull);
+    });
+
+    test('peak：整段同向柱 + 峰值 x', () {
+      final hl = buildDivergenceMacdHighlight(
+        algo: DivergenceAlgo.peak,
+        span: span,
+        macdHist: macd,
+      )!;
+      expect(hl.inXs, [0, 1]); // dir↑ 只要 >0
+      expect(hl.outXs, [7]); // dir↓ 只要 <0
+      expect(hl.inPeakX, 0); // |2| 最大
+      expect(hl.outPeakX, 7);
+    });
+
+    test('full_area：整段同向柱（可有空隙）', () {
+      final hl = buildDivergenceMacdHighlight(
+        algo: DivergenceAlgo.fullArea,
+        span: span,
+        macdHist: macd,
+      )!;
+      expect(hl.inXs, [0, 1]);
+      expect(hl.outXs, [7]);
+      expect(hl.inPeakX, isNull);
+    });
+
+    test('diff：整段全部非空柱', () {
+      final hl = buildDivergenceMacdHighlight(
+        algo: DivergenceAlgo.diff,
+        span: span,
+        macdHist: macd,
+      )!;
+      expect(hl.inXs, [0, 1, 2, 3, 4]);
+      expect(hl.outXs, [5, 6, 7]);
+      expect(hl.inPeakX, isNull);
+    });
+  });
+
+  test('背驰_斜率：与连线斜率公式同源（取绝对值）', () {
+    // 突破：in=上枢末#11 |slope|=|(10.5-9.2)/(3-2)|=1.3
+    // out=active#12 |slope|=|(8-11)/(4-3)|=3
+    final zs = [
+      const ZSFrame(
+        x1: 0,
+        x2: 2,
+        high: 11,
+        low: 9,
+        level: 1,
+        isSure: true,
+        endIdx: 10,
+      ),
+      const ZSFrame(
+        x1: 3,
+        x2: 4,
+        high: 10,
+        low: 8,
+        level: 1,
+        isSure: false,
+        endIdx: 11,
+      ),
+      const ZSFrame(
+        x1: 5,
+        x2: 6,
+        high: 9.5,
+        low: 7.5,
+        level: 1,
+        isSure: false,
+        endIdx: 12,
+      ),
+    ];
+    final fixture = _kn1Dyn(
+      activeX2: 4,
+      zsFrames: zs,
+      activeHigh: 11.0,
+      activeLow: 8.0,
+      activeIdx: 12,
+    );
+    final map = computeDivergenceForLevel(
+      displayKn: 1,
+      bars: fixture.bars,
+      levels: fixture.levels,
+      config: const MathIndicatorConfig(divergenceRate: 1e9),
+      asOf: 4,
+    );
+    final s = map[DivergenceAlgo.lineSlope]!;
+    expect(s.diverAt[4], isNot(0));
+    expect(s.inAt[4], closeTo(1.3, 1e-9));
+    expect(s.outAt[4], closeTo(3.0, 1e-9));
+    expect(s.ratioAt[4], closeTo(3.0 / 1.3, 1e-9));
   });
 }

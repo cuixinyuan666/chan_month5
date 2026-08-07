@@ -559,29 +559,26 @@ class MsgHistory {
     );
   }
 
-  /// Kn背驰 12 算法分项（进程内去重；非买卖点）
-  static bool _knDivergenceLoggedV4 = false;
+  /// Kn背驰 13 算法分项（进程内去重；非买卖点）
+  static bool _knDivergenceLoggedV11 = false;
   void appendKnDivergenceIndicators() {
-    if (_knDivergenceLoggedV4) return;
-    _knDivergenceLoggedV4 = true;
+    if (_knDivergenceLoggedV11) return;
+    _knDivergenceLoggedV11 = true;
     append(
-      '【Kn背驰·副图分算法·v4·全层同构+冻结】'
-      '副图类别「背驰」：K{n}背驰_area/peak/full_area/diff/slope/amp/amount/volumn/'
-      'amount_avg/volumn_avg/turnrate_avg/rsi（12 算法分类×层分层）。'
-      '绑定：进「Kn指标」层全选；启动默认不勾（defaultSubIndicatorsK0 过滤 divergence）。'
-      '副图绘制：ratio 折线 + diver±1 短柱；读数框/chip 同源 sub 键。'
-      '口径：CZS.is_divergence——离开段须突破中枢(ZG/ZD)；in/out=进出段力度；'
-      'ratio=out/in；diver：背离=1、未背离=-1、无值=0（未突破/缺力度/非有限/in=0）。'
-      '事件 diver=0 时 in/out/ratio 同步清空（expandNullable，禁 hold 旧值·fresh）。'
-      'divergence_rate>100 保送；设置落盘 .chan_trend_model_config.json。'
-      'K0 进出段=分钟K段 idx；Kn=冻段+activeUnit；'
-      '力度=本层 MACD/RSI（与 Math 同号，优先读 MathSeriesFreezeStore）；'
-      '成交/振幅仍在进出段 K0 时间窗聚合。'
-      '当下冻结：DivergenceFreezeStore 格点首次非空/非0 写入后冻结；'
-      '动态离开段 endX 右移只追加新 x，禁止挪旧点/整表消点；'
-      '参数变更清空并 0..当前步重冻。十字 asOf 截断仓视图（禁回落末态 ZS）。'
-      'turnrate_avg 读 metrics.turnrate（纠正旧误映射 AMOUNT_AVG）。'
-      '特征键 diver_{algo}_{in|out|ratio|flag}_{dkn}；tooltip 应显尽显。',
+      '【Kn背驰·副图分算法·v11·全体副图整段高亮】'
+      '副图类别「背驰」：K{n}背驰_area/peak/…/斜率（13 算法×层）。'
+      '绑定：进「Kn指标」层全选；启动默认不勾。'
+      '口径：中枢判断±1 启动；相对最新动态中枢——'
+      '动态Kn包中→上枢末vs上上枢末；破上/下沿→本枢末vs上枢末。'
+      'ratio=out/in；diver 1/-1/0；divergence_rate 默认1.0（>100保送）。'
+      '学习观察(可删)：勾选 area/peak/full_area/diff 任一自动并入同号 KnMACD 并立即绘制；'
+      '十字 asOf 下 MACD 按算法差异高亮实际贡献柱（in蓝/out琥珀）：'
+      'area=端点同号连续段；peak=整段同向柱+峰值描边；'
+      'full_area=整段同向柱；diff=整段全部非空柱。'
+      '全体 Kn背驰_* 副图同十字：高亮比较两段整 Kn 区间（in蓝/out琥珀）；'
+      '含 slope/斜率/amp/amount/volumn/amount_avg/volumn_avg/turnrate_avg/rsi 及 MACD 四算法。'
+      'Kn背驰_斜率：与 Kn连线斜率同源 |(endVal-beginVal)/dx|；K0 无连线段不写。'
+      'span/高亮来自 DivergenceFreezeStore；颗粒度K0；旧格冻结不回写。',
     );
   }
 

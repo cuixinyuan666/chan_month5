@@ -362,8 +362,19 @@ class _KlineChartState extends State<KlineChart> {
     _mutedSubs = {
       ..._mutedSubs.intersection(_activeSubs),
       for (final e in addedS)
-        if (!isDefaultDrawnSub(e)) e,
+        if (!isDefaultDrawnSub(e) &&
+            // 学习观察：MACD 类背驰连带的同号 MACD 立即绘制（不进静音）
+            !(e.kind == SubIndicatorKind.macd &&
+                hasMacdDivergenceForKn(_activeSubs, e.kn)))
+          e,
     };
+    // 已勾 MACD 类背驰时强制取消同号 MACD 静音（含先前已 muted 的）
+    for (final e in _activeSubs) {
+      if (e.kind == SubIndicatorKind.divergence &&
+          isMacdDivergenceAlgo(e.diverAlgo)) {
+        _mutedSubs.remove(SubChartIndicator.macd(e.kn));
+      }
+    }
   }
 
   void _measureSubChipBar() {
@@ -4329,6 +4340,33 @@ class _KlineCompositePainter extends CustomPainter {
       zeroPaint,
     );
 
+    // 学习观察：十字 asOf 下，背驰副图高亮比较两段整 Kn 区间（全体算法）
+    // in=蓝 / out=琥珀；MACD 类另在 MACD 副图按贡献柱差异高亮
+    if (asOf != null && diverFreezeStore != null) {
+      final cmp = diverFreezeStore!.spanAtOrBefore(displayKn, asOf);
+      if (cmp != null) {
+        void paintBand(int lo, int hi, Color color) {
+          final a = lo < hi ? lo : hi;
+          final b = lo < hi ? hi : lo;
+          for (var x = a; x <= b; x++) {
+            if (x > maxX) continue;
+            if (x < viewport.viewXMin - 1 || x > viewport.viewXMax + 1) {
+              continue;
+            }
+            final cx = _barCenterX(x, w, slotW);
+            final half = math.max(1.0, slotW * 0.45);
+            canvas.drawRect(
+              Rect.fromLTRB(cx - half, innerTop, cx + half, innerTop + innerH),
+              Paint()..color = color,
+            );
+          }
+        }
+
+        paintBand(cmp.inLoX, cmp.inHiX, const Color(0x552563EB));
+        paintBand(cmp.outLoX, cmp.outHiX, const Color(0x55F59E0B));
+      }
+    }
+
     final upBar = Paint()..color = const Color(0xCCDC2626);
     final dnBar = Paint()..color = const Color(0xCC16A34A);
     final halfW = math.max(1.0, barW * 0.3);
@@ -4587,6 +4625,67 @@ class _KlineCompositePainter extends CustomPainter {
       Offset(w - KlineViewport.padR, subY(0)),
       zeroPaint,
     );
+
+    // 学习观察：十字 asOf 下按算法差异高亮实际贡献柱
+    // area=同号连续段；peak/full_area=整段同向柱；diff=整段全部非空柱；peak 另标极值点
+    // in=蓝半透明底，out=琥珀半透明底
+    final macdAlgo = macdDivergenceAlgoForKn(subIndicators, displayKn);
+    if (asOf != null &&
+        macdAlgo != null &&
+        diverFreezeStore != null) {
+      final cmp = diverFreezeStore!.spanAtOrBefore(displayKn, asOf);
+      final hl = cmp == null
+          ? null
+          : buildDivergenceMacdHighlight(
+              algo: macdAlgo,
+              span: cmp,
+              macdHist: histArr,
+            );
+      if (hl != null) {
+        void paintXs(List<int> xs, Color color) {
+          for (final x in xs) {
+            if (x > maxX) continue;
+            if (x < viewport.viewXMin - 1 || x > viewport.viewXMax + 1) {
+              continue;
+            }
+            final cx = _barCenterX(x, w, slotW);
+            final half = math.max(1.0, slotW * 0.45);
+            canvas.drawRect(
+              Rect.fromLTRB(cx - half, innerTop, cx + half, innerTop + innerH),
+              Paint()..color = color,
+            );
+          }
+        }
+
+        void paintPeakMark(int? peakX, Color color) {
+          if (peakX == null || peakX > maxX) return;
+          if (peakX < viewport.viewXMin - 1 || peakX > viewport.viewXMax + 1) {
+            return;
+          }
+          final cx = _barCenterX(peakX, w, slotW);
+          final half = math.max(1.5, slotW * 0.5);
+          canvas.drawRect(
+            Rect.fromLTRB(
+              cx - half,
+              innerTop,
+              cx + half,
+              innerTop + innerH,
+            ),
+            Paint()
+              ..color = color
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = 2,
+          );
+        }
+
+        paintXs(hl.inXs, const Color(0x552563EB)); // in 蓝
+        paintXs(hl.outXs, const Color(0x55F59E0B)); // out 琥珀
+        if (hl.algo == DivergenceAlgo.peak) {
+          paintPeakMark(hl.inPeakX, const Color(0xFF2563EB));
+          paintPeakMark(hl.outPeakX, const Color(0xFFF59E0B));
+        }
+      }
+    }
 
     final upBar = Paint()..color = const Color(0xCCDC2626);
     final dnBar = Paint()..color = const Color(0xCC16A34A);

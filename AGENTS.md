@@ -74,5 +74,6 @@ CHAN_RUST项目：项目定位：全新项目，用于行情回测、机器学�
 - **默认绘制（关联≠全画）**：层全选仍勾全集；默认实际绘制仅主图 Kn/合并/中枢/连线 + 副图分型确认/判断/截断/中枢确认/判断；其余关联项默认删除线静音（`isDefaultDrawnMain/Sub`），单击 chip 可打开。
 - **主图 Math 仍绑层全选**：均线/通道/布林（与中枢同号）。
 - **十字 asOf 右侧不画**：蜡烛/成交量/分型/BS/Math 副图已截断；主图均线/通道/布林必须走 `_paintPriceSeries` 的 `x>asOf` 截断，禁止只算 asOf 却仍把冻结仓全长画完。
-- **当下冻结**：`MathSeriesFreezeStore` 格点首次非空写入后冻结；参数变更清空并 0..当前步重冻。背驰另有 `DivergenceFreezeStore`（本层 MACD/RSI 力度；旧格不改、动态离开只追加）。验收：连续单步（非一键跳末）。
+- **当下冻结**：`MathSeriesFreezeStore` 格点首次非空写入后冻结；参数变更清空并 0..当前步重冻。背驰另有 `DivergenceFreezeStore`（本层 MACD/RSI 力度；旧格不改、新 x 追加）。验收：连续单步（非一键跳末）。
+- **背驰 v11（2026-08-07）**：全体 Kn背驰_* 副图十字下整段高亮比较 in/out Kn；MACD 四算法另在 MACD 副图按贡献柱高亮。含斜率同源连线斜率。详见 `msg_history` v11。
 - **踩坑**：新增副图指标时同步改 ①catalog ②`subIndicatorsForLevel` ③绘制分支 ④`crosshairSubRows` ⑤`msg_history`；漏任一环=「没和 Kn指标绑定」或「十字右侧读数空白」。默认不勾≠不进层全选——背驰即此例。背驰力度须与 Math 同号（`displayKn`），禁止再绑死 K0。Math 副图绘制须对冻结仓 `min(bars.length, series.length)`，禁 RSI/KDJ/MACD 越界。

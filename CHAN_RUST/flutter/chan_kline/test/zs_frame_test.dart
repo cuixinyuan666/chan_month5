@@ -14,6 +14,7 @@ void main() {
       'count': 5,
       'dir': 1,
       'is_sure': true,
+      'end_idx': 9,
       'in_seg_idx': 7,
       'out_seg_idx': 12,
     };
@@ -27,6 +28,7 @@ void main() {
     expect(f.count, 5);
     expect(f.dir, 1);
     expect(f.isSure, isTrue);
+    expect(f.endIdx, 9);
     expect(f.inSegIdx, 7);
     expect(f.outSegIdx, 12);
   });
@@ -37,6 +39,7 @@ void main() {
     expect(f.level, 1);
     expect(f.count, 0);
     expect(f.isSure, isTrue);
+    expect(f.endIdx, isNull);
     expect(f.inSegIdx, isNull);
     expect(f.outSegIdx, isNull);
   });

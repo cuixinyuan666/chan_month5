@@ -364,6 +364,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
   void _refreezeMathFromStart() {
     final end = _stepIdx;
     if (end < 0 || _allBars.isEmpty) return;
+    // 背驰确认同拍：与中枢确认历史解耦，按相邻步 is_sure 跃迁合成
+    Map<int, Set<int>> prevSureByKn = {};
     for (var i = 0; i <= end; i++) {
       final visible = _allBars.sublist(0, i + 1);
       try {
@@ -371,8 +373,24 @@ class _KlineHomePageState extends State<KlineHomePage> {
           visible,
           truncationCheck: _truncationCheck,
         );
+        final curZs = collectZsFramesByKn(bundle);
+        final confirmedByKn = <int, Set<int>>{};
+        for (final e in curZs.entries) {
+          final prevSure = prevSureByKn[e.key] ?? const <int>{};
+          final nowSure = {
+            for (final f in e.value)
+              if (f.isSure) f.x1,
+          };
+          confirmedByKn[e.key] = nowSure.difference(prevSure);
+          prevSureByKn[e.key] = nowSure;
+        }
         _mergeMathFreeze(bundle, bars: visible, asOf: i);
-        _mergeDivergenceFreeze(bundle, bars: visible, asOf: i);
+        _mergeDivergenceFreeze(
+          bundle,
+          bars: visible,
+          asOf: i,
+          confirmedX1ByKn: confirmedByKn,
+        );
       } catch (_) {
         break;
       }
@@ -681,7 +699,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
   }
 
   /// 本步中枢帧 → 判断/确认会话历史（先确认后判断；确认同拍共点）。
-  void _mergeZsSignalHistory(KlineCombineBundle bundle) {
+  /// 返回各层本步新确认的 x1（供背驰本枢启动）。
+  Map<int, Set<int>> _mergeZsSignalHistory(KlineCombineBundle bundle) {
     final discoveryX = _stepIdx < 0 ? 0 : _stepIdx;
     final nextJudge = <int, List<ZsSignalEvent>>{
       for (final e in _zsJudgmentHistoryByKn.entries)
@@ -691,6 +710,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       for (final e in _zsConfirmHistoryByKn.entries)
         e.key: List<ZsSignalEvent>.from(e.value),
     };
+    final confirmedByKn = <int, Set<int>>{};
     for (final e in collectZsFramesByKn(bundle).entries) {
       final cLog = nextConfirm.putIfAbsent(e.key, () => <ZsSignalEvent>[]);
       final confirmed = mergeZsConfirmEventLog(
@@ -699,6 +719,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         kn: e.key,
         discoveryX: discoveryX,
       );
+      confirmedByKn[e.key] = confirmed;
       final jLog = nextJudge.putIfAbsent(e.key, () => <ZsSignalEvent>[]);
       mergeZsJudgmentEventLog(
         jLog,
@@ -711,6 +732,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
     }
     _zsJudgmentHistoryByKn = nextJudge;
     _zsConfirmHistoryByKn = nextConfirm;
+    return confirmedByKn;
   }
 
   /// Kn≥1：本步动态 active 段 idx；K0 无 active（分钟K段不延伸）。
@@ -888,6 +910,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
     KlineCombineBundle bundle, {
     List<KlineBar>? bars,
     int? asOf,
+    Map<int, Set<int>> confirmedX1ByKn = const {},
   }) {
     final visible = bars ?? _visibleBars;
     if (visible.isEmpty) return;
@@ -902,6 +925,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       config: _mathIndicatorConfig,
       maxDisplayKn: maxKn,
       asOf: displayX,
+      confirmedX1ByKn: confirmedX1ByKn,
     );
   }
 
@@ -989,10 +1013,10 @@ class _KlineHomePageState extends State<KlineHomePage> {
       );
       // 会话冻结：并入本步一类BS，禁止下一步整表覆盖消掉上步显示
       _mergeBsHistory(bundle);
-      _mergeZsSignalHistory(bundle);
+      final zsConfirmed = _mergeZsSignalHistory(bundle);
       _mergeRatioAndRhythm(bundle);
       _mergeMathFreeze(bundle);
-      _mergeDivergenceFreeze(bundle);
+      _mergeDivergenceFreeze(bundle, confirmedX1ByKn: zsConfirmed);
       final frozenLevels = _levelsWithFrozenBs(bundle.levels);
       setState(() {
         _combineFrames = bundle.frames;
@@ -1199,10 +1223,15 @@ class _KlineHomePageState extends State<KlineHomePage> {
         );
         // 一类/二类BS 也逐K并入会话冻结，避免一次性走完只剩末态
         _mergeBsHistory(bundle);
-        _mergeZsSignalHistory(bundle);
+        final zsConfirmed = _mergeZsSignalHistory(bundle);
         _mergeRatioAndRhythm(bundle);
         _mergeMathFreeze(bundle, bars: visible, asOf: i);
-        _mergeDivergenceFreeze(bundle, bars: visible, asOf: i);
+        _mergeDivergenceFreeze(
+          bundle,
+          bars: visible,
+          asOf: i,
+          confirmedX1ByKn: zsConfirmed,
+        );
       } catch (e) {
         _msgHistory.append('一次性走完@step=$i 失败：$e');
         break;
@@ -1273,8 +1302,9 @@ class _KlineHomePageState extends State<KlineHomePage> {
                   onMainIndicatorsChanged: (v) =>
                       setState(() => _mainIndicators = v),
                   subIndicators: _subIndicators,
-                  onSubIndicatorsChanged: (v) =>
-                      setState(() => _subIndicators = v),
+                  onSubIndicatorsChanged: (v) => setState(
+                    () => _subIndicators = ensureMacdForDivergenceArea(v),
+                  ),
                   indicatorsEnabled: _hasSession,
                   autoFollowLatest: true,
                   isPlaying: _playing,
@@ -2144,7 +2174,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
                 controller: diverRateCtl,
                 decoration: const InputDecoration(
                   labelText: '背驰率 divergence_rate',
-                  hintText: '>100 保送；如 0.8 / 1e9',
+                  hintText: '>100 保送；默认 1.0；如 0.8',
                 ),
                 keyboardType:
                     const TextInputType.numberWithOptions(decimal: true),
@@ -2203,7 +2233,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       demarkSetupBias: parseInt(demarkSetupCtl.text, 4),
       demarkCountdownBias: parseInt(demarkCdCtl.text, 2),
       demarkMaxCountdown: parseInt(demarkMaxCtl.text, 13),
-      divergenceRate: parseDouble(diverRateCtl.text, 1e9),
+      divergenceRate: parseDouble(diverRateCtl.text, 1.0),
     );
     for (final c in [
       meanCtl,

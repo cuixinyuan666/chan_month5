@@ -2,6 +2,48 @@
 
 ## 最新记录
 
+### 2026-08-07 — 全体背驰副图整段高亮（补 amp/成交量/RSI 等）
+
+- **要点**：十字 asOf 下，所有 Kn背驰_* 副图均蓝/琥珀高亮比较两段整 Kn；此前仅 slope/斜率。MACD 四算法仍额外在 MACD 副图按贡献柱高亮。
+- **相关路径**：`kline_chart.dart`、`divergence_algo.dart`、`msg_history.dart`、`AGENTS.md`
+- **注意**：依赖 DivergenceFreezeStore.span
+
+### 2026-08-07 — 新增 Kn背驰_斜率（与连线斜率同源）
+
+- **要点**：13 算法；力度=`|(endVal-beginVal)/(endX-beginX)|`（冻段 endConfirmX；active 随 asOf）；取绝对值做 ratio；副图整段蓝/琥珀高亮。旧 `slope` 保留。
+- **相关路径**：`divergence_algo.dart`、`adjacent_ratio_compute.dart`、`divergence_compute.dart`、`kline_chart.dart`、`msg_history.dart`
+- **注意**：K0 无连线段不写斜率背驰；勿与旧 slope（振幅摊平）混淆
+
+### 2026-08-07 — Kn背驰_slope 副图高亮比较 Kn 整段
+
+- **要点**：十字 asOf 下，Kn背驰_slope 副图用蓝/琥珀条带高亮 in/out 两段整 Kn 区间（slope 吃几何整段，非 MACD 贡献子集）。
+- **相关路径**：`kline_chart.dart`、`msg_history.dart`、`AGENTS.md`
+- **注意**：依赖 DivergenceFreezeStore.span；与 MACD 类高亮配色一致
+
+### 2026-08-07 — 背驰 MACD 四算法差异化高亮（area/peak/full_area/diff）
+
+- **要点**：理清四算法对 MACD 柱的贡献差异后，十字 asOf 下按实际贡献柱高亮（不再整段 lo–hi 糊满）；peak 另描峰值。勾任一 MACD 类背驰自动叠同号 MACD。
+- **相关路径**：`divergence_compute.dart`、`divergence_algo.dart`、`chart_indicator.dart`、`kline_chart.dart`、`msg_history.dart`、`divergence_compute_test.dart`
+- **注意**：area=端点同号连续；peak/full_area=整段同向；diff=整段全非空。旧 span 缺 begin/end/dir 需重步进。
+
+### 2026-08-07 — 背驰area学习观察：自动叠KnMACD + 十字高亮比较段
+
+- **要点**：默认背驰率 1.0（旧 1e9 加载时迁移）；勾选 Kn背驰_area 自动并入同号 MACD 并取消静音；十字 asOf 下 MACD 副图蓝/琥珀条带高亮 in/out 两段。观察向，可删。
+- **相关路径**：`divergence_compute.dart`、`divergence_freeze_store.dart`、`chart_indicator.dart`、`kline_chart.dart`、`math_indicator_settings_store.dart`、`msg_history.dart`
+- **注意**：高亮依赖步进冻结的 span；一键跳末/连续单步后十字才有区间；冷启重载配置后背驰率应为 1.0
+
+### 2026-08-06 — Kn背驰 v6：包中用上/上上，突破用本/上
+
+- **要点**：相对最新动态中枢，动态Kn完全落在 ZG/ZD 内则比较上枢末与上上枢末；破上沿或下沿才用本枢末 vs 上枢末。启动仍靠中枢判断会话。
+- **相关路径**：`divergence_compute.dart`、`msg_history.dart`、`divergence_compute_test.dart`、`AGENTS.md`
+- **注意**：验收默认分笔 K0=90 应为 21vs23；K0=104 破枢后应为 23vs26
+
+### 2026-08-06 — Kn背驰 v5：本枢末Kn vs 上枢末Kn
+
+- **要点**：背驰改由中枢判断±1 启动本枢；比较上枢末 Kn 与本枢末 Kn（`end_idx`，含动态 active）；K0 颗粒度只写当前步格；重叠合并当步重映射本枢，旧格冻结不回写；废除破 ZG/ZD 门槛。
+- **相关路径**：`zs.rs`、`zs_frame.dart`、`divergence_compute.dart`、`divergence_freeze_store.dart`、`main.dart`、`msg_history.dart`、`divergence_compute_test.dart`
+- **注意**：须重编 `chan_ffi.dll` 后冷启；验收连续单步（非一键跳末）
+
 ### 2026-08-06 — 中枢判断/确认：未确认共点 + 经验落盘（提交）
 
 - **要点**：对象=尚未确认中枢（非新芽）；离开窗打上个 + 确认当步对刚定型框同拍打判断。K0 无动态Kn → 副图判断/确认同 x/x1 重叠（预期）；全层同一 merge。经验写入 `zs_signal_compute` 头注释、`AGENTS`、`msg_history` v11。

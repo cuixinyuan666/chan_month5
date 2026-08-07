@@ -12,6 +12,8 @@ class ZSFrame {
   final int count;
   final int dir;
   final bool isSure;
+  /// 本中枢最后一个成员段 idx（Rust end_idx）
+  final int? endIdx;
   final int? inSegIdx;
   final int? outSegIdx;
 
@@ -27,6 +29,7 @@ class ZSFrame {
     this.count = 0,
     this.dir = 0,
     this.isSure = true,
+    this.endIdx,
     this.inSegIdx,
     this.outSegIdx,
   });
@@ -44,6 +47,7 @@ class ZSFrame {
       count: (json['count'] as num?)?.toInt() ?? 0,
       dir: (json['dir'] as num?)?.toInt() ?? 0,
       isSure: json['is_sure'] as bool? ?? true,
+      endIdx: json['end_idx'] is num ? (json['end_idx'] as num).toInt() : null,
       inSegIdx: json['in_seg_idx'] is num
           ? (json['in_seg_idx'] as num).toInt()
           : null,

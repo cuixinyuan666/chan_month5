@@ -15,8 +15,8 @@ class MathIndicatorConfig {
     this.demarkSetupBias = 4,
     this.demarkCountdownBias = 2,
     this.demarkMaxCountdown = 13,
-    /// >100 保送背驰（突破即 diver=1）；默认很大
-    this.divergenceRate = 1e9,
+    /// >100 保送背驰；正常比例如 0.9/1.0（默认 1.0=等力度阈值）
+    this.divergenceRate = 1.0,
   });
 
   final List<int> meanPeriods;
@@ -123,7 +123,7 @@ class MathIndicatorConfig {
       demarkSetupBias: i(map['demarkSetupBias'], 4),
       demarkCountdownBias: i(map['demarkCountdownBias'], 2),
       demarkMaxCountdown: i(map['demarkMaxCountdown'], 13),
-      divergenceRate: d(map['divergenceRate'], 1e9),
+      divergenceRate: d(map['divergenceRate'], 1.0),
     );
   }
 

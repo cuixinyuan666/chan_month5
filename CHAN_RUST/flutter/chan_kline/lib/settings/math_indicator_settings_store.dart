@@ -18,7 +18,13 @@ abstract final class MathIndicatorSettingsStore {
       final map = obj is Map<String, dynamic>
           ? obj
           : (obj is Map ? Map<String, dynamic>.from(obj) : null);
-      return MathIndicatorConfig.fromJson(map);
+      var cfg = MathIndicatorConfig.fromJson(map);
+      // 旧默认 1e9=保送 → 迁移为 1.0（等力度阈值）
+      if (cfg.divergenceRate > 100) {
+        cfg = cfg.copyWith(divergenceRate: 1.0);
+        await save(cfg);
+      }
+      return cfg;
     } catch (_) {
       return const MathIndicatorConfig();
     }
