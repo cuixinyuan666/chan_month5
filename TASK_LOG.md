@@ -2,6 +2,17 @@
 
 ## 最新记录
 
+### 2026-08-09 — 本批验收通过（T1 tip三类·T2 节奏主图）
+
+- **要点**：用户贴文确认 T1=`OK_FIXED`（背驰/比例+节奏/其它序与 `-。-` 分隔、混桶=N）、T2=`OK_FIXED`（main节奏 kn=0..4、副图无残留、层全选/默认静音）；本批结案。
+- **注意**：主图 chip 点开「Kn节奏」才绘制（默认静音）
+
+### 2026-08-08 — tip三类分桶 + Kn节奏迁主图（价轴）
+
+- **要点**：十字 tip 层内拆三类（背驰 / 比例+节奏 / 其它指标）；Kn节奏从副图干净迁主图（`MainIndicatorKind.stepRhythm`，挂节奏投影价，进 Kn指标、默认静音）；「复制调试信息」改绑本批 T1/T2。
+- **相关路径**：`chart_indicator.dart`、`bar_feature_lookup.dart`、`kline_chart.dart`、`audit_probe_snapshot.dart`、`msg_history.dart`、`AGENTS.md`
+- **注意**：冷启后跳末→复制调试信息看 T1/T2；主图 chip 点开节奏才绘制
+
 ### 2026-08-08 — 本批验收通过（A/D/E/F/G/H）
 
 - **要点**：用户贴文确认 A=`OK_FIXED`（K0 bs1_hits x=2）、D tip 十一类、E Peak 已接线、F 虚线末枢、G 口径、H asOf 段数差；本批结案。

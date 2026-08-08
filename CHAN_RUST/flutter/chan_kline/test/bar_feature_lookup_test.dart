@@ -314,5 +314,16 @@ void main() {
     );
     expect(lines.any((l) => l == 'K0节奏0-0:【11.500】'), isTrue);
     expect(lines.any((l) => l == 'K0节奏0-1:【12.250】'), isTrue);
+    // tip 三类：背驰 | 比例+节奏 | 其它（均线）用 -。- 分隔
+    final rows = lookup.crosshairTooltipRows(0, timePart: 't0');
+    final labs = rows.map((e) => e.label).toList();
+    final iDiver = labs.indexWhere((l) => l.startsWith('K0背驰'));
+    final iRatio = labs.indexWhere((l) => l == 'K0比例');
+    final iMean = labs.indexWhere((l) => l == 'K0均线');
+    expect(iDiver, greaterThanOrEqualTo(0));
+    expect(iRatio, greaterThan(iDiver));
+    expect(iMean, greaterThan(iRatio));
+    expect(rows.sublist(iDiver, iRatio).any((e) => e.isStar), isTrue);
+    expect(rows.sublist(iRatio, iMean).any((e) => e.isStar), isTrue);
   });
 }

@@ -333,24 +333,35 @@ void main() {
   });
 
   group('catalog', () {
-    test('含 adjacentRatio / stepRhythm 且 displayLevel 正确', () {
-      final cat = buildSubIndicatorCatalog(2);
-      final ratios = cat.where((e) => e.kind == SubIndicatorKind.adjacentRatio);
-      final rhythms = cat.where((e) => e.kind == SubIndicatorKind.stepRhythm);
+    test('副图含 adjacentRatio；主图含 stepRhythm 且 displayLevel 正确', () {
+      final subCat = buildSubIndicatorCatalog(2);
+      final mainCat = buildMainIndicatorCatalog(2);
+      final ratios =
+          subCat.where((e) => e.kind == SubIndicatorKind.adjacentRatio);
+      final rhythms =
+          mainCat.where((e) => e.kind == MainIndicatorKind.stepRhythm);
       expect(ratios.map((e) => e.kn), [0, 1]);
       expect(rhythms.map((e) => e.kn), [0, 1]);
       expect(ratios.every((e) => e.displayLevel == e.kn), isTrue);
       expect(rhythms.every((e) => e.label.contains('节奏')), isTrue);
       expect(ratios.every((e) => e.label.contains('比例')), isTrue);
+      expect(subCat.any((e) => e.label.contains('节奏')), isFalse);
     });
 
-    test('默认 K0 副图含相邻比例/节奏（进 Kn指标层全选）', () {
-      final d = defaultSubIndicatorsK0();
-      expect(d.any((e) => e.kind == SubIndicatorKind.adjacentRatio), isTrue);
-      expect(d.any((e) => e.kind == SubIndicatorKind.stepRhythm), isTrue);
-      final lv0 = subIndicatorsForLevel(0, buildSubIndicatorCatalog(1));
-      expect(lv0.any((e) => e.kind == SubIndicatorKind.adjacentRatio), isTrue);
-      expect(lv0.any((e) => e.kind == SubIndicatorKind.stepRhythm), isTrue);
+    test('默认 K0：副图含比例；主图含节奏（进 Kn指标层全选）', () {
+      final dSub = defaultSubIndicatorsK0();
+      final dMain = defaultMainIndicatorsK0();
+      expect(dSub.any((e) => e.kind == SubIndicatorKind.adjacentRatio), isTrue);
+      expect(dMain.any((e) => e.kind == MainIndicatorKind.stepRhythm), isTrue);
+      final subLv0 = subIndicatorsForLevel(0, buildSubIndicatorCatalog(1));
+      final mainLv0 = mainIndicatorsForLevel(0, buildMainIndicatorCatalog(1));
+      expect(
+          subLv0.any((e) => e.kind == SubIndicatorKind.adjacentRatio), isTrue);
+      expect(
+          mainLv0.any((e) => e.kind == MainIndicatorKind.stepRhythm), isTrue);
+      expect(subLv0.any((e) => e.label.contains('节奏')), isFalse);
+      expect(isDefaultDrawnMain(const MainChartIndicator.stepRhythm(0)),
+          isFalse);
     });
   });
 }

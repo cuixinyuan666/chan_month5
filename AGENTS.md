@@ -69,19 +69,20 @@ CHAN_RUST项目：项目定位：全新项目，用于行情回测、机器学�
 - **趋势线/节奏父层**：子=`displayKn`，父=`displayKn+1`（仍是「看上一层」，但不再相对旧 1 起编拧着）。
 - **DLL**：改 Rust 后必须重编并覆盖 `windows/native/chan_ffi.dll`；冷启动连续单步验收。
 
-### CHAN_RUST Kn相邻比例 / Kn步进节奏（2026-07-31·常驻）
-- **范围**：仅副图；节奏只保留 **normal**；主图水平节奏线 / transition / strict1382 本轮未做。默认 catalog 不勾选。
+### CHAN_RUST Kn相邻比例 / Kn步进节奏（2026-07-31·常驻；节奏迁主图·2026-08-08）
+- **范围**：比例仍副图；**节奏为主图**（`MainIndicatorKind.stepRhythm`，价轴挂投影价）；节奏只保留 **normal**；主图水平节奏线 / transition / strict1382 本轮未做。默认关联进 Kn指标、绘制静音。
 - **映射（全层同构·方案B）**：`displayKn` ↔ Kn连线 `level==displayKn`；节奏子分型=`displayKn` confirms；父分型切组=`displayKn+1` confirms。
 - **相邻比例**：子线=主图出现链（冻段+展示轨虚线/种子），**虚实不论**；按 `beginX` 出现序取末两根 `ratio=|cur|/|prev|`；K0 颗粒度写入会话。踩坑：勿只读冻段（动态虚线步会变 0）；勿按 `endConfirmX`/`isSure` 过滤排序。
-- **步进节奏**：组锚=父分型极值；命名从 **0-0**；子同向分型开窗、反向分型关窗（关窗后单点不向后连）；父分型确认切组并 `groupId++`；key 含 groupId。绘制：Δx==1 才点线续连、名在左侧、同 `roundRef` 同色、升暖降冷。
+- **步进节奏**：组锚=父分型极值；命名从 **0-0**；子同向分型开窗、反向分型关窗（关窗后单点不向后连）；父分型确认切组并 `groupId++`；key 含 groupId。绘制：`value`=节奏投影价挂主图价轴；Δx==1 才点线续连、名在左侧、同 `roundRef` 同色、升暖降冷。禁止副图残留 `SubIndicatorKind.stepRhythm`。
+- **tooltip 三类（2026-08-08）**：层内 `-。-` 分桶：①`Kn背驰_*`；②`Kn比例`+`Kn节奏*`；③其它（均线/通道/斜率/延伸/MACD/布林/RSI/KDJ/Demark）。
 - **验收**：连续单步（非一键跳末）；口径变更写 `lib/history/msg_history.dart` 与 `TASK_LOG.md`。
 
 ### CHAN_RUST Math 指标 / 副图绑定 / 十字 asOf（2026-08-04·常驻）
 - **Demark（主图）**：`MainIndicatorKind.demark`；锚 K0 低点向上垂直排；文案 `S1…S9`/`C1…C13`/`完成买|完成卖`；Setup9 与 Countdown13 都算完整信号。买红/橙、卖绿/青。进主图「Kn指标」层全选，默认静音。副图枚举已删除。
 - **Demark 设置三项**：Countdown 宽松 close↔close[i-2]（默认）/原版严 close↔low|high[i-2]；完美9 默认关；反向 Setup 打断 Countdown 严=打断（默认）/宽松=不打断。
-- **Kn绑定清单（副图层全选必须含）**：volume/tickCount/分型类/**中枢判断/确认**/BS/比例/节奏/斜率/MACD/RSI/KDJ/**背驰算法**（Demark 已迁主图；无 turnrate）。启动默认仍不勾背驰（`defaultSubIndicatorsK0` 过滤）；点「Kn指标」可一层全选。
+- **Kn绑定清单（副图层全选必须含）**：volume/tickCount/分型类/**中枢判断/确认**/BS/比例/斜率/MACD/RSI/KDJ/**背驰算法**（Demark/节奏已迁主图；无 turnrate）。启动默认仍不勾背驰（`defaultSubIndicatorsK0` 过滤）；点「Kn指标」可一层全选。
 - **默认绘制（关联≠全画）**：层全选仍勾全集；默认实际绘制仅主图 Kn/合并/中枢/连线 + 副图分型确认/判断/截断/中枢确认/判断；其余关联项默认删除线静音（`isDefaultDrawnMain/Sub`），单击 chip 可打开。
-- **主图 Math 仍绑层全选**：均线/通道/布林/Demark（与中枢同号）。
+- **主图 Math/节奏仍绑层全选**：均线/通道/布林/Demark（与中枢同号）；节奏与连线同号。
 - **十字 asOf 右侧不画**：蜡烛/成交量/分型/BS/Math 副图已截断；主图均线/通道/布林走 `_paintPriceSeries`；三型/四型/趋势线射线右端截到 asOf 柱心，禁止画到视口右缘「看见未来」。
 - **当下冻结**：`MathSeriesFreezeStore` 格点首次非空写入后冻结；参数变更清空并 0..当前步重冻。背驰另有 `DivergenceFreezeStore`（本层 MACD/RSI 力度；旧格不改、新 x 追加）。验收：连续单步（非一键跳末）。
 - **背驰 v12**：12 算法（已删 turnrate_avg，离线无换手）；全体 Kn背驰_* 副图十字下整段高亮；MACD 四算法另按贡献柱高亮。含斜率同源连线斜率。

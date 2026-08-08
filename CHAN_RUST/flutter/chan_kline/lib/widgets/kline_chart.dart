@@ -1983,6 +1983,15 @@ class _KlineCompositePainter extends CustomPainter {
             slotW,
             ind.kn,
           );
+        } else if (ind.kind == MainIndicatorKind.stepRhythm) {
+          _drawStepRhythmMain(
+            canvas,
+            size.width,
+            plotTop,
+            plotH,
+            slotW,
+            ind.kn,
+          );
         }
       }
     }
@@ -4254,16 +4263,8 @@ class _KlineCompositePainter extends CustomPainter {
     for (final kn in ratioKns) {
       _drawAdjacentRatioSubChart(canvas, w, innerTop, innerH, barW, slotW, kn);
     }
-    // Kn步进节奏：按 key 折线（动态子线，不要求已确认）
-    final rhythmKns = subIndicators
-        .where((e) => e.kind == SubIndicatorKind.stepRhythm)
-        .map((e) => e.kn)
-        .toList()
-      ..sort();
-    for (final kn in rhythmKns) {
-      _drawStepRhythmSubChart(canvas, w, innerTop, innerH, barW, slotW, kn);
-    }
     // Kn连线斜率：折线 + 0 轴虚线（动态：冻段+展示轨）
+    // （Kn节奏已迁主图 MainIndicatorKind.stepRhythm）
     final slopeKns = subIndicators
         .where((e) => e.kind == SubIndicatorKind.lineSlope)
         .map((e) => e.kn)
@@ -4977,13 +4978,12 @@ class _KlineCompositePainter extends CustomPainter {
     return palette[p.roundRef.clamp(0, palette.length - 1)];
   }
 
-  /// 副图 Kn步进节奏：点线、K0 对齐；缺口不续连；名在左侧；同父级同色；升暖降冷。
-  void _drawStepRhythmSubChart(
+  /// 主图 Kn步进节奏：value=节奏投影价，挂价轴；Δx==1 点线续连；名在左侧；同父级同色；升暖降冷。
+  void _drawStepRhythmMain(
     Canvas canvas,
     double w,
-    double innerTop,
-    double innerH,
-    double barW,
+    double plotTop,
+    double plotH,
     double slotW,
     int displayKn,
   ) {
@@ -4992,18 +4992,6 @@ class _KlineCompositePainter extends CustomPainter {
     final asOf = segAsOf ?? bars.last.idx;
     final visible = hist.where((e) => e.x <= asOf).toList();
     if (visible.isEmpty) return;
-    var minV = visible.first.value;
-    var maxV = visible.first.value;
-    for (final p in visible) {
-      if (p.value < minV) minV = p.value;
-      if (p.value > maxV) maxV = p.value;
-    }
-    if ((maxV - minV).abs() < 1e-12) {
-      minV -= 1;
-      maxV += 1;
-    }
-    final span = maxV - minV;
-    double subY(double v) => innerTop + (maxV - v) / span * innerH;
 
     // 按 key 分组（不同 label/组不混连）
     final byKey = <String, List<StepRhythmLinePoint>>{};
@@ -5036,7 +5024,11 @@ class _KlineCompositePainter extends CustomPainter {
           prevPt = null;
           continue;
         }
-        final pt = Offset(_barCenterX(p.x, w, slotW), subY(p.value));
+        // value 已是节奏投影价（挂分型锚点价附近），直接映射主图价轴
+        final pt = Offset(
+          _barCenterX(p.x, w, slotW),
+          priceRange.yOf(p.value, plotTop, plotH),
+        );
         // 仅相邻 K0（Δx==1）点线续连；中间无值则断开（不自动跨缺口）
         if (prevP != null && prevPt != null && p.x - prevP.x == 1) {
           _drawDashedLine(canvas, prevPt, pt, linePaint);

@@ -3,7 +3,8 @@ import '../models/kline_bar.dart';
 import '../models/level_models.dart';
 import 'adjacent_ratio_compute.dart';
 
-/// 步进节奏副图：normal 算法；全层同构；颗粒度 K0；不回写、无未来函数。
+/// 步进节奏（主图价轴挂点）：normal 算法；全层同构；颗粒度 K0；不回写、无未来函数。
+/// value=节奏投影价（挂分型锚点附近），非副图归一化读数。
 ///
 /// 口径（以 K0连线 + K1分型为例，Kn 同构）：
 /// - 组锚点 = 上一父分型极值（K1底→极低 / K1顶→极高）；组内命名从 **0-0** 起
@@ -16,7 +17,7 @@ import 'adjacent_ratio_compute.dart';
 /// - 勿用「父段 end_confirm」替代「父分型 confirms」切组；a0 取 fractalHigh/Low 而非 seq[0]
 /// - 命名取消 1-0：roundCurrent=(evenIdx~/2)-1，roundRef 从 0 → 首条 0-0
 /// - 关窗后禁止续写（例：25 出 0-1/1-0，26 顶确认后 26–38 应无点）；key 含 groupId
-/// - 同棒顺序：bootstrap → 子窗 → 父切组（父优先）；副图仅 Δx==1 点线续连
+/// - 同棒顺序：bootstrap → 子窗 → 父切组（父优先）；主图仅 Δx==1 点线续连
 
 /// 单条节奏线（同 key 多步连成折线；组切后 key 含 groupId）。
 class StepRhythmLinePoint {

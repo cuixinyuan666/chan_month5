@@ -23,6 +23,8 @@ enum MainIndicatorKind {
   boll,
   /// Kn Demark（setup/countdown/完成信号；kn 同中枢；主图标注）
   demark,
+  /// Kn步进节奏（old step_rhythm；与 Kn连线同号；主图价轴挂点）
+  stepRhythm,
 }
 
 /// 主图指标类别元数据。
@@ -47,6 +49,8 @@ extension MainIndicatorKindMeta on MainIndicatorKind {
         return '均线';
       case MainIndicatorKind.demark:
         return 'Demark';
+      case MainIndicatorKind.stepRhythm:
+        return '节奏';
     }
   }
 
@@ -70,6 +74,8 @@ extension MainIndicatorKindMeta on MainIndicatorKind {
         return 5;
       case MainIndicatorKind.demark:
         return 6;
+      case MainIndicatorKind.stepRhythm:
+        return 7;
     }
   }
 }
@@ -97,6 +103,9 @@ class MainChartIndicator {
       : kind = MainIndicatorKind.trendChannel;
   const MainChartIndicator.boll(this.kn) : kind = MainIndicatorKind.boll;
   const MainChartIndicator.demark(this.kn) : kind = MainIndicatorKind.demark;
+  /// kn=连线显示层：K0步进节奏…（主图价轴；动态子线）
+  const MainChartIndicator.stepRhythm(this.kn)
+      : kind = MainIndicatorKind.stepRhythm;
 
   String get label {
     switch (kind) {
@@ -123,6 +132,8 @@ class MainChartIndicator {
         return 'K$kn布林';
       case MainIndicatorKind.demark:
         return 'K${kn}Demark';
+      case MainIndicatorKind.stepRhythm:
+        return 'K$kn节奏';
     }
   }
 
@@ -156,6 +167,8 @@ class MainChartIndicator {
         return 9;
       case MainIndicatorKind.demark:
         return 10;
+      case MainIndicatorKind.stepRhythm:
+        return 11;
     }
   }
 
@@ -186,8 +199,6 @@ enum SubIndicatorKind {
   buyN,
   /// Kn相邻连线比例（旧 adjacent_bi_ratio；与 Kn连线同号；动态计算）
   adjacentRatio,
-  /// Kn步进节奏副图（old step_rhythm；与 Kn连线同号；动态计算）
-  stepRhythm,
   /// Kn连线斜率（与 Kn连线同号；动态：冻段+展示轨）
   lineSlope,
   /// Kn MACD（动态 Kn close；kn 同中枢）
@@ -228,8 +239,6 @@ extension SubIndicatorKindMeta on SubIndicatorKind {
         return 'N类BS';
       case SubIndicatorKind.adjacentRatio:
         return '比例';
-      case SubIndicatorKind.stepRhythm:
-        return '节奏';
       case SubIndicatorKind.lineSlope:
         return '斜率';
       case SubIndicatorKind.macd:
@@ -269,18 +278,16 @@ extension SubIndicatorKindMeta on SubIndicatorKind {
         return 10;
       case SubIndicatorKind.adjacentRatio:
         return 11;
-      case SubIndicatorKind.stepRhythm:
-        return 12;
       case SubIndicatorKind.lineSlope:
-        return 13;
+        return 12;
       case SubIndicatorKind.macd:
-        return 14;
+        return 13;
       case SubIndicatorKind.rsi:
-        return 15;
+        return 14;
       case SubIndicatorKind.kdj:
-        return 16;
+        return 15;
       case SubIndicatorKind.divergence:
-        return 17;
+        return 16;
     }
   }
 }
@@ -377,11 +384,6 @@ class SubChartIndicator {
       : kind = SubIndicatorKind.adjacentRatio,
         bsClass = null,
         diverAlgo = null;
-  /// kn=连线显示层：K0步进节奏…（动态子线，不要求已确认）
-  const SubChartIndicator.stepRhythm(this.kn)
-      : kind = SubIndicatorKind.stepRhythm,
-        bsClass = null,
-        diverAlgo = null;
   /// kn=连线显示层：K0连线斜率…（动态：冻段+展示轨；方案B 数据 level==kn）
   const SubChartIndicator.lineSlope(this.kn)
       : kind = SubIndicatorKind.lineSlope,
@@ -432,8 +434,6 @@ class SubChartIndicator {
         return 'K$kn${bsClassChinese(bsClass ?? 3)}类BS';
       case SubIndicatorKind.adjacentRatio:
         return 'K$kn比例';
-      case SubIndicatorKind.stepRhythm:
-        return 'K$kn节奏';
       case SubIndicatorKind.lineSlope:
         return 'K$kn连线斜率';
       case SubIndicatorKind.macd:
@@ -524,11 +524,15 @@ List<MainChartIndicator> buildMainIndicatorCatalog(int maxKn) {
   for (var d = 0; d <= maxKn; d++) {
     out.add(MainChartIndicator.demark(d));
   }
+  // 步进节奏（与连线同号 0..maxKn-1；主图价轴挂点）
+  for (var d = 0; d < maxKn; d++) {
+    out.add(MainChartIndicator.stepRhythm(d));
+  }
   return out;
 }
 
 /// 副图 catalog；[maxBsClass] 默认至少 9，数据更高时调用方传入扩大。
-/// 按类别分组：成交量 → … → 相邻比例 → 步进节奏 → 连线斜率。
+/// 按类别分组：成交量 → … → 相邻比例 → 连线斜率（节奏已迁主图）。
 List<SubChartIndicator> buildSubIndicatorCatalog(
   int maxKn, {
   bool truncationCheck = true,
@@ -581,13 +585,9 @@ List<SubChartIndicator> buildSubIndicatorCatalog(
       out.add(SubChartIndicator.buyN(d, cls));
     }
   }
-  // 相邻比例 (0..maxKn-1)
+  // 相邻比例 (0..maxKn-1)；步进节奏已迁主图 MainIndicatorKind.stepRhythm
   for (var d = 0; d < maxKn; d++) {
     out.add(SubChartIndicator.adjacentRatio(d));
-  }
-  // 步进节奏 (0..maxKn-1)
-  for (var d = 0; d < maxKn; d++) {
-    out.add(SubChartIndicator.stepRhythm(d));
   }
   // 连线斜率 (0..maxKn-1)
   for (var d = 0; d < maxKn; d++) {
@@ -633,12 +633,14 @@ List<MainChartIndicator> mainIndicatorsForLevel(
     MainChartIndicator.trendChannel(displayLevel),
     MainChartIndicator.boll(displayLevel),
     MainChartIndicator.demark(displayLevel),
+    // 必须进主图「Kn指标」层全选（与连线同显示层）
+    MainChartIndicator.stepRhythm(displayLevel),
   ];
   return candidates.where(allow.contains).toList();
 }
 
 /// 副图「K{displayLevel}指标」层全选成员。
-/// 含比例/节奏/斜率/MACD/RSI/KDJ/背驰算法（catalog 有才入选；Demark 已迁主图）。
+/// 含比例/斜率/MACD/RSI/KDJ/背驰算法（catalog 有才入选；节奏/Demark 已迁主图）。
 List<SubChartIndicator> subIndicatorsForLevel(
   int displayLevel,
   List<SubChartIndicator> catalog, {
@@ -657,9 +659,8 @@ List<SubChartIndicator> subIndicatorsForLevel(
     SubChartIndicator.zsJudgment(displayLevel),
     SubChartIndicator.buy1(displayLevel),
     SubChartIndicator.buy2(displayLevel),
-    // 必须进「Kn指标」层全选（与连线同显示层）
+    // 必须进「Kn指标」层全选（与连线同显示层；节奏已迁主图）
     SubChartIndicator.adjacentRatio(displayLevel),
-    SubChartIndicator.stepRhythm(displayLevel),
     SubChartIndicator.lineSlope(displayLevel),
     SubChartIndicator.macd(displayLevel),
     SubChartIndicator.rsi(displayLevel),
@@ -702,7 +703,7 @@ Set<T> pruneIndicators<T>(Set<T> selected, List<T> catalog) {
 }
 
 /// 启动默认：勾选「K0指标」层全选（与选择栏层全选同口径）。
-/// 用 catalog(maxKn=1) 生成，保证含 K0连线 / 副图分型类与相邻比例/节奏。
+/// 用 catalog(maxKn=1) 生成，保证含 K0连线 / 主图节奏 / 副图分型类与相邻比例。
 /// （筹码分布由设置面板控制，不在默认指标内）
 Set<MainChartIndicator> defaultMainIndicatorsK0() {
   return mainIndicatorsForLevel(0, buildMainIndicatorCatalog(1)).toSet();
@@ -733,6 +734,7 @@ bool isDefaultDrawnMain(MainChartIndicator e) {
     case MainIndicatorKind.trendChannel:
     case MainIndicatorKind.boll:
     case MainIndicatorKind.demark:
+    case MainIndicatorKind.stepRhythm:
       return false;
   }
 }
@@ -754,7 +756,6 @@ bool isDefaultDrawnSub(SubChartIndicator e) {
     case SubIndicatorKind.buy2:
     case SubIndicatorKind.buyN:
     case SubIndicatorKind.adjacentRatio:
-    case SubIndicatorKind.stepRhythm:
     case SubIndicatorKind.lineSlope:
     case SubIndicatorKind.macd:
     case SubIndicatorKind.rsi:

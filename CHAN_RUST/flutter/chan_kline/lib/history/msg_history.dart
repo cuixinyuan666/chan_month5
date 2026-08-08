@@ -461,7 +461,7 @@ class MsgHistory {
     );
   }
 
-  /// Kn相邻比例 + Kn步进节奏副图（进程内去重）
+  /// Kn相邻比例 + Kn步进节奏（进程内去重；节奏现主图，见 appendStepRhythmToMainAndTipCats）
   static bool _adjacentRatioRhythmAppearLogged = false;
   void appendAdjacentRatioAndStepRhythm() {
     if (_adjacentRatioRhythmAppearLogged) return;
@@ -474,12 +474,13 @@ class MsgHistory {
       '不要求 isSure；每步按 K0 idx 写入；denom≤1e-12 跳过；默认不勾选。',
     );
     append(
-      '【Kn步进节奏·副图·normal·K0颗粒度·0-0组】'
+      '【Kn步进节奏·主图价轴·normal·K0颗粒度·0-0组】'
       '仅 normal；全层同构；子线=出现链虚实不论；'
       '组锚=父分型极值（底→极低升组/顶→极高降组）；命名从 0-0；'
       '子同向分型开窗逐K续写，子反向分型确认后停写（单点不连后）；'
       '父分型确认本组停、下组重置自确认步绘；不回写无未来；'
-      '绘制：同父级(roundRef)同色，升暖降冷；K0 对齐点线，Δx≠1 不跨缺口续连；名在左侧；默认不勾选。',
+      '绘制：value=节奏投影价挂主图价轴；同父级(roundRef)同色，升暖降冷；'
+      'K0 对齐点线，Δx≠1 不跨缺口续连；名在左侧；进主图Kn指标、默认静音。',
     );
     append(
       '【踩坑·比例/节奏·2026-07-31】'
@@ -487,6 +488,22 @@ class MsgHistory {
       '②比例子线须含展示轨虚线/种子，勿只读冻段；按 beginX 出现序勿按 endConfirmX；'
       '③节奏命名 0-0 起；关窗后不续写；key 含 groupId；同棒 bootstrap→子窗→父切组；'
       '④验收连续单步非跳末。详见 TASK_LOG / AGENTS.md。',
+    );
+  }
+
+  /// tip三类分桶 + Kn节奏副→主（进程内去重；2026-08-08）
+  static bool _stepRhythmMainTipCatsLogged = false;
+  void appendStepRhythmToMainAndTipCats() {
+    if (_stepRhythmMainTipCatsLogged) return;
+    _stepRhythmMainTipCatsLogged = true;
+    append(
+      '【口径·2026-08-08·tip三类+节奏迁主图】'
+      '十字 tip 层内拆三类（-。-分隔）：①Kn背驰_*；②Kn比例+Kn节奏*；'
+      '③其它指标（均线/通道/斜率/三型四型/趋势线/MACD/布林/RSI/KDJ/Demark）。'
+      'Kn节奏：删除 SubIndicatorKind.stepRhythm；改 MainIndicatorKind.stepRhythm；'
+      '进主图「Kn指标」层全选（连线同号 0..maxKn-1）、默认静音；'
+      '绘制挂价轴（value=节奏投影价）；副图 catalog/绘制/crosshairSubRows 已清干净。'
+      '验收：设置「复制调试信息」→T1/T2。',
     );
   }
 
@@ -663,8 +680,8 @@ class MsgHistory {
     _auditProbeCopyLogged = true;
     append(
       '【复制调试信息】设置面板常驻按钮（勿删）。'
-      '当前绑定本批：A会话BS+bar_features冻结；D tip最高类键；'
-      'E Peak合并；F末枢离开才sure；G N类每成员/1Ba锁/k1_*命名；H asOf吃bundle。'
+      '当前绑定本批：T1 tip三类分桶（背驰/比例+节奏/其它）；'
+      'T2 Kn节奏主图归属（catalog/层全选/默认静音/副图无残留）。'
       '跳末后点按；实现 audit_probe_snapshot.dart。',
     );
   }
@@ -829,7 +846,8 @@ class MsgHistory {
     append(
       '【指标归属·筹码迁设置】Kn筹码分布从主图指标迁出，不再进「Kn指标」层全选，'
       '只保留 K0 分支、由设置面板「筹码分布」总开关控制（K1/…/Kn 筹码分支移除）。'
-      '副图「Kn相邻比例」「Kn步进节奏」仍纳入「Kn指标」层全选与默认 K0 全选；'
+      '副图「Kn相邻比例」仍纳入「Kn指标」层全选与默认 K0 全选；'
+      'Kn步进节奏已迁主图（见 appendStepRhythmToMainAndTipCats）；'
       '副图 catalog 按显示层交错排列。',
     );
   }
@@ -890,7 +908,7 @@ class MsgHistory {
       'Kn OHLC 与成交量拆行：Kn=O/H/L/C，Kn成交量=B/S/G；有数值一律【】。'
       '命名：Kn相邻比例→Kn比例、Kn步进节奏→Kn节奏；X类BS 独立类别；比例+节奏独立类别。'
       '节奏颗粒度 K0，同棒可多值：动态行名「K{n}节奏{label}」如 K0节奏0-0：【价】；无点时占位 K{n}节奏【0】。'
-      '层内序：价量笔→合并/分型→中枢→极点距/截断→X类BS→比例/节奏。',
+      '层内序（2026-08-08 起）：…→X类BS→背驰→比例/节奏→其它指标（均线等）。',
     );
   }
 

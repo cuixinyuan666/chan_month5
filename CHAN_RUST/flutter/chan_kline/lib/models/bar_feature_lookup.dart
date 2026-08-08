@@ -1218,7 +1218,9 @@ class BarFeatureLookup {
         zsAfterK0,
         k0Cats.fxExtra,
         k0Cats.bs,
+        k0Cats.divergence,
         k0Cats.ratioRhythm,
+        k0Cats.otherMath,
       ]),
       ..._levelBlockRows(idx),
     ];
@@ -1389,9 +1391,6 @@ class BarFeatureLookup {
           add(ind.label, '0');
         }
       }
-      if (ind.kind == SubIndicatorKind.stepRhythm) {
-        add(ind.label, sub['step_rhythm_${ind.kn}'] ?? '0');
-      }
       if (ind.kind == SubIndicatorKind.lineSlope) {
         final v = sub['line_slope_${ind.kn}'];
         if (v is num) {
@@ -1524,7 +1523,9 @@ class BarFeatureLookup {
         dd: (row['combine_range_low_$n'] as num?)?.toDouble(),
         fxExtra: cats.fxExtra,
         bs: cats.bs,
+        divergence: cats.divergence,
         ratioRhythm: cats.ratioRhythm,
+        otherMath: cats.otherMath,
       ));
     }
     return lines;
@@ -1557,7 +1558,9 @@ class BarFeatureLookup {
     double? dd,
     List<CrosshairTooltipRow> fxExtra = const [],
     List<CrosshairTooltipRow> bs = const [],
+    List<CrosshairTooltipRow> divergence = const [],
     List<CrosshairTooltipRow> ratioRhythm = const [],
+    List<CrosshairTooltipRow> otherMath = const [],
   }) {
     final label = 'K$n';
     final confirmText = confirmVal == null
@@ -1645,20 +1648,26 @@ class BarFeatureLookup {
       knZsAfterKn[n] ?? const [],
       fxExtra,
       bs,
+      divergence,
       ratioRhythm,
+      otherMath,
     ]);
   }
 
-  /// 层内其它类别：极点距/截断 | X类BS | 比例+节奏（应显尽显，数值一律【】）。
+  /// 层内其它类别：极点距/截断 | X类BS | 背驰 | 比例+节奏 | 其它指标（应显尽显，数值一律【】）。
   ({
     List<CrosshairTooltipRow> fxExtra,
     List<CrosshairTooltipRow> bs,
+    List<CrosshairTooltipRow> divergence,
     List<CrosshairTooltipRow> ratioRhythm,
+    List<CrosshairTooltipRow> otherMath,
   }) _levelCategoryExtras(int idx, int displayKn) {
     final empty = (
       fxExtra: const <CrosshairTooltipRow>[],
       bs: const <CrosshairTooltipRow>[],
+      divergence: const <CrosshairTooltipRow>[],
       ratioRhythm: const <CrosshairTooltipRow>[],
+      otherMath: const <CrosshairTooltipRow>[],
     );
     final row = byIdx[idx];
     if (row == null) return empty;
@@ -1720,7 +1729,33 @@ class BarFeatureLookup {
         ),
     ];
 
-    // —— 比例 / 节奏 / 连线斜率（独立类别；节奏按 0-0 动态多行）——
+    // —— 背驰（独立一类；12 算法）——
+    final divergence = <CrosshairTooltipRow>[];
+    for (final algo in DivergenceAlgoMeta.all) {
+      final vin = sub?[diverFeatureKey(algo, 'in', displayKn)];
+      final vout = sub?[diverFeatureKey(algo, 'out', displayKn)];
+      final vr = sub?[diverFeatureKey(algo, 'ratio', displayKn)];
+      final vf = sub?[diverFeatureKey(algo, 'flag', displayKn)];
+      if (vin is num || vout is num || vr is num || vf is num) {
+        final parts = <String>[
+          if (vin is num) 'in${vin.toStringAsFixed(4)}',
+          if (vout is num) 'out${vout.toStringAsFixed(4)}',
+          if (vr is num) 'r${vr.toStringAsFixed(4)}',
+          'd${vf is num ? vf.toInt() : 0}',
+        ];
+        divergence.add(kv(
+          'K$displayKn背驰_${algo.key}',
+          CrosshairTooltipRow.boxNum(parts.join('/')),
+        ));
+      } else {
+        divergence.add(kv(
+          'K$displayKn背驰_${algo.key}',
+          CrosshairTooltipRow.boxNum(0),
+        ));
+      }
+    }
+
+    // —— 比例 + 节奏（独立一类；节奏按 0-0 动态多行）——
     final ratioRhythm = <CrosshairTooltipRow>[];
     final ar = sub?['adjacent_ratio_$displayKn'];
     ratioRhythm.add(kv(
@@ -1744,15 +1779,18 @@ class BarFeatureLookup {
       ratioRhythm.add(
           kv('K$displayKn节奏', CrosshairTooltipRow.boxNum(0)));
     }
+
+    // —— 其它指标（均线/通道/斜率/延伸/Math/Demark）——
+    final otherMath = <CrosshairTooltipRow>[];
     final slope = sub?['line_slope_$displayKn'];
-    ratioRhythm.add(kv(
+    otherMath.add(kv(
       'K$displayKn连线斜率',
       CrosshairTooltipRow.boxNum(
           slope is num ? slope.toStringAsFixed(4) : 0),
     ));
     // 三型平移 / 四型对线：延长线落到本根 K0 的价格
     final triple = sub?['fx_triple_price_$displayKn'];
-    ratioRhythm.add(kv(
+    otherMath.add(kv(
       'K$displayKn三型平移线',
       CrosshairTooltipRow.boxNum(
           triple is num ? triple.toStringAsFixed(2) : 0),
@@ -1764,12 +1802,12 @@ class BarFeatureLookup {
         if (qTop is num) '顶${qTop.toStringAsFixed(2)}',
         if (qBot is num) '底${qBot.toStringAsFixed(2)}',
       ];
-      ratioRhythm.add(kv(
+      otherMath.add(kv(
         'K$displayKn四型对线',
         CrosshairTooltipRow.boxNum(parts.join(' ')),
       ));
     } else {
-      ratioRhythm.add(
+      otherMath.add(
           kv('K$displayKn四型对线', CrosshairTooltipRow.boxNum(0)));
     }
     // 趋势线：支撑/压力延长线落到本根 K0 的价格
@@ -1780,21 +1818,21 @@ class BarFeatureLookup {
         if (tSup is num) '撑${tSup.toStringAsFixed(2)}',
         if (tRes is num) '压${tRes.toStringAsFixed(2)}',
       ];
-      ratioRhythm.add(kv(
+      otherMath.add(kv(
         'K$displayKn趋势线',
         CrosshairTooltipRow.boxNum(parts.join(' ')),
       ));
     } else {
-      ratioRhythm.add(
+      otherMath.add(
           kv('K$displayKn趋势线', CrosshairTooltipRow.boxNum(0)));
     }
     final meanText = sub?['mean_text_$displayKn'];
-    ratioRhythm.add(kv(
+    otherMath.add(kv(
       'K$displayKn均线',
       CrosshairTooltipRow.boxNum(meanText is String ? meanText : 0),
     ));
     final chanText = sub?['channel_text_$displayKn'];
-    ratioRhythm.add(kv(
+    otherMath.add(kv(
       'K$displayKn通道',
       CrosshairTooltipRow.boxNum(chanText is String ? chanText : 0),
     ));
@@ -1808,9 +1846,9 @@ class BarFeatureLookup {
         if (macdDea is num) 'DEA${macdDea.toStringAsFixed(3)}',
         if (macdHist is num) 'MACD${macdHist.toStringAsFixed(3)}',
       ];
-      ratioRhythm.add(kv('K$displayKn MACD', CrosshairTooltipRow.boxNum(parts.join('/'))));
+      otherMath.add(kv('K$displayKn MACD', CrosshairTooltipRow.boxNum(parts.join('/'))));
     } else {
-      ratioRhythm.add(kv('K$displayKn MACD', CrosshairTooltipRow.boxNum(0)));
+      otherMath.add(kv('K$displayKn MACD', CrosshairTooltipRow.boxNum(0)));
     }
     final bMid = sub?['boll_mid_$displayKn'];
     final bUp = sub?['boll_up_$displayKn'];
@@ -1821,12 +1859,12 @@ class BarFeatureLookup {
         if (bUp is num) 'U${bUp.toStringAsFixed(2)}',
         if (bDn is num) 'D${bDn.toStringAsFixed(2)}',
       ];
-      ratioRhythm.add(kv('K$displayKn布林', CrosshairTooltipRow.boxNum(parts.join('/'))));
+      otherMath.add(kv('K$displayKn布林', CrosshairTooltipRow.boxNum(parts.join('/'))));
     } else {
-      ratioRhythm.add(kv('K$displayKn布林', CrosshairTooltipRow.boxNum(0)));
+      otherMath.add(kv('K$displayKn布林', CrosshairTooltipRow.boxNum(0)));
     }
     final rsi = sub?['rsi_$displayKn'];
-    ratioRhythm.add(kv(
+    otherMath.add(kv(
       'K$displayKn RSI',
       CrosshairTooltipRow.boxNum(rsi is num ? rsi.toStringAsFixed(2) : 0),
     ));
@@ -1839,41 +1877,23 @@ class BarFeatureLookup {
         if (kdjD is num) 'D${kdjD.toStringAsFixed(2)}',
         if (kdjJ is num) 'J${kdjJ.toStringAsFixed(2)}',
       ];
-      ratioRhythm.add(kv('K$displayKn KDJ', CrosshairTooltipRow.boxNum(parts.join('/'))));
+      otherMath.add(kv('K$displayKn KDJ', CrosshairTooltipRow.boxNum(parts.join('/'))));
     } else {
-      ratioRhythm.add(kv('K$displayKn KDJ', CrosshairTooltipRow.boxNum(0)));
+      otherMath.add(kv('K$displayKn KDJ', CrosshairTooltipRow.boxNum(0)));
     }
     final demarkText = sub?['demark_text_$displayKn'];
-    ratioRhythm.add(kv(
+    otherMath.add(kv(
       'K$displayKn Demark',
       CrosshairTooltipRow.boxNum(demarkText is String ? demarkText : 0),
     ));
-    // 背驰 12 算法：in/out/ratio/diver(1|-1|0)
-    for (final algo in DivergenceAlgoMeta.all) {
-      final vin = sub?[diverFeatureKey(algo, 'in', displayKn)];
-      final vout = sub?[diverFeatureKey(algo, 'out', displayKn)];
-      final vr = sub?[diverFeatureKey(algo, 'ratio', displayKn)];
-      final vf = sub?[diverFeatureKey(algo, 'flag', displayKn)];
-      if (vin is num || vout is num || vr is num || vf is num) {
-        final parts = <String>[
-          if (vin is num) 'in${vin.toStringAsFixed(4)}',
-          if (vout is num) 'out${vout.toStringAsFixed(4)}',
-          if (vr is num) 'r${vr.toStringAsFixed(4)}',
-          'd${vf is num ? vf.toInt() : 0}',
-        ];
-        ratioRhythm.add(kv(
-          'K$displayKn背驰_${algo.key}',
-          CrosshairTooltipRow.boxNum(parts.join('/')),
-        ));
-      } else {
-        ratioRhythm.add(kv(
-          'K$displayKn背驰_${algo.key}',
-          CrosshairTooltipRow.boxNum(0),
-        ));
-      }
-    }
 
-    return (fxExtra: fxExtra, bs: bs, ratioRhythm: ratioRhythm);
+    return (
+      fxExtra: fxExtra,
+      bs: bs,
+      divergence: divergence,
+      ratioRhythm: ratioRhythm,
+      otherMath: otherMath,
+    );
   }
 
   /// 合并行：GG/DD=组内原始区间极值（原始K高低 max/min，逐K当下、无未来函数）；MG/MD=合并框框体高低点（M=merge）。

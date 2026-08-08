@@ -92,8 +92,9 @@ Future<void> main() async {
   MsgHistory.instance.appendBuy1AndZgZdCommonNaming();
   MsgHistory.instance.appendBuy2Class2Naming();
   MsgHistory.instance.appendBuyNClass3PlusNaming();
-  // Kn相邻比例 + Kn步进节奏副图
+  // Kn相邻比例 + Kn步进节奏（节奏已迁主图）
   MsgHistory.instance.appendAdjacentRatioAndStepRhythm();
+  MsgHistory.instance.appendStepRhythmToMainAndTipCats();
   // Kn连线斜率副图（全层同构；复用比例出现链）
   MsgHistory.instance.appendKnLineSlope();
   // 主图 Kn三型平移线 / Kn四型对线
@@ -1138,7 +1139,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
     _showSnack('页面快照已复制，可粘贴排查');
   }
 
-  /// 例1–例5审计探针：设置「复制调试信息」（常驻，勿当临时调试删）。
+  /// 本次任务验收探针：设置「复制调试信息」（常驻，勿当临时调试删）。
   Future<void> _copyAuditProbeDebug() async {
     if (_allBars.isEmpty || _stepIdx < 0) {
       _showSnack('请先加载并步进/跳末后再复制');
@@ -1149,25 +1150,16 @@ class _KlineHomePageState extends State<KlineHomePage> {
     String text;
     try {
       text = AuditProbeSnapshot.build(
-        bridge: _bridge,
         code: _selectedCode ?? '',
         period: _period,
         periodLabel: _periods[_period] ?? _period,
         beginDate: _fmtDateTime(_beginDate),
         endDate: _fmtDateTime(_endDate),
         stepIdx: _stepIdx,
-        truncationCheck: _truncationCheck,
         bars: fed,
         sessionLevels: _levels,
-        sessionK1CombineFrames: _k1CombineFrames,
         barFeatures: _barFeatures,
-        buy1HistoryByKn: _buy1HistoryByKn,
-        sell1HistoryByKn: _sell1HistoryByKn,
-        buy1K0Frames: _buy1K0Frames,
-        sell1K0Frames: _sell1K0Frames,
-        zsK0Frames: _zsK0Frames,
-        buyNHistoryByKn: _buyNHistoryByKn,
-        sellNHistoryByKn: _sellNHistoryByKn,
+        stepRhythmHistoryByKn: _stepRhythmHistoryByKn,
       );
     } catch (e) {
       _showSnack('生成失败：$e');
@@ -1176,7 +1168,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
     }
     await Clipboard.setData(ClipboardData(text: text));
     _msgHistory.append(
-      '已复制验收调试信息（本批A/D/E/F/G/H；step=$_stepIdx bars=${fed.length}）',
+      '已复制验收调试信息（本批T1 tip三类·T2节奏主图；step=$_stepIdx bars=${fed.length}）',
     );
     _showSnack('调试信息已复制，请粘贴给助手');
   }
@@ -1790,7 +1782,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         ),
         const SizedBox(height: 4),
         Text(
-          '本次验收：A会话冻结·D tip类键·Peak·末枢sure·N类/1Ba/k1_*·asOf bundle；'
+          '本次验收：T1 tip三类分桶（背驰/比例+节奏/其它）·T2 Kn节奏主图归属；'
           '建议跳末后点按，稍等后粘贴全文。',
           style: TextStyle(fontSize: 11, color: Colors.grey.shade700, height: 1.3),
         ),
