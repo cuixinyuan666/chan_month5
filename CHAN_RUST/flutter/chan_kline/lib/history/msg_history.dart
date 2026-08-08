@@ -663,13 +663,28 @@ class MsgHistory {
     _auditProbeCopyLogged = true;
     append(
       '【复制调试信息】设置面板常驻按钮；输出例1–例5核对字段：'
-      '①K1合并 tip(combine_box_1←level+1) vs 主图k1CombineFrames/level==1；'
-      '②会话末态 vs asOf=100 前缀计数 + asOf回落路径说明；'
-      '③一类BS rust导出x vs 会话历史；'
-      '④三型/四型特征上界 maxD=structureMax-1 是否缺最高层；'
-      '⑤bar_features 是否缺 zs/BS 字段。'
-      '建议默认002003+分笔跳末后点按；生成含多次前缀FFI；全文粘贴排查。'
-      '实现：lib/history/audit_probe_snapshot.dart（勿当临时调试删）。',
+      '①K1合并 tip=k1CombineFrames；②asOf vs 会话计数；③一类BS x；'
+      '④三型/四型上界；⑤lookup.sub zs/BS。'
+      '建议默认002003+分笔跳末后点按；实现：audit_probe_snapshot.dart。',
+    );
+  }
+
+  /// 审计修复落地：例1/2/4/5（进程内去重）。
+  static bool _auditFixEx145Logged = false;
+  void appendAuditFixEx145() {
+    if (_auditFixEx145Logged) return;
+    _auditFixEx145Logged = true;
+    append(
+      '【审计修复·例1/2/4/5】'
+      '①tip「K1合并」MG/MD←k1CombineFrames（覆盖 level==1）；'
+      '禁止 level0 写入 combine_box_1。'
+      '②十字 asOf 时 BarFeatureLookup.levels/zsK0 禁 ??sessionLevels。'
+      '④三型/四型 maxD=structureMax（含最高连线层）；趋势线上界 structureMax-1；'
+      'Math/背驰 meanMaxD=structureMax+1。'
+      '⑤lookup.sub 写入 zs_high_*/zs_low_*/zs_sure_*/zs_seq_*（与主副图同号）；'
+      'BS 仍会话历史 buy1_*；Rust bar_features 本身仍无 zs/BS。'
+      '验收：跳末→十字 idx=12 看 tip K1合并 MG/MD 对主图宽框；'
+      '复制调试信息例1/4/5 应为 OK_FIXED。',
     );
   }
 

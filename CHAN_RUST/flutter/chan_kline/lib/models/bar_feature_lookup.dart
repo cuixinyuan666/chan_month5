@@ -103,6 +103,8 @@ class BarFeatureLookup {
     List<K0Line> k0Lines = const [],
     K1AnalysisBundle k1Analysis = const K1AnalysisBundle(),
     List<LevelBundle> levels = const [],
+    /// 主图 K1合并展示轨（与 tip「K1合并」MG/MD 同源；覆盖 level==1 永久框）
+    List<KlineCombineFrame> k1CombineFrames = const [],
     Map<int, List<Buy1Frame>> buy1HistoryByKn = const {},
     Map<int, List<Sell1Frame>> sell1HistoryByKn = const {},
     Map<int, List<Buy2Frame>> buy2HistoryByKn = const {},
@@ -219,18 +221,29 @@ class BarFeatureLookup {
       }
     }
 
-    // 方案B：tooltip Kn 块号 = structure+1；键用 display
+    // 方案B·连线族：tip「K{n}合并」MG/MD ← structure.level==n 的合并框
+    // （K0合并仍走上方 combineFrames→row['combine']；勿再把 level0 框写入 combine_box_1）
     for (final lv in levels) {
-      final displayKn = lv.level + 1;
+      if (lv.level < 1) continue;
+      final displayKn = lv.level;
       for (final f in lv.combineFrames) {
         for (var x = f.x1; x <= f.x2; x++) {
+          if (asOf != null && x > asOf) continue;
           final row = byIdx.putIfAbsent(x, () => {'idx': x});
           row['combine_box_$displayKn'] = {'high': f.high, 'low': f.low};
         }
       }
     }
+    // K1合并与主图展示轨同源（构建中虚线框也在 k1CombineFrames）
+    for (final f in k1CombineFrames) {
+      for (var x = f.x1; x <= f.x2; x++) {
+        if (asOf != null && x > asOf) continue;
+        final row = byIdx.putIfAbsent(x, () => {'idx': x});
+        row['combine_box_1'] = {'high': f.high, 'low': f.low};
+      }
+    }
 
-    // 各层 Kn合并 GG/DD：按 snap.level==structure 查找（勿再用下标 n-1）
+    // tip Kn块 GG/DD：snap.level==n-1 → 键 combine_range_*_n（块号仍 +1 相对 structure）
     for (final lv in levels) {
       final displayKn = lv.level + 1;
       var curStart = -2;
@@ -691,13 +704,12 @@ class BarFeatureLookup {
         (k0Confirms.isNotEmpty ||
             levels.isNotEmpty ||
             zsK0Frames.isNotEmpty)) {
-      var maxD = 0;
+      // 方案B：三型/四型属连线族，dkn==structure.level，上界=structureMax（勿再用 level-1）
       var maxLevel = 0;
       for (final lv in levels) {
-        final d = lv.level - 1;
-        if (d > maxD) maxD = d;
         if (lv.level > maxLevel) maxLevel = lv.level;
       }
+      final maxD = maxLevel;
       for (var dkn = 0; dkn <= maxD; dkn++) {
         for (final b in bars) {
           if (asOf != null && b.idx > asOf) continue;
@@ -727,8 +739,8 @@ class BarFeatureLookup {
           if (q.bottom != null) sub['fx_quad_bottom_price_$dkn'] = q.bottom;
         }
       }
-      // 趋势线：需父层 level=dkn+2，故 dkn 最大 maxLevel-2
-      final trendMaxD = maxLevel >= 2 ? maxLevel - 2 : -1;
+      // 趋势线：父层=displayKn+1（structure），dkn 最大 structureMax-1
+      final trendMaxD = maxLevel >= 1 ? maxLevel - 1 : -1;
       for (var dkn = 0; dkn <= trendMaxD; dkn++) {
         for (final b in bars) {
           if (asOf != null && b.idx > asOf) continue;
@@ -753,8 +765,8 @@ class BarFeatureLookup {
         }
       }
 
-      // 均线 / 通道：优先读会话冻结仓（Kn≥1 禁整表回写）
-      final meanMaxD = maxLevel;
+      // 均线 / 通道 / 背驰：显示层 0..chartMaxKn（K0原生；K1+=structure kn-1）
+      final meanMaxD = maxLevel + 1;
       for (var dkn = 0; dkn <= meanMaxD; dkn++) {
         final means = mathFreezeStore?.mean(dkn) ??
             computeMeanSeriesForLevel(
@@ -925,12 +937,55 @@ class BarFeatureLookup {
       }
     }
 
+    // ML/十字同源：把中枢框写入 sub（bar_features 本身无 zs/BS；BS 已由会话历史写入）
+    _writeZsFeaturesIntoSub(
+      byIdx: byIdx,
+      bars: bars,
+      asOf: asOf,
+      zsK0Frames: zsK0Frames,
+      levels: levels,
+    );
+
     return BarFeatureLookup._(
       byIdx: byIdx,
       totalLevels: levels.length,
       zsAfterK0: zsAfterK0,
       knZsAfterKn: knZsAfterKn,
     );
+  }
+
+  /// 将盖住该 K0 的中枢 high/low/sure 写入 sub（K0=zsK0；Kn=frame.level 显示号）
+  static void _writeZsFeaturesIntoSub({
+    required Map<int, Map<String, dynamic>> byIdx,
+    required List<KlineBar> bars,
+    required int? asOf,
+    required List<ZSFrame> zsK0Frames,
+    required List<LevelBundle> levels,
+  }) {
+    void paintFrame(ZSFrame f, int kn) {
+      for (var x = f.x1; x <= f.x2; x++) {
+        if (asOf != null && x > asOf) continue;
+        final row = byIdx[x];
+        if (row == null) continue;
+        final sub = row.putIfAbsent('sub', () => <String, dynamic>{})
+            as Map<String, dynamic>;
+        sub['zs_high_$kn'] = f.high;
+        sub['zs_low_$kn'] = f.low;
+        sub['zs_sure_$kn'] = f.isSure ? 1 : 0;
+        sub['zs_seq_$kn'] = f.seq;
+      }
+    }
+
+    for (final f in zsK0Frames) {
+      paintFrame(f, 0);
+    }
+    for (final lv in levels) {
+      for (final f in lv.zsFrames) {
+        // 帧上 level=显示中枢号（structure+1）；与副图/主图同号
+        final kn = f.level >= 0 ? f.level : (lv.level + 1);
+        paintFrame(f, kn);
+      }
+    }
   }
 
   Map<String, dynamic>? operator [](int idx) => byIdx[idx];

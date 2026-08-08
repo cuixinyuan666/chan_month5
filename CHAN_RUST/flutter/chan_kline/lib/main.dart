@@ -116,6 +116,7 @@ Future<void> main() async {
   // 桌面：工作区全屏不盖任务栏；tooltip 分隔线贴边框
   MsgHistory.instance.appendDesktopWorkAreaAndTooltipSep();
   MsgHistory.instance.appendAuditProbeCopyButton();
+  MsgHistory.instance.appendAuditFixEx145();
   // 主/副图指标 UI + Kn成交量归属口径
   MsgHistory.instance.appendIndicatorUiAndKnVolume();
   MsgHistory.instance.appendIndicatorMuteToggleAndVolReadout();
@@ -1163,6 +1164,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         sell1HistoryByKn: _sell1HistoryByKn,
         buy1K0Frames: _buy1K0Frames,
         sell1K0Frames: _sell1K0Frames,
+        zsK0Frames: _zsK0Frames,
       );
     } catch (e) {
       _showSnack('生成失败：$e');

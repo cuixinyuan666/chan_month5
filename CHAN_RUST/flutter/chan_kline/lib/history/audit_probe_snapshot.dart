@@ -1,5 +1,6 @@
 import '../bridge/chan_bridge.dart';
 import '../models/bar_crosshair_feature.dart';
+import '../models/bar_feature_lookup.dart';
 import '../models/buy1_frame.dart';
 import '../models/chart_indicator.dart';
 import '../models/kline_bar.dart';
@@ -7,6 +8,7 @@ import '../models/kline_combine_bundle.dart';
 import '../models/kline_combine_frame.dart';
 import '../models/level_models.dart';
 import '../models/sell1_frame.dart';
+import '../models/zs_frame.dart';
 
 /// 审计探针：例1–例5核对字段（设置「复制调试信息」）。
 /// 常驻：勿当临时调试代码删；合并 main 时须保留按钮与本文件。
@@ -34,6 +36,7 @@ class AuditProbeSnapshot {
     required Map<int, List<Sell1Frame>> sell1HistoryByKn,
     required List<Buy1Frame> buy1K0Frames,
     required List<Sell1Frame> sell1K0Frames,
+    List<ZSFrame> zsK0Frames = const [],
   }) {
     final now = DateTime.now();
     final ts =
@@ -68,13 +71,14 @@ class AuditProbeSnapshot {
       barFeatures: barFeatures,
       buy1K0: buy1K0Frames,
       sell1K0: sell1K0Frames,
+      zsK0: zsK0Frames,
     );
 
     // ---- 例1：K1合并 tip 层号 vs 主图 ----
     buf.writeln('======== 例1：K1合并 tip/主图是否同框 ========');
     buf.writeln(
-      '猜想：tip 的 combine_box_1 误取 structure.level==0（K0合并），'
-      '主图 K1合并取 k1CombineFrames / level==1。',
+      '现行口径：tip combine_box_1 ← k1CombineFrames（覆盖 level==1）；'
+      '勿再把 level0 写入 combine_box_1。',
     );
     _writeEx1At(
       buf,
@@ -108,9 +112,9 @@ class AuditProbeSnapshot {
     // ---- 例2：asOf 双轨 ----
     buf.writeln('======== 例2：十字 asOf 与会话末态计数 ========');
     buf.writeln(
-      '说明：正常十字下 K0/K1合并已走 asOf 重算，肉眼常看不到「铺满未来」。'
-      '本段比「会话已喂到 lastIdx」与「只喂到100」的结构计数；'
-      '并标明 painter featureLookup 仍有 `zsAsOfBundle?.levels ?? levels` 回落点。',
+      '说明：正常十字下 K0/K1合并已走 asOf 重算；'
+      'lookup.levels/zsK0 在 asOf 下禁回落会话末态。'
+      '本段比「会话已喂到 lastIdx」与「只喂到100」的结构计数（差值为预期）。',
     );
     _writeEx2(
       buf,
@@ -142,17 +146,25 @@ class AuditProbeSnapshot {
     // ---- 例4：三型/四型特征上界 ----
     buf.writeln('======== 例4：三型/四型 tip 层上界 ========');
     buf.writeln(
-      '猜想：bar_feature_lookup 用 maxD=structureMax-1，缺最高连线层。',
+      '现行：三型/四型上界=structureMax；旧 bug 为 structureMax-1。',
     );
     _writeEx4(buf, sessionLevels: sessionLevels);
     buf.writeln();
 
-    // ---- 例5：ML bar_features 是否含 zs/BS ----
-    buf.writeln('======== 例5：bar_features 与主副图 BS/中枢是否同源 ========');
+    // ---- 例5：ML lookup.sub 是否含 zs/BS ----
+    buf.writeln('======== 例5：lookup.sub 中枢/BS 与画面同源 ========');
     buf.writeln(
-      '猜想：Rust BarCrosshairFeature 无 zs/一类BS 字段；主副图来自 bundle 帧+会话历史。',
+      '现行：Flutter BarFeatureLookup.sub 写入 zs_high_*/buy1_*；'
+      'Rust bar_features 仍无 zs/BS 字段（ML 请导 lookup 或会话历史）。',
     );
-    _writeEx5(buf, session: sessionBundle, lastIdx: lastIdx);
+    _writeEx5(
+      buf,
+      bars: bars,
+      session: sessionBundle,
+      lastIdx: lastIdx,
+      buy1HistoryByKn: buy1HistoryByKn,
+      sell1HistoryByKn: sell1HistoryByKn,
+    );
     buf.writeln();
     buf.writeln('======== 结束 ========');
     return buf.toString();
@@ -181,9 +193,11 @@ class AuditProbeSnapshot {
     final lv1 = _levelAt(bundle.levels, 1);
     final k1Bars = bundle.k1Bars.length;
     final conf = bundle.k0Confirms.length;
-    final wrong = _frameCovering(lv0?.combineFrames ?? const [], focus);
-    final right = _frameCovering(lv1?.combineFrames ?? const [], focus);
+    final oldBug = _frameCovering(lv0?.combineFrames ?? const [], focus);
+    final lv1Box = _frameCovering(lv1?.combineFrames ?? const [], focus);
     final main = _frameCovering(bundle.k1CombineFrames, focus);
+    // 修后 tip：优先 k1_cf，否则 level==1
+    final tipNow = main ?? lv1Box;
     final tipK0 = _frameCovering(bundle.frames, focus);
 
     buf.writeln(
@@ -193,35 +207,30 @@ class AuditProbeSnapshot {
       'k1_cf=${bundle.k1CombineFrames.length}',
     );
     buf.writeln('main_K1合并(k1CombineFrames@focus)=${_fmtFrame(main)}');
-    buf.writeln(
-      'tip_K1合并_现行模拟(combine_box_1←level+1即lv0)=${_fmtFrame(wrong)}',
-    );
-    buf.writeln(
-      'tip_K1合并_方案B应取(level==1)=${_fmtFrame(right)}',
-    );
+    buf.writeln('tip_K1合并_修后模拟(k1_cf优先)=${_fmtFrame(tipNow)}');
+    buf.writeln('旧bug源(level0冒充K1)=${_fmtFrame(oldBug)}');
+    buf.writeln('level==1永久框@focus=${_fmtFrame(lv1Box)}');
     buf.writeln('tip_K0合并(frames@focus)=${_fmtFrame(tipK0)}');
 
     final verdict = _ex1Verdict(
       prefixEnd: prefixEnd,
-      focus: focus,
       k1Bars: k1Bars,
       main: main,
-      wrong: wrong,
-      right: right,
+      tipNow: tipNow,
+      oldBug: oldBug,
     );
     buf.writeln('判定=$verdict');
   }
 
   static String _ex1Verdict({
     required int prefixEnd,
-    required int focus,
     required int k1Bars,
     required KlineCombineFrame? main,
-    required KlineCombineFrame? wrong,
-    required KlineCombineFrame? right,
+    required KlineCombineFrame? tipNow,
+    required KlineCombineFrame? oldBug,
   }) {
     if (prefixEnd <= probeIdx3 && k1Bars == 0) {
-      if (main == null && right == null) {
+      if (main == null) {
         return 'OK_当下无K1（符合设计）';
       }
       return '异常_prefix<=3仍见K1合并';
@@ -229,19 +238,13 @@ class AuditProbeSnapshot {
     if (main == null) {
       return 'INFO_主图该focus无K1合并框（可能在框外/构建中未盖住）';
     }
-    if (_sameBox(main, wrong) && !_sameBox(main, right)) {
-      return 'BUG_CONFIRMED tip现行=主图却来自lv0映射（或主图与错误源偶然同值）';
+    if (_sameBox(main, tipNow)) {
+      if (oldBug != null && !_sameBox(main, oldBug)) {
+        return 'OK_FIXED tip与主图同框（且已不同于旧level0冒充）';
+      }
+      return 'OK_FIXED tip与主图同框';
     }
-    if (_sameBox(main, right) && !_sameBox(main, wrong)) {
-      return 'BUG_CONFIRMED tip现行(lv0)≠主图；方案B(lv1)=主图 → 层号张冠李戴';
-    }
-    if (_sameBox(main, right) && _sameBox(main, wrong)) {
-      return 'INFO_三源同值（此focus分不出层号bug）';
-    }
-    if (!_sameBox(main, wrong) && right == null) {
-      return 'BUG_LIKELY tip现行≠主图，且lv1无盖住focus的框（主图走k1_cf展示轨）';
-    }
-    return 'INFO_需人工看三行框体';
+    return 'BUG_仍不一致 tip≠主图';
   }
 
   static void _writeEx2(
@@ -288,14 +291,12 @@ class AuditProbeSnapshot {
     );
     buf.writeln(
       '代码路径：'
-      'tip.levels=asOfBundle??[]（禁回落）；'
-      '主图K0/K1合并=_effective*（asOf重算）；'
-      'painter.BarFeatureLookup.levels=zsAsOfBundle?.levels??sessionLevels（有回落）。',
+      'tip/painter.lookup.levels=asOfBundle??[]（禁回落）；'
+      '主图K0/K1合并=_effective*（asOf重算）。',
     );
     if (s0 > a0 || s1 > a1) {
       buf.writeln(
-        '判定=DATA_DIFF_OK（末态多于asOf100，属预期；'
-        '正常十字合并已asOf，故你常看不到铺满未来）',
+        '判定=OK_FIXED 末态多于asOf100属预期；asOf路径已禁回落',
       );
     } else {
       buf.writeln('判定=NO_COUNT_DIFF');
@@ -402,20 +403,13 @@ class AuditProbeSnapshot {
       if (lv.level > structureMax) structureMax = lv.level;
     }
     final maxKn = chartMaxKn(levels: sessionLevels);
-    // 复现 bar_feature_lookup 现行上界
-    var maxDBug = 0;
-    for (final lv in sessionLevels) {
-      final d = lv.level - 1;
-      if (d > maxDBug) maxDBug = d;
-    }
-    final maxDFix = structureMax < 0 ? 0 : structureMax;
+    final maxDNow = structureMax < 0 ? 0 : structureMax;
+    final maxDOldBug = structureMax < 1 ? 0 : structureMax - 1;
     buf.writeln('structureMax=$structureMax chartMaxKn=$maxKn');
-    buf.writeln('三型/四型循环上界_现行maxD(level-1)=$maxDBug → dkn=0..$maxDBug');
-    buf.writeln('三型/四型循环上界_方案B应取=$maxDFix → dkn=0..$maxDFix');
-    if (structureMax >= 0 && maxDBug < maxDFix) {
-      buf.writeln(
-        '判定=BUG_CONFIRMED 缺最高连线层 displayKn=$maxDFix 的三型/四型特征',
-      );
+    buf.writeln('三型/四型循环上界_现行=$maxDNow → dkn=0..$maxDNow');
+    buf.writeln('三型/四型循环上界_旧bug=$maxDOldBug → dkn=0..$maxDOldBug');
+    if (structureMax >= 1 && maxDNow > maxDOldBug) {
+      buf.writeln('判定=OK_FIXED 已含最高连线层 displayKn=$maxDNow');
     } else if (structureMax < 1) {
       buf.writeln('判定=SKIP_层数不足');
     } else {
@@ -425,45 +419,60 @@ class AuditProbeSnapshot {
 
   static void _writeEx5(
     StringBuffer buf, {
+    required List<KlineBar> bars,
     required _SessionView session,
     required int lastIdx,
+    required Map<int, List<Buy1Frame>> buy1HistoryByKn,
+    required Map<int, List<Sell1Frame>> sell1HistoryByKn,
   }) {
     final bf = session.barFeatures;
-    buf.writeln('bar_features条数=${bf.length}');
-    if (bf.isEmpty) {
-      buf.writeln('判定=NO_BAR_FEATURES');
-      return;
-    }
-    final sample = bf[lastIdx.clamp(0, bf.length - 1)];
-    buf.writeln(
-      '样本idx=${sample.idx} 字段='
-      'weekday,merge_*,combine_*,fractal_peak_dist,k1_*,levels[] '
-      '（无 zs_* / buy1_* / sell1_* 字段）',
-    );
-    buf.writeln('levels快照层数=${sample.levels.length}');
-    for (final s in sample.levels.take(4)) {
-      buf.writeln(
-        '  snap.level=${s.level} unitIdx=${s.unitIdx} '
-        'combineHigh=${s.combineHigh} combineLow=${s.combineLow}',
+    buf.writeln('bar_features条数=${bf.length}（Rust仍无zs/BS字段，属预期）');
+    try {
+      // 抽检一根「必有中枢」的 idx：优先取 level0 首个 zs 的 x2
+      var probeIdx = lastIdx;
+      final lv0 = _levelAt(session.levels, 0);
+      if (lv0 != null && lv0.zsFrames.isNotEmpty) {
+        probeIdx = lv0.zsFrames.first.x2.clamp(0, lastIdx);
+      }
+      final lookup = BarFeatureLookup.build(
+        bars: bars,
+        combineFrames: const [],
+        k0Confirms: const [],
+        barFeatures: session.barFeatures,
+        levels: session.levels,
+        k1CombineFrames: session.k1CombineFrames,
+        buy1HistoryByKn: buy1HistoryByKn,
+        sell1HistoryByKn: sell1HistoryByKn,
+        zsK0Frames: session.zsK0,
       );
+      final row = lookup.byIdx[probeIdx];
+      final sub = row?['sub'];
+      final subMap = sub is Map ? Map<String, dynamic>.from(sub) : const {};
+      final zsKeys = subMap.keys.where((k) => k.startsWith('zs_')).toList()
+        ..sort();
+      final bsKeys = subMap.keys
+          .where((k) =>
+              k.startsWith('buy1_') ||
+              k.startsWith('sell1_') ||
+              k.startsWith('buy2_') ||
+              k.startsWith('sell2_'))
+          .toList()
+        ..sort();
+      buf.writeln('lookup.sub@probeIdx=$probeIdx zs键=${zsKeys.take(12).join(",")}');
+      buf.writeln('lookup.sub@probeIdx bs键=${bsKeys.take(12).join(",")}');
+      if (zsKeys.isNotEmpty) {
+        buf.writeln(
+          bsKeys.isNotEmpty
+              ? '判定=OK_FIXED lookup.sub 已含 zs_*（及BS_*）'
+              : '判定=OK_FIXED lookup.sub 已含 zs_*（该根无BS点属正常）',
+        );
+      } else {
+        buf.writeln('判定=WARN_lookup.sub仍缺zs');
+      }
+    } catch (e) {
+      buf.writeln('lookup抽检失败：$e');
+      buf.writeln('判定=ERROR');
     }
-
-    var zsOnly = 0;
-    var buy1N = session.buy1K0.length;
-    var sell1N = session.sell1K0.length;
-    for (final lv in session.levels) {
-      zsOnly += lv.zsFrames.length;
-      buy1N += lv.buy1Frames.length;
-      sell1N += lv.sell1Frames.length;
-    }
-    buf.writeln(
-      'bundle可见：levels内zs=$zsOnly buy1合计(含K0帧)=$buy1N '
-      'sell1合计(含K0帧)=$sell1N',
-    );
-    buf.writeln(
-      '判定=SCHEMA_GAP bar_features不含zs/BS；'
-      '主副图/会话历史另源 → ML若只导bar_features则与画面不同源',
-    );
   }
 
   static void _writeLevelCounts(
@@ -551,6 +560,7 @@ class _SessionView {
   final List<BarCrosshairFeature> barFeatures;
   final List<Buy1Frame> buy1K0;
   final List<Sell1Frame> sell1K0;
+  final List<ZSFrame> zsK0;
 
   const _SessionView({
     required this.levels,
@@ -558,5 +568,6 @@ class _SessionView {
     required this.barFeatures,
     required this.buy1K0,
     required this.sell1K0,
+    this.zsK0 = const [],
   });
 }

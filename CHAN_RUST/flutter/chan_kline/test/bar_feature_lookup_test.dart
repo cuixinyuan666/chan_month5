@@ -142,18 +142,18 @@ void main() {
       combineFrames: const [],
       k0Confirms: const [],
       barFeatures: feats,
-      levels: [
-        const LevelBundle(
-          level: 0,
-          combineFrames: [
-            KlineCombineFrame(
-                x1: 0, x2: 5, t1: '', t2: '', high: 12.0, low: 8.0, fx: 'UNKNOWN', count: 3),
-          ],
-        ),
+      // 方案B：K1合并=level==1 / k1CombineFrames，勿再用 level0 框冒充
+      k1CombineFrames: const [
+        KlineCombineFrame(
+            x1: 0, x2: 5, t1: '', t2: '', high: 12.0, low: 8.0, fx: 'UNKNOWN', count: 3),
+      ],
+      levels: const [
+        LevelBundle(level: 0),
+        LevelBundle(level: 1),
       ],
     );
     final lines = lookup.crosshairTooltipLines(3, timePart: 't');
-    // snap 区间极值 GG/DD=11.00/9.50；框体高低点 MG/MD=12.00/8.00（取 combineFrames 框体）
+    // snap 区间极值 GG/DD=11.00/9.50；框体高低点 MG/MD=12.00/8.00（取 k1CombineFrames）
     expect(
       lines.any((l) => l == 'K1合并:GG【11.00】/DD【9.50】/MG【12.00】/MD【8.00】'),
       isTrue,

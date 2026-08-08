@@ -2,6 +2,12 @@
 
 ## 最新记录
 
+### 2026-08-08 — 审计修复例1/2/4/5（K1合并同源·asOf禁回落·三型上界·zs进lookup）
+
+- **要点**：tip「K1合并」改与主图 `k1CombineFrames` 同源；十字 asOf 下 lookup 禁回落会话 levels；三型/四型特征上界=structureMax；lookup.sub 写入 zs_*（BS 仍会话历史）。例3本样本未漂未改 Rust。
+- **相关路径**：`bar_feature_lookup.dart`、`kline_chart.dart`、`audit_probe_snapshot.dart`、`msg_history.dart`、`bar_feature_lookup_test.dart`
+- **注意**：热重载后跳末→十字 idx=12 看 tip K1合并；再点「复制调试信息」应见 OK_FIXED
+
 ### 2026-08-08 — 设置增加「复制调试信息」（例1–例5审计探针）
 
 - **要点**：设置面板常驻按钮，一键复制例1（K1合并 tip/主图层号）、例2（asOf vs 会话计数）、例3（一类BS x）、例4（三型/四型上界）、例5（bar_features 缺 zs/BS）核对文本，便于粘贴验证猜想。

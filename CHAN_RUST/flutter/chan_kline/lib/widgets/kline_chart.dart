@@ -811,6 +811,8 @@ class _KlineChartState extends State<KlineChart> {
       k0Lines: widget.k0Lines,
       k1Analysis: widget.k1Analysis,
       levels: tipLevels,
+      // K1合并 tip 与主图展示轨同源
+      k1CombineFrames: _effectiveK1CombineFrames,
       buy1HistoryByKn: widget.buy1HistoryByKn,
       sell1HistoryByKn: widget.sell1HistoryByKn,
       buy2HistoryByKn: widget.buy2HistoryByKn,
@@ -1248,6 +1250,7 @@ class _KlineChartState extends State<KlineChart> {
       k0Lines: widget.k0Lines,
       k1Analysis: widget.k1Analysis,
       levels: chipLevels,
+      k1CombineFrames: _effectiveK1CombineFrames,
       buy1HistoryByKn: widget.buy1HistoryByKn,
       sell1HistoryByKn: widget.sell1HistoryByKn,
       buy2HistoryByKn: widget.buy2HistoryByKn,
@@ -1669,8 +1672,11 @@ class _KlineCompositePainter extends CustomPainter {
                 barFeatures: barFeatures,
                 k0Lines: k0Lines,
                 k1Analysis: k1Analysis,
-                // 十字 as-of：层结构可用 asOf；BS 用会话历史（禁止 asOf 重算消点）
-                levels: zsAsOfBundle?.levels ?? levels,
+                // 十字 as-of：只认 asOf bundle（失败=空，禁回落末态）；BS 用会话历史
+                levels: segAsOf != null
+                    ? (zsAsOfBundle?.levels ?? const <LevelBundle>[])
+                    : levels,
+                k1CombineFrames: k1CombineFrames,
                 buy1HistoryByKn: buy1HistoryByKn,
                 sell1HistoryByKn: sell1HistoryByKn,
                 buy2HistoryByKn: buy2HistoryByKn,
@@ -1689,7 +1695,9 @@ class _KlineCompositePainter extends CustomPainter {
                 mathIndicatorConfig: mathIndicatorConfig,
                 mathFreezeStore: mathFreezeStore,
                 diverFreezeStore: diverFreezeStore,
-                zsK0Frames: zsAsOfBundle?.zsK0Frames ?? zsK0Frames,
+                zsK0Frames: segAsOf != null
+                    ? (zsAsOfBundle?.zsK0Frames ?? const <ZSFrame>[])
+                    : zsK0Frames,
               );
 
   /// 分层绘制：底图/筹码/十字 独立 shouldRepaint（计算口径不变）
