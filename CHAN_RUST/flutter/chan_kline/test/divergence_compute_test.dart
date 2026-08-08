@@ -111,15 +111,16 @@ List<KlineBar> _bars(int n) => [for (var i = 0; i < n; i++) _bar(i)];
 }
 
 void main() {
-  test('副图 catalog 含 13 背驰算法×层；主图无背驰', () {
+  test('副图 catalog 含 12 背驰算法×层；主图无背驰；无 turnrate', () {
     final sub = buildSubIndicatorCatalog(1);
     final divers = sub.where((e) => e.kind == SubIndicatorKind.divergence);
     expect(divers.length, DivergenceAlgoMeta.all.length * 2);
+    expect(DivergenceAlgoMeta.all.length, 12);
     expect(
       divers.any((e) => e.diverAlgo == DivergenceAlgo.peak && e.kn == 0),
       isTrue,
     );
-    expect(divers.any((e) => e.label == 'K0背驰_turnrate_avg'), isTrue);
+    expect(divers.any((e) => e.label.contains('turnrate')), isFalse);
     expect(divers.any((e) => e.label == 'K1背驰_斜率'), isTrue);
     expect(
       SubIndicatorKind.divergence.categoryLabel,
@@ -211,7 +212,7 @@ void main() {
     expect(amp.ratioAt[2], isNull);
   });
 
-  test('13 算法均有序列；缺 turnrate 时 turnrate_avg diver=0', () {
+  test('12 算法均有序列', () {
     final f = _k0TwoZsLeaveWindow();
     final map = computeDivergenceForLevel(
       displayKn: 0,
@@ -224,8 +225,6 @@ void main() {
       expect(map[a], isNotNull);
       expect(map[a]!.diverAt.length, f.bars.length);
     }
-    expect(map[DivergenceAlgo.turnrateAvg]!.diverAt[5], 0);
-    expect(map[DivergenceAlgo.turnrateAvg]!.ratioAt[5], isNull);
   });
 
   test('选段：包中→上/上上 endIdx；突破→本/上 endIdx', () {

@@ -1615,7 +1615,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
             'MACD ${_mathIndicatorConfig.macdFast}/${_mathIndicatorConfig.macdSlow}/${_mathIndicatorConfig.macdSignal}；'
             'BOLL ${_mathIndicatorConfig.bollN}；RSI ${_mathIndicatorConfig.rsiPeriod}；'
             'KDJ ${_mathIndicatorConfig.kdjPeriod}；Demark ${_mathIndicatorConfig.demarkLen}；'
-            '背驰率 ${_mathIndicatorConfig.divergenceRate}',
+            '背驰率 ${_mathIndicatorConfig.divergenceRate}；'
+            '桶宽 ${_chipConfig.bucketStep.toStringAsFixed(2)}',
             style: const TextStyle(fontSize: 11),
           ),
           trailing: IconButton(
@@ -1663,33 +1664,6 @@ class _KlineHomePageState extends State<KlineHomePage> {
                   _updateChipConfig(_chipConfig.copyWith(peakLineEnabled: v));
                   _msgHistory.append('筹码峰延长线=${v ? "开" : "关"}');
                 },
-        ),
-        ListTile(
-          contentPadding: EdgeInsets.zero,
-          dense: true,
-          title: const Text('筹码桶宽（元）', style: TextStyle(fontSize: 13)),
-          subtitle: Text(
-            '${_chipConfig.bucketStep.toStringAsFixed(2)}（笔数分布共用）',
-            style: const TextStyle(fontSize: 11),
-          ),
-          trailing: SizedBox(
-            width: 120,
-            child: Slider(
-              min: 0.01,
-              max: 1.0,
-              divisions: 99,
-              value: _chipConfig.bucketStep.clamp(0.01, 1.0),
-              onChanged: (!_chipConfig.enabled && !_tickDistConfig.enabled) ||
-                      _busy
-                  ? null
-                  : (v) {
-                      final step = (v * 100).round() / 100.0;
-                      _updateChipConfig(_chipConfig.copyWith(bucketStep: step));
-                      _updateTickDistConfig(
-                          _tickDistConfig.copyWith(bucketStep: step));
-                    },
-            ),
-          ),
         ),
         SwitchListTile(
           contentPadding: EdgeInsets.zero,
@@ -1983,8 +1957,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
             '操作步骤\n'
             '1. 设置里打开「筹码分布」总开关；\n'
             '2. 主图右侧立即绘制 K0 筹码；\n'
-            '3. 可调「筹码桶宽」「筹码峰延长线」；\n'
-            '4. 配置写入 .chan_chip_config.json，下次启动恢复。',
+            '3. 桶宽在「数学指标参数」里用输入框设置（最小 0.01，与笔数分布共用）；\n'
+            '4. 可调「筹码峰延长线」；配置写入 .chan_chip_config.json。',
           ),
         ),
         actions: [
@@ -2012,11 +1986,11 @@ class _KlineHomePageState extends State<KlineHomePage> {
             '· 十字 tooltip：K0笔数峰-/+n（编号规则同筹码峰）。\n\n'
             '数据\n'
             '· Rust 写入 chip_tick_count_bins（按价累加 ticks）；'
-            '桶宽与筹码共用。\n\n'
+            '桶宽与筹码共用（在「数学指标参数」输入，最小 0.01）。\n\n'
             '操作步骤\n'
             '1. 设置打开「笔数分布」；\n'
             '2. 主图左侧绘制；可开「笔数峰延长线」；\n'
-            '3. 重编 DLL 后冷启以载入笔数桶（旧数据无 bins 时回退收盘价落笔数）。',
+            '3. 桶宽到「数学指标参数」修改；重编 DLL 后冷启载入笔数桶。',
           ),
         ),
         actions: [
@@ -2037,16 +2011,18 @@ class _KlineHomePageState extends State<KlineHomePage> {
         title: const Text('数学指标参数'),
         content: const SingleChildScrollView(
           child: Text(
-            '作用：移植旧工程 Math——均线/通道/MACD/BOLL/RSI/KDJ/Demark/背驰。\n'
+            '作用：移植旧工程 Math——均线/通道/MACD/BOLL/RSI/KDJ/Demark/背驰；\n'
+            '另含筹码/笔数分布共用桶宽。\n'
             '口径（全层同构）\n'
             '· K0：原生 K 线 OHLC；Kn≥1：unitBars+active；\n'
             '· Demark：主图标注；Countdown 宽松/严、完美9、反向打断可配；\n'
-            '· 背驰：进出段力度比 + diver∈{1,-1,0}；算法分项；\n'
+            '· 背驰：进出段力度比 + diver∈{1,-1,0}；无 turnrate（离线无换手）；\n'
+            '· 桶宽：最小 0.01 元，筹码与笔数分布共用；\n'
             '· K0 颗粒度展开；无未来函数；十字 asOf 截断。\n\n'
             '操作步骤\n'
             '1. 主图勾选布林/Demark；副图勾选 MACD/RSI/KDJ/背驰_*；\n'
-            '2. 点本项或「?」编辑参数（含 Demark 三项下拉与背驰率）；\n'
-            '3. 写入 .chan_trend_model_config.json，下次启动恢复。',
+            '2. 点本项或「?」编辑参数（Demark/背驰率/桶宽）；\n'
+            '3. Math 写入 .chan_trend_model_config.json；桶宽写入筹码配置。',
           ),
         ),
         actions: [
@@ -2093,6 +2069,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
         text: '${_mathIndicatorConfig.demarkMaxCountdown}');
     final diverRateCtl = TextEditingController(
         text: '${_mathIndicatorConfig.divergenceRate}');
+    final bucketCtl = TextEditingController(
+        text: _chipConfig.bucketStep.toStringAsFixed(2));
     var demarkCdMode = _mathIndicatorConfig.demarkCountdownMode;
     var demarkPerfect9 = _mathIndicatorConfig.demarkPerfect9;
     var demarkInterruptCd =
@@ -2100,6 +2078,13 @@ class _KlineHomePageState extends State<KlineHomePage> {
     int parseInt(String s, int fb) => int.tryParse(s.trim()) ?? fb;
     double parseDouble(String s, double fb) =>
         double.tryParse(s.trim()) ?? fb;
+    /// 桶宽：最小 0.01；非法回落当前值
+    double parseBucket(String s) {
+      final v = double.tryParse(s.trim());
+      if (v == null || !v.isFinite) return _chipConfig.bucketStep;
+      if (v < 0.01) return 0.01;
+      return (v * 100).round() / 100.0;
+    }
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -2246,6 +2231,21 @@ class _KlineHomePageState extends State<KlineHomePage> {
                   keyboardType:
                       const TextInputType.numberWithOptions(decimal: true),
                 ),
+                const SizedBox(height: 8),
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text('筹码 / 笔数分布',
+                      style: TextStyle(fontWeight: FontWeight.w600)),
+                ),
+                TextField(
+                  controller: bucketCtl,
+                  decoration: const InputDecoration(
+                    labelText: '筹码桶宽（元，笔数分布共用）',
+                    hintText: '最小 0.01；如 0.01 / 0.05 / 0.10',
+                  ),
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                ),
               ],
             ),
           ),
@@ -2277,11 +2277,13 @@ class _KlineHomePageState extends State<KlineHomePage> {
         demarkCdCtl,
         demarkMaxCtl,
         diverRateCtl,
+        bucketCtl,
       ]) {
         c.dispose();
       }
       return;
     }
+    final bucketStep = parseBucket(bucketCtl.text);
     final cfg = MathIndicatorConfig(
       meanPeriods: TrendModelConfig.parsePeriodsText(
         meanCtl.text,
@@ -2320,10 +2322,19 @@ class _KlineHomePageState extends State<KlineHomePage> {
       demarkCdCtl,
       demarkMaxCtl,
       diverRateCtl,
+      bucketCtl,
     ]) {
       c.dispose();
     }
-    await _updateMathIndicatorConfig(cfg);
+    // Math 参数未变则不重冻；桶宽单独落盘筹码配置
+    if (cfg != _mathIndicatorConfig) {
+      await _updateMathIndicatorConfig(cfg);
+    }
+    if ((bucketStep - _chipConfig.bucketStep).abs() > 1e-12) {
+      await _updateChipConfig(_chipConfig.copyWith(bucketStep: bucketStep));
+      await _updateTickDistConfig(
+          _tickDistConfig.copyWith(bucketStep: bucketStep));
+    }
     _msgHistory.append(
       '数学指标：均线=${cfg.meanPeriods.join(",")}；通道=${cfg.channelPeriods.join(",")}；'
       'MACD=${cfg.macdFast}/${cfg.macdSlow}/${cfg.macdSignal}；BOLL=${cfg.bollN}；'
@@ -2331,7 +2342,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       '/${cfg.demarkCountdownMode.name}'
       '/完美9=${cfg.demarkPerfect9}'
       '/反向打断=${cfg.demarkInterruptCountdownOnReverse}；'
-      '背驰率=${cfg.divergenceRate}',
+      '背驰率=${cfg.divergenceRate}；桶宽=$bucketStep',
     );
   }
 }

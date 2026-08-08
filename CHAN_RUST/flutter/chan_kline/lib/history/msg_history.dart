@@ -498,7 +498,8 @@ class MsgHistory {
       '确认序滑动窗：三型窗长3（两同+一异→过异型向右）、四型窗长4（两顶线+两底线弦+向右）；|dx|<1 跳过。'
       '呈现：无十字只画最新合格窗；开十字只画焦点近邻窗（落窗优先，否则距区间最近）；'
       'tooltip 固定槽「K{n}三型平移线」「K{n}四型对线」=延长线落到该根K0的价格(四型分顶/底)，与主图筛选同口径。'
-      '十字 asOf：只认 asOfBundle 的 confirms/levels（失败空，禁末态）；线型=层色构建虚线。'
+      '十字 asOf：只认 asOfBundle 的 confirms/levels（失败空，禁末态）；线型=层色构建虚线；'
+      '射线右端截到 asOf 柱心（不向未来画到视口右缘）。'
       '默认勾选：进 catalog +「Kn指标」层全选 + 启动默认 K0。纯 Flutter，不改 Rust。',
     );
   }
@@ -514,7 +515,8 @@ class MsgHistory {
       '映射：子线=levels[level==n+1]，父段=levels[level==n+2]（含 active）；K0≈旧工程（父K1连线/子K0连线）。'
       '父段内子线≥3：隔笔取样→峰值斜率→点到线距离和最小；INSIDE=支撑、OUTSIDE=压力。'
       '例外：依赖父层，最高层不作显示名；maxKn<2 目录仍挂 K0 占位（计算空）。'
-      '呈现对齐三型/四型：无十字最新父段组；十字近邻组；父段弦+向右外推；层色构建虚线。'
+      '呈现对齐三型/四型：无十字最新父段组；十字近邻组；父段弦+向右外推；层色构建虚线；'
+      '十字 asOf 时射线右端截到 asOf（与蜡烛/均线同构）。'
       'tooltip「K{n}趋势线」=撑/压延长线落到该根K0价格；十字 asOf 只认 asOfBundle（禁末态）。'
       '默认：进 catalog +「Kn指标」层全选 + 启动默认 K0。纯 Flutter，不改 Rust。',
     );
@@ -540,39 +542,36 @@ class MsgHistory {
   }
 
   /// MACD/BOLL/RSI/KDJ/Demark（进程内去重）
-  static bool _knMathClassicLoggedV5 = false;
+  static bool _knMathClassicLoggedV6 = false;
   void appendKnMathClassicIndicators() {
-    if (_knMathClassicLoggedV5) return;
-    _knMathClassicLoggedV5 = true;
+    if (_knMathClassicLoggedV6) return;
+    _knMathClassicLoggedV6 = true;
     append(
-      '【Kn MACD/BOLL/RSI/KDJ/Demark·全层同构·v5·Demark主图+设置三项】'
+      '【Kn MACD/BOLL/RSI/KDJ/Demark·全层同构·v6·清副图Demark枚举+桶宽进Math】'
       '主图：K{n}布林(MID/UP/DOWN)；K{n}Demark（锚K0低点向上垂直排：S1…S9/C1…C13/完成买|完成卖）。'
-      '副图：K{n}MACD(DIF/DEA线+柱)、K{n}RSI、K{n}KDJ（Demark已迁主图）。'
+      '副图：K{n}MACD(DIF/DEA线+柱)、K{n}RSI、K{n}KDJ；已删除 SubIndicatorKind.demark。'
       'Demark完成信号：Setup满9 与 Countdown满13 都算完整信号（各打「完成买/卖」）。'
-      '设置（数学指标参数·Demark下拉）：'
-      '①Countdown比较 宽松closevsclose[i-2]（默认）/原版严closevs低高[i-2]；'
-      '②完美9 默认关（开则未Perfected不启Countdown、不打Setup完成）；'
-      '③反向Setup打断Countdown 严=打断（默认）/宽松=不打断仅TDST或数满13。'
+      '设置（数学指标参数）：Demark三项下拉 + 背驰率 + 筹码桶宽输入框（最小0.01，笔数分布共用，落盘筹码配置）。'
       '分色：买红/橙、卖绿/青；完成信号更深加粗。'
       '输入：collectKnOhlcSamples(displayKn, unitBars+activeUnit)；K0 颗粒度 expandPointsToK0；asOf 截断。'
       '当下性：会话 MathSeriesFreezeStore 格点首次非空写入后冻结（含 Demark 标记内容），'
       '禁 Kn≥1 因 activeUnit/EMA 整表回写；主图/副图/十字读仓；参数变更清空并 0..当前步重冻。'
       '十字 asOf：均线/通道/布林/_paintPriceSeries 与副图 Math 一律 x>asOf 右侧不画（与蜡烛同构）。'
       'Kn绑定：Demark进主图「Kn指标」层全选（默认静音）；MACD/RSI/KDJ/背驰进副图「Kn指标」；启动默认仍不勾背驰。'
-      '参数：设置面板「数学指标参数」统一落盘 .chan_trend_model_config.json（兼容旧均线/通道字段）。'
+      '参数：Math 落盘 .chan_trend_model_config.json；桶宽落盘 .chan_chip_config.json。'
       'tooltip：macd_dif/dea/hist、boll_mid/up/down、rsi、kdj_k/d/j、demark_text（含完成买/卖）。'
       '默认：进 catalog +「Kn指标」层全选；纯 Flutter，不改 Rust。',
     );
   }
 
-  /// Kn背驰 13 算法分项（进程内去重；非买卖点）
-  static bool _knDivergenceLoggedV11 = false;
+  /// Kn背驰 12 算法分项（进程内去重；非买卖点；已删 turnrate）
+  static bool _knDivergenceLoggedV12 = false;
   void appendKnDivergenceIndicators() {
-    if (_knDivergenceLoggedV11) return;
-    _knDivergenceLoggedV11 = true;
+    if (_knDivergenceLoggedV12) return;
+    _knDivergenceLoggedV12 = true;
     append(
-      '【Kn背驰·副图分算法·v11·全体副图整段高亮】'
-      '副图类别「背驰」：K{n}背驰_area/peak/…/斜率（13 算法×层）。'
+      '【Kn背驰·副图分算法·v12·删turnrate】'
+      '副图类别「背驰」：K{n}背驰_area/peak/…/斜率（12 算法×层；无 turnrate_avg，离线无换手）。'
       '绑定：进「Kn指标」层全选；启动默认不勾。'
       '口径：中枢判断±1 启动；相对最新动态中枢——'
       '动态Kn包中→上枢末vs上上枢末；破上/下沿→本枢末vs上枢末。'
@@ -582,7 +581,7 @@ class MsgHistory {
       'area=端点同号连续段；peak=整段同向柱+峰值描边；'
       'full_area=整段同向柱；diff=整段全部非空柱。'
       '全体 Kn背驰_* 副图同十字：高亮比较两段整 Kn 区间（in蓝/out琥珀）；'
-      '含 slope/斜率/amp/amount/volumn/amount_avg/volumn_avg/turnrate_avg/rsi 及 MACD 四算法。'
+      '含 slope/斜率/amp/amount/volumn/amount_avg/volumn_avg/rsi 及 MACD 四算法。'
       'Kn背驰_斜率：与 Kn连线斜率同源 |(endVal-beginVal)/dx|；K0 无连线段不写。'
       'span/高亮来自 DivergenceFreezeStore；颗粒度K0；旧格冻结不回写。',
     );

@@ -445,7 +445,6 @@ DivergenceMacdHighlight? buildDivergenceMacdHighlight({
     case DivergenceAlgo.volumn:
     case DivergenceAlgo.amountAvg:
     case DivergenceAlgo.volumnAvg:
-    case DivergenceAlgo.turnrateAvg:
     case DivergenceAlgo.rsi:
       return (xs: const [], peakX: null);
   }
@@ -786,8 +785,6 @@ double? _calMetric({
       return _metricTrade(seg, bars, _TradeField.amount, avg: true);
     case DivergenceAlgo.volumnAvg:
       return _metricTrade(seg, bars, _TradeField.volume, avg: true);
-    case DivergenceAlgo.turnrateAvg:
-      return _metricTrade(seg, bars, _TradeField.turnrate, avg: true);
     case DivergenceAlgo.rsi:
       return _metricRsi(seg, rsi);
     case DivergenceAlgo.lineSlope:
@@ -929,7 +926,7 @@ double? _metricAmp(_SegView seg, List<KlineBar> bars) {
   return (end.high - begin.low) / begin.low;
 }
 
-enum _TradeField { amount, volume, turnrate }
+enum _TradeField { amount, volume }
 
 double? _metricTrade(
   _SegView seg,
@@ -949,14 +946,6 @@ double? _metricTrade(
         break;
       case _TradeField.volume:
         v = b.volume;
-        break;
-      case _TradeField.turnrate:
-        final raw = b.metrics['turnrate'] ?? b.metrics['turn_rate'];
-        if (raw is num) {
-          v = raw.toDouble();
-        } else {
-          return null; // 缺换手 → 无值
-        }
         break;
     }
     sum += v;

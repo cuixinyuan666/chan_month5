@@ -210,8 +210,6 @@ enum SubIndicatorKind {
   rsi,
   /// Kn KDJ
   kdj,
-  /// Kn Demark（setup/countdown；kn 同中枢）
-  demark,
   /// Kn背驰（分算法；kn 同中枢；输出 in/out/ratio/diver）
   divergence,
 }
@@ -254,8 +252,6 @@ extension SubIndicatorKindMeta on SubIndicatorKind {
         return 'RSI';
       case SubIndicatorKind.kdj:
         return 'KDJ';
-      case SubIndicatorKind.demark:
-        return 'Demark';
       case SubIndicatorKind.divergence:
         return '背驰';
     }
@@ -297,10 +293,8 @@ extension SubIndicatorKindMeta on SubIndicatorKind {
         return 15;
       case SubIndicatorKind.kdj:
         return 16;
-      case SubIndicatorKind.demark:
-        return 17;
       case SubIndicatorKind.divergence:
-        return 18;
+        return 17;
     }
   }
 }
@@ -407,10 +401,6 @@ class SubChartIndicator {
       : kind = SubIndicatorKind.kdj,
         bsClass = null,
         diverAlgo = null;
-  const SubChartIndicator.demark(this.kn)
-      : kind = SubIndicatorKind.demark,
-        bsClass = null,
-        diverAlgo = null;
   /// kn 同中枢；algo=力度算法
   const SubChartIndicator.divergence(this.kn, DivergenceAlgo algo)
       : kind = SubIndicatorKind.divergence,
@@ -454,8 +444,6 @@ class SubChartIndicator {
         return 'K${kn}RSI';
       case SubIndicatorKind.kdj:
         return 'K${kn}KDJ';
-      case SubIndicatorKind.demark:
-        return 'K${kn}Demark';
       case SubIndicatorKind.divergence:
         return 'K$kn背驰_${diverAlgo?.key ?? "?"}';
     }
@@ -477,7 +465,6 @@ class SubChartIndicator {
       case SubIndicatorKind.macd:
       case SubIndicatorKind.rsi:
       case SubIndicatorKind.kdj:
-      case SubIndicatorKind.demark:
       case SubIndicatorKind.divergence:
         return kn;
       case SubIndicatorKind.fractalConfirm:
@@ -638,7 +625,7 @@ List<SubChartIndicator> buildSubIndicatorCatalog(
     out.add(SubChartIndicator.kdj(d));
   }
   // Demark 已迁主图（MainIndicatorKind.demark）
-  // 背驰：按算法分类，层内 0..maxKn（默认不勾、不进层全选）
+  // 背驰：按算法分类，层内 0..maxKn（12 算法；默认不勾）
   for (final algo in DivergenceAlgoMeta.all) {
     for (var d = 0; d <= maxD; d++) {
       out.add(SubChartIndicator.divergence(d, algo));
@@ -791,7 +778,6 @@ bool isDefaultDrawnSub(SubChartIndicator e) {
     case SubIndicatorKind.macd:
     case SubIndicatorKind.rsi:
     case SubIndicatorKind.kdj:
-    case SubIndicatorKind.demark:
     case SubIndicatorKind.divergence:
       return false;
   }

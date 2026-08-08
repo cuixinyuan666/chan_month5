@@ -69,12 +69,13 @@ CHAN_RUST项目：项目定位：全新项目，用于行情回测、机器学�
 - **验收**：连续单步（非一键跳末）；口径变更写 `lib/history/msg_history.dart` 与 `TASK_LOG.md`。
 
 ### CHAN_RUST Math 指标 / 副图绑定 / 十字 asOf（2026-08-04·常驻）
-- **Demark（主图）**：`MainIndicatorKind.demark`；锚 K0 低点向上垂直排；文案 `S1…S9`/`C1…C13`/`完成买|完成卖`；Setup9 与 Countdown13 都算完整信号。买红/橙、卖绿/青。进主图「Kn指标」层全选，默认静音。
+- **Demark（主图）**：`MainIndicatorKind.demark`；锚 K0 低点向上垂直排；文案 `S1…S9`/`C1…C13`/`完成买|完成卖`；Setup9 与 Countdown13 都算完整信号。买红/橙、卖绿/青。进主图「Kn指标」层全选，默认静音。副图枚举已删除。
 - **Demark 设置三项**：Countdown 宽松 close↔close[i-2]（默认）/原版严 close↔low|high[i-2]；完美9 默认关；反向 Setup 打断 Countdown 严=打断（默认）/宽松=不打断。
-- **Kn绑定清单（副图层全选必须含）**：volume/tickCount/分型类/**中枢判断/确认**/BS/比例/节奏/斜率/MACD/RSI/KDJ/**背驰算法**（Demark 已迁主图）。启动默认仍不勾背驰（`defaultSubIndicatorsK0` 过滤）；点「Kn指标」可一层全选。
+- **Kn绑定清单（副图层全选必须含）**：volume/tickCount/分型类/**中枢判断/确认**/BS/比例/节奏/斜率/MACD/RSI/KDJ/**背驰算法**（Demark 已迁主图；无 turnrate）。启动默认仍不勾背驰（`defaultSubIndicatorsK0` 过滤）；点「Kn指标」可一层全选。
 - **默认绘制（关联≠全画）**：层全选仍勾全集；默认实际绘制仅主图 Kn/合并/中枢/连线 + 副图分型确认/判断/截断/中枢确认/判断；其余关联项默认删除线静音（`isDefaultDrawnMain/Sub`），单击 chip 可打开。
 - **主图 Math 仍绑层全选**：均线/通道/布林/Demark（与中枢同号）。
-- **十字 asOf 右侧不画**：蜡烛/成交量/分型/BS/Math 副图已截断；主图均线/通道/布林必须走 `_paintPriceSeries` 的 `x>asOf` 截断，禁止只算 asOf 却仍把冻结仓全长画完。
+- **十字 asOf 右侧不画**：蜡烛/成交量/分型/BS/Math 副图已截断；主图均线/通道/布林走 `_paintPriceSeries`；三型/四型/趋势线射线右端截到 asOf 柱心，禁止画到视口右缘「看见未来」。
 - **当下冻结**：`MathSeriesFreezeStore` 格点首次非空写入后冻结；参数变更清空并 0..当前步重冻。背驰另有 `DivergenceFreezeStore`（本层 MACD/RSI 力度；旧格不改、新 x 追加）。验收：连续单步（非一键跳末）。
-- **背驰 v11（2026-08-07）**：全体 Kn背驰_* 副图十字下整段高亮比较 in/out Kn；MACD 四算法另在 MACD 副图按贡献柱高亮。含斜率同源连线斜率。详见 `msg_history` v11。
+- **背驰 v12**：12 算法（已删 turnrate_avg，离线无换手）；全体 Kn背驰_* 副图十字下整段高亮；MACD 四算法另按贡献柱高亮。含斜率同源连线斜率。
+- **桶宽**：筹码/笔数分布共用；在「数学指标参数」输入框设置，最小 0.01，落盘筹码配置。
 - **踩坑**：新增副图指标时同步改 ①catalog ②`subIndicatorsForLevel` ③绘制分支 ④`crosshairSubRows` ⑤`msg_history`；漏任一环=「没和 Kn指标绑定」或「十字右侧读数空白」。默认不勾≠不进层全选——背驰即此例。背驰力度须与 Math 同号（`displayKn`），禁止再绑死 K0。Math 副图绘制须对冻结仓 `min(bars.length, series.length)`，禁 RSI/KDJ/MACD 越界。

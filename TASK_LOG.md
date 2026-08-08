@@ -2,6 +2,12 @@
 
 ## 最新记录
 
+### 2026-08-08 — 延伸线 asOf 截断 / 清 Demark 副图枚举 / 删 turnrate 背驰 / 桶宽进 Math 输入框
+
+- **要点**：三型/四型/趋势线射线十字下截到 asOf；删除 `SubIndicatorKind.demark`；背驰去掉 turnrate_avg（12 算法）；筹码桶宽从拉条迁入「数学指标参数」输入框（最小 0.01，笔数分布共用）。
+- **相关路径**：`kline_chart.dart`、`chart_indicator.dart`、`divergence_algo.dart`、`divergence_compute.dart`、`main.dart`、`msg_history.dart`、`AGENTS.md`
+- **注意**：旧会话若勾过背驰_turnrate 会被 prune；桶宽仍落盘筹码配置
+
 ### 2026-08-08 — KnDemark 主图标注 + 设置三项（宽松Countdown/完美9/反向打断）
 
 - **要点**：Demark 从副图迁主图，锚 K0 低点垂直排 S/C 与「完成买/卖」（Setup9 与 Countdown13 均算完整信号）。设置增加 Countdown 宽松/原版严（默认宽松）、完美9（默认关）、反向 Setup 打断 Countdown（默认严=打断）。

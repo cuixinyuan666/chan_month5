@@ -1,4 +1,5 @@
-/// 12+1 种背驰力度算法（前 12 对齐旧 `MACD_ALGO`；`lineSlope`=与 Kn连线斜率同源）。
+/// 背驰力度算法（对齐旧 `MACD_ALGO` 去掉 turnrate；`lineSlope`=与 Kn连线斜率同源）。
+/// 离线分笔无换手率字段，故不提供 turnrate_avg。
 enum DivergenceAlgo {
   area,
   peak,
@@ -10,7 +11,6 @@ enum DivergenceAlgo {
   volumn,
   amountAvg,
   volumnAvg,
-  turnrateAvg,
   rsi,
   /// 与 Kn连线斜率同源：|(endVal-beginVal)/(endX-beginX)|
   lineSlope,
@@ -40,8 +40,6 @@ extension DivergenceAlgoMeta on DivergenceAlgo {
         return 'amount_avg';
       case DivergenceAlgo.volumnAvg:
         return 'volumn_avg';
-      case DivergenceAlgo.turnrateAvg:
-        return 'turnrate_avg';
       case DivergenceAlgo.rsi:
         return 'rsi';
       case DivergenceAlgo.lineSlope:

@@ -1387,10 +1387,6 @@ class BarFeatureLookup {
           add(ind.label, '0');
         }
       }
-      if (ind.kind == SubIndicatorKind.demark) {
-        final t = sub['demark_text_${ind.kn}'];
-        add(ind.label, t is String && t.isNotEmpty ? t : '0');
-      }
     }
     return lines;
   }

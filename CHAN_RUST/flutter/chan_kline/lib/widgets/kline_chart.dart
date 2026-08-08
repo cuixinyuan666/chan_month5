@@ -3261,7 +3261,8 @@ class _KlineCompositePainter extends CustomPainter {
     }
   }
 
-  /// 画延伸射线：可选弦 (x1,y1)→(x0,y0)，再自 (x0,y0) 外推到视口右缘。
+  /// 画延伸射线：可选弦 (x1,y1)→(x0,y0)，再自 (x0,y0) 外推。
+  /// 十字 asOf：右端截到 asOf 柱心（与蜡烛/均线同构，不向未来画）；无十字仍到视口右缘。
   void _paintFxExtendRay(
     Canvas canvas,
     double w,
@@ -3278,8 +3279,14 @@ class _KlineCompositePainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round;
 
-    // 弦：左锚 → 右锚
-    if (ray.x1 != null && ray.y1 != null) {
+    final asOf = segAsOf;
+    // 锚点已在 asOf 右侧：整条不画
+    if (asOf != null && ray.x0 > asOf) return;
+
+    // 弦：左锚 → 右锚（左锚若越过 asOf 则跳过弦，只画开口）
+    if (ray.x1 != null &&
+        ray.y1 != null &&
+        (asOf == null || ray.x1! <= asOf)) {
       final ax = _barCenterX(ray.x1!.round(), w, slotW);
       final ay = priceRange.yOf(ray.y1!, plotTop, plotH);
       final bx = _barCenterX(ray.x0.round(), w, slotW);
@@ -3293,13 +3300,17 @@ class _KlineCompositePainter extends CustomPainter {
       );
     }
 
-    // 向右外推至绘图区右缘（价由斜率连续外推）
-    final endBarF = viewport.xToIndex(w - KlineViewport.padR, w);
+    // 向右外推：无十字→视口右缘；有 asOf→截到 asOf
+    final viewEnd = viewport.xToIndex(w - KlineViewport.padR, w);
+    final endBarF =
+        asOf != null ? math.min(viewEnd, asOf.toDouble()) : viewEnd;
     if (endBarF <= ray.x0) return;
     final endPrice = ray.y0 + ray.slope * (endBarF - ray.x0);
     final sx = _barCenterX(ray.x0.round(), w, slotW);
     final sy = priceRange.yOf(ray.y0, plotTop, plotH);
-    final ex = w - KlineViewport.padR;
+    final ex = asOf != null
+        ? _barCenterX(endBarF.round(), w, slotW)
+        : (w - KlineViewport.padR);
     final ey = priceRange.yOf(endPrice, plotTop, plotH);
     _drawPatternLine(
       canvas,

@@ -158,7 +158,6 @@ void main() {
       expect(subCat.any((e) => e.kind == SubIndicatorKind.macd), isTrue);
       expect(subCat.any((e) => e.kind == SubIndicatorKind.rsi), isTrue);
       expect(subCat.any((e) => e.kind == SubIndicatorKind.kdj), isTrue);
-      expect(subCat.any((e) => e.kind == SubIndicatorKind.demark), isFalse);
 
       final dMain = defaultMainIndicatorsK0();
       expect(dMain.any((e) => e.kind == MainIndicatorKind.boll), isTrue);
@@ -167,10 +166,9 @@ void main() {
       expect(isDefaultDrawnMain(const MainChartIndicator.demark(0)), isFalse);
 
       final dSub = defaultSubIndicatorsK0();
-      expect(dSub.any((e) => e.kind == SubIndicatorKind.demark), isFalse);
+      expect(dSub.any((e) => e.kind == SubIndicatorKind.macd), isTrue);
 
       final lvl0 = subIndicatorsForLevel(0, subCat);
-      expect(lvl0.any((e) => e.kind == SubIndicatorKind.demark), isFalse);
       expect(
         lvl0.where((e) => e.kind == SubIndicatorKind.divergence).length,
         DivergenceAlgoMeta.all.length,
