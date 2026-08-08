@@ -44,7 +44,8 @@ pub use engine::{
 pub use error::{ChanDataError, Result};
 pub use feature::{
     build_k1_bar_views, enrich_fractal_peak_dist, fractal_extreme_bar_idx,
-    weekday_from_bar, BarCrosshairFeature, K0Line, K1Bar, K1BarView,
+    weekday_from_bar, BarBs1Hit, BarCrosshairFeature, BarZsHit, K0Line, K1Bar,
+    K1BarView,
 };
 pub use kline::{KlineBar, KlinePeriod};
 pub use offline::{

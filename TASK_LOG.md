@@ -2,6 +2,18 @@
 
 ## 最新记录
 
+### 2026-08-08 — build_rust.ps1 编完后自动 flutter run -d windows
+
+- **要点**：`CHAN_RUST/scripts/build_rust.ps1` 在复制 `chan_ffi.dll` 后进入 `flutter/chan_kline` 执行 `flutter run -d windows`。
+- **相关路径**：`CHAN_RUST/scripts/build_rust.ps1`
+- **注意**：脚本会先杀占用中的 `chan_kline`；`flutter run` 占住该终端
+
+### 2026-08-08 — BS x冻结 / sure中枢禁改写 / bar_features.zs·bs1 / tip类上界
+
+- **要点**：Rust 钉死一类/二类 discovery x；`try_combine` 跳过已 `is_sure`；`bar_features` 增 `zs_hits`/`bs1_hits`；tip 三类+跟 `maxBsClass`。「复制调试信息」改绑本轮 A/B/C/D 验收。须重编 `chan_ffi.dll`。
+- **相关路径**：`pipeline.rs`、`zs.rs`、`feature.rs`、`combine.rs`、`bar_crosshair_feature.dart`、`bar_feature_lookup.dart`、`audit_probe_snapshot.dart`
+- **注意**：冷启后跳末→复制调试信息看判定；flutter run 占用 DLL 时先 `q` 再跑 `build_rust.ps1`
+
 ### 2026-08-08 — 审计修复例1/2/4/5（K1合并同源·asOf禁回落·三型上界·zs进lookup）
 
 - **要点**：tip「K1合并」改与主图 `k1CombineFrames` 同源；十字 asOf 下 lookup 禁回落会话 levels；三型/四型特征上界=structureMax；lookup.sub 写入 zs_*（BS 仍会话历史）。例3本样本未漂未改 Rust。

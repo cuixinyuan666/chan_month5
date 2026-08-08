@@ -656,35 +656,31 @@ class MsgHistory {
     );
   }
 
-  /// 设置「复制调试信息」：例1–例5审计探针（进程内去重）。
+  /// 设置「复制调试信息」按钮说明（进程内去重；文案随任务更新）。
   static bool _auditProbeCopyLogged = false;
   void appendAuditProbeCopyButton() {
     if (_auditProbeCopyLogged) return;
     _auditProbeCopyLogged = true;
     append(
-      '【复制调试信息】设置面板常驻按钮；输出例1–例5核对字段：'
-      '①K1合并 tip=k1CombineFrames；②asOf vs 会话计数；③一类BS x；'
-      '④三型/四型上界；⑤lookup.sub zs/BS。'
-      '建议默认002003+分笔跳末后点按；实现：audit_probe_snapshot.dart。',
+      '【复制调试信息】设置面板常驻按钮（勿删）。'
+      '当前绑定验收：A一类BS x冻结；B sure中枢禁合并改写；'
+      'C bar_features.zs_hits/bs1_hits；D tip三类+上界=maxBsClass。'
+      '跳末后点按；实现 audit_probe_snapshot.dart。',
     );
   }
 
-  /// 审计修复落地：例1/2/4/5（进程内去重）。
-  static bool _auditFixEx145Logged = false;
-  void appendAuditFixEx145() {
-    if (_auditFixEx145Logged) return;
-    _auditFixEx145Logged = true;
+  /// 本轮：BS冻结 / sure中枢 / bar_features / tip类上界（进程内去重）。
+  static bool _auditFixBsZsFeatureLogged = false;
+  void appendAuditFixBsZsFeature() {
+    if (_auditFixBsZsFeatureLogged) return;
+    _auditFixBsZsFeatureLogged = true;
     append(
-      '【审计修复·例1/2/4/5】'
-      '①tip「K1合并」MG/MD←k1CombineFrames（覆盖 level==1）；'
-      '禁止 level0 写入 combine_box_1。'
-      '②十字 asOf 时 BarFeatureLookup.levels/zsK0 禁 ??sessionLevels。'
-      '④三型/四型 maxD=structureMax（含最高连线层）；趋势线上界 structureMax-1；'
-      'Math/背驰 meanMaxD=structureMax+1。'
-      '⑤lookup.sub 写入 zs_high_*/zs_low_*/zs_sure_*/zs_seq_*（与主副图同号）；'
-      'BS 仍会话历史 buy1_*；Rust bar_features 本身仍无 zs/BS。'
-      '验收：跳末→十字 idx=12 看 tip K1合并 MG/MD 对主图宽框；'
-      '复制调试信息例1/4/5 应为 OK_FIXED。',
+      '【验收修复·BS冻结+sure中枢+bar_features】'
+      'Rust：seg_idx→首次 discovery x 钉死（buy1/2）；'
+      'try_combine 跳过已 is_sure 框；'
+      'bar_features 增 zs_hits/bs1_hits（逐K pipeline 写入）。'
+      'Flutter：tip 三类+上界跟 maxBsClass/会话最高类。'
+      '须重编 chan_ffi.dll；复制调试信息看 A/B/C/D 判定。',
     );
   }
 

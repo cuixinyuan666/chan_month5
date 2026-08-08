@@ -1,24 +1,22 @@
 import '../bridge/chan_bridge.dart';
+import '../compute/class_n_bs_compute.dart';
 import '../models/bar_crosshair_feature.dart';
-import '../models/bar_feature_lookup.dart';
 import '../models/buy1_frame.dart';
-import '../models/chart_indicator.dart';
+import '../models/buy_n_frame.dart';
 import '../models/kline_bar.dart';
 import '../models/kline_combine_bundle.dart';
 import '../models/kline_combine_frame.dart';
 import '../models/level_models.dart';
 import '../models/sell1_frame.dart';
+import '../models/sell_n_frame.dart';
 import '../models/zs_frame.dart';
 
-/// 审计探针：例1–例5核对字段（设置「复制调试信息」）。
-/// 常驻：勿当临时调试代码删；合并 main 时须保留按钮与本文件。
-class AuditProbeSnapshot {
-  /// 固定探针 idx（分笔默认区间已验证过这些点位）。
-  static const probeIdx3 = 3;
-  static const probeIdx7 = 7;
-  static const probeIdx12 = 12;
-  static const probeAsOf100 = 100;
+// buy1K0Frames / sessionK1 保留入参兼容 main 调用，本轮探针未用
 
+/// 本次任务验收探针（设置「复制调试信息」）。
+/// 绑定：①一类BS x 冻结 ②sure中枢禁合并改写 ③bar_features.zs/bs1 ④tip maxBsClass
+/// 常驻按钮；内容随当前验收项更新（勿删按钮）。
+class AuditProbeSnapshot {
   static String build({
     required ChanBridge bridge,
     required String code,
@@ -37,6 +35,8 @@ class AuditProbeSnapshot {
     required List<Buy1Frame> buy1K0Frames,
     required List<Sell1Frame> sell1K0Frames,
     List<ZSFrame> zsK0Frames = const [],
+    Map<int, List<BuyNFrame>> buyNHistoryByKn = const {},
+    Map<int, List<SellNFrame>> sellNHistoryByKn = const {},
   }) {
     final now = DateTime.now();
     final ts =
@@ -45,7 +45,7 @@ class AuditProbeSnapshot {
         '${now.second.toString().padLeft(2, '0')}';
 
     final buf = StringBuffer();
-    buf.writeln('CHAN_RUST 审计调试信息（例1–例5）');
+    buf.writeln('CHAN_RUST 验收调试信息（BS冻结·sure中枢·bar_features·tip类上界）');
     buf.writeln('时间=$ts');
     buf.writeln(
       '代码=$code 周期=$period($periodLabel) 区间=$beginDate ~ $endDate',
@@ -53,441 +53,216 @@ class AuditProbeSnapshot {
     buf.writeln(
       'stepIdx=$stepIdx bars=${bars.length} truncationCheck=$truncationCheck',
     );
-    buf.writeln(
-      '用法：默认002003+分笔+默认区间；建议一键跳末后再点本按钮；'
-      '把全文粘贴给助手核对猜想。',
-    );
+    buf.writeln('用法：跳末后点本按钮，全文粘贴给助手。');
     buf.writeln();
 
     if (bars.isEmpty || stepIdx < 0) {
-      buf.writeln('【中止】尚无已步进数据（先加载并至少单步/跳末）。');
+      buf.writeln('【中止】尚无已步进数据。');
       return buf.toString();
     }
 
     final lastIdx = bars[stepIdx.clamp(0, bars.length - 1)].idx;
-    final sessionBundle = _SessionView(
-      levels: sessionLevels,
-      k1CombineFrames: sessionK1CombineFrames,
-      barFeatures: barFeatures,
-      buy1K0: buy1K0Frames,
-      sell1K0: sell1K0Frames,
-      zsK0: zsK0Frames,
-    );
 
-    // ---- 例1：K1合并 tip 层号 vs 主图 ----
-    buf.writeln('======== 例1：K1合并 tip/主图是否同框 ========');
+    // ---- A：一类BS x 冻结 ----
+    buf.writeln('======== A：一类BS discovery x 冻结 ========');
+    buf.writeln('期望：同 seg 在 discovery 后更长前缀上 x 不变。');
+    _writeBsFreeze(buf, bridge, bars, truncationCheck, sessionLevels, lastIdx);
+    buf.writeln();
+
+    // ---- B：sure 中枢禁改写 ----
+    buf.writeln('======== B：已定型中枢禁合并改写 ========');
+    buf.writeln('期望：早期已 is_sure 的框 high/low/x2 在全量末态仍一致。');
+    _writeSureZs(buf, bridge, bars, truncationCheck, lastIdx);
+    buf.writeln();
+
+    // ---- C：bar_features zs/bs1 ----
+    buf.writeln('======== C：bar_features.zs_hits / bs1_hits ========');
+    buf.writeln('期望：Rust 逐K特征含 zs_hits、bs1_hits（非空样本）。');
+    _writeBarFeatureHits(buf, barFeatures, lastIdx);
+    buf.writeln();
+
+    // ---- D：tip maxBsClass ----
+    buf.writeln('======== D：tip 三类+BS 上界=maxBsClass ========');
+    final observed = maxBuyNClassObserved(
+      buyNHistoryByKn: buyNHistoryByKn,
+      sellNHistoryByKn: sellNHistoryByKn,
+    );
+    final tipHi = observed < 9 ? 9 : observed;
+    buf.writeln('会话观察到的最高类=$observed；tip上界应>=$tipHi（至少9）');
     buf.writeln(
-      '现行口径：tip combine_box_1 ← k1CombineFrames（覆盖 level==1）；'
-      '勿再把 level0 写入 combine_box_1。',
-    );
-    _writeEx1At(
-      buf,
-      bridge: bridge,
-      bars: bars,
-      truncationCheck: truncationCheck,
-      prefixEnd: probeIdx3,
-      focus: probeIdx3,
-      note: '当下前缀=3（第一根K1未确认：两边都应无K1合并）',
-    );
-    _writeEx1At(
-      buf,
-      bridge: bridge,
-      bars: bars,
-      truncationCheck: truncationCheck,
-      prefixEnd: probeIdx7,
-      focus: probeIdx7,
-      note: '第一根K1刚出现（约10:51）',
-    );
-    _writeEx1At(
-      buf,
-      bridge: bridge,
-      bars: bars,
-      truncationCheck: truncationCheck,
-      prefixEnd: probeIdx12,
-      focus: probeIdx12,
-      note: '主验收点：主图宽框 vs tip 是否张冠李戴',
+      observed > 9
+          ? '判定=OK_DATA_HAS_CLASS_$observed（tip应扩到该类）'
+          : '判定=OK_DEFAULT_HI_9（本样本无>9类；逻辑已跟 maxBsClass）',
     );
     buf.writeln();
 
-    // ---- 例2：asOf 双轨 ----
-    buf.writeln('======== 例2：十字 asOf 与会话末态计数 ========');
-    buf.writeln(
-      '说明：正常十字下 K0/K1合并已走 asOf 重算；'
-      'lookup.levels/zsK0 在 asOf 下禁回落会话末态。'
-      '本段比「会话已喂到 lastIdx」与「只喂到100」的结构计数（差值为预期）。',
-    );
-    _writeEx2(
-      buf,
-      bridge: bridge,
-      bars: bars,
-      truncationCheck: truncationCheck,
-      lastIdx: lastIdx,
-      session: sessionBundle,
-    );
-    buf.writeln();
-
-    // ---- 例3：一类BS x / 会话冻结 ----
-    buf.writeln('======== 例3：一类BS 打点x 与会话历史 ========');
-    buf.writeln(
-      '猜想：Rust 导出可能随 active 右端漂移；Flutter 会话双键应钉住 discoveryX。',
-    );
-    _writeEx3(
-      buf,
-      bridge: bridge,
-      bars: bars,
-      truncationCheck: truncationCheck,
-      lastIdx: lastIdx,
-      session: sessionBundle,
-      buy1HistoryByKn: buy1HistoryByKn,
-      sell1HistoryByKn: sell1HistoryByKn,
-    );
-    buf.writeln();
-
-    // ---- 例4：三型/四型特征上界 ----
-    buf.writeln('======== 例4：三型/四型 tip 层上界 ========');
-    buf.writeln(
-      '现行：三型/四型上界=structureMax；旧 bug 为 structureMax-1。',
-    );
-    _writeEx4(buf, sessionLevels: sessionLevels);
-    buf.writeln();
-
-    // ---- 例5：ML lookup.sub 是否含 zs/BS ----
-    buf.writeln('======== 例5：lookup.sub 中枢/BS 与画面同源 ========');
-    buf.writeln(
-      '现行：Flutter BarFeatureLookup.sub 写入 zs_high_*/buy1_*；'
-      'Rust bar_features 仍无 zs/BS 字段（ML 请导 lookup 或会话历史）。',
-    );
-    _writeEx5(
-      buf,
-      bars: bars,
-      session: sessionBundle,
-      lastIdx: lastIdx,
-      buy1HistoryByKn: buy1HistoryByKn,
-      sell1HistoryByKn: sell1HistoryByKn,
-    );
-    buf.writeln();
     buf.writeln('======== 结束 ========');
     return buf.toString();
   }
 
-  static void _writeEx1At(
-    StringBuffer buf, {
-    required ChanBridge bridge,
-    required List<KlineBar> bars,
-    required bool truncationCheck,
-    required int prefixEnd,
-    required int focus,
-    required String note,
-  }) {
-    buf.writeln('--- focus=$focus prefixEnd=$prefixEnd | $note ---');
-    if (prefixEnd >= bars.length) {
-      buf.writeln('跳过：bars不足 prefixEnd=$prefixEnd bars=${bars.length}');
-      return;
-    }
-    final bundle = _safeBundle(bridge, bars, prefixEnd, truncationCheck);
-    if (bundle == null) {
-      buf.writeln('FFI失败：无法重建 prefix<=$prefixEnd');
-      return;
-    }
-    final lv0 = _levelAt(bundle.levels, 0);
-    final lv1 = _levelAt(bundle.levels, 1);
-    final k1Bars = bundle.k1Bars.length;
-    final conf = bundle.k0Confirms.length;
-    final oldBug = _frameCovering(lv0?.combineFrames ?? const [], focus);
-    final lv1Box = _frameCovering(lv1?.combineFrames ?? const [], focus);
-    final main = _frameCovering(bundle.k1CombineFrames, focus);
-    // 修后 tip：优先 k1_cf，否则 level==1
-    final tipNow = main ?? lv1Box;
-    final tipK0 = _frameCovering(bundle.frames, focus);
-
-    buf.writeln(
-      'k0_confirms=$conf k1_bars=$k1Bars '
-      'lv0_cf=${lv0?.combineFrames.length ?? 0} '
-      'lv1_cf=${lv1?.combineFrames.length ?? 0} '
-      'k1_cf=${bundle.k1CombineFrames.length}',
-    );
-    buf.writeln('main_K1合并(k1CombineFrames@focus)=${_fmtFrame(main)}');
-    buf.writeln('tip_K1合并_修后模拟(k1_cf优先)=${_fmtFrame(tipNow)}');
-    buf.writeln('旧bug源(level0冒充K1)=${_fmtFrame(oldBug)}');
-    buf.writeln('level==1永久框@focus=${_fmtFrame(lv1Box)}');
-    buf.writeln('tip_K0合并(frames@focus)=${_fmtFrame(tipK0)}');
-
-    final verdict = _ex1Verdict(
-      prefixEnd: prefixEnd,
-      k1Bars: k1Bars,
-      main: main,
-      tipNow: tipNow,
-      oldBug: oldBug,
-    );
-    buf.writeln('判定=$verdict');
-  }
-
-  static String _ex1Verdict({
-    required int prefixEnd,
-    required int k1Bars,
-    required KlineCombineFrame? main,
-    required KlineCombineFrame? tipNow,
-    required KlineCombineFrame? oldBug,
-  }) {
-    if (prefixEnd <= probeIdx3 && k1Bars == 0) {
-      if (main == null) {
-        return 'OK_当下无K1（符合设计）';
+  static void _writeBsFreeze(
+    StringBuffer buf,
+    ChanBridge bridge,
+    List<KlineBar> bars,
+    bool truncationCheck,
+    List<LevelBundle> sessionLevels,
+    int lastIdx,
+  ) {
+    LevelBundle? lv0;
+    for (final l in sessionLevels) {
+      if (l.level == 0) {
+        lv0 = l;
+        break;
       }
-      return '异常_prefix<=3仍见K1合并';
     }
-    if (main == null) {
-      return 'INFO_主图该focus无K1合并框（可能在框外/构建中未盖住）';
-    }
-    if (_sameBox(main, tipNow)) {
-      if (oldBug != null && !_sameBox(main, oldBug)) {
-        return 'OK_FIXED tip与主图同框（且已不同于旧level0冒充）';
-      }
-      return 'OK_FIXED tip与主图同框';
-    }
-    return 'BUG_仍不一致 tip≠主图';
-  }
-
-  static void _writeEx2(
-    StringBuffer buf, {
-    required ChanBridge bridge,
-    required List<KlineBar> bars,
-    required bool truncationCheck,
-    required int lastIdx,
-    required _SessionView session,
-  }) {
-    final asOf = probeAsOf100;
-    buf.writeln('会话末(lastIdx=$lastIdx)结构计数：');
-    _writeLevelCounts(buf, 'session', session.levels, session.k1CombineFrames);
-
-    if (asOf > lastIdx) {
-      buf.writeln(
-        '跳过asOf=$asOf前缀：当前step只到$lastIdx（请跳末或单步到>=$asOf后再复制）',
-      );
-      buf.writeln('判定=SKIP_步进不足');
+    final sells = lv0?.sell1Frames ?? const <Sell1Frame>[];
+    if (sells.isEmpty) {
+      buf.writeln('判定=SKIP_无卖1');
       return;
     }
-    if (asOf >= bars.length) {
-      buf.writeln('跳过：bars不足 asOf=$asOf');
-      return;
-    }
-
-    final asOfBundle = _safeBundle(bridge, bars, asOf, truncationCheck);
-    if (asOfBundle == null) {
-      buf.writeln('asOf=$asOf FFI失败 → tip会空；painter featureLookup 可能回落会话末态');
-      buf.writeln('判定=ASOF_FFI_FAIL（此情形才容易肉眼看到例2）');
-      return;
-    }
-
-    final t = bars[asOf].timeText;
-    buf.writeln('asOf=$asOf t=$t 前缀重算计数：');
-    _writeLevelCounts(buf, 'asOf', asOfBundle.levels, asOfBundle.k1CombineFrames);
-
-    final s0 = _levelAt(session.levels, 0)?.combineFrames.length ?? 0;
-    final a0 = _levelAt(asOfBundle.levels, 0)?.combineFrames.length ?? 0;
-    final s1 = session.k1CombineFrames.length;
-    final a1 = asOfBundle.k1CombineFrames.length;
+    final s0 = sells.first;
+    final disc = s0.x;
     buf.writeln(
-      '差值：lv0_cf session-asOf=${s0 - a0}；k1_cf session-asOf=${s1 - a1}',
+      '跟踪首卖 label=${s0.label} seg=${s0.segIdx} zs=${s0.zsSeq} full_x=${s0.x}',
     );
-    buf.writeln(
-      '代码路径：'
-      'tip/painter.lookup.levels=asOfBundle??[]（禁回落）；'
-      '主图K0/K1合并=_effective*（asOf重算）。',
-    );
-    if (s0 > a0 || s1 > a1) {
-      buf.writeln(
-        '判定=OK_FIXED 末态多于asOf100属预期；asOf路径已禁回落',
-      );
+    if (disc < 0 || disc >= bars.length) {
+      buf.writeln('判定=SKIP_x越界');
+      return;
+    }
+    final later = (disc + 30).clamp(0, lastIdx);
+    final atDisc = _safeBundle(bridge, bars, disc, truncationCheck);
+    final atLater = _safeBundle(bridge, bars, later, truncationCheck);
+    final a = _sellX(atDisc, s0.segIdx);
+    final b = _sellX(atLater, s0.segIdx);
+    buf.writeln('前缀@$disc → x=$a；前缀@$later → x=$b');
+    if (a != null && b != null && a == b) {
+      buf.writeln('判定=OK_FIXED x冻结 a=b=$a');
+    } else if (a != null && b != null) {
+      buf.writeln('判定=BUG_X_DRIFT a=$a b=$b');
     } else {
-      buf.writeln('判定=NO_COUNT_DIFF');
+      buf.writeln('判定=INFO_前缀未复现同seg（可能结构变化） a=$a b=$b');
     }
   }
 
-  static void _writeEx3(
-    StringBuffer buf, {
-    required ChanBridge bridge,
-    required List<KlineBar> bars,
-    required bool truncationCheck,
-    required int lastIdx,
-    required _SessionView session,
-    required Map<int, List<Buy1Frame>> buy1HistoryByKn,
-    required Map<int, List<Sell1Frame>> sell1HistoryByKn,
-  }) {
-    // 显示层 K1一类 = structure level0；history 键 display=1
-    final rustLv0 = _levelAt(session.levels, 0);
-    final rustSell = rustLv0?.sell1Frames ?? const <Sell1Frame>[];
-    final rustBuy = rustLv0?.buy1Frames ?? const <Buy1Frame>[];
-    final histSell = sell1HistoryByKn[1] ?? const <Sell1Frame>[];
-    final histBuy = buy1HistoryByKn[1] ?? const <Buy1Frame>[];
-
-    buf.writeln(
-      'session structure.level0：buy1=${rustBuy.length} sell1=${rustSell.length}',
-    );
-    buf.writeln(
-      '会话历史 displayKn=1：buy1=${histBuy.length} sell1=${histSell.length}',
-    );
-    buf.writeln('K0一类：buy1=${session.buy1K0.length} sell1=${session.sell1K0.length}');
-
-    void dumpSell(String tag, List<Sell1Frame> list, {int n = 3}) {
-      for (final s in list.take(n)) {
-        buf.writeln(
-          '$tag 1S label=${s.label} x=${s.x} price=${s.price} '
-          'seg=${s.segIdx} zs=${s.zsSeq} level=${s.level}',
-        );
-      }
+  static void _writeSureZs(
+    StringBuffer buf,
+    ChanBridge bridge,
+    List<KlineBar> bars,
+    bool truncationCheck,
+    int lastIdx,
+  ) {
+    final early = 200.clamp(0, lastIdx);
+    final e = _safeBundle(bridge, bars, early, truncationCheck);
+    final full = _safeBundle(bridge, bars, lastIdx, truncationCheck);
+    if (e == null || full == null) {
+      buf.writeln('判定=FFI_FAIL');
+      return;
     }
-
-    void dumpBuy(String tag, List<Buy1Frame> list, {int n = 3}) {
-      for (final b in list.take(n)) {
-        buf.writeln(
-          '$tag 1B label=${b.label} x=${b.x} price=${b.price} '
-          'seg=${b.segIdx} zs=${b.zsSeq} level=${b.level}',
-        );
-      }
-    }
-
-    dumpSell('rust', rustSell);
-    dumpSell('hist', histSell);
-    dumpBuy('rust', rustBuy);
-    dumpBuy('hist', histBuy);
-
-    // 跟踪首个 rust sell1：discovery 前缀 vs 末态 x
-    if (rustSell.isNotEmpty) {
-      final s0 = rustSell.first;
-      final disc = s0.x;
-      buf.writeln('跟踪首个rust卖1：label=${s0.label} full_x=${s0.x} seg=${s0.segIdx}');
-      if (disc >= 0 && disc < bars.length) {
-        final atDisc = _safeBundle(bridge, bars, disc, truncationCheck);
-        final later = (disc + 30).clamp(0, lastIdx);
-        final atLater = _safeBundle(bridge, bars, later, truncationCheck);
-        final a = _sellXAt(
-          atDisc,
-          segIdx: s0.segIdx,
-          zsSeq: s0.zsSeq,
-        );
-        final b = _sellXAt(
-          atLater,
-          segIdx: s0.segIdx,
-          zsSeq: s0.zsSeq,
-        );
-        buf.writeln('前缀@$disc → x=$a；前缀@$later → x=$b');
-        if (a != null && b != null && a != b) {
-          buf.writeln('判定=RUST_X_DRIFT a=$a b=$b');
-        } else if (a != null && b != null) {
-          buf.writeln('判定=RUST_X_STABLE（本样本首卖未漂）');
+    var checked = 0;
+    var ok = 0;
+    var bad = 0;
+    for (final lv in e.levels) {
+      for (final z in lv.zsFrames.where((z) => z.isSure).take(3)) {
+        checked++;
+        ZSFrame? zf;
+        for (final l in full.levels) {
+          if (l.level != lv.level) continue;
+          for (final zz in l.zsFrames) {
+            if (zz.seq == z.seq && zz.isSure) {
+              zf = zz;
+              break;
+            }
+          }
+        }
+        if (zf == null) {
+          buf.writeln(
+            'L${lv.level} seq=${z.seq} early sure 在全量中找不到同seq sure',
+          );
+          bad++;
+          continue;
+        }
+        final same = (z.high - zf.high).abs() < 1e-9 &&
+            (z.low - zf.low).abs() < 1e-9 &&
+            z.x1 == zf.x1 &&
+            z.x2 == zf.x2;
+        if (same) {
+          ok++;
         } else {
-          buf.writeln('判定=INFO_未在前缀复现同seg卖点');
+          bad++;
+          buf.writeln(
+            'REWRITE L${lv.level} seq=${z.seq} '
+            'early h/l=${z.high}/${z.low} x=${z.x1}..${z.x2} | '
+            'full h/l=${zf.high}/${zf.low} x=${zf.x1}..${zf.x2}',
+          );
         }
       }
+    }
+    buf.writeln('抽检 sure框 checked=$checked ok=$ok bad=$bad early@$early');
+    if (checked == 0) {
+      buf.writeln('判定=SKIP_early无sure框');
+    } else if (bad == 0) {
+      buf.writeln('判定=OK_FIXED sure框未改写');
     } else {
-      buf.writeln('判定=NO_SELL1_ON_LV0');
-    }
-
-    // hist vs rust 首点 x
-    if (histSell.isNotEmpty && rustSell.isNotEmpty) {
-      final h0 = histSell.first;
-      final r0 = rustSell.first;
-      buf.writeln(
-        '对照首卖 hist.x=${h0.x} rust.x=${r0.x} '
-        '${h0.x == r0.x ? "同x" : "不同x(会话钉死vs末态导出)"}',
-      );
+      buf.writeln('判定=BUG_SURE_REWRITTEN');
     }
   }
 
-  static void _writeEx4(
-    StringBuffer buf, {
-    required List<LevelBundle> sessionLevels,
-  }) {
-    var structureMax = -1;
-    for (final lv in sessionLevels) {
-      if (lv.level > structureMax) structureMax = lv.level;
-    }
-    final maxKn = chartMaxKn(levels: sessionLevels);
-    final maxDNow = structureMax < 0 ? 0 : structureMax;
-    final maxDOldBug = structureMax < 1 ? 0 : structureMax - 1;
-    buf.writeln('structureMax=$structureMax chartMaxKn=$maxKn');
-    buf.writeln('三型/四型循环上界_现行=$maxDNow → dkn=0..$maxDNow');
-    buf.writeln('三型/四型循环上界_旧bug=$maxDOldBug → dkn=0..$maxDOldBug');
-    if (structureMax >= 1 && maxDNow > maxDOldBug) {
-      buf.writeln('判定=OK_FIXED 已含最高连线层 displayKn=$maxDNow');
-    } else if (structureMax < 1) {
-      buf.writeln('判定=SKIP_层数不足');
-    } else {
-      buf.writeln('判定=NO_GAP');
-    }
-  }
-
-  static void _writeEx5(
-    StringBuffer buf, {
-    required List<KlineBar> bars,
-    required _SessionView session,
-    required int lastIdx,
-    required Map<int, List<Buy1Frame>> buy1HistoryByKn,
-    required Map<int, List<Sell1Frame>> sell1HistoryByKn,
-  }) {
-    final bf = session.barFeatures;
-    buf.writeln('bar_features条数=${bf.length}（Rust仍无zs/BS字段，属预期）');
-    try {
-      // 抽检一根「必有中枢」的 idx：优先取 level0 首个 zs 的 x2
-      var probeIdx = lastIdx;
-      final lv0 = _levelAt(session.levels, 0);
-      if (lv0 != null && lv0.zsFrames.isNotEmpty) {
-        probeIdx = lv0.zsFrames.first.x2.clamp(0, lastIdx);
-      }
-      final lookup = BarFeatureLookup.build(
-        bars: bars,
-        combineFrames: const [],
-        k0Confirms: const [],
-        barFeatures: session.barFeatures,
-        levels: session.levels,
-        k1CombineFrames: session.k1CombineFrames,
-        buy1HistoryByKn: buy1HistoryByKn,
-        sell1HistoryByKn: sell1HistoryByKn,
-        zsK0Frames: session.zsK0,
-      );
-      final row = lookup.byIdx[probeIdx];
-      final sub = row?['sub'];
-      final subMap = sub is Map ? Map<String, dynamic>.from(sub) : const {};
-      final zsKeys = subMap.keys.where((k) => k.startsWith('zs_')).toList()
-        ..sort();
-      final bsKeys = subMap.keys
-          .where((k) =>
-              k.startsWith('buy1_') ||
-              k.startsWith('sell1_') ||
-              k.startsWith('buy2_') ||
-              k.startsWith('sell2_'))
-          .toList()
-        ..sort();
-      buf.writeln('lookup.sub@probeIdx=$probeIdx zs键=${zsKeys.take(12).join(",")}');
-      buf.writeln('lookup.sub@probeIdx bs键=${bsKeys.take(12).join(",")}');
-      if (zsKeys.isNotEmpty) {
-        buf.writeln(
-          bsKeys.isNotEmpty
-              ? '判定=OK_FIXED lookup.sub 已含 zs_*（及BS_*）'
-              : '判定=OK_FIXED lookup.sub 已含 zs_*（该根无BS点属正常）',
-        );
-      } else {
-        buf.writeln('判定=WARN_lookup.sub仍缺zs');
-      }
-    } catch (e) {
-      buf.writeln('lookup抽检失败：$e');
-      buf.writeln('判定=ERROR');
-    }
-  }
-
-  static void _writeLevelCounts(
+  static void _writeBarFeatureHits(
     StringBuffer buf,
-    String tag,
-    List<LevelBundle> levels,
-    List<KlineCombineFrame> k1cf,
+    List<BarCrosshairFeature> barFeatures,
+    int lastIdx,
   ) {
-    buf.writeln('$tag k1_combine_frames=${k1cf.length} levels=${levels.length}');
-    for (final lv in levels) {
+    buf.writeln('bar_features条数=${barFeatures.length}');
+    if (barFeatures.isEmpty) {
+      buf.writeln('判定=NO_BAR_FEATURES');
+      return;
+    }
+    var zsN = 0;
+    var bsN = 0;
+    BarCrosshairFeature? sampleZs;
+    BarCrosshairFeature? sampleBs;
+    for (final f in barFeatures) {
+      if (f.zsHits.isNotEmpty) {
+        zsN++;
+        sampleZs ??= f;
+      }
+      if (f.bs1Hits.isNotEmpty) {
+        bsN++;
+        sampleBs ??= f;
+      }
+    }
+    buf.writeln('含zs_hits的bar数=$zsN；含bs1_hits的bar数=$bsN');
+    if (sampleZs != null) {
+      final h = sampleZs.zsHits.first;
       buf.writeln(
-        '  $tag L${lv.level} cf=${lv.combineFrames.length} '
-        'zs=${lv.zsFrames.length} buy1=${lv.buy1Frames.length} '
-        'sell1=${lv.sell1Frames.length} segs=${lv.segments.length}',
+        '样例zs idx=${sampleZs.idx} kn=${h.kn} seq=${h.seq} '
+        'h/l=${h.high}/${h.low} sure=${h.isSure}',
       );
+    }
+    if (sampleBs != null) {
+      final h = sampleBs.bs1Hits.first;
+      buf.writeln(
+        '样例bs1 idx=${sampleBs.idx} kn=${h.kn} ${h.side}${h.label} '
+        'x=${h.x} px=${h.price}',
+      );
+    }
+    // 当下性：全量末态下，历史 idx 的 bs1_hits 不应含「只在更晚才 discovery」的点
+    // 简化：若某 idx 的 bs1.x 必须==idx
+    var badX = 0;
+    for (final f in barFeatures) {
+      for (final h in f.bs1Hits) {
+        if (h.x != f.idx) badX++;
+      }
+    }
+    buf.writeln('bs1_hits中 x!=idx 的异常数=$badX');
+    if (zsN > 0 && bsN > 0 && badX == 0) {
+      buf.writeln('判定=OK_FIXED bar_features 已含 zs/bs1 且 discovery 对齐');
+    } else if (zsN > 0 && bsN > 0) {
+      buf.writeln('判定=PARTIAL zs/bs1有数据但 x 对齐异常');
+    } else if (zsN == 0 && bsN == 0) {
+      buf.writeln('判定=BUG_无hits（请确认已重编 chan_ffi.dll）');
+    } else {
+      buf.writeln('判定=PARTIAL zsN=$zsN bsN=$bsN');
     }
   }
 
@@ -509,65 +284,14 @@ class AuditProbeSnapshot {
     }
   }
 
-  static LevelBundle? _levelAt(List<LevelBundle> levels, int level) {
-    for (final lv in levels) {
-      if (lv.level == level) return lv;
-    }
-    return null;
-  }
-
-  static KlineCombineFrame? _frameCovering(
-    List<KlineCombineFrame> frames,
-    int focus,
-  ) {
-    for (final f in frames) {
-      if (f.x1 <= focus && focus <= f.x2) return f;
-    }
-    return null;
-  }
-
-  static String _fmtFrame(KlineCombineFrame? f) {
-    if (f == null) return 'null';
-    return 'x1=${f.x1} x2=${f.x2} h=${f.high} l=${f.low} fx=${f.fx} count=${f.count}';
-  }
-
-  static bool _sameBox(KlineCombineFrame? a, KlineCombineFrame? b) {
-    if (a == null || b == null) return false;
-    return a.x1 == b.x1 &&
-        a.x2 == b.x2 &&
-        (a.high - b.high).abs() < 1e-9 &&
-        (a.low - b.low).abs() < 1e-9;
-  }
-
-  static int? _sellXAt(
-    KlineCombineBundle? bundle, {
-    required int segIdx,
-    required int zsSeq,
-  }) {
+  static int? _sellX(KlineCombineBundle? bundle, int segIdx) {
     if (bundle == null) return null;
-    final frames = _levelAt(bundle.levels, 0)?.sell1Frames;
-    if (frames == null) return null;
-    for (final p in frames) {
-      if (p.segIdx == segIdx && p.zsSeq == zsSeq) return p.x;
+    for (final lv in bundle.levels) {
+      if (lv.level != 0) continue;
+      for (final p in lv.sell1Frames) {
+        if (p.segIdx == segIdx) return p.x;
+      }
     }
     return null;
   }
-}
-
-class _SessionView {
-  final List<LevelBundle> levels;
-  final List<KlineCombineFrame> k1CombineFrames;
-  final List<BarCrosshairFeature> barFeatures;
-  final List<Buy1Frame> buy1K0;
-  final List<Sell1Frame> sell1K0;
-  final List<ZSFrame> zsK0;
-
-  const _SessionView({
-    required this.levels,
-    required this.k1CombineFrames,
-    required this.barFeatures,
-    required this.buy1K0,
-    required this.sell1K0,
-    this.zsK0 = const [],
-  });
 }

@@ -79,6 +79,7 @@ class BarFeatureLookup {
     this.totalLevels = 0,
     this.zsAfterK0 = const [],
     this.knZsAfterKn = const {},
+    this.maxBsClass = 9,
   });
 
   final Map<int, Map<String, dynamic>> byIdx;
@@ -91,6 +92,9 @@ class BarFeatureLookup {
 
   /// 十字线：各 Kn 块后追加的中枢 ZG/ZD 行
   final Map<int, List<CrosshairTooltipRow>> knZsAfterKn;
+
+  /// tip 三类+BS 上界（与 catalog 同口径）
+  final int maxBsClass;
 
   factory BarFeatureLookup.empty() =>
       BarFeatureLookup._(byIdx: const <int, Map<String, dynamic>>{});
@@ -136,6 +140,8 @@ class BarFeatureLookup {
     MathSeriesFreezeStore? mathFreezeStore,
     DivergenceFreezeStore? diverFreezeStore,
     List<ZSFrame> zsK0Frames = const [],
+    /// tip 三类+上界（与 catalog maxBsClass 同口径；默认至少 9）
+    int maxBsClass = 9,
   }) {
     final trendModelConfig = mathIndicatorConfig.asTrendModel;
     final byIdx = <int, Map<String, dynamic>>{};
@@ -946,11 +952,20 @@ class BarFeatureLookup {
       levels: levels,
     );
 
+    // tip 上界：入参与会话观察到的更高类取 max（至少 9）
+    var bsClassHi = maxBsClass < 3 ? 3 : maxBsClass;
+    final observed = maxBuyNClassObserved(
+      buyNHistoryByKn: buyNHistoryByKn,
+      sellNHistoryByKn: sellNHistoryByKn,
+    );
+    if (observed > bsClassHi) bsClassHi = observed;
+    if (bsClassHi < 9) bsClassHi = 9;
     return BarFeatureLookup._(
       byIdx: byIdx,
       totalLevels: levels.length,
       zsAfterK0: zsAfterK0,
       knZsAfterKn: knZsAfterKn,
+      maxBsClass: bsClassHi,
     );
   }
 
@@ -1691,12 +1706,13 @@ class BarFeatureLookup {
       return parts.join(' ');
     }
 
+    final hi = maxBsClass < 3 ? 3 : maxBsClass;
     final bs = <CrosshairTooltipRow>[
       kv('K$displayKn一类BS',
           bsVal(sub?['buy1_$displayKn'], sub?['sell1_$displayKn'])),
       kv('K$displayKn二类BS',
           bsVal(sub?['buy2_$displayKn'], sub?['sell2_$displayKn'])),
-      for (var cls = 3; cls <= 9; cls++)
+      for (var cls = 3; cls <= hi; cls++)
         kv(
           'K$displayKn${bsClassChinese(cls)}类BS',
           bsVal(sub?['buyN_${displayKn}_$cls'],

@@ -1,5 +1,59 @@
 import 'level_models.dart';
 
+/// 单根 K 上的中枢命中（Rust `BarZsHit`）。
+class BarZsHit {
+  final int kn;
+  final int seq;
+  final double high;
+  final double low;
+  final bool isSure;
+
+  const BarZsHit({
+    required this.kn,
+    required this.seq,
+    required this.high,
+    required this.low,
+    this.isSure = false,
+  });
+
+  factory BarZsHit.fromJson(Map<String, dynamic> json) {
+    return BarZsHit(
+      kn: (json['kn'] as num?)?.toInt() ?? 0,
+      seq: (json['seq'] as num?)?.toInt() ?? 0,
+      high: (json['high'] as num?)?.toDouble() ?? 0,
+      low: (json['low'] as num?)?.toDouble() ?? 0,
+      isSure: json['is_sure'] as bool? ?? false,
+    );
+  }
+}
+
+/// 单根 K 上的一类 BS discovery（Rust `BarBs1Hit`）。
+class BarBs1Hit {
+  final int kn;
+  final String side;
+  final String label;
+  final int x;
+  final double price;
+
+  const BarBs1Hit({
+    required this.kn,
+    required this.side,
+    required this.label,
+    required this.x,
+    required this.price,
+  });
+
+  factory BarBs1Hit.fromJson(Map<String, dynamic> json) {
+    return BarBs1Hit(
+      kn: (json['kn'] as num?)?.toInt() ?? 0,
+      side: json['side'] as String? ?? '',
+      label: json['label'] as String? ?? '',
+      x: (json['x'] as num?)?.toInt() ?? 0,
+      price: (json['price'] as num?)?.toDouble() ?? 0,
+    );
+  }
+}
+
 /// 单根 K 十字线特征（Rust `BarCrosshairFeature`）。
 class BarCrosshairFeature {
   final int idx;
@@ -49,8 +103,14 @@ class BarCrosshairFeature {
   /// 当步 K1合并分型（未确认=UNKNOWN）
   final String k1CombineFx;
 
-  /// 各层 Kn 快照（levels[0]=K1/K0连线，levels[1]=K2/K1连线，…穷尽）
+  /// 各层 Kn 快照（方案B：levels[0].level=0=K0连线…）
   final List<LevelSnap> levels;
+
+  /// 当步盖住本 K0 的中枢（逐K当下）
+  final List<BarZsHit> zsHits;
+
+  /// 当步 discovery 的一类 BS（x==本 idx）
+  final List<BarBs1Hit> bs1Hits;
 
   const BarCrosshairFeature({
     required this.idx,
@@ -74,6 +134,8 @@ class BarCrosshairFeature {
     this.k1CombineLow = 0,
     this.k1CombineFx = 'UNKNOWN',
     this.levels = const [],
+    this.zsHits = const [],
+    this.bs1Hits = const [],
   });
 
   factory BarCrosshairFeature.fromJson(Map<String, dynamic> json) {
@@ -101,6 +163,12 @@ class BarCrosshairFeature {
       k1CombineFx: json['k1_combine_fx'] as String? ?? 'UNKNOWN',
       levels: (json['levels'] as List? ?? const [])
           .map((e) => LevelSnap.fromJson(Map<String, dynamic>.from(e as Map)))
+          .toList(),
+      zsHits: (json['zs_hits'] as List? ?? const [])
+          .map((e) => BarZsHit.fromJson(Map<String, dynamic>.from(e as Map)))
+          .toList(),
+      bs1Hits: (json['bs1_hits'] as List? ?? const [])
+          .map((e) => BarBs1Hit.fromJson(Map<String, dynamic>.from(e as Map)))
           .toList(),
     );
   }

@@ -116,7 +116,7 @@ Future<void> main() async {
   // 桌面：工作区全屏不盖任务栏；tooltip 分隔线贴边框
   MsgHistory.instance.appendDesktopWorkAreaAndTooltipSep();
   MsgHistory.instance.appendAuditProbeCopyButton();
-  MsgHistory.instance.appendAuditFixEx145();
+  MsgHistory.instance.appendAuditFixBsZsFeature();
   // 主/副图指标 UI + Kn成交量归属口径
   MsgHistory.instance.appendIndicatorUiAndKnVolume();
   MsgHistory.instance.appendIndicatorMuteToggleAndVolReadout();
@@ -1165,6 +1165,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
         buy1K0Frames: _buy1K0Frames,
         sell1K0Frames: _sell1K0Frames,
         zsK0Frames: _zsK0Frames,
+        buyNHistoryByKn: _buyNHistoryByKn,
+        sellNHistoryByKn: _sellNHistoryByKn,
       );
     } catch (e) {
       _showSnack('生成失败：$e');
@@ -1173,7 +1175,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
     }
     await Clipboard.setData(ClipboardData(text: text));
     _msgHistory.append(
-      '已复制审计调试信息（例1–例5；step=$_stepIdx bars=${fed.length}）',
+      '已复制验收调试信息（A/B/C/D；step=$_stepIdx bars=${fed.length}）',
     );
     _showSnack('调试信息已复制，请粘贴给助手');
   }
@@ -1779,7 +1781,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
           label: const Text('复制页面快照'),
         ),
         const SizedBox(height: 8),
-        // 常驻：例1–例5审计探针（合并 main / 清理 UI 时不得删除）
+        // 常驻：验收调试信息（内容随当前任务更新；勿删按钮）
         OutlinedButton.icon(
           onPressed: _busy ? null : _copyAuditProbeDebug,
           icon: const Icon(Icons.bug_report_outlined, size: 18),
@@ -1787,8 +1789,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
         ),
         const SizedBox(height: 4),
         Text(
-          '例1–例5核对字段：默认002003+分笔建议先跳末再点；'
-          '生成时会多次前缀FFI，稍等后粘贴全文。',
+          '本次验收：BS x冻结 / sure中枢禁改写 / bar_features.zs·bs1 / tip类上界；'
+          '建议跳末后点按，稍等后粘贴全文。',
           style: TextStyle(fontSize: 11, color: Colors.grey.shade700, height: 1.3),
         ),
       ],

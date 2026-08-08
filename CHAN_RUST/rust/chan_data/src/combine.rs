@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::engine::{CombineEngine, MergeUnit, TruncReplayState};
 use crate::feature::{
-    build_k1_bar_views, enrich_fractal_peak_dist, weekday_from_bar, BarCrosshairFeature,
-    K0Line, K1Bar,
+    build_k1_bar_views, enrich_fractal_peak_dist, weekday_from_bar, BarCrosshairFeature, K0Line,
+    K1Bar,
 };
 use crate::kline::KlineBar;
 use crate::pipeline::{
@@ -551,6 +551,16 @@ pub fn build_kline_combine_bundle_with(
                     .map(|s| s.combine_fx.clone())
                     .unwrap_or_else(|| "UNKNOWN".to_string()),
                 levels: snaps.clone(),
+                zs_hits: pr
+                    .bar_struct_hits
+                    .get(i)
+                    .map(|(z, _)| z.clone())
+                    .unwrap_or_default(),
+                bs1_hits: pr
+                    .bar_struct_hits
+                    .get(i)
+                    .map(|(_, b)| b.clone())
+                    .unwrap_or_default(),
             }
         })
         .collect();

@@ -279,10 +279,14 @@ fn try_combine(zs_list: &mut Vec<ZS>, segs: &[LevelSegment]) {
         while k + 1 < zs_list.len() {
             let a = &zs_list[k];
             let b = &zs_list[k + 1];
+            // 已定型中枢禁止再被合并改写（不回写 ZG/ZD/成员）
+            if a.is_sure {
+                k += 1;
+                continue;
+            }
             // ranges_overlap(lo, hi, …)：ZD=下沿、ZG=上沿
             let overlap = ranges_overlap(a.zd, a.zg, b.zd, b.zg);
-            let block = a.is_sure && b.member_segs.len() == 1;
-            if overlap && !block {
+            if overlap {
                 let merged = merge_two(a, b, segs);
                 zs_list[k] = merged;
                 zs_list.remove(k + 1);

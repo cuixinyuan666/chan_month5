@@ -67,6 +67,34 @@ pub struct BarCrosshairFeature {
     /// 各层 Kn 快照（方案B：levels[0].level=0=K0连线，levels[1].level=1=K1连线，…穷尽）
     #[serde(default)]
     pub levels: Vec<LevelSnap>,
+    /// 当步盖住本 K0 的中枢（显示层号 kn；逐K当下，禁止未来回写）
+    #[serde(default)]
+    pub zs_hits: Vec<BarZsHit>,
+    /// 当步 discovery 的一类 BS（x==本 idx；逐K当下冻结）
+    #[serde(default)]
+    pub bs1_hits: Vec<BarBs1Hit>,
+}
+
+/// 单根 K 上的中枢命中（ML / 十字同源）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BarZsHit {
+    /// 显示中枢号（K0=0；结构层 frame.level=structure+1）
+    pub kn: i32,
+    pub seq: i32,
+    pub high: f64,
+    pub low: f64,
+    pub is_sure: bool,
+}
+
+/// 单根 K 上的一类 BS discovery（ML / 十字同源）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BarBs1Hit {
+    pub kn: i32,
+    /// "B" / "S"
+    pub side: String,
+    pub label: String,
+    pub x: i32,
+    pub price: f64,
 }
 
 fn default_one() -> i32 {

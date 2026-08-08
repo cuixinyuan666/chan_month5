@@ -10,7 +10,7 @@
 //! 全层同构约束：**必须等 K(n-1) 单元永久冻结后才能参与 Kn**（禁止行进中下层提前确认上层）。
 //! 进行中单元仍可只读探测上层合并态，但仅用于十字线/展示快照，不触发 `on_confirm`。
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use serde::{Deserialize, Serialize};
 
@@ -18,6 +18,7 @@ use crate::combine::KlineCombineFrame;
 use crate::engine::{
     seed_leave_dir, CombineEngine, FxEvent, FxKind, MergeUnit, TruncGuard,
 };
+use crate::feature::{BarBs1Hit, BarZsHit};
 use crate::kline::KlineBar;
 use crate::zs::{ZSConfig, ZSFrame, ZSIncEngine};
 
@@ -303,6 +304,8 @@ pub struct PipelineResult {
     pub bar_k_snaps: Vec<BarCombineSnap>,
     /// 每根K的2段兼容行（building/first/confirm）
     pub bar_seg_rows: Vec<BarSegRow>,
+    /// 每根K：中枢盖住 + 一类BS discovery（逐K当下冻结）
+    pub bar_struct_hits: Vec<(Vec<BarZsHit>, Vec<BarBs1Hit>)>,
 }
 
 /// 分型极点 1 分钟 K：TOP 取 high 极大首K，BOTTOM 取 low 极小首K
@@ -506,6 +509,13 @@ struct LevelState {
     zs_config: ZSConfig,
     /// 增量中枢引擎（逐段 feed，对齐动态 Kn 的 CombineEngine 模式）
     zs_inc: ZSIncEngine,
+    /// 一类买点 x 冻结：seg_idx → 首次 discovery x（不随 active 右端漂移）
+    frozen_buy1_x: HashMap<i64, i32>,
+    /// 一类卖点 x 冻结
+    frozen_sell1_x: HashMap<i64, i32>,
+    /// 二类买/卖 x 冻结
+    frozen_buy2_x: HashMap<i64, i32>,
+    frozen_sell2_x: HashMap<i64, i32>,
 }
 
 /// 有效性校验：顶极值 > 底极值（最低限度，可配置关闭）
@@ -545,7 +555,135 @@ impl LevelState {
             freshly_first_seg: false,
             last_bottom_low: None,
             last_top_high: None,
+            frozen_buy1_x: HashMap::new(),
+            frozen_sell1_x: HashMap::new(),
+            frozen_buy2_x: HashMap::new(),
+            frozen_sell2_x: HashMap::new(),
         }
+    }
+
+    /// 进行中单元（与 export 同口径），供中枢/BS 当下计算。
+    fn active_unit_now(&self, bars: &[KlineBar]) -> Option<LevelUnitBar> {
+        match (&self.anchor, &self.prov) {
+            (Some(a), Some(c)) if c.last_x < bars.len() => {
+                let dir = if a.fx == FxKind::Bottom { 1 } else { -1 };
+                let (open, high, low, close, volume) =
+                    kn_unit_ohlcv(bars, dir, a.pole_x, c.last_x as i32, a.high, a.low);
+                Some(LevelUnitBar {
+                    idx: self.segments.len() as i64,
+                    dir,
+                    x1: c.x1 as i32,
+                    x2: c.last_x as i32,
+                    open,
+                    high,
+                    low,
+                    close,
+                    volume,
+                    confirm_x: c.last_x as i32,
+                })
+            }
+            _ => None,
+        }
+    }
+
+    /// 当步中枢/一类BS 命中 + 更新 x 冻结表（逐K当下，禁止未来回写旧 x）。
+    fn collect_struct_hits(
+        &mut self,
+        bars: &[KlineBar],
+        bar_x: i32,
+    ) -> (Vec<BarZsHit>, Vec<BarBs1Hit>) {
+        let active_unit = self.active_unit_now(bars);
+        let n_confirmed = self.segments.len();
+        let segs_for_zs =
+            crate::zs::segments_with_optional_active(&self.segments, active_unit.as_ref());
+        let display_zs_level = self.level + 1;
+        let mut zs_list = crate::zs::find_zs_with_confirmed(
+            &segs_for_zs,
+            display_zs_level,
+            &self.zs_config,
+            n_confirmed,
+        );
+        if active_unit.is_none() {
+            if let Some(last) = zs_list.last_mut() {
+                last.is_sure = true;
+            }
+        }
+        let active_idx = active_unit.as_ref().map(|u| u.idx);
+        let zs_frames =
+            crate::zs::zs_frames_from_list(&zs_list, &segs_for_zs, display_zs_level);
+        let mut buy1 = crate::buy1::find_buy1_with_active(
+            &zs_list,
+            &segs_for_zs,
+            display_zs_level,
+            active_idx,
+        );
+        let mut sell1 = crate::buy1::find_sell1_with_active(
+            &zs_list,
+            &segs_for_zs,
+            display_zs_level,
+            active_idx,
+        );
+        let mut buy2 = crate::buy2::find_buy2_with_active(
+            &zs_list,
+            &segs_for_zs,
+            display_zs_level,
+            active_idx,
+        );
+        let mut sell2 = crate::buy2::find_sell2_with_active(
+            &zs_list,
+            &segs_for_zs,
+            display_zs_level,
+            active_idx,
+        );
+        for f in &mut buy1 {
+            f.x = *self.frozen_buy1_x.entry(f.seg_idx).or_insert(f.x);
+        }
+        for f in &mut sell1 {
+            f.x = *self.frozen_sell1_x.entry(f.seg_idx).or_insert(f.x);
+        }
+        for f in &mut buy2 {
+            f.x = *self.frozen_buy2_x.entry(f.seg_idx).or_insert(f.x);
+        }
+        for f in &mut sell2 {
+            f.x = *self.frozen_sell2_x.entry(f.seg_idx).or_insert(f.x);
+        }
+
+        let mut zs_hits = Vec::new();
+        for f in &zs_frames {
+            if f.x1 <= bar_x && bar_x <= f.x2 {
+                zs_hits.push(BarZsHit {
+                    kn: f.level,
+                    seq: f.seq,
+                    high: f.high,
+                    low: f.low,
+                    is_sure: f.is_sure,
+                });
+            }
+        }
+        let mut bs1_hits = Vec::new();
+        for f in &buy1 {
+            if f.x == bar_x {
+                bs1_hits.push(BarBs1Hit {
+                    kn: f.level,
+                    side: "B".to_string(),
+                    label: f.label.clone(),
+                    x: f.x,
+                    price: f.price,
+                });
+            }
+        }
+        for f in &sell1 {
+            if f.x == bar_x {
+                bs1_hits.push(BarBs1Hit {
+                    kn: f.level,
+                    side: "S".to_string(),
+                    label: f.label.clone(),
+                    x: f.x,
+                    price: f.price,
+                });
+            }
+        }
+        (zs_hits, bs1_hits)
     }
 
     fn begin_bar(&mut self) {
@@ -1083,28 +1221,9 @@ impl LevelState {
         Some(fx_pole_x(bars, ev.x1, ev.x2, ev.fx))
     }
 
-    fn export(self, bars: &[KlineBar]) -> LevelBundleOut {
+    fn export(mut self, bars: &[KlineBar]) -> LevelBundleOut {
         // 末步进行中单元：prov 缓存（快照阶段已推进到末K）
-        let active_unit = match (&self.anchor, &self.prov) {
-            (Some(a), Some(c)) if c.last_x < bars.len() => {
-                let dir = if a.fx == FxKind::Bottom { 1 } else { -1 };
-                let (open, high, low, close, volume) =
-                    kn_unit_ohlcv(bars, dir, a.pole_x, c.last_x as i32, a.high, a.low);
-                Some(LevelUnitBar {
-                    idx: self.segments.len() as i64,
-                    dir,
-                    x1: c.x1 as i32,
-                    x2: c.last_x as i32,
-                    open,
-                    high,
-                    low,
-                    close,
-                    volume,
-                    confirm_x: c.last_x as i32,
-                })
-            }
-            _ => None,
-        };
+        let active_unit = self.active_unit_now(bars);
         // 展示轨：冻段 + 进行中 active_unit 喂 find_zs（动态离开不定型，禁未来）
         let n_confirmed = self.segments.len();
         let segs_for_zs =
@@ -1123,6 +1242,44 @@ impl LevelState {
                 last.is_sure = true;
             }
         }
+        let active_idx = active_unit.as_ref().map(|u| u.idx);
+        let mut buy1_frames = crate::buy1::find_buy1_with_active(
+            &zs_list,
+            &segs_for_zs,
+            display_zs_level,
+            active_idx,
+        );
+        let mut sell1_frames = crate::buy1::find_sell1_with_active(
+            &zs_list,
+            &segs_for_zs,
+            display_zs_level,
+            active_idx,
+        );
+        let mut buy2_frames = crate::buy2::find_buy2_with_active(
+            &zs_list,
+            &segs_for_zs,
+            display_zs_level,
+            active_idx,
+        );
+        let mut sell2_frames = crate::buy2::find_sell2_with_active(
+            &zs_list,
+            &segs_for_zs,
+            display_zs_level,
+            active_idx,
+        );
+        // 会话内钉死 discovery x（与逐步 collect_struct_hits 同表）
+        for f in &mut buy1_frames {
+            f.x = *self.frozen_buy1_x.entry(f.seg_idx).or_insert(f.x);
+        }
+        for f in &mut sell1_frames {
+            f.x = *self.frozen_sell1_x.entry(f.seg_idx).or_insert(f.x);
+        }
+        for f in &mut buy2_frames {
+            f.x = *self.frozen_buy2_x.entry(f.seg_idx).or_insert(f.x);
+        }
+        for f in &mut sell2_frames {
+            f.x = *self.frozen_sell2_x.entry(f.seg_idx).or_insert(f.x);
+        }
         LevelBundleOut {
             level: self.level,
             confirms: self.confirms.clone(),
@@ -1130,41 +1287,21 @@ impl LevelState {
             unit_bars: self.unit_bars.clone(),
             combine_frames: frames_from_engine(&self.engine, bars),
             zs_frames: crate::zs::zs_frames_from_list(&zs_list, &segs_for_zs, display_zs_level),
-            buy1_frames: crate::buy1::find_buy1_with_active(
-                &zs_list,
-                &segs_for_zs,
-                display_zs_level,
-                active_unit.as_ref().map(|u| u.idx),
-            ),
-            sell1_frames: crate::buy1::find_sell1_with_active(
-                &zs_list,
-                &segs_for_zs,
-                display_zs_level,
-                active_unit.as_ref().map(|u| u.idx),
-            ),
-            buy2_frames: crate::buy2::find_buy2_with_active(
-                &zs_list,
-                &segs_for_zs,
-                display_zs_level,
-                active_unit.as_ref().map(|u| u.idx),
-            ),
-            sell2_frames: crate::buy2::find_sell2_with_active(
-                &zs_list,
-                &segs_for_zs,
-                display_zs_level,
-                active_unit.as_ref().map(|u| u.idx),
-            ),
+            buy1_frames,
+            sell1_frames,
+            buy2_frames,
+            sell2_frames,
             buy_n_frames: crate::buy_n::find_buy_n_with_active(
                 &zs_list,
                 &segs_for_zs,
                 display_zs_level,
-                active_unit.as_ref().map(|u| u.idx),
+                active_idx,
             ),
             sell_n_frames: crate::buy_n::find_sell_n_with_active(
                 &zs_list,
                 &segs_for_zs,
                 display_zs_level,
-                active_unit.as_ref().map(|u| u.idx),
+                active_idx,
             ),
             first_dir: self.first_dir,
             first_dir_x: self.first_dir_x,
@@ -1249,6 +1386,8 @@ pub fn run_pipeline(bars: &[KlineBar], opt: &PipelineOptions) -> PipelineResult 
     let mut bar_level_snaps: Vec<Vec<LevelSnap>> = Vec::with_capacity(bars.len());
     let mut bar_k_snaps: Vec<BarCombineSnap> = Vec::with_capacity(bars.len());
     let mut bar_seg_rows: Vec<BarSegRow> = Vec::with_capacity(bars.len());
+    let mut bar_struct_hits: Vec<(Vec<BarZsHit>, Vec<BarBs1Hit>)> =
+        Vec::with_capacity(bars.len());
 
     for (i, bar) in bars.iter().enumerate() {
         let bar_x = i as i32;
@@ -1317,6 +1456,16 @@ pub fn run_pipeline(bars: &[KlineBar], opt: &PipelineOptions) -> PipelineResult 
         }
         bar_level_snaps.push(snaps);
 
+        // 中枢/一类BS：当步命中 + discovery x 冻结
+        let mut zs_hits = Vec::new();
+        let mut bs1_hits = Vec::new();
+        for lv in levels.iter_mut() {
+            let (z, b) = lv.collect_struct_hits(bars, bar_x);
+            zs_hits.extend(z);
+            bs1_hits.extend(b);
+        }
+        bar_struct_hits.push((zs_hits, bs1_hits));
+
         // K1连线兼容行
         let row = levels
             .get(1)
@@ -1334,6 +1483,7 @@ pub fn run_pipeline(bars: &[KlineBar], opt: &PipelineOptions) -> PipelineResult 
         bar_level_snaps,
         bar_k_snaps,
         bar_seg_rows,
+        bar_struct_hits,
     }
 }
 
