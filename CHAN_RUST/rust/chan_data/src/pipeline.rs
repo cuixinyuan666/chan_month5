@@ -597,17 +597,13 @@ impl LevelState {
         let segs_for_zs =
             crate::zs::segments_with_optional_active(&self.segments, active_unit.as_ref());
         let display_zs_level = self.level + 1;
-        let mut zs_list = crate::zs::find_zs_with_confirmed(
+        // 离开才定型：禁「无 active 时强制末枢 is_sure」末态补丁
+        let zs_list = crate::zs::find_zs_with_confirmed(
             &segs_for_zs,
             display_zs_level,
             &self.zs_config,
             n_confirmed,
         );
-        if active_unit.is_none() {
-            if let Some(last) = zs_list.last_mut() {
-                last.is_sure = true;
-            }
-        }
         let active_idx = active_unit.as_ref().map(|u| u.idx);
         let zs_frames =
             crate::zs::zs_frames_from_list(&zs_list, &segs_for_zs, display_zs_level);
@@ -1230,18 +1226,13 @@ impl LevelState {
             crate::zs::segments_with_optional_active(&self.segments, active_unit.as_ref());
         // 帧上 level=显示中枢号(structure+1)，避免与 zs_k0(level=0) 撞号
         let display_zs_level = self.level + 1;
-        let mut zs_list = crate::zs::find_zs_with_confirmed(
+        // 离开才定型：禁「无 active 时强制末枢 is_sure」末态补丁
+        let zs_list = crate::zs::find_zs_with_confirmed(
             &segs_for_zs,
             display_zs_level,
             &self.zs_config,
             n_confirmed,
         );
-        // 无 active_unit 时末个中枢也定型（实线）：所有段已冻结，无动态 Kn
-        if active_unit.is_none() {
-            if let Some(last) = zs_list.last_mut() {
-                last.is_sure = true;
-            }
-        }
         let active_idx = active_unit.as_ref().map(|u| u.idx);
         let mut buy1_frames = crate::buy1::find_buy1_with_active(
             &zs_list,
@@ -1379,6 +1370,112 @@ fn propagate(
     }
 }
 
+/// 原生分钟K → 段（每根一段；与 combine::kline_bars_to_segments 同构，避循环依赖）
+fn k0_bars_to_segments(bars: &[KlineBar]) -> Vec<LevelSegment> {
+    let mut out = Vec::with_capacity(bars.len());
+    for (i, b) in bars.iter().enumerate() {
+        let dir = if i == 0 {
+            1
+        } else {
+            let p = &bars[i - 1];
+            let mid = (b.high + b.low) / 2.0;
+            let p_mid = (p.high + p.low) / 2.0;
+            if mid >= p_mid {
+                1
+            } else {
+                -1
+            }
+        };
+        let x = b.idx;
+        out.push(LevelSegment {
+            idx: i as i64,
+            dir,
+            begin_confirm_x: x,
+            end_confirm_x: x,
+            begin_pole_x: x,
+            end_pole_x: x,
+            open: b.open,
+            high: b.high,
+            low: b.low,
+            close: b.close,
+            volume: b.volume,
+            begin_fractal_x1: x,
+            begin_fractal_x2: x,
+            end_fractal_x1: x,
+            end_fractal_x2: x,
+            begin_fractal_high: b.high,
+            begin_fractal_low: b.low,
+            end_fractal_high: b.high,
+            end_fractal_low: b.low,
+            is_bootstrap: false,
+            is_promoted_default: false,
+        });
+    }
+    out
+}
+
+/// K0 原生中枢/一类BS 当步命中（kn=0）；discovery x 钉死，与结构层同构写入 bar_features
+fn collect_k0_struct_hits(
+    bars: &[KlineBar],
+    bar_x: i32,
+    zs_cfg: &ZSConfig,
+    frozen_buy1_x: &mut HashMap<i64, i32>,
+    frozen_sell1_x: &mut HashMap<i64, i32>,
+) -> (Vec<BarZsHit>, Vec<BarBs1Hit>) {
+    if bars.is_empty() || bar_x < 0 {
+        return (Vec::new(), Vec::new());
+    }
+    let end = (bar_x as usize).min(bars.len() - 1);
+    let prefix = &bars[..=end];
+    let segs = k0_bars_to_segments(prefix);
+    let zs_list = crate::zs::find_zs(&segs, 0, zs_cfg);
+    let zs_frames = crate::zs::zs_frames_from_list(&zs_list, &segs, 0);
+    let mut buy1 = crate::buy1::find_buy1(&zs_list, &segs, 0);
+    let mut sell1 = crate::buy1::find_sell1(&zs_list, &segs, 0);
+    for f in &mut buy1 {
+        f.x = *frozen_buy1_x.entry(f.seg_idx).or_insert(f.x);
+    }
+    for f in &mut sell1 {
+        f.x = *frozen_sell1_x.entry(f.seg_idx).or_insert(f.x);
+    }
+    let mut zs_hits = Vec::new();
+    for f in &zs_frames {
+        if f.x1 <= bar_x && bar_x <= f.x2 {
+            zs_hits.push(BarZsHit {
+                kn: 0,
+                seq: f.seq,
+                high: f.high,
+                low: f.low,
+                is_sure: f.is_sure,
+            });
+        }
+    }
+    let mut bs1_hits = Vec::new();
+    for f in &buy1 {
+        if f.x == bar_x {
+            bs1_hits.push(BarBs1Hit {
+                kn: 0,
+                side: "B".to_string(),
+                label: f.label.clone(),
+                x: f.x,
+                price: f.price,
+            });
+        }
+    }
+    for f in &sell1 {
+        if f.x == bar_x {
+            bs1_hits.push(BarBs1Hit {
+                kn: 0,
+                side: "S".to_string(),
+                label: f.label.clone(),
+                x: f.x,
+                price: f.price,
+            });
+        }
+    }
+    (zs_hits, bs1_hits)
+}
+
 /// 全量入口：对已喂入 K 线前缀跑穷尽 N 段流水线（内部单遍逐K，无未来函数）
 pub fn run_pipeline(bars: &[KlineBar], opt: &PipelineOptions) -> PipelineResult {
     // 方案B：首层结构号 0（K0连线）；原 level N → N-1
@@ -1388,6 +1485,9 @@ pub fn run_pipeline(bars: &[KlineBar], opt: &PipelineOptions) -> PipelineResult 
     let mut bar_seg_rows: Vec<BarSegRow> = Vec::with_capacity(bars.len());
     let mut bar_struct_hits: Vec<(Vec<BarZsHit>, Vec<BarBs1Hit>)> =
         Vec::with_capacity(bars.len());
+    // K0 一类 BS discovery x 冻结（与结构层同语义）
+    let mut k0_frozen_buy1_x: HashMap<i64, i32> = HashMap::new();
+    let mut k0_frozen_sell1_x: HashMap<i64, i32> = HashMap::new();
 
     for (i, bar) in bars.iter().enumerate() {
         let bar_x = i as i32;
@@ -1456,9 +1556,18 @@ pub fn run_pipeline(bars: &[KlineBar], opt: &PipelineOptions) -> PipelineResult 
         }
         bar_level_snaps.push(snaps);
 
-        // 中枢/一类BS：当步命中 + discovery x 冻结
+        // 中枢/一类BS：K0 原生 + 各结构层；当步命中 + discovery x 冻结
         let mut zs_hits = Vec::new();
         let mut bs1_hits = Vec::new();
+        let (z0, b0) = collect_k0_struct_hits(
+            bars,
+            bar_x,
+            &opt.zs_config,
+            &mut k0_frozen_buy1_x,
+            &mut k0_frozen_sell1_x,
+        );
+        zs_hits.extend(z0);
+        bs1_hits.extend(b0);
         for lv in levels.iter_mut() {
             let (z, b) = lv.collect_struct_hits(bars, bar_x);
             zs_hits.extend(z);

@@ -76,7 +76,7 @@ fn mark_x(pole: i32, s: &LevelSegment, pin_active_body: bool) -> i32 {
     pole.max(s.end_pole_x)
 }
 
-/// 同框按序打买点（字母不复位）
+/// 同资格框内「每成员都打点」（与一类/二类「极值才标」不同；三类+链升类口径，ML 勿当极值语义）
 fn label_buy_box(
     out: &mut Vec<BuyNFrame>,
     seq: &mut i32,

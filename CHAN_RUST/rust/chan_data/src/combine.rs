@@ -60,8 +60,8 @@ pub struct K0ConfirmSignal {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KlineCombineBundle {
     pub frames: Vec<KlineCombineFrame>,
-    /// 原始K分型确认序列（= levels[0].confirms，level 1=K1/K0连线层）。
-    /// 数据即合并原始K后的顶/底分型，也是 K0连线(K1) 的端点；被副图/tooltip「K0分型确认」同源同值消费。
+    /// 原始K分型确认序列（= levels[0].confirms，方案B：level==0=K0连线层）。
+    /// 数据即合并原始K后的顶/底分型，也是 K0连线端点；被副图/tooltip「K0分型确认」同源同值消费。
     pub k0_confirms: Vec<K0ConfirmSignal>,
     /// 每根 K 十字线特征（星期 w1..w7、K0合并序、各层 Kn 快照）
     #[serde(default)]
@@ -90,7 +90,7 @@ pub struct KlineCombineBundle {
     /// 全层展示用虚拟段 K（pending + 冻结 + 进行中）
     #[serde(default)]
     pub level_virtual_units: Vec<Vec<K1Bar>>,
-    /// Kn 流水线全量输出（1=K1/K0连线，2=K2/K1连线，…穷尽）
+    /// Kn 流水线全量输出（方案B：0=K0连线，1=K1连线，…穷尽）
     #[serde(default)]
     pub levels: Vec<LevelBundleOut>,
     /// K0中枢（分钟K段，level=0）
@@ -470,7 +470,7 @@ pub fn build_kline_combine_bundle_with(
     let pr = run_pipeline(bars, opt);
     let l1 = &pr.levels[0];
 
-    // 原始K分型确认（= l1.confirms；l1=levels[0]，level 1=K1/K0连线层）；全量含被丢弃的同向/校验失败分型，与旧口径一致。值不变，仅字段映射。
+    // 原始K分型确认（= l1.confirms；l1=levels[0]，方案B level==0=K0连线层）；全量含被丢弃的同向/校验失败分型，与旧口径一致。
     let k0_confirms: Vec<K0ConfirmSignal> = l1
         .confirms
         .iter()

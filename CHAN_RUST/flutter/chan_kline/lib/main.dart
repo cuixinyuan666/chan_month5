@@ -117,6 +117,7 @@ Future<void> main() async {
   MsgHistory.instance.appendDesktopWorkAreaAndTooltipSep();
   MsgHistory.instance.appendAuditProbeCopyButton();
   MsgHistory.instance.appendAuditFixBsZsFeature();
+  MsgHistory.instance.appendAuditBatch2ProbePeakAsOf();
   // 主/副图指标 UI + Kn成交量归属口径
   MsgHistory.instance.appendIndicatorUiAndKnVolume();
   MsgHistory.instance.appendIndicatorMuteToggleAndVolReadout();
@@ -1175,7 +1176,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
     }
     await Clipboard.setData(ClipboardData(text: text));
     _msgHistory.append(
-      '已复制验收调试信息（A/B/C/D；step=$_stepIdx bars=${fed.length}）',
+      '已复制验收调试信息（本批A/D/E/F/G/H；step=$_stepIdx bars=${fed.length}）',
     );
     _showSnack('调试信息已复制，请粘贴给助手');
   }
@@ -1789,7 +1790,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         ),
         const SizedBox(height: 4),
         Text(
-          '本次验收：BS x冻结 / sure中枢禁改写 / bar_features.zs·bs1 / tip类上界；'
+          '本次验收：A会话冻结·D tip类键·Peak·末枢sure·N类/1Ba/k1_*·asOf bundle；'
           '建议跳末后点按，稍等后粘贴全文。',
           style: TextStyle(fontSize: 11, color: Colors.grey.shade700, height: 1.3),
         ),

@@ -2,6 +2,23 @@
 
 ## 最新记录
 
+### 2026-08-08 — 本批验收通过（A/D/E/F/G/H）
+
+- **要点**：用户贴文确认 A=`OK_FIXED`（K0 bs1_hits x=2）、D tip 十一类、E Peak 已接线、F 虚线末枢、G 口径、H asOf 段数差；本批结案。
+- **注意**：Peak 默认仍为 zs；UI 切 peak 需传 `zs_config.zs_combine_mode=peak`
+
+### 2026-08-08 — A探针修：K0 bs1_hits 写入 bar_features
+
+- **要点**：验收贴文 A=`BUG_无bs1_hits` 因会话 kn=0 而结构层 hits 无 K0。`run_pipeline` 逐K补写 K0 zs/bs1（discovery 冻结）；探针改取全层最早 x。D/E/F/G/H 已通过。
+- **相关路径**：`pipeline.rs`、`audit_probe_snapshot.dart`
+- **注意**：须重编 DLL 冷启后再点「复制调试信息」看 A
+
+### 2026-08-08 — 本批：探针A/D·Peak·末枢sure·口径文案·asOf bundle
+
+- **要点**：复制调试信息改验本批；A改会话+bar_features；D实扫 tip 最高类键（中文类名扩到二十）；Rust Peak 按 DD/GG 合并；删无 active 强制末枢 is_sure；N类每成员/1Ba锁/k1_*=structure0 落注释与历史；十字 painter 直接传 asOfBundle.levels/k0/zsK0。
+- **相关路径**：`zs.rs`、`pipeline.rs`、`audit_probe_snapshot.dart`、`kline_chart.dart`、`msg_history.dart`、`chart_indicator.dart`
+- **注意**：须重编 `chan_ffi.dll` 后冷启；跳末→复制调试信息看 A/D/E/F/G/H
+
 ### 2026-08-08 — build_rust.ps1 编完后自动 flutter run -d windows
 
 - **要点**：`CHAN_RUST/scripts/build_rust.ps1` 在复制 `chan_ffi.dll` 后进入 `flutter/chan_kline` 执行 `flutter run -d windows`。

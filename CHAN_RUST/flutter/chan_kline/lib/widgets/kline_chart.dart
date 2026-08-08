@@ -664,14 +664,16 @@ class _KlineChartState extends State<KlineChart> {
   int _crosshairAsOfIdx() =>
       widget.bars[_crosshairBarIdx!.clamp(0, widget.bars.length - 1)].idx;
 
-  /// as-of K1 bar 重建：Rust 冻结段 + 可选当步进行中 K0连线。
+  /// as-of K1 bar 重建：优先 asOfBundle.levels（与主图/量柱同源），失败=空。
   List<K1Bar> _asOfK1Bars({bool includeBuilding = true}) {
+    final asOf = _crosshairAsOfIdx();
+    final bundle = _bundleForZsAsOf(asOf);
     return asOfK1Bars(
       bars: widget.bars,
-      levels: widget.levels,
+      levels: bundle?.levels ?? const <LevelBundle>[],
       barFeatures: widget.barFeatures,
       defaultK0Policy: widget.defaultK0Policy,
-      asOf: _crosshairAsOfIdx(),
+      asOf: asOf,
       includeBuilding: includeBuilding,
     );
   }
@@ -1319,6 +1321,16 @@ class _KlineChartState extends State<KlineChart> {
             : null;
         final zsAsOfBundle =
             widget.chipOnlyMode ? null : _bundleForZsAsOf(segAsOf);
+        // 十字 asOf：连线/量柱/合并等统一只吃 asOfBundle（失败=空，禁会话末态+裁x）
+        final paintLevels = segAsOf != null
+            ? (zsAsOfBundle?.levels ?? const <LevelBundle>[])
+            : widget.levels;
+        final paintZsK0 = segAsOf != null
+            ? (zsAsOfBundle?.zsK0Frames ?? const <ZSFrame>[])
+            : widget.zsK0Frames;
+        final paintK0Confirms = segAsOf != null
+            ? (zsAsOfBundle?.k0Confirms ?? const <K0ConfirmSignal>[])
+            : widget.k0ConfirmSignals;
 
         WidgetsBinding.instance.addPostFrameCallback((_) => _measureSubChipBar());
 
@@ -1327,14 +1339,14 @@ class _KlineChartState extends State<KlineChart> {
               bars: widget.bars,
               period: widget.period,
               combineFrames: _effectiveK0CombineFrames,
-              k0ConfirmSignals: widget.k0ConfirmSignals,
+              k0ConfirmSignals: paintK0Confirms,
               barFeatures: widget.barFeatures,
               k0Lines: widget.k0Lines,
               k1BarViews: _effectiveK1BarViews,
               k1CombineFrames: _effectiveK1CombineFrames,
               k1Analysis: widget.k1Analysis,
-              levels: widget.levels,
-              zsK0Frames: widget.zsK0Frames,
+              levels: paintLevels,
+              zsK0Frames: paintZsK0,
               buy1K0Frames: widget.buy1K0Frames,
               sell1K0Frames: widget.sell1K0Frames,
               buy2K0Frames: widget.buy2K0Frames,

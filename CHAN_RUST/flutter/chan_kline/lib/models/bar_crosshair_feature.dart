@@ -103,6 +103,7 @@ class BarCrosshairFeature {
   /// 当步 K1合并分型（未确认=UNKNOWN）
   final String k1CombineFx;
 
+  /// k1_* 字段=structure0 虚拟K（K0连线合成；键名历史兼容，≠displayKn=1）
   /// 各层 Kn 快照（方案B：levels[0].level=0=K0连线…）
   final List<LevelSnap> levels;
 

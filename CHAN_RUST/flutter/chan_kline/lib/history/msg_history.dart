@@ -483,7 +483,7 @@ class MsgHistory {
     );
     append(
       '【踩坑·比例/节奏·2026-07-31】'
-      '①显示层 displayKn→数据 level=kn+1；节奏父切组用 level+2 的分型 confirms，勿用父段 end_confirm；'
+      '①方案B：显示层 displayKn→数据 LevelBundle.level==displayKn；节奏父切组用 displayKn+1 的分型 confirms，勿用父段 end_confirm；'
       '②比例子线须含展示轨虚线/种子，勿只读冻段；按 beginX 出现序勿按 endConfirmX；'
       '③节奏命名 0-0 起；关窗后不续写；key 含 groupId；同棒 bootstrap→子窗→父切组；'
       '④验收连续单步非跳末。详见 TASK_LOG / AGENTS.md。',
@@ -497,7 +497,7 @@ class MsgHistory {
     _knLineSlopeLogged = true;
     append(
       '【Kn连线斜率·全层同构·动态·K0颗粒度】'
-      '显示名 K{n}连线斜率；映射 displayKn→LevelBundle.level==displayKn+1（与比例/节奏/主图 Kn连线同号）。'
+      '显示名 K{n}连线斜率；映射 displayKn→LevelBundle.level==displayKn（方案B；与比例/节奏/主图 Kn连线同号）。'
       '子线复用比例出现链（冻段实线+展示轨虚线/种子），虚实不论，按 beginX 出现序取末根；'
       'slope=(endVal-beginVal)/(endX-beginX)，endX=子线终点极点/开口 x；|dx|<1 或尚无子线不写点（tip【0】）。'
       '颗粒度 K0：每步 displayX=stepIdx 覆盖写入，不回写旧 x；虚线延伸步 slope 随终点变（当下性）。'
@@ -513,8 +513,8 @@ class MsgHistory {
     _knFxExtendLinesLogged = true;
     append(
       '【Kn三型平移线 / Kn四型对线·主图·全层同构·v1】'
-      '显示名 K{n}三型平移线、K{n}四型对线；内部 kn 同连线（1→K0）；类别「延伸」。'
-      '分型源仅已确认：K0=k0Confirms；Kn≥1→levels[level==n+1].confirms；极点同连线 resolvePole/poleBarPrice。'
+      '显示名 K{n}三型平移线、K{n}四型对线；内部 kn==displayKn（方案B）；类别「延伸」。'
+      '分型源仅已确认：K0=k0Confirms；Kn≥1→levels[level==displayKn].confirms；极点同连线 resolvePole/poleBarPrice。'
       '确认序滑动窗：三型窗长3（两同+一异→过异型向右）、四型窗长4（两顶线+两底线弦+向右）；|dx|<1 跳过。'
       '呈现：无十字只画最新合格窗；开十字只画焦点近邻窗（落窗优先，否则距区间最近）；'
       'tooltip 固定槽「K{n}三型平移线」「K{n}四型对线」=延长线落到该根K0的价格(四型分顶/底)，与主图筛选同口径。'
@@ -531,8 +531,8 @@ class MsgHistory {
     _knTrendLineLogged = true;
     append(
       '【Kn趋势线·主图·子线层同号·v1】'
-      '显示名 K{n}趋势线；内部 kn 同连线（1→K0）；类别「延伸」；移植旧 Math/TrendLine.py。'
-      '映射：子线=levels[level==n+1]，父段=levels[level==n+2]（含 active）；K0≈旧工程（父K1连线/子K0连线）。'
+      '显示名 K{n}趋势线；内部 kn==displayKn（方案B）；类别「延伸」；移植旧 Math/TrendLine.py。'
+      '映射：子线=levels[level==displayKn]，父段=levels[level==displayKn+1]（含 active）；K0 父=K1连线。'
       '父段内子线≥3：隔笔取样→峰值斜率→点到线距离和最小；INSIDE=支撑、OUTSIDE=压力。'
       '例外：依赖父层，最高层不作显示名；maxKn<2 目录仍挂 K0 占位（计算空）。'
       '呈现对齐三型/四型：无十字最新父段组；十字近邻组；父段弦+向右外推；层色构建虚线；'
@@ -663,9 +663,25 @@ class MsgHistory {
     _auditProbeCopyLogged = true;
     append(
       '【复制调试信息】设置面板常驻按钮（勿删）。'
-      '当前绑定验收：A一类BS x冻结；B sure中枢禁合并改写；'
-      'C bar_features.zs_hits/bs1_hits；D tip三类+上界=maxBsClass。'
+      '当前绑定本批：A会话BS+bar_features冻结；D tip最高类键；'
+      'E Peak合并；F末枢离开才sure；G N类每成员/1Ba锁/k1_*命名；H asOf吃bundle。'
       '跳末后点按；实现 audit_probe_snapshot.dart。',
+    );
+  }
+
+  /// 本批：探针改会话/tip扫键 + Peak + 末枢sure + 口径文案 + asOf同源（进程内去重）。
+  static bool _auditBatch2Logged = false;
+  void appendAuditBatch2ProbePeakAsOf() {
+    if (_auditBatch2Logged) return;
+    _auditBatch2Logged = true;
+    append(
+      '【验收·本批】A探针改读会话历史+bar_features（告别冷前缀seg）；'
+      'D探针实扫 tip「K*十一类BS」等最高类键；bsClassChinese 扩到二十防 K111 粘连。'
+      'Rust：ZSCombineMode::Peak 按 DD/GG 重叠合并；删 export/collect 无 active 强制末枢 is_sure。'
+      '口径：N类资格框每成员打点（≠1/2极值）；一类字母锁1Ba/1Sa；'
+      'k1_*=structure0 虚拟K键名历史兼容≠displayKn=1。'
+      'Flutter：十字下 painter levels/k0/zsK0 直接传 asOfBundle；'
+      'msg_history 方案A层号文案改为方案B。须重编 chan_ffi.dll。',
     );
   }
 

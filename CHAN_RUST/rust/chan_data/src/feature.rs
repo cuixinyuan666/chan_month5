@@ -36,13 +36,13 @@ pub struct BarCrosshairFeature {
     /// 距最近冻结K0连线确认分型极点间隔根数（不含极点 K）；首K0连线确认前=0
     #[serde(default)]
     pub fractal_peak_dist: i32,
-    /// 当步所属 K1 序号；首 K1 确认前=None（levels[0] 冗余镜像，ML 兼容）
+    /// structure0 单元序号（K0连线合成虚拟K；键名 k1_* 历史兼容，≠displayKn=1）
     #[serde(default)]
     pub k1_idx: Option<i32>,
-    /// K1合并K1序：当步 K1 在 K1合并框内序号（0 起）
+    /// structure0 合并框内序号（0 起；键名历史兼容）
     #[serde(default = "default_zero")]
     pub k1_merge_inner_seq: i32,
-    /// 当步所在 K1合并框已含 K1 根数（逐K当下）
+    /// structure0 合并框已含单元根数（逐K当下）
     #[serde(default = "default_one")]
     pub k1_merge_count: i32,
     #[serde(default)]
@@ -55,13 +55,13 @@ pub struct BarCrosshairFeature {
     pub k1_close: f64,
     #[serde(default)]
     pub k1_volume: f64,
-    /// 当步 K1合并区间最高价（逐K当下）
+    /// structure0 合并区间最高价（逐K当下）
     #[serde(default)]
     pub k1_combine_high: f64,
-    /// 当步 K1合并区间最低价（逐K当下）
+    /// structure0 合并区间最低价（逐K当下）
     #[serde(default)]
     pub k1_combine_low: f64,
-    /// 当步 K1合并分型：未确认=UNKNOWN
+    /// structure0 合并分型：未确认=UNKNOWN
     #[serde(default = "default_unknown")]
     pub k1_combine_fx: String,
     /// 各层 Kn 快照（方案B：levels[0].level=0=K0连线，levels[1].level=1=K1连线，…穷尽）

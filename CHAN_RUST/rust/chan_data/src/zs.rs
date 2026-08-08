@@ -6,7 +6,9 @@ use std::collections::HashMap;
 
 use crate::pipeline::{LevelBundleOut, LevelSegment, LevelUnitBar};
 
-/// 相邻中枢合并模式（peak 按 DD/GG）
+/// 相邻中枢合并模式（对齐旧工程）：
+/// - `zs`：ZG/ZD 区间重叠才合并
+/// - `peak`：DD/GG（峰谷极值）重叠就合并
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ZSCombineMode {
@@ -261,7 +263,7 @@ fn finalize(mut zs_list: Vec<ZS>, segs: &[LevelSegment], cfg: &ZSConfig) -> Vec<
         };
     }
     if cfg.need_combine {
-        try_combine(&mut zs_list, segs);
+        try_combine(&mut zs_list, segs, cfg.zs_combine_mode);
     }
     zs_list
 }
@@ -271,7 +273,7 @@ fn ranges_overlap(lo1: f64, hi1: f64, lo2: f64, hi2: f64) -> bool {
     lo1 <= hi2 && lo2 <= hi1
 }
 
-fn try_combine(zs_list: &mut Vec<ZS>, segs: &[LevelSegment]) {
+fn try_combine(zs_list: &mut Vec<ZS>, segs: &[LevelSegment], mode: ZSCombineMode) {
     let mut changed = true;
     while changed {
         changed = false;
@@ -284,8 +286,11 @@ fn try_combine(zs_list: &mut Vec<ZS>, segs: &[LevelSegment]) {
                 k += 1;
                 continue;
             }
-            // ranges_overlap(lo, hi, …)：ZD=下沿、ZG=上沿
-            let overlap = ranges_overlap(a.zd, a.zg, b.zd, b.zg);
+            // zs=重叠带 ZD/ZG；peak=峰谷 DD/GG（对齐旧工程 CZS.combine）
+            let overlap = match mode {
+                ZSCombineMode::Zs => ranges_overlap(a.zd, a.zg, b.zd, b.zg),
+                ZSCombineMode::Peak => ranges_overlap(a.dd, a.gg, b.dd, b.gg),
+            };
             if overlap {
                 let merged = merge_two(a, b, segs);
                 zs_list[k] = merged;
@@ -650,6 +655,53 @@ mod tests {
         assert_eq!(zs_cfm.len(), 2);
         assert!(zs_cfm[0].is_sure, "确认离开才定型");
         assert!(!zs_cfm[1].is_sure);
+    }
+
+    /// peak：两未定型框 ZG/ZD 不重叠但 DD/GG 重叠 → 合并；zs 模式保持两框。
+    /// 用动态离开造「相邻双虚线」（已 sure 框禁合并，故不能测确认离开后的峰合并）。
+    #[test]
+    fn peak_combine_by_gg_dd_not_zg_zd() {
+        use crate::pipeline::LevelUnitBar;
+
+        let frozen = vec![
+            mk_seg(0, 1, 40.0, 30.0),
+            mk_seg(1, 1, 39.0, 31.0), // zg=39 zd=31 gg=40 dd=30
+        ];
+        let active = LevelUnitBar {
+            idx: 2,
+            dir: 1,
+            x1: 2,
+            x2: 3,
+            open: 18.0,
+            high: 30.5,
+            low: 18.0,
+            close: 29.0,
+            volume: 0.0,
+            confirm_x: 3,
+        };
+        let segs = segments_with_optional_active(&frozen, Some(&active));
+        let zs_mode = find_zs_with_confirmed(
+            &segs,
+            1,
+            &ZSConfig {
+                need_combine: true,
+                zs_combine_mode: ZSCombineMode::Zs,
+            },
+            frozen.len(),
+        );
+        assert_eq!(zs_mode.len(), 2, "zs 模式 ZG/ZD 不重叠应两框");
+        assert!(!zs_mode[0].is_sure && !zs_mode[1].is_sure);
+
+        let peak_mode = find_zs_with_confirmed(
+            &segs,
+            1,
+            &ZSConfig {
+                need_combine: true,
+                zs_combine_mode: ZSCombineMode::Peak,
+            },
+            frozen.len(),
+        );
+        assert_eq!(peak_mode.len(), 1, "peak 模式 DD/GG 重叠应合并");
     }
 
     #[test]
