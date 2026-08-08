@@ -2,6 +2,12 @@
 
 ## 最新记录
 
+### 2026-08-08 — 设置增加「复制调试信息」（例1–例5审计探针）
+
+- **要点**：设置面板常驻按钮，一键复制例1（K1合并 tip/主图层号）、例2（asOf vs 会话计数）、例3（一类BS x）、例4（三型/四型上界）、例5（bar_features 缺 zs/BS）核对文本，便于粘贴验证猜想。
+- **相关路径**：`CHAN_RUST/flutter/chan_kline/lib/history/audit_probe_snapshot.dart`、`main.dart`、`msg_history.dart`
+- **注意**：建议跳末后点；会多次前缀 FFI；与「复制页面快照」并存，勿当临时调试删
+
 ### 2026-08-08 — 方案B：结构层 0 起编，消除 displayKn↔level +1 双轨
 
 - **要点**：Rust 首层 `level==0`（K0连线）；中枢/BS 帧 `level=structure+1` 避 zs_k0 撞号。Flutter 连线族 `kn==displayKn`；中枢/Math/BS 的 K1+ 取 `structure==kn-1`；`collect*ByKn` 写 `out[lv.level+1]`。已重编并覆盖 `chan_ffi.dll`。

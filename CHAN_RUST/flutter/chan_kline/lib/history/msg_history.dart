@@ -656,6 +656,23 @@ class MsgHistory {
     );
   }
 
+  /// 设置「复制调试信息」：例1–例5审计探针（进程内去重）。
+  static bool _auditProbeCopyLogged = false;
+  void appendAuditProbeCopyButton() {
+    if (_auditProbeCopyLogged) return;
+    _auditProbeCopyLogged = true;
+    append(
+      '【复制调试信息】设置面板常驻按钮；输出例1–例5核对字段：'
+      '①K1合并 tip(combine_box_1←level+1) vs 主图k1CombineFrames/level==1；'
+      '②会话末态 vs asOf=100 前缀计数 + asOf回落路径说明；'
+      '③一类BS rust导出x vs 会话历史；'
+      '④三型/四型特征上界 maxD=structureMax-1 是否缺最高层；'
+      '⑤bar_features 是否缺 zs/BS 字段。'
+      '建议默认002003+分笔跳末后点按；生成含多次前缀FFI；全文粘贴排查。'
+      '实现：lib/history/audit_probe_snapshot.dart（勿当临时调试删）。',
+    );
+  }
+
   /// 主/副图指标 UI：Kn中枢命名、层全选、Kn成交量归属、chip 单击关闭（进程内去重）。
   static bool _indicatorUiKnVolumeLogged = false;
   void appendIndicatorUiAndKnVolume() {

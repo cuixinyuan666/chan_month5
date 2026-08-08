@@ -21,6 +21,7 @@ import 'compute/step_rhythm_compute.dart';
 import 'compute/math_series_freeze_store.dart';
 import 'compute/divergence_freeze_store.dart';
 import 'history/app_debug_snapshot.dart';
+import 'history/audit_probe_snapshot.dart';
 import 'history/msg_history.dart';
 import 'models/zs_frame.dart';
 import 'models/buy1_frame.dart';
@@ -114,6 +115,7 @@ Future<void> main() async {
   MsgHistory.instance.appendTestCustomOhlc();
   // 桌面：工作区全屏不盖任务栏；tooltip 分隔线贴边框
   MsgHistory.instance.appendDesktopWorkAreaAndTooltipSep();
+  MsgHistory.instance.appendAuditProbeCopyButton();
   // 主/副图指标 UI + Kn成交量归属口径
   MsgHistory.instance.appendIndicatorUiAndKnVolume();
   MsgHistory.instance.appendIndicatorMuteToggleAndVolReadout();
@@ -1134,6 +1136,46 @@ class _KlineHomePageState extends State<KlineHomePage> {
     _showSnack('页面快照已复制，可粘贴排查');
   }
 
+  /// 例1–例5审计探针：设置「复制调试信息」（常驻，勿当临时调试删）。
+  Future<void> _copyAuditProbeDebug() async {
+    if (_allBars.isEmpty || _stepIdx < 0) {
+      _showSnack('请先加载并步进/跳末后再复制');
+      return;
+    }
+    _showSnack('正在生成审计调试信息…');
+    final fed = _allBars.take(_stepIdx + 1).toList();
+    String text;
+    try {
+      text = AuditProbeSnapshot.build(
+        bridge: _bridge,
+        code: _selectedCode ?? '',
+        period: _period,
+        periodLabel: _periods[_period] ?? _period,
+        beginDate: _fmtDateTime(_beginDate),
+        endDate: _fmtDateTime(_endDate),
+        stepIdx: _stepIdx,
+        truncationCheck: _truncationCheck,
+        bars: fed,
+        sessionLevels: _levels,
+        sessionK1CombineFrames: _k1CombineFrames,
+        barFeatures: _barFeatures,
+        buy1HistoryByKn: _buy1HistoryByKn,
+        sell1HistoryByKn: _sell1HistoryByKn,
+        buy1K0Frames: _buy1K0Frames,
+        sell1K0Frames: _sell1K0Frames,
+      );
+    } catch (e) {
+      _showSnack('生成失败：$e');
+      _msgHistory.append('复制调试信息失败：$e');
+      return;
+    }
+    await Clipboard.setData(ClipboardData(text: text));
+    _msgHistory.append(
+      '已复制审计调试信息（例1–例5；step=$_stepIdx bars=${fed.length}）',
+    );
+    _showSnack('调试信息已复制，请粘贴给助手');
+  }
+
   void _showSnack(String msg) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -1733,6 +1775,19 @@ class _KlineHomePageState extends State<KlineHomePage> {
           onPressed: _copyDebugSnapshot,
           icon: const Icon(Icons.content_copy, size: 18),
           label: const Text('复制页面快照'),
+        ),
+        const SizedBox(height: 8),
+        // 常驻：例1–例5审计探针（合并 main / 清理 UI 时不得删除）
+        OutlinedButton.icon(
+          onPressed: _busy ? null : _copyAuditProbeDebug,
+          icon: const Icon(Icons.bug_report_outlined, size: 18),
+          label: const Text('复制调试信息'),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          '例1–例5核对字段：默认002003+分笔建议先跳末再点；'
+          '生成时会多次前缀FFI，稍等后粘贴全文。',
+          style: TextStyle(fontSize: 11, color: Colors.grey.shade700, height: 1.3),
         ),
       ],
     );
