@@ -73,7 +73,7 @@ CHAN_RUST项目：项目定位：全新项目，用于行情回测、机器学�
 - **范围**：比例仍副图；**节奏为主图**（`MainIndicatorKind.stepRhythm`，价轴挂投影价）；节奏只保留 **normal**；主图水平节奏线 / transition / strict1382 本轮未做。默认关联进 Kn指标、绘制静音。
 - **映射（全层同构·方案B）**：`displayKn` ↔ Kn连线 `level==displayKn`；节奏子分型=`displayKn` confirms；父分型切组=`displayKn+1` confirms。
 - **相邻比例**：子线=主图出现链（冻段+展示轨虚线/种子），**虚实不论**；按 `beginX` 出现序取末两根 `ratio=|cur|/|prev|`；K0 颗粒度写入会话。踩坑：勿只读冻段（动态虚线步会变 0）；勿按 `endConfirmX`/`isSure` 过滤排序。
-- **步进节奏**：组锚=父分型极值；命名从 **0-0**；子同向分型开窗、反向分型关窗（关窗后单点不向后连）；父分型确认切组并 `groupId++`；key 含 groupId。绘制：`value`=节奏投影价挂主图价轴；Δx==1 才点线续连、名在左侧、同 `roundRef` 同色、升暖降冷。禁止副图残留 `SubIndicatorKind.stepRhythm`。
+- **步进节奏**：组锚=父分型极值；命名从 **0-0**；子同向分型开窗实时算、反向分型关窗后**持上个 x-x 原值续写**（升：顶关→底确认前；降镜像；其它 x-x 同理）；再开窗恢复实时；父分型确认切组并 `groupId++`、清 holdLines；key 含 groupId。绘制：`value`=节奏投影价挂主图价轴；Δx==1 才点线续连、名在左侧、同 `roundRef` 同色、升暖降冷。禁止副图残留 `SubIndicatorKind.stepRhythm`。锚点：分笔·K1·K0 77–114 续上个 0-0。
 - **tooltip 三类（2026-08-08）**：层内 `-。-` 分桶：①`Kn背驰_*`；②`Kn比例`+`Kn节奏*`；③其它（均线/通道/斜率/延伸/MACD/布林/RSI/KDJ/Demark）。
 - **验收**：连续单步（非一键跳末）；口径变更写 `lib/history/msg_history.dart` 与 `TASK_LOG.md`。
 

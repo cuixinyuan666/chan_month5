@@ -477,17 +477,32 @@ class MsgHistory {
       '【Kn步进节奏·主图价轴·normal·K0颗粒度·0-0组】'
       '仅 normal；全层同构；子线=出现链虚实不论；'
       '组锚=父分型极值（底→极低升组/顶→极高降组）；命名从 0-0；'
-      '子同向分型开窗逐K续写，子反向分型确认后停写（单点不连后）；'
-      '父分型确认本组停、下组重置自确认步绘；不回写无未来；'
+      '子同向分型开窗逐K实时算；子反向关窗后持上个 x-x 原值续写（升：顶关→底确认前；降镜像）；'
+      '再开窗恢复实时；父分型确认切组并清空持值；不回写无未来；'
       '绘制：value=节奏投影价挂主图价轴；同父级(roundRef)同色，升暖降冷；'
       'K0 对齐点线，Δx≠1 不跨缺口续连；名在左侧；进主图Kn指标、默认静音。',
     );
     append(
-      '【踩坑·比例/节奏·2026-07-31】'
+      '【踩坑·比例/节奏·2026-07-31 / 持值2026-08-09】'
       '①方案B：显示层 displayKn→数据 LevelBundle.level==displayKn；节奏父切组用 displayKn+1 的分型 confirms，勿用父段 end_confirm；'
       '②比例子线须含展示轨虚线/种子，勿只读冻段；按 beginX 出现序勿按 endConfirmX；'
-      '③节奏命名 0-0 起；关窗后不续写；key 含 groupId；同棒 bootstrap→子窗→父切组；'
+      '③节奏命名 0-0 起；关窗持同 key/同 value（例分笔 K1：77–114 续上个 0-0）；切组清 holdLines；'
       '④验收连续单步非跳末。详见 TASK_LOG / AGENTS.md。',
+    );
+  }
+
+  /// Kn节奏关窗持值（进程内去重；2026-08-09）
+  static bool _stepRhythmHoldLogged = false;
+  void appendStepRhythmHoldBeforeChildReopen() {
+    if (_stepRhythmHoldLogged) return;
+    _stepRhythmHoldLogged = true;
+    append(
+      '【口径·2026-08-09·Kn节奏关窗持值·全层同构】'
+      '升组：子顶关窗后、子底确认前，继续使用上个 x-x（同 key/同 value 逐K写入历史）；'
+      '其它 x-x 同理；降组镜像。下一子同向分型开窗恢复实时；父分型切组清空持值。'
+      '锚点验收：默认分笔·K1节奏·K0 77–114 续上个 0-0。'
+      '主图/tooltip 共读会话历史（禁止只画不写）。'
+      '验收：设置「复制调试信息」→T1持值·T2 tip同源。',
     );
   }
 
@@ -680,8 +695,8 @@ class MsgHistory {
     _auditProbeCopyLogged = true;
     append(
       '【复制调试信息】设置面板常驻按钮（勿删）。'
-      '当前绑定本批：T1 tip三类分桶（背驰/比例+节奏/其它）；'
-      'T2 Kn节奏主图归属（catalog/层全选/默认静音/副图无残留）。'
+      '当前绑定本批：T1 K1节奏关窗持值（分笔·77–114 续上个 0-0）；'
+      'T2 tip 与主图节奏历史同源。'
       '跳末后点按；实现 audit_probe_snapshot.dart。',
     );
   }

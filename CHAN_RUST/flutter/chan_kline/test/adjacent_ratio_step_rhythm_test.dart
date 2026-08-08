@@ -248,42 +248,132 @@ void main() {
       expect(r.dir, 'up');
     });
 
-    test('子顶分型确认后窗口关闭，本步不再产出', () {
+    test('子顶关窗后持上个 x-x；再开窗前同值续写', () {
       final state = StepRhythmState()
         ..activeDir = 1
         ..a0 = 10
         ..anchorPoleX = 0
         ..windowOpen = true
         ..groupId = 0;
-      final levels = [
-        _lv(
-          0,
-          [
-            _seg(idx: 0, dir: 1, endConfirmX: 2, begin: 10, end: 14),
-            _seg(idx: 1, dir: -1, endConfirmX: 4, begin: 14, end: 12),
-            _seg(idx: 2, dir: 1, endConfirmX: 6, begin: 12, end: 16),
-          ],
-          // level1 本步顶分型 → 升组关窗
-        ),
+      final segs = [
+        _seg(idx: 0, dir: 1, endConfirmX: 2, begin: 10, end: 14),
+        _seg(idx: 1, dir: -1, endConfirmX: 4, begin: 14, end: 12),
+        _seg(idx: 2, dir: 1, endConfirmX: 6, begin: 12, end: 16),
       ];
-      // 注入 confirms：LevelBundle 需要带 confirms
-      final levelsWithFx = [
-        LevelBundle(
-          level: 0,
-          segments: levels.first.segments,
-          confirms: const [
-            LevelConfirm(x: 6, fx: 'TOP', value: -1, poleX: 5),
-          ],
-        ),
-      ];
-      final r = calcStepRhythmForStep(
-        levels: levelsWithFx,
+      // 开窗实时：写出 0-0 并写入 holdLines
+      final live = calcStepRhythmForStep(
+        levels: [_lv(0, segs)],
         displayKn: 0,
         displayX: 6,
         state: state,
       );
-      expect(r, isNull);
+      expect(live, isNotNull);
+      expect(live!.lines.first.label, '0-0');
+      final liveVal = live.lines.first.value;
+      final liveKey = live.lines.first.key;
+
+      // 子顶关窗：本步起持值（同 key/同 value，x 推进）
+      final closedLv = [
+        LevelBundle(
+          level: 0,
+          segments: segs,
+          confirms: const [
+            LevelConfirm(x: 7, fx: 'TOP', value: -1, poleX: 6),
+          ],
+        ),
+      ];
+      final hold0 = calcStepRhythmForStep(
+        levels: closedLv,
+        displayKn: 0,
+        displayX: 7,
+        state: state,
+      );
       expect(state.windowOpen, isFalse);
+      expect(hold0, isNotNull);
+      expect(hold0!.lines.first.label, '0-0');
+      expect(hold0.lines.first.key, liveKey);
+      expect(hold0.lines.first.value, closeTo(liveVal, 1e-9));
+      expect(hold0.lines.first.x, 7);
+
+      // 关窗区间继续持值（底分型确认前）
+      final hold1 = calcStepRhythmForStep(
+        levels: [
+          LevelBundle(level: 0, segments: segs),
+        ],
+        displayKn: 0,
+        displayX: 8,
+        state: state,
+      );
+      expect(state.windowOpen, isFalse);
+      expect(hold1, isNotNull);
+      expect(hold1!.lines.first.value, closeTo(liveVal, 1e-9));
+      expect(hold1.lines.first.x, 8);
+    });
+
+    test('父切组清空持值，不把旧组 x-x 带入新组', () {
+      final state = StepRhythmState()
+        ..activeDir = 1
+        ..a0 = 10
+        ..anchorPoleX = 0
+        ..windowOpen = false
+        ..groupId = 0
+        ..holdLines = [
+          const StepRhythmLinePoint(
+            x: 5,
+            displayKn: 0,
+            key: 'old',
+            value: 13,
+            ratio: 0.5,
+            dir: 'up',
+            roundCurrent: 0,
+            roundRef: 0,
+            layer: 0,
+            label: '0-0',
+            currentBiIdx: 2,
+            refBiIdx: 0,
+            retraceBiIdx: 1,
+            groupId: 0,
+          ),
+        ];
+      final levels = [
+        LevelBundle(
+          level: 0,
+          segments: [
+            _seg(idx: 0, dir: -1, endConfirmX: 3, begin: 14, end: 12),
+            _seg(idx: 1, dir: 1, endConfirmX: 5, begin: 12, end: 13),
+            _seg(idx: 2, dir: -1, endConfirmX: 8, begin: 13, end: 11),
+          ],
+        ),
+        LevelBundle(
+          level: 1,
+          segments: const [],
+          confirms: const [
+            LevelConfirm(
+              x: 8,
+              fx: 'TOP',
+              value: -1,
+              poleX: 0,
+              fractalHigh: 14,
+              fractalLow: 12,
+            ),
+          ],
+        ),
+      ];
+      calcStepRhythmForStep(
+        levels: levels,
+        displayKn: 0,
+        displayX: 8,
+        state: state,
+      );
+      expect(state.groupId, 1);
+      expect(state.windowOpen, isTrue);
+      // 切组后 hold 已被清；若本步算出新线则刷新为新组模板
+      expect(
+        state.holdLines == null ||
+            state.holdLines!.every((e) => e.groupId == 1),
+        isTrue,
+      );
+      expect(state.holdLines?.any((e) => e.key == 'old'), isFalse);
     });
 
     test('父顶分型切降组，a0=极高，自本步开窗', () {

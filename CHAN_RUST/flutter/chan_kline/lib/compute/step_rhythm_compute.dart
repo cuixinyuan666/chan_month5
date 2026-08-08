@@ -8,16 +8,17 @@ import 'adjacent_ratio_compute.dart';
 ///
 /// 口径（以 K0连线 + K1分型为例，Kn 同构）：
 /// - 组锚点 = 上一父分型极值（K1底→极低 / K1顶→极高）；组内命名从 **0-0** 起
-/// - 子分型打开推升/推降窗口后按 K0 步持续算；子反向分型确认当步起停写（单点不连后）
-/// - 父分型确认：本组停止，下一组命名重置，自确认步按反向趋势重开
+/// - 子同向分型开窗后按 K0 步实时算；子反向分型关窗后 **持上个 x-x 原值** 逐K续写
+///   （升组：顶关→底确认前持值；降组镜像）；其它 x-x 同理
+/// - 下一子同向分型再开窗 → 恢复实时计算；父分型确认 → 切组并清空持值缓存
 ///
 /// 方案B映射：子线 level==displayKn；子分型 confirms@displayKn；父分型 confirms@displayKn+1。
 ///
-/// 踩坑（2026-07-31）：
+/// 踩坑（2026-07-31 / 持值 2026-08-09）：
 /// - 勿用「父段 end_confirm」替代「父分型 confirms」切组；a0 取 fractalHigh/Low 而非 seq[0]
 /// - 命名取消 1-0：roundCurrent=(evenIdx~/2)-1，roundRef 从 0 → 首条 0-0
-/// - 关窗后禁止续写（例：25 出 0-1/1-0，26 顶确认后 26–38 应无点）；key 含 groupId
-/// - 同棒顺序：bootstrap → 子窗 → 父切组（父优先）；主图仅 Δx==1 点线续连
+/// - 关窗≠断线：持值同 key/同 value 续写（例分笔 K1：77–114 续上个 0-0）；无上步可持才空
+/// - key 含 groupId；同棒顺序：bootstrap → 子窗 → 父切组（父优先）；主图仅 Δx==1 点线续连
 
 /// 单条节奏线（同 key 多步连成折线；组切后 key 含 groupId）。
 class StepRhythmLinePoint {
@@ -85,8 +86,10 @@ class StepRhythmState {
   int? groupStartX;
   String? lastParentFxKey;
   String? lastChildFxKey;
-  /// 子线推升/推降窗口：开着才逐K续写；反向子分型确认后关闭→单点不连后
+  /// 子线推升/推降窗口：开着→实时算；关着→持上步 lines（见 holdLines）
   bool windowOpen = false;
+  /// 关窗持值模板（上一次实时算出的同组 lines）；切组/reset 清空
+  List<StepRhythmLinePoint>? holdLines;
 
   void reset() {
     activeDir = null;
@@ -97,6 +100,7 @@ class StepRhythmState {
     lastParentFxKey = null;
     lastChildFxKey = null;
     windowOpen = false;
+    holdLines = null;
   }
 }
 
@@ -192,8 +196,9 @@ void applyParentFractalGroup({
   state.groupId += 1;
   state.groupStartX = displayX;
   state.anchorPoleX = last.poleX >= 0 ? last.poleX : displayX;
-  // 清子窗键，避免同棒子分型抢先关窗
+  // 切组：清子窗键 + 持值缓存（旧组 x-x 不得带入新组）
   state.lastChildFxKey = null;
+  state.holdLines = null;
   if (_isTopFx(last)) {
     state.activeDir = -1;
     state.a0 = last.fractalHigh;
@@ -203,6 +208,42 @@ void applyParentFractalGroup({
     state.a0 = last.fractalLow;
     state.windowOpen = true;
   }
+}
+
+/// 关窗持值：把上步实时线原值原 key 写到本步 x（主图/tooltip 同源）。
+StepRhythmStepResult? holdStepRhythmFromCache({
+  required StepRhythmState state,
+  required int displayKn,
+  required int displayX,
+}) {
+  final src = state.holdLines;
+  if (src == null || src.isEmpty) return null;
+  final lines = <StepRhythmLinePoint>[
+    for (final p in src)
+      StepRhythmLinePoint(
+        x: displayX,
+        displayKn: displayKn,
+        key: p.key,
+        value: p.value,
+        ratio: p.ratio,
+        dir: p.dir,
+        roundCurrent: p.roundCurrent,
+        roundRef: p.roundRef,
+        layer: p.layer,
+        label: p.label,
+        currentBiIdx: p.currentBiIdx,
+        refBiIdx: p.refBiIdx,
+        retraceBiIdx: p.retraceBiIdx,
+        groupId: p.groupId,
+      ),
+  ];
+  return StepRhythmStepResult(
+    x: displayX,
+    displayKn: displayKn,
+    lines: lines,
+    dir: lines.first.dir,
+    firstValue: lines.first.value,
+  );
 }
 
 /// 无父分型时：用首条子线方向+起点价引导首组（仍从 0-0 起算）。
@@ -269,12 +310,16 @@ StepRhythmStepResult? calcStepRhythmForStep({
   );
 
   final dir = state.activeDir;
-  // 窗口关闭：本步不产出（历史已写入的单点保留，不向后连）
   if (dir != 1 && dir != -1) {
     return null;
   }
+  // 关窗：持上个 x-x（无缓存则空）；开窗：实时算并刷新持值模板
   if (!state.windowOpen) {
-    return null;
+    return holdStepRhythmFromCache(
+      state: state,
+      displayKn: displayKn,
+      displayX: displayX,
+    );
   }
   final activeDir = dir!;
 
@@ -352,6 +397,8 @@ StepRhythmStepResult? calcStepRhythmForStep({
   }
 
   if (lines.isEmpty) return null;
+  // 刷新持值模板，供后续关窗区间逐K续写
+  state.holdLines = List<StepRhythmLinePoint>.from(lines);
   return StepRhythmStepResult(
     x: displayX,
     displayKn: displayKn,

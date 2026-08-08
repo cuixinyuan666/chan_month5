@@ -1,15 +1,19 @@
 import '../compute/step_rhythm_compute.dart';
 import '../models/bar_crosshair_feature.dart';
 import '../models/bar_feature_lookup.dart';
-import '../models/chart_indicator.dart';
 import '../models/k1_analysis.dart';
 import '../models/kline_bar.dart';
 import '../models/level_models.dart';
 
 /// 本次任务验收探针（设置「复制调试信息」）。
-/// 只含：T1 tip三类分桶（背驰 / 比例+节奏 / 其它指标）；T2 Kn节奏主图归属。
+/// 只含：T1 K1节奏关窗持值（默认分笔·77–114 续上个 0-0）；T2 tip 与主图历史同源。
 /// 常驻按钮；内容随当前验收项更新（勿删按钮）。
 class AuditProbeSnapshot {
+  static const int _holdFromX = 77;
+  static const int _holdToX = 114;
+  static const int _displayKn = 1;
+  static const String _holdLabel = '0-0';
+
   static String build({
     required String code,
     required String period,
@@ -30,13 +34,17 @@ class AuditProbeSnapshot {
 
     final buf = StringBuffer();
     buf.writeln(
-      'CHAN_RUST 验收调试信息（本批：T1 tip三类分桶·T2 Kn节奏主图）',
+      'CHAN_RUST 验收调试信息（本批：T1 K1节奏关窗持值·T2 tip同源）',
     );
     buf.writeln('时间=$ts');
     buf.writeln(
       '代码=$code 周期=$period($periodLabel) 区间=$beginDate ~ $endDate',
     );
     buf.writeln('stepIdx=$stepIdx bars=${bars.length}');
+    buf.writeln(
+      '期望锚点：分笔·K$_displayKn节奏·K0 $_holdFromX–$_holdToX 续上个 $_holdLabel；'
+      '全层同构；tip 与主图历史同源。',
+    );
     buf.writeln('用法：跳末后点本按钮，全文粘贴给助手。');
     buf.writeln();
 
@@ -46,42 +54,147 @@ class AuditProbeSnapshot {
     }
 
     final lastIdx = bars[stepIdx.clamp(0, bars.length - 1)].idx;
+    final hist = stepRhythmHistoryByKn[_displayKn] ?? const <StepRhythmLinePoint>[];
 
-    buf.writeln('======== T1：tooltip 三类分桶（背驰 / 比例+节奏 / 其它） ========');
     buf.writeln(
-      '期望：层内用 -。- 分隔三类；序=…→背驰_*→比例+节奏*→均线等其它；'
-      '禁把背驰/均线塞进比例节奏桶。',
+      '======== T1：K$_displayKn 节奏关窗持值（$_holdFromX–$_holdToX 续 $_holdLabel） ========',
     );
-    _writeTipThreeCats(
+    _writeHoldContinuity(
+      buf,
+      hist: hist,
+      lastIdx: lastIdx,
+      period: period,
+    );
+    buf.writeln();
+
+    buf.writeln('======== T2：tooltip 与主图节奏历史同源 ========');
+    _writeTipHistorySync(
       buf,
       bars: bars,
       sessionLevels: sessionLevels,
       barFeatures: barFeatures,
       stepRhythmHistoryByKn: stepRhythmHistoryByKn,
-      focusX: lastIdx,
+      hist: hist,
+      lastIdx: lastIdx,
     );
-    buf.writeln();
-
-    buf.writeln('======== T2：Kn节奏主图归属（干净迁移） ========');
-    buf.writeln(
-      '期望：MainIndicatorKind.stepRhythm 进主图 catalog+Kn指标层全选；'
-      'Sub 无 stepRhythm；默认静音；与连线同号 0..maxKn-1；价轴挂点。',
-    );
-    _writeRhythmMainOwnership(buf, sessionLevels: sessionLevels);
     buf.writeln();
 
     buf.writeln('======== 结束 ========');
     return buf.toString();
   }
 
-  static void _writeTipThreeCats(
+  static void _writeHoldContinuity(
+    StringBuffer buf, {
+    required List<StepRhythmLinePoint> hist,
+    required int lastIdx,
+    required String period,
+  }) {
+    buf.writeln('period=$period histN=${hist.length} lastIdx=$lastIdx');
+    if (lastIdx < _holdFromX) {
+      buf.writeln('判定=SKIP_数据未到$_holdFromX（请跳末或换默认样本）');
+      return;
+    }
+
+    final toX = lastIdx < _holdToX ? lastIdx : _holdToX;
+    // 持值参照：区间起点前最近一根同 label
+    StepRhythmLinePoint? ref;
+    for (final p in hist) {
+      if (p.label != _holdLabel) continue;
+      if (p.x >= _holdFromX) continue;
+      if (ref == null || p.x > ref.x) ref = p;
+    }
+    if (ref == null) {
+      buf.writeln('判定=BUG_HOLD_无参照（$_holdFromX 前无 $_holdLabel）');
+      return;
+    }
+    buf.writeln(
+      '参照 x=${ref.x} label=${ref.label} value=${ref.value.toStringAsFixed(6)} '
+      'key=${ref.key}',
+    );
+
+    var miss = 0;
+    var mismatch = 0;
+    var okN = 0;
+    final missXs = <int>[];
+    final badXs = <int>[];
+    for (var x = _holdFromX; x <= toX; x++) {
+      final at = hist.where((e) => e.x == x && e.label == _holdLabel).toList();
+      if (at.isEmpty) {
+        miss++;
+        if (missXs.length < 8) missXs.add(x);
+        continue;
+      }
+      final p = at.first;
+      final sameKey = p.key == ref.key;
+      final sameVal = (p.value - ref.value).abs() <= 1e-9;
+      if (!sameKey || !sameVal) {
+        mismatch++;
+        if (badXs.length < 8) badXs.add(x);
+        continue;
+      }
+      okN++;
+    }
+    final span = toX - _holdFromX + 1;
+    buf.writeln(
+      '扫 x=$_holdFromX..$toX span=$span ok=$okN miss=$miss mismatch=$mismatch',
+    );
+    if (missXs.isNotEmpty) {
+      buf.writeln('缺点样例 x=$missXs');
+    }
+    if (badXs.isNotEmpty) {
+      buf.writeln('异值样例 x=$badXs');
+    }
+    if (toX < _holdToX) {
+      buf.writeln('注意：数据仅到 $toX，未满 $_holdToX（部分验收）');
+    }
+    if (miss == 0 && mismatch == 0 && okN == span) {
+      buf.writeln('判定=OK_FIXED K$_displayKn节奏关窗持值');
+    } else if (miss > 0) {
+      buf.writeln('判定=BUG_HOLD_缺续写（关窗区间应持上个 $_holdLabel）');
+    } else {
+      buf.writeln('判定=BUG_HOLD_值或key漂移');
+    }
+  }
+
+  static void _writeTipHistorySync(
     StringBuffer buf, {
     required List<KlineBar> bars,
     required List<LevelBundle> sessionLevels,
     required List<BarCrosshairFeature> barFeatures,
     required Map<int, List<StepRhythmLinePoint>> stepRhythmHistoryByKn,
-    required int focusX,
+    required List<StepRhythmLinePoint> hist,
+    required int lastIdx,
   }) {
+    // 优先在持值区内取样；不足则用最后一根有 0-0 的柱
+    var focusX = _holdFromX;
+    if (focusX > lastIdx) focusX = lastIdx;
+    if (focusX < _holdFromX && lastIdx >= _holdFromX) {
+      focusX = _holdFromX;
+    }
+    final inHold = hist
+        .where((e) =>
+            e.label == _holdLabel &&
+            e.x >= _holdFromX &&
+            e.x <= (lastIdx < _holdToX ? lastIdx : _holdToX))
+        .toList();
+    if (inHold.isNotEmpty) {
+      focusX = inHold[inHold.length ~/ 2].x;
+    } else {
+      final any = hist.where((e) => e.label == _holdLabel).toList();
+      if (any.isNotEmpty) focusX = any.last.x;
+    }
+
+    final atHist =
+        hist.where((e) => e.x == focusX && e.label == _holdLabel).toList();
+    buf.writeln('取样 x=$focusX hist有$_holdLabel=${atHist.isNotEmpty}');
+    if (atHist.isEmpty) {
+      buf.writeln('判定=BUG_TIP_历史无点（无法对同源）');
+      return;
+    }
+    final expectVal = atHist.first.value;
+    // tip 与 bar_feature_lookup 同口径：toStringAsFixed(3) 后再装箱
+    final expectTipText = expectVal.toStringAsFixed(3);
+
     final lookup = BarFeatureLookup.build(
       bars: bars,
       combineFrames: const [],
@@ -93,140 +206,35 @@ class AuditProbeSnapshot {
       stepRhythmHistoryByKn: stepRhythmHistoryByKn,
     );
     final rows = lookup.crosshairTooltipRows(focusX, timePart: 'probe');
-    // 只扫 K0 块（到第一个层间 === 之前的内容已含 K0 三类）
-    final k0 = <CrosshairTooltipRow>[];
-    var seenDate = false;
+    final tipLabel = 'K$_displayKn节奏$_holdLabel';
+    CrosshairTooltipRow? tipRow;
     for (final r in rows) {
-      if (r.isSeparator) {
-        if (seenDate && k0.isNotEmpty) break; // 下一层 ===
-        seenDate = true;
-        continue;
-      }
-      if (!seenDate) continue;
-      k0.add(r);
-    }
-
-    int? iDiver;
-    int? iRatio;
-    int? iOther;
-    for (var i = 0; i < k0.length; i++) {
-      final lab = k0[i].label;
-      if (iDiver == null && lab.startsWith('K0背驰')) iDiver = i;
-      if (iRatio == null &&
-          (lab == 'K0比例' || lab.startsWith('K0节奏'))) {
-        iRatio = i;
-      }
-      if (iOther == null &&
-          (lab == 'K0均线' ||
-              lab == 'K0通道' ||
-              lab.contains('连线斜率') ||
-              lab.contains('MACD') ||
-              lab.contains('Demark'))) {
-        iOther = i;
+      if (r.label == tipLabel) {
+        tipRow = r;
+        break;
       }
     }
-
-    buf.writeln('扫 tip @x=$focusX（K0 块行数=${k0.length}）');
-    buf.writeln(
-      '首背驰行=${iDiver == null ? "null" : k0[iDiver].label} idx=$iDiver',
-    );
-    buf.writeln(
-      '首比例/节奏行=${iRatio == null ? "null" : k0[iRatio].label} idx=$iRatio',
-    );
-    buf.writeln(
-      '首其它指标行=${iOther == null ? "null" : k0[iOther].label} idx=$iOther',
-    );
-
-    bool hasStarBetween(int a, int b) {
-      if (a < 0 || b < 0 || a >= b) return false;
-      for (var i = a + 1; i < b; i++) {
-        if (k0[i].isStar) return true;
-      }
-      return false;
+    buf.writeln('tip行=$tipLabel 存在=${tipRow != null}');
+    if (tipRow == null) {
+      buf.writeln('判定=BUG_TIP_缺节奏行');
+      return;
     }
-
-    final d = iDiver;
-    final r = iRatio;
-    final o = iOther;
-    var orderOk = false;
-    var sepDiverRatio = false;
-    var sepRatioOther = false;
-    var mixed = false;
-    if (d != null && r != null && o != null && d < r && r < o) {
-      orderOk = true;
-      sepDiverRatio = hasStarBetween(d, r);
-      sepRatioOther = hasStarBetween(r, o);
-      // 抽查：背驰块内不应出现均线；比例节奏块内不应出现背驰/均线
-      for (var i = d; i < r; i++) {
-        final lab = k0[i].label;
-        if (lab.contains('均线') || lab == 'K0比例' || lab.startsWith('K0节奏')) {
-          mixed = true;
-          buf.writeln('混桶？背驰区出现 $lab @i=$i');
-        }
-      }
-      for (var i = r; i < o; i++) {
-        final lab = k0[i].label;
-        if (lab.startsWith('K0背驰') || lab.contains('均线')) {
-          mixed = true;
-          buf.writeln('混桶？比例节奏区出现 $lab @i=$i');
-        }
-      }
+    // tip 值格式 【价】；与历史同 3 位小数口径比对（勿用全精度 vs 四舍五入）
+    final tipText = tipRow.value;
+    final m = RegExp(r'[-+]?\d+(?:\.\d+)?').firstMatch(tipText);
+    if (m == null) {
+      buf.writeln('tip原文=$tipText 判定=BUG_TIP_无数值');
+      return;
     }
-
+    final tipNumText = m.group(0)!;
     buf.writeln(
-      '序OK=${orderOk ? "Y" : "N"} '
-      '背驰|-。-|比例节奏=${sepDiverRatio ? "Y" : "N"} '
-      '比例节奏|-。-|其它=${sepRatioOther ? "Y" : "N"} '
-      '混桶=${mixed ? "Y" : "N"}',
+      'hist=${expectVal.toStringAsFixed(6)} hist3=$expectTipText '
+      'tip原文=$tipText tipNum=$tipNumText',
     );
-    if (orderOk && sepDiverRatio && sepRatioOther && !mixed) {
-      buf.writeln('判定=OK_FIXED tip三类分桶');
-    } else if (d == null || r == null || o == null) {
-      buf.writeln('判定=BUG_TIP_缺类行（背驰/比例节奏/其它）');
+    if (tipNumText == expectTipText) {
+      buf.writeln('判定=OK_FIXED tip与主图节奏历史同源');
     } else {
-      buf.writeln('判定=BUG_TIP_分桶序或分隔');
-    }
-  }
-
-  static void _writeRhythmMainOwnership(
-    StringBuffer buf, {
-    required List<LevelBundle> sessionLevels,
-  }) {
-    final maxKn = chartMaxKn(levels: sessionLevels);
-    final mainCat = buildMainIndicatorCatalog(maxKn < 1 ? 1 : maxKn);
-    final subCat = buildSubIndicatorCatalog(maxKn < 1 ? 1 : maxKn);
-    final mainRhythm =
-        mainCat.where((e) => e.kind == MainIndicatorKind.stepRhythm).toList();
-    final subRhythmGone = !subCat.any((e) => e.label.contains('节奏'));
-    // 枚举已删：用 label 兜底再确认无「K*节奏」副图项
-    final lv0 = mainIndicatorsForLevel(0, mainCat);
-    final subLv0 = subIndicatorsForLevel(0, subCat);
-    final inLevel = lv0.any((e) => e.kind == MainIndicatorKind.stepRhythm);
-    final notInSubLevel = !subLv0.any((e) => e.label.contains('节奏'));
-    final mutedDefault = mainRhythm.isNotEmpty &&
-        mainRhythm.every((e) => !isDefaultDrawnMain(e));
-    final kns = mainRhythm.map((e) => e.kn).toList()..sort();
-    final expectHi = maxKn < 1 ? 0 : maxKn - 1;
-    final knRangeOk = kns.isNotEmpty &&
-        kns.first == 0 &&
-        kns.last == (expectHi < 0 ? 0 : expectHi);
-
-    buf.writeln('chartMaxKn=$maxKn main节奏kn=$kns');
-    buf.writeln(
-      'main含stepRhythm=${mainRhythm.isNotEmpty} '
-      'sub无节奏=$subRhythmGone '
-      '层全选含=$inLevel 副层无=$notInSubLevel '
-      '默认静音=$mutedDefault knRangeOK=$knRangeOk',
-    );
-    if (mainRhythm.isNotEmpty &&
-        subRhythmGone &&
-        inLevel &&
-        notInSubLevel &&
-        mutedDefault &&
-        knRangeOk) {
-      buf.writeln('判定=OK_FIXED 节奏主图归属干净');
-    } else {
-      buf.writeln('判定=BUG_节奏归属残留或层关联缺失');
+      buf.writeln('判定=BUG_TIP_与历史不同源');
     }
   }
 }
