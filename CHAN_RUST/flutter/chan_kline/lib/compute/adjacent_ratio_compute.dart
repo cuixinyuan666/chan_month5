@@ -7,7 +7,7 @@ import 'fractal_judgment_compute.dart';
 /// 相邻连线比例：当前线幅度 / 上一线幅度（不拆回调/趋势）。
 ///
 /// **指标设计遵循动态计算**（除非明确指示其它逻辑）：
-/// - 全层同构：displayKn → LevelBundle.level==displayKn+1（与 Kn连线同号）
+/// - 方案B全层同构：displayKn → LevelBundle.level==displayKn（与 Kn连线同号）
 /// - 子线序列 = 主图已实现的连线出现链（冻段实线 + 展示轨虚线/种子），**虚实一视同仁**
 /// - 排序按起点极点出现时机（beginX），取末两根做比值
 /// - 颗粒度 = K0：每步 displayX=stepIdx 写入/覆盖当步读数
@@ -210,7 +210,8 @@ List<RatioChild> buildRatioChildren({
   bool truncationCheck = true,
   int? displayX,
 }) {
-  final level = displayKn + 1;
+  // 方案B：连线族 level==displayKn
+  final level = displayKn;
   final lv = _bundleAtLevel(levels, level);
   if (lv == null) return const [];
 
@@ -414,7 +415,7 @@ List<double?> expandAdjacentRatioToSeries(
 }
 
 /// 与「Kn连线斜率」同一公式：`(endVal-beginVal)/(endX-beginX)`（有符号）。
-/// [level] = LevelBundle.level（背驰 displayKn；连线斜率侧为 displayKn+1）。
+/// [level] = LevelBundle.level（方案B：连线斜率=displayKn；背驰段=displayKn-1）。
 /// 冻段 endX=endConfirmX；动态 active endX=min(x2,asOf)。|dx|<1 → null。
 double? calcUnitLineSlope({
   required List<LevelBundle> levels,

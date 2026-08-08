@@ -77,7 +77,8 @@ List<TrendCloseSample> collectTrendCloseSamples({
     }
     return out;
   }
-  final lv = _bundleAtLevel(levels, displayKn);
+  // 方案B：Math Kn≥1 → structure level==displayKn-1
+  final lv = _bundleAtLevel(levels, displayKn - 1);
   if (lv == null) return const [];
   final out = <TrendCloseSample>[];
   for (final u in lv.unitBars) {

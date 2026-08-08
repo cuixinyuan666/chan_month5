@@ -24,7 +24,8 @@ void main() {
     final k1 = [
       const ZSFrame(x1: 0, x2: 2, high: 20, low: 10, gg: 22, dd: 8, level: 1, count: 2),
     ];
-    final levels = [_levelWithZs(level: 1, frames: k1)];
+    // 方案B：K1中枢帧挂在 structure level==0
+    final levels = [_levelWithZs(level: 0, frames: k1)];
     expect(
       rustZsFramesForKn(
         kn: 0,

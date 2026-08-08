@@ -298,8 +298,9 @@ List<FxExtendGroup> calcTrendLineGroupsForLevel({
   required List<LevelBundle> levels,
   int? asOf,
 }) {
-  final childLv = _bundleAtLevel(levels, displayKn + 1);
-  final parentLv = _bundleAtLevel(levels, displayKn + 2);
+  // 方案B：子=displayKn，父=displayKn+1
+  final childLv = _bundleAtLevel(levels, displayKn);
+  final parentLv = _bundleAtLevel(levels, displayKn + 1);
   if (childLv == null || parentLv == null) return const [];
 
   final out = <FxExtendGroup>[];

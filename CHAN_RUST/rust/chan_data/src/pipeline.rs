@@ -1,5 +1,5 @@
-//! Kn 递归流水线：K0(原始K) → K1(K0连线) → K2(K1连线) → … → Kn，穷尽到无法再生成新层。
-//! 命名历史：旧「1段/2段/n段」→「K1/K2/Kn」；内部 level 序号不变（1=K1）。
+//! Kn 递归流水线：K0(原始K) → 结构level0(K0连线) → level1(K1连线) → …，穷尽到无法再生成新层。
+//! 方案B：结构层从 0 起编（0=K0连线）；中枢/BS 帧上 level=structure+1（显示中枢号，避 zs_k0 撞号）。
 //!
 //! 三层语义（勿混为一谈）：
 //! 1. **判定内核同构**（全层）：`CombineEngine` 包含合并 + 三元素分型（首两单元不做包含，见种子框例外）；
@@ -1109,9 +1109,11 @@ impl LevelState {
         let n_confirmed = self.segments.len();
         let segs_for_zs =
             crate::zs::segments_with_optional_active(&self.segments, active_unit.as_ref());
+        // 帧上 level=显示中枢号(structure+1)，避免与 zs_k0(level=0) 撞号
+        let display_zs_level = self.level + 1;
         let mut zs_list = crate::zs::find_zs_with_confirmed(
             &segs_for_zs,
-            self.level,
+            display_zs_level,
             &self.zs_config,
             n_confirmed,
         );
@@ -1127,41 +1129,41 @@ impl LevelState {
             segments: self.segments.clone(),
             unit_bars: self.unit_bars.clone(),
             combine_frames: frames_from_engine(&self.engine, bars),
-            zs_frames: crate::zs::zs_frames_from_list(&zs_list, &segs_for_zs, self.level),
+            zs_frames: crate::zs::zs_frames_from_list(&zs_list, &segs_for_zs, display_zs_level),
             buy1_frames: crate::buy1::find_buy1_with_active(
                 &zs_list,
                 &segs_for_zs,
-                self.level,
+                display_zs_level,
                 active_unit.as_ref().map(|u| u.idx),
             ),
             sell1_frames: crate::buy1::find_sell1_with_active(
                 &zs_list,
                 &segs_for_zs,
-                self.level,
+                display_zs_level,
                 active_unit.as_ref().map(|u| u.idx),
             ),
             buy2_frames: crate::buy2::find_buy2_with_active(
                 &zs_list,
                 &segs_for_zs,
-                self.level,
+                display_zs_level,
                 active_unit.as_ref().map(|u| u.idx),
             ),
             sell2_frames: crate::buy2::find_sell2_with_active(
                 &zs_list,
                 &segs_for_zs,
-                self.level,
+                display_zs_level,
                 active_unit.as_ref().map(|u| u.idx),
             ),
             buy_n_frames: crate::buy_n::find_buy_n_with_active(
                 &zs_list,
                 &segs_for_zs,
-                self.level,
+                display_zs_level,
                 active_unit.as_ref().map(|u| u.idx),
             ),
             sell_n_frames: crate::buy_n::find_sell_n_with_active(
                 &zs_list,
                 &segs_for_zs,
-                self.level,
+                display_zs_level,
                 active_unit.as_ref().map(|u| u.idx),
             ),
             first_dir: self.first_dir,
@@ -1218,8 +1220,9 @@ fn propagate(
         if li >= opt.max_levels {
             continue;
         }
+        // 方案B：结构层号=数组下标（0=K0连线），创建时用 li 而非 li+1
         if li == levels.len() {
-            levels.push(LevelState::new((li + 1) as i32, opt));
+            levels.push(LevelState::new(li as i32, opt));
         }
         let mu = MergeUnit {
             uid: ub.idx,
@@ -1241,7 +1244,8 @@ fn propagate(
 
 /// 全量入口：对已喂入 K 线前缀跑穷尽 N 段流水线（内部单遍逐K，无未来函数）
 pub fn run_pipeline(bars: &[KlineBar], opt: &PipelineOptions) -> PipelineResult {
-    let mut levels: Vec<LevelState> = vec![LevelState::new(1, opt)];
+    // 方案B：首层结构号 0（K0连线）；原 level N → N-1
+    let mut levels: Vec<LevelState> = vec![LevelState::new(0, opt)];
     let mut bar_level_snaps: Vec<Vec<LevelSnap>> = Vec::with_capacity(bars.len());
     let mut bar_k_snaps: Vec<BarCombineSnap> = Vec::with_capacity(bars.len());
     let mut bar_seg_rows: Vec<BarSegRow> = Vec::with_capacity(bars.len());
@@ -1252,7 +1256,7 @@ pub fn run_pipeline(bars: &[KlineBar], opt: &PipelineOptions) -> PipelineResult 
             lv.begin_bar();
         }
 
-        // 1) 永久流：当前K → Level1 引擎 → 级联向上
+        // 1) 永久流：当前K → 结构 level0 引擎 → 级联向上
         let ku = LevelUnitBar {
             idx: i as i64,
             dir: 0,
@@ -1269,7 +1273,7 @@ pub fn run_pipeline(bars: &[KlineBar], opt: &PipelineOptions) -> PipelineResult 
 
         // 2) 快照（逐K当下冻结）
         // 进行中单元只读探测仅发生在 snapshot 内（展示用），不在此提前 on_confirm。
-        // K线合并快照：当步K必在 Level1 引擎末组
+        // K线合并快照：当步K必在结构 level0 引擎末组
         let ksnap = levels[0]
             .engine
             .snapshot_for(i as i64)
@@ -1376,7 +1380,7 @@ mod tests {
         let pr = run_pipeline(&bars, &PipelineOptions::default());
         assert_eq!(pr.bar_level_snaps.len(), bars.len());
         assert!(!pr.levels.is_empty());
-        assert!(!pr.levels[0].confirms.is_empty(), "应有K1分型确认");
+        assert!(!pr.levels[0].confirms.is_empty(), "应有K0连线层分型确认");
     }
 
     #[test]

@@ -47,7 +47,7 @@ void main() {
   group('adjacent_ratio_compute', () {
     test('不足 2 段 → null', () {
       final levels = [
-        _lv(1, [_seg(idx: 0, dir: 1, endConfirmX: 5, begin: 10, end: 12)]),
+        _lv(0, [_seg(idx: 0, dir: 1, endConfirmX: 5, begin: 10, end: 12)]),
       ];
       expect(
         calcAdjacentRatioForStep(
@@ -62,7 +62,7 @@ void main() {
     test('仅一根进行中 → 不足 2 线 null', () {
       final levels = [
         _lv(
-          1,
+          0,
           const [],
           active: const LevelUnitBar(
             idx: 0,
@@ -91,7 +91,7 @@ void main() {
       // prev 不再要求 isSure（进行中/虚线可作分母）
       final levels = [
         _lv(
-          1,
+          0,
           [_seg(idx: 0, dir: 1, endConfirmX: 4, begin: 10, end: 12)],
           active: const LevelUnitBar(
             idx: 1,
@@ -120,7 +120,7 @@ void main() {
       // 冻段 + active：按 beginX 取末两根
       final levels2 = [
         _lv(
-          1,
+          0,
           [_seg(idx: 0, dir: 1, endConfirmX: 4, begin: 10, end: 12)],
           active: const LevelUnitBar(
             idx: 1,
@@ -147,7 +147,7 @@ void main() {
     test('分母为 0 跳过', () {
       final levels = [
         _lv(
-          1,
+          0,
           [_seg(idx: 0, dir: 1, endConfirmX: 4, begin: 10, end: 10)],
           active: const LevelUnitBar(
             idx: 1,
@@ -173,7 +173,7 @@ void main() {
 
     test('末两根按 beginX：新开口为 cur', () {
       final levels = [
-        _lv(1, [
+        _lv(0, [
           _seg(idx: 0, dir: 1, endConfirmX: 3, begin: 10, end: 12), // amp2
           _seg(idx: 1, dir: -1, endConfirmX: 8, begin: 12, end: 10), // amp2
         ], active: const LevelUnitBar(
@@ -203,7 +203,7 @@ void main() {
     test('不足交替序列 → null', () {
       final state = StepRhythmState();
       final levels = [
-        _lv(1, [
+        _lv(0, [
           _seg(idx: 0, dir: 1, endConfirmX: 2, begin: 10, end: 12),
           _seg(idx: 1, dir: -1, endConfirmX: 4, begin: 12, end: 11),
         ]),
@@ -227,7 +227,7 @@ void main() {
         ..windowOpen = true
         ..groupId = 0;
       final levels = [
-        _lv(1, [
+        _lv(0, [
           _seg(idx: 0, dir: 1, endConfirmX: 2, begin: 10, end: 14),
           _seg(idx: 1, dir: -1, endConfirmX: 4, begin: 14, end: 12),
           _seg(idx: 2, dir: 1, endConfirmX: 6, begin: 12, end: 16),
@@ -257,7 +257,7 @@ void main() {
         ..groupId = 0;
       final levels = [
         _lv(
-          1,
+          0,
           [
             _seg(idx: 0, dir: 1, endConfirmX: 2, begin: 10, end: 14),
             _seg(idx: 1, dir: -1, endConfirmX: 4, begin: 14, end: 12),
@@ -269,7 +269,7 @@ void main() {
       // 注入 confirms：LevelBundle 需要带 confirms
       final levelsWithFx = [
         LevelBundle(
-          level: 1,
+          level: 0,
           segments: levels.first.segments,
           confirms: const [
             LevelConfirm(x: 6, fx: 'TOP', value: -1, poleX: 5),
@@ -294,7 +294,7 @@ void main() {
         ..groupId = 0;
       final levels = [
         LevelBundle(
-          level: 1,
+          level: 0,
           segments: [
             _seg(idx: 0, dir: -1, endConfirmX: 3, begin: 14, end: 12),
             _seg(idx: 1, dir: 1, endConfirmX: 5, begin: 12, end: 13),
@@ -302,7 +302,7 @@ void main() {
           ],
         ),
         LevelBundle(
-          level: 2,
+          level: 1,
           segments: const [],
           confirms: const [
             LevelConfirm(

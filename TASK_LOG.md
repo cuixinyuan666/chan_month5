@@ -2,6 +2,12 @@
 
 ## 最新记录
 
+### 2026-08-08 — 方案B：结构层 0 起编，消除 displayKn↔level +1 双轨
+
+- **要点**：Rust 首层 `level==0`（K0连线）；中枢/BS 帧 `level=structure+1` 避 zs_k0 撞号。Flutter 连线族 `kn==displayKn`；中枢/Math/BS 的 K1+ 取 `structure==kn-1`；`collect*ByKn` 写 `out[lv.level+1]`。已重编并覆盖 `chan_ffi.dll`。
+- **相关路径**：`pipeline.rs`、`zs.rs`、`chart_indicator.dart`、`kline_chart.dart`、各 `*_compute.dart`、`msg_history.dart`、`AGENTS.md`
+- **注意**：旧会话勾选 kn 语义漂移需冷启动；趋势线/节奏仍看父层 `displayKn+1`（非旧偏移尾巴）
+
 ### 2026-08-08 — 延伸线 asOf 截断 / 清 Demark 副图枚举 / 删 turnrate 背驰 / 桶宽进 Math 输入框
 
 - **要点**：三型/四型/趋势线射线十字下截到 asOf；删除 `SubIndicatorKind.demark`；背驰去掉 turnrate_avg（12 算法）；筹码桶宽从拉条迁入「数学指标参数」输入框（最小 0.01，笔数分布共用）。

@@ -83,12 +83,13 @@ void mergeSell1EventLog(
 }
 
 /// 从本步 bundle 采集各层一类买（K0 + levels）。
+/// 方案B：out[0]=k0；写 out[lv.level+1]（禁盖 K0）。
 Map<int, List<Buy1Frame>> collectBuy1EventsByKn(KlineCombineBundle bundle) {
   final out = <int, List<Buy1Frame>>{
     0: List<Buy1Frame>.from(bundle.buy1K0Frames),
   };
   for (final lv in bundle.levels) {
-    out[lv.level] = List<Buy1Frame>.from(lv.buy1Frames);
+    out[lv.level + 1] = List<Buy1Frame>.from(lv.buy1Frames);
   }
   return out;
 }
@@ -99,7 +100,7 @@ Map<int, List<Sell1Frame>> collectSell1EventsByKn(KlineCombineBundle bundle) {
     0: List<Sell1Frame>.from(bundle.sell1K0Frames),
   };
   for (final lv in bundle.levels) {
-    out[lv.level] = List<Sell1Frame>.from(lv.sell1Frames);
+    out[lv.level + 1] = List<Sell1Frame>.from(lv.sell1Frames);
   }
   return out;
 }
@@ -163,8 +164,9 @@ List<LevelBundle> levelsWithFrozenClass1Bs(
           unitBars: lv.unitBars,
           combineFrames: lv.combineFrames,
           zsFrames: lv.zsFrames,
-          buy1Frames: buy1HistoryByKn[lv.level] ?? lv.buy1Frames,
-          sell1Frames: sell1HistoryByKn[lv.level] ?? lv.sell1Frames,
+          // 方案B：history 键用 display=lv.level+1
+          buy1Frames: buy1HistoryByKn[lv.level + 1] ?? lv.buy1Frames,
+          sell1Frames: sell1HistoryByKn[lv.level + 1] ?? lv.sell1Frames,
           buy2Frames: lv.buy2Frames,
           sell2Frames: lv.sell2Frames,
           buyNFrames: lv.buyNFrames,

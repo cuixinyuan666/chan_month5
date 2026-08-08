@@ -47,13 +47,14 @@ List<FractalJudgmentEvent> collectFractalJudgmentEvents({
   int? asOf,
   bool truncationCheck = true,
 }) {
-  if (bars.isEmpty || kn < 1) return const [];
+  // 方案B：kn==displayKn；K0 分型 kn=0；Kn≥1 用下层 structure kn-1 单元
+  if (bars.isEmpty || kn < 0) return const [];
   final end = asOf ?? bars.last.idx;
   final barsSlice = bars.where((b) => b.idx <= end).toList();
   if (barsSlice.isEmpty) return const [];
 
   final events = <FractalJudgmentEvent>[];
-  if (kn == 1) {
+  if (kn == 0) {
     computeK0CombineFrames(
       barsSlice,
       truncationCheck: truncationCheck,

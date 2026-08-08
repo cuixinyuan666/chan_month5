@@ -407,8 +407,10 @@ pub fn build_zs_for_levels(levels: &[LevelBundleOut], cfg: &ZSConfig) -> Vec<Vec
         .map(|lv| {
             let n_confirmed = lv.segments.len();
             let segs = segments_with_optional_active(&lv.segments, lv.active_unit.as_ref());
-            let zs_list = find_zs_with_confirmed(&segs, lv.level, cfg, n_confirmed);
-            zs_frames_from_list(&zs_list, &segs, lv.level)
+            // 方案B：帧上 level=显示中枢号 structure+1（与 pipeline export 对齐）
+            let display_zs_level = lv.level + 1;
+            let zs_list = find_zs_with_confirmed(&segs, display_zs_level, cfg, n_confirmed);
+            zs_frames_from_list(&zs_list, &segs, display_zs_level)
         })
         .collect()
 }

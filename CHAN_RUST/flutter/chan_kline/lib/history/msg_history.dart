@@ -14,6 +14,9 @@ class MsgHistory {
 
   static const int _maxRows = 500;
 
+  /// 方案B层号改口径是否已记录
+  static bool _planBLayerRemapLogged = false;
+
   /// 命名变更是否已记录（进程内只记一次，便于从历史记录追溯完整更名过程）
   static bool _namingRenameLogged = false;
 
@@ -62,6 +65,23 @@ class MsgHistory {
     if (reason != null && reason.trim().isNotEmpty) {
       append('历史记录已清空：$reason');
     }
+  }
+
+  /// 方案B：Flutter 彻底改层号（Rust structure 0 起编；连线族 kn==displayKn）。
+  void appendPlanBLayerRemap() {
+    if (_planBLayerRemapLogged) return;
+    _planBLayerRemapLogged = true;
+    append(
+      '【口径·方案B层号】Rust structure 0 起编：levels[].level==0=K0连线；'
+      '中枢/BS 帧 frame.level=structure+1（显示中枢号）。'
+      '连线族（line/combine/kn/三型/四型/趋势线/分型副图/截断/比例/节奏/斜率）'
+      'catalog kn==displayKn，取数 LevelBundle.level==kn（去掉 displayKn+1 / 绘制 kn-1）。'
+      '中枢/Math/volume/BS/背驰：K0=原生 k0；K1+ 取 structure level==kn-1。'
+      'collect*ByKn：out[0]=k0，pipeline 写 out[lv.level+1]；'
+      'levelsWithFrozen*Bs history 键 display=lv.level+1。'
+      'chartMaxKn=structureMax+1（无 levels 有 k0Lines→1；全空→0）。'
+      'asOfLevel* 按 lv.level==level 查找（允许 0）。勿再改回旧 1 起编。',
+    );
   }
 
   /// 记录「跨段中枢 v1 + 原生中枢(ZS)」命名变更（进程内去重一次），

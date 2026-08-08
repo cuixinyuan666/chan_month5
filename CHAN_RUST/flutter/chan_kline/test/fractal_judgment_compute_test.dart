@@ -50,7 +50,7 @@ void main() {
     expect(drawn[7], 'UNKNOWN', reason: 'as-of 过滤未来');
   });
 
-  test('collectFractalJudgmentEvents kn=1：事件带中组 fractalX1/X2', () {
+  test('collectFractalJudgmentEvents kn=0：事件带中组 fractalX1/X2', () {
     final bars = <KlineBar>[
       for (var i = 0; i < 12; i++)
         KlineBar(
@@ -67,7 +67,7 @@ void main() {
         ),
     ];
     final events = collectFractalJudgmentEvents(
-      kn: 1,
+      kn: 0,
       bars: bars,
       levels: const [],
       barFeatures: const [],
@@ -87,7 +87,7 @@ void main() {
     }
   });
 
-  test('computeFractalJudgmentSeries kn=1：稀疏打点，非整框铺满', () {
+  test('computeFractalJudgmentSeries kn=0：稀疏打点，非整框铺满', () {
     // 构造易出分型的上下交错高低
     final bars = <KlineBar>[
       for (var i = 0; i < 12; i++)
@@ -105,7 +105,7 @@ void main() {
         ),
     ];
     final series = computeFractalJudgmentSeries(
-      kn: 1,
+      kn: 0,
       bars: bars,
       levels: const [],
       barFeatures: const [],
@@ -128,7 +128,7 @@ void main() {
     expect(signed.where((v) => v != 0).length, hit.length);
   });
 
-  test('computeFractalJudgmentSeries kn=2 含进行中虚拟单元不抛', () {
+  test('computeFractalJudgmentSeries kn=1 含进行中虚拟单元不抛', () {
     final bars = [
       for (var i = 0; i < 8; i++)
         KlineBar(
@@ -146,7 +146,7 @@ void main() {
     ];
     const levels = [
       LevelBundle(
-        level: 1,
+        level: 0,
         unitBars: [
           LevelUnitBar(
             idx: 0,
@@ -188,7 +188,7 @@ void main() {
       ),
     ];
     final series = computeFractalJudgmentSeries(
-      kn: 2,
+      kn: 1,
       bars: bars,
       levels: levels,
       barFeatures: const [],

@@ -7,7 +7,7 @@ import 'chart_view_compute.dart';
 
 /// Kn三型平移线 / Kn四型对线：确认分型极点几何（纯 Flutter）。
 ///
-/// 全层同构：displayKn → K0=`k0Confirms`；Kn≥1 → `levels[level==displayKn+1].confirms`
+/// 方案B全层同构：displayKn → K0=`k0Confirms`；Kn≥1 → `levels[level==displayKn].confirms`
 /// 确认序滑动窗（三型3 / 四型4）；绘制默认只显最新窗，十字则显近邻窗；tip 同口径。
 
 /// 分型极点（极点 K0 索引 + 价；confirmX=确认步）。
@@ -109,7 +109,8 @@ List<FxPole> collectLevelFxPoles({
       ));
     }
   } else {
-    final lv = _bundleAtLevel(levels, displayKn + 1);
+    // 方案B：Kn≥1 取 structure level==displayKn
+    final lv = _bundleAtLevel(levels, displayKn);
     if (lv == null) return const [];
     final ordered = [...lv.confirms]..sort((a, b) => a.x.compareTo(b.x));
     for (final c in ordered) {

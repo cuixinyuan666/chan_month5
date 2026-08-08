@@ -608,13 +608,14 @@ mod tests {
         .expect("load 002003");
         assert!(bars.len() > 24);
         let at21 = build_kline_combine_bundle(&bars[..=21]);
-        let k1_21 = at21.levels.iter().find(|l| l.level == 1).unwrap();
+        // 方案B：K0连线层 structure.level==0；帧上 level 仍为显示中枢号 1
+        let k1_21 = at21.levels.iter().find(|l| l.level == 0).unwrap();
         assert!(
             k1_21.zs_frames.len() < 2 || k1_21.sell1_frames.is_empty(),
             "idx=21 must not yet emit K1 sell1"
         );
         let at24 = build_kline_combine_bundle(&bars[..=24]);
-        let k1_24 = at24.levels.iter().find(|l| l.level == 1).unwrap();
+        let k1_24 = at24.levels.iter().find(|l| l.level == 0).unwrap();
         assert_eq!(k1_24.zs_frames.len(), 2);
         assert_eq!(k1_24.sell1_frames.len(), 1);
         assert_eq!(k1_24.sell1_frames[0].label, "1Sa");
@@ -788,7 +789,7 @@ mod tests {
         .expect("load 002003");
         assert!(bars.len() > 27);
         let at25 = build_kline_combine_bundle(&bars[..=25]);
-        let k1_25 = at25.levels.iter().find(|l| l.level == 1).unwrap();
+        let k1_25 = at25.levels.iter().find(|l| l.level == 0).unwrap();
         let act25 = k1_25.active_unit.as_ref().expect("step25 active");
         assert_eq!(act25.dir, 1, "idx=25 active is up: no new sell");
         assert!(
@@ -800,7 +801,7 @@ mod tests {
         );
 
         let at26 = build_kline_combine_bundle(&bars[..=26]);
-        let k1_26 = at26.levels.iter().find(|l| l.level == 1).unwrap();
+        let k1_26 = at26.levels.iter().find(|l| l.level == 0).unwrap();
         let act26 = k1_26.active_unit.as_ref().expect("step26 active");
         assert_eq!(act26.dir, -1);
         assert_eq!(act26.idx, 5);
@@ -818,7 +819,7 @@ mod tests {
         );
 
         let at27 = build_kline_combine_bundle(&bars[..=27]);
-        let k1_27 = at27.levels.iter().find(|l| l.level == 1).unwrap();
+        let k1_27 = at27.levels.iter().find(|l| l.level == 0).unwrap();
         let act27 = k1_27.active_unit.as_ref().expect("step27 active");
         assert_eq!(act27.idx, act26.idx, "27 same active K1 as 26");
         assert_eq!(act27.x1, act26.x1);

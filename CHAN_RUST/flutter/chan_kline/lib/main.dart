@@ -53,6 +53,8 @@ import 'window_work_area.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // 方案B：Flutter 层号彻底改（structure 0 起编）
+  MsgHistory.instance.appendPlanBLayerRemap();
   // 命名变更追踪：笔/线段 → K0连线/K1连线；中枢/买卖点口径见 appendZSSplitNormalOverSeg
   MsgHistory.instance.appendNamingRename();
   // 新特性追踪：构建中合并框（虚线），便于调试时从历史记录追溯口径演进
@@ -676,13 +678,14 @@ class _KlineHomePageState extends State<KlineHomePage> {
     required List<K0Line> k0Lines,
   }) {
     if (bars.isEmpty) return;
+    // 方案B：分型判断 kn=0..chartMaxKn-1
     final maxKnProbe = chartMaxKn(levels: levels, k0Lines: k0Lines);
     final knHi = maxKnProbe < 1 ? 1 : maxKnProbe;
     final nextHistory = <int, List<FractalJudgmentEvent>>{
       for (final e in _judgmentHistoryByKn.entries)
         e.key: List<FractalJudgmentEvent>.from(e.value),
     };
-    for (var kn = 1; kn <= knHi; kn++) {
+    for (var kn = 0; kn < knHi; kn++) {
       final log = nextHistory.putIfAbsent(kn, () => <FractalJudgmentEvent>[]);
       mergeFractalJudgmentEventLog(
         log,
@@ -736,10 +739,11 @@ class _KlineHomePageState extends State<KlineHomePage> {
   }
 
   /// Kn≥1：本步动态 active 段 idx；K0 无 active（分钟K段不延伸）。
+  /// 方案B：display kn → structure level==kn-1。
   int? _activeSegIdxForKn(KlineCombineBundle bundle, int kn) {
     if (kn <= 0) return null;
     for (final lv in bundle.levels) {
-      if (lv.level == kn) return lv.activeUnit?.idx;
+      if (lv.level == kn - 1) return lv.activeUnit?.idx;
     }
     return null;
   }

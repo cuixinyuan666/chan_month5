@@ -10,7 +10,7 @@ import 'adjacent_ratio_compute.dart';
 /// - 子分型打开推升/推降窗口后按 K0 步持续算；子反向分型确认当步起停写（单点不连后）
 /// - 父分型确认：本组停止，下一组命名重置，自确认步按反向趋势重开
 ///
-/// 映射：子线 level==displayKn+1；子分型 confirms@level+1；父分型 confirms@level+2。
+/// 方案B映射：子线 level==displayKn；子分型 confirms@displayKn；父分型 confirms@displayKn+1。
 ///
 /// 踩坑（2026-07-31）：
 /// - 勿用「父段 end_confirm」替代「父分型 confirms」切组；a0 取 fractalHigh/Low 而非 seq[0]
@@ -242,15 +242,15 @@ StepRhythmStepResult? calcStepRhythmForStep({
     displayX: displayX,
   );
 
-  // 子线层分型 = displayKn 分型确认；父层分型 = displayKn+1 分型确认
+  // 方案B：子线分型=displayKn；父分型=displayKn+1
   final childFx = fractalConfirmsOnDisplayX(
     levels: levels,
-    level: displayKn + 1,
+    level: displayKn,
     displayX: displayX,
   );
   final parentFx = fractalConfirmsOnDisplayX(
     levels: levels,
-    level: displayKn + 2,
+    level: displayKn + 1,
     displayX: displayX,
   );
 

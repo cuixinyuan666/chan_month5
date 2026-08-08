@@ -1855,8 +1855,9 @@ class _KlineCompositePainter extends CustomPainter {
 
     // —— base：蜡烛 / 缠论 / 坐标轴（不含筹码与十字）——
     final chanDraw = !chipOnlyMode;
+    // 方案B：K0 蜡烛/合并/连线 kn==0
     final showK0 = !chipOnlyMode
-        ? mainIndicators.contains(const MainChartIndicator.kn(1))
+        ? mainIndicators.contains(const MainChartIndicator.kn(0))
         : true;
     if (showK0) {
       _drawCandles(canvas, size.width, plotTop, plotH, barW, slotW);
@@ -1864,10 +1865,10 @@ class _KlineCompositePainter extends CustomPainter {
     if (chanDraw && mainIndicators.isNotEmpty) {
       for (final ind in mainIndicators) {
         if (ind.kind == MainIndicatorKind.combine) {
-          if (ind.kn == 1) {
+          if (ind.kn == 0) {
             _drawKlineCombineOnMainChart(
                 canvas, size.width, plotTop, plotH, barW, slotW);
-          } else if (ind.kn == 2) {
+          } else if (ind.kn == 1) {
             _drawK1CombineOnMainChart(
                 canvas, size.width, plotTop, plotH, barW, slotW);
           } else {
@@ -1875,15 +1876,15 @@ class _KlineCompositePainter extends CustomPainter {
                 canvas, size.width, plotTop, plotH, barW, slotW, ind.kn);
           }
         } else if (ind.kind == MainIndicatorKind.kn) {
-          if (ind.kn == 2) {
+          if (ind.kn == 1) {
             _drawK1Candles(
                 canvas, size.width, plotTop, plotH, barW, slotW, faint: true);
-          } else if (ind.kn >= 3) {
+          } else if (ind.kn >= 2) {
             _drawLevelUnitCandlesOnMainChart(
                 canvas, size.width, plotTop, plotH, barW, slotW, ind.kn);
           }
         } else if (ind.kind == MainIndicatorKind.line) {
-          if (ind.kn == 1) {
+          if (ind.kn == 0) {
             _drawK0Lines(canvas, size.width, plotTop, plotH, slotW);
           } else {
             _drawK1LinesForLevel(
@@ -2211,8 +2212,8 @@ class _KlineCompositePainter extends CustomPainter {
     }
 
     _drawBuildingK0Line(canvas, w, plotTop, plotH, slotW);
-    // 种子框首段：UNKNOWN 开口 / JUDGE·CONFIRM ABC（level=1，与 Kn 同构）
-    _drawSeedPhaseLines(canvas, w, plotTop, plotH, slotW, level: 1, style: null);
+    // 方案B：种子框首段 structure level==0
+    _drawSeedPhaseLines(canvas, w, plotTop, plotH, slotW, level: 0, style: null);
   }
 
   /// 取 as-of 当下该层种子框快照（逐K冻结，与 tooltip/ML 同源）
@@ -2222,11 +2223,10 @@ class _KlineCompositePainter extends CustomPainter {
     if (asOf < 0) return null;
     final idx = asOf.clamp(0, barFeatures.length - 1);
     final feat = barFeatures[idx];
+    // 方案B：只按 lv.level 匹配，允许 level==0
     for (final s in feat.levels) {
       if (s.level == level) return s;
     }
-    final li = level - 1;
-    if (li >= 0 && li < feat.levels.length) return feat.levels[li];
     return null;
   }
 
@@ -2403,8 +2403,8 @@ class _KlineCompositePainter extends CustomPainter {
       fx: snap.seedFx == 'UNKNOWN' ? 'UNKNOWN' : snap.seedFx,
       count: 1,
     );
-    // 种子框跟该层合并同色（不再单独金色）
-    final seedColor = ChartLevelLineStyle.forLevel(level).color;
+    // 种子框跟该层合并同色（方案B：level=displayKn）
+    final seedColor = ChartLevelLineStyle.forDisplayKn(level).color;
     _drawCombineFramesOnMainChart(
       canvas,
       w,
@@ -2442,16 +2442,17 @@ class _KlineCompositePainter extends CustomPainter {
       asOf: tailIdx,
       includeBuilding: true,
     );
+    // 方案B：K0连线 structure level==0；分型判断 kn==0
     final frozenIdx = <int>{
       for (final s in asOfLevelSegments(
         levels: levels,
-        level: 1,
+        level: 0,
         asOf: tailIdx,
       ))
         s.idx,
     };
     final liveJudgments = collectFractalJudgmentEvents(
-      kn: 1,
+      kn: 0,
       bars: bars,
       levels: levels,
       barFeatures: barFeatures,
@@ -2601,7 +2602,7 @@ class _KlineCompositePainter extends CustomPainter {
     return 0;
   }
 
-  /// 指定层连线（内部 kn≥2 → 展示名 K(kn-1)连线）；勾哪层画哪层。
+  /// 方案B：指定层连线（kn≥1 → K{kn}连线）；勾哪层画哪层。
   void _drawK1LinesForLevel(
     Canvas canvas,
     double w,
@@ -2610,7 +2611,7 @@ class _KlineCompositePainter extends CustomPainter {
     double slotW,
     int kn,
   ) {
-    if (kn < 2) return;
+    if (kn < 1) return;
     final tailIdx = segAsOf ?? (bars.isEmpty ? -1 : bars.last.idx);
 
     LevelBundle? bundle;
@@ -2637,13 +2638,13 @@ class _KlineCompositePainter extends CustomPainter {
         plotH,
         slotW,
         level: kn,
-        style: ChartLevelLineStyle.forLevel(kn),
+        style: ChartLevelLineStyle.forDisplayKn(kn),
       );
       return;
     }
-    // 回退：仅 K2 且无 levels 时用旧 k1Analysis
-    if (kn != 2) return;
-    final style = ChartLevelLineStyle.forLevel(2);
+    // 回退：仅 K1 且无 levels 时用旧 k1Analysis
+    if (kn != 1) return;
+    final style = ChartLevelLineStyle.forDisplayKn(1);
     final paint = Paint()
       ..color = style.color
       ..strokeWidth = style.strokeWidth
@@ -2670,7 +2671,7 @@ class _KlineCompositePainter extends CustomPainter {
         plotTop,
         plotH,
         slotW,
-        level: 2,
+        level: 1,
         style: style,
         tailIdx: tailIdx,
         confirms: const [],
@@ -2730,7 +2731,7 @@ class _KlineCompositePainter extends CustomPainter {
     );
     if (displayFrames.isEmpty) return;
 
-    final style = ChartLevelLineStyle.forLevel(kn);
+    final style = ChartLevelLineStyle.forDisplayKn(kn);
     _drawCombineFramesOnMainChart(
       canvas,
       w,
@@ -2758,7 +2759,7 @@ class _KlineCompositePainter extends CustomPainter {
     );
   }
 
-  /// 取某层（kn≥2）的单元 view（用于合并框横向对齐 / KN 指标画淡实体），含十字线 as-of 重算。
+  /// 取某层（kn≥1）的单元 view（用于合并框横向对齐 / KN 指标画淡实体），含十字线 as-of 重算。
   List<LevelUnitBarView> _levelUnitViewsForLevel(int kn) {
     LevelBundle? bundle;
     for (final b in levels) {
@@ -2859,7 +2860,7 @@ class _KlineCompositePainter extends CustomPainter {
     return buildLevelUnitBarViews(frozenBars, activeUnit: active);
   }
 
-  /// 主图 Kn三型平移线（internal kn≥1 → 显示 K(kn-1)）。
+  /// 主图 Kn三型平移线（方案B：kn==displayKn）。
   void _drawFxTripleParallel(
     Canvas canvas,
     double w,
@@ -2868,8 +2869,8 @@ class _KlineCompositePainter extends CustomPainter {
     double slotW,
     int kn,
   ) {
-    if (kn < 1 || bars.isEmpty) return;
-    final displayKn = kn - 1;
+    if (kn < 0 || bars.isEmpty) return;
+    final displayKn = kn;
     final asOf = segAsOf;
     // 十字 asOf：层/确认只认 asOfBundle（失败=空，禁末态）
     final lv = asOf != null
@@ -2904,7 +2905,7 @@ class _KlineCompositePainter extends CustomPainter {
     }
   }
 
-  /// 主图 Kn四型对线（两顶线 + 两底线）。
+  /// 主图 Kn四型对线（两顶线 + 两底线）。方案B：kn==displayKn。
   void _drawFxQuadPair(
     Canvas canvas,
     double w,
@@ -2913,8 +2914,8 @@ class _KlineCompositePainter extends CustomPainter {
     double slotW,
     int kn,
   ) {
-    if (kn < 1 || bars.isEmpty) return;
-    final displayKn = kn - 1;
+    if (kn < 0 || bars.isEmpty) return;
+    final displayKn = kn;
     final asOf = segAsOf;
     final lv = asOf != null
         ? (zsAsOfBundle?.levels ?? const <LevelBundle>[])
@@ -3224,7 +3225,7 @@ class _KlineCompositePainter extends CustomPainter {
     return isBuy ? const Color(0xFFF97316) : const Color(0xFF0D9488);
   }
 
-  /// 主图 Kn趋势线（父段内支撑/压力；子线层同号）。
+  /// 主图 Kn趋势线（父段内支撑/压力；子线层同号）。方案B：kn==displayKn。
   void _drawTrendLine(
     Canvas canvas,
     double w,
@@ -3233,8 +3234,8 @@ class _KlineCompositePainter extends CustomPainter {
     double slotW,
     int kn,
   ) {
-    if (kn < 1 || bars.isEmpty) return;
-    final displayKn = kn - 1;
+    if (kn < 0 || bars.isEmpty) return;
+    final displayKn = kn;
     final asOf = segAsOf;
     // 十字 asOf：只认 asOfBundle（失败=空，禁末态）
     final lv = asOf != null
@@ -3272,7 +3273,7 @@ class _KlineCompositePainter extends CustomPainter {
     required FxExtendRay ray,
     required int displayKn,
   }) {
-    final style = ChartLevelLineStyle.forLevel(displayKn + 1);
+    final style = ChartLevelLineStyle.forDisplayKn(displayKn);
     final paint = Paint()
       ..color = style.color.withValues(alpha: style.buildingAlpha)
       ..strokeWidth = style.buildingStrokeWidth
@@ -3528,7 +3529,7 @@ class _KlineCompositePainter extends CustomPainter {
     return (left, right);
   }
 
-  /// 单层 N 段（level≥2）已冻结段 + 构建中段。
+  /// 单层 N 段（方案B：level≥1）已冻结段 + 构建中段。
   void _drawOneLevelLines(
     Canvas canvas,
     double w,
@@ -3539,8 +3540,8 @@ class _KlineCompositePainter extends CustomPainter {
     required int tailIdx,
   }) {
     final level = bundle.level;
-    if (level < 2) return;
-    final style = ChartLevelLineStyle.forLevel(level);
+    if (level < 1) return;
+    final style = ChartLevelLineStyle.forDisplayKn(level);
     final paint = Paint()
       ..color = style.color
       ..strokeWidth = style.strokeWidth
@@ -3864,7 +3865,8 @@ class _KlineCompositePainter extends CustomPainter {
     if (combineFrames.isEmpty) return;
     // 末组=构建中合并（虚线）；前组=已冻结合并（实线）。
     // 信号取 CombineEngine.groups 末项（已在 combineFrames 末尾），不是 activeUnit（那是进行中段）。
-    final k0Style = ChartLevelLineStyle.forLevel(1);
+    // 方案B：K0 displayKn=0
+    final k0Style = ChartLevelLineStyle.forDisplayKn(0);
     _drawCombineFramesOnMainChart(
       canvas,
       w,
@@ -3878,7 +3880,7 @@ class _KlineCompositePainter extends CustomPainter {
       lastAsBuilding: showBuildingDash,
       buildingDashPattern: k0Style.buildingDashPattern,
     );
-    // 种子框（K0合并层=level1）
+    // 种子框（K0合并层=structure 0）
     _drawSeedBoxOverlay(
       canvas,
       w,
@@ -3886,8 +3888,8 @@ class _KlineCompositePainter extends CustomPainter {
       plotH,
       barW,
       slotW,
-      level: 1,
-      buildingDashPattern: ChartLevelLineStyle.forLevel(1).buildingDashPattern,
+      level: 0,
+      buildingDashPattern: ChartLevelLineStyle.forDisplayKn(0).buildingDashPattern,
     );
   }
 
@@ -3970,7 +3972,8 @@ class _KlineCompositePainter extends CustomPainter {
     if (k1CombineFrames.isEmpty && k1BarViews.isEmpty) return;
 
     if (k1CombineFrames.isNotEmpty) {
-      final k1Style = ChartLevelLineStyle.forLevel(2);
+      // 方案B：K1 displayKn=1
+      final k1Style = ChartLevelLineStyle.forDisplayKn(1);
       _drawCombineFramesOnMainChart(
         canvas,
         w,
@@ -3987,7 +3990,7 @@ class _KlineCompositePainter extends CustomPainter {
         buildingDashPattern: k1Style.buildingDashPattern,
       );
     }
-    // 种子框（K1合并层=level2）
+    // 种子框（K1合并层=structure 1）
     _drawSeedBoxOverlay(
       canvas,
       w,
@@ -3995,8 +3998,8 @@ class _KlineCompositePainter extends CustomPainter {
       plotH,
       barW,
       slotW,
-      level: 2,
-      buildingDashPattern: ChartLevelLineStyle.forLevel(2).buildingDashPattern,
+      level: 1,
+      buildingDashPattern: ChartLevelLineStyle.forDisplayKn(1).buildingDashPattern,
     );
   }
 
@@ -5466,9 +5469,8 @@ class _KlineCompositePainter extends CustomPainter {
       );
     }
 
-    // 【语义统一·K0】labelKn==1（显示 K0分型确认）只画 k0ConfirmSignals；
-    // level==1.confirms 与 k0 同源，但禁止优先走 bundle（易误读成 K1）。
-    if (labelKn == 1) {
+    // 方案B：labelKn==0（K0分型确认）只画 k0ConfirmSignals
+    if (labelKn == 0) {
       for (final s in k0ConfirmSignals) {
         paintPoint(s.x, s.value);
       }
@@ -5502,7 +5504,8 @@ class _KlineCompositePainter extends CustomPainter {
     int stackRank = 0,
     int stackCount = 1,
   }) {
-    if (bars.isEmpty || labelKn < 1) return;
+    // 方案B：分型判断 kn≥0
+    if (bars.isEmpty || labelKn < 0) return;
     const minV = -1.0;
     const maxV = 1.0;
     final span = maxV - minV;
@@ -5632,9 +5635,8 @@ class _KlineCompositePainter extends CustomPainter {
         break;
       }
     }
-    // 【语义统一·K0】labelKn==1（显示 K0分型极点距）只读 barFeatures（=k0 极点距）；
-    // level==1.confirms 虽与 k0 同源，禁止优先走 bundle，避免误判为「K1 层」。
-    if (labelKn == 1 && barFeatures.isNotEmpty) {
+    // 方案B：labelKn==0 只读 barFeatures；kn≥1 用 bundle.confirms
+    if (labelKn == 0 && barFeatures.isNotEmpty) {
       series = List<int>.generate(
         n,
         (i) => i < barFeatures.length ? barFeatures[i].fractalPeakDist : 0,
@@ -5642,7 +5644,7 @@ class _KlineCompositePainter extends CustomPainter {
       color = const Color(0xFF38BDF8);
     } else if (bundle != null) {
       series = _peakDistSeries(n, bundle.confirms);
-      color = ChartLevelLineStyle.forLevel(level).color;
+      color = ChartLevelLineStyle.forDisplayKn(level).color;
     } else {
       return;
     }
@@ -5738,8 +5740,8 @@ class _KlineCompositePainter extends CustomPainter {
         break;
       }
     }
-    // 【语义统一·K0】labelKn==1 只画 k0ConfirmSignals；Kn≥2 才用 LevelBundle
-    if (labelKn == 1) {
+    // 方案B：labelKn==0 只画 k0ConfirmSignals；kn≥1 用 LevelBundle
+    if (labelKn == 0) {
       for (final s in k0ConfirmSignals) {
         if (!s.truncated) continue;
         paintPoint(s.x, s.value);

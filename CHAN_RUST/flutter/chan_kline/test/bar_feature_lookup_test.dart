@@ -31,8 +31,9 @@ BarCrosshairFeature _feat(int idx, {int? unitIdx, int level2Unit = -1}) {
     weekday: '周一',
     mergeInnerSeq: 0,
     levels: [
+      // 方案B：structure 0=K0连线 → K1 块
       LevelSnap(
-        level: 1,
+        level: 0,
         unitIdx: unitIdx,
         unitDir: 1,
         unitX1: unitIdx == null ? -1 : 0,
@@ -49,7 +50,7 @@ BarCrosshairFeature _feat(int idx, {int? unitIdx, int level2Unit = -1}) {
       ),
       if (level2Unit >= 0)
         LevelSnap(
-          level: 2,
+          level: 1,
           unitIdx: level2Unit,
           unitDir: -1,
           unitX1: 0,
@@ -76,7 +77,7 @@ void main() {
       combineFrames: const [],
       k0Confirms: const [],
       barFeatures: [for (var i = 0; i < 3; i++) _feat(i)],
-      levels: const [LevelBundle(level: 1), LevelBundle(level: 2)],
+      levels: const [LevelBundle(level: 0), LevelBundle(level: 1)],
     );
     final lines = lookup.crosshairTooltipLines(0, timePart: '2024/01/01 09:00');
     expect(lines.first, startsWith('日期时间:2024/01/01 09:00'));
@@ -98,10 +99,10 @@ void main() {
       ],
       barFeatures: feats,
       levels: [
-        const LevelBundle(level: 1, confirms: [
+        const LevelBundle(level: 0, confirms: [
           LevelConfirm(x: 2, fx: 'BOTTOM', value: 1),
         ]),
-        const LevelBundle(level: 2, confirms: [
+        const LevelBundle(level: 1, confirms: [
           LevelConfirm(x: 4, fx: 'TOP', value: -1),
         ]),
       ],
@@ -143,7 +144,7 @@ void main() {
       barFeatures: feats,
       levels: [
         const LevelBundle(
-          level: 1,
+          level: 0,
           combineFrames: [
             KlineCombineFrame(
                 x1: 0, x2: 5, t1: '', t2: '', high: 12.0, low: 8.0, fx: 'UNKNOWN', count: 3),
@@ -199,7 +200,7 @@ void main() {
       barFeatures: feats,
       levels: [
         const LevelBundle(
-          level: 1,
+          level: 0,
           unitBars: [
             LevelUnitBar(idx: 0, dir: 1, x1: 0, x2: 2, confirmX: 3, volume: 303),
           ],

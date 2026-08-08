@@ -50,7 +50,8 @@ List<KnOhlcSample> collectKnOhlcSamples({
     }
     return out;
   }
-  final lv = bundleAtLevel(levels, displayKn);
+  // 方案B：Math/OHLC Kn≥1 → structure level==displayKn-1
+  final lv = bundleAtLevel(levels, displayKn - 1);
   if (lv == null) return const [];
   final out = <KnOhlcSample>[];
   for (final u in lv.unitBars) {

@@ -6,6 +6,7 @@ import 'package:chan_kline/models/buy_n_frame.dart';
 import 'package:chan_kline/models/sell_n_frame.dart';
 import 'package:chan_kline/models/chart_indicator.dart';
 import 'package:chan_kline/models/kline_bar.dart';
+import 'package:chan_kline/models/level_models.dart';
 
 void main() {
   test('BuyNFrame fromJson', () {
@@ -106,10 +107,12 @@ void main() {
         amount: 0,
       ),
     );
+    // 方案B：挂 structure0 以出 K1 块
     final lookup = BarFeatureLookup.build(
       bars: bars,
       combineFrames: const [],
       k0Confirms: const [],
+      levels: const [LevelBundle(level: 0)],
       buyNHistoryByKn: {
         1: const [
           BuyNFrame(

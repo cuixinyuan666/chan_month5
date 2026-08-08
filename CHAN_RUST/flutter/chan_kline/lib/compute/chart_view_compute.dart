@@ -205,14 +205,23 @@ LevelLineEndpoint? levelConfirmEndpoint(
   return LevelLineEndpoint(barIdx: poleIdx, price: price);
 }
 
+/// 方案B：按 lv.level==level 查找，允许 level==0。
+LevelBundle? _bundleAtStructureLevel(List<LevelBundle> levels, int level) {
+  for (final lv in levels) {
+    if (lv.level == level) return lv;
+  }
+  return null;
+}
+
 /// as-of 已冻结 N 段（`endConfirmX <= asOf`）。
 List<LevelSegmentN> asOfLevelSegments({
   required List<LevelBundle> levels,
   required int level,
   required int asOf,
 }) {
-  if (level < 1 || levels.length < level) return const [];
-  final bundle = levels[level - 1];
+  if (level < 0) return const [];
+  final bundle = _bundleAtStructureLevel(levels, level);
+  if (bundle == null) return const [];
   return bundle.segments.where((s) => s.endConfirmX <= asOf).toList();
 }
 
@@ -233,8 +242,9 @@ int buildingLevelDirAt({
   required int level,
   required int asOf,
 }) {
-  if (level < 1 || levels.length < level) return 0;
-  final bundle = levels[level - 1];
+  if (level < 0) return 0;
+  final bundle = _bundleAtStructureLevel(levels, level);
+  if (bundle == null) return 0;
 
   LevelSnap? snap;
   if (asOf < barFeatures.length && barFeatures[asOf].idx == asOf) {
@@ -293,10 +303,11 @@ List<K1Bar> asOfK1Bars({
   if (bars.isEmpty) return const [];
   final bx = asOf.clamp(0, bars.length - 1);
 
-  final l1 = levels.isNotEmpty ? levels.first : null;
+  // 方案B：K0连线 = structure level==0
+  final l0 = _bundleAtStructureLevel(levels, 0);
   final frozen = <K1Bar>[];
-  if (l1 != null) {
-    for (final s in l1.segments) {
+  if (l0 != null) {
+    for (final s in l0.segments) {
       if (s.endConfirmX > bx) continue;
       final x1 = s.beginPoleX < s.endPoleX ? s.beginPoleX : s.endPoleX;
       final x2 = s.beginPoleX > s.endPoleX ? s.beginPoleX : s.endPoleX;
@@ -314,17 +325,25 @@ List<K1Bar> asOfK1Bars({
     }
   }
 
-  // 当步快照（逐K当下冻结）：进行中 K0连线或刚冻结首根
+  // 当步快照（逐K当下冻结）：进行中 K0连线或刚冻结首根（level==0）
   LevelSnap? snap;
   if (bx < barFeatures.length && barFeatures[bx].idx == bx) {
-    final ls = barFeatures[bx].levels;
-    if (ls.isNotEmpty) snap = ls.first;
-  } else {
-    for (final f in barFeatures) {
-      if (f.idx == bx && f.levels.isNotEmpty) {
-        snap = f.levels.first;
+    for (final ls in barFeatures[bx].levels) {
+      if (ls.level == 0) {
+        snap = ls;
         break;
       }
+    }
+  } else {
+    for (final f in barFeatures) {
+      if (f.idx != bx) continue;
+      for (final ls in f.levels) {
+        if (ls.level == 0) {
+          snap = ls;
+          break;
+        }
+      }
+      if (snap != null) break;
     }
   }
 
@@ -424,8 +443,10 @@ List<K1Bar> asOfLevelVirtualK1Bars({
   required int asOf,
   bool includeBuilding = true,
 }) {
-  if (level < 1 || levels.length < level) return const [];
-  final bundle = levels[level - 1];
+  // 方案B：按 lv.level==level 查找，允许 level==0
+  if (level < 0) return const [];
+  final bundle = _bundleAtStructureLevel(levels, level);
+  if (bundle == null) return const [];
   final frozen = asOfLevelSegments(levels: levels, level: level, asOf: asOf)
       .map(levelSegmentToK1Bar)
       .toList();

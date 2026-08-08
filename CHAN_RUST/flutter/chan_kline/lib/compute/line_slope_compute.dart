@@ -5,7 +5,7 @@ import 'adjacent_ratio_compute.dart';
 
 /// Kn连线斜率：末根子线 (endVal-beginVal)/(endX-beginX)。
 ///
-/// **全层同构**：displayKn → LevelBundle.level==displayKn+1（与比例/节奏/主图 Kn连线同号）。
+/// **方案B全层同构**：displayKn → LevelBundle.level==displayKn（与比例/节奏/主图 Kn连线同号）。
 /// 子线复用 [buildRatioChildren]（冻段+展示轨，虚实不论）；K0 颗粒度每步覆盖写入。
 
 /// 单步产出（K0 颗粒度；同 x 覆盖更新）。

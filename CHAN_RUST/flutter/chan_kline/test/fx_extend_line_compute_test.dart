@@ -209,8 +209,9 @@ void main() {
       final cat = buildMainIndicatorCatalog(2);
       final t = cat.where((e) => e.kind == MainIndicatorKind.fxTripleParallel);
       final q = cat.where((e) => e.kind == MainIndicatorKind.fxQuadPair);
-      expect(t.map((e) => e.kn), [1, 2]);
-      expect(q.map((e) => e.kn), [1, 2]);
+      // 方案B：连线族 kn==displayKn
+      expect(t.map((e) => e.kn), [0, 1]);
+      expect(q.map((e) => e.kn), [0, 1]);
       expect(t.every((e) => e.label.contains('三型平移线')), isTrue);
       expect(q.every((e) => e.label.contains('四型对线')), isTrue);
 

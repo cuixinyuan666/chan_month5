@@ -468,8 +468,9 @@ void main() {
       frames: const [],
       k0Confirms: const [],
       levels: [
+        // 方案B：structure 0 → out[1]
         const LevelBundle(
-          level: 1,
+          level: 0,
           zsFrames: [
             ZSFrame(
               x1: 1,
@@ -511,10 +512,11 @@ void main() {
   });
 
   test('默认绘制白名单：主图四类 + 副图五类；其余静音', () {
-    expect(isDefaultDrawnMain(const MainChartIndicator.kn(1)), isTrue);
-    expect(isDefaultDrawnMain(const MainChartIndicator.combine(1)), isTrue);
+    // 方案B：K0 连线/合并/Kn kn==0
+    expect(isDefaultDrawnMain(const MainChartIndicator.kn(0)), isTrue);
+    expect(isDefaultDrawnMain(const MainChartIndicator.combine(0)), isTrue);
     expect(isDefaultDrawnMain(const MainChartIndicator.zs(0)), isTrue);
-    expect(isDefaultDrawnMain(const MainChartIndicator.line(1)), isTrue);
+    expect(isDefaultDrawnMain(const MainChartIndicator.line(0)), isTrue);
     expect(isDefaultDrawnMain(const MainChartIndicator.meanLine(0)), isFalse);
     expect(isDefaultDrawnMain(const MainChartIndicator.boll(0)), isFalse);
 

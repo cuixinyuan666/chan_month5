@@ -101,8 +101,9 @@ List<KlineBar> _bars(int n) => [for (var i = 0; i < n; i++) _bar(i)];
     high: activeHigh,
     low: activeLow,
   );
+  // 方案B：displayKn=1 → structure level==0
   final lv = LevelBundle(
-    level: 1,
+    level: 0,
     segments: segs,
     zsFrames: zsFrames,
     activeUnit: active,

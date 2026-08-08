@@ -78,7 +78,7 @@ extension MainIndicatorKindMeta on MainIndicatorKind {
 class MainChartIndicator {
   final MainIndicatorKind kind;
   /// kn=0：K0中枢/均线/通道（原生分钟K）；kn≥1：Kn中枢/均线/通道。
-  /// combine/line/kn/延伸：内部 kn≥1，显示层 = kn-1。
+  /// 方案B：combine/line/kn/延伸 catalog kn==displayKn（K0连线 kn=0）。
   final int kn;
 
   const MainChartIndicator.line(this.kn) : kind = MainIndicatorKind.line;
@@ -101,20 +101,20 @@ class MainChartIndicator {
   String get label {
     switch (kind) {
       case MainIndicatorKind.line:
-        return 'K${kn - 1}连线';
+        return 'K$kn连线';
       case MainIndicatorKind.combine:
-        return 'K${kn - 1}合并';
+        return 'K$kn合并';
       case MainIndicatorKind.kn:
-        return 'K${kn - 1}';
+        return 'K$kn';
       case MainIndicatorKind.zs:
         // 自定义命名：去掉「连续」，展示为「Kn中枢」
         return 'K$kn中枢';
       case MainIndicatorKind.fxTripleParallel:
-        return 'K${kn - 1}三型平移线';
+        return 'K$kn三型平移线';
       case MainIndicatorKind.fxQuadPair:
-        return 'K${kn - 1}四型对线';
+        return 'K$kn四型对线';
       case MainIndicatorKind.trendLine:
-        return 'K${kn - 1}趋势线';
+        return 'K$kn趋势线';
       case MainIndicatorKind.meanLine:
         return 'K$kn均线';
       case MainIndicatorKind.trendChannel:
@@ -126,23 +126,9 @@ class MainChartIndicator {
     }
   }
 
-  /// 显示层号（K0/K1/…），用于「Kn指标」全选。
+  /// 显示层号（K0/K1/…），用于「Kn指标」全选。方案B：连线族 kn 即 display。
   int get displayLevel {
-    switch (kind) {
-      case MainIndicatorKind.zs:
-      case MainIndicatorKind.meanLine:
-      case MainIndicatorKind.trendChannel:
-      case MainIndicatorKind.boll:
-      case MainIndicatorKind.demark:
-        return kn;
-      case MainIndicatorKind.line:
-      case MainIndicatorKind.combine:
-      case MainIndicatorKind.kn:
-      case MainIndicatorKind.fxTripleParallel:
-      case MainIndicatorKind.fxQuadPair:
-      case MainIndicatorKind.trendLine:
-        return kn - 1;
-    }
+    return kn;
   }
 
   /// 同层内展示序：… → 均线 → 通道 → 布林。
@@ -374,7 +360,7 @@ class SubChartIndicator {
   const SubChartIndicator.buyN(this.kn, this.bsClass)
       : kind = SubIndicatorKind.buyN,
         diverAlgo = null;
-  /// kn=连线显示层：K0相邻比例…（动态：冻段+展示轨虚线；数据 level==kn+1）
+  /// kn=连线显示层：K0相邻比例…（动态：冻段+展示轨虚线；方案B 数据 level==kn）
   const SubChartIndicator.adjacentRatio(this.kn)
       : kind = SubIndicatorKind.adjacentRatio,
         bsClass = null,
@@ -384,7 +370,7 @@ class SubChartIndicator {
       : kind = SubIndicatorKind.stepRhythm,
         bsClass = null,
         diverAlgo = null;
-  /// kn=连线显示层：K0连线斜率…（动态：冻段+展示轨；数据 level==kn+1）
+  /// kn=连线显示层：K0连线斜率…（动态：冻段+展示轨；方案B 数据 level==kn）
   const SubChartIndicator.lineSlope(this.kn)
       : kind = SubIndicatorKind.lineSlope,
         bsClass = null,
@@ -414,14 +400,14 @@ class SubChartIndicator {
       case SubIndicatorKind.tickCount:
         return 'K$kn笔数';
       case SubIndicatorKind.fractalConfirm:
-        return 'K${kn - 1}分型确认';
+        return 'K$kn分型确认';
       case SubIndicatorKind.fractalJudgment:
-        return 'K${kn - 1}分型判断';
-      // kn=1→显示 K0：数据源=k0_confirm/feat（勿把 level==1 当成 K1）
+        return 'K$kn分型判断';
+      // 方案B：kn==display；K0 数据源=k0_confirm/feat
       case SubIndicatorKind.fractalPeakDist:
-        return 'K${kn - 1}分型极点距';
+        return 'K$kn分型极点距';
       case SubIndicatorKind.truncation:
-        return 'K${kn - 1}截断';
+        return 'K$kn截断';
       case SubIndicatorKind.zsConfirm:
         return 'K$kn中枢确认';
       case SubIndicatorKind.zsJudgment:
@@ -449,31 +435,8 @@ class SubChartIndicator {
     }
   }
 
-  /// 显示层号（成交量/中枢判断确定/BS/比例/节奏/斜率/Math/背驰 kn 直接；分型类 kn-1）。
-  int get displayLevel {
-    switch (kind) {
-      case SubIndicatorKind.volume:
-      case SubIndicatorKind.tickCount:
-      case SubIndicatorKind.zsConfirm:
-      case SubIndicatorKind.zsJudgment:
-      case SubIndicatorKind.buy1:
-      case SubIndicatorKind.buy2:
-      case SubIndicatorKind.buyN:
-      case SubIndicatorKind.adjacentRatio:
-      case SubIndicatorKind.stepRhythm:
-      case SubIndicatorKind.lineSlope:
-      case SubIndicatorKind.macd:
-      case SubIndicatorKind.rsi:
-      case SubIndicatorKind.kdj:
-      case SubIndicatorKind.divergence:
-        return kn;
-      case SubIndicatorKind.fractalConfirm:
-      case SubIndicatorKind.fractalJudgment:
-      case SubIndicatorKind.fractalPeakDist:
-      case SubIndicatorKind.truncation:
-        return kn - 1;
-    }
-  }
+  /// 显示层号。方案B：全体 catalog kn 即 displayKn。
+  int get displayLevel => kn;
 
   @override
   bool operator ==(Object other) =>
@@ -487,45 +450,52 @@ class SubChartIndicator {
   int get hashCode => Object.hash(kind, kn, bsClass, diverAlgo);
 }
 
+/// 方案B：chartMaxKn = structureMax+1；无 levels 有 k0Lines→1；全空→0。
+/// 有 structure level==0 时勿再走「m==0 && k0Lines→1」旧逻辑。
 int chartMaxKn({
   required List<LevelBundle> levels,
   List<K0Line> k0Lines = const [],
 }) {
-  var m = 0;
-  for (final lv in levels) {
-    if (lv.level > m) m = lv.level;
+  if (levels.isEmpty) {
+    return k0Lines.isNotEmpty ? 1 : 0;
   }
-  if (m == 0 && k0Lines.isNotEmpty) m = 1;
-  return m;
+  var structureMax = 0;
+  for (final lv in levels) {
+    if (lv.level > structureMax) structureMax = lv.level;
+  }
+  return structureMax + 1;
 }
 
 List<MainChartIndicator> buildMainIndicatorCatalog(int maxKn) {
   final out = <MainChartIndicator>[];
-  final combineMax = maxKn < 1 ? 1 : maxKn;
-  final knMax = maxKn < 1 ? 1 : maxKn;
+  // 方案B：连线族 0..maxKn-1；中枢/Math 0..maxKn；趋势线上界 structureMax-1=maxKn-2（至少占位0）
+  final lineHi = maxKn < 1 ? 0 : maxKn - 1;
+  final lineCount = lineHi < 0 ? 0 : lineHi + 1;
+  final knMax = lineCount < 1 ? 1 : lineCount;
+  final combineMax = knMax;
   // 按类别分组：K线 → 合并 → 中枢 → 连线 → 延伸（筹码分布已迁设置·仅K0，不在目录）
-  for (var d = 1; d <= knMax; d++) {
+  for (var d = 0; d < knMax; d++) {
     out.add(MainChartIndicator.kn(d));
   }
-  for (var d = 1; d <= combineMax; d++) {
+  for (var d = 0; d < combineMax; d++) {
     out.add(MainChartIndicator.combine(d));
   }
   for (var d = 0; d <= maxKn; d++) {
     out.add(MainChartIndicator.zs(d));
   }
-  for (var d = 1; d <= maxKn; d++) {
+  for (var d = 0; d < maxKn; d++) {
     out.add(MainChartIndicator.line(d));
   }
-  // 三型平移 / 四型对线（与连线同号：d=1→K0）
-  for (var d = 1; d <= maxKn; d++) {
+  // 三型平移 / 四型对线（与连线同号：d=0→K0）
+  for (var d = 0; d < maxKn; d++) {
     out.add(MainChartIndicator.fxTripleParallel(d));
   }
-  for (var d = 1; d <= maxKn; d++) {
+  for (var d = 0; d < maxKn; d++) {
     out.add(MainChartIndicator.fxQuadPair(d));
   }
-  // 趋势线：子线层同号；需父层 level=n+2。maxKn<2 仍挂 K0 占位（计算空）
-  final trendMax = maxKn < 2 ? 1 : maxKn - 1;
-  for (var d = 1; d <= trendMax; d++) {
+  // 趋势线：子=displayKn、父=displayKn+1；maxKn<2 仍挂 K0 占位
+  final trendMax = maxKn < 2 ? 0 : maxKn - 2;
+  for (var d = 0; d <= trendMax; d++) {
     out.add(MainChartIndicator.trendLine(d));
   }
   // 均线 / 通道（与中枢同号：d=0→K0）
@@ -563,21 +533,18 @@ List<SubChartIndicator> buildSubIndicatorCatalog(
   for (var d = 0; d <= maxD; d++) {
     out.add(SubChartIndicator.tickCount(d));
   }
-  // 分型确认 (1..maxKn, internal kn)
-  for (var d = 1; d <= maxKn; d++) {
+  // 方案B：分型/截断与连线同号 0..maxKn-1
+  for (var d = 0; d < maxKn; d++) {
     out.add(SubChartIndicator.fractalConfirm(d));
   }
-  // 分型判断 (1..maxKn)
-  for (var d = 1; d <= maxKn; d++) {
+  for (var d = 0; d < maxKn; d++) {
     out.add(SubChartIndicator.fractalJudgment(d));
   }
-  // 分型极点距 (1..maxKn)
-  for (var d = 1; d <= maxKn; d++) {
+  for (var d = 0; d < maxKn; d++) {
     out.add(SubChartIndicator.fractalPeakDist(d));
   }
-  // 截断 (1..maxKn)
   if (truncationCheck) {
-    for (var d = 1; d <= maxKn; d++) {
+    for (var d = 0; d < maxKn; d++) {
       out.add(SubChartIndicator.truncation(d));
     }
   }
@@ -641,14 +608,15 @@ List<MainChartIndicator> mainIndicatorsForLevel(
   List<MainChartIndicator> catalog,
 ) {
   final allow = catalog.toSet();
+  // 方案B：连线/分型用 *(displayLevel)，不再 +1
   final candidates = <MainChartIndicator>[
-    MainChartIndicator.kn(displayLevel + 1),
-    MainChartIndicator.combine(displayLevel + 1),
+    MainChartIndicator.kn(displayLevel),
+    MainChartIndicator.combine(displayLevel),
     MainChartIndicator.zs(displayLevel),
-    MainChartIndicator.line(displayLevel + 1),
-    MainChartIndicator.fxTripleParallel(displayLevel + 1),
-    MainChartIndicator.fxQuadPair(displayLevel + 1),
-    MainChartIndicator.trendLine(displayLevel + 1),
+    MainChartIndicator.line(displayLevel),
+    MainChartIndicator.fxTripleParallel(displayLevel),
+    MainChartIndicator.fxQuadPair(displayLevel),
+    MainChartIndicator.trendLine(displayLevel),
     MainChartIndicator.meanLine(displayLevel),
     MainChartIndicator.trendChannel(displayLevel),
     MainChartIndicator.boll(displayLevel),
@@ -665,13 +633,14 @@ List<SubChartIndicator> subIndicatorsForLevel(
   int maxBsClass = 9,
 }) {
   final allow = catalog.toSet();
+  // 方案B：分型类 kn==displayLevel
   final candidates = <SubChartIndicator>[
     SubChartIndicator.volume(displayLevel),
     SubChartIndicator.tickCount(displayLevel),
-    SubChartIndicator.fractalConfirm(displayLevel + 1),
-    SubChartIndicator.fractalJudgment(displayLevel + 1),
-    SubChartIndicator.fractalPeakDist(displayLevel + 1),
-    SubChartIndicator.truncation(displayLevel + 1),
+    SubChartIndicator.fractalConfirm(displayLevel),
+    SubChartIndicator.fractalJudgment(displayLevel),
+    SubChartIndicator.fractalPeakDist(displayLevel),
+    SubChartIndicator.truncation(displayLevel),
     SubChartIndicator.zsConfirm(displayLevel),
     SubChartIndicator.zsJudgment(displayLevel),
     SubChartIndicator.buy1(displayLevel),

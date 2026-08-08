@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
-/// Kn 主图层样式：连线 / 合并 / 中枢 **同层同色**（展示名 K(level-1)）。
-/// 原始 Kn 蜡烛仍红绿涨跌，不走本表。
+/// Kn 主图层样式：连线 / 合并 / 中枢 **同层同色**。
+/// 方案B：按 displayKn（≥0）取色/线宽；原始 Kn 蜡烛仍红绿涨跌，不走本表。
 class ChartLevelLineStyle {
   /// 连线颜色（含 alpha）
   final Color color;
@@ -49,11 +49,15 @@ class ChartLevelLineStyle {
     return _displayKnColors[i];
   }
 
-  /// 按内部 level 取样式（2→展示 K1连线，3→K2连线，…；level=1→K0）。
-  static ChartLevelLineStyle forLevel(int level) {
-    assert(level >= 1);
-    final color = colorForDisplayKn(level - 1);
-    if (level == 1) {
+  /// 方案B：按 displayKn（≥0）取样式；等同 [forDisplayKn]。
+  static ChartLevelLineStyle forLevel(int displayKn) =>
+      forDisplayKn(displayKn);
+
+  /// 按 displayKn（≥0）取连线/合并样式。
+  static ChartLevelLineStyle forDisplayKn(int displayKn) {
+    assert(displayKn >= 0);
+    final color = colorForDisplayKn(displayKn);
+    if (displayKn == 0) {
       return ChartLevelLineStyle(
         color: color,
         strokeWidth: 1.9,
@@ -61,23 +65,23 @@ class ChartLevelLineStyle {
         buildingDashPattern: const [5, 4],
       );
     }
-    final w = 2.2 + (level - 2) * 0.5;
-    switch (level) {
-      case 2:
+    final w = 2.2 + (displayKn - 1) * 0.5;
+    switch (displayKn) {
+      case 1:
         return ChartLevelLineStyle(
           color: color,
           strokeWidth: w,
           buildingStrokeWidth: w - 0.35,
           buildingDashPattern: const [5, 4],
         );
-      case 3:
+      case 2:
         return ChartLevelLineStyle(
           color: color,
           strokeWidth: w,
           buildingStrokeWidth: w - 0.35,
           buildingDashPattern: const [7, 5],
         );
-      case 4:
+      case 3:
         return ChartLevelLineStyle(
           color: color,
           strokeWidth: w,
@@ -85,7 +89,7 @@ class ChartLevelLineStyle {
           buildingDashPattern: const [5, 5],
           frozenDashPattern: const [8, 4],
         );
-      case 5:
+      case 4:
         return ChartLevelLineStyle(
           color: color,
           strokeWidth: w,
@@ -93,7 +97,7 @@ class ChartLevelLineStyle {
           buildingDashPattern: const [10, 6],
           frozenDashPattern: const [10, 5],
         );
-      case 6:
+      case 5:
         return ChartLevelLineStyle(
           color: color,
           strokeWidth: w,
@@ -106,14 +110,14 @@ class ChartLevelLineStyle {
           color: color,
           strokeWidth: w,
           buildingStrokeWidth: w - 0.45,
-          buildingDashPattern: [8.0 + (level % 3), 5.0],
-          frozenDashPattern: level >= 4 ? const [8, 4] : null,
+          buildingDashPattern: [8.0 + (displayKn % 3), 5.0],
+          frozenDashPattern: displayKn >= 3 ? const [8, 4] : null,
         );
     }
   }
 
-  /// 图例短标签（连线展示名：内部 level → K(level-1)）
-  static String shortLabel(int level) => 'K${level - 1}';
+  /// 图例短标签（方案B：displayKn 即展示名）
+  static String shortLabel(int displayKn) => 'K$displayKn';
 
   /// 按展示 Kn 取中枢样式（0=K0中枢，1=K1…）；色与同层合并/连线一致。
   static ChartLevelLineStyle forZS(int kn) {

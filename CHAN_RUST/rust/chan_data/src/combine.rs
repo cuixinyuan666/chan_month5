@@ -670,7 +670,7 @@ mod tests {
             .collect();
         let bundle = build_kline_combine_bundle(&bars);
         assert!(!bundle.levels.is_empty());
-        assert_eq!(bundle.levels[0].level, 1);
+        assert_eq!(bundle.levels[0].level, 0); // 方案B：首层结构号=0
         assert_eq!(bundle.frames.len(), bundle.levels[0].combine_frames.len());
     }
 

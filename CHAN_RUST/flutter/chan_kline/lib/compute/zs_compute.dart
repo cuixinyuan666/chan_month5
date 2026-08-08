@@ -13,11 +13,12 @@ List<ZSFrame> rustZsFramesForKn({
   required List<ZSFrame> zsK0Frames,
   required List<LevelBundle> levels,
 }) {
+  // 方案B：K0=原生 zs_k0；K1+ 取 structure level==kn-1
   if (kn == 0) {
     return zsK0Frames;
   }
   for (final b in levels) {
-    if (b.level == kn) {
+    if (b.level == kn - 1) {
       return b.zsFrames;
     }
   }

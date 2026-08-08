@@ -136,9 +136,10 @@ void main() {
           endConfirmX: 10,
         ),
       ];
+      // 方案B：子=0 父=1
       final levels = [
-        LevelBundle(level: 1, segments: childSegs),
-        LevelBundle(level: 2, segments: parentSegs),
+        LevelBundle(level: 0, segments: childSegs),
+        LevelBundle(level: 1, segments: parentSegs),
       ];
       final groups = calcTrendLineGroupsForLevel(
         displayKn: 0,
@@ -156,7 +157,7 @@ void main() {
     test('无父层 → 空；asOf 截断可致空', () {
       final levels = [
         LevelBundle(
-          level: 1,
+          level: 0,
           segments: [
             _seg(
               idx: 0,
@@ -198,8 +199,8 @@ void main() {
         ),
       ];
       final full = [
-        LevelBundle(level: 1, segments: childSegs),
-        LevelBundle(level: 2, segments: parentSegs),
+        LevelBundle(level: 0, segments: childSegs),
+        LevelBundle(level: 1, segments: parentSegs),
       ];
       // asOf 过早：父段尚未确认 → 空
       expect(
@@ -247,8 +248,8 @@ void main() {
         ),
       ];
       final levels = [
-        LevelBundle(level: 1, segments: childSegs),
-        LevelBundle(level: 2, segments: parentSegs),
+        LevelBundle(level: 0, segments: childSegs),
+        LevelBundle(level: 1, segments: parentSegs),
       ];
       final groups = calcTrendLineGroupsForLevel(displayKn: 0, levels: levels);
       expect(groups.length, greaterThanOrEqualTo(1));
@@ -262,12 +263,12 @@ void main() {
     test('主图含趋势线：maxKn=1 挂 K0；maxKn=3 挂 K0/K1', () {
       final c1 = buildMainIndicatorCatalog(1);
       final t1 = c1.where((e) => e.kind == MainIndicatorKind.trendLine);
-      expect(t1.map((e) => e.kn), [1]);
+      expect(t1.map((e) => e.kn), [0]);
       expect(t1.first.label, 'K0趋势线');
 
       final c3 = buildMainIndicatorCatalog(3);
       final t3 = c3.where((e) => e.kind == MainIndicatorKind.trendLine);
-      expect(t3.map((e) => e.kn), [1, 2]);
+      expect(t3.map((e) => e.kn), [0, 1]);
 
       final d = defaultMainIndicatorsK0();
       expect(d.any((e) => e.kind == MainIndicatorKind.trendLine), isTrue);

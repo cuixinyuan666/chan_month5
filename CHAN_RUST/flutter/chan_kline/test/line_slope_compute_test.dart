@@ -44,7 +44,7 @@ void main() {
   group('line_slope_compute', () {
     test('水平线 slope≈0', () {
       final levels = [
-        _lv(1, [
+        _lv(0, [
           _seg(
             idx: 0,
             dir: 1,
@@ -68,7 +68,7 @@ void main() {
     test('上升 dx=2 → 正斜率', () {
       // begin=10 end=14，dx=2 → slope=2
       final levels = [
-        _lv(1, [
+        _lv(0, [
           _seg(
             idx: 0,
             dir: 1,
@@ -92,7 +92,7 @@ void main() {
     test('虚线/进行中子线可算', () {
       final levels = [
         _lv(
-          1,
+          0,
           const [],
           active: const LevelUnitBar(
             idx: 0,
@@ -119,7 +119,7 @@ void main() {
 
     test('|dx|<1 → null', () {
       final levels = [
-        _lv(1, [
+        _lv(0, [
           _seg(
             idx: 0,
             dir: 1,

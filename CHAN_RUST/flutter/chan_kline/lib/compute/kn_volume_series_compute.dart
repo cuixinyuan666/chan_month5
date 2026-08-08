@@ -175,16 +175,17 @@ Map<int, List<double>> _computeAllKnFromK0({
   var increments = List<double>.from(k0Series);
   out[0] = List<double>.from(increments);
 
+  // 方案B：structure level L → display kn=L+1（K0 已在 out[0]）
   final sorted = [...levels]..sort((a, b) => a.level.compareTo(b.level));
   for (final bundle in sorted) {
-    final kn = bundle.level;
-    if (kn < 1) continue;
+    final displayKn = bundle.level + 1;
+    if (displayKn < 1) continue;
     final series = _accumulateConfirmGated(
       lowerIncrements: increments,
       bundle: bundle,
       bars: bars,
     );
-    out[kn] = series;
+    out[displayKn] = series;
     increments = _cumulativeToIncrements(series);
   }
   return out;

@@ -140,8 +140,7 @@ class BarFeatureLookup {
 
     final featureByIdx = {for (final f in barFeatures) f.idx: f};
 
-    // 各层确认查表：level_confirms[n][x] = Kn 合并分型确认（当步冻结；含截断）
-    // Kn 块显示 K(n+1) 端点确认（K0 块显示 levels[1]=K1 确认，旧称「K线合并分型确认」）
+    // 各层确认查表：level_confirms[structureLevel][x]（方案B：0=K0连线）
     final levelConfirmByX = <int, Map<int, LevelConfirm>>{};
     for (final lv in levels) {
       final m = <int, LevelConfirm>{};
@@ -220,20 +219,20 @@ class BarFeatureLookup {
       }
     }
 
-    // 各层 Kn合并框框体高低点（tooltip「MG/MD」用，与主图框同源；as-of bundle 时为当下框，无未来函数）
+    // 方案B：tooltip Kn 块号 = structure+1；键用 display
     for (final lv in levels) {
+      final displayKn = lv.level + 1;
       for (final f in lv.combineFrames) {
         for (var x = f.x1; x <= f.x2; x++) {
           final row = byIdx.putIfAbsent(x, () => {'idx': x});
-          row['combine_box_${lv.level}'] = {'high': f.high, 'low': f.low};
+          row['combine_box_$displayKn'] = {'high': f.high, 'low': f.low};
         }
       }
     }
 
-    // 各层 Kn合并 GG/DD=组内原始区间极值：以当步 Kn 单元高低跑组内 max/min（逐K当下、无未来函数）；
-    // combineX1 为组起点，变化即切组；与 K0 的 combine_range_* 全层同构
+    // 各层 Kn合并 GG/DD：按 snap.level==structure 查找（勿再用下标 n-1）
     for (final lv in levels) {
-      final n = lv.level;
+      final displayKn = lv.level + 1;
       var curStart = -2;
       var rangeHigh = double.negativeInfinity;
       var rangeLow = double.infinity;
@@ -241,9 +240,15 @@ class BarFeatureLookup {
         final row = byIdx[b.idx];
         if (row == null) continue;
         final snaps = row['levels'];
-        final snap = (snaps is List<LevelSnap> && n - 1 < snaps.length)
-            ? snaps[n - 1]
-            : null;
+        LevelSnap? snap;
+        if (snaps is List<LevelSnap>) {
+          for (final s in snaps) {
+            if (s.level == lv.level) {
+              snap = s;
+              break;
+            }
+          }
+        }
         if (snap == null || snap.unitIdx == null || snap.combineX1 < 0) {
           curStart = -2;
           continue;
@@ -255,8 +260,8 @@ class BarFeatureLookup {
         }
         if (snap.unitHigh > rangeHigh) rangeHigh = snap.unitHigh;
         if (snap.unitLow < rangeLow) rangeLow = snap.unitLow;
-        row['combine_range_high_$n'] = rangeHigh;
-        row['combine_range_low_$n'] = rangeLow;
+        row['combine_range_high_$displayKn'] = rangeHigh;
+        row['combine_range_low_$displayKn'] = rangeLow;
       }
     }
 
@@ -271,8 +276,8 @@ class BarFeatureLookup {
         'truncated': sig.truncated,
       };
       if (subIndicators.any((e) =>
-          e.kind == SubIndicatorKind.fractalConfirm && e.kn == 1)) {
-        // kn=1（最低层）回退源：旧 k0_confirm（K0 原始K分型）
+          e.kind == SubIndicatorKind.fractalConfirm && e.kn == 0)) {
+        // 方案B：kn=0=K0分型，回退源旧 k0_confirm
         (row['sub'] as Map<String, dynamic>)['k0_confirm_value'] = sig.value;
       }
     }
@@ -555,20 +560,17 @@ class BarFeatureLookup {
       }
     }
 
-    // 极点距：tooltip 应显尽显，全层始终计算（不依赖副图勾选）。
-    // 【语义统一·K0】fractal_peak_dist_1 只认 barFeatures（=k0_confirm 极点距）；
-    // level==1.confirms 与 k0 同源，但禁止再覆盖，避免读成「K1 层」双轨。
-    // Kn≥1 显示名对应 catalog kn=displayKn+1 → 写 fractal_peak_dist_{level≥2}。
+    // 方案B：峰距键与 display 对齐；K0→_0；structure L≥1 → fractal_peak_dist_L
     for (final f in barFeatures) {
       final row = byIdx.putIfAbsent(f.idx, () => {'idx': f.idx});
       final sub = row.putIfAbsent('sub', () => <String, dynamic>{})
           as Map<String, dynamic>;
       sub['fractal_peak_dist'] = f.fractalPeakDist;
-      sub['fractal_peak_dist_1'] = f.fractalPeakDist;
+      sub['fractal_peak_dist_0'] = f.fractalPeakDist;
     }
     for (final bundle in levels) {
-      // level==1 = K0 分型确认（输入为原始K），K0 峰距已由 barFeatures 写好，跳过覆盖
-      if (bundle.level < 2 || bars.isEmpty) continue;
+      // structure 0=K0连线，峰距已由 barFeatures 写好，跳过覆盖
+      if (bundle.level < 1 || bars.isEmpty) continue;
       final series = _peakDistSeries(bars.length, bundle.confirms);
       for (var i = 0; i < bars.length; i++) {
         final row = byIdx.putIfAbsent(bars[i].idx, () => {'idx': bars[i].idx});
@@ -577,16 +579,10 @@ class BarFeatureLookup {
       }
     }
 
-    // 展示轨分型判断：为每个层级(kn=1..N)计算，供副图指标与十字线 tooltip「Kn分型判断」共用；
-    // 与「Kn分型确认」同口径：仅成立后当步有点，不整框回填。
-    // tooltip 与副图「indicator Kn分型判断」完全同源：两端都用 judgmentHistoryByKn[kn]
-    // 事件列表、都按 segAsOf 截断(maxX: asOf)、都取 per-x 末态(后者覆盖)。
-    // 不再用 collectFractalJudgmentEvents 兜底——否则 history 缺失的层 tooltip 显示末态、
-    // 副图却无点，造成两端不对应。history 为空则全 UNKNOWN(显示 0)，与副图一致。
-    // 写到 levels.length + 1：tooltip「K{N}块分型判断」需读 fractal_judgment_{N+1}
-    // （对最高层连线做的分型判断），与副图指标 K{N}分型判断(kn=N+1) 同口径。
+    // 方案B：分型判断 kn=0..levels.length（0=K0；L=structure L 的 Kn连线分型）
+    // tooltip 与副图同源：judgmentHistoryByKn[kn] + asOf 截断。
     if (bars.isNotEmpty) {
-      for (var kn = 1; kn <= levels.length + 1; kn++) {
+      for (var kn = 0; kn <= levels.length; kn++) {
         final history = judgmentHistoryByKn[kn];
         final fxSeries = history != null && history.isNotEmpty
             ? expandJudgmentEventsToSeries(history, bars.last.idx + 1,
@@ -1086,15 +1082,15 @@ class BarFeatureLookup {
         combineFxConfirm = k0Confirm['truncated'] == true ? '$v(截断)' : '$v';
       }
     }
-    // K0分型判断：与副图 kn=1 同源
+    // 方案B：K0分型判断与副图 kn=0 同源
     var combineFxJudge = '0';
-    final fx0 = subMap?['fractal_judgment_1'];
+    final fx0 = subMap?['fractal_judgment_0'];
     if (fx0 == 'TOP') {
       combineFxJudge =
-          subMap?['fractal_judgment_trunc_1'] == true ? '-1(截断)' : '-1';
+          subMap?['fractal_judgment_trunc_0'] == true ? '-1(截断)' : '-1';
     } else if (fx0 == 'BOTTOM') {
       combineFxJudge =
-          subMap?['fractal_judgment_trunc_1'] == true ? '1(截断)' : '1';
+          subMap?['fractal_judgment_trunc_0'] == true ? '1(截断)' : '1';
     }
 
     final k0Core = <CrosshairTooltipRow>[
@@ -1205,8 +1201,8 @@ class BarFeatureLookup {
       if (ind.kind == SubIndicatorKind.fractalConfirm) {
         dynamic v;
         var truncated = false;
-        if (ind.kn == 1) {
-          // K0分型确认：与 tooltip K0 块同源（勿用 level_confirms[1]）
+        // 方案B：kn==0→k0；kn≥1→level_confirms[kn]
+        if (ind.kn == 0) {
           v = sub['k0_confirm_value'];
           final bc = row['k0_confirm'];
           if (bc is Map) truncated = bc['truncated'] == true;
@@ -1247,18 +1243,17 @@ class BarFeatureLookup {
         add(ind.label, sub['zs_judgment_${ind.kn}'] ?? 0);
       }
       if (ind.kind == SubIndicatorKind.fractalPeakDist) {
-        // 【语义统一·K0】kn==1 优先 feat；kn≥2 读 fractal_peak_dist_{kn}
-        if (ind.kn == 1) {
-          add(ind.label, sub['fractal_peak_dist_1'] ?? sub['fractal_peak_dist']);
+        // 方案B：kn==0 优先 feat；kn≥1 读 fractal_peak_dist_{kn}
+        if (ind.kn == 0) {
+          add(ind.label, sub['fractal_peak_dist_0'] ?? sub['fractal_peak_dist']);
         } else if (sub.containsKey('fractal_peak_dist_${ind.kn}')) {
           add(ind.label, sub['fractal_peak_dist_${ind.kn}']);
         }
       }
       if (ind.kind == SubIndicatorKind.truncation) {
-        // 截断触发当步：有 truncated 确认才显示方向值
-        // 【语义统一·K0】kn==1 只读 k0_confirm；kn≥2 读 level_confirms[kn]
+        // 方案B：kn==0 只读 k0_confirm；kn≥1 读 level_confirms[kn]
         dynamic v;
-        if (ind.kn == 1) {
+        if (ind.kn == 0) {
           final bc = row['k0_confirm'];
           if (bc is Map && bc['truncated'] == true) {
             v = bc['value'];
@@ -1404,12 +1399,19 @@ class BarFeatureLookup {
     final subMap = sub is Map ? sub : null;
 
     final lines = <CrosshairTooltipRow>[];
+    // 方案B：Kn块 n=1..；snap.level==n-1；分型确认/判断键=structure n（Kn连线）
     for (var n = 1; n <= total; n++) {
-      final snap = n - 1 < snapList.length ? snapList[n - 1] : null;
+      LevelSnap? snap;
+      for (final s in snapList) {
+        if (s.level == n - 1) {
+          snap = s;
+          break;
+        }
+      }
       int? confirmVal;
       var confirmTruncated = false;
       if (confirms is Map) {
-        final v = confirms[n + 1];
+        final v = confirms[n];
         if (v is LevelConfirm && (v.value == 1 || v.value == -1)) {
           confirmVal = v.value;
           confirmTruncated = v.truncated;
@@ -1417,14 +1419,14 @@ class BarFeatureLookup {
       }
       int? judgeVal;
       var judgeTruncated = false;
-      final fx = subMap?['fractal_judgment_${n + 1}'];
+      final fx = subMap?['fractal_judgment_$n'];
       if (fx == 'TOP') {
         judgeVal = -1;
       } else if (fx == 'BOTTOM') {
         judgeVal = 1;
       }
       if (judgeVal != null) {
-        judgeTruncated = subMap?['fractal_judgment_trunc_${n + 1}'] == true;
+        judgeTruncated = subMap?['fractal_judgment_trunc_$n'] == true;
       }
       final knVol = (subMap?['volume_$n'] as num?) ?? snap?.unitVolume;
       final vBsg = _volBsg(subMap, n, totalFallback: knVol);
@@ -1595,16 +1597,13 @@ class BarFeatureLookup {
     CrosshairTooltipRow kv(String label, String value) =>
         CrosshairTooltipRow.kv(label, value);
 
-    // —— 极点距 / 截断 ——
-    // catalog：显示 Kn → 内部 kn=displayKn+1；K0(display=0) 一律 k0/feat，Kn≥1 用 level_confirms
+    // —— 极点距 / 截断 —— 方案B：键与 display 对齐
     final fxExtra = <CrosshairTooltipRow>[];
-    final peakKn = displayKn + 1;
     dynamic peak;
     if (displayKn == 0) {
-      // 【语义统一·K0】与 K0分型确认同宗：barFeatures 峰距（enrich 自 k0_confirm）
-      peak = sub?['fractal_peak_dist_1'] ?? sub?['fractal_peak_dist'];
+      peak = sub?['fractal_peak_dist_0'] ?? sub?['fractal_peak_dist'];
     } else {
-      peak = sub == null ? null : sub['fractal_peak_dist_$peakKn'];
+      peak = sub == null ? null : sub['fractal_peak_dist_$displayKn'];
     }
     fxExtra.add(kv(
         'K$displayKn分型极点距', CrosshairTooltipRow.boxNum(peak ?? 0)));
@@ -1612,13 +1611,12 @@ class BarFeatureLookup {
     dynamic truncV;
     final confirms = row['level_confirms'];
     if (displayKn == 0) {
-      // 【语义统一·K0】截断只读 k0_confirm，不绕 level_confirms[1]
       final bc = row['k0_confirm'];
       if (bc is Map && bc['truncated'] == true) {
         truncV = bc['value'];
       }
-    } else if (confirms is Map && confirms.containsKey(peakKn)) {
-      final c = confirms[peakKn];
+    } else if (confirms is Map && confirms.containsKey(displayKn)) {
+      final c = confirms[displayKn];
       if (c is LevelConfirm && c.truncated) {
         truncV = c.value;
       } else if (c is Map && c['truncated'] == true) {

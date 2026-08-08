@@ -64,7 +64,7 @@ pub struct BarCrosshairFeature {
     /// 当步 K1合并分型：未确认=UNKNOWN
     #[serde(default = "default_unknown")]
     pub k1_combine_fx: String,
-    /// 各层 Kn 快照（levels[0]=K1/K0连线，levels[1]=K2/K1连线，…穷尽）
+    /// 各层 Kn 快照（方案B：levels[0].level=0=K0连线，levels[1].level=1=K1连线，…穷尽）
     #[serde(default)]
     pub levels: Vec<LevelSnap>,
 }

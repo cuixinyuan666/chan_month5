@@ -113,7 +113,7 @@ void main() {
           close: 30,
         ),
       ];
-      final levels = [LevelBundle(level: 1, unitBars: units)];
+      final levels = [LevelBundle(level: 0, unitBars: units)];
       final samples = collectTrendCloseSamples(
         displayKn: 1,
         bars: bars,

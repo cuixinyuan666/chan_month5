@@ -6,6 +6,7 @@ import 'package:chan_kline/models/buy2_frame.dart';
 import 'package:chan_kline/models/sell2_frame.dart';
 import 'package:chan_kline/models/chart_indicator.dart';
 import 'package:chan_kline/models/kline_bar.dart';
+import 'package:chan_kline/models/level_models.dart';
 
 void main() {
   test('Buy2Frame fromJson', () {
@@ -170,10 +171,12 @@ void main() {
         amount: 0,
       ),
     );
+    // 方案B：挂 structure0 以出 K1 块（tooltip BS 在 Kn 块类别区）
     final lookup = BarFeatureLookup.build(
       bars: bars,
       combineFrames: const [],
       k0Confirms: const [],
+      levels: const [LevelBundle(level: 0)],
       buy2HistoryByKn: {
         1: const [
           Buy2Frame(

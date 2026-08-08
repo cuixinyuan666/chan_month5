@@ -28,7 +28,7 @@ int _countRewrites(
 }
 
 void main() {
-  test('MathSeriesFreezeStore：Kn1 步进格点不回写', () {
+  test('MathSeriesFreezeStore：K0 步进格点不回写', () {
     final bridge = ChanBridge.instance;
     final bars = bridge.loadKlines(
       dataRoot: bridge.defaultDataRoot(),
@@ -49,6 +49,8 @@ void main() {
     final chanFrozen = <int, Map<int, double?>>{};
     final demarkFrozen = <int, Map<int, double?>>{};
 
+    // 方案B：用 K0（原生 bars）验冻结；Kn1 依赖 structure0/样本密度，单测不绑死
+    const kn = 0;
     for (final asOf in steps) {
       final prefix = bars.where((b) => b.idx <= asOf).toList();
       final bundle = bridge.buildKlineCombineBundle(prefix);
@@ -70,19 +72,19 @@ void main() {
         return m;
       }
 
-      macdFrozen[asOf] = snap(store.macd(1)?.macd);
-      bollFrozen[asOf] = snap(store.boll(1)?.mid);
-      rsiFrozen[asOf] = snap(store.rsi(1));
-      kdjFrozen[asOf] = snap(store.kdj(1)?.k);
-      meanFrozen[asOf] = snap(store.mean(1)?[5]);
-      chanFrozen[asOf] = snap(store.channel(1)?[5]?.max);
+      macdFrozen[asOf] = snap(store.macd(kn)?.macd);
+      bollFrozen[asOf] = snap(store.boll(kn)?.mid);
+      rsiFrozen[asOf] = snap(store.rsi(kn));
+      kdjFrozen[asOf] = snap(store.kdj(kn)?.k);
+      meanFrozen[asOf] = snap(store.mean(kn)?[5]);
+      chanFrozen[asOf] = snap(store.channel(kn)?[5]?.max);
       demarkFrozen[asOf] = {
         for (var x = 0;
-            x <= asOf && x < (store.demark(1)?.marksAt.length ?? 0);
+            x <= asOf && x < (store.demark(kn)?.marksAt.length ?? 0);
             x++)
-          x: store.demark(1)!.marksAt[x] == null
+          x: store.demark(kn)!.marksAt[x] == null
               ? null
-              : store.demark(1)!.marksAt[x]!
+              : store.demark(kn)!.marksAt[x]!
                   .map((m) => '${m.type}:${m.dir}:${m.idx}')
                   .join('|')
                   .hashCode

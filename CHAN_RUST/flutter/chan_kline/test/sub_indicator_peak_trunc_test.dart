@@ -29,16 +29,17 @@ void main() {
     expect(off.any((e) => e.label == 'K0分型极点距'), isTrue);
 
     // 关截断后 prune 掉已勾选的截断项
+    // 方案B：截断/极点距 kn==displayKn
     final pruned = pruneIndicators(
       {
         const SubChartIndicator.volume(0),
-        const SubChartIndicator.truncation(1),
-        const SubChartIndicator.fractalPeakDist(1),
+        const SubChartIndicator.truncation(0),
+        const SubChartIndicator.fractalPeakDist(0),
       },
       off,
     );
-    expect(pruned.contains(const SubChartIndicator.truncation(1)), isFalse);
-    expect(pruned.contains(const SubChartIndicator.fractalPeakDist(1)), isTrue);
+    expect(pruned.contains(const SubChartIndicator.truncation(0)), isFalse);
+    expect(pruned.contains(const SubChartIndicator.fractalPeakDist(0)), isTrue);
   });
 
   test('副图目录含 Kn成交量且大类顺序：成交量 < 确认 < 判断 < 极点距 < 截断 < 中枢确认 < 中枢判断', () {
@@ -74,22 +75,7 @@ void main() {
         truncated: true,
       ),
     ];
-    final levels = [
-      LevelBundle(
-        level: 1,
-        confirms: [
-          const LevelConfirm(
-            x: 3,
-            fx: 'TOP',
-            value: -1,
-            fractalX1: 2,
-            fractalX2: 2,
-            poleX: 2,
-            truncated: true,
-          ),
-        ],
-      ),
-    ];
+    // 方案B：K0 截断/极点距 kn==0，只认 k0_confirm/feat
     final lookup = BarFeatureLookup.build(
       bars: bars,
       combineFrames: const [],
@@ -103,22 +89,22 @@ void main() {
             fractalPeakDist: i,
           ),
       ],
-      levels: levels,
+      levels: const [],
       subIndicators: {
-        const SubChartIndicator.truncation(1),
-        const SubChartIndicator.fractalPeakDist(1),
+        const SubChartIndicator.truncation(0),
+        const SubChartIndicator.fractalPeakDist(0),
       },
     );
 
     final atTrunc = lookup.crosshairSubLines(3, {
-      const SubChartIndicator.truncation(1),
-      const SubChartIndicator.fractalPeakDist(1),
+      const SubChartIndicator.truncation(0),
+      const SubChartIndicator.fractalPeakDist(0),
     });
     expect(atTrunc.any((l) => l == 'K0截断:-1'), isTrue);
     expect(atTrunc.any((l) => l.startsWith('K0分型极点距:')), isTrue);
 
     final atNormal = lookup.crosshairSubLines(2, {
-      const SubChartIndicator.truncation(1),
+      const SubChartIndicator.truncation(0),
     });
     expect(atNormal.any((l) => l.startsWith('K0截断:')), isFalse);
   });

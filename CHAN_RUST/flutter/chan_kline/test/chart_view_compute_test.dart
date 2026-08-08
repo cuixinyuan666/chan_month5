@@ -27,10 +27,10 @@ List<KlineBar> _bars(int n) => List.generate(
 void main() {
   test('as-of 组装：冻结段查表 + 当步快照进行中K0连线（含半侧衔接）', () {
     final bars = _bars(10);
-    // Rust 冻结段：K1#0（极点 → 极点，x=5 冻结）
+    // 方案B：Rust 冻结段 structure level==0（K0连线）
     const levels = [
       LevelBundle(
-        level: 1,
+        level: 0,
         segments: [
           LevelSegmentN(
             idx: 0,
@@ -57,7 +57,7 @@ void main() {
         mergeInnerSeq: 0,
         levels: [
           LevelSnap(
-            level: 1,
+            level: 0,
             unitIdx: active ? 1 : (i >= 2 ? 0 : null),
             unitDir: active ? -1 : 1,
             unitX1: active ? 4 : (i >= 2 ? 1 : -1),
@@ -177,9 +177,9 @@ void main() {
 
   test('asOfLevelSegments 仅含 endConfirmX<=asOf 的冻结段', () {
     const levels = [
-      LevelBundle(level: 1),
+      LevelBundle(level: 0),
       LevelBundle(
-        level: 2,
+        level: 1,
         segments: [
           LevelSegmentN(
             idx: 0,
@@ -210,10 +210,10 @@ void main() {
         ],
       ),
     ];
-    final at5 = asOfLevelSegments(levels: levels, level: 2, asOf: 5);
+    final at5 = asOfLevelSegments(levels: levels, level: 1, asOf: 5);
     expect(at5.length, 1);
     expect(at5.first.idx, 0);
-    final at8 = asOfLevelSegments(levels: levels, level: 2, asOf: 8);
+    final at8 = asOfLevelSegments(levels: levels, level: 1, asOf: 8);
     expect(at8.length, 2);
   });
 
@@ -222,12 +222,12 @@ void main() {
     final feats = [
       for (var i = 0; i < 4; i++)
         BarCrosshairFeature(idx: i, weekday: '周一', mergeInnerSeq: 0, levels: const [
-          LevelSnap(level: 1),
+          LevelSnap(level: 0),
         ]),
     ];
     final pending = asOfK1Bars(
       bars: bars,
-      levels: const [LevelBundle(level: 1)],
+      levels: const [LevelBundle(level: 0)],
       barFeatures: feats,
       defaultK0Policy: 'pending',
       asOf: 3,
@@ -238,7 +238,7 @@ void main() {
 
     final purged = asOfK1Bars(
       bars: bars,
-      levels: const [LevelBundle(level: 1)],
+      levels: const [LevelBundle(level: 0)],
       barFeatures: feats,
       defaultK0Policy: 'purged',
       asOf: 3,
@@ -313,7 +313,7 @@ void main() {
 
   test('展示轨虚拟单元：levelBundle 含 active；asOf 含进行中', () {
     const bundle = LevelBundle(
-      level: 2,
+      level: 1,
       unitBars: [
         LevelUnitBar(
           idx: 0,
@@ -359,7 +359,7 @@ void main() {
     expect(v.last.x2, 7);
 
     final levels = [
-      const LevelBundle(level: 1),
+      const LevelBundle(level: 0),
       bundle,
     ];
     final feats = [
@@ -371,7 +371,7 @@ void main() {
           levels: [
             if (i >= 5)
               LevelSnap(
-                level: 2,
+                level: 1,
                 unitIdx: 1,
                 unitDir: -1,
                 unitX1: 4,
@@ -387,7 +387,7 @@ void main() {
     final at7 = asOfLevelVirtualK1Bars(
       levels: levels,
       barFeatures: feats,
-      level: 2,
+      level: 1,
       asOf: 7,
       includeBuilding: true,
     );
@@ -398,7 +398,7 @@ void main() {
     final frozenOnly = asOfLevelVirtualK1Bars(
       levels: levels,
       barFeatures: feats,
-      level: 2,
+      level: 1,
       asOf: 7,
       includeBuilding: false,
     );

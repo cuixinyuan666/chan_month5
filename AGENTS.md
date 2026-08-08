@@ -61,9 +61,17 @@ CHAN_RUST项目：项目定位：全新项目，用于行情回测、机器学�
 - **同枢极值参照（2026-07-30·全层同构+B/S镜像）**：同一中枢框内，B 后续 low **一律与本枢已见最低 low 比**（高于则不标；跳过时不得把参照抬成更高的跳过成员）；S 镜像——一律与本枢已见最高 high 比。禁止改成「与上一成员比」。K0/K1/…/Kn 同一套 `find_buy1`/`find_sell1`。
 - **一类收紧 + 二类BS（2026-07-30·方案A）**：同资格中枢框内，仅建框/严格新极值标一类；`low≥已见最低`（买）/`high≤已见最高`（卖）标二类 `2Ba…`/`2Sa…`。二类字母随一类建框/新极值同步复位（一类 1Ba→二类 2Ba 重起）。二类全链路同构一类（`buy2.rs`、会话双键冻结、副图「Kn二类BS」、十字）；禁止整表覆盖消点。
 
+### CHAN_RUST 方案B层号（2026-08-08·常驻）
+- **结构层 0 起编**：`levels[].level==0`=K0连线；原 level N → N-1。`chartMaxKn=structureMax+1`。
+- **连线族**（line/combine/kn/三型/四型/趋势线/分型/截断/比例/节奏/斜率）：catalog `kn==displayKn`，取数 `LevelBundle.level==kn`；禁止再写 `displayKn+1` / 绘制 `kn-1`。
+- **中枢/Math/volume/BS/背驰**：K0=原生 bars/`zs_k0`；K1+ 取 structure `level==kn-1`。帧上 `frame.level=structure+1`（显示中枢号，避与 zs_k0 撞号）。
+- **collect*ByKn**：`out[0]=k0`，pipeline 写 `out[lv.level+1]`；`levelsWithFrozen*Bs` history 键=`lv.level+1`。
+- **趋势线/节奏父层**：子=`displayKn`，父=`displayKn+1`（仍是「看上一层」，但不再相对旧 1 起编拧着）。
+- **DLL**：改 Rust 后必须重编并覆盖 `windows/native/chan_ffi.dll`；冷启动连续单步验收。
+
 ### CHAN_RUST Kn相邻比例 / Kn步进节奏（2026-07-31·常驻）
 - **范围**：仅副图；节奏只保留 **normal**；主图水平节奏线 / transition / strict1382 本轮未做。默认 catalog 不勾选。
-- **映射（全层同构）**：`displayKn` ↔ Kn连线 `level==displayKn+1`；节奏子分型=`level+1` confirms；父分型切组=`level+2` confirms。
+- **映射（全层同构·方案B）**：`displayKn` ↔ Kn连线 `level==displayKn`；节奏子分型=`displayKn` confirms；父分型切组=`displayKn+1` confirms。
 - **相邻比例**：子线=主图出现链（冻段+展示轨虚线/种子），**虚实不论**；按 `beginX` 出现序取末两根 `ratio=|cur|/|prev|`；K0 颗粒度写入会话。踩坑：勿只读冻段（动态虚线步会变 0）；勿按 `endConfirmX`/`isSure` 过滤排序。
 - **步进节奏**：组锚=父分型极值；命名从 **0-0**；子同向分型开窗、反向分型关窗（关窗后单点不向后连）；父分型确认切组并 `groupId++`；key 含 groupId。绘制：Δx==1 才点线续连、名在左侧、同 `roundRef` 同色、升暖降冷。
 - **验收**：连续单步（非一键跳末）；口径变更写 `lib/history/msg_history.dart` 与 `TASK_LOG.md`。

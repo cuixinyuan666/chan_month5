@@ -248,9 +248,10 @@ bool divergenceKnContainedInZs({
   required List<LevelBundle> levels,
   int? asOf,
 }) {
+  // 方案B：Kn≥1 → structure level==displayKn-1
   if (displayKn > 0) {
     for (final lv in levels) {
-      if (lv.level != displayKn) continue;
+      if (lv.level != displayKn - 1) continue;
       final a = lv.activeUnit;
       if (a != null) {
         return (high: a.high, low: a.low, idx: a.idx);
@@ -705,9 +706,10 @@ _SegView? _resolveSeg({
       low: b.low,
     );
   }
+  // 方案B：段解析 Kn≥1 → structure level==displayKn-1
   LevelBundle? lv;
   for (final b in levels) {
-    if (b.level == displayKn) {
+    if (b.level == displayKn - 1) {
       lv = b;
       break;
     }
@@ -804,10 +806,11 @@ double? _metricLineSlopeAbs({
   required List<LevelBundle> levels,
   int? asOf,
 }) {
+  // 方案B：背驰 displayKn≥1 → structure level==displayKn-1
   if (displayKn <= 0) return null;
   final s = calcUnitLineSlope(
     levels: levels,
-    level: displayKn,
+    level: displayKn - 1,
     unitIdx: segIdx,
     asOf: asOf,
   );

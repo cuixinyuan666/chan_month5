@@ -182,12 +182,13 @@ Set<int> mergeZsConfirmEventLog(
 }
 
 /// 本步各层中枢帧（K0 + levels）。
+/// 方案B：out[0]=k0；pipeline 写 out[lv.level+1]（禁止 out[lv.level] 盖掉 K0）。
 Map<int, List<ZSFrame>> collectZsFramesByKn(KlineCombineBundle bundle) {
   final out = <int, List<ZSFrame>>{
     0: List<ZSFrame>.from(bundle.zsK0Frames),
   };
   for (final lv in bundle.levels) {
-    out[lv.level] = List<ZSFrame>.from(lv.zsFrames);
+    out[lv.level + 1] = List<ZSFrame>.from(lv.zsFrames);
   }
   return out;
 }
