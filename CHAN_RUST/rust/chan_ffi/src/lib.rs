@@ -5,7 +5,8 @@ use std::ptr;
 
 use chan_data::{
     build_kline_combine_bundle_with, chip_profile, default_data_root, list_stock_codes, load_klines,
-    resolve_data_root, save_test_ohlc, KlineBar, KlinePeriod, PipelineOptions, ZSConfig,
+    ml_predict_dense, resolve_data_root, save_test_ohlc, KlineBar, KlinePeriod, PipelineOptions,
+    ZSConfig,
 };
 use serde::{Deserialize, Serialize};
 
@@ -215,4 +216,30 @@ pub extern "C" fn chan_chip_profile(req_json: *const c_char) -> *mut c_char {
         Err(e) => return to_json_err(&format!("chip_profile 解析失败: {e}")),
     };
     to_json_ok(chip_profile(&req.bars, req.cutoff_x, req.bucket_step))
+}
+
+/// ML 预测：`{ "model_path": "...", "dense": [f64...] }` → `{ score }`
+/// 对齐 demo6：meta 填稠密向量后打分；支持 chan_ml_v1 / 简化 XGBoost JSON。
+#[no_mangle]
+pub extern "C" fn chan_ml_predict(req_json: *const c_char) -> *mut c_char {
+    let Some(raw) = cstr_to_str(req_json) else {
+        return to_json_err("req_json 不能为空");
+    };
+    #[derive(Deserialize)]
+    struct PredReq {
+        model_path: String,
+        dense: Vec<f64>,
+    }
+    #[derive(Serialize)]
+    struct PredOut {
+        score: f64,
+    }
+    let req: PredReq = match serde_json::from_str(raw) {
+        Ok(v) => v,
+        Err(e) => return to_json_err(&format!("ml_predict 解析失败: {e}")),
+    };
+    match ml_predict_dense(&req.model_path, &req.dense) {
+        Ok(score) => to_json_ok(PredOut { score }),
+        Err(e) => to_json_err(&e),
+    }
 }

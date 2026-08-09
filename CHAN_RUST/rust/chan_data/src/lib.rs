@@ -11,6 +11,7 @@ mod engine;
 mod error;
 mod feature;
 mod kline;
+mod ml_predict;
 mod offline;
 mod pipeline;
 mod seg_eigen;
@@ -48,6 +49,7 @@ pub use feature::{
     K1BarView,
 };
 pub use kline::{KlineBar, KlinePeriod};
+pub use ml_predict::{predict_dense as ml_predict_dense, MISSING as ML_MISSING};
 pub use offline::{
     default_data_root, list_stock_codes, load_klines, load_test_ohlc_csv, resolve_data_root,
     save_test_ohlc, save_test_ohlc_csv, test_ohlc_csv_path,

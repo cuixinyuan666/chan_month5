@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 
@@ -23,6 +24,16 @@ import 'compute/divergence_freeze_store.dart';
 import 'history/app_debug_snapshot.dart';
 import 'history/audit_probe_snapshot.dart';
 import 'history/msg_history.dart';
+import 'ml/ml_bsp_export.dart';
+import 'ml/ml_bsp_labeler.dart';
+import 'ml/ml_bsp_sample.dart';
+import 'ml/ml_bsp_sampler.dart';
+import 'ml/ml_dataset_split.dart';
+import 'ml/ml_feature_flat.dart';
+import 'ml/ml_feature_schema.dart';
+import 'ml/ml_session_controller.dart';
+import 'ml/ml_split_config.dart';
+import 'ml/ml_workbench.dart';
 import 'models/zs_frame.dart';
 import 'models/buy1_frame.dart';
 import 'models/sell1_frame.dart';
@@ -33,6 +44,7 @@ import 'models/sell_n_frame.dart';
 import 'models/kline_bar.dart';
 import 'models/k0_confirm_signal.dart';
 import 'models/bar_crosshair_feature.dart';
+import 'models/bar_feature_lookup.dart';
 import 'models/k0_line.dart';
 import 'models/k1_bar_view.dart';
 import 'models/chart_indicator.dart';
@@ -146,6 +158,8 @@ Future<void> main() async {
   MsgHistory.instance.appendK0FractalSourceUnified();
   // tooltip 四准则：asOf禁末态 / K0合并Rust / 上一中枢确认 / BS禁兜底
   MsgHistory.instance.appendTooltipFourRulesMlReady();
+  // 机器学习：设置入口 + 图面使用权交接（不改 tip 生产）
+  MsgHistory.instance.appendMlWorkbenchHandoff();
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     await windowManager.ensureInitialized();
     const opts = WindowOptions(
@@ -284,6 +298,18 @@ class _KlineHomePageState extends State<KlineHomePage> {
   /// Kn步进节奏会话历史 + 每层方向状态。
   Map<int, List<StepRhythmLinePoint>> _stepRhythmHistoryByKn = {};
   final Map<int, StepRhythmState> _stepRhythmStateByKn = {};
+
+  /// 机器学习会话：true=主区挂 ML 成果页（不加载/不展示 K 线图）
+  final MlSessionController _mlSession = MlSessionController();
+  bool _mlExporting = false;
+  bool _mlPredicting = false;
+  bool _mlModelLoaded = false;
+  MlPreparePhase _mlPhase = MlPreparePhase.idle;
+  List<MlBspSample> _mlSamples = [];
+  Map<String, int> _mlFeatureMeta = {};
+  String? _mlError;
+  MlSplitConfig _mlSplitConfig = const MlSplitConfig();
+  final MlBspSampler _mlSampler = MlBspSampler();
 
   /// catalog 三类..N 类上限（至少 9；随会话观察到的更高类扩大）
   int get _maxBsClass => math.max(
@@ -1231,7 +1257,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
     _rebuildCombine();
   }
 
-  void _runToEnd() {
+  void _runToEnd({MlBspSampler? mlSampler}) {
     if (!_hasSession) return;
     _stopPlay();
     final end = _allBars.length - 1;
@@ -1276,6 +1302,24 @@ class _KlineHomePageState extends State<KlineHomePage> {
           asOf: i,
           confirmedX1ByKn: zsConfirmed,
         );
+        // 仅 ML 路径：采 K0 一类 BS 当下特征（不改复盘语义）
+        mlSampler?.onStep(
+          stepIdx: i,
+          visibleBars: visible,
+          buy1K0: _buy1HistoryByKn[0] ?? const [],
+          sell1K0: _sell1HistoryByKn[0] ?? const [],
+          buildLookup: () => _buildMlLookupFor(
+            bars: visible,
+            combineFrames: bundle.frames,
+            k0Confirms: bundle.k0Confirms,
+            barFeatures: bundle.barFeatures,
+            k0Lines: bundle.k0Lines,
+            levels: bundle.levels,
+            k1CombineFrames: bundle.k1CombineFrames,
+            k1Analysis: bundle.k1Analysis,
+            zsK0Frames: bundle.zsK0Frames,
+          ),
+        );
       } catch (e) {
         _msgHistory.append('一次性走完@step=$i 失败：$e');
         break;
@@ -1303,68 +1347,23 @@ class _KlineHomePageState extends State<KlineHomePage> {
                   borderRadius: BorderRadius.circular(8),
                   border: Border.all(color: const Color(0x33FFFFFF)),
                 ),
-                child: KlineChart(
-                  bars: _visibleBars,
-                  period: _period,
-                  combineFrames: _combineFrames,
-                  k0ConfirmSignals: _k0ConfirmSignals,
-                  barFeatures: _barFeatures,
-                  k0Lines: _k0Lines,
-                  k1BarViews: _k1BarViews,
-                  k1CombineFrames: _k1CombineFrames,
-                  k1Analysis: _k1Analysis,
-                  levels: _levels,
-                  zsK0Frames: _zsK0Frames,
-                  buy1K0Frames: _buy1K0Frames,
-                  sell1K0Frames: _sell1K0Frames,
-                  buy2K0Frames: _buy2K0Frames,
-                  sell2K0Frames: _sell2K0Frames,
-                  buyNK0Frames: _buyNK0Frames,
-                  sellNK0Frames: _sellNK0Frames,
-                  defaultK0Policy: _defaultK0Policy,
-                  truncationCheck: _truncationCheck,
-                  showBuildingDash: _showBuildingDash,
-                  chipOnlyMode: _chipOnlyMode,
-                  chipConfig: _chipConfig,
-                  tickDistConfig: _tickDistConfig,
-                  mathIndicatorConfig: _mathIndicatorConfig,
-                  mathFreezeStore: _mathFreezeStore,
-                  diverFreezeStore: _diverFreezeStore,
-                  judgmentHistoryByKn: _judgmentHistoryByKn,
-                  zsJudgmentHistoryByKn: _zsJudgmentHistoryByKn,
-                  zsConfirmHistoryByKn: _zsConfirmHistoryByKn,
-                  buy1HistoryByKn: _buy1HistoryByKn,
-                  sell1HistoryByKn: _sell1HistoryByKn,
-                  buy2HistoryByKn: _buy2HistoryByKn,
-                  sell2HistoryByKn: _sell2HistoryByKn,
-                  buyNHistoryByKn: _buyNHistoryByKn,
-                  sellNHistoryByKn: _sellNHistoryByKn,
-                  adjacentRatioHistoryByKn: _adjacentRatioHistoryByKn,
-                  stepRhythmHistoryByKn: _stepRhythmHistoryByKn,
-                  lineSlopeHistoryByKn: _lineSlopeHistoryByKn,
-                  mainIndicators: _mainIndicators,
-                  onMainIndicatorsChanged: (v) =>
-                      setState(() => _mainIndicators = v),
-                  subIndicators: _subIndicators,
-                  onSubIndicatorsChanged: (v) => setState(
-                    () => _subIndicators = ensureMacdForDivergenceArea(v),
-                  ),
-                  indicatorsEnabled: _hasSession,
-                  autoFollowLatest: true,
-                  isPlaying: _playing,
-                  // 左中右热区：会话内始终可点（尤其播放中暂停优先）；加载中才屏蔽
-                  onTapStepBack: _hasSession && !_busy ? _stepBack : null,
-                  onTapPlay: _hasSession
-                      ? (_busy && !_playing ? null : _togglePlay)
-                      : null,
-                  onTapStepForward:
-                      _hasSession && !_busy ? _stepForward : null,
-                  onLongPressReset:
-                      _hasSession && !_busy ? _resetStep : null,
-                  onLongPressReload: _busy ? null : _loadKlines,
-                  onLongPressRunToEnd:
-                      _hasSession && !_busy ? _runToEnd : null,
-                ),
+                // ML：主区只挂成果页（无 K 线图）；否则复盘 K 线
+                child: _mlSession.isActive
+                    ? MlWorkbench(
+                        statusLine: _mlStatusLine(),
+                        exporting: _mlExporting,
+                        predicting: _mlPredicting,
+                        modelLoaded: _mlModelLoaded,
+                        phase: _mlPhase,
+                        splitConfig: _mlSplitConfig,
+                        onSplitConfigChanged: _onMlSplitConfigChanged,
+                        samples: _mlSamples,
+                        errorText: _mlError,
+                        onExit: _exitMlSession,
+                        onExport: _exportMlFeatures,
+                        onLoadModelPredict: _loadModelAndPredict,
+                      )
+                    : _buildKlineChart(),
               ),
             ),
           ),
@@ -1787,8 +1786,400 @@ class _KlineHomePageState extends State<KlineHomePage> {
           '建议跳末后点按，稍等后粘贴全文。',
           style: TextStyle(fontSize: 11, color: Colors.grey.shade700, height: 1.3),
         ),
+        const SizedBox(height: 12),
+        // 机器学习：不加载K线图；后台算样本后看训练/考试结果
+        Row(
+          children: [
+            Expanded(
+              child: FilledButton.icon(
+                onPressed: (_busy && !_mlSession.isActive) ||
+                        _mlSession.isActive
+                    ? null
+                    : () => _enterMlSession(),
+                icon: const Icon(Icons.psychology, size: 18),
+                label: Text(
+                  _mlSession.isActive ? '机器学习（进行中）' : '机器学习',
+                ),
+              ),
+            ),
+            IconButton(
+              tooltip: '机器学习说明',
+              onPressed: _showMlHelp,
+              icon: const Icon(Icons.help_outline, size: 20),
+            ),
+          ],
+        ),
+        if (_mlSession.isActive) ...[
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: _mlExporting ? null : _exitMlSession,
+            icon: const Icon(Icons.exit_to_app, size: 18),
+            label: const Text('退出机器学习'),
+          ),
+        ],
       ],
     );
+  }
+
+  /// 复盘 K 线（ML 期间主区不挂本组件）。
+  Widget _buildKlineChart() {
+    final gesturesOn = _hasSession && !_busy;
+    return KlineChart(
+      bars: _visibleBars,
+      period: _period,
+      combineFrames: _combineFrames,
+      k0ConfirmSignals: _k0ConfirmSignals,
+      barFeatures: _barFeatures,
+      k0Lines: _k0Lines,
+      k1BarViews: _k1BarViews,
+      k1CombineFrames: _k1CombineFrames,
+      k1Analysis: _k1Analysis,
+      levels: _levels,
+      zsK0Frames: _zsK0Frames,
+      buy1K0Frames: _buy1K0Frames,
+      sell1K0Frames: _sell1K0Frames,
+      buy2K0Frames: _buy2K0Frames,
+      sell2K0Frames: _sell2K0Frames,
+      buyNK0Frames: _buyNK0Frames,
+      sellNK0Frames: _sellNK0Frames,
+      defaultK0Policy: _defaultK0Policy,
+      truncationCheck: _truncationCheck,
+      showBuildingDash: _showBuildingDash,
+      chipOnlyMode: _chipOnlyMode,
+      chipConfig: _chipConfig,
+      tickDistConfig: _tickDistConfig,
+      mathIndicatorConfig: _mathIndicatorConfig,
+      mathFreezeStore: _mathFreezeStore,
+      diverFreezeStore: _diverFreezeStore,
+      judgmentHistoryByKn: _judgmentHistoryByKn,
+      zsJudgmentHistoryByKn: _zsJudgmentHistoryByKn,
+      zsConfirmHistoryByKn: _zsConfirmHistoryByKn,
+      buy1HistoryByKn: _buy1HistoryByKn,
+      sell1HistoryByKn: _sell1HistoryByKn,
+      buy2HistoryByKn: _buy2HistoryByKn,
+      sell2HistoryByKn: _sell2HistoryByKn,
+      buyNHistoryByKn: _buyNHistoryByKn,
+      sellNHistoryByKn: _sellNHistoryByKn,
+      adjacentRatioHistoryByKn: _adjacentRatioHistoryByKn,
+      stepRhythmHistoryByKn: _stepRhythmHistoryByKn,
+      lineSlopeHistoryByKn: _lineSlopeHistoryByKn,
+      mainIndicators: _mainIndicators,
+      onMainIndicatorsChanged: (v) => setState(() => _mainIndicators = v),
+      subIndicators: _subIndicators,
+      onSubIndicatorsChanged: (v) => setState(
+            () => _subIndicators = ensureMacdForDivergenceArea(v),
+          ),
+      indicatorsEnabled: _hasSession,
+      autoFollowLatest: true,
+      isPlaying: _playing,
+      onTapStepBack: gesturesOn ? _stepBack : null,
+      onTapPlay: !_hasSession
+          ? null
+          : (_busy && !_playing ? null : _togglePlay),
+      onTapStepForward: gesturesOn ? _stepForward : null,
+      onLongPressReset: gesturesOn ? _resetStep : null,
+      onLongPressReload: _busy ? null : _loadKlines,
+      onLongPressRunToEnd: gesturesOn ? _runToEnd : null,
+    );
+  }
+
+  String _mlStatusLine() {
+    final code = _selectedCode ?? '未选';
+    final exam = MlDatasetSplit.examOf(_mlSamples);
+    final examM = MlDatasetSplit.metrics(exam);
+    return '标的=$code 周期=$_period · ${_mlSplitConfig.summary} · '
+        '考试α=${(examM.alphaAccuracy * 100).toStringAsFixed(1)}%'
+        '(√${examM.correct}/×${examM.wrong}) · 无K线图';
+  }
+
+  void _onMlSplitConfigChanged(MlSplitConfig cfg) {
+    setState(() {
+      _mlSplitConfig = cfg;
+      if (_mlSamples.isNotEmpty) {
+        MlDatasetSplit.apply(_mlSamples, _mlSplitConfig);
+      }
+    });
+  }
+
+  /// 设置选好后点「机器学习」：后台取数→完整跳末→α打标→切分→成果页（无K线图）。
+  Future<void> _enterMlSession() async {
+    if (_selectedCode == null) {
+      _showSnack('请先在设置里选择股票代码');
+      _showMlHelp();
+      return;
+    }
+    if (_dataRoot.isEmpty) {
+      _showSnack('数据根目录未就绪，请稍候或刷新股票列表');
+      return;
+    }
+    if (_playing) {
+      _playTimer?.cancel();
+      _playing = false;
+    }
+    _mlSampler.reset();
+    setState(() {
+      _mlSession.enter();
+      _mlPhase = MlPreparePhase.loading;
+      _mlSamples = [];
+      _mlFeatureMeta = {};
+      _mlModelLoaded = false;
+      _mlError = null;
+      _panelExpanded = false;
+    });
+    _msgHistory.append(
+      '进入机器学习：后台取数（不加载K线图）→完整跳末采K0一类BS→α打标→'
+      '${_mlSplitConfig.summary}（schema v${MlFeatureSchema.schemaVersion}）',
+    );
+    try {
+      await _loadKlines();
+      if (!mounted) return;
+      if (!_hasSession || _allBars.isEmpty) {
+        throw Exception(_error ?? '取数后无 K 线，请检查代码/区间/周期');
+      }
+      setState(() => _mlPhase = MlPreparePhase.computing);
+      await Future<void>.delayed(Duration.zero);
+      if (!mounted) return;
+      _runToEnd(mlSampler: _mlSampler);
+      if (!mounted) return;
+      setState(() => _mlPhase = MlPreparePhase.scoring);
+      await Future<void>.delayed(Duration.zero);
+      if (!mounted) return;
+      MlBspLabeler.applyLabels(
+        samples: _mlSampler.samples,
+        finalBuy1K0: _buy1HistoryByKn[0] ?? const [],
+        finalSell1K0: _sell1HistoryByKn[0] ?? const [],
+        k0Lines: _k0Lines,
+        bars: _visibleBars,
+      );
+      final samples = List<MlBspSample>.from(_mlSampler.samples);
+      MlDatasetSplit.apply(samples, _mlSplitConfig);
+      setState(() {
+        _mlSamples = samples;
+        _mlPhase = MlPreparePhase.ready;
+      });
+      final examM = MlDatasetSplit.metrics(MlDatasetSplit.examOf(_mlSamples));
+      final trainM = MlDatasetSplit.metrics(MlDatasetSplit.trainOf(_mlSamples));
+      _msgHistory.append(
+        'ML成果：样本=${_mlSamples.length} 训练=${trainM.total} 考试=${examM.total} '
+        '考试α=${(examM.alphaAccuracy * 100).toStringAsFixed(1)}% '
+        '(√${examM.correct}/×${examM.wrong})',
+      );
+      _showSnack(
+        '完成：训练${trainM.total}/考试${examM.total} · '
+        '考试α ${(examM.alphaAccuracy * 100).toStringAsFixed(1)}%',
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _mlPhase = MlPreparePhase.error;
+        _mlError = '$e';
+      });
+      _msgHistory.append('机器学习准备失败：$e');
+      _showSnack('机器学习失败：$e');
+    }
+  }
+
+  void _exitMlSession() {
+    setState(() {
+      _mlSession.exit();
+      _mlExporting = false;
+      _mlPredicting = false;
+      _mlModelLoaded = false;
+      _mlPhase = MlPreparePhase.idle;
+      _mlSamples = [];
+      _mlFeatureMeta = {};
+      _mlError = null;
+      _mlSampler.reset();
+    });
+    _msgHistory.append('退出机器学习：回到复盘界面');
+    _showSnack('已退出机器学习');
+  }
+
+  void _showMlHelp() {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('机器学习说明（K0一类BS闭环）'),
+        content: const SingleChildScrollView(
+          child: Text(
+            '对齐开源 Vespa demo5/6 思想\n\n'
+            '1. 设置里选好股票、周期、起止时间；\n'
+            '2. 点「机器学习」——后台取数与计算，不加载/不展示 K 线图；\n'
+            '3. 完整逐K跳末：每当出现 K0 一类 BS，冻结当下 tip 同源特征；\n'
+            '4. α label：跳末后是否仍正确（√/×）；'
+            '且 Ba=K0连线最低、Sa=K0连线最高；\n'
+            '5. 按比例切分训练集/考试集（默认 70/30，可拖动）；\n'
+            '6. 成果页默认看「考试集」α准确率与样本列表；\n'
+            '7. 「导出数据」得 feature_train/exam.libsvm + feature.meta + 考试报告；\n'
+            '8. 用训练集外部训练后，把 model.json 放到 ml_exports，'
+            '点「加载模型预测」可在考试集上看模型准确率。\n\n'
+            '本结果仅供学习，不构成投资建议。',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('知道了'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 跳末逐步采样用：用当步 bundle + 已冻结会话 history。
+  BarFeatureLookup _buildMlLookupFor({
+    required List<KlineBar> bars,
+    required List<KlineCombineFrame> combineFrames,
+    required List<K0ConfirmSignal> k0Confirms,
+    required List<BarCrosshairFeature> barFeatures,
+    required List<K0Line> k0Lines,
+    required List<LevelBundle> levels,
+    required List<KlineCombineFrame> k1CombineFrames,
+    required K1AnalysisBundle k1Analysis,
+    required List<ZSFrame> zsK0Frames,
+  }) {
+    if (bars.isEmpty) return BarFeatureLookup.empty();
+    final maxKn = chartMaxKn(levels: levels, k0Lines: k0Lines);
+    final allSubs = buildSubIndicatorCatalog(
+      maxKn,
+      truncationCheck: _truncationCheck,
+    ).toSet();
+    final asOf = bars.last.idx;
+    return BarFeatureLookup.build(
+      bars: bars,
+      combineFrames: combineFrames,
+      k0Confirms: k0Confirms,
+      barFeatures: barFeatures,
+      k0Lines: k0Lines,
+      k1Analysis: k1Analysis,
+      levels: levels,
+      k1CombineFrames: k1CombineFrames,
+      buy1HistoryByKn: _buy1HistoryByKn,
+      sell1HistoryByKn: _sell1HistoryByKn,
+      buy2HistoryByKn: _buy2HistoryByKn,
+      sell2HistoryByKn: _sell2HistoryByKn,
+      buyNHistoryByKn: _buyNHistoryByKn,
+      sellNHistoryByKn: _sellNHistoryByKn,
+      adjacentRatioHistoryByKn: _adjacentRatioHistoryByKn,
+      stepRhythmHistoryByKn: _stepRhythmHistoryByKn,
+      lineSlopeHistoryByKn: _lineSlopeHistoryByKn,
+      buy1K0Frames: _buy1HistoryByKn[0] ?? const [],
+      sell1K0Frames: _sell1HistoryByKn[0] ?? const [],
+      buy2K0Frames: _buy2HistoryByKn[0] ?? const [],
+      sell2K0Frames: _sell2HistoryByKn[0] ?? const [],
+      buyNK0Frames: _buyNHistoryByKn[0] ?? const [],
+      sellNK0Frames: _sellNHistoryByKn[0] ?? const [],
+      subIndicators: allSubs,
+      truncationCheck: _truncationCheck,
+      judgmentHistoryByKn: _judgmentHistoryByKn,
+      zsJudgmentHistoryByKn: _zsJudgmentHistoryByKn,
+      zsConfirmHistoryByKn: _zsConfirmHistoryByKn,
+      asOf: asOf,
+      mathIndicatorConfig: _mathIndicatorConfig,
+      mathFreezeStore: _mathFreezeStore,
+      diverFreezeStore: _diverFreezeStore,
+      zsK0Frames: zsK0Frames,
+      maxBsClass: _maxBsClass,
+    );
+  }
+
+  Future<void> _exportMlFeatures() async {
+    if (_mlSamples.isEmpty) {
+      _showSnack('无 K0 一类样本可导出');
+      return;
+    }
+    if (_dataRoot.isEmpty) {
+      _showSnack('数据根目录为空，无法落盘');
+      return;
+    }
+    setState(() => _mlExporting = true);
+    try {
+      MlDatasetSplit.apply(_mlSamples, _mlSplitConfig);
+      final result = await MlBspExport.write(
+        samples: _mlSamples,
+        dataRoot: _dataRoot,
+        code: _selectedCode ?? '',
+        period: _period,
+        stepIdx: _stepIdx,
+        beginDate: _fmtDateTime(_beginDate),
+        endDate: _fmtDateTime(_endDate),
+        splitConfig: _mlSplitConfig,
+      );
+      _mlFeatureMeta = result.meta;
+      _msgHistory.append(
+        '已导出ML train=${result.trainCount} exam=${result.examCount} '
+        'feats=${result.featureCount} exam_report=${result.examReportPath}',
+      );
+      _showSnack(
+        '已导出：训练${result.trainCount}/考试${result.examCount} → ${result.trainPath}',
+      );
+    } catch (e) {
+      _msgHistory.append('ML导出失败：$e');
+      _showSnack('导出失败：$e');
+    } finally {
+      if (mounted) setState(() => _mlExporting = false);
+    }
+  }
+
+  /// 加载 ml_exports/model.json（+ feature.meta）对样本预测。
+  Future<void> _loadModelAndPredict() async {
+    if (_mlSamples.isEmpty) {
+      _showSnack('无样本可预测');
+      return;
+    }
+    if (_dataRoot.isEmpty) {
+      _showSnack('数据根为空');
+      return;
+    }
+    setState(() => _mlPredicting = true);
+    try {
+      final dir = '$_dataRoot${Platform.pathSeparator}ml_exports';
+      final modelPath = '$dir${Platform.pathSeparator}model.json';
+      final metaPath = '$dir${Platform.pathSeparator}feature.meta';
+      if (!File(modelPath).existsSync()) {
+        throw Exception('未找到 $modelPath（请先外部训练并放入）');
+      }
+      Map<String, int> meta = _mlFeatureMeta;
+      if (meta.isEmpty && File(metaPath).existsSync()) {
+        final raw = jsonDecode(await File(metaPath).readAsString());
+        meta = {
+          for (final e in (raw as Map).entries)
+            e.key.toString(): (e.value as num).toInt(),
+        };
+        _mlFeatureMeta = meta;
+      }
+      if (meta.isEmpty) {
+        // 从当前样本重建 meta（与导出口径一致）
+        final names = <String>{};
+        for (final s in _mlSamples) {
+          names.addAll(s.features.keys);
+        }
+        final sorted = names.toList()..sort();
+        meta = {for (var i = 0; i < sorted.length; i++) sorted[i]: i};
+        _mlFeatureMeta = meta;
+      }
+      for (final s in _mlSamples) {
+        final dense = MlFeatureFlat.denseFromMeta(meta, s.features);
+        s.predictScore = _bridge.mlPredict(modelPath: modelPath, dense: dense);
+      }
+      final examM =
+          MlDatasetSplit.metrics(MlDatasetSplit.examOf(_mlSamples));
+      setState(() => _mlModelLoaded = true);
+      _msgHistory.append(
+        'ML预测完成：model=$modelPath n=${_mlSamples.length} '
+        '考试模型准确率=${examM.predAccuracy == null ? "未评估" : "${(examM.predAccuracy! * 100).toStringAsFixed(1)}%"}',
+      );
+      _showSnack(
+        examM.predAccuracy == null
+            ? '预测完成（考试集暂无可评估）'
+            : '预测完成：考试准确率 ${(examM.predAccuracy! * 100).toStringAsFixed(1)}%',
+      );
+    } catch (e) {
+      _msgHistory.append('ML预测失败：$e');
+      _showSnack('预测失败：$e');
+    } finally {
+      if (mounted) setState(() => _mlPredicting = false);
+    }
   }
 
   Widget _datePickerField({

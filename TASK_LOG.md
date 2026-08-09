@@ -2,6 +2,30 @@
 
 ## 最新记录
 
+### 2026-08-09 — ML成果页：无K线图 + 训练/考试集可设置可看
+
+- **要点**：ML 主区不再挂 K 线；后台取数采 K0 一类 BS 后按时间序切分训练/考试（默认70/30，滑条可调并即时重切）；成果页默认考试集α准确率与样本列表，导出 train/exam libsvm + 考试报告，模型预测后显示考试准确率。
+- **相关路径**：`lib/ml/ml_workbench.dart`、`ml_dataset_split.dart`、`ml_split_config.dart`、`ml_bsp_export.dart`、`main.dart`、`docs/ML_FEATURE_SPEC.md`
+- **注意**：后台仍 `_loadKlines` 算特征，只是 UI 不展示图
+
+### 2026-08-09 — K0一类BS机器学习闭环（对齐 Vespa demo5/6）
+
+- **要点**：ML 改为事件样本：完整跳末采 K0 一类 BS 当下 tip 同源特征→α label（末态集合√/× + K0连线高低极值）→导出 libsvm/meta；Rust FFI `chan_ml_predict` 加载外部 model.json；成果页替换规则打分。
+- **相关路径**：`lib/ml/ml_bsp_*`、`ml_workbench.dart`、`main.dart`、`chan_data/ml_predict.rs`、`chan_ffi`、`docs/ML_FEATURE_SPEC.md`
+- **注意**：需重编并覆盖 `chan_ffi.dll` 后预测才可用；模型可用 `chan_ml_v1` 权重 JSON
+
+### 2026-08-09 — ML 新手成果页：自动加载跳末 + tip 分类打分
+
+- **要点**：设置选好标的后点「机器学习」即自动加载并完整跳末；成果整页展示总分/教学建议/8 类 tip 打分卡 + K 线小预览；可选导出 JSONL；图面使用权进出交接不变。
+- **相关路径**：`lib/ml/ml_rule_score.dart`、`ml_workbench.dart`、`main.dart`、`docs/ML_FEATURE_SPEC.md`、`test/ml_rule_score_test.dart`
+- **注意**：规则评分非训练模型；计算走 `_runToEnd` 不省略逻辑
+
+### 2026-08-09 — ML 分支：设置入口 + 图面使用权交接 + JSONL 导出
+
+- **要点**：新建分支 `ML`；设置「机器学习」进入后图面由 `MlWorkbench` 占用（预览只读），退出归还复盘；只读导出 `schema_version=1` JSONL 至 `ml_exports/`，不改 tip/`BarFeatureLookup` 生产逻辑。
+- **相关路径**：`lib/ml/*`、`main.dart`、`msg_history.dart`、`docs/ML_FEATURE_SPEC.md`、`test/ml_feature_export_test.dart`
+- **注意**：进入前需已步进；禁止 tip 动态行名作键
+
 ### 2026-08-09 — 本批验收通过（T1 K1节奏持值·T2 tip同源）
 
 - **要点**：用户贴文确认 T1=`OK_FIXED`（分笔·K1·77–114 续上个 0-0，ok=38）、T2=`OK_FIXED`（tip【11.726】与 hist3 同源）；本批结案。

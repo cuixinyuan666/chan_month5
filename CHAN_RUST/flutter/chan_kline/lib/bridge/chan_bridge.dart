@@ -118,6 +118,12 @@ class ChanBridge {
       )
       .asFunction();
 
+  late final Pointer<Utf8> Function(Pointer<Utf8>) _mlPredict = _lib
+      .lookup<NativeFunction<Pointer<Utf8> Function(Pointer<Utf8>)>>(
+        'chan_ml_predict',
+      )
+      .asFunction();
+
   dynamic _decode(String jsonText) {
     final obj = jsonDecode(jsonText);
     if (obj is! Map<String, dynamic>) {
@@ -250,5 +256,25 @@ class ChanBridge {
     bool truncationCheck = true,
   }) {
     return buildKlineCombineBundle(bars, truncationCheck: truncationCheck).frames;
+  }
+
+  /// ML：按稠密向量 + 外部模型打分（chan_ml_v1 / 简化 XGB JSON）。
+  double mlPredict({
+    required String modelPath,
+    required List<double> dense,
+  }) {
+    ensureInitialized();
+    final payload = <String, dynamic>{
+      'model_path': modelPath,
+      'dense': dense,
+    };
+    final ptr = _toNative(jsonEncode(payload));
+    try {
+      final data = _decode(_takeJson(_mlPredict(ptr)));
+      final map = Map<String, dynamic>.from(data as Map);
+      return (map['score'] as num?)?.toDouble() ?? 0;
+    } finally {
+      if (ptr != nullptr) calloc.free(ptr);
+    }
   }
 }
