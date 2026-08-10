@@ -40,12 +40,23 @@ class MlFeatureSchema {
     'metrics',
   ];
 
-  /// tip 动态名模式：导出时不得出现在 JSON 键里。
+  /// tip 动态名 / 字符串汇总：导出与 flatten 不得当数值特征。
   static final List<RegExp> forbiddenKeyPatterns = [
     RegExp(r'^K0筹码峰'),
     RegExp(r'^K0笔数峰'),
     RegExp(r'筹码峰[-＋+]'),
     RegExp(r'笔数峰[-＋+]'),
+    // 均线/通道/Demark 字符串汇总（已有数值或 demark_marks）
+    RegExp(r'^mean_text_'),
+    RegExp(r'^channel_text_'),
+    RegExp(r'^demark_text_'),
+    // BS 展示字符串（ML 用 *_code；禁 __has）
+    RegExp(r'^buy1_\d+$'),
+    RegExp(r'^sell1_\d+$'),
+    RegExp(r'^buy2_\d+$'),
+    RegExp(r'^sell2_\d+$'),
+    RegExp(r'^buyN_\d+_\d+$'),
+    RegExp(r'^sellN_\d+_\d+$'),
   ];
 
   static bool isForbiddenKey(String key) {

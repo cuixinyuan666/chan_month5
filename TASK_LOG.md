@@ -2,6 +2,12 @@
 
 ## 最新记录
 
+### 2026-08-10 — ML特征数值化：BS/节奏/Demark 编码
+
+- **要点**：tooltip 字符串汇总保留；BS 追加 `*_code`、节奏追加 `labelInt`、Demark 追加 `demark_marks` 结构化数组；`mean_text_/channel_text_/demark_text_/buy*_N` 展示键禁入 flatten（去 `__has` 冗余）。
+- **相关路径**：`lib/ml/ml_bs_code.dart`、`bar_feature_lookup.dart`、`ml_feature_schema.dart`、`ml_feature_label.dart`、`msg_history.dart`
+- **注意**：不改 Rust；验收 `flutter test test/ml_bs_feature_code_test.dart`
+
 ### 2026-08-10 — 跑通特征价值评估（002003 1m）
 
 - **要点**：对 002003 两日 1m（465根）采 K0一类样本275、特征维416；测试准确率74.5%、经验胜率66.7%但仅采纳6条；漂移告警；结论=有弱信号但不值得整包 tip 特征当主力。

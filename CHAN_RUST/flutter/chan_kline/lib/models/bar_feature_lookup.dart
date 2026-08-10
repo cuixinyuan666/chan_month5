@@ -30,9 +30,18 @@ import '../compute/divergence_freeze_store.dart';
 import '../compute/math_series_freeze_store.dart';
 import '../compute/step_rhythm_compute.dart';
 import '../compute/profile_peak_classify.dart';
+import '../ml/ml_bs_code.dart';
 import 'divergence_algo.dart';
 import 'math_indicator_config.dart';
 import 'zs_frame.dart';
+
+/// 节奏名 "0-1" → 1、"1-0" → 10（ML 数值；tooltip 仍用原 label）
+int _stepRhythmLabelToInt(String? label) {
+  if (label == null || label.isEmpty) return 0;
+  final m = RegExp(r'^(\d+)-(\d+)$').firstMatch(label);
+  if (m == null) return 0;
+  return int.parse(m.group(1)!) * 10 + int.parse(m.group(2)!);
+}
 
 /// 十字线 tooltip 一行：键值 / 层级分隔线 / 同层内容分隔线。
 class CrosshairTooltipRow {
@@ -458,12 +467,15 @@ class BarFeatureLookup {
           if (b.idx >= 0 &&
               b.idx < buySeries.length &&
               buySeries[b.idx] != null) {
+            // tip 仍用字符串；ML 用 *_code 数值编码
             sub['buy1_$kn'] = buySeries[b.idx];
+            sub['buy1_${kn}_code'] = MlBsCode.encode(buySeries[b.idx]);
           }
           if (b.idx >= 0 &&
               b.idx < sellSeries.length &&
               sellSeries[b.idx] != null) {
             sub['sell1_$kn'] = sellSeries[b.idx];
+            sub['sell1_${kn}_code'] = MlBsCode.encode(sellSeries[b.idx]);
           }
         }
       }
@@ -502,11 +514,13 @@ class BarFeatureLookup {
               b.idx < buySeries.length &&
               buySeries[b.idx] != null) {
             sub['buy2_$kn'] = buySeries[b.idx];
+            sub['buy2_${kn}_code'] = MlBsCode.encode(buySeries[b.idx]);
           }
           if (b.idx >= 0 &&
               b.idx < sellSeries.length &&
               sellSeries[b.idx] != null) {
             sub['sell2_$kn'] = sellSeries[b.idx];
+            sub['sell2_${kn}_code'] = MlBsCode.encode(sellSeries[b.idx]);
           }
         }
       }
@@ -568,11 +582,15 @@ class BarFeatureLookup {
                 b.idx < buySeries.length &&
                 buySeries[b.idx] != null) {
               sub['buyN_${kn}_$cls'] = buySeries[b.idx];
+              sub['buyN_${kn}_${cls}_code'] =
+                  MlBsCode.encode(buySeries[b.idx]);
             }
             if (b.idx >= 0 &&
                 b.idx < sellSeries.length &&
                 sellSeries[b.idx] != null) {
               sub['sellN_${kn}_$cls'] = sellSeries[b.idx];
+              sub['sellN_${kn}_${cls}_code'] =
+                  MlBsCode.encode(sellSeries[b.idx]);
             }
           }
         }
@@ -680,7 +698,8 @@ class BarFeatureLookup {
           sub['step_rhythm_lines_${e.key}'] = [
             for (final p in at)
               {
-                'label': p.label,
+                'label': p.label, // tip 用
+                'labelInt': _stepRhythmLabelToInt(p.label), // ML 数值
                 'value': p.value,
                 'ratio': p.ratio,
                 'dir': p.dir,
@@ -895,7 +914,19 @@ class BarFeatureLookup {
           if (i >= 0 && i < demark.marksAt.length) {
             final marks = demark.marksAt[i];
             if (marks != null && marks.isNotEmpty) {
+              // tip 仍用字符串汇总；ML 用 demark_marks 结构化数组
               sub['demark_text_$dkn'] = formatDemarkMarks(marks);
+              sub['demark_marks_$dkn'] = [
+                for (final m in marks)
+                  {
+                    // 0=setup, 1=countdown, 2=complete
+                    'type': m.type == 'setup'
+                        ? 0
+                        : (m.type == 'countdown' ? 1 : 2),
+                    'dir': m.dir, // +1卖向 / -1买向
+                    'idx': m.idx,
+                  },
+              ];
             }
           }
         }

@@ -988,6 +988,20 @@ class MsgHistory {
     );
   }
 
+  /// ML 特征数值化：BS/节奏/Demark 编码；字符串汇总禁入 flatten（进程内去重）。
+  static bool _mlNumericFeaturesLogged = false;
+  void appendMlNumericFeatures() {
+    if (_mlNumericFeaturesLogged) return;
+    _mlNumericFeaturesLogged = true;
+    append(
+      '【ML特征数值化·2026-08-10】tooltip 字符串汇总不变；'
+      'BS 追加 *_code（方向×(类号×100+字母序)，如 1Ba→101）；'
+      '节奏数组追加 labelInt（0-1→1）；Demark 追加 demark_marks_{kn}={type,dir,idx}；'
+      'forbidden：mean_text_/channel_text_/demark_text_/buy1_N 等展示键（禁 __has）；'
+      '不改 Rust 计算与 tip 读数字符串键。',
+    );
+  }
+
   /// 运行时虚线摘要（内容变才追加；复制历史记录排查用）。
   void appendDisplayBuildingLinesRuntime({
     required int kn,

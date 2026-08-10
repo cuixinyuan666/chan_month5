@@ -159,6 +159,8 @@ Future<void> main() async {
   MsgHistory.instance.appendTooltipFourRulesMlReady();
   // 机器学习：设置入口 + 图面使用权交接（不改 tip 生产）
   MsgHistory.instance.appendMlWorkbenchHandoff();
+  // ML 特征数值化：*_code / labelInt / demark_marks；字符串汇总禁 flatten
+  MsgHistory.instance.appendMlNumericFeatures();
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     await windowManager.ensureInitialized();
     const opts = WindowOptions(

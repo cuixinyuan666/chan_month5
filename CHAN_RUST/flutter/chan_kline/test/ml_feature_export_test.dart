@@ -81,6 +81,10 @@ void main() {
       expect(MlFeatureSchema.isForbiddenKey('K0筹码峰-1'), isTrue);
       expect(MlFeatureSchema.isForbiddenKey('K0笔数峰+2'), isTrue);
       expect(MlFeatureSchema.isForbiddenKey('volume_0'), isFalse);
+      expect(MlFeatureSchema.isForbiddenKey('demark_text_0'), isTrue);
+      expect(MlFeatureSchema.isForbiddenKey('mean_text_0'), isTrue);
+      expect(MlFeatureSchema.isForbiddenKey('buy1_0'), isTrue);
+      expect(MlFeatureSchema.isForbiddenKey('buy1_0_code'), isFalse);
     });
   });
 }
