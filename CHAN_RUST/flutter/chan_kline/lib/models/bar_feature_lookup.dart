@@ -43,6 +43,13 @@ int _stepRhythmLabelToInt(String? label) {
   return int.parse(m.group(1)!) * 10 + int.parse(m.group(2)!);
 }
 
+/// 节奏方向 "up"/"down" → +1/-1（ML 数值；tip 仍用原 dir 字符串）
+int _stepRhythmDirToInt(String? dir) {
+  if (dir == 'up') return 1;
+  if (dir == 'down') return -1;
+  return 0;
+}
+
 /// 十字线 tooltip 一行：键值 / 层级分隔线 / 同层内容分隔线。
 class CrosshairTooltipRow {
   const CrosshairTooltipRow.kv(this.label, this.value)
@@ -702,7 +709,8 @@ class BarFeatureLookup {
                 'labelInt': _stepRhythmLabelToInt(p.label), // ML 数值
                 'value': p.value,
                 'ratio': p.ratio,
-                'dir': p.dir,
+                'dir': p.dir, // tip/规则分用 up|down
+                'dirInt': _stepRhythmDirToInt(p.dir), // ML：+1升/-1降
               },
           ];
           sub['step_rhythm_${e.key}'] =

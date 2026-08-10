@@ -85,6 +85,17 @@ void main() {
       expect(MlFeatureSchema.isForbiddenKey('mean_text_0'), isTrue);
       expect(MlFeatureSchema.isForbiddenKey('buy1_0'), isTrue);
       expect(MlFeatureSchema.isForbiddenKey('buy1_0_code'), isFalse);
+      expect(MlFeatureSchema.isForbiddenKey('step_rhythm_0'), isTrue);
+      expect(
+          MlFeatureSchema.isForbiddenKey('sub.step_rhythm_lines_0[0].label'),
+          isTrue);
+      expect(
+          MlFeatureSchema.isForbiddenKey('sub.step_rhythm_lines_0[0].dir'),
+          isTrue);
+      expect(
+          MlFeatureSchema.isForbiddenKey(
+              'sub.step_rhythm_lines_0[0].labelInt'),
+          isFalse);
     });
   });
 }

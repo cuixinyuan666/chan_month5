@@ -44,9 +44,11 @@ void main() {
               'labelInt': 1,
               'value': 10.5,
               'ratio': 1.2,
-              'dir': 1,
+              'dir': 'up',
+              'dirInt': 1,
             },
           ],
+          'step_rhythm_0': '1 上 10.500',
         },
       };
 
@@ -64,12 +66,29 @@ void main() {
       expect(features['sub.demark_marks_0[1].dir'], -1);
       expect(features['sub.demark_marks_0[2].idx'], 9);
       expect(features['sub.step_rhythm_lines_0[0].labelInt'], 1);
+      expect(features['sub.step_rhythm_lines_0[0].dirInt'], 1);
       expect(features['sub.step_rhythm_lines_0[0].value'], 10.5);
+      expect(features['sub.step_rhythm_lines_0[0].ratio'], 1.2);
+      // 节奏字符串不得进 flatten 成 __has
+      expect(
+          features.containsKey('sub.step_rhythm_lines_0[0].label__has'),
+          isFalse);
+      expect(
+          features.containsKey('sub.step_rhythm_lines_0[0].dir__has'),
+          isFalse);
+      expect(features.containsKey('sub.step_rhythm_0__has'), isFalse);
 
       expect(MlFeatureSchema.isForbiddenKey('demark_text_0'), isTrue);
       expect(MlFeatureSchema.isForbiddenKey('mean_text_0'), isTrue);
       expect(MlFeatureSchema.isForbiddenKey('buy1_0'), isTrue);
       expect(MlFeatureSchema.isForbiddenKey('buy1_0_code'), isFalse);
+      expect(
+          MlFeatureSchema.isForbiddenKey('sub.step_rhythm_lines_0[0].label'),
+          isTrue);
+      expect(
+          MlFeatureSchema.isForbiddenKey('sub.step_rhythm_lines_0[0].dir'),
+          isTrue);
+      expect(MlFeatureSchema.isForbiddenKey('step_rhythm_0'), isTrue);
     });
   });
 }

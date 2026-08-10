@@ -996,8 +996,10 @@ class MsgHistory {
     append(
       '【ML特征数值化·2026-08-10】tooltip 字符串汇总不变；'
       'BS 追加 *_code（方向×(类号×100+字母序)，如 1Ba→101）；'
-      '节奏数组追加 labelInt（0-1→1）；Demark 追加 demark_marks_{kn}={type,dir,idx}；'
-      'forbidden：mean_text_/channel_text_/demark_text_/buy1_N 等展示键（禁 __has）；'
+      '节奏数组追加 labelInt（0-1→1）+ dirInt（up→+1/down→-1）；'
+      'Demark 追加 demark_marks_{kn}={type,dir,idx}；'
+      'forbidden：mean_text_/channel_text_/demark_text_/buy*_N、'
+      'step_rhythm_lines_*[.label|.dir]、step_rhythm_N 展示键（禁 __has）；'
       '不改 Rust 计算与 tip 读数字符串键。',
     );
   }

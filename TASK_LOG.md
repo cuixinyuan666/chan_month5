@@ -2,6 +2,12 @@
 
 ## 最新记录
 
+### 2026-08-10 — 节奏 ML：补 dirInt + 禁 label/dir 字符串
+
+- **要点**：核实 BS `*_code` 已就绪；节奏 `dir` 实为 up/down 字符串会 flatten 成 `__has` 丢方向，现写 `dirInt`；schema 禁 `step_rhythm_lines_*[.label|.dir]`（匹配含 `sub.` 全路径）与 `step_rhythm_N`。
+- **相关路径**：`bar_feature_lookup.dart`、`ml_feature_schema.dart`、`ml_feature_label.dart`、`msg_history.dart`、`test/ml_bs_feature_code_test.dart`
+- **注意**：答复2 建议的 `^step_rhythm_…\.label$` 匹配不到 `sub.` 前缀，已改为无锚前缀的后缀匹配
+
 ### 2026-08-10 — ML特征数值化：BS/节奏/Demark 编码
 
 - **要点**：tooltip 字符串汇总保留；BS 追加 `*_code`、节奏追加 `labelInt`、Demark 追加 `demark_marks` 结构化数组；`mean_text_/channel_text_/demark_text_/buy*_N` 展示键禁入 flatten（去 `__has` 冗余）。

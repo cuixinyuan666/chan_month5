@@ -122,11 +122,14 @@ class MlFeatureLabel {
       }
       return 'K$kn $clsName$side点序列';
     }
-    // 节奏 labelInt
-    if (key.contains('step_rhythm_lines_') && key.endsWith('.labelInt')) {
+    // 节奏 labelInt / dirInt
+    if (key.contains('step_rhythm_lines_')) {
       final m = RegExp(r'step_rhythm_lines_(\d+)').firstMatch(key);
       final kn = m?.group(1) ?? '?';
-      return 'K$kn 节奏名编码';
+      if (key.endsWith('.labelInt')) return 'K$kn 节奏名编码';
+      if (key.endsWith('.dirInt')) return 'K$kn 节奏方向';
+      if (key.endsWith('.value')) return 'K$kn 节奏投影价';
+      if (key.endsWith('.ratio')) return 'K$kn 节奏比值';
     }
     // Demark 结构化
     if (key.contains('demark_marks_')) {

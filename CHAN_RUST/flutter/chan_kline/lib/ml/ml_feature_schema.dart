@@ -57,6 +57,11 @@ class MlFeatureSchema {
     RegExp(r'^sell2_\d+$'),
     RegExp(r'^buyN_\d+_\d+$'),
     RegExp(r'^sellN_\d+_\d+$'),
+    // 节奏：label/dir 字符串（已有 labelInt/dirInt）；匹配全路径含 sub. 前缀
+    RegExp(r'step_rhythm_lines_\d+\[\d+\]\.label$'),
+    RegExp(r'step_rhythm_lines_\d+\[\d+\]\.dir$'),
+    // 节奏汇总读数字符串（已有 lines 数组）
+    RegExp(r'^step_rhythm_\d+$'),
   ];
 
   static bool isForbiddenKey(String key) {
