@@ -1,9 +1,9 @@
 import 'ml_bsp_sample.dart';
 import 'ml_split_config.dart';
 
-enum MlSampleSplit { train, exam }
+enum MlSampleSplit { train, valid, test }
 
-/// 按 x 升序切分训练集 / 考试集。
+/// 按 x 升序严格时序切分：训练 | 验证 | 测试（禁止打乱）。
 class MlDatasetSplit {
   MlDatasetSplit._();
 
@@ -14,76 +14,59 @@ class MlDatasetSplit {
         if (c != 0) return c;
         return a.sampleKey.compareTo(b.sampleKey);
       });
-    final trainN = (ordered.length * cfg.trainRatio).floor().clamp(
-          1,
-          ordered.length,
-        );
-    // 至少留 1 条考试（样本≥2 时）
-    final cut = ordered.length >= 2
-        ? trainN.clamp(1, ordered.length - 1)
-        : ordered.length;
-    for (var i = 0; i < ordered.length; i++) {
-      ordered[i].split = i < cut ? MlSampleSplit.train : MlSampleSplit.exam;
+    final n = ordered.length;
+    if (n == 1) {
+      ordered[0].split = MlSampleSplit.train;
+      return;
+    }
+    if (n == 2) {
+      ordered[0].split = MlSampleSplit.train;
+      ordered[1].split = MlSampleSplit.test;
+      return;
+    }
+
+    // 三截各至少 1 条
+    var trainN = (n * cfg.trainRatio).floor();
+    var validN = (n * cfg.validRatio).floor();
+    var testN = n - trainN - validN;
+    if (trainN < 1) trainN = 1;
+    if (validN < 1) validN = 1;
+    if (testN < 1) testN = 1;
+    while (trainN + validN + testN > n) {
+      if (trainN >= validN && trainN >= testN && trainN > 1) {
+        trainN--;
+      } else if (validN >= testN && validN > 1) {
+        validN--;
+      } else if (testN > 1) {
+        testN--;
+      } else {
+        break;
+      }
+    }
+    // 补齐差额给测试（末段）
+    final used = trainN + validN + testN;
+    if (used < n) testN += n - used;
+
+    for (var i = 0; i < n; i++) {
+      if (i < trainN) {
+        ordered[i].split = MlSampleSplit.train;
+      } else if (i < trainN + validN) {
+        ordered[i].split = MlSampleSplit.valid;
+      } else {
+        ordered[i].split = MlSampleSplit.test;
+      }
     }
   }
 
   static List<MlBspSample> trainOf(List<MlBspSample> samples) =>
       samples.where((e) => e.split == MlSampleSplit.train).toList();
 
-  static List<MlBspSample> examOf(List<MlBspSample> samples) =>
-      samples.where((e) => e.split == MlSampleSplit.exam).toList();
+  static List<MlBspSample> validOf(List<MlBspSample> samples) =>
+      samples.where((e) => e.split == MlSampleSplit.valid).toList();
 
-  static MlSplitMetrics metrics(List<MlBspSample> subset) {
-    final n = subset.length;
-    final ok = subset.where((e) => e.isCorrect == true).length;
-    final bad = subset.where((e) => e.isCorrect == false).length;
-    final labeled = ok + bad;
-    final alphaAcc = labeled == 0 ? 0.0 : ok / labeled;
+  static List<MlBspSample> testOf(List<MlBspSample> samples) =>
+      samples.where((e) => e.split == MlSampleSplit.test).toList();
 
-    var predOk = 0;
-    var predN = 0;
-    for (final s in subset) {
-      if (s.predictScore == null || s.isCorrect == null) continue;
-      predN++;
-      final predPos = s.predictScore! >= 0.5;
-      if (predPos == s.isCorrect) predOk++;
-    }
-    final predAcc = predN == 0 ? null : predOk / predN;
-
-    return MlSplitMetrics(
-      total: n,
-      correct: ok,
-      wrong: bad,
-      alphaAccuracy: alphaAcc,
-      predAccuracy: predAcc,
-      predEvaluated: predN,
-    );
-  }
-}
-
-class MlSplitMetrics {
-  const MlSplitMetrics({
-    required this.total,
-    required this.correct,
-    required this.wrong,
-    required this.alphaAccuracy,
-    required this.predAccuracy,
-    required this.predEvaluated,
-  });
-
-  final int total;
-  final int correct;
-  final int wrong;
-  final double alphaAccuracy;
-  final double? predAccuracy;
-  final int predEvaluated;
-
-  String get alphaSummary =>
-      'α准确率 ${(alphaAccuracy * 100).toStringAsFixed(1)}%（√$correct/×$wrong）';
-
-  String get predSummary {
-    if (predAccuracy == null) return '模型预测：未评估';
-    return '模型准确率 ${(predAccuracy! * 100).toStringAsFixed(1)}%'
-        '（阈值0.5，n=$predEvaluated）';
-  }
+  /// 兼容旧名：考试=测试
+  static List<MlBspSample> examOf(List<MlBspSample> samples) => testOf(samples);
 }

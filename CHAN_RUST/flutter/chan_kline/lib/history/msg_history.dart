@@ -975,17 +975,15 @@ class MsgHistory {
     );
   }
 
-  /// 机器学习工作台：无K线图成果页 + 训练/考试切分（进程内去重）。
+  /// 机器学习工作台：展望窗α + 测试锁定 + 漂移（进程内去重）。
   static bool _mlWorkbenchLogged = false;
   void appendMlWorkbenchHandoff() {
     if (_mlWorkbenchLogged) return;
     _mlWorkbenchLogged = true;
     append(
-      '【机器学习·K0一类BS闭环·2026-08-09】对齐 Vespa demo5/6：'
-      '设置选好后点「机器学习」→后台取数（不加载/不展示K线图）→完整跳末采 K0 一类 BS '
-      '当下 tip 同源特征→α label（末态集合√/×，且 Ba=K0连线最低/Sa=最高）→'
-      '按样本时间序切分训练/考试集（默认70/30可调）→成果页默认看考试集α与样本列表；'
-      '导出 feature_train/exam.libsvm+feature.meta+考试报告；外部 model.json 可加载预测。'
+      '【机器学习·防未来/防窥探·2026-08-10】只基于当前股票；不展示K线图；不导出/不加载外部模型。'
+      'α=发现后固定展望窗内 live一类+asOf截断极值（禁跳末末态）；时序训练|验证|测试；'
+      '仅验证调参；测试只评估一次并锁定（改比例须退出重进）；报告标签√率与特征漂移。'
       '不改 tip 生产逻辑。详见 docs/ML_FEATURE_SPEC.md。',
     );
   }

@@ -190,7 +190,7 @@ void main() {
     expect(File(result.examPath).existsSync(), isTrue);
     expect(File(result.examReportPath).existsSync(), isTrue);
     expect(File(result.metaPath).existsSync(), isTrue);
-    // 默认 70/30：2 条 → 训练1 / 考试1；feature.libsvm=训练集
+    // 2 条时序：训练1 / 测试1（无验证）；feature.libsvm=训练集
     expect(result.trainCount, 1);
     expect(result.examCount, 1);
     final trainLines = await File(result.trainPath).readAsLines();

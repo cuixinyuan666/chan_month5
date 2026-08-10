@@ -2,6 +2,30 @@
 
 ## 最新记录
 
+### 2026-08-10 — 跑通特征价值评估（002003 1m）
+
+- **要点**：对 002003 两日 1m（465根）采 K0一类样本275、特征维416；测试准确率74.5%、经验胜率66.7%但仅采纳6条；漂移告警；结论=有弱信号但不值得整包 tip 特征当主力。
+- **相关路径**：`test/ml_feature_worth_eval_test.dart`
+- **注意**：复跑：`flutter test test/ml_feature_worth_eval_test.dart`
+
+### 2026-08-10 — ML收紧：展望窗α + 测试锁定 + 漂移报告
+
+- **要点**：α改为发现后固定展望窗内用当步live一类与asOf截断极值打标（禁跳末末态）；测试评估成功后锁定不可改比例重跑；结果页增加三截标签√率与特征漂移告警。
+- **相关路径**：`ml_bsp_labeler.dart`、`ml_label_config.dart`、`ml_drift_report.dart`、`ml_workbench.dart`、`main.dart`、`docs/ML_FEATURE_SPEC.md`
+- **注意**：锁定仅防同会话窥探；单票过拟合仍在
+
+### 2026-08-10 — ML修正：训练/验证/测试时序三截 + 仅验证调参
+
+- **要点**：按样本 x 严格前→后切训练|验证|测试；网格超参只在验证集选；锁参后测试集只评估一次；UI 默认报测试经验胜率，并展示调参摘要。
+- **相关路径**：`ml_dataset_split.dart`、`ml_split_config.dart`、`ml_experience_trainer.dart`、`ml_workbench.dart`、`main.dart`、`docs/ML_FEATURE_SPEC.md`
+- **注意**：禁止用测试集调参；样本不足 3 条时验证可能为空并跳过调参
+
+### 2026-08-09 — ML当前阶段：先设切分再加载，考试集看经验胜率
+
+- **要点**：进 ML 先设训练/考试比例，点「加载」显示进度；用训练集拟合经验应用到考试集；结果含经验胜率/基准胜率/准确率/覆盖率/买卖侧；本阶段去掉导出与外部模型加载，只基于当前股票、不展示K线。
+- **相关路径**：`lib/ml/ml_experience_trainer.dart`、`ml_workbench.dart`、`main.dart`、`docs/ML_FEATURE_SPEC.md`
+- **注意**：经验=内存逻辑回归；经验胜率=采纳且α=√ / 采纳数
+
 ### 2026-08-09 — ML成果页：无K线图 + 训练/考试集可设置可看
 
 - **要点**：ML 主区不再挂 K 线；后台取数采 K0 一类 BS 后按时间序切分训练/考试（默认70/30，滑条可调并即时重切）；成果页默认考试集α准确率与样本列表，导出 train/exam libsvm + 考试报告，模型预测后显示考试准确率。

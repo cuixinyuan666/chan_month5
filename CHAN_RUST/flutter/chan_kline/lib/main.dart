@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 
@@ -24,13 +23,13 @@ import 'compute/divergence_freeze_store.dart';
 import 'history/app_debug_snapshot.dart';
 import 'history/audit_probe_snapshot.dart';
 import 'history/msg_history.dart';
-import 'ml/ml_bsp_export.dart';
 import 'ml/ml_bsp_labeler.dart';
 import 'ml/ml_bsp_sample.dart';
 import 'ml/ml_bsp_sampler.dart';
 import 'ml/ml_dataset_split.dart';
-import 'ml/ml_feature_flat.dart';
+import 'ml/ml_experience_trainer.dart';
 import 'ml/ml_feature_schema.dart';
+import 'ml/ml_label_config.dart';
 import 'ml/ml_session_controller.dart';
 import 'ml/ml_split_config.dart';
 import 'ml/ml_workbench.dart';
@@ -299,16 +298,17 @@ class _KlineHomePageState extends State<KlineHomePage> {
   Map<int, List<StepRhythmLinePoint>> _stepRhythmHistoryByKn = {};
   final Map<int, StepRhythmState> _stepRhythmStateByKn = {};
 
-  /// 机器学习会话：true=主区挂 ML 成果页（不加载/不展示 K 线图）
+  /// 机器学习会话：true=主区挂 ML（不展示 K 线图）
   final MlSessionController _mlSession = MlSessionController();
-  bool _mlExporting = false;
-  bool _mlPredicting = false;
-  bool _mlModelLoaded = false;
-  MlPreparePhase _mlPhase = MlPreparePhase.idle;
+  MlPreparePhase _mlPhase = MlPreparePhase.setup;
   List<MlBspSample> _mlSamples = [];
-  Map<String, int> _mlFeatureMeta = {};
+  MlRunReport? _mlReport;
   String? _mlError;
+  String _mlProgressHint = '';
   MlSplitConfig _mlSplitConfig = const MlSplitConfig();
+  MlLabelConfig _mlLabelConfig = const MlLabelConfig();
+  /// 测试集已评估一次：禁止改比例重跑（须退出 ML 再进）
+  bool _mlTestLocked = false;
   final MlBspSampler _mlSampler = MlBspSampler();
 
   /// catalog 三类..N 类上限（至少 9；随会话观察到的更高类扩大）
@@ -1320,6 +1320,21 @@ class _KlineHomePageState extends State<KlineHomePage> {
             zsK0Frames: bundle.zsK0Frames,
           ),
         );
+        // α：展望窗到期用**当步 live 一类**打标，不用跳末末态
+        if (mlSampler != null) {
+          final liveBuy = collectBuy1EventsByKn(bundle)[0] ?? const [];
+          final liveSell = collectSell1EventsByKn(bundle)[0] ?? const [];
+          MlBspLabeler.labelDueSamples(
+            samples: mlSampler.samples,
+            asOfIdx: i,
+            horizonBars: _mlLabelConfig.horizonBars,
+            isLastBar: i == end,
+            liveBuy1: liveBuy,
+            liveSell1: liveSell,
+            k0LinesAsOf: bundle.k0Lines,
+            barsAsOf: visible,
+          );
+        }
       } catch (e) {
         _msgHistory.append('一次性走完@step=$i 失败：$e');
         break;
@@ -1351,17 +1366,21 @@ class _KlineHomePageState extends State<KlineHomePage> {
                 child: _mlSession.isActive
                     ? MlWorkbench(
                         statusLine: _mlStatusLine(),
-                        exporting: _mlExporting,
-                        predicting: _mlPredicting,
-                        modelLoaded: _mlModelLoaded,
+                        progressHint: _mlProgressHint,
                         phase: _mlPhase,
                         splitConfig: _mlSplitConfig,
                         onSplitConfigChanged: _onMlSplitConfigChanged,
+                        labelConfig: _mlLabelConfig,
+                        onLabelConfigChanged: (c) =>
+                            setState(() => _mlLabelConfig = c),
+                        testLocked: _mlTestLocked,
+                        code: _selectedCode ?? '',
+                        period: _period,
                         samples: _mlSamples,
+                        report: _mlReport,
                         errorText: _mlError,
                         onExit: _exitMlSession,
-                        onExport: _exportMlFeatures,
-                        onLoadModelPredict: _loadModelAndPredict,
+                        onLoad: _loadMlRun,
                       )
                     : _buildKlineChart(),
               ),
@@ -1812,7 +1831,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         if (_mlSession.isActive) ...[
           const SizedBox(height: 8),
           OutlinedButton.icon(
-            onPressed: _mlExporting ? null : _exitMlSession,
+            onPressed: _exitMlSession,
             icon: const Icon(Icons.exit_to_app, size: 18),
             label: const Text('退出机器学习'),
           ),
@@ -1885,24 +1904,26 @@ class _KlineHomePageState extends State<KlineHomePage> {
 
   String _mlStatusLine() {
     final code = _selectedCode ?? '未选';
-    final exam = MlDatasetSplit.examOf(_mlSamples);
-    final examM = MlDatasetSplit.metrics(exam);
-    return '标的=$code 周期=$_period · ${_mlSplitConfig.summary} · '
-        '考试α=${(examM.alphaAccuracy * 100).toStringAsFixed(1)}%'
-        '(√${examM.correct}/×${examM.wrong}) · 无K线图';
+    final r = _mlReport;
+    if (r == null) {
+      return '标的=$code 周期=$_period · ${_mlSplitConfig.summary} · '
+          '时序三截 · 验证调参 · 测试只报一次';
+    }
+    final t = r.testStats;
+    return '标的=$code · 测试经验胜率=${(t.experienceWinRate * 100).toStringAsFixed(1)}%'
+        ' · 基准=${(t.alphaWinRate * 100).toStringAsFixed(1)}%';
   }
 
   void _onMlSplitConfigChanged(MlSplitConfig cfg) {
-    setState(() {
-      _mlSplitConfig = cfg;
-      if (_mlSamples.isNotEmpty) {
-        MlDatasetSplit.apply(_mlSamples, _mlSplitConfig);
-      }
-    });
+    if (_mlTestLocked) {
+      _showSnack('测试已锁定：不可改切分。请退出机器学习后重新进入');
+      return;
+    }
+    setState(() => _mlSplitConfig = cfg);
   }
 
-  /// 设置选好后点「机器学习」：后台取数→完整跳末→α打标→切分→成果页（无K线图）。
-  Future<void> _enterMlSession() async {
+  /// 进入 ML：只打开设置页（当前股票 + 训练/验证/测试比例）。
+  void _enterMlSession() {
     if (_selectedCode == null) {
       _showSnack('请先在设置里选择股票代码');
       _showMlHelp();
@@ -1919,16 +1940,43 @@ class _KlineHomePageState extends State<KlineHomePage> {
     _mlSampler.reset();
     setState(() {
       _mlSession.enter();
-      _mlPhase = MlPreparePhase.loading;
+      _mlPhase = MlPreparePhase.setup;
       _mlSamples = [];
-      _mlFeatureMeta = {};
-      _mlModelLoaded = false;
+      _mlReport = null;
       _mlError = null;
+      _mlProgressHint = '';
+      _mlTestLocked = false;
       _panelExpanded = false;
     });
     _msgHistory.append(
-      '进入机器学习：后台取数（不加载K线图）→完整跳末采K0一类BS→α打标→'
-      '${_mlSplitConfig.summary}（schema v${MlFeatureSchema.schemaVersion}）',
+      '进入机器学习：当前股票=$_selectedCode · ${_mlLabelConfig.summary} · '
+      '时序三截+验证调参+测试一次锁定'
+      '（schema v${MlFeatureSchema.schemaVersion}）',
+    );
+  }
+
+  /// 点「加载」：取数→采样→展望窗打标→时序三截→验证调参→测试只评估一次并锁定。
+  Future<void> _loadMlRun() async {
+    if (_selectedCode == null) {
+      _showSnack('请先选择股票');
+      return;
+    }
+    if (_mlTestLocked) {
+      _showSnack('测试已锁定一次评估。请退出机器学习后重新进入再加载');
+      _msgHistory.append('ML拒绝重跑：测试已锁定（防窥探）');
+      return;
+    }
+    _mlSampler.reset();
+    setState(() {
+      _mlPhase = MlPreparePhase.loading;
+      _mlSamples = [];
+      _mlReport = null;
+      _mlError = null;
+      _mlProgressHint = '正在取 $_selectedCode 数据…';
+    });
+    _msgHistory.append(
+      'ML加载：$_selectedCode $_period · ${_mlSplitConfig.summary} · '
+      '${_mlLabelConfig.summary}',
     );
     try {
       await _loadKlines();
@@ -1936,62 +1984,99 @@ class _KlineHomePageState extends State<KlineHomePage> {
       if (!_hasSession || _allBars.isEmpty) {
         throw Exception(_error ?? '取数后无 K 线，请检查代码/区间/周期');
       }
-      setState(() => _mlPhase = MlPreparePhase.computing);
+
+      setState(() {
+        _mlPhase = MlPreparePhase.computing;
+        _mlProgressHint =
+            '逐K采集 + 展望窗${_mlLabelConfig.horizonBars}K打标…';
+      });
       await Future<void>.delayed(Duration.zero);
       if (!mounted) return;
       _runToEnd(mlSampler: _mlSampler);
       if (!mounted) return;
-      setState(() => _mlPhase = MlPreparePhase.scoring);
+
+      setState(() {
+        _mlPhase = MlPreparePhase.labeling;
+        _mlProgressHint = '检查展望窗标签完整性…';
+      });
       await Future<void>.delayed(Duration.zero);
       if (!mounted) return;
-      MlBspLabeler.applyLabels(
-        samples: _mlSampler.samples,
-        finalBuy1K0: _buy1HistoryByKn[0] ?? const [],
-        finalSell1K0: _sell1HistoryByKn[0] ?? const [],
-        k0Lines: _k0Lines,
-        bars: _visibleBars,
-      );
       final samples = List<MlBspSample>.from(_mlSampler.samples);
+      if (samples.isEmpty) {
+        throw Exception('未采到 K0 一类 BS 样本，可换区间/周期再试');
+      }
+      final unlabeled = samples.where((e) => e.isCorrect == null).length;
+      if (unlabeled > 0) {
+        throw Exception('仍有 $unlabeled 条未打标（展望窗未到期）');
+      }
+
+      setState(() {
+        _mlPhase = MlPreparePhase.training;
+        _mlProgressHint = '时序切分训练/验证/测试…';
+      });
+      await Future<void>.delayed(Duration.zero);
+      if (!mounted) return;
       MlDatasetSplit.apply(samples, _mlSplitConfig);
+
+      setState(() {
+        _mlPhase = MlPreparePhase.tuning;
+        _mlProgressHint = '仅验证集网格调参（测试集不参与）…';
+      });
+      await Future<void>.delayed(Duration.zero);
+      if (!mounted) return;
+
+      setState(() {
+        _mlPhase = MlPreparePhase.evaluating;
+        _mlProgressHint = '测试集只评估一次并锁定…';
+      });
+      await Future<void>.delayed(Duration.zero);
+      if (!mounted) return;
+      final report = MlExperienceTrainer.fitTuneAndTest(samples: samples);
+
       setState(() {
         _mlSamples = samples;
+        _mlReport = report;
         _mlPhase = MlPreparePhase.ready;
+        _mlProgressHint = '';
+        _mlTestLocked = true;
       });
-      final examM = MlDatasetSplit.metrics(MlDatasetSplit.examOf(_mlSamples));
-      final trainM = MlDatasetSplit.metrics(MlDatasetSplit.trainOf(_mlSamples));
+      final t = report.testStats;
       _msgHistory.append(
-        'ML成果：样本=${_mlSamples.length} 训练=${trainM.total} 考试=${examM.total} '
-        '考试α=${(examM.alphaAccuracy * 100).toStringAsFixed(1)}% '
-        '(√${examM.correct}/×${examM.wrong})',
+        'ML测试结果(已锁定)：经验胜率=${(t.experienceWinRate * 100).toStringAsFixed(1)}% '
+        '基准=${(t.alphaWinRate * 100).toStringAsFixed(1)}% '
+        '采纳=${t.adopted}/${t.total} · ${report.tuneSummary} · '
+        '${report.drift.labelRateSummary} · ${report.drift.driftSummary}',
       );
       _showSnack(
-        '完成：训练${trainM.total}/考试${examM.total} · '
-        '考试α ${(examM.alphaAccuracy * 100).toStringAsFixed(1)}%',
+        report.drift.alert
+            ? '${report.headline} · ⚠分布漂移告警'
+            : report.headline,
       );
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _mlPhase = MlPreparePhase.error;
         _mlError = '$e';
+        _mlProgressHint = '';
+        // 失败不锁定，可改参重试
       });
-      _msgHistory.append('机器学习准备失败：$e');
-      _showSnack('机器学习失败：$e');
+      _msgHistory.append('机器学习加载失败：$e');
+      _showSnack('加载失败：$e');
     }
   }
 
   void _exitMlSession() {
     setState(() {
       _mlSession.exit();
-      _mlExporting = false;
-      _mlPredicting = false;
-      _mlModelLoaded = false;
-      _mlPhase = MlPreparePhase.idle;
+      _mlPhase = MlPreparePhase.setup;
       _mlSamples = [];
-      _mlFeatureMeta = {};
+      _mlReport = null;
       _mlError = null;
+      _mlProgressHint = '';
+      _mlTestLocked = false;
       _mlSampler.reset();
     });
-    _msgHistory.append('退出机器学习：回到复盘界面');
+    _msgHistory.append('退出机器学习：解锁测试锁定，回到复盘界面');
     _showSnack('已退出机器学习');
   }
 
@@ -1999,20 +2084,16 @@ class _KlineHomePageState extends State<KlineHomePage> {
     showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('机器学习说明（K0一类BS闭环）'),
+        title: const Text('机器学习说明（防未来/防窥探）'),
         content: const SingleChildScrollView(
           child: Text(
-            '对齐开源 Vespa demo5/6 思想\n\n'
-            '1. 设置里选好股票、周期、起止时间；\n'
-            '2. 点「机器学习」——后台取数与计算，不加载/不展示 K 线图；\n'
-            '3. 完整逐K跳末：每当出现 K0 一类 BS，冻结当下 tip 同源特征；\n'
-            '4. α label：跳末后是否仍正确（√/×）；'
-            '且 Ba=K0连线最低、Sa=K0连线最高；\n'
-            '5. 按比例切分训练集/考试集（默认 70/30，可拖动）；\n'
-            '6. 成果页默认看「考试集」α准确率与样本列表；\n'
-            '7. 「导出数据」得 feature_train/exam.libsvm + feature.meta + 考试报告；\n'
-            '8. 用训练集外部训练后，把 model.json 放到 ml_exports，'
-            '点「加载模型预测」可在考试集上看模型准确率。\n\n'
+            '只基于当前股票；不展示 K 线图；本阶段不导出、不加载外部模型。\n\n'
+            '1. 设训练/验证比例（测试=时序余量）与展望窗K数；\n'
+            '2. 「加载」：逐K采特征；α=发现后固定展望窗内 live一类+asOf极值'
+            '（禁止跳末末态回标）；\n'
+            '3. 时序三截→仅验证集调参→测试只评估一次并锁定；\n'
+            '4. 结果含标签√率与特征漂移；测试锁定后不可改比例重跑'
+            '（须退出机器学习再进）。\n\n'
             '本结果仅供学习，不构成投资建议。',
           ),
         ),
@@ -2081,105 +2162,6 @@ class _KlineHomePageState extends State<KlineHomePage> {
       zsK0Frames: zsK0Frames,
       maxBsClass: _maxBsClass,
     );
-  }
-
-  Future<void> _exportMlFeatures() async {
-    if (_mlSamples.isEmpty) {
-      _showSnack('无 K0 一类样本可导出');
-      return;
-    }
-    if (_dataRoot.isEmpty) {
-      _showSnack('数据根目录为空，无法落盘');
-      return;
-    }
-    setState(() => _mlExporting = true);
-    try {
-      MlDatasetSplit.apply(_mlSamples, _mlSplitConfig);
-      final result = await MlBspExport.write(
-        samples: _mlSamples,
-        dataRoot: _dataRoot,
-        code: _selectedCode ?? '',
-        period: _period,
-        stepIdx: _stepIdx,
-        beginDate: _fmtDateTime(_beginDate),
-        endDate: _fmtDateTime(_endDate),
-        splitConfig: _mlSplitConfig,
-      );
-      _mlFeatureMeta = result.meta;
-      _msgHistory.append(
-        '已导出ML train=${result.trainCount} exam=${result.examCount} '
-        'feats=${result.featureCount} exam_report=${result.examReportPath}',
-      );
-      _showSnack(
-        '已导出：训练${result.trainCount}/考试${result.examCount} → ${result.trainPath}',
-      );
-    } catch (e) {
-      _msgHistory.append('ML导出失败：$e');
-      _showSnack('导出失败：$e');
-    } finally {
-      if (mounted) setState(() => _mlExporting = false);
-    }
-  }
-
-  /// 加载 ml_exports/model.json（+ feature.meta）对样本预测。
-  Future<void> _loadModelAndPredict() async {
-    if (_mlSamples.isEmpty) {
-      _showSnack('无样本可预测');
-      return;
-    }
-    if (_dataRoot.isEmpty) {
-      _showSnack('数据根为空');
-      return;
-    }
-    setState(() => _mlPredicting = true);
-    try {
-      final dir = '$_dataRoot${Platform.pathSeparator}ml_exports';
-      final modelPath = '$dir${Platform.pathSeparator}model.json';
-      final metaPath = '$dir${Platform.pathSeparator}feature.meta';
-      if (!File(modelPath).existsSync()) {
-        throw Exception('未找到 $modelPath（请先外部训练并放入）');
-      }
-      Map<String, int> meta = _mlFeatureMeta;
-      if (meta.isEmpty && File(metaPath).existsSync()) {
-        final raw = jsonDecode(await File(metaPath).readAsString());
-        meta = {
-          for (final e in (raw as Map).entries)
-            e.key.toString(): (e.value as num).toInt(),
-        };
-        _mlFeatureMeta = meta;
-      }
-      if (meta.isEmpty) {
-        // 从当前样本重建 meta（与导出口径一致）
-        final names = <String>{};
-        for (final s in _mlSamples) {
-          names.addAll(s.features.keys);
-        }
-        final sorted = names.toList()..sort();
-        meta = {for (var i = 0; i < sorted.length; i++) sorted[i]: i};
-        _mlFeatureMeta = meta;
-      }
-      for (final s in _mlSamples) {
-        final dense = MlFeatureFlat.denseFromMeta(meta, s.features);
-        s.predictScore = _bridge.mlPredict(modelPath: modelPath, dense: dense);
-      }
-      final examM =
-          MlDatasetSplit.metrics(MlDatasetSplit.examOf(_mlSamples));
-      setState(() => _mlModelLoaded = true);
-      _msgHistory.append(
-        'ML预测完成：model=$modelPath n=${_mlSamples.length} '
-        '考试模型准确率=${examM.predAccuracy == null ? "未评估" : "${(examM.predAccuracy! * 100).toStringAsFixed(1)}%"}',
-      );
-      _showSnack(
-        examM.predAccuracy == null
-            ? '预测完成（考试集暂无可评估）'
-            : '预测完成：考试准确率 ${(examM.predAccuracy! * 100).toStringAsFixed(1)}%',
-      );
-    } catch (e) {
-      _msgHistory.append('ML预测失败：$e');
-      _showSnack('预测失败：$e');
-    } finally {
-      if (mounted) setState(() => _mlPredicting = false);
-    }
   }
 
   Widget _datePickerField({

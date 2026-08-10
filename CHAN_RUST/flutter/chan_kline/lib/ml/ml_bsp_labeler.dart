@@ -5,79 +5,144 @@ import '../models/k0_line.dart';
 import '../models/kline_bar.dart';
 import '../models/sell1_frame.dart';
 import 'ml_bsp_sample.dart';
+import 'ml_label_config.dart';
 
-/// α label：末态一类集合 + K0连线极值核对（Ba=连线最低 / Sa=连线最高）。
+/// α label：发现后固定展望窗内，用**当时** live 一类帧 + asOf 截断极值判定。
+/// 禁止用全样本跳末末态回标。
 class MlBspLabeler {
   MlBspLabeler._();
 
   static const double _priceEps = 1e-6;
 
+  /// 在步进过程中：对已到期（x+horizon 或数据末）且未打标的样本打标。
+  static void labelDueSamples({
+    required List<MlBspSample> samples,
+    required int asOfIdx,
+    required int horizonBars,
+    required bool isLastBar,
+    required List<Buy1Frame> liveBuy1,
+    required List<Sell1Frame> liveSell1,
+    required List<K0Line> k0LinesAsOf,
+    required List<KlineBar> barsAsOf,
+  }) {
+    for (final s in samples) {
+      if (s.isCorrect != null) continue;
+      final dueAt = s.x + horizonBars;
+      final due = asOfIdx >= dueAt || isLastBar;
+      if (!due) continue;
+      final truncated = isLastBar && asOfIdx < dueAt;
+      applyOneAtAsOf(
+        sample: s,
+        asOfIdx: asOfIdx,
+        liveBuy1: liveBuy1,
+        liveSell1: liveSell1,
+        k0LinesAsOf: k0LinesAsOf,
+        barsAsOf: barsAsOf,
+        truncated: truncated,
+        horizonBars: horizonBars,
+      );
+    }
+  }
+
+  /// 单条：仅用 asOf 已可见数据（live 帧 + 截断连线极值）。
+  static void applyOneAtAsOf({
+    required MlBspSample sample,
+    required int asOfIdx,
+    required List<Buy1Frame> liveBuy1,
+    required List<Sell1Frame> liveSell1,
+    required List<K0Line> k0LinesAsOf,
+    required List<KlineBar> barsAsOf,
+    required bool truncated,
+    required int horizonBars,
+  }) {
+    final buyKeys = {
+      for (final b in liveBuy1) 'B|${b.x}|${b.label}|${b.segIdx}',
+    };
+    final sellKeys = {
+      for (final s in liveSell1) 'S|${s.x}|${s.label}|${s.segIdx}',
+    };
+    final buyXs = {for (final b in liveBuy1) b.x};
+    final sellXs = {for (final s in liveSell1) s.x};
+
+    final inSetStrict = sample.side == 'B'
+        ? buyKeys.contains(sample.sampleKey)
+        : sellKeys.contains(sample.sampleKey);
+    final inSetLoose = sample.side == 'B'
+        ? buyXs.contains(sample.x)
+        : sellXs.contains(sample.x);
+    final inSet = inSetStrict || inSetLoose;
+    final truncNote = truncated ? '·窗截断至数据末' : '';
+
+    if (!inSet) {
+      sample.isCorrect = false;
+      sample.labelReason =
+          '展望窗${horizonBars}K内 live一类已不在（α=×）$truncNote';
+      return;
+    }
+
+    final extremeOk = matchesK0LineExtremeAsOf(
+      side: sample.side,
+      x: sample.x,
+      price: sample.price,
+      asOfIdx: asOfIdx,
+      k0Lines: k0LinesAsOf,
+      bars: barsAsOf,
+    );
+    if (!extremeOk) {
+      sample.isCorrect = false;
+      sample.labelReason = sample.side == 'B'
+          ? '展望窗内非K0连线最低（α=×）$truncNote'
+          : '展望窗内非K0连线最高（α=×）$truncNote';
+      return;
+    }
+
+    sample.isCorrect = true;
+    sample.labelReason = inSetStrict
+        ? '展望窗内live命中且为asOf极值（α=√）$truncNote'
+        : '展望窗内同x命中且为asOf极值（α=√）$truncNote';
+  }
+
+  /// 兼容旧测试：asOf=末根、live=传入列表（仍走展望窗截断路径）。
   static void applyLabels({
     required List<MlBspSample> samples,
     required List<Buy1Frame> finalBuy1K0,
     required List<Sell1Frame> finalSell1K0,
     required List<K0Line> k0Lines,
     required List<KlineBar> bars,
+    int? horizonBars,
   }) {
-    final buyKeys = {
-      for (final b in finalBuy1K0) 'B|${b.x}|${b.label}|${b.segIdx}',
-    };
-    final sellKeys = {
-      for (final s in finalSell1K0) 'S|${s.x}|${s.label}|${s.segIdx}',
-    };
-    // 宽松：同 side+x 也算仍在集合（字母复位时 label 可能变）
-    final buyXs = {for (final b in finalBuy1K0) b.x};
-    final sellXs = {for (final s in finalSell1K0) s.x};
-
-    for (final s in samples) {
-      final inSetStrict = s.side == 'B'
-          ? buyKeys.contains(s.sampleKey)
-          : sellKeys.contains(s.sampleKey);
-      final inSetLoose = s.side == 'B' ? buyXs.contains(s.x) : sellXs.contains(s.x);
-      final inSet = inSetStrict || inSetLoose;
-
-      if (!inSet) {
-        s.isCorrect = false;
-        s.labelReason = '末态一类集合中已不存在（α=×）';
-        continue;
-      }
-
-      final extremeOk = matchesK0LineExtreme(
-        side: s.side,
-        x: s.x,
-        price: s.price,
-        k0Lines: k0Lines,
-        bars: bars,
-      );
-      if (!extremeOk) {
-        s.isCorrect = false;
-        s.labelReason = s.side == 'B'
-            ? '非对应K0连线最低点（α=×）'
-            : '非对应K0连线最高点（α=×）';
-        continue;
-      }
-
-      s.isCorrect = true;
-      s.labelReason = inSetStrict
-          ? '末态集合命中且为K0连线极值（α=√）'
-          : '末态同x命中且为K0连线极值（α=√）';
-    }
+    if (bars.isEmpty) return;
+    final asOf = bars.last.idx;
+    final h = horizonBars ?? MlLabelConfig().horizonBars;
+    labelDueSamples(
+      samples: samples,
+      asOfIdx: asOf,
+      horizonBars: h,
+      isLastBar: true,
+      liveBuy1: finalBuy1K0,
+      liveSell1: finalSell1K0,
+      k0LinesAsOf: k0Lines,
+      barsAsOf: bars,
+    );
   }
 
-  /// Ba ↔ 覆盖该 x 的 K0连线区间最低；Sa ↔ 最高。
-  static bool matchesK0LineExtreme({
+  /// Ba/Sa 极值只在 [lineX1, min(lineX2, asOf)] 内比，禁止看 asOf 右侧。
+  static bool matchesK0LineExtremeAsOf({
     required String side,
     required int x,
     required double price,
+    required int asOfIdx,
     required List<K0Line> k0Lines,
     required List<KlineBar> bars,
   }) {
     if (bars.isEmpty || k0Lines.isEmpty) return false;
+    if (x > asOfIdx) return false;
     final barByIdx = {for (final b in bars) b.idx: b};
 
     for (final line in k0Lines) {
       final x1 = _lineX1(line);
-      final x2 = _lineX2(line);
+      final x2Raw = _lineX2(line);
+      final x2 = math.min(x2Raw, asOfIdx);
       if (x < x1 || x > x2) continue;
 
       var minLow = double.infinity;
@@ -99,10 +164,10 @@ class MlBspLabeler {
       if (minLow.isInfinite || maxHigh.isInfinite) continue;
 
       if (side == 'B') {
-        if (x == minX && (price - minLow).abs() <= _priceEps + 1e-4 * minLow.abs()) {
+        if (x == minX &&
+            (price - minLow).abs() <= _priceEps + 1e-4 * minLow.abs()) {
           return true;
         }
-        // 价格贴近最低且 x 在极值邻域（合并K）
         if ((price - minLow).abs() <= _priceEps + 1e-4 * minLow.abs() &&
             (x - minX).abs() <= 2) {
           return true;
@@ -119,6 +184,25 @@ class MlBspLabeler {
       }
     }
     return false;
+  }
+
+  /// 旧名转发（极值 asOf=bars末）
+  static bool matchesK0LineExtreme({
+    required String side,
+    required int x,
+    required double price,
+    required List<K0Line> k0Lines,
+    required List<KlineBar> bars,
+  }) {
+    if (bars.isEmpty) return false;
+    return matchesK0LineExtremeAsOf(
+      side: side,
+      x: x,
+      price: price,
+      asOfIdx: bars.last.idx,
+      k0Lines: k0Lines,
+      bars: bars,
+    );
   }
 
   static int _lineX1(K0Line line) {

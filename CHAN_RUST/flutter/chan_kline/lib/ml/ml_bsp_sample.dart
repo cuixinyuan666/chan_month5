@@ -34,12 +34,18 @@ class MlBspSample {
   String labelReason;
   double? predictScore;
 
-  /// 训练集 / 考试集
+  /// 训练 / 验证 / 测试
   MlSampleSplit split;
 
   String get sampleKey => '$side|$x|$label|$segIdx';
 
   int get libsvmLabel => (isCorrect ?? false) ? 1 : 0;
+
+  String get splitName => switch (split) {
+        MlSampleSplit.train => 'train',
+        MlSampleSplit.valid => 'valid',
+        MlSampleSplit.test => 'test',
+      };
 
   Map<String, dynamic> toJson() => {
         'x': x,
@@ -52,7 +58,7 @@ class MlBspSample {
         'is_correct': isCorrect,
         'label_reason': labelReason,
         'predict_score': predictScore,
-        'split': split == MlSampleSplit.train ? 'train' : 'exam',
+        'split': splitName,
         'features': features,
       };
 }
