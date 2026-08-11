@@ -33,6 +33,7 @@ import 'ml/ml_label_config.dart';
 import 'ml/ml_session_controller.dart';
 import 'ml/ml_split_config.dart';
 import 'ml/ml_workbench.dart';
+import 'ml/ml_xgb_trainer.dart';
 import 'models/zs_frame.dart';
 import 'models/buy1_frame.dart';
 import 'models/sell1_frame.dart';
@@ -161,6 +162,7 @@ Future<void> main() async {
   MsgHistory.instance.appendMlWorkbenchHandoff();
   // ML 特征数值化：*_code / labelInt / demark_marks；字符串汇总禁 flatten
   MsgHistory.instance.appendMlNumericFeatures();
+  MsgHistory.instance.appendMlXgbTrainServe();
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     await windowManager.ensureInitialized();
     const opts = WindowOptions(
@@ -311,6 +313,10 @@ class _KlineHomePageState extends State<KlineHomePage> {
   MlLabelConfig _mlLabelConfig = const MlLabelConfig();
   /// 测试集已评估一次：禁止改比例重跑（须退出 ML 再进）
   bool _mlTestLocked = false;
+  /// false=逻辑回归；true=XGB（Python 训 + Rust 推）
+  bool _isXgbMode = false;
+  XgbTrainParams _xgbParams = const XgbTrainParams();
+  bool _forceXgbRetrain = true;
   final MlBspSampler _mlSampler = MlBspSampler();
 
   /// catalog 三类..N 类上限（至少 9；随会话观察到的更高类扩大）
@@ -1378,6 +1384,31 @@ class _KlineHomePageState extends State<KlineHomePage> {
                         testLocked: _mlTestLocked,
                         code: _selectedCode ?? '',
                         period: _period,
+                        dataRoot: _dataRoot,
+                        isXgbMode: _isXgbMode,
+                        onTrainerKindChanged: (k) {
+                          if (_mlTestLocked) {
+                            _showSnack('测试已锁定：不可切换训练器');
+                            return;
+                          }
+                          setState(() {
+                            _isXgbMode = k == MlTrainerKind.xgb;
+                            _mlReport = null;
+                            _mlSamples = [];
+                            _mlPhase = MlPreparePhase.setup;
+                            _mlError = null;
+                          });
+                        },
+                        xgbParams: _xgbParams,
+                        onXgbParamsChanged: (p) {
+                          if (_mlTestLocked) return;
+                          setState(() => _xgbParams = p);
+                        },
+                        forceXgbRetrain: _forceXgbRetrain,
+                        onForceXgbRetrainChanged: (v) {
+                          if (_mlTestLocked) return;
+                          setState(() => _forceXgbRetrain = v);
+                        },
                         samples: _mlSamples,
                         report: _mlReport,
                         errorText: _mlError,
@@ -1906,13 +1937,14 @@ class _KlineHomePageState extends State<KlineHomePage> {
 
   String _mlStatusLine() {
     final code = _selectedCode ?? '未选';
+    final mode = _isXgbMode ? 'XGB' : 'LR';
     final r = _mlReport;
     if (r == null) {
-      return '标的=$code 周期=$_period · ${_mlSplitConfig.summary} · '
+      return '标的=$code 周期=$_period · $mode · ${_mlSplitConfig.summary} · '
           '时序三截 · 验证调参 · 测试只报一次';
     }
     final t = r.testStats;
-    return '标的=$code · 测试经验胜率=${(t.experienceWinRate * 100).toStringAsFixed(1)}%'
+    return '标的=$code · $mode · 测试经验胜率=${(t.experienceWinRate * 100).toStringAsFixed(1)}%'
         ' · 基准=${(t.alphaWinRate * 100).toStringAsFixed(1)}%';
   }
 
@@ -2014,26 +2046,57 @@ class _KlineHomePageState extends State<KlineHomePage> {
 
       setState(() {
         _mlPhase = MlPreparePhase.training;
-        _mlProgressHint = '时序切分训练/验证/测试…';
+        _mlProgressHint = _isXgbMode
+            ? '导出 libsvm + 调用 XGB 训练…'
+            : '时序切分训练/验证/测试…';
       });
       await Future<void>.delayed(Duration.zero);
       if (!mounted) return;
       MlDatasetSplit.apply(samples, _mlSplitConfig);
 
-      setState(() {
-        _mlPhase = MlPreparePhase.tuning;
-        _mlProgressHint = '仅验证集网格调参（测试集不参与）…';
-      });
-      await Future<void>.delayed(Duration.zero);
-      if (!mounted) return;
+      late final MlRunReport report;
+      if (_isXgbMode) {
+        setState(() {
+          _mlPhase = MlPreparePhase.tuning;
+          _mlProgressHint = _forceXgbRetrain
+              ? 'Python XGB 强制重训中…'
+              : 'Python XGB 训练（可复用指纹）…';
+        });
+        await Future<void>.delayed(Duration.zero);
+        if (!mounted) return;
+        report = await MlXgbTrainer.exportTrainAndEvaluate(
+          samples: samples,
+          dataRoot: _dataRoot,
+          code: _selectedCode ?? '',
+          period: _period,
+          stepIdx: _stepIdx < 0 ? 0 : _stepIdx,
+          splitConfig: _mlSplitConfig,
+          params: _xgbParams,
+          forceRetrain: _forceXgbRetrain,
+        );
+        if (!mounted) return;
+        setState(() {
+          _mlPhase = MlPreparePhase.evaluating;
+          _mlProgressHint = 'Rust 打分完成 · 测试只评估一次并锁定…';
+        });
+        await Future<void>.delayed(Duration.zero);
+        if (!mounted) return;
+      } else {
+        setState(() {
+          _mlPhase = MlPreparePhase.tuning;
+          _mlProgressHint = '仅验证集网格调参（测试集不参与）…';
+        });
+        await Future<void>.delayed(Duration.zero);
+        if (!mounted) return;
 
-      setState(() {
-        _mlPhase = MlPreparePhase.evaluating;
-        _mlProgressHint = '测试集只评估一次并锁定…';
-      });
-      await Future<void>.delayed(Duration.zero);
-      if (!mounted) return;
-      final report = MlExperienceTrainer.fitTuneAndTest(samples: samples);
+        setState(() {
+          _mlPhase = MlPreparePhase.evaluating;
+          _mlProgressHint = '测试集只评估一次并锁定…';
+        });
+        await Future<void>.delayed(Duration.zero);
+        if (!mounted) return;
+        report = MlExperienceTrainer.fitTuneAndTest(samples: samples);
+      }
 
       setState(() {
         _mlSamples = samples;
@@ -2044,7 +2107,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       });
       final t = report.testStats;
       _msgHistory.append(
-        'ML测试结果(已锁定)：经验胜率=${(t.experienceWinRate * 100).toStringAsFixed(1)}% '
+        'ML测试结果(已锁定·${report.trainerKind})：经验胜率=${(t.experienceWinRate * 100).toStringAsFixed(1)}% '
         '基准=${(t.alphaWinRate * 100).toStringAsFixed(1)}% '
         '采纳=${t.adopted}/${t.total} · ${report.tuneSummary} · '
         '${report.drift.labelRateSummary} · ${report.drift.driftSummary}',

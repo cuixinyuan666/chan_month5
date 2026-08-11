@@ -2,6 +2,12 @@
 
 ## 最新记录
 
+### 2026-08-10 — XGB 训推：Python 训 + Rust 推（纠偏落地）
+
+- **要点**：新增 `ml_train_xgb.py`（0-based CSR、valid early stop、sidecar 绑 meta/schema）；Flutter `MlXgbTrainer`+工作台 LR/XGB 切换；验证选阈值、测试锁定与 LR 同口径；Rust `ml_predict` 读 `default_left`。
+- **相关路径**：`ml_train_xgb.py`、`ml_xgb_trainer.dart`、`ml_workbench.dart`、`main.dart`、`ml_predict.rs`、`msg_history.dart`
+- **注意**：打包 `pyinstaller ml_train_xgb.spec` 拷到 `windows/native/`；无 EXE 可回退 `python ml_train_xgb.py`；改 Rust 后需重编覆盖 `chan_ffi.dll`
+
 ### 2026-08-10 — 节奏 ML：补 dirInt + 禁 label/dir 字符串
 
 - **要点**：核实 BS `*_code` 已就绪；节奏 `dir` 实为 up/down 字符串会 flatten 成 `__has` 丢方向，现写 `dirInt`；schema 禁 `step_rhythm_lines_*[.label|.dir]`（匹配含 `sub.` 全路径）与 `step_rhythm_N`。

@@ -100,6 +100,27 @@ class MlSplitStats {
       experienceAccuracy * 1000 + experienceWinRate * 10 + coverage;
 }
 
+/// XGB 附加信息（同一套采纳/胜率统计仍走 [MlRunReport]）。
+class MlXgbExtras {
+  const MlXgbExtras({
+    required this.modelPath,
+    required this.sidecarPath,
+    required this.trainAuc,
+    required this.validAuc,
+    required this.numRounds,
+    required this.elapsedSec,
+    this.skipped = false,
+  });
+
+  final String modelPath;
+  final String sidecarPath;
+  final double? trainAuc;
+  final double? validAuc;
+  final int numRounds;
+  final double elapsedSec;
+  final bool skipped;
+}
+
 /// 跑完后的总报告：验证只用于调参说明；测试只报一次。
 class MlRunReport {
   const MlRunReport({
@@ -114,6 +135,8 @@ class MlRunReport {
     required this.tuneTrials,
     required this.drift,
     this.testLocked = true,
+    this.trainerKind = 'lr',
+    this.xgb,
   });
 
   final int trainTotal;
@@ -128,8 +151,14 @@ class MlRunReport {
   final MlDriftReport drift;
   final bool testLocked;
 
+  /// `lr` | `xgb`
+  final String trainerKind;
+  final MlXgbExtras? xgb;
+
   /// 兼容旧字段名（UI 曾用 examStats）
   MlSplitStats get examStats => testStats;
+
+  bool get isXgb => trainerKind == 'xgb';
 
   String get headline {
     final t = testStats;
@@ -137,15 +166,27 @@ class MlRunReport {
     if (t.adopted == 0) {
       return '测试集未采纳 · 基准胜率 ${(t.alphaWinRate * 100).toStringAsFixed(1)}%';
     }
-    return '测试经验胜率 ${(t.experienceWinRate * 100).toStringAsFixed(1)}%'
+    final prefix = isXgb ? 'XGB' : '测试';
+    return '$prefix经验胜率 ${(t.experienceWinRate * 100).toStringAsFixed(1)}%'
         '（采纳${t.adopted} √${t.adoptedWin}/×${t.adoptedLose}）'
         ' · 基准 ${(t.alphaWinRate * 100).toStringAsFixed(1)}%';
   }
 
-  String get tuneSummary =>
-      '验证调参×$tuneTrials：epochs=$bestEpochs lr=${bestLr.toStringAsFixed(2)} '
-      'l2=${bestL2.toStringAsExponential(0)} thr=${bestThreshold.toStringAsFixed(2)}'
-      ' · 验证准确率${(validStats.experienceAccuracy * 100).toStringAsFixed(1)}%';
+  String get tuneSummary {
+    if (isXgb && xgb != null) {
+      final x = xgb!;
+      String auc(double? v) =>
+          v == null ? '-' : v.toStringAsFixed(3);
+      return 'XGB：rounds=${x.numRounds} thr=${bestThreshold.toStringAsFixed(2)}'
+          ' · trainAUC=${auc(x.trainAuc)} validAUC=${auc(x.validAuc)}'
+          ' · ${x.elapsedSec.toStringAsFixed(1)}s'
+          '${x.skipped ? " · 复用已有模型" : ""}'
+          ' · 验证准确率${(validStats.experienceAccuracy * 100).toStringAsFixed(1)}%';
+    }
+    return '验证调参×$tuneTrials：epochs=$bestEpochs lr=${bestLr.toStringAsFixed(2)} '
+        'l2=${bestL2.toStringAsExponential(0)} thr=${bestThreshold.toStringAsFixed(2)}'
+        ' · 验证准确率${(validStats.experienceAccuracy * 100).toStringAsFixed(1)}%';
+  }
 }
 /// 兼容旧名
 typedef MlExamStats = MlRunReport;
@@ -157,7 +198,6 @@ class MlExperienceTrainer {
   static const _epochGrid = [20, 40, 60];
   static const _lrGrid = [0.05, 0.15];
   static const _l2Grid = [1e-4, 1e-3];
-  static const _thrGrid = [0.4, 0.5, 0.6];
 
   static MlExperienceModel fit(
     List<MlBspSample> train, {
@@ -277,6 +317,21 @@ class MlExperienceTrainer {
     MlExperienceModel model, {
     bool writeScores = false,
   }) {
+    return statsOfScored(
+      subset,
+      threshold: model.threshold,
+      scoreOf: model.scoreOf,
+      writeScores: writeScores,
+    );
+  }
+
+  /// 已写 [MlBspSample.predictScore] 或按回调打分后的采纳统计（LR/XGB 共用）。
+  static MlSplitStats statsOfScored(
+    List<MlBspSample> subset, {
+    required double threshold,
+    double Function(Map<String, double> features)? scoreOf,
+    bool writeScores = false,
+  }) {
     var alphaWin = 0;
     var alphaLose = 0;
     var adopted = 0;
@@ -290,7 +345,9 @@ class MlExperienceTrainer {
     var sellWin = 0;
 
     for (final s in subset) {
-      final score = model.scoreOf(s.features);
+      final score = scoreOf != null
+          ? scoreOf(s.features)
+          : (s.predictScore ?? 0.0);
       if (writeScores) s.predictScore = score;
       final ok = s.isCorrect == true;
       if (ok) {
@@ -300,7 +357,7 @@ class MlExperienceTrainer {
       }
       if (s.isCorrect == null) continue;
       evalN++;
-      final pred = model.adopt(score);
+      final pred = score >= threshold;
       if (pred == ok) hit++;
       if (!pred) continue;
       adopted++;
@@ -335,6 +392,23 @@ class MlExperienceTrainer {
       sellAdopted: sellAdopted,
       sellAdoptedWin: sellWin,
     );
+  }
+
+  static const thrGrid = [0.4, 0.5, 0.6];
+
+  /// 仅在验证集上选阈值（分数已写入 predictScore）。
+  static double tuneThresholdOnValid(List<MlBspSample> valid) {
+    if (valid.isEmpty) return 0.5;
+    var bestThr = 0.5;
+    var bestScore = -1.0;
+    for (final thr in thrGrid) {
+      final vs = statsOfScored(valid, threshold: thr);
+      if (vs.tuneScore > bestScore) {
+        bestScore = vs.tuneScore;
+        bestThr = thr;
+      }
+    }
+    return bestThr;
   }
 
   /// 仅在验证集上网格搜参；锁参后用 train(+valid) 重拟合；测试集只评估一次。
@@ -373,14 +447,14 @@ class MlExperienceTrainer {
     var bestEpochs = _epochGrid.first;
     var bestLr = _lrGrid.first;
     var bestL2 = _l2Grid.first;
-    var bestThr = _thrGrid.first;
+    var bestThr = thrGrid.first;
     var trials = 0;
 
     for (final ep in _epochGrid) {
       for (final lr in _lrGrid) {
         for (final l2 in _l2Grid) {
           final base = fit(train, epochs: ep, lr: lr, l2: l2);
-          for (final thr in _thrGrid) {
+          for (final thr in thrGrid) {
             trials++;
             final m = base.withThreshold(thr);
             final vs = statsOf(valid, m);

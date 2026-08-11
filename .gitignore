@@ -16,6 +16,10 @@ a_replay_cache/kline_sessions/
 a_replay_record/*/*.pkl
 a_replay_record/*/*.meta.json
 
+# ML 训练产物（XGB/LR 训练中间文件、样本与模型，可再生，勿提交）
+a_Data/ml_exports/
+!a_Data/ml_exports/002003_tick_step0_v1.jsonl
+
 # Rust 编译产物
 a_rust_core/target/
 CHAN_RUST/rust/target/

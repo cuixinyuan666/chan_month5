@@ -114,13 +114,15 @@ fn parse_f64(v: &Value) -> Option<f64> {
     }
 }
 
-/// 简化树：支持 split_indices / split_conditions / left_children / right_children / base_weights
+/// 简化树：split_* / children / base_weights；缺省读 default_left（与 XGB JSON 对齐）。
 fn eval_xgb_tree(tree: &Value, dense: &[f64]) -> Option<f64> {
     let split_idx = tree.get("split_indices")?.as_array()?;
     let split_cond = tree.get("split_conditions")?.as_array()?;
     let left = tree.get("left_children")?.as_array()?;
     let right = tree.get("right_children")?.as_array()?;
     let base_weights = tree.get("base_weights")?.as_array()?;
+    // XGB：true/1 → missing 走左；缺字段时保持旧行为（走左）
+    let default_left = tree.get("default_left").and_then(|x| x.as_array());
 
     let mut node: i64 = 0;
     for _ in 0..512 {
@@ -141,8 +143,12 @@ fn eval_xgb_tree(tree: &Value, dense: &[f64]) -> Option<f64> {
         let thr = split_cond.get(ni).and_then(parse_f64).unwrap_or(0.0);
         let x = dense.get(fidx).copied().unwrap_or(MISSING);
         if (x - MISSING).abs() < 1e-12 {
-            // 缺省走默认方向：左
-            node = l;
+            let go_left = match default_left.and_then(|a| a.get(ni)) {
+                Some(Value::Bool(b)) => *b,
+                Some(Value::Number(n)) => n.as_i64().unwrap_or(1) != 0,
+                _ => true,
+            };
+            node = if go_left { l } else { r };
             continue;
         }
         node = if x < thr { l } else { r };
@@ -166,5 +172,28 @@ mod tests {
         .unwrap();
         let s = predict_dense(f.path().to_str().unwrap(), &[2.0, 0.0]).unwrap();
         assert!(s > 0.5);
+    }
+
+    #[test]
+    fn xgb_missing_follows_default_left() {
+        // 单树：根 split f0；default_left=false → missing 走右叶 weight=2
+        let raw = r#"{
+          "learner":{"gradient_booster":{"model":{
+            "base_score":[0.5],
+            "trees":[{
+              "split_indices":[0, 0, 0],
+              "split_conditions":[0.0, 0.0, 0.0],
+              "left_children":[1, -1, -1],
+              "right_children":[2, -1, -1],
+              "base_weights":[0.0, -1.0, 2.0],
+              "default_left":[0, 1, 1]
+            }]
+          }}}
+        }"#;
+        let mut f = NamedTempFile::new().unwrap();
+        write!(f, "{raw}").unwrap();
+        let s = predict_dense(f.path().to_str().unwrap(), &[MISSING]).unwrap();
+        // margin ≈ logit(0.5)+2 → sigmoid 接近 1
+        assert!(s > 0.8, "score={s}");
     }
 }

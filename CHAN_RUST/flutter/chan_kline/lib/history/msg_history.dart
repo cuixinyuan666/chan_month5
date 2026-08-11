@@ -981,10 +981,25 @@ class MsgHistory {
     if (_mlWorkbenchLogged) return;
     _mlWorkbenchLogged = true;
     append(
-      '【机器学习·防未来/防窥探·2026-08-10】只基于当前股票；不展示K线图；不导出/不加载外部模型。'
+      '【机器学习·防未来/防窥探·2026-08-10】只基于当前股票；不展示K线图。'
       'α=发现后固定展望窗内 live一类+asOf截断极值（禁跳末末态）；时序训练|验证|测试；'
       '仅验证调参；测试只评估一次并锁定（改比例须退出重进）；报告标签√率与特征漂移。'
+      '训练器可切逻辑回归(内存)/XGB(Python训+Rust推)：libsvm 0-based、missing=-9999999、'
+      '模型名带 code/period/schema；强制重训可关仅当 sidecar 指纹一致。'
       '不改 tip 生产逻辑。详见 docs/ML_FEATURE_SPEC.md。',
+    );
+  }
+
+  /// XGB 训推口径（进程内去重）。
+  static bool _mlXgbLogged = false;
+  void appendMlXgbTrainServe() {
+    if (_mlXgbLogged) return;
+    _mlXgbLogged = true;
+    append(
+      '【XGB训推·2026-08-10】样本只吃 Flutter MlBspExport；Python 自解析 0-based libsvm+CSR；'
+      'valid early stop；sidecar 绑 feature_names/schema；Flutter 验证选阈值、测试只报一次；'
+      'Rust ml_predict 读 default_left（缺省仍走左）；简化 walker≠完整 XGB。'
+      '打包：pyinstaller ml_train_xgb.spec → windows/native/ml_train_xgb.exe（可回退 python 脚本）。',
     );
   }
 

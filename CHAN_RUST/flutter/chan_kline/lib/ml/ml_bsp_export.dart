@@ -112,6 +112,7 @@ class MlBspExport {
       'test_alpha_acc': _alphaAcc(test),
       'feature_count': meta.length,
       'missing_value': MlFeatureFlat.missing,
+      'index_base': 0,
       'exported_at': DateTime.now().toIso8601String(),
     };
 
@@ -141,6 +142,8 @@ class MlBspExport {
       metaPath: metaPath,
       libsvmPath: libsvmPath,
       trainPath: trainPath,
+      validPath: validPath,
+      testPath: testPath,
       examPath: examPath,
       samplesPath: samplesPath,
       runMetaPath: runMetaPath,
@@ -159,6 +162,8 @@ class MlBspExportResult {
     required this.metaPath,
     required this.libsvmPath,
     required this.trainPath,
+    required this.validPath,
+    required this.testPath,
     required this.examPath,
     required this.samplesPath,
     required this.runMetaPath,
@@ -173,6 +178,8 @@ class MlBspExportResult {
   final String metaPath;
   final String libsvmPath;
   final String trainPath;
+  final String validPath;
+  final String testPath;
   final String examPath;
   final String samplesPath;
   final String runMetaPath;

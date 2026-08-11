@@ -6,6 +6,7 @@ import 'ml_experience_trainer.dart';
 import 'ml_feature_schema.dart';
 import 'ml_label_config.dart';
 import 'ml_split_config.dart';
+import 'ml_xgb_trainer.dart';
 
 /// ML 阶段：先设三截切分 → 加载 → 验证调参 → 测试只报一次并锁定。
 enum MlPreparePhase {
@@ -22,7 +23,9 @@ enum MlPreparePhase {
 
 enum MlResultTab { test, valid, train, all }
 
-/// 无 K 线图；当前股票；本阶段不导出、不加载外部模型。
+enum MlTrainerKind { logistic, xgb }
+
+/// 无 K 线图；当前股票；LR 内存训 / XGB 子进程训后 Rust 打分。
 class MlWorkbench extends StatefulWidget {
   const MlWorkbench({
     super.key,
@@ -36,6 +39,13 @@ class MlWorkbench extends StatefulWidget {
     required this.testLocked,
     required this.code,
     required this.period,
+    required this.dataRoot,
+    required this.isXgbMode,
+    required this.onTrainerKindChanged,
+    required this.xgbParams,
+    required this.onXgbParamsChanged,
+    required this.forceXgbRetrain,
+    required this.onForceXgbRetrainChanged,
     this.samples = const [],
     this.report,
     this.errorText,
@@ -53,6 +63,13 @@ class MlWorkbench extends StatefulWidget {
   final bool testLocked;
   final String code;
   final String period;
+  final String dataRoot;
+  final bool isXgbMode;
+  final ValueChanged<MlTrainerKind> onTrainerKindChanged;
+  final XgbTrainParams xgbParams;
+  final ValueChanged<XgbTrainParams> onXgbParamsChanged;
+  final bool forceXgbRetrain;
+  final ValueChanged<bool> onForceXgbRetrainChanged;
   final List<MlBspSample> samples;
   final MlRunReport? report;
   final String? errorText;
@@ -119,7 +136,8 @@ class _MlWorkbenchState extends State<MlWorkbench> {
             const SizedBox(width: 6),
             Expanded(
               child: Text(
-                '$title · schema v${MlFeatureSchema.schemaVersion}',
+                '$title · schema v${MlFeatureSchema.schemaVersion}'
+                '${widget.isXgbMode ? " · XGB" : " · LR"}',
                 style: const TextStyle(
                   color: Colors.white,
                   fontSize: 13,
@@ -151,106 +169,206 @@ class _MlWorkbenchState extends State<MlWorkbench> {
           color: const Color(0xFF1A1A1A),
           child: Padding(
             padding: const EdgeInsets.all(20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(
-                  '当前股票：${widget.code} · ${widget.period}',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'α=发现后固定展望窗（非跳末）；时序三截；验证调参；测试只评估一次并锁定。\n'
-                  '本阶段不导出、不加载外部模型、不展示K线图。',
-                  style: TextStyle(color: Colors.grey.shade300, height: 1.4),
-                ),
-                if (widget.phase == MlPreparePhase.error) ...[
-                  const SizedBox(height: 10),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
                   Text(
-                    widget.errorText ?? '加载失败',
-                    style: const TextStyle(color: Colors.orangeAccent),
+                    '当前股票：${widget.code} · ${widget.period}',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
-                ],
-                if (widget.testLocked) ...[
                   const SizedBox(height: 8),
-                  const Text(
-                    '测试已锁定：不可改切分/展望窗后重跑。请点「退出」再重新进入。',
-                    style: TextStyle(color: Colors.orangeAccent, fontSize: 12),
+                  Text(
+                    widget.isXgbMode
+                        ? 'α=展望窗；时序三截；导出 libsvm→Python XGB 训练→Rust 打分；'
+                            '验证选阈值；测试只评估一次并锁定。\n'
+                            '特征 0-based；缺失=-9999999；模型带 code/period/schema。'
+                        : 'α=发现后固定展望窗（非跳末）；时序三截；验证调参；测试只评估一次并锁定。\n'
+                            '本阶段逻辑回归在内存拟合；不展示K线图。',
+                    style: TextStyle(color: Colors.grey.shade300, height: 1.4),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    '训练器',
+                    style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
+                  ),
+                  const SizedBox(height: 6),
+                  SegmentedButton<MlTrainerKind>(
+                    segments: const [
+                      ButtonSegment(
+                        value: MlTrainerKind.logistic,
+                        label: Text('逻辑回归'),
+                      ),
+                      ButtonSegment(
+                        value: MlTrainerKind.xgb,
+                        label: Text('XGB'),
+                      ),
+                    ],
+                    selected: {
+                      widget.isXgbMode
+                          ? MlTrainerKind.xgb
+                          : MlTrainerKind.logistic,
+                    },
+                    onSelectionChanged: canEdit
+                        ? (s) => widget.onTrainerKindChanged(s.first)
+                        : null,
+                  ),
+                  if (widget.phase == MlPreparePhase.error) ...[
+                    const SizedBox(height: 10),
+                    Text(
+                      widget.errorText ?? '加载失败',
+                      style: const TextStyle(color: Colors.orangeAccent),
+                    ),
+                  ],
+                  if (widget.testLocked) ...[
+                    const SizedBox(height: 8),
+                    const Text(
+                      '测试已锁定：不可改切分/展望窗/训练器后重跑。请点「退出」再重新进入。',
+                      style:
+                          TextStyle(color: Colors.orangeAccent, fontSize: 12),
+                    ),
+                  ],
+                  const SizedBox(height: 14),
+                  Text(
+                    '切分：${widget.splitConfig.summary}',
+                    style: const TextStyle(color: Colors.lightBlueAccent),
+                  ),
+                  _ratioSlider(
+                    label: '训练',
+                    value: widget.splitConfig.trainRatio,
+                    min: 0.4,
+                    max: 0.8,
+                    divisions: 8,
+                    display: '$tr%',
+                    onChanged: canEdit
+                        ? (v) => widget.onSplitConfigChanged(
+                              widget.splitConfig.copyWith(trainRatio: v),
+                            )
+                        : null,
+                  ),
+                  _ratioSlider(
+                    label: '验证',
+                    value: widget.splitConfig.validRatio,
+                    min: 0.1,
+                    max: 0.4,
+                    divisions: 6,
+                    display: '$vr%',
+                    onChanged: canEdit
+                        ? (v) => widget.onSplitConfigChanged(
+                              widget.splitConfig.copyWith(validRatio: v),
+                            )
+                        : null,
+                  ),
+                  Text(
+                    '测试（自动余量）$te% · 时序最末段',
+                    style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    '展望窗：${widget.labelConfig.summary}',
+                    style: const TextStyle(color: Colors.lightBlueAccent),
+                  ),
+                  _ratioSlider(
+                    label: '窗K',
+                    value: hz.toDouble(),
+                    min: 8,
+                    max: 256,
+                    divisions: 31,
+                    display: '$hz',
+                    onChanged: canEdit
+                        ? (v) => widget.onLabelConfigChanged(
+                              widget.labelConfig.copyWith(
+                                horizonBars: v.round(),
+                              ),
+                            )
+                        : null,
+                  ),
+                  if (widget.isXgbMode) ...[
+                    const SizedBox(height: 12),
+                    const Text(
+                      'XGB 超参',
+                      style: TextStyle(color: Colors.lightBlueAccent),
+                    ),
+                    _ratioSlider(
+                      label: '深度',
+                      value: widget.xgbParams.maxDepth.toDouble(),
+                      min: 2,
+                      max: 10,
+                      divisions: 8,
+                      display: '${widget.xgbParams.maxDepth}',
+                      onChanged: canEdit
+                          ? (v) => widget.onXgbParamsChanged(
+                                widget.xgbParams.copyWith(maxDepth: v.round()),
+                              )
+                          : null,
+                    ),
+                    _ratioSlider(
+                      label: '轮数',
+                      value: widget.xgbParams.numRound.toDouble(),
+                      min: 20,
+                      max: 300,
+                      divisions: 28,
+                      display: '${widget.xgbParams.numRound}',
+                      onChanged: canEdit
+                          ? (v) => widget.onXgbParamsChanged(
+                                widget.xgbParams.copyWith(numRound: v.round()),
+                              )
+                          : null,
+                    ),
+                    _ratioSlider(
+                      label: 'lr',
+                      value: widget.xgbParams.learningRate,
+                      min: 0.01,
+                      max: 0.3,
+                      divisions: 29,
+                      display:
+                          widget.xgbParams.learningRate.toStringAsFixed(2),
+                      onChanged: canEdit
+                          ? (v) => widget.onXgbParamsChanged(
+                                widget.xgbParams.copyWith(learningRate: v),
+                              )
+                          : null,
+                    ),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      dense: true,
+                      title: const Text(
+                        '强制重训（关闭则指纹一致时可复用 model）',
+                        style: TextStyle(color: Colors.white70, fontSize: 12),
+                      ),
+                      value: widget.forceXgbRetrain,
+                      onChanged:
+                          canEdit ? widget.onForceXgbRetrainChanged : null,
+                    ),
+                    Text(
+                      '数据根：${widget.dataRoot.isEmpty ? "(未就绪)" : widget.dataRoot}',
+                      style: TextStyle(
+                        color: Colors.grey.shade500,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 12),
+                  FilledButton.icon(
+                    onPressed: (!canEdit && widget.testLocked) || _busy
+                        ? null
+                        : () => widget.onLoad(),
+                    icon: const Icon(Icons.play_arrow),
+                    label: Text(
+                      widget.testLocked
+                          ? '已锁定（请退出重进）'
+                          : widget.phase == MlPreparePhase.error
+                              ? '重新加载'
+                              : (widget.isXgbMode ? '加载并训练 XGB' : '加载'),
+                    ),
                   ),
                 ],
-                const SizedBox(height: 14),
-                Text(
-                  '切分：${widget.splitConfig.summary}',
-                  style: const TextStyle(color: Colors.lightBlueAccent),
-                ),
-                _ratioSlider(
-                  label: '训练',
-                  value: widget.splitConfig.trainRatio,
-                  min: 0.4,
-                  max: 0.8,
-                  divisions: 8,
-                  display: '$tr%',
-                  onChanged: canEdit
-                      ? (v) => widget.onSplitConfigChanged(
-                            widget.splitConfig.copyWith(trainRatio: v),
-                          )
-                      : null,
-                ),
-                _ratioSlider(
-                  label: '验证',
-                  value: widget.splitConfig.validRatio,
-                  min: 0.1,
-                  max: 0.4,
-                  divisions: 6,
-                  display: '$vr%',
-                  onChanged: canEdit
-                      ? (v) => widget.onSplitConfigChanged(
-                            widget.splitConfig.copyWith(validRatio: v),
-                          )
-                      : null,
-                ),
-                Text(
-                  '测试（自动余量）$te% · 时序最末段',
-                  style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  '展望窗：${widget.labelConfig.summary}',
-                  style: const TextStyle(color: Colors.lightBlueAccent),
-                ),
-                _ratioSlider(
-                  label: '窗K',
-                  value: hz.toDouble(),
-                  min: 8,
-                  max: 256,
-                  divisions: 31,
-                  display: '$hz',
-                  onChanged: canEdit
-                      ? (v) => widget.onLabelConfigChanged(
-                            widget.labelConfig.copyWith(horizonBars: v.round()),
-                          )
-                      : null,
-                ),
-                const SizedBox(height: 12),
-                FilledButton.icon(
-                  onPressed: (!canEdit && widget.testLocked) || _busy
-                      ? null
-                      : () => widget.onLoad(),
-                  icon: const Icon(Icons.play_arrow),
-                  label: Text(
-                    widget.testLocked
-                        ? '已锁定（请退出重进）'
-                        : widget.phase == MlPreparePhase.error
-                            ? '重新加载'
-                            : '加载',
-                  ),
-                ),
-              ],
+              ),
             ),
           ),
         ),
@@ -293,8 +411,14 @@ class _MlWorkbenchState extends State<MlWorkbench> {
       (MlPreparePhase.loading, '① 取当前股票数据（不展示K线图）'),
       (MlPreparePhase.computing, '② 逐K采集 + 展望窗α打标'),
       (MlPreparePhase.labeling, '③ 检查标签完整性'),
-      (MlPreparePhase.training, '④ 时序切分训练/验证/测试'),
-      (MlPreparePhase.tuning, '⑤ 仅验证集网格调参'),
+      (
+        MlPreparePhase.training,
+        widget.isXgbMode ? '④ 导出 libsvm + XGB 训练' : '④ 时序切分训练/验证/测试',
+      ),
+      (
+        MlPreparePhase.tuning,
+        widget.isXgbMode ? '⑤ 验证集选阈值（测试不参与）' : '⑤ 仅验证集网格调参',
+      ),
       (MlPreparePhase.evaluating, '⑥ 测试只评估一次并锁定'),
     ];
     return Center(
@@ -421,6 +545,7 @@ class _MlWorkbenchState extends State<MlWorkbench> {
         n == 0 ? '-' : '${pct(win / n)}（$win/$n）';
     final t = r.testStats;
     final v = r.validStats;
+    final x = r.xgb;
 
     return Card(
       color: const Color(0xFF1A2433),
@@ -447,6 +572,13 @@ class _MlWorkbenchState extends State<MlWorkbench> {
               ' · ${widget.labelConfig.summary}',
               style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
             ),
+            if (x != null) ...[
+              const SizedBox(height: 4),
+              Text(
+                '模型 ${x.modelPath}',
+                style: TextStyle(color: Colors.grey.shade500, fontSize: 11),
+              ),
+            ],
             const SizedBox(height: 6),
             Text(
               r.drift.labelRateSummary,
@@ -455,7 +587,8 @@ class _MlWorkbenchState extends State<MlWorkbench> {
             Text(
               r.drift.driftSummary,
               style: TextStyle(
-                color: r.drift.alert ? Colors.orangeAccent : Colors.grey.shade300,
+                color:
+                    r.drift.alert ? Colors.orangeAccent : Colors.grey.shade300,
                 fontSize: 12,
               ),
             ),
@@ -490,11 +623,24 @@ class _MlWorkbenchState extends State<MlWorkbench> {
             _statLine('测试覆盖率', pct(t.coverage)),
             _statLine('买侧经验胜率', sideRate(t.buyAdoptedWin, t.buyAdopted)),
             _statLine('卖侧经验胜率', sideRate(t.sellAdoptedWin, t.sellAdopted)),
+            if (x != null) ...[
+              _statLine('trainAUC', x.trainAuc?.toStringAsFixed(3) ?? '-'),
+              _statLine('validAUC', x.validAuc?.toStringAsFixed(3) ?? '-'),
+              _statLine('XGB轮数', '${x.numRounds}'),
+              _statLine('耗时', '${x.elapsedSec.toStringAsFixed(1)}s'),
+            ],
             const SizedBox(height: 8),
             Text(
-              '说明：α用展望窗内live帧+asOf极值；超参只在验证集选；'
-              '测试锁定防窥探。仅供学习，不构成投资建议。',
-              style: TextStyle(color: Colors.grey.shade500, fontSize: 11, height: 1.35),
+              r.isXgb
+                  ? '说明：XGB 在 Python 训、Rust 推；阈值只在验证集选；'
+                      '测试锁定防窥探。Rust 树 walker 读 default_left。仅供学习。'
+                  : '说明：α用展望窗内live帧+asOf极值；超参只在验证集选；'
+                      '测试锁定防窥探。仅供学习，不构成投资建议。',
+              style: TextStyle(
+                color: Colors.grey.shade500,
+                fontSize: 11,
+                height: 1.35,
+              ),
             ),
           ],
         ),
@@ -510,10 +656,16 @@ class _MlWorkbenchState extends State<MlWorkbench> {
         children: [
           SizedBox(
             width: 100,
-            child: Text(k, style: TextStyle(color: Colors.grey.shade400, fontSize: 12)),
+            child: Text(
+              k,
+              style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
+            ),
           ),
           Expanded(
-            child: Text(v, style: const TextStyle(color: Colors.white, fontSize: 13)),
+            child: Text(
+              v,
+              style: const TextStyle(color: Colors.white, fontSize: 13),
+            ),
           ),
         ],
       ),
