@@ -3,24 +3,25 @@
 //! 合并/分型内核唯一实现见 engine.rs；递归 N 段见 pipeline.rs。
 
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 use crate::engine::{CombineEngine, MergeUnit, TruncReplayState};
 use crate::feature::{
-    build_k1_bar_views, enrich_fractal_peak_dist, weekday_from_bar, BarCrosshairFeature, K0Line,
-    K1Bar,
+    build_bar_crosshair_feature, build_k1_bar_views, enrich_fractal_peak_dist, BarCrosshairFeature,
+    K0Line, K1Bar,
 };
 use crate::kline::KlineBar;
 use crate::pipeline::{
-    run_pipeline, LevelBundleOut, LevelSegment, LevelUnitBar, PipelineOptions, PipelineResult,
-    PipelineState,
+    compute_k0_zs_bs, run_pipeline, K0ZsBsFrames, LevelBundleOut, LevelSegment, LevelUnitBar,
+    PipelineOptions, PipelineResult, PipelineState,
 };
 use crate::seg_eigen::{
     BarSubSnapshot, FirstSegDirSignal, K1AnalysisBundle, K1ConfirmSignal, K1Line,
 };
-use crate::buy1::{find_buy1, find_sell1, Buy1Frame, Sell1Frame};
-use crate::buy2::{find_buy2, find_sell2, Buy2Frame, Sell2Frame};
-use crate::buy_n::{find_buy_n, find_sell_n, BuyNFrame, SellNFrame};
-use crate::zs::{find_zs, zs_frames_from_list, ZSConfig, ZSFrame};
+use crate::buy1::{Buy1Frame, Sell1Frame};
+use crate::buy2::{Buy2Frame, Sell2Frame};
+use crate::buy_n::{BuyNFrame, SellNFrame};
+use crate::zs::ZSFrame;
 
 /// 合并 K 线线框（对齐 serialize_kline_combine）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,8 +66,9 @@ pub struct KlineCombineBundle {
     /// 数据即合并原始K后的顶/底分型，也是 K0连线端点；被副图/tooltip「K0分型确认」同源同值消费。
     pub k0_confirms: Vec<K0ConfirmSignal>,
     /// 每根 K 十字线特征（星期 w1..w7、K0合并序、各层 Kn 快照）
+    /// Arc：步进只追加当步，bundle 共享不整表 clone；JSON 仍是数组（FFI 协议不变）。
     #[serde(default)]
-    pub bar_features: Vec<BarCrosshairFeature>,
+    pub bar_features: Arc<Vec<BarCrosshairFeature>>,
     /// K1（K0连线）链：锚定配对，链条无缝
     #[serde(default)]
     pub k0_lines: Vec<K0Line>,
@@ -126,7 +128,7 @@ impl KlineCombineBundle {
         Self {
             frames: Vec::new(),
             k0_confirms: Vec::new(),
-            bar_features: Vec::new(),
+            bar_features: Arc::new(Vec::new()),
             k0_lines: Vec::new(),
             k1_analysis: K1AnalysisBundle::default(),
             k1_bars: Vec::new(),
@@ -172,73 +174,29 @@ fn link_k0_lines(chain: &mut [K0Line]) {
     }
 }
 
-/// 原生分钟 K → LevelSegment（每根 K 一段；K0 中枢段实体）
-fn kline_bars_to_segments(bars: &[KlineBar]) -> Vec<LevelSegment> {
-    let mut out = Vec::with_capacity(bars.len());
-    for (i, b) in bars.iter().enumerate() {
-        let dir = if i == 0 {
-            1
-        } else {
-            let p = &bars[i - 1];
-            let mid = (b.high + b.low) / 2.0;
-            let p_mid = (p.high + p.low) / 2.0;
-            if mid >= p_mid {
-                1
-            } else {
-                -1
-            }
-        };
-        let x = b.idx;
-        out.push(LevelSegment {
-            idx: i as i64,
-            dir,
-            begin_confirm_x: x,
-            end_confirm_x: x,
-            begin_pole_x: x,
-            end_pole_x: x,
-            open: b.open,
-            high: b.high,
-            low: b.low,
-            close: b.close,
-            volume: b.volume,
-            begin_fractal_x1: x,
-            begin_fractal_x2: x,
-            end_fractal_x1: x,
-            end_fractal_x2: x,
-            begin_fractal_high: b.high,
-            begin_fractal_low: b.low,
-            end_fractal_high: b.high,
-            end_fractal_low: b.low,
-            is_bootstrap: false,
-            is_promoted_default: false,
-        });
+/// Phase 1.5：从持久 `PipelineState` 导出与黄金路径同构的 bundle（非消费 snapshot）。
+/// 不 clone 全历史 bar_*；BarFeature 增量；K0 ZS/BS 只算一次。
+pub fn build_kline_combine_bundle_from_state(state: &mut PipelineState) -> KlineCombineBundle {
+    if state.is_empty() {
+        return KlineCombineBundle::empty();
     }
-    out
+    let pr = state.snapshot();
+    build_kline_combine_bundle_from_snapshot(state, pr)
 }
 
-/// K0 中枢 + 一类/二类买/卖：在原生分钟 K 段上计算
-fn build_k0_zs_and_bs1(
-    bars: &[KlineBar],
-    zs_cfg: &ZSConfig,
-) -> (
-    Vec<ZSFrame>,
-    Vec<Buy1Frame>,
-    Vec<Sell1Frame>,
-    Vec<Buy2Frame>,
-    Vec<Sell2Frame>,
-    Vec<BuyNFrame>,
-    Vec<SellNFrame>,
-) {
-    let segs = kline_bars_to_segments(bars);
-    let zs_list = find_zs(&segs, 0, zs_cfg);
-    let frames = zs_frames_from_list(&zs_list, &segs, 0);
-    let buy1 = find_buy1(&zs_list, &segs, 0);
-    let sell1 = find_sell1(&zs_list, &segs, 0);
-    let buy2 = find_buy2(&zs_list, &segs, 0);
-    let sell2 = find_sell2(&zs_list, &segs, 0);
-    let buy_n = find_buy_n(&zs_list, &segs, 0);
-    let sell_n = find_sell_n(&zs_list, &segs, 0);
-    (frames, buy1, sell1, buy2, sell2, buy_n, sell_n)
+/// 已 snapshot 后组装（热路径）：复用增量 BarFeature 与 collect_k0 帧。
+pub fn build_kline_combine_bundle_from_snapshot(
+    state: &PipelineState,
+    pr: PipelineResult,
+) -> KlineCombineBundle {
+    let opt = state.options();
+    build_kline_combine_bundle_from_pipeline_parts(
+        state.bars(),
+        opt,
+        pr,
+        Some(state.bar_features_arc()),
+        Some(state.k0_zs_bs_clone()),
+    )
 }
 
 fn unit_to_virtual_bar(u: &LevelUnitBar) -> K1Bar {
@@ -472,22 +430,21 @@ pub fn build_kline_combine_bundle_with(
     build_kline_combine_bundle_from_pipeline(bars, opt, pr)
 }
 
-/// Phase 1.5：从持久 `PipelineState` 导出与黄金路径同构的 bundle（非消费 snapshot）。
-pub fn build_kline_combine_bundle_from_state(state: &mut PipelineState) -> KlineCombineBundle {
-    if state.is_empty() {
-        return KlineCombineBundle::empty();
-    }
-    let opt = state.options().clone();
-    let bars = state.bars().to_vec();
-    let pr = state.snapshot();
-    build_kline_combine_bundle_from_pipeline(&bars, &opt, pr)
-}
-
 /// 将已算好的 PipelineResult 映射为 Flutter 兼容 bundle（不重跑流水线）。
 pub fn build_kline_combine_bundle_from_pipeline(
     bars: &[KlineBar],
     opt: &PipelineOptions,
     pr: PipelineResult,
+) -> KlineCombineBundle {
+    build_kline_combine_bundle_from_pipeline_parts(bars, opt, pr, None, None)
+}
+
+fn build_kline_combine_bundle_from_pipeline_parts(
+    bars: &[KlineBar],
+    opt: &PipelineOptions,
+    pr: PipelineResult,
+    cached_features: Option<Arc<Vec<BarCrosshairFeature>>>,
+    cached_k0: Option<K0ZsBsFrames>,
 ) -> KlineCombineBundle {
     if bars.is_empty() || pr.levels.is_empty() {
         return KlineCombineBundle::empty();
@@ -543,64 +500,31 @@ pub fn build_kline_combine_bundle_from_pipeline(
         opt.validity_check,
     );
 
-    // 十字线/ML 特征：K线合并快照 + 各层 N 段快照（固定 purged：首 K0连线确认前不填 k1_*）
-    let mut bar_features: Vec<BarCrosshairFeature> = bars
-        .iter()
-        .enumerate()
-        .map(|(i, b)| {
-            let k = &pr.bar_k_snaps[i];
-            let snaps = &pr.bar_level_snaps[i];
-            let l1s = snaps.first();
-            BarCrosshairFeature {
-                idx: b.idx,
-                weekday: weekday_from_bar(b),
-                merge_inner_seq: k.inner_seq,
-                merge_count: k.count,
-                merge_box_seq: k.group_seq,
-                combine_fx: k.fx.clone(),
-                combine_high: k.high,
-                combine_low: k.low,
-                fractal_peak_dist: 0,
-                k1_idx: l1s.and_then(|s| s.unit_idx.map(|v| v as i32)),
-                k1_merge_inner_seq: l1s.map(|s| s.merge_inner_seq).unwrap_or(0),
-                k1_merge_count: l1s.map(|s| s.merge_count).unwrap_or(1),
-                k1_open: l1s.map(|s| s.unit_open).unwrap_or(0.0),
-                k1_high: l1s.map(|s| s.unit_high).unwrap_or(0.0),
-                k1_low: l1s.map(|s| s.unit_low).unwrap_or(0.0),
-                k1_close: l1s.map(|s| s.unit_close).unwrap_or(0.0),
-                k1_volume: l1s.map(|s| s.unit_volume).unwrap_or(0.0),
-                k1_combine_high: l1s.map(|s| s.combine_high).unwrap_or(0.0),
-                k1_combine_low: l1s.map(|s| s.combine_low).unwrap_or(0.0),
-                k1_combine_fx: l1s
-                    .map(|s| s.combine_fx.clone())
-                    .unwrap_or_else(|| "UNKNOWN".to_string()),
-                levels: snaps.clone(),
-                zs_hits: pr
+    let bar_features = if let Some(cached) = cached_features {
+        cached
+    } else {
+        // 黄金路径：一次性从 snaps 建全表（run_pipeline 末态，非步进热路径）
+        let mut features: Vec<BarCrosshairFeature> = bars
+            .iter()
+            .enumerate()
+            .map(|(i, b)| {
+                let k = &pr.bar_k_snaps[i];
+                let snaps = &pr.bar_level_snaps[i];
+                let (zs, bs) = pr
                     .bar_struct_hits
                     .get(i)
-                    .map(|(z, _)| z.clone())
-                    .unwrap_or_default(),
-                bs1_hits: pr
-                    .bar_struct_hits
-                    .get(i)
-                    .map(|(_, b)| b.clone())
-                    .unwrap_or_default(),
-            }
-        })
-        .collect();
-    enrich_fractal_peak_dist(bars, &mut bar_features, &k0_confirms);
+                    .map(|(z, b)| (z.as_slice(), b.as_slice()))
+                    .unwrap_or((&[], &[]));
+                build_bar_crosshair_feature(b, k, snaps, zs, bs)
+            })
+            .collect();
+        enrich_fractal_peak_dist(bars, &mut features, &k0_confirms);
+        Arc::new(features)
+    };
 
     let k1_analysis = map_k1_analysis(&pr);
 
-    let (
-        zs_k0_frames,
-        buy1_k0_frames,
-        sell1_k0_frames,
-        buy2_k0_frames,
-        sell2_k0_frames,
-        buy_n_k0_frames,
-        sell_n_k0_frames,
-    ) = build_k0_zs_and_bs1(bars, &opt.zs_config);
+    let k0 = cached_k0.unwrap_or_else(|| compute_k0_zs_bs(bars, &opt.zs_config));
 
     KlineCombineBundle {
         frames: l1.combine_frames.clone(),
@@ -615,13 +539,13 @@ pub fn build_kline_combine_bundle_from_pipeline(
         level_segments,
         level_virtual_units,
         levels: pr.levels,
-        zs_k0_frames,
-        buy1_k0_frames,
-        sell1_k0_frames,
-        buy2_k0_frames,
-        sell2_k0_frames,
-        buy_n_k0_frames,
-        sell_n_k0_frames,
+        zs_k0_frames: k0.zs,
+        buy1_k0_frames: k0.buy1,
+        sell1_k0_frames: k0.sell1,
+        buy2_k0_frames: k0.buy2,
+        sell2_k0_frames: k0.sell2,
+        buy_n_k0_frames: k0.buy_n,
+        sell_n_k0_frames: k0.sell_n,
     }
 }
 

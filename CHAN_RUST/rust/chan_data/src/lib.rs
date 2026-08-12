@@ -34,7 +34,8 @@ pub use chip::{
 };
 pub use combine::{
     build_k1_combine_frames, build_k1_combine_frames_with, build_kline_combine_bundle,
-    build_kline_combine_bundle_from_pipeline, build_kline_combine_bundle_from_state,
+    build_kline_combine_bundle_from_pipeline, build_kline_combine_bundle_from_snapshot,
+    build_kline_combine_bundle_from_state,
     build_kline_combine_bundle_with, build_kline_combine_frames, K0ConfirmSignal,
     KlineCombineBundle, KlineCombineFrame,
 };
@@ -45,9 +46,9 @@ pub use engine::{
 };
 pub use error::{ChanDataError, Result};
 pub use feature::{
-    build_k1_bar_views, enrich_fractal_peak_dist, fractal_extreme_bar_idx,
-    weekday_from_bar, BarBs1Hit, BarCrosshairFeature, BarZsHit, K0Line, K1Bar,
-    K1BarView,
+    build_bar_crosshair_feature, build_k1_bar_views, enrich_fractal_peak_dist,
+    fractal_extreme_bar_idx, fractal_peak_dist_at, weekday_from_bar, BarBs1Hit,
+    BarCrosshairFeature, BarZsHit, K0Line, K1Bar, K1BarView,
 };
 pub use kline::{KlineBar, KlinePeriod};
 pub use ml_predict::{predict_dense as ml_predict_dense, MISSING as ML_MISSING};

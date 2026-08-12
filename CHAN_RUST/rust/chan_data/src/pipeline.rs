@@ -11,14 +11,17 @@
 //! 进行中单元仍可只读探测上层合并态，但仅用于十字线/展示快照，不触发 `on_confirm`。
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::combine::KlineCombineFrame;
+use crate::combine::{K0ConfirmSignal, KlineCombineFrame};
 use crate::engine::{
     seed_leave_dir, CombineEngine, FxEvent, FxKind, MergeUnit, TruncGuard,
 };
-use crate::feature::{BarBs1Hit, BarZsHit};
+use crate::feature::{
+    build_bar_crosshair_feature, fractal_peak_dist_at, BarBs1Hit, BarCrosshairFeature, BarZsHit,
+};
 use crate::kline::KlineBar;
 use crate::zs::{ZSConfig, ZSFrame, ZSIncEngine};
 
@@ -295,17 +298,18 @@ pub struct BarSegRow {
 }
 
 /// 流水线结果
+/// `bar_*` 用 Arc 共享：snapshot 不再全量 clone；append 在唯一引用时 `make_mut` 只 push。
 #[derive(Debug, Clone)]
 pub struct PipelineResult {
     pub levels: Vec<LevelBundleOut>,
     /// 每根K × 每层快照
-    pub bar_level_snaps: Vec<Vec<LevelSnap>>,
+    pub bar_level_snaps: Arc<Vec<Vec<LevelSnap>>>,
     /// 每根K的K线合并快照
-    pub bar_k_snaps: Vec<BarCombineSnap>,
+    pub bar_k_snaps: Arc<Vec<BarCombineSnap>>,
     /// 每根K的2段兼容行（building/first/confirm）
-    pub bar_seg_rows: Vec<BarSegRow>,
+    pub bar_seg_rows: Arc<Vec<BarSegRow>>,
     /// 每根K：中枢盖住 + 一类BS discovery（逐K当下冻结）
-    pub bar_struct_hits: Vec<(Vec<BarZsHit>, Vec<BarBs1Hit>)>,
+    pub bar_struct_hits: Arc<Vec<(Vec<BarZsHit>, Vec<BarBs1Hit>)>>,
 }
 
 /// 分型极点 1 分钟 K：TOP 取 high 极大首K，BOTTOM 取 low 极小首K
@@ -1414,24 +1418,53 @@ fn k0_bars_to_segments(bars: &[KlineBar]) -> Vec<LevelSegment> {
     out
 }
 
+/// K0 中枢/BS 帧（未钉 discovery x；与黄金 `build_k0_zs_and_bs1` 同构，供 bundle 复用）
+#[derive(Clone, Default)]
+pub(crate) struct K0ZsBsFrames {
+    pub zs: Vec<ZSFrame>,
+    pub buy1: Vec<crate::buy1::Buy1Frame>,
+    pub sell1: Vec<crate::buy1::Sell1Frame>,
+    pub buy2: Vec<crate::buy2::Buy2Frame>,
+    pub sell2: Vec<crate::buy2::Sell2Frame>,
+    pub buy_n: Vec<crate::buy_n::BuyNFrame>,
+    pub sell_n: Vec<crate::buy_n::SellNFrame>,
+}
+
+/// 原生分钟 K 上算 K0 中枢+六路 BS（判定函数本身不改；只统一出口）
+pub(crate) fn compute_k0_zs_bs(bars: &[KlineBar], zs_cfg: &ZSConfig) -> K0ZsBsFrames {
+    if bars.is_empty() {
+        return K0ZsBsFrames::default();
+    }
+    let segs = k0_bars_to_segments(bars);
+    let zs_list = crate::zs::find_zs(&segs, 0, zs_cfg);
+    K0ZsBsFrames {
+        zs: crate::zs::zs_frames_from_list(&zs_list, &segs, 0),
+        buy1: crate::buy1::find_buy1(&zs_list, &segs, 0),
+        sell1: crate::buy1::find_sell1(&zs_list, &segs, 0),
+        buy2: crate::buy2::find_buy2(&zs_list, &segs, 0),
+        sell2: crate::buy2::find_sell2(&zs_list, &segs, 0),
+        buy_n: crate::buy_n::find_buy_n(&zs_list, &segs, 0),
+        sell_n: crate::buy_n::find_sell_n(&zs_list, &segs, 0),
+    }
+}
+
 /// K0 原生中枢/一类BS 当步命中（kn=0）；discovery x 钉死，与结构层同构写入 bar_features
+/// 顺带产出未钉 x 的 K0 帧，供 bundle 复用，避免再跑一遍 find_zs/BS。
 fn collect_k0_struct_hits(
     bars: &[KlineBar],
     bar_x: i32,
     zs_cfg: &ZSConfig,
     frozen_buy1_x: &mut HashMap<i64, i32>,
     frozen_sell1_x: &mut HashMap<i64, i32>,
-) -> (Vec<BarZsHit>, Vec<BarBs1Hit>) {
+) -> (Vec<BarZsHit>, Vec<BarBs1Hit>, K0ZsBsFrames) {
     if bars.is_empty() || bar_x < 0 {
-        return (Vec::new(), Vec::new());
+        return (Vec::new(), Vec::new(), K0ZsBsFrames::default());
     }
     let end = (bar_x as usize).min(bars.len() - 1);
     let prefix = &bars[..=end];
-    let segs = k0_bars_to_segments(prefix);
-    let zs_list = crate::zs::find_zs(&segs, 0, zs_cfg);
-    let zs_frames = crate::zs::zs_frames_from_list(&zs_list, &segs, 0);
-    let mut buy1 = crate::buy1::find_buy1(&zs_list, &segs, 0);
-    let mut sell1 = crate::buy1::find_sell1(&zs_list, &segs, 0);
+    let frames = compute_k0_zs_bs(prefix, zs_cfg);
+    let mut buy1 = frames.buy1.clone();
+    let mut sell1 = frames.sell1.clone();
     for f in &mut buy1 {
         f.x = *frozen_buy1_x.entry(f.seg_idx).or_insert(f.x);
     }
@@ -1439,7 +1472,7 @@ fn collect_k0_struct_hits(
         f.x = *frozen_sell1_x.entry(f.seg_idx).or_insert(f.x);
     }
     let mut zs_hits = Vec::new();
-    for f in &zs_frames {
+    for f in &frames.zs {
         if f.x1 <= bar_x && bar_x <= f.x2 {
             zs_hits.push(BarZsHit {
                 kn: 0,
@@ -1473,7 +1506,7 @@ fn collect_k0_struct_hits(
             });
         }
     }
-    (zs_hits, bs1_hits)
+    (zs_hits, bs1_hits, frames)
 }
 
 /// 持久流水线状态（Phase 1）：跨步复用 LevelState/CombineEngine，逐根 `append`。
@@ -1484,10 +1517,14 @@ pub struct PipelineState {
     /// 已喂入 K0（collect/snapshot 需要全前缀）
     bars: Vec<KlineBar>,
     levels: Vec<LevelState>,
-    bar_level_snaps: Vec<Vec<LevelSnap>>,
-    bar_k_snaps: Vec<BarCombineSnap>,
-    bar_seg_rows: Vec<BarSegRow>,
-    bar_struct_hits: Vec<(Vec<BarZsHit>, Vec<BarBs1Hit>)>,
+    bar_level_snaps: Arc<Vec<Vec<LevelSnap>>>,
+    bar_k_snaps: Arc<Vec<BarCombineSnap>>,
+    bar_seg_rows: Arc<Vec<BarSegRow>>,
+    bar_struct_hits: Arc<Vec<(Vec<BarZsHit>, Vec<BarBs1Hit>)>>,
+    /// 十字特征增量仓：只追加当步，历史行冻结不重建
+    bar_features: Arc<Vec<BarCrosshairFeature>>,
+    /// 当步 K0 中枢/BS 帧（collect_k0 已算；bundle 复用，不再重跑）
+    k0_zs_bs: K0ZsBsFrames,
     /// K0 一类 BS discovery x 冻结（与结构层同语义）
     k0_frozen_buy1_x: HashMap<i64, i32>,
     k0_frozen_sell1_x: HashMap<i64, i32>,
@@ -1500,10 +1537,12 @@ impl PipelineState {
             levels: vec![LevelState::new(0, &opt)],
             opt,
             bars: Vec::new(),
-            bar_level_snaps: Vec::new(),
-            bar_k_snaps: Vec::new(),
-            bar_seg_rows: Vec::new(),
-            bar_struct_hits: Vec::new(),
+            bar_level_snaps: Arc::new(Vec::new()),
+            bar_k_snaps: Arc::new(Vec::new()),
+            bar_seg_rows: Arc::new(Vec::new()),
+            bar_struct_hits: Arc::new(Vec::new()),
+            bar_features: Arc::new(Vec::new()),
+            k0_zs_bs: K0ZsBsFrames::default(),
             k0_frozen_buy1_x: HashMap::new(),
             k0_frozen_sell1_x: HashMap::new(),
         }
@@ -1589,7 +1628,7 @@ impl PipelineState {
                 fx: "UNKNOWN".to_string(),
                 group_seq: -1,
             });
-        self.bar_k_snaps.push(ksnap);
+        Arc::make_mut(&mut self.bar_k_snaps).push(ksnap);
 
         let mut provs: Vec<Option<(MergeUnit, f64, f64, f64)>> =
             Vec::with_capacity(self.levels.len());
@@ -1615,17 +1654,18 @@ impl PipelineState {
                 pending_input,
             ));
         }
-        self.bar_level_snaps.push(snaps);
+        Arc::make_mut(&mut self.bar_level_snaps).push(snaps);
 
         let mut zs_hits = Vec::new();
         let mut bs1_hits = Vec::new();
-        let (z0, b0) = collect_k0_struct_hits(
+        let (z0, b0, k0_frames) = collect_k0_struct_hits(
             &self.bars,
             bar_x,
             &self.opt.zs_config,
             &mut self.k0_frozen_buy1_x,
             &mut self.k0_frozen_sell1_x,
         );
+        self.k0_zs_bs = k0_frames;
         zs_hits.extend(z0);
         bs1_hits.extend(b0);
         for lv in self.levels.iter_mut() {
@@ -1633,7 +1673,7 @@ impl PipelineState {
             zs_hits.extend(z);
             bs1_hits.extend(b);
         }
-        self.bar_struct_hits.push((zs_hits, bs1_hits));
+        Arc::make_mut(&mut self.bar_struct_hits).push((zs_hits, bs1_hits));
 
         let row = self
             .levels
@@ -1644,22 +1684,78 @@ impl PipelineState {
                 confirm: l.confirm_val_this_bar,
             })
             .unwrap_or_default();
-        self.bar_seg_rows.push(row);
+        Arc::make_mut(&mut self.bar_seg_rows).push(row);
     }
 
     /// 非消费快照：会话仍存活，供 FFI 每步返回 bundle（Phase 1.5）
+    /// `bar_*` 只 Arc 共享，不再全历史 clone。
     pub fn snapshot(&mut self) -> PipelineResult {
-        let levels = {
-            let bars = &self.bars;
-            self.levels.iter_mut().map(|l| l.export(bars)).collect()
-        };
+        self.ensure_bar_features();
         PipelineResult {
-            levels,
-            bar_level_snaps: self.bar_level_snaps.clone(),
-            bar_k_snaps: self.bar_k_snaps.clone(),
-            bar_seg_rows: self.bar_seg_rows.clone(),
-            bar_struct_hits: self.bar_struct_hits.clone(),
+            levels: self.export_levels(),
+            bar_level_snaps: Arc::clone(&self.bar_level_snaps),
+            bar_k_snaps: Arc::clone(&self.bar_k_snaps),
+            bar_seg_rows: Arc::clone(&self.bar_seg_rows),
+            bar_struct_hits: Arc::clone(&self.bar_struct_hits),
         }
+    }
+
+    /// 全层 export（ZS/BS 帧给 JSON；判定函数本身不改）
+    pub(crate) fn export_levels(&mut self) -> Vec<LevelBundleOut> {
+        let bars = &self.bars;
+        self.levels.iter_mut().map(|l| l.export(bars)).collect()
+    }
+
+    /// 十字特征增量：只为尚未建仓的新 K 追加一行（历史冻结）。
+    pub(crate) fn ensure_bar_features(&mut self) {
+        let n = self.bars.len();
+        if self.bar_features.len() >= n {
+            return;
+        }
+        let k0_confirms: Vec<K0ConfirmSignal> = self
+            .levels
+            .first()
+            .map(|l| {
+                l.confirms
+                    .iter()
+                    .map(|c| K0ConfirmSignal {
+                        x: c.x,
+                        fx: c.fx.clone(),
+                        value: c.value,
+                        fractal_x1: c.fractal_x1,
+                        fractal_x2: c.fractal_x2,
+                        truncated: c.truncated,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let start = self.bar_features.len();
+        let mut added = Vec::with_capacity(n - start);
+        for i in start..n {
+            let (zs, bs) = self
+                .bar_struct_hits
+                .get(i)
+                .map(|(z, b)| (z.as_slice(), b.as_slice()))
+                .unwrap_or((&[], &[]));
+            let mut feat = build_bar_crosshair_feature(
+                &self.bars[i],
+                &self.bar_k_snaps[i],
+                &self.bar_level_snaps[i],
+                zs,
+                bs,
+            );
+            feat.fractal_peak_dist = fractal_peak_dist_at(&self.bars, &k0_confirms, i);
+            added.push(feat);
+        }
+        Arc::make_mut(&mut self.bar_features).extend(added);
+    }
+
+    pub(crate) fn bar_features_arc(&self) -> Arc<Vec<BarCrosshairFeature>> {
+        Arc::clone(&self.bar_features)
+    }
+
+    pub(crate) fn k0_zs_bs_clone(&self) -> K0ZsBsFrames {
+        self.k0_zs_bs.clone()
     }
 
     /// 消费状态，导出与 `run_pipeline` 同构的 PipelineResult
@@ -1752,7 +1848,7 @@ pub fn run_pipeline(bars: &[KlineBar], opt: &PipelineOptions) -> PipelineResult 
         // 中枢/一类BS：K0 原生 + 各结构层；当步命中 + discovery x 冻结
         let mut zs_hits = Vec::new();
         let mut bs1_hits = Vec::new();
-        let (z0, b0) = collect_k0_struct_hits(
+        let (z0, b0, _) = collect_k0_struct_hits(
             bars,
             bar_x,
             &opt.zs_config,
@@ -1782,10 +1878,10 @@ pub fn run_pipeline(bars: &[KlineBar], opt: &PipelineOptions) -> PipelineResult 
 
     PipelineResult {
         levels: levels.into_iter().map(|mut l| l.export(bars)).collect(),
-        bar_level_snaps,
-        bar_k_snaps,
-        bar_seg_rows,
-        bar_struct_hits,
+        bar_level_snaps: Arc::new(bar_level_snaps),
+        bar_k_snaps: Arc::new(bar_k_snaps),
+        bar_seg_rows: Arc::new(bar_seg_rows),
+        bar_struct_hits: Arc::new(bar_struct_hits),
     }
 }
 

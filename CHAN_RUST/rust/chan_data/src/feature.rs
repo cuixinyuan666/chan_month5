@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::combine::K0ConfirmSignal;
 use crate::kline::KlineBar;
-use crate::pipeline::LevelSnap;
+use crate::pipeline::{BarCombineSnap, LevelSnap};
 
 const WEEKDAY_CN: [&str; 7] = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
 
@@ -237,6 +237,64 @@ pub fn fractal_extreme_bar_idx(bars: &[KlineBar], conf: &K0ConfirmSignal) -> Opt
         _ => {}
     }
     None
+}
+
+/// 单根十字特征（输出映射；不改判定）。`fractal_peak_dist` 由调用方写入。
+pub fn build_bar_crosshair_feature(
+    bar: &KlineBar,
+    k: &BarCombineSnap,
+    snaps: &[LevelSnap],
+    zs_hits: &[BarZsHit],
+    bs1_hits: &[BarBs1Hit],
+) -> BarCrosshairFeature {
+    let l1s = snaps.first();
+    BarCrosshairFeature {
+        idx: bar.idx,
+        weekday: weekday_from_bar(bar),
+        merge_inner_seq: k.inner_seq,
+        merge_count: k.count,
+        merge_box_seq: k.group_seq,
+        combine_fx: k.fx.clone(),
+        combine_high: k.high,
+        combine_low: k.low,
+        fractal_peak_dist: 0,
+        k1_idx: l1s.and_then(|s| s.unit_idx.map(|v| v as i32)),
+        k1_merge_inner_seq: l1s.map(|s| s.merge_inner_seq).unwrap_or(0),
+        k1_merge_count: l1s.map(|s| s.merge_count).unwrap_or(1),
+        k1_open: l1s.map(|s| s.unit_open).unwrap_or(0.0),
+        k1_high: l1s.map(|s| s.unit_high).unwrap_or(0.0),
+        k1_low: l1s.map(|s| s.unit_low).unwrap_or(0.0),
+        k1_close: l1s.map(|s| s.unit_close).unwrap_or(0.0),
+        k1_volume: l1s.map(|s| s.unit_volume).unwrap_or(0.0),
+        k1_combine_high: l1s.map(|s| s.combine_high).unwrap_or(0.0),
+        k1_combine_low: l1s.map(|s| s.combine_low).unwrap_or(0.0),
+        k1_combine_fx: l1s
+            .map(|s| s.combine_fx.clone())
+            .unwrap_or_else(|| "UNKNOWN".to_string()),
+        levels: snaps.to_vec(),
+        zs_hits: zs_hits.to_vec(),
+        bs1_hits: bs1_hits.to_vec(),
+    }
+}
+
+/// 单根极点距（与 `enrich_fractal_peak_dist` 同口径；供增量只写当步）。
+pub fn fractal_peak_dist_at(
+    bars: &[KlineBar],
+    k0_confirms: &[K0ConfirmSignal],
+    i: usize,
+) -> i32 {
+    let mut extreme_idx: Option<i32> = None;
+    for c in k0_confirms {
+        if (c.x as usize) <= i {
+            extreme_idx = fractal_extreme_bar_idx(bars, c);
+        } else {
+            break;
+        }
+    }
+    match extreme_idx {
+        Some(ext) => (i as i32) - ext,
+        None => 0,
+    }
 }
 
 /// 逐 K 填充 K线分型极点距：基准=最近冻结K0连线确认分型框；确认当步起算；不含极点 K。
