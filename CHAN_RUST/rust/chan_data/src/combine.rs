@@ -124,7 +124,8 @@ fn default_k0_policy_pending() -> String {
 }
 
 impl KlineCombineBundle {
-    fn empty() -> Self {
+    /// 空包：Delta 从空仓重建 Full Snapshot 的起点
+    pub fn empty() -> Self {
         Self {
             frames: Vec::new(),
             k0_confirms: Vec::new(),

@@ -283,6 +283,27 @@ pub extern "C" fn chan_pipeline_append(handle: u64, bar_json: *const c_char) -> 
     to_json_ok(build_kline_combine_bundle_from_state(state))
 }
 
+/// 逐根 append，返回 `PipelineDelta`（历史 bar_features 不重复发送）。
+/// Full Snapshot 仍走 `chan_pipeline_append` / `chan_pipeline_snapshot`，本接口不替代。
+#[no_mangle]
+pub extern "C" fn chan_pipeline_append_delta(handle: u64, bar_json: *const c_char) -> *mut c_char {
+    let Some(raw) = cstr_to_str(bar_json) else {
+        return to_json_err("bar_json 不能为空");
+    };
+    let bar = match parse_one_bar(raw) {
+        Ok(b) => b,
+        Err(e) => return to_json_err(&e),
+    };
+    let mut reg = match pipeline_registry().lock() {
+        Ok(g) => g,
+        Err(_) => return to_json_err("pipeline registry lock poisoned"),
+    };
+    let Some(state) = reg.map.get_mut(&handle) else {
+        return to_json_err(&format!("invalid pipeline handle: {handle}"));
+    };
+    to_json_ok(state.append_delta(bar))
+}
+
 fn parse_one_bar(raw: &str) -> Result<KlineBar, String> {
     let trimmed = raw.trim_start();
     if trimmed.starts_with('{') {

@@ -7,6 +7,7 @@ mod buy2;
 mod buy_n;
 mod chip;
 mod combine;
+mod delta;
 mod engine;
 mod error;
 mod feature;
@@ -38,6 +39,9 @@ pub use combine::{
     build_kline_combine_bundle_from_state,
     build_kline_combine_bundle_with, build_kline_combine_frames, K0ConfirmSignal,
     KlineCombineBundle, KlineCombineFrame,
+};
+pub use delta::{
+    apply_pipeline_delta, reconstruct_bundle_from_deltas, PipelineDelta, PipelineDeltaStructure,
 };
 pub use engine::{
     seed_contain_trunc_up_leg, seed_is_leave, seed_leave_dir, seed_nonleave_may_trunc,
