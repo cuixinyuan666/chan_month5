@@ -1,11 +1,10 @@
 //! Kn class-1 buy/sell (isomorphic all Kn): ZS below prev -> buy; above -> sell.
 //!
-//! == 方案A 一类/二类分工 ==
-//! 同一资格中枢框内，一类仅负责「建框」与「严格新极值」：
-//!   - 建框（box_min_low / box_max_high 首次赋值）→ 1Ba / 1Sa
-//!   - 严格新低（买）/ 严格新高（卖）→ 重置字母为 1Ba / 1Sa
-//!   - 方案A收紧：一类字母常锁 a（1Ba/1Sa），不升 1Bb…；等高/非新极值交给二类
-//!   - 等高或更弱 → 不标（交由 buy2.rs 标 2Ba…/2Sa…）
+//! == V2.1 一类/二类分工 ==
+//! 同一资格中枢框内：
+//!   - 建框 / 严格新极值 → 1Ba / 1Sa，更新 box 极值，二类字母 reset
+//!   - 等高/等低 → 1Bb / 1Bc… / 1Sb…，box 极值不变，不产生二类
+//!   - 严格更高低点 / 严格更低高点 → 一类跳过，交由 buy2.rs 标 2Ba…/2Sa…
 //! 运行参照（box_min_low / box_max_high）由一类更新，二类只读共享。
 //! 两类均遵守「跳过时不抬高/压低参照」。
 //! == 打点规则（与二类同构）==
@@ -119,7 +118,7 @@ pub fn find_buy1_with_active(
             continue;
         }
         // Members in order; layer-first Kn (segs index 0) skipped.
-        // box_min_low = 本中枢框已见最低；仅建框/新低标一类；等高/更高交给二类。
+        // box_min_low = 本中枢框已见最低；建框/新低/等高标一类；更高低点交给二类。
         let mut letter_ord: Option<usize> = None;
         let mut box_min_low: Option<f64> = None;
         for &mi in &curr.member_segs {
@@ -131,17 +130,19 @@ pub fn find_buy1_with_active(
             }
             let s = &segs[mi];
             let low = s.low;
-            // 已有参照且非严格新低 → 不标一类（参照不抬）
-            if let Some(bmin) = box_min_low {
-                if low > bmin || approx_eq(low, bmin) {
-                    continue;
+            let (ord, update_box): (usize, bool) = match box_min_low {
+                None => (0, true),
+                Some(bmin) if low < bmin && !approx_eq(low, bmin) => (0, true),
+                Some(bmin) if approx_eq(low, bmin) => {
+                    (letter_ord.map(|o| o + 1).unwrap_or(0), false)
                 }
-            }
+                Some(_bmin) => continue, // 更高低点：二类，参照不抬
+            };
             let prior_labeled_in_zs = letter_ord.is_some();
-            // 建框或新低：重置字母为 1Ba
-            let ord = 0usize;
             letter_ord = Some(ord);
-            box_min_low = Some(low);
+            if update_box {
+                box_min_low = Some(low);
+            }
             let pin = active_idx == Some(s.idx) && prior_labeled_in_zs;
             out.push(Buy1Frame {
                 seq,
@@ -179,7 +180,7 @@ pub fn find_sell1_with_active(
         if !zs_above_prev(curr, prev) {
             continue;
         }
-        // box_max_high = 本中枢框已见最高；仅建框/新高标一类；等高/更低交给二类。
+        // box_max_high = 本中枢框已见最高；建框/新高/等高标一类；更低高点交给二类。
         let mut letter_ord: Option<usize> = None;
         let mut box_max_high: Option<f64> = None;
         for &mi in &curr.member_segs {
@@ -191,16 +192,19 @@ pub fn find_sell1_with_active(
             }
             let s = &segs[mi];
             let high = s.high;
-            // 已有参照且非严格新高 → 不标一类（参照不压）
-            if let Some(bmax) = box_max_high {
-                if high < bmax || approx_eq(high, bmax) {
-                    continue;
+            let (ord, update_box): (usize, bool) = match box_max_high {
+                None => (0, true),
+                Some(bmax) if high > bmax && !approx_eq(high, bmax) => (0, true),
+                Some(bmax) if approx_eq(high, bmax) => {
+                    (letter_ord.map(|o| o + 1).unwrap_or(0), false)
                 }
-            }
+                Some(_bmax) => continue, // 更低高点：二类，参照不压
+            };
             let prior_labeled_in_zs = letter_ord.is_some();
-            let ord = 0usize;
             letter_ord = Some(ord);
-            box_max_high = Some(high);
+            if update_box {
+                box_max_high = Some(high);
+            }
             let pin = active_idx == Some(s.idx) && prior_labeled_in_zs;
             out.push(Sell1Frame {
                 seq,
@@ -280,8 +284,8 @@ mod tests {
         assert_eq!(b1[0].label, "1Ba");
     }
     #[test]
-    fn equal_low_not_class1_new_low_resets_1ba() {
-        // 方案A：等高不再标一类（交给二类）；新低仍 1Ba
+    fn equal_low_gets_1bb_new_low_resets_1ba() {
+        // V2.1：等高标一类 1Bb…；新低仍 1Ba
         let segs = vec![
             mk_seg(0, 1, 20.0, 10.0),
             mk_seg(1, 1, 15.0, 5.0),
@@ -323,14 +327,16 @@ mod tests {
             member_segs: vec![1, 2, 3],
         };
         let b1 = find_buy1(&[prev, curr], &segs, 1);
-        assert_eq!(b1.len(), 2);
+        assert_eq!(b1.len(), 3);
         assert_eq!(b1[0].label, "1Ba");
         assert_eq!(b1[0].price, 5.0);
         assert_eq!(b1[0].seg_idx, 1);
-        assert_eq!(b1[1].label, "1Ba");
-        assert_eq!(b1[1].price, 3.0);
-        assert_eq!(b1[1].seg_idx, 3);
-        assert!(b1.iter().all(|p| p.seg_idx != 2));
+        assert_eq!(b1[1].label, "1Bb");
+        assert_eq!(b1[1].price, 5.0);
+        assert_eq!(b1[1].seg_idx, 2);
+        assert_eq!(b1[2].label, "1Ba");
+        assert_eq!(b1[2].price, 3.0);
+        assert_eq!(b1[2].seg_idx, 3);
     }
     #[test]
     fn higher_low_in_same_zs_not_labeled() {
@@ -444,8 +450,8 @@ mod tests {
         }
     }
     #[test]
-    fn equal_high_not_class1_new_high_resets_1sa() {
-        // 方案A：等高不再标一类（交给二类）；新高仍 1Sa
+    fn equal_high_gets_1sb_new_high_resets_1sa() {
+        // V2.1：等高标一类 1Sb…；新高仍 1Sa
         let segs = vec![
             mk_seg(0, 1, 10.0, 2.0),
             mk_seg(1, 1, 20.0, 10.0),
@@ -488,14 +494,16 @@ mod tests {
         };
         assert!(zs_above_prev(&curr, &prev));
         let s1 = find_sell1(&[prev, curr], &segs, 1);
-        assert_eq!(s1.len(), 2);
+        assert_eq!(s1.len(), 3);
         assert_eq!(s1[0].label, "1Sa");
         assert_eq!(s1[0].price, 20.0);
         assert_eq!(s1[0].seg_idx, 1);
-        assert_eq!(s1[1].label, "1Sa");
-        assert_eq!(s1[1].price, 25.0);
-        assert_eq!(s1[1].seg_idx, 3);
-        assert!(s1.iter().all(|p| p.seg_idx != 2));
+        assert_eq!(s1[1].label, "1Sb");
+        assert_eq!(s1[1].price, 20.0);
+        assert_eq!(s1[1].seg_idx, 2);
+        assert_eq!(s1[2].label, "1Sa");
+        assert_eq!(s1[2].price, 25.0);
+        assert_eq!(s1[2].seg_idx, 3);
     }
     #[test]
     fn lower_high_in_same_zs_not_labeled_sell() {
@@ -673,14 +681,14 @@ mod tests {
         assert_eq!(s1[0].seg_idx, 1);
         assert_eq!(s1[0].label, "1Sa");
     }
-    /// 同枢：跳过低于框最高后回到框最高 → 等高不再标一类（交给二类）。
+    /// 同枢：跳过低于框最高后回到框最高 → 等高标一类 1Sb（不产生二类）。
     #[test]
-    fn after_lower_high_return_to_box_max_not_class1() {
+    fn after_lower_high_return_to_box_max_gets_1sb() {
         let segs = vec![
             mk_seg(0, 1, 10.0, 2.0),
             mk_seg(1, -1, 20.0, 10.0), // 1Sa
             mk_seg(2, 1, 18.0, 11.0),  // skip / class2
-            mk_seg(3, -1, 20.0, 9.0),  // 等高 → 非一类
+            mk_seg(3, -1, 20.0, 9.0),  // 等高 → 1Sb
         ];
         let prev = ZS {
             level: 1,
@@ -717,9 +725,11 @@ mod tests {
             member_segs: vec![1, 2, 3],
         };
         let s1 = find_sell1(&[prev, curr], &segs, 1);
-        assert_eq!(s1.len(), 1);
+        assert_eq!(s1.len(), 2);
         assert_eq!(s1[0].seg_idx, 1);
         assert_eq!(s1[0].label, "1Sa");
+        assert_eq!(s1[1].seg_idx, 3);
+        assert_eq!(s1[1].label, "1Sb");
     }
     /// 同枢买：跳过更高低后，中间价仍高于框最低 → 不标（禁止旧逻辑把参照抬到跳过价）。
     #[test]
@@ -770,6 +780,104 @@ mod tests {
         assert_eq!(b1[0].label, "1Ba");
         assert_eq!(b1[0].price, 5.0);
     }
+    #[test]
+    fn v21_class1_equal_low_increments_1ba_1bb_1bc() {
+        let segs = vec![
+            mk_seg(0, 1, 20.0, 10.0),
+            mk_seg(1, 1, 15.0, 100.0),
+            mk_seg(2, 1, 14.0, 100.0),
+            mk_seg(3, 1, 13.0, 100.0),
+        ];
+        let prev = ZS {
+            level: 1,
+            start_idx: 0,
+            end_idx: 0,
+            start_seg: 0,
+            end_seg: 0,
+            zg: 20.0,
+            zd: 12.0,
+            gg: 20.0,
+            dd: 10.0,
+            mid: 16.0,
+            dir: 1,
+            in_seg_idx: None,
+            out_seg_idx: Some(1),
+            is_sure: true,
+            member_segs: vec![0],
+        };
+        let curr = ZS {
+            level: 1,
+            start_idx: 1,
+            end_idx: 3,
+            start_seg: 1,
+            end_seg: 3,
+            zg: 8.0,
+            zd: 2.0,
+            gg: 15.0,
+            dd: 100.0,
+            mid: 5.0,
+            dir: 1,
+            in_seg_idx: Some(0),
+            out_seg_idx: None,
+            is_sure: false,
+            member_segs: vec![1, 2, 3],
+        };
+        let b1 = find_buy1(&[prev, curr], &segs, 1);
+        assert_eq!(
+            b1.iter().map(|p| p.label.as_str()).collect::<Vec<_>>(),
+            vec!["1Ba", "1Bb", "1Bc"]
+        );
+    }
+
+    #[test]
+    fn v21_class1_equal_high_increments_1sa_1sb_1sc() {
+        let segs = vec![
+            mk_seg(0, 1, 10.0, 2.0),
+            mk_seg(1, 1, 100.0, 10.0),
+            mk_seg(2, 1, 100.0, 11.0),
+            mk_seg(3, 1, 100.0, 12.0),
+        ];
+        let prev = ZS {
+            level: 1,
+            start_idx: 0,
+            end_idx: 0,
+            start_seg: 0,
+            end_seg: 0,
+            zg: 8.0,
+            zd: 2.0,
+            gg: 10.0,
+            dd: 2.0,
+            mid: 5.0,
+            dir: 1,
+            in_seg_idx: None,
+            out_seg_idx: Some(1),
+            is_sure: true,
+            member_segs: vec![0],
+        };
+        let curr = ZS {
+            level: 1,
+            start_idx: 1,
+            end_idx: 3,
+            start_seg: 1,
+            end_seg: 3,
+            zg: 30.0,
+            zd: 15.0,
+            gg: 100.0,
+            dd: 10.0,
+            mid: 22.5,
+            dir: 1,
+            in_seg_idx: Some(0),
+            out_seg_idx: None,
+            is_sure: false,
+            member_segs: vec![1, 2, 3],
+        };
+        let s1 = find_sell1(&[prev, curr], &segs, 1);
+        assert_eq!(
+            s1.iter().map(|p| p.label.as_str()).collect::<Vec<_>>(),
+            vec!["1Sa", "1Sb", "1Sc"]
+        );
+    }
+
     /// 002003: step25 no new sell; step26/27 以框最高口径验收（见运行结果）。
     #[test]
     fn sell1_002003_step25_no_new_step26_1sa_step27_keeps() {

@@ -1,7 +1,7 @@
 //! Kn class-2 buy/sell (isomorphic all Kn): same ZS frames as class-1
-//! (below/above prev). Scheme A: after box extreme is established, members with
-//! low >= box_min (buy) or high <= box_max (sell) get 2Ba…/2Sa…; establish/new
-//! extreme stay class-1 only. Running ref same as class-1 (skip does not raise/lower).
+//! (below/above prev). V2.1: after box extreme is established, only strict
+//! higher lows (buy) or strict lower highs (sell) get 2Ba…/2Sa…; equal
+//! extremes stay class-1 only (1Bb…/1Sb…). Running ref same as class-1.
 //! When class-1 establishes or resets (new extreme), class-2 letter also resets to 2Ba/2Sa.
 //! Active-unit mark x: if prior class-2 label exists in ZS, pin to begin_pole+1.
 use crate::buy1::{zs_above_prev, zs_below_prev};
@@ -83,7 +83,7 @@ pub fn find_buy2(zs_list: &[ZS], segs: &[LevelSegment], level: i32) -> Vec<Buy2F
     find_buy2_with_active(zs_list, segs, level, None)
 }
 
-/// Same ZS as class-1; label equal/higher lows as 2Ba… (establish/new low skip).
+/// Same ZS as class-1; only strict higher lows as 2Ba… (equal/new low skip).
 pub fn find_buy2_with_active(
     zs_list: &[ZS],
     segs: &[LevelSegment],
@@ -101,7 +101,7 @@ pub fn find_buy2_with_active(
         if !zs_below_prev(curr, prev) {
             continue;
         }
-        // 与一类同框同序维护已见最低；建框/新低归一类，等高/更高标二类。
+        // 与一类同框同序维护已见最低；建框/新低/等高归一类，仅更高低点标二类。
         let mut letter_ord: Option<usize> = None;
         let mut box_min_low: Option<f64> = None;
         for &mi in &curr.member_segs {
@@ -124,9 +124,14 @@ pub fn find_buy2_with_active(
                     box_min_low = Some(low);
                     letter_ord = None;
                 }
+                Some(bmin) if approx_eq(low, bmin) => {
+                    // 等高：一类 1Bb…，不产生二类
+                    let _ = bmin;
+                    continue;
+                }
                 Some(bmin) => {
-                    // 等高或更高 → 二类（参照不抬）
-                    debug_assert!(low > bmin || approx_eq(low, bmin));
+                    // 严格更高低点 → 二类（参照不抬）
+                    debug_assert!(low > bmin);
                     let _ = bmin;
                     let prior_labeled_in_zs = letter_ord.is_some();
                     let ord = letter_ord.map(|o| o + 1).unwrap_or(0);
@@ -153,7 +158,7 @@ pub fn find_sell2(zs_list: &[ZS], segs: &[LevelSegment], level: i32) -> Vec<Sell
     find_sell2_with_active(zs_list, segs, level, None)
 }
 
-/// Sell2 mirror: equal/lower highs → 2Sa…; establish/new high stay class-1.
+/// Sell2 mirror: only strict lower highs → 2Sa…; equal/new high stay class-1.
 pub fn find_sell2_with_active(
     zs_list: &[ZS],
     segs: &[LevelSegment],
@@ -193,8 +198,13 @@ pub fn find_sell2_with_active(
                     box_max_high = Some(high);
                     letter_ord = None;
                 }
+                Some(bmax) if approx_eq(high, bmax) => {
+                    // 等高：一类 1Sb…，不产生二类
+                    let _ = bmax;
+                    continue;
+                }
                 Some(bmax) => {
-                    debug_assert!(high < bmax || approx_eq(high, bmax));
+                    debug_assert!(high < bmax);
                     let _ = bmax;
                     let prior_labeled_in_zs = letter_ord.is_some();
                     let ord = letter_ord.map(|o| o + 1).unwrap_or(0);
@@ -326,13 +336,85 @@ mod tests {
     }
 
     #[test]
-    fn higher_and_equal_low_get_2ba_2bb_new_low_resets_2ba() {
-        // 新低复位一类字母，二类也从 2Ba 重起
+    fn v21_acceptance_buy_side_no_dual_label_at_equal() {
+        // 100→1Ba/1Bb/1Bc；101→2Ba；102→2Bb；99→1Ba/1Bb；100→2Ba；同价禁止 1B*+2B* 双标
+        let segs = vec![
+            mk_seg(0, 1, 20.0, 10.0),
+            mk_seg(1, 1, 15.0, 100.0),
+            mk_seg(2, 1, 14.0, 100.0),
+            mk_seg(3, 1, 13.0, 100.0),
+            mk_seg(4, 1, 16.0, 101.0),
+            mk_seg(5, 1, 17.0, 102.0),
+            mk_seg(6, 1, 12.0, 99.0),
+            mk_seg(7, 1, 11.0, 99.0),
+            mk_seg(8, 1, 14.0, 100.0),
+        ];
+        let (prev, curr) = below_pair(vec![1, 2, 3, 4, 5, 6, 7, 8]);
+        let zs = [prev, curr];
+        let b1 = find_buy1(&zs, &segs, 1);
+        let b2 = find_buy2(&zs, &segs, 1);
+        assert_eq!(
+            b1.iter().map(|p| p.label.as_str()).collect::<Vec<_>>(),
+            vec!["1Ba", "1Bb", "1Bc", "1Ba", "1Bb"]
+        );
+        assert_eq!(
+            b2.iter().map(|p| p.label.as_str()).collect::<Vec<_>>(),
+            vec!["2Ba", "2Bb", "2Ba"]
+        );
+        for mi in 1..=8 {
+            let has_c1 = b1.iter().any(|p| p.seg_idx == mi as i64);
+            let has_c2 = b2.iter().any(|p| p.seg_idx == mi as i64);
+            assert!(
+                !(has_c1 && has_c2),
+                "seg {mi} must not have both class-1 and class-2"
+            );
+        }
+    }
+
+    #[test]
+    fn v21_acceptance_sell_side_no_dual_label_at_equal() {
+        // 卖侧镜像：100→1Sa/b/c；99→2Sa；98→2Sb；103→1Sa/b；102→2Sa
+        let segs = vec![
+            mk_seg(0, 1, 10.0, 2.0),
+            mk_seg(1, 1, 100.0, 10.0),
+            mk_seg(2, 1, 100.0, 11.0),
+            mk_seg(3, 1, 100.0, 12.0),
+            mk_seg(4, 1, 99.0, 13.0),
+            mk_seg(5, 1, 98.0, 14.0),
+            mk_seg(6, 1, 103.0, 15.0),
+            mk_seg(7, 1, 103.0, 16.0),
+            mk_seg(8, 1, 102.0, 17.0),
+        ];
+        let (prev, curr) = above_pair(vec![1, 2, 3, 4, 5, 6, 7, 8]);
+        let zs = [prev, curr];
+        let s1 = find_sell1(&zs, &segs, 1);
+        let s2 = find_sell2(&zs, &segs, 1);
+        assert_eq!(
+            s1.iter().map(|p| p.label.as_str()).collect::<Vec<_>>(),
+            vec!["1Sa", "1Sb", "1Sc", "1Sa", "1Sb"]
+        );
+        assert_eq!(
+            s2.iter().map(|p| p.label.as_str()).collect::<Vec<_>>(),
+            vec!["2Sa", "2Sb", "2Sa"]
+        );
+        for mi in 1..=8 {
+            let has_c1 = s1.iter().any(|p| p.seg_idx == mi as i64);
+            let has_c2 = s2.iter().any(|p| p.seg_idx == mi as i64);
+            assert!(
+                !(has_c1 && has_c2),
+                "seg {mi} must not have both class-1 and class-2"
+            );
+        }
+    }
+
+    #[test]
+    fn higher_low_only_gets_buy2_equal_low_class1_only() {
+        // V2.1：等高归一类 1Bb；更高低点才标二类
         let segs = vec![
             mk_seg(0, 1, 20.0, 10.0),
             mk_seg(1, 1, 15.0, 5.0),  // 1Ba 建框
-            mk_seg(2, 1, 14.0, 5.0),  // 等高 → 2Ba
-            mk_seg(3, 1, 16.0, 6.0),  // 更高 → 2Bb
+            mk_seg(2, 1, 14.0, 5.0),  // 等高 → 1Bb（非二类）
+            mk_seg(3, 1, 16.0, 6.0),  // 更高 → 2Ba
             mk_seg(4, 1, 13.0, 3.0),  // 新低 → 一类 1Ba（复位）
             mk_seg(5, 1, 12.0, 4.0),  // 高于新低 → 二类从 2Ba 重起
         ];
@@ -340,16 +422,17 @@ mod tests {
         let zs = [prev, curr];
         let b1 = find_buy1(&zs, &segs, 1);
         let b2 = find_buy2(&zs, &segs, 1);
-        assert_eq!(b1.len(), 2);
+        assert_eq!(b1.len(), 3);
         assert_eq!(b1[0].seg_idx, 1);
-        assert_eq!(b1[1].seg_idx, 4);
-        assert_eq!(b2.len(), 3);
+        assert_eq!(b1[1].seg_idx, 2);
+        assert_eq!(b1[1].label, "1Bb");
+        assert_eq!(b1[2].seg_idx, 4);
+        assert_eq!(b1[2].label, "1Ba");
+        assert_eq!(b2.len(), 2);
         assert_eq!(b2[0].label, "2Ba");
-        assert_eq!(b2[0].seg_idx, 2);
-        assert_eq!(b2[1].label, "2Bb");
-        assert_eq!(b2[1].seg_idx, 3);
-        assert_eq!(b2[2].label, "2Ba");
-        assert_eq!(b2[2].seg_idx, 5);
+        assert_eq!(b2[0].seg_idx, 3);
+        assert_eq!(b2[1].label, "2Ba");
+        assert_eq!(b2[1].seg_idx, 5);
     }
 
     #[test]
@@ -390,12 +473,12 @@ mod tests {
     }
 
     #[test]
-    fn sell2_equal_and_lower_high_mirror() {
+    fn sell2_lower_high_only_equal_goes_class1() {
         let segs = vec![
             mk_seg(0, 1, 10.0, 2.0),
             mk_seg(1, 1, 20.0, 10.0), // 1Sa 建框
-            mk_seg(2, 1, 20.0, 11.0), // 等高 → 2Sa
-            mk_seg(3, 1, 18.0, 9.0),  // 更低 → 2Sb
+            mk_seg(2, 1, 20.0, 11.0), // 等高 → 1Sb
+            mk_seg(3, 1, 18.0, 9.0),  // 更低 → 2Sa
             mk_seg(4, 1, 25.0, 12.0), // 新高 → 一类 1Sa（复位）
             mk_seg(5, 1, 22.0, 10.0), // 低于新高 → 二类从 2Sa 重起
         ];
@@ -403,16 +486,18 @@ mod tests {
         let zs = [prev, curr];
         let s1 = find_sell1(&zs, &segs, 1);
         let s2 = find_sell2(&zs, &segs, 1);
-        assert_eq!(s1.len(), 2);
+        assert_eq!(s1.len(), 3);
         assert_eq!(s1[0].seg_idx, 1);
-        assert_eq!(s1[1].seg_idx, 4);
-        assert_eq!(s2.len(), 3);
+        assert_eq!(s1[0].label, "1Sa");
+        assert_eq!(s1[1].seg_idx, 2);
+        assert_eq!(s1[1].label, "1Sb");
+        assert_eq!(s1[2].seg_idx, 4);
+        assert_eq!(s1[2].label, "1Sa");
+        assert_eq!(s2.len(), 2);
         assert_eq!(s2[0].label, "2Sa");
-        assert_eq!(s2[0].seg_idx, 2);
-        assert_eq!(s2[1].label, "2Sb");
-        assert_eq!(s2[1].seg_idx, 3);
-        assert_eq!(s2[2].label, "2Sa");
-        assert_eq!(s2[2].seg_idx, 5);
+        assert_eq!(s2[0].seg_idx, 3);
+        assert_eq!(s2[1].label, "2Sa");
+        assert_eq!(s2[1].seg_idx, 5);
     }
 
     #[test]
