@@ -12,6 +12,7 @@ use crate::feature::{
 use crate::kline::KlineBar;
 use crate::pipeline::{
     run_pipeline, LevelBundleOut, LevelSegment, LevelUnitBar, PipelineOptions, PipelineResult,
+    PipelineState,
 };
 use crate::seg_eigen::{
     BarSubSnapshot, FirstSegDirSignal, K1AnalysisBundle, K1ConfirmSignal, K1Line,
@@ -459,7 +460,7 @@ pub fn build_kline_combine_bundle(bars: &[KlineBar]) -> KlineCombineBundle {
     build_kline_combine_bundle_with(bars, &PipelineOptions::default())
 }
 
-/// 带选项版本（validity_check 可配置）。
+/// 带选项版本（validity_check 可配置）。黄金路径：内部 `run_pipeline`。
 pub fn build_kline_combine_bundle_with(
     bars: &[KlineBar],
     opt: &PipelineOptions,
@@ -468,6 +469,29 @@ pub fn build_kline_combine_bundle_with(
         return KlineCombineBundle::empty();
     }
     let pr = run_pipeline(bars, opt);
+    build_kline_combine_bundle_from_pipeline(bars, opt, pr)
+}
+
+/// Phase 1.5：从持久 `PipelineState` 导出与黄金路径同构的 bundle（非消费 snapshot）。
+pub fn build_kline_combine_bundle_from_state(state: &mut PipelineState) -> KlineCombineBundle {
+    if state.is_empty() {
+        return KlineCombineBundle::empty();
+    }
+    let opt = state.options().clone();
+    let bars = state.bars().to_vec();
+    let pr = state.snapshot();
+    build_kline_combine_bundle_from_pipeline(&bars, &opt, pr)
+}
+
+/// 将已算好的 PipelineResult 映射为 Flutter 兼容 bundle（不重跑流水线）。
+pub fn build_kline_combine_bundle_from_pipeline(
+    bars: &[KlineBar],
+    opt: &PipelineOptions,
+    pr: PipelineResult,
+) -> KlineCombineBundle {
+    if bars.is_empty() || pr.levels.is_empty() {
+        return KlineCombineBundle::empty();
+    }
     let l1 = &pr.levels[0];
 
     // 原始K分型确认（= l1.confirms；l1=levels[0]，方案B level==0=K0连线层）；全量含被丢弃的同向/校验失败分型，与旧口径一致。
@@ -825,6 +849,121 @@ mod tests {
                     "trunc={trunc} 展示用虚拟K1 bar应含进行中"
                 );
                 assert_eq!(bundle.k1_bars.len(), virtual_units.len());
+            }
+        }
+    }
+
+    /// Phase 1.5：PipelineState 导出 bundle == 黄金 run_pipeline 路径
+    #[test]
+    fn state_bundle_matches_golden_run_pipeline() {
+        let bars: Vec<KlineBar> = (0..50)
+            .map(|i| {
+                let up = (i / 4) % 2 == 0;
+                let base = 10.0 + (i % 4) as f64 * 0.5;
+                let h = if up { base + 1.0 } else { 16.0 - base };
+                bar(i, h, h - 0.8)
+            })
+            .collect();
+        let opt = PipelineOptions::default();
+        let mut st = PipelineState::new(opt.clone());
+        for b in &bars {
+            st.append(b.clone());
+        }
+        let a = build_kline_combine_bundle_with(&bars, &opt);
+        let b = build_kline_combine_bundle_from_state(&mut st);
+        let ja = serde_json::to_value(&a).unwrap();
+        let jb = serde_json::to_value(&b).unwrap();
+        assert_eq!(ja, jb, "state bundle != golden bundle");
+    }
+
+    /// 002003 step24..28：会话 append 链 bundle == 黄金路径
+    #[test]
+    fn state_bundle_002003_steps_24_28() {
+        let data_root =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../a_Data");
+        if !data_root.join("002003").exists() {
+            eprintln!("skip: a_Data/002003 missing");
+            return;
+        }
+        let root = crate::resolve_data_root(Some(data_root.to_str().unwrap()));
+        let bars = crate::load_klines(
+            &root,
+            "002003",
+            "2004/07/19 10:47:00",
+            "2004/07/20 13:09:00",
+            crate::KlinePeriod::M1,
+        )
+        .expect("load 002003");
+        assert!(bars.len() > 28);
+        let opt = PipelineOptions::default();
+        let mut st = PipelineState::new(opt.clone());
+        for step in 0..=28 {
+            st.append(bars[step].clone());
+            if (24..=28).contains(&step) {
+                let a = build_kline_combine_bundle_with(&bars[..=step], &opt);
+                let b = build_kline_combine_bundle_from_state(&mut st);
+                let ja = serde_json::to_value(&a).unwrap();
+                let jb = serde_json::to_value(&b).unwrap();
+                assert_eq!(ja, jb, "002003 step{step} state!=golden");
+            }
+        }
+        // reset + replay 到 27
+        st.reset();
+        for step in 0..=27 {
+            st.append(bars[step].clone());
+        }
+        let a = build_kline_combine_bundle_with(&bars[..=27], &opt);
+        let b = build_kline_combine_bundle_from_state(&mut st);
+        assert_eq!(
+            serde_json::to_value(&a).unwrap(),
+            serde_json::to_value(&b).unwrap(),
+            "reset+replay step27"
+        );
+    }
+
+    /// 性能：前缀重跑 vs state.append 链
+    /// 200/500 做双侧对比；1000/2000 只测 append+bundle（debug 下 naive O(n²) 过慢）
+    #[test]
+    fn phase15_perf_prefix_vs_append() {
+        fn zig(n: usize) -> Vec<KlineBar> {
+            (0..n)
+                .map(|i| {
+                    let up = (i / 4) % 2 == 0;
+                    let base = 10.0 + (i % 4) as f64 * 0.5;
+                    let h = if up { base + 1.0 } else { 16.0 - base };
+                    bar(i, h, h - 0.8)
+                })
+                .collect()
+        }
+        let opt = PipelineOptions::default();
+        for n in [200usize, 500, 1000, 2000] {
+            let bars = zig(n);
+            let t1 = std::time::Instant::now();
+            let mut st = PipelineState::new(opt.clone());
+            for b in &bars {
+                st.append(b.clone());
+                let _ = build_kline_combine_bundle_from_state(&mut st);
+            }
+            let incr = t1.elapsed();
+
+            if n <= 500 {
+                let t0 = std::time::Instant::now();
+                for i in 0..n {
+                    let _ = build_kline_combine_bundle_with(&bars[..=i], &opt);
+                }
+                let naive = t0.elapsed();
+                eprintln!(
+                    "phase1.5 perf n={n}: naive_prefix={:?} append+bundle={:?} speedup={:.2}x",
+                    naive,
+                    incr,
+                    naive.as_secs_f64() / incr.as_secs_f64().max(1e-9)
+                );
+                assert!(
+                    incr < naive,
+                    "n={n} append 应快于前缀重跑: incr={incr:?} naive={naive:?}"
+                );
+            } else {
+                eprintln!("phase1.5 perf n={n}: append+bundle={:?} (skip naive in debug)", incr);
             }
         }
     }

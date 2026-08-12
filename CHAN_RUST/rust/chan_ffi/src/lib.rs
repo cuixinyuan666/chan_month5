@@ -1,12 +1,14 @@
 //! Flutter `dart:ffi` 桥：返回 JSON 字符串指针，调用方负责 `chan_free_string`。
 
+use std::collections::HashMap;
 use std::ffi::{c_char, CStr, CString};
 use std::ptr;
+use std::sync::{Mutex, OnceLock};
 
 use chan_data::{
-    build_kline_combine_bundle_with, chip_profile, default_data_root, list_stock_codes, load_klines,
-    ml_predict_dense, resolve_data_root, save_test_ohlc, KlineBar, KlinePeriod, PipelineOptions,
-    ZSConfig,
+    build_kline_combine_bundle_from_state, build_kline_combine_bundle_with, chip_profile,
+    default_data_root, list_stock_codes, load_klines, ml_predict_dense, resolve_data_root,
+    save_test_ohlc, KlineBar, KlinePeriod, PipelineOptions, PipelineState, ZSConfig,
 };
 use serde::{Deserialize, Serialize};
 
@@ -194,6 +196,186 @@ fn parse_combine_request(raw: &str) -> Result<(Vec<KlineBar>, PipelineOptions), 
         opt.zs_config = z;
     }
     Ok((req.bars, opt))
+}
+
+// ========== Phase 1.5：PipelineHandle 会话（Rust 持 PipelineState，Flutter 只持 handle）==========
+
+struct PipelineRegistry {
+    next_id: u64,
+    map: HashMap<u64, PipelineState>,
+}
+
+fn pipeline_registry() -> &'static Mutex<PipelineRegistry> {
+    static REG: OnceLock<Mutex<PipelineRegistry>> = OnceLock::new();
+    REG.get_or_init(|| {
+        Mutex::new(PipelineRegistry {
+            next_id: 1,
+            map: HashMap::new(),
+        })
+    })
+}
+
+fn parse_pipeline_opt(raw: &str) -> Result<PipelineOptions, String> {
+    if raw.trim().is_empty() || raw.trim() == "{}" {
+        return Ok(PipelineOptions::default());
+    }
+    #[derive(Deserialize)]
+    struct OptReq {
+        #[serde(default)]
+        truncation_check: Option<bool>,
+        #[serde(default)]
+        zs_config: Option<ZSConfig>,
+    }
+    let req: OptReq =
+        serde_json::from_str(raw).map_err(|e| format!("pipeline opt 解析失败: {e}"))?;
+    let mut opt = PipelineOptions::default();
+    if let Some(v) = req.truncation_check {
+        opt.truncation_check = v;
+    }
+    if let Some(z) = req.zs_config {
+        opt.zs_config = z;
+    }
+    Ok(opt)
+}
+
+/// 创建流水线会话。入参 JSON：`{ truncation_check?, zs_config? }`（可空/`{}`）。
+/// 返回 `{ ok, data: { handle: u64 } }`
+#[no_mangle]
+pub extern "C" fn chan_pipeline_create(opt_json: *const c_char) -> *mut c_char {
+    let raw = cstr_to_str(opt_json).unwrap_or("{}");
+    let opt = match parse_pipeline_opt(raw) {
+        Ok(o) => o,
+        Err(e) => return to_json_err(&e),
+    };
+    let mut reg = match pipeline_registry().lock() {
+        Ok(g) => g,
+        Err(_) => return to_json_err("pipeline registry lock poisoned"),
+    };
+    let handle = reg.next_id;
+    reg.next_id = reg.next_id.wrapping_add(1).max(1);
+    reg.map.insert(handle, PipelineState::new(opt));
+    #[derive(Serialize)]
+    struct Out {
+        handle: u64,
+    }
+    to_json_ok(Out { handle })
+}
+
+/// 逐根 append。入参 JSON：单根 KlineBar 或 `{ "bar": {...} }`。
+/// 返回完整 `KlineCombineBundle`（与 `chan_kline_combine_frames` 同构）。
+#[no_mangle]
+pub extern "C" fn chan_pipeline_append(handle: u64, bar_json: *const c_char) -> *mut c_char {
+    let Some(raw) = cstr_to_str(bar_json) else {
+        return to_json_err("bar_json 不能为空");
+    };
+    let bar = match parse_one_bar(raw) {
+        Ok(b) => b,
+        Err(e) => return to_json_err(&e),
+    };
+    let mut reg = match pipeline_registry().lock() {
+        Ok(g) => g,
+        Err(_) => return to_json_err("pipeline registry lock poisoned"),
+    };
+    let Some(state) = reg.map.get_mut(&handle) else {
+        return to_json_err(&format!("invalid pipeline handle: {handle}"));
+    };
+    state.append(bar);
+    to_json_ok(build_kline_combine_bundle_from_state(state))
+}
+
+fn parse_one_bar(raw: &str) -> Result<KlineBar, String> {
+    let trimmed = raw.trim_start();
+    if trimmed.starts_with('{') {
+        // 允许 { "bar": {...} } 或直接 KlineBar
+        #[derive(Deserialize)]
+        struct Wrap {
+            bar: Option<KlineBar>,
+        }
+        if let Ok(w) = serde_json::from_str::<Wrap>(raw) {
+            if let Some(b) = w.bar {
+                return Ok(b);
+            }
+        }
+        return serde_json::from_str(raw).map_err(|e| format!("bar_json 解析失败: {e}"));
+    }
+    Err("bar_json 须为对象".into())
+}
+
+/// 非消费快照：当前已喂入前缀的 bundle。
+#[no_mangle]
+pub extern "C" fn chan_pipeline_snapshot(handle: u64) -> *mut c_char {
+    let mut reg = match pipeline_registry().lock() {
+        Ok(g) => g,
+        Err(_) => return to_json_err("pipeline registry lock poisoned"),
+    };
+    let Some(state) = reg.map.get_mut(&handle) else {
+        return to_json_err(&format!("invalid pipeline handle: {handle}"));
+    };
+    to_json_ok(build_kline_combine_bundle_from_state(state))
+}
+
+/// reset：清空已喂入 K，保留选项（随后 replay）。
+#[no_mangle]
+pub extern "C" fn chan_pipeline_reset(handle: u64) -> *mut c_char {
+    let mut reg = match pipeline_registry().lock() {
+        Ok(g) => g,
+        Err(_) => return to_json_err("pipeline registry lock poisoned"),
+    };
+    let Some(state) = reg.map.get_mut(&handle) else {
+        return to_json_err(&format!("invalid pipeline handle: {handle}"));
+    };
+    state.reset();
+    #[derive(Serialize)]
+    struct Out {
+        handle: u64,
+        len: usize,
+    }
+    to_json_ok(Out {
+        handle,
+        len: state.len(),
+    })
+}
+
+/// 当前会话已喂入根数。
+#[no_mangle]
+pub extern "C" fn chan_pipeline_len(handle: u64) -> *mut c_char {
+    let reg = match pipeline_registry().lock() {
+        Ok(g) => g,
+        Err(_) => return to_json_err("pipeline registry lock poisoned"),
+    };
+    let Some(state) = reg.map.get(&handle) else {
+        return to_json_err(&format!("invalid pipeline handle: {handle}"));
+    };
+    #[derive(Serialize)]
+    struct Out {
+        handle: u64,
+        len: usize,
+    }
+    to_json_ok(Out {
+        handle,
+        len: state.len(),
+    })
+}
+
+/// 销毁会话，释放 Rust 侧 PipelineState。
+#[no_mangle]
+pub extern "C" fn chan_pipeline_free(handle: u64) -> *mut c_char {
+    let mut reg = match pipeline_registry().lock() {
+        Ok(g) => g,
+        Err(_) => return to_json_err("pipeline registry lock poisoned"),
+    };
+    if reg.map.remove(&handle).is_none() {
+        return to_json_err(&format!("invalid pipeline handle: {handle}"));
+    }
+    #[derive(Serialize)]
+    struct Out {
+        handle: u64,
+        freed: bool,
+    }
+    to_json_ok(Out {
+        handle,
+        freed: true,
+    })
 }
 
 /// 筹码分桶 profile。

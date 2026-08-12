@@ -447,6 +447,23 @@ class MsgHistory {
     );
   }
 
+  static bool _pipelineSessionLogged = false;
+
+  /// Phase 1.5：真实逐K 走 PipelineHandle（Rust 持 PipelineState）
+  void appendPipelineStateSession() {
+    if (_pipelineSessionLogged) return;
+    _pipelineSessionLogged = true;
+    append(
+      '【Phase1.5·PipelineSession】图表会话=一个 Rust PipelineState；'
+      'Flutter 只存 handle，不存核心 state。'
+      '步进前进：FFI chan_pipeline_append(bar)；'
+      '步退/复位/换股/换周期/截断开关：reset+replay 或 dispose 后重建；'
+      '关闭页面 dispose→chan_pipeline_free。'
+      '黄金对照仍保留 chan_kline_combine_frames/run_pipeline；'
+      '十字 asOf 仍可走无状态短前缀。算法/mark_x/discoveryX/V2.1 BS/History 不变。',
+    );
+  }
+
   /// Kn三类及以上BS（链升类；全层同构）
   void appendBuyNClass3PlusNaming() {
     if (_buyNLogged) return;

@@ -34,6 +34,7 @@ pub use chip::{
 };
 pub use combine::{
     build_k1_combine_frames, build_k1_combine_frames_with, build_kline_combine_bundle,
+    build_kline_combine_bundle_from_pipeline, build_kline_combine_bundle_from_state,
     build_kline_combine_bundle_with, build_kline_combine_frames, K0ConfirmSignal,
     KlineCombineBundle, KlineCombineFrame,
 };

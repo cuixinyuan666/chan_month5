@@ -1217,7 +1217,7 @@ impl LevelState {
         Some(fx_pole_x(bars, ev.x1, ev.x2, ev.fx))
     }
 
-    fn export(mut self, bars: &[KlineBar]) -> LevelBundleOut {
+    fn export(&mut self, bars: &[KlineBar]) -> LevelBundleOut {
         // 末步进行中单元：prov 缓存（快照阶段已推进到末K）
         let active_unit = self.active_unit_now(bars);
         // 展示轨：冻段 + 进行中 active_unit 喂 find_zs（动态离开不定型，禁未来）
@@ -1518,9 +1518,20 @@ impl PipelineState {
         self.bars.is_empty()
     }
 
+    /// 流水线选项（只读）
+    pub fn options(&self) -> &PipelineOptions {
+        &self.opt
+    }
+
     /// 已喂入 K0 前缀（只读）
     pub fn bars(&self) -> &[KlineBar] {
         &self.bars
+    }
+
+    /// 清空已喂入 K，保留选项（reset + replay 用）
+    pub fn reset(&mut self) {
+        let opt = self.opt.clone();
+        *self = Self::new(opt);
     }
 
     /// 逐根追加一根 K：复用已有 LevelState，只推进当步（无未来函数）
@@ -1636,24 +1647,24 @@ impl PipelineState {
         self.bar_seg_rows.push(row);
     }
 
-    /// 消费状态，导出与 `run_pipeline` 同构的 PipelineResult
-    pub fn into_result(self) -> PipelineResult {
-        let Self {
-            bars,
-            levels,
-            bar_level_snaps,
-            bar_k_snaps,
-            bar_seg_rows,
-            bar_struct_hits,
-            ..
-        } = self;
+    /// 非消费快照：会话仍存活，供 FFI 每步返回 bundle（Phase 1.5）
+    pub fn snapshot(&mut self) -> PipelineResult {
+        let levels = {
+            let bars = &self.bars;
+            self.levels.iter_mut().map(|l| l.export(bars)).collect()
+        };
         PipelineResult {
-            levels: levels.into_iter().map(|l| l.export(&bars)).collect(),
-            bar_level_snaps,
-            bar_k_snaps,
-            bar_seg_rows,
-            bar_struct_hits,
+            levels,
+            bar_level_snaps: self.bar_level_snaps.clone(),
+            bar_k_snaps: self.bar_k_snaps.clone(),
+            bar_seg_rows: self.bar_seg_rows.clone(),
+            bar_struct_hits: self.bar_struct_hits.clone(),
         }
+    }
+
+    /// 消费状态，导出与 `run_pipeline` 同构的 PipelineResult
+    pub fn into_result(mut self) -> PipelineResult {
+        self.snapshot()
     }
 }
 
@@ -1770,7 +1781,7 @@ pub fn run_pipeline(bars: &[KlineBar], opt: &PipelineOptions) -> PipelineResult 
     }
 
     PipelineResult {
-        levels: levels.into_iter().map(|l| l.export(bars)).collect(),
+        levels: levels.into_iter().map(|mut l| l.export(bars)).collect(),
         bar_level_snaps,
         bar_k_snaps,
         bar_seg_rows,

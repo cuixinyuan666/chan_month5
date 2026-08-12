@@ -104,6 +104,7 @@ Future<void> main() async {
   MsgHistory.instance.appendBuy1AndZgZdCommonNaming();
   MsgHistory.instance.appendBuy2Class2Naming();
   MsgHistory.instance.appendBuyNClass3PlusNaming();
+  MsgHistory.instance.appendPipelineStateSession();
   // Kn相邻比例 + Kn步进节奏（节奏已迁主图）
   MsgHistory.instance.appendAdjacentRatioAndStepRhythm();
   MsgHistory.instance.appendStepRhythmToMainAndTipCats();
@@ -218,6 +219,8 @@ class KlineHomePage extends StatefulWidget {
 class _KlineHomePageState extends State<KlineHomePage> {
   final _bridge = ChanBridge.instance;
   final _msgHistory = MsgHistory.instance;
+  /// Phase 1.5：Rust PipelineState 会话句柄（Flutter 不存核心 state）
+  ChanPipelineSession? _pipelineSession;
   /// 工作区全屏前的窗口矩形（还原用）
   Rect? _preWorkAreaBounds;
   DateTime _beginDate = _standardBeginDate;
@@ -411,10 +414,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
     for (var i = 0; i <= end; i++) {
       final visible = _allBars.sublist(0, i + 1);
       try {
-        final bundle = _bridge.buildKlineCombineBundle(
-          visible,
-          truncationCheck: _truncationCheck,
-        );
+        final bundle = _bundleForVisible(visible);
         final curZs = collectZsFramesByKn(bundle);
         final confirmedByKn = <int, Set<int>>{};
         for (final e in curZs.entries) {
@@ -452,7 +452,28 @@ class _KlineHomePageState extends State<KlineHomePage> {
   @override
   void dispose() {
     _playTimer?.cancel();
+    _disposePipelineSession();
     super.dispose();
+  }
+
+  /// 释放 Rust 侧 PipelineState（换股/换周期/关页/截断开关重建前）
+  void _disposePipelineSession() {
+    _pipelineSession?.dispose();
+    _pipelineSession = null;
+  }
+
+  /// 取与可见前缀同步的 bundle：前进 append，步退/变短 reset+replay
+  KlineCombineBundle _bundleForVisible(List<KlineBar> visible) {
+    if (_pipelineSession == null ||
+        !_pipelineSession!.isAlive ||
+        _pipelineSession!.truncationCheck != _truncationCheck) {
+      _disposePipelineSession();
+      _pipelineSession = ChanPipelineSession.create(
+        truncationCheck: _truncationCheck,
+        bridge: _bridge,
+      );
+    }
+    return _pipelineSession!.syncTo(visible);
   }
 
   /// 切换股票时对齐各自默认加载区间。
@@ -591,6 +612,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       _loadingChart = true;
       _error = null;
     });
+    _disposePipelineSession();
     try {
       final bars = _bridge.loadKlines(
         dataRoot: _dataRoot,
@@ -1032,10 +1054,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       return;
     }
     try {
-      final bundle = _bridge.buildKlineCombineBundle(
-        _visibleBars,
-        truncationCheck: _truncationCheck,
-      );
+      final bundle = _bundleForVisible(_visibleBars);
       if (bundle.defaultK0Policy == 'purged') {
         _defaultK0Purged = true;
       }
@@ -1286,10 +1305,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       _stepIdx = i;
       final visible = _allBars.sublist(0, i + 1);
       try {
-        final bundle = _bridge.buildKlineCombineBundle(
-          visible,
-          truncationCheck: _truncationCheck,
-        );
+        final bundle = _bundleForVisible(visible);
         if (bundle.defaultK0Policy == 'purged') {
           _defaultK0Purged = true;
         }
@@ -1663,6 +1679,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
                       ),
                     );
                   });
+                  // opt 变了：重建 PipelineState 会话再重算
+                  _disposePipelineSession();
                   _msgHistory.append('截断机制=${v ? "开" : "关"}，重算当前步进');
                   _rebuildCombine();
                   _logCombineSummary(prefix: '截断开关后汇总');
