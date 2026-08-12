@@ -56,7 +56,7 @@ pub use offline::{
 };
 pub use pipeline::{
     run_pipeline, LevelBundleOut, LevelConfirm, LevelSegment, LevelSnap, LevelUnitBar,
-    PipelineOptions, PipelineResult,
+    PipelineOptions, PipelineResult, PipelineState,
 };
 pub use segment_first::{aggregate_unit_range, pole_x_in_range};
 pub use seg_eigen::{

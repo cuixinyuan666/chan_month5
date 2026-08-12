@@ -1476,7 +1476,189 @@ fn collect_k0_struct_hits(
     (zs_hits, bs1_hits)
 }
 
+/// 持久流水线状态（Phase 1）：跨步复用 LevelState/CombineEngine，逐根 `append`。
+/// 算法与 `run_pipeline` 同构；`run_pipeline` 保留为黄金参考路径（不改其原实现）。
+/// Phase 1 不优化 collect_*/ZS/BS：每步仍按当前前缀重算命中，只消除「每步从头重建引擎」。
+pub struct PipelineState {
+    opt: PipelineOptions,
+    /// 已喂入 K0（collect/snapshot 需要全前缀）
+    bars: Vec<KlineBar>,
+    levels: Vec<LevelState>,
+    bar_level_snaps: Vec<Vec<LevelSnap>>,
+    bar_k_snaps: Vec<BarCombineSnap>,
+    bar_seg_rows: Vec<BarSegRow>,
+    bar_struct_hits: Vec<(Vec<BarZsHit>, Vec<BarBs1Hit>)>,
+    /// K0 一类 BS discovery x 冻结（与结构层同语义）
+    k0_frozen_buy1_x: HashMap<i64, i32>,
+    k0_frozen_sell1_x: HashMap<i64, i32>,
+}
+
+impl PipelineState {
+    /// 空状态，尚未喂入任何 K
+    pub fn new(opt: PipelineOptions) -> Self {
+        Self {
+            levels: vec![LevelState::new(0, &opt)],
+            opt,
+            bars: Vec::new(),
+            bar_level_snaps: Vec::new(),
+            bar_k_snaps: Vec::new(),
+            bar_seg_rows: Vec::new(),
+            bar_struct_hits: Vec::new(),
+            k0_frozen_buy1_x: HashMap::new(),
+            k0_frozen_sell1_x: HashMap::new(),
+        }
+    }
+
+    /// 已喂入根数
+    pub fn len(&self) -> usize {
+        self.bars.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.bars.is_empty()
+    }
+
+    /// 已喂入 K0 前缀（只读）
+    pub fn bars(&self) -> &[KlineBar] {
+        &self.bars
+    }
+
+    /// 逐根追加一根 K：复用已有 LevelState，只推进当步（无未来函数）
+    pub fn append(&mut self, bar: KlineBar) {
+        self.bars.push(bar);
+        let i = self.bars.len() - 1;
+        let bar_x = i as i32;
+        // 下面与 run_pipeline 单步同构（Phase 1 故意双份，双路径测试互证）
+        for lv in self.levels.iter_mut() {
+            lv.begin_bar();
+        }
+
+        let ku = {
+            let bar = &self.bars[i];
+            LevelUnitBar {
+                idx: i as i64,
+                dir: 0,
+                x1: bar_x,
+                x2: bar_x,
+                open: bar.open,
+                high: bar.high,
+                low: bar.low,
+                close: bar.close,
+                volume: bar.volume,
+                confirm_x: bar_x,
+            }
+        };
+        // 不同字段拆借：levels 可变 + bars/opt 只读（与 run_pipeline 单步同构）
+        propagate(
+            &mut self.levels,
+            0,
+            vec![ku],
+            bar_x,
+            &self.bars,
+            &self.opt,
+        );
+
+        let bar = &self.bars[i];
+        let ksnap = self.levels[0]
+            .engine
+            .snapshot_for(i as i64)
+            .map(|m| BarCombineSnap {
+                inner_seq: m.inner_seq,
+                count: m.group_count,
+                high: m.group_high,
+                low: m.group_low,
+                fx: m.group_fx.as_str().to_string(),
+                group_seq: m.group_seq,
+            })
+            .unwrap_or(BarCombineSnap {
+                inner_seq: 0,
+                count: 1,
+                high: bar.high,
+                low: bar.low,
+                fx: "UNKNOWN".to_string(),
+                group_seq: -1,
+            });
+        self.bar_k_snaps.push(ksnap);
+
+        let mut provs: Vec<Option<(MergeUnit, f64, f64, f64)>> =
+            Vec::with_capacity(self.levels.len());
+        for lv in self.levels.iter_mut() {
+            provs.push(lv.provisional_unit(&self.bars, i));
+        }
+        let mut snaps = Vec::with_capacity(self.levels.len());
+        for li in 0..self.levels.len() {
+            let upper = if li + 1 < self.levels.len() {
+                Some(&self.levels[li + 1].engine)
+            } else {
+                None
+            };
+            let pending_input = if li == 0 {
+                None
+            } else {
+                provs[li - 1].as_ref().map(|(u, _, _, _)| u)
+            };
+            snaps.push(self.levels[li].snapshot(
+                &self.bars,
+                upper,
+                provs[li].as_ref(),
+                pending_input,
+            ));
+        }
+        self.bar_level_snaps.push(snaps);
+
+        let mut zs_hits = Vec::new();
+        let mut bs1_hits = Vec::new();
+        let (z0, b0) = collect_k0_struct_hits(
+            &self.bars,
+            bar_x,
+            &self.opt.zs_config,
+            &mut self.k0_frozen_buy1_x,
+            &mut self.k0_frozen_sell1_x,
+        );
+        zs_hits.extend(z0);
+        bs1_hits.extend(b0);
+        for lv in self.levels.iter_mut() {
+            let (z, b) = lv.collect_struct_hits(&self.bars, bar_x);
+            zs_hits.extend(z);
+            bs1_hits.extend(b);
+        }
+        self.bar_struct_hits.push((zs_hits, bs1_hits));
+
+        let row = self
+            .levels
+            .get(1)
+            .map(|l| BarSegRow {
+                building_dir: l.building_dir,
+                first_dir: l.first_dir,
+                confirm: l.confirm_val_this_bar,
+            })
+            .unwrap_or_default();
+        self.bar_seg_rows.push(row);
+    }
+
+    /// 消费状态，导出与 `run_pipeline` 同构的 PipelineResult
+    pub fn into_result(self) -> PipelineResult {
+        let Self {
+            bars,
+            levels,
+            bar_level_snaps,
+            bar_k_snaps,
+            bar_seg_rows,
+            bar_struct_hits,
+            ..
+        } = self;
+        PipelineResult {
+            levels: levels.into_iter().map(|l| l.export(&bars)).collect(),
+            bar_level_snaps,
+            bar_k_snaps,
+            bar_seg_rows,
+            bar_struct_hits,
+        }
+    }
+}
+
 /// 全量入口：对已喂入 K 线前缀跑穷尽 N 段流水线（内部单遍逐K，无未来函数）
+/// Phase 1 黄金参考路径：保持原实现，供双路径一致性测试对照 `PipelineState::append`。
 pub fn run_pipeline(bars: &[KlineBar], opt: &PipelineOptions) -> PipelineResult {
     // 方案B：首层结构号 0（K0连线）；原 level N → N-1
     let mut levels: Vec<LevelState> = vec![LevelState::new(0, opt)];
@@ -2245,6 +2427,286 @@ mod tests {
         assert_eq!(
             snap.seed_leave_dir, 1,
             "动态末组 probe 后 leave 应与展示轨对齐"
+        );
+    }
+
+    // ========== Phase 1：双路径一致性（run_pipeline 黄金 vs PipelineState.append）==========
+
+    fn load_002003_m1_window() -> Option<Vec<KlineBar>> {
+        let data_root =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../a_Data");
+        if !data_root.join("002003").exists() {
+            eprintln!("skip: a_Data/002003 不存在");
+            return None;
+        }
+        let root = crate::resolve_data_root(Some(data_root.to_str().unwrap()));
+        Some(
+            crate::load_klines(
+                &root,
+                "002003",
+                "2004/07/19 10:47:00",
+                "2004/07/20 13:09:00",
+                crate::KlinePeriod::M1,
+            )
+            .expect("load 002003"),
+        )
+    }
+
+    fn run_via_append(bars: &[KlineBar], opt: &PipelineOptions) -> PipelineResult {
+        let mut st = PipelineState::new(opt.clone());
+        for b in bars {
+            st.append(b.clone());
+        }
+        st.into_result()
+    }
+
+    fn assert_f64_eq(a: f64, b: f64, ctx: &str) {
+        if a.is_nan() && b.is_nan() {
+            return;
+        }
+        assert!(
+            (a - b).abs() <= 1e-12,
+            "{ctx}: {a} != {b}"
+        );
+    }
+
+    /// 比较双路径：K0/K1/Kn · segments · confirms · ZS · Buy1/2/N · Sell1/2/N · mark_x(=frame.x)
+    /// · bar_features 输入（k_snaps/level_snaps/struct_hits）· struct_hits
+    fn assert_pipeline_dual_eq(a: &PipelineResult, b: &PipelineResult, tag: &str) {
+        assert_eq!(a.levels.len(), b.levels.len(), "{tag}: levels.len");
+        assert_eq!(
+            a.bar_level_snaps.len(),
+            b.bar_level_snaps.len(),
+            "{tag}: bar_level_snaps.len"
+        );
+        assert_eq!(a.bar_k_snaps.len(), b.bar_k_snaps.len(), "{tag}: bar_k_snaps.len");
+        assert_eq!(
+            a.bar_struct_hits.len(),
+            b.bar_struct_hits.len(),
+            "{tag}: bar_struct_hits.len"
+        );
+        assert_eq!(
+            a.bar_seg_rows.len(),
+            b.bar_seg_rows.len(),
+            "{tag}: bar_seg_rows.len"
+        );
+
+        // levels：序列化比对（含 ZS/BS/active/mark_x）
+        let ja = serde_json::to_value(&a.levels).expect("ser a.levels");
+        let jb = serde_json::to_value(&b.levels).expect("ser b.levels");
+        assert_eq!(ja, jb, "{tag}: levels JSON 不一致（segments/confirms/ZS/BS/active）");
+
+        for i in 0..a.bar_level_snaps.len() {
+            assert_eq!(
+                a.bar_level_snaps[i], b.bar_level_snaps[i],
+                "{tag}: bar_level_snaps[{i}]"
+            );
+        }
+        for i in 0..a.bar_k_snaps.len() {
+            let (x, y) = (&a.bar_k_snaps[i], &b.bar_k_snaps[i]);
+            assert_eq!(x.inner_seq, y.inner_seq, "{tag}: k_snap[{i}].inner_seq");
+            assert_eq!(x.count, y.count, "{tag}: k_snap[{i}].count");
+            assert_eq!(x.fx, y.fx, "{tag}: k_snap[{i}].fx");
+            assert_eq!(x.group_seq, y.group_seq, "{tag}: k_snap[{i}].group_seq");
+            assert_f64_eq(x.high, y.high, &format!("{tag}: k_snap[{i}].high"));
+            assert_f64_eq(x.low, y.low, &format!("{tag}: k_snap[{i}].low"));
+        }
+        for i in 0..a.bar_seg_rows.len() {
+            assert_eq!(
+                a.bar_seg_rows[i].building_dir, b.bar_seg_rows[i].building_dir,
+                "{tag}: seg_row[{i}].building_dir"
+            );
+            assert_eq!(
+                a.bar_seg_rows[i].first_dir, b.bar_seg_rows[i].first_dir,
+                "{tag}: seg_row[{i}].first_dir"
+            );
+            assert_eq!(
+                a.bar_seg_rows[i].confirm, b.bar_seg_rows[i].confirm,
+                "{tag}: seg_row[{i}].confirm"
+            );
+        }
+        for i in 0..a.bar_struct_hits.len() {
+            let (az, ab) = &a.bar_struct_hits[i];
+            let (bz, bb) = &b.bar_struct_hits[i];
+            assert_eq!(az.len(), bz.len(), "{tag}: struct_hits[{i}].zs.len");
+            assert_eq!(ab.len(), bb.len(), "{tag}: struct_hits[{i}].bs1.len");
+            for (j, (u, v)) in az.iter().zip(bz.iter()).enumerate() {
+                assert_eq!(u.kn, v.kn, "{tag}: zs_hit[{i}][{j}].kn");
+                assert_eq!(u.seq, v.seq, "{tag}: zs_hit[{i}][{j}].seq");
+                assert_eq!(u.is_sure, v.is_sure, "{tag}: zs_hit[{i}][{j}].is_sure");
+                assert_f64_eq(u.high, v.high, &format!("{tag}: zs_hit[{i}][{j}].high"));
+                assert_f64_eq(u.low, v.low, &format!("{tag}: zs_hit[{i}][{j}].low"));
+            }
+            for (j, (u, v)) in ab.iter().zip(bb.iter()).enumerate() {
+                assert_eq!(u.kn, v.kn, "{tag}: bs1_hit[{i}][{j}].kn");
+                assert_eq!(u.side, v.side, "{tag}: bs1_hit[{i}][{j}].side");
+                assert_eq!(u.label, v.label, "{tag}: bs1_hit[{i}][{j}].label");
+                assert_eq!(u.x, v.x, "{tag}: bs1_hit[{i}][{j}].x discovery/mark");
+                assert_f64_eq(u.price, v.price, &format!("{tag}: bs1_hit[{i}][{j}].price"));
+            }
+        }
+    }
+
+    /// ① 全量：run_pipeline(all) == append 逐根
+    #[test]
+    fn dual_path_final_eq_zigzag() {
+        let bars = zigzag(80);
+        let opt = PipelineOptions::default();
+        let a = run_pipeline(&bars, &opt);
+        let b = run_via_append(&bars, &opt);
+        assert_pipeline_dual_eq(&a, &b, "zigzag80_final");
+        assert!(!a.levels.is_empty());
+        // K0/K1/Kn：至少有结构层 0
+        assert_eq!(a.levels[0].level, 0);
+    }
+
+    /// ② 每一步历史一致 + ③ 无未来泄漏（前缀重放）
+    #[test]
+    fn dual_path_each_step_and_no_future_zigzag() {
+        let bars = zigzag(40);
+        let opt = PipelineOptions::default();
+        // 持久链：连续 append，每步与黄金前缀对照
+        let mut st = PipelineState::new(opt.clone());
+        for cut in 1..=bars.len() {
+            st.append(bars[cut - 1].clone());
+            let a = run_pipeline(&bars[..cut], &opt);
+            // 同前缀再跑一条 append 链，验证与持久链最终同构（into_result 消费前用旁路）
+            let b = run_via_append(&bars[..cut], &opt);
+            assert_pipeline_dual_eq(&a, &b, &format!("zigzag_step_{}", cut - 1));
+            assert_eq!(st.len(), cut, "持久状态根数");
+        }
+        // 持久链最终 == 黄金全量
+        let final_a = run_pipeline(&bars, &opt);
+        let final_b = st.into_result();
+        assert_pipeline_dual_eq(&final_a, &final_b, "zigzag40_persistent_final");
+
+        // 无未来：全量前缀 snaps 与当步冻结一致
+        for earlier in [10usize, 20, 30] {
+            let part = run_pipeline(&bars[..earlier], &opt);
+            let part_b = run_via_append(&bars[..earlier], &opt);
+            for i in 0..earlier {
+                let common = final_a.bar_level_snaps[i]
+                    .len()
+                    .min(part.bar_level_snaps[i].len());
+                for li in 0..common {
+                    assert_eq!(
+                        final_a.bar_level_snaps[i][li], part.bar_level_snaps[i][li],
+                        "未来泄漏 A bar {i} lv {li}"
+                    );
+                    assert_eq!(
+                        part.bar_level_snaps[i][li], part_b.bar_level_snaps[i][li],
+                        "未来泄漏 B bar {i} lv {li}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// 002003：step 24..28 双路径 + active 动态案
+    #[test]
+    fn dual_path_002003_steps_24_28_and_active() {
+        let Some(bars) = load_002003_m1_window() else {
+            return;
+        };
+        assert!(bars.len() > 28, "002003 window too short");
+        let opt = PipelineOptions::default();
+
+        for step in [24usize, 25, 26, 27, 28] {
+            let prefix = &bars[..=step];
+            let a = run_pipeline(prefix, &opt);
+            let b = run_via_append(prefix, &opt);
+            assert_pipeline_dual_eq(&a, &b, &format!("002003_step{step}"));
+
+            // bar_features 输入同源：用 combine 映射核对末根特征关键字段
+            let feat_a = crate::combine::build_kline_combine_bundle_with(prefix, &opt);
+            // Path B 的 pipeline 结果应能驱动相同 levels/BS；bundle 仍走黄金 run_pipeline，
+            // 这里用 append 结果的 levels 与 bundle.levels 再比一次
+            let jb = serde_json::to_value(&b.levels).unwrap();
+            let jbundle = serde_json::to_value(&feat_a.levels).unwrap();
+            assert_eq!(jb, jbundle, "step{step}: append levels == bundle.levels");
+            assert_eq!(
+                feat_a.bar_features.len(),
+                prefix.len(),
+                "step{step}: bar_features len"
+            );
+        }
+
+        // active dynamic case：step27 active 延伸（对齐既有 sell1 验收）
+        let a27 = run_pipeline(&bars[..=27], &opt);
+        let b27 = run_via_append(&bars[..=27], &opt);
+        let la = a27.levels.iter().find(|l| l.level == 0).expect("K0连线层");
+        let lb = b27.levels.iter().find(|l| l.level == 0).expect("K0连线层");
+        let act_a = la.active_unit.as_ref().expect("step27 active A");
+        let act_b = lb.active_unit.as_ref().expect("step27 active B");
+        assert_eq!(act_a.idx, act_b.idx, "active.idx");
+        assert_eq!(act_a.x1, act_b.x1, "active.x1");
+        assert_eq!(act_a.x2, act_b.x2, "active.x2");
+        assert!(act_a.x2 > act_a.x1, "active 动态延伸");
+
+        // ④ History 不丢动态 x：step24 发现的 sell1 discovery x 在后续步仍在 levels 中
+        let a24 = run_pipeline(&bars[..=24], &opt);
+        let sell24: Vec<_> = a24.levels[0]
+            .sell1_frames
+            .iter()
+            .map(|f| (f.seg_idx, f.label.clone(), f.x))
+            .collect();
+        assert!(!sell24.is_empty(), "step24 应有 sell1 discovery");
+        for step in [25usize, 26, 27, 28] {
+            let a = run_pipeline(&bars[..=step], &opt);
+            let b = run_via_append(&bars[..=step], &opt);
+            for (seg, label, x) in &sell24 {
+                assert!(
+                    a.levels[0]
+                        .sell1_frames
+                        .iter()
+                        .any(|f| f.seg_idx == *seg && f.label == *label && f.x == *x),
+                    "step{step} 黄金路径丢失 discovery sell ({seg},{label},x={x})"
+                );
+                assert!(
+                    b.levels[0]
+                        .sell1_frames
+                        .iter()
+                        .any(|f| f.seg_idx == *seg && f.label == *label && f.x == *x),
+                    "step{step} append 路径丢失 discovery sell ({seg},{label},x={x})"
+                );
+            }
+        }
+    }
+
+    /// ⑨ 性能真实下降：逐K「每步全量 run_pipeline」 vs 一次 PipelineState.append 链
+    #[test]
+    fn dual_path_perf_append_faster_than_prefix_rerun() {
+        let bars = zigzag(200);
+        let opt = PipelineOptions::default();
+
+        let t0 = std::time::Instant::now();
+        for i in 0..bars.len() {
+            let _ = run_pipeline(&bars[..=i], &opt);
+        }
+        let naive = t0.elapsed();
+
+        let t1 = std::time::Instant::now();
+        let mut st = PipelineState::new(opt.clone());
+        for b in &bars {
+            st.append(b.clone());
+        }
+        let _ = st.into_result();
+        let incr = t1.elapsed();
+
+        eprintln!(
+            "perf Phase1: naive_prefix_rerun={:?} append_chain={:?} speedup={:.2}x",
+            naive,
+            incr,
+            naive.as_secs_f64() / incr.as_secs_f64().max(1e-9)
+        );
+        assert!(
+            incr < naive,
+            "append 链应快于每步前缀重跑: incr={incr:?} naive={naive:?}"
+        );
+        // 至少 2x，避免噪声误报；200K 通常远高于此
+        assert!(
+            naive.as_secs_f64() > incr.as_secs_f64() * 2.0,
+            "期望显著加速(>=2x): naive={naive:?} incr={incr:?}"
         );
     }
 }
