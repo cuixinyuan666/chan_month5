@@ -7,6 +7,8 @@ import 'package:ffi/ffi.dart';
 import '../models/kline_bar.dart';
 import '../models/kline_combine_bundle.dart';
 import '../models/kline_combine_frame.dart';
+import '../models/pipeline_delta.dart';
+import '../models/presentation_cache.dart';
 import '../widgets/kline_chip.dart';
 
 /// Rust `chan_ffi` 动态库桥接（纯 FFI：全部计算在 Rust，Dart 无回退实现）。
@@ -123,6 +125,30 @@ class ChanBridge {
         'chan_pipeline_append',
       )
       .asFunction();
+
+  Pointer<Utf8> Function(int, Pointer<Utf8>)? _pipelineAppendDeltaFn;
+  bool _appendDeltaLookupDone = false;
+
+  void _ensureAppendDeltaLookup() {
+    if (_appendDeltaLookupDone) return;
+    _appendDeltaLookupDone = true;
+    try {
+      _pipelineAppendDeltaFn = _lib
+          .lookup<NativeFunction<Pointer<Utf8> Function(Uint64, Pointer<Utf8>)>>(
+            'chan_pipeline_append_delta',
+          )
+          .asFunction();
+    } catch (_) {
+      _pipelineAppendDeltaFn = null;
+    }
+  }
+
+  /// 当前 DLL 是否导出 `chan_pipeline_append_delta`（旧 DLL 回退 Full）。
+  bool get supportsAppendDelta {
+    ensureInitialized();
+    _ensureAppendDeltaLookup();
+    return _pipelineAppendDeltaFn != null;
+  }
 
   late final Pointer<Utf8> Function(int) _pipelineSnapshot = _lib
       .lookup<NativeFunction<Pointer<Utf8> Function(Uint64)>>(
@@ -280,13 +306,30 @@ class ChanBridge {
     }
   }
 
-  /// 逐根 append，返回完整 bundle。
+  /// 逐根 append，返回完整 bundle（Full Snapshot；首包/回退/asOf 对照）。
   KlineCombineBundle pipelineAppend(int handle, KlineBar bar) {
     ensureInitialized();
     final ptr = _toNative(jsonEncode(bar.toJson()));
     try {
       final data = _decode(_takeJson(_pipelineAppend(handle, ptr)));
       return KlineCombineBundle.fromJson(Map<String, dynamic>.from(data as Map));
+    } finally {
+      if (ptr != nullptr) calloc.free(ptr);
+    }
+  }
+
+  /// 逐根 append，返回 PipelineDelta（历史 bar_features 不重复）。
+  PipelineDelta pipelineAppendDelta(int handle, KlineBar bar) {
+    ensureInitialized();
+    _ensureAppendDeltaLookup();
+    final fn = _pipelineAppendDeltaFn;
+    if (fn == null) {
+      throw StateError('chan_ffi.dll 无 chan_pipeline_append_delta，请重编 DLL');
+    }
+    final ptr = _toNative(jsonEncode(bar.toJson()));
+    try {
+      final data = _decode(_takeJson(fn(handle, ptr)));
+      return PipelineDelta.fromJson(Map<String, dynamic>.from(data as Map));
     } finally {
       if (ptr != nullptr) calloc.free(ptr);
     }
@@ -369,29 +412,52 @@ class ChanBridge {
   }
 }
 
-/// Phase 1.5：图表会话 = 一个 Rust PipelineState；Flutter 只存 handle。
-/// 前进：append；步退/复位/换 opt：reset + replay。
+/// Phase 1.5：图表会话 = 一个 Rust PipelineState；Flutter 只存 handle + presentation cache。
+/// 前进：首包 Full Snapshot，其后 append_delta + mergeDelta；失败回退 snapshot。
+/// 步退/复位/换 opt：reset + replay。asOf 仍走无状态 Full。
 class ChanPipelineSession {
-  ChanPipelineSession._(this._bridge, this.handle, this.truncationCheck);
+  ChanPipelineSession._(
+    this._bridge,
+    this.handle,
+    this.truncationCheck, {
+    this.preferDelta = true,
+  });
 
   final ChanBridge _bridge;
   final int handle;
   final bool truncationCheck;
+
+  /// false=全程 Full Snapshot（对照路径）；true=首包 Full + 后续 Delta。
+  final bool preferDelta;
+  final PresentationCache cache = PresentationCache();
   int _len = 0;
   bool _alive = true;
 
   /// 创建会话（Rust 侧 new PipelineState）
   factory ChanPipelineSession.create({
     bool truncationCheck = true,
+    bool preferDelta = true,
     ChanBridge? bridge,
   }) {
     final b = bridge ?? ChanBridge.instance;
     final h = b.pipelineCreate(truncationCheck: truncationCheck);
-    return ChanPipelineSession._(b, h, truncationCheck);
+    return ChanPipelineSession._(
+      b,
+      h,
+      truncationCheck,
+      preferDelta: preferDelta,
+    );
   }
 
   int get len => _len;
   bool get isAlive => _alive;
+  KlineCombineBundle get cachedBundle => cache.bundle;
+
+  void _resetLocal() {
+    _bridge.pipelineReset(handle);
+    _len = 0;
+    cache.reset();
+  }
 
   /// 同步到可见前缀：短则 reset+replay，长则继续 append。
   KlineCombineBundle syncTo(List<KlineBar> visible) {
@@ -400,21 +466,45 @@ class ChanPipelineSession {
     }
     if (visible.isEmpty) {
       if (_len > 0) {
-        _bridge.pipelineReset(handle);
-        _len = 0;
+        _resetLocal();
       }
       return KlineCombineBundle.empty();
     }
     if (_len > visible.length) {
-      _bridge.pipelineReset(handle);
-      _len = 0;
+      _resetLocal();
     }
-    KlineCombineBundle? last;
     while (_len < visible.length) {
-      last = _bridge.pipelineAppend(handle, visible[_len]);
-      _len += 1;
+      _appendOne(visible[_len]);
     }
-    return last ?? _bridge.pipelineSnapshot(handle);
+    return cache.bundle;
+  }
+
+  void _appendOne(KlineBar bar) {
+    final canDelta = preferDelta &&
+        _bridge.supportsAppendDelta &&
+        !cache.isEmpty &&
+        cache.len == _len;
+    if (canDelta) {
+      try {
+        final d = _bridge.pipelineAppendDelta(handle, bar);
+        cache.mergeDelta(d);
+        _len += 1;
+        return;
+      } catch (_) {
+        // Rust 若已 append，snapshot 根数=_len+1 → Full 回填，禁止再 append
+      }
+    }
+    // Delta 半成功或旧 DLL：Rust 已吃进这根则只回填 Full
+    try {
+      if (_bridge.pipelineLen(handle) == _len + 1) {
+        cache.seedFromFull(_bridge.pipelineSnapshot(handle));
+        _len += 1;
+        return;
+      }
+    } catch (_) {}
+    final full = _bridge.pipelineAppend(handle, bar);
+    cache.seedFromFull(full);
+    _len += 1;
   }
 
   void dispose() {
@@ -422,5 +512,6 @@ class ChanPipelineSession {
     _alive = false;
     _bridge.pipelineFree(handle);
     _len = 0;
+    cache.reset();
   }
 }

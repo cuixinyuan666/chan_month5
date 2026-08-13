@@ -62,4 +62,4 @@ N=2000 末步拆分：`bar_feature` 一行 2,734 B；`structure` 当步全量 1,
 
 - **已证明**：按序应用 Delta 可无损重建 Full Snapshot（JSON 逐字段相等），含 002003 step24–28 与 reset 后用 Delta 重建。
 - Full Snapshot 入口保留。算法 / `append` / mark_x / History / asOf / V2.1 未改。
-- **停止。** 不接 Flutter、不改 Dart Lookup、不改二进制。structure 仍 O(N) 是下一阶段的事，不是本阶段目标。
+- **2B-2 停止点已完成。** Flutter 接入见 `PHASE2B3_FLUTTER_DELTA_REPORT.md`（Lookup 填表仍未改；structure 仍 O(N)）。

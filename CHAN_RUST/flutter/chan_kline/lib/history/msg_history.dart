@@ -455,12 +455,34 @@ class MsgHistory {
     _pipelineSessionLogged = true;
     append(
       '【Phase1.5·PipelineSession】图表会话=一个 Rust PipelineState；'
-      'Flutter 只存 handle，不存核心 state。'
-      '步进前进：FFI chan_pipeline_append(bar)；'
+      'Flutter 只存 handle + presentation cache，不存核心判定 state。'
+      '步进前进：首包 FFI chan_pipeline_append（Full Snapshot），'
+      '其后 chan_pipeline_append_delta + mergeDelta（历史 bar_features 只追加，'
+      '结构字段当步全量替换，不做字段级 patch）；'
+      '失败回退 chan_pipeline_snapshot Full。'
       '步退/复位/换股/换周期/截断开关：reset+replay 或 dispose 后重建；'
       '关闭页面 dispose→chan_pipeline_free。'
       '黄金对照仍保留 chan_kline_combine_frames/run_pipeline；'
-      '十字 asOf 仍可走无状态短前缀。算法/mark_x/discoveryX/V2.1 BS/History 不变。',
+      '十字 asOf 仍走无状态短前缀 Full。'
+      '算法/mark_x/discoveryX/V2.1 BS/History/Lookup 填表算法不变；'
+      'Lookup 由 PresentationCache 增量维护，Painter 复用同一份。须重编 chan_ffi.dll。',
+    );
+  }
+
+  static bool _incrementalLookupLogged = false;
+
+  /// Phase 2B-3A：PresentationCache 增量 Lookup（禁全表 BarFeatureLookup.build）
+  void appendIncrementalLookup() {
+    if (_incrementalLookupLogged) return;
+    _incrementalLookupLogged = true;
+    append(
+      '【Phase2B-3A·增量Lookup】步进不再全历史 BarFeatureLookup.build；'
+      'PresentationCache.syncLookup：首包/回退一次 Full 种仓，热路径 applyStep 只写脏区间。'
+      '永久冻结=旧 bar_features/History/Math冻格；只追加=byIdx[step]/新事件；'
+      '当步可替换=末合并框/未确认中枢/当步 confirm；'
+      'asOf=结构短前缀 Full + 冻格 x<=asOf，三型只算 asOf 柱。'
+      'Full Lookup.build 保留为黄金参考。Painter/十字/chip/ML 复用同一份增量 Lookup。'
+      '不改 Rust/Delta/算法/History/asOf/mark_x/V2.1 BS。',
     );
   }
 

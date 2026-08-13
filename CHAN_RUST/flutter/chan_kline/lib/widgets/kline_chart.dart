@@ -54,6 +54,7 @@ import '../models/chip_config.dart';
 import '../models/tick_dist_config.dart';
 import '../models/kline_combine_frame.dart';
 import '../models/bar_feature_lookup.dart';
+import '../models/incremental_lookup.dart';
 import '../models/level_models.dart';
 import '../models/k1_analysis.dart';
 import 'chart_level_line_style.dart';
@@ -139,6 +140,7 @@ class KlineChart extends StatefulWidget {
     this.mathFreezeStore,
     this.diverFreezeStore,
     this.chipOnlyMode = false,
+    this.lookupEngine,
   });
 
   final List<KlineBar> bars;
@@ -218,6 +220,8 @@ class KlineChart extends StatefulWidget {
   final DivergenceFreezeStore? diverFreezeStore;
   /// chip 分支：仅显示筹码分布，关闭所有缠论渲染
   final bool chipOnlyMode;
+  /// 会话增量 Lookup；Painter / 十字 / chip 复用同一份，禁止各画一次 Full build。
+  final IncrementalBarFeatureLookup? lookupEngine;
 
   /// 点击左/中/右：后退 / 播放暂停 / 前进
   final VoidCallback? onTapStepBack;
@@ -286,14 +290,18 @@ class _KlineChartState extends State<KlineChart> {
   /// 十字线 as-of 中枢 bundle 缓存（逐K当下 Rust 重算）
   int? _zsAsOfCacheKey;
   KlineCombineBundle? _zsAsOfBundle;
+  /// 同帧 asOf 视图：Painter / 十字 / chip 复用，禁止三次 Math 短前缀
+  int? _incAsOfLookupKey;
+  int _incAsOfLookupGen = -1;
+  Map<int, Map<String, dynamic>>? _incAsOfByIdx;
+  int _incAsOfTotalLevels = 0;
+  int _incAsOfMaxBs = 9;
 
   KlineCombineBundle? _bundleForZsAsOf(int? asOf) {
     if (asOf == null) return null;
     // chip 分支无缠论数据：禁止 as-of 全量 FFI（日志：2.6万根≈13–18s 卡死）
     // 踩坑：chipOnlyMode 下 _bundleForZsAsOf 必须返回 null，
-    // 否则 paint() → zsAsOfBundle 非空 → BarFeatureLookup.build() 触发的
-    // ChanBridge FFI 会序列化全量 bars（5.6万根）做 JSON 传输，单次 1.5-1.8s；
-    // 十字线每帧移动都会触发，导致 UI 卡死 13-18s。
+    // 否则 paint() 会走 asOf 短前缀 Full FFI；十字每帧移动会卡死。
     if (widget.chipOnlyMode) {
       return null;
     }
@@ -313,6 +321,88 @@ class _KlineChartState extends State<KlineChart> {
     } catch (_) {
       return null;
     }
+  }
+
+  /// 一次 step 一份 Lookup：引擎热路径；无引擎才回落 Full（测试/筹码）。
+  BarFeatureLookup _lookupForPaint({
+    int? asOf,
+    KlineCombineBundle? asOfBundle,
+    List<CrosshairTooltipRow> zsAfterK0 = const [],
+    Map<int, List<CrosshairTooltipRow>> knZsAfterKn = const {},
+    Set<SubChartIndicator> subIndicators = const {},
+  }) {
+    final engine = widget.lookupEngine;
+    if (engine != null && !engine.isEmpty) {
+      if (asOf != null &&
+          asOfBundle != null &&
+          asOf < engine.step) {
+        if (_incAsOfLookupKey != asOf ||
+            _incAsOfLookupGen != engine.gen ||
+            _incAsOfByIdx == null) {
+          final view = engine.asOfView(
+            asOf: asOf,
+            asOfBundle: asOfBundle,
+            prefixBars: widget.bars.where((b) => b.idx <= asOf).toList(),
+          );
+          _incAsOfByIdx = view.byIdx;
+          _incAsOfTotalLevels = view.totalLevels;
+          _incAsOfMaxBs = view.maxBsClass;
+          _incAsOfLookupKey = asOf;
+          _incAsOfLookupGen = engine.gen;
+        }
+        return BarFeatureLookup.fromCached(
+          byIdx: _incAsOfByIdx!,
+          totalLevels: _incAsOfTotalLevels,
+          zsAfterK0: zsAfterK0,
+          knZsAfterKn: knZsAfterKn,
+          maxBsClass: _incAsOfMaxBs,
+        );
+      }
+      return engine.toLookup(
+        zsAfterK0: zsAfterK0,
+        knZsAfterKn: knZsAfterKn,
+      );
+    }
+    final tipLevels = asOf != null
+        ? (asOfBundle?.levels ?? const <LevelBundle>[])
+        : widget.levels;
+    final tipK0Confirms = asOf != null
+        ? (asOfBundle?.k0Confirms ?? const <K0ConfirmSignal>[])
+        : widget.k0ConfirmSignals;
+    final tipZsK0 = asOf != null
+        ? (asOfBundle?.zsK0Frames ?? const <ZSFrame>[])
+        : widget.zsK0Frames;
+    return BarFeatureLookup.build(
+      bars: widget.bars,
+      combineFrames: _effectiveK0CombineFrames,
+      k0Confirms: tipK0Confirms,
+      barFeatures: widget.barFeatures,
+      k0Lines: widget.k0Lines,
+      k1Analysis: widget.k1Analysis,
+      levels: tipLevels,
+      k1CombineFrames: _effectiveK1CombineFrames,
+      buy1HistoryByKn: widget.buy1HistoryByKn,
+      sell1HistoryByKn: widget.sell1HistoryByKn,
+      buy2HistoryByKn: widget.buy2HistoryByKn,
+      sell2HistoryByKn: widget.sell2HistoryByKn,
+      buyNHistoryByKn: widget.buyNHistoryByKn,
+      sellNHistoryByKn: widget.sellNHistoryByKn,
+      adjacentRatioHistoryByKn: widget.adjacentRatioHistoryByKn,
+      stepRhythmHistoryByKn: widget.stepRhythmHistoryByKn,
+      lineSlopeHistoryByKn: widget.lineSlopeHistoryByKn,
+      subIndicators: subIndicators,
+      truncationCheck: widget.truncationCheck,
+      judgmentHistoryByKn: widget.judgmentHistoryByKn,
+      zsJudgmentHistoryByKn: widget.zsJudgmentHistoryByKn,
+      zsConfirmHistoryByKn: widget.zsConfirmHistoryByKn,
+      asOf: asOf,
+      zsAfterK0: zsAfterK0,
+      knZsAfterKn: knZsAfterKn,
+      mathIndicatorConfig: widget.mathIndicatorConfig,
+      mathFreezeStore: widget.mathFreezeStore,
+      diverFreezeStore: widget.diverFreezeStore,
+      zsK0Frames: tipZsK0,
+    );
   }
 
   Set<SubChartIndicator> get _activeSubs => widget.subIndicators;
@@ -794,48 +884,12 @@ class _KlineChartState extends State<KlineChart> {
       maxKn,
       truncationCheck: widget.truncationCheck,
     ).toSet();
-    // 十字 asOf：levels 仅认 asOfBundle（失败=空，禁回落末态）；非十字用会话末态
-    final tipLevels = asOf != null
-        ? (asOfBundle?.levels ?? const <LevelBundle>[])
-        : widget.levels;
-    final tipK0Confirms = asOf != null
-        ? (asOfBundle?.k0Confirms ?? const <K0ConfirmSignal>[])
-        : widget.k0ConfirmSignals;
-    final tipZsK0 = asOf != null
-        ? (asOfBundle?.zsK0Frames ?? const <ZSFrame>[])
-        : widget.zsK0Frames;
-    final lookup = BarFeatureLookup.build(
-      bars: widget.bars,
-      // K0合并框：十字 as-of=Rust frames；MG/MD 与合并序同源
-      combineFrames: _effectiveK0CombineFrames,
-      k0Confirms: tipK0Confirms,
-      barFeatures: widget.barFeatures,
-      k0Lines: widget.k0Lines,
-      k1Analysis: widget.k1Analysis,
-      levels: tipLevels,
-      // K1合并 tip 与主图展示轨同源
-      k1CombineFrames: _effectiveK1CombineFrames,
-      buy1HistoryByKn: widget.buy1HistoryByKn,
-      sell1HistoryByKn: widget.sell1HistoryByKn,
-      buy2HistoryByKn: widget.buy2HistoryByKn,
-      sell2HistoryByKn: widget.sell2HistoryByKn,
-      buyNHistoryByKn: widget.buyNHistoryByKn,
-      sellNHistoryByKn: widget.sellNHistoryByKn,
-      adjacentRatioHistoryByKn: widget.adjacentRatioHistoryByKn,
-      stepRhythmHistoryByKn: widget.stepRhythmHistoryByKn,
-      lineSlopeHistoryByKn: widget.lineSlopeHistoryByKn,
-      subIndicators: allSubs,
-      truncationCheck: widget.truncationCheck,
-      judgmentHistoryByKn: widget.judgmentHistoryByKn,
-      zsJudgmentHistoryByKn: widget.zsJudgmentHistoryByKn,
-      zsConfirmHistoryByKn: widget.zsConfirmHistoryByKn,
+    final lookup = _lookupForPaint(
       asOf: asOf,
+      asOfBundle: asOfBundle,
       zsAfterK0: k0Zs,
       knZsAfterKn: knZs,
-      mathIndicatorConfig: widget.mathIndicatorConfig,
-      mathFreezeStore: widget.mathFreezeStore,
-      diverFreezeStore: widget.diverFreezeStore,
-      zsK0Frames: tipZsK0,
+      subIndicators: allSubs,
     );
     // K0 筹码峰 / 笔数峰：与主图 profile 同 cutoff，按本根高低编号
     final cut = asOf ?? bar.idx;
@@ -1237,41 +1291,10 @@ class _KlineChartState extends State<KlineChart> {
         : null;
     final asOfBundle =
         widget.chipOnlyMode ? null : _bundleForZsAsOf(asOf);
-    // 十字 asOf：levels 仅认 asOfBundle（失败=空，禁回落末态）
-    final chipLevels = asOf != null
-        ? (asOfBundle?.levels ?? const <LevelBundle>[])
-        : widget.levels;
-    final tipZsK0 = asOf != null
-        ? (asOfBundle?.zsK0Frames ?? const <ZSFrame>[])
-        : widget.zsK0Frames;
-    final lookup = BarFeatureLookup.build(
-      bars: widget.bars,
-      combineFrames: widget.combineFrames,
-      k0Confirms: widget.k0ConfirmSignals,
-      barFeatures: widget.barFeatures,
-      k0Lines: widget.k0Lines,
-      k1Analysis: widget.k1Analysis,
-      levels: chipLevels,
-      k1CombineFrames: _effectiveK1CombineFrames,
-      buy1HistoryByKn: widget.buy1HistoryByKn,
-      sell1HistoryByKn: widget.sell1HistoryByKn,
-      buy2HistoryByKn: widget.buy2HistoryByKn,
-      sell2HistoryByKn: widget.sell2HistoryByKn,
-      buyNHistoryByKn: widget.buyNHistoryByKn,
-      sellNHistoryByKn: widget.sellNHistoryByKn,
-      adjacentRatioHistoryByKn: widget.adjacentRatioHistoryByKn,
-      stepRhythmHistoryByKn: widget.stepRhythmHistoryByKn,
-      lineSlopeHistoryByKn: widget.lineSlopeHistoryByKn,
-      subIndicators: _activeSubs,
-      truncationCheck: widget.truncationCheck,
-      judgmentHistoryByKn: widget.judgmentHistoryByKn,
-      zsJudgmentHistoryByKn: widget.zsJudgmentHistoryByKn,
-      zsConfirmHistoryByKn: widget.zsConfirmHistoryByKn,
+    final lookup = _lookupForPaint(
       asOf: asOf,
-      mathIndicatorConfig: widget.mathIndicatorConfig,
-      mathFreezeStore: widget.mathFreezeStore,
-      diverFreezeStore: widget.diverFreezeStore,
-      zsK0Frames: tipZsK0,
+      asOfBundle: asOfBundle,
+      subIndicators: _activeSubs,
     );
     final out = <SubChartIndicator, String>{};
     for (final e in _activeSubs) {
@@ -1334,6 +1357,14 @@ class _KlineChartState extends State<KlineChart> {
 
         WidgetsBinding.instance.addPostFrameCallback((_) => _measureSubChipBar());
 
+        final paintLookup = widget.chipOnlyMode
+            ? BarFeatureLookup.empty()
+            : _lookupForPaint(
+                asOf: segAsOf,
+                asOfBundle: zsAsOfBundle,
+                subIndicators: _drawnSubs,
+              );
+
         _KlineCompositePainter paintLayer(_ChartPaintLayer layer) =>
             _KlineCompositePainter(
               bars: widget.bars,
@@ -1390,6 +1421,9 @@ class _KlineChartState extends State<KlineChart> {
               diverFreezeStore: widget.diverFreezeStore,
               chipOnlyMode: widget.chipOnlyMode,
               layer: layer,
+              featureLookup: layer == _ChartPaintLayer.chip
+                  ? BarFeatureLookup.empty()
+                  : paintLookup,
             );
 
         final chartSize = Size(w, mainH + volH);
@@ -1675,42 +1709,8 @@ class _KlineCompositePainter extends CustomPainter {
     this.diverFreezeStore,
     this.chipOnlyMode = false,
     this.layer = _ChartPaintLayer.base,
-  }) : featureLookup = (chipOnlyMode || layer == _ChartPaintLayer.chip)
-            ? BarFeatureLookup.empty()
-            : BarFeatureLookup.build(
-                bars: bars,
-                combineFrames: combineFrames,
-                k0Confirms: k0ConfirmSignals,
-                barFeatures: barFeatures,
-                k0Lines: k0Lines,
-                k1Analysis: k1Analysis,
-                // 十字 as-of：只认 asOf bundle（失败=空，禁回落末态）；BS 用会话历史
-                levels: segAsOf != null
-                    ? (zsAsOfBundle?.levels ?? const <LevelBundle>[])
-                    : levels,
-                k1CombineFrames: k1CombineFrames,
-                buy1HistoryByKn: buy1HistoryByKn,
-                sell1HistoryByKn: sell1HistoryByKn,
-                buy2HistoryByKn: buy2HistoryByKn,
-                sell2HistoryByKn: sell2HistoryByKn,
-                buyNHistoryByKn: buyNHistoryByKn,
-                sellNHistoryByKn: sellNHistoryByKn,
-                adjacentRatioHistoryByKn: adjacentRatioHistoryByKn,
-                stepRhythmHistoryByKn: stepRhythmHistoryByKn,
-                lineSlopeHistoryByKn: lineSlopeHistoryByKn,
-                subIndicators: subIndicators,
-                truncationCheck: truncationCheck,
-                judgmentHistoryByKn: judgmentHistoryByKn,
-                zsJudgmentHistoryByKn: zsJudgmentHistoryByKn,
-                zsConfirmHistoryByKn: zsConfirmHistoryByKn,
-                asOf: segAsOf,
-                mathIndicatorConfig: mathIndicatorConfig,
-                mathFreezeStore: mathFreezeStore,
-                diverFreezeStore: diverFreezeStore,
-                zsK0Frames: segAsOf != null
-                    ? (zsAsOfBundle?.zsK0Frames ?? const <ZSFrame>[])
-                    : zsK0Frames,
-              );
+    required this.featureLookup,
+  });
 
   /// 分层绘制：底图/筹码/十字 独立 shouldRepaint（计算口径不变）
   final _ChartPaintLayer layer;
@@ -6015,7 +6015,8 @@ class _KlineCompositePainter extends CustomPainter {
         oldDelegate.chipOnlyMode != chipOnlyMode ||
         oldDelegate.chipConfig != chipConfig ||
         oldDelegate.tickDistConfig != tickDistConfig ||
-        oldDelegate.mathIndicatorConfig != mathIndicatorConfig;
+        oldDelegate.mathIndicatorConfig != mathIndicatorConfig ||
+        !identical(oldDelegate.featureLookup.byIdx, featureLookup.byIdx);
 
     switch (layer) {
       case _ChartPaintLayer.base:

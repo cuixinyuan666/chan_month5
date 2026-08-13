@@ -2,6 +2,28 @@
 
 > 口径/行为变更记录（复制排查用）；与 `lib/history/msg_history.dart` 常驻历史同步维护。
 
+## 2026-08-13 PresentationCache 增量 Lookup（Phase 2B-3A）
+
+- **需求**：消除每步 `BarFeatureLookup.build` 全历史重建（N=2000 Lookup≈5.5s / 96%）；Painter 不得重复建 Lookup。
+- **不变**：Rust / Delta / FFI / 算法 / History / asOf 语义 / mark_x / V2.1 BS；Full `build()` 保留黄金参考。
+- **变更**：`IncrementalBarFeatureLookup` + `PresentationCache.syncLookup`；热路径 `applyStep`；三型只算当前 x；asOf 视图短前缀 Math + 冻格。KlineChart / ML 复用 `lookupEngine`。
+- **验证**：`incremental_lookup_session_test` 全过（002003 step24–28 Incremental==Full、reset+replay、asOf 24–28）。N=2000 FullLookup=6259ms / Incremental=1048ms（6.0x）；Full 随 N 增 26.4x，Incremental 6.2x。报告 `docs/PHASE2B3_INCREMENTAL_LOOKUP_REPORT.md`。
+- **注意**：不进 Phase 2C；冷启后连续单步验收。
+
+## 2026-08-13 Flutter 接入 PipelineDelta（presentation cache）
+
+- **需求**：步进走 `chan_pipeline_append_delta`；Flutter 建 presentation cache + `mergeDelta`；Full Snapshot 仅首包/回退/asOf。
+- **不变**：Rust 算法、Delta 语义、Lookup 填表算法、History/asOf/V2.1 BS；不做二进制/字段级 patch/ZS-BS 优化。
+- **变更**：`PipelineDelta`/`PresentationCache`；`ChanPipelineSession` 首包 Full、其后 Delta；旧 DLL 无符号则全程 Full。
+- **验证**：`pipeline_delta_session_test` 全过。002003 step24–28 Full==Delta；reset+replay；asOf；History/BS/副图/十字/ML。N=200 末步 Delta≈Full 的 31%。报告 `docs/PHASE2B3_FLUTTER_DELTA_REPORT.md`。
+- **注意**：须重编并复制 `chan_ffi.dll` 后冷启。
+
+## 2026-08-13 Lookup 增量化（仅 profiling+设计，未实现）
+
+- **需求**：消除每步 `BarFeatureLookup.build` 全量重建；不改 Rust/Delta/History/asOf/BS。
+- **测量**：`phase2b3_lookup_profile_test`。N=2000 末步 Lookup≈5.5s（占 96%），mergeDelta≈0；Painter 每帧 2 次 build。Lookup 随 N 超线性。
+- **设计**：`docs/PHASE2B3_LOOKUP_INCREMENTAL_DESIGN.md` 方案 A（增量 Lookup 挂 cache，只写脏区间）。**等待批准**。
+
 ## 2026-08-09 Kn节奏关窗持值（全层同构）
 
 - **需求**：升组子顶关窗后、子底确认前继续用上个 x-x；锚点分笔·K1·K0 77–114 续 0-0；tip 同源；复制调试信息仅本批。

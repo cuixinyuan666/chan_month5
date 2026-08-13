@@ -105,6 +105,7 @@ Future<void> main() async {
   MsgHistory.instance.appendBuy2Class2Naming();
   MsgHistory.instance.appendBuyNClass3PlusNaming();
   MsgHistory.instance.appendPipelineStateSession();
+  MsgHistory.instance.appendIncrementalLookup();
   // Kn相邻比例 + Kn步进节奏（节奏已迁主图）
   MsgHistory.instance.appendAdjacentRatioAndStepRhythm();
   MsgHistory.instance.appendStepRhythmToMainAndTipCats();
@@ -474,6 +475,38 @@ class _KlineHomePageState extends State<KlineHomePage> {
       );
     }
     return _pipelineSession!.syncTo(visible);
+  }
+
+  /// 把当前步 History + Math 冻仓打进增量 Lookup（Painter 只消费这份）。
+  void _syncPresentationLookup(List<KlineBar> bars, KlineCombineBundle bundle) {
+    final sess = _pipelineSession;
+    if (sess == null || !sess.isAlive) return;
+    final maxKn = chartMaxKn(levels: bundle.levels, k0Lines: bundle.k0Lines);
+    sess.cache.syncLookup(
+      bars: bars,
+      buy1HistoryByKn: _buy1HistoryByKn,
+      sell1HistoryByKn: _sell1HistoryByKn,
+      buy2HistoryByKn: _buy2HistoryByKn,
+      sell2HistoryByKn: _sell2HistoryByKn,
+      buyNHistoryByKn: _buyNHistoryByKn,
+      sellNHistoryByKn: _sellNHistoryByKn,
+      adjacentRatioHistoryByKn: _adjacentRatioHistoryByKn,
+      stepRhythmHistoryByKn: _stepRhythmHistoryByKn,
+      lineSlopeHistoryByKn: _lineSlopeHistoryByKn,
+      judgmentHistoryByKn: _judgmentHistoryByKn,
+      zsJudgmentHistoryByKn: _zsJudgmentHistoryByKn,
+      zsConfirmHistoryByKn: _zsConfirmHistoryByKn,
+      subIndicators: buildSubIndicatorCatalog(
+        maxKn,
+        truncationCheck: _truncationCheck,
+        maxBsClass: _maxBsClass,
+      ).toSet(),
+      truncationCheck: _truncationCheck,
+      mathIndicatorConfig: _mathIndicatorConfig,
+      mathFreezeStore: _mathFreezeStore,
+      diverFreezeStore: _diverFreezeStore,
+      maxBsClass: _maxBsClass,
+    );
   }
 
   /// 切换股票时对齐各自默认加载区间。
@@ -1016,6 +1049,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
   void _rebuildCombine() {
     if (_chipOnlyMode) return;
     if (_visibleBars.isEmpty) {
+      _pipelineSession?.cache.reset();
       setState(() {
         _combineFrames = [];
         _k0ConfirmSignals = [];
@@ -1080,6 +1114,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       _mergeRatioAndRhythm(bundle);
       _mergeMathFreeze(bundle);
       _mergeDivergenceFreeze(bundle, confirmedX1ByKn: zsConfirmed);
+      _syncPresentationLookup(_visibleBars, bundle);
       final frozenLevels = _levelsWithFrozenBs(bundle.levels);
       setState(() {
         _combineFrames = bundle.frames;
@@ -1326,6 +1361,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
           asOf: i,
           confirmedX1ByKn: zsConfirmed,
         );
+        _syncPresentationLookup(visible, bundle);
         // 仅 ML 路径：采 K0 一类 BS 当下特征（不改复盘语义）
         mlSampler?.onStep(
           stepIdx: i,
@@ -1933,6 +1969,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       adjacentRatioHistoryByKn: _adjacentRatioHistoryByKn,
       stepRhythmHistoryByKn: _stepRhythmHistoryByKn,
       lineSlopeHistoryByKn: _lineSlopeHistoryByKn,
+      lookupEngine: _pipelineSession?.cache.lookupEngine,
       mainIndicators: _mainIndicators,
       onMainIndicatorsChanged: (v) => setState(() => _mainIndicators = v),
       subIndicators: _subIndicators,
@@ -2190,7 +2227,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
     );
   }
 
-  /// 跳末逐步采样用：用当步 bundle + 已冻结会话 history。
+  /// 跳末逐步采样用：用当步 cache 增量 Lookup（与图表同源，禁止再 Full build）。
   BarFeatureLookup _buildMlLookupFor({
     required List<KlineBar> bars,
     required List<KlineCombineFrame> combineFrames,
@@ -2202,6 +2239,10 @@ class _KlineHomePageState extends State<KlineHomePage> {
     required K1AnalysisBundle k1Analysis,
     required List<ZSFrame> zsK0Frames,
   }) {
+    final sess = _pipelineSession;
+    if (sess != null && sess.isAlive && !sess.cache.lookupEngine.isEmpty) {
+      return sess.cache.lookup;
+    }
     if (bars.isEmpty) return BarFeatureLookup.empty();
     final maxKn = chartMaxKn(levels: levels, k0Lines: k0Lines);
     final allSubs = buildSubIndicatorCatalog(

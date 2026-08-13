@@ -115,6 +115,24 @@ class BarFeatureLookup {
   factory BarFeatureLookup.empty() =>
       BarFeatureLookup._(byIdx: const <int, Map<String, dynamic>>{});
 
+  /// 增量仓包装：不扫描历史。黄金全量仍走 [build]。
+  factory BarFeatureLookup.fromCached({
+    required Map<int, Map<String, dynamic>> byIdx,
+    int totalLevels = 0,
+    List<CrosshairTooltipRow> zsAfterK0 = const [],
+    Map<int, List<CrosshairTooltipRow>> knZsAfterKn = const {},
+    int maxBsClass = 9,
+  }) =>
+      BarFeatureLookup._(
+        byIdx: byIdx,
+        totalLevels: totalLevels,
+        zsAfterK0: zsAfterK0,
+        knZsAfterKn: knZsAfterKn,
+        maxBsClass: maxBsClass,
+      );
+
+  /// 逐 K 字典式特征索引（ML / 十字线 tooltip 同源）。
+  /// [barFeatures] 应来自 PresentationCache（历史行冻结只追加），核心填表算法不变。
   factory BarFeatureLookup.build({
     required List<KlineBar> bars,
     required List<KlineCombineFrame> combineFrames,
