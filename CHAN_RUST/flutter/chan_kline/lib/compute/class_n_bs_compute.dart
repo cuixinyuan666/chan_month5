@@ -190,6 +190,7 @@ List<LevelBundle> levelsWithFrozenClassNBs(
           // 方案B：history 键用 display=lv.level+1
           buyNFrames: buyNHistoryByKn[lv.level + 1] ?? lv.buyNFrames,
           sellNFrames: sellNHistoryByKn[lv.level + 1] ?? lv.sellNFrames,
+          bsVerdictFrames: lv.bsVerdictFrames,
           firstDir: lv.firstDir,
           firstDirX: lv.firstDirX,
           activeUnit: lv.activeUnit,

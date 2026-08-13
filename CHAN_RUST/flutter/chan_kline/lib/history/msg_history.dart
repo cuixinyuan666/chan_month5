@@ -42,6 +42,8 @@ class MsgHistory {
   static bool _buy2Logged = false;
   /// Kn三类+BS 口径（进程内去重）
   static bool _buyNLogged = false;
+  /// 全类 BSP 在线对错
+  static bool _bsVerdictLogged = false;
 
   final List<MsgHistoryEntry> _rows = [];
 
@@ -499,6 +501,24 @@ class MsgHistory {
       'JSON：buy_n_k0_frames/sell_n_k0_frames、levels[].buy_n_frames/sell_n_frames（含 cls）；'
       '副图分槽「Kn三类BS」…「Kn九类BS」（更高类动态扩）；'
       '全类副图 S 在上(+1)冷色、B 在下(-1)暖色，同族内按类分档。',
+    );
+  }
+
+  /// 全类 BSP 在线对错（独立 verdict；不回写 BSP）
+  void appendBsOnlineVerdict() {
+    if (_bsVerdictLogged) return;
+    _bsVerdictLogged = true;
+    append(
+      '【新增·全类BSP在线对错·全层同构】覆盖当前全部类别 1B…nB / 1S…nS（类号从 label/cls 解析，不写死1/2/3）。'
+      'Rust bs_eval 是唯一评判源：judge_level 对 K0…KN 同一入口。'
+      'BSP 永久事件不改 x/price/seg/label；verdict 独立 Pending→Correct|Wrong 后冻结。'
+      '成功/失败继承既有结构：后续定型中枢 zs_above_prev/zs_below_prev（买卖镜像）；'
+      '一类/二类另继承同框严格新极值复位；三类+无独立极值失败语义（生成是全员打点）。'
+      '无未来：只使用 asof 已见 ZS/seg；verdict_x≥bsp_x。'
+      'JSON：bs_verdict_k0_frames、levels[].bs_verdict_frames。'
+      '旧 ml_bsp_sample.isCorrect 仍是展望窗离线 α，不是在线 verdict。'
+      'Flutter 只接收/冻结/asOf 过滤；设置「BSP对错叠加X」：错标叠加X，对的不叠加。'
+      '须重编 chan_ffi.dll；冷启动连续单步验收。',
     );
   }
 

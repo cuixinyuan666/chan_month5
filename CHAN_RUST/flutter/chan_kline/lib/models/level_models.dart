@@ -6,6 +6,7 @@ import 'buy2_frame.dart';
 import 'sell2_frame.dart';
 import 'buy_n_frame.dart';
 import 'sell_n_frame.dart';
+import 'bs_verdict_frame.dart';
 
 /// 每根 K0 × 每层 Kn 十字线快照（Rust `LevelSnap`，逐K当下冻结）。
 class LevelSnap {
@@ -319,6 +320,8 @@ class LevelBundle {
   final List<BuyNFrame> buyNFrames;
   /// 本层三类+卖（买镜像）
   final List<SellNFrame> sellNFrames;
+  /// 本层 BSP 在线评判（独立于原 BSP）
+  final List<BsVerdictFrame> bsVerdictFrames;
   final int firstDir;
   final int firstDirX;
 
@@ -344,6 +347,7 @@ class LevelBundle {
     this.sell2Frames = const [],
     this.buyNFrames = const [],
     this.sellNFrames = const [],
+    this.bsVerdictFrames = const [],
     this.firstDir = 0,
     this.firstDirX = -1,
     this.activeUnit,
@@ -387,6 +391,10 @@ class LevelBundle {
           .toList(),
       sellNFrames: (json['sell_n_frames'] as List? ?? const [])
           .map((e) => SellNFrame.fromJson(Map<String, dynamic>.from(e as Map)))
+          .toList(),
+      bsVerdictFrames: (json['bs_verdict_frames'] as List? ?? const [])
+          .map((e) =>
+              BsVerdictFrame.fromJson(Map<String, dynamic>.from(e as Map)))
           .toList(),
       firstDir: (json['first_dir'] as num?)?.toInt() ?? 0,
       firstDirX: (json['first_dir_x'] as num?)?.toInt() ?? -1,

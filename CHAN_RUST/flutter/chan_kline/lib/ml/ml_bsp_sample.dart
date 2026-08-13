@@ -29,7 +29,8 @@ class MlBspSample {
   /// 扁平固定键特征（禁止 tip 动态名）
   final Map<String, double> features;
 
-  /// α：跳末后是否仍正确；未标注前为 null
+  /// α：展望窗离线标签（跳到数据末/到期后打标）。
+  /// 不是 CHAN_RUST 在线 BSP verdict；新在线对错见 Rust `bs_verdict_*`。
   bool? isCorrect;
   String labelReason;
   double? predictScore;

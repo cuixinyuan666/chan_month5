@@ -2,6 +2,7 @@
 //! 模块分工：engine=包含合并+分型唯一内核；pipeline=N 段递归；
 //! combine/feature/seg_eigen=旧字段兼容映射；segment_first=全层首段策略。
 
+mod bs_eval;
 mod buy1;
 mod buy2;
 mod buy_n;
@@ -20,6 +21,10 @@ mod segment_first;
 mod tick;
 mod zs;
 
+pub use bs_eval::{
+    collect_bs_events, judge_bsp, judge_frames, judge_level, parse_bsp_class, BsEvent, BsSide,
+    BsVerdictFrame, BsVerdictState,
+};
 pub use buy1::{
     find_buy1, find_buy1_with_active, find_sell1, find_sell1_with_active, zs_above_prev,
     zs_below_prev, Buy1Frame, Sell1Frame,

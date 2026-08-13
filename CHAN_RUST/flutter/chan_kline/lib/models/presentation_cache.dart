@@ -60,6 +60,7 @@ KlineCombineBundle applyPipelineDelta(
     sell2K0Frames: s.sell2K0Frames,
     buyNK0Frames: s.buyNK0Frames,
     sellNK0Frames: s.sellNK0Frames,
+    bsVerdictK0Frames: s.bsVerdictK0Frames,
   );
 }
 

@@ -14,6 +14,7 @@ import '../compute/zs_signal_compute.dart';
 import '../compute/class1_bs_compute.dart';
 import '../compute/class2_bs_compute.dart';
 import '../compute/class_n_bs_compute.dart';
+import '../compute/bs_verdict_compute.dart';
 import '../compute/kn_volume_series_compute.dart';
 import '../compute/adjacent_ratio_compute.dart';
 import '../compute/line_slope_compute.dart';
@@ -43,6 +44,7 @@ import '../models/buy2_frame.dart';
 import '../models/sell2_frame.dart';
 import '../models/buy_n_frame.dart';
 import '../models/sell_n_frame.dart';
+import '../models/bs_verdict_frame.dart';
 import '../models/k0_confirm_signal.dart';
 import '../models/bar_crosshair_feature.dart';
 import '../models/k0_line.dart';
@@ -120,6 +122,8 @@ class KlineChart extends StatefulWidget {
     this.sell2HistoryByKn = const {},
     this.buyNHistoryByKn = const {},
     this.sellNHistoryByKn = const {},
+    this.bsVerdictHistoryByKn = const {},
+    this.overlayBsVerdictWrong = true,
     this.adjacentRatioHistoryByKn = const {},
     this.stepRhythmHistoryByKn = const {},
     this.lineSlopeHistoryByKn = const {},
@@ -195,6 +199,10 @@ class KlineChart extends StatefulWidget {
   final Map<int, List<BuyNFrame>> buyNHistoryByKn;
   /// 三类+卖会话事件日志
   final Map<int, List<SellNFrame>> sellNHistoryByKn;
+  /// BSP 在线对错会话
+  final Map<int, List<BsVerdictFrame>> bsVerdictHistoryByKn;
+  /// 错标叠加 X
+  final bool overlayBsVerdictWrong;
   /// Kn相邻比例会话历史（显示层 → 点列）
   final Map<int, List<AdjacentRatioPoint>> adjacentRatioHistoryByKn;
   /// Kn步进节奏会话历史
@@ -1411,6 +1419,8 @@ class _KlineChartState extends State<KlineChart> {
               sell2HistoryByKn: widget.sell2HistoryByKn,
               buyNHistoryByKn: widget.buyNHistoryByKn,
               sellNHistoryByKn: widget.sellNHistoryByKn,
+              bsVerdictHistoryByKn: widget.bsVerdictHistoryByKn,
+              overlayBsVerdictWrong: widget.overlayBsVerdictWrong,
               adjacentRatioHistoryByKn: widget.adjacentRatioHistoryByKn,
               stepRhythmHistoryByKn: widget.stepRhythmHistoryByKn,
               lineSlopeHistoryByKn: widget.lineSlopeHistoryByKn,
@@ -1699,6 +1709,8 @@ class _KlineCompositePainter extends CustomPainter {
     this.sell2HistoryByKn = const {},
     this.buyNHistoryByKn = const {},
     this.sellNHistoryByKn = const {},
+    this.bsVerdictHistoryByKn = const {},
+    this.overlayBsVerdictWrong = true,
     this.adjacentRatioHistoryByKn = const {},
     this.stepRhythmHistoryByKn = const {},
     this.lineSlopeHistoryByKn = const {},
@@ -1775,6 +1787,10 @@ class _KlineCompositePainter extends CustomPainter {
   final Map<int, List<BuyNFrame>> buyNHistoryByKn;
   /// 三类+卖会话事件日志
   final Map<int, List<SellNFrame>> sellNHistoryByKn;
+  /// BSP 在线对错会话
+  final Map<int, List<BsVerdictFrame>> bsVerdictHistoryByKn;
+  /// 错标叠加 X
+  final bool overlayBsVerdictWrong;
   /// Kn相邻比例会话历史
   final Map<int, List<AdjacentRatioPoint>> adjacentRatioHistoryByKn;
   /// Kn步进节奏会话历史
@@ -5078,6 +5094,38 @@ class _KlineCompositePainter extends CustomPainter {
           .where((e) => e.cls == cls)
           .toList();
 
+  bool _bsMarkIsWrong({
+    required int kn,
+    required String side,
+    required int cls,
+    required int segIdx,
+    required String label,
+  }) {
+    if (!overlayBsVerdictWrong) return false;
+    final asOf = segAsOf ?? (bars.isEmpty ? -1 : bars.last.idx);
+    final v = verdictAtAsOf(
+      bsVerdictHistoryForKn(bsVerdictHistoryByKn, kn),
+      level: kn,
+      side: side,
+      cls: cls,
+      segIdx: segIdx,
+      label: label,
+      asOf: asOf,
+    );
+    return v != null && v.isWrong;
+  }
+
+  void _paintWrongX(Canvas canvas, double cx, double y, double r) {
+    final p = Paint()
+      ..color = const Color(0xFFE53935)
+      ..strokeWidth = math.max(1.6, r * 0.42)
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+    final d = r * 0.95;
+    canvas.drawLine(Offset(cx - d, y - d), Offset(cx + d, y + d), p);
+    canvas.drawLine(Offset(cx + d, y - d), Offset(cx - d, y + d), p);
+  }
+
   /// 副图 Kn一类BS：扫会话历史；S 在上(+1)、B 在下(-1)；暖B冷S。
   /// 踩坑：只画「首次发现 x」不够——同动态 Kn 延伸步必须已在 history 里有本步 x。
   /// 注意：cx 不加 dx — BS标记必须与主图 K0 / 十字线严格对齐。
@@ -5113,6 +5161,7 @@ class _KlineCompositePainter extends CustomPainter {
       required double yMark,
       required Color color,
       required bool labelBelow,
+      bool wrong = false,
     }) {
       if (x < 0
        || x > maxX) return;
@@ -5120,6 +5169,7 @@ class _KlineCompositePainter extends CustomPainter {
       final cx = _barCenterX(x, w, slotW);
       final r = math.max(2.5, barW * 0.28);
       canvas.drawCircle(Offset(cx, yMark), r, Paint()..color = color);
+      if (wrong) _paintWrongX(canvas, cx, yMark, r);
       tp.text = TextSpan(
         text: label,
         style: TextStyle(
@@ -5140,6 +5190,13 @@ class _KlineCompositePainter extends CustomPainter {
         yMark: yBuy,
         color: buyColor,
         labelBelow: false,
+        wrong: _bsMarkIsWrong(
+          kn: kn,
+          side: 'B',
+          cls: 1,
+          segIdx: p.segIdx,
+          label: p.label,
+        ),
       );
     }
     for (final p in sellFrames) {
@@ -5149,6 +5206,13 @@ class _KlineCompositePainter extends CustomPainter {
         yMark: ySell,
         color: sellColor,
         labelBelow: true,
+        wrong: _bsMarkIsWrong(
+          kn: kn,
+          side: 'S',
+          cls: 1,
+          segIdx: p.segIdx,
+          label: p.label,
+        ),
       );
     }
   }
@@ -5185,12 +5249,14 @@ class _KlineCompositePainter extends CustomPainter {
       required double yMark,
       required Color color,
       required bool labelBelow,
+      bool wrong = false,
     }) {
       if (x < 0 || x > maxX) return;
       if (x < viewport.viewXMin - 1 || x > viewport.viewXMax + 1) return;
       final cx = _barCenterX(x, w, slotW);
       final r = math.max(2.5, barW * 0.28);
       canvas.drawCircle(Offset(cx, yMark), r, Paint()..color = color);
+      if (wrong) _paintWrongX(canvas, cx, yMark, r);
       tp.text = TextSpan(
         text: label,
         style: TextStyle(
@@ -5211,6 +5277,13 @@ class _KlineCompositePainter extends CustomPainter {
         yMark: yBuy,
         color: buyColor,
         labelBelow: false,
+        wrong: _bsMarkIsWrong(
+          kn: kn,
+          side: 'B',
+          cls: 2,
+          segIdx: p.segIdx,
+          label: p.label,
+        ),
       );
     }
     for (final p in sellFrames) {
@@ -5220,6 +5293,13 @@ class _KlineCompositePainter extends CustomPainter {
         yMark: ySell,
         color: sellColor,
         labelBelow: true,
+        wrong: _bsMarkIsWrong(
+          kn: kn,
+          side: 'S',
+          cls: 2,
+          segIdx: p.segIdx,
+          label: p.label,
+        ),
       );
     }
   }
@@ -5257,12 +5337,14 @@ class _KlineCompositePainter extends CustomPainter {
       required double yMark,
       required Color color,
       required bool labelBelow,
+      bool wrong = false,
     }) {
       if (x < 0 || x > maxX) return;
       if (x < viewport.viewXMin - 1 || x > viewport.viewXMax + 1) return;
       final cx = _barCenterX(x, w, slotW);
       final r = math.max(2.5, barW * 0.28);
       canvas.drawCircle(Offset(cx, yMark), r, Paint()..color = color);
+      if (wrong) _paintWrongX(canvas, cx, yMark, r);
       tp.text = TextSpan(
         text: label,
         style: TextStyle(
@@ -5283,6 +5365,13 @@ class _KlineCompositePainter extends CustomPainter {
         yMark: yBuy,
         color: buyColor,
         labelBelow: false,
+        wrong: _bsMarkIsWrong(
+          kn: kn,
+          side: 'B',
+          cls: cls,
+          segIdx: p.segIdx,
+          label: p.label,
+        ),
       );
     }
     for (final p in sellFrames) {
@@ -5292,6 +5381,13 @@ class _KlineCompositePainter extends CustomPainter {
         yMark: ySell,
         color: sellColor,
         labelBelow: true,
+        wrong: _bsMarkIsWrong(
+          kn: kn,
+          side: 'S',
+          cls: cls,
+          segIdx: p.segIdx,
+          label: p.label,
+        ),
       );
     }
   }
@@ -6009,6 +6105,8 @@ class _KlineCompositePainter extends CustomPainter {
         oldDelegate.sell2HistoryByKn != sell2HistoryByKn ||
         oldDelegate.buyNHistoryByKn != buyNHistoryByKn ||
         oldDelegate.sellNHistoryByKn != sellNHistoryByKn ||
+        oldDelegate.bsVerdictHistoryByKn != bsVerdictHistoryByKn ||
+        oldDelegate.overlayBsVerdictWrong != overlayBsVerdictWrong ||
         oldDelegate.adjacentRatioHistoryByKn != adjacentRatioHistoryByKn ||
         oldDelegate.stepRhythmHistoryByKn != stepRhythmHistoryByKn ||
         oldDelegate.lineSlopeHistoryByKn != lineSlopeHistoryByKn ||

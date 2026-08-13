@@ -43,6 +43,8 @@ pub struct PipelineDeltaStructure {
     pub sell2_k0_frames: Vec<Sell2Frame>,
     pub buy_n_k0_frames: Vec<BuyNFrame>,
     pub sell_n_k0_frames: Vec<SellNFrame>,
+    #[serde(default)]
+    pub bs_verdict_k0_frames: Vec<crate::bs_eval::BsVerdictFrame>,
 }
 
 /// 当步增量。JSON 扁平：`idx` + `bar_feature` + 结构字段（无历史 bar_features）。
@@ -92,6 +94,7 @@ fn structure_from_full(full: &KlineCombineBundle) -> PipelineDeltaStructure {
         sell2_k0_frames: full.sell2_k0_frames.clone(),
         buy_n_k0_frames: full.buy_n_k0_frames.clone(),
         sell_n_k0_frames: full.sell_n_k0_frames.clone(),
+        bs_verdict_k0_frames: full.bs_verdict_k0_frames.clone(),
     }
 }
 
@@ -114,6 +117,7 @@ fn apply_structure(acc: &mut KlineCombineBundle, s: PipelineDeltaStructure) {
     acc.sell2_k0_frames = s.sell2_k0_frames;
     acc.buy_n_k0_frames = s.buy_n_k0_frames;
     acc.sell_n_k0_frames = s.sell_n_k0_frames;
+    acc.bs_verdict_k0_frames = s.bs_verdict_k0_frames;
 }
 
 /// 把一步 Delta 打进累加仓。历史 `bar_features` 只追加，禁止回写旧行。

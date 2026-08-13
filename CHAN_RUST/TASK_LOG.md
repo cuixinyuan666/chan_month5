@@ -2,6 +2,18 @@
 
 > 口径/行为变更记录（复制排查用）；与 `lib/history/msg_history.dart` 常驻历史同步维护。
 
+## 2026-08-14 全类 BSP 在线对错（Pending/Correct/Wrong）
+
+- **需求**：对 CHAN_RUST 当前能产生的全部 BSP（1…n B / 1…n S）建立统一在线对错；不改 BSP 生成；K0…KN 同一 judge；无未来、终态冻结；供后续 ML label；副图错标可叠加 X（设置开关）。
+- **不变**：buy1/buy2/buy_n 判点规则、mark_x、会话双键冻结、旧 `ml_bsp_sample.isCorrect` 展望窗 α（隔离，不删）。
+- **语义（继承既有结构，不发明止盈止损）**：
+  - 全类成功/失败：后续 **已定型** 中枢 `zs_above_prev` / `zs_below_prev`（买上移成功、卖下移成功；镜像失败）。
+  - 一类/二类额外失败：同框严格新极值（一类破自身价；二类破当时 box 极值，不是 2B 自身价）。
+  - 三类+：代码无独立极值语义（同框全员打点），不套一类极值失败。
+- **变更**：`chan_data/src/bs_eval.rs`；`LevelBundleOut.bs_verdict_frames` + `bs_verdict_k0_frames`；pipeline/combine/delta；Flutter 接收冻结 + asOf + 设置「BSP对错叠加X」。
+- **验证**：`cargo test -p chan_data --lib bs_eval` 全过（全类 1..8 × 买卖 × Correct/Wrong × K0/K1/K2、冻结、无未来、不回写）。
+- **注意**：须重编并复制 `chan_ffi.dll` 后冷启；连续单步验收。
+
 ## 2026-08-13 PresentationCache 增量 Lookup（Phase 2B-3A）
 
 - **需求**：消除每步 `BarFeatureLookup.build` 全历史重建（N=2000 Lookup≈5.5s / 96%）；Painter 不得重复建 Lookup。

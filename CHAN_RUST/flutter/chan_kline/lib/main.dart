@@ -14,6 +14,7 @@ import 'compute/tick_dist_profile_compute.dart';
 import 'compute/class1_bs_compute.dart';
 import 'compute/class2_bs_compute.dart';
 import 'compute/class_n_bs_compute.dart';
+import 'compute/bs_verdict_compute.dart';
 import 'compute/fractal_judgment_compute.dart';
 import 'compute/zs_signal_compute.dart';
 import 'compute/k1_bar_view_compute.dart';
@@ -41,6 +42,7 @@ import 'models/buy2_frame.dart';
 import 'models/sell2_frame.dart';
 import 'models/buy_n_frame.dart';
 import 'models/sell_n_frame.dart';
+import 'models/bs_verdict_frame.dart';
 import 'models/kline_bar.dart';
 import 'models/k0_confirm_signal.dart';
 import 'models/bar_crosshair_feature.dart';
@@ -104,6 +106,7 @@ Future<void> main() async {
   MsgHistory.instance.appendBuy1AndZgZdCommonNaming();
   MsgHistory.instance.appendBuy2Class2Naming();
   MsgHistory.instance.appendBuyNClass3PlusNaming();
+  MsgHistory.instance.appendBsOnlineVerdict();
   MsgHistory.instance.appendPipelineStateSession();
   MsgHistory.instance.appendIncrementalLookup();
   // Kn相邻比例 + Kn步进节奏（节奏已迁主图）
@@ -295,6 +298,11 @@ class _KlineHomePageState extends State<KlineHomePage> {
   /// 三类+BS 会话历史（链升类；双键冻结同构）。
   Map<int, List<BuyNFrame>> _buyNHistoryByKn = {};
   Map<int, List<SellNFrame>> _sellNHistoryByKn = {};
+
+  /// BSP 在线对错（Rust 唯一源；Flutter 只冻/展示）
+  Map<int, List<BsVerdictFrame>> _bsVerdictHistoryByKn = {};
+  /// 副图 Kn类BS 错标叠加 X；对的不叠加
+  bool _overlayBsVerdictWrong = true;
 
   /// Kn相邻比例会话历史（按显示层；换股/重载清空）。
   Map<int, List<AdjacentRatioPoint>> _adjacentRatioHistoryByKn = {};
@@ -667,6 +675,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _sell2HistoryByKn.clear();
         _buyNHistoryByKn.clear();
         _sellNHistoryByKn.clear();
+        _bsVerdictHistoryByKn.clear();
         _adjacentRatioHistoryByKn.clear();
         _lineSlopeHistoryByKn.clear();
         _stepRhythmHistoryByKn.clear();
@@ -749,6 +758,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _sell2HistoryByKn.clear();
         _buyNHistoryByKn.clear();
         _sellNHistoryByKn.clear();
+        _bsVerdictHistoryByKn.clear();
         _adjacentRatioHistoryByKn.clear();
         _lineSlopeHistoryByKn.clear();
         _stepRhythmHistoryByKn.clear();
@@ -931,6 +941,15 @@ class _KlineHomePageState extends State<KlineHomePage> {
     _sell2HistoryByKn = nextSell2;
     _buyNHistoryByKn = nextBuyN;
     _sellNHistoryByKn = nextSellN;
+    final nextVerdict = <int, List<BsVerdictFrame>>{
+      for (final e in _bsVerdictHistoryByKn.entries)
+        e.key: List<BsVerdictFrame>.from(e.value),
+    };
+    for (final e in collectBsVerdictByKn(bundle).entries) {
+      final log = nextVerdict.putIfAbsent(e.key, () => <BsVerdictFrame>[]);
+      mergeBsVerdictLog(log, e.value);
+    }
+    _bsVerdictHistoryByKn = nextVerdict;
   }
 
   /// 本步相邻比例 + 步进节奏 + 连线斜率并入会话（全层；禁止整表覆盖消点）。
@@ -1039,10 +1058,14 @@ class _KlineHomePageState extends State<KlineHomePage> {
       buy2HistoryByKn: _buy2HistoryByKn,
       sell2HistoryByKn: _sell2HistoryByKn,
     );
-    return levelsWithFrozenClassNBs(
+    final withN = levelsWithFrozenClassNBs(
       with2,
       buyNHistoryByKn: _buyNHistoryByKn,
       sellNHistoryByKn: _sellNHistoryByKn,
+    );
+    return levelsWithFrozenBsVerdict(
+      withN,
+      historyByKn: _bsVerdictHistoryByKn,
     );
   }
 
@@ -1075,6 +1098,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _sell2HistoryByKn.clear();
         _buyNHistoryByKn.clear();
         _sellNHistoryByKn.clear();
+        _bsVerdictHistoryByKn.clear();
         _adjacentRatioHistoryByKn.clear();
         _lineSlopeHistoryByKn.clear();
         _stepRhythmHistoryByKn.clear();
@@ -1753,6 +1777,32 @@ class _KlineHomePageState extends State<KlineHomePage> {
           ),
         ),
         const SizedBox(height: 8),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          dense: true,
+          title: const Text('BSP对错叠加X', style: TextStyle(fontSize: 13)),
+          subtitle: Text(
+            _overlayBsVerdictWrong
+                ? '已开启（错标叠加X，对的不叠加）'
+                : '已关闭（只显示原 Kn类BS 标记）',
+            style: const TextStyle(fontSize: 11),
+          ),
+          value: _overlayBsVerdictWrong,
+          onChanged: _busy
+              ? null
+              : (v) {
+                  setState(() {
+                    _overlayBsVerdictWrong = v;
+                  });
+                  _msgHistory.append('BSP对错叠加X=${v ? "开" : "关"}');
+                },
+          secondary: IconButton(
+            tooltip: 'BSP对错叠加说明',
+            icon: const Icon(Icons.help_outline, size: 18),
+            onPressed: _showBsVerdictOverlayHelp,
+          ),
+        ),
+        const SizedBox(height: 8),
         // 筹码分布：总开关 + 峰线；桶宽/拉伸见说明弹窗（已迁设置·仅K0，不参与主图指标勾选）
         ListTile(
           contentPadding: EdgeInsets.zero,
@@ -1966,6 +2016,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
       sell2HistoryByKn: _sell2HistoryByKn,
       buyNHistoryByKn: _buyNHistoryByKn,
       sellNHistoryByKn: _sellNHistoryByKn,
+      bsVerdictHistoryByKn: _bsVerdictHistoryByKn,
+      overlayBsVerdictWrong: _overlayBsVerdictWrong,
       adjacentRatioHistoryByKn: _adjacentRatioHistoryByKn,
       stepRhythmHistoryByKn: _stepRhythmHistoryByKn,
       lineSlopeHistoryByKn: _lineSlopeHistoryByKn,
@@ -2477,6 +2529,53 @@ class _KlineHomePageState extends State<KlineHomePage> {
             '1. 打开右上角设置；\n'
             '2. 拨动「构建中/未确认虚线」开关；\n'
             '3. 当前图表立刻按开关刷新（无需重算步进）。',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('知道了'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showBsVerdictOverlayHelp() {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('BSP对错叠加X说明'),
+        content: const SingleChildScrollView(
+          child: Text(
+            '作用：在原 Kn类BS 副图标记处叠加在线对错结果。\n\n'
+            '评判源\n'
+            '· 只使用 Rust 输出的 bs_verdict（Pending/Correct/Wrong）；\n'
+            '· Flutter 不重新判断对错，只接收、冻结、按十字 asOf 展示。\n\n'
+            '覆盖范围\n'
+            '· 当前项目全部 BSP 类别：1B/2B/…/nB 与 1S/2S/…/nS；\n'
+            '· K0…KN 同一套 judge；原 BSP 的 x/价格/标签不被改写。\n\n'
+            '叠加规则\n'
+            '· 对（Correct）或尚未判定（Pending）：不叠加，保持原标记；\n'
+            '· 错（Wrong）：在原标记圆心叠加一个 X。\n'
+            '· 十字 asOf=X 时，只展示 verdict_x≤X 的终态；提前于评判步仍显示 Pending。\n\n'
+            '与旧 ML α\n'
+            '· 旧 isCorrect 仍是展望窗离线标签，不是本开关的事实源。\n\n'
+            '操作步骤\n'
+            '1. 打开右上角设置；\n'
+            '2. 拨动「BSP对错叠加X」；\n'
+            '3. 图表立刻刷新（无需重算步进）。须连续单步验收，一键跳末≠步进验收。',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('知道了'),
+          ),
+        ],
+      ),
+    );
+  }
           ),
         ),
         actions: [

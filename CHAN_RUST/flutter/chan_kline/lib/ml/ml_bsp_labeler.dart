@@ -9,6 +9,7 @@ import 'ml_label_config.dart';
 
 /// α label：发现后固定展望窗内，用**当时** live 一类帧 + asOf 截断极值判定。
 /// 禁止用全样本跳末末态回标。
+/// 这是旧离线 ML 标签路径，不是 Rust 在线 `BsVerdict`（Pending/Correct/Wrong）事实源。
 class MlBspLabeler {
   MlBspLabeler._();
 

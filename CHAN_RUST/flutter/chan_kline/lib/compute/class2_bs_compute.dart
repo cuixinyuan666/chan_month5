@@ -168,6 +168,7 @@ List<LevelBundle> levelsWithFrozenClass2Bs(
           sell2Frames: sell2HistoryByKn[lv.level + 1] ?? lv.sell2Frames,
           buyNFrames: lv.buyNFrames,
           sellNFrames: lv.sellNFrames,
+          bsVerdictFrames: lv.bsVerdictFrames,
           firstDir: lv.firstDir,
           firstDirX: lv.firstDirX,
           activeUnit: lv.activeUnit,

@@ -258,6 +258,9 @@ pub struct LevelBundleOut {
     /// 本层三类+卖（买镜像）
     #[serde(default)]
     pub sell_n_frames: Vec<crate::buy_n::SellNFrame>,
+    /// 本层 BSP 在线评判（独立于原 BSP 帧；Pending/Correct/Wrong）
+    #[serde(default)]
+    pub bs_verdict_frames: Vec<crate::bs_eval::BsVerdictFrame>,
     /// 首 N 段方向：0 未定
     pub first_dir: i32,
     pub first_dir_x: i32,
@@ -520,6 +523,8 @@ struct LevelState {
     /// 二类买/卖 x 冻结
     frozen_buy2_x: HashMap<i64, i32>,
     frozen_sell2_x: HashMap<i64, i32>,
+    /// 本层 BSP verdict 终态冻结（跨步；不回写 BSP）
+    verdict_store: HashMap<String, crate::bs_eval::BsVerdictFrame>,
 }
 
 /// 有效性校验：顶极值 > 底极值（最低限度，可配置关闭）
@@ -563,6 +568,7 @@ impl LevelState {
             frozen_sell1_x: HashMap::new(),
             frozen_buy2_x: HashMap::new(),
             frozen_sell2_x: HashMap::new(),
+            verdict_store: HashMap::new(),
         }
     }
 
@@ -1275,6 +1281,33 @@ impl LevelState {
         for f in &mut sell2_frames {
             f.x = *self.frozen_sell2_x.entry(f.seg_idx).or_insert(f.x);
         }
+        let buy_n_frames = crate::buy_n::find_buy_n_with_active(
+            &zs_list,
+            &segs_for_zs,
+            display_zs_level,
+            active_idx,
+        );
+        let sell_n_frames = crate::buy_n::find_sell_n_with_active(
+            &zs_list,
+            &segs_for_zs,
+            display_zs_level,
+            active_idx,
+        );
+        // 在线 verdict：不改 BSP；asof=已喂入末根；与 K0 同一 judge_frames
+        let asof = bars.last().map(|b| b.idx).unwrap_or(-1);
+        let bs_verdict_frames = crate::bs_eval::judge_frames(
+            asof,
+            &zs_list,
+            &segs_for_zs,
+            &buy1_frames,
+            &sell1_frames,
+            &buy2_frames,
+            &sell2_frames,
+            &buy_n_frames,
+            &sell_n_frames,
+            &mut self.verdict_store,
+            active_idx,
+        );
         LevelBundleOut {
             level: self.level,
             confirms: self.confirms.clone(),
@@ -1286,18 +1319,9 @@ impl LevelState {
             sell1_frames,
             buy2_frames,
             sell2_frames,
-            buy_n_frames: crate::buy_n::find_buy_n_with_active(
-                &zs_list,
-                &segs_for_zs,
-                display_zs_level,
-                active_idx,
-            ),
-            sell_n_frames: crate::buy_n::find_sell_n_with_active(
-                &zs_list,
-                &segs_for_zs,
-                display_zs_level,
-                active_idx,
-            ),
+            buy_n_frames,
+            sell_n_frames,
+            bs_verdict_frames,
             first_dir: self.first_dir,
             first_dir_x: self.first_dir_x,
             active_unit,
@@ -1428,23 +1452,45 @@ pub(crate) struct K0ZsBsFrames {
     pub sell2: Vec<crate::buy2::Sell2Frame>,
     pub buy_n: Vec<crate::buy_n::BuyNFrame>,
     pub sell_n: Vec<crate::buy_n::SellNFrame>,
+    pub bs_verdict: Vec<crate::bs_eval::BsVerdictFrame>,
 }
 
 /// 原生分钟 K 上算 K0 中枢+六路 BS（判定函数本身不改；只统一出口）
 pub(crate) fn compute_k0_zs_bs(bars: &[KlineBar], zs_cfg: &ZSConfig) -> K0ZsBsFrames {
+    let mut store = HashMap::new();
+    compute_k0_zs_bs_with_store(bars, zs_cfg, &mut store)
+}
+
+/// K0 中枢/BS + 在线 verdict（store 跨步冻结终态；不改 BSP）
+pub(crate) fn compute_k0_zs_bs_with_store(
+    bars: &[KlineBar],
+    zs_cfg: &ZSConfig,
+    store: &mut HashMap<String, crate::bs_eval::BsVerdictFrame>,
+) -> K0ZsBsFrames {
     if bars.is_empty() {
         return K0ZsBsFrames::default();
     }
     let segs = k0_bars_to_segments(bars);
     let zs_list = crate::zs::find_zs(&segs, 0, zs_cfg);
+    let buy1 = crate::buy1::find_buy1(&zs_list, &segs, 0);
+    let sell1 = crate::buy1::find_sell1(&zs_list, &segs, 0);
+    let buy2 = crate::buy2::find_buy2(&zs_list, &segs, 0);
+    let sell2 = crate::buy2::find_sell2(&zs_list, &segs, 0);
+    let buy_n = crate::buy_n::find_buy_n(&zs_list, &segs, 0);
+    let sell_n = crate::buy_n::find_sell_n(&zs_list, &segs, 0);
+    let asof = bars.last().map(|b| b.idx).unwrap_or(-1);
+    let bs_verdict = crate::bs_eval::judge_frames(
+        asof, &zs_list, &segs, &buy1, &sell1, &buy2, &sell2, &buy_n, &sell_n, store, None,
+    );
     K0ZsBsFrames {
         zs: crate::zs::zs_frames_from_list(&zs_list, &segs, 0),
-        buy1: crate::buy1::find_buy1(&zs_list, &segs, 0),
-        sell1: crate::buy1::find_sell1(&zs_list, &segs, 0),
-        buy2: crate::buy2::find_buy2(&zs_list, &segs, 0),
-        sell2: crate::buy2::find_sell2(&zs_list, &segs, 0),
-        buy_n: crate::buy_n::find_buy_n(&zs_list, &segs, 0),
-        sell_n: crate::buy_n::find_sell_n(&zs_list, &segs, 0),
+        buy1,
+        sell1,
+        buy2,
+        sell2,
+        buy_n,
+        sell_n,
+        bs_verdict,
     }
 }
 
@@ -1456,13 +1502,14 @@ fn collect_k0_struct_hits(
     zs_cfg: &ZSConfig,
     frozen_buy1_x: &mut HashMap<i64, i32>,
     frozen_sell1_x: &mut HashMap<i64, i32>,
+    verdict_store: &mut HashMap<String, crate::bs_eval::BsVerdictFrame>,
 ) -> (Vec<BarZsHit>, Vec<BarBs1Hit>, K0ZsBsFrames) {
     if bars.is_empty() || bar_x < 0 {
         return (Vec::new(), Vec::new(), K0ZsBsFrames::default());
     }
     let end = (bar_x as usize).min(bars.len() - 1);
     let prefix = &bars[..=end];
-    let frames = compute_k0_zs_bs(prefix, zs_cfg);
+    let frames = compute_k0_zs_bs_with_store(prefix, zs_cfg, verdict_store);
     let mut buy1 = frames.buy1.clone();
     let mut sell1 = frames.sell1.clone();
     for f in &mut buy1 {
@@ -1528,6 +1575,8 @@ pub struct PipelineState {
     /// K0 一类 BS discovery x 冻结（与结构层同语义）
     k0_frozen_buy1_x: HashMap<i64, i32>,
     k0_frozen_sell1_x: HashMap<i64, i32>,
+    /// K0 BSP verdict 终态冻结
+    k0_verdict_store: HashMap<String, crate::bs_eval::BsVerdictFrame>,
 }
 
 impl PipelineState {
@@ -1545,6 +1594,7 @@ impl PipelineState {
             k0_zs_bs: K0ZsBsFrames::default(),
             k0_frozen_buy1_x: HashMap::new(),
             k0_frozen_sell1_x: HashMap::new(),
+            k0_verdict_store: HashMap::new(),
         }
     }
 
@@ -1664,6 +1714,7 @@ impl PipelineState {
             &self.opt.zs_config,
             &mut self.k0_frozen_buy1_x,
             &mut self.k0_frozen_sell1_x,
+            &mut self.k0_verdict_store,
         );
         self.k0_zs_bs = k0_frames;
         zs_hits.extend(z0);
@@ -1777,6 +1828,7 @@ pub fn run_pipeline(bars: &[KlineBar], opt: &PipelineOptions) -> PipelineResult 
     // K0 一类 BS discovery x 冻结（与结构层同语义）
     let mut k0_frozen_buy1_x: HashMap<i64, i32> = HashMap::new();
     let mut k0_frozen_sell1_x: HashMap<i64, i32> = HashMap::new();
+    let mut k0_verdict_store: HashMap<String, crate::bs_eval::BsVerdictFrame> = HashMap::new();
 
     for (i, bar) in bars.iter().enumerate() {
         let bar_x = i as i32;
@@ -1854,6 +1906,7 @@ pub fn run_pipeline(bars: &[KlineBar], opt: &PipelineOptions) -> PipelineResult 
             &opt.zs_config,
             &mut k0_frozen_buy1_x,
             &mut k0_frozen_sell1_x,
+            &mut k0_verdict_store,
         );
         zs_hits.extend(z0);
         bs1_hits.extend(b0);

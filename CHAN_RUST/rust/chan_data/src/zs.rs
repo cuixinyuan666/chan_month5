@@ -507,6 +507,7 @@ mod tests {
             sell2_frames: vec![],
             buy_n_frames: vec![],
             sell_n_frames: vec![],
+            bs_verdict_frames: vec![],
             first_dir: 0,
             first_dir_x: 0,
             active_unit: None,

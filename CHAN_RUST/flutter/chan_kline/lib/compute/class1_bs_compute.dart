@@ -171,6 +171,7 @@ List<LevelBundle> levelsWithFrozenClass1Bs(
           sell2Frames: lv.sell2Frames,
           buyNFrames: lv.buyNFrames,
           sellNFrames: lv.sellNFrames,
+          bsVerdictFrames: lv.bsVerdictFrames,
           firstDir: lv.firstDir,
           firstDirX: lv.firstDirX,
           activeUnit: lv.activeUnit,

@@ -117,6 +117,9 @@ pub struct KlineCombineBundle {
     /// K0三类+卖（买镜像）
     #[serde(default)]
     pub sell_n_k0_frames: Vec<SellNFrame>,
+    /// K0 BSP 在线评判（独立于原 BSP）
+    #[serde(default)]
+    pub bs_verdict_k0_frames: Vec<crate::bs_eval::BsVerdictFrame>,
 }
 
 fn default_k0_policy_pending() -> String {
@@ -146,6 +149,7 @@ impl KlineCombineBundle {
             sell2_k0_frames: Vec::new(),
             buy_n_k0_frames: Vec::new(),
             sell_n_k0_frames: Vec::new(),
+            bs_verdict_k0_frames: Vec::new(),
         }
     }
 }
@@ -547,6 +551,7 @@ fn build_kline_combine_bundle_from_pipeline_parts(
         sell2_k0_frames: k0.sell2,
         buy_n_k0_frames: k0.buy_n,
         sell_n_k0_frames: k0.sell_n,
+        bs_verdict_k0_frames: k0.bs_verdict,
     }
 }
 
