@@ -2,9 +2,12 @@
 //!
 //! BSP 本身是永久事件；本模块只派生 Pending/Correct/Wrong，不改原始 x/price/label。
 //! 类号从 BSP 自身 label/cls 解析，不写死 1/2/3。
-//! 成功/失败只继承现有结构谓词：zs_above_prev / zs_below_prev，以及
-//! 一类/二类同框「严格新极值复位」口径；三类+无独立极值语义，只走中枢升降。
+//! 成功/失败是 BSP 之后第一个明确的顺向/反向结构事件（不要求必须等新中枢定型）：
+//!   1) 后续非本框成员段相对本框 ZG/ZD 的离开（全类都有失败路径）
+//!   2) 后续已定型中枢 zs_above_prev / zs_below_prev（事件之一，非唯一判据）
+//!   3) 一类/二类另继承同框严格新极值复位；三类+仍是全员打点，不套极值失败
 //! 无未来：只使用 asof 已可见的 ZS/seg。终态冻结：Pending→Correct|Wrong 后忽略冲突。
+//! 同 x 同时命中成功/失败：成功优先（apply_hits）。不同 x：取最早事件。
 
 use std::collections::HashMap;
 
@@ -381,7 +384,7 @@ fn judge_one(
         }
     };
 
-    // 1/2 类：同框严格新极值（与 buy1/buy2 复位口径同源）。三类+同框全员打点，无此失败语义。
+    // 一类/二类同框保护极值（buy1/buy2 生成语义）。三类+是全员打点，不套此失败。
     if ev.cls <= 2 {
         let protective = if ev.cls == 1 {
             Some(ev.price)
@@ -425,7 +428,65 @@ fn judge_one(
         }
     }
 
-    // 全类统一：后续已定型中枢整体上/下移（继承 zs_above_prev / zs_below_prev）。
+    // 全类：后续非本框成员段相对本框 ZG/ZD 的离开。不要求新 ZS 已形成/定型。
+    // 买：升破 ZG=顺向确认，跌破 ZD=反向证伪；卖镜像。本框延伸成员不是离开。
+    let member_set: std::collections::HashSet<usize> =
+        this_zs.member_segs.iter().copied().collect();
+    for (si, s) in segs.iter().enumerate() {
+        if member_set.contains(&si) {
+            continue;
+        }
+        let hx = seg_known_x(s);
+        if hx <= ev.x || hx > asof {
+            continue;
+        }
+        let above = s.high > this_zs.zg && !approx_eq(s.high, this_zs.zg);
+        let below = s.low < this_zs.zd && !approx_eq(s.low, this_zs.zd);
+        match ev.side {
+            BsSide::Buy => {
+                if above {
+                    bump_ok(
+                        &mut success,
+                        Hit {
+                            x: hx.max(ev.x),
+                            reason: "leave_above_zg".to_string(),
+                        },
+                    );
+                }
+                if below {
+                    bump_ok(
+                        &mut failure,
+                        Hit {
+                            x: hx.max(ev.x),
+                            reason: "leave_below_zd".to_string(),
+                        },
+                    );
+                }
+            }
+            BsSide::Sell => {
+                if below {
+                    bump_ok(
+                        &mut success,
+                        Hit {
+                            x: hx.max(ev.x),
+                            reason: "leave_below_zd".to_string(),
+                        },
+                    );
+                }
+                if above {
+                    bump_ok(
+                        &mut failure,
+                        Hit {
+                            x: hx.max(ev.x),
+                            reason: "leave_above_zg".to_string(),
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    // 全类：后续已定型中枢整体上/下移（事件之一；继承 zs_above_prev / zs_below_prev）。
     for later in zs_list.iter().skip(zi + 1) {
         if !later.is_sure {
             continue;
@@ -763,7 +824,8 @@ mod tests {
         let e = ev_buy(1, 'a', 1, 10, 4.0, 1, 0);
         let v = judge_bsp(40, &zs, &segs, &[e], None);
         assert_eq!(v[0].state, "correct");
-        assert_eq!(v[0].confirm_x, Some(40));
+        assert_eq!(v[0].confirm_x, Some(30)); // 非本框升破 ZG，早于后续 ZS 定型 x=40
+        assert_eq!(v[0].reason, "leave_above_zg");
         assert!(v[0].confirm_x.unwrap() >= v[0].bsp_x);
         assert_eq!(v[0].bsp_x, 10);
         assert_eq!(v[0].price, 4.0);
@@ -776,7 +838,8 @@ mod tests {
         let e = ev_buy(1, 'a', 1, 10, 4.0, 1, 0);
         let v = judge_bsp(40, &zs, &segs, &[e], None);
         assert_eq!(v[0].state, "wrong");
-        assert_eq!(v[0].invalid_x, Some(40));
+        assert_eq!(v[0].invalid_x, Some(30)); // 非本框跌破 ZD，早于后续 ZS 定型 x=40
+        assert_eq!(v[0].reason, "leave_below_zd");
     }
 
     #[test]
@@ -821,7 +884,7 @@ mod tests {
         assert_eq!(v1[0].state, "correct");
         let v2 = judge_level(60, &zs, &segs, &[e], &mut store, None);
         assert_eq!(v2[0].state, "correct");
-        assert_eq!(v2[0].confirm_x, Some(40));
+        assert_eq!(v2[0].confirm_x, Some(30));
     }
 
     #[test]
@@ -847,7 +910,7 @@ mod tests {
         assert_eq!(v1[0].state, "wrong");
         let v2 = judge_level(60, &zs, &segs, &[e], &mut store, None);
         assert_eq!(v2[0].state, "wrong");
-        assert_eq!(v2[0].invalid_x, Some(40));
+        assert_eq!(v2[0].invalid_x, Some(30));
     }
 
     #[test]
@@ -897,7 +960,8 @@ mod tests {
         let e = ev_sell(1, 'a', 1, 10, 30.0, 1, 0);
         let v = judge_bsp(40, &zs, &segs, &[e], None);
         assert_eq!(v[0].state, "correct");
-        assert_eq!(v[0].reason, "later_zs_below");
+        assert_eq!(v[0].reason, "leave_below_zd");
+        assert_eq!(v[0].confirm_x, Some(30));
     }
 
     #[test]
@@ -1100,6 +1164,35 @@ mod tests {
         assert!(evs.iter().any(|e| e.cls == 7 && e.side == BsSide::Sell));
     }
 
+    fn load_002003_m1() -> Vec<crate::kline::KlineBar> {
+        let data_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../a_Data");
+        assert!(data_root.join("002003").exists(), "a_Data/002003 missing");
+        let root = crate::resolve_data_root(Some(data_root.to_str().unwrap()));
+        crate::load_klines(
+            &root,
+            "002003",
+            "2004/07/19 10:47:00",
+            "2004/07/20 13:09:00",
+            crate::KlinePeriod::M1,
+        )
+        .expect("load 002003")
+    }
+
+    fn k0_verdict_at(
+        bars: &[crate::kline::KlineBar],
+        asof: usize,
+        label: &str,
+        bsp_x: i32,
+    ) -> BsVerdictFrame {
+        use crate::combine::build_kline_combine_bundle;
+        let bundle = build_kline_combine_bundle(&bars[..=asof]);
+        bundle
+            .bs_verdict_k0_frames
+            .into_iter()
+            .find(|v| v.label == label && v.bsp_x == bsp_x)
+            .unwrap_or_else(|| panic!("missing {label} bsp_x={bsp_x} at asof={asof}"))
+    }
+
     #[test]
     fn stepwise_matches_truncated_prefix() {
         let (segs, zs) = chain_buy_zs(true);
@@ -1112,5 +1205,133 @@ mod tests {
             assert_eq!(last[0].state, fresh[0].state, "asof={asof}");
         }
         assert_eq!(last[0].state, "correct");
+    }
+
+    /// 强制验收：002003 1min K0 idx=12 的 4Sa，首次证伪在升破本框 ZG 的 step=17。
+    #[test]
+    fn k0_1min_idx12_4sa_wrong_at_17() {
+        let bars = load_002003_m1();
+        assert!(bars.len() > 17);
+        for asof in 12..17 {
+            let v = k0_verdict_at(&bars, asof, "4Sa", 12);
+            assert_eq!(v.state, "pending", "asof={asof} must not be Wrong yet");
+            assert!(v.invalid_x.is_none());
+        }
+        let at17 = k0_verdict_at(&bars, 17, "4Sa", 12);
+        assert_eq!(at17.state, "wrong");
+        assert_eq!(at17.invalid_x, Some(17));
+        assert_eq!(at17.reason, "leave_above_zg");
+        assert!(at17.invalid_x.unwrap() >= at17.bsp_x);
+        for asof in [18usize, 20, 40, bars.len() - 1] {
+            let v = k0_verdict_at(&bars, asof, "4Sa", 12);
+            assert_eq!(v.state, "wrong", "asof={asof} must stay Wrong");
+            assert_eq!(v.invalid_x, Some(17));
+        }
+    }
+
+    /// 强制验收：同窗 1Ba@12，同框新低 11.68 在 step=14 首次证伪。
+    #[test]
+    fn k0_1min_idx12_1ba_wrong_at_14() {
+        let bars = load_002003_m1();
+        assert!(bars.len() > 14);
+        for asof in 12..14 {
+            let v = k0_verdict_at(&bars, asof, "1Ba", 12);
+            assert_eq!(v.state, "pending", "asof={asof} must not be Wrong yet");
+        }
+        let at14 = k0_verdict_at(&bars, 14, "1Ba", 12);
+        assert_eq!(at14.state, "wrong");
+        assert_eq!(at14.invalid_x, Some(14));
+        assert_eq!(at14.reason, "same_zs_new_extreme");
+        let at_end = k0_verdict_at(&bars, bars.len() - 1, "1Ba", 12);
+        assert_eq!(at_end.state, "wrong");
+        assert_eq!(at_end.invalid_x, Some(14));
+    }
+
+    /// 三类+：尚未形成后续 ZS，但非本框成员已反向离开 ZG/ZD → 立即 Wrong。
+    #[test]
+    fn class_n_reverse_leave_is_failure() {
+        let segs = vec![
+            mk_seg(0, 1, 30.0, 20.0, 0),
+            mk_seg(1, -1, 10.0, 4.0, 10),
+            mk_seg(2, 1, 9.0, 5.0, 20),
+            mk_seg(3, 1, 18.0, 12.0, 30), // 3Ba 所在框
+            mk_seg(4, -1, 10.0, 8.0, 35), // 非本框：跌破 zd=11
+        ];
+        let zs = vec![
+            mk_zs(25.0, 18.0, vec![0], true),
+            mk_zs(8.0, 2.0, vec![1, 2], true),
+            mk_zs(16.0, 11.0, vec![3], true),
+        ];
+        let e = ev_buy(3, 'a', 3, 30, 12.0, 2, 0);
+        let v_early = judge_bsp(30, &zs, &segs, &[e.clone()], None);
+        assert_eq!(v_early[0].state, "pending");
+        let v = judge_bsp(35, &zs, &segs, &[e], None);
+        assert_eq!(v[0].state, "wrong");
+        assert_eq!(v[0].invalid_x, Some(35));
+        assert_eq!(v[0].reason, "leave_below_zd");
+    }
+
+    #[test]
+    fn class_n_sell_reverse_leave_is_failure() {
+        let segs = vec![
+            mk_seg(0, -1, 10.0, 4.0, 0),
+            mk_seg(1, 1, 30.0, 20.0, 10),
+            mk_seg(2, -1, 12.0, 6.0, 20),
+            mk_seg(3, 1, 11.0, 7.0, 25),
+            mk_seg(4, 1, 18.0, 13.0, 30), // 非本框：升破 zg=12
+        ];
+        let zs = vec![
+            mk_zs(8.0, 2.0, vec![0], true),
+            mk_zs(28.0, 18.0, vec![1], true),
+            mk_zs(12.0, 5.0, vec![2, 3], true),
+        ];
+        let e = ev_sell(3, 'a', 2, 20, 12.0, 2, 0);
+        let v = judge_bsp(30, &zs, &segs, &[e], None);
+        assert_eq!(v[0].state, "wrong");
+        assert_eq!(v[0].invalid_x, Some(30));
+        assert_eq!(v[0].reason, "leave_above_zg");
+    }
+
+    /// 成功事件更晚、失败事件更早 → 取最早失败。
+    #[test]
+    fn earliest_failure_beats_later_success() {
+        let segs = vec![
+            mk_seg(0, 1, 30.0, 20.0, 0),
+            mk_seg(1, -1, 10.0, 4.0, 10),
+            mk_seg(2, 1, 9.0, 5.0, 20),
+            mk_seg(3, -1, 6.0, 2.0, 25), // 同框新低 → 失败
+            mk_seg(4, 1, 18.0, 12.0, 30),
+            mk_seg(5, -1, 17.0, 13.0, 40), // 后续上移 ZS → 成功更晚
+        ];
+        let zs = vec![
+            mk_zs(25.0, 18.0, vec![0], true),
+            mk_zs(8.0, 2.0, vec![1, 2, 3], true),
+            mk_zs(16.0, 11.0, vec![4, 5], true),
+        ];
+        let e = ev_buy(1, 'a', 1, 10, 4.0, 1, 0);
+        let v = judge_bsp(40, &zs, &segs, &[e], None);
+        assert_eq!(v[0].state, "wrong");
+        assert_eq!(v[0].invalid_x, Some(25));
+        assert!(v[0].confirm_x.is_none());
+    }
+
+    /// 同一 x 同时命中成功/失败：成功优先（与 apply_hits 单调状态机一致）。
+    #[test]
+    fn same_x_success_and_failure_picks_correct() {
+        let segs = vec![
+            mk_seg(0, 1, 30.0, 20.0, 0),
+            mk_seg(1, -1, 10.0, 4.0, 10),
+            mk_seg(2, 1, 9.0, 5.0, 20),
+            mk_seg(3, 1, 18.0, 1.0, 30), // 同时升破 zg=8 且跌破 zd=2
+        ];
+        let zs = vec![
+            mk_zs(25.0, 18.0, vec![0], true),
+            mk_zs(8.0, 2.0, vec![1, 2], true),
+        ];
+        let e = ev_buy(1, 'a', 1, 10, 4.0, 1, 0);
+        let v = judge_bsp(30, &zs, &segs, &[e], None);
+        assert_eq!(v[0].state, "correct");
+        assert_eq!(v[0].confirm_x, Some(30));
+        assert_eq!(v[0].reason, "leave_above_zg");
     }
 }

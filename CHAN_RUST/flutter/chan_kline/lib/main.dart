@@ -2576,17 +2576,6 @@ class _KlineHomePageState extends State<KlineHomePage> {
       ),
     );
   }
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('知道了'),
-          ),
-        ],
-      ),
-    );
-  }
 
   /// 筹码分布说明弹窗。
   void _showChipHelp() {

@@ -512,12 +512,15 @@ class MsgHistory {
       '【新增·全类BSP在线对错·全层同构】覆盖当前全部类别 1B…nB / 1S…nS（类号从 label/cls 解析，不写死1/2/3）。'
       'Rust bs_eval 是唯一评判源：judge_level 对 K0…KN 同一入口。'
       'BSP 永久事件不改 x/price/seg/label；verdict 独立 Pending→Correct|Wrong 后冻结。'
-      '成功/失败继承既有结构：后续定型中枢 zs_above_prev/zs_below_prev（买卖镜像）；'
-      '一类/二类另继承同框严格新极值复位；三类+无独立极值失败语义（生成是全员打点）。'
-      '无未来：只使用 asof 已见 ZS/seg；verdict_x≥bsp_x。'
+      '对错=BSP之后第一个明确顺向确认或反向证伪事件（不要求必须等新中枢定型）。'
+      '全类事件：非本框成员段相对本框 ZG/ZD 离开（买升破ZG=对、跌破ZD=错；卖镜像）；'
+      '后续已定型中枢 zs_above_prev/zs_below_prev 仍是事件之一。'
+      '一类/二类另继承同框严格新极值复位；三类+全员打点不套极值失败，但反向离开仍立即 Wrong。'
+      '同x同时命中成功/失败：成功优先；不同x取最早。无未来：只使用 asof 已见结构；verdict_x≥bsp_x。'
       'JSON：bs_verdict_k0_frames、levels[].bs_verdict_frames。'
       '旧 ml_bsp_sample.isCorrect 仍是展望窗离线 α，不是在线 verdict。'
       'Flutter 只接收/冻结/asOf 过滤；设置「BSP对错叠加X」：错标叠加X，对的不叠加。'
+      '强制验收：002003 1min K0 idx=12 → 4Sa.invalid_x=17（leave_above_zg）、1Ba.invalid_x=14（same_zs_new_extreme）。'
       '须重编 chan_ffi.dll；冷启动连续单步验收。',
     );
   }

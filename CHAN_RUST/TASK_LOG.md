@@ -2,6 +2,22 @@
 
 > 口径/行为变更记录（复制排查用）；与 `lib/history/msg_history.dart` 常驻历史同步维护。
 
+## 2026-08-14 BSP 在线对错：离开事件语义（不再只等后续中枢升降）
+
+- **需求**：`judge_one` 不再把对错近似成「后续已定型 ZS 是否按预期升降」。BSP 出现后观察已发生结构事件，第一个明确顺向确认/反向证伪即判定冻结。强制反例：002003 1min K0 idx=12 的 `4Sa`/`1Ba` 最终都必须 Wrong。
+- **不变**：`BsVerdictFrame` / `verdict_store` / `judge_level` / K0…KN 同一入口 / Pending→终态单向 / asOf / 不回写 BSP / 旧 `ml_bsp_sample.isCorrect` 隔离。
+- **语义**：
+  - 全类（1…n B/S）共用失败路径：后续**非本框成员**段升破本框 ZG / 跌破本框 ZD（买：升破=对、跌破=错；卖镜像）。不要求新 ZS 形成或 `is_sure`。
+  - 后续已定型中枢 `zs_above_prev`/`zs_below_prev` 降为事件之一。
+  - 一类/二类额外：同框严格新极值（一类破自身价；二类破当时 box 极值）。三类+仍不套极值失败（生成是全员打点）。
+  - 同 x 同时命中成功/失败：成功优先（`apply_hits`）；不同 x 取最早。
+- **反例**：
+  - `4Sa@12`：ZS5 框 ZG=11.69；idx=17 非本框 K 高=11.70 → `leave_above_zg`，`invalid_x=17`。旧实现等 ZS6 `is_sure`（asof=18 才 Wrong，且 asOf 会把 17 提前亮错）。
+  - `1Ba@12`：idx=14 同框新低 11.68 → `same_zs_new_extreme`，`invalid_x=14`（一类路径原先就能打到；回归锁死）。
+- **变更**：`chan_data/src/bs_eval.rs` 的 `judge_one`；`msg_history.appendBsOnlineVerdict`。
+- **验证**：`cargo test -p chan_data --lib bs_eval`（含 002003 连续 asof 与三类+无后续 ZS 反向离开）。
+- **注意**：须重编并复制 `chan_ffi.dll` 后冷启；连续单步验收（一键跳末≠步进）。
+
 ## 2026-08-14 全类 BSP 在线对错（Pending/Correct/Wrong）
 
 - **需求**：对 CHAN_RUST 当前能产生的全部 BSP（1…n B / 1…n S）建立统一在线对错；不改 BSP 生成；K0…KN 同一 judge；无未来、终态冻结；供后续 ML label；副图错标可叠加 X（设置开关）。
@@ -12,7 +28,7 @@
   - 三类+：代码无独立极值语义（同框全员打点），不套一类极值失败。
 - **变更**：`chan_data/src/bs_eval.rs`；`LevelBundleOut.bs_verdict_frames` + `bs_verdict_k0_frames`；pipeline/combine/delta；Flutter 接收冻结 + asOf + 设置「BSP对错叠加X」。
 - **验证**：`cargo test -p chan_data --lib bs_eval` 全过（全类 1..8 × 买卖 × Correct/Wrong × K0/K1/K2、冻结、无未来、不回写）。
-- **注意**：须重编并复制 `chan_ffi.dll` 后冷启；连续单步验收。
+- **注意**：须重编并复制 `chan_ffi.dll` 后冷启；连续单步验收。**同日已被「离开事件语义」修正：三类+不再只能等后续定型 ZS。**
 
 ## 2026-08-13 PresentationCache 增量 Lookup（Phase 2B-3A）
 
