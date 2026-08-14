@@ -24,3 +24,10 @@
 
 ## 历史按钮（常驻，禁止当调试代码删）
 `chan_kline` 设置面板必须保留「一键复制历史记录」「查看历史记录」「复制页面快照」（实现位于 `lib/history/`，勿放 `lib/debug/`）。
+
+## 智能体长期记忆（2026-08-15·常驻）
+- **接任务先读**：仓库根 `AGENT_LONG_TERM_MEMORY.md` §0 + `AGENTS.md`（Claude→`CLAUDE.md`，OpenCode→`OPENCODE.md`）。
+- **无用户「确认执行」** → 禁止改 app 关键逻辑；须文字提修改方案后再动代码。
+- 任务完成后写 `task-log.md`；演示文案**白话**为主，少贴代码名。
+- 修改类任务：`a_Data/test/demos/{task_id}/` + 开发演示阶段（默认开，可关）。
+- Cursor：`.cursor/rules/agent-long-term-memory.mdc`；Trae：`.trae/skills/chan-agent-memory/SKILL.md`。

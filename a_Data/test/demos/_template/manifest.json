@@ -1,0 +1,21 @@
+{
+  "id": "TEMPLATE",
+  "title": "任务标题（复制本目录后改 id）",
+  "completedAt": "YYYY-MM-DD",
+  "agent": "cursor",
+  "isNewFeature": false,
+  "beforeSummary": "原本实现：一句话",
+  "afterSummary": "本次实现：一句话",
+  "verificationPoints": [
+    "K0 step=N：应看到 …",
+    "连续单步：出现后下一步仍在"
+  ],
+  "keySteps": [],
+  "demoCsv": "demo.ohlc.csv",
+  "autoLaunchOnStartup": true,
+  "walkthroughSteps": [
+    { "stepIdx": 0, "phase": "both", "caption": "任务加载完成" },
+    { "stepIdx": 12, "phase": "before", "caption": "原本：…" },
+    { "stepIdx": 12, "phase": "after", "caption": "本次：…" }
+  ]
+}

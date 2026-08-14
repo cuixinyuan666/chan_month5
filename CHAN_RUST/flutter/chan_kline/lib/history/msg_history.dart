@@ -32,6 +32,9 @@ class MsgHistory {
   /// test 自定义 OHLC 口径是否已记录（进程内去重）
   static bool _testCustomOhlcLogged = false;
 
+  /// 智能体长期记忆（任务演示 / 前后对比）
+  static bool _agentLongTermMemoryLogged = false;
+
   /// 工作区全屏 + tooltip 分隔线口径是否已记录
   static bool _desktopWorkAreaLogged = false;
 
@@ -402,6 +405,48 @@ class MsgHistory {
       '无 CSV 时回退原 test 分笔文件。仅改 K0 数据源，K1/Kn 流水线不变。'
       '默认 custom.ohlc.csv=100 根强复杂性样本（包含合并/一字线/种子离开长 UNKNOWN/'
       '暴力下杀截断雏形/中枢震荡/多层波浪），便于全层同构排查开口虚线与递归层。'
+      '历史记录按钮与 lib/history/ 常驻不得删。',
+    );
+  }
+
+  /// 智能体长期记忆：Task Log + test 演示 + 同页前后对比（常驻）。
+  void appendAgentLongTermMemory() {
+    if (_agentLongTermMemoryLogged) return;
+    _agentLongTermMemoryLogged = true;
+    append(
+      '【智能体长期记忆·2026-08-15】全智能体（Cursor/OpenCode/Claude Code/WorkBuddy 等）'
+      '任务完成后必须写 task-log.md；修改类任务须提供可演示验收：'
+      '优先默认股票002003，否则在 a_Data/test/demos/{task_id}/ 建 manifest+before/after；'
+      '股票选 test →「任务演示/前后对比」同页上=原本实现、下=本次实现。'
+      '详见仓库 AGENT_LONG_TERM_MEMORY.md。'
+      '历史记录按钮与 lib/history/ 常驻不得删。',
+    );
+  }
+
+  static bool _devDemoPhaseLogged = false;
+  static bool _agentConfirmGateLogged = false;
+
+  /// 开发演示阶段：启动自动加载最新任务 + 点击下一步步进（常驻）。
+  void appendDevelopmentDemoPhaseLaunch() {
+    if (_devDemoPhaseLogged) return;
+    _devDemoPhaseLogged = true;
+    append(
+      '【开发演示阶段·2026-08-15】默认开启：启动 exe 自动加载 demos 最新任务；'
+      '主图底部叠层左=原本/右=本次，点「下一步」步进；可自动播放。'
+      '设置「开发演示阶段」关=不再自动加载。落盘 .chan_task_demo_settings.json。'
+      '历史记录按钮与 lib/history/ 常驻不得删。',
+    );
+  }
+
+  /// 确认执行门禁 + 演示白话 + 接任务必读（常驻）。
+  void appendAgentConfirmExecuteGate() {
+    if (_agentConfirmGateLogged) return;
+    _agentConfirmGateLogged = true;
+    append(
+      '【智能体门禁·2026-08-15】接任务先读 AGENT_LONG_TERM_MEMORY.md §0。'
+      '用户未说「确认执行」禁止改 app 关键逻辑（缠论内核/步进冻结/主图语义）；'
+      '须先文字提修改方案。演示 before/after/步进说明用白话，少贴代码名。'
+      'CLAUDE.md / OPENCODE.md / .cursor/rules 均指向同一规范。'
       '历史记录按钮与 lib/history/ 常驻不得删。',
     );
   }

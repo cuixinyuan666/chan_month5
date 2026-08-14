@@ -1,0 +1,40 @@
+{
+  "id": "2026-08-15-agent-long-term-memory",
+  "title": "智能体长期记忆与开发演示阶段",
+  "completedAt": "2026-08-15",
+  "agent": "cursor",
+  "isNewFeature": true,
+  "autoLaunchOnStartup": true,
+  "beforeSummary": "以前：做完任务没有统一记账；打开软件不会自动带你验收；也不能点下一步一格一格看。",
+  "afterSummary": "现在：做完要写任务日志；开发阶段打开软件会自动弹出这次任务的对比说明；可以点下一步或自动播放，一格一格看主图变化。",
+  "verificationPoints": [
+    "重新打开软件：底下应自动弹出本说明条",
+    "点「下一步」：左右「原本/这次」会轮流高亮，主图跟着走到对应 K 线",
+    "在设置里关掉「开发演示阶段」再重启：不应再自动弹出",
+    "设置里「任务演示列表」可随时手动选别的任务"
+  ],
+  "keySteps": [0],
+  "walkthroughSteps": [
+    {
+      "stepIdx": 0,
+      "phase": "both",
+      "caption": "你好：开发演示阶段开着，这次任务完成项已自动加载"
+    },
+    {
+      "stepIdx": 0,
+      "phase": "before",
+      "caption": "以前：没有强制写任务日志，启动也不会自动带你验收"
+    },
+    {
+      "stepIdx": 0,
+      "phase": "after",
+      "caption": "现在：左边写改之前、右边写改之后；智能体没你说「确认执行」不能乱改关键逻辑"
+    },
+    {
+      "stepIdx": 0,
+      "phase": "after",
+      "caption": "继续点下一步或点播放：会自动一格一格演示；点「退出演示阶段」后下次打开不再自动弹"
+    }
+  ],
+  "demoCsv": ""
+}

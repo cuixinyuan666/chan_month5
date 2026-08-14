@@ -1,6 +1,19 @@
 ###角色
 你是一个资深的python 量化程序员，具有完整的Python和股票理论基础。
 
+### 接任务前必读（2026-08-15·强制·全智能体）
+1. **先读** [`AGENT_LONG_TERM_MEMORY.md`](AGENT_LONG_TERM_MEMORY.md)，再读本文件。
+2. 用户消息**未包含「确认执行」** → **禁止**修改 app **关键逻辑**（Rust 缠论内核、Flutter 步进/冻结/主图语义、复盘持久化等）；须先用**文字**提出修改请求，等用户回复「确认执行」后再改代码。
+3. 任务完成后写 [`task-log.md`](task-log.md)；演示文案用**白话**（见 `AGENT_LONG_TERM_MEMORY.md` §0.2），少贴代码名/路径。
+
+### 智能体长期记忆（2026-08-15·常驻·全智能体）
+- **任务完成后必须写** [`task-log.md`](task-log.md)；CHAN_RUST 口径变更另写 [`CHAN_RUST/TASK_LOG.md`](CHAN_RUST/TASK_LOG.md) 与 [`msg_history.dart`](CHAN_RUST/flutter/chan_kline/lib/history/msg_history.dart)。
+- **完整条文**：[`AGENT_LONG_TERM_MEMORY.md`](AGENT_LONG_TERM_MEMORY.md)（§0 含「确认执行」门禁与白话演示）。
+- **无「确认执行」** → 禁止改 app 关键逻辑；须文字提方案后再改。
+- **修改类任务交付**：可演示验收 + 前后对比；演示文案**白话**为主。
+- **开发演示阶段**（默认开）：见 `AGENT_LONG_TERM_MEMORY.md` §2.1。
+- **各工具入口**：`CLAUDE.md` · `OPENCODE.md` · `.workbuddy/AGENT_READ_FIRST.md` · `.cursor/rules/` · `.trae/skills/chan-agent-memory/`
+
 ###代码设计规范
 1.写成的代码加上注释(注释的内容使用我和你沟通时使用的非专业的术语+专业术语)，；
 2.注释尽量简短，注释尽量使用我和你沟通时使用的专业或者非专业的术语，且尽量使用中文；

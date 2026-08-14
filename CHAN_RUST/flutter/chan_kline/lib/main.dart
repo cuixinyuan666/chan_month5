@@ -58,12 +58,19 @@ import 'models/k1_analysis.dart';
 import 'models/kline_combine_bundle.dart';
 import 'settings/chip_settings_store.dart';
 import 'settings/math_indicator_settings_store.dart';
+import 'settings/task_demo_settings_store.dart';
 import 'models/math_indicator_config.dart';
 import 'models/trend_model_config.dart';
 import 'widgets/datetime_picker_dialog.dart';
 import 'widgets/edge_control_panel.dart';
 import 'widgets/kline_chart.dart';
 import 'widgets/test_ohlc_editor_dialog.dart';
+import 'task_demo/task_demo_compare_page.dart';
+import 'task_demo/task_demo_data_loader.dart';
+import 'task_demo/task_demo_loader.dart';
+import 'task_demo/task_demo_manifest.dart';
+import 'task_demo/task_demo_walkthrough_overlay.dart';
+import 'task_demo/task_demo_walkthrough_step.dart';
 import 'window_work_area.dart';
 
 Future<void> main() async {
@@ -132,6 +139,12 @@ Future<void> main() async {
   MsgHistory.instance.appendSeedContainTruncation();
   // test 自定义 OHLC：前端编辑 → custom.ohlc.csv 直读上图
   MsgHistory.instance.appendTestCustomOhlc();
+  // 智能体长期记忆：Task Log + test 任务演示前后对比
+  MsgHistory.instance.appendAgentLongTermMemory();
+  // 开发演示阶段：启动自动加载最新任务 + 点击下一步步进
+  MsgHistory.instance.appendDevelopmentDemoPhaseLaunch();
+  // 确认执行门禁 + 演示白话 + 接任务必读
+  MsgHistory.instance.appendAgentConfirmExecuteGate();
   // 桌面：工作区全屏不盖任务栏；tooltip 分隔线贴边框
   MsgHistory.instance.appendDesktopWorkAreaAndTooltipSep();
   MsgHistory.instance.appendAuditProbeCopyButton();
@@ -279,6 +292,17 @@ class _KlineHomePageState extends State<KlineHomePage> {
   /// chip 分支：仅显示筹码分布，关闭所有缠论渲染（关=正常缠论+筹码可并存）
   final bool _chipOnlyMode = false;
 
+  /// 开发演示阶段（默认开）：启动 exe 自动加载最新任务演示
+  bool _devDemoPhaseEnabled = true;
+  bool _taskDemoWalkActive = false;
+  TaskDemoManifest? _taskDemoManifest;
+  List<TaskDemoWalkthroughStep> _taskDemoSteps = const [];
+  int _taskDemoWalkIndex = 0;
+  String? _taskDemoBeforeMd;
+  bool _taskDemoHasBeforePng = false;
+  bool _taskDemoAutoPlay = false;
+  Timer? _taskDemoAutoTimer;
+
   /// 分型判断步进事件日志：kn → 追加式历史（换股/重载才清空；不因重算丢点）
   Map<int, List<FractalJudgmentEvent>> _judgmentHistoryByKn = {};
 
@@ -385,7 +409,13 @@ class _KlineHomePageState extends State<KlineHomePage> {
     super.initState();
     _loadChipConfig();
     _loadMathIndicatorConfig();
-    _bootstrap();
+    _bootstrapWithDemo();
+  }
+
+  Future<void> _bootstrapWithDemo() async {
+    _devDemoPhaseEnabled =
+        await TaskDemoSettingsStore.isDevelopmentDemoPhaseEnabled();
+    await _bootstrap();
   }
 
   Future<void> _loadChipConfig() async {
@@ -461,6 +491,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
   @override
   void dispose() {
     _playTimer?.cancel();
+    _stopTaskDemoAutoPlay();
     _disposePipelineSession();
     super.dispose();
   }
@@ -634,6 +665,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         '根目录=$_dataRoot；口径=K0原始K/K1=K0连线/K2=K1连线/Kn第n层；'
         '截断=${_truncationCheck ? "开" : "关"}',
       );
+      await _maybeAutoStartLatestTaskDemo();
     } catch (e) {
       setState(() => _error = e.toString());
       _msgHistory.append('启动失败：$e');
@@ -1536,6 +1568,32 @@ class _KlineHomePageState extends State<KlineHomePage> {
                 child: CircularProgressIndicator(strokeWidth: 2),
               ),
             ),
+          if (_taskDemoWalkActive &&
+              _taskDemoManifest != null &&
+              !_mlSession.isActive)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              height: math.min(
+                360,
+                MediaQuery.of(context).size.height * 0.42,
+              ),
+              child: TaskDemoWalkthroughOverlay(
+                manifest: _taskDemoManifest!,
+                steps: _taskDemoSteps,
+                walkIndex: _taskDemoWalkIndex,
+                currentStepIdx: _stepIdx < 0 ? 0 : _stepIdx,
+                beforeMd: _taskDemoBeforeMd,
+                hasBeforePng: _taskDemoHasBeforePng,
+                autoPlayActive: _taskDemoAutoPlay,
+                onToggleAutoPlay: _toggleTaskDemoAutoPlay,
+                onPrev: _taskDemoWalkPrev,
+                onNext: _taskDemoWalkNext,
+                onExitWalkthrough: _exitTaskDemoWalkthrough,
+                onExitDevelopmentPhase: _exitDevelopmentDemoPhase,
+              ),
+            ),
         ],
       ),
     );
@@ -1653,6 +1711,12 @@ class _KlineHomePageState extends State<KlineHomePage> {
                 onPressed: _showTestOhlcHelp,
               ),
             ],
+          ),
+          const SizedBox(height: 6),
+          OutlinedButton.icon(
+            onPressed: _busy ? null : _openTaskDemoList,
+            icon: const Icon(Icons.compare, size: 18),
+            label: const Text('任务演示 / 前后对比'),
           ),
         ],
         const SizedBox(height: 10),
@@ -1903,6 +1967,50 @@ class _KlineHomePageState extends State<KlineHomePage> {
                       _tickDistConfig.copyWith(peakLineEnabled: v));
                   _msgHistory.append('笔数峰延长线=${v ? "开" : "关"}');
                 },
+        ),
+        const SizedBox(height: 12),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          dense: true,
+          title: const Text('开发演示阶段', style: TextStyle(fontSize: 13)),
+          subtitle: Text(
+            _devDemoPhaseEnabled
+                ? '已开启：启动自动加载最新任务演示（可点下一步步进）'
+                : '已关闭：自行选择股票/演示内容',
+            style: const TextStyle(fontSize: 11),
+          ),
+          value: _devDemoPhaseEnabled,
+          onChanged: _busy
+              ? null
+              : (v) async {
+                  await TaskDemoSettingsStore.setDevelopmentDemoPhaseEnabled(v);
+                  setState(() => _devDemoPhaseEnabled = v);
+                  if (!v) {
+                    _exitTaskDemoWalkthrough();
+                  } else {
+                    _msgHistory.append('开发演示阶段=开（下次启动自动加载最新任务演示）');
+                  }
+                  _msgHistory.append('开发演示阶段=${v ? "开" : "关"}');
+                },
+          secondary: IconButton(
+            tooltip: '开发演示阶段说明',
+            icon: const Icon(Icons.help_outline, size: 18),
+            onPressed: _showDevDemoPhaseHelp,
+          ),
+        ),
+        if (!_devDemoPhaseEnabled) ...[
+          const SizedBox(height: 6),
+          OutlinedButton.icon(
+            onPressed: _busy ? null : _openLatestTaskDemoWalkthrough,
+            icon: const Icon(Icons.play_lesson, size: 18),
+            label: const Text('手动打开最新任务演示'),
+          ),
+        ],
+        const SizedBox(height: 8),
+        OutlinedButton.icon(
+          onPressed: _busy ? null : _openTaskDemoList,
+          icon: const Icon(Icons.list_alt, size: 18),
+          label: const Text('任务演示列表 / 前后对比'),
         ),
         const SizedBox(height: 12),
         OutlinedButton.icon(
@@ -2428,6 +2536,237 @@ class _KlineHomePageState extends State<KlineHomePage> {
         ],
       ),
     );
+  }
+
+  Future<void> _maybeAutoStartLatestTaskDemo() async {
+    if (!_devDemoPhaseEnabled || _taskDemoWalkActive || _mlSession.isActive) {
+      return;
+    }
+    if (_dataRoot.isEmpty) return;
+    final latest = await TaskDemoLoader.latestDemo(_dataRoot);
+    if (latest == null || !mounted) return;
+    await _startTaskDemoWalkthrough(latest, fromAutoLaunch: true);
+  }
+
+  Future<void> _openLatestTaskDemoWalkthrough() async {
+    if (_dataRoot.isEmpty) {
+      _showSnack('数据根目录未就绪');
+      return;
+    }
+    final latest = await TaskDemoLoader.latestDemo(
+      _dataRoot,
+      onlyAutoLaunch: false,
+    );
+    if (latest == null) {
+      _showSnack('暂无任务演示条目');
+      return;
+    }
+    await _startTaskDemoWalkthrough(latest);
+  }
+
+  Future<void> _startTaskDemoWalkthrough(
+    TaskDemoManifest m, {
+    bool fromAutoLaunch = false,
+  }) async {
+    if (_dataRoot.isEmpty) return;
+    _exitTaskDemoWalkthrough(silent: true);
+    final prep = await TaskDemoDataLoader.prepareForManifest(
+      dataRoot: _dataRoot,
+      manifest: m,
+    );
+    if (prep.bars != null && prep.bars!.isNotEmpty) {
+      final b0 = _tryParseBarTime(prep.bars!.first.timeText);
+      final b1 = _tryParseBarTime(prep.bars!.last.timeText);
+      setState(() {
+        _selectedCode = 'test';
+        if (b0 != null && b1 != null) {
+          _beginDate = b0;
+          _endDate = b1;
+        }
+      });
+      await _loadKlines();
+    } else if (prep.useTest) {
+      setState(() => _selectedCode = 'test');
+      _syncDateRangeForCode('test');
+      await _loadKlines();
+    } else {
+      final code = m.defaultStockCode?.trim();
+      if (code != null && code.isNotEmpty) {
+        setState(() {
+          _selectedCode = code;
+          if (m.defaultStockPeriod != null &&
+              _periods.containsKey(m.defaultStockPeriod)) {
+            _period = m.defaultStockPeriod!;
+          }
+        });
+        _syncDateRangeForCode(code);
+        await _loadKlines();
+      }
+    }
+    final sep = Platform.pathSeparator;
+    final beforeMd = await TaskDemoLoader.readTextIfExists(
+      '${m.demoDirPath}${sep}before.md',
+    );
+    final hasPng = await TaskDemoLoader.hasImage(m.demoDirPath, 'before.png');
+    final steps = m.resolvedWalkthroughSteps();
+    if (!mounted) return;
+    setState(() {
+      _taskDemoManifest = m;
+      _taskDemoSteps = steps;
+      _taskDemoWalkIndex = 0;
+      _taskDemoBeforeMd = beforeMd;
+      _taskDemoHasBeforePng = hasPng;
+      _taskDemoWalkActive = steps.isNotEmpty;
+    });
+    if (steps.isNotEmpty) {
+      await _applyTaskDemoWalkIndex(0);
+    }
+    _msgHistory.append(
+      '任务演示步进：${m.id}${fromAutoLaunch ? "（启动自动加载）" : ""} '
+      '步数=${steps.length}',
+    );
+    if (fromAutoLaunch) {
+      _showSnack('已自动加载最新任务演示：${m.title}');
+    }
+  }
+
+  Future<void> _applyTaskDemoWalkIndex(int walkIndex) async {
+    if (walkIndex < 0 || walkIndex >= _taskDemoSteps.length) return;
+    final s = _taskDemoSteps[walkIndex];
+    _stopPlay();
+    if (!_hasSession || _allBars.isEmpty) {
+      setState(() => _taskDemoWalkIndex = walkIndex);
+      return;
+    }
+    final maxIdx = _allBars.length - 1;
+    final target = s.stepIdx.clamp(0, maxIdx);
+    setState(() {
+      _taskDemoWalkIndex = walkIndex;
+      _stepIdx = target;
+    });
+    _rebuildCombine();
+  }
+
+  void _taskDemoWalkNext() {
+    if (_taskDemoWalkIndex >= _taskDemoSteps.length - 1) {
+      _stopTaskDemoAutoPlay();
+      _showSnack('演示已到最后一步');
+      return;
+    }
+    _applyTaskDemoWalkIndex(_taskDemoWalkIndex + 1);
+  }
+
+  void _taskDemoWalkPrev() {
+    if (_taskDemoWalkIndex <= 0) return;
+    _applyTaskDemoWalkIndex(_taskDemoWalkIndex - 1);
+  }
+
+  void _stopTaskDemoAutoPlay() {
+    _taskDemoAutoTimer?.cancel();
+    _taskDemoAutoTimer = null;
+    _taskDemoAutoPlay = false;
+  }
+
+  void _toggleTaskDemoAutoPlay() {
+    if (_taskDemoAutoPlay) {
+      _stopTaskDemoAutoPlay();
+      setState(() {});
+      return;
+    }
+    if (_taskDemoWalkIndex >= _taskDemoSteps.length - 1) return;
+    setState(() => _taskDemoAutoPlay = true);
+    _taskDemoAutoTimer = Timer.periodic(const Duration(milliseconds: 1400), (_) {
+      if (!mounted || !_taskDemoAutoPlay) return;
+      if (_taskDemoWalkIndex >= _taskDemoSteps.length - 1) {
+        _stopTaskDemoAutoPlay();
+        if (mounted) setState(() {});
+        return;
+      }
+      _taskDemoWalkNext();
+    });
+  }
+
+  void _exitTaskDemoWalkthrough({bool silent = false}) {
+    _stopTaskDemoAutoPlay();
+    setState(() {
+      _taskDemoWalkActive = false;
+      _taskDemoManifest = null;
+      _taskDemoSteps = const [];
+      _taskDemoWalkIndex = 0;
+      _taskDemoBeforeMd = null;
+      _taskDemoHasBeforePng = false;
+    });
+    if (!silent) {
+      _msgHistory.append('已退出本次任务演示步进');
+      _showSnack('已退出本次演示，可自行选择加载内容');
+    }
+  }
+
+  Future<void> _exitDevelopmentDemoPhase() async {
+    await TaskDemoSettingsStore.setDevelopmentDemoPhaseEnabled(false);
+    setState(() => _devDemoPhaseEnabled = false);
+    _exitTaskDemoWalkthrough();
+    _msgHistory.append('用户退出开发演示阶段：启动不再自动加载任务演示');
+    _showSnack('已退出开发演示阶段；下次启动不再自动加载，可自行选择内容');
+  }
+
+  void _showDevDemoPhaseHelp() {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('开发演示阶段'),
+        content: const SingleChildScrollView(
+          child: Text(
+            '开发阶段（默认开启）\n'
+            '· 打开软件后自动加载最新一次任务完成说明；\n'
+            '· 底下左右分别是「改之前 / 改之后」；\n'
+            '· 点「下一步」或播放，主图一格一格走到对应 K 线；\n'
+            '· 说明尽量用白话，不要堆代码名。\n\n'
+            '退出演示阶段\n'
+            '· 设置里关「开发演示阶段」，或点「退出演示阶段」；\n'
+            '· 关了之后下次打开不再自动弹，你自己选股或开演示列表。\n\n'
+            '给智能体：接任务先读 AGENT_LONG_TERM_MEMORY.md；\n'
+            '你没说「确认执行」不能改关键逻辑。',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('知道了'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _openTaskDemoList() {
+    if (_dataRoot.isEmpty) {
+      _showSnack('数据根目录未就绪，请稍候或刷新股票列表');
+      return;
+    }
+    Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => TaskDemoListPage(
+          dataRoot: _dataRoot,
+          onLoadDemoCsv: _onTaskDemoCsvLoaded,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _onTaskDemoCsvLoaded(List<KlineBar> bars) async {
+    if (bars.isNotEmpty) {
+      final b0 = _tryParseBarTime(bars.first.timeText);
+      final b1 = _tryParseBarTime(bars.last.timeText);
+      if (b0 != null && b1 != null) {
+        setState(() {
+          _selectedCode = 'test';
+          _beginDate = b0;
+          _endDate = b1;
+        });
+      }
+    }
+    await _loadKlines();
   }
 
   void _showTestOhlcHelp() {

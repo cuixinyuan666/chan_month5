@@ -128,3 +128,49 @@
 - **注意事项**：全层同构（K0/Kn 行为一致）；`确认`语义=上一中枢首次确认（isSure）；`boxNumInString` 用正则 `(\d+\.?\d*)` 匹配数字
 ---
 
+### 2026-08-15 — 智能体长期记忆：Task Log + test 演示 + 同页前后对比
+
+- **执行者**：cursor
+- **任务类型**：配置 / 文档 / 演示基础设施
+- **上下文**：为 Cursor、OpenCode、Claude Code、WorkBuddy 等建立统一长期记忆与任务验收流程
+- **关键操作**：
+  1. 新增 `AGENT_LONG_TERM_MEMORY.md`、`.cursor/rules/agent-long-term-memory.mdc`、`.trae/skills/chan-agent-memory/SKILL.md`
+  2. 新增 `a_Data/test/demos/` 目录与 `_template`、本任务自举演示 `2026-08-15-agent-long-term-memory`
+  3. Flutter：`lib/task_demo/` + test 面板「任务演示/前后对比」；`msg_history.appendAgentLongTermMemory`
+  4. 更新 `AGENTS.md`、`.workbuddy/memory/MEMORY.md`
+- **结果**：全智能体任务完成必写 task-log；修改类任务须可演示 + 上下对比（全新功能可免对比）
+- **演示**：test → 任务演示/前后对比 → `2026-08-15-agent-long-term-memory`
+- **注意事项**：后续任务复制 `_template` 建演示；Rust 改动仍须重编 DLL
+
+---
+
+### 2026-08-15 — 开发演示阶段：启动自动加载 + 点击下一步步进
+
+- **执行者**：cursor
+- **任务类型**：功能开发
+- **上下文**：在长期记忆基础上，开发阶段启动 exe 应自动展示最新任务完成项，并支持步进动图演示；用户可退出演示阶段自行加载
+- **关键操作**：
+  1. `TaskDemoSettingsStore`（`.chan_task_demo_settings.json`）持久化「开发演示阶段」开关，默认开
+  2. `TaskDemoWalkthroughOverlay`：主图底部叠层，左原本/右本次，下一步/自动播放/退出
+  3. `manifest.walkthroughSteps` + 启动时 `latestDemo` 自动 `_startTaskDemoWalkthrough`
+  4. 更新 `AGENT_LONG_TERM_MEMORY.md` §2.1、`msg_history.appendDevelopmentDemoPhaseLaunch`
+- **结果**：演示阶段开→冷启动自动加载；关→不自动加载，可手动打开列表或最新演示
+- **演示**：冷启动即见叠层；设置关「开发演示阶段」后重启验证不再自动加载
+- **注意事项**：`autoLaunchOnStartup: false` 可让某 manifest 不参与启动自动加载
+
+---
+
+### 2026-08-15 — 确认执行门禁 + 演示白话 + 全智能体必读入口
+
+- **执行者**：cursor
+- **任务类型**：配置 / 文档
+- **上下文**：无「确认执行」禁止改关键逻辑；演示用白话；确保各智能体接任务能读到记忆文件
+- **关键操作**：
+  1. `AGENT_LONG_TERM_MEMORY.md` §0：确认执行门禁、白话演示、接任务必读顺序
+  2. 新增 `CLAUDE.md`、`OPENCODE.md` 指向主规范
+  3. 更新 `.cursor/rules`、`AGENTS.md`、WorkBuddy、Trae skill
+  4. `msg_history.appendAgentConfirmExecuteGate`；演示 manifest 改白话示例
+- **结果**：关键逻辑改动须用户原话含「确认执行」；演示文案禁止堆代码引用
+- **演示**：冷启动叠层第 3 步说明含「确认执行」门禁
+- **注意事项**：非关键逻辑（演示 md、task-log）仍可随任务直接改
+

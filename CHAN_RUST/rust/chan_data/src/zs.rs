@@ -443,16 +443,6 @@ impl ZSIncEngine {
 }
 
 #[cfg(test)]
-pub fn make_zs_for_test(
-    level: i32,
-    members: &[usize],
-    segs: &[LevelSegment],
-    is_sure: bool,
-) -> ZS {
-    make_zs(level, members, segs, is_sure)
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
 
