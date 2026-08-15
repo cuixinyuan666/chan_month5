@@ -1,0 +1,26 @@
+{
+  "id": "2026-08-15-tooltip-vol-tick-asof",
+  "title": "Tooltip 成交量/笔数循环补 asOf 截断",
+  "completedAt": "2026-08-15",
+  "agent": "workbuddy",
+  "isNewFeature": false,
+  "beforeSummary": "原本十字 tooltip 的成交量/笔数（含 B/S/G 分解）两个循环，没有像其它区段那样按悬停位置 asOf 截断；虽因只读当前根而不影响显示，但与其余 tooltip 的当下性纪律不一致。",
+  "afterSummary": "本次给成交量、笔数两个循环补上「超出悬停位置的 K 不写入」的截断，与 tooltip 其它区段对齐；悬停显示行为不变。",
+  "verificationPoints": [
+    "走到任意一根 K 悬停，十字 tooltip 里的成交量/笔数（B/S/G 分解）读数与原本一致",
+    "连续单步前进，成交量/笔数读数随步进正常刷新、不出现未来 K 的量"
+  ],
+  "keySteps": [12, 20],
+  "demoCsv": "",
+  "defaultStock": {
+    "code": "002003",
+    "period": "1min",
+    "note": "默认数据即可验收；本次为防御性对齐，显示无变化"
+  },
+  "autoLaunchOnStartup": false,
+  "walkthroughSteps": [
+    { "stepIdx": 12, "phase": "before", "caption": "原本：悬停第 12 根，成交量/笔数两个循环没按悬停位置截断（虽显示正常）" },
+    { "stepIdx": 12, "phase": "after", "caption": "这次：同一根 K 悬停，成交量/笔数循环已与其它区段一样按当前根截断，读数不变" },
+    { "stepIdx": 20, "phase": "after", "caption": "再走到第 20 根，成交量/笔数读数随步进刷新、没有出现未来 K 的量" }
+  ]
+}

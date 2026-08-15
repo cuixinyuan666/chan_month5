@@ -402,6 +402,8 @@ class BarFeatureLookup {
         final sellS = allSell[e.key] ?? const <double>[];
         final grayS = allGray[e.key] ?? const <double>[];
         for (var i = 0; i < bars.length; i++) {
+          // 与其余 tooltip 区段一致：悬停 asOf 之外的 K 不写入（防御性，保持当下性纪律统一）
+          if (asOf != null && bars[i].idx > asOf) continue;
           final row =
               byIdx.putIfAbsent(bars[i].idx, () => {'idx': bars[i].idx});
           final sub = row.putIfAbsent('sub', () => <String, dynamic>{})
@@ -442,6 +444,8 @@ class BarFeatureLookup {
         final sellSeries = allSellTick[e.key] ?? const <double>[];
         final graySeries = allGrayTick[e.key] ?? const <double>[];
         for (var i = 0; i < bars.length; i++) {
+          // 与其余 tooltip 区段一致：悬停 asOf 之外的 K 不写入（防御性，保持当下性纪律统一）
+          if (asOf != null && bars[i].idx > asOf) continue;
           final row =
               byIdx.putIfAbsent(bars[i].idx, () => {'idx': bars[i].idx});
           final sub = row.putIfAbsent('sub', () => <String, dynamic>{})

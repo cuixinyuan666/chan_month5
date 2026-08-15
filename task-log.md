@@ -174,3 +174,17 @@
 - **演示**：冷启动叠层第 3 步说明含「确认执行」门禁
 - **注意事项**：非关键逻辑（演示 md、task-log）仍可随任务直接改
 
+---
+
+### 2026-08-15 05:44 — Tooltip 成交量/笔数循环补 asOf 截断（与当下性纪律对齐）
+
+- **执行者**：workbuddy
+- **任务类型**：重构 / 演示
+- **上下文**：审查 tooltip 合规性时发现，成交量/笔数（含 B/S/G 分解）两个循环未像其它区段那样按悬停 asOf 截断；经追 `_accumulateConfirmGated` 确认取值本身已是累计到 i 的因果量（无未来数据），故悬停显示不变，但为与 tooltip 其余项当下性纪律统一，补防御性 asOf 截断。
+- **关键操作**：
+  1. `CHAN_RUST/flutter/chan_kline/lib/models/bar_feature_lookup.dart` 成交量循环与笔数循环：在 `for (var i = 0; i < bars.length; i++)` 体首补 `if (asOf != null && bars[i].idx > asOf) continue;`
+  2. 配套 test 演示：`a_Data/test/demos/2026-08-15-tooltip-vol-tick-asof/`（manifest.json + before.md + after.md，白话文案）
+- **结果**：2 处循环补截断；悬停显示行为不变（只读当前根）；tooltip 全区段 asOf 纪律一致
+- **演示**：test → 任务演示/前后对比 → `2026-08-15-tooltip-vol-tick-asof`；默认股 002003 任意根悬停验证读数一致
+- **注意事项**：此改纯防御性、无显示变化；未动 `msg_history`（口径未变）；非 Rust 改动，无需重编 DLL
+
