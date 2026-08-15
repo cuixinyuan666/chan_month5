@@ -1141,6 +1141,41 @@ class MsgHistory {
     );
   }
 
+  /// 交易条件变量目录阶段0（进程内去重）
+  static bool _tradeCatalogPhase0Logged = false;
+  void appendTradeSignalCatalogPhase0() {
+    if (_tradeCatalogPhase0Logged) return;
+    _tradeCatalogPhase0Logged = true;
+    append(
+      '【交易条件目录·阶段0·2026-08-15】'
+      '回测先建「能拿来做条件的变量目录」，不在图上另判买卖箭头。'
+      '本阶段已登记：K0开高低收量、各层虚拟K开高低收、各层布林中轨/上轨/下轨。'
+      '同一层、同一套钟才能比较（K0收盘对K0布林；K1收盘对K1布林）。'
+      '禁止用K0收盘去穿K1布林。布林读图上已冻住的格子，不另算一套。'
+      '没有数=不可用，不是条件不成立；布林热身仍按图上出数，不另造前20根空白。'
+      '中枢高低、一类/二类买卖点、三型四型、节奏、背驰只盘点、暂不进公式'
+      '（框身份未写清，或需要「首次出现才触发」）。'
+      '成交约定仍是：信号出在当根，下一根K0开盘才成交（本阶段尚未做撮合）。'
+      '阶段0无图上买卖标记，不自动弹任务演示。',
+    );
+  }
+
+  /// Clock + 契约 + K0成交钟（进程内去重）
+  static bool _tradeClockContractLogged = false;
+  void appendTradeClockContract() {
+    if (_tradeClockContractLogged) return;
+    _tradeClockContractLogged = true;
+    append(
+      '【交易钟·契约·K0成交·2026-08-15】'
+      '比较和穿越必须同一层、同一套钟，否则在搭条件时就是非法，不会等回测跑完再查。'
+      '例如 K1收盘对K1布林下轨可以；K0收盘对K1布林下轨直接禁止。'
+      '条件只在该变量自己的计算钟上算，不能拿铺到K0格子上的阶梯当穿越。'
+      '成交一律下一根K0开盘，没有下一根K3开盘。'
+      '回测不另算一套指标，沿用现有逐步计算结果；策略箭头与缠论买卖点分开。'
+      '本阶段仍只定契约，不做公式求值、撮合、账户。',
+    );
+  }
+
   /// 运行时虚线摘要（内容变才追加；复制历史记录排查用）。
   void appendDisplayBuildingLinesRuntime({
     required int kn,

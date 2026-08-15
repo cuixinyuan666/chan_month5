@@ -2,6 +2,27 @@
 
 > 口径/行为变更记录（复制排查用）；与 `lib/history/msg_history.dart` 常驻历史同步维护。
 
+## 2026-08-15 交易条件变量目录阶段0（SignalDataCatalog）
+
+- **需求**：回测先建可交易变量目录，不在 Flutter 里另判条件画箭头。阶段0只登记身份清楚、能取值的变量。
+- **不变**：缠论内核、步进冻结、主图语义、布林算法、MathSeriesFreezeStore；不搬数学指标进 Rust；不做公式/撮合/账户。
+- **登记**：`RAW.K0` 开高低收量；`RAW.K{n≥1}` 开高低收（与布林同一套钟：K0原生，K1+结构层 kn-1 虚拟K，含动态段）；`MAIN.K{n}.BOLL.MID/UP/DOWN`（读冻结仓，与图上布林同一份数）。
+- **只盘点不进公式**：中枢高低（未写清哪一框）、一类/二类买卖点（未写边沿）、三型/四型/趋势线/节奏/背驰/MACD/RSI 等。
+- **钟**：同一显示层 + 同一 `zsMath`/`line` 才能进表达式；禁止 K0 收盘穿 K1 布林。
+- **三态**：没有数=不可用，不是条件不成立。布林热身仍按图上出数，不另造前 N 根空白。
+- **成交约定（尚未实现）**：信号在当根发现，下一根 K0 开盘成交。
+- **验证**：`flutter test test/signal_data_catalog_test.dart` 全过。
+- **注意**：纯 Flutter；无需重编 DLL。阶段0无图上买卖标记，不自动弹任务演示。分支 `trade`。
+
+## 2026-08-15 交易钟类型门禁（Clock + 契约 + K0 成交钟）
+
+- **需求**：同层同钟才能比较/穿越，混钟在编译阶段就是非法表达式；条件只在 evalClock 上算。
+- **不变**：不碰公式求值、撮合、账户、Rust 指标迁移、策略箭头、缠论内核。
+- **变更**：`TradeOperand`（displayKn+clockFamily+evalClock+plotClock）；`compileBinaryOp` 产出 `TradeExprOk`/`TradeExprIllegal`；`SameClockPair` 只能由编译成功得到。`readEvalClockSeries` 给出计算钟样本（availableAt=当时能知道的 K0）。成交钟固定下一根 K0 开盘。
+- **例子**：K1.CLOSE vs K1.BOLL.DOWN 合法；K0.CLOSE vs K1.BOLL.DOWN 非法。
+- **验证**：`flutter test test/signal_data_catalog_test.dart`。
+- **注意**：纯 Flutter；无需重编 DLL。
+
 ## 2026-08-15 连线斜率背驰特征键 ASCII（line_slope）
 
 - **需求**：ML 特征键不再混入汉字「斜率」；算法本身保留（与 Kn连线斜率同源）。
