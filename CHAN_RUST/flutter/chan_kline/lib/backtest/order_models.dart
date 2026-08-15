@@ -103,4 +103,7 @@ class TradeRecord {
     this.commission = 0,
     this.slippage = 0,
   });
+
+  /// 闭合交易净盈亏（毛利减买卖两边手续费）。未平仓没有这笔。
+  double get netPnL => grossPnL - commission;
 }

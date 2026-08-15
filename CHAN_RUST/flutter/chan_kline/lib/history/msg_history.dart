@@ -1205,6 +1205,22 @@ class MsgHistory {
     );
   }
 
+  /// 回测结果引擎：净值 + 绩效（进程内去重）
+  static bool _tradeBacktestResultLogged = false;
+  void appendTradeBacktestResult() {
+    if (_tradeBacktestResultLogged) return;
+    _tradeBacktestResultLogged = true;
+    append(
+      '【回测结果引擎·2026-08-15】每一根K0记现金、持仓、净值、已实现/浮盈。'
+      '净值=现金+持仓数量×该根收盘价，持仓期间必须计入浮盈浮亏，不能只看已平仓交易。'
+      '期末若还持仓：没有闭合交易记录，但净值里仍有浮盈；结果分开记已平仓、未平仓、期末净值。'
+      '收益：期末净值−本金。交易质量：胜率、盈亏因子、盈亏比、期望等；'
+      '没有亏损交易时盈亏因子/盈亏比记成∞，不是让界面去猜NaN。'
+      '最大回撤只看净值曲线（可定位开始/结束/回到前高的K），不要拿交易盈亏去代替回撤。'
+      '本阶段仍无策略界面、无图上买卖箭头。',
+    );
+  }
+
   /// 运行时虚线摘要（内容变才追加；复制历史记录排查用）。
   void appendDisplayBuildingLinesRuntime({
     required int kn,

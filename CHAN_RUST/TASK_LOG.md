@@ -42,6 +42,18 @@
 - **验证**：`flutter test test/mini_loop_test.dart` + catalog/cross 全过。
 - **注意**：纯 Flutter；无需重编 DLL。无箭头、不自动弹演示。
 
+## 2026-08-15 Phase3 回测结果引擎（Equity + PnL + 核心绩效）
+
+- **需求**：一次接完逐K0净值、回测结果对象、收益/交易质量/最大回撤/连续盈亏、未平仓语义。不做 Flutter 回测 UI。
+- **净值**：每根 K0 记 cash / positionQty / positionValue / equity / realizedPnL / unrealizedPnL；`equity = cash + qty × close`。持仓计入浮盈。
+- **结果**：`BacktestResult` = signals / orders / fills / trades / equityCurve / metrics；`closedTrades` 与 `openPosition` 分开。
+- **收益**：`netProfit = finalEquity - initialCapital`。
+- **交易质量**：胜率、毛盈亏、均盈均亏、盈亏因子、盈亏比、期望；无亏损交易 → `∞` / `不可用`，禁止 NaN。
+- **回撤**：只看净值曲线；记录峰/谷/起止K/回到前高的K。TradeRecord 盈亏 ≠ 净值回撤。
+- **费用**：比例手续费、固定价差滑点可非 0；默认仍 0。
+- **验证**：`flutter test test/backtest_result_test.dart test/mini_loop_test.dart`
+- **注意**：纯 Flutter；无需重编 DLL。无箭头、不做 Sharpe/做空/加仓/多品种。
+
 ## 2026-08-15 连线斜率背驰特征键 ASCII（line_slope）
 
 - **需求**：ML 特征键不再混入汉字「斜率」；算法本身保留（与 Kn连线斜率同源）。
