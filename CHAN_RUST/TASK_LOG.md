@@ -23,6 +23,15 @@
 - **验证**：`flutter test test/signal_data_catalog_test.dart`。
 - **注意**：纯 Flutter；无需重编 DLL。
 
+## 2026-08-15 CROSS 求值（仅上穿/下穿，不撮合）
+
+- **需求**：同层同钟读双方 evalClock 样本，相邻两根判断穿越，只在边沿出一次 `SignalEvent`；`availableAt` 映射到当时已知 K0。
+- **不变**：不碰撮合/订单/账户/净值/箭头；不碰 AND/OR；不拿 `lookupTradeNumeric` 铺平值做穿越。
+- **合法**：K1.CLOSE vs K1.BOLL.DOWN / UP。**非法**：K0.CLOSE vs K1.BOLL.DOWN（编译期，无事件）。
+- **边沿**：CROSS_ABOVE = 上一根 A≤B 且本根 A>B；CROSS_BELOW 镜像。持续在轨外不重复。
+- **验证**：`flutter test test/cross_eval_test.dart` + `signal_data_catalog_test.dart` 全过。
+- **注意**：纯 Flutter；无需重编 DLL。无图上标记，不自动弹演示。
+
 ## 2026-08-15 连线斜率背驰特征键 ASCII（line_slope）
 
 - **需求**：ML 特征键不再混入汉字「斜率」；算法本身保留（与 Kn连线斜率同源）。

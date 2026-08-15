@@ -38,7 +38,7 @@ class TradeOperand {
   }
 }
 
-/// 以后比较 / 穿越只接受已编译的同钟对；本阶段不求值。
+/// 比较只编译、不求值；穿越 [crossAbove]/[crossBelow] 由 evalCross 求值。
 enum TradeBinaryOp {
   gt,
   lt,

@@ -1176,6 +1176,20 @@ class MsgHistory {
     );
   }
 
+  /// CROSS 求值（进程内去重）
+  static bool _tradeCrossEvalLogged = false;
+  void appendTradeCrossEval() {
+    if (_tradeCrossEvalLogged) return;
+    _tradeCrossEvalLogged = true;
+    append(
+      '【穿越求值·2026-08-15】只做上穿/下穿。必须同一层同一套钟，读双方计算钟样本，'
+      '相邻两根样本才判断穿越，只在边沿那一根打一次点。'
+      'K1收盘对K1布林上/下轨可以；K0收盘对K1布林直接禁止。'
+      '禁止用铺到K0格子上的阶梯做穿越。事件时间是当时已知的K0，看不到未来样本。'
+      '连续待在轨外不重复触发。尚未做撮合、账户、策略箭头。',
+    );
+  }
+
   /// 运行时虚线摘要（内容变才追加；复制历史记录排查用）。
   void appendDisplayBuildingLinesRuntime({
     required int kn,

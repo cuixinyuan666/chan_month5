@@ -185,6 +185,7 @@ Future<void> main() async {
   // 交易条件变量目录阶段0（只登记可取值变量，不改缠论内核）
   MsgHistory.instance.appendTradeSignalCatalogPhase0();
   MsgHistory.instance.appendTradeClockContract();
+  MsgHistory.instance.appendTradeCrossEval();
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     await windowManager.ensureInitialized();
     const opts = WindowOptions(
