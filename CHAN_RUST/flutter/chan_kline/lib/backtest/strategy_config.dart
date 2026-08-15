@@ -1,3 +1,5 @@
+import 'condition_ast.dart';
+
 /// 这次回测用的数据范围（当时走到哪根 K0），不是另算一套行情。
 class BacktestDataScope {
   final String code;
@@ -18,12 +20,10 @@ class BacktestDataScope {
   });
 }
 
-/// 第一版策略：每条腿只选一层 Kn，CLOSE 与布林轨锁死同层同钟。
-/// 买：K{n}.CLOSE 下穿 K{n}.BOLL.DOWN；卖：K{m}.CLOSE 上穿 K{m}.BOLL.UP。
-/// 界面没有「左腿一层、右腿另一层」的独立选择，所以拼不出 K0收盘×K1布林。
+/// 策略配置：买/卖各一棵 AST。界面只搭树，真假由引擎求值。
 class StrategyConfig {
-  final int buyKn;
-  final int sellKn;
+  final TradeAst buyAst;
+  final TradeAst sellAst;
   final int quantity;
   final double initialCapital;
   /// 成交额费率；0=免手续费
@@ -33,8 +33,8 @@ class StrategyConfig {
   final BacktestDataScope? dataScope;
 
   const StrategyConfig({
-    this.buyKn = 0,
-    this.sellKn = 0,
+    this.buyAst = kDefaultBollBuyAst,
+    this.sellAst = kDefaultBollSellAst,
     this.quantity = 100,
     this.initialCapital = 100000,
     this.commissionRate = 0,
@@ -42,17 +42,33 @@ class StrategyConfig {
     this.dataScope,
   });
 
-  String get buyCloseId => 'RAW.K$buyKn.CLOSE';
-  String get buyBollId => 'MAIN.K$buyKn.BOLL.DOWN';
-  String get sellCloseId => 'RAW.K$sellKn.CLOSE';
-  String get sellBollId => 'MAIN.K$sellKn.BOLL.UP';
+  /// 旧口径：每边只选一层，收盘穿布林。
+  factory StrategyConfig.bollLayers({
+    int buyKn = 0,
+    int sellKn = 0,
+    int quantity = 100,
+    double initialCapital = 100000,
+    double commissionRate = 0,
+    double slippageAmount = 0,
+    BacktestDataScope? dataScope,
+  }) {
+    return StrategyConfig(
+      buyAst: bollBuyAst(buyKn),
+      sellAst: bollSellAst(sellKn),
+      quantity: quantity,
+      initialCapital: initialCapital,
+      commissionRate: commissionRate,
+      slippageAmount: slippageAmount,
+      dataScope: dataScope,
+    );
+  }
 
-  String get buyLabel => 'K$buyKn 收盘 下穿 K$buyKn 布林下轨';
-  String get sellLabel => 'K$sellKn 收盘 上穿 K$sellKn 布林上轨';
+  String get buyLabel => astConditionText(buyAst);
+  String get sellLabel => astConditionText(sellAst);
 
   StrategyConfig copyWith({
-    int? buyKn,
-    int? sellKn,
+    TradeAst? buyAst,
+    TradeAst? sellAst,
     int? quantity,
     double? initialCapital,
     double? commissionRate,
@@ -60,8 +76,8 @@ class StrategyConfig {
     BacktestDataScope? dataScope,
   }) {
     return StrategyConfig(
-      buyKn: buyKn ?? this.buyKn,
-      sellKn: sellKn ?? this.sellKn,
+      buyAst: buyAst ?? this.buyAst,
+      sellAst: sellAst ?? this.sellAst,
       quantity: quantity ?? this.quantity,
       initialCapital: initialCapital ?? this.initialCapital,
       commissionRate: commissionRate ?? this.commissionRate,

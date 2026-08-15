@@ -99,7 +99,7 @@ class BacktestWorkbench extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 SizedBox(
-                  width: 280,
+                  width: 400,
                   child: SingleChildScrollView(
                     padding: const EdgeInsets.fromLTRB(10, 8, 8, 8),
                     child: StrategyConfigForm(
@@ -116,7 +116,7 @@ class BacktestWorkbench extends StatelessWidget {
                   child: run == null
                       ? const Center(
                           child: Text(
-                            '选好层号后点运行回测。图上的策买/策卖来自这一次结果，不会另算一遍。',
+                            '搭好买卖条件后点运行回测。图上的策买/策卖来自这一次结果，不会另算一遍。',
                             style: TextStyle(color: Color(0xFF94A3B8), fontSize: 13),
                           ),
                         )

@@ -3,6 +3,7 @@ import 'package:chan_kline/backtest/backtest_link.dart';
 import 'package:chan_kline/backtest/backtest_metrics.dart';
 import 'package:chan_kline/backtest/backtest_result.dart';
 import 'package:chan_kline/backtest/backtest_run.dart';
+import 'package:chan_kline/backtest/condition_ast.dart';
 import 'package:chan_kline/backtest/equity_build.dart';
 import 'package:chan_kline/backtest/order_models.dart';
 import 'package:chan_kline/backtest/signal_event.dart';
@@ -42,22 +43,21 @@ SignalEvent _sig(String id, TradeSide side, int x) {
 
 void main() {
   group('策略配置编译门禁', () {
-    test('同一层 CLOSE 与布林轨能编过；层号写在配置上锁死', () {
-      const cfg = StrategyConfig(buyKn: 1, sellKn: 1);
-      expect(cfg.buyCloseId, 'RAW.K1.CLOSE');
-      expect(cfg.buyBollId, 'MAIN.K1.BOLL.DOWN');
-      expect(cfg.sellCloseId, 'RAW.K1.CLOSE');
-      expect(cfg.sellBollId, 'MAIN.K1.BOLL.UP');
+    test('同一层 CLOSE 与布林轨能编过；层号写在 AST 上锁死', () {
+      final cfg = StrategyConfig.bollLayers(buyKn: 1, sellKn: 1);
+      expect(astConditionText(cfg.buyAst), contains('K1.CLOSE'));
+      expect(astConditionText(cfg.buyAst), contains('K1.BOLL.DOWN'));
+      expect(astConditionText(cfg.sellAst), contains('K1.BOLL.UP'));
       expect(compileBollCrossStrategy(cfg, maxKn: 2), isA<StrategyCompileOk>());
     });
 
     test('买 K0、卖 K2 仍合法：两条腿各自同层，不是一条表达式混层', () {
-      const cfg = StrategyConfig(buyKn: 0, sellKn: 2);
+      final cfg = StrategyConfig.bollLayers(buyKn: 0, sellKn: 2);
       expect(compileBollCrossStrategy(cfg, maxKn: 2), isA<StrategyCompileOk>());
     });
 
     test('层号超出当前图上最大层 → 非法，不进 CROSS', () {
-      const cfg = StrategyConfig(buyKn: 5, sellKn: 0);
+      final cfg = StrategyConfig.bollLayers(buyKn: 5, sellKn: 0);
       final r = compileBollCrossStrategy(cfg, maxKn: 1);
       expect(r, isA<StrategyCompileIllegal>());
     });
@@ -234,24 +234,32 @@ void main() {
     });
   });
 
-  group('配置 UI 锁死同层', () {
-    testWidgets('每边只有层下拉，右腿文案固定为收盘/布林，没有第二层选择', (tester) async {
+  group('配置 UI 条件构建器', () {
+    testWidgets('买卖可搭比较/穿越/AND，不再写死收盘下穿布林', (tester) async {
       var cfg = const StrategyConfig();
       await tester.pumpWidget(
         MaterialApp(
           home: Scaffold(
-            body: StrategyConfigForm(
-              config: cfg,
-              maxKn: 3,
-              onChanged: (c) => cfg = c,
+            body: SingleChildScrollView(
+              child: StrategyConfigForm(
+                config: cfg,
+                maxKn: 3,
+                onChanged: (c) => cfg = c,
+              ),
             ),
           ),
         ),
       );
-      expect(find.text('收盘  下穿  布林下轨'), findsOneWidget);
-      expect(find.text('收盘  上穿  布林上轨'), findsOneWidget);
+      expect(find.text('收盘  下穿  布林下轨'), findsNothing);
+      expect(find.text('买入条件（同层同钟，真假由回测引擎算）'), findsOneWidget);
+      expect(find.text('下穿'), findsWidgets);
+      expect(find.text('上穿'), findsWidgets);
+      expect(find.text('添加条件'), findsNWidgets(2));
+      await tester.tap(find.text('添加条件').first);
+      await tester.pumpAndSettle();
+      expect(find.text('AND'), findsWidgets);
+      expect(find.text('OR'), findsWidgets);
       expect(find.text('K0收盘穿K1布林'), findsNothing);
-      expect(find.byType(DropdownButtonFormField<int>), findsNWidgets(2));
     });
   });
 }

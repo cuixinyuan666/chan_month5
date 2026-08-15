@@ -196,6 +196,7 @@ Future<void> main() async {
   MsgHistory.instance.appendTradeMiniLoop();
   MsgHistory.instance.appendTradeBacktestResult();
   MsgHistory.instance.appendTradeBacktestWorkbench();
+  MsgHistory.instance.appendTradeConditionBuilder();
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     await windowManager.ensureInitialized();
     const opts = WindowOptions(
@@ -2275,11 +2276,12 @@ class _KlineHomePageState extends State<KlineHomePage> {
         content: const SingleChildScrollView(
           child: Text(
             '先加载股票并走到你要回测的那根 K，再打开策略回测。\n\n'
-            '第一版只能搭：某一层的收盘下穿该层布林下轨做买，'
-            '某一层的收盘上穿该层布林上轨做卖。'
-            '买和卖各自锁死同层，界面里选不出「K0收盘穿K1布林」。\n\n'
+            '买卖条件各自用积木搭：比较（> < >= <=）、上穿/下穿，'
+            '多条之间用 AND / OR。左右可以是同一层的收开高低或布林三轨，右边也可以填常数。'
+            '同一条比较必须同层同钟，K0 和 K1 不能拼在同一棵树上。\n\n'
             '点运行后，图上出现「策买/策卖」，这是策略信号，不是缠论的 1Ba/1Sa。'
-            '报告里的净利润、胜率、盈亏比、回撤都来自这一次回测结果，界面不会再算一遍。\n\n'
+            '报告里的净利润、胜率、盈亏比、回撤都来自这一次回测结果，界面不会再算一遍。'
+            '每条信号会写明条件、触发时的取值、发现在哪根 K0。\n\n'
             '点交易明细会跳到入场 K，再点同一笔会跳到出场 K。'
             '点图上的策买/策卖会打开对应的信号→订单→成交→交易。\n\n'
             '手续费、滑点先按你填的数字；默认 0。不做做空、加仓、多品种。',

@@ -1,19 +1,18 @@
-import 'signal_normalize.dart';
+import 'condition_eval.dart';
 import 'strategy_config.dart';
-import 'trade_operand.dart';
 
-/// 策略编译：每条腿必须过同层同钟门禁，失败则根本不进 CROSS。
+/// 策略编译：买/卖两棵 AST 都必须过同层同钟门禁，失败则根本不进求值。
 sealed class StrategyCompileResult {
   const StrategyCompileResult();
 }
 
 final class StrategyCompileOk extends StrategyCompileResult {
-  final CrossRule buyRule;
-  final CrossRule sellRule;
+  final CompiledCond buy;
+  final CompiledCond sell;
 
   const StrategyCompileOk({
-    required this.buyRule,
-    required this.sellRule,
+    required this.buy,
+    required this.sell,
   });
 }
 
@@ -22,39 +21,28 @@ final class StrategyCompileIllegal extends StrategyCompileResult {
   const StrategyCompileIllegal(this.reason);
 }
 
-/// 把第一版布林穿越策略编成买/卖规则。混层在这里就会被挡住。
-StrategyCompileResult compileBollCrossStrategy(
+/// 把买/卖 AST 编成可求值树。混层在这里就会被挡住。
+StrategyCompileResult compileStrategyConfig(
   StrategyConfig config, {
   int maxKn = 8,
 }) {
-  if (config.buyKn < 0 || config.sellKn < 0) {
-    return const StrategyCompileIllegal('层号不能为负');
-  }
-  if (config.buyKn > maxKn || config.sellKn > maxKn) {
-    return StrategyCompileIllegal(
-      '所选层超出当前图上最大层 K$maxKn，请改选更低的层',
-    );
-  }
-  final buy = compileBinaryOp(
-    leftId: config.buyCloseId,
-    rightId: config.buyBollId,
-    op: TradeBinaryOp.crossBelow,
-    maxKn: maxKn,
-  );
-  if (buy is TradeExprIllegal) {
+  final buy = compileConditionAst(config.buyAst, maxKn: maxKn);
+  if (buy is CondCompileIllegal) {
     return StrategyCompileIllegal('买入条件：${buy.reason}');
   }
-  final sell = compileBinaryOp(
-    leftId: config.sellCloseId,
-    rightId: config.sellBollId,
-    op: TradeBinaryOp.crossAbove,
-    maxKn: maxKn,
-  );
-  if (sell is TradeExprIllegal) {
+  final sell = compileConditionAst(config.sellAst, maxKn: maxKn);
+  if (sell is CondCompileIllegal) {
     return StrategyCompileIllegal('卖出条件：${sell.reason}');
   }
   return StrategyCompileOk(
-    buyRule: CrossRule.bollBuy(kn: config.buyKn),
-    sellRule: CrossRule.bollSell(kn: config.sellKn),
+    buy: (buy as CondCompileOk).root,
+    sell: (sell as CondCompileOk).root,
   );
 }
+
+/// 兼容旧测试名：现在走通用 AST 编译。
+StrategyCompileResult compileBollCrossStrategy(
+  StrategyConfig config, {
+  int maxKn = 8,
+}) =>
+    compileStrategyConfig(config, maxKn: maxKn);

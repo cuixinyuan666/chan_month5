@@ -2,6 +2,18 @@
 
 > 口径/行为变更记录（复制排查用）；与 `lib/history/msg_history.dart` 常驻历史同步维护。
 
+## 2026-08-15 Phase5 通用交易条件构建器 v1
+
+- **需求**：策略从写死的布林穿越模板升级为可搭积木的条件 AST；界面只建树，真假仍走现有回测核心。
+- **不变**：缠论内核、步进冻结、主图语义、K0 下一根开盘成交、单仓只做多；不新做指标算法/Rust 迁移/MACD/RSI/Buy1/背驰/做空/加仓。
+- **AST**：比较 `> < >= <=`、`CROSS_ABOVE`/`CROSS_BELOW`、`AND`/`OR`；操作数=变量或常数；两常数非法。
+- **第一批变量**：收/开/高/低 + 布林中/上/下轨。同 displayKn + 同 clockFamily 才能比较或穿越；K0×K1 编译期非法；一棵树上也不能把 K0 和 K1 AND/OR 在一起。
+- **求值**：只在 evalClock 样本上算布尔，假变真出 `SignalEvent`。CROSS 仍是边沿脉冲。AND/OR 按 availableAt 对齐。
+- **可解释**：每条信号带条件文案、触发时取值、发现 K0 #；链路仍是条件→Signal→Order→Fill→Trade。
+- **默认策略**：仍是 K0 收下穿下轨买 / 上穿上轨卖，结果应与旧固定布林路径同一批发现点。
+- **验证**：`flutter test test/condition_ast_test.dart test/backtest_workbench_test.dart`
+- **注意**：纯 Flutter；无需重编 DLL。不自动弹任务演示。引擎版本 `backtest-workbench-v2-ast`。
+
 ## 2026-08-15 交易条件变量目录阶段0（SignalDataCatalog）
 
 - **需求**：回测先建可交易变量目录，不在 Flutter 里另判条件画箭头。阶段0只登记身份清楚、能取值的变量。

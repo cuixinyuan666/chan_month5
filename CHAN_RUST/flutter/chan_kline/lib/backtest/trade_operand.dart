@@ -49,6 +49,23 @@ enum TradeBinaryOp {
   crossBelow,
 }
 
+/// 表达式操作数：变量 或 常数。比较/穿越至少一侧必须是变量。
+sealed class TradeValueRef {
+  const TradeValueRef();
+}
+
+/// 目录里的可交易变量，例如 RAW.K1.CLOSE
+class TradeVarRef extends TradeValueRef {
+  final String variableId;
+  const TradeVarRef(this.variableId);
+}
+
+/// 字面量，例如 CLOSE > 10 里的 10。钟跟着对面那根变量走。
+class TradeConstRef extends TradeValueRef {
+  final double value;
+  const TradeConstRef(this.value);
+}
+
 /// 同层同钟对：外部组不出来，只能 [compileBinaryOp] 成功才有。
 class SameClockPair {
   final TradeOperand left;
@@ -74,6 +91,26 @@ final class TradeExprIllegal extends TradeExprCompile {
   final String reason;
 
   const TradeExprIllegal(this.reason);
+}
+
+/// 变量或常数比较/穿越：钟由变量一侧决定；两常数非法。
+final class TradeValueExprOk extends TradeExprCompile {
+  /// 这对操作数共用的层号/钟
+  final TradeOperand clock;
+  final TradeOperand? leftOp;
+  final TradeOperand? rightOp;
+  final TradeValueRef left;
+  final TradeValueRef right;
+  final TradeBinaryOp op;
+
+  const TradeValueExprOk({
+    required this.clock,
+    required this.leftOp,
+    required this.rightOp,
+    required this.left,
+    required this.right,
+    required this.op,
+  });
 }
 
 /// 比较 / CROSS 的唯一入口：过不了同钟门禁就是非法表达式，不会进入求值。
@@ -111,4 +148,49 @@ bool canCombineInExpression(String idA, String idB, {int maxKn = 8}) {
     op: TradeBinaryOp.gt,
     maxKn: maxKn,
   ) is TradeExprOk;
+}
+
+/// 变量 vs 变量走同层同钟；变量 vs 常数继承变量的钟；常数 vs 常数非法。
+TradeExprCompile compileValuePair({
+  required TradeValueRef left,
+  required TradeValueRef right,
+  required TradeBinaryOp op,
+  int maxKn = 8,
+}) {
+  final leftVar = left is TradeVarRef;
+  final rightVar = right is TradeVarRef;
+  if (!leftVar && !rightVar) {
+    return const TradeExprIllegal('常数和常数不能比较，至少一侧必须是变量');
+  }
+  if (leftVar && rightVar) {
+    final bin = compileBinaryOp(
+      leftId: (left as TradeVarRef).variableId,
+      rightId: (right as TradeVarRef).variableId,
+      op: op,
+      maxKn: maxKn,
+    );
+    if (bin is TradeExprIllegal) return bin;
+    final ok = bin as TradeExprOk;
+    return TradeValueExprOk(
+      clock: ok.pair.left,
+      leftOp: ok.pair.left,
+      rightOp: ok.pair.right,
+      left: left,
+      right: right,
+      op: op,
+    );
+  }
+  final varRef = leftVar ? left as TradeVarRef : right as TradeVarRef;
+  final bound = TradeOperand.tryBind(varRef.variableId, maxKn: maxKn);
+  if (bound == null) {
+    return const TradeExprIllegal('未登记进交易目录，或只盘点还不能当条件');
+  }
+  return TradeValueExprOk(
+    clock: bound,
+    leftOp: leftVar ? bound : null,
+    rightOp: rightVar ? bound : null,
+    left: left,
+    right: right,
+    op: op,
+  );
 }

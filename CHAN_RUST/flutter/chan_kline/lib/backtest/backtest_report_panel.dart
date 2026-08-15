@@ -10,7 +10,6 @@ import 'metric_format.dart';
 import 'order_models.dart';
 import 'signal_event.dart';
 import 'strategy_signal_painter.dart';
-import 'trade_operand.dart';
 
 enum BacktestReportTab { metrics, equity, trades, chain }
 
@@ -261,22 +260,38 @@ class BacktestReportPanel extends StatelessWidget {
         final on = s.signalId == selectedSignalId;
         final side = s.side == TradeSide.buy ? '策买' : '策卖';
         final st = o == null ? '无订单' : _orderStatus(o);
-        return ListTile(
-          dense: true,
-          selected: on,
-          selectedTileColor: const Color(0x33D500F9),
-          title: Text(
-            '$side  K${s.discoveryX}  $st',
-            style: const TextStyle(fontSize: 13),
+        return Material(
+          color: on ? const Color(0x33D500F9) : Colors.transparent,
+          child: InkWell(
+            onTap: () => onSelectSignal(s),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '$side  K${s.discoveryX}  $st',
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    s.explainBlock,
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: Color(0xFFCBD5E1),
+                      height: 1.35,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '${f == null ? '未成交' : '成交K${f.executeX} @${f.price.toStringAsFixed(3)}'}'
+                    '${t == null ? '' : '  · 交易 ${t.tradeId} 净${formatMoney(t.netPnL)}'}',
+                    style: const TextStyle(fontSize: 11, color: Color(0xFF94A3B8)),
+                  ),
+                ],
+              ),
+            ),
           ),
-          subtitle: Text(
-            '${s.leftId} ${s.op == TradeBinaryOp.crossBelow ? '下穿' : '上穿'} ${s.rightId}\n'
-            '${f == null ? '未成交' : '成交K${f.executeX} @${f.price.toStringAsFixed(3)}'}'
-            '${t == null ? '' : '  · 交易 ${t.tradeId} 净${formatMoney(t.netPnL)}'}',
-            style: const TextStyle(fontSize: 11),
-          ),
-          isThreeLine: true,
-          onTap: () => onSelectSignal(s),
         );
       },
     );

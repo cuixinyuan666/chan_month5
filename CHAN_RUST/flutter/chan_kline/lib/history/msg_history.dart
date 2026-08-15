@@ -1237,6 +1237,23 @@ class MsgHistory {
     );
   }
 
+  /// 通用交易条件构建器（进程内去重）
+  static bool _tradeConditionBuilderLogged = false;
+  void appendTradeConditionBuilder() {
+    if (_tradeConditionBuilderLogged) return;
+    _tradeConditionBuilderLogged = true;
+    append(
+      '【条件构建器·2026-08-15】买卖条件不再写死布林穿越。'
+      '可以搭：大于/小于/大于等于/小于等于、上穿、下穿，多条用 AND 或 OR 组合；'
+      '右边可以是同一层的收开高低或布林三轨，也可以填常数。'
+      '同一条比较必须同层同钟：K1收盘对K1布林可以，K0收盘对K1布林直接禁止；'
+      '一棵树上也不能把 K0 和 K1 AND/OR 在一起。'
+      '真假只由回测引擎按这棵条件树计算，界面只负责搭树、展示结果。'
+      '每条策买/策卖会写出条件、触发时的取值、发现在哪根K0，并能追到订单和成交。'
+      '本批变量只有收开高低和布林三轨，未接入 MACD/RSI/买卖点/背驰。',
+    );
+  }
+
   /// 运行时虚线摘要（内容变才追加；复制历史记录排查用）。
   void appendDisplayBuildingLinesRuntime({
     required int kn,
