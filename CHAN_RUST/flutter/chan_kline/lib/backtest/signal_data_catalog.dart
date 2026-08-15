@@ -57,6 +57,13 @@ class TradeVariableDef {
   final String? blockedReason;
   /// 盘点模板里的 `{n}` 层号占位
   final String? idPattern;
+  /// 选择器分组键：ohlc / boll / macd / rsi / kdj / volume
+  final String groupKey;
+  final String groupLabel;
+  /// 组内字段短名：DIF / 中轨 / 收
+  final String fieldLabel;
+  /// 给人看的来源说明（诊断面板）
+  final String description;
 
   const TradeVariableDef({
     required this.variableId,
@@ -74,6 +81,10 @@ class TradeVariableDef {
     required this.availabilityNote,
     this.blockedReason,
     this.idPattern,
+    this.groupKey = '',
+    this.groupLabel = '',
+    this.fieldLabel = '',
+    this.description = '',
   });
 
   bool get expressionReady => readiness == TradeReadiness.registered;
@@ -92,6 +103,75 @@ String rawOhlcId(int kn, String field) => 'RAW.K$kn.${field.toUpperCase()}';
 
 String bollBandId(int kn, String band) =>
     'MAIN.K$kn.BOLL.${band.toUpperCase()}';
+
+String macdFieldId(int kn, String field) =>
+    'SUB.K$kn.MACD.${field.toUpperCase()}';
+
+String rsiValueId(int kn) => 'SUB.K$kn.RSI.VALUE';
+
+String kdjFieldId(int kn, String field) =>
+    'SUB.K$kn.KDJ.${field.toUpperCase()}';
+
+String k0VolumeId() => 'RAW.K0.VOLUME';
+
+/// 把已登记 id 换到另一层；该层没有对应变量（如 K1 成交量）则退回该层收盘。
+String remapRegisteredVarId(String variableId, int newKn, {int maxKn = 8}) {
+  final parts = variableId.split('.');
+  if (parts.length < 3 || !parts[1].startsWith('K')) {
+    return rawOhlcId(newKn, 'CLOSE');
+  }
+  parts[1] = 'K$newKn';
+  final next = parts.join('.');
+  final def = lookupTradeVariable(next, maxKn: maxKn);
+  if (def != null && def.expressionReady) return next;
+  return rawOhlcId(newKn, 'CLOSE');
+}
+
+int? knFromVariableId(String variableId) {
+  final parts = variableId.split('.');
+  if (parts.length < 2 || !parts[1].startsWith('K')) return null;
+  return int.tryParse(parts[1].substring(1));
+}
+
+/// 某一层里、已进公式的变量，按登记顺序分组（选择器只用这份，不写死指标名）。
+class TradeVarGroupSpec {
+  final String key;
+  final String label;
+  final TradePanel panel;
+  final List<TradeVariableDef> fields;
+
+  const TradeVarGroupSpec({
+    required this.key,
+    required this.label,
+    required this.panel,
+    required this.fields,
+  });
+}
+
+List<TradeVarGroupSpec> groupedRegisteredVars(int kn, int maxKn) {
+  final vars = buildRegisteredTradeVariables(maxKn)
+      .where((v) => v.displayKn == kn && v.expressionReady)
+      .toList();
+  final order = <String>[];
+  final map = <String, List<TradeVariableDef>>{};
+  for (final v in vars) {
+    final g = v.groupKey.isEmpty ? v.panel.name : v.groupKey;
+    map.putIfAbsent(g, () {
+      order.add(g);
+      return <TradeVariableDef>[];
+    });
+    map[g]!.add(v);
+  }
+  return [
+    for (final g in order)
+      TradeVarGroupSpec(
+        key: g,
+        label: map[g]!.first.groupLabel.isEmpty ? g : map[g]!.first.groupLabel,
+        panel: map[g]!.first.panel,
+        fields: map[g]!,
+      ),
+  ];
+}
 
 /// 阶段0已登记、可以进条件表达式的变量。
 /// [maxKn] 与图上 chartMaxKn 同口径：布林 0..maxKn；虚拟K收盘 1..maxKn。
@@ -118,6 +198,10 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
       unit: 'price',
       futureSafe: true,
       availabilityNote: '走到这根 K0 时即可读；没有这根则为不可用',
+      groupKey: 'ohlc',
+      groupLabel: '开高低收',
+      fieldLabel: ohlcCn[f]!,
+      description: '原生 K0 开高低收',
     ));
   }
   out.add(const TradeVariableDef(
@@ -134,6 +218,10 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
     unit: 'volume',
     futureSafe: true,
     availabilityNote: '走到这根 K0 时即可读',
+    groupKey: 'volume',
+    groupLabel: '成交量',
+    fieldLabel: '成交量',
+    description: '只登记 K0 原生成交量；Kn 成交量是铺平阶梯，本阶段不进公式',
   ));
 
   // Kn≥1：虚拟K开高低收（与布林同一套钟；含动态段）
@@ -153,6 +241,10 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
         unit: 'price',
         futureSafe: true,
         availabilityNote: '该层还没有第一根虚拟K时为不可用；不读未来K',
+        groupKey: 'ohlc',
+        groupLabel: '开高低收',
+        fieldLabel: ohlcCn[f]!,
+        description: '虚拟K开高低收，条件只在样本右端跳',
       ));
     }
   }
@@ -176,6 +268,79 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
         unit: 'price',
         futureSafe: true,
         availabilityNote: '有第一个布林样本才有数；热身不足仍按图上布林出数，不另造前N根不可用',
+        groupKey: 'boll',
+        groupLabel: '布林',
+        fieldLabel: bandCn[b]!,
+        description: '读图上已冻住的布林格子，禁止现场另算',
+      ));
+    }
+  }
+
+  // 副图 MACD / RSI / KDJ：与中枢同号、同一套 zsMath 钟；只读冻结仓
+  const macdFields = ['DIF', 'DEA', 'HIST'];
+  for (var kn = 0; kn <= hi; kn++) {
+    for (final f in macdFields) {
+      out.add(TradeVariableDef(
+        variableId: macdFieldId(kn, f),
+        displayName: 'K$kn MACD.$f',
+        panel: TradePanel.sub,
+        displayKn: kn,
+        clockFamily: TradeClockFamily.zsMath,
+        evalClock: evalClockForDisplayKn(kn),
+        plotClock: TradePlotClock.k0Bar,
+        valueType: TradeValueType.numeric,
+        readiness: TradeReadiness.registered,
+        source: 'MathSeriesFreezeStore.macd(kn)，与副图 MACD 同一仓',
+        unit: 'macd',
+        futureSafe: true,
+        availabilityNote: '冻结仓该格有数才可读；没有仓或空格=不可用，不现场重算',
+        groupKey: 'macd',
+        groupLabel: 'MACD',
+        fieldLabel: f,
+        description: f == 'HIST'
+            ? 'MACD 柱=2*(DIF-DEA)，读冻结仓 macd 序列'
+            : '读冻结仓 ${f.toLowerCase()} 序列',
+      ));
+    }
+    out.add(TradeVariableDef(
+      variableId: rsiValueId(kn),
+      displayName: 'K$kn RSI',
+      panel: TradePanel.sub,
+      displayKn: kn,
+      clockFamily: TradeClockFamily.zsMath,
+      evalClock: evalClockForDisplayKn(kn),
+      plotClock: TradePlotClock.k0Bar,
+      valueType: TradeValueType.numeric,
+      readiness: TradeReadiness.registered,
+      source: 'MathSeriesFreezeStore.rsi(kn)，与副图 RSI 同一仓',
+      unit: 'rsi',
+      futureSafe: true,
+      availabilityNote: '冻结仓该格有数才可读；没有仓或空格=不可用，不现场重算',
+      groupKey: 'rsi',
+      groupLabel: 'RSI',
+      fieldLabel: 'VALUE',
+      description: 'RSI 单值序列，比较/穿越走现有变量 vs 常数',
+    ));
+    const kdjFields = {'K': 'K', 'D': 'D', 'J': 'J'};
+    for (final e in kdjFields.entries) {
+      out.add(TradeVariableDef(
+        variableId: kdjFieldId(kn, e.key),
+        displayName: 'K$kn KDJ.${e.key}',
+        panel: TradePanel.sub,
+        displayKn: kn,
+        clockFamily: TradeClockFamily.zsMath,
+        evalClock: evalClockForDisplayKn(kn),
+        plotClock: TradePlotClock.k0Bar,
+        valueType: TradeValueType.numeric,
+        readiness: TradeReadiness.registered,
+        source: 'MathSeriesFreezeStore.kdj(kn)，与副图 KDJ 同一仓',
+        unit: 'kdj',
+        futureSafe: true,
+        availabilityNote: '冻结仓该格有数才可读；没有仓或空格=不可用，不现场重算',
+        groupKey: 'kdj',
+        groupLabel: 'KDJ',
+        fieldLabel: e.value,
+        description: '读冻结仓 KDJ.${e.key}，金叉死叉用 CROSS 表达',
       ));
     }
   }
@@ -267,36 +432,12 @@ List<TradeVariableDef> inventoryOnlyTradeVariables() {
       why: '段内拟合线，不是序列格子',
     ),
     stub(
-      pattern: 'SUB.K{n}.MACD.DIF',
-      name: 'KnMACD_DIF',
-      panel: TradePanel.sub,
-      clock: TradeClockFamily.zsMath,
-      type: TradeValueType.numeric,
-      why: '有冻结仓，阶段0不进公式，避免目录一次铺太宽',
-    ),
-    stub(
-      pattern: 'SUB.K{n}.RSI',
-      name: 'KnRSI',
-      panel: TradePanel.sub,
-      clock: TradeClockFamily.zsMath,
-      type: TradeValueType.numeric,
-      why: '同上',
-    ),
-    stub(
-      pattern: 'SUB.K{n}.KDJ',
-      name: 'KnKDJ',
-      panel: TradePanel.sub,
-      clock: TradeClockFamily.zsMath,
-      type: TradeValueType.numeric,
-      why: '同上',
-    ),
-    stub(
       pattern: 'SUB.K{n}.VOLUME',
       name: 'Kn成交量',
       panel: TradePanel.sub,
       clock: TradeClockFamily.zsMath,
       type: TradeValueType.numeric,
-      why: 'K1+ 成交量是铺平后的层序列；阶段0只登记 RAW.K0.VOLUME',
+      why: 'K1+ 成交量是铺平后的层序列，不是虚拟K样本总量；本阶段只登记 RAW.K0.VOLUME',
     ),
     stub(
       pattern: 'SUB.K{n}.FRACTAL_CONFIRM',

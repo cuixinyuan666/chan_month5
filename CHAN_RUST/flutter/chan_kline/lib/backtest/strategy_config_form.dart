@@ -1,10 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../compute/math_series_freeze_store.dart';
+import '../models/kline_bar.dart';
+import '../models/level_models.dart';
 import 'condition_ast.dart';
+import 'signal_data_catalog.dart';
 import 'strategy_compile.dart';
 import 'strategy_config.dart';
 import 'trade_operand.dart';
+import 'trade_var_diagnose.dart';
 
 /// 通用条件构建器：比较 / 穿越 / AND / OR / 变量 vs 常数。只搭 AST，不算真假。
 class StrategyConfigForm extends StatefulWidget {
@@ -13,6 +18,10 @@ class StrategyConfigForm extends StatefulWidget {
   final ValueChanged<StrategyConfig> onChanged;
   final ValueChanged<StrategyConfig>? onRun;
   final bool running;
+  final List<KlineBar> bars;
+  final List<LevelBundle> levels;
+  final MathSeriesFreezeStore? mathFreeze;
+  final int asOf;
 
   const StrategyConfigForm({
     super.key,
@@ -21,6 +30,10 @@ class StrategyConfigForm extends StatefulWidget {
     required this.onChanged,
     this.onRun,
     this.running = false,
+    this.bars = const [],
+    this.levels = const [],
+    this.mathFreeze,
+    this.asOf = 0,
   });
 
   @override
@@ -29,41 +42,40 @@ class StrategyConfigForm extends StatefulWidget {
 
 class _LeafDraft {
   int kn;
-  String leftKey;
+  String leftId;
   TradeBinaryOp op;
   bool rightIsConst;
-  String rightKey;
+  String rightId;
   double rightConst;
 
   _LeafDraft({
     required this.kn,
-    required this.leftKey,
+    required this.leftId,
     required this.op,
     required this.rightIsConst,
-    required this.rightKey,
+    required this.rightId,
     required this.rightConst,
   });
 
   factory _LeafDraft.fromCmp(TradeCmpAst cmp, {int fallbackKn = 0}) {
-    final leftParsed = cmp.left is TradeVarRef
-        ? parseFirstBatchId((cmp.left as TradeVarRef).variableId)
-        : null;
-    final kn = leftParsed?.kn ??
+    final leftId = cmp.left is TradeVarRef
+        ? (cmp.left as TradeVarRef).variableId
+        : rawOhlcId(fallbackKn, 'CLOSE');
+    final kn = knFromVariableId(leftId) ??
         (cmp.right is TradeVarRef
-            ? parseFirstBatchId((cmp.right as TradeVarRef).variableId)?.kn
+            ? knFromVariableId((cmp.right as TradeVarRef).variableId)
             : null) ??
         fallbackKn;
-    final leftKey = leftParsed?.key ?? 'CLOSE';
     final rightIsConst = cmp.right is TradeConstRef;
-    final rightParsed = cmp.right is TradeVarRef
-        ? parseFirstBatchId((cmp.right as TradeVarRef).variableId)
-        : null;
+    final rightId = cmp.right is TradeVarRef
+        ? (cmp.right as TradeVarRef).variableId
+        : bollBandId(kn, 'DOWN');
     return _LeafDraft(
       kn: kn,
-      leftKey: leftKey,
+      leftId: leftId,
       op: cmp.op,
       rightIsConst: rightIsConst,
-      rightKey: rightParsed?.key ?? 'BOLL.DOWN',
+      rightId: rightId,
       rightConst: cmp.right is TradeConstRef
           ? (cmp.right as TradeConstRef).value
           : 0,
@@ -71,16 +83,13 @@ class _LeafDraft {
   }
 
   TradeCmpAst toCmp() {
-    final leftSpec = specByKey(leftKey) ?? kStrategyFirstBatch.first;
-    final left = TradeVarRef(leftSpec.idOf(kn));
     final TradeValueRef right;
     if (rightIsConst) {
       right = TradeConstRef(rightConst);
     } else {
-      final rs = specByKey(rightKey) ?? kStrategyFirstBatch.last;
-      right = TradeVarRef(rs.idOf(kn));
+      right = TradeVarRef(rightId);
     }
-    return TradeCmpAst(left: left, right: right, op: op);
+    return TradeCmpAst(left: TradeVarRef(leftId), right: right, op: op);
   }
 }
 
@@ -115,6 +124,7 @@ class _StrategyConfigFormState extends State<StrategyConfigForm> {
   late _SideDraft _buy;
   late _SideDraft _sell;
   final Map<String, TextEditingController> _constCtrls = {};
+  String? _diagId;
 
   @override
   void initState() {
@@ -260,6 +270,8 @@ class _StrategyConfigFormState extends State<StrategyConfigForm> {
           icon: const Icon(Icons.play_arrow, size: 18),
           label: Text(widget.running ? '正在回测…' : '运行回测'),
         ),
+        const SizedBox(height: 10),
+        _diagnoseCard(),
       ],
     );
   }
@@ -296,10 +308,10 @@ class _StrategyConfigFormState extends State<StrategyConfigForm> {
               final last = draft.leaves.last;
               draft.leaves.add(_LeafDraft(
                 kn: last.kn,
-                leftKey: 'CLOSE',
+                leftId: rawOhlcId(last.kn, 'CLOSE'),
                 op: TradeBinaryOp.lt,
                 rightIsConst: false,
-                rightKey: 'BOLL.MID',
+                rightId: bollBandId(last.kn, 'MID'),
                 rightConst: 0,
               ));
               draft.joins.add(CondJoin.and);
@@ -387,28 +399,34 @@ class _StrategyConfigFormState extends State<StrategyConfigForm> {
                   onChanged: (v) {
                     if (v == null) return;
                     leaf.kn = v;
+                    leaf.leftId = remapRegisteredVarId(
+                      leaf.leftId,
+                      v,
+                      maxKn: maxKn,
+                    );
+                    if (!leaf.rightIsConst) {
+                      leaf.rightId = remapRegisteredVarId(
+                        leaf.rightId,
+                        v,
+                        maxKn: maxKn,
+                      );
+                    }
                     setState(() {});
-              _emit();
+                    _emit();
                   },
                 ),
               ),
               const SizedBox(width: 6),
               Expanded(
-                child: DropdownButtonFormField<String>(
-                  isExpanded: true,
-                  value: specByKey(leaf.leftKey) == null
-                      ? kStrategyFirstBatch.first.key
-                      : leaf.leftKey,
-                  decoration: _dec('左'),
-                  items: [
-                    for (final s in kStrategyFirstBatch)
-                      DropdownMenuItem(value: s.key, child: Text(s.label)),
-                  ],
-                  onChanged: (v) {
-                    if (v == null) return;
-                    leaf.leftKey = v;
+                child: _varPicker(
+                  id: leaf.leftId,
+                  kn: kn,
+                  maxKn: maxKn,
+                  label: '左',
+                  onId: (id) {
+                    leaf.leftId = id;
                     setState(() {});
-              _emit();
+                    _emit();
                   },
                 ),
               ),
@@ -446,10 +464,16 @@ class _StrategyConfigFormState extends State<StrategyConfigForm> {
                       draft.joins.removeAt(index - 1);
                     }
                     setState(() {});
-              _emit();
+                    _emit();
                   },
                   icon: const Icon(Icons.close, size: 16),
                 ),
+              IconButton(
+                tooltip: '诊断这个变量',
+                visualDensity: VisualDensity.compact,
+                onPressed: () => setState(() => _diagId = leaf.leftId),
+                icon: const Icon(Icons.monitor_heart_outlined, size: 16),
+              ),
             ],
           ),
           const SizedBox(height: 6),
@@ -496,28 +520,122 @@ class _StrategyConfigFormState extends State<StrategyConfigForm> {
                           _emit();
                         },
                       )
-                    : DropdownButtonFormField<String>(
-                        isExpanded: true,
-                        value: specByKey(leaf.rightKey) == null
-                            ? kStrategyFirstBatch.last.key
-                            : leaf.rightKey,
-                        decoration: _dec('变量'),
-                        items: [
-                          for (final s in kStrategyFirstBatch)
-                            DropdownMenuItem(
-                              value: s.key,
-                              child: Text(s.label),
-                            ),
-                        ],
-                        onChanged: (v) {
-                          if (v == null) return;
-                          leaf.rightKey = v;
+                    : _varPicker(
+                        id: leaf.rightId,
+                        kn: kn,
+                        maxKn: maxKn,
+                        label: '变量',
+                        onId: (id) {
+                          leaf.rightId = id;
                           setState(() {});
-              _emit();
+                          _emit();
                         },
                       ),
               ),
             ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _varPicker({
+    required String id,
+    required int kn,
+    required int maxKn,
+    required String label,
+    required ValueChanged<String> onId,
+  }) {
+    final groups = groupedRegisteredVars(kn, maxKn);
+    if (groups.isEmpty) {
+      return Text(label, style: const TextStyle(fontSize: 12));
+    }
+    final def = lookupTradeVariable(id, maxKn: maxKn);
+    var groupKey = def?.groupKey ?? groups.first.key;
+    if (!groups.any((g) => g.key == groupKey)) {
+      groupKey = groups.first.key;
+    }
+    final group = groups.firstWhere((g) => g.key == groupKey);
+    var fieldId = id;
+    if (!group.fields.any((f) => f.variableId == fieldId)) {
+      fieldId = group.fields.first.variableId;
+    }
+    return Row(
+      children: [
+        Expanded(
+          flex: 4,
+          child: DropdownButtonFormField<String>(
+            isExpanded: true,
+            value: groupKey,
+            decoration: _dec(label),
+            items: [
+              for (final g in groups)
+                DropdownMenuItem(value: g.key, child: Text(g.label)),
+            ],
+            onChanged: (v) {
+              if (v == null) return;
+              final g = groups.firstWhere((e) => e.key == v);
+              onId(g.fields.first.variableId);
+            },
+          ),
+        ),
+        const SizedBox(width: 4),
+        Expanded(
+          flex: 5,
+          child: DropdownButtonFormField<String>(
+            isExpanded: true,
+            value: fieldId,
+            decoration: _dec('字段'),
+            items: [
+              for (final f in group.fields)
+                DropdownMenuItem(
+                  value: f.variableId,
+                  child: Text(f.fieldLabel.isEmpty ? f.displayName : f.fieldLabel),
+                ),
+            ],
+            onChanged: (v) {
+              if (v != null) onId(v);
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _diagnoseCard() {
+    final id = _diagId ??
+        (_buy.leaves.isNotEmpty ? _buy.leaves.first.leftId : 'RAW.K0.CLOSE');
+    final d = diagnoseTradeVariable(
+      variableId: id,
+      asOf: widget.asOf,
+      bars: widget.bars,
+      levels: widget.levels,
+      mathFreeze: widget.mathFreeze,
+      maxKn: widget.maxKn < 0 ? 0 : widget.maxKn,
+    );
+    return Container(
+      padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFF111827),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFF334155)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            '变量诊断（只读目录和冻结仓，不算条件）',
+            style: TextStyle(fontSize: 11, color: Color(0xFF94A3B8)),
+          ),
+          const SizedBox(height: 4),
+          SelectableText(
+            d.text,
+            style: const TextStyle(
+              fontSize: 11,
+              height: 1.35,
+              color: Color(0xFFE2E8F0),
+              fontFamily: 'monospace',
+            ),
           ),
         ],
       ),

@@ -10,7 +10,7 @@ import 'strategy_compile.dart';
 import 'strategy_config.dart';
 
 /// 引擎版本：以后缠论/撮合规则改了，旧报告能对上是哪一版跑的。
-const String kBacktestEngineVersion = 'backtest-workbench-v2-ast';
+const String kBacktestEngineVersion = 'backtest-workbench-v3-indicators';
 
 /// 一次回测运行：策略 + 当时数据范围 + 引擎版本 + 结果。
 /// UI 不直接塞一堆散参数进引擎。

@@ -2,6 +2,17 @@
 
 > 口径/行为变更记录（复制排查用）；与 `lib/history/msg_history.dart` 常驻历史同步维护。
 
+## 2026-08-15 Phase6 指标变量扩展层 v1
+
+- **需求**：条件树能搭，但可交易变量还只有 OHLC+布林。接入现有 MACD/RSI/KDJ 冻结仓和 K0 成交量，做成统一注册通道。
+- **不变**：缠论内核、步进冻结、K0 下一根开盘成交；不新写指标算法；不做空/加仓/Buy1/背驰/节奏/Demark。
+- **登记**：`SUB.K{n}.MACD.DIF/DEA/HIST`、`SUB.K{n}.RSI.VALUE`、`SUB.K{n}.KDJ.K/D/J`；成交量只开放 `RAW.K0.VOLUME`（Kn 成交量仍是铺平阶梯，不进公式）。无 `VOLUME_AVG5`。
+- **钟**：与布林同一套 zsMath；K0 一根一根，K1+ 虚拟K右端。混层编译期非法。
+- **读数**：只读 `MathSeriesFreezeStore`；没有仓/空格=不可用，禁止现场重算。
+- **UI**：条件积木按层+类别（开高低收/布林/MACD/RSI/KDJ/成交量）动态列出已登记变量；变量诊断只读目录和冻结仓。
+- **验证**：`flutter test test/indicator_var_ext_test.dart test/signal_data_catalog_test.dart test/condition_ast_test.dart test/backtest_workbench_test.dart`
+- **注意**：纯 Flutter；无需重编 DLL。引擎版本 `backtest-workbench-v3-indicators`。
+
 ## 2026-08-15 Phase5 通用交易条件构建器 v1
 
 - **需求**：策略从写死的布林穿越模板升级为可搭积木的条件 AST；界面只建树，真假仍走现有回测核心。

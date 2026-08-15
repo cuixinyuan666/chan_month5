@@ -197,6 +197,7 @@ Future<void> main() async {
   MsgHistory.instance.appendTradeBacktestResult();
   MsgHistory.instance.appendTradeBacktestWorkbench();
   MsgHistory.instance.appendTradeConditionBuilder();
+  MsgHistory.instance.appendTradeIndicatorVars();
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     await windowManager.ensureInitialized();
     const opts = WindowOptions(
@@ -371,7 +372,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
   bool _forceXgbRetrain = true;
   final MlBspSampler _mlSampler = MlBspSampler();
 
-  /// 策略回测工作台（第一版：同层 CLOSE×布林穿越）
+  /// 策略回测工作台（条件树 + 指标变量：OHLC/布林/MACD/RSI/KDJ/K0成交量）
   bool _backtestPanelOpen = false;
   StrategyConfig _strategyConfig = const StrategyConfig();
   BacktestRun? _backtestRun;
@@ -2168,6 +2169,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
             onSelectSignal: _onBacktestSelectSignal,
             onJumpX: _jumpBacktestBar,
             focusX: _btFocusBarIdx,
+            levels: _levels,
+            mathFreeze: _mathFreezeStore,
           ),
         ),
       ],
@@ -2277,11 +2280,13 @@ class _KlineHomePageState extends State<KlineHomePage> {
           child: Text(
             '先加载股票并走到你要回测的那根 K，再打开策略回测。\n\n'
             '买卖条件各自用积木搭：比较（> < >= <=）、上穿/下穿，'
-            '多条之间用 AND / OR。左右可以是同一层的收开高低或布林三轨，右边也可以填常数。'
-            '同一条比较必须同层同钟，K0 和 K1 不能拼在同一棵树上。\n\n'
+            '多条之间用 AND / OR。左右可以是同一层的收开高低、布林三轨、'
+            'MACD（DIF/DEA/柱）、RSI、KDJ，K0 还可以用成交量；右边也可以填常数。'
+            '同一条比较必须同层同钟，K0 和 K1 不能拼在同一棵树上。'
+            '成交量这一版只开放 K0，没有另造 Kn 成交量和均量。\n\n'
             '点运行后，图上出现「策买/策卖」，这是策略信号，不是缠论的 1Ba/1Sa。'
             '报告里的净利润、胜率、盈亏比、回撤都来自这一次回测结果，界面不会再算一遍。'
-            '每条信号会写明条件、触发时的取值、发现在哪根 K0。\n\n'
+            '左侧变量诊断只读图上已冻住的格子和计算钟样本，不会现场重算指标。\n\n'
             '点交易明细会跳到入场 K，再点同一笔会跳到出场 K。'
             '点图上的策买/策卖会打开对应的信号→订单→成交→交易。\n\n'
             '手续费、滑点先按你填的数字；默认 0。不做做空、加仓、多品种。',

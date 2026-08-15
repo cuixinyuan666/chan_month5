@@ -251,6 +251,7 @@ void main() {
         ),
       );
       expect(find.text('收盘  下穿  布林下轨'), findsNothing);
+      expect(find.textContaining('变量诊断'), findsOneWidget);
       expect(find.text('买入条件（同层同钟，真假由回测引擎算）'), findsOneWidget);
       expect(find.text('下穿'), findsWidgets);
       expect(find.text('上穿'), findsWidgets);

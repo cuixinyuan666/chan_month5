@@ -1254,6 +1254,22 @@ class MsgHistory {
     );
   }
 
+  /// 指标变量扩展层（进程内去重）
+  static bool _tradeIndicatorVarsLogged = false;
+  void appendTradeIndicatorVars() {
+    if (_tradeIndicatorVarsLogged) return;
+    _tradeIndicatorVarsLogged = true;
+    append(
+      '【指标变量·2026-08-15】条件积木按层和类别选变量：开高低收、布林、MACD（DIF/DEA/柱）、RSI、KDJ；'
+      '成交量这一版只开放 K0，没有另造 Kn 成交量和均量。'
+      'MACD/RSI/KDJ 只读图上已冻住的格子，没有仓就是不可用，不会现场再算一遍。'
+      '和布林同一套钟：K0 一根一根，K1 及以上看虚拟K右端。'
+      'K1 的 MACD DIF 上穿 DEA 可以；K0 的 MACD 对 K1 的 RSI 直接禁止。'
+      '左侧变量诊断能看到来源、计算钟、显示格子、当时已知的 K0 和当前值。'
+      '未接入买卖点、背驰、节奏、Demark。',
+    );
+  }
+
   /// 运行时虚线摘要（内容变才追加；复制历史记录排查用）。
   void appendDisplayBuildingLinesRuntime({
     required int kn,

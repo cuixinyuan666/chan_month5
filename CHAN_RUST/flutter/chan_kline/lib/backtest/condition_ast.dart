@@ -109,6 +109,41 @@ TradeAst k1CompositeSellAst() => TradeOrAst(
       ),
     );
 
+/// 综合策略买：K1 MACD DIF 上穿 DEA 并且 RSI < 50
+TradeAst k1MacdRsiBuyAst() => TradeAndAst(
+      const TradeCmpAst(
+        left: TradeVarRef('SUB.K1.MACD.DIF'),
+        right: TradeVarRef('SUB.K1.MACD.DEA'),
+        op: TradeBinaryOp.crossAbove,
+      ),
+      const TradeCmpAst(
+        left: TradeVarRef('SUB.K1.RSI.VALUE'),
+        right: TradeConstRef(50),
+        op: TradeBinaryOp.lt,
+      ),
+    );
+
+/// 综合策略卖：K1 MACD DIF 下穿 DEA 或者 RSI > 70
+TradeAst k1MacdRsiSellAst() => TradeOrAst(
+      const TradeCmpAst(
+        left: TradeVarRef('SUB.K1.MACD.DIF'),
+        right: TradeVarRef('SUB.K1.MACD.DEA'),
+        op: TradeBinaryOp.crossBelow,
+      ),
+      const TradeCmpAst(
+        left: TradeVarRef('SUB.K1.RSI.VALUE'),
+        right: TradeConstRef(70),
+        op: TradeBinaryOp.gt,
+      ),
+    );
+
+/// 成交量 vs 常数（K1 成交量本阶段不登记，只用 K0）
+TradeCmpAst k0VolumeGtAst(double threshold) => TradeCmpAst(
+      left: const TradeVarRef('RAW.K0.VOLUME'),
+      right: TradeConstRef(threshold),
+      op: TradeBinaryOp.gt,
+    );
+
 /// 给人看的操作符：比较用符号，穿越用 CROSS_ABOVE / CROSS_BELOW
 String tradeOpToken(TradeBinaryOp op) {
   return switch (op) {

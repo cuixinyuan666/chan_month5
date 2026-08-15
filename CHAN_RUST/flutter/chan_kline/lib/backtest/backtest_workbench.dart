@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
+import '../compute/math_series_freeze_store.dart';
 import '../models/kline_bar.dart';
+import '../models/level_models.dart';
 import 'backtest_report_panel.dart';
 import 'backtest_run.dart';
 import 'order_models.dart';
@@ -28,6 +30,8 @@ class BacktestWorkbench extends StatelessWidget {
   final ValueChanged<SignalEvent> onSelectSignal;
   final ValueChanged<int> onJumpX;
   final int? focusX;
+  final List<LevelBundle> levels;
+  final MathSeriesFreezeStore? mathFreeze;
 
   const BacktestWorkbench({
     super.key,
@@ -49,6 +53,8 @@ class BacktestWorkbench extends StatelessWidget {
     required this.onSelectSignal,
     required this.onJumpX,
     this.focusX,
+    this.levels = const [],
+    this.mathFreeze,
   });
 
   @override
@@ -108,6 +114,10 @@ class BacktestWorkbench extends StatelessWidget {
                       onChanged: onConfigChanged,
                       onRun: onRun,
                       running: running,
+                      bars: bars,
+                      levels: levels,
+                      mathFreeze: mathFreeze,
+                      asOf: currentStepIdx,
                     ),
                   ),
                 ),

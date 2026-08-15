@@ -1,0 +1,197 @@
+import '../compute/math_series_freeze_store.dart';
+import '../models/kline_bar.dart';
+import '../models/level_models.dart';
+import 'catalog_lookup.dart';
+import 'signal_data_catalog.dart';
+import 'trade_clock.dart';
+import 'trade_value.dart';
+
+/// 变量诊断：看钟、availableAt、图上格子值和计算钟样本，不重算指标。
+class TradeVarDiagnosis {
+  final String variableId;
+  final String displayName;
+  final String? groupLabel;
+  final TradePanel? panel;
+  final int? displayKn;
+  final TradeClockFamily? clockFamily;
+  final TradeEvalClock? evalClock;
+  final TradePlotClock? plotClock;
+  final String source;
+  final String description;
+  final bool expressionReady;
+  final bool freezePresent;
+  /// 当前 asOf 这根 K0 格子上能看见的值（plotClock）
+  final TradeScalar plotValue;
+  final int plotAt;
+  /// 计算钟上 asOf 当时最后一根已有样本
+  final EvalClockPoint? evalPoint;
+  final int evalSampleCount;
+  final String note;
+
+  const TradeVarDiagnosis({
+    required this.variableId,
+    required this.displayName,
+    required this.groupLabel,
+    required this.panel,
+    required this.displayKn,
+    required this.clockFamily,
+    required this.evalClock,
+    required this.plotClock,
+    required this.source,
+    required this.description,
+    required this.expressionReady,
+    required this.freezePresent,
+    required this.plotValue,
+    required this.plotAt,
+    required this.evalPoint,
+    required this.evalSampleCount,
+    required this.note,
+  });
+
+  String get text {
+    final buf = StringBuffer();
+    buf.writeln('变量：');
+    buf.writeln(displayName.isEmpty ? variableId : displayName);
+    buf.writeln(variableId);
+    buf.writeln();
+    buf.writeln('钟：');
+    buf.writeln(clockFamily?.name ?? '未登记');
+    buf.writeln();
+    buf.writeln('计算钟：');
+    buf.writeln(_evalClockCn(evalClock, displayKn));
+    if (evalPoint != null) {
+      buf.writeln();
+      buf.writeln('计算样本：');
+      final kn = displayKn ?? 0;
+      buf.writeln('K$kn sample #${evalPoint!.evalIndex}');
+      buf.writeln();
+      buf.writeln('availableAt：');
+      buf.writeln('K0 #${evalPoint!.availableAt}');
+      buf.writeln();
+      buf.writeln('计算钟上的值：');
+      buf.writeln(_fmt(evalPoint!.value));
+    } else {
+      buf.writeln();
+      buf.writeln('计算样本：');
+      buf.writeln('无（不可用或还没有样本）');
+    }
+    buf.writeln();
+    buf.writeln('plotAt：');
+    buf.writeln('K0 #$plotAt');
+    buf.writeln();
+    buf.writeln('图上格子值：');
+    buf.writeln(plotValue.isAvailable ? _fmt(plotValue.value!) : '不可用');
+    buf.writeln();
+    buf.writeln('来源：');
+    buf.writeln(source.isEmpty ? '未登记' : source);
+    buf.writeln();
+    buf.writeln('冻结仓：');
+    buf.writeln(freezePresent ? '有' : '没有（不会现场重算）');
+    if (note.isNotEmpty) {
+      buf.writeln();
+      buf.writeln(note);
+    }
+    return buf.toString().trimRight();
+  }
+}
+
+String _evalClockCn(TradeEvalClock? c, int? kn) {
+  if (c == TradeEvalClock.k0Bar) return 'K0 一根一根';
+  if (c == TradeEvalClock.knSample) return 'K${kn ?? "n"} 虚拟K样本（右端）';
+  return '未定';
+}
+
+String _fmt(double v) {
+  if (v == v.roundToDouble() && v.abs() >= 1) return v.toStringAsFixed(0);
+  return v.toStringAsFixed(4);
+}
+
+/// 只读目录 + 冻结仓 + 计算钟样本。UI 不在这里算条件真假。
+TradeVarDiagnosis diagnoseTradeVariable({
+  required String variableId,
+  required int asOf,
+  required List<KlineBar> bars,
+  List<LevelBundle> levels = const [],
+  MathSeriesFreezeStore? mathFreeze,
+  int maxKn = 8,
+}) {
+  final def = lookupTradeVariable(variableId, maxKn: maxKn);
+  final parsed = parseTradeVariableId(variableId);
+  var freezePresent = false;
+  if (mathFreeze != null && parsed != null && parsed.panel != 'RAW') {
+    freezePresent = frozenPlotSeries(parsed: parsed, store: mathFreeze) != null;
+  } else if (parsed?.panel == 'RAW') {
+    freezePresent = true; // 原生成交量/OHLC 不走冻结仓
+  }
+
+  if (def == null || !def.expressionReady) {
+    return TradeVarDiagnosis(
+      variableId: variableId,
+      displayName: def?.displayName ?? variableId,
+      groupLabel: def?.groupLabel,
+      panel: def?.panel,
+      displayKn: def?.displayKn,
+      clockFamily: def?.clockFamily,
+      evalClock: def?.evalClock,
+      plotClock: def?.plotClock,
+      source: def?.source ?? '',
+      description: def?.description ?? '',
+      expressionReady: false,
+      freezePresent: freezePresent,
+      plotValue: const TradeScalar.unavailable(),
+      plotAt: asOf,
+      evalPoint: null,
+      evalSampleCount: 0,
+      note: def?.blockedReason ?? '未登记进公式，不能当条件',
+    );
+  }
+
+  final plot = lookupTradeNumeric(
+    variableId: variableId,
+    asOf: asOf,
+    bars: bars,
+    levels: levels,
+    mathFreeze: mathFreeze,
+  );
+  final series = readEvalClockSeries(
+    variableId: variableId,
+    asOf: asOf,
+    bars: bars,
+    levels: levels,
+    mathFreeze: mathFreeze,
+  );
+  EvalClockPoint? last;
+  for (final p in series) {
+    if (p.availableAt <= asOf) last = p;
+  }
+
+  var note = def.description.isEmpty ? def.availabilityNote : def.description;
+  if (!freezePresent && parsed?.panel != 'RAW') {
+    note = '冻结仓没有这份序列，读数不可用，不会现场重算。$note';
+  } else if (plot.isUnavailable) {
+    note = '当前这根 K0 格子没有值（尚未出数或越界）。$note';
+  } else if (last != null && last.availableAt != asOf) {
+    note =
+        '图上格子是铺平后的持值；条件只在计算钟样本右端（K0 #${last.availableAt}）跳动。$note';
+  }
+
+  return TradeVarDiagnosis(
+    variableId: variableId,
+    displayName: def.displayName,
+    groupLabel: def.groupLabel,
+    panel: def.panel,
+    displayKn: def.displayKn,
+    clockFamily: def.clockFamily,
+    evalClock: def.evalClock,
+    plotClock: def.plotClock,
+    source: def.source,
+    description: def.description,
+    expressionReady: true,
+    freezePresent: freezePresent,
+    plotValue: plot,
+    plotAt: asOf,
+    evalPoint: last,
+    evalSampleCount: series.length,
+    note: note,
+  );
+}

@@ -35,20 +35,11 @@ TradeScalar lookupTradeNumeric({
       levels: levels,
     );
   }
-  if (parsed.panel == 'MAIN' &&
-      parsed.rest.length >= 2 &&
-      parsed.rest[0] == 'BOLL') {
-    return _lookupBoll(
-      kn: parsed.kn,
-      band: parsed.rest[1],
-      asOf: asOf,
-      bars: bars,
-      levels: levels,
-      mathFreeze: mathFreeze,
-      bollN: bollN,
-    );
-  }
-  return const TradeScalar.unavailable();
+  return _lookupFrozenPlot(
+    parsed: parsed,
+    asOf: asOf,
+    mathFreeze: mathFreeze,
+  );
 }
 
 ({String panel, int kn, List<String> rest})? _parseId(String id) {
@@ -120,28 +111,64 @@ TradeScalar _lookupRaw({
   return TradeScalar.num(v);
 }
 
-TradeScalar _lookupBoll({
-  required int kn,
-  required String band,
+/// 图上/十字用的铺平格子：只读冻结仓，禁止现算第二套 MACD/RSI/KDJ/布林。
+TradeScalar _lookupFrozenPlot({
+  required ({String panel, int kn, List<String> rest}) parsed,
   required int asOf,
-  required List<KlineBar> bars,
-  required List<LevelBundle> levels,
   required MathSeriesFreezeStore? mathFreeze,
-  required int bollN,
 }) {
-  List<double?>? series;
-  if (mathFreeze == null) {
-    // 交易/回测禁止现算第二套布林；没有冻结仓就是不可用
-    return const TradeScalar.unavailable();
-  }
-  series = _bollField(mathFreeze.boll(kn), band);
-  if (series == null || asOf >= series.length) {
+  if (mathFreeze == null) return const TradeScalar.unavailable();
+  final series = frozenPlotSeries(parsed: parsed, store: mathFreeze);
+  if (series == null || asOf < 0 || asOf >= series.length) {
     return const TradeScalar.unavailable();
   }
   final v = series[asOf];
   if (v == null) return const TradeScalar.unavailable();
   return TradeScalar.num(v);
 }
+
+/// 从冻结仓取出与图上同一份 K0 格子序列。没有仓/对不上字段 → null。
+List<double?>? frozenPlotSeries({
+  required ({String panel, int kn, List<String> rest}) parsed,
+  required MathSeriesFreezeStore store,
+}) {
+  if (parsed.panel == 'MAIN' &&
+      parsed.rest.length >= 2 &&
+      parsed.rest[0] == 'BOLL') {
+    return _bollField(store.boll(parsed.kn), parsed.rest[1]);
+  }
+  if (parsed.panel != 'SUB' || parsed.rest.isEmpty) return null;
+  switch (parsed.rest[0]) {
+    case 'MACD':
+      if (parsed.rest.length < 2) return null;
+      final m = store.macd(parsed.kn);
+      if (m == null) return null;
+      return switch (parsed.rest[1]) {
+        'DIF' => m.dif,
+        'DEA' => m.dea,
+        'HIST' => m.macd,
+        _ => null,
+      };
+    case 'RSI':
+      if (parsed.rest.length < 2 || parsed.rest[1] != 'VALUE') return null;
+      return store.rsi(parsed.kn);
+    case 'KDJ':
+      if (parsed.rest.length < 2) return null;
+      final k = store.kdj(parsed.kn);
+      if (k == null) return null;
+      return switch (parsed.rest[1]) {
+        'K' => k.k,
+        'D' => k.d,
+        'J' => k.j,
+        _ => null,
+      };
+    default:
+      return null;
+  }
+}
+
+({String panel, int kn, List<String> rest})? parseTradeVariableId(String id) =>
+    _parseId(id);
 
 /// evalClock 上的一个样本：条件/穿越只走这里，不走铺平后的 K0 阶梯。
 class EvalClockPoint {
@@ -184,20 +211,16 @@ List<EvalClockPoint> readEvalClockSeries({
       levels: levels,
     );
   }
-  if (parsed.panel == 'MAIN' &&
-      parsed.rest.length >= 2 &&
-      parsed.rest[0] == 'BOLL') {
-    return _bollEvalSeries(
-      kn: parsed.kn,
-      band: parsed.rest[1],
-      asOf: asOf,
-      bars: bars,
-      levels: levels,
-      mathFreeze: mathFreeze,
-      bollN: bollN,
-    );
-  }
-  return const [];
+  if (mathFreeze == null) return const [];
+  final plot = frozenPlotSeries(parsed: parsed, store: mathFreeze);
+  if (plot == null) return const [];
+  return _plotEvalSeries(
+    kn: parsed.kn,
+    plot: plot,
+    asOf: asOf,
+    bars: bars,
+    levels: levels,
+  );
 }
 
 List<EvalClockPoint> _rawEvalSeries({
@@ -249,22 +272,14 @@ List<EvalClockPoint> _rawEvalSeries({
   return out;
 }
 
-List<EvalClockPoint> _bollEvalSeries({
+/// 冻结仓是 K0 格子；条件只在 evalClock 样本上取（K0 每根，Kn 取虚拟K右端）。
+List<EvalClockPoint> _plotEvalSeries({
   required int kn,
-  required String band,
+  required List<double?> plot,
   required int asOf,
   required List<KlineBar> bars,
   required List<LevelBundle> levels,
-  required MathSeriesFreezeStore? mathFreeze,
-  required int bollN,
 }) {
-  List<double?>? plot;
-  if (mathFreeze == null) {
-    return const [];
-  }
-  plot = _bollField(mathFreeze.boll(kn), band);
-  if (plot == null) return const [];
-
   if (kn <= 0) {
     final out = <EvalClockPoint>[];
     var i = 0;
@@ -291,7 +306,6 @@ List<EvalClockPoint> _bollEvalSeries({
     if (x < 0 || x >= plot.length) continue;
     final v = plot[x];
     if (v == null) continue;
-    // 取样本右端那一格：那是该虚拟K上算出的布林，不是中间被铺平的持值
     out.add(EvalClockPoint(evalIndex: i, availableAt: x, value: v));
   }
   return out;

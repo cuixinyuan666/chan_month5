@@ -33,6 +33,10 @@ void main() {
       expect(regs.any((e) => e.variableId == 'RAW.K1.CLOSE'), isTrue);
       expect(regs.any((e) => e.variableId == 'MAIN.K0.BOLL.DOWN'), isTrue);
       expect(regs.any((e) => e.variableId == 'MAIN.K1.BOLL.UP'), isTrue);
+      expect(regs.any((e) => e.variableId == 'SUB.K0.MACD.DIF'), isTrue);
+      expect(regs.any((e) => e.variableId == 'SUB.K1.MACD.HIST'), isTrue);
+      expect(regs.any((e) => e.variableId == 'SUB.K1.RSI.VALUE'), isTrue);
+      expect(regs.any((e) => e.variableId == 'SUB.K1.KDJ.K'), isTrue);
       // 成交量只登记 K0
       expect(regs.any((e) => e.variableId == 'RAW.K1.VOLUME'), isFalse);
 
