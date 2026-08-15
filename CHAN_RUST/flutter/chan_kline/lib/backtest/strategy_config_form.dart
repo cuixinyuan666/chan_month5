@@ -6,6 +6,7 @@ import '../models/kline_bar.dart';
 import '../models/level_models.dart';
 import 'chan_event_store.dart';
 import 'condition_ast.dart';
+import 'divergence_relation_store.dart';
 import 'signal_data_catalog.dart';
 import 'strategy_compile.dart';
 import 'strategy_config.dart';
@@ -25,6 +26,7 @@ class StrategyConfigForm extends StatefulWidget {
   final MathSeriesFreezeStore? mathFreeze;
   final ChanEventStore chanEvents;
   final ZhongshuObjectStore? zsObjects;
+  final DivergenceRelationStore? diverRelations;
   final int asOf;
 
   const StrategyConfigForm({
@@ -39,6 +41,7 @@ class StrategyConfigForm extends StatefulWidget {
     this.mathFreeze,
     this.chanEvents = ChanEventStore.empty,
     this.zsObjects,
+    this.diverRelations,
     this.asOf = 0,
   });
 
@@ -53,6 +56,7 @@ class _LeafDraft {
   bool rightIsConst;
   String rightId;
   double rightConst;
+  String enumToken;
 
   _LeafDraft({
     required this.kn,
@@ -61,6 +65,7 @@ class _LeafDraft {
     required this.rightIsConst,
     required this.rightId,
     required this.rightConst,
+    this.enumToken = 'DOWN',
   });
 
   factory _LeafDraft.fromCmp(TradeCmpAst cmp, {int fallbackKn = 0}) {
@@ -72,10 +77,14 @@ class _LeafDraft {
             ? knFromVariableId((cmp.right as TradeVarRef).variableId)
             : null) ??
         fallbackKn;
-    final rightIsConst = cmp.right is TradeConstRef;
+    final rightIsConst =
+        cmp.right is TradeConstRef || cmp.right is TradeEnumRef;
     final rightId = cmp.right is TradeVarRef
         ? (cmp.right as TradeVarRef).variableId
         : bollBandId(kn, 'DOWN');
+    final enumToken = cmp.right is TradeEnumRef
+        ? (cmp.right as TradeEnumRef).token
+        : 'DOWN';
     return _LeafDraft(
       kn: kn,
       leftId: leftId,
@@ -85,6 +94,7 @@ class _LeafDraft {
       rightConst: cmp.right is TradeConstRef
           ? (cmp.right as TradeConstRef).value
           : 0,
+      enumToken: enumToken,
     );
   }
 
@@ -113,6 +123,13 @@ class _LeafDraft {
         def.valueType == TradeValueType.event;
   }
 
+  bool get isEnumLeft {
+    final def = lookupTradeVariable(leftId, maxKn: 32);
+    return def != null &&
+        def.expressionReady &&
+        def.valueType == TradeValueType.enumeration;
+  }
+
   TradeAst toNode() {
     if (isEventLeft) return TradeEventAst(leftId);
     return toCmp();
@@ -120,7 +137,9 @@ class _LeafDraft {
 
   TradeCmpAst toCmp() {
     final TradeValueRef right;
-    if (rightIsConst) {
+    if (isEnumLeft) {
+      right = TradeEnumRef(enumToken);
+    } else if (rightIsConst) {
       right = TradeConstRef(rightConst);
     } else {
       right = TradeVarRef(rightId);
@@ -405,6 +424,7 @@ class _StrategyConfigFormState extends State<StrategyConfigForm> {
     final leaf = draft.leaves[index];
     final kn = leaf.kn.clamp(0, maxKn);
     final eventLeft = leaf.isEventLeft;
+    final enumLeft = leaf.isEnumLeft;
     const ops = <TradeBinaryOp>[
       TradeBinaryOp.gt,
       TradeBinaryOp.lt,
@@ -415,7 +435,9 @@ class _StrategyConfigFormState extends State<StrategyConfigForm> {
     ];
     final shownOps = eventLeft
         ? const <TradeBinaryOp>[TradeBinaryOp.eventExists]
-        : ops;
+        : enumLeft
+            ? const <TradeBinaryOp>[TradeBinaryOp.eq]
+            : ops;
     return Container(
       margin: const EdgeInsets.only(bottom: 4),
       padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
@@ -469,7 +491,12 @@ class _StrategyConfigFormState extends State<StrategyConfigForm> {
                     final def = lookupTradeVariable(id, maxKn: maxKn);
                     if (def != null && def.valueType == TradeValueType.event) {
                       leaf.op = TradeBinaryOp.eventExists;
-                    } else if (leaf.op == TradeBinaryOp.eventExists) {
+                    } else if (def != null &&
+                        def.valueType == TradeValueType.enumeration) {
+                      leaf.op = TradeBinaryOp.eq;
+                      leaf.rightIsConst = true;
+                    } else if (leaf.op == TradeBinaryOp.eventExists ||
+                        leaf.op == TradeBinaryOp.eq) {
                       leaf.op = TradeBinaryOp.gt;
                     }
                     setState(() {});
@@ -491,7 +518,7 @@ class _StrategyConfigFormState extends State<StrategyConfigForm> {
                         child: Text(tradeOpLabelCn(o)),
                       ),
                   ],
-                  onChanged: eventLeft
+                  onChanged: eventLeft || enumLeft
                       ? null
                       : (v) {
                           if (v == null) return;
@@ -525,7 +552,26 @@ class _StrategyConfigFormState extends State<StrategyConfigForm> {
               ),
             ],
           ),
-          if (!eventLeft) ...[
+          if (enumLeft) ...[
+          const SizedBox(height: 6),
+          DropdownButtonFormField<String>(
+            isExpanded: true,
+            value: leaf.enumToken == 'UP' || leaf.enumToken == 'DOWN'
+                ? leaf.enumToken
+                : 'DOWN',
+            decoration: _dec('方向'),
+            items: const [
+              DropdownMenuItem(value: 'UP', child: Text('向上')),
+              DropdownMenuItem(value: 'DOWN', child: Text('向下')),
+            ],
+            onChanged: (v) {
+              if (v == null) return;
+              leaf.enumToken = v;
+              setState(() {});
+              _emit();
+            },
+          ),
+          ] else if (!eventLeft) ...[
           const SizedBox(height: 6),
           Row(
             children: [
@@ -681,6 +727,7 @@ class _StrategyConfigFormState extends State<StrategyConfigForm> {
       mathFreeze: widget.mathFreeze,
       chanEvents: widget.chanEvents,
       zsObjects: widget.zsObjects,
+      diverRelations: widget.diverRelations,
       maxKn: widget.maxKn < 0 ? 0 : widget.maxKn,
     );
     return Container(
@@ -694,7 +741,7 @@ class _StrategyConfigFormState extends State<StrategyConfigForm> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Text(
-            '变量诊断（只读目录、冻结仓和确认中枢对象，不算条件）',
+            '变量诊断（只读目录、冻结仓、确认中枢和背驰关系，不算条件）',
             style: TextStyle(fontSize: 11, color: Color(0xFF94A3B8)),
           ),
           const SizedBox(height: 4),

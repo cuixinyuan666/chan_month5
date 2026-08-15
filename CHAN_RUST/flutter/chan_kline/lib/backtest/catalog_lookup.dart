@@ -3,6 +3,8 @@ import '../compute/math_classic_compute.dart';
 import '../compute/math_series_freeze_store.dart';
 import '../models/kline_bar.dart';
 import '../models/level_models.dart';
+import 'divergence_relation.dart';
+import 'divergence_relation_store.dart';
 import 'signal_data_catalog.dart';
 import 'structure_object.dart';
 import 'trade_value.dart';
@@ -17,6 +19,7 @@ TradeScalar lookupTradeNumeric({
   List<LevelBundle> levels = const [],
   MathSeriesFreezeStore? mathFreeze,
   ZhongshuObjectStore? zsObjects,
+  DivergenceRelationStore? diverRelations,
   int bollN = 20,
 }) {
   if (bars.isEmpty || asOf < 0) return const TradeScalar.unavailable();
@@ -44,6 +47,12 @@ TradeScalar lookupTradeNumeric({
     zsObjects: zsObjects,
   );
   if (zs != null) return zs;
+  final diver = _lookupDiverProjection(
+    parsed: parsed,
+    asOf: asOf,
+    diverRelations: diverRelations,
+  );
+  if (diver != null) return diver;
   return _lookupFrozenPlot(
     parsed: parsed,
     asOf: asOf,
@@ -203,6 +212,7 @@ List<EvalClockPoint> readEvalClockSeries({
   List<LevelBundle> levels = const [],
   MathSeriesFreezeStore? mathFreeze,
   ZhongshuObjectStore? zsObjects,
+  DivergenceRelationStore? diverRelations,
   int bollN = 20,
 }) {
   if (bars.isEmpty || asOf < 0) return const [];
@@ -230,6 +240,17 @@ List<EvalClockPoint> readEvalClockSeries({
       bars: bars,
       levels: levels,
       zsObjects: zsObjects,
+    );
+  }
+  final diverField = _diverProjectionField(parsed);
+  if (diverField != null) {
+    return _diverEvalSeries(
+      kn: parsed.kn,
+      field: diverField,
+      asOf: asOf,
+      bars: bars,
+      levels: levels,
+      diverRelations: diverRelations,
     );
   }
   if (mathFreeze == null) return const [];
@@ -405,6 +426,84 @@ List<EvalClockPoint> _zsCurrentEvalSeries({
       asOf: g.availableAt,
       projection: projection,
     );
+    if (v == null) continue;
+    out.add(EvalClockPoint(
+      evalIndex: i,
+      availableAt: g.availableAt,
+      value: v,
+    ));
+    i++;
+  }
+  return out;
+}
+
+/// RATIO / DIRECTION。EXISTS 是事件，不走这里。
+String? _diverProjectionField(
+  ({String panel, int kn, List<String> rest}) parsed,
+) {
+  if (parsed.panel != 'STRUCTURE') return null;
+  if (parsed.rest.length != 2) return null;
+  if (parsed.rest[0] != 'DIVERGENCE') return null;
+  final f = parsed.rest[1];
+  if (f == 'RATIO' || f == 'DIRECTION') return f;
+  return null;
+}
+
+/// 没有当时可见的确认背驰关系 → 不可用（不是 0）。
+TradeScalar? _lookupDiverProjection({
+  required ({String panel, int kn, List<String> rest}) parsed,
+  required int asOf,
+  required DivergenceRelationStore? diverRelations,
+}) {
+  final field = _diverProjectionField(parsed);
+  if (field == null) return null;
+  if (diverRelations == null || diverRelations.isEmpty) {
+    return const TradeScalar.unavailable();
+  }
+  final rel = diverRelations.resolveCurrent(
+    displayKn: parsed.kn,
+    asOf: asOf,
+  );
+  if (rel == null) return const TradeScalar.unavailable();
+  if (field == 'RATIO') {
+    final r = rel.ratio;
+    if (r == null) return const TradeScalar.unavailable();
+    return TradeScalar.num(r);
+  }
+  return TradeScalar.num(divergenceDirectionCode(rel.direction));
+}
+
+/// 背驰投影跟该层收盘同一套计算钟：K0 一根一根，K1+ 虚拟K右端。
+List<EvalClockPoint> _diverEvalSeries({
+  required int kn,
+  required String field,
+  required int asOf,
+  required List<KlineBar> bars,
+  required List<LevelBundle> levels,
+  required DivergenceRelationStore? diverRelations,
+}) {
+  if (diverRelations == null || diverRelations.isEmpty) return const [];
+  final grid = _rawEvalSeries(
+    kn: kn,
+    field: 'CLOSE',
+    asOf: asOf,
+    bars: bars,
+    levels: levels,
+  );
+  final out = <EvalClockPoint>[];
+  var i = 0;
+  for (final g in grid) {
+    final rel = diverRelations.resolveCurrent(
+      displayKn: kn,
+      asOf: g.availableAt,
+    );
+    if (rel == null) continue;
+    double? v;
+    if (field == 'RATIO') {
+      v = rel.ratio;
+    } else if (field == 'DIRECTION') {
+      v = divergenceDirectionCode(rel.direction);
+    }
     if (v == null) continue;
     out.add(EvalClockPoint(
       evalIndex: i,

@@ -1299,6 +1299,21 @@ class MsgHistory {
     );
   }
 
+  /// 背驰结构关系变量（进程内去重）
+  static bool _tradeDivergenceRelLogged = false;
+  void appendTradeDivergenceRelations() {
+    if (_tradeDivergenceRelLogged) return;
+    _tradeDivergenceRelLogged = true;
+    append(
+      '【背驰关系·2026-08-15】背驰不是「这根 K 看起来像背驰」，而是：哪一个结构对比哪一个结构、在哪根 K0 被发现。'
+      '第一版只开放已经确认的 MACD 面积背驰：出现一次、力度比、方向（向上/向下）。'
+      '出现是事件，不能比大小或上穿下穿；力度比可以和数字比；方向只能等于向上或向下。'
+      '同一个比较对象后面再拉长，关系编号不变；当时已经记下的力度比不会被以后改掉。'
+      '确认程度变了会记成新事件，不回写旧记录。没有当时可见的背驰就是不可用，不是 0。'
+      '可以和同层一类买点、RSI 拼。未接入其它背驰算法、N 类、节奏、三型四型、做空、加仓。',
+    );
+  }
+
   /// 运行时虚线摘要（内容变才追加；复制历史记录排查用）。
   void appendDisplayBuildingLinesRuntime({
     required int kn,

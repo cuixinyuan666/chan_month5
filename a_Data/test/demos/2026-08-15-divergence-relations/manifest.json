@@ -1,0 +1,35 @@
+{
+  "id": "2026-08-15-divergence-relations",
+  "title": "背驰可以当成有身份的买卖条件",
+  "completedAt": "2026-08-15",
+  "agent": "cursor",
+  "isNewFeature": true,
+  "beforeSummary": "原本背驰只是副图上能看见的力度结果，不能问是哪一个结构对比哪一个结构、在哪根 K 形成的。",
+  "afterSummary": "现在每一层都可以用「背驰出现」「力度比」「方向」。出现是一次性事件；力度比可以和数字比；方向只能选向上或向下。当时记下的关系以后不会被改掉。",
+  "verificationPoints": [
+    "打开策略回测，K1 变量里能选到背驰出现、力度比、方向",
+    "买策略 A：K1 一类买点 并且 K1 背驰出现",
+    "买策略 B：K1 背驰力度比小于 0.8 并且 K1 RSI 小于 50",
+    "点诊断：能看到这条背驰的编号、比较对象、发现时刻、力度比和方向",
+    "还没有当时看得见的确认背驰时读数是不可用，不会变成 0"
+  ],
+  "keySteps": [12, 30],
+  "defaultStock": {
+    "code": "002003",
+    "period": "1min",
+    "note": "默认股票步进后打开策略回测即可验收"
+  },
+  "autoLaunchOnStartup": false,
+  "walkthroughSteps": [
+    {
+      "stepIdx": 12,
+      "phase": "after",
+      "caption": "先连续单步走到副图已经能看见确认背驰的位置，不要一键跳到最后"
+    },
+    {
+      "stepIdx": 30,
+      "phase": "after",
+      "caption": "打开策略回测：买可以用一类买点并且背驰出现，也可以用力度比小于某个数并且 RSI 偏低。运行后看策买策卖，成交仍是下一根开盘"
+    }
+  ]
+}

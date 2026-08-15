@@ -6,6 +6,7 @@
 /// 结构种类。第一版只做中枢；背驰以后要引用「哪一段、哪一个中枢」。
 enum StructureKind {
   zhongshu,
+  segment,
 }
 
 /// 中枢生命周期。未确认不进交易变量。
@@ -120,3 +121,6 @@ double zsCenterOf({required double high, required double low}) =>
 
 String zsCurrentVarId(int kn, String field) =>
     'STRUCTURE.K$kn.ZS.CURRENT.${field.toUpperCase()}';
+
+/// 段身份：层 + 段序号（背驰比较对象；中枢仍优先用 ZS|{kn}|{x1}）
+String segObjectId(int displayKn, int segIdx) => 'SEG|$displayKn|$segIdx';

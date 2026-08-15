@@ -3,6 +3,8 @@ import '../models/kline_bar.dart';
 import '../models/level_models.dart';
 import 'catalog_lookup.dart';
 import 'chan_event_store.dart';
+import 'divergence_relation.dart';
+import 'divergence_relation_store.dart';
 import 'signal_data_catalog.dart';
 import 'structure_object.dart';
 import 'trade_clock.dart';
@@ -33,6 +35,7 @@ class TradeVarDiagnosis {
   final TradeChanEvent? lastEvent;
   final int eventCount;
   final ZhongshuObject? currentZs;
+  final DivergenceRelation? currentDiver;
 
   const TradeVarDiagnosis({
     required this.variableId,
@@ -55,6 +58,7 @@ class TradeVarDiagnosis {
     this.lastEvent,
     this.eventCount = 0,
     this.currentZs,
+    this.currentDiver,
   });
 
   String get text {
@@ -119,6 +123,32 @@ class TradeVarDiagnosis {
       buf.writeln('当前 asOf：K0 #${currentZs!.availableAt}');
       buf.writeln('状态：${currentZs!.state.name}');
     }
+    if (currentDiver != null) {
+      buf.writeln();
+      buf.writeln('背驰关系：');
+      buf.writeln(currentDiver!.relationId);
+      buf.writeln('发现时间：K0 #${currentDiver!.discoveryX}');
+      buf.writeln('当时可见：K0 #${currentDiver!.availableAt}');
+      buf.writeln('方向：${divergenceDirectionCn(currentDiver!.direction)}');
+      buf.writeln('比较对象：${currentDiver!.referenceObjectId}');
+      buf.writeln('当前对象：${currentDiver!.sourceObjectId}');
+      if (currentDiver!.referenceZs != null) {
+        buf.writeln('比较中枢：${currentDiver!.referenceZs}');
+      }
+      if (currentDiver!.sourceZs != null) {
+        buf.writeln('当前中枢：${currentDiver!.sourceZs}');
+      }
+      if (currentDiver!.referenceSegment != null) {
+        buf.writeln('比较段：${currentDiver!.referenceSegment}');
+      }
+      if (currentDiver!.sourceSegment != null) {
+        buf.writeln('当前段：${currentDiver!.sourceSegment}');
+      }
+      buf.writeln(
+        '力度比：${currentDiver!.ratio == null ? "不可用" : _fmt(currentDiver!.ratio!)}',
+      );
+      buf.writeln('已确认：${currentDiver!.confirmed ? "是" : "否"}');
+    }
     if (note.isNotEmpty) {
       buf.writeln();
       buf.writeln(note);
@@ -147,6 +177,7 @@ TradeVarDiagnosis diagnoseTradeVariable({
   MathSeriesFreezeStore? mathFreeze,
   ChanEventStore chanEvents = ChanEventStore.empty,
   ZhongshuObjectStore? zsObjects,
+  DivergenceRelationStore? diverRelations,
   int maxKn = 8,
 }) {
   final def = lookupTradeVariable(variableId, maxKn: maxKn);
@@ -165,6 +196,13 @@ TradeVarDiagnosis diagnoseTradeVariable({
   if (isZsCurrent) {
     freezePresent = zsObjects != null && !zsObjects.isEmpty;
   }
+  final isDiver = parsed != null &&
+      parsed.panel == 'STRUCTURE' &&
+      parsed.rest.isNotEmpty &&
+      parsed.rest[0] == 'DIVERGENCE';
+  if (isDiver) {
+    freezePresent = diverRelations != null && !diverRelations.isEmpty;
+  }
 
   if (def != null &&
       def.expressionReady &&
@@ -174,13 +212,23 @@ TradeVarDiagnosis diagnoseTradeVariable({
       asOf: asOf,
       store: chanEvents,
       levels: levels,
+      diverRelations: diverRelations,
       maxKn: maxKn,
     );
     TradeChanEvent? last;
     for (final e in events) {
       if (e.availableAt <= asOf) last = e;
     }
-    final hasHist = !chanEvents.isEmpty || events.isNotEmpty;
+    final hasHist = !chanEvents.isEmpty ||
+        events.isNotEmpty ||
+        (isDiver && diverRelations != null && !diverRelations.isEmpty);
+    DivergenceRelation? lastDiver;
+    if (isDiver && last != null && diverRelations != null) {
+      lastDiver = diverRelations.resolveCurrent(
+        displayKn: def.displayKn ?? parsed?.kn ?? 0,
+        asOf: last.availableAt,
+      );
+    }
     return TradeVarDiagnosis(
       variableId: variableId,
       displayName: def.displayName,
@@ -208,6 +256,7 @@ TradeVarDiagnosis diagnoseTradeVariable({
       evalSampleCount: events.length,
       lastEvent: last,
       eventCount: events.length,
+      currentDiver: lastDiver,
       note: last == null
           ? '截至当前这根 K0，还没有首次发现。动态段后续 x 不会当成新的交易事件。'
           : '这是稳定身份的首次发现边沿，不是持续状态。',
@@ -243,6 +292,7 @@ TradeVarDiagnosis diagnoseTradeVariable({
     levels: levels,
     mathFreeze: mathFreeze,
     zsObjects: zsObjects,
+    diverRelations: diverRelations,
   );
   final series = readEvalClockSeries(
     variableId: variableId,
@@ -251,6 +301,7 @@ TradeVarDiagnosis diagnoseTradeVariable({
     levels: levels,
     mathFreeze: mathFreeze,
     zsObjects: zsObjects,
+    diverRelations: diverRelations,
   );
   EvalClockPoint? last;
   for (final p in series) {
@@ -259,6 +310,7 @@ TradeVarDiagnosis diagnoseTradeVariable({
 
   var note = def.description.isEmpty ? def.availabilityNote : def.description;
   ZhongshuObject? currentZs;
+  DivergenceRelation? currentDiver;
   if (isZsCurrent) {
     currentZs = zsObjects?.resolveCurrentConfirmedZs(
       displayKn: parsed.kn,
@@ -268,6 +320,16 @@ TradeVarDiagnosis diagnoseTradeVariable({
       note = '还没有中枢对象仓（需按步进喂入已确认中枢）。$note';
     } else if (currentZs == null) {
       note = '当前这根 K0 还没有已确认中枢（不可用，不是 0）。$note';
+    }
+  } else if (isDiver) {
+    currentDiver = diverRelations?.resolveCurrent(
+      displayKn: parsed!.kn,
+      asOf: asOf,
+    );
+    if (!freezePresent) {
+      note = '还没有背驰关系仓（需按步进喂入已确认背驰）。$note';
+    } else if (currentDiver == null) {
+      note = '当前这根 K0 还没有当时可见的确认背驰关系（不可用，不是 0）。$note';
     }
   } else if (!freezePresent && parsed?.panel != 'RAW') {
     note = '冻结仓没有这份序列，读数不可用，不会现场重算。$note';
@@ -297,5 +359,6 @@ TradeVarDiagnosis diagnoseTradeVariable({
     evalSampleCount: series.length,
     note: note,
     currentZs: currentZs,
+    currentDiver: currentDiver,
   );
 }

@@ -68,6 +68,12 @@ class TradeConstRef extends TradeValueRef {
   const TradeConstRef(this.value);
 }
 
+/// 枚举常量，例如背驰方向 UP / DOWN。不是 double。
+class TradeEnumRef extends TradeValueRef {
+  final String token;
+  const TradeEnumRef(this.token);
+}
+
 /// 同层同钟对：外部组不出来，只能 [compileBinaryOp] 成功才有。
 class SameClockPair {
   final TradeOperand left;
@@ -132,6 +138,18 @@ TradeExprCompile compileBinaryOp({
       '事件不能比较或穿越，请用「出现」条件（EVENT_EXISTS）',
     );
   }
+  if (_isEnumOperand(a, maxKn) || _isEnumOperand(b, maxKn)) {
+    if (op != TradeBinaryOp.eq) {
+      return const TradeExprIllegal(
+        '方向这类枚举只能用等于，不能比大小或上穿下穿',
+      );
+    }
+    if (!_isEnumOperand(a, maxKn) || !_isEnumOperand(b, maxKn)) {
+      return const TradeExprIllegal(
+        '方向只能和方向常量或同类枚举比较，不能和数字混比',
+      );
+    }
+  }
   if (a.displayKn != b.displayKn || a.clockFamily != b.clockFamily) {
     return TradeExprIllegal(
       '${a.displayName} 和 ${b.displayName} 不是同一层同一套钟，'
@@ -166,6 +184,34 @@ TradeExprCompile compileValuePair({
 }) {
   final leftVar = left is TradeVarRef;
   final rightVar = right is TradeVarRef;
+  final leftEnum = left is TradeEnumRef;
+  final rightEnum = right is TradeEnumRef;
+  if (leftEnum || rightEnum) {
+    if (op != TradeBinaryOp.eq) {
+      return const TradeExprIllegal(
+        '方向这类枚举只能用等于，不能比大小或上穿下穿',
+      );
+    }
+    if (!leftVar && !rightVar) {
+      return const TradeExprIllegal('两个方向常量不能比较，至少一侧必须是变量');
+    }
+    final varRef = leftVar ? left as TradeVarRef : right as TradeVarRef;
+    final bound = TradeOperand.tryBind(varRef.variableId, maxKn: maxKn);
+    if (bound == null) {
+      return const TradeExprIllegal('未登记进交易目录，或只盘点还不能当条件');
+    }
+    if (!_isEnumOperand(bound, maxKn)) {
+      return const TradeExprIllegal('只有背驰方向这类枚举才能和方向常量比较');
+    }
+    return TradeValueExprOk(
+      clock: bound,
+      leftOp: leftVar ? bound : null,
+      rightOp: rightVar ? bound : null,
+      left: left,
+      right: right,
+      op: op,
+    );
+  }
   if (!leftVar && !rightVar) {
     return const TradeExprIllegal('常数和常数不能比较，至少一侧必须是变量');
   }
@@ -197,6 +243,11 @@ TradeExprCompile compileValuePair({
       '事件不能和常数比较，请用「出现」条件（EVENT_EXISTS）',
     );
   }
+  if (_isEnumOperand(bound, maxKn)) {
+    return const TradeExprIllegal(
+      '方向只能和「向上/向下」比较，不能和数字比',
+    );
+  }
   return TradeValueExprOk(
       clock: bound,
       leftOp: leftVar ? bound : null,
@@ -210,4 +261,9 @@ TradeExprCompile compileValuePair({
 bool _isEventOperand(TradeOperand op, int maxKn) {
   final def = lookupTradeVariable(op.variableId, maxKn: maxKn);
   return def != null && def.valueType == TradeValueType.event;
+}
+
+bool _isEnumOperand(TradeOperand op, int maxKn) {
+  final def = lookupTradeVariable(op.variableId, maxKn: maxKn);
+  return def != null && def.valueType == TradeValueType.enumeration;
 }

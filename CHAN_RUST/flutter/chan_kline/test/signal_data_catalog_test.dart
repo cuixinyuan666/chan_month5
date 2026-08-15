@@ -56,6 +56,23 @@ void main() {
       expect(zsCur.valueType, TradeValueType.numeric);
       expect(zsCur.clockFamily, TradeClockFamily.zsMath);
       expect(zsCur.evalClock, TradeEvalClock.knSample);
+
+      final exists = lookupTradeVariable('STRUCTURE.K1.DIVERGENCE.EXISTS');
+      expect(exists, isNotNull);
+      expect(exists!.expressionReady, isTrue);
+      expect(exists.valueType, TradeValueType.event);
+      expect(exists.evalClock, TradeEvalClock.k0Bar);
+
+      final ratio = lookupTradeVariable('STRUCTURE.K1.DIVERGENCE.RATIO');
+      expect(ratio, isNotNull);
+      expect(ratio!.expressionReady, isTrue);
+      expect(ratio.valueType, TradeValueType.numeric);
+      expect(ratio.evalClock, TradeEvalClock.knSample);
+
+      final dir = lookupTradeVariable('STRUCTURE.K1.DIVERGENCE.DIRECTION');
+      expect(dir, isNotNull);
+      expect(dir!.expressionReady, isTrue);
+      expect(dir.valueType, TradeValueType.enumeration);
     });
 
     test('同层同钟才能编译成比较/穿越；混层在编译阶段就是非法表达式', () {

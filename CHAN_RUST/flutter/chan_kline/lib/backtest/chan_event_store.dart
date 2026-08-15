@@ -8,6 +8,7 @@ import '../models/level_models.dart';
 import '../models/sell1_frame.dart';
 import '../models/sell2_frame.dart';
 import '../models/zs_signal_event.dart';
+import 'divergence_relation_store.dart';
 import 'signal_data_catalog.dart';
 import 'trade_value.dart';
 
@@ -60,6 +61,7 @@ List<TradeChanEvent> listTradeChanEvents({
   required int asOf,
   ChanEventStore store = ChanEventStore.empty,
   List<LevelBundle> levels = const [],
+  DivergenceRelationStore? diverRelations,
   int maxKn = 8,
 }) {
   final def = lookupTradeVariable(variableId, maxKn: maxKn);
@@ -87,6 +89,12 @@ List<TradeChanEvent> listTradeChanEvents({
       return kn == 0
           ? _firstK0Fractal(store.k0FractalConfirms, asOf)
           : _firstKnFractal(levels, kn, asOf);
+    case 'DIVERGENCE.EXISTS':
+      return diverRelations?.listExistsEvents(
+            displayKn: kn,
+            asOf: asOf,
+          ) ??
+          const [];
     default:
       return const [];
   }

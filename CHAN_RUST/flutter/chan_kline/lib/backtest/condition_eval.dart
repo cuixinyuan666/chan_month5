@@ -4,6 +4,8 @@ import '../models/level_models.dart';
 import 'catalog_lookup.dart';
 import 'chan_event_store.dart';
 import 'condition_ast.dart';
+import 'divergence_relation.dart';
+import 'divergence_relation_store.dart';
 import 'signal_event.dart';
 import 'trade_clock.dart';
 import 'trade_operand.dart';
@@ -234,6 +236,7 @@ class CondEvalCtx {
   final MathSeriesFreezeStore? mathFreeze;
   final ChanEventStore chanEvents;
   final ZhongshuObjectStore? zsObjects;
+  final DivergenceRelationStore? diverRelations;
   final int bollN;
   final int maxKn;
 
@@ -244,6 +247,7 @@ class CondEvalCtx {
     this.mathFreeze,
     this.chanEvents = ChanEventStore.empty,
     this.zsObjects,
+    this.diverRelations,
     this.bollN = 20,
     this.maxKn = 8,
   });
@@ -342,6 +346,7 @@ List<_BoolPt> _evalEvent(CompiledEvent cond, CondEvalCtx ctx) {
     asOf: ctx.asOf,
     store: ctx.chanEvents,
     levels: ctx.levels,
+    diverRelations: ctx.diverRelations,
     maxKn: ctx.maxKn,
   );
   final at = <int, TradeChanEvent>{
@@ -467,6 +472,11 @@ List<SignalSnapshot> _leafSnapshots(
       label: '常数 ${tradeValueLabel(cond.left)}',
       value: leftVal,
     ));
+  } else if (cond.left is TradeEnumRef) {
+    out.add(SignalSnapshot(
+      label: '方向 ${tradeValueLabel(cond.left)}',
+      value: leftVal,
+    ));
   }
   if (cond.right is TradeVarRef) {
     out.add(SignalSnapshot(
@@ -476,6 +486,11 @@ List<SignalSnapshot> _leafSnapshots(
   } else if (cond.right is TradeConstRef) {
     out.add(SignalSnapshot(
       label: '常数 ${tradeValueLabel(cond.right)}',
+      value: rightVal,
+    ));
+  } else if (cond.right is TradeEnumRef) {
+    out.add(SignalSnapshot(
+      label: '方向 ${tradeValueLabel(cond.right)}',
       value: rightVal,
     ));
   }
@@ -638,6 +653,7 @@ List<EvalClockPoint> _readRef(
       levels: ctx.levels,
       mathFreeze: ctx.mathFreeze,
       zsObjects: ctx.zsObjects,
+      diverRelations: ctx.diverRelations,
       bollN: ctx.bollN,
     );
     return [
@@ -649,6 +665,28 @@ List<EvalClockPoint> _readRef(
         ),
     ];
   }
+  if (ref is TradeEnumRef) {
+    final dir = divergenceDirectionFromToken(ref.token);
+    final code = dir == null ? 0.0 : divergenceDirectionCode(dir);
+    final grid = readEvalClockSeries(
+      variableId: clockOp.variableId,
+      asOf: ctx.asOf,
+      bars: ctx.bars,
+      levels: ctx.levels,
+      mathFreeze: ctx.mathFreeze,
+      zsObjects: ctx.zsObjects,
+      diverRelations: ctx.diverRelations,
+      bollN: ctx.bollN,
+    );
+    return [
+      for (final p in grid)
+        EvalClockPoint(
+          evalIndex: p.evalIndex,
+          availableAt: p.availableAt,
+          value: code,
+        ),
+    ];
+  }
   final id = (ref as TradeVarRef).variableId;
   return readEvalClockSeries(
     variableId: id,
@@ -657,6 +695,7 @@ List<EvalClockPoint> _readRef(
     levels: ctx.levels,
     mathFreeze: ctx.mathFreeze,
     zsObjects: ctx.zsObjects,
+    diverRelations: ctx.diverRelations,
     bollN: ctx.bollN,
   );
 }

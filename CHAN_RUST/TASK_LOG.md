@@ -2,6 +2,17 @@
 
 > 口径/行为变更记录（复制排查用）；与 `lib/history/msg_history.dart` 常驻历史同步维护。
 
+## 2026-08-15 Phase9 背驰结构关系变量 v1
+
+- **需求**：背驰从「能显示的指标结果」升级为引用具体结构对象、比较对象、发现时刻的可交易关系。禁止无身份的 `DIVERGENCE=true`，禁止把整个背驰对象当 double 去比较/穿越。
+- **不变**：背驰算法/冻结/Clock；不新写第二套计算；K0 下一根开盘成交。不做 N 类、节奏、三型四型、趋势线、做空、加仓、多品种、参数优化。
+- **对象**：稳定 `relationId=DIVER|{kn}|area|{referenceObjectId}|{sourceObjectId}|{inSeg}|{outSeg}|{mode}`。比较对象优先绑 `ZS|{kn}|{x1}`，否则 `SEG|{kn}|{segIdx}`。动态延伸同一 relationId；历史 asOf 快照不回写。确认翻转追加新 EXISTS 边沿，不改旧事件。
+- **投影**：`STRUCTURE.K{n}.DIVERGENCE.EXISTS` 事件（k0Bar）；`RATIO` Numeric；`DIRECTION` 枚举（只能 `==` 向上/向下）。力度只读现有 MACD 面积冻结仓。没有当时可见确认关系=不可用，不是 0。
+- **钟**：zsMath；EXISTS 可与同层一类买/RSI AND；RATIO 可与同层 RSI 比较。K0×K1、EXISTS 比较/穿越、DIRECTION 比大小/CROSS 编译期非法。
+- **综合**：买 A `K1.BUY1 AND K1.DIVERGENCE.EXISTS`；买 B `K1.DIVERGENCE.RATIO < 0.8 AND K1.RSI < 50`。
+- **验证**：`flutter test test/divergence_relation_var_test.dart test/zs_object_var_test.dart test/chan_event_var_test.dart test/signal_data_catalog_test.dart test/condition_ast_test.dart test/backtest_workbench_test.dart test/indicator_var_ext_test.dart`
+- **注意**：纯 Flutter；无需重编 DLL。引擎版本 `backtest-workbench-v6-divergence-rel`。
+
 ## 2026-08-15 Phase8 缠论结构对象契约 + 中枢数值变量 v1
 
 - **需求**：中枢从「确认事件」升级为有身份的结构对象，再投影成可交易数值。禁止直接把 ZS_HIGH 注册成无身份 double。

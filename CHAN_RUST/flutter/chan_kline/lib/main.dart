@@ -43,6 +43,7 @@ import 'backtest/signal_event.dart';
 import 'backtest/strategy_config.dart';
 import 'backtest/backtest_workbench.dart';
 import 'backtest/chan_event_store.dart';
+import 'backtest/divergence_relation_store.dart';
 import 'backtest/zhongshu_object_store.dart';
 import 'models/zs_frame.dart';
 import 'models/buy1_frame.dart';
@@ -202,6 +203,7 @@ Future<void> main() async {
   MsgHistory.instance.appendTradeIndicatorVars();
   MsgHistory.instance.appendTradeChanEvents();
   MsgHistory.instance.appendTradeZsObjects();
+  MsgHistory.instance.appendTradeDivergenceRelations();
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     await windowManager.ensureInitialized();
     const opts = WindowOptions(
@@ -332,6 +334,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
   Map<int, List<ZsSignalEvent>> _zsConfirmHistoryByKn = {};
   /// 中枢结构对象仓：步进喂入现有帧，交易变量只读确认中枢投影
   final ZhongshuObjectStore _zsObjectStore = ZhongshuObjectStore();
+  /// 背驰结构关系仓：只读现有冻结仓，不重算背驰
+  final DivergenceRelationStore _diverRelationStore = DivergenceRelationStore();
 
   /// 一类BS 会话历史：对齐分型判断（K0 步进颗粒度 + 动态 Kn）；换股/重载清空。
   /// 踩坑：禁止只用「层|段|标签」去重——同动态 active 延伸时下一步会无新 x。
@@ -473,6 +477,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
     // 参数变了：清空 Math/背驰冻结仓，再从 0 步进重冻到当前（避免旧参数残值）
     _mathFreezeStore.clear();
     _diverFreezeStore.clear();
+    _diverRelationStore.clear();
     if (_hasSession && !_chipOnlyMode && _stepIdx >= 0) {
       _refreezeMathFromStart();
     }
@@ -736,6 +741,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _zsJudgmentHistoryByKn.clear();
         _zsConfirmHistoryByKn.clear();
         _zsObjectStore.clear();
+        _diverRelationStore.clear();
         _buy1HistoryByKn.clear();
         _sell1HistoryByKn.clear();
         _buy2HistoryByKn.clear();
@@ -821,6 +827,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _zsJudgmentHistoryByKn.clear();
         _zsConfirmHistoryByKn.clear();
         _zsObjectStore.clear();
+        _diverRelationStore.clear();
         _buy1HistoryByKn.clear();
         _sell1HistoryByKn.clear();
         _buy2HistoryByKn.clear();
@@ -1117,6 +1124,16 @@ class _KlineHomePageState extends State<KlineHomePage> {
       asOf: displayX,
       confirmedX1ByKn: confirmedX1ByKn,
     );
+    // 交易层只读冻结仓，把当步确认背驰收成有身份的关系，不另算一套
+    final zsByKn = collectZsFramesByKn(bundle);
+    for (var kn = 0; kn <= maxKn; kn++) {
+      _diverRelationStore.ingestFromFreeze(
+        displayKn: kn,
+        asOf: displayX,
+        freeze: _diverFreezeStore,
+        zsFrames: zsByKn[kn] ?? const [],
+      );
+    }
   }
 
   List<LevelBundle> _levelsWithFrozenBs(List<LevelBundle> levels) {
@@ -1165,6 +1182,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _zsJudgmentHistoryByKn.clear();
         _zsConfirmHistoryByKn.clear();
         _zsObjectStore.clear();
+        _diverRelationStore.clear();
         _buy1HistoryByKn.clear();
         _sell1HistoryByKn.clear();
         _buy2HistoryByKn.clear();
@@ -2184,6 +2202,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
             mathFreeze: _mathFreezeStore,
             chanEvents: _chanEventStore(),
             zsObjects: _zsObjectStore,
+            diverRelations: _diverRelationStore,
           ),
         ),
       ],
@@ -2223,6 +2242,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       mathFreeze: _mathFreezeStore,
       chanEvents: _chanEventStore(),
       zsObjects: _zsObjectStore,
+      diverRelations: _diverRelationStore,
       bollN: _mathIndicatorConfig.bollN,
       maxKn: maxKn,
     );
@@ -2308,10 +2328,12 @@ class _KlineHomePageState extends State<KlineHomePage> {
             '买卖条件各自用积木搭：比较（> < >= <=）、上穿/下穿，'
             '多条之间用 AND / OR。左右可以是同一层的收开高低、布林三轨、'
             'MACD（DIF/DEA/柱）、RSI、KDJ，K0 还可以用成交量；右边也可以填常数。'
-            '也可以选一类/二类买卖点、分型确认、中枢确认：这些是「出现一次」的事件，'
+            '也可以选一类/二类买卖点、分型确认、中枢确认、背驰出现：这些是「出现一次」的事件，'
             '只能和同层同钟的条件用 AND/OR 拼，不能拿去比较或上穿下穿。'
             '确认中枢的高/低/中轴是数值：先认定「当前这层最新一个已经确认的中枢」，再取当时能看见的高低，'
             '不是事后扩大后的末态。没有确认中枢就是不可用，不会当成 0。'
+            '背驰是「哪一个结构对比哪一个结构、在哪根 K 被发现」的关系，不是一根 K 看起来像背驰。'
+            '力度比可以拿去和数字比，方向只能选向上或向下，不能把整个背驰拿去比大小或上穿下穿。'
             '同一条比较必须同层同钟，K0 和 K1 不能拼在同一棵树上。'
             '成交量这一版只开放 K0，没有另造 Kn 成交量和均量。\n\n'
             '点运行后，图上出现「策买/策卖」，这是策略信号，不是缠论的 1Ba/1Sa。'

@@ -1,3 +1,4 @@
+import 'divergence_relation.dart';
 import 'structure_object.dart';
 import 'trade_clock.dart';
 
@@ -446,6 +447,63 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
             'CURRENT_CONFIRMED_ZS 的 ${f.$2}；动态延伸同一 objectId，历史 asOf 不跟末态改',
       ));
     }
+    out.add(TradeVariableDef(
+      variableId: diverExistsId(kn),
+      displayName: 'K$kn 背驰出现',
+      panel: TradePanel.structure,
+      displayKn: kn,
+      clockFamily: TradeClockFamily.zsMath,
+      evalClock: TradeEvalClock.k0Bar,
+      plotClock: TradePlotClock.k0Bar,
+      valueType: TradeValueType.event,
+      readiness: TradeReadiness.registered,
+      source: 'DivergenceRelationStore EXISTS；引用比较对象，不按当前K猜',
+      unit: 'event',
+      futureSafe: true,
+      availabilityNote: '确认背驰首次发现当根出现一次；确认翻转后再确认才是新事件',
+      groupKey: 'diver',
+      groupLabel: '背驰',
+      fieldLabel: '出现',
+      description: 'EVENT_EXISTS；禁止比较/穿越；默认 MACD 面积',
+    ));
+    out.add(TradeVariableDef(
+      variableId: diverRatioId(kn),
+      displayName: 'K$kn 背驰力度比',
+      panel: TradePanel.structure,
+      displayKn: kn,
+      clockFamily: TradeClockFamily.zsMath,
+      evalClock: evalClockForDisplayKn(kn),
+      plotClock: TradePlotClock.k0Bar,
+      valueType: TradeValueType.numeric,
+      readiness: TradeReadiness.registered,
+      source: 'DivergenceRelation.ratio（面积 out/in）；历史 asOf 不回写',
+      unit: 'ratio',
+      futureSafe: true,
+      availabilityNote: '没有当时可见的确认背驰关系则为不可用，不是 0',
+      groupKey: 'diver',
+      groupLabel: '背驰',
+      fieldLabel: '力度比',
+      description: 'Numeric；可与同层 RSI/收盘比较，不能 CROSS 整个背驰对象',
+    ));
+    out.add(TradeVariableDef(
+      variableId: diverDirectionId(kn),
+      displayName: 'K$kn 背驰方向',
+      panel: TradePanel.structure,
+      displayKn: kn,
+      clockFamily: TradeClockFamily.zsMath,
+      evalClock: evalClockForDisplayKn(kn),
+      plotClock: TradePlotClock.k0Bar,
+      valueType: TradeValueType.enumeration,
+      readiness: TradeReadiness.registered,
+      source: 'DivergenceRelation.direction（离开段方向）',
+      unit: 'enum',
+      futureSafe: true,
+      availabilityNote: '没有当时可见的确认背驰关系则为不可用',
+      groupKey: 'diver',
+      groupLabel: '背驰',
+      fieldLabel: '方向',
+      description: '枚举 向上/向下；只能等于，不能比大小或穿越',
+    ));
   }
   return out;
 }
@@ -576,11 +634,11 @@ List<TradeVariableDef> inventoryOnlyTradeVariables() {
     ),
     stub(
       pattern: 'SUB.K{n}.DIVERGENCE',
-      name: 'Kn背驰',
+      name: 'Kn背驰（未指定关系）',
       panel: TradePanel.sub,
       clock: TradeClockFamily.zsMath,
       type: TradeValueType.numeric,
-      why: '12 路算法，需先定用哪一路力度',
+      why: '请用 STRUCTURE.K{n}.DIVERGENCE.EXISTS/RATIO/DIRECTION；背驰是关系不是一根 double',
     ),
     stub(
       pattern: 'SUB.K{n}.LINE_SLOPE',

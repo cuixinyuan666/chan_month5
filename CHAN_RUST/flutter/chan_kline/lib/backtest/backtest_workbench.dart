@@ -6,6 +6,7 @@ import '../models/level_models.dart';
 import 'backtest_report_panel.dart';
 import 'backtest_run.dart';
 import 'chan_event_store.dart';
+import 'divergence_relation_store.dart';
 import 'order_models.dart';
 import 'signal_event.dart';
 import 'strategy_config.dart';
@@ -36,6 +37,7 @@ class BacktestWorkbench extends StatelessWidget {
   final MathSeriesFreezeStore? mathFreeze;
   final ChanEventStore chanEvents;
   final ZhongshuObjectStore? zsObjects;
+  final DivergenceRelationStore? diverRelations;
 
   const BacktestWorkbench({
     super.key,
@@ -61,6 +63,7 @@ class BacktestWorkbench extends StatelessWidget {
     this.mathFreeze,
     this.chanEvents = ChanEventStore.empty,
     this.zsObjects,
+    this.diverRelations,
   });
 
   @override
@@ -125,6 +128,7 @@ class BacktestWorkbench extends StatelessWidget {
                       mathFreeze: mathFreeze,
                       chanEvents: chanEvents,
                       zsObjects: zsObjects,
+                      diverRelations: diverRelations,
                       asOf: currentStepIdx,
                     ),
                   ),

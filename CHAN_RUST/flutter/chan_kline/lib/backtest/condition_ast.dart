@@ -1,3 +1,4 @@
+import 'divergence_relation.dart';
 import 'signal_data_catalog.dart';
 import 'trade_operand.dart';
 
@@ -176,6 +177,26 @@ TradeAst k1Sell1OrMacdAst() => TradeOrAst(
       ),
     );
 
+/// 买：K1 一类买点 并且 该层确认背驰出现
+TradeAst k1Buy1AndDiverAst() => TradeAndAst(
+      k1Buy1EventAst,
+      TradeEventAst(diverExistsId(1)),
+    );
+
+/// 买：K1 背驰力度比 < 0.8 并且 RSI < 50
+TradeAst k1DiverRatioAndRsiAst() => TradeAndAst(
+      TradeCmpAst(
+        left: TradeVarRef(diverRatioId(1)),
+        right: const TradeConstRef(0.8),
+        op: TradeBinaryOp.lt,
+      ),
+      const TradeCmpAst(
+        left: TradeVarRef('SUB.K1.RSI.VALUE'),
+        right: TradeConstRef(50),
+        op: TradeBinaryOp.lt,
+      ),
+    );
+
 /// 买：K1 一类买点 并且 收盘低于当前确认中枢低
 TradeAst k1Buy1AndZsLowAst() => const TradeAndAst(
       k1Buy1EventAst,
@@ -237,6 +258,10 @@ String tradeValueLabel(TradeValueRef ref) {
     final v = ref.value;
     if (v == v.roundToDouble()) return '${v.toInt()}';
     return '$v';
+  }
+  if (ref is TradeEnumRef) {
+    final d = divergenceDirectionFromToken(ref.token);
+    return d == null ? ref.token : divergenceDirectionCn(d);
   }
   if (ref is TradeVarRef) return compactVarId(ref.variableId);
   return '?';

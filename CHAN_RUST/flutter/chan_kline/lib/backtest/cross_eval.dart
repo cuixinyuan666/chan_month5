@@ -1,4 +1,5 @@
 import 'catalog_lookup.dart';
+import 'divergence_relation_store.dart';
 import 'signal_event.dart';
 import 'trade_operand.dart';
 import 'zhongshu_object_store.dart';
@@ -93,6 +94,7 @@ CrossEvalResult evalCross({
   List<LevelBundle> levels = const [],
   MathSeriesFreezeStore? mathFreeze,
   ZhongshuObjectStore? zsObjects,
+  DivergenceRelationStore? diverRelations,
   int bollN = 20,
   int maxKn = 8,
 }) {
@@ -116,6 +118,7 @@ CrossEvalResult evalCross({
     levels: levels,
     mathFreeze: mathFreeze,
     zsObjects: zsObjects,
+    diverRelations: diverRelations,
     bollN: bollN,
   );
   final right = readEvalClockSeries(
@@ -125,6 +128,7 @@ CrossEvalResult evalCross({
     levels: levels,
     mathFreeze: mathFreeze,
     zsObjects: zsObjects,
+    diverRelations: diverRelations,
     bollN: bollN,
   );
   return CrossEvalOk(detectCrossOnEvalSeries(
