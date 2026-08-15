@@ -94,11 +94,23 @@ final class TradeExprOk extends TradeExprCompile {
   const TradeExprOk({required this.pair, required this.op});
 }
 
+/// 编译失败分类：不要所有错误都叫 invalid。
+enum TradeCompileErrorKind {
+  type,
+  clock,
+  unavailable,
+  other,
+}
+
 final class TradeExprIllegal extends TradeExprCompile {
   /// 白话原因，给以后策略搭积木报错用
   final String reason;
+  final TradeCompileErrorKind kind;
 
-  const TradeExprIllegal(this.reason);
+  const TradeExprIllegal(
+    this.reason, {
+    this.kind = TradeCompileErrorKind.other,
+  });
 }
 
 /// 变量或常数比较/穿越：钟由变量一侧决定；两常数非法。
@@ -131,22 +143,25 @@ TradeExprCompile compileBinaryOp({
   final a = TradeOperand.tryBind(leftId, maxKn: maxKn);
   final b = TradeOperand.tryBind(rightId, maxKn: maxKn);
   if (a == null || b == null) {
-    return const TradeExprIllegal('未登记进交易目录，或只盘点还不能当条件');
+    return _unboundExpr(leftId, rightId, maxKn);
   }
   if (_isEventOperand(a, maxKn) || _isEventOperand(b, maxKn)) {
     return const TradeExprIllegal(
       '事件不能比较或穿越，请用「出现」条件（EVENT_EXISTS）',
+      kind: TradeCompileErrorKind.type,
     );
   }
   if (_isEnumOperand(a, maxKn) || _isEnumOperand(b, maxKn)) {
     if (op != TradeBinaryOp.eq) {
       return const TradeExprIllegal(
         '方向这类枚举只能用等于，不能比大小或上穿下穿',
+        kind: TradeCompileErrorKind.type,
       );
     }
     if (!_isEnumOperand(a, maxKn) || !_isEnumOperand(b, maxKn)) {
       return const TradeExprIllegal(
         '方向只能和方向常量或同类枚举比较，不能和数字混比',
+        kind: TradeCompileErrorKind.type,
       );
     }
   }
@@ -154,12 +169,14 @@ TradeExprCompile compileBinaryOp({
     return TradeExprIllegal(
       '${a.displayName} 和 ${b.displayName} 不是同一层同一套钟，'
       '不能直接比较或穿越（禁止用铺平后的K0格子混钟）',
+      kind: TradeCompileErrorKind.clock,
     );
   }
   if (a.evalClock != b.evalClock) {
     return TradeExprIllegal(
       '${a.displayName} 和 ${b.displayName} 计算钟不同，'
       '条件只能在各自 evalClock 上算',
+      kind: TradeCompileErrorKind.clock,
     );
   }
   return TradeExprOk(pair: SameClockPair._(a, b), op: op);
@@ -190,18 +207,25 @@ TradeExprCompile compileValuePair({
     if (op != TradeBinaryOp.eq) {
       return const TradeExprIllegal(
         '方向这类枚举只能用等于，不能比大小或上穿下穿',
+        kind: TradeCompileErrorKind.type,
       );
     }
     if (!leftVar && !rightVar) {
-      return const TradeExprIllegal('两个方向常量不能比较，至少一侧必须是变量');
+      return const TradeExprIllegal(
+        '两个方向常量不能比较，至少一侧必须是变量',
+        kind: TradeCompileErrorKind.type,
+      );
     }
     final varRef = leftVar ? left as TradeVarRef : right as TradeVarRef;
     final bound = TradeOperand.tryBind(varRef.variableId, maxKn: maxKn);
     if (bound == null) {
-      return const TradeExprIllegal('未登记进交易目录，或只盘点还不能当条件');
+      return _unboundOne(varRef.variableId, maxKn);
     }
     if (!_isEnumOperand(bound, maxKn)) {
-      return const TradeExprIllegal('只有背驰方向这类枚举才能和方向常量比较');
+      return const TradeExprIllegal(
+        '只有背驰方向这类枚举才能和方向常量比较',
+        kind: TradeCompileErrorKind.type,
+      );
     }
     return TradeValueExprOk(
       clock: bound,
@@ -213,7 +237,10 @@ TradeExprCompile compileValuePair({
     );
   }
   if (!leftVar && !rightVar) {
-    return const TradeExprIllegal('常数和常数不能比较，至少一侧必须是变量');
+    return const TradeExprIllegal(
+      '常数和常数不能比较，至少一侧必须是变量',
+      kind: TradeCompileErrorKind.type,
+    );
   }
   if (leftVar && rightVar) {
     final bin = compileBinaryOp(
@@ -236,16 +263,18 @@ TradeExprCompile compileValuePair({
   final varRef = leftVar ? left as TradeVarRef : right as TradeVarRef;
   final bound = TradeOperand.tryBind(varRef.variableId, maxKn: maxKn);
   if (bound == null) {
-    return const TradeExprIllegal('未登记进交易目录，或只盘点还不能当条件');
+    return _unboundOne(varRef.variableId, maxKn);
   }
   if (_isEventOperand(bound, maxKn)) {
     return const TradeExprIllegal(
       '事件不能和常数比较，请用「出现」条件（EVENT_EXISTS）',
+      kind: TradeCompileErrorKind.type,
     );
   }
   if (_isEnumOperand(bound, maxKn)) {
     return const TradeExprIllegal(
       '方向只能和「向上/向下」比较，不能和数字比',
+      kind: TradeCompileErrorKind.type,
     );
   }
   return TradeValueExprOk(
@@ -266,4 +295,34 @@ bool _isEventOperand(TradeOperand op, int maxKn) {
 bool _isEnumOperand(TradeOperand op, int maxKn) {
   final def = lookupTradeVariable(op.variableId, maxKn: maxKn);
   return def != null && def.valueType == TradeValueType.enumeration;
+}
+
+TradeExprIllegal _unboundExpr(String leftId, String rightId, int maxKn) {
+  final da = lookupTradeVariable(leftId, maxKn: maxKn);
+  final db = lookupTradeVariable(rightId, maxKn: maxKn);
+  if (da?.readiness == TradeReadiness.inventoryOnly ||
+      db?.readiness == TradeReadiness.inventoryOnly) {
+    return const TradeExprIllegal(
+      '只盘点还不能当条件（整个对象/关系请用投影字段，例如中枢低、背驰力度比）',
+      kind: TradeCompileErrorKind.unavailable,
+    );
+  }
+  return const TradeExprIllegal(
+    '未登记进交易目录，或只盘点还不能当条件',
+    kind: TradeCompileErrorKind.unavailable,
+  );
+}
+
+TradeExprIllegal _unboundOne(String variableId, int maxKn) {
+  final d = lookupTradeVariable(variableId, maxKn: maxKn);
+  if (d?.readiness == TradeReadiness.inventoryOnly) {
+    return const TradeExprIllegal(
+      '只盘点还不能当条件（整个对象/关系请用投影字段，例如中枢低、背驰力度比）',
+      kind: TradeCompileErrorKind.unavailable,
+    );
+  }
+  return const TradeExprIllegal(
+    '未登记进交易目录，或只盘点还不能当条件',
+    kind: TradeCompileErrorKind.unavailable,
+  );
 }

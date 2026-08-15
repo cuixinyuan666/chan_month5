@@ -2,6 +2,19 @@
 
 > 口径/行为变更记录（复制排查用）；与 `lib/history/msg_history.dart` 常驻历史同步维护。
 
+## 2026-08-16 Phase10～15 缠论交易变量与策略回测基础设施收口
+
+- **需求**：N 类事件 `BUY_N(class)`/`SELL_N(class)`；统一 StructureObject/Relation/Projection/Event；条件树 v2 类型与 ConditionTrace；RulePerformance 归因；BacktestRunContext；6+1 条标准策略回归。禁止重复实现 Phase8/9。
+- **不变**：缠论内核、BOLL/MACD/RSI/KDJ/BS/中枢/背驰算法、冻结、K0 下一根开盘成交。不做空/加仓/多品种/参数优化/全市场选股。未确认结构不进策略。
+- **Phase10**：`STRUCTURE.K{n}.BUY_N.{cls}` / `SELL_N.{cls}`（cls≥3）；`CHAN.` 别名规范化。只读 buyN/sellN 会话历史；稳定身份首次发现；动态后续 x 不重复信号；x>asOf 不可见。UI 列出 3..6，lookup 可合成到 20。
+- **Phase11**：`StructureMeta` 统一 objectId/relationId、source/reference、displayKn、discoveryX、availableAt、state、projection。已有中枢对象、背驰关系接入；不改算法。
+- **Phase12**：Number/Boolean/Event/Enum/ObjectProjection/RelationProjection。编译失败分 TypeError/ClockError/Unavailable。Signal 带 ConditionTrace。
+- **Phase13**：`BacktestResult.rulePerformances` 按 ruleId 统计信号/接单/成交/闭合/胜率/净利/笔均/盈亏比。只归因，不优化。
+- **Phase14**：`BacktestRunContext`：runId、engineVersion、strategyVersion=`ast-v2`、dataContractVersion=`catalog-v2-buy-n`、structureSemanticVersion=`structure-v2`、品种/周期/区间/资金/成本。
+- **Phase15**：标准策略（纯指标、BOLL+RSI、BUY1+RSI、BUY1+ZS、BUY1+DIVERGENCE、RATIO+RSI、BUY_N(3) OR BUY1）同一条 AST→Signal→Order→Fill→Trade→Equity→Metrics。
+- **验证**：`flutter test test/buy_n_var_test.dart test/structure_contract_test.dart test/chan_strategy_regression_test.dart test/divergence_relation_var_test.dart test/zs_object_var_test.dart test/chan_event_var_test.dart test/signal_data_catalog_test.dart test/condition_ast_test.dart test/backtest_workbench_test.dart test/indicator_var_ext_test.dart`
+- **注意**：纯 Flutter；无需重编 DLL。引擎版本 `backtest-workbench-v7-chan-complete`。不自动弹演示。
+
 ## 2026-08-15 Phase9 背驰结构关系变量 v1
 
 - **需求**：背驰从「能显示的指标结果」升级为引用具体结构对象、比较对象、发现时刻的可交易关系。禁止无身份的 `DIVERGENCE=true`，禁止把整个背驰对象当 double 去比较/穿越。

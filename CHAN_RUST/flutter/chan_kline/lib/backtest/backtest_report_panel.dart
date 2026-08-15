@@ -11,7 +11,7 @@ import 'order_models.dart';
 import 'signal_event.dart';
 import 'strategy_signal_painter.dart';
 
-enum BacktestReportTab { metrics, equity, trades, chain }
+enum BacktestReportTab { metrics, equity, trades, chain, attribution }
 
 /// 把 BacktestResult 端出来：指标卡 / 净值 / 交易 / 信号订单链路。不重算。
 class BacktestReportPanel extends StatelessWidget {
@@ -84,6 +84,7 @@ class BacktestReportPanel extends StatelessWidget {
           chip(BacktestReportTab.equity, '净值/回撤'),
           chip(BacktestReportTab.trades, '交易'),
           chip(BacktestReportTab.chain, '信号链路'),
+          chip(BacktestReportTab.attribution, '归因'),
         ],
       ),
     );
@@ -95,6 +96,7 @@ class BacktestReportPanel extends StatelessWidget {
       BacktestReportTab.equity => _equity(result),
       BacktestReportTab.trades => _trades(result),
       BacktestReportTab.chain => _chain(result),
+      BacktestReportTab.attribution => _attribution(result),
     };
   }
 
@@ -133,7 +135,8 @@ class BacktestReportPanel extends StatelessWidget {
           style: const TextStyle(fontSize: 11, color: Color(0xFF94A3B8)),
         ),
         Text(
-          '引擎 ${run.engineVersion} · ${run.runId}',
+          '引擎 ${run.engineVersion} · ${run.runId}'
+          '${run.context == null ? '' : ' · 策略${run.context!.strategyVersion} · 契约${run.context!.dataContractVersion} · 结构${run.context!.structureSemanticVersion}'}',
           style: const TextStyle(fontSize: 10, color: Color(0xFF64748B)),
         ),
       ],
@@ -290,6 +293,54 @@ class BacktestReportPanel extends StatelessWidget {
                   ),
                 ],
               ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _attribution(BacktestResult result) {
+    final rows = result.rulePerformances;
+    if (rows.isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.all(12),
+        child: Text(
+          '没有规则归因。先跑出信号后，这里会按买/卖条件分别统计。',
+          style: TextStyle(color: Color(0xFF94A3B8)),
+        ),
+      );
+    }
+    return ListView.builder(
+      padding: const EdgeInsets.fromLTRB(10, 4, 10, 8),
+      itemCount: rows.length,
+      itemBuilder: (ctx, i) {
+        final p = rows[i];
+        final side = p.side == TradeSide.buy ? '买规则' : '卖规则';
+        return Card(
+          color: const Color(0xFF1E293B),
+          margin: const EdgeInsets.only(bottom: 8),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '$side  ${p.ruleId}',
+                  style: const TextStyle(fontSize: 12, color: Color(0xFF94A3B8)),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  p.label,
+                  style: const TextStyle(fontSize: 12, height: 1.35),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  '信号 ${p.signalCount}  · 接单 ${p.acceptedOrderCount}  · 成交 ${p.filledCount}  · 闭合 ${p.tradeCount}\n'
+                  '胜率 ${formatPctFraction(p.winRate)}  · 净 ${formatMoney(p.netProfit)}  · 笔均 ${formatMetricNum(p.avgTrade)}  · PF ${formatMetricNum(p.profitFactor)}',
+                  style: const TextStyle(fontSize: 11, color: Color(0xFFCBD5E1), height: 1.4),
+                ),
+              ],
             ),
           ),
         );

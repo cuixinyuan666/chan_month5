@@ -73,7 +73,7 @@ void main() {
           final id = 'STRUCTURE.K$kn.ZS.CURRENT.$f';
           final d = lookupTradeVariable(id, maxKn: 2)!;
           expect(d.expressionReady, isTrue, reason: id);
-          expect(d.valueType, TradeValueType.numeric, reason: id);
+          expect(d.valueType, TradeValueType.objectProjection, reason: id);
           expect(d.clockFamily, TradeClockFamily.zsMath, reason: id);
         }
       }

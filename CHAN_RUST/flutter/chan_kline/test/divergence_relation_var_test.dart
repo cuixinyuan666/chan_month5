@@ -178,7 +178,7 @@ void main() {
           maxKn: 2,
         )!;
         expect(ratio.expressionReady, isTrue, reason: 'RATIO K$kn');
-        expect(ratio.valueType, TradeValueType.numeric);
+        expect(ratio.valueType, TradeValueType.relationProjection);
 
         final dir = lookupTradeVariable(
           'STRUCTURE.K$kn.DIVERGENCE.DIRECTION',
@@ -191,10 +191,9 @@ void main() {
           TradeEvalClock.k0Bar);
       expect(lookupTradeVariable('STRUCTURE.K1.DIVERGENCE.RATIO')!.evalClock,
           TradeEvalClock.knSample);
-      expect(
-        lookupTradeVariable('STRUCTURE.K1.DIVERGENCE', maxKn: 2),
-        isNull,
-      );
+      final whole = lookupTradeVariable('STRUCTURE.K1.DIVERGENCE', maxKn: 2);
+      expect(whole, isNotNull);
+      expect(whole!.expressionReady, isFalse);
     });
 
     test('EXISTS 不能比较/穿越；DIRECTION 只能等于；混层混钟非法', () {

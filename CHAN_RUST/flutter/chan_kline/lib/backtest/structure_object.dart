@@ -7,6 +7,8 @@
 enum StructureKind {
   zhongshu,
   segment,
+  bi,
+  fractalGroup,
 }
 
 /// 中枢生命周期。未确认不进交易变量。

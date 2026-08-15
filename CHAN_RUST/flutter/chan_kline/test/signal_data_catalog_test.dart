@@ -53,7 +53,7 @@ void main() {
       final zsCur = lookupTradeVariable('STRUCTURE.K1.ZS.CURRENT.HIGH');
       expect(zsCur, isNotNull);
       expect(zsCur!.expressionReady, isTrue);
-      expect(zsCur.valueType, TradeValueType.numeric);
+      expect(zsCur.valueType, TradeValueType.objectProjection);
       expect(zsCur.clockFamily, TradeClockFamily.zsMath);
       expect(zsCur.evalClock, TradeEvalClock.knSample);
 
@@ -66,13 +66,22 @@ void main() {
       final ratio = lookupTradeVariable('STRUCTURE.K1.DIVERGENCE.RATIO');
       expect(ratio, isNotNull);
       expect(ratio!.expressionReady, isTrue);
-      expect(ratio.valueType, TradeValueType.numeric);
+      expect(ratio.valueType, TradeValueType.relationProjection);
       expect(ratio.evalClock, TradeEvalClock.knSample);
 
       final dir = lookupTradeVariable('STRUCTURE.K1.DIVERGENCE.DIRECTION');
       expect(dir, isNotNull);
       expect(dir!.expressionReady, isTrue);
       expect(dir.valueType, TradeValueType.enumeration);
+
+      final buyN = lookupTradeVariable('STRUCTURE.K1.BUY_N.3');
+      expect(buyN, isNotNull);
+      expect(buyN!.expressionReady, isTrue);
+      expect(buyN.valueType, TradeValueType.event);
+      expect(
+        lookupTradeVariable('CHAN.K1.BUY_N.3')!.variableId,
+        'STRUCTURE.K1.BUY_N.3',
+      );
     });
 
     test('同层同钟才能编译成比较/穿越；混层在编译阶段就是非法表达式', () {
@@ -95,19 +104,17 @@ void main() {
         op: TradeBinaryOp.crossBelow,
       );
       expect(mixed, isA<TradeExprIllegal>());
-      expect(
-        (mixed as TradeExprIllegal).reason.contains('不是同一层同一套钟'),
-        isTrue,
-      );
+      final mixedErr = mixed as TradeExprIllegal;
+      expect(mixedErr.reason.contains('不是同一层同一套钟'), isTrue);
+      expect(mixedErr.kind, TradeCompileErrorKind.clock);
 
-      expect(
-        compileBinaryOp(
-          leftId: 'RAW.K0.CLOSE',
-          rightId: 'STRUCTURE.K0.BUY1',
-          op: TradeBinaryOp.gt,
-        ),
-        isA<TradeExprIllegal>(),
+      final eventCmp = compileBinaryOp(
+        leftId: 'RAW.K0.CLOSE',
+        rightId: 'STRUCTURE.K0.BUY1',
+        op: TradeBinaryOp.gt,
       );
+      expect(eventCmp, isA<TradeExprIllegal>());
+      expect((eventCmp as TradeExprIllegal).kind, TradeCompileErrorKind.type);
 
       expect(
         canCombineInExpression('RAW.K0.CLOSE', 'MAIN.K0.BOLL.DOWN'),

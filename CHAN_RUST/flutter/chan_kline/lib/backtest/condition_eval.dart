@@ -1,11 +1,14 @@
 import '../compute/math_series_freeze_store.dart';
 import '../models/kline_bar.dart';
 import '../models/level_models.dart';
+import 'buy_n_var.dart';
 import 'catalog_lookup.dart';
 import 'chan_event_store.dart';
 import 'condition_ast.dart';
+import 'condition_trace.dart';
 import 'divergence_relation.dart';
 import 'divergence_relation_store.dart';
+import 'signal_data_catalog.dart';
 import 'signal_event.dart';
 import 'trade_clock.dart';
 import 'trade_operand.dart';
@@ -41,7 +44,11 @@ final class CondCompileOk extends CondCompileResult {
 
 final class CondCompileIllegal extends CondCompileResult {
   final String reason;
-  const CondCompileIllegal(this.reason);
+  final TradeCompileErrorKind kind;
+  const CondCompileIllegal(
+    this.reason, {
+    this.kind = TradeCompileErrorKind.other,
+  });
 }
 
 sealed class CompiledCond {
@@ -147,7 +154,9 @@ CondCompileResult _compile(TradeAst ast, {required int maxKn}) {
         op: op,
         maxKn: maxKn,
       );
-      if (r is TradeExprIllegal) return CondCompileIllegal(r.reason);
+      if (r is TradeExprIllegal) {
+        return CondCompileIllegal(r.reason, kind: r.kind);
+      }
       final ok = r as TradeValueExprOk;
       return CondCompileOk(CompiledCmp(
         left: ok.left,
@@ -168,11 +177,24 @@ CondCompileResult _compile(TradeAst ast, {required int maxKn}) {
 
 CondCompileResult _compileEvent(String variableId, {required int maxKn}) {
   if (!isRegisteredEventVar(variableId, maxKn: maxKn)) {
-    return const CondCompileIllegal('未登记的事件变量，或还不能当条件');
+    final def = lookupTradeVariable(variableId, maxKn: maxKn);
+    if (def?.readiness == TradeReadiness.inventoryOnly) {
+      return const CondCompileIllegal(
+        '只盘点还不能当条件',
+        kind: TradeCompileErrorKind.unavailable,
+      );
+    }
+    return const CondCompileIllegal(
+      '未登记的事件变量，或还不能当条件',
+      kind: TradeCompileErrorKind.unavailable,
+    );
   }
   final bound = TradeOperand.tryBind(variableId, maxKn: maxKn);
   if (bound == null) {
-    return const CondCompileIllegal('未登记进交易目录，或只盘点还不能当条件');
+    return const CondCompileIllegal(
+      '未登记进交易目录，或只盘点还不能当条件',
+      kind: TradeCompileErrorKind.unavailable,
+    );
   }
   return CondCompileOk(CompiledEvent(variableId: variableId, clockOp: bound));
 }
@@ -193,6 +215,7 @@ CondCompileResult _compileJoin(
     return CondCompileIllegal(
       '条件里混了不同层或不同钟，不能 ${and ? 'AND' : 'OR'} 在一起'
       '（禁止 K0 和 K1 拼在同一棵树上；分型确认是连线钟，不能和 RSI 直接拼）',
+      kind: TradeCompileErrorKind.clock,
     );
   }
   final clock = _joinClock(l, r);
@@ -264,6 +287,7 @@ class _BoolPt {
   final String rightId;
   final TradeBinaryOp op;
   final List<SignalSnapshot> snapshots;
+  final ConditionTrace trace;
 
   const _BoolPt({
     required this.evalIndex,
@@ -276,6 +300,7 @@ class _BoolPt {
     required this.rightId,
     required this.op,
     required this.snapshots,
+    required this.trace,
   });
 }
 
@@ -312,6 +337,7 @@ List<SignalEvent> evalCompiledCond({
       rightId: curr.rightId,
       conditionText: text,
       snapshots: curr.snapshots,
+      trace: curr.trace,
     ));
   }
   return out;
@@ -374,6 +400,15 @@ List<_BoolPt> _evalEvent(CompiledEvent cond, CondEvalCtx ctx) {
           value: flag ? (ev?.price ?? 1) : null,
         ),
       ],
+      trace: ConditionTrace(
+        op: 'EXISTS',
+        flag: flag,
+        label: snapshotVarLabel(cond.variableId),
+        variableId: cond.variableId,
+        value: flag ? 1 : 0,
+        objectId: ev?.objectId,
+        relationId: ev?.relationId,
+      ),
     ));
     i++;
   }
@@ -418,6 +453,7 @@ List<_BoolPt> _evalCmp(CompiledCmp cond, CondEvalCtx ctx) {
       rightId: rightId,
       op: cond.op,
       snapshots: _leafSnapshots(cond, a.value, b.value),
+      trace: _cmpTrace(cond, ctx, a.availableAt, a.value, b.value, flag),
     ));
   }
   return out;
@@ -537,6 +573,12 @@ List<_BoolPt> _combineExact(
       rightId: b.rightId,
       op: _preferCrossOp(a, b),
       snapshots: _mergeSnaps(a.snapshots, b.snapshots),
+      trace: ConditionTrace(
+        op: and ? 'AND' : 'OR',
+        flag: flag,
+        label: and ? 'AND' : 'OR',
+        children: [a.trace, b.trace],
+      ),
     ));
   }
   out.sort((x, y) => x.availableAt.compareTo(y.availableAt));
@@ -614,6 +656,15 @@ List<_BoolPt> _combineAsOf(
         a?.snapshots ?? const [],
         bpt?.snapshots ?? const [],
       ),
+      trace: ConditionTrace(
+        op: and ? 'AND' : 'OR',
+        flag: flag,
+        label: and ? 'AND' : 'OR',
+        children: [
+          if (a != null) a.trace,
+          if (bpt != null) bpt.trace,
+        ],
+      ),
     ));
     i++;
   }
@@ -638,6 +689,73 @@ List<SignalSnapshot> _mergeSnaps(
     if (seen.add(s.label)) out.add(s);
   }
   return out;
+}
+
+ConditionTrace _cmpTrace(
+  CompiledCmp cond,
+  CondEvalCtx ctx,
+  int asOf,
+  double leftVal,
+  double rightVal,
+  bool flag,
+) {
+  final leftId = cond.left is TradeVarRef
+      ? (cond.left as TradeVarRef).variableId
+      : null;
+  final rightId = cond.right is TradeVarRef
+      ? (cond.right as TradeVarRef).variableId
+      : null;
+  final leftIds = leftId == null
+      ? (objectId: null, relationId: null)
+      : _structIds(leftId, asOf, ctx);
+  final rightIds = rightId == null
+      ? (objectId: null, relationId: null)
+      : _structIds(rightId, asOf, ctx);
+  return ConditionTrace(
+    op: tradeOpToken(cond.op),
+    flag: flag,
+    label: cond.label,
+    children: [
+      ConditionTrace(
+        op: 'VALUE',
+        label: tradeValueLabel(cond.left),
+        variableId: leftId,
+        value: leftVal,
+        objectId: leftIds.objectId,
+        relationId: leftIds.relationId,
+      ),
+      ConditionTrace(
+        op: 'VALUE',
+        label: tradeValueLabel(cond.right),
+        variableId: rightId,
+        value: rightVal,
+        objectId: rightIds.objectId,
+        relationId: rightIds.relationId,
+      ),
+    ],
+  );
+}
+
+({String? objectId, String? relationId}) _structIds(
+  String variableId,
+  int asOf,
+  CondEvalCtx ctx,
+) {
+  final id = canonicalizeTradeVarId(variableId);
+  final kn = knFromVariableId(id);
+  if (kn == null) return (objectId: null, relationId: null);
+  if (id.contains('.ZS.CURRENT') && ctx.zsObjects != null) {
+    final zs = ctx.zsObjects!.resolveCurrentConfirmedZs(
+      displayKn: kn,
+      asOf: asOf,
+    );
+    return (objectId: zs?.objectId, relationId: null);
+  }
+  if (id.contains('.DIVERGENCE') && ctx.diverRelations != null) {
+    final rel = ctx.diverRelations!.resolveCurrent(displayKn: kn, asOf: asOf);
+    return (objectId: null, relationId: rel?.relationId);
+  }
+  return (objectId: null, relationId: null);
 }
 
 List<EvalClockPoint> _readRef(

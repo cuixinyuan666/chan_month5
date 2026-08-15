@@ -1314,6 +1314,21 @@ class MsgHistory {
     );
   }
 
+  /// N 类事件 + 结构契约 + 条件树 v2 + 归因（进程内去重）
+  static bool _tradeChanCompleteLogged = false;
+  void appendTradeChanComplete() {
+    if (_tradeChanCompleteLogged) return;
+    _tradeChanCompleteLogged = true;
+    append(
+      '【缠论交易变量收口·2026-08-16】三类及以上买卖点用 BUY_N(3)、SELL_N(3) 这种带类号的事件，不再为每一类单独起名字。'
+      '出现一次才出信号，动态段后面几根 K 还挂着同一个点也不会重复下单。'
+      '中枢和背驰接到同一套结构编号：对象有 objectId，关系有 relationId，策略只用当时已经能看见的投影。'
+      '条件树会在编译时分清类型错、混钟、不可用三种失败，不会再一律叫 invalid。'
+      '每笔信号能看见完整求值链；回测报告多了按买卖规则的归因，以及引擎/策略/契约/结构四套版本号。'
+      '成交仍是下一根 K0 开盘。未接入做空、加仓、多品种、参数优化、全市场选股。',
+    );
+  }
+
   /// 运行时虚线摘要（内容变才追加；复制历史记录排查用）。
   void appendDisplayBuildingLinesRuntime({
     required int kn,

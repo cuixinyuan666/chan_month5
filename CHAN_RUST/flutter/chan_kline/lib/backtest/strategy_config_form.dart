@@ -649,14 +649,14 @@ class _StrategyConfigFormState extends State<StrategyConfigForm> {
     if (numericOnly) {
       groups = [
         for (final g in groups)
-          if (g.fields.any((f) => f.valueType == TradeValueType.numeric))
+          if (g.fields.any((f) => isNumericComparableType(f.valueType)))
             TradeVarGroupSpec(
               key: g.key,
               label: g.label,
               panel: g.panel,
               fields: [
                 for (final f in g.fields)
-                  if (f.valueType == TradeValueType.numeric) f,
+                  if (isNumericComparableType(f.valueType)) f,
               ],
             ),
       ];

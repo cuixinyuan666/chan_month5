@@ -1,3 +1,4 @@
+import 'buy_n_var.dart';
 import 'divergence_relation.dart';
 import 'structure_object.dart';
 import 'trade_clock.dart';
@@ -24,7 +25,17 @@ enum TradeValueType {
   boolean,
   event,
   enumeration,
+  /// 结构对象上的数值投影（如确认中枢 HIGH）
+  objectProjection,
+  /// 结构关系上的数值投影（如背驰 RATIO）
+  relationProjection,
 }
+
+/// 能进比较 / CROSS 的「有大小的数」。事件、枚举、整个对象/关系不行。
+bool isNumericComparableType(TradeValueType t) =>
+    t == TradeValueType.numeric ||
+    t == TradeValueType.objectProjection ||
+    t == TradeValueType.relationProjection;
 
 /// 已登记可进公式 / 只盘点不进公式。
 enum TradeReadiness {
@@ -118,7 +129,8 @@ String k0VolumeId() => 'RAW.K0.VOLUME';
 
 /// 把已登记 id 换到另一层；该层没有对应变量（如 K1 成交量）则退回该层收盘。
 String remapRegisteredVarId(String variableId, int newKn, {int maxKn = 8}) {
-  final parts = variableId.split('.');
+  final canonical = canonicalizeTradeVarId(variableId);
+  final parts = canonical.split('.');
   if (parts.length < 3 || !parts[1].startsWith('K')) {
     return rawOhlcId(newKn, 'CLOSE');
   }
@@ -130,7 +142,7 @@ String remapRegisteredVarId(String variableId, int newKn, {int maxKn = 8}) {
 }
 
 int? knFromVariableId(String variableId) {
-  final parts = variableId.split('.');
+  final parts = canonicalizeTradeVarId(variableId).split('.');
   if (parts.length < 2 || !parts[1].startsWith('K')) return null;
   return int.tryParse(parts[1].substring(1));
 }
@@ -377,6 +389,46 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
         description: 'EVENT_EXISTS；禁止比较/穿越',
       ));
     }
+    for (var cls = kTradeMinBsClass; cls <= kTradeUiMaxBsClass; cls++) {
+      out.add(TradeVariableDef(
+        variableId: buyNVarId(kn, cls),
+        displayName: 'K$kn ${tradeBsClassCn(cls)}类买点',
+        panel: TradePanel.structure,
+        displayKn: kn,
+        clockFamily: TradeClockFamily.zsMath,
+        evalClock: TradeEvalClock.k0Bar,
+        plotClock: TradePlotClock.k0Bar,
+        valueType: TradeValueType.event,
+        readiness: TradeReadiness.registered,
+        source: 'buyNHistory 会话冻结，按 class=$cls 过滤；发现边沿',
+        unit: 'event',
+        futureSafe: true,
+        availabilityNote: '首次发现当根才出现一次；动态段后续 x 不重复出交易事件',
+        groupKey: 'bsN',
+        groupLabel: 'N类BS',
+        fieldLabel: '${tradeBsClassCn(cls)}买',
+        description: 'BUY_N(class=$cls) EVENT_EXISTS；禁止比较/穿越',
+      ));
+      out.add(TradeVariableDef(
+        variableId: sellNVarId(kn, cls),
+        displayName: 'K$kn ${tradeBsClassCn(cls)}类卖点',
+        panel: TradePanel.structure,
+        displayKn: kn,
+        clockFamily: TradeClockFamily.zsMath,
+        evalClock: TradeEvalClock.k0Bar,
+        plotClock: TradePlotClock.k0Bar,
+        valueType: TradeValueType.event,
+        readiness: TradeReadiness.registered,
+        source: 'sellNHistory 会话冻结，按 class=$cls 过滤；发现边沿',
+        unit: 'event',
+        futureSafe: true,
+        availabilityNote: '首次发现当根才出现一次；动态段后续 x 不重复出交易事件',
+        groupKey: 'bsN',
+        groupLabel: 'N类BS',
+        fieldLabel: '${tradeBsClassCn(cls)}卖',
+        description: 'SELL_N(class=$cls) EVENT_EXISTS；禁止比较/穿越',
+      ));
+    }
     out.add(TradeVariableDef(
       variableId: 'SUB.K$kn.FRACTAL_CONFIRM',
       displayName: 'K$kn 分型确认',
@@ -432,7 +484,7 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
         clockFamily: TradeClockFamily.zsMath,
         evalClock: evalClockForDisplayKn(kn),
         plotClock: TradePlotClock.k0Bar,
-        valueType: TradeValueType.numeric,
+        valueType: TradeValueType.objectProjection,
         readiness: TradeReadiness.registered,
         source:
             'ZhongshuObjectStore.resolveCurrentConfirmedZs → ${f.$1}；只读现有中枢帧快照',
@@ -474,7 +526,7 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
       clockFamily: TradeClockFamily.zsMath,
       evalClock: evalClockForDisplayKn(kn),
       plotClock: TradePlotClock.k0Bar,
-      valueType: TradeValueType.numeric,
+      valueType: TradeValueType.relationProjection,
       readiness: TradeReadiness.registered,
       source: 'DivergenceRelation.ratio（面积 out/in）；历史 asOf 不回写',
       unit: 'ratio',
@@ -483,7 +535,7 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
       groupKey: 'diver',
       groupLabel: '背驰',
       fieldLabel: '力度比',
-      description: 'Numeric；可与同层 RSI/收盘比较，不能 CROSS 整个背驰对象',
+      description: '关系投影；可与同层 RSI/收盘比较，不能 CROSS 整个背驰对象',
     ));
     out.add(TradeVariableDef(
       variableId: diverDirectionId(kn),
@@ -609,6 +661,14 @@ List<TradeVariableDef> inventoryOnlyTradeVariables() {
       why: '对象是尚未确认的分型，不是新芽；未写边沿',
     ),
     stub(
+      pattern: 'STRUCTURE.K{n}.ZS.CURRENT',
+      name: 'Kn确认中枢（整对象）',
+      panel: TradePanel.structure,
+      clock: TradeClockFamily.zsMath,
+      type: TradeValueType.objectProjection,
+      why: '整对象不能比大小；请用 ZS.CURRENT.HIGH/LOW/CENTER 投影',
+    ),
+    stub(
       pattern: 'STRUCTURE.K{n}.ZS.HIGH',
       name: 'Kn中枢高（未指定哪一框）',
       panel: TradePanel.structure,
@@ -631,6 +691,14 @@ List<TradeVariableDef> inventoryOnlyTradeVariables() {
       clock: TradeClockFamily.zsMath,
       type: TradeValueType.numeric,
       why: '未确认中枢不进交易变量，避免未来函数',
+    ),
+    stub(
+      pattern: 'STRUCTURE.K{n}.DIVERGENCE',
+      name: 'Kn背驰关系（整对象）',
+      panel: TradePanel.structure,
+      clock: TradeClockFamily.zsMath,
+      type: TradeValueType.relationProjection,
+      why: '整段背驰关系不能比大小或穿越；请用 EXISTS / RATIO / DIRECTION 投影',
     ),
     stub(
       pattern: 'SUB.K{n}.DIVERGENCE',
@@ -659,13 +727,43 @@ List<TradeVariableDef> inventoryOnlyTradeVariables() {
   ];
 }
 
-/// 在已登记表里找；找不到再看盘点模板。
+/// 在已登记表里找；找不到再看盘点模板。CHAN. 前缀与 STRUCTURE. 同义。
 TradeVariableDef? lookupTradeVariable(String variableId, {int maxKn = 8}) {
+  final id = canonicalizeTradeVarId(variableId);
   for (final d in buildRegisteredTradeVariables(maxKn)) {
-    if (d.variableId == variableId) return d;
+    if (d.variableId == id) return d;
+  }
+  final n = parseClassNVarId(id);
+  if (n != null && n.cls <= kTradeMaxBsClass && n.kn <= (maxKn < 0 ? 0 : maxKn)) {
+    return _classNDef(n.kn, n.cls, buy: n.buy);
   }
   for (final d in inventoryOnlyTradeVariables()) {
-    if (d.matchesId(variableId)) return d;
+    if (d.matchesId(id)) return d;
   }
   return null;
+}
+
+TradeVariableDef _classNDef(int kn, int cls, {required bool buy}) {
+  return TradeVariableDef(
+    variableId: buy ? buyNVarId(kn, cls) : sellNVarId(kn, cls),
+    displayName: 'K$kn ${tradeBsClassCn(cls)}类${buy ? "买" : "卖"}点',
+    panel: TradePanel.structure,
+    displayKn: kn,
+    clockFamily: TradeClockFamily.zsMath,
+    evalClock: TradeEvalClock.k0Bar,
+    plotClock: TradePlotClock.k0Bar,
+    valueType: TradeValueType.event,
+    readiness: TradeReadiness.registered,
+    source: buy
+        ? 'buyNHistory 会话冻结，按 class=$cls 过滤；发现边沿'
+        : 'sellNHistory 会话冻结，按 class=$cls 过滤；发现边沿',
+    unit: 'event',
+    futureSafe: true,
+    availabilityNote: '首次发现当根才出现一次；动态段后续 x 不重复出交易事件',
+    groupKey: 'bsN',
+    groupLabel: 'N类BS',
+    fieldLabel: '${tradeBsClassCn(cls)}${buy ? "买" : "卖"}',
+    description:
+        '${buy ? "BUY_N" : "SELL_N"}(class=$cls) EVENT_EXISTS；禁止比较/穿越',
+  );
 }

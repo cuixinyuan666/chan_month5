@@ -1,6 +1,7 @@
+import 'condition_ast.dart';
+import 'condition_trace.dart';
 import 'trade_clock.dart';
 import 'trade_operand.dart';
-import 'condition_ast.dart';
 
 /// 策略方向（归一化后的买卖，不是缠论 1Ba）。
 enum TradeSide { buy, sell }
@@ -38,6 +39,8 @@ class SignalEvent {
   final String conditionText;
   /// 触发当步各变量取值
   final List<SignalSnapshot> snapshots;
+  /// 条件求值链（AND/OR/取值/对象编号）
+  final ConditionTrace? trace;
 
   const SignalEvent({
     required this.signalId,
@@ -57,6 +60,7 @@ class SignalEvent {
     required this.rightId,
     this.conditionText = '',
     this.snapshots = const [],
+    this.trace,
   });
 
   bool get isTradable => side != null && ruleId.isNotEmpty;
@@ -80,7 +84,9 @@ class SignalEvent {
             for (final s in snapshots)
               '${s.label} = ${s.value == null ? '不可用' : _fmtNum(s.value!)}',
           ];
-    return '$sideCn：\n$cond\n\n触发时：\n${snapLines.join('\n')}\n\n发现：\nK0 #$discoveryX';
+    final traceBlock =
+        trace == null ? '' : '\n\n求值链：\n${trace!.text}';
+    return '$sideCn：\n$cond\n\n触发时：\n${snapLines.join('\n')}\n\n发现：\nK0 #$discoveryX$traceBlock';
   }
 
   SignalEvent copyWith({
@@ -90,6 +96,7 @@ class SignalEvent {
     String? source,
     String? conditionText,
     List<SignalSnapshot>? snapshots,
+    ConditionTrace? trace,
   }) {
     return SignalEvent(
       signalId: signalId ?? this.signalId,
@@ -109,6 +116,7 @@ class SignalEvent {
       rightId: rightId,
       conditionText: conditionText ?? this.conditionText,
       snapshots: snapshots ?? this.snapshots,
+      trace: trace ?? this.trace,
     );
   }
 }

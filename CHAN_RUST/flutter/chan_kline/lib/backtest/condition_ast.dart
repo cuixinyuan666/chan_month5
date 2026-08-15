@@ -1,3 +1,4 @@
+import 'buy_n_var.dart';
 import 'divergence_relation.dart';
 import 'signal_data_catalog.dart';
 import 'trade_operand.dart';
@@ -214,6 +215,32 @@ TradeAst k1Sell1OrZsHighAst() => const TradeOrAst(
         left: TradeVarRef('RAW.K1.CLOSE'),
         right: TradeVarRef('STRUCTURE.K1.ZS.CURRENT.HIGH'),
         op: TradeBinaryOp.crossAbove,
+      ),
+    );
+
+/// 买：K0 收下穿下轨 并且 RSI < 40
+TradeAst k0BollDownAndRsiAst({double rsi = 40}) => TradeAndAst(
+      bollBuyAst(0),
+      TradeCmpAst(
+        left: const TradeVarRef('SUB.K0.RSI.VALUE'),
+        right: TradeConstRef(rsi),
+        op: TradeBinaryOp.lt,
+      ),
+    );
+
+/// 买：K1 三类买点 或者 一类买点
+TradeAst k1BuyN3OrBuy1Ast() => TradeOrAst(
+      TradeEventAst(buyNVarId(1, 3)),
+      k1Buy1EventAst,
+    );
+
+/// 买：K1 三类买点 并且 RSI < 50
+TradeAst k1BuyN3AndRsiAst() => TradeAndAst(
+      TradeEventAst(buyNVarId(1, 3)),
+      const TradeCmpAst(
+        left: TradeVarRef('SUB.K1.RSI.VALUE'),
+        right: TradeConstRef(50),
+        op: TradeBinaryOp.lt,
       ),
     );
 

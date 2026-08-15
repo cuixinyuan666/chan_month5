@@ -35,6 +35,8 @@ class TradeChanEvent {
   final String label;
   final double price;
   final String source;
+  final String? objectId;
+  final String? relationId;
 
   const TradeChanEvent({
     required this.eventId,
@@ -44,5 +46,7 @@ class TradeChanEvent {
     required this.label,
     required this.price,
     required this.source,
+    this.objectId,
+    this.relationId,
   });
 }

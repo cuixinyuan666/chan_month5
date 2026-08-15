@@ -3,6 +3,7 @@ import '../compute/math_classic_compute.dart';
 import '../compute/math_series_freeze_store.dart';
 import '../models/kline_bar.dart';
 import '../models/level_models.dart';
+import 'buy_n_var.dart';
 import 'divergence_relation.dart';
 import 'divergence_relation_store.dart';
 import 'signal_data_catalog.dart';
@@ -61,7 +62,7 @@ TradeScalar lookupTradeNumeric({
 }
 
 ({String panel, int kn, List<String> rest})? _parseId(String id) {
-  final parts = id.split('.');
+  final parts = canonicalizeTradeVarId(id).split('.');
   if (parts.length < 3) return null;
   final knTok = parts[1];
   if (!knTok.startsWith('K')) return null;

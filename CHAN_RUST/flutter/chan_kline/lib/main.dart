@@ -204,6 +204,7 @@ Future<void> main() async {
   MsgHistory.instance.appendTradeChanEvents();
   MsgHistory.instance.appendTradeZsObjects();
   MsgHistory.instance.appendTradeDivergenceRelations();
+  MsgHistory.instance.appendTradeChanComplete();
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     await windowManager.ensureInitialized();
     const opts = WindowOptions(
@@ -2215,6 +2216,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
       sell1ByKn: _sell1HistoryByKn,
       buy2ByKn: _buy2HistoryByKn,
       sell2ByKn: _sell2HistoryByKn,
+      buyNByKn: _buyNHistoryByKn,
+      sellNByKn: _sellNHistoryByKn,
       zsConfirmByKn: _zsConfirmHistoryByKn,
       k0FractalConfirms: _k0ConfirmSignals,
     );

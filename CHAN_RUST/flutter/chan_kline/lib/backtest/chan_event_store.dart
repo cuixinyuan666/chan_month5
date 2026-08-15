@@ -1,13 +1,17 @@
 import '../compute/class1_bs_compute.dart';
 import '../compute/class2_bs_compute.dart';
+import '../compute/class_n_bs_compute.dart';
 import '../compute/zs_signal_compute.dart';
 import '../models/buy1_frame.dart';
 import '../models/buy2_frame.dart';
+import '../models/buy_n_frame.dart';
 import '../models/k0_confirm_signal.dart';
 import '../models/level_models.dart';
 import '../models/sell1_frame.dart';
 import '../models/sell2_frame.dart';
+import '../models/sell_n_frame.dart';
 import '../models/zs_signal_event.dart';
+import 'buy_n_var.dart';
 import 'divergence_relation_store.dart';
 import 'signal_data_catalog.dart';
 import 'trade_value.dart';
@@ -18,6 +22,8 @@ class ChanEventStore {
   final Map<int, List<Sell1Frame>> sell1ByKn;
   final Map<int, List<Buy2Frame>> buy2ByKn;
   final Map<int, List<Sell2Frame>> sell2ByKn;
+  final Map<int, List<BuyNFrame>> buyNByKn;
+  final Map<int, List<SellNFrame>> sellNByKn;
   final Map<int, List<ZsSignalEvent>> zsConfirmByKn;
   final List<K0ConfirmSignal> k0FractalConfirms;
 
@@ -26,6 +32,8 @@ class ChanEventStore {
     this.sell1ByKn = const {},
     this.buy2ByKn = const {},
     this.sell2ByKn = const {},
+    this.buyNByKn = const {},
+    this.sellNByKn = const {},
     this.zsConfirmByKn = const {},
     this.k0FractalConfirms = const [],
   });
@@ -37,6 +45,8 @@ class ChanEventStore {
       sell1ByKn.isEmpty &&
       buy2ByKn.isEmpty &&
       sell2ByKn.isEmpty &&
+      buyNByKn.isEmpty &&
+      sellNByKn.isEmpty &&
       zsConfirmByKn.isEmpty &&
       k0FractalConfirms.isEmpty;
 }
@@ -64,13 +74,14 @@ List<TradeChanEvent> listTradeChanEvents({
   DivergenceRelationStore? diverRelations,
   int maxKn = 8,
 }) {
-  final def = lookupTradeVariable(variableId, maxKn: maxKn);
+  final id = canonicalizeTradeVarId(variableId);
+  final def = lookupTradeVariable(id, maxKn: maxKn);
   if (def == null || !def.expressionReady) return const [];
   if (def.valueType != TradeValueType.event) return const [];
   final kn = def.displayKn;
   if (kn == null || kn < 0) return const [];
 
-  final parts = variableId.split('.');
+  final parts = id.split('.');
   if (parts.length < 3) return const [];
   final kind = parts.sublist(2).join('.');
 
@@ -96,6 +107,13 @@ List<TradeChanEvent> listTradeChanEvents({
           ) ??
           const [];
     default:
+      final n = parseClassNVarId(id);
+      if (n != null && n.kn == kn) {
+        if (n.buy) {
+          return _firstBuyN(store.buyNByKn[kn] ?? const [], kn, n.cls, asOf);
+        }
+        return _firstSellN(store.sellNByKn[kn] ?? const [], kn, n.cls, asOf);
+      }
       return const [];
   }
 }
@@ -239,6 +257,54 @@ List<TradeChanEvent> _firstKnFractal(
       label: e.fx,
       price: e.value >= 0 ? e.fractalLow : e.fractalHigh,
       source: 'Kn 分型确认冻结列表（首次确认事件，不是当前已确认清单状态）',
+    ),
+  );
+}
+
+List<TradeChanEvent> _firstBuyN(
+  List<BuyNFrame> hist,
+  int kn,
+  int cls,
+  int asOf,
+) {
+  final filtered = [for (final p in hist) if (p.cls == cls) p];
+  return _firstByX(
+    items: filtered,
+    asOf: asOf,
+    xOf: (p) => p.x,
+    stableOf: buyNStableKey,
+    toEvent: (p) => TradeChanEvent(
+      eventId: 'BUY_N|$kn|$cls|${p.segIdx}|${p.label}',
+      displayKn: kn,
+      discoveryX: p.x,
+      availableAt: p.x,
+      label: p.label,
+      price: p.price,
+      source: 'N类买点会话历史（class=$cls；稳定身份首次发现；动态后续 x 不重复出信号）',
+    ),
+  );
+}
+
+List<TradeChanEvent> _firstSellN(
+  List<SellNFrame> hist,
+  int kn,
+  int cls,
+  int asOf,
+) {
+  final filtered = [for (final p in hist) if (p.cls == cls) p];
+  return _firstByX(
+    items: filtered,
+    asOf: asOf,
+    xOf: (p) => p.x,
+    stableOf: sellNStableKey,
+    toEvent: (p) => TradeChanEvent(
+      eventId: 'SELL_N|$kn|$cls|${p.segIdx}|${p.label}',
+      displayKn: kn,
+      discoveryX: p.x,
+      availableAt: p.x,
+      label: p.label,
+      price: p.price,
+      source: 'N类卖点会话历史（class=$cls；发现边沿；不把持续存在铺成 true）',
     ),
   );
 }

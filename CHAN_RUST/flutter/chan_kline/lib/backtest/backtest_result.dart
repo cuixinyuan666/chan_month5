@@ -4,6 +4,7 @@ import 'backtest_metrics.dart';
 import 'equity_build.dart';
 import 'equity_curve.dart';
 import 'order_models.dart';
+import 'rule_performance.dart';
 import 'signal_event.dart';
 
 export 'backtest_metrics.dart';
@@ -22,6 +23,8 @@ class BacktestResult {
   final AccountState account;
   final double lastPrice;
   final double initialCapital;
+  /// 按买卖规则归因；没有信号时为空
+  final List<RulePerformance> rulePerformances;
 
   const BacktestResult({
     required this.signals,
@@ -34,6 +37,7 @@ class BacktestResult {
     required this.account,
     required this.lastPrice,
     required this.initialCapital,
+    this.rulePerformances = const [],
   });
 
   List<TradeRecord> get closedTrades => trades;
@@ -72,5 +76,11 @@ BacktestResult buildBacktestResult({
     account: account,
     lastPrice: lastPrice,
     initialCapital: initialCapital,
+    rulePerformances: computeRulePerformance(
+      signals: signals,
+      orders: orders,
+      trades: trades,
+      equityCurve: curve,
+    ),
   );
 }

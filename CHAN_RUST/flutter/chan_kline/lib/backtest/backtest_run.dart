@@ -2,6 +2,7 @@ import '../compute/math_series_freeze_store.dart';
 import '../models/kline_bar.dart';
 import '../models/level_models.dart';
 import 'backtest_result.dart';
+import 'backtest_run_context.dart';
 import 'chan_event_store.dart';
 import 'divergence_relation_store.dart';
 import 'condition_eval.dart';
@@ -13,7 +14,7 @@ import 'strategy_config.dart';
 import 'zhongshu_object_store.dart';
 
 /// 引擎版本：以后缠论/撮合规则改了，旧报告能对上是哪一版跑的。
-const String kBacktestEngineVersion = 'backtest-workbench-v6-divergence-rel';
+const String kBacktestEngineVersion = 'backtest-workbench-v7-chan-complete';
 
 /// 一次回测运行：策略 + 当时数据范围 + 引擎版本 + 结果。
 /// UI 不直接塞一堆散参数进引擎。
@@ -23,6 +24,7 @@ class BacktestRun {
   final DateTime startedAt;
   final StrategyConfig strategyConfig;
   final BacktestDataScope sourceRange;
+  final BacktestRunContext? context;
   final BacktestResult? result;
   final String? error;
 
@@ -32,6 +34,7 @@ class BacktestRun {
     required this.startedAt,
     required this.strategyConfig,
     required this.sourceRange,
+    this.context,
     this.result,
     this.error,
   });
@@ -56,6 +59,12 @@ BacktestRun executeStrategyBacktest({
 }) {
   final started = now ?? DateTime.now();
   final id = runId ?? 'run_${started.millisecondsSinceEpoch}';
+  final runCtx = buildRunContext(
+    runId: id,
+    engineVersion: kBacktestEngineVersion,
+    config: config.copyWith(dataScope: scope),
+    scope: scope,
+  );
   final compiled = compileStrategyConfig(config, maxKn: maxKn);
   if (compiled is StrategyCompileIllegal) {
     return BacktestRun(
@@ -64,6 +73,7 @@ BacktestRun executeStrategyBacktest({
       startedAt: started,
       strategyConfig: config,
       sourceRange: scope,
+      context: runCtx,
       error: compiled.reason,
     );
   }
@@ -75,6 +85,7 @@ BacktestRun executeStrategyBacktest({
       startedAt: started,
       strategyConfig: config,
       sourceRange: scope,
+      context: runCtx,
       error: '还没有可回测的 K 线，请先加载并走到至少一根',
     );
   }
@@ -124,6 +135,7 @@ BacktestRun executeStrategyBacktest({
     startedAt: started,
     strategyConfig: config.copyWith(dataScope: scope),
     sourceRange: scope,
+    context: runCtx,
     result: result,
   );
 }

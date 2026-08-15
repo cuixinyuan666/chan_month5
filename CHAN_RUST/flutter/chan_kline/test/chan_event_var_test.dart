@@ -96,7 +96,7 @@ void main() {
       );
       expect(
         lookupTradeVariable('STRUCTURE.K1.ZS.CURRENT.LOW', maxKn: 2)!.valueType,
-        TradeValueType.numeric,
+        TradeValueType.objectProjection,
       );
     });
 

@@ -166,6 +166,7 @@ class DivergenceRelationStore {
           label: '背驰',
           price: rel.ratio ?? 0,
           source: rel.source,
+          relationId: e.key,
         ));
       }
     }
