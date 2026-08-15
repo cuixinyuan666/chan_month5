@@ -32,6 +32,16 @@
 - **验证**：`flutter test test/cross_eval_test.dart` + `signal_data_catalog_test.dart` 全过。
 - **注意**：纯 Flutter；无需重编 DLL。无图上标记，不自动弹演示。
 
+## 2026-08-15 Phase2 最小交易闭环（Signal→Order→K0开盘Fill→Position→TradeRecord）
+
+- **需求**：一次接完单仓多头闭环；不实现统计/UI。
+- **成交**：`discoveryX=X` → `executeX=X+1` → 价=`K0[X+1].open`；无下一根则订单过期，禁止用末根收盘虚构。
+- **仓位**：无仓才能买、有仓才能卖；再买/无仓卖显式拒绝。
+- **布林**：`mathFreeze==null` 不再现算，只读冻结仓。
+- **费用**：手续费/滑点接口默认 0。
+- **验证**：`flutter test test/mini_loop_test.dart` + catalog/cross 全过。
+- **注意**：纯 Flutter；无需重编 DLL。无箭头、不自动弹演示。
+
 ## 2026-08-15 连线斜率背驰特征键 ASCII（line_slope）
 
 - **需求**：ML 特征键不再混入汉字「斜率」；算法本身保留（与 Kn连线斜率同源）。

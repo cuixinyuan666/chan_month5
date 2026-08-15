@@ -61,11 +61,17 @@ List<SignalEvent> detectCrossOnEvalSeries({
     };
     if (!hit) continue;
     out.add(SignalEvent(
+      signalId: 'sig-${curr.a.availableAt}-${curr.a.evalIndex}-${op.name}',
+      ruleId: '',
+      side: null,
       op: op,
       displayKn: leftOp.displayKn,
       clockFamily: leftOp.clockFamily,
       evalIndex: curr.a.evalIndex,
+      discoveryX: curr.a.availableAt,
       availableAt: curr.a.availableAt,
+      signalPrice: curr.a.value,
+      source: '${op.name}|${leftOp.variableId}|${rightOp.variableId}',
       leftValue: curr.a.value,
       rightValue: curr.b.value,
       leftId: leftOp.variableId,

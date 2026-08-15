@@ -130,18 +130,11 @@ TradeScalar _lookupBoll({
   required int bollN,
 }) {
   List<double?>? series;
-  if (mathFreeze != null) {
-    series = _bollField(mathFreeze.boll(kn), band);
-  } else {
-    final fresh = computeBollForLevel(
-      displayKn: kn,
-      bars: bars,
-      levels: levels,
-      n: bollN < 2 ? 2 : bollN,
-      asOf: asOf,
-    );
-    series = _bollField(fresh, band);
+  if (mathFreeze == null) {
+    // 交易/回测禁止现算第二套布林；没有冻结仓就是不可用
+    return const TradeScalar.unavailable();
   }
+  series = _bollField(mathFreeze.boll(kn), band);
   if (series == null || asOf >= series.length) {
     return const TradeScalar.unavailable();
   }
@@ -266,18 +259,10 @@ List<EvalClockPoint> _bollEvalSeries({
   required int bollN,
 }) {
   List<double?>? plot;
-  if (mathFreeze != null) {
-    plot = _bollField(mathFreeze.boll(kn), band);
-  } else {
-    final fresh = computeBollForLevel(
-      displayKn: kn,
-      bars: bars,
-      levels: levels,
-      n: bollN < 2 ? 2 : bollN,
-      asOf: asOf,
-    );
-    plot = _bollField(fresh, band);
+  if (mathFreeze == null) {
+    return const [];
   }
+  plot = _bollField(mathFreeze.boll(kn), band);
   if (plot == null) return const [];
 
   if (kn <= 0) {

@@ -1190,6 +1190,21 @@ class MsgHistory {
     );
   }
 
+  /// 最小交易闭环（进程内去重）
+  static bool _tradeMiniLoopLogged = false;
+  void appendTradeMiniLoop() {
+    if (_tradeMiniLoopLogged) return;
+    _tradeMiniLoopLogged = true;
+    append(
+      '【最小交易闭环·2026-08-15】穿越信号归一成买/卖后：当根知道、下一根K0开盘成交。'
+      '没有下一根K0就不成交，不许拿最后收盘价虚构。'
+      '第一版只做多、单仓：没仓才能买，有仓才能卖；再买/再卖直接拒绝。'
+      'K1穿越也在下一根真实K0开盘成交，层号不改成交钟。'
+      '布林只读图上已冻住的格子，禁止另算一套。手续费/滑点接口先留着、这阶段当0。'
+      '尚未做净值、回撤、箭头、策略界面。',
+    );
+  }
+
   /// 运行时虚线摘要（内容变才追加；复制历史记录排查用）。
   void appendDisplayBuildingLinesRuntime({
     required int kn,

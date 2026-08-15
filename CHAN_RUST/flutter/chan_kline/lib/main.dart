@@ -186,6 +186,7 @@ Future<void> main() async {
   MsgHistory.instance.appendTradeSignalCatalogPhase0();
   MsgHistory.instance.appendTradeClockContract();
   MsgHistory.instance.appendTradeCrossEval();
+  MsgHistory.instance.appendTradeMiniLoop();
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     await windowManager.ensureInitialized();
     const opts = WindowOptions(

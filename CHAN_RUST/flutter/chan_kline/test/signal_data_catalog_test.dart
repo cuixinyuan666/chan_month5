@@ -135,30 +135,38 @@ void main() {
 
     test('布林第一根就有数，不把热身当成不可用', () {
       final bars = [_bar(0, 10)];
+      final store = MathSeriesFreezeStore();
+      mergeMathSeriesForStep(
+        store: store,
+        bars: bars,
+        levels: const [],
+        config: const MathIndicatorConfig(bollN: 20),
+        maxDisplayKn: 0,
+        asOf: 0,
+      );
       final got = lookupTradeNumeric(
         variableId: 'MAIN.K0.BOLL.MID',
         asOf: 0,
         bars: bars,
+        mathFreeze: store,
         bollN: 20,
       );
       expect(got.isAvailable, isTrue);
       expect(got.value, closeTo(10, 1e-9));
     });
 
-    test('K0 布林与现算/冻结仓同一份数；没有仓且未写过则为不可用', () {
+    test('K0 布林只读冻结仓；没有仓则不可用，禁止现算第二套', () {
       final bars = [
         for (var i = 0; i < 5; i++) _bar(i, (i + 1).toDouble()),
       ];
       final live = computeBollForLevel(displayKn: 0, bars: bars, n: 3, asOf: 2);
-      final got = lookupTradeNumeric(
+      final noFreeze = lookupTradeNumeric(
         variableId: 'MAIN.K0.BOLL.MID',
         asOf: 2,
         bars: bars.where((b) => b.idx <= 2).toList(),
         bollN: 3,
       );
-      expect(got.isAvailable, isTrue);
-      expect(got.value, closeTo(live.mid[2]!, 1e-12));
-      expect(got.value, closeTo(2, 1e-12));
+      expect(noFreeze.isUnavailable, isTrue);
 
       final store = MathSeriesFreezeStore();
       mergeMathSeriesForStep(
@@ -177,6 +185,16 @@ void main() {
         bollN: 3,
       );
       expect(frozen.value, closeTo(store.boll(0)!.down[4]!, 1e-12));
+      expect(
+        lookupTradeNumeric(
+          variableId: 'MAIN.K0.BOLL.MID',
+          asOf: 2,
+          bars: bars,
+          mathFreeze: store,
+          bollN: 3,
+        ).value,
+        closeTo(live.mid[2]!, 1e-12),
+      );
 
       final emptyStore = MathSeriesFreezeStore();
       final noCell = lookupTradeNumeric(
