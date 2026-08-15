@@ -130,6 +130,7 @@ Future<void> main() async {
   MsgHistory.instance.appendKnTrendModel();
   MsgHistory.instance.appendKnMathClassicIndicators();
   MsgHistory.instance.appendKnDivergenceIndicators();
+  MsgHistory.instance.appendDiverLineSlopeAsciiKey();
   MsgHistory.instance.appendTickK0NativePeriod();
   // 展示轨：动态KN当确认段画虚线；确认优先纠正/改实线
   MsgHistory.instance.appendDisplayTrackDynamicKnBuildingLines();

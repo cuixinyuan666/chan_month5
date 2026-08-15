@@ -742,9 +742,22 @@ class MsgHistory {
       'area=端点同号连续段；peak=整段同向柱+峰值描边；'
       'full_area=整段同向柱；diff=整段全部非空柱。'
       '全体 Kn背驰_* 副图同十字：高亮比较两段整 Kn 区间（in蓝/out琥珀）；'
-      '含 slope/斜率/amp/amount/volumn/amount_avg/volumn_avg/rsi 及 MACD 四算法。'
-      'Kn背驰_斜率：与 Kn连线斜率同源 |(endVal-beginVal)/dx|；K0 无连线段不写。'
+      '含 slope（振幅摊平）/line_slope（显示名斜率）/amp/amount/volumn/amount_avg/volumn_avg/rsi 及 MACD 四算法。'
+      'Kn背驰_斜率：与 Kn连线斜率同源 |(endVal-beginVal)/dx|；特征键 diver_line_slope_*；K0 无连线段不写。'
       'span/高亮来自 DivergenceFreezeStore；颗粒度K0；旧格冻结不回写。',
+    );
+  }
+
+  /// 连线斜率背驰：ML 键 ASCII line_slope，界面仍写「斜率」（进程内去重）。
+  static bool _diverLineSlopeAsciiLogged = false;
+  void appendDiverLineSlopeAsciiKey() {
+    if (_diverLineSlopeAsciiLogged) return;
+    _diverLineSlopeAsciiLogged = true;
+    append(
+      '【Kn背驰_斜率·特征键 ASCII·2026-08-15】'
+      '算法保留（与 Kn连线斜率同源）；ML/flatten 键改为 diver_line_slope_*（不再用汉字「斜率」）。'
+      '副图芯片、十字 tip 仍显示 K{n}背驰_斜率。勿与旧 slope（振幅摊平）当成同一路。'
+      'schema_version 仍为 1；旧 feature.meta / 旧模型须重导出并重训（sidecar 按特征名校验）。',
     );
   }
 

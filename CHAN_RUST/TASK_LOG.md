@@ -2,6 +2,14 @@
 
 > 口径/行为变更记录（复制排查用）；与 `lib/history/msg_history.dart` 常驻历史同步维护。
 
+## 2026-08-15 连线斜率背驰特征键 ASCII（line_slope）
+
+- **需求**：ML 特征键不再混入汉字「斜率」；算法本身保留（与 Kn连线斜率同源）。
+- **不变**：计算公式、冻结仓、副图芯片/十字显示名仍为 `K{n}背驰_斜率`；旧 `slope`（振幅摊平）不动。
+- **变更**：`DivergenceAlgo.lineSlope.key`=`line_slope`；新增 `labelSuffix`=`斜率` 给界面；`diver_line_slope_*`；ML 中文名「连线斜率」vs 旧 slope「振幅摊平」。`schema_version` 仍为 1。
+- **验证**：`divergence_compute_test` catalog 显示名 + ASCII 键；`ml_feature_label_test`。
+- **注意**：纯 Flutter；无需重编 DLL。旧 `feature.meta` / 旧模型须重导出并重训。
+
 ## 2026-08-14 BSP 在线对错：离开事件语义（不再只等后续中枢升降）
 
 - **需求**：`judge_one` 不再把对错近似成「后续已定型 ZS 是否按预期升降」。BSP 出现后观察已发生结构事件，第一个明确顺向确认/反向证伪即判定冻结。强制反例：002003 1min K0 idx=12 的 `4Sa`/`1Ba` 最终都必须 Wrong。

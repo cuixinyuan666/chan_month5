@@ -1805,12 +1805,12 @@ class BarFeatureLookup {
           'd${vf is num ? vf.toInt() : 0}',
         ];
         divergence.add(kv(
-          'K$displayKn背驰_${algo.key}',
+          'K$displayKn背驰_${algo.labelSuffix}',
           CrosshairTooltipRow.boxNum(parts.join('/')),
         ));
       } else {
         divergence.add(kv(
-          'K$displayKn背驰_${algo.key}',
+          'K$displayKn背驰_${algo.labelSuffix}',
           CrosshairTooltipRow.boxNum(0),
         ));
       }

@@ -17,7 +17,7 @@ enum DivergenceAlgo {
 }
 
 extension DivergenceAlgoMeta on DivergenceAlgo {
-  /// 特征键 / 标签后缀（如 peak、full_area、斜率）
+  /// ML / flatten 特征键（纯 ASCII；如 peak、full_area、line_slope）
   String get key {
     switch (this) {
       case DivergenceAlgo.area:
@@ -43,7 +43,17 @@ extension DivergenceAlgoMeta on DivergenceAlgo {
       case DivergenceAlgo.rsi:
         return 'rsi';
       case DivergenceAlgo.lineSlope:
+        return 'line_slope';
+    }
+  }
+
+  /// 副图芯片 / 十字 tip 后缀（连线斜率背驰界面仍写「斜率」）
+  String get labelSuffix {
+    switch (this) {
+      case DivergenceAlgo.lineSlope:
         return '斜率';
+      default:
+        return key;
     }
   }
 

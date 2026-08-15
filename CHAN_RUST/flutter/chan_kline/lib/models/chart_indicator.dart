@@ -443,7 +443,7 @@ class SubChartIndicator {
       case SubIndicatorKind.kdj:
         return 'K${kn}KDJ';
       case SubIndicatorKind.divergence:
-        return 'K$kn背驰_${diverAlgo?.key ?? "?"}';
+        return 'K$kn背驰_${diverAlgo?.labelSuffix ?? "?"}';
     }
   }
 

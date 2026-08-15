@@ -123,6 +123,19 @@ void main() {
     );
     expect(divers.any((e) => e.label.contains('turnrate')), isFalse);
     expect(divers.any((e) => e.label == 'K1背驰_斜率'), isTrue);
+    expect(DivergenceAlgo.lineSlope.key, 'line_slope');
+    expect(DivergenceAlgo.lineSlope.labelSuffix, '斜率');
+    expect(
+      diverFeatureKey(DivergenceAlgo.lineSlope, 'flag', 0),
+      'diver_line_slope_flag_0',
+    );
+    for (final a in DivergenceAlgoMeta.all) {
+      expect(
+        RegExp(r'^[\x00-\x7F]+$').hasMatch(a.key),
+        isTrue,
+        reason: '特征键须 ASCII: ${a.key}',
+      );
+    }
     expect(
       SubIndicatorKind.divergence.categoryLabel,
       '背驰',

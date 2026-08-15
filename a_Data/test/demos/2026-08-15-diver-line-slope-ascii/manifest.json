@@ -1,0 +1,27 @@
+{
+  "id": "2026-08-15-diver-line-slope-ascii",
+  "title": "背驰「斜率」特征键改英文，图上名字不变",
+  "completedAt": "2026-08-15",
+  "agent": "cursor",
+  "isNewFeature": false,
+  "beforeSummary": "原本：副图芯片叫「背驰_斜率」；机器学习导出里这一路名字带着汉字，和另一路「振幅摊平」容易混成同一件事。",
+  "afterSummary": "这次：图上芯片和十字仍写「背驰_斜率」，计算没变；导出键改成英文 line_slope，和旧的振幅摊平分开。旧模型要重新导出再训练。",
+  "verificationPoints": [
+    "副图勾上 K0背驰_斜率：芯片名仍是中文「斜率」，不是英文",
+    "连续单步：这路背驰读数与改前一样会出现、下一步还在",
+    "十字悬停：仍看到「K0背驰_斜率」这一栏"
+  ],
+  "keySteps": [12, 20],
+  "demoCsv": "",
+  "defaultStock": {
+    "code": "002003",
+    "period": "1min",
+    "note": "默认数据即可看芯片名；机器学习导出需在设置里重新加载后核对键名"
+  },
+  "autoLaunchOnStartup": true,
+  "walkthroughSteps": [
+    { "stepIdx": 12, "phase": "before", "caption": "原本：副图「背驰_斜率」芯片是中文；导出文件里这一路名字也带着汉字，容易和另一路斜率搞混" },
+    { "stepIdx": 12, "phase": "after", "caption": "这次：同一根 K，芯片仍叫「背驰_斜率」，图上看起来没变" },
+    { "stepIdx": 20, "phase": "after", "caption": "再往前走：这路背驰还在；导出给机器学习的名字改成了英文，和旧的振幅摊平分开了" }
+  ]
+}

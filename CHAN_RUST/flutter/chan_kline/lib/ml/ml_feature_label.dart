@@ -22,24 +22,16 @@ class MlFeatureLabel {
       }
       return key;
     }
-    // 背驰：diver_{algo}_{field}_{kn}
-    // 实际键形如：sub.diver_peak_flag_1, sub.diver_full_area_flag_1
+    // 背驰：diver_{algo}_{field}_{kn}（algo 可含下划线：full_area / line_slope）
     if (key.contains('diver_')) {
       final idx = key.indexOf('diver_') + 6;
       final rest = key.substring(idx);
-      // rest 形如: peak_flag_1, full_area_flag_1, rsi_in_1, diff_ratio_1
-      // 最后一段是 kn（数字），前面是 algo_field
-      final dotParts = rest.split('_');
-      if (dotParts.length >= 3) {
-        final kn = dotParts.last; // 最后一段是数字层号
-        final algoField = dotParts.sublist(0, dotParts.length - 1).join('_');
-        // algoField 形如: peak_flag, full_area_flag, rsi_in, diff_ratio
-        final afParts = algoField.split('_');
-        if (afParts.length >= 2) {
-          final algo = afParts[0];
-          final field = afParts[1];
-          return 'K$kn 背驰${_algoName(algo)}${_fieldName(field)}';
-        }
+      final m = RegExp(r'^(.*)_(in|out|ratio|flag)_(\d+)$').firstMatch(rest);
+      if (m != null) {
+        final algo = m.group(1)!;
+        final field = m.group(2)!;
+        final kn = m.group(3)!;
+        return 'K$kn 背驰${_algoName(algo)}${_fieldName(field)}';
       }
       return key;
     }
@@ -204,14 +196,15 @@ class MlFeatureLabel {
       case 'peak': return '极值';
       case 'full_area': return '全面积';
       case 'diff': return '差值';
-      case 'slope': return '斜率';
+      case 'slope': return '振幅摊平';
       case 'amp': return '振幅';
       case 'amount': return '成交额';
       case 'volumn': return '成交量';
       case 'amount_avg': return '均额';
       case 'volumn_avg': return '均量';
       case 'rsi': return 'RSI';
-      case '斜率': return '斜率';
+      case 'line_slope': return '连线斜率';
+      case '斜率': return '连线斜率';
       default: return '($algo)';
     }
   }

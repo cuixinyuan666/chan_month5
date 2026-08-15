@@ -169,7 +169,7 @@ class _SubIndicatorPickerDialogState extends State<_SubIndicatorPickerDialog> {
           Container(
             padding: const EdgeInsets.only(top: 6, bottom: 1, left: 4),
             child: Text(
-              '· ${item.diverAlgo!.key}',
+              '· ${item.diverAlgo!.labelSuffix}',
               style: const TextStyle(
                 color: Color(0xFF94A3B8),
                 fontSize: 12,

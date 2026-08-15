@@ -188,3 +188,19 @@
 - **演示**：test → 任务演示/前后对比 → `2026-08-15-tooltip-vol-tick-asof`；默认股 002003 任意根悬停验证读数一致
 - **注意事项**：此改纯防御性、无显示变化；未动 `msg_history`（口径未变）；非 Rust 改动，无需重编 DLL
 
+---
+
+### 2026-08-15 10:06 — 背驰「斜率」特征键改 ASCII line_slope（算法保留）
+
+- **执行者**：cursor
+- **任务类型**：重构 / 演示
+- **上下文**：ML 特征键混入汉字「斜率」，易与旧 slope（振幅摊平）混淆；确认执行后只改键名，不删这一路算法
+- **关键操作**：
+  1. `DivergenceAlgo.lineSlope.key`=`line_slope`；新增 `labelSuffix`=`斜率` 给副图芯片/十字
+  2. 十字 tip、副图选择器用显示名；`diverFeatureKey` 仍走 ASCII
+  3. ML 中文映射：`line_slope`→连线斜率，`slope`→振幅摊平；最长匹配解析 full_area 等
+  4. 历史记录 + TASK_LOG；演示 `2026-08-15-diver-line-slope-ascii`
+- **结果**：图上仍显示「背驰_斜率」；导出键 `diver_line_slope_*`；schema_version 仍为 1
+- **演示**：默认股 002003 勾 K0背驰_斜率；冷启动自动加载本条演示
+- **注意事项**：纯 Flutter，无需重编 DLL；旧 feature.meta / 旧模型须重导出重训；未改 volumn 拼写
+
