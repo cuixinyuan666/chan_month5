@@ -54,6 +54,16 @@
 - **验证**：`flutter test test/backtest_result_test.dart test/mini_loop_test.dart`
 - **注意**：纯 Flutter；无需重编 DLL。无箭头、不做 Sharpe/做空/加仓/多品种。
 
+## 2026-08-15 Phase4 策略回测工作台
+
+- **需求**：配置策略 → 调用现有回测核心 → 图上策略点 → 报告；Flutter 不重算条件/指标/收益。
+- **配置**：第一版只选层号；买=该层收盘下穿该层布林下轨，卖=该层收盘上穿该层布林上轨。同层同钟门禁；选不出 K0收盘×K1布林。
+- **运行**：`BacktestRun` 记下 strategyConfig、数据范围、engineVersion、runId。
+- **图**：主图覆盖「策买/策卖」，只画 `BacktestResult.signals`，与 1Ba/1Sa 分离。
+- **报告**：净利润/收益率/胜率/盈亏比/Profit Factor/最大回撤、净值与回撤曲线、交易明细、信号→订单→成交链路。点交易跳入场/再点出场；点图上策略点打开链路。
+- **验证**：`flutter test test/backtest_workbench_test.dart test/backtest_result_test.dart test/mini_loop_test.dart`
+- **注意**：纯 Flutter；无需重编 DLL。未做做空/加仓/优化/新指标。
+
 ## 2026-08-15 连线斜率背驰特征键 ASCII（line_slope）
 
 - **需求**：ML 特征键不再混入汉字「斜率」；算法本身保留（与 Kn连线斜率同源）。

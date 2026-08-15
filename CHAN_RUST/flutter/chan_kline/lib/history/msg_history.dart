@@ -1221,6 +1221,22 @@ class MsgHistory {
     );
   }
 
+  /// 策略回测工作台（进程内去重）
+  static bool _tradeBacktestWorkbenchLogged = false;
+  void appendTradeBacktestWorkbench() {
+    if (_tradeBacktestWorkbenchLogged) return;
+    _tradeBacktestWorkbenchLogged = true;
+    append(
+      '【策略回测工作台·2026-08-15】设置里打开策略回测。'
+      '第一版只能选层号：该层收盘下穿该层布林下轨做买，该层收盘上穿该层布林上轨做卖；'
+      '买和卖各自锁死同层，选不出K0收盘穿K1布林。'
+      '运行后图上画「策买/策卖」，只展示这一次回测的信号，不再算一遍，也不是缠论1Ba。'
+      '报告直接端出净利润、收益率、胜率、盈亏比、盈亏因子、最大回撤、净值曲线和交易明细。'
+      '点交易会跳到入场K，再点同一笔跳出场；点图上策买/策卖能追到订单和成交。'
+      '每次运行记下引擎版本。未做做空、加仓、参数优化。',
+    );
+  }
+
   /// 运行时虚线摘要（内容变才追加；复制历史记录排查用）。
   void appendDisplayBuildingLinesRuntime({
     required int kn,

@@ -35,6 +35,13 @@ import 'ml/ml_session_controller.dart';
 import 'ml/ml_split_config.dart';
 import 'ml/ml_workbench.dart';
 import 'ml/ml_xgb_trainer.dart';
+import 'backtest/backtest_link.dart';
+import 'backtest/backtest_report_panel.dart';
+import 'backtest/backtest_run.dart';
+import 'backtest/order_models.dart';
+import 'backtest/signal_event.dart';
+import 'backtest/strategy_config.dart';
+import 'backtest/backtest_workbench.dart';
 import 'models/zs_frame.dart';
 import 'models/buy1_frame.dart';
 import 'models/sell1_frame.dart';
@@ -188,6 +195,7 @@ Future<void> main() async {
   MsgHistory.instance.appendTradeCrossEval();
   MsgHistory.instance.appendTradeMiniLoop();
   MsgHistory.instance.appendTradeBacktestResult();
+  MsgHistory.instance.appendTradeBacktestWorkbench();
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     await windowManager.ensureInitialized();
     const opts = WindowOptions(
@@ -361,6 +369,17 @@ class _KlineHomePageState extends State<KlineHomePage> {
   XgbTrainParams _xgbParams = const XgbTrainParams();
   bool _forceXgbRetrain = true;
   final MlBspSampler _mlSampler = MlBspSampler();
+
+  /// 策略回测工作台（第一版：同层 CLOSE×布林穿越）
+  bool _backtestPanelOpen = false;
+  StrategyConfig _strategyConfig = const StrategyConfig();
+  BacktestRun? _backtestRun;
+  BacktestReportTab _btTab = BacktestReportTab.metrics;
+  String? _btSelectedSignalId;
+  String? _btSelectedTradeId;
+  Set<String> _btHighlightIds = {};
+  int? _btFocusBarIdx;
+  int _btFocusEpoch = 0;
 
   /// catalog 三类..N 类上限（至少 9；随会话观察到的更高类扩大）
   int get _maxBsClass => math.max(
@@ -724,6 +743,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _stepRhythmStateByKn.clear();
         _mathFreezeStore.clear();
         _diverFreezeStore.clear();
+        _clearBacktestSession();
       });
       final directOhlc = code == 'test' && _hasTestOhlcCsv();
       _msgHistory.append(
@@ -807,6 +827,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _stepRhythmStateByKn.clear();
         _mathFreezeStore.clear();
         _diverFreezeStore.clear();
+        _clearBacktestSession();
       });
       _msgHistory.append('加载K0失败：$e');
     } finally {
@@ -1530,7 +1551,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
                         onExit: _exitMlSession,
                         onLoad: _loadMlRun,
                       )
-                    : _buildKlineChart(),
+                    : _buildReplayBody(),
               ),
             ),
           ),
@@ -2058,6 +2079,14 @@ class _KlineHomePageState extends State<KlineHomePage> {
           style: TextStyle(fontSize: 11, color: Colors.grey.shade700, height: 1.3),
         ),
         const SizedBox(height: 12),
+        OutlinedButton.icon(
+          onPressed: (_busy && !_backtestPanelOpen) || _mlSession.isActive
+              ? null
+              : _openBacktestWorkbench,
+          icon: const Icon(Icons.show_chart, size: 18),
+          label: Text(_backtestPanelOpen ? '策略回测（已打开）' : '策略回测'),
+        ),
+        const SizedBox(height: 8),
         // 机器学习：不加载K线图；后台算样本后看训练/考试结果
         Row(
           children: [
@@ -2089,6 +2118,180 @@ class _KlineHomePageState extends State<KlineHomePage> {
           ),
         ],
       ],
+    );
+  }
+
+  void _clearBacktestSession() {
+    _backtestRun = null;
+    _btSelectedSignalId = null;
+    _btSelectedTradeId = null;
+    _btHighlightIds = {};
+    _btFocusBarIdx = null;
+  }
+
+  void _openBacktestWorkbench() {
+    if (_mlSession.isActive) {
+      _showSnack('请先退出机器学习');
+      return;
+    }
+    setState(() {
+      _backtestPanelOpen = true;
+      _panelExpanded = false;
+    });
+  }
+
+  Widget _buildReplayBody() {
+    final chart = _buildKlineChart();
+    if (!_backtestPanelOpen) return chart;
+    final maxKn = chartMaxKn(levels: _levels, k0Lines: _k0Lines);
+    return Column(
+      children: [
+        Expanded(flex: 3, child: chart),
+        SizedBox(
+          height: 286,
+          child: BacktestWorkbench(
+            config: _strategyConfig,
+            maxKn: maxKn,
+            onConfigChanged: (c) => setState(() => _strategyConfig = c),
+            onRun: _runStrategyBacktest,
+            onClose: () => setState(() => _backtestPanelOpen = false),
+            onHelp: _showBacktestHelp,
+            run: _backtestRun,
+            bars: _visibleBars,
+            currentStepIdx: _stepIdx < 0 ? 0 : _stepIdx,
+            tab: _btTab,
+            onTab: (t) => setState(() => _btTab = t),
+            selectedSignalId: _btSelectedSignalId,
+            selectedTradeId: _btSelectedTradeId,
+            onSelectTrade: _onBacktestSelectTrade,
+            onSelectSignal: _onBacktestSelectSignal,
+            onJumpX: _jumpBacktestBar,
+            focusX: _btFocusBarIdx,
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _runStrategyBacktest(StrategyConfig cfg) {
+    if (!_hasSession || _visibleBars.isEmpty) {
+      _showSnack('请先加载 K 线并走到至少一根');
+      return;
+    }
+    final maxKn = chartMaxKn(levels: _levels, k0Lines: _k0Lines);
+    final scope = BacktestDataScope(
+      code: _selectedCode ?? '',
+      period: _period,
+      barCount: _visibleBars.length,
+      asOfX: _stepIdx < 0 ? 0 : _stepIdx,
+      beginText: _fmtDateTime(_beginDate),
+      endText: _fmtDateTime(_endDate),
+    );
+    final run = executeStrategyBacktest(
+      config: cfg,
+      scope: scope,
+      bars: _visibleBars,
+      levels: _levels,
+      mathFreeze: _mathFreezeStore,
+      bollN: _mathIndicatorConfig.bollN,
+      maxKn: maxKn,
+    );
+    setState(() {
+      _strategyConfig = cfg;
+      _backtestRun = run;
+      _backtestPanelOpen = true;
+      _btSelectedSignalId = null;
+      _btSelectedTradeId = null;
+      _btHighlightIds = {};
+      _panelExpanded = false;
+    });
+    if (run.error != null) {
+      _showSnack(run.error!);
+      _msgHistory.append('策略回测未跑成：${run.error}');
+      return;
+    }
+    final m = run.result!.metrics;
+    _msgHistory.append(
+      '策略回测 ${run.runId} 引擎${run.engineVersion}：'
+      '${cfg.buyLabel} / ${cfg.sellLabel}；'
+      '已走到K${scope.asOfX}；'
+      '净利${m.netProfit.toStringAsFixed(2)} 胜率${m.winRate.display} '
+      '最大回撤${m.maxDrawdown.toStringAsFixed(2)}。'
+      '图上策买/策卖来自这一次结果，不是缠论1Ba。',
+    );
+    _showSnack('回测完成：闭合 ${m.totalTrades} 笔');
+  }
+
+  void _jumpBacktestBar(int x) {
+    setState(() {
+      _btFocusBarIdx = x;
+      _btFocusEpoch++;
+    });
+  }
+
+  void _onBacktestSelectTrade(TradeRecord t) {
+    final same = _btSelectedTradeId == t.tradeId;
+    setState(() {
+      _btSelectedTradeId = t.tradeId;
+      _btHighlightIds = {t.entrySignalId, t.exitSignalId};
+      _btSelectedSignalId = same ? t.exitSignalId : t.entrySignalId;
+      _btFocusBarIdx = same ? t.exitX : t.entryX;
+      _btFocusEpoch++;
+      _btTab = BacktestReportTab.trades;
+    });
+  }
+
+  void _onBacktestSelectSignal(SignalEvent s) {
+    _applySignalSelection(s, openChain: true);
+  }
+
+  void _onChartStrategySignalTap(SignalEvent s) {
+    _applySignalSelection(s, openChain: true);
+  }
+
+  void _applySignalSelection(SignalEvent s, {required bool openChain}) {
+    final result = _backtestRun?.result;
+    final trade = result == null
+        ? null
+        : BacktestLinkIndex(result).tradeForSignal(s.signalId);
+    setState(() {
+      _backtestPanelOpen = true;
+      _btSelectedSignalId = s.signalId;
+      _btSelectedTradeId = trade?.tradeId;
+      _btHighlightIds = trade != null
+          ? {trade.entrySignalId, trade.exitSignalId}
+          : {s.signalId};
+      _btFocusBarIdx = s.discoveryX;
+      _btFocusEpoch++;
+      if (openChain) _btTab = BacktestReportTab.chain;
+    });
+  }
+
+  void _showBacktestHelp() {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('策略回测说明'),
+        content: const SingleChildScrollView(
+          child: Text(
+            '先加载股票并走到你要回测的那根 K，再打开策略回测。\n\n'
+            '第一版只能搭：某一层的收盘下穿该层布林下轨做买，'
+            '某一层的收盘上穿该层布林上轨做卖。'
+            '买和卖各自锁死同层，界面里选不出「K0收盘穿K1布林」。\n\n'
+            '点运行后，图上出现「策买/策卖」，这是策略信号，不是缠论的 1Ba/1Sa。'
+            '报告里的净利润、胜率、盈亏比、回撤都来自这一次回测结果，界面不会再算一遍。\n\n'
+            '点交易明细会跳到入场 K，再点同一笔会跳到出场 K。'
+            '点图上的策买/策卖会打开对应的信号→订单→成交→交易。\n\n'
+            '手续费、滑点先按你填的数字；默认 0。不做做空、加仓、多品种。',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('知道了'),
+          ),
+        ],
+      ),
     );
   }
 
@@ -2154,6 +2357,11 @@ class _KlineHomePageState extends State<KlineHomePage> {
       onLongPressReset: gesturesOn ? _resetStep : null,
       onLongPressReload: _busy ? null : _loadKlines,
       onLongPressRunToEnd: gesturesOn ? _runToEnd : null,
+      strategySignals: _backtestRun?.result?.signals ?? const [],
+      highlightedStrategyIds: _btHighlightIds,
+      focusBarIdx: _btFocusBarIdx,
+      focusBarEpoch: _btFocusEpoch,
+      onStrategySignalTap: _onChartStrategySignalTap,
     );
   }
 

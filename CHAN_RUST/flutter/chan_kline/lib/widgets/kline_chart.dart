@@ -5,6 +5,8 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../backtest/signal_event.dart';
+import '../backtest/strategy_signal_painter.dart';
 import '../compute/k0_combine_compute.dart';
 import '../compute/k1_combine_compute.dart';
 import '../compute/k1_bar_view_compute.dart';
@@ -145,6 +147,11 @@ class KlineChart extends StatefulWidget {
     this.diverFreezeStore,
     this.chipOnlyMode = false,
     this.lookupEngine,
+    this.strategySignals = const [],
+    this.highlightedStrategyIds = const {},
+    this.focusBarIdx,
+    this.focusBarEpoch = 0,
+    this.onStrategySignalTap,
   });
 
   final List<KlineBar> bars;
@@ -231,6 +238,14 @@ class KlineChart extends StatefulWidget {
   /// 会话增量 Lookup；Painter / 十字 / chip 复用同一份，禁止各画一次 Full build。
   final IncrementalBarFeatureLookup? lookupEngine;
 
+  /// 策略买/卖点：只画 BacktestResult.signals，与缠论 1Ba 分开。
+  final List<SignalEvent> strategySignals;
+  final Set<String> highlightedStrategyIds;
+  /// 报告点交易时把这根 K 滚进视窗
+  final int? focusBarIdx;
+  final int focusBarEpoch;
+  final ValueChanged<SignalEvent>? onStrategySignalTap;
+
   /// 点击左/中/右：后退 / 播放暂停 / 前进
   final VoidCallback? onTapStepBack;
   final VoidCallback? onTapPlay;
@@ -277,6 +292,8 @@ class _KlineChartState extends State<KlineChart> {
   /// 最近一帧主图上下界（供 pointer 热区回调）
   double _zonePlotTop = KlineViewport.padT;
   double _zoneContentBottom = 0;
+  PriceRange? _hitPriceRange;
+  double _hitMainH = 1;
 
   /// 中间区自管双击：避免左/右连点被系统双击手势吞掉
   static const _doubleTapMs = 280;
@@ -567,6 +584,11 @@ class _KlineChartState extends State<KlineChart> {
           bucketStep: widget.chipConfig.bucketStep,
         ),
       );
+    }
+
+    if (widget.focusBarEpoch != oldWidget.focusBarEpoch &&
+        widget.focusBarIdx != null) {
+      _viewport.ensureBarVisible(widget.focusBarIdx!);
     }
   }
 
@@ -1090,8 +1112,35 @@ class _KlineChartState extends State<KlineChart> {
     return 2;
   }
 
+  bool _tryTapStrategySignal(Offset local, double plotTop) {
+    if (widget.onStrategySignalTap == null ||
+        widget.strategySignals.isEmpty ||
+        _hitPriceRange == null) {
+      return false;
+    }
+    final plotH = math.max(1.0, _hitMainH - KlineViewport.padB - plotTop);
+    final asOf = _crosshairEnabled && _crosshairBarIdx != null
+        ? widget.bars[_crosshairBarIdx!.clamp(0, widget.bars.length - 1)].idx
+        : null;
+    final hit = hitTestStrategySignal(
+      local: local,
+      signals: widget.strategySignals,
+      bars: widget.bars,
+      viewport: _viewport,
+      priceRange: _hitPriceRange!,
+      canvasW: _chartSize.width,
+      plotTop: plotTop,
+      plotH: plotH,
+      asOf: asOf,
+    );
+    if (hit == null) return false;
+    widget.onStrategySignalTap!(hit.signal);
+    return true;
+  }
+
   void _onZoneTapAt(Offset local, double plotTop, double contentBottom) {
     if (widget.bars.isEmpty) return;
+    if (_tryTapStrategySignal(local, plotTop)) return;
     final zone = _hotZone(local);
 
     // 十字线激活：屏蔽步退/步进/播放，只保留中间双击切三态 + 点击跟线
@@ -1339,6 +1388,8 @@ class _KlineChartState extends State<KlineChart> {
 
         final visible = _viewport.visibleBars(widget.bars);
         final priceRange = _viewport.priceRangeFor(visible);
+        _hitPriceRange = priceRange;
+        _hitMainH = mainH;
 
         final cursor = _crosshairEnabled
             ? SystemMouseCursors.precise
@@ -1447,6 +1498,21 @@ class _KlineChartState extends State<KlineChart> {
                 painter: paintLayer(_ChartPaintLayer.base),
               ),
             ),
+            if (widget.strategySignals.isNotEmpty)
+              RepaintBoundary(
+                child: CustomPaint(
+                  size: chartSize,
+                  painter: StrategySignalPainter(
+                    bars: widget.bars,
+                    signals: widget.strategySignals,
+                    highlightedIds: widget.highlightedStrategyIds,
+                    viewport: _viewport,
+                    priceRange: priceRange,
+                    mainH: mainH,
+                    asOf: segAsOf,
+                  ),
+                ),
+              ),
             RepaintBoundary(
               child: CustomPaint(
                 size: chartSize,

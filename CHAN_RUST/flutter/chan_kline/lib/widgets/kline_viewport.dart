@@ -92,6 +92,27 @@ class KlineViewport {
     viewXMax = newMax;
   }
 
+  /// 把指定 K0 滚进视窗中间附近（报告点交易时跳图）。
+  void ensureBarVisible(int idx) {
+    if (!ready) return;
+    final i = idx.toDouble();
+    if (i >= viewXMin && i <= viewXMax) return;
+    final span = xSpan;
+    var newMin = i - span * 0.4;
+    var newMax = newMin + span;
+    if (newMin < allXMin) {
+      newMin = allXMin;
+      newMax = newMin + span;
+    }
+    if (newMax > allXMax + span * 0.5) {
+      newMax = allXMax + span * 0.5;
+      newMin = newMax - span;
+    }
+    viewXMin = newMin;
+    viewXMax = newMax;
+    markUserAdjusted();
+  }
+
   /// 逐K步进后同步视窗（未手动调视图则展示全量，已调视图则跟随最新 K）。
   void syncWindowOnStep(int lastIdx) {
     if (!ready) return;
