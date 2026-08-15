@@ -49,6 +49,13 @@ void main() {
       final zsHigh = lookupTradeVariable('STRUCTURE.K2.ZS.HIGH');
       expect(zsHigh, isNotNull);
       expect(zsHigh!.expressionReady, isFalse);
+
+      final zsCur = lookupTradeVariable('STRUCTURE.K1.ZS.CURRENT.HIGH');
+      expect(zsCur, isNotNull);
+      expect(zsCur!.expressionReady, isTrue);
+      expect(zsCur.valueType, TradeValueType.numeric);
+      expect(zsCur.clockFamily, TradeClockFamily.zsMath);
+      expect(zsCur.evalClock, TradeEvalClock.knSample);
     });
 
     test('同层同钟才能编译成比较/穿越；混层在编译阶段就是非法表达式', () {

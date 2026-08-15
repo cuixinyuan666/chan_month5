@@ -43,6 +43,7 @@ import 'backtest/signal_event.dart';
 import 'backtest/strategy_config.dart';
 import 'backtest/backtest_workbench.dart';
 import 'backtest/chan_event_store.dart';
+import 'backtest/zhongshu_object_store.dart';
 import 'models/zs_frame.dart';
 import 'models/buy1_frame.dart';
 import 'models/sell1_frame.dart';
@@ -200,6 +201,7 @@ Future<void> main() async {
   MsgHistory.instance.appendTradeConditionBuilder();
   MsgHistory.instance.appendTradeIndicatorVars();
   MsgHistory.instance.appendTradeChanEvents();
+  MsgHistory.instance.appendTradeZsObjects();
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     await windowManager.ensureInitialized();
     const opts = WindowOptions(
@@ -328,6 +330,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
   /// 中枢判断/确定会话历史（与中枢同号；换股/重载清空）。
   Map<int, List<ZsSignalEvent>> _zsJudgmentHistoryByKn = {};
   Map<int, List<ZsSignalEvent>> _zsConfirmHistoryByKn = {};
+  /// 中枢结构对象仓：步进喂入现有帧，交易变量只读确认中枢投影
+  final ZhongshuObjectStore _zsObjectStore = ZhongshuObjectStore();
 
   /// 一类BS 会话历史：对齐分型判断（K0 步进颗粒度 + 动态 Kn）；换股/重载清空。
   /// 踩坑：禁止只用「层|段|标签」去重——同动态 active 延伸时下一步会无新 x。
@@ -374,7 +378,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
   bool _forceXgbRetrain = true;
   final MlBspSampler _mlSampler = MlBspSampler();
 
-  /// 策略回测工作台（条件树 + 指标变量 + 缠论结构事件）
+  /// 策略回测工作台（条件树 + 指标变量 + 结构事件 + 确认中枢数值）
   bool _backtestPanelOpen = false;
   StrategyConfig _strategyConfig = const StrategyConfig();
   BacktestRun? _backtestRun;
@@ -731,6 +735,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _judgmentHistoryByKn.clear();
         _zsJudgmentHistoryByKn.clear();
         _zsConfirmHistoryByKn.clear();
+        _zsObjectStore.clear();
         _buy1HistoryByKn.clear();
         _sell1HistoryByKn.clear();
         _buy2HistoryByKn.clear();
@@ -815,6 +820,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _judgmentHistoryByKn.clear();
         _zsJudgmentHistoryByKn.clear();
         _zsConfirmHistoryByKn.clear();
+        _zsObjectStore.clear();
         _buy1HistoryByKn.clear();
         _sell1HistoryByKn.clear();
         _buy2HistoryByKn.clear();
@@ -883,7 +889,9 @@ class _KlineHomePageState extends State<KlineHomePage> {
         e.key: List<ZsSignalEvent>.from(e.value),
     };
     final confirmedByKn = <int, Set<int>>{};
-    for (final e in collectZsFramesByKn(bundle).entries) {
+    final collected = collectZsFramesByKn(bundle);
+    _zsObjectStore.ingestCollected(collected, asOf: discoveryX);
+    for (final e in collected.entries) {
       final cLog = nextConfirm.putIfAbsent(e.key, () => <ZsSignalEvent>[]);
       final confirmed = mergeZsConfirmEventLog(
         cLog,
@@ -1156,6 +1164,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _judgmentHistoryByKn.clear();
         _zsJudgmentHistoryByKn.clear();
         _zsConfirmHistoryByKn.clear();
+        _zsObjectStore.clear();
         _buy1HistoryByKn.clear();
         _sell1HistoryByKn.clear();
         _buy2HistoryByKn.clear();
@@ -2174,6 +2183,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
             levels: _levels,
             mathFreeze: _mathFreezeStore,
             chanEvents: _chanEventStore(),
+            zsObjects: _zsObjectStore,
           ),
         ),
       ],
@@ -2212,6 +2222,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       levels: _levels,
       mathFreeze: _mathFreezeStore,
       chanEvents: _chanEventStore(),
+      zsObjects: _zsObjectStore,
       bollN: _mathIndicatorConfig.bollN,
       maxKn: maxKn,
     );
@@ -2299,6 +2310,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
             'MACD（DIF/DEA/柱）、RSI、KDJ，K0 还可以用成交量；右边也可以填常数。'
             '也可以选一类/二类买卖点、分型确认、中枢确认：这些是「出现一次」的事件，'
             '只能和同层同钟的条件用 AND/OR 拼，不能拿去比较或上穿下穿。'
+            '确认中枢的高/低/中轴是数值：先认定「当前这层最新一个已经确认的中枢」，再取当时能看见的高低，'
+            '不是事后扩大后的末态。没有确认中枢就是不可用，不会当成 0。'
             '同一条比较必须同层同钟，K0 和 K1 不能拼在同一棵树上。'
             '成交量这一版只开放 K0，没有另造 Kn 成交量和均量。\n\n'
             '点运行后，图上出现「策买/策卖」，这是策略信号，不是缠论的 1Ba/1Sa。'

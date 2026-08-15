@@ -10,6 +10,7 @@ import 'order_models.dart';
 import 'signal_event.dart';
 import 'strategy_config.dart';
 import 'strategy_config_form.dart';
+import 'zhongshu_object_store.dart';
 
 /// 策略回测工作台：左侧配置，右侧报告。图表仍在上面，这里不重算。
 class BacktestWorkbench extends StatelessWidget {
@@ -34,6 +35,7 @@ class BacktestWorkbench extends StatelessWidget {
   final List<LevelBundle> levels;
   final MathSeriesFreezeStore? mathFreeze;
   final ChanEventStore chanEvents;
+  final ZhongshuObjectStore? zsObjects;
 
   const BacktestWorkbench({
     super.key,
@@ -58,6 +60,7 @@ class BacktestWorkbench extends StatelessWidget {
     this.levels = const [],
     this.mathFreeze,
     this.chanEvents = ChanEventStore.empty,
+    this.zsObjects,
   });
 
   @override
@@ -121,6 +124,7 @@ class BacktestWorkbench extends StatelessWidget {
                       levels: levels,
                       mathFreeze: mathFreeze,
                       chanEvents: chanEvents,
+                      zsObjects: zsObjects,
                       asOf: currentStepIdx,
                     ),
                   ),

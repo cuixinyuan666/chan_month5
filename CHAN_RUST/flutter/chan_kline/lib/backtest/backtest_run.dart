@@ -9,9 +9,10 @@ import 'mini_loop.dart';
 import 'signal_event.dart';
 import 'strategy_compile.dart';
 import 'strategy_config.dart';
+import 'zhongshu_object_store.dart';
 
 /// 引擎版本：以后缠论/撮合规则改了，旧报告能对上是哪一版跑的。
-const String kBacktestEngineVersion = 'backtest-workbench-v4-chan-events';
+const String kBacktestEngineVersion = 'backtest-workbench-v5-zs-objects';
 
 /// 一次回测运行：策略 + 当时数据范围 + 引擎版本 + 结果。
 /// UI 不直接塞一堆散参数进引擎。
@@ -45,6 +46,7 @@ BacktestRun executeStrategyBacktest({
   List<LevelBundle> levels = const [],
   required MathSeriesFreezeStore mathFreeze,
   ChanEventStore chanEvents = ChanEventStore.empty,
+  ZhongshuObjectStore? zsObjects,
   int bollN = 20,
   int maxKn = 8,
   DateTime? now,
@@ -83,6 +85,7 @@ BacktestRun executeStrategyBacktest({
     levels: levels,
     mathFreeze: mathFreeze,
     chanEvents: chanEvents,
+    zsObjects: zsObjects,
     bollN: bollN,
     maxKn: maxKn,
   );

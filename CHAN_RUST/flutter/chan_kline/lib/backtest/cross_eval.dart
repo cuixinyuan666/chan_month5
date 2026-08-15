@@ -1,6 +1,7 @@
 import 'catalog_lookup.dart';
 import 'signal_event.dart';
 import 'trade_operand.dart';
+import 'zhongshu_object_store.dart';
 import '../models/kline_bar.dart';
 import '../models/level_models.dart';
 import '../compute/math_series_freeze_store.dart';
@@ -91,6 +92,7 @@ CrossEvalResult evalCross({
   required List<KlineBar> bars,
   List<LevelBundle> levels = const [],
   MathSeriesFreezeStore? mathFreeze,
+  ZhongshuObjectStore? zsObjects,
   int bollN = 20,
   int maxKn = 8,
 }) {
@@ -113,6 +115,7 @@ CrossEvalResult evalCross({
     bars: bars,
     levels: levels,
     mathFreeze: mathFreeze,
+    zsObjects: zsObjects,
     bollN: bollN,
   );
   final right = readEvalClockSeries(
@@ -121,6 +124,7 @@ CrossEvalResult evalCross({
     bars: bars,
     levels: levels,
     mathFreeze: mathFreeze,
+    zsObjects: zsObjects,
     bollN: bollN,
   );
   return CrossEvalOk(detectCrossOnEvalSeries(

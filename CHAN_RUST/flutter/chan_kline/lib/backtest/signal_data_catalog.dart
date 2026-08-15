@@ -1,3 +1,4 @@
+import 'structure_object.dart';
 import 'trade_clock.dart';
 
 /// 可交易条件变量目录（阶段0）。
@@ -409,12 +410,42 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
       source: 'zsConfirmHistory 会话冻结，is_sure 首次',
       unit: 'event',
       futureSafe: true,
-      availabilityNote: '首次确认事件；不暴露中枢高低',
+      availabilityNote: '首次确认事件；高低走 ZS.CURRENT 投影，不和事件混用',
       groupKey: 'zsConfirm',
       groupLabel: '中枢确认',
       fieldLabel: '确认',
       description: 'EVENT_EXISTS；与 RSI/MACD 同 zsMath 可 AND/OR',
     ));
+    // 确认中枢数值：先解析 CURRENT_CONFIRMED_ZS 的稳定 objectId，再投影
+    const zsFields = [
+      ('HIGH', '高'),
+      ('LOW', '低'),
+      ('CENTER', '中轴'),
+    ];
+    for (final f in zsFields) {
+      out.add(TradeVariableDef(
+        variableId: zsCurrentVarId(kn, f.$1),
+        displayName: 'K$kn确认中枢${f.$2}',
+        panel: TradePanel.structure,
+        displayKn: kn,
+        clockFamily: TradeClockFamily.zsMath,
+        evalClock: evalClockForDisplayKn(kn),
+        plotClock: TradePlotClock.k0Bar,
+        valueType: TradeValueType.numeric,
+        readiness: TradeReadiness.registered,
+        source:
+            'ZhongshuObjectStore.resolveCurrentConfirmedZs → ${f.$1}；只读现有中枢帧快照',
+        unit: 'price',
+        futureSafe: true,
+        availabilityNote:
+            '该层当时还没有已确认中枢则为不可用，不会填 0；未确认中枢不进公式',
+        groupKey: 'zsCurrent',
+        groupLabel: '确认中枢',
+        fieldLabel: f.$2,
+        description:
+            'CURRENT_CONFIRMED_ZS 的 ${f.$2}；动态延伸同一 objectId，历史 asOf 不跟末态改',
+      ));
+    }
   }
   return out;
 }
@@ -521,19 +552,27 @@ List<TradeVariableDef> inventoryOnlyTradeVariables() {
     ),
     stub(
       pattern: 'STRUCTURE.K{n}.ZS.HIGH',
-      name: 'Kn中枢高',
+      name: 'Kn中枢高（未指定哪一框）',
       panel: TradePanel.structure,
       clock: TradeClockFamily.zsMath,
       type: TradeValueType.numeric,
-      why: '一根K上可能盖着多个框，没写清用哪一框',
+      why: '请用 ZS.CURRENT.HIGH：当前层最新已确认中枢。未指定哪一框不能进公式',
     ),
     stub(
       pattern: 'STRUCTURE.K{n}.ZS.LOW',
-      name: 'Kn中枢低',
+      name: 'Kn中枢低（未指定哪一框）',
       panel: TradePanel.structure,
       clock: TradeClockFamily.zsMath,
       type: TradeValueType.numeric,
-      why: '同上',
+      why: '请用 ZS.CURRENT.LOW',
+    ),
+    stub(
+      pattern: 'STRUCTURE.K{n}.ZS.ACTIVE.HIGH',
+      name: 'Kn未确认中枢高',
+      panel: TradePanel.structure,
+      clock: TradeClockFamily.zsMath,
+      type: TradeValueType.numeric,
+      why: '未确认中枢不进交易变量，避免未来函数',
     ),
     stub(
       pattern: 'SUB.K{n}.DIVERGENCE',

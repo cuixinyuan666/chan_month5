@@ -2,6 +2,18 @@
 
 > 口径/行为变更记录（复制排查用）；与 `lib/history/msg_history.dart` 常驻历史同步维护。
 
+## 2026-08-15 Phase8 缠论结构对象契约 + 中枢数值变量 v1
+
+- **需求**：中枢从「确认事件」升级为有身份的结构对象，再投影成可交易数值。禁止直接把 ZS_HIGH 注册成无身份 double。
+- **不变**：缠论中枢算法/确认/冻结/Clock；K0 下一根开盘成交。不做 N 类、背驰、节奏、三型四型、未确认中枢、做空、加仓。
+- **对象**：稳定 `objectId=ZS|{kn}|{x1}`；动态延伸不换 ID；历史 asOf 快照冻结，未来扩大不回写。生命周期 DISCOVERED/CONFIRMED/ACTIVE/EXTENDED/ENDED。
+- **选择**：第一版只暴露 `CURRENT_CONFIRMED_ZS`（该层 asOf 下最新一个已确认且当时可见的中枢）。未确认不进交易变量。没有确认中枢=不可用，不是 0。
+- **登记**：`STRUCTURE.K{n}.ZS.CURRENT.HIGH/LOW/CENTER` 为 Numeric Projection。读数路径 `(asOf, kn) → resolveCurrentConfirmedZs → objectId → HIGH/LOW/CENTER`，只消费现有中枢帧步进快照。
+- **钟**：与收盘同一套 zsMath；K1.CLOSE vs K1.ZS.CURRENT.LOW 合法；K0.CLOSE vs K1.ZS.CURRENT.HIGH 编译期非法。`ZS_CONFIRM` 仍是事件，不能比较/穿越，可与同层数值 AND/OR。
+- **综合**：买 `K1.BUY1 AND K1.CLOSE < K1.ZS.CURRENT.LOW`；卖 `K1.SELL1 OR K1.CLOSE CROSS_ABOVE K1.ZS.CURRENT.HIGH`。
+- **验证**：`flutter test test/zs_object_var_test.dart test/chan_event_var_test.dart test/signal_data_catalog_test.dart test/condition_ast_test.dart test/backtest_workbench_test.dart test/indicator_var_ext_test.dart`
+- **注意**：纯 Flutter；无需重编 DLL。引擎版本 `backtest-workbench-v5-zs-objects`。
+
 ## 2026-08-15 Phase7 缠论结构事件变量层 v1
 
 - **需求**：把最成熟的缠论事件做成可交易变量：一类/二类 BS、分型确认、中枢确认。不是持续 true，是发现边沿。

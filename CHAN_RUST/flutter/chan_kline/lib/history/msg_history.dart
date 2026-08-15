@@ -1284,6 +1284,21 @@ class MsgHistory {
     );
   }
 
+  /// 中枢结构对象 + 确认中枢数值（进程内去重）
+  static bool _tradeZsObjectsLogged = false;
+  void appendTradeZsObjects() {
+    if (_tradeZsObjectsLogged) return;
+    _tradeZsObjectsLogged = true;
+    append(
+      '【确认中枢数值·2026-08-15】中枢先当成有身份的对象：同一个框动态拉长，编号不变。'
+      '策略只用「这一层当前最新一个已经确认、当时已经能看见的中枢」的高/低/中轴，'
+      '不是事后扩大后的末态，也不是未确认的框。没有确认中枢就是不可用，不会填成 0。'
+      'K1 收盘可以跟 K1 中枢低比；K0 收盘不能跟 K1 中枢比。'
+      '中枢确认仍是「出现一次」的事件，不能拿去比大小或上穿下穿，但可以和同层收盘低于中枢低拼在一起。'
+      '未接入未确认中枢、N 类、背驰、节奏、三型四型。',
+    );
+  }
+
   /// 运行时虚线摘要（内容变才追加；复制历史记录排查用）。
   void appendDisplayBuildingLinesRuntime({
     required int kn,

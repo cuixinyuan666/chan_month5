@@ -4,8 +4,10 @@ import '../models/level_models.dart';
 import 'catalog_lookup.dart';
 import 'chan_event_store.dart';
 import 'signal_data_catalog.dart';
+import 'structure_object.dart';
 import 'trade_clock.dart';
 import 'trade_value.dart';
+import 'zhongshu_object_store.dart';
 
 /// 变量诊断：看钟、availableAt、图上格子值和计算钟样本，不重算指标。
 class TradeVarDiagnosis {
@@ -30,6 +32,7 @@ class TradeVarDiagnosis {
   final String note;
   final TradeChanEvent? lastEvent;
   final int eventCount;
+  final ZhongshuObject? currentZs;
 
   const TradeVarDiagnosis({
     required this.variableId,
@@ -51,6 +54,7 @@ class TradeVarDiagnosis {
     required this.note,
     this.lastEvent,
     this.eventCount = 0,
+    this.currentZs,
   });
 
   String get text {
@@ -102,6 +106,19 @@ class TradeVarDiagnosis {
       buf.writeln('price：${_fmt(lastEvent!.price)}');
       buf.writeln('截至当前首次发现次数：$eventCount');
     }
+    if (currentZs != null) {
+      buf.writeln();
+      buf.writeln('中枢对象：');
+      buf.writeln(currentZs!.objectId);
+      buf.writeln('确认时间：K0 #${currentZs!.confirmX}');
+      buf.writeln('开始时间：K0 #${currentZs!.startX}');
+      buf.writeln('结束时间：K0 #${currentZs!.endX}');
+      buf.writeln('HIGH：${_fmt(currentZs!.high)}');
+      buf.writeln('LOW：${_fmt(currentZs!.low)}');
+      buf.writeln('CENTER：${_fmt(currentZs!.center)}');
+      buf.writeln('当前 asOf：K0 #${currentZs!.availableAt}');
+      buf.writeln('状态：${currentZs!.state.name}');
+    }
     if (note.isNotEmpty) {
       buf.writeln();
       buf.writeln(note);
@@ -129,6 +146,7 @@ TradeVarDiagnosis diagnoseTradeVariable({
   List<LevelBundle> levels = const [],
   MathSeriesFreezeStore? mathFreeze,
   ChanEventStore chanEvents = ChanEventStore.empty,
+  ZhongshuObjectStore? zsObjects,
   int maxKn = 8,
 }) {
   final def = lookupTradeVariable(variableId, maxKn: maxKn);
@@ -138,6 +156,14 @@ TradeVarDiagnosis diagnoseTradeVariable({
     freezePresent = frozenPlotSeries(parsed: parsed, store: mathFreeze) != null;
   } else if (parsed?.panel == 'RAW') {
     freezePresent = true; // 原生成交量/OHLC 不走冻结仓
+  }
+  final isZsCurrent = parsed != null &&
+      parsed.panel == 'STRUCTURE' &&
+      parsed.rest.length >= 2 &&
+      parsed.rest[0] == 'ZS' &&
+      parsed.rest[1] == 'CURRENT';
+  if (isZsCurrent) {
+    freezePresent = zsObjects != null && !zsObjects.isEmpty;
   }
 
   if (def != null &&
@@ -216,6 +242,7 @@ TradeVarDiagnosis diagnoseTradeVariable({
     bars: bars,
     levels: levels,
     mathFreeze: mathFreeze,
+    zsObjects: zsObjects,
   );
   final series = readEvalClockSeries(
     variableId: variableId,
@@ -223,6 +250,7 @@ TradeVarDiagnosis diagnoseTradeVariable({
     bars: bars,
     levels: levels,
     mathFreeze: mathFreeze,
+    zsObjects: zsObjects,
   );
   EvalClockPoint? last;
   for (final p in series) {
@@ -230,7 +258,18 @@ TradeVarDiagnosis diagnoseTradeVariable({
   }
 
   var note = def.description.isEmpty ? def.availabilityNote : def.description;
-  if (!freezePresent && parsed?.panel != 'RAW') {
+  ZhongshuObject? currentZs;
+  if (isZsCurrent) {
+    currentZs = zsObjects?.resolveCurrentConfirmedZs(
+      displayKn: parsed.kn,
+      asOf: asOf,
+    );
+    if (!freezePresent) {
+      note = '还没有中枢对象仓（需按步进喂入已确认中枢）。$note';
+    } else if (currentZs == null) {
+      note = '当前这根 K0 还没有已确认中枢（不可用，不是 0）。$note';
+    }
+  } else if (!freezePresent && parsed?.panel != 'RAW') {
     note = '冻结仓没有这份序列，读数不可用，不会现场重算。$note';
   } else if (plot.isUnavailable) {
     note = '当前这根 K0 格子没有值（尚未出数或越界）。$note';
@@ -257,5 +296,6 @@ TradeVarDiagnosis diagnoseTradeVariable({
     evalPoint: last,
     evalSampleCount: series.length,
     note: note,
+    currentZs: currentZs,
   );
 }

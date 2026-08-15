@@ -176,6 +176,26 @@ TradeAst k1Sell1OrMacdAst() => TradeOrAst(
       ),
     );
 
+/// 买：K1 一类买点 并且 收盘低于当前确认中枢低
+TradeAst k1Buy1AndZsLowAst() => const TradeAndAst(
+      k1Buy1EventAst,
+      TradeCmpAst(
+        left: TradeVarRef('RAW.K1.CLOSE'),
+        right: TradeVarRef('STRUCTURE.K1.ZS.CURRENT.LOW'),
+        op: TradeBinaryOp.lt,
+      ),
+    );
+
+/// 卖：K1 一类卖点 或者 收盘上穿当前确认中枢高
+TradeAst k1Sell1OrZsHighAst() => const TradeOrAst(
+      k1Sell1EventAst,
+      TradeCmpAst(
+        left: TradeVarRef('RAW.K1.CLOSE'),
+        right: TradeVarRef('STRUCTURE.K1.ZS.CURRENT.HIGH'),
+        op: TradeBinaryOp.crossAbove,
+      ),
+    );
+
 /// 给人看的操作符：比较用符号，穿越用 CROSS_ABOVE / CROSS_BELOW
 String tradeOpToken(TradeBinaryOp op) {
   return switch (op) {

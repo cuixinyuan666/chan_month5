@@ -4,7 +4,9 @@ import '../compute/math_series_freeze_store.dart';
 import '../models/kline_bar.dart';
 import '../models/level_models.dart';
 import 'signal_data_catalog.dart';
+import 'structure_object.dart';
 import 'trade_value.dart';
+import 'zhongshu_object_store.dart';
 
 /// 按当步 K0 索引读「当时能看见」的值（plot/asOf）。
 /// CROSS / 比较请走 [readEvalClockSeries]，不要拿铺平阶梯当穿越。
@@ -14,6 +16,7 @@ TradeScalar lookupTradeNumeric({
   required List<KlineBar> bars,
   List<LevelBundle> levels = const [],
   MathSeriesFreezeStore? mathFreeze,
+  ZhongshuObjectStore? zsObjects,
   int bollN = 20,
 }) {
   if (bars.isEmpty || asOf < 0) return const TradeScalar.unavailable();
@@ -35,6 +38,12 @@ TradeScalar lookupTradeNumeric({
       levels: levels,
     );
   }
+  final zs = _lookupZsCurrent(
+    parsed: parsed,
+    asOf: asOf,
+    zsObjects: zsObjects,
+  );
+  if (zs != null) return zs;
   return _lookupFrozenPlot(
     parsed: parsed,
     asOf: asOf,
@@ -193,6 +202,7 @@ List<EvalClockPoint> readEvalClockSeries({
   required List<KlineBar> bars,
   List<LevelBundle> levels = const [],
   MathSeriesFreezeStore? mathFreeze,
+  ZhongshuObjectStore? zsObjects,
   int bollN = 20,
 }) {
   if (bars.isEmpty || asOf < 0) return const [];
@@ -209,6 +219,17 @@ List<EvalClockPoint> readEvalClockSeries({
       asOf: asOf,
       bars: bars,
       levels: levels,
+    );
+  }
+  final zsProj = _zsProjectionOf(parsed);
+  if (zsProj != null) {
+    return _zsCurrentEvalSeries(
+      kn: parsed.kn,
+      projection: zsProj,
+      asOf: asOf,
+      bars: bars,
+      levels: levels,
+      zsObjects: zsObjects,
     );
   }
   if (mathFreeze == null) return const [];
@@ -323,4 +344,74 @@ List<double?>? _bollField(BollK0Series? b, String band) {
     default:
       return null;
   }
+}
+
+ZsProjection? _zsProjectionOf(
+  ({String panel, int kn, List<String> rest}) parsed,
+) {
+  if (parsed.panel != 'STRUCTURE') return null;
+  if (parsed.rest.length != 3) return null;
+  if (parsed.rest[0] != 'ZS' || parsed.rest[1] != 'CURRENT') return null;
+  return switch (parsed.rest[2]) {
+    'HIGH' => ZsProjection.high,
+    'LOW' => ZsProjection.low,
+    'CENTER' => ZsProjection.center,
+    _ => null,
+  };
+}
+
+/// 没有确认中枢 → 不可用（不是 0）。
+TradeScalar? _lookupZsCurrent({
+  required ({String panel, int kn, List<String> rest}) parsed,
+  required int asOf,
+  required ZhongshuObjectStore? zsObjects,
+}) {
+  final proj = _zsProjectionOf(parsed);
+  if (proj == null) return null;
+  if (zsObjects == null || zsObjects.isEmpty) {
+    return const TradeScalar.unavailable();
+  }
+  final v = zsObjects.projectCurrent(
+    displayKn: parsed.kn,
+    asOf: asOf,
+    projection: proj,
+  );
+  if (v == null) return const TradeScalar.unavailable();
+  return TradeScalar.num(v);
+}
+
+/// 中枢投影跟该层收盘同一套计算钟：K0 一根一根，K1+ 虚拟K右端。
+List<EvalClockPoint> _zsCurrentEvalSeries({
+  required int kn,
+  required ZsProjection projection,
+  required int asOf,
+  required List<KlineBar> bars,
+  required List<LevelBundle> levels,
+  required ZhongshuObjectStore? zsObjects,
+}) {
+  if (zsObjects == null || zsObjects.isEmpty) return const [];
+  final grid = _rawEvalSeries(
+    kn: kn,
+    field: 'CLOSE',
+    asOf: asOf,
+    bars: bars,
+    levels: levels,
+  );
+  final out = <EvalClockPoint>[];
+  var i = 0;
+  for (final g in grid) {
+    final v = zsObjects.projectCurrent(
+      displayKn: kn,
+      asOf: g.availableAt,
+      projection: projection,
+    );
+    if (v == null) continue;
+    out.add(EvalClockPoint(
+      evalIndex: i,
+      availableAt: g.availableAt,
+      value: v,
+    ));
+    i++;
+  }
+  return out;
 }

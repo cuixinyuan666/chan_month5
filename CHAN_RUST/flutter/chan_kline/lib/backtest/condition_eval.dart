@@ -8,6 +8,7 @@ import 'signal_event.dart';
 import 'trade_clock.dart';
 import 'trade_operand.dart';
 import 'trade_value.dart';
+import 'zhongshu_object_store.dart';
 
 /// 编译后的钟身份：AND/OR 两边必须同一层同一套钟同一计算钟。
 class CompiledClock {
@@ -232,6 +233,7 @@ class CondEvalCtx {
   final List<LevelBundle> levels;
   final MathSeriesFreezeStore? mathFreeze;
   final ChanEventStore chanEvents;
+  final ZhongshuObjectStore? zsObjects;
   final int bollN;
   final int maxKn;
 
@@ -241,6 +243,7 @@ class CondEvalCtx {
     this.levels = const [],
     this.mathFreeze,
     this.chanEvents = ChanEventStore.empty,
+    this.zsObjects,
     this.bollN = 20,
     this.maxKn = 8,
   });
@@ -634,6 +637,7 @@ List<EvalClockPoint> _readRef(
       bars: ctx.bars,
       levels: ctx.levels,
       mathFreeze: ctx.mathFreeze,
+      zsObjects: ctx.zsObjects,
       bollN: ctx.bollN,
     );
     return [
@@ -652,6 +656,7 @@ List<EvalClockPoint> _readRef(
     bars: ctx.bars,
     levels: ctx.levels,
     mathFreeze: ctx.mathFreeze,
+    zsObjects: ctx.zsObjects,
     bollN: ctx.bollN,
   );
 }

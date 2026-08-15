@@ -11,6 +11,7 @@ import 'strategy_compile.dart';
 import 'strategy_config.dart';
 import 'trade_operand.dart';
 import 'trade_var_diagnose.dart';
+import 'zhongshu_object_store.dart';
 
 /// 通用条件构建器：比较 / 穿越 / AND / OR / 变量 vs 常数。只搭 AST，不算真假。
 class StrategyConfigForm extends StatefulWidget {
@@ -23,6 +24,7 @@ class StrategyConfigForm extends StatefulWidget {
   final List<LevelBundle> levels;
   final MathSeriesFreezeStore? mathFreeze;
   final ChanEventStore chanEvents;
+  final ZhongshuObjectStore? zsObjects;
   final int asOf;
 
   const StrategyConfigForm({
@@ -36,6 +38,7 @@ class StrategyConfigForm extends StatefulWidget {
     this.levels = const [],
     this.mathFreeze,
     this.chanEvents = ChanEventStore.empty,
+    this.zsObjects,
     this.asOf = 0,
   });
 
@@ -677,6 +680,7 @@ class _StrategyConfigFormState extends State<StrategyConfigForm> {
       levels: widget.levels,
       mathFreeze: widget.mathFreeze,
       chanEvents: widget.chanEvents,
+      zsObjects: widget.zsObjects,
       maxKn: widget.maxKn < 0 ? 0 : widget.maxKn,
     );
     return Container(
@@ -690,7 +694,7 @@ class _StrategyConfigFormState extends State<StrategyConfigForm> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Text(
-            '变量诊断（只读目录和冻结仓，不算条件）',
+            '变量诊断（只读目录、冻结仓和确认中枢对象，不算条件）',
             style: TextStyle(fontSize: 11, color: Color(0xFF94A3B8)),
           ),
           const SizedBox(height: 4),

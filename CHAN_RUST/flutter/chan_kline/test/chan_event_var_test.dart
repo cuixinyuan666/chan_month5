@@ -89,6 +89,15 @@ void main() {
         TradeClockFamily.line,
       );
       expect(lookupTradeVariable('STRUCTURE.K2.ZS.HIGH')!.expressionReady, isFalse);
+      expect(
+        lookupTradeVariable('STRUCTURE.K1.ZS.CURRENT.HIGH', maxKn: 2)!
+            .expressionReady,
+        isTrue,
+      );
+      expect(
+        lookupTradeVariable('STRUCTURE.K1.ZS.CURRENT.LOW', maxKn: 2)!.valueType,
+        TradeValueType.numeric,
+      );
     });
 
     test('事件不能比较或穿越；EVENT_EXISTS 能编过', () {
