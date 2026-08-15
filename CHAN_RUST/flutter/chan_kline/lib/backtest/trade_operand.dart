@@ -47,6 +47,8 @@ enum TradeBinaryOp {
   eq,
   crossAbove,
   crossBelow,
+  /// 事件出现一次（发现边沿），不是数值比较
+  eventExists,
 }
 
 /// 表达式操作数：变量 或 常数。比较/穿越至少一侧必须是变量。
@@ -125,6 +127,11 @@ TradeExprCompile compileBinaryOp({
   if (a == null || b == null) {
     return const TradeExprIllegal('未登记进交易目录，或只盘点还不能当条件');
   }
+  if (_isEventOperand(a, maxKn) || _isEventOperand(b, maxKn)) {
+    return const TradeExprIllegal(
+      '事件不能比较或穿越，请用「出现」条件（EVENT_EXISTS）',
+    );
+  }
   if (a.displayKn != b.displayKn || a.clockFamily != b.clockFamily) {
     return TradeExprIllegal(
       '${a.displayName} 和 ${b.displayName} 不是同一层同一套钟，'
@@ -185,12 +192,22 @@ TradeExprCompile compileValuePair({
   if (bound == null) {
     return const TradeExprIllegal('未登记进交易目录，或只盘点还不能当条件');
   }
+  if (_isEventOperand(bound, maxKn)) {
+    return const TradeExprIllegal(
+      '事件不能和常数比较，请用「出现」条件（EVENT_EXISTS）',
+    );
+  }
   return TradeValueExprOk(
-    clock: bound,
-    leftOp: leftVar ? bound : null,
-    rightOp: rightVar ? bound : null,
-    left: left,
-    right: right,
-    op: op,
-  );
+      clock: bound,
+      leftOp: leftVar ? bound : null,
+      rightOp: rightVar ? bound : null,
+      left: left,
+      right: right,
+      op: op,
+    );
+}
+
+bool _isEventOperand(TradeOperand op, int maxKn) {
+  final def = lookupTradeVariable(op.variableId, maxKn: maxKn);
+  return def != null && def.valueType == TradeValueType.event;
 }

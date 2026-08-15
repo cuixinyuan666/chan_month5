@@ -2,10 +2,12 @@ import '../compute/math_series_freeze_store.dart';
 import '../models/kline_bar.dart';
 import '../models/level_models.dart';
 import 'catalog_lookup.dart';
+import 'chan_event_store.dart';
 import 'condition_ast.dart';
 import 'signal_event.dart';
 import 'trade_clock.dart';
 import 'trade_operand.dart';
+import 'trade_value.dart';
 
 /// 编译后的钟身份：AND/OR 两边必须同一层同一套钟同一计算钟。
 class CompiledClock {
@@ -76,11 +78,12 @@ final class CompiledCmp extends CompiledCond {
 final class CompiledAnd extends CompiledCond {
   final CompiledCond left;
   final CompiledCond right;
+  final CompiledClock _clock;
 
-  const CompiledAnd(this.left, this.right);
+  const CompiledAnd(this.left, this.right, this._clock);
 
   @override
-  CompiledClock get clock => left.clock;
+  CompiledClock get clock => _clock;
 
   @override
   String get label => astConditionText(TradeAndAst(
@@ -92,17 +95,35 @@ final class CompiledAnd extends CompiledCond {
 final class CompiledOr extends CompiledCond {
   final CompiledCond left;
   final CompiledCond right;
+  final CompiledClock _clock;
 
-  const CompiledOr(this.left, this.right);
+  const CompiledOr(this.left, this.right, this._clock);
 
   @override
-  CompiledClock get clock => left.clock;
+  CompiledClock get clock => _clock;
 
   @override
   String get label => astConditionText(TradeOrAst(
         _astFromCompiled(left),
         _astFromCompiled(right),
       ));
+}
+
+final class CompiledEvent extends CompiledCond {
+  final String variableId;
+  final TradeOperand clockOp;
+
+  const CompiledEvent({required this.variableId, required this.clockOp});
+
+  @override
+  CompiledClock get clock => CompiledClock(
+        displayKn: clockOp.displayKn,
+        family: clockOp.clockFamily,
+        evalClock: clockOp.evalClock,
+      );
+
+  @override
+  String get label => astConditionText(TradeEventAst(variableId));
 }
 
 /// 编译一棵条件树：混层/混钟/两常数在这里就非法，不会进求值。
@@ -137,7 +158,20 @@ CondCompileResult _compile(TradeAst ast, {required int maxKn}) {
       return _compileJoin(left, right, maxKn: maxKn, and: true);
     case TradeOrAst(:final left, :final right):
       return _compileJoin(left, right, maxKn: maxKn, and: false);
+    case TradeEventAst(:final variableId):
+      return _compileEvent(variableId, maxKn: maxKn);
   }
+}
+
+CondCompileResult _compileEvent(String variableId, {required int maxKn}) {
+  if (!isRegisteredEventVar(variableId, maxKn: maxKn)) {
+    return const CondCompileIllegal('未登记的事件变量，或还不能当条件');
+  }
+  final bound = TradeOperand.tryBind(variableId, maxKn: maxKn);
+  if (bound == null) {
+    return const CondCompileIllegal('未登记进交易目录，或只盘点还不能当条件');
+  }
+  return CondCompileOk(CompiledEvent(variableId: variableId, clockOp: bound));
 }
 
 CondCompileResult _compileJoin(
@@ -152,13 +186,44 @@ CondCompileResult _compileJoin(
   if (ra is CondCompileIllegal) return ra;
   final l = (la as CondCompileOk).root;
   final r = (ra as CondCompileOk).root;
-  if (!l.clock.sameAs(r.clock)) {
+  if (!_clocksJoinable(l, r)) {
     return CondCompileIllegal(
       '条件里混了不同层或不同钟，不能 ${and ? 'AND' : 'OR'} 在一起'
-      '（禁止 K0 和 K1 拼在同一棵树上）',
+      '（禁止 K0 和 K1 拼在同一棵树上；分型确认是连线钟，不能和 RSI 直接拼）',
     );
   }
-  return CondCompileOk(and ? CompiledAnd(l, r) : CompiledOr(l, r));
+  final clock = _joinClock(l, r);
+  return CondCompileOk(
+    and ? CompiledAnd(l, r, clock) : CompiledOr(l, r, clock),
+  );
+}
+
+bool _involvesEvent(CompiledCond c) {
+  return switch (c) {
+    CompiledEvent() => true,
+    CompiledAnd(:final left, :final right) =>
+      _involvesEvent(left) || _involvesEvent(right),
+    CompiledOr(:final left, :final right) =>
+      _involvesEvent(left) || _involvesEvent(right),
+    CompiledCmp() => false,
+  };
+}
+
+bool _clocksJoinable(CompiledCond a, CompiledCond b) {
+  if (a.clock.sameAs(b.clock)) return true;
+  if (a.clock.displayKn != b.clock.displayKn) return false;
+  if (a.clock.family != b.clock.family) return false;
+  return _involvesEvent(a) || _involvesEvent(b);
+}
+
+CompiledClock _joinClock(CompiledCond a, CompiledCond b) {
+  if (_involvesEvent(a) && a.clock.evalClock == TradeEvalClock.k0Bar) {
+    return a.clock;
+  }
+  if (_involvesEvent(b) && b.clock.evalClock == TradeEvalClock.k0Bar) {
+    return b.clock;
+  }
+  return a.clock;
 }
 
 class CondEvalCtx {
@@ -166,6 +231,7 @@ class CondEvalCtx {
   final List<KlineBar> bars;
   final List<LevelBundle> levels;
   final MathSeriesFreezeStore? mathFreeze;
+  final ChanEventStore chanEvents;
   final int bollN;
   final int maxKn;
 
@@ -174,6 +240,7 @@ class CondEvalCtx {
     required this.bars,
     this.levels = const [],
     this.mathFreeze,
+    this.chanEvents = ChanEventStore.empty,
     this.bollN = 20,
     this.maxKn = 8,
   });
@@ -247,11 +314,62 @@ List<_BoolPt> _eval(CompiledCond cond, CondEvalCtx ctx) {
   switch (cond) {
     case CompiledCmp():
       return _evalCmp(cond, ctx);
+    case CompiledEvent():
+      return _evalEvent(cond, ctx);
     case CompiledAnd():
-      return _combine(_eval(cond.left, ctx), _eval(cond.right, ctx), and: true);
+      return _combine(
+        _eval(cond.left, ctx),
+        _eval(cond.right, ctx),
+        and: true,
+        ctx: ctx,
+      );
     case CompiledOr():
-      return _combine(_eval(cond.left, ctx), _eval(cond.right, ctx), and: false);
+      return _combine(
+        _eval(cond.left, ctx),
+        _eval(cond.right, ctx),
+        and: false,
+        ctx: ctx,
+      );
   }
+}
+
+List<_BoolPt> _evalEvent(CompiledEvent cond, CondEvalCtx ctx) {
+  final events = listTradeChanEvents(
+    variableId: cond.variableId,
+    asOf: ctx.asOf,
+    store: ctx.chanEvents,
+    levels: ctx.levels,
+    maxKn: ctx.maxKn,
+  );
+  final at = <int, TradeChanEvent>{
+    for (final e in events) e.availableAt: e,
+  };
+  final out = <_BoolPt>[];
+  var i = 0;
+  for (final b in ctx.bars) {
+    if (b.idx > ctx.asOf) continue;
+    final ev = at[b.idx];
+    final flag = ev != null;
+    out.add(_BoolPt(
+      evalIndex: i,
+      availableAt: b.idx,
+      flag: flag,
+      signalPrice: ev?.price ?? b.close,
+      leftValue: ev?.price ?? 0,
+      rightValue: flag ? 1 : 0,
+      leftId: cond.variableId,
+      rightId: '',
+      op: TradeBinaryOp.eventExists,
+      snapshots: [
+        SignalSnapshot(
+          label: snapshotVarLabel(cond.variableId),
+          value: flag ? (ev?.price ?? 1) : null,
+        ),
+      ],
+    ));
+    i++;
+  }
+  return out;
 }
 
 List<_BoolPt> _evalCmp(CompiledCmp cond, CondEvalCtx ctx) {
@@ -325,6 +443,8 @@ bool _cmpAt(
       final pa = aligned[i - 1].a.value;
       final pb = aligned[i - 1].b.value;
       return pa >= pb && a < b;
+    case TradeBinaryOp.eventExists:
+      return false;
   }
 }
 
@@ -359,7 +479,28 @@ List<SignalSnapshot> _leafSnapshots(
   return out;
 }
 
-List<_BoolPt> _combine(List<_BoolPt> left, List<_BoolPt> right, {required bool and}) {
+List<_BoolPt> _combine(
+  List<_BoolPt> left,
+  List<_BoolPt> right, {
+  required bool and,
+  required CondEvalCtx ctx,
+}) {
+  final eventful = left.any((p) => p.op == TradeBinaryOp.eventExists) ||
+      right.any((p) => p.op == TradeBinaryOp.eventExists);
+  if (!eventful) {
+    return _combineExact(left, right, and: and);
+  }
+  if (and && (left.isEmpty || right.isEmpty)) return const [];
+  if (!and && left.isEmpty) return right;
+  if (!and && right.isEmpty) return left;
+  return _combineAsOf(left, right, and: and, ctx: ctx);
+}
+
+List<_BoolPt> _combineExact(
+  List<_BoolPt> left,
+  List<_BoolPt> right, {
+  required bool and,
+}) {
   if (left.isEmpty || right.isEmpty) return const [];
   final rightByAt = <int, _BoolPt>{for (final p in right) p.availableAt: p};
   final out = <_BoolPt>[];
@@ -373,9 +514,9 @@ List<_BoolPt> _combine(List<_BoolPt> left, List<_BoolPt> right, {required bool a
       flag: flag,
       signalPrice: a.signalPrice,
       leftValue: a.leftValue,
-      rightValue: a.rightValue,
+      rightValue: b.rightValue,
       leftId: a.leftId,
-      rightId: a.rightId,
+      rightId: b.rightId,
       op: _preferCrossOp(a, b),
       snapshots: _mergeSnaps(a.snapshots, b.snapshots),
     ));
@@ -384,11 +525,88 @@ List<_BoolPt> _combine(List<_BoolPt> left, List<_BoolPt> right, {required bool a
   return out;
 }
 
+bool _isPulseOp(TradeBinaryOp op) =>
+    op == TradeBinaryOp.eventExists ||
+    op == TradeBinaryOp.crossAbove ||
+    op == TradeBinaryOp.crossBelow;
+
+bool _flagAt(List<_BoolPt> series, int x) {
+  _BoolPt? exact;
+  _BoolPt? last;
+  for (final p in series) {
+    if (p.availableAt > x) continue;
+    last = p;
+    if (p.availableAt == x) exact = p;
+  }
+  if (exact != null) return exact.flag;
+  if (last == null) return false;
+  if (_isPulseOp(last.op)) return false;
+  return last.flag;
+}
+
+_BoolPt? _ptAt(List<_BoolPt> series, int x) {
+  _BoolPt? exact;
+  _BoolPt? last;
+  for (final p in series) {
+    if (p.availableAt > x) continue;
+    last = p;
+    if (p.availableAt == x) exact = p;
+  }
+  return exact ?? last;
+}
+
+List<_BoolPt> _combineAsOf(
+  List<_BoolPt> left,
+  List<_BoolPt> right, {
+  required bool and,
+  required CondEvalCtx ctx,
+}) {
+  final out = <_BoolPt>[];
+  var i = 0;
+  for (final b in ctx.bars) {
+    if (b.idx > ctx.asOf) continue;
+    final x = b.idx;
+    final lf = _flagAt(left, x);
+    final rf = _flagAt(right, x);
+    final flag = and ? (lf && rf) : (lf || rf);
+    final a = _ptAt(left, x);
+    final bpt = _ptAt(right, x);
+    final preferLeftEvent =
+        a != null && a.op == TradeBinaryOp.eventExists && lf;
+    final src = preferLeftEvent
+        ? a
+        : (bpt != null && bpt.op == TradeBinaryOp.eventExists && rf)
+            ? bpt
+            : (lf ? a : (rf ? bpt : a));
+    out.add(_BoolPt(
+      evalIndex: i,
+      availableAt: x,
+      flag: flag,
+      signalPrice: src?.signalPrice ?? b.close,
+      leftValue: a?.leftValue ?? 0,
+      rightValue: bpt?.rightValue ?? 0,
+      leftId: a?.leftId ?? '',
+      rightId: (bpt != null && bpt.leftId.isNotEmpty)
+          ? bpt.leftId
+          : (bpt?.rightId ?? ''),
+      op: a != null && bpt != null
+          ? _preferCrossOp(a, bpt)
+          : (src?.op ?? TradeBinaryOp.eventExists),
+      snapshots: _mergeSnaps(
+        a?.snapshots ?? const [],
+        bpt?.snapshots ?? const [],
+      ),
+    ));
+    i++;
+  }
+  return out;
+}
+
 TradeBinaryOp _preferCrossOp(_BoolPt a, _BoolPt b) {
-  bool isCross(TradeBinaryOp op) =>
-      op == TradeBinaryOp.crossAbove || op == TradeBinaryOp.crossBelow;
-  if (a.flag && isCross(a.op)) return a.op;
-  if (b.flag && isCross(b.op)) return b.op;
+  if (a.flag && a.op == TradeBinaryOp.eventExists) return a.op;
+  if (b.flag && b.op == TradeBinaryOp.eventExists) return b.op;
+  if (a.flag && _isPulseOp(a.op)) return a.op;
+  if (b.flag && _isPulseOp(b.op)) return b.op;
   return a.op;
 }
 
@@ -442,6 +660,8 @@ TradeAst _astFromCompiled(CompiledCond c) {
   switch (c) {
     case CompiledCmp(:final left, :final right, :final op):
       return TradeCmpAst(left: left, right: right, op: op);
+    case CompiledEvent(:final variableId):
+      return TradeEventAst(variableId);
     case CompiledAnd(:final left, :final right):
       return TradeAndAst(_astFromCompiled(left), _astFromCompiled(right));
     case CompiledOr(:final left, :final right):

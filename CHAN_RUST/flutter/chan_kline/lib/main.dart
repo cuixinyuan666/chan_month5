@@ -42,6 +42,7 @@ import 'backtest/order_models.dart';
 import 'backtest/signal_event.dart';
 import 'backtest/strategy_config.dart';
 import 'backtest/backtest_workbench.dart';
+import 'backtest/chan_event_store.dart';
 import 'models/zs_frame.dart';
 import 'models/buy1_frame.dart';
 import 'models/sell1_frame.dart';
@@ -198,6 +199,7 @@ Future<void> main() async {
   MsgHistory.instance.appendTradeBacktestWorkbench();
   MsgHistory.instance.appendTradeConditionBuilder();
   MsgHistory.instance.appendTradeIndicatorVars();
+  MsgHistory.instance.appendTradeChanEvents();
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     await windowManager.ensureInitialized();
     const opts = WindowOptions(
@@ -372,7 +374,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
   bool _forceXgbRetrain = true;
   final MlBspSampler _mlSampler = MlBspSampler();
 
-  /// 策略回测工作台（条件树 + 指标变量：OHLC/布林/MACD/RSI/KDJ/K0成交量）
+  /// 策略回测工作台（条件树 + 指标变量 + 缠论结构事件）
   bool _backtestPanelOpen = false;
   StrategyConfig _strategyConfig = const StrategyConfig();
   BacktestRun? _backtestRun;
@@ -2171,9 +2173,21 @@ class _KlineHomePageState extends State<KlineHomePage> {
             focusX: _btFocusBarIdx,
             levels: _levels,
             mathFreeze: _mathFreezeStore,
+            chanEvents: _chanEventStore(),
           ),
         ),
       ],
+    );
+  }
+
+  ChanEventStore _chanEventStore() {
+    return ChanEventStore(
+      buy1ByKn: _buy1HistoryByKn,
+      sell1ByKn: _sell1HistoryByKn,
+      buy2ByKn: _buy2HistoryByKn,
+      sell2ByKn: _sell2HistoryByKn,
+      zsConfirmByKn: _zsConfirmHistoryByKn,
+      k0FractalConfirms: _k0ConfirmSignals,
     );
   }
 
@@ -2197,6 +2211,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       bars: _visibleBars,
       levels: _levels,
       mathFreeze: _mathFreezeStore,
+      chanEvents: _chanEventStore(),
       bollN: _mathIndicatorConfig.bollN,
       maxKn: maxKn,
     );
@@ -2282,6 +2297,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
             '买卖条件各自用积木搭：比较（> < >= <=）、上穿/下穿，'
             '多条之间用 AND / OR。左右可以是同一层的收开高低、布林三轨、'
             'MACD（DIF/DEA/柱）、RSI、KDJ，K0 还可以用成交量；右边也可以填常数。'
+            '也可以选一类/二类买卖点、分型确认、中枢确认：这些是「出现一次」的事件，'
+            '只能和同层同钟的条件用 AND/OR 拼，不能拿去比较或上穿下穿。'
             '同一条比较必须同层同钟，K0 和 K1 不能拼在同一棵树上。'
             '成交量这一版只开放 K0，没有另造 Kn 成交量和均量。\n\n'
             '点运行后，图上出现「策买/策卖」，这是策略信号，不是缠论的 1Ba/1Sa。'

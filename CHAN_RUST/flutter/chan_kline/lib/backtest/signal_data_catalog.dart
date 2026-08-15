@@ -344,6 +344,78 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
       ));
     }
   }
+
+  // 结构事件：发现边沿，不是持续状态。计算钟一律 K0（发现当根）。
+  for (var kn = 0; kn <= hi; kn++) {
+    const bs = [
+      ('BUY1', '一类买点', 'buy1History 会话冻结，稳定身份首次发现'),
+      ('SELL1', '一类卖点', 'sell1History 会话冻结，稳定身份首次发现'),
+      ('BUY2', '二类买点', 'buy2History 会话冻结，发现边沿'),
+      ('SELL2', '二类卖点', 'sell2History 会话冻结，发现边沿'),
+    ];
+    for (final e in bs) {
+      final isClass1 = e.$1 == 'BUY1' || e.$1 == 'SELL1';
+      out.add(TradeVariableDef(
+        variableId: 'STRUCTURE.K$kn.${e.$1}',
+        displayName: 'K$kn ${e.$2}',
+        panel: TradePanel.structure,
+        displayKn: kn,
+        clockFamily: TradeClockFamily.zsMath,
+        evalClock: TradeEvalClock.k0Bar,
+        plotClock: TradePlotClock.k0Bar,
+        valueType: TradeValueType.event,
+        readiness: TradeReadiness.registered,
+        source: e.$3,
+        unit: 'event',
+        futureSafe: true,
+        availabilityNote: '首次发现当根才出现一次；动态段后续 x 不重复出交易事件',
+        groupKey: isClass1 ? 'bs1' : 'bs2',
+        groupLabel: isClass1 ? '一类BS' : '二类BS',
+        fieldLabel: e.$1,
+        description: 'EVENT_EXISTS；禁止比较/穿越',
+      ));
+    }
+    out.add(TradeVariableDef(
+      variableId: 'SUB.K$kn.FRACTAL_CONFIRM',
+      displayName: 'K$kn 分型确认',
+      panel: TradePanel.sub,
+      displayKn: kn,
+      clockFamily: TradeClockFamily.line,
+      evalClock: TradeEvalClock.k0Bar,
+      plotClock: TradePlotClock.k0Bar,
+      valueType: TradeValueType.event,
+      readiness: TradeReadiness.registered,
+      source: kn == 0
+          ? 'k0ConfirmSignals 首次确认'
+          : 'LevelBundle.level==kn confirms 首次确认',
+      unit: 'event',
+      futureSafe: true,
+      availabilityNote: '确认事件不等于当前已确认分型列表',
+      groupKey: 'fxConfirm',
+      groupLabel: '分型确认',
+      fieldLabel: '确认',
+      description: 'EVENT_EXISTS；连线钟，不能和布林/RSI 直接 AND',
+    ));
+    out.add(TradeVariableDef(
+      variableId: 'SUB.K$kn.ZS_CONFIRM',
+      displayName: 'K$kn 中枢确认',
+      panel: TradePanel.sub,
+      displayKn: kn,
+      clockFamily: TradeClockFamily.zsMath,
+      evalClock: TradeEvalClock.k0Bar,
+      plotClock: TradePlotClock.k0Bar,
+      valueType: TradeValueType.event,
+      readiness: TradeReadiness.registered,
+      source: 'zsConfirmHistory 会话冻结，is_sure 首次',
+      unit: 'event',
+      futureSafe: true,
+      availabilityNote: '首次确认事件；不暴露中枢高低',
+      groupKey: 'zsConfirm',
+      groupLabel: '中枢确认',
+      fieldLabel: '确认',
+      description: 'EVENT_EXISTS；与 RSI/MACD 同 zsMath 可 AND/OR',
+    ));
+  }
   return out;
 }
 
@@ -440,28 +512,12 @@ List<TradeVariableDef> inventoryOnlyTradeVariables() {
       why: 'K1+ 成交量是铺平后的层序列，不是虚拟K样本总量；本阶段只登记 RAW.K0.VOLUME',
     ),
     stub(
-      pattern: 'SUB.K{n}.FRACTAL_CONFIRM',
-      name: 'Kn分型确认',
-      panel: TradePanel.sub,
-      clock: TradeClockFamily.line,
-      type: TradeValueType.event,
-      why: '事件点，需边沿触发规则后才能当条件',
-    ),
-    stub(
       pattern: 'SUB.K{n}.FRACTAL_JUDGMENT',
       name: 'Kn分型判断',
       panel: TradePanel.sub,
       clock: TradeClockFamily.line,
       type: TradeValueType.event,
       why: '对象是尚未确认的分型，不是新芽；未写边沿',
-    ),
-    stub(
-      pattern: 'SUB.K{n}.ZS_CONFIRM',
-      name: 'Kn中枢确认',
-      panel: TradePanel.sub,
-      clock: TradeClockFamily.zsMath,
-      type: TradeValueType.event,
-      why: '事件；未写「确认哪一框」',
     ),
     stub(
       pattern: 'STRUCTURE.K{n}.ZS.HIGH',
@@ -477,30 +533,6 @@ List<TradeVariableDef> inventoryOnlyTradeVariables() {
       panel: TradePanel.structure,
       clock: TradeClockFamily.zsMath,
       type: TradeValueType.numeric,
-      why: '同上',
-    ),
-    stub(
-      pattern: 'STRUCTURE.K{n}.BUY1',
-      name: 'Kn一类买点',
-      panel: TradePanel.structure,
-      clock: TradeClockFamily.zsMath,
-      type: TradeValueType.event,
-      why: '稳定身份+当步x，动态层可连续多根都有点；未写「首次出现才触发」',
-    ),
-    stub(
-      pattern: 'STRUCTURE.K{n}.SELL1',
-      name: 'Kn一类卖点',
-      panel: TradePanel.structure,
-      clock: TradeClockFamily.zsMath,
-      type: TradeValueType.event,
-      why: '同上',
-    ),
-    stub(
-      pattern: 'STRUCTURE.K{n}.BUY2',
-      name: 'Kn二类买点',
-      panel: TradePanel.structure,
-      clock: TradeClockFamily.zsMath,
-      type: TradeValueType.event,
       why: '同上',
     ),
     stub(

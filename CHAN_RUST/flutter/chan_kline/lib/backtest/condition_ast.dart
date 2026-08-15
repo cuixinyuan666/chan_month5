@@ -19,6 +19,12 @@ class TradeCmpAst extends TradeAst {
   });
 }
 
+/// 叶子：某事件在当根首次出现（EVENT_EXISTS）
+class TradeEventAst extends TradeAst {
+  final String variableId;
+  const TradeEventAst(this.variableId);
+}
+
 /// 并且：左右都真才真（按计算钟对齐后的样本）
 class TradeAndAst extends TradeAst {
   final TradeAst left;
@@ -144,6 +150,32 @@ TradeCmpAst k0VolumeGtAst(double threshold) => TradeCmpAst(
       op: TradeBinaryOp.gt,
     );
 
+/// K1 一类买点出现
+const TradeEventAst k1Buy1EventAst = TradeEventAst('STRUCTURE.K1.BUY1');
+
+/// K1 一类卖点出现
+const TradeEventAst k1Sell1EventAst = TradeEventAst('STRUCTURE.K1.SELL1');
+
+/// 买：K1 一类买点 并且 RSI < 50
+TradeAst k1Buy1AndRsiAst() => TradeAndAst(
+      k1Buy1EventAst,
+      const TradeCmpAst(
+        left: TradeVarRef('SUB.K1.RSI.VALUE'),
+        right: TradeConstRef(50),
+        op: TradeBinaryOp.lt,
+      ),
+    );
+
+/// 卖：K1 一类卖点 或者 MACD DIF 下穿 DEA
+TradeAst k1Sell1OrMacdAst() => TradeOrAst(
+      k1Sell1EventAst,
+      const TradeCmpAst(
+        left: TradeVarRef('SUB.K1.MACD.DIF'),
+        right: TradeVarRef('SUB.K1.MACD.DEA'),
+        op: TradeBinaryOp.crossBelow,
+      ),
+    );
+
 /// 给人看的操作符：比较用符号，穿越用 CROSS_ABOVE / CROSS_BELOW
 String tradeOpToken(TradeBinaryOp op) {
   return switch (op) {
@@ -154,6 +186,7 @@ String tradeOpToken(TradeBinaryOp op) {
     TradeBinaryOp.eq => '==',
     TradeBinaryOp.crossAbove => 'CROSS_ABOVE',
     TradeBinaryOp.crossBelow => 'CROSS_BELOW',
+    TradeBinaryOp.eventExists => 'EVENT_EXISTS',
   };
 }
 
@@ -166,6 +199,7 @@ String tradeOpLabelCn(TradeBinaryOp op) {
     TradeBinaryOp.eq => '==',
     TradeBinaryOp.crossAbove => '上穿',
     TradeBinaryOp.crossBelow => '下穿',
+    TradeBinaryOp.eventExists => '出现',
   };
 }
 
@@ -202,6 +236,8 @@ String astConditionText(TradeAst ast, {String? parentKind}) {
   switch (ast) {
     case TradeCmpAst(:final left, :final right, :final op):
       return '${tradeValueLabel(left)} ${tradeOpToken(op)} ${tradeValueLabel(right)}';
+    case TradeEventAst(:final variableId):
+      return '${compactVarId(variableId)} EVENT_EXISTS';
     case TradeAndAst(:final left, :final right):
       final inner =
           '${astConditionText(left, parentKind: 'and')}\nAND\n${astConditionText(right, parentKind: 'and')}';
@@ -218,6 +254,8 @@ void collectAstVarIds(TradeAst ast, List<String> out) {
     case TradeCmpAst(:final left, :final right):
       if (left is TradeVarRef) out.add(left.variableId);
       if (right is TradeVarRef) out.add(right.variableId);
+    case TradeEventAst(:final variableId):
+      out.add(variableId);
     case TradeAndAst(:final left, :final right):
       collectAstVarIds(left, out);
       collectAstVarIds(right, out);
@@ -266,10 +304,10 @@ StrategyVarSpec? specByKey(String key) {
 }
 
 /// 把 AST 摊成左结合叶子链，给界面编辑用（求值仍走原树）
-({List<TradeCmpAst> leaves, List<CondJoin> joins}) flattenAstChain(
+({List<TradeAst> leaves, List<CondJoin> joins}) flattenAstChain(
   TradeAst ast,
 ) {
-  if (ast is TradeCmpAst) {
+  if (ast is TradeCmpAst || ast is TradeEventAst) {
     return (leaves: [ast], joins: <CondJoin>[]);
   }
   if (ast is TradeAndAst) {
@@ -288,11 +326,11 @@ StrategyVarSpec? specByKey(String key) {
       joins: [...l.joins, CondJoin.or, ...r.joins],
     );
   }
-  return (leaves: const <TradeCmpAst>[], joins: <CondJoin>[]);
+  return (leaves: const <TradeAst>[], joins: <CondJoin>[]);
 }
 
 /// 叶子链折回 AST（左结合）
-TradeAst foldAstChain(List<TradeCmpAst> leaves, List<CondJoin> joins) {
+TradeAst foldAstChain(List<TradeAst> leaves, List<CondJoin> joins) {
   if (leaves.isEmpty) return kDefaultBollBuyAst;
   TradeAst acc = leaves.first;
   for (var i = 0; i < joins.length && i + 1 < leaves.length; i++) {

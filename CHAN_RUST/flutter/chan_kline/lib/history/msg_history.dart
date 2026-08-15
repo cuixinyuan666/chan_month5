@@ -1270,6 +1270,20 @@ class MsgHistory {
     );
   }
 
+  /// 缠论结构事件变量（进程内去重）
+  static bool _tradeChanEventsLogged = false;
+  void appendTradeChanEvents() {
+    if (_tradeChanEventsLogged) return;
+    _tradeChanEventsLogged = true;
+    append(
+      '【结构事件·2026-08-15】一类/二类买卖点、分型确认、中枢确认进条件积木，都是「出现一次」的事件，'
+      '不是一直为真的状态。动态段后面几根 K 即使还挂着同一个点，交易信号也不再重复打。'
+      '事件只能跟同层同钟用 AND/OR 拼，不能拿去比大小或上穿下穿。'
+      '分型确认是连线钟，不能直接和 RSI 拼；一类买点和 RSI 同属中枢那套钟，可以拼。'
+      '未来才确认的点不会写进过去的回测。未接入 N 类、中枢高低、背驰、节奏。',
+    );
+  }
+
   /// 运行时虚线摘要（内容变才追加；复制历史记录排查用）。
   void appendDisplayBuildingLinesRuntime({
     required int kn,

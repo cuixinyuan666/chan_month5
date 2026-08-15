@@ -2,6 +2,7 @@ import '../compute/math_series_freeze_store.dart';
 import '../models/kline_bar.dart';
 import '../models/level_models.dart';
 import 'backtest_result.dart';
+import 'chan_event_store.dart';
 import 'condition_eval.dart';
 import 'cost_models.dart';
 import 'mini_loop.dart';
@@ -10,7 +11,7 @@ import 'strategy_compile.dart';
 import 'strategy_config.dart';
 
 /// 引擎版本：以后缠论/撮合规则改了，旧报告能对上是哪一版跑的。
-const String kBacktestEngineVersion = 'backtest-workbench-v3-indicators';
+const String kBacktestEngineVersion = 'backtest-workbench-v4-chan-events';
 
 /// 一次回测运行：策略 + 当时数据范围 + 引擎版本 + 结果。
 /// UI 不直接塞一堆散参数进引擎。
@@ -43,6 +44,7 @@ BacktestRun executeStrategyBacktest({
   required List<KlineBar> bars,
   List<LevelBundle> levels = const [],
   required MathSeriesFreezeStore mathFreeze,
+  ChanEventStore chanEvents = ChanEventStore.empty,
   int bollN = 20,
   int maxKn = 8,
   DateTime? now,
@@ -80,6 +82,7 @@ BacktestRun executeStrategyBacktest({
     bars: bars,
     levels: levels,
     mathFreeze: mathFreeze,
+    chanEvents: chanEvents,
     bollN: bollN,
     maxKn: maxKn,
   );

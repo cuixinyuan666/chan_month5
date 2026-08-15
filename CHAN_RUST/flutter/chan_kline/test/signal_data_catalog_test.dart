@@ -26,7 +26,7 @@ KlineBar _bar(int idx, double close, {double vol = 1}) {
 
 void main() {
   group('目录登记', () {
-    test('K0 开高低收量 + 各层布林已登记；一类买点只盘点', () {
+    test('K0 开高低收量 + 各层布林已登记；一类买点是事件', () {
       final regs = buildRegisteredTradeVariables(1);
       expect(regs.any((e) => e.variableId == 'RAW.K0.CLOSE'), isTrue);
       expect(regs.any((e) => e.variableId == 'RAW.K0.VOLUME'), isTrue);
@@ -40,10 +40,11 @@ void main() {
       // 成交量只登记 K0
       expect(regs.any((e) => e.variableId == 'RAW.K1.VOLUME'), isFalse);
 
+      // 一类买点已进公式（事件，不能拿去比较）
       final buy1 = lookupTradeVariable('STRUCTURE.K0.BUY1');
       expect(buy1, isNotNull);
-      expect(buy1!.expressionReady, isFalse);
-      expect(buy1.blockedReason, isNotNull);
+      expect(buy1!.expressionReady, isTrue);
+      expect(buy1.valueType, TradeValueType.event);
 
       final zsHigh = lookupTradeVariable('STRUCTURE.K2.ZS.HIGH');
       expect(zsHigh, isNotNull);

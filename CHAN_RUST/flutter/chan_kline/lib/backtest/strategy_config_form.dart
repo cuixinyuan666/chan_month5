@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../compute/math_series_freeze_store.dart';
 import '../models/kline_bar.dart';
 import '../models/level_models.dart';
+import 'chan_event_store.dart';
 import 'condition_ast.dart';
 import 'signal_data_catalog.dart';
 import 'strategy_compile.dart';
@@ -21,6 +22,7 @@ class StrategyConfigForm extends StatefulWidget {
   final List<KlineBar> bars;
   final List<LevelBundle> levels;
   final MathSeriesFreezeStore? mathFreeze;
+  final ChanEventStore chanEvents;
   final int asOf;
 
   const StrategyConfigForm({
@@ -33,6 +35,7 @@ class StrategyConfigForm extends StatefulWidget {
     this.bars = const [],
     this.levels = const [],
     this.mathFreeze,
+    this.chanEvents = ChanEventStore.empty,
     this.asOf = 0,
   });
 
@@ -82,6 +85,36 @@ class _LeafDraft {
     );
   }
 
+  factory _LeafDraft.fromLeaf(TradeAst ast, {int fallbackKn = 0}) {
+    if (ast is TradeEventAst) {
+      final kn = knFromVariableId(ast.variableId) ?? fallbackKn;
+      return _LeafDraft(
+        kn: kn,
+        leftId: ast.variableId,
+        op: TradeBinaryOp.eventExists,
+        rightIsConst: true,
+        rightId: rawOhlcId(kn, 'CLOSE'),
+        rightConst: 0,
+      );
+    }
+    if (ast is TradeCmpAst) {
+      return _LeafDraft.fromCmp(ast, fallbackKn: fallbackKn);
+    }
+    return _LeafDraft.fromCmp(kDefaultBollBuyAst, fallbackKn: fallbackKn);
+  }
+
+  bool get isEventLeft {
+    final def = lookupTradeVariable(leftId, maxKn: 32);
+    return def != null &&
+        def.expressionReady &&
+        def.valueType == TradeValueType.event;
+  }
+
+  TradeAst toNode() {
+    if (isEventLeft) return TradeEventAst(leftId);
+    return toCmp();
+  }
+
   TradeCmpAst toCmp() {
     final TradeValueRef right;
     if (rightIsConst) {
@@ -102,7 +135,8 @@ class _SideDraft {
   factory _SideDraft.fromAst(TradeAst ast, {int fallbackKn = 0}) {
     final flat = flattenAstChain(ast);
     final leaves = [
-      for (final c in flat.leaves) _LeafDraft.fromCmp(c, fallbackKn: fallbackKn),
+      for (final c in flat.leaves)
+        _LeafDraft.fromLeaf(c, fallbackKn: fallbackKn),
     ];
     if (leaves.isEmpty) {
       leaves.add(_LeafDraft.fromCmp(kDefaultBollBuyAst, fallbackKn: fallbackKn));
@@ -111,8 +145,8 @@ class _SideDraft {
   }
 
   TradeAst toAst() {
-    final cmps = [for (final l in leaves) l.toCmp()];
-    return foldAstChain(cmps, joins);
+    final nodes = [for (final l in leaves) l.toNode()];
+    return foldAstChain(nodes, joins);
   }
 }
 
@@ -367,6 +401,7 @@ class _StrategyConfigFormState extends State<StrategyConfigForm> {
   }) {
     final leaf = draft.leaves[index];
     final kn = leaf.kn.clamp(0, maxKn);
+    final eventLeft = leaf.isEventLeft;
     const ops = <TradeBinaryOp>[
       TradeBinaryOp.gt,
       TradeBinaryOp.lt,
@@ -375,6 +410,9 @@ class _StrategyConfigFormState extends State<StrategyConfigForm> {
       TradeBinaryOp.crossAbove,
       TradeBinaryOp.crossBelow,
     ];
+    final shownOps = eventLeft
+        ? const <TradeBinaryOp>[TradeBinaryOp.eventExists]
+        : ops;
     return Container(
       margin: const EdgeInsets.only(bottom: 4),
       padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
@@ -425,6 +463,12 @@ class _StrategyConfigFormState extends State<StrategyConfigForm> {
                   label: '左',
                   onId: (id) {
                     leaf.leftId = id;
+                    final def = lookupTradeVariable(id, maxKn: maxKn);
+                    if (def != null && def.valueType == TradeValueType.event) {
+                      leaf.op = TradeBinaryOp.eventExists;
+                    } else if (leaf.op == TradeBinaryOp.eventExists) {
+                      leaf.op = TradeBinaryOp.gt;
+                    }
                     setState(() {});
                     _emit();
                   },
@@ -435,21 +479,23 @@ class _StrategyConfigFormState extends State<StrategyConfigForm> {
                 width: 72,
                 child: DropdownButtonFormField<TradeBinaryOp>(
                   isExpanded: true,
-                  value: ops.contains(leaf.op) ? leaf.op : TradeBinaryOp.gt,
+                  value: shownOps.contains(leaf.op) ? leaf.op : shownOps.first,
                   decoration: _dec('关系'),
                   items: [
-                    for (final o in ops)
+                    for (final o in shownOps)
                       DropdownMenuItem(
                         value: o,
                         child: Text(tradeOpLabelCn(o)),
                       ),
                   ],
-                  onChanged: (v) {
-                    if (v == null) return;
-                    leaf.op = v;
-                    setState(() {});
-              _emit();
-                  },
+                  onChanged: eventLeft
+                      ? null
+                      : (v) {
+                          if (v == null) return;
+                          leaf.op = v;
+                          setState(() {});
+                          _emit();
+                        },
                 ),
               ),
               if (draft.leaves.length > 1)
@@ -476,6 +522,7 @@ class _StrategyConfigFormState extends State<StrategyConfigForm> {
               ),
             ],
           ),
+          if (!eventLeft) ...[
           const SizedBox(height: 6),
           Row(
             children: [
@@ -525,6 +572,7 @@ class _StrategyConfigFormState extends State<StrategyConfigForm> {
                         kn: kn,
                         maxKn: maxKn,
                         label: '变量',
+                        numericOnly: true,
                         onId: (id) {
                           leaf.rightId = id;
                           setState(() {});
@@ -534,6 +582,7 @@ class _StrategyConfigFormState extends State<StrategyConfigForm> {
               ),
             ],
           ),
+          ],
         ],
       ),
     );
@@ -545,8 +594,24 @@ class _StrategyConfigFormState extends State<StrategyConfigForm> {
     required int maxKn,
     required String label,
     required ValueChanged<String> onId,
+    bool numericOnly = false,
   }) {
-    final groups = groupedRegisteredVars(kn, maxKn);
+    var groups = groupedRegisteredVars(kn, maxKn);
+    if (numericOnly) {
+      groups = [
+        for (final g in groups)
+          if (g.fields.any((f) => f.valueType == TradeValueType.numeric))
+            TradeVarGroupSpec(
+              key: g.key,
+              label: g.label,
+              panel: g.panel,
+              fields: [
+                for (final f in g.fields)
+                  if (f.valueType == TradeValueType.numeric) f,
+              ],
+            ),
+      ];
+    }
     if (groups.isEmpty) {
       return Text(label, style: const TextStyle(fontSize: 12));
     }
@@ -611,6 +676,7 @@ class _StrategyConfigFormState extends State<StrategyConfigForm> {
       bars: widget.bars,
       levels: widget.levels,
       mathFreeze: widget.mathFreeze,
+      chanEvents: widget.chanEvents,
       maxKn: widget.maxKn < 0 ? 0 : widget.maxKn,
     );
     return Container(

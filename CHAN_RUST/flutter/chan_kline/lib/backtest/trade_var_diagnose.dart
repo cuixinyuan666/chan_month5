@@ -2,6 +2,7 @@ import '../compute/math_series_freeze_store.dart';
 import '../models/kline_bar.dart';
 import '../models/level_models.dart';
 import 'catalog_lookup.dart';
+import 'chan_event_store.dart';
 import 'signal_data_catalog.dart';
 import 'trade_clock.dart';
 import 'trade_value.dart';
@@ -27,6 +28,8 @@ class TradeVarDiagnosis {
   final EvalClockPoint? evalPoint;
   final int evalSampleCount;
   final String note;
+  final TradeChanEvent? lastEvent;
+  final int eventCount;
 
   const TradeVarDiagnosis({
     required this.variableId,
@@ -46,6 +49,8 @@ class TradeVarDiagnosis {
     required this.evalPoint,
     required this.evalSampleCount,
     required this.note,
+    this.lastEvent,
+    this.eventCount = 0,
   });
 
   String get text {
@@ -87,6 +92,16 @@ class TradeVarDiagnosis {
     buf.writeln();
     buf.writeln('冻结仓：');
     buf.writeln(freezePresent ? '有' : '没有（不会现场重算）');
+    if (lastEvent != null) {
+      buf.writeln();
+      buf.writeln('事件：');
+      buf.writeln(lastEvent!.eventId);
+      buf.writeln('discoveryX：K0 #${lastEvent!.discoveryX}');
+      buf.writeln('availableAt：K0 #${lastEvent!.availableAt}');
+      buf.writeln('label：${lastEvent!.label}');
+      buf.writeln('price：${_fmt(lastEvent!.price)}');
+      buf.writeln('截至当前首次发现次数：$eventCount');
+    }
     if (note.isNotEmpty) {
       buf.writeln();
       buf.writeln(note);
@@ -113,6 +128,7 @@ TradeVarDiagnosis diagnoseTradeVariable({
   required List<KlineBar> bars,
   List<LevelBundle> levels = const [],
   MathSeriesFreezeStore? mathFreeze,
+  ChanEventStore chanEvents = ChanEventStore.empty,
   int maxKn = 8,
 }) {
   final def = lookupTradeVariable(variableId, maxKn: maxKn);
@@ -122,6 +138,54 @@ TradeVarDiagnosis diagnoseTradeVariable({
     freezePresent = frozenPlotSeries(parsed: parsed, store: mathFreeze) != null;
   } else if (parsed?.panel == 'RAW') {
     freezePresent = true; // 原生成交量/OHLC 不走冻结仓
+  }
+
+  if (def != null &&
+      def.expressionReady &&
+      def.valueType == TradeValueType.event) {
+    final events = listTradeChanEvents(
+      variableId: variableId,
+      asOf: asOf,
+      store: chanEvents,
+      levels: levels,
+      maxKn: maxKn,
+    );
+    TradeChanEvent? last;
+    for (final e in events) {
+      if (e.availableAt <= asOf) last = e;
+    }
+    final hasHist = !chanEvents.isEmpty || events.isNotEmpty;
+    return TradeVarDiagnosis(
+      variableId: variableId,
+      displayName: def.displayName,
+      groupLabel: def.groupLabel,
+      panel: def.panel,
+      displayKn: def.displayKn,
+      clockFamily: def.clockFamily,
+      evalClock: def.evalClock,
+      plotClock: def.plotClock,
+      source: def.source,
+      description: def.description,
+      expressionReady: true,
+      freezePresent: hasHist,
+      plotValue: last == null
+          ? const TradeScalar.unavailable()
+          : TradeScalar.num(last.price),
+      plotAt: asOf,
+      evalPoint: last == null
+          ? null
+          : EvalClockPoint(
+              evalIndex: events.indexOf(last),
+              availableAt: last.availableAt,
+              value: last.price,
+            ),
+      evalSampleCount: events.length,
+      lastEvent: last,
+      eventCount: events.length,
+      note: last == null
+          ? '截至当前这根 K0，还没有首次发现。动态段后续 x 不会当成新的交易事件。'
+          : '这是稳定身份的首次发现边沿，不是持续状态。',
+    );
   }
 
   if (def == null || !def.expressionReady) {

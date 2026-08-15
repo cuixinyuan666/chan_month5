@@ -2,6 +2,16 @@
 
 > 口径/行为变更记录（复制排查用）；与 `lib/history/msg_history.dart` 常驻历史同步维护。
 
+## 2026-08-15 Phase7 缠论结构事件变量层 v1
+
+- **需求**：把最成熟的缠论事件做成可交易变量：一类/二类 BS、分型确认、中枢确认。不是持续 true，是发现边沿。
+- **不变**：缠论内核、BS 计算、步进冻结、K0 下一根开盘成交。不做 N 类、中枢高低、背驰、节奏、几何线、做空、加仓。
+- **登记**：`STRUCTURE.K{n}.BUY1/SELL1/BUY2/SELL2`、`SUB.K{n}.FRACTAL_CONFIRM`、`SUB.K{n}.ZS_CONFIRM`。读会话历史/确认列表的**稳定身份首次 x**；动态后续 x 仍留在图上历史，不重复出交易事件。未来 x>asOf 不进过去。
+- **AST**：新增 `EVENT_EXISTS`。事件只参与 AND/OR；`BUY1 > 0` / `CROSS(BUY1,X)` 编译期非法。一类买 + RSI 同 zsMath 合法；分型确认是连线钟，和 RSI AND 非法。
+- **综合**：买 `K1.BUY1 AND K1.RSI<50`；卖 `K1.SELL1 OR K1.MACD DIF 下穿 DEA`。
+- **验证**：`flutter test test/chan_event_var_test.dart test/signal_data_catalog_test.dart test/condition_ast_test.dart test/backtest_workbench_test.dart test/indicator_var_ext_test.dart`
+- **注意**：纯 Flutter；无需重编 DLL。引擎版本 `backtest-workbench-v4-chan-events`。
+
 ## 2026-08-15 Phase6 指标变量扩展层 v1
 
 - **需求**：条件树能搭，但可交易变量还只有 OHLC+布林。接入现有 MACD/RSI/KDJ 冻结仓和 K0 成交量，做成统一注册通道。

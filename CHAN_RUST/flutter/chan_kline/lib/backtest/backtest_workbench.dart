@@ -5,6 +5,7 @@ import '../models/kline_bar.dart';
 import '../models/level_models.dart';
 import 'backtest_report_panel.dart';
 import 'backtest_run.dart';
+import 'chan_event_store.dart';
 import 'order_models.dart';
 import 'signal_event.dart';
 import 'strategy_config.dart';
@@ -32,6 +33,7 @@ class BacktestWorkbench extends StatelessWidget {
   final int? focusX;
   final List<LevelBundle> levels;
   final MathSeriesFreezeStore? mathFreeze;
+  final ChanEventStore chanEvents;
 
   const BacktestWorkbench({
     super.key,
@@ -55,6 +57,7 @@ class BacktestWorkbench extends StatelessWidget {
     this.focusX,
     this.levels = const [],
     this.mathFreeze,
+    this.chanEvents = ChanEventStore.empty,
   });
 
   @override
@@ -117,6 +120,7 @@ class BacktestWorkbench extends StatelessWidget {
                       bars: bars,
                       levels: levels,
                       mathFreeze: mathFreeze,
+                      chanEvents: chanEvents,
                       asOf: currentStepIdx,
                     ),
                   ),

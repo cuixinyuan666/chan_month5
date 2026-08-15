@@ -24,3 +24,25 @@ class TradeScalar {
 
   bool get isAvailable => state == TradeTriState.available && value != null;
 }
+
+/// 结构事件（discovery edge）：一次发现一笔，不是持续 true。
+/// 身份走稳定键；discoveryX 是首次被系统知道的那根 K0。
+class TradeChanEvent {
+  final String eventId;
+  final int displayKn;
+  final int discoveryX;
+  final int availableAt;
+  final String label;
+  final double price;
+  final String source;
+
+  const TradeChanEvent({
+    required this.eventId,
+    required this.displayKn,
+    required this.discoveryX,
+    required this.availableAt,
+    required this.label,
+    required this.price,
+    required this.source,
+  });
+}
