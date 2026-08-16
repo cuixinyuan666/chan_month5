@@ -5,6 +5,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../backtest/order_models.dart';
 import '../backtest/signal_event.dart';
 import '../backtest/strategy_signal_painter.dart';
 import '../compute/k0_combine_compute.dart';
@@ -148,6 +149,7 @@ class KlineChart extends StatefulWidget {
     this.chipOnlyMode = false,
     this.lookupEngine,
     this.strategySignals = const [],
+    this.strategyFills = const [],
     this.highlightedStrategyIds = const {},
     this.focusBarIdx,
     this.focusBarEpoch = 0,
@@ -238,8 +240,9 @@ class KlineChart extends StatefulWidget {
   /// 会话增量 Lookup；Painter / 十字 / chip 复用同一份，禁止各画一次 Full build。
   final IncrementalBarFeatureLookup? lookupEngine;
 
-  /// 策略买/卖点：只画 BacktestResult.signals，与缠论 1Ba 分开。
+  /// 策略买/卖点：有成交才画，位置用成交根；与缠论 1Ba 分开。
   final List<SignalEvent> strategySignals;
+  final List<Fill> strategyFills;
   final Set<String> highlightedStrategyIds;
   /// 报告点交易时把这根 K 滚进视窗
   final int? focusBarIdx;
@@ -1132,6 +1135,7 @@ class _KlineChartState extends State<KlineChart> {
       plotTop: plotTop,
       plotH: plotH,
       asOf: asOf,
+      fills: widget.strategyFills,
     );
     if (hit == null) return false;
     widget.onStrategySignalTap!(hit.signal);
@@ -1505,6 +1509,7 @@ class _KlineChartState extends State<KlineChart> {
                   painter: StrategySignalPainter(
                     bars: widget.bars,
                     signals: widget.strategySignals,
+                    fills: widget.strategyFills,
                     highlightedIds: widget.highlightedStrategyIds,
                     viewport: _viewport,
                     priceRange: priceRange,

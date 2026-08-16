@@ -205,6 +205,8 @@ Future<void> main() async {
   MsgHistory.instance.appendTradeZsObjects();
   MsgHistory.instance.appendTradeDivergenceRelations();
   MsgHistory.instance.appendTradeChanComplete();
+  MsgHistory.instance.appendTradeEventPulse();
+  MsgHistory.instance.appendTradeSignalDisplay();
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     await windowManager.ensureInitialized();
     const opts = WindowOptions(
@@ -2270,7 +2272,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       '已走到K${scope.asOfX}；'
       '净利${m.netProfit.toStringAsFixed(2)} 胜率${m.winRate.display} '
       '最大回撤${m.maxDrawdown.toStringAsFixed(2)}。'
-      '图上策买/策卖来自这一次结果，不是缠论1Ba。',
+      '图上策买/策卖画在发现当根，被拒的不画；成交在下一根开盘。',
     );
     _showSnack('回测完成：闭合 ${m.totalTrades} 笔');
   }
@@ -2304,9 +2306,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
 
   void _applySignalSelection(SignalEvent s, {required bool openChain}) {
     final result = _backtestRun?.result;
-    final trade = result == null
-        ? null
-        : BacktestLinkIndex(result).tradeForSignal(s.signalId);
+    final link = result == null ? null : BacktestLinkIndex(result);
+    final trade = link?.tradeForSignal(s.signalId);
     setState(() {
       _backtestPanelOpen = true;
       _btSelectedSignalId = s.signalId;
@@ -2332,14 +2333,17 @@ class _KlineHomePageState extends State<KlineHomePage> {
             '多条之间用 AND / OR。左右可以是同一层的收开高低、布林三轨、'
             'MACD（DIF/DEA/柱）、RSI、KDJ，K0 还可以用成交量；右边也可以填常数。'
             '也可以选一类/二类买卖点、分型确认、中枢确认、背驰出现：这些是「出现一次」的事件，'
+            '每颗点当根出一次信号，连着两颗确认不会把后面那颗吞掉。'
             '只能和同层同钟的条件用 AND/OR 拼，不能拿去比较或上穿下穿。'
+            '买卖都选分型确认时，同一根先平后开：空仓只开，有仓先平再开。'
             '确认中枢的高/低/中轴是数值：先认定「当前这层最新一个已经确认的中枢」，再取当时能看见的高低，'
             '不是事后扩大后的末态。没有确认中枢就是不可用，不会当成 0。'
             '背驰是「哪一个结构对比哪一个结构、在哪根 K 被发现」的关系，不是一根 K 看起来像背驰。'
             '力度比可以拿去和数字比，方向只能选向上或向下，不能把整个背驰拿去比大小或上穿下穿。'
             '同一条比较必须同层同钟，K0 和 K1 不能拼在同一棵树上。'
             '成交量这一版只开放 K0，没有另造 Kn 成交量和均量。\n\n'
-            '点运行后，图上出现「策买/策卖」，这是策略信号，不是缠论的 1Ba/1Sa。'
+            '点运行后，图上「策买/策卖」画在发现当根，被拒的不画（例如空仓时的卖）。'
+            '真正成交在下一根开盘：交易明细写成交K和该根时间，并注明信号K。这不是缠论的 1Ba/1Sa。'
             '报告里的净利润、胜率、盈亏比、回撤都来自这一次回测结果，界面不会再算一遍。'
             '左侧变量诊断只读图上已冻住的格子和计算钟样本，不会现场重算指标。\n\n'
             '点交易明细会跳到入场 K，再点同一笔会跳到出场 K。'
@@ -2420,6 +2424,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       onLongPressReload: _busy ? null : _loadKlines,
       onLongPressRunToEnd: gesturesOn ? _runToEnd : null,
       strategySignals: _backtestRun?.result?.signals ?? const [],
+      strategyFills: _backtestRun?.result?.fills ?? const [],
       highlightedStrategyIds: _btHighlightIds,
       focusBarIdx: _btFocusBarIdx,
       focusBarEpoch: _btFocusEpoch,

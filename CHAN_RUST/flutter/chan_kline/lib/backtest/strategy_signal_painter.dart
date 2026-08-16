@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../models/kline_bar.dart';
 import '../widgets/kline_viewport.dart';
+import 'order_models.dart';
 import 'signal_event.dart';
 
 /// 策略买卖点颜色：刻意不用缠论 1Ba/1Sa 的红绿。
@@ -26,6 +27,18 @@ class StrategyMarkerHit {
   const StrategyMarkerHit(this.signal, this.center);
 }
 
+/// 图上画在发现根：有成交才画；被拒/过期不画；无成交列表时仍画发现根（单测）。
+int? strategyMarkerPlotX({
+  required SignalEvent signal,
+  List<Fill> fills = const [],
+}) {
+  if (fills.isEmpty) return signal.discoveryX;
+  for (final f in fills) {
+    if (f.signalId == signal.signalId) return signal.discoveryX;
+  }
+  return null;
+}
+
 /// 主图策略点位置：只消费 SignalEvent，不重算穿越。
 Offset? strategyMarkerCenter({
   required SignalEvent signal,
@@ -35,15 +48,17 @@ Offset? strategyMarkerCenter({
   required double canvasW,
   required double plotTop,
   required double plotH,
+  List<Fill> fills = const [],
 }) {
   if (signal.side == null) return null;
-  final bar = klineBarByIdx(bars, signal.discoveryX);
+  final x = strategyMarkerPlotX(signal: signal, fills: fills);
+  if (x == null) return null;
+  final bar = klineBarByIdx(bars, x);
   if (bar == null) return null;
-  if (signal.discoveryX < viewport.viewXMin - 1 ||
-      signal.discoveryX > viewport.viewXMax + 1) {
+  if (x < viewport.viewXMin - 1 || x > viewport.viewXMax + 1) {
     return null;
   }
-  final cx = viewport.barCenterX(signal.discoveryX, canvasW);
+  final cx = viewport.barCenterX(x, canvasW);
   final isBuy = signal.side == TradeSide.buy;
   final y = isBuy
       ? priceRange.yOf(bar.low, plotTop, plotH) + 10
@@ -62,12 +77,15 @@ StrategyMarkerHit? hitTestStrategySignal({
   required double plotH,
   int? asOf,
   double slop = 16,
+  List<Fill> fills = const [],
 }) {
   StrategyMarkerHit? best;
   var bestD = slop;
   for (final s in signals) {
     if (s.side == null) continue;
-    if (asOf != null && s.discoveryX > asOf) continue;
+    final x = strategyMarkerPlotX(signal: s, fills: fills);
+    if (x == null) continue;
+    if (asOf != null && x > asOf) continue;
     final c = strategyMarkerCenter(
       signal: s,
       bars: bars,
@@ -76,6 +94,7 @@ StrategyMarkerHit? hitTestStrategySignal({
       canvasW: canvasW,
       plotTop: plotTop,
       plotH: plotH,
+      fills: fills,
     );
     if (c == null) continue;
     final d = (c - local).distance;
@@ -91,21 +110,31 @@ StrategyMarkerHit? hitTestStrategySignal({
 class StrategySignalPainter extends CustomPainter {
   final List<KlineBar> bars;
   final List<SignalEvent> signals;
+  final List<Fill> fills;
   final Set<String> highlightedIds;
   final KlineViewport viewport;
   final PriceRange priceRange;
   final double mainH;
   final int? asOf;
+  /// 视口是可变对象：平移时同一份被改掉，必须把当时的窗拷下来，否则点不跟 K 线走。
+  final double _viewXMin;
+  final double _viewXMax;
+  final double _yZoom;
+  final double _yShift;
 
   StrategySignalPainter({
     required this.bars,
     required this.signals,
+    this.fills = const [],
     required this.highlightedIds,
     required this.viewport,
     required this.priceRange,
     required this.mainH,
     this.asOf,
-  });
+  })  : _viewXMin = viewport.viewXMin,
+        _viewXMax = viewport.viewXMax,
+        _yZoom = viewport.yZoomRatio,
+        _yShift = viewport.yShiftRatio;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -116,7 +145,9 @@ class StrategySignalPainter extends CustomPainter {
     final tp = TextPainter(textDirection: TextDirection.ltr);
     for (final s in signals) {
       if (s.side == null) continue;
-      if (cut != null && s.discoveryX > cut) continue;
+      final x = strategyMarkerPlotX(signal: s, fills: fills);
+      if (x == null) continue;
+      if (cut != null && x > cut) continue;
       final c = strategyMarkerCenter(
         signal: s,
         bars: bars,
@@ -125,6 +156,7 @@ class StrategySignalPainter extends CustomPainter {
         canvasW: size.width,
         plotTop: plotTop,
         plotH: plotH,
+        fills: fills,
       );
       if (c == null) continue;
       final buy = s.side == TradeSide.buy;
@@ -175,12 +207,15 @@ class StrategySignalPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant StrategySignalPainter old) {
     return old.signals != signals ||
+        old.fills != fills ||
         old.highlightedIds != highlightedIds ||
         old.bars != bars ||
         old.mainH != mainH ||
         old.asOf != asOf ||
-        old.viewport.viewXMin != viewport.viewXMin ||
-        old.viewport.viewXMax != viewport.viewXMax ||
+        old._viewXMin != _viewXMin ||
+        old._viewXMax != _viewXMax ||
+        old._yZoom != _yZoom ||
+        old._yShift != _yShift ||
         old.priceRange.min != priceRange.min ||
         old.priceRange.max != priceRange.max;
   }

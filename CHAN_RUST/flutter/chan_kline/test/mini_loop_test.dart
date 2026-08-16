@@ -137,6 +137,48 @@ void main() {
       expect(r.trades, isEmpty);
     });
 
+    test('同一根既买又卖：先平后开（空仓只开，有仓先平再开）', () {
+      final bars = [
+        for (var i = 0; i <= 12; i++) _bar(i, 10, open: 10.0 + i),
+      ];
+      // 7 空仓：卖拒绝、买成交在 8；8 有仓：先卖平再买开，都在 9 成交
+      final r = runMiniLoopFromSignals(
+        signals: [
+          _sig(id: 'b7', side: TradeSide.buy, discoveryX: 7),
+          _sig(id: 's7', side: TradeSide.sell, discoveryX: 7),
+          _sig(id: 'b8', side: TradeSide.buy, discoveryX: 8),
+          _sig(id: 's8', side: TradeSide.sell, discoveryX: 8),
+        ],
+        bars: bars,
+        quantity: 100,
+        initialCash: 100000,
+      );
+      expect(
+        r.orders
+            .firstWhere((o) => o.signalId == 's7')
+            .status,
+        OrderStatus.rejected,
+      );
+      expect(
+        r.orders.firstWhere((o) => o.signalId == 's7').rejectReason,
+        '没有仓位SELL',
+      );
+      expect(r.fills.length, 3);
+      expect(r.fills[0].signalId, 'b7');
+      expect(r.fills[0].side, TradeSide.buy);
+      expect(r.fills[0].executeX, 8);
+      expect(r.fills[1].signalId, 's8');
+      expect(r.fills[1].side, TradeSide.sell);
+      expect(r.fills[1].executeX, 9);
+      expect(r.fills[2].signalId, 'b8');
+      expect(r.fills[2].side, TradeSide.buy);
+      expect(r.fills[2].executeX, 9);
+      expect(r.trades.length, 1);
+      expect(r.trades.single.entryX, 8);
+      expect(r.trades.single.exitX, 9);
+      expect(r.account.isLong, isTrue);
+    });
+
     test('K1 CROSS 仍映射到真实 K0 executionX；displayKn 不改变成交钟', () {
       final bars = [
         for (var i = 0; i <= 20; i++) _bar(i, 10, open: 50.0 + i),

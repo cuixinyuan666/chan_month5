@@ -2,6 +2,23 @@
 
 > 口径/行为变更记录（复制排查用）；与 `lib/history/msg_history.dart` 常驻历史同步维护。
 
+## 2026-08-17 策买画在发现根；被拒不画；拖动跟着走
+
+- **需求**：图上策买和交易买入时间对得上；拖动 K 线时绿/紫三角跟着蜡烛走。
+- **不变**：撮合仍是发现当根、下一根开盘成交、同一根先平后开。不改缠论内核。
+- **显示**：有成交才画策买/策卖，位置在发现根；被拒不画。交易明细写成交K和时间，并注明信号K。
+- **拖动**：策略点图层把当时视窗拷下来再比是否重画，避免和蜡烛不同步。
+- **注意**：纯 Flutter；无需重编 DLL。
+
+## 2026-08-16 事件脉冲 + 同一根先平后开（对齐金字塔）
+
+- **需求**：分型确认等事件按当根脉冲出信号；连着两颗不同确认（如 K0 7 和 8）都认。同一根既买又卖时先平后开。状态比较仍假变真。
+- **不变**：缠论内核、冻结、K0 下一根开盘成交、只做多单仓。不拆顶/底确认积木。不做空、加仓、当根收盘成交。
+- **信号**：`EVENT_EXISTS` 当根各打一次；`CLOSE>均线` 等比较仍假变真。同一分型动态后续 x 仍只认首次。
+- **撮合**：同一根发现先处理卖再处理买。空仓卖拒绝、只开；有仓先平成交再开。
+- **验证**：`flutter test test/chan_event_var_test.dart test/mini_loop_test.dart test/condition_ast_test.dart`
+- **注意**：纯 Flutter；无需重编 DLL。引擎版本 `backtest-workbench-v8-event-pulse`。
+
 ## 2026-08-16 Phase10～15 缠论交易变量与策略回测基础设施收口
 
 - **需求**：N 类事件 `BUY_N(class)`/`SELL_N(class)`；统一 StructureObject/Relation/Projection/Event；条件树 v2 类型与 ConditionTrace；RulePerformance 归因；BacktestRunContext；6+1 条标准策略回归。禁止重复实现 Phase8/9。

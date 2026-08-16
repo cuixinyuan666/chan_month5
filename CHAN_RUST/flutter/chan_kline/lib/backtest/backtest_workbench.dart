@@ -138,7 +138,7 @@ class BacktestWorkbench extends StatelessWidget {
                   child: run == null
                       ? const Center(
                           child: Text(
-                            '搭好买卖条件后点运行回测。图上的策买/策卖来自这一次结果，不会另算一遍。',
+                            '搭好买卖条件后点运行回测。图上策买/策卖画在发现当根，被拒的不画。',
                             style: TextStyle(color: Color(0xFF94A3B8), fontSize: 13),
                           ),
                         )

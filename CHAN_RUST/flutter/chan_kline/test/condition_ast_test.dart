@@ -126,7 +126,7 @@ void main() {
     });
   });
 
-  group('AST 求值（计算钟，假变真才出信号）', () {
+  group('AST 求值（状态假变真；事件当根脉冲）', () {
     test('变量 vs 常数：CLOSE > 10 只在假变真时打一次', () {
       final bars = [
         _bar(0, 8),

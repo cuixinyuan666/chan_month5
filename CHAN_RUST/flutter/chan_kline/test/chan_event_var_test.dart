@@ -402,6 +402,100 @@ void main() {
     });
   });
 
+  group('事件脉冲（对齐金字塔 CROSS）', () {
+    test('连着两颗不同分型确认都出信号，不像收盘大于均线那样只打第一次', () {
+      final bars = _bars(12);
+      final store = ChanEventStore(
+        k0FractalConfirms: const [
+          K0ConfirmSignal(
+            x: 7,
+            fx: 'BOTTOM',
+            value: 1,
+            fractalX1: 5,
+            fractalX2: 6,
+          ),
+          K0ConfirmSignal(
+            x: 8,
+            fx: 'TOP',
+            value: -1,
+            fractalX1: 6,
+            fractalX2: 7,
+          ),
+        ],
+      );
+      final compiled = compileConditionAst(
+        const TradeEventAst('SUB.K0.FRACTAL_CONFIRM'),
+      ) as CondCompileOk;
+      final ev = evalCompiledCond(
+        cond: compiled.root,
+        side: TradeSide.buy,
+        ruleId: 'ast_buy',
+        ctx: CondEvalCtx(
+          asOf: 11,
+          bars: bars,
+          chanEvents: store,
+        ),
+      );
+      expect(ev.map((e) => e.discoveryX).toList(), [7, 8]);
+    });
+
+    test('买卖都用分型确认：7 开仓，8 先平再开；成交在下一根开盘', () {
+      final bars = _bars(12);
+      final store = ChanEventStore(
+        k0FractalConfirms: const [
+          K0ConfirmSignal(
+            x: 7,
+            fx: 'BOTTOM',
+            value: 1,
+            fractalX1: 5,
+            fractalX2: 6,
+          ),
+          K0ConfirmSignal(
+            x: 8,
+            fx: 'TOP',
+            value: -1,
+            fractalX1: 6,
+            fractalX2: 7,
+          ),
+        ],
+      );
+      final run = executeStrategyBacktest(
+        config: const StrategyConfig(
+          buyAst: TradeEventAst('SUB.K0.FRACTAL_CONFIRM'),
+          sellAst: TradeEventAst('SUB.K0.FRACTAL_CONFIRM'),
+          quantity: 100,
+          initialCapital: 100000,
+        ),
+        scope: _scope(11),
+        bars: bars,
+        mathFreeze: MathSeriesFreezeStore(),
+        chanEvents: store,
+      );
+      expect(run.ok, isTrue, reason: run.error);
+      final buys = run.result!.signals
+          .where((s) => s.side == TradeSide.buy)
+          .map((s) => s.discoveryX)
+          .toList();
+      final sells = run.result!.signals
+          .where((s) => s.side == TradeSide.sell)
+          .map((s) => s.discoveryX)
+          .toList();
+      expect(buys, [7, 8]);
+      expect(sells, [7, 8]);
+      expect(run.result!.fills.length, 3);
+      expect(run.result!.fills[0].side, TradeSide.buy);
+      expect(run.result!.fills[0].executeX, 8);
+      expect(run.result!.fills[1].side, TradeSide.sell);
+      expect(run.result!.fills[1].executeX, 9);
+      expect(run.result!.fills[2].side, TradeSide.buy);
+      expect(run.result!.fills[2].executeX, 9);
+      expect(run.result!.trades.length, 1);
+      expect(run.result!.trades.single.entryX, 8);
+      expect(run.result!.trades.single.exitX, 9);
+      expect(run.result!.openPosition, isNotNull);
+    });
+  });
+
   group('综合策略：一类买 + RSI / 一类卖 OR MACD', () {
     test('K1.BUY1 AND RSI<50 → 下一根开盘成交；动态后续不重复买', () {
       final bars = [

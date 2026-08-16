@@ -1329,6 +1329,33 @@ class MsgHistory {
     );
   }
 
+  /// 事件脉冲 + 同一根先平后开（对齐金字塔 CROSS / 平仓在前）
+  static bool _tradeEventPulseLogged = false;
+  void appendTradeEventPulse() {
+    if (_tradeEventPulseLogged) return;
+    _tradeEventPulseLogged = true;
+    append(
+      '【事件脉冲·先平后开·2026-08-16】分型确认、一类买点这类「出现」条件，'
+      '按当根脉冲出信号：连着两颗不同确认（例如 K0 7 和 8）各打一次，不再用假变真把第二颗吞掉。'
+      '同一分型动态段后面几根还挂着，仍只认第一次。'
+      '收盘大于均线这类状态比较，继续假变真，避免条件一直成立就每根都买。'
+      '同一根既有买又有卖：先平后开（空仓只开，有仓先平再开）。成交仍是下一根 K0 开盘。'
+      '未拆顶确认/底确认积木；未做做空、加仓、当根收盘成交。',
+    );
+  }
+
+  /// 策买画在发现根；被拒不画；交易写成交时间；拖动跟着 K 线
+  static bool _tradeSignalDisplayLogged = false;
+  void appendTradeSignalDisplay() {
+    if (_tradeSignalDisplayLogged) return;
+    _tradeSignalDisplayLogged = true;
+    append(
+      '【策买显示·2026-08-17】图上策买/策卖画在发现当根，被拒的不画（空仓时的卖不出现紫三角）。'
+      '真正成交在下一根开盘：交易明细写成交那根的时间和K号，并注明信号在哪根，方便和图上的绿/紫三角对上。'
+      '拖动或缩放 K 线时，策买/策卖跟着蜡烛走，不再停在原地。',
+    );
+  }
+
   /// 运行时虚线摘要（内容变才追加；复制历史记录排查用）。
   void appendDisplayBuildingLinesRuntime({
     required int kn,

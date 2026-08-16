@@ -304,7 +304,9 @@ class _BoolPt {
   });
 }
 
-/// 在 evalClock 上求值 → 布尔序列 → 假变真出信号。界面不再算一遍。
+/// 在 evalClock 上求值 → 布尔序列 → 出信号。界面不再算一遍。
+/// 状态比较（收盘>均线）：假变真，连着真只打第一次。
+/// 分型确认等事件：当根脉冲，连着两颗各打一次（对齐金字塔 CROSS）。
 List<SignalEvent> evalCompiledCond({
   required CompiledCond cond,
   required TradeSide side,
@@ -318,7 +320,9 @@ List<SignalEvent> evalCompiledCond({
   for (var i = 0; i < series.length; i++) {
     final prev = i == 0 ? false : series[i - 1].flag;
     final curr = series[i];
-    if (prev || !curr.flag) continue;
+    if (!curr.flag) continue;
+    // 事件当根各打一次；比较/穿越仍假变真
+    if (curr.op != TradeBinaryOp.eventExists && prev) continue;
     out.add(SignalEvent(
       signalId: 'sig-${side.name}-${curr.availableAt}-${curr.evalIndex}',
       ruleId: ruleId,
@@ -676,6 +680,9 @@ TradeBinaryOp _preferCrossOp(_BoolPt a, _BoolPt b) {
   if (b.flag && b.op == TradeBinaryOp.eventExists) return b.op;
   if (a.flag && _isPulseOp(a.op)) return a.op;
   if (b.flag && _isPulseOp(b.op)) return b.op;
+  // 真值来自状态比较时，不要把事件/穿越的 op 粘到整段 true 上
+  if (a.flag) return a.op;
+  if (b.flag) return b.op;
   return a.op;
 }
 

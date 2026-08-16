@@ -232,6 +232,107 @@ void main() {
       );
       expect(hit?.signal.signalId, 'b1');
     });
+
+    test('有成交时画在发现根，被拒不画', () {
+      final bars = [
+        for (var i = 0; i < 5; i++)
+          KlineBar(
+            idx: i,
+            timeMs: i,
+            timeText: '$i',
+            open: 10,
+            high: 11,
+            low: 9,
+            close: 10,
+            volume: 1,
+            amount: 1,
+          ),
+      ];
+      final vp = KlineViewport()..resetForBarCount(5);
+      final pr = vp.priceRangeFor(bars);
+      final buy = _sig('b1', TradeSide.buy, 2);
+      final sell = _sig('s1', TradeSide.sell, 2);
+      const fills = [
+        Fill(
+          fillId: 'F1',
+          orderId: 'O1',
+          signalId: 'b1',
+          side: TradeSide.buy,
+          quantity: 1,
+          price: 10,
+          executeX: 3,
+        ),
+      ];
+      expect(strategyMarkerPlotX(signal: buy, fills: fills), 2);
+      expect(strategyMarkerPlotX(signal: sell, fills: fills), isNull);
+      final c = strategyMarkerCenter(
+        signal: buy,
+        bars: bars,
+        viewport: vp,
+        priceRange: pr,
+        canvasW: 500,
+        plotTop: 28,
+        plotH: 200,
+        fills: fills,
+      );
+      expect(c, isNotNull);
+      expect(c!.dx, closeTo(vp.barCenterX(2, 500), 0.5));
+      final rejected = strategyMarkerCenter(
+        signal: sell,
+        bars: bars,
+        viewport: vp,
+        priceRange: pr,
+        canvasW: 500,
+        plotTop: 28,
+        plotH: 200,
+        fills: fills,
+      );
+      expect(rejected, isNull);
+      final hit = hitTestStrategySignal(
+        local: c,
+        signals: [buy, sell],
+        bars: bars,
+        viewport: vp,
+        priceRange: pr,
+        canvasW: 500,
+        plotTop: 28,
+        plotH: 200,
+        fills: fills,
+      );
+      expect(hit?.signal.signalId, 'b1');
+    });
+
+    test('平移视口后策略点应重绘（窗已拷贝，不跟共享对象比）', () {
+      final bars = [
+        for (var i = 0; i < 5; i++)
+          KlineBar(
+            idx: i,
+            timeMs: i,
+            timeText: '$i',
+            open: 10,
+            high: 11,
+            low: 9,
+            close: 10,
+            volume: 1,
+            amount: 1,
+          ),
+      ];
+      final vp = KlineViewport()..resetForBarCount(5);
+      final pr = vp.priceRangeFor(bars);
+      StrategySignalPainter make() => StrategySignalPainter(
+            bars: bars,
+            signals: [_sig('b1', TradeSide.buy, 2)],
+            highlightedIds: const {},
+            viewport: vp,
+            priceRange: pr,
+            mainH: 200,
+          );
+      final a = make();
+      vp.viewXMin += 1.2;
+      vp.viewXMax += 1.2;
+      final b = make();
+      expect(b.shouldRepaint(a), isTrue);
+    });
   });
 
   group('配置 UI 条件构建器', () {

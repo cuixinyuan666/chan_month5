@@ -36,9 +36,9 @@ BacktestResult runMiniLoopFromSignals({
     ..sort((a, b) {
       final c = a.discoveryX.compareTo(b.discoveryX);
       if (c != 0) return c;
-      // 同一根：先买后卖，拒绝规则仍按当时仓位显式处理
-      final aw = a.side == TradeSide.buy ? 0 : 1;
-      final bw = b.side == TradeSide.buy ? 0 : 1;
+      // 同一根：先平后开（对齐金字塔：平仓写在开仓前面）
+      final aw = a.side == TradeSide.sell ? 0 : 1;
+      final bw = b.side == TradeSide.sell ? 0 : 1;
       return aw.compareTo(bw);
     });
 

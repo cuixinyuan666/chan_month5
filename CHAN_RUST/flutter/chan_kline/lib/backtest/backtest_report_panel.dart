@@ -214,13 +214,20 @@ class BacktestReportPanel extends StatelessWidget {
         ),
       );
     }
+    final link = BacktestLinkIndex(result);
     return ListView.builder(
       itemCount: result.trades.length,
       itemBuilder: (ctx, i) {
         final t = result.trades[i];
         final on = t.tradeId == selectedTradeId;
+        final entrySig = link.entrySignalOf(t);
+        final exitSig = link.exitSignalOf(t);
         final entryT = _time(t.entryX);
         final exitT = _time(t.exitX);
+        final entrySigK =
+            entrySig == null ? '' : '（信号K${entrySig.discoveryX}）';
+        final exitSigK =
+            exitSig == null ? '' : '（信号K${exitSig.discoveryX}）';
         return ListTile(
           dense: true,
           selected: on,
@@ -233,7 +240,8 @@ class BacktestReportPanel extends StatelessWidget {
             ),
           ),
           subtitle: Text(
-            '入 $entryT @${t.entryPrice.toStringAsFixed(3)}  →  出 $exitT @${t.exitPrice.toStringAsFixed(3)}\n'
+            '入 成交K${t.entryX} $entryT$entrySigK @${t.entryPrice.toStringAsFixed(3)}  →  '
+            '出 成交K${t.exitX} $exitT$exitSigK @${t.exitPrice.toStringAsFixed(3)}\n'
             '量${t.quantity}  毛${formatMoney(t.grossPnL)}  费${formatMoney(t.commission)}  滑${formatMoney(t.slippage)}',
             style: const TextStyle(fontSize: 11),
           ),

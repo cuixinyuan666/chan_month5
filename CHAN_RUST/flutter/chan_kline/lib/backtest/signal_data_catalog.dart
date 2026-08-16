@@ -444,11 +444,11 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
           : 'LevelBundle.level==kn confirms 首次确认',
       unit: 'event',
       futureSafe: true,
-      availabilityNote: '确认事件不等于当前已确认分型列表',
+      availabilityNote: '每颗确认当根出一次；连着的第二颗也出，不按假变真吞掉',
       groupKey: 'fxConfirm',
       groupLabel: '分型确认',
       fieldLabel: '确认',
-      description: 'EVENT_EXISTS；连线钟，不能和布林/RSI 直接 AND',
+      description: 'EVENT_EXISTS；当根脉冲；连线钟，不能和布林/RSI 直接 AND',
     ));
     out.add(TradeVariableDef(
       variableId: 'SUB.K$kn.ZS_CONFIRM',

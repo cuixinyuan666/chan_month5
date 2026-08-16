@@ -1,0 +1,44 @@
+{
+  "id": "2026-08-16-pyramid-event-pulse",
+  "title": "分型确认连着两颗都认；同一根先平后开",
+  "completedAt": "2026-08-16",
+  "agent": "cursor",
+  "isNewFeature": false,
+  "beforeSummary": "原本：买卖都选分型确认时，副图 7、8 都有点，回测只打 7，8 被假变真吞掉；同一根还先开再平。",
+  "afterSummary": "这次：每颗分型确认当根出一次信号，7 和 8 都认。同一根先平后开。图上策买画在发现那根，被拒的卖不画。交易写成交时间和信号在哪根。拖动时三角跟着 K 线走。",
+  "verificationPoints": [
+    "默认 002003 分笔，连续单步走到第 8、9 根，副图 7、8 都有分型确认",
+    "策略回测买和卖都选 K0 分型确认",
+    "7 应看到策买、看不到策卖；8 应看到策卖和策买",
+    "交易第一笔买入时间是第 8 根，并注明信号在第 7 根；拖动图时三角跟着蜡烛走"
+  ],
+  "keySteps": [7, 8, 9],
+  "defaultStock": {
+    "code": "002003",
+    "period": "tick",
+    "note": "默认股票分笔，连续单步到 8、9 后打开策略回测"
+  },
+  "autoLaunchOnStartup": true,
+  "walkthroughSteps": [
+    {
+      "stepIdx": 7,
+      "phase": "before",
+      "caption": "原本：走到第 7 根，副图有分型确认，回测会在这里开仓又立刻平掉"
+    },
+    {
+      "stepIdx": 7,
+      "phase": "after",
+      "caption": "这次：第 7 根空仓，只开仓，不平"
+    },
+    {
+      "stepIdx": 8,
+      "phase": "before",
+      "caption": "原本：第 8 根副图也有确认点，但回测不再出信号"
+    },
+    {
+      "stepIdx": 8,
+      "phase": "after",
+      "caption": "这次：第 8 根先平掉第 7 根开的仓，再开新仓。成交在下一根开盘"
+    }
+  ]
+}
