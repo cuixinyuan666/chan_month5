@@ -10,6 +10,7 @@ import 'divergence_relation_store.dart';
 import 'signal_data_catalog.dart';
 import 'strategy_compile.dart';
 import 'strategy_config.dart';
+import 'trade_clock.dart';
 import 'trade_operand.dart';
 import 'trade_var_diagnose.dart';
 import 'zhongshu_object_store.dart';
@@ -309,6 +310,36 @@ class _StrategyConfigFormState extends State<StrategyConfigForm> {
             Expanded(child: _field('手续费率', _fee)),
             const SizedBox(width: 8),
             Expanded(child: _field('滑点价差', _slip)),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(
+              child: DropdownButtonFormField<TradeFillPriceMode>(
+                isExpanded: true,
+                value: widget.config.fillPriceMode,
+                decoration: _dec('成交价格（买/卖共用）'),
+                items: [
+                  for (final mode in TradeFillPriceMode.values)
+                    DropdownMenuItem(
+                      value: mode,
+                      child: Text(tradeFillPriceModeLabel(mode)),
+                    ),
+                ],
+                onChanged: (v) {
+                  if (v == null) return;
+                  widget.onChanged(
+                    _readNums(widget.config.copyWith(fillPriceMode: v)),
+                  );
+                },
+              ),
+            ),
+            IconButton(
+              tooltip: '成交价格说明',
+              onPressed: () => _showFillPriceHelp(context),
+              icon: const Icon(Icons.help_outline, size: 20),
+            ),
           ],
         ),
         const SizedBox(height: 10),
@@ -765,6 +796,32 @@ class _StrategyConfigFormState extends State<StrategyConfigForm> {
       isDense: true,
       border: const OutlineInputBorder(),
       contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+    );
+  }
+
+  Future<void> _showFillPriceHelp(BuildContext context) async {
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('成交价格怎么选'),
+        content: const SingleChildScrollView(
+          child: Text(
+            '买点或卖点条件在第 N 根 K0 成立时，按下面规则撮合（买、卖共用同一选项）：\n\n'
+            '· 本周期收盘价（默认）：在第 N 根按收盘价成交。'
+            '信号当步已知、图上买1/卖1也在第 N 根，和交易明细的成交K一致。\n\n'
+            '· 次周期开盘价：在第 N+1 根按开盘价成交。'
+            '更保守；若后面没有下一根 K0，则该信号无法成交。\n\n'
+            '滑点仍加在选定的原始价上；同一根既有买又有卖时仍先平后开。',
+            style: TextStyle(fontSize: 13, height: 1.45),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('知道了'),
+          ),
+        ],
+      ),
     );
   }
 

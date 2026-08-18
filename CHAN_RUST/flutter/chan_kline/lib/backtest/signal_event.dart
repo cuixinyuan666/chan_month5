@@ -25,7 +25,7 @@ class SignalEvent {
   final int displayKn;
   final TradeClockFamily clockFamily;
   final int evalIndex;
-  /// 发现当根 K0（与 availableAt 同义；成交用 discoveryX+1）
+  /// 发现当根 K0（与 availableAt 同义；成交价见 TradeFillPriceMode）
   final int discoveryX;
   /// 当时能知道这根样本的 K0
   final int availableAt;

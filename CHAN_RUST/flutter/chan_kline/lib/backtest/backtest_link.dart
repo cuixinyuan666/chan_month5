@@ -1,10 +1,12 @@
 import 'backtest_result.dart';
 import 'order_models.dart';
 import 'signal_event.dart';
+import 'strategy_trade_round.dart';
 
 /// 信号 → 订单 → 成交 → 交易 的索引。只查已有结果，不重算。
 class BacktestLinkIndex {
   final BacktestResult result;
+  final StrategyRoundIndex rounds;
   final Map<String, SignalEvent> _sig;
   final Map<String, Order> _ordBySig;
   final Map<String, Fill> _fillBySig;
@@ -12,7 +14,8 @@ class BacktestLinkIndex {
   final Map<String, TradeRecord> _tradeByExit;
 
   BacktestLinkIndex(this.result)
-      : _sig = {for (final s in result.signals) s.signalId: s},
+      : rounds = buildStrategyRoundIndex(result),
+        _sig = {for (final s in result.signals) s.signalId: s},
         _ordBySig = {for (final o in result.orders) o.signalId: o},
         _fillBySig = {for (final f in result.fills) f.signalId: f},
         _tradeByEntry = {

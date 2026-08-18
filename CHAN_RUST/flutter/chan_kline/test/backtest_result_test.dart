@@ -9,6 +9,9 @@ import 'package:chan_kline/backtest/trade_operand.dart';
 import 'package:chan_kline/models/kline_bar.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+/// 旧净值/绩效用例按次周期开盘成交编写。
+const _nextOpenFill = TradeFillPriceMode.nextBarOpen;
+
 KlineBar _bar(int idx, double close, {double? open}) {
   final o = open ?? close;
   return KlineBar(
@@ -91,6 +94,7 @@ void main() {
         bars: bars,
         quantity: qty,
         initialCash: cash,
+        fillPriceMode: _nextOpenFill,
       );
       _expectCurveIdentity(r, bars);
       expect(r.closedTrades.length, 1);
@@ -123,6 +127,7 @@ void main() {
         bars: bars,
         quantity: 100,
         initialCash: 100000,
+        fillPriceMode: _nextOpenFill,
       );
       expect(r.trades.single.netPnL, closeTo(-200, 1e-9));
       expect(r.metrics.winningTrades, 0);
@@ -152,6 +157,7 @@ void main() {
         bars: bars,
         quantity: 100,
         initialCash: 100000,
+        fillPriceMode: _nextOpenFill,
       );
       expect(r.trades.length, 4);
       expect(r.metrics.maxConsecutiveWins, 2);
@@ -179,6 +185,7 @@ void main() {
         bars: bars,
         quantity: 100,
         initialCash: 100000,
+        fillPriceMode: _nextOpenFill,
       );
       _expectCurveIdentity(r, bars);
       expect(r.trades, isEmpty);
@@ -199,6 +206,7 @@ void main() {
         signals: [_sig(id: 'bLast', side: TradeSide.buy, discoveryX: 1)],
         bars: bars,
         initialCash: 50000,
+        fillPriceMode: _nextOpenFill,
       );
       expect(r.fills, isEmpty);
       expect(r.trades, isEmpty);
@@ -244,6 +252,7 @@ void main() {
         bars: bars,
         quantity: 100,
         initialCash: 100000,
+        fillPriceMode: _nextOpenFill,
       );
       expect(r.metrics.losingTrades, 0);
       expect(r.metrics.winningTrades, 2);
@@ -269,6 +278,7 @@ void main() {
         bars: bars,
         quantity: 100,
         initialCash: 100000,
+        fillPriceMode: _nextOpenFill,
       );
       expect(r.metrics.winningTrades, 0);
       expect(r.metrics.losingTrades, 2);
@@ -296,6 +306,7 @@ void main() {
         quantity: qty,
         initialCash: 100000,
         commission: const RateCommission(rate),
+        fillPriceMode: _nextOpenFill,
       );
       final buyFee = 100 * qty * rate;
       final sellFee = 120 * qty * rate;
@@ -324,6 +335,7 @@ void main() {
         quantity: 100,
         initialCash: 100000,
         slippage: const AbsoluteSlippage(0.5),
+        fillPriceMode: _nextOpenFill,
       );
       expect(r.fills[0].price, closeTo(10.5, 1e-12));
       expect(r.fills[0].slippage, closeTo(0.5, 1e-12));
@@ -354,6 +366,7 @@ void main() {
         bars: bars,
         quantity: qty,
         initialCash: cash,
+        fillPriceMode: _nextOpenFill,
       );
       _expectCurveIdentity(r, bars);
       expect(r.trades.single.netPnL, closeTo(2000, 1e-9)); // 交易赢
@@ -385,6 +398,7 @@ void main() {
         bars: bars,
         quantity: 100,
         initialCash: 100000,
+        fillPriceMode: _nextOpenFill,
       );
       expect(r.trades, isEmpty);
       expect(r.openPosition, isNotNull);

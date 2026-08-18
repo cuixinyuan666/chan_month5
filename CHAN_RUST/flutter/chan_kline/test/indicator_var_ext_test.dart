@@ -304,7 +304,7 @@ void main() {
       expect(buys.first.explainBlock, contains('买点'));
       final buyFill =
           run.result!.fills.firstWhere((f) => f.side == TradeSide.buy);
-      expect(buyFill.executeX, 4);
+      expect(buyFill.executeX, 3);
       expect(run.result!.equityCurve, isNotEmpty);
       expect(run.result!.metrics.netProfit, isA<double>());
     });
@@ -381,7 +381,7 @@ void main() {
       for (final f in run.result!.fills) {
         final sig =
             run.result!.signals.firstWhere((s) => s.signalId == f.signalId);
-        expect(f.executeX, sig.discoveryX + 1);
+        expect(f.executeX, sig.discoveryX);
       }
       expect(run.result!.equityCurve, isNotEmpty);
     });

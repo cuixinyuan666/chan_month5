@@ -5,12 +5,14 @@ import 'package:chan_kline/backtest/backtest_result.dart';
 import 'package:chan_kline/backtest/backtest_run.dart';
 import 'package:chan_kline/backtest/condition_ast.dart';
 import 'package:chan_kline/backtest/equity_build.dart';
+import 'package:chan_kline/backtest/equity_curve.dart';
 import 'package:chan_kline/backtest/order_models.dart';
 import 'package:chan_kline/backtest/signal_event.dart';
 import 'package:chan_kline/backtest/strategy_compile.dart';
 import 'package:chan_kline/backtest/strategy_config.dart';
 import 'package:chan_kline/backtest/strategy_config_form.dart';
 import 'package:chan_kline/backtest/strategy_signal_painter.dart';
+import 'package:chan_kline/backtest/strategy_trade_round.dart';
 import 'package:chan_kline/backtest/trade_clock.dart';
 import 'package:chan_kline/backtest/trade_operand.dart';
 import 'package:chan_kline/compute/math_series_freeze_store.dart';
@@ -332,6 +334,91 @@ void main() {
       vp.viewXMax += 1.2;
       final b = make();
       expect(b.shouldRepaint(a), isTrue);
+    });
+  });
+
+  group('策略买卖组号', () {
+    test('闭合交易按顺序编号买1卖1买2卖2', () {
+      final buy1 = _sig('b1', TradeSide.buy, 2);
+      final sell1 = _sig('s1', TradeSide.sell, 6);
+      final buy2 = _sig('b2', TradeSide.buy, 8);
+      final sell2 = _sig('s2', TradeSide.sell, 10);
+      final trades = [
+        TradeRecord(
+          tradeId: 'T1',
+          entrySignalId: 'b1',
+          exitSignalId: 's1',
+          entryX: 2,
+          exitX: 6,
+          entryPrice: 10,
+          exitPrice: 12,
+          quantity: 100,
+          grossPnL: 200,
+        ),
+        TradeRecord(
+          tradeId: 'T2',
+          entrySignalId: 'b2',
+          exitSignalId: 's2',
+          entryX: 8,
+          exitX: 10,
+          entryPrice: 11,
+          exitPrice: 13,
+          quantity: 100,
+          grossPnL: 200,
+        ),
+      ];
+      final result = BacktestResult(
+        signals: [buy1, sell1, buy2, sell2],
+        orders: const [],
+        fills: const [],
+        trades: trades,
+        equityCurve: const [],
+        metrics: computeBacktestMetrics(
+          initialCapital: 100000,
+          equityCurve: const [],
+          closedTrades: trades,
+        ),
+        openPosition: null,
+        account: AccountState(cash: 100000),
+        lastPrice: 10,
+        initialCapital: 100000,
+      );
+      final rounds = buildStrategyRoundIndex(result);
+      expect(rounds.sideLabel(buy1), '买1');
+      expect(rounds.sideLabel(sell1), '卖1');
+      expect(rounds.sideLabel(buy2), '买2');
+      expect(rounds.sideLabel(sell2), '卖2');
+      expect(rounds.tradeGroupLabel(result.trades.first), '买1→卖1');
+      expect(rounds.tradeGroupShort(result.trades.last), '组2');
+    });
+
+    test('期末持仓只有买N', () {
+      final buy = _sig('bOpen', TradeSide.buy, 5);
+      final result = BacktestResult(
+        signals: [buy],
+        orders: const [],
+        fills: const [],
+        trades: const [],
+        equityCurve: const [],
+        metrics: computeBacktestMetrics(
+          initialCapital: 100000,
+          equityCurve: const [],
+          closedTrades: const [],
+        ),
+        openPosition: OpenPosition(
+          entrySignalId: 'bOpen',
+          entryX: 5,
+          avgCost: 10,
+          quantity: 100,
+          marketValue: 1100,
+          unrealizedPnL: 100,
+        ),
+        account: AccountState(cash: 90000, positionQty: 100, avgCost: 10),
+        lastPrice: 11,
+        initialCapital: 100000,
+      );
+      final rounds = buildStrategyRoundIndex(result);
+      expect(rounds.sideLabel(buy), '买1');
     });
   });
 

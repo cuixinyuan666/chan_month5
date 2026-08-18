@@ -1,4 +1,5 @@
 import 'condition_ast.dart';
+import 'trade_clock.dart';
 
 /// 这次回测用的数据范围（当时走到哪根 K0），不是另算一套行情。
 class BacktestDataScope {
@@ -30,6 +31,8 @@ class StrategyConfig {
   final double commissionRate;
   /// 买加价/卖减价的固定价差；0=无滑点
   final double slippageAmount;
+  /// 买点/卖点共用：本周期收盘或次周期开盘（K0 轴）
+  final TradeFillPriceMode fillPriceMode;
   final BacktestDataScope? dataScope;
 
   const StrategyConfig({
@@ -39,6 +42,7 @@ class StrategyConfig {
     this.initialCapital = 100000,
     this.commissionRate = 0,
     this.slippageAmount = 0,
+    this.fillPriceMode = kDefaultTradeFillPriceMode,
     this.dataScope,
   });
 
@@ -50,6 +54,7 @@ class StrategyConfig {
     double initialCapital = 100000,
     double commissionRate = 0,
     double slippageAmount = 0,
+    TradeFillPriceMode fillPriceMode = kDefaultTradeFillPriceMode,
     BacktestDataScope? dataScope,
   }) {
     return StrategyConfig(
@@ -59,6 +64,7 @@ class StrategyConfig {
       initialCapital: initialCapital,
       commissionRate: commissionRate,
       slippageAmount: slippageAmount,
+      fillPriceMode: fillPriceMode,
       dataScope: dataScope,
     );
   }
@@ -73,6 +79,7 @@ class StrategyConfig {
     double? initialCapital,
     double? commissionRate,
     double? slippageAmount,
+    TradeFillPriceMode? fillPriceMode,
     BacktestDataScope? dataScope,
   }) {
     return StrategyConfig(
@@ -82,6 +89,7 @@ class StrategyConfig {
       initialCapital: initialCapital ?? this.initialCapital,
       commissionRate: commissionRate ?? this.commissionRate,
       slippageAmount: slippageAmount ?? this.slippageAmount,
+      fillPriceMode: fillPriceMode ?? this.fillPriceMode,
       dataScope: dataScope ?? this.dataScope,
     );
   }

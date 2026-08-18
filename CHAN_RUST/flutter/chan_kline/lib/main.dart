@@ -41,6 +41,7 @@ import 'backtest/backtest_run.dart';
 import 'backtest/order_models.dart';
 import 'backtest/signal_event.dart';
 import 'backtest/strategy_config.dart';
+import 'backtest/strategy_trade_round.dart';
 import 'backtest/backtest_workbench.dart';
 import 'backtest/chan_event_store.dart';
 import 'backtest/divergence_relation_store.dart';
@@ -207,6 +208,9 @@ Future<void> main() async {
   MsgHistory.instance.appendTradeChanComplete();
   MsgHistory.instance.appendTradeEventPulse();
   MsgHistory.instance.appendTradeSignalDisplay();
+  MsgHistory.instance.appendTradeSignalTable();
+  MsgHistory.instance.appendTradeFillPriceMode();
+  MsgHistory.instance.appendTradeRoundLabel();
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     await windowManager.ensureInitialized();
     const opts = WindowOptions(
@@ -2272,7 +2276,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       '已走到K${scope.asOfX}；'
       '净利${m.netProfit.toStringAsFixed(2)} 胜率${m.winRate.display} '
       '最大回撤${m.maxDrawdown.toStringAsFixed(2)}。'
-      '图上策买/策卖画在发现当根，被拒的不画；成交在下一根开盘。',
+      '图上买1/卖1、买2/卖2 按组合组显示在发现当根，被拒的不画。',
     );
     _showSnack('回测完成：闭合 ${m.totalTrades} 笔');
   }
@@ -2342,12 +2346,12 @@ class _KlineHomePageState extends State<KlineHomePage> {
             '力度比可以拿去和数字比，方向只能选向上或向下，不能把整个背驰拿去比大小或上穿下穿。'
             '同一条比较必须同层同钟，K0 和 K1 不能拼在同一棵树上。'
             '成交量这一版只开放 K0，没有另造 Kn 成交量和均量。\n\n'
-            '点运行后，图上「策买/策卖」画在发现当根，被拒的不画（例如空仓时的卖）。'
-            '真正成交在下一根开盘：交易明细写成交K和该根时间，并注明信号K。这不是缠论的 1Ba/1Sa。'
+            '点运行后，图上按组合组显示「买1/卖1」「买2/卖2」（红买绿卖），画在发现当根，被拒的不画。'
+            '默认按本周期收盘价成交；也可在设置里改次周期开盘价。这不是缠论的 1Ba/1Sa。'
             '报告里的净利润、胜率、盈亏比、回撤都来自这一次回测结果，界面不会再算一遍。'
             '左侧变量诊断只读图上已冻住的格子和计算钟样本，不会现场重算指标。\n\n'
-            '点交易明细会跳到入场 K，再点同一笔会跳到出场 K。'
-            '点图上的策买/策卖会打开对应的信号→订单→成交→交易。\n\n'
+            '点交易表格会跳到入场 K，再点同一笔会跳到出场 K。'
+            '点图上的买1/卖1会打开对应的信号→订单→成交→交易。\n\n'
             '手续费、滑点先按你填的数字；默认 0。不做做空、加仓、多品种。',
           ),
         ),
@@ -2425,6 +2429,9 @@ class _KlineHomePageState extends State<KlineHomePage> {
       onLongPressRunToEnd: gesturesOn ? _runToEnd : null,
       strategySignals: _backtestRun?.result?.signals ?? const [],
       strategyFills: _backtestRun?.result?.fills ?? const [],
+      strategyRoundBySignalId: _backtestRun?.result == null
+          ? const {}
+          : buildStrategyRoundIndex(_backtestRun!.result!).roundBySignalId,
       highlightedStrategyIds: _btHighlightIds,
       focusBarIdx: _btFocusBarIdx,
       focusBarEpoch: _btFocusEpoch,

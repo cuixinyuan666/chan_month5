@@ -484,14 +484,14 @@ void main() {
       expect(sells, [7, 8]);
       expect(run.result!.fills.length, 3);
       expect(run.result!.fills[0].side, TradeSide.buy);
-      expect(run.result!.fills[0].executeX, 8);
+      expect(run.result!.fills[0].executeX, 7);
       expect(run.result!.fills[1].side, TradeSide.sell);
-      expect(run.result!.fills[1].executeX, 9);
+      expect(run.result!.fills[1].executeX, 8);
       expect(run.result!.fills[2].side, TradeSide.buy);
-      expect(run.result!.fills[2].executeX, 9);
+      expect(run.result!.fills[2].executeX, 8);
       expect(run.result!.trades.length, 1);
-      expect(run.result!.trades.single.entryX, 8);
-      expect(run.result!.trades.single.exitX, 9);
+      expect(run.result!.trades.single.entryX, 7);
+      expect(run.result!.trades.single.exitX, 8);
       expect(run.result!.openPosition, isNotNull);
     });
   });
@@ -592,13 +592,13 @@ void main() {
       expect(buys.first.conditionText, contains('RSI'));
       final buyFill =
           run.result!.fills.firstWhere((f) => f.side == TradeSide.buy);
-      expect(buyFill.executeX, 7);
+      expect(buyFill.executeX, 6);
       expect(run.result!.equityCurve, isNotEmpty);
       expect(run.result!.metrics.netProfit, isA<double>());
       for (final f in run.result!.fills) {
         final sig =
             run.result!.signals.firstWhere((s) => s.signalId == f.signalId);
-        expect(f.executeX, sig.discoveryX + 1);
+        expect(f.executeX, sig.discoveryX);
       }
     });
   });

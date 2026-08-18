@@ -203,7 +203,7 @@ void main() {
       expect(buys.first.trace, isNotNull);
       expect(buys.first.trace!.text.contains('AND'), isTrue);
       expect(run.result!.fills, isNotEmpty);
-      expect(run.result!.fills.first.executeX, buys.first.discoveryX + 1);
+      expect(run.result!.fills.first.executeX, buys.first.discoveryX);
       expect(run.result!.rulePerformances.any((p) => p.ruleId == 'ast_buy'), isTrue);
     });
 
@@ -259,7 +259,7 @@ void main() {
       final buy = run.result!.signals.firstWhere((s) => s.side == TradeSide.buy);
       expect(buy.discoveryX, 3);
       expect(buy.trace!.text.contains('TRUE'), isTrue);
-      expect(run.result!.fills.first.executeX, 4);
+      expect(run.result!.fills.first.executeX, 3);
     });
 
     test('BUY_N(3) OR BUY1 与四类分层互不串', () {

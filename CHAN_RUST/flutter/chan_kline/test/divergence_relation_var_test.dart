@@ -485,13 +485,13 @@ void main() {
       expect(buys.first.conditionText, contains('DIVERGENCE.EXISTS'));
       final buyFill =
           run.result!.fills.firstWhere((f) => f.side == TradeSide.buy);
-      expect(buyFill.executeX, 7);
+      expect(buyFill.executeX, 6);
       expect(run.result!.equityCurve, isNotEmpty);
       expect(run.result!.metrics.netProfit, isA<double>());
       for (final f in run.result!.fills) {
         final sig =
             run.result!.signals.firstWhere((s) => s.signalId == f.signalId);
-        expect(f.executeX, sig.discoveryX + 1);
+        expect(f.executeX, sig.discoveryX);
       }
     });
 
@@ -549,7 +549,7 @@ void main() {
       expect(buys.first.conditionText, contains('RSI'));
       final buyFill =
           run.result!.fills.firstWhere((f) => f.side == TradeSide.buy);
-      expect(buyFill.executeX, 7);
+      expect(buyFill.executeX, 6);
       expect(run.result!.equityCurve, isNotEmpty);
       expect(run.result!.metrics.netProfit, isA<double>());
     });

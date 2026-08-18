@@ -2,6 +2,32 @@
 
 > 口径/行为变更记录（复制排查用）；与 `lib/history/msg_history.dart` 常驻历史同步维护。
 
+## 2026-08-19 策略买卖组号：买1/卖1、买2/卖2
+
+- **需求**：每次闭合交易的买/卖为一组，主图与报告同步显示买1/卖1、买2/卖2。
+- **不变**：撮合、冻结、缠论 BS 分离、先平后开；被拒信号仍不画。
+- **实现**：`buildStrategyRoundIndex` 按闭合交易顺序编号；期末持仓仅买N。
+- **UI**：主图标签、交易表「组」列、信号链路方向/组列。
+- **验证**：`flutter test test/backtest_workbench_test.dart`
+- **注意**：纯 Flutter；无需重编 DLL。
+
+## 2026-08-18 策略回测成交价格：本周期收盘 / 次周期开盘
+
+- **需求**：设置里可选成交价格（买/卖共用）：本周期收盘价（默认）、次周期开盘价。
+- **不变**：缠论内核、冻结、步进、策略信号与缠论 BS 分离、同一根先平后开、只做多单仓。
+- **撮合**：`TradeFillPriceMode.sameBarClose` → 发现根收盘成交；`nextBarOpen` → 下一根开盘（无下一根过期）。
+- **UI**：策略表单下拉 + 说明弹窗；`msg_history` 同步口径。
+- **验证**：`flutter test test/mini_loop_test.dart test/backtest_result_test.dart test/chan_strategy_regression_test.dart`
+- **注意**：纯 Flutter；引擎版本 `backtest-workbench-v9-fill-price`；无需重编 DLL。
+
+## 2026-08-18 策略标记买/卖2红绿；交易与信号链路表格
+
+- **需求**：主图策买→买（红）、策卖→卖2（绿）；报告「交易」「信号链路」改表格。
+- **不变**：撮合、冻结、缠论内核不变；被拒信号仍不画；点行/点图联动跳 K 不变。
+- **显示**：`strategySideLabel` / `strategySideColor` 统一主图与报告；表格可横滑。
+- **验证**：`flutter test test/backtest_workbench_test.dart`
+- **注意**：纯 Flutter；无需重编 DLL。
+
 ## 2026-08-17 策买画在发现根；被拒不画；拖动跟着走
 
 - **需求**：图上策买和交易买入时间对得上；拖动 K 线时绿/紫三角跟着蜡烛走。

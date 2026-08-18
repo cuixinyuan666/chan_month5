@@ -3,7 +3,7 @@ import 'equity_curve.dart';
 import 'order_models.dart';
 import 'signal_event.dart';
 
-/// 按成交顺序在每根 K0 开盘应用 Fill，收盘记净值（含浮盈）。
+/// 按成交顺序在每根 K0 应用 Fill（executeX），收盘记净值（含浮盈）。
 List<EquityPoint> buildEquityCurve({
   required List<KlineBar> bars,
   required List<Fill> fills,

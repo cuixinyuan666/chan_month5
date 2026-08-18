@@ -55,7 +55,7 @@ SignalEvent _sig({
 }
 
 void main() {
-  group('最小闭环：信号→订单→下一根K0开盘→持仓→交易记录', () {
+  group('最小闭环：信号→订单→次周期K0开盘→持仓→交易记录', () {
     test('BUY X → X+1 开盘成交 → SELL Y → Y+1 开盘成交 → 一笔 TradeRecord', () {
       final bars = [
         for (var i = 0; i <= 10; i++)
@@ -69,6 +69,7 @@ void main() {
         bars: bars,
         quantity: 100,
         initialCash: 100000,
+        fillPriceMode: TradeFillPriceMode.nextBarOpen,
       );
       expect(r.fills.length, 2);
       expect(r.fills[0].side, TradeSide.buy);
@@ -90,11 +91,12 @@ void main() {
       expect(r.account.realizedPnL, closeTo(t.grossPnL, 1e-9));
     });
 
-    test('最后一根 K0 产生 BUY → 不得虚构成交', () {
+    test('最后一根 K0 产生 BUY + 次周期开盘 → 不得虚构成交', () {
       final bars = [_bar(0, 10, open: 10), _bar(1, 11, open: 11)];
       final r = runMiniLoopFromSignals(
         signals: [_sig(id: 'bLast', side: TradeSide.buy, discoveryX: 1)],
         bars: bars,
+        fillPriceMode: TradeFillPriceMode.nextBarOpen,
       );
       expect(r.fills, isEmpty);
       expect(r.trades, isEmpty);
@@ -108,6 +110,7 @@ void main() {
       final r = runMiniLoopFromSignals(
         signals: [_sig(id: 's0', side: TradeSide.sell, discoveryX: 0)],
         bars: bars,
+        fillPriceMode: TradeFillPriceMode.nextBarOpen,
       );
       expect(r.fills, isEmpty);
       expect(r.trades, isEmpty);
@@ -125,6 +128,7 @@ void main() {
           _sig(id: 'b2', side: TradeSide.buy, discoveryX: 3),
         ],
         bars: bars,
+        fillPriceMode: TradeFillPriceMode.nextBarOpen,
       );
       expect(r.fills.length, 1);
       expect(r.fills.single.executeX, 2);
@@ -152,6 +156,7 @@ void main() {
         bars: bars,
         quantity: 100,
         initialCash: 100000,
+        fillPriceMode: TradeFillPriceMode.nextBarOpen,
       );
       expect(
         r.orders
@@ -201,6 +206,7 @@ void main() {
           ),
         ],
         bars: bars,
+        fillPriceMode: TradeFillPriceMode.nextBarOpen,
       );
       expect(r.signals.singleWhere((s) => s.signalId == 'k1b').displayKn, 1);
       expect(r.fills[0].executeX, 11); // 10+1，K0 不是 K1
@@ -208,6 +214,39 @@ void main() {
       expect(r.fills[1].executeX, 15);
       expect(r.trades.single.entryX, 11);
       expect(r.trades.single.exitX, 15);
+    });
+  });
+
+  group('默认：本周期收盘价成交', () {
+    test('BUY X → X 收盘成交；最后一根也能成交', () {
+      final bars = [_bar(0, 10, open: 10), _bar(1, 11, open: 11)];
+      final r = runMiniLoopFromSignals(
+        signals: [_sig(id: 'bLast', side: TradeSide.buy, discoveryX: 1)],
+        bars: bars,
+      );
+      expect(r.fills.single.executeX, 1);
+      expect(r.fills.single.price, closeTo(11, 1e-12));
+      expect(r.account.isLong, isTrue);
+    });
+
+    test('BUY X → X 收盘 → SELL Y → Y 收盘', () {
+      final bars = [
+        for (var i = 0; i <= 6; i++) _bar(i, 10.0 + i, open: 100.0 + i),
+      ];
+      final r = runMiniLoopFromSignals(
+        signals: [
+          _sig(id: 'b1', side: TradeSide.buy, discoveryX: 2, price: 12),
+          _sig(id: 's1', side: TradeSide.sell, discoveryX: 5, price: 15),
+        ],
+        bars: bars,
+        quantity: 100,
+        initialCash: 100000,
+      );
+      expect(r.fills[0].executeX, 2);
+      expect(r.fills[0].price, closeTo(12, 1e-12));
+      expect(r.fills[1].executeX, 5);
+      expect(r.fills[1].price, closeTo(15, 1e-12));
+      expect(r.trades.single.grossPnL, closeTo((15 - 12) * 100, 1e-9));
     });
   });
 
@@ -236,6 +275,7 @@ void main() {
         quantity: 100,
         initialCash: 1000000,
         bollN: 20,
+        fillPriceMode: TradeFillPriceMode.nextBarOpen,
       );
       expect(r.signals.where((s) => s.side == TradeSide.buy), isNotEmpty);
       expect(r.fills.where((f) => f.side == TradeSide.buy), isNotEmpty);

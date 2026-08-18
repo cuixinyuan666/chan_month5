@@ -38,6 +38,23 @@ enum TradeExecutionClock {
 
 const TradeExecutionClock kTradeExecutionClock = TradeExecutionClock.k0NextOpen;
 
+/// 策略回测成交价：发现根当根收盘，或下一根开盘（均在 K0 轴）。
+enum TradeFillPriceMode {
+  /// 发现当根 K0 收盘价（默认；信号当步已知后按收盘撮合）
+  sameBarClose,
+  /// 下一根 K0 开盘价（保守；无下一根则订单过期）
+  nextBarOpen,
+}
+
+/// 回测设置默认：本周期收盘价。
+const TradeFillPriceMode kDefaultTradeFillPriceMode =
+    TradeFillPriceMode.sameBarClose;
+
+String tradeFillPriceModeLabel(TradeFillPriceMode mode) => switch (mode) {
+      TradeFillPriceMode.sameBarClose => '本周期收盘价',
+      TradeFillPriceMode.nextBarOpen => '次周期开盘价',
+    };
+
 /// displayKn=0 → 原生K0；≥1 → 该层虚拟K样本。
 TradeEvalClock evalClockForDisplayKn(int displayKn) =>
     displayKn <= 0 ? TradeEvalClock.k0Bar : TradeEvalClock.knSample;

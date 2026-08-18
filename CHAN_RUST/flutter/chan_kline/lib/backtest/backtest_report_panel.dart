@@ -215,40 +215,126 @@ class BacktestReportPanel extends StatelessWidget {
       );
     }
     final link = BacktestLinkIndex(result);
-    return ListView.builder(
-      itemCount: result.trades.length,
-      itemBuilder: (ctx, i) {
-        final t = result.trades[i];
-        final on = t.tradeId == selectedTradeId;
-        final entrySig = link.entrySignalOf(t);
-        final exitSig = link.exitSignalOf(t);
-        final entryT = _time(t.entryX);
-        final exitT = _time(t.exitX);
-        final entrySigK =
-            entrySig == null ? '' : '（信号K${entrySig.discoveryX}）';
-        final exitSigK =
-            exitSig == null ? '' : '（信号K${exitSig.discoveryX}）';
-        return ListTile(
-          dense: true,
-          selected: on,
-          selectedTileColor: const Color(0x334FC3F7),
-          title: Text(
-            '#${i + 1}  净 ${formatMoney(t.netPnL)}',
-            style: TextStyle(
-              fontSize: 13,
-              color: t.netPnL >= 0 ? kStrategyBuyColor : const Color(0xFFFF8A65),
+    const headerStyle = TextStyle(
+      fontSize: 11,
+      fontWeight: FontWeight.w600,
+      color: Color(0xFF94A3B8),
+    );
+    const cellStyle = TextStyle(fontSize: 11, color: Color(0xFFE2E8F0));
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minWidth: constraints.maxWidth),
+              child: Table(
+                columnWidths: const {
+                  0: FixedColumnWidth(72),
+                  1: FixedColumnWidth(72),
+                  2: FixedColumnWidth(52),
+                  3: FixedColumnWidth(52),
+                  4: FixedColumnWidth(64),
+                  5: FixedColumnWidth(52),
+                  6: FixedColumnWidth(52),
+                  7: FixedColumnWidth(64),
+                  8: FixedColumnWidth(44),
+                  9: FixedColumnWidth(64),
+                  10: FixedColumnWidth(56),
+                },
+                defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+                border: TableBorder(
+                  horizontalInside: BorderSide(
+                    color: Colors.white.withValues(alpha: 0.08),
+                  ),
+                  verticalInside: BorderSide(
+                    color: Colors.white.withValues(alpha: 0.05),
+                  ),
+                ),
+                children: [
+                  TableRow(
+                    decoration: const BoxDecoration(color: Color(0xFF1E293B)),
+                    children: [
+                      _th('组', headerStyle),
+                      _th('净利', headerStyle),
+                      _th('信号K入', headerStyle),
+                      _th('成交K入', headerStyle),
+                      _th('入价', headerStyle),
+                      _th('信号K出', headerStyle),
+                      _th('成交K出', headerStyle),
+                      _th('出价', headerStyle),
+                      _th('数量', headerStyle),
+                      _th('毛利', headerStyle),
+                      _th('费用', headerStyle),
+                    ],
+                  ),
+                  for (var i = 0; i < result.trades.length; i++)
+                    _tradeRow(
+                      i: i,
+                      t: result.trades[i],
+                      link: link,
+                      selected: result.trades[i].tradeId == selectedTradeId,
+                      cellStyle: cellStyle,
+                      onTap: () => onSelectTrade(result.trades[i]),
+                    ),
+                ],
+              ),
             ),
           ),
-          subtitle: Text(
-            '入 成交K${t.entryX} $entryT$entrySigK @${t.entryPrice.toStringAsFixed(3)}  →  '
-            '出 成交K${t.exitX} $exitT$exitSigK @${t.exitPrice.toStringAsFixed(3)}\n'
-            '量${t.quantity}  毛${formatMoney(t.grossPnL)}  费${formatMoney(t.commission)}  滑${formatMoney(t.slippage)}',
-            style: const TextStyle(fontSize: 11),
-          ),
-          isThreeLine: true,
-          onTap: () => onSelectTrade(t),
         );
       },
+    );
+  }
+
+  TableRow _tradeRow({
+    required int i,
+    required TradeRecord t,
+    required BacktestLinkIndex link,
+    required bool selected,
+    required TextStyle cellStyle,
+    required VoidCallback onTap,
+  }) {
+    final entrySig = link.entrySignalOf(t);
+    final exitSig = link.exitSignalOf(t);
+    final groupLabel = link.rounds.tradeGroupLabel(t);
+    final pnlColor =
+        t.netPnL >= 0 ? kStrategyBuyColor : const Color(0xFFFF8A65);
+    return TableRow(
+      decoration: BoxDecoration(
+        color: selected ? const Color(0x334FC3F7) : null,
+      ),
+      children: [
+        _tdTap(
+          onTap,
+          Text(
+            groupLabel,
+            style: cellStyle.copyWith(fontWeight: FontWeight.w600),
+          ),
+        ),
+        _tdTap(
+          onTap,
+          Text(
+            formatMoney(t.netPnL),
+            style: cellStyle.copyWith(color: pnlColor, fontWeight: FontWeight.w600),
+          ),
+        ),
+        _tdTap(onTap, Text('${entrySig?.discoveryX ?? '-'}', style: cellStyle)),
+        _tdTap(onTap, Text('${t.entryX}', style: cellStyle)),
+        _tdTap(onTap, Text(t.entryPrice.toStringAsFixed(3), style: cellStyle)),
+        _tdTap(onTap, Text('${exitSig?.discoveryX ?? '-'}', style: cellStyle)),
+        _tdTap(onTap, Text('${t.exitX}', style: cellStyle)),
+        _tdTap(onTap, Text(t.exitPrice.toStringAsFixed(3), style: cellStyle)),
+        _tdTap(onTap, Text('${t.quantity}', style: cellStyle)),
+        _tdTap(onTap, Text(formatMoney(t.grossPnL), style: cellStyle)),
+        _tdTap(
+          onTap,
+          Text(
+            formatMoney(t.commission + t.slippage),
+            style: cellStyle,
+          ),
+        ),
+      ],
     );
   }
 
@@ -261,50 +347,165 @@ class BacktestReportPanel extends StatelessWidget {
         child: Text('没有策略信号', style: TextStyle(color: Color(0xFF94A3B8))),
       );
     }
-    return ListView.builder(
-      itemCount: sigs.length,
-      itemBuilder: (ctx, i) {
-        final s = sigs[i];
-        final o = link.orderForSignal(s.signalId);
-        final f = link.fillForSignal(s.signalId);
-        final t = link.tradeForSignal(s.signalId);
-        final on = s.signalId == selectedSignalId;
-        final side = s.side == TradeSide.buy ? '策买' : '策卖';
-        final st = o == null ? '无订单' : _orderStatus(o);
-        return Material(
-          color: on ? const Color(0x33D500F9) : Colors.transparent,
-          child: InkWell(
-            onTap: () => onSelectSignal(s),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+    const headerStyle = TextStyle(
+      fontSize: 11,
+      fontWeight: FontWeight.w600,
+      color: Color(0xFF94A3B8),
+    );
+    const cellStyle = TextStyle(fontSize: 11, color: Color(0xFFE2E8F0));
+    const condStyle = TextStyle(
+      fontSize: 10,
+      color: Color(0xFFCBD5E1),
+      height: 1.3,
+    );
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minWidth: constraints.maxWidth),
+              child: Table(
+                columnWidths: const {
+                  0: FixedColumnWidth(40),
+                  1: FixedColumnWidth(44),
+                  2: FixedColumnWidth(108),
+                  3: FixedColumnWidth(72),
+                  4: FixedColumnWidth(44),
+                  5: FixedColumnWidth(64),
+                  6: FixedColumnWidth(52),
+                  7: FixedColumnWidth(72),
+                  8: FlexColumnWidth(2),
+                },
+                defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+                border: TableBorder(
+                  horizontalInside: BorderSide(
+                    color: Colors.white.withValues(alpha: 0.08),
+                  ),
+                  verticalInside: BorderSide(
+                    color: Colors.white.withValues(alpha: 0.05),
+                  ),
+                ),
                 children: [
-                  Text(
-                    '$side  K${s.discoveryX}  $st',
-                    style: const TextStyle(fontSize: 13),
+                  TableRow(
+                    decoration: const BoxDecoration(color: Color(0xFF1E293B)),
+                    children: [
+                      _th('方向', headerStyle),
+                      _th('信号K', headerStyle),
+                      _th('时间', headerStyle),
+                      _th('订单', headerStyle),
+                      _th('成交K', headerStyle),
+                      _th('成交价', headerStyle),
+                      _th('组', headerStyle),
+                      _th('净利', headerStyle),
+                      _th('条件', headerStyle),
+                    ],
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    s.explainBlock,
-                    style: const TextStyle(
-                      fontSize: 11,
-                      color: Color(0xFFCBD5E1),
-                      height: 1.35,
+                  for (final s in sigs)
+                    _chainRow(
+                      s: s,
+                      link: link,
+                      selected: s.signalId == selectedSignalId,
+                      cellStyle: cellStyle,
+                      condStyle: condStyle,
+                      onTap: () => onSelectSignal(s),
                     ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '${f == null ? '未成交' : '成交K${f.executeX} @${f.price.toStringAsFixed(3)}'}'
-                    '${t == null ? '' : '  · 交易 ${t.tradeId} 净${formatMoney(t.netPnL)}'}',
-                    style: const TextStyle(fontSize: 11, color: Color(0xFF94A3B8)),
-                  ),
                 ],
               ),
             ),
           ),
         );
       },
+    );
+  }
+
+  TableRow _chainRow({
+    required SignalEvent s,
+    required BacktestLinkIndex link,
+    required bool selected,
+    required TextStyle cellStyle,
+    required TextStyle condStyle,
+    required VoidCallback onTap,
+  }) {
+    final side = s.side;
+    final o = link.orderForSignal(s.signalId);
+    final f = link.fillForSignal(s.signalId);
+    final t = link.tradeForSignal(s.signalId);
+    final sideLabel = link.rounds.sideLabel(s);
+    final sideColor =
+        side == null ? const Color(0xFF94A3B8) : strategySideColor(side);
+    return TableRow(
+      decoration: BoxDecoration(
+        color: selected ? const Color(0x33D500F9) : null,
+      ),
+      children: [
+        _tdTap(
+          onTap,
+          Text(
+            sideLabel,
+            style: cellStyle.copyWith(
+              color: sideColor,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+        _tdTap(onTap, Text('${s.discoveryX}', style: cellStyle)),
+        _tdTap(onTap, Text(_time(s.discoveryX), style: cellStyle)),
+        _tdTap(
+          onTap,
+          Text(o == null ? '无订单' : _orderStatus(o), style: cellStyle),
+        ),
+        _tdTap(
+          onTap,
+          Text(f == null ? '-' : '${f.executeX}', style: cellStyle),
+        ),
+        _tdTap(
+          onTap,
+          Text(f == null ? '-' : f.price.toStringAsFixed(3), style: cellStyle),
+        ),
+        _tdTap(
+          onTap,
+          Text(
+            t == null ? '-' : link.rounds.tradeGroupShort(t),
+            style: cellStyle,
+          ),
+        ),
+        _tdTap(
+          onTap,
+          Text(
+            t == null ? '-' : formatMoney(t.netPnL),
+            style: cellStyle.copyWith(
+              color: t == null
+                  ? const Color(0xFF94A3B8)
+                  : (t.netPnL >= 0
+                      ? kStrategyBuyColor
+                      : const Color(0xFFFF8A65)),
+            ),
+          ),
+        ),
+        _tdTap(
+          onTap,
+          Text(s.explainBlock, style: condStyle, maxLines: 3, overflow: TextOverflow.ellipsis),
+        ),
+      ],
+    );
+  }
+
+  static Widget _th(String text, TextStyle style) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+      child: Text(text, style: style),
+    );
+  }
+
+  static Widget _tdTap(VoidCallback onTap, Widget child) {
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+        child: child,
+      ),
     );
   }
 

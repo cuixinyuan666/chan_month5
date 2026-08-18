@@ -6,10 +6,16 @@ import '../models/kline_bar.dart';
 import '../widgets/kline_viewport.dart';
 import 'order_models.dart';
 import 'signal_event.dart';
+import 'strategy_trade_round.dart';
 
-/// 策略买卖点颜色：刻意不用缠论 1Ba/1Sa 的红绿。
-const Color kStrategyBuyColor = Color(0xFF00E676);
-const Color kStrategySellColor = Color(0xFFD500F9);
+export 'strategy_trade_round.dart' show strategySideLabel;
+
+/// 策略买卖点颜色：买=红、卖=绿，与缠论 1Ba/1Sa 标签区分。
+const Color kStrategyBuyColor = Color(0xFFEF5350);
+const Color kStrategySellColor = Color(0xFF00E676);
+
+Color strategySideColor(TradeSide side) =>
+    side == TradeSide.buy ? kStrategyBuyColor : kStrategySellColor;
 
 KlineBar? klineBarByIdx(List<KlineBar> bars, int idx) {
   if (idx >= 0 && idx < bars.length && bars[idx].idx == idx) {
@@ -111,6 +117,7 @@ class StrategySignalPainter extends CustomPainter {
   final List<KlineBar> bars;
   final List<SignalEvent> signals;
   final List<Fill> fills;
+  final Map<String, int> roundBySignalId;
   final Set<String> highlightedIds;
   final KlineViewport viewport;
   final PriceRange priceRange;
@@ -126,6 +133,7 @@ class StrategySignalPainter extends CustomPainter {
     required this.bars,
     required this.signals,
     this.fills = const [],
+    this.roundBySignalId = const {},
     required this.highlightedIds,
     required this.viewport,
     required this.priceRange,
@@ -159,8 +167,8 @@ class StrategySignalPainter extends CustomPainter {
         fills: fills,
       );
       if (c == null) continue;
-      final buy = s.side == TradeSide.buy;
-      final color = buy ? kStrategyBuyColor : kStrategySellColor;
+      final side = s.side!;
+      final color = strategySideColor(side);
       final hot = highlightedIds.contains(s.signalId);
       if (hot) {
         canvas.drawCircle(
@@ -171,8 +179,9 @@ class StrategySignalPainter extends CustomPainter {
       }
       final path = Path();
       const r = 7.0;
+      final buy = side == TradeSide.buy;
       if (buy) {
-        // 尖朝上：策略买
+        // 尖朝上：买
         path.moveTo(c.dx, c.dy - r);
         path.lineTo(c.dx - r, c.dy + r * 0.7);
         path.lineTo(c.dx + r, c.dy + r * 0.7);
@@ -191,7 +200,10 @@ class StrategySignalPainter extends CustomPainter {
           ..strokeWidth = hot ? 1.8 : 1.0,
       );
       tp.text = TextSpan(
-        text: buy ? '策买' : '策卖',
+        text: strategySideLabel(
+          side,
+          round: roundBySignalId[s.signalId],
+        ),
         style: TextStyle(
           color: color,
           fontSize: 9,
@@ -208,6 +220,7 @@ class StrategySignalPainter extends CustomPainter {
   bool shouldRepaint(covariant StrategySignalPainter old) {
     return old.signals != signals ||
         old.fills != fills ||
+        old.roundBySignalId != roundBySignalId ||
         old.highlightedIds != highlightedIds ||
         old.bars != bars ||
         old.mainH != mainH ||

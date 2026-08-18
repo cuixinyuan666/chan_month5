@@ -20,7 +20,7 @@ class Order {
   final int quantity;
   /// 信号被知道的 K0
   final int createdAt;
-  /// 计划成交的 K0（discoveryX+1）
+  /// 计划成交的 K0（由 TradeFillPriceMode 决定：发现根或 discoveryX+1）
   final int executeAt;
   final OrderStatus status;
   final String? rejectReason;

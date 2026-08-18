@@ -14,7 +14,7 @@ import 'strategy_config.dart';
 import 'zhongshu_object_store.dart';
 
 /// 引擎版本：以后缠论/撮合规则改了，旧报告能对上是哪一版跑的。
-const String kBacktestEngineVersion = 'backtest-workbench-v8-event-pulse';
+const String kBacktestEngineVersion = 'backtest-workbench-v9-fill-price';
 
 /// 一次回测运行：策略 + 当时数据范围 + 引擎版本 + 结果。
 /// UI 不直接塞一堆散参数进引擎。
@@ -122,6 +122,7 @@ BacktestRun executeStrategyBacktest({
     bars: bars,
     quantity: config.quantity,
     initialCash: config.initialCapital,
+    fillPriceMode: config.fillPriceMode,
     commission: config.commissionRate <= 0
         ? const ZeroCommission()
         : RateCommission(config.commissionRate),

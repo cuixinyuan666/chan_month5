@@ -150,6 +150,7 @@ class KlineChart extends StatefulWidget {
     this.lookupEngine,
     this.strategySignals = const [],
     this.strategyFills = const [],
+    this.strategyRoundBySignalId = const {},
     this.highlightedStrategyIds = const {},
     this.focusBarIdx,
     this.focusBarEpoch = 0,
@@ -243,6 +244,7 @@ class KlineChart extends StatefulWidget {
   /// 策略买/卖点：有成交才画，位置用成交根；与缠论 1Ba 分开。
   final List<SignalEvent> strategySignals;
   final List<Fill> strategyFills;
+  final Map<String, int> strategyRoundBySignalId;
   final Set<String> highlightedStrategyIds;
   /// 报告点交易时把这根 K 滚进视窗
   final int? focusBarIdx;
@@ -1510,6 +1512,7 @@ class _KlineChartState extends State<KlineChart> {
                     bars: widget.bars,
                     signals: widget.strategySignals,
                     fills: widget.strategyFills,
+                    roundBySignalId: widget.strategyRoundBySignalId,
                     highlightedIds: widget.highlightedStrategyIds,
                     viewport: _viewport,
                     priceRange: priceRange,

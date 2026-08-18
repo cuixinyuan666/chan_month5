@@ -9,8 +9,35 @@ import 'equity_curve.dart';
 import 'order_models.dart';
 import 'signal_event.dart';
 import 'signal_normalize.dart';
+import 'trade_clock.dart';
 
 export 'backtest_result.dart';
+
+/// 按计划成交价解析：K0 轴上的成交根与原始价。
+class FillPlan {
+  final int executeX;
+  final double rawPrice;
+
+  const FillPlan({required this.executeX, required this.rawPrice});
+}
+
+FillPlan? planFill({
+  required SignalEvent sig,
+  required List<KlineBar> bars,
+  required TradeFillPriceMode fillPriceMode,
+}) {
+  switch (fillPriceMode) {
+    case TradeFillPriceMode.sameBarClose:
+      final bar = k0BarAt(bars, sig.discoveryX);
+      if (bar == null) return null;
+      return FillPlan(executeX: sig.discoveryX, rawPrice: bar.close);
+    case TradeFillPriceMode.nextBarOpen:
+      final executeAt = sig.discoveryX + 1;
+      final next = k0BarAt(bars, executeAt);
+      if (next == null) return null;
+      return FillPlan(executeX: executeAt, rawPrice: next.open);
+  }
+}
 
 /// 兼容旧测试名：最小闭环现在直接产出完整回测结果。
 typedef MiniLoopResult = BacktestResult;
@@ -22,13 +49,14 @@ KlineBar? k0BarAt(List<KlineBar> bars, int idx) {
   return null;
 }
 
-/// 从已归一化信号跑：订单 → 下一根 K0 开盘成交 → 单仓多头 → 交易记录 → 净值/绩效。
+/// 从已归一化信号跑：订单 → K0 成交 → 单仓多头 → 交易记录 → 净值/绩效。
 /// displayKn 只留在信号上，成交钟永远是 K0。
 BacktestResult runMiniLoopFromSignals({
   required List<SignalEvent> signals,
   required List<KlineBar> bars,
   int quantity = 100,
   double initialCash = 100000000,
+  TradeFillPriceMode fillPriceMode = kDefaultTradeFillPriceMode,
   CommissionModel commission = const ZeroCommission(),
   SlippageModel slippage = const ZeroSlippage(),
 }) {
@@ -53,25 +81,33 @@ BacktestResult runMiniLoopFromSignals({
   Fill? entryFill;
 
   for (final sig in tradable) {
-    final executeAt = sig.discoveryX + 1;
+    final plan = planFill(
+      sig: sig,
+      bars: bars,
+      fillPriceMode: fillPriceMode,
+    );
     var order = Order(
       orderId: 'O${++oid}',
       signalId: sig.signalId,
       side: sig.side!,
       quantity: quantity,
       createdAt: sig.discoveryX,
-      executeAt: executeAt,
+      executeAt: plan?.executeX ?? sig.discoveryX + 1,
       status: OrderStatus.pending,
     );
 
-    final next = k0BarAt(bars, executeAt);
-    if (next == null) {
+    if (plan == null) {
       orders.add(order.copyWith(
         status: OrderStatus.expired,
-        rejectReason: '无未来K0',
+        rejectReason: fillPriceMode == TradeFillPriceMode.nextBarOpen
+            ? '无未来K0'
+            : '无发现根K0',
       ));
       continue;
     }
+
+    final executeAt = plan.executeX;
+    final raw = plan.rawPrice;
 
     if (sig.side == TradeSide.buy) {
       if (acc.isLong) {
@@ -81,7 +117,6 @@ BacktestResult runMiniLoopFromSignals({
         ));
         continue;
       }
-      final raw = next.open;
       final price = slippage.apply(raw, side: TradeSide.buy);
       final fee = commission.fee(price: price, quantity: quantity);
       final cost = price * quantity + fee;
@@ -105,7 +140,7 @@ BacktestResult runMiniLoopFromSignals({
         price: price,
         executeX: executeAt,
         commission: fee,
-        slippage: price - raw, // 买滑点：成交价相对开盘的差
+        slippage: price - raw, // 买滑点：成交价相对原始价的差
       );
       fills.add(fill);
       entrySig = sig;
@@ -122,7 +157,6 @@ BacktestResult runMiniLoopFromSignals({
       ));
       continue;
     }
-    final raw = next.open;
     final price = slippage.apply(raw, side: TradeSide.sell);
     final fee = commission.fee(price: price, quantity: acc.positionQty);
     final qty = acc.positionQty;
@@ -138,7 +172,7 @@ BacktestResult runMiniLoopFromSignals({
       price: price,
       executeX: executeAt,
       commission: fee,
-      slippage: price - raw, // 卖滑点：成交价相对开盘的差（通常为负）
+      slippage: price - raw, // 卖滑点：成交价相对原始价的差（通常为负）
     );
     fills.add(fill);
     if (entrySig != null && entryFill != null) {
@@ -201,6 +235,7 @@ BacktestResult runMiniLongOnlyLoop({
   int quantity = 100,
   double initialCash = 100000000,
   int bollN = 20,
+  TradeFillPriceMode fillPriceMode = kDefaultTradeFillPriceMode,
   CommissionModel commission = const ZeroCommission(),
   SlippageModel slippage = const ZeroSlippage(),
 }) {
@@ -238,6 +273,7 @@ BacktestResult runMiniLongOnlyLoop({
     bars: bars,
     quantity: quantity,
     initialCash: initialCash,
+    fillPriceMode: fillPriceMode,
     commission: commission,
     slippage: slippage,
   );

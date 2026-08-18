@@ -133,6 +133,7 @@ void main() {
       final close0 = lookupTradeVariable('RAW.K0.CLOSE')!;
       expect(close0.evalClock, TradeEvalClock.k0Bar);
       expect(kTradeExecutionClock, TradeExecutionClock.k0NextOpen);
+      expect(kDefaultTradeFillPriceMode, TradeFillPriceMode.sameBarClose);
     });
   });
 
