@@ -1,0 +1,4 @@
+{
+  "name": "CHAN_RUST 缠论 Rust/Flutter 环境",
+  "install": "bash .cursor/install.sh"
+}
