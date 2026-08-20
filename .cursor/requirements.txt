@@ -1,0 +1,25 @@
+# Cloud Agent 环境依赖清单（缠论回测/研究工程）
+# 说明：把散落在 Script/requirements.txt、a_Script/a_requirements.txt 与
+#       a_replay_trainer.py 顶层 import 的依赖统一汇总，保证复盘训练器后端可直接启动。
+
+# --- 核心计算/数据/绘图 ---
+numpy>=1.23.3
+pandas>=1.4.2
+matplotlib>=3.5.3
+requests>=2.22.0
+ipython>=8.5.0
+beautifulsoup4
+
+# --- 行情数据源（a_replay_trainer 顶层硬导入，缺失会启动失败）---
+baostock>=0.8.8
+akshare
+tushare
+
+# --- FastAPI 复盘训练器后端（a_replay_trainer.py 的 Web 服务）---
+fastapi
+uvicorn
+starlette
+pydantic
+
+# --- Rust 极速引擎构建（rust_auto 模式必需）---
+maturin>=1.5
