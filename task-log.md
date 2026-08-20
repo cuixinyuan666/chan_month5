@@ -480,3 +480,16 @@
 - **演示**：test 演示 id=2026-08-20-chip-peak-vars
 - **注意事项**：纯 Flutter；无需重编 DLL；K1 筹码峰仍不进公式
 
+### 2026-08-20 17:30 — 把编译好的 APP 发到 GitHub Releases
+
+- **执行者**：cursor
+- **任务类型**：配置
+- **上下文**：用户要把桌面端安装包发到 GitHub Releases；云端编不了 Windows，本机 token 也不能直接建 Release，改为 Actions 自动打包上传
+- **关键操作**：
+  1. 增加 `Release chan_kline` 工作流：Windows zip + Linux tar.gz，打 `v*` 标签或手动跑即可上传
+  2. 发布包查找 `a_Data`：环境变量 / 仓库路径 / 当前目录 / exe 旁边，解压就能打开默认股票
+  3. Linux 发布目录带上 `libchan_ffi.so`；包内写入使用说明
+- **结果**：`cargo test -p chan_data pick_data_root_*`；PR 上的 Actions 编出安装包；打 tag 后出现在 Releases
+- **演示**：全新功能·免对比（发布管道，不改主图步进）
+- **注意事项**：不解压就双击 zip 里的 exe 会缺 dll；Windows 可能要装 VC++ 运行库
+
