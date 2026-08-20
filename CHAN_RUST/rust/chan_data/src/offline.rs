@@ -7,21 +7,61 @@ use crate::error::{ChanDataError, Result};
 use crate::kline::{KlineBar, KlinePeriod};
 use crate::tick::{assign_intramute_times, normalize_native, read_tick_file, TickRow};
 
-/// 默认 a_Data：优先 `chan.py/a_Data`（CHAN_RUST 的上一级），其次 `CHAN_RUST/a_Data`。
+/// 默认 a_Data 查找顺序（发布包必须能在 exe 旁边找到数据）：
+/// 1. 环境变量 `CHAN_DATA_ROOT`
+/// 2. 编译期仓库路径（开发态：CHAN_RUST 上一级或 CHAN_RUST 内）
+/// 3. 当前工作目录 / 上一级的 `a_Data`
+/// 4. exe 同级 / 上一级的 `a_Data`（GitHub Releases 解压即用）
 pub fn default_data_root() -> PathBuf {
+    pick_data_root(
+        std::env::var_os("CHAN_DATA_ROOT").map(PathBuf::from),
+        std::env::current_dir().ok(),
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.to_path_buf())),
+        compile_time_repo_data_candidates(),
+    )
+}
+
+fn compile_time_repo_data_candidates() -> Vec<PathBuf> {
     let chan_rust = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..");
-    let candidates = [
+    vec![
         chan_rust.join("..").join("a_Data"),
         chan_rust.join("a_Data"),
-    ];
+    ]
+}
+
+/// 从候选路径里挑第一个真实存在的 `a_Data` 目录。
+fn pick_data_root(
+    env_root: Option<PathBuf>,
+    cwd: Option<PathBuf>,
+    exe_dir: Option<PathBuf>,
+    repo_candidates: Vec<PathBuf>,
+) -> PathBuf {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(p) = env_root {
+        candidates.push(p);
+    }
+    candidates.extend(repo_candidates);
+    if let Some(cwd) = cwd {
+        candidates.push(cwd.join("a_Data"));
+        candidates.push(cwd.join("..").join("a_Data"));
+    }
+    if let Some(exe_dir) = exe_dir {
+        candidates.push(exe_dir.join("a_Data"));
+        candidates.push(exe_dir.join("..").join("a_Data"));
+    }
     for c in &candidates {
         if c.is_dir() {
             return c.canonicalize().unwrap_or_else(|_| c.clone());
         }
     }
-    candidates[0].clone()
+    candidates
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| PathBuf::from("a_Data"))
 }
 
 /// 解析数据根目录：优先入参，否则默认相对路径。
@@ -765,6 +805,38 @@ mod tests {
             let codes = list_stock_codes(&root).unwrap();
             assert!(!codes.is_empty());
         }
+    }
+
+    #[test]
+    fn pick_data_root_uses_cwd_a_data_when_repo_missing() {
+        let tmp = std::env::temp_dir().join(format!("chan_pick_cwd_{}", std::process::id()));
+        let data = tmp.join("a_Data");
+        std::fs::create_dir_all(&data).unwrap();
+        let got = pick_data_root(None, Some(tmp.clone()), None, vec![tmp.join("missing_repo")]);
+        assert_eq!(got.canonicalize().unwrap(), data.canonicalize().unwrap());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn pick_data_root_env_wins_over_cwd() {
+        let tmp = std::env::temp_dir().join(format!("chan_pick_env_{}", std::process::id()));
+        let env_dir = tmp.join("from_env");
+        let cwd_data = tmp.join("a_Data");
+        std::fs::create_dir_all(&env_dir).unwrap();
+        std::fs::create_dir_all(&cwd_data).unwrap();
+        let got = pick_data_root(Some(env_dir.clone()), Some(tmp.clone()), None, vec![]);
+        assert_eq!(got.canonicalize().unwrap(), env_dir.canonicalize().unwrap());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn pick_data_root_exe_dir_a_data() {
+        let tmp = std::env::temp_dir().join(format!("chan_pick_exe_{}", std::process::id()));
+        let data = tmp.join("a_Data");
+        std::fs::create_dir_all(&data).unwrap();
+        let got = pick_data_root(None, None, Some(tmp.clone()), vec![]);
+        assert_eq!(got.canonicalize().unwrap(), data.canonicalize().unwrap());
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]

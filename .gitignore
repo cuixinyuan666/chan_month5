@@ -42,3 +42,6 @@ a_Data/ml_exports/
 *.tmp
 *.temp
 test_*.py
+
+# GitHub Releases 本地打包输出
+/dist/

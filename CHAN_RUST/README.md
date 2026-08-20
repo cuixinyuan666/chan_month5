@@ -21,6 +21,17 @@ CHAN_RUST/
 
 默认读取 `chan.py/a_Data/`（与 `CHAN_RUST` 同级的离线分笔目录），与 Python `COfflineInline` 分笔格式一致。
 
+**发布包**（GitHub Releases 解压后的 exe）还会在：环境变量 `CHAN_DATA_ROOT`、当前目录 `a_Data`、exe 同级 `a_Data` 中查找。
+
+## 从 GitHub Releases 下载
+
+编译好的桌面端在仓库 [Releases](https://github.com/cuixinyuan666/chan_month5/releases)：
+
+- Windows：`chan_kline-windows-x64.zip` → 解压后双击 `chan_kline.exe`
+- Linux：`chan_kline-linux-x64.tar.gz` → 解压后运行 `./chan_kline`
+
+包内已带 `a_Data`。打 `v*` 标签或在 Actions 里手动跑 `Release chan_kline` 会自动再打一版。
+
 ## 环境要求
 
 - Rust 1.70+
