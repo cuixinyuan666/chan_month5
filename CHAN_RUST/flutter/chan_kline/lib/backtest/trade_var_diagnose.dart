@@ -1,8 +1,11 @@
 import '../compute/math_series_freeze_store.dart';
+import '../models/bar_feature_lookup.dart';
 import '../models/kline_bar.dart';
 import '../models/level_models.dart';
 import 'catalog_lookup.dart';
 import 'chan_event_store.dart';
+import 'chart_line_store.dart';
+import 'chip_peak_store.dart';
 import 'divergence_relation.dart';
 import 'divergence_relation_store.dart';
 import 'signal_data_catalog.dart';
@@ -178,6 +181,10 @@ TradeVarDiagnosis diagnoseTradeVariable({
   ChanEventStore chanEvents = ChanEventStore.empty,
   ZhongshuObjectStore? zsObjects,
   DivergenceRelationStore? diverRelations,
+  ChartLineStore? lineSeries,
+  BarFeatureLookup? features,
+  ChipPeakFreezeStore? chipPeaks,
+  double bucketStep = 0.1,
   int maxKn = 8,
 }) {
   final def = lookupTradeVariable(variableId, maxKn: maxKn);
@@ -193,7 +200,12 @@ TradeVarDiagnosis diagnoseTradeVariable({
       parsed.rest.length >= 2 &&
       parsed.rest[0] == 'ZS' &&
       parsed.rest[1] == 'CURRENT';
-  if (isZsCurrent) {
+  final isZsActive = parsed != null &&
+      parsed.panel == 'STRUCTURE' &&
+      parsed.rest.length >= 2 &&
+      parsed.rest[0] == 'ZS' &&
+      parsed.rest[1] == 'ACTIVE';
+  if (isZsCurrent || isZsActive) {
     freezePresent = zsObjects != null && !zsObjects.isEmpty;
   }
   final isDiver = parsed != null &&
@@ -202,6 +214,14 @@ TradeVarDiagnosis diagnoseTradeVariable({
       parsed.rest[0] == 'DIVERGENCE';
   if (isDiver) {
     freezePresent = diverRelations != null && !diverRelations.isEmpty;
+  }
+  final isChipPeak = parsed != null &&
+      parsed.panel == 'SUB' &&
+      parsed.rest.length >= 2 &&
+      parsed.rest[1] == 'PEAK' &&
+      (parsed.rest[0] == 'CHIP' || parsed.rest[0] == 'TICK');
+  if (isChipPeak) {
+    freezePresent = chipPeaks != null && !chipPeaks.isEmpty;
   }
 
   if (def != null &&
@@ -213,6 +233,7 @@ TradeVarDiagnosis diagnoseTradeVariable({
       store: chanEvents,
       levels: levels,
       diverRelations: diverRelations,
+      mathFreeze: mathFreeze,
       maxKn: maxKn,
     );
     TradeChanEvent? last;
@@ -293,6 +314,11 @@ TradeVarDiagnosis diagnoseTradeVariable({
     mathFreeze: mathFreeze,
     zsObjects: zsObjects,
     diverRelations: diverRelations,
+    lineSeries: lineSeries,
+    features: features,
+    chipPeaks: chipPeaks,
+    bucketStep: bucketStep,
+    k0Confirms: chanEvents.k0FractalConfirms,
   );
   final series = readEvalClockSeries(
     variableId: variableId,
@@ -302,24 +328,38 @@ TradeVarDiagnosis diagnoseTradeVariable({
     mathFreeze: mathFreeze,
     zsObjects: zsObjects,
     diverRelations: diverRelations,
+    lineSeries: lineSeries,
+    features: features,
+    chipPeaks: chipPeaks,
+    bucketStep: bucketStep,
+    k0Confirms: chanEvents.k0FractalConfirms,
   );
   EvalClockPoint? last;
   for (final p in series) {
     if (p.availableAt <= asOf) last = p;
   }
+  if (plot.isAvailable) freezePresent = true;
 
   var note = def.description.isEmpty ? def.availabilityNote : def.description;
   ZhongshuObject? currentZs;
   DivergenceRelation? currentDiver;
   if (isZsCurrent) {
     currentZs = zsObjects?.resolveCurrentConfirmedZs(
-      displayKn: parsed.kn,
+      displayKn: parsed!.kn,
       asOf: asOf,
     );
     if (!freezePresent) {
       note = '还没有中枢对象仓（需按步进喂入已确认中枢）。$note';
     } else if (currentZs == null) {
       note = '当前这根 K0 还没有已确认中枢（不可用，不是 0）。$note';
+    }
+  } else if (isZsActive) {
+    currentZs = zsObjects?.resolveCurrentActiveZs(
+      displayKn: parsed!.kn,
+      asOf: asOf,
+    );
+    if (currentZs == null) {
+      note = '当前这根 K 没有盖住的未确认中枢（不可用，不是 0，不沿用）。$note';
     }
   } else if (isDiver) {
     currentDiver = diverRelations?.resolveCurrent(

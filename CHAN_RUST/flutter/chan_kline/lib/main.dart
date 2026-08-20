@@ -44,6 +44,8 @@ import 'backtest/strategy_config.dart';
 import 'backtest/strategy_trade_round.dart';
 import 'backtest/backtest_workbench.dart';
 import 'backtest/chan_event_store.dart';
+import 'backtest/chart_line_store.dart';
+import 'backtest/chip_peak_store.dart';
 import 'backtest/divergence_relation_store.dart';
 import 'backtest/zhongshu_object_store.dart';
 import 'models/zs_frame.dart';
@@ -211,6 +213,8 @@ Future<void> main() async {
   MsgHistory.instance.appendTradeSignalTable();
   MsgHistory.instance.appendTradeFillPriceMode();
   MsgHistory.instance.appendTradeRoundLabel();
+    MsgHistory.instance.appendTradeCatalogFull();
+    MsgHistory.instance.appendChipPeakVars();
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     await windowManager.ensureInitialized();
     const opts = WindowOptions(
@@ -319,6 +323,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
   /// Math/均线/通道/Demark 会话冻结（Kn≥1 禁整表回写）
   final MathSeriesFreezeStore _mathFreezeStore = MathSeriesFreezeStore();
   final DivergenceFreezeStore _diverFreezeStore = DivergenceFreezeStore();
+  final ChipPeakFreezeStore _chipPeakStore = ChipPeakFreezeStore();
   /// chip 分支：仅显示筹码分布，关闭所有缠论渲染（关=正常缠论+筹码可并存）
   final bool _chipOnlyMode = false;
 
@@ -484,6 +489,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
     // 参数变了：清空 Math/背驰冻结仓，再从 0 步进重冻到当前（避免旧参数残值）
     _mathFreezeStore.clear();
     _diverFreezeStore.clear();
+    _chipPeakStore.clear();
     _diverRelationStore.clear();
     if (_hasSession && !_chipOnlyMode && _stepIdx >= 0) {
       _refreezeMathFromStart();
@@ -525,8 +531,22 @@ class _KlineHomePageState extends State<KlineHomePage> {
   }
 
   Future<void> _updateChipConfig(ChipConfig cfg) async {
+    final stepChanged =
+        (cfg.bucketStep - _chipConfig.bucketStep).abs() > 1e-12;
     setState(() => _chipConfig = cfg);
     await ChipSettingsStore.save(cfg, tickDist: _tickDistConfig);
+    if (stepChanged) {
+      _chipPeakStore.clear();
+      ChipProfileCompute.clearCache();
+      TickDistProfileCompute.clearCache();
+      if (_hasSession && _stepIdx >= 0 && _visibleBars.isNotEmpty) {
+        _chipPeakStore.ingestThrough(
+          asOf: _stepIdx,
+          bars: _visibleBars,
+          bucketStep: cfg.bucketStep,
+        );
+      }
+    }
   }
 
   Future<void> _updateTickDistConfig(TickDistConfig cfg) async {
@@ -765,6 +785,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _stepRhythmStateByKn.clear();
         _mathFreezeStore.clear();
         _diverFreezeStore.clear();
+        _chipPeakStore.clear();
         _clearBacktestSession();
       });
       final directOhlc = code == 'test' && _hasTestOhlcCsv();
@@ -851,6 +872,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _stepRhythmStateByKn.clear();
         _mathFreezeStore.clear();
         _diverFreezeStore.clear();
+        _chipPeakStore.clear();
         _clearBacktestSession();
       });
       _msgHistory.append('加载K0失败：$e');
@@ -1107,6 +1129,11 @@ class _KlineHomePageState extends State<KlineHomePage> {
       maxDisplayKn: maxKn,
       asOf: displayX,
     );
+    _chipPeakStore.ingestThrough(
+      asOf: displayX,
+      bars: visible,
+      bucketStep: _chipConfig.bucketStep,
+    );
   }
 
   /// 本步背驰并入会话冻结（本层力度；旧格不改、新 x 追加）。
@@ -1206,6 +1233,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _stepRhythmStateByKn.clear();
         _mathFreezeStore.clear();
         _diverFreezeStore.clear();
+        _chipPeakStore.clear();
       });
       return;
     }
@@ -2210,6 +2238,10 @@ class _KlineHomePageState extends State<KlineHomePage> {
             chanEvents: _chanEventStore(),
             zsObjects: _zsObjectStore,
             diverRelations: _diverRelationStore,
+            lineSeries: _chartLineStore(),
+            features: _pipelineSession?.cache.lookup,
+            chipPeaks: _chipPeakStore,
+            bucketStep: _chipConfig.bucketStep,
           ),
         ),
       ],
@@ -2225,7 +2257,17 @@ class _KlineHomePageState extends State<KlineHomePage> {
       buyNByKn: _buyNHistoryByKn,
       sellNByKn: _sellNHistoryByKn,
       zsConfirmByKn: _zsConfirmHistoryByKn,
+      zsJudgmentByKn: _zsJudgmentHistoryByKn,
+      fractalJudgmentByKn: _judgmentHistoryByKn,
       k0FractalConfirms: _k0ConfirmSignals,
+    );
+  }
+
+  ChartLineStore _chartLineStore() {
+    return ChartLineStore(
+      adjacentRatioByKn: _adjacentRatioHistoryByKn,
+      lineSlopeByKn: _lineSlopeHistoryByKn,
+      stepRhythmByKn: _stepRhythmHistoryByKn,
     );
   }
 
@@ -2252,6 +2294,10 @@ class _KlineHomePageState extends State<KlineHomePage> {
       chanEvents: _chanEventStore(),
       zsObjects: _zsObjectStore,
       diverRelations: _diverRelationStore,
+      lineSeries: _chartLineStore(),
+      features: _pipelineSession?.cache.lookup,
+      chipPeaks: _chipPeakStore,
+      bucketStep: _chipConfig.bucketStep,
       bollN: _mathIndicatorConfig.bollN,
       maxKn: maxKn,
     );

@@ -1,10 +1,13 @@
 import '../compute/class1_bs_compute.dart';
 import '../compute/class2_bs_compute.dart';
 import '../compute/class_n_bs_compute.dart';
+import '../compute/demark_compute.dart';
+import '../compute/math_series_freeze_store.dart';
 import '../compute/zs_signal_compute.dart';
 import '../models/buy1_frame.dart';
 import '../models/buy2_frame.dart';
 import '../models/buy_n_frame.dart';
+import '../models/fractal_judgment_event.dart';
 import '../models/k0_confirm_signal.dart';
 import '../models/level_models.dart';
 import '../models/sell1_frame.dart';
@@ -25,6 +28,8 @@ class ChanEventStore {
   final Map<int, List<BuyNFrame>> buyNByKn;
   final Map<int, List<SellNFrame>> sellNByKn;
   final Map<int, List<ZsSignalEvent>> zsConfirmByKn;
+  final Map<int, List<ZsSignalEvent>> zsJudgmentByKn;
+  final Map<int, List<FractalJudgmentEvent>> fractalJudgmentByKn;
   final List<K0ConfirmSignal> k0FractalConfirms;
 
   const ChanEventStore({
@@ -35,6 +40,8 @@ class ChanEventStore {
     this.buyNByKn = const {},
     this.sellNByKn = const {},
     this.zsConfirmByKn = const {},
+    this.zsJudgmentByKn = const {},
+    this.fractalJudgmentByKn = const {},
     this.k0FractalConfirms = const [],
   });
 
@@ -48,6 +55,8 @@ class ChanEventStore {
       buyNByKn.isEmpty &&
       sellNByKn.isEmpty &&
       zsConfirmByKn.isEmpty &&
+      zsJudgmentByKn.isEmpty &&
+      fractalJudgmentByKn.isEmpty &&
       k0FractalConfirms.isEmpty;
 }
 
@@ -72,6 +81,7 @@ List<TradeChanEvent> listTradeChanEvents({
   ChanEventStore store = ChanEventStore.empty,
   List<LevelBundle> levels = const [],
   DivergenceRelationStore? diverRelations,
+  MathSeriesFreezeStore? mathFreeze,
   int maxKn = 8,
 }) {
   final id = canonicalizeTradeVarId(variableId);
@@ -96,10 +106,32 @@ List<TradeChanEvent> listTradeChanEvents({
       return _firstSell2(store.sell2ByKn[kn] ?? const [], kn, asOf);
     case 'ZS_CONFIRM':
       return _firstZsConfirm(store.zsConfirmByKn[kn] ?? const [], kn, asOf);
+    case 'ZS_JUDGMENT':
+      return _firstZsJudgment(store.zsJudgmentByKn[kn] ?? const [], kn, asOf);
     case 'FRACTAL_CONFIRM':
       return kn == 0
           ? _firstK0Fractal(store.k0FractalConfirms, asOf)
           : _firstKnFractal(levels, kn, asOf);
+    case 'FRACTAL_JUDGMENT':
+      return _firstFractalJudgment(
+        store.fractalJudgmentByKn[kn] ?? const [],
+        kn,
+        asOf,
+      );
+    case 'DEMARK.COMPLETE_BUY':
+      return _firstDemarkComplete(
+        mathFreeze?.demark(kn),
+        kn,
+        asOf,
+        buy: true,
+      );
+    case 'DEMARK.COMPLETE_SELL':
+      return _firstDemarkComplete(
+        mathFreeze?.demark(kn),
+        kn,
+        asOf,
+        buy: false,
+      );
     case 'DIVERGENCE.EXISTS':
       return diverRelations?.listExistsEvents(
             displayKn: kn,
@@ -210,6 +242,88 @@ List<TradeChanEvent> _firstZsConfirm(
       source: '中枢确认会话历史（is_sure 首次；不暴露框高框低）',
     ),
   );
+}
+
+List<TradeChanEvent> _firstZsJudgment(
+  List<ZsSignalEvent> hist,
+  int kn,
+  int asOf,
+) {
+  return _firstByX(
+    items: hist,
+    asOf: asOf,
+    xOf: (e) => e.x,
+    stableOf: (e) => zsSignalStableKey(e.kn, e.x1),
+    toEvent: (e) => TradeChanEvent(
+      eventId: 'ZS_JUDGMENT|$kn|${e.x1}',
+      displayKn: kn,
+      discoveryX: e.x,
+      availableAt: e.x,
+      label: '中枢判断',
+      price: 0,
+      source: '中枢判断会话历史（尚未确认框首次可判；离开窗后续 x 不重复出信号）',
+    ),
+  );
+}
+
+List<TradeChanEvent> _firstFractalJudgment(
+  List<FractalJudgmentEvent> hist,
+  int kn,
+  int asOf,
+) {
+  return _firstByX(
+    items: hist,
+    asOf: asOf,
+    xOf: (e) => e.x,
+    stableOf: (e) => '$kn|${e.fractalX1}|${e.fx}',
+    toEvent: (e) => TradeChanEvent(
+      eventId: 'FRACTAL_JUDGMENT|$kn|${e.fractalX1}|${e.fx}',
+      displayKn: kn,
+      discoveryX: e.x,
+      availableAt: e.x,
+      label: e.fx,
+      price: 0,
+      source: '分型判断会话历史（尚未确认分型首次可判边沿）',
+    ),
+  );
+}
+
+bool _demarkHasComplete(List<DemarkMark>? marks, {required bool buy}) {
+  if (marks == null) return false;
+  for (final m in marks) {
+    if (m.type != 'complete') continue;
+    if (buy && m.dir < 0) return true;
+    if (!buy && m.dir > 0) return true;
+  }
+  return false;
+}
+
+List<TradeChanEvent> _firstDemarkComplete(
+  DemarkK0Series? series,
+  int kn,
+  int asOf, {
+  required bool buy,
+}) {
+  if (series == null) return const [];
+  final out = <TradeChanEvent>[];
+  final marksAt = series.marksAt;
+  var prev = false;
+  for (var x = 0; x < marksAt.length && x <= asOf; x++) {
+    final now = _demarkHasComplete(marksAt[x], buy: buy);
+    if (now && !prev) {
+      out.add(TradeChanEvent(
+        eventId: 'DEMARK|${buy ? "BUY" : "SELL"}|$kn|$x',
+        displayKn: kn,
+        discoveryX: x,
+        availableAt: x,
+        label: buy ? '完成买' : '完成卖',
+        price: 0,
+        source: 'Demark 冻结仓完成买/卖边沿（阶梯持值不重复出事件）',
+      ));
+    }
+    prev = now;
+  }
+  return out;
 }
 
 List<TradeChanEvent> _firstK0Fractal(List<K0ConfirmSignal> hist, int asOf) {

@@ -1,13 +1,21 @@
+import '../compute/fx_extend_line_compute.dart';
 import '../compute/kn_ohlc_sample_compute.dart';
+import '../compute/kn_volume_series_compute.dart';
 import '../compute/math_classic_compute.dart';
 import '../compute/math_series_freeze_store.dart';
+import '../compute/trend_line_compute.dart';
+import '../models/bar_feature_lookup.dart';
+import '../models/k0_confirm_signal.dart';
 import '../models/kline_bar.dart';
 import '../models/level_models.dart';
 import 'buy_n_var.dart';
+import 'chart_line_store.dart';
+import 'chip_peak_store.dart';
 import 'divergence_relation.dart';
 import 'divergence_relation_store.dart';
 import 'signal_data_catalog.dart';
 import 'structure_object.dart';
+import 'trade_clock.dart';
 import 'trade_value.dart';
 import 'zhongshu_object_store.dart';
 
@@ -21,6 +29,11 @@ TradeScalar lookupTradeNumeric({
   MathSeriesFreezeStore? mathFreeze,
   ZhongshuObjectStore? zsObjects,
   DivergenceRelationStore? diverRelations,
+  ChartLineStore? lineSeries,
+  BarFeatureLookup? features,
+  ChipPeakFreezeStore? chipPeaks,
+  double bucketStep = 0.1,
+  List<K0ConfirmSignal> k0Confirms = const [],
   int bollN = 20,
 }) {
   if (bars.isEmpty || asOf < 0) return const TradeScalar.unavailable();
@@ -54,6 +67,18 @@ TradeScalar lookupTradeNumeric({
     diverRelations: diverRelations,
   );
   if (diver != null) return diver;
+  final extra = _lookupExtendedNumeric(
+    parsed: parsed,
+    asOf: asOf,
+    bars: bars,
+    levels: levels,
+    lineSeries: lineSeries,
+    features: features,
+    chipPeaks: chipPeaks,
+    bucketStep: bucketStep,
+    k0Confirms: k0Confirms,
+  );
+  if (extra != null) return extra;
   return _lookupFrozenPlot(
     parsed: parsed,
     asOf: asOf,
@@ -100,6 +125,8 @@ TradeScalar _lookupRaw({
         return TradeScalar.num(bar.close);
       case 'VOLUME':
         return TradeScalar.num(bar.volume);
+      case 'TICK_COUNT':
+        return TradeScalar.num(_tickCountOf(bar));
       default:
         return const TradeScalar.unavailable();
     }
@@ -151,6 +178,26 @@ List<double?>? frozenPlotSeries({
   required ({String panel, int kn, List<String> rest}) parsed,
   required MathSeriesFreezeStore store,
 }) {
+  if (parsed.panel == 'MAIN' &&
+      parsed.rest.length == 2 &&
+      parsed.rest[0] == 'MA') {
+    final period = int.tryParse(parsed.rest[1]);
+    if (period == null || period < 1) return null;
+    return store.mean(parsed.kn)?[period];
+  }
+  if (parsed.panel == 'MAIN' &&
+      parsed.rest.length == 3 &&
+      parsed.rest[0] == 'CHANNEL') {
+    final period = int.tryParse(parsed.rest[1]);
+    if (period == null || period < 1) return null;
+    final pair = store.channel(parsed.kn)?[period];
+    if (pair == null) return null;
+    return switch (parsed.rest[2]) {
+      'MAX' => pair.max,
+      'MIN' => pair.min,
+      _ => null,
+    };
+  }
   if (parsed.panel == 'MAIN' &&
       parsed.rest.length >= 2 &&
       parsed.rest[0] == 'BOLL') {
@@ -214,6 +261,11 @@ List<EvalClockPoint> readEvalClockSeries({
   MathSeriesFreezeStore? mathFreeze,
   ZhongshuObjectStore? zsObjects,
   DivergenceRelationStore? diverRelations,
+  ChartLineStore? lineSeries,
+  BarFeatureLookup? features,
+  ChipPeakFreezeStore? chipPeaks,
+  double bucketStep = 0.1,
+  List<K0ConfirmSignal> k0Confirms = const [],
   int bollN = 20,
 }) {
   if (bars.isEmpty || asOf < 0) return const [];
@@ -236,7 +288,8 @@ List<EvalClockPoint> readEvalClockSeries({
   if (zsProj != null) {
     return _zsCurrentEvalSeries(
       kn: parsed.kn,
-      projection: zsProj,
+      projection: zsProj.proj,
+      active: zsProj.active,
       asOf: asOf,
       bars: bars,
       levels: levels,
@@ -254,11 +307,33 @@ List<EvalClockPoint> readEvalClockSeries({
       diverRelations: diverRelations,
     );
   }
+  final extraPlot = _extendedPlotSeries(
+    parsed: parsed,
+    asOf: asOf,
+    bars: bars,
+    levels: levels,
+    lineSeries: lineSeries,
+    features: features,
+    chipPeaks: chipPeaks,
+    bucketStep: bucketStep,
+    k0Confirms: k0Confirms,
+  );
+  if (extraPlot != null) {
+    return _plotEvalSeries(
+      kn: parsed.kn,
+      evalClock: def.evalClock ?? TradeEvalClock.k0Bar,
+      plot: extraPlot,
+      asOf: asOf,
+      bars: bars,
+      levels: levels,
+    );
+  }
   if (mathFreeze == null) return const [];
   final plot = frozenPlotSeries(parsed: parsed, store: mathFreeze);
   if (plot == null) return const [];
   return _plotEvalSeries(
     kn: parsed.kn,
+    evalClock: def.evalClock ?? evalClockForDisplayKn(parsed.kn),
     plot: plot,
     asOf: asOf,
     bars: bars,
@@ -284,6 +359,7 @@ List<EvalClockPoint> _rawEvalSeries({
         'LOW' => b.low,
         'CLOSE' => b.close,
         'VOLUME' => b.volume,
+        'TICK_COUNT' => _tickCountOf(b),
         _ => null,
       };
       if (v == null) continue;
@@ -315,15 +391,17 @@ List<EvalClockPoint> _rawEvalSeries({
   return out;
 }
 
-/// 冻结仓是 K0 格子；条件只在 evalClock 样本上取（K0 每根，Kn 取虚拟K右端）。
+/// 冻结仓是 K0 格子；条件只在 evalClock 样本上取。
+/// 连线斜率/比例/节奏虽是 Kn 变量，计算钟仍是 K0 一根一根，不能按层号误走虚拟K。
 List<EvalClockPoint> _plotEvalSeries({
   required int kn,
+  required TradeEvalClock evalClock,
   required List<double?> plot,
   required int asOf,
   required List<KlineBar> bars,
   required List<LevelBundle> levels,
 }) {
-  if (kn <= 0) {
+  if (evalClock == TradeEvalClock.k0Bar) {
     final out = <EvalClockPoint>[];
     var i = 0;
     for (final b in bars) {
@@ -368,36 +446,46 @@ List<double?>? _bollField(BollK0Series? b, String band) {
   }
 }
 
-ZsProjection? _zsProjectionOf(
+({ZsProjection proj, bool active})? _zsProjectionOf(
   ({String panel, int kn, List<String> rest}) parsed,
 ) {
   if (parsed.panel != 'STRUCTURE') return null;
   if (parsed.rest.length != 3) return null;
-  if (parsed.rest[0] != 'ZS' || parsed.rest[1] != 'CURRENT') return null;
-  return switch (parsed.rest[2]) {
+  if (parsed.rest[0] != 'ZS') return null;
+  final kind = parsed.rest[1];
+  if (kind != 'CURRENT' && kind != 'ACTIVE') return null;
+  final proj = switch (parsed.rest[2]) {
     'HIGH' => ZsProjection.high,
     'LOW' => ZsProjection.low,
     'CENTER' => ZsProjection.center,
     _ => null,
   };
+  if (proj == null) return null;
+  return (proj: proj, active: kind == 'ACTIVE');
 }
 
-/// 没有确认中枢 → 不可用（不是 0）。
+/// 没有对应中枢 → 不可用（不是 0）。ACTIVE 不沿用框外旧值。
 TradeScalar? _lookupZsCurrent({
   required ({String panel, int kn, List<String> rest}) parsed,
   required int asOf,
   required ZhongshuObjectStore? zsObjects,
 }) {
-  final proj = _zsProjectionOf(parsed);
-  if (proj == null) return null;
+  final spec = _zsProjectionOf(parsed);
+  if (spec == null) return null;
   if (zsObjects == null || zsObjects.isEmpty) {
     return const TradeScalar.unavailable();
   }
-  final v = zsObjects.projectCurrent(
-    displayKn: parsed.kn,
-    asOf: asOf,
-    projection: proj,
-  );
+  final v = spec.active
+      ? zsObjects.projectActive(
+          displayKn: parsed.kn,
+          asOf: asOf,
+          projection: spec.proj,
+        )
+      : zsObjects.projectCurrent(
+          displayKn: parsed.kn,
+          asOf: asOf,
+          projection: spec.proj,
+        );
   if (v == null) return const TradeScalar.unavailable();
   return TradeScalar.num(v);
 }
@@ -406,6 +494,7 @@ TradeScalar? _lookupZsCurrent({
 List<EvalClockPoint> _zsCurrentEvalSeries({
   required int kn,
   required ZsProjection projection,
+  required bool active,
   required int asOf,
   required List<KlineBar> bars,
   required List<LevelBundle> levels,
@@ -422,11 +511,17 @@ List<EvalClockPoint> _zsCurrentEvalSeries({
   final out = <EvalClockPoint>[];
   var i = 0;
   for (final g in grid) {
-    final v = zsObjects.projectCurrent(
-      displayKn: kn,
-      asOf: g.availableAt,
-      projection: projection,
-    );
+    final v = active
+        ? zsObjects.projectActive(
+            displayKn: kn,
+            asOf: g.availableAt,
+            projection: projection,
+          )
+        : zsObjects.projectCurrent(
+            displayKn: kn,
+            asOf: g.availableAt,
+            projection: projection,
+          );
     if (v == null) continue;
     out.add(EvalClockPoint(
       evalIndex: i,
@@ -512,6 +607,255 @@ List<EvalClockPoint> _diverEvalSeries({
       value: v,
     ));
     i++;
+  }
+  return out;
+}
+
+double _tickCountOf(KlineBar b) {
+  return computeK0TickCountSeries([b]).first;
+}
+
+double? _featureNum(BarFeatureLookup? features, int asOf, String key) {
+  final row = features?[asOf];
+  if (row == null) return null;
+  final sub = row['sub'];
+  if (sub is! Map) return null;
+  final v = sub[key];
+  if (v is num) return v.toDouble();
+  return null;
+}
+
+TradeScalar _optNum(double? v) =>
+    v == null ? const TradeScalar.unavailable() : TradeScalar.num(v);
+
+/// 斜率/比例/节奏/量笔/三型四型趋势：读会话历史或十字已冻格子。
+TradeScalar? _lookupExtendedNumeric({
+  required ({String panel, int kn, List<String> rest}) parsed,
+  required int asOf,
+  required List<KlineBar> bars,
+  required List<LevelBundle> levels,
+  required ChartLineStore? lineSeries,
+  required BarFeatureLookup? features,
+  required ChipPeakFreezeStore? chipPeaks,
+  required double bucketStep,
+  required List<K0ConfirmSignal> k0Confirms,
+}) {
+  final plot = _extendedPlotSeries(
+    parsed: parsed,
+    asOf: asOf,
+    bars: bars,
+    levels: levels,
+    lineSeries: lineSeries,
+    features: features,
+    chipPeaks: chipPeaks,
+    bucketStep: bucketStep,
+    k0Confirms: k0Confirms,
+  );
+  if (plot == null) return null;
+  if (asOf < 0 || asOf >= plot.length) return const TradeScalar.unavailable();
+  return _optNum(plot[asOf]);
+}
+
+List<double?>? _extendedPlotSeries({
+  required ({String panel, int kn, List<String> rest}) parsed,
+  required int asOf,
+  required List<KlineBar> bars,
+  required List<LevelBundle> levels,
+  required ChartLineStore? lineSeries,
+  required BarFeatureLookup? features,
+  required ChipPeakFreezeStore? chipPeaks,
+  required double bucketStep,
+  required List<K0ConfirmSignal> k0Confirms,
+}) {
+  if (bars.isEmpty) return null;
+  final n = bars.last.idx + 1;
+  if (n <= 0) return null;
+
+  final peakPlot = _chipPeakPlotSeries(
+    parsed: parsed,
+    asOf: asOf,
+    bars: bars,
+    n: n,
+    chipPeaks: chipPeaks,
+    bucketStep: bucketStep,
+  );
+  if (peakPlot != null) return peakPlot;
+
+  if (parsed.panel == 'SUB' &&
+      parsed.rest.length == 1 &&
+      parsed.rest[0] == 'LINE_SLOPE') {
+    final out = List<double?>.filled(n, null);
+    final lines = lineSeries ?? ChartLineStore.empty;
+    for (final p in lines.lineSlopeByKn[parsed.kn] ?? const []) {
+      if (p.x >= 0 && p.x < n && p.x <= asOf) out[p.x] = p.slope;
+    }
+    return out;
+  }
+  if (parsed.panel == 'SUB' &&
+      parsed.rest.length == 1 &&
+      parsed.rest[0] == 'ADJACENT_RATIO') {
+    final out = List<double?>.filled(n, null);
+    final lines = lineSeries ?? ChartLineStore.empty;
+    for (final p in lines.adjacentRatioByKn[parsed.kn] ?? const []) {
+      if (p.x >= 0 && p.x < n && p.x <= asOf) out[p.x] = p.ratio;
+    }
+    return out;
+  }
+  if (parsed.panel == 'MAIN' &&
+      parsed.rest.length == 1 &&
+      parsed.rest[0] == 'STEP_RHYTHM') {
+    final out = List<double?>.filled(n, null);
+    final lines = lineSeries ?? ChartLineStore.empty;
+    for (final p in lines.stepRhythmByKn[parsed.kn] ?? const []) {
+      if (p.x >= 0 && p.x < n && p.x <= asOf && out[p.x] == null) {
+        out[p.x] = p.value;
+      }
+    }
+    return out;
+  }
+  if (parsed.panel == 'SUB' &&
+      parsed.rest.length == 1 &&
+      (parsed.rest[0] == 'VOLUME' || parsed.rest[0] == 'TICK_COUNT') &&
+      parsed.kn >= 1) {
+    final all = parsed.rest[0] == 'VOLUME'
+        ? computeAllKnVolumeSeries(bars: bars, levels: levels)
+        : computeAllKnTickCountSeries(bars: bars, levels: levels);
+    final series = all[parsed.kn];
+    if (series == null) return List<double?>.filled(n, null);
+    return [
+      for (var i = 0; i < n; i++)
+        i < series.length && i <= asOf ? series[i] : null,
+    ];
+  }
+  if (parsed.panel == 'MAIN' && parsed.rest.isNotEmpty) {
+    final head = parsed.rest[0];
+    if (head == 'FX_TRIPLE' ||
+        head == 'FX_QUAD' ||
+        head == 'TREND_LINE') {
+      return _geometryPriceSeries(
+        parsed: parsed,
+        asOf: asOf,
+        bars: bars,
+        levels: levels,
+        features: features,
+        k0Confirms: k0Confirms,
+        n: n,
+      );
+    }
+  }
+  return null;
+}
+
+List<double?>? _chipPeakPlotSeries({
+  required ({String panel, int kn, List<String> rest}) parsed,
+  required int asOf,
+  required List<KlineBar> bars,
+  required int n,
+  required ChipPeakFreezeStore? chipPeaks,
+  required double bucketStep,
+}) {
+  if (parsed.panel != 'SUB' || parsed.kn != 0) return null;
+  if (parsed.rest.length < 2 || parsed.rest[1] != 'PEAK') return null;
+  final head = parsed.rest[0];
+  if (head != 'CHIP' && head != 'TICK') return null;
+  final kind = head == 'TICK' ? 'tick' : 'chip';
+  final suffix = parsed.rest.length < 3
+      ? ''
+      : chipPeakSuffixOfToken(parsed.rest[2]);
+  final out = List<double?>.filled(n, null);
+  final useStore = chipPeaks != null && !chipPeaks.isEmpty;
+  for (var x = 0; x < n && x <= asOf; x++) {
+    out[x] = useStore
+        ? chipPeaks.at(kind: kind, suffix: suffix, asOf: x)
+        : liveProfilePeakPrice(
+            kind: kind,
+            suffix: suffix,
+            asOf: x,
+            bars: bars,
+            bucketStep: bucketStep,
+          );
+  }
+  return out;
+}
+
+List<double?> _geometryPriceSeries({
+  required ({String panel, int kn, List<String> rest}) parsed,
+  required int asOf,
+  required List<KlineBar> bars,
+  required List<LevelBundle> levels,
+  required BarFeatureLookup? features,
+  required List<K0ConfirmSignal> k0Confirms,
+  required int n,
+}) {
+  final kn = parsed.kn;
+  final out = List<double?>.filled(n, null);
+  String? featureKey;
+  if (parsed.rest[0] == 'FX_TRIPLE') {
+    featureKey = 'fx_triple_price_$kn';
+  } else if (parsed.rest[0] == 'FX_QUAD' && parsed.rest.length >= 2) {
+    featureKey = parsed.rest[1] == 'TOP'
+        ? 'fx_quad_top_price_$kn'
+        : parsed.rest[1] == 'BOTTOM'
+            ? 'fx_quad_bottom_price_$kn'
+            : null;
+  } else if (parsed.rest[0] == 'TREND_LINE' && parsed.rest.length >= 2) {
+    featureKey = parsed.rest[1] == 'SUPPORT'
+        ? 'trend_support_price_$kn'
+        : parsed.rest[1] == 'RESIST'
+            ? 'trend_resist_price_$kn'
+            : null;
+  }
+  var filled = 0;
+  if (featureKey != null && features != null) {
+    for (var x = 0; x < n && x <= asOf; x++) {
+      final v = _featureNum(features, x, featureKey);
+      if (v != null) {
+        out[x] = v;
+        filled++;
+      }
+    }
+  }
+  if (filled > 0) return out;
+  for (var x = 0; x < n && x <= asOf; x++) {
+    if (parsed.rest[0] == 'FX_TRIPLE') {
+      final poles = collectLevelFxPoles(
+        displayKn: kn,
+        bars: bars,
+        k0Confirms: k0Confirms,
+        levels: levels,
+        asOf: x,
+      );
+      out[x] = triplePriceReadout(
+        calcAllTripleGroups(poles),
+        atX: x,
+        focusX: x,
+      );
+    } else if (parsed.rest[0] == 'FX_QUAD' && parsed.rest.length >= 2) {
+      final poles = collectLevelFxPoles(
+        displayKn: kn,
+        bars: bars,
+        k0Confirms: k0Confirms,
+        levels: levels,
+        asOf: x,
+      );
+      final q = quadPriceReadout(
+        calcAllQuadGroups(poles),
+        atX: x,
+        focusX: x,
+      );
+      out[x] = parsed.rest[1] == 'TOP' ? q.top : q.bottom;
+    } else if (parsed.rest[0] == 'TREND_LINE' && parsed.rest.length >= 2) {
+      final tl = trendLinePriceReadout(
+        calcTrendLineGroupsForLevel(
+          displayKn: kn,
+          levels: levels,
+          asOf: x,
+        ),
+        atX: x,
+        focusX: x,
+      );
+      out[x] = parsed.rest[1] == 'SUPPORT' ? tl.support : tl.resistance;
+    }
   }
   return out;
 }

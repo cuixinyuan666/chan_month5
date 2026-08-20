@@ -39,6 +39,8 @@ void main() {
       expect(regs.any((e) => e.variableId == 'SUB.K1.KDJ.K'), isTrue);
       // 成交量只登记 K0
       expect(regs.any((e) => e.variableId == 'RAW.K1.VOLUME'), isFalse);
+      expect(regs.any((e) => e.variableId == 'SUB.K1.VOLUME'), isTrue);
+      expect(regs.any((e) => e.variableId == 'RAW.K0.TICK_COUNT'), isTrue);
 
       // 一类买点已进公式（事件，不能拿去比较）
       final buy1 = lookupTradeVariable('STRUCTURE.K0.BUY1');

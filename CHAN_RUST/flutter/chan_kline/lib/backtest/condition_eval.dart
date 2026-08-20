@@ -1,9 +1,12 @@
 import '../compute/math_series_freeze_store.dart';
+import '../models/bar_feature_lookup.dart';
 import '../models/kline_bar.dart';
 import '../models/level_models.dart';
 import 'buy_n_var.dart';
 import 'catalog_lookup.dart';
 import 'chan_event_store.dart';
+import 'chart_line_store.dart';
+import 'chip_peak_store.dart';
 import 'condition_ast.dart';
 import 'condition_trace.dart';
 import 'divergence_relation.dart';
@@ -260,6 +263,10 @@ class CondEvalCtx {
   final ChanEventStore chanEvents;
   final ZhongshuObjectStore? zsObjects;
   final DivergenceRelationStore? diverRelations;
+  final ChartLineStore? lineSeries;
+  final BarFeatureLookup? features;
+  final ChipPeakFreezeStore? chipPeaks;
+  final double bucketStep;
   final int bollN;
   final int maxKn;
 
@@ -271,6 +278,10 @@ class CondEvalCtx {
     this.chanEvents = ChanEventStore.empty,
     this.zsObjects,
     this.diverRelations,
+    this.lineSeries,
+    this.features,
+    this.chipPeaks,
+    this.bucketStep = 0.1,
     this.bollN = 20,
     this.maxKn = 8,
   });
@@ -377,6 +388,7 @@ List<_BoolPt> _evalEvent(CompiledEvent cond, CondEvalCtx ctx) {
     store: ctx.chanEvents,
     levels: ctx.levels,
     diverRelations: ctx.diverRelations,
+    mathFreeze: ctx.mathFreeze,
     maxKn: ctx.maxKn,
   );
   final at = <int, TradeChanEvent>{
@@ -758,6 +770,13 @@ ConditionTrace _cmpTrace(
     );
     return (objectId: zs?.objectId, relationId: null);
   }
+  if (id.contains('.ZS.ACTIVE') && ctx.zsObjects != null) {
+    final zs = ctx.zsObjects!.resolveCurrentActiveZs(
+      displayKn: kn,
+      asOf: asOf,
+    );
+    return (objectId: zs?.objectId, relationId: null);
+  }
   if (id.contains('.DIVERGENCE') && ctx.diverRelations != null) {
     final rel = ctx.diverRelations!.resolveCurrent(displayKn: kn, asOf: asOf);
     return (objectId: null, relationId: rel?.relationId);
@@ -779,6 +798,11 @@ List<EvalClockPoint> _readRef(
       mathFreeze: ctx.mathFreeze,
       zsObjects: ctx.zsObjects,
       diverRelations: ctx.diverRelations,
+      lineSeries: ctx.lineSeries,
+      features: ctx.features,
+      chipPeaks: ctx.chipPeaks,
+      bucketStep: ctx.bucketStep,
+      k0Confirms: ctx.chanEvents.k0FractalConfirms,
       bollN: ctx.bollN,
     );
     return [
@@ -801,6 +825,11 @@ List<EvalClockPoint> _readRef(
       mathFreeze: ctx.mathFreeze,
       zsObjects: ctx.zsObjects,
       diverRelations: ctx.diverRelations,
+      lineSeries: ctx.lineSeries,
+      features: ctx.features,
+      chipPeaks: ctx.chipPeaks,
+      bucketStep: ctx.bucketStep,
+      k0Confirms: ctx.chanEvents.k0FractalConfirms,
       bollN: ctx.bollN,
     );
     return [
@@ -821,6 +850,11 @@ List<EvalClockPoint> _readRef(
     mathFreeze: ctx.mathFreeze,
     zsObjects: ctx.zsObjects,
     diverRelations: ctx.diverRelations,
+    lineSeries: ctx.lineSeries,
+    features: ctx.features,
+    chipPeaks: ctx.chipPeaks,
+    bucketStep: ctx.bucketStep,
+    k0Confirms: ctx.chanEvents.k0FractalConfirms,
     bollN: ctx.bollN,
   );
 }

@@ -231,6 +231,62 @@ void main() {
       expect(v.isUnavailable, isTrue);
       expect(v.value, isNull);
       expect(store.resolveCurrentConfirmedZs(displayKn: 0, asOf: 3), isNull);
+      final active = lookupTradeNumeric(
+        variableId: 'STRUCTURE.K0.ZS.ACTIVE.LOW',
+        asOf: 3,
+        bars: bars,
+        zsObjects: store,
+      );
+      expect(active.isAvailable, isTrue);
+      expect(active.value, closeTo(8, 1e-12));
+    });
+
+    test('未确认中枢：盖住才有数，框外为空不沿用；确认后改走 CURRENT', () {
+      final store = ZhongshuObjectStore();
+      store.ingestLevel(
+        displayKn: 0,
+        frames: [_zs(x1: 2, x2: 4, high: 11, low: 9, sure: false)],
+        asOf: 4,
+      );
+      store.ingestLevel(
+        displayKn: 0,
+        frames: [_zs(x1: 2, x2: 4, high: 11, low: 9, sure: false)],
+        asOf: 5,
+      );
+      store.ingestLevel(
+        displayKn: 0,
+        frames: [_zs(x1: 2, x2: 6, high: 12, low: 9)],
+        asOf: 6,
+      );
+      final bars = [_bar(4, 10), _bar(5, 10), _bar(6, 10)];
+      final at4 = lookupTradeNumeric(
+        variableId: 'STRUCTURE.K0.ZS.ACTIVE.HIGH',
+        asOf: 4,
+        bars: bars,
+        zsObjects: store,
+      );
+      final at5 = lookupTradeNumeric(
+        variableId: 'STRUCTURE.K0.ZS.ACTIVE.HIGH',
+        asOf: 5,
+        bars: bars,
+        zsObjects: store,
+      );
+      final at6Active = lookupTradeNumeric(
+        variableId: 'STRUCTURE.K0.ZS.ACTIVE.HIGH',
+        asOf: 6,
+        bars: bars,
+        zsObjects: store,
+      );
+      final at6Cur = lookupTradeNumeric(
+        variableId: 'STRUCTURE.K0.ZS.CURRENT.HIGH',
+        asOf: 6,
+        bars: bars,
+        zsObjects: store,
+      );
+      expect(at4.value, closeTo(11, 1e-12));
+      expect(at5.isUnavailable, isTrue);
+      expect(at6Active.isUnavailable, isTrue);
+      expect(at6Cur.value, closeTo(12, 1e-12));
     });
 
     test('K0 / K1 同一套 CURRENT 规则', () {

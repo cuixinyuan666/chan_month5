@@ -11,7 +11,7 @@ enum StructureKind {
   fractalGroup,
 }
 
-/// 中枢生命周期。未确认不进交易变量。
+/// 中枢生命周期。未确认可进 ACTIVE 投影（当步冻结，框外为空）。
 enum StructureObjectState {
   /// 已经看见框，但还没确认（is_sure=false）
   discovered,

@@ -2,9 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../compute/math_series_freeze_store.dart';
+import '../models/bar_feature_lookup.dart';
 import '../models/kline_bar.dart';
 import '../models/level_models.dart';
 import 'chan_event_store.dart';
+import 'chart_line_store.dart';
+import 'chip_peak_store.dart';
 import 'condition_ast.dart';
 import 'divergence_relation_store.dart';
 import 'signal_data_catalog.dart';
@@ -28,6 +31,10 @@ class StrategyConfigForm extends StatefulWidget {
   final ChanEventStore chanEvents;
   final ZhongshuObjectStore? zsObjects;
   final DivergenceRelationStore? diverRelations;
+  final ChartLineStore? lineSeries;
+  final BarFeatureLookup? features;
+  final ChipPeakFreezeStore? chipPeaks;
+  final double bucketStep;
   final int asOf;
 
   const StrategyConfigForm({
@@ -43,6 +50,10 @@ class StrategyConfigForm extends StatefulWidget {
     this.chanEvents = ChanEventStore.empty,
     this.zsObjects,
     this.diverRelations,
+    this.lineSeries,
+    this.features,
+    this.chipPeaks,
+    this.bucketStep = 0.1,
     this.asOf = 0,
   });
 
@@ -759,6 +770,10 @@ class _StrategyConfigFormState extends State<StrategyConfigForm> {
       chanEvents: widget.chanEvents,
       zsObjects: widget.zsObjects,
       diverRelations: widget.diverRelations,
+      lineSeries: widget.lineSeries,
+      features: widget.features,
+      chipPeaks: widget.chipPeaks,
+      bucketStep: widget.bucketStep,
       maxKn: widget.maxKn < 0 ? 0 : widget.maxKn,
     );
     return Container(

@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 
 import '../compute/math_series_freeze_store.dart';
+import '../models/bar_feature_lookup.dart';
 import '../models/kline_bar.dart';
 import '../models/level_models.dart';
 import 'backtest_report_panel.dart';
 import 'backtest_run.dart';
 import 'chan_event_store.dart';
+import 'chart_line_store.dart';
+import 'chip_peak_store.dart';
 import 'divergence_relation_store.dart';
 import 'order_models.dart';
 import 'signal_event.dart';
@@ -38,6 +41,10 @@ class BacktestWorkbench extends StatelessWidget {
   final ChanEventStore chanEvents;
   final ZhongshuObjectStore? zsObjects;
   final DivergenceRelationStore? diverRelations;
+  final ChartLineStore? lineSeries;
+  final BarFeatureLookup? features;
+  final ChipPeakFreezeStore? chipPeaks;
+  final double bucketStep;
 
   const BacktestWorkbench({
     super.key,
@@ -64,6 +71,10 @@ class BacktestWorkbench extends StatelessWidget {
     this.chanEvents = ChanEventStore.empty,
     this.zsObjects,
     this.diverRelations,
+    this.lineSeries,
+    this.features,
+    this.chipPeaks,
+    this.bucketStep = 0.1,
   });
 
   @override
@@ -129,6 +140,10 @@ class BacktestWorkbench extends StatelessWidget {
                       chanEvents: chanEvents,
                       zsObjects: zsObjects,
                       diverRelations: diverRelations,
+                      lineSeries: lineSeries,
+                      features: features,
+                      chipPeaks: chipPeaks,
+                      bucketStep: bucketStep,
                       asOf: currentStepIdx,
                     ),
                   ),

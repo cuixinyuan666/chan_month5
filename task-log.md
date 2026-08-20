@@ -454,3 +454,29 @@
 - **演示**：运行回测后主图见买1/卖1；交易 Tab 第一列「买1→卖1」；信号链路方向列「买1」「卖1」
 - **注意事项**：纯 Flutter；无需重编 DLL；被拒信号仍无组号
 
+### 2026-08-20 19:20 — 策略回测接入未确认中枢及其余已算好指标
+
+- **执行者**：cursor
+- **任务类型**：功能开发
+- **上下文**：用户确认执行：未确认中枢高/低/中轴单独变量（没有就空、不沿用）；其它图上已实现指标全部进策略公式
+- **关键操作**：
+  1. 目录登记未确认中枢、均线、通道、Demark完成买/卖、分型/中枢判断、斜率/比例/节奏、Kn成交量笔数、三型/四型/趋势线投影
+  2. 中枢对象仓对未确认框按当步盖住才写快照，框外为空；确认中枢 CURRENT 不变
+  3. 取值只读冻结仓/会话历史/十字已冻格子，不解析 tooltip 文案；main 把判断历史、连线历史、Lookup 喂进回测
+- **结果**：`flutter test test/catalog_full_var_test.dart test/zs_object_var_test.dart test/signal_data_catalog_test.dart test/indicator_var_ext_test.dart test/buy_n_var_test.dart test/chan_event_var_test.dart test/chan_strategy_regression_test.dart` 全过（57 项）
+- **演示**：test 演示 id=2026-08-20-trade-catalog-full
+- **注意事项**：纯 Flutter；无需重编 DLL；筹码峰动态名仍不进公式；斜率/节奏是连线钟不能和布林混写
+
+### 2026-08-20 22:30 — K0筹码峰/笔数峰进策略公式
+
+- **执行者**：cursor
+- **任务类型**：功能开发
+- **上下文**：确认执行：峰价与开高低收比；笔数峰同样做；不混层混钟；斜率暂不执行；完成后合并 main 并开瘦身分支 CHAN_RUST
+- **关键操作**：
+  1. 登记 K0筹码峰/笔数峰（框内、-1..-3、+1..+3），与 K0 开高低收同一套钟
+  2. 按这根高低编号写入冻结仓，没有就空、不沿用、不回写
+  3. 演示 id=2026-08-20-chip-peak-vars
+- **结果**：`flutter test test/chip_peak_var_test.dart test/catalog_full_var_test.dart test/zs_object_var_test.dart test/buy_n_var_test.dart test/signal_data_catalog_test.dart test/indicator_var_ext_test.dart` 全过（38 项）
+- **演示**：test 演示 id=2026-08-20-chip-peak-vars
+- **注意事项**：纯 Flutter；无需重编 DLL；K1 筹码峰仍不进公式
+

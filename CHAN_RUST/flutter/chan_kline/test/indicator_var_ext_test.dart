@@ -42,12 +42,12 @@ BacktestDataScope _scope(int asOf, {int barCount = 0}) => BacktestDataScope(
 
 void main() {
   group('登记与选择器', () {
-    test('MACD/RSI/KDJ 进公式；K1 成交量仍只盘点', () {
+    test('MACD/RSI/KDJ 进公式；K1 成交量按铺平层序列进公式', () {
       final g0 = groupedRegisteredVars(0, 2);
       expect(g0.map((e) => e.key).toList(),
           containsAll(['ohlc', 'volume', 'boll', 'macd', 'rsi', 'kdj']));
       final g1 = groupedRegisteredVars(1, 2);
-      expect(g1.any((e) => e.key == 'volume'), isFalse);
+      expect(g1.any((e) => e.key == 'volume'), isTrue);
       expect(
         g1
             .firstWhere((e) => e.key == 'macd')
@@ -57,8 +57,9 @@ void main() {
         ['DIF', 'DEA', 'HIST'],
       );
       expect(lookupTradeVariable('SUB.K1.MACD.DIF')!.expressionReady, isTrue);
-      expect(lookupTradeVariable('SUB.K1.VOLUME')!.expressionReady, isFalse);
-      expect(remapRegisteredVarId('RAW.K0.VOLUME', 1, maxKn: 2), 'RAW.K1.CLOSE');
+      expect(lookupTradeVariable('SUB.K1.VOLUME')!.expressionReady, isTrue);
+      expect(remapRegisteredVarId('RAW.K0.VOLUME', 1, maxKn: 2), 'SUB.K1.VOLUME');
+      expect(remapRegisteredVarId('SUB.K1.VOLUME', 0, maxKn: 2), 'RAW.K0.VOLUME');
       expect(remapRegisteredVarId('SUB.K0.MACD.DIF', 1, maxKn: 2),
           'SUB.K1.MACD.DIF');
     });

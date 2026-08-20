@@ -1,9 +1,12 @@
 import '../compute/math_series_freeze_store.dart';
+import '../models/bar_feature_lookup.dart';
 import '../models/kline_bar.dart';
 import '../models/level_models.dart';
 import 'backtest_result.dart';
 import 'backtest_run_context.dart';
 import 'chan_event_store.dart';
+import 'chart_line_store.dart';
+import 'chip_peak_store.dart';
 import 'divergence_relation_store.dart';
 import 'condition_eval.dart';
 import 'cost_models.dart';
@@ -52,6 +55,10 @@ BacktestRun executeStrategyBacktest({
   ChanEventStore chanEvents = ChanEventStore.empty,
   ZhongshuObjectStore? zsObjects,
   DivergenceRelationStore? diverRelations,
+  ChartLineStore? lineSeries,
+  BarFeatureLookup? features,
+  ChipPeakFreezeStore? chipPeaks,
+  double bucketStep = 0.1,
   int bollN = 20,
   int maxKn = 8,
   DateTime? now,
@@ -100,6 +107,10 @@ BacktestRun executeStrategyBacktest({
     chanEvents: chanEvents,
     zsObjects: zsObjects,
     diverRelations: diverRelations,
+    lineSeries: lineSeries,
+    features: features,
+    chipPeaks: chipPeaks,
+    bucketStep: bucketStep,
     bollN: bollN,
     maxKn: maxKn,
   );

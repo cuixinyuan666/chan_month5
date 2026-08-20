@@ -1,0 +1,39 @@
+{
+  "id": "2026-08-20-chip-peak-vars",
+  "title": "策略回测用筹码峰/笔数峰价和开高低收比",
+  "completedAt": "2026-08-20",
+  "agent": "cursor",
+  "isNewFeature": false,
+  "beforeSummary": "十字上能看到筹码峰-1、笔数峰+1，但策略公式不能拿来和收盘比。",
+  "afterSummary": "现在可以选 K0筹码峰-1、筹码峰+1、框内筹码峰，以及同样的笔数峰，去和开高低收比较。这根没有那一颗峰就是空。",
+  "verificationPoints": [
+    "打开策略回测，K0 变量里能选到筹码峰-1、筹码峰+1、笔数峰-1",
+    "买：K0收盘低于筹码峰-1；没有峰-1时诊断读数是不可用，不是0",
+    "不能拿连线斜率和布林写在同一条里（仍会提示不是同一套钟）",
+    "连续单步后再运行回测"
+  ],
+  "keySteps": [12, 30],
+  "defaultStock": {
+    "code": "002003",
+    "period": "1min",
+    "note": "默认股票连续单步后打开策略回测即可验收"
+  },
+  "autoLaunchOnStartup": true,
+  "walkthroughSteps": [
+    {
+      "stepIdx": 12,
+      "phase": "before",
+      "caption": "原本：十字能看到筹码峰编号，策略变量里选不到"
+    },
+    {
+      "stepIdx": 12,
+      "phase": "after",
+      "caption": "这次：走到有筹码的位置，变量里能选筹码峰-1，和收盘比"
+    },
+    {
+      "stepIdx": 30,
+      "phase": "after",
+      "caption": "再单步往后。打开策略回测，用收盘低于筹码峰-1 做买，点运行看策买"
+    }
+  ]
+}

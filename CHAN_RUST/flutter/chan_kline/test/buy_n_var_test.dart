@@ -262,6 +262,7 @@ void main() {
         sellAst: k1Sell1EventAst,
         quantity: 100,
         initialCapital: 100000,
+        fillPriceMode: TradeFillPriceMode.nextBarOpen,
       );
       expect(compileStrategyConfig(cfg, maxKn: 2), isA<StrategyCompileOk>());
       final run = executeStrategyBacktest(
@@ -282,7 +283,7 @@ void main() {
       expect(run.result!.rulePerformances, isNotEmpty);
       expect(run.context, isNotNull);
       expect(run.context!.engineVersion, kBacktestEngineVersion);
-      expect(run.context!.dataContractVersion, 'catalog-v2-buy-n');
+      expect(run.context!.dataContractVersion, 'catalog-v4-chip-peaks');
     });
   });
 }

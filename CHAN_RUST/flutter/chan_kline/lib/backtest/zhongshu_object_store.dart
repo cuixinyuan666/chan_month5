@@ -27,7 +27,7 @@ class ZhongshuObjectStore {
     }
   }
 
-  /// 喂入一层当时帧。未确认只记身份；确认后才有可交易快照。
+  /// 喂入一层当时帧。未确认盖住 asOf 才写 ACTIVE 快照（不沿用）；确认后才有 CURRENT。
   void ingestLevel({
     required int displayKn,
     required List<ZSFrame> frames,
@@ -37,7 +37,7 @@ class ZhongshuObjectStore {
     final srcLv = zsSourceLevel(displayKn);
     const src = '现有中枢帧步进快照，不重算中枢';
 
-    // 先过一遍：建/补身份；已确认的记下本步高低
+    // 先过一遍：建/补身份；已确认的记下本步高低；未确认且盖住 asOf 的记下 ACTIVE
     final confirmedNow = <String>[];
     for (final f in frames) {
       if (f.x1 < 0) continue;
@@ -56,6 +56,15 @@ class ZhongshuObjectStore {
         ident.confirmX ??= asOf;
         confirmedNow.add(id);
         _appendConfirmedSnap(
+          ident: ident,
+          asOf: asOf,
+          endX: f.x2,
+          high: f.high,
+          low: f.low,
+          source: src,
+        );
+      } else if (f.x1 <= asOf && asOf <= f.x2) {
+        _appendActiveSnap(
           ident: ident,
           asOf: asOf,
           endX: f.x2,
@@ -144,7 +153,7 @@ class ZhongshuObjectStore {
     };
   }
 
-  /// 测试/诊断：某身份在 asOf 当时的快照（含未确认则没有可交易快照）。
+  /// 测试/诊断：某身份在 asOf 当时的快照（含当步未确认 ACTIVE）。
   ZhongshuObject? snapshotOf(String objectId, int asOf) =>
       _latestSnap(objectId, asOf);
 
@@ -179,6 +188,43 @@ class ZhongshuObjectStore {
     ));
   }
 
+  void _appendActiveSnap({
+    required _ZsIdent ident,
+    required int asOf,
+    required int endX,
+    required double high,
+    required double low,
+    required String source,
+  }) {
+    final list = _snaps.putIfAbsent(ident.objectId, () => <ZhongshuObject>[]);
+    if (list.any((s) => s.availableAt == asOf)) return;
+    list.add(ZhongshuObject(
+      objectId: ident.objectId,
+      displayKn: ident.displayKn,
+      sourceLevel: ident.sourceLevel,
+      discoveryX: ident.discoveryX,
+      confirmX: ident.confirmX,
+      availableAt: asOf,
+      startX: ident.startX,
+      endX: endX,
+      high: high,
+      low: low,
+      center: zsCenterOf(high: high, low: low),
+      confirmed: false,
+      state: StructureObjectState.discovered,
+      source: source,
+    ));
+  }
+
+  ZhongshuObject? _snapExactly(String objectId, int asOf) {
+    final list = _snaps[objectId];
+    if (list == null) return null;
+    for (final s in list) {
+      if (s.availableAt == asOf) return s;
+    }
+    return null;
+  }
+
   String? _pickCurrentId(int displayKn, int asOf) {
     _ZsIdent? best;
     for (final ident in _idents.values) {
@@ -206,6 +252,41 @@ class ZhongshuObjectStore {
       last = s;
     }
     return last;
+  }
+
+  /// 指定层在 asOf 下盖住这根 K 的未确认中枢。没有 / 已确认 / 框外 → null（不沿用）。
+  ZhongshuObject? resolveCurrentActiveZs({
+    required int displayKn,
+    required int asOf,
+  }) {
+    ZhongshuObject? best;
+    for (final ident in _idents.values) {
+      if (ident.displayKn != displayKn) continue;
+      if (ident.confirmX != null && ident.confirmX! <= asOf) continue;
+      final snap = _snapExactly(ident.objectId, asOf);
+      if (snap == null || snap.confirmed) continue;
+      if (asOf < snap.startX || asOf > snap.endX) continue;
+      if (best == null ||
+          snap.startX > best.startX ||
+          (snap.startX == best.startX && snap.discoveryX >= best.discoveryX)) {
+        best = snap;
+      }
+    }
+    return best;
+  }
+
+  double? projectActive({
+    required int displayKn,
+    required int asOf,
+    required ZsProjection projection,
+  }) {
+    final obj = resolveCurrentActiveZs(displayKn: displayKn, asOf: asOf);
+    if (obj == null) return null;
+    return switch (projection) {
+      ZsProjection.high => obj.high,
+      ZsProjection.low => obj.low,
+      ZsProjection.center => obj.center,
+    };
   }
 
   StructureObjectState _stateAt({

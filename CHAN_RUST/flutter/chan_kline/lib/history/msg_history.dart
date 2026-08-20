@@ -1393,6 +1393,34 @@ class MsgHistory {
     );
   }
 
+  /// 回测变量目录补全（进程内去重）
+  static bool _tradeCatalogFullLogged = false;
+  void appendTradeCatalogFull() {
+    if (_tradeCatalogFullLogged) return;
+    _tradeCatalogFullLogged = true;
+    append(
+      '【回测变量补全·2026-08-20】图上已经算好的，策略公式按同一份冻结仓/会话历史接入，不解析十字文案、不另算一套。'
+      '未确认中枢高/低/中轴是单独变量：这根 K 盖住未确认框才有数，没有就空，不填 0、不沿用上一根；当步写入后冻结。'
+      '已确认中枢 CURRENT 照旧。均线/通道读冻结仓；Demark 完成买/卖当根脉冲；分型判断/中枢判断首次可判出一次。'
+      '连线斜率、相邻比例、节奏是连线钟，不能和布林/RSI 直接比。三型/四型/趋势线是线投影到价，可与同层收盘/布林比。'
+      'K1+ 成交量/笔数按铺平层序列、跟 MACD 同一套计算钟取样。'
+      'K0筹码峰/笔数峰按这根高低编号（-1/+1），峰价可与开高低收比；没有那一颗就空。'
+      '整段中枢/整段背驰仍不能当一个数比。',
+    );
+  }
+
+  /// 筹码峰/笔数峰进公式（进程内去重）
+  static bool _chipPeakVarsLogged = false;
+  void appendChipPeakVars() {
+    if (_chipPeakVarsLogged) return;
+    _chipPeakVarsLogged = true;
+    append(
+      '【筹码峰进公式·2026-08-20】K0筹码峰/笔数峰按这根 K 的高低框编号：框下最近-1、框上最近+1，框内无号。'
+      '公式比的是峰价和开高低收，不解析十字文字。没有那一颗就空，不填 0、不沿用；当步冻结。'
+      '只做 K0，和收盘同一套钟。斜率仍不和布林混写。',
+    );
+  }
+
   /// 运行时虚线摘要（内容变才追加；复制历史记录排查用）。
   void appendDisplayBuildingLinesRuntime({
     required int kn,
