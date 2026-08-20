@@ -1,0 +1,17 @@
+{
+  "name": "chan_month5 缠论回测/研究环境",
+  "install": "bash .cursor/install.sh",
+  "terminals": [
+    {
+      "name": "replay-trainer",
+      "command": "source .venv/bin/activate && A_REPLAY_PORT=8000 python a_replay_trainer.py",
+      "description": "缠论复盘训练器 FastAPI 后端；启动后浏览器访问 http://127.0.0.1:8000/"
+    }
+  ],
+  "ports": [
+    {
+      "name": "replay-trainer-web",
+      "port": 8000
+    }
+  ]
+}
