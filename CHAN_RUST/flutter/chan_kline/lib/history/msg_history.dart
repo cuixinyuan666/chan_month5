@@ -799,6 +799,18 @@ class MsgHistory {
     );
   }
 
+  /// Android：内置 a_Data 种子解压到应用私有目录（勿再走编译期桌面路径）。
+  static bool _androidBundledDataLogged = false;
+  void appendAndroidBundledDataRoot() {
+    if (_androidBundledDataLogged) return;
+    _androidBundledDataLogged = true;
+    append(
+      '【Android·a_Data】首次启动从 assets/a_data_seed.zip 解压到应用私有目录/a_Data；'
+      '默认股票 002003（2025Q1 分笔）+ test；002003 默认区间=2025/01/02~2025/03/31。'
+      '桌面仍可用环境变量 CHAN_DATA_ROOT 或 Rust 默认相对路径。',
+    );
+  }
+
   /// 桌面窗体：铺满工作区不盖任务栏；十字线 tooltip 分隔线贴边框。
   void appendDesktopWorkAreaAndTooltipSep() {
     if (_desktopWorkAreaLogged) return;

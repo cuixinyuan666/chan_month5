@@ -81,4 +81,9 @@ if [ -x "$REPO_ROOT/CHAN_RUST/scripts/build_rust_android.sh" ]; then
   bash "$REPO_ROOT/CHAN_RUST/scripts/build_rust_android.sh"
 fi
 
+if [ -x "$REPO_ROOT/CHAN_RUST/scripts/prepare_android_a_data_seed.sh" ]; then
+  echo ">> [android-env] 打包 Android a_Data 种子"
+  bash "$REPO_ROOT/CHAN_RUST/scripts/prepare_android_a_data_seed.sh"
+fi
+
 echo ">> [android-env] 完成"

@@ -168,5 +168,5 @@ cargo test -p chan_data
 
 - [x] ~~跨段中枢(KuaDuan)~~：已于 2026-07-27 **彻底移除**（计算/JSON/主图指标/as-of 全清）——删除 `CHAN_RUST/rust/chan_data/src/kuaduan.rs`、`CHAN_RUST/flutter/chan_kline/lib/models/kuaduan_frame.dart`、`CHAN_RUST/flutter/chan_kline/lib/compute/kuaduan_compute.dart`、`CHAN_RUST/flutter/chan_kline/test/kuaduan_compute_test.dart`，清理相关引用与展示逻辑
 - [x] Normal/OverSeg 双中枢双买卖点：流水线每层双算；JSON `zs_normal_frames`/`zs_over_seg_frames`/`bsp_normal_frames`/`bsp_over_seg_frames`；主图 `K(n-1)中枢(Normal|OverSeg)` / `K(n-1)买卖点(Normal|OverSeg)`；十字 as-of 本地重算对齐；Auto 放弃
-- [ ] Android JNI 复用 `chan_data`（环境/SDK/交叉编译已配置；数据目录与真机验收待补）
+- [x] Android JNI 复用 `chan_data`（环境/SDK/交叉编译 + 内置 a_Data 种子解压；全量离线库导入待补）
 - [ ] 逐 K 步进增量 API（复用 pipeline 状态，免前缀全量重算）

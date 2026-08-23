@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'bridge/chan_bridge.dart';
+import 'data/mobile_data_root.dart';
 import 'compute/adjacent_ratio_compute.dart';
 import 'compute/line_slope_compute.dart';
 import 'compute/chip_profile_compute.dart';
@@ -161,6 +162,7 @@ Future<void> main() async {
   MsgHistory.instance.appendAgentConfirmExecuteGate();
   // 桌面：工作区全屏不盖任务栏；tooltip 分隔线贴边框
   MsgHistory.instance.appendDesktopWorkAreaAndTooltipSep();
+  MsgHistory.instance.appendAndroidBundledDataRoot();
   MsgHistory.instance.appendAuditProbeCopyButton();
   MsgHistory.instance.appendAuditFixBsZsFeature();
   MsgHistory.instance.appendAuditBatch2ProbePeakAsOf();
@@ -616,6 +618,12 @@ class _KlineHomePageState extends State<KlineHomePage> {
 
   /// 切换股票时对齐各自默认加载区间。
   void _syncDateRangeForCode(String code) {
+    // Android 内置种子仅含 002003 的 2025Q1
+    if (Platform.isAndroid && code == MobileDataRoot.bundledStockCode) {
+      _beginDate = MobileDataRoot.bundledBeginDate;
+      _endDate = MobileDataRoot.bundledEndDate;
+      return;
+    }
     // test + 已有 custom.ohlc.csv：用文件首末时间填区间
     if (code == 'test' && _hasTestOhlcCsv()) {
       try {
@@ -708,13 +716,24 @@ class _KlineHomePageState extends State<KlineHomePage> {
     await _loadKlines();
   }
 
+  Future<String> _resolveDataRoot() async {
+    if (Platform.isAndroid) {
+      return MobileDataRoot.ensureReady();
+    }
+    final env = Platform.environment['CHAN_DATA_ROOT']?.trim();
+    if (env != null && env.isNotEmpty) {
+      return env;
+    }
+    return _bridge.defaultDataRoot();
+  }
+
   Future<void> _bootstrap() async {
     setState(() {
       _bootstrapping = true;
       _error = null;
     });
     try {
-      final root = _bridge.defaultDataRoot();
+      final root = await _resolveDataRoot();
       final codes = _bridge.listStockCodes(dataRoot: root);
       if (codes.isEmpty) {
         throw StateError('a_Data 下未找到股票目录，请检查: $root');
