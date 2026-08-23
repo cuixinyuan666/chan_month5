@@ -41,6 +41,10 @@ class ChanBridge {
       }
       return DynamicLibrary.open('chan_ffi.dll');
     }
+    if (Platform.isAndroid) {
+      // Android 由 jniLibs/<abi>/libchan_ffi.so 打包进 APK
+      return DynamicLibrary.open('libchan_ffi.so');
+    }
     if (Platform.isLinux) {
       return DynamicLibrary.open('libchan_ffi.so');
     }

@@ -24,12 +24,43 @@ CHAN_RUST/
 ## 环境要求
 
 - Rust 1.70+
-- Flutter 3.x（已测 Windows 桌面）
+- Flutter 3.x（已测 Windows / Linux 桌面；Android 见下文）
 - 数据源：`../a_Data` 下已有分笔 txt
 
 > **本机支持 WSL**：本机可在 WSL（Windows Subsystem for Linux）中直接编译运行。
 > WSL 下 Rust 产物为 Linux 动态库 `libchan_ffi.so`（而非 Windows 的 `.dll`），
 > 对应构建脚本为 `scripts/build_rust.sh`，Flutter 以 Linux 桌面目标运行。
+
+## Android 环境（ANDROID_RUST 分支）
+
+Cloud Agent / Linux 首次配置：
+
+```bash
+# 安装 Android SDK、NDK、Rust 交叉编译目标，并预编译 jniLibs
+bash .cursor/scripts/install-android-env.sh
+```
+
+本地仅重编 Rust → jniLibs：
+
+```bash
+bash CHAN_RUST/scripts/build_rust_android.sh
+```
+
+构建并安装调试 APK（需已连接设备或模拟器）：
+
+```bash
+cd CHAN_RUST/flutter/chan_kline
+flutter pub get
+flutter run -d android
+# 或仅打包：
+flutter build apk --debug
+```
+
+说明：
+
+- `chan_bridge.dart` 在 Android 上加载 `libchan_ffi.so`（由 `jniLibs/<abi>/` 打包）。
+- `.so` 不入库（`CHAN_RUST/.gitignore`），由 `install-android-env.sh` / `build_rust_android.sh` 生成。
+- 默认 `a_Data` 路径仍按桌面相对目录解析；真机部署需另行配置数据目录（待后续任务）。
 
 ## 构建与运行（Windows）
 
@@ -137,5 +168,5 @@ cargo test -p chan_data
 
 - [x] ~~跨段中枢(KuaDuan)~~：已于 2026-07-27 **彻底移除**（计算/JSON/主图指标/as-of 全清）——删除 `CHAN_RUST/rust/chan_data/src/kuaduan.rs`、`CHAN_RUST/flutter/chan_kline/lib/models/kuaduan_frame.dart`、`CHAN_RUST/flutter/chan_kline/lib/compute/kuaduan_compute.dart`、`CHAN_RUST/flutter/chan_kline/test/kuaduan_compute_test.dart`，清理相关引用与展示逻辑
 - [x] Normal/OverSeg 双中枢双买卖点：流水线每层双算；JSON `zs_normal_frames`/`zs_over_seg_frames`/`bsp_normal_frames`/`bsp_over_seg_frames`；主图 `K(n-1)中枢(Normal|OverSeg)` / `K(n-1)买卖点(Normal|OverSeg)`；十字 as-of 本地重算对齐；Auto 放弃
-- [ ] Android JNI 复用 `chan_data`
+- [ ] Android JNI 复用 `chan_data`（环境/SDK/交叉编译已配置；数据目录与真机验收待补）
 - [ ] 逐 K 步进增量 API（复用 pipeline 状态，免前缀全量重算）
