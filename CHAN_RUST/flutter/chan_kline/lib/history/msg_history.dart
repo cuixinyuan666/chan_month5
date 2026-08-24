@@ -817,8 +817,9 @@ class MsgHistory {
     if (_androidMobileLayoutLogged) return;
     _androidMobileLayoutLogged = true;
     append(
-      '【Android·界面】顶栏=股票+周期+设置；底栏=步退/播放/步进/跳末；'
-      '设置用底部抽屉；图表指标 chip 全宽；无桌面窗控条。',
+      '【Android·界面】顶栏=股票+周期+设置；无底栏播放条，默认左/中/右热区手势步进；'
+      '设置用底部抽屉且开关即时刷新；主/副图各一收纳钮；主副图分割显式「调节」手柄；'
+      '十字 tooltip 可上下滚动且右上角可关；无桌面窗控条。',
     );
   }
 
@@ -828,7 +829,8 @@ class MsgHistory {
     if (_androidTouchUiLogged) return;
     _androidTouchUiLogged = true;
     append(
-      '【指标收纳】主/副图左上角「指标」按钮默认收起 chip；点按展开/再点收纳。'
+      '【指标收纳】主图/副图左上角各一「主图」「副图」按钮，默认收起 chip；点按展开/再点收纳。'
+      '主图 chip 裁切在主图区；副图 chip 单行横滑且标记区保底高度。'
       '【手机双指】mobileLayout 下 K 线：双指捏合缩放 X、双指拖动平移；单指不拖图。'
       '【策略回测分割】打开策略回测后 K 线与工作台之间可拖分割条上下调整占比；'
       'Android 默认 K 线约 38%、桌面约 58%；拖条样式与图内主副图分割一致。',

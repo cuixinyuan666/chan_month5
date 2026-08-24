@@ -9,6 +9,12 @@ class KlineViewport {
   /// 右侧几乎不留白：主/副图画到价格数字处，价格标签叠在图上
   static const double padR = 2;
   static const double padT = 28;
+  /// 主图指标 chip 区最大占位（防多行撑入副图）
+  static const double mainIndicatorChipMaxBand = 56;
+  /// 副图指标 chip 区最大占位（为标记区保底高度）
+  static const double subIndicatorChipMaxBand = 40;
+  /// 副图标记/曲线最小绘制高度（chip 再长也不挤没标记）
+  static const double minSubMarkerPlotH = 52;
   /// 副图顶留白：避开左上角指标名按钮，标记不被盖
   static const double subIndicatorChipBand = 26;
   /// 主图底边距（与副图分隔）

@@ -290,8 +290,9 @@ class _KlineChartState extends State<KlineChart> {
   double _panStartYShift = 0;
   double _panStartViewMin = 0;
   double _panStartViewMax = 0;
-  /// 主/副图指标 chip 默认收纳，点「指标」展开
-  bool _indicatorChipsExpanded = false;
+  /// 主/副图指标 chip 默认收纳，主/副各一钮
+  bool _mainIndicatorChipsExpanded = false;
+  bool _subIndicatorChipsExpanded = false;
   /// 手机双指缩放：累计 scale 基准
   bool _pinchScaling = false;
   double _pinchScaleBaseline = 1.0;
@@ -510,11 +511,17 @@ class _KlineChartState extends State<KlineChart> {
     final renderBox =
         _subChipBarKey.currentContext?.findRenderObject() as RenderBox?;
     if (renderBox != null && renderBox.hasSize) {
-      final h = renderBox.size.height + 4;
+      final measured = renderBox.size.height + 4;
+      final h = math.min(measured, KlineViewport.subIndicatorChipMaxBand);
       if ((h - _subChipBarHeight).abs() > 0.5) {
         setState(() => _subChipBarHeight = h);
       }
     }
+  }
+
+  void _closeTooltipKeepCrosshair() {
+    if (!_crosshairShowTooltip) return;
+    setState(() => _crosshairMode = CrosshairMode.linesOnly);
   }
 
   @override
@@ -1315,15 +1322,15 @@ class _KlineChartState extends State<KlineChart> {
     _pinchScaleBaseline = 1.0;
   }
 
-  Widget _buildIndicatorToggleButton() {
-    final count = _activeMains.length + _activeSubs.length;
+  Widget _buildMainIndicatorToggleButton() {
+    final count = _activeMains.length;
     return Material(
       color: const Color(0xCC1A1A1A),
       borderRadius: BorderRadius.circular(4),
       child: InkWell(
         borderRadius: BorderRadius.circular(4),
         onTap: () => setState(
-          () => _indicatorChipsExpanded = !_indicatorChipsExpanded,
+          () => _mainIndicatorChipsExpanded = !_mainIndicatorChipsExpanded,
         ),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
@@ -1331,7 +1338,7 @@ class _KlineChartState extends State<KlineChart> {
             mainAxisSize: MainAxisSize.min,
             children: [
               Icon(
-                _indicatorChipsExpanded
+                _mainIndicatorChipsExpanded
                     ? Icons.expand_less
                     : Icons.expand_more,
                 size: 18,
@@ -1339,7 +1346,48 @@ class _KlineChartState extends State<KlineChart> {
               ),
               const SizedBox(width: 2),
               Text(
-                count > 0 ? '指标($count)' : '指标',
+                count > 0 ? '主图($count)' : '主图',
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFFE2E8F0),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSubIndicatorToggleButton() {
+    final count = _activeSubs.length;
+    return Material(
+      color: const Color(0xCC1A1A1A),
+      borderRadius: BorderRadius.circular(4),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(4),
+        onTap: () => setState(() {
+          _subIndicatorChipsExpanded = !_subIndicatorChipsExpanded;
+          if (!_subIndicatorChipsExpanded) {
+            _subChipBarHeight = KlineViewport.subIndicatorChipBand;
+          }
+        }),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                _subIndicatorChipsExpanded
+                    ? Icons.expand_less
+                    : Icons.expand_more,
+                size: 18,
+                color: const Color(0xFFE2E8F0),
+              ),
+              const SizedBox(width: 2),
+              Text(
+                count > 0 ? '副图($count)' : '副图',
                 style: const TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w600,
@@ -1354,7 +1402,10 @@ class _KlineChartState extends State<KlineChart> {
   }
 
   void _onSplitDown(PointerDownEvent e) {
-    if (e.buttons != kPrimaryMouseButton) return;
+    if (e.kind == PointerDeviceKind.mouse &&
+        e.buttons != kPrimaryMouseButton) {
+      return;
+    }
     _splitDragging = true;
     _splitDragStartY = e.localPosition.dy;
     _splitDragStartFraction = _mainFraction;
@@ -1683,7 +1734,7 @@ class _KlineChartState extends State<KlineChart> {
                       ),
                     ),
             ),
-            // 十字线 tooltip 盖在手势层之上（IgnorePointer 保证点击/滚轮仍由下层接管）
+            // 十字线 tooltip：可滚动 + 右上角关闭（保留十字线）
             if (_crosshairShowTooltip &&
                 _crosshairX != null &&
                 _crosshairY != null &&
@@ -1703,136 +1754,211 @@ class _KlineChartState extends State<KlineChart> {
                 return Positioned(
                   left: anchor.dx,
                   top: anchor.dy,
-                  child: IgnorePointer(
-                    child: CrosshairTooltipPanel(
-                      rows: rows,
-                      scrollController: _tooltipScroll,
-                      maxWidth: maxW,
-                      maxHeight: maxH,
-                    ),
+                  child: CrosshairTooltipPanel(
+                    rows: rows,
+                    scrollController: _tooltipScroll,
+                    maxWidth: maxW,
+                    maxHeight: maxH,
+                    onClose: _closeTooltipKeepCrosshair,
                   ),
                 );
               }),
-            // 主副图分割条（副图收起时不显示）
+            // 主副图分割：显式拖动手柄（不再隐式拖整条）
             if (_showSubPane)
               Positioned(
-                left: KlineViewport.padL,
-                right: KlineViewport.padR,
-                top: mainH - 4,
-                height: 8,
-                child: MouseRegion(
-                  cursor: SystemMouseCursors.resizeUpDown,
+                left: 0,
+                right: 0,
+                top: mainH - 14,
+                height: 28,
+                child: Center(
                   child: Listener(
                     behavior: HitTestBehavior.opaque,
                     onPointerDown: _onSplitDown,
                     onPointerMove: _onSplitMove,
                     onPointerUp: _onSplitUp,
-                    child: Center(
+                    child: MouseRegion(
+                      cursor: SystemMouseCursors.resizeUpDown,
                       child: Container(
-                        height: _splitDragging ? 3 : 2,
+                        width: 72,
+                        height: 22,
                         decoration: BoxDecoration(
                           color: _splitDragging
-                              ? const Color(0xAA42A5F5)
-                              : const Color(0x55FFFFFF),
-                          borderRadius: BorderRadius.circular(2),
+                              ? const Color(0xDD1E3A5F)
+                              : const Color(0xCC1A1A1A),
+                          border: Border.all(
+                            color: _splitDragging
+                                ? const Color(0xFF42A5F5)
+                                : const Color(0x55FFFFFF),
+                          ),
+                          borderRadius: BorderRadius.circular(11),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              Icons.drag_handle,
+                              size: 16,
+                              color: _splitDragging
+                                  ? const Color(0xFF42A5F5)
+                                  : const Color(0xFFE2E8F0),
+                            ),
+                            const SizedBox(width: 2),
+                            Text(
+                              '调节',
+                              style: TextStyle(
+                                fontSize: 10,
+                                color: _splitDragging
+                                    ? const Color(0xFF42A5F5)
+                                    : const Color(0xFF94A3B8),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ),
                   ),
                 ),
               ),
-            // 指标收纳：默认收起
+            // 主图指标收纳：裁切在主图区内，不侵入副图
             Positioned(
               left: 0,
               top: 0,
-              child: _buildIndicatorToggleButton(),
-            ),
-            if (_indicatorChipsExpanded)
-              Positioned(
-                left: widget.mobileLayout ? 72 : 76,
-                top: 0,
-                right: widget.mobileLayout ? 4 : 140,
-                child: IgnorePointer(
-                  ignoring: !widget.indicatorsEnabled,
-                  child: Opacity(
-                    opacity: widget.indicatorsEnabled ? 1 : 0.35,
-                    child: IndicatorPickerChip(
-                      entries: () {
-                        final list = _mainCatalog
-                            .where(_activeMains.contains)
-                            .toList()
-                          ..sort((a, b) {
-                            final lv = a.displayLevel.compareTo(b.displayLevel);
-                            if (lv != 0) return lv;
-                            final c = a.kind.categoryOrder
-                                .compareTo(b.kind.categoryOrder);
-                            if (c != 0) return c;
-                            return a.kn.compareTo(b.kn);
-                          });
-                        return [
-                          for (final e in list)
-                            IndicatorChipEntry(
-                              label: e.label,
-                              displayLevel: e.displayLevel,
-                              muted: _mutedMains.contains(e),
-                              onTapToggle: () => _toggleMuteMain(e),
-                            ),
-                        ];
-                      }(),
-                      onTapDropdown: () => _pickMainIndicators(context),
-                      maxWidth: widget.mobileLayout
-                          ? math.max(80.0, w - 80)
-                          : math.max(120.0, w - 220),
-                      emptyHint: 'K0',
+              right: 0,
+              height: mainH,
+              child: ClipRect(
+                child: Stack(
+                  clipBehavior: Clip.hardEdge,
+                  children: [
+                    Positioned(
+                      left: 0,
+                      top: 0,
+                      child: _buildMainIndicatorToggleButton(),
                     ),
-                  ),
+                    if (_mainIndicatorChipsExpanded)
+                      Positioned(
+                        left: widget.mobileLayout ? 72 : 76,
+                        top: 0,
+                        right: widget.mobileLayout ? 4 : 140,
+                        child: IgnorePointer(
+                          ignoring: !widget.indicatorsEnabled,
+                          child: Opacity(
+                            opacity: widget.indicatorsEnabled ? 1 : 0.35,
+                            child: IndicatorPickerChip(
+                              entries: () {
+                                final list = _mainCatalog
+                                    .where(_activeMains.contains)
+                                    .toList()
+                                  ..sort((a, b) {
+                                    final lv =
+                                        a.displayLevel.compareTo(b.displayLevel);
+                                    if (lv != 0) return lv;
+                                    final c = a.kind.categoryOrder
+                                        .compareTo(b.kind.categoryOrder);
+                                    if (c != 0) return c;
+                                    return a.kn.compareTo(b.kn);
+                                  });
+                                return [
+                                  for (final e in list)
+                                    IndicatorChipEntry(
+                                      label: e.label,
+                                      displayLevel: e.displayLevel,
+                                      muted: _mutedMains.contains(e),
+                                      onTapToggle: () => _toggleMuteMain(e),
+                                    ),
+                                ];
+                              }(),
+                              onTapDropdown: () => _pickMainIndicators(context),
+                              maxWidth: widget.mobileLayout
+                                  ? math.max(80.0, w - 80)
+                                  : math.max(120.0, w - 220),
+                              emptyHint: 'K0',
+                              horizontalScroll: widget.mobileLayout,
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
               ),
-            if (_indicatorChipsExpanded)
+            ),
+            if (_showSubPane)
               Positioned(
-                left: KlineViewport.padL,
-                top: _showSubPane ? mainH + 2 : math.max(0.0, mainH - 26),
-                child: Builder(
-                  key: _subChipBarKey,
-                  builder: (_) => IgnorePointer(
-                    ignoring: !widget.indicatorsEnabled,
-                    child: Opacity(
-                      opacity: widget.indicatorsEnabled ? 1 : 0.35,
-                      child: IndicatorPickerChip(
-                        entries: () {
-                          final values = _subChipValueByInd();
-                          final list = _subCatalog
-                              .where(_activeSubs.contains)
-                              .toList()
-                            ..sort((a, b) {
-                              final lv = a.displayLevel.compareTo(b.displayLevel);
-                              if (lv != 0) return lv;
-                              final c = a.kind.categoryOrder
-                                  .compareTo(b.kind.categoryOrder);
-                              if (c != 0) return c;
-                              final ai = a.diverAlgo?.index ?? -1;
-                              final bi = b.diverAlgo?.index ?? -1;
-                              if (ai != bi) return ai.compareTo(bi);
-                              return a.kn.compareTo(b.kn);
-                            });
-                          return [
-                            for (final e in list)
-                              IndicatorChipEntry(
-                                label: e.label,
-                                displayLevel: e.displayLevel,
-                                muted: _mutedSubs.contains(e),
-                                valueText: values[e],
-                                onTapToggle: () => _toggleMuteSub(e),
-                              ),
-                          ];
-                        }(),
-                        onTapDropdown: () => _pickSubIndicators(context),
-                        maxWidth: widget.mobileLayout
-                            ? math.max(80.0, w - KlineViewport.padL - 8)
-                            : math.max(100.0, w - KlineViewport.padL - 24),
-                        emptyHint: '未选',
+                left: 0,
+                top: mainH,
+                right: 0,
+                height: volH,
+                child: ClipRect(
+                  child: Stack(
+                    clipBehavior: Clip.hardEdge,
+                    children: [
+                      Positioned(
+                        left: KlineViewport.padL,
+                        top: 2,
+                        child: _buildSubIndicatorToggleButton(),
                       ),
-                    ),
+                      if (_subIndicatorChipsExpanded)
+                        Positioned(
+                          left: KlineViewport.padL,
+                          top: 2,
+                          right: 4,
+                          child: Builder(
+                            key: _subChipBarKey,
+                            builder: (_) => IgnorePointer(
+                              ignoring: !widget.indicatorsEnabled,
+                              child: Opacity(
+                                opacity: widget.indicatorsEnabled ? 1 : 0.35,
+                                child: Padding(
+                                  padding: EdgeInsets.only(
+                                    left: widget.mobileLayout ? 68 : 72,
+                                  ),
+                                  child: IndicatorPickerChip(
+                                    entries: () {
+                                      final values = _subChipValueByInd();
+                                      final list = _subCatalog
+                                          .where(_activeSubs.contains)
+                                          .toList()
+                                        ..sort((a, b) {
+                                          final lv = a.displayLevel
+                                              .compareTo(b.displayLevel);
+                                          if (lv != 0) return lv;
+                                          final c = a.kind.categoryOrder
+                                              .compareTo(b.kind.categoryOrder);
+                                          if (c != 0) return c;
+                                          final ai =
+                                              a.diverAlgo?.index ?? -1;
+                                          final bi =
+                                              b.diverAlgo?.index ?? -1;
+                                          if (ai != bi) return ai.compareTo(bi);
+                                          return a.kn.compareTo(b.kn);
+                                        });
+                                      return [
+                                        for (final e in list)
+                                          IndicatorChipEntry(
+                                            label: e.label,
+                                            displayLevel: e.displayLevel,
+                                            muted: _mutedSubs.contains(e),
+                                            valueText: values[e],
+                                            onTapToggle: () => _toggleMuteSub(e),
+                                          ),
+                                      ];
+                                    }(),
+                                    onTapDropdown: () =>
+                                        _pickSubIndicators(context),
+                                    maxWidth: widget.mobileLayout
+                                        ? math.max(80.0, w - KlineViewport.padL - 8)
+                                        : math.max(
+                                            100.0,
+                                            w - KlineViewport.padL - 24,
+                                          ),
+                                    emptyHint: '未选',
+                                    horizontalScroll: widget.mobileLayout,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
                   ),
                 ),
               ),
@@ -4243,9 +4369,16 @@ class _KlineCompositePainter extends CustomPainter {
     double barW,
     double slotW,
   ) {
-    final innerTop = volTop + subChipBarHeight;
+    final chipBand = math.min(
+      subChipBarHeight,
+      KlineViewport.subIndicatorChipMaxBand,
+    );
+    final innerTop = volTop + chipBand;
     final innerBottom = contentBottom - 4;
-    final innerH = math.max(12.0, innerBottom - innerTop);
+    final innerH = math.max(
+      KlineViewport.minSubMarkerPlotH,
+      innerBottom - innerTop,
+    );
     if (innerH <= 0) return;
 
     if (subIndicators.any((e) => e.kind == SubIndicatorKind.volume)) {

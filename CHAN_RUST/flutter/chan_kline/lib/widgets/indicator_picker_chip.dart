@@ -28,6 +28,7 @@ class IndicatorPickerChip extends StatefulWidget {
     required this.onTapDropdown,
     this.maxWidth = 280,
     this.emptyHint = '未选',
+    this.horizontalScroll = false,
   });
 
   final List<IndicatorChipEntry> entries;
@@ -35,6 +36,8 @@ class IndicatorPickerChip extends StatefulWidget {
   final double maxWidth;
   /// 无勾选时右侧提示（主图关全部≈只留K0；副图关全部=收起）
   final String emptyHint;
+  /// 手机端横向滚动，避免多行撑高挤占副图标记区
+  final bool horizontalScroll;
 
   @override
   State<IndicatorPickerChip> createState() => _IndicatorPickerChipState();
@@ -94,6 +97,78 @@ class _IndicatorPickerChipState extends State<IndicatorPickerChip> {
                           fontSize: 12,
                           fontWeight: FontWeight.w600,
                           height: 1.2,
+                        ),
+                      ),
+                    )
+                  else if (widget.horizontalScroll)
+                    Expanded(
+                      child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            for (var i = 0; i < entries.length; i++) ...[
+                              if (i > 0)
+                                Padding(
+                                  padding:
+                                      const EdgeInsets.symmetric(horizontal: 2),
+                                  child: Text(
+                                    entries[i].displayLevel !=
+                                            entries[i - 1].displayLevel
+                                        ? ' ※ '
+                                        : '/',
+                                    style: TextStyle(
+                                      color: (entries[i].muted &&
+                                              entries[i - 1].muted)
+                                          ? _sepMuted
+                                          : _sepActive,
+                                      fontSize: 12,
+                                      height: 1.2,
+                                    ),
+                                  ),
+                                ),
+                              GestureDetector(
+                                behavior: HitTestBehavior.opaque,
+                                onTap: entries[i].onTapToggle,
+                                child: Text.rich(
+                                  TextSpan(
+                                    children: [
+                                      TextSpan(
+                                        text: entries[i].label,
+                                        style: TextStyle(
+                                          color: entries[i].muted
+                                              ? _mutedColor
+                                              : _activeColor,
+                                          fontSize: 12,
+                                          fontWeight: entries[i].muted
+                                              ? FontWeight.w400
+                                              : FontWeight.w600,
+                                          height: 1.2,
+                                          decoration: entries[i].muted
+                                              ? TextDecoration.lineThrough
+                                              : TextDecoration.none,
+                                          decorationColor: _mutedColor,
+                                        ),
+                                      ),
+                                      if (entries[i].valueText != null &&
+                                          entries[i].valueText!.isNotEmpty)
+                                        TextSpan(
+                                          text: ':${entries[i].valueText}',
+                                          style: TextStyle(
+                                            color: entries[i].muted
+                                                ? _mutedColor
+                                                : _valueColor,
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w600,
+                                            height: 1.2,
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ],
                         ),
                       ),
                     )

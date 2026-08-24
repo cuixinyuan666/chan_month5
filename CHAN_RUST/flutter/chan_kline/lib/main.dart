@@ -327,6 +327,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
   bool _loadingChart = false;
   bool _panelExpanded = false;
   int _panelEdge = 1; // 默认右贴边（设置按钮在右上）
+  /// Android 设置抽屉局部刷新（开关即时反馈）
+  StateSetter? _settingsSheetSetState;
   /// 截断监察：开=当前口径；关=添加截断前旧行为（暴力反转被吸收）
   bool _truncationCheck = true;
   /// 构建中合并框（虚线）开关：开=末组合并画虚线；关=全部实线（默认开）
@@ -557,7 +559,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
   Future<void> _updateChipConfig(ChipConfig cfg) async {
     final stepChanged =
         (cfg.bucketStep - _chipConfig.bucketStep).abs() > 1e-12;
-    setState(() => _chipConfig = cfg);
+    _panelUi(() => _chipConfig = cfg);
     await ChipSettingsStore.save(cfg, tickDist: _tickDistConfig);
     if (stepChanged) {
       _chipPeakStore.clear();
@@ -574,8 +576,14 @@ class _KlineHomePageState extends State<KlineHomePage> {
   }
 
   Future<void> _updateTickDistConfig(TickDistConfig cfg) async {
-    setState(() => _tickDistConfig = cfg);
+    _panelUi(() => _tickDistConfig = cfg);
     await ChipSettingsStore.save(_chipConfig, tickDist: cfg);
+  }
+
+  /// 设置面板与主界面同步刷新（底部抽屉内开关即时可见）
+  void _panelUi(VoidCallback fn, {StateSetter? sheetSetState}) {
+    setState(fn);
+    (sheetSetState ?? _settingsSheetSetState)?.call(() {});
   }
 
   @override
@@ -1744,7 +1752,6 @@ class _KlineHomePageState extends State<KlineHomePage> {
 
   /// 手机：顶栏/底栏 + 全屏图表；设置走底部抽屉（参考行情 App）。
   Widget _buildAndroidShell(BuildContext context) {
-    final gesturesOn = _hasSession && !_busy;
     return Scaffold(
       backgroundColor: const Color(0xFF121212),
       body: Stack(
@@ -1826,19 +1833,6 @@ class _KlineHomePageState extends State<KlineHomePage> {
                         child: _buildReplayBody(),
                       ),
               ),
-              if (!_mlSession.isActive && !_backtestPanelOpen)
-                AndroidPlayBar(
-                  stepIdx: _stepIdx,
-                  totalBars: _allBars.length,
-                  isPlaying: _playing,
-                  canStep: _hasSession,
-                  onStepBack: gesturesOn ? _stepBack : null,
-                  onPlay: !_hasSession
-                      ? null
-                      : (_busy && !_playing ? null : _togglePlay),
-                  onStepForward: gesturesOn ? _stepForward : null,
-                  onRunToEnd: gesturesOn ? _runToEnd : null,
-                ),
             ],
           ),
           if (_loadingChart)
@@ -1857,7 +1851,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
             Positioned(
               left: 0,
               right: 0,
-              bottom: _backtestPanelOpen ? 0 : 52,
+              bottom: 0,
               height: math.min(320, MediaQuery.of(context).size.height * 0.38),
               child: TaskDemoWalkthroughOverlay(
                 manifest: _taskDemoManifest!,
@@ -1882,7 +1876,11 @@ class _KlineHomePageState extends State<KlineHomePage> {
   void _openAndroidSettings() {
     showAndroidSettingsSheet(
       context: context,
-      child: _buildPanelBody(forMobileSheet: true),
+      onClosed: () => _settingsSheetSetState = null,
+      builder: (ctx, sheetSetState) {
+        _settingsSheetSetState = sheetSetState;
+        return _buildPanelBody(forMobileSheet: true, sheetSetState: sheetSetState);
+      },
     );
   }
 
@@ -1971,8 +1969,11 @@ class _KlineHomePageState extends State<KlineHomePage> {
     );
   }
 
-  Widget _buildPanelBody({bool forMobileSheet = false}) {
-    final advanced = _buildPanelAdvancedSection();
+  Widget _buildPanelBody({
+    bool forMobileSheet = false,
+    StateSetter? sheetSetState,
+  }) {
+    final advanced = _buildPanelAdvancedSection(sheetSetState: sheetSetState);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -2098,7 +2099,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
           onChanged: _busy
               ? null
               : (v) {
-                  setState(() {
+                  _panelUi(() {
                     _truncationCheck = v;
                     _defaultK0Purged = false;
                     // 关截断时从副图勾选里摘掉 Kn截断（目录也不可选）
@@ -2114,7 +2115,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
                         maxBsClass: _maxBsClass,
                       ),
                     );
-                  });
+                  }, sheetSetState: sheetSetState);
                   // opt 变了：重建 PipelineState 会话再重算
                   _disposePipelineSession();
                   _msgHistory.append('截断机制=${v ? "开" : "关"}，重算当前步进');
@@ -2141,9 +2142,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
           onChanged: _busy
               ? null
               : (v) {
-                  setState(() {
-                    _showBuildingDash = v;
-                  });
+                  _panelUi(() => _showBuildingDash = v,
+                      sheetSetState: sheetSetState);
                   _msgHistory.append('构建中虚线=${v ? "开" : "关"}');
                 },
           secondary: IconButton(
@@ -2167,9 +2167,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
           onChanged: _busy
               ? null
               : (v) {
-                  setState(() {
-                    _overlayBsVerdictWrong = v;
-                  });
+                  _panelUi(() => _overlayBsVerdictWrong = v,
+                      sheetSetState: sheetSetState);
                   _msgHistory.append('BSP对错叠加X=${v ? "开" : "关"}');
                 },
           secondary: IconButton(
@@ -2296,7 +2295,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
   }
 
   /// 设置面板：开发演示 / 历史记录 / ML / 回测等（手机端收进 ExpansionTile）。
-  List<Widget> _buildPanelAdvancedSection() {
+  List<Widget> _buildPanelAdvancedSection({StateSetter? sheetSetState}) {
     return [
         const SizedBox(height: 12),
         SwitchListTile(
@@ -2314,7 +2313,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
               ? null
               : (v) async {
                   await TaskDemoSettingsStore.setDevelopmentDemoPhaseEnabled(v);
-                  setState(() => _devDemoPhaseEnabled = v);
+                  _panelUi(() => _devDemoPhaseEnabled = v,
+                      sheetSetState: sheetSetState);
                   if (!v) {
                     _exitTaskDemoWalkthrough();
                   } else {

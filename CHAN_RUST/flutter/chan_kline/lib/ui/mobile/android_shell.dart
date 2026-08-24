@@ -112,88 +112,12 @@ class AndroidTopBar extends StatelessWidget {
   }
 }
 
-/// Android 底栏：步退/播放/步进/跳末 + 步进读数。
-class AndroidPlayBar extends StatelessWidget {
-  const AndroidPlayBar({
-    super.key,
-    required this.stepIdx,
-    required this.totalBars,
-    required this.isPlaying,
-    required this.canStep,
-    required this.onStepBack,
-    required this.onPlay,
-    required this.onStepForward,
-    required this.onRunToEnd,
-  });
-
-  final int stepIdx;
-  final int totalBars;
-  final bool isPlaying;
-  final bool canStep;
-  final VoidCallback? onStepBack;
-  final VoidCallback? onPlay;
-  final VoidCallback? onStepForward;
-  final VoidCallback? onRunToEnd;
-
-  @override
-  Widget build(BuildContext context) {
-    final pos = stepIdx < 0 ? 0 : stepIdx + 1;
-    final total = totalBars;
-    return Material(
-      color: const Color(0xFF1A1A1A),
-      child: SafeArea(
-        top: false,
-        child: SizedBox(
-          height: 52,
-          child: Row(
-            children: [
-              IconButton(
-                tooltip: '步退',
-                onPressed: onStepBack,
-                icon: const Icon(Icons.skip_previous),
-              ),
-              IconButton(
-                tooltip: isPlaying ? '暂停' : '播放',
-                onPressed: onPlay,
-                iconSize: 32,
-                icon: Icon(
-                  isPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled,
-                  color: const Color(0xFF42A5F5),
-                ),
-              ),
-              IconButton(
-                tooltip: '步进',
-                onPressed: onStepForward,
-                icon: const Icon(Icons.skip_next),
-              ),
-              IconButton(
-                tooltip: '跑到末尾',
-                onPressed: onRunToEnd,
-                icon: const Icon(Icons.fast_forward),
-              ),
-              Expanded(
-                child: Text(
-                  canStep ? 'K $pos / $total' : '加载中…',
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    fontSize: 13,
-                    color: Color(0xFF94A3B8),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 /// Android 设置：全宽底部抽屉（替代桌面侧边面板）。
 Future<void> showAndroidSettingsSheet({
   required BuildContext context,
-  required Widget child,
+  required Widget Function(BuildContext context, StateSetter setSheetState)
+      builder,
+  VoidCallback? onClosed,
 }) {
   return showModalBottomSheet<void>(
     context: context,
@@ -204,47 +128,51 @@ Future<void> showAndroidSettingsSheet({
     ),
     builder: (ctx) {
       final maxH = MediaQuery.sizeOf(ctx).height * 0.88;
-      return SafeArea(
-        child: SizedBox(
-          height: maxH,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              SizedBox(
-                height: 44,
-                child: Row(
-                  children: [
-                    const SizedBox(width: 12),
-                    const Expanded(
-                      child: Text(
-                        '加载与显示设置',
-                        style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w600,
-                          color: Color(0xFFE2E8F0),
+      return StatefulBuilder(
+        builder: (sheetCtx, setSheetState) {
+          return SafeArea(
+            child: SizedBox(
+              height: maxH,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  SizedBox(
+                    height: 44,
+                    child: Row(
+                      children: [
+                        const SizedBox(width: 12),
+                        const Expanded(
+                          child: Text(
+                            '加载与显示设置',
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w600,
+                              color: Color(0xFFE2E8F0),
+                            ),
+                          ),
                         ),
-                      ),
+                        IconButton(
+                          onPressed: () => Navigator.pop(sheetCtx),
+                          icon: const Icon(Icons.close, color: Color(0xFF94A3B8)),
+                        ),
+                      ],
                     ),
-                    IconButton(
-                      onPressed: () => Navigator.pop(ctx),
-                      icon: const Icon(Icons.close, color: Color(0xFF94A3B8)),
+                  ),
+                  const Divider(height: 1, color: Color(0x33FFFFFF)),
+                  Expanded(
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
+                      child: builder(sheetCtx, setSheetState),
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
-              const Divider(height: 1, color: Color(0x33FFFFFF)),
-              Expanded(
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
-                  child: child,
-                ),
-              ),
-            ],
-          ),
-        ),
+            ),
+          );
+        },
       );
     },
-  );
+  ).whenComplete(() => onClosed?.call());
 }
 
 /// Android 股票列表底部抽屉。
