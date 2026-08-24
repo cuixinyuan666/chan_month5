@@ -8,7 +8,10 @@ class KlineViewport {
   static const double padL = 4;
   /// 右侧几乎不留白：主/副图画到价格数字处，价格标签叠在图上
   static const double padR = 2;
+  /// 桌面主图顶留白
   static const double padT = 28;
+  /// 手机主图「主图」收纳钮行高
+  static const double mainIndicatorToggleBand = 30;
   /// 主图指标 chip 区最大占位（防多行撑入副图）
   static const double mainIndicatorChipMaxBand = 56;
   /// 副图指标 chip 区最大占位（为标记区保底高度）

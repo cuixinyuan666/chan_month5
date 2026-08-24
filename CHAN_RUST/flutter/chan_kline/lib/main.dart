@@ -586,6 +586,21 @@ class _KlineHomePageState extends State<KlineHomePage> {
     (sheetSetState ?? _settingsSheetSetState)?.call(() {});
   }
 
+  void _applyBucketStepFromSettings(
+    String text, {
+    StateSetter? sheetSetState,
+  }) {
+    final v = double.tryParse(text.trim());
+    if (v == null || !v.isFinite || v < 0.01) {
+      _showSnack('桶宽无效：请输入不小于 0.01 的数字');
+      return;
+    }
+    _updateChipConfig(_chipConfig.copyWith(bucketStep: v));
+    _updateTickDistConfig(_tickDistConfig.copyWith(bucketStep: v));
+    _panelUi(() {}, sheetSetState: sheetSetState);
+    _msgHistory.append('筹码/笔数分布桶宽=${v.toStringAsFixed(2)}');
+  }
+
   @override
   void dispose() {
     _playTimer?.cancel();
@@ -1750,96 +1765,104 @@ class _KlineHomePageState extends State<KlineHomePage> {
     );
   }
 
-  /// 手机：顶栏/底栏 + 全屏图表；设置走底部抽屉（参考行情 App）。
+  /// 手机：全屏图表 + 浮动设置钮；股票/周期在设置抽屉。
   Widget _buildAndroidShell(BuildContext context) {
+    final topInset = MediaQuery.paddingOf(context).top;
     return Scaffold(
       backgroundColor: const Color(0xFF121212),
       body: Stack(
         fit: StackFit.expand,
         children: [
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              AndroidTopBar(
-                selectedCode: _selectedCode,
-                codes: _codes,
-                periodLabel: _period,
-                periods: _periods,
-                busy: _bootstrapping || _busy,
-                onPickStock: _openAndroidStockPicker,
-                onPeriodChanged: _onAndroidPeriodChanged,
-                onOpenSettings: _openAndroidSettings,
-              ),
-              if (_error != null)
-                Material(
-                  color: const Color(0x33FF9800),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    child: Text(
-                      _error!,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(color: Colors.orange, fontSize: 12),
-                    ),
+          Positioned.fill(
+            child: _mlSession.isActive
+                ? MlWorkbench(
+                    statusLine: _mlStatusLine(),
+                    progressHint: _mlProgressHint,
+                    phase: _mlPhase,
+                    splitConfig: _mlSplitConfig,
+                    onSplitConfigChanged: _onMlSplitConfigChanged,
+                    labelConfig: _mlLabelConfig,
+                    onLabelConfigChanged: (c) =>
+                        setState(() => _mlLabelConfig = c),
+                    testLocked: _mlTestLocked,
+                    code: _selectedCode ?? '',
+                    period: _period,
+                    dataRoot: _dataRoot,
+                    isXgbMode: _isXgbMode,
+                    onTrainerKindChanged: (k) {
+                      if (_mlTestLocked) {
+                        _showSnack('测试已锁定：不可切换训练器');
+                        return;
+                      }
+                      setState(() {
+                        _isXgbMode = k == MlTrainerKind.xgb;
+                        _mlReport = null;
+                        _mlSamples = [];
+                        _mlPhase = MlPreparePhase.setup;
+                        _mlError = null;
+                      });
+                    },
+                    xgbParams: _xgbParams,
+                    onXgbParamsChanged: (p) {
+                      if (_mlTestLocked) return;
+                      setState(() => _xgbParams = p);
+                    },
+                    forceXgbRetrain: _forceXgbRetrain,
+                    onForceXgbRetrainChanged: (v) {
+                      if (_mlTestLocked) return;
+                      setState(() => _forceXgbRetrain = v);
+                    },
+                    samples: _mlSamples,
+                    report: _mlReport,
+                    errorText: _mlError,
+                    onExit: _exitMlSession,
+                    onLoad: _loadMlRun,
+                  )
+                : Padding(
+                    padding: const EdgeInsets.fromLTRB(2, 0, 2, 0),
+                    child: _buildReplayBody(),
+                  ),
+          ),
+          if (_error != null)
+            Positioned(
+              left: 8,
+              right: 56,
+              top: topInset + 4,
+              child: Material(
+                color: const Color(0x33FF9800),
+                borderRadius: BorderRadius.circular(4),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  child: Text(
+                    _error!,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: Colors.orange, fontSize: 12),
                   ),
                 ),
-              Expanded(
-                child: _mlSession.isActive
-                    ? MlWorkbench(
-                        statusLine: _mlStatusLine(),
-                        progressHint: _mlProgressHint,
-                        phase: _mlPhase,
-                        splitConfig: _mlSplitConfig,
-                        onSplitConfigChanged: _onMlSplitConfigChanged,
-                        labelConfig: _mlLabelConfig,
-                        onLabelConfigChanged: (c) =>
-                            setState(() => _mlLabelConfig = c),
-                        testLocked: _mlTestLocked,
-                        code: _selectedCode ?? '',
-                        period: _period,
-                        dataRoot: _dataRoot,
-                        isXgbMode: _isXgbMode,
-                        onTrainerKindChanged: (k) {
-                          if (_mlTestLocked) {
-                            _showSnack('测试已锁定：不可切换训练器');
-                            return;
-                          }
-                          setState(() {
-                            _isXgbMode = k == MlTrainerKind.xgb;
-                            _mlReport = null;
-                            _mlSamples = [];
-                            _mlPhase = MlPreparePhase.setup;
-                            _mlError = null;
-                          });
-                        },
-                        xgbParams: _xgbParams,
-                        onXgbParamsChanged: (p) {
-                          if (_mlTestLocked) return;
-                          setState(() => _xgbParams = p);
-                        },
-                        forceXgbRetrain: _forceXgbRetrain,
-                        onForceXgbRetrainChanged: (v) {
-                          if (_mlTestLocked) return;
-                          setState(() => _forceXgbRetrain = v);
-                        },
-                        samples: _mlSamples,
-                        report: _mlReport,
-                        errorText: _mlError,
-                        onExit: _exitMlSession,
-                        onLoad: _loadMlRun,
-                      )
-                    : Padding(
-                        padding: const EdgeInsets.fromLTRB(2, 0, 2, 0),
-                        child: _buildReplayBody(),
-                      ),
               ),
-            ],
-          ),
+            ),
+          if (!_mlSession.isActive)
+            Positioned(
+              top: topInset + 2,
+              right: 4,
+              child: Material(
+                color: const Color(0xCC1A1A1A),
+                shape: const CircleBorder(),
+                child: IconButton(
+                  tooltip: '设置',
+                  onPressed: _bootstrapping || _busy
+                      ? null
+                      : _openAndroidSettings,
+                  icon: const Icon(Icons.tune, color: Color(0xFFE2E8F0)),
+                ),
+              ),
+            ),
           if (_loadingChart)
-            const Positioned(
-              top: 56,
-              right: 12,
-              child: SizedBox(
+            Positioned(
+              top: topInset + 8,
+              right: 52,
+              child: const SizedBox(
                 width: 22,
                 height: 22,
                 child: CircularProgressIndicator(strokeWidth: 2),
@@ -1897,13 +1920,6 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _loadKlines();
       },
     );
-  }
-
-  void _onAndroidPeriodChanged(String next) {
-    setState(() => _period = next);
-    if (_selectedCode != null) _loadKlines();
-    _msgHistory.appendPeriodAutoReload();
-    _showPeriodHelp();
   }
 
   /// 透明标题条：左侧穿透点击主图指标；窗控前窄条拖窗；右侧设置/最小化/最大化/关闭。
@@ -1977,35 +1993,47 @@ class _KlineHomePageState extends State<KlineHomePage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (!forMobileSheet) ...[
-        DropdownButtonFormField<String>(
-          isExpanded: true,
-          value: _codes.contains(_selectedCode) ? _selectedCode : null,
-          hint: Text(_codes.isEmpty ? '无股票' : '选择股票'),
-          decoration: InputDecoration(
-            labelText: '股票 (${_codes.length})',
-            isDense: true,
-            border: const OutlineInputBorder(),
+        if (forMobileSheet)
+          OutlinedButton.icon(
+            onPressed: _bootstrapping || _busy || _codes.isEmpty
+                ? null
+                : _openAndroidStockPicker,
+            icon: const Icon(Icons.list_alt, size: 18),
+            label: Text(
+              _selectedCode == null
+                  ? '选择股票 (${_codes.length})'
+                  : '股票：$_selectedCode',
+            ),
+          )
+        else
+          DropdownButtonFormField<String>(
+            isExpanded: true,
+            value: _codes.contains(_selectedCode) ? _selectedCode : null,
+            hint: Text(_codes.isEmpty ? '无股票' : '选择股票'),
+            decoration: InputDecoration(
+              labelText: '股票 (${_codes.length})',
+              isDense: true,
+              border: const OutlineInputBorder(),
+            ),
+            items: _codes
+                .map(
+                  (c) => DropdownMenuItem(
+                    value: c,
+                    child: Text(c, overflow: TextOverflow.ellipsis),
+                  ),
+                )
+                .toList(),
+            onChanged: _bootstrapping || _codes.isEmpty
+                ? null
+                : (v) {
+                    if (v == null) return;
+                    _panelUi(() {
+                      _selectedCode = v;
+                      _syncDateRangeForCode(v);
+                    }, sheetSetState: sheetSetState);
+                    _loadKlines();
+                  },
           ),
-          items: _codes
-              .map(
-                (c) => DropdownMenuItem(
-                  value: c,
-                  child: Text(c, overflow: TextOverflow.ellipsis),
-                ),
-              )
-              .toList(),
-          onChanged: _bootstrapping || _codes.isEmpty
-              ? null
-              : (v) {
-                  if (v == null) return;
-                  setState(() {
-                    _selectedCode = v;
-                    _syncDateRangeForCode(v);
-                  });
-                  _loadKlines();
-                },
-        ),
         if (_selectedCode == 'test') ...[
           const SizedBox(height: 8),
           Row(
@@ -2056,9 +2084,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
                     ? null
                     : (v) {
                         final next = v ?? 'tick';
-                        setState(() => _period = next);
-                        // 切周期立即按新周期重载：否则图表用「新周期蜡烛画法」重绘
-                        // 仍停留在内存的 tick 数据（每根 O=H=L=C），会全部显示成一字线
+                        _panelUi(() => _period = next,
+                            sheetSetState: sheetSetState);
                         if (_selectedCode != null) _loadKlines();
                         _msgHistory.appendPeriodAutoReload();
                         _showPeriodHelp();
@@ -2072,7 +2099,6 @@ class _KlineHomePageState extends State<KlineHomePage> {
             ),
           ],
         ),
-        ],
         const SizedBox(height: 10),
         _datePickerField(
           label: '加载起始时间',
@@ -2084,6 +2110,21 @@ class _KlineHomePageState extends State<KlineHomePage> {
           label: '加载截止时间',
           value: _fmtDateTime(_endDate),
           onTap: _busy ? null : () => _pickDateTime(isBegin: false),
+        ),
+        const SizedBox(height: 8),
+        TextFormField(
+          key: ValueKey(_chipConfig.bucketStep),
+          initialValue: _chipConfig.bucketStep.toStringAsFixed(2),
+          enabled: !_busy,
+          decoration: const InputDecoration(
+            labelText: '筹码分布桶宽',
+            helperText: '最小 0.01；筹码/笔数分布共用',
+            isDense: true,
+            border: OutlineInputBorder(),
+          ),
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          onFieldSubmitted: (text) =>
+              _applyBucketStepFromSettings(text, sheetSetState: sheetSetState),
         ),
         const SizedBox(height: 8),
         // 截断监察开关：对照「加截断前」旧行为

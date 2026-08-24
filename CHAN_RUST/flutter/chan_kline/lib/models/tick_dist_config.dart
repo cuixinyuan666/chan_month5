@@ -5,14 +5,14 @@ import 'chip_config.dart';
 /// 笔数分布配置（主图左侧；与筹码同构，仅 K0）。
 class TickDistConfig {
   const TickDistConfig({
-    this.enabled = true,
-    this.bucketStep = 0.1,
+    this.enabled = false,
+    this.bucketStep = 0.01,
     this.stretchLevel = 5,
     this.paneWidth = 88,
     this.sColor = const Color(0xC722C55E),
     this.bColor = const Color(0xC7DC2626),
     this.wColor = const Color(0xC79CA3AF),
-    this.peakLineEnabled = true,
+    this.peakLineEnabled = false,
     this.peakLineColor = const Color(0xFF7C3AED),
     this.peakLineWidth = 1.2,
     this.peakLineDashed = true,
@@ -85,11 +85,11 @@ class TickDistConfig {
   factory TickDistConfig.fromJson(Map<String, dynamic>? json) {
     if (json == null) return const TickDistConfig();
     return TickDistConfig(
-      enabled: json['enabled'] as bool? ?? true,
-      bucketStep: (json['bucketStep'] as num?)?.toDouble() ?? 0.1,
+      enabled: json['enabled'] as bool? ?? false,
+      bucketStep: (json['bucketStep'] as num?)?.toDouble() ?? 0.01,
       stretchLevel: (json['stretchLevel'] as num?)?.toInt() ?? 5,
       paneWidth: (json['paneWidth'] as num?)?.toDouble() ?? 88,
-      peakLineEnabled: json['peakLineEnabled'] as bool? ?? true,
+      peakLineEnabled: json['peakLineEnabled'] as bool? ?? false,
     );
   }
 

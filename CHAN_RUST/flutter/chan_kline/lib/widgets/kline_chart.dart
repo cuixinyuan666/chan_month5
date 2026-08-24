@@ -324,7 +324,9 @@ class _KlineChartState extends State<KlineChart> {
   double _splitDragStartFraction = 0.79;
   double _chartBodyH = 1;
   final _subChipBarKey = GlobalKey();
+  final _mainChipBarKey = GlobalKey();
   double _subChipBarHeight = KlineViewport.subIndicatorChipBand;
+  double _mainChipBarHeight = 0;
 
   /// 十字线 as-of 中枢 bundle 缓存（逐K当下 Rust 重算）
   int? _zsAsOfCacheKey;
@@ -517,6 +519,35 @@ class _KlineChartState extends State<KlineChart> {
         setState(() => _subChipBarHeight = h);
       }
     }
+  }
+
+  void _measureMainChipBar() {
+    if (!mounted || !_mainIndicatorChipsExpanded) {
+      if (_mainChipBarHeight != 0) {
+        setState(() => _mainChipBarHeight = 0);
+      }
+      return;
+    }
+    final renderBox =
+        _mainChipBarKey.currentContext?.findRenderObject() as RenderBox?;
+    if (renderBox != null && renderBox.hasSize) {
+      final h = math.min(
+        renderBox.size.height + 2,
+        KlineViewport.mainIndicatorChipMaxBand,
+      );
+      if ((h - _mainChipBarHeight).abs() > 0.5) {
+        setState(() => _mainChipBarHeight = h);
+      }
+    }
+  }
+
+  double _resolveMainPlotTop(BuildContext context) {
+    if (!widget.mobileLayout) return KlineViewport.padT;
+    final safeTop = MediaQuery.paddingOf(context).top;
+    final chipExtra = _mainIndicatorChipsExpanded ? _mainChipBarHeight : 0.0;
+    return safeTop +
+        KlineViewport.mainIndicatorToggleBand +
+        chipExtra;
   }
 
   void _closeTooltipKeepCrosshair() {
@@ -1329,9 +1360,12 @@ class _KlineChartState extends State<KlineChart> {
       borderRadius: BorderRadius.circular(4),
       child: InkWell(
         borderRadius: BorderRadius.circular(4),
-        onTap: () => setState(
-          () => _mainIndicatorChipsExpanded = !_mainIndicatorChipsExpanded,
-        ),
+        onTap: () => setState(() {
+          _mainIndicatorChipsExpanded = !_mainIndicatorChipsExpanded;
+          if (!_mainIndicatorChipsExpanded) {
+            _mainChipBarHeight = 0;
+          }
+        }),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
           child: Row(
@@ -1532,7 +1566,7 @@ class _KlineChartState extends State<KlineChart> {
         final cursor = _crosshairEnabled
             ? SystemMouseCursors.precise
             : (_panning ? SystemMouseCursors.grabbing : SystemMouseCursors.grab);
-        final plotTop = KlineViewport.padT;
+        final plotTop = _resolveMainPlotTop(context);
         _zonePlotTop = plotTop;
         _zoneContentBottom = contentBottom;
 
@@ -1552,7 +1586,10 @@ class _KlineChartState extends State<KlineChart> {
             ? (zsAsOfBundle?.k0Confirms ?? const <K0ConfirmSignal>[])
             : widget.k0ConfirmSignals;
 
-        WidgetsBinding.instance.addPostFrameCallback((_) => _measureSubChipBar());
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _measureSubChipBar();
+          _measureMainChipBar();
+        });
 
         final paintLookup = widget.chipOnlyMode
             ? BarFeatureLookup.empty()
@@ -1589,6 +1626,7 @@ class _KlineChartState extends State<KlineChart> {
               visible: visible,
               mainH: mainH,
               volH: volH,
+              mainPlotTop: plotTop,
               crosshairEnabled: _crosshairEnabled,
               crosshairShowTooltip: _crosshairShowTooltip,
               crosshairX: _crosshairX,
@@ -1626,8 +1664,11 @@ class _KlineChartState extends State<KlineChart> {
             );
 
         final chartSize = Size(w, mainH + volH);
+        final overlayTop = widget.mobileLayout
+            ? MediaQuery.paddingOf(context).top
+            : 0.0;
         return Stack(
-          clipBehavior: Clip.none,
+          clipBehavior: Clip.hardEdge,
           children: [
             // A：底图 / 筹码 / 十字 三层独立重绘
             RepaintBoundary(
@@ -1822,9 +1863,9 @@ class _KlineChartState extends State<KlineChart> {
             // 主图指标收纳：裁切在主图区内，不侵入副图
             Positioned(
               left: 0,
-              top: 0,
+              top: overlayTop,
               right: 0,
-              height: mainH,
+              height: mainH - overlayTop,
               child: ClipRect(
                 child: Stack(
                   clipBehavior: Clip.hardEdge,
@@ -1838,8 +1879,10 @@ class _KlineChartState extends State<KlineChart> {
                       Positioned(
                         left: widget.mobileLayout ? 72 : 76,
                         top: 0,
-                        right: widget.mobileLayout ? 4 : 140,
-                        child: IgnorePointer(
+                        right: widget.mobileLayout ? 52 : 140,
+                        child: Builder(
+                          key: _mainChipBarKey,
+                          builder: (_) => IgnorePointer(
                           ignoring: !widget.indicatorsEnabled,
                           child: Opacity(
                             opacity: widget.indicatorsEnabled ? 1 : 0.35,
@@ -1877,6 +1920,7 @@ class _KlineChartState extends State<KlineChart> {
                           ),
                         ),
                       ),
+                    ),
                   ],
                 ),
               ),
@@ -2004,6 +2048,7 @@ class _KlineCompositePainter extends CustomPainter {
     required this.visible,
     required this.mainH,
     required this.volH,
+    this.mainPlotTop = KlineViewport.padT,
     required this.crosshairEnabled,
     required this.crosshairShowTooltip,
     required this.crosshairX,
@@ -2066,6 +2111,7 @@ class _KlineCompositePainter extends CustomPainter {
   final List<KlineBar> visible;
   final double mainH;
   final double volH;
+  final double mainPlotTop;
   final bool crosshairEnabled;
   /// false=仅画十字线与价格标签，不画 K0/Kn 信息框
   final bool crosshairShowTooltip;
@@ -2126,7 +2172,7 @@ class _KlineCompositePainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final plotTop = KlineViewport.padT;
+    final plotTop = mainPlotTop;
     final plotBottom = mainH - KlineViewport.padB;
     final plotH = math.max(1.0, plotBottom - plotTop);
     // 筹码右 / 笔数左：叠在主图两侧；蜡烛坐标系不变
@@ -2151,6 +2197,10 @@ class _KlineCompositePainter extends CustomPainter {
     }
 
     if (layer == _ChartPaintLayer.chip) {
+      canvas.save();
+      canvas.clipRect(
+        Rect.fromLTWH(0, plotTop, size.width, math.max(1, mainH - plotTop)),
+      );
       final cut = bars.isEmpty ? 0 : (segAsOf ?? bars.last.idx);
       final yOf = (double p) => priceRange.yOf(p, plotTop, plotH);
       if (showTickDist) {
@@ -2200,10 +2250,15 @@ class _KlineCompositePainter extends CustomPainter {
           hoverBar: hoverBar,
         );
       }
+      canvas.restore();
       return;
     }
 
     // —— base：蜡烛 / 缠论 / 坐标轴（不含筹码与十字）——
+    canvas.save();
+    canvas.clipRect(
+      Rect.fromLTWH(0, plotTop, size.width, math.max(1, mainH - plotTop)),
+    );
     final chanDraw = !chipOnlyMode;
     // 方案B：K0 蜡烛/合并/连线 kn==0
     final showK0 = !chipOnlyMode
@@ -2325,11 +2380,6 @@ class _KlineCompositePainter extends CustomPainter {
         }
       }
     }
-    if (chanDraw && subIndicators.isNotEmpty) {
-      _drawSubCharts(canvas, size.width, mainH, barW, slotW);
-    }
-
-    // 价签：笔数分布开启时画在其右侧（分布图「下方/之后」）；仅筹码时仍靠左避让
     _drawYLabels(
       canvas,
       size.width,
@@ -2339,6 +2389,15 @@ class _KlineCompositePainter extends CustomPainter {
       onLeft: showChip || showTickDist,
       leftX: showTickDist ? plotLeft + 2 : null,
     );
+    canvas.restore();
+
+    if (chanDraw && subIndicators.isNotEmpty) {
+      canvas.save();
+      canvas.clipRect(Rect.fromLTWH(0, mainH, size.width, math.max(1, volH)));
+      _drawSubCharts(canvas, size.width, mainH, barW, slotW);
+      canvas.restore();
+    }
+
     _drawXAxis(canvas, size.width, xAxisTop);
   }
 
@@ -6267,7 +6326,7 @@ class _KlineCompositePainter extends CustomPainter {
     final safeBottom = math.max(plotTop, contentBottom);
     final x = crosshairX!.clamp(KlineViewport.padL, safeRight).toDouble();
     final y = crosshairY!.clamp(plotTop, safeBottom).toDouble();
-    final plotH = math.max(1.0, mainH - KlineViewport.padT - KlineViewport.padB);
+    final plotH = math.max(1.0, mainH - mainPlotTop - KlineViewport.padB);
 
     final paint = Paint()
       ..color = const Color(0xFFE2E8F0)
@@ -6387,6 +6446,7 @@ class _KlineCompositePainter extends CustomPainter {
     if (oldDelegate.layer != layer) return true;
     final geomChanged = oldDelegate.mainH != mainH ||
         oldDelegate.volH != volH ||
+        oldDelegate.mainPlotTop != mainPlotTop ||
         oldDelegate.viewport.viewXMin != viewport.viewXMin ||
         oldDelegate.viewport.viewXMax != viewport.viewXMax ||
         oldDelegate.viewport.yZoomRatio != viewport.yZoomRatio ||

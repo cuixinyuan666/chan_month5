@@ -805,8 +805,8 @@ class MsgHistory {
     if (_androidBundledDataLogged) return;
     _androidBundledDataLogged = true;
     append(
-      '【Android·a_Data】首次启动从 assets/a_data_seed.zip 解压到应用私有目录/a_Data；'
-      '默认股票 002003（2025Q1 分笔）+ test；002003 默认区间=2025/01/02~2025/03/31。'
+      '【Android·a_Data】首次启动从 assets/a_data_seed.zip 解压全量 a_Data 到应用私有目录；'
+      '内置 001312/002003/688687/920992/test 等全部股票与演示数据。'
       '桌面仍可用环境变量 CHAN_DATA_ROOT 或 Rust 默认相对路径。',
     );
   }
@@ -817,9 +817,9 @@ class MsgHistory {
     if (_androidMobileLayoutLogged) return;
     _androidMobileLayoutLogged = true;
     append(
-      '【Android·界面】顶栏=股票+周期+设置；无底栏播放条，默认左/中/右热区手势步进；'
-      '设置用底部抽屉且开关即时刷新；主/副图各一收纳钮；主副图分割显式「调节」手柄；'
-      '十字 tooltip 可上下滚动且右上角可关；无桌面窗控条。',
+      '【Android·界面】无顶栏/底栏，图表全屏；右上角浮动「设置」钮；'
+      '股票/周期/日期/桶宽等在设置抽屉；主/副图各一收纳钮；主副图分割显式「调节」手柄；'
+      '主图绘制 canvas 裁切，禁止侵入状态栏区与副图区；十字 tooltip 可滚动且右上角可关。',
     );
   }
 
