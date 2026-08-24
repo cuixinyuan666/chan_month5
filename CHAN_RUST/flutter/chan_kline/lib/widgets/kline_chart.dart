@@ -295,9 +295,6 @@ class _KlineChartState extends State<KlineChart> {
   /// 手机双指缩放：累计 scale 基准
   bool _pinchScaling = false;
   double _pinchScaleBaseline = 1.0;
-  double _pinchStartViewMin = 0;
-  double _pinchStartViewMax = 0;
-  double _pinchStartYShift = 0;
   Size _chartSize = Size.zero;
 
   /// 左中右热区：用 Listener 优先吃点击（避免卡顿时被 GestureDetector 拖拽抢走）
@@ -1288,9 +1285,6 @@ class _KlineChartState extends State<KlineChart> {
     if (!widget.mobileLayout || widget.bars.isEmpty) return;
     _pinchScaling = true;
     _pinchScaleBaseline = 1.0;
-    _pinchStartViewMin = _viewport.viewXMin;
-    _pinchStartViewMax = _viewport.viewXMax;
-    _pinchStartYShift = _viewport.yShiftRatio;
     _panning = false;
     _panStart = null;
   }
