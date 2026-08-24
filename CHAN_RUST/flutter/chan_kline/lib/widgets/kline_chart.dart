@@ -290,6 +290,14 @@ class _KlineChartState extends State<KlineChart> {
   double _panStartYShift = 0;
   double _panStartViewMin = 0;
   double _panStartViewMax = 0;
+  /// 主/副图指标 chip 默认收纳，点「指标」展开
+  bool _indicatorChipsExpanded = false;
+  /// 手机双指缩放：累计 scale 基准
+  bool _pinchScaling = false;
+  double _pinchScaleBaseline = 1.0;
+  double _pinchStartViewMin = 0;
+  double _pinchStartViewMax = 0;
+  double _pinchStartYShift = 0;
   Size _chartSize = Size.zero;
 
   /// 左中右热区：用 Listener 优先吃点击（避免卡顿时被 GestureDetector 拖拽抢走）
@@ -1250,7 +1258,7 @@ class _KlineChartState extends State<KlineChart> {
   }
 
   void _onPanStart(DragStartDetails d, double mainPlotH) {
-    if (widget.bars.isEmpty || _splitDragging) return;
+    if (widget.mobileLayout || widget.bars.isEmpty || _splitDragging) return;
     _panning = true;
     _panStart = d.localPosition;
     _panStartViewMin = _viewport.viewXMin;
@@ -1273,6 +1281,82 @@ class _KlineChartState extends State<KlineChart> {
   void _onPanEnd(DragEndDetails d) {
     _panning = false;
     _panStart = null;
+  }
+
+  /// 手机：双指捏合缩放 X + 双指平移（单指不拖图）。
+  void _onPinchScaleStart(ScaleStartDetails d) {
+    if (!widget.mobileLayout || widget.bars.isEmpty) return;
+    _pinchScaling = true;
+    _pinchScaleBaseline = 1.0;
+    _pinchStartViewMin = _viewport.viewXMin;
+    _pinchStartViewMax = _viewport.viewXMax;
+    _pinchStartYShift = _viewport.yShiftRatio;
+    _panning = false;
+    _panStart = null;
+  }
+
+  void _onPinchScaleUpdate(ScaleUpdateDetails d, double mainPlotH) {
+    if (!widget.mobileLayout || !_pinchScaling || widget.bars.isEmpty) return;
+    _viewport.markUserAdjusted();
+    if (d.scale != _pinchScaleBaseline) {
+      final factor = d.scale / _pinchScaleBaseline;
+      _pinchScaleBaseline = d.scale;
+      if (factor != 1.0 && _chartSize.width > 0) {
+        _viewport.zoomXAt(factor, d.localFocalPoint.dx, _chartSize.width);
+      }
+    }
+    if (d.focalPointDelta != Offset.zero) {
+      _viewport.panByPixels(
+        d.focalPointDelta.dx,
+        d.focalPointDelta.dy,
+        _chartSize.width,
+        mainPlotH,
+      );
+    }
+    _scheduleRedraw();
+  }
+
+  void _onPinchScaleEnd(ScaleEndDetails d) {
+    _pinchScaling = false;
+    _pinchScaleBaseline = 1.0;
+  }
+
+  Widget _buildIndicatorToggleButton() {
+    final count = _activeMains.length + _activeSubs.length;
+    return Material(
+      color: const Color(0xCC1A1A1A),
+      borderRadius: BorderRadius.circular(4),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(4),
+        onTap: () => setState(
+          () => _indicatorChipsExpanded = !_indicatorChipsExpanded,
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                _indicatorChipsExpanded
+                    ? Icons.expand_less
+                    : Icons.expand_more,
+                size: 18,
+                color: const Color(0xFFE2E8F0),
+              ),
+              const SizedBox(width: 2),
+              Text(
+                count > 0 ? '指标($count)' : '指标',
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFFE2E8F0),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   void _onSplitDown(PointerDownEvent e) {
@@ -1537,48 +1621,73 @@ class _KlineChartState extends State<KlineChart> {
               ),
             ),
             Positioned.fill(
-              child: MouseRegion(
-                cursor: cursor,
-                onExit: (_) => _onPointerLeave(),
-                onHover: (e) {
-                  if (!_panning) {
-                    _updateCrosshairAt(e.localPosition, plotTop, contentBottom);
-                  }
-                },
-                child: Listener(
-                  behavior: HitTestBehavior.opaque,
-                  onPointerSignal: (e) {
-                    if (e is PointerScrollEvent) {
-                      _onWheel(
+              child: widget.mobileLayout
+                  ? Listener(
+                      behavior: HitTestBehavior.opaque,
+                      onPointerDown: _onPointerDown,
+                      onPointerMove: (e) => _onPointerMove(
                         e,
                         mainH - KlineViewport.padT - KlineViewport.padB,
-                      );
-                    }
-                  },
-                  onPointerDown: _onPointerDown,
-                  onPointerMove: (e) => _onPointerMove(
-                    e,
-                    mainH - KlineViewport.padT - KlineViewport.padB,
-                    contentBottom,
-                  ),
-                  onPointerUp: _onPointerUp,
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    // 左中右点击已由 Listener 高优先处理；此处只保留长按与拖拽
-                    onLongPressStart: _onZoneLongPress,
-                    onPanStart: (d) => _onPanStart(
-                      d,
-                      mainH - KlineViewport.padT - KlineViewport.padB,
+                        contentBottom,
+                      ),
+                      onPointerUp: _onPointerUp,
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onLongPressStart: _onZoneLongPress,
+                        onScaleStart: _onPinchScaleStart,
+                        onScaleUpdate: (d) => _onPinchScaleUpdate(
+                          d,
+                          mainH - KlineViewport.padT - KlineViewport.padB,
+                        ),
+                        onScaleEnd: _onPinchScaleEnd,
+                        child: const SizedBox.expand(),
+                      ),
+                    )
+                  : MouseRegion(
+                      cursor: cursor,
+                      onExit: (_) => _onPointerLeave(),
+                      onHover: (e) {
+                        if (!_panning) {
+                          _updateCrosshairAt(
+                            e.localPosition,
+                            plotTop,
+                            contentBottom,
+                          );
+                        }
+                      },
+                      child: Listener(
+                        behavior: HitTestBehavior.opaque,
+                        onPointerSignal: (e) {
+                          if (e is PointerScrollEvent) {
+                            _onWheel(
+                              e,
+                              mainH - KlineViewport.padT - KlineViewport.padB,
+                            );
+                          }
+                        },
+                        onPointerDown: _onPointerDown,
+                        onPointerMove: (e) => _onPointerMove(
+                          e,
+                          mainH - KlineViewport.padT - KlineViewport.padB,
+                          contentBottom,
+                        ),
+                        onPointerUp: _onPointerUp,
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onLongPressStart: _onZoneLongPress,
+                          onPanStart: (d) => _onPanStart(
+                            d,
+                            mainH - KlineViewport.padT - KlineViewport.padB,
+                          ),
+                          onPanUpdate: (d) => _onPanUpdate(
+                            d,
+                            mainH - KlineViewport.padT - KlineViewport.padB,
+                          ),
+                          onPanEnd: _onPanEnd,
+                          child: const SizedBox.expand(),
+                        ),
+                      ),
                     ),
-                    onPanUpdate: (d) => _onPanUpdate(
-                      d,
-                      mainH - KlineViewport.padT - KlineViewport.padB,
-                    ),
-                    onPanEnd: _onPanEnd,
-                    child: const SizedBox.expand(),
-                  ),
-                ),
-              ),
             ),
             // 十字线 tooltip 盖在手势层之上（IgnorePointer 保证点击/滚轮仍由下层接管）
             if (_crosshairShowTooltip &&
@@ -1638,73 +1747,32 @@ class _KlineChartState extends State<KlineChart> {
                   ),
                 ),
               ),
-            // 主图：↓ + 已选指标名（无数据不可点）；避让右上窗控
+            // 指标收纳：默认收起
             Positioned(
               left: 0,
               top: 0,
-              child: IgnorePointer(
-                ignoring: !widget.indicatorsEnabled,
-                child: Opacity(
-                  opacity: widget.indicatorsEnabled ? 1 : 0.35,
-                  child: IndicatorPickerChip(
-                    entries: () {
-                      final list = _mainCatalog
-                          .where(_activeMains.contains)
-                          .toList()
-                        ..sort((a, b) {
-                          // ※ 按层级分隔：先 displayLevel，再类别/kn
-                          final lv = a.displayLevel.compareTo(b.displayLevel);
-                          if (lv != 0) return lv;
-                          final c = a.kind.categoryOrder
-                              .compareTo(b.kind.categoryOrder);
-                          if (c != 0) return c;
-                          return a.kn.compareTo(b.kn);
-                        });
-                      return [
-                        for (final e in list)
-                          IndicatorChipEntry(
-                            label: e.label,
-                            displayLevel: e.displayLevel,
-                            muted: _mutedMains.contains(e),
-                            onTapToggle: () => _toggleMuteMain(e),
-                          ),
-                      ];
-                    }(),
-                    onTapDropdown: () => _pickMainIndicators(context),
-                    maxWidth: widget.mobileLayout
-                        ? math.max(80.0, w - 12)
-                        : math.max(120.0, w - 140),
-                    emptyHint: 'K0',
-                  ),
-                ),
-              ),
+              child: _buildIndicatorToggleButton(),
             ),
-            // 副图入口：已选指标后方挂变量读数（取消右上独立读数框）
-            Positioned(
-              left: KlineViewport.padL,
-              top: _showSubPane ? mainH + 2 : math.max(0.0, mainH - 26),
-              child: Builder(
-                key: _subChipBarKey,
-                builder: (_) => IgnorePointer(
+            if (_indicatorChipsExpanded)
+              Positioned(
+                left: widget.mobileLayout ? 72 : 76,
+                top: 0,
+                right: widget.mobileLayout ? 4 : 140,
+                child: IgnorePointer(
                   ignoring: !widget.indicatorsEnabled,
                   child: Opacity(
                     opacity: widget.indicatorsEnabled ? 1 : 0.35,
                     child: IndicatorPickerChip(
                       entries: () {
-                        final values = _subChipValueByInd();
-                        final list = _subCatalog
-                            .where(_activeSubs.contains)
+                        final list = _mainCatalog
+                            .where(_activeMains.contains)
                             .toList()
                           ..sort((a, b) {
-                            // ※ 按层级分隔：先 displayLevel，再类别/算法/kn
                             final lv = a.displayLevel.compareTo(b.displayLevel);
                             if (lv != 0) return lv;
                             final c = a.kind.categoryOrder
                                 .compareTo(b.kind.categoryOrder);
                             if (c != 0) return c;
-                            final ai = a.diverAlgo?.index ?? -1;
-                            final bi = b.diverAlgo?.index ?? -1;
-                            if (ai != bi) return ai.compareTo(bi);
                             return a.kn.compareTo(b.kn);
                           });
                         return [
@@ -1712,22 +1780,68 @@ class _KlineChartState extends State<KlineChart> {
                             IndicatorChipEntry(
                               label: e.label,
                               displayLevel: e.displayLevel,
-                              muted: _mutedSubs.contains(e),
-                              valueText: values[e],
-                              onTapToggle: () => _toggleMuteSub(e),
+                              muted: _mutedMains.contains(e),
+                              onTapToggle: () => _toggleMuteMain(e),
                             ),
                         ];
                       }(),
-                      onTapDropdown: () => _pickSubIndicators(context),
+                      onTapDropdown: () => _pickMainIndicators(context),
                       maxWidth: widget.mobileLayout
-                          ? math.max(80.0, w - KlineViewport.padL - 8)
-                          : math.max(100.0, w - KlineViewport.padL - 24),
-                      emptyHint: '未选',
+                          ? math.max(80.0, w - 80)
+                          : math.max(120.0, w - 220),
+                      emptyHint: 'K0',
                     ),
                   ),
                 ),
               ),
-            ),
+            if (_indicatorChipsExpanded)
+              Positioned(
+                left: KlineViewport.padL,
+                top: _showSubPane ? mainH + 2 : math.max(0.0, mainH - 26),
+                child: Builder(
+                  key: _subChipBarKey,
+                  builder: (_) => IgnorePointer(
+                    ignoring: !widget.indicatorsEnabled,
+                    child: Opacity(
+                      opacity: widget.indicatorsEnabled ? 1 : 0.35,
+                      child: IndicatorPickerChip(
+                        entries: () {
+                          final values = _subChipValueByInd();
+                          final list = _subCatalog
+                              .where(_activeSubs.contains)
+                              .toList()
+                            ..sort((a, b) {
+                              final lv = a.displayLevel.compareTo(b.displayLevel);
+                              if (lv != 0) return lv;
+                              final c = a.kind.categoryOrder
+                                  .compareTo(b.kind.categoryOrder);
+                              if (c != 0) return c;
+                              final ai = a.diverAlgo?.index ?? -1;
+                              final bi = b.diverAlgo?.index ?? -1;
+                              if (ai != bi) return ai.compareTo(bi);
+                              return a.kn.compareTo(b.kn);
+                            });
+                          return [
+                            for (final e in list)
+                              IndicatorChipEntry(
+                                label: e.label,
+                                displayLevel: e.displayLevel,
+                                muted: _mutedSubs.contains(e),
+                                valueText: values[e],
+                                onTapToggle: () => _toggleMuteSub(e),
+                              ),
+                          ];
+                        }(),
+                        onTapDropdown: () => _pickSubIndicators(context),
+                        maxWidth: widget.mobileLayout
+                            ? math.max(80.0, w - KlineViewport.padL - 8)
+                            : math.max(100.0, w - KlineViewport.padL - 24),
+                        emptyHint: '未选',
+                      ),
+                    ),
+                  ),
+                ),
+              ),
           ],
         );
       },

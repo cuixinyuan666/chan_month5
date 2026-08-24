@@ -822,6 +822,19 @@ class MsgHistory {
     );
   }
 
+  /// 指标收纳、双指缩放/平移、策略回测上下分割（进程内去重）。
+  static bool _androidTouchUiLogged = false;
+  void appendAndroidTouchUiAndBacktestSplit() {
+    if (_androidTouchUiLogged) return;
+    _androidTouchUiLogged = true;
+    append(
+      '【指标收纳】主/副图左上角「指标」按钮默认收起 chip；点按展开/再点收纳。'
+      '【手机双指】mobileLayout 下 K 线：双指捏合缩放 X、双指拖动平移；单指不拖图。'
+      '【策略回测分割】打开策略回测后 K 线与工作台之间可拖分割条上下调整占比；'
+      'Android 默认 K 线约 38%、桌面约 58%；拖条样式与图内主副图分割一致。',
+    );
+  }
+
   /// 桌面窗体：铺满工作区不盖任务栏；十字线 tooltip 分隔线贴边框。
   void appendDesktopWorkAreaAndTooltipSep() {
     if (_desktopWorkAreaLogged) return;

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
@@ -176,6 +177,7 @@ Future<void> main() async {
   MsgHistory.instance.appendDesktopWorkAreaAndTooltipSep();
   MsgHistory.instance.appendAndroidBundledDataRoot();
   MsgHistory.instance.appendAndroidMobileLayout();
+  MsgHistory.instance.appendAndroidTouchUiAndBacktestSplit();
   MsgHistory.instance.appendAuditProbeCopyButton();
   MsgHistory.instance.appendAuditFixBsZsFeature();
   MsgHistory.instance.appendAuditBatch2ProbePeakAsOf();
@@ -419,6 +421,13 @@ class _KlineHomePageState extends State<KlineHomePage> {
   Set<String> _btHighlightIds = {};
   int? _btFocusBarIdx;
   int _btFocusEpoch = 0;
+  /// 策略回测打开时：K 线区占竖向比例（可拖分割条调整）
+  double _backtestChartFraction = Platform.isAndroid ? 0.38 : 0.58;
+  static const _minBacktestChartFraction = 0.22;
+  static const _maxBacktestChartFraction = 0.85;
+  bool _backtestSplitDragging = false;
+  double _backtestSplitDragStartY = 0;
+  double _backtestSplitDragStartFraction = 0.58;
 
   /// catalog 三类..N 类上限（至少 9；随会话观察到的更高类扩大）
   int get _maxBsClass => math.max(
@@ -2432,45 +2441,108 @@ class _KlineHomePageState extends State<KlineHomePage> {
     });
   }
 
+  void _onBacktestSplitDown(PointerDownEvent e) {
+    if (e.buttons != kPrimaryButton) return;
+    _backtestSplitDragging = true;
+    _backtestSplitDragStartY = e.localPosition.dy;
+    _backtestSplitDragStartFraction = _backtestChartFraction;
+  }
+
+  void _onBacktestSplitMove(PointerMoveEvent e, double totalH) {
+    if (!_backtestSplitDragging || totalH <= 0) return;
+    final delta = e.localPosition.dy - _backtestSplitDragStartY;
+    setState(() {
+      _backtestChartFraction = ((_backtestSplitDragStartFraction * totalH +
+              delta) /
+          totalH)
+          .clamp(_minBacktestChartFraction, _maxBacktestChartFraction);
+    });
+  }
+
+  void _onBacktestSplitUp(PointerUpEvent e) {
+    _backtestSplitDragging = false;
+  }
+
+  Widget _buildBacktestSplitBar(double totalH) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.resizeUpDown,
+      child: Listener(
+        behavior: HitTestBehavior.opaque,
+        onPointerDown: _onBacktestSplitDown,
+        onPointerMove: (e) => _onBacktestSplitMove(e, totalH),
+        onPointerUp: _onBacktestSplitUp,
+        child: SizedBox(
+          height: 8,
+          child: Center(
+            child: Container(
+              height: _backtestSplitDragging ? 3 : 2,
+              margin: const EdgeInsets.symmetric(horizontal: 8),
+              decoration: BoxDecoration(
+                color: _backtestSplitDragging
+                    ? const Color(0xAA42A5F5)
+                    : const Color(0x55FFFFFF),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildReplayBody() {
     final chart = _buildKlineChart();
     if (!_backtestPanelOpen) return chart;
     final maxKn = chartMaxKn(levels: _levels, k0Lines: _k0Lines);
-    return Column(
-      children: [
-        Expanded(flex: 3, child: chart),
-        SizedBox(
-          height: 286,
-          child: BacktestWorkbench(
-            config: _strategyConfig,
-            maxKn: maxKn,
-            onConfigChanged: (c) => setState(() => _strategyConfig = c),
-            onRun: _runStrategyBacktest,
-            onClose: () => setState(() => _backtestPanelOpen = false),
-            onHelp: _showBacktestHelp,
-            run: _backtestRun,
-            bars: _visibleBars,
-            currentStepIdx: _stepIdx < 0 ? 0 : _stepIdx,
-            tab: _btTab,
-            onTab: (t) => setState(() => _btTab = t),
-            selectedSignalId: _btSelectedSignalId,
-            selectedTradeId: _btSelectedTradeId,
-            onSelectTrade: _onBacktestSelectTrade,
-            onSelectSignal: _onBacktestSelectSignal,
-            onJumpX: _jumpBacktestBar,
-            focusX: _btFocusBarIdx,
-            levels: _levels,
-            mathFreeze: _mathFreezeStore,
-            chanEvents: _chanEventStore(),
-            zsObjects: _zsObjectStore,
-            diverRelations: _diverRelationStore,
-            lineSeries: _chartLineStore(),
-            features: _pipelineSession?.cache.lookup,
-            chipPeaks: _chipPeakStore,
-            bucketStep: _chipConfig.bucketStep,
-          ),
-        ),
-      ],
+    final workbench = BacktestWorkbench(
+      config: _strategyConfig,
+      maxKn: maxKn,
+      onConfigChanged: (c) => setState(() => _strategyConfig = c),
+      onRun: _runStrategyBacktest,
+      onClose: () => setState(() => _backtestPanelOpen = false),
+      onHelp: _showBacktestHelp,
+      run: _backtestRun,
+      bars: _visibleBars,
+      currentStepIdx: _stepIdx < 0 ? 0 : _stepIdx,
+      tab: _btTab,
+      onTab: (t) => setState(() => _btTab = t),
+      selectedSignalId: _btSelectedSignalId,
+      selectedTradeId: _btSelectedTradeId,
+      onSelectTrade: _onBacktestSelectTrade,
+      onSelectSignal: _onBacktestSelectSignal,
+      onJumpX: _jumpBacktestBar,
+      focusX: _btFocusBarIdx,
+      levels: _levels,
+      mathFreeze: _mathFreezeStore,
+      chanEvents: _chanEventStore(),
+      zsObjects: _zsObjectStore,
+      diverRelations: _diverRelationStore,
+      lineSeries: _chartLineStore(),
+      features: _pipelineSession?.cache.lookup,
+      chipPeaks: _chipPeakStore,
+      bucketStep: _chipConfig.bucketStep,
+    );
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final totalH = constraints.maxHeight;
+        if (totalH <= 0) return chart;
+        const splitBarH = 8.0;
+        const minChartH = 120.0;
+        const minBacktestH = 160.0;
+        final maxChartH = math.max(minChartH, totalH - minBacktestH - splitBarH);
+        final minFrac = minChartH / totalH;
+        final maxFrac = maxChartH / totalH;
+        final frac = _backtestChartFraction.clamp(minFrac, maxFrac);
+        final chartH = frac * totalH;
+        final backtestH = totalH - chartH - splitBarH;
+        return Column(
+          children: [
+            SizedBox(height: chartH, child: chart),
+            _buildBacktestSplitBar(totalH),
+            SizedBox(height: backtestH, child: workbench),
+          ],
+        );
+      },
     );
   }
 
