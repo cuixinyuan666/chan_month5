@@ -811,6 +811,17 @@ class MsgHistory {
     );
   }
 
+  /// Android 手机布局：顶栏/底栏/设置抽屉，图表区最大化。
+  static bool _androidMobileLayoutLogged = false;
+  void appendAndroidMobileLayout() {
+    if (_androidMobileLayoutLogged) return;
+    _androidMobileLayoutLogged = true;
+    append(
+      '【Android·界面】顶栏=股票+周期+设置；底栏=步退/播放/步进/跳末；'
+      '设置用底部抽屉；图表指标 chip 全宽；无桌面窗控条。',
+    );
+  }
+
   /// 桌面窗体：铺满工作区不盖任务栏；十字线 tooltip 分隔线贴边框。
   void appendDesktopWorkAreaAndTooltipSep() {
     if (_desktopWorkAreaLogged) return;

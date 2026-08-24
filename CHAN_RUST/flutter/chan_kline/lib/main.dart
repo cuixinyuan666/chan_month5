@@ -8,6 +8,7 @@ import 'package:window_manager/window_manager.dart';
 
 import 'bridge/chan_bridge.dart';
 import 'data/mobile_data_root.dart';
+import 'ui/mobile/android_shell.dart';
 import 'compute/adjacent_ratio_compute.dart';
 import 'compute/line_slope_compute.dart';
 import 'compute/chip_profile_compute.dart';
@@ -89,6 +90,17 @@ import 'window_work_area.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  if (Platform.isAndroid) {
+    await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    SystemChrome.setSystemUIOverlayStyle(
+      const SystemUiOverlayStyle(
+        statusBarColor: Colors.transparent,
+        statusBarIconBrightness: Brightness.light,
+        systemNavigationBarColor: Color(0xFF121212),
+        systemNavigationBarIconBrightness: Brightness.light,
+      ),
+    );
+  }
   // 方案B：Flutter 层号彻底改（structure 0 起编）
   MsgHistory.instance.appendPlanBLayerRemap();
   // 命名变更追踪：笔/线段 → K0连线/K1连线；中枢/买卖点口径见 appendZSSplitNormalOverSeg
@@ -163,6 +175,7 @@ Future<void> main() async {
   // 桌面：工作区全屏不盖任务栏；tooltip 分隔线贴边框
   MsgHistory.instance.appendDesktopWorkAreaAndTooltipSep();
   MsgHistory.instance.appendAndroidBundledDataRoot();
+  MsgHistory.instance.appendAndroidMobileLayout();
   MsgHistory.instance.appendAuditProbeCopyButton();
   MsgHistory.instance.appendAuditFixBsZsFeature();
   MsgHistory.instance.appendAuditBatch2ProbePeakAsOf();
@@ -1576,6 +1589,14 @@ class _KlineHomePageState extends State<KlineHomePage> {
 
   @override
   Widget build(BuildContext context) {
+    if (Platform.isAndroid) {
+      return _buildAndroidShell(context);
+    }
+    return _buildDesktopShell(context);
+  }
+
+  /// 桌面：图表铺满 + 透明标题条 + 左右设置浮层。
+  Widget _buildDesktopShell(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF121212),
       // 图表铺满；标题按钮叠在右上角之上，可点且不挡视觉延伸
@@ -1712,6 +1733,172 @@ class _KlineHomePageState extends State<KlineHomePage> {
     );
   }
 
+  /// 手机：顶栏/底栏 + 全屏图表；设置走底部抽屉（参考行情 App）。
+  Widget _buildAndroidShell(BuildContext context) {
+    final gesturesOn = _hasSession && !_busy;
+    return Scaffold(
+      backgroundColor: const Color(0xFF121212),
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              AndroidTopBar(
+                selectedCode: _selectedCode,
+                codes: _codes,
+                periodLabel: _period,
+                periods: _periods,
+                busy: _bootstrapping || _busy,
+                onPickStock: _openAndroidStockPicker,
+                onPeriodChanged: _onAndroidPeriodChanged,
+                onOpenSettings: _openAndroidSettings,
+              ),
+              if (_error != null)
+                Material(
+                  color: const Color(0x33FF9800),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    child: Text(
+                      _error!,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: Colors.orange, fontSize: 12),
+                    ),
+                  ),
+                ),
+              Expanded(
+                child: _mlSession.isActive
+                    ? MlWorkbench(
+                        statusLine: _mlStatusLine(),
+                        progressHint: _mlProgressHint,
+                        phase: _mlPhase,
+                        splitConfig: _mlSplitConfig,
+                        onSplitConfigChanged: _onMlSplitConfigChanged,
+                        labelConfig: _mlLabelConfig,
+                        onLabelConfigChanged: (c) =>
+                            setState(() => _mlLabelConfig = c),
+                        testLocked: _mlTestLocked,
+                        code: _selectedCode ?? '',
+                        period: _period,
+                        dataRoot: _dataRoot,
+                        isXgbMode: _isXgbMode,
+                        onTrainerKindChanged: (k) {
+                          if (_mlTestLocked) {
+                            _showSnack('测试已锁定：不可切换训练器');
+                            return;
+                          }
+                          setState(() {
+                            _isXgbMode = k == MlTrainerKind.xgb;
+                            _mlReport = null;
+                            _mlSamples = [];
+                            _mlPhase = MlPreparePhase.setup;
+                            _mlError = null;
+                          });
+                        },
+                        xgbParams: _xgbParams,
+                        onXgbParamsChanged: (p) {
+                          if (_mlTestLocked) return;
+                          setState(() => _xgbParams = p);
+                        },
+                        forceXgbRetrain: _forceXgbRetrain,
+                        onForceXgbRetrainChanged: (v) {
+                          if (_mlTestLocked) return;
+                          setState(() => _forceXgbRetrain = v);
+                        },
+                        samples: _mlSamples,
+                        report: _mlReport,
+                        errorText: _mlError,
+                        onExit: _exitMlSession,
+                        onLoad: _loadMlRun,
+                      )
+                    : Padding(
+                        padding: const EdgeInsets.fromLTRB(2, 0, 2, 0),
+                        child: _buildReplayBody(),
+                      ),
+              ),
+              if (!_mlSession.isActive && !_backtestPanelOpen)
+                AndroidPlayBar(
+                  stepIdx: _stepIdx,
+                  totalBars: _allBars.length,
+                  isPlaying: _playing,
+                  canStep: _hasSession,
+                  onStepBack: gesturesOn ? _stepBack : null,
+                  onPlay: !_hasSession
+                      ? null
+                      : (_busy && !_playing ? null : _togglePlay),
+                  onStepForward: gesturesOn ? _stepForward : null,
+                  onRunToEnd: gesturesOn ? _runToEnd : null,
+                ),
+            ],
+          ),
+          if (_loadingChart)
+            const Positioned(
+              top: 56,
+              right: 12,
+              child: SizedBox(
+                width: 22,
+                height: 22,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            ),
+          if (_taskDemoWalkActive &&
+              _taskDemoManifest != null &&
+              !_mlSession.isActive)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: _backtestPanelOpen ? 0 : 52,
+              height: math.min(320, MediaQuery.of(context).size.height * 0.38),
+              child: TaskDemoWalkthroughOverlay(
+                manifest: _taskDemoManifest!,
+                steps: _taskDemoSteps,
+                walkIndex: _taskDemoWalkIndex,
+                currentStepIdx: _stepIdx < 0 ? 0 : _stepIdx,
+                beforeMd: _taskDemoBeforeMd,
+                hasBeforePng: _taskDemoHasBeforePng,
+                autoPlayActive: _taskDemoAutoPlay,
+                onToggleAutoPlay: _toggleTaskDemoAutoPlay,
+                onPrev: _taskDemoWalkPrev,
+                onNext: _taskDemoWalkNext,
+                onExitWalkthrough: _exitTaskDemoWalkthrough,
+                onExitDevelopmentPhase: _exitDevelopmentDemoPhase,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  void _openAndroidSettings() {
+    showAndroidSettingsSheet(
+      context: context,
+      child: _buildPanelBody(forMobileSheet: true),
+    );
+  }
+
+  void _openAndroidStockPicker() {
+    showAndroidStockPicker(
+      context: context,
+      codes: _codes,
+      selected: _selectedCode,
+      onSelected: (v) {
+        setState(() {
+          _selectedCode = v;
+          _syncDateRangeForCode(v);
+        });
+        _loadKlines();
+      },
+    );
+  }
+
+  void _onAndroidPeriodChanged(String next) {
+    setState(() => _period = next);
+    if (_selectedCode != null) _loadKlines();
+    _msgHistory.appendPeriodAutoReload();
+    _showPeriodHelp();
+  }
+
   /// 透明标题条：左侧穿透点击主图指标；窗控前窄条拖窗；右侧设置/最小化/最大化/关闭。
   /// 踩坑：勿用「屏宽-140 固定开孔 + Expanded」——窗控实际约 174px，会 RIGHT OVERFLOW。
   Widget _buildCaptionBar() {
@@ -1775,10 +1962,12 @@ class _KlineHomePageState extends State<KlineHomePage> {
     );
   }
 
-  Widget _buildPanelBody() {
+  Widget _buildPanelBody({bool forMobileSheet = false}) {
+    final advanced = _buildPanelAdvancedSection();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        if (!forMobileSheet) ...[
         DropdownButtonFormField<String>(
           isExpanded: true,
           value: _codes.contains(_selectedCode) ? _selectedCode : null,
@@ -1873,6 +2062,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
             ),
           ],
         ),
+        ],
         const SizedBox(height: 10),
         _datePickerField(
           label: '加载起始时间',
@@ -2081,6 +2271,24 @@ class _KlineHomePageState extends State<KlineHomePage> {
                   _msgHistory.append('笔数峰延长线=${v ? "开" : "关"}');
                 },
         ),
+        if (forMobileSheet)
+          ExpansionTile(
+            tilePadding: EdgeInsets.zero,
+            title: const Text(
+              '高级与工具',
+              style: TextStyle(fontSize: 13, color: Color(0xFFE2E8F0)),
+            ),
+            children: advanced,
+          )
+        else
+          ...advanced,
+      ],
+    );
+  }
+
+  /// 设置面板：开发演示 / 历史记录 / ML / 回测等（手机端收进 ExpansionTile）。
+  List<Widget> _buildPanelAdvancedSection() {
+    return [
         const SizedBox(height: 12),
         SwitchListTile(
           contentPadding: EdgeInsets.zero,
@@ -2202,8 +2410,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
             label: const Text('退出机器学习'),
           ),
         ],
-      ],
-    );
+    ];
   }
 
   void _clearBacktestSession() {
@@ -2501,6 +2708,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       focusBarIdx: _btFocusBarIdx,
       focusBarEpoch: _btFocusEpoch,
       onStrategySignalTap: _onChartStrategySignalTap,
+      mobileLayout: Platform.isAndroid,
     );
   }
 

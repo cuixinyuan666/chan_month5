@@ -155,6 +155,7 @@ class KlineChart extends StatefulWidget {
     this.focusBarIdx,
     this.focusBarEpoch = 0,
     this.onStrategySignalTap,
+    this.mobileLayout = false,
   });
 
   final List<KlineBar> bars;
@@ -250,6 +251,8 @@ class KlineChart extends StatefulWidget {
   final int? focusBarIdx;
   final int focusBarEpoch;
   final ValueChanged<SignalEvent>? onStrategySignalTap;
+  /// 手机布局：指标 chip 全宽、不预留桌面窗控区
+  final bool mobileLayout;
 
   /// 点击左/中/右：后退 / 播放暂停 / 前进
   final VoidCallback? onTapStepBack;
@@ -1668,8 +1671,9 @@ class _KlineChartState extends State<KlineChart> {
                       ];
                     }(),
                     onTapDropdown: () => _pickMainIndicators(context),
-                    // 避开右上设置/最小化/最大化/关闭
-                    maxWidth: math.max(120.0, w - 140),
+                    maxWidth: widget.mobileLayout
+                        ? math.max(80.0, w - 12)
+                        : math.max(120.0, w - 140),
                     emptyHint: 'K0',
                   ),
                 ),
@@ -1715,7 +1719,9 @@ class _KlineChartState extends State<KlineChart> {
                         ];
                       }(),
                       onTapDropdown: () => _pickSubIndicators(context),
-                      maxWidth: math.max(100.0, w - KlineViewport.padL - 24),
+                      maxWidth: widget.mobileLayout
+                          ? math.max(80.0, w - KlineViewport.padL - 8)
+                          : math.max(100.0, w - KlineViewport.padL - 24),
                       emptyHint: '未选',
                     ),
                   ),
