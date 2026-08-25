@@ -2027,16 +2027,14 @@ class _KlineHomePageState extends State<KlineHomePage> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         if (forMobileSheet)
-          OutlinedButton.icon(
+          SettingsOutlinedButton(
+            label: _selectedCode == null
+                ? '选择股票 (${_codes.length})'
+                : '股票：$_selectedCode',
+            icon: Icons.list_alt,
             onPressed: _bootstrapping || _busy || _codes.isEmpty
                 ? null
                 : _openAndroidStockPicker,
-            icon: const Icon(Icons.list_alt, size: 18),
-            label: Text(
-              _selectedCode == null
-                  ? '选择股票 (${_codes.length})'
-                  : '股票：$_selectedCode',
-            ),
           )
         else
           DropdownButtonFormField<String>(
