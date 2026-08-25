@@ -51,6 +51,9 @@ import 'backtest/chart_line_store.dart';
 import 'backtest/chip_peak_store.dart';
 import 'backtest/divergence_relation_store.dart';
 import 'backtest/zhongshu_object_store.dart';
+import 'app/background_keep_alive.dart';
+import 'settings/interaction_mode_store.dart';
+import 'ui/settings_panel_widgets.dart';
 import 'models/zs_frame.dart';
 import 'models/buy1_frame.dart';
 import 'models/sell1_frame.dart';
@@ -178,6 +181,7 @@ Future<void> main() async {
   MsgHistory.instance.appendAndroidBundledDataRoot();
   MsgHistory.instance.appendAndroidMobileLayout();
   MsgHistory.instance.appendAndroidTouchUiAndBacktestSplit();
+  MsgHistory.instance.appendDualPlatformUiOptimization();
   MsgHistory.instance.appendAuditProbeCopyButton();
   MsgHistory.instance.appendAuditFixBsZsFeature();
   MsgHistory.instance.appendAuditBatch2ProbePeakAsOf();
@@ -329,6 +333,16 @@ class _KlineHomePageState extends State<KlineHomePage> {
   int _panelEdge = 1; // 默认右贴边（设置按钮在右上）
   /// Android 设置抽屉局部刷新（开关即时反馈）
   StateSetter? _settingsSheetSetState;
+  /// 是否走安卓交互（手势/壳层）；默认跟随系统，可手动覆盖。
+  bool _useAndroidInteraction = InteractionModeStore.resolveUseAndroidLogic();
+  bool? _interactionManualOverride = InteractionModeStore.manualOverride;
+  late final BackgroundKeepAlive _keepAlive = BackgroundKeepAlive(
+    onSessionActive: () =>
+        _playing ||
+        _backtestPanelOpen ||
+        _mlSession.isActive ||
+        _taskDemoAutoPlay,
+  );
   /// 截断监察：开=当前口径；关=添加截断前旧行为（暴力反转被吸收）
   bool _truncationCheck = true;
   /// 构建中合并框（虚线）开关：开=末组合并画虚线；关=全部实线（默认开）
@@ -483,9 +497,20 @@ class _KlineHomePageState extends State<KlineHomePage> {
   @override
   void initState() {
     super.initState();
+    _keepAlive.attach();
+    _loadInteractionMode();
     _loadChipConfig();
     _loadMathIndicatorConfig();
     _bootstrapWithDemo();
+  }
+
+  Future<void> _loadInteractionMode() async {
+    await InteractionModeStore.load();
+    if (!mounted) return;
+    setState(() {
+      _interactionManualOverride = InteractionModeStore.manualOverride;
+      _useAndroidInteraction = InteractionModeStore.resolveUseAndroidLogic();
+    });
   }
 
   Future<void> _bootstrapWithDemo() async {
@@ -603,11 +628,14 @@ class _KlineHomePageState extends State<KlineHomePage> {
 
   @override
   void dispose() {
+    _keepAlive.detach();
     _playTimer?.cancel();
     _stopTaskDemoAutoPlay();
     _disposePipelineSession();
     super.dispose();
   }
+
+  void _refreshKeepAlive() => _keepAlive.refresh();
 
   /// 释放 Rust 侧 PipelineState（换股/换周期/关页/截断开关重建前）
   void _disposePipelineSession() {
@@ -1494,9 +1522,11 @@ class _KlineHomePageState extends State<KlineHomePage> {
     if (_playing) {
       _stopPlay();
       setState(() {});
+      _refreshKeepAlive();
       return;
     }
     setState(() => _playing = true);
+    _refreshKeepAlive();
     // 异步步进：先让出事件循环，优先消化左/中/右点击（尤其暂停），再做重算
     _playTimer = Timer.periodic(const Duration(milliseconds: 120), (_) async {
       if (!mounted || !_playing) return;
@@ -1621,7 +1651,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
 
   @override
   Widget build(BuildContext context) {
-    if (Platform.isAndroid) {
+    if (_useAndroidInteraction) {
       return _buildAndroidShell(context);
     }
     return _buildDesktopShell(context);
@@ -1989,7 +2019,10 @@ class _KlineHomePageState extends State<KlineHomePage> {
     bool forMobileSheet = false,
     StateSetter? sheetSetState,
   }) {
-    final advanced = _buildPanelAdvancedSection(sheetSetState: sheetSetState);
+    final advanced = _buildPanelAdvancedSection(
+      sheetSetState: sheetSetState,
+      forMobileSheet: forMobileSheet,
+    );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -2126,6 +2159,51 @@ class _KlineHomePageState extends State<KlineHomePage> {
           onFieldSubmitted: (text) =>
               _applyBucketStepFromSettings(text, sheetSetState: sheetSetState),
         ),
+        const SizedBox(height: SettingsPanelTheme.fieldGap),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          dense: true,
+          title: const Text('是否启用安卓操作逻辑', style: TextStyle(fontSize: 13)),
+          subtitle: Text(
+            _interactionManualOverride == null
+                ? '自动：当前为${_useAndroidInteraction ? "安卓" : "Windows"}交互'
+                : (_useAndroidInteraction
+                    ? '手动：安卓手势与布局'
+                    : '手动：Windows手势与布局'),
+            style: const TextStyle(fontSize: 11),
+          ),
+          value: _useAndroidInteraction,
+          onChanged: _busy
+              ? null
+              : (v) async {
+                  await InteractionModeStore.saveManualOverride(v);
+                  _panelUi(() {
+                    _interactionManualOverride = v;
+                    _useAndroidInteraction = v;
+                  }, sheetSetState: sheetSetState);
+                  _msgHistory.append(
+                    '交互模式=${v ? "安卓操作逻辑" : "Windows操作逻辑"}（手动）',
+                  );
+                },
+        ),
+        if (_interactionManualOverride != null)
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton(
+              onPressed: _busy
+                  ? null
+                  : () async {
+                      await InteractionModeStore.saveManualOverride(null);
+                      _panelUi(() {
+                        _interactionManualOverride = null;
+                        _useAndroidInteraction =
+                            InteractionModeStore.resolveUseAndroidLogic();
+                      }, sheetSetState: sheetSetState);
+                      _msgHistory.append('交互模式=跟随系统自动');
+                    },
+              child: const Text('恢复跟随系统自动', style: TextStyle(fontSize: 12)),
+            ),
+          ),
         const SizedBox(height: 8),
         // 截断监察开关：对照「加截断前」旧行为
         SwitchListTile(
@@ -2336,7 +2414,10 @@ class _KlineHomePageState extends State<KlineHomePage> {
   }
 
   /// 设置面板：开发演示 / 历史记录 / ML / 回测等（手机端收进 ExpansionTile）。
-  List<Widget> _buildPanelAdvancedSection({StateSetter? sheetSetState}) {
+  List<Widget> _buildPanelAdvancedSection({
+    StateSetter? sheetSetState,
+    bool forMobileSheet = false,
+  }) {
     return [
         const SizedBox(height: 12),
         SwitchListTile(
@@ -2422,27 +2503,25 @@ class _KlineHomePageState extends State<KlineHomePage> {
           style: TextStyle(fontSize: 11, color: Colors.grey.shade700, height: 1.3),
         ),
         const SizedBox(height: 12),
-        OutlinedButton.icon(
+        SettingsOutlinedButton(
+          label: _backtestPanelOpen ? '策略回测（已打开）' : '策略回测',
+          icon: Icons.show_chart,
           onPressed: (_busy && !_backtestPanelOpen) || _mlSession.isActive
               ? null
-              : _openBacktestWorkbench,
-          icon: const Icon(Icons.show_chart, size: 18),
-          label: Text(_backtestPanelOpen ? '策略回测（已打开）' : '策略回测'),
+              : () => _openBacktestWorkbench(closeSettingsSheet: forMobileSheet),
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: SettingsPanelTheme.fieldGap),
         // 机器学习：不加载K线图；后台算样本后看训练/考试结果
         Row(
           children: [
             Expanded(
-              child: FilledButton.icon(
+              child: SettingsFilledButton(
+                label: _mlSession.isActive ? '机器学习（进行中）' : '机器学习',
+                icon: Icons.psychology,
                 onPressed: (_busy && !_mlSession.isActive) ||
                         _mlSession.isActive
                     ? null
                     : () => _enterMlSession(),
-                icon: const Icon(Icons.psychology, size: 18),
-                label: Text(
-                  _mlSession.isActive ? '机器学习（进行中）' : '机器学习',
-                ),
               ),
             ),
             IconButton(
@@ -2471,15 +2550,20 @@ class _KlineHomePageState extends State<KlineHomePage> {
     _btFocusBarIdx = null;
   }
 
-  void _openBacktestWorkbench() {
+  void _openBacktestWorkbench({bool closeSettingsSheet = false}) {
     if (_mlSession.isActive) {
       _showSnack('请先退出机器学习');
       return;
+    }
+    if (closeSettingsSheet && Navigator.canPop(context)) {
+      Navigator.pop(context);
+      _settingsSheetSetState = null;
     }
     setState(() {
       _backtestPanelOpen = true;
       _panelExpanded = false;
     });
+    _refreshKeepAlive();
   }
 
   void _onBacktestSplitDown(PointerDownEvent e) {
@@ -2540,7 +2624,10 @@ class _KlineHomePageState extends State<KlineHomePage> {
       maxKn: maxKn,
       onConfigChanged: (c) => setState(() => _strategyConfig = c),
       onRun: _runStrategyBacktest,
-      onClose: () => setState(() => _backtestPanelOpen = false),
+      onClose: () {
+        setState(() => _backtestPanelOpen = false);
+        _refreshKeepAlive();
+      },
       onHelp: _showBacktestHelp,
       run: _backtestRun,
       bars: _visibleBars,
@@ -2562,6 +2649,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       features: _pipelineSession?.cache.lookup,
       chipPeaks: _chipPeakStore,
       bucketStep: _chipConfig.bucketStep,
+      compactLayout: _useAndroidInteraction,
     );
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -2821,7 +2909,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       focusBarIdx: _btFocusBarIdx,
       focusBarEpoch: _btFocusEpoch,
       onStrategySignalTap: _onChartStrategySignalTap,
-      mobileLayout: Platform.isAndroid,
+      mobileLayout: _useAndroidInteraction,
     );
   }
 
@@ -2872,6 +2960,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       _mlTestLocked = false;
       _panelExpanded = false;
     });
+    _refreshKeepAlive();
     _msgHistory.append(
       '进入机器学习：当前股票=$_selectedCode · ${_mlLabelConfig.summary} · '
       '时序三截+验证调参+测试一次锁定'
@@ -3031,6 +3120,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       _mlTestLocked = false;
       _mlSampler.reset();
     });
+    _refreshKeepAlive();
     _msgHistory.append('退出机器学习：解锁测试锁定，回到复盘界面');
     _showSnack('已退出机器学习');
   }

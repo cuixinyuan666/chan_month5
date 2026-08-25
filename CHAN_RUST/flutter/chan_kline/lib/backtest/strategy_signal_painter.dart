@@ -123,6 +123,7 @@ class StrategySignalPainter extends CustomPainter {
   final PriceRange priceRange;
   final double mainH;
   final int? asOf;
+  final bool isTickPeriod;
   /// 视口是可变对象：平移时同一份被改掉，必须把当时的窗拷下来，否则点不跟 K 线走。
   final double _viewXMin;
   final double _viewXMax;
@@ -139,6 +140,7 @@ class StrategySignalPainter extends CustomPainter {
     required this.priceRange,
     required this.mainH,
     this.asOf,
+    this.isTickPeriod = false,
   })  : _viewXMin = viewport.viewXMin,
         _viewXMax = viewport.viewXMax,
         _yZoom = viewport.yZoomRatio,
@@ -150,7 +152,6 @@ class StrategySignalPainter extends CustomPainter {
     final plotTop = KlineViewport.padT;
     final plotH = math.max(1.0, mainH - KlineViewport.padB - plotTop);
     final cut = asOf;
-    final tp = TextPainter(textDirection: TextDirection.ltr);
     for (final s in signals) {
       if (s.side == null) continue;
       final x = strategyMarkerPlotX(signal: s, fills: fills);
@@ -177,28 +178,37 @@ class StrategySignalPainter extends CustomPainter {
           Paint()..color = color.withValues(alpha: 0.28),
         );
       }
-      final path = Path();
-      const r = 7.0;
       final buy = side == TradeSide.buy;
       if (buy) {
-        // 尖朝上：买
-        path.moveTo(c.dx, c.dy - r);
-        path.lineTo(c.dx - r, c.dy + r * 0.7);
-        path.lineTo(c.dx + r, c.dy + r * 0.7);
+        // 买：红色圆点，在 K 线下方；分笔在圆点再往下排标签
+        const r = 5.0;
+        canvas.drawCircle(c, r, Paint()..color = color);
+        canvas.drawCircle(
+          c,
+          r,
+          Paint()
+            ..color = Colors.white
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = hot ? 1.8 : 1.0,
+        );
       } else {
+        // 卖：绿色向下箭头，在 K 线上方
+        final path = Path();
+        const r = 7.0;
         path.moveTo(c.dx, c.dy + r);
         path.lineTo(c.dx - r, c.dy - r * 0.7);
         path.lineTo(c.dx + r, c.dy - r * 0.7);
+        path.close();
+        canvas.drawPath(path, Paint()..color = color);
+        canvas.drawPath(
+          path,
+          Paint()
+            ..color = Colors.white
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = hot ? 1.8 : 1.0,
+        );
       }
-      path.close();
-      canvas.drawPath(path, Paint()..color = color);
-      canvas.drawPath(
-        path,
-        Paint()
-          ..color = Colors.white
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = hot ? 1.8 : 1.0,
-      );
+      final tp = TextPainter(textDirection: TextDirection.ltr);
       tp.text = TextSpan(
         text: strategySideLabel(
           side,
@@ -211,7 +221,9 @@ class StrategySignalPainter extends CustomPainter {
         ),
       );
       tp.layout();
-      final ly = buy ? c.dy + 8 : c.dy - 8 - tp.height;
+      final ly = buy
+          ? (isTickPeriod ? c.dy + 10 : c.dy + 8)
+          : c.dy - 8 - tp.height;
       tp.paint(canvas, Offset(c.dx - tp.width / 2, ly));
     }
   }
@@ -225,6 +237,7 @@ class StrategySignalPainter extends CustomPainter {
         old.bars != bars ||
         old.mainH != mainH ||
         old.asOf != asOf ||
+        old.isTickPeriod != isTickPeriod ||
         old._viewXMin != _viewXMin ||
         old._viewXMax != _viewXMax ||
         old._yZoom != _yZoom ||

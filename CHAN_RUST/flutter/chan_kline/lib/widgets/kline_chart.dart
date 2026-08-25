@@ -82,6 +82,9 @@ enum CrosshairMode {
   linesOnly,
 }
 
+/// 主/副图指标全屏层（点空白关闭）。
+enum _IndicatorFullscreenPane { none, main, sub }
+
 /// 主图同级别连线配色（与 [ChartLevelLineStyle] 同层同色）。
 abstract final class ChartLineColors {
   /// K0连线 = 展示层 K0 蓝
@@ -293,6 +296,7 @@ class _KlineChartState extends State<KlineChart> {
   /// 主/副图指标 chip 默认收纳，主/副各一钮
   bool _mainIndicatorChipsExpanded = false;
   bool _subIndicatorChipsExpanded = false;
+  _IndicatorFullscreenPane _fullscreenPane = _IndicatorFullscreenPane.none;
   /// 手机双指缩放：累计 scale 基准
   bool _pinchScaling = false;
   double _pinchScaleBaseline = 1.0;
@@ -1055,6 +1059,16 @@ class _KlineChartState extends State<KlineChart> {
       _onSplitMove(e);
       return;
     }
+    if (_crosshairEnabled) {
+      _zoneMoved = true;
+      _updateCrosshairAt(
+        e.localPosition,
+        KlineViewport.padT,
+        contentBottom,
+      );
+      return;
+    }
+
     if (_panning && _panStart != null) {
       final dx = e.localPosition.dx - _panStart!.dx;
       final dy = e.localPosition.dy - _panStart!.dy;
@@ -1065,14 +1079,6 @@ class _KlineChartState extends State<KlineChart> {
       _viewport.panByPixels(dx, dy, _chartSize.width, mainPlotH);
       _scheduleRedraw();
       return;
-    }
-
-    if (_crosshairEnabled) {
-      _updateCrosshairAt(
-        e.localPosition,
-        KlineViewport.padT,
-        contentBottom,
-      );
     }
   }
 
@@ -1193,6 +1199,18 @@ class _KlineChartState extends State<KlineChart> {
   void _onZoneTapAt(Offset local, double plotTop, double contentBottom) {
     if (widget.bars.isEmpty) return;
     if (_tryTapStrategySignal(local, plotTop)) return;
+
+    final mainH = _hitMainH;
+    if (widget.mobileLayout &&
+        widget.indicatorsEnabled &&
+        !_crosshairEnabled &&
+        _tryOpenFullscreenFromTap(local, mainH, plotTop)) {
+      _middleTapTimer?.cancel();
+      _lastMiddleTapAt = null;
+      _lastMiddleTapPos = null;
+      return;
+    }
+
     final zone = _hotZone(local);
 
     // 十字线激活：屏蔽步退/步进/播放，只保留中间双击切三态 + 点击跟线
@@ -1278,6 +1296,21 @@ class _KlineChartState extends State<KlineChart> {
     });
   }
 
+  /// 手机：点主/副图区打开指标全屏（左/右热区仍留给步进）。
+  bool _tryOpenFullscreenFromTap(Offset local, double mainH, double plotTop) {
+    if (local.dy >= mainH + 2) {
+      _openIndicatorFullscreen(_IndicatorFullscreenPane.sub);
+      return true;
+    }
+    if (local.dy >= plotTop + 20 && local.dy < mainH - KlineViewport.xAxisH) {
+      final zone = _hotZone(local);
+      if (zone == 0 || zone == 2) return false;
+      _openIndicatorFullscreen(_IndicatorFullscreenPane.main);
+      return true;
+    }
+    return false;
+  }
+
   void _onZoneLongPress(LongPressStartDetails d) {
     // 十字线激活时屏蔽长按：复位/重载/跑到末尾
     if (_crosshairEnabled) return;
@@ -1321,6 +1354,13 @@ class _KlineChartState extends State<KlineChart> {
   /// 手机：双指捏合缩放 X + 双指平移（单指不拖图）。
   void _onPinchScaleStart(ScaleStartDetails d) {
     if (!widget.mobileLayout || widget.bars.isEmpty) return;
+    // 十字线开启：单指/双指都只跟线，禁止缩放平移抢手势
+    if (_crosshairEnabled) {
+      _pinchScaling = false;
+      _panning = false;
+      _panStart = null;
+      return;
+    }
     _pinchScaling = true;
     _pinchScaleBaseline = 1.0;
     _panning = false;
@@ -1329,6 +1369,7 @@ class _KlineChartState extends State<KlineChart> {
 
   void _onPinchScaleUpdate(ScaleUpdateDetails d, double mainPlotH) {
     if (!widget.mobileLayout || !_pinchScaling || widget.bars.isEmpty) return;
+    if (_crosshairEnabled) return;
     _viewport.markUserAdjusted();
     if (d.scale != _pinchScaleBaseline) {
       final factor = d.scale / _pinchScaleBaseline;
@@ -1354,7 +1395,6 @@ class _KlineChartState extends State<KlineChart> {
   }
 
   Widget _buildMainIndicatorToggleButton() {
-    final count = _activeMains.length;
     return Material(
       color: const Color(0xCC1A1A1A),
       borderRadius: BorderRadius.circular(4),
@@ -1367,27 +1407,13 @@ class _KlineChartState extends State<KlineChart> {
           }
         }),
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                _mainIndicatorChipsExpanded
-                    ? Icons.expand_less
-                    : Icons.expand_more,
-                size: 18,
-                color: const Color(0xFFE2E8F0),
-              ),
-              const SizedBox(width: 2),
-              Text(
-                count > 0 ? '主图($count)' : '主图',
-                style: const TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: Color(0xFFE2E8F0),
-                ),
-              ),
-            ],
+          padding: const EdgeInsets.all(6),
+          child: Icon(
+            _mainIndicatorChipsExpanded
+                ? Icons.expand_less
+                : Icons.expand_more,
+            size: 18,
+            color: const Color(0xFFE2E8F0),
           ),
         ),
       ),
@@ -1395,7 +1421,6 @@ class _KlineChartState extends State<KlineChart> {
   }
 
   Widget _buildSubIndicatorToggleButton() {
-    final count = _activeSubs.length;
     return Material(
       color: const Color(0xCC1A1A1A),
       borderRadius: BorderRadius.circular(4),
@@ -1408,27 +1433,153 @@ class _KlineChartState extends State<KlineChart> {
           }
         }),
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                _subIndicatorChipsExpanded
-                    ? Icons.expand_less
-                    : Icons.expand_more,
-                size: 18,
-                color: const Color(0xFFE2E8F0),
-              ),
-              const SizedBox(width: 2),
-              Text(
-                count > 0 ? '副图($count)' : '副图',
-                style: const TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: Color(0xFFE2E8F0),
+          padding: const EdgeInsets.all(6),
+          child: Icon(
+            _subIndicatorChipsExpanded
+                ? Icons.expand_less
+                : Icons.expand_more,
+            size: 18,
+            color: const Color(0xFFE2E8F0),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _openIndicatorFullscreen(_IndicatorFullscreenPane pane) {
+    if (!widget.indicatorsEnabled) return;
+    setState(() => _fullscreenPane = pane);
+  }
+
+  void _closeIndicatorFullscreen() {
+    if (_fullscreenPane == _IndicatorFullscreenPane.none) return;
+    setState(() => _fullscreenPane = _IndicatorFullscreenPane.none);
+  }
+
+  Widget _buildFullscreenIndicatorOverlay(double w, double h) {
+    if (_fullscreenPane == _IndicatorFullscreenPane.none) return const SizedBox.shrink();
+    final isMain = _fullscreenPane == _IndicatorFullscreenPane.main;
+    final title = isMain ? '主图指标' : '副图指标';
+    final marginH = math.max(12.0, w * 0.04);
+    final marginV = math.max(36.0, h * 0.06);
+    return Positioned.fill(
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: _closeIndicatorFullscreen,
+        child: Container(
+          color: const Color(0x99000000),
+          alignment: Alignment.center,
+          padding: EdgeInsets.fromLTRB(marginH, marginV, marginH, marginV),
+          child: GestureDetector(
+            onTap: () {},
+            child: Material(
+              color: const Color(0xF01A1A1A),
+              borderRadius: BorderRadius.circular(10),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          title,
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFFE2E8F0),
+                          ),
+                        ),
+                        const Spacer(),
+                        IconButton(
+                          tooltip: '关闭',
+                          visualDensity: VisualDensity.compact,
+                          onPressed: _closeIndicatorFullscreen,
+                          icon: const Icon(Icons.close, size: 20, color: Color(0xFF94A3B8)),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Expanded(
+                      child: isMain
+                          ? IndicatorPickerChip(
+                              entries: () {
+                                final list = _mainCatalog
+                                    .where(_activeMains.contains)
+                                    .toList()
+                                  ..sort((a, b) {
+                                    final lv =
+                                        a.displayLevel.compareTo(b.displayLevel);
+                                    if (lv != 0) return lv;
+                                    final c = a.kind.categoryOrder
+                                        .compareTo(b.kind.categoryOrder);
+                                    if (c != 0) return c;
+                                    return a.kn.compareTo(b.kn);
+                                  });
+                                return [
+                                  for (final e in list)
+                                    IndicatorChipEntry(
+                                      label: e.label,
+                                      displayLevel: e.displayLevel,
+                                      muted: _mutedMains.contains(e),
+                                      onTapToggle: () => _toggleMuteMain(e),
+                                    ),
+                                ];
+                              }(),
+                              onTapDropdown: () => _pickMainIndicators(context),
+                              maxWidth: w - marginH * 2 - 24,
+                              emptyHint: 'K0',
+                              horizontalScroll: true,
+                            )
+                          : IndicatorPickerChip(
+                              entries: () {
+                                final values = _subChipValueByInd();
+                                final list = _subCatalog
+                                    .where(_activeSubs.contains)
+                                    .toList()
+                                  ..sort((a, b) {
+                                    final lv = a.displayLevel
+                                        .compareTo(b.displayLevel);
+                                    if (lv != 0) return lv;
+                                    final c = a.kind.categoryOrder
+                                        .compareTo(b.kind.categoryOrder);
+                                    if (c != 0) return c;
+                                    final ai = a.diverAlgo?.index ?? -1;
+                                    final bi = b.diverAlgo?.index ?? -1;
+                                    if (ai != bi) return ai.compareTo(bi);
+                                    return a.kn.compareTo(b.kn);
+                                  });
+                                return [
+                                  for (final e in list)
+                                    IndicatorChipEntry(
+                                      label: e.label,
+                                      displayLevel: e.displayLevel,
+                                      muted: _mutedSubs.contains(e),
+                                      valueText: values[e],
+                                      onTapToggle: () => _toggleMuteSub(e),
+                                    ),
+                                ];
+                              }(),
+                              onTapDropdown: () => _pickSubIndicators(context),
+                              maxWidth: w - marginH * 2 - 24,
+                              emptyHint: '未选',
+                              horizontalScroll: true,
+                            ),
+                    ),
+                    const SizedBox(height: 8),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: TextButton(
+                        onPressed: () => isMain
+                            ? _pickMainIndicators(context)
+                            : _pickSubIndicators(context),
+                        child: const Text('打开完整选择器'),
+                      ),
+                    ),
+                  ],
                 ),
               ),
-            ],
+            ),
           ),
         ),
       ),
@@ -1691,6 +1842,7 @@ class _KlineChartState extends State<KlineChart> {
                     priceRange: priceRange,
                     mainH: mainH,
                     asOf: segAsOf,
+                    isTickPeriod: widget.period == 'tick',
                   ),
                 ),
               ),
@@ -1820,7 +1972,7 @@ class _KlineChartState extends State<KlineChart> {
                     child: MouseRegion(
                       cursor: SystemMouseCursors.resizeUpDown,
                       child: Container(
-                        width: 72,
+                        width: 44,
                         height: 22,
                         decoration: BoxDecoration(
                           color: _splitDragging
@@ -1833,27 +1985,12 @@ class _KlineChartState extends State<KlineChart> {
                           ),
                           borderRadius: BorderRadius.circular(11),
                         ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(
-                              Icons.drag_handle,
-                              size: 16,
-                              color: _splitDragging
-                                  ? const Color(0xFF42A5F5)
-                                  : const Color(0xFFE2E8F0),
-                            ),
-                            const SizedBox(width: 2),
-                            Text(
-                              '调节',
-                              style: TextStyle(
-                                fontSize: 10,
-                                color: _splitDragging
-                                    ? const Color(0xFF42A5F5)
-                                    : const Color(0xFF94A3B8),
-                              ),
-                            ),
-                          ],
+                        child: Icon(
+                          Icons.drag_handle,
+                          size: 16,
+                          color: _splitDragging
+                              ? const Color(0xFF42A5F5)
+                              : const Color(0xFFE2E8F0),
                         ),
                       ),
                     ),
@@ -2006,6 +2143,7 @@ class _KlineChartState extends State<KlineChart> {
                   ),
                 ),
               ),
+            _buildFullscreenIndicatorOverlay(w, h),
           ],
         );
       },

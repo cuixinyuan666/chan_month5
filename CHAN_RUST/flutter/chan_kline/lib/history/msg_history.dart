@@ -837,6 +837,21 @@ class MsgHistory {
     );
   }
 
+  /// 双端 UI 与交互模式（2026-08-25）
+  static bool _dualPlatformUiLogged = false;
+  void appendDualPlatformUiOptimization() {
+    if (_dualPlatformUiLogged) return;
+    _dualPlatformUiLogged = true;
+    append(
+      '【双端UI·2026-08-25】设置项「是否启用安卓操作逻辑」：默认跟随系统自动，可手动切安卓/Windows 手势。'
+      '主副图分割/伸展钮仅保留图标；点主/副图区可全屏展开指标行（点空白关闭）。'
+      '十字线开启后单指滑动只跟十字线，不缩放平移图。'
+      '策略回测：手机竖向分栏保证交易表可见；设置里点策略回测自动关设置并打开面板。'
+      '回测买卖信号：买=红圆点在下、卖=绿箭头在上；分笔买标签在圆点下方。'
+      '变量诊断顶部增加白话说明；会话活跃时 wakelock 后台保活。',
+    );
+  }
+
   /// 桌面窗体：铺满工作区不盖任务栏；十字线 tooltip 分隔线贴边框。
   void appendDesktopWorkAreaAndTooltipSep() {
     if (_desktopWorkAreaLogged) return;
