@@ -161,10 +161,16 @@ class KlineViewport {
       newMin = allXMin;
       newMax = newMin + newSpan;
     }
-    final rightMax = allXMax + newSpan * 2;
-    if (newMax > rightMax) {
-      newMax = rightMax;
-      newMin = newMax - newSpan;
+    // 右侧留白：超出时整体左移视窗，避免 span 变小后 rightMax 收紧把视窗硬拽回、缩放失效
+    final rightLimit = allXMax + newSpan * 2;
+    if (newMax > rightLimit) {
+      final shift = newMax - rightLimit;
+      newMin -= shift;
+      newMax -= shift;
+      if (newMin < allXMin) {
+        newMin = allXMin;
+        newMax = newMin + newSpan;
+      }
     }
 
     viewXMin = newMin;
@@ -175,15 +181,15 @@ class KlineViewport {
     }
   }
 
+  /// 双指/滚轮纵向缩放：factor>1 放大，<1 缩小。
+  void zoomYBy(double factor) {
+    if (!ready || factor <= 0) return;
+    yZoomRatio = (yZoomRatio * factor).clamp(0.2, 20.0);
+  }
+
   /// 滚轮 + Ctrl：纵向缩放。
   void zoomY(bool zoomIn) {
-    if (!ready) return;
-    if (zoomIn) {
-      yZoomRatio *= zoomFactor;
-    } else {
-      yZoomRatio /= zoomFactor;
-    }
-    yZoomRatio = yZoomRatio.clamp(0.2, 20.0);
+    zoomYBy(zoomIn ? zoomFactor : 1 / zoomFactor);
   }
 
   /// 左键拖拽平移：dx/dy 为像素位移。

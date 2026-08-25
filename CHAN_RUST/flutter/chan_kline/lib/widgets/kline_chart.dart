@@ -83,6 +83,9 @@ enum CrosshairMode {
 /// 主/副图指标全屏选择层（仅伸展钮唤起）。
 enum _IndicatorPickerPane { none, main, sub }
 
+/// 双指缩放主方向：手势开始时锁定，避免斜向抖动抢轴。
+enum _PinchZoomAxis { undecided, horizontal, vertical }
+
 /// 主图同级别连线配色（与 [ChartLevelLineStyle] 同层同色）。
 abstract final class ChartLineColors {
   /// K0连线 = 展示层 K0 蓝
@@ -293,8 +296,13 @@ class _KlineChartState extends State<KlineChart> {
   double _panStartViewMax = 0;
   /// 主/副图指标选择层：默认关闭，仅伸展钮打开全屏列表
   _IndicatorPickerPane _pickerPane = _IndicatorPickerPane.none;
-  /// 手机双指方向缩放
+  /// 手机双指缩放
   bool _pinchScaling = false;
+  double _pinchScaleBaseline = 1.0;
+  _PinchZoomAxis _pinchAxis = _PinchZoomAxis.undecided;
+  double _pinchAccumDx = 0;
+  double _pinchAccumDy = 0;
+  static const _pinchAxisLockSlop = 10.0;
   Size _chartSize = Size.zero;
 
   /// 左中右热区：用 Listener 优先吃点击（避免卡顿时被 GestureDetector 拖拽抢走）
@@ -1281,7 +1289,7 @@ class _KlineChartState extends State<KlineChart> {
     _panStart = null;
   }
 
-  /// 手机：单指平移；双指上下=纵向缩放、左右=横向缩放。
+  /// 手机：单指平移；双指锁定轴向缩放（拖动 + 捏合）。
   void _onPinchScaleStart(ScaleStartDetails d) {
     if (!widget.mobileLayout || widget.bars.isEmpty) return;
     // 十字线开启：单指/双指都只跟线，禁止缩放抢手势
@@ -1292,8 +1300,22 @@ class _KlineChartState extends State<KlineChart> {
       return;
     }
     _pinchScaling = true;
+    _pinchScaleBaseline = 1.0;
+    _pinchAxis = _PinchZoomAxis.undecided;
+    _pinchAccumDx = 0;
+    _pinchAccumDy = 0;
     _panning = false;
     _panStart = null;
+  }
+
+  void _applyPinchZoomX(double factor, double anchorX) {
+    if ((factor - 1.0).abs() <= 1e-6 || _chartSize.width <= 0) return;
+    _viewport.zoomXAt(factor, anchorX, _chartSize.width);
+  }
+
+  void _applyPinchZoomY(double factor) {
+    if ((factor - 1.0).abs() <= 1e-6) return;
+    _viewport.zoomYBy(factor);
   }
 
   void _onPinchScaleUpdate(ScaleUpdateDetails d, double mainPlotH) {
@@ -1310,28 +1332,65 @@ class _KlineChartState extends State<KlineChart> {
           mainPlotH,
         );
       }
-    } else {
-      // 双指：方向缩放
-      final dx = d.focalPointDelta.dx;
-      final dy = d.focalPointDelta.dy;
-      if (dx.abs() >= dy.abs() && dx.abs() > 0.5 && _chartSize.width > 0) {
-        final factor = math.exp(-dx * 0.012);
-        if ((factor - 1.0).abs() > 1e-6) {
-          _viewport.zoomXAt(factor, d.localFocalPoint.dx, _chartSize.width);
-        }
-      } else if (dy.abs() > 0.5) {
-        final factor = math.exp(-dy * 0.012);
-        if ((factor - 1.0).abs() > 1e-6) {
-          _viewport.yZoomRatio *= factor;
-          _viewport.yZoomRatio = _viewport.yZoomRatio.clamp(0.2, 20.0);
-        }
+      _scheduleRedraw();
+      return;
+    }
+
+    _pinchAccumDx += d.focalPointDelta.dx;
+    _pinchAccumDy += d.focalPointDelta.dy;
+    if (_pinchAxis == _PinchZoomAxis.undecided) {
+      if (_pinchAccumDx.abs() >= _pinchAxisLockSlop ||
+          _pinchAccumDy.abs() >= _pinchAxisLockSlop) {
+        _pinchAxis = _pinchAccumDx.abs() >= _pinchAccumDy.abs()
+            ? _PinchZoomAxis.horizontal
+            : _PinchZoomAxis.vertical;
+      } else if ((d.scale - 1.0).abs() > 0.04) {
+        // 纯捏合：按双指横向/纵向展开量选轴
+        final hScale = d.horizontalScale;
+        final vScale = d.verticalScale;
+        _pinchAxis = (hScale - 1.0).abs() >= (vScale - 1.0).abs()
+            ? _PinchZoomAxis.horizontal
+            : _PinchZoomAxis.vertical;
       }
+    }
+
+    final scaleStep = d.scale / _pinchScaleBaseline;
+    final pinchActive = (scaleStep - 1.0).abs() > 0.003;
+    final dragMag = _pinchAccumDx.abs() + _pinchAccumDy.abs();
+
+    if (_pinchAxis == _PinchZoomAxis.horizontal) {
+      var factor = 1.0;
+      if (pinchActive && dragMag < _pinchAxisLockSlop * 2) {
+        factor = scaleStep;
+      } else if (d.focalPointDelta.dx.abs() > 0.3) {
+        factor = math.exp(-d.focalPointDelta.dx * 0.012);
+      }
+      _applyPinchZoomX(factor, d.localFocalPoint.dx);
+    } else if (_pinchAxis == _PinchZoomAxis.vertical) {
+      var factor = 1.0;
+      if (pinchActive && dragMag < _pinchAxisLockSlop * 2) {
+        factor = scaleStep;
+      } else if (d.focalPointDelta.dy.abs() > 0.3) {
+        factor = math.exp(-d.focalPointDelta.dy * 0.012);
+      }
+      _applyPinchZoomY(factor);
+    } else if (pinchActive) {
+      // 未锁定轴向时先响应捏合，默认横向
+      _applyPinchZoomX(scaleStep, d.localFocalPoint.dx);
+    }
+
+    if (pinchActive) {
+      _pinchScaleBaseline = d.scale;
     }
     _scheduleRedraw();
   }
 
   void _onPinchScaleEnd(ScaleEndDetails d) {
     _pinchScaling = false;
+    _pinchScaleBaseline = 1.0;
+    _pinchAxis = _PinchZoomAxis.undecided;
+    _pinchAccumDx = 0;
+    _pinchAccumDy = 0;
   }
 
   void _closeIndicatorPicker() {

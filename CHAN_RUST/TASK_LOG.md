@@ -2,6 +2,22 @@
 
 > 口径/行为变更记录（复制排查用）；与 `lib/history/msg_history.dart` 常驻历史同步维护。
 
+## 2026-08-25 双指缩放阈值失效修复
+
+- **问题**：放大/缩小到一定阈值后横纵双指缩放全部失效。
+- **根因**：`zoomXAt` 右界硬拽回视窗；双指手势每帧按 dx/dy 抢轴且忽略捏合 scale。
+- **修复**：右缘超出改为整体左移；手势锁定轴向 + 捏合 scale 补充；新增 `zoomYBy`。
+- **验证**：`flutter test test/kline_viewport_zoom_test.dart`
+
+## 2026-08-25 指标全屏列表 + 单指平移 + 覆盖安装
+
+- **需求**：伸展钮打开近乎全屏指标列表（每行一项）；单指仅平移、双指缩放；APK 覆盖安装无需卸载。
+- **变更**：
+  - `indicator_picker_overlay.dart`：全屏列表组件；删除 `indicator_picker_chip.dart`。
+  - `kline_chart.dart`：伸展钮唤起全屏层；单指 `pointerCount<2` 仅 `panByPixels`。
+  - `android/app/build.gradle.kts` + `key.properties` + `chan_kline-debug.jks`：固定签名，versionCode 递增可覆盖安装。
+- **验证**：纯 Flutter + Android 配置；`flutter build apk --release`。
+
 ## 2026-08-25 指标展开直选 + 双指方向缩放
 
 - **需求**：展开视图打开后直接展示主/副图全量指标列表，单击切换选中；已选白字、未选灰字+删除线；摒弃多选框。双指上下=纵向缩放、左右=横向扩张/收紧。点 K 线/主图/副图不唤起指标面板，仅展开钮（三角）可调出。
