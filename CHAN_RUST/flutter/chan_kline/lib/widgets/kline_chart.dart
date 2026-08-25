@@ -65,7 +65,7 @@ import '../models/k1_analysis.dart';
 import 'chart_level_line_style.dart';
 import 'crosshair_tooltip_panel.dart';
 import 'fractal_confirm_paint.dart';
-import 'indicator_picker_chip.dart';
+import 'indicator_picker_overlay.dart';
 import 'kline_axis_format.dart';
 import 'kline_chip.dart';
 import 'kline_viewport.dart';
@@ -79,6 +79,9 @@ enum CrosshairMode {
   /// 十字线 + 价格标签，隐藏信息框
   linesOnly,
 }
+
+/// 主/副图指标全屏选择层（仅伸展钮唤起）。
+enum _IndicatorPickerPane { none, main, sub }
 
 /// 主图同级别连线配色（与 [ChartLevelLineStyle] 同层同色）。
 abstract final class ChartLineColors {
@@ -288,9 +291,8 @@ class _KlineChartState extends State<KlineChart> {
   double _panStartYShift = 0;
   double _panStartViewMin = 0;
   double _panStartViewMax = 0;
-  /// 主/副图指标 chip 默认收纳，主/副各一钮
-  bool _mainIndicatorChipsExpanded = false;
-  bool _subIndicatorChipsExpanded = false;
+  /// 主/副图指标选择层：默认关闭，仅伸展钮打开全屏列表
+  _IndicatorPickerPane _pickerPane = _IndicatorPickerPane.none;
   /// 手机双指方向缩放
   bool _pinchScaling = false;
   Size _chartSize = Size.zero;
@@ -320,10 +322,7 @@ class _KlineChartState extends State<KlineChart> {
   double _splitDragStartY = 0;
   double _splitDragStartFraction = 0.79;
   double _chartBodyH = 1;
-  final _subChipBarKey = GlobalKey();
-  final _mainChipBarKey = GlobalKey();
-  double _subChipBarHeight = KlineViewport.subIndicatorChipBand;
-  double _mainChipBarHeight = 0;
+  static const _subChipBarHeight = KlineViewport.subIndicatorChipBand;
 
   /// 十字线 as-of 中枢 bundle 缓存（逐K当下 Rust 重算）
   int? _zsAsOfCacheKey;
@@ -505,46 +504,10 @@ class _KlineChartState extends State<KlineChart> {
     }
   }
 
-  void _measureSubChipBar() {
-    if (!mounted) return;
-    final renderBox =
-        _subChipBarKey.currentContext?.findRenderObject() as RenderBox?;
-    if (renderBox != null && renderBox.hasSize) {
-      final measured = renderBox.size.height + 4;
-      final h = math.min(measured, KlineViewport.subIndicatorChipMaxBand);
-      if ((h - _subChipBarHeight).abs() > 0.5) {
-        setState(() => _subChipBarHeight = h);
-      }
-    }
-  }
-
-  void _measureMainChipBar() {
-    if (!mounted || !_mainIndicatorChipsExpanded) {
-      if (_mainChipBarHeight != 0) {
-        setState(() => _mainChipBarHeight = 0);
-      }
-      return;
-    }
-    final renderBox =
-        _mainChipBarKey.currentContext?.findRenderObject() as RenderBox?;
-    if (renderBox != null && renderBox.hasSize) {
-      final h = math.min(
-        renderBox.size.height + 2,
-        KlineViewport.mainIndicatorChipMaxBand,
-      );
-      if ((h - _mainChipBarHeight).abs() > 0.5) {
-        setState(() => _mainChipBarHeight = h);
-      }
-    }
-  }
-
   double _resolveMainPlotTop(BuildContext context) {
     if (!widget.mobileLayout) return KlineViewport.padT;
     final safeTop = MediaQuery.paddingOf(context).top;
-    final chipExtra = _mainIndicatorChipsExpanded ? _mainChipBarHeight : 0.0;
-    return safeTop +
-        KlineViewport.mainIndicatorToggleBand +
-        chipExtra;
+    return safeTop + KlineViewport.mainIndicatorToggleBand;
   }
 
   void _closeTooltipKeepCrosshair() {
@@ -1318,7 +1281,7 @@ class _KlineChartState extends State<KlineChart> {
     _panStart = null;
   }
 
-  /// 手机：双指上下=纵向缩放、左右=横向缩放（单指不拖图）。
+  /// 手机：单指平移；双指上下=纵向缩放、左右=横向缩放。
   void _onPinchScaleStart(ScaleStartDetails d) {
     if (!widget.mobileLayout || widget.bars.isEmpty) return;
     // 十字线开启：单指/双指都只跟线，禁止缩放抢手势
@@ -1337,19 +1300,31 @@ class _KlineChartState extends State<KlineChart> {
     if (!widget.mobileLayout || !_pinchScaling || widget.bars.isEmpty) return;
     if (_crosshairEnabled) return;
     _viewport.markUserAdjusted();
-    final dx = d.focalPointDelta.dx;
-    final dy = d.focalPointDelta.dy;
-    // 主方向：左右收紧/扩张 X，上下放大/缩小 Y
-    if (dx.abs() >= dy.abs() && dx.abs() > 0.5 && _chartSize.width > 0) {
-      final factor = math.exp(-dx * 0.012);
-      if ((factor - 1.0).abs() > 1e-6) {
-        _viewport.zoomXAt(factor, d.localFocalPoint.dx, _chartSize.width);
+    if (d.pointerCount < 2) {
+      // 单指：仅平移，禁止缩放
+      if (d.focalPointDelta != Offset.zero) {
+        _viewport.panByPixels(
+          d.focalPointDelta.dx,
+          d.focalPointDelta.dy,
+          _chartSize.width,
+          mainPlotH,
+        );
       }
-    } else if (dy.abs() > 0.5) {
-      final factor = math.exp(-dy * 0.012);
-      if ((factor - 1.0).abs() > 1e-6) {
-        _viewport.yZoomRatio *= factor;
-        _viewport.yZoomRatio = _viewport.yZoomRatio.clamp(0.2, 20.0);
+    } else {
+      // 双指：方向缩放
+      final dx = d.focalPointDelta.dx;
+      final dy = d.focalPointDelta.dy;
+      if (dx.abs() >= dy.abs() && dx.abs() > 0.5 && _chartSize.width > 0) {
+        final factor = math.exp(-dx * 0.012);
+        if ((factor - 1.0).abs() > 1e-6) {
+          _viewport.zoomXAt(factor, d.localFocalPoint.dx, _chartSize.width);
+        }
+      } else if (dy.abs() > 0.5) {
+        final factor = math.exp(-dy * 0.012);
+        if ((factor - 1.0).abs() > 1e-6) {
+          _viewport.yZoomRatio *= factor;
+          _viewport.yZoomRatio = _viewport.yZoomRatio.clamp(0.2, 20.0);
+        }
       }
     }
     _scheduleRedraw();
@@ -1359,22 +1334,52 @@ class _KlineChartState extends State<KlineChart> {
     _pinchScaling = false;
   }
 
+  void _closeIndicatorPicker() {
+    if (_pickerPane == _IndicatorPickerPane.none) return;
+    setState(() => _pickerPane = _IndicatorPickerPane.none);
+  }
+
+  void _toggleMainIndicatorPicker() {
+    if (!widget.indicatorsEnabled) return;
+    setState(() {
+      _pickerPane = _pickerPane == _IndicatorPickerPane.main
+          ? _IndicatorPickerPane.none
+          : _IndicatorPickerPane.main;
+    });
+  }
+
+  void _toggleSubIndicatorPicker() {
+    if (!widget.indicatorsEnabled) return;
+    setState(() {
+      _pickerPane = _pickerPane == _IndicatorPickerPane.sub
+          ? _IndicatorPickerPane.none
+          : _IndicatorPickerPane.sub;
+    });
+  }
+
+  Widget _buildIndicatorPickerOverlay() {
+    if (_pickerPane == _IndicatorPickerPane.none) {
+      return const SizedBox.shrink();
+    }
+    final isMain = _pickerPane == _IndicatorPickerPane.main;
+    return IndicatorPickerOverlay(
+      title: isMain ? '主图指标' : '副图指标',
+      entries: isMain ? _mainChipEntries() : _subChipEntries(),
+      onClose: _closeIndicatorPicker,
+    );
+  }
+
   Widget _buildMainIndicatorToggleButton() {
     return Material(
       color: const Color(0xCC1A1A1A),
       borderRadius: BorderRadius.circular(4),
       child: InkWell(
         borderRadius: BorderRadius.circular(4),
-        onTap: () => setState(() {
-          _mainIndicatorChipsExpanded = !_mainIndicatorChipsExpanded;
-          if (!_mainIndicatorChipsExpanded) {
-            _mainChipBarHeight = 0;
-          }
-        }),
+        onTap: _toggleMainIndicatorPicker,
         child: Padding(
           padding: const EdgeInsets.all(6),
           child: Icon(
-            _mainIndicatorChipsExpanded
+            _pickerPane == _IndicatorPickerPane.main
                 ? Icons.expand_less
                 : Icons.expand_more,
             size: 18,
@@ -1391,16 +1396,11 @@ class _KlineChartState extends State<KlineChart> {
       borderRadius: BorderRadius.circular(4),
       child: InkWell(
         borderRadius: BorderRadius.circular(4),
-        onTap: () => setState(() {
-          _subIndicatorChipsExpanded = !_subIndicatorChipsExpanded;
-          if (!_subIndicatorChipsExpanded) {
-            _subChipBarHeight = KlineViewport.subIndicatorChipBand;
-          }
-        }),
+        onTap: _toggleSubIndicatorPicker,
         child: Padding(
           padding: const EdgeInsets.all(6),
           child: Icon(
-            _subIndicatorChipsExpanded
+            _pickerPane == _IndicatorPickerPane.sub
                 ? Icons.expand_less
                 : Icons.expand_more,
             size: 18,
@@ -1581,11 +1581,6 @@ class _KlineChartState extends State<KlineChart> {
         final paintK0Confirms = segAsOf != null
             ? (zsAsOfBundle?.k0Confirms ?? const <K0ConfirmSignal>[])
             : widget.k0ConfirmSignals;
-
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          _measureSubChipBar();
-          _measureMainChipBar();
-        });
 
         final paintLookup = widget.chipOnlyMode
             ? BarFeatureLookup.empty()
@@ -1842,98 +1837,31 @@ class _KlineChartState extends State<KlineChart> {
                   ),
                 ),
               ),
-            // 主图指标收纳：裁切在主图区内，不侵入副图
+            // 主图伸展钮：点开全屏指标列表
             Positioned(
               left: 0,
               top: overlayTop,
-              right: 0,
-              height: mainH - overlayTop,
-              child: ClipRect(
-                child: Stack(
-                  clipBehavior: Clip.hardEdge,
-                  children: [
-                    Positioned(
-                      left: 0,
-                      top: 0,
-                      child: _buildMainIndicatorToggleButton(),
-                    ),
-                    if (_mainIndicatorChipsExpanded)
-                      Positioned(
-                        left: widget.mobileLayout ? 72 : 76,
-                        top: 0,
-                        right: widget.mobileLayout ? 52 : 140,
-                        child: Builder(
-                          key: _mainChipBarKey,
-                          builder: (_) => IgnorePointer(
-                          ignoring: !widget.indicatorsEnabled,
-                          child: Opacity(
-                            opacity: widget.indicatorsEnabled ? 1 : 0.35,
-                            child: IndicatorPickerChip(
-                              entries: _mainChipEntries(),
-                              maxWidth: widget.mobileLayout
-                                  ? math.max(80.0, w - 80)
-                                  : math.max(120.0, w - 220),
-                              maxHeight: KlineViewport.mainIndicatorChipMaxBand,
-                              horizontalScroll: widget.mobileLayout,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
+              child: Opacity(
+                opacity: widget.indicatorsEnabled ? 1 : 0.35,
+                child: IgnorePointer(
+                  ignoring: !widget.indicatorsEnabled,
+                  child: _buildMainIndicatorToggleButton(),
                 ),
               ),
             ),
             if (_showSubPane)
               Positioned(
-                left: 0,
-                top: mainH,
-                right: 0,
-                height: volH,
-                child: ClipRect(
-                  child: Stack(
-                    clipBehavior: Clip.hardEdge,
-                    children: [
-                      Positioned(
-                        left: KlineViewport.padL,
-                        top: 2,
-                        child: _buildSubIndicatorToggleButton(),
-                      ),
-                      if (_subIndicatorChipsExpanded)
-                        Positioned(
-                          left: KlineViewport.padL,
-                          top: 2,
-                          right: 4,
-                          child: Builder(
-                            key: _subChipBarKey,
-                            builder: (_) => IgnorePointer(
-                              ignoring: !widget.indicatorsEnabled,
-                              child: Opacity(
-                                opacity: widget.indicatorsEnabled ? 1 : 0.35,
-                                child: Padding(
-                                  padding: EdgeInsets.only(
-                                    left: widget.mobileLayout ? 68 : 72,
-                                  ),
-                                  child: IndicatorPickerChip(
-                                    entries: _subChipEntries(),
-                                    maxWidth: widget.mobileLayout
-                                        ? math.max(80.0, w - KlineViewport.padL - 8)
-                                        : math.max(
-                                            100.0,
-                                            w - KlineViewport.padL - 24,
-                                          ),
-                                    maxHeight: KlineViewport.subIndicatorChipMaxBand,
-                                    horizontalScroll: widget.mobileLayout,
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                    ],
+                left: KlineViewport.padL,
+                top: mainH + 2,
+                child: Opacity(
+                  opacity: widget.indicatorsEnabled ? 1 : 0.35,
+                  child: IgnorePointer(
+                    ignoring: !widget.indicatorsEnabled,
+                    child: _buildSubIndicatorToggleButton(),
                   ),
                 ),
               ),
+            _buildIndicatorPickerOverlay(),
           ],
         );
       },
