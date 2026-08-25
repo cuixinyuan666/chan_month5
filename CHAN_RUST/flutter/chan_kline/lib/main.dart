@@ -2452,49 +2452,47 @@ class _KlineHomePageState extends State<KlineHomePage> {
         ),
         if (!_devDemoPhaseEnabled) ...[
           const SizedBox(height: 6),
-          OutlinedButton.icon(
+          SettingsOutlinedButton(
+            label: '手动打开最新任务演示',
+            icon: Icons.play_lesson,
             onPressed: _busy ? null : _openLatestTaskDemoWalkthrough,
-            icon: const Icon(Icons.play_lesson, size: 18),
-            label: const Text('手动打开最新任务演示'),
           ),
         ],
-        const SizedBox(height: 8),
-        OutlinedButton.icon(
+        const SizedBox(height: SettingsPanelTheme.fieldGap),
+        SettingsOutlinedButton(
+          label: '任务演示列表 / 前后对比',
+          icon: Icons.list_alt,
           onPressed: _busy ? null : _openTaskDemoList,
-          icon: const Icon(Icons.list_alt, size: 18),
-          label: const Text('任务演示列表 / 前后对比'),
         ),
-        const SizedBox(height: 12),
-        OutlinedButton.icon(
+        const SizedBox(height: SettingsPanelTheme.sectionGap),
+        SettingsOutlinedButton(
+          label: '刷新股票列表',
+          icon: Icons.refresh,
           onPressed: _busy ? null : _bootstrap,
-          icon: const Icon(Icons.refresh, size: 18),
-          label: const Text('刷新股票列表'),
         ),
-        const SizedBox(height: 10),
-        // 常驻：一键复制历史记录（合并到 main / 清理 UI 时不得删除）
-        OutlinedButton.icon(
+        const SizedBox(height: SettingsPanelTheme.fieldGap),
+        SettingsOutlinedButton(
+          label: '一键复制历史记录',
+          icon: Icons.copy_all,
           onPressed: _copyHistoryRecords,
-          icon: const Icon(Icons.copy_all, size: 18),
-          label: const Text('一键复制历史记录'),
         ),
-        const SizedBox(height: 8),
-        OutlinedButton.icon(
+        const SizedBox(height: SettingsPanelTheme.fieldGap),
+        SettingsOutlinedButton(
+          label: '查看历史记录',
+          icon: Icons.history,
           onPressed: () => _msgHistory.showDialog(context),
-          icon: const Icon(Icons.history, size: 18),
-          label: const Text('查看历史记录'),
         ),
-        const SizedBox(height: 8),
-        OutlinedButton.icon(
+        const SizedBox(height: SettingsPanelTheme.fieldGap),
+        SettingsOutlinedButton(
+          label: '复制页面快照',
+          icon: Icons.content_copy,
           onPressed: _copyDebugSnapshot,
-          icon: const Icon(Icons.content_copy, size: 18),
-          label: const Text('复制页面快照'),
         ),
-        const SizedBox(height: 8),
-        // 常驻：验收调试信息（内容随当前任务更新；勿删按钮）
-        OutlinedButton.icon(
+        const SizedBox(height: SettingsPanelTheme.fieldGap),
+        SettingsOutlinedButton(
+          label: '复制调试信息',
+          icon: Icons.bug_report_outlined,
           onPressed: _busy ? null : _copyAuditProbeDebug,
-          icon: const Icon(Icons.bug_report_outlined, size: 18),
-          label: const Text('复制调试信息'),
         ),
         const SizedBox(height: 4),
         Text(
@@ -2532,11 +2530,11 @@ class _KlineHomePageState extends State<KlineHomePage> {
           ],
         ),
         if (_mlSession.isActive) ...[
-          const SizedBox(height: 8),
-          OutlinedButton.icon(
+          const SizedBox(height: SettingsPanelTheme.fieldGap),
+          SettingsOutlinedButton(
+            label: '退出机器学习',
+            icon: Icons.exit_to_app,
             onPressed: _exitMlSession,
-            icon: const Icon(Icons.exit_to_app, size: 18),
-            label: const Text('退出机器学习'),
           ),
         ],
     ];
