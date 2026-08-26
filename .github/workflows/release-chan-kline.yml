@@ -20,6 +20,10 @@ concurrency:
   group: release-chan-kline-android-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  ANDROID_HOME: /usr/local/lib/android/sdk
+  ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+
 jobs:
   android:
     name: 打包 Android APK
@@ -34,7 +38,7 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: 安装 Rust
+      - name: 安装 Rust Android targets
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
@@ -48,17 +52,19 @@ jobs:
           channel: stable
           cache: true
 
-      - name: 安装 Android SDK / NDK
-        uses: nttld/setup-ndk@v1
-        with:
-          ndk-version: r28c
+      - name: 安装 Android NDK
+        run: |
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          yes | sdkmanager --sdk_root="$ANDROID_HOME" \
+            "ndk;28.2.13676358" \
+            "platforms;android-35" \
+            "build-tools;35.0.0" || true
+          ls -la "$ANDROID_HOME/ndk" || ls -la "$ANDROID_HOME"
 
       - name: 接受 Android 许可
         run: yes | flutter doctor --android-licenses || true
 
       - name: 准备 a_Data 种子并编译 Rust/Android APK
-        env:
-          ANDROID_HOME: ${{ env.ANDROID_SDK_ROOT }}
         run: bash CHAN_RUST/scripts/build_android_release.sh
 
       - name: 重命名 APK（含版本号）
