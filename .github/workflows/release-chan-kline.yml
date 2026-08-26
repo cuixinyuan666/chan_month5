@@ -1,0 +1,94 @@
+# chan_kline Android 发布（APK）
+# 触发：打 v* 标签，或在 Actions 页手动 Run workflow
+name: Release chan_kline Android
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "版本号（不含 v 前缀，如 1.0.10）"
+        required: true
+        default: "1.0.10"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-chan-kline-android-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ANDROID_HOME: /usr/local/lib/android/sdk
+  ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+
+jobs:
+  android:
+    name: 打包 Android APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+
+      - name: 安装 Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: 安装 Rust Android targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+
+      - name: 安装 cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: 安装 Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: 安装 Android NDK
+        run: |
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          yes | sdkmanager --sdk_root="$ANDROID_HOME" \
+            "ndk;28.2.13676358" \
+            "platforms;android-35" \
+            "build-tools;35.0.0" || true
+          ls -la "$ANDROID_HOME/ndk" || ls -la "$ANDROID_HOME"
+
+      - name: 接受 Android 许可
+        run: yes | flutter doctor --android-licenses || true
+
+      - name: 准备 a_Data 种子并编译 Rust/Android APK
+        run: bash CHAN_RUST/scripts/build_android_release.sh
+
+      - name: 重命名 APK（含版本号）
+        id: apk
+        run: |
+          ver=$(grep '^version:' CHAN_RUST/flutter/chan_kline/pubspec.yaml | awk '{print $2}' | cut -d+ -f1)
+          src="CHAN_RUST/flutter/chan_kline/build/app/outputs/flutter-apk/app-release.apk"
+          dest="dist/chan_kline-android-v${ver}.apk"
+          mkdir -p dist
+          cp "$src" "$dest"
+          echo "path=$dest" >> "$GITHUB_OUTPUT"
+
+      - name: 创建 GitHub Release 并上传 APK
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', github.event.inputs.version) || github.ref_name }}
+          name: chan_kline ${{ github.event_name == 'workflow_dispatch' && format('v{0}', github.event.inputs.version) || github.ref_name }}
+          generate_release_notes: true
+          files: dist/chan_kline-android-*.apk
+          body: |
+            缠论 K 线 Android 发布包。
+
+            下载 `chan_kline-android-*.apk` 并安装。
+            同包名 `com.chan.chan_kline`，versionCode 递增可直接覆盖安装，无需卸载旧版。
+            首次启动从内置种子解压 a_Data（含 002003 等演示股票）。
+
+            **v1.0.10 要点**：修复右区长按「一次性走完」触发应用无响应；分批喂入 + 会话 merge 性能优化。

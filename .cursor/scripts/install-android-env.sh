@@ -34,11 +34,13 @@ if [ ! -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ]; then
 fi
 
 echo ">> [android-env] sdkmanager 安装 platform-tools / SDK / NDK"
+set +o pipefail
 yes | sdkmanager --sdk_root="$ANDROID_HOME" \
   "platform-tools" \
   "$ANDROID_PLATFORM_PKG" \
   "$ANDROID_BUILD_TOOLS_PKG" \
-  "$ANDROID_NDK_PKG"
+  "$ANDROID_NDK_PKG" || true
+set -o pipefail
 
 # 写入 shell 配置，便于交互式终端复用
 for rc in "$HOME/.bashrc" "$HOME/.profile"; do
