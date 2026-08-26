@@ -181,6 +181,7 @@ Future<void> main() async {
   MsgHistory.instance.appendAndroidBundledDataRoot();
   MsgHistory.instance.appendAndroidMobileLayout();
   MsgHistory.instance.appendAndroidTouchUiAndBacktestSplit();
+  MsgHistory.instance.appendAndroidRunToEndPerformance();
   MsgHistory.instance.appendDualPlatformUiOptimization();
   MsgHistory.instance.appendAuditProbeCopyButton();
   MsgHistory.instance.appendAuditFixBsZsFeature();
@@ -329,6 +330,10 @@ class _KlineHomePageState extends State<KlineHomePage> {
   String _defaultK0Policy = 'pending';
   bool _bootstrapping = false;
   bool _loadingChart = false;
+  /// 右区长按「一次性走完」：分批喂入，避免 Android 主线程 ANR。
+  bool _runningToEnd = false;
+  int _runToEndDone = 0;
+  int _runToEndTotal = 0;
   bool _panelExpanded = false;
   int _panelEdge = 1; // 默认右贴边（设置按钮在右上）
   /// Android 设置抽屉局部刷新（开关即时反馈）
@@ -454,7 +459,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         ),
       );
 
-  bool get _busy => _bootstrapping || _loadingChart;
+  bool get _busy => _bootstrapping || _loadingChart || _runningToEnd;
   bool get _hasSession => _allBars.isNotEmpty;
   int get _visibleCount => _stepIdx < 0 ? 0 : math.min(_stepIdx + 1, _allBars.length);
   List<KlineBar> get _visibleBars =>
@@ -984,12 +989,11 @@ class _KlineHomePageState extends State<KlineHomePage> {
     // 方案B：分型判断 kn=0..chartMaxKn-1
     final maxKnProbe = chartMaxKn(levels: levels, k0Lines: k0Lines);
     final knHi = maxKnProbe < 1 ? 1 : maxKnProbe;
-    final nextHistory = <int, List<FractalJudgmentEvent>>{
-      for (final e in _judgmentHistoryByKn.entries)
-        e.key: List<FractalJudgmentEvent>.from(e.value),
-    };
     for (var kn = 0; kn < knHi; kn++) {
-      final log = nextHistory.putIfAbsent(kn, () => <FractalJudgmentEvent>[]);
+      final log = _judgmentHistoryByKn.putIfAbsent(
+        kn,
+        () => <FractalJudgmentEvent>[],
+      );
       mergeFractalJudgmentEventLog(
         log,
         collectFractalJudgmentEvents(
@@ -1001,26 +1005,20 @@ class _KlineHomePageState extends State<KlineHomePage> {
         ),
       );
     }
-    _judgmentHistoryByKn = nextHistory;
   }
 
   /// 本步中枢帧 → 判断/确认会话历史（先确认后判断；确认同拍共点）。
   /// 返回各层本步新确认的 x1（供背驰本枢启动）。
   Map<int, Set<int>> _mergeZsSignalHistory(KlineCombineBundle bundle) {
     final discoveryX = _stepIdx < 0 ? 0 : _stepIdx;
-    final nextJudge = <int, List<ZsSignalEvent>>{
-      for (final e in _zsJudgmentHistoryByKn.entries)
-        e.key: List<ZsSignalEvent>.from(e.value),
-    };
-    final nextConfirm = <int, List<ZsSignalEvent>>{
-      for (final e in _zsConfirmHistoryByKn.entries)
-        e.key: List<ZsSignalEvent>.from(e.value),
-    };
     final confirmedByKn = <int, Set<int>>{};
     final collected = collectZsFramesByKn(bundle);
     _zsObjectStore.ingestCollected(collected, asOf: discoveryX);
     for (final e in collected.entries) {
-      final cLog = nextConfirm.putIfAbsent(e.key, () => <ZsSignalEvent>[]);
+      final cLog = _zsConfirmHistoryByKn.putIfAbsent(
+        e.key,
+        () => <ZsSignalEvent>[],
+      );
       final confirmed = mergeZsConfirmEventLog(
         cLog,
         e.value,
@@ -1028,7 +1026,10 @@ class _KlineHomePageState extends State<KlineHomePage> {
         discoveryX: discoveryX,
       );
       confirmedByKn[e.key] = confirmed;
-      final jLog = nextJudge.putIfAbsent(e.key, () => <ZsSignalEvent>[]);
+      final jLog = _zsJudgmentHistoryByKn.putIfAbsent(
+        e.key,
+        () => <ZsSignalEvent>[],
+      );
       mergeZsJudgmentEventLog(
         jLog,
         e.value,
@@ -1038,8 +1039,6 @@ class _KlineHomePageState extends State<KlineHomePage> {
         confirmedX1ThisStep: confirmed,
       );
     }
-    _zsJudgmentHistoryByKn = nextJudge;
-    _zsConfirmHistoryByKn = nextConfirm;
     return confirmedByKn;
   }
 
@@ -1057,32 +1056,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
   /// 对齐分型判断：K0 步进颗粒度；传 activeSegIdx 使动态 Kn 延伸步仍追加本步 x。
   void _mergeBsHistory(KlineCombineBundle bundle) {
     final discoveryX = _stepIdx < 0 ? 0 : _stepIdx;
-    final nextBuy = <int, List<Buy1Frame>>{
-      for (final e in _buy1HistoryByKn.entries)
-        e.key: List<Buy1Frame>.from(e.value),
-    };
-    final nextSell = <int, List<Sell1Frame>>{
-      for (final e in _sell1HistoryByKn.entries)
-        e.key: List<Sell1Frame>.from(e.value),
-    };
-    final nextBuy2 = <int, List<Buy2Frame>>{
-      for (final e in _buy2HistoryByKn.entries)
-        e.key: List<Buy2Frame>.from(e.value),
-    };
-    final nextSell2 = <int, List<Sell2Frame>>{
-      for (final e in _sell2HistoryByKn.entries)
-        e.key: List<Sell2Frame>.from(e.value),
-    };
-    final nextBuyN = <int, List<BuyNFrame>>{
-      for (final e in _buyNHistoryByKn.entries)
-        e.key: List<BuyNFrame>.from(e.value),
-    };
-    final nextSellN = <int, List<SellNFrame>>{
-      for (final e in _sellNHistoryByKn.entries)
-        e.key: List<SellNFrame>.from(e.value),
-    };
     for (final e in collectBuy1EventsByKn(bundle).entries) {
-      final log = nextBuy.putIfAbsent(e.key, () => <Buy1Frame>[]);
+      final log = _buy1HistoryByKn.putIfAbsent(e.key, () => <Buy1Frame>[]);
       mergeBuy1EventLog(
         log,
         e.value,
@@ -1091,7 +1066,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       );
     }
     for (final e in collectSell1EventsByKn(bundle).entries) {
-      final log = nextSell.putIfAbsent(e.key, () => <Sell1Frame>[]);
+      final log = _sell1HistoryByKn.putIfAbsent(e.key, () => <Sell1Frame>[]);
       mergeSell1EventLog(
         log,
         e.value,
@@ -1100,7 +1075,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       );
     }
     for (final e in collectBuy2EventsByKn(bundle).entries) {
-      final log = nextBuy2.putIfAbsent(e.key, () => <Buy2Frame>[]);
+      final log = _buy2HistoryByKn.putIfAbsent(e.key, () => <Buy2Frame>[]);
       mergeBuy2EventLog(
         log,
         e.value,
@@ -1109,7 +1084,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       );
     }
     for (final e in collectSell2EventsByKn(bundle).entries) {
-      final log = nextSell2.putIfAbsent(e.key, () => <Sell2Frame>[]);
+      final log = _sell2HistoryByKn.putIfAbsent(e.key, () => <Sell2Frame>[]);
       mergeSell2EventLog(
         log,
         e.value,
@@ -1118,7 +1093,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       );
     }
     for (final e in collectBuyNEventsByKn(bundle).entries) {
-      final log = nextBuyN.putIfAbsent(e.key, () => <BuyNFrame>[]);
+      final log = _buyNHistoryByKn.putIfAbsent(e.key, () => <BuyNFrame>[]);
       mergeBuyNEventLog(
         log,
         e.value,
@@ -1127,7 +1102,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       );
     }
     for (final e in collectSellNEventsByKn(bundle).entries) {
-      final log = nextSellN.putIfAbsent(e.key, () => <SellNFrame>[]);
+      final log = _sellNHistoryByKn.putIfAbsent(e.key, () => <SellNFrame>[]);
       mergeSellNEventLog(
         log,
         e.value,
@@ -1135,21 +1110,13 @@ class _KlineHomePageState extends State<KlineHomePage> {
         activeSegIdx: _activeSegIdxForKn(bundle, e.key),
       );
     }
-    _buy1HistoryByKn = nextBuy;
-    _sell1HistoryByKn = nextSell;
-    _buy2HistoryByKn = nextBuy2;
-    _sell2HistoryByKn = nextSell2;
-    _buyNHistoryByKn = nextBuyN;
-    _sellNHistoryByKn = nextSellN;
-    final nextVerdict = <int, List<BsVerdictFrame>>{
-      for (final e in _bsVerdictHistoryByKn.entries)
-        e.key: List<BsVerdictFrame>.from(e.value),
-    };
     for (final e in collectBsVerdictByKn(bundle).entries) {
-      final log = nextVerdict.putIfAbsent(e.key, () => <BsVerdictFrame>[]);
+      final log = _bsVerdictHistoryByKn.putIfAbsent(
+        e.key,
+        () => <BsVerdictFrame>[],
+      );
       mergeBsVerdictLog(log, e.value);
     }
-    _bsVerdictHistoryByKn = nextVerdict;
   }
 
   /// 本步相邻比例 + 步进节奏 + 连线斜率并入会话（全层；禁止整表覆盖消点）。
@@ -1563,15 +1530,82 @@ class _KlineHomePageState extends State<KlineHomePage> {
     _rebuildCombine();
   }
 
-  void _runToEnd({MlBspSampler? mlSampler}) {
-    if (!_hasSession) return;
+  /// 单步喂入：Rust pipeline + 会话冻结；lookup 留给末态 _rebuildCombine。
+  bool _feedRunToEndStep(int i, {MlBspSampler? mlSampler, required int end}) {
+    _stepIdx = i;
+    final visible = _allBars.sublist(0, i + 1);
+    try {
+      final bundle = _bundleForVisible(visible);
+      if (bundle.defaultK0Policy == 'purged') {
+        _defaultK0Purged = true;
+      }
+      _mergeJudgmentHistory(
+        bars: visible,
+        levels: bundle.levels,
+        barFeatures: bundle.barFeatures,
+        k0Lines: bundle.k0Lines,
+      );
+      _mergeBsHistory(bundle);
+      final zsConfirmed = _mergeZsSignalHistory(bundle);
+      _mergeRatioAndRhythm(bundle);
+      _mergeMathFreeze(bundle, bars: visible, asOf: i);
+      _mergeDivergenceFreeze(
+        bundle,
+        bars: visible,
+        asOf: i,
+        confirmedX1ByKn: zsConfirmed,
+      );
+      mlSampler?.onStep(
+        stepIdx: i,
+        visibleBars: visible,
+        buy1K0: _buy1HistoryByKn[0] ?? const [],
+        sell1K0: _sell1HistoryByKn[0] ?? const [],
+        buildLookup: () => _buildMlLookupFor(
+          bars: visible,
+          combineFrames: bundle.frames,
+          k0Confirms: bundle.k0Confirms,
+          barFeatures: bundle.barFeatures,
+          k0Lines: bundle.k0Lines,
+          levels: bundle.levels,
+          k1CombineFrames: bundle.k1CombineFrames,
+          k1Analysis: bundle.k1Analysis,
+          zsK0Frames: bundle.zsK0Frames,
+        ),
+      );
+      if (mlSampler != null) {
+        final liveBuy = collectBuy1EventsByKn(bundle)[0] ?? const [];
+        final liveSell = collectSell1EventsByKn(bundle)[0] ?? const [];
+        MlBspLabeler.labelDueSamples(
+          samples: mlSampler.samples,
+          asOfIdx: i,
+          horizonBars: _mlLabelConfig.horizonBars,
+          isLastBar: i == end,
+          liveBuy1: liveBuy,
+          liveSell1: liveSell,
+          k0LinesAsOf: bundle.k0Lines,
+          barsAsOf: visible,
+        );
+      }
+      return true;
+    } catch (e) {
+      _msgHistory.append('一次性走完@step=$i 失败：$e');
+      return false;
+    }
+  }
+
+  int _runToEndBatchSize() {
+    if (Platform.isAndroid) return 12;
+    return 32;
+  }
+
+  Future<void> _runToEnd({MlBspSampler? mlSampler}) async {
+    if (!_hasSession || _runningToEnd) return;
     _stopPlay();
     final end = _allBars.length - 1;
     final start = _stepIdx < 0 ? 0 : _stepIdx;
+    if (start > end) return;
     if (_chipOnlyMode) {
-      // 仅筹码：直接跳到末尾，跳过缠论逻辑
       setState(() => _stepIdx = end);
-      // 后台预热前缀索引，避免首帧主线程 build 卡一下
       unawaited(
         ChipProfileCompute.warmUpInBackground(
           _allBars,
@@ -1580,73 +1614,80 @@ class _KlineHomePageState extends State<KlineHomePage> {
       );
       return;
     }
-    for (var i = start; i <= end; i++) {
-      _stepIdx = i;
-      final visible = _allBars.sublist(0, i + 1);
-      try {
-        final bundle = _bundleForVisible(visible);
-        if (bundle.defaultK0Policy == 'purged') {
-          _defaultK0Purged = true;
+    if (start == end) {
+      _rebuildCombine();
+      return;
+    }
+
+    final total = end - start + 1;
+    setState(() {
+      _runningToEnd = true;
+      _runToEndDone = 0;
+      _runToEndTotal = total;
+    });
+    _msgHistory.append('一次性走完：$total 步，分批${_runToEndBatchSize()}根/帧');
+
+    var ok = true;
+    var done = 0;
+    final batch = _runToEndBatchSize();
+    try {
+      for (var i = start; i <= end; i++) {
+        ok = _feedRunToEndStep(i, mlSampler: mlSampler, end: end);
+        if (!ok) break;
+        done += 1;
+        if (done % batch == 0 || i == end) {
+          if (!mounted) return;
+          setState(() => _runToEndDone = done);
+          await Future<void>.delayed(Duration.zero);
         }
-        _mergeJudgmentHistory(
-          bars: visible,
-          levels: bundle.levels,
-          barFeatures: bundle.barFeatures,
-          k0Lines: bundle.k0Lines,
-        );
-        // 一类/二类BS 也逐K并入会话冻结，避免一次性走完只剩末态
-        _mergeBsHistory(bundle);
-        final zsConfirmed = _mergeZsSignalHistory(bundle);
-        _mergeRatioAndRhythm(bundle);
-        _mergeMathFreeze(bundle, bars: visible, asOf: i);
-        _mergeDivergenceFreeze(
-          bundle,
-          bars: visible,
-          asOf: i,
-          confirmedX1ByKn: zsConfirmed,
-        );
-        _syncPresentationLookup(visible, bundle);
-        // 仅 ML 路径：采 K0 一类 BS 当下特征（不改复盘语义）
-        mlSampler?.onStep(
-          stepIdx: i,
-          visibleBars: visible,
-          buy1K0: _buy1HistoryByKn[0] ?? const [],
-          sell1K0: _sell1HistoryByKn[0] ?? const [],
-          buildLookup: () => _buildMlLookupFor(
-            bars: visible,
-            combineFrames: bundle.frames,
-            k0Confirms: bundle.k0Confirms,
-            barFeatures: bundle.barFeatures,
-            k0Lines: bundle.k0Lines,
-            levels: bundle.levels,
-            k1CombineFrames: bundle.k1CombineFrames,
-            k1Analysis: bundle.k1Analysis,
-            zsK0Frames: bundle.zsK0Frames,
-          ),
-        );
-        // α：展望窗到期用**当步 live 一类**打标，不用跳末末态
-        if (mlSampler != null) {
-          final liveBuy = collectBuy1EventsByKn(bundle)[0] ?? const [];
-          final liveSell = collectSell1EventsByKn(bundle)[0] ?? const [];
-          MlBspLabeler.labelDueSamples(
-            samples: mlSampler.samples,
-            asOfIdx: i,
-            horizonBars: _mlLabelConfig.horizonBars,
-            isLastBar: i == end,
-            liveBuy1: liveBuy,
-            liveSell1: liveSell,
-            k0LinesAsOf: bundle.k0Lines,
-            barsAsOf: visible,
-          );
-        }
-      } catch (e) {
-        _msgHistory.append('一次性走完@step=$i 失败：$e');
-        break;
+      }
+      if (!mounted) return;
+      _rebuildCombine();
+      _logCombineSummary(prefix: ok ? '一次性走完' : '一次性走完(中断)');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _runningToEnd = false;
+          _runToEndDone = 0;
+          _runToEndTotal = 0;
+        });
       }
     }
-    // 末态刷新图面（merge 幂等，不会删旧点）
-    _rebuildCombine();
-    _logCombineSummary(prefix: '一次性走完');
+  }
+
+  Widget _buildRunToEndProgressBanner({required double top}) {
+    if (!_runningToEnd || _runToEndTotal <= 0) {
+      return const SizedBox.shrink();
+    }
+    final ratio = (_runToEndDone / _runToEndTotal).clamp(0.0, 1.0);
+    return Positioned(
+      left: 8,
+      right: 8,
+      top: top,
+      child: Material(
+        color: const Color(0xCC1A1A1A),
+        borderRadius: BorderRadius.circular(6),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                '一次性加载全部K线 $_runToEndDone/$_runToEndTotal',
+                style: const TextStyle(color: Color(0xFFE2E8F0), fontSize: 12),
+              ),
+              const SizedBox(height: 4),
+              LinearProgressIndicator(
+                value: ratio,
+                minHeight: 3,
+                backgroundColor: const Color(0x33FFFFFF),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   @override
@@ -1764,6 +1805,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
                 child: CircularProgressIndicator(strokeWidth: 2),
               ),
             ),
+          _buildRunToEndProgressBanner(top: 44),
           if (_taskDemoWalkActive &&
               _taskDemoManifest != null &&
               !_mlSession.isActive)
@@ -1898,6 +1940,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
                 child: CircularProgressIndicator(strokeWidth: 2),
               ),
             ),
+          _buildRunToEndProgressBanner(top: topInset + 36),
           if (_taskDemoWalkActive &&
               _taskDemoManifest != null &&
               !_mlSession.isActive)
@@ -2895,7 +2938,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       onTapStepForward: gesturesOn ? _stepForward : null,
       onLongPressReset: gesturesOn ? _resetStep : null,
       onLongPressReload: _busy ? null : _loadKlines,
-      onLongPressRunToEnd: gesturesOn ? _runToEnd : null,
+      onLongPressRunToEnd: gesturesOn ? () => unawaited(_runToEnd()) : null,
       strategySignals: _backtestRun?.result?.signals ?? const [],
       strategyFills: _backtestRun?.result?.fills ?? const [],
       strategyRoundBySignalId: _backtestRun?.result == null
@@ -3001,7 +3044,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       });
       await Future<void>.delayed(Duration.zero);
       if (!mounted) return;
-      _runToEnd(mlSampler: _mlSampler);
+      await _runToEnd(mlSampler: _mlSampler);
       if (!mounted) return;
 
       setState(() {

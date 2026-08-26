@@ -838,6 +838,21 @@ class MsgHistory {
     );
   }
 
+  /// Android 右区长按「一次性走完」：分批喂入 + 会话 merge 原地更新，避免 ANR。
+  static bool _androidRunToEndPerfLogged = false;
+  void appendAndroidRunToEndPerformance() {
+    if (_androidRunToEndPerfLogged) return;
+    _androidRunToEndPerfLogged = true;
+    append(
+      '【Android·一次性走完·性能】右区长按触发逐K跑到末根；'
+      '旧实现主线程同步跑完全部步进，长序列易触发「应用无响应」。'
+      '现改为分批喂入（Android 12 根/帧、桌面 32 根/帧）并在帧间 yield；'
+      '会话 merge（分型/中枢/BS/比例/节奏/Math/背驰）改为原地追加，'
+      '去掉逐步全量 Map 拷贝；lookup 仅在末态 _rebuildCombine 同步一次。'
+      '加载中显示进度条并占用 _busy，禁止重复触发。',
+    );
+  }
+
   /// 双端 UI 与交互模式（2026-08-25）
   static bool _dualPlatformUiLogged = false;
   void appendDualPlatformUiOptimization() {

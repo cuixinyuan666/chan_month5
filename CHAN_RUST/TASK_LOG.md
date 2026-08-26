@@ -2,6 +2,16 @@
 
 > 口径/行为变更记录（复制排查用）；与 `lib/history/msg_history.dart` 常驻历史同步维护。
 
+## 2026-08-26 Android 一次性走完 ANR 修复
+
+- **问题**：K 线图右区长按「一次性走完」时，主线程同步跑完全部逐 K 步进，Android 弹出「应用无响应」。
+- **根因**：`_runToEnd` 同步 for 循环；每步 merge 全量拷贝 Map（分型/中枢/BS 等），长序列 O(n²) 分配 + 无帧间 yield。
+- **修复**：
+  - `_runToEnd` 改异步分批（Android 12 根/帧、桌面 32 根/帧），帧间 `Future.delayed(Duration.zero)` yield。
+  - 会话 merge 改原地 `putIfAbsent` 追加，去掉逐步 Map 拷贝；lookup 仅末态 `_rebuildCombine` 同步。
+  - 加载中进度条 + `_busy` 防重复触发。
+- **验证**：`flutter analyze`；`flutter test`（merge/步进相关单测）。
+
 ## 2026-08-25 双指缩放阈值失效修复
 
 - **问题**：放大/缩小到一定阈值后横纵双指缩放全部失效。
