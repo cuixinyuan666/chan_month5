@@ -1,0 +1,197 @@
+# chan_kline 多平台发布：Android APK + Windows/Linux 桌面端
+# 触发：打 v* 标签，或在 Actions 页手动 Run workflow
+name: Release chan_kline
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "版本号（不含 v 前缀，如 1.0.10）"
+        required: true
+        default: "1.0.10"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-chan-kline-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android:
+    name: 打包 Android APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+
+      - name: 安装 Android 构建依赖
+        run: bash .cursor/scripts/install-android-env.sh
+
+      - name: 安装 Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 安装 Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: 准备 a_Data 种子并编译 Rust/Android APK
+        run: bash CHAN_RUST/scripts/build_android_release.sh
+
+      - name: 重命名 APK（含版本号）
+        id: apk
+        run: |
+          ver=$(grep '^version:' CHAN_RUST/flutter/chan_kline/pubspec.yaml | awk '{print $2}' | cut -d+ -f1)
+          src="CHAN_RUST/flutter/chan_kline/build/app/outputs/flutter-apk/app-release.apk"
+          dest="dist/chan_kline-android-v${ver}.apk"
+          mkdir -p dist
+          cp "$src" "$dest"
+          echo "path=$dest" >> "$GITHUB_OUTPUT"
+
+      - name: 上传 Android 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: chan_kline-android
+          path: dist/chan_kline-android-*.apk
+          if-no-files-found: error
+
+  windows:
+    name: 打包 Windows
+    runs-on: windows-latest
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+
+      - name: 安装 Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 安装 Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: 编译 Rust 动态库 chan_ffi.dll
+        working-directory: CHAN_RUST/rust
+        run: cargo build -p chan_ffi --release
+
+      - name: 复制 DLL 到 Flutter Windows native
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path CHAN_RUST/flutter/chan_kline/windows/native | Out-Null
+          Copy-Item CHAN_RUST/rust/target/release/chan_ffi.dll `
+            CHAN_RUST/flutter/chan_kline/windows/native/chan_ffi.dll -Force
+
+      - name: Flutter Windows Release
+        working-directory: CHAN_RUST/flutter/chan_kline
+        run: |
+          flutter config --enable-windows-desktop
+          flutter pub get
+          flutter build windows --release
+
+      - name: 打 zip（含 a_Data）
+        shell: pwsh
+        run: |
+          if (Test-Path CHAN_RUST/scripts/package_windows.ps1) {
+            CHAN_RUST/scripts/package_windows.ps1
+          } else {
+            Write-Error "缺少 package_windows.ps1"
+          }
+
+      - name: 上传 Windows 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: chan_kline-windows-x64
+          path: dist/chan_kline-windows-x64.zip
+          if-no-files-found: error
+
+  linux:
+    name: 打包 Linux
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+
+      - name: 安装 Linux 桌面依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev
+
+      - name: 安装 Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 安装 Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: 编译 Rust 动态库并复制到 Flutter
+        run: bash CHAN_RUST/scripts/build_rust.sh
+
+      - name: Flutter Linux Release
+        working-directory: CHAN_RUST/flutter/chan_kline
+        run: |
+          flutter config --enable-linux-desktop
+          flutter pub get
+          flutter build linux --release
+
+      - name: 打 tar.gz（含 a_Data）
+        run: |
+          chmod +x CHAN_RUST/scripts/package_linux.sh
+          bash CHAN_RUST/scripts/package_linux.sh
+
+      - name: 上传 Linux 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: chan_kline-linux-x64
+          path: dist/chan_kline-linux-x64.tar.gz
+          if-no-files-found: error
+
+  publish:
+    name: 发布到 GitHub Releases
+    needs: [android, windows, linux]
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: 下载全部产物
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: 确定版本号
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=v${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 创建 GitHub Release 并上传安装包
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: chan_kline ${{ steps.ver.outputs.tag }}
+          generate_release_notes: true
+          files: |
+            artifacts/chan_kline-android/*.apk
+            artifacts/chan_kline-windows-x64/chan_kline-windows-x64.zip
+            artifacts/chan_kline-linux-x64/chan_kline-linux-x64.tar.gz
+          body: |
+            缠论 K 线发布包（${{ steps.ver.outputs.tag }}）。
+
+            **Android**：下载 `chan_kline-android-*.apk`，直接安装（同包名 versionCode 递增可覆盖安装）。
+            **Windows**：下载 `chan_kline-windows-x64.zip`，解压后双击 `chan_kline.exe`。
+            **Linux**：下载 `chan_kline-linux-x64.tar.gz`，解压后运行 `./chan_kline`。
+
+            包内已带同目录 `a_Data`（默认股票 002003）。也可设环境变量 `CHAN_DATA_ROOT` 指向自己的数据目录。
+
+            **v1.0.10 要点**：修复 Android 右区长按「一次性走完」触发应用无响应；分批喂入 + 会话 merge 性能优化。
+
+            Windows 若提示缺少运行库，请安装 [Microsoft Visual C++ Redistributable x64](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist)。
