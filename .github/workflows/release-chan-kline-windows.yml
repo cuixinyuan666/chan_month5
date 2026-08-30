@@ -81,6 +81,6 @@ jobs:
           append_body: true
           files: dist/chan_kline-windows-x64.zip
           body: |
-            **Windows 桌面端（补发）**：下载 `chan_kline-windows-x64.zip`，解压后双击 `chan_kline.exe`。
-            包内已带同目录 `a_Data`（默认股票 002003）。也可设环境变量 `CHAN_DATA_ROOT` 指向自己的数据目录。
+            **Windows 桌面端（补发）**：下载 `chan_kline-windows-x64.zip`，解压后双击 **启动 chan_kline.bat**（推荐）或 `chan_kline.exe`。
+            包内已带同目录 **a_Data** 全量行情（默认股票 002003，约 7000+ 数据文件）。也可设环境变量 `CHAN_DATA_ROOT` 指向自己的数据目录。
             若提示缺少运行库，请安装 [Microsoft Visual C++ Redistributable x64](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist)。
