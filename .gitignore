@@ -34,3 +34,14 @@ CHAN_RUST/flutter/chan_kline/.chan_chip_config.json
 
 # CodeBuddy 运行时数据（含工作记忆，非源码，勿删但勿提交）
 .codebuddy/
+
+# ML 导出文件（运行时生成的模型和特征文件，勿提交）
+a_Data/ml_exports/
+
+# 临时测试文件
+*.tmp
+*.temp
+test_*.py
+
+# 发布打包产物
+dist/
