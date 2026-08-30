@@ -190,7 +190,7 @@ void main() {
       expect(slopes.every((e) => e.displayLevel == e.kn), isTrue);
 
       final d = defaultSubIndicatorsK0();
-      expect(d.any((e) => e.kind == SubIndicatorKind.lineSlope), isTrue);
+      expect(d.any((e) => e.kind == SubIndicatorKind.lineSlope), isFalse);
       final lv0 = subIndicatorsForLevel(0, buildSubIndicatorCatalog(1));
       expect(lv0.any((e) => e.kind == SubIndicatorKind.lineSlope), isTrue);
     });

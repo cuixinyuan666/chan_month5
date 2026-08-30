@@ -454,14 +454,9 @@ class _KlineChartState extends State<KlineChart> {
 
   Set<MainChartIndicator> get _activeMains => widget.mainIndicators;
 
-  /// 左上角单击灰度关闭的指标（仍在选择集中，再点可打开）
-  Set<MainChartIndicator> _mutedMains = {};
-  Set<SubChartIndicator> _mutedSubs = {};
-
-  /// 实际绘制/读数用：已选减去灰度关闭
-  Set<MainChartIndicator> get _drawnMains =>
-      _activeMains.difference(_mutedMains);
-  Set<SubChartIndicator> get _drawnSubs => _activeSubs.difference(_mutedSubs);
+  /// 实际绘制/读数：与选择集一致（收纳列表白字=已选=绘制）
+  Set<MainChartIndicator> get _drawnMains => _activeMains;
+  Set<SubChartIndicator> get _drawnSubs => _activeSubs;
 
   /// 当前数据最高 Kn → 动态生成可选指标
   int get _maxKn => chartMaxKn(
@@ -478,40 +473,6 @@ class _KlineChartState extends State<KlineChart> {
   /// 副图是否展开（无勾选副图指标则收起整块副图区）
   bool get _showSubPane => _activeSubs.isNotEmpty;
 
-  /// 选择集增删后同步静音集。
-  /// 重要：新勾选且非 [isDefaultDrawnMain]/[isDefaultDrawnSub] 的项默认进 muted
-  ///（左上角删除线灰度，仍在选择集；再点才绘制）。已静音项取消勾选后从集里摘掉。
-  void _syncMutedWithSelection({
-    Set<MainChartIndicator>? previousMains,
-    Set<SubChartIndicator>? previousSubs,
-  }) {
-    final oldM = previousMains ?? <MainChartIndicator>{};
-    final oldS = previousSubs ?? <SubChartIndicator>{};
-    final addedM = _activeMains.difference(oldM);
-    final addedS = _activeSubs.difference(oldS);
-    _mutedMains = {
-      ..._mutedMains.intersection(_activeMains),
-      for (final e in addedM)
-        if (!isDefaultDrawnMain(e)) e,
-    };
-    _mutedSubs = {
-      ..._mutedSubs.intersection(_activeSubs),
-      for (final e in addedS)
-        if (!isDefaultDrawnSub(e) &&
-            // 学习观察：MACD 类背驰连带的同号 MACD 立即绘制（不进静音）
-            !(e.kind == SubIndicatorKind.macd &&
-                hasMacdDivergenceForKn(_activeSubs, e.kn)))
-          e,
-    };
-    // 已勾 MACD 类背驰时强制取消同号 MACD 静音（含先前已 muted 的）
-    for (final e in _activeSubs) {
-      if (e.kind == SubIndicatorKind.divergence &&
-          isMacdDivergenceAlgo(e.diverAlgo)) {
-        _mutedSubs.remove(SubChartIndicator.macd(e.kn));
-      }
-    }
-  }
-
   double _resolveMainPlotTop(BuildContext context) {
     if (!widget.mobileLayout) return KlineViewport.padT;
     final safeTop = MediaQuery.paddingOf(context).top;
@@ -527,8 +488,6 @@ class _KlineChartState extends State<KlineChart> {
   void initState() {
     super.initState();
     _resetViewport();
-    // 层全选关联项默认静音非核心绘制项（删除线灰度）
-    _syncMutedWithSelection();
     // 全局键盘监听：方向键←/→（十字线态=十字线左右移；非十字线态=步退/步进）
     HardwareKeyboard.instance.addHandler(_handleHardwareKey);
   }
@@ -582,15 +541,6 @@ class _KlineChartState extends State<KlineChart> {
         _crosshairY = null;
         _crosshairBarIdx = null;
       }
-    }
-
-    // 选择栏增删后：保留仍勾选的静音态；新关联非默认绘制项默认静音
-    if (oldWidget.mainIndicators != widget.mainIndicators ||
-        oldWidget.subIndicators != widget.subIndicators) {
-      _syncMutedWithSelection(
-        previousMains: oldWidget.mainIndicators,
-        previousSubs: oldWidget.subIndicators,
-      );
     }
 
     // C：大序列跳末/换股后后台预热筹码前缀（不堵 UI；口径同同步 build）
@@ -1421,9 +1371,32 @@ class _KlineChartState extends State<KlineChart> {
       return const SizedBox.shrink();
     }
     final isMain = _pickerPane == _IndicatorPickerPane.main;
-    return IndicatorPickerOverlay(
-      title: isMain ? '主图指标' : '副图指标',
-      entries: isMain ? _mainChipEntries() : _subChipEntries(),
+    if (isMain) {
+      return IndicatorPickerOverlay<MainChartIndicator>(
+        key: const ValueKey('main-indicator-picker'),
+        title: '主图指标',
+        catalog: _mainCatalog,
+        selected: _activeMains,
+        onToggle: _toggleMainSelection,
+        labelOf: (e) => e.label,
+        displayLevelOf: (e) => e.displayLevel,
+        categoryLabelOf: (e) => e.kind.categoryLabel,
+        categoryOrderOf: (e) => e.kind.categoryOrder,
+        onClose: _closeIndicatorPicker,
+      );
+    }
+    final subValues = _subChipValueByInd();
+    return IndicatorPickerOverlay<SubChartIndicator>(
+      key: const ValueKey('sub-indicator-picker'),
+      title: '副图指标',
+      catalog: _subCatalog,
+      selected: _activeSubs,
+      onToggle: _toggleSubSelection,
+      labelOf: (e) => e.label,
+      displayLevelOf: (e) => e.displayLevel,
+      categoryLabelOf: (e) => e.kind.categoryLabel,
+      categoryOrderOf: (e) => e.kind.categoryOrder,
+      valueTextOf: (e) => subValues[e],
       onClose: _closeIndicatorPicker,
     );
   }
@@ -1490,51 +1463,6 @@ class _KlineChartState extends State<KlineChart> {
       next.add(item);
     }
     widget.onSubIndicatorsChanged?.call(next);
-  }
-
-  List<IndicatorChipEntry> _mainChipEntries() {
-    final list = List<MainChartIndicator>.from(_mainCatalog)
-      ..sort((a, b) {
-        final lv = a.displayLevel.compareTo(b.displayLevel);
-        if (lv != 0) return lv;
-        final c = a.kind.categoryOrder.compareTo(b.kind.categoryOrder);
-        if (c != 0) return c;
-        return a.kn.compareTo(b.kn);
-      });
-    return [
-      for (final e in list)
-        IndicatorChipEntry(
-          label: e.label,
-          displayLevel: e.displayLevel,
-          selected: _activeMains.contains(e),
-          onTapToggle: () => _toggleMainSelection(e),
-        ),
-    ];
-  }
-
-  List<IndicatorChipEntry> _subChipEntries() {
-    final values = _subChipValueByInd();
-    final list = List<SubChartIndicator>.from(_subCatalog)
-      ..sort((a, b) {
-        final lv = a.displayLevel.compareTo(b.displayLevel);
-        if (lv != 0) return lv;
-        final c = a.kind.categoryOrder.compareTo(b.kind.categoryOrder);
-        if (c != 0) return c;
-        final ai = a.diverAlgo?.index ?? -1;
-        final bi = b.diverAlgo?.index ?? -1;
-        if (ai != bi) return ai.compareTo(bi);
-        return a.kn.compareTo(b.kn);
-      });
-    return [
-      for (final e in list)
-        IndicatorChipEntry(
-          label: e.label,
-          displayLevel: e.displayLevel,
-          selected: _activeSubs.contains(e),
-          valueText: values[e],
-          onTapToggle: () => _toggleSubSelection(e),
-        ),
-    ];
   }
 
   void _onSplitDown(PointerDownEvent e) {
@@ -1896,7 +1824,7 @@ class _KlineChartState extends State<KlineChart> {
                   ),
                 ),
               ),
-            // 主图伸展钮：点开全屏指标列表
+            // 主图收纳钮：全关时仍保留入口
             Positioned(
               left: 0,
               top: overlayTop,
@@ -1908,18 +1836,23 @@ class _KlineChartState extends State<KlineChart> {
                 ),
               ),
             ),
-            if (_showSubPane)
-              Positioned(
-                left: KlineViewport.padL,
-                top: mainH + 2,
-                child: Opacity(
-                  opacity: widget.indicatorsEnabled ? 1 : 0.35,
-                  child: IgnorePointer(
-                    ignoring: !widget.indicatorsEnabled,
-                    child: _buildSubIndicatorToggleButton(),
-                  ),
+            // 副图收纳钮：副图收起时贴在主图底 / X 轴上方
+            Positioned(
+              left: KlineViewport.padL,
+              top: _showSubPane
+                  ? mainH + 2
+                  : math.max(
+                      overlayTop + 4,
+                      mainH - KlineViewport.subIndicatorEntryBand,
+                    ),
+              child: Opacity(
+                opacity: widget.indicatorsEnabled ? 1 : 0.35,
+                child: IgnorePointer(
+                  ignoring: !widget.indicatorsEnabled,
+                  child: _buildSubIndicatorToggleButton(),
                 ),
               ),
+            ),
             _buildIndicatorPickerOverlay(),
           ],
         );
@@ -2946,6 +2879,7 @@ class _KlineCompositePainter extends CustomPainter {
   ) {
     if (kn < 1) return;
     final tailIdx = segAsOf ?? (bars.isEmpty ? -1 : bars.last.idx);
+    if (tailIdx < 0) return;
 
     LevelBundle? bundle;
     for (final b in levels) {
@@ -2954,16 +2888,26 @@ class _KlineCompositePainter extends CustomPainter {
         break;
       }
     }
+
+    final drawAllowed = levelLineDrawAllowed(
+      levels: levels,
+      barFeatures: barFeatures,
+      level: kn,
+      asOf: tailIdx,
+    );
+
     if (bundle != null) {
-      _drawOneLevelLines(
-        canvas,
-        w,
-        plotTop,
-        plotH,
-        slotW,
-        bundle: bundle,
-        tailIdx: tailIdx,
-      );
+      if (drawAllowed) {
+        _drawOneLevelLines(
+          canvas,
+          w,
+          plotTop,
+          plotH,
+          slotW,
+          bundle: bundle,
+          tailIdx: tailIdx,
+        );
+      }
       _drawSeedPhaseLines(
         canvas,
         w,
@@ -2976,7 +2920,7 @@ class _KlineCompositePainter extends CustomPainter {
       return;
     }
     // 回退：仅 K1 且无 levels 时用旧 k1Analysis
-    if (kn != 1) return;
+    if (kn != 1 || !drawAllowed) return;
     final style = ChartLevelLineStyle.forDisplayKn(1);
     final paint = Paint()
       ..color = style.color
@@ -2985,6 +2929,7 @@ class _KlineCompositePainter extends CustomPainter {
     for (final seg in k1Analysis.k1Lines) {
       final beginIdx = seg.beginX;
       final endIdx = seg.endX;
+      if (endIdx > tailIdx) continue;
       if (endIdx < viewport.viewXMin - 1 || beginIdx > viewport.viewXMax + 1) {
         continue;
       }

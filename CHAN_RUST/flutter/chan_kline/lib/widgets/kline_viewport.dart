@@ -20,6 +20,8 @@ class KlineViewport {
   static const double minSubMarkerPlotH = 52;
   /// 副图顶留白：避开左上角指标名按钮，标记不被盖
   static const double subIndicatorChipBand = 26;
+  /// 副图全关时仍保留的收纳钮占位（主图底 / X 轴上方）
+  static const double subIndicatorEntryBand = 28;
   /// 主图底边距（与副图分隔）
   static const double padB = 4;
   /// 底部 X 轴时间刻度带高度

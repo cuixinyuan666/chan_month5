@@ -216,8 +216,11 @@ void main() {
       expect(q.every((e) => e.label.contains('四型对线')), isTrue);
 
       final d = defaultMainIndicatorsK0();
-      expect(d.any((e) => e.kind == MainIndicatorKind.fxTripleParallel), isTrue);
-      expect(d.any((e) => e.kind == MainIndicatorKind.fxQuadPair), isTrue);
+      expect(
+        d.any((e) => e.kind == MainIndicatorKind.fxTripleParallel),
+        isFalse,
+      );
+      expect(d.any((e) => e.kind == MainIndicatorKind.fxQuadPair), isFalse);
       final lv0 = mainIndicatorsForLevel(0, buildMainIndicatorCatalog(1));
       expect(
         lv0.any((e) => e.kind == MainIndicatorKind.fxTripleParallel),
