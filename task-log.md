@@ -480,3 +480,16 @@
 - **演示**：test 演示 id=2026-08-20-chip-peak-vars
 - **注意事项**：纯 Flutter；无需重编 DLL；K1 筹码峰仍不进公式
 
+### 2026-08-30 08:29 — 补发 GitHub Windows zip 发布包（v1.0.10）
+
+- **执行者**：cursor（cloud agent）
+- **任务类型**：配置 / 发布
+- **上下文**：v1.0.10 Release 仅有 Android APK，缺 Windows 解压即用 zip
+- **关键操作**：
+  1. 新增 `package_windows.ps1`、`release_readme.txt` 与 `release-chan-kline-windows.yml` 工作流
+  2. 推送到 ANDROID_RUST / main，打标签 `win-v1.0.10` 触发 CI
+  3. GitHub Actions 编译 Rust DLL + Flutter Windows Release，打包含 a_Data 的 zip 并上传到 v1.0.10 Release
+- **结果**：`chan_kline-windows-x64.zip`（约 89 MB）已挂到 [v1.0.10 Release](https://github.com/cuixinyuan666/chan_month5/releases/tag/v1.0.10)；工作流 run #33301469836 成功
+- **演示**：下载 zip → 解压 → 双击 `chan_kline.exe`；同目录 `a_Data` 含 002003 默认股票
+- **注意事项**：Windows 需 VC++ x64 运行库；后续可 Actions 手动 Run「Release chan_kline Windows」补发其它版本
+
