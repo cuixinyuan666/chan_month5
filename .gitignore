@@ -42,3 +42,6 @@ a_Data/ml_exports/
 *.tmp
 *.temp
 test_*.py
+
+# 发布打包产物
+dist/
