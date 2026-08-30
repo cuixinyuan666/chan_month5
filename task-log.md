@@ -493,3 +493,16 @@
 - **演示**：下载 zip → 解压 → 双击 `chan_kline.exe`；同目录 `a_Data` 含 002003 默认股票
 - **注意事项**：Windows 需 VC++ x64 运行库；后续可 Actions 手动 Run「Release chan_kline Windows」补发其它版本
 
+### 2026-08-30 08:51 — Windows zip 强化 a_Data 打包并重新发布
+
+- **执行者**：cursor（cloud agent）
+- **任务类型**：配置 / 发布
+- **上下文**：用户要求 zip 内必须含 a_Data 且解压可运行
+- **关键操作**：
+  1. `package_windows.ps1` 增加 a_Data 文件数校验（≥5000）、复制后二次校验
+  2. 生成「启动 chan_kline.bat」自动设置 `CHAN_DATA_ROOT=%~dp0a_Data`
+  3. 修正 CI 标签归并（`win-v1.0.10-*` → Release `v1.0.10`），重新触发构建
+- **结果**：v1.0.10 Release 的 `chan_kline-windows-x64.zip` 已更新（含 a_Data 7327 项 + 启动脚本）；CI run 成功
+- **演示**：解压 zip → 双击「启动 chan_kline.bat」→ 应能加载 002003
+- **注意事项**：若直接双击 exe 需手设 `CHAN_DATA_ROOT`；长期可在 Flutter 侧加 exe 旁 a_Data 自动发现（需确认执行）
+

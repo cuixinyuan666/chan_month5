@@ -70,7 +70,13 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "tag=${{ github.event.inputs.release_tag }}" >> "$GITHUB_OUTPUT"
           else
-            echo "tag=${GITHUB_REF_NAME#win-}" >> "$GITHUB_OUTPUT"
+            # win-v1.0.10 / win-v1.0.10-adata 等均归并到 v1.0.10
+            raw="${GITHUB_REF_NAME#win-}"
+            if [[ "$raw" =~ ^(v[0-9]+\.[0-9]+\.[0-9]+) ]]; then
+              echo "tag=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+            else
+              echo "tag=$raw" >> "$GITHUB_OUTPUT"
+            fi
           fi
 
       - name: 上传到 GitHub Release
