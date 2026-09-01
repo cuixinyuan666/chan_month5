@@ -355,22 +355,31 @@ class LevelBundle {
     this.pendingUnit,
   });
 
-  factory LevelBundle.fromJson(Map<String, dynamic> json) {
+  factory LevelBundle.fromJson(
+    Map<String, dynamic> json, {
+    bool slim = false,
+  }) {
     return LevelBundle(
       level: (json['level'] as num?)?.toInt() ?? 1,
       confirms: (json['confirms'] as List? ?? const [])
           .map((e) => LevelConfirm.fromJson(Map<String, dynamic>.from(e as Map)))
           .toList(),
-      segments: (json['segments'] as List? ?? const [])
-          .map((e) => LevelSegmentN.fromJson(Map<String, dynamic>.from(e as Map)))
-          .toList(),
+      segments: slim
+          ? const []
+          : (json['segments'] as List? ?? const [])
+              .map((e) => LevelSegmentN.fromJson(Map<String, dynamic>.from(e as Map)))
+              .toList(),
       unitBars: (json['unit_bars'] as List? ?? const [])
           .map((e) => LevelUnitBar.fromJson(Map<String, dynamic>.from(e as Map)))
           .toList(),
-      combineFrames: (json['combine_frames'] as List? ?? const [])
-          .map((e) =>
-              KlineCombineFrame.fromJson(Map<String, dynamic>.from(e as Map)))
-          .toList(),
+      combineFrames: slim
+          ? const []
+          : (json['combine_frames'] as List? ?? const [])
+              .map(
+                (e) =>
+                    KlineCombineFrame.fromJson(Map<String, dynamic>.from(e as Map)),
+              )
+              .toList(),
       zsFrames: (json['zs_frames'] as List? ?? const [])
           .map((e) => ZSFrame.fromJson(Map<String, dynamic>.from(e as Map)))
           .toList(),

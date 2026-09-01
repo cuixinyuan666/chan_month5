@@ -16,7 +16,10 @@ class PipelineDelta {
     required this.structure,
   });
 
-  factory PipelineDelta.fromJson(Map<String, dynamic> json) {
+  factory PipelineDelta.fromJson(
+    Map<String, dynamic> json, {
+    bool slim = false,
+  }) {
     final rawFeat = json['bar_feature'];
     if (rawFeat is! Map) {
       throw FormatException('PipelineDelta 缺少 bar_feature');
@@ -26,7 +29,7 @@ class PipelineDelta {
       barFeature: BarCrosshairFeature.fromJson(
         Map<String, dynamic>.from(rawFeat),
       ),
-      structure: KlineCombineBundle.fromJson(json),
+      structure: KlineCombineBundle.fromJson(json, slim: slim),
     );
   }
 }

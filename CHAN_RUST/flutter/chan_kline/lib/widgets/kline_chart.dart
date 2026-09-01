@@ -152,6 +152,7 @@ class KlineChart extends StatefulWidget {
     this.diverFreezeStore,
     this.chipOnlyMode = false,
     this.lookupEngine,
+    this.sessionAsOfBundle,
     this.strategySignals = const [],
     this.strategyFills = const [],
     this.strategyRoundBySignalId = const {},
@@ -245,6 +246,8 @@ class KlineChart extends StatefulWidget {
   final bool chipOnlyMode;
   /// 会话增量 Lookup；Painter / 十字 / chip 复用同一份，禁止各画一次 Full build。
   final IncrementalBarFeatureLookup? lookupEngine;
+  /// 步进当步仓：十字 asOf 优先取这份（与当时管道仓同构），未命中才回落 Full FFI。
+  final KlineCombineBundle? Function(int asOf)? sessionAsOfBundle;
 
   /// 策略买/卖点：有成交才画，位置用成交根；与缠论 1Ba 分开。
   final List<SignalEvent> strategySignals;
@@ -289,6 +292,9 @@ class _KlineChartState extends State<KlineChart> {
   /// tooltip 滚轮下翻（显示 tooltip 时接管滚轮，不缩放）
   final _tooltipScroll = ScrollController();
   int? _tooltipScrollBarIdx;
+  final GlobalKey _tooltipKey = GlobalKey();
+  /// 分笔刚进图：未做实质操作前全屏太极，操作后恢复圆点。
+  bool _tickIdleYinYang = true;
   bool _panning = false;
   Offset? _panStart;
   double _panStartYShift = 0;
@@ -353,6 +359,12 @@ class _KlineChartState extends State<KlineChart> {
     if (_zsAsOfCacheKey == asOf && _zsAsOfBundle != null) {
       return _zsAsOfBundle;
     }
+    final snap = widget.sessionAsOfBundle?.call(asOf);
+    if (snap != null) {
+      _zsAsOfCacheKey = asOf;
+      _zsAsOfBundle = snap;
+      return snap;
+    }
     final slice = widget.bars.where((b) => b.idx <= asOf).toList();
     if (slice.isEmpty) return null;
     try {
@@ -384,10 +396,16 @@ class _KlineChartState extends State<KlineChart> {
         if (_incAsOfLookupKey != asOf ||
             _incAsOfLookupGen != engine.gen ||
             _incAsOfByIdx == null) {
+          final bars = widget.bars;
+          final prefixBars = (asOf >= 0 &&
+                  asOf < bars.length &&
+                  bars[asOf].idx == asOf)
+              ? bars.sublist(0, asOf + 1)
+              : bars.where((b) => b.idx <= asOf).toList();
           final view = engine.asOfView(
             asOf: asOf,
             asOfBundle: asOfBundle,
-            prefixBars: widget.bars.where((b) => b.idx <= asOf).toList(),
+            prefixBars: prefixBars,
           );
           _incAsOfByIdx = view.byIdx;
           _incAsOfTotalLevels = view.totalLevels;
@@ -488,6 +506,7 @@ class _KlineChartState extends State<KlineChart> {
   void initState() {
     super.initState();
     _resetViewport();
+    _tickIdleYinYang = widget.period == 'tick';
     // 全局键盘监听：方向键←/→（十字线态=十字线左右移；非十字线态=步退/步进）
     HardwareKeyboard.instance.addHandler(_handleHardwareKey);
   }
@@ -519,6 +538,21 @@ class _KlineChartState extends State<KlineChart> {
       if (widget.autoFollowLatest) {
         _viewport.syncWindowOnStep(widget.bars.length - 1);
       }
+    }
+
+    if (seriesChanged) {
+      _zsAsOfCacheKey = null;
+      _zsAsOfBundle = null;
+      _incAsOfLookupKey = null;
+      _incAsOfByIdx = null;
+    }
+
+    if (widget.period != 'tick') {
+      _tickIdleYinYang = false;
+    } else if (seriesChanged) {
+      _tickIdleYinYang = true;
+    } else if (lenChanged) {
+      _clearTickIdleYinYang(rebuild: false);
     }
 
     if (lenChanged || seriesChanged) {
@@ -559,6 +593,13 @@ class _KlineChartState extends State<KlineChart> {
         widget.focusBarIdx != null) {
       _viewport.ensureBarVisible(widget.focusBarIdx!);
     }
+  }
+
+  /// 分笔进图后第一次实质操作：阴阳鱼换回圆点。
+  void _clearTickIdleYinYang({bool rebuild = true}) {
+    if (!_tickIdleYinYang) return;
+    _tickIdleYinYang = false;
+    if (rebuild && mounted) setState(() {});
   }
 
   /// 十字线跟随鼠标：竖线吸附 K 线中心，横线跟价格。鼠标移线解除贴右步进标记。
@@ -776,6 +817,7 @@ class _KlineChartState extends State<KlineChart> {
   }
 
   void _onWheel(PointerScrollEvent e, double mainPlotH) {
+    _clearTickIdleYinYang();
     if (widget.bars.isEmpty || !_viewport.ready || _chartSize.width <= 0) return;
 
     // 显示 tooltip：滚轮只翻信息框，不缩放 K 线；仅线(关tooltip)时仍可缩放
@@ -921,7 +963,7 @@ class _KlineChartState extends State<KlineChart> {
     return out;
   }
 
-  /// tooltip 锚点：十字线旁，尽量不挡价签
+  /// tooltip 锚点：钉在十字对侧上角，避免左右移时鼠标走进信息框。
   Offset _tooltipAnchor({
     required double chartW,
     required double contentBottom,
@@ -929,27 +971,36 @@ class _KlineChartState extends State<KlineChart> {
     required double maxW,
     required double maxH,
   }) {
-    final x = (_crosshairX ?? chartW / 2)
-        .clamp(KlineViewport.padL, math.max(KlineViewport.padL, chartW - KlineViewport.padR))
-        .toDouble();
-    final y = (_crosshairY ?? plotTop + 40)
-        .clamp(plotTop, math.max(plotTop, contentBottom))
-        .toDouble();
-    var boxX = x + 12;
-    if (boxX + maxW > chartW - KlineViewport.padR - 4) {
-      boxX = x - maxW - 12;
-    }
+    final x = (_crosshairX ?? chartW / 2).toDouble();
     final minBoxX = KlineViewport.padL + 4.0;
     final maxBoxX = chartW - KlineViewport.padR - maxW - 4;
+    // 十字在左半 → 框钉右上；在右半 → 框钉左上（躲开左上调节钮一点）
+    var boxX = x < chartW * 0.5
+        ? maxBoxX
+        : minBoxX + 36;
     boxX = boxX.clamp(minBoxX, math.max(minBoxX, maxBoxX));
-    var boxY = y - math.min(maxH, 220) - 10;
     final minBoxY = plotTop + 4.0;
-    final maxBoxY = contentBottom - 40;
-    boxY = boxY.clamp(minBoxY, math.max(minBoxY, maxBoxY));
+    final maxBoxY = math.max(minBoxY, contentBottom - 40);
+    final boxY = minBoxY.clamp(minBoxY, maxBoxY);
     return Offset(boxX, boxY);
   }
 
   void _onPointerDown(PointerDownEvent e) {
+    // 信息框整体不接鼠标；关闭钮按位置判定
+    if (_crosshairShowTooltip) {
+      final box = _tooltipKey.currentContext?.findRenderObject() as RenderBox?;
+      if (box != null && box.hasSize) {
+        final local = box.globalToLocal(e.position);
+        final close = Rect.fromLTWH(box.size.width - 32, 0, 32, 32);
+        if (close.contains(local)) {
+          _closeTooltipKeepCrosshair();
+          _zonePointerDown = null;
+          _zonePointerId = null;
+          _zoneMoved = false;
+          return;
+        }
+      }
+    }
     // 鼠标中键：快速显示(含十字)/隐藏 tooltip（不关十字线）
     if (e.buttons & kMiddleMouseButton != 0) {
       _toggleTooltipKeepCrosshair(e.localPosition);
@@ -1033,6 +1084,7 @@ class _KlineChartState extends State<KlineChart> {
   }
 
   void _cycleCrosshair(Offset pos, double plotTop, double contentBottom) {
+    _clearTickIdleYinYang(rebuild: false);
     setState(() {
       // 第一次开十字线+tooltip；第二次只关 tooltip；第三次全关恢复鼠标
       switch (_crosshairMode) {
@@ -1055,6 +1107,7 @@ class _KlineChartState extends State<KlineChart> {
 
   /// 中键：无十字→开十字+tooltip；有 tooltip→只藏 tooltip；仅线→再显 tooltip。
   void _toggleTooltipKeepCrosshair(Offset pos) {
+    _clearTickIdleYinYang(rebuild: false);
     final plotTop = _zonePlotTop;
     final contentBottom = _zoneContentBottom > 0
         ? _zoneContentBottom
@@ -1112,6 +1165,7 @@ class _KlineChartState extends State<KlineChart> {
 
   void _onZoneTapAt(Offset local, double plotTop, double contentBottom) {
     if (widget.bars.isEmpty) return;
+    _clearTickIdleYinYang();
     if (_tryTapStrategySignal(local, plotTop)) return;
 
     final zone = _hotZone(local);
@@ -1215,6 +1269,7 @@ class _KlineChartState extends State<KlineChart> {
 
   void _onPanStart(DragStartDetails d, double mainPlotH) {
     if (widget.mobileLayout || widget.bars.isEmpty || _splitDragging) return;
+    _clearTickIdleYinYang();
     _panning = true;
     _panStart = d.localPosition;
     _panStartViewMin = _viewport.viewXMin;
@@ -1242,6 +1297,7 @@ class _KlineChartState extends State<KlineChart> {
   /// 手机：单指平移；双指锁定轴向缩放（拖动 + 捏合）。
   void _onPinchScaleStart(ScaleStartDetails d) {
     if (!widget.mobileLayout || widget.bars.isEmpty) return;
+    _clearTickIdleYinYang();
     // 十字线开启：单指/双指都只跟线，禁止缩放抢手势
     if (_crosshairEnabled) {
       _pinchScaling = false;
@@ -1350,6 +1406,7 @@ class _KlineChartState extends State<KlineChart> {
 
   void _toggleMainIndicatorPicker() {
     if (!widget.indicatorsEnabled) return;
+    _clearTickIdleYinYang(rebuild: false);
     setState(() {
       _pickerPane = _pickerPane == _IndicatorPickerPane.main
           ? _IndicatorPickerPane.none
@@ -1359,6 +1416,7 @@ class _KlineChartState extends State<KlineChart> {
 
   void _toggleSubIndicatorPicker() {
     if (!widget.indicatorsEnabled) return;
+    _clearTickIdleYinYang(rebuild: false);
     setState(() {
       _pickerPane = _pickerPane == _IndicatorPickerPane.sub
           ? _IndicatorPickerPane.none
@@ -1402,20 +1460,23 @@ class _KlineChartState extends State<KlineChart> {
   }
 
   Widget _buildMainIndicatorToggleButton() {
-    return Material(
-      color: const Color(0xCC1A1A1A),
-      borderRadius: BorderRadius.circular(4),
-      child: InkWell(
+    return Opacity(
+      opacity: 0.42,
+      child: Material(
+        color: const Color(0x22111111),
         borderRadius: BorderRadius.circular(4),
-        onTap: _toggleMainIndicatorPicker,
-        child: Padding(
-          padding: const EdgeInsets.all(6),
-          child: Icon(
-            _pickerPane == _IndicatorPickerPane.main
-                ? Icons.expand_less
-                : Icons.expand_more,
-            size: 18,
-            color: const Color(0xFFE2E8F0),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(4),
+          onTap: _toggleMainIndicatorPicker,
+          child: Padding(
+            padding: const EdgeInsets.all(6),
+            child: Icon(
+              _pickerPane == _IndicatorPickerPane.main
+                  ? Icons.expand_less
+                  : Icons.expand_more,
+              size: 18,
+              color: const Color(0x99AAAAAA),
+            ),
           ),
         ),
       ),
@@ -1423,20 +1484,23 @@ class _KlineChartState extends State<KlineChart> {
   }
 
   Widget _buildSubIndicatorToggleButton() {
-    return Material(
-      color: const Color(0xCC1A1A1A),
-      borderRadius: BorderRadius.circular(4),
-      child: InkWell(
+    return Opacity(
+      opacity: 0.42,
+      child: Material(
+        color: const Color(0x22111111),
         borderRadius: BorderRadius.circular(4),
-        onTap: _toggleSubIndicatorPicker,
-        child: Padding(
-          padding: const EdgeInsets.all(6),
-          child: Icon(
-            _pickerPane == _IndicatorPickerPane.sub
-                ? Icons.expand_less
-                : Icons.expand_more,
-            size: 18,
-            color: const Color(0xFFE2E8F0),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(4),
+          onTap: _toggleSubIndicatorPicker,
+          child: Padding(
+            padding: const EdgeInsets.all(6),
+            child: Icon(
+              _pickerPane == _IndicatorPickerPane.sub
+                  ? Icons.expand_less
+                  : Icons.expand_more,
+              size: 18,
+              color: const Color(0x99AAAAAA),
+            ),
           ),
         ),
       ),
@@ -1471,6 +1535,7 @@ class _KlineChartState extends State<KlineChart> {
       return;
     }
     _splitDragging = true;
+    _clearTickIdleYinYang();
     _splitDragStartY = e.localPosition.dy;
     _splitDragStartFraction = _mainFraction;
     _panning = false;
@@ -1581,6 +1646,7 @@ class _KlineChartState extends State<KlineChart> {
             _KlineCompositePainter(
               bars: widget.bars,
               period: widget.period,
+              tickIdleYinYang: _tickIdleYinYang,
               combineFrames: _effectiveK0CombineFrames,
               k0ConfirmSignals: paintK0Confirms,
               barFeatures: widget.barFeatures,
@@ -1645,7 +1711,7 @@ class _KlineChartState extends State<KlineChart> {
         final overlayTop = widget.mobileLayout
             ? MediaQuery.paddingOf(context).top
             : 0.0;
-        return Stack(
+        final tree = Stack(
           clipBehavior: Clip.hardEdge,
           children: [
             // A：底图 / 筹码 / 十字 三层独立重绘
@@ -1708,10 +1774,9 @@ class _KlineChartState extends State<KlineChart> {
                         child: const SizedBox.expand(),
                       ),
                     )
-                  : MouseRegion(
-                      cursor: cursor,
-                      onExit: (_) => _onPointerLeave(),
-                      onHover: (e) {
+                  : Listener(
+                      behavior: HitTestBehavior.opaque,
+                      onPointerHover: (e) {
                         if (!_panning) {
                           _updateCrosshairAt(
                             e.localPosition,
@@ -1720,37 +1785,34 @@ class _KlineChartState extends State<KlineChart> {
                           );
                         }
                       },
-                      child: Listener(
-                        behavior: HitTestBehavior.opaque,
-                        onPointerSignal: (e) {
-                          if (e is PointerScrollEvent) {
-                            _onWheel(
-                              e,
-                              mainH - KlineViewport.padT - KlineViewport.padB,
-                            );
-                          }
-                        },
-                        onPointerDown: _onPointerDown,
-                        onPointerMove: (e) => _onPointerMove(
-                          e,
+                      onPointerSignal: (e) {
+                        if (e is PointerScrollEvent) {
+                          _onWheel(
+                            e,
+                            mainH - KlineViewport.padT - KlineViewport.padB,
+                          );
+                        }
+                      },
+                      onPointerDown: _onPointerDown,
+                      onPointerMove: (e) => _onPointerMove(
+                        e,
+                        mainH - KlineViewport.padT - KlineViewport.padB,
+                        contentBottom,
+                      ),
+                      onPointerUp: _onPointerUp,
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.translucent,
+                        onLongPressStart: _onZoneLongPress,
+                        onPanStart: (d) => _onPanStart(
+                          d,
                           mainH - KlineViewport.padT - KlineViewport.padB,
-                          contentBottom,
                         ),
-                        onPointerUp: _onPointerUp,
-                        child: GestureDetector(
-                          behavior: HitTestBehavior.opaque,
-                          onLongPressStart: _onZoneLongPress,
-                          onPanStart: (d) => _onPanStart(
-                            d,
-                            mainH - KlineViewport.padT - KlineViewport.padB,
-                          ),
-                          onPanUpdate: (d) => _onPanUpdate(
-                            d,
-                            mainH - KlineViewport.padT - KlineViewport.padB,
-                          ),
-                          onPanEnd: _onPanEnd,
-                          child: const SizedBox.expand(),
+                        onPanUpdate: (d) => _onPanUpdate(
+                          d,
+                          mainH - KlineViewport.padT - KlineViewport.padB,
                         ),
+                        onPanEnd: _onPanEnd,
+                        child: const SizedBox.expand(),
                       ),
                     ),
             ),
@@ -1774,12 +1836,16 @@ class _KlineChartState extends State<KlineChart> {
                 return Positioned(
                   left: anchor.dx,
                   top: anchor.dy,
-                  child: CrosshairTooltipPanel(
-                    rows: rows,
-                    scrollController: _tooltipScroll,
-                    maxWidth: maxW,
-                    maxHeight: maxH,
-                    onClose: _closeTooltipKeepCrosshair,
+                  child: IgnorePointer(
+                    ignoring: true,
+                    key: _tooltipKey,
+                    child: CrosshairTooltipPanel(
+                      rows: rows,
+                      scrollController: _tooltipScroll,
+                      maxWidth: maxW,
+                      maxHeight: maxH,
+                      onClose: _closeTooltipKeepCrosshair,
+                    ),
                   ),
                 );
               }),
@@ -1791,7 +1857,9 @@ class _KlineChartState extends State<KlineChart> {
                 top: mainH - 14,
                 height: 28,
                 child: Center(
-                  child: Listener(
+                  child: Opacity(
+                    opacity: 0.42,
+                    child: Listener(
                     behavior: HitTestBehavior.opaque,
                     onPointerDown: _onSplitDown,
                     onPointerMove: _onSplitMove,
@@ -1803,12 +1871,12 @@ class _KlineChartState extends State<KlineChart> {
                         height: 22,
                         decoration: BoxDecoration(
                           color: _splitDragging
-                              ? const Color(0xDD1E3A5F)
-                              : const Color(0xCC1A1A1A),
+                              ? const Color(0x551E3A5F)
+                              : const Color(0x33111111),
                           border: Border.all(
                             color: _splitDragging
-                                ? const Color(0xFF42A5F5)
-                                : const Color(0x55FFFFFF),
+                                ? const Color(0x6642A5F5)
+                                : const Color(0x22AAAAAA),
                           ),
                           borderRadius: BorderRadius.circular(11),
                         ),
@@ -1816,11 +1884,12 @@ class _KlineChartState extends State<KlineChart> {
                           Icons.drag_handle,
                           size: 16,
                           color: _splitDragging
-                              ? const Color(0xFF42A5F5)
-                              : const Color(0xFFE2E8F0),
+                              ? const Color(0x8842A5F5)
+                              : const Color(0x66888888),
                         ),
                       ),
                     ),
+                  ),
                   ),
                 ),
               ),
@@ -1856,6 +1925,18 @@ class _KlineChartState extends State<KlineChart> {
             _buildIndicatorPickerOverlay(),
           ],
         );
+        if (widget.mobileLayout) return tree;
+        // 外层跟鼠标：信息框是子孙，划过信息框十字仍更新（勿把 MouseRegion 放在信息框下面当兄弟）
+        return MouseRegion(
+          cursor: cursor,
+          onExit: (_) => _onPointerLeave(),
+          onHover: (e) {
+            if (!_panning) {
+              _updateCrosshairAt(e.localPosition, plotTop, contentBottom);
+            }
+          },
+          child: tree,
+        );
       },
     );
   }
@@ -1873,6 +1954,7 @@ class _KlineCompositePainter extends CustomPainter {
   _KlineCompositePainter({
     required this.bars,
     this.period = 'tick',
+    this.tickIdleYinYang = false,
     required this.combineFrames,
     required this.k0ConfirmSignals,
     required this.barFeatures,
@@ -1935,6 +2017,8 @@ class _KlineCompositePainter extends CustomPainter {
   final _ChartPaintLayer layer;
   final List<KlineBar> bars;
   final String period;
+  /// 分笔刚进图、尚未操作：画稍小阴阳鱼。
+  final bool tickIdleYinYang;
   final List<KlineCombineFrame> combineFrames;
   final List<K0ConfirmSignal> k0ConfirmSignals;
   final List<BarCrosshairFeature> barFeatures;
@@ -6315,6 +6399,7 @@ class _KlineCompositePainter extends CustomPainter {
         oldDelegate.priceRange.max != priceRange.max;
     final dataChanged = oldDelegate.bars != bars ||
         oldDelegate.period != period ||
+        oldDelegate.tickIdleYinYang != tickIdleYinYang ||
         oldDelegate.combineFrames != combineFrames ||
         oldDelegate.k0ConfirmSignals != k0ConfirmSignals ||
         oldDelegate.barFeatures != barFeatures ||

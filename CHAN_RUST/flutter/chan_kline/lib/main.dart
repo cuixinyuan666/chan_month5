@@ -83,6 +83,7 @@ import 'models/trend_model_config.dart';
 import 'widgets/datetime_picker_dialog.dart';
 import 'widgets/edge_control_panel.dart';
 import 'widgets/kline_chart.dart';
+import 'widgets/yin_yang_mark.dart';
 import 'widgets/test_ohlc_editor_dialog.dart';
 import 'task_demo/task_demo_compare_page.dart';
 import 'task_demo/task_demo_data_loader.dart';
@@ -146,6 +147,7 @@ Future<void> main() async {
   MsgHistory.instance.appendBsOnlineVerdict();
   MsgHistory.instance.appendPipelineStateSession();
   MsgHistory.instance.appendIncrementalLookup();
+  MsgHistory.instance.appendSessionAsOfSnapshot();
   // Kn相邻比例 + Kn步进节奏（节奏已迁主图）
   MsgHistory.instance.appendAdjacentRatioAndStepRhythm();
   MsgHistory.instance.appendStepRhythmToMainAndTipCats();
@@ -182,6 +184,8 @@ Future<void> main() async {
   MsgHistory.instance.appendAndroidMobileLayout();
   MsgHistory.instance.appendAndroidTouchUiAndBacktestSplit();
   MsgHistory.instance.appendDualPlatformUiOptimization();
+  MsgHistory.instance.appendTickLoadYinYangAndTooltipPass();
+  MsgHistory.instance.appendTickYinYangFullscreen();
   MsgHistory.instance.appendAuditProbeCopyButton();
   MsgHistory.instance.appendAuditFixBsZsFeature();
   MsgHistory.instance.appendAuditBatch2ProbePeakAsOf();
@@ -329,6 +333,9 @@ class _KlineHomePageState extends State<KlineHomePage> {
   String _defaultK0Policy = 'pending';
   bool _bootstrapping = false;
   bool _loadingChart = false;
+  /// 分笔：加载中/刚进图时铺满屏幕太极；点一下或步进后收起。
+  bool _tickYinYangCover = false;
+  bool _runningToEnd = false;
   bool _panelExpanded = false;
   int _panelEdge = 1; // 默认右贴边（设置按钮在右上）
   /// Android 设置抽屉局部刷新（开关即时反馈）
@@ -456,6 +463,32 @@ class _KlineHomePageState extends State<KlineHomePage> {
 
   bool get _busy => _bootstrapping || _loadingChart;
   bool get _hasSession => _allBars.isNotEmpty;
+
+  /// 其它周期加载用小转圈；分笔走全屏太极层。
+  Widget _chartLoadingIndicator() {
+    return const SizedBox(
+      width: 22,
+      height: 22,
+      child: CircularProgressIndicator(strokeWidth: 2),
+    );
+  }
+
+  void _dismissTickYinYang() {
+    if (!_tickYinYangCover) return;
+    setState(() => _tickYinYangCover = false);
+  }
+
+  /// 分笔太极铺满整个窗口（拉成窗口矩形），点一下收起。
+  Widget _buildTickYinYangOverlay(BuildContext context) {
+    return Positioned.fill(
+      child: Listener(
+        behavior: HitTestBehavior.opaque,
+        onPointerDown: _loadingChart ? null : (_) => _dismissTickYinYang(),
+        child: const YinYangFullscreenCover(),
+      ),
+    );
+  }
+
   int get _visibleCount => _stepIdx < 0 ? 0 : math.min(_stepIdx + 1, _allBars.length);
   List<KlineBar> get _visibleBars =>
       _visibleCount <= 0 ? const [] : _allBars.sublist(0, _visibleCount);
@@ -643,7 +676,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
     _pipelineSession = null;
   }
 
-  /// 取与可见前缀同步的 bundle：前进 append，步退/变短 reset+replay
+  /// 取与可见前缀同步的 bundle：前进 append；步退优先当步仓，无仓才 reset+replay
   KlineCombineBundle _bundleForVisible(List<KlineBar> visible) {
     if (_pipelineSession == null ||
         !_pipelineSession!.isAlive ||
@@ -842,6 +875,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
     setState(() {
       _loadingChart = true;
       _error = null;
+      _tickYinYangCover = _period == 'tick';
     });
     _disposePipelineSession();
     try {
@@ -979,15 +1013,18 @@ class _KlineHomePageState extends State<KlineHomePage> {
     required List<LevelBundle> levels,
     required List<BarCrosshairFeature> barFeatures,
     required List<K0Line> k0Lines,
+    bool copyForPaint = true,
   }) {
     if (bars.isEmpty) return;
     // 方案B：分型判断 kn=0..chartMaxKn-1
     final maxKnProbe = chartMaxKn(levels: levels, k0Lines: k0Lines);
     final knHi = maxKnProbe < 1 ? 1 : maxKnProbe;
-    final nextHistory = <int, List<FractalJudgmentEvent>>{
-      for (final e in _judgmentHistoryByKn.entries)
-        e.key: List<FractalJudgmentEvent>.from(e.value),
-    };
+    final nextHistory = copyForPaint
+        ? <int, List<FractalJudgmentEvent>>{
+            for (final e in _judgmentHistoryByKn.entries)
+              e.key: List<FractalJudgmentEvent>.from(e.value),
+          }
+        : _judgmentHistoryByKn;
     for (var kn = 0; kn < knHi; kn++) {
       final log = nextHistory.putIfAbsent(kn, () => <FractalJudgmentEvent>[]);
       mergeFractalJudgmentEventLog(
@@ -1006,16 +1043,23 @@ class _KlineHomePageState extends State<KlineHomePage> {
 
   /// 本步中枢帧 → 判断/确认会话历史（先确认后判断；确认同拍共点）。
   /// 返回各层本步新确认的 x1（供背驰本枢启动）。
-  Map<int, Set<int>> _mergeZsSignalHistory(KlineCombineBundle bundle) {
+  Map<int, Set<int>> _mergeZsSignalHistory(
+    KlineCombineBundle bundle, {
+    bool copyForPaint = true,
+  }) {
     final discoveryX = _stepIdx < 0 ? 0 : _stepIdx;
-    final nextJudge = <int, List<ZsSignalEvent>>{
-      for (final e in _zsJudgmentHistoryByKn.entries)
-        e.key: List<ZsSignalEvent>.from(e.value),
-    };
-    final nextConfirm = <int, List<ZsSignalEvent>>{
-      for (final e in _zsConfirmHistoryByKn.entries)
-        e.key: List<ZsSignalEvent>.from(e.value),
-    };
+    final nextJudge = copyForPaint
+        ? <int, List<ZsSignalEvent>>{
+            for (final e in _zsJudgmentHistoryByKn.entries)
+              e.key: List<ZsSignalEvent>.from(e.value),
+          }
+        : _zsJudgmentHistoryByKn;
+    final nextConfirm = copyForPaint
+        ? <int, List<ZsSignalEvent>>{
+            for (final e in _zsConfirmHistoryByKn.entries)
+              e.key: List<ZsSignalEvent>.from(e.value),
+          }
+        : _zsConfirmHistoryByKn;
     final confirmedByKn = <int, Set<int>>{};
     final collected = collectZsFramesByKn(bundle);
     _zsObjectStore.ingestCollected(collected, asOf: discoveryX);
@@ -1055,32 +1099,44 @@ class _KlineHomePageState extends State<KlineHomePage> {
 
   /// 把本步 Rust 一类/二类/三类+BS 并入会话历史。
   /// 对齐分型判断：K0 步进颗粒度；传 activeSegIdx 使动态 Kn 延伸步仍追加本步 x。
-  void _mergeBsHistory(KlineCombineBundle bundle) {
+  void _mergeBsHistory(KlineCombineBundle bundle, {bool copyForPaint = true}) {
     final discoveryX = _stepIdx < 0 ? 0 : _stepIdx;
-    final nextBuy = <int, List<Buy1Frame>>{
-      for (final e in _buy1HistoryByKn.entries)
-        e.key: List<Buy1Frame>.from(e.value),
-    };
-    final nextSell = <int, List<Sell1Frame>>{
-      for (final e in _sell1HistoryByKn.entries)
-        e.key: List<Sell1Frame>.from(e.value),
-    };
-    final nextBuy2 = <int, List<Buy2Frame>>{
-      for (final e in _buy2HistoryByKn.entries)
-        e.key: List<Buy2Frame>.from(e.value),
-    };
-    final nextSell2 = <int, List<Sell2Frame>>{
-      for (final e in _sell2HistoryByKn.entries)
-        e.key: List<Sell2Frame>.from(e.value),
-    };
-    final nextBuyN = <int, List<BuyNFrame>>{
-      for (final e in _buyNHistoryByKn.entries)
-        e.key: List<BuyNFrame>.from(e.value),
-    };
-    final nextSellN = <int, List<SellNFrame>>{
-      for (final e in _sellNHistoryByKn.entries)
-        e.key: List<SellNFrame>.from(e.value),
-    };
+    final nextBuy = copyForPaint
+        ? <int, List<Buy1Frame>>{
+            for (final e in _buy1HistoryByKn.entries)
+              e.key: List<Buy1Frame>.from(e.value),
+          }
+        : _buy1HistoryByKn;
+    final nextSell = copyForPaint
+        ? <int, List<Sell1Frame>>{
+            for (final e in _sell1HistoryByKn.entries)
+              e.key: List<Sell1Frame>.from(e.value),
+          }
+        : _sell1HistoryByKn;
+    final nextBuy2 = copyForPaint
+        ? <int, List<Buy2Frame>>{
+            for (final e in _buy2HistoryByKn.entries)
+              e.key: List<Buy2Frame>.from(e.value),
+          }
+        : _buy2HistoryByKn;
+    final nextSell2 = copyForPaint
+        ? <int, List<Sell2Frame>>{
+            for (final e in _sell2HistoryByKn.entries)
+              e.key: List<Sell2Frame>.from(e.value),
+          }
+        : _sell2HistoryByKn;
+    final nextBuyN = copyForPaint
+        ? <int, List<BuyNFrame>>{
+            for (final e in _buyNHistoryByKn.entries)
+              e.key: List<BuyNFrame>.from(e.value),
+          }
+        : _buyNHistoryByKn;
+    final nextSellN = copyForPaint
+        ? <int, List<SellNFrame>>{
+            for (final e in _sellNHistoryByKn.entries)
+              e.key: List<SellNFrame>.from(e.value),
+          }
+        : _sellNHistoryByKn;
     for (final e in collectBuy1EventsByKn(bundle).entries) {
       final log = nextBuy.putIfAbsent(e.key, () => <Buy1Frame>[]);
       mergeBuy1EventLog(
@@ -1141,10 +1197,12 @@ class _KlineHomePageState extends State<KlineHomePage> {
     _sell2HistoryByKn = nextSell2;
     _buyNHistoryByKn = nextBuyN;
     _sellNHistoryByKn = nextSellN;
-    final nextVerdict = <int, List<BsVerdictFrame>>{
-      for (final e in _bsVerdictHistoryByKn.entries)
-        e.key: List<BsVerdictFrame>.from(e.value),
-    };
+    final nextVerdict = copyForPaint
+        ? <int, List<BsVerdictFrame>>{
+            for (final e in _bsVerdictHistoryByKn.entries)
+              e.key: List<BsVerdictFrame>.from(e.value),
+          }
+        : _bsVerdictHistoryByKn;
     for (final e in collectBsVerdictByKn(bundle).entries) {
       final log = nextVerdict.putIfAbsent(e.key, () => <BsVerdictFrame>[]);
       mergeBsVerdictLog(log, e.value);
@@ -1154,18 +1212,23 @@ class _KlineHomePageState extends State<KlineHomePage> {
 
   /// 本步相邻比例 + 步进节奏 + 连线斜率并入会话（全层；禁止整表覆盖消点）。
   /// 指标遵循动态计算：传入 bars/barFeatures，子线含展示轨虚线。
-  void _mergeRatioAndRhythm(KlineCombineBundle bundle) {
+  void _mergeRatioAndRhythm(
+    KlineCombineBundle bundle, {
+    List<KlineBar>? bars,
+    bool copyForPaint = true,
+  }) {
     final displayX = _stepIdx < 0 ? 0 : _stepIdx;
     final maxKn = chartMaxKn(levels: bundle.levels, k0Lines: bundle.k0Lines);
     // 连线显示层 0..maxKn-1
     final maxDisplayKn = maxKn <= 0 ? -1 : maxKn - 1;
     if (maxDisplayKn < 0) return;
+    final vis = bars ?? _visibleBars;
     mergeAdjacentRatioForStep(
       historyByKn: _adjacentRatioHistoryByKn,
       levels: bundle.levels,
       displayX: displayX,
       maxDisplayKn: maxDisplayKn,
-      bars: _visibleBars,
+      bars: vis,
       barFeatures: bundle.barFeatures,
       truncationCheck: _truncationCheck,
     );
@@ -1175,7 +1238,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       levels: bundle.levels,
       displayX: displayX,
       maxDisplayKn: maxDisplayKn,
-      bars: _visibleBars,
+      bars: vis,
       barFeatures: bundle.barFeatures,
       truncationCheck: _truncationCheck,
     );
@@ -1184,10 +1247,11 @@ class _KlineHomePageState extends State<KlineHomePage> {
       levels: bundle.levels,
       displayX: displayX,
       maxDisplayKn: maxDisplayKn,
-      bars: _visibleBars,
+      bars: vis,
       barFeatures: bundle.barFeatures,
       truncationCheck: _truncationCheck,
     );
+    if (!copyForPaint) return;
     // 新 Map 引用，便于 painter shouldRepaint 感知
     _adjacentRatioHistoryByKn = {
       for (final e in _adjacentRatioHistoryByKn.entries)
@@ -1208,6 +1272,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
     KlineCombineBundle bundle, {
     List<KlineBar>? bars,
     int? asOf,
+    bool ingestChip = true,
   }) {
     final visible = bars ?? _visibleBars;
     if (visible.isEmpty) return;
@@ -1221,6 +1286,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       maxDisplayKn: maxKn,
       asOf: displayX,
     );
+    if (!ingestChip) return;
     _chipPeakStore.ingestThrough(
       asOf: displayX,
       bars: visible,
@@ -1284,7 +1350,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
     );
   }
 
-  void _rebuildCombine() {
+  void _rebuildCombine({bool skipFreezeMerge = false}) {
     if (_chipOnlyMode) return;
     if (_visibleBars.isEmpty) {
       _pipelineSession?.cache.reset();
@@ -1343,19 +1409,25 @@ class _KlineHomePageState extends State<KlineHomePage> {
         virtualBars = const [];
       }
       final k1Views = buildK1BarViews(virtualBars);
-      // 本步展示轨判断事件 → 追加进会话日志
-      _mergeJudgmentHistory(
-        bars: _visibleBars,
-        levels: bundle.levels,
-        barFeatures: bundle.barFeatures,
-        k0Lines: bundle.k0Lines,
-      );
-      // 会话冻结：并入本步一类BS，禁止下一步整表覆盖消掉上步显示
-      _mergeBsHistory(bundle);
-      final zsConfirmed = _mergeZsSignalHistory(bundle);
-      _mergeRatioAndRhythm(bundle);
-      _mergeMathFreeze(bundle);
-      _mergeDivergenceFreeze(bundle, confirmedX1ByKn: zsConfirmed);
+      // 管道仍长于画面：步退用当步仓，冻结历史已有，禁止再合并
+      final sessNow = _pipelineSession;
+      final asofKeep = sessNow != null && sessNow.len > _visibleCount;
+      Map<int, Set<int>> zsConfirmed = const {};
+      if (!asofKeep && !skipFreezeMerge) {
+        // 本步展示轨判断事件 → 追加进会话日志
+        _mergeJudgmentHistory(
+          bars: _visibleBars,
+          levels: bundle.levels,
+          barFeatures: bundle.barFeatures,
+          k0Lines: bundle.k0Lines,
+        );
+        // 会话冻结：并入本步一类BS，禁止下一步整表覆盖消掉上步显示
+        _mergeBsHistory(bundle);
+        zsConfirmed = _mergeZsSignalHistory(bundle);
+        _mergeRatioAndRhythm(bundle);
+        _mergeMathFreeze(bundle);
+        _mergeDivergenceFreeze(bundle, confirmedX1ByKn: zsConfirmed);
+      }
       _syncPresentationLookup(_visibleBars, bundle);
       final frozenLevels = _levelsWithFrozenBs(bundle.levels);
       setState(() {
@@ -1526,25 +1598,38 @@ class _KlineHomePageState extends State<KlineHomePage> {
       return;
     }
     setState(() => _playing = true);
+    _dismissTickYinYang();
     _refreshKeepAlive();
-    // 异步步进：先让出事件循环，优先消化左/中/右点击（尤其暂停），再做重算
-    _playTimer = Timer.periodic(const Duration(milliseconds: 120), (_) async {
-      if (!mounted || !_playing) return;
-      if (_stepIdx >= _allBars.length - 1) {
-        _stopPlay();
-        setState(() {});
-        return;
-      }
-      setState(() => _stepIdx += 1);
-      await Future<void>.delayed(Duration.zero);
-      if (!mounted || !_playing) return;
-      _rebuildCombine();
+    unawaited(_playNextTick());
+  }
+
+  /// 链式播放：重算后再等至少一帧，避免 periodic 在重算>120ms 时把步进叠死。
+  Future<void> _playNextTick() async {
+    _playTimer?.cancel();
+    _playTimer = null;
+    if (!mounted || !_playing) return;
+    if (_stepIdx >= _allBars.length - 1) {
+      _stopPlay();
+      setState(() {});
+      return;
+    }
+    setState(() => _stepIdx += 1);
+    await Future<void>.delayed(Duration.zero);
+    if (!mounted || !_playing) return;
+    final sw = Stopwatch()..start();
+    _rebuildCombine();
+    if (!mounted || !_playing) return;
+    final elapsed = sw.elapsedMilliseconds;
+    final wait = math.max(16, 120 - elapsed);
+    _playTimer = Timer(Duration(milliseconds: wait), () {
+      unawaited(_playNextTick());
     });
   }
 
   void _stepForward() {
     if (!_hasSession || _stepIdx >= _allBars.length - 1) return;
     _stopPlay();
+    _dismissTickYinYang();
     setState(() => _stepIdx += 1);
     _rebuildCombine();
   }
@@ -1552,6 +1637,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
   void _stepBack() {
     if (!_hasSession || _stepIdx <= 0) return;
     _stopPlay();
+    _dismissTickYinYang();
     setState(() => _stepIdx -= 1);
     _rebuildCombine();
   }
@@ -1559,12 +1645,13 @@ class _KlineHomePageState extends State<KlineHomePage> {
   void _resetStep() {
     if (!_hasSession) return;
     _stopPlay();
+    _dismissTickYinYang();
     setState(() => _stepIdx = 0);
     _rebuildCombine();
   }
 
-  void _runToEnd({MlBspSampler? mlSampler}) {
-    if (!_hasSession) return;
+  Future<void> _runToEnd({MlBspSampler? mlSampler}) async {
+    if (!_hasSession || _runningToEnd) return;
     _stopPlay();
     final end = _allBars.length - 1;
     final start = _stepIdx < 0 ? 0 : _stepIdx;
@@ -1580,73 +1667,106 @@ class _KlineHomePageState extends State<KlineHomePage> {
       );
       return;
     }
-    for (var i = start; i <= end; i++) {
-      _stepIdx = i;
-      final visible = _allBars.sublist(0, i + 1);
-      try {
-        final bundle = _bundleForVisible(visible);
-        if (bundle.defaultK0Policy == 'purged') {
-          _defaultK0Purged = true;
+    _runningToEnd = true;
+    _dismissTickYinYang();
+    try {
+      final growing =
+          start > 0 ? _allBars.sublist(0, start) : <KlineBar>[];
+      final sess = _pipelineSession;
+      sess?.slimDeltaStructure = true;
+      for (var i = start; i <= end; i++) {
+        _stepIdx = i;
+        growing.add(_allBars[i]);
+        if (i == end) {
+          sess?.slimDeltaStructure = false;
         }
-        _mergeJudgmentHistory(
-          bars: visible,
-          levels: bundle.levels,
-          barFeatures: bundle.barFeatures,
-          k0Lines: bundle.k0Lines,
-        );
-        // 一类/二类BS 也逐K并入会话冻结，避免一次性走完只剩末态
-        _mergeBsHistory(bundle);
-        final zsConfirmed = _mergeZsSignalHistory(bundle);
-        _mergeRatioAndRhythm(bundle);
-        _mergeMathFreeze(bundle, bars: visible, asOf: i);
-        _mergeDivergenceFreeze(
-          bundle,
-          bars: visible,
-          asOf: i,
-          confirmedX1ByKn: zsConfirmed,
-        );
-        _syncPresentationLookup(visible, bundle);
-        // 仅 ML 路径：采 K0 一类 BS 当下特征（不改复盘语义）
-        mlSampler?.onStep(
-          stepIdx: i,
-          visibleBars: visible,
-          buy1K0: _buy1HistoryByKn[0] ?? const [],
-          sell1K0: _sell1HistoryByKn[0] ?? const [],
-          buildLookup: () => _buildMlLookupFor(
-            bars: visible,
-            combineFrames: bundle.frames,
-            k0Confirms: bundle.k0Confirms,
+        try {
+          final bundle = _bundleForVisible(growing);
+          if (bundle.defaultK0Policy == 'purged') {
+            _defaultK0Purged = true;
+          }
+          _mergeJudgmentHistory(
+            bars: growing,
+            levels: bundle.levels,
             barFeatures: bundle.barFeatures,
             k0Lines: bundle.k0Lines,
-            levels: bundle.levels,
-            k1CombineFrames: bundle.k1CombineFrames,
-            k1Analysis: bundle.k1Analysis,
-            zsK0Frames: bundle.zsK0Frames,
-          ),
-        );
-        // α：展望窗到期用**当步 live 一类**打标，不用跳末末态
-        if (mlSampler != null) {
-          final liveBuy = collectBuy1EventsByKn(bundle)[0] ?? const [];
-          final liveSell = collectSell1EventsByKn(bundle)[0] ?? const [];
-          MlBspLabeler.labelDueSamples(
-            samples: mlSampler.samples,
-            asOfIdx: i,
-            horizonBars: _mlLabelConfig.horizonBars,
-            isLastBar: i == end,
-            liveBuy1: liveBuy,
-            liveSell1: liveSell,
-            k0LinesAsOf: bundle.k0Lines,
-            barsAsOf: visible,
+            copyForPaint: false,
           );
+          // 一类/二类BS 也逐K并入会话冻结，避免一次性走完只剩末态
+          _mergeBsHistory(bundle, copyForPaint: false);
+          final zsConfirmed = _mergeZsSignalHistory(
+            bundle,
+            copyForPaint: false,
+          );
+          _mergeRatioAndRhythm(
+            bundle,
+            bars: growing,
+            copyForPaint: false,
+          );
+          _mergeMathFreeze(
+            bundle,
+            bars: growing,
+            asOf: i,
+            ingestChip: false,
+          );
+          _mergeDivergenceFreeze(
+            bundle,
+            bars: growing,
+            asOf: i,
+            confirmedX1ByKn: zsConfirmed,
+          );
+          // 画面只在末态刷新：循环内不刷 Lookup（冻结仍逐步 merge）
+          // 仅 ML 路径：采 K0 一类 BS 当下特征（不改复盘语义）
+          mlSampler?.onStep(
+            stepIdx: i,
+            visibleBars: growing,
+            buy1K0: _buy1HistoryByKn[0] ?? const [],
+            sell1K0: _sell1HistoryByKn[0] ?? const [],
+            buildLookup: () => _buildMlLookupFor(
+              bars: growing,
+              combineFrames: bundle.frames,
+              k0Confirms: bundle.k0Confirms,
+              barFeatures: bundle.barFeatures,
+              k0Lines: bundle.k0Lines,
+              levels: bundle.levels,
+              k1CombineFrames: bundle.k1CombineFrames,
+              k1Analysis: bundle.k1Analysis,
+              zsK0Frames: bundle.zsK0Frames,
+            ),
+          );
+          // α：展望窗到期用**当步 live 一类**打标，不用跳末末态
+          if (mlSampler != null) {
+            final liveBuy = collectBuy1EventsByKn(bundle)[0] ?? const [];
+            final liveSell = collectSell1EventsByKn(bundle)[0] ?? const [];
+            MlBspLabeler.labelDueSamples(
+              samples: mlSampler.samples,
+              asOfIdx: i,
+              horizonBars: _mlLabelConfig.horizonBars,
+              isLastBar: i == end,
+              liveBuy1: liveBuy,
+              liveSell1: liveSell,
+              k0LinesAsOf: bundle.k0Lines,
+              barsAsOf: growing,
+            );
+          }
+        } catch (e) {
+          _msgHistory.append('一次性走完@step=$i 失败：$e');
+          break;
         }
-      } catch (e) {
-        _msgHistory.append('一次性走完@step=$i 失败：$e');
-        break;
       }
+      final chipAsOf = growing.isEmpty ? end : growing.last.idx;
+      _chipPeakStore.ingestThrough(
+        asOf: chipAsOf,
+        bars: growing,
+        bucketStep: _chipConfig.bucketStep,
+      );
+      // 循环里已逐 K 合并冻结，末态只刷查表和画面，避免再合一遍
+      _rebuildCombine(skipFreezeMerge: true);
+      _logCombineSummary(prefix: '一次性走完');
+    } finally {
+      _pipelineSession?.slimDeltaStructure = false;
+      _runningToEnd = false;
     }
-    // 末态刷新图面（merge 幂等，不会删旧点）
-    _rebuildCombine();
-    _logCombineSummary(prefix: '一次性走完');
   }
 
   @override
@@ -1746,6 +1866,10 @@ class _KlineHomePageState extends State<KlineHomePage> {
               onCycleEdge: () => setState(() => _panelEdge = 1 - _panelEdge),
               child: _buildPanelBody(),
             ),
+          if (_period == 'tick' &&
+              (_loadingChart || _tickYinYangCover) &&
+              !_mlSession.isActive)
+            _buildTickYinYangOverlay(context),
           // 最上层：拖动区 + 设置 + 最小/最大/关闭
           Positioned(
             left: 0,
@@ -1754,14 +1878,10 @@ class _KlineHomePageState extends State<KlineHomePage> {
             height: 36,
             child: _buildCaptionBar(),
           ),
-          if (_loadingChart)
-            const Positioned(
-              top: 44,
-              right: 16,
-              child: SizedBox(
-                width: 22,
-                height: 22,
-                child: CircularProgressIndicator(strokeWidth: 2),
+          if (_loadingChart && _period != 'tick')
+            Positioned.fill(
+              child: IgnorePointer(
+                child: Center(child: _chartLoadingIndicator()),
               ),
             ),
           if (_taskDemoWalkActive &&
@@ -1872,6 +1992,10 @@ class _KlineHomePageState extends State<KlineHomePage> {
                 ),
               ),
             ),
+          if (_period == 'tick' &&
+              (_loadingChart || _tickYinYangCover) &&
+              !_mlSession.isActive)
+            _buildTickYinYangOverlay(context),
           if (!_mlSession.isActive)
             Positioned(
               top: topInset + 2,
@@ -1888,14 +2012,10 @@ class _KlineHomePageState extends State<KlineHomePage> {
                 ),
               ),
             ),
-          if (_loadingChart)
-            Positioned(
-              top: topInset + 8,
-              right: 52,
-              child: const SizedBox(
-                width: 22,
-                height: 22,
-                child: CircularProgressIndicator(strokeWidth: 2),
+          if (_loadingChart && _period != 'tick')
+            Positioned.fill(
+              child: IgnorePointer(
+                child: Center(child: _chartLoadingIndicator()),
               ),
             ),
           if (_taskDemoWalkActive &&
@@ -2879,6 +2999,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       stepRhythmHistoryByKn: _stepRhythmHistoryByKn,
       lineSlopeHistoryByKn: _lineSlopeHistoryByKn,
       lookupEngine: _pipelineSession?.cache.lookupEngine,
+      sessionAsOfBundle: (asOf) => _pipelineSession?.cache.snapshotAt(asOf),
       mainIndicators: _mainIndicators,
       onMainIndicatorsChanged: (v) => setState(() => _mainIndicators = v),
       subIndicators: _subIndicators,
@@ -2895,7 +3016,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       onTapStepForward: gesturesOn ? _stepForward : null,
       onLongPressReset: gesturesOn ? _resetStep : null,
       onLongPressReload: _busy ? null : _loadKlines,
-      onLongPressRunToEnd: gesturesOn ? _runToEnd : null,
+      onLongPressRunToEnd: gesturesOn ? () { unawaited(_runToEnd()); } : null,
       strategySignals: _backtestRun?.result?.signals ?? const [],
       strategyFills: _backtestRun?.result?.fills ?? const [],
       strategyRoundBySignalId: _backtestRun?.result == null
@@ -3001,7 +3122,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       });
       await Future<void>.delayed(Duration.zero);
       if (!mounted) return;
-      _runToEnd(mlSampler: _mlSampler);
+      await _runToEnd(mlSampler: _mlSampler);
       if (!mounted) return;
 
       setState(() {

@@ -163,6 +163,19 @@ int _listLen(dynamic binData) {
 }
 
 /// 内部复用：从 K0 系列出发，逐一累积各层确认门控系列。
+Map<int, List<double>> computeAllKnFromK0Series({
+  required List<double> k0Series,
+  required List<LevelBundle> levels,
+  required List<KlineBar> bars,
+}) {
+  return _computeAllKnFromK0(
+    k0Series: k0Series,
+    levels: levels,
+    bars: bars,
+  );
+}
+
+/// 内部复用：从 K0 系列出发，逐一累积各层确认门控系列。
 Map<int, List<double>> _computeAllKnFromK0({
   required List<double> k0Series,
   required List<LevelBundle> levels,

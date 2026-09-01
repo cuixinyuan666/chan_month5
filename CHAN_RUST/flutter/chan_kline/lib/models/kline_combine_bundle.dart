@@ -84,7 +84,10 @@ class KlineCombineBundle {
     this.bsVerdictK0Frames = const [],
   });
 
-  factory KlineCombineBundle.fromJson(Map<String, dynamic> json) {
+  factory KlineCombineBundle.fromJson(
+    Map<String, dynamic> json, {
+    bool slim = false,
+  }) {
     return KlineCombineBundle(
       frames: (json['frames'] as List? ?? const [])
           .map(
@@ -114,53 +117,68 @@ class KlineCombineBundle {
             ),
           )
           .toList(),
-      k1Analysis: json['k1_analysis'] is Map
-          ? K1AnalysisBundle.fromJson(
-              Map<String, dynamic>.from(json['k1_analysis'] as Map),
-            )
-          : K1AnalysisBundle.empty(),
-      k1Bars: (json['k1_bars'] as List? ?? const [])
-          .map(
-            (e) => K1Bar.fromJson(
-              Map<String, dynamic>.from(e as Map),
-            ),
-          )
-          .toList(),
-      k1CombineFrames: (json['k1_combine_frames'] as List? ?? const [])
-          .map(
-            (e) => KlineCombineFrame.fromJson(
-              Map<String, dynamic>.from(e as Map),
-            ),
-          )
-          .toList(),
+      k1Analysis: slim
+          ? K1AnalysisBundle.empty()
+          : json['k1_analysis'] is Map
+              ? K1AnalysisBundle.fromJson(
+                  Map<String, dynamic>.from(json['k1_analysis'] as Map),
+                )
+              : K1AnalysisBundle.empty(),
+      k1Bars: slim
+          ? const []
+          : (json['k1_bars'] as List? ?? const [])
+              .map(
+                (e) => K1Bar.fromJson(
+                  Map<String, dynamic>.from(e as Map),
+                ),
+              )
+              .toList(),
+      k1CombineFrames: slim
+          ? const []
+          : (json['k1_combine_frames'] as List? ?? const [])
+              .map(
+                (e) => KlineCombineFrame.fromJson(
+                  Map<String, dynamic>.from(e as Map),
+                ),
+              )
+              .toList(),
       defaultK0Policy: json['default_k0_policy'] as String? ?? 'pending',
       defaultSegmentPolicies: (json['default_segment_policies'] as List? ?? const [])
           .map((e) => e.toString())
           .toList(),
-      levelSegments: (json['level_segments'] as List? ?? const [])
-          .map(
-            (layer) => (layer as List)
-                .map(
-                  (e) => K0Line.fromJson(
-                    Map<String, dynamic>.from(e as Map),
-                  ),
-                )
-                .toList(),
-          )
-          .toList(),
-      levelVirtualUnits: (json['level_virtual_units'] as List? ?? const [])
-          .map(
-            (layer) => (layer as List)
-                .map(
-                  (e) => K1Bar.fromJson(
-                    Map<String, dynamic>.from(e as Map),
-                  ),
-                )
-                .toList(),
-          )
-          .toList(),
+      levelSegments: slim
+          ? const []
+          : (json['level_segments'] as List? ?? const [])
+              .map(
+                (layer) => (layer as List)
+                    .map(
+                      (e) => K0Line.fromJson(
+                        Map<String, dynamic>.from(e as Map),
+                      ),
+                    )
+                    .toList(),
+              )
+              .toList(),
+      levelVirtualUnits: slim
+          ? const []
+          : (json['level_virtual_units'] as List? ?? const [])
+              .map(
+                (layer) => (layer as List)
+                    .map(
+                      (e) => K1Bar.fromJson(
+                        Map<String, dynamic>.from(e as Map),
+                      ),
+                    )
+                    .toList(),
+              )
+              .toList(),
       levels: (json['levels'] as List? ?? const [])
-          .map((e) => LevelBundle.fromJson(Map<String, dynamic>.from(e as Map)))
+          .map(
+            (e) => LevelBundle.fromJson(
+              Map<String, dynamic>.from(e as Map),
+              slim: slim,
+            ),
+          )
           .toList(),
       zsK0Frames: (json['zs_k0_frames'] as List? ?? const [])
           .map((e) => ZSFrame.fromJson(Map<String, dynamic>.from(e as Map)))
@@ -187,6 +205,32 @@ class KlineCombineBundle {
           .map((e) =>
               BsVerdictFrame.fromJson(Map<String, dynamic>.from(e as Map)))
           .toList(),
+    );
+  }
+
+  /// 只换 bar_features（步退时用当前仓前缀补上 slim 快照里故意没钉的逐根特征）。
+  KlineCombineBundle withBarFeatures(List<BarCrosshairFeature> feats) {
+    return KlineCombineBundle(
+      frames: frames,
+      k0Confirms: k0Confirms,
+      barFeatures: feats,
+      k0Lines: k0Lines,
+      k1Analysis: k1Analysis,
+      k1Bars: k1Bars,
+      k1CombineFrames: k1CombineFrames,
+      defaultK0Policy: defaultK0Policy,
+      defaultSegmentPolicies: defaultSegmentPolicies,
+      levelSegments: levelSegments,
+      levelVirtualUnits: levelVirtualUnits,
+      levels: levels,
+      zsK0Frames: zsK0Frames,
+      buy1K0Frames: buy1K0Frames,
+      sell1K0Frames: sell1K0Frames,
+      buy2K0Frames: buy2K0Frames,
+      sell2K0Frames: sell2K0Frames,
+      buyNK0Frames: buyNK0Frames,
+      sellNK0Frames: sellNK0Frames,
+      bsVerdictK0Frames: bsVerdictK0Frames,
     );
   }
 

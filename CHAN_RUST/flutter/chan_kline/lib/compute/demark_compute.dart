@@ -313,13 +313,15 @@ DemarkK0Series computeDemarkForLevel({
   List<LevelBundle> levels = const [],
   MathIndicatorConfig config = const MathIndicatorConfig(),
   int? asOf,
+  List<KnOhlcSample>? samples,
 }) {
-  final samples = collectKnOhlcSamples(
-    displayKn: displayKn,
-    bars: bars,
-    levels: levels,
-    asOf: asOf,
-  );
+  final use = samples ??
+      collectKnOhlcSamples(
+        displayKn: displayKn,
+        bars: bars,
+        levels: levels,
+        asOf: asOf,
+      );
   final eng = DemarkEngine(
     demarkLen: config.demarkLen,
     setupBias: config.demarkSetupBias,
@@ -330,7 +332,7 @@ DemarkK0Series computeDemarkForLevel({
     interruptCountdownOnReverse: config.demarkInterruptCountdownOnReverse,
   );
   final events = <({int x, List<DemarkMark> v})>[];
-  for (final s in samples) {
+  for (final s in use) {
     final marks = eng.update(
       idx: s.endX,
       close: s.close,

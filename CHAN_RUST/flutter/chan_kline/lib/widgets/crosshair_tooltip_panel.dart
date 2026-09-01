@@ -58,6 +58,7 @@ class CrosshairTooltipPanel extends StatelessWidget {
           borderRadius: BorderRadius.circular(2),
         ),
         child: Column(
+          mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             SizedBox(
@@ -96,7 +97,10 @@ class CrosshairTooltipPanel extends StatelessWidget {
               ),
             ),
             const Divider(height: 1, color: Color(0x33FFFFFF)),
-            Expanded(
+            ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight: maxHeight > 40 ? maxHeight - 32 : maxHeight,
+              ),
               child: ScrollConfiguration(
                 behavior:
                     ScrollConfiguration.of(context).copyWith(scrollbars: true),
@@ -106,6 +110,7 @@ class CrosshairTooltipPanel extends StatelessWidget {
                   // 仅上下内边距；左右内边距下放到各数据行，使分隔线铺满 tooltip 边框
                   padding: const EdgeInsets.only(top: 4, bottom: 6),
                   child: Column(
+                    mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       for (final row in rows)
