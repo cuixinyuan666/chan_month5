@@ -1,0 +1,92 @@
+# chan_kline Windows 发布：打 zip 并上传到 GitHub Releases（解压即用）
+# 触发：Actions 页手动 Run workflow，或打 win-v* 标签
+name: Release chan_kline Windows
+
+on:
+  push:
+    tags:
+      - "win-v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "目标 Release 标签（如 v1.0.10）"
+        required: true
+        default: "v1.0.10"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-chan-kline-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: 打包 Windows zip
+    runs-on: windows-latest
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+
+      - name: 安装 Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 安装 Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: 编译 Rust 动态库 chan_ffi.dll
+        working-directory: CHAN_RUST/rust
+        run: cargo build -p chan_ffi --release
+
+      - name: 复制 DLL 到 Flutter Windows native
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path CHAN_RUST/flutter/chan_kline/windows/native | Out-Null
+          Copy-Item CHAN_RUST/rust/target/release/chan_ffi.dll `
+            CHAN_RUST/flutter/chan_kline/windows/native/chan_ffi.dll -Force
+
+      - name: Flutter Windows Release
+        working-directory: CHAN_RUST/flutter/chan_kline
+        run: |
+          flutter config --enable-windows-desktop
+          flutter pub get
+          flutter build windows --release
+
+      - name: 打 zip（含 a_Data）
+        shell: pwsh
+        run: |
+          if (-not (Test-Path CHAN_RUST/scripts/package_windows.ps1)) {
+            throw "缺少 package_windows.ps1"
+          }
+          & CHAN_RUST/scripts/package_windows.ps1
+
+      - name: 确定 Release 标签
+        id: tag
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ github.event.inputs.release_tag }}" >> "$GITHUB_OUTPUT"
+          else
+            # win-v1.0.10 / win-v1.0.10-adata 等均归并到 v1.0.10
+            raw="${GITHUB_REF_NAME#win-}"
+            if [[ "$raw" =~ ^(v[0-9]+\.[0-9]+\.[0-9]+) ]]; then
+              echo "tag=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+            else
+              echo "tag=$raw" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+      - name: 上传到 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: chan_kline ${{ steps.tag.outputs.tag }}
+          append_body: true
+          files: dist/chan_kline-windows-x64.zip
+          body: |
+            **Windows 桌面端（补发）**：下载 `chan_kline-windows-x64.zip`，解压后双击 **启动 chan_kline.bat**（推荐）或 `chan_kline.exe`。
+            包内已带同目录 **a_Data** 全量行情（默认股票 002003，约 7000+ 数据文件）。也可设环境变量 `CHAN_DATA_ROOT` 指向自己的数据目录。
+            若提示缺少运行库，请安装 [Microsoft Visual C++ Redistributable x64](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist)。

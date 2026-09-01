@@ -14,6 +14,7 @@ import '../compute/trend_line_compute.dart';
 import '../compute/trend_model_compute.dart';
 import '../ml/ml_bs_code.dart';
 import 'bar_feature_lookup.dart';
+import 'bar_crosshair_feature.dart';
 import 'buy1_frame.dart';
 import 'buy2_frame.dart';
 import 'buy_n_frame.dart';
@@ -45,6 +46,15 @@ class IncrementalBarFeatureLookup {
   MathIndicatorConfig _mathCfg = const MathIndicatorConfig();
   MathSeriesFreezeStore? _mathFreeze;
   DivergenceFreezeStore? _diverFreeze;
+  /// K0 量/笔增量缓存：每步只追加当根，禁止每步重扫全部 chip_tick_bins。
+  final List<double> _k0Vol = [];
+  final List<double> _k0Buy = [];
+  final List<double> _k0Sell = [];
+  final List<double> _k0Gray = [];
+  final List<double> _k0Tick = [];
+  final List<double> _k0BuyTick = [];
+  final List<double> _k0SellTick = [];
+  final List<double> _k0GrayTick = [];
 
   int get gen => _gen;
   int get step => _step;
@@ -61,6 +71,14 @@ class IncrementalBarFeatureLookup {
     _mathCfg = const MathIndicatorConfig();
     _mathFreeze = null;
     _diverFreeze = null;
+    _k0Vol.clear();
+    _k0Buy.clear();
+    _k0Sell.clear();
+    _k0Gray.clear();
+    _k0Tick.clear();
+    _k0BuyTick.clear();
+    _k0SellTick.clear();
+    _k0GrayTick.clear();
     _gen++;
   }
 
@@ -222,12 +240,22 @@ class IncrementalBarFeatureLookup {
     if (x != _step + 1) {
       throw StateError('applyStep expected idx=${_step + 1}, got $x (reset+replay on step-back)');
     }
-    final featByIdx = {for (final f in bundle.barFeatures) f.idx: f};
-    final feat = featByIdx[x];
+    BarCrosshairFeature? feat;
+    if (bundle.barFeatures.isNotEmpty && bundle.barFeatures.last.idx == x) {
+      feat = bundle.barFeatures.last;
+    } else {
+      for (var i = bundle.barFeatures.length - 1; i >= 0; i--) {
+        if (bundle.barFeatures[i].idx == x) {
+          feat = bundle.barFeatures[i];
+          break;
+        }
+      }
+    }
     final levelConfirmByX = <int, Map<int, LevelConfirm>>{};
     for (final lv in bundle.levels) {
       final m = <int, LevelConfirm>{};
       for (final c in lv.confirms) {
+        if (c.x != x) continue;
         if (c.value == 1 || c.value == -1) m[c.x] = c;
       }
       levelConfirmByX[lv.level] = m;
@@ -270,7 +298,20 @@ class IncrementalBarFeatureLookup {
       'sub': <String, dynamic>{},
     };
 
-    final barByIdx = {for (final b in bars) b.idx: b};
+    final barByIdx = <int, KlineBar>{};
+    if (bundle.frames.isNotEmpty) {
+      final f = bundle.frames.last;
+      final lo = f.x1 < 0 ? 0 : f.x1;
+      final hi = f.x2 < x ? f.x2 : x;
+      for (var xi = lo; xi <= hi; xi++) {
+        if (xi >= 0 && xi < bars.length && bars[xi].idx == xi) {
+          barByIdx[xi] = bars[xi];
+        }
+      }
+    }
+    if (barByIdx[x] == null && bars.isNotEmpty) {
+      barByIdx[x] = bars.last;
+    }
     _patchLastCombine(bundle.frames, barByIdx, x);
     _patchKnCombineBoxes(bundle, x);
     _writeKnCombineRangeAtX(bundle, bars, x);
@@ -278,7 +319,7 @@ class IncrementalBarFeatureLookup {
     _writeK1ConfirmAtX(bundle, x);
     _writeK0LineAtX(bundle.k0Lines, x);
     _writeK1SnapshotAtX(bundle, x);
-    _writeVolumeTickAll(bars, bundle);
+    _writeVolumeTickAtX(bars, bundle, x);
     _writeBsAtX(
       x: x,
       buy1HistoryByKn: buy1HistoryByKn,
@@ -295,8 +336,8 @@ class IncrementalBarFeatureLookup {
       sellNK0: bundle.sellNK0Frames,
       subIndicators: subIndicators,
     );
-    _writePeakDistAll(bundle, bars);
-    _writeJudgmentLayerInit(bundle);
+    _writePeakDistAtX(bundle, bars, x);
+    _writeJudgmentLayerInitAtX(bundle, x);
     _writeJudgmentAtX(bundle, judgmentHistoryByKn, x);
     _writeZsSignalsAtX(zsJudgmentHistoryByKn, zsConfirmHistoryByKn, x);
     _writeRatioRhythmSlopeAtX(
@@ -317,6 +358,7 @@ class IncrementalBarFeatureLookup {
       mathIndicatorConfig: mathIndicatorConfig,
       mathFreezeStore: mathFreezeStore,
       diverFreezeStore: diverFreezeStore,
+      onlyX: x,
     );
     _writeZsDirty(bundle, x);
 
@@ -338,7 +380,18 @@ class IncrementalBarFeatureLookup {
     _gen++;
   }
 
-  /// asOf 视图：冻结格只读 x<=asOf；结构用 asOf bundle 覆盖；三型只算 asOf 柱。
+  /// 浅拷贝一行（含 sub），避免 asOf 覆盖写回步进仓。
+  Map<String, dynamic> _cloneFeatRow(Map<String, dynamic> src) {
+    final row = Map<String, dynamic>.from(src);
+    final sub = src['sub'];
+    if (sub is Map) {
+      row['sub'] = Map<String, dynamic>.from(sub);
+    }
+    return row;
+  }
+
+  /// asOf 视图：冻结格只读 x<=asOf；结构用 asOf bundle 覆盖当前柱；三型/Math 只算 asOf 柱。
+  /// 十字 tooltip 只读当前柱；历史格共享引用（不整表深拷贝），覆盖前 copy-on-write。
   BarFeatureLookup asOfView({
     required int asOf,
     required KlineCombineBundle asOfBundle,
@@ -349,78 +402,82 @@ class IncrementalBarFeatureLookup {
     final view = <int, Map<String, dynamic>>{};
     for (final e in byIdx.entries) {
       if (e.key > asOf) continue;
-      final row = Map<String, dynamic>.from(e.value);
-      final sub = e.value['sub'];
-      if (sub is Map) {
-        row['sub'] = Map<String, dynamic>.from(sub);
-      }
-      view[e.key] = row;
+      view[e.key] = e.value;
     }
+
+    Map<String, dynamic> cow(int xi) {
+      var row = view[xi];
+      final src = byIdx[xi];
+      if (row == null) {
+        row = src != null
+            ? _cloneFeatRow(src)
+            : <String, dynamic>{'idx': xi, 'sub': <String, dynamic>{}};
+        view[xi] = row;
+        return row;
+      }
+      if (identical(row, src)) {
+        row = _cloneFeatRow(row);
+        view[xi] = row;
+      }
+      return row;
+    }
+
+    // 十字只改当前柱结构；禁止把末态合并框写回引擎，也禁止整表覆盖。
+    cow(asOf);
     final barByIdx = {for (final b in prefixBars) b.idx: b};
     for (final f in asOfBundle.frames) {
+      if (asOf < f.x1 || asOf > f.x2) continue;
       var rangeHigh = double.negativeInfinity;
       var rangeLow = double.infinity;
-      for (var xi = f.x1; xi <= f.x2; xi++) {
-        if (xi > asOf) continue;
+      for (var xi = f.x1; xi <= f.x2 && xi <= asOf; xi++) {
         final b = barByIdx[xi];
-        if (b != null) {
-          if (b.high > rangeHigh) rangeHigh = b.high;
-          if (b.low < rangeLow) rangeLow = b.low;
-        }
-        final row = view.putIfAbsent(xi, () => {'idx': xi, 'sub': <String, dynamic>{}});
-        row['combine'] = {
-          'x1': f.x1,
-          'x2': f.x2,
-          'high': f.high,
-          'low': f.low,
-          'fx': f.fx,
-          'count': f.count,
-          'in_merge': f.count > 1,
-        };
-        if (rangeHigh.isFinite && rangeLow.isFinite) {
-          row['combine_range_high'] = rangeHigh;
-          row['combine_range_low'] = rangeLow;
-        }
+        if (b == null) continue;
+        if (b.high > rangeHigh) rangeHigh = b.high;
+        if (b.low < rangeLow) rangeLow = b.low;
+      }
+      final row = cow(asOf);
+      row['combine'] = {
+        'x1': f.x1,
+        'x2': f.x2,
+        'high': f.high,
+        'low': f.low,
+        'fx': f.fx,
+        'count': f.count,
+        'in_merge': f.count > 1,
+      };
+      if (rangeHigh.isFinite && rangeLow.isFinite) {
+        row['combine_range_high'] = rangeHigh;
+        row['combine_range_low'] = rangeLow;
       }
     }
     for (final lv in asOfBundle.levels) {
       if (lv.level < 1) continue;
       for (final f in lv.combineFrames) {
-        for (var xi = f.x1; xi <= f.x2; xi++) {
-          if (xi > asOf) continue;
-          final row = view.putIfAbsent(xi, () => {'idx': xi, 'sub': <String, dynamic>{}});
-          row['combine_box_${lv.level}'] = {'high': f.high, 'low': f.low};
-        }
+        if (asOf < f.x1 || asOf > f.x2) continue;
+        cow(asOf)['combine_box_${lv.level}'] = {'high': f.high, 'low': f.low};
       }
     }
     for (final f in asOfBundle.k1CombineFrames) {
-      for (var xi = f.x1; xi <= f.x2; xi++) {
-        if (xi > asOf) continue;
-        final row = view.putIfAbsent(xi, () => {'idx': xi, 'sub': <String, dynamic>{}});
-        row['combine_box_1'] = {'high': f.high, 'low': f.low};
-      }
+      if (asOf < f.x1 || asOf > f.x2) continue;
+      cow(asOf)['combine_box_1'] = {'high': f.high, 'low': f.low};
     }
-    void paintZs(ZSFrame f, int kn) {
-      for (var xi = f.x1; xi <= f.x2; xi++) {
-        if (xi > asOf) continue;
-        final row = view[xi];
-        if (row == null) continue;
-        final sub = row.putIfAbsent('sub', () => <String, dynamic>{})
-            as Map<String, dynamic>;
-        sub['zs_high_$kn'] = f.high;
-        sub['zs_low_$kn'] = f.low;
-        sub['zs_sure_$kn'] = f.isSure ? 1 : 0;
-        sub['zs_seq_$kn'] = f.seq;
-      }
+    void paintZsAtAsOf(ZSFrame f, int kn) {
+      if (asOf < f.x1 || asOf > f.x2) return;
+      final sub = cow(asOf).putIfAbsent('sub', () => <String, dynamic>{})
+          as Map<String, dynamic>;
+      sub['zs_high_$kn'] = f.high;
+      sub['zs_low_$kn'] = f.low;
+      sub['zs_sure_$kn'] = f.isSure ? 1 : 0;
+      sub['zs_seq_$kn'] = f.seq;
     }
 
     for (final f in asOfBundle.zsK0Frames) {
-      paintZs(f, 0);
+      paintZsAtAsOf(f, 0);
     }
     for (final lv in asOfBundle.levels) {
       for (final f in lv.zsFrames) {
         final kn = f.level >= 0 ? f.level : (lv.level + 1);
-        paintZs(f, kn);
+        paintZsAtAsOf(f, kn);
       }
     }
     _writeTripleQuadTrendInto(
@@ -429,7 +486,7 @@ class IncrementalBarFeatureLookup {
       bundle: asOfBundle,
       x: asOf,
     );
-    // asOf 当前柱 Math 按短前缀重算（对齐 Full asOf）；禁止全表三型。
+    // asOf 当前柱 Math 按短前缀重算（对齐 Full asOf）；禁止全表三型，也禁止整表回写 Math。
     _writeMathAll(
       bars: prefixBars,
       bundle: asOfBundle,
@@ -438,6 +495,7 @@ class IncrementalBarFeatureLookup {
       mathFreezeStore: _mathFreeze,
       diverFreezeStore: _diverFreeze,
       into: view,
+      onlyX: asOf,
     );
     return BarFeatureLookup.fromCached(
       byIdx: view,
@@ -615,14 +673,22 @@ class IncrementalBarFeatureLookup {
     }
   }
 
-  void _writeVolumeTickAll(List<KlineBar> bars, KlineCombineBundle bundle) {
+  /// 量/笔：K0 缓存只追加当根；Kn 只回写末段脏窗（进行中单元），禁止每步重写全表。
+  void _writeVolumeTickAtX(
+    List<KlineBar> bars,
+    KlineCombineBundle bundle,
+    int x,
+  ) {
+    _ensureK0Caches(bars);
+    if (bars.isEmpty) return;
     void paint(
       Map<int, List<double>> all, {
       required String prefix,
+      required int from,
     }) {
       for (final e in all.entries) {
         final series = e.value;
-        for (var i = 0; i < bars.length; i++) {
+        for (var i = from; i < bars.length; i++) {
           final xi = bars[i].idx;
           _sub(xi)['${prefix}_${e.key}'] =
               i < series.length ? series[i] : 0.0;
@@ -630,69 +696,92 @@ class IncrementalBarFeatureLookup {
       }
     }
 
+    final n = bars.length;
+    var tailFrom = n - 1;
+    for (final lv in bundle.levels) {
+      final u = lv.activeUnit;
+      if (u != null && u.x1 >= 0 && u.x1 < tailFrom) {
+        tailFrom = u.x1;
+      }
+    }
+    if (tailFrom < 0) tailFrom = 0;
+    if (x >= 0 && x < tailFrom) tailFrom = x;
     paint(
-      computeAllKnVolumeSeries(
-        bars: bars,
-        levels: bundle.levels,
-        barFeatures: bundle.barFeatures,
-      ),
+      _computeAllKnFromCached(k0: _k0Vol, levels: bundle.levels, bars: bars),
       prefix: 'volume',
+      from: tailFrom,
     );
     paint(
-      computeAllKnBuyVolumeBsgSeries(
-        bars: bars,
-        levels: bundle.levels,
-        barFeatures: bundle.barFeatures,
-      ),
+      _computeAllKnFromCached(k0: _k0Buy, levels: bundle.levels, bars: bars),
       prefix: 'buy_volume',
+      from: tailFrom,
     );
     paint(
-      computeAllKnSellVolumeSeries(
-        bars: bars,
-        levels: bundle.levels,
-        barFeatures: bundle.barFeatures,
-      ),
+      _computeAllKnFromCached(k0: _k0Sell, levels: bundle.levels, bars: bars),
       prefix: 'sell_volume',
+      from: tailFrom,
     );
     paint(
-      computeAllKnGrayVolumeSeries(
-        bars: bars,
-        levels: bundle.levels,
-        barFeatures: bundle.barFeatures,
-      ),
+      _computeAllKnFromCached(k0: _k0Gray, levels: bundle.levels, bars: bars),
       prefix: 'gray_volume',
+      from: tailFrom,
     );
     paint(
-      computeAllKnTickCountSeries(
-        bars: bars,
-        levels: bundle.levels,
-        barFeatures: bundle.barFeatures,
-      ),
+      _computeAllKnFromCached(k0: _k0Tick, levels: bundle.levels, bars: bars),
       prefix: 'tick_count',
+      from: tailFrom,
     );
     paint(
-      computeAllKnBuyTickCountSeries(
-        bars: bars,
-        levels: bundle.levels,
-        barFeatures: bundle.barFeatures,
-      ),
+      _computeAllKnFromCached(k0: _k0BuyTick, levels: bundle.levels, bars: bars),
       prefix: 'buy_tick_count',
+      from: tailFrom,
     );
     paint(
-      computeAllKnSellTickCountSeries(
-        bars: bars,
-        levels: bundle.levels,
-        barFeatures: bundle.barFeatures,
-      ),
+      _computeAllKnFromCached(k0: _k0SellTick, levels: bundle.levels, bars: bars),
       prefix: 'sell_tick_count',
+      from: tailFrom,
     );
     paint(
-      computeAllKnGrayTickCountSeries(
-        bars: bars,
-        levels: bundle.levels,
-        barFeatures: bundle.barFeatures,
-      ),
+      _computeAllKnFromCached(k0: _k0GrayTick, levels: bundle.levels, bars: bars),
       prefix: 'gray_tick_count',
+      from: tailFrom,
+    );
+  }
+
+  void _ensureK0Caches(List<KlineBar> bars) {
+    if (bars.length < _k0Vol.length) {
+      _k0Vol.clear();
+      _k0Buy.clear();
+      _k0Sell.clear();
+      _k0Gray.clear();
+      _k0Tick.clear();
+      _k0BuyTick.clear();
+      _k0SellTick.clear();
+      _k0GrayTick.clear();
+    }
+    while (_k0Vol.length < bars.length) {
+      final b = bars[_k0Vol.length];
+      final bsg = computeK0VolumeBsgSeries([b]).first;
+      _k0Vol.add(b.volume);
+      _k0Buy.add(bsg.b);
+      _k0Sell.add(bsg.s);
+      _k0Gray.add(bsg.g);
+      _k0Tick.add(computeK0TickCountSeries([b]).first);
+      _k0BuyTick.add(computeK0BuyTickCountSeries([b]).first);
+      _k0SellTick.add(computeK0SellTickCountSeries([b]).first);
+      _k0GrayTick.add(computeK0GrayTickCountSeries([b]).first);
+    }
+  }
+
+  Map<int, List<double>> _computeAllKnFromCached({
+    required List<double> k0,
+    required List<LevelBundle> levels,
+    required List<KlineBar> bars,
+  }) {
+    return computeAllKnFromK0Series(
+      k0Series: k0,
+      levels: levels,
+      bars: bars,
     );
   }
 
@@ -781,38 +870,39 @@ class IncrementalBarFeatureLookup {
     }
   }
 
-  void _writePeakDistAll(KlineCombineBundle bundle, List<KlineBar> bars) {
-    for (final f in bundle.barFeatures) {
-      if (bars.isNotEmpty && f.idx > bars.last.idx) continue;
-      final sub = _sub(f.idx);
-      sub['fractal_peak_dist'] = f.fractalPeakDist;
-      sub['fractal_peak_dist_0'] = f.fractalPeakDist;
+  /// 当步极点距：历史格冻结，只写 x。
+  void _writePeakDistAtX(
+    KlineCombineBundle bundle,
+    List<KlineBar> bars,
+    int x,
+  ) {
+    BarCrosshairFeature? feat;
+    if (bundle.barFeatures.isNotEmpty && bundle.barFeatures.last.idx == x) {
+      feat = bundle.barFeatures.last;
     }
+    final sub = _sub(x);
+    sub['fractal_peak_dist'] = feat?.fractalPeakDist ?? 0;
+    sub['fractal_peak_dist_0'] = feat?.fractalPeakDist ?? 0;
     for (final lv in bundle.levels) {
       if (lv.level < 1) continue;
-      for (final b in bars) {
-        var extreme = 0;
-        var has = false;
-        for (final c in lv.confirms) {
-          if (c.x > b.idx) break;
-          if ((c.fx == 'TOP' || c.fx == 'BOTTOM') && c.poleX >= 0) {
-            extreme = c.poleX;
-            has = true;
-          }
+      var extreme = 0;
+      var has = false;
+      for (final c in lv.confirms) {
+        if (c.x > x) break;
+        if ((c.fx == 'TOP' || c.fx == 'BOTTOM') && c.poleX >= 0) {
+          extreme = c.poleX;
+          has = true;
         }
-        _sub(b.idx)['fractal_peak_dist_${lv.level}'] =
-            has ? b.idx - extreme : 0;
       }
+      sub['fractal_peak_dist_${lv.level}'] = has ? x - extreme : 0;
     }
   }
 
-  void _writeJudgmentLayerInit(KlineCombineBundle bundle) {
-    for (final x in byIdx.keys) {
-      final sub = _sub(x);
-      for (var kn = 0; kn <= bundle.levels.length; kn++) {
-        sub.putIfAbsent('fractal_judgment_$kn', () => 'UNKNOWN');
-        sub.putIfAbsent('fractal_judgment_trunc_$kn', () => false);
-      }
+  void _writeJudgmentLayerInitAtX(KlineCombineBundle bundle, int x) {
+    final sub = _sub(x);
+    for (var kn = 0; kn <= bundle.levels.length; kn++) {
+      sub.putIfAbsent('fractal_judgment_$kn', () => 'UNKNOWN');
+      sub.putIfAbsent('fractal_judgment_trunc_$kn', () => false);
     }
   }
 
@@ -984,6 +1074,7 @@ class IncrementalBarFeatureLookup {
     MathSeriesFreezeStore? mathFreezeStore,
     DivergenceFreezeStore? diverFreezeStore,
     Map<int, Map<String, dynamic>>? into,
+    int? onlyX,
   }) {
     if (bars.isEmpty) return;
     if (bundle.k0Confirms.isEmpty &&
@@ -1001,6 +1092,22 @@ class IncrementalBarFeatureLookup {
       final row = dest.putIfAbsent(x, () => {'idx': x});
       fn(row.putIfAbsent('sub', () => <String, dynamic>{})
           as Map<String, dynamic>);
+    }
+
+    bool skipBar(int idx) =>
+        idx > asOf || (onlyX != null && idx != onlyX);
+
+    Iterable<KlineBar> barsToWrite() {
+      if (onlyX == null) return bars;
+      if (onlyX >= 0 &&
+          onlyX < bars.length &&
+          bars[onlyX].idx == onlyX) {
+        return [bars[onlyX]];
+      }
+      if (bars.isNotEmpty && bars.last.idx == onlyX) {
+        return [bars.last];
+      }
+      return bars.where((b) => b.idx == onlyX);
     }
 
     final meanMaxD = maxLevel + 1;
@@ -1021,8 +1128,8 @@ class IncrementalBarFeatureLookup {
             periods: trendModelConfig.channelPeriods,
             asOf: asOf,
           );
-      for (final b in bars) {
-        if (b.idx > asOf) continue;
+      for (final b in barsToWrite()) {
+        if (skipBar(b.idx)) continue;
         atBar(b.idx, (sub) {
           final meanParts = <String>[];
           for (final t in (means.keys.toList()..sort())) {
@@ -1086,7 +1193,9 @@ class IncrementalBarFeatureLookup {
           );
       final frozenDiver = diverFreezeStore?.level(dkn);
       final diverMap = frozenDiver != null
-          ? truncateDivergenceMap(frozenDiver, bars.length, asOf: asOf)
+          ? (onlyX != null
+              ? frozenDiver
+              : truncateDivergenceMap(frozenDiver, bars.length, asOf: asOf))
           : computeDivergenceForLevel(
               displayKn: dkn,
               bars: bars,
@@ -1096,8 +1205,8 @@ class IncrementalBarFeatureLookup {
               asOf: asOf,
               mathFreezeStore: mathFreezeStore,
             );
-      for (final b in bars) {
-        if (b.idx > asOf) continue;
+      for (final b in barsToWrite()) {
+        if (skipBar(b.idx)) continue;
         final x = b.idx;
         atBar(x, (sub) {
           if (x >= 0 && x < classic.macd.dif.length) {

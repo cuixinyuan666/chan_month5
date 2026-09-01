@@ -702,24 +702,25 @@ Set<T> pruneIndicators<T>(Set<T> selected, List<T> catalog) {
   return selected.where(allow.contains).toSet();
 }
 
-/// 启动默认：勾选「K0指标」层全选（与选择栏层全选同口径）。
-/// 用 catalog(maxKn=1) 生成，保证含 K0连线 / 主图节奏 / 副图分型类与相邻比例。
-/// （筹码分布由设置面板控制，不在默认指标内）
+/// 启动默认：主图核心指标（Kn/合并/中枢/连线）。
 Set<MainChartIndicator> defaultMainIndicatorsK0() {
-  return mainIndicatorsForLevel(0, buildMainIndicatorCatalog(1)).toSet();
+  return mainIndicatorsForLevel(0, buildMainIndicatorCatalog(1))
+      .where(isDefaultDrawnMain)
+      .toSet();
 }
 
-/// 启动默认：副图「K0指标」层全选，但背驰 12 项默认不勾（可在选择栏「K0指标」里一键勾上）。
+/// 启动默认：副图核心指标（分型/截断/中枢类）；背驰 12 项默认不勾。
 Set<SubChartIndicator> defaultSubIndicatorsK0({bool truncationCheck = true}) {
   return subIndicatorsForLevel(
     0,
     buildSubIndicatorCatalog(1, truncationCheck: truncationCheck),
-  ).where((e) => e.kind != SubIndicatorKind.divergence).toSet();
+  )
+      .where((e) => e.kind != SubIndicatorKind.divergence && isDefaultDrawnSub(e))
+      .toSet();
 }
 
-/// 层全选关联后默认「实际绘制」的主图（其余关联项默认删除线静音）。
-/// 重要：关联≠全画——「Kn指标」仍勾全集，但启动/新层只亮：
-/// Kn / Kn合并 / Kn中枢 / Kn连线；其它进 `_mutedMains`，单击 chip 可打开。
+/// 层全选后默认「实际绘制」的主图（用于文档/测试口径）。
+/// Android 收纳列表：白字=已选=绘制，不再维护独立 muted 集。
 bool isDefaultDrawnMain(MainChartIndicator e) {
   switch (e.kind) {
     case MainIndicatorKind.kn:
@@ -739,8 +740,7 @@ bool isDefaultDrawnMain(MainChartIndicator e) {
   }
 }
 
-/// 层全选关联后默认「实际绘制」的副图（其余关联项默认删除线静音）。
-/// 重要：只亮分型确认/判断、截断、中枢确认/判断；成交量/BS/Math/背驰等默认 muted。
+/// 层全选关联后默认「实际绘制」的副图（用于文档/测试口径）。
 bool isDefaultDrawnSub(SubChartIndicator e) {
   switch (e.kind) {
     case SubIndicatorKind.fractalConfirm:

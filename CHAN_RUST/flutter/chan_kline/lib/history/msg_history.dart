@@ -507,10 +507,10 @@ class MsgHistory {
       '其后 chan_pipeline_append_delta + mergeDelta（历史 bar_features 只追加，'
       '结构字段当步全量替换，不做字段级 patch）；'
       '失败回退 chan_pipeline_snapshot Full。'
-      '步退/复位/换股/换周期/截断开关：reset+replay 或 dispose 后重建；'
-      '关闭页面 dispose→chan_pipeline_free。'
+      '步退：有当步仓则直接取当时快照（Rust 管道保持最长前缀），无仓才 reset+replay；'
+      '换股/换周期/截断开关：dispose 后重建；关闭页面 dispose→chan_pipeline_free。'
       '黄金对照仍保留 chan_kline_combine_frames/run_pipeline；'
-      '十字 asOf 仍走无状态短前缀 Full。'
+      '十字 asOf 用当步仓，禁止末态裁 x、禁止每根再打无状态短前缀 Full。'
       '算法/mark_x/discoveryX/V2.1 BS/History/Lookup 填表算法不变；'
       'Lookup 由 PresentationCache 增量维护，Painter 复用同一份。须重编 chan_ffi.dll。',
     );
@@ -527,9 +527,26 @@ class MsgHistory {
       'PresentationCache.syncLookup：首包/回退一次 Full 种仓，热路径 applyStep 只写脏区间。'
       '永久冻结=旧 bar_features/History/Math冻格；只追加=byIdx[step]/新事件；'
       '当步可替换=末合并框/未确认中枢/当步 confirm；'
-      'asOf=结构短前缀 Full + 冻格 x<=asOf，三型只算 asOf 柱。'
-      'Full Lookup.build 保留为黄金参考。Painter/十字/chip/ML 复用同一份增量 Lookup。'
-      '不改 Rust/Delta/算法/History/asOf/mark_x/V2.1 BS。',
+      'asOf=当步仓结构 + 冻格 x<=asOf，asOfView 只改当前柱（历史格共享引用）；'
+      '三型只算 asOf 柱。Full Lookup.build 保留为黄金参考。'
+      'Painter/十字/chip/ML 复用同一份增量 Lookup。'
+      '不改 Rust/Delta/算法/History/mark_x/V2.1 BS。',
+    );
+  }
+
+  static bool _sessionAsOfSnapshotLogged = false;
+
+  /// 十字/步退用当步仓（禁末态裁 x；禁步退整段 reset+replay）
+  void appendSessionAsOfSnapshot() {
+    if (_sessionAsOfSnapshotLogged) return;
+    _sessionAsOfSnapshotLogged = true;
+    append(
+      '【当步仓·十字/步退】播放每步把当时结构钉进当步仓（合并框/连线/中枢/买卖点框；不钉逐根特征表）。'
+      '十字回看直接取那一根当时的仓，禁止用末态再裁 x，禁止每根再打一遍无状态全量。'
+      '步退：画面变短时仍用当时那步的仓，Rust 管道保持最长前缀，禁止整段推倒重放；'
+      '管道比画面长时冻结历史不再重复合并。'
+      '无当步仓才回落全量/重放。换股、换周期、截断开关仍重建会话。'
+      '不改冻结键、不改一类/二类打点口径、不改 mark_x。',
     );
   }
 
@@ -796,6 +813,90 @@ class MsgHistory {
       '背景：改周期只改 _period 会令图表用新周期蜡烛画法重绘未重载的 tick 数据'
       '（O=H=L=C），整屏一字线；已改为选中即自动重载，并同步更新周期说明弹窗。'
       '聚合口径不变：仍 ticks→1m→升周期，主图恢复蜡烛。',
+    );
+  }
+
+  /// Android：内置 a_Data 种子解压到应用私有目录（勿再走编译期桌面路径）。
+  static bool _androidBundledDataLogged = false;
+  void appendAndroidBundledDataRoot() {
+    if (_androidBundledDataLogged) return;
+    _androidBundledDataLogged = true;
+    append(
+      '【Android·a_Data】首次启动从 assets/a_data_seed.zip 解压全量 a_Data 到应用私有目录；'
+      '内置 001312/002003/688687/920992/test 等全部股票与演示数据。'
+      '桌面仍可用环境变量 CHAN_DATA_ROOT 或 Rust 默认相对路径。',
+    );
+  }
+
+  /// Android 手机布局：顶栏/底栏/设置抽屉，图表区最大化。
+  static bool _androidMobileLayoutLogged = false;
+  void appendAndroidMobileLayout() {
+    if (_androidMobileLayoutLogged) return;
+    _androidMobileLayoutLogged = true;
+    append(
+      '【Android·界面】无顶栏/底栏，图表全屏；右上角浮动「设置」钮；'
+      '股票/周期/日期/桶宽等在设置抽屉；主/副图各一收纳钮；主副图分割显式「调节」手柄；'
+      '主图绘制 canvas 裁切，禁止侵入状态栏区与副图区；十字 tooltip 可滚动且右上角可关。',
+    );
+  }
+
+  /// 指标收纳、双指缩放/平移、策略回测上下分割（进程内去重）。
+  static bool _androidTouchUiLogged = false;
+  void appendAndroidTouchUiAndBacktestSplit() {
+    if (_androidTouchUiLogged) return;
+    _androidTouchUiLogged = true;
+    append(
+      '【指标收纳】主/副图左上角伸展钮（三角）点开近乎全屏指标列表，每行一项；已选白字、未选灰字+删除线；点空白/关闭钮收起。'
+      '指标列表仅可通过伸展钮调出，点主/副图/K 线区不唤起。'
+      '【手机手势】单指滑动=平移 K 线；双指锁定轴向缩放（拖动+捏合），缩放至极限后另一轴向仍可用。'
+      '【覆盖安装】同包名 com.chan.chan_kline，versionCode 递增即可直接覆盖安装，无需卸载旧版。'
+      '【策略回测分割】打开策略回测后 K 线与工作台之间可拖分割条上下调整占比；'
+      'Android 默认 K 线约 38%、桌面约 58%；拖条样式与图内主副图分割一致。',
+    );
+  }
+
+  /// 双端 UI 与交互模式（2026-08-25）
+  static bool _dualPlatformUiLogged = false;
+  void appendDualPlatformUiOptimization() {
+    if (_dualPlatformUiLogged) return;
+    _dualPlatformUiLogged = true;
+    append(
+      '【双端UI·2026-08-25】设置项「是否启用安卓操作逻辑」：默认跟随系统自动，可手动切安卓/Windows 手势。'
+      '主副图分割/伸展钮仅保留图标；指标列表仅通过展开钮（三角）调出，点图不唤起。'
+      '十字线开启后单指滑动只跟十字线，不缩放平移图。'
+      '策略回测：手机竖向分栏保证交易表可见；设置里点策略回测自动关设置并打开面板。'
+      '回测买卖信号：买=红圆点在下、卖=绿箭头在上；分笔买标签在圆点下方。'
+      '变量诊断顶部增加白话说明；会话活跃时 wakelock 后台保活。',
+    );
+  }
+
+  static bool _tickIdleYinYangLogged = false;
+
+  /// 分笔进图稍小太极 + 十字 tooltip 不挡跟手 + 主副图钮降亮
+  void appendTickLoadYinYangAndTooltipPass() {
+    if (_tickIdleYinYangLogged) return;
+    _tickIdleYinYangLogged = true;
+    append(
+      '【分笔进图·太极】仅分笔：刚进入/重新加载后，阴阳鱼拉成窗口矩形铺满（完整 S 形、四边贴齐）；'
+      '点一下屏幕、步进、播放或走完后收起，图上仍是原来的圆点。'
+      '换股/重新加载分笔会再铺满一次。其它周期仍是蜡烛。'
+      '【一次性走完】循环里不再每步刷新查表，少拷历史表，筹码峰放到走完后一次补写；冻结仍逐 K 合并。'
+      '【十字信息框】开十字+信息框时，鼠标左右移动即使划过信息框，十字仍跟光标走。'
+      '【主副图钮】伸展三角和中间调节手柄降低亮度对比。',
+    );
+  }
+
+  static bool _tickYinYangFullscreenLogged = false;
+
+  /// 分笔太极铺满窗口 + 一次性走完少拷表
+  void appendTickYinYangFullscreen() {
+    if (_tickYinYangFullscreenLogged) return;
+    _tickYinYangFullscreenLogged = true;
+    append(
+      '【分笔太极铺满】仅分笔：加载中和刚进图时阴阳鱼拉成窗口矩形铺满（完整 S 形、四边贴齐）；'
+      '点一下、步进、播放或一次性走完后收起，K 线仍是圆点。'
+      '【一次性走完】仍逐 K 合并冻结；循环里少拷买卖点/比例表，筹码峰走完后一次补写。'
+      '再压每步内核包须确认执行。',
     );
   }
 

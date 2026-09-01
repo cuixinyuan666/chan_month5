@@ -3,14 +3,14 @@ import 'package:flutter/material.dart';
 /// 筹码分布配置（进程内；与 Skill 字段对齐）。
 class ChipConfig {
   const ChipConfig({
-    this.enabled = true,
-    this.bucketStep = 0.1,
+    this.enabled = false,
+    this.bucketStep = 0.01,
     this.stretchLevel = 5,
     this.paneWidth = 88,
     this.sColor = const Color(0xC722C55E),
     this.bColor = const Color(0xC7DC2626),
     this.wColor = const Color(0xC79CA3AF),
-    this.peakLineEnabled = true,
+    this.peakLineEnabled = false,
     this.peakLineColor = const Color(0xFF2563EB),
     this.peakLineWidth = 1.2,
     this.peakLineDashed = true,
@@ -82,11 +82,11 @@ class ChipConfig {
   factory ChipConfig.fromJson(Map<String, dynamic>? json) {
     if (json == null) return const ChipConfig();
     return ChipConfig(
-      enabled: json['enabled'] as bool? ?? true,
-      bucketStep: (json['bucketStep'] as num?)?.toDouble() ?? 0.1,
+      enabled: json['enabled'] as bool? ?? false,
+      bucketStep: (json['bucketStep'] as num?)?.toDouble() ?? 0.01,
       stretchLevel: (json['stretchLevel'] as num?)?.toInt() ?? 5,
       paneWidth: (json['paneWidth'] as num?)?.toDouble() ?? 88,
-      peakLineEnabled: json['peakLineEnabled'] as bool? ?? true,
+      peakLineEnabled: json['peakLineEnabled'] as bool? ?? false,
       peakLineWidth: (json['peakLineWidth'] as num?)?.toDouble() ?? 1.2,
       peakLineDashed: json['peakLineDashed'] as bool? ?? true,
     );

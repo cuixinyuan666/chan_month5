@@ -10,12 +10,15 @@ class CrosshairTooltipPanel extends StatelessWidget {
     required this.scrollController,
     required this.maxWidth,
     required this.maxHeight,
+    this.onClose,
   });
 
   final List<CrosshairTooltipRow> rows;
   final ScrollController scrollController;
   final double maxWidth;
   final double maxHeight;
+  /// 关闭 tooltip，保留十字线
+  final VoidCallback? onClose;
 
   static const _labelStyle = TextStyle(
     color: Color(0xFFE2E8F0),
@@ -45,6 +48,7 @@ class CrosshairTooltipPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     return Material(
       color: Colors.transparent,
+      elevation: 4,
       child: Container(
         constraints: BoxConstraints(maxWidth: maxWidth, maxHeight: maxHeight),
         decoration: BoxDecoration(
@@ -53,67 +57,119 @@ class CrosshairTooltipPanel extends StatelessWidget {
           border: Border.all(color: const Color(0x55E2E8F0), width: 1),
           borderRadius: BorderRadius.circular(2),
         ),
-        child: ScrollConfiguration(
-          behavior: ScrollConfiguration.of(context).copyWith(scrollbars: true),
-          child: SingleChildScrollView(
-            controller: scrollController,
-            physics: const ClampingScrollPhysics(),
-            // 仅上下内边距；左右内边距下放到各数据行，使分隔线铺满 tooltip 边框
-            padding: const EdgeInsets.only(top: 6, bottom: 6),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                for (final row in rows)
-                  if (row.isSeparator || row.isStar)
-                    // 分隔线铺满 tooltip 宽度，触达左右边框
-                    Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 3),
-                      child: SizedBox(
-                        width: double.infinity,
-                        child: ClipRect(
-                          child: Text(
-                            row.isSeparator
-                                ? '=' * _sepRepeat
-                                // 类别分隔与 flat 同源：-。-。-。-。-
-                                : '-。-' * _sepRepeat,
-                            style: _sepStyle,
-                            maxLines: 1,
-                            softWrap: false,
-                            overflow: TextOverflow.clip,
-                          ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            SizedBox(
+              height: 28,
+              child: Row(
+                children: [
+                  const Expanded(
+                    child: Padding(
+                      padding: EdgeInsets.only(left: 8),
+                      child: Text(
+                        '十字信息',
+                        style: TextStyle(
+                          color: Color(0xFF94A3B8),
+                          fontSize: 10,
+                          fontWeight: FontWeight.w600,
                         ),
                       ),
-                    )
-                  else
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          // 左列标签定宽，便于各层对齐（含「K0中枢K0 idx」）
-                          SizedBox(
-                            width: 108,
-                            child: Text(
-                              '${row.label}:',
-                              style: _labelStyle,
-                              softWrap: false,
-                              overflow: TextOverflow.clip,
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              row.value,
-                              style: _valueStyle,
-                              textAlign: TextAlign.right,
-                            ),
-                          ),
-                        ],
+                    ),
+                  ),
+                  if (onClose != null)
+                    IconButton(
+                      tooltip: '关闭信息框',
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints.tightFor(
+                        width: 28,
+                        height: 28,
+                      ),
+                      iconSize: 16,
+                      onPressed: onClose,
+                      icon: const Icon(
+                        Icons.close,
+                        color: Color(0xFFE2E8F0),
                       ),
                     ),
-              ],
+                ],
+              ),
             ),
-          ),
+            const Divider(height: 1, color: Color(0x33FFFFFF)),
+            ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight: maxHeight > 40 ? maxHeight - 32 : maxHeight,
+              ),
+              child: ScrollConfiguration(
+                behavior:
+                    ScrollConfiguration.of(context).copyWith(scrollbars: true),
+                child: SingleChildScrollView(
+                  controller: scrollController,
+                  physics: const ClampingScrollPhysics(),
+                  // 仅上下内边距；左右内边距下放到各数据行，使分隔线铺满 tooltip 边框
+                  padding: const EdgeInsets.only(top: 4, bottom: 6),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      for (final row in rows)
+                        if (row.isSeparator || row.isStar)
+                          // 分隔线铺满 tooltip 宽度，触达左右边框
+                          Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 3),
+                            child: SizedBox(
+                              width: double.infinity,
+                              child: ClipRect(
+                                child: Text(
+                                  row.isSeparator
+                                      ? '=' * _sepRepeat
+                                      // 类别分隔与 flat 同源：-。-。-。-。-
+                                      : '-。-' * _sepRepeat,
+                                  style: _sepStyle,
+                                  maxLines: 1,
+                                  softWrap: false,
+                                  overflow: TextOverflow.clip,
+                                ),
+                              ),
+                            ),
+                          )
+                        else
+                          Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 1,
+                            ),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                // 左列标签定宽，便于各层对齐（含「K0中枢K0 idx」）
+                                SizedBox(
+                                  width: 108,
+                                  child: Text(
+                                    '${row.label}:',
+                                    style: _labelStyle,
+                                    softWrap: false,
+                                    overflow: TextOverflow.clip,
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    row.value,
+                                    style: _valueStyle,
+                                    textAlign: TextAlign.right,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );

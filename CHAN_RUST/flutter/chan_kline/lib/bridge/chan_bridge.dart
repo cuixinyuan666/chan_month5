@@ -41,6 +41,10 @@ class ChanBridge {
       }
       return DynamicLibrary.open('chan_ffi.dll');
     }
+    if (Platform.isAndroid) {
+      // Android 由 jniLibs/<abi>/libchan_ffi.so 打包进 APK
+      return DynamicLibrary.open('libchan_ffi.so');
+    }
     if (Platform.isLinux) {
       return DynamicLibrary.open('libchan_ffi.so');
     }
@@ -312,14 +316,20 @@ class ChanBridge {
     final ptr = _toNative(jsonEncode(bar.toJson()));
     try {
       final data = _decode(_takeJson(_pipelineAppend(handle, ptr)));
-      return KlineCombineBundle.fromJson(Map<String, dynamic>.from(data as Map));
+      return KlineCombineBundle.fromJson(
+        Map<String, dynamic>.from(data as Map),
+      );
     } finally {
       if (ptr != nullptr) calloc.free(ptr);
     }
   }
 
   /// 逐根 append，返回 PipelineDelta（历史 bar_features 不重复）。
-  PipelineDelta pipelineAppendDelta(int handle, KlineBar bar) {
+  PipelineDelta pipelineAppendDelta(
+    int handle,
+    KlineBar bar, {
+    bool slim = false,
+  }) {
     ensureInitialized();
     _ensureAppendDeltaLookup();
     final fn = _pipelineAppendDeltaFn;
@@ -328,8 +338,12 @@ class ChanBridge {
     }
     final ptr = _toNative(jsonEncode(bar.toJson()));
     try {
-      final data = _decode(_takeJson(fn(handle, ptr)));
-      return PipelineDelta.fromJson(Map<String, dynamic>.from(data as Map));
+      final raw = _takeJson(fn(handle, ptr));
+      final data = _decode(raw);
+      return PipelineDelta.fromJson(
+        Map<String, dynamic>.from(data as Map),
+        slim: slim,
+      );
     } finally {
       if (ptr != nullptr) calloc.free(ptr);
     }
@@ -414,7 +428,8 @@ class ChanBridge {
 
 /// Phase 1.5：图表会话 = 一个 Rust PipelineState；Flutter 只存 handle + presentation cache。
 /// 前进：首包 Full Snapshot，其后 append_delta + mergeDelta；失败回退 snapshot。
-/// 步退/复位/换 opt：reset + replay。asOf 仍走无状态 Full。
+/// 步退：有当步仓则直接返回快照（Rust 仓保持最长前缀），禁止整段 reset+replay。
+/// 无当步仓才 reset + replay。换股/换周期/截断开关仍 dispose 后重建。
 class ChanPipelineSession {
   ChanPipelineSession._(
     this._bridge,
@@ -429,6 +444,8 @@ class ChanPipelineSession {
 
   /// false=全程 Full Snapshot（对照路径）；true=首包 Full + 后续 Delta。
   final bool preferDelta;
+  /// 走完循环里可跳过 k1 分析等展示字段的 fromJson（末根必须关掉）。
+  bool slimDeltaStructure = false;
   final PresentationCache cache = PresentationCache();
   int _len = 0;
   bool _alive = true;
@@ -459,7 +476,7 @@ class ChanPipelineSession {
     cache.reset();
   }
 
-  /// 同步到可见前缀：短则 reset+replay，长则继续 append。
+  /// 同步到可见前缀：短则优先当步仓，无仓才 reset+replay；长则继续 append。
   KlineCombineBundle syncTo(List<KlineBar> visible) {
     if (!_alive) {
       throw StateError('PipelineSession 已 dispose');
@@ -471,6 +488,11 @@ class ChanPipelineSession {
       return KlineCombineBundle.empty();
     }
     if (_len > visible.length) {
+      final asOf = visible.last.idx;
+      final snap = cache.snapshotAt(asOf, withBarFeatures: true);
+      if (snap != null) {
+        return snap;
+      }
       _resetLocal();
     }
     while (_len < visible.length) {
@@ -486,7 +508,11 @@ class ChanPipelineSession {
         cache.len == _len;
     if (canDelta) {
       try {
-        final d = _bridge.pipelineAppendDelta(handle, bar);
+        final d = _bridge.pipelineAppendDelta(
+          handle,
+          bar,
+          slim: slimDeltaStructure,
+        );
         cache.mergeDelta(d);
         _len += 1;
         return;

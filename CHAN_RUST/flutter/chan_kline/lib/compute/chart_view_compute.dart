@@ -206,11 +206,58 @@ LevelLineEndpoint? levelConfirmEndpoint(
 }
 
 /// 方案B：按 lv.level==level 查找，允许 level==0。
-LevelBundle? _bundleAtStructureLevel(List<LevelBundle> levels, int level) {
+LevelBundle? bundleAtStructureLevel(List<LevelBundle> levels, int level) {
   for (final lv in levels) {
     if (lv.level == level) return lv;
   }
   return null;
+}
+
+LevelBundle? _bundleAtStructureLevel(List<LevelBundle> levels, int level) =>
+    bundleAtStructureLevel(levels, level);
+
+/// 取 as-of 当步层级快照（与 [asOfLevelVirtualK1Bars] 同源）。
+LevelSnap? levelSnapAt(
+  List<BarCrosshairFeature> barFeatures, {
+  required int level,
+  required int asOf,
+}) {
+  if (barFeatures.isEmpty || asOf < 0) return null;
+  BarCrosshairFeature? feat;
+  if (asOf < barFeatures.length && barFeatures[asOf].idx == asOf) {
+    feat = barFeatures[asOf];
+  } else {
+    for (final f in barFeatures) {
+      if (f.idx == asOf) {
+        feat = f;
+        break;
+      }
+    }
+  }
+  if (feat == null) return null;
+  for (final ls in feat.levels) {
+    if (ls.level == level) return ls;
+  }
+  return null;
+}
+
+/// Kn连线（structure level≥1）是否允许绘制；全层同构。
+/// 规则：父层（level-1）首根虚拟单元未形成前禁止，避免下层判断链整批画成 Kn连线。
+/// 例：K1连线看 level0；K2连线看 level1；K3连线看 level2 …
+bool levelLineDrawAllowed({
+  required List<LevelBundle> levels,
+  required List<BarCrosshairFeature> barFeatures,
+  required int level,
+  required int asOf,
+}) {
+  if (level < 1) return true;
+  if (bundleAtStructureLevel(levels, level) == null) return false;
+
+  final parentLevel = level - 1;
+  final parentFrozen =
+      asOfLevelSegments(levels: levels, level: parentLevel, asOf: asOf);
+  final parentSnap = levelSnapAt(barFeatures, level: parentLevel, asOf: asOf);
+  return parentFrozen.isNotEmpty || parentSnap?.unitIdx != null;
 }
 
 /// as-of 已冻结 N 段（`endConfirmX <= asOf`）。

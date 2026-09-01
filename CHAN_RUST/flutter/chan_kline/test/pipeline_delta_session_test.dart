@@ -89,6 +89,16 @@ BarFeatureLookup _lookup(List<KlineBar> bars, KlineCombineBundle b) {
   );
 }
 
+String _structSig(KlineCombineBundle b) {
+  final zs = collectZsFramesByKn(b)
+      .entries
+      .map((e) =>
+          '${e.key}:${e.value.map((f) => '${f.x1}-${f.x2}/${f.isSure}').join(',')}')
+      .join(';');
+  return 'k0c=${b.k0Confirms.length}|lv=${b.levels.length}|fr=${b.frames.length}|'
+      'k1c=${b.k1CombineFrames.length}|zs=$zs';
+}
+
 void _assertBundlesEq(
   KlineCombineBundle a,
   KlineCombineBundle b,
@@ -185,18 +195,26 @@ void main() {
     }
   });
 
-  test('reset+replay 后 Delta 仓 == Full', () {
+  test('缩短可见前缀用当步仓，不 reset+replay', () {
     final sess = ChanPipelineSession.create(preferDelta: true);
     addTearDown(sess.dispose);
     sess.syncTo(bars.sublist(0, 29));
     expect(sess.cachedBundle.barFeatures.length, 29);
-    // 缩短可见前缀 → reset+replay
-    final replayed = sess.syncTo(bars.sublist(0, 28));
-    expect(replayed.barFeatures.length, 28);
+    final shortened = sess.syncTo(bars.sublist(0, 28));
+    expect(shortened.barFeatures.length, 28);
+    // Rust 仓保持最长前缀，再前进不必整段重放
+    expect(sess.cachedBundle.barFeatures.length, 29);
     final golden = ChanBridge.instance.buildKlineCombineBundle(
       bars.sublist(0, 28),
     );
-    _assertBundlesEq(replayed, golden, 'reset+replay step27');
+    expect(
+      _structSig(shortened),
+      _structSig(golden),
+      reason: 'asof_keep step27 struct',
+    );
+    expect(shortened.barFeatures.last.idx, 27);
+    final again = sess.syncTo(bars.sublist(0, 29));
+    expect(again.barFeatures.length, 29);
   });
 
   test('asOf 无状态 Full 前缀 == 会话 Delta 仓', () {
@@ -207,6 +225,30 @@ void main() {
       final live = sess.syncTo(visible);
       final asOfBundle = ChanBridge.instance.buildKlineCombineBundle(visible);
       _assertBundlesEq(live, asOfBundle, 'asOf=$asOf');
+    }
+  });
+
+  test('走完后 snapshotAt 历史步仍等于当时 Full asOf', () {
+    final sess = ChanPipelineSession.create(preferDelta: true);
+    addTearDown(sess.dispose);
+    sess.syncTo(bars.sublist(0, 29));
+    expect(sess.cache.asOfSnapshotCount, greaterThanOrEqualTo(29));
+    for (final asOf in [24, 25, 26, 27, 28]) {
+      final snap = sess.cache.snapshotAt(asOf);
+      expect(snap, isNotNull, reason: 'snapshot asOf=$asOf');
+      final golden = ChanBridge.instance.buildKlineCombineBundle(
+        bars.sublist(0, asOf + 1),
+      );
+      // 历史当步仓只钉结构（不钉 bar_features）；末根 snapshotAt 仍是完整仓。
+      if (asOf == 28) {
+        _assertBundlesEq(snap!, golden, 'snapshot asOf=$asOf after live=28');
+      } else {
+        expect(
+          _structSig(snap!),
+          _structSig(golden),
+          reason: 'snapshot struct asOf=$asOf after live=28',
+        );
+      }
     }
   });
 

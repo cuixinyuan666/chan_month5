@@ -787,7 +787,7 @@ class _StrategyConfigFormState extends State<StrategyConfigForm> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Text(
-            '变量诊断（只读目录、冻结仓、确认中枢和背驰关系，不算条件）',
+            '变量诊断（只读：看图上已冻住的格子和计算钟，不会现场重算条件）',
             style: TextStyle(fontSize: 11, color: Color(0xFF94A3B8)),
           ),
           const SizedBox(height: 4),

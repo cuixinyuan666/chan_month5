@@ -65,12 +65,10 @@ import '../models/k1_analysis.dart';
 import 'chart_level_line_style.dart';
 import 'crosshair_tooltip_panel.dart';
 import 'fractal_confirm_paint.dart';
-import 'indicator_picker_chip.dart';
+import 'indicator_picker_overlay.dart';
 import 'kline_axis_format.dart';
 import 'kline_chip.dart';
 import 'kline_viewport.dart';
-import 'main_indicator_picker.dart';
-import 'sub_indicator_picker.dart';
 
 /// 十字线三态：双击循环 off → 全开(含tooltip) → 仅线(关tooltip) → off。
 enum CrosshairMode {
@@ -81,6 +79,12 @@ enum CrosshairMode {
   /// 十字线 + 价格标签，隐藏信息框
   linesOnly,
 }
+
+/// 主/副图指标全屏选择层（仅伸展钮唤起）。
+enum _IndicatorPickerPane { none, main, sub }
+
+/// 双指缩放主方向：手势开始时锁定，避免斜向抖动抢轴。
+enum _PinchZoomAxis { undecided, horizontal, vertical }
 
 /// 主图同级别连线配色（与 [ChartLevelLineStyle] 同层同色）。
 abstract final class ChartLineColors {
@@ -148,6 +152,7 @@ class KlineChart extends StatefulWidget {
     this.diverFreezeStore,
     this.chipOnlyMode = false,
     this.lookupEngine,
+    this.sessionAsOfBundle,
     this.strategySignals = const [],
     this.strategyFills = const [],
     this.strategyRoundBySignalId = const {},
@@ -155,6 +160,7 @@ class KlineChart extends StatefulWidget {
     this.focusBarIdx,
     this.focusBarEpoch = 0,
     this.onStrategySignalTap,
+    this.mobileLayout = false,
   });
 
   final List<KlineBar> bars;
@@ -240,6 +246,8 @@ class KlineChart extends StatefulWidget {
   final bool chipOnlyMode;
   /// 会话增量 Lookup；Painter / 十字 / chip 复用同一份，禁止各画一次 Full build。
   final IncrementalBarFeatureLookup? lookupEngine;
+  /// 步进当步仓：十字 asOf 优先取这份（与当时管道仓同构），未命中才回落 Full FFI。
+  final KlineCombineBundle? Function(int asOf)? sessionAsOfBundle;
 
   /// 策略买/卖点：有成交才画，位置用成交根；与缠论 1Ba 分开。
   final List<SignalEvent> strategySignals;
@@ -250,6 +258,8 @@ class KlineChart extends StatefulWidget {
   final int? focusBarIdx;
   final int focusBarEpoch;
   final ValueChanged<SignalEvent>? onStrategySignalTap;
+  /// 手机布局：指标 chip 全宽、不预留桌面窗控区
+  final bool mobileLayout;
 
   /// 点击左/中/右：后退 / 播放暂停 / 前进
   final VoidCallback? onTapStepBack;
@@ -282,11 +292,23 @@ class _KlineChartState extends State<KlineChart> {
   /// tooltip 滚轮下翻（显示 tooltip 时接管滚轮，不缩放）
   final _tooltipScroll = ScrollController();
   int? _tooltipScrollBarIdx;
+  final GlobalKey _tooltipKey = GlobalKey();
+  /// 分笔刚进图：未做实质操作前全屏太极，操作后恢复圆点。
+  bool _tickIdleYinYang = true;
   bool _panning = false;
   Offset? _panStart;
   double _panStartYShift = 0;
   double _panStartViewMin = 0;
   double _panStartViewMax = 0;
+  /// 主/副图指标选择层：默认关闭，仅伸展钮打开全屏列表
+  _IndicatorPickerPane _pickerPane = _IndicatorPickerPane.none;
+  /// 手机双指缩放
+  bool _pinchScaling = false;
+  double _pinchScaleBaseline = 1.0;
+  _PinchZoomAxis _pinchAxis = _PinchZoomAxis.undecided;
+  double _pinchAccumDx = 0;
+  double _pinchAccumDy = 0;
+  static const _pinchAxisLockSlop = 10.0;
   Size _chartSize = Size.zero;
 
   /// 左中右热区：用 Listener 优先吃点击（避免卡顿时被 GestureDetector 拖拽抢走）
@@ -314,8 +336,7 @@ class _KlineChartState extends State<KlineChart> {
   double _splitDragStartY = 0;
   double _splitDragStartFraction = 0.79;
   double _chartBodyH = 1;
-  final _subChipBarKey = GlobalKey();
-  double _subChipBarHeight = KlineViewport.subIndicatorChipBand;
+  static const _subChipBarHeight = KlineViewport.subIndicatorChipBand;
 
   /// 十字线 as-of 中枢 bundle 缓存（逐K当下 Rust 重算）
   int? _zsAsOfCacheKey;
@@ -337,6 +358,12 @@ class _KlineChartState extends State<KlineChart> {
     }
     if (_zsAsOfCacheKey == asOf && _zsAsOfBundle != null) {
       return _zsAsOfBundle;
+    }
+    final snap = widget.sessionAsOfBundle?.call(asOf);
+    if (snap != null) {
+      _zsAsOfCacheKey = asOf;
+      _zsAsOfBundle = snap;
+      return snap;
     }
     final slice = widget.bars.where((b) => b.idx <= asOf).toList();
     if (slice.isEmpty) return null;
@@ -369,10 +396,16 @@ class _KlineChartState extends State<KlineChart> {
         if (_incAsOfLookupKey != asOf ||
             _incAsOfLookupGen != engine.gen ||
             _incAsOfByIdx == null) {
+          final bars = widget.bars;
+          final prefixBars = (asOf >= 0 &&
+                  asOf < bars.length &&
+                  bars[asOf].idx == asOf)
+              ? bars.sublist(0, asOf + 1)
+              : bars.where((b) => b.idx <= asOf).toList();
           final view = engine.asOfView(
             asOf: asOf,
             asOfBundle: asOfBundle,
-            prefixBars: widget.bars.where((b) => b.idx <= asOf).toList(),
+            prefixBars: prefixBars,
           );
           _incAsOfByIdx = view.byIdx;
           _incAsOfTotalLevels = view.totalLevels;
@@ -439,14 +472,9 @@ class _KlineChartState extends State<KlineChart> {
 
   Set<MainChartIndicator> get _activeMains => widget.mainIndicators;
 
-  /// 左上角单击灰度关闭的指标（仍在选择集中，再点可打开）
-  Set<MainChartIndicator> _mutedMains = {};
-  Set<SubChartIndicator> _mutedSubs = {};
-
-  /// 实际绘制/读数用：已选减去灰度关闭
-  Set<MainChartIndicator> get _drawnMains =>
-      _activeMains.difference(_mutedMains);
-  Set<SubChartIndicator> get _drawnSubs => _activeSubs.difference(_mutedSubs);
+  /// 实际绘制/读数：与选择集一致（收纳列表白字=已选=绘制）
+  Set<MainChartIndicator> get _drawnMains => _activeMains;
+  Set<SubChartIndicator> get _drawnSubs => _activeSubs;
 
   /// 当前数据最高 Kn → 动态生成可选指标
   int get _maxKn => chartMaxKn(
@@ -463,58 +491,22 @@ class _KlineChartState extends State<KlineChart> {
   /// 副图是否展开（无勾选副图指标则收起整块副图区）
   bool get _showSubPane => _activeSubs.isNotEmpty;
 
-  /// 选择集增删后同步静音集。
-  /// 重要：新勾选且非 [isDefaultDrawnMain]/[isDefaultDrawnSub] 的项默认进 muted
-  ///（左上角删除线灰度，仍在选择集；再点才绘制）。已静音项取消勾选后从集里摘掉。
-  void _syncMutedWithSelection({
-    Set<MainChartIndicator>? previousMains,
-    Set<SubChartIndicator>? previousSubs,
-  }) {
-    final oldM = previousMains ?? <MainChartIndicator>{};
-    final oldS = previousSubs ?? <SubChartIndicator>{};
-    final addedM = _activeMains.difference(oldM);
-    final addedS = _activeSubs.difference(oldS);
-    _mutedMains = {
-      ..._mutedMains.intersection(_activeMains),
-      for (final e in addedM)
-        if (!isDefaultDrawnMain(e)) e,
-    };
-    _mutedSubs = {
-      ..._mutedSubs.intersection(_activeSubs),
-      for (final e in addedS)
-        if (!isDefaultDrawnSub(e) &&
-            // 学习观察：MACD 类背驰连带的同号 MACD 立即绘制（不进静音）
-            !(e.kind == SubIndicatorKind.macd &&
-                hasMacdDivergenceForKn(_activeSubs, e.kn)))
-          e,
-    };
-    // 已勾 MACD 类背驰时强制取消同号 MACD 静音（含先前已 muted 的）
-    for (final e in _activeSubs) {
-      if (e.kind == SubIndicatorKind.divergence &&
-          isMacdDivergenceAlgo(e.diverAlgo)) {
-        _mutedSubs.remove(SubChartIndicator.macd(e.kn));
-      }
-    }
+  double _resolveMainPlotTop(BuildContext context) {
+    if (!widget.mobileLayout) return KlineViewport.padT;
+    final safeTop = MediaQuery.paddingOf(context).top;
+    return safeTop + KlineViewport.mainIndicatorToggleBand;
   }
 
-  void _measureSubChipBar() {
-    if (!mounted) return;
-    final renderBox =
-        _subChipBarKey.currentContext?.findRenderObject() as RenderBox?;
-    if (renderBox != null && renderBox.hasSize) {
-      final h = renderBox.size.height + 4;
-      if ((h - _subChipBarHeight).abs() > 0.5) {
-        setState(() => _subChipBarHeight = h);
-      }
-    }
+  void _closeTooltipKeepCrosshair() {
+    if (!_crosshairShowTooltip) return;
+    setState(() => _crosshairMode = CrosshairMode.linesOnly);
   }
 
   @override
   void initState() {
     super.initState();
     _resetViewport();
-    // 层全选关联项默认静音非核心绘制项（删除线灰度）
-    _syncMutedWithSelection();
+    _tickIdleYinYang = widget.period == 'tick';
     // 全局键盘监听：方向键←/→（十字线态=十字线左右移；非十字线态=步退/步进）
     HardwareKeyboard.instance.addHandler(_handleHardwareKey);
   }
@@ -548,6 +540,21 @@ class _KlineChartState extends State<KlineChart> {
       }
     }
 
+    if (seriesChanged) {
+      _zsAsOfCacheKey = null;
+      _zsAsOfBundle = null;
+      _incAsOfLookupKey = null;
+      _incAsOfByIdx = null;
+    }
+
+    if (widget.period != 'tick') {
+      _tickIdleYinYang = false;
+    } else if (seriesChanged) {
+      _tickIdleYinYang = true;
+    } else if (lenChanged) {
+      _clearTickIdleYinYang(rebuild: false);
+    }
+
     if (lenChanged || seriesChanged) {
       // 贴右步进 / autoFollowLatest：bars 变长后十字线吸附新最右端（步进当下性）
       if (widget.autoFollowLatest &&
@@ -570,15 +577,6 @@ class _KlineChartState extends State<KlineChart> {
       }
     }
 
-    // 选择栏增删后：保留仍勾选的静音态；新关联非默认绘制项默认静音
-    if (oldWidget.mainIndicators != widget.mainIndicators ||
-        oldWidget.subIndicators != widget.subIndicators) {
-      _syncMutedWithSelection(
-        previousMains: oldWidget.mainIndicators,
-        previousSubs: oldWidget.subIndicators,
-      );
-    }
-
     // C：大序列跳末/换股后后台预热筹码前缀（不堵 UI；口径同同步 build）
     if ((lenChanged || seriesChanged) &&
         widget.bars.length >= 2048 &&
@@ -595,6 +593,13 @@ class _KlineChartState extends State<KlineChart> {
         widget.focusBarIdx != null) {
       _viewport.ensureBarVisible(widget.focusBarIdx!);
     }
+  }
+
+  /// 分笔进图后第一次实质操作：阴阳鱼换回圆点。
+  void _clearTickIdleYinYang({bool rebuild = true}) {
+    if (!_tickIdleYinYang) return;
+    _tickIdleYinYang = false;
+    if (rebuild && mounted) setState(() {});
   }
 
   /// 十字线跟随鼠标：竖线吸附 K 线中心，横线跟价格。鼠标移线解除贴右步进标记。
@@ -812,6 +817,7 @@ class _KlineChartState extends State<KlineChart> {
   }
 
   void _onWheel(PointerScrollEvent e, double mainPlotH) {
+    _clearTickIdleYinYang();
     if (widget.bars.isEmpty || !_viewport.ready || _chartSize.width <= 0) return;
 
     // 显示 tooltip：滚轮只翻信息框，不缩放 K 线；仅线(关tooltip)时仍可缩放
@@ -957,7 +963,7 @@ class _KlineChartState extends State<KlineChart> {
     return out;
   }
 
-  /// tooltip 锚点：十字线旁，尽量不挡价签
+  /// tooltip 锚点：钉在十字对侧上角，避免左右移时鼠标走进信息框。
   Offset _tooltipAnchor({
     required double chartW,
     required double contentBottom,
@@ -965,27 +971,36 @@ class _KlineChartState extends State<KlineChart> {
     required double maxW,
     required double maxH,
   }) {
-    final x = (_crosshairX ?? chartW / 2)
-        .clamp(KlineViewport.padL, math.max(KlineViewport.padL, chartW - KlineViewport.padR))
-        .toDouble();
-    final y = (_crosshairY ?? plotTop + 40)
-        .clamp(plotTop, math.max(plotTop, contentBottom))
-        .toDouble();
-    var boxX = x + 12;
-    if (boxX + maxW > chartW - KlineViewport.padR - 4) {
-      boxX = x - maxW - 12;
-    }
+    final x = (_crosshairX ?? chartW / 2).toDouble();
     final minBoxX = KlineViewport.padL + 4.0;
     final maxBoxX = chartW - KlineViewport.padR - maxW - 4;
+    // 十字在左半 → 框钉右上；在右半 → 框钉左上（躲开左上调节钮一点）
+    var boxX = x < chartW * 0.5
+        ? maxBoxX
+        : minBoxX + 36;
     boxX = boxX.clamp(minBoxX, math.max(minBoxX, maxBoxX));
-    var boxY = y - math.min(maxH, 220) - 10;
     final minBoxY = plotTop + 4.0;
-    final maxBoxY = contentBottom - 40;
-    boxY = boxY.clamp(minBoxY, math.max(minBoxY, maxBoxY));
+    final maxBoxY = math.max(minBoxY, contentBottom - 40);
+    final boxY = minBoxY.clamp(minBoxY, maxBoxY);
     return Offset(boxX, boxY);
   }
 
   void _onPointerDown(PointerDownEvent e) {
+    // 信息框整体不接鼠标；关闭钮按位置判定
+    if (_crosshairShowTooltip) {
+      final box = _tooltipKey.currentContext?.findRenderObject() as RenderBox?;
+      if (box != null && box.hasSize) {
+        final local = box.globalToLocal(e.position);
+        final close = Rect.fromLTWH(box.size.width - 32, 0, 32, 32);
+        if (close.contains(local)) {
+          _closeTooltipKeepCrosshair();
+          _zonePointerDown = null;
+          _zonePointerId = null;
+          _zoneMoved = false;
+          return;
+        }
+      }
+    }
     // 鼠标中键：快速显示(含十字)/隐藏 tooltip（不关十字线）
     if (e.buttons & kMiddleMouseButton != 0) {
       _toggleTooltipKeepCrosshair(e.localPosition);
@@ -1009,6 +1024,16 @@ class _KlineChartState extends State<KlineChart> {
       _onSplitMove(e);
       return;
     }
+    if (_crosshairEnabled) {
+      _zoneMoved = true;
+      _updateCrosshairAt(
+        e.localPosition,
+        KlineViewport.padT,
+        contentBottom,
+      );
+      return;
+    }
+
     if (_panning && _panStart != null) {
       final dx = e.localPosition.dx - _panStart!.dx;
       final dy = e.localPosition.dy - _panStart!.dy;
@@ -1019,14 +1044,6 @@ class _KlineChartState extends State<KlineChart> {
       _viewport.panByPixels(dx, dy, _chartSize.width, mainPlotH);
       _scheduleRedraw();
       return;
-    }
-
-    if (_crosshairEnabled) {
-      _updateCrosshairAt(
-        e.localPosition,
-        KlineViewport.padT,
-        contentBottom,
-      );
     }
   }
 
@@ -1067,6 +1084,7 @@ class _KlineChartState extends State<KlineChart> {
   }
 
   void _cycleCrosshair(Offset pos, double plotTop, double contentBottom) {
+    _clearTickIdleYinYang(rebuild: false);
     setState(() {
       // 第一次开十字线+tooltip；第二次只关 tooltip；第三次全关恢复鼠标
       switch (_crosshairMode) {
@@ -1089,6 +1107,7 @@ class _KlineChartState extends State<KlineChart> {
 
   /// 中键：无十字→开十字+tooltip；有 tooltip→只藏 tooltip；仅线→再显 tooltip。
   void _toggleTooltipKeepCrosshair(Offset pos) {
+    _clearTickIdleYinYang(rebuild: false);
     final plotTop = _zonePlotTop;
     final contentBottom = _zoneContentBottom > 0
         ? _zoneContentBottom
@@ -1146,7 +1165,9 @@ class _KlineChartState extends State<KlineChart> {
 
   void _onZoneTapAt(Offset local, double plotTop, double contentBottom) {
     if (widget.bars.isEmpty) return;
+    _clearTickIdleYinYang();
     if (_tryTapStrategySignal(local, plotTop)) return;
+
     final zone = _hotZone(local);
 
     // 十字线激活：屏蔽步退/步进/播放，只保留中间双击切三态 + 点击跟线
@@ -1247,7 +1268,8 @@ class _KlineChartState extends State<KlineChart> {
   }
 
   void _onPanStart(DragStartDetails d, double mainPlotH) {
-    if (widget.bars.isEmpty || _splitDragging) return;
+    if (widget.mobileLayout || widget.bars.isEmpty || _splitDragging) return;
+    _clearTickIdleYinYang();
     _panning = true;
     _panStart = d.localPosition;
     _panStartViewMin = _viewport.viewXMin;
@@ -1272,9 +1294,248 @@ class _KlineChartState extends State<KlineChart> {
     _panStart = null;
   }
 
+  /// 手机：单指平移；双指锁定轴向缩放（拖动 + 捏合）。
+  void _onPinchScaleStart(ScaleStartDetails d) {
+    if (!widget.mobileLayout || widget.bars.isEmpty) return;
+    _clearTickIdleYinYang();
+    // 十字线开启：单指/双指都只跟线，禁止缩放抢手势
+    if (_crosshairEnabled) {
+      _pinchScaling = false;
+      _panning = false;
+      _panStart = null;
+      return;
+    }
+    _pinchScaling = true;
+    _pinchScaleBaseline = 1.0;
+    _pinchAxis = _PinchZoomAxis.undecided;
+    _pinchAccumDx = 0;
+    _pinchAccumDy = 0;
+    _panning = false;
+    _panStart = null;
+  }
+
+  void _applyPinchZoomX(double factor, double anchorX) {
+    if ((factor - 1.0).abs() <= 1e-6 || _chartSize.width <= 0) return;
+    _viewport.zoomXAt(factor, anchorX, _chartSize.width);
+  }
+
+  void _applyPinchZoomY(double factor) {
+    if ((factor - 1.0).abs() <= 1e-6) return;
+    _viewport.zoomYBy(factor);
+  }
+
+  void _onPinchScaleUpdate(ScaleUpdateDetails d, double mainPlotH) {
+    if (!widget.mobileLayout || !_pinchScaling || widget.bars.isEmpty) return;
+    if (_crosshairEnabled) return;
+    _viewport.markUserAdjusted();
+    if (d.pointerCount < 2) {
+      // 单指：仅平移，禁止缩放
+      if (d.focalPointDelta != Offset.zero) {
+        _viewport.panByPixels(
+          d.focalPointDelta.dx,
+          d.focalPointDelta.dy,
+          _chartSize.width,
+          mainPlotH,
+        );
+      }
+      _scheduleRedraw();
+      return;
+    }
+
+    _pinchAccumDx += d.focalPointDelta.dx;
+    _pinchAccumDy += d.focalPointDelta.dy;
+    if (_pinchAxis == _PinchZoomAxis.undecided) {
+      if (_pinchAccumDx.abs() >= _pinchAxisLockSlop ||
+          _pinchAccumDy.abs() >= _pinchAxisLockSlop) {
+        _pinchAxis = _pinchAccumDx.abs() >= _pinchAccumDy.abs()
+            ? _PinchZoomAxis.horizontal
+            : _PinchZoomAxis.vertical;
+      } else if ((d.scale - 1.0).abs() > 0.04) {
+        // 纯捏合：按双指横向/纵向展开量选轴
+        final hScale = d.horizontalScale;
+        final vScale = d.verticalScale;
+        _pinchAxis = (hScale - 1.0).abs() >= (vScale - 1.0).abs()
+            ? _PinchZoomAxis.horizontal
+            : _PinchZoomAxis.vertical;
+      }
+    }
+
+    final scaleStep = d.scale / _pinchScaleBaseline;
+    final pinchActive = (scaleStep - 1.0).abs() > 0.003;
+    final dragMag = _pinchAccumDx.abs() + _pinchAccumDy.abs();
+
+    if (_pinchAxis == _PinchZoomAxis.horizontal) {
+      var factor = 1.0;
+      if (pinchActive && dragMag < _pinchAxisLockSlop * 2) {
+        factor = scaleStep;
+      } else if (d.focalPointDelta.dx.abs() > 0.3) {
+        factor = math.exp(-d.focalPointDelta.dx * 0.012);
+      }
+      _applyPinchZoomX(factor, d.localFocalPoint.dx);
+    } else if (_pinchAxis == _PinchZoomAxis.vertical) {
+      var factor = 1.0;
+      if (pinchActive && dragMag < _pinchAxisLockSlop * 2) {
+        factor = scaleStep;
+      } else if (d.focalPointDelta.dy.abs() > 0.3) {
+        factor = math.exp(-d.focalPointDelta.dy * 0.012);
+      }
+      _applyPinchZoomY(factor);
+    } else if (pinchActive) {
+      // 未锁定轴向时先响应捏合，默认横向
+      _applyPinchZoomX(scaleStep, d.localFocalPoint.dx);
+    }
+
+    if (pinchActive) {
+      _pinchScaleBaseline = d.scale;
+    }
+    _scheduleRedraw();
+  }
+
+  void _onPinchScaleEnd(ScaleEndDetails d) {
+    _pinchScaling = false;
+    _pinchScaleBaseline = 1.0;
+    _pinchAxis = _PinchZoomAxis.undecided;
+    _pinchAccumDx = 0;
+    _pinchAccumDy = 0;
+  }
+
+  void _closeIndicatorPicker() {
+    if (_pickerPane == _IndicatorPickerPane.none) return;
+    setState(() => _pickerPane = _IndicatorPickerPane.none);
+  }
+
+  void _toggleMainIndicatorPicker() {
+    if (!widget.indicatorsEnabled) return;
+    _clearTickIdleYinYang(rebuild: false);
+    setState(() {
+      _pickerPane = _pickerPane == _IndicatorPickerPane.main
+          ? _IndicatorPickerPane.none
+          : _IndicatorPickerPane.main;
+    });
+  }
+
+  void _toggleSubIndicatorPicker() {
+    if (!widget.indicatorsEnabled) return;
+    _clearTickIdleYinYang(rebuild: false);
+    setState(() {
+      _pickerPane = _pickerPane == _IndicatorPickerPane.sub
+          ? _IndicatorPickerPane.none
+          : _IndicatorPickerPane.sub;
+    });
+  }
+
+  Widget _buildIndicatorPickerOverlay() {
+    if (_pickerPane == _IndicatorPickerPane.none) {
+      return const SizedBox.shrink();
+    }
+    final isMain = _pickerPane == _IndicatorPickerPane.main;
+    if (isMain) {
+      return IndicatorPickerOverlay<MainChartIndicator>(
+        key: const ValueKey('main-indicator-picker'),
+        title: '主图指标',
+        catalog: _mainCatalog,
+        selected: _activeMains,
+        onToggle: _toggleMainSelection,
+        labelOf: (e) => e.label,
+        displayLevelOf: (e) => e.displayLevel,
+        categoryLabelOf: (e) => e.kind.categoryLabel,
+        categoryOrderOf: (e) => e.kind.categoryOrder,
+        onClose: _closeIndicatorPicker,
+      );
+    }
+    final subValues = _subChipValueByInd();
+    return IndicatorPickerOverlay<SubChartIndicator>(
+      key: const ValueKey('sub-indicator-picker'),
+      title: '副图指标',
+      catalog: _subCatalog,
+      selected: _activeSubs,
+      onToggle: _toggleSubSelection,
+      labelOf: (e) => e.label,
+      displayLevelOf: (e) => e.displayLevel,
+      categoryLabelOf: (e) => e.kind.categoryLabel,
+      categoryOrderOf: (e) => e.kind.categoryOrder,
+      valueTextOf: (e) => subValues[e],
+      onClose: _closeIndicatorPicker,
+    );
+  }
+
+  Widget _buildMainIndicatorToggleButton() {
+    return Opacity(
+      opacity: 0.42,
+      child: Material(
+        color: const Color(0x22111111),
+        borderRadius: BorderRadius.circular(4),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(4),
+          onTap: _toggleMainIndicatorPicker,
+          child: Padding(
+            padding: const EdgeInsets.all(6),
+            child: Icon(
+              _pickerPane == _IndicatorPickerPane.main
+                  ? Icons.expand_less
+                  : Icons.expand_more,
+              size: 18,
+              color: const Color(0x99AAAAAA),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSubIndicatorToggleButton() {
+    return Opacity(
+      opacity: 0.42,
+      child: Material(
+        color: const Color(0x22111111),
+        borderRadius: BorderRadius.circular(4),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(4),
+          onTap: _toggleSubIndicatorPicker,
+          child: Padding(
+            padding: const EdgeInsets.all(6),
+            child: Icon(
+              _pickerPane == _IndicatorPickerPane.sub
+                  ? Icons.expand_less
+                  : Icons.expand_more,
+              size: 18,
+              color: const Color(0x99AAAAAA),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _toggleMainSelection(MainChartIndicator item) {
+    if (!widget.indicatorsEnabled) return;
+    final next = Set<MainChartIndicator>.from(_activeMains);
+    if (next.contains(item)) {
+      next.remove(item);
+    } else {
+      next.add(item);
+    }
+    widget.onMainIndicatorsChanged?.call(next);
+  }
+
+  void _toggleSubSelection(SubChartIndicator item) {
+    if (!widget.indicatorsEnabled) return;
+    final next = Set<SubChartIndicator>.from(_activeSubs);
+    if (next.contains(item)) {
+      next.remove(item);
+    } else {
+      next.add(item);
+    }
+    widget.onSubIndicatorsChanged?.call(next);
+  }
+
   void _onSplitDown(PointerDownEvent e) {
-    if (e.buttons != kPrimaryMouseButton) return;
+    if (e.kind == PointerDeviceKind.mouse &&
+        e.buttons != kPrimaryMouseButton) {
+      return;
+    }
     _splitDragging = true;
+    _clearTickIdleYinYang();
     _splitDragStartY = e.localPosition.dy;
     _splitDragStartFraction = _mainFraction;
     _panning = false;
@@ -1292,53 +1553,6 @@ class _KlineChartState extends State<KlineChart> {
 
   void _onSplitUp(PointerUpEvent e) {
     _splitDragging = false;
-  }
-
-  Future<void> _pickMainIndicators(BuildContext context) async {
-    if (!widget.indicatorsEnabled) return;
-    final picked = await showMainIndicatorPicker(
-      context: context,
-      selected: _activeMains,
-      available: _mainCatalog,
-    );
-    // null 已在 picker 内转成草稿；此处仍可能为 Set（含空）
-    if (picked != null) {
-      widget.onMainIndicatorsChanged?.call(picked);
-    }
-  }
-
-  Future<void> _pickSubIndicators(BuildContext context) async {
-    if (!widget.indicatorsEnabled) return;
-    final picked = await showSubIndicatorPicker(
-      context: context,
-      selected: _activeSubs,
-      available: _subCatalog,
-    );
-    if (picked != null) {
-      widget.onSubIndicatorsChanged?.call(picked);
-    }
-  }
-
-  /// 单击左上角名称：灰度关闭 / 再点打开（不从选择集移除）。
-  void _toggleMuteMain(MainChartIndicator item) {
-    setState(() {
-      if (_mutedMains.contains(item)) {
-        _mutedMains = Set<MainChartIndicator>.from(_mutedMains)..remove(item);
-      } else {
-        _mutedMains = Set<MainChartIndicator>.from(_mutedMains)..add(item);
-      }
-    });
-  }
-
-  /// 单击左上角名称：灰度关闭 / 再点打开。
-  void _toggleMuteSub(SubChartIndicator item) {
-    setState(() {
-      if (_mutedSubs.contains(item)) {
-        _mutedSubs = Set<SubChartIndicator>.from(_mutedSubs)..remove(item);
-      } else {
-        _mutedSubs = Set<SubChartIndicator>.from(_mutedSubs)..add(item);
-      }
-    });
   }
 
   /// 副图 chip 后方读数：十字线当步 / 否则末根；与旧右上读数同源。
@@ -1400,7 +1614,7 @@ class _KlineChartState extends State<KlineChart> {
         final cursor = _crosshairEnabled
             ? SystemMouseCursors.precise
             : (_panning ? SystemMouseCursors.grabbing : SystemMouseCursors.grab);
-        final plotTop = KlineViewport.padT;
+        final plotTop = _resolveMainPlotTop(context);
         _zonePlotTop = plotTop;
         _zoneContentBottom = contentBottom;
 
@@ -1420,8 +1634,6 @@ class _KlineChartState extends State<KlineChart> {
             ? (zsAsOfBundle?.k0Confirms ?? const <K0ConfirmSignal>[])
             : widget.k0ConfirmSignals;
 
-        WidgetsBinding.instance.addPostFrameCallback((_) => _measureSubChipBar());
-
         final paintLookup = widget.chipOnlyMode
             ? BarFeatureLookup.empty()
             : _lookupForPaint(
@@ -1434,6 +1646,7 @@ class _KlineChartState extends State<KlineChart> {
             _KlineCompositePainter(
               bars: widget.bars,
               period: widget.period,
+              tickIdleYinYang: _tickIdleYinYang,
               combineFrames: _effectiveK0CombineFrames,
               k0ConfirmSignals: paintK0Confirms,
               barFeatures: widget.barFeatures,
@@ -1457,6 +1670,7 @@ class _KlineChartState extends State<KlineChart> {
               visible: visible,
               mainH: mainH,
               volH: volH,
+              mainPlotTop: plotTop,
               crosshairEnabled: _crosshairEnabled,
               crosshairShowTooltip: _crosshairShowTooltip,
               crosshairX: _crosshairX,
@@ -1494,8 +1708,11 @@ class _KlineChartState extends State<KlineChart> {
             );
 
         final chartSize = Size(w, mainH + volH);
-        return Stack(
-          clipBehavior: Clip.none,
+        final overlayTop = widget.mobileLayout
+            ? MediaQuery.paddingOf(context).top
+            : 0.0;
+        final tree = Stack(
+          clipBehavior: Clip.hardEdge,
           children: [
             // A：底图 / 筹码 / 十字 三层独立重绘
             RepaintBoundary(
@@ -1518,6 +1735,7 @@ class _KlineChartState extends State<KlineChart> {
                     priceRange: priceRange,
                     mainH: mainH,
                     asOf: segAsOf,
+                    isTickPeriod: widget.period == 'tick',
                   ),
                 ),
               ),
@@ -1534,50 +1752,71 @@ class _KlineChartState extends State<KlineChart> {
               ),
             ),
             Positioned.fill(
-              child: MouseRegion(
-                cursor: cursor,
-                onExit: (_) => _onPointerLeave(),
-                onHover: (e) {
-                  if (!_panning) {
-                    _updateCrosshairAt(e.localPosition, plotTop, contentBottom);
-                  }
-                },
-                child: Listener(
-                  behavior: HitTestBehavior.opaque,
-                  onPointerSignal: (e) {
-                    if (e is PointerScrollEvent) {
-                      _onWheel(
+              child: widget.mobileLayout
+                  ? Listener(
+                      behavior: HitTestBehavior.opaque,
+                      onPointerDown: _onPointerDown,
+                      onPointerMove: (e) => _onPointerMove(
                         e,
                         mainH - KlineViewport.padT - KlineViewport.padB,
-                      );
-                    }
-                  },
-                  onPointerDown: _onPointerDown,
-                  onPointerMove: (e) => _onPointerMove(
-                    e,
-                    mainH - KlineViewport.padT - KlineViewport.padB,
-                    contentBottom,
-                  ),
-                  onPointerUp: _onPointerUp,
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    // 左中右点击已由 Listener 高优先处理；此处只保留长按与拖拽
-                    onLongPressStart: _onZoneLongPress,
-                    onPanStart: (d) => _onPanStart(
-                      d,
-                      mainH - KlineViewport.padT - KlineViewport.padB,
+                        contentBottom,
+                      ),
+                      onPointerUp: _onPointerUp,
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onLongPressStart: _onZoneLongPress,
+                        onScaleStart: _onPinchScaleStart,
+                        onScaleUpdate: (d) => _onPinchScaleUpdate(
+                          d,
+                          mainH - KlineViewport.padT - KlineViewport.padB,
+                        ),
+                        onScaleEnd: _onPinchScaleEnd,
+                        child: const SizedBox.expand(),
+                      ),
+                    )
+                  : Listener(
+                      behavior: HitTestBehavior.opaque,
+                      onPointerHover: (e) {
+                        if (!_panning) {
+                          _updateCrosshairAt(
+                            e.localPosition,
+                            plotTop,
+                            contentBottom,
+                          );
+                        }
+                      },
+                      onPointerSignal: (e) {
+                        if (e is PointerScrollEvent) {
+                          _onWheel(
+                            e,
+                            mainH - KlineViewport.padT - KlineViewport.padB,
+                          );
+                        }
+                      },
+                      onPointerDown: _onPointerDown,
+                      onPointerMove: (e) => _onPointerMove(
+                        e,
+                        mainH - KlineViewport.padT - KlineViewport.padB,
+                        contentBottom,
+                      ),
+                      onPointerUp: _onPointerUp,
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.translucent,
+                        onLongPressStart: _onZoneLongPress,
+                        onPanStart: (d) => _onPanStart(
+                          d,
+                          mainH - KlineViewport.padT - KlineViewport.padB,
+                        ),
+                        onPanUpdate: (d) => _onPanUpdate(
+                          d,
+                          mainH - KlineViewport.padT - KlineViewport.padB,
+                        ),
+                        onPanEnd: _onPanEnd,
+                        child: const SizedBox.expand(),
+                      ),
                     ),
-                    onPanUpdate: (d) => _onPanUpdate(
-                      d,
-                      mainH - KlineViewport.padT - KlineViewport.padB,
-                    ),
-                    onPanEnd: _onPanEnd,
-                    child: const SizedBox.expand(),
-                  ),
-                ),
-              ),
             ),
-            // 十字线 tooltip 盖在手势层之上（IgnorePointer 保证点击/滚轮仍由下层接管）
+            // 十字线 tooltip：可滚动 + 右上角关闭（保留十字线）
             if (_crosshairShowTooltip &&
                 _crosshairX != null &&
                 _crosshairY != null &&
@@ -1598,131 +1837,105 @@ class _KlineChartState extends State<KlineChart> {
                   left: anchor.dx,
                   top: anchor.dy,
                   child: IgnorePointer(
+                    ignoring: true,
+                    key: _tooltipKey,
                     child: CrosshairTooltipPanel(
                       rows: rows,
                       scrollController: _tooltipScroll,
                       maxWidth: maxW,
                       maxHeight: maxH,
+                      onClose: _closeTooltipKeepCrosshair,
                     ),
                   ),
                 );
               }),
-            // 主副图分割条（副图收起时不显示）
+            // 主副图分割：显式拖动手柄（不再隐式拖整条）
             if (_showSubPane)
               Positioned(
-                left: KlineViewport.padL,
-                right: KlineViewport.padR,
-                top: mainH - 4,
-                height: 8,
-                child: MouseRegion(
-                  cursor: SystemMouseCursors.resizeUpDown,
-                  child: Listener(
+                left: 0,
+                right: 0,
+                top: mainH - 14,
+                height: 28,
+                child: Center(
+                  child: Opacity(
+                    opacity: 0.42,
+                    child: Listener(
                     behavior: HitTestBehavior.opaque,
                     onPointerDown: _onSplitDown,
                     onPointerMove: _onSplitMove,
                     onPointerUp: _onSplitUp,
-                    child: Center(
+                    child: MouseRegion(
+                      cursor: SystemMouseCursors.resizeUpDown,
                       child: Container(
-                        height: _splitDragging ? 3 : 2,
+                        width: 44,
+                        height: 22,
                         decoration: BoxDecoration(
                           color: _splitDragging
-                              ? const Color(0xAA42A5F5)
-                              : const Color(0x55FFFFFF),
-                          borderRadius: BorderRadius.circular(2),
+                              ? const Color(0x551E3A5F)
+                              : const Color(0x33111111),
+                          border: Border.all(
+                            color: _splitDragging
+                                ? const Color(0x6642A5F5)
+                                : const Color(0x22AAAAAA),
+                          ),
+                          borderRadius: BorderRadius.circular(11),
+                        ),
+                        child: Icon(
+                          Icons.drag_handle,
+                          size: 16,
+                          color: _splitDragging
+                              ? const Color(0x8842A5F5)
+                              : const Color(0x66888888),
                         ),
                       ),
                     ),
                   ),
+                  ),
                 ),
               ),
-            // 主图：↓ + 已选指标名（无数据不可点）；避让右上窗控
+            // 主图收纳钮：全关时仍保留入口
             Positioned(
               left: 0,
-              top: 0,
-              child: IgnorePointer(
-                ignoring: !widget.indicatorsEnabled,
-                child: Opacity(
-                  opacity: widget.indicatorsEnabled ? 1 : 0.35,
-                  child: IndicatorPickerChip(
-                    entries: () {
-                      final list = _mainCatalog
-                          .where(_activeMains.contains)
-                          .toList()
-                        ..sort((a, b) {
-                          // ※ 按层级分隔：先 displayLevel，再类别/kn
-                          final lv = a.displayLevel.compareTo(b.displayLevel);
-                          if (lv != 0) return lv;
-                          final c = a.kind.categoryOrder
-                              .compareTo(b.kind.categoryOrder);
-                          if (c != 0) return c;
-                          return a.kn.compareTo(b.kn);
-                        });
-                      return [
-                        for (final e in list)
-                          IndicatorChipEntry(
-                            label: e.label,
-                            displayLevel: e.displayLevel,
-                            muted: _mutedMains.contains(e),
-                            onTapToggle: () => _toggleMuteMain(e),
-                          ),
-                      ];
-                    }(),
-                    onTapDropdown: () => _pickMainIndicators(context),
-                    // 避开右上设置/最小化/最大化/关闭
-                    maxWidth: math.max(120.0, w - 140),
-                    emptyHint: 'K0',
-                  ),
+              top: overlayTop,
+              child: Opacity(
+                opacity: widget.indicatorsEnabled ? 1 : 0.35,
+                child: IgnorePointer(
+                  ignoring: !widget.indicatorsEnabled,
+                  child: _buildMainIndicatorToggleButton(),
                 ),
               ),
             ),
-            // 副图入口：已选指标后方挂变量读数（取消右上独立读数框）
+            // 副图收纳钮：副图收起时贴在主图底 / X 轴上方
             Positioned(
               left: KlineViewport.padL,
-              top: _showSubPane ? mainH + 2 : math.max(0.0, mainH - 26),
-              child: Builder(
-                key: _subChipBarKey,
-                builder: (_) => IgnorePointer(
-                  ignoring: !widget.indicatorsEnabled,
-                  child: Opacity(
-                    opacity: widget.indicatorsEnabled ? 1 : 0.35,
-                    child: IndicatorPickerChip(
-                      entries: () {
-                        final values = _subChipValueByInd();
-                        final list = _subCatalog
-                            .where(_activeSubs.contains)
-                            .toList()
-                          ..sort((a, b) {
-                            // ※ 按层级分隔：先 displayLevel，再类别/算法/kn
-                            final lv = a.displayLevel.compareTo(b.displayLevel);
-                            if (lv != 0) return lv;
-                            final c = a.kind.categoryOrder
-                                .compareTo(b.kind.categoryOrder);
-                            if (c != 0) return c;
-                            final ai = a.diverAlgo?.index ?? -1;
-                            final bi = b.diverAlgo?.index ?? -1;
-                            if (ai != bi) return ai.compareTo(bi);
-                            return a.kn.compareTo(b.kn);
-                          });
-                        return [
-                          for (final e in list)
-                            IndicatorChipEntry(
-                              label: e.label,
-                              displayLevel: e.displayLevel,
-                              muted: _mutedSubs.contains(e),
-                              valueText: values[e],
-                              onTapToggle: () => _toggleMuteSub(e),
-                            ),
-                        ];
-                      }(),
-                      onTapDropdown: () => _pickSubIndicators(context),
-                      maxWidth: math.max(100.0, w - KlineViewport.padL - 24),
-                      emptyHint: '未选',
+              top: _showSubPane
+                  ? mainH + 2
+                  : math.max(
+                      overlayTop + 4,
+                      mainH - KlineViewport.subIndicatorEntryBand,
                     ),
-                  ),
+              child: Opacity(
+                opacity: widget.indicatorsEnabled ? 1 : 0.35,
+                child: IgnorePointer(
+                  ignoring: !widget.indicatorsEnabled,
+                  child: _buildSubIndicatorToggleButton(),
                 ),
               ),
             ),
+            _buildIndicatorPickerOverlay(),
           ],
+        );
+        if (widget.mobileLayout) return tree;
+        // 外层跟鼠标：信息框是子孙，划过信息框十字仍更新（勿把 MouseRegion 放在信息框下面当兄弟）
+        return MouseRegion(
+          cursor: cursor,
+          onExit: (_) => _onPointerLeave(),
+          onHover: (e) {
+            if (!_panning) {
+              _updateCrosshairAt(e.localPosition, plotTop, contentBottom);
+            }
+          },
+          child: tree,
         );
       },
     );
@@ -1741,6 +1954,7 @@ class _KlineCompositePainter extends CustomPainter {
   _KlineCompositePainter({
     required this.bars,
     this.period = 'tick',
+    this.tickIdleYinYang = false,
     required this.combineFrames,
     required this.k0ConfirmSignals,
     required this.barFeatures,
@@ -1764,6 +1978,7 @@ class _KlineCompositePainter extends CustomPainter {
     required this.visible,
     required this.mainH,
     required this.volH,
+    this.mainPlotTop = KlineViewport.padT,
     required this.crosshairEnabled,
     required this.crosshairShowTooltip,
     required this.crosshairX,
@@ -1802,6 +2017,8 @@ class _KlineCompositePainter extends CustomPainter {
   final _ChartPaintLayer layer;
   final List<KlineBar> bars;
   final String period;
+  /// 分笔刚进图、尚未操作：画稍小阴阳鱼。
+  final bool tickIdleYinYang;
   final List<KlineCombineFrame> combineFrames;
   final List<K0ConfirmSignal> k0ConfirmSignals;
   final List<BarCrosshairFeature> barFeatures;
@@ -1826,6 +2043,7 @@ class _KlineCompositePainter extends CustomPainter {
   final List<KlineBar> visible;
   final double mainH;
   final double volH;
+  final double mainPlotTop;
   final bool crosshairEnabled;
   /// false=仅画十字线与价格标签，不画 K0/Kn 信息框
   final bool crosshairShowTooltip;
@@ -1886,7 +2104,7 @@ class _KlineCompositePainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final plotTop = KlineViewport.padT;
+    final plotTop = mainPlotTop;
     final plotBottom = mainH - KlineViewport.padB;
     final plotH = math.max(1.0, plotBottom - plotTop);
     // 筹码右 / 笔数左：叠在主图两侧；蜡烛坐标系不变
@@ -1911,6 +2129,10 @@ class _KlineCompositePainter extends CustomPainter {
     }
 
     if (layer == _ChartPaintLayer.chip) {
+      canvas.save();
+      canvas.clipRect(
+        Rect.fromLTWH(0, plotTop, size.width, math.max(1, mainH - plotTop)),
+      );
       final cut = bars.isEmpty ? 0 : (segAsOf ?? bars.last.idx);
       final yOf = (double p) => priceRange.yOf(p, plotTop, plotH);
       if (showTickDist) {
@@ -1960,10 +2182,15 @@ class _KlineCompositePainter extends CustomPainter {
           hoverBar: hoverBar,
         );
       }
+      canvas.restore();
       return;
     }
 
     // —— base：蜡烛 / 缠论 / 坐标轴（不含筹码与十字）——
+    canvas.save();
+    canvas.clipRect(
+      Rect.fromLTWH(0, plotTop, size.width, math.max(1, mainH - plotTop)),
+    );
     final chanDraw = !chipOnlyMode;
     // 方案B：K0 蜡烛/合并/连线 kn==0
     final showK0 = !chipOnlyMode
@@ -2085,11 +2312,6 @@ class _KlineCompositePainter extends CustomPainter {
         }
       }
     }
-    if (chanDraw && subIndicators.isNotEmpty) {
-      _drawSubCharts(canvas, size.width, mainH, barW, slotW);
-    }
-
-    // 价签：笔数分布开启时画在其右侧（分布图「下方/之后」）；仅筹码时仍靠左避让
     _drawYLabels(
       canvas,
       size.width,
@@ -2099,6 +2321,15 @@ class _KlineCompositePainter extends CustomPainter {
       onLeft: showChip || showTickDist,
       leftX: showTickDist ? plotLeft + 2 : null,
     );
+    canvas.restore();
+
+    if (chanDraw && subIndicators.isNotEmpty) {
+      canvas.save();
+      canvas.clipRect(Rect.fromLTWH(0, mainH, size.width, math.max(1, volH)));
+      _drawSubCharts(canvas, size.width, mainH, barW, slotW);
+      canvas.restore();
+    }
+
     _drawXAxis(canvas, size.width, xAxisTop);
   }
 
@@ -2732,6 +2963,7 @@ class _KlineCompositePainter extends CustomPainter {
   ) {
     if (kn < 1) return;
     final tailIdx = segAsOf ?? (bars.isEmpty ? -1 : bars.last.idx);
+    if (tailIdx < 0) return;
 
     LevelBundle? bundle;
     for (final b in levels) {
@@ -2740,16 +2972,26 @@ class _KlineCompositePainter extends CustomPainter {
         break;
       }
     }
+
+    final drawAllowed = levelLineDrawAllowed(
+      levels: levels,
+      barFeatures: barFeatures,
+      level: kn,
+      asOf: tailIdx,
+    );
+
     if (bundle != null) {
-      _drawOneLevelLines(
-        canvas,
-        w,
-        plotTop,
-        plotH,
-        slotW,
-        bundle: bundle,
-        tailIdx: tailIdx,
-      );
+      if (drawAllowed) {
+        _drawOneLevelLines(
+          canvas,
+          w,
+          plotTop,
+          plotH,
+          slotW,
+          bundle: bundle,
+          tailIdx: tailIdx,
+        );
+      }
       _drawSeedPhaseLines(
         canvas,
         w,
@@ -2762,7 +3004,7 @@ class _KlineCompositePainter extends CustomPainter {
       return;
     }
     // 回退：仅 K1 且无 levels 时用旧 k1Analysis
-    if (kn != 1) return;
+    if (kn != 1 || !drawAllowed) return;
     final style = ChartLevelLineStyle.forDisplayKn(1);
     final paint = Paint()
       ..color = style.color
@@ -2771,6 +3013,7 @@ class _KlineCompositePainter extends CustomPainter {
     for (final seg in k1Analysis.k1Lines) {
       final beginIdx = seg.beginX;
       final endIdx = seg.endX;
+      if (endIdx > tailIdx) continue;
       if (endIdx < viewport.viewXMin - 1 || beginIdx > viewport.viewXMax + 1) {
         continue;
       }
@@ -4129,9 +4372,16 @@ class _KlineCompositePainter extends CustomPainter {
     double barW,
     double slotW,
   ) {
-    final innerTop = volTop + subChipBarHeight;
+    final chipBand = math.min(
+      subChipBarHeight,
+      KlineViewport.subIndicatorChipMaxBand,
+    );
+    final innerTop = volTop + chipBand;
     final innerBottom = contentBottom - 4;
-    final innerH = math.max(12.0, innerBottom - innerTop);
+    final innerH = math.max(
+      KlineViewport.minSubMarkerPlotH,
+      innerBottom - innerTop,
+    );
     if (innerH <= 0) return;
 
     if (subIndicators.any((e) => e.kind == SubIndicatorKind.volume)) {
@@ -6020,7 +6270,7 @@ class _KlineCompositePainter extends CustomPainter {
     final safeBottom = math.max(plotTop, contentBottom);
     final x = crosshairX!.clamp(KlineViewport.padL, safeRight).toDouble();
     final y = crosshairY!.clamp(plotTop, safeBottom).toDouble();
-    final plotH = math.max(1.0, mainH - KlineViewport.padT - KlineViewport.padB);
+    final plotH = math.max(1.0, mainH - mainPlotTop - KlineViewport.padB);
 
     final paint = Paint()
       ..color = const Color(0xFFE2E8F0)
@@ -6140,6 +6390,7 @@ class _KlineCompositePainter extends CustomPainter {
     if (oldDelegate.layer != layer) return true;
     final geomChanged = oldDelegate.mainH != mainH ||
         oldDelegate.volH != volH ||
+        oldDelegate.mainPlotTop != mainPlotTop ||
         oldDelegate.viewport.viewXMin != viewport.viewXMin ||
         oldDelegate.viewport.viewXMax != viewport.viewXMax ||
         oldDelegate.viewport.yZoomRatio != viewport.yZoomRatio ||
@@ -6148,6 +6399,7 @@ class _KlineCompositePainter extends CustomPainter {
         oldDelegate.priceRange.max != priceRange.max;
     final dataChanged = oldDelegate.bars != bars ||
         oldDelegate.period != period ||
+        oldDelegate.tickIdleYinYang != tickIdleYinYang ||
         oldDelegate.combineFrames != combineFrames ||
         oldDelegate.k0ConfirmSignals != k0ConfirmSignals ||
         oldDelegate.barFeatures != barFeatures ||
