@@ -36,8 +36,8 @@ class StrategyConfig {
   final BacktestDataScope? dataScope;
 
   const StrategyConfig({
-    this.buyAst = kDefaultBollBuyAst,
-    this.sellAst = kDefaultBollSellAst,
+    this.buyAst = kDefaultBuyAst,
+    this.sellAst = kDefaultSellAst,
     this.quantity = 100,
     this.initialCapital = 100000,
     this.commissionRate = 0,

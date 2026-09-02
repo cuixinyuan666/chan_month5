@@ -431,9 +431,10 @@ class MsgHistory {
     if (_devDemoPhaseLogged) return;
     _devDemoPhaseLogged = true;
     append(
-      '【开发演示阶段·2026-08-15】默认开启：启动 exe 自动加载 demos 最新任务；'
-      '主图底部叠层左=原本/右=本次，点「下一步」步进；可自动播放。'
-      '设置「开发演示阶段」关=不再自动加载。落盘 .chan_task_demo_settings.json。'
+      '【开发演示阶段·2026-09-01】对外默认关：启动不再自动加载任务演示。'
+      '研究/开发可在设置里打开「开发演示阶段」，下次启动才自动加载最新任务。'
+      '关=自行选股 / 任务演示列表 / 手动打开最新任务演示。'
+      '落盘 .chan_task_demo_settings.json。'
       '历史记录按钮与 lib/history/ 常驻不得删。',
     );
   }
@@ -881,6 +882,7 @@ class MsgHistory {
       '点一下屏幕、步进、播放或走完后收起，图上仍是原来的圆点。'
       '换股/重新加载分笔会再铺满一次。其它周期仍是蜡烛。'
       '【一次性走完】循环里不再每步刷新查表，少拷历史表，筹码峰放到走完后一次补写；冻结仍逐 K 合并。'
+      '走完中间步仍带冻段，比例/斜率/节奏与单步同一套。'
       '【十字信息框】开十字+信息框时，鼠标左右移动即使划过信息框，十字仍跟光标走。'
       '【主副图钮】伸展三角和中间调节手柄降低亮度对比。',
     );
@@ -895,8 +897,68 @@ class MsgHistory {
     append(
       '【分笔太极铺满】仅分笔：加载中和刚进图时阴阳鱼拉成窗口矩形铺满（完整 S 形、四边贴齐）；'
       '点一下、步进、播放或一次性走完后收起，K 线仍是圆点。'
-      '【一次性走完】仍逐 K 合并冻结；循环里少拷买卖点/比例表，筹码峰走完后一次补写。'
+      '【一次性走完】仍逐 K 合并冻结；循环里少拷买卖点表、少刷查表，筹码峰走完后一次补写。'
+      '走完中间步仍带上已冻住的连线，比例/斜率/节奏与连续单步同一套。'
       '再压每步内核包须确认执行。',
+    );
+  }
+
+  static bool _p0TrustGatesLogged = false;
+
+  /// 走完对拍 / 长操作进度 / 动态库版本门禁（白话）。
+  void appendP0TrustGates() {
+    if (_p0TrustGatesLogged) return;
+    _p0TrustGatesLogged = true;
+    append(
+      '【走完=单步】一次性走完和一步一步点，副图必须同一套数：买卖点、中枢、分型判断、比例、斜率、节奏都对得上。'
+      '走完可以少画中间过程，但不能少算已冻住的连线；少解析冻段会把比例/节奏冻成另一套。'
+      '【长数据不像死机】一次性走完、自动播放会显示中文进度；走完可取消，停在当前根，已经写下的点还在。'
+      '【计算库版本】启动时核对准不准；对不上或找不到库就中文停机，请覆盖本次那一份后冷启动，禁止静默混用旧库算出另一套点。',
+    );
+  }
+
+  static bool _crossKnBsJoinLogged = false;
+
+  /// 一类/二类/N 类买卖点可跨层 AND/OR（白话）。
+  void appendCrossKnBsJoin() {
+    if (_crossKnBsJoinLogged) return;
+    _crossKnBsJoinLogged = true;
+    append(
+      '【策略买卖点跨层】买条件、卖条件里，一类/二类/N 类买卖点可以用 AND 或 OR 跨层拼：'
+      '例如 K0 一类买 AND K1 三类买，或 K0 一类买 OR K1 三类买。'
+      'AND 必须同一根 K 上两边都刚出现，不是「以前有过就算」；OR 是哪一层先出现就先出信号。'
+      '收盘、RSI、布林、分型确认仍不能把 K0 和 K1 拼在一棵树上。'
+      '缠论各层自己怎么打点没改。',
+    );
+  }
+
+  static bool _workbenchLayoutK0BarLogged = false;
+
+  /// 左右分栏 / 默认一类买卖 / 当根事件跨层 / 策略点跟柱（白话）。
+  void appendWorkbenchLayoutAndK0BarEvents() {
+    if (_workbenchLayoutK0BarLogged) return;
+    _workbenchLayoutK0BarLogged = true;
+    append(
+      '【桌面左右分栏】电脑上 K 线在左、策略回测在右；手机仍上下排。'
+      '工作台一次只开一页：条件、资金、指标、交易等标签互不叠在一起。'
+      '【默认买卖】新策略买=K0 一类买点出现，卖=K0 一类卖点出现，不再默认收盘穿布林。'
+      '【当根事件可跨层】钉在这一根 K 上才出现的事件（一类/二类/N类买卖点、分型确认、中枢确认、Demark 完成买/卖）可以用 AND 或 OR 跨层拼。'
+      'AND 必须同一根两边都刚出现；OR 哪一层出现就出信号。'
+      '收盘、RSI、上穿下穿仍不能把 K0 和 K1 拼在一棵树上。'
+      '【策略点跟柱】回测画出来的买/卖圆点三角和 K 线用同一套柱心，左右拖图时跟着蜡烛走，不是钉在屏幕上。',
+    );
+  }
+
+  static bool _workbenchBelowCaptionLogged = false;
+
+  /// 工作台下移避开标题栏 + 关闭整块台子（白话）。
+  void appendWorkbenchBelowCaptionAndClose() {
+    if (_workbenchBelowCaptionLogged) return;
+    _workbenchBelowCaptionLogged = true;
+    append(
+      '【策略回测避开标题栏】电脑打开策略回测后，右侧整块工作台（运行、标签、内容）往下挪，'
+      '不再挡住窗口右上角的最小化、最大化、关闭。'
+      '工作台自己有关闭（X）：点了只关策略回测，K 线铺回整屏；设置里再点「策略回测」还能打开。不是关软件窗口。',
     );
   }
 

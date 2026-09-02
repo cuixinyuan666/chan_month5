@@ -10,6 +10,7 @@ import 'package:chan_kline/backtest/order_models.dart';
 import 'package:chan_kline/backtest/signal_event.dart';
 import 'package:chan_kline/backtest/strategy_compile.dart';
 import 'package:chan_kline/backtest/strategy_config.dart';
+import 'package:chan_kline/backtest/backtest_workbench.dart';
 import 'package:chan_kline/backtest/strategy_config_form.dart';
 import 'package:chan_kline/backtest/strategy_signal_painter.dart';
 import 'package:chan_kline/backtest/strategy_trade_round.dart';
@@ -423,7 +424,7 @@ void main() {
   });
 
   group('配置 UI 条件构建器', () {
-    testWidgets('买卖可搭比较/穿越/AND，不再写死收盘下穿布林', (tester) async {
+    testWidgets('买卖可搭比较/穿越/AND，默认是一类买/卖出现', (tester) async {
       var cfg = const StrategyConfig();
       await tester.pumpWidget(
         MaterialApp(
@@ -440,15 +441,94 @@ void main() {
       );
       expect(find.text('收盘  下穿  布林下轨'), findsNothing);
       expect(find.textContaining('变量诊断'), findsOneWidget);
-      expect(find.text('买入条件（同层同钟，真假由回测引擎算）'), findsOneWidget);
-      expect(find.text('下穿'), findsWidgets);
-      expect(find.text('上穿'), findsWidgets);
+      expect(find.textContaining('买入条件'), findsOneWidget);
+      expect(find.textContaining('卖出条件'), findsOneWidget);
+      expect(find.text('一类BS'), findsWidgets);
+      expect(find.text('出现'), findsWidgets);
+      // 默认策略是一类买/卖出现，不再自带下穿
+      expect(find.text('下穿'), findsNothing);
+      expect(find.text('上穿'), findsNothing);
       expect(find.text('添加条件'), findsNWidgets(2));
       await tester.tap(find.text('添加条件').first);
       await tester.pumpAndSettle();
       expect(find.text('AND'), findsWidgets);
       expect(find.text('OR'), findsWidgets);
       expect(find.text('K0收盘穿K1布林'), findsNothing);
+      // 新叶子是比较积木，打开关系可切到下穿/上穿
+      expect(find.text('<'), findsWidgets);
+      await tester.tap(find.text('<').first);
+      await tester.pumpAndSettle();
+      expect(find.text('下穿'), findsWidgets);
+      expect(find.text('上穿'), findsWidgets);
+    });
+  });
+
+  group('工作台关闭与下移', () {
+    Widget pumpBench({
+      required VoidCallback onClose,
+      required bool compact,
+    }) {
+      return MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 420,
+            height: 640,
+            child: BacktestWorkbench(
+              config: const StrategyConfig(),
+              maxKn: 1,
+              onConfigChanged: (_) {},
+              onRun: (_) {},
+              onClose: onClose,
+              run: null,
+              bars: const [],
+              currentStepIdx: 0,
+              tab: BacktestWorkbenchTab.conditions,
+              onTab: (_) {},
+              selectedSignalId: null,
+              selectedTradeId: null,
+              onSelectTrade: (_) {},
+              onSelectSignal: (_) {},
+              onJumpX: (_) {},
+              compactLayout: compact,
+            ),
+          ),
+        ),
+      );
+    }
+
+    testWidgets('有关闭钮，点了关掉整块台子', (tester) async {
+      var closed = false;
+      await tester.pumpWidget(pumpBench(
+        onClose: () => closed = true,
+        compact: false,
+      ));
+      expect(find.byKey(const Key('backtestWorkbenchClose')), findsOneWidget);
+      expect(find.byTooltip('关闭'), findsOneWidget);
+      expect(find.byTooltip('收起'), findsNothing);
+      await tester.tap(find.byKey(const Key('backtestWorkbenchClose')));
+      await tester.pump();
+      expect(closed, isTrue);
+    });
+
+    testWidgets('电脑整块下移避开标题栏，手机不再加顶距', (tester) async {
+      expect(kDesktopCaptionBarHeight, 36);
+      expect(kDesktopShellInset, 4);
+      expect(kDesktopBacktestWorkbenchTopInset, 36);
+
+      await tester.pumpWidget(pumpBench(onClose: () {}, compact: false));
+      final pad = tester.widget<Padding>(
+        find.byKey(const Key('backtestWorkbenchDesktopInset')),
+      );
+      expect(
+        pad.padding,
+        const EdgeInsets.only(top: kDesktopBacktestWorkbenchTopInset),
+      );
+      expect(find.text('运行'), findsOneWidget);
+      expect(find.text('条件'), findsOneWidget);
+
+      await tester.pumpWidget(pumpBench(onClose: () {}, compact: true));
+      expect(find.byKey(const Key('backtestWorkbenchDesktopInset')), findsNothing);
+      expect(find.byTooltip('关闭'), findsOneWidget);
     });
   });
 }

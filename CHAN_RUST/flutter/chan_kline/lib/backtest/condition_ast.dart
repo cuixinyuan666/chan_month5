@@ -152,6 +152,18 @@ TradeCmpAst k0VolumeGtAst(double threshold) => TradeCmpAst(
       op: TradeBinaryOp.gt,
     );
 
+/// K0 一类买点出现
+const TradeEventAst k0Buy1EventAst = TradeEventAst('STRUCTURE.K0.BUY1');
+
+/// K0 一类卖点出现
+const TradeEventAst k0Sell1EventAst = TradeEventAst('STRUCTURE.K0.SELL1');
+
+/// 买条件默认：K0 一类买点出现
+const TradeEventAst kDefaultBuyAst = k0Buy1EventAst;
+
+/// 卖条件默认：K0 一类卖点出现
+const TradeEventAst kDefaultSellAst = k0Sell1EventAst;
+
 /// K1 一类买点出现
 const TradeEventAst k1Buy1EventAst = TradeEventAst('STRUCTURE.K1.BUY1');
 
@@ -231,6 +243,46 @@ TradeAst k0BollDownAndRsiAst({double rsi = 40}) => TradeAndAst(
 /// 买：K1 三类买点 或者 一类买点
 TradeAst k1BuyN3OrBuy1Ast() => TradeOrAst(
       TradeEventAst(buyNVarId(1, 3)),
+      k1Buy1EventAst,
+    );
+
+/// 买：K0 一类买 并且 K1 一类买（跨层；须同一根 K0 两边都出现）
+TradeAst k0Buy1AndK1Buy1Ast() => const TradeAndAst(
+      k0Buy1EventAst,
+      k1Buy1EventAst,
+    );
+
+/// 买：K0 一类买 或者 K1 三类买（跨层；各层出现各打一次）
+TradeAst k0Buy1OrK1BuyN3Ast() => TradeOrAst(
+      k0Buy1EventAst,
+      TradeEventAst(buyNVarId(1, 3)),
+    );
+
+/// K0 分型确认出现
+const TradeEventAst k0FractalConfirmAst =
+    TradeEventAst('SUB.K0.FRACTAL_CONFIRM');
+
+/// 买：K0 分型确认 并且 K1 一类买（都是当根事件，可跨层）
+TradeAst k0FxConfirmAndK1Buy1Ast() => const TradeAndAst(
+      k0FractalConfirmAst,
+      k1Buy1EventAst,
+    );
+
+/// 买：K0 分型确认 或者 K1 一类买
+TradeAst k0FxConfirmOrK1Buy1Ast() => const TradeOrAst(
+      k0FractalConfirmAst,
+      k1Buy1EventAst,
+    );
+
+/// 买：K0 中枢确认 并且 K1 一类买
+TradeAst k0ZsConfirmAndK1Buy1Ast() => const TradeAndAst(
+      TradeEventAst('SUB.K0.ZS_CONFIRM'),
+      k1Buy1EventAst,
+    );
+
+/// 买：K0 Demark 完成买 并且 K1 一类买
+TradeAst k0DemarkBuyAndK1Buy1Ast() => TradeAndAst(
+      TradeEventAst(demarkCompleteId(0, buy: true)),
       k1Buy1EventAst,
     );
 
@@ -403,7 +455,7 @@ StrategyVarSpec? specByKey(String key) {
 
 /// 叶子链折回 AST（左结合）
 TradeAst foldAstChain(List<TradeAst> leaves, List<CondJoin> joins) {
-  if (leaves.isEmpty) return kDefaultBollBuyAst;
+  if (leaves.isEmpty) return kDefaultBuyAst;
   TradeAst acc = leaves.first;
   for (var i = 0; i < joins.length && i + 1 < leaves.length; i++) {
     final next = leaves[i + 1];

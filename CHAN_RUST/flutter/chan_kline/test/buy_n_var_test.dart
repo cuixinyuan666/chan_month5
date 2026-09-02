@@ -105,6 +105,10 @@ void main() {
       );
       expect(compileConditionAst(k1BuyN3AndRsiAst(), maxKn: 2), isA<CondCompileOk>());
       expect(compileConditionAst(k1BuyN3OrBuy1Ast(), maxKn: 2), isA<CondCompileOk>());
+      expect(compileConditionAst(k0Buy1OrK1BuyN3Ast(), maxKn: 2), isA<CondCompileOk>());
+      expect(isChanClassBsEventVarId('STRUCTURE.K0.BUY1'), isTrue);
+      expect(isChanClassBsEventVarId('STRUCTURE.K1.BUY_N.4'), isTrue);
+      expect(isChanClassBsEventVarId('SUB.K1.FRACTAL_CONFIRM'), isFalse);
     });
   });
 

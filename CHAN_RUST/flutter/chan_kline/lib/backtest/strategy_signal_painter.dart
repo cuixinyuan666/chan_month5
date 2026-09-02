@@ -72,6 +72,85 @@ Offset? strategyMarkerCenter({
   return Offset(cx, y);
 }
 
+/// 与蜡烛同一套柱心 X / 价轴 Y，平移时跟 K 线走。
+void paintStrategyMarkersOnChart({
+  required Canvas canvas,
+  required List<SignalEvent> signals,
+  required List<KlineBar> bars,
+  required double Function(int x) barCenterX,
+  required PriceRange priceRange,
+  required double plotTop,
+  required double plotH,
+  required int? asOf,
+  required bool isTickPeriod,
+  List<Fill> fills = const [],
+  Map<String, int> roundBySignalId = const {},
+  Set<String> highlightedIds = const {},
+}) {
+  if (signals.isEmpty || bars.isEmpty) return;
+  final cut = asOf;
+  for (final s in signals) {
+    if (s.side == null) continue;
+    final x = strategyMarkerPlotX(signal: s, fills: fills);
+    if (x == null) continue;
+    if (cut != null && x > cut) continue;
+    final bar = klineBarByIdx(bars, x);
+    if (bar == null) continue;
+    final cx = barCenterX(x);
+    final isBuy = s.side == TradeSide.buy;
+    final y = isBuy
+        ? priceRange.yOf(bar.low, plotTop, plotH) + 10
+        : priceRange.yOf(bar.high, plotTop, plotH) - 10;
+    final c = Offset(cx, y);
+    final color = strategySideColor(s.side!);
+    final hot = highlightedIds.contains(s.signalId);
+    if (hot) {
+      canvas.drawCircle(c, 14, Paint()..color = color.withValues(alpha: 0.28));
+    }
+    if (isBuy) {
+      const r = 5.0;
+      canvas.drawCircle(c, r, Paint()..color = color);
+      canvas.drawCircle(
+        c,
+        r,
+        Paint()
+          ..color = Colors.white
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = hot ? 1.8 : 1.0,
+      );
+    } else {
+      final path = Path();
+      const r = 7.0;
+      path.moveTo(c.dx, c.dy + r);
+      path.lineTo(c.dx - r, c.dy - r * 0.7);
+      path.lineTo(c.dx + r, c.dy - r * 0.7);
+      path.close();
+      canvas.drawPath(path, Paint()..color = color);
+      canvas.drawPath(
+        path,
+        Paint()
+          ..color = Colors.white
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = hot ? 1.8 : 1.0,
+      );
+    }
+    final tp = TextPainter(textDirection: TextDirection.ltr);
+    tp.text = TextSpan(
+      text: strategySideLabel(s.side!, round: roundBySignalId[s.signalId]),
+      style: TextStyle(
+        color: color,
+        fontSize: 9,
+        fontWeight: FontWeight.w700,
+      ),
+    );
+    tp.layout();
+    final ly = isBuy
+        ? (isTickPeriod ? c.dy + 10 : c.dy + 8)
+        : c.dy - 8 - tp.height;
+    tp.paint(canvas, Offset(c.dx - tp.width / 2, ly));
+  }
+}
+
 StrategyMarkerHit? hitTestStrategySignal({
   required Offset local,
   required List<SignalEvent> signals,
@@ -148,84 +227,22 @@ class StrategySignalPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    if (signals.isEmpty || bars.isEmpty) return;
     final plotTop = KlineViewport.padT;
     final plotH = math.max(1.0, mainH - KlineViewport.padB - plotTop);
-    final cut = asOf;
-    for (final s in signals) {
-      if (s.side == null) continue;
-      final x = strategyMarkerPlotX(signal: s, fills: fills);
-      if (x == null) continue;
-      if (cut != null && x > cut) continue;
-      final c = strategyMarkerCenter(
-        signal: s,
-        bars: bars,
-        viewport: viewport,
-        priceRange: priceRange,
-        canvasW: size.width,
-        plotTop: plotTop,
-        plotH: plotH,
-        fills: fills,
-      );
-      if (c == null) continue;
-      final side = s.side!;
-      final color = strategySideColor(side);
-      final hot = highlightedIds.contains(s.signalId);
-      if (hot) {
-        canvas.drawCircle(
-          c,
-          14,
-          Paint()..color = color.withValues(alpha: 0.28),
-        );
-      }
-      final buy = side == TradeSide.buy;
-      if (buy) {
-        // 买：红色圆点，在 K 线下方；分笔在圆点再往下排标签
-        const r = 5.0;
-        canvas.drawCircle(c, r, Paint()..color = color);
-        canvas.drawCircle(
-          c,
-          r,
-          Paint()
-            ..color = Colors.white
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = hot ? 1.8 : 1.0,
-        );
-      } else {
-        // 卖：绿色向下箭头，在 K 线上方
-        final path = Path();
-        const r = 7.0;
-        path.moveTo(c.dx, c.dy + r);
-        path.lineTo(c.dx - r, c.dy - r * 0.7);
-        path.lineTo(c.dx + r, c.dy - r * 0.7);
-        path.close();
-        canvas.drawPath(path, Paint()..color = color);
-        canvas.drawPath(
-          path,
-          Paint()
-            ..color = Colors.white
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = hot ? 1.8 : 1.0,
-        );
-      }
-      final tp = TextPainter(textDirection: TextDirection.ltr);
-      tp.text = TextSpan(
-        text: strategySideLabel(
-          side,
-          round: roundBySignalId[s.signalId],
-        ),
-        style: TextStyle(
-          color: color,
-          fontSize: 9,
-          fontWeight: FontWeight.w700,
-        ),
-      );
-      tp.layout();
-      final ly = buy
-          ? (isTickPeriod ? c.dy + 10 : c.dy + 8)
-          : c.dy - 8 - tp.height;
-      tp.paint(canvas, Offset(c.dx - tp.width / 2, ly));
-    }
+    paintStrategyMarkersOnChart(
+      canvas: canvas,
+      signals: signals,
+      bars: bars,
+      barCenterX: (x) => viewport.barCenterX(x, size.width),
+      priceRange: priceRange,
+      plotTop: plotTop,
+      plotH: plotH,
+      asOf: asOf,
+      isTickPeriod: isTickPeriod,
+      fills: fills,
+      roundBySignalId: roundBySignalId,
+      highlightedIds: highlightedIds,
+    );
   }
 
   @override

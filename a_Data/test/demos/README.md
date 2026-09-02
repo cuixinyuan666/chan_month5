@@ -12,6 +12,6 @@
 1. 复制 `_template/` → `{task_id}/`
 2. 填 `manifest.json`、`before.md`（改代码**前**写）
 3. 完成后写 `task-log.md`
-4. 冷启动（开发演示阶段开着）会自动加载最新一条
+4. 冷启动默认不自动加载；设置打开「开发演示阶段」后才会自动加载最新一条
 
 详见 `AGENT_LONG_TERM_MEMORY.md`。

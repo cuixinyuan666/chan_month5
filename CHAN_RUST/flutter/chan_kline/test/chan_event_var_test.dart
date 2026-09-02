@@ -13,6 +13,7 @@ import 'package:chan_kline/compute/math_classic_compute.dart';
 import 'package:chan_kline/compute/math_series_freeze_store.dart';
 import 'package:chan_kline/models/buy1_frame.dart';
 import 'package:chan_kline/models/buy2_frame.dart';
+import 'package:chan_kline/models/buy_n_frame.dart';
 import 'package:chan_kline/models/k0_confirm_signal.dart';
 import 'package:chan_kline/models/kline_bar.dart';
 import 'package:chan_kline/models/level_models.dart';
@@ -136,7 +137,7 @@ void main() {
       );
     });
 
-    test('BUY1 AND RSI 同层合法；分型确认 AND RSI 非法；BUY1 OR BUY2 合法', () {
+    test('BUY1 AND RSI 同层合法；分型确认 AND RSI 非法；BUY1 OR BUY2 合法；跨层一类可拼', () {
       expect(
         compileConditionAst(k1Buy1AndRsiAst(), maxKn: 2),
         isA<CondCompileOk>(),
@@ -166,14 +167,159 @@ void main() {
         isA<CondCompileIllegal>(),
       );
       expect(
+        compileConditionAst(k0Buy1AndK1Buy1Ast(), maxKn: 2),
+        isA<CondCompileOk>(),
+      );
+      expect(
+        compileConditionAst(k0Buy1OrK1BuyN3Ast(), maxKn: 2),
+        isA<CondCompileOk>(),
+      );
+      expect(
         compileConditionAst(
           const TradeAndAst(
             TradeEventAst('STRUCTURE.K0.BUY1'),
-            TradeEventAst('STRUCTURE.K1.BUY1'),
+            TradeCmpAst(
+              left: TradeVarRef('SUB.K1.RSI.VALUE'),
+              right: TradeConstRef(50),
+              op: TradeBinaryOp.lt,
+            ),
           ),
           maxKn: 2,
         ),
         isA<CondCompileIllegal>(),
+      );
+      expect(
+        compileConditionAst(
+          TradeAndAst(
+            k0Buy1AndK1Buy1Ast(),
+            const TradeCmpAst(
+              left: TradeVarRef('SUB.K0.RSI.VALUE'),
+              right: TradeConstRef(50),
+              op: TradeBinaryOp.lt,
+            ),
+          ),
+          maxKn: 2,
+        ),
+        isA<CondCompileIllegal>(),
+      );
+    });
+
+    test('K0 分型确认 AND/OR K1 一类买能编过；分型确认 AND K1 RSI 非法', () {
+      expect(
+        compileConditionAst(k0FxConfirmAndK1Buy1Ast(), maxKn: 2),
+        isA<CondCompileOk>(),
+      );
+      expect(
+        compileConditionAst(k0FxConfirmOrK1Buy1Ast(), maxKn: 2),
+        isA<CondCompileOk>(),
+      );
+      expect(
+        compileConditionAst(
+          const TradeAndAst(
+            k0FractalConfirmAst,
+            TradeCmpAst(
+              left: TradeVarRef('SUB.K1.RSI.VALUE'),
+              right: TradeConstRef(50),
+              op: TradeBinaryOp.lt,
+            ),
+          ),
+          maxKn: 2,
+        ),
+        isA<CondCompileIllegal>(),
+      );
+      expect(
+        compileConditionAst(k0ZsConfirmAndK1Buy1Ast(), maxKn: 2),
+        isA<CondCompileOk>(),
+      );
+      expect(
+        compileConditionAst(k0DemarkBuyAndK1Buy1Ast(), maxKn: 2),
+        isA<CondCompileOk>(),
+      );
+    });
+  });
+
+  group('跨层一类/二类/N类 AND/OR（同一根 K0 脉冲）', () {
+    test('K0 一类 AND K1 一类：同一根才出信号，错开不出', () {
+      final bars = _bars(20);
+      final sameBar = ChanEventStore(
+        buy1ByKn: {
+          0: [_b1(x: 10, label: '1Ba', price: 11, level: 0)],
+          1: [_b1(x: 10, label: '1Ba', price: 12, level: 0)],
+        },
+      );
+      final andOk =
+          compileConditionAst(k0Buy1AndK1Buy1Ast(), maxKn: 2) as CondCompileOk;
+      expect(
+        evalCompiledCond(
+          cond: andOk.root,
+          side: TradeSide.buy,
+          ruleId: 'cross_and',
+          ctx: CondEvalCtx(
+            asOf: 15,
+            bars: bars,
+            chanEvents: sameBar,
+            maxKn: 2,
+          ),
+        ).map((e) => e.discoveryX).toList(),
+        [10],
+      );
+
+      final staggered = ChanEventStore(
+        buy1ByKn: {
+          0: [_b1(x: 10, label: '1Ba', price: 11, level: 0)],
+          1: [_b1(x: 12, label: '1Ba', price: 12, level: 0)],
+        },
+      );
+      expect(
+        evalCompiledCond(
+          cond: andOk.root,
+          side: TradeSide.buy,
+          ruleId: 'cross_and',
+          ctx: CondEvalCtx(
+            asOf: 15,
+            bars: bars,
+            chanEvents: staggered,
+            maxKn: 2,
+          ),
+        ),
+        isEmpty,
+      );
+    });
+
+    test('K0 一类 OR K1 三类：两层各出现各打一次', () {
+      final bars = _bars(20);
+      final store = ChanEventStore(
+        buy1ByKn: {
+          0: [_b1(x: 8, label: '1Ba', price: 11, level: 0)],
+        },
+        buyNByKn: {
+          1: [
+            const BuyNFrame(
+              cls: 3,
+              x: 14,
+              price: 18,
+              label: '3Ba',
+              segIdx: 2,
+              level: 0,
+            ),
+          ],
+        },
+      );
+      final orOk =
+          compileConditionAst(k0Buy1OrK1BuyN3Ast(), maxKn: 2) as CondCompileOk;
+      expect(
+        evalCompiledCond(
+          cond: orOk.root,
+          side: TradeSide.buy,
+          ruleId: 'cross_or',
+          ctx: CondEvalCtx(
+            asOf: 18,
+            bars: bars,
+            chanEvents: store,
+            maxKn: 2,
+          ),
+        ).map((e) => e.discoveryX).toList(),
+        [8, 14],
       );
     });
   });

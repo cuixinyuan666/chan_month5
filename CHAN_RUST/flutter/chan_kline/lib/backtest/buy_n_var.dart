@@ -20,6 +20,21 @@ String canonicalizeTradeVarId(String id) {
   return id;
 }
 
+/// 一类 / 二类 / N 类买卖点事件（不含分型确认、中枢确认）。
+/// 这些点发现时刻都钉在 K0 当根，层号只说明哪一层打出来的标签。
+bool isChanClassBsEventVarId(String id) {
+  final canonical = canonicalizeTradeVarId(id);
+  if (parseClassNVarId(canonical) != null) return true;
+  final parts = canonical.split('.');
+  if (parts.length != 3) return false;
+  if (parts[0] != 'STRUCTURE') return false;
+  if (!parts[1].startsWith('K')) return false;
+  return parts[2] == 'BUY1' ||
+      parts[2] == 'SELL1' ||
+      parts[2] == 'BUY2' ||
+      parts[2] == 'SELL2';
+}
+
 ({int kn, int cls, bool buy})? parseClassNVarId(String id) {
   final canonical = canonicalizeTradeVarId(id);
   final parts = canonical.split('.');

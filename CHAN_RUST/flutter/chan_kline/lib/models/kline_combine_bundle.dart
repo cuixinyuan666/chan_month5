@@ -176,7 +176,6 @@ class KlineCombineBundle {
           .map(
             (e) => LevelBundle.fromJson(
               Map<String, dynamic>.from(e as Map),
-              slim: slim,
             ),
           )
           .toList(),

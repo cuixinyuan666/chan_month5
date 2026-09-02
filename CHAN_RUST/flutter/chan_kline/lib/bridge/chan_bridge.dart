@@ -10,6 +10,9 @@ import '../models/kline_combine_frame.dart';
 import '../models/pipeline_delta.dart';
 import '../models/presentation_cache.dart';
 import '../widgets/kline_chip.dart';
+import 'chan_ffi_abi.dart';
+
+export 'chan_ffi_abi.dart';
 
 /// Rust `chan_ffi` 动态库桥接（纯 FFI：全部计算在 Rust，Dart 无回退实现）。
 class ChanBridge {
@@ -19,10 +22,19 @@ class ChanBridge {
 
   late final DynamicLibrary _lib;
   bool _ready = false;
+  int _abiVersion = -1;
+  String _openedLibraryPath = '';
+
+  /// 已加载库的协议号；未初始化为 -1。
+  int get loadedFfiAbiVersion {
+    ensureInitialized();
+    return _abiVersion;
+  }
 
   void ensureInitialized() {
     if (_ready) return;
     _lib = _openLibrary();
+    _assertAbiVersion();
     _ready = true;
   }
 
@@ -32,26 +44,55 @@ class ChanBridge {
       final devAbs =
           '${Directory.current.path}${Platform.pathSeparator}windows${Platform.pathSeparator}native${Platform.pathSeparator}chan_ffi.dll';
       if (File(devAbs).existsSync()) {
-        return DynamicLibrary.open(devAbs);
+        return _openNamed(devAbs);
       }
       final exeDir = File(Platform.resolvedExecutable).parent.path;
       final besideExe = '$exeDir${Platform.pathSeparator}chan_ffi.dll';
       if (File(besideExe).existsSync()) {
-        return DynamicLibrary.open(besideExe);
+        return _openNamed(besideExe);
       }
-      return DynamicLibrary.open('chan_ffi.dll');
+      return _openNamed('chan_ffi.dll');
     }
     if (Platform.isAndroid) {
       // Android 由 jniLibs/<abi>/libchan_ffi.so 打包进 APK
-      return DynamicLibrary.open('libchan_ffi.so');
+      return _openNamed('libchan_ffi.so');
     }
     if (Platform.isLinux) {
-      return DynamicLibrary.open('libchan_ffi.so');
+      return _openNamed('libchan_ffi.so');
     }
     if (Platform.isMacOS) {
-      return DynamicLibrary.open('libchan_ffi.dylib');
+      return _openNamed('libchan_ffi.dylib');
     }
     throw UnsupportedError('当前平台暂不支持 FFI: ${Platform.operatingSystem}');
+  }
+
+  DynamicLibrary _openNamed(String path) {
+    _openedLibraryPath = path;
+    try {
+      return DynamicLibrary.open(path);
+    } catch (e) {
+      throw ChanFfiVersionException(
+        chanFfiMissingLibraryMessage(triedPath: path, cause: e),
+      );
+    }
+  }
+
+  void _assertAbiVersion() {
+    int got;
+    try {
+      got = _lib.lookupFunction<Uint32 Function(), int Function()>(
+        'chan_ffi_abi_version',
+      )();
+    } catch (_) {
+      throw ChanFfiVersionException(chanFfiMissingAbiSymbolMessage());
+    }
+    _abiVersion = got;
+    if (got != kChanFfiAbiVersion) {
+      throw ChanFfiVersionException(
+        '${chanFfiAbiMismatchMessage(got: got, expected: kChanFfiAbiVersion)}'
+        ' 当前库：$_openedLibraryPath',
+      );
+    }
   }
 
   Pointer<Utf8> _toNative(String? text) {
@@ -444,7 +485,8 @@ class ChanPipelineSession {
 
   /// false=全程 Full Snapshot（对照路径）；true=首包 Full + 后续 Delta。
   final bool preferDelta;
-  /// 走完循环里可跳过 k1 分析等展示字段的 fromJson（末根必须关掉）。
+  /// 走完循环可跳过 k1 分析等纯展示表；冻段/合并框仍解析（比例/节奏与单步同口径）。
+  /// 末根关掉，补齐 k1 展示字段。
   bool slimDeltaStructure = false;
   final PresentationCache cache = PresentationCache();
   int _len = 0;

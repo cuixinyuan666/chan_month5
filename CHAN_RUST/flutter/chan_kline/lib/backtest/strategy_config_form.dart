@@ -18,6 +18,9 @@ import 'trade_operand.dart';
 import 'trade_var_diagnose.dart';
 import 'zhongshu_object_store.dart';
 
+/// 工作台标签：一次只展示一块，避免条件和报告叠在一起。
+enum StrategyFormSection { conditions, capital, all }
+
 /// 通用条件构建器：比较 / 穿越 / AND / OR / 变量 vs 常数。只搭 AST，不算真假。
 class StrategyConfigForm extends StatefulWidget {
   final StrategyConfig config;
@@ -25,6 +28,8 @@ class StrategyConfigForm extends StatefulWidget {
   final ValueChanged<StrategyConfig> onChanged;
   final ValueChanged<StrategyConfig>? onRun;
   final bool running;
+  final StrategyFormSection section;
+  final bool showRunButton;
   final List<KlineBar> bars;
   final List<LevelBundle> levels;
   final MathSeriesFreezeStore? mathFreeze;
@@ -44,6 +49,8 @@ class StrategyConfigForm extends StatefulWidget {
     required this.onChanged,
     this.onRun,
     this.running = false,
+    this.section = StrategyFormSection.all,
+    this.showRunButton = true,
     this.bars = const [],
     this.levels = const [],
     this.mathFreeze,
@@ -125,7 +132,7 @@ class _LeafDraft {
     if (ast is TradeCmpAst) {
       return _LeafDraft.fromCmp(ast, fallbackKn: fallbackKn);
     }
-    return _LeafDraft.fromCmp(kDefaultBollBuyAst, fallbackKn: fallbackKn);
+    return _LeafDraft.fromLeaf(kDefaultBuyAst, fallbackKn: fallbackKn);
   }
 
   bool get isEventLeft {
@@ -166,14 +173,18 @@ class _SideDraft {
 
   _SideDraft({required this.leaves, required this.joins});
 
-  factory _SideDraft.fromAst(TradeAst ast, {int fallbackKn = 0}) {
+  factory _SideDraft.fromAst(
+    TradeAst ast, {
+    int fallbackKn = 0,
+    TradeAst emptyFallback = kDefaultBuyAst,
+  }) {
     final flat = flattenAstChain(ast);
     final leaves = [
       for (final c in flat.leaves)
         _LeafDraft.fromLeaf(c, fallbackKn: fallbackKn),
     ];
     if (leaves.isEmpty) {
-      leaves.add(_LeafDraft.fromCmp(kDefaultBollBuyAst, fallbackKn: fallbackKn));
+      leaves.add(_LeafDraft.fromLeaf(emptyFallback, fallbackKn: fallbackKn));
     }
     return _SideDraft(leaves: leaves, joins: [...flat.joins]);
   }
@@ -203,8 +214,8 @@ class _StrategyConfigFormState extends State<StrategyConfigForm> {
     );
     _fee = TextEditingController(text: '${widget.config.commissionRate}');
     _slip = TextEditingController(text: '${widget.config.slippageAmount}');
-    _buy = _SideDraft.fromAst(widget.config.buyAst);
-    _sell = _SideDraft.fromAst(widget.config.sellAst);
+    _buy = _SideDraft.fromAst(widget.config.buyAst, emptyFallback: kDefaultBuyAst);
+    _sell = _SideDraft.fromAst(widget.config.sellAst, emptyFallback: kDefaultSellAst);
   }
 
   @override
@@ -282,94 +293,105 @@ class _StrategyConfigFormState extends State<StrategyConfigForm> {
       widget.config.copyWith(buyAst: _buy.toAst(), sellAst: _sell.toAst()),
       maxKn: maxKn,
     );
+    final showCond = widget.section == StrategyFormSection.conditions ||
+        widget.section == StrategyFormSection.all;
+    final showCap = widget.section == StrategyFormSection.capital ||
+        widget.section == StrategyFormSection.all;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _sideBlock(
-          title: '买入条件（同层同钟，真假由回测引擎算）',
-          draft: _buy,
-          kns: kns,
-          maxKn: maxKn,
-          prefix: 'buy',
-        ),
-        const SizedBox(height: 10),
-        _sideBlock(
-          title: '卖出条件（独立于买入，也可同层同钟）',
-          draft: _sell,
-          kns: kns,
-          maxKn: maxKn,
-          prefix: 'sell',
-        ),
-        if (compiled is StrategyCompileIllegal) ...[
+        if (showCond) ...[
+          _sideBlock(
+            title: '买入条件（一类/二类/N类和确认类事件可跨层；收盘/RSI 仍须同层同钟）',
+            draft: _buy,
+            kns: kns,
+            maxKn: maxKn,
+            prefix: 'buy',
+          ),
+          const SizedBox(height: 10),
+          _sideBlock(
+            title: '卖出条件（独立于买入；一类/二类/N类和确认类事件可跨层）',
+            draft: _sell,
+            kns: kns,
+            maxKn: maxKn,
+            prefix: 'sell',
+          ),
+          if (compiled is StrategyCompileIllegal) ...[
+            const SizedBox(height: 8),
+            Text(
+              compiled.reason,
+              style: const TextStyle(fontSize: 11, color: Color(0xFFFFB74D)),
+            ),
+          ],
+        ],
+        if (showCap) ...[
+          Row(
+            children: [
+              Expanded(child: _field('手数/数量', _qty)),
+              const SizedBox(width: 8),
+              Expanded(child: _field('本金', _cap)),
+            ],
+          ),
           const SizedBox(height: 8),
-          Text(
-            compiled.reason,
-            style: const TextStyle(fontSize: 11, color: Color(0xFFFFB74D)),
+          Row(
+            children: [
+              Expanded(child: _field('手续费率', _fee)),
+              const SizedBox(width: 8),
+              Expanded(child: _field('滑点价差', _slip)),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: DropdownButtonFormField<TradeFillPriceMode>(
+                  isExpanded: true,
+                  value: widget.config.fillPriceMode,
+                  decoration: _dec('成交价格（买/卖共用）'),
+                  items: [
+                    for (final mode in TradeFillPriceMode.values)
+                      DropdownMenuItem(
+                        value: mode,
+                        child: Text(tradeFillPriceModeLabel(mode)),
+                      ),
+                  ],
+                  onChanged: (v) {
+                    if (v == null) return;
+                    widget.onChanged(
+                      _readNums(widget.config.copyWith(fillPriceMode: v)),
+                    );
+                  },
+                ),
+              ),
+              IconButton(
+                tooltip: '成交价格说明',
+                onPressed: () => _showFillPriceHelp(context),
+                icon: const Icon(Icons.help_outline, size: 20),
+              ),
+            ],
           ),
         ],
-        const SizedBox(height: 8),
-        Row(
-          children: [
-            Expanded(child: _field('手数/数量', _qty)),
-            const SizedBox(width: 8),
-            Expanded(child: _field('本金', _cap)),
-          ],
-        ),
-        const SizedBox(height: 8),
-        Row(
-          children: [
-            Expanded(child: _field('手续费率', _fee)),
-            const SizedBox(width: 8),
-            Expanded(child: _field('滑点价差', _slip)),
-          ],
-        ),
-        const SizedBox(height: 8),
-        Row(
-          children: [
-            Expanded(
-              child: DropdownButtonFormField<TradeFillPriceMode>(
-                isExpanded: true,
-                value: widget.config.fillPriceMode,
-                decoration: _dec('成交价格（买/卖共用）'),
-                items: [
-                  for (final mode in TradeFillPriceMode.values)
-                    DropdownMenuItem(
-                      value: mode,
-                      child: Text(tradeFillPriceModeLabel(mode)),
-                    ),
-                ],
-                onChanged: (v) {
-                  if (v == null) return;
-                  widget.onChanged(
-                    _readNums(widget.config.copyWith(fillPriceMode: v)),
-                  );
-                },
-              ),
-            ),
-            IconButton(
-              tooltip: '成交价格说明',
-              onPressed: () => _showFillPriceHelp(context),
-              icon: const Icon(Icons.help_outline, size: 20),
-            ),
-          ],
-        ),
-        const SizedBox(height: 10),
-        FilledButton.icon(
-          onPressed: widget.running
-              ? null
-              : () {
-                  final next = _readNums(widget.config.copyWith(
-                    buyAst: _buy.toAst(),
-                    sellAst: _sell.toAst(),
-                  ));
-                  widget.onChanged(next);
-                  widget.onRun?.call(next);
-                },
-          icon: const Icon(Icons.play_arrow, size: 18),
-          label: Text(widget.running ? '正在回测…' : '运行回测'),
-        ),
-        const SizedBox(height: 10),
-        _diagnoseCard(),
+        if (widget.showRunButton) ...[
+          const SizedBox(height: 10),
+          FilledButton.icon(
+            onPressed: widget.running
+                ? null
+                : () {
+                    final next = _readNums(widget.config.copyWith(
+                      buyAst: _buy.toAst(),
+                      sellAst: _sell.toAst(),
+                    ));
+                    widget.onChanged(next);
+                    widget.onRun?.call(next);
+                  },
+            icon: const Icon(Icons.play_arrow, size: 18),
+            label: Text(widget.running ? '正在回测…' : '运行回测'),
+          ),
+        ],
+        if (showCond) ...[
+          const SizedBox(height: 10),
+          _diagnoseCard(),
+        ],
       ],
     );
   }

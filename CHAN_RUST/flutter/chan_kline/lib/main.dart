@@ -238,8 +238,12 @@ Future<void> main() async {
   MsgHistory.instance.appendTradeSignalTable();
   MsgHistory.instance.appendTradeFillPriceMode();
   MsgHistory.instance.appendTradeRoundLabel();
-    MsgHistory.instance.appendTradeCatalogFull();
-    MsgHistory.instance.appendChipPeakVars();
+  MsgHistory.instance.appendTradeCatalogFull();
+  MsgHistory.instance.appendChipPeakVars();
+  MsgHistory.instance.appendP0TrustGates();
+  MsgHistory.instance.appendCrossKnBsJoin();
+  MsgHistory.instance.appendWorkbenchLayoutAndK0BarEvents();
+  MsgHistory.instance.appendWorkbenchBelowCaptionAndClose();
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     await windowManager.ensureInitialized();
     const opts = WindowOptions(
@@ -336,6 +340,11 @@ class _KlineHomePageState extends State<KlineHomePage> {
   /// 分笔：加载中/刚进图时铺满屏幕太极；点一下或步进后收起。
   bool _tickYinYangCover = false;
   bool _runningToEnd = false;
+  bool _cancelRunToEnd = false;
+  final ValueNotifier<String> _longOpHint = ValueNotifier<String>('');
+  /// 计算库缺失/版本不对：中文停机，禁止继续算出另一套点。
+  bool _libHalt = false;
+  String? _libHaltMessage;
   bool _panelExpanded = false;
   int _panelEdge = 1; // 默认右贴边（设置按钮在右上）
   /// Android 设置抽屉局部刷新（开关即时反馈）
@@ -346,6 +355,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
   late final BackgroundKeepAlive _keepAlive = BackgroundKeepAlive(
     onSessionActive: () =>
         _playing ||
+        _runningToEnd ||
         _backtestPanelOpen ||
         _mlSession.isActive ||
         _taskDemoAutoPlay,
@@ -367,8 +377,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
   /// chip 分支：仅显示筹码分布，关闭所有缠论渲染（关=正常缠论+筹码可并存）
   final bool _chipOnlyMode = false;
 
-  /// 开发演示阶段（默认开）：启动 exe 自动加载最新任务演示
-  bool _devDemoPhaseEnabled = true;
+  /// 开发演示阶段（对外默认关）：开了才启动自动加载最新任务演示
+  bool _devDemoPhaseEnabled = false;
   bool _taskDemoWalkActive = false;
   TaskDemoManifest? _taskDemoManifest;
   List<TaskDemoWalkthroughStep> _taskDemoSteps = const [];
@@ -438,14 +448,14 @@ class _KlineHomePageState extends State<KlineHomePage> {
   bool _backtestPanelOpen = false;
   StrategyConfig _strategyConfig = const StrategyConfig();
   BacktestRun? _backtestRun;
-  BacktestReportTab _btTab = BacktestReportTab.metrics;
+  BacktestWorkbenchTab _btTab = BacktestWorkbenchTab.conditions;
   String? _btSelectedSignalId;
   String? _btSelectedTradeId;
   Set<String> _btHighlightIds = {};
   int? _btFocusBarIdx;
   int _btFocusEpoch = 0;
-  /// 策略回测打开时：K 线区占竖向比例（可拖分割条调整）
-  double _backtestChartFraction = Platform.isAndroid ? 0.38 : 0.58;
+  /// 策略回测打开时：桌面=K 线占横向比例；手机竖屏=K 线占竖向比例
+  double _backtestChartFraction = Platform.isAndroid ? 0.42 : 0.64;
   static const _minBacktestChartFraction = 0.22;
   static const _maxBacktestChartFraction = 0.85;
   bool _backtestSplitDragging = false;
@@ -461,7 +471,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
         ),
       );
 
-  bool get _busy => _bootstrapping || _loadingChart;
+  bool get _busy =>
+      _bootstrapping || _loadingChart || _runningToEnd || _libHalt;
   bool get _hasSession => _allBars.isNotEmpty;
 
   /// 其它周期加载用小转圈；分笔走全屏太极层。
@@ -485,6 +496,103 @@ class _KlineHomePageState extends State<KlineHomePage> {
         behavior: HitTestBehavior.opaque,
         onPointerDown: _loadingChart ? null : (_) => _dismissTickYinYang(),
         child: const YinYangFullscreenCover(),
+      ),
+    );
+  }
+
+  /// 计算库对不上：全屏中文停机说明。
+  Widget _buildLibHaltOverlay() {
+    final msg = _libHaltMessage ?? '缠论计算库不可用。';
+    return Positioned.fill(
+      child: ColoredBox(
+        color: const Color(0xF2121212),
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 520),
+            child: Material(
+              color: const Color(0xFF1E1E1E),
+              borderRadius: BorderRadius.circular(8),
+              child: Padding(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      '计算库对不上，已停机',
+                      style: TextStyle(
+                        color: Colors.orange,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      msg,
+                      style: const TextStyle(
+                        color: Color(0xFFE2E8F0),
+                        fontSize: 14,
+                        height: 1.45,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    const Text(
+                      '请覆盖为本次安装包里的那一份动态库，关掉软件再打开。不要混用旧备份，否则副图买卖点会对成另一套。',
+                      style: TextStyle(color: Color(0xFF94A3B8), fontSize: 12, height: 1.4),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 走完/长播放进度条：只刷这行字，不刷整张图。
+  Widget _buildLongOpBanner({double top = 44}) {
+    if (!_runningToEnd && !_playing) return const SizedBox.shrink();
+    final total = _allBars.length;
+    return Positioned(
+      left: 12,
+      right: 12,
+      top: top,
+      child: Material(
+        color: const Color(0xE61A1A1A),
+        borderRadius: BorderRadius.circular(8),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(
+            children: [
+              const SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _runningToEnd
+                    ? ValueListenableBuilder<String>(
+                        valueListenable: _longOpHint,
+                        builder: (_, hint, __) => Text(
+                          hint.isEmpty ? '一次性走完，请稍候…' : hint,
+                          style: const TextStyle(color: Colors.white, fontSize: 13),
+                        ),
+                      )
+                    : Text(
+                        '自动播放 ${_stepIdx + 1} / $total',
+                        style: const TextStyle(color: Colors.white, fontSize: 13),
+                      ),
+              ),
+              if (_runningToEnd)
+                TextButton(
+                  onPressed: () => _cancelRunToEnd = true,
+                  child: const Text('取消'),
+                ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -663,6 +771,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
   void dispose() {
     _keepAlive.detach();
     _playTimer?.cancel();
+    _longOpHint.dispose();
     _stopTaskDemoAutoPlay();
     _disposePipelineSession();
     super.dispose();
@@ -858,7 +967,13 @@ class _KlineHomePageState extends State<KlineHomePage> {
       );
       await _maybeAutoStartLatestTaskDemo();
     } catch (e) {
-      setState(() => _error = e.toString());
+      setState(() {
+        _error = e.toString();
+        if (e is ChanFfiVersionException) {
+          _libHalt = true;
+          _libHaltMessage = e.message;
+        }
+      });
       _msgHistory.append('启动失败：$e');
     } finally {
       if (mounted) setState(() => _bootstrapping = false);
@@ -1667,8 +1782,15 @@ class _KlineHomePageState extends State<KlineHomePage> {
       );
       return;
     }
+    _cancelRunToEnd = false;
     _runningToEnd = true;
+    final total = end - start + 1;
+    _longOpHint.value = '一次性走完 0 / $total，请稍候…';
+    setState(() {});
+    _refreshKeepAlive();
     _dismissTickYinYang();
+    var cancelled = false;
+    var lastYield = DateTime.fromMillisecondsSinceEpoch(0);
     try {
       final growing =
           start > 0 ? _allBars.sublist(0, start) : <KlineBar>[];
@@ -1753,6 +1875,23 @@ class _KlineHomePageState extends State<KlineHomePage> {
           _msgHistory.append('一次性走完@step=$i 失败：$e');
           break;
         }
+        final now = DateTime.now();
+        if (i == start ||
+            i == end ||
+            now.difference(lastYield).inMilliseconds >= 200) {
+          final done = i - start + 1;
+          _longOpHint.value =
+              '一次性走完 $done / $total（第 ${i + 1} 根），请稍候…';
+          await Future<void>.delayed(Duration.zero);
+          lastYield = DateTime.now();
+          if (!mounted) return;
+          if (_cancelRunToEnd) {
+            cancelled = true;
+            sess?.slimDeltaStructure = false;
+            _msgHistory.append('一次性走完已取消，停在第 ${i + 1} 根（冻结保留到这里）');
+            break;
+          }
+        }
       }
       final chipAsOf = growing.isEmpty ? end : growing.last.idx;
       _chipPeakStore.ingestThrough(
@@ -1762,10 +1901,15 @@ class _KlineHomePageState extends State<KlineHomePage> {
       );
       // 循环里已逐 K 合并冻结，末态只刷查表和画面，避免再合一遍
       _rebuildCombine(skipFreezeMerge: true);
-      _logCombineSummary(prefix: '一次性走完');
+      _logCombineSummary(prefix: cancelled ? '一次性走完(取消)' : '一次性走完');
     } finally {
       _pipelineSession?.slimDeltaStructure = false;
       _runningToEnd = false;
+      if (mounted) {
+        _longOpHint.value = '';
+        setState(() {});
+        _refreshKeepAlive();
+      }
     }
   }
 
@@ -1787,7 +1931,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         children: [
           Positioned.fill(
             child: Padding(
-              padding: const EdgeInsets.all(4),
+              padding: const EdgeInsets.all(kDesktopShellInset),
               child: DecoratedBox(
                 decoration: BoxDecoration(
                   color: const Color(0xFF121212),
@@ -1875,9 +2019,10 @@ class _KlineHomePageState extends State<KlineHomePage> {
             left: 0,
             right: 0,
             top: 0,
-            height: 36,
+            height: kDesktopCaptionBarHeight,
             child: _buildCaptionBar(),
           ),
+          if (_runningToEnd || _playing) _buildLongOpBanner(),
           if (_loadingChart && _period != 'tick')
             Positioned.fill(
               child: IgnorePointer(
@@ -1910,6 +2055,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
                 onExitDevelopmentPhase: _exitDevelopmentDemoPhase,
               ),
             ),
+          if (_libHalt) _buildLibHaltOverlay(),
         ],
       ),
     );
@@ -2018,6 +2164,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
                 child: Center(child: _chartLoadingIndicator()),
               ),
             ),
+          if (_runningToEnd || _playing) _buildLongOpBanner(top: topInset + 48),
           if (_taskDemoWalkActive &&
               _taskDemoManifest != null &&
               !_mlSession.isActive)
@@ -2041,6 +2188,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
                 onExitDevelopmentPhase: _exitDevelopmentDemoPhase,
               ),
             ),
+          if (_libHalt) _buildLibHaltOverlay(),
         ],
       ),
     );
@@ -2080,13 +2228,13 @@ class _KlineHomePageState extends State<KlineHomePage> {
       children: [
         const Expanded(
           child: IgnorePointer(
-            child: SizedBox(height: 36),
+            child: SizedBox(height: kDesktopCaptionBarHeight),
           ),
         ),
         DragToMoveArea(
           child: SizedBox(
             width: dragGripW,
-            height: 36,
+            height: kDesktopCaptionBarHeight,
             child: Container(color: Colors.transparent),
           ),
         ),
@@ -2095,7 +2243,10 @@ class _KlineHomePageState extends State<KlineHomePage> {
           child: IconButton(
             onPressed: () => setState(() => _panelExpanded = !_panelExpanded),
             padding: EdgeInsets.zero,
-            constraints: const BoxConstraints.tightFor(width: 36, height: 36),
+            constraints: const BoxConstraints.tightFor(
+              width: kDesktopCaptionBarHeight,
+              height: kDesktopCaptionBarHeight,
+            ),
             icon: Icon(
               _panelExpanded ? Icons.close : Icons.settings,
               size: 18,
@@ -2545,7 +2696,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
           subtitle: Text(
             _devDemoPhaseEnabled
                 ? '已开启：启动自动加载最新任务演示（可点下一步步进）'
-                : '已关闭：自行选择股票/演示内容',
+                : '已关闭（对外默认关）：自行选股；研究时可手动打开',
             style: const TextStyle(fontSize: 11),
           ),
           value: _devDemoPhaseEnabled,
@@ -2666,6 +2817,11 @@ class _KlineHomePageState extends State<KlineHomePage> {
     _btFocusBarIdx = null;
   }
 
+  void _closeBacktestWorkbench() {
+    setState(() => _backtestPanelOpen = false);
+    _refreshKeepAlive();
+  }
+
   void _openBacktestWorkbench({bool closeSettingsSheet = false}) {
     if (_mlSession.isActive) {
       _showSnack('请先退出机器学习');
@@ -2685,18 +2841,21 @@ class _KlineHomePageState extends State<KlineHomePage> {
   void _onBacktestSplitDown(PointerDownEvent e) {
     if (e.buttons != kPrimaryButton) return;
     _backtestSplitDragging = true;
-    _backtestSplitDragStartY = e.localPosition.dy;
+    _backtestSplitDragStartY = _useAndroidInteraction
+        ? e.localPosition.dy
+        : e.localPosition.dx;
     _backtestSplitDragStartFraction = _backtestChartFraction;
   }
 
-  void _onBacktestSplitMove(PointerMoveEvent e, double totalH) {
-    if (!_backtestSplitDragging || totalH <= 0) return;
-    final delta = e.localPosition.dy - _backtestSplitDragStartY;
+  void _onBacktestSplitMove(PointerMoveEvent e, double total) {
+    if (!_backtestSplitDragging || total <= 0) return;
+    final pos =
+        _useAndroidInteraction ? e.localPosition.dy : e.localPosition.dx;
+    final delta = pos - _backtestSplitDragStartY;
     setState(() {
-      _backtestChartFraction = ((_backtestSplitDragStartFraction * totalH +
-              delta) /
-          totalH)
-          .clamp(_minBacktestChartFraction, _maxBacktestChartFraction);
+      _backtestChartFraction =
+          ((_backtestSplitDragStartFraction * total + delta) / total)
+              .clamp(_minBacktestChartFraction, _maxBacktestChartFraction);
     });
   }
 
@@ -2704,29 +2863,47 @@ class _KlineHomePageState extends State<KlineHomePage> {
     _backtestSplitDragging = false;
   }
 
-  Widget _buildBacktestSplitBar(double totalH) {
+  Widget _buildBacktestSplitBar(double total, {required bool vertical}) {
     return MouseRegion(
-      cursor: SystemMouseCursors.resizeUpDown,
+      cursor: vertical
+          ? SystemMouseCursors.resizeUpDown
+          : SystemMouseCursors.resizeLeftRight,
       child: Listener(
         behavior: HitTestBehavior.opaque,
         onPointerDown: _onBacktestSplitDown,
-        onPointerMove: (e) => _onBacktestSplitMove(e, totalH),
+        onPointerMove: (e) => _onBacktestSplitMove(e, total),
         onPointerUp: _onBacktestSplitUp,
-        child: SizedBox(
-          height: 8,
-          child: Center(
-            child: Container(
-              height: _backtestSplitDragging ? 3 : 2,
-              margin: const EdgeInsets.symmetric(horizontal: 8),
-              decoration: BoxDecoration(
-                color: _backtestSplitDragging
-                    ? const Color(0xAA42A5F5)
-                    : const Color(0x55FFFFFF),
-                borderRadius: BorderRadius.circular(2),
+        child: vertical
+            ? SizedBox(
+                height: 8,
+                child: Center(
+                  child: Container(
+                    height: _backtestSplitDragging ? 3 : 2,
+                    margin: const EdgeInsets.symmetric(horizontal: 8),
+                    decoration: BoxDecoration(
+                      color: _backtestSplitDragging
+                          ? const Color(0xAA42A5F5)
+                          : const Color(0x55FFFFFF),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+              )
+            : SizedBox(
+                width: 8,
+                child: Center(
+                  child: Container(
+                    width: _backtestSplitDragging ? 3 : 2,
+                    margin: const EdgeInsets.symmetric(vertical: 8),
+                    decoration: BoxDecoration(
+                      color: _backtestSplitDragging
+                          ? const Color(0xAA42A5F5)
+                          : const Color(0x55FFFFFF),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
               ),
-            ),
-          ),
-        ),
       ),
     );
   }
@@ -2740,10 +2917,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       maxKn: maxKn,
       onConfigChanged: (c) => setState(() => _strategyConfig = c),
       onRun: _runStrategyBacktest,
-      onClose: () {
-        setState(() => _backtestPanelOpen = false);
-        _refreshKeepAlive();
-      },
+      onClose: _closeBacktestWorkbench,
       onHelp: _showBacktestHelp,
       run: _backtestRun,
       bars: _visibleBars,
@@ -2769,6 +2943,27 @@ class _KlineHomePageState extends State<KlineHomePage> {
     );
     return LayoutBuilder(
       builder: (context, constraints) {
+        final sideBySide = !_useAndroidInteraction;
+        if (sideBySide) {
+          final totalW = constraints.maxWidth;
+          if (totalW <= 0) return chart;
+          const splitW = 8.0;
+          const minChartW = 240.0;
+          const minBenchW = 300.0;
+          final maxChartW = math.max(minChartW, totalW - minBenchW - splitW);
+          final minFrac = minChartW / totalW;
+          final maxFrac = maxChartW / totalW;
+          final frac = _backtestChartFraction.clamp(minFrac, maxFrac);
+          final chartW = frac * totalW;
+          final benchW = totalW - chartW - splitW;
+          return Row(
+            children: [
+              SizedBox(width: chartW, child: chart),
+              _buildBacktestSplitBar(totalW, vertical: false),
+              SizedBox(width: benchW, child: workbench),
+            ],
+          );
+        }
         final totalH = constraints.maxHeight;
         if (totalH <= 0) return chart;
         const splitBarH = 8.0;
@@ -2783,7 +2978,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         return Column(
           children: [
             SizedBox(height: chartH, child: chart),
-            _buildBacktestSplitBar(totalH),
+            _buildBacktestSplitBar(totalH, vertical: true),
             SizedBox(height: backtestH, child: workbench),
           ],
         );
@@ -2885,7 +3080,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       _btSelectedSignalId = same ? t.exitSignalId : t.entrySignalId;
       _btFocusBarIdx = same ? t.exitX : t.entryX;
       _btFocusEpoch++;
-      _btTab = BacktestReportTab.trades;
+      _btTab = BacktestWorkbenchTab.trades;
     });
   }
 
@@ -2910,7 +3105,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
           : {s.signalId};
       _btFocusBarIdx = s.discoveryX;
       _btFocusEpoch++;
-      if (openChain) _btTab = BacktestReportTab.chain;
+      if (openChain) _btTab = BacktestWorkbenchTab.chain;
     });
   }
 
@@ -2921,7 +3116,9 @@ class _KlineHomePageState extends State<KlineHomePage> {
         title: const Text('策略回测说明'),
         content: const SingleChildScrollView(
           child: Text(
-            '先加载股票并走到你要回测的那根 K，再打开策略回测。\n\n'
+            '先加载股票并走到你要回测的那根 K，再打开策略回测。\n'
+            '电脑上整块工作台在窗口最小/最大/关闭下面，避免挡住那三个键。'
+            '点工作台右上角关闭（X）只关策略回测、K 线铺回整屏；设置里还能再打开。不是关软件窗口。\n\n'
             '买卖条件各自用积木搭：比较（> < >= <=）、上穿/下穿，'
             '多条之间用 AND / OR。左右可以是同一层的收开高低、布林三轨、'
             'MACD（DIF/DEA/柱）、RSI、KDJ，K0 还可以用成交量；右边也可以填常数。'
@@ -3599,8 +3796,9 @@ class _KlineHomePageState extends State<KlineHomePage> {
         title: const Text('开发演示阶段'),
         content: const SingleChildScrollView(
           child: Text(
-            '开发阶段（默认开启）\n'
-            '· 打开软件后自动加载最新一次任务完成说明；\n'
+            '开发阶段（需手动打开）\n'
+            '· 对外包默认关：打开软件不会自动加载任务演示；\n'
+            '· 研究/开发：设置里打开「开发演示阶段」，下次启动才自动加载最新任务；\n'
             '· 底下左右分别是「改之前 / 改之后」；\n'
             '· 点「下一步」或播放，主图一格一格走到对应 K 线；\n'
             '· 说明尽量用白话，不要堆代码名。\n\n'

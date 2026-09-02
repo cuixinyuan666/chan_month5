@@ -1705,6 +1705,10 @@ class _KlineChartState extends State<KlineChart> {
               featureLookup: layer == _ChartPaintLayer.chip
                   ? BarFeatureLookup.empty()
                   : paintLookup,
+              strategySignals: widget.strategySignals,
+              strategyFills: widget.strategyFills,
+              strategyRoundBySignalId: widget.strategyRoundBySignalId,
+              highlightedStrategyIds: widget.highlightedStrategyIds,
             );
 
         final chartSize = Size(w, mainH + volH);
@@ -1721,24 +1725,6 @@ class _KlineChartState extends State<KlineChart> {
                 painter: paintLayer(_ChartPaintLayer.base),
               ),
             ),
-            if (widget.strategySignals.isNotEmpty)
-              RepaintBoundary(
-                child: CustomPaint(
-                  size: chartSize,
-                  painter: StrategySignalPainter(
-                    bars: widget.bars,
-                    signals: widget.strategySignals,
-                    fills: widget.strategyFills,
-                    roundBySignalId: widget.strategyRoundBySignalId,
-                    highlightedIds: widget.highlightedStrategyIds,
-                    viewport: _viewport,
-                    priceRange: priceRange,
-                    mainH: mainH,
-                    asOf: segAsOf,
-                    isTickPeriod: widget.period == 'tick',
-                  ),
-                ),
-              ),
             RepaintBoundary(
               child: CustomPaint(
                 size: chartSize,
@@ -2011,7 +1997,14 @@ class _KlineCompositePainter extends CustomPainter {
     this.chipOnlyMode = false,
     this.layer = _ChartPaintLayer.base,
     required this.featureLookup,
-  });
+    this.strategySignals = const [],
+    this.strategyFills = const [],
+    this.strategyRoundBySignalId = const {},
+    this.highlightedStrategyIds = const {},
+  })  : _viewXMin = viewport.viewXMin,
+        _viewXMax = viewport.viewXMax,
+        _yZoom = viewport.yZoomRatio,
+        _yShift = viewport.yShiftRatio;
 
   /// 分层绘制：底图/筹码/十字 独立 shouldRepaint（计算口径不变）
   final _ChartPaintLayer layer;
@@ -2101,6 +2094,18 @@ class _KlineCompositePainter extends CustomPainter {
   final DivergenceFreezeStore? diverFreezeStore;
   /// chip 分支：仅显示筹码分布，关闭所有缠论渲染
   final bool chipOnlyMode;
+
+  /// 策略买/卖：跟蜡烛同一套柱心，平移时一起走
+  final List<SignalEvent> strategySignals;
+  final List<Fill> strategyFills;
+  final Map<String, int> strategyRoundBySignalId;
+  final Set<String> highlightedStrategyIds;
+
+  /// 视口快照：viewport 是可变对象，平移时同一份被改掉，不能跟共享 viewXMin 比
+  final double _viewXMin;
+  final double _viewXMax;
+  final double _yZoom;
+  final double _yShift;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -2321,6 +2326,23 @@ class _KlineCompositePainter extends CustomPainter {
       onLeft: showChip || showTickDist,
       leftX: showTickDist ? plotLeft + 2 : null,
     );
+    if (chanDraw && strategySignals.isNotEmpty) {
+      // 策略买/卖与蜡烛同一套柱心，平移时跟 K 线走（不再单独一层 overlay）
+      paintStrategyMarkersOnChart(
+        canvas: canvas,
+        signals: strategySignals,
+        bars: bars,
+        barCenterX: (x) => _barCenterX(x, size.width, slotW),
+        priceRange: priceRange,
+        plotTop: plotTop,
+        plotH: plotH,
+        asOf: segAsOf,
+        isTickPeriod: period == 'tick',
+        fills: strategyFills,
+        roundBySignalId: strategyRoundBySignalId,
+        highlightedIds: highlightedStrategyIds,
+      );
+    }
     canvas.restore();
 
     if (chanDraw && subIndicators.isNotEmpty) {
@@ -6391,10 +6413,10 @@ class _KlineCompositePainter extends CustomPainter {
     final geomChanged = oldDelegate.mainH != mainH ||
         oldDelegate.volH != volH ||
         oldDelegate.mainPlotTop != mainPlotTop ||
-        oldDelegate.viewport.viewXMin != viewport.viewXMin ||
-        oldDelegate.viewport.viewXMax != viewport.viewXMax ||
-        oldDelegate.viewport.yZoomRatio != viewport.yZoomRatio ||
-        oldDelegate.viewport.yShiftRatio != viewport.yShiftRatio ||
+        oldDelegate._viewXMin != _viewXMin ||
+        oldDelegate._viewXMax != _viewXMax ||
+        oldDelegate._yZoom != _yZoom ||
+        oldDelegate._yShift != _yShift ||
         oldDelegate.priceRange.min != priceRange.min ||
         oldDelegate.priceRange.max != priceRange.max;
     final dataChanged = oldDelegate.bars != bars ||
@@ -6437,6 +6459,10 @@ class _KlineCompositePainter extends CustomPainter {
         oldDelegate.stepRhythmHistoryByKn != stepRhythmHistoryByKn ||
         oldDelegate.lineSlopeHistoryByKn != lineSlopeHistoryByKn ||
         oldDelegate.chipOnlyMode != chipOnlyMode ||
+        oldDelegate.strategySignals != strategySignals ||
+        oldDelegate.strategyFills != strategyFills ||
+        oldDelegate.strategyRoundBySignalId != strategyRoundBySignalId ||
+        oldDelegate.highlightedStrategyIds != highlightedStrategyIds ||
         oldDelegate.chipConfig != chipConfig ||
         oldDelegate.tickDistConfig != tickDistConfig ||
         oldDelegate.mathIndicatorConfig != mathIndicatorConfig ||

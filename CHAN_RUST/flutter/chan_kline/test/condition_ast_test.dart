@@ -263,7 +263,7 @@ void main() {
   });
 
   group('同一套 AST → 现有回测核心', () {
-    test('默认布林穿越 AST 与旧 CROSS 路径发现点一致', () {
+    test('布林穿越 AST 与旧 CROSS 路径发现点一致', () {
       final bars = <KlineBar>[
         for (var i = 0; i < 24; i++) _bar(i, 100, open: 100),
         for (var i = 24; i < 40; i++) _bar(i, 40, open: 41),
@@ -288,7 +288,7 @@ void main() {
         bollN: 20,
       );
       final run = executeStrategyBacktest(
-        config: const StrategyConfig(),
+        config: StrategyConfig.bollLayers(buyKn: 0, sellKn: 0),
         scope: _scope(bars.last.idx),
         bars: bars,
         mathFreeze: store,

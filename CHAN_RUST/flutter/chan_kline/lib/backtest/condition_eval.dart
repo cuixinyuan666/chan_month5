@@ -18,22 +18,28 @@ import 'trade_operand.dart';
 import 'trade_value.dart';
 import 'zhongshu_object_store.dart';
 
-/// 编译后的钟身份：AND/OR 两边必须同一层同一套钟同一计算钟。
+/// 编译后的钟身份：比较/RSI 等 AND/OR 仍须同一层同一套钟。
+/// K0 当根事件（一类/二类/N类、分型确认/判断、中枢确认/判断、背驰出现、Demark完成）
+/// 可以跨层 AND/OR；拼过之后不能再跟某一层的 RSI/收盘混。
 class CompiledClock {
   final int displayKn;
   final TradeClockFamily family;
   final TradeEvalClock evalClock;
+  /// 这棵子树已经把不同层或不同钟族的 K0 当根事件拼在一起。
+  final bool crossKnBs;
 
   const CompiledClock({
     required this.displayKn,
     required this.family,
     required this.evalClock,
+    this.crossKnBs = false,
   });
 
   bool sameAs(CompiledClock o) =>
       displayKn == o.displayKn &&
       family == o.family &&
-      evalClock == o.evalClock;
+      evalClock == o.evalClock &&
+      crossKnBs == o.crossKnBs;
 }
 
 sealed class CondCompileResult {
@@ -217,7 +223,8 @@ CondCompileResult _compileJoin(
   if (!_clocksJoinable(l, r)) {
     return CondCompileIllegal(
       '条件里混了不同层或不同钟，不能 ${and ? 'AND' : 'OR'} 在一起'
-      '（禁止 K0 和 K1 拼在同一棵树上；分型确认是连线钟，不能和 RSI 直接拼）',
+      '（一类/二类/N类、分型确认/判断、中枢确认/判断、背驰出现、Demark完成'
+      '可以跨层拼；收盘/RSI/布林仍须同层同钟；分型确认不能和 RSI 直接拼）',
       kind: TradeCompileErrorKind.clock,
     );
   }
@@ -238,7 +245,24 @@ bool _involvesEvent(CompiledCond c) {
   };
 }
 
+/// 整棵子树都是「K0 当根出现」的事件（可含它们之间的 AND/OR）。
+bool _isPureK0BarEventTree(CompiledCond c) {
+  return switch (c) {
+    CompiledEvent(:final clockOp) =>
+      clockOp.evalClock == TradeEvalClock.k0Bar,
+    CompiledAnd(:final left, :final right) =>
+      _isPureK0BarEventTree(left) && _isPureK0BarEventTree(right),
+    CompiledOr(:final left, :final right) =>
+      _isPureK0BarEventTree(left) && _isPureK0BarEventTree(right),
+    CompiledCmp() => false,
+  };
+}
+
 bool _clocksJoinable(CompiledCond a, CompiledCond b) {
+  // 发现都钉在 K0 当根：层号/钟族只标明哪一层打出来的，允许跨层 AND/OR。
+  if (_isPureK0BarEventTree(a) && _isPureK0BarEventTree(b)) return true;
+  // 已经跨层或跨钟族拼过的事件树，不能再跟某一层 RSI/收盘混。
+  if (a.clock.crossKnBs || b.clock.crossKnBs) return false;
   if (a.clock.sameAs(b.clock)) return true;
   if (a.clock.displayKn != b.clock.displayKn) return false;
   if (a.clock.family != b.clock.family) return false;
@@ -246,6 +270,18 @@ bool _clocksJoinable(CompiledCond a, CompiledCond b) {
 }
 
 CompiledClock _joinClock(CompiledCond a, CompiledCond b) {
+  if (_isPureK0BarEventTree(a) && _isPureK0BarEventTree(b)) {
+    final cross = a.clock.displayKn != b.clock.displayKn ||
+        a.clock.family != b.clock.family ||
+        a.clock.crossKnBs ||
+        b.clock.crossKnBs;
+    return CompiledClock(
+      displayKn: a.clock.displayKn,
+      family: a.clock.family,
+      evalClock: TradeEvalClock.k0Bar,
+      crossKnBs: cross,
+    );
+  }
   if (_involvesEvent(a) && a.clock.evalClock == TradeEvalClock.k0Bar) {
     return a.clock;
   }

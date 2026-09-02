@@ -49,6 +49,16 @@ fn cstr_to_str<'a>(ptr: *const c_char) -> Option<&'a str> {
     }
 }
 
+/// 动态库协议号：必须与 Flutter `kChanFfiAbiVersion` 相同。
+/// 改管道 JSON / 冻结语义时两边一起加一，禁止静默混用旧库。
+pub const CHAN_FFI_ABI_VERSION: u32 = 1;
+
+/// 返回协议号（裸 u32，不走 JSON）。缺此符号=旧库，界面应停机。
+#[no_mangle]
+pub extern "C" fn chan_ffi_abi_version() -> u32 {
+    CHAN_FFI_ABI_VERSION
+}
+
 /// 释放 `chan_*` 返回的字符串。
 #[no_mangle]
 pub extern "C" fn chan_free_string(s: *mut c_char) {
