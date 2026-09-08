@@ -339,6 +339,13 @@ void main() {
   });
 
   group('策略买卖组号', () {
+    test('买1卖1用三角、买2卖2用箭头，按组号奇偶交替', () {
+      expect(strategyMarkerGlyph(1), StrategyMarkerGlyph.triangle);
+      expect(strategyMarkerGlyph(2), StrategyMarkerGlyph.arrow);
+      expect(strategyMarkerGlyph(3), StrategyMarkerGlyph.triangle);
+      expect(strategyMarkerGlyph(null), StrategyMarkerGlyph.triangle);
+    });
+
     test('闭合交易按顺序编号买1卖1买2卖2', () {
       final buy1 = _sig('b1', TradeSide.buy, 2);
       final sell1 = _sig('s1', TradeSide.sell, 6);
@@ -443,7 +450,8 @@ void main() {
       expect(find.textContaining('变量诊断'), findsOneWidget);
       expect(find.textContaining('买入条件'), findsOneWidget);
       expect(find.textContaining('卖出条件'), findsOneWidget);
-      expect(find.text('一类BS'), findsWidgets);
+      expect(find.text('N类BS'), findsWidgets);
+      expect(find.text('一类BS'), findsNothing);
       expect(find.text('出现'), findsWidgets);
       // 默认策略是一类买/卖出现，不再自带下穿
       expect(find.text('下穿'), findsNothing);

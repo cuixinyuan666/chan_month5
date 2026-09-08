@@ -17,6 +17,69 @@ const Color kStrategySellColor = Color(0xFF00E676);
 Color strategySideColor(TradeSide side) =>
     side == TradeSide.buy ? kStrategyBuyColor : kStrategySellColor;
 
+/// 买1/卖1 三角，买2/卖2 箭头，买3/卖3 再三角，按组号奇偶交替。
+enum StrategyMarkerGlyph { triangle, arrow }
+
+StrategyMarkerGlyph strategyMarkerGlyph(int? round) {
+  final n = (round == null || round < 1) ? 1 : round;
+  return n.isOdd ? StrategyMarkerGlyph.triangle : StrategyMarkerGlyph.arrow;
+}
+
+void _paintStrategyMarkerGlyph({
+  required Canvas canvas,
+  required Offset c,
+  required Color color,
+  required bool isBuy,
+  required StrategyMarkerGlyph glyph,
+  required bool hot,
+}) {
+  final path = Path();
+  if (glyph == StrategyMarkerGlyph.triangle) {
+    const r = 7.0;
+    if (isBuy) {
+      // 买点在柱下，尖朝上对着蜡烛
+      path.moveTo(c.dx, c.dy - r);
+      path.lineTo(c.dx - r, c.dy + r * 0.7);
+      path.lineTo(c.dx + r, c.dy + r * 0.7);
+    } else {
+      // 卖点在柱上，尖朝下对着蜡烛
+      path.moveTo(c.dx, c.dy + r);
+      path.lineTo(c.dx - r, c.dy - r * 0.7);
+      path.lineTo(c.dx + r, c.dy - r * 0.7);
+    }
+    path.close();
+  } else {
+    const r = 8.0;
+    const shaft = 2.2;
+    if (isBuy) {
+      path.moveTo(c.dx, c.dy - r);
+      path.lineTo(c.dx - r * 0.72, c.dy - r * 0.12);
+      path.lineTo(c.dx - shaft, c.dy - r * 0.12);
+      path.lineTo(c.dx - shaft, c.dy + r);
+      path.lineTo(c.dx + shaft, c.dy + r);
+      path.lineTo(c.dx + shaft, c.dy - r * 0.12);
+      path.lineTo(c.dx + r * 0.72, c.dy - r * 0.12);
+    } else {
+      path.moveTo(c.dx, c.dy + r);
+      path.lineTo(c.dx - r * 0.72, c.dy + r * 0.12);
+      path.lineTo(c.dx - shaft, c.dy + r * 0.12);
+      path.lineTo(c.dx - shaft, c.dy - r);
+      path.lineTo(c.dx + shaft, c.dy - r);
+      path.lineTo(c.dx + shaft, c.dy + r * 0.12);
+      path.lineTo(c.dx + r * 0.72, c.dy + r * 0.12);
+    }
+    path.close();
+  }
+  canvas.drawPath(path, Paint()..color = color);
+  canvas.drawPath(
+    path,
+    Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = hot ? 1.8 : 1.0,
+  );
+}
+
 KlineBar? klineBarByIdx(List<KlineBar> bars, int idx) {
   if (idx >= 0 && idx < bars.length && bars[idx].idx == idx) {
     return bars[idx];
@@ -107,33 +170,14 @@ void paintStrategyMarkersOnChart({
     if (hot) {
       canvas.drawCircle(c, 14, Paint()..color = color.withValues(alpha: 0.28));
     }
-    if (isBuy) {
-      const r = 5.0;
-      canvas.drawCircle(c, r, Paint()..color = color);
-      canvas.drawCircle(
-        c,
-        r,
-        Paint()
-          ..color = Colors.white
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = hot ? 1.8 : 1.0,
-      );
-    } else {
-      final path = Path();
-      const r = 7.0;
-      path.moveTo(c.dx, c.dy + r);
-      path.lineTo(c.dx - r, c.dy - r * 0.7);
-      path.lineTo(c.dx + r, c.dy - r * 0.7);
-      path.close();
-      canvas.drawPath(path, Paint()..color = color);
-      canvas.drawPath(
-        path,
-        Paint()
-          ..color = Colors.white
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = hot ? 1.8 : 1.0,
-      );
-    }
+    _paintStrategyMarkerGlyph(
+      canvas: canvas,
+      c: c,
+      color: color,
+      isBuy: isBuy,
+      glyph: strategyMarkerGlyph(roundBySignalId[s.signalId]),
+      hot: hot,
+    );
     final tp = TextPainter(textDirection: TextDirection.ltr);
     tp.text = TextSpan(
       text: strategySideLabel(s.side!, round: roundBySignalId[s.signalId]),
@@ -191,7 +235,7 @@ StrategyMarkerHit? hitTestStrategySignal({
   return best;
 }
 
-/// 独立覆盖层：策略买/卖三角，与缠论一类/二类 BS 分离。
+/// 独立覆盖层：策略买/卖三角与箭头，与缠论一类/二类 BS 分离。
 class StrategySignalPainter extends CustomPainter {
   final List<KlineBar> bars;
   final List<SignalEvent> signals;

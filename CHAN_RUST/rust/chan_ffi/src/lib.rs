@@ -7,8 +7,9 @@ use std::sync::{Mutex, OnceLock};
 
 use chan_data::{
     build_kline_combine_bundle_from_state, build_kline_combine_bundle_with, chip_profile,
-    default_data_root, list_stock_codes, load_klines, ml_predict_dense, resolve_data_root,
-    save_test_ohlc, KlineBar, KlinePeriod, PipelineOptions, PipelineState, ZSConfig,
+    default_data_root, list_stock_codes, load_klines, load_klines_with_source, ml_predict_dense,
+    resolve_data_root, save_test_ohlc, KlineBar, KlinePeriod, LoadKlinesOut, PipelineOptions,
+    PipelineState, TickSource, ZSConfig,
 };
 use serde::{Deserialize, Serialize};
 
@@ -51,7 +52,7 @@ fn cstr_to_str<'a>(ptr: *const c_char) -> Option<&'a str> {
 
 /// 动态库协议号：必须与 Flutter `kChanFfiAbiVersion` 相同。
 /// 改管道 JSON / 冻结语义时两边一起加一，禁止静默混用旧库。
-pub const CHAN_FFI_ABI_VERSION: u32 = 1;
+pub const CHAN_FFI_ABI_VERSION: u32 = 2;
 
 /// 返回协议号（裸 u32，不走 JSON）。缺此符号=旧库，界面应停机。
 #[no_mangle]
@@ -124,6 +125,53 @@ pub extern "C" fn chan_load_klines(
         period_enum,
     ) {
         Ok(bars) => to_json_ok(bars),
+        Err(e) => to_json_err(&e.to_string()),
+    }
+}
+
+/// 加载 K 线（带分笔来源与质量）。tick_source：file / protocol。
+/// 返回 `{ bars, quality }`；test 股即使 protocol 也走文件。
+#[no_mangle]
+pub extern "C" fn chan_load_klines_ex(
+    data_root: *const c_char,
+    code: *const c_char,
+    begin_date: *const c_char,
+    end_date: *const c_char,
+    period: *const c_char,
+    tick_source: *const c_char,
+) -> *mut c_char {
+    let Some(code) = cstr_to_str(code) else {
+        return to_json_err("code 不能为空");
+    };
+    let Some(begin_date) = cstr_to_str(begin_date) else {
+        return to_json_err("begin_date 不能为空");
+    };
+    let Some(end_date) = cstr_to_str(end_date) else {
+        return to_json_err("end_date 不能为空");
+    };
+    let period_s = cstr_to_str(period)
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "day".to_string());
+    let Some(period_enum) = KlinePeriod::parse(&period_s) else {
+        return to_json_err(&format!("不支持的周期: {period_s}"));
+    };
+    let source = TickSource::parse(cstr_to_str(tick_source));
+
+    let root_s = cstr_to_str(data_root).map(|s| s.to_string());
+    let root = resolve_data_root(root_s.as_deref());
+
+    match load_klines_with_source(
+        &root,
+        code,
+        begin_date,
+        end_date,
+        period_enum,
+        source,
+    ) {
+        Ok(LoadKlinesOut { bars, quality }) => to_json_ok(serde_json::json!({
+            "bars": bars,
+            "quality": quality,
+        })),
         Err(e) => to_json_err(&e.to_string()),
     }
 }

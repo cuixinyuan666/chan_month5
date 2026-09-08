@@ -18,14 +18,15 @@ import 'trade_operand.dart';
 import 'trade_value.dart';
 import 'zhongshu_object_store.dart';
 
-/// 编译后的钟身份：比较/RSI 等 AND/OR 仍须同一层同一套钟。
-/// K0 当根事件（一类/二类/N类、分型确认/判断、中枢确认/判断、背驰出现、Demark完成）
-/// 可以跨层 AND/OR；拼过之后不能再跟某一层的 RSI/收盘混。
+/// 编译后的钟身份。
+/// 比较/穿越仍须同一层同一套钟（比例不能直接和收盘比；K0 最低价不能去穿 K1 布林）。
+/// AND/OR：各支先在自己的钟上算完，再映到同一根 K0。
+/// 穿越/事件必须当根刚发生，不是「以前下穿过、这根虚拟K里一直算数」。
 class CompiledClock {
   final int displayKn;
   final TradeClockFamily family;
   final TradeEvalClock evalClock;
-  /// 这棵子树已经把不同层或不同钟族的 K0 当根事件拼在一起。
+  /// 这棵子树已经把不同层或不同钟族拼在一起（事件或指标都算）。
   final bool crossKnBs;
 
   const CompiledClock({
@@ -145,7 +146,7 @@ final class CompiledEvent extends CompiledCond {
   String get label => astConditionText(TradeEventAst(variableId));
 }
 
-/// 编译一棵条件树：混层/混钟/两常数在这里就非法，不会进求值。
+/// 编译一棵条件树：单条比较仍禁混层混钟/两常数；AND/OR 跨层合法，求值时映到同一根 K0。
 CondCompileResult compileConditionAst(TradeAst ast, {int maxKn = 8}) {
   final kn = maxKnInAst(ast);
   if (kn != null && kn > maxKn) {
@@ -220,61 +221,24 @@ CondCompileResult _compileJoin(
   if (ra is CondCompileIllegal) return ra;
   final l = (la as CondCompileOk).root;
   final r = (ra as CondCompileOk).root;
-  if (!_clocksJoinable(l, r)) {
-    return CondCompileIllegal(
-      '条件里混了不同层或不同钟，不能 ${and ? 'AND' : 'OR'} 在一起'
-      '（一类/二类/N类、分型确认/判断、中枢确认/判断、背驰出现、Demark完成'
-      '可以跨层拼；收盘/RSI/布林仍须同层同钟；分型确认不能和 RSI 直接拼）',
-      kind: TradeCompileErrorKind.clock,
-    );
-  }
   final clock = _joinClock(l, r);
   return CondCompileOk(
     and ? CompiledAnd(l, r, clock) : CompiledOr(l, r, clock),
   );
 }
 
-bool _involvesEvent(CompiledCond c) {
-  return switch (c) {
-    CompiledEvent() => true,
-    CompiledAnd(:final left, :final right) =>
-      _involvesEvent(left) || _involvesEvent(right),
-    CompiledOr(:final left, :final right) =>
-      _involvesEvent(left) || _involvesEvent(right),
-    CompiledCmp() => false,
-  };
-}
-
-/// 整棵子树都是「K0 当根出现」的事件（可含它们之间的 AND/OR）。
-bool _isPureK0BarEventTree(CompiledCond c) {
-  return switch (c) {
-    CompiledEvent(:final clockOp) =>
-      clockOp.evalClock == TradeEvalClock.k0Bar,
-    CompiledAnd(:final left, :final right) =>
-      _isPureK0BarEventTree(left) && _isPureK0BarEventTree(right),
-    CompiledOr(:final left, :final right) =>
-      _isPureK0BarEventTree(left) && _isPureK0BarEventTree(right),
-    CompiledCmp() => false,
-  };
-}
-
-bool _clocksJoinable(CompiledCond a, CompiledCond b) {
-  // 发现都钉在 K0 当根：层号/钟族只标明哪一层打出来的，允许跨层 AND/OR。
-  if (_isPureK0BarEventTree(a) && _isPureK0BarEventTree(b)) return true;
-  // 已经跨层或跨钟族拼过的事件树，不能再跟某一层 RSI/收盘混。
-  if (a.clock.crossKnBs || b.clock.crossKnBs) return false;
-  if (a.clock.sameAs(b.clock)) return true;
-  if (a.clock.displayKn != b.clock.displayKn) return false;
-  if (a.clock.family != b.clock.family) return false;
-  return _involvesEvent(a) || _involvesEvent(b);
-}
+bool _onK0BarTimeline(CompiledCond c) =>
+    c.clock.evalClock == TradeEvalClock.k0Bar;
 
 CompiledClock _joinClock(CompiledCond a, CompiledCond b) {
-  if (_isPureK0BarEventTree(a) && _isPureK0BarEventTree(b)) {
-    final cross = a.clock.displayKn != b.clock.displayKn ||
-        a.clock.family != b.clock.family ||
-        a.clock.crossKnBs ||
-        b.clock.crossKnBs;
+  if (a.clock.sameAs(b.clock)) return a.clock;
+  final cross = a.clock.displayKn != b.clock.displayKn ||
+      a.clock.family != b.clock.family ||
+      a.clock.evalClock != b.clock.evalClock ||
+      a.clock.crossKnBs ||
+      b.clock.crossKnBs;
+  // 拼完的树落在 K0 发现轴上（成交也在这根轴）。
+  if (_onK0BarTimeline(a) && _onK0BarTimeline(b)) {
     return CompiledClock(
       displayKn: a.clock.displayKn,
       family: a.clock.family,
@@ -282,13 +246,14 @@ CompiledClock _joinClock(CompiledCond a, CompiledCond b) {
       crossKnBs: cross,
     );
   }
-  if (_involvesEvent(a) && a.clock.evalClock == TradeEvalClock.k0Bar) {
-    return a.clock;
-  }
-  if (_involvesEvent(b) && b.clock.evalClock == TradeEvalClock.k0Bar) {
-    return b.clock;
-  }
-  return a.clock;
+  return CompiledClock(
+    displayKn: _onK0BarTimeline(a)
+        ? a.clock.displayKn
+        : (_onK0BarTimeline(b) ? b.clock.displayKn : a.clock.displayKn),
+    family: a.clock.family,
+    evalClock: TradeEvalClock.k0Bar,
+    crossKnBs: true,
+  );
 }
 
 class CondEvalCtx {
@@ -365,11 +330,22 @@ List<SignalEvent> evalCompiledCond({
   final text = cond.label;
   final out = <SignalEvent>[];
   for (var i = 0; i < series.length; i++) {
-    final prev = i == 0 ? false : series[i - 1].flag;
     final curr = series[i];
     if (!curr.flag) continue;
-    // 事件当根各打一次；比较/穿越仍假变真
-    if (curr.op != TradeBinaryOp.eventExists && prev) continue;
+    // 状态比较：假变真，连着真只打第一次。
+    // 事件：当根各打一次。
+    // 穿越：当根各打一次；但若 OR 已经被状态撑成一直为真，后面的穿越不再打。
+    final prevPt = i == 0 ? null : series[i - 1];
+    final prevFlag = prevPt?.flag ?? false;
+    if (curr.op != TradeBinaryOp.eventExists) {
+      if (!_isPulseOp(curr.op) && prevFlag) continue;
+      if (_isPulseOp(curr.op) &&
+          prevFlag &&
+          prevPt != null &&
+          !_isPulseOp(prevPt.op)) {
+        continue;
+      }
+    }
     out.add(SignalEvent(
       signalId: 'sig-${side.name}-${curr.availableAt}-${curr.evalIndex}',
       ruleId: ruleId,
@@ -593,13 +569,25 @@ List<_BoolPt> _combine(
 }) {
   final eventful = left.any((p) => p.op == TradeBinaryOp.eventExists) ||
       right.any((p) => p.op == TradeBinaryOp.eventExists);
+  // AND 按同一根 K0 对齐：稀疏的虚拟K样本和密的 K0 只在撞上的那根取交集。
+  // OR 若两边格子不同，要铺到全部 K0，否则只出现在某一层的穿越会被丢掉。
   if (!eventful) {
-    return _combineExact(left, right, and: and);
+    if (and || _sameAvailableGrid(left, right)) {
+      return _combineExact(left, right, and: and);
+    }
   }
   if (and && (left.isEmpty || right.isEmpty)) return const [];
   if (!and && left.isEmpty) return right;
   if (!and && right.isEmpty) return left;
   return _combineAsOf(left, right, and: and, ctx: ctx);
+}
+
+bool _sameAvailableGrid(List<_BoolPt> left, List<_BoolPt> right) {
+  if (left.length != right.length) return false;
+  for (var i = 0; i < left.length; i++) {
+    if (left[i].availableAt != right[i].availableAt) return false;
+  }
+  return true;
 }
 
 List<_BoolPt> _combineExact(

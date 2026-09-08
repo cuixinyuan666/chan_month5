@@ -9,6 +9,7 @@ import 'chan_event_store.dart';
 import 'chart_line_store.dart';
 import 'chip_peak_store.dart';
 import 'condition_ast.dart';
+import 'buy_n_var.dart';
 import 'divergence_relation_store.dart';
 import 'signal_data_catalog.dart';
 import 'strategy_compile.dart';
@@ -203,6 +204,7 @@ class _StrategyConfigFormState extends State<StrategyConfigForm> {
   late _SideDraft _buy;
   late _SideDraft _sell;
   final Map<String, TextEditingController> _constCtrls = {};
+  final Map<String, TextEditingController> _nCtrls = {};
   String? _diagId;
 
   @override
@@ -244,6 +246,9 @@ class _StrategyConfigFormState extends State<StrategyConfigForm> {
     for (final c in _constCtrls.values) {
       c.dispose();
     }
+    for (final c in _nCtrls.values) {
+      c.dispose();
+    }
     super.dispose();
   }
 
@@ -254,6 +259,14 @@ class _StrategyConfigFormState extends State<StrategyConfigForm> {
       text: value == value.roundToDouble() ? '${value.toInt()}' : '$value',
     );
     _constCtrls[key] = c;
+    return c;
+  }
+
+  TextEditingController _nCtrl(String key, int cls) {
+    final existing = _nCtrls[key];
+    if (existing != null) return existing;
+    final c = TextEditingController(text: '$cls');
+    _nCtrls[key] = c;
     return c;
   }
 
@@ -302,7 +315,7 @@ class _StrategyConfigFormState extends State<StrategyConfigForm> {
       children: [
         if (showCond) ...[
           _sideBlock(
-            title: '买入条件（一类/二类/N类和确认类事件可跨层；收盘/RSI 仍须同层同钟）',
+            title: '买入条件（各层各自算完可拼；AND 须同一根 K 刚发生）',
             draft: _buy,
             kns: kns,
             maxKn: maxKn,
@@ -310,7 +323,7 @@ class _StrategyConfigFormState extends State<StrategyConfigForm> {
           ),
           const SizedBox(height: 10),
           _sideBlock(
-            title: '卖出条件（独立于买入；一类/二类/N类和确认类事件可跨层）',
+            title: '卖出条件（独立于买入；AND 须同一根 K 刚发生）',
             draft: _sell,
             kns: kns,
             maxKn: maxKn,
@@ -550,6 +563,7 @@ class _StrategyConfigFormState extends State<StrategyConfigForm> {
                   kn: kn,
                   maxKn: maxKn,
                   label: '左',
+                  editorKey: '$prefix-$index-left',
                   onId: (id) {
                     leaf.leftId = id;
                     final def = lookupTradeVariable(id, maxKn: maxKn);
@@ -708,6 +722,7 @@ class _StrategyConfigFormState extends State<StrategyConfigForm> {
     required String label,
     required ValueChanged<String> onId,
     bool numericOnly = false,
+    String editorKey = '',
   }) {
     var groups = groupedRegisteredVars(kn, maxKn);
     if (numericOnly) {
@@ -735,9 +750,14 @@ class _StrategyConfigFormState extends State<StrategyConfigForm> {
     }
     final group = groups.firstWhere((g) => g.key == groupKey);
     var fieldId = id;
-    if (!group.fields.any((f) => f.variableId == fieldId)) {
+    final listed = group.fields.any((f) => f.variableId == fieldId);
+    final keepBsN = groupKey == 'bsN' && parseChanClassBsVarId(id) != null;
+    if (!listed && !keepBsN) {
       fieldId = group.fields.first.variableId;
     }
+    final isBsN = groupKey == 'bsN';
+    final bs = parseChanClassBsVarId(keepBsN ? id : fieldId);
+    final nKey = editorKey.isEmpty ? 'bs-n-$kn-$label' : editorKey;
     return Row(
       children: [
         Expanded(
@@ -753,29 +773,84 @@ class _StrategyConfigFormState extends State<StrategyConfigForm> {
             onChanged: (v) {
               if (v == null) return;
               final g = groups.firstWhere((e) => e.key == v);
+              if (g.key == 'bsN') {
+                _nCtrl(nKey, 1).text = '1';
+              }
               onId(g.fields.first.variableId);
             },
           ),
         ),
         const SizedBox(width: 4),
-        Expanded(
-          flex: 5,
-          child: DropdownButtonFormField<String>(
-            isExpanded: true,
-            value: fieldId,
-            decoration: _dec('字段'),
-            items: [
-              for (final f in group.fields)
-                DropdownMenuItem(
-                  value: f.variableId,
-                  child: Text(f.fieldLabel.isEmpty ? f.displayName : f.fieldLabel),
-                ),
-            ],
-            onChanged: (v) {
-              if (v != null) onId(v);
-            },
+        if (isBsN) ...[
+          Expanded(
+            flex: 3,
+            child: DropdownButtonFormField<bool>(
+              isExpanded: true,
+              value: bs?.buy ?? true,
+              decoration: _dec('买/卖'),
+              items: const [
+                DropdownMenuItem(value: true, child: Text('买点')),
+                DropdownMenuItem(value: false, child: Text('卖点')),
+              ],
+              onChanged: (v) {
+                if (v == null) return;
+                onId(chanClassBsVarId(
+                  kn: kn,
+                  cls: bs?.cls ?? 1,
+                  buy: v,
+                ));
+              },
+            ),
           ),
-        ),
+          const SizedBox(width: 4),
+          SizedBox(
+            width: 64,
+            child: Tooltip(
+              message: '1=一类；2=二类；≥3=该类；0或-1=该侧全部',
+              child: TextFormField(
+                controller: _nCtrl(nKey, bs?.cls ?? 1),
+                style: const TextStyle(fontSize: 13),
+                decoration: _dec('N'),
+                keyboardType: const TextInputType.numberWithOptions(
+                  signed: true,
+                ),
+                inputFormatters: [
+                  FilteringTextInputFormatter.allow(RegExp(r'^-?\d*')),
+                ],
+                onChanged: (t) {
+                  final n = int.tryParse(t);
+                  if (n == null) return;
+                  if (!isChanBsAllClass(n) && (n < 1 || n > kTradeMaxBsClass)) {
+                    return;
+                  }
+                  onId(chanClassBsVarId(
+                    kn: kn,
+                    cls: n,
+                    buy: bs?.buy ?? true,
+                  ));
+                },
+              ),
+            ),
+          ),
+        ] else
+          Expanded(
+            flex: 5,
+            child: DropdownButtonFormField<String>(
+              isExpanded: true,
+              value: fieldId,
+              decoration: _dec('字段'),
+              items: [
+                for (final f in group.fields)
+                  DropdownMenuItem(
+                    value: f.variableId,
+                    child: Text(f.fieldLabel.isEmpty ? f.displayName : f.fieldLabel),
+                  ),
+              ],
+              onChanged: (v) {
+                if (v != null) onId(v);
+              },
+            ),
+          ),
       ],
     );
   }

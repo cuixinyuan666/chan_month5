@@ -101,14 +101,14 @@
 
 ---
 
-## 2.1 开发演示阶段（启动 exe 自动加载 · 2026-08-15）
+## 2.1 开发演示阶段（启动 exe 自动加载 · 2026-09-01 对外默认关）
 
-**默认开启**（落盘 `CHAN_RUST/flutter/chan_kline/.chan_task_demo_settings.json` 的 `developmentDemoPhase`）。
+**对外默认关闭**（无落盘文件时 `developmentDemoPhase=false`；研究/开发可在设置里打开，落盘 `CHAN_RUST/flutter/chan_kline/.chan_task_demo_settings.json`）。
 
 | 状态 | 行为 |
 |------|------|
-| **演示阶段·开**（默认） | 冷启动后自动加载 `a_Data/test/demos/` **最新** `manifest.json`（`autoLaunchOnStartup≠false`）；主图底部叠层：**左=原本、右=本次**；**下一步** / **自动播放** 按 `walkthroughSteps` 或 `keySteps`+`verificationPoints` 步进 K 线 |
-| **演示阶段·关** | 用户明确退出（设置关「开发演示阶段」或叠层「退出演示阶段」）→ **不再**自动加载；自行选股 / 「任务演示列表」 / 「手动打开最新任务演示」 |
+| **演示阶段·开** | 冷启动后自动加载 `a_Data/test/demos/` **最新** `manifest.json`（`autoLaunchOnStartup≠false`）；主图底部叠层：**左=原本、右=本次**；**下一步** / **自动播放** 按 `walkthroughSteps` 或 `keySteps`+`verificationPoints` 步进 K 线 |
+| **演示阶段·关**（默认） | 不自动加载；自行选股 / 「任务演示列表」 / 「手动打开最新任务演示」。设置打开后下次启动才自动加载。 |
 
 ### manifest 扩展字段
 

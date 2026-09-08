@@ -24,6 +24,7 @@ jobs:
   windows:
     name: 打包 Windows zip
     runs-on: windows-latest
+    timeout-minutes: 180
     steps:
       - name: 检出仓库
         uses: actions/checkout@v4
@@ -47,6 +48,19 @@ jobs:
           New-Item -ItemType Directory -Force -Path CHAN_RUST/flutter/chan_kline/windows/native | Out-Null
           Copy-Item CHAN_RUST/rust/target/release/chan_ffi.dll `
             CHAN_RUST/flutter/chan_kline/windows/native/chan_ffi.dll -Force
+
+      - name: 发布前对拍闸门（失败则不打 zip）
+        shell: pwsh
+        working-directory: CHAN_RUST/rust
+        run: cargo test -p chan_data
+
+      - name: Flutter 库版本 + 单步/走完冻结对拍
+        working-directory: CHAN_RUST/flutter/chan_kline
+        timeout-minutes: 40
+        run: |
+          flutter config --enable-windows-desktop
+          flutter pub get
+          flutter test test/chan_ffi_abi_test.dart test/run_to_end_vs_step_freeze_test.dart
 
       - name: Flutter Windows Release
         working-directory: CHAN_RUST/flutter/chan_kline

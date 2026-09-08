@@ -44,22 +44,41 @@ void drawYinYangSymbol(
   );
 }
 
-/// 铺满父级：整条阴阳鱼拉满窗口矩形（完整 S 形可见，四边贴齐）。
+/// 铺满父级：正圆阴阳鱼，直径=父级高度×[heightFactor]（初始=屏高）。
 class YinYangFullscreenCover extends StatelessWidget {
-  const YinYangFullscreenCover({super.key});
+  const YinYangFullscreenCover({
+    super.key,
+    this.heightFactor = 1.0,
+    this.opacity = 1.0,
+    this.dimBackground = true,
+  });
+
+  /// 1=直径等于当前窗口高度；走完加载用 0.25（缩小 4 倍）。
+  final double heightFactor;
+  final double opacity;
+  final bool dimBackground;
 
   @override
   Widget build(BuildContext context) {
-    return const ColoredBox(
-      color: Color(0xF0121212),
-      child: SizedBox.expand(child: YinYangFillSpin()),
+    return ColoredBox(
+      color: dimBackground ? const Color(0xF0121212) : const Color(0x00000000),
+      child: SizedBox.expand(
+        child: YinYangFillSpin(heightFactor: heightFactor, opacity: opacity),
+      ),
     );
   }
 }
 
-/// 阴阳鱼拉满父级宽高，旋转发生在单位圆里再拉伸，四边始终贴齐。
+/// 正圆旋转；直径跟窗口高度走，不再按宽高分别拉伸成椭圆。
 class YinYangFillSpin extends StatefulWidget {
-  const YinYangFillSpin({super.key});
+  const YinYangFillSpin({
+    super.key,
+    this.heightFactor = 1.0,
+    this.opacity = 1.0,
+  });
+
+  final double heightFactor;
+  final double opacity;
 
   @override
   State<YinYangFillSpin> createState() => _YinYangFillSpinState();
@@ -88,36 +107,44 @@ class _YinYangFillSpinState extends State<YinYangFillSpin>
   Widget build(BuildContext context) {
     return AnimatedBuilder(
       animation: _spin,
-      builder: (context, _) => CustomPaint(
-        painter: _YinYangFillPainter(turns: _spin.value),
-        child: const SizedBox.expand(),
+      builder: (context, _) => Opacity(
+        opacity: widget.opacity.clamp(0.0, 1.0),
+        child: CustomPaint(
+          painter: _YinYangFillPainter(
+            turns: _spin.value,
+            heightFactor: widget.heightFactor,
+          ),
+          child: const SizedBox.expand(),
+        ),
       ),
     );
   }
 }
 
 class _YinYangFillPainter extends CustomPainter {
-  _YinYangFillPainter({required this.turns});
+  _YinYangFillPainter({required this.turns, required this.heightFactor});
 
   final double turns;
+  final double heightFactor;
 
   @override
   void paint(Canvas canvas, Size size) {
     final w = size.width;
     final h = size.height;
     if (w < 2 || h < 2) return;
-    final minSide = math.min(w, h);
-    final r = minSide / 2;
+    final diameter = h * heightFactor;
+    final r = diameter / 2;
+    if (r < 1) return;
     canvas.save();
     canvas.translate(w / 2, h / 2);
     canvas.rotate(turns * math.pi * 2);
-    canvas.scale(w / minSide, h / minSide);
     drawYinYangSymbol(canvas, Offset.zero, r);
     canvas.restore();
   }
 
   @override
-  bool shouldRepaint(covariant _YinYangFillPainter old) => old.turns != turns;
+  bool shouldRepaint(covariant _YinYangFillPainter old) =>
+      old.turns != turns || old.heightFactor != heightFactor;
 }
 
 /// 易经太极（阴阳鱼）：完整圆形，不裁切。分笔加载时替代原来的小圆点转圈。

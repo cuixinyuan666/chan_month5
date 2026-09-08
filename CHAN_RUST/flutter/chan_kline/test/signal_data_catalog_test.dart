@@ -10,6 +10,8 @@ import 'package:chan_kline/models/kline_bar.dart';
 import 'package:chan_kline/models/math_indicator_config.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'offline_tick_files.dart';
+
 KlineBar _bar(int idx, double close, {double vol = 1}) {
   return KlineBar(
     idx: idx,
@@ -329,6 +331,6 @@ void main() {
       expect(evalBoll, isNotEmpty);
       expect(evalBoll.map((e) => e.availableAt).toList(),
           evalClose.map((e) => e.availableAt).toList());
-    });
+    }, skip: hasOffline002003TickFiles() ? false : kNoOffline002003Skip);
   });
 }

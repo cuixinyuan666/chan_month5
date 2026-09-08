@@ -11,7 +11,7 @@
 - **完整条文**：[`AGENT_LONG_TERM_MEMORY.md`](AGENT_LONG_TERM_MEMORY.md)（§0 含「确认执行」门禁与白话演示）。
 - **无「确认执行」** → 禁止改 app 关键逻辑；须文字提方案后再改。
 - **修改类任务交付**：可演示验收 + 前后对比；演示文案**白话**为主。
-- **开发演示阶段**（默认开）：见 `AGENT_LONG_TERM_MEMORY.md` §2.1。
+- **开发演示阶段**（对外默认关，设置可开）：见 `AGENT_LONG_TERM_MEMORY.md` §2.1。
 - **各工具入口**：`CLAUDE.md` · `OPENCODE.md` · `.workbuddy/AGENT_READ_FIRST.md` · `.cursor/rules/` · `.trae/skills/chan-agent-memory/`
 
 ###代码设计规范

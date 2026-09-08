@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 abstract final class SettingsPanelTheme {
   static const sectionGap = 12.0;
   static const fieldGap = 10.0;
-  static const buttonHeight = 40.0;
+  static const buttonHeight = 42.0;
   static const fieldDecoration = InputDecoration(
     isDense: true,
     border: OutlineInputBorder(),
@@ -13,6 +13,8 @@ abstract final class SettingsPanelTheme {
 
   static ButtonStyle outlinedStyle() => OutlinedButton.styleFrom(
         minimumSize: const Size.fromHeight(buttonHeight),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
         foregroundColor: const Color(0xFFE2E8F0),
         side: const BorderSide(color: Color(0x55FFFFFF)),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
@@ -20,6 +22,8 @@ abstract final class SettingsPanelTheme {
 
   static ButtonStyle filledStyle() => FilledButton.styleFrom(
         minimumSize: const Size.fromHeight(buttonHeight),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
         backgroundColor: const Color(0xFF2563EB),
         foregroundColor: Colors.white,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
@@ -56,6 +60,33 @@ class SettingsSection extends StatelessWidget {
   }
 }
 
+/// 问号叠在按钮左侧，不挤占整行宽度，好和上方按钮对齐。
+Widget settingsButtonWithLeftHelp({
+  required Widget button,
+  required VoidCallback onHelp,
+  required String helpTooltip,
+  Color iconColor = const Color(0xFFE2E8F0),
+}) {
+  return Stack(
+    alignment: Alignment.center,
+    children: [
+      button,
+      Positioned(
+        left: 0,
+        top: 0,
+        bottom: 0,
+        child: IconButton(
+          tooltip: helpTooltip,
+          onPressed: onHelp,
+          visualDensity: VisualDensity.compact,
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          icon: Icon(Icons.help_outline, size: 20, color: iconColor),
+        ),
+      ),
+    ],
+  );
+}
+
 class SettingsOutlinedButton extends StatelessWidget {
   const SettingsOutlinedButton({
     super.key,
@@ -63,12 +94,16 @@ class SettingsOutlinedButton extends StatelessWidget {
     required this.onPressed,
     this.icon,
     this.tooltip,
+    this.onHelp,
+    this.helpTooltip,
   });
 
   final String label;
   final VoidCallback? onPressed;
   final IconData? icon;
   final String? tooltip;
+  final VoidCallback? onHelp;
+  final String? helpTooltip;
 
   @override
   Widget build(BuildContext context) {
@@ -82,13 +117,19 @@ class SettingsOutlinedButton extends StatelessWidget {
               Flexible(child: Text(label, overflow: TextOverflow.ellipsis)),
             ],
           );
-    return Tooltip(
+    final button = Tooltip(
       message: tooltip ?? label,
       child: OutlinedButton(
         style: SettingsPanelTheme.outlinedStyle(),
         onPressed: onPressed,
         child: child,
       ),
+    );
+    if (onHelp == null) return button;
+    return settingsButtonWithLeftHelp(
+      button: button,
+      onHelp: onHelp!,
+      helpTooltip: helpTooltip ?? '说明',
     );
   }
 }
@@ -99,15 +140,19 @@ class SettingsFilledButton extends StatelessWidget {
     required this.label,
     required this.onPressed,
     this.icon,
+    this.onHelp,
+    this.helpTooltip,
   });
 
   final String label;
   final VoidCallback? onPressed;
   final IconData? icon;
+  final VoidCallback? onHelp;
+  final String? helpTooltip;
 
   @override
   Widget build(BuildContext context) {
-    return FilledButton(
+    final button = FilledButton(
       style: SettingsPanelTheme.filledStyle(),
       onPressed: onPressed,
       child: Row(
@@ -120,6 +165,13 @@ class SettingsFilledButton extends StatelessWidget {
           Flexible(child: Text(label, overflow: TextOverflow.ellipsis)),
         ],
       ),
+    );
+    if (onHelp == null) return button;
+    return settingsButtonWithLeftHelp(
+      button: button,
+      onHelp: onHelp!,
+      helpTooltip: helpTooltip ?? '说明',
+      iconColor: Colors.white,
     );
   }
 }

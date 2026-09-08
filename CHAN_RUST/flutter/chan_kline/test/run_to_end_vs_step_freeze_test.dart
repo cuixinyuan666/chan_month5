@@ -18,6 +18,8 @@ import 'package:chan_kline/models/sell2_frame.dart';
 import 'package:chan_kline/models/sell_n_frame.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'offline_tick_files.dart';
+
 /// 后台对拍：连续单步冻结 vs 一次性走完瘦包（冻段仍解析）。
 ///
 /// 本机：先有 `windows/native/chan_ffi.dll` 和仓库 `a_Data/002003`。
@@ -294,19 +296,29 @@ void main() {
     );
   });
 
-  test('002003 1m 单步冻结 == 走完瘦解析冻结', () {
-    final bars = _load(period: '1m');
-    expect(bars.length, greaterThan(40), reason: '检查 a_Data/002003 1m');
-    final step = _drive(bars, slimMiddle: false);
-    final run = _drive(bars, slimMiddle: true);
-    _compare('1m', step, run);
-  }, timeout: const Timeout(Duration(minutes: 8)));
+  test(
+    '002003 1m 单步冻结 == 走完瘦解析冻结',
+    () {
+      final bars = _load(period: '1m');
+      expect(bars.length, greaterThan(40), reason: '检查 a_Data/002003 1m');
+      final step = _drive(bars, slimMiddle: false);
+      final run = _drive(bars, slimMiddle: true);
+      _compare('1m', step, run);
+    },
+    timeout: const Timeout(Duration(minutes: 8)),
+    skip: hasOffline002003TickFiles() ? false : kNoOffline002003Skip,
+  );
 
-  test('002003 分笔 单步冻结 == 走完瘦解析冻结', () {
-    final bars = _load(period: 'tick');
-    expect(bars.length, greaterThan(80), reason: '检查 a_Data/002003 分笔');
-    final step = _drive(bars, slimMiddle: false);
-    final run = _drive(bars, slimMiddle: true);
-    _compare('tick', step, run);
-  }, timeout: const Timeout(Duration(minutes: 12)));
+  test(
+    '002003 分笔 单步冻结 == 走完瘦解析冻结',
+    () {
+      final bars = _load(period: 'tick');
+      expect(bars.length, greaterThan(80), reason: '检查 a_Data/002003 分笔');
+      final step = _drive(bars, slimMiddle: false);
+      final run = _drive(bars, slimMiddle: true);
+      _compare('tick', step, run);
+    },
+    timeout: const Timeout(Duration(minutes: 12)),
+    skip: hasOffline002003TickFiles() ? false : kNoOffline002003Skip,
+  );
 }

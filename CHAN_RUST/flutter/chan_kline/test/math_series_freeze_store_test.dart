@@ -3,6 +3,8 @@ import 'package:chan_kline/compute/math_series_freeze_store.dart';
 import 'package:chan_kline/models/math_indicator_config.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'offline_tick_files.dart';
+
 int _countRewrites(
   Map<int, Map<int, double?>> byAsOf, {
   required int maxCompareX,
@@ -104,5 +106,5 @@ void main() {
     final v40 = macdFrozen[40]![40];
     expect(v40, isNotNull);
     expect(macdFrozen[80]![40], v40);
-  });
+  }, skip: hasOffline002003TickFiles() ? false : kNoOffline002003Skip);
 }

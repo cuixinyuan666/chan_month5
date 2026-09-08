@@ -45,3 +45,7 @@ test_*.py
 
 # 发布打包产物
 dist/
+
+# 通达信协议分笔缓存（运行时按日生成，勿提交）
+a_Data/.tdx_protocol_cache/
+CHAN_RUST/a_Data/.tdx_protocol_cache/

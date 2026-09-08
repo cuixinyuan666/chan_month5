@@ -65,6 +65,7 @@ import '../models/k1_analysis.dart';
 import 'chart_level_line_style.dart';
 import 'crosshair_tooltip_panel.dart';
 import 'fractal_confirm_paint.dart';
+import 'indicator_picker_chip.dart';
 import 'indicator_picker_overlay.dart';
 import 'kline_axis_format.dart';
 import 'kline_chip.dart';
@@ -300,8 +301,18 @@ class _KlineChartState extends State<KlineChart> {
   double _panStartYShift = 0;
   double _panStartViewMin = 0;
   double _panStartViewMax = 0;
-  /// 主/副图指标选择层：默认关闭，仅伸展钮打开全屏列表
+  /// 主/副图指标选择层：伸展钮打开全屏列表
   _IndicatorPickerPane _pickerPane = _IndicatorPickerPane.none;
+  /// 向右箭头：展示已选指标名 + 变量读数（主/副各一）
+  bool _mainIndicatorReadoutExpanded = false;
+  bool _subIndicatorReadoutExpanded = false;
+  /// 左上角单击灰度关闭的指标（仍在选择集中，再点可打开）
+  Set<MainChartIndicator> _mutedMains = {};
+  Set<SubChartIndicator> _mutedSubs = {};
+  final _mainChipBarKey = GlobalKey();
+  final _subChipBarKey = GlobalKey();
+  double _mainChipBarHeight = 0;
+  double _subChipBarHeight = KlineViewport.subIndicatorChipBand;
   /// 手机双指缩放
   bool _pinchScaling = false;
   double _pinchScaleBaseline = 1.0;
@@ -336,7 +347,7 @@ class _KlineChartState extends State<KlineChart> {
   double _splitDragStartY = 0;
   double _splitDragStartFraction = 0.79;
   double _chartBodyH = 1;
-  static const _subChipBarHeight = KlineViewport.subIndicatorChipBand;
+  static const _subChipBarHeightDefault = KlineViewport.subIndicatorChipBand;
 
   /// 十字线 as-of 中枢 bundle 缓存（逐K当下 Rust 重算）
   int? _zsAsOfCacheKey;
@@ -472,9 +483,10 @@ class _KlineChartState extends State<KlineChart> {
 
   Set<MainChartIndicator> get _activeMains => widget.mainIndicators;
 
-  /// 实际绘制/读数：与选择集一致（收纳列表白字=已选=绘制）
-  Set<MainChartIndicator> get _drawnMains => _activeMains;
-  Set<SubChartIndicator> get _drawnSubs => _activeSubs;
+  /// 实际绘制/读数：已选减去灰度关闭
+  Set<MainChartIndicator> get _drawnMains =>
+      _activeMains.difference(_mutedMains);
+  Set<SubChartIndicator> get _drawnSubs => _activeSubs.difference(_mutedSubs);
 
   /// 当前数据最高 Kn → 动态生成可选指标
   int get _maxKn => chartMaxKn(
@@ -494,7 +506,73 @@ class _KlineChartState extends State<KlineChart> {
   double _resolveMainPlotTop(BuildContext context) {
     if (!widget.mobileLayout) return KlineViewport.padT;
     final safeTop = MediaQuery.paddingOf(context).top;
-    return safeTop + KlineViewport.mainIndicatorToggleBand;
+    final chipExtra = _mainIndicatorReadoutExpanded ? _mainChipBarHeight : 0.0;
+    return safeTop +
+        KlineViewport.mainIndicatorToggleBand +
+        chipExtra;
+  }
+
+  /// 选择集增删后同步静音集：新勾选的非默认绘制项默认 muted（删除线灰度）。
+  void _syncMutedWithSelection({
+    Set<MainChartIndicator>? previousMains,
+    Set<SubChartIndicator>? previousSubs,
+  }) {
+    final oldM = previousMains ?? <MainChartIndicator>{};
+    final oldS = previousSubs ?? <SubChartIndicator>{};
+    final addedM = _activeMains.difference(oldM);
+    final addedS = _activeSubs.difference(oldS);
+    _mutedMains = {
+      ..._mutedMains.intersection(_activeMains),
+      for (final e in addedM)
+        if (!isDefaultDrawnMain(e)) e,
+    };
+    _mutedSubs = {
+      ..._mutedSubs.intersection(_activeSubs),
+      for (final e in addedS)
+        if (!isDefaultDrawnSub(e) &&
+            !(e.kind == SubIndicatorKind.macd &&
+                hasMacdDivergenceForKn(_activeSubs, e.kn)))
+          e,
+    };
+    for (final e in _activeSubs) {
+      if (e.kind == SubIndicatorKind.divergence &&
+          isMacdDivergenceAlgo(e.diverAlgo)) {
+        _mutedSubs.remove(SubChartIndicator.macd(e.kn));
+      }
+    }
+  }
+
+  void _measureSubChipBar() {
+    if (!mounted) return;
+    final renderBox =
+        _subChipBarKey.currentContext?.findRenderObject() as RenderBox?;
+    if (renderBox != null && renderBox.hasSize) {
+      final measured = renderBox.size.height + 4;
+      final h = math.min(measured, KlineViewport.subIndicatorChipMaxBand);
+      if ((h - _subChipBarHeight).abs() > 0.5) {
+        setState(() => _subChipBarHeight = h);
+      }
+    }
+  }
+
+  void _measureMainChipBar() {
+    if (!mounted || !_mainIndicatorReadoutExpanded) {
+      if (_mainChipBarHeight != 0) {
+        setState(() => _mainChipBarHeight = 0);
+      }
+      return;
+    }
+    final renderBox =
+        _mainChipBarKey.currentContext?.findRenderObject() as RenderBox?;
+    if (renderBox != null && renderBox.hasSize) {
+      final h = math.min(
+        renderBox.size.height + 2,
+        KlineViewport.mainIndicatorChipMaxBand,
+      );
+      if ((h - _mainChipBarHeight).abs() > 0.5) {
+        setState(() => _mainChipBarHeight = h);
+      }
+    }
   }
 
   void _closeTooltipKeepCrosshair() {
@@ -507,6 +585,7 @@ class _KlineChartState extends State<KlineChart> {
     super.initState();
     _resetViewport();
     _tickIdleYinYang = widget.period == 'tick';
+    _syncMutedWithSelection();
     // 全局键盘监听：方向键←/→（十字线态=十字线左右移；非十字线态=步退/步进）
     HardwareKeyboard.instance.addHandler(_handleHardwareKey);
   }
@@ -553,6 +632,14 @@ class _KlineChartState extends State<KlineChart> {
       _tickIdleYinYang = true;
     } else if (lenChanged) {
       _clearTickIdleYinYang(rebuild: false);
+    }
+
+    if (oldWidget.mainIndicators != widget.mainIndicators ||
+        oldWidget.subIndicators != widget.subIndicators) {
+      _syncMutedWithSelection(
+        previousMains: oldWidget.mainIndicators,
+        previousSubs: oldWidget.subIndicators,
+      );
     }
 
     if (lenChanged || seriesChanged) {
@@ -1459,52 +1546,205 @@ class _KlineChartState extends State<KlineChart> {
     );
   }
 
-  Widget _buildMainIndicatorToggleButton() {
+  Widget _buildIndicatorToggleShell({
+    required Widget child,
+  }) {
     return Opacity(
       opacity: 0.42,
       child: Material(
         color: const Color(0x22111111),
         borderRadius: BorderRadius.circular(4),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(4),
-          onTap: _toggleMainIndicatorPicker,
-          child: Padding(
-            padding: const EdgeInsets.all(6),
-            child: Icon(
-              _pickerPane == _IndicatorPickerPane.main
-                  ? Icons.expand_less
-                  : Icons.expand_more,
-              size: 18,
-              color: const Color(0x99AAAAAA),
-            ),
-          ),
-        ),
+        child: child,
       ),
     );
   }
 
-  Widget _buildSubIndicatorToggleButton() {
-    return Opacity(
-      opacity: 0.42,
-      child: Material(
-        color: const Color(0x22111111),
-        borderRadius: BorderRadius.circular(4),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(4),
-          onTap: _toggleSubIndicatorPicker,
-          child: Padding(
-            padding: const EdgeInsets.all(6),
-            child: Icon(
-              _pickerPane == _IndicatorPickerPane.sub
-                  ? Icons.expand_less
-                  : Icons.expand_more,
-              size: 18,
-              color: const Color(0x99AAAAAA),
+  Widget _buildMainIndicatorControlRow() {
+    return _buildIndicatorToggleShell(
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          InkWell(
+            borderRadius: const BorderRadius.horizontal(
+              left: Radius.circular(4),
+            ),
+            onTap: _toggleMainIndicatorPicker,
+            child: Padding(
+              padding: const EdgeInsets.all(6),
+              child: Icon(
+                _pickerPane == _IndicatorPickerPane.main
+                    ? Icons.expand_less
+                    : Icons.expand_more,
+                size: 18,
+                color: const Color(0x99AAAAAA),
+              ),
             ),
           ),
-        ),
+          Container(width: 1, height: 18, color: const Color(0x22FFFFFF)),
+          InkWell(
+            borderRadius: const BorderRadius.horizontal(
+              right: Radius.circular(4),
+            ),
+            onTap: _toggleMainIndicatorReadout,
+            child: Padding(
+              padding: const EdgeInsets.all(6),
+              child: Icon(
+                _mainIndicatorReadoutExpanded
+                    ? Icons.chevron_left
+                    : Icons.chevron_right,
+                size: 18,
+                color: const Color(0x99AAAAAA),
+              ),
+            ),
+          ),
+        ],
       ),
     );
+  }
+
+  Widget _buildSubIndicatorControlRow() {
+    return _buildIndicatorToggleShell(
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          InkWell(
+            borderRadius: const BorderRadius.horizontal(
+              left: Radius.circular(4),
+            ),
+            onTap: _toggleSubIndicatorPicker,
+            child: Padding(
+              padding: const EdgeInsets.all(6),
+              child: Icon(
+                _pickerPane == _IndicatorPickerPane.sub
+                    ? Icons.expand_less
+                    : Icons.expand_more,
+                size: 18,
+                color: const Color(0x99AAAAAA),
+              ),
+            ),
+          ),
+          Container(width: 1, height: 18, color: const Color(0x22FFFFFF)),
+          InkWell(
+            borderRadius: const BorderRadius.horizontal(
+              right: Radius.circular(4),
+            ),
+            onTap: _toggleSubIndicatorReadout,
+            child: Padding(
+              padding: const EdgeInsets.all(6),
+              child: Icon(
+                _subIndicatorReadoutExpanded
+                    ? Icons.chevron_left
+                    : Icons.chevron_right,
+                size: 18,
+                color: const Color(0x99AAAAAA),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _toggleMainIndicatorReadout() {
+    if (!widget.indicatorsEnabled) return;
+    _clearTickIdleYinYang(rebuild: false);
+    setState(() {
+      _mainIndicatorReadoutExpanded = !_mainIndicatorReadoutExpanded;
+      if (!_mainIndicatorReadoutExpanded) {
+        _mainChipBarHeight = 0;
+      }
+    });
+    if (_mainIndicatorReadoutExpanded) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _measureMainChipBar());
+    }
+  }
+
+  void _toggleSubIndicatorReadout() {
+    if (!widget.indicatorsEnabled) return;
+    _clearTickIdleYinYang(rebuild: false);
+    setState(() {
+      _subIndicatorReadoutExpanded = !_subIndicatorReadoutExpanded;
+      if (!_subIndicatorReadoutExpanded) {
+        _subChipBarHeight = _subChipBarHeightDefault;
+      }
+    });
+    if (_subIndicatorReadoutExpanded) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _measureSubChipBar());
+    }
+  }
+
+  void _toggleMuteMain(MainChartIndicator item) {
+    if (!widget.indicatorsEnabled) return;
+    _clearTickIdleYinYang(rebuild: false);
+    setState(() {
+      if (_mutedMains.contains(item)) {
+        _mutedMains = Set<MainChartIndicator>.from(_mutedMains)..remove(item);
+      } else {
+        _mutedMains = Set<MainChartIndicator>.from(_mutedMains)..add(item);
+      }
+    });
+  }
+
+  void _toggleMuteSub(SubChartIndicator item) {
+    if (!widget.indicatorsEnabled) return;
+    _clearTickIdleYinYang(rebuild: false);
+    setState(() {
+      if (_mutedSubs.contains(item)) {
+        _mutedSubs = Set<SubChartIndicator>.from(_mutedSubs)..remove(item);
+      } else {
+        _mutedSubs = Set<SubChartIndicator>.from(_mutedSubs)..add(item);
+      }
+    });
+  }
+
+  List<IndicatorChipEntry> _mainChipEntries() {
+    final list = _mainCatalog.where(_activeMains.contains).toList()
+      ..sort((a, b) {
+        final lv = a.displayLevel.compareTo(b.displayLevel);
+        if (lv != 0) return lv;
+        final c = a.kind.categoryOrder.compareTo(b.kind.categoryOrder);
+        if (c != 0) return c;
+        return a.kn.compareTo(b.kn);
+      });
+    return [
+      for (final e in list)
+        IndicatorChipEntry(
+          label: e.label,
+          displayLevel: e.displayLevel,
+          muted: _mutedMains.contains(e),
+          onTapToggle: () => _toggleMuteMain(e),
+        ),
+    ];
+  }
+
+  List<IndicatorChipEntry> _subChipEntries() {
+    final values = _subChipValueByInd();
+    final list = _subCatalog.where(_activeSubs.contains).toList()
+      ..sort((a, b) {
+        final lv = a.displayLevel.compareTo(b.displayLevel);
+        if (lv != 0) return lv;
+        final c = a.kind.categoryOrder.compareTo(b.kind.categoryOrder);
+        if (c != 0) return c;
+        return a.label.compareTo(b.label);
+      });
+    return [
+      for (final e in list)
+        IndicatorChipEntry(
+          label: e.label,
+          displayLevel: e.displayLevel,
+          muted: _mutedSubs.contains(e),
+          valueText: values[e],
+          onTapToggle: () => _toggleMuteSub(e),
+        ),
+    ];
+  }
+
+  Widget _buildMainIndicatorToggleButton() {
+    return _buildMainIndicatorControlRow();
+  }
+
+  Widget _buildSubIndicatorToggleButton() {
+    return _buildSubIndicatorControlRow();
   }
 
   void _toggleMainSelection(MainChartIndicator item) {
@@ -1879,7 +2119,7 @@ class _KlineChartState extends State<KlineChart> {
                   ),
                 ),
               ),
-            // 主图收纳钮：全关时仍保留入口
+            // 主图收纳钮：伸展=全屏列表，右箭头=已选名+读数
             Positioned(
               left: 0,
               top: overlayTop,
@@ -1891,6 +2131,33 @@ class _KlineChartState extends State<KlineChart> {
                 ),
               ),
             ),
+            if (_mainIndicatorReadoutExpanded)
+              Positioned(
+                left: widget.mobileLayout ? 72 : 76,
+                top: overlayTop,
+                right: widget.mobileLayout ? 52 : 140,
+                child: Builder(
+                  key: _mainChipBarKey,
+                  builder: (_) {
+                    WidgetsBinding.instance
+                        .addPostFrameCallback((_) => _measureMainChipBar());
+                    return IgnorePointer(
+                      ignoring: !widget.indicatorsEnabled,
+                      child: Opacity(
+                        opacity: widget.indicatorsEnabled ? 1 : 0.35,
+                        child: IndicatorPickerChip(
+                          entries: _mainChipEntries(),
+                          maxWidth: widget.mobileLayout
+                              ? math.max(80.0, w - 80)
+                              : math.max(120.0, w - 220),
+                          maxHeight: KlineViewport.mainIndicatorChipMaxBand,
+                          horizontalScroll: widget.mobileLayout,
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
             // 副图收纳钮：副图收起时贴在主图底 / X 轴上方
             Positioned(
               left: KlineViewport.padL,
@@ -1908,6 +2175,43 @@ class _KlineChartState extends State<KlineChart> {
                 ),
               ),
             ),
+            if (_subIndicatorReadoutExpanded)
+              Positioned(
+                left: KlineViewport.padL,
+                top: _showSubPane
+                    ? mainH + 2
+                    : math.max(
+                        overlayTop + 4,
+                        mainH - KlineViewport.subIndicatorEntryBand,
+                      ),
+                right: 4,
+                child: Builder(
+                  key: _subChipBarKey,
+                  builder: (_) {
+                    WidgetsBinding.instance
+                        .addPostFrameCallback((_) => _measureSubChipBar());
+                    return IgnorePointer(
+                      ignoring: !widget.indicatorsEnabled,
+                      child: Opacity(
+                        opacity: widget.indicatorsEnabled ? 1 : 0.35,
+                        child: Padding(
+                          padding: EdgeInsets.only(
+                            left: widget.mobileLayout ? 68 : 72,
+                          ),
+                          child: IndicatorPickerChip(
+                            entries: _subChipEntries(),
+                            maxWidth: widget.mobileLayout
+                                ? math.max(80.0, w - 80)
+                                : math.max(120.0, w - 220),
+                            maxHeight: KlineViewport.subIndicatorChipMaxBand,
+                            horizontalScroll: widget.mobileLayout,
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
             _buildIndicatorPickerOverlay(),
           ],
         );
@@ -2187,6 +2491,8 @@ class _KlineCompositePainter extends CustomPainter {
           hoverBar: hoverBar,
         );
       }
+      // 价签叠在筹码/笔数柱上面，允许互相挡住；始终画在主图右侧。
+      _drawYLabels(canvas, size.width, plotTop, plotH, priceRange);
       canvas.restore();
       return;
     }
@@ -2317,15 +2623,6 @@ class _KlineCompositePainter extends CustomPainter {
         }
       }
     }
-    _drawYLabels(
-      canvas,
-      size.width,
-      plotTop,
-      plotH,
-      priceRange,
-      onLeft: showChip || showTickDist,
-      leftX: showTickDist ? plotLeft + 2 : null,
-    );
     if (chanDraw && strategySignals.isNotEmpty) {
       // 策略买/卖与蜡烛同一套柱心，平移时跟 K 线走（不再单独一层 overlay）
       paintStrategyMarkersOnChart(
@@ -6212,16 +6509,14 @@ class _KlineCompositePainter extends CustomPainter {
     }
   }
 
-  /// 主图 Y 轴价签；[onLeft]=true 时画在左侧（避让右侧筹码）；[leftX] 可指定左锚（笔数分布右侧）。
+  /// 主图 Y 轴价签：始终在右侧，与筹码柱允许重叠。
   void _drawYLabels(
     Canvas canvas,
     double w,
     double plotTop,
     double plotH,
-    PriceRange pr, {
-    bool onLeft = false,
-    double? leftX,
-  }) {
+    PriceRange pr,
+  ) {
     const style = TextStyle(color: Color(0x99FFFFFF), fontSize: 9);
     for (var i = 0; i <= 4; i++) {
       final p = pr.max - pr.span * i / 4;
@@ -6230,10 +6525,7 @@ class _KlineCompositePainter extends CustomPainter {
         text: TextSpan(text: p.toStringAsFixed(2), style: style),
         textDirection: TextDirection.ltr,
       )..layout();
-      final lx = onLeft
-          ? (leftX ?? (KlineViewport.padL + 2))
-          : w - tp.width - 3;
-      tp.paint(canvas, Offset(lx, y - tp.height / 2));
+      tp.paint(canvas, Offset(w - tp.width - 3, y - tp.height / 2));
     }
   }
 
@@ -6321,9 +6613,8 @@ class _KlineCompositePainter extends CustomPainter {
     final lw = tp.width + 12;
     final lh = tp.height + 8;
     final ly = y - lh / 2;
-    // 筹码开启：价签改左侧，避免被右侧筹码挡住（设置总开关控制，仅K0）
-    final chipOn = chipConfig.enabled;
-    final lx = chipOn ? KlineViewport.padL + 2 : size.width - lw - 3;
+    // 十字价格标签始终在右侧，与筹码柱允许重叠（筹码层在下、十字层在上）。
+    final lx = size.width - lw - 3;
     canvas.drawRect(Rect.fromLTWH(lx, ly, lw, lh), labelBg);
     canvas.drawRect(Rect.fromLTWH(lx, ly, lw, lh), labelBorder);
     tp.paint(canvas, Offset(lx + 6, ly + 4));
@@ -6470,7 +6761,7 @@ class _KlineCompositePainter extends CustomPainter {
 
     switch (layer) {
       case _ChartPaintLayer.base:
-        // 不含 crosshairX/Y：纯移价位线不重画蜡烛；chipConfig 变→价签左右切换
+        // 不含 crosshairX/Y：纯移价位线不重画蜡烛
         return dataChanged ||
             geomChanged ||
             oldDelegate.segAsOf != segAsOf ||
@@ -6479,7 +6770,8 @@ class _KlineCompositePainter extends CustomPainter {
         return dataChanged ||
             geomChanged ||
             oldDelegate.segAsOf != segAsOf ||
-            oldDelegate.chipConfig != chipConfig;
+            oldDelegate.chipConfig != chipConfig ||
+            oldDelegate.tickDistConfig != tickDistConfig;
       case _ChartPaintLayer.crosshair:
         return geomChanged ||
             oldDelegate.crosshairEnabled != crosshairEnabled ||

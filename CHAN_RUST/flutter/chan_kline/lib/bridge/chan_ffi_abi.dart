@@ -1,6 +1,6 @@
 /// 界面期望的动态库协议号。必须与 Rust `CHAN_FFI_ABI_VERSION` 相同。
 /// 改管道 JSON / 冻结语义时两边一起加一，禁止静默混用旧库。
-const int kChanFfiAbiVersion = 1;
+const int kChanFfiAbiVersion = 2;
 
 /// 计算库缺失或版本对不上：界面停机，不继续算出另一套点。
 class ChanFfiVersionException implements Exception {

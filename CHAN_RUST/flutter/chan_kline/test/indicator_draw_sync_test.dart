@@ -13,12 +13,16 @@ void main() {
     expect(subs.contains(const SubChartIndicator.volume(0)), isFalse);
   });
 
-  test('用户勾选非默认指标后应进入选择集（无 muted 裁剪）', () {
+  test('非默认指标勾选后默认 muted，需再点才绘制', () {
     final selected = Set<MainChartIndicator>.from(defaultMainIndicatorsK0())
       ..add(const MainChartIndicator.boll(0));
-    final drawn = selected; // 修复后：drawn == selected
+    final muted = <MainChartIndicator>{
+      for (final e in selected)
+        if (!isDefaultDrawnMain(e)) e,
+    };
+    final drawn = selected.difference(muted);
     expect(selected.contains(const MainChartIndicator.boll(0)), isTrue);
-    expect(drawn.contains(const MainChartIndicator.boll(0)), isTrue);
-    expect(drawn.length, selected.length);
+    expect(muted.contains(const MainChartIndicator.boll(0)), isTrue);
+    expect(drawn.contains(const MainChartIndicator.boll(0)), isFalse);
   });
 }

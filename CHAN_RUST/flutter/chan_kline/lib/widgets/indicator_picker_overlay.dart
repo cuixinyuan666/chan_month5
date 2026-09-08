@@ -2,24 +2,10 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
-/// 单个指标条目（兼容旧引用；新面板走 [IndicatorPickerOverlay] 泛型）。
-class IndicatorChipEntry {
-  const IndicatorChipEntry({
-    required this.label,
-    required this.onTapToggle,
-    required this.displayLevel,
-    this.selected = true,
-    this.valueText,
-  });
-
-  final String label;
-  final VoidCallback onTapToggle;
-  final int displayLevel;
-  final bool selected;
-  final String? valueText;
-}
-
 enum _PickerNav { levels, categories, items }
+
+/// 分类下只有一项时，点击分类直接勾选，不再进子菜单。
+bool pickerHasUniqueChild<T>(List<T> items) => items.length == 1;
 
 /// 层级 → 类别 → 指标 三级导航选择面板（主/副图通用）。
 class IndicatorPickerOverlay<T> extends StatefulWidget {
@@ -128,6 +114,31 @@ class _IndicatorPickerOverlayState<T> extends State<IndicatorPickerOverlay<T>> {
       _level = lv;
       _category = category;
     });
+  }
+
+  /// 层级只有一项：直接勾选；只有一个类别：跳过类别页。
+  void _onLevelTap(int lv) {
+    final items = _itemsAtLevel(lv);
+    if (pickerHasUniqueChild(items)) {
+      widget.onToggle(items.first);
+      return;
+    }
+    final cats = _categoriesAtLevel(lv);
+    if (cats.length == 1) {
+      _onCategoryTap(lv, cats.first.label);
+      return;
+    }
+    _goCategories(lv);
+  }
+
+  /// 类别只有一项：直接勾选，不再进子菜单。
+  void _onCategoryTap(int lv, String category) {
+    final items = _itemsInCategory(lv, category);
+    if (pickerHasUniqueChild(items)) {
+      widget.onToggle(items.first);
+      return;
+    }
+    _goItems(lv, category);
   }
 
   void _onBack() {
@@ -274,11 +285,21 @@ class _IndicatorPickerOverlayState<T> extends State<IndicatorPickerOverlay<T>> {
           itemBuilder: (_, i) {
             final lv = levels[i];
             final items = _itemsAtLevel(lv);
+            if (pickerHasUniqueChild(items)) {
+              return _itemRow(items.first);
+            }
+            final cats = _categoriesAtLevel(lv);
+            if (cats.length == 1) {
+              final only = _itemsInCategory(lv, cats.first.label);
+              if (pickerHasUniqueChild(only)) {
+                return _itemRow(only.first);
+              }
+            }
             final cnt = _selectedCount(items);
             return _navRow(
               title: 'K$lv',
               subtitle: cnt > 0 ? '已选 $cnt 项' : '点击进入类别',
-              onTap: () => _goCategories(lv),
+              onTap: () => _onLevelTap(lv),
             );
           },
         );
@@ -299,11 +320,14 @@ class _IndicatorPickerOverlayState<T> extends State<IndicatorPickerOverlay<T>> {
           itemBuilder: (_, i) {
             final cat = cats[i];
             final items = _itemsInCategory(lv, cat.label);
+            if (pickerHasUniqueChild(items)) {
+              return _itemRow(items.first);
+            }
             final cnt = _selectedCount(items);
             return _navRow(
               title: cat.label,
               subtitle: cnt > 0 ? '已选 $cnt 项' : '${items.length} 项可选',
-              onTap: () => _goItems(lv, cat.label),
+              onTap: () => _onCategoryTap(lv, cat.label),
             );
           },
         );

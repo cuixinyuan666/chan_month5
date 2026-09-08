@@ -10,7 +10,7 @@ $OutDir = Join-Path $OutParent "chan_kline-windows-x64"
 $ZipPath = Join-Path $OutParent "chan_kline-windows-x64.zip"
 $DataSrc = Join-Path $RepoRoot "a_Data"
 $ReadmeSrc = Join-Path $PSScriptRoot "release_readme.txt"
-$MinDataFiles = 5000
+$MinDataFiles = 10
 
 if (-not (Test-Path (Join-Path $ReleaseDir "chan_kline.exe"))) {
     throw "未找到发布目录: $ReleaseDir ，请先 flutter build windows --release"

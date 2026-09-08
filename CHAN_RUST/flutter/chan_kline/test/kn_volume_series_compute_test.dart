@@ -71,4 +71,34 @@ void main() {
     expect(s[3], 40); // excludes shared pole 30
     expect(s[4], 45);
   });
+
+  test('K0 笔数无 metrics 时是 0，不用 tick_side 充 1 笔', () {
+    final withSide = KlineBar(
+      idx: 0,
+      timeMs: 0,
+      timeText: 't0',
+      open: 10,
+      high: 11,
+      low: 9,
+      close: 10.5,
+      volume: 10,
+      amount: 1000,
+      metrics: const {'tick_side': 'B'},
+    );
+    final explicitZero = KlineBar(
+      idx: 1,
+      timeMs: 60000,
+      timeText: 't1',
+      open: 10,
+      high: 11,
+      low: 9,
+      close: 10.5,
+      volume: 10,
+      amount: 1000,
+      metrics: const {'tick_count': 0, 'buy_tick_count': 0, 'tick_side': 'B'},
+    );
+    expect(computeK0TickCountSeries([withSide, explicitZero]), [0.0, 0.0]);
+    expect(computeK0BuyTickCountSeries([withSide, explicitZero]), [0.0, 0.0]);
+    expect(computeK0SellTickCountSeries([withSide]), [0.0]);
+  });
 }

@@ -27,7 +27,7 @@ class TradeEventAst extends TradeAst {
   const TradeEventAst(this.variableId);
 }
 
-/// 并且：左右都真才真（按计算钟对齐后的样本）
+/// 并且：左右都真才真（各支先在自己的钟上算，再映到同一根 K0）
 class TradeAndAst extends TradeAst {
   final TradeAst left;
   final TradeAst right;
@@ -250,6 +250,20 @@ TradeAst k1BuyN3OrBuy1Ast() => TradeOrAst(
 TradeAst k0Buy1AndK1Buy1Ast() => const TradeAndAst(
       k0Buy1EventAst,
       k1Buy1EventAst,
+    );
+
+/// 买：K0 最低价下穿下轨 并且 K1 最低价下穿下轨（各算各层；AND 须同一根 K0 刚发生）
+TradeAst k0LowCrossBollAndK1LowCrossBollAst() => const TradeAndAst(
+      TradeCmpAst(
+        left: TradeVarRef('RAW.K0.LOW'),
+        right: TradeVarRef('MAIN.K0.BOLL.DOWN'),
+        op: TradeBinaryOp.crossBelow,
+      ),
+      TradeCmpAst(
+        left: TradeVarRef('RAW.K1.LOW'),
+        right: TradeVarRef('MAIN.K1.BOLL.DOWN'),
+        op: TradeBinaryOp.crossBelow,
+      ),
     );
 
 /// 买：K0 一类买 或者 K1 三类买（跨层；各层出现各打一次）

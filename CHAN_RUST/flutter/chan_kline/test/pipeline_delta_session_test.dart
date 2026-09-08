@@ -15,6 +15,8 @@ import 'package:chan_kline/models/pipeline_delta.dart';
 import 'package:chan_kline/models/presentation_cache.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'offline_tick_files.dart';
+
 List<KlineBar> _load002003() {
   final bridge = ChanBridge.instance;
   final root = bridge.defaultDataRoot();
@@ -108,6 +110,10 @@ void _assertBundlesEq(
 }
 
 void main() {
+  if (!hasOffline002003TickFiles()) {
+    test('002003 Delta 会话', () {}, skip: kNoOffline002003Skip);
+    return;
+  }
   late List<KlineBar> bars;
 
   setUpAll(() {

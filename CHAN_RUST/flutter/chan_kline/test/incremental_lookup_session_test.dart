@@ -16,6 +16,8 @@ import 'package:chan_kline/models/sell2_frame.dart';
 import 'package:chan_kline/models/sell_n_frame.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'offline_tick_files.dart';
+
 List<KlineBar> _load002003() {
   final bridge = ChanBridge.instance;
   return bridge.loadKlines(
@@ -99,6 +101,10 @@ void _expectRowsEq(
 }
 
 void main() {
+  if (!hasOffline002003TickFiles()) {
+    test('002003 Incremental Lookup', () {}, skip: kNoOffline002003Skip);
+    return;
+  }
   late List<KlineBar> bars;
 
   setUpAll(() {

@@ -137,7 +137,7 @@ void main() {
       );
     });
 
-    test('BUY1 AND RSI 同层合法；分型确认 AND RSI 非法；BUY1 OR BUY2 合法；跨层一类可拼', () {
+    test('BUY1 AND RSI 同层合法；K1 分型确认 AND K1 RSI 可拼；跨层一类可拼', () {
       expect(
         compileConditionAst(k1Buy1AndRsiAst(), maxKn: 2),
         isA<CondCompileOk>(),
@@ -164,7 +164,7 @@ void main() {
           ),
           maxKn: 2,
         ),
-        isA<CondCompileIllegal>(),
+        isA<CondCompileOk>(),
       );
       expect(
         compileConditionAst(k0Buy1AndK1Buy1Ast(), maxKn: 2),
@@ -186,7 +186,7 @@ void main() {
           ),
           maxKn: 2,
         ),
-        isA<CondCompileIllegal>(),
+        isA<CondCompileOk>(),
       );
       expect(
         compileConditionAst(
@@ -200,11 +200,11 @@ void main() {
           ),
           maxKn: 2,
         ),
-        isA<CondCompileIllegal>(),
+        isA<CondCompileOk>(),
       );
     });
 
-    test('K0 分型确认 AND/OR K1 一类买能编过；分型确认 AND K1 RSI 非法', () {
+    test('K0 分型确认 AND/OR K1 一类买能编过；分型确认 AND K1 RSI 可拼', () {
       expect(
         compileConditionAst(k0FxConfirmAndK1Buy1Ast(), maxKn: 2),
         isA<CondCompileOk>(),
@@ -225,7 +225,7 @@ void main() {
           ),
           maxKn: 2,
         ),
-        isA<CondCompileIllegal>(),
+        isA<CondCompileOk>(),
       );
       expect(
         compileConditionAst(k0ZsConfirmAndK1Buy1Ast(), maxKn: 2),

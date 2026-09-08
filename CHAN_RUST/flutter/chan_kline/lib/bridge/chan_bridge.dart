@@ -9,6 +9,7 @@ import '../models/kline_combine_bundle.dart';
 import '../models/kline_combine_frame.dart';
 import '../models/pipeline_delta.dart';
 import '../models/presentation_cache.dart';
+import '../models/tick_quality.dart';
 import '../widgets/kline_chip.dart';
 import 'chan_ffi_abi.dart';
 
@@ -147,6 +148,26 @@ class ChanBridge {
               )>>('chan_load_klines')
       .asFunction();
 
+  late final Pointer<Utf8> Function(
+    Pointer<Utf8>,
+    Pointer<Utf8>,
+    Pointer<Utf8>,
+    Pointer<Utf8>,
+    Pointer<Utf8>,
+    Pointer<Utf8>,
+  ) _loadKlinesEx = _lib
+      .lookup<
+          NativeFunction<
+              Pointer<Utf8> Function(
+                Pointer<Utf8>,
+                Pointer<Utf8>,
+                Pointer<Utf8>,
+                Pointer<Utf8>,
+                Pointer<Utf8>,
+                Pointer<Utf8>,
+              )>>('chan_load_klines_ex')
+      .asFunction();
+
   late final Pointer<Utf8> Function(Pointer<Utf8>) _saveTestOhlc = _lib
       .lookup<NativeFunction<Pointer<Utf8> Function(Pointer<Utf8>)>>(
         'chan_save_test_ohlc',
@@ -282,6 +303,47 @@ class ChanBridge {
           .toList();
     } finally {
       for (final p in [pRoot, pCode, pBegin, pEnd, pPeriod]) {
+        if (p != nullptr) calloc.free(p);
+      }
+    }
+  }
+
+  /// 加载 K 线并带回分笔质量。tickSource：`file`（单测/test）或 `protocol`（通达信）。
+  ({List<KlineBar> bars, TickQuality quality}) loadKlinesEx({
+    String? dataRoot,
+    required String code,
+    required String beginDate,
+    required String endDate,
+    String period = 'day',
+    String tickSource = 'file',
+  }) {
+    ensureInitialized();
+    final pRoot = _toNative(dataRoot);
+    final pCode = _toNative(code);
+    final pBegin = _toNative(beginDate);
+    final pEnd = _toNative(endDate);
+    final pPeriod = _toNative(period);
+    final pSource = _toNative(tickSource);
+    try {
+      final data = _decode(
+        _takeJson(
+          _loadKlinesEx(pRoot, pCode, pBegin, pEnd, pPeriod, pSource),
+        ),
+      );
+      final map = Map<String, dynamic>.from(data as Map);
+      final bars = (map['bars'] as List? ?? const [])
+          .map((e) => KlineBar.fromJson(Map<String, dynamic>.from(e as Map)))
+          .toList();
+      return (
+        bars: bars,
+        quality: TickQuality.fromJson(
+          map['quality'] is Map
+              ? Map<String, dynamic>.from(map['quality'] as Map)
+              : null,
+        ),
+      );
+    } finally {
+      for (final p in [pRoot, pCode, pBegin, pEnd, pPeriod, pSource]) {
         if (p != nullptr) calloc.free(p);
       }
     }

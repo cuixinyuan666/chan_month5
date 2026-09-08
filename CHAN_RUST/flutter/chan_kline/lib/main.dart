@@ -63,6 +63,7 @@ import 'models/buy_n_frame.dart';
 import 'models/sell_n_frame.dart';
 import 'models/bs_verdict_frame.dart';
 import 'models/kline_bar.dart';
+import 'models/tick_quality.dart';
 import 'models/k0_confirm_signal.dart';
 import 'models/bar_crosshair_feature.dart';
 import 'models/bar_feature_lookup.dart';
@@ -84,6 +85,7 @@ import 'widgets/datetime_picker_dialog.dart';
 import 'widgets/edge_control_panel.dart';
 import 'widgets/kline_chart.dart';
 import 'widgets/yin_yang_mark.dart';
+import 'widgets/yin_yang_native_overlay.dart';
 import 'widgets/test_ohlc_editor_dialog.dart';
 import 'task_demo/task_demo_compare_page.dart';
 import 'task_demo/task_demo_data_loader.dart';
@@ -244,6 +246,11 @@ Future<void> main() async {
   MsgHistory.instance.appendCrossKnBsJoin();
   MsgHistory.instance.appendWorkbenchLayoutAndK0BarEvents();
   MsgHistory.instance.appendWorkbenchBelowCaptionAndClose();
+  MsgHistory.instance.appendTdxProtocolTicks();
+  MsgHistory.instance.appendK0BarJoinYinYangCenterPriceAxis();
+  MsgHistory.instance.appendUiBsPickerSettings20260905();
+  MsgHistory.instance.appendBsNAllClass20260905();
+  MsgHistory.instance.appendCrossKnIndicatorJoin20260905();
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     await windowManager.ensureInitialized();
     const opts = WindowOptions(
@@ -341,6 +348,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
   bool _tickYinYangCover = false;
   bool _runningToEnd = false;
   bool _cancelRunToEnd = false;
+  bool _nativeYinYangActive = false;
+  final YinYangNativeOverlay _runToEndYinYang = YinYangNativeOverlay();
   final ValueNotifier<String> _longOpHint = ValueNotifier<String>('');
   /// 计算库缺失/版本不对：中文停机，禁止继续算出另一套点。
   bool _libHalt = false;
@@ -368,6 +377,27 @@ class _KlineHomePageState extends State<KlineHomePage> {
   ChipConfig _chipConfig = const ChipConfig();
   /// 笔数分布配置（主图左侧；同 JSON 嵌套 tickDist）
   TickDistConfig _tickDistConfig = const TickDistConfig();
+  /// 本会话是否允许筹码/笔数依赖（弹窗选「不继续」后关掉，不改落盘）
+  bool _chipTickDepsAllowed = true;
+  /// 本会话是否画笔数分布（「分笔笔数为 0」弹窗专用）
+  bool _tickDistSessionAllowed = true;
+
+  ChipConfig get _sessionChipConfig => _chipTickDepsAllowed
+      ? _chipConfig
+      : _chipConfig.copyWith(enabled: false, peakLineEnabled: false);
+
+  TickDistConfig get _sessionTickDistConfig => _tickDistSessionAllowed
+      ? _tickDistConfig
+      : _tickDistConfig.copyWith(enabled: false, peakLineEnabled: false);
+
+  Set<SubChartIndicator> get _sessionSubIndicators {
+    if (_chipTickDepsAllowed) return _subIndicators;
+    return _subIndicators
+        .where((e) => e.kind != SubIndicatorKind.tickCount)
+        .toSet();
+  }
+
+  String _tickSourceFor(String code) => code == 'test' ? 'file' : 'protocol';
   /// 数学指标参数（均线/通道/MACD/BOLL/RSI/KDJ/Demark）
   MathIndicatorConfig _mathIndicatorConfig = const MathIndicatorConfig();
   /// Math/均线/通道/Demark 会话冻结（Kn≥1 禁整表回写）
@@ -489,13 +519,30 @@ class _KlineHomePageState extends State<KlineHomePage> {
     setState(() => _tickYinYangCover = false);
   }
 
-  /// 分笔太极铺满整个窗口（拉成窗口矩形），点一下收起。
+  /// 分笔太极：正圆，直径=当前窗口高度。
   Widget _buildTickYinYangOverlay(BuildContext context) {
     return Positioned.fill(
       child: Listener(
         behavior: HitTestBehavior.opaque,
         onPointerDown: _loadingChart ? null : (_) => _dismissTickYinYang(),
         child: const YinYangFullscreenCover(),
+      ),
+    );
+  }
+
+  /// 一次性走完：Windows 用独立窗口转太极；其它平台仍用 Flutter 层。
+  /// 正中心对齐当前窗口（含标题条），不再为进度条/边距人为下移。
+  Widget _buildRunToEndYinYangOverlay(BuildContext context) {
+    if (_nativeYinYangActive) {
+      return const SizedBox.shrink();
+    }
+    return const Positioned.fill(
+      child: IgnorePointer(
+        child: YinYangFullscreenCover(
+          heightFactor: 0.25,
+          opacity: 0.5,
+          dimBackground: false,
+        ),
       ),
     );
   }
@@ -640,7 +687,6 @@ class _KlineHomePageState extends State<KlineHomePage> {
     super.initState();
     _keepAlive.attach();
     _loadInteractionMode();
-    _loadChipConfig();
     _loadMathIndicatorConfig();
     _bootstrapWithDemo();
   }
@@ -657,6 +703,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
   Future<void> _bootstrapWithDemo() async {
     _devDemoPhaseEnabled =
         await TaskDemoSettingsStore.isDevelopmentDemoPhaseEnabled();
+    await _loadChipConfig();
     await _bootstrap();
   }
 
@@ -774,6 +821,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
     _longOpHint.dispose();
     _stopTaskDemoAutoPlay();
     _disposePipelineSession();
+    unawaited(_runToEndYinYang.hide());
     super.dispose();
   }
 
@@ -991,20 +1039,30 @@ class _KlineHomePageState extends State<KlineHomePage> {
       _loadingChart = true;
       _error = null;
       _tickYinYangCover = _period == 'tick';
+      _chipTickDepsAllowed = true;
+      _tickDistSessionAllowed = true;
     });
     _disposePipelineSession();
+    TickQuality? quality;
     try {
-      final bars = _bridge.loadKlines(
+      final loaded = _bridge.loadKlinesEx(
         dataRoot: _dataRoot,
         code: code,
         beginDate: _fmtDateTime(_beginDate),
         endDate: _fmtDateTime(_endDate),
         period: _period,
+        tickSource: _tickSourceFor(code),
       );
+      quality = loaded.quality;
+      final bars = loaded.bars;
+      final tickDistOn = _tickDistConfig.enabled;
+      final pendingMute = quality.shouldPrompt(tickDistEnabled: tickDistOn);
       setState(() {
         _allBars = bars;
         _stepIdx = bars.isEmpty ? -1 : 0;
         _defaultK0Purged = false;
+        _chipTickDepsAllowed = true;
+        _tickDistSessionAllowed = !pendingMute;
         _judgmentHistoryByKn.clear();
         _zsJudgmentHistoryByKn.clear();
         _zsConfirmHistoryByKn.clear();
@@ -1030,10 +1088,12 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _clearBacktestSession();
       });
       final directOhlc = code == 'test' && _hasTestOhlcCsv();
+      final srcHint = directOhlc
+          ? '（直读custom.ohlc.csv，忽略周期聚合）'
+          : (quality.source == 'protocol' ? '（通达信协议分笔）' : '（本地分笔文件）');
       _msgHistory.append(
         '加载K0：$code ${_fmtDateTime(_beginDate)}~${_fmtDateTime(_endDate)} '
-        '${_periods[_period] ?? _period} 共${bars.length}根'
-        '${directOhlc ? "（直读custom.ohlc.csv，忽略周期聚合）" : ""}',
+        '${_periods[_period] ?? _period} 共${bars.length}根$srcHint',
       );
       if (_chipOnlyMode) {
         // 仅筹码分布：跳过缠论合并/线段/中枢/BS 计算，清空相关数据
@@ -1092,6 +1152,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _buyNK0Frames = [];
         _sellNK0Frames = [];
         _stepIdx = -1;
+        _chipTickDepsAllowed = true;
+        _tickDistSessionAllowed = true;
         _judgmentHistoryByKn.clear();
         _zsJudgmentHistoryByKn.clear();
         _zsConfirmHistoryByKn.clear();
@@ -1120,6 +1182,70 @@ class _KlineHomePageState extends State<KlineHomePage> {
     } finally {
       if (mounted) setState(() => _loadingChart = false);
     }
+    if (quality != null && mounted) {
+      await _promptTickQuality(quality);
+    }
+  }
+
+  /// 笔数分布已开启且笔数为 0 时询问是否继续用该图。
+  Future<void> _promptTickQuality(TickQuality q) async {
+    final tickDistOn = _tickDistConfig.enabled;
+    final need = q.shouldPrompt(tickDistEnabled: tickDistOn);
+    if (q.skipPrompts || !need) {
+      if (!_tickDistSessionAllowed) {
+        setState(() => _tickDistSessionAllowed = true);
+      }
+      return;
+    }
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted) return;
+    var allow = true;
+    if (q.zeroTickCount && tickDistOn) {
+      final go = await _askChipTickContinue(
+        title: '分笔笔数为 0',
+        body: '笔数分布图已开启，但所选区间里有分笔的笔数是 0。'
+            '主图左侧笔数分布会没有柱。'
+            '要继续用笔数分布吗？\n\n'
+            '点「不继续」：K 线和缠论仍加载；本会话关掉笔数分布（不改你保存的设置）。',
+      );
+      allow = go && allow;
+    }
+    if (!mounted) return;
+    setState(() {
+      _tickDistSessionAllowed = allow;
+    });
+    if (!allow) {
+      _msgHistory.append(
+        '本会话已关掉笔数分布（K 线与缠论仍在；不改保存的设置）',
+      );
+    } else {
+      _msgHistory.append('已选择继续使用笔数分布');
+    }
+  }
+
+  Future<bool> _askChipTickContinue({
+    required String title,
+    required String body,
+  }) async {
+    final go = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: Text(title),
+        content: SingleChildScrollView(child: Text(body)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('不继续'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('继续用'),
+          ),
+        ],
+      ),
+    );
+    return go == true;
   }
 
   /// 把当前可见窗口的展示轨分型判断并入会话日志（追加去重，不删旧点）。
@@ -1789,6 +1915,18 @@ class _KlineHomePageState extends State<KlineHomePage> {
     setState(() {});
     _refreshKeepAlive();
     _dismissTickYinYang();
+    if (Platform.isWindows) {
+      try {
+        await _runToEndYinYang.showCentered(
+          heightFactor: 0.25,
+          opacity: 0.5,
+        );
+        _nativeYinYangActive = _runToEndYinYang.isShowing;
+        if (mounted) setState(() {});
+      } catch (_) {
+        _nativeYinYangActive = false;
+      }
+    }
     var cancelled = false;
     var lastYield = DateTime.fromMillisecondsSinceEpoch(0);
     try {
@@ -1905,6 +2043,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
     } finally {
       _pipelineSession?.slimDeltaStructure = false;
       _runningToEnd = false;
+      _nativeYinYangActive = false;
+      await _runToEndYinYang.hide();
       if (mounted) {
         _longOpHint.value = '';
         setState(() {});
@@ -2014,6 +2154,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
               (_loadingChart || _tickYinYangCover) &&
               !_mlSession.isActive)
             _buildTickYinYangOverlay(context),
+          if (_runningToEnd && !_mlSession.isActive)
+            _buildRunToEndYinYangOverlay(context),
           // 最上层：拖动区 + 设置 + 最小/最大/关闭
           Positioned(
             left: 0,
@@ -2142,6 +2284,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
               (_loadingChart || _tickYinYangCover) &&
               !_mlSession.isActive)
             _buildTickYinYangOverlay(context),
+          if (_runningToEnd && !_mlSession.isActive)
+            _buildRunToEndYinYangOverlay(context),
           if (!_mlSession.isActive)
             Positioned(
               top: topInset + 2,
@@ -2338,27 +2482,18 @@ class _KlineHomePageState extends State<KlineHomePage> {
           ),
         if (_selectedCode == 'test') ...[
           const SizedBox(height: 8),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: _busy ? null : _openTestOhlcEditor,
-                  icon: const Icon(Icons.edit_note, size: 18),
-                  label: const Text('编辑/加载自定义 OHLC'),
-                ),
-              ),
-              IconButton(
-                tooltip: '自定义 OHLC 说明',
-                icon: const Icon(Icons.help_outline, size: 18),
-                onPressed: _showTestOhlcHelp,
-              ),
-            ],
+          SettingsOutlinedButton(
+            label: '编辑/加载自定义 OHLC',
+            icon: Icons.edit_note,
+            onPressed: _busy ? null : _openTestOhlcEditor,
+            onHelp: _showTestOhlcHelp,
+            helpTooltip: '自定义 OHLC 说明',
           ),
           const SizedBox(height: 6),
-          OutlinedButton.icon(
+          SettingsOutlinedButton(
+            label: '任务演示 / 前后对比',
+            icon: Icons.compare,
             onPressed: _busy ? null : _openTaskDemoList,
-            icon: const Icon(Icons.compare, size: 18),
-            label: const Text('任务演示 / 前后对比'),
           ),
         ],
         const SizedBox(height: 10),
@@ -2778,25 +2913,14 @@ class _KlineHomePageState extends State<KlineHomePage> {
               : () => _openBacktestWorkbench(closeSettingsSheet: forMobileSheet),
         ),
         const SizedBox(height: SettingsPanelTheme.fieldGap),
-        // 机器学习：不加载K线图；后台算样本后看训练/考试结果
-        Row(
-          children: [
-            Expanded(
-              child: SettingsFilledButton(
-                label: _mlSession.isActive ? '机器学习（进行中）' : '机器学习',
-                icon: Icons.psychology,
-                onPressed: (_busy && !_mlSession.isActive) ||
-                        _mlSession.isActive
-                    ? null
-                    : () => _enterMlSession(),
-              ),
-            ),
-            IconButton(
-              tooltip: '机器学习说明',
-              onPressed: _showMlHelp,
-              icon: const Icon(Icons.help_outline, size: 20),
-            ),
-          ],
+        SettingsFilledButton(
+          label: _mlSession.isActive ? '机器学习（进行中）' : '机器学习',
+          icon: Icons.psychology,
+          onPressed: (_busy && !_mlSession.isActive) || _mlSession.isActive
+              ? null
+              : () => _enterMlSession(),
+          onHelp: _showMlHelp,
+          helpTooltip: '机器学习说明',
         ),
         if (_mlSession.isActive) ...[
           const SizedBox(height: SettingsPanelTheme.fieldGap),
@@ -3124,15 +3248,17 @@ class _KlineHomePageState extends State<KlineHomePage> {
             'MACD（DIF/DEA/柱）、RSI、KDJ，K0 还可以用成交量；右边也可以填常数。'
             '也可以选一类/二类买卖点、分型确认、中枢确认、背驰出现：这些是「出现一次」的事件，'
             '每颗点当根出一次信号，连着两颗确认不会把后面那颗吞掉。'
-            '只能和同层同钟的条件用 AND/OR 拼，不能拿去比较或上穿下穿。'
+            '事件只能用 AND/OR 拼（须同一根 K 两边都刚发生），不能拿去比较或上穿下穿。'
             '买卖都选分型确认时，同一根先平后开：空仓只开，有仓先平再开。'
             '确认中枢的高/低/中轴是数值：先认定「当前这层最新一个已经确认的中枢」，再取当时能看见的高低，'
             '不是事后扩大后的末态。没有确认中枢就是不可用，不会当成 0。'
             '背驰是「哪一个结构对比哪一个结构、在哪根 K 被发现」的关系，不是一根 K 看起来像背驰。'
             '力度比可以拿去和数字比，方向只能选向上或向下，不能把整个背驰拿去比大小或上穿下穿。'
-            '同一条比较必须同层同钟，K0 和 K1 不能拼在同一棵树上。'
+            '同一条比较必须同层同钟：K0 最低价不能去穿 K1 布林。'
+            '但两层各自穿完自己的布林，再用 AND/OR 拼是可以的，AND 必须撞在同一根 K 上。'
             '成交量这一版只开放 K0，没有另造 Kn 成交量和均量。\n\n'
             '点运行后，图上按组合组显示「买1/卖1」「买2/卖2」（红买绿卖），画在发现当根，被拒的不画。'
+            '买1/卖1 用三角，买2/卖2 用箭头，买3/卖3 再三角，按组号奇偶交替。'
             '默认按本周期收盘价成交；也可在设置里改次周期开盘价。这不是缠论的 1Ba/1Sa。'
             '报告里的净利润、胜率、盈亏比、回撤都来自这一次回测结果，界面不会再算一遍。'
             '左侧变量诊断只读图上已冻住的格子和计算钟样本，不会现场重算指标。\n\n'
@@ -3176,8 +3302,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
       truncationCheck: _truncationCheck,
       showBuildingDash: _showBuildingDash,
       chipOnlyMode: _chipOnlyMode,
-      chipConfig: _chipConfig,
-      tickDistConfig: _tickDistConfig,
+      chipConfig: _sessionChipConfig,
+      tickDistConfig: _sessionTickDistConfig,
       mathIndicatorConfig: _mathIndicatorConfig,
       mathFreezeStore: _mathFreezeStore,
       diverFreezeStore: _diverFreezeStore,
@@ -3199,7 +3325,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       sessionAsOfBundle: (asOf) => _pipelineSession?.cache.snapshotAt(asOf),
       mainIndicators: _mainIndicators,
       onMainIndicatorsChanged: (v) => setState(() => _mainIndicators = v),
-      subIndicators: _subIndicators,
+      subIndicators: _sessionSubIndicators,
       onSubIndicatorsChanged: (v) => setState(
             () => _subIndicators = ensureMacdForDivergenceArea(v),
           ),
@@ -4040,7 +4166,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         content: const SingleChildScrollView(
           child: Text(
             '作用：与筹码分布同构，按价格累计分笔笔数（第4列），'
-            '画在主图左侧；价签画在笔数分布右侧。\n\n'
+            '画在主图左侧；主图价签仍在右侧，与筹码/笔数柱允许重叠。\n\n'
             '怎么看\n'
             '· 水平柱 B/S/G 着色同筹码；\n'
             '· 笔数峰：局部笔数峰打点，虚线延长进主图；\n'
