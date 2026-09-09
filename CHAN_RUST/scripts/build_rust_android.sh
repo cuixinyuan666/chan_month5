@@ -12,12 +12,12 @@ export ANDROID_HOME
 export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
 
 if ! command -v cargo-ndk >/dev/null 2>&1; then
-  echo "缺少 cargo-ndk，请先运行: bash .cursor/scripts/install-android-env.sh" >&2
+  echo "缺少 cargo-ndk，请先运行: bash ../.cursor/scripts/install-android-env.sh" >&2
   exit 1
 fi
 
 if [ ! -d "$ANDROID_HOME/ndk" ]; then
-  echo "未找到 Android NDK，请先运行: bash .cursor/scripts/install-android-env.sh" >&2
+  echo "未找到 Android NDK，请先运行: bash ../.cursor/scripts/install-android-env.sh" >&2
   exit 1
 fi
 

@@ -1,4 +1,4 @@
-# 任务日志
+﻿# 任务日志
 
 > 所有智能体在完成任务后，应在此文件末尾追加。格式见下。本文件是**唯一**任务日志：已按时间从早到晚合并根目录原 `task-log.md`、`CHAN_RUST/TASK_LOG.md`（口径条目前加【口径】）、`CHAN_RUST/tooltip_audit_2026-08-14.md`（【审计】）。
 
@@ -2698,3 +2698,44 @@ Rust `buy2.rs`（新）→ pipeline/combine → Flutter 会话双键冻结（`cl
 - **注意事项**：无需重编 DLL。`a_Data` 仍与 `CHAN_RUST` 同级，加载股票和演示都走这里
 
 ---
+
+### 2026-09-09 — 检查并补充 CHAN_RUST/README.md
+
+- **执行者**：Kilo
+- **任务类型**：文档 / 配置
+- **上下文**：用户要求检查 README.md 并补充缺失/过时内容。
+- **关键操作**：
+   1. 核对项目实际结构与 README 声称一致：修复 Android 环境安装脚本路径错误（`.cursor/scripts/install-android-env.sh` 位于工程根目录而非 `CHAN_RUST/` 内）。
+   2. 补充 FFI 接口表，新增 `chan_load_klines_ex`、`chan_save_test_ohlc`、`chan_pipeline_*` 会话 API、`chan_chip_profile`、`chan_ml_predict` 等 11 个函数。
+   3. 更新项目描述，反映当前已非仅「首期聚合 K 线」。
+   4. 新增 `## 已实现功能速览` 节，概括 Pipeline Delta+Incremental Lookup、背驰 v12、BS 全类、笔数分布、斜率延伸趋势线、Demark、中枢判断确认副图、ML 闭环、历史记录审计、筹码设置、tick 分笔、tooltip 格式化等 12 项。
+   5. 更新 `## 后续规划`：Normal/OverSeg 双中枢已统一为单套 ZS；补充背驰/BS/笔数/斜率/Demark/中枢判断确认/ML/Pipeline Delta/历史记录等已实现项；新增全量离线库一键导入、策略回测框架。
+   6. 清理 `## 实现约束与口径` 中过时的 `中枢(Normal|OverSeg)` 引用。
+- **结果**：`CHAN_RUST/README.md` 从 245 行扩展至 275 行；`CHAN_RUST/scripts/build_rust_android.sh` 错误提示路径已修正。
+- **注意事项**：未改缠论步进/冻结内核；未改 Rust 计算逻辑。
+
+---
+
+### 2026-09-09 — 精简 AGENTS.md，技术口径迁入 CHAN_RUST/README.md
+
+- **执行者**：Kilo
+- **任务类型**：重构 / 文档整理
+- **上下文**：AGENTS.md 是智能体规则的唯一正文，但混入了大量 CHAN_RUST 技术实现约束，导致维护两份口径。精简 AGENTS.md 只保留行为规则，技术口径统一迁入 README.md。
+- **关键操作**：
+   1. 在 README.md 的 `## Kn 递归流水线` 节末尾新增 `## 实现约束与口径` 节，迁入 AGENTS.md 中 README 尚无的 6 个技术区块：一次性呈现逐K增强说明、分型/中枢判断·确认对象、一类BS/步进当下性、方案B层号、Kn相邻比例/Kn步进节奏、Math指标/副图绑定/十字asOf；同时迁入项目定位/计算模式/代码引用规范/开发限制/设计约束/增删改查约束/数据约束。
+   2. 将 README.md 中 `## Kn 递归流水线` 节内的一类BS 3 条简略 bullet 替换为 AGENTS.md 完整版（含验收门槛、Flutter 方法名、rawLostN/histLostN、V2.1 等细节），去重合并。
+   3. 删除 AGENTS.md 中 9 个技术区块（实现约束、一次性呈现、逐K当下性、Flutter 历史记录、项目定位/计算模式/设计约束/数据约束、分型/中枢判断·确认对象、一类BS/步进当下性、方案B层号、Kn相邻比例/节奏、Math指标/副图绑定/十字asOf），仅保留角色、门禁、完成后、代码规范、禁止。
+   4. AGENTS.md 末尾追加一行指针：`技术口径详见 CHAN_RUST/README.md「实现约束与口径」节。`
+- **结果**：AGENTS.md 从 121 行精简到 42 行；README.md 从 182 行扩展到 245 行；新增 `## 实现约束与口径` 节完整承接全部技术口径。CLAUDE.md / OPENCODE.md 无需改动。
+- **注意事项**：后续口径变更只需更新 README.md，无需同步 AGENTS.md。
+
+---
+
+### 2026-09-09 16:40 �?��֤ CHAN_RUST/README.md �ĸ���
+- **执行�?**: ��֤ CHAN_RUST/README.md �ĸ���
+- **任务类型**: ����ȷ��
+- **上下�?**: CHAN_RUST/README.md
+- **关键操作**:
+  1. �Ķ��� README.md �ļ�����
+  2. ������ļ���ʽ���½�������
+- **结果**: ��
