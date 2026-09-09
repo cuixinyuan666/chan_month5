@@ -14,7 +14,7 @@
 
 ### 完成后
 
-- **每次**完成修改类任务，在 [`task-log.md`](task-log.md) 末尾追加一条（执行者、类型、操作、结果、演示）。CHAN_RUST 口径/行为变更另写 [`CHAN_RUST/TASK_LOG.md`](CHAN_RUST/TASK_LOG.md)；对用户可见时同步 [`msg_history.dart`](CHAN_RUST/flutter/chan_kline/lib/history/msg_history.dart)。
+- **每次**完成修改类任务，在 [`task-log.md`](task-log.md) 末尾追加一条（执行者、类型、操作、结果、演示）。口径/行为变更也写在同一文件；对用户可见时同步 [`msg_history.dart`](CHAN_RUST/flutter/chan_kline/lib/history/msg_history.dart)。
 - 演示 `before.md` / `after.md` / `walkthroughSteps` 用**白话 + 缠论术语**（K0、一类买点、中枢、步进、副图）；禁止大段贴代码、函数名当说明。例：✅「走到第 12 根 K，副图应出现一颗 1Ba，下一步这颗点还在」。
 - 修改类任务：优先用默认股票 `002003` 验收；不够清晰再在 `a_Data/test/demos/{task_id}/` 放 manifest + before/after。全新功能可免前后对比，日志注明 `全新功能·免对比`。
 - Rust 改动：重编 `chan_ffi.dll`，冷启动**连续单步**验收（一键跳末≠步进验收）。
