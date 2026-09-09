@@ -8,14 +8,23 @@
 CHAN_RUST/
 ├── README.md
 ├── scripts/
-│   ├── build_rust.ps1      # 编译 Rust 并复制 DLL 到 Flutter Windows
-│   └── build_rust.sh       # 编译 Rust 并复制 .so 到 Flutter Linux（WSL 通用）
+│   ├── build_rust.ps1              # Windows：编 DLL、复制、启动 flutter run
+│   ├── build_rust.sh               # Linux/WSL：编 .so 并复制到 Flutter Linux
+│   ├── build_rust_android.ps1      # Windows：交叉编译 Android jniLibs
+│   ├── build_rust_android.sh       # Linux：交叉编译 Android jniLibs
+│   ├── prepare_android_a_data_seed.sh  # 打 Android 内置 a_Data 种子 zip
+│   ├── build_android_release.sh    # 种子 + jniLibs + Release APK
+│   ├── run_release_gate.ps1        # 发布前：Rust 单测 + Flutter 对拍
+│   ├── package_windows.ps1         # 打 Windows zip（含 a_Data）
+│   └── release_readme.txt          # zip 内「使用说明.txt」底稿
 ├── rust/
 │   ├── chan_data/          # a_Data 分笔解析 + K 线聚合（纯 Rust）
 │   └── chan_ffi/           # Flutter FFI（JSON 桥）
 └── flutter/
     └── chan_kline/         # Flutter K 线应用
 ```
+
+`flutter clean` / `flutter pub get` / `flutter run` 必须在 `flutter/chan_kline` 下执行（该目录才有 `pubspec.yaml`）。在 `scripts/` 下跑会报找不到工程；`build_rust.ps1` 会自行切到 `chan_kline`。
 
 ## 数据路径
 
@@ -65,13 +74,14 @@ flutter build apk --debug
 ## 构建与运行（Windows）
 
 ```powershell
-# 1. 编译 Rust 并复制 chan_ffi.dll
+# 编译 Rust、复制 chan_ffi.dll，并启动 Flutter 桌面（脚本内会进入 chan_kline）
 .\CHAN_RUST\scripts\build_rust.ps1
 
-# 2. 启动 Flutter 桌面
-cd CHAN_RUST\flutter\chan_kline
-flutter pub get
-flutter run -d windows
+# 若要自己跑 Flutter 命令，必须先进入工程目录：
+# cd CHAN_RUST\flutter\chan_kline
+# flutter pub get
+# flutter run -d windows
+# flutter clean
 ```
 
 ## 构建与运行（WSL / Linux）

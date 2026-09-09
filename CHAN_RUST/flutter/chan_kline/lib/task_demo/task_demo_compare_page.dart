@@ -48,7 +48,7 @@ class _TaskDemoListPageState extends State<TaskDemoListPage> {
               child: Text(
                 '暂无演示条目。\n'
                 '智能体完成任务后应在 a_Data/test/demos/{task_id}/ 放置 manifest.json。\n'
-                '详见仓库 AGENT_LONG_TERM_MEMORY.md。',
+                '详见仓库 AGENTS.md。',
               ),
             );
           }

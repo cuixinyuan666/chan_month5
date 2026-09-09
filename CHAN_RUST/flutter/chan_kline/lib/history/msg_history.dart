@@ -418,7 +418,7 @@ class MsgHistory {
       '任务完成后必须写 task-log.md；修改类任务须提供可演示验收：'
       '优先默认股票002003，否则在 a_Data/test/demos/{task_id}/ 建 manifest+before/after；'
       '股票选 test →「任务演示/前后对比」同页上=原本实现、下=本次实现。'
-      '详见仓库 AGENT_LONG_TERM_MEMORY.md。'
+      '详见仓库 AGENTS.md。'
       '历史记录按钮与 lib/history/ 常驻不得删。',
     );
   }
@@ -444,10 +444,10 @@ class MsgHistory {
     if (_agentConfirmGateLogged) return;
     _agentConfirmGateLogged = true;
     append(
-      '【智能体门禁·2026-08-15】接任务先读 AGENT_LONG_TERM_MEMORY.md §0。'
+      '【智能体门禁·2026-08-15】接任务先读 AGENTS.md。'
       '用户未说「确认执行」禁止改 app 关键逻辑（缠论内核/步进冻结/主图语义）；'
       '须先文字提修改方案。演示 before/after/步进说明用白话，少贴代码名。'
-      'CLAUDE.md / OPENCODE.md / .cursor/rules 均指向同一规范。'
+      'CLAUDE.md / OPENCODE.md / WorkBuddy / Trae 均指向 AGENTS.md。'
       '历史记录按钮与 lib/history/ 常驻不得删。',
     );
   }

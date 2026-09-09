@@ -1,32 +1,43 @@
 ###角色
-你是一个资深的python 量化程序员，具有完整的Python和股票理论基础。
+你是一个资深的量化程序员，该程序源于缠论，但不同于缠论；
 
-### 接任务前必读（2026-08-15·强制·全智能体）
-1. **先读** [`AGENT_LONG_TERM_MEMORY.md`](AGENT_LONG_TERM_MEMORY.md)，再读本文件。
-2. 用户消息**未包含「确认执行」** → **禁止**修改 app **关键逻辑**（Rust 缠论内核、Flutter 步进/冻结/主图语义、复盘持久化等）；须先用**文字**提出修改请求，等用户回复「确认执行」后再改代码。
-3. 任务完成后写 [`task-log.md`](task-log.md)；演示文案用**白话**（见 `AGENT_LONG_TERM_MEMORY.md` §0.2），少贴代码名/路径。
+本文件是本仓库智能体规则的**唯一正文**。其它工具入口（`CLAUDE.md` / `OPENCODE.md` / WorkBuddy / Trae）只指向这里。
 
-### 智能体长期记忆（2026-08-15·常驻·全智能体）
-- **任务完成后必须写** [`task-log.md`](task-log.md)；CHAN_RUST 口径变更另写 [`CHAN_RUST/TASK_LOG.md`](CHAN_RUST/TASK_LOG.md) 与 [`msg_history.dart`](CHAN_RUST/flutter/chan_kline/lib/history/msg_history.dart)。
-- **完整条文**：[`AGENT_LONG_TERM_MEMORY.md`](AGENT_LONG_TERM_MEMORY.md)（§0 含「确认执行」门禁与白话演示）。
-- **无「确认执行」** → 禁止改 app 关键逻辑；须文字提方案后再改。
-- **修改类任务交付**：可演示验收 + 前后对比；演示文案**白话**为主。
-- **开发演示阶段**（对外默认关，设置可开）：见 `AGENT_LONG_TERM_MEMORY.md` §2.1。
-- **各工具入口**：`CLAUDE.md` · `OPENCODE.md` · `.workbuddy/AGENT_READ_FIRST.md` · `.cursor/rules/` · `.trae/skills/chan-agent-memory/`
+### 确认执行门禁（最高优先级）
 
-###代码设计规范
+**没有用户在对话中包含「确认执行」字样，禁止修改 app 的关键逻辑。**
+
+- **允许（无需确认执行）**：阅读、分析、回答问题；写/改演示说明、`task-log`、记忆类 md；改 `a_Data/test/demos/` 白话文案；用户已写明「确认执行」后的按指示修改。
+- **须先文字提方案，等「确认执行」后再改**：Rust `chan_data` 缠论内核（合并/分型/段/中枢/买卖点/步进管道等）；Flutter 步进/冻结/会话历史合并、主图绘制语义、`chan_bridge` 管道；影响「步进当下性」「冻结不回写」的任何逻辑；`a_replay_trainer` 持久化相关逻辑。
+- 需改关键逻辑时：只用文字说明「想改什么、为什么、影响范围、怎么验」，末尾写：**请回复「确认执行」后我再改代码。** 不得先改再问。
+- 「确认执行」以用户原话包含该四字为准；不要用「好的」「继续」自行等同。
+
+### 完成后
+
+- **每次**完成修改类任务，在 [`task-log.md`](task-log.md) 末尾追加一条（执行者、类型、操作、结果、演示）。CHAN_RUST 口径/行为变更另写 [`CHAN_RUST/TASK_LOG.md`](CHAN_RUST/TASK_LOG.md)；对用户可见时同步 [`msg_history.dart`](CHAN_RUST/flutter/chan_kline/lib/history/msg_history.dart)。
+- 演示 `before.md` / `after.md` / `walkthroughSteps` 用**白话 + 缠论术语**（K0、一类买点、中枢、步进、副图）；禁止大段贴代码、函数名当说明。例：✅「走到第 12 根 K，副图应出现一颗 1Ba，下一步这颗点还在」。
+- 修改类任务：优先用默认股票 `002003` 验收；不够清晰再在 `a_Data/test/demos/{task_id}/` 放 manifest + before/after。全新功能可免前后对比，日志注明 `全新功能·免对比`。
+- Rust 改动：重编 `chan_ffi.dll`，冷启动**连续单步**验收（一键跳末≠步进验收）。
+
+### 代码设计规范
 1.写成的代码加上注释(注释的内容使用我和你沟通时使用的非专业的术语+专业术语)，；
 2.注释尽量简短，注释尽量使用我和你沟通时使用的专业或者非专业的术语，且尽量使用中文；
-3.当前分支下，允许修改工程内所有文件（不限于"a_"开头的文件），包括核心计算模块（Bi/、Seg/、ZS/、KLine/、BuySellPoint/、Math/、Common/、DataAPI/、Plot/等），以追求极致性能为目标；
 4.UI端设计时尽量使用中文；
-5.增加任何设置时注意和当前前后端中的所有模式所有周期的适配性，如果你十分不确定可以提出疑问，如果有通常做法则提醒用户即可；
-6.a_replay_trainer.py使用了可持久化，需要你增删改代码或者增删改设置时，时刻注意；
+5.增加任何设置时注意和当前前后端中的所有模式所有周期的适配性；
+6.如果你十分不确定可以提出疑问，直到你理解该用户意图的90%，如果有通常做法则提醒用户即可；
 7.增加设置时尽可能添加弹窗显示该设置的操作逻辑和操作步骤；
 8.代码的设计应模块化，在后续添加其它功能时可以方便复用；
 9.如果生成了测试代码或者文件，在调试结束后应当删除无用代码；
 10.尽量最大性价比的使用TOKEN，不进行非必要操作；
 11.优化后的核心计算模块应尽量与UI/渲染解耦，便于半年后移植到Android;
-12.没有我的明确指示前，不允许修改任何文件，包括但不限于不是以"a_"开头的文件，核心计算模块（Bi/、Seg/、ZS/、KLine/、BuySellPoint/、Math/、Common/、DataAPI/、Plot/等）。
+
+
+### CHAN_RUST 实现约束（全层同构）
+- 每层同一算法建在 `LevelSegment` 上；不引入 Python 式独立「笔」；中枢进出段引用相邻段 `idx`。
+- **禁止更改**已实现元素逻辑（合并引擎 / 分型 / 段构造 / 层级递归 / `run_pipeline` / v1）。
+- 无未来函数：只读冻结段（排除 `active_unit`，一类 BS 动态轨另有口径）。
+- 新增框/指标走现有全链路：Rust 模块 → pipeline 导出 → FFI → Flutter 模型/绘制/历史文案；Flutter 直接消费 Rust 帧，不本地重算 ZS/BSP。
+- 增删改查必须基于当前实现与呈现，不允许另起一套逻辑显性或隐性替代现有功能。
 
 ### 一次性呈现逐K增强说明
 - 配置项：`喂数据方式=逐K喂数据` 且 `K线图呈现形式=一次性呈现`。
@@ -58,7 +69,7 @@ CHAN_RUST项目：项目定位：全新项目，用于行情回测、机器学�
 - **中枢判断**：①离开窗（≥2 不确定）对尚未确认的上个框可逐K打点；②本步刚确认的框同拍再打判断（与确认同 x/x1）；③禁止单开放给新芽打首次可判。
 - **中枢确认**：`is_sure` 首次=确认原先未确认的那一框。
 - **踩坑**：勿把同拍新种子当判断身份（曾出现 idx=7：确认 x1=6 / 判断 x1=7）；勿为「对齐分型首次可判」给中枢新芽打点——会破坏 K0 重叠预期；确认当步若不共点补判断，K0 判断易全 0；配色禁 first.dir。
-- 口径变更写 `lib/history/msg_history.dart` 与 `TASK_LOG.md`。
+- 口径变更写 `lib/history/msg_history.dart` 与根目录 [`task-log.md`](task-log.md)。
 
 ### CHAN_RUST 一类BS / 步进当下性（任务前必读·常驻）
 - Kn(n>0) 一类买卖点判定喂入必须与动态中枢同构：冻段 + `active_unit`（`segments_with_optional_active`）；不得只改注释/单测就当完成。
@@ -88,7 +99,7 @@ CHAN_RUST项目：项目定位：全新项目，用于行情回测、机器学�
 - **相邻比例**：子线=主图出现链（冻段+展示轨虚线/种子），**虚实不论**；按 `beginX` 出现序取末两根 `ratio=|cur|/|prev|`；K0 颗粒度写入会话。踩坑：勿只读冻段（动态虚线步会变 0）；勿按 `endConfirmX`/`isSure` 过滤排序。
 - **步进节奏**：组锚=父分型极值；命名从 **0-0**；子同向分型开窗实时算、反向分型关窗后**持上个 x-x 原值续写**（升：顶关→底确认前；降镜像；其它 x-x 同理）；再开窗恢复实时；父分型确认切组并 `groupId++`、清 holdLines；key 含 groupId。绘制：`value`=节奏投影价挂主图价轴；Δx==1 才点线续连、名在左侧、同 `roundRef` 同色、升暖降冷。禁止副图残留 `SubIndicatorKind.stepRhythm`。锚点：分笔·K1·K0 77–114 续上个 0-0。
 - **tooltip 三类（2026-08-08）**：层内 `-。-` 分桶：①`Kn背驰_*`；②`Kn比例`+`Kn节奏*`；③其它（均线/通道/斜率/延伸/MACD/布林/RSI/KDJ/Demark）。
-- **验收**：连续单步（非一键跳末）；口径变更写 `lib/history/msg_history.dart` 与 `TASK_LOG.md`。
+- **验收**：连续单步（非一键跳末）；口径变更写 `lib/history/msg_history.dart` 与根目录 `task-log.md`。
 
 ### CHAN_RUST Math 指标 / 副图绑定 / 十字 asOf（2026-08-04·常驻）
 - **Demark（主图）**：`MainIndicatorKind.demark`；锚 K0 低点向上垂直排；文案 `S1…S9`/`C1…C13`/`完成买|完成卖`；Setup9 与 Countdown13 都算完整信号。买红/橙、卖绿/青。进主图「Kn指标」层全选，默认静音。副图枚举已删除。
@@ -101,3 +112,10 @@ CHAN_RUST项目：项目定位：全新项目，用于行情回测、机器学�
 - **背驰 v12**：12 算法（已删 turnrate_avg，离线无换手）；全体 Kn背驰_* 副图十字下整段高亮；MACD 四算法另按贡献柱高亮。含斜率同源连线斜率。显示名 `Kn背驰_斜率`；ML 特征键 `diver_line_slope_*`（勿与旧 slope 振幅摊平混淆）。
 - **桶宽**：筹码/笔数分布共用；在「数学指标参数」输入框设置，最小 0.01，落盘筹码配置。
 - **踩坑**：新增副图指标时同步改 ①catalog ②`subIndicatorsForLevel` ③绘制分支 ④`crosshairSubRows` ⑤`msg_history`；漏任一环=「没和 Kn指标绑定」或「十字右侧读数空白」。默认不勾≠不进层全选——背驰即此例。背驰力度须与 Math 同号（`displayKn`），禁止再绑死 K0。Math 副图绘制须对冻结仓 `min(bars.length, series.length)`，禁 RSI/KDJ/MACD 越界。
+
+### 禁止
+- 未「确认执行」就改关键逻辑。
+- 只提交代码不写 `task-log.md`。
+- 删除 `lib/history/` 常驻按钮。
+- 演示文案堆代码引用。
+- 用「一键跳末」代替连续单步验收。

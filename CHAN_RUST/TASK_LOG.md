@@ -434,7 +434,7 @@
 - **需求**：离线写笔数=0 时，Kn笔数副图与左侧笔数分布应全无柱；勿显示成每根 1。
 - **根因**：`parse_tick_line` 仅 `v>0` 才采纳，显式 `0` 被当成非法仍默认 1。
 - **变更**：数字且 `v>=0` 原样用（含 0）；仅无列或第4列为 B/S 时默认 1；`chip_tick_count_bins` 仅 `ticks>0` 才写。
-- **相关**：`tick.rs` / `chip.rs` 注释、`msg_history.appendTickCountZeroLiteral`、根 `TASK_LOG.md`。
+- **相关**：`tick.rs` / `chip.rs` 注释、`msg_history.appendTickCountZeroLiteral`、根 `task-log.md`。
 - **注意**：须重编 `chan_ffi.dll` 后冷启；002003 等旧文件笔数列全 0 → 预期全无柱。
 
 ## 2026-08-02 K0筹码峰/笔数峰 tooltip + 左侧笔数分布

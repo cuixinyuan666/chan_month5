@@ -3931,7 +3931,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
             '退出演示阶段\n'
             '· 设置里关「开发演示阶段」，或点「退出演示阶段」；\n'
             '· 关了之后下次打开不再自动弹，你自己选股或开演示列表。\n\n'
-            '给智能体：接任务先读 AGENT_LONG_TERM_MEMORY.md；\n'
+            '给智能体：接任务先读 AGENTS.md；\n'
             '你没说「确认执行」不能改关键逻辑。',
           ),
         ),
