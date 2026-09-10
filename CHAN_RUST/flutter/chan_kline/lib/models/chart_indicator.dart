@@ -9,9 +9,9 @@ enum MainIndicatorKind {
   combine,
   kn,
   zs,
-  /// Kn三型平移线（前三确认分型：两同定斜率，过异型向右）
+  /// K{n}三极平行线（前三确认分型：两同定斜率，过异型向右）
   fxTripleParallel,
-  /// Kn四型对线（前四确认分型：两顶线+两底线向右）
+  /// K{n}顶底对弦线（前四确认分型：两顶线+两底线向右）
   fxQuadPair,
   /// Kn趋势线（父段内子线端点拟合支撑/压力；子线层同号）
   trendLine,
@@ -119,9 +119,9 @@ class MainChartIndicator {
         // 自定义命名：去掉「连续」，展示为「Kn中枢」
         return 'K$kn中枢';
       case MainIndicatorKind.fxTripleParallel:
-        return 'K$kn三型平移线';
+        return 'K$kn三极平行线';
       case MainIndicatorKind.fxQuadPair:
-        return 'K$kn四型对线';
+        return 'K$kn顶底对弦线';
       case MainIndicatorKind.trendLine:
         return 'K$kn趋势线';
       case MainIndicatorKind.meanLine:
@@ -498,7 +498,7 @@ List<MainChartIndicator> buildMainIndicatorCatalog(int maxKn) {
   for (var d = 0; d < maxKn; d++) {
     out.add(MainChartIndicator.line(d));
   }
-  // 三型平移 / 四型对线（与连线同号：d=0→K0）
+  // 三极平行 / 顶底对弦（与连线同号：d=0→K0）
   for (var d = 0; d < maxKn; d++) {
     out.add(MainChartIndicator.fxTripleParallel(d));
   }

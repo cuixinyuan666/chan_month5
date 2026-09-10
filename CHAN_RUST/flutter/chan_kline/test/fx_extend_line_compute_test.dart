@@ -125,7 +125,7 @@ void main() {
       expect(all.map((e) => e.x0).toList(), [2, 4, 6]);
     });
 
-    test('四型：5 极点 → 两窗对线', () {
+    test('顶底对弦：5 极点 → 两窗对弦', () {
       final poles = [
         const FxPole(x: 0, price: 12, fx: 'TOP', confirmX: 1),
         const FxPole(x: 2, price: 8, fx: 'BOTTOM', confirmX: 3),
@@ -212,8 +212,8 @@ void main() {
       // 方案B：连线族 kn==displayKn
       expect(t.map((e) => e.kn), [0, 1]);
       expect(q.map((e) => e.kn), [0, 1]);
-      expect(t.every((e) => e.label.contains('三型平移线')), isTrue);
-      expect(q.every((e) => e.label.contains('四型对线')), isTrue);
+      expect(t.every((e) => e.label.contains('三极平行线')), isTrue);
+      expect(q.every((e) => e.label.contains('顶底对弦线')), isTrue);
 
       final d = defaultMainIndicatorsK0();
       expect(

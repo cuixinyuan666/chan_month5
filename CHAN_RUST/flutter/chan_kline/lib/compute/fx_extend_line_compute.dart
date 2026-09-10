@@ -5,7 +5,7 @@ import '../models/kline_bar.dart';
 import '../models/level_models.dart';
 import 'chart_view_compute.dart';
 
-/// Kn三型平移线 / Kn四型对线：确认分型极点几何（纯 Flutter）。
+/// K{n}三极平行线 / K{n}顶底对弦线：确认分型极点几何（纯 Flutter）。
 ///
 /// 方案B全层同构：displayKn → K0=`k0Confirms`；Kn≥1 → `levels[level==displayKn].confirms`
 /// 确认序滑动窗（三型3 / 四型4）；绘制默认只显最新窗，十字则显近邻窗；tip 同口径。
@@ -137,7 +137,7 @@ List<FxPole> collectLevelFxPoles({
   return out;
 }
 
-/// 三型平移：取 [poles] 前三极点须两同+一异；两同定斜率，过异型向右。
+/// 三极平行：取 [poles] 前三极点须两同+一异；两同定斜率，过异型向右。
 FxExtendRay? calcTripleParallelRay(List<FxPole> poles) {
   if (poles.length < 3) return null;
   final win = poles.sublist(0, 3);
@@ -166,7 +166,7 @@ FxExtendRay? calcTripleParallelRay(List<FxPole> poles) {
   );
 }
 
-/// 三型：滑动窗长 3 → 窗组列表。
+/// 三极平行：滑动窗长 3 → 窗组列表。
 List<FxExtendGroup> calcAllTripleGroups(List<FxPole> poles) {
   if (poles.length < 3) return const [];
   final out = <FxExtendGroup>[];
@@ -198,7 +198,7 @@ List<FxExtendRay> calcAllTripleParallelRays(List<FxPole> poles) {
   ];
 }
 
-/// 四型对线：取 [poles] 前四中两顶、两底。
+/// 顶底对弦：取 [poles] 前四中两顶、两底。
 List<FxExtendRay> calcQuadPairRays(List<FxPole> poles) {
   if (poles.length < 4) return const [];
   final win = poles.sublist(0, 4);
@@ -232,7 +232,7 @@ List<FxExtendRay> calcQuadPairRays(List<FxPole> poles) {
   return out;
 }
 
-/// 四型：滑动窗长 4 → 窗组列表。
+/// 顶底对弦：滑动窗长 4 → 窗组列表。
 List<FxExtendGroup> calcAllQuadGroups(List<FxPole> poles) {
   if (poles.length < 4) return const [];
   final out = <FxExtendGroup>[];
@@ -343,7 +343,7 @@ double rayPriceAt(FxExtendRay ray, int atX) {
   return ray.y0 + ray.slope * (atX - ray.x0);
 }
 
-/// tip：三型延长线在 [atX] 的价格（近邻窗）；无则 null。
+/// tip：三极平行延长线在 [atX] 的价格（近邻窗）；无则 null。
 double? triplePriceReadout(
   List<FxExtendGroup> groups, {
   required int atX,
@@ -354,7 +354,7 @@ double? triplePriceReadout(
   return rayPriceAt(sel.first.rays.first, atX);
 }
 
-/// tip：四型顶/底延长线在 [atX] 的价格。
+/// tip：顶底对弦顶/底延长线在 [atX] 的价格。
 ({double? top, double? bottom}) quadPriceReadout(
   List<FxExtendGroup> groups, {
   required int atX,

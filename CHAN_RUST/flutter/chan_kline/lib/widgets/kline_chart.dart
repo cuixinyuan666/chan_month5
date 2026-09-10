@@ -3541,7 +3541,7 @@ class _KlineCompositePainter extends CustomPainter {
     return buildLevelUnitBarViews(frozenBars, activeUnit: active);
   }
 
-  /// 主图 Kn三型平移线（方案B：kn==displayKn）。
+  /// 主图 K{n}三极平行线（方案B：kn==displayKn）。
   void _drawFxTripleParallel(
     Canvas canvas,
     double w,
@@ -3586,7 +3586,7 @@ class _KlineCompositePainter extends CustomPainter {
     }
   }
 
-  /// 主图 Kn四型对线（两顶线 + 两底线）。方案B：kn==displayKn。
+  /// 主图 K{n}顶底对弦线（两顶线 + 两底线）。方案B：kn==displayKn。
   void _drawFxQuadPair(
     Canvas canvas,
     double w,

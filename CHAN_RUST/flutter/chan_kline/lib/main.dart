@@ -156,7 +156,7 @@ Future<void> main() async {
   MsgHistory.instance.appendStepRhythmHoldBeforeChildReopen();
   // Kn连线斜率副图（全层同构；复用比例出现链）
   MsgHistory.instance.appendKnLineSlope();
-  // 主图 Kn三型平移线 / Kn四型对线
+  // 主图 K{n}三极平行线 / K{n}顶底对弦线
   MsgHistory.instance.appendKnFxExtendLines();
   // 主图 Kn趋势线（段内支撑/压力）
   MsgHistory.instance.appendKnTrendLine();
