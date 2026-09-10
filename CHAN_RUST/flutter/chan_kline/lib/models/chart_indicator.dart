@@ -13,6 +13,8 @@ enum MainIndicatorKind {
   fxTripleParallel,
   /// K{n}顶底对弦线（前四确认分型：两顶线+两底线向右）
   fxQuadPair,
+  /// K{n}对弦平移线（ab斜率平移至c点）
+  fxChordTranslated,
   /// Kn趋势线（父段内子线端点拟合支撑/压力；子线层同号）
   trendLine,
   /// Kn均线（收盘价滑窗 MEAN；kn 同中枢显示层）
@@ -41,6 +43,7 @@ extension MainIndicatorKindMeta on MainIndicatorKind {
         return '连线';
       case MainIndicatorKind.fxTripleParallel:
       case MainIndicatorKind.fxQuadPair:
+      case MainIndicatorKind.fxChordTranslated:
       case MainIndicatorKind.trendLine:
         return '延伸';
       case MainIndicatorKind.meanLine:
@@ -66,6 +69,7 @@ extension MainIndicatorKindMeta on MainIndicatorKind {
         return 3;
       case MainIndicatorKind.fxTripleParallel:
       case MainIndicatorKind.fxQuadPair:
+      case MainIndicatorKind.fxChordTranslated:
       case MainIndicatorKind.trendLine:
         return 4;
       case MainIndicatorKind.meanLine:
@@ -95,6 +99,8 @@ class MainChartIndicator {
       : kind = MainIndicatorKind.fxTripleParallel;
   const MainChartIndicator.fxQuadPair(this.kn)
       : kind = MainIndicatorKind.fxQuadPair;
+  const MainChartIndicator.fxChordTranslated(this.kn)
+      : kind = MainIndicatorKind.fxChordTranslated;
   const MainChartIndicator.trendLine(this.kn)
       : kind = MainIndicatorKind.trendLine;
   const MainChartIndicator.meanLine(this.kn)
@@ -122,6 +128,8 @@ class MainChartIndicator {
         return 'K$kn三极平行线';
       case MainIndicatorKind.fxQuadPair:
         return 'K$kn顶底对弦线';
+      case MainIndicatorKind.fxChordTranslated:
+        return 'K$kn对弦平移线';
       case MainIndicatorKind.trendLine:
         return 'K$kn趋势线';
       case MainIndicatorKind.meanLine:
@@ -157,18 +165,20 @@ class MainChartIndicator {
         return 4;
       case MainIndicatorKind.fxQuadPair:
         return 5;
-      case MainIndicatorKind.trendLine:
+      case MainIndicatorKind.fxChordTranslated:
         return 6;
-      case MainIndicatorKind.meanLine:
+      case MainIndicatorKind.trendLine:
         return 7;
-      case MainIndicatorKind.trendChannel:
+      case MainIndicatorKind.meanLine:
         return 8;
-      case MainIndicatorKind.boll:
+      case MainIndicatorKind.trendChannel:
         return 9;
-      case MainIndicatorKind.demark:
+      case MainIndicatorKind.boll:
         return 10;
-      case MainIndicatorKind.stepRhythm:
+      case MainIndicatorKind.demark:
         return 11;
+      case MainIndicatorKind.stepRhythm:
+        return 12;
     }
   }
 
@@ -498,12 +508,15 @@ List<MainChartIndicator> buildMainIndicatorCatalog(int maxKn) {
   for (var d = 0; d < maxKn; d++) {
     out.add(MainChartIndicator.line(d));
   }
-  // 三极平行 / 顶底对弦（与连线同号：d=0→K0）
+  // 三极平行 / 顶底对弦 / 对弦平移线（与连线同号：d=0→K0）
   for (var d = 0; d < maxKn; d++) {
     out.add(MainChartIndicator.fxTripleParallel(d));
   }
   for (var d = 0; d < maxKn; d++) {
     out.add(MainChartIndicator.fxQuadPair(d));
+  }
+  for (var d = 0; d < maxKn; d++) {
+    out.add(MainChartIndicator.fxChordTranslated(d));
   }
   // 趋势线：子=displayKn、父=displayKn+1；maxKn<2 仍挂 K0 占位
   final trendMax = maxKn < 2 ? 0 : maxKn - 2;
@@ -628,6 +641,7 @@ List<MainChartIndicator> mainIndicatorsForLevel(
     MainChartIndicator.line(displayLevel),
     MainChartIndicator.fxTripleParallel(displayLevel),
     MainChartIndicator.fxQuadPair(displayLevel),
+    MainChartIndicator.fxChordTranslated(displayLevel),
     MainChartIndicator.trendLine(displayLevel),
     MainChartIndicator.meanLine(displayLevel),
     MainChartIndicator.trendChannel(displayLevel),
@@ -730,6 +744,7 @@ bool isDefaultDrawnMain(MainChartIndicator e) {
       return true;
     case MainIndicatorKind.fxTripleParallel:
     case MainIndicatorKind.fxQuadPair:
+    case MainIndicatorKind.fxChordTranslated:
     case MainIndicatorKind.trendLine:
     case MainIndicatorKind.meanLine:
     case MainIndicatorKind.trendChannel:

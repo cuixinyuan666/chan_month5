@@ -2767,3 +2767,20 @@ Rust `buy2.rs`（新）→ pipeline/combine → Flutter 会话双键冻结（`cl
   3. 启动超时放到 90 秒。
 - **结果**：本机网关 `/v1/models` 返回 291 个模型；Codex、ClaudeCode、OpenCode 都能完成 ACP 握手并开出新会话。
 - **演示**：保持 FreeLLMAPI 开着 → Cursor `Ctrl+Shift+P` 执行 Developer: Reload Window → 左侧 Agent Debate 输入题目发送。副图应同时出现至少两个 Agent 在说话，而不是只剩 OpenCode。不要在插件设置页点保存 Agents，那会把网关环境变量清空。
+
+---
+
+### 2026-09-10 07:55 — K{n}对弦平移线验收与收尾
+
+- **执行者**：Kilo
+- **任务类型**：功能验收 / 收尾
+- **上下文**：新增 K{n}对弦平移线指标实现后，执行单测、静态分析验收；排查运行时 native crash。
+- **关键操作**：
+  1. 核对 `calcChordTranslatedRay/calcAllChordTranslatedGroups/chordTranslatedPriceReadout` 与 `_drawFxChordTranslated` 逻辑，确认 ab 斜率平移至 c 点、交替校验、asOf 截断、Tooltip 槽位均符合方案。
+  2. 运行 `flutter analyze`：除历史既有 warning 外，新增代码无新增静态告警。
+  3. 运行 `flutter test test/fx_extend_line_compute_test.dart test/bar_feature_lookup_test.dart test/catalog_full_var_test.dart test/indicator_draw_sync_test.dart`：全绿。
+  4. 排查 `_Future._propagateToListeners.handleValueCallback` 崩溃：结合 runner 日志 `Could not start thread DartWorker / memory allocation failed`，定位为 Windows 线程/内存分配失败导致的 VM 级崩溃，非新指标代码缺陷。
+- **结果**：新增 6 处 Flutter 文件，177 行增量，0 行删除；指标口径已落地，待环境稳定后冷启动连续单步验收。
+- **注意事项**：若仍复现 crash，先结束所有 dart/flutter 进程，必要时重启系统；任务完成后已清理 plans 目录无关文件。
+
+---

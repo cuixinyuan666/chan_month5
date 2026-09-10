@@ -1039,6 +1039,12 @@ class IncrementalBarFeatureLookup {
       if (tPx != null) sub['fx_triple_price_$dkn'] = tPx;
       if (q.top != null) sub['fx_quad_top_price_$dkn'] = q.top;
       if (q.bottom != null) sub['fx_quad_bottom_price_$dkn'] = q.bottom;
+      final cPx = chordTranslatedPriceReadout(
+        calcAllChordTranslatedGroups(poles),
+        atX: x,
+        focusX: x,
+      );
+      if (cPx != null) sub['fx_chord_translated_price_$dkn'] = cPx;
     }
     final trendMaxD = maxLevel >= 1 ? maxLevel - 1 : -1;
     for (var dkn = 0; dkn <= trendMaxD; dkn++) {

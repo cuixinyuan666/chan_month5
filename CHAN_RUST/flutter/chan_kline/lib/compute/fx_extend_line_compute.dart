@@ -137,6 +137,56 @@ List<FxPole> collectLevelFxPoles({
   return out;
 }
 
+/// 对弦平移线：取 [poles] 前三极点须交替（T-B-T 或 B-T-B）；ab斜率平移到c点。
+FxExtendRay? calcChordTranslatedRay(List<FxPole> poles) {
+  if (poles.length < 3) return null;
+  final win = poles.sublist(0, 3);
+  // 必须交替：T-B-T 或 B-T-B
+  if (win[0].fx == win[1].fx || win[1].fx == win[2].fx) return null;
+  
+  // a = win[0], b = win[1], c = win[2]
+  final a = win[0];
+  final b = win[1];
+  final c = win[2];
+  
+  final dx = (b.x - a.x).toDouble();
+  if (dx.abs() < 1) return null;
+  final slope = (b.price - a.price) / dx;
+  
+  return FxExtendRay(
+    x0: c.x.toDouble(),
+    y0: c.price,
+    slope: slope,
+    kind: 'chordTranslated',
+  );
+}
+
+/// 对弦平移线：滑动窗长 3 → 窗组列表。
+List<FxExtendGroup> calcAllChordTranslatedGroups(List<FxPole> poles) {
+  if (poles.length < 3) return const [];
+  final out = <FxExtendGroup>[];
+  for (var i = 0; i + 3 <= poles.length; i++) {
+    final win = poles.sublist(i, i + 3);
+    final r = calcChordTranslatedRay(win);
+    if (r == null) continue;
+    var lo = win.first.x;
+    var hi = win.first.x;
+    var cMax = win.first.confirmX;
+    for (final p in win) {
+      lo = math.min(lo, p.x);
+      hi = math.max(hi, p.x);
+      cMax = math.max(cMax, p.confirmX);
+    }
+    out.add(FxExtendGroup(
+      poleMinX: lo,
+      poleMaxX: hi,
+      confirmMax: cMax,
+      rays: [r],
+    ));
+  }
+  return out;
+}
+
 /// 三极平行：取 [poles] 前三极点须两同+一异；两同定斜率，过异型向右。
 FxExtendRay? calcTripleParallelRay(List<FxPole> poles) {
   if (poles.length < 3) return null;
@@ -369,6 +419,36 @@ double? triplePriceReadout(
     if (r.kind == 'bottomPair') bottom = rayPriceAt(r, atX);
   }
   return (top: top, bottom: bottom);
+}
+
+/// 对弦平移线：便捷函数
+List<FxExtendGroup> calcChordTranslatedGroupsForLevel({
+  required int displayKn,
+  required List<KlineBar> bars,
+  List<K0ConfirmSignal> k0Confirms = const [],
+  List<LevelBundle> levels = const [],
+  int? asOf,
+}) {
+  return calcAllChordTranslatedGroups(
+    collectLevelFxPoles(
+      displayKn: displayKn,
+      bars: bars,
+      k0Confirms: k0Confirms,
+      levels: levels,
+      asOf: asOf,
+    ),
+  );
+}
+
+/// 对弦平移线：tooltip 价格读取
+double? chordTranslatedPriceReadout(
+  List<FxExtendGroup> groups, {
+  required int atX,
+  int? focusX,
+}) {
+  final sel = selectFxExtendGroups(groups, focusX: focusX ?? atX);
+  if (sel.isEmpty || sel.first.rays.isEmpty) return null;
+  return rayPriceAt(sel.first.rays.first, atX);
 }
 
 /// 兼容旧 ForLevel 名：返回筛选前全量射线（测试用）。

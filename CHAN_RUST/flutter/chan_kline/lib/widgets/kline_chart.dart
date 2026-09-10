@@ -2566,6 +2566,15 @@ class _KlineCompositePainter extends CustomPainter {
             slotW,
             ind.kn,
           );
+        } else if (ind.kind == MainIndicatorKind.fxChordTranslated) {
+          _drawFxChordTranslated(
+            canvas,
+            size.width,
+            plotTop,
+            plotH,
+            slotW,
+            ind.kn,
+          );
         } else if (ind.kind == MainIndicatorKind.trendLine) {
           _drawTrendLine(
             canvas,
@@ -3571,6 +3580,49 @@ class _KlineCompositePainter extends CustomPainter {
     final focusX = asOf;
     final rays = selectFxExtendRays(
       calcAllTripleGroups(poles),
+      focusX: focusX,
+    );
+    for (final ray in rays) {
+      _paintFxExtendRay(
+        canvas,
+        w,
+        plotTop,
+        plotH,
+        slotW,
+        ray: ray,
+        displayKn: displayKn,
+      );
+    }
+  }
+
+  /// 主图 K{n}对弦平移线（ab斜率平移至c点）。方案B：kn==displayKn。
+  void _drawFxChordTranslated(
+    Canvas canvas,
+    double w,
+    double plotTop,
+    double plotH,
+    double slotW,
+    int kn,
+  ) {
+    if (kn < 0 || bars.isEmpty) return;
+    final displayKn = kn;
+    final asOf = segAsOf;
+    final lv = asOf != null
+        ? (zsAsOfBundle?.levels ?? const <LevelBundle>[])
+        : levels;
+    final k0 = asOf != null
+        ? (zsAsOfBundle?.k0Confirms ?? const <K0ConfirmSignal>[])
+        : k0ConfirmSignals;
+    final poles = collectLevelFxPoles(
+      displayKn: displayKn,
+      bars: bars,
+      k0Confirms: k0,
+      levels: lv,
+      asOf: asOf,
+    );
+    final focusX = asOf;
+    final rays = selectFxExtendRays(
+      calcAllChordTranslatedGroups(poles),
       focusX: focusX,
     );
     for (final ray in rays) {

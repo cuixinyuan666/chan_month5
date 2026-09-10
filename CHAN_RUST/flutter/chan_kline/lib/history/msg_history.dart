@@ -671,12 +671,12 @@ class MsgHistory {
     if (_knFxExtendLinesLogged) return;
     _knFxExtendLinesLogged = true;
     append(
-      '【K{n}三极平行线 / K{n}顶底对弦线·主图·全层同构·v1】'
-      '显示名 K{n}三极平行线、K{n}顶底对弦线；内部 kn==displayKn（方案B）；类别「延伸」。'
+      '【K{n}三极平行线 / K{n}顶底对弦线 / K{n}对弦平移线·主图·全层同构·v1】'
+      '显示名 K{n}三极平行线、K{n}顶底对弦线、K{n}对弦平移线；内部 kn==displayKn（方案B）；类别「延伸」。'
       '分型源仅已确认：K0=k0Confirms；Kn≥1→levels[level==displayKn].confirms；极点同连线 resolvePole/poleBarPrice。'
-      '确认序滑动窗：三极平行窗长3（两同+一异→过异型向右）、顶底对弦窗长4（两顶线+两底线弦+向右）；|dx|<1 跳过。'
+      '确认序滑动窗：三极平行窗长3（两同+一异→过异型向右）、顶底对弦窗长4（两顶线+两底线弦+向右）、对弦平移窗长3（T-B-T/B-T-B交替→ab斜率平移到c点）；|dx|<1 跳过。'
       '呈现：无十字只画最新合格窗；开十字只画焦点近邻窗（落窗优先，否则距区间最近）；'
-      'tooltip 固定槽「K{n}三极平行线」「K{n}顶底对弦线」=延长线落到该根K0的价格(顶底对弦分顶/底)，与主图筛选同口径。'
+      'tooltip 固定槽「K{n}三极平行线」「K{n}顶底对弦线」「K{n}对弦平移线」=延长线落到该根K0的价格(顶底对弦分顶/底)，与主图筛选同口径。'
       '十字 asOf：只认 asOfBundle 的 confirms/levels（失败空，禁末态）；线型=层色构建虚线；'
       '射线右端截到 asOf 柱心（不向未来画到视口右缘）。'
       '默认勾选：进 catalog +「Kn指标」层全选 + 启动默认 K0。纯 Flutter，不改 Rust。',
