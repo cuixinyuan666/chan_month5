@@ -2739,3 +2739,31 @@ Rust `buy2.rs`（新）→ pipeline/combine → Flutter 会话双键冻结（`cl
   1. �Ķ��� README.md �ļ�����
   2. ������ļ���ʽ���½�������
 - **结果**: ��
+
+---
+
+### 2026-09-09 — 桌面脚本改为自动获取公网地址
+
+- **执行者**：Cursor Grok
+- **任务类型**：脚本
+- **上下文**：桌面 `FreeLLMAPI-CursorConfig.bat` 原先要手填 Cloudflare 公网地址；Quick Tunnel 每次都会变，手填必然过期。
+- **关键操作**：
+  1. `freellmapi-cursor-config.ps1` 改为先探测本机已有隧道（Cloudflare / localhost.run / Serveo），不通再自动新建。
+  2. API Key 优先从 FreeLLMAPI 库里读，不再为公网地址弹窗。
+  3. 拿到地址后复制剪贴板，并调用 `npx freellmapi setup-cursor`。
+- **结果**：双击桌面 bat 即可自动拿公网 Base URL，无需手填。
+- **演示**：确保 FreeLLMAPI 托盘在跑，双击桌面 `FreeLLMAPI-CursorConfig.bat`，弹窗应出现一串 `https://…/v1`，粘贴到 Cursor Override OpenAI Base URL 即可。
+
+---
+
+### 2026-09-10 — 重试给 Agent Debate 接上本机 FreeLLMAPI
+
+- **执行者**：Cursor Grok
+- **任务类型**：配置
+- **上下文**：Agent Debate 环境变量已经写了本机网关，但辩论开不起来。日志里 Codex / Claude 两段在 PATH 里找不到 ACP 命令，只剩 OpenCode 这一段，不够最少 2 个 Agent。
+- **关键操作**：
+  1. 全局安装 `@agentclientprotocol/codex-acp`、`@agentclientprotocol/claude-agent-acp`。
+  2. Cursor 设置改成 npm 下的绝对路径 `.cmd`，并带上 FreeLLMAPI 密钥与本机 `127.0.0.1:31415`。
+  3. 启动超时放到 90 秒。
+- **结果**：本机网关 `/v1/models` 返回 291 个模型；Codex、ClaudeCode、OpenCode 都能完成 ACP 握手并开出新会话。
+- **演示**：保持 FreeLLMAPI 开着 → Cursor `Ctrl+Shift+P` 执行 Developer: Reload Window → 左侧 Agent Debate 输入题目发送。副图应同时出现至少两个 Agent 在说话，而不是只剩 OpenCode。不要在插件设置页点保存 Agents，那会把网关环境变量清空。
