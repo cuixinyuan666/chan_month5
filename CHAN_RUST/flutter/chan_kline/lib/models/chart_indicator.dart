@@ -9,10 +9,12 @@ enum MainIndicatorKind {
   combine,
   kn,
   zs,
-  /// Kn三型平移线（前三确认分型：两同定斜率，过异型向右）
+  /// K{n}三极平行线（前三确认分型：两同定斜率，过异型向右）
   fxTripleParallel,
-  /// Kn四型对线（前四确认分型：两顶线+两底线向右）
+  /// K{n}顶底对弦线（前四确认分型：两顶线+两底线向右）
   fxQuadPair,
+  /// K{n}对弦平移线（ab斜率平移至c点）
+  fxChordTranslated,
   /// Kn趋势线（父段内子线端点拟合支撑/压力；子线层同号）
   trendLine,
   /// Kn均线（收盘价滑窗 MEAN；kn 同中枢显示层）
@@ -41,6 +43,7 @@ extension MainIndicatorKindMeta on MainIndicatorKind {
         return '连线';
       case MainIndicatorKind.fxTripleParallel:
       case MainIndicatorKind.fxQuadPair:
+      case MainIndicatorKind.fxChordTranslated:
       case MainIndicatorKind.trendLine:
         return '延伸';
       case MainIndicatorKind.meanLine:
@@ -66,6 +69,7 @@ extension MainIndicatorKindMeta on MainIndicatorKind {
         return 3;
       case MainIndicatorKind.fxTripleParallel:
       case MainIndicatorKind.fxQuadPair:
+      case MainIndicatorKind.fxChordTranslated:
       case MainIndicatorKind.trendLine:
         return 4;
       case MainIndicatorKind.meanLine:
@@ -95,6 +99,8 @@ class MainChartIndicator {
       : kind = MainIndicatorKind.fxTripleParallel;
   const MainChartIndicator.fxQuadPair(this.kn)
       : kind = MainIndicatorKind.fxQuadPair;
+  const MainChartIndicator.fxChordTranslated(this.kn)
+      : kind = MainIndicatorKind.fxChordTranslated;
   const MainChartIndicator.trendLine(this.kn)
       : kind = MainIndicatorKind.trendLine;
   const MainChartIndicator.meanLine(this.kn)
@@ -119,9 +125,11 @@ class MainChartIndicator {
         // 自定义命名：去掉「连续」，展示为「Kn中枢」
         return 'K$kn中枢';
       case MainIndicatorKind.fxTripleParallel:
-        return 'K$kn三型平移线';
+        return 'K$kn三极平行线';
       case MainIndicatorKind.fxQuadPair:
-        return 'K$kn四型对线';
+        return 'K$kn顶底对弦线';
+      case MainIndicatorKind.fxChordTranslated:
+        return 'K$kn对弦平移线';
       case MainIndicatorKind.trendLine:
         return 'K$kn趋势线';
       case MainIndicatorKind.meanLine:
@@ -157,18 +165,20 @@ class MainChartIndicator {
         return 4;
       case MainIndicatorKind.fxQuadPair:
         return 5;
-      case MainIndicatorKind.trendLine:
+      case MainIndicatorKind.fxChordTranslated:
         return 6;
-      case MainIndicatorKind.meanLine:
+      case MainIndicatorKind.trendLine:
         return 7;
-      case MainIndicatorKind.trendChannel:
+      case MainIndicatorKind.meanLine:
         return 8;
-      case MainIndicatorKind.boll:
+      case MainIndicatorKind.trendChannel:
         return 9;
-      case MainIndicatorKind.demark:
+      case MainIndicatorKind.boll:
         return 10;
-      case MainIndicatorKind.stepRhythm:
+      case MainIndicatorKind.demark:
         return 11;
+      case MainIndicatorKind.stepRhythm:
+        return 12;
     }
   }
 
@@ -498,12 +508,15 @@ List<MainChartIndicator> buildMainIndicatorCatalog(int maxKn) {
   for (var d = 0; d < maxKn; d++) {
     out.add(MainChartIndicator.line(d));
   }
-  // 三型平移 / 四型对线（与连线同号：d=0→K0）
+  // 三极平行 / 顶底对弦 / 对弦平移线（与连线同号：d=0→K0）
   for (var d = 0; d < maxKn; d++) {
     out.add(MainChartIndicator.fxTripleParallel(d));
   }
   for (var d = 0; d < maxKn; d++) {
     out.add(MainChartIndicator.fxQuadPair(d));
+  }
+  for (var d = 0; d < maxKn; d++) {
+    out.add(MainChartIndicator.fxChordTranslated(d));
   }
   // 趋势线：子=displayKn、父=displayKn+1；maxKn<2 仍挂 K0 占位
   final trendMax = maxKn < 2 ? 0 : maxKn - 2;
@@ -628,6 +641,7 @@ List<MainChartIndicator> mainIndicatorsForLevel(
     MainChartIndicator.line(displayLevel),
     MainChartIndicator.fxTripleParallel(displayLevel),
     MainChartIndicator.fxQuadPair(displayLevel),
+    MainChartIndicator.fxChordTranslated(displayLevel),
     MainChartIndicator.trendLine(displayLevel),
     MainChartIndicator.meanLine(displayLevel),
     MainChartIndicator.trendChannel(displayLevel),
@@ -702,24 +716,25 @@ Set<T> pruneIndicators<T>(Set<T> selected, List<T> catalog) {
   return selected.where(allow.contains).toSet();
 }
 
-/// 启动默认：勾选「K0指标」层全选（与选择栏层全选同口径）。
-/// 用 catalog(maxKn=1) 生成，保证含 K0连线 / 主图节奏 / 副图分型类与相邻比例。
-/// （筹码分布由设置面板控制，不在默认指标内）
+/// 启动默认：主图核心指标（Kn/合并/中枢/连线）。
 Set<MainChartIndicator> defaultMainIndicatorsK0() {
-  return mainIndicatorsForLevel(0, buildMainIndicatorCatalog(1)).toSet();
+  return mainIndicatorsForLevel(0, buildMainIndicatorCatalog(1))
+      .where(isDefaultDrawnMain)
+      .toSet();
 }
 
-/// 启动默认：副图「K0指标」层全选，但背驰 12 项默认不勾（可在选择栏「K0指标」里一键勾上）。
+/// 启动默认：副图核心指标（分型/截断/中枢类）；背驰 12 项默认不勾。
 Set<SubChartIndicator> defaultSubIndicatorsK0({bool truncationCheck = true}) {
   return subIndicatorsForLevel(
     0,
     buildSubIndicatorCatalog(1, truncationCheck: truncationCheck),
-  ).where((e) => e.kind != SubIndicatorKind.divergence).toSet();
+  )
+      .where((e) => e.kind != SubIndicatorKind.divergence && isDefaultDrawnSub(e))
+      .toSet();
 }
 
-/// 层全选关联后默认「实际绘制」的主图（其余关联项默认删除线静音）。
-/// 重要：关联≠全画——「Kn指标」仍勾全集，但启动/新层只亮：
-/// Kn / Kn合并 / Kn中枢 / Kn连线；其它进 `_mutedMains`，单击 chip 可打开。
+/// 层全选后默认「实际绘制」的主图（用于文档/测试口径）。
+/// Android 收纳列表：白字=已选=绘制，不再维护独立 muted 集。
 bool isDefaultDrawnMain(MainChartIndicator e) {
   switch (e.kind) {
     case MainIndicatorKind.kn:
@@ -729,6 +744,7 @@ bool isDefaultDrawnMain(MainChartIndicator e) {
       return true;
     case MainIndicatorKind.fxTripleParallel:
     case MainIndicatorKind.fxQuadPair:
+    case MainIndicatorKind.fxChordTranslated:
     case MainIndicatorKind.trendLine:
     case MainIndicatorKind.meanLine:
     case MainIndicatorKind.trendChannel:
@@ -739,8 +755,7 @@ bool isDefaultDrawnMain(MainChartIndicator e) {
   }
 }
 
-/// 层全选关联后默认「实际绘制」的副图（其余关联项默认删除线静音）。
-/// 重要：只亮分型确认/判断、截断、中枢确认/判断；成交量/BS/Math/背驰等默认 muted。
+/// 层全选关联后默认「实际绘制」的副图（用于文档/测试口径）。
 bool isDefaultDrawnSub(SubChartIndicator e) {
   switch (e.kind) {
     case SubIndicatorKind.fractalConfirm:

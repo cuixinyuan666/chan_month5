@@ -211,7 +211,7 @@ abstract final class ChipProfilePainter {
           text: 'K$highlightKn',
           style: const TextStyle(
             color: Color(0xAAE5E7EB),
-            fontSize: 9,
+            fontSize: 12,
             fontWeight: FontWeight.w600,
           ),
         ),
@@ -256,7 +256,7 @@ abstract final class ChipProfilePainter {
     final sumS = sumOf(profile.s);
     final sumW = sumOf(profile.w);
     final full = 'B:${fmt(sumB)}, S:${fmt(sumS)}, 灰度:${fmt(sumW)}';
-    final style = const TextStyle(color: Color(0x99FFFFFF), fontSize: 8);
+    final style = const TextStyle(color: Color(0x99FFFFFF), fontSize: 12);
     final avail = math.max(10.0, chipRight - chipLeft - 6);
     final xRight = chipRight - 3;
     var y = plotTop + 3;
@@ -285,8 +285,8 @@ abstract final class ChipProfilePainter {
 
     if (hoverBar == null) return;
     // 悬停单根：分色高亮，区别于累计角标
-    final dim = const TextStyle(color: Color(0x66FFFFFF), fontSize: 8);
-    final valStyle = const TextStyle(fontSize: 8, fontWeight: FontWeight.w700);
+    final dim = const TextStyle(color: Color(0x66FFFFFF), fontSize: 12);
+    final valStyle = const TextStyle(fontSize: 12, fontWeight: FontWeight.w700);
     final hSpan = TextSpan(children: [
       TextSpan(text: '当前 ', style: dim),
       TextSpan(

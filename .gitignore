@@ -10,14 +10,7 @@ OpenConfig.yaml
 gotify_push.py
 cos_config.yaml
 
-# 本地运行缓存
-a_replay_cache/a_perf_engine_cache/
-a_replay_cache/kline_sessions/
-a_replay_record/*/*.pkl
-a_replay_record/*/*.meta.json
-
 # Rust 编译产物
-a_rust_core/target/
 CHAN_RUST/rust/target/
 CHAN_RUST/rust/target_alt/
 
@@ -42,3 +35,14 @@ a_Data/ml_exports/
 *.tmp
 *.temp
 test_*.py
+
+# 发布打包产物
+dist/
+
+# 通达信协议分笔缓存（运行时按日生成，勿提交）
+a_Data/.tdx_protocol_cache/
+CHAN_RUST/a_Data/.tdx_protocol_cache/
+
+# Kilo 本地配置/缓存
+.kilo/
+.kilocode/

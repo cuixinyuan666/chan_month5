@@ -11,9 +11,11 @@ import 'package:chan_kline/backtest/trade_clock.dart';
 import 'package:chan_kline/backtest/trade_operand.dart';
 import 'package:chan_kline/compute/math_series_freeze_store.dart';
 import 'package:chan_kline/models/buy1_frame.dart';
+import 'package:chan_kline/models/buy2_frame.dart';
 import 'package:chan_kline/models/buy_n_frame.dart';
 import 'package:chan_kline/models/kline_bar.dart';
 import 'package:chan_kline/models/sell1_frame.dart';
+import 'package:chan_kline/models/sell2_frame.dart';
 import 'package:chan_kline/models/sell_n_frame.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -83,6 +85,27 @@ void main() {
       );
     });
 
+    test('一类/二类并入 N类BS；N=1/2 仍走 BUY1/BUY2', () {
+      final g0 = groupedRegisteredVars(0, 2);
+      expect(g0.any((e) => e.key == 'bs1'), isFalse);
+      expect(g0.any((e) => e.key == 'bs2'), isFalse);
+      final n = g0.firstWhere((e) => e.key == 'bsN');
+      expect(n.label, 'N类BS');
+      expect(lookupTradeVariable('STRUCTURE.K0.BUY1')!.groupKey, 'bsN');
+      expect(lookupTradeVariable('STRUCTURE.K0.BUY2')!.groupKey, 'bsN');
+      expect(chanClassBsVarId(kn: 0, cls: 1, buy: true), 'STRUCTURE.K0.BUY1');
+      expect(chanClassBsVarId(kn: 0, cls: 2, buy: false), 'STRUCTURE.K0.SELL2');
+      expect(chanClassBsVarId(kn: 1, cls: 3, buy: true), buyNVarId(1, 3));
+      expect(chanClassBsVarId(kn: 0, cls: 0, buy: true), buyNVarId(0, 0));
+      expect(chanClassBsVarId(kn: 1, cls: -1, buy: false), sellNVarId(1, 0));
+      expect(parseChanClassBsVarId('STRUCTURE.K0.BUY1')!.cls, 1);
+      expect(parseChanClassBsVarId(buyNVarId(1, 4))!.cls, 4);
+      expect(parseChanClassBsVarId(buyNVarId(0, 0))!.cls, 0);
+      expect(parseChanClassBsVarId('STRUCTURE.K0.BUY_N.-1')!.cls, 0);
+      expect(isChanClassBsEventVarId('STRUCTURE.K0.BUY1'), isTrue);
+      expect(lookupTradeVariable(buyNVarId(0, 0), maxKn: 2)!.expressionReady, isTrue);
+    });
+
     test('BUY_N 不能比较/穿越；可与同层 RSI AND', () {
       expect(
         compileValuePair(
@@ -105,6 +128,10 @@ void main() {
       );
       expect(compileConditionAst(k1BuyN3AndRsiAst(), maxKn: 2), isA<CondCompileOk>());
       expect(compileConditionAst(k1BuyN3OrBuy1Ast(), maxKn: 2), isA<CondCompileOk>());
+      expect(compileConditionAst(k0Buy1OrK1BuyN3Ast(), maxKn: 2), isA<CondCompileOk>());
+      expect(isChanClassBsEventVarId('STRUCTURE.K0.BUY1'), isTrue);
+      expect(isChanClassBsEventVarId('STRUCTURE.K1.BUY_N.4'), isTrue);
+      expect(isChanClassBsEventVarId('SUB.K1.FRACTAL_CONFIRM'), isFalse);
     });
   });
 
@@ -203,6 +230,110 @@ void main() {
           maxKn: 2,
         ).single.discoveryX,
         30,
+      );
+    });
+
+    test('N=0 或 -1 取该侧全部买卖点；N=1 仍只取一类', () {
+      final store = ChanEventStore(
+        buy1ByKn: {
+          0: [
+            const Buy1Frame(
+              x: 4,
+              price: 10,
+              label: '1Ba',
+              segIdx: 1,
+              level: 0,
+            ),
+          ],
+        },
+        buy2ByKn: {
+          0: [
+            const Buy2Frame(
+              x: 12,
+              price: 11,
+              label: '2Ba',
+              segIdx: 2,
+              level: 0,
+            ),
+          ],
+        },
+        buyNByKn: {
+          0: [_bn(x: 20, cls: 3, label: '3Ba', price: 12, seg: 3)],
+        },
+        sell1ByKn: {
+          0: [
+            const Sell1Frame(
+              x: 6,
+              price: 13,
+              label: '1Sa',
+              segIdx: 1,
+              level: 0,
+            ),
+          ],
+        },
+        sell2ByKn: {
+          0: [
+            const Sell2Frame(
+              x: 14,
+              price: 14,
+              label: '2Sa',
+              segIdx: 2,
+              level: 0,
+            ),
+          ],
+        },
+        sellNByKn: {
+          0: [
+            const SellNFrame(
+              cls: 3,
+              x: 22,
+              price: 15,
+              label: '3Sa',
+              segIdx: 3,
+              level: 0,
+            ),
+          ],
+        },
+      );
+      expect(
+        listTradeChanEvents(
+          variableId: buyNVarId(0, 0),
+          asOf: 30,
+          store: store,
+          maxKn: 2,
+        ).map((e) => e.discoveryX).toList(),
+        [4, 12, 20],
+      );
+      expect(
+        listTradeChanEvents(
+          variableId: 'STRUCTURE.K0.BUY_N.-1',
+          asOf: 30,
+          store: store,
+          maxKn: 2,
+        ).map((e) => e.discoveryX).toList(),
+        [4, 12, 20],
+      );
+      expect(
+        listTradeChanEvents(
+          variableId: sellNVarId(0, 0),
+          asOf: 30,
+          store: store,
+          maxKn: 2,
+        ).map((e) => e.discoveryX).toList(),
+        [6, 14, 22],
+      );
+      expect(
+        listTradeChanEvents(
+          variableId: 'STRUCTURE.K0.BUY1',
+          asOf: 30,
+          store: store,
+          maxKn: 2,
+        ).map((e) => e.discoveryX).toList(),
+        [4],
+      );
+      expect(
+        compileConditionAst(TradeEventAst(buyNVarId(0, 0)), maxKn: 2),
+        isA<CondCompileOk>(),
       );
     });
 

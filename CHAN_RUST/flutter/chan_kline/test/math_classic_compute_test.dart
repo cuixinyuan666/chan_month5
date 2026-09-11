@@ -160,13 +160,13 @@ void main() {
       expect(subCat.any((e) => e.kind == SubIndicatorKind.kdj), isTrue);
 
       final dMain = defaultMainIndicatorsK0();
-      expect(dMain.any((e) => e.kind == MainIndicatorKind.boll), isTrue);
-      // Demark 进 K0 层全选关联，默认删除线静音
-      expect(dMain.any((e) => e.kind == MainIndicatorKind.demark), isTrue);
+      // 默认只勾核心绘制项；BOLL/Demark 仍在层全选 catalog 内
+      expect(dMain.any((e) => e.kind == MainIndicatorKind.boll), isFalse);
+      expect(dMain.any((e) => e.kind == MainIndicatorKind.demark), isFalse);
       expect(isDefaultDrawnMain(const MainChartIndicator.demark(0)), isFalse);
 
       final dSub = defaultSubIndicatorsK0();
-      expect(dSub.any((e) => e.kind == SubIndicatorKind.macd), isTrue);
+      expect(dSub.any((e) => e.kind == SubIndicatorKind.macd), isFalse);
 
       final lvl0 = subIndicatorsForLevel(0, subCat);
       expect(

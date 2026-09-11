@@ -164,6 +164,8 @@ String fxTripleVarId(int kn) => 'MAIN.K$kn.FX_TRIPLE.PRICE';
 String fxQuadVarId(int kn, String side) =>
     'MAIN.K$kn.FX_QUAD.${side.toUpperCase()}';
 
+String fxChordTranslatedVarId(int kn) => 'MAIN.K$kn.FX_CHORD_TRANSLATED.PRICE';
+
 /// 默认登记框内 + 下侧-1..-3 + 上侧+1..+3
 const int kTradeChipPeakMaxRank = 3;
 
@@ -535,7 +537,6 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
       ('SELL2', '二类卖点', 'sell2History 会话冻结，发现边沿'),
     ];
     for (final e in bs) {
-      final isClass1 = e.$1 == 'BUY1' || e.$1 == 'SELL1';
       out.add(TradeVariableDef(
         variableId: 'STRUCTURE.K$kn.${e.$1}',
         displayName: 'K$kn ${e.$2}',
@@ -550,8 +551,8 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
         unit: 'event',
         futureSafe: true,
         availabilityNote: '首次发现当根才出现一次；动态段后续 x 不重复出交易事件',
-        groupKey: isClass1 ? 'bs1' : 'bs2',
-        groupLabel: isClass1 ? '一类BS' : '二类BS',
+        groupKey: 'bsN',
+        groupLabel: 'N类BS',
         fieldLabel: e.$1,
         description: 'EVENT_EXISTS；禁止比较/穿越',
       ));
@@ -615,7 +616,7 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
       groupKey: 'fxConfirm',
       groupLabel: '分型确认',
       fieldLabel: '确认',
-        description: 'EVENT_EXISTS；当根脉冲；连线钟，不能和布林/RSI 直接 AND',
+        description: 'EVENT_EXISTS；当根脉冲；连线钟，不能和布林直接比；AND/OR 可跨层，须同一根 K0 刚发生',
       ));
     out.add(TradeVariableDef(
       variableId: fractalJudgmentId(kn),
@@ -634,7 +635,7 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
       groupKey: 'fxJudge',
       groupLabel: '分型判断',
       fieldLabel: '判断',
-      description: 'EVENT_EXISTS；连线钟，不能和布林/RSI 直接 AND',
+      description: 'EVENT_EXISTS；连线钟，不能和布林直接比；AND/OR 可跨层，须同一根 K0 刚发生',
     ));
     out.add(TradeVariableDef(
       variableId: 'SUB.K$kn.ZS_CONFIRM',
@@ -653,7 +654,7 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
       groupKey: 'zsConfirm',
       groupLabel: '中枢确认',
       fieldLabel: '确认',
-        description: 'EVENT_EXISTS；与 RSI/MACD 同 zsMath 可 AND/OR',
+        description: 'EVENT_EXISTS；AND/OR 可跨层，须同一根 K0 刚发生',
     ));
     out.add(TradeVariableDef(
       variableId: zsJudgmentId(kn),
@@ -672,7 +673,7 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
       groupKey: 'zsJudge',
       groupLabel: '中枢判断',
       fieldLabel: '判断',
-      description: 'EVENT_EXISTS；与 RSI/MACD 同 zsMath 可 AND/OR',
+      description: 'EVENT_EXISTS；AND/OR 可跨层，须同一根 K0 刚发生',
     ));
     // 确认中枢数值：先解析 CURRENT_CONFIRMED_ZS 的稳定 objectId，再投影
     const zsFields = [
@@ -743,7 +744,7 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
       groupKey: 'lineSlope',
       groupLabel: '连线斜率',
       fieldLabel: '斜率',
-      description: '连线钟数值；可与同层比例/分型确认拼，不能和布林/RSI 直接比',
+      description: '连线钟数值；可与同层比例比，不能和布林直接比；AND/OR 可跨层，须同一根 K0 刚发生',
     ));
     out.add(TradeVariableDef(
       variableId: adjacentRatioId(kn),
@@ -762,7 +763,7 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
       groupKey: 'adjRatio',
       groupLabel: '相邻比例',
       fieldLabel: '比例',
-      description: '连线钟数值；可与同层斜率比，不能和布林直接比',
+      description: '连线钟数值；可与同层斜率比，不能和布林直接比；AND/OR 可跨层，须同一根 K0 刚发生',
     ));
     out.add(TradeVariableDef(
       variableId: stepRhythmId(kn),
@@ -781,7 +782,7 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
       groupKey: 'rhythm',
       groupLabel: '节奏',
       fieldLabel: '投影价',
-      description: '读会话已写下的投影价（含关窗持值）；连线钟，不能和布林直接比',
+      description: '读会话已写下的投影价（含关窗持值）；连线钟，不能和布林直接比；AND/OR 可跨层，须同一根 K0 刚发生',
     ));
     if (kn >= 1) {
       out.add(TradeVariableDef(
@@ -825,7 +826,7 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
     }
     out.add(TradeVariableDef(
       variableId: fxTripleVarId(kn),
-      displayName: 'K$kn三型价',
+      displayName: 'K$kn三极平行价',
       panel: TradePanel.main,
       displayKn: kn,
       clockFamily: TradeClockFamily.zsMath,
@@ -836,15 +837,15 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
       source: 'Lookup/十字已冻的 fx_triple_price；无仓则按 asOf 前缀现算投影',
       unit: 'price',
       futureSafe: true,
-      availabilityNote: '这根没有三型延长线落到价位则为不可用',
+      availabilityNote: '这根没有三极平行延长线落到价位则为不可用',
       groupKey: 'fxTriple',
-      groupLabel: '三型',
+      groupLabel: '三极平行',
       fieldLabel: '价',
       description: '线→价投影，可与同层收盘/布林比',
     ));
     out.add(TradeVariableDef(
       variableId: fxQuadVarId(kn, 'TOP'),
-      displayName: 'K$kn四型上',
+      displayName: 'K$kn顶底对弦上',
       panel: TradePanel.main,
       displayKn: kn,
       clockFamily: TradeClockFamily.zsMath,
@@ -855,15 +856,15 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
       source: 'Lookup 已冻的 fx_quad_top_price',
       unit: 'price',
       futureSafe: true,
-      availabilityNote: '这根没有四型上沿价则为不可用',
+      availabilityNote: '这根没有顶底对弦上沿价则为不可用',
       groupKey: 'fxQuad',
-      groupLabel: '四型',
+      groupLabel: '顶底对弦',
       fieldLabel: '上',
       description: '线→价投影，可与同层收盘/布林比',
     ));
     out.add(TradeVariableDef(
       variableId: fxQuadVarId(kn, 'BOTTOM'),
-      displayName: 'K$kn四型下',
+      displayName: 'K$kn顶底对弦下',
       panel: TradePanel.main,
       displayKn: kn,
       clockFamily: TradeClockFamily.zsMath,
@@ -874,11 +875,30 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
       source: 'Lookup 已冻的 fx_quad_bottom_price',
       unit: 'price',
       futureSafe: true,
-      availabilityNote: '这根没有四型下沿价则为不可用',
+      availabilityNote: '这根没有顶底对弦下沿价则为不可用',
       groupKey: 'fxQuad',
-      groupLabel: '四型',
+      groupLabel: '顶底对弦',
       fieldLabel: '下',
       description: '线→价投影，可与同层收盘/布林比',
+    ));
+    out.add(TradeVariableDef(
+      variableId: fxChordTranslatedVarId(kn),
+      displayName: 'K$kn对弦平移价',
+      panel: TradePanel.main,
+      displayKn: kn,
+      clockFamily: TradeClockFamily.zsMath,
+      evalClock: evalClockForDisplayKn(kn),
+      plotClock: TradePlotClock.k0Bar,
+      valueType: TradeValueType.objectProjection,
+      readiness: TradeReadiness.registered,
+      source: 'Lookup/十字已冻的 fx_chord_translated_price；无仓则按 asOf 前缀现算投影',
+      unit: 'price',
+      futureSafe: true,
+      availabilityNote: '这根没有对弦平移延长线落到价位则为不可用',
+      groupKey: 'fxChordTranslated',
+      groupLabel: '对弦平移',
+      fieldLabel: '价',
+      description: 'ab 斜率平移到 c 点后的价投影，可与同层收盘/布林比',
     ));
     out.add(TradeVariableDef(
       variableId: trendLineVarId(kn, 'SUPPORT'),
@@ -1095,9 +1115,11 @@ TradeVariableDef? lookupTradeVariable(String variableId, {int maxKn = 8}) {
 }
 
 TradeVariableDef _classNDef(int kn, int cls, {required bool buy}) {
+  final all = isChanBsAllClass(cls);
+  final side = buy ? '买' : '卖';
   return TradeVariableDef(
     variableId: buy ? buyNVarId(kn, cls) : sellNVarId(kn, cls),
-    displayName: 'K$kn ${tradeBsClassCn(cls)}类${buy ? "买" : "卖"}点',
+    displayName: all ? 'K$kn 全部${side}点' : 'K$kn ${tradeBsClassCn(cls)}类${side}点',
     panel: TradePanel.structure,
     displayKn: kn,
     clockFamily: TradeClockFamily.zsMath,
@@ -1105,17 +1127,22 @@ TradeVariableDef _classNDef(int kn, int cls, {required bool buy}) {
     plotClock: TradePlotClock.k0Bar,
     valueType: TradeValueType.event,
     readiness: TradeReadiness.registered,
-    source: buy
-        ? 'buyNHistory 会话冻结，按 class=$cls 过滤；发现边沿'
-        : 'sellNHistory 会话冻结，按 class=$cls 过滤；发现边沿',
+    source: all
+        ? (buy
+            ? 'buy1+buy2+buyN 会话冻结，该侧全部类号；发现边沿'
+            : 'sell1+sell2+sellN 会话冻结，该侧全部类号；发现边沿')
+        : (buy
+            ? 'buyNHistory 会话冻结，按 class=$cls 过滤；发现边沿'
+            : 'sellNHistory 会话冻结，按 class=$cls 过滤；发现边沿'),
     unit: 'event',
     futureSafe: true,
     availabilityNote: '首次发现当根才出现一次；动态段后续 x 不重复出交易事件',
     groupKey: 'bsN',
     groupLabel: 'N类BS',
-    fieldLabel: '${tradeBsClassCn(cls)}${buy ? "买" : "卖"}',
-    description:
-        '${buy ? "BUY_N" : "SELL_N"}(class=$cls) EVENT_EXISTS；禁止比较/穿越',
+    fieldLabel: all ? '全$side' : '${tradeBsClassCn(cls)}$side',
+    description: all
+        ? '${buy ? "BUY_N" : "SELL_N"}(class=0/-1) 一类+二类+三类及以上 EVENT_EXISTS；禁止比较/穿越'
+        : '${buy ? "BUY_N" : "SELL_N"}(class=$cls) EVENT_EXISTS；禁止比较/穿越',
   );
 }
 
@@ -1182,7 +1209,7 @@ TradeVariableDef _demarkCompleteDef(int kn, {required bool buy}) {
     groupKey: 'demark',
     groupLabel: 'Demark',
     fieldLabel: buy ? '完成买' : '完成卖',
-    description: 'EVENT_EXISTS；与 RSI/收盘同 zsMath 可 AND/OR',
+    description: 'EVENT_EXISTS；AND/OR 可跨层，须同一根 K0 刚发生',
   );
 }
 

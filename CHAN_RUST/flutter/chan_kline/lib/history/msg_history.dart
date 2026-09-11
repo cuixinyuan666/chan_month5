@@ -79,7 +79,7 @@ class MsgHistory {
     append(
       '【口径·方案B层号】Rust structure 0 起编：levels[].level==0=K0连线；'
       '中枢/BS 帧 frame.level=structure+1（显示中枢号）。'
-      '连线族（line/combine/kn/三型/四型/趋势线/分型副图/截断/比例/节奏/斜率）'
+      '连线族（line/combine/kn/三极平行/顶底对弦/对弦平移/趋势线/分型副图/截断/比例/节奏/斜率）'
       'catalog kn==displayKn，取数 LevelBundle.level==kn（去掉 displayKn+1 / 绘制 kn-1）。'
       '中枢/Math/volume/BS/背驰：K0=原生 k0；K1+ 取 structure level==kn-1。'
       'collect*ByKn：out[0]=k0，pipeline 写 out[lv.level+1]；'
@@ -418,7 +418,7 @@ class MsgHistory {
       '任务完成后必须写 task-log.md；修改类任务须提供可演示验收：'
       '优先默认股票002003，否则在 a_Data/test/demos/{task_id}/ 建 manifest+before/after；'
       '股票选 test →「任务演示/前后对比」同页上=原本实现、下=本次实现。'
-      '详见仓库 AGENT_LONG_TERM_MEMORY.md。'
+      '详见仓库 AGENTS.md。'
       '历史记录按钮与 lib/history/ 常驻不得删。',
     );
   }
@@ -431,9 +431,10 @@ class MsgHistory {
     if (_devDemoPhaseLogged) return;
     _devDemoPhaseLogged = true;
     append(
-      '【开发演示阶段·2026-08-15】默认开启：启动 exe 自动加载 demos 最新任务；'
-      '主图底部叠层左=原本/右=本次，点「下一步」步进；可自动播放。'
-      '设置「开发演示阶段」关=不再自动加载。落盘 .chan_task_demo_settings.json。'
+      '【开发演示阶段·2026-09-01】对外默认关：启动不再自动加载任务演示。'
+      '研究/开发可在设置里打开「开发演示阶段」，下次启动才自动加载最新任务。'
+      '关=自行选股 / 任务演示列表 / 手动打开最新任务演示。'
+      '落盘 .chan_task_demo_settings.json。'
       '历史记录按钮与 lib/history/ 常驻不得删。',
     );
   }
@@ -443,10 +444,10 @@ class MsgHistory {
     if (_agentConfirmGateLogged) return;
     _agentConfirmGateLogged = true;
     append(
-      '【智能体门禁·2026-08-15】接任务先读 AGENT_LONG_TERM_MEMORY.md §0。'
+      '【智能体门禁·2026-08-15】接任务先读 AGENTS.md。'
       '用户未说「确认执行」禁止改 app 关键逻辑（缠论内核/步进冻结/主图语义）；'
       '须先文字提修改方案。演示 before/after/步进说明用白话，少贴代码名。'
-      'CLAUDE.md / OPENCODE.md / .cursor/rules 均指向同一规范。'
+      'CLAUDE.md / OPENCODE.md / WorkBuddy / Trae 均指向 AGENTS.md。'
       '历史记录按钮与 lib/history/ 常驻不得删。',
     );
   }
@@ -507,10 +508,10 @@ class MsgHistory {
       '其后 chan_pipeline_append_delta + mergeDelta（历史 bar_features 只追加，'
       '结构字段当步全量替换，不做字段级 patch）；'
       '失败回退 chan_pipeline_snapshot Full。'
-      '步退/复位/换股/换周期/截断开关：reset+replay 或 dispose 后重建；'
-      '关闭页面 dispose→chan_pipeline_free。'
+      '步退：有当步仓则直接取当时快照（Rust 管道保持最长前缀），无仓才 reset+replay；'
+      '换股/换周期/截断开关：dispose 后重建；关闭页面 dispose→chan_pipeline_free。'
       '黄金对照仍保留 chan_kline_combine_frames/run_pipeline；'
-      '十字 asOf 仍走无状态短前缀 Full。'
+      '十字 asOf 用当步仓，禁止末态裁 x、禁止每根再打无状态短前缀 Full。'
       '算法/mark_x/discoveryX/V2.1 BS/History/Lookup 填表算法不变；'
       'Lookup 由 PresentationCache 增量维护，Painter 复用同一份。须重编 chan_ffi.dll。',
     );
@@ -527,9 +528,26 @@ class MsgHistory {
       'PresentationCache.syncLookup：首包/回退一次 Full 种仓，热路径 applyStep 只写脏区间。'
       '永久冻结=旧 bar_features/History/Math冻格；只追加=byIdx[step]/新事件；'
       '当步可替换=末合并框/未确认中枢/当步 confirm；'
-      'asOf=结构短前缀 Full + 冻格 x<=asOf，三型只算 asOf 柱。'
-      'Full Lookup.build 保留为黄金参考。Painter/十字/chip/ML 复用同一份增量 Lookup。'
-      '不改 Rust/Delta/算法/History/asOf/mark_x/V2.1 BS。',
+      'asOf=当步仓结构 + 冻格 x<=asOf，asOfView 只改当前柱（历史格共享引用）；'
+      '三极平行只算 asOf 柱。Full Lookup.build 保留为黄金参考。'
+      'Painter/十字/chip/ML 复用同一份增量 Lookup。'
+      '不改 Rust/Delta/算法/History/mark_x/V2.1 BS。',
+    );
+  }
+
+  static bool _sessionAsOfSnapshotLogged = false;
+
+  /// 十字/步退用当步仓（禁末态裁 x；禁步退整段 reset+replay）
+  void appendSessionAsOfSnapshot() {
+    if (_sessionAsOfSnapshotLogged) return;
+    _sessionAsOfSnapshotLogged = true;
+    append(
+      '【当步仓·十字/步退】播放每步把当时结构钉进当步仓（合并框/连线/中枢/买卖点框；不钉逐根特征表）。'
+      '十字回看直接取那一根当时的仓，禁止用末态再裁 x，禁止每根再打一遍无状态全量。'
+      '步退：画面变短时仍用当时那步的仓，Rust 管道保持最长前缀，禁止整段推倒重放；'
+      '管道比画面长时冻结历史不再重复合并。'
+      '无当步仓才回落全量/重放。换股、换周期、截断开关仍重建会话。'
+      '不改冻结键、不改一类/二类打点口径、不改 mark_x。',
     );
   }
 
@@ -623,7 +641,7 @@ class MsgHistory {
     append(
       '【口径·2026-08-08·tip三类+节奏迁主图】'
       '十字 tip 层内拆三类（-。-分隔）：①Kn背驰_*；②Kn比例+Kn节奏*；'
-      '③其它指标（均线/通道/斜率/三型四型/趋势线/MACD/布林/RSI/KDJ/Demark）。'
+      '③其它指标（均线/通道/斜率/三极平行/顶底对弦/对弦平移/趋势线/MACD/布林/RSI/KDJ/Demark）。'
       'Kn节奏：删除 SubIndicatorKind.stepRhythm；改 MainIndicatorKind.stepRhythm；'
       '进主图「Kn指标」层全选（连线同号 0..maxKn-1）、默认静音；'
       '绘制挂价轴（value=节奏投影价）；副图 catalog/绘制/crosshairSubRows 已清干净。'
@@ -647,18 +665,18 @@ class MsgHistory {
     );
   }
 
-  /// 主图 Kn三型平移线 / Kn四型对线（进程内去重）
+  /// 主图 K{n}三极平行线 / K{n}顶底对弦线（进程内去重）
   static bool _knFxExtendLinesLogged = false;
   void appendKnFxExtendLines() {
     if (_knFxExtendLinesLogged) return;
     _knFxExtendLinesLogged = true;
     append(
-      '【Kn三型平移线 / Kn四型对线·主图·全层同构·v1】'
-      '显示名 K{n}三型平移线、K{n}四型对线；内部 kn==displayKn（方案B）；类别「延伸」。'
+      '【K{n}三极平行线 / K{n}顶底对弦线 / K{n}对弦平移线·主图·全层同构·v1】'
+      '显示名 K{n}三极平行线、K{n}顶底对弦线、K{n}对弦平移线；内部 kn==displayKn（方案B）；类别「延伸」。'
       '分型源仅已确认：K0=k0Confirms；Kn≥1→levels[level==displayKn].confirms；极点同连线 resolvePole/poleBarPrice。'
-      '确认序滑动窗：三型窗长3（两同+一异→过异型向右）、四型窗长4（两顶线+两底线弦+向右）；|dx|<1 跳过。'
+      '确认序滑动窗：三极平行窗长3（两同+一异→过异型向右）、顶底对弦窗长4（两顶线+两底线弦+向右）、对弦平移窗长3（T-B-T/B-T-B交替→ab斜率平移到c点）；|dx|<1 跳过。'
       '呈现：无十字只画最新合格窗；开十字只画焦点近邻窗（落窗优先，否则距区间最近）；'
-      'tooltip 固定槽「K{n}三型平移线」「K{n}四型对线」=延长线落到该根K0的价格(四型分顶/底)，与主图筛选同口径。'
+      'tooltip 固定槽「K{n}三极平行线」「K{n}顶底对弦线」「K{n}对弦平移线」=延长线落到该根K0的价格(顶底对弦分顶/底)，与主图筛选同口径。'
       '十字 asOf：只认 asOfBundle 的 confirms/levels（失败空，禁末态）；线型=层色构建虚线；'
       '射线右端截到 asOf 柱心（不向未来画到视口右缘）。'
       '默认勾选：进 catalog +「Kn指标」层全选 + 启动默认 K0。纯 Flutter，不改 Rust。',
@@ -676,7 +694,7 @@ class MsgHistory {
       '映射：子线=levels[level==displayKn]，父段=levels[level==displayKn+1]（含 active）；K0 父=K1连线。'
       '父段内子线≥3：隔笔取样→峰值斜率→点到线距离和最小；INSIDE=支撑、OUTSIDE=压力。'
       '例外：依赖父层，最高层不作显示名；maxKn<2 目录仍挂 K0 占位（计算空）。'
-      '呈现对齐三型/四型：无十字最新父段组；十字近邻组；父段弦+向右外推；层色构建虚线；'
+      '呈现对齐三极平行/顶底对弦/对弦平移：无十字最新父段组；十字近邻组；父段弦+向右外推；层色点线；'
       '十字 asOf 时射线右端截到 asOf（与蜡烛/均线同构）。'
       'tooltip「K{n}趋势线」=撑/压延长线落到该根K0价格；十字 asOf 只认 asOfBundle（禁末态）。'
       '默认：进 catalog +「Kn指标」层全选 + 启动默认 K0。纯 Flutter，不改 Rust。',
@@ -698,7 +716,7 @@ class MsgHistory {
       '周期：设置面板「数学指标参数」（默认均线5,10,20；通道20,60），落盘 .chan_trend_model_config.json。'
       '呈现：主图连续折线（多T分色）；tooltip「K{n}均线」「K{n}通道」=各T读数。'
       '默认：进 catalog +「Kn指标」层全选 + 启动默认 K0。纯 Flutter，不改 Rust。'
-      '与Kn趋势线/三型四型无关（序列统计≠段内拟合/分型几何）。',
+      '与Kn趋势线/三极平行/顶底对弦/对弦平移无关（序列统计≠段内拟合/分型几何）。',
     );
   }
 
@@ -796,6 +814,185 @@ class MsgHistory {
       '背景：改周期只改 _period 会令图表用新周期蜡烛画法重绘未重载的 tick 数据'
       '（O=H=L=C），整屏一字线；已改为选中即自动重载，并同步更新周期说明弹窗。'
       '聚合口径不变：仍 ticks→1m→升周期，主图恢复蜡烛。',
+    );
+  }
+
+  /// Android：内置 a_Data 种子解压到应用私有目录（勿再走编译期桌面路径）。
+  static bool _androidBundledDataLogged = false;
+  void appendAndroidBundledDataRoot() {
+    if (_androidBundledDataLogged) return;
+    _androidBundledDataLogged = true;
+    append(
+      '【Android·a_Data】首次启动从 assets/a_data_seed.zip 解压全量 a_Data 到应用私有目录；'
+      '内置 001312/002003/688687/920992/test 等全部股票与演示数据。'
+      '桌面仍可用环境变量 CHAN_DATA_ROOT 或 Rust 默认相对路径。',
+    );
+  }
+
+  /// Android 手机布局：顶栏/底栏/设置抽屉，图表区最大化。
+  static bool _androidMobileLayoutLogged = false;
+  void appendAndroidMobileLayout() {
+    if (_androidMobileLayoutLogged) return;
+    _androidMobileLayoutLogged = true;
+    append(
+      '【Android·界面】无顶栏/底栏，图表全屏；右上角浮动「设置」钮；'
+      '股票/周期/日期/桶宽等在设置抽屉；主/副图各一收纳钮；主副图分割显式「调节」手柄；'
+      '主图绘制 canvas 裁切，禁止侵入状态栏区与副图区；十字 tooltip 可滚动且右上角可关。',
+    );
+  }
+
+  /// 指标收纳、双指缩放/平移、策略回测上下分割（进程内去重）。
+  static bool _androidTouchUiLogged = false;
+  void appendAndroidTouchUiAndBacktestSplit() {
+    if (_androidTouchUiLogged) return;
+    _androidTouchUiLogged = true;
+    append(
+      '【指标收纳】主/副图左上角伸展钮（三角）点开近乎全屏指标列表，每行一项；已选白字、未选灰字+删除线；点空白/关闭钮收起。'
+      '指标列表仅可通过伸展钮调出，点主/副图/K 线区不唤起。'
+      '【手机手势】单指滑动=平移 K 线；双指锁定轴向缩放（拖动+捏合），缩放至极限后另一轴向仍可用。'
+      '【覆盖安装】同包名 com.chan.chan_kline，versionCode 递增即可直接覆盖安装，无需卸载旧版。'
+      '【策略回测分割】打开策略回测后 K 线与工作台之间可拖分割条上下调整占比；'
+      'Android 默认 K 线约 38%、桌面约 58%；拖条样式与图内主副图分割一致。',
+    );
+  }
+
+  /// 双端 UI 与交互模式（2026-08-25）
+  static bool _dualPlatformUiLogged = false;
+  void appendDualPlatformUiOptimization() {
+    if (_dualPlatformUiLogged) return;
+    _dualPlatformUiLogged = true;
+    append(
+      '【双端UI·2026-08-25】设置项「是否启用安卓操作逻辑」：默认跟随系统自动，可手动切安卓/Windows 手势。'
+      '主副图分割/伸展钮仅保留图标；指标列表仅通过展开钮（三角）调出，点图不唤起。'
+      '十字线开启后单指滑动只跟十字线，不缩放平移图。'
+      '策略回测：手机竖向分栏保证交易表可见；设置里点策略回测自动关设置并打开面板。'
+      '回测买卖信号：买=红圆点在下、卖=绿箭头在上；分笔买标签在圆点下方。'
+      '变量诊断顶部增加白话说明；会话活跃时 wakelock 后台保活。',
+    );
+  }
+
+  static bool _tickIdleYinYangLogged = false;
+
+  /// 分笔进图稍小太极 + 十字 tooltip 不挡跟手 + 主副图钮降亮
+  void appendTickLoadYinYangAndTooltipPass() {
+    if (_tickIdleYinYangLogged) return;
+    _tickIdleYinYangLogged = true;
+    append(
+      '【分笔进图·太极】仅分笔：刚进入/重新加载后，阴阳鱼为正圆，直径等于当前最大化窗口高度；'
+      '点一下屏幕、步进、播放后收起，图上仍是原来的圆点。'
+      '换股/重新加载分笔会再铺满一次。其它周期仍是蜡烛。'
+      '【一次性走完】过程中显示缩小 4 倍、更透明的阴阳鱼；循环里不再每步刷新查表，少拷历史表，筹码峰放到走完后一次补写；冻结仍逐 K 合并。'
+      '走完中间步仍带冻段，比例/斜率/节奏与单步同一套。'
+      '【十字信息框】开十字+信息框时，鼠标左右移动即使划过信息框，十字仍跟光标走。'
+      '【主副图钮】伸展三角和中间调节手柄降低亮度对比。',
+    );
+  }
+
+  static bool _tickYinYangFullscreenLogged = false;
+
+  /// 分笔太极铺满窗口 + 一次性走完少拷表
+  void appendTickYinYangFullscreen() {
+    if (_tickYinYangFullscreenLogged) return;
+    _tickYinYangFullscreenLogged = true;
+    append(
+      '【分笔太极】仅分笔：加载中和刚进图时阴阳鱼为正圆，直径等于当前窗口高度；'
+      '点一下、步进、播放后收起，K 线仍是圆点。'
+      '【一次性走完】过程中再显示缩小 4 倍、半透明的阴阳鱼（Windows 在独立窗口转，不跟算线一起卡）；仍逐 K 合并冻结；循环里少拷买卖点表、少刷查表，筹码峰走完后一次补写。'
+      '走完中间步仍带上已冻住的连线，比例/斜率/节奏与连续单步同一套。'
+      '再压每步内核包须确认执行。',
+    );
+  }
+
+  static bool _p0TrustGatesLogged = false;
+
+  /// 走完对拍 / 长操作进度 / 动态库版本门禁（白话）。
+  void appendP0TrustGates() {
+    if (_p0TrustGatesLogged) return;
+    _p0TrustGatesLogged = true;
+    append(
+      '【走完=单步】一次性走完和一步一步点，副图必须同一套数：买卖点、中枢、分型判断、比例、斜率、节奏都对得上。'
+      '走完可以少画中间过程，但不能少算已冻住的连线；少解析冻段会把比例/节奏冻成另一套。'
+      '【长数据不像死机】一次性走完、自动播放会显示中文进度；走完可取消，停在当前根，已经写下的点还在。'
+      '【计算库版本】启动时核对准不准；对不上或找不到库就中文停机，请覆盖本次那一份后冷启动，禁止静默混用旧库算出另一套点。',
+    );
+  }
+
+  static bool _crossKnBsJoinLogged = false;
+
+  /// 一类/二类/N 类买卖点可跨层 AND/OR（白话）。
+  void appendCrossKnBsJoin() {
+    if (_crossKnBsJoinLogged) return;
+    _crossKnBsJoinLogged = true;
+    append(
+      '【策略买卖点跨层】买条件、卖条件里，一类/二类/N 类买卖点可以用 AND 或 OR 跨层拼：'
+      '例如 K0 一类买 AND K1 三类买，或 K0 一类买 OR K1 三类买。'
+      'AND 必须同一根 K 上两边都刚出现，不是「以前有过就算」；OR 是哪一层先出现就先出信号。'
+      '收盘、RSI、布林、分型确认仍不能把 K0 和 K1 拼在一棵树上。'
+      '缠论各层自己怎么打点没改。',
+    );
+  }
+
+  static bool _workbenchLayoutK0BarLogged = false;
+
+  /// 左右分栏 / 默认一类买卖 / 当根事件跨层 / 策略点跟柱（白话）。
+  void appendWorkbenchLayoutAndK0BarEvents() {
+    if (_workbenchLayoutK0BarLogged) return;
+    _workbenchLayoutK0BarLogged = true;
+    append(
+      '【桌面左右分栏】电脑上 K 线在左、策略回测在右；手机仍上下排。'
+      '工作台一次只开一页：条件、资金、指标、交易等标签互不叠在一起。'
+      '【默认买卖】新策略买=K0 一类买点出现，卖=K0 一类卖点出现，不再默认收盘穿布林。'
+      '【当根事件可跨层】钉在这一根 K 上才出现的事件（一类/二类/N类买卖点、分型确认、中枢确认、Demark 完成买/卖）可以用 AND 或 OR 跨层拼。'
+      'AND 必须同一根两边都刚出现；OR 哪一层出现就出信号。'
+      '收盘、RSI、上穿下穿仍不能把 K0 和 K1 拼在一棵树上。'
+      '【策略点跟柱】回测画出来的买/卖圆点三角和 K 线用同一套柱心，左右拖图时跟着蜡烛走，不是钉在屏幕上。',
+    );
+  }
+
+  static bool _workbenchBelowCaptionLogged = false;
+
+  /// 工作台下移避开标题栏 + 关闭整块台子（白话）。
+  void appendWorkbenchBelowCaptionAndClose() {
+    if (_workbenchBelowCaptionLogged) return;
+    _workbenchBelowCaptionLogged = true;
+    append(
+      '【策略回测避开标题栏】电脑打开策略回测后，右侧整块工作台（运行、标签、内容）往下挪，'
+      '不再挡住窗口右上角的最小化、最大化、关闭。'
+      '工作台自己有关闭（X）：点了只关策略回测，K 线铺回整屏；设置里再点「策略回测」还能打开。不是关软件窗口。',
+    );
+  }
+
+  static bool _tdxProtocolTicksLogged = false;
+
+  /// 通达信协议分笔 + 笔数缺省 0 + 筹码/笔数弹窗（白话）。
+  void appendTdxProtocolTicks() {
+    if (_tdxProtocolTicksLogged) return;
+    _tdxProtocolTicksLogged = true;
+    append(
+      '【分笔改走通达信协议】普通股票的分笔不再以本地导出 txt 为准，改从通达信行情口取带笔数的历史分笔；'
+      '日线及更长周期仍是「分笔先合成 1 分钟，再升周期」，算法没换。'
+      'test 股和自定义 OHLC 仍读文件。'
+      '所选区间若开启了笔数分布，且分笔笔数为 0，会先问要不要继续用笔数分布。'
+      '没开笔数分布就不弹这个窗。'
+      '点「不继续」：K 线和缠论仍加载，只是本会话关掉这些指标，不改你保存的设置。'
+      '无笔数列或第 4 列是 B/S 时记 0，不再当成 1 笔。'
+      '计算库协议号升到 2，须覆盖本次编出来的库后冷启动。',
+    );
+  }
+
+  static bool _k0BarJoinAndAxisLogged = false;
+
+  /// 同一根 K0 可读条件可拼；走完太极窗口正中；价签叠筹码（白话）。
+  void appendK0BarJoinYinYangCenterPriceAxis() {
+    if (_k0BarJoinAndAxisLogged) return;
+    _k0BarJoinAndAxisLogged = true;
+    append(
+      '【策略同一根K可拼·2026-09-04】买/卖条件里，只要两边都是「这一根 K 上已经能读到的数或事件」，'
+      '就可以 AND/OR：例如 K0 比例>=1.382 并且 K0 最低价<=筹码峰-1。'
+      '这不是混层：比例是连线钟、开高低收/筹码峰是价钟，但都按 K0 一根一根取值。'
+      '仍然不能：把比例直接和价格比或穿越；把 K0 收盘和 K1 布林/RSI 硬拼（K1 那些走虚拟K钟）。'
+      '【一次性走完太极】阴阳鱼对准当前窗口正中心（Windows 按窗口屏幕矩形居中，不再偏到一边）。'
+      '【价签】开筹码分布或笔数分布时，Y 轴数字仍在主图右侧，允许和柱子重叠，不再挪到最左边。',
     );
   }
 
@@ -915,25 +1112,25 @@ class MsgHistory {
     _knTickCountRealLogged = true;
     append(
       '【Kn笔数·真实笔数】Rust 分笔解析第 4 列笔数（HH:MM 价格 量 笔数 [B/S]；'
-      '无列/非数字按 1 笔；显式 0 保留 0），tick/Day3/普通周期三路径均写 bar.metrics：'
+      '无列/非数字记 0，不再默认填 1；显式 0 保留 0），tick/Day3/普通周期三路径均写 bar.metrics：'
       'tick_count（总，含灰度 w）、buy_tick_count（B）、sell_tick_count（S）；'
       '非法行（价格/量）不计，与 from_side_rows 同口径。'
-      'Flutter K0 笔数优先读 metrics.tick_count / buy_tick_count，旧数据回退 bins 长度、'
-      '再回退 tick_side；Kn=下层增量累加步进与成交量同构。'
+      'Flutter K0 笔数优先读 metrics.tick_count / buy_tick_count，旧数据回退 bins 长度；'
+      '无键则 0，不再用 tick_side 充 1 笔。Kn=下层增量累加步进与成交量同构。'
       '【踩坑】勿用 bins 数组长度当笔数（每价位三数组各 push 1，长度恒=3×价位数）；'
       '笔数 metrics 键存在即用（可为 0，勿用 >0 判断），无键才回退。'
       'crosshairSubRows 新增 tickCount 分支 → 副图读数/十字 tooltip 显示真实笔数。',
     );
   }
 
-  /// 分笔第4列显式 0 ≠ 缺列默认 1（进程内去重）。
+  /// 分笔第4列显式 0，以及缺列也不再默认 1（进程内去重）。
   static bool _tickCountZeroLiteralLogged = false;
   void appendTickCountZeroLiteral() {
     if (_tickCountZeroLiteralLogged) return;
     _tickCountZeroLiteralLogged = true;
     append(
-      '【Kn笔数·显式0·2026-08-02】分笔第4列写 0 时 ticks=0（副图/笔数分布全无柱）；'
-      '仅无笔数列或第4列为 B/S 时默认 1。勿把 0 当成非法再默认成 1。'
+      '【Kn笔数·显式0·2026-09-03】分笔第4列写 0 时 ticks=0（副图/笔数分布全无柱）；'
+      '无笔数列或第4列为 B/S 时也记 0，不再默认 1。勿把 0 当成非法再填成 1。'
       '须重编 chan_ffi.dll 后冷启。',
     );
   }
@@ -971,7 +1168,7 @@ class MsgHistory {
       '大序列 Isolate 后台预热前缀（跳末/加载），计算口径不变。'
       '逐K当下性：只累加已喂入 bars；十字 as-of 回滚到该日累积，不回写历史桶。'
       '配置：chipEnabled/bucketStep/stretch/peakLine；落盘 .chan_chip_config.json。'
-      '【优化】开启筹码分布时主图 Y 轴价签与十字价格标签改左侧，避免被右侧筹码挡住。',
+      '【优化】主图 Y 轴价签与十字价格标签始终在右侧，和筹码柱叠在一起也可以。',
     );
   }
 
@@ -1059,7 +1256,7 @@ class MsgHistory {
       'tooltip 仅 K0 增加独立类别：K0筹码峰、K0笔数峰；动态名 -/＋n：'
       '-1=当前低价之下最近峰，+2=高价之上且中间还有一峰；落在高低之间无 -/＋。'
       '格式：K0筹码峰-1：【价】/B：【】S：【】G：【】（笔数峰同）。'
-      '笔数分布：主图左侧、与筹码同构（chip_tick_count_bins）；价签画在分布右侧；'
+      '笔数分布：主图左侧、与筹码同构（chip_tick_count_bins）；价签仍在主图右侧，允许重叠；'
       '桶宽与筹码共用。',
     );
   }
@@ -1153,7 +1350,7 @@ class MsgHistory {
       '同一层、同一套钟才能比较（K0收盘对K0布林；K1收盘对K1布林）。'
       '禁止用K0收盘去穿K1布林。布林读图上已冻住的格子，不另算一套。'
       '没有数=不可用，不是条件不成立；布林热身仍按图上出数，不另造前20根空白。'
-      '中枢高低、一类/二类买卖点、三型四型、节奏、背驰只盘点、暂不进公式'
+      '中枢高低、一类/二类买卖点、三极平行/顶底对弦/对弦平移、节奏、背驰只盘点、暂不进公式'
       '（框身份未写清，或需要「首次出现才触发」）。'
       '成交约定仍是：信号出在当根，下一根K0开盘才成交（本阶段尚未做撮合）。'
       '阶段0无图上买卖标记，不自动弹任务演示。',
@@ -1295,7 +1492,7 @@ class MsgHistory {
       '不是事后扩大后的末态，也不是未确认的框。没有确认中枢就是不可用，不会填成 0。'
       'K1 收盘可以跟 K1 中枢低比；K0 收盘不能跟 K1 中枢比。'
       '中枢确认仍是「出现一次」的事件，不能拿去比大小或上穿下穿，但可以和同层收盘低于中枢低拼在一起。'
-      '未接入未确认中枢、N 类、背驰、节奏、三型四型。',
+      '未接入未确认中枢、N 类、背驰、节奏、三极平行/顶底对弦/对弦平移。',
     );
   }
 
@@ -1310,7 +1507,7 @@ class MsgHistory {
       '出现是事件，不能比大小或上穿下穿；力度比可以和数字比；方向只能等于向上或向下。'
       '同一个比较对象后面再拉长，关系编号不变；当时已经记下的力度比不会被以后改掉。'
       '确认程度变了会记成新事件，不回写旧记录。没有当时可见的背驰就是不可用，不是 0。'
-      '可以和同层一类买点、RSI 拼。未接入其它背驰算法、N 类、节奏、三型四型、做空、加仓。',
+      '可以和同层一类买点、RSI 拼。未接入其它背驰算法、N 类、节奏、三极平行/顶底对弦/对弦平移、做空、加仓。',
     );
   }
 
@@ -1402,7 +1599,9 @@ class MsgHistory {
       '【回测变量补全·2026-08-20】图上已经算好的，策略公式按同一份冻结仓/会话历史接入，不解析十字文案、不另算一套。'
       '未确认中枢高/低/中轴是单独变量：这根 K 盖住未确认框才有数，没有就空，不填 0、不沿用上一根；当步写入后冻结。'
       '已确认中枢 CURRENT 照旧。均线/通道读冻结仓；Demark 完成买/卖当根脉冲；分型判断/中枢判断首次可判出一次。'
-      '连线斜率、相邻比例、节奏是连线钟，不能和布林/RSI 直接比。三型/四型/趋势线是线投影到价，可与同层收盘/布林比。'
+      '连线斜率、相邻比例、节奏是连线钟，不能和布林/RSI 直接比数字。'
+      '但同一根 K 上已经能读到的条件（例如 K0 比例>=1.382 并且最低价<=筹码峰-1）可以 AND/OR。'
+      '三极平行/顶底对弦/对弦平移/趋势线是线投影到价，可与同层收盘/布林比。'
       'K1+ 成交量/笔数按铺平层序列、跟 MACD 同一套计算钟取样。'
       'K0筹码峰/笔数峰按这根高低编号（-1/+1），峰价可与开高低收比；没有那一颗就空。'
       '整段中枢/整段背驰仍不能当一个数比。',
@@ -1418,6 +1617,49 @@ class MsgHistory {
       '【筹码峰进公式·2026-08-20】K0筹码峰/笔数峰按这根 K 的高低框编号：框下最近-1、框上最近+1，框内无号。'
       '公式比的是峰价和开高低收，不解析十字文字。没有那一颗就空，不填 0、不沿用；当步冻结。'
       '只做 K0，和收盘同一套钟。斜率仍不和布林混写。',
+    );
+  }
+
+  /// 策略买卖点形状、N类BS填N、指标单击选中、设置按钮对齐（进程内去重）。
+  static bool _uiBsPickerSettingsLogged = false;
+  void appendUiBsPickerSettings20260905() {
+    if (_uiBsPickerSettingsLogged) return;
+    _uiBsPickerSettingsLogged = true;
+    append(
+      '【策略买卖点形状·2026-09-05】图上买/卖都用三角，不再买圆卖三角。'
+      '买1/卖1 三角，买2/卖2 箭头，买3/卖3 再三角，按组合组号奇偶交替；买在柱下尖朝上，卖在柱上尖朝下。'
+      '【N类BS】策略条件里一类/二类/N类合并成「N类BS」：选买点或卖点，再填 N。'
+      'N=1 仍是一类、N=2 仍是二类、N≥3 仍是三类及以上；N=0 或 -1 表示该侧（买或卖）一类+二类+三类及以上全部取上。'
+      '旧条件里的一类买点 id 还能用。缠论副图一类BS/二类BS 画法没改，只改策略积木。'
+      '【指标选择】分类下只有一项时，点分类直接勾选，不再进子菜单。例如进了 K0 后点「K0」就是勾选 K0 线。'
+      '【设置按钮】机器学习问号改到按钮左边，不挤窄按钮；复制调试信息等按钮同一宽度、同一高度。',
+    );
+  }
+
+  /// N=0/-1 表示该侧全部买卖点（进程内去重）。
+  static bool _bsNAllClassLogged = false;
+  void appendBsNAllClass20260905() {
+    if (_bsNAllClassLogged) return;
+    _bsNAllClassLogged = true;
+    append(
+      '【N类BS·0/-1=全部·2026-09-05】策略条件 N 填 0 或 -1：选的是买点就吃该层全部买点（一类+二类+三类及以上），选卖点同理。'
+      '不是把买和卖混成一条。填 1/2/3… 仍只取那一类。同一根 K 上多种买点只出一次买信号。',
+    );
+  }
+
+  /// 跨层指标 AND/OR：各支算完映到同一根 K0（进程内去重）。
+  static bool _crossKnIndicatorJoinLogged = false;
+  void appendCrossKnIndicatorJoin20260905() {
+    if (_crossKnIndicatorJoinLogged) return;
+    _crossKnIndicatorJoinLogged = true;
+    append(
+      '【策略跨层指标可拼·2026-09-05】买/卖条件里，各层指标各自算完后可以用 AND 或 OR 拼：'
+      '例如 K0 最低价下穿布林下轨 AND K1 最低价下穿布林下轨。'
+      'AND 必须同一根 K 上两边都刚发生，不是「K1 以前下穿过、这根虚拟K里一直算数」；'
+      'OR 是哪一层先发生就先出信号。'
+      '同一条比较或穿越仍必须同层：K0 最低价不能去穿 K1 布林。'
+      '比例仍不能直接和价格比。颗粒度是 K0 时，正在长的那根虚拟K也是真的，发现根就是这根 K0。'
+      '缠论各层自己怎么打点没改。',
     );
   }
 

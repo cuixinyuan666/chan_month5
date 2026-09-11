@@ -62,18 +62,20 @@ MacdK0Series computeMacdForLevel({
   int slow = 26,
   int signal = 9,
   int? asOf,
+  List<KnOhlcSample>? samples,
 }) {
-  final samples = collectKnOhlcSamples(
-    displayKn: displayKn,
-    bars: bars,
-    levels: levels,
-    asOf: asOf,
-  );
+  final use = samples ??
+      collectKnOhlcSamples(
+        displayKn: displayKn,
+        bars: bars,
+        levels: levels,
+        asOf: asOf,
+      );
   final eng = MacdEngine(fast: fast, slow: slow, signal: signal);
   final ptsDif = <({int x, double v})>[];
   final ptsDea = <({int x, double v})>[];
   final ptsMacd = <({int x, double v})>[];
-  for (final s in samples) {
+  for (final s in use) {
     final it = eng.add(s.close);
     ptsDif.add((x: s.endX, v: it.dif));
     ptsDea.add((x: s.endX, v: it.dea));
@@ -138,18 +140,20 @@ BollK0Series computeBollForLevel({
   List<LevelBundle> levels = const [],
   int n = 20,
   int? asOf,
+  List<KnOhlcSample>? samples,
 }) {
-  final samples = collectKnOhlcSamples(
-    displayKn: displayKn,
-    bars: bars,
-    levels: levels,
-    asOf: asOf,
-  );
+  final use = samples ??
+      collectKnOhlcSamples(
+        displayKn: displayKn,
+        bars: bars,
+        levels: levels,
+        asOf: asOf,
+      );
   final eng = BollEngine(n < 2 ? 2 : n);
   final ptsM = <({int x, double v})>[];
   final ptsU = <({int x, double v})>[];
   final ptsD = <({int x, double v})>[];
-  for (final s in samples) {
+  for (final s in use) {
     final it = eng.add(s.close);
     ptsM.add((x: s.endX, v: it.mid));
     ptsU.add((x: s.endX, v: it.up));
@@ -210,16 +214,18 @@ List<double?> computeRsiForLevel({
   List<LevelBundle> levels = const [],
   int period = 14,
   int? asOf,
+  List<KnOhlcSample>? samples,
 }) {
-  final samples = collectKnOhlcSamples(
-    displayKn: displayKn,
-    bars: bars,
-    levels: levels,
-    asOf: asOf,
-  );
+  final use = samples ??
+      collectKnOhlcSamples(
+        displayKn: displayKn,
+        bars: bars,
+        levels: levels,
+        asOf: asOf,
+      );
   final eng = RsiEngine(period < 1 ? 1 : period);
   final pts = <({int x, double v})>[
-    for (final s in samples) (x: s.endX, v: eng.add(s.close)),
+    for (final s in use) (x: s.endX, v: eng.add(s.close)),
   ];
   return expandPointsToK0(pts, bars.length, asOf: asOf);
 }
@@ -270,18 +276,20 @@ KdjK0Series computeKdjForLevel({
   List<LevelBundle> levels = const [],
   int period = 9,
   int? asOf,
+  List<KnOhlcSample>? samples,
 }) {
-  final samples = collectKnOhlcSamples(
-    displayKn: displayKn,
-    bars: bars,
-    levels: levels,
-    asOf: asOf,
-  );
+  final use = samples ??
+      collectKnOhlcSamples(
+        displayKn: displayKn,
+        bars: bars,
+        levels: levels,
+        asOf: asOf,
+      );
   final eng = KdjEngine(period < 1 ? 1 : period);
   final ptsK = <({int x, double v})>[];
   final ptsD = <({int x, double v})>[];
   final ptsJ = <({int x, double v})>[];
-  for (final s in samples) {
+  for (final s in use) {
     final it = eng.add(high: s.high, low: s.low, close: s.close);
     ptsK.add((x: s.endX, v: it.k));
     ptsD.add((x: s.endX, v: it.d));
@@ -307,7 +315,15 @@ KdjK0Series computeKdjForLevel({
   List<LevelBundle> levels = const [],
   MathIndicatorConfig config = const MathIndicatorConfig(),
   int? asOf,
+  List<KnOhlcSample>? samples,
 }) {
+  final use = samples ??
+      collectKnOhlcSamples(
+        displayKn: displayKn,
+        bars: bars,
+        levels: levels,
+        asOf: asOf,
+      );
   return (
     macd: computeMacdForLevel(
       displayKn: displayKn,
@@ -317,6 +333,7 @@ KdjK0Series computeKdjForLevel({
       slow: config.macdSlow,
       signal: config.macdSignal,
       asOf: asOf,
+      samples: use,
     ),
     boll: computeBollForLevel(
       displayKn: displayKn,
@@ -324,6 +341,7 @@ KdjK0Series computeKdjForLevel({
       levels: levels,
       n: config.bollN,
       asOf: asOf,
+      samples: use,
     ),
     rsi: computeRsiForLevel(
       displayKn: displayKn,
@@ -331,6 +349,7 @@ KdjK0Series computeKdjForLevel({
       levels: levels,
       period: config.rsiPeriod,
       asOf: asOf,
+      samples: use,
     ),
     kdj: computeKdjForLevel(
       displayKn: displayKn,
@@ -338,6 +357,7 @@ KdjK0Series computeKdjForLevel({
       levels: levels,
       period: config.kdjPeriod,
       asOf: asOf,
+      samples: use,
     ),
   );
 }

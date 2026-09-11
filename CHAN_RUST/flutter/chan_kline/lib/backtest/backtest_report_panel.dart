@@ -13,12 +13,34 @@ import 'strategy_signal_painter.dart';
 
 enum BacktestReportTab { metrics, equity, trades, chain, attribution }
 
+/// 工作台顶栏标签：条件/资金 + 报告各页，一次只开一页。
+enum BacktestWorkbenchTab {
+  conditions,
+  capital,
+  metrics,
+  equity,
+  trades,
+  chain,
+  attribution,
+}
+
+BacktestReportTab? reportTabOf(BacktestWorkbenchTab t) => switch (t) {
+      BacktestWorkbenchTab.metrics => BacktestReportTab.metrics,
+      BacktestWorkbenchTab.equity => BacktestReportTab.equity,
+      BacktestWorkbenchTab.trades => BacktestReportTab.trades,
+      BacktestWorkbenchTab.chain => BacktestReportTab.chain,
+      BacktestWorkbenchTab.attribution => BacktestReportTab.attribution,
+      _ => null,
+    };
+
 /// 把 BacktestResult 端出来：指标卡 / 净值 / 交易 / 信号订单链路。不重算。
 class BacktestReportPanel extends StatelessWidget {
   final BacktestRun run;
   final List<KlineBar> bars;
   final BacktestReportTab tab;
   final ValueChanged<BacktestReportTab> onTab;
+  /// false：外层工作台已有标签，这里不再画一排 chip。
+  final bool showTabBar;
   final String? selectedSignalId;
   final String? selectedTradeId;
   final ValueChanged<TradeRecord> onSelectTrade;
@@ -38,6 +60,7 @@ class BacktestReportPanel extends StatelessWidget {
     required this.onSelectSignal,
     required this.onJumpX,
     this.focusX,
+    this.showTabBar = true,
   });
 
   @override
@@ -55,7 +78,7 @@ class BacktestReportPanel extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _tabBar(),
+        if (showTabBar) _tabBar(),
         Expanded(child: _body(result)),
       ],
     );

@@ -144,8 +144,8 @@ void main() {
       expect(c.first.label, 'K0通道');
 
       final d = defaultMainIndicatorsK0();
-      expect(d.any((e) => e.kind == MainIndicatorKind.meanLine), isTrue);
-      expect(d.any((e) => e.kind == MainIndicatorKind.trendChannel), isTrue);
+      expect(d.any((e) => e.kind == MainIndicatorKind.meanLine), isFalse);
+      expect(d.any((e) => e.kind == MainIndicatorKind.trendChannel), isFalse);
     });
 
     test('周期文本解析', () {

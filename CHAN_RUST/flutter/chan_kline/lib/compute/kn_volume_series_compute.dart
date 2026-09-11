@@ -76,12 +76,12 @@ double _sumBins(dynamic binData) {
 }
 
 /// K0 tick count: 优先 Rust 真实笔数 metrics.tick_count（分笔第4列；显式0即为0）；
-/// 旧数据回退 chip_tick_bins 数组长度；再无 tick 数据时回退到 tick_side。
+/// 旧数据回退 chip_tick_bins 数组长度；无键则 0（不再用 tick_side 充 1 笔）。
 /// 含 w（灰度）笔，与 _tickSideColor 三态一致。
 List<double> computeK0TickCountSeries(List<KlineBar> bars) {
   double tickCount(KlineBar b) {
     final m = b.metrics['tick_count'];
-    // 键存在即用（含 0）；勿用 >0 判断，否则显式0会误回退成 bins 长度/1
+    // 键存在即用（含 0）；勿用 >0 判断，否则显式0会误回退成 bins 长度
     if (m is num) return m.toDouble();
     final bins = b.metrics['chip_tick_bins'];
     if (bins is Map) {
@@ -90,16 +90,13 @@ List<double> computeK0TickCountSeries(List<KlineBar> bars) {
       final wLen = _listLen(bins['w']);
       if (bLen + sLen + wLen > 0) return (bLen + sLen + wLen).toDouble();
     }
-    // 无逐笔数据时回退到 tick_side 方向（B/S 各算 1 笔）
-    final side = b.metrics['tick_side'];
-    if (side == 'B' || side == 'S') return 1;
     return 0;
   }
   return [for (final b in bars) tickCount(b)];
 }
 
 /// K0 buy tick count: 优先 Rust 真实买入笔数 metrics.buy_tick_count（含显式 0）；
-/// 旧数据回退 chip_tick_bins 数组长度；再无 tick 数据时回退到 tick_side。
+/// 旧数据回退 chip_tick_bins 数组长度；无键则 0（不再用 tick_side 充 1 笔）。
 /// 灰笔 (w) 不计入买入笔数。
 List<double> computeK0BuyTickCountSeries(List<KlineBar> bars) {
   double buyTick(KlineBar b) {
@@ -110,15 +107,12 @@ List<double> computeK0BuyTickCountSeries(List<KlineBar> bars) {
       final bLen = _listLen(bins['b']);
       if (bLen > 0) return bLen.toDouble();
     }
-    // 无逐笔数据时回退到 tick_side 方向
-    final side = b.metrics['tick_side'];
-    if (side == 'B') return 1;
     return 0;
   }
   return [for (final b in bars) buyTick(b)];
 }
 
-/// K0 卖出笔数：优先 metrics.sell_tick_count；回退 bins['s'] 长度 / tick_side。
+/// K0 卖出笔数：优先 metrics.sell_tick_count；回退 bins['s'] 长度；无键则 0。
 List<double> computeK0SellTickCountSeries(List<KlineBar> bars) {
   double sellTick(KlineBar b) {
     final m = b.metrics['sell_tick_count'];
@@ -128,8 +122,6 @@ List<double> computeK0SellTickCountSeries(List<KlineBar> bars) {
       final sLen = _listLen(bins['s']);
       if (sLen > 0) return sLen.toDouble();
     }
-    final side = b.metrics['tick_side'];
-    if (side == 'S') return 1;
     return 0;
   }
   return [for (final b in bars) sellTick(b)];
@@ -160,6 +152,19 @@ List<double> computeK0GrayTickCountSeries(List<KlineBar> bars) {
 int _listLen(dynamic binData) {
   if (binData is List) return binData.length;
   return 0;
+}
+
+/// 内部复用：从 K0 系列出发，逐一累积各层确认门控系列。
+Map<int, List<double>> computeAllKnFromK0Series({
+  required List<double> k0Series,
+  required List<LevelBundle> levels,
+  required List<KlineBar> bars,
+}) {
+  return _computeAllKnFromK0(
+    k0Series: k0Series,
+    levels: levels,
+    bars: bars,
+  );
 }
 
 /// 内部复用：从 K0 系列出发，逐一累积各层确认门控系列。

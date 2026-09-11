@@ -438,11 +438,11 @@ void main() {
       expect(subCat.any((e) => e.label.contains('节奏')), isFalse);
     });
 
-    test('默认 K0：副图含比例；主图含节奏（进 Kn指标层全选）', () {
+    test('默认 K0：层全选含比例/节奏；默认启动只勾核心绘制项', () {
       final dSub = defaultSubIndicatorsK0();
       final dMain = defaultMainIndicatorsK0();
-      expect(dSub.any((e) => e.kind == SubIndicatorKind.adjacentRatio), isTrue);
-      expect(dMain.any((e) => e.kind == MainIndicatorKind.stepRhythm), isTrue);
+      expect(dSub.any((e) => e.kind == SubIndicatorKind.adjacentRatio), isFalse);
+      expect(dMain.any((e) => e.kind == MainIndicatorKind.stepRhythm), isFalse);
       final subLv0 = subIndicatorsForLevel(0, buildSubIndicatorCatalog(1));
       final mainLv0 = mainIndicatorsForLevel(0, buildMainIndicatorCatalog(1));
       expect(

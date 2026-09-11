@@ -26,6 +26,7 @@ class TradeVarDiagnosis {
   final TradePlotClock? plotClock;
   final String source;
   final String description;
+  final String plainLanguage;
   final bool expressionReady;
   final bool freezePresent;
   /// 当前 asOf 这根 K0 格子上能看见的值（plotClock）
@@ -51,6 +52,7 @@ class TradeVarDiagnosis {
     required this.plotClock,
     required this.source,
     required this.description,
+    required this.plainLanguage,
     required this.expressionReady,
     required this.freezePresent,
     required this.plotValue,
@@ -66,6 +68,11 @@ class TradeVarDiagnosis {
 
   String get text {
     final buf = StringBuffer();
+    if (plainLanguage.isNotEmpty) {
+      buf.writeln('白话说明：');
+      buf.writeln(plainLanguage);
+      buf.writeln();
+    }
     buf.writeln('变量：');
     buf.writeln(displayName.isEmpty ? variableId : displayName);
     buf.writeln(variableId);
@@ -158,6 +165,23 @@ class TradeVarDiagnosis {
     }
     return buf.toString().trimRight();
   }
+}
+
+String _plainLanguageForDef(TradeVariableDef? def) {
+  if (def == null) {
+    return '这个键还没登记进变量目录，不能拿来写买卖条件。';
+  }
+  final parts = <String>[
+    '「${def.displayName}」就是：${def.description.isNotEmpty ? def.description : def.variableId}',
+    if (def.availabilityNote.isNotEmpty) '什么时候有数：${def.availabilityNote}',
+    if (def.blockedReason != null && def.blockedReason!.isNotEmpty)
+      '为啥还不能直接写条件：${def.blockedReason}',
+    if (def.valueType == TradeValueType.event)
+      '这是「有没有发生过」的脉冲事件，只能判断有没有，不能和数字比大小。',
+    if (def.valueType == TradeValueType.enumeration)
+      '这是方向类枚举（向上/向下），只能选方向，不能和数字比大小。',
+  ];
+  return parts.join('\n');
 }
 
 String _evalClockCn(TradeEvalClock? c, int? kn) {
@@ -261,6 +285,7 @@ TradeVarDiagnosis diagnoseTradeVariable({
       plotClock: def.plotClock,
       source: def.source,
       description: def.description,
+      plainLanguage: _plainLanguageForDef(def),
       expressionReady: true,
       freezePresent: hasHist,
       plotValue: last == null
@@ -296,6 +321,7 @@ TradeVarDiagnosis diagnoseTradeVariable({
       plotClock: def?.plotClock,
       source: def?.source ?? '',
       description: def?.description ?? '',
+      plainLanguage: _plainLanguageForDef(def),
       expressionReady: false,
       freezePresent: freezePresent,
       plotValue: const TradeScalar.unavailable(),
@@ -391,6 +417,7 @@ TradeVarDiagnosis diagnoseTradeVariable({
     plotClock: def.plotClock,
     source: def.source,
     description: def.description,
+    plainLanguage: _plainLanguageForDef(def),
     expressionReady: true,
     freezePresent: freezePresent,
     plotValue: plot,

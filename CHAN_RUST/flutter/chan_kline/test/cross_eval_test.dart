@@ -9,6 +9,8 @@ import 'package:chan_kline/models/kline_bar.dart';
 import 'package:chan_kline/models/math_indicator_config.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'offline_tick_files.dart';
+
 KlineBar _bar(int idx, double close, {double? open}) {
   final o = open ?? close;
   return KlineBar(
@@ -285,6 +287,6 @@ void main() {
       for (final x in lateAts) {
         expect(cutR.events.any((e) => e.availableAt == x), isFalse);
       }
-    });
+    }, skip: hasOffline002003TickFiles() ? false : kNoOffline002003Skip);
   });
 }

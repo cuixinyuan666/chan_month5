@@ -754,12 +754,12 @@ class BarFeatureLookup {
       }
     }
 
-    // Kn三型平移 / 四型对线 / 趋势线 / 数学 / 背驰：按柱 asOf 取近邻窗读数
+    // K{n}三极平行 / 顶底对弦 / 趋势线 / 数学 / 背驰：按柱 asOf 取近邻窗读数
     if (bars.isNotEmpty &&
         (k0Confirms.isNotEmpty ||
             levels.isNotEmpty ||
             zsK0Frames.isNotEmpty)) {
-      // 方案B：三型/四型属连线族，dkn==structure.level，上界=structureMax（勿再用 level-1）
+      // 方案B：三极平行/顶底对弦属连线族，dkn==structure.level，上界=structureMax（勿再用 level-1）
       var maxLevel = 0;
       for (final lv in levels) {
         if (lv.level > maxLevel) maxLevel = lv.level;
@@ -792,6 +792,12 @@ class BarFeatureLookup {
           if (tPx != null) sub['fx_triple_price_$dkn'] = tPx;
           if (q.top != null) sub['fx_quad_top_price_$dkn'] = q.top;
           if (q.bottom != null) sub['fx_quad_bottom_price_$dkn'] = q.bottom;
+          final cPx = chordTranslatedPriceReadout(
+            calcAllChordTranslatedGroups(poles),
+            atX: b.idx,
+            focusX: b.idx,
+          );
+          if (cPx != null) sub['fx_chord_translated_price_$dkn'] = cPx;
         }
       }
       // 趋势线：父层=displayKn+1（structure），dkn 最大 structureMax-1
@@ -1849,10 +1855,10 @@ class BarFeatureLookup {
       CrosshairTooltipRow.boxNum(
           slope is num ? slope.toStringAsFixed(4) : 0),
     ));
-    // 三型平移 / 四型对线：延长线落到本根 K0 的价格
+    // 三极平行 / 顶底对弦 / 对弦平移线：延长线落到本根 K0 的价格
     final triple = sub?['fx_triple_price_$displayKn'];
     otherMath.add(kv(
-      'K$displayKn三型平移线',
+      'K$displayKn三极平行线',
       CrosshairTooltipRow.boxNum(
           triple is num ? triple.toStringAsFixed(2) : 0),
     ));
@@ -1864,13 +1870,19 @@ class BarFeatureLookup {
         if (qBot is num) '底${qBot.toStringAsFixed(2)}',
       ];
       otherMath.add(kv(
-        'K$displayKn四型对线',
+        'K$displayKn顶底对弦线',
         CrosshairTooltipRow.boxNum(parts.join(' ')),
       ));
     } else {
       otherMath.add(
-          kv('K$displayKn四型对线', CrosshairTooltipRow.boxNum(0)));
+          kv('K$displayKn顶底对弦线', CrosshairTooltipRow.boxNum(0)));
     }
+    final chordTranslated = sub?['fx_chord_translated_price_$displayKn'];
+    otherMath.add(kv(
+      'K$displayKn对弦平移线',
+      CrosshairTooltipRow.boxNum(
+          chordTranslated is num ? chordTranslated.toStringAsFixed(2) : 0),
+    ));
     // 趋势线：支撑/压力延长线落到本根 K0 的价格
     final tSup = sub?['trend_support_price_$displayKn'];
     final tRes = sub?['trend_resist_price_$displayKn'];
