@@ -4017,6 +4017,9 @@ class _KlineCompositePainter extends CustomPainter {
     // 锚点已在 asOf 右侧：整条不画
     if (asOf != null && ray.x0 > asOf) return;
 
+    // 延伸组统一点线：与虚拟连线（短虚线）区分
+    const dotDash = <double>[1, 3];
+
     // 弦：左锚 → 右锚（左锚若越过 asOf 则跳过弦，只画开口）
     if (ray.x1 != null &&
         ray.y1 != null &&
@@ -4030,7 +4033,7 @@ class _KlineCompositePainter extends CustomPainter {
         Offset(ax, ay),
         Offset(bx, by),
         paint,
-        style.buildingDashPattern,
+        dotDash,
       );
     }
 
@@ -4051,7 +4054,7 @@ class _KlineCompositePainter extends CustomPainter {
       Offset(sx, sy),
       Offset(ex, ey),
       paint,
-      style.buildingDashPattern,
+      dotDash,
     );
   }
 

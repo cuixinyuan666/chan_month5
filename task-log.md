@@ -2784,3 +2784,31 @@ Rust `buy2.rs`（新）→ pipeline/combine → Flutter 会话双键冻结（`cl
 - **注意事项**：若仍复现 crash，先结束所有 dart/flutter 进程，必要时重启系统；任务完成后已清理 plans 目录无关文件。
 
 ---
+
+### 2026-09-10 08:10 — 指标名称同步 / 延伸组画线 / ML 退出按钮下移
+
+- **执行者**：Kilo
+- **任务类型**：UI 调整 / 口径同步
+- **上下文**：K{n}指标重命名（三型平移线→三极平行线、四型对线→顶底对弦线）并新增对弦平移线后，发现策略回测、ML 信号文案仍显示旧名称；延伸组画线与虚拟连线均为短虚线难以区分；ML 退出按钮与窗口关闭 X 重叠。
+- **关键操作**：
+  1. 在 `AGENTS.md` 追加「指标名称/增加变更同步检查清单」，防止后续新增/重命名指标时漏同步策略回测、ML、主图绘制、tooltip、历史记录。
+  2. `backtest/signal_data_catalog.dart`：`三型价`→`三极平行价`、`四型上/下`→`顶底对弦上/下`，`groupLabel` 同步更新；新增 `fxChordTranslatedVarId` 与 `K$kn对弦平移价` 条目；`catalog_lookup.dart` 注释同步。
+  3. `ml/ml_rule_score.dart`：信号文案 `K$kn三型价`→`K$kn三极平行价`。
+  4. `ml/ml_feature_label.dart`：特征中文映射 `K0/K1 三型价`、`K1 四型顶价`→`三极平行价/顶底对弦顶价/顶底对弦底价`，并新增对弦平移价映射。
+  5. `widgets/kline_chart.dart`：`_paintFxExtendRay` 中延伸组（三极平行/顶底对弦/对弦平移/趋势线）的画线 pattern 从 `style.buildingDashPattern` 改为统一点线 `const [1, 3]`（..........），与虚拟连线短虚线区分。
+  6. `lib/ml/ml_workbench.dart`：ML 顶栏 `Padding` 从 `EdgeInsets.symmetric(horizontal: 8, vertical: 6)` 调整为 `EdgeInsets.fromLTRB(12, 10, 12, 6)`，下移退出按钮避免与窗口 X 重叠。
+- **结果**：策略回测变量名、ML 信号文案、tooltip、历史记录口径全部对齐新指标名称；延伸组画线视觉区分完成；ML 退出按钮不再与窗口关闭按钮重叠。
+- **演示**：步进到含三极平行/顶底对弦/对弦平移线的 K 线，策略回测面板变量名显示新名称；ML 成果页顶栏退出按钮可见且不与窗口 X 重叠。
+
+---
+
+### 2026-09-11 00:48 — ML 退出按钮二次下移
+
+- **执行者**：Kilo
+- **任务类型**：UI 微调
+- **上下文**：用户反馈 ML 退出按钮与窗口关闭 X 仍视觉重叠，需再下移。
+- **关键操作**：`lib/ml/ml_workbench.dart` 的 `Column` 顶部新增 `SizedBox(height: 36)`，将 ML 顶栏整体下推，使其与窗口标题栏（高度 36px）完全分离。
+- **结果**：ML 退出按钮垂直位置与窗口关闭 X 无重叠。
+- **演示**：进入 ML 工作台，顶栏「退出」按钮位于窗口标题栏下方，不与右上角关闭按钮重叠。
+
+---

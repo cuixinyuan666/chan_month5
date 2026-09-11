@@ -505,7 +505,7 @@ class MlRuleScore {
       }
       if (sub['fx_triple_price_$kn'] != null) {
         hits++;
-        signals.add('K$kn三型价=${sub['fx_triple_price_$kn']}');
+        signals.add('K$kn三极平行价=${sub['fx_triple_price_$kn']}');
       }
       if (sub['mean_text_$kn'] != null) {
         hits++;

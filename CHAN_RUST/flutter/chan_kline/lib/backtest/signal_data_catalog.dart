@@ -164,6 +164,8 @@ String fxTripleVarId(int kn) => 'MAIN.K$kn.FX_TRIPLE.PRICE';
 String fxQuadVarId(int kn, String side) =>
     'MAIN.K$kn.FX_QUAD.${side.toUpperCase()}';
 
+String fxChordTranslatedVarId(int kn) => 'MAIN.K$kn.FX_CHORD_TRANSLATED.PRICE';
+
 /// 默认登记框内 + 下侧-1..-3 + 上侧+1..+3
 const int kTradeChipPeakMaxRank = 3;
 
@@ -824,7 +826,7 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
     }
     out.add(TradeVariableDef(
       variableId: fxTripleVarId(kn),
-      displayName: 'K$kn三型价',
+      displayName: 'K$kn三极平行价',
       panel: TradePanel.main,
       displayKn: kn,
       clockFamily: TradeClockFamily.zsMath,
@@ -835,15 +837,15 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
       source: 'Lookup/十字已冻的 fx_triple_price；无仓则按 asOf 前缀现算投影',
       unit: 'price',
       futureSafe: true,
-      availabilityNote: '这根没有三型延长线落到价位则为不可用',
+      availabilityNote: '这根没有三极平行延长线落到价位则为不可用',
       groupKey: 'fxTriple',
-      groupLabel: '三型',
+      groupLabel: '三极平行',
       fieldLabel: '价',
       description: '线→价投影，可与同层收盘/布林比',
     ));
     out.add(TradeVariableDef(
       variableId: fxQuadVarId(kn, 'TOP'),
-      displayName: 'K$kn四型上',
+      displayName: 'K$kn顶底对弦上',
       panel: TradePanel.main,
       displayKn: kn,
       clockFamily: TradeClockFamily.zsMath,
@@ -854,15 +856,15 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
       source: 'Lookup 已冻的 fx_quad_top_price',
       unit: 'price',
       futureSafe: true,
-      availabilityNote: '这根没有四型上沿价则为不可用',
+      availabilityNote: '这根没有顶底对弦上沿价则为不可用',
       groupKey: 'fxQuad',
-      groupLabel: '四型',
+      groupLabel: '顶底对弦',
       fieldLabel: '上',
       description: '线→价投影，可与同层收盘/布林比',
     ));
     out.add(TradeVariableDef(
       variableId: fxQuadVarId(kn, 'BOTTOM'),
-      displayName: 'K$kn四型下',
+      displayName: 'K$kn顶底对弦下',
       panel: TradePanel.main,
       displayKn: kn,
       clockFamily: TradeClockFamily.zsMath,
@@ -873,11 +875,30 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
       source: 'Lookup 已冻的 fx_quad_bottom_price',
       unit: 'price',
       futureSafe: true,
-      availabilityNote: '这根没有四型下沿价则为不可用',
+      availabilityNote: '这根没有顶底对弦下沿价则为不可用',
       groupKey: 'fxQuad',
-      groupLabel: '四型',
+      groupLabel: '顶底对弦',
       fieldLabel: '下',
       description: '线→价投影，可与同层收盘/布林比',
+    ));
+    out.add(TradeVariableDef(
+      variableId: fxChordTranslatedVarId(kn),
+      displayName: 'K$kn对弦平移价',
+      panel: TradePanel.main,
+      displayKn: kn,
+      clockFamily: TradeClockFamily.zsMath,
+      evalClock: evalClockForDisplayKn(kn),
+      plotClock: TradePlotClock.k0Bar,
+      valueType: TradeValueType.objectProjection,
+      readiness: TradeReadiness.registered,
+      source: 'Lookup/十字已冻的 fx_chord_translated_price；无仓则按 asOf 前缀现算投影',
+      unit: 'price',
+      futureSafe: true,
+      availabilityNote: '这根没有对弦平移延长线落到价位则为不可用',
+      groupKey: 'fxChordTranslated',
+      groupLabel: '对弦平移',
+      fieldLabel: '价',
+      description: 'ab 斜率平移到 c 点后的价投影，可与同层收盘/布林比',
     ));
     out.add(TradeVariableDef(
       variableId: trendLineVarId(kn, 'SUPPORT'),

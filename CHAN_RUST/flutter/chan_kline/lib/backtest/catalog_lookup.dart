@@ -628,7 +628,7 @@ double? _featureNum(BarFeatureLookup? features, int asOf, String key) {
 TradeScalar _optNum(double? v) =>
     v == null ? const TradeScalar.unavailable() : TradeScalar.num(v);
 
-/// 斜率/比例/节奏/量笔/三型四型趋势：读会话历史或十字已冻格子。
+/// 斜率/比例/节奏/量笔/三极平行/顶底对弦/对弦平移：读会话历史或十字已冻格子。
 TradeScalar? _lookupExtendedNumeric({
   required ({String panel, int kn, List<String> rest}) parsed,
   required int asOf,

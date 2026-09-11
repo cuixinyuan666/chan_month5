@@ -42,3 +42,18 @@
 
 
 技术口径详见 `CHAN_RUST/README.md`「实现约束与口径」节。
+
+### 指标名称/增加变更同步检查清单（必做）
+
+在 `chart_indicator.dart` 中增删或重命名主图/副图指标后，**必须同步**以下位置，否则会出现名称不一致、功能缺失：
+
+1. **策略回测**：`backtest/signal_data_catalog.dart` 中的 `displayName`、`groupLabel`、`variableId`、`source`、`description`。
+2. **机器学习**：
+   - `ml/ml_rule_score.dart` 中的信号文案；
+   - `ml/ml_feature_label.dart` 中的中文映射；
+   - `ml/ml_feature_schema.dart` 中的 `coreKeys`（如需导出）。
+3. **主图绘制**：`kline_chart.dart` 中对应 `MainIndicatorKind` 的绘制分支与画线样式。
+4. **tooltip/十字**：`bar_feature_lookup.dart` 中的 tooltip 槽位与价格读取。
+5. **历史记录**：`msg_history.dart` 中的口径说明。
+
+> 踩坑记录：`三型平移线→三极平行线`、`四型对线→顶底对弦线`、新增 `对弦平移线` 时，仅改了 `chart_indicator.dart` 与主图绘制，未同步策略回测与机器学习，导致回测变量名、ML 信号文案仍显示旧名称。
