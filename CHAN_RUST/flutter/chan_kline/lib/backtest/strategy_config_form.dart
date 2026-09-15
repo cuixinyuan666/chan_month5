@@ -507,6 +507,7 @@ class _StrategyConfigFormState extends State<StrategyConfigForm> {
       TradeBinaryOp.lt,
       TradeBinaryOp.ge,
       TradeBinaryOp.le,
+      TradeBinaryOp.eq,
       TradeBinaryOp.crossAbove,
       TradeBinaryOp.crossBelow,
     ];

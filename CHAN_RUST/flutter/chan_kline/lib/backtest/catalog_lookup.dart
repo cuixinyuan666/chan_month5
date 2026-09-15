@@ -341,6 +341,33 @@ List<EvalClockPoint> readEvalClockSeries({
   );
 }
 
+/// 副图 MACD/RSI/KDJ：变量 vs 常数比较时走 K0 铺平格（与十字线/副图持值同口径）。
+/// knSample 稀疏样本只用于穿越/事件，不等于图上每根 K0 看见的数。
+List<EvalClockPoint> readSubIndicatorPlotGridSeries({
+  required String variableId,
+  required int asOf,
+  required List<KlineBar> bars,
+  List<LevelBundle> levels = const [],
+  MathSeriesFreezeStore? mathFreeze,
+}) {
+  if (bars.isEmpty || asOf < 0 || mathFreeze == null) return const [];
+  final parsed = _parseId(variableId);
+  if (parsed == null || parsed.panel != 'SUB') return const [];
+  if (parsed.rest.isEmpty) return const [];
+  final kind = parsed.rest[0];
+  if (kind != 'MACD' && kind != 'RSI' && kind != 'KDJ') return const [];
+  final plot = frozenPlotSeries(parsed: parsed, store: mathFreeze);
+  if (plot == null) return const [];
+  return _plotEvalSeries(
+    kn: parsed.kn,
+    evalClock: TradeEvalClock.k0Bar,
+    plot: plot,
+    asOf: asOf,
+    bars: bars,
+    levels: levels,
+  );
+}
+
 List<EvalClockPoint> _rawEvalSeries({
   required int kn,
   required String field,

@@ -444,8 +444,37 @@ List<_BoolPt> _evalEvent(CompiledEvent cond, CondEvalCtx ctx) {
 }
 
 List<_BoolPt> _evalCmp(CompiledCmp cond, CondEvalCtx ctx) {
-  final left = _readRef(cond.left, cond.clockOp, ctx);
-  final right = _readRef(cond.right, cond.clockOp, ctx);
+  final usePlotGrid = _usePlotGridForVarConstSubNumeric(cond);
+  final left = usePlotGrid && cond.left is TradeVarRef
+      ? readSubIndicatorPlotGridSeries(
+          variableId: (cond.left as TradeVarRef).variableId,
+          asOf: ctx.asOf,
+          bars: ctx.bars,
+          levels: ctx.levels,
+          mathFreeze: ctx.mathFreeze,
+        )
+      : _readRef(cond.left, cond.clockOp, ctx);
+  final right = usePlotGrid && cond.right is TradeConstRef
+      ? [
+          for (final p in left)
+            EvalClockPoint(
+              evalIndex: p.evalIndex,
+              availableAt: p.availableAt,
+              value: (cond.right as TradeConstRef).value,
+            ),
+        ]
+      : usePlotGrid && cond.right is TradeVarRef
+          ? readSubIndicatorPlotGridSeries(
+              variableId: (cond.right as TradeVarRef).variableId,
+              asOf: ctx.asOf,
+              bars: ctx.bars,
+              levels: ctx.levels,
+              mathFreeze: ctx.mathFreeze,
+            )
+          : _readRef(cond.right, cond.clockOp, ctx);
+  final eqDigits = usePlotGrid && cond.op == TradeBinaryOp.eq
+      ? _subNumericDisplayDigits(cond)
+      : null;
   final rightByAt = <int, EvalClockPoint>{
     for (final p in right) p.availableAt: p,
   };
@@ -469,7 +498,7 @@ List<_BoolPt> _evalCmp(CompiledCmp cond, CondEvalCtx ctx) {
   for (var i = 0; i < aligned.length; i++) {
     final a = aligned[i].a;
     final b = aligned[i].b;
-    final flag = _cmpAt(cond.op, aligned, i);
+    final flag = _cmpAt(cond.op, aligned, i, eqDisplayDigits: eqDigits);
     out.add(_BoolPt(
       evalIndex: a.evalIndex,
       availableAt: a.availableAt,
@@ -490,8 +519,9 @@ List<_BoolPt> _evalCmp(CompiledCmp cond, CondEvalCtx ctx) {
 bool _cmpAt(
   TradeBinaryOp op,
   List<({EvalClockPoint a, EvalClockPoint b})> aligned,
-  int i,
-) {
+  int i, {
+  int? eqDisplayDigits,
+}) {
   final a = aligned[i].a.value;
   final b = aligned[i].b.value;
   switch (op) {
@@ -504,6 +534,10 @@ bool _cmpAt(
     case TradeBinaryOp.le:
       return a <= b;
     case TradeBinaryOp.eq:
+      if (eqDisplayDigits != null) {
+        return a.toStringAsFixed(eqDisplayDigits) ==
+            b.toStringAsFixed(eqDisplayDigits);
+      }
       return a == b;
     case TradeBinaryOp.crossAbove:
       if (i == 0) return false;
@@ -881,6 +915,44 @@ List<EvalClockPoint> _readRef(
     k0Confirms: ctx.chanEvents.k0FractalConfirms,
     bollN: ctx.bollN,
   );
+}
+
+bool _usePlotGridForVarConstSubNumeric(CompiledCmp cond) {
+  if (cond.op == TradeBinaryOp.crossAbove ||
+      cond.op == TradeBinaryOp.crossBelow ||
+      cond.op == TradeBinaryOp.eventExists) {
+    return false;
+  }
+  final hasConst =
+      cond.left is TradeConstRef || cond.right is TradeConstRef;
+  if (!hasConst) return false;
+  final varRef = cond.left is TradeVarRef
+      ? cond.left as TradeVarRef
+      : cond.right is TradeVarRef
+          ? cond.right as TradeVarRef
+          : null;
+  if (varRef == null) return false;
+  final id = varRef.variableId;
+  if (!id.startsWith('SUB.K')) return false;
+  if (!id.contains('.MACD.') &&
+      !id.contains('.RSI.') &&
+      !id.contains('.KDJ.')) {
+    return false;
+  }
+  final op = cond.leftOp ?? cond.rightOp;
+  return op != null &&
+      op.displayKn >= 1 &&
+      op.evalClock == TradeEvalClock.knSample;
+}
+
+int _subNumericDisplayDigits(CompiledCmp cond) {
+  final varRef = cond.left is TradeVarRef
+      ? cond.left as TradeVarRef
+      : cond.right as TradeVarRef;
+  final id = varRef.variableId;
+  if (id.contains('.MACD.')) return 3;
+  if (id.contains('.RSI.')) return 2;
+  return 2;
 }
 
 TradeAst _astFromCompiled(CompiledCond c) {
