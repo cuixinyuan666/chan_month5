@@ -304,8 +304,8 @@ class _KlineChartState extends State<KlineChart> {
   /// 主/副图指标选择层：伸展钮打开全屏列表
   _IndicatorPickerPane _pickerPane = _IndicatorPickerPane.none;
   /// 向右箭头：展示已选指标名 + 变量读数（主/副各一）
-  bool _mainIndicatorReadoutExpanded = false;
-  bool _subIndicatorReadoutExpanded = false;
+  bool _mainIndicatorReadoutExpanded = true;
+  bool _subIndicatorReadoutExpanded = true;
   /// 左上角单击灰度关闭的指标（仍在选择集中，再点可打开）
   Set<MainChartIndicator> _mutedMains = {};
   Set<SubChartIndicator> _mutedSubs = {};
@@ -512,7 +512,7 @@ class _KlineChartState extends State<KlineChart> {
         chipExtra;
   }
 
-  /// 选择集增删后同步静音集：新勾选的非默认绘制项默认 muted（删除线灰度）。
+  /// 选择集增删后同步静音集：新勾选项默认打开绘制（不再自动 muted）。
   void _syncMutedWithSelection({
     Set<MainChartIndicator>? previousMains,
     Set<SubChartIndicator>? previousSubs,
@@ -521,19 +521,14 @@ class _KlineChartState extends State<KlineChart> {
     final oldS = previousSubs ?? <SubChartIndicator>{};
     final addedM = _activeMains.difference(oldM);
     final addedS = _activeSubs.difference(oldS);
-    _mutedMains = {
-      ..._mutedMains.intersection(_activeMains),
-      for (final e in addedM)
-        if (!isDefaultDrawnMain(e)) e,
-    };
-    _mutedSubs = {
-      ..._mutedSubs.intersection(_activeSubs),
-      for (final e in addedS)
-        if (!isDefaultDrawnSub(e) &&
-            !(e.kind == SubIndicatorKind.macd &&
-                hasMacdDivergenceForKn(_activeSubs, e.kn)))
-          e,
-    };
+    _mutedMains = _mutedMains.intersection(_activeMains);
+    _mutedSubs = _mutedSubs.intersection(_activeSubs);
+    for (final e in addedM) {
+      _mutedMains.remove(e);
+    }
+    for (final e in addedS) {
+      _mutedSubs.remove(e);
+    }
     for (final e in _activeSubs) {
       if (e.kind == SubIndicatorKind.divergence &&
           isMacdDivergenceAlgo(e.diverAlgo)) {
@@ -586,6 +581,10 @@ class _KlineChartState extends State<KlineChart> {
     _resetViewport();
     _tickIdleYinYang = widget.period == 'tick';
     _syncMutedWithSelection();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_mainIndicatorReadoutExpanded) _measureMainChipBar();
+      if (_subIndicatorReadoutExpanded) _measureSubChipBar();
+    });
     // 全局键盘监听：方向键←/→（十字线态=十字线左右移；非十字线态=步退/步进）
     HardwareKeyboard.instance.addHandler(_handleHardwareKey);
   }
@@ -1527,6 +1526,7 @@ class _KlineChartState extends State<KlineChart> {
         displayLevelOf: (e) => e.displayLevel,
         categoryLabelOf: (e) => e.kind.categoryLabel,
         categoryOrderOf: (e) => e.kind.categoryOrder,
+        itemOrderOf: (e) => e.kindOrderInLevel,
         onClose: _closeIndicatorPicker,
       );
     }
@@ -1541,6 +1541,7 @@ class _KlineChartState extends State<KlineChart> {
       displayLevelOf: (e) => e.displayLevel,
       categoryLabelOf: (e) => e.kind.categoryLabel,
       categoryOrderOf: (e) => e.kind.categoryOrder,
+      itemOrderOf: subIndicatorPickerOrder,
       valueTextOf: (e) => subValues[e],
       onClose: _closeIndicatorPicker,
     );
@@ -1799,26 +1800,30 @@ class _KlineChartState extends State<KlineChart> {
   /// 踩坑：勿在 painter 右上再画独立读数框；值挂 IndicatorChipEntry.valueText。
   Map<SubChartIndicator, String> _subChipValueByInd() {
     if (widget.bars.isEmpty || _activeSubs.isEmpty) return const {};
-    final barIdx = (_crosshairEnabled && _crosshairBarIdx != null)
-        ? _crosshairBarIdx!
-        : widget.bars.length - 1;
-    final bar = widget.bars[barIdx.clamp(0, widget.bars.length - 1)];
-    final asOf = (_crosshairEnabled && _crosshairBarIdx != null)
-        ? bar.idx
-        : null;
-    final asOfBundle =
-        widget.chipOnlyMode ? null : _bundleForZsAsOf(asOf);
-    final lookup = _lookupForPaint(
-      asOf: asOf,
-      asOfBundle: asOfBundle,
-      subIndicators: _activeSubs,
-    );
-    final out = <SubChartIndicator, String>{};
-    for (final e in _activeSubs) {
-      final rows = lookup.crosshairSubRows(bar.idx, {e});
-      out[e] = rows.isNotEmpty ? rows.first.value : '0';
+    try {
+      final barIdx = (_crosshairEnabled && _crosshairBarIdx != null)
+          ? _crosshairBarIdx!
+          : widget.bars.length - 1;
+      final bar = widget.bars[barIdx.clamp(0, widget.bars.length - 1)];
+      final asOf = (_crosshairEnabled && _crosshairBarIdx != null)
+          ? bar.idx
+          : null;
+      final asOfBundle =
+          widget.chipOnlyMode ? null : _bundleForZsAsOf(asOf);
+      final lookup = _lookupForPaint(
+        asOf: asOf,
+        asOfBundle: asOfBundle,
+        subIndicators: _activeSubs,
+      );
+      final out = <SubChartIndicator, String>{};
+      for (final e in _activeSubs) {
+        final rows = lookup.crosshairSubRows(bar.idx, {e});
+        out[e] = rows.isNotEmpty ? rows.first.value : '0';
+      }
+      return out;
+    } catch (_) {
+      return const {};
     }
-    return out;
   }
 
   @override

@@ -242,11 +242,9 @@ extension SubIndicatorKindMeta on SubIndicatorKind {
       case SubIndicatorKind.zsJudgment:
         return '中枢判断';
       case SubIndicatorKind.buy1:
-        return '一类BS';
       case SubIndicatorKind.buy2:
-        return '二类BS';
       case SubIndicatorKind.buyN:
-        return 'N类BS';
+        return 'KnN类BS';
       case SubIndicatorKind.adjacentRatio:
         return '比例';
       case SubIndicatorKind.lineSlope:
@@ -281,11 +279,9 @@ extension SubIndicatorKindMeta on SubIndicatorKind {
       case SubIndicatorKind.zsJudgment:
         return 7;
       case SubIndicatorKind.buy1:
-        return 8;
       case SubIndicatorKind.buy2:
-        return 9;
       case SubIndicatorKind.buyN:
-        return 10;
+        return 8;
       case SubIndicatorKind.adjacentRatio:
         return 11;
       case SubIndicatorKind.lineSlope:
@@ -470,6 +466,20 @@ class SubChartIndicator {
 
   @override
   int get hashCode => Object.hash(kind, kn, bsClass, diverAlgo);
+}
+
+/// 副图选择面板：KnN类BS 内一类→二类→N类排序。
+int subIndicatorPickerOrder(SubChartIndicator e) {
+  switch (e.kind) {
+    case SubIndicatorKind.buy1:
+      return 0;
+    case SubIndicatorKind.buy2:
+      return 1;
+    case SubIndicatorKind.buyN:
+      return 2 + (e.bsClass ?? 3);
+    default:
+      return e.kind.categoryOrder * 1000 + e.kn;
+  }
 }
 
 /// 方案B：chartMaxKn = structureMax+1；无 levels 有 k0Lines→1；全空→0。

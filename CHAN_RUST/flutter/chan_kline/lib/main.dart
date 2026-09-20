@@ -833,6 +833,32 @@ class _KlineHomePageState extends State<KlineHomePage> {
     _pipelineSession = null;
   }
 
+  /// 清空会话冻结历史：回首 K / 从 0 重跑走完前必须清，避免重复 merge 崩溃。
+  void _clearSessionFreezeHistory() {
+    _judgmentHistoryByKn.clear();
+    _zsJudgmentHistoryByKn.clear();
+    _zsConfirmHistoryByKn.clear();
+    _zsObjectStore.clear();
+    _diverRelationStore.clear();
+    _buy1HistoryByKn.clear();
+    _sell1HistoryByKn.clear();
+    _buy2HistoryByKn.clear();
+    _sell2HistoryByKn.clear();
+    _buyNHistoryByKn.clear();
+    _sellNHistoryByKn.clear();
+    _bsVerdictHistoryByKn.clear();
+    _adjacentRatioHistoryByKn.clear();
+    _lineSlopeHistoryByKn.clear();
+    _stepRhythmHistoryByKn.clear();
+    for (final s in _stepRhythmStateByKn.values) {
+      s.reset();
+    }
+    _stepRhythmStateByKn.clear();
+    _mathFreezeStore.clear();
+    _diverFreezeStore.clear();
+    _chipPeakStore.clear();
+  }
+
   /// 取与可见前缀同步的 bundle：前进 append；步退优先当步仓，无仓才 reset+replay
   KlineCombineBundle _bundleForVisible(List<KlineBar> visible) {
     if (_pipelineSession == null ||
@@ -1887,6 +1913,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
     if (!_hasSession) return;
     _stopPlay();
     _dismissTickYinYang();
+    _clearSessionFreezeHistory();
+    _disposePipelineSession();
     setState(() => _stepIdx = 0);
     _rebuildCombine();
   }
@@ -1929,6 +1957,10 @@ class _KlineHomePageState extends State<KlineHomePage> {
     }
     var cancelled = false;
     var lastYield = DateTime.fromMillisecondsSinceEpoch(0);
+    if (start == 0) {
+      _clearSessionFreezeHistory();
+      _disposePipelineSession();
+    }
     try {
       final growing =
           start > 0 ? _allBars.sublist(0, start) : <KlineBar>[];
