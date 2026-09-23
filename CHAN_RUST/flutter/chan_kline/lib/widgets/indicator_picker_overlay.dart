@@ -72,7 +72,15 @@ class _IndicatorPickerOverlayState<T> extends State<IndicatorPickerOverlay<T>> {
   void didUpdateWidget(covariant IndicatorPickerOverlay<T> oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.catalog != widget.catalog) {
-      _seedExpanded();
+      // 取消「勾选指标即缩回父目录」：保留用户已展开的层级/类别，
+      // 仅同步层级集合（丢弃已消失的层级、其类别键一并清理），不强制重置展开态。
+      final newLevels = _levels.toSet();
+      _expandedLevels.removeWhere((l) => !newLevels.contains(l));
+      _expandedCategories.removeWhere((key) {
+        final lv = int.tryParse(key.split('|').first) ?? -1;
+        return !newLevels.contains(lv);
+      });
+      // 新增层级保持折叠（与首次打开一致），不强制展开。
     }
   }
 
@@ -175,7 +183,9 @@ class _IndicatorPickerOverlayState<T> extends State<IndicatorPickerOverlay<T>> {
     return InkWell(
       onTap: () => widget.onToggle(item),
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(28, 10, 14, 10),
+        // 缩进：类别头文字在 48px（22 padding + 22 箭头 + 4 间距），
+        // 指标项再缩进 8px 到 56px，形成 层级→类别→指标 一致的三级树缩进。
+        padding: const EdgeInsets.fromLTRB(56, 10, 14, 10),
         child: Text.rich(
           TextSpan(
             children: [
@@ -335,6 +345,13 @@ class _IndicatorPickerOverlayState<T> extends State<IndicatorPickerOverlay<T>> {
     final size = MediaQuery.sizeOf(context);
     final marginH = math.max(12.0, size.width * 0.04);
     final marginV = math.max(28.0, size.height * 0.05);
+    // 宽度随内容（最长指标名）自适应，不再占满整屏；高度封顶后内部滚动。
+    // 注意：不能用 IntrinsicWidth 包裹含 ListView 的 Column —— ListView 无固有宽度，
+    // Expanded 在固有测量阶段拿到 0 高度，面板会塌陷/不显示（只剩变暗遮罩）。
+    // 故改为显式测量内容宽度并给定确定宽高。
+    final maxAllowed = size.width - marginH * 2;
+    final maxH = size.height - marginV * 2;
+    final contentW = _measureContentWidth().clamp(240.0, maxAllowed);
     return Positioned.fill(
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
@@ -345,13 +362,16 @@ class _IndicatorPickerOverlayState<T> extends State<IndicatorPickerOverlay<T>> {
           padding: EdgeInsets.fromLTRB(marginH, marginV, marginH, marginV),
           child: GestureDetector(
             onTap: () {},
-            child: Material(
-              color: const Color(0xF01A1A1A),
-              borderRadius: BorderRadius.circular(10),
-              child: SizedBox(
-                width: size.width - marginH * 2,
-                height: size.height - marginV * 2,
-                child: Column(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                minWidth: contentW,
+                maxWidth: contentW,
+                maxHeight: maxH,
+              ),
+              child: Material(
+                  color: const Color(0xF01A1A1A),
+                  borderRadius: BorderRadius.circular(10),
+                  child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Padding(
@@ -391,5 +411,47 @@ class _IndicatorPickerOverlayState<T> extends State<IndicatorPickerOverlay<T>> {
         ),
       ),
     );
+  }
+
+  /// 测量面板所需宽度：取标题、各指标项、各分类头的文字宽度的较大者，
+  /// 加上对应左右内边距。用于让面板宽度随最长指标名自适应（而非占满整屏）。
+  double _measureContentWidth() {
+    final tp = TextPainter(textDirection: TextDirection.ltr);
+    double maxW = 0.0;
+    const rowStyle = TextStyle(
+      fontSize: 15,
+      fontWeight: FontWeight.w600,
+      height: 1.35,
+    );
+    const valueStyle = TextStyle(fontSize: 14, fontWeight: FontWeight.w600);
+    const headerStyle = TextStyle(fontSize: 15, fontWeight: FontWeight.w600);
+    // 标题：关闭图标(~48) + 标题文字 + 间距
+    tp.text = TextSpan(
+      text: widget.title,
+      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+    );
+    tp.layout();
+    maxW = 56.0 + tp.width;
+    for (final e in widget.catalog) {
+      double w = 56.0 + 14.0; // 指标项左右 padding
+      tp.text = TextSpan(text: widget.labelOf(e), style: rowStyle);
+      tp.layout();
+      w += tp.width;
+      final v = widget.valueTextOf?.call(e);
+      if (v != null && v.isNotEmpty) {
+        tp.text = TextSpan(text: '  $v', style: valueStyle);
+        tp.layout();
+        w += tp.width;
+      }
+      // 分类/层级头（左 padding 22 + 箭头 22 + 间距 4 + 右 padding 14）也计入
+      final cat = widget.categoryLabelOf(e);
+      tp.text = TextSpan(text: cat, style: headerStyle);
+      tp.layout();
+      final headerW = 22.0 + 4.0 + 14.0 + tp.width;
+      if (headerW > w) w = headerW;
+      if (w > maxW) maxW = w;
+    }
+    tp.dispose();
+    return maxW;
   }
 }

@@ -84,6 +84,8 @@ import 'models/trend_model_config.dart';
 import 'widgets/datetime_picker_dialog.dart';
 import 'widgets/edge_control_panel.dart';
 import 'widgets/kline_chart.dart';
+import 'widgets/crosshair_tooltip_panel.dart';
+import 'widgets/crosshair_tooltip_bridge.dart';
 import 'widgets/yin_yang_mark.dart';
 import 'widgets/yin_yang_native_overlay.dart';
 import 'widgets/test_ohlc_editor_dialog.dart';
@@ -160,9 +162,13 @@ Future<void> main() async {
   MsgHistory.instance.appendKnFxExtendLines();
   // 主图 Kn趋势线（段内支撑/压力）
   MsgHistory.instance.appendKnTrendLine();
+  // 主图 K{n}底极贴合线 / K{n}顶极贴合线
+  MsgHistory.instance.appendKnFxPoleSnug();
   // 主图 Kn均线 / Kn通道 + MACD/BOLL/RSI/KDJ/Demark
   MsgHistory.instance.appendKnTrendModel();
   MsgHistory.instance.appendKnMathClassicIndicators();
+  // 主图 Kn回归通道（滑窗回归；只绘制，暂未接入回测/ML）
+  MsgHistory.instance.appendKnRegressionChannel();
   MsgHistory.instance.appendKnDivergenceIndicators();
   MsgHistory.instance.appendDiverLineSlopeAsciiKey();
   MsgHistory.instance.appendTickK0NativePeriod();
@@ -489,6 +495,14 @@ class _KlineHomePageState extends State<KlineHomePage> {
   static const _minBacktestChartFraction = 0.22;
   static const _maxBacktestChartFraction = 0.85;
   bool _backtestSplitDragging = false;
+
+  /// 十字线 tooltip 桥：KlineChart 向本层广播「是否显示 + 当前行」，停靠为左侧子窗口。
+  final CrosshairTooltipBridge _tooltipBridge = CrosshairTooltipBridge();
+  /// 左侧停靠子窗口宽度（可拖拽调整）
+  double _tooltipPanelWidth = 320.0;
+  static const double _minTooltipPanelWidth = 200.0;
+  static const double _maxTooltipPanelWidth = 600.0;
+  bool _tooltipPanelDragging = false;
   double _backtestSplitDragStartY = 0;
   double _backtestSplitDragStartFraction = 0.58;
 
@@ -821,7 +835,9 @@ class _KlineHomePageState extends State<KlineHomePage> {
     _longOpHint.dispose();
     _stopTaskDemoAutoPlay();
     _disposePipelineSession();
-    unawaited(_runToEndYinYang.hide());
+    // 整个 app 收摊才拆 overlay 窗口（拆窗+注销窗口类+isolate 自行退出）
+    unawaited(_runToEndYinYang.dispose());
+    _tooltipBridge.dispose();
     super.dispose();
   }
 
@@ -2742,7 +2758,9 @@ class _KlineHomePageState extends State<KlineHomePage> {
             '均线 ${_mathIndicatorConfig.meanPeriods.join(',')}；'
             '通道 ${_mathIndicatorConfig.channelPeriods.join(',')}；'
             'MACD ${_mathIndicatorConfig.macdFast}/${_mathIndicatorConfig.macdSlow}/${_mathIndicatorConfig.macdSignal}；'
-            'BOLL ${_mathIndicatorConfig.bollN}；RSI ${_mathIndicatorConfig.rsiPeriod}；'
+            'BOLL ${_mathIndicatorConfig.bollN}；'
+            '回归通道 k=${_mathIndicatorConfig.regressK.toStringAsFixed(2)}；'
+            'RSI ${_mathIndicatorConfig.rsiPeriod}；'
             'KDJ ${_mathIndicatorConfig.kdjPeriod}；Demark ${_mathIndicatorConfig.demarkLen}；'
             '背驰率 ${_mathIndicatorConfig.divergenceRate}；'
             '桶宽 ${_chipConfig.bucketStep.toStringAsFixed(2)}',
@@ -2752,6 +2770,24 @@ class _KlineHomePageState extends State<KlineHomePage> {
             tooltip: '数学指标说明与设置',
             icon: const Icon(Icons.help_outline, size: 18),
             onPressed: _showMathIndicatorHelp,
+          ),
+          onTap: _busy ? null : _editMathIndicatorParams,
+        ),
+        const SizedBox(height: 8),
+        // 回归通道：父层连线最后一段内收盘价最小二乘回归；只做主图绘制，暂未接入回测/ML
+        ListTile(
+          contentPadding: EdgeInsets.zero,
+          dense: true,
+          title: const Text('K{n}回归通道', style: TextStyle(fontSize: 13)),
+          subtitle: Text(
+            'k ${_mathIndicatorConfig.regressK.toStringAsFixed(2)}'
+            '（只绘制，暂未接入回测/ML）',
+            style: const TextStyle(fontSize: 11),
+          ),
+          trailing: IconButton(
+            tooltip: '回归通道说明与设置',
+            icon: const Icon(Icons.help_outline, size: 18),
+            onPressed: _showRegressionChannelHelp,
           ),
           onTap: _busy ? null : _editMathIndicatorParams,
         ),
@@ -3066,7 +3102,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
 
   Widget _buildReplayBody() {
     final chart = _buildKlineChart();
-    if (!_backtestPanelOpen) return chart;
+    if (!_backtestPanelOpen) return _withTooltipDock(chart);
     final maxKn = chartMaxKn(levels: _levels, k0Lines: _k0Lines);
     final workbench = BacktestWorkbench(
       config: _strategyConfig,
@@ -3131,14 +3167,111 @@ class _KlineHomePageState extends State<KlineHomePage> {
         final frac = _backtestChartFraction.clamp(minFrac, maxFrac);
         final chartH = frac * totalH;
         final backtestH = totalH - chartH - splitBarH;
-        return Column(
-          children: [
-            SizedBox(height: chartH, child: chart),
-            _buildBacktestSplitBar(totalH, vertical: true),
-            SizedBox(height: backtestH, child: workbench),
-          ],
+        return _withTooltipDock(
+          Column(
+            children: [
+              SizedBox(height: chartH, child: chart),
+              _buildBacktestSplitBar(totalH, vertical: true),
+              SizedBox(height: backtestH, child: workbench),
+            ],
+          ),
         );
       },
+    );
+  }
+
+  /// 桌面：把十字线 tooltip 停靠为左侧独立子窗口（chart 缩小到剩余宽），原悬浮态关闭。
+  /// 移动端：KlineChart 用内部悬浮面板，这里直接返回 child。
+  ///
+  /// 关键：Row 结构必须**始终存在**（用 Offstage 控制左栏显隐），不能在
+  /// 「直接返回 child」与「Row>Expanded 包裹 child」之间切换 —— 否则 KlineChart
+  /// 在树中的位置/深度变化且无 GlobalKey，Element 连同 State 会被整体重建，
+  /// 十字线坐标、视口缩放等内部状态全部丢失（表现为 tooltip 一出现十字线就消失）。
+  Widget _withTooltipDock(Widget child) {
+    if (_useAndroidInteraction) return child;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final h = constraints.maxHeight;
+        return ValueListenableBuilder<bool>(
+          valueListenable: _tooltipBridge.shown,
+          builder: (context, shown, _) {
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Offstage(
+                  offstage: !shown,
+                  child: SizedBox(
+                    width: _tooltipPanelWidth,
+                    child: _buildDockedTooltipPanel(h),
+                  ),
+                ),
+                Offstage(offstage: !shown, child: _buildTooltipDragHandle()),
+                Expanded(child: child),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  /// 左侧停靠的 tooltip 子窗口内容（随十字线移动刷新行）
+  Widget _buildDockedTooltipPanel(double h) {
+    return ValueListenableBuilder<List<CrosshairTooltipRow>>(
+      valueListenable: _tooltipBridge.rows,
+      builder: (context, rows, _) {
+        return Container(
+          decoration: BoxDecoration(
+            border: Border(
+              right: BorderSide(
+                color: const Color(0x33556677),
+                width: 1,
+              ),
+            ),
+          ),
+          child: CrosshairTooltipPanel(
+            rows: rows,
+            scrollController: _tooltipBridge.scrollController!,
+            maxWidth: _tooltipPanelWidth,
+            maxHeight: h,
+            onClose: () => _tooltipBridge.onRequestClose?.call(),
+          ),
+        );
+      },
+    );
+  }
+
+  /// 左侧子窗口与 K 线之间的可拖拽分隔条（调整面板宽度）
+  Widget _buildTooltipDragHandle() {
+    return MouseRegion(
+      cursor: SystemMouseCursors.resizeLeftRight,
+      child: Listener(
+        behavior: HitTestBehavior.opaque,
+        onPointerDown: (e) => setState(() => _tooltipPanelDragging = true),
+        onPointerMove: (e) {
+          if (e.buttons == 0) return;
+          setState(() {
+            _tooltipPanelWidth = (_tooltipPanelWidth + e.delta.dx)
+                .clamp(_minTooltipPanelWidth, _maxTooltipPanelWidth);
+          });
+        },
+        onPointerUp: (e) => setState(() => _tooltipPanelDragging = false),
+        child: SizedBox(
+          width: 8,
+          child: Center(
+            child: Container(
+              width: _tooltipPanelDragging ? 3 : 2,
+              margin: const EdgeInsets.symmetric(vertical: 8),
+              decoration: BoxDecoration(
+                color: _tooltipPanelDragging
+                    ? const Color(0xAA42A5F5)
+                    : const Color(0x55FFFFFF),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 
@@ -3382,6 +3515,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
       focusBarEpoch: _btFocusEpoch,
       onStrategySignalTap: _onChartStrategySignalTap,
       mobileLayout: _useAndroidInteraction,
+      tooltipBridge: _tooltipBridge,
+      dockTooltipPanel: !_useAndroidInteraction,
     );
   }
 
@@ -4230,18 +4365,71 @@ class _KlineHomePageState extends State<KlineHomePage> {
         title: const Text('数学指标参数'),
         content: const SingleChildScrollView(
           child: Text(
-            '作用：移植旧工程 Math——均线/通道/MACD/BOLL/RSI/KDJ/Demark/背驰；\n'
+            '作用：移植旧工程 Math——均线/通道/BOLL/回归通道/MACD/RSI/KDJ/Demark/背驰；\n'
             '另含筹码/笔数分布共用桶宽。\n'
             '口径（全层同构）\n'
             '· K0：原生 K 线 OHLC；Kn≥1：unitBars+active；\n'
+            '· 回归通道：父层 K{n+1}连线最后一段绑定——段内最小二乘回归=中轨，上下轨=中轨±k×残差标准差，'
+            '外推到 asOf（与布林不同源；不进冻结仓）；\n'
             '· Demark：主图标注；Countdown 宽松/严、完美9、反向打断可配；\n'
             '· 背驰：进出段力度比 + diver∈{1,-1,0}；无 turnrate（离线无换手）；\n'
             '· 桶宽：最小 0.01 元，筹码与笔数分布共用；\n'
             '· K0 颗粒度展开；无未来函数；十字 asOf 截断。\n\n'
             '操作步骤\n'
-            '1. 主图勾选布林/Demark；副图勾选 MACD/RSI/KDJ/背驰_*；\n'
-            '2. 点本项或「?」编辑参数（Demark/背驰率/桶宽）；\n'
+            '1. 主图勾选布林/回归通道/Demark；副图勾选 MACD/RSI/KDJ/背驰_*；\n'
+            '2. 点本项或「?」编辑参数（回归通道 k、Demark/背驰率/桶宽）；\n'
             '3. Math 写入 .chan_trend_model_config.json；桶宽写入筹码配置。',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              _editMathIndicatorParams();
+            },
+            child: const Text('编辑参数'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('知道了'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 回归通道说明弹窗（操作逻辑 + 参数含义 + 操作步骤）。
+  void _showRegressionChannelHelp() {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('K{n}回归通道说明'),
+        content: const SingleChildScrollView(
+          child: Text(
+            '作用：在主图上画一条「回归通道」——通道画在哪段价格区间，'
+            '由**父层 K{n+1}连线的最后一段**决定，不再是固定 N 根滑窗。\n\n'
+            '口径（全层同构·父层连线绑定）\n'
+            '· 基准区间：父层 K{n+1}连线（K0回归通道看 K1连线、K1看 K2…）在 asOf 视图下的最后一段，'
+            '即「倒数第二个极点 → 最后一个极点」；端点含分型判断与构建中开口尾端；\n'
+            '· 父层一出现新的一段，整条通道就换到新基准（旧的整条不留，不拼阶梯）；\n'
+            '· 样本钟：K0 取区间内每根 K0 的收盘价；K{n}≥1 取右端 x 落在区间内的本层虚拟K收盘（与布林同一套钟）；\n'
+            '· 回归：以 K0 格点 x 为自变量做最小二乘 → 中轨（带斜率）；\n'
+            '· 上下轨：中轨 ± k×残差总体标准差（除 m，与本项目布林同口径，修正了旧版用收盘价 std）；\n'
+            '· 从基准起点一路**平行外推到 asOf 截断**（宽度恒定，不是喇叭口），asOf 右侧不画；\n'
+            '· 回看：十字 asOf 回退时基准取当时可见的那条父层连线，不泄漏未来；\n'
+            '· 不回写：不进冻结仓，父层端点一动整条通道跟着动；不参与任何信号计算，无未来函数。\n\n'
+            '绘制样式\n'
+            '· 中轨实线；上下轨虚线，与中轨同色降透明度；不填充，不遮挡 K 线与中枢；整图只有一组通道。\n\n'
+            '与 Kn布林的区别\n'
+            '· 布林=滑窗均值（水平线）且全图连续；回归通道=父层连线段内回归线（带斜率）且只画最新一段。\n\n'
+            '不可用\n'
+            '· 父层还没形成连线、或区间内样本不足 2 根 → 该层整条不出线。\n\n'
+            '范围与技术债\n'
+            '· 本次只做主图绘制 + 十字读数；**暂未接入策略回测与机器学习**。\n\n'
+            '操作步骤\n'
+            '1. 主图指标面板 → 延伸类 → 勾选「K0回归通道」（各 Kn 层各一套，父层粒度不同）；\n'
+            '2. 点本项或「?」旁的「数学指标参数」改 k（通道带宽，默认 2.00；区间由父层连线决定，无 N 参数）；\n'
+            '3. 连续单步验收：通道应从父层连线最后一段的起点一路画到当前 K；父层一出新段整条换新基准。',
           ),
         ),
         actions: [
@@ -4274,6 +4462,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
     final macdSigCtl =
         TextEditingController(text: '${_mathIndicatorConfig.macdSignal}');
     final bollCtl = TextEditingController(text: '${_mathIndicatorConfig.bollN}');
+    final regressKCtl = TextEditingController(
+        text: _mathIndicatorConfig.regressK.toStringAsFixed(2));
     final rsiCtl =
         TextEditingController(text: '${_mathIndicatorConfig.rsiPeriod}');
     final kdjCtl =
@@ -4346,6 +4536,15 @@ class _KlineHomePageState extends State<KlineHomePage> {
                   controller: bollCtl,
                   decoration: const InputDecoration(labelText: 'BOLL N'),
                   keyboardType: TextInputType.number,
+                ),
+                TextField(
+                  controller: regressKCtl,
+                  decoration: const InputDecoration(
+                    labelText: '回归通道 k',
+                    hintText: '上下轨倍数，默认 2.00',
+                  ),
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
                 ),
                 TextField(
                   controller: rsiCtl,
@@ -4489,6 +4688,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         macdSlowCtl,
         macdSigCtl,
         bollCtl,
+        regressKCtl,
         rsiCtl,
         kdjCtl,
         demarkLenCtl,
@@ -4516,6 +4716,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       macdSlow: parseInt(macdSlowCtl.text, 26),
       macdSignal: parseInt(macdSigCtl.text, 9),
       bollN: parseInt(bollCtl.text, 20),
+      regressK: parseDouble(regressKCtl.text, 2.0),
       rsiPeriod: parseInt(rsiCtl.text, 14),
       kdjPeriod: parseInt(kdjCtl.text, 9),
       demarkLen: parseInt(demarkLenCtl.text, 9),

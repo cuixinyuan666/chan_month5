@@ -22,6 +22,7 @@ import '../compute/kn_volume_series_compute.dart';
 import '../compute/adjacent_ratio_compute.dart';
 import '../compute/line_slope_compute.dart';
 import '../compute/fx_extend_line_compute.dart';
+import '../compute/fx_pole_snug_compute.dart';
 import '../compute/trend_line_compute.dart';
 import '../compute/trend_model_compute.dart';
 import '../compute/math_classic_compute.dart';
@@ -64,6 +65,7 @@ import '../models/level_models.dart';
 import '../models/k1_analysis.dart';
 import 'chart_level_line_style.dart';
 import 'crosshair_tooltip_panel.dart';
+import 'crosshair_tooltip_bridge.dart';
 import 'fractal_confirm_paint.dart';
 import 'indicator_picker_chip.dart';
 import 'indicator_picker_overlay.dart';
@@ -162,6 +164,8 @@ class KlineChart extends StatefulWidget {
     this.focusBarEpoch = 0,
     this.onStrategySignalTap,
     this.mobileLayout = false,
+    this.tooltipBridge,
+    this.dockTooltipPanel = false,
   });
 
   final List<KlineBar> bars;
@@ -261,6 +265,14 @@ class KlineChart extends StatefulWidget {
   final ValueChanged<SignalEvent>? onStrategySignalTap;
   /// 手机布局：指标 chip 全宽、不预留桌面窗控区
   final bool mobileLayout;
+
+  /// 十字线 tooltip 桥：向父布局广播「是否显示 + 当前行」，供停靠为左侧子窗口。
+  /// 为 null 时 tooltip 仍按原悬浮态绘制（移动端/未停靠）。
+  final CrosshairTooltipBridge? tooltipBridge;
+
+  /// 是否将 tooltip 停靠为左侧独立子窗口（由父布局渲染），而非 chart 内部悬浮。
+  /// 移动端传 false，保持原悬浮态。
+  final bool dockTooltipPanel;
 
   /// 点击左/中/右：后退 / 播放暂停 / 前进
   final VoidCallback? onTapStepBack;
@@ -573,6 +585,18 @@ class _KlineChartState extends State<KlineChart> {
   void _closeTooltipKeepCrosshair() {
     if (!_crosshairShowTooltip) return;
     setState(() => _crosshairMode = CrosshairMode.linesOnly);
+    _publishTooltipToBridge();
+  }
+
+  /// 向父层桥广播 tooltip 状态（停靠子窗口用）：显示态 + 当前聚焦 K 的行。
+  /// 无桥或内部悬浮态(dockTooltipPanel=false)时为空操作。
+  void _publishTooltipToBridge() {
+    final b = widget.tooltipBridge;
+    if (b == null || !widget.dockTooltipPanel) return;
+    b.shown.value = _crosshairShowTooltip;
+    if (_crosshairShowTooltip && _crosshairBarIdx != null) {
+      b.rows.value = _tooltipRowsForBar(_crosshairBarIdx!);
+    }
   }
 
   @override
@@ -587,6 +611,11 @@ class _KlineChartState extends State<KlineChart> {
     });
     // 全局键盘监听：方向键←/→（十字线态=十字线左右移；非十字线态=步退/步进）
     HardwareKeyboard.instance.addHandler(_handleHardwareKey);
+    // tooltip 桥：注入 scroll 控制器与关闭回调，供父层停靠子窗口复用
+    if (widget.tooltipBridge != null) {
+      widget.tooltipBridge!.scrollController = _tooltipScroll;
+      widget.tooltipBridge!.onRequestClose = _closeTooltipKeepCrosshair;
+    }
   }
 
   @override
@@ -690,6 +719,8 @@ class _KlineChartState extends State<KlineChart> {
 
   /// 十字线跟随鼠标：竖线吸附 K 线中心，横线跟价格。鼠标移线解除贴右步进标记。
   void _updateCrosshairAt(Offset pos, double plotTop, double contentBottom) {
+    // 指标选择面板打开时，十字线不响应：避免桌面 onHover 持续重绘（重建风暴）打断面板内点击
+    if (_pickerPane != _IndicatorPickerPane.none) return;
     _crosshairPinRightmost = false;
     if (!_crosshairEnabled || widget.bars.isEmpty || _chartSize.width <= 0) return;
     final barIdx = _viewport.barIndexAtCanvasX(
@@ -711,6 +742,7 @@ class _KlineChartState extends State<KlineChart> {
       _resetTooltipScrollIfNeeded(barIdx);
     }
     _scheduleRedraw();
+    _publishTooltipToBridge();
   }
 
   /// 键盘方向键“按住连发加速”：单次 keydown 触发一次，按住超过阈值后按加速节奏连发；
@@ -838,6 +870,7 @@ class _KlineChartState extends State<KlineChart> {
       _resetTooltipScrollIfNeeded(barIdx);
     }
     _scheduleRedraw();
+    _publishTooltipToBridge();
   }
 
   /// 十字线开启时按当步 K 重建K1 bar view，与 bar_features 逐步冻结口径对齐。
@@ -1072,8 +1105,8 @@ class _KlineChartState extends State<KlineChart> {
   }
 
   void _onPointerDown(PointerDownEvent e) {
-    // 信息框整体不接鼠标；关闭钮按位置判定
-    if (_crosshairShowTooltip) {
+    // 信息框整体不接鼠标；关闭钮按位置判定（仅内部悬浮态；停靠子窗口由面板自身关闭钮处理）
+    if (_crosshairShowTooltip && !widget.dockTooltipPanel) {
       final box = _tooltipKey.currentContext?.findRenderObject() as RenderBox?;
       if (box != null && box.hasSize) {
         final local = box.globalToLocal(e.position);
@@ -1087,7 +1120,7 @@ class _KlineChartState extends State<KlineChart> {
         }
       }
     }
-    // 鼠标中键：快速显示(含十字)/隐藏 tooltip（不关十字线）
+    // 鼠标中键：关闭 → 仅十字线 → 十字线+tooltip → 全关（三态循环）
     if (e.buttons & kMiddleMouseButton != 0) {
       _toggleTooltipKeepCrosshair(e.localPosition);
       _zonePointerDown = null;
@@ -1172,15 +1205,17 @@ class _KlineChartState extends State<KlineChart> {
   void _cycleCrosshair(Offset pos, double plotTop, double contentBottom) {
     _clearTickIdleYinYang(rebuild: false);
     setState(() {
-      // 第一次开十字线+tooltip；第二次只关 tooltip；第三次全关恢复鼠标
+      // 三态循环：关 → 仅十字线（滚轮可缩放）→ 十字线+tooltip → 全关。
+      // 与鼠标中键保持同一顺序；回到「全关」后下一次必定从「仅十字线」重新开始。
       switch (_crosshairMode) {
         case CrosshairMode.off:
-          _crosshairMode = CrosshairMode.withTooltip;
+          _crosshairMode = CrosshairMode.linesOnly;
           _tooltipScrollBarIdx = null;
           _updateCrosshairAt(pos, plotTop, contentBottom);
-        case CrosshairMode.withTooltip:
-          _crosshairMode = CrosshairMode.linesOnly;
         case CrosshairMode.linesOnly:
+          _crosshairMode = CrosshairMode.withTooltip;
+          _resetTooltipScrollIfNeeded(_crosshairBarIdx);
+        case CrosshairMode.withTooltip:
           _crosshairMode = CrosshairMode.off;
           _crosshairX = null;
           _crosshairY = null;
@@ -1189,9 +1224,12 @@ class _KlineChartState extends State<KlineChart> {
           _tooltipScrollBarIdx = null;
       }
     });
+    // 停靠态(dockTooltipPanel)由父层渲染左侧子窗口，模式变化后必须同步桥接
+    _publishTooltipToBridge();
   }
 
-  /// 中键：无十字→开十字+tooltip；有 tooltip→只藏 tooltip；仅线→再显 tooltip。
+  /// 鼠标中键：关闭 → 仅十字线（滚轮可缩放）→ 十字线+tooltip → 全关，三态循环。
+  /// 回到「全关」后下一次点击必定从「仅十字线」重新开始（纯状态机，无需额外步数计数）。
   void _toggleTooltipKeepCrosshair(Offset pos) {
     _clearTickIdleYinYang(rebuild: false);
     final plotTop = _zonePlotTop;
@@ -1201,16 +1239,25 @@ class _KlineChartState extends State<KlineChart> {
     setState(() {
       switch (_crosshairMode) {
         case CrosshairMode.off:
-          _crosshairMode = CrosshairMode.withTooltip;
+          // 第一次：只开十字线，不显示 tooltip（滚轮仍可缩放）
+          _crosshairMode = CrosshairMode.linesOnly;
           _tooltipScrollBarIdx = null;
           _updateCrosshairAt(pos, plotTop, contentBottom);
-        case CrosshairMode.withTooltip:
-          _crosshairMode = CrosshairMode.linesOnly;
         case CrosshairMode.linesOnly:
+          // 第二次：十字线 + tooltip
           _crosshairMode = CrosshairMode.withTooltip;
           _resetTooltipScrollIfNeeded(_crosshairBarIdx);
+        case CrosshairMode.withTooltip:
+          // 第三次：全关（十字线+tooltip 一起关），释放鼠标与滚轮
+          _crosshairMode = CrosshairMode.off;
+          _crosshairX = null;
+          _crosshairY = null;
+          _crosshairBarIdx = null;
+          _crosshairPinRightmost = false;
+          _tooltipScrollBarIdx = null;
       }
     });
+    _publishTooltipToBridge();
   }
 
   /// 左/中/右三等分热区
@@ -1849,7 +1896,16 @@ class _KlineChartState extends State<KlineChart> {
         }
         final xAxisTop = mainH + volH - KlineViewport.xAxisH;
         final contentBottom = xAxisTop;
+        final prevChartW = _chartSize.width;
         _chartSize = Size(w, mainH + volH);
+        // 宽度变化（如 tooltip 停靠面板出现/拖宽、窗口缩放）时，十字线竖线
+        // 重新吸附同一根 K：旧 X 是按旧宽算的，不重算会脱离所指 K 线。
+        if (_crosshairEnabled &&
+            _crosshairBarIdx != null &&
+            prevChartW > 0 &&
+            (prevChartW - w).abs() > 0.5) {
+          _crosshairX = _viewport.barCenterX(_crosshairBarIdx!, w);
+        }
 
         final visible = _viewport.visibleBars(widget.bars);
         final priceRange = _viewport.priceRangeFor(visible);
@@ -2047,8 +2103,10 @@ class _KlineChartState extends State<KlineChart> {
                       ),
                     ),
             ),
-            // 十字线 tooltip：可滚动 + 右上角关闭（保留十字线）
+            // 十字线 tooltip：可滚动 + 右上角关闭（保留十字线）。
+            // 停靠态(dockTooltipPanel)由父层渲染左侧子窗口，这里不再画内部悬浮面板。
             if (_crosshairShowTooltip &&
+                !widget.dockTooltipPanel &&
                 _crosshairX != null &&
                 _crosshairY != null &&
                 _crosshairBarIdx != null)
@@ -2589,6 +2647,24 @@ class _KlineCompositePainter extends CustomPainter {
             slotW,
             ind.kn,
           );
+        } else if (ind.kind == MainIndicatorKind.fxBottomSnug) {
+          _drawFxBottomSnug(
+            canvas,
+            size.width,
+            plotTop,
+            plotH,
+            slotW,
+            ind.kn,
+          );
+        } else if (ind.kind == MainIndicatorKind.fxTopSnug) {
+          _drawFxTopSnug(
+            canvas,
+            size.width,
+            plotTop,
+            plotH,
+            slotW,
+            ind.kn,
+          );
         } else if (ind.kind == MainIndicatorKind.meanLine) {
           _drawMeanLine(
             canvas,
@@ -2609,6 +2685,15 @@ class _KlineCompositePainter extends CustomPainter {
           );
         } else if (ind.kind == MainIndicatorKind.boll) {
           _drawBoll(
+            canvas,
+            size.width,
+            plotTop,
+            plotH,
+            slotW,
+            ind.kn,
+          );
+        } else if (ind.kind == MainIndicatorKind.regressionChannel) {
+          _drawRegressionChannel(
             canvas,
             size.width,
             plotTop,
@@ -3802,6 +3887,8 @@ class _KlineCompositePainter extends CustomPainter {
     required List<double?> series,
     required Color color,
     double strokeWidth = 1.2,
+    /// 非空则按该 pattern 画虚线（如 [4,3]）；空/null 为实线。
+    List<double>? dashPattern,
   }) {
     final paint = Paint()
       ..color = color
@@ -3832,7 +3919,11 @@ class _KlineCompositePainter extends CustomPainter {
         priceRange.yOf(v, plotTop, plotH),
       );
       if (prev != null) {
-        canvas.drawLine(prev, pt, paint);
+        if (dashPattern == null || dashPattern.isEmpty) {
+          canvas.drawLine(prev, pt, paint);
+        } else {
+          _drawPatternLine(canvas, prev, pt, paint, dashPattern);
+        }
       }
       prev = pt;
     }
@@ -3889,6 +3980,82 @@ class _KlineCompositePainter extends CustomPainter {
       series: boll.down,
       color: midColor.withValues(alpha: 0.55),
       strokeWidth: 1.0,
+    );
+  }
+
+  /// 主图 Kn回归通道（父层连线绑定）：基准 = 父层 K{n+1}连线最后一段，
+  /// 中轨=该区间内样本收盘价最小二乘回归线（实线），上下轨 = 中轨 ± k×残差总体标准差（虚线）；
+  /// 从基准起点一路平行外推到 asOf 截断；不回写冻结仓、不填充。
+  void _drawRegressionChannel(
+    Canvas canvas,
+    double w,
+    double plotTop,
+    double plotH,
+    double slotW,
+    int kn,
+  ) {
+    if (bars.isEmpty) return;
+    final asOf = segAsOf;
+    final rcLevels = asOf != null
+        ? (zsAsOfBundle?.levels ?? const <LevelBundle>[])
+        : levels;
+    final rcAsOfEff = asOf ?? bars.last.idx;
+    // 回归通道不进冻结仓：父层端点一动整条通道跟着动（纯绘制）
+    final RegressionChannelK0Series rc = computeRegressionChannelForLevel(
+      displayKn: kn,
+      bars: bars,
+      levels: rcLevels,
+      barFeatures: barFeatures,
+      liveJudgments: rcAsOfEff < 0
+          ? const <FractalJudgmentEvent>[]
+          : collectFractalJudgmentEvents(
+              kn: kn + 1,
+              bars: bars,
+              levels: rcLevels,
+              barFeatures: barFeatures,
+              asOf: rcAsOfEff,
+              truncationCheck: truncationCheck,
+            ),
+      k: mathIndicatorConfig.regressK,
+      asOf: asOf,
+    );
+    // 延伸组统一点线（与 Kn趋势线 / fx 家族一致）：layer 色 + 构建段透明度 + round 端
+    final style = ChartLevelLineStyle.forDisplayKn(kn);
+    const dotDash = <double>[1, 3];
+    // 中轨：回归线本体（点线，与趋势线同型）
+    _paintPriceSeries(
+      canvas,
+      w,
+      plotTop,
+      plotH,
+      slotW,
+      series: rc.mid,
+      color: style.color.withValues(alpha: style.buildingAlpha),
+      strokeWidth: style.buildingStrokeWidth,
+      dashPattern: dotDash,
+    );
+    // 上下轨：同点线、同宽，降透明度作通道带（次级）
+    _paintPriceSeries(
+      canvas,
+      w,
+      plotTop,
+      plotH,
+      slotW,
+      series: rc.up,
+      color: style.color.withValues(alpha: style.buildingAlpha * 0.6),
+      strokeWidth: style.buildingStrokeWidth,
+      dashPattern: dotDash,
+    );
+    _paintPriceSeries(
+      canvas,
+      w,
+      plotTop,
+      plotH,
+      slotW,
+      series: rc.down,
+      color: style.color.withValues(alpha: style.buildingAlpha * 0.6),
+      strokeWidth: style.buildingStrokeWidth,
+      dashPattern: dotDash,
     );
   }
 
@@ -3998,6 +4165,125 @@ class _KlineCompositePainter extends CustomPainter {
         displayKn: displayKn,
       );
     }
+  }
+
+  /// 主图 K{n}底极贴合线（父段内底极点拟合；子线层同号）。方案B：kn==displayKn。
+  void _drawFxBottomSnug(
+    Canvas canvas,
+    double w,
+    double plotTop,
+    double plotH,
+    double slotW,
+    int kn,
+  ) {
+    if (kn < 0 || bars.isEmpty) return;
+    final displayKn = kn;
+    final asOf = segAsOf;
+    final lv = asOf != null
+        ? (zsAsOfBundle?.levels ?? const <LevelBundle>[])
+        : levels;
+    final k0 = asOf != null
+        ? (zsAsOfBundle?.k0Confirms ?? const <K0ConfirmSignal>[])
+        : k0ConfirmSignals;
+    final rays = selectFxExtendRays(
+      calcBottomSnugGroupsForLevel(
+        displayKn: displayKn,
+        bars: bars,
+        k0Confirms: k0,
+        levels: lv,
+        asOf: asOf,
+      ),
+      focusX: asOf,
+    );
+    for (final ray in rays) {
+      _paintFxSnugRay(
+        canvas,
+        w,
+        plotTop,
+        plotH,
+        slotW,
+        ray: ray,
+        displayKn: displayKn,
+      );
+    }
+  }
+
+  /// 主图 K{n}顶极贴合线（父段内顶极点拟合；子线层同号）。方案B：kn==displayKn。
+  void _drawFxTopSnug(
+    Canvas canvas,
+    double w,
+    double plotTop,
+    double plotH,
+    double slotW,
+    int kn,
+  ) {
+    if (kn < 0 || bars.isEmpty) return;
+    final displayKn = kn;
+    final asOf = segAsOf;
+    final lv = asOf != null
+        ? (zsAsOfBundle?.levels ?? const <LevelBundle>[])
+        : levels;
+    final k0 = asOf != null
+        ? (zsAsOfBundle?.k0Confirms ?? const <K0ConfirmSignal>[])
+        : k0ConfirmSignals;
+    final rays = selectFxExtendRays(
+      calcTopSnugGroupsForLevel(
+        displayKn: displayKn,
+        bars: bars,
+        k0Confirms: k0,
+        levels: lv,
+        asOf: asOf,
+      ),
+      focusX: asOf,
+    );
+    for (final ray in rays) {
+      _paintFxSnugRay(
+        canvas,
+        w,
+        plotTop,
+        plotH,
+        slotW,
+        ray: ray,
+        displayKn: displayKn,
+      );
+    }
+  }
+
+  /// 极贴合线：自首个同型极点沿拟合斜率画到 asOf（步进末根或十字）；不向视口右缘外推。
+  void _paintFxSnugRay(
+    Canvas canvas,
+    double w,
+    double plotTop,
+    double plotH,
+    double slotW, {
+    required FxExtendRay ray,
+    required int displayKn,
+  }) {
+    if (bars.isEmpty) return;
+    final effectiveAsOf = segAsOf ?? bars.last.idx;
+    if (effectiveAsOf < ray.x0.round()) return;
+
+    final style = ChartLevelLineStyle.forDisplayKn(displayKn);
+    final paint = Paint()
+      ..color = style.color.withValues(alpha: style.buildingAlpha)
+      ..strokeWidth = style.buildingStrokeWidth
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+
+    const dotDash = <double>[1, 3];
+    final endX = effectiveAsOf.toDouble();
+    final endY = ray.y0 + ray.slope * (endX - ray.x0);
+    final sx = _barCenterX(ray.x0.round(), w, slotW);
+    final sy = priceRange.yOf(ray.y0, plotTop, plotH);
+    final ex = _barCenterX(endX.round(), w, slotW);
+    final ey = priceRange.yOf(endY, plotTop, plotH);
+    _drawPatternLine(
+      canvas,
+      Offset(sx, sy),
+      Offset(ex, ey),
+      paint,
+      dotDash,
+    );
   }
 
   /// 画延伸射线：可选弦 (x1,y1)→(x0,y0)，再自 (x0,y0) 外推。
