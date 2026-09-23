@@ -2848,3 +2848,359 @@ Rust `buy2.rs`（新）→ pipeline/combine → Flutter 会话双键冻结（`cl
 - **演示**：002003 先一次性走完 → 长按回首 K → 再一次性走完，进程应保持；打开指标面板时 K0/K1 层默认收拢，点 K0 可看到延伸/KnN类BS 已展开。
 
 ---
+
+### 2026-09-21 · Composer · 主图 · K{n}底极贴合线 / K{n}顶极贴合线
+
+- **执行者**：Composer
+- **任务类型**：主图延伸指标（纯 Flutter 几何，不改 Rust）
+- **操作**：
+  1. 新增「延伸」类主图指标 **K{n}底极贴合线**、**K{n}顶极贴合线**；按父层段（K{n+1}）切分，段内同型分型极点 ≥2 时做距离和最小拟合射线。
+  2. 上升父段只画底极贴合（支撑），下降父段只画顶极贴合（压力）；呈现对齐趋势线/三极平行（点虚线、首极→末极弦、向右外推、十字 asOf 截断、近邻窗选组）。
+  3. 抽出 `parent_span_collect.dart` 供趋势线与贴合线共用父段收集；同步 catalog / tooltip / 回测变量 / ML 信号 / msg_history。
+- **结果**：K1 底极贴合在 K2 上升父段内，第 2 个 K1 底分型确认后应出现贴合线（自**首个**底极点沿拟合斜率画到当前步/asOf，非延伸到视口右缘）；换 K2 父段后换线；十字回看历史步时线右端截到 asOf。
+- **演示**：冷启动勾选 **K1底极贴合线** → 002003 连续单步 → 某 K2 上升段内第 2 个 K1 底分型确认后，主图出现从首个底极点到当前 K 的点虚线；开十字回到更早 K，线只画到十字 asOf；对称验收 **K1顶极贴合线** 于下降 K2 父段。
+- **测试**：`flutter test test/fx_pole_snug_compute_test.dart` 全通过（18 项含趋势线回归）。
+
+---
+
+### 2026-09-21 · Composer · 修正 · 底/顶极贴合线绘制语义
+
+- **执行者**：Composer
+- **任务类型**：主图延伸指标修正（纯 Flutter）
+- **操作**：底/顶极贴合线由「首极→末极弦 + 向右外推视口」改为「段内首个同型极点 → 当前 asOf（步进末根或十字）」单段拟合线；斜率仍由段内 ≥2 同型极点距离和最小拟合。
+- **结果**：连续单步时，线随当前 K 伸长但不过视口右缘；十字回看时线止于十字 asOf。
+- **演示**：K1底极贴合线单步到第 2 个底分型后，线应从第一个底极点画到当前 K，而非只连到最后一个底再向右射出去。
+
+---
+### 2026-09-21 · WorkBuddy · 文档 · Obsidian 项目文件夹 chan-month5 建立与自动同步规则
+
+- **执行者**：WorkBuddy
+- **任务类型**：文档 / 流程（不涉及缠论内核与绘制逻辑）
+- **操作**：
+  1. Vault 顶层新建 `chan-month5/`：把 `task-log.md` 的 **251 条 / 38 天**按日切分为 38 篇日期笔记（原文保真、带 frontmatter 与相邻日导航），另建 `MOC.md`（时间线索引 + 主题导航 + 来源说明 + 历史缺口）与 3 份指针索引（`index-memory` / `index-plans` / `index-demos`）。
+  2. `AGENTS.md`「完成后」追加 **Obsidian 同步 4 步**（当日笔记追加或新建、相邻日互链、更新 MOC 时间线行、更新 index-*），并声明 `task-log.md` 为唯一源、Obsidian 为副本、**禁止手改副本**（修订须先回写源）。
+  3. 项目 `.workbuddy/memory/MEMORY.md` 同步写入同一套约定。
+- **结果**：共 42 个 md 落地，条目守恒 251 条，逐字比对 38 篇全部一致；原有 5 篇笔记与 `01-projects/chan-regression-channel.md` 未动（按你的选择留原地，仅在 MOC 放链接）。
+- **演示**：Obsidian 打开 `chan-month5/MOC.md` → 点 2026-08-15 应看到当天 29 条原文（最忙日）；笔记底栏可回上一日与总览，顺着时间线前后翻。
+- **测试**：临时校验脚本（文件数 / 条目守恒 / 逐字保真 / 纯 LF / 链接可达）全通过，跑完即删，工程保持干净。
+
+---
+
+### 2026-09-22 · WorkBuddy · 主图指标 · 新增 K{n}回归通道（滑窗回归，只绘制）
+
+- **执行者**：WorkBuddy
+- **任务类型**：主图指标（纯 Flutter 数学指标，不改 Rust 内核）
+- **操作**：
+  1. 新增主图「均线」类指标 **K{n}回归通道**（0..maxKn 每层一套，命名 K0/K1…回归通道，层内序排在布林之后）：取滑窗 N 根收盘价做最小二乘回归得**中轨**（回归线在窗口末根的拟合值），上下轨 = 中轨 ± k×总体标准差（除 N，与 Kn布林同口径离散度）。
+  2. 默认 N=20、k=2；设置面板「数学指标参数」新增「回归通道 N」「回归通道 k」两项，并把口径与操作步骤写进该项弹窗说明；参数随 Math 落盘 `.chan_trend_model_config.json`。
+  3. 绘制：中轨实线、上下轨虚线，不填充；十字 asOf 右侧不画（与蜡烛/布林同构）。读数走会话冻结仓，tooltip 给出中轨/上轨/下轨三个槽位。
+  4. 改法用**滑窗**而非增长窗：每根 K 的通道只由它前面 N 根决定，新 K 只追加新点、历史点不被改写；不向右延伸，无未来函数。
+- **结果**：冷启动勾选 K1回归通道 → 连续单步，第 1 根 K 就出通道（热身不空白）；每多走一根只**追加**一个新通道点，已画出的历史通道**不跳变、不重绘**。同层 K1布林 与 K1回归通道 的离散度口径一致，中轨一条是水平均线、一条带斜率，走势近似但不重合。
+- **演示**：冷启动 → 主图指标 → 均线 → 勾 **K1回归通道**（顺手勾 K1布林 对照）→ 002003 连续单步：走到第 1 根 K 即出现三条线；继续单步，右侧只长新点、左侧旧线纹丝不动；开十字回看更早的 K，右侧（>asOf）不画线。
+- **测试**：`flutter test test/math_classic_compute_test.dart` 新增 6 项（中轨=回归末值、上下轨对称、k 越大越宽、**新增K不改写历史点**、窗口不足也出数、目录/命名/层内序/默认不绘制）全通过；`flutter analyze lib test` 无新增 error/warning。全局 `flutter test` 353 通过 / 10 跳过 / 3 失败，3 项失败（mini_loop BOLL CROSS、signal_data_catalog 布林冻结仓、widget_test 挂载冒烟）已用 stash 基线复现确认属**既有失败**，与本改动无关。
+- **同步检查清单（AGENTS.md）**：本次**未动**策略回测 `signal_data_catalog` 与机器学习 `ml_*` 四处——已在 `msg_history.dart` 口径说明中明确标注「暂未接入回测/ML」作为技术债，避免以后误以为已同步。
+
+---
+
+### 2026-09-22 01:05 · WorkBuddy · 修复 · 一次性走完的太极窗口：Win32 回调失效导致进程退出
+
+- **执行者**：WorkBuddy
+- **任务类型**：Bug修复（Windows 桌面端 overlay 窗口生命周期；未动缠论内核 / 步进 / 冻结）
+- **白话根因**：一次性走完时那个会转的太极，是「另一个 isolate 起的独立 Win32 分层窗口」。它的窗口过程是用 Dart 的 FFI 回调注册的，**isolate 一结束，这个回调指针就被 VM 删掉**；可 RegisterClass 注册的窗口类要活到进程结束，它记的 WndProc 还指向**上一轮那个已经死掉的 isolate**。旧代码每轮 show/hide 都 spawn/kill isolate，还在 ack 没回来时就 beforeNextEvent 强杀，于是留下「窗口还在、回调已废」的孤儿。第二次「一次性走完」再 CreateWindowEx 建窗时，Win32 在**建窗过程中**就回调那个失效指针，Dart VM 报 `Callback invoked after it has been deleted` 直接把整个进程带走（堆栈正好落在 `startWindow → CreateWindowEx`）。
+- **操作**：
+  1. overlay isolate 改为**常驻**：全局只 spawn 一次，show/hide 只发消息，不再反复杀 isolate。
+  2. 收起（hide）只 SW_HIDE 停转，**不拆窗口**；只有 app 收摊（dispose）才走「停定时器 → DestroyWindow → UnregisterClass → isolate 自行退出」这条顺序。
+  3. 窗口类名带时间戳；RegisterClass 失败先 UnregisterClass 再注册，保证绑的一定是当前活着这个 isolate 的回调；第二轮复用同一窗口，只有直径变了才整窗重建。
+  4. `main.dart` dispose 处 `hide()` 换成 `dispose()`；不再用 `Isolate.kill` 抢跑——强杀会留下「活着却没有回调」的窗口，比留着更危险。
+- **结果**：`flutter analyze`（三个文件）无新增告警，仅剩 main.dart 既有 info；`flutter build windows --debug` 通过。
+- **演示**：默认股 002003 → 长按「一次性走完」，等太极转完；**再**长按走完第二次、第三次，进程应保持不再退出（这正是旧版必崩的那一步）；走完途中点取消也正常。
+- **注意事项**：纯 Flutter / Win32 层；无需重编 DLL，缠论冻结口径未改。Android 走完仍用 Flutter 层太极（主路径是 Windows）。以后凡是「isolate + Win32 窗口过程」这种写法，窗口过程要么放 native 侧，要么保证 isolate 与窗口同生命周期。
+
+---
+
+### 2026-09-22 · WorkBuddy · 主图指标 · 重构 K{n}回归通道：滑窗 → 缠论段绑定
+
+- **执行者**：WorkBuddy
+- **任务类型**：主图指标重构（纯 Flutter 数学指标，不改 Rust 内核；经 `@skill:nox-grill-me` 收敛设计、用户「确认」后落地）
+- **白话背景**：初版「固定 N 窗滑窗回归通道」起点终点由固定 N 根决定，用户反馈不贴合当下缠论结构。经 grill-me 逐分支确认 11 个决策点，共识改为「**按缠论段界定通道起止**」，并**取代**初版（非新增第二指标）。
+- **操作**：
+  1. `compute/math_classic_compute.dart`：`computeRegressionChannelForLevel` 重写**段绑定**——一段一通道。起点=段起极点 `beginPoleX`、终点=段终极点 `endPoleX`（取二者 min/max 作区间）；段内 K0 收盘价做**静态最小二乘**得中轨；上下轨=中轨 ± k×**残差总体标准差**（`sqrt(Σ(y-fit)²)/m`，修正初版用收盘价 std 的偏差）；段区间外保持 null（段间断开）。
+  2. 进行中段：段集合最后一段 `endPoleX` 为起点，随步进生长到 `asOf`，只在已确认段之外追加，不改写历史。
+  3. 显示层跟随：`bundleAtLevel(levels, displayKn<=0?0:displayKn-1)` 取与 OHLC 采样**同层** bundle（K0/K1→笔 level0、K2→段 level1），与 `collectKnOhlcSamples` 同层映射。
+  4. 配置清理：移除 `regressN`，只留 `regressK`（默认 2.0）；`MathIndicatorConfig` 去字段，`main.dart` 去控件与弹窗 N 行，`msg_history`/`kline_chart`/`bar_feature_lookup`/`freeze_store` 调用点去 `n:` 实参。
+  5. 冻结仓 `MathSeriesFreezeStore.regress` 首次非空冻结、禁止回写语义不变。
+- **结果**：缠论段绑定通道——每段一段一通道、段间断开、不向右延伸、无未来函数；历史段通道随步进不跳变（冻结不回写）；进行中段随步进从最后段极点生长。中轨=段内静态回归线，上下轨带宽由残差离散度决定（k 越大越宽），比初版「收盘价 std」更贴合回归残差口径。
+- **演示**：冷启动 → 主图指标 → 均线 → 勾 **K0回归通道**（顺带勾 K0笔/段对照）→ 002003 连续单步：走到某段确认即出现一段三均线贴合段内走势；继续单步，段内已画通道纹丝不动，新确认段才另起一条；末段（进行中）随步进向右生长到当前 K；右侧（>asOf）不画。
+- **测试**：`flutter test test/math_classic_compute_test.dart` 原 6 项滑窗单测**替换为** 6 项段绑定单测（完美直线中轨精确、段间断开为 null、上下轨对称±k×残差std 验证 2×sqrt(0.96)、k 越大越宽、进行中段随 asOf 生长、无 segments/bundle 全 null 不崩）全通过；`flutter analyze lib test` 退出码 0、无新增 error。
+- **同步检查清单（AGENTS.md）**：本次仍**未动**策略回测 `signal_data_catalog` 与机器学习 `ml_*` 四处——回归通道接回测/ML 仍为技术债，已在 `msg_history.dart` 口径说明标注。
+
+
+---
+
+### 2026-09-22 · WorkBuddy · Bug修复 · K{n}回归通道 tooltip 恒为 0（增量 Lookup 漏写槽位）
+
+- **执行者**：WorkBuddy
+- **任务类型**：修复（增量 Lookup 取值链路；纯 Flutter，不改 Rust 内核，不动缠论内核计算口径。经用户「确认」方案 1 后实施）
+- **白话背景**：主图回归通道画得出来，可十字 tooltip 里「K0回归通道」一行永远是 0。根因是**两条链路不同源**：绘制侧每帧直接现算（父层 K{n+1}连线最后一段 + 外推到 asOf）；tooltip 侧读 lookup 的 sub 槽位 `regress_mid/up/down`，而这三个键**只在全量 `BarFeatureLookup.build` 里写过**，增量引擎（步进热路径）的 Math 段只写了 MACD/布林/RSI/KDJ/Demark/背驰，**漏了回归通道** → 读不到键就回落显示 0。步进时只有首包那一次全量写过历史区间，新出现的每一根 K 都没有 → 十字停在当下柱就是 0。
+- **操作**：
+  1. `models/incremental_lookup.dart` 新增 `_applyRegressInto`：与绘制**同源现算**回归通道，按「**先清旧段、再写新段**」整段回写。通道是**一段一换**（父层端点一动整条换新），所以增量绝不能只写当根——否则新旧两条通道的值会混在同一层上。
+  2. 新增 `_regressSpan`（按显示层记录已回写区间）与 `_rebuildRegressSpans`（全量种仓后反推区间，保证首包那一次写过的旧段也能被清掉），`reset()` 一并清空。
+  3. `_writeMathAll` 每层补算回归通道并整段回写；asOf 视图（`into != null`）**只修当前柱**，历史格共享引擎仓引用，禁止整段回写；新增 `truncationCheck` 透传，与全量同口径。
+  4. 非 null 区间连续，从右端往回扫出起点，避免每步全表扫描。
+- **结果**：步进/回看时 tooltip 的 K{n}回归通道三值（M/U/D）与图上那条通道**同源同值**；通道区间左侧的历史 K 仍显示 0（设计如此——只画父层连线最新一段并外推到 asOf，段外本就没有通道）。
+- **演示**：冷启动 → 主图指标 → 均线类 → 勾 **K0回归通道**（顺带勾 K0笔/段对照）→ 002003 **连续单步**：走到父层（K1连线）成段，十字停在当前 K，tooltip「K0回归通道」应显示 M/U/D 三个数，且与图中通道位置一致；继续单步到父层**换新段**，旧段区间上的值应被清空（不再残留上一段的旧数），新段从新极点起才有值。
+- **测试**：`test/incremental_lookup_session_test.dart` 新增一条「逐格步进：增量回归通道槽位 == Full（父层换段后旧段清空）」——每步**全格**比对 `regress_mid/up/down` 与全量 build（含旧段是否被清）。`flutter analyze lib/models/incremental_lookup.dart test/incremental_lookup_session_test.dart` 无问题。
+- **注意事项 / 待办**：**本机内存不足导致 flutter 前端编译器 OOM**（8GB 机器、空闲仅约 700MB，`flutter test` 与 `dart run` 均在编译期堆耗尽），新增单测**只做了静态分析、尚未跑通**。请在空闲内存充足时执行 `flutter test test/incremental_lookup_session_test.dart` 并做上述 GUI 连续单步验收。另：回归通道接回测/ML 仍是技术债，本次未动 `signal_data_catalog` 与 `ml_*`。
+
+---
+
+### 2026-09-22 · WorkBuddy · 验证 · K{n}回归通道 tooltip 归零修复的测试验收（新增自包含回归测试，全绿）
+
+- **执行者**：WorkBuddy
+- **任务类型**：验证（补测试 + 回归；不改关键计算逻辑，不动缠论内核口径）
+- **白话背景**：上一条修「增量 Lookup 漏写回归通道槽位」时，本机内存不足（8GB 机器、空闲仅约 0.7GB），flutter 前端编译器在编译期堆耗尽，`flutter test` 根本跑不起来，当时只做了静态分析。本次内存回到约 1.8GB，编译通过（10–20 秒），于是把上一条留下的「尚未跑通」补齐。**上一条的「尚未跑通」说法由本条取代。**
+- **踩到的坑（重要）**：原有 `test/incremental_lookup_session_test.dart` 整份挂在离线分笔 002003 上，而仓库已把该数据清掉（`a_Data/002003` 只剩空 `.gitkeep`，`001312`/`688687`/`920992` 也全空），`hasOffline002003TickFiles()` 直接判定无数据 → **整份测试 skip，新加的那条单测一条也跑不到**（输出 "All tests skipped"）。历史提交里确实躺着 190MB 分笔数据，但那是刻意清理的，不适合为跑测试而恢复。
+- **操作**：新增**不依赖任何外部数据**的自包含测试 `test/incremental_regress_slot_test.dart`（合成数据放 `test/synth_bars.dart`）：
+  1. 合成 K0 折线（交替等长腿，180 根），过 Rust 管道先出「笔」。
+  2. 合成折线**始终不出线段**——试到 600 根、多种腿长腿幅，父层（断面 level==1 = K1连线）一直是空的。于是改为**手工注入**父层合成段（每 20 根 K0 一段、首尾相接），让回归通道确定性出线；并先立一条"前置条件"断言：通道必须落在最后冻结段内、并外推到 asOf，**不通就报错而不是空跑**。
+  3. 三条断言：①**逐格步进**（n=111…178）每一格、K0/K1/K2 三层、中轨/上轨/下轨三键，增量都必须等于全量 `build`；②**父层换段后旧段必须清空**——记录每步"有值的格子集合"，一旦收窄就逐个断言增量也为空（不能残留上一段的旧数），并断言整轮至少发生过一次换段，否则判定为无效测试；③**asOf 视图只修当前柱**——当前柱等于按 asOf 重算的全量、历史格不得被改写（保持引擎步进态）、未来格不泄漏。
+- **结果**：三条全绿。另跑 `phase2b3_lookup_profile_test.dart` 回归：末步 Full vs Incremental（N=200/500/1000/2000）全等，性能无退化（N=2000 增量 210ms / 全量 7628ms，36.3x）。**结论：增量引擎写回回归通道槽位后，十字读数与主图那条通道同源同值，父层换新段时旧段会被清掉，不再残留旧数。**
+- **演示**：GUI 侧仍需你手动过一遍：冷启动 → 主图指标 → 均线类 → 勾 **K0回归通道** → 选一只有数据的标的 → **连续单步**；走到父层（K1连线）成段后，十字停在当前 K，tooltip「K0回归通道」应出 M/U/D 三个数，位置与图上通道一致；继续单步到父层**换新段**，旧段那几根应回到 0，新段从新极点起才有值。
+- **待办 / 缺口**：`a_Data/*` 离线分笔已清空，导致仓库内**依赖 002003 的步进/管道测试全部处于跳过状态**（`incremental_lookup_session_test`、`pipeline_delta_session_test`、`math_series_freeze_store_test`、`cross_eval_test`、`indicator_var_ext_test`、`signal_data_catalog_test` 等）。这是数据缺失造成的覆盖面缺口，建议后续补一份**可再分发的合成或脱敏数据**来顶替，否则这些测试等于长期不设防。另：回归通道接回测 / 机器学习仍是技术债，本次未动 `signal_data_catalog` 与 `ml_*`。
+
+
+---
+
+### 2026-09-22 · WorkBuddy · 文档整理 · 解释性文档迁入 Obsidian + 清理调试文件
+
+- **执行者**：WorkBuddy
+- **任务类型**：文档迁移（复制）+ 清理（非核心逻辑，无需确认执行）
+- **白话背景**：按用户要求，把仓库内除 `AGENTS.md` 外的所有解释性文档迁入 Obsidian，做成 AI 编码机器人可检索的集成副本；并删除本次任务链留下的调试 scratch 文件。
+- **操作**：
+  1. **删除调试文件**：根目录 5 个本会话产生的 scratch（`_an.txt`/`_bd.txt`/`_t.txt`/`_t2.txt`/`_tf.txt`，均为 flutter analyze / safe-delete 临时输出）已删；`_t2.txt` 引用的 `analyze_result.txt` 等经查不存在，无残留。flutter 工程根无 `_` 临时文件。
+  2. **复制迁移解释性文档**（13 篇，源保留）：
+     - 根：`GLOSSARY.md`、`CHAN_RUST/README.md`
+     - `CHAN_RUST/docs/`（8 篇）：`DESIGN_OPTIMIZATION`、`ML_FEATURE_SPEC`、`PHASE2A`/`PHASE2B1`/`PHASE2B2`/`PHASE2B3_FLUTTER`/`PHASE2B3_INCREMENTAL_LOOKUP` 报告、`PHASE2B3_LOOKUP_INCREMENTAL_DESIGN` 设计
+     - `CHAN_RUST/docs/superpowers/`（3 篇）：k0-zs-early-dash 计划+设计、zs-normal-overseg 设计
+     - 每篇生成 `chan-month5/docs/<同名>.md`，含 frontmatter（tags/source/rel/migrate_mode=copy）+ AI 速览 + 全文（LF/UTF-8）。
+  3. **任务过程+坑点笔记**：新建 `chan-month5/01-projects/chan-regression-channel.md`（填补 MOC 既有断链），写回归通道设计（缠论段绑定）、2026-09-22 tooltip 恒为 0 根因与方案1 修复、6 个坑点（002003 数据清理致测试 skip / level 0 基 / asOfView 只修当前柱 / 8GB OOM / 键名一致 / 合成线难出线段）。
+  4. **索引**：新建 `chan-month5/index-docs.md`（按 术语表/工程总览/设计/性能报告/早期计划规格 分类，含 wikilink+说明）；`MOC.md` 主题导航加 index-docs 链接、回归通道行改为「已迁入 Obsidian」、记录来源说明补文档迁移。
+- **未迁移（刻意保留仓库）**：`AGENTS.md`（最高规则，排除）；`CLAUDE.md`/`OPENCODE.md`（仅 42 字节指针，指向 AGENTS.md）；`a_Data/test/demos/*`（测试夹具，被 `task_demo_manifest_test` 引用，已有 `index-demos.md`）。
+- **结果**：Obsidian `chan-month5` 现含 13 篇文档副本 + 文档索引 + 回归通道任务笔记，AI 可经 frontmatter 标签与 wikilink 检索；workspace 源文件与 task-log 主源未动。
+- **注意事项**：采用**复制迁移**（源保留，零数据风险）；若要做成彻底移动（删除 workspace 源），回复「删除源」即可。调试文件删除已获用户授权（「删除调试文件」）。
+
+---
+
+### 2026-09-22 · WorkBuddy · 文档整理 · 新增 obsidian-task-recorder 项目级 skill（每次任务成果自动同步 Obsidian）
+
+- **执行者**：WorkBuddy
+- **任务类型**：文档整理 / skill 创建（非核心逻辑，无需确认执行）
+- **白话背景**：用户要求「在 WorkBuddy 中添加每次任务成果记录到 Obsidian」，确认范围=仅 chan_month5 项目、机制=可复用 skill。AGENTS.md 本就有「完成后」约定，但缺少可复用的确定性实现，每次都靠临场重排格式易出错。
+- **操作**：
+  1. 项目级 skill 落地于 `.workbuddy/skills/obsidian-task-recorder/`：`SKILL.md`（记录流程 + 不变量：源=task-log、Obsidian=副本、禁止手改 Obsidian）+ `scripts/sync_task_to_obsidian.py`（确定性、幂等）。
+  2. 脚本流程：解析 task-log 尾部条目 → 按日期头去重同步到 `chan-month5/YYYY-MM-DD.md`（不存在则带 frontmatter 模板新建）→ 刷新 `MOC.md` 时间线行与总数。
+  3. **踩坑并修复**：初版把 task-log 里所有 `### ` 都当条目边界，而本仓库条目内含嵌套 `### A.`/`### 2.` 子标题与模板块，导致把 8 个伪条目（含模板占位）写进当日笔记、并因 `update_moc` 漏 `re.M` 标志而在 MOC 插入整份重复时间线行（39→78 篇）。已还原损坏的两文件，并修正：仅「内容以真实日期开头」的 `### ` 才算条目边界；`update_moc` 加 `re.M`；总数按各当日笔记真实 `### ` 数求和（不数 task-log 的嵌套头）。
+  4. **验证**：临时副本端到端冒烟——新增 1 条临时条目，同步后当日笔记 `### ` 数 6→7、条目正确插在文末导航之前、MOC 行 `6→7`、嵌套子标题不重复；重跑幂等无副作用。真实 vault 已还原且幂等。
+- **结果**：此后每次完成任务，先追加 task-log 条目，再 `python .workbuddy/skills/obsidian-task-recorder/scripts/sync_task_to_obsidian.py` 即可把成果同步进 Obsidian（支持 `--dry-run` 预览）。重复运行安全。
+- **演示**：完成任意任务后，在 task-log.md 末尾追加 `### YYYY-MM-DD · WorkBuddy · <类型> · <标题>` 条目，运行上述脚本，Obsidian `chan-month5/当日笔记` 与 `MOC.md` 即更新；`--dry-run` 可先预览。
+- **注意事项**：skill 仅覆盖「记录」环节；AGENTS.md 的「确认执行」门禁、grill-me 设计收敛仍独立生效。回归通道接回测/ML 等技术债未在本 skill 范围。
+
+
+---
+
+### 2026-09-22 · WorkBuddy · 文档整理 · 项目记忆迁移至 Obsidian
+
+- **执行者**：WorkBuddy
+- **任务类型**：文档整理 / 记忆同步
+- **操作**：
+  1. 用户要求把 WorkBuddy 项目记忆（`.workbuddy/memory/`：6 篇每日工作日志 + `MEMORY.md`）也迁移进 Obsidian，并接上「以后自动同步」。
+  2. 范围确认=仅项目 workspace memory（不含 user-level `~/.workbuddy/MEMORY.md`）；同步方式=一次性复制 + 扩展 `obsidian-task-recorder` skill 自动同步。
+  3. 新建 `sync_memory_to_obsidian.py`：把 `.workbuddy/memory/*.md` 复制进 Vault `chan-month5/memory/`，加 frontmatter(source/migrate_mode=copy/synced=源 mtime 日期) + 「来源与同步」callout，原文保真、LF/UTF-8、源保留不动；按源 mtime 幂等（全文一致则跳过）。
+  4. 一次性复制 7 篇到 Vault；更新 `index-memory.md`（由 file:/// 外链改为 Vault 副本 wikilink，补 09-22 行）、`MOC.md` 来源说明（5→6 篇、`已复制进 Vault memory/`）；源 `MEMORY.md` 补「记忆镜像约定」并重同步副本。
+  5. `SKILL.md` 增「2b. Mirror project memory」步骤、触发器加「同步 memory」、Paths 加 memory 目录。
+- **结果**：项目记忆现已全部进 Vault `chan-month5/memory/`，可检索；以后每次写记忆后跑 `sync_memory_to_obsidian.py` 即与源一致。
+- **演示**：Obsidian 打开 `chan-month5/memory/2026-09-22.md` 等查看；`index-memory.md` 已索引全部 7 篇。
+- **测试**：脚本 `--dry-run` 与实跑均通过；二次实跑仅 `MEMORY.md` 因源改动刷新、其余幂等无变化。
+- **注意事项 / 待办**：记忆副本为镜像，勿手改；user-level `~/.workbuddy/MEMORY.md` 按用户要求未纳入本次迁移。
+
+---
+
+### 2026-09-22 · WorkBuddy · UI调整 · 回归通道归「延伸」组 + 线型对齐趋势线
+
+- **执行者**：WorkBuddy
+- **任务类型**：主图指标 UI（分组 / 绘制线型）
+- **操作**：
+  1. 用户要求：Kn回归通道移到「延伸」分组；线型与 Kn趋势线等「延伸」族对齐。
+  2. `chart_indicator.dart`：`MainIndicatorKindMeta.categoryLabel`/`categoryOrder` 把 `regressionChannel` 从「均线」(order 5) 移到「延伸」(order 4)；`buildMainIndicatorCatalog` 注释标注「归延伸组」。
+  3. `kline_chart.dart` `_drawRegressionChannel`：原中轨实线 / 上下轨虚线 `[4,3]` → 改用「延伸」组统一点线 `[1,3]`（与 Kn趋势线 / fx 家族一致）；颜色取 `style.color × buildingAlpha`、线宽取 `style.buildingStrokeWidth`、round 端（`_paintPriceSeries` 已带）；上下轨再降透明度 ×0.6 作通道带（次级）。
+  4. 同步收尾：`math_classic_compute_test.dart` 断言「均线」→「延伸」、序改比 `fxTopSnug`；`main.dart` 回归通道说明弹窗「均线类」→「延伸类」。
+- **结果**：回归通道现归「延伸」组，线型与趋势线同族（点线 + 层色 + 构建段透明度）；picker 内排序落在 `fxTopSnug` 之后；中线=中轨、两侧虚点线=通道带。
+- **演示**：主图指标面板 → 延伸类 → 勾选「K0回归通道」可见点线通道带（父层 K1 连线最后一段外推到当前 K）。
+- **测试**：`flutter analyze` 0 error；`math_classic_compute_test` 全绿（含该断言：归「延伸」、序在 fxTopSnug 后、默认不绘制）。
+- **注意事项 / 待办**：回归通道计算与取值不变（仍=父层连线最后一段 + 外推 asOf、不进冻结仓、tooltip 槽位 regress_mid/up/down 照旧）；本次仅分组与绘制线型变；回归通道接回测/ML 技术债未变。
+
+### 2026-09-22 23:25 修复十字线挡面板点击 + 勾选指标缩回父目录
+
+- **执行者**：WorkBuddy（agent）
+- **类型**：UI 交互修复（非核心计算）
+- **操作**：
+  1. Bug1：开启十字线后，主/副图指标选择面板内条目点不动。根因=桌面 `MouseRegion.onHover`→`_updateCrosshairAt`→`setState` 在面板打开时持续重绘（重建风暴），一次 hover 重建落在「按下→抬起」之间即取消了条目 InkWell 的点击手势；十字线关时 `_updateCrosshairAt` 早返回不重绘，所以只「开十字线」才复现。
+  2. Bug1 修复：`kline_chart.dart` `_updateCrosshairAt` 头部加 `_pickerPane != none` 早返回——面板打开期间十字线不响应，消除重绘风暴，面板内点击不再被打断。
+  3. Bug2：点击「K1合并」等条目后自动缩回「K1父目录」。根因=`indicator_picker_overlay.dart` `didUpdateWidget` 每次 `catalog` 实例变化就 `_seedExpanded()` 把 `_expandedLevels` 清空（全层级折叠）；`onToggle`→父组件 `setState` 重建→传入新 catalog→触发重置→层级瞬间收起。
+  4. Bug2 修复：`didUpdateWidget` 改为「保留已展开层级/类别」，仅丢弃已消失层级的展开态与类别键；新增层级保持折叠（与首次打开一致），不再强制重置。
+- **结果**：面板打开时点条目正常勾选/取消，层级与类别保持展开不缩回；十字线关闭行为不变（仍按 off/线/tooltip 三态）。
+- **演示**：主图指标面板（先开十字线）→ 展开 K1 → 点「K1合并」→ 条目切换勾选态、K1 不再缩回；副图同理。
+- **测试**：`flutter analyze` 0 error（6 条预存 lint 告警，无关本次改动）。
+- **注意事项 / 待办**：两处均为 UI 交互/手势态，未动缠论内核（合并/分型/段/中枢/买卖点/步进/冻结）；回归通道、tooltip 槽位等计算与取值不变。建议冷启动后连续单步 + 开十字线实操验收面板点击与层级保持。
+
+### 2026-09-22 23:51 tooltip 悬浮态 → 左侧停靠子窗口（桌面）
+- 执行者：WorkBuddy（grill-me 已就布局位置/宽度/平台三问确认）。
+- 类型：UI 交互改造（非缠论内核）。
+- 操作：十字线 tooltip 由「chart 内部 Positioned 悬浮面板」改为「父层 main.dart 左侧独立子窗口」，原 K 线只占剩余宽、按比例缩小。
+- 改动点：
+  1. 新建 `lib/widgets/crosshair_tooltip_bridge.dart`：`CrosshairTooltipBridge`（shown/rows 两个 ValueNotifier + scrollController + onRequestClose），KlineChart → 父层广播当前聚焦 K 的结构化行。
+  2. `kline_chart.dart`：加 `tooltipBridge`/`dockTooltipPanel` 参数；`initState` 注入 scroll 与关闭回调；十字线移动/三态循环/中键处发布到桥；`dockTooltipPanel` 为真时不再画内部悬浮面板、关闭钮命中逻辑仅悬浮态生效。
+  3. `main.dart`：建 `_tooltipBridge` 字段并 dispose；`KlineChart` 传参 `dockTooltipPanel: !_useAndroidInteraction`；桌面用 `Row([左面板][拖拽柄][Expanded(chart)])` 停靠；面板宽度可拖拽（默认 320，200–600）；移动端保持内部悬浮。
+- 结果：桌面开 tooltip → 左侧开辟子窗口、K 线缩小、内容随十字线刷新、可拖拽调宽；移动端不变。`flutter analyze` 0 error（12 条为预存 lint）。
+- 演示：开启十字线+tooltip（双击/中键），看左侧子窗口是否稳定显示、K 线是否按比例缩小、拖拽分隔条能否调宽；移动端（魅族）仍为悬浮态。
+
+### 2026-09-23 00:24 修复指标面板缩进 BUG（纯 UI，未动缠论内核）
+
+**现象（白话）**：主/副图指标选择面板里，勾选「K0均线」这种指标项时，
+它跟类别头「均线」几乎齐平、甚至更靠左，看不出是「均线」下面的子项；
+「延伸 / KnN类BS / 背驰」等其它类别里的指标项也一样没缩进。
+
+**根因**：三级树 层级(K0)→类别(均线)→指标(K0均线) 的横向缩进没对齐。
+类别头文字起点在 48px（22 padding + 22 箭头 + 4 间距），而指标项
+`_itemRow` 的左 padding 写死 28px，文字起点 28px——比类别头文字还靠左，
+所以指标项看起来没缩进、甚至反超父级。
+
+**修复**：`indicator_picker_overlay.dart` 的 `_itemRow` 左 padding 由 28 改 56，
+使指标项文字起点 56px = 类别头 48px + 8px，形成「层级40→类别48→指标56」
+一致的三级树缩进（每级 +8px）。`_itemRow` 被所有类别共用，一次改动覆盖
+均线/延伸/KnN类BS/背驰全部指标。
+
+**验证**：`flutter analyze` 0 error（余 1 条 pre-existing unnecessary_underscores，与本次无关）。
+
+**范围**：纯 UI 显示缩进，未碰合并/分型/段/中枢/买卖点/步进/冻结等内核；
+不触发 AGENTS.md 关键计算逻辑确认门禁。
+
+### 2026-09-23 00:29 指标选择面板改为按内容自适应宽度（纯 UI，未动内核）
+
+**现象（白话）**：主/副图指标选择弹窗一打开就占满整屏（宽=屏宽-边距、高=屏高-边距），
+哪怕里面只有几个指标也很臃肿。
+
+**根因**：`indicator_picker_overlay.dart` 的 `build` 用 `SizedBox(width: size.width-marginH*2,
+height: size.height-marginV*2)` 把面板写死成近满屏尺寸，与内容多少无关。
+
+**修复**：去掉固定 `SizedBox`，改用 `ConstrainedBox(maxWidth/maxHeight)` 包 `IntrinsicWidth`，
+使面板**宽度随最长指标名自适应**（不再占满整屏）；高度封顶 `maxH` 后内部 `ListView` 滚动。
+`Column` 维持 `crossAxisAlignment: stretch`、`Expanded(_body())` 填充剩余高度。
+
+**验证**：`flutter analyze` 0 error（余 1 条 pre-existing unnecessary_underscores，与本次无关）。
+**待 GUI 验收**：开主图指标面板，看宽度是否贴合最长指标名、很多项时是否内部滚动。
+
+**范围**：纯 UI 布局，未碰合并/分型/段/中枢/买卖点/步进/冻结等内核；不触发关键计算逻辑确认门禁。
+
+
+### 2026-09-23 00:52 修复BUG：点「下拉」后只变暗、指标选择面板不显示（纯 UI，未动内核）
+
+**现象（白话）**：点主/副图指标的下拉钮，K 线图只是整体变暗（遮罩出来了），
+但指标选择面板本身完全不出现，等于选不了指标。这是上一条「面板自适应宽度」引入的回归。
+
+**根因**：原先 `SizedBox(width, height)` 给 `Column` 一个**确定高度**，
+`Expanded(_body())` 里的 `ListView` 才有界高度可画；改成 `ConstrainedBox` 包
+`IntrinsicWidth` 后，`IntrinsicWidth` 走**固有尺寸测量**通道，而 `ListView`
+是可滚动控件、没有固有宽度，`Expanded` 在固有测量阶段拿不到高度 →
+面板塌陷成零尺寸/极窄一条，只剩 `0x99000000` 变暗遮罩可见。
+（`IntrinsicWidth` + `Column` + `Expanded(ListView)` 是死对头。）
+
+**修复**：`indicator_picker_overlay.dart`
+- 去掉 `IntrinsicWidth`。
+- 新增 `_measureContentWidth()`：用 `TextPainter` 量出「标题 / 各指标名+取值 /
+  各类别头」的文字宽度，取最大者加对应左右 padding，得到内容宽度。
+- 面板改回**确定尺寸**：`BoxConstraints(minWidth: contentW, maxWidth: contentW,
+  maxHeight: maxH)`，`contentW = _measureContentWidth().clamp(240, 屏宽-边距*2)`。
+  既保留「宽度随最长指标名自适应、不占满整屏」，又让 `Expanded(ListView)` 拿到确定高度。
+- 顺手改用真实 `widget.title` 量标题宽（原来写死 '主图指标'，副图也能量准）。
+
+**验证**：
+- `flutter analyze` 0 error（余 1 条 pre-existing unnecessary_underscores，与本次无关）。
+- 临时 widget 测试（已按工程规范删除）：面板尺寸 `240×540` 非零、标题可见、
+  展开 K0 后「K0均线」「K0回归通道」均可见、宽度 < 屏宽 —— 证明 ListView
+  拿到确定高度、不再塌陷。
+- **待 GUI 验收**：点主图/副图下拉，面板应正常弹出且宽度贴合最长指标名。
+
+**范围**：纯 UI 布局，未碰合并/分型/段/中枢/买卖点/步进/冻结/回归通道计算与
+tooltip 槽位；不触发 AGENTS.md 关键计算逻辑确认门禁。
+
+**踩坑**：删 `IntrinsicWidth(` 时只删了开括号、留下它的 `),` 收尾，导致
+`return Positioned.fill(...)` 多一个 `)`，analyze 报 `expected_token`。
+最后把 `    ),` + `  );` 合并为 `    );` 才平。
+教训：动嵌套括号必须**成对删**，改完立刻 `flutter analyze` 兜底。
+
+
+### 2026-09-23 01:15 鼠标中键十字线/tooltip 循环改为「仅十字线优先」三态（纯 UI，未动内核）
+
+**现象（白话）**：原来中键第一次点击就同时弹出「十字线+tooltip」，且中键只在
+「十字线+tooltip」和「仅十字线」之间来回切，**永远关不掉十字线**。期望改为：
+第一次只开十字线（滚轮还能缩放）→ 第二次加 tooltip → 第三次全关。
+
+**需求澄清**：最初描述是 4 步，但第 1 步与第 3 步视觉完全相同（都只有十字线、
+滚轮可缩放）。经确认改为 **3 步循环**（去掉重复）：
+`关 → 仅十字线 → 十字线+tooltip → 全关 → 循环`。
+并确认：状态回到「全关」后，下一次中键必定从「仅十字线」重新开始
+（用纯状态机实现，无需额外步数计数）。
+
+**改动**（`lib/widgets/kline_chart.dart`）：
+- `_toggleTooltipKeepCrosshair`（**真正的鼠标中键**入口，`_onPointerDown` 里
+  判 `kMiddleMouseButton`）：`off→linesOnly`（只开十字线，不显 tooltip）、
+  `linesOnly→withTooltip`（加 tooltip）、`withTooltip→off`（全关并清空
+  十字线坐标/barIdx/钉右标志）。
+- `_cycleCrosshair`（触屏·双击中间区）同步改成**同一顺序**，避免两条路径
+  （中键 vs 双击中间区）走向不一致；并补上 `_publishTooltipToBridge()` ——
+  原实现切换模式后不同步桥接，dock 模式下左侧 tooltip 子窗口不会跟着显隐。
+- 两处入口注释同步更新。
+
+**滚轮**：`_onWheel` 本来就符合预期——仅当 `_crosshairShowTooltip` 为真时
+滚轮才翻 tooltip，其余状态（含「仅十字线」）都缩放，故未改动。
+
+**验证**：`flutter analyze` 0 error（余 6 条 pre-existing info/warning，与本次无关）。
+**待 GUI 验收**：中键连点 3 次依次为「只有十字线（滚轮可缩放）→ 十字线+tooltip
+→ 全关」，第 4 次回到「只有十字线」；dock 模式下左侧子窗口应随第 2 次出现、
+第 3 次消失。
+
+**范围**：纯交互状态机，未碰合并/分型/段/中枢/买卖点/步进/冻结/回归通道计算与
+tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
+
+
+### 2026-09-23 01:58 修复BUG：tooltip 一显示，K 线上的十字线就消失（纯 UI，未动内核）
+
+**现象（白话）**：dock 模式（桌面）下，中键切到「十字线+tooltip」，左侧子窗口出现，
+但 K 线图上的十字线没了；tooltip 关掉后十字线又回来。
+
+**根因**：`main.dart` 的 `_withTooltipDock` 在「不显示 tooltip」时**直接返回 chart**，
+「显示 tooltip」时才用 `LayoutBuilder>Row>[面板,拖拽柄,Expanded(chart)]` 包裹。
+两种形态下 KlineChart 在树中的位置/深度不同，又没有 GlobalKey，于是 tooltip 一显隐，
+**KlineChart 的 Element 连同整个 State 被重建**：`_crosshairX/_Y/barIdx` 归零（十字线消失）、
+`_crosshairMode` 回到 off、视口缩放重置。左侧子窗口内容由 main 层的 bridge 驱动，
+所以看起来「tooltip 在、十字线没了」。
+
+**修复**：
+- `_withTooltipDock` 改为 **Row 结构始终存在**：左栏与拖拽柄用 `Offstage(offstage:!shown)`
+  控制显隐（offstage 时占 0 宽），`Expanded(child: chart)` 位置/类型恒定 →
+  KlineChart 的 Element/State 在显隐切换间完整保留。
+- `kline_chart.dart` build：图表宽度变化（停靠面板出现/拖宽、窗口缩放）且十字线激活时，
+  用 `barCenterX(barIdx, 新宽)` 重算 `_crosshairX`，竖线继续吸附同一根 K，
+  不因旧宽算出的 X 而脱离所指 K 线。
+
+**验证**：
+- `flutter analyze` 0 error（main.dart 余 7 条 pre-existing info，与本次无关）。
+- 临时 widget 测试（已按规范删除）实证根因与修复：
+  旧结构显隐切换后 State 重建（计数 1→2，复现 BUG）；
+  新结构 Offstage 切换后 State 保留（计数恒 1）。All tests passed。
+- **待 GUI 验收**：dock 模式下中键三态循环，十字线应始终在图上；
+  tooltip 显隐不再重置缩放/视口。
+
+**范围**：纯 UI 布局与状态保持，未碰合并/分型/段/中枢/买卖点/步进/冻结/回归通道
+计算与 tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。

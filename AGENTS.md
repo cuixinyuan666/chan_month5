@@ -21,6 +21,12 @@
 - **每次**完成修改类任务，在 [`task-log.md`](task-log.md) 末尾追加一条（执行者、类型、操作、结果、演示）。
 - 你对任务执行的过程和结果的总结用**白话 + 缠论术语**（K0、一类买点、中枢、步进、副图）；禁止大段贴代码、函数名当说明。例：✅「走到第 12 根 K，副图应出现一颗 1Ba，下一步这颗点还在」。
 - Rust 改动：重编 `chan_ffi.dll`，冷启动**连续单步**验收（一键跳末≠步进验收）。
+- **Obsidian 同步（必做）**：每次追加 `task-log` 条目后，同步写入 Obsidian 副本（遵循 `obsidian-writer` 规范：frontmatter 置顶、`[[wikilinks]]`、UTF-8、LF）：
+  1. 在 Vault `chan-month5/` 下，于**当日**笔记 `YYYY-MM-DD.md` 末尾追加同一条目（保真，不摘要）；当日笔记不存在则新建（套日期笔记模板，含 frontmatter 与相邻日导航）。
+  2. 若次日笔记已存在，确保本篇 `next` 指向次日、次日篇 `prev` 指回本篇。
+  3. 更新 `chan-month5/MOC.md` 时间线索引表当日行（日期 / 条目数 / 链接）。
+  4. 涉及记忆 / 方案 / demos 的，同步更新 `index-memory.md` / `index-plans.md` / `index-demos.md`。
+  - **源权威**：`task-log.md` 是唯一源，Obsidian 为副本；禁止在 Obsidian 手改任务原文，修订须先回写 `task-log.md` 再同步。
 
 ### 代码设计规范
 - 代码生成和阅读都为AI编码机器人，所以代码设计为AI编码机器人友好协作的代码风格，方便AI编码机器人索引等各种操作：
