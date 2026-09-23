@@ -186,15 +186,14 @@ List<double?>? frozenPlotSeries({
     return store.mean(parsed.kn)?[period];
   }
   if (parsed.panel == 'MAIN' &&
-      parsed.rest.length == 3 &&
-      parsed.rest[0] == 'CHANNEL') {
-    final period = int.tryParse(parsed.rest[1]);
-    if (period == null || period < 1) return null;
-    final pair = store.channel(parsed.kn)?[period];
-    if (pair == null) return null;
-    return switch (parsed.rest[2]) {
-      'MAX' => pair.max,
-      'MIN' => pair.min,
+      parsed.rest.length == 2 &&
+      parsed.rest[0] == 'REGRESS') {
+    final series = store.regress(parsed.kn);
+    if (series == null) return null;
+    return switch (parsed.rest[1]) {
+      'MID' => series.mid,
+      'UP' => series.up,
+      'DOWN' => series.down,
       _ => null,
     };
   }

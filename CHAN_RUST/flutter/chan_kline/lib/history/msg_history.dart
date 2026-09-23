@@ -760,13 +760,13 @@ class MsgHistory {
     );
   }
 
-  /// Kn回归通道（进程内去重；主图绘制；暂未接入回测/ML）
+  /// Kn回归通道（进程内去重；主图绘制；已接入回测/ML：MAIN.Kn.REGRESS.MID/UP/DOWN）
   static bool _knRegressionChannelLogged = false;
   void appendKnRegressionChannel() {
     if (_knRegressionChannelLogged) return;
     _knRegressionChannelLogged = true;
     append(
-      '【Kn回归通道·主图·只绘制·暂未接入回测/ML】'
+      '【Kn回归通道·主图·已绘制·已接入回测/ML（MAIN.Kn.REGRESS.MID/UP/DOWN）】'
       '口径（父层连线绑定·全层同构）：基准区间 = 父层 K{n+1}连线（structure level = 显示层+1）'
       '在 asOf 视图下的最后一段——倒数第二个极点 → 最后一个极点；端点含分型判断与构建中开口尾端。'
       'K0回归通道看 K1连线、K1看 K2…；父层一出新段整条通道换新基准（旧的整条不留，不拼阶梯）。'
@@ -778,7 +778,7 @@ class MsgHistory {
       '绘制样式：中轨实线、上下轨虚线 [4,3]，与中轨同色降透明度，不填充。'
       '回看：十字 asOf 回退时基准取当时可见的那条父层连线（不泄漏未来），右端照样截到 asOf。'
       '不可用：父层还没形成连线、或区间内样本 < 2 根 → 该层整条不出线。'
-      '冻结：刻意**不进** MathSeriesFreezeStore（与布林不同）——不回写，父层端点一动整条通道跟着动，纯绘制。'
+      '冻结：已进 MathSeriesFreezeStore（regressByKn）——每层每步整段重算后全量覆写（与布林不同，不按单格增量合并），父层端点一动整条通道跟着动；回测读 MAIN.Kn.REGRESS.MID/UP/DOWN 取到与图上同基准的值。'
       '设置：数学指标参数里只有「回归通道 k」（区间由父层连线决定，无 N 参数）；tooltip 槽位 regress_mid/up/down。'
       '技术债：本指标**暂未接入策略回测与机器学习**（signal_data_catalog / ml_rule_score / '
       'ml_feature_label / ml_feature_schema 未同步），后续要接须按「指标名称同步检查清单」补四处。'

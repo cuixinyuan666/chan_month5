@@ -152,53 +152,55 @@ class BacktestWorkbench extends StatelessWidget {
               ),
             ),
           Expanded(
-            child: reportTab == null
-                ? SingleChildScrollView(
-                    padding: const EdgeInsets.fromLTRB(10, 8, 8, 8),
-                    child: StrategyConfigForm(
-                      config: config,
-                      maxKn: maxKn,
-                      onChanged: onConfigChanged,
-                      onRun: onRun,
-                      running: running,
-                      section: tab == BacktestWorkbenchTab.conditions
-                          ? StrategyFormSection.conditions
-                          : StrategyFormSection.capital,
-                      showRunButton: false,
-                      bars: bars,
-                      levels: levels,
-                      mathFreeze: mathFreeze,
-                      chanEvents: chanEvents,
-                      zsObjects: zsObjects,
-                      diverRelations: diverRelations,
-                      lineSeries: lineSeries,
-                      features: features,
-                      chipPeaks: chipPeaks,
-                      bucketStep: bucketStep,
-                      asOf: currentStepIdx,
-                    ),
-                  )
-                : (run == null
-                    ? const Center(
-                        child: Text(
-                          '搭好买卖条件后点运行。图上买/卖按组显示在发现当根，被拒的不画。',
-                          style:
-                              TextStyle(color: Color(0xFF94A3B8), fontSize: 13),
+            child: tab == BacktestWorkbenchTab.performance
+                ? _performancePanel(run)
+                : (reportTab == null
+                    ? SingleChildScrollView(
+                        padding: const EdgeInsets.fromLTRB(10, 8, 8, 8),
+                        child: StrategyConfigForm(
+                          config: config,
+                          maxKn: maxKn,
+                          onChanged: onConfigChanged,
+                          onRun: onRun,
+                          running: running,
+                          section: tab == BacktestWorkbenchTab.conditions
+                              ? StrategyFormSection.conditions
+                              : StrategyFormSection.capital,
+                          showRunButton: false,
+                          bars: bars,
+                          levels: levels,
+                          mathFreeze: mathFreeze,
+                          chanEvents: chanEvents,
+                          zsObjects: zsObjects,
+                          diverRelations: diverRelations,
+                          lineSeries: lineSeries,
+                          features: features,
+                          chipPeaks: chipPeaks,
+                          bucketStep: bucketStep,
+                          asOf: currentStepIdx,
                         ),
                       )
-                    : BacktestReportPanel(
-                        run: run!,
-                        bars: bars,
-                        tab: reportTab,
-                        onTab: (_) {},
-                        showTabBar: false,
-                        selectedSignalId: selectedSignalId,
-                        selectedTradeId: selectedTradeId,
-                        onSelectTrade: onSelectTrade,
-                        onSelectSignal: onSelectSignal,
-                        onJumpX: onJumpX,
-                        focusX: focusX,
-                      )),
+                    : (run == null
+                        ? const Center(
+                            child: Text(
+                              '搭好买卖条件后点运行。图上买/卖按组显示在发现当根，被拒的不画。',
+                              style:
+                                  TextStyle(color: Color(0xFF94A3B8), fontSize: 13),
+                            ),
+                          )
+                        : BacktestReportPanel(
+                            run: run!,
+                            bars: bars,
+                            tab: reportTab,
+                            onTab: (_) {},
+                            showTabBar: false,
+                            selectedSignalId: selectedSignalId,
+                            selectedTradeId: selectedTradeId,
+                            onSelectTrade: onSelectTrade,
+                            onSelectSignal: onSelectSignal,
+                            onJumpX: onJumpX,
+                            focusX: focusX,
+                          ))),
           ),
         ],
       ),
@@ -232,14 +234,58 @@ class BacktestWorkbench extends StatelessWidget {
       child: Row(
         children: [
           chip(BacktestWorkbenchTab.conditions, '条件'),
-          chip(BacktestWorkbenchTab.capital, '资金'),
-          chip(BacktestWorkbenchTab.metrics, '指标'),
-          chip(BacktestWorkbenchTab.equity, '净值'),
           chip(BacktestWorkbenchTab.trades, '交易'),
+          chip(BacktestWorkbenchTab.performance, '绩效'),
+          chip(BacktestWorkbenchTab.capital, '资金'),
           chip(BacktestWorkbenchTab.chain, '链路'),
           chip(BacktestWorkbenchTab.attribution, '归因'),
         ],
       ),
+    );
+  }
+
+  /// 绩效标签：指标卡（上）+ 净值/回撤曲线（下）同屏堆叠。
+  /// BacktestReportPanel 内部用 Expanded，必须包在定高容器里，故用
+  /// Column + 两个 Expanded 而非整体滚动，避免嵌套 Expanded/ListView 无界报错。
+  Widget _performancePanel(BacktestRun? run) {
+    if (run == null) {
+      return const Center(
+        child: Text(
+          '搭好买卖条件后点运行。图上买/卖按组显示在发现当根，被拒的不画。',
+          style: TextStyle(color: Color(0xFF94A3B8), fontSize: 13),
+        ),
+      );
+    }
+    if (!run.ok) {
+      return const Center(
+        child: Text(
+          '本轮回测未产出结果。',
+          style: TextStyle(color: Color(0xFF94A3B8), fontSize: 13),
+        ),
+      );
+    }
+    Widget section(BacktestReportTab t) => Expanded(
+          child: BacktestReportPanel(
+            run: run,
+            bars: bars,
+            tab: t,
+            onTab: (_) {},
+            showTabBar: false,
+            selectedSignalId: selectedSignalId,
+            selectedTradeId: selectedTradeId,
+            onSelectTrade: onSelectTrade,
+            onSelectSignal: onSelectSignal,
+            onJumpX: onJumpX,
+            focusX: focusX,
+          ),
+        );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        section(BacktestReportTab.metrics),
+        const Divider(height: 1, color: Color(0xFF334155)),
+        section(BacktestReportTab.equity),
+      ],
     );
   }
 }

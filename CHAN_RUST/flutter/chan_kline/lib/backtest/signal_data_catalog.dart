@@ -132,8 +132,8 @@ String k0TickCountId() => 'RAW.K0.TICK_COUNT';
 
 String maVarId(int kn, int period) => 'MAIN.K$kn.MA.$period';
 
-String channelVarId(int kn, int period, String band) =>
-    'MAIN.K$kn.CHANNEL.$period.${band.toUpperCase()}';
+String regressVarId(int kn, String band) =>
+    'MAIN.K$kn.REGRESS.${band.toUpperCase()}';
 
 String demarkCompleteId(int kn, {required bool buy}) =>
     buy ? 'MAIN.K$kn.DEMARK.COMPLETE_BUY' : 'MAIN.K$kn.DEMARK.COMPLETE_SELL';
@@ -232,17 +232,16 @@ String chipPeakFieldLabel(String suffix) {
   return (kn: kn, period: period);
 }
 
-/// MAIN.K1.CHANNEL.20.MAX
-({int kn, int period, String band})? parseChannelVarId(String id) {
+/// MAIN.K1.REGRESS.MID / .UP / .DOWN
+({int kn, String band})? parseRegressVarId(String id) {
   final parts = canonicalizeTradeVarId(id).split('.');
-  if (parts.length != 5 || parts[0] != 'MAIN') return null;
-  if (!parts[1].startsWith('K') || parts[2] != 'CHANNEL') return null;
+  if (parts.length != 4 || parts[0] != 'MAIN') return null;
+  if (!parts[1].startsWith('K') || parts[2] != 'REGRESS') return null;
   final kn = int.tryParse(parts[1].substring(1));
-  final period = int.tryParse(parts[3]);
-  final band = parts[4];
-  if (kn == null || kn < 0 || period == null || period < 1) return null;
-  if (band != 'MAX' && band != 'MIN') return null;
-  return (kn: kn, period: period, band: band);
+  final band = parts[3];
+  if (kn == null || kn < 0) return null;
+  if (band != 'MID' && band != 'UP' && band != 'DOWN') return null;
+  return (kn: kn, band: band);
 }
 
 /// 把已登记 id 换到另一层。
@@ -448,16 +447,14 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
     }
   }
 
-  // 各层均线/通道：与布林同一冻结仓、同一套钟
+  // 各层均线/回归通道：与布林同一冻结仓、同一套钟
   const meanPeriods = TrendModelConfig.defaultMeanPeriods;
-  const channelPeriods = TrendModelConfig.defaultChannelPeriods;
   for (var kn = 0; kn <= hi; kn++) {
     for (final p in meanPeriods) {
       out.add(_maDef(kn, p));
     }
-    for (final p in channelPeriods) {
-      out.add(_channelDef(kn, p, 'MAX'));
-      out.add(_channelDef(kn, p, 'MIN'));
+    for (final b in const ['MID', 'UP', 'DOWN']) {
+      out.add(_regressDef(kn, b));
     }
     out.add(_demarkCompleteDef(kn, buy: true));
     out.add(_demarkCompleteDef(kn, buy: false));
@@ -1144,9 +1141,9 @@ TradeVariableDef? lookupTradeVariable(String variableId, {int maxKn = 8}) {
   if (ma != null && ma.kn <= (maxKn < 0 ? 0 : maxKn)) {
     return _maDef(ma.kn, ma.period);
   }
-  final ch = parseChannelVarId(id);
+  final ch = parseRegressVarId(id);
   if (ch != null && ch.kn <= (maxKn < 0 ? 0 : maxKn)) {
-    return _channelDef(ch.kn, ch.period, ch.band);
+    return _regressDef(ch.kn, ch.band);
   }
   final peak = parseChipPeakVarId(id);
   if (peak != null && peak.kn == 0) {
@@ -1212,11 +1209,12 @@ TradeVariableDef _maDef(int kn, int period) {
   );
 }
 
-TradeVariableDef _channelDef(int kn, int period, String band) {
-  final isMax = band == 'MAX';
+TradeVariableDef _regressDef(int kn, String band) {
+  final isMid = band == 'MID';
+  final isUp = band == 'UP';
   return TradeVariableDef(
-    variableId: channelVarId(kn, period, band),
-    displayName: 'K$kn通道$period${isMax ? "上" : "下"}',
+    variableId: regressVarId(kn, band),
+    displayName: 'K$kn回归通道${isMid ? "中" : isUp ? "上" : "下"}',
     panel: TradePanel.main,
     displayKn: kn,
     clockFamily: TradeClockFamily.zsMath,
@@ -1224,14 +1222,15 @@ TradeVariableDef _channelDef(int kn, int period, String band) {
     plotClock: TradePlotClock.k0Bar,
     valueType: TradeValueType.numeric,
     readiness: TradeReadiness.registered,
-    source: 'MathSeriesFreezeStore.channel(kn)[$period].${isMax ? "max" : "min"}',
+    source:
+        'MathSeriesFreezeStore.regress(kn).${isMid ? "mid" : isUp ? "up" : "down"}',
     unit: 'price',
     futureSafe: true,
-    availabilityNote: '冻结仓该格有数才可读；没有仓或空格=不可用，不现场重算',
-    groupKey: 'channel',
-    groupLabel: '通道',
-    fieldLabel: '$period${isMax ? "上" : "下"}',
-    description: '读冻结仓通道，禁止现场另算',
+    availabilityNote: '回归通道当前父层连线段有数才可读；段未成形或基线外=不可用',
+    groupKey: 'regress',
+    groupLabel: '回归通道',
+    fieldLabel: isMid ? '中轨' : isUp ? '上轨' : '下轨',
+    description: '读图上已冻住的回归通道（中/上/下轨），禁止现场另算',
   );
 }
 

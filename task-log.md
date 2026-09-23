@@ -3204,3 +3204,123 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 
 **范围**：纯 UI 布局与状态保持，未碰合并/分型/段/中枢/买卖点/步进/冻结/回归通道
 计算与 tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
+
+
+### 2026-09-23 09:18 — 设置面板文字支持鼠标拖选 + Ctrl+C 复制（纯 UI，未动内核）
+
+- **执行者**：WorkBuddy（🐝）
+- **任务类型**：功能开发（UI 体验）
+- **上下文**：用户希望设置面板里各项文字（如「筹码分布桶宽」标签、各开关标题、按钮文字）能像普通网页文本一样，拖拽选中后 Ctrl+C 复制。
+- **关键操作**：
+  1. 在 `main.dart` 的 `_buildPanelBody()` 中，把返回的 `Column` 整体用 `SelectionArea` 包裹（`child: Column`）。
+  2. `SelectionArea` 让面板内所有 `Text`（含 `TextFormField` 的 `labelText`、`SwitchListTile` 标题、`SettingsOutlinedButton` 标签、`ListTile` 副标题等）可拖选；桌面端 Ctrl+C 即复制选中文字。
+  3. 单击仍触发按钮/输入框/开关，拖拽才进入选择，二者不冲突；手机端 sheet 与桌面 `EdgeControlPanel` 共用同一 `_buildPanelBody`，均已覆盖。
+- **结果**：`flutter analyze --no-pub` 0 error（75 条均为 `test/` 下 pre-existing info/warning，与本次无关）。
+- **注意事项**：
+  - 本次只覆盖主设置面板 `_buildPanelBody`；策略回测表单、ML 面板等子对话框若也要可复制，可同样用 `SelectionArea` 包裹各自内容。
+  - 未碰合并/分型/段/中枢/买卖点/步进/冻结/主图指标逻辑；不触发 AGENTS.md 关键计算逻辑确认门禁。
+  - 待 GUI 验收：打开设置，拖选「筹码分布桶宽」等文字后 Ctrl+C 可复制；编辑桶宽输入框、点开关/按钮仍正常。
+
+---
+
+### 2026-09-23 09:30 优化：回测「添加条件」深拷贝上一条（纯 UI 表单，未动内核）
+
+- **执行者**：WorkBuddy（🐝）
+- **任务类型**：功能优化（UI 表单体验）
+- **上下文**：策略回测买入/卖出条件，点「添加条件」后应默认复制上一条；并希望下拉框默认从第一个开始显示。经 grill 澄清两点冲突，定为：深拷贝上一条 + 菜单展开滚到首项（原生不支持，落地只做深拷贝）+ 仅作用于添加按钮 + 新条固定 AND。
+- **关键操作**：
+  1. `backtest/strategy_config_form.dart` 的「添加条件」`onPressed`：原写死的 `_LeafDraft(kn: last.kn, leftId: rawOhlcId(CLOSE), op: lt, rightId: bollBandId(MID), rightConst: 0)` 改为按 `draft.leaves.last` 全字段值拷贝新建 `_LeafDraft`（kn/leftId/op/rightIsConst/rightId/rightConst/enumToken）。字段均为值类型，浅拷贝即深拷贝；新对象独立，改新条不影响上一条。
+  2. 保留 `draft.joins.add(CondJoin.and)`（新条与前一条固定 AND）。
+  3. 「下拉框从第一个」按共识**不做滚动 hack**：深拷贝后选中值=上一条的值（合理），菜单原生定位到该值；Flutter DropdownButtonFormField 原生无「展开滚到首项」接口，不强行自定义路由。
+  4. 范围仅「添加条件」按钮（买/卖两侧共用同一 handler，均已覆盖）；初始种子条件（kDefaultBuyAst/kDefaultSellAst）不变。
+- **结果**：`flutter analyze --no-pub` 0 error（75 条为 test/ 下 pre-existing info/warning，与本次无关）。
+- **注意事项**：
+  - 只改回测条件**编辑表单**初值，未碰条件求值内核（`condition_ast.dart`/`executeStrategyBacktest`）、步进/冻结/主图绘制；不触发 AGENTS.md 关键计算逻辑确认门禁。
+  - 待 GUI 验收：买入（或卖出）加一条 → 新条各下拉等于上一条选中值，改新条不影响上一条；继续点添加再复制。
+  - 「菜单展开停顶部」因 Flutter 原生限制未实现；若后续确需，再单独做自定义下拉路由（封装 层/左/关系/方向/右/右变量 6 类下拉）。
+
+## 2026-09-23 策略回测开关联动买卖点标记 + 运行后自动打开条件指标（叠加）
+
+- **执行者**：WorkBuddy（Agent 模式，用户已确认两点分叉：①标记随工作台面板开闭上 ②实现 Part 1·叠加·背驰默认 area）
+- **任务类型**：功能联动（回测显示开关 + 指标自动显示）
+- **上下文**：用户要求「关闭策略回测后左侧主/副图买卖点标记也关闭，开启则显示；通过策略回测打开的指标默认不关闭」。分叉澄清：标记显隐绑定 `_backtestPanelOpen`（点面板 X 即隐、设置再点「策略回测」即显）；并落地此前未确认的 Part 1（运行回测自动把条件里引用的指标并入主/副图，叠加不清空）。
+- **关键操作**：
+  1. 新建 `backtest/condition_indicators.dart`：`indicatorsFromStrategyConfig(cfg)` 摊开买/卖两棵 AST 的全部变量 ID（`collectAstVarIds`），按面板/字段前缀映射到主/副图指标（RAW 开高低收=K线本体不另加；VOLUME/TICK_COUNT→副图；MAIN 布林/均线/通道/Demark/三极平行/顶底对弦/对弦平移/底极贴合/顶极贴合/趋势线/节奏→主图；SUB MACD/RSI/KDJ/分型确认/分型判断/中枢确认/中枢判断/斜率/比例→副图；STRUCTURE 一类二类买卖点→副图 buy1/buy2 同槽、BUY_N/SELL_N→buyN、背驰→divergence(area)、确认/未确认中枢数值投影→主图 zs；CHIP/TICK.PEAK 走筹码配置忽略）。`mergeStrategyIndicators` 做叠加 + 按 maxKn 裁剪 + `ensureMacdForDivergenceArea` 并入同号 MACD。
+  2. `_runStrategyBacktest` 的 `setState` 内：跑成后把 `mergeStrategyIndicators(main:_mainIndicators, sub:_subIndicators, cfg, maxKn, _truncationCheck, _maxBsClass)` 写回 `_mainIndicators`/`_subIndicators`（叠加，保留用户原有勾选）。
+  3. 图表构建处（`buildKlineChart` 传参）：`strategySignals`/`strategyFills`/`strategyRoundBySignalId` 由「`_backtestRun` 非空即显示」改为「`_backtestPanelOpen` 为真才显示」——关面板即隐藏买卖点标记，重开即显示；关面板**不**移除已并入的指标（叠加语义天然保留，满足「指标默认不关闭」）。
+- **结果**：`flutter analyze --no-pub` 0 error（75 条 test/ pre-existing warning/info，无关）。
+- **注意事项**：
+  - 仍只动回测显示状态与指标选择，未碰条件求值内核/步进/冻结/主图绘制语义；不触发 AGENTS.md 关键计算逻辑确认门禁。
+  - 待 GUI 验收：加载股票→走到某根→设条件含「K0 收下穿布林下轨 + RSI<40」→运行→主图应出现布林、副图应出现 RSI（叠加在原勾选上）；点面板 X 关回测→买卖点三角标记消失、但布林/RSI 仍留；设置再点「策略回测」→标记重现。
+  - 背驰默认取面积(area)算法副图；若条件里写「背驰出现」想用别的算法，需事后在副图里改。
+  - 此前未确认的「策略回测移到筹码分布桶宽下方」(Part 2) 本次未做（不在本需求内）。
+
+---
+
+### 2026-09-23 · WorkBuddy · UI重排 · 策略回测工作台标签重排（交易左移 + 指标净值合并为绩效）
+
+- **执行者**：WorkBuddy（grill-me 设计共识后落地；纯 UI 重排，未碰缠论内核/步进/冻结/主图绘制）
+- **任务类型**：UI 布局 / 工作台标签重排
+- **操作**：
+  1. grill 澄清三点：①最终顺序 交易|条件|绩效|资金|链路|归因；②指标+净值合为一个界面（上下堆叠同屏）；③合并标签名「绩效」。
+  2. `backtest_report_panel.dart`：从 `BacktestWorkbenchTab` 枚举移除 `metrics`/`equity`，新增 `performance`（指标+净值合并）；`reportTabOf` 同步去掉 `metrics`/`equity` 分支（`performance` 由工作台单独渲染）。
+  3. `backtest_workbench.dart` 标签栏 chips 重排为 交易→条件→绩效→资金→链路→归因。
+  4. 工作台 body 对 `performance` 特殊处理：未跑出结果显示提示；跑出后用一个 Column 包两个 `Expanded`，上放「指标卡」(`BacktestReportPanel` metrics)、下放「净值/回撤曲线」(`BacktestReportPanel` equity)，中间分隔线——同屏上下堆叠。`BacktestReportPanel` 内部用 Expanded，必须定高容器，故不用整体滚动而用双 Expanded 拆分。
+- **结果**：`flutter analyze --no-pub` 0 error（75 条为 test/ 既有 warning/info）。
+- **演示**：加载股票→走到某根→设置点「策略回测」→工作台顶栏顺序应为 交易|条件|绩效|资金|链路|归因；设条件跑回测后点「绩效」标签，应同屏看到上方指标卡（净利润/收益率/胜率等）+ 下方净值与回撤曲线；「交易」标签在「条件」左边。
+- **测试**：未跑 widget 测试（UI 重排，沿用现有 analyze 验收；按 AGENTS.md 验证应连续单步，本次为 UI 布局改动，主要靠 GUI 验收）。
+- **注意事项 / 待办**：
+  - 仅动工作台标签与报告视图排版，未碰条件求值内核、步进/冻结、主图绘制语义；不触发 AGENTS.md 关键计算逻辑确认门禁。
+  - 「资金/链路/归因」三个未提及标签保留原功能，仅位置随重排。
+  - 此前未确认的「策略回测移到筹码分布桶宽下方」(Part 2) 仍待用户确认，本次未做。
+---
+### 2026-09-23 · WorkBuddy · BUG修复 · 策略回测打开时左侧K线图无法调出tooltip
+
+- **执行者**：WorkBuddy（Agent 模式，用户直接要求修复 BUG；纯 UI 布局，未碰缠论内核/步进/冻结/主图绘制语义）
+- **任务类型**：BUG 修复（tooltip 停靠子窗口缺失）
+- **现象**：桌面端打开「策略回测」工作台后，左侧 K 线图无法调出十字线 tooltip 界面；手机关闭 dock 路径正常。
+- **根因**：`_buildReplayBody()` 中，回测面板**关闭**时 `return _withTooltipDock(chart)`（带左侧 tooltip 停靠消费者），但回测面板**打开且桌面并排**（`sideBySide`）分支直接 `return Row[chart, 分隔条, 工作台]`，漏包 `_withTooltipDock`。`KlineChart` 桌面端 `dockTooltipPanel:true`，只把十字线状态广播给 `_tooltipBridge`，自身不出悬浮框；缺 `_withTooltipDock` 这个 bridge 消费者 → tooltip 永远不显示。手机端 `!sideBySide` 分支已包 `_withTooltipDock` 故正常。
+- **操作**：`main.dart` 桌面并排分支，将 `SizedBox(width: chartW, child: chart)` 改为 `SizedBox(width: chartW, child: _withTooltipDock(chart))`，与关闭态/手机端一致。dock 仅在 chart 区域内出现（关面板不占宽），工作台宽度 `benchW` 与 split 拖动（`_backtestChartFraction`）逻辑不变。
+- **结果**：`flutter analyze --no-pub` 0 error（75 条 test/ 既有 warning/info）。
+- **演示 / GUI 验收**：加载股票→走到某根→设置点「策略回测」→在工作台左图区域拖动/悬停应调出左侧 tooltip 停靠子窗口（指标数据行），且分笔成交/买卖点仍按组显示；拖动分隔条缩放左图、右侧工作台宽度不受 tooltip 影响。
+- **注意事项**：
+  - 仅补上 bridge 消费者包裹，未改 tooltip 槽位内容、十字线语义或主图绘制；不触发 AGENTS.md 关键计算逻辑确认门禁。
+  - 此前未确认的「策略回测移到筹码分布桶宽下方」(Part 2) 仍待用户确认，本次未做。
+---
+
+### 2026-09-23 · WorkBuddy · 功能对齐 · 策略回测“通道”改造为“回归通道”（与主图对齐）
+
+- **执行者**：WorkBuddy（grill-me 设计共识后落地；用户选 B：改造'通道'为回归通道、中/上/下三轨、运行自动显示）
+- **任务类型**：功能对齐（回测条件变量 ↔ 主图指标）
+- **背景**：grill 澄清——主图有“通道”(trendChannel,滑窗) 与“回归通道”(regressionChannel,父层连线回归) 两套；回测原“通道”组=滑窗值，≠主图“回归通道”。用户要“对齐”=把回测'通道'组改成'回归通道'组。
+- **操作**：
+  1. 冻结仓接入回归通道（关键计算逻辑，grill 共识即确认）：`math_series_freeze_store.dart` 新增 `regressByKn` 字段 + `regress(kn)` getter + `mergeLevel` 增 `regress` 参数（每层每步整段重算后**全量覆写**，不按单格增量合并——因回归通道“一段一换”，历史格随父层段变整体重算）；`mergeMathSeriesForStep` 增 `barFeatures`/`truncationCheck` 参数，按层调 `computeRegressionChannelForLevel`（父层 K{n+1}连线最后一段 + `collectFractalJudgmentEvents`）并入。去掉原“刻意不进冻结仓”注释。
+  2. `main.dart` `_mergeMathFreeze` 调 `mergeMathSeriesForStep` 时传 `barFeatures: bundle.barFeatures, truncationCheck: _truncationCheck`。
+  3. `signal_data_catalog.dart`：删原 `channelVarId`/`parseChannelVarId`/`_channelDef` 与通道组注册，改为 `regressVarId(kn,'MID'|'UP'|'DOWN')`=`MAIN.Kn.REGRESS.{MID,UP,DOWN}`、`parseRegressVarId`、`_regressDef`（groupKey 'regress'、groupLabel '回归通道'、displayName 'K{kn}回归通道中/上/下'、source 'MathSeriesFreezeStore.regress(kn).mid/up/down'）；注册处按层加 中/上/下 三轨；parse 兜底同步改。原滑窗“通道”组从回测移除（符合用户选择）。
+  4. `catalog_lookup.dart` `frozenPlotSeries`：CHANNEL 分支改为 REGRESS 分支读 `store.regress(kn).{mid,up,down}`。
+  5. `condition_indicators.dart`：`MAIN.Kn.CHANNEL`→trendChannel 映射改为 `MAIN.Kn.REGRESS`→regressionChannel（运行回测引用回归通道后自动在主图画 K{kn}回归通道）。
+  6. `msg_history.dart`：回归通道口径由“暂未接入回测/ML / 刻意不进冻结仓”改为“已接入回测（MAIN.Kn.REGRESS.MID/UP/DOWN）/ 已进 regressByKn 全量覆写”。
+- **结果**：`flutter analyze --no-pub` 0 error（75 条 test/ 既有 warning/info）。
+- **演示 / GUI 验收**：加载股票→走到某根→设置点“策略回测”→条件“左变量”里原“通道”组变为“回归通道”组（含 K0回归通道中/上/下三轨）；设“收 < K0回归通道下”→运行→主图自动叠加 K0回归通道，且与条件求值同基准；买卖点照常。
+- **注意事项**：
+  - 触 AGENTS.md 关键计算逻辑（MathSeriesFreezeStore 合并/冻结）：grill-me 逐枝确认即授权，未先改再问。
+  - 代价：此前保存的、引用滑窗“通道”(MAIN.Kn.CHANNEL.*) 的旧策略不再解析（组已移除）→ 该条件不可用，需改用“回归通道”组重建。
+  - 主图“通道”(trendChannel, 滑窗) 仍保留为手动指标（冻结仓 channel 合并未动），与回测脱钩。
+  - 回归通道每层每步多算一次（与绘制同源），属可接受开销。
+
+---
+
+### 2026-09-23 · WorkBuddy · UI重排 · 设置面板策略回测上移 + 回测工作台条件标签置最左
+
+- **执行者**：WorkBuddy（Agent 模式；grill-me 澄清落位后落地；纯 UI 重排，未碰缠论内核/步进/冻结/主图绘制）
+- **任务类型**：UI 布局 / 设置面板与工作台标签重排
+- **上下文**：用户指出最新 app 未实现此前未确认的 Part 2（策略回测移到“筹码分布桶宽”下方），并要求把回测工作台“条件”标签放到“交易”左侧（即最左）。
+- **操作**：
+  1. grill 澄清唯一分叉：策略回测按钮紧贴“筹码分布桶宽”字段正下方（用户选此），顺序变为 筹码分布桶宽 → 策略回测 → 是否启用安卓操作逻辑 → 截断监察 → … → 机器学习。
+  2. `main.dart` `_buildPanelBody`：把“策略回测”按钮从面板底部（紧挨机器学习上方）整体移到“筹码分布桶宽”`TextFormField` 之后，加 `SizedBox(fieldGap)` 间隔再接安卓开关；底部删除旧按钮及其上方 `SizedBox(height: 12)`，保留 `fieldGap` 接到机器学习。桌面 `EdgeControlPanel` 与手机 sheet 共用同一 `_buildPanelBody`，均已覆盖。
+  3. `backtest_workbench.dart` 标签栏 chips：把 `交易` 与 `条件` 两个 chip 对调，顺序由 交易→条件→绩效→资金→链路→归因 改为 条件→交易→绩效→资金→链路→归因。`_btTab` 初始值本就 `conditions`（打开即显“条件”内容），置左后与默认选中一致；其余四标签位置不变。
+- **结果**：`flutter analyze --no-pub` 0 error（75 条为 `test/` 既有 warning/info，无关）。
+- **演示 / GUI 验收**：打开设置面板，“筹码分布桶宽”正下方应出现“策略回测”按钮（安卓开关在其下）；打开策略回测工作台，顶栏顺序应为 条件|交易|绩效|资金|链路|归因，且默认落在“条件”标签。
+- **注意事项 / 待办**：
+  - 仅动设置面板按钮顺序与工作台标签顺序，未碰条件求值内核、步进/冻结、主图绘制语义、回归通道；不触发 AGENTS.md 关键计算逻辑确认门禁。
+  - 此前未确认的 Part 2（策略回测移到筹码分布桶宽下方）本次已落地（用户本轮明确要补做）。

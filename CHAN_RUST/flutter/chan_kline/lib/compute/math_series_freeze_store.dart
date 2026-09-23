@@ -1,7 +1,9 @@
+import '../models/bar_crosshair_feature.dart';
 import '../models/kline_bar.dart';
 import '../models/level_models.dart';
 import '../models/math_indicator_config.dart';
 import 'demark_compute.dart';
+import 'fractal_judgment_compute.dart';
 import 'kn_ohlc_sample_compute.dart';
 import 'math_classic_compute.dart';
 import 'trend_model_compute.dart';
@@ -176,6 +178,7 @@ class MathSeriesFreezeStore {
   final Map<int, Map<int, List<double?>>> meanByKn = {};
   final Map<int, Map<int, ({List<double?> max, List<double?> min})>>
       channelByKn = {};
+  final Map<int, RegressionChannelK0Series> regressByKn = {};
 
   void clear() {
     macdByKn.clear();
@@ -185,6 +188,7 @@ class MathSeriesFreezeStore {
     demarkByKn.clear();
     meanByKn.clear();
     channelByKn.clear();
+    regressByKn.clear();
   }
 
   /// 本步新鲜值并入冻结仓（全层同构）。[onlyX] 只写当根，避免整表拷贝。
@@ -197,6 +201,7 @@ class MathSeriesFreezeStore {
     required DemarkK0Series demark,
     required Map<int, List<double?>> mean,
     required Map<int, ({List<double?> max, List<double?> min})> channel,
+    required RegressionChannelK0Series regress,
     int? onlyX,
   }) {
     if (onlyX != null) {
@@ -227,6 +232,8 @@ class MathSeriesFreezeStore {
           _mergeMeanAt(meanByKn[displayKn], mean, x);
       channelByKn[displayKn] =
           _mergeChannelAt(channelByKn[displayKn], channel, x);
+      // 回归通道：一段一换，每层每步整段重算后全量覆写（不按 onlyX 单格合并）。
+      regressByKn[displayKn] = regress;
       return;
     }
     macdByKn[displayKn] = freezeMacd(macdByKn[displayKn], macd);
@@ -236,6 +243,8 @@ class MathSeriesFreezeStore {
     demarkByKn[displayKn] = freezeDemark(demarkByKn[displayKn], demark);
     meanByKn[displayKn] = freezeMeanMap(meanByKn[displayKn], mean);
     channelByKn[displayKn] = freezeChannelMap(channelByKn[displayKn], channel);
+    // 回归通道：一层整段全量覆写（见 onlyX 分支说明）。
+    regressByKn[displayKn] = regress;
   }
 
   MacdK0Series? macd(int kn) => macdByKn[kn];
@@ -246,6 +255,7 @@ class MathSeriesFreezeStore {
   Map<int, List<double?>>? mean(int kn) => meanByKn[kn];
   Map<int, ({List<double?> max, List<double?> min})>? channel(int kn) =>
       channelByKn[kn];
+  RegressionChannelK0Series? regress(int kn) => regressByKn[kn];
 }
 
 /// 本步 0..maxDisplayKn 新鲜算完并入冻结仓。
@@ -256,6 +266,8 @@ void mergeMathSeriesForStep({
   required MathIndicatorConfig config,
   required int maxDisplayKn,
   int? asOf,
+  List<BarCrosshairFeature> barFeatures = const [],
+  bool truncationCheck = true,
 }) {
   if (bars.isEmpty || maxDisplayKn < 0) return;
   for (var kn = 0; kn <= maxDisplayKn; kn++) {
@@ -295,7 +307,26 @@ void mergeMathSeriesForStep({
       periods: config.channelPeriods,
       asOf: asOf,
     );
-    // 回归通道刻意不进冻结仓：基准=父层连线最后一段，端点一动整条通道跟着动（纯绘制）。
+    // 回归通道：基准=父层 K{n+1}连线最后一段，端点一动整条通道跟着动（一段一换）。
+    // 每层每步整段重算，全量覆写进冻结仓，使回测可在 asOf 处读到与图上同基准的值。
+    final regress = computeRegressionChannelForLevel(
+      displayKn: kn,
+      bars: bars,
+      levels: levels,
+      barFeatures: barFeatures,
+      liveJudgments: asOf == null || asOf < 0
+          ? const []
+          : collectFractalJudgmentEvents(
+              kn: kn + 1,
+              bars: bars,
+              levels: levels,
+              barFeatures: barFeatures,
+              asOf: asOf,
+              truncationCheck: truncationCheck,
+            ),
+      k: config.regressK,
+      asOf: asOf,
+    );
     store.mergeLevel(
       displayKn: kn,
       macd: classic.macd,
@@ -305,6 +336,7 @@ void mergeMathSeriesForStep({
       demark: demark,
       mean: mean,
       channel: channel,
+      regress: regress,
       onlyX: asOf,
     );
   }

@@ -14,19 +14,17 @@ import 'strategy_signal_painter.dart';
 enum BacktestReportTab { metrics, equity, trades, chain, attribution }
 
 /// 工作台顶栏标签：条件/资金 + 报告各页，一次只开一页。
+/// 绩效 = 指标 + 净值 合并同屏（上下堆叠）。
 enum BacktestWorkbenchTab {
   conditions,
   capital,
-  metrics,
-  equity,
+  performance,
   trades,
   chain,
   attribution,
 }
 
 BacktestReportTab? reportTabOf(BacktestWorkbenchTab t) => switch (t) {
-      BacktestWorkbenchTab.metrics => BacktestReportTab.metrics,
-      BacktestWorkbenchTab.equity => BacktestReportTab.equity,
       BacktestWorkbenchTab.trades => BacktestReportTab.trades,
       BacktestWorkbenchTab.chain => BacktestReportTab.chain,
       BacktestWorkbenchTab.attribution => BacktestReportTab.attribution,

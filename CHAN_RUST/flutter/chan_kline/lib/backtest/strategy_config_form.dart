@@ -439,13 +439,15 @@ class _StrategyConfigFormState extends State<StrategyConfigForm> {
           child: TextButton.icon(
             onPressed: () {
               final last = draft.leaves.last;
+              // 深拷贝上一条：新条件在副本上微调，避免每次从写死的 CLOSE/lt/MID 重来
               draft.leaves.add(_LeafDraft(
                 kn: last.kn,
-                leftId: rawOhlcId(last.kn, 'CLOSE'),
-                op: TradeBinaryOp.lt,
-                rightIsConst: false,
-                rightId: bollBandId(last.kn, 'MID'),
-                rightConst: 0,
+                leftId: last.leftId,
+                op: last.op,
+                rightIsConst: last.rightIsConst,
+                rightId: last.rightId,
+                rightConst: last.rightConst,
+                enumToken: last.enumToken,
               ));
               draft.joins.add(CondJoin.and);
               setState(() {});

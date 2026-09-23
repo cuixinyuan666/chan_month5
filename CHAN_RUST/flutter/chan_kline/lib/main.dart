@@ -49,6 +49,7 @@ import 'backtest/backtest_workbench.dart';
 import 'backtest/chan_event_store.dart';
 import 'backtest/chart_line_store.dart';
 import 'backtest/chip_peak_store.dart';
+import 'backtest/condition_indicators.dart';
 import 'backtest/divergence_relation_store.dart';
 import 'backtest/zhongshu_object_store.dart';
 import 'app/background_keep_alive.dart';
@@ -1568,6 +1569,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
       config: _mathIndicatorConfig,
       maxDisplayKn: maxKn,
       asOf: displayX,
+      barFeatures: bundle.barFeatures,
+      truncationCheck: _truncationCheck,
     );
     if (!ingestChip) return;
     _chipPeakStore.ingestThrough(
@@ -2486,9 +2489,12 @@ class _KlineHomePageState extends State<KlineHomePage> {
       sheetSetState: sheetSetState,
       forMobileSheet: forMobileSheet,
     );
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
+    // 让设置面板内所有文字（标签、开关标题、按钮文字等）支持鼠标拖选 + Ctrl+C 复制。
+    // 单击仍触发按钮/输入框，拖拽才进入选择，二者不冲突。
+    return SelectionArea(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
         if (forMobileSheet)
           SettingsOutlinedButton(
             label: _selectedCode == null
@@ -2610,6 +2616,14 @@ class _KlineHomePageState extends State<KlineHomePage> {
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
           onFieldSubmitted: (text) =>
               _applyBucketStepFromSettings(text, sheetSetState: sheetSetState),
+        ),
+        const SizedBox(height: SettingsPanelTheme.fieldGap),
+        SettingsOutlinedButton(
+          label: _backtestPanelOpen ? '策略回测（已打开）' : '策略回测',
+          icon: Icons.show_chart,
+          onPressed: (_busy && !_backtestPanelOpen) || _mlSession.isActive
+              ? null
+              : () => _openBacktestWorkbench(closeSettingsSheet: forMobileSheet),
         ),
         const SizedBox(height: SettingsPanelTheme.fieldGap),
         SwitchListTile(
@@ -2882,6 +2896,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         else
           ...advanced,
       ],
+      ),
     );
   }
 
@@ -2971,14 +2986,6 @@ class _KlineHomePageState extends State<KlineHomePage> {
           '本次验收：T1 K1节奏关窗持值（分笔·77–114续上个0-0）·T2 tip与主图同源；'
           '建议跳末后点按，稍等后粘贴全文。',
           style: TextStyle(fontSize: 11, color: Colors.grey.shade700, height: 1.3),
-        ),
-        const SizedBox(height: 12),
-        SettingsOutlinedButton(
-          label: _backtestPanelOpen ? '策略回测（已打开）' : '策略回测',
-          icon: Icons.show_chart,
-          onPressed: (_busy && !_backtestPanelOpen) || _mlSession.isActive
-              ? null
-              : () => _openBacktestWorkbench(closeSettingsSheet: forMobileSheet),
         ),
         const SizedBox(height: SettingsPanelTheme.fieldGap),
         SettingsFilledButton(
@@ -3150,7 +3157,11 @@ class _KlineHomePageState extends State<KlineHomePage> {
           final benchW = totalW - chartW - splitW;
           return Row(
             children: [
-              SizedBox(width: chartW, child: chart),
+              // 桌面并排：chart 仍要包 _withTooltipDock，否则左边 tooltip 停靠子窗口
+              // 没有 _tooltipBridge 的消费者，十字线 tooltip 界面无法调出。
+              // dock 只在 chart 区域内出现（关面板时不占宽），工作台宽度 benchW 不变，
+              // split 拖动改 _backtestChartFraction 仍然生效。
+              SizedBox(width: chartW, child: _withTooltipDock(chart)),
               _buildBacktestSplitBar(totalW, vertical: false),
               SizedBox(width: benchW, child: workbench),
             ],
@@ -3336,6 +3347,18 @@ class _KlineHomePageState extends State<KlineHomePage> {
       _btSelectedTradeId = null;
       _btHighlightIds = {};
       _panelExpanded = false;
+      // 运行回测后：自动把条件里引用的指标并入主/副图（叠加，不清空原有勾选）；
+      // 关面板不自动关这些指标（叠加语义天然保留）。
+      final merged = mergeStrategyIndicators(
+        main: _mainIndicators,
+        sub: _subIndicators,
+        cfg: cfg,
+        maxKn: maxKn,
+        truncationCheck: _truncationCheck,
+        maxBsClass: _maxBsClass,
+      );
+      _mainIndicators = merged.main;
+      _subIndicators = merged.sub;
     });
     if (run.error != null) {
       _showSnack(run.error!);
@@ -3505,9 +3528,13 @@ class _KlineHomePageState extends State<KlineHomePage> {
       onLongPressReset: gesturesOn ? _resetStep : null,
       onLongPressReload: _busy ? null : _loadKlines,
       onLongPressRunToEnd: gesturesOn ? () { unawaited(_runToEnd()); } : null,
-      strategySignals: _backtestRun?.result?.signals ?? const [],
-      strategyFills: _backtestRun?.result?.fills ?? const [],
-      strategyRoundBySignalId: _backtestRun?.result == null
+      strategySignals: _backtestPanelOpen
+          ? (_backtestRun?.result?.signals ?? const [])
+          : const [],
+      strategyFills: _backtestPanelOpen
+          ? (_backtestRun?.result?.fills ?? const [])
+          : const [],
+      strategyRoundBySignalId: (!_backtestPanelOpen || _backtestRun?.result == null)
           ? const {}
           : buildStrategyRoundIndex(_backtestRun!.result!).roundBySignalId,
       highlightedStrategyIds: _btHighlightIds,
