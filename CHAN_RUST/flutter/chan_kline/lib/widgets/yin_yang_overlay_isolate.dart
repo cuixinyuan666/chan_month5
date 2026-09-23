@@ -7,6 +7,19 @@ import 'package:ffi/ffi.dart';
 import 'package:win32/win32.dart';
 
 /// 独立 isolate 入口：自己的定时器画分层窗口，不跟 Flutter UI isolate 抢时间片。
+///
+/// ─── 生命周期铁律（别乱动，改之前先看懂）────────────────────────────────
+/// 1. 窗口过程是用 Dart FFI 回调（[Pointer.fromFunction]）注册的；
+///    **isolate 一结束，这个回调指针就被 VM 删掉**，再被 Win32 调到就会
+///    `error: Callback invoked after it has been deleted` 直接干掉整个进程。
+/// 2. RegisterClass 注册的窗口类活到「进程结束或 UnregisterClass」，它记的
+///    lpfnWndProc 是**第一次**注册时那个 isolate 的回调指针。旧 isolate 死了、
+///    类还在，下一次 CreateWindowEx 建窗口过程中（WM_NCCREATE）会去回调那个
+///    失效指针 → 崩。这正是「第二次一键走完必崩」的原因。
+/// 3. 因此本 isolate 起来后就常驻；隐藏（hide）只 [SW_HIDE]，不 Destroy；
+///    真正的收摊顺序必须是：停定时器 → DestroyWindow → UnregisterClass
+///    → 才允许 isolate 退出。类名带时间戳，避免撞上残留的旧类。
+/// ──────────────────────────────────────────────────────────────────────
 void yinYangOverlayIsolateMain(SendPort ready) {
   final cmd = ReceivePort();
   ready.send(cmd.sendPort);
@@ -24,13 +37,21 @@ void yinYangOverlayIsolateMain(SendPort ready) {
   var turns = 0.0;
   var lastPaintMs = DateTime.now().millisecondsSinceEpoch;
   Timer? ticker;
-  final className = TEXT('ChanYinYangOverlay');
+  final className =
+      TEXT('ChanYinYangOverlay_${DateTime.now().microsecondsSinceEpoch}');
+  final wndProcPtr = Pointer.fromFunction<WNDPROC>(_overlayWndProc, 0);
 
-  void destroy() {
+  /// 停转 + 隐藏。窗口本体与回调都留着，下一轮 [show] 直接复用。
+  void stopPainting() {
     ticker?.cancel();
     ticker = null;
+    if (hwnd != 0) ShowWindow(hwnd, SW_HIDE);
+  }
+
+  void destroy() {
+    stopPainting();
     if (hwnd != 0) {
-      DestroyWindow(hwnd);
+      DestroyWindow(hwnd); // 同步走 WM_DESTROY，此刻回调还有效
       hwnd = 0;
     }
     if (hbmp != 0) {
@@ -46,6 +67,7 @@ void yinYangOverlayIsolateMain(SendPort ready) {
       hdcScreen = 0;
     }
     bits = null;
+    UnregisterClass(className, GetModuleHandle(nullptr));
   }
 
   void paintFrame() {
@@ -89,16 +111,22 @@ void yinYangOverlayIsolateMain(SendPort ready) {
     turns = (turns + (dt.clamp(1, 50) / 8000.0)) % 1.0;
   }
 
-  void startWindow() {
-    destroy();
+  /// 建一次窗口就一直复用；不再每轮重新 RegisterClass / 重新绑回调。
+  void ensureWindow() {
+    if (hwnd != 0 || diameter <= 0) return;
     final hInst = GetModuleHandle(nullptr);
     final wc = calloc<WNDCLASS>();
     try {
-      wc.ref.lpfnWndProc = Pointer.fromFunction<WNDPROC>(_overlayWndProc, 0);
+      wc.ref.lpfnWndProc = wndProcPtr;
       wc.ref.hInstance = hInst;
       wc.ref.lpszClassName = className;
       wc.ref.hCursor = LoadCursor(NULL, IDC_ARROW);
-      RegisterClass(wc);
+      // 类已存在说明是上一轮残留（可能绑着失效回调）→ 先注销再注册，
+      // 保证用的一定是本 isolate 的回调。
+      if (RegisterClass(wc) == 0) {
+        UnregisterClass(className, hInst);
+        RegisterClass(wc);
+      }
     } finally {
       calloc.free(wc);
     }
@@ -145,8 +173,15 @@ void yinYangOverlayIsolateMain(SendPort ready) {
       calloc.free(bmi);
       calloc.free(bitsPtr);
     }
-    if (hbmp == 0 || bits == null || bits!.address == 0) return;
+    if (hbmp == 0 || bits == null || bits!.address == 0) {
+      destroy();
+      return;
+    }
     SelectObject(hdcMem, hbmp);
+  }
+
+  void startPainting() {
+    if (hwnd == 0) return;
     ShowWindow(hwnd, SW_SHOWNOACTIVATE);
     SetWindowPos(
       hwnd,
@@ -158,6 +193,7 @@ void yinYangOverlayIsolateMain(SendPort ready) {
       SWP_NOACTIVATE | SWP_SHOWWINDOW,
     );
     lastPaintMs = DateTime.now().millisecondsSinceEpoch;
+    ticker?.cancel();
     ticker = Timer.periodic(const Duration(milliseconds: 16), (_) {
       if (!running) return;
       paintFrame();
@@ -168,26 +204,56 @@ void yinYangOverlayIsolateMain(SendPort ready) {
   cmd.listen((msg) {
     if (msg is! Map) return;
     final op = msg['op']?.toString();
-    if (op == 'stop') {
-      running = false;
-      destroy();
-      final ack = msg['ack'];
-      if (ack is SendPort) ack.send(true);
-      cmd.close();
-      return;
-    }
-    if (op == 'show') {
-      opacity = (msg['opacity'] as num?)?.toDouble() ?? 0.5;
-      final heightFactor = (msg['heightFactor'] as num?)?.toDouble() ?? 0.25;
-      _snapToFlutterWindowCenter(
-        heightFactor: heightFactor,
-        onPlaced: (l, t, d) {
-          left = l;
-          top = t;
-          diameter = d;
-        },
-      );
-      startWindow();
+    final ack = msg['ack'];
+    switch (op) {
+      case 'show':
+        running = true;
+        opacity = (msg['opacity'] as num?)?.toDouble() ?? 0.5;
+        final heightFactor = (msg['heightFactor'] as num?)?.toDouble() ?? 0.25;
+        var newLeft = left;
+        var newTop = top;
+        var newDiameter = diameter;
+        _snapToFlutterWindowCenter(
+          heightFactor: heightFactor,
+          onPlaced: (l, t, d) {
+            newLeft = l;
+            newTop = t;
+            newDiameter = d;
+          },
+        );
+        if (newDiameter != diameter) {
+          // 尺寸变了（窗口被拉过）→ 整窗重建；destroy 里已注销旧类，安全。
+          destroy();
+        } else if (hwnd != 0 && (newLeft != left || newTop != top)) {
+          SetWindowPos(
+            hwnd,
+            HWND_TOPMOST,
+            newLeft,
+            newTop,
+            newDiameter,
+            newDiameter,
+            SWP_NOACTIVATE | SWP_SHOWWINDOW,
+          );
+        }
+        left = newLeft;
+        top = newTop;
+        diameter = newDiameter;
+        ensureWindow();
+        startPainting();
+        if (ack is SendPort) ack.send(hwnd != 0);
+        return;
+      case 'hide':
+        stopPainting();
+        if (ack is SendPort) ack.send(true);
+        return;
+      case 'stop':
+        running = false;
+        destroy();
+        if (ack is SendPort) ack.send(true);
+        cmd.close(); // 此后 main 返回，isolate 自然退出（窗口已拆、类已注销）
+        return;
+      default:
+        return;
     }
   });
 }
@@ -225,10 +291,6 @@ void _snapToFlutterWindowCenter({
 }
 
 int _overlayWndProc(int hwnd, int msg, int wParam, int lParam) {
-  if (msg == WM_DESTROY) {
-    PostQuitMessage(0);
-    return 0;
-  }
   return DefWindowProc(hwnd, msg, wParam, lParam);
 }
 

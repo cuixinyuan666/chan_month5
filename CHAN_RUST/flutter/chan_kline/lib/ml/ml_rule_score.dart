@@ -507,6 +507,14 @@ class MlRuleScore {
         hits++;
         signals.add('K$kn三极平行价=${sub['fx_triple_price_$kn']}');
       }
+      if (sub['fx_bottom_snug_price_$kn'] != null) {
+        hits++;
+        signals.add('K$kn底极贴合价=${sub['fx_bottom_snug_price_$kn']}');
+      }
+      if (sub['fx_top_snug_price_$kn'] != null) {
+        hits++;
+        signals.add('K$kn顶极贴合价=${sub['fx_top_snug_price_$kn']}');
+      }
       if (sub['mean_text_$kn'] != null) {
         hits++;
         signals.add('K$kn均线 ${sub['mean_text_$kn']}');

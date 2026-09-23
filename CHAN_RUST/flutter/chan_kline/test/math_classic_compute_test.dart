@@ -1,11 +1,15 @@
 import 'package:flutter_test/flutter_test.dart';
 
+import 'dart:math' as math;
+
 import 'package:chan_kline/compute/demark_compute.dart';
+import 'package:chan_kline/compute/kn_ohlc_sample_compute.dart';
 import 'package:chan_kline/compute/math_classic_compute.dart';
 import 'package:chan_kline/models/bar_feature_lookup.dart';
 import 'package:chan_kline/models/chart_indicator.dart';
 import 'package:chan_kline/models/divergence_algo.dart';
 import 'package:chan_kline/models/kline_bar.dart';
+import 'package:chan_kline/models/level_models.dart';
 import 'package:chan_kline/models/math_indicator_config.dart';
 
 KlineBar _bar(int idx, double close, {double? high, double? low}) {
@@ -49,6 +53,141 @@ void main() {
       expect(boll.mid[2], closeTo(2, 1e-12)); // (1+2+3)/3
       expect(boll.up[2], greaterThan(boll.mid[2]!));
       expect(boll.down[2], lessThan(boll.mid[2]!));
+    });
+  });
+
+  group('回归通道(父层连线绑定)', () {
+    // 父层 = structure level displayKn+1；K0回归通道看 level1（K1连线）
+    LevelBundle parentBundle(
+      List<LevelSegmentN> segs, {
+      int level = 1,
+      LevelUnitBar? active,
+    }) =>
+        LevelBundle(level: level, segments: segs, activeUnit: active);
+
+    test('基准=父层最后一段；一路外推到 asOf', () {
+      final bars = [for (var i = 0; i < 7; i++) _bar(i, 10 + i.toDouble())];
+      final s0 = LevelSegmentN(
+        idx: 0, dir: 1, beginConfirmX: 1, endConfirmX: 3,
+        beginPoleX: 1, endPoleX: 3,
+      );
+      final s1 = LevelSegmentN(
+        idx: 1, dir: -1, beginConfirmX: 3, endConfirmX: 5,
+        beginPoleX: 3, endPoleX: 5,
+      );
+      final rc = computeRegressionChannelForLevel(
+        displayKn: 0,
+        bars: bars,
+        levels: [parentBundle([s0, s1])],
+      );
+      // 只认最后一段 [3,5]：3 之前不出线
+      expect(rc.mid[2], isNull);
+      expect(rc.mid[3], closeTo(13, 1e-9));
+      // 完美直线斜率 1 → 外推到末根 6
+      expect(rc.mid[6], closeTo(16, 1e-9));
+      // 残差≈0 → 带宽≈0（下限 1e-7）
+      expect(rc.up[4]! - rc.mid[4]!, lessThan(1e-5));
+    });
+
+    test('上下轨关于中轨对称（±k×残差总体标准差，除 m）', () {
+      final bars = [
+        _bar(0, 10), _bar(1, 13), _bar(2, 12), _bar(3, 15), _bar(4, 14),
+      ];
+      final seg = LevelSegmentN(
+        idx: 0, dir: 1, beginConfirmX: 0, endConfirmX: 4,
+        beginPoleX: 0, endPoleX: 4,
+      );
+      final rc = computeRegressionChannelForLevel(
+        displayKn: 0, bars: bars, levels: [parentBundle([seg])], k: 2.0,
+      );
+      final m = rc.mid[2]!, u = rc.up[2]!, d = rc.down[2]!;
+      // 残差 std = sqrt(0.96) ≈ 0.9798（非收盘价 std≈1.72）
+      expect(u - m, closeTo(2 * math.sqrt(0.96), 1e-9));
+      expect(m - d, closeTo(2 * math.sqrt(0.96), 1e-9));
+    });
+
+    test('k 越大轨道越宽', () {
+      final bars = [
+        _bar(0, 10), _bar(1, 13), _bar(2, 12), _bar(3, 15), _bar(4, 14),
+      ];
+      final seg = LevelSegmentN(
+        idx: 0, dir: 1, beginConfirmX: 0, endConfirmX: 4,
+        beginPoleX: 0, endPoleX: 4,
+      );
+      final w1 = computeRegressionChannelForLevel(
+        displayKn: 0, bars: bars, levels: [parentBundle([seg])], k: 1,
+      );
+      final w2 = computeRegressionChannelForLevel(
+        displayKn: 0, bars: bars, levels: [parentBundle([seg])], k: 2,
+      );
+      expect(
+        w2.up[2]! - w2.mid[2]!,
+        greaterThan(w1.up[2]! - w1.mid[2]!),
+      );
+    });
+
+    test('asOf 回退：基准取当时可见那段，右端截到 asOf', () {
+      final bars = [for (var i = 0; i < 7; i++) _bar(i, 10 + i.toDouble())];
+      final s0 = LevelSegmentN(
+        idx: 0, dir: 1, beginConfirmX: 0, endConfirmX: 3,
+        beginPoleX: 0, endPoleX: 3,
+      );
+      final s1 = LevelSegmentN(
+        idx: 1, dir: -1, beginConfirmX: 3, endConfirmX: 6,
+        beginPoleX: 3, endPoleX: 6,
+      );
+      // asOf=4 时第二段（endConfirmX=6）还看不见 → 基准回到 [0,3]
+      final rc = computeRegressionChannelForLevel(
+        displayKn: 0, bars: bars, levels: [parentBundle([s0, s1])], asOf: 4,
+      );
+      expect(rc.mid[0], closeTo(10, 1e-9));
+      expect(rc.mid[4], closeTo(14, 1e-9));
+      expect(rc.mid[5], isNull);
+      expect(rc.mid[6], isNull);
+    });
+
+    test('全层同构：K1回归通道看 level2 连线，样本用本层虚拟K', () {
+      final bars = [for (var i = 0; i < 6; i++) _bar(i, 10 + i.toDouble())];
+      final seg = LevelSegmentN(
+        idx: 0, dir: 1, beginConfirmX: 0, endConfirmX: 4,
+        beginPoleX: 0, endPoleX: 4,
+      );
+      final rc = computeRegressionChannelForLevel(
+        displayKn: 1,
+        bars: bars,
+        levels: [parentBundle([seg], level: 2)],
+        samples: [
+          for (var i = 0; i <= 4; i++)
+            KnOhlcSample(
+              endX: i,
+              open: 10 + i.toDouble(),
+              high: 11 + i.toDouble(),
+              low: 9 + i.toDouble(),
+              close: 10 + 2 * i.toDouble(), // 斜率 2
+            ),
+        ],
+      );
+      expect(rc.mid[0], closeTo(10, 1e-9));
+      expect(rc.mid[2], closeTo(14, 1e-9));
+      expect(rc.mid[5], closeTo(20, 1e-9)); // 外推到 asOf=5
+    });
+
+    test('无父层 bundle / 区间不足 2 点 → 整条不出线（不打崩）', () {
+      final bars = [for (var i = 0; i < 5; i++) _bar(i, 10 + i.toDouble())];
+      final empty = computeRegressionChannelForLevel(
+        displayKn: 0, bars: bars, levels: const [],
+      );
+      expect(empty.mid.every((e) => e == null), isTrue);
+
+      // 父层只有一个点（起=终）→ 无有效段
+      final onePoint = LevelSegmentN(
+        idx: 0, dir: 1, beginConfirmX: 2, endConfirmX: 2,
+        beginPoleX: 2, endPoleX: 2,
+      );
+      final rc = computeRegressionChannelForLevel(
+        displayKn: 0, bars: bars, levels: [parentBundle([onePoint])],
+      );
+      expect(rc.mid.every((e) => e == null), isTrue);
     });
   });
 
@@ -177,6 +316,25 @@ void main() {
 
       final mainLvl = mainIndicatorsForLevel(0, mainCat);
       expect(mainLvl.any((e) => e.kind == MainIndicatorKind.demark), isTrue);
+    });
+
+    test('回归通道入主图目录、归「延伸」、序在 fxTopSnug 后、默认不绘制', () {
+      final mainCat = buildMainIndicatorCatalog(1);
+      final rcItems = mainCat
+          .where((e) => e.kind == MainIndicatorKind.regressionChannel)
+          .toList();
+      // 0..maxKn 每层一套
+      expect(rcItems.length, 2);
+      expect(rcItems.map((e) => e.label), containsAll(['K0回归通道', 'K1回归通道']));
+      expect(MainIndicatorKind.regressionChannel.categoryLabel, '延伸');
+      expect(
+        const MainChartIndicator.regressionChannel(0).kindOrderInLevel,
+        greaterThan(const MainChartIndicator.fxTopSnug(0).kindOrderInLevel),
+      );
+      expect(
+        isDefaultDrawnMain(const MainChartIndicator.regressionChannel(0)),
+        isFalse,
+      );
     });
   });
 }

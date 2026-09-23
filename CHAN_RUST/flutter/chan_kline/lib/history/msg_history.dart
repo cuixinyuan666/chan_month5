@@ -701,6 +701,23 @@ class MsgHistory {
     );
   }
 
+  /// 主图 K{n}底极贴合线 / K{n}顶极贴合线（进程内去重）
+  static bool _knFxPoleSnugLogged = false;
+  void appendKnFxPoleSnug() {
+    if (_knFxPoleSnugLogged) return;
+    _knFxPoleSnugLogged = true;
+    append(
+      '【K{n}底极贴合线 / K{n}顶极贴合线·主图·子线层同号·v1】'
+      '显示名 K{n}底极贴合线、K{n}顶极贴合线；内部 kn==displayKn（方案B）；类别「延伸」。'
+      '映射：分型=levels[level==displayKn].confirms 极点；父段=levels[level==displayKn+1]（含 active）。'
+      '父段内同型极点≥2：峰值斜率扫描+距离和最小拟合；上升父段只画底极贴合，下降父段只画顶极贴合。'
+      '呈现：自段内首个同型极点沿拟合斜率画到 asOf（步进末根/十字），非延伸到视口右缘；无十字最新父段组、十字近邻组。'
+      '十字 asOf 时射线右端截到 asOf（禁末态）。'
+      'tooltip 固定槽「K{n}底极贴合线」「K{n}顶极贴合线」=延长线落到该根K0价格。'
+      '默认：进 catalog +「Kn指标」层全选 + 启动默认 K0。纯 Flutter，不改 Rust。',
+    );
+  }
+
   /// 主图 Kn均线 / Kn通道（进程内去重）
   static bool _knTrendModelLogged = false;
   void appendKnTrendModel() {
@@ -740,6 +757,32 @@ class MsgHistory {
       '参数：Math 落盘 .chan_trend_model_config.json；桶宽落盘 .chan_chip_config.json。'
       'tooltip：macd_dif/dea/hist、boll_mid/up/down、rsi、kdj_k/d/j、demark_text（含完成买/卖）。'
       '默认：进 catalog +「Kn指标」层全选；纯 Flutter，不改 Rust。',
+    );
+  }
+
+  /// Kn回归通道（进程内去重；主图绘制；暂未接入回测/ML）
+  static bool _knRegressionChannelLogged = false;
+  void appendKnRegressionChannel() {
+    if (_knRegressionChannelLogged) return;
+    _knRegressionChannelLogged = true;
+    append(
+      '【Kn回归通道·主图·只绘制·暂未接入回测/ML】'
+      '口径（父层连线绑定·全层同构）：基准区间 = 父层 K{n+1}连线（structure level = 显示层+1）'
+      '在 asOf 视图下的最后一段——倒数第二个极点 → 最后一个极点；端点含分型判断与构建中开口尾端。'
+      'K0回归通道看 K1连线、K1看 K2…；父层一出新段整条通道换新基准（旧的整条不留，不拼阶梯）。'
+      '样本钟：K0 取区间内每根 K0 收盘；K{n}≥1 取右端 x 落在区间内的本层虚拟K收盘（与布林同一套钟）。'
+      '回归：以 K0 格点 x 为自变量最小二乘 → 中轨（带斜率）；'
+      '上下轨 = 中轨 ± k×残差总体标准差（除 m，与布林同口径，修正了旧版用收盘价 std）；默认 k=2。'
+      '绘制：从基准起点一路平行外推到 asOf 截断（宽度恒定，不是喇叭口），asOf 右侧不画；无未来函数、不参与任何信号计算。'
+      '与布林的区别：布林=滑窗均值（水平线）且全图连续；回归通道=父层连线段内回归线（带斜率）且只有最新一段。'
+      '绘制样式：中轨实线、上下轨虚线 [4,3]，与中轨同色降透明度，不填充。'
+      '回看：十字 asOf 回退时基准取当时可见的那条父层连线（不泄漏未来），右端照样截到 asOf。'
+      '不可用：父层还没形成连线、或区间内样本 < 2 根 → 该层整条不出线。'
+      '冻结：刻意**不进** MathSeriesFreezeStore（与布林不同）——不回写，父层端点一动整条通道跟着动，纯绘制。'
+      '设置：数学指标参数里只有「回归通道 k」（区间由父层连线决定，无 N 参数）；tooltip 槽位 regress_mid/up/down。'
+      '技术债：本指标**暂未接入策略回测与机器学习**（signal_data_catalog / ml_rule_score / '
+      'ml_feature_label / ml_feature_schema 未同步），后续要接须按「指标名称同步检查清单」补四处。'
+      '纯 Flutter，不改 Rust，无需重编 chan_ffi.dll。',
     );
   }
 

@@ -17,12 +17,18 @@ enum MainIndicatorKind {
   fxChordTranslated,
   /// Kn趋势线（父段内子线端点拟合支撑/压力；子线层同号）
   trendLine,
+  /// K{n}底极贴合线（父段内底分型极点距离最小拟合）
+  fxBottomSnug,
+  /// K{n}顶极贴合线（父段内顶分型极点距离最小拟合）
+  fxTopSnug,
   /// Kn均线（收盘价滑窗 MEAN；kn 同中枢显示层）
   meanLine,
   /// Kn通道（收盘价滑窗 MAX/MIN；kn 同中枢显示层）
   trendChannel,
   /// Kn布林带（MID/UP/DOWN；kn 同中枢）
   boll,
+  /// Kn回归通道（父层连线绑定：基准=父层 K{n+1}连线最后一段，外推到 asOf；kn 同中枢）
+  regressionChannel,
   /// Kn Demark（setup/countdown/完成信号；kn 同中枢；主图标注）
   demark,
   /// Kn步进节奏（old step_rhythm；与 Kn连线同号；主图价轴挂点）
@@ -45,6 +51,9 @@ extension MainIndicatorKindMeta on MainIndicatorKind {
       case MainIndicatorKind.fxQuadPair:
       case MainIndicatorKind.fxChordTranslated:
       case MainIndicatorKind.trendLine:
+      case MainIndicatorKind.fxBottomSnug:
+      case MainIndicatorKind.fxTopSnug:
+      case MainIndicatorKind.regressionChannel:
         return '延伸';
       case MainIndicatorKind.meanLine:
       case MainIndicatorKind.trendChannel:
@@ -71,6 +80,9 @@ extension MainIndicatorKindMeta on MainIndicatorKind {
       case MainIndicatorKind.fxQuadPair:
       case MainIndicatorKind.fxChordTranslated:
       case MainIndicatorKind.trendLine:
+      case MainIndicatorKind.fxBottomSnug:
+      case MainIndicatorKind.fxTopSnug:
+      case MainIndicatorKind.regressionChannel:
         return 4;
       case MainIndicatorKind.meanLine:
       case MainIndicatorKind.trendChannel:
@@ -103,11 +115,17 @@ class MainChartIndicator {
       : kind = MainIndicatorKind.fxChordTranslated;
   const MainChartIndicator.trendLine(this.kn)
       : kind = MainIndicatorKind.trendLine;
+  const MainChartIndicator.fxBottomSnug(this.kn)
+      : kind = MainIndicatorKind.fxBottomSnug;
+  const MainChartIndicator.fxTopSnug(this.kn)
+      : kind = MainIndicatorKind.fxTopSnug;
   const MainChartIndicator.meanLine(this.kn)
       : kind = MainIndicatorKind.meanLine;
   const MainChartIndicator.trendChannel(this.kn)
       : kind = MainIndicatorKind.trendChannel;
   const MainChartIndicator.boll(this.kn) : kind = MainIndicatorKind.boll;
+  const MainChartIndicator.regressionChannel(this.kn)
+      : kind = MainIndicatorKind.regressionChannel;
   const MainChartIndicator.demark(this.kn) : kind = MainIndicatorKind.demark;
   /// kn=连线显示层：K0步进节奏…（主图价轴；动态子线）
   const MainChartIndicator.stepRhythm(this.kn)
@@ -132,12 +150,18 @@ class MainChartIndicator {
         return 'K$kn对弦平移线';
       case MainIndicatorKind.trendLine:
         return 'K$kn趋势线';
+      case MainIndicatorKind.fxBottomSnug:
+        return 'K$kn底极贴合线';
+      case MainIndicatorKind.fxTopSnug:
+        return 'K$kn顶极贴合线';
       case MainIndicatorKind.meanLine:
         return 'K$kn均线';
       case MainIndicatorKind.trendChannel:
         return 'K$kn通道';
       case MainIndicatorKind.boll:
         return 'K$kn布林';
+      case MainIndicatorKind.regressionChannel:
+        return 'K$kn回归通道';
       case MainIndicatorKind.demark:
         return 'K${kn}Demark';
       case MainIndicatorKind.stepRhythm:
@@ -150,7 +174,7 @@ class MainChartIndicator {
     return kn;
   }
 
-  /// 同层内展示序：… → 均线 → 通道 → 布林。
+  /// 同层内展示序：… → 均线 → 通道 → 布林 → 回归通道。
   int get kindOrderInLevel {
     switch (kind) {
       case MainIndicatorKind.kn:
@@ -169,16 +193,22 @@ class MainChartIndicator {
         return 6;
       case MainIndicatorKind.trendLine:
         return 7;
-      case MainIndicatorKind.meanLine:
+      case MainIndicatorKind.fxBottomSnug:
         return 8;
-      case MainIndicatorKind.trendChannel:
+      case MainIndicatorKind.fxTopSnug:
         return 9;
-      case MainIndicatorKind.boll:
+      case MainIndicatorKind.meanLine:
         return 10;
-      case MainIndicatorKind.demark:
+      case MainIndicatorKind.trendChannel:
         return 11;
-      case MainIndicatorKind.stepRhythm:
+      case MainIndicatorKind.boll:
         return 12;
+      case MainIndicatorKind.regressionChannel:
+        return 13;
+      case MainIndicatorKind.demark:
+        return 14;
+      case MainIndicatorKind.stepRhythm:
+        return 15;
     }
   }
 
@@ -528,10 +558,12 @@ List<MainChartIndicator> buildMainIndicatorCatalog(int maxKn) {
   for (var d = 0; d < maxKn; d++) {
     out.add(MainChartIndicator.fxChordTranslated(d));
   }
-  // 趋势线：子=displayKn、父=displayKn+1；maxKn<2 仍挂 K0 占位
+  // 趋势线 / 极贴合线：子=displayKn、父=displayKn+1；maxKn<2 仍挂 K0 占位
   final trendMax = maxKn < 2 ? 0 : maxKn - 2;
   for (var d = 0; d <= trendMax; d++) {
     out.add(MainChartIndicator.trendLine(d));
+    out.add(MainChartIndicator.fxBottomSnug(d));
+    out.add(MainChartIndicator.fxTopSnug(d));
   }
   // 均线 / 通道（与中枢同号：d=0→K0）
   for (var d = 0; d <= maxKn; d++) {
@@ -542,6 +574,10 @@ List<MainChartIndicator> buildMainIndicatorCatalog(int maxKn) {
   }
   for (var d = 0; d <= maxKn; d++) {
     out.add(MainChartIndicator.boll(d));
+  }
+  // 回归通道（父层连线绑定：只画最新一段并外推到 asOf；归「延伸」组，与中枢同号 d=0→K0）
+  for (var d = 0; d <= maxKn; d++) {
+    out.add(MainChartIndicator.regressionChannel(d));
   }
   // Demark（与中枢同号；主图标注）
   for (var d = 0; d <= maxKn; d++) {
@@ -653,9 +689,12 @@ List<MainChartIndicator> mainIndicatorsForLevel(
     MainChartIndicator.fxQuadPair(displayLevel),
     MainChartIndicator.fxChordTranslated(displayLevel),
     MainChartIndicator.trendLine(displayLevel),
+    MainChartIndicator.fxBottomSnug(displayLevel),
+    MainChartIndicator.fxTopSnug(displayLevel),
     MainChartIndicator.meanLine(displayLevel),
     MainChartIndicator.trendChannel(displayLevel),
     MainChartIndicator.boll(displayLevel),
+    MainChartIndicator.regressionChannel(displayLevel),
     MainChartIndicator.demark(displayLevel),
     // 必须进主图「Kn指标」层全选（与连线同显示层）
     MainChartIndicator.stepRhythm(displayLevel),
@@ -756,9 +795,12 @@ bool isDefaultDrawnMain(MainChartIndicator e) {
     case MainIndicatorKind.fxQuadPair:
     case MainIndicatorKind.fxChordTranslated:
     case MainIndicatorKind.trendLine:
+    case MainIndicatorKind.fxBottomSnug:
+    case MainIndicatorKind.fxTopSnug:
     case MainIndicatorKind.meanLine:
     case MainIndicatorKind.trendChannel:
     case MainIndicatorKind.boll:
+    case MainIndicatorKind.regressionChannel:
     case MainIndicatorKind.demark:
     case MainIndicatorKind.stepRhythm:
       return false;

@@ -295,6 +295,7 @@ void mergeMathSeriesForStep({
       periods: config.channelPeriods,
       asOf: asOf,
     );
+    // 回归通道刻意不进冻结仓：基准=父层连线最后一段，端点一动整条通道跟着动（纯绘制）。
     store.mergeLevel(
       displayKn: kn,
       macd: classic.macd,

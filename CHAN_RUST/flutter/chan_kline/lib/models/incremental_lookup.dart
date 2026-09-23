@@ -55,6 +55,9 @@ class IncrementalBarFeatureLookup {
   final List<double> _k0BuyTick = [];
   final List<double> _k0SellTick = [];
   final List<double> _k0GrayTick = [];
+  /// 回归通道已回写区间（按显示层）：父层端点一动整条换新，
+  /// 增量必须「先清旧段再写新段」，否则新旧两条通道的值会混在同一层。
+  final Map<int, ({int x1, int x2})> _regressSpan = {};
 
   int get gen => _gen;
   int get step => _step;
@@ -79,6 +82,7 @@ class IncrementalBarFeatureLookup {
     _k0BuyTick.clear();
     _k0SellTick.clear();
     _k0GrayTick.clear();
+    _regressSpan.clear();
     _gen++;
   }
 
@@ -163,6 +167,7 @@ class IncrementalBarFeatureLookup {
     _sureZs.clear();
     _unsureZs.clear();
     _writtenHist.clear();
+    _rebuildRegressSpans();
     _bindMath(
       mathIndicatorConfig: mathIndicatorConfig,
       mathFreezeStore: mathFreezeStore,
@@ -359,6 +364,7 @@ class IncrementalBarFeatureLookup {
       mathFreezeStore: mathFreezeStore,
       diverFreezeStore: diverFreezeStore,
       onlyX: x,
+      truncationCheck: truncationCheck,
     );
     _writeZsDirty(bundle, x);
 
@@ -1072,6 +1078,122 @@ class IncrementalBarFeatureLookup {
     _diverFreeze = diverFreezeStore;
   }
 
+  /// 全量种仓后反推各层回归通道已回写区间，供后续增量「先清旧段」用。
+  void _rebuildRegressSpans() {
+    _regressSpan.clear();
+    for (final e in byIdx.entries) {
+      final sub = e.value['sub'];
+      if (sub is! Map) continue;
+      for (final k in sub.keys) {
+        if (k is! String || !k.startsWith('regress_mid_')) continue;
+        final dkn = int.tryParse(k.substring('regress_mid_'.length));
+        if (dkn == null) continue;
+        final old = _regressSpan[dkn];
+        _regressSpan[dkn] = old == null
+            ? (x1: e.key, x2: e.key)
+            : (
+                x1: e.key < old.x1 ? e.key : old.x1,
+                x2: e.key > old.x2 ? e.key : old.x2,
+              );
+      }
+    }
+  }
+
+  /// 回归通道整段回写：与绘制同源（父层 K{n+1}连线最后一段 + 外推到 asOf）。
+  ///
+  /// 通道是「一段一换」，所以增量不能只写当根：先把上一次写过的整段清掉，
+  /// 再把新段 + 外推段写进去；[trackSpan] 为 false（asOf 视图）时只修当前柱，
+  /// 历史格始终共享引擎仓引用，禁止整段回写。
+  void _applyRegressInto({
+    required Map<int, Map<String, dynamic>> dest,
+    required int dkn,
+    required RegressionChannelK0Series series,
+    required int asOf,
+    int? onlyX,
+    required bool trackSpan,
+  }) {
+    void clearAt(int x) {
+      final row = dest[x];
+      if (row == null) return;
+      final sub = row['sub'];
+      if (sub is! Map<String, dynamic>) return;
+      sub
+        ..remove('regress_mid_$dkn')
+        ..remove('regress_up_$dkn')
+        ..remove('regress_down_$dkn');
+    }
+
+    int? lo;
+    int? hi;
+    void writeAt(int x) {
+      if (x < 0 || x >= series.mid.length) return;
+      final mid = series.mid[x];
+      final up = series.up[x];
+      final down = series.down[x];
+      var row = dest[x];
+      if (row == null && mid == null && up == null && down == null) return;
+      row = dest.putIfAbsent(x, () => {'idx': x});
+      final sub = row.putIfAbsent('sub', () => <String, dynamic>{})
+          as Map<String, dynamic>;
+      if (mid != null) {
+        sub['regress_mid_$dkn'] = mid;
+      } else {
+        sub.remove('regress_mid_$dkn');
+      }
+      if (up != null) {
+        sub['regress_up_$dkn'] = up;
+      } else {
+        sub.remove('regress_up_$dkn');
+      }
+      if (down != null) {
+        sub['regress_down_$dkn'] = down;
+      } else {
+        sub.remove('regress_down_$dkn');
+      }
+      if (mid != null) {
+        lo = lo == null ? x : (x < lo! ? x : lo!);
+        hi = hi == null ? x : (x > hi! ? x : hi!);
+      }
+    }
+
+    if (!trackSpan) {
+      if (onlyX == null) return;
+      clearAt(onlyX);
+      writeAt(onlyX);
+      return;
+    }
+    final prev = _regressSpan[dkn];
+    if (prev != null) {
+      for (var x = prev.x1; x <= prev.x2; x++) {
+        clearAt(x);
+      }
+    }
+    var end = asOf < series.mid.length ? asOf : series.mid.length - 1;
+    if (end >= series.mid.length) end = series.mid.length - 1;
+    if (end < 0 || series.mid.length <= end || series.mid[end] == null) {
+      // 该层此刻没通道（父层还没连线 / 样本不足）：旧段已清空，不再回写。
+      _regressSpan.remove(dkn);
+      return;
+    }
+    // 非 null 区间连续：从右端往回扫出起点，避免每步全表扫描。
+    var start = end;
+    for (var x = end - 1; x >= 0; x--) {
+      if (series.mid[x] != null) {
+        start = x;
+      } else {
+        break;
+      }
+    }
+    for (var x = start; x <= end; x++) {
+      writeAt(x);
+    }
+    if (lo != null && hi != null) {
+      _regressSpan[dkn] = (x1: lo!, x2: hi!);
+    } else {
+      _regressSpan.remove(dkn);
+    }
+  }
+
   void _writeMathAll({
     required List<KlineBar> bars,
     required KlineCombineBundle bundle,
@@ -1081,6 +1203,7 @@ class IncrementalBarFeatureLookup {
     DivergenceFreezeStore? diverFreezeStore,
     Map<int, Map<String, dynamic>>? into,
     int? onlyX,
+    bool truncationCheck = true,
   }) {
     if (bars.isEmpty) return;
     if (bundle.k0Confirms.isEmpty &&
@@ -1197,6 +1320,33 @@ class IncrementalBarFeatureLookup {
             config: mathIndicatorConfig,
             asOf: asOf,
           );
+      // 回归通道不进冻结仓：与绘制同源现算（父层 K{n+1}连线最后一段 + 外推到 asOf）。
+      final regress = computeRegressionChannelForLevel(
+        displayKn: dkn,
+        bars: bars,
+        levels: bundle.levels,
+        barFeatures: bundle.barFeatures,
+        liveJudgments: asOf < 0
+            ? const <FractalJudgmentEvent>[]
+            : collectFractalJudgmentEvents(
+                kn: dkn + 1,
+                bars: bars,
+                levels: bundle.levels,
+                barFeatures: bundle.barFeatures,
+                asOf: asOf,
+                truncationCheck: truncationCheck,
+              ),
+        k: mathIndicatorConfig.regressK,
+        asOf: asOf,
+      );
+      _applyRegressInto(
+        dest: dest,
+        dkn: dkn,
+        series: regress,
+        asOf: asOf,
+        onlyX: onlyX,
+        trackSpan: into == null,
+      );
       final frozenDiver = diverFreezeStore?.level(dkn);
       final diverMap = frozenDiver != null
           ? (onlyX != null

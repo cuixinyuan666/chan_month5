@@ -8,7 +8,7 @@ enum DemarkCountdownMode {
   strictExtreme,
 }
 
-/// 数学指标参数（均线/通道/MACD/BOLL/RSI/KDJ/Demark/背驰）。
+/// 数学指标参数（均线/通道/MACD/BOLL/回归通道/RSI/KDJ/Demark/背驰）。
 class MathIndicatorConfig {
   const MathIndicatorConfig({
     this.meanPeriods = TrendModelConfig.defaultMeanPeriods,
@@ -17,6 +17,8 @@ class MathIndicatorConfig {
     this.macdSlow = 26,
     this.macdSignal = 9,
     this.bollN = 20,
+    /// 回归通道带宽倍数 k（默认 2.0；上下轨 = 中轨 ± k×残差标准差）
+    this.regressK = 2.0,
     this.rsiPeriod = 14,
     this.kdjPeriod = 9,
     this.demarkLen = 9,
@@ -36,6 +38,8 @@ class MathIndicatorConfig {
   final int macdSlow;
   final int macdSignal;
   final int bollN;
+  /// 回归通道上下轨倍数 k（中轨 ± k×残差总体标准差）
+  final double regressK;
   final int rsiPeriod;
   final int kdjPeriod;
   final int demarkLen;
@@ -61,6 +65,7 @@ class MathIndicatorConfig {
     int? macdSlow,
     int? macdSignal,
     int? bollN,
+    double? regressK,
     int? rsiPeriod,
     int? kdjPeriod,
     int? demarkLen,
@@ -79,6 +84,7 @@ class MathIndicatorConfig {
       macdSlow: macdSlow ?? this.macdSlow,
       macdSignal: macdSignal ?? this.macdSignal,
       bollN: bollN ?? this.bollN,
+      regressK: regressK ?? this.regressK,
       rsiPeriod: rsiPeriod ?? this.rsiPeriod,
       kdjPeriod: kdjPeriod ?? this.kdjPeriod,
       demarkLen: demarkLen ?? this.demarkLen,
@@ -100,6 +106,7 @@ class MathIndicatorConfig {
         'macdSlow': macdSlow,
         'macdSignal': macdSignal,
         'bollN': bollN,
+        'regressK': regressK,
         'rsiPeriod': rsiPeriod,
         'kdjPeriod': kdjPeriod,
         'demarkLen': demarkLen,
@@ -164,6 +171,7 @@ class MathIndicatorConfig {
       macdSlow: i(map['macdSlow'], 26),
       macdSignal: i(map['macdSignal'], 9),
       bollN: i(map['bollN'], 20),
+      regressK: d(map['regressK'], 2.0),
       rsiPeriod: i(map['rsiPeriod'], 14),
       kdjPeriod: i(map['kdjPeriod'], 9),
       demarkLen: i(map['demarkLen'], 9),
@@ -187,6 +195,7 @@ class MathIndicatorConfig {
       macdSlow == other.macdSlow &&
       macdSignal == other.macdSignal &&
       bollN == other.bollN &&
+      regressK == other.regressK &&
       rsiPeriod == other.rsiPeriod &&
       kdjPeriod == other.kdjPeriod &&
       demarkLen == other.demarkLen &&
@@ -207,6 +216,7 @@ class MathIndicatorConfig {
         macdSlow,
         macdSignal,
         bollN,
+        regressK,
         rsiPeriod,
         kdjPeriod,
         demarkLen,

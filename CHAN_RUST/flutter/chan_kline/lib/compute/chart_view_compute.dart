@@ -272,6 +272,67 @@ List<LevelSegmentN> asOfLevelSegments({
   return bundle.segments.where((s) => s.endConfirmX <= asOf).toList();
 }
 
+/// K{level}连线在 as-of 视图下的「最后一段」两端 K0 格点（含构建中虚线端点）。
+///
+/// 冻段取 beginPoleX/endPoleX；构建中虚线取 [computeDisplayBuildingLines] 的首尾端点
+/// （虚线是 pole→pole→开口尾端 一串，取末段即「倒数第二极点 → 末极点」）。
+/// 供 K{n}回归通道当基准区间（父层 = level = displayKn+1；全层同构）。
+/// 返回 null = 该层此刻还没有能当基准的连线。
+({int x1, int x2})? lastLevelLineSpanAtAsOf({
+  required List<KlineBar> bars,
+  required List<LevelBundle> levels,
+  required List<BarCrosshairFeature> barFeatures,
+  required int level,
+  required int asOf,
+  List<FractalJudgmentEvent> liveJudgments = const [],
+}) {
+  if (level < 1 || bars.isEmpty) return null;
+  if (asOf < 0 || asOf >= bars.length) return null;
+  final bundle = bundleAtStructureLevel(levels, level);
+  if (bundle == null) return null;
+
+  int? lo;
+  int? hi;
+  void take(int a, int b) {
+    final l = a <= b ? a : b;
+    final h = a <= b ? b : a;
+    if (hi == null || h >= hi!) {
+      lo = l;
+      hi = h;
+    }
+  }
+
+  final frozen = asOfLevelSegments(levels: levels, level: level, asOf: asOf);
+  for (final s in frozen) {
+    if (s.beginPoleX < 0 || s.endPoleX < 0) continue;
+    take(s.beginPoleX, s.endPoleX);
+  }
+
+  final virtualUnits = asOfLevelVirtualK1Bars(
+    levels: levels,
+    barFeatures: barFeatures,
+    level: level,
+    asOf: asOf,
+    includeBuilding: true,
+  );
+  final frozenIdx = <int>{for (final s in frozen) s.idx};
+  for (final l in computeDisplayBuildingLines(
+    bars: bars,
+    asOf: asOf,
+    virtualUnits: virtualUnits,
+    frozenIdx: frozenIdx,
+    levelConfirms: bundle.confirms,
+    liveJudgments: liveJudgments,
+  )) {
+    take(l.begin.barIdx, l.end.barIdx);
+  }
+
+  if (lo == null || hi == null) return null;
+  final end = hi! > asOf ? asOf : hi!;
+  if (end <= lo!) return null;
+  return (x1: lo!, x2: end);
+}
+
 /// as-of 前末次 N 段分型确认（TOP/BOTTOM）。
 LevelConfirm? lastLevelConfirmAt(List<LevelConfirm> confirms, int asOf) {
   LevelConfirm? last;

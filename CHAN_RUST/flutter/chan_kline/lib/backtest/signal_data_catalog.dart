@@ -166,6 +166,10 @@ String fxQuadVarId(int kn, String side) =>
 
 String fxChordTranslatedVarId(int kn) => 'MAIN.K$kn.FX_CHORD_TRANSLATED.PRICE';
 
+String fxBottomSnugVarId(int kn) => 'MAIN.K$kn.FX_BOTTOM_SNUG.PRICE';
+
+String fxTopSnugVarId(int kn) => 'MAIN.K$kn.FX_TOP_SNUG.PRICE';
+
 /// 默认登记框内 + 下侧-1..-3 + 上侧+1..+3
 const int kTradeChipPeakMaxRank = 3;
 
@@ -938,6 +942,46 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
       fieldLabel: '压力',
       description: '线→价投影，可与同层收盘/布林比',
     ));
+    if (kn <= hi - 2) {
+      out.add(TradeVariableDef(
+        variableId: fxBottomSnugVarId(kn),
+        displayName: 'K$kn底极贴合价',
+        panel: TradePanel.main,
+        displayKn: kn,
+        clockFamily: TradeClockFamily.zsMath,
+        evalClock: evalClockForDisplayKn(kn),
+        plotClock: TradePlotClock.k0Bar,
+        valueType: TradeValueType.objectProjection,
+        readiness: TradeReadiness.registered,
+        source: 'Lookup/十字已冻的 fx_bottom_snug_price；无仓则按 asOf 前缀现算投影',
+        unit: 'price',
+        futureSafe: true,
+        availabilityNote: '这根没有底极贴合延长线落到价位则为不可用',
+        groupKey: 'fxBottomSnug',
+        groupLabel: '底极贴合',
+        fieldLabel: '价',
+        description: '上升父段内底极点拟合线→价投影，可与同层收盘/布林比',
+      ));
+      out.add(TradeVariableDef(
+        variableId: fxTopSnugVarId(kn),
+        displayName: 'K$kn顶极贴合价',
+        panel: TradePanel.main,
+        displayKn: kn,
+        clockFamily: TradeClockFamily.zsMath,
+        evalClock: evalClockForDisplayKn(kn),
+        plotClock: TradePlotClock.k0Bar,
+        valueType: TradeValueType.objectProjection,
+        readiness: TradeReadiness.registered,
+        source: 'Lookup/十字已冻的 fx_top_snug_price；无仓则按 asOf 前缀现算投影',
+        unit: 'price',
+        futureSafe: true,
+        availabilityNote: '这根没有顶极贴合延长线落到价位则为不可用',
+        groupKey: 'fxTopSnug',
+        groupLabel: '顶极贴合',
+        fieldLabel: '价',
+        description: '下降父段内顶极点拟合线→价投影，可与同层收盘/布林比',
+      ));
+    }
     out.add(TradeVariableDef(
       variableId: diverExistsId(kn),
       displayName: 'K$kn 背驰出现',
