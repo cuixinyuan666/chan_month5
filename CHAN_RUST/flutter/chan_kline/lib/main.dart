@@ -72,6 +72,7 @@ import 'models/k0_line.dart';
 import 'models/k1_bar_view.dart';
 import 'models/chart_indicator.dart';
 import 'models/chip_config.dart';
+import 'models/peak_rank_config.dart';
 import 'models/tick_dist_config.dart';
 import 'models/kline_combine_frame.dart';
 import 'models/level_models.dart';
@@ -249,6 +250,7 @@ Future<void> main() async {
   MsgHistory.instance.appendTradeRoundLabel();
   MsgHistory.instance.appendTradeCatalogFull();
   MsgHistory.instance.appendChipPeakVars();
+  MsgHistory.instance.appendChipPeakDerivedVars();
   MsgHistory.instance.appendP0TrustGates();
   MsgHistory.instance.appendCrossKnBsJoin();
   MsgHistory.instance.appendWorkbenchLayoutAndK0BarEvents();
@@ -787,9 +789,11 @@ class _KlineHomePageState extends State<KlineHomePage> {
   Future<void> _updateChipConfig(ChipConfig cfg) async {
     final stepChanged =
         (cfg.bucketStep - _chipConfig.bucketStep).abs() > 1e-12;
+    final rankChanged =
+        cfg.peakRankConfig.fingerprint != _chipConfig.peakRankConfig.fingerprint;
     _panelUi(() => _chipConfig = cfg);
     await ChipSettingsStore.save(cfg, tickDist: _tickDistConfig);
-    if (stepChanged) {
+    if (stepChanged || rankChanged) {
       _chipPeakStore.clear();
       ChipProfileCompute.clearCache();
       TickDistProfileCompute.clearCache();
@@ -798,6 +802,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
           asOf: _stepIdx,
           bars: _visibleBars,
           bucketStep: cfg.bucketStep,
+          rank: cfg.peakRankConfig,
         );
       }
     }
@@ -1577,6 +1582,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       asOf: displayX,
       bars: visible,
       bucketStep: _chipConfig.bucketStep,
+      rank: _chipConfig.peakRankConfig,
     );
   }
 
@@ -2087,6 +2093,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         asOf: chipAsOf,
         bars: growing,
         bucketStep: _chipConfig.bucketStep,
+        rank: _chipConfig.peakRankConfig,
       );
       // 循环里已逐 K 合并冻结，末态只刷查表和画面，避免再合一遍
       _rebuildCombine(skipFreezeMerge: true);
@@ -2843,6 +2850,19 @@ class _KlineHomePageState extends State<KlineHomePage> {
                   _updateChipConfig(_chipConfig.copyWith(peakLineEnabled: v));
                   _msgHistory.append('筹码峰延长线=${v ? "开" : "关"}');
                 },
+        ),
+        ListTile(
+          contentPadding: EdgeInsets.zero,
+          dense: true,
+          title: const Text('筹码峰编号模式', style: TextStyle(fontSize: 13)),
+          subtitle: Text(
+            _chipConfig.peakRankMode == PeakRankMode.spatial
+                ? '空间序（-1=框下最近；框内离收盘近）'
+                : '量级序（各区内按筹码量从大到小）',
+            style: const TextStyle(fontSize: 11),
+          ),
+          trailing: const Icon(Icons.chevron_right, size: 20),
+          onTap: _busy ? null : _showPeakRankModeHelp,
         ),
         SwitchListTile(
           contentPadding: EdgeInsets.zero,
@@ -4310,6 +4330,61 @@ class _KlineHomePageState extends State<KlineHomePage> {
           TextButton(
             onPressed: () => Navigator.pop(ctx),
             child: const Text('知道了'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showPeakRankModeHelp() {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('筹码峰 / 笔数峰编号'),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                '空间序（默认，与旧策略兼容）\n'
+                '· -1：当前 K 低价之下、离低价最近的峰\n'
+                '· +1：高价之上最近峰\n'
+                '· 框内 IN1：离收盘最近的框内峰；无后缀「K0筹码峰」同 IN1\n\n'
+                '量级序\n'
+                '· 各区内按峰位筹码量从大到小编号；切换后所有峰变量语义都会变\n\n'
+                '策略回测另有：距收盘(DIST)、有无(EXISTS 为 1/0)、多空比(BS)。'
+                '改模式会清空峰冻结仓并重算。',
+              ),
+              const SizedBox(height: 12),
+              SegmentedButton<PeakRankMode>(
+                segments: const [
+                  ButtonSegment(
+                    value: PeakRankMode.spatial,
+                    label: Text('空间序'),
+                  ),
+                  ButtonSegment(
+                    value: PeakRankMode.volume,
+                    label: Text('量级序'),
+                  ),
+                ],
+                selected: {_chipConfig.peakRankMode},
+                onSelectionChanged: (s) {
+                  final mode = s.first;
+                  Navigator.pop(ctx);
+                  _updateChipConfig(_chipConfig.copyWith(peakRankMode: mode));
+                  _msgHistory.append(
+                    '筹码峰编号=${mode == PeakRankMode.spatial ? "空间序" : "量级序"}',
+                  );
+                },
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('关闭'),
           ),
         ],
       ),

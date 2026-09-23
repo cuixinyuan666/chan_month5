@@ -1663,6 +1663,17 @@ class MsgHistory {
     );
   }
 
+  static bool _chipPeakDerivedLogged = false;
+  void appendChipPeakDerivedVars() {
+    if (_chipPeakDerivedLogged) return;
+    _chipPeakDerivedLogged = true;
+    append(
+      '【筹码峰回测扩展·2026-09-23】设置可选空间序/量级序（改模式清空峰冻结仓）。'
+      '框内 IN1..IN3；外侧 ±5；衍生 DIST(收盘-峰价)、EXISTS(1/0 恒可比)、BS(b/s)。'
+      '无后缀 K0筹码峰 在空间序下同 IN1。数据契约 catalog-v5-chip-peaks-derived。',
+    );
+  }
+
   /// 策略买卖点形状、N类BS填N、指标单击选中、设置按钮对齐（进程内去重）。
   static bool _uiBsPickerSettingsLogged = false;
   void appendUiBsPickerSettings20260905() {

@@ -37,16 +37,43 @@ void main() {
     );
   });
 
-  test('框内多峰取离收盘更近；没有对应编号就是空', () {
+  test('框内 IN1 离收盘更近；没有对应编号就是空', () {
     const rows = [
       ProfilePeakRow(nameSuffix: '-1', price: 9, b: 0, s: 0, g: 0),
-      ProfilePeakRow(nameSuffix: '', price: 10.2, b: 0, s: 0, g: 0),
-      ProfilePeakRow(nameSuffix: '', price: 11.8, b: 0, s: 0, g: 0),
+      ProfilePeakRow(nameSuffix: 'IN1', price: 10.2, b: 0, s: 0, g: 0),
+      ProfilePeakRow(nameSuffix: 'IN2', price: 11.8, b: 0, s: 0, g: 0),
       ProfilePeakRow(nameSuffix: '+1', price: 13, b: 0, s: 0, g: 0),
     ];
     expect(pickProfilePeakPrice(rows: rows, suffix: '-1', close: 11), 9);
-    expect(pickProfilePeakPrice(rows: rows, suffix: '', close: 11), closeTo(10.2, 1e-12));
+    expect(pickProfilePeakPrice(rows: rows, suffix: '', close: 11),
+        closeTo(10.2, 1e-12));
+    expect(pickProfilePeakPrice(rows: rows, suffix: 'IN2', close: 11),
+        closeTo(11.8, 1e-12));
     expect(pickProfilePeakPrice(rows: rows, suffix: '+2', close: 11), isNull);
+  });
+
+  test('EXISTS 衍生为 1/0；DIST 为收盘减峰价', () {
+    const rows = [
+      ProfilePeakRow(nameSuffix: '-1', price: 9, b: 2, s: 1, g: 0),
+    ];
+    expect(
+      peakScalarAt(rows: rows, suffix: '-1', field: 'EXISTS', close: 10),
+      1,
+    );
+    expect(
+      peakScalarAt(rows: rows, suffix: '-1', field: 'DIST', close: 10),
+      1,
+    );
+    expect(
+      peakScalarAt(rows: rows, suffix: '-1', field: 'BS', close: 10),
+      2,
+    );
+    expect(
+      peakScalarAt(rows: rows, suffix: 'P1', field: 'EXISTS', close: 10),
+      0,
+    );
+    expect(lookupTradeVariable('SUB.K0.CHIP.PEAK.M1.EXISTS')!.expressionReady,
+        isTrue);
   });
 
   test('冻结后不沿用、不回写', () {

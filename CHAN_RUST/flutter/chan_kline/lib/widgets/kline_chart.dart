@@ -1054,6 +1054,7 @@ class _KlineChartState extends State<KlineChart> {
     // K0 筹码峰 / 笔数峰：与主图 profile 同 cutoff，按本根高低编号
     final cut = asOf ?? bar.idx;
     final step = widget.chipConfig.bucketStep;
+    final rank = widget.chipConfig.peakRankConfig;
     final chipPeaks = classifyProfilePeaks(
       profile: ChipProfileCompute.compute(
         bars: widget.bars,
@@ -1062,6 +1063,8 @@ class _KlineChartState extends State<KlineChart> {
       ),
       low: bar.low,
       high: bar.high,
+      close: bar.close,
+      rank: rank,
     );
     final tickPeaks = classifyProfilePeaks(
       profile: TickDistProfileCompute.compute(
@@ -1071,6 +1074,8 @@ class _KlineChartState extends State<KlineChart> {
       ),
       low: bar.low,
       high: bar.high,
+      close: bar.close,
+      rank: rank,
     );
     final out = lookup.crosshairTooltipRows(
       bar.idx,

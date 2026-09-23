@@ -414,7 +414,7 @@ void main() {
       expect(run.result!.rulePerformances, isNotEmpty);
       expect(run.context, isNotNull);
       expect(run.context!.engineVersion, kBacktestEngineVersion);
-      expect(run.context!.dataContractVersion, 'catalog-v4-chip-peaks');
+      expect(run.context!.dataContractVersion, 'catalog-v5-chip-peaks-derived');
     });
   });
 }

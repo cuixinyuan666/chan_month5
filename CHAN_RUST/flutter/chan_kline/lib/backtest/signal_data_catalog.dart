@@ -170,8 +170,12 @@ String fxBottomSnugVarId(int kn) => 'MAIN.K$kn.FX_BOTTOM_SNUG.PRICE';
 
 String fxTopSnugVarId(int kn) => 'MAIN.K$kn.FX_TOP_SNUG.PRICE';
 
-/// 默认登记框内 + 下侧-1..-3 + 上侧+1..+3
-const int kTradeChipPeakMaxRank = 3;
+/// 默认登记外侧 -1..-n / +1..+n（与 [PeakRankConfig.clampedMaxOuter] 默认 5 对齐）
+const int kTradeChipPeakMaxRank = 5;
+
+const int kTradeChipPeakMaxInBox = 3;
+
+const _chipPeakDerivedFields = {'DIST', 'EXISTS', 'BS'};
 
 /// SUB.K0.CHIP.PEAK / SUB.K0.CHIP.PEAK.M1 / SUB.K0.TICK.PEAK.P2
 String chipPeakVarId({
@@ -187,6 +191,7 @@ String chipPeakTokenOfSuffix(String suffix) {
   if (suffix.isEmpty) return '';
   if (suffix.startsWith('-')) return 'M${suffix.substring(1)}';
   if (suffix.startsWith('+')) return 'P${suffix.substring(1)}';
+  if (suffix.startsWith('IN')) return suffix;
   return suffix;
 }
 
@@ -194,31 +199,83 @@ String chipPeakSuffixOfToken(String token) {
   if (token.isEmpty) return '';
   if (token.startsWith('M')) return '-${token.substring(1)}';
   if (token.startsWith('P')) return '+${token.substring(1)}';
+  if (token.startsWith('IN')) return token;
   return token;
 }
 
 String chipPeakFieldLabel(String suffix) {
-  if (suffix.isEmpty) return '框内';
+  if (suffix.isEmpty) return '框内(同IN1)';
+  if (suffix.startsWith('IN')) return '框内${suffix.substring(2)}';
   return suffix;
 }
 
-/// SUB.K0.CHIP.PEAK.M1 → kn=0, kind=chip, suffix=-1
-({int kn, String kind, String suffix})? parseChipPeakVarId(String id) {
+bool isChipPeakToken(String token) {
+  if (token.isEmpty) return true;
+  return RegExp(r'^(IN\d+|[MP]\d+)$').hasMatch(token);
+}
+
+String chipPeakDerivedVarId({
+  required String kind,
+  required String token,
+  required String field,
+}) {
+  final head = kind == 'tick' ? 'TICK' : 'CHIP';
+  if (token.isEmpty) return 'SUB.K0.$head.PEAK.$field';
+  return 'SUB.K0.$head.PEAK.$token.$field';
+}
+
+/// 峰价或衍生：field 为 DIST / EXISTS / BS 时表示衍生变量。
+({int kn, String kind, String suffix, String? field})? parseChipPeakTradeVarId(
+  String id,
+) {
   final parts = canonicalizeTradeVarId(id).split('.');
-  if (parts.length < 4 || parts.length > 5) return null;
-  if (parts[0] != 'SUB' || parts[3] != 'PEAK') return null;
+  if (parts.length < 4 || parts[0] != 'SUB' || parts[3] != 'PEAK') {
+    return null;
+  }
   if (!parts[1].startsWith('K')) return null;
   final kn = int.tryParse(parts[1].substring(1));
   if (kn == null || kn < 0) return null;
   final head = parts[2];
   if (head != 'CHIP' && head != 'TICK') return null;
   final kind = head == 'TICK' ? 'tick' : 'chip';
-  if (parts.length == 4) return (kn: kn, kind: kind, suffix: '');
-  final token = parts[4];
-  if (!RegExp(r'^[MP]\d+$').hasMatch(token)) return null;
-  final n = int.tryParse(token.substring(1));
-  if (n == null || n < 1) return null;
-  return (kn: kn, kind: kind, suffix: chipPeakSuffixOfToken(token));
+
+  if (parts.length == 4) {
+    return (kn: kn, kind: kind, suffix: '', field: null);
+  }
+  if (parts.length == 5) {
+    final tail = parts[4];
+    if (_chipPeakDerivedFields.contains(tail)) {
+      return (kn: kn, kind: kind, suffix: '', field: tail);
+    }
+    if (!isChipPeakToken(tail)) return null;
+    return (
+      kn: kn,
+      kind: kind,
+      suffix: chipPeakSuffixOfToken(tail),
+      field: null,
+    );
+  }
+  if (parts.length == 6) {
+    final token = parts[4];
+    final field = parts[5];
+    if (!_chipPeakDerivedFields.contains(field) || !isChipPeakToken(token)) {
+      return null;
+    }
+    return (
+      kn: kn,
+      kind: kind,
+      suffix: chipPeakSuffixOfToken(token),
+      field: field,
+    );
+  }
+  return null;
+}
+
+/// SUB.K0.CHIP.PEAK.M1 → kn=0, kind=chip, suffix=-1（仅峰价，不含衍生）
+({int kn, String kind, String suffix})? parseChipPeakVarId(String id) {
+  final p = parseChipPeakTradeVarId(id);
+  if (p == null || p.field != null) return null;
+  return (kn: p.kn, kind: p.kind, suffix: p.suffix);
 }
 
 /// MAIN.K1.MA.5
@@ -386,12 +443,25 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
     description: '只登记 K0 原生笔数；K1+ 走 SUB.K{n}.TICK_COUNT',
   ));
 
-  // K0 筹码峰 / 笔数峰：价，和开高低收同一套钟
+  // K0 筹码峰 / 笔数峰：价 + 距峰 / 有无(1/0) / 多空比
   for (final kind in ['chip', 'tick']) {
     out.add(_chipPeakDef(kind: kind, suffix: ''));
+    for (var n = 1; n <= kTradeChipPeakMaxInBox; n++) {
+      out.add(_chipPeakDef(kind: kind, suffix: 'IN$n'));
+    }
     for (var n = 1; n <= kTradeChipPeakMaxRank; n++) {
       out.add(_chipPeakDef(kind: kind, suffix: '-$n'));
       out.add(_chipPeakDef(kind: kind, suffix: '+$n'));
+    }
+    final tokens = <String>[
+      '',
+      for (var n = 1; n <= kTradeChipPeakMaxInBox; n++) 'IN$n',
+      for (var n = 1; n <= kTradeChipPeakMaxRank; n++) ...['M$n', 'P$n'],
+    ];
+    for (final token in tokens) {
+      for (final field in _chipPeakDerivedFields) {
+        out.add(_chipPeakDerivedDef(kind: kind, token: token, field: field));
+      }
     }
   }
 
@@ -1145,9 +1215,16 @@ TradeVariableDef? lookupTradeVariable(String variableId, {int maxKn = 8}) {
   if (ch != null && ch.kn <= (maxKn < 0 ? 0 : maxKn)) {
     return _regressDef(ch.kn, ch.band);
   }
-  final peak = parseChipPeakVarId(id);
-  if (peak != null && peak.kn == 0) {
-    return _chipPeakDef(kind: peak.kind, suffix: peak.suffix);
+  final peakTrade = parseChipPeakTradeVarId(id);
+  if (peakTrade != null && peakTrade.kn == 0) {
+    if (peakTrade.field != null) {
+      return _chipPeakDerivedDef(
+        kind: peakTrade.kind,
+        token: chipPeakTokenOfSuffix(peakTrade.suffix),
+        field: peakTrade.field!,
+      );
+    }
+    return _chipPeakDef(kind: peakTrade.kind, suffix: peakTrade.suffix);
   }
   for (final d in inventoryOnlyTradeVariables()) {
     if (d.matchesId(id)) return d;
@@ -1263,9 +1340,14 @@ TradeVariableDef _chipPeakDef({
   final isTick = kind == 'tick';
   final prefix = isTick ? 'K0笔数峰' : 'K0筹码峰';
   final token = chipPeakTokenOfSuffix(suffix);
+  final displaySuffix = suffix.isEmpty
+      ? ''
+      : suffix.startsWith('IN')
+          ? '·框内${suffix.substring(2)}'
+          : suffix;
   return TradeVariableDef(
     variableId: chipPeakVarId(kind: kind, token: token),
-    displayName: '$prefix${suffix.isEmpty ? "" : suffix}',
+    displayName: '$prefix$displaySuffix',
     panel: TradePanel.sub,
     displayKn: 0,
     clockFamily: TradeClockFamily.zsMath,
@@ -1279,9 +1361,86 @@ TradeVariableDef _chipPeakDef({
     unit: 'price',
     futureSafe: true,
     availabilityNote: '这根没有对应编号的峰则为不可用，不会填 0、不沿用上一根',
-    groupKey: isTick ? 'tickPeak' : 'chipPeak',
-    groupLabel: isTick ? '笔数峰' : '筹码峰',
+    groupKey: isTick ? 'tickPeakPrice' : 'chipPeakPrice',
+    groupLabel: isTick ? '笔数峰·价' : '筹码峰·价',
     fieldLabel: chipPeakFieldLabel(suffix),
-    description: '峰价；框内多峰取离收盘更近的一颗；可与 K0 开高低收比',
+    description:
+        '峰价。空间序：外侧离边界近、框内离收盘近；量级序：各区内按筹码量从大到小。可与 K0 开高低收比',
+  );
+}
+
+TradeVariableDef _chipPeakDerivedDef({
+  required String kind,
+  required String token,
+  required String field,
+}) {
+  final isTick = kind == 'tick';
+  final prefix = isTick ? 'K0笔数峰' : 'K0筹码峰';
+  final suffix = chipPeakSuffixOfToken(token);
+  final nameSuffix = suffix.isEmpty
+      ? ''
+      : suffix.startsWith('IN')
+          ? '·框内${suffix.substring(2)}'
+          : suffix;
+  final fieldCn = switch (field) {
+    'DIST' => '距收盘',
+    'EXISTS' => '有无',
+    'BS' => '多空比',
+    _ => field,
+  };
+  String groupKey;
+  String groupLabel;
+  String unit;
+  String availability;
+  String desc;
+  switch (field) {
+    case 'DIST':
+      groupKey = isTick ? 'tickPeakDist' : 'chipPeakDist';
+      groupLabel = isTick ? '笔数峰·距收盘' : '筹码峰·距收盘';
+      unit = 'price';
+      availability = '无该峰则不可用；DIST=收盘-峰价，正=收盘在峰上方';
+      desc = '收盘减峰价（元）。距某价带内请用 EXISTS==1 且 DIST 上下界';
+      break;
+    case 'EXISTS':
+      groupKey = isTick ? 'tickPeakExists' : 'chipPeakExists';
+      groupLabel = isTick ? '笔数峰·有无' : '筹码峰·有无';
+      unit = 'count';
+      availability = '恒为 1 或 0，永远可比较；无峰为 0 不是不可用';
+      desc = '有对应编号峰为 1，无为 0；请写 ==1，勿当布尔叶子';
+      break;
+    case 'BS':
+      groupKey = isTick ? 'tickPeakBs' : 'chipPeakBs';
+      groupLabel = isTick ? '笔数峰·多空比' : '筹码峰·多空比';
+      unit = 'ratio';
+      availability = '无峰或卖量为 0 则不可用；b/s 无上界';
+      desc = '峰位桶买量/卖量；>1 偏多';
+      break;
+    default:
+      groupKey = isTick ? 'tickPeakPrice' : 'chipPeakPrice';
+      groupLabel = isTick ? '笔数峰' : '筹码峰';
+      unit = 'price';
+      availability = '';
+      desc = '';
+  }
+  return TradeVariableDef(
+    variableId: chipPeakDerivedVarId(kind: kind, token: token, field: field),
+    displayName: '$prefix$nameSuffix·$fieldCn',
+    panel: TradePanel.sub,
+    displayKn: 0,
+    clockFamily: TradeClockFamily.zsMath,
+    evalClock: TradeEvalClock.k0Bar,
+    plotClock: TradePlotClock.k0Bar,
+    valueType: TradeValueType.numeric,
+    readiness: TradeReadiness.registered,
+    source: isTick
+        ? 'TickDistProfileCompute 峰位桶派生'
+        : 'ChipProfileCompute 峰位桶派生',
+    unit: unit,
+    futureSafe: true,
+    availabilityNote: availability,
+    groupKey: groupKey,
+    groupLabel: groupLabel,
+    fieldLabel: '${chipPeakFieldLabel(suffix)}·$field',
+    description: desc,
   );
 }

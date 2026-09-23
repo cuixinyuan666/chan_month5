@@ -1,11 +1,16 @@
 import 'package:flutter/material.dart';
 
+import 'peak_rank_config.dart';
+
 /// 筹码分布配置（进程内；与 Skill 字段对齐）。
 class ChipConfig {
   const ChipConfig({
     this.enabled = false,
     this.bucketStep = 0.01,
     this.stretchLevel = 5,
+    this.peakRankMode = PeakRankMode.spatial,
+    this.maxOuterRank = 5,
+    this.maxInBoxRank = 3,
     this.paneWidth = 88,
     this.sColor = const Color(0xC722C55E),
     this.bColor = const Color(0xC7DC2626),
@@ -24,8 +29,20 @@ class ChipConfig {
   final double bucketStep;
   /// 对比度拉伸 1..20
   final int stretchLevel;
+  /// 筹码峰编号：空间序 / 量级序（与笔数峰共用）
+  final PeakRankMode peakRankMode;
+  /// 外侧 ±n 登记上限 3..7
+  final int maxOuterRank;
+  /// 框内 INn 档数 1..5
+  final int maxInBoxRank;
   /// 主图右侧筹码区宽度
   final double paneWidth;
+
+  PeakRankConfig get peakRankConfig => PeakRankConfig(
+        mode: peakRankMode,
+        maxOuterRank: maxOuterRank,
+        maxInBoxRank: maxInBoxRank,
+      );
   final Color sColor;
   final Color bColor;
   /// 灰度（无方向分笔）柱色
@@ -41,6 +58,9 @@ class ChipConfig {
     bool? enabled,
     double? bucketStep,
     int? stretchLevel,
+    PeakRankMode? peakRankMode,
+    int? maxOuterRank,
+    int? maxInBoxRank,
     double? paneWidth,
     Color? sColor,
     Color? bColor,
@@ -56,6 +76,9 @@ class ChipConfig {
       enabled: enabled ?? this.enabled,
       bucketStep: bucketStep ?? this.bucketStep,
       stretchLevel: stretchLevel ?? this.stretchLevel,
+      peakRankMode: peakRankMode ?? this.peakRankMode,
+      maxOuterRank: maxOuterRank ?? this.maxOuterRank,
+      maxInBoxRank: maxInBoxRank ?? this.maxInBoxRank,
       paneWidth: paneWidth ?? this.paneWidth,
       sColor: sColor ?? this.sColor,
       bColor: bColor ?? this.bColor,
@@ -73,6 +96,9 @@ class ChipConfig {
         'enabled': enabled,
         'bucketStep': bucketStep,
         'stretchLevel': stretchLevel,
+        'peakRankMode': peakRankMode.name,
+        'maxOuterRank': maxOuterRank,
+        'maxInBoxRank': maxInBoxRank,
         'paneWidth': paneWidth,
         'peakLineEnabled': peakLineEnabled,
         'peakLineWidth': peakLineWidth,
@@ -85,6 +111,9 @@ class ChipConfig {
       enabled: json['enabled'] as bool? ?? false,
       bucketStep: (json['bucketStep'] as num?)?.toDouble() ?? 0.01,
       stretchLevel: (json['stretchLevel'] as num?)?.toInt() ?? 5,
+      peakRankMode: PeakRankConfig.fromJson(json).mode,
+      maxOuterRank: (json['maxOuterRank'] as num?)?.toInt() ?? 5,
+      maxInBoxRank: (json['maxInBoxRank'] as num?)?.toInt() ?? 3,
       paneWidth: (json['paneWidth'] as num?)?.toDouble() ?? 88,
       peakLineEnabled: json['peakLineEnabled'] as bool? ?? false,
       peakLineWidth: (json['peakLineWidth'] as num?)?.toDouble() ?? 1.2,
@@ -98,6 +127,9 @@ class ChipConfig {
       other.enabled == enabled &&
       other.bucketStep == bucketStep &&
       other.stretchLevel == stretchLevel &&
+      other.peakRankMode == peakRankMode &&
+      other.maxOuterRank == maxOuterRank &&
+      other.maxInBoxRank == maxInBoxRank &&
       other.paneWidth == paneWidth &&
       other.sColor == sColor &&
       other.bColor == bColor &&
@@ -114,6 +146,9 @@ class ChipConfig {
         enabled,
         bucketStep,
         stretchLevel,
+        peakRankMode,
+        maxOuterRank,
+        maxInBoxRank,
         paneWidth,
         sColor,
         bColor,

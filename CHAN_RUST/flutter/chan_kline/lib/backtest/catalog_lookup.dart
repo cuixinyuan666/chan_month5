@@ -7,6 +7,7 @@ import '../compute/trend_line_compute.dart';
 import '../models/bar_feature_lookup.dart';
 import '../models/k0_confirm_signal.dart';
 import '../models/kline_bar.dart';
+import '../models/peak_rank_config.dart';
 import '../models/level_models.dart';
 import 'buy_n_var.dart';
 import 'chart_line_store.dart';
@@ -33,6 +34,7 @@ TradeScalar lookupTradeNumeric({
   BarFeatureLookup? features,
   ChipPeakFreezeStore? chipPeaks,
   double bucketStep = 0.1,
+  PeakRankConfig peakRank = PeakRankConfig.defaults,
   List<K0ConfirmSignal> k0Confirms = const [],
   int bollN = 20,
 }) {
@@ -76,6 +78,9 @@ TradeScalar lookupTradeNumeric({
     features: features,
     chipPeaks: chipPeaks,
     bucketStep: bucketStep,
+    peakRank: chipPeaks != null && !chipPeaks.isEmpty
+        ? chipPeaks.rankConfig
+        : peakRank,
     k0Confirms: k0Confirms,
   );
   if (extra != null) return extra;
@@ -264,6 +269,7 @@ List<EvalClockPoint> readEvalClockSeries({
   BarFeatureLookup? features,
   ChipPeakFreezeStore? chipPeaks,
   double bucketStep = 0.1,
+  PeakRankConfig peakRank = PeakRankConfig.defaults,
   List<K0ConfirmSignal> k0Confirms = const [],
   int bollN = 20,
 }) {
@@ -315,6 +321,9 @@ List<EvalClockPoint> readEvalClockSeries({
     features: features,
     chipPeaks: chipPeaks,
     bucketStep: bucketStep,
+    peakRank: chipPeaks != null && !chipPeaks.isEmpty
+        ? chipPeaks.rankConfig
+        : peakRank,
     k0Confirms: k0Confirms,
   );
   if (extraPlot != null) {
@@ -664,6 +673,7 @@ TradeScalar? _lookupExtendedNumeric({
   required BarFeatureLookup? features,
   required ChipPeakFreezeStore? chipPeaks,
   required double bucketStep,
+  required PeakRankConfig peakRank,
   required List<K0ConfirmSignal> k0Confirms,
 }) {
   final plot = _extendedPlotSeries(
@@ -675,6 +685,7 @@ TradeScalar? _lookupExtendedNumeric({
     features: features,
     chipPeaks: chipPeaks,
     bucketStep: bucketStep,
+    peakRank: peakRank,
     k0Confirms: k0Confirms,
   );
   if (plot == null) return null;
@@ -691,6 +702,7 @@ List<double?>? _extendedPlotSeries({
   required BarFeatureLookup? features,
   required ChipPeakFreezeStore? chipPeaks,
   required double bucketStep,
+  required PeakRankConfig peakRank,
   required List<K0ConfirmSignal> k0Confirms,
 }) {
   if (bars.isEmpty) return null;
@@ -704,6 +716,7 @@ List<double?>? _extendedPlotSeries({
     n: n,
     chipPeaks: chipPeaks,
     bucketStep: bucketStep,
+    peakRank: peakRank,
   );
   if (peakPlot != null) return peakPlot;
 
@@ -779,26 +792,39 @@ List<double?>? _chipPeakPlotSeries({
   required int n,
   required ChipPeakFreezeStore? chipPeaks,
   required double bucketStep,
+  required PeakRankConfig peakRank,
 }) {
   if (parsed.panel != 'SUB' || parsed.kn != 0) return null;
   if (parsed.rest.length < 2 || parsed.rest[1] != 'PEAK') return null;
-  final head = parsed.rest[0];
-  if (head != 'CHIP' && head != 'TICK') return null;
-  final kind = head == 'TICK' ? 'tick' : 'chip';
-  final suffix = parsed.rest.length < 3
-      ? ''
-      : chipPeakSuffixOfToken(parsed.rest[2]);
+  final varId = 'SUB.K${parsed.kn}.${parsed.rest.join('.')}';
+  final peak = parseChipPeakTradeVarId(varId);
+  if (peak == null) return null;
+  final kind = peak.kind;
+  final suffix = peak.suffix;
+  final field = peak.field;
+  final rank = chipPeaks != null && !chipPeaks.isEmpty
+      ? chipPeaks.rankConfig
+      : peakRank;
   final out = List<double?>.filled(n, null);
   final useStore = chipPeaks != null && !chipPeaks.isEmpty;
   for (var x = 0; x < n && x <= asOf; x++) {
     out[x] = useStore
-        ? chipPeaks.at(kind: kind, suffix: suffix, asOf: x)
-        : liveProfilePeakPrice(
+        ? peakScalarFromStore(
+            store: chipPeaks,
             kind: kind,
             suffix: suffix,
+            field: field,
+            asOf: x,
+            bars: bars,
+          )
+        : liveProfilePeakScalar(
+            kind: kind,
+            suffix: suffix,
+            field: field,
             asOf: x,
             bars: bars,
             bucketStep: bucketStep,
+            rank: rank,
           );
   }
   return out;

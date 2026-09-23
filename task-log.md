@@ -3345,3 +3345,17 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   - 沙箱缺真实默认数据；要对你真实数据跑，把 TDX 数据目录指给我（或在 `a_Data` 放真实离线分笔/日线）即可同法重跑。
   - 搜索空间为「单买条件 × 单卖条件」；要做 AND/OR 多条件组合需扩展枚举（空间更大），可再跑。
   - 未碰合并/分型/段/中枢/买卖点/步进/冻结/主图绘制内核；不触发 AGENTS.md 关键逻辑确认门禁。
+
+---
+
+### 2026-09-23 22:00 — Cursor · 筹码峰回测变量扩展（空间序/量级序 + 衍生）
+
+- **执行者**：cursor
+- **任务类型**：功能 / 策略回测
+- **关键操作**：
+  1. `PeakRankConfig` 写入筹码设置（空间序默认、量级序可切）；改模式或桶宽清空 `ChipPeakFreezeStore`。
+  2. `classifyProfilePeaks` 框内 IN1..3、外侧 ±5；tooltip 与回测同源；`kline_chart` 已接 `close`+rank。
+  3. 冻结仓存 `PeakCell`（价+B/S/G）；catalog 登记峰价四组 groupKey + DIST/EXISTS(1/0)/BS；六段 id 解析；契约 `catalog-v5-chip-peaks-derived`。
+- **结果**：纯 Flutter，未改 Rust；`profile_peak_classify_test` / `chip_peak_var_test` / `buy_n_var_test` 通过。
+- **演示**：设置→筹码峰编号模式；策略条件选「筹码峰·有无」`EXISTS==1` 与「筹码峰·价」`M1` 组合；空间序下 `LOW<=筹码峰-1` 与改前一致。
+- **注意事项**：切量级序后 `PEAK/INn/Mn/Pn` 语义全变；DIST 距价带需双边界比较（无 abs 函数）。
