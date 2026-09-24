@@ -3620,3 +3620,15 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   3. flutter analyze 全包 0 error；profile_peak_classify_test 2/2、chip_peak_var_test 4/4 通过（清 proxy + no_proxy=*）。
 - **结果**：单笔 commit + push 至 origin/ANDROID_RUST + 同步 Obsidian；最终状态可独立构建。
 - **注意事项**：signal_data_catalog_test 中 BOLL 用例失败（MAIN.K0.BOLL.DOWN 期望 2.0 实得 null），走 MathSeriesFreezeStore/mergeMathSeriesForStep 路径，与本次筹码峰改动无关，属既有独立问题，未处理。
+
+### 2026-09-24 · OpenCode · 文档整理 · 术语教科书新增「背驰专题」并同步 Obsidian GLOSSARY
+
+- **执行者**：OpenCode
+- **任务类型**：文档整理（GLOSSARY 扩写 + Obsidian 副本同步，未触核心逻辑）
+- **操作**：
+  1. 桌面 `cursor_slope_and_divergence_concepts.md`（Cursor 导出，slope/斜率背驰 002003 分笔实录）内容蒸馏为仓库 `GLOSSARY.md` 新增「第十二部分：背驰专题」：两路背驰共用的 in/out 比力度框架（包中 vs 破枢选段、背驰率 1.0、diver 判据）、slope「振幅摊平」公式与 K0 可用性、斜率 line_slope 与 `Kn连线斜率` 同式且 K0 无连线不写、K0#93 双路实录表（slope ratio≈0.703、斜率 ratio≈0.96，diver 均 1，但 #92/#93 翻眨眼界不同）；原「第十二部分：结语」顺延为第十三部分，速查表补两行，版本升到 v1.3。
+  2. 镜像到 Obsidian `chan-month5/GLOSSARY.md`（frontmatter + 来源说明 + 原文保真，LF/UTF-8 无 BOM）。
+- **结果**：术语教科书从十二部分扩到十三部分；slope（振幅摊平）与斜率（连线斜率）两路背驰的公式/键名/差异/验收锚点在 App 目录、回测、ML 与 Obsidian 三处口径一致。
+- **演示**：Obsidian 打开 `chan-month5/GLOSSARY.md` → 第十二部分应见 12.1~12.5 与 K0#93 表；App 002003 分笔连续单步到 K0#93，勾 `K1背驰_slope`/`K1背驰_斜率`（对照 `K1连线斜率`），十字 tip 应接近 0.00060→0.00042 与 0.00625→0.00600。
+- **测试**：纯文档层，无 Rust/Flutter 改动；GLOSSARY.md CRLF 一致、Obsidian 副本 LF/UTF-8 无 BOM。
+- **注意事项 / 待办**：桌面源文件保留（已引用进 GLOSSARY 尾注）；未动任何关键计算逻辑。
