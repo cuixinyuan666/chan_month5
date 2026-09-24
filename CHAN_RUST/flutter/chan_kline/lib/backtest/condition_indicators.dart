@@ -44,6 +44,8 @@ import 'strategy_config.dart';
         switch (parts[2]) {
           case 'BOLL':
             main.add(MainChartIndicator.boll(kn));
+          case 'DONCHIAN':
+            main.add(MainChartIndicator.donchian(kn));
           case 'MA':
             main.add(MainChartIndicator.meanLine(kn));
           case 'REGRESS':

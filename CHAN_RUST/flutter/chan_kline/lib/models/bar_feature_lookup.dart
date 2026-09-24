@@ -924,15 +924,18 @@ class BarFeatureLookup {
       for (var dkn = 0; dkn <= maxLevel; dkn++) {
         final classicFrozenMacd = mathFreezeStore?.macd(dkn);
         final classicFrozenBoll = mathFreezeStore?.boll(dkn);
+        final classicFrozenDon = mathFreezeStore?.donchian(dkn);
         final classicFrozenRsi = mathFreezeStore?.rsi(dkn);
         final classicFrozenKdj = mathFreezeStore?.kdj(dkn);
         final classic = (classicFrozenMacd != null &&
                 classicFrozenBoll != null &&
+                classicFrozenDon != null &&
                 classicFrozenRsi != null &&
                 classicFrozenKdj != null)
             ? (
                 macd: classicFrozenMacd,
                 boll: classicFrozenBoll,
+                donchian: classicFrozenDon,
                 rsi: classicFrozenRsi,
                 kdj: classicFrozenKdj,
               )
@@ -989,6 +992,14 @@ class BarFeatureLookup {
             if (mid != null) sub['boll_mid_$dkn'] = mid;
             if (up != null) sub['boll_up_$dkn'] = up;
             if (down != null) sub['boll_down_$dkn'] = down;
+          }
+          if (i >= 0 && i < classic.donchian.mid.length) {
+            final mid = classic.donchian.mid[i];
+            final up = classic.donchian.up[i];
+            final down = classic.donchian.down[i];
+            if (mid != null) sub['donchian_mid_$dkn'] = mid;
+            if (up != null) sub['donchian_up_$dkn'] = up;
+            if (down != null) sub['donchian_down_$dkn'] = down;
           }
           if (i >= 0 && i < regress.mid.length) {
             final mid = regress.mid[i];
@@ -2010,6 +2021,20 @@ class BarFeatureLookup {
       otherMath.add(kv('K$displayKn布林', CrosshairTooltipRow.boxNum(parts.join('/'))));
     } else {
       otherMath.add(kv('K$displayKn布林', CrosshairTooltipRow.boxNum(0)));
+    }
+    final dMid = sub?['donchian_mid_$displayKn'];
+    final dUp = sub?['donchian_up_$displayKn'];
+    final dDn = sub?['donchian_down_$displayKn'];
+    if (dMid is num || dUp is num || dDn is num) {
+      final parts = <String>[
+        if (dUp is num) 'U${dUp.toStringAsFixed(2)}',
+        if (dMid is num) 'M${dMid.toStringAsFixed(2)}',
+        if (dDn is num) 'D${dDn.toStringAsFixed(2)}',
+      ];
+      otherMath.add(
+          kv('K$displayKn唐奇安', CrosshairTooltipRow.boxNum(parts.join('/'))));
+    } else {
+      otherMath.add(kv('K$displayKn唐奇安', CrosshairTooltipRow.boxNum(0)));
     }
     final rMid = sub?['regress_mid_$displayKn'];
     final rUp = sub?['regress_up_$displayKn'];

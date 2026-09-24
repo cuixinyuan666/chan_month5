@@ -163,6 +163,8 @@ Future<void> main() async {
   MsgHistory.instance.appendKnMathClassicIndicators();
   // 主图 Kn回归通道（父层连线绑定；已接入冻结仓/回测 MAIN.Kn.REGRESS.* / 十字读数）
   MsgHistory.instance.appendKnRegressionChannel();
+  // 主图 Kn唐奇安通道（经典海龟口径；已接入冻结仓/回测 MAIN.Kn.DONCHIAN.* / 十字读数）
+  MsgHistory.instance.appendKnDonchianChannel();
   MsgHistory.instance.appendKnDivergenceIndicators();
   MsgHistory.instance.appendDiverLineSlopeAsciiKey();
   MsgHistory.instance.appendTickK0NativePeriod();
@@ -3215,6 +3217,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       chipPeaks: _chipPeakStore,
       bucketStep: _chipConfig.bucketStep,
       bollN: _mathIndicatorConfig.bollN,
+      donchianN: _mathIndicatorConfig.donchianN,
       maxKn: maxKn,
     );
     setState(() {
@@ -4065,6 +4068,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
     final macdSigCtl =
         TextEditingController(text: '${_mathIndicatorConfig.macdSignal}');
     final bollCtl = TextEditingController(text: '${_mathIndicatorConfig.bollN}');
+    final donchianCtl =
+        TextEditingController(text: '${_mathIndicatorConfig.donchianN}');
     final regressKCtl = TextEditingController(
         text: _mathIndicatorConfig.regressK.toStringAsFixed(2));
     final rsiCtl =
@@ -4141,6 +4146,14 @@ class _KlineHomePageState extends State<KlineHomePage> {
                 TextField(
                   controller: bollCtl,
                   decoration: const InputDecoration(labelText: 'BOLL N'),
+                  keyboardType: TextInputType.number,
+                ),
+                TextField(
+                  controller: donchianCtl,
+                  decoration: const InputDecoration(
+                    labelText: '唐奇安 N',
+                    hintText: '窗口根数，默认 20',
+                  ),
                   keyboardType: TextInputType.number,
                 ),
                 TextField(
@@ -4326,6 +4339,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         macdSlowCtl,
         macdSigCtl,
         bollCtl,
+        donchianCtl,
         regressKCtl,
         rsiCtl,
         kdjCtl,
@@ -4354,6 +4368,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       macdSlow: parseInt(macdSlowCtl.text, 26),
       macdSignal: parseInt(macdSigCtl.text, 9),
       bollN: parseInt(bollCtl.text, 20),
+      donchianN: parseInt(donchianCtl.text, 20),
       regressK: parseDouble(regressKCtl.text, 2.0),
       rsiPeriod: parseInt(rsiCtl.text, 14),
       kdjPeriod: parseInt(kdjCtl.text, 9),
@@ -4373,6 +4388,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       macdSlowCtl,
       macdSigCtl,
       bollCtl,
+      donchianCtl,
       rsiCtl,
       kdjCtl,
       demarkLenCtl,
@@ -4409,6 +4425,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
     _msgHistory.append(
       '数学指标：均线=${cfg.meanPeriods.join(",")}；通道=${cfg.channelPeriods.join(",")}；'
       'MACD=${cfg.macdFast}/${cfg.macdSlow}/${cfg.macdSignal}；BOLL=${cfg.bollN}；'
+      '唐奇安N=${cfg.donchianN}；'
       'RSI=${cfg.rsiPeriod}；KDJ=${cfg.kdjPeriod}；Demark=${cfg.demarkLen}'
       '/${cfg.demarkCountdownMode.name}'
       '/完美9=${cfg.demarkPerfect9}'

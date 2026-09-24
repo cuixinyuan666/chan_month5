@@ -1293,15 +1293,18 @@ class IncrementalBarFeatureLookup {
     for (var dkn = 0; dkn <= maxLevel; dkn++) {
       final classicFrozenMacd = mathFreezeStore?.macd(dkn);
       final classicFrozenBoll = mathFreezeStore?.boll(dkn);
+      final classicFrozenDon = mathFreezeStore?.donchian(dkn);
       final classicFrozenRsi = mathFreezeStore?.rsi(dkn);
       final classicFrozenKdj = mathFreezeStore?.kdj(dkn);
       final classic = (classicFrozenMacd != null &&
               classicFrozenBoll != null &&
+              classicFrozenDon != null &&
               classicFrozenRsi != null &&
               classicFrozenKdj != null)
           ? (
               macd: classicFrozenMacd,
               boll: classicFrozenBoll,
+              donchian: classicFrozenDon,
               rsi: classicFrozenRsi,
               kdj: classicFrozenKdj,
             )
@@ -1380,6 +1383,14 @@ class IncrementalBarFeatureLookup {
             if (mid != null) sub['boll_mid_$dkn'] = mid;
             if (up != null) sub['boll_up_$dkn'] = up;
             if (down != null) sub['boll_down_$dkn'] = down;
+          }
+          if (x >= 0 && x < classic.donchian.mid.length) {
+            final mid = classic.donchian.mid[x];
+            final up = classic.donchian.up[x];
+            final down = classic.donchian.down[x];
+            if (mid != null) sub['donchian_mid_$dkn'] = mid;
+            if (up != null) sub['donchian_up_$dkn'] = up;
+            if (down != null) sub['donchian_down_$dkn'] = down;
           }
           if (x >= 0 && x < classic.rsi.length) {
             final rsi = classic.rsi[x];

@@ -269,6 +269,7 @@ class CondEvalCtx {
   final ChipPeakFreezeStore? chipPeaks;
   final double bucketStep;
   final int bollN;
+  final int donchianN;
   final int maxKn;
 
   const CondEvalCtx({
@@ -284,6 +285,7 @@ class CondEvalCtx {
     this.chipPeaks,
     this.bucketStep = 0.1,
     this.bollN = 20,
+    this.donchianN = 20,
     this.maxKn = 8,
   });
 }
@@ -865,6 +867,7 @@ List<EvalClockPoint> _readRef(
       zsJudgmentByKn: ctx.chanEvents.zsJudgmentByKn,
       zsConfirmByKn: ctx.chanEvents.zsConfirmByKn,
       bollN: ctx.bollN,
+      donchianN: ctx.donchianN,
     );
     return [
       for (final p in grid)
@@ -895,6 +898,7 @@ List<EvalClockPoint> _readRef(
       zsJudgmentByKn: ctx.chanEvents.zsJudgmentByKn,
       zsConfirmByKn: ctx.chanEvents.zsConfirmByKn,
       bollN: ctx.bollN,
+      donchianN: ctx.donchianN,
     );
     return [
       for (final p in grid)
@@ -923,6 +927,7 @@ List<EvalClockPoint> _readRef(
     zsJudgmentByKn: ctx.chanEvents.zsJudgmentByKn,
     zsConfirmByKn: ctx.chanEvents.zsConfirmByKn,
     bollN: ctx.bollN,
+    donchianN: ctx.donchianN,
   );
 }
 

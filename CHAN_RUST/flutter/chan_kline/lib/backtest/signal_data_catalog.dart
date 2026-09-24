@@ -118,6 +118,9 @@ String rawOhlcId(int kn, String field) => 'RAW.K$kn.${field.toUpperCase()}';
 String bollBandId(int kn, String band) =>
     'MAIN.K$kn.BOLL.${band.toUpperCase()}';
 
+String donchianBandId(int kn, String band) =>
+    'MAIN.K$kn.DONCHIAN.${band.toUpperCase()}';
+
 String macdFieldId(int kn, String field) =>
     'SUB.K$kn.MACD.${field.toUpperCase()}';
 
@@ -528,6 +531,33 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
         groupLabel: '布林',
         fieldLabel: bandCn[b]!,
         description: '读图上已冻住的布林格子，禁止现场另算',
+      ));
+    }
+  }
+
+  // 各层唐奇安通道：与布林同号，读冻结仓（UP=窗口最高价最大/MID/DOWN=窗口最低价最小）
+  const donchBands = ['UP', 'MID', 'DOWN'];
+  const donchBandCn = {'UP': '上轨', 'MID': '中轨', 'DOWN': '下轨'};
+  for (var kn = 0; kn <= hi; kn++) {
+    for (final b in donchBands) {
+      out.add(TradeVariableDef(
+        variableId: donchianBandId(kn, b),
+        displayName: 'K$kn唐奇安${donchBandCn[b]}',
+        panel: TradePanel.main,
+        displayKn: kn,
+        clockFamily: TradeClockFamily.zsMath,
+        evalClock: evalClockForDisplayKn(kn),
+        plotClock: TradePlotClock.k0Bar,
+        valueType: TradeValueType.numeric,
+        readiness: TradeReadiness.registered,
+        source: 'MathSeriesFreezeStore.donchian(kn)，与图上唐奇安同一仓；CROSS 取 evalClock 样本点',
+        unit: 'price',
+        futureSafe: true,
+        availabilityNote: '有第一个唐奇安样本才有数；热身不足仍按图上通道出数，不另造前N根不可用',
+        groupKey: 'donchian',
+        groupLabel: '唐奇安',
+        fieldLabel: donchBandCn[b]!,
+        description: '读图上已冻住的唐奇安格子，禁止现场另算；上轨=窗口内最高价最大，下轨=窗口内最低价最小',
       ));
     }
   }

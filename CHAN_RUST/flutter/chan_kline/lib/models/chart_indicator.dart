@@ -27,6 +27,8 @@ enum MainIndicatorKind {
   trendChannel,
   /// Kn布林带（MID/UP/DOWN；kn 同中枢）
   boll,
+  /// Kn唐奇安通道（UP=HHV(high,N)/MID/DOWN=LLV(low,N)；kn 同中枢）
+  donchian,
   /// Kn回归通道（父层连线绑定：基准=父层 K{n+1}连线最后一段，外推到 asOf；kn 同中枢）
   regressionChannel,
   /// Kn Demark（setup/countdown/完成信号；kn 同中枢；主图标注）
@@ -72,6 +74,7 @@ extension MainIndicatorKindMeta on MainIndicatorKind {
       case MainIndicatorKind.meanLine:
       case MainIndicatorKind.trendChannel:
       case MainIndicatorKind.boll:
+      case MainIndicatorKind.donchian:
         return '均线';
       case MainIndicatorKind.demark:
         return 'Demark';
@@ -105,6 +108,7 @@ extension MainIndicatorKindMeta on MainIndicatorKind {
       case MainIndicatorKind.meanLine:
       case MainIndicatorKind.trendChannel:
       case MainIndicatorKind.boll:
+      case MainIndicatorKind.donchian:
         return 5;
       case MainIndicatorKind.demark:
         return 6;
@@ -146,6 +150,8 @@ class MainChartIndicator {
   const MainChartIndicator.trendChannel(this.kn)
       : kind = MainIndicatorKind.trendChannel;
   const MainChartIndicator.boll(this.kn) : kind = MainIndicatorKind.boll;
+  const MainChartIndicator.donchian(this.kn)
+      : kind = MainIndicatorKind.donchian;
   const MainChartIndicator.regressionChannel(this.kn)
       : kind = MainIndicatorKind.regressionChannel;
   const MainChartIndicator.demark(this.kn) : kind = MainIndicatorKind.demark;
@@ -188,6 +194,8 @@ class MainChartIndicator {
         return 'K$kn通道';
       case MainIndicatorKind.boll:
         return 'K$kn布林';
+      case MainIndicatorKind.donchian:
+        return 'K$kn唐奇安';
       case MainIndicatorKind.regressionChannel:
         return 'K$kn回归通道';
       case MainIndicatorKind.demark:
@@ -237,18 +245,20 @@ class MainChartIndicator {
         return 11;
       case MainIndicatorKind.boll:
         return 12;
-      case MainIndicatorKind.regressionChannel:
+      case MainIndicatorKind.donchian:
         return 13;
-      case MainIndicatorKind.demark:
+      case MainIndicatorKind.regressionChannel:
         return 14;
-      case MainIndicatorKind.stepRhythm:
+      case MainIndicatorKind.demark:
         return 15;
-      case MainIndicatorKind.chipPeakSpatial:
+      case MainIndicatorKind.stepRhythm:
         return 16;
-      case MainIndicatorKind.chipPeakVolume:
+      case MainIndicatorKind.chipPeakSpatial:
         return 17;
-      case MainIndicatorKind.chipPeakPure:
+      case MainIndicatorKind.chipPeakVolume:
         return 18;
+      case MainIndicatorKind.chipPeakPure:
+        return 19;
     }
   }
 
@@ -615,6 +625,10 @@ List<MainChartIndicator> buildMainIndicatorCatalog(int maxKn) {
   for (var d = 0; d <= maxKn; d++) {
     out.add(MainChartIndicator.boll(d));
   }
+  // 唐奇安通道（经典口径 high/low；与中枢同号：d=0→K0）
+  for (var d = 0; d <= maxKn; d++) {
+    out.add(MainChartIndicator.donchian(d));
+  }
   // K0 筹码峰价折线（仅 catalog 挂 K0 一项；空间序 / 量级序 / 纯量级 三方案）
   out.add(MainChartIndicator.chipPeakSpatial(0));
   out.add(MainChartIndicator.chipPeakVolume(0));
@@ -738,6 +752,7 @@ List<MainChartIndicator> mainIndicatorsForLevel(
     MainChartIndicator.meanLine(displayLevel),
     MainChartIndicator.trendChannel(displayLevel),
     MainChartIndicator.boll(displayLevel),
+    MainChartIndicator.donchian(displayLevel),
     MainChartIndicator.regressionChannel(displayLevel),
     MainChartIndicator.demark(displayLevel),
     // 必须进主图「Kn指标」层全选（与连线同显示层）
@@ -849,6 +864,7 @@ bool isDefaultDrawnMain(MainChartIndicator e) {
     case MainIndicatorKind.meanLine:
     case MainIndicatorKind.trendChannel:
     case MainIndicatorKind.boll:
+    case MainIndicatorKind.donchian:
     case MainIndicatorKind.regressionChannel:
     case MainIndicatorKind.demark:
     case MainIndicatorKind.stepRhythm:

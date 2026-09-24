@@ -60,6 +60,7 @@ BacktestRun executeStrategyBacktest({
   ChipPeakFreezeStore? chipPeaks,
   double bucketStep = 0.1,
   int bollN = 20,
+  int donchianN = 20,
   int maxKn = 8,
   DateTime? now,
   String? runId,
@@ -112,6 +113,7 @@ BacktestRun executeStrategyBacktest({
     chipPeaks: chipPeaks,
     bucketStep: bucketStep,
     bollN: bollN,
+    donchianN: donchianN,
     maxKn: maxKn,
   );
   final signals = <SignalEvent>[

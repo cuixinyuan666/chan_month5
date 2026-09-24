@@ -55,6 +55,14 @@ BollK0Series freezeBoll(BollK0Series? prev, BollK0Series fresh) {
   );
 }
 
+DonchianK0Series freezeDonchian(DonchianK0Series? prev, DonchianK0Series fresh) {
+  return DonchianK0Series(
+    up: freezeNullableSeries(prev?.up, fresh.up),
+    mid: freezeNullableSeries(prev?.mid, fresh.mid),
+    down: freezeNullableSeries(prev?.down, fresh.down),
+  );
+}
+
 KdjK0Series freezeKdj(KdjK0Series? prev, KdjK0Series fresh) {
   return KdjK0Series(
     k: freezeNullableSeries(prev?.k, fresh.k),
@@ -172,6 +180,7 @@ Map<int, ({List<double?> max, List<double?> min})> _mergeChannelAt(
 class MathSeriesFreezeStore {
   final Map<int, MacdK0Series> macdByKn = {};
   final Map<int, BollK0Series> bollByKn = {};
+  final Map<int, DonchianK0Series> donchianByKn = {};
   final Map<int, List<double?>> rsiByKn = {};
   final Map<int, KdjK0Series> kdjByKn = {};
   final Map<int, DemarkK0Series> demarkByKn = {};
@@ -183,6 +192,7 @@ class MathSeriesFreezeStore {
   void clear() {
     macdByKn.clear();
     bollByKn.clear();
+    donchianByKn.clear();
     rsiByKn.clear();
     kdjByKn.clear();
     demarkByKn.clear();
@@ -196,6 +206,7 @@ class MathSeriesFreezeStore {
     required int displayKn,
     required MacdK0Series macd,
     required BollK0Series boll,
+    required DonchianK0Series donchian,
     required List<double?> rsi,
     required KdjK0Series kdj,
     required DemarkK0Series demark,
@@ -218,6 +229,12 @@ class MathSeriesFreezeStore {
         up: _mergeCellAt(prevBoll?.up, boll.up, x),
         down: _mergeCellAt(prevBoll?.down, boll.down, x),
       );
+      final prevDon = donchianByKn[displayKn];
+      donchianByKn[displayKn] = DonchianK0Series(
+        up: _mergeCellAt(prevDon?.up, donchian.up, x),
+        mid: _mergeCellAt(prevDon?.mid, donchian.mid, x),
+        down: _mergeCellAt(prevDon?.down, donchian.down, x),
+      );
       rsiByKn[displayKn] = _mergeCellAt(rsiByKn[displayKn], rsi, x);
       final prevKdj = kdjByKn[displayKn];
       kdjByKn[displayKn] = KdjK0Series(
@@ -238,6 +255,7 @@ class MathSeriesFreezeStore {
     }
     macdByKn[displayKn] = freezeMacd(macdByKn[displayKn], macd);
     bollByKn[displayKn] = freezeBoll(bollByKn[displayKn], boll);
+    donchianByKn[displayKn] = freezeDonchian(donchianByKn[displayKn], donchian);
     rsiByKn[displayKn] = freezeNullableSeries(rsiByKn[displayKn], rsi);
     kdjByKn[displayKn] = freezeKdj(kdjByKn[displayKn], kdj);
     demarkByKn[displayKn] = freezeDemark(demarkByKn[displayKn], demark);
@@ -249,6 +267,7 @@ class MathSeriesFreezeStore {
 
   MacdK0Series? macd(int kn) => macdByKn[kn];
   BollK0Series? boll(int kn) => bollByKn[kn];
+  DonchianK0Series? donchian(int kn) => donchianByKn[kn];
   List<double?>? rsi(int kn) => rsiByKn[kn];
   KdjK0Series? kdj(int kn) => kdjByKn[kn];
   DemarkK0Series? demark(int kn) => demarkByKn[kn];
@@ -331,6 +350,7 @@ void mergeMathSeriesForStep({
       displayKn: kn,
       macd: classic.macd,
       boll: classic.boll,
+      donchian: classic.donchian,
       rsi: classic.rsi,
       kdj: classic.kdj,
       demark: demark,

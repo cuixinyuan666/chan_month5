@@ -170,6 +170,67 @@ BollK0Series computeBollForLevel({
   );
 }
 
+// ─── 唐奇安通道（Donchian） ───────────────────────────
+// 经典口径：上轨 = 窗口 N 内最高价最大（HHV），下轨 = 窗口 N 内最低价最小（LLV），
+// 中轨 = (上轨 + 下轨) / 2。样本钟与布林/KDJ 同构：K0=原生分钟K，K{n}=本层虚拟K。
+
+class DonchianK0Series {
+  final List<double?> up;
+  final List<double?> mid;
+  final List<double?> down;
+  const DonchianK0Series({
+    required this.up,
+    required this.mid,
+    required this.down,
+  });
+}
+
+DonchianK0Series computeDonchianForLevel({
+  required int displayKn,
+  required List<KlineBar> bars,
+  List<LevelBundle> levels = const [],
+  int n = 20,
+  int? asOf,
+  List<KnOhlcSample>? samples,
+}) {
+  final use = samples ??
+      collectKnOhlcSamples(
+        displayKn: displayKn,
+        bars: bars,
+        levels: levels,
+        asOf: asOf,
+      );
+  final win = n < 1 ? 1 : n;
+  final highs = <double>[];
+  final lows = <double>[];
+  final ptsU = <({int x, double v})>[];
+  final ptsM = <({int x, double v})>[];
+  final ptsD = <({int x, double v})>[];
+  for (final s in use) {
+    highs.add(s.high);
+    lows.add(s.low);
+    if (highs.length > win) {
+      highs.removeRange(0, highs.length - win);
+      lows.removeRange(0, lows.length - win);
+    }
+    var hh = highs.first;
+    var ll = lows.first;
+    for (var i = 1; i < highs.length; i++) {
+      if (highs[i] > hh) hh = highs[i];
+      if (lows[i] < ll) ll = lows[i];
+    }
+    ptsU.add((x: s.endX, v: hh));
+    ptsD.add((x: s.endX, v: ll));
+    ptsM.add((x: s.endX, v: (hh + ll) / 2));
+  }
+  final len = bars.length;
+  return DonchianK0Series(
+    up: expandPointsToK0(ptsU, len, asOf: asOf),
+    mid: expandPointsToK0(ptsM, len, asOf: asOf),
+    down: expandPointsToK0(ptsD, len, asOf: asOf),
+  );
+}
+
 // ─── 回归通道（父层连线绑定） ─────────────────────────
 // 基准区间：父层 K{n+1}连线（structure level = displayKn+1）在 asOf 视图下的**最后一段**
 // ——倒数第二个极点 → 最后一个极点，端点含分型判断与构建中开口尾端；父层一出新段整条通道换新基准，旧的不留。
@@ -427,6 +488,7 @@ KdjK0Series computeKdjForLevel({
 ({
   MacdK0Series macd,
   BollK0Series boll,
+  DonchianK0Series donchian,
   List<double?> rsi,
   KdjK0Series kdj,
 }) computeClassicMathForLevel({
@@ -460,6 +522,14 @@ KdjK0Series computeKdjForLevel({
       bars: bars,
       levels: levels,
       n: config.bollN,
+      asOf: asOf,
+      samples: use,
+    ),
+    donchian: computeDonchianForLevel(
+      displayKn: displayKn,
+      bars: bars,
+      levels: levels,
+      n: config.donchianN,
       asOf: asOf,
       samples: use,
     ),

@@ -42,6 +42,7 @@ TradeScalar lookupTradeNumeric({
   Map<int, List<ZsSignalEvent>> zsJudgmentByKn = const {},
   Map<int, List<ZsSignalEvent>> zsConfirmByKn = const {},
   int bollN = 20,
+  int donchianN = 20,
 }) {
   if (bars.isEmpty || asOf < 0) return const TradeScalar.unavailable();
 
@@ -291,6 +292,11 @@ List<double?>? frozenPlotSeries({
       parsed.rest[0] == 'BOLL') {
     return _bollField(store.boll(parsed.kn), parsed.rest[1]);
   }
+  if (parsed.panel == 'MAIN' &&
+      parsed.rest.length >= 2 &&
+      parsed.rest[0] == 'DONCHIAN') {
+    return _donchianField(store.donchian(parsed.kn), parsed.rest[1]);
+  }
   if (parsed.panel != 'SUB' || parsed.rest.isEmpty) return null;
   switch (parsed.rest[0]) {
     case 'MACD':
@@ -359,6 +365,7 @@ List<EvalClockPoint> readEvalClockSeries({
   Map<int, List<ZsSignalEvent>> zsJudgmentByKn = const {},
   Map<int, List<ZsSignalEvent>> zsConfirmByKn = const {},
   int bollN = 20,
+  int donchianN = 20,
 }) {
   if (bars.isEmpty || asOf < 0) return const [];
   final def = lookupTradeVariable(variableId, maxKn: 32);
@@ -573,6 +580,20 @@ List<double?>? _bollField(BollK0Series? b, String band) {
       return b.up;
     case 'DOWN':
       return b.down;
+    default:
+      return null;
+  }
+}
+
+List<double?>? _donchianField(DonchianK0Series? d, String band) {
+  if (d == null) return null;
+  switch (band) {
+    case 'UP':
+      return d.up;
+    case 'MID':
+      return d.mid;
+    case 'DOWN':
+      return d.down;
     default:
       return null;
   }

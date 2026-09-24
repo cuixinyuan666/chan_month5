@@ -3620,7 +3620,6 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   3. flutter analyze 全包 0 error；profile_peak_classify_test 2/2、chip_peak_var_test 4/4 通过（清 proxy + no_proxy=*）。
 - **结果**：单笔 commit + push 至 origin/ANDROID_RUST + 同步 Obsidian；最终状态可独立构建。
 - **注意事项**：signal_data_catalog_test 中 BOLL 用例失败（MAIN.K0.BOLL.DOWN 期望 2.0 实得 null），走 MathSeriesFreezeStore/mergeMathSeriesForStep 路径，与本次筹码峰改动无关，属既有独立问题，未处理。
-
 ### 2026-09-24 · OpenCode · 文档整理 · 术语教科书新增「背驰专题」并同步 Obsidian GLOSSARY
 
 - **执行者**：OpenCode
@@ -3632,3 +3631,23 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **演示**：Obsidian 打开 `chan-month5/GLOSSARY.md` → 第十二部分应见 12.1~12.5 与 K0#93 表；App 002003 分笔连续单步到 K0#93，勾 `K1背驰_slope`/`K1背驰_斜率`（对照 `K1连线斜率`），十字 tip 应接近 0.00060→0.00042 与 0.00625→0.00600。
 - **测试**：纯文档层，无 Rust/Flutter 改动；GLOSSARY.md CRLF 一致、Obsidian 副本 LF/UTF-8 无 BOM。
 - **注意事项 / 待办**：桌面源文件保留（已引用进 GLOSSARY 尾注）；未动任何关键计算逻辑。
+
+### 2026-09-24 23:10 — 新增主图指标「唐奇安通道」（经典海龟口径，全管线接入）
+
+- **执行者**：WorkBuddy（Agent 模式，用户「确认」后执行）
+- **任务类型**：功能开发（主图指标，纯 Flutter 增量，不动缠论内核/Rust）
+- **上下文**：用户要求参照其它指标的呈现方式添加主图指标「唐奇安通道」。grill-me 四问共议：经典口径（最高价/最低价）、三线含中轨、单周期 donchianN=20 可配置、kn 同中枢 0..maxKn（照布林）。
+- **关键操作**：
+  1. math_indicator_config.dart：新增 donchianN=20（构造/copyWith/toJson/fromJson/相等/hash 全带）；
+  2. math_classic_compute.dart：新增 DonchianK0Series(up/mid/down) + computeDonchianForLevel（HHV(high,N)/LLV(low,N)/中轨=两者均值；样本钟与布林同构 collectKnOhlcSamples + expandPointsToK0）；并入 computeClassicMathForLevel 汇总；
+  3. math_series_freeze_store.dart：冻结仓新增 donchianByKn 槽位（freezeDonchian/_mergeCellAt 单格合并/clear/mergeLevel/读取器），保「格点首次非空写入后冻结不回写」口径；
+  4. chart_indicator.dart：MainIndicatorKind.donchian 挂「均线」类（类别序 5、层内序 13，后续项顺延），label「K$kn唐奇安」；catalog 0..maxKn、层全选、isDefaultDrawnMain=false；
+  5. kline_chart.dart：绘制分支 _drawDonchian（中轨实线 + 上下轨同色降透明度细线，与布林同型）；走冻结仓优先；
+  6. main.dart 设置面板：「唐奇安 N」输入框（默认 20）+ 汇总文案 + 回测 donchianN 贯通；
+  7. 十字 tooltip：bar_feature_lookup.dart / incremental_lookup.dart 写 donchian_up/mid/down 槽 + 展示行「K$n唐奇安 U/M/D」；
+  8. 回测：signal_data_catalog 新增 MAIN.Kn.DONCHIAN.UP/MID/DOWN 变量（读图上同一冻结仓）；catalog_lookup frozenPlotSeries DONCHIAN 分支 + _donchianField；condition_eval/cross_eval/backtest_run 参数贯通；condition_indicators 自动并入映射加 DONCHIAN→主图唐奇安；
+  9. ML：ml_rule_score 记「K$kn 唐奇安通道已就绪」（同布林就绪口径）；donchian_* 数值键自动进特征（schema 无需改，与 boll_* 一致）；ml_feature_label 无布林条目故不加；
+  10. msg_history：新增 appendKnDonchianChannel 口径说明（含与 Kn通道 的区别：通道=收盘价 MAX/MIN 双轨，唐奇安=最高/最低价+中轨）。
+- **结果**：沙箱 flutter analyze 因管道耗尽不可用，改用 dart language-server --protocol=lsp + Python stdio LSP 拉 15 个改动文件诊断——**0 error**；临时脚本已删。纯 Dart 改动，无需重编 chan_ffi.dll。
+- **演示**：冷启动→主图指标「均线」类勾「K0唐奇安」→上轨贴前 20 根最高点、下轨贴最低点、中轨居中；连续单步若干根，已画的轨道值不回写、新 K 只在末端长点；十字 tooltip「K0唐奇安」三读数与图一致；设置改 N 生效。待用户 GUI 验收（连续单步，非一键跳末）。
+ Stashed changes

@@ -772,6 +772,25 @@ class MsgHistory {
     );
   }
 
+  /// Kn唐奇安通道（进程内去重；主图绘制；已接入回测/ML：MAIN.Kn.DONCHIAN.UP/MID/DOWN）
+  static bool _knDonchianChannelLogged = false;
+  void appendKnDonchianChannel() {
+    if (_knDonchianChannelLogged) return;
+    _knDonchianChannelLogged = true;
+    append(
+      '【Kn唐奇安通道·主图·已绘制·已接入回测/ML（MAIN.Kn.DONCHIAN.UP/MID/DOWN）】'
+      '口径（经典海龟口径·全层同构）：上轨=窗口 N 内最高价最大（HHV(high,N)），'
+      '下轨=窗口 N 内最低价最小（LLV(low,N)），中轨=(上轨+下轨)/2；默认 N=20（设置面板「唐奇安 N」可调）。'
+      '与 Kn通道 的区别：通道=收盘价滑窗 MAX/MIN 双轨无中轨；唐奇安=最高/最低价口径 + 中轨（海龟突破进场用）。'
+      '样本钟：与布林同一套（collectKnOhlcSamples；K0=原生分钟K，Kn=本层虚拟K）；K0 颗粒度 expandPointsToK0；asOf 截断。'
+      '当下性：已进 MathSeriesFreezeStore（donchianByKn），格点首次非空写入后冻结，禁整表回写；主图/十字读仓。'
+      '绘制：中轨实线、上下轨同色降透明度细线（与布林同型）；十字 x>asOf 右侧不画。'
+      'tooltip 槽位：donchian_up/mid/down，展示行「K{n}唐奇安」=U/M/D 读数。'
+      '回测/ML：MAIN.Kn.DONCHIAN.UP/MID/DOWN 读图上同一冻结仓；ml_rule_score 记「唐奇安通道已就绪」；'
+      'donchian_mid/up/down 为数值特征（同 boll_*，无需进 coreKeys）。',
+    );
+  }
+
   /// Kn背驰 12 算法分项（进程内去重；非买卖点；已删 turnrate）
   static bool _knDivergenceLoggedV12 = false;
   void appendKnDivergenceIndicators() {

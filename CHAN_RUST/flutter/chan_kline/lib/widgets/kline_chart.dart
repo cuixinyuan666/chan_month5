@@ -2771,6 +2771,15 @@ class _KlineCompositePainter extends CustomPainter {
             slotW,
             ind.kn,
           );
+        } else if (ind.kind == MainIndicatorKind.donchian) {
+          _drawDonchian(
+            canvas,
+            size.width,
+            plotTop,
+            plotH,
+            slotW,
+            ind.kn,
+          );
         } else if (ind.kind == MainIndicatorKind.regressionChannel) {
           _drawRegressionChannel(
             canvas,
@@ -4136,6 +4145,62 @@ class _KlineCompositePainter extends CustomPainter {
       plotH,
       slotW,
       series: boll.down,
+      color: midColor.withValues(alpha: 0.55),
+      strokeWidth: 1.0,
+    );
+  }
+
+  /// 主图 Kn唐奇安通道（UP=窗口最高价最大 / MID=(UP+DOWN)/2 / DOWN=窗口最低价最小）。
+  void _drawDonchian(
+    Canvas canvas,
+    double w,
+    double plotTop,
+    double plotH,
+    double slotW,
+    int kn,
+  ) {
+    if (bars.isEmpty) return;
+    final asOf = segAsOf;
+    final DonchianK0Series don = mathFreezeStore?.donchian(kn) ??
+        computeDonchianForLevel(
+          displayKn: kn,
+          bars: bars,
+          levels: asOf != null
+              ? (zsAsOfBundle?.levels ?? const <LevelBundle>[])
+              : levels,
+          n: mathIndicatorConfig.donchianN,
+          asOf: asOf,
+        );
+    final midColor = ChartLevelLineStyle.colorForDisplayKn(kn);
+    // 中轨：实线（与布林中轨同型）
+    _paintPriceSeries(
+      canvas,
+      w,
+      plotTop,
+      plotH,
+      slotW,
+      series: don.mid,
+      color: midColor,
+      strokeWidth: 1.4,
+    );
+    // 上下轨：突破轨，实线略细、降透明度（与布林上下轨同型）
+    _paintPriceSeries(
+      canvas,
+      w,
+      plotTop,
+      plotH,
+      slotW,
+      series: don.up,
+      color: midColor.withValues(alpha: 0.55),
+      strokeWidth: 1.0,
+    );
+    _paintPriceSeries(
+      canvas,
+      w,
+      plotTop,
+      plotH,
+      slotW,
+      series: don.down,
       color: midColor.withValues(alpha: 0.55),
       strokeWidth: 1.0,
     );
