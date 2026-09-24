@@ -3420,3 +3420,76 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **演示**：加载 K 线 → 连续单步数根 → 主图指标勾选「K0筹码峰」→ 应见青/翠绿两轨随 K 延伸，无峰处断线；与右侧筹码峰 `-1/+1` 价对齐。
 - **测试**：`dart analyze` 上述 4 文件无 error（本机 Flutter 3.41.9）。
 - **注意事项 / 待办**：二期可扩展 IN1~3、±2~5 多选；未新增回测变量 ID。
+
+---
+
+### 2026-09-24 11:30 — 删除开发演示阶段与任务演示子系统
+
+- **执行者**：WorkBuddy（🐝）
+- **任务类型**：设置/UI 清理（纯 Flutter 删减；未改 Rust 缠论内核）
+- **上下文**：用户要求把设置里「开发演示阶段」按钮及相关逻辑删除干净；经 grill 确认连始终可见的「任务演示列表/前后对比」独立演示浏览器（及其 task_demo 子系统）也一并删。
+- **关键操作**：
+  1. `main.dart`：删 import（task_demo/* + TaskDemoSettingsStore）；删 `_devDemoPhaseEnabled` 等 9 个状态字段与相关注释；initState 改用 `_bootstrapApp()`（保留 `_loadChipConfig()` 加载顺序，避免丢筹码配置）；删两处 `TaskDemoWalkthroughOverlay` 单步叠层；删设置面板「开发演示阶段」开关+帮助+「手动打开最新任务演示」+「任务演示列表/前后对比」，删第二处「任务演示/前后对比」按钮；删 `_maybeAutoStartLatestTaskDemo` 等 12 个方法；`BackgroundKeepAlive` 去掉 `_taskDemoAutoPlay`；`dispose`/`_bootstrap` 去掉相关调用。
+  2. `msg_history.dart`：删 `_devDemoPhaseLogged` 字段与 `appendDevelopmentDemoPhaseLaunch` 方法（保留 `_agentConfirmGateLogged` 与门禁日志）；顺手把长期记忆里指向已删按钮的陈旧措辞改准（「交易条件目录」那条「不自动弹任务演示」属另一常驻功能，保留）。
+  3. 删文件：`settings/task_demo_settings_store.dart` + 整个 `task_demo/` 目录（7 文件）+ 测试 `test/task_demo_manifest_test.dart`（测已删功能，按 AGENTS.md 调试结束清测试）。
+- **结果**：设置面板不再有「开发演示阶段」区块；启动不再自动加载任务演示；任务演示列表/前后对比浏览器与其数据加载入口整体移除。全包查 `TaskDemo`/`_taskDemo`/`_devDemo`/`开发演示`/`任务演示`——除「交易条件目录」长期记忆里一句无关文案外，零残留。
+- **注意事项 / 待办**：语义级 analyzer 沙箱因 Windows 管道耗尽起不来（`dart language-server` 仅 init 无诊断），仅 `dart format` 4 文件全过（语法无错）；需你本机 `flutter analyze --no-pub` 复核 0 error。运行期 `.chan_task_demo_settings.json` 若残留可手动删（已无读写）。`a_Data/test/demos/` 演示数据目录未动（纯数据，非逻辑）。
+
+---
+
+### 2026-09-24 11:45 — 筹码峰线型：+1 虚线 / -1 实线（主图 K0筹码峰 + 侧栏峰延长线）
+
+- **执行者**：WorkBuddy（🐝）
+- **任务类型**：主图指标 + 侧栏绘制（纯 Flutter；未改 Rust 缠论内核）
+- **上下文**：用户要求筹码峰线型区分符号——+1 用虚线、-1 用实线。经 grill 确认两处都改：主图「K0筹码峰」−1/+1 两轨折线、侧栏峰延长线（筹码右 + 笔数左）。因 `peakRingColor` 给 +1/-1 同色，靠线型区分上下轨。
+- **关键操作**：
+  1. 主图 `_drawChipPeakLines`（`kline_chart.dart`，K0 专用）：按符号判定 `spec.$1.startsWith('+')` → `dashPattern: const [4.0, 3.0]`（虚），否则实线；即 −1 实、+1 虚。
+  2. 侧栏峰延长线：把全局布尔 `peakLineDashed`（全虚/全实）升级为三态枚举 `PeakLineMode { solid, dashed, bySign }`（定义在 `chip_config.dart`），默认 `bySign`；`bySign` 下 `+` 开头档→虚、`−`/IN 档→实；旧配置 `peakLineDashed:bool` 反序列化兼容映射 true→dashed、false→solid。枚举同步改 `chip_config.dart`/`tick_dist_config.dart` 的构造/copyWith/toJson/fromJson/==/hashCode；`ChipProfilePainter.draw` 按 `config.peakLineMode` 走 `_drawDashed` 或 `drawLine`。
+  3. 未碰 `peakRingColor`、未改 Rust、合并/分型/段/中枢/买卖点/步进/冻结语义。
+- **结果**：主图 K0筹码峰 −1 实线青轨、+1 虚线青轨；侧栏峰延长线默认按符号 +虚/−实/IN实。设置里无该开关（沿用默认 bySign）。
+- **演示 / 验收**：`dart format` 4 文件全过（语法无错）；沙箱 analyzer 仍管道耗尽，需本机 `flutter analyze --no-pub` 复核。目视：开「K0筹码峰」→ −1 实、+1 虚；开「峰延长线」→ 正档虚、负档/IN 实。
+- **注意事项**：虚线 pattern 用 [4,3]；INn（框内峰）按实线；旧 `.chan_chip_config.json` 若存了 `peakLineDashed` 会被兼容读取，下次保存即转 `peakLineMode`。
+
+---
+
+### 2026-09-24 10:06 — 本地分支从云端更新：ANDROID_RUST 已为最新（no-op）
+
+- **执行者**：WorkBuddy（🐝）
+- **任务类型**：验证 / 配置
+- **上下文**：用户要求「本地分支从云端更新」，经 grill 确认目标为当前所在分支 ANDROID_RUST，范围仅此一支、不碰 main / full-optimization。
+- **关键操作**：
+  1. `git fetch origin` 拉取最新远端引用。
+  2. `git rev-list --left-right --count ANDROID_RUST...origin/ANDROID_RUST` → 0 领先 / 0 落后，证明本地与云端同一提交。
+  3. `git pull --ff-only` → 输出 "Already up to date."，工作树干净，无任何拉取动作。
+  4. 明确保留 main（本地落后 origin/main 174 提交）、full-optimization（落后 9 提交）不动。
+- **结果**：ANDROID_RUST 已与云端完全一致，本次无需更新；云端对该分支无新提交。
+- **注意事项**：本地 main 仍落后 origin/main 174 个提交、full-optimization 落后 9 个；若后续需基于最新主干开发/合并，记得先快进这两支。
+
+---
+
+### 2026-09-24 10:20 — 本地 ANDROID_RUST 从云端快进至 ec803ec1
+
+- **执行者**：WorkBuddy（🐝）
+- **任务类型**：验证 / 配置（git 同步）
+- **上下文**：用户问「当前分支是否 ec803ec1？不是则从云端更新」。10:06 曾验证本地与云端一致（a45e2754），但本轮 `git fetch` 发现 origin/ANDROID_RUST 已推进到 ec803ec1（a45e2754→ec803ec1，本地落后 1 提交、0 领先）。
+- **关键操作**：
+  1. `git checkout -- task-log.md` 暂弃上一轮未提交的 no-op 记录（避免与云端同文件改动冲突）。
+  2. `git pull --ff-only` → Fast-forward a45e2754..ec803ec1，本地 HEAD 现为 ec803ec12753c6907c3ca6ed3e0f759c7bdd3926。
+  3. ec803 含云端条目「Cursor 主图指标 K0筹码峰价折线（-1/+1）」及对 kline_chart / chart_indicator / chip_peak_store 的改动；kline_chip.dart / chip_config.dart 未变。
+- **结果**：本地 ANDROID_RUST 已与云端 ec803ec1 一致；上一轮 no-op 记录已重新追加以保持源/副本一致。
+
+---
+
+### 2026-09-24 11:57 — 新增 auto-commit-obsidian 技能（每子任务自动 commit+push+Obsidian 记录）
+
+- **执行者**：WorkBuddy（🐝）
+- **任务类型**：配置（项目级 skill）
+- **上下文**：用户要求新增一个技能，使批量任务也按子任务粒度自动提交、推送并同步 Obsidian；避免大任务一次性提交导致回滚点不清、记录与代码脱节。
+- **关键操作**：
+  1. grill-me 确认 4 个设计分叉：范围=项目级（`.workbuddy/skills/auto-commit-obsidian/`）、切分=按可交付单元枚举（TaskCreate）、push 失败=rebase 一次再重试、提交=代码+task-log+记忆一体。
+  2. 写 `SKILL.md`：工作流（拆子任务→执行→追加 task-log 条目→helper 提交/推送/同步）；固化三条安全规则——禁止 `git add -A`、禁止 `git push --force`、不降低 AGENTS.md「确认执行」门禁（仅自动化完成后动作）。
+  3. 写 `scripts/commit_push_record.py`：自动定位仓库根（含 `.git`+`task-log.md`）；仅暂存显式传入文件 + `task-log.md` + 当日 `.workbuddy/memory`；空暂存跳过；`git push` 被拒则 `pull --rebase --autostash` 一次重试；最后跑 obsidian-task-recorder 的 `sync_task_to_obsidian.py`。支持 `--no-push`/`--no-sync`/`--dry-run`/`--repo`。
+- **结果**：技能就位；本任务即「自举」用该技能 commit+push+record（创建它的提交里只含技能文件 + task-log + 记忆，不动此前未提交的 dev-demo/筹码峰代码）。
+- **演示 / 验收**：`python -m py_compile` 校验脚本通过；首跑即本次创建技能。提交类型映射：功能开发=feat / Bug修复=fix / 重构=refactor / 配置=chore / 数据处理=data / 验证=test / 复盘=docs。
+- **注意事项**：语义级 analyzer 沙箱不可用（纯 Python skill，无需 flutter analyze）。后续每批任务按子任务拆分，各自独立 commit/push/Obsidian 条目。
+- **注意事项**：ec803 在云端新增 `.cursor/skills/obsidian-task-recorder/`（与本地 `.workbuddy/skills/` 副本并存）；且新增「K0筹码峰」主图指标（画 -1/+1 峰价折线）——用户随后的「筹码峰线型 +1虚线/-1实线」需求很可能针对该指标，grill 时需先确认目标。
