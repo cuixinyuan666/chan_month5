@@ -60,7 +60,7 @@ class AppDebugSnapshot {
     buf.writeln('时间=$ts');
     buf.writeln();
 
-    buf.writeln('口径版本：chan_kline 命名/层级口径 v2026-07-15（K0/K1/…/KN 统一，详见仓库 GLOSSARY.md）；本快照仅含动态状态，历史见整合输出。');
+    buf.writeln('口径版本：chan_kline 命名/层级口径 v2026-07-15（K0/K1/…/KN 统一，术语表见 Obsidian 笔记 chan-month5/docs/GLOSSARY）；本快照仅含动态状态，历史见整合输出。');
     buf.writeln('【基础参数】');
     buf.writeln(
       '代码=${code ?? "-"}；周期=$periodLabel($period)；开始=$beginDate；结束=$endDate',

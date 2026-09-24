@@ -47,7 +47,8 @@
 - 任务完成不验收，且用「一键跳末」代替连续单步验收。
 
 
-技术口径详见 `CHAN_RUST/README.md`「实现约束与口径」节。
+技术口径详见 Obsidian 笔记 `chan-month5/docs/CHAN_RUST_README`「实现约束与口径」节
+（原 `CHAN_RUST/README.md` 已于 2026-09-24 随解释性文档一并剪切迁移到 Obsidian，仓库不再保留副本）。
 
 ### 指标名称/增加变更同步检查清单（必做）
 
