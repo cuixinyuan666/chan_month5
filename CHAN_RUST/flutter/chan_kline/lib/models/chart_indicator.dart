@@ -33,6 +33,8 @@ enum MainIndicatorKind {
   demark,
   /// Kn步进节奏（old step_rhythm；与 Kn连线同号；主图价轴挂点）
   stepRhythm,
+  /// K0筹码峰价折线（仅 kn=0；-1/+1 两轨；读 ChipPeakFreezeStore）
+  chipPeakLine,
 }
 
 /// 主图指标类别元数据。
@@ -63,6 +65,8 @@ extension MainIndicatorKindMeta on MainIndicatorKind {
         return 'Demark';
       case MainIndicatorKind.stepRhythm:
         return '节奏';
+      case MainIndicatorKind.chipPeakLine:
+        return '均线';
     }
   }
 
@@ -92,6 +96,8 @@ extension MainIndicatorKindMeta on MainIndicatorKind {
         return 6;
       case MainIndicatorKind.stepRhythm:
         return 7;
+      case MainIndicatorKind.chipPeakLine:
+        return 5;
     }
   }
 }
@@ -130,6 +136,8 @@ class MainChartIndicator {
   /// kn=连线显示层：K0步进节奏…（主图价轴；动态子线）
   const MainChartIndicator.stepRhythm(this.kn)
       : kind = MainIndicatorKind.stepRhythm;
+  const MainChartIndicator.chipPeakLine(this.kn)
+      : kind = MainIndicatorKind.chipPeakLine;
 
   String get label {
     switch (kind) {
@@ -166,6 +174,8 @@ class MainChartIndicator {
         return 'K${kn}Demark';
       case MainIndicatorKind.stepRhythm:
         return 'K$kn节奏';
+      case MainIndicatorKind.chipPeakLine:
+        return 'K$kn筹码峰';
     }
   }
 
@@ -209,6 +219,8 @@ class MainChartIndicator {
         return 14;
       case MainIndicatorKind.stepRhythm:
         return 15;
+      case MainIndicatorKind.chipPeakLine:
+        return 16;
     }
   }
 
@@ -575,6 +587,8 @@ List<MainChartIndicator> buildMainIndicatorCatalog(int maxKn) {
   for (var d = 0; d <= maxKn; d++) {
     out.add(MainChartIndicator.boll(d));
   }
+  // K0 筹码峰价折线（仅 catalog 挂 K0 一项）
+  out.add(MainChartIndicator.chipPeakLine(0));
   // 回归通道（父层连线绑定：只画最新一段并外推到 asOf；归「延伸」组，与中枢同号 d=0→K0）
   for (var d = 0; d <= maxKn; d++) {
     out.add(MainChartIndicator.regressionChannel(d));
@@ -698,6 +712,7 @@ List<MainChartIndicator> mainIndicatorsForLevel(
     MainChartIndicator.demark(displayLevel),
     // 必须进主图「Kn指标」层全选（与连线同显示层）
     MainChartIndicator.stepRhythm(displayLevel),
+    if (displayLevel == 0) MainChartIndicator.chipPeakLine(0),
   ];
   return candidates.where(allow.contains).toList();
 }
@@ -803,6 +818,7 @@ bool isDefaultDrawnMain(MainChartIndicator e) {
     case MainIndicatorKind.regressionChannel:
     case MainIndicatorKind.demark:
     case MainIndicatorKind.stepRhythm:
+    case MainIndicatorKind.chipPeakLine:
       return false;
   }
 }

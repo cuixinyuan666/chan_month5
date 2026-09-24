@@ -35,6 +35,7 @@ import '../models/divergence_algo.dart';
 import '../models/math_indicator_config.dart';
 import '../compute/level_unit_bar_view_compute.dart';
 import '../compute/zs_compute.dart';
+import '../backtest/chip_peak_store.dart';
 import '../compute/chip_profile_compute.dart';
 import '../compute/tick_dist_profile_compute.dart';
 import '../compute/profile_peak_classify.dart';
@@ -181,6 +182,7 @@ class KlineChart extends StatefulWidget {
     this.mathIndicatorConfig = const MathIndicatorConfig(),
     this.mathFreezeStore,
     this.diverFreezeStore,
+    this.chipPeakStore,
     this.chipOnlyMode = false,
     this.lookupEngine,
     this.sessionAsOfBundle,
@@ -275,6 +277,8 @@ class KlineChart extends StatefulWidget {
   final MathSeriesFreezeStore? mathFreezeStore;
   /// 背驰会话冻结仓（本层力度；旧格不改）
   final DivergenceFreezeStore? diverFreezeStore;
+  /// K0 筹码峰价序列（主图折线 + 回测同源）
+  final ChipPeakFreezeStore? chipPeakStore;
   /// chip 分支：仅显示筹码分布，关闭所有缠论渲染
   final bool chipOnlyMode;
   /// 会话增量 Lookup；Painter / 十字 / chip 复用同一份，禁止各画一次 Full build。
@@ -2034,6 +2038,7 @@ class _KlineChartState extends State<KlineChart> {
               mathIndicatorConfig: widget.mathIndicatorConfig,
               mathFreezeStore: widget.mathFreezeStore,
               diverFreezeStore: widget.diverFreezeStore,
+              chipPeakStore: widget.chipPeakStore,
               chipOnlyMode: widget.chipOnlyMode,
               layer: layer,
               featureLookup: layer == _ChartPaintLayer.chip
@@ -2394,6 +2399,7 @@ class _KlineCompositePainter extends CustomPainter {
     this.mathIndicatorConfig = const MathIndicatorConfig(),
     this.mathFreezeStore,
     this.diverFreezeStore,
+    this.chipPeakStore,
     this.chipOnlyMode = false,
     this.layer = _ChartPaintLayer.base,
     required this.featureLookup,
@@ -2492,6 +2498,8 @@ class _KlineCompositePainter extends CustomPainter {
   final MathSeriesFreezeStore? mathFreezeStore;
   /// 背驰会话冻结仓（有则读仓）
   final DivergenceFreezeStore? diverFreezeStore;
+  /// K0 筹码峰价序列（主图折线）
+  final ChipPeakFreezeStore? chipPeakStore;
   /// chip 分支：仅显示筹码分布，关闭所有缠论渲染
   final bool chipOnlyMode;
 
@@ -2759,6 +2767,15 @@ class _KlineCompositePainter extends CustomPainter {
           );
         } else if (ind.kind == MainIndicatorKind.stepRhythm) {
           _drawStepRhythmMain(
+            canvas,
+            size.width,
+            plotTop,
+            plotH,
+            slotW,
+            ind.kn,
+          );
+        } else if (ind.kind == MainIndicatorKind.chipPeakLine) {
+          _drawChipPeakLines(
             canvas,
             size.width,
             plotTop,
@@ -3814,6 +3831,41 @@ class _KlineCompositePainter extends CustomPainter {
         slotW,
         ray: ray,
         displayKn: displayKn,
+      );
+    }
+  }
+
+  /// 主图 K0 筹码峰价折线（-1 / +1；无峰断开；与侧栏峰色一致）。
+  void _drawChipPeakLines(
+    Canvas canvas,
+    double w,
+    double plotTop,
+    double plotH,
+    double slotW,
+    int kn,
+  ) {
+    if (kn != 0 || bars.isEmpty) return;
+    final store = chipPeakStore;
+    if (store == null || store.isEmpty) return;
+    const specs = [
+      ('-1', '-1'),
+      ('+1', '+1'),
+    ];
+    for (final spec in specs) {
+      final series = store.priceSeriesForBars(
+        kind: 'chip',
+        suffix: spec.$1,
+        bars: bars,
+      );
+      _paintPriceSeries(
+        canvas,
+        w,
+        plotTop,
+        plotH,
+        slotW,
+        series: series,
+        color: ChipProfilePainter.peakRingColor(spec.$2),
+        strokeWidth: 1.4,
       );
     }
   }
@@ -7150,7 +7202,9 @@ class _KlineCompositePainter extends CustomPainter {
         oldDelegate.chipConfig != chipConfig ||
         oldDelegate.tickDistConfig != tickDistConfig ||
         oldDelegate.mathIndicatorConfig != mathIndicatorConfig ||
-        !identical(oldDelegate.featureLookup.byIdx, featureLookup.byIdx);
+        !identical(oldDelegate.featureLookup.byIdx, featureLookup.byIdx) ||
+        oldDelegate.chipPeakStore?.ingestedBarCount !=
+            chipPeakStore?.ingestedBarCount;
 
     switch (layer) {
       case _ChartPaintLayer.base:
@@ -7158,7 +7212,9 @@ class _KlineCompositePainter extends CustomPainter {
         return dataChanged ||
             geomChanged ||
             oldDelegate.segAsOf != segAsOf ||
-            oldDelegate.crosshairEnabled != crosshairEnabled;
+            oldDelegate.crosshairEnabled != crosshairEnabled ||
+            oldDelegate.chipPeakStore?.ingestedBarCount !=
+                chipPeakStore?.ingestedBarCount;
       case _ChartPaintLayer.chip:
         return dataChanged ||
             geomChanged ||

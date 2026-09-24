@@ -31,6 +31,9 @@ class ChipPeakFreezeStore {
 
   bool get isEmpty => _written.isEmpty;
 
+  /// 已写入 K 下标个数（用于主图重绘；仓体引用不变时仍可能增长）。
+  int get ingestedBarCount => _written.length;
+
   PeakRankConfig get rankConfig => _rankConfig;
   PeakRankConfig _rankConfig = PeakRankConfig.defaults;
 
@@ -86,6 +89,17 @@ class ChipPeakFreezeStore {
     required int asOf,
   }) {
     return cellAt(kind: kind, suffix: suffix, asOf: asOf)?.price;
+  }
+
+  /// 与 [bars] 列表对齐的峰价序列（无峰为 null）。
+  List<double?> priceSeriesForBars({
+    required String kind,
+    required String suffix,
+    required List<KlineBar> bars,
+  }) {
+    return [
+      for (final b in bars) at(kind: kind, suffix: suffix, asOf: b.idx),
+    ];
   }
 
   PeakCell? cellAt({

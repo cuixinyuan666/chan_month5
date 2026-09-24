@@ -1,11 +1,11 @@
 读仓库根 [`AGENTS.md`](../../AGENTS.md)。
 
 ## 工具接入
-- Obsidian：已接入。vault 路径 `C:\Users\86185\Documents\Obsidian Vault`（从 %APPDATA%/obsidian/obsidian.json 发现）。使用 user-level skill `obsidian-writer`（零依赖，直接读写 .md/.canvas，无需 Obsidian 运行）。
-- grill me：已安装 user-level skill `nox-grill-me`（对计划/设计持续追问直到达成共识，触发词 "grill me"）。
+- Obsidian：本机 vault `D:\ObsidianVault`（%APPDATA%/obsidian/obsidian.json）。user-level `obsidian-writer`；项目级 `obsidian-task-recorder` 在 `.cursor/skills/`（同步脚本自动解析 vault/chan-month5）。
+- grill me：user-level `grill-me` + `grilling`（Matt Pocock 上游）；chan_month5 专用 `nox-grill-me`（配合 AGENTS.md「确认执行」）。
 
 ## Obsidian 任务过程记录约定
-- Vault：`C:\Users\86185\Documents\Obsidian Vault`（用 `obsidian-writer` skill 读写）。
+- Vault：`D:\ObsidianVault`；项目笔记目录 `chan-month5/`（若尚未建库，首次同步脚本会按需创建）。
 - 项目笔记文件夹：`chan-month5/`（Vault 顶层，无数字编号）。
 - 主源：`chan_month5/task-log.md`（唯一源）；Obsidian 为**副本**，按日归档（38 篇日期笔记 + `MOC.md` + `index-memory.md` / `index-plans.md` / `index-demos.md`）。
 - 每次完成任务：追加 task-log 后，同步写当日 `chan-month5/YYYY-MM-DD.md` 并更新 `MOC.md` 索引（详见 AGENTS.md「完成后」）。**禁止在 Obsidian 手改任务原文**，修订须先回写 task-log 再同步。

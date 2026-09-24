@@ -3481,6 +3481,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       mathIndicatorConfig: _mathIndicatorConfig,
       mathFreezeStore: _mathFreezeStore,
       diverFreezeStore: _diverFreezeStore,
+      chipPeakStore: _chipPeakStore,
       judgmentHistoryByKn: _judgmentHistoryByKn,
       zsJudgmentHistoryByKn: _zsJudgmentHistoryByKn,
       zsConfirmHistoryByKn: _zsConfirmHistoryByKn,
