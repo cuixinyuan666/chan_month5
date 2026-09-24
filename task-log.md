@@ -3680,3 +3680,16 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **结果**：仓库根目录只剩 AGENTS.md / CLAUDE.md / OPENCODE.md / task-log.md；CHAN_RUST/docs 只剩 design_mockup.html。解释性文档正本统一在 Obsidian chan-month5/docs/。
 - **刻意不迁**：AGENTS.md（最高规则）、CLAUDE.md/OPENCODE.md（指针）、a_Data/test/demos（测试夹具，被 task_demo_manifest_test 引用）、design_mockup.html（设计稿，非解释性文档）。
 - **注意事项**：AI 编码机器人查术语/口径要改看 Obsidian chan-month5/docs/，别再找仓库文件；task-log 与 .workbuddy/memory 仍是仓库内唯一源。
+
+### 2026-09-25 00:50 — 清理误提交的本机构建产物（取消跟踪 + .gitignore）
+
+- **执行者**：WorkBuddy（Agent 模式，用户确认方案后执行）
+- **任务类型**：仓库卫生 / 修复误提交
+- **上下文**：提交 6df0d200（修 task-log 那次）误把 15 个 Flutter 本机生成物一起带进去并推到云端——它们含本机 flutter/android sdk/pub-cache 绝对路径（C 盘 src 与 D 盘 android_sdk），换机器就会被覆盖。用户选「取消跟踪 + 进 .gitignore」。
+- **关键操作**：
+  1. git rm --cached 精确取消跟踪 15 个路径：.flutter-plugins-dependencies、android/local.properties、linux 与 windows 的 ephemeral/.plugin_symlinks 下 12 个符号链接、windows ephemeral/generated_config.cmake（**文件留在磁盘，只是不再入库**）；
+  2. **未动 windows ephemeral 下的 cpp_client_wrapper 头文件与 icudtl.dat**——那些是被跟踪的正常内容，不能整目录忽略；
+  3. 根 .gitignore 新增一段忽略规则（含 2026-09-25 说明注释）；
+  4. commit 7c00d3a6 + push，工作区现全干净，与上游 0/0。
+- **结果**：这些文件以后不会再被提交，flutter 构建会自动重建；历史里的旧记录保留，需要可取回。
+- **教训（防复发）**：本仓库提交务必只用显式路径 git add，**别用 git add -A / git add .**；提交后立刻 git status 复核，看有没有混进 ephemeral/local 产物。
