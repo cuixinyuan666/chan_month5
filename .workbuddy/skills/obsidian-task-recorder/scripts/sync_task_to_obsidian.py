@@ -225,6 +225,7 @@ def main():
     entries = parse_entries(text)
     notes = existing_daily_notes(args.vault)
     synced = []
+    dry_synced = []
 
     for e in entries:
         d = e["date"] or args.date
@@ -243,6 +244,7 @@ def main():
         new_text = append_entry_to_note(note_text, e["text"], prev_d, next_d)
         if args.dry_run:
             print(f"[DRY] 将同步 {d}: {e['header'][:60]}")
+            dry_synced.append((d, e["header"]))
             continue
         _write(note_path, new_text)
         notes[d] = note_path
@@ -253,7 +255,14 @@ def main():
         moc_path = os.path.join(args.vault, "MOC.md")
         update_moc(moc_path, args.vault, args.task_log)
 
-    if synced:
+    if args.dry_run:
+        if dry_synced:
+            print(f"[DRY] 共 {len(dry_synced)} 条需同步：")
+            for d, h in dry_synced:
+                print(f"  - {d}: {h[:70]}")
+        else:
+            print("[DRY] 无新条目需同步（已是最新）")
+    elif synced:
         print(f"[OK] 已同步 {len(synced)} 条：")
         for d, h in synced:
             print(f"  - {d}: {h[:70]}")

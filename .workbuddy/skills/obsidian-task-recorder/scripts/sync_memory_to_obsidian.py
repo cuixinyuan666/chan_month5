@@ -96,6 +96,7 @@ def main():
 
     out_dir = os.path.join(args.vault, "memory")
     done = []
+    dry_done = []
     for fn in sorted(os.listdir(args.memory_dir)):
         if not fn.endswith(".md"):
             continue
@@ -112,11 +113,19 @@ def main():
             continue  # 幂等跳过
         if args.dry_run:
             print(f"[DRY] 将同步 {fn} (synced={synced_date})")
+            dry_done.append(fn)
             continue
         _write(dest, copy_text)
         done.append(fn)
 
-    if done:
+    if args.dry_run:
+        if dry_done:
+            print(f"[DRY] 共 {len(dry_done)} 篇记忆需同步到 {out_dir}：")
+            for fn in dry_done:
+                print(f"  - {fn}")
+        else:
+            print("[DRY] 记忆副本已是最新（无变化）")
+    elif done:
         print(f"[OK] 已同步 {len(done)} 篇记忆到 {out_dir}：")
         for fn in done:
             print(f"  - {fn}")
