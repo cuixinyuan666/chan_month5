@@ -1,11 +1,18 @@
 读仓库根 [`AGENTS.md`](../../AGENTS.md)。
 
 ## 工具接入
-- Obsidian：本机 vault `D:\ObsidianVault`（%APPDATA%/obsidian/obsidian.json）。user-level `obsidian-writer`；项目级 `obsidian-task-recorder` 在 `.cursor/skills/`（同步脚本自动解析 vault/chan-month5）。
+- Obsidian：**本机 vault 实际路径 `C:\Users\86185\Documents\Obsidian Vault`（项目笔记在 `chan-month5/`）**；旧记录的 `D:\ObsidianVault` 已失效，以同步脚本实际写入位置为准。user-level `obsidian-writer`；项目级 `obsidian-task-recorder` 在 `.workbuddy/skills/`（同步脚本自动解析 vault/chan-month5）。
+- **同步脚本跨零点坑**：`sync_task_to_obsidian.py` 默认 `--date` 取「今天」，零点后再补同步前一天条目会被静默跳过（不是 bug）。补同步必须显式加 `--date YYYY-MM-DD`。
 - grill me：user-level `grill-me` + `grilling`（Matt Pocock 上游）；chan_month5 专用 `nox-grill-me`（配合 AGENTS.md「确认执行」）。
 
+## 解释性文档归属（2026-09-24 起）
+- **解释性文档已「剪切」迁移到 Obsidian `chan-month5/docs/`，仓库不再保留副本**（13 篇：GLOSSARY、CHAN_RUST_README、8 篇设计/性能报告、superpowers 3 篇）。**Obsidian 笔记即唯一正本**，改文档直接改笔记。
+- 查术语 / 技术口径 → 看 `chan-month5/docs/`，别再找仓库文件（`AGENTS.md` 技术口径行已改指 `docs/CHAN_RUST_README`）。
+- 刻意留在仓库：AGENTS.md（规则）、CLAUDE/OPENCODE 指针、`a_Data/test/demos`（测试夹具）、`CHAN_RUST/docs/design_mockup.html`、`task-log.md` 与 `.workbuddy/memory`（仍是仓库内唯一源）。
+- 迁移套路：**先把仓库最新内容覆盖进 vault 再删仓库**（vault 副本常是旧版，直接删会丢内容）；删后用 `git grep` 扫死引用（代码字符串、AGENTS.md 指针都要改）。
+
 ## Obsidian 任务过程记录约定
-- Vault：`D:\ObsidianVault`；项目笔记目录 `chan-month5/`（若尚未建库，首次同步脚本会按需创建）。
+- Vault：`C:\Users\86185\Documents\Obsidian Vault`；项目笔记目录 `chan-month5/`（若尚未建库，首次同步脚本会按需创建）。
 - 项目笔记文件夹：`chan-month5/`（Vault 顶层，无数字编号）。
 - 主源：`chan_month5/task-log.md`（唯一源）；Obsidian 为**副本**，按日归档（38 篇日期笔记 + `MOC.md` + `index-memory.md` / `index-plans.md` / `index-demos.md`）。
 - 每次完成任务：追加 task-log 后，同步写当日 `chan-month5/YYYY-MM-DD.md` 并更新 `MOC.md` 索引（详见 AGENTS.md「完成后」）。**禁止在 Obsidian 手改任务原文**，修订须先回写 task-log 再同步。

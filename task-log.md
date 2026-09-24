@@ -3665,3 +3665,18 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   5. commit eaaee87d 后 push origin ANDROID_RUST（6bc1e26c..eaaee87d），推送完与上游 0 领先 0 落后。
 - **结果**：云端已同步、唐奇安成果已入库；工作区仅剩本机路径类构建产物未提交（保持原样，不污染仓库）。
 - **注意事项**：这些 ephemeral / local 产物是**被 git 跟踪的**，换机器或改 SDK 路径就会被标脏；后续提交务必只 git add 具体文件，别用 git add -A。
+
+### 2026-09-24 23:58 — 解释性文档剪切迁移到 Obsidian（仓库不再保留副本）
+
+- **执行者**：WorkBuddy（Agent 模式，用户确认范围后执行）
+- **任务类型**：文档迁移 / 仓库清理（纯文档，不动任何计算逻辑）
+- **上下文**：用户要求把 GLOSSARY.md 这类解释性文档「剪切」到 Obsidian。此前 2026-09-22 做的是**复制**迁移（源保留），且 Obsidian 副本已过期（GLOSSARY 停在 v1.2，仓库已是 v1.3 含背驰专题）。用户确认：范围=index-docs 清单全部、仓库全删不留占位、删后 commit+push。
+- **关键操作**：
+  1. 先用脚本把 13 篇文档的**仓库最新内容**覆盖进 Obsidian chan-month5/docs/（保留原 frontmatter 标题与 AI 速览，migrate_mode 改 move、标注剪切日期；校验 GLOSSARY 的 v1.3 背驰专题已带过去）；
+  2. git rm 删除仓库 13 篇：GLOSSARY.md、CHAN_RUST/README.md、CHAN_RUST/docs 下 8 篇设计与性能报告、docs/superpowers 下 3 篇计划与规格；
+  3. 修死引用：app_debug_snapshot.dart 的「详见仓库 GLOSSARY.md」改为指向 Obsidian 笔记；AGENTS.md 第 50 行技术口径指向改到 docs/CHAN_RUST_README；
+  4. Obsidian index-docs.md 更新口径说明（正本改在 Obsidian），临时迁移脚本已删；
+  5. commit e0408d22 + push，推送后 0/0。
+- **结果**：仓库根目录只剩 AGENTS.md / CLAUDE.md / OPENCODE.md / task-log.md；CHAN_RUST/docs 只剩 design_mockup.html。解释性文档正本统一在 Obsidian chan-month5/docs/。
+- **刻意不迁**：AGENTS.md（最高规则）、CLAUDE.md/OPENCODE.md（指针）、a_Data/test/demos（测试夹具，被 task_demo_manifest_test 引用）、design_mockup.html（设计稿，非解释性文档）。
+- **注意事项**：AI 编码机器人查术语/口径要改看 Obsidian chan-month5/docs/，别再找仓库文件；task-log 与 .workbuddy/memory 仍是仓库内唯一源。
