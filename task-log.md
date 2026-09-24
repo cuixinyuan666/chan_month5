@@ -3651,3 +3651,17 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **结果**：沙箱 flutter analyze 因管道耗尽不可用，改用 dart language-server --protocol=lsp + Python stdio LSP 拉 15 个改动文件诊断——**0 error**；临时脚本已删。纯 Dart 改动，无需重编 chan_ffi.dll。
 - **演示**：冷启动→主图指标「均线」类勾「K0唐奇安」→上轨贴前 20 根最高点、下轨贴最低点、中轨居中；连续单步若干根，已画的轨道值不回写、新 K 只在末端长点；十字 tooltip「K0唐奇安」三读数与图一致；设置改 N 生效。待用户 GUI 验收（连续单步，非一键跳末）。
  Stashed changes
+
+### 2026-09-24 23:40 — 唐奇安通道成果：云端同步 + 单笔 commit + push
+
+- **执行者**：WorkBuddy（Agent 模式）
+- **任务类型**：版本管理（pull 快进 / 提交 / 推送）
+- **上下文**：用户要求「首先从云端更新，然后将本次任务成果 commit+push」。本地 ANDROID_RUST 落后云端 1 个提交（6bc1e26c，术语教科书新增「背驰专题」并同步 Obsidian GLOSSARY；动 GLOSSARY.md 与 task-log.md），而本地 task-log.md 已追加唐奇安条目 → 直接 pull 会撞车。
+- **关键操作**：
+  1. git stash push 暂存全部本地改动 → git pull --ff-only 快进到 6bc1e26c → git stash pop 弹回；
+  2. task-log.md 冲突（双方都在末尾追加）：解为「云端 OpenCode 条目在前 + 唐奇安条目在后」，两条都保留；
+  3. 重跑 obsidian-task-recorder 同步脚本（把云端那条 GLOSSARY 条目补进 Vault 当日笔记）；
+  4. 只提交 17 个源码与日志文件，排除 15 个本机构建产物（.flutter-plugins-dependencies、android/local.properties、windows 与 linux 的 flutter/ephemeral/.plugin_symlinks 全部符号链接、windows 的 generated_config.cmake——内容全是本机 flutter / android sdk 路径，因人而异）；
+  5. commit eaaee87d 后 push origin ANDROID_RUST（6bc1e26c..eaaee87d），推送完与上游 0 领先 0 落后。
+- **结果**：云端已同步、唐奇安成果已入库；工作区仅剩本机路径类构建产物未提交（保持原样，不污染仓库）。
+- **注意事项**：这些 ephemeral / local 产物是**被 git 跟踪的**，换机器或改 SDK 路径就会被标脏；后续提交务必只 git add 具体文件，别用 git add -A。
