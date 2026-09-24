@@ -345,6 +345,9 @@ TradeVarDiagnosis diagnoseTradeVariable({
     chipPeaks: chipPeaks,
     bucketStep: bucketStep,
     k0Confirms: chanEvents.k0FractalConfirms,
+    fractalJudgmentByKn: chanEvents.fractalJudgmentByKn,
+    zsJudgmentByKn: chanEvents.zsJudgmentByKn,
+    zsConfirmByKn: chanEvents.zsConfirmByKn,
   );
   final series = readEvalClockSeries(
     variableId: variableId,
@@ -359,6 +362,9 @@ TradeVarDiagnosis diagnoseTradeVariable({
     chipPeaks: chipPeaks,
     bucketStep: bucketStep,
     k0Confirms: chanEvents.k0FractalConfirms,
+    fractalJudgmentByKn: chanEvents.fractalJudgmentByKn,
+    zsJudgmentByKn: chanEvents.zsJudgmentByKn,
+    zsConfirmByKn: chanEvents.zsConfirmByKn,
   );
   EvalClockPoint? last;
   for (final p in series) {

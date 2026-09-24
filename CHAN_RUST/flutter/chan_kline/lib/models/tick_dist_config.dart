@@ -13,10 +13,8 @@ class TickDistConfig {
     this.bColor = const Color(0xC7DC2626),
     this.wColor = const Color(0xC79CA3AF),
     this.peakLineEnabled = false,
-    this.peakLineColor = const Color(0xFF7C3AED),
     this.peakLineWidth = 1.2,
     this.peakLineDashed = true,
-    this.peakDotColor = const Color(0xFFA78BFA),
     this.peakDotRadius = 2.5,
   });
 
@@ -28,10 +26,8 @@ class TickDistConfig {
   final Color bColor;
   final Color wColor;
   final bool peakLineEnabled;
-  final Color peakLineColor;
   final double peakLineWidth;
   final bool peakLineDashed;
-  final Color peakDotColor;
   final double peakDotRadius;
 
   ChipConfig toChipConfig() => ChipConfig(
@@ -43,10 +39,8 @@ class TickDistConfig {
         bColor: bColor,
         wColor: wColor,
         peakLineEnabled: peakLineEnabled,
-        peakLineColor: peakLineColor,
         peakLineWidth: peakLineWidth,
         peakLineDashed: peakLineDashed,
-        peakDotColor: peakDotColor,
         peakDotRadius: peakDotRadius,
       );
 
@@ -66,10 +60,8 @@ class TickDistConfig {
       bColor: bColor,
       wColor: wColor,
       peakLineEnabled: peakLineEnabled ?? this.peakLineEnabled,
-      peakLineColor: peakLineColor,
       peakLineWidth: peakLineWidth,
       peakLineDashed: peakLineDashed,
-      peakDotColor: peakDotColor,
       peakDotRadius: peakDotRadius,
     );
   }

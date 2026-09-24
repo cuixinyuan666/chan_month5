@@ -861,6 +861,9 @@ List<EvalClockPoint> _readRef(
       chipPeaks: ctx.chipPeaks,
       bucketStep: ctx.bucketStep,
       k0Confirms: ctx.chanEvents.k0FractalConfirms,
+      fractalJudgmentByKn: ctx.chanEvents.fractalJudgmentByKn,
+      zsJudgmentByKn: ctx.chanEvents.zsJudgmentByKn,
+      zsConfirmByKn: ctx.chanEvents.zsConfirmByKn,
       bollN: ctx.bollN,
     );
     return [
@@ -888,6 +891,9 @@ List<EvalClockPoint> _readRef(
       chipPeaks: ctx.chipPeaks,
       bucketStep: ctx.bucketStep,
       k0Confirms: ctx.chanEvents.k0FractalConfirms,
+      fractalJudgmentByKn: ctx.chanEvents.fractalJudgmentByKn,
+      zsJudgmentByKn: ctx.chanEvents.zsJudgmentByKn,
+      zsConfirmByKn: ctx.chanEvents.zsConfirmByKn,
       bollN: ctx.bollN,
     );
     return [
@@ -913,6 +919,9 @@ List<EvalClockPoint> _readRef(
     chipPeaks: ctx.chipPeaks,
     bucketStep: ctx.bucketStep,
     k0Confirms: ctx.chanEvents.k0FractalConfirms,
+    fractalJudgmentByKn: ctx.chanEvents.fractalJudgmentByKn,
+    zsJudgmentByKn: ctx.chanEvents.zsJudgmentByKn,
+    zsConfirmByKn: ctx.chanEvents.zsConfirmByKn,
     bollN: ctx.bollN,
   );
 }

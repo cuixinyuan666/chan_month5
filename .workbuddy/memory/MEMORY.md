@@ -16,6 +16,7 @@
 ## Flutter 工程与本机环境（高频复用）
 - **Flutter 包根目录是 `CHAN_RUST/flutter/chan_kline`（不是仓库根！）**；源码在 `lib/`，测试在 `test/`。
 - flutter 可执行文件：`C:/src/flutter/bin/flutter.BAT`。验证改动：`flutter analyze --no-pub`（关注 `error` 级；`test/` 下大量 pre-existing info/warning 可忽略）。
+- **沙箱管道耗尽时 analyze 兜底**：`flutter/dart analyze` 起 analysis_server 子进程报 `CreateFile failed 231（所有的管道范例都在使用中）`时，改用 `dart.exe language-server --protocol=lsp`（进程内不 spawn）+ Python stdio LSP 拉诊断；语法快检用 `dart format --output=none`（详见 2026-09-23 日志）。
 - `flutter test` 在本沙箱默认会报 `Unable to connect to flutter_tester`（代理劫持 localhost WebSocket）。**解决办法：清掉所有 proxy 环境变量并设 `no_proxy=*` 后再跑**（用 managed Python subprocess 传 env）。
 - 本机 bash 偶发 PATH 损坏（`dirname`/`head`/`tail`/`cat`/`rm` 找不到）。**兜底：用 managed Python** `C:/Users/86185/.workbuddy/binaries/python/versions/3.13.12/python.exe` 跑脚本、读写/删文件。
 

@@ -2812,25 +2812,27 @@ class _KlineHomePageState extends State<KlineHomePage> {
           ),
           onTap: _busy ? null : _editMathIndicatorParams,
         ),
+        // 筹码 / 笔数分布：单一总开关（右侧筹码+左侧笔数同时显隐）；峰延长线合并为共享开关（颜色按 ±档自动区分）
         SwitchListTile(
           contentPadding: EdgeInsets.zero,
           dense: true,
-          title: const Text('筹码分布', style: TextStyle(fontSize: 13)),
+          title: const Text('筹码 / 笔数分布', style: TextStyle(fontSize: 13)),
           subtitle: Text(
-            _chipConfig.enabled
-                ? '已开启（主图右侧绘制 K0筹码）'
-                : '已关闭（主图右侧不绘制）',
+            _chipConfig.enabled && _tickDistConfig.enabled
+                ? '已开启（右侧筹码 + 左侧笔数，仅 K0）'
+                : '已关闭',
             style: const TextStyle(fontSize: 11),
           ),
-          value: _chipConfig.enabled,
+          value: _chipConfig.enabled && _tickDistConfig.enabled,
           onChanged: _busy
               ? null
               : (v) {
                   _updateChipConfig(_chipConfig.copyWith(enabled: v));
-                  _msgHistory.append('筹码分布总开关=${v ? "开" : "关"}');
+                  _updateTickDistConfig(_tickDistConfig.copyWith(enabled: v));
+                  _msgHistory.append('筹码/笔数分布总开关=${v ? "开" : "关"}');
                 },
           secondary: IconButton(
-            tooltip: '筹码分布说明',
+            tooltip: '筹码/笔数分布说明',
             icon: const Icon(Icons.help_outline, size: 18),
             onPressed: _showChipHelp,
           ),
@@ -2838,23 +2840,27 @@ class _KlineHomePageState extends State<KlineHomePage> {
         SwitchListTile(
           contentPadding: EdgeInsets.zero,
           dense: true,
-          title: const Text('筹码峰延长线', style: TextStyle(fontSize: 13)),
+          title: const Text('峰延长线（按 ±档配色）', style: TextStyle(fontSize: 13)),
           subtitle: Text(
-            _chipConfig.peakLineEnabled ? '已开启' : '已关闭',
+            _chipConfig.peakLineEnabled && _tickDistConfig.peakLineEnabled
+                ? '已开启（±1同色、±2同色…；框内 INn 另色）'
+                : '已关闭',
             style: const TextStyle(fontSize: 11),
           ),
-          value: _chipConfig.peakLineEnabled,
-          onChanged: !_chipConfig.enabled || _busy
+          value: _chipConfig.peakLineEnabled && _tickDistConfig.peakLineEnabled,
+          onChanged: (!_chipConfig.enabled && !_tickDistConfig.enabled) || _busy
               ? null
               : (v) {
                   _updateChipConfig(_chipConfig.copyWith(peakLineEnabled: v));
-                  _msgHistory.append('筹码峰延长线=${v ? "开" : "关"}');
+                  _updateTickDistConfig(
+                      _tickDistConfig.copyWith(peakLineEnabled: v));
+                  _msgHistory.append('峰延长线=${v ? "开" : "关"}');
                 },
         ),
         ListTile(
           contentPadding: EdgeInsets.zero,
           dense: true,
-          title: const Text('筹码峰编号模式', style: TextStyle(fontSize: 13)),
+          title: const Text('峰编号模式', style: TextStyle(fontSize: 13)),
           subtitle: Text(
             _chipConfig.peakRankMode == PeakRankMode.spatial
                 ? '空间序（-1=框下最近；框内离收盘近）'
@@ -2863,46 +2869,6 @@ class _KlineHomePageState extends State<KlineHomePage> {
           ),
           trailing: const Icon(Icons.chevron_right, size: 20),
           onTap: _busy ? null : _showPeakRankModeHelp,
-        ),
-        SwitchListTile(
-          contentPadding: EdgeInsets.zero,
-          dense: true,
-          title: const Text('笔数分布', style: TextStyle(fontSize: 13)),
-          subtitle: Text(
-            _tickDistConfig.enabled
-                ? '已开启（主图左侧绘制 K0笔数分布）'
-                : '已关闭（主图左侧不绘制）',
-            style: const TextStyle(fontSize: 11),
-          ),
-          value: _tickDistConfig.enabled,
-          onChanged: _busy
-              ? null
-              : (v) {
-                  _updateTickDistConfig(_tickDistConfig.copyWith(enabled: v));
-                  _msgHistory.append('笔数分布总开关=${v ? "开" : "关"}');
-                },
-          secondary: IconButton(
-            tooltip: '笔数分布说明',
-            icon: const Icon(Icons.help_outline, size: 18),
-            onPressed: _showTickDistHelp,
-          ),
-        ),
-        SwitchListTile(
-          contentPadding: EdgeInsets.zero,
-          dense: true,
-          title: const Text('笔数峰延长线', style: TextStyle(fontSize: 13)),
-          subtitle: Text(
-            _tickDistConfig.peakLineEnabled ? '已开启' : '已关闭',
-            style: const TextStyle(fontSize: 11),
-          ),
-          value: _tickDistConfig.peakLineEnabled,
-          onChanged: !_tickDistConfig.enabled || _busy
-              ? null
-              : (v) {
-                  _updateTickDistConfig(
-                      _tickDistConfig.copyWith(peakLineEnabled: v));
-                  _msgHistory.append('笔数峰延长线=${v ? "开" : "关"}');
-                },
         ),
         if (forMobileSheet)
           ExpansionTile(
@@ -4403,7 +4369,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
             '（上市/区间首根 → 当前步进/十字 as-of）。\n\n'
             '怎么看\n'
             '· 主图右侧水平柱：左绿=S（卖），右红=B（买）；\n'
-            '· 筹码峰：局部量峰打点，虚线延长到主图左侧；\n'
+            '· 筹码峰：局部量峰打点，虚线延长到主图左侧；'
+            '按 ±档自动配色：+1/-1 同色、+2/-2 同色…，框内 INn 另色；\n'
             '· 由设置面板总开关控制，不参与主图指标勾选；仅 K0 分支。\n\n'
             '数据与当下性\n'
             '· 离线分笔写入 chip_tick_bins（价量直加）；tick 禁止三角；'
@@ -4414,39 +4381,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
             '1. 设置里打开「筹码分布」总开关；\n'
             '2. 主图右侧立即绘制 K0 筹码；\n'
             '3. 桶宽在「数学指标参数」里用输入框设置（最小 0.01，与笔数分布共用）；\n'
-            '4. 可调「筹码峰延长线」；配置写入 .chan_chip_config.json。',
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('知道了'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showTickDistHelp() {
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('笔数分布说明'),
-        content: const SingleChildScrollView(
-          child: Text(
-            '作用：与筹码分布同构，按价格累计分笔笔数（第4列），'
-            '画在主图左侧；主图价签仍在右侧，与筹码/笔数柱允许重叠。\n\n'
-            '怎么看\n'
-            '· 水平柱 B/S/G 着色同筹码；\n'
-            '· 笔数峰：局部笔数峰打点，虚线延长进主图；\n'
-            '· 十字 tooltip：K0笔数峰-/+n（编号规则同筹码峰）。\n\n'
-            '数据\n'
-            '· Rust 写入 chip_tick_count_bins（按价累加 ticks）；'
-            '桶宽与筹码共用（在「数学指标参数」输入，最小 0.01）。\n\n'
-            '操作步骤\n'
-            '1. 设置打开「笔数分布」；\n'
-            '2. 主图左侧绘制；可开「笔数峰延长线」；\n'
-            '3. 桶宽到「数学指标参数」修改；重编 DLL 后冷启载入笔数桶。',
+            '4. 可调「峰延长线（按 ±档配色）」（与笔数分布共享开关）；配置写入 .chan_chip_config.json。',
           ),
         ),
         actions: [

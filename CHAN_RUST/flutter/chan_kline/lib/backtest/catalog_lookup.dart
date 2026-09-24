@@ -5,6 +5,8 @@ import '../compute/math_classic_compute.dart';
 import '../compute/math_series_freeze_store.dart';
 import '../compute/trend_line_compute.dart';
 import '../models/bar_feature_lookup.dart';
+import '../models/fractal_judgment_event.dart';
+import '../models/zs_signal_event.dart';
 import '../models/k0_confirm_signal.dart';
 import '../models/kline_bar.dart';
 import '../models/peak_rank_config.dart';
@@ -36,6 +38,9 @@ TradeScalar lookupTradeNumeric({
   double bucketStep = 0.1,
   PeakRankConfig peakRank = PeakRankConfig.defaults,
   List<K0ConfirmSignal> k0Confirms = const [],
+  Map<int, List<FractalJudgmentEvent>> fractalJudgmentByKn = const {},
+  Map<int, List<ZsSignalEvent>> zsJudgmentByKn = const {},
+  Map<int, List<ZsSignalEvent>> zsConfirmByKn = const {},
   int bollN = 20,
 }) {
   if (bars.isEmpty || asOf < 0) return const TradeScalar.unavailable();
@@ -47,6 +52,20 @@ TradeScalar lookupTradeNumeric({
 
   final parsed = _parseId(variableId);
   if (parsed == null) return const TradeScalar.unavailable();
+
+  final signEvents = _signEventsOf(
+    parsed: parsed,
+    k0Confirms: k0Confirms,
+    levels: levels,
+    fractalJudgmentByKn: fractalJudgmentByKn,
+    zsJudgmentByKn: zsJudgmentByKn,
+    zsConfirmByKn: zsConfirmByKn,
+  );
+  if (signEvents != null) {
+    final atBar = signEvents.where((e) => e.x == asOf).toList();
+    if (atBar.isEmpty) return const TradeScalar.unavailable();
+    return TradeScalar.num(atBar.last.sign);
+  }
 
   if (parsed.panel == 'RAW') {
     return _lookupRaw(
@@ -99,6 +118,71 @@ TradeScalar lookupTradeNumeric({
   final kn = int.tryParse(knTok.substring(1));
   if (kn == null || kn < 0) return null;
   return (panel: parts[0], kn: kn, rest: parts.sublist(2));
+}
+
+/// 收集「判断/确认·方向」SIGN 变量的事件脉冲（x=当根，sign=±1）。
+/// 返回 null 表示该 id 不是 SIGN 变量；空列表表示是 SIGN 但本层无事件。
+List<({int x, double sign})>? _signEventsOf({
+  required ({String panel, int kn, List<String> rest}) parsed,
+  required List<K0ConfirmSignal> k0Confirms,
+  required List<LevelBundle> levels,
+  required Map<int, List<FractalJudgmentEvent>> fractalJudgmentByKn,
+  required Map<int, List<ZsSignalEvent>> zsJudgmentByKn,
+  required Map<int, List<ZsSignalEvent>> zsConfirmByKn,
+}) {
+  if (parsed.panel != 'SUB' ||
+      parsed.rest.length != 2 ||
+      parsed.rest[1] != 'SIGN') {
+    return null;
+  }
+  switch (parsed.rest[0]) {
+    case 'FRACTAL_JUDGMENT':
+      // 顶分型=+1 / 底分型=-1（取 fx，判断历史无 ±1 数值字段）
+      return [
+        for (final e in fractalJudgmentByKn[parsed.kn] ?? const <FractalJudgmentEvent>[])
+          (x: e.x, sign: e.fx == 'TOP' ? 1.0 : -1.0),
+      ];
+    case 'FRACTAL_CONFIRM':
+      // 统一按 fx 归一：顶=+1 / 底=-1（K0ConfirmSignal.value 与 LevelConfirm.value 符号约定相反，不直接用）
+      if (parsed.kn == 0) {
+        return [
+          for (final e in k0Confirms) (x: e.x, sign: e.fx == 'TOP' ? 1.0 : -1.0),
+        ];
+      }
+      return [
+        for (final lv in levels)
+          if (lv.level == parsed.kn)
+            for (final c in lv.confirms)
+              (x: c.x, sign: c.fx == 'TOP' ? 1.0 : -1.0),
+      ];
+    case 'ZS_JUDGMENT':
+    case 'ZS_CONFIRM':
+      // 中枢方向：上个中枢空间趋势 抬高=+1 / 下移=-1（dir>=0 视为抬高，与绘色口径一致）
+      final src = parsed.rest[0] == 'ZS_JUDGMENT' ? zsJudgmentByKn : zsConfirmByKn;
+      return [
+        for (final e in src[parsed.kn] ?? const <ZsSignalEvent>[])
+          (x: e.x, sign: e.dir >= 0 ? 1.0 : -1.0),
+      ];
+    default:
+      return const [];
+  }
+}
+
+/// SIGN 脉冲序列：仅事件当根有 ±1，其余 K0 不可用（不填 0、不沿用上一根）。
+List<EvalClockPoint> _signPulseSeries(
+  List<({int x, double sign})> events,
+  int asOf,
+) {
+  final signAt = <int, double>{};
+  for (final e in events) {
+    if (e.x < 0 || e.x > asOf) continue;
+    signAt[e.x] = e.sign;
+  }
+  final xs = signAt.keys.toList()..sort();
+  return [
+    for (var i = 0; i < xs.length; i++)
+      EvalClockPoint(evalIndex: i, availableAt: xs[i], value: signAt[xs[i]]!),
+  ];
 }
 
 TradeScalar _lookupRaw({
@@ -271,6 +355,9 @@ List<EvalClockPoint> readEvalClockSeries({
   double bucketStep = 0.1,
   PeakRankConfig peakRank = PeakRankConfig.defaults,
   List<K0ConfirmSignal> k0Confirms = const [],
+  Map<int, List<FractalJudgmentEvent>> fractalJudgmentByKn = const {},
+  Map<int, List<ZsSignalEvent>> zsJudgmentByKn = const {},
+  Map<int, List<ZsSignalEvent>> zsConfirmByKn = const {},
   int bollN = 20,
 }) {
   if (bars.isEmpty || asOf < 0) return const [];
@@ -278,6 +365,16 @@ List<EvalClockPoint> readEvalClockSeries({
   if (def == null || !def.expressionReady) return const [];
   final parsed = _parseId(variableId);
   if (parsed == null) return const [];
+
+  final signEvents = _signEventsOf(
+    parsed: parsed,
+    k0Confirms: k0Confirms,
+    levels: levels,
+    fractalJudgmentByKn: fractalJudgmentByKn,
+    zsJudgmentByKn: zsJudgmentByKn,
+    zsConfirmByKn: zsConfirmByKn,
+  );
+  if (signEvents != null) return _signPulseSeries(signEvents, asOf);
 
   if (parsed.panel == 'RAW') {
     if (parsed.rest.length != 1) return const [];

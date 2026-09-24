@@ -3359,3 +3359,50 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **结果**：纯 Flutter，未改 Rust；`profile_peak_classify_test` / `chip_peak_var_test` / `buy_n_var_test` 通过。
 - **演示**：设置→筹码峰编号模式；策略条件选「筹码峰·有无」`EXISTS==1` 与「筹码峰·价」`M1` 组合；空间序下 `LOW<=筹码峰-1` 与改前一致。
 - **注意事项**：切量级序后 `PEAK/INn/Mn/Pn` 语义全变；DIST 距价带需双边界比较（无 abs 函数）。
+
+---
+
+### 2026-09-23 22:16 — 设置合并筹码/笔数分布为单开关 + 峰延长线按 ±档配色
+
+- **执行者**：WorkBuddy（🐝）
+- **任务类型**：UI/绘制（设置面板 + 主图峰延长线）
+- **上下文**：用户要求 (1) 拉取云端最新代码；(2) 设置中将「筹码分布」与「笔数分布」集成一个按钮；(3) 筹码峰/笔数峰延长线按档配色——K0筹码峰+1 与 -1 同色、+2 与 -2 同色…。
+- **关键操作**：
+  1. `git pull --ff-only`（ANDROID_RUST）：fast-forward 到 `ba278f24`；本次云端已含 `peak_rank_config.dart`、筹码/笔数峰冻结仓与分类逻辑（本任务地基）。
+  2. 设置面板（`main.dart`）：删两个独立总开关（筹码分布 / 笔数分布）与各自「峰延长线」开关，合并为「筹码 / 笔数分布」单一总开关（同时控右侧筹码 + 左侧笔数显隐）+ 其下「峰延长线（按 ±档配色）」共享开关（开=两者都画）；保留「峰编号模式」入口与说明。
+  3. 绘制（`kline_chip.dart`）：`ChipProfilePainter.draw` 改收 `peakMarks`，按 `classifyProfilePeaks` 给的 `-1/+1/INn` 后缀上色——外侧 ±n 取绝对值同色（±1 青、±2 翠绿、±3 琥珀、±4 橙、±5 粉、±6 紫、±7 天蓝，超 7 循环），框内 `INn` 另给中性岩灰；线+点同色。
+  4. 清理：`ChipConfig`/`TickDistConfig` 去掉不再用的单色 `peakLineColor`/`peakDotColor`（线宽/虚线/点径/总开关保留）；`kline_chart` 用 cutoff K0 的 low/high/close + `peakRankConfig` 实时算 marks 传给两侧。
+- **结果**：纯 Flutter 设置与绘制层；未改 Rust，未碰合并/分型/段/中枢/买卖点/步进/冻结/主图绘制语义内核（仅消费既有峰编号）；不触发 AGENTS.md 关键逻辑确认门禁。
+- **演示 / 验收**：开设置「筹码 / 笔数分布」→ 主图右侧筹码 + 左侧笔数同显；开「峰延长线」，峰线应见 ±1 同色、±2 次色…；本沙箱 `flutter analyze` 因 Windows 管道耗尽无法起子进程，未能跑静态检查，需你本机 `flutter analyze` / 目视验收。
+- **注意事项**：沙箱限制静态分析待本机复核；旧仅开其一（如只开筹码）的配置会被总开关拉齐为两者同开关。
+
+---
+
+### 2026-09-23 23:10 — 策略回测：Kn分型/中枢 判断·确认 增设「方向=常数」数值变量
+
+- **执行者**：WorkBuddy（🐝）
+- **任务类型**：策略回测条件取值（只读消费冻结历史，未改内核）
+- **上下文**：用户要求给策略回测的 Kn分型判断/确认（值有 1/-1）补「=常数」的比较过程；随后追加 Kn中枢判断/确认同样处理。
+- **关键操作**：
+  1. 目录（`signal_data_catalog.dart`）：新增 4 个数值型变量——`K$kn 分型判断·方向`（顶=+1/底=-1）、`K$kn 分型确认·方向`（同 fx 归一）、`K$kn 中枢判断·方向`、`K$kn 中枢确认·方向`（上个中枢空间趋势 抬高(升)=+1/下移(降)=-1，取 `dir>=0→+1`）；均为「仅当根脉冲，其余 K0 不可用（不填 0、不沿用上一根）」。原 EVENT_EXISTS 事件变量原样保留。
+  2. 取值（`catalog_lookup.dart`）：`lookupTradeNumeric` 与 `readEvalClockSeries` 增加共用 `_signEventsOf` 收集器 + `_signPulseSeries` 脉冲序列；新增形参 `fractalJudgmentByKn`/`zsJudgmentByKn`/`zsConfirmByKn`。分型确认 kn=0 走 k0Confirms、kn>0 走 `LevelBundle.confirms`，**统一按 fx 定 ±1**（K0ConfirmSignal.value 与 LevelConfirm.value 符号约定相反，直接用会踩坑）。
+  3. 接线：`condition_eval.dart` 三处 `_readRef`、`trade_var_diagnose.dart` 两处，从 `ctx.chanEvents`/`chanEvents` 传历史 map。
+  4. 顺手清理：`main.dart` 删除合并开关后闲置的 `_showTickDistHelp` 死方法。
+  5. 过程修复：上一会话中断曾在 `catalog_lookup.dart` 留下签名残块与泄漏标记（`replace_all`/重复参数块），本次已全部清干净。
+- **结果**：策略条件现在可选「分型判断·方向 == 1」选顶、「== -1」选底；「中枢判断/确认·方向 == 1/-1」选升/降枢；事件脉冲比较走连线钟当根口径。未改 Rust、未碰步进/冻结/主图绘制语义。
+- **演示 / 验收**：`dart format --output=none` 4 文件全过（无语法错）；沙箱 `dart analyze` 因 Windows 管道耗尽仍起不来分析服务器，改用 `dart language-server`（进程内 stdio LSP）对 9 个改动文件拉诊断——**全部 0 error**；余下 warning 均为旧有风格项（`?.`/`!`/未用 import，与本次无关）。建议你本机照常 `flutter analyze` 复核 + 回测里配一条「分型确认·方向 == -1」看是否只抓底分型当根。
+- **注意事项**：CROSS 对 ±1 脉冲无意义（cross_eval 未接事件 map，序列为空自然无穿越）；同根同层多事件取最后一个的符号。
+
+---
+
+### 2026-09-23 23:50 — 峰延长线左端标注档号（+1/-1/INn…）
+
+- **执行者**：WorkBuddy（🐝）
+- **任务类型**：主图绘制（峰延长线可读性）
+- **上下文**：用户要求峰延长线左侧显示 +1、-1…（之前只有颜色区分，看不出每条线是第几档）。
+- **关键操作**：
+  1. `kline_chart.dart`：`_buildChipPeakMarks` 返回记录加 `label` 字段（取 `ProfilePeakRow.nameSuffix`，即 `-1/+2/IN1…`），筹码（右）与笔数（左）两侧共用。
+  2. `kline_chip.dart`：`ChipProfilePainter.draw` 的 `peakMarks` 类型同步加 `label`；画完线/点后在**线段左端**（筹码侧=主图左缘、笔数侧=面板内缘）用同档色画 9 号加粗小文本；贴顶时自动改画线下方防裁切。
+- **结果**：峰延长线现在「颜色分档 + 左端档号」双标识；未改 Rust / 缠论内核，纯绘制层。
+- **演示 / 验收**：`dart format` 过；LSP 诊断 2 文件 0 error（余 2 条 warning 为云端旧有）。本机开「峰延长线」目视：右侧筹码峰线左端应见 +1/-1 小字，左侧笔数峰线内缘同理，框内峰标 IN1/IN2…。
+- **注意事项**：档号文本与线同色同档；若嫌小可后续加配置项调字号。

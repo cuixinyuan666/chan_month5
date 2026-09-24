@@ -58,6 +58,7 @@ import '../models/kline_bar.dart';
 import '../models/chart_indicator.dart';
 import '../models/chip_config.dart';
 import '../models/tick_dist_config.dart';
+import '../models/peak_rank_config.dart';
 import '../models/kline_combine_frame.dart';
 import '../models/bar_feature_lookup.dart';
 import '../models/incremental_lookup.dart';
@@ -72,6 +73,33 @@ import 'indicator_picker_overlay.dart';
 import 'kline_axis_format.dart';
 import 'kline_chip.dart';
 import 'kline_viewport.dart';
+
+/// 由 K0 截止根的 low/high/close 与编号配置，给筹码/笔数峰按 ±档上色，生成延长线标记。
+/// label=档号（-1/+2/IN1…），画在延长线左端。
+List<({double price, String label, Color color})> _buildChipPeakMarks(
+  ChipProfileData profile,
+  double low,
+  double high,
+  double close,
+  PeakRankConfig rank,
+) {
+  if (profile.isEmpty) return const [];
+  final rows = classifyProfilePeaks(
+    profile: profile,
+    low: low,
+    high: high,
+    close: close,
+    rank: rank,
+  );
+  return [
+    for (final r in rows)
+      (
+        price: r.price,
+        label: r.nameSuffix,
+        color: ChipProfilePainter.peakRingColor(r.nameSuffix),
+      ),
+  ];
+}
 
 /// 十字线三态：双击循环 off → 全开(含tooltip) → 仅线(关tooltip) → off。
 enum CrosshairMode {
@@ -2512,6 +2540,10 @@ class _KlineCompositePainter extends CustomPainter {
       );
       final cut = bars.isEmpty ? 0 : (segAsOf ?? bars.last.idx);
       final yOf = (double p) => priceRange.yOf(p, plotTop, plotH);
+      final cutBar = bars.isEmpty
+          ? null
+          : bars.firstWhere((b) => b.idx == cut, orElse: () => bars.last);
+      final rank = chipConfig.peakRankConfig;
       if (showTickDist) {
         // 笔数分布：主图左侧；桶宽与筹码共用，价轴对齐
         final step = chipConfig.bucketStep;
@@ -2520,6 +2552,10 @@ class _KlineCompositePainter extends CustomPainter {
           cutoffX: cut,
           bucketStep: step,
         );
+        final marks = (tickDistConfig.peakLineEnabled && cutBar != null)
+            ? _buildChipPeakMarks(
+                profile, cutBar.low, cutBar.high, cutBar.close, rank)
+            : null;
         ChipProfilePainter.draw(
           canvas: canvas,
           profile: profile,
@@ -2531,6 +2567,7 @@ class _KlineCompositePainter extends CustomPainter {
           yOfPrice: yOf,
           highlightKn: 0,
           alignLeft: true,
+          peakMarks: marks,
         );
       }
       if (showChip) {
@@ -2546,6 +2583,10 @@ class _KlineCompositePainter extends CustomPainter {
             crosshairBarIdx! < bars.length) {
           hoverBar = _singleBarChipSums(bars[crosshairBarIdx!]);
         }
+        final marks = (chipConfig.peakLineEnabled && cutBar != null)
+            ? _buildChipPeakMarks(
+                profile, cutBar.low, cutBar.high, cutBar.close, rank)
+            : null;
         ChipProfilePainter.draw(
           canvas: canvas,
           profile: profile,
@@ -2557,6 +2598,7 @@ class _KlineCompositePainter extends CustomPainter {
           yOfPrice: yOf,
           highlightKn: 0,
           hoverBar: hoverBar,
+          peakMarks: marks,
         );
       }
       // 价签叠在筹码/笔数柱上面，允许互相挡住；始终画在主图右侧。

@@ -16,10 +16,8 @@ class ChipConfig {
     this.bColor = const Color(0xC7DC2626),
     this.wColor = const Color(0xC79CA3AF),
     this.peakLineEnabled = false,
-    this.peakLineColor = const Color(0xFF2563EB),
     this.peakLineWidth = 1.2,
     this.peakLineDashed = true,
-    this.peakDotColor = const Color(0xFFF59E0B),
     this.peakDotRadius = 2.5,
   });
 
@@ -48,10 +46,8 @@ class ChipConfig {
   /// 灰度（无方向分笔）柱色
   final Color wColor;
   final bool peakLineEnabled;
-  final Color peakLineColor;
   final double peakLineWidth;
   final bool peakLineDashed;
-  final Color peakDotColor;
   final double peakDotRadius;
 
   ChipConfig copyWith({
@@ -66,10 +62,8 @@ class ChipConfig {
     Color? bColor,
     Color? wColor,
     bool? peakLineEnabled,
-    Color? peakLineColor,
     double? peakLineWidth,
     bool? peakLineDashed,
-    Color? peakDotColor,
     double? peakDotRadius,
   }) {
     return ChipConfig(
@@ -84,10 +78,8 @@ class ChipConfig {
       bColor: bColor ?? this.bColor,
       wColor: wColor ?? this.wColor,
       peakLineEnabled: peakLineEnabled ?? this.peakLineEnabled,
-      peakLineColor: peakLineColor ?? this.peakLineColor,
       peakLineWidth: peakLineWidth ?? this.peakLineWidth,
       peakLineDashed: peakLineDashed ?? this.peakLineDashed,
-      peakDotColor: peakDotColor ?? this.peakDotColor,
       peakDotRadius: peakDotRadius ?? this.peakDotRadius,
     );
   }
@@ -135,10 +127,8 @@ class ChipConfig {
       other.bColor == bColor &&
       other.wColor == wColor &&
       other.peakLineEnabled == peakLineEnabled &&
-      other.peakLineColor == peakLineColor &&
       other.peakLineWidth == peakLineWidth &&
       other.peakLineDashed == peakLineDashed &&
-      other.peakDotColor == peakDotColor &&
       other.peakDotRadius == peakDotRadius;
 
   @override
@@ -154,10 +144,8 @@ class ChipConfig {
         bColor,
         wColor,
         peakLineEnabled,
-        peakLineColor,
         peakLineWidth,
         peakLineDashed,
-        peakDotColor,
         peakDotRadius,
       );
 }

@@ -140,7 +140,19 @@ String demarkCompleteId(int kn, {required bool buy}) =>
 
 String fractalJudgmentId(int kn) => 'SUB.K$kn.FRACTAL_JUDGMENT';
 
+/// 分型判断方向符号：顶分型=+1，底分型=-1（脉冲，仅分型当根有值）。
+String fractalJudgmentSignId(int kn) => 'SUB.K$kn.FRACTAL_JUDGMENT.SIGN';
+
+/// 分型确认方向符号：顶分型=+1，底分型=-1（脉冲，仅分型当根有值）。
+String fractalConfirmSignId(int kn) => 'SUB.K$kn.FRACTAL_CONFIRM.SIGN';
+
 String zsJudgmentId(int kn) => 'SUB.K$kn.ZS_JUDGMENT';
+
+/// 中枢判断方向符号：抬高(升)=+1，下移(降)=-1（脉冲，仅判断当根有值）。
+String zsJudgmentSignId(int kn) => 'SUB.K$kn.ZS_JUDGMENT.SIGN';
+
+/// 中枢确认方向符号：抬高(升)=+1，下移(降)=-1（脉冲，仅确认当根有值）。
+String zsConfirmSignId(int kn) => 'SUB.K$kn.ZS_CONFIRM.SIGN';
 
 String zsActiveVarId(int kn, String field) =>
     'STRUCTURE.K$kn.ZS.ACTIVE.${field.toUpperCase()}';
@@ -708,6 +720,50 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
       fieldLabel: '判断',
       description: 'EVENT_EXISTS；连线钟，不能和布林直接比；AND/OR 可跨层，须同一根 K0 刚发生',
     ));
+    // 分型判断方向符号：顶=+1 / 底=-1（脉冲，仅分型当根有值）；配合 ==1 / ==-1 过滤顶/底
+    out.add(TradeVariableDef(
+      variableId: fractalJudgmentSignId(kn),
+      displayName: 'K$kn 分型判断·方向',
+      panel: TradePanel.sub,
+      displayKn: kn,
+      clockFamily: TradeClockFamily.line,
+      evalClock: TradeEvalClock.k0Bar,
+      plotClock: TradePlotClock.k0Bar,
+      valueType: TradeValueType.numeric,
+      readiness: TradeReadiness.registered,
+      source: 'judgmentHistory 会话冻结；fx=TOP→+1，fx=BOTTOM→-1',
+      unit: 'sign',
+      futureSafe: true,
+      availabilityNote: '该根不是分型判断当根则为不可用（不填 0、不沿用上一根）',
+      groupKey: 'fxJudge',
+      groupLabel: '分型判断',
+      fieldLabel: '方向(±1)',
+      description:
+          '顶分型=+1，底分型=-1；仅分型当根有值。配合「==1」选顶、「==-1」选底；不破坏原有 EVENT_EXISTS',
+    ));
+    // 分型确认方向符号：顶=+1 / 底=-1（脉冲，仅分型当根有值）
+    out.add(TradeVariableDef(
+      variableId: fractalConfirmSignId(kn),
+      displayName: 'K$kn 分型确认·方向',
+      panel: TradePanel.sub,
+      displayKn: kn,
+      clockFamily: TradeClockFamily.line,
+      evalClock: TradeEvalClock.k0Bar,
+      plotClock: TradePlotClock.k0Bar,
+      valueType: TradeValueType.numeric,
+      readiness: TradeReadiness.registered,
+      source: kn == 0
+          ? 'k0ConfirmSignals.value（向上=+1/向下=-1）'
+          : 'LevelBundle.confirms.value（向上=+1/向下=-1）',
+      unit: 'sign',
+      futureSafe: true,
+      availabilityNote: '该根不是分型确认当根则为不可用（不填 0、不沿用上一根）',
+      groupKey: 'fxConfirm',
+      groupLabel: '分型确认',
+      fieldLabel: '方向(±1)',
+      description:
+          '顶分型=+1，底分型=-1；仅分型当根有值。配合「==1」选顶、「==-1」选底；不破坏原有 EVENT_EXISTS',
+    ));
     out.add(TradeVariableDef(
       variableId: 'SUB.K$kn.ZS_CONFIRM',
       displayName: 'K$kn 中枢确认',
@@ -727,6 +783,27 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
       fieldLabel: '确认',
         description: 'EVENT_EXISTS；AND/OR 可跨层，须同一根 K0 刚发生',
     ));
+    // 中枢确认方向符号：上个中枢空间趋势 抬高(升)=+1 / 下移(降)=-1（脉冲，仅确认当根有值）
+    out.add(TradeVariableDef(
+      variableId: zsConfirmSignId(kn),
+      displayName: 'K$kn 中枢确认·方向',
+      panel: TradePanel.sub,
+      displayKn: kn,
+      clockFamily: TradeClockFamily.zsMath,
+      evalClock: TradeEvalClock.k0Bar,
+      plotClock: TradePlotClock.k0Bar,
+      valueType: TradeValueType.numeric,
+      readiness: TradeReadiness.registered,
+      source: 'zsConfirmHistory 会话冻结；dir>=0→+1（抬高/升），dir<0→-1（下移/降）',
+      unit: 'sign',
+      futureSafe: true,
+      availabilityNote: '该根不是中枢确认当根则为不可用（不填 0、不沿用上一根）',
+      groupKey: 'zsConfirm',
+      groupLabel: '中枢确认',
+      fieldLabel: '方向(±1)',
+      description:
+          '抬高(升)=+1，下移(降)=-1；仅中枢确认当根有值。配合「==1」选升、「==-1」选降；不破坏原有 EVENT_EXISTS',
+    ));
     out.add(TradeVariableDef(
       variableId: zsJudgmentId(kn),
       displayName: 'K$kn 中枢判断',
@@ -745,6 +822,27 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
       groupLabel: '中枢判断',
       fieldLabel: '判断',
       description: 'EVENT_EXISTS；AND/OR 可跨层，须同一根 K0 刚发生',
+    ));
+    // 中枢判断方向符号：上个中枢空间趋势 抬高(升)=+1 / 下移(降)=-1（脉冲，仅判断当根有值）
+    out.add(TradeVariableDef(
+      variableId: zsJudgmentSignId(kn),
+      displayName: 'K$kn 中枢判断·方向',
+      panel: TradePanel.sub,
+      displayKn: kn,
+      clockFamily: TradeClockFamily.zsMath,
+      evalClock: TradeEvalClock.k0Bar,
+      plotClock: TradePlotClock.k0Bar,
+      valueType: TradeValueType.numeric,
+      readiness: TradeReadiness.registered,
+      source: 'zsJudgmentHistory 会话冻结；dir>=0→+1（抬高/升），dir<0→-1（下移/降）',
+      unit: 'sign',
+      futureSafe: true,
+      availabilityNote: '该根不是中枢判断当根则为不可用（不填 0、不沿用上一根）',
+      groupKey: 'zsJudge',
+      groupLabel: '中枢判断',
+      fieldLabel: '方向(±1)',
+      description:
+          '抬高(升)=+1，下移(降)=-1；仅中枢判断当根有值。配合「==1」选升、「==-1」选降；不破坏原有 EVENT_EXISTS',
     ));
     // 确认中枢数值：先解析 CURRENT_CONFIRMED_ZS 的稳定 objectId，再投影
     const zsFields = [

@@ -87,6 +87,7 @@ abstract final class ChipProfilePainter {
     // 十字悬停的单根 B/S/灰度 量（区别于累计角标）
     ({double b, double s, double w})? hoverBar,
     bool alignLeft = false,
+    List<({double price, String label, Color color})>? peakMarks,
   }) {
     if (!config.enabled || profile.isEmpty) return;
     final paneW = math.max(24.0, config.paneWidth);
@@ -174,15 +175,11 @@ abstract final class ChipProfilePainter {
     _drawCornerSums(canvas, profile, chipLeft, chipRight, plotTop,
         config: config, hoverBar: hoverBar);
 
-    if (!config.peakLineEnabled) return;
-    final peaks = profile.peakIndices();
-    final linePaint = Paint()
-      ..color = config.peakLineColor
-      ..strokeWidth = config.peakLineWidth
-      ..style = PaintingStyle.stroke;
-    final dotPaint = Paint()..color = config.peakDotColor;
-    for (final i in peaks) {
-      final price = profile.prices[i];
+    if (!config.peakLineEnabled || peakMarks == null || peakMarks.isEmpty) {
+      return;
+    }
+    for (final mark in peakMarks) {
+      final price = mark.price;
       final y = yOfPrice(price);
       if (y < plotTop || y > plotBottom) continue;
       final Offset from;
@@ -197,12 +194,31 @@ abstract final class ChipProfilePainter {
         to = Offset(chipLeft, y);
         dot = Offset(chipLeft + 3, y);
       }
+      final paint = Paint()
+        ..color = mark.color
+        ..strokeWidth = config.peakLineWidth
+        ..style = PaintingStyle.stroke;
       if (config.peakLineDashed) {
-        _drawDashed(canvas, from, to, linePaint);
+        _drawDashed(canvas, from, to, paint);
       } else {
-        canvas.drawLine(from, to, linePaint);
+        canvas.drawLine(from, to, paint);
       }
-      canvas.drawCircle(dot, config.peakDotRadius, dotPaint);
+      canvas.drawCircle(dot, config.peakDotRadius, Paint()..color = mark.color);
+      // 线段左端标注档号（-1/+1/IN1…），与峰线同档色；贴顶时改画线下方
+      final tp = TextPainter(
+        text: TextSpan(
+          text: mark.label,
+          style: TextStyle(
+            color: mark.color,
+            fontSize: 9,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      final leftX = from.dx <= to.dx ? from.dx : to.dx;
+      final labelY = y - tp.height - 2 < plotTop ? y + 2 : y - tp.height - 2;
+      tp.paint(canvas, Offset(leftX + 2, labelY));
     }
 
     if (highlightKn != null) {
@@ -337,5 +353,36 @@ abstract final class ChipProfilePainter {
       );
       t += dash + gap;
     }
+  }
+
+  /// 峰延长线按档配色：外侧 ±n 取绝对值同色（+1 与 -1 同色、+2 与 -2 同色…）；
+  /// 框内 INn 另给一组中性色，便于与对称档区分。
+  static const List<Color> _outerRingPalette = <Color>[
+    Color(0xFF22D3EE), // 1 青
+    Color(0xFF34D399), // 2 翠绿
+    Color(0xFFFBBF24), // 3 琥珀
+    Color(0xFFFB923C), // 4 橙
+    Color(0xFFF472B6), // 5 粉
+    Color(0xFFA78BFA), // 6 紫
+    Color(0xFF38BDF8), // 7 天蓝
+  ];
+  static const List<Color> _inBoxPalette = <Color>[
+    Color(0xFFCBD5E1), // IN1 浅岩灰
+    Color(0xFF94A3B8), // IN2 岩灰
+    Color(0xFF64748B), // IN3 深岩灰
+  ];
+
+  /// 由峰后缀（-1/+2/IN3）解析配色。
+  static Color peakRingColor(String suffix) {
+    if (suffix.startsWith('IN')) {
+      final n = int.tryParse(suffix.substring(2)) ?? 1;
+      final idx = (n - 1).clamp(0, _inBoxPalette.length - 1);
+      return _inBoxPalette[idx];
+    }
+    final signChar = suffix.startsWith('-') ? '-' : '+';
+    final n = int.tryParse(suffix.replaceFirst(signChar, '')) ?? 1;
+    final ring = n.abs();
+    final idx = (ring - 1).clamp(0, _outerRingPalette.length - 1);
+    return _outerRingPalette[idx];
   }
 }
