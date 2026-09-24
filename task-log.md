@@ -3492,4 +3492,19 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **结果**：技能就位；本任务即「自举」用该技能 commit+push+record（创建它的提交里只含技能文件 + task-log + 记忆，不动此前未提交的 dev-demo/筹码峰代码）。
 - **演示 / 验收**：`python -m py_compile` 校验脚本通过；首跑即本次创建技能。提交类型映射：功能开发=feat / Bug修复=fix / 重构=refactor / 配置=chore / 数据处理=data / 验证=test / 复盘=docs。
 - **注意事项**：语义级 analyzer 沙箱不可用（纯 Python skill，无需 flutter analyze）。后续每批任务按子任务拆分，各自独立 commit/push/Obsidian 条目。
+
+---
+
+### 2026-09-24 12:20 — 跨智能体 skills 同步（WB↔CodeBuddy/Claude/Cursor/OpenCode，双向）
+
+- **执行者**：WorkBuddy（🐝）
+- **任务类型**：配置（技能同步 / 跨工具）
+- **上下文**：用户要求把 WorkBuddy 的 skills 同步到其它智能体，其它智能体独有的也拉回 WorkBuddy；并给所有智能体新增「同步所有智能体 skills、保持更新」的技能。
+- **关键操作**：
+  1. 探查本机：7 个其它智能体仅 5 个用 SKILL.md 格式（OpenCode `~/.config/opencode/skills`、Cursor `~/.cursor/skills-cursor`、CodeBuddy/Claude 无 skills 目录将新建）；Trae(仅内置)/Cline(rules)/Continue(config.ts) 非 SKILL.md，跳过。
+  2. 新建用户级技能 `sync-agents-skills`（~/.workbuddy/skills/），含 `scripts/sync_agents_skills.py`：跨 5 智能体双向 mesh 同步（缺失新增、远端更新则刷新），源=最新 mtime，优先级 workbuddy>cursor>codebuddy>claude>opencode；skip-list `update-cursor-settings/migrate-to-skills/update-cli-config` 不传播；支持 `--dry-run`/`--check`。
+  3. 跑一次脚本完成全量同步（108 次复制）：WB 的 nox-grill-me/obsidian-writer/auto-commit-obsidian/obsidian-task-recorder 互通到 4 个其它智能体；Cursor 22 个通用 skill 拉回 WB 并互通到 CodeBuddy/Claude/OpenCode；sync-agents-skills 自身装到全部 5 个智能体。
+- **结果**：5 个智能体 skills 一致（各 25~27 个，差异仅在是否含 WB 项目级 2 个与 Cursor 专属 3 个）；WB 新增 22 个 Cursor 通用 skill；Cursor 新增 5 个 WB skill；skip-list 3 个未污染 WB。
+- **演示 / 验收**：`python sync_agents_skills.py --dry-run` 预览 108 项、`--check` 零漂移；各 agents skills 目录已列确认。
+- **注意事项**：Trae/Cline/Continue 因非 SKILL.md 未纳入（强行放 SKILL.md 它们读不懂）；以后任一智能体增改 skill，重跑 `sync-agents-skills` 即全网同步。本任务仅改各智能体全局 skills 目录（在 git 仓库外），故只把记录写入 task-log 并 commit，技能文件不入库。
 - **注意事项**：ec803 在云端新增 `.cursor/skills/obsidian-task-recorder/`（与本地 `.workbuddy/skills/` 副本并存）；且新增「K0筹码峰」主图指标（画 -1/+1 峰价折线）——用户随后的「筹码峰线型 +1虚线/-1实线」需求很可能针对该指标，grill 时需先确认目标。
