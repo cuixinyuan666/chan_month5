@@ -118,6 +118,9 @@ String rawOhlcId(int kn, String field) => 'RAW.K$kn.${field.toUpperCase()}';
 String bollBandId(int kn, String band) =>
     'MAIN.K$kn.BOLL.${band.toUpperCase()}';
 
+String donchianBandId(int kn, String band) =>
+    'MAIN.K$kn.DONCHIAN.${band.toUpperCase()}';
+
 String macdFieldId(int kn, String field) =>
     'SUB.K$kn.MACD.${field.toUpperCase()}';
 
@@ -132,15 +135,27 @@ String k0TickCountId() => 'RAW.K0.TICK_COUNT';
 
 String maVarId(int kn, int period) => 'MAIN.K$kn.MA.$period';
 
-String channelVarId(int kn, int period, String band) =>
-    'MAIN.K$kn.CHANNEL.$period.${band.toUpperCase()}';
+String regressVarId(int kn, String band) =>
+    'MAIN.K$kn.REGRESS.${band.toUpperCase()}';
 
 String demarkCompleteId(int kn, {required bool buy}) =>
     buy ? 'MAIN.K$kn.DEMARK.COMPLETE_BUY' : 'MAIN.K$kn.DEMARK.COMPLETE_SELL';
 
 String fractalJudgmentId(int kn) => 'SUB.K$kn.FRACTAL_JUDGMENT';
 
+/// 分型判断方向符号：顶分型=+1，底分型=-1（脉冲，仅分型当根有值）。
+String fractalJudgmentSignId(int kn) => 'SUB.K$kn.FRACTAL_JUDGMENT.SIGN';
+
+/// 分型确认方向符号：顶分型=+1，底分型=-1（脉冲，仅分型当根有值）。
+String fractalConfirmSignId(int kn) => 'SUB.K$kn.FRACTAL_CONFIRM.SIGN';
+
 String zsJudgmentId(int kn) => 'SUB.K$kn.ZS_JUDGMENT';
+
+/// 中枢判断方向符号：抬高(升)=+1，下移(降)=-1（脉冲，仅判断当根有值）。
+String zsJudgmentSignId(int kn) => 'SUB.K$kn.ZS_JUDGMENT.SIGN';
+
+/// 中枢确认方向符号：抬高(升)=+1，下移(降)=-1（脉冲，仅确认当根有值）。
+String zsConfirmSignId(int kn) => 'SUB.K$kn.ZS_CONFIRM.SIGN';
 
 String zsActiveVarId(int kn, String field) =>
     'STRUCTURE.K$kn.ZS.ACTIVE.${field.toUpperCase()}';
@@ -164,8 +179,18 @@ String fxTripleVarId(int kn) => 'MAIN.K$kn.FX_TRIPLE.PRICE';
 String fxQuadVarId(int kn, String side) =>
     'MAIN.K$kn.FX_QUAD.${side.toUpperCase()}';
 
-/// 默认登记框内 + 下侧-1..-3 + 上侧+1..+3
-const int kTradeChipPeakMaxRank = 3;
+String fxChordTranslatedVarId(int kn) => 'MAIN.K$kn.FX_CHORD_TRANSLATED.PRICE';
+
+String fxBottomSnugVarId(int kn) => 'MAIN.K$kn.FX_BOTTOM_SNUG.PRICE';
+
+String fxTopSnugVarId(int kn) => 'MAIN.K$kn.FX_TOP_SNUG.PRICE';
+
+/// 默认登记外侧 -1..-n / +1..+n（与 [PeakRankConfig.clampedMaxOuter] 默认 5 对齐）
+const int kTradeChipPeakMaxRank = 5;
+
+const int kTradeChipPeakMaxInBox = 3;
+
+const _chipPeakDerivedFields = {'DIST', 'EXISTS', 'BS'};
 
 /// SUB.K0.CHIP.PEAK / SUB.K0.CHIP.PEAK.M1 / SUB.K0.TICK.PEAK.P2
 String chipPeakVarId({
@@ -179,40 +204,96 @@ String chipPeakVarId({
 
 String chipPeakTokenOfSuffix(String suffix) {
   if (suffix.isEmpty) return '';
+  if (suffix.startsWith('PURE')) return suffix;
   if (suffix.startsWith('-')) return 'M${suffix.substring(1)}';
   if (suffix.startsWith('+')) return 'P${suffix.substring(1)}';
+  if (suffix.startsWith('IN')) return suffix;
   return suffix;
 }
 
 String chipPeakSuffixOfToken(String token) {
   if (token.isEmpty) return '';
+  if (token.startsWith('PURE')) return token;
   if (token.startsWith('M')) return '-${token.substring(1)}';
   if (token.startsWith('P')) return '+${token.substring(1)}';
+  if (token.startsWith('IN')) return token;
   return token;
 }
 
 String chipPeakFieldLabel(String suffix) {
-  if (suffix.isEmpty) return '框内';
+  if (suffix.isEmpty) return '框内(同IN1)';
+  if (suffix.startsWith('PURE')) return '纯${suffix.substring(4)}';
+  if (suffix.startsWith('IN')) return '框内${suffix.substring(2)}';
   return suffix;
 }
 
-/// SUB.K0.CHIP.PEAK.M1 → kn=0, kind=chip, suffix=-1
-({int kn, String kind, String suffix})? parseChipPeakVarId(String id) {
+bool isChipPeakToken(String token) {
+  if (token.isEmpty) return true;
+  return RegExp(r'^(IN\d+|[MP]\d+|PURE\d+)$').hasMatch(token);
+}
+
+String chipPeakDerivedVarId({
+  required String kind,
+  required String token,
+  required String field,
+}) {
+  final head = kind == 'tick' ? 'TICK' : 'CHIP';
+  if (token.isEmpty) return 'SUB.K0.$head.PEAK.$field';
+  return 'SUB.K0.$head.PEAK.$token.$field';
+}
+
+/// 峰价或衍生：field 为 DIST / EXISTS / BS 时表示衍生变量。
+({int kn, String kind, String suffix, String? field})? parseChipPeakTradeVarId(
+  String id,
+) {
   final parts = canonicalizeTradeVarId(id).split('.');
-  if (parts.length < 4 || parts.length > 5) return null;
-  if (parts[0] != 'SUB' || parts[3] != 'PEAK') return null;
+  if (parts.length < 4 || parts[0] != 'SUB' || parts[3] != 'PEAK') {
+    return null;
+  }
   if (!parts[1].startsWith('K')) return null;
   final kn = int.tryParse(parts[1].substring(1));
   if (kn == null || kn < 0) return null;
   final head = parts[2];
   if (head != 'CHIP' && head != 'TICK') return null;
   final kind = head == 'TICK' ? 'tick' : 'chip';
-  if (parts.length == 4) return (kn: kn, kind: kind, suffix: '');
-  final token = parts[4];
-  if (!RegExp(r'^[MP]\d+$').hasMatch(token)) return null;
-  final n = int.tryParse(token.substring(1));
-  if (n == null || n < 1) return null;
-  return (kn: kn, kind: kind, suffix: chipPeakSuffixOfToken(token));
+
+  if (parts.length == 4) {
+    return (kn: kn, kind: kind, suffix: '', field: null);
+  }
+  if (parts.length == 5) {
+    final tail = parts[4];
+    if (_chipPeakDerivedFields.contains(tail)) {
+      return (kn: kn, kind: kind, suffix: '', field: tail);
+    }
+    if (!isChipPeakToken(tail)) return null;
+    return (
+      kn: kn,
+      kind: kind,
+      suffix: chipPeakSuffixOfToken(tail),
+      field: null,
+    );
+  }
+  if (parts.length == 6) {
+    final token = parts[4];
+    final field = parts[5];
+    if (!_chipPeakDerivedFields.contains(field) || !isChipPeakToken(token)) {
+      return null;
+    }
+    return (
+      kn: kn,
+      kind: kind,
+      suffix: chipPeakSuffixOfToken(token),
+      field: field,
+    );
+  }
+  return null;
+}
+
+/// SUB.K0.CHIP.PEAK.M1 → kn=0, kind=chip, suffix=-1（仅峰价，不含衍生）
+({int kn, String kind, String suffix})? parseChipPeakVarId(String id) {
+  final p = parseChipPeakTradeVarId(id);
+  if (p == null || p.field != null) return null;
+  return (kn: p.kn, kind: p.kind, suffix: p.suffix);
 }
 
 /// MAIN.K1.MA.5
@@ -226,17 +307,16 @@ String chipPeakFieldLabel(String suffix) {
   return (kn: kn, period: period);
 }
 
-/// MAIN.K1.CHANNEL.20.MAX
-({int kn, int period, String band})? parseChannelVarId(String id) {
+/// MAIN.K1.REGRESS.MID / .UP / .DOWN
+({int kn, String band})? parseRegressVarId(String id) {
   final parts = canonicalizeTradeVarId(id).split('.');
-  if (parts.length != 5 || parts[0] != 'MAIN') return null;
-  if (!parts[1].startsWith('K') || parts[2] != 'CHANNEL') return null;
+  if (parts.length != 4 || parts[0] != 'MAIN') return null;
+  if (!parts[1].startsWith('K') || parts[2] != 'REGRESS') return null;
   final kn = int.tryParse(parts[1].substring(1));
-  final period = int.tryParse(parts[3]);
-  final band = parts[4];
-  if (kn == null || kn < 0 || period == null || period < 1) return null;
-  if (band != 'MAX' && band != 'MIN') return null;
-  return (kn: kn, period: period, band: band);
+  final band = parts[3];
+  if (kn == null || kn < 0) return null;
+  if (band != 'MID' && band != 'UP' && band != 'DOWN') return null;
+  return (kn: kn, band: band);
 }
 
 /// 把已登记 id 换到另一层。
@@ -381,12 +461,25 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
     description: '只登记 K0 原生笔数；K1+ 走 SUB.K{n}.TICK_COUNT',
   ));
 
-  // K0 筹码峰 / 笔数峰：价，和开高低收同一套钟
+  // K0 筹码峰 / 笔数峰：价 + 距峰 / 有无(1/0) / 多空比
   for (final kind in ['chip', 'tick']) {
     out.add(_chipPeakDef(kind: kind, suffix: ''));
+    for (var n = 1; n <= kTradeChipPeakMaxInBox; n++) {
+      out.add(_chipPeakDef(kind: kind, suffix: 'IN$n'));
+    }
     for (var n = 1; n <= kTradeChipPeakMaxRank; n++) {
       out.add(_chipPeakDef(kind: kind, suffix: '-$n'));
       out.add(_chipPeakDef(kind: kind, suffix: '+$n'));
+    }
+    final tokens = <String>[
+      '',
+      for (var n = 1; n <= kTradeChipPeakMaxInBox; n++) 'IN$n',
+      for (var n = 1; n <= kTradeChipPeakMaxRank; n++) ...['M$n', 'P$n'],
+    ];
+    for (final token in tokens) {
+      for (final field in _chipPeakDerivedFields) {
+        out.add(_chipPeakDerivedDef(kind: kind, token: token, field: field));
+      }
     }
   }
 
@@ -442,16 +535,41 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
     }
   }
 
-  // 各层均线/通道：与布林同一冻结仓、同一套钟
+  // 各层唐奇安通道：与布林同号，读冻结仓（UP=窗口最高价最大/MID/DOWN=窗口最低价最小）
+  const donchBands = ['UP', 'MID', 'DOWN'];
+  const donchBandCn = {'UP': '上轨', 'MID': '中轨', 'DOWN': '下轨'};
+  for (var kn = 0; kn <= hi; kn++) {
+    for (final b in donchBands) {
+      out.add(TradeVariableDef(
+        variableId: donchianBandId(kn, b),
+        displayName: 'K$kn唐奇安${donchBandCn[b]}',
+        panel: TradePanel.main,
+        displayKn: kn,
+        clockFamily: TradeClockFamily.zsMath,
+        evalClock: evalClockForDisplayKn(kn),
+        plotClock: TradePlotClock.k0Bar,
+        valueType: TradeValueType.numeric,
+        readiness: TradeReadiness.registered,
+        source: 'MathSeriesFreezeStore.donchian(kn)，与图上唐奇安同一仓；CROSS 取 evalClock 样本点',
+        unit: 'price',
+        futureSafe: true,
+        availabilityNote: '有第一个唐奇安样本才有数；热身不足仍按图上通道出数，不另造前N根不可用',
+        groupKey: 'donchian',
+        groupLabel: '唐奇安',
+        fieldLabel: donchBandCn[b]!,
+        description: '读图上已冻住的唐奇安格子，禁止现场另算；上轨=窗口内最高价最大，下轨=窗口内最低价最小',
+      ));
+    }
+  }
+
+  // 各层均线/回归通道：与布林同一冻结仓、同一套钟
   const meanPeriods = TrendModelConfig.defaultMeanPeriods;
-  const channelPeriods = TrendModelConfig.defaultChannelPeriods;
   for (var kn = 0; kn <= hi; kn++) {
     for (final p in meanPeriods) {
       out.add(_maDef(kn, p));
     }
-    for (final p in channelPeriods) {
-      out.add(_channelDef(kn, p, 'MAX'));
-      out.add(_channelDef(kn, p, 'MIN'));
+    for (final b in const ['MID', 'UP', 'DOWN']) {
+      out.add(_regressDef(kn, b));
     }
     out.add(_demarkCompleteDef(kn, buy: true));
     out.add(_demarkCompleteDef(kn, buy: false));
@@ -535,7 +653,6 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
       ('SELL2', '二类卖点', 'sell2History 会话冻结，发现边沿'),
     ];
     for (final e in bs) {
-      final isClass1 = e.$1 == 'BUY1' || e.$1 == 'SELL1';
       out.add(TradeVariableDef(
         variableId: 'STRUCTURE.K$kn.${e.$1}',
         displayName: 'K$kn ${e.$2}',
@@ -550,8 +667,8 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
         unit: 'event',
         futureSafe: true,
         availabilityNote: '首次发现当根才出现一次；动态段后续 x 不重复出交易事件',
-        groupKey: isClass1 ? 'bs1' : 'bs2',
-        groupLabel: isClass1 ? '一类BS' : '二类BS',
+        groupKey: 'bsN',
+        groupLabel: 'N类BS',
         fieldLabel: e.$1,
         description: 'EVENT_EXISTS；禁止比较/穿越',
       ));
@@ -615,7 +732,7 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
       groupKey: 'fxConfirm',
       groupLabel: '分型确认',
       fieldLabel: '确认',
-        description: 'EVENT_EXISTS；当根脉冲；连线钟，不能和布林/RSI 直接 AND',
+        description: 'EVENT_EXISTS；当根脉冲；连线钟，不能和布林直接比；AND/OR 可跨层，须同一根 K0 刚发生',
       ));
     out.add(TradeVariableDef(
       variableId: fractalJudgmentId(kn),
@@ -634,7 +751,51 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
       groupKey: 'fxJudge',
       groupLabel: '分型判断',
       fieldLabel: '判断',
-      description: 'EVENT_EXISTS；连线钟，不能和布林/RSI 直接 AND',
+      description: 'EVENT_EXISTS；连线钟，不能和布林直接比；AND/OR 可跨层，须同一根 K0 刚发生',
+    ));
+    // 分型判断方向符号：顶=+1 / 底=-1（脉冲，仅分型当根有值）；配合 ==1 / ==-1 过滤顶/底
+    out.add(TradeVariableDef(
+      variableId: fractalJudgmentSignId(kn),
+      displayName: 'K$kn 分型判断·方向',
+      panel: TradePanel.sub,
+      displayKn: kn,
+      clockFamily: TradeClockFamily.line,
+      evalClock: TradeEvalClock.k0Bar,
+      plotClock: TradePlotClock.k0Bar,
+      valueType: TradeValueType.numeric,
+      readiness: TradeReadiness.registered,
+      source: 'judgmentHistory 会话冻结；fx=TOP→+1，fx=BOTTOM→-1',
+      unit: 'sign',
+      futureSafe: true,
+      availabilityNote: '该根不是分型判断当根则为不可用（不填 0、不沿用上一根）',
+      groupKey: 'fxJudge',
+      groupLabel: '分型判断',
+      fieldLabel: '方向(±1)',
+      description:
+          '顶分型=+1，底分型=-1；仅分型当根有值。配合「==1」选顶、「==-1」选底；不破坏原有 EVENT_EXISTS',
+    ));
+    // 分型确认方向符号：顶=+1 / 底=-1（脉冲，仅分型当根有值）
+    out.add(TradeVariableDef(
+      variableId: fractalConfirmSignId(kn),
+      displayName: 'K$kn 分型确认·方向',
+      panel: TradePanel.sub,
+      displayKn: kn,
+      clockFamily: TradeClockFamily.line,
+      evalClock: TradeEvalClock.k0Bar,
+      plotClock: TradePlotClock.k0Bar,
+      valueType: TradeValueType.numeric,
+      readiness: TradeReadiness.registered,
+      source: kn == 0
+          ? 'k0ConfirmSignals.value（向上=+1/向下=-1）'
+          : 'LevelBundle.confirms.value（向上=+1/向下=-1）',
+      unit: 'sign',
+      futureSafe: true,
+      availabilityNote: '该根不是分型确认当根则为不可用（不填 0、不沿用上一根）',
+      groupKey: 'fxConfirm',
+      groupLabel: '分型确认',
+      fieldLabel: '方向(±1)',
+      description:
+          '顶分型=+1，底分型=-1；仅分型当根有值。配合「==1」选顶、「==-1」选底；不破坏原有 EVENT_EXISTS',
     ));
     out.add(TradeVariableDef(
       variableId: 'SUB.K$kn.ZS_CONFIRM',
@@ -653,7 +814,28 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
       groupKey: 'zsConfirm',
       groupLabel: '中枢确认',
       fieldLabel: '确认',
-        description: 'EVENT_EXISTS；与 RSI/MACD 同 zsMath 可 AND/OR',
+        description: 'EVENT_EXISTS；AND/OR 可跨层，须同一根 K0 刚发生',
+    ));
+    // 中枢确认方向符号：上个中枢空间趋势 抬高(升)=+1 / 下移(降)=-1（脉冲，仅确认当根有值）
+    out.add(TradeVariableDef(
+      variableId: zsConfirmSignId(kn),
+      displayName: 'K$kn 中枢确认·方向',
+      panel: TradePanel.sub,
+      displayKn: kn,
+      clockFamily: TradeClockFamily.zsMath,
+      evalClock: TradeEvalClock.k0Bar,
+      plotClock: TradePlotClock.k0Bar,
+      valueType: TradeValueType.numeric,
+      readiness: TradeReadiness.registered,
+      source: 'zsConfirmHistory 会话冻结；dir>=0→+1（抬高/升），dir<0→-1（下移/降）',
+      unit: 'sign',
+      futureSafe: true,
+      availabilityNote: '该根不是中枢确认当根则为不可用（不填 0、不沿用上一根）',
+      groupKey: 'zsConfirm',
+      groupLabel: '中枢确认',
+      fieldLabel: '方向(±1)',
+      description:
+          '抬高(升)=+1，下移(降)=-1；仅中枢确认当根有值。配合「==1」选升、「==-1」选降；不破坏原有 EVENT_EXISTS',
     ));
     out.add(TradeVariableDef(
       variableId: zsJudgmentId(kn),
@@ -672,7 +854,28 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
       groupKey: 'zsJudge',
       groupLabel: '中枢判断',
       fieldLabel: '判断',
-      description: 'EVENT_EXISTS；与 RSI/MACD 同 zsMath 可 AND/OR',
+      description: 'EVENT_EXISTS；AND/OR 可跨层，须同一根 K0 刚发生',
+    ));
+    // 中枢判断方向符号：上个中枢空间趋势 抬高(升)=+1 / 下移(降)=-1（脉冲，仅判断当根有值）
+    out.add(TradeVariableDef(
+      variableId: zsJudgmentSignId(kn),
+      displayName: 'K$kn 中枢判断·方向',
+      panel: TradePanel.sub,
+      displayKn: kn,
+      clockFamily: TradeClockFamily.zsMath,
+      evalClock: TradeEvalClock.k0Bar,
+      plotClock: TradePlotClock.k0Bar,
+      valueType: TradeValueType.numeric,
+      readiness: TradeReadiness.registered,
+      source: 'zsJudgmentHistory 会话冻结；dir>=0→+1（抬高/升），dir<0→-1（下移/降）',
+      unit: 'sign',
+      futureSafe: true,
+      availabilityNote: '该根不是中枢判断当根则为不可用（不填 0、不沿用上一根）',
+      groupKey: 'zsJudge',
+      groupLabel: '中枢判断',
+      fieldLabel: '方向(±1)',
+      description:
+          '抬高(升)=+1，下移(降)=-1；仅中枢判断当根有值。配合「==1」选升、「==-1」选降；不破坏原有 EVENT_EXISTS',
     ));
     // 确认中枢数值：先解析 CURRENT_CONFIRMED_ZS 的稳定 objectId，再投影
     const zsFields = [
@@ -743,7 +946,7 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
       groupKey: 'lineSlope',
       groupLabel: '连线斜率',
       fieldLabel: '斜率',
-      description: '连线钟数值；可与同层比例/分型确认拼，不能和布林/RSI 直接比',
+      description: '连线钟数值；可与同层比例比，不能和布林直接比；AND/OR 可跨层，须同一根 K0 刚发生',
     ));
     out.add(TradeVariableDef(
       variableId: adjacentRatioId(kn),
@@ -762,7 +965,7 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
       groupKey: 'adjRatio',
       groupLabel: '相邻比例',
       fieldLabel: '比例',
-      description: '连线钟数值；可与同层斜率比，不能和布林直接比',
+      description: '连线钟数值；可与同层斜率比，不能和布林直接比；AND/OR 可跨层，须同一根 K0 刚发生',
     ));
     out.add(TradeVariableDef(
       variableId: stepRhythmId(kn),
@@ -781,7 +984,7 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
       groupKey: 'rhythm',
       groupLabel: '节奏',
       fieldLabel: '投影价',
-      description: '读会话已写下的投影价（含关窗持值）；连线钟，不能和布林直接比',
+      description: '读会话已写下的投影价（含关窗持值）；连线钟，不能和布林直接比；AND/OR 可跨层，须同一根 K0 刚发生',
     ));
     if (kn >= 1) {
       out.add(TradeVariableDef(
@@ -825,7 +1028,7 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
     }
     out.add(TradeVariableDef(
       variableId: fxTripleVarId(kn),
-      displayName: 'K$kn三型价',
+      displayName: 'K$kn三极平行价',
       panel: TradePanel.main,
       displayKn: kn,
       clockFamily: TradeClockFamily.zsMath,
@@ -836,15 +1039,15 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
       source: 'Lookup/十字已冻的 fx_triple_price；无仓则按 asOf 前缀现算投影',
       unit: 'price',
       futureSafe: true,
-      availabilityNote: '这根没有三型延长线落到价位则为不可用',
+      availabilityNote: '这根没有三极平行延长线落到价位则为不可用',
       groupKey: 'fxTriple',
-      groupLabel: '三型',
+      groupLabel: '三极平行',
       fieldLabel: '价',
       description: '线→价投影，可与同层收盘/布林比',
     ));
     out.add(TradeVariableDef(
       variableId: fxQuadVarId(kn, 'TOP'),
-      displayName: 'K$kn四型上',
+      displayName: 'K$kn顶底对弦上',
       panel: TradePanel.main,
       displayKn: kn,
       clockFamily: TradeClockFamily.zsMath,
@@ -855,15 +1058,15 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
       source: 'Lookup 已冻的 fx_quad_top_price',
       unit: 'price',
       futureSafe: true,
-      availabilityNote: '这根没有四型上沿价则为不可用',
+      availabilityNote: '这根没有顶底对弦上沿价则为不可用',
       groupKey: 'fxQuad',
-      groupLabel: '四型',
+      groupLabel: '顶底对弦',
       fieldLabel: '上',
       description: '线→价投影，可与同层收盘/布林比',
     ));
     out.add(TradeVariableDef(
       variableId: fxQuadVarId(kn, 'BOTTOM'),
-      displayName: 'K$kn四型下',
+      displayName: 'K$kn顶底对弦下',
       panel: TradePanel.main,
       displayKn: kn,
       clockFamily: TradeClockFamily.zsMath,
@@ -874,11 +1077,30 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
       source: 'Lookup 已冻的 fx_quad_bottom_price',
       unit: 'price',
       futureSafe: true,
-      availabilityNote: '这根没有四型下沿价则为不可用',
+      availabilityNote: '这根没有顶底对弦下沿价则为不可用',
       groupKey: 'fxQuad',
-      groupLabel: '四型',
+      groupLabel: '顶底对弦',
       fieldLabel: '下',
       description: '线→价投影，可与同层收盘/布林比',
+    ));
+    out.add(TradeVariableDef(
+      variableId: fxChordTranslatedVarId(kn),
+      displayName: 'K$kn对弦平移价',
+      panel: TradePanel.main,
+      displayKn: kn,
+      clockFamily: TradeClockFamily.zsMath,
+      evalClock: evalClockForDisplayKn(kn),
+      plotClock: TradePlotClock.k0Bar,
+      valueType: TradeValueType.objectProjection,
+      readiness: TradeReadiness.registered,
+      source: 'Lookup/十字已冻的 fx_chord_translated_price；无仓则按 asOf 前缀现算投影',
+      unit: 'price',
+      futureSafe: true,
+      availabilityNote: '这根没有对弦平移延长线落到价位则为不可用',
+      groupKey: 'fxChordTranslated',
+      groupLabel: '对弦平移',
+      fieldLabel: '价',
+      description: 'ab 斜率平移到 c 点后的价投影，可与同层收盘/布林比',
     ));
     out.add(TradeVariableDef(
       variableId: trendLineVarId(kn, 'SUPPORT'),
@@ -918,6 +1140,46 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
       fieldLabel: '压力',
       description: '线→价投影，可与同层收盘/布林比',
     ));
+    if (kn <= hi - 2) {
+      out.add(TradeVariableDef(
+        variableId: fxBottomSnugVarId(kn),
+        displayName: 'K$kn底极贴合价',
+        panel: TradePanel.main,
+        displayKn: kn,
+        clockFamily: TradeClockFamily.zsMath,
+        evalClock: evalClockForDisplayKn(kn),
+        plotClock: TradePlotClock.k0Bar,
+        valueType: TradeValueType.objectProjection,
+        readiness: TradeReadiness.registered,
+        source: 'Lookup/十字已冻的 fx_bottom_snug_price；无仓则按 asOf 前缀现算投影',
+        unit: 'price',
+        futureSafe: true,
+        availabilityNote: '这根没有底极贴合延长线落到价位则为不可用',
+        groupKey: 'fxBottomSnug',
+        groupLabel: '底极贴合',
+        fieldLabel: '价',
+        description: '上升父段内底极点拟合线→价投影，可与同层收盘/布林比',
+      ));
+      out.add(TradeVariableDef(
+        variableId: fxTopSnugVarId(kn),
+        displayName: 'K$kn顶极贴合价',
+        panel: TradePanel.main,
+        displayKn: kn,
+        clockFamily: TradeClockFamily.zsMath,
+        evalClock: evalClockForDisplayKn(kn),
+        plotClock: TradePlotClock.k0Bar,
+        valueType: TradeValueType.objectProjection,
+        readiness: TradeReadiness.registered,
+        source: 'Lookup/十字已冻的 fx_top_snug_price；无仓则按 asOf 前缀现算投影',
+        unit: 'price',
+        futureSafe: true,
+        availabilityNote: '这根没有顶极贴合延长线落到价位则为不可用',
+        groupKey: 'fxTopSnug',
+        groupLabel: '顶极贴合',
+        fieldLabel: '价',
+        description: '下降父段内顶极点拟合线→价投影，可与同层收盘/布林比',
+      ));
+    }
     out.add(TradeVariableDef(
       variableId: diverExistsId(kn),
       displayName: 'K$kn 背驰出现',
@@ -1080,13 +1342,20 @@ TradeVariableDef? lookupTradeVariable(String variableId, {int maxKn = 8}) {
   if (ma != null && ma.kn <= (maxKn < 0 ? 0 : maxKn)) {
     return _maDef(ma.kn, ma.period);
   }
-  final ch = parseChannelVarId(id);
+  final ch = parseRegressVarId(id);
   if (ch != null && ch.kn <= (maxKn < 0 ? 0 : maxKn)) {
-    return _channelDef(ch.kn, ch.period, ch.band);
+    return _regressDef(ch.kn, ch.band);
   }
-  final peak = parseChipPeakVarId(id);
-  if (peak != null && peak.kn == 0) {
-    return _chipPeakDef(kind: peak.kind, suffix: peak.suffix);
+  final peakTrade = parseChipPeakTradeVarId(id);
+  if (peakTrade != null && peakTrade.kn == 0) {
+    if (peakTrade.field != null) {
+      return _chipPeakDerivedDef(
+        kind: peakTrade.kind,
+        token: chipPeakTokenOfSuffix(peakTrade.suffix),
+        field: peakTrade.field!,
+      );
+    }
+    return _chipPeakDef(kind: peakTrade.kind, suffix: peakTrade.suffix);
   }
   for (final d in inventoryOnlyTradeVariables()) {
     if (d.matchesId(id)) return d;
@@ -1095,9 +1364,11 @@ TradeVariableDef? lookupTradeVariable(String variableId, {int maxKn = 8}) {
 }
 
 TradeVariableDef _classNDef(int kn, int cls, {required bool buy}) {
+  final all = isChanBsAllClass(cls);
+  final side = buy ? '买' : '卖';
   return TradeVariableDef(
     variableId: buy ? buyNVarId(kn, cls) : sellNVarId(kn, cls),
-    displayName: 'K$kn ${tradeBsClassCn(cls)}类${buy ? "买" : "卖"}点',
+    displayName: all ? 'K$kn 全部${side}点' : 'K$kn ${tradeBsClassCn(cls)}类${side}点',
     panel: TradePanel.structure,
     displayKn: kn,
     clockFamily: TradeClockFamily.zsMath,
@@ -1105,17 +1376,22 @@ TradeVariableDef _classNDef(int kn, int cls, {required bool buy}) {
     plotClock: TradePlotClock.k0Bar,
     valueType: TradeValueType.event,
     readiness: TradeReadiness.registered,
-    source: buy
-        ? 'buyNHistory 会话冻结，按 class=$cls 过滤；发现边沿'
-        : 'sellNHistory 会话冻结，按 class=$cls 过滤；发现边沿',
+    source: all
+        ? (buy
+            ? 'buy1+buy2+buyN 会话冻结，该侧全部类号；发现边沿'
+            : 'sell1+sell2+sellN 会话冻结，该侧全部类号；发现边沿')
+        : (buy
+            ? 'buyNHistory 会话冻结，按 class=$cls 过滤；发现边沿'
+            : 'sellNHistory 会话冻结，按 class=$cls 过滤；发现边沿'),
     unit: 'event',
     futureSafe: true,
     availabilityNote: '首次发现当根才出现一次；动态段后续 x 不重复出交易事件',
     groupKey: 'bsN',
     groupLabel: 'N类BS',
-    fieldLabel: '${tradeBsClassCn(cls)}${buy ? "买" : "卖"}',
-    description:
-        '${buy ? "BUY_N" : "SELL_N"}(class=$cls) EVENT_EXISTS；禁止比较/穿越',
+    fieldLabel: all ? '全$side' : '${tradeBsClassCn(cls)}$side',
+    description: all
+        ? '${buy ? "BUY_N" : "SELL_N"}(class=0/-1) 一类+二类+三类及以上 EVENT_EXISTS；禁止比较/穿越'
+        : '${buy ? "BUY_N" : "SELL_N"}(class=$cls) EVENT_EXISTS；禁止比较/穿越',
   );
 }
 
@@ -1141,11 +1417,12 @@ TradeVariableDef _maDef(int kn, int period) {
   );
 }
 
-TradeVariableDef _channelDef(int kn, int period, String band) {
-  final isMax = band == 'MAX';
+TradeVariableDef _regressDef(int kn, String band) {
+  final isMid = band == 'MID';
+  final isUp = band == 'UP';
   return TradeVariableDef(
-    variableId: channelVarId(kn, period, band),
-    displayName: 'K$kn通道$period${isMax ? "上" : "下"}',
+    variableId: regressVarId(kn, band),
+    displayName: 'K$kn回归通道${isMid ? "中" : isUp ? "上" : "下"}',
     panel: TradePanel.main,
     displayKn: kn,
     clockFamily: TradeClockFamily.zsMath,
@@ -1153,14 +1430,15 @@ TradeVariableDef _channelDef(int kn, int period, String band) {
     plotClock: TradePlotClock.k0Bar,
     valueType: TradeValueType.numeric,
     readiness: TradeReadiness.registered,
-    source: 'MathSeriesFreezeStore.channel(kn)[$period].${isMax ? "max" : "min"}',
+    source:
+        'MathSeriesFreezeStore.regress(kn).${isMid ? "mid" : isUp ? "up" : "down"}',
     unit: 'price',
     futureSafe: true,
-    availabilityNote: '冻结仓该格有数才可读；没有仓或空格=不可用，不现场重算',
-    groupKey: 'channel',
-    groupLabel: '通道',
-    fieldLabel: '$period${isMax ? "上" : "下"}',
-    description: '读冻结仓通道，禁止现场另算',
+    availabilityNote: '回归通道当前父层连线段有数才可读；段未成形或基线外=不可用',
+    groupKey: 'regress',
+    groupLabel: '回归通道',
+    fieldLabel: isMid ? '中轨' : isUp ? '上轨' : '下轨',
+    description: '读图上已冻住的回归通道（中/上/下轨），禁止现场另算',
   );
 }
 
@@ -1182,7 +1460,7 @@ TradeVariableDef _demarkCompleteDef(int kn, {required bool buy}) {
     groupKey: 'demark',
     groupLabel: 'Demark',
     fieldLabel: buy ? '完成买' : '完成卖',
-    description: 'EVENT_EXISTS；与 RSI/收盘同 zsMath 可 AND/OR',
+    description: 'EVENT_EXISTS；AND/OR 可跨层，须同一根 K0 刚发生',
   );
 }
 
@@ -1193,9 +1471,14 @@ TradeVariableDef _chipPeakDef({
   final isTick = kind == 'tick';
   final prefix = isTick ? 'K0笔数峰' : 'K0筹码峰';
   final token = chipPeakTokenOfSuffix(suffix);
+  final displaySuffix = suffix.isEmpty
+      ? ''
+      : suffix.startsWith('IN')
+          ? '·框内${suffix.substring(2)}'
+          : suffix;
   return TradeVariableDef(
     variableId: chipPeakVarId(kind: kind, token: token),
-    displayName: '$prefix${suffix.isEmpty ? "" : suffix}',
+    displayName: '$prefix$displaySuffix',
     panel: TradePanel.sub,
     displayKn: 0,
     clockFamily: TradeClockFamily.zsMath,
@@ -1209,9 +1492,86 @@ TradeVariableDef _chipPeakDef({
     unit: 'price',
     futureSafe: true,
     availabilityNote: '这根没有对应编号的峰则为不可用，不会填 0、不沿用上一根',
-    groupKey: isTick ? 'tickPeak' : 'chipPeak',
-    groupLabel: isTick ? '笔数峰' : '筹码峰',
+    groupKey: isTick ? 'tickPeakPrice' : 'chipPeakPrice',
+    groupLabel: isTick ? '笔数峰·价' : '筹码峰·价',
     fieldLabel: chipPeakFieldLabel(suffix),
-    description: '峰价；框内多峰取离收盘更近的一颗；可与 K0 开高低收比',
+    description:
+        '峰价。空间序：外侧离边界近、框内离收盘近；量级序：各区内按筹码量从大到小。可与 K0 开高低收比',
+  );
+}
+
+TradeVariableDef _chipPeakDerivedDef({
+  required String kind,
+  required String token,
+  required String field,
+}) {
+  final isTick = kind == 'tick';
+  final prefix = isTick ? 'K0笔数峰' : 'K0筹码峰';
+  final suffix = chipPeakSuffixOfToken(token);
+  final nameSuffix = suffix.isEmpty
+      ? ''
+      : suffix.startsWith('IN')
+          ? '·框内${suffix.substring(2)}'
+          : suffix;
+  final fieldCn = switch (field) {
+    'DIST' => '距收盘',
+    'EXISTS' => '有无',
+    'BS' => '多空比',
+    _ => field,
+  };
+  String groupKey;
+  String groupLabel;
+  String unit;
+  String availability;
+  String desc;
+  switch (field) {
+    case 'DIST':
+      groupKey = isTick ? 'tickPeakDist' : 'chipPeakDist';
+      groupLabel = isTick ? '笔数峰·距收盘' : '筹码峰·距收盘';
+      unit = 'price';
+      availability = '无该峰则不可用；DIST=收盘-峰价，正=收盘在峰上方';
+      desc = '收盘减峰价（元）。距某价带内请用 EXISTS==1 且 DIST 上下界';
+      break;
+    case 'EXISTS':
+      groupKey = isTick ? 'tickPeakExists' : 'chipPeakExists';
+      groupLabel = isTick ? '笔数峰·有无' : '筹码峰·有无';
+      unit = 'count';
+      availability = '恒为 1 或 0，永远可比较；无峰为 0 不是不可用';
+      desc = '有对应编号峰为 1，无为 0；请写 ==1，勿当布尔叶子';
+      break;
+    case 'BS':
+      groupKey = isTick ? 'tickPeakBs' : 'chipPeakBs';
+      groupLabel = isTick ? '笔数峰·多空比' : '筹码峰·多空比';
+      unit = 'ratio';
+      availability = '无峰或卖量为 0 则不可用；b/s 无上界';
+      desc = '峰位桶买量/卖量；>1 偏多';
+      break;
+    default:
+      groupKey = isTick ? 'tickPeakPrice' : 'chipPeakPrice';
+      groupLabel = isTick ? '笔数峰' : '筹码峰';
+      unit = 'price';
+      availability = '';
+      desc = '';
+  }
+  return TradeVariableDef(
+    variableId: chipPeakDerivedVarId(kind: kind, token: token, field: field),
+    displayName: '$prefix$nameSuffix·$fieldCn',
+    panel: TradePanel.sub,
+    displayKn: 0,
+    clockFamily: TradeClockFamily.zsMath,
+    evalClock: TradeEvalClock.k0Bar,
+    plotClock: TradePlotClock.k0Bar,
+    valueType: TradeValueType.numeric,
+    readiness: TradeReadiness.registered,
+    source: isTick
+        ? 'TickDistProfileCompute 峰位桶派生'
+        : 'ChipProfileCompute 峰位桶派生',
+    unit: unit,
+    futureSafe: true,
+    availabilityNote: availability,
+    groupKey: groupKey,
+    groupLabel: groupLabel,
+    fieldLabel: '${chipPeakFieldLabel(suffix)}·$field',
+    description: desc,
   );
 }

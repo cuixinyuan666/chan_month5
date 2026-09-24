@@ -8,7 +8,7 @@ enum DemarkCountdownMode {
   strictExtreme,
 }
 
-/// 数学指标参数（均线/通道/MACD/BOLL/RSI/KDJ/Demark/背驰）。
+/// 数学指标参数（均线/通道/MACD/BOLL/唐奇安/回归通道/RSI/KDJ/Demark/背驰）。
 class MathIndicatorConfig {
   const MathIndicatorConfig({
     this.meanPeriods = TrendModelConfig.defaultMeanPeriods,
@@ -17,6 +17,10 @@ class MathIndicatorConfig {
     this.macdSlow = 26,
     this.macdSignal = 9,
     this.bollN = 20,
+    /// 唐奇安通道窗口 N（上轨=NNV(high,N)，下轨=LLV(low,N)，中轨=(上+下)/2）
+    this.donchianN = 20,
+    /// 回归通道带宽倍数 k（默认 2.0；上下轨 = 中轨 ± k×残差标准差）
+    this.regressK = 2.0,
     this.rsiPeriod = 14,
     this.kdjPeriod = 9,
     this.demarkLen = 9,
@@ -36,6 +40,10 @@ class MathIndicatorConfig {
   final int macdSlow;
   final int macdSignal;
   final int bollN;
+  /// 唐奇安通道窗口 N（K 线根数；上轨=窗口内最高价最大、下轨=最低价最小）
+  final int donchianN;
+  /// 回归通道上下轨倍数 k（中轨 ± k×残差总体标准差）
+  final double regressK;
   final int rsiPeriod;
   final int kdjPeriod;
   final int demarkLen;
@@ -61,6 +69,8 @@ class MathIndicatorConfig {
     int? macdSlow,
     int? macdSignal,
     int? bollN,
+    int? donchianN,
+    double? regressK,
     int? rsiPeriod,
     int? kdjPeriod,
     int? demarkLen,
@@ -79,6 +89,8 @@ class MathIndicatorConfig {
       macdSlow: macdSlow ?? this.macdSlow,
       macdSignal: macdSignal ?? this.macdSignal,
       bollN: bollN ?? this.bollN,
+      donchianN: donchianN ?? this.donchianN,
+      regressK: regressK ?? this.regressK,
       rsiPeriod: rsiPeriod ?? this.rsiPeriod,
       kdjPeriod: kdjPeriod ?? this.kdjPeriod,
       demarkLen: demarkLen ?? this.demarkLen,
@@ -100,6 +112,8 @@ class MathIndicatorConfig {
         'macdSlow': macdSlow,
         'macdSignal': macdSignal,
         'bollN': bollN,
+        'donchianN': donchianN,
+        'regressK': regressK,
         'rsiPeriod': rsiPeriod,
         'kdjPeriod': kdjPeriod,
         'demarkLen': demarkLen,
@@ -164,6 +178,8 @@ class MathIndicatorConfig {
       macdSlow: i(map['macdSlow'], 26),
       macdSignal: i(map['macdSignal'], 9),
       bollN: i(map['bollN'], 20),
+      donchianN: i(map['donchianN'], 20),
+      regressK: d(map['regressK'], 2.0),
       rsiPeriod: i(map['rsiPeriod'], 14),
       kdjPeriod: i(map['kdjPeriod'], 9),
       demarkLen: i(map['demarkLen'], 9),
@@ -187,6 +203,8 @@ class MathIndicatorConfig {
       macdSlow == other.macdSlow &&
       macdSignal == other.macdSignal &&
       bollN == other.bollN &&
+      donchianN == other.donchianN &&
+      regressK == other.regressK &&
       rsiPeriod == other.rsiPeriod &&
       kdjPeriod == other.kdjPeriod &&
       demarkLen == other.demarkLen &&
@@ -207,6 +225,8 @@ class MathIndicatorConfig {
         macdSlow,
         macdSignal,
         bollN,
+        donchianN,
+        regressK,
         rsiPeriod,
         kdjPeriod,
         demarkLen,

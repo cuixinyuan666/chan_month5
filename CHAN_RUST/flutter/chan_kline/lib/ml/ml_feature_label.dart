@@ -172,10 +172,13 @@ class MlFeatureLabel {
     if (key == 'combine.in_merge') return '合并框内合并';
     if (key == 'combine_range_high_2') return 'K2 合并区间高';
     if (key == 'combine_range_low_2') return 'K2 合并区间低';
-    // 三型/四型价
-    if (key == 'sub.fx_triple_price_0') return 'K0 三型价';
-    if (key == 'sub.fx_triple_price_1') return 'K1 三型价';
-    if (key == 'sub.fx_quad_top_price_1') return 'K1 四型顶价';
+    // 三极平行/顶底对弦/对弦平移价
+    if (key == 'sub.fx_triple_price_0') return 'K0 三极平行价';
+    if (key == 'sub.fx_triple_price_1') return 'K1 三极平行价';
+    if (key == 'sub.fx_quad_top_price_1') return 'K1 顶底对弦顶价';
+    if (key == 'sub.fx_quad_bottom_price_1') return 'K1 顶底对弦底价';
+    if (key == 'sub.fx_chord_translated_price_0') return 'K0 对弦平移价';
+    if (key == 'sub.fx_chord_translated_price_1') return 'K1 对弦平移价';
     // 趋势线
     if (key == 'sub.trend_support_price_0') return 'K0 趋势支撑';
     if (key == 'sub.trend_resist_price_1') return 'K1 趋势阻力';

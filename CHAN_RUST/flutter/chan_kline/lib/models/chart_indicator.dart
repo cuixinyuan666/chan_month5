@@ -9,22 +9,46 @@ enum MainIndicatorKind {
   combine,
   kn,
   zs,
-  /// Kn三型平移线（前三确认分型：两同定斜率，过异型向右）
+  /// K{n}三极平行线（前三确认分型：两同定斜率，过异型向右）
   fxTripleParallel,
-  /// Kn四型对线（前四确认分型：两顶线+两底线向右）
+  /// K{n}顶底对弦线（前四确认分型：两顶线+两底线向右）
   fxQuadPair,
+  /// K{n}对弦平移线（ab斜率平移至c点）
+  fxChordTranslated,
   /// Kn趋势线（父段内子线端点拟合支撑/压力；子线层同号）
   trendLine,
+  /// K{n}底极贴合线（父段内底分型极点距离最小拟合）
+  fxBottomSnug,
+  /// K{n}顶极贴合线（父段内顶分型极点距离最小拟合）
+  fxTopSnug,
   /// Kn均线（收盘价滑窗 MEAN；kn 同中枢显示层）
   meanLine,
   /// Kn通道（收盘价滑窗 MAX/MIN；kn 同中枢显示层）
   trendChannel,
   /// Kn布林带（MID/UP/DOWN；kn 同中枢）
   boll,
+  /// Kn唐奇安通道（UP=HHV(high,N)/MID/DOWN=LLV(low,N)；kn 同中枢）
+  donchian,
+  /// Kn回归通道（父层连线绑定：基准=父层 K{n+1}连线最后一段，外推到 asOf；kn 同中枢）
+  regressionChannel,
   /// Kn Demark（setup/countdown/完成信号；kn 同中枢；主图标注）
   demark,
   /// Kn步进节奏（old step_rhythm；与 Kn连线同号；主图价轴挂点）
   stepRhythm,
+  /// K0筹码峰价折线（仅 kn=0；空间序：-1/+1 两轨；读 ChipPeakFreezeStore）
+  chipPeakSpatial,
+  /// K0筹码峰价折线（仅 kn=0；量级序：各区内按筹码量从大到小；读 ChipPeakFreezeStore）
+  chipPeakVolume,
+  /// K0纯量级筹码峰（仅 kn=0；忽略 OHLC 区间，全局按峰位 total 取前 N；读 ChipPeakFreezeStore）
+  chipPeakPure,
+}
+
+/// 是否筹码峰类主图指标（三种编号模式同属一组，UI 与冻结仓按方案区分）。
+extension MainIndicatorKindChipPeak on MainIndicatorKind {
+  bool get isChipPeak =>
+      this == MainIndicatorKind.chipPeakSpatial ||
+      this == MainIndicatorKind.chipPeakVolume ||
+      this == MainIndicatorKind.chipPeakPure;
 }
 
 /// 主图指标类别元数据。
@@ -41,16 +65,25 @@ extension MainIndicatorKindMeta on MainIndicatorKind {
         return '连线';
       case MainIndicatorKind.fxTripleParallel:
       case MainIndicatorKind.fxQuadPair:
+      case MainIndicatorKind.fxChordTranslated:
       case MainIndicatorKind.trendLine:
+      case MainIndicatorKind.fxBottomSnug:
+      case MainIndicatorKind.fxTopSnug:
+      case MainIndicatorKind.regressionChannel:
         return '延伸';
       case MainIndicatorKind.meanLine:
       case MainIndicatorKind.trendChannel:
       case MainIndicatorKind.boll:
+      case MainIndicatorKind.donchian:
         return '均线';
       case MainIndicatorKind.demark:
         return 'Demark';
       case MainIndicatorKind.stepRhythm:
         return '节奏';
+      case MainIndicatorKind.chipPeakSpatial:
+      case MainIndicatorKind.chipPeakVolume:
+      case MainIndicatorKind.chipPeakPure:
+        return '筹码峰';
     }
   }
 
@@ -66,16 +99,25 @@ extension MainIndicatorKindMeta on MainIndicatorKind {
         return 3;
       case MainIndicatorKind.fxTripleParallel:
       case MainIndicatorKind.fxQuadPair:
+      case MainIndicatorKind.fxChordTranslated:
       case MainIndicatorKind.trendLine:
+      case MainIndicatorKind.fxBottomSnug:
+      case MainIndicatorKind.fxTopSnug:
+      case MainIndicatorKind.regressionChannel:
         return 4;
       case MainIndicatorKind.meanLine:
       case MainIndicatorKind.trendChannel:
       case MainIndicatorKind.boll:
+      case MainIndicatorKind.donchian:
         return 5;
       case MainIndicatorKind.demark:
         return 6;
       case MainIndicatorKind.stepRhythm:
         return 7;
+      case MainIndicatorKind.chipPeakSpatial:
+      case MainIndicatorKind.chipPeakVolume:
+      case MainIndicatorKind.chipPeakPure:
+        return 5;
     }
   }
 }
@@ -95,17 +137,33 @@ class MainChartIndicator {
       : kind = MainIndicatorKind.fxTripleParallel;
   const MainChartIndicator.fxQuadPair(this.kn)
       : kind = MainIndicatorKind.fxQuadPair;
+  const MainChartIndicator.fxChordTranslated(this.kn)
+      : kind = MainIndicatorKind.fxChordTranslated;
   const MainChartIndicator.trendLine(this.kn)
       : kind = MainIndicatorKind.trendLine;
+  const MainChartIndicator.fxBottomSnug(this.kn)
+      : kind = MainIndicatorKind.fxBottomSnug;
+  const MainChartIndicator.fxTopSnug(this.kn)
+      : kind = MainIndicatorKind.fxTopSnug;
   const MainChartIndicator.meanLine(this.kn)
       : kind = MainIndicatorKind.meanLine;
   const MainChartIndicator.trendChannel(this.kn)
       : kind = MainIndicatorKind.trendChannel;
   const MainChartIndicator.boll(this.kn) : kind = MainIndicatorKind.boll;
+  const MainChartIndicator.donchian(this.kn)
+      : kind = MainIndicatorKind.donchian;
+  const MainChartIndicator.regressionChannel(this.kn)
+      : kind = MainIndicatorKind.regressionChannel;
   const MainChartIndicator.demark(this.kn) : kind = MainIndicatorKind.demark;
   /// kn=连线显示层：K0步进节奏…（主图价轴；动态子线）
   const MainChartIndicator.stepRhythm(this.kn)
       : kind = MainIndicatorKind.stepRhythm;
+  const MainChartIndicator.chipPeakSpatial(this.kn)
+      : kind = MainIndicatorKind.chipPeakSpatial;
+  const MainChartIndicator.chipPeakVolume(this.kn)
+      : kind = MainIndicatorKind.chipPeakVolume;
+  const MainChartIndicator.chipPeakPure(this.kn)
+      : kind = MainIndicatorKind.chipPeakPure;
 
   String get label {
     switch (kind) {
@@ -119,21 +177,37 @@ class MainChartIndicator {
         // 自定义命名：去掉「连续」，展示为「Kn中枢」
         return 'K$kn中枢';
       case MainIndicatorKind.fxTripleParallel:
-        return 'K$kn三型平移线';
+        return 'K$kn三极平行线';
       case MainIndicatorKind.fxQuadPair:
-        return 'K$kn四型对线';
+        return 'K$kn顶底对弦线';
+      case MainIndicatorKind.fxChordTranslated:
+        return 'K$kn对弦平移线';
       case MainIndicatorKind.trendLine:
         return 'K$kn趋势线';
+      case MainIndicatorKind.fxBottomSnug:
+        return 'K$kn底极贴合线';
+      case MainIndicatorKind.fxTopSnug:
+        return 'K$kn顶极贴合线';
       case MainIndicatorKind.meanLine:
         return 'K$kn均线';
       case MainIndicatorKind.trendChannel:
         return 'K$kn通道';
       case MainIndicatorKind.boll:
         return 'K$kn布林';
+      case MainIndicatorKind.donchian:
+        return 'K$kn唐奇安';
+      case MainIndicatorKind.regressionChannel:
+        return 'K$kn回归通道';
       case MainIndicatorKind.demark:
         return 'K${kn}Demark';
       case MainIndicatorKind.stepRhythm:
         return 'K$kn节奏';
+      case MainIndicatorKind.chipPeakSpatial:
+        return 'K$kn筹码峰·空间序';
+      case MainIndicatorKind.chipPeakVolume:
+        return 'K$kn筹码峰·量级序';
+      case MainIndicatorKind.chipPeakPure:
+        return 'K$kn筹码峰·纯量级';
     }
   }
 
@@ -142,7 +216,7 @@ class MainChartIndicator {
     return kn;
   }
 
-  /// 同层内展示序：… → 均线 → 通道 → 布林。
+  /// 同层内展示序：… → 均线 → 通道 → 布林 → 回归通道。
   int get kindOrderInLevel {
     switch (kind) {
       case MainIndicatorKind.kn:
@@ -157,18 +231,34 @@ class MainChartIndicator {
         return 4;
       case MainIndicatorKind.fxQuadPair:
         return 5;
-      case MainIndicatorKind.trendLine:
+      case MainIndicatorKind.fxChordTranslated:
         return 6;
-      case MainIndicatorKind.meanLine:
+      case MainIndicatorKind.trendLine:
         return 7;
-      case MainIndicatorKind.trendChannel:
+      case MainIndicatorKind.fxBottomSnug:
         return 8;
-      case MainIndicatorKind.boll:
+      case MainIndicatorKind.fxTopSnug:
         return 9;
-      case MainIndicatorKind.demark:
+      case MainIndicatorKind.meanLine:
         return 10;
-      case MainIndicatorKind.stepRhythm:
+      case MainIndicatorKind.trendChannel:
         return 11;
+      case MainIndicatorKind.boll:
+        return 12;
+      case MainIndicatorKind.donchian:
+        return 13;
+      case MainIndicatorKind.regressionChannel:
+        return 14;
+      case MainIndicatorKind.demark:
+        return 15;
+      case MainIndicatorKind.stepRhythm:
+        return 16;
+      case MainIndicatorKind.chipPeakSpatial:
+        return 17;
+      case MainIndicatorKind.chipPeakVolume:
+        return 18;
+      case MainIndicatorKind.chipPeakPure:
+        return 19;
     }
   }
 
@@ -232,11 +322,9 @@ extension SubIndicatorKindMeta on SubIndicatorKind {
       case SubIndicatorKind.zsJudgment:
         return '中枢判断';
       case SubIndicatorKind.buy1:
-        return '一类BS';
       case SubIndicatorKind.buy2:
-        return '二类BS';
       case SubIndicatorKind.buyN:
-        return 'N类BS';
+        return 'KnN类BS';
       case SubIndicatorKind.adjacentRatio:
         return '比例';
       case SubIndicatorKind.lineSlope:
@@ -271,11 +359,9 @@ extension SubIndicatorKindMeta on SubIndicatorKind {
       case SubIndicatorKind.zsJudgment:
         return 7;
       case SubIndicatorKind.buy1:
-        return 8;
       case SubIndicatorKind.buy2:
-        return 9;
       case SubIndicatorKind.buyN:
-        return 10;
+        return 8;
       case SubIndicatorKind.adjacentRatio:
         return 11;
       case SubIndicatorKind.lineSlope:
@@ -462,6 +548,20 @@ class SubChartIndicator {
   int get hashCode => Object.hash(kind, kn, bsClass, diverAlgo);
 }
 
+/// 副图选择面板：KnN类BS 内一类→二类→N类排序。
+int subIndicatorPickerOrder(SubChartIndicator e) {
+  switch (e.kind) {
+    case SubIndicatorKind.buy1:
+      return 0;
+    case SubIndicatorKind.buy2:
+      return 1;
+    case SubIndicatorKind.buyN:
+      return 2 + (e.bsClass ?? 3);
+    default:
+      return e.kind.categoryOrder * 1000 + e.kn;
+  }
+}
+
 /// 方案B：chartMaxKn = structureMax+1；无 levels 有 k0Lines→1；全空→0。
 /// 有 structure level==0 时勿再走「m==0 && k0Lines→1」旧逻辑。
 int chartMaxKn({
@@ -498,17 +598,22 @@ List<MainChartIndicator> buildMainIndicatorCatalog(int maxKn) {
   for (var d = 0; d < maxKn; d++) {
     out.add(MainChartIndicator.line(d));
   }
-  // 三型平移 / 四型对线（与连线同号：d=0→K0）
+  // 三极平行 / 顶底对弦 / 对弦平移线（与连线同号：d=0→K0）
   for (var d = 0; d < maxKn; d++) {
     out.add(MainChartIndicator.fxTripleParallel(d));
   }
   for (var d = 0; d < maxKn; d++) {
     out.add(MainChartIndicator.fxQuadPair(d));
   }
-  // 趋势线：子=displayKn、父=displayKn+1；maxKn<2 仍挂 K0 占位
+  for (var d = 0; d < maxKn; d++) {
+    out.add(MainChartIndicator.fxChordTranslated(d));
+  }
+  // 趋势线 / 极贴合线：子=displayKn、父=displayKn+1；maxKn<2 仍挂 K0 占位
   final trendMax = maxKn < 2 ? 0 : maxKn - 2;
   for (var d = 0; d <= trendMax; d++) {
     out.add(MainChartIndicator.trendLine(d));
+    out.add(MainChartIndicator.fxBottomSnug(d));
+    out.add(MainChartIndicator.fxTopSnug(d));
   }
   // 均线 / 通道（与中枢同号：d=0→K0）
   for (var d = 0; d <= maxKn; d++) {
@@ -519,6 +624,18 @@ List<MainChartIndicator> buildMainIndicatorCatalog(int maxKn) {
   }
   for (var d = 0; d <= maxKn; d++) {
     out.add(MainChartIndicator.boll(d));
+  }
+  // 唐奇安通道（经典口径 high/low；与中枢同号：d=0→K0）
+  for (var d = 0; d <= maxKn; d++) {
+    out.add(MainChartIndicator.donchian(d));
+  }
+  // K0 筹码峰价折线（仅 catalog 挂 K0 一项；空间序 / 量级序 / 纯量级 三方案）
+  out.add(MainChartIndicator.chipPeakSpatial(0));
+  out.add(MainChartIndicator.chipPeakVolume(0));
+  out.add(MainChartIndicator.chipPeakPure(0));
+  // 回归通道（父层连线绑定：只画最新一段并外推到 asOf；归「延伸」组，与中枢同号 d=0→K0）
+  for (var d = 0; d <= maxKn; d++) {
+    out.add(MainChartIndicator.regressionChannel(d));
   }
   // Demark（与中枢同号；主图标注）
   for (var d = 0; d <= maxKn; d++) {
@@ -628,13 +745,23 @@ List<MainChartIndicator> mainIndicatorsForLevel(
     MainChartIndicator.line(displayLevel),
     MainChartIndicator.fxTripleParallel(displayLevel),
     MainChartIndicator.fxQuadPair(displayLevel),
+    MainChartIndicator.fxChordTranslated(displayLevel),
     MainChartIndicator.trendLine(displayLevel),
+    MainChartIndicator.fxBottomSnug(displayLevel),
+    MainChartIndicator.fxTopSnug(displayLevel),
     MainChartIndicator.meanLine(displayLevel),
     MainChartIndicator.trendChannel(displayLevel),
     MainChartIndicator.boll(displayLevel),
+    MainChartIndicator.donchian(displayLevel),
+    MainChartIndicator.regressionChannel(displayLevel),
     MainChartIndicator.demark(displayLevel),
     // 必须进主图「Kn指标」层全选（与连线同显示层）
     MainChartIndicator.stepRhythm(displayLevel),
+    if (displayLevel == 0) ...[
+      MainChartIndicator.chipPeakSpatial(0),
+      MainChartIndicator.chipPeakVolume(0),
+      MainChartIndicator.chipPeakPure(0),
+    ],
   ];
   return candidates.where(allow.contains).toList();
 }
@@ -702,24 +829,25 @@ Set<T> pruneIndicators<T>(Set<T> selected, List<T> catalog) {
   return selected.where(allow.contains).toSet();
 }
 
-/// 启动默认：勾选「K0指标」层全选（与选择栏层全选同口径）。
-/// 用 catalog(maxKn=1) 生成，保证含 K0连线 / 主图节奏 / 副图分型类与相邻比例。
-/// （筹码分布由设置面板控制，不在默认指标内）
+/// 启动默认：主图核心指标（Kn/合并/中枢/连线）。
 Set<MainChartIndicator> defaultMainIndicatorsK0() {
-  return mainIndicatorsForLevel(0, buildMainIndicatorCatalog(1)).toSet();
+  return mainIndicatorsForLevel(0, buildMainIndicatorCatalog(1))
+      .where(isDefaultDrawnMain)
+      .toSet();
 }
 
-/// 启动默认：副图「K0指标」层全选，但背驰 12 项默认不勾（可在选择栏「K0指标」里一键勾上）。
+/// 启动默认：副图核心指标（分型/截断/中枢类）；背驰 12 项默认不勾。
 Set<SubChartIndicator> defaultSubIndicatorsK0({bool truncationCheck = true}) {
   return subIndicatorsForLevel(
     0,
     buildSubIndicatorCatalog(1, truncationCheck: truncationCheck),
-  ).where((e) => e.kind != SubIndicatorKind.divergence).toSet();
+  )
+      .where((e) => e.kind != SubIndicatorKind.divergence && isDefaultDrawnSub(e))
+      .toSet();
 }
 
-/// 层全选关联后默认「实际绘制」的主图（其余关联项默认删除线静音）。
-/// 重要：关联≠全画——「Kn指标」仍勾全集，但启动/新层只亮：
-/// Kn / Kn合并 / Kn中枢 / Kn连线；其它进 `_mutedMains`，单击 chip 可打开。
+/// 层全选后默认「实际绘制」的主图（用于文档/测试口径）。
+/// Android 收纳列表：白字=已选=绘制，不再维护独立 muted 集。
 bool isDefaultDrawnMain(MainChartIndicator e) {
   switch (e.kind) {
     case MainIndicatorKind.kn:
@@ -729,18 +857,25 @@ bool isDefaultDrawnMain(MainChartIndicator e) {
       return true;
     case MainIndicatorKind.fxTripleParallel:
     case MainIndicatorKind.fxQuadPair:
+    case MainIndicatorKind.fxChordTranslated:
     case MainIndicatorKind.trendLine:
+    case MainIndicatorKind.fxBottomSnug:
+    case MainIndicatorKind.fxTopSnug:
     case MainIndicatorKind.meanLine:
     case MainIndicatorKind.trendChannel:
     case MainIndicatorKind.boll:
+    case MainIndicatorKind.donchian:
+    case MainIndicatorKind.regressionChannel:
     case MainIndicatorKind.demark:
     case MainIndicatorKind.stepRhythm:
+    case MainIndicatorKind.chipPeakSpatial:
+    case MainIndicatorKind.chipPeakVolume:
+    case MainIndicatorKind.chipPeakPure:
       return false;
   }
 }
 
-/// 层全选关联后默认「实际绘制」的副图（其余关联项默认删除线静音）。
-/// 重要：只亮分型确认/判断、截断、中枢确认/判断；成交量/BS/Math/背驰等默认 muted。
+/// 层全选关联后默认「实际绘制」的副图（用于文档/测试口径）。
 bool isDefaultDrawnSub(SubChartIndicator e) {
   switch (e.kind) {
     case SubIndicatorKind.fractalConfirm:

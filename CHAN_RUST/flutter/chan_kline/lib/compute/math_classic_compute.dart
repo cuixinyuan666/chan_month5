@@ -1,8 +1,11 @@
 import 'dart:math' as math;
 
+import '../models/bar_crosshair_feature.dart';
+import '../models/fractal_judgment_event.dart';
 import '../models/kline_bar.dart';
 import '../models/level_models.dart';
 import '../models/math_indicator_config.dart';
+import 'chart_view_compute.dart';
 import 'kn_ohlc_sample_compute.dart';
 
 /// MACD / BOLL / RSI / KDJ：移植旧 Math，动态 Kn OHLC，K0 颗粒度展开。
@@ -62,18 +65,20 @@ MacdK0Series computeMacdForLevel({
   int slow = 26,
   int signal = 9,
   int? asOf,
+  List<KnOhlcSample>? samples,
 }) {
-  final samples = collectKnOhlcSamples(
-    displayKn: displayKn,
-    bars: bars,
-    levels: levels,
-    asOf: asOf,
-  );
+  final use = samples ??
+      collectKnOhlcSamples(
+        displayKn: displayKn,
+        bars: bars,
+        levels: levels,
+        asOf: asOf,
+      );
   final eng = MacdEngine(fast: fast, slow: slow, signal: signal);
   final ptsDif = <({int x, double v})>[];
   final ptsDea = <({int x, double v})>[];
   final ptsMacd = <({int x, double v})>[];
-  for (final s in samples) {
+  for (final s in use) {
     final it = eng.add(s.close);
     ptsDif.add((x: s.endX, v: it.dif));
     ptsDea.add((x: s.endX, v: it.dea));
@@ -138,18 +143,20 @@ BollK0Series computeBollForLevel({
   List<LevelBundle> levels = const [],
   int n = 20,
   int? asOf,
+  List<KnOhlcSample>? samples,
 }) {
-  final samples = collectKnOhlcSamples(
-    displayKn: displayKn,
-    bars: bars,
-    levels: levels,
-    asOf: asOf,
-  );
+  final use = samples ??
+      collectKnOhlcSamples(
+        displayKn: displayKn,
+        bars: bars,
+        levels: levels,
+        asOf: asOf,
+      );
   final eng = BollEngine(n < 2 ? 2 : n);
   final ptsM = <({int x, double v})>[];
   final ptsU = <({int x, double v})>[];
   final ptsD = <({int x, double v})>[];
-  for (final s in samples) {
+  for (final s in use) {
     final it = eng.add(s.close);
     ptsM.add((x: s.endX, v: it.mid));
     ptsU.add((x: s.endX, v: it.up));
@@ -161,6 +168,184 @@ BollK0Series computeBollForLevel({
     up: expandPointsToK0(ptsU, len, asOf: asOf),
     down: expandPointsToK0(ptsD, len, asOf: asOf),
   );
+}
+
+// ─── 唐奇安通道（Donchian） ───────────────────────────
+// 经典口径：上轨 = 窗口 N 内最高价最大（HHV），下轨 = 窗口 N 内最低价最小（LLV），
+// 中轨 = (上轨 + 下轨) / 2。样本钟与布林/KDJ 同构：K0=原生分钟K，K{n}=本层虚拟K。
+
+class DonchianK0Series {
+  final List<double?> up;
+  final List<double?> mid;
+  final List<double?> down;
+  const DonchianK0Series({
+    required this.up,
+    required this.mid,
+    required this.down,
+  });
+}
+
+DonchianK0Series computeDonchianForLevel({
+  required int displayKn,
+  required List<KlineBar> bars,
+  List<LevelBundle> levels = const [],
+  int n = 20,
+  int? asOf,
+  List<KnOhlcSample>? samples,
+}) {
+  final use = samples ??
+      collectKnOhlcSamples(
+        displayKn: displayKn,
+        bars: bars,
+        levels: levels,
+        asOf: asOf,
+      );
+  final win = n < 1 ? 1 : n;
+  final highs = <double>[];
+  final lows = <double>[];
+  final ptsU = <({int x, double v})>[];
+  final ptsM = <({int x, double v})>[];
+  final ptsD = <({int x, double v})>[];
+  for (final s in use) {
+    highs.add(s.high);
+    lows.add(s.low);
+    if (highs.length > win) {
+      highs.removeRange(0, highs.length - win);
+      lows.removeRange(0, lows.length - win);
+    }
+    var hh = highs.first;
+    var ll = lows.first;
+    for (var i = 1; i < highs.length; i++) {
+      if (highs[i] > hh) hh = highs[i];
+      if (lows[i] < ll) ll = lows[i];
+    }
+    ptsU.add((x: s.endX, v: hh));
+    ptsD.add((x: s.endX, v: ll));
+    ptsM.add((x: s.endX, v: (hh + ll) / 2));
+  }
+  final len = bars.length;
+  return DonchianK0Series(
+    up: expandPointsToK0(ptsU, len, asOf: asOf),
+    mid: expandPointsToK0(ptsM, len, asOf: asOf),
+    down: expandPointsToK0(ptsD, len, asOf: asOf),
+  );
+}
+
+// ─── 回归通道（父层连线绑定） ─────────────────────────
+// 基准区间：父层 K{n+1}连线（structure level = displayKn+1）在 asOf 视图下的**最后一段**
+// ——倒数第二个极点 → 最后一个极点，端点含分型判断与构建中开口尾端；父层一出新段整条通道换新基准，旧的不留。
+// 样本钟：K0 取区间内每根 K0 收盘；K{n}≥1 取右端 x 落在区间内的本层虚拟K收盘（与布林同一套钟）。
+// 回归：以 K0 格点 x 为自变量做最小二乘 → 中轨；上下轨 = 中轨 ± k×残差总体标准差（除 m，与布林同口径）。
+// 绘制：从基准起点 x1 一路平行外推到 asOf 截断（宽度恒定），asOf 右侧不画；不回写、不参与信号。
+
+class RegressionChannelK0Series {
+  final List<double?> mid;
+  final List<double?> up;
+  final List<double?> down;
+  const RegressionChannelK0Series({
+    required this.mid,
+    required this.up,
+    required this.down,
+  });
+}
+
+/// 按「父层 K{n+1}连线最后一段」拟合回归通道（全层同构·不回写）。
+///
+/// [displayKn]：指标所在层；父层连线 = structure level `displayKn + 1`
+/// （K0回归通道看 K1连线、K1看 K2…）。
+/// [k]：上下轨带宽倍数（中轨 ± k×残差总体标准差）。
+/// [asOf]：步进截断；基底连线按 asOf 当时可见的那条取，右端外推也截到 asOf。
+/// [barFeatures] / [liveJudgments]：父层构建中虚线端点来源（与图上连线同源）；缺省时只认冻段。
+/// 父层还没有连线、或区间内样本 < 2 → 该层整条不出线。
+RegressionChannelK0Series computeRegressionChannelForLevel({
+  required int displayKn,
+  required List<KlineBar> bars,
+  List<LevelBundle> levels = const [],
+  List<BarCrosshairFeature> barFeatures = const [],
+  List<FractalJudgmentEvent> liveJudgments = const [],
+  double k = 2.0,
+  int? asOf,
+  List<KnOhlcSample>? samples,
+}) {
+  final len = bars.length;
+  final mid = List<double?>.filled(len, null);
+  final up = List<double?>.filled(len, null);
+  final down = List<double?>.filled(len, null);
+  RegressionChannelK0Series empty() =>
+      RegressionChannelK0Series(mid: mid, up: up, down: down);
+  if (len == 0) return empty();
+
+  final asOfEff = asOf ?? (len - 1);
+  if (asOfEff < 0 || asOfEff >= len) return empty();
+
+  // ① 基准区间 = 父层 K{n+1}连线最后一段
+  final span = lastLevelLineSpanAtAsOf(
+    bars: bars,
+    levels: levels,
+    barFeatures: barFeatures,
+    level: displayKn + 1,
+    asOf: asOfEff,
+    liveJudgments: liveJudgments,
+  );
+  if (span == null) return empty();
+  final x1 = span.x1;
+  final x2 = span.x2;
+  if (x1 < 0 || x2 <= x1) return empty();
+
+  // ② 样本钟：K0=原生收盘；K{n}≥1=本层虚拟K（右端 x 落在区间内）
+  final xs = <double>[];
+  final ys = <double>[];
+  if (displayKn <= 0) {
+    for (final b in bars) {
+      if (b.idx < x1) continue;
+      if (b.idx > x2) break;
+      xs.add(b.idx.toDouble());
+      ys.add(b.close);
+    }
+  } else {
+    final use = samples ??
+        collectKnOhlcSamples(
+          displayKn: displayKn,
+          bars: bars,
+          levels: levels,
+          asOf: asOf,
+        );
+    for (final s in use) {
+      if (s.endX < x1 || s.endX > x2) continue;
+      xs.add(s.endX.toDouble());
+      ys.add(s.close);
+    }
+  }
+  final m = xs.length;
+  if (m < 2) return empty();
+
+  // ③ 最小二乘 + 残差总体标准差
+  double sx = 0, sxx = 0, sy = 0, sxy = 0;
+  for (var i = 0; i < m; i++) {
+    sx += xs[i];
+    sxx += xs[i] * xs[i];
+    sy += ys[i];
+    sxy += xs[i] * ys[i];
+  }
+  final denom = m * sxx - sx * sx;
+  final bSlope = denom.abs() > 1e-12 ? (m * sxy - sx * sy) / denom : 0.0;
+  final aInter = (sy - bSlope * sx) / m;
+  var resVar = 0.0;
+  for (var i = 0; i < m; i++) {
+    final d = ys[i] - (aInter + bSlope * xs[i]);
+    resVar += d * d;
+  }
+  final theta = math.sqrt(resVar / m); // 残差总体标准差（除 m，与布林同口径）
+  final t = theta == 0 ? 1e-7 : theta;
+
+  // ④ 从基准起点一路平行外推到 asOf 截断
+  for (var i = x1; i <= asOfEff && i < len; i++) {
+    final fitMid = aInter + bSlope * i;
+    mid[i] = fitMid;
+    up[i] = fitMid + k * t;
+    down[i] = fitMid - k * t;
+  }
+  return RegressionChannelK0Series(mid: mid, up: up, down: down);
 }
 
 // ─── RSI ──────────────────────────────────────────────
@@ -210,16 +395,18 @@ List<double?> computeRsiForLevel({
   List<LevelBundle> levels = const [],
   int period = 14,
   int? asOf,
+  List<KnOhlcSample>? samples,
 }) {
-  final samples = collectKnOhlcSamples(
-    displayKn: displayKn,
-    bars: bars,
-    levels: levels,
-    asOf: asOf,
-  );
+  final use = samples ??
+      collectKnOhlcSamples(
+        displayKn: displayKn,
+        bars: bars,
+        levels: levels,
+        asOf: asOf,
+      );
   final eng = RsiEngine(period < 1 ? 1 : period);
   final pts = <({int x, double v})>[
-    for (final s in samples) (x: s.endX, v: eng.add(s.close)),
+    for (final s in use) (x: s.endX, v: eng.add(s.close)),
   ];
   return expandPointsToK0(pts, bars.length, asOf: asOf);
 }
@@ -270,18 +457,20 @@ KdjK0Series computeKdjForLevel({
   List<LevelBundle> levels = const [],
   int period = 9,
   int? asOf,
+  List<KnOhlcSample>? samples,
 }) {
-  final samples = collectKnOhlcSamples(
-    displayKn: displayKn,
-    bars: bars,
-    levels: levels,
-    asOf: asOf,
-  );
+  final use = samples ??
+      collectKnOhlcSamples(
+        displayKn: displayKn,
+        bars: bars,
+        levels: levels,
+        asOf: asOf,
+      );
   final eng = KdjEngine(period < 1 ? 1 : period);
   final ptsK = <({int x, double v})>[];
   final ptsD = <({int x, double v})>[];
   final ptsJ = <({int x, double v})>[];
-  for (final s in samples) {
+  for (final s in use) {
     final it = eng.add(high: s.high, low: s.low, close: s.close);
     ptsK.add((x: s.endX, v: it.k));
     ptsD.add((x: s.endX, v: it.d));
@@ -299,6 +488,7 @@ KdjK0Series computeKdjForLevel({
 ({
   MacdK0Series macd,
   BollK0Series boll,
+  DonchianK0Series donchian,
   List<double?> rsi,
   KdjK0Series kdj,
 }) computeClassicMathForLevel({
@@ -307,7 +497,15 @@ KdjK0Series computeKdjForLevel({
   List<LevelBundle> levels = const [],
   MathIndicatorConfig config = const MathIndicatorConfig(),
   int? asOf,
+  List<KnOhlcSample>? samples,
 }) {
+  final use = samples ??
+      collectKnOhlcSamples(
+        displayKn: displayKn,
+        bars: bars,
+        levels: levels,
+        asOf: asOf,
+      );
   return (
     macd: computeMacdForLevel(
       displayKn: displayKn,
@@ -317,6 +515,7 @@ KdjK0Series computeKdjForLevel({
       slow: config.macdSlow,
       signal: config.macdSignal,
       asOf: asOf,
+      samples: use,
     ),
     boll: computeBollForLevel(
       displayKn: displayKn,
@@ -324,6 +523,15 @@ KdjK0Series computeKdjForLevel({
       levels: levels,
       n: config.bollN,
       asOf: asOf,
+      samples: use,
+    ),
+    donchian: computeDonchianForLevel(
+      displayKn: displayKn,
+      bars: bars,
+      levels: levels,
+      n: config.donchianN,
+      asOf: asOf,
+      samples: use,
     ),
     rsi: computeRsiForLevel(
       displayKn: displayKn,
@@ -331,6 +539,7 @@ KdjK0Series computeKdjForLevel({
       levels: levels,
       period: config.rsiPeriod,
       asOf: asOf,
+      samples: use,
     ),
     kdj: computeKdjForLevel(
       displayKn: displayKn,
@@ -338,6 +547,7 @@ KdjK0Series computeKdjForLevel({
       levels: levels,
       period: config.kdjPeriod,
       asOf: asOf,
+      samples: use,
     ),
   );
 }

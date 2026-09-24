@@ -96,6 +96,7 @@ CrossEvalResult evalCross({
   ZhongshuObjectStore? zsObjects,
   DivergenceRelationStore? diverRelations,
   int bollN = 20,
+  int donchianN = 20,
   int maxKn = 8,
 }) {
   if (op != TradeBinaryOp.crossAbove && op != TradeBinaryOp.crossBelow) {
@@ -120,6 +121,7 @@ CrossEvalResult evalCross({
     zsObjects: zsObjects,
     diverRelations: diverRelations,
     bollN: bollN,
+    donchianN: donchianN,
   );
   final right = readEvalClockSeries(
     variableId: rightId,
@@ -130,6 +132,7 @@ CrossEvalResult evalCross({
     zsObjects: zsObjects,
     diverRelations: diverRelations,
     bollN: bollN,
+    donchianN: donchianN,
   );
   return CrossEvalOk(detectCrossOnEvalSeries(
     left: left,

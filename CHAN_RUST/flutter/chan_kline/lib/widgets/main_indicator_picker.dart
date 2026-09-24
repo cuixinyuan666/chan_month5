@@ -42,6 +42,9 @@ class _MainIndicatorPickerDialogState extends State<_MainIndicatorPickerDialog> 
   late Set<MainChartIndicator> _draft;
   final _scrollCtrl = ScrollController();
 
+  static const _activeColor = Color(0xFFFFFFFF);
+  static const _inactiveColor = Color(0xFF6B7280);
+
   @override
   void initState() {
     super.initState();
@@ -60,58 +63,71 @@ class _MainIndicatorPickerDialogState extends State<_MainIndicatorPickerDialog> 
     widget.onDraftChanged(_draft);
   }
 
-  void _toggleItem(MainChartIndicator item, bool? checked) {
+  void _toggleItem(MainChartIndicator item) {
     setState(() {
       final next = Set<MainChartIndicator>.from(_draft);
-      if (checked == true) {
-        next.add(item);
-      } else {
+      if (next.contains(item)) {
         next.remove(item);
+      } else {
+        next.add(item);
       }
       _setDraft(next);
     });
   }
 
-  void _toggleLevel(int displayLevel, bool? checked) {
+  void _toggleLevel(int displayLevel) {
     final members = mainIndicatorsForLevel(displayLevel, widget.available);
     if (members.isEmpty) return;
+    final allOn = members.every(_draft.contains);
     setState(() {
       final next = Set<MainChartIndicator>.from(_draft);
-      if (checked == true) {
-        next.addAll(members);
-      } else {
+      if (allOn) {
         next.removeAll(members);
+      } else {
+        next.addAll(members);
       }
       _setDraft(next);
     });
   }
 
-  bool? _levelTriState(int displayLevel) {
-    final members = mainIndicatorsForLevel(displayLevel, widget.available);
-    if (members.isEmpty) return false;
-    final n = members.where(_draft.contains).length;
-    if (n == 0) return false;
-    if (n == members.length) return true;
-    return null;
+  TextStyle _labelStyle(bool selected) => TextStyle(
+        color: selected ? _activeColor : _inactiveColor,
+        fontSize: 14,
+        fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+        decoration: selected ? TextDecoration.none : TextDecoration.lineThrough,
+        decorationColor: _inactiveColor,
+      );
+
+  Widget _tapRow({
+    required String label,
+    required bool selected,
+    required VoidCallback onTap,
+    EdgeInsets padding = const EdgeInsets.symmetric(vertical: 6),
+  }) {
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: padding,
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: Text(label, style: _labelStyle(selected)),
+        ),
+      ),
+    );
   }
 
   List<Widget> _buildTiles() {
     final tiles = <Widget>[];
-    // 最上：Kn指标层全选
     final levels = mainDisplayLevels(widget.available);
     for (final lv in levels) {
       final members = mainIndicatorsForLevel(lv, widget.available);
       if (members.isEmpty) continue;
+      final allOn = members.every(_draft.contains);
       tiles.add(
-        CheckboxListTile(
-          dense: true,
-          contentPadding: EdgeInsets.zero,
-          controlAffinity: ListTileControlAffinity.trailing,
-          activeColor: const Color(0xFF42A5F5),
-          tristate: true,
-          title: Text('K$lv指标', style: const TextStyle(fontSize: 14)),
-          value: _levelTriState(lv),
-          onChanged: (v) => _toggleLevel(lv, v == true),
+        _tapRow(
+          label: 'K$lv指标',
+          selected: allOn,
+          onTap: () => _toggleLevel(lv),
         ),
       );
     }
@@ -125,7 +141,6 @@ class _MainIndicatorPickerDialogState extends State<_MainIndicatorPickerDialog> 
       );
     }
 
-    // 按类别分组
     MainIndicatorKind? prevKind;
     for (final item in widget.available) {
       if (prevKind != null && prevKind != item.kind) {
@@ -159,14 +174,10 @@ class _MainIndicatorPickerDialogState extends State<_MainIndicatorPickerDialog> 
       }
       prevKind = item.kind;
       tiles.add(
-        CheckboxListTile(
-          dense: true,
-          contentPadding: EdgeInsets.zero,
-          controlAffinity: ListTileControlAffinity.trailing,
-          activeColor: const Color(0xFF42A5F5),
-          title: Text(item.label, style: const TextStyle(fontSize: 14)),
-          value: _draft.contains(item),
-          onChanged: (v) => _toggleItem(item, v),
+        _tapRow(
+          label: item.label,
+          selected: _draft.contains(item),
+          onTap: () => _toggleItem(item),
         ),
       );
     }

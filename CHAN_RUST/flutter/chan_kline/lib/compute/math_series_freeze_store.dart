@@ -1,7 +1,10 @@
+import '../models/bar_crosshair_feature.dart';
 import '../models/kline_bar.dart';
 import '../models/level_models.dart';
 import '../models/math_indicator_config.dart';
 import 'demark_compute.dart';
+import 'fractal_judgment_compute.dart';
+import 'kn_ohlc_sample_compute.dart';
 import 'math_classic_compute.dart';
 import 'trend_model_compute.dart';
 
@@ -52,6 +55,14 @@ BollK0Series freezeBoll(BollK0Series? prev, BollK0Series fresh) {
   );
 }
 
+DonchianK0Series freezeDonchian(DonchianK0Series? prev, DonchianK0Series fresh) {
+  return DonchianK0Series(
+    up: freezeNullableSeries(prev?.up, fresh.up),
+    mid: freezeNullableSeries(prev?.mid, fresh.mid),
+    down: freezeNullableSeries(prev?.down, fresh.down),
+  );
+}
+
 KdjK0Series freezeKdj(KdjK0Series? prev, KdjK0Series fresh) {
   return KdjK0Series(
     k: freezeNullableSeries(prev?.k, fresh.k),
@@ -93,56 +104,177 @@ Map<int, ({List<double?> max, List<double?> min})> freezeChannelMap(
   return out;
 }
 
+List<double?> _mergeCellAt(List<double?>? prev, List<double?> fresh, int x) {
+  var out = prev ?? <double?>[];
+  try {
+    while (out.length <= x) {
+      out.add(null);
+    }
+  } on UnsupportedError {
+    out = List<double?>.from(out);
+    while (out.length <= x) {
+      out.add(null);
+    }
+  }
+  if (x >= 0 && x < fresh.length) {
+    out[x] ??= fresh[x];
+  }
+  return out;
+}
+
+List<List<DemarkMark>?> _mergeDemarkAt(
+  List<List<DemarkMark>?>? prev,
+  List<List<DemarkMark>?> fresh,
+  int x,
+) {
+  var out = prev ?? <List<DemarkMark>?>[];
+  try {
+    while (out.length <= x) {
+      out.add(null);
+    }
+  } on UnsupportedError {
+    out = List<List<DemarkMark>?>.from(out);
+    while (out.length <= x) {
+      out.add(null);
+    }
+  }
+  if (x >= 0 && x < fresh.length) {
+    out[x] ??= fresh[x];
+  }
+  return out;
+}
+
+Map<int, List<double?>> _mergeMeanAt(
+  Map<int, List<double?>>? prev,
+  Map<int, List<double?>> fresh,
+  int x,
+) {
+  final keys = {...?prev?.keys, ...fresh.keys};
+  final out = prev ?? <int, List<double?>>{};
+  for (final t in keys) {
+    out[t] = _mergeCellAt(out[t] ?? prev?[t], fresh[t] ?? const [], x);
+  }
+  return out;
+}
+
+Map<int, ({List<double?> max, List<double?> min})> _mergeChannelAt(
+  Map<int, ({List<double?> max, List<double?> min})>? prev,
+  Map<int, ({List<double?> max, List<double?> min})> fresh,
+  int x,
+) {
+  final keys = {...?prev?.keys, ...fresh.keys};
+  final out = prev ?? <int, ({List<double?> max, List<double?> min})>{};
+  for (final t in keys) {
+    final p = out[t] ?? prev?[t];
+    final f = fresh[t];
+    out[t] = (
+      max: _mergeCellAt(p?.max, f?.max ?? const [], x),
+      min: _mergeCellAt(p?.min, f?.min ?? const [], x),
+    );
+  }
+  return out;
+}
+
 /// 会话级 Math/趋势序列冻结仓（按 displayKn）。
 /// 仅 merge 写入；绘制/十字读仓，禁止整表覆盖消点。
 class MathSeriesFreezeStore {
   final Map<int, MacdK0Series> macdByKn = {};
   final Map<int, BollK0Series> bollByKn = {};
+  final Map<int, DonchianK0Series> donchianByKn = {};
   final Map<int, List<double?>> rsiByKn = {};
   final Map<int, KdjK0Series> kdjByKn = {};
   final Map<int, DemarkK0Series> demarkByKn = {};
   final Map<int, Map<int, List<double?>>> meanByKn = {};
   final Map<int, Map<int, ({List<double?> max, List<double?> min})>>
       channelByKn = {};
+  final Map<int, RegressionChannelK0Series> regressByKn = {};
 
   void clear() {
     macdByKn.clear();
     bollByKn.clear();
+    donchianByKn.clear();
     rsiByKn.clear();
     kdjByKn.clear();
     demarkByKn.clear();
     meanByKn.clear();
     channelByKn.clear();
+    regressByKn.clear();
   }
 
-  /// 本步新鲜值并入冻结仓（全层同构）。
+  /// 本步新鲜值并入冻结仓（全层同构）。[onlyX] 只写当根，避免整表拷贝。
   void mergeLevel({
     required int displayKn,
     required MacdK0Series macd,
     required BollK0Series boll,
+    required DonchianK0Series donchian,
     required List<double?> rsi,
     required KdjK0Series kdj,
     required DemarkK0Series demark,
     required Map<int, List<double?>> mean,
     required Map<int, ({List<double?> max, List<double?> min})> channel,
+    required RegressionChannelK0Series regress,
+    int? onlyX,
   }) {
+    if (onlyX != null) {
+      final x = onlyX;
+      final prevMacd = macdByKn[displayKn];
+      macdByKn[displayKn] = MacdK0Series(
+        dif: _mergeCellAt(prevMacd?.dif, macd.dif, x),
+        dea: _mergeCellAt(prevMacd?.dea, macd.dea, x),
+        macd: _mergeCellAt(prevMacd?.macd, macd.macd, x),
+      );
+      final prevBoll = bollByKn[displayKn];
+      bollByKn[displayKn] = BollK0Series(
+        mid: _mergeCellAt(prevBoll?.mid, boll.mid, x),
+        up: _mergeCellAt(prevBoll?.up, boll.up, x),
+        down: _mergeCellAt(prevBoll?.down, boll.down, x),
+      );
+      final prevDon = donchianByKn[displayKn];
+      donchianByKn[displayKn] = DonchianK0Series(
+        up: _mergeCellAt(prevDon?.up, donchian.up, x),
+        mid: _mergeCellAt(prevDon?.mid, donchian.mid, x),
+        down: _mergeCellAt(prevDon?.down, donchian.down, x),
+      );
+      rsiByKn[displayKn] = _mergeCellAt(rsiByKn[displayKn], rsi, x);
+      final prevKdj = kdjByKn[displayKn];
+      kdjByKn[displayKn] = KdjK0Series(
+        k: _mergeCellAt(prevKdj?.k, kdj.k, x),
+        d: _mergeCellAt(prevKdj?.d, kdj.d, x),
+        j: _mergeCellAt(prevKdj?.j, kdj.j, x),
+      );
+      demarkByKn[displayKn] = DemarkK0Series(
+        _mergeDemarkAt(demarkByKn[displayKn]?.marksAt, demark.marksAt, x),
+      );
+      meanByKn[displayKn] =
+          _mergeMeanAt(meanByKn[displayKn], mean, x);
+      channelByKn[displayKn] =
+          _mergeChannelAt(channelByKn[displayKn], channel, x);
+      // 回归通道：一段一换，每层每步整段重算后全量覆写（不按 onlyX 单格合并）。
+      regressByKn[displayKn] = regress;
+      return;
+    }
     macdByKn[displayKn] = freezeMacd(macdByKn[displayKn], macd);
     bollByKn[displayKn] = freezeBoll(bollByKn[displayKn], boll);
+    donchianByKn[displayKn] = freezeDonchian(donchianByKn[displayKn], donchian);
     rsiByKn[displayKn] = freezeNullableSeries(rsiByKn[displayKn], rsi);
     kdjByKn[displayKn] = freezeKdj(kdjByKn[displayKn], kdj);
     demarkByKn[displayKn] = freezeDemark(demarkByKn[displayKn], demark);
     meanByKn[displayKn] = freezeMeanMap(meanByKn[displayKn], mean);
     channelByKn[displayKn] = freezeChannelMap(channelByKn[displayKn], channel);
+    // 回归通道：一层整段全量覆写（见 onlyX 分支说明）。
+    regressByKn[displayKn] = regress;
   }
 
   MacdK0Series? macd(int kn) => macdByKn[kn];
   BollK0Series? boll(int kn) => bollByKn[kn];
+  DonchianK0Series? donchian(int kn) => donchianByKn[kn];
   List<double?>? rsi(int kn) => rsiByKn[kn];
   KdjK0Series? kdj(int kn) => kdjByKn[kn];
   DemarkK0Series? demark(int kn) => demarkByKn[kn];
   Map<int, List<double?>>? mean(int kn) => meanByKn[kn];
   Map<int, ({List<double?> max, List<double?> min})>? channel(int kn) =>
       channelByKn[kn];
+  RegressionChannelK0Series? regress(int kn) => regressByKn[kn];
 }
 
 /// 本步 0..maxDisplayKn 新鲜算完并入冻结仓。
@@ -153,15 +285,24 @@ void mergeMathSeriesForStep({
   required MathIndicatorConfig config,
   required int maxDisplayKn,
   int? asOf,
+  List<BarCrosshairFeature> barFeatures = const [],
+  bool truncationCheck = true,
 }) {
   if (bars.isEmpty || maxDisplayKn < 0) return;
   for (var kn = 0; kn <= maxDisplayKn; kn++) {
+    final samples = collectKnOhlcSamples(
+      displayKn: kn,
+      bars: bars,
+      levels: levels,
+      asOf: asOf,
+    );
     final classic = computeClassicMathForLevel(
       displayKn: kn,
       bars: bars,
       levels: levels,
       config: config,
       asOf: asOf,
+      samples: samples,
     );
     final demark = computeDemarkForLevel(
       displayKn: kn,
@@ -169,6 +310,7 @@ void mergeMathSeriesForStep({
       levels: levels,
       config: config,
       asOf: asOf,
+      samples: samples,
     );
     final mean = computeMeanSeriesForLevel(
       displayKn: kn,
@@ -184,15 +326,38 @@ void mergeMathSeriesForStep({
       periods: config.channelPeriods,
       asOf: asOf,
     );
+    // 回归通道：基准=父层 K{n+1}连线最后一段，端点一动整条通道跟着动（一段一换）。
+    // 每层每步整段重算，全量覆写进冻结仓，使回测可在 asOf 处读到与图上同基准的值。
+    final regress = computeRegressionChannelForLevel(
+      displayKn: kn,
+      bars: bars,
+      levels: levels,
+      barFeatures: barFeatures,
+      liveJudgments: asOf == null || asOf < 0
+          ? const []
+          : collectFractalJudgmentEvents(
+              kn: kn + 1,
+              bars: bars,
+              levels: levels,
+              barFeatures: barFeatures,
+              asOf: asOf,
+              truncationCheck: truncationCheck,
+            ),
+      k: config.regressK,
+      asOf: asOf,
+    );
     store.mergeLevel(
       displayKn: kn,
       macd: classic.macd,
       boll: classic.boll,
+      donchian: classic.donchian,
       rsi: classic.rsi,
       kdj: classic.kdj,
       demark: demark,
       mean: mean,
       channel: channel,
+      regress: regress,
+      onlyX: asOf,
     );
   }
 }

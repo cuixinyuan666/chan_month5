@@ -474,6 +474,14 @@ class MlRuleScore {
         bias += 2;
         signals.add('K$kn 布林带已就绪');
       }
+      final donMid = sub['donchian_mid_$kn'];
+      final donUp = sub['donchian_up_$kn'];
+      final donDn = sub['donchian_down_$kn'];
+      if (donMid is num && donUp is num && donDn is num && donUp > donDn) {
+        hits++;
+        bias += 2;
+        signals.add('K$kn 唐奇安通道已就绪');
+      }
       final slope = sub['line_slope_$kn'];
       if (slope is num) {
         hits++;
@@ -505,7 +513,15 @@ class MlRuleScore {
       }
       if (sub['fx_triple_price_$kn'] != null) {
         hits++;
-        signals.add('K$kn三型价=${sub['fx_triple_price_$kn']}');
+        signals.add('K$kn三极平行价=${sub['fx_triple_price_$kn']}');
+      }
+      if (sub['fx_bottom_snug_price_$kn'] != null) {
+        hits++;
+        signals.add('K$kn底极贴合价=${sub['fx_bottom_snug_price_$kn']}');
+      }
+      if (sub['fx_top_snug_price_$kn'] != null) {
+        hits++;
+        signals.add('K$kn顶极贴合价=${sub['fx_top_snug_price_$kn']}');
       }
       if (sub['mean_text_$kn'] != null) {
         hits++;
@@ -523,7 +539,7 @@ class MlRuleScore {
       score: _r1(score),
       weight: 0.08,
       explain: hits == 0
-          ? '末根无 MACD/RSI/KDJ/布林/斜率/Demark/趋势线等读数。'
+          ? '末根无 MACD/RSI/KDJ/布林/唐奇安/斜率/Demark/趋势线等读数。'
           : 'Math 权重低于结构信号；多指标净向合成。',
       signals: signals.take(5).toList(),
     );

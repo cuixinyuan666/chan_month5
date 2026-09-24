@@ -5,8 +5,11 @@ import '../compute/math_classic_compute.dart';
 import '../compute/math_series_freeze_store.dart';
 import '../compute/trend_line_compute.dart';
 import '../models/bar_feature_lookup.dart';
+import '../models/fractal_judgment_event.dart';
+import '../models/zs_signal_event.dart';
 import '../models/k0_confirm_signal.dart';
 import '../models/kline_bar.dart';
+import '../models/peak_rank_config.dart';
 import '../models/level_models.dart';
 import 'buy_n_var.dart';
 import 'chart_line_store.dart';
@@ -33,8 +36,13 @@ TradeScalar lookupTradeNumeric({
   BarFeatureLookup? features,
   ChipPeakFreezeStore? chipPeaks,
   double bucketStep = 0.1,
+  PeakRankConfig peakRank = PeakRankConfig.defaults,
   List<K0ConfirmSignal> k0Confirms = const [],
+  Map<int, List<FractalJudgmentEvent>> fractalJudgmentByKn = const {},
+  Map<int, List<ZsSignalEvent>> zsJudgmentByKn = const {},
+  Map<int, List<ZsSignalEvent>> zsConfirmByKn = const {},
   int bollN = 20,
+  int donchianN = 20,
 }) {
   if (bars.isEmpty || asOf < 0) return const TradeScalar.unavailable();
 
@@ -45,6 +53,20 @@ TradeScalar lookupTradeNumeric({
 
   final parsed = _parseId(variableId);
   if (parsed == null) return const TradeScalar.unavailable();
+
+  final signEvents = _signEventsOf(
+    parsed: parsed,
+    k0Confirms: k0Confirms,
+    levels: levels,
+    fractalJudgmentByKn: fractalJudgmentByKn,
+    zsJudgmentByKn: zsJudgmentByKn,
+    zsConfirmByKn: zsConfirmByKn,
+  );
+  if (signEvents != null) {
+    final atBar = signEvents.where((e) => e.x == asOf).toList();
+    if (atBar.isEmpty) return const TradeScalar.unavailable();
+    return TradeScalar.num(atBar.last.sign);
+  }
 
   if (parsed.panel == 'RAW') {
     return _lookupRaw(
@@ -76,6 +98,9 @@ TradeScalar lookupTradeNumeric({
     features: features,
     chipPeaks: chipPeaks,
     bucketStep: bucketStep,
+    peakRank: chipPeaks != null && !chipPeaks.isEmpty
+        ? chipPeaks.rankConfig
+        : peakRank,
     k0Confirms: k0Confirms,
   );
   if (extra != null) return extra;
@@ -94,6 +119,71 @@ TradeScalar lookupTradeNumeric({
   final kn = int.tryParse(knTok.substring(1));
   if (kn == null || kn < 0) return null;
   return (panel: parts[0], kn: kn, rest: parts.sublist(2));
+}
+
+/// 收集「判断/确认·方向」SIGN 变量的事件脉冲（x=当根，sign=±1）。
+/// 返回 null 表示该 id 不是 SIGN 变量；空列表表示是 SIGN 但本层无事件。
+List<({int x, double sign})>? _signEventsOf({
+  required ({String panel, int kn, List<String> rest}) parsed,
+  required List<K0ConfirmSignal> k0Confirms,
+  required List<LevelBundle> levels,
+  required Map<int, List<FractalJudgmentEvent>> fractalJudgmentByKn,
+  required Map<int, List<ZsSignalEvent>> zsJudgmentByKn,
+  required Map<int, List<ZsSignalEvent>> zsConfirmByKn,
+}) {
+  if (parsed.panel != 'SUB' ||
+      parsed.rest.length != 2 ||
+      parsed.rest[1] != 'SIGN') {
+    return null;
+  }
+  switch (parsed.rest[0]) {
+    case 'FRACTAL_JUDGMENT':
+      // 顶分型=+1 / 底分型=-1（取 fx，判断历史无 ±1 数值字段）
+      return [
+        for (final e in fractalJudgmentByKn[parsed.kn] ?? const <FractalJudgmentEvent>[])
+          (x: e.x, sign: e.fx == 'TOP' ? 1.0 : -1.0),
+      ];
+    case 'FRACTAL_CONFIRM':
+      // 统一按 fx 归一：顶=+1 / 底=-1（K0ConfirmSignal.value 与 LevelConfirm.value 符号约定相反，不直接用）
+      if (parsed.kn == 0) {
+        return [
+          for (final e in k0Confirms) (x: e.x, sign: e.fx == 'TOP' ? 1.0 : -1.0),
+        ];
+      }
+      return [
+        for (final lv in levels)
+          if (lv.level == parsed.kn)
+            for (final c in lv.confirms)
+              (x: c.x, sign: c.fx == 'TOP' ? 1.0 : -1.0),
+      ];
+    case 'ZS_JUDGMENT':
+    case 'ZS_CONFIRM':
+      // 中枢方向：上个中枢空间趋势 抬高=+1 / 下移=-1（dir>=0 视为抬高，与绘色口径一致）
+      final src = parsed.rest[0] == 'ZS_JUDGMENT' ? zsJudgmentByKn : zsConfirmByKn;
+      return [
+        for (final e in src[parsed.kn] ?? const <ZsSignalEvent>[])
+          (x: e.x, sign: e.dir >= 0 ? 1.0 : -1.0),
+      ];
+    default:
+      return const [];
+  }
+}
+
+/// SIGN 脉冲序列：仅事件当根有 ±1，其余 K0 不可用（不填 0、不沿用上一根）。
+List<EvalClockPoint> _signPulseSeries(
+  List<({int x, double sign})> events,
+  int asOf,
+) {
+  final signAt = <int, double>{};
+  for (final e in events) {
+    if (e.x < 0 || e.x > asOf) continue;
+    signAt[e.x] = e.sign;
+  }
+  final xs = signAt.keys.toList()..sort();
+  return [
+    for (var i = 0; i < xs.length; i++)
+      EvalClockPoint(evalIndex: i, availableAt: xs[i], value: signAt[xs[i]]!),
+  ];
 }
 
 TradeScalar _lookupRaw({
@@ -186,15 +276,14 @@ List<double?>? frozenPlotSeries({
     return store.mean(parsed.kn)?[period];
   }
   if (parsed.panel == 'MAIN' &&
-      parsed.rest.length == 3 &&
-      parsed.rest[0] == 'CHANNEL') {
-    final period = int.tryParse(parsed.rest[1]);
-    if (period == null || period < 1) return null;
-    final pair = store.channel(parsed.kn)?[period];
-    if (pair == null) return null;
-    return switch (parsed.rest[2]) {
-      'MAX' => pair.max,
-      'MIN' => pair.min,
+      parsed.rest.length == 2 &&
+      parsed.rest[0] == 'REGRESS') {
+    final series = store.regress(parsed.kn);
+    if (series == null) return null;
+    return switch (parsed.rest[1]) {
+      'MID' => series.mid,
+      'UP' => series.up,
+      'DOWN' => series.down,
       _ => null,
     };
   }
@@ -202,6 +291,11 @@ List<double?>? frozenPlotSeries({
       parsed.rest.length >= 2 &&
       parsed.rest[0] == 'BOLL') {
     return _bollField(store.boll(parsed.kn), parsed.rest[1]);
+  }
+  if (parsed.panel == 'MAIN' &&
+      parsed.rest.length >= 2 &&
+      parsed.rest[0] == 'DONCHIAN') {
+    return _donchianField(store.donchian(parsed.kn), parsed.rest[1]);
   }
   if (parsed.panel != 'SUB' || parsed.rest.isEmpty) return null;
   switch (parsed.rest[0]) {
@@ -265,14 +359,29 @@ List<EvalClockPoint> readEvalClockSeries({
   BarFeatureLookup? features,
   ChipPeakFreezeStore? chipPeaks,
   double bucketStep = 0.1,
+  PeakRankConfig peakRank = PeakRankConfig.defaults,
   List<K0ConfirmSignal> k0Confirms = const [],
+  Map<int, List<FractalJudgmentEvent>> fractalJudgmentByKn = const {},
+  Map<int, List<ZsSignalEvent>> zsJudgmentByKn = const {},
+  Map<int, List<ZsSignalEvent>> zsConfirmByKn = const {},
   int bollN = 20,
+  int donchianN = 20,
 }) {
   if (bars.isEmpty || asOf < 0) return const [];
   final def = lookupTradeVariable(variableId, maxKn: 32);
   if (def == null || !def.expressionReady) return const [];
   final parsed = _parseId(variableId);
   if (parsed == null) return const [];
+
+  final signEvents = _signEventsOf(
+    parsed: parsed,
+    k0Confirms: k0Confirms,
+    levels: levels,
+    fractalJudgmentByKn: fractalJudgmentByKn,
+    zsJudgmentByKn: zsJudgmentByKn,
+    zsConfirmByKn: zsConfirmByKn,
+  );
+  if (signEvents != null) return _signPulseSeries(signEvents, asOf);
 
   if (parsed.panel == 'RAW') {
     if (parsed.rest.length != 1) return const [];
@@ -316,6 +425,9 @@ List<EvalClockPoint> readEvalClockSeries({
     features: features,
     chipPeaks: chipPeaks,
     bucketStep: bucketStep,
+    peakRank: chipPeaks != null && !chipPeaks.isEmpty
+        ? chipPeaks.rankConfig
+        : peakRank,
     k0Confirms: k0Confirms,
   );
   if (extraPlot != null) {
@@ -334,6 +446,33 @@ List<EvalClockPoint> readEvalClockSeries({
   return _plotEvalSeries(
     kn: parsed.kn,
     evalClock: def.evalClock ?? evalClockForDisplayKn(parsed.kn),
+    plot: plot,
+    asOf: asOf,
+    bars: bars,
+    levels: levels,
+  );
+}
+
+/// 副图 MACD/RSI/KDJ：变量 vs 常数比较时走 K0 铺平格（与十字线/副图持值同口径）。
+/// knSample 稀疏样本只用于穿越/事件，不等于图上每根 K0 看见的数。
+List<EvalClockPoint> readSubIndicatorPlotGridSeries({
+  required String variableId,
+  required int asOf,
+  required List<KlineBar> bars,
+  List<LevelBundle> levels = const [],
+  MathSeriesFreezeStore? mathFreeze,
+}) {
+  if (bars.isEmpty || asOf < 0 || mathFreeze == null) return const [];
+  final parsed = _parseId(variableId);
+  if (parsed == null || parsed.panel != 'SUB') return const [];
+  if (parsed.rest.isEmpty) return const [];
+  final kind = parsed.rest[0];
+  if (kind != 'MACD' && kind != 'RSI' && kind != 'KDJ') return const [];
+  final plot = frozenPlotSeries(parsed: parsed, store: mathFreeze);
+  if (plot == null) return const [];
+  return _plotEvalSeries(
+    kn: parsed.kn,
+    evalClock: TradeEvalClock.k0Bar,
     plot: plot,
     asOf: asOf,
     bars: bars,
@@ -441,6 +580,20 @@ List<double?>? _bollField(BollK0Series? b, String band) {
       return b.up;
     case 'DOWN':
       return b.down;
+    default:
+      return null;
+  }
+}
+
+List<double?>? _donchianField(DonchianK0Series? d, String band) {
+  if (d == null) return null;
+  switch (band) {
+    case 'UP':
+      return d.up;
+    case 'MID':
+      return d.mid;
+    case 'DOWN':
+      return d.down;
     default:
       return null;
   }
@@ -628,7 +781,7 @@ double? _featureNum(BarFeatureLookup? features, int asOf, String key) {
 TradeScalar _optNum(double? v) =>
     v == null ? const TradeScalar.unavailable() : TradeScalar.num(v);
 
-/// 斜率/比例/节奏/量笔/三型四型趋势：读会话历史或十字已冻格子。
+/// 斜率/比例/节奏/量笔/三极平行/顶底对弦/对弦平移：读会话历史或十字已冻格子。
 TradeScalar? _lookupExtendedNumeric({
   required ({String panel, int kn, List<String> rest}) parsed,
   required int asOf,
@@ -638,6 +791,7 @@ TradeScalar? _lookupExtendedNumeric({
   required BarFeatureLookup? features,
   required ChipPeakFreezeStore? chipPeaks,
   required double bucketStep,
+  required PeakRankConfig peakRank,
   required List<K0ConfirmSignal> k0Confirms,
 }) {
   final plot = _extendedPlotSeries(
@@ -649,6 +803,7 @@ TradeScalar? _lookupExtendedNumeric({
     features: features,
     chipPeaks: chipPeaks,
     bucketStep: bucketStep,
+    peakRank: peakRank,
     k0Confirms: k0Confirms,
   );
   if (plot == null) return null;
@@ -665,6 +820,7 @@ List<double?>? _extendedPlotSeries({
   required BarFeatureLookup? features,
   required ChipPeakFreezeStore? chipPeaks,
   required double bucketStep,
+  required PeakRankConfig peakRank,
   required List<K0ConfirmSignal> k0Confirms,
 }) {
   if (bars.isEmpty) return null;
@@ -678,6 +834,7 @@ List<double?>? _extendedPlotSeries({
     n: n,
     chipPeaks: chipPeaks,
     bucketStep: bucketStep,
+    peakRank: peakRank,
   );
   if (peakPlot != null) return peakPlot;
 
@@ -753,26 +910,41 @@ List<double?>? _chipPeakPlotSeries({
   required int n,
   required ChipPeakFreezeStore? chipPeaks,
   required double bucketStep,
+  required PeakRankConfig peakRank,
 }) {
   if (parsed.panel != 'SUB' || parsed.kn != 0) return null;
   if (parsed.rest.length < 2 || parsed.rest[1] != 'PEAK') return null;
-  final head = parsed.rest[0];
-  if (head != 'CHIP' && head != 'TICK') return null;
-  final kind = head == 'TICK' ? 'tick' : 'chip';
-  final suffix = parsed.rest.length < 3
-      ? ''
-      : chipPeakSuffixOfToken(parsed.rest[2]);
+  final varId = 'SUB.K${parsed.kn}.${parsed.rest.join('.')}';
+  final peak = parseChipPeakTradeVarId(varId);
+  if (peak == null) return null;
+  final kind = peak.kind;
+  final suffix = peak.suffix;
+  final field = peak.field;
+  final rank = chipPeaks != null && !chipPeaks.isEmpty
+      ? chipPeaks.rankConfig
+      : peakRank;
+  final scheme = rank.schemeId;
   final out = List<double?>.filled(n, null);
   final useStore = chipPeaks != null && !chipPeaks.isEmpty;
   for (var x = 0; x < n && x <= asOf; x++) {
     out[x] = useStore
-        ? chipPeaks.at(kind: kind, suffix: suffix, asOf: x)
-        : liveProfilePeakPrice(
+        ? peakScalarFromStore(
+            store: chipPeaks,
             kind: kind,
             suffix: suffix,
+            field: field,
+            asOf: x,
+            bars: bars,
+            scheme: scheme,
+          )
+        : liveProfilePeakScalar(
+            kind: kind,
+            suffix: suffix,
+            field: field,
             asOf: x,
             bars: bars,
             bucketStep: bucketStep,
+            rank: rank,
           );
   }
   return out;

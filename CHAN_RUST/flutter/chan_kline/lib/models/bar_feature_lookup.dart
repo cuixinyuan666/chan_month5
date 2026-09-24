@@ -21,6 +21,7 @@ import '../compute/kn_volume_series_compute.dart';
 import '../compute/adjacent_ratio_compute.dart';
 import '../compute/line_slope_compute.dart';
 import '../compute/fx_extend_line_compute.dart';
+import '../compute/fx_pole_snug_compute.dart';
 import '../compute/trend_line_compute.dart';
 import '../compute/trend_model_compute.dart';
 import '../compute/math_classic_compute.dart';
@@ -754,12 +755,12 @@ class BarFeatureLookup {
       }
     }
 
-    // Kn三型平移 / 四型对线 / 趋势线 / 数学 / 背驰：按柱 asOf 取近邻窗读数
+    // K{n}三极平行 / 顶底对弦 / 趋势线 / 数学 / 背驰：按柱 asOf 取近邻窗读数
     if (bars.isNotEmpty &&
         (k0Confirms.isNotEmpty ||
             levels.isNotEmpty ||
             zsK0Frames.isNotEmpty)) {
-      // 方案B：三型/四型属连线族，dkn==structure.level，上界=structureMax（勿再用 level-1）
+      // 方案B：三极平行/顶底对弦属连线族，dkn==structure.level，上界=structureMax（勿再用 level-1）
       var maxLevel = 0;
       for (final lv in levels) {
         if (lv.level > maxLevel) maxLevel = lv.level;
@@ -792,6 +793,12 @@ class BarFeatureLookup {
           if (tPx != null) sub['fx_triple_price_$dkn'] = tPx;
           if (q.top != null) sub['fx_quad_top_price_$dkn'] = q.top;
           if (q.bottom != null) sub['fx_quad_bottom_price_$dkn'] = q.bottom;
+          final cPx = chordTranslatedPriceReadout(
+            calcAllChordTranslatedGroups(poles),
+            atX: b.idx,
+            focusX: b.idx,
+          );
+          if (cPx != null) sub['fx_chord_translated_price_$dkn'] = cPx;
         }
       }
       // 趋势线：父层=displayKn+1（structure），dkn 最大 structureMax-1
@@ -816,6 +823,43 @@ class BarFeatureLookup {
           }
           if (tl.resistance != null) {
             sub['trend_resist_price_$dkn'] = tl.resistance;
+          }
+        }
+      }
+      // 底/顶极贴合线：父层=displayKn+1（structure），dkn 最大 structureMax-1
+      for (var dkn = 0; dkn <= trendMaxD; dkn++) {
+        for (final b in bars) {
+          if (asOf != null && b.idx > asOf) continue;
+          final bottomSnug = bottomSnugPriceReadout(
+            calcBottomSnugGroupsForLevel(
+              displayKn: dkn,
+              bars: bars,
+              k0Confirms: k0Confirms,
+              levels: levels,
+              asOf: b.idx,
+            ),
+            atX: b.idx,
+            focusX: b.idx,
+          );
+          final topSnug = topSnugPriceReadout(
+            calcTopSnugGroupsForLevel(
+              displayKn: dkn,
+              bars: bars,
+              k0Confirms: k0Confirms,
+              levels: levels,
+              asOf: b.idx,
+            ),
+            atX: b.idx,
+            focusX: b.idx,
+          );
+          final row = byIdx.putIfAbsent(b.idx, () => {'idx': b.idx});
+          final sub = row.putIfAbsent('sub', () => <String, dynamic>{})
+              as Map<String, dynamic>;
+          if (bottomSnug != null) {
+            sub['fx_bottom_snug_price_$dkn'] = bottomSnug;
+          }
+          if (topSnug != null) {
+            sub['fx_top_snug_price_$dkn'] = topSnug;
           }
         }
       }
@@ -880,15 +924,18 @@ class BarFeatureLookup {
       for (var dkn = 0; dkn <= maxLevel; dkn++) {
         final classicFrozenMacd = mathFreezeStore?.macd(dkn);
         final classicFrozenBoll = mathFreezeStore?.boll(dkn);
+        final classicFrozenDon = mathFreezeStore?.donchian(dkn);
         final classicFrozenRsi = mathFreezeStore?.rsi(dkn);
         final classicFrozenKdj = mathFreezeStore?.kdj(dkn);
         final classic = (classicFrozenMacd != null &&
                 classicFrozenBoll != null &&
+                classicFrozenDon != null &&
                 classicFrozenRsi != null &&
                 classicFrozenKdj != null)
             ? (
                 macd: classicFrozenMacd,
                 boll: classicFrozenBoll,
+                donchian: classicFrozenDon,
                 rsi: classicFrozenRsi,
                 kdj: classicFrozenKdj,
               )
@@ -907,6 +954,23 @@ class BarFeatureLookup {
               config: mathIndicatorConfig,
               asOf: asOf,
             );
+        // 回归通道不读冻结仓：基准=父层连线最后一段，随父层端点实时重算
+        final regress = computeRegressionChannelForLevel(
+          displayKn: dkn,
+          bars: bars,
+          levels: levels,
+          barFeatures: barFeatures,
+          liveJudgments: collectFractalJudgmentEvents(
+            kn: dkn + 1,
+            bars: bars,
+            levels: levels,
+            barFeatures: barFeatures,
+            asOf: asOf,
+            truncationCheck: truncationCheck,
+          ),
+          k: mathIndicatorConfig.regressK,
+          asOf: asOf,
+        );
         for (final b in bars) {
           if (asOf != null && b.idx > asOf) continue;
           final i = b.idx;
@@ -928,6 +992,22 @@ class BarFeatureLookup {
             if (mid != null) sub['boll_mid_$dkn'] = mid;
             if (up != null) sub['boll_up_$dkn'] = up;
             if (down != null) sub['boll_down_$dkn'] = down;
+          }
+          if (i >= 0 && i < classic.donchian.mid.length) {
+            final mid = classic.donchian.mid[i];
+            final up = classic.donchian.up[i];
+            final down = classic.donchian.down[i];
+            if (mid != null) sub['donchian_mid_$dkn'] = mid;
+            if (up != null) sub['donchian_up_$dkn'] = up;
+            if (down != null) sub['donchian_down_$dkn'] = down;
+          }
+          if (i >= 0 && i < regress.mid.length) {
+            final mid = regress.mid[i];
+            final up = regress.up[i];
+            final down = regress.down[i];
+            if (mid != null) sub['regress_mid_$dkn'] = mid;
+            if (up != null) sub['regress_up_$dkn'] = up;
+            if (down != null) sub['regress_down_$dkn'] = down;
           }
           if (i >= 0 && i < classic.rsi.length) {
             final rsi = classic.rsi[i];
@@ -1849,10 +1929,10 @@ class BarFeatureLookup {
       CrosshairTooltipRow.boxNum(
           slope is num ? slope.toStringAsFixed(4) : 0),
     ));
-    // 三型平移 / 四型对线：延长线落到本根 K0 的价格
+    // 三极平行 / 顶底对弦 / 对弦平移线：延长线落到本根 K0 的价格
     final triple = sub?['fx_triple_price_$displayKn'];
     otherMath.add(kv(
-      'K$displayKn三型平移线',
+      'K$displayKn三极平行线',
       CrosshairTooltipRow.boxNum(
           triple is num ? triple.toStringAsFixed(2) : 0),
     ));
@@ -1864,13 +1944,19 @@ class BarFeatureLookup {
         if (qBot is num) '底${qBot.toStringAsFixed(2)}',
       ];
       otherMath.add(kv(
-        'K$displayKn四型对线',
+        'K$displayKn顶底对弦线',
         CrosshairTooltipRow.boxNum(parts.join(' ')),
       ));
     } else {
       otherMath.add(
-          kv('K$displayKn四型对线', CrosshairTooltipRow.boxNum(0)));
+          kv('K$displayKn顶底对弦线', CrosshairTooltipRow.boxNum(0)));
     }
+    final chordTranslated = sub?['fx_chord_translated_price_$displayKn'];
+    otherMath.add(kv(
+      'K$displayKn对弦平移线',
+      CrosshairTooltipRow.boxNum(
+          chordTranslated is num ? chordTranslated.toStringAsFixed(2) : 0),
+    ));
     // 趋势线：支撑/压力延长线落到本根 K0 的价格
     final tSup = sub?['trend_support_price_$displayKn'];
     final tRes = sub?['trend_resist_price_$displayKn'];
@@ -1887,6 +1973,18 @@ class BarFeatureLookup {
       otherMath.add(
           kv('K$displayKn趋势线', CrosshairTooltipRow.boxNum(0)));
     }
+    final bottomSnug = sub?['fx_bottom_snug_price_$displayKn'];
+    otherMath.add(kv(
+      'K$displayKn底极贴合线',
+      CrosshairTooltipRow.boxNum(
+          bottomSnug is num ? bottomSnug.toStringAsFixed(2) : 0),
+    ));
+    final topSnug = sub?['fx_top_snug_price_$displayKn'];
+    otherMath.add(kv(
+      'K$displayKn顶极贴合线',
+      CrosshairTooltipRow.boxNum(
+          topSnug is num ? topSnug.toStringAsFixed(2) : 0),
+    ));
     final meanText = sub?['mean_text_$displayKn'];
     otherMath.add(kv(
       'K$displayKn均线',
@@ -1923,6 +2021,34 @@ class BarFeatureLookup {
       otherMath.add(kv('K$displayKn布林', CrosshairTooltipRow.boxNum(parts.join('/'))));
     } else {
       otherMath.add(kv('K$displayKn布林', CrosshairTooltipRow.boxNum(0)));
+    }
+    final dMid = sub?['donchian_mid_$displayKn'];
+    final dUp = sub?['donchian_up_$displayKn'];
+    final dDn = sub?['donchian_down_$displayKn'];
+    if (dMid is num || dUp is num || dDn is num) {
+      final parts = <String>[
+        if (dUp is num) 'U${dUp.toStringAsFixed(2)}',
+        if (dMid is num) 'M${dMid.toStringAsFixed(2)}',
+        if (dDn is num) 'D${dDn.toStringAsFixed(2)}',
+      ];
+      otherMath.add(
+          kv('K$displayKn唐奇安', CrosshairTooltipRow.boxNum(parts.join('/'))));
+    } else {
+      otherMath.add(kv('K$displayKn唐奇安', CrosshairTooltipRow.boxNum(0)));
+    }
+    final rMid = sub?['regress_mid_$displayKn'];
+    final rUp = sub?['regress_up_$displayKn'];
+    final rDn = sub?['regress_down_$displayKn'];
+    if (rMid is num || rUp is num || rDn is num) {
+      final parts = <String>[
+        if (rMid is num) 'M${rMid.toStringAsFixed(2)}',
+        if (rUp is num) 'U${rUp.toStringAsFixed(2)}',
+        if (rDn is num) 'D${rDn.toStringAsFixed(2)}',
+      ];
+      otherMath.add(
+          kv('K$displayKn回归通道', CrosshairTooltipRow.boxNum(parts.join('/'))));
+    } else {
+      otherMath.add(kv('K$displayKn回归通道', CrosshairTooltipRow.boxNum(0)));
     }
     final rsi = sub?['rsi_$displayKn'];
     otherMath.add(kv(

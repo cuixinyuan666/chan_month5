@@ -10,14 +10,7 @@ OpenConfig.yaml
 gotify_push.py
 cos_config.yaml
 
-# 本地运行缓存
-a_replay_cache/a_perf_engine_cache/
-a_replay_cache/kline_sessions/
-a_replay_record/*/*.pkl
-a_replay_record/*/*.meta.json
-
 # Rust 编译产物
-a_rust_core/target/
 CHAN_RUST/rust/target/
 CHAN_RUST/rust/target_alt/
 
@@ -42,3 +35,22 @@ a_Data/ml_exports/
 *.tmp
 *.temp
 test_*.py
+
+# 发布打包产物
+dist/
+
+# 通达信协议分笔缓存（运行时按日生成，勿提交）
+a_Data/.tdx_protocol_cache/
+CHAN_RUST/a_Data/.tdx_protocol_cache/
+
+# Kilo 本地配置/缓存
+.kilo/
+.kilocode/
+
+# Flutter 本机生成物（含本机 flutter/sdk/pub-cache 路径，因人而异；flutter 会自动重建）
+# 2026-09-25 已 git rm --cached 取消跟踪，勿再提交
+CHAN_RUST/flutter/chan_kline/.flutter-plugins-dependencies
+CHAN_RUST/flutter/chan_kline/android/local.properties
+CHAN_RUST/flutter/chan_kline/linux/flutter/ephemeral/.plugin_symlinks/
+CHAN_RUST/flutter/chan_kline/windows/flutter/ephemeral/.plugin_symlinks/
+CHAN_RUST/flutter/chan_kline/windows/flutter/ephemeral/generated_config.cmake

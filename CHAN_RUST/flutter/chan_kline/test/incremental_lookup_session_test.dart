@@ -16,6 +16,8 @@ import 'package:chan_kline/models/sell2_frame.dart';
 import 'package:chan_kline/models/sell_n_frame.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'offline_tick_files.dart';
+
 List<KlineBar> _load002003() {
   final bridge = ChanBridge.instance;
   return bridge.loadKlines(
@@ -99,6 +101,10 @@ void _expectRowsEq(
 }
 
 void main() {
+  if (!hasOffline002003TickFiles()) {
+    test('002003 Incremental Lookup', () {}, skip: kNoOffline002003Skip);
+    return;
+  }
   late List<KlineBar> bars;
 
   setUpAll(() {
@@ -192,16 +198,51 @@ void main() {
     }
   });
 
-  test('reset+replay 后 Incremental == Full', () {
+  test('步退后 Incremental 不 Full 种仓，asOfView == Full', () {
     final sess = ChanPipelineSession.create(preferDelta: true);
     addTearDown(sess.dispose);
     sess.syncTo(bars.sublist(0, 29));
     sess.cache.syncLookup(bars: bars.sublist(0, 29), subIndicators: _subs(sess.cachedBundle));
-    final replayed = sess.syncTo(bars.sublist(0, 28));
-    sess.cache.syncLookup(bars: bars.sublist(0, 28), subIndicators: _subs(replayed));
-    final full = _full(bars.sublist(0, 28), replayed);
-    _expectRowsEq(sess.cache.lookup.at(27), full.at(27), 'replay current');
-    _expectRowsEq(sess.cache.lookup.at(5), full.at(5), 'replay frozen');
+    expect(sess.cache.lookupEngine.step, 28);
+    final shortened = sess.syncTo(bars.sublist(0, 28));
+    sess.cache.syncLookup(bars: bars.sublist(0, 28), subIndicators: _subs(shortened));
+    expect(sess.cache.lookupEngine.step, 28);
+    final inc = sess.cache.lookupEngine.asOfView(
+      asOf: 27,
+      asOfBundle: shortened,
+      prefixBars: bars.sublist(0, 28),
+    );
+    final full = _full(bars.sublist(0, 28), shortened, asOf: 27);
+    _expectRowsEq(inc.at(27), full.at(27), 'asof_keep current');
+    _expectRowsEq(inc.at(5), full.at(5), 'asof_keep frozen');
+  });
+
+  test('逐格步进：增量回归通道槽位 == Full（父层换段后旧段清空）', () {
+    final sess = ChanPipelineSession.create(preferDelta: true);
+    addTearDown(sess.dispose);
+    for (var step = 0; step <= 28; step++) {
+      final visible = bars.sublist(0, step + 1);
+      final bundle = sess.syncTo(visible);
+      sess.cache.syncLookup(
+        bars: visible,
+        subIndicators: _subs(bundle),
+      );
+      final inc = sess.cache.lookup;
+      final full = _full(visible, bundle);
+      for (var x = 0; x <= step; x++) {
+        for (var dkn = 0; dkn <= 2; dkn++) {
+          for (final key in const [
+            'regress_mid',
+            'regress_up',
+            'regress_down',
+          ]) {
+            final k = '${key}_$dkn';
+            expect(inc.at(x)?['sub']?[k], full.at(x)?['sub']?[k],
+                reason: 'step=$step x=$x $k');
+          }
+        }
+      }
+    }
   });
 
   test('asOf 24–28 不跑全表 build：冻结格 + 结构覆盖 == Full', () {
