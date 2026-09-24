@@ -3508,3 +3508,115 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **演示 / 验收**：`python sync_agents_skills.py --dry-run` 预览 108 项、`--check` 零漂移；各 agents skills 目录已列确认。
 - **注意事项**：Trae/Cline/Continue 因非 SKILL.md 未纳入（强行放 SKILL.md 它们读不懂）；以后任一智能体增改 skill，重跑 `sync-agents-skills` 即全网同步。本任务仅改各智能体全局 skills 目录（在 git 仓库外），故只把记录写入 task-log 并 commit，技能文件不入库。
 - **注意事项**：ec803 在云端新增 `.cursor/skills/obsidian-task-recorder/`（与本地 `.workbuddy/skills/` 副本并存）；且新增「K0筹码峰」主图指标（画 -1/+1 峰价折线）——用户随后的「筹码峰线型 +1虚线/-1实线」需求很可能针对该指标，grill 时需先确认目标。
+
+---
+
+### 2026-09-24 12:34 — 删除设置中独立的 K{n}回归通道 入口，整合进「数学指标参数」
+
+- **执行者**：WorkBuddy（🐝）
+- **任务类型**：重构 / 清理（设置 UI 整合，非核心）
+- **上下文**：用户问「设置里的 K{n}回归通道 是否逻辑已不存在？不存在就删按钮」。先核查：回归通道逻辑其实全在——计算 `computeRegressionChannelForLevel`、主图绘制 `_drawRegressionChannel`、冻结仓 `regressByKn`、回测变量 `MAIN.Kn.REGRESS.MID/UP/DOWN`、十字读数 `regress_mid/up/down`，故不满足「不存在才删」。用户明确预期=把该独立入口「集成到数学指标参数」。
+- **关键操作**：
+  1. 删设置面板独立的 `ListTile('K{n}回归通道')`（main.dart 原 2719-2735）及其过期副标题「（只绘制，暂未接入回测/ML）」——`regressK` 编辑本就在「数学指标参数」对话框（回归通道 k 输入框）里，入口重复。
+  2. 把回归通道详细说明折叠进「数学指标参数」的「?」说明弹窗 `_showMathIndicatorHelp`，并更正过期措辞：明确它已接入冻结仓 / 回测 / 十字读数（不再是「暂未接入回测/ML」）。
+  3. 删除因此孤立的 `_showRegressionChannelHelp` 方法（main.dart 原 4077-4126）。
+  4. 顺手修两处过期注释：main.dart 原 165「滑窗回归；只绘制，暂未接入回测/ML」→「父层连线绑定；已接入冻结仓/回测 MAIN.Kn.REGRESS.* / 十字读数」；设置副标题同措辞随之消失。
+- **结果**：设置里不再有重复的独立回归通道入口；回归通道参数（k）仍由「数学指标参数」统一编辑、说明并入同一「?」弹窗；回归通道计算 / 绘制 / 冻结 / 回测 / ML 一行未动，无功能退化。残留 grep 仅 `chart_view_compute.dart:279` 一处合法 doc 注释（指回归通道特性本身），保留。`dart format --output=none` 通过（语法有效；沙箱 analyzer 管道耗尽，需本地 `flutter analyze --no-pub` 终验）。
+- **注意事项**：属设置 UI 清理，未触碰 AGENTS.md「确认执行」门禁（没改回归通道内核）。回归通道功能本身保留且完整。改动未提交，按 auto-commit-obsidian 子任务流待单独 commit+push+record。
+
+
+---
+
+
+
+### 2026-09-24 12:47 — 设置内所有子对话框（含参数/确认弹窗）字符串可复制
+
+
+
+- **执行者**：WorkBuddy（🐝）
+
+- **任务类型**：增强 / 设置 UI 可访问性（非核心）
+
+- **上下文**：用户要求把「设置元素字符串可复制」强化到设置内所有子UI甚至子子UI的所有字符串都可复制。核查现状：设置面板 `_buildPanelBody` 已用 `SelectionArea` 包裹（main.dart ~2428），但由设置按钮打开的对话框（`showDialog`→`AlertDialog`）未包裹，故说明弹窗/参数对话框/确认对话框内文字不可选复制——这是缺口。
+
+- **关键操作**：
+
+  1. 用括号配平脚本把 main.dart 里 12 个「设置簇」对话框的 `builder: (ctx) => AlertDialog(` 改为 `builder: (ctx) => SelectionArea(child: AlertDialog(`，并在 `showDialog` 闭合处自动补一个 `)` 配平：各说明弹窗 `_showMathIndicatorHelp`/`_showChipHelp`/`_showPeakRankModeHelp`/`_showBsVerdictOverlayHelp`/`_showBuildingDashHelp`/`_showTestOhlcHelp`/`_showPeriodHelp`/`_showTruncationHelp`/`_showMlHelp`/`_showBacktestHelp`、参数对话框 `_editMathIndicatorParams`（子子UI，由说明弹窗「编辑参数」打开）、确认对话框 `_askChipTickContinue`（`_promptTickQuality` 委托它，一并覆盖）。
+
+  2. 同步更新设置面板注释（~2426），说明子对话框同样被 SelectionArea 包裹，按钮单击/输入框交互不受影响。
+
+  3. 临时脚本用后即删。
+
+- **结果**：设置内所有层级（面板 → 子对话框 → 子子UI 参数对话框）文本均可鼠标拖选 + Ctrl+C 复制；`dart format --output=none` 通过，12 处全部配平无语法错误。
+
+- **注意事项**：纯设置 UI 可访问性增强，未触 AGENTS.md「确认执行」门禁。沙箱 analyzer 管道耗尽，需本地 `flutter analyze --no-pub` 终验；`_editMathIndicatorParams` 内含多个 TextField，SelectionArea 包裹后输入不受影响（TextField 自管选区），但本沙箱无法目视验收，建议本地点开「数学指标参数」对话框确认可正常输入与复制。改动未提交，按 auto-commit-obsidian 子任务流待单独 commit+push+record。
+
+### 2026-09-24 12:58 — 设置4按钮合1：复制排查信息（整合去重精简）
+
+- **执行者**：Cursor（WorkBuddy 驱动）
+- **任务类型**：设置 UI 整合 / 清理
+- **上下文**：设置中原「一键复制历史记录 / 查看历史记录 / 复制页面快照 / 复制调试信息」4 个按钮信息重叠——页面快照已内嵌最近10条历史（与全量复制重复），且快照含约60行静态“命名与口径”文档每次复制都重复。
+- **关键操作**：
+  1. 设里4按钮 → 1个「复制排查信息」按钮，点开弹「排查快照」对话框（可滚动 SelectableText + 底部「复制」；「完整历史」次级入口保留全量浏览/清空，满足常驻约束）。
+  2. `app_debug_snapshot.dart`：删除约64行静态“命名与口径”文档（改1行口径版本号）+ 删除内嵌“历史记录最近10条”（历史改由整合器统一输出），并移除多余 `msg_history` import。
+  3. `main.dart`：删 `_copyHistoryRecords`/`_copyDebugSnapshot`/`_copyAuditProbeDebug` 3个孤立方法，新增 `_buildConsolidatedProbeText`（页面状态 + 最近历史20条 + 验收探针段落）+ `_showConsolidatedProbeDialog`；验收探针保留为段落（满足代码中“常驻勿删”约束）。
+  4. 同步修正过期 doc/文案：`app_debug_snapshot`/`audit_probe_snapshot`/`msg_history` 中“复制调试信息”字样改为“复制排查信息”。
+- **结果**：4→1 按钮；整合输出一次带走页面状态+最近历史+验收探针，去掉重复静态文档与历史两处重复；`dart format --output=none` 通过（4文件）。
+- **注意事项**：语义 analyzer 沙箱管道耗尽，本地请 `flutter analyze --no-pub` 终验；改动未提交。
+### 2026-09-24 13:03 — 确认删除「手动打开最新任务演示 / 任务演示列表·前后对比」两按钮 + 清理残留注释
+
+- **执行者**：Cursor / WorkBuddy
+- **任务类型**：设置 UI 核查 + 残留注释清理（非核心）
+- **上下文**：用户要求删除设置里「手动打开最新任务演示」「任务演示列表/前后对比」两个按钮。经核查，这两按钮在上一轮「删除开发演示阶段与任务演示子系统」任务（main.dart ~2553–2558、~2896–2939）中已删除；task_demo/ 目录与全部 _taskDemo/_devDemo 引用均不存在；设置面板当前仅剩 刷新股票列表/复制排查信息/机器学习 等，无演示按钮。用户确认走「确认已删 + 清残留注释」。
+- **关键操作**：
+  1. 直接核查 main.dart 设置区（2760–2875）并全 lib grep（任务演示/演示列表/前后对比/手动打开/最新任务/_taskDemo/TaskDemo/task_demo）→ 0 个按钮级命中，确认按钮已不存在；
+  2. 清理 msg_history.dart:412 过时 doc 注释「同页前后对比（常驻）」→ 改为准确描述「可演示验收（a_Data/test/demos 的 manifest + before/after 文件）（常驻）」；
+  3. 历史日志原文 msg_history.dart:1385「不自动弹任务演示」属永久记录，保留不动；
+  4. 附注：main.dart:628「自动播放 N/M」为通用步进走完进度文字，非 task_demo 自动播放，未动。
+- **结果**：两按钮确认已删（无代码改动需求）；仅修正 1 处过时 doc 注释；dart format 通过（沙箱 analyzer 不可用）。
+- **注意事项**：本任务本质为「核查 + 清残留」，非新增删除；工作树中此前数批未提交代码（删演示子系统/筹码峰线型/回归通道整合/子UI可复制/4按钮合1）仍待 auto-commit-obsidian 分子任务提交。
+### 2026-09-24 13:10 — 删除「刷新股票列表」按钮 + 点击股票下拉框自动刷新
+
+- **执行者**：Cursor / WorkBuddy
+- **任务类型**：设置 UI / UX 清理（非核心）
+- **上下文**：用户要求删设置里「刷新股票列表」按钮，改为「点击股票下拉框时自动执行刷新股票列表」。
+- **关键操作**：
+  1. 删 `_buildPanelAdvancedSection` 的 `SettingsOutlinedButton('刷新股票列表')`（原 onPressed 调 `_bootstrap`）；
+  2. 新增轻量 `_refreshStockList()`：仅 `_bridge.listStockCodes(dataRoot)` 重新列举目录，不改当前选择、不重载 K 线；若 `_selectedCode` 仍在列表则保留，否则回落 `_preferredCode`；
+  3. 桌面 `DropdownButtonFormField` 股票下拉加 `onTap: _refreshStockList`；
+  4. 移动端 `_openAndroidStockPicker` 开头调 `_refreshStockList`；
+  5. 更新 3445 snackbar 文案「刷新股票列表」→「重新打开股票下拉框」（避免指向已删按钮）。
+- **结果**：按钮已删；点开股票下拉框（桌面/移动）即自动刷新目录；`dart format` 通过。`_bootstrap` 仍被 initState 使用，未成孤儿。
+- **注意事项**：沙箱 analyzer 不可用，请本地 `flutter analyze --no-pub` 终验；改动**未提交**。
+
+### 2026-09-24 13:12 — 设置「数学指标参数」仅保留按钮，删除参数细节副标题
+
+- **执行者**：Cursor / WorkBuddy
+- **任务类型**：设置 UI 清理（非核心）
+- **上下文**：用户要求设置里「数学指标参数」只保留按钮，删除下方的参数细节文字。
+- **关键操作**：删 `ListTile('数学指标参数')` 的 `subtitle`（原显示 均线/通道/MACD/BOLL/回归通道k/RSI/KDJ/Demark/背驰率/桶宽 一长串）；保留 `title` + 「?」help（`_showMathIndicatorHelp`）+ `onTap`（`_editMathIndicatorParams`）；参数细节改由「?」说明弹窗与编辑对话框查看。
+- **结果**：该面板条目仅剩按钮 + 说明入口，更紧凑；`dart format` 通过。
+- **注意事项**：未触「确认执行」门禁（纯设置 UI）；改动**未提交**。
+### 2026-09-24 14:45 — 完成「K线筹码峰·纯量级」主图指标 + 设置 UI 收尾 + 全包校验
+
+- **执行者**：WorkBuddy（Agent 模式）
+- **任务类型**：功能开发 + 设置 UI + 验证
+- **上下文**：用户「确认」后，在筹码量级序基础上新增「Kn纯量筹码峰」逻辑（不按 K 的 OHLC 区间，仅按峰位筹码量全局降序取前 N 画线），并删设置中「峰编号模式量级序」入口，使空间序/量级序/纯量级三方案共存于主图指标。前期 Task 10–16 已完成模型/绘制/ML 目录层，本轮收尾 Task 17（设置 UI）+ Task 18（校验测试）。
+- **关键操作**：
+  1. main.dart：删孤儿方法 `_showPeakRankModeHelp`（仅定义无调用，含 spatial/volume SegmentedButton）；三方案 ingest 辅助 `_ingestAllChipPeakSchemes` 已落地并三处替换调用。
+  2. main.dart `_editMathIndicatorParams` 弹窗新增「筹码峰数量 N（纯量级取前 N，1..12）」TextField 与「峰线型」Dropdown（solid/dashed/bySign），保存时写 `_chipConfig.copyWith(chipPeakPureRank:, peakLineMode:)`；改 N 会改变 `pure|<N>` schemeId → `_updateChipConfig` 的 rankChanged 自动清仓重冻，改线型仅渲染无需重算。
+  3. 删 main.dart 冗余导入 `models/peak_rank_config.dart`（删孤儿方法后已无人引用）。
+  4. 校验期修复 4 处问题：(a) `profile_peak_classify.dart` 纯分支在 `row` 局部函数声明前引用 → 上移 `row` 至 `cmpVolume` 之后；(b) `catalog_lookup.dart` 调 `liveProfilePeakScalar(field:)` 但该函数重构后丢 `field` 参数 → 补回并透传 `peakScalarAt`；(c) `test/chip_peak_var_test.dart` 的 `ingestClassified` 缺必填 `scheme` → 补 `PeakRankConfig.defaults.schemeId`；(d) 新增纯量级单元测试（验证忽略 OHLC、全局按量取前 N、按价格升序）。
+- **结果**：`flutter analyze --no-pub` 全包 **0 个 error**；`profile_peak_classify_test` 2/2、`chip_peak_var_test` 4/4 通过（清 proxy + no_proxy=* 后跑 `flutter test`）。三方案（spatial/volume/pure）按 schemeId 分区冻结仓，互不覆盖。
+- **注意事项**：`signal_data_catalog_test` 中 BOLL 用例（MAIN.K0.BOLL.DOWN 期望 2.0 实得 null）失败，但走 `MathSeriesFreezeStore`/`mergeMathSeriesForStep` 路径，与本次筹码峰改动无关，属既有独立问题，未在本任务范围处理。全部改动**未提交**（用户计划用 auto-commit-obsidian 分次提交）。
+### 2026-09-24 16:10 — 累积改动综合提交（删演示子系统 + UI整合 + 筹码峰纯量级）
+
+- **执行者**：WorkBuddy（auto-commit-obsidian，单笔综合提交）
+- **任务类型**：功能开发 / 重构 / 验证（综合）
+- **上下文**：本会话完成「K线筹码峰·纯量级」主图指标（Task 10–18），并包含前期累积的删除开发演示子系统(task_demo)、子UI全可复制、4按钮合1、回归通道整合、Task1+2 等改动。working tree 已完全混合，main.dart（853 行）同时依赖「删 task_demo」与「新筹码峰 lib 文件」（chart_indicator 把 chipPeakLine 拆为 chipPeakSpatial/Volume/Pure，旧版 main.dart 直接 import 了 7 个 task_demo 文件），整文件暂存无法拆出互相独立且各自可构建的多笔提交，故经用户确认做单笔综合提交。
+- **关键操作**：
+  1. 全部源码与测试一次性提交；剔除环境生成文件（.flutter-plugins-dependencies、android/local.properties、*/flutter/ephemeral/.plugin_symlinks/*、windows/.../generated_config.cmake）。
+  2. 提交范围：main.dart（删 task_demo 引用 + UI整合 + 筹码峰设置UI）、history/*（app_debug_snapshot/audit_probe_snapshot/msg_history）、tick_dist_config、筹码峰 lib（peak_rank_config/profile_peak_classify/chip_peak_store/chart_indicator/kline_chip/chip_config/kline_chart/signal_data_catalog/catalog_lookup）、删除 task_demo/*（8 文件）+ task_demo_manifest_test、新增/修正 chip_peak_var_test 与 profile_peak_classify_test（含纯量级用例）。
+  3. flutter analyze 全包 0 error；profile_peak_classify_test 2/2、chip_peak_var_test 4/4 通过（清 proxy + no_proxy=*）。
+- **结果**：单笔 commit + push 至 origin/ANDROID_RUST + 同步 Obsidian；最终状态可独立构建。
+- **注意事项**：signal_data_catalog_test 中 BOLL 用例失败（MAIN.K0.BOLL.DOWN 期望 2.0 实得 null），走 MathSeriesFreezeStore/mergeMathSeriesForStep 路径，与本次筹码峰改动无关，属既有独立问题，未处理。

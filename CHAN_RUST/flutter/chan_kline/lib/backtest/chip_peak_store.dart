@@ -19,53 +19,62 @@ class PeakCell {
   final double g;
 }
 
+/// 单个编号方案下的冻结数据（与筹码峰编号模式一一对应）。
+class _SchemeStore {
+  final Map<String, Map<String, List<PeakCell?>>> cells = {};
+  final Set<int> written = {};
+  final Set<String> kindWritten = {};
+  double? bucketStep;
+  PeakRankConfig rankConfig = PeakRankConfig.defaults;
+}
+
 /// 筹码峰 / 笔数峰：与十字同一套编号。
 ///
-/// 格点首次写入后冻结；峰价没有那一颗就是空，不填 0、不沿用上一根。
+/// 按 [PeakRankConfig.schemeId] 分区冻结；不同编号模式（spatial/volume/pure）
+/// 并存互不覆盖，切换方案只重算对应分区。格点首次写入后冻结；峰价没有那一颗
+/// 就是空，不填 0、不沿用上一根。
 class ChipPeakFreezeStore {
-  final Map<String, Map<String, List<PeakCell?>>> _cells = {};
-  final Set<int> _written = {};
-  final Set<String> _kindWritten = {};
-  double? _bucketStep;
-  String? _rankFingerprint;
+  final Map<String, _SchemeStore> _schemes = {};
 
-  bool get isEmpty => _written.isEmpty;
+  bool get isEmpty =>
+      _schemes.isEmpty || _schemes.values.every((s) => s.written.isEmpty);
 
   /// 已写入 K 下标个数（用于主图重绘；仓体引用不变时仍可能增长）。
-  int get ingestedBarCount => _written.length;
+  int get ingestedBarCount =>
+      _schemes.values.fold(0, (m, s) => s.written.length > m ? s.written.length : m);
 
-  PeakRankConfig get rankConfig => _rankConfig;
-  PeakRankConfig _rankConfig = PeakRankConfig.defaults;
-
-  void clear() {
-    _cells.clear();
-    _written.clear();
-    _kindWritten.clear();
-    _bucketStep = null;
-    _rankFingerprint = null;
+  /// 优先返回 spatial 方案配置（与 ML 目录默认口径一致）；无则首个方案。
+  PeakRankConfig get rankConfig {
+    final spatial =
+        _schemes.entries.where((e) => e.key.startsWith('spatial')).firstOrNull;
+    if (spatial != null) return spatial.value.rankConfig;
+    final any = _schemes.values.firstOrNull;
+    return any?.rankConfig ?? PeakRankConfig.defaults;
   }
+
+  void clear() => _schemes.clear();
 
   void ingestThrough({
     required int asOf,
     required List<KlineBar> bars,
     required double bucketStep,
     PeakRankConfig rank = PeakRankConfig.defaults,
+    String? scheme,
   }) {
+    final key = scheme ?? rank.schemeId;
+    final sd = _schemes.putIfAbsent(key, () => _SchemeStore());
     if (asOf < 0 || bars.isEmpty) return;
     final step = bucketStep < 0.001 ? 0.001 : bucketStep;
-    final fp = rank.fingerprint;
-    if (_bucketStep != null && (step - _bucketStep!).abs() > 1e-12) {
-      clear();
+    if (sd.bucketStep != null && (step - sd.bucketStep!).abs() > 1e-12) {
+      sd.cells.clear();
+      sd.written.clear();
+      sd.kindWritten.clear();
     }
-    if (_rankFingerprint != null && _rankFingerprint != fp) {
-      clear();
-    }
-    _bucketStep = step;
-    _rankFingerprint = fp;
-    _rankConfig = rank;
+    sd.bucketStep = step;
+    sd.rankConfig = rank;
     for (var x = 0; x <= asOf; x++) {
-      if (_written.contains(x)) continue;
-      _ingestOne(asOf: x, bars: bars, bucketStep: step, rank: rank);
+      if (sd.written.contains(x)) continue;
+      _ingestOne(sd, asOf: x, bars: bars, bucketStep: step, rank: rank);
     }
   }
 
@@ -74,21 +83,26 @@ class ChipPeakFreezeStore {
     required String kind,
     required List<ProfilePeakRow> rows,
     required double close,
+    required String scheme,
+    PeakRankConfig rank = PeakRankConfig.defaults,
   }) {
     if (asOf < 0) return;
+    final sd = _schemes.putIfAbsent(scheme, () => _SchemeStore());
+    if (sd.rankConfig == PeakRankConfig.defaults) sd.rankConfig = rank;
     final key = '$kind|$asOf';
-    if (_kindWritten.contains(key)) return;
-    _writeKind(kind: kind, asOf: asOf, rows: rows, close: close);
-    _kindWritten.add(key);
-    _written.add(asOf);
+    if (sd.kindWritten.contains(key)) return;
+    _writeKind(sd, kind: kind, asOf: asOf, rows: rows, close: close, rank: sd.rankConfig);
+    sd.kindWritten.add(key);
+    sd.written.add(asOf);
   }
 
   double? at({
     required String kind,
     required String suffix,
     required int asOf,
+    required String scheme,
   }) {
-    return cellAt(kind: kind, suffix: suffix, asOf: asOf)?.price;
+    return cellAt(kind: kind, suffix: suffix, asOf: asOf, scheme: scheme)?.price;
   }
 
   /// 与 [bars] 列表对齐的峰价序列（无峰为 null）。
@@ -96,9 +110,11 @@ class ChipPeakFreezeStore {
     required String kind,
     required String suffix,
     required List<KlineBar> bars,
+    required String scheme,
   }) {
     return [
-      for (final b in bars) at(kind: kind, suffix: suffix, asOf: b.idx),
+      for (final b in bars)
+        at(kind: kind, suffix: suffix, asOf: b.idx, scheme: scheme),
     ];
   }
 
@@ -106,14 +122,18 @@ class ChipPeakFreezeStore {
     required String kind,
     required String suffix,
     required int asOf,
+    required String scheme,
   }) {
+    final sd = _schemes[scheme];
+    if (sd == null) return null;
     final key = canonicalPeakSuffix(suffix);
-    final series = _cells[kind]?[key];
+    final series = sd.cells[kind]?[key];
     if (series == null || asOf < 0 || asOf >= series.length) return null;
     return series[asOf];
   }
 
-  void _ingestOne({
+  void _ingestOne(
+    _SchemeStore sd, {
     required int asOf,
     required List<KlineBar> bars,
     required double bucketStep,
@@ -127,7 +147,7 @@ class ChipPeakFreezeStore {
       }
     }
     if (bar == null) {
-      _written.add(asOf);
+      sd.written.add(asOf);
       return;
     }
     final chip = classifyProfilePeaks(
@@ -152,38 +172,53 @@ class ChipPeakFreezeStore {
       close: bar.close,
       rank: rank,
     );
-    _writeKind(kind: 'chip', asOf: asOf, rows: chip, close: bar.close);
-    _writeKind(kind: 'tick', asOf: asOf, rows: tick, close: bar.close);
-    _kindWritten.add('chip|$asOf');
-    _kindWritten.add('tick|$asOf');
-    _written.add(asOf);
+    _writeKind(sd, kind: 'chip', asOf: asOf, rows: chip, close: bar.close, rank: rank);
+    _writeKind(sd, kind: 'tick', asOf: asOf, rows: tick, close: bar.close, rank: rank);
+    sd.kindWritten.add('chip|$asOf');
+    sd.kindWritten.add('tick|$asOf');
+    sd.written.add(asOf);
   }
 
-  void _writeKind({
+  void _writeKind(
+    _SchemeStore sd, {
     required String kind,
     required int asOf,
     required List<ProfilePeakRow> rows,
     required double close,
+    required PeakRankConfig rank,
   }) {
     final suffixes = <String>{for (final r in rows) r.nameSuffix};
-    suffixes.addAll(registeredPeakSuffixes());
+    suffixes.addAll(_padSuffixes(rank));
     for (final s in suffixes) {
       final cell = pickProfilePeakCell(rows: rows, suffix: s, close: close);
-      _put(kind, canonicalPeakSuffix(s), asOf, cell);
+      _put(sd, kind, canonicalPeakSuffix(s), asOf, cell);
       if (canonicalPeakSuffix(s) == 'IN1') {
-        _put(kind, '', asOf, cell);
+        _put(sd, kind, '', asOf, cell);
       }
     }
   }
 
-  void _put(String kind, String suffix, int asOf, PeakCell? v) {
-    final bySuffix = _cells.putIfAbsent(kind, () => {});
+  void _put(_SchemeStore sd, String kind, String suffix, int asOf, PeakCell? v) {
+    final bySuffix = sd.cells.putIfAbsent(kind, () => {});
     final list = bySuffix.putIfAbsent(suffix, () => <PeakCell?>[]);
     while (list.length <= asOf) {
       list.add(null);
     }
     list[asOf] = v;
   }
+}
+
+/// 按编号模式生成用于补 NULL 格的后缀（保证 EXISTS=0 等衍生变量恒有列）。
+List<String> _padSuffixes(PeakRankConfig rank) {
+  if (rank.mode == PeakRankMode.pure) {
+    return [for (var n = 1; n <= rank.clampedMaxPure; n++) 'PURE$n'];
+  }
+  final out = <String>['IN1', 'IN2', 'IN3'];
+  for (var n = 1; n <= kCatalogChipPeakMaxOuter; n++) {
+    out.add('-$n');
+    out.add('+$n');
+  }
+  return out;
 }
 
 /// 登记在 catalog 中的外侧/框内后缀（用于 EXISTS=0 补格）。
@@ -238,11 +273,11 @@ double? pickProfilePeakPrice({
 double? liveProfilePeakScalar({
   required String kind,
   required String suffix,
-  String? field,
   required int asOf,
   required List<KlineBar> bars,
   required double bucketStep,
   PeakRankConfig rank = PeakRankConfig.defaults,
+  String? field,
 }) {
   KlineBar? bar;
   for (final b in bars) {
@@ -331,16 +366,19 @@ double? peakScalarFromStore({
   String? field,
   required int asOf,
   required List<KlineBar> bars,
+  required String scheme,
 }) {
   if (field == 'EXISTS') {
     final cell = store?.cellAt(
       kind: kind,
       suffix: suffix,
       asOf: asOf,
+      scheme: scheme,
     );
     return cell != null ? 1.0 : 0.0;
   }
-  final cell = store?.cellAt(kind: kind, suffix: suffix, asOf: asOf);
+  final cell = store?.cellAt(
+      kind: kind, suffix: suffix, asOf: asOf, scheme: scheme);
   if (cell == null) return null;
   if (field == null || field.isEmpty) return cell.price;
   KlineBar? bar;

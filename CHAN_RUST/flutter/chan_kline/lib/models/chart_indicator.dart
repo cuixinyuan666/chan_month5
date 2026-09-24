@@ -33,8 +33,20 @@ enum MainIndicatorKind {
   demark,
   /// Kn步进节奏（old step_rhythm；与 Kn连线同号；主图价轴挂点）
   stepRhythm,
-  /// K0筹码峰价折线（仅 kn=0；-1/+1 两轨；读 ChipPeakFreezeStore）
-  chipPeakLine,
+  /// K0筹码峰价折线（仅 kn=0；空间序：-1/+1 两轨；读 ChipPeakFreezeStore）
+  chipPeakSpatial,
+  /// K0筹码峰价折线（仅 kn=0；量级序：各区内按筹码量从大到小；读 ChipPeakFreezeStore）
+  chipPeakVolume,
+  /// K0纯量级筹码峰（仅 kn=0；忽略 OHLC 区间，全局按峰位 total 取前 N；读 ChipPeakFreezeStore）
+  chipPeakPure,
+}
+
+/// 是否筹码峰类主图指标（三种编号模式同属一组，UI 与冻结仓按方案区分）。
+extension MainIndicatorKindChipPeak on MainIndicatorKind {
+  bool get isChipPeak =>
+      this == MainIndicatorKind.chipPeakSpatial ||
+      this == MainIndicatorKind.chipPeakVolume ||
+      this == MainIndicatorKind.chipPeakPure;
 }
 
 /// 主图指标类别元数据。
@@ -65,8 +77,10 @@ extension MainIndicatorKindMeta on MainIndicatorKind {
         return 'Demark';
       case MainIndicatorKind.stepRhythm:
         return '节奏';
-      case MainIndicatorKind.chipPeakLine:
-        return '均线';
+      case MainIndicatorKind.chipPeakSpatial:
+      case MainIndicatorKind.chipPeakVolume:
+      case MainIndicatorKind.chipPeakPure:
+        return '筹码峰';
     }
   }
 
@@ -96,7 +110,9 @@ extension MainIndicatorKindMeta on MainIndicatorKind {
         return 6;
       case MainIndicatorKind.stepRhythm:
         return 7;
-      case MainIndicatorKind.chipPeakLine:
+      case MainIndicatorKind.chipPeakSpatial:
+      case MainIndicatorKind.chipPeakVolume:
+      case MainIndicatorKind.chipPeakPure:
         return 5;
     }
   }
@@ -136,8 +152,12 @@ class MainChartIndicator {
   /// kn=连线显示层：K0步进节奏…（主图价轴；动态子线）
   const MainChartIndicator.stepRhythm(this.kn)
       : kind = MainIndicatorKind.stepRhythm;
-  const MainChartIndicator.chipPeakLine(this.kn)
-      : kind = MainIndicatorKind.chipPeakLine;
+  const MainChartIndicator.chipPeakSpatial(this.kn)
+      : kind = MainIndicatorKind.chipPeakSpatial;
+  const MainChartIndicator.chipPeakVolume(this.kn)
+      : kind = MainIndicatorKind.chipPeakVolume;
+  const MainChartIndicator.chipPeakPure(this.kn)
+      : kind = MainIndicatorKind.chipPeakPure;
 
   String get label {
     switch (kind) {
@@ -174,8 +194,12 @@ class MainChartIndicator {
         return 'K${kn}Demark';
       case MainIndicatorKind.stepRhythm:
         return 'K$kn节奏';
-      case MainIndicatorKind.chipPeakLine:
-        return 'K$kn筹码峰';
+      case MainIndicatorKind.chipPeakSpatial:
+        return 'K$kn筹码峰·空间序';
+      case MainIndicatorKind.chipPeakVolume:
+        return 'K$kn筹码峰·量级序';
+      case MainIndicatorKind.chipPeakPure:
+        return 'K$kn筹码峰·纯量级';
     }
   }
 
@@ -219,8 +243,12 @@ class MainChartIndicator {
         return 14;
       case MainIndicatorKind.stepRhythm:
         return 15;
-      case MainIndicatorKind.chipPeakLine:
+      case MainIndicatorKind.chipPeakSpatial:
         return 16;
+      case MainIndicatorKind.chipPeakVolume:
+        return 17;
+      case MainIndicatorKind.chipPeakPure:
+        return 18;
     }
   }
 
@@ -587,8 +615,10 @@ List<MainChartIndicator> buildMainIndicatorCatalog(int maxKn) {
   for (var d = 0; d <= maxKn; d++) {
     out.add(MainChartIndicator.boll(d));
   }
-  // K0 筹码峰价折线（仅 catalog 挂 K0 一项）
-  out.add(MainChartIndicator.chipPeakLine(0));
+  // K0 筹码峰价折线（仅 catalog 挂 K0 一项；空间序 / 量级序 / 纯量级 三方案）
+  out.add(MainChartIndicator.chipPeakSpatial(0));
+  out.add(MainChartIndicator.chipPeakVolume(0));
+  out.add(MainChartIndicator.chipPeakPure(0));
   // 回归通道（父层连线绑定：只画最新一段并外推到 asOf；归「延伸」组，与中枢同号 d=0→K0）
   for (var d = 0; d <= maxKn; d++) {
     out.add(MainChartIndicator.regressionChannel(d));
@@ -712,7 +742,11 @@ List<MainChartIndicator> mainIndicatorsForLevel(
     MainChartIndicator.demark(displayLevel),
     // 必须进主图「Kn指标」层全选（与连线同显示层）
     MainChartIndicator.stepRhythm(displayLevel),
-    if (displayLevel == 0) MainChartIndicator.chipPeakLine(0),
+    if (displayLevel == 0) ...[
+      MainChartIndicator.chipPeakSpatial(0),
+      MainChartIndicator.chipPeakVolume(0),
+      MainChartIndicator.chipPeakPure(0),
+    ],
   ];
   return candidates.where(allow.contains).toList();
 }
@@ -818,7 +852,9 @@ bool isDefaultDrawnMain(MainChartIndicator e) {
     case MainIndicatorKind.regressionChannel:
     case MainIndicatorKind.demark:
     case MainIndicatorKind.stepRhythm:
-    case MainIndicatorKind.chipPeakLine:
+    case MainIndicatorKind.chipPeakSpatial:
+    case MainIndicatorKind.chipPeakVolume:
+    case MainIndicatorKind.chipPeakPure:
       return false;
   }
 }

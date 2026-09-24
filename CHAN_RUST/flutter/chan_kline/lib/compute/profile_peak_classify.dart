@@ -11,7 +11,7 @@ class ProfilePeakRow {
     required this.g,
   });
 
-  /// 动态名后缀：IN1/IN2=框内；'-1'/'+2'=外侧序号
+  /// 动态名后缀：IN1/IN2=框内；'-1'/'+2'=外侧序号；'PURE1'..=纯量级全局序
   final String nameSuffix;
   final double price;
   final double b;
@@ -19,6 +19,10 @@ class ProfilePeakRow {
   final double g;
 
   String label(String prefix) {
+    if (nameSuffix.startsWith('PURE')) {
+      final n = nameSuffix.substring(4);
+      return '$prefix·纯$n';
+    }
     if (nameSuffix.startsWith('IN')) {
       final n = nameSuffix.substring(2);
       return '$prefix·框内$n';
@@ -65,25 +69,12 @@ List<ProfilePeakRow> classifyProfilePeaks({
   final maxOut = rank.clampedMaxOuter;
   final maxIn = rank.clampedMaxInBox;
 
-  if (rank.mode == PeakRankMode.spatial) {
-    below.sort((a, b) => profile.prices[b].compareTo(profile.prices[a]));
-    above.sort((a, b) => profile.prices[a].compareTo(profile.prices[b]));
-    inRange.sort(
-      (a, b) => (profile.prices[a] - close)
-          .abs()
-          .compareTo((profile.prices[b] - close).abs()),
-    );
-  } else {
-    int cmpVolume(int a, int b) {
-      final ta = profile.total[a];
-      final tb = profile.total[b];
-      final c = tb.compareTo(ta);
-      if (c != 0) return c;
-      return profile.prices[a].compareTo(profile.prices[b]);
-    }
-    below.sort(cmpVolume);
-    above.sort(cmpVolume);
-    inRange.sort(cmpVolume);
+  int cmpVolume(int a, int b) {
+    final ta = profile.total[a];
+    final tb = profile.total[b];
+    final c = tb.compareTo(ta);
+    if (c != 0) return c;
+    return profile.prices[a].compareTo(profile.prices[b]);
   }
 
   ProfilePeakRow row(int i, String suffix) {
@@ -95,6 +86,31 @@ List<ProfilePeakRow> classifyProfilePeaks({
       s: i < profile.s.length ? profile.s[i] : 0.0,
       g: wv,
     );
+  }
+
+  /// 纯量级：忽略 K 的 OHLC 区间，全局按峰位 total 降序取前 N。
+  if (rank.mode == PeakRankMode.pure) {
+    final all = [...peaks]..sort(cmpVolume);
+    final out = <ProfilePeakRow>[
+      for (var n = 0; n < all.length && n < rank.clampedMaxPure; n++)
+        row(all[n], 'PURE${n + 1}'),
+    ];
+    out.sort((a, b) => a.price.compareTo(b.price));
+    return out;
+  }
+
+  if (rank.mode == PeakRankMode.spatial) {
+    below.sort((a, b) => profile.prices[b].compareTo(profile.prices[a]));
+    above.sort((a, b) => profile.prices[a].compareTo(profile.prices[b]));
+    inRange.sort(
+      (a, b) => (profile.prices[a] - close)
+          .abs()
+          .compareTo((profile.prices[b] - close).abs()),
+    );
+  } else {
+    below.sort(cmpVolume);
+    above.sort(cmpVolume);
+    inRange.sort(cmpVolume);
   }
 
   final out = <ProfilePeakRow>[

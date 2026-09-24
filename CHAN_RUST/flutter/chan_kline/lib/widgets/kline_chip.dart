@@ -198,7 +198,13 @@ abstract final class ChipProfilePainter {
         ..color = mark.color
         ..strokeWidth = config.peakLineWidth
         ..style = PaintingStyle.stroke;
-      if (config.peakLineDashed) {
+      // 线型：bySign 时 + 档虚线 / −档与 IN 档实线；solid 全实、dashed 全虚
+      final useDashed = switch (config.peakLineMode) {
+        PeakLineMode.solid => false,
+        PeakLineMode.dashed => true,
+        PeakLineMode.bySign => mark.label.startsWith('+'),
+      };
+      if (useDashed) {
         _drawDashed(canvas, from, to, paint);
       } else {
         canvas.drawLine(from, to, paint);
@@ -371,9 +377,25 @@ abstract final class ChipProfilePainter {
     Color(0xFF94A3B8), // IN2 岩灰
     Color(0xFF64748B), // IN3 深岩灰
   ];
+  /// 纯量级筹码峰（PURE1..PUREn）配色：暖色系按量降序，避免与 ±档/框内混淆。
+  static const List<Color> _purePalette = <Color>[
+    Color(0xFFEF4444), // 1 红
+    Color(0xFFF97316), // 2 橙
+    Color(0xFFEAB308), // 3 黄
+    Color(0xFF84CC16), // 4 黄绿
+    Color(0xFF14B8A6), // 5 青绿
+    Color(0xFF3B82F6), // 6 蓝
+    Color(0xFF8B5CF6), // 7 紫
+    Color(0xFFEC4899), // 8 玫红
+  ];
 
-  /// 由峰后缀（-1/+2/IN3）解析配色。
+  /// 由峰后缀（-1/+2/IN3/PURE3）解析配色。
   static Color peakRingColor(String suffix) {
+    if (suffix.startsWith('PURE')) {
+      final n = int.tryParse(suffix.substring(4)) ?? 1;
+      final idx = (n - 1).clamp(0, _purePalette.length - 1);
+      return _purePalette[idx];
+    }
     if (suffix.startsWith('IN')) {
       final n = int.tryParse(suffix.substring(2)) ?? 1;
       final idx = (n - 1).clamp(0, _inBoxPalette.length - 1);

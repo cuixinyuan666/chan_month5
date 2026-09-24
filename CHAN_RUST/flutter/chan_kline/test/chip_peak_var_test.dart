@@ -4,6 +4,7 @@ import 'package:chan_kline/backtest/signal_data_catalog.dart';
 import 'package:chan_kline/backtest/trade_operand.dart';
 import 'package:chan_kline/compute/profile_peak_classify.dart';
 import 'package:chan_kline/models/kline_bar.dart';
+import 'package:chan_kline/models/peak_rank_config.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 KlineBar _bar(int idx, double close) {
@@ -78,6 +79,7 @@ void main() {
 
   test('冻结后不沿用、不回写', () {
     final store = ChipPeakFreezeStore();
+    final scheme = PeakRankConfig.defaults.schemeId;
     store.ingestClassified(
       asOf: 4,
       kind: 'chip',
@@ -85,12 +87,14 @@ void main() {
         ProfilePeakRow(nameSuffix: '-1', price: 9.5, b: 0, s: 0, g: 0),
       ],
       close: 10,
+      scheme: scheme,
     );
     store.ingestClassified(
       asOf: 5,
       kind: 'chip',
       rows: const [],
       close: 10,
+      scheme: scheme,
     );
     final bars = [_bar(4, 10), _bar(5, 10)];
     final at4 = lookupTradeNumeric(
@@ -114,6 +118,7 @@ void main() {
         ProfilePeakRow(nameSuffix: '-1', price: 1, b: 0, s: 0, g: 0),
       ],
       close: 10,
+      scheme: scheme,
     );
     final at4again = lookupTradeNumeric(
       variableId: 'SUB.K0.CHIP.PEAK.M1',

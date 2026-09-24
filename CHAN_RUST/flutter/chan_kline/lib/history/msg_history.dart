@@ -32,7 +32,7 @@ class MsgHistory {
   /// test 自定义 OHLC 口径是否已记录（进程内去重）
   static bool _testCustomOhlcLogged = false;
 
-  /// 智能体长期记忆（任务演示 / 前后对比）
+  /// 智能体长期记忆（Task Log + test 验收口径）
   static bool _agentLongTermMemoryLogged = false;
 
   /// 工作区全屏 + tooltip 分隔线口径是否已记录
@@ -409,7 +409,7 @@ class MsgHistory {
     );
   }
 
-  /// 智能体长期记忆：Task Log + test 演示 + 同页前后对比（常驻）。
+  /// 智能体长期记忆：Task Log + 可演示验收（a_Data/test/demos 的 manifest + before/after 文件）（常驻）。
   void appendAgentLongTermMemory() {
     if (_agentLongTermMemoryLogged) return;
     _agentLongTermMemoryLogged = true;
@@ -417,27 +417,13 @@ class MsgHistory {
       '【智能体长期记忆·2026-08-15】全智能体（Cursor/OpenCode/Claude Code/WorkBuddy 等）'
       '任务完成后必须写 task-log.md；修改类任务须提供可演示验收：'
       '优先默认股票002003，否则在 a_Data/test/demos/{task_id}/ 建 manifest+before/after；'
-      '股票选 test →「任务演示/前后对比」同页上=原本实现、下=本次实现。'
+      '股票选 test 用 a_Data/test 数据做可演示验收。'
       '详见仓库 AGENTS.md。'
       '历史记录按钮与 lib/history/ 常驻不得删。',
     );
   }
 
-  static bool _devDemoPhaseLogged = false;
   static bool _agentConfirmGateLogged = false;
-
-  /// 开发演示阶段：启动自动加载最新任务 + 点击下一步步进（常驻）。
-  void appendDevelopmentDemoPhaseLaunch() {
-    if (_devDemoPhaseLogged) return;
-    _devDemoPhaseLogged = true;
-    append(
-      '【开发演示阶段·2026-09-01】对外默认关：启动不再自动加载任务演示。'
-      '研究/开发可在设置里打开「开发演示阶段」，下次启动才自动加载最新任务。'
-      '关=自行选股 / 任务演示列表 / 手动打开最新任务演示。'
-      '落盘 .chan_task_demo_settings.json。'
-      '历史记录按钮与 lib/history/ 常驻不得删。',
-    );
-  }
 
   /// 确认执行门禁 + 演示白话 + 接任务必读（常驻）。
   void appendAgentConfirmExecuteGate() {
@@ -1050,13 +1036,13 @@ class MsgHistory {
     );
   }
 
-  /// 设置「复制调试信息」按钮说明（进程内去重；文案随任务更新）。
+  /// 设置「复制排查信息」对话框说明（进程内去重；文案随任务更新）。
   static bool _auditProbeCopyLogged = false;
   void appendAuditProbeCopyButton() {
     if (_auditProbeCopyLogged) return;
     _auditProbeCopyLogged = true;
     append(
-      '【复制调试信息】设置面板常驻按钮（勿删）。'
+      '【复制排查信息】设置面板常驻按钮（勿删）；弹窗含页面状态+最近历史+验收探针。'
       '当前绑定本批：T1 K1节奏关窗持值（分笔·77–114 续上个 0-0）；'
       'T2 tip 与主图节奏历史同源。'
       '跳末后点按；实现 audit_probe_snapshot.dart。',

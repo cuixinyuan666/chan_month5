@@ -14,7 +14,7 @@ class TickDistConfig {
     this.wColor = const Color(0xC79CA3AF),
     this.peakLineEnabled = false,
     this.peakLineWidth = 1.2,
-    this.peakLineDashed = true,
+    this.peakLineMode = PeakLineMode.bySign,
     this.peakDotRadius = 2.5,
   });
 
@@ -27,7 +27,7 @@ class TickDistConfig {
   final Color wColor;
   final bool peakLineEnabled;
   final double peakLineWidth;
-  final bool peakLineDashed;
+  final PeakLineMode peakLineMode;
   final double peakDotRadius;
 
   ChipConfig toChipConfig() => ChipConfig(
@@ -40,7 +40,7 @@ class TickDistConfig {
         wColor: wColor,
         peakLineEnabled: peakLineEnabled,
         peakLineWidth: peakLineWidth,
-        peakLineDashed: peakLineDashed,
+        peakLineMode: peakLineMode,
         peakDotRadius: peakDotRadius,
       );
 
@@ -61,7 +61,7 @@ class TickDistConfig {
       wColor: wColor,
       peakLineEnabled: peakLineEnabled ?? this.peakLineEnabled,
       peakLineWidth: peakLineWidth,
-      peakLineDashed: peakLineDashed,
+      peakLineMode: peakLineMode,
       peakDotRadius: peakDotRadius,
     );
   }
@@ -72,6 +72,7 @@ class TickDistConfig {
         'stretchLevel': stretchLevel,
         'paneWidth': paneWidth,
         'peakLineEnabled': peakLineEnabled,
+        'peakLineMode': peakLineMode.name,
       };
 
   factory TickDistConfig.fromJson(Map<String, dynamic>? json) {
@@ -82,6 +83,7 @@ class TickDistConfig {
       stretchLevel: (json['stretchLevel'] as num?)?.toInt() ?? 5,
       paneWidth: (json['paneWidth'] as num?)?.toDouble() ?? 88,
       peakLineEnabled: json['peakLineEnabled'] as bool? ?? false,
+      peakLineMode: peakLineModeFromJson(json),
     );
   }
 
@@ -92,9 +94,16 @@ class TickDistConfig {
       other.bucketStep == bucketStep &&
       other.stretchLevel == stretchLevel &&
       other.paneWidth == paneWidth &&
+      other.peakLineMode == peakLineMode &&
       other.peakLineEnabled == peakLineEnabled;
 
   @override
-  int get hashCode =>
-      Object.hash(enabled, bucketStep, stretchLevel, paneWidth, peakLineEnabled);
+  int get hashCode => Object.hash(
+        enabled,
+        bucketStep,
+        stretchLevel,
+        paneWidth,
+        peakLineMode,
+        peakLineEnabled,
+      );
 }

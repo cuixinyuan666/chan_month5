@@ -902,6 +902,7 @@ List<double?>? _chipPeakPlotSeries({
   final rank = chipPeaks != null && !chipPeaks.isEmpty
       ? chipPeaks.rankConfig
       : peakRank;
+  final scheme = rank.schemeId;
   final out = List<double?>.filled(n, null);
   final useStore = chipPeaks != null && !chipPeaks.isEmpty;
   for (var x = 0; x < n && x <= asOf; x++) {
@@ -913,6 +914,7 @@ List<double?>? _chipPeakPlotSeries({
             field: field,
             asOf: x,
             bars: bars,
+            scheme: scheme,
           )
         : liveProfilePeakScalar(
             kind: kind,

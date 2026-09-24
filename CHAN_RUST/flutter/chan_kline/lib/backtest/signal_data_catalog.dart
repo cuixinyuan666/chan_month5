@@ -201,6 +201,7 @@ String chipPeakVarId({
 
 String chipPeakTokenOfSuffix(String suffix) {
   if (suffix.isEmpty) return '';
+  if (suffix.startsWith('PURE')) return suffix;
   if (suffix.startsWith('-')) return 'M${suffix.substring(1)}';
   if (suffix.startsWith('+')) return 'P${suffix.substring(1)}';
   if (suffix.startsWith('IN')) return suffix;
@@ -209,6 +210,7 @@ String chipPeakTokenOfSuffix(String suffix) {
 
 String chipPeakSuffixOfToken(String token) {
   if (token.isEmpty) return '';
+  if (token.startsWith('PURE')) return token;
   if (token.startsWith('M')) return '-${token.substring(1)}';
   if (token.startsWith('P')) return '+${token.substring(1)}';
   if (token.startsWith('IN')) return token;
@@ -217,13 +219,14 @@ String chipPeakSuffixOfToken(String token) {
 
 String chipPeakFieldLabel(String suffix) {
   if (suffix.isEmpty) return '框内(同IN1)';
+  if (suffix.startsWith('PURE')) return '纯${suffix.substring(4)}';
   if (suffix.startsWith('IN')) return '框内${suffix.substring(2)}';
   return suffix;
 }
 
 bool isChipPeakToken(String token) {
   if (token.isEmpty) return true;
-  return RegExp(r'^(IN\d+|[MP]\d+)$').hasMatch(token);
+  return RegExp(r'^(IN\d+|[MP]\d+|PURE\d+)$').hasMatch(token);
 }
 
 String chipPeakDerivedVarId({

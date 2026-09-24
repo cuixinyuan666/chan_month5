@@ -1083,32 +1083,51 @@ class _KlineChartState extends State<KlineChart> {
       knZsAfterKn: knZs,
       subIndicators: allSubs,
     );
-    // K0 筹码峰 / 笔数峰：与主图 profile 同 cutoff，按本根高低编号
+    // K0 筹码峰 / 笔数峰：与主图 profile 同 cutoff；按激活的筹码峰指标种类（空间/量级/纯量级）分别计算合并
     final cut = asOf ?? bar.idx;
     final step = widget.chipConfig.bucketStep;
-    final rank = widget.chipConfig.peakRankConfig;
-    final chipPeaks = classifyProfilePeaks(
-      profile: ChipProfileCompute.compute(
-        bars: widget.bars,
-        cutoffX: cut,
-        bucketStep: step,
-      ),
-      low: bar.low,
-      high: bar.high,
-      close: bar.close,
-      rank: rank,
+    final chipProfile = ChipProfileCompute.compute(
+      bars: widget.bars,
+      cutoffX: cut,
+      bucketStep: step,
     );
-    final tickPeaks = classifyProfilePeaks(
-      profile: TickDistProfileCompute.compute(
-        bars: widget.bars,
-        cutoffX: cut,
-        bucketStep: step,
-      ),
-      low: bar.low,
-      high: bar.high,
-      close: bar.close,
-      rank: rank,
+    final tickProfile = TickDistProfileCompute.compute(
+      bars: widget.bars,
+      cutoffX: cut,
+      bucketStep: step,
     );
+    PeakRankConfig cfgForKind(MainIndicatorKind k) {
+      if (k == MainIndicatorKind.chipPeakVolume) {
+        return widget.chipConfig.peakRankVolumeConfig;
+      }
+      if (k == MainIndicatorKind.chipPeakPure) {
+        return widget.chipConfig.peakRankPureConfig;
+      }
+      return widget.chipConfig.peakRankSpatialConfig;
+    }
+    final activeChipKinds = widget.mainIndicators
+        .where((i) => i.kind.isChipPeak)
+        .map((i) => i.kind)
+        .toSet();
+    final chipPeaks = <ProfilePeakRow>[];
+    final tickPeaks = <ProfilePeakRow>[];
+    for (final k in activeChipKinds) {
+      final cfg = cfgForKind(k);
+      chipPeaks.addAll(classifyProfilePeaks(
+        profile: chipProfile,
+        low: bar.low,
+        high: bar.high,
+        close: bar.close,
+        rank: cfg,
+      ));
+      tickPeaks.addAll(classifyProfilePeaks(
+        profile: tickProfile,
+        low: bar.low,
+        high: bar.high,
+        close: bar.close,
+        rank: cfg,
+      ));
+    }
     final out = lookup.crosshairTooltipRows(
       bar.idx,
       timePart: timePart,
@@ -2551,7 +2570,8 @@ class _KlineCompositePainter extends CustomPainter {
       final cutBar = bars.isEmpty
           ? null
           : bars.firstWhere((b) => b.idx == cut, orElse: () => bars.last);
-      final rank = chipConfig.peakRankConfig;
+      final activeChipPeak =
+          mainIndicators.any((i) => i.kind.isChipPeak);
       if (showTickDist) {
         // 笔数分布：主图左侧；桶宽与筹码共用，价轴对齐
         final step = chipConfig.bucketStep;
@@ -2560,9 +2580,11 @@ class _KlineCompositePainter extends CustomPainter {
           cutoffX: cut,
           bucketStep: step,
         );
-        final marks = (tickDistConfig.peakLineEnabled && cutBar != null)
-            ? _buildChipPeakMarks(
-                profile, cutBar.low, cutBar.high, cutBar.close, rank)
+        final marks = (tickDistConfig.peakLineEnabled &&
+                cutBar != null &&
+                activeChipPeak)
+            ? _buildChipPeakMarksForActive(
+                profile, cutBar.low, cutBar.high, cutBar.close)
             : null;
         ChipProfilePainter.draw(
           canvas: canvas,
@@ -2591,9 +2613,11 @@ class _KlineCompositePainter extends CustomPainter {
             crosshairBarIdx! < bars.length) {
           hoverBar = _singleBarChipSums(bars[crosshairBarIdx!]);
         }
-        final marks = (chipConfig.peakLineEnabled && cutBar != null)
-            ? _buildChipPeakMarks(
-                profile, cutBar.low, cutBar.high, cutBar.close, rank)
+        final marks = (chipConfig.peakLineEnabled &&
+                cutBar != null &&
+                activeChipPeak)
+            ? _buildChipPeakMarksForActive(
+                profile, cutBar.low, cutBar.high, cutBar.close)
             : null;
         ChipProfilePainter.draw(
           canvas: canvas,
@@ -2774,14 +2798,14 @@ class _KlineCompositePainter extends CustomPainter {
             slotW,
             ind.kn,
           );
-        } else if (ind.kind == MainIndicatorKind.chipPeakLine) {
+        } else if (ind.kind.isChipPeak) {
           _drawChipPeakLines(
             canvas,
             size.width,
             plotTop,
             plotH,
             slotW,
-            ind.kn,
+            ind,
           );
         }
       }
@@ -3842,21 +3866,27 @@ class _KlineCompositePainter extends CustomPainter {
     double plotTop,
     double plotH,
     double slotW,
-    int kn,
+    MainChartIndicator ind,
   ) {
-    if (kn != 0 || bars.isEmpty) return;
+    if (ind.kn != 0 || bars.isEmpty) return;
     final store = chipPeakStore;
     if (store == null || store.isEmpty) return;
-    const specs = [
-      ('-1', '-1'),
-      ('+1', '+1'),
-    ];
-    for (final spec in specs) {
+    final cfg = _chipPeakRankForKind(ind.kind);
+    final scheme = cfg.schemeId;
+    final isPure = ind.kind == MainIndicatorKind.chipPeakPure;
+    final suffixes = isPure
+        ? [for (var n = 1; n <= cfg.clampedMaxPure; n++) 'PURE$n']
+        : const ['-1', '+1'];
+    for (final s in suffixes) {
       final series = store.priceSeriesForBars(
         kind: 'chip',
-        suffix: spec.$1,
+        suffix: s,
         bars: bars,
+        scheme: scheme,
       );
+      if (series.every((e) => e == null)) continue;
+      // + 档虚线 / − 档实线（pure 全实线）：peakRingColor 给 ± / PURE 各自配色
+      final dash = isPure ? null : (s.startsWith('+') ? const [4.0, 3.0] : null);
       _paintPriceSeries(
         canvas,
         w,
@@ -3864,10 +3894,39 @@ class _KlineCompositePainter extends CustomPainter {
         plotH,
         slotW,
         series: series,
-        color: ChipProfilePainter.peakRingColor(spec.$2),
+        color: ChipProfilePainter.peakRingColor(s),
         strokeWidth: 1.4,
+        dashPattern: dash,
       );
     }
+  }
+
+  /// 按筹码峰指标种类取对应的编号方案配置（来自 chipConfig）。
+  PeakRankConfig _chipPeakRankForKind(MainIndicatorKind k) {
+    if (k == MainIndicatorKind.chipPeakVolume) {
+      return chipConfig.peakRankVolumeConfig;
+    }
+    if (k == MainIndicatorKind.chipPeakPure) return chipConfig.peakRankPureConfig;
+    return chipConfig.peakRankSpatialConfig;
+  }
+
+  /// 当前激活的筹码峰指标（空间/量级/纯量级）合并生成的侧边栏延长线标记。
+  List<({double price, String label, Color color})> _buildChipPeakMarksForActive(
+    ChipProfileData profile,
+    double low,
+    double high,
+    double close,
+  ) {
+    final kinds =
+        mainIndicators.where((i) => i.kind.isChipPeak).map((i) => i.kind).toSet();
+    if (kinds.isEmpty) return const [];
+    final out = <({double price, String label, Color color})>[];
+    for (final k in kinds) {
+      out.addAll(
+        _buildChipPeakMarks(profile, low, high, close, _chipPeakRankForKind(k)),
+      );
+    }
+    return out;
   }
 
   /// 主图 Kn均线（kn=显示层；收盘价滑窗 MEAN）。
