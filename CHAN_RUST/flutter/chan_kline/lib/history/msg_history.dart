@@ -730,30 +730,32 @@ class MsgHistory {
     _knMathClassicLoggedV6 = true;
     append(
       '【Kn MACD/BOLL/RSI/KDJ/Demark·全层同构·v6·清副图Demark枚举+桶宽进Math】'
-      '主图：K{n}布林(MID/UP/DOWN)；K{n}Demark（锚K0低点向上垂直排：S1…S9/C1…C13/完成买|完成卖）。'
+      '主图：K{n}布林(MID/UP/DOWN)；K{n}Demark（锚K0低点向上垂直排：S1…S9/C1…C13/德马克买|德马克卖）。'
       '副图：K{n}MACD(DIF/DEA线+柱)、K{n}RSI、K{n}KDJ；已删除 SubIndicatorKind.demark。'
-      'Demark完成信号：Setup满9 与 Countdown满13 都算完整信号（各打「完成买/卖」）。'
+      'Demark完成信号：Setup满9 与 Countdown满13 都算完整信号（各打「德马克买/卖」，与一类买点区分）。'
       '设置（数学指标参数）：Demark三项下拉 + 背驰率 + 筹码桶宽输入框（最小0.01，笔数分布共用，落盘筹码配置）。'
       '分色：买红/橙、卖绿/青；完成信号更深加粗。'
       '输入：collectKnOhlcSamples(displayKn, unitBars+activeUnit)；K0 颗粒度 expandPointsToK0；asOf 截断。'
-      '当下性：会话 MathSeriesFreezeStore 格点首次非空写入后冻结（含 Demark 标记内容），'
-      '禁 Kn≥1 因 activeUnit/EMA 整表回写；主图/副图/十字读仓；参数变更清空并 0..当前步重冻。'
+      '当下性：MACD/布林/RSI/KDJ 等读 MathSeriesFreezeStore 单格冻结；Demark 主图/十字按 asOf 现算（不进冻结仓）。'
+      '禁 Kn≥1 因 activeUnit/EMA 整表回写；参数变更清空并 0..当前步重冻。'
       '十字 asOf：均线/通道/布林/_paintPriceSeries 与副图 Math 一律 x>asOf 右侧不画（与蜡烛同构）。'
       'Kn绑定：Demark进主图「Kn指标」层全选（默认静音）；MACD/RSI/KDJ/背驰进副图「Kn指标」；启动默认仍不勾背驰。'
       '参数：Math 落盘 .chan_trend_model_config.json；桶宽落盘 .chan_chip_config.json。'
-      'tooltip：macd_dif/dea/hist、boll_mid/up/down、rsi、kdj_k/d/j、demark_text（含完成买/卖）。'
+      'tooltip：macd_dif/dea/hist、boll_mid/up/down、rsi、kdj_k/d/j、demark_text（含德马克买/卖）。'
       '默认：进 catalog +「Kn指标」层全选；纯 Flutter，不改 Rust。',
     );
   }
 
-  /// Kn回归通道（进程内去重；主图绘制；已接入回测/ML：MAIN.Kn.REGRESS.MID/UP/DOWN）
+  /// Kn回归通道（进程内去重；主图绘制；已接入回测：MAIN.Kn.REGRESS.MID/UP/DOWN）
   static bool _knRegressionChannelLogged = false;
   void appendKnRegressionChannel() {
     if (_knRegressionChannelLogged) return;
     _knRegressionChannelLogged = true;
     append(
-      '【Kn回归通道·主图·已绘制·已接入回测/ML（MAIN.Kn.REGRESS.MID/UP/DOWN）】'
-      '口径（父层连线绑定·全层同构）：基准区间 = 父层 K{n+1}连线（structure level = 显示层+1）'
+      '【Kn回归通道·主图·已绘制·已接入回测（MAIN.Kn.REGRESS.MID/UP/DOWN）】'
+      '口径（父层连线绑定·刻意取数例外）：其它 Math 指标 structure level 一般为 displayKn−1；'
+      '回归通道绑定父层 K{n+1}连线（structure level = 显示层+1），K0 看 K1 连线、K1 看 K2…。'
+      '基准区间 = 父层连线'
       '在 asOf 视图下的最后一段——倒数第二个极点 → 最后一个极点；端点含分型判断与构建中开口尾端。'
       'K0回归通道看 K1连线、K1看 K2…；父层一出新段整条通道换新基准（旧的整条不留，不拼阶梯）。'
       '样本钟：K0 取区间内每根 K0 收盘；K{n}≥1 取右端 x 落在区间内的本层虚拟K收盘（与布林同一套钟）。'
@@ -764,10 +766,10 @@ class MsgHistory {
       '绘制样式：中轨实线、上下轨虚线 [4,3]，与中轨同色降透明度，不填充。'
       '回看：十字 asOf 回退时基准取当时可见的那条父层连线（不泄漏未来），右端照样截到 asOf。'
       '不可用：父层还没形成连线、或区间内样本 < 2 根 → 该层整条不出线。'
-      '冻结：已进 MathSeriesFreezeStore（regressByKn）——每层每步整段重算后全量覆写（与布林不同，不按单格增量合并），父层端点一动整条通道跟着动；回测读 MAIN.Kn.REGRESS.MID/UP/DOWN 取到与图上同基准的值。'
+      '冻结：不进 MathSeriesFreezeStore；主图/十字/回测均按当步 asOf 现算（父层 K{n+1}连线最后一段），父层换段旧段清空、不回写历史格。'
       '设置：数学指标参数里只有「回归通道 k」（区间由父层连线决定，无 N 参数）；tooltip 槽位 regress_mid/up/down。'
-      '技术债：本指标**暂未接入策略回测与机器学习**（signal_data_catalog / ml_rule_score / '
-      'ml_feature_label / ml_feature_schema 未同步），后续要接须按「指标名称同步检查清单」补四处。'
+      '技术债：回归通道**暂未接入机器学习**（ml_feature_label / ml_feature_schema 无 REGRESS 变量），'
+      '后续要接须按「指标名称同步检查清单」补 ML 三处。'
       '纯 Flutter，不改 Rust，无需重编 chan_ffi.dll。',
     );
   }
@@ -990,7 +992,7 @@ class MsgHistory {
       '【桌面左右分栏】电脑上 K 线在左、策略回测在右；手机仍上下排。'
       '工作台一次只开一页：条件、资金、指标、交易等标签互不叠在一起。'
       '【默认买卖】新策略买=K0 一类买点出现，卖=K0 一类卖点出现，不再默认收盘穿布林。'
-      '【当根事件可跨层】钉在这一根 K 上才出现的事件（一类/二类/N类买卖点、分型确认、中枢确认、Demark 完成买/卖）可以用 AND 或 OR 跨层拼。'
+      '【当根事件可跨层】钉在这一根 K 上才出现的事件（一类/二类/N类买卖点、分型确认、中枢确认、Demark 德马克买/卖）可以用 AND 或 OR 跨层拼。'
       'AND 必须同一根两边都刚出现；OR 哪一层出现就出信号。'
       '收盘、RSI、上穿下穿仍不能把 K0 和 K1 拼在一棵树上。'
       '【策略点跟柱】回测画出来的买/卖圆点三角和 K 线用同一套柱心，左右拖图时跟着蜡烛走，不是钉在屏幕上。',
@@ -1646,7 +1648,7 @@ class MsgHistory {
     append(
       '【回测变量补全·2026-08-20】图上已经算好的，策略公式按同一份冻结仓/会话历史接入，不解析十字文案、不另算一套。'
       '未确认中枢高/低/中轴是单独变量：这根 K 盖住未确认框才有数，没有就空，不填 0、不沿用上一根；当步写入后冻结。'
-      '已确认中枢 CURRENT 照旧。均线/通道读冻结仓；Demark 完成买/卖当根脉冲；分型判断/中枢判断首次可判出一次。'
+      '已确认中枢 CURRENT 照旧。均线/通道读冻结仓；Demark 德马克买/卖当根脉冲（按 asOf 现算）；分型判断/中枢判断首次可判出一次。'
       '连线斜率、相邻比例、节奏是连线钟，不能和布林/RSI 直接比数字。'
       '但同一根 K 上已经能读到的条件（例如 K0 比例>=1.382 并且最低价<=筹码峰-1）可以 AND/OR。'
       '三极平行/顶底对弦/对弦平移/趋势线是线投影到价，可与同层收盘/布林比。'

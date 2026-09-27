@@ -3681,6 +3681,22 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **刻意不迁**：AGENTS.md（最高规则）、CLAUDE.md/OPENCODE.md（指针）、a_Data/test/demos（测试夹具，被 task_demo_manifest_test 引用）、design_mockup.html（设计稿，非解释性文档）。
 - **注意事项**：AI 编码机器人查术语/口径要改看 Obsidian chan-month5/docs/，别再找仓库文件；task-log 与 .workbuddy/memory 仍是仓库内唯一源。
 
+### 2026-09-27 · Cline · 文档整理 · 纯咨询讨论沉淀为 Obsidian 知识库（唐奇安买卖点 / K1 层显示口径 / 指标候选 / 选股可行性）
+
+- **执行者**：Cline
+- **任务类型**：文档整理（纯 Obsidian 写入，**未改动任何代码**）
+- **上下文**：用户提出「纯咨询讨论也要留档，但新开文档当知识库」。经确认采用「一篇知识库 MOC + 四篇永久笔记」结构，与既有任务日志时间线分工——任务日志记改过代码的流水（源 `task-log.md` 权威、副本勿手改），知识库记没动代码但结论值得留档的讨论。
+- **关键操作**：
+  1. 定位 vault 根目录（用户给的 `D:\ObsidianVault\.obsidian\plugins` 是插件子目录，根为 `D:\ObsidianVault`），确认 `chan-month5/` 下已有 `MOC.md`、`GLOSSARY.md`、`2026-09-24.md`。
+  2. 核查唐奇安实现现状：已确认 2026-09-24 接入全管线（`math_classic_compute.dart` 的 `computeDonchianForLevel` + `MathSeriesFreezeStore.donchianByKn` 冻结仓），`kn` 同中枢 0..maxKn，已接回测 `MAIN.Kn.DONCHIAN.*`；**本次未改动**。
+  3. 新建 `D:\ObsidianVault\chan-month5\` 下五篇：`知识库-MOC.md`（索引）、`唐奇安通道买卖点设计.md`、`K1层指标显示口径.md`、`指标扩充候选清单.md`、`选股功能可行性.md`。均套 vault 既有 `永久笔记.md` 模板（frontmatter + 一句话核心 + 展开 + 关联 + 出处），frontmatter 置顶、UTF-8、LF、全部用 `[[wikilinks]]`。
+  4. `chan-month5/MOC.md` 追加「🧠 知识库」索引段（含四篇双链与分工说明），**未改动**原有「项目文档（副本）」与「任务日志时间线」结构。
+- **结果**：知识库建成，四篇笔记 + 索引已挂到 `MOC.md`。内容全部来自本次纯咨询：唐奇安四个买卖方案（突破确认买/回踩确认买/跌破离场卖/挤压突破/多级共振）与验收方式、Kn≥1 每根 K0 显示口径与「Kn 的 N 指虚拟 K 而非 K0」这个大坑、指标扩充三批优先级与数据边界、选股三种做法排序（结构筛选优先）与 asOf/时间对齐/流动性四坑。
+- **演示**：Obsidian 打开 `chan-month5/知识库-MOC.md` → 应见「核心概念 / 方案设计 / 落地纪律 / 收录标准」四段，共链出 4 篇笔记；点任一篇可在「关联笔记」里跳到 `GLOSSARY` 术语教科书；`MOC.md` 顶部应新增「🧠 知识库」段，下方任务日志时间线原样保留。
+- **注意事项 / 待办**：① 知识库笔记为**独立撰写**（非源文件机械副本），可自由修订，与「`task-log.md` 为唯一源、Obsidian 为副本」的规则不冲突；② 四篇笔记均标注「未落地 / 待确认」，唐奇安方案留了三个待定口径（冻结方案甲乙、离场点符号、是否新增第 13 种背驰算法）；③ 选股方案里若要改 `asOfX` 语义（按日期切），属步进/冻结口径，落地前须先取得「确认」；④ 本次全程只写 Obsidian 与 `task-log.md`，**未动 Rust / Flutter 任何文件，无需重编 `chan_ffi.dll`**；⑤ vault 装有 `obsidian-git`，git 提交由用户自行在 Obsidian 内完成。
+
+---
+
 ### 2026-09-25 00:50 — 清理误提交的本机构建产物（取消跟踪 + .gitignore）
 
 - **执行者**：WorkBuddy（Agent 模式，用户确认方案后执行）
@@ -3693,3 +3709,81 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   4. commit 7c00d3a6 + push，工作区现全干净，与上游 0/0。
 - **结果**：这些文件以后不会再被提交，flutter 构建会自动重建；历史里的旧记录保留，需要可取回。
 - **教训（防复发）**：本仓库提交务必只用显式路径 git add，**别用 git add -A / git add .**；提交后立刻 git status 复核，看有没有混进 ephemeral/local 产物。
+
+---
+
+### 2026-09-27 · Cursor · 指标口径 · 四条突兀指标对齐步进/冻结铁律
+
+- **执行者**：Cursor Agent（用户「确认」后执行）
+- **任务类型**：主图/副图指标口径修复（纯 Flutter，未改 Rust）
+- **操作**：
+  1. **Kn 回归通道**：从 `MathSeriesFreezeStore` 移除整段覆写；回测 `catalog_lookup` 与主图/十字一致，按每根 eval 的 `asOf` 调用 `computeRegressionChannelForLevel`；`signal_data_catalog` / `msg_history` / 设置说明改为「不进冻结仓、现算」。
+  2. **Kn 唐奇安**：注释澄清「同钟不同价源」（high/low vs 布林 close），逻辑未改。
+  3. **Kn Demark**：主图/ Lookup / 增量 Lookup 一律按 `asOf` 现算；完成标记文案改为 **TD买/TD卖**（与一类买点区分）；回测 Demark 事件在有 K 线时走现算。
+  4. **副图 Kn 笔数**：Kn≥1 改为虚拟 K 区间内 **K0 笔数即时累加**（不等确认门控）；展示名 **区间笔数**；成交量仍保留确认门控。
+  5. 副图选择器序号 8→9/10 补全（相邻比例/连线斜率）。
+- **结果**：回归通道不再违反「冻结不回写」；图/十字/回测回归同源；Demark 与缠论「买」字脱钩；Kn 笔数语义与成交量拆开。
+- **演示**：冷启动后连续单步：① 勾选 K0 回归通道，父层换段后旧段应消失、十字回退 asOf 与当时通道一致；② 主图 Demark 显示 TD买/TD卖；③ 副图 K1 区间笔数在虚拟 K 未确认前也应随 K0 笔数爬升（与同层成交量曲线形态可不同）。
+- **测试**：`incremental_regress_slot_test` 通过；`signal_data_catalog_test` 中「布林只读冻结仓」一例在本环境仍失败（与本次改动无直接关系，待另查）。
+- **注意事项**：回归通道仍未接 ML 特征轴；筹码峰三兄弟共用开关等技术债未动。
+
+---
+
+### 2026-09-27 · Cursor · 指标口径 · 回测同源与 Demark 命名补漏
+
+- **执行者**：Cursor Agent
+- **任务类型**：回测参数链路 / 测试 / 文案同步
+- **操作**：
+  1. 修 `math_classic_compute_test` Demark 期望为「德马克买」。
+  2. `CondEvalCtx` + `executeStrategyBacktest` + `cross_eval` 贯通 `regressK` 与 `barFeatures`；`main` 回测传入 `MathIndicatorConfig.regressK` 与 `_barFeatures`。
+  3. `catalog_lookup` 回归父层段计算透传 `barFeatures`（与主图一致）。
+  4. Demark 完成标记统一「德马克买/德马克卖」；同步 `msg_history`、`signal_data_catalog`、`ml_rule_score`。
+  5. `msg_history` 回归通道补「displayKn+1 刻意取数例外」说明。
+- **结果**：用户检验列出的 🔴🟠🟡 项已落地；层级反向已文档化为例外。
+- **测试**：`math_classic_compute_test` 全过。
+
+---
+
+### 2026-09-27 · Cursor · 指标口径 · Demark 回测 mathConfig 与文案收尾
+
+- **执行者**：Cursor Agent（用户「确认」后执行）
+- **任务类型**：回测参数链路 / 文案 / ML 规则分
+- **操作**：
+  1. `CondEvalCtx` + `executeStrategyBacktest` + `main` 贯通 `mathConfig`；`_evalEvent` → `listTradeChanEvents` 与主图 Demark 参数同源。
+  2. `msg_history` L993/L1649「完成买/卖」→「德马克买/卖」。
+  3. `ml_rule_score` Demark 完成信号只认「德马克买/德马克卖」，去掉裸 `卖` 与废弃「完成买/卖」分支。
+- **结果**：回归/Demark 回测参数链与 UI 设置对齐；口径说明与 AGENTS 同步清单一致。
+- **演示**：改数学指标里 Demark 下拉后跑回测 Demark 事件条件，应与主图标记一致；连续单步看德马克文案与十字 asOf。
+- **测试**：`math_classic_compute_test`、`chan_event_var_test` 通过。
+
+### 2026-09-27 · Cline · 指标审计 · 找出四条突兀指标并用默认数据实证回归通道四宗罪
+
+- **执行者**：Cline（受托做只读审计，未改任何 app 计算逻辑）
+- **任务类型**：指标口径审计 / 纯咨询分析（**全程未改代码**，临时诊断文件已删除，工作区已还原）
+- **上下文**：用户问「当前项目有很多指标，有没有逻辑很突兀、明显和本项目思想逻辑不符的」。按本工程三条铁律（步进当下性、冻结不回写、全层同构且 Kn 只往下取数）逐个过 20 个主图 + 16 个副图指标。
+- **关键操作**：
+  1. **审计结论**：四个指标突兀——Kn 回归通道（原则性）、Kn 唐奇安（口径冲突）、Kn Demark（语义冲突）、副图 Kn 笔数（语义割裂）；另记 2 处瑕疵（副图类别序跳号、筹码峰三兄弟共用开关）。
+  2. **回归通道四宗罪**：① 冻结仓里它是唯一「整段全量覆写」；② 层级方向反了（其它 Math 取 `level−1`，它取 `level+1`）；③ 一指标三套数据源（图上现算 / 全量现算 / 增量现算+回写 / 回测读冻结仓）；④ 文档标题说「已接回测+ML」、正文说「未接回测与 ML」，两边各对一半。
+  3. **默认数据实证**（002003 分笔 942 根 K0，缠论底数 L0 331 段 / L1 43 段 / L2 8 段）：旧格被改 **271 次**（同仓布林 **0 次**）；第 60 根 K 时 x=31 = 11.6493，第 90 根 K 后变 null；图上非空 17 格 vs 回测 20 格、**37 格全不同 0 格相同**；ML 侧 grep 无任何 REGRESS 键。
+  4. 临时复制协议缓存里的 002003 分笔到 `a_Data/002003/` 以便加载，诊断完已删除、仓库还原原状。
+- **结果**：把「哪几处不对劲」从主观判断变成可复核的数字，交给用户拍板。用户认同并选择「踢出冻结仓改现算」路线（而非改成单格冻结——因「一段一换」与单格冻结互斥），另判定层级反向为**刻意取数例外**、需文档化。
+- **注意事项**：审计期间未动任何计算逻辑，全部动作可逆；结论以 `task-log.md` 后续 3 条 Cursor 实现条目为准。
+
+---
+
+### 2026-09-27 · Cline · 复核 · 三轮复审后确认四条违规关闭、测试与基线持平
+
+- **执行者**：Cline（只读复核，未改代码）
+- **任务类型**：代码复核 / 测试基线对照（**未改任何 app 逻辑**）
+- **上下文**：用户在 Cursor 实施后请我复核。改动累计 18 个文件、+401/-104。
+- **关键操作**：
+  1. **基线对照法**：用 `git stash` 跑改动前基线，精确区分「基线就失败」与「新引入失败」——避免把环境问题误判为回归。结论：6 个失败（`backtest_workbench` / `catalog_full_var` / `chip_profile` / `mini_loop` / `signal_data_catalog` / `widget_test`）全部源于 `a_Data/002003` 离线分笔已从仓库移除，**与本次改动无关**；唯一新挂点是 Demark 文案测试（`完成买`→`德马克买` 未同步期望值），已修。
+  2. **全量测试**：`+355 通过 / 6 失败`，与基线逐条完全一致。
+  3. **分三轮挑出遗留**：每轮都发现「改了 A 漏了 B」——① `regressK` 加了形参但 `CondEvalCtx` 没字段、调用点全没传，永远走默认 2.0；② `_regressionLiveJudgments` 写死 `barFeatures: const []`，与主图传真值不一致；③ `TD买/卖` 是英文缩写、违反「UI 尽量用中文」，且 `msg_history` 未同步。
+  4. **另提 3 条尾巴**：`mathConfig` 漏传（Demark 4 参数回测读默认值）、`msg_history` L993/L1649 旧文案、`ml_rule_score` 保留废弃串且裸 `contains('卖')` 会误命中。
+  5. 全文扫描 `完成买|完成卖`，`lib/` 下仅剩 2 处纯注释（`condition_ast.dart:297`、`demark_compute.dart:20`），不影响运行。
+- **结果**：四条违规全部关闭；三条回测参数链路（`regressK` / `barFeatures` / `mathConfig`）全通，改设置面板后图上与回测同源。判定「代码可提交」，剩余均为动作性事项（跑一次全量测试、冷启动连续单步验收、可选清 2 处注释）。
+- **注意事项 / 待办**：① 提交**勿用 `git add -A`**（仓库已有踩坑记录，`android/.gradle/` 等构建产物会混入）；② 回归通道仍未接 ML 特征轴，已记为技术债；③ 本次为纯 Flutter 改动但动了主图 Demark 绘制分支与回测求值入口，仍需**冷启动连续单步**验收（禁「一键跳末」代替）。
+
+---
+

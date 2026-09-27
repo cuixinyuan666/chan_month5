@@ -9,7 +9,9 @@ import '../models/buy2_frame.dart';
 import '../models/buy_n_frame.dart';
 import '../models/fractal_judgment_event.dart';
 import '../models/k0_confirm_signal.dart';
+import '../models/kline_bar.dart';
 import '../models/level_models.dart';
+import '../models/math_indicator_config.dart';
 import '../models/sell1_frame.dart';
 import '../models/sell2_frame.dart';
 import '../models/sell_n_frame.dart';
@@ -82,6 +84,8 @@ List<TradeChanEvent> listTradeChanEvents({
   List<LevelBundle> levels = const [],
   DivergenceRelationStore? diverRelations,
   MathSeriesFreezeStore? mathFreeze,
+  List<KlineBar> bars = const [],
+  MathIndicatorConfig mathConfig = const MathIndicatorConfig(),
   int maxKn = 8,
 }) {
   final id = canonicalizeTradeVarId(variableId);
@@ -120,14 +124,28 @@ List<TradeChanEvent> listTradeChanEvents({
       );
     case 'DEMARK.COMPLETE_BUY':
       return _firstDemarkComplete(
-        mathFreeze?.demark(kn),
+        _demarkSeriesForEvents(
+          kn: kn,
+          asOf: asOf,
+          bars: bars,
+          levels: levels,
+          mathConfig: mathConfig,
+          mathFreeze: mathFreeze,
+        ),
         kn,
         asOf,
         buy: true,
       );
     case 'DEMARK.COMPLETE_SELL':
       return _firstDemarkComplete(
-        mathFreeze?.demark(kn),
+        _demarkSeriesForEvents(
+          kn: kn,
+          asOf: asOf,
+          bars: bars,
+          levels: levels,
+          mathConfig: mathConfig,
+          mathFreeze: mathFreeze,
+        ),
         kn,
         asOf,
         buy: false,
@@ -293,6 +311,26 @@ List<TradeChanEvent> _firstFractalJudgment(
   );
 }
 
+DemarkK0Series? _demarkSeriesForEvents({
+  required int kn,
+  required int asOf,
+  required List<KlineBar> bars,
+  required List<LevelBundle> levels,
+  required MathIndicatorConfig mathConfig,
+  MathSeriesFreezeStore? mathFreeze,
+}) {
+  if (bars.isNotEmpty) {
+    return computeDemarkForLevel(
+      displayKn: kn,
+      bars: bars,
+      levels: levels,
+      config: mathConfig,
+      asOf: asOf,
+    );
+  }
+  return mathFreeze?.demark(kn);
+}
+
 bool _demarkHasComplete(List<DemarkMark>? marks, {required bool buy}) {
   if (marks == null) return false;
   for (final m in marks) {
@@ -321,9 +359,9 @@ List<TradeChanEvent> _firstDemarkComplete(
         displayKn: kn,
         discoveryX: x,
         availableAt: x,
-        label: buy ? '完成买' : '完成卖',
+        label: buy ? '德马克买' : '德马克卖',
         price: 0,
-        source: 'Demark 冻结仓完成买/卖边沿（阶梯持值不重复出事件）',
+        source: 'Demark 德马克买/卖边沿（按 asOf 现算，与主图标记同源）',
       ));
     }
     prev = now;

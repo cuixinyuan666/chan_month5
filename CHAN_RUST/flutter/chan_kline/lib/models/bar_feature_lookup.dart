@@ -946,14 +946,13 @@ class BarFeatureLookup {
                 config: mathIndicatorConfig,
                 asOf: asOf,
               );
-        final demark = mathFreezeStore?.demark(dkn) ??
-            computeDemarkForLevel(
-              displayKn: dkn,
-              bars: bars,
-              levels: levels,
-              config: mathIndicatorConfig,
-              asOf: asOf,
-            );
+        final demark = computeDemarkForLevel(
+          displayKn: dkn,
+          bars: bars,
+          levels: levels,
+          config: mathIndicatorConfig,
+          asOf: asOf,
+        );
         // 回归通道不读冻结仓：基准=父层连线最后一段，随父层端点实时重算
         final regress = computeRegressionChannelForLevel(
           displayKn: dkn,
@@ -1168,10 +1167,10 @@ class BarFeatureLookup {
       ? vol.toInt().toString()
       : vol.toStringAsFixed(2);
 
-  /// Demark 单标记文案：S1…S9 / C1…C13 / 完成买|完成卖
+  /// Demark 单标记文案：S1…S9 / C1…C13 / 德马克买|德马克卖
   static String formatDemarkMark(DemarkMark m) {
     if (m.type == 'complete') {
-      return m.dir < 0 ? '完成买' : '完成卖';
+      return m.dir < 0 ? '德马克买' : '德马克卖';
     }
     final prefix = m.type == 'setup' ? 'S' : 'C';
     return '$prefix${m.idx}';

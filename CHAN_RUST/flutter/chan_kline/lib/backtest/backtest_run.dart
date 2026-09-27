@@ -1,7 +1,9 @@
 import '../compute/math_series_freeze_store.dart';
+import '../models/bar_crosshair_feature.dart';
 import '../models/bar_feature_lookup.dart';
 import '../models/kline_bar.dart';
 import '../models/level_models.dart';
+import '../models/math_indicator_config.dart';
 import 'backtest_result.dart';
 import 'backtest_run_context.dart';
 import 'chan_event_store.dart';
@@ -62,6 +64,9 @@ BacktestRun executeStrategyBacktest({
   int bollN = 20,
   int donchianN = 20,
   int maxKn = 8,
+  double regressK = 2.0,
+  List<BarCrosshairFeature> barFeatures = const [],
+  MathIndicatorConfig mathConfig = const MathIndicatorConfig(),
   DateTime? now,
   String? runId,
 }) {
@@ -115,6 +120,9 @@ BacktestRun executeStrategyBacktest({
     bollN: bollN,
     donchianN: donchianN,
     maxKn: maxKn,
+    regressK: regressK,
+    barFeatures: barFeatures,
+    mathConfig: mathConfig,
   );
   final signals = <SignalEvent>[
     ...evalCompiledCond(

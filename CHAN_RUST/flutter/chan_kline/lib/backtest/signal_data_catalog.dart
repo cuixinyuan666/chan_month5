@@ -1008,7 +1008,7 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
       ));
       out.add(TradeVariableDef(
         variableId: knTickCountId(kn),
-        displayName: 'K$kn笔数',
+        displayName: 'K$kn区间笔数',
         panel: TradePanel.sub,
         displayKn: kn,
         clockFamily: TradeClockFamily.zsMath,
@@ -1019,10 +1019,10 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
         source: 'computeAllKnTickCountSeries 铺平层序列，按该层计算钟取样',
         unit: 'count',
         futureSafe: true,
-        availabilityNote: '该层还没有确认门控笔数则为不可用',
+        availabilityNote: '该虚拟 K 区间内尚无 K0 笔数累加则为不可用（不等确认门控）',
         groupKey: 'tickCount',
         groupLabel: '笔数',
-        fieldLabel: '笔数',
+        fieldLabel: '区间笔数',
         description: '与 Kn 成交量同一套铺平取样',
       ));
     }
@@ -1431,21 +1431,21 @@ TradeVariableDef _regressDef(int kn, String band) {
     valueType: TradeValueType.numeric,
     readiness: TradeReadiness.registered,
     source:
-        'MathSeriesFreezeStore.regress(kn).${isMid ? "mid" : isUp ? "up" : "down"}',
+        'computeRegressionChannelForLevel（父层连线段，按 eval asOf 现算；与主图/十字同源）',
     unit: 'price',
     futureSafe: true,
     availabilityNote: '回归通道当前父层连线段有数才可读；段未成形或基线外=不可用',
     groupKey: 'regress',
     groupLabel: '回归通道',
     fieldLabel: isMid ? '中轨' : isUp ? '上轨' : '下轨',
-    description: '读图上已冻住的回归通道（中/上/下轨），禁止现场另算',
+    description: '按当步 asOf 现算回归通道（中/上/下轨），不进冻结仓',
   );
 }
 
 TradeVariableDef _demarkCompleteDef(int kn, {required bool buy}) {
   return TradeVariableDef(
     variableId: demarkCompleteId(kn, buy: buy),
-    displayName: 'K$kn Demark完成${buy ? "买" : "卖"}',
+    displayName: 'K$kn Demark德马克${buy ? "买" : "卖"}',
     panel: TradePanel.main,
     displayKn: kn,
     clockFamily: TradeClockFamily.zsMath,
@@ -1453,13 +1453,13 @@ TradeVariableDef _demarkCompleteDef(int kn, {required bool buy}) {
     plotClock: TradePlotClock.k0Bar,
     valueType: TradeValueType.event,
     readiness: TradeReadiness.registered,
-    source: 'MathSeriesFreezeStore.demark(kn) 完成买/卖标记边沿',
+    source: 'computeDemarkForLevel（按 asOf 现算 TD 完成标记边沿）',
     unit: 'event',
     futureSafe: true,
-    availabilityNote: '完成买/卖当根出一次；持值阶梯不重复出事件',
+    availabilityNote: '德马克买/德马克卖当根出一次；持值阶梯不重复出事件',
     groupKey: 'demark',
     groupLabel: 'Demark',
-    fieldLabel: buy ? '完成买' : '完成卖',
+    fieldLabel: buy ? '德马克买' : '德马克卖',
     description: 'EVENT_EXISTS；AND/OR 可跨层，须同一根 K0 刚发生',
   );
 }

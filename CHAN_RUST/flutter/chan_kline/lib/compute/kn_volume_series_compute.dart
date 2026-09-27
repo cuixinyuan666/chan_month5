@@ -164,14 +164,22 @@ Map<int, List<double>> computeAllKnFromK0Series({
     k0Series: k0Series,
     levels: levels,
     bars: bars,
+    accumulate: _accumulateConfirmGated,
   );
 }
 
-/// 内部复用：从 K0 系列出发，逐一累积各层确认门控系列。
+typedef _KnAccumulateFn = List<double> Function({
+  required List<double> lowerIncrements,
+  required LevelBundle bundle,
+  required List<KlineBar> bars,
+});
+
+/// 内部复用：从 K0 系列出发，逐一累积各层系列。
 Map<int, List<double>> _computeAllKnFromK0({
   required List<double> k0Series,
   required List<LevelBundle> levels,
   required List<KlineBar> bars,
+  required _KnAccumulateFn accumulate,
 }) {
   final n = bars.length;
   final out = <int, List<double>>{};
@@ -185,7 +193,7 @@ Map<int, List<double>> _computeAllKnFromK0({
   for (final bundle in sorted) {
     final displayKn = bundle.level + 1;
     if (displayKn < 1) continue;
-    final series = _accumulateConfirmGated(
+    final series = accumulate(
       lowerIncrements: increments,
       bundle: bundle,
       bars: bars,
@@ -206,6 +214,7 @@ Map<int, List<double>> computeAllKnVolumeSeries({
     k0Series: computeK0VolumeSeries(bars),
     levels: levels,
     bars: bars,
+    accumulate: _accumulateConfirmGated,
   );
 }
 
@@ -220,6 +229,7 @@ Map<int, List<double>> computeAllKnBuyVolumeSeries({
     k0Series: computeK0BuyVolumeSeries(bars),
     levels: levels,
     bars: bars,
+    accumulate: _accumulateConfirmGated,
   );
 }
 
@@ -233,6 +243,7 @@ Map<int, List<double>> computeAllKnBuyVolumeBsgSeries({
     k0Series: computeK0BuyVolumeBsgSeries(bars),
     levels: levels,
     bars: bars,
+    accumulate: _accumulateConfirmGated,
   );
 }
 
@@ -246,6 +257,7 @@ Map<int, List<double>> computeAllKnSellVolumeSeries({
     k0Series: computeK0SellVolumeSeries(bars),
     levels: levels,
     bars: bars,
+    accumulate: _accumulateConfirmGated,
   );
 }
 
@@ -259,10 +271,12 @@ Map<int, List<double>> computeAllKnGrayVolumeSeries({
     k0Series: computeK0GrayVolumeSeries(bars),
     levels: levels,
     bars: bars,
+    accumulate: _accumulateConfirmGated,
   );
 }
 
 /// All Kn 总笔数系列（key = display kn: 0=K0, 1=K1, ...）。
+/// Kn≥1：区间内 K0 笔数累加（不等确认门控；与成交量确认门控口径不同）。
 Map<int, List<double>> computeAllKnTickCountSeries({
   required List<KlineBar> bars,
   required List<LevelBundle> levels,
@@ -272,6 +286,7 @@ Map<int, List<double>> computeAllKnTickCountSeries({
     k0Series: computeK0TickCountSeries(bars),
     levels: levels,
     bars: bars,
+    accumulate: _accumulateIntervalRunning,
   );
 }
 
@@ -285,6 +300,7 @@ Map<int, List<double>> computeAllKnBuyTickCountSeries({
     k0Series: computeK0BuyTickCountSeries(bars),
     levels: levels,
     bars: bars,
+    accumulate: _accumulateIntervalRunning,
   );
 }
 
@@ -298,6 +314,7 @@ Map<int, List<double>> computeAllKnSellTickCountSeries({
     k0Series: computeK0SellTickCountSeries(bars),
     levels: levels,
     bars: bars,
+    accumulate: _accumulateIntervalRunning,
   );
 }
 
@@ -311,6 +328,7 @@ Map<int, List<double>> computeAllKnGrayTickCountSeries({
     k0Series: computeK0GrayTickCountSeries(bars),
     levels: levels,
     bars: bars,
+    accumulate: _accumulateIntervalRunning,
   );
 }
 
@@ -358,6 +376,64 @@ List<double> _accumulateConfirmGated({
       displayStart =
           prev.confirmX >= 0 ? prev.confirmX : (prev.x2 + 1);
     }
+
+    final int endX;
+    if (isActiveTail) {
+      endX = lastIdx;
+    } else if (u.confirmX >= 0) {
+      endX = u.confirmX - 1;
+    } else {
+      endX = u.x2;
+    }
+    if (endX < sumStart) {
+      prev = u;
+      continue;
+    }
+
+    var run = 0.0;
+    for (var x = sumStart; x <= endX; x++) {
+      final i = idxToI[x];
+      if (i == null) continue;
+      run += lowerIncrements[i];
+      if (x >= displayStart) {
+        out[i] = run;
+      }
+    }
+    prev = u;
+  }
+  return out;
+}
+
+/// Kn 笔数：虚拟 K 区间内从 sumStart 起即累加 K0 增量（不等上层确认）。
+List<double> _accumulateIntervalRunning({
+  required List<double> lowerIncrements,
+  required LevelBundle bundle,
+  required List<KlineBar> bars,
+}) {
+  final n = bars.length;
+  final out = List<double>.filled(n, 0.0);
+  if (n == 0) return out;
+  final idxToI = <int, int>{for (var i = 0; i < n; i++) bars[i].idx: i};
+  final lastIdx = bars.last.idx;
+
+  final units = <LevelUnitBar>[
+    ...bundle.unitBars,
+    if (bundle.activeUnit != null) bundle.activeUnit!,
+  ];
+  if (units.isEmpty) return out;
+
+  LevelUnitBar? prev;
+  for (final u in units) {
+    final isActiveTail =
+        bundle.activeUnit != null && identical(u, bundle.activeUnit);
+
+    late final int sumStart;
+    if (prev == null) {
+      sumStart = u.x1 >= 0 ? u.x1 : 0;
+    } else {
+      sumStart = prev.x2 + 1;
+    }
+    final displayStart = sumStart;
 
     final int endX;
     if (isActiveTail) {

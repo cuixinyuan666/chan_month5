@@ -491,10 +491,10 @@ class MlRuleScore {
       if (sub['demark_text_$kn'] != null) {
         hits++;
         final t = '${sub['demark_text_$kn']}';
-        if (t.contains('买') || t.contains('完成买')) {
+        if (t.contains('德马克买')) {
           bias += 35;
           signals.add('K$kn Demark $t');
-        } else if (t.contains('卖') || t.contains('完成卖')) {
+        } else if (t.contains('德马克卖')) {
           bias -= 35;
           signals.add('K$kn Demark $t');
         } else if (t.isNotEmpty) {

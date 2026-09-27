@@ -363,9 +363,9 @@ extension SubIndicatorKindMeta on SubIndicatorKind {
       case SubIndicatorKind.buyN:
         return 8;
       case SubIndicatorKind.adjacentRatio:
-        return 11;
+        return 9;
       case SubIndicatorKind.lineSlope:
-        return 12;
+        return 10;
       case SubIndicatorKind.macd:
         return 13;
       case SubIndicatorKind.rsi:
@@ -498,7 +498,7 @@ class SubChartIndicator {
       case SubIndicatorKind.volume:
         return 'K$kn成交量';
       case SubIndicatorKind.tickCount:
-        return 'K$kn笔数';
+        return kn == 0 ? 'K0笔数' : 'K$kn区间笔数';
       case SubIndicatorKind.fractalConfirm:
         return 'K$kn分型确认';
       case SubIndicatorKind.fractalJudgment:

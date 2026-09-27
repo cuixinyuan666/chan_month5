@@ -172,7 +172,7 @@ BollK0Series computeBollForLevel({
 
 // ─── 唐奇安通道（Donchian） ───────────────────────────
 // 经典口径：上轨 = 窗口 N 内最高价最大（HHV），下轨 = 窗口 N 内最低价最小（LLV），
-// 中轨 = (上轨 + 下轨) / 2。样本钟与布林/KDJ 同构：K0=原生分钟K，K{n}=本层虚拟K。
+// 中轨 = (上轨 + 下轨) / 2。样本钟与布林/KDJ 同（虚拟 K 落点）；价格源为 high/low（经典唐奇安），与布林 close 不同。
 
 class DonchianK0Series {
   final List<double?> up;

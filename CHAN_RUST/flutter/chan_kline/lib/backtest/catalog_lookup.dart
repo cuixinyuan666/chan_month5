@@ -1,8 +1,10 @@
+import '../compute/fractal_judgment_compute.dart';
 import '../compute/fx_extend_line_compute.dart';
 import '../compute/kn_ohlc_sample_compute.dart';
 import '../compute/kn_volume_series_compute.dart';
 import '../compute/math_classic_compute.dart';
 import '../compute/math_series_freeze_store.dart';
+import '../models/bar_crosshair_feature.dart';
 import '../compute/trend_line_compute.dart';
 import '../models/bar_feature_lookup.dart';
 import '../models/fractal_judgment_event.dart';
@@ -43,6 +45,8 @@ TradeScalar lookupTradeNumeric({
   Map<int, List<ZsSignalEvent>> zsConfirmByKn = const {},
   int bollN = 20,
   int donchianN = 20,
+  double regressK = 2.0,
+  List<BarCrosshairFeature> barFeatures = const [],
 }) {
   if (bars.isEmpty || asOf < 0) return const TradeScalar.unavailable();
 
@@ -104,6 +108,17 @@ TradeScalar lookupTradeNumeric({
     k0Confirms: k0Confirms,
   );
   if (extra != null) return extra;
+  final regress = _lookupRegressionPlot(
+    parsed: parsed,
+    asOf: asOf,
+    bars: bars,
+    levels: levels,
+    features: features,
+    fractalJudgmentByKn: fractalJudgmentByKn,
+    regressK: regressK,
+    barFeatures: barFeatures,
+  );
+  if (regress != null) return regress;
   return _lookupFrozenPlot(
     parsed: parsed,
     asOf: asOf,
@@ -247,6 +262,128 @@ TradeScalar _lookupRaw({
   return TradeScalar.num(v);
 }
 
+bool _isRegressionPlotId(({String panel, int kn, List<String> rest}) parsed) {
+  return parsed.panel == 'MAIN' &&
+      parsed.rest.length == 2 &&
+      parsed.rest[0] == 'REGRESS';
+}
+
+List<FractalJudgmentEvent> _regressionLiveJudgments({
+  required int parentKn,
+  required List<KlineBar> bars,
+  required List<LevelBundle> levels,
+  required int asOf,
+  Map<int, List<FractalJudgmentEvent>> fractalJudgmentByKn = const {},
+  List<BarCrosshairFeature> barFeatures = const [],
+}) {
+  final hist = fractalJudgmentByKn[parentKn];
+  if (hist != null && hist.isNotEmpty) {
+    return hist.where((e) => e.x <= asOf).toList();
+  }
+  return collectFractalJudgmentEvents(
+    kn: parentKn,
+    bars: bars,
+    levels: levels,
+    barFeatures: barFeatures,
+    asOf: asOf,
+  );
+}
+
+double? _regressionBandValueAt({
+  required int displayKn,
+  required String band,
+  required int asOf,
+  required List<KlineBar> bars,
+  required List<LevelBundle> levels,
+  List<BarCrosshairFeature> barFeatures = const [],
+  Map<int, List<FractalJudgmentEvent>> fractalJudgmentByKn = const {},
+  double regressK = 2.0,
+}) {
+  final rc = computeRegressionChannelForLevel(
+    displayKn: displayKn,
+    bars: bars,
+    levels: levels,
+    barFeatures: barFeatures,
+    liveJudgments: _regressionLiveJudgments(
+      parentKn: displayKn + 1,
+      bars: bars,
+      levels: levels,
+      asOf: asOf,
+      fractalJudgmentByKn: fractalJudgmentByKn,
+      barFeatures: barFeatures,
+    ),
+    k: regressK,
+    asOf: asOf,
+  );
+  final series = switch (band) {
+    'MID' => rc.mid,
+    'UP' => rc.up,
+    'DOWN' => rc.down,
+    _ => null,
+  };
+  if (series == null || asOf < 0 || asOf >= series.length) return null;
+  return series[asOf];
+}
+
+/// 回归通道：与主图/十字同源，按 eval 当步 asOf 现算（不进冻结仓）。
+TradeScalar? _lookupRegressionPlot({
+  required ({String panel, int kn, List<String> rest}) parsed,
+  required int asOf,
+  required List<KlineBar> bars,
+  required List<LevelBundle> levels,
+  BarFeatureLookup? features,
+  Map<int, List<FractalJudgmentEvent>> fractalJudgmentByKn = const {},
+  double regressK = 2.0,
+  List<BarCrosshairFeature> barFeatures = const [],
+}) {
+  if (!_isRegressionPlotId(parsed)) return null;
+  final band = parsed.rest[1];
+  final v = _regressionBandValueAt(
+    displayKn: parsed.kn,
+    band: band,
+    asOf: asOf,
+    bars: bars,
+    levels: levels,
+    barFeatures: barFeatures,
+    fractalJudgmentByKn: fractalJudgmentByKn,
+    regressK: regressK,
+  );
+  if (v == null) return const TradeScalar.unavailable();
+  return TradeScalar.num(v);
+}
+
+List<EvalClockPoint> _regressionEvalSeries({
+  required int kn,
+  required String band,
+  required int asOf,
+  required List<KlineBar> bars,
+  required List<LevelBundle> levels,
+  BarFeatureLookup? features,
+  Map<int, List<FractalJudgmentEvent>> fractalJudgmentByKn = const {},
+  double regressK = 2.0,
+  List<BarCrosshairFeature> barFeatures = const [],
+}) {
+  final out = <EvalClockPoint>[];
+  var i = 0;
+  for (final b in bars) {
+    if (b.idx > asOf) continue;
+    final v = _regressionBandValueAt(
+      displayKn: kn,
+      band: band,
+      asOf: b.idx,
+      bars: bars,
+      levels: levels,
+      barFeatures: barFeatures,
+      fractalJudgmentByKn: fractalJudgmentByKn,
+      regressK: regressK,
+    );
+    if (v == null) continue;
+    out.add(EvalClockPoint(evalIndex: i, availableAt: b.idx, value: v));
+    i++;
+  }
+  return out;
+}
+
 /// 图上/十字用的铺平格子：只读冻结仓，禁止现算第二套 MACD/RSI/KDJ/布林。
 TradeScalar _lookupFrozenPlot({
   required ({String panel, int kn, List<String> rest}) parsed,
@@ -274,18 +411,6 @@ List<double?>? frozenPlotSeries({
     final period = int.tryParse(parsed.rest[1]);
     if (period == null || period < 1) return null;
     return store.mean(parsed.kn)?[period];
-  }
-  if (parsed.panel == 'MAIN' &&
-      parsed.rest.length == 2 &&
-      parsed.rest[0] == 'REGRESS') {
-    final series = store.regress(parsed.kn);
-    if (series == null) return null;
-    return switch (parsed.rest[1]) {
-      'MID' => series.mid,
-      'UP' => series.up,
-      'DOWN' => series.down,
-      _ => null,
-    };
   }
   if (parsed.panel == 'MAIN' &&
       parsed.rest.length >= 2 &&
@@ -366,6 +491,8 @@ List<EvalClockPoint> readEvalClockSeries({
   Map<int, List<ZsSignalEvent>> zsConfirmByKn = const {},
   int bollN = 20,
   int donchianN = 20,
+  double regressK = 2.0,
+  List<BarCrosshairFeature> barFeatures = const [],
 }) {
   if (bars.isEmpty || asOf < 0) return const [];
   final def = lookupTradeVariable(variableId, maxKn: 32);
@@ -438,6 +565,19 @@ List<EvalClockPoint> readEvalClockSeries({
       asOf: asOf,
       bars: bars,
       levels: levels,
+    );
+  }
+  if (_isRegressionPlotId(parsed)) {
+    return _regressionEvalSeries(
+      kn: parsed.kn,
+      band: parsed.rest[1],
+      asOf: asOf,
+      bars: bars,
+      levels: levels,
+      features: features,
+      fractalJudgmentByKn: fractalJudgmentByKn,
+      regressK: regressK,
+      barFeatures: barFeatures,
     );
   }
   if (mathFreeze == null) return const [];

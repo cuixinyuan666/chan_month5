@@ -4293,16 +4293,15 @@ class _KlineCompositePainter extends CustomPainter {
   ) {
     if (bars.isEmpty) return;
     final asOf = segAsOf;
-    final DemarkK0Series demark = mathFreezeStore?.demark(displayKn) ??
-        computeDemarkForLevel(
-          displayKn: displayKn,
-          bars: bars,
-          levels: asOf != null
-              ? (zsAsOfBundle?.levels ?? const <LevelBundle>[])
-              : levels,
-          config: mathIndicatorConfig,
-          asOf: asOf,
-        );
+    final DemarkK0Series demark = computeDemarkForLevel(
+      displayKn: displayKn,
+      bars: bars,
+      levels: asOf != null
+          ? (zsAsOfBundle?.levels ?? const <LevelBundle>[])
+          : levels,
+      config: mathIndicatorConfig,
+      asOf: asOf,
+    );
     final maxX = asOf ?? bars.last.idx;
     final fontSize = math.max(8.0, slotW * 0.45);
     final lineH = fontSize + 1.5;

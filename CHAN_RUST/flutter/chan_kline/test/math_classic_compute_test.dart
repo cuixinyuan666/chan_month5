@@ -227,7 +227,7 @@ void main() {
       expect(anyMark, isTrue);
     });
 
-    test('formatDemarkMarks 文案含完成买/卖', () {
+    test('formatDemarkMarks 文案含德马克买/卖', () {
       const marks = [
         DemarkMark(type: 'setup', dir: -1, idx: 9),
         DemarkMark(type: 'countdown', dir: 1, idx: 3),
@@ -235,7 +235,7 @@ void main() {
       ];
       expect(
         BarFeatureLookup.formatDemarkMarks(marks),
-        'S9 C3 完成买',
+        'S9 C3 德马克买',
       );
     });
 

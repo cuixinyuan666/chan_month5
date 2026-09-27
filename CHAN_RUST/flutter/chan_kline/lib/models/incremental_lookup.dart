@@ -1315,14 +1315,13 @@ class IncrementalBarFeatureLookup {
               config: mathIndicatorConfig,
               asOf: asOf,
             );
-      final demark = mathFreezeStore?.demark(dkn) ??
-          computeDemarkForLevel(
-            displayKn: dkn,
-            bars: bars,
-            levels: bundle.levels,
-            config: mathIndicatorConfig,
-            asOf: asOf,
-          );
+      final demark = computeDemarkForLevel(
+        displayKn: dkn,
+        bars: bars,
+        levels: bundle.levels,
+        config: mathIndicatorConfig,
+        asOf: asOf,
+      );
       // 回归通道不进冻结仓：与绘制同源现算（父层 K{n+1}连线最后一段 + 外推到 asOf）。
       final regress = computeRegressionChannelForLevel(
         displayKn: dkn,

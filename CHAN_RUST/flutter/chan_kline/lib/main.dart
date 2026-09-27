@@ -3219,6 +3219,9 @@ class _KlineHomePageState extends State<KlineHomePage> {
       bollN: _mathIndicatorConfig.bollN,
       donchianN: _mathIndicatorConfig.donchianN,
       maxKn: maxKn,
+      regressK: _mathIndicatorConfig.regressK,
+      barFeatures: _barFeatures,
+      mathConfig: _mathIndicatorConfig,
     );
     setState(() {
       _strategyConfig = cfg;
@@ -4032,7 +4035,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
             '· 父层一出现新段，整条通道换基准（旧的整条不留，不拼阶梯）；\n'
             '· 回归：以 K0 格点 x 为自变量最小二乘 → 中轨（带斜率）；上下轨 = 中轨 ± k×残差总体标准差（与本项目布林同口径）；\n'
             '· 平行外推到 asOf 截断（宽度恒定，非喇叭口），asOf 右侧不画；十字 asOf 回退不泄漏未来；\n'
-            '· 已接入：冻结仓（regressByKn）+ 回测变量 MAIN.Kn.REGRESS.MID/UP/DOWN + 十字读数 regress_mid/up/down；\n'
+            '· 已接入：回测变量 MAIN.Kn.REGRESS.MID/UP/DOWN + 十字读数 regress_mid/up/down（按 asOf 现算，不进冻结仓）；\n'
             '· 不参与任何信号计算的未来函数；父层未成形或样本不足 2 根 → 该层整条不出线；\n'
             '· 与布林区别：布林=滑窗均值（水平线）全图连续；回归通道=父层连线段内回归线（带斜率）只画最新一段。',
           ),

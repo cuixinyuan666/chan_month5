@@ -1,7 +1,9 @@
 import '../compute/math_series_freeze_store.dart';
+import '../models/bar_crosshair_feature.dart';
 import '../models/bar_feature_lookup.dart';
 import '../models/kline_bar.dart';
 import '../models/level_models.dart';
+import '../models/math_indicator_config.dart';
 import 'buy_n_var.dart';
 import 'catalog_lookup.dart';
 import 'chan_event_store.dart';
@@ -271,6 +273,9 @@ class CondEvalCtx {
   final int bollN;
   final int donchianN;
   final int maxKn;
+  final double regressK;
+  final List<BarCrosshairFeature> barFeatures;
+  final MathIndicatorConfig mathConfig;
 
   const CondEvalCtx({
     required this.asOf,
@@ -287,6 +292,9 @@ class CondEvalCtx {
     this.bollN = 20,
     this.donchianN = 20,
     this.maxKn = 8,
+    this.regressK = 2.0,
+    this.barFeatures = const [],
+    this.mathConfig = const MathIndicatorConfig(),
   });
 }
 
@@ -403,6 +411,8 @@ List<_BoolPt> _evalEvent(CompiledEvent cond, CondEvalCtx ctx) {
     levels: ctx.levels,
     diverRelations: ctx.diverRelations,
     mathFreeze: ctx.mathFreeze,
+    bars: ctx.bars,
+    mathConfig: ctx.mathConfig,
     maxKn: ctx.maxKn,
   );
   final at = <int, TradeChanEvent>{
@@ -868,6 +878,8 @@ List<EvalClockPoint> _readRef(
       zsConfirmByKn: ctx.chanEvents.zsConfirmByKn,
       bollN: ctx.bollN,
       donchianN: ctx.donchianN,
+      regressK: ctx.regressK,
+      barFeatures: ctx.barFeatures,
     );
     return [
       for (final p in grid)
@@ -899,6 +911,8 @@ List<EvalClockPoint> _readRef(
       zsConfirmByKn: ctx.chanEvents.zsConfirmByKn,
       bollN: ctx.bollN,
       donchianN: ctx.donchianN,
+      regressK: ctx.regressK,
+      barFeatures: ctx.barFeatures,
     );
     return [
       for (final p in grid)
@@ -928,6 +942,8 @@ List<EvalClockPoint> _readRef(
     zsConfirmByKn: ctx.chanEvents.zsConfirmByKn,
     bollN: ctx.bollN,
     donchianN: ctx.donchianN,
+    regressK: ctx.regressK,
+    barFeatures: ctx.barFeatures,
   );
 }
 
