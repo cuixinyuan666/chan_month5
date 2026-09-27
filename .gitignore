@@ -18,6 +18,9 @@ CHAN_RUST/rust/target_alt/
 CHAN_RUST/flutter/chan_kline/build/
 CHAN_RUST/flutter/chan_kline/.dart_tool/
 CHAN_RUST/flutter/chan_kline/.idea/
+# Gradle 本机构建缓存（含 8.14/ 版本目录、buildOutputCleanup、vcs-1；android 构建自动重建）
+# 2026-09-27 加入：仅 Android 平台产物，勿提交
+CHAN_RUST/flutter/chan_kline/android/.gradle/
 
 # 筹码分布本机偏好（bucketStep 等；运行时落盘，勿提交）
 CHAN_RUST/flutter/chan_kline/.chan_chip_config.json
