@@ -69,6 +69,8 @@ BacktestRun executeStrategyBacktest({
   MathIndicatorConfig mathConfig = const MathIndicatorConfig(),
   DateTime? now,
   String? runId,
+  /// 寻优等批量场景：外层已编译则跳过重编 AST（求值/撮合口径不变）。
+  StrategyCompileOk? precompiled,
 }) {
   final started = now ?? DateTime.now();
   final id = runId ?? 'run_${started.millisecondsSinceEpoch}';
@@ -78,7 +80,9 @@ BacktestRun executeStrategyBacktest({
     config: config.copyWith(dataScope: scope),
     scope: scope,
   );
-  final compiled = compileStrategyConfig(config, maxKn: maxKn);
+  final StrategyCompileResult compiled = precompiled != null
+      ? precompiled
+      : compileStrategyConfig(config, maxKn: maxKn);
   if (compiled is StrategyCompileIllegal) {
     return BacktestRun(
       runId: id,

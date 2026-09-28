@@ -3527,7 +3527,20 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 
 ---
 
+### 2026-09-27 · Cursor · 验证 · 指标组合扫描（002003 默认 protocol 两日）
 
+- **执行者**：Cursor Agent
+- **任务类型**：策略回测批量扫描 / 非核心测试工具
+- **操作**：
+  1. 新增 `test/backtest_step_harness.dart`：连续单步冻结构/Math/背驰/中枢对象，与主界面步进口径一致。
+  2. 新增 `test/indicator_combo_sweep_test.dart`：登记变量事件对 + 标准组合模板共 512 条，次根开盘撮合，按胜率×盈亏比排序。
+  3. 数据：`002003` `1m`，`2004/07/19~20`（protocol 缓存，462 根 K0），非 `a_Data/002003/*.txt`。
+- **结果**：138 条≥2 笔闭合。样本较多且综合分靠前：**K0 二类买→二类卖**（11 笔，胜率约 64%，盈亏比约 13.6）；**K0 四类买→三类卖**（22 笔，胜率约 64%，盈亏比约 3.7）。若干「100% 胜率」仅 3～6 笔且无亏损，盈亏比不可用，不宜当真。
+- **演示**：在 `chan_kline` 目录执行 `flutter test test/indicator_combo_sweep_test.dart`，看控制台 Top 榜；加长样本请改测试文件 `_kBegin/_kEnd` 或补 protocol 缓存后再跑。
+- **测试**：上述单测约 25s 通过（512/512 编译跑通）。
+- **注意事项 / 待办**：两日窗口过拟合风险高；未扫筹码峰/笔数峰组合（冻结仓未灌 chip）；全组合 AND/OR 爆炸未做，仅事件同层配对 + 内置模板。
+
+---
 
 ### 2026-09-24 12:47 — 设置内所有子对话框（含参数/确认弹窗）字符串可复制
 
@@ -3784,6 +3797,53 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   5. 全文扫描 `完成买|完成卖`，`lib/` 下仅剩 2 处纯注释（`condition_ast.dart:297`、`demark_compute.dart:20`），不影响运行。
 - **结果**：四条违规全部关闭；三条回测参数链路（`regressK` / `barFeatures` / `mathConfig`）全通，改设置面板后图上与回测同源。判定「代码可提交」，剩余均为动作性事项（跑一次全量测试、冷启动连续单步验收、可选清 2 处注释）。
 - **注意事项 / 待办**：① 提交**勿用 `git add -A`**（仓库已有踩坑记录，`android/.gradle/` 等构建产物会混入）；② 回归通道仍未接 ML 特征轴，已记为技术债；③ 本次为纯 Flutter 改动但动了主图 Demark 绘制分支与回测求值入口，仍需**冷启动连续单步**验收（禁「一键跳末」代替）。
+
+---
+
+### 2026-09-27 · Cursor · 验证 · 指标组合扫描（002003 默认 protocol 两日）
+
+- **执行者**：Cursor Agent
+- **任务类型**：策略回测批量扫描 / 非核心测试工具
+- **操作**：
+  1. 新增 `test/backtest_step_harness.dart`：连续单步冻结构/Math/背驰/中枢对象，与主界面步进口径一致。
+  2. 新增 `test/indicator_combo_sweep_test.dart`：登记变量事件对 + 标准组合模板共 512 条，次根开盘撮合，按胜率×盈亏比排序。
+  3. 数据：`002003` `1m`，`2004/07/19~20`（protocol 缓存，462 根 K0），非 `a_Data/002003/*.txt`。
+- **结果**：138 条≥2 笔闭合。样本较多且综合分靠前：**K0 二类买→二类卖**（11 笔，胜率约 64%，盈亏比约 13.6）；**K0 四类买→三类卖**（22 笔，胜率约 64%，盈亏比约 3.7）。若干「100% 胜率」仅 3～6 笔且无亏损，盈亏比不可用，不宜当真。
+- **演示**：在 `chan_kline` 目录执行 `flutter test test/indicator_combo_sweep_test.dart`，看控制台 Top 榜；加长样本请改测试文件 `_kBegin/_kEnd` 或补 protocol 缓存后再跑。
+- **测试**：上述单测约 25s 通过（512/512 编译跑通）。
+- **注意事项 / 待办**：两日窗口过拟合风险高；未扫筹码峰/笔数峰组合（冻结仓未灌 chip）；全组合 AND/OR 爆炸未做，仅事件同层配对 + 内置模板。
+
+---
+
+### 2026-09-28 · Cursor · 功能 · 设置·指标寻优（Runner + 对拍）
+
+- **执行者**：Cursor Agent
+- **任务类型**：设置入口 / 策略回测批量寻优（非缠论内核改动）
+- **操作**：
+  1. 步进冻结仓下沉 `lib/backtest/backtest_step_harness.dart`；寻优核心下沉 `lib/indicator_search/`（变量池、候选、SearchEnv、Runner）。
+  2. 候选 `legacyFull` 与旧全量枚举一致；默认 `optimized`（常用模板 + 事件全量 + 数值/阈值上限）+ 样本外早停，避免 30m 一年全枚举卡数小时。
+  3. 设置「策略回测」下增加 **寻优**、说明与 **寻优参数**；结果 TSV/进度日志写应用支持目录。
+  4. `indicator_search_parity_test`：002003 protocol 两日 1m，前 400 条 legacy 候选与旧循环逐条对拍样本内外笔数、胜率、净利、保守分。
+- **结果**：对拍约 25s 通过；APP 可用当前代码/周期/区间后台出组合榜（同口径冻结 + 现有回测引擎）。
+- **演示**：设置 → 加载 K 线 → 点「寻优」；全量枚举在「寻优参数」里关闭优化（极慢）。
+- **测试**：`flutter test test/indicator_search/indicator_search_parity_test.dart` 通过。
+- **注意事项 / 待办**：全量 `indicator_search_test.dart` 仍可能跑很久；寻优中勿开机器学习；提交勿 `git add -A`。
+
+---
+
+### 2026-09-28 · Cursor · 增强 · 寻优提速/表格/进度/多维对拍
+
+- **执行者**：Cursor Agent
+- **任务类型**：寻优体验与批量回测性能（不改缠论内核）
+- **操作**：
+  1. **编排层提速（分数不变）**：`executeStrategyBacktest` 支持 `precompiled`，Runner 样本内/外共用一次 AST 编译；TSV 批量 flush。
+  2. **结果 UI**：寻优完成用大窗 **Tab + DataTable**（双达标 / 保守分 Top30），替代纯文本榜。
+  3. **过程 UI**：冻结/扫描分阶段进度条、已用时间与 ETA；扫描中展示最新双达标条目；日志写 progress.log。
+  4. **对拍**：`parity`（400 条无早停）、`compile_parity`（预编译 vs 重编）、`early_stop_parity`（早停开/关各 250 条）均与手写循环一致。
+- **结果**：三组寻优对拍测试约 70s 全通过；APP 内寻优更直观、扫描阶段预计较上次少一层重复编译开销。
+- **演示**：设置 → 寻优 → 看进度条与表格；关早停可对照 TSV 样本外笔数。
+- **测试**：`flutter test test/indicator_search/indicator_search_parity_test.dart test/indicator_search/indicator_search_compile_parity_test.dart test/indicator_search/indicator_search_early_stop_parity_test.dart` 通过。
+- **注意事项 / 待办**：未做「一次求信号切两段」与多 isolate 并行（需另立项对拍）；递推 Math 仍不动。
 
 ---
 

@@ -79,6 +79,9 @@ import 'models/k1_analysis.dart';
 import 'models/kline_combine_bundle.dart';
 import 'settings/chip_settings_store.dart';
 import 'settings/math_indicator_settings_store.dart';
+import 'settings/indicator_search_last_result_store.dart';
+import 'settings/indicator_search_settings_store.dart';
+import 'widgets/indicator_search_dialog.dart';
 import 'models/math_indicator_config.dart';
 import 'models/trend_model_config.dart';
 import 'widgets/datetime_picker_dialog.dart';
@@ -480,6 +483,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
   static const _maxBacktestChartFraction = 0.85;
   bool _backtestSplitDragging = false;
 
+  bool _indicatorSearchRunning = false;
+
   /// 十字线 tooltip 桥：KlineChart 向本层广播「是否显示 + 当前行」，停靠为左侧子窗口。
   final CrosshairTooltipBridge _tooltipBridge = CrosshairTooltipBridge();
   /// 左侧停靠子窗口宽度（可拖拽调整）
@@ -686,6 +691,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
     _keepAlive.attach();
     _loadInteractionMode();
     _loadMathIndicatorConfig();
+    IndicatorSearchSettingsStore.load();
+    IndicatorSearchLastResultStore.load();
     _bootstrapApp();
   }
 
@@ -2638,6 +2645,37 @@ class _KlineHomePageState extends State<KlineHomePage> {
               : () => _openBacktestWorkbench(closeSettingsSheet: forMobileSheet),
         ),
         const SizedBox(height: SettingsPanelTheme.fieldGap),
+        SettingsFilledButton(
+          label: _indicatorSearchRunning ? '寻优（进行中）' : '寻优',
+          icon: Icons.travel_explore,
+          onPressed: _indicatorSearchRunning ||
+                  _mlSession.isActive ||
+                  (_busy && !_indicatorSearchRunning)
+              ? null
+              : () => _openIndicatorSearch(closeSettingsSheet: forMobileSheet),
+          onHelp: () => showIndicatorSearchHelp(context),
+          helpTooltip: '指标寻优说明',
+        ),
+        Row(
+          children: [
+            TextButton(
+              onPressed: _indicatorSearchRunning
+                  ? null
+                  : () => showIndicatorSearchLastResultDialog(context),
+              child: const Text('上次寻优结果', style: TextStyle(fontSize: 12)),
+            ),
+            const Spacer(),
+            TextButton(
+              onPressed: _indicatorSearchRunning
+                  ? null
+                  : () async {
+                      await showIndicatorSearchSettingsSheet(context);
+                    },
+              child: const Text('寻优参数', style: TextStyle(fontSize: 12)),
+            ),
+          ],
+        ),
+        const SizedBox(height: SettingsPanelTheme.fieldGap),
         SwitchListTile(
           contentPadding: EdgeInsets.zero,
           dense: true,
@@ -2899,6 +2937,44 @@ class _KlineHomePageState extends State<KlineHomePage> {
   void _closeBacktestWorkbench() {
     setState(() => _backtestPanelOpen = false);
     _refreshKeepAlive();
+  }
+
+  Future<void> _openIndicatorSearch({bool closeSettingsSheet = false}) async {
+    if (_mlSession.isActive) {
+      _showSnack('请先退出机器学习');
+      return;
+    }
+    final code = _selectedCode;
+    if (code == null) {
+      _showSnack('请先选择股票');
+      return;
+    }
+    if (closeSettingsSheet && Navigator.canPop(context)) {
+      Navigator.pop(context);
+      _settingsSheetSetState = null;
+    }
+    setState(() => _indicatorSearchRunning = true);
+    _msgHistory.append(
+      '指标寻优：$code ${_periods[_period] ?? _period} '
+      '${_fmtDateTime(_beginDate)}~${_fmtDateTime(_endDate)}',
+    );
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => IndicatorSearchDialog(
+        code: code,
+        period: _period,
+        beginText: _fmtDateTime(_beginDate),
+        endText: _fmtDateTime(_endDate),
+        dataRoot: _dataRoot,
+        tickSource: _tickSourceFor(code),
+        mathConfig: _mathIndicatorConfig,
+        initialBars: _allBars.isEmpty ? null : List<KlineBar>.from(_allBars),
+      ),
+    );
+    if (!mounted) return;
+    setState(() => _indicatorSearchRunning = false);
+    _msgHistory.append('指标寻优结束');
   }
 
   void _openBacktestWorkbench({bool closeSettingsSheet = false}) {

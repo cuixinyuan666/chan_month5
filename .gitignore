@@ -34,6 +34,14 @@ CHAN_RUST/flutter/chan_kline/.chan_chip_config.json
 # ML 导出文件（运行时生成的模型和特征文件，勿提交）
 a_Data/ml_exports/
 
+# 指标寻优测试落盘（长任务进度/榜单，勿提交）
+CHAN_RUST/flutter/chan_kline/test/indicator_search/*.out
+CHAN_RUST/flutter/chan_kline/test/indicator_search/*.err
+CHAN_RUST/flutter/chan_kline/test/indicator_search/progress.log
+CHAN_RUST/flutter/chan_kline/test/indicator_search/results.tsv
+CHAN_RUST/flutter/chan_kline/test/indicator_search/report.txt
+CHAN_RUST/flutter/chan_kline/test/indicator_search/proc.txt
+
 # 临时测试文件
 *.tmp
 *.temp

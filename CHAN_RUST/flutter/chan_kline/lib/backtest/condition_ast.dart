@@ -387,6 +387,77 @@ String astConditionText(TradeAst ast, {String? parentKind}) {
   }
 }
 
+String _tradeValueLabelCn(TradeValueRef ref, {required int maxKn}) {
+  if (ref is TradeConstRef) return tradeValueLabel(ref);
+  if (ref is TradeEnumRef) return tradeValueLabel(ref);
+  if (ref is TradeVarRef) {
+    final def = lookupTradeVariable(ref.variableId, maxKn: maxKn);
+    return def?.displayName ?? compactVarId(ref.variableId);
+  }
+  return '?';
+}
+
+/// 寻优/设置展示用：变量中文名 + 中文运算符（与引擎 AST 一致，仅文案不同）。
+String astConditionTextCn(TradeAst ast, {int maxKn = 16, String? parentKind}) {
+  switch (ast) {
+    case TradeCmpAst(:final left, :final right, :final op):
+      return '${_tradeValueLabelCn(left, maxKn: maxKn)} ${tradeOpLabelCn(op)} ${_tradeValueLabelCn(right, maxKn: maxKn)}';
+    case TradeEventAst(:final variableId):
+      final def = lookupTradeVariable(variableId, maxKn: maxKn);
+      final name = def?.displayName ?? compactVarId(variableId);
+      return '$name 出现';
+    case TradeAndAst(:final left, :final right):
+      final inner =
+          '${astConditionTextCn(left, maxKn: maxKn, parentKind: 'and')}\n且\n${astConditionTextCn(right, maxKn: maxKn, parentKind: 'and')}';
+      return parentKind != null && parentKind != 'and' ? '（$inner）' : inner;
+    case TradeOrAst(:final left, :final right):
+      final inner =
+          '${astConditionTextCn(left, maxKn: maxKn, parentKind: 'or')}\n或\n${astConditionTextCn(right, maxKn: maxKn, parentKind: 'or')}';
+      return parentKind != null && parentKind != 'or' ? '（$inner）' : inner;
+  }
+}
+
+String? _displayNameForCompactId(String compact, int maxKn) {
+  for (final d in buildRegisteredTradeVariables(maxKn)) {
+    if (d.variableId == compact || compactVarId(d.variableId) == compact) {
+      return d.displayName;
+    }
+  }
+  return null;
+}
+
+/// 把旧版英文条件行转成中文（快照/TSV 兼容）。
+String conditionDisplayText(String text, {int maxKn = 16}) {
+  if (text.contains('出现') || text.contains('且') || text.contains('或')) {
+    return text;
+  }
+  final lines = text.split('\n');
+  return lines.map((line) => _conditionLineToCn(line.trim(), maxKn)).join('\n');
+}
+
+String _conditionLineToCn(String line, int maxKn) {
+  if (line.isEmpty) return line;
+  if (line == 'AND') return '且';
+  if (line == 'OR') return '或';
+  if (line.endsWith(' EVENT_EXISTS')) {
+    final compact = line.substring(0, line.length - ' EVENT_EXISTS'.length).trim();
+    final name = _displayNameForCompactId(compact, maxKn) ?? compact;
+    return '$name 出现';
+  }
+  for (final op in TradeBinaryOp.values) {
+    final en = tradeOpToken(op);
+    final token = ' $en ';
+    if (!line.contains(token)) continue;
+    final parts = line.split(token);
+    if (parts.length != 2) continue;
+    final cn = tradeOpLabelCn(op);
+    final l = _displayNameForCompactId(parts[0].trim(), maxKn) ?? parts[0].trim();
+    final r = _displayNameForCompactId(parts[1].trim(), maxKn) ?? parts[1].trim();
+    return '$l $cn $r';
+  }
+  return line;
+}
+
 void collectAstVarIds(TradeAst ast, List<String> out) {
   switch (ast) {
     case TradeCmpAst(:final left, :final right):
