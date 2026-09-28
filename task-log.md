@@ -3847,3 +3847,18 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 
 ---
 
+### 2026-09-28 · Cursor · 整理 · 寻优调试代码清理并推送
+
+- **执行者**：Cursor Agent
+- **任务类型**：工程整理 / 提交
+- **操作**：
+  1. 删除根目录 `_fin.txt`、长冒烟 `indicator_search_test`/`quick_search`、分笔预热 `data_warmup`、512 短扫 `indicator_combo_sweep`、test 侧仅 re-export 桩与 `evaluateCandidateLegacyLoop` 死代码。
+  2. 保留 `test/indicator_search` 四组 parity + helpers；`flutter test test/indicator_search/` 约 62s 全通过。
+  3. 提交 `feat(chan_kline): 指标组合寻优与对拍回归` 并 push `ANDROID_RUST`（含此前未提交的寻优 lib/UI/设置）。
+- **结果**：远端 `ANDROID_RUST` 已更新至 `a33d8a7`；仓库无遗留调试桩，回归测试仍可对拍步进冻结回测口径。
+- **演示**：拉最新代码后设置里仍可点「寻优」「上次寻优结果」；CI/本地跑 `flutter test test/indicator_search/`。
+- **测试**：`flutter test test/indicator_search/` 通过（4 tests）。
+- **注意事项 / 待办**：全量 12000 候选仍建议在真机/本机后台跑；勿 `git add -A` 纳入 build。
+
+---
+
