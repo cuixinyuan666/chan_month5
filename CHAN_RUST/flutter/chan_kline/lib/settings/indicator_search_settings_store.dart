@@ -5,7 +5,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../indicator_search/candidate_builder.dart';
 
-/// 设置 · 寻优：枚举模式、候选上限、样本外早停等。
+/// 设置 · 寻优：枚举模式、候选上限、内段不过关则外段不参与双达标等。
 class IndicatorSearchSettings {
   final bool useOptimizedBuild;
   final int maxCandidates;

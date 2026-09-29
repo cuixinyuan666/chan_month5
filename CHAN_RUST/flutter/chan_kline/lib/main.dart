@@ -45,6 +45,7 @@ import 'backtest/order_models.dart';
 import 'backtest/signal_event.dart';
 import 'backtest/strategy_config.dart';
 import 'backtest/strategy_trade_round.dart';
+import 'backtest/backtest_step_harness.dart';
 import 'backtest/backtest_workbench.dart';
 import 'backtest/chan_event_store.dart';
 import 'backtest/chart_line_store.dart';
@@ -2939,6 +2940,24 @@ class _KlineHomePageState extends State<KlineHomePage> {
     _refreshKeepAlive();
   }
 
+  BacktestStepHarnessResult _mainSessionHarnessForSearch() {
+    final maxKn = chartMaxKn(levels: _levels, k0Lines: _k0Lines);
+    return BacktestStepHarnessResult.fromMainSession(
+      bars: List<KlineBar>.from(_allBars),
+      levels: _levels,
+      mathFreeze: _mathFreezeStore,
+      chanEvents: _chanEventStore(),
+      zsObjects: _zsObjectStore,
+      diverRelations: _diverRelationStore,
+      lineSeries: _chartLineStore(),
+      chipPeaks: _chipPeakStore,
+      barFeatures: _barFeatures,
+      maxKn: maxKn,
+      mathConfig: _mathIndicatorConfig,
+      chipBucketStep: _chipConfig.bucketStep,
+    );
+  }
+
   Future<void> _openIndicatorSearch({bool closeSettingsSheet = false}) async {
     if (_mlSession.isActive) {
       _showSnack('请先退出机器学习');
@@ -2947,6 +2966,20 @@ class _KlineHomePageState extends State<KlineHomePage> {
     final code = _selectedCode;
     if (code == null) {
       _showSnack('请先选择股票');
+      return;
+    }
+    if (!_hasSession || _allBars.isEmpty) {
+      _showSnack('请先加载 K 线');
+      return;
+    }
+    if (_stepIdx < 0) {
+      _showSnack('请先步进至少一根 K 线');
+      return;
+    }
+    if (_stepIdx < _allBars.length - 1) {
+      _showSnack(
+        '寻优与策略回测共用主图冻结：请先步进到区间最后一根 K（可一键跳末）',
+      );
       return;
     }
     if (closeSettingsSheet && Navigator.canPop(context)) {
@@ -2969,7 +3002,12 @@ class _KlineHomePageState extends State<KlineHomePage> {
         dataRoot: _dataRoot,
         tickSource: _tickSourceFor(code),
         mathConfig: _mathIndicatorConfig,
-        initialBars: _allBars.isEmpty ? null : List<KlineBar>.from(_allBars),
+        chipConfig: _chipConfig,
+        strategyConfig: _strategyConfig,
+        featureLookup: _pipelineSession?.cache.lookup,
+        truncationCheck: _truncationCheck,
+        mainSessionHarness: _mainSessionHarnessForSearch(),
+        initialBars: List<KlineBar>.from(_allBars),
       ),
     );
     if (!mounted) return;

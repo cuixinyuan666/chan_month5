@@ -3800,21 +3800,6 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 
 ---
 
-### 2026-09-27 · Cursor · 验证 · 指标组合扫描（002003 默认 protocol 两日）
-
-- **执行者**：Cursor Agent
-- **任务类型**：策略回测批量扫描 / 非核心测试工具
-- **操作**：
-  1. 新增 `test/backtest_step_harness.dart`：连续单步冻结构/Math/背驰/中枢对象，与主界面步进口径一致。
-  2. 新增 `test/indicator_combo_sweep_test.dart`：登记变量事件对 + 标准组合模板共 512 条，次根开盘撮合，按胜率×盈亏比排序。
-  3. 数据：`002003` `1m`，`2004/07/19~20`（protocol 缓存，462 根 K0），非 `a_Data/002003/*.txt`。
-- **结果**：138 条≥2 笔闭合。样本较多且综合分靠前：**K0 二类买→二类卖**（11 笔，胜率约 64%，盈亏比约 13.6）；**K0 四类买→三类卖**（22 笔，胜率约 64%，盈亏比约 3.7）。若干「100% 胜率」仅 3～6 笔且无亏损，盈亏比不可用，不宜当真。
-- **演示**：在 `chan_kline` 目录执行 `flutter test test/indicator_combo_sweep_test.dart`，看控制台 Top 榜；加长样本请改测试文件 `_kBegin/_kEnd` 或补 protocol 缓存后再跑。
-- **测试**：上述单测约 25s 通过（512/512 编译跑通）。
-- **注意事项 / 待办**：两日窗口过拟合风险高；未扫筹码峰/笔数峰组合（冻结仓未灌 chip）；全组合 AND/OR 爆炸未做，仅事件同层配对 + 内置模板。
-
----
-
 ### 2026-09-28 · Cursor · 功能 · 设置·指标寻优（Runner + 对拍）
 
 - **执行者**：Cursor Agent
@@ -3859,6 +3844,101 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **演示**：拉最新代码后设置里仍可点「寻优」「上次寻优结果」；CI/本地跑 `flutter test test/indicator_search/`。
 - **测试**：`flutter test test/indicator_search/` 通过（4 tests）。
 - **注意事项 / 待办**：全量 12000 候选仍建议在真机/本机后台跑；勿 `git add -A` 纳入 build。
+
+---
+
+### 2026-09-29 · Cursor · 修复 · 指标寻优口径与评审整改
+
+- **执行者**：Cursor Agent
+- **任务类型**：寻优编排 / 回测对齐（未改缠论内核）
+- **操作**：
+  1. **样本外**：全区间回测后按 `entryX > splitX` 切片统计外段；报告头与榜单文案同步。
+  2. **工作台对齐**：寻优传入 `regressK/bollN/donchianN/bucketStep/features`、策略撮合参数；步进 harness 按主界面灌三套筹码峰冻结。
+  3. **默认枚举**：优化档为 K1+ 穿越与阈值预留配额，避免 12000 上限只吃 K0 穿越。
+  4. **体验**：早停外段标「未测」；∞ 盈亏比计达标；冻结进度可刷新；TSV 表头+写临时文件；快照存 `maxKn`；去重 task-log 重复条目。
+- **结果**：`flutter test test/indicator_search/` 四组对拍约 60s 全过；双达标需样本内截断 + 外段独立进场统计，与主界面回测参数一致。
+- **演示**：设置加载 K 线 → 寻优 → 看「外段未测」计数与表格外列；改数学指标 k/筹码桶宽后寻优榜应与工作台复跑更接近。
+- **测试**：`flutter test test/indicator_search/`（4/4）。
+- **注意事项 / 待办**：未抽 main/harness 公共单步管道（仍建议后续做）；截断检查开关与变量表缓存未在本轮处理。
+
+---
+
+### 2026-09-29 · Cursor · 修复 · 寻优评审 A/B 批次（快照/枚举/测试）
+
+- **执行者**：Cursor Agent（用户拍板：Q1=A 不含 C 全口径统一；Q2=b+c 验收；Q3/Q4/Q5 按推荐）
+- **任务类型**：寻优模块测试与编排（未动缠论内核、未做 C 一次全跑切段）
+- **操作**：
+  1. **JSON ∞**：`RawScore.toJson/fromJson` 用 `'inf'` 编码，避免快照静默写失败；store.save 失败 `debugPrint`。
+  2. **legacyFull**：数值穿越恢复独立原序枚举；optimized 配额按「配对数」修正（`minUpperKPairs = reserveEntries/2`）。
+  3. **测试**：helper 外段走未预编译 `runOutSampleFromFull(null,…)`；新增 JSON、optimized 构成、外段 `entryX>splitX` 断言；`splitBarIdx` 统一切点 idx。
+  4. **B 卫生**：`kRankScoreInfinitePayoffCap`；报告头注明内外净利不可横比、全胜小样本；冻结 `progressEvery=50`；harness 回传 `chipBucketStep`；`.workbuddy/` 进 gitignore；寻优说明强调关早停看全外段。
+- **结果**：`flutter test test/indicator_search/` **8/8** 通过（约 97s）。
+- **演示**：寻优出榜后设置「上次寻优结果」应能打开（含 ∞ 组合）；关早停跑一条看外段笔数；改 k/桶宽与工作台复跑。
+- **测试**：`flutter test test/indicator_search/`（8 tests）。
+- **注意事项 / 待办**：**C 批次**（一次全跑、内外净利统一、跨界笔归属）仍待拍板后另做；样本内净利盯市泄漏问题仍在。
+
+---
+
+### 2026-09-29 · Cursor · 修复 · 寻优 C 口径（一次全跑 + 跨界不计）
+
+- **执行者**：Cursor Agent（用户口径：跨界未闭环不计入任一段统计）
+- **任务类型**：寻优段划分 / 回测汇总（未改缠论内核与 mini_loop 撮合）
+- **操作**：
+  1. 每条候选**全区间只回测一次**，样本内/外均用闭合交易 `netPnL` 汇总（内外净利口径一致）。
+  2. **样本内**：`entryX ≤ splitX` 且 `exitX ≤ splitX`；**样本外**：`entryX > splitX`。
+  3. **跨界闭合**（进场≤切点、平仓>切点）与**未平仓**均不计入任一段；报告头同步说明。
+- **结果**：`flutter test test/indicator_search/` 8/8 通过；早停时仍只算内段切片，过线后再用同次全跑的外段切片。
+- **演示**：关早停寻优后，榜内外笔数应只反映「段内闭环」成交；跨界单不会同时撑高内外胜率。
+- **测试**：`flutter test test/indicator_search/`（含内外 exit/entry 与跨界排除断言）。
+- **注意事项**：全跑替代原「内 asOf 截断 + 外全跑」，早停路径也会多算一次全区间回测（略慢）；工作台单次回测面板语义未改，仅寻优榜切段规则变。
+
+---
+
+### 2026-09-29 · Cursor · 整理 · 寻优遗留项清扫
+
+- **执行者**：Cursor Agent
+- **任务类型**：寻优体验 / 对齐 / 卫生（未抽公共步进管道）
+- **操作**：
+  1. 寻优冻结 harness 传入与主界面一致的 **截断监察**（`ChanPipelineSession.truncationCheck`）。
+  2. 寻优开跑前 **await 加载寻优参数**；快照记录 `skipOosEarly`；结果表早停开启时显示说明条。
+  3. `VariablePool` 只构建一次变量表；`conditionDisplayText` 显示名缓存；`VerdictSink.close` 无数据也写表头。
+  4. 新增 `runInOutFromSingleFull` 预编译 vs 重编对拍测试。
+- **结果**：`flutter test test/indicator_search/` 全通过（含 segment compile parity）。
+- **演示**：设置关截断监察后寻优冻结口径与主图一致；早停开时结果窗顶部有黄色提示。
+- **测试**：`flutter test test/indicator_search/`。
+- **注意事项 / 待办**：main 与 harness **公共单步管道**仍建议单立项；策略回测工作台与寻优切段语义刻意分离。
+
+---
+
+### 2026-09-29 · Cursor · 功能 · 寻优复用主图冻结仓
+
+- **执行者**：Cursor Agent
+- **任务类型**：寻优 / 与策略回测数据源对齐（未改缠论内核）
+- **操作**：
+  1. 主界面打包 `_mathFreezeStore`、筹码峰、事件/中枢/背驰/画线等与 `_runStrategyBacktest` 同源的 `BacktestStepHarnessResult.fromMainSession`。
+  2. 打开寻优前门禁：已加载 K 线、已步进，且须到区间最后一根（可一键跳末）；否则提示不打开。
+  3. 寻优对话框有 `mainSessionHarness` 时跳过 harness 重冻，进度显示「主图冻结」；无主图会话时仍走独立 harness（单测路径）。
+  4. 帮助文案改为说明须步进到末根再寻优。
+- **结果**：寻优与策略回测共用当前会话冻结，避免双轨 replay 漂移；`flutter test test/indicator_search/` 9/9 通过。
+- **演示**：加载区间 → 一键跳末 → 寻优应立即进入枚举（无长时间「步进冻结」）；未跳末点寻优应 Snack 提示。
+- **测试**：`flutter test test/indicator_search/`。
+- **注意事项 / 待办**：主图与 harness 公共单步管道仍属技术债；寻优区间须与 `_allBars` 根数一致。
+
+---
+
+### 2026-09-29 · Cursor · 修正 · 寻优报告语义与可复现元数据
+
+- **执行者**：Cursor Agent
+- **任务类型**：寻优体验 / 文案与快照（未改回测切段与步进内核）
+- **操作**：
+  1. 报告头按主界面策略回测写出**成交价模式**与费率/滑点/数学指标/筹码步长；补「内外净利勿横比」警示。
+  2. 开关文案改为「内段不过关则外段不参与双达标」，说明全区间仍回测一次；旧快照缺字段不再误显黄条。
+  3. 快照 JSON 写入 `align`；结果面板展示**枚举构成**（模板/事件/穿越/阈值）。
+  4. `optimized(maxCandidates:0)` 仍补穿越与阈值；清掉对拍 helper 多余 `?.` 告警。
+- **结果**：`flutter test test/indicator_search/` 10/10 通过。
+- **演示**：改策略回测成交价后寻优，报告头应显示对应中文；开「外段不参与双达标」时内段不过关外段标未测；跑完结果窗有枚举构成一行。
+- **测试**：`flutter test test/indicator_search/`（含 optimized(0) 枚举回归）。
+- **注意事项 / 待办**：早停仍不省算力（内段切片需全区间闭合单）；主图与 harness 公共管道仍为技术债。
 
 ---
 

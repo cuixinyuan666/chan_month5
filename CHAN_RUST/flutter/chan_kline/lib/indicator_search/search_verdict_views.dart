@@ -16,20 +16,28 @@ class SearchVerdictBuckets {
 
   static List<ComboVerdict> outSampleOnly(List<ComboVerdict> all) =>
       all
-          .where((e) => gate.okSegment(e.outSample) && !gate.okSegment(e.inSample))
+          .where((e) =>
+              !e.outSampleSkipped &&
+              gate.okSegment(e.outSample) &&
+              !gate.okSegment(e.inSample))
           .toList();
 
-  /// 样本内过线、样本外未过（含早停 0 笔）。
+  /// 样本内过线、样本外未过线（不含早停未测外段）。
   static List<ComboVerdict> inPassOutWeak(List<ComboVerdict> all) =>
       inSampleOnly(all);
 
   /// 保守分>0 但未双达标（供人工筛）。
   static List<ComboVerdict> rankPositiveNotDual(List<ComboVerdict> all) =>
-      all.where((e) => e.inRankScore > 0 && !e.passed).toList();
+      all
+          .where((e) =>
+              e.inRankScore > 0 && !e.passed && !e.outSampleSkipped)
+          .toList();
 
   /// 样本外有成交且外段过线（不要求样本内）。
   static List<ComboVerdict> outSegmentStrong(List<ComboVerdict> all) =>
-      all.where((e) => gate.okSegment(e.outSample)).toList();
+      all
+          .where((e) => !e.outSampleSkipped && gate.okSegment(e.outSample))
+          .toList();
 
   static List<ComboVerdict> byRankDesc(List<ComboVerdict> all) {
     final copy = [...all];

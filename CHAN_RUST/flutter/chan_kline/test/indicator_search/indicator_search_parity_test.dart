@@ -17,7 +17,7 @@ void main() {
   const gate = PassGate(minWinRate: 0.60, minPayoff: 1.5, minTrades: 2);
   const parityLimit = 400;
 
-  test('寻优 Runner 与旧循环对拍（skipOosEarly=false）', () {
+  test('寻优 Runner 与旧循环对拍（skipOosEarly=false）', () async {
     final bridge = ChanBridge.instance;
     bridge.ensureInitialized();
     final bars = bridge
@@ -32,14 +32,13 @@ void main() {
         .bars;
     expect(bars.length, greaterThan(100));
 
-    final h = driveStepHarness(bars);
+    final h = await driveStepHarness(bars);
     final cands = buildCandidates(
       VariablePool(h.maxKn),
       const CandidateBuildOptions.legacyFull(),
     );
     final env = SearchEnv(bars, h, code, period, begin, end);
-    final splitX = splitIndexOf(bars.length);
-    final outEndX = env.outSampleEndX;
+    final splitX = splitBarIdx(bars);
     final runner = IndicatorSearchRunner();
 
     final n = cands.length < parityLimit ? cands.length : parityLimit;
@@ -49,7 +48,6 @@ void main() {
         c: c,
         env: env,
         splitX: splitX,
-        outEndX: outEndX,
         gate: gate,
         maxKn: h.maxKn,
         skipOosEarly: false,
@@ -58,7 +56,6 @@ void main() {
         c: c,
         env: env,
         splitX: splitX,
-        outEndX: outEndX,
         gate: gate,
         maxKn: h.maxKn,
         skipOosEarly: false,

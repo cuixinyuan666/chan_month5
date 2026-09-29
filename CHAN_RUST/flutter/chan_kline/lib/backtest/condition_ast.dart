@@ -417,12 +417,19 @@ String astConditionTextCn(TradeAst ast, {int maxKn = 16, String? parentKind}) {
   }
 }
 
+final _displayNameByMaxKn = <int, Map<String, String?>>{};
+
 String? _displayNameForCompactId(String compact, int maxKn) {
+  final cache = _displayNameByMaxKn.putIfAbsent(maxKn, () => {});
+  final hit = cache[compact];
+  if (hit != null || cache.containsKey(compact)) return hit;
   for (final d in buildRegisteredTradeVariables(maxKn)) {
     if (d.variableId == compact || compactVarId(d.variableId) == compact) {
+      cache[compact] = d.displayName;
       return d.displayName;
     }
   }
+  cache[compact] = null;
   return null;
 }
 

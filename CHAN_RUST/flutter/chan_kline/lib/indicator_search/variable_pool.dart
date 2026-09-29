@@ -2,23 +2,22 @@ import 'package:chan_kline/backtest/signal_data_catalog.dart';
 
 class VariablePool {
   final int maxKn;
-  final List<TradeVariableDef> all;
-  final List<TradeVariableDef> numeric;
-  final List<TradeVariableDef> events;
+  final List<TradeVariableDef> _registered;
+  late final List<TradeVariableDef> all;
+  late final List<TradeVariableDef> numeric;
+  late final List<TradeVariableDef> events;
 
   VariablePool(this.maxKn)
-      : all = buildRegisteredTradeVariables(maxKn).where((d) => d.readiness ==
-            TradeReadiness.registered).toList(),
-        numeric = buildRegisteredTradeVariables(maxKn)
-            .where((d) =>
-                d.readiness == TradeReadiness.registered &&
-                isNumericComparableType(d.valueType))
-            .toList(),
-        events = buildRegisteredTradeVariables(maxKn)
-            .where((d) =>
-                d.readiness == TradeReadiness.registered &&
-                d.valueType == TradeValueType.event)
-            .toList();
+      : _registered = buildRegisteredTradeVariables(maxKn)
+            .where((d) => d.readiness == TradeReadiness.registered)
+            .toList() {
+    all = _registered;
+    numeric = _registered
+        .where((d) => isNumericComparableType(d.valueType))
+        .toList();
+    events =
+        _registered.where((d) => d.valueType == TradeValueType.event).toList();
+  }
 
   Map<String, int> byGroup() {
     final m = <String, int>{};
@@ -56,7 +55,6 @@ class VariablePool {
     final u = d.variableId.toUpperCase();
     if (u.contains('SELL')) return false;
     if (u.contains('BUY')) return true;
-    if (u.contains('COMPLETE_BUY')) return true;
     return false;
   }
 
@@ -64,7 +62,6 @@ class VariablePool {
     final u = d.variableId.toUpperCase();
     if (u.contains('BUY') && !u.contains('SELL')) return false;
     if (u.contains('SELL')) return true;
-    if (u.contains('COMPLETE_SELL')) return true;
     return false;
   }
 

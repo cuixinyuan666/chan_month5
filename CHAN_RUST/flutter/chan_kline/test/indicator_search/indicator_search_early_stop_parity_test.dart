@@ -17,7 +17,7 @@ void main() {
   const end = '2004/07/20 15:00:00';
   const gate = PassGate(minTrades: 2);
 
-  test('skipOosEarly true/false 均对拍手写循环', () {
+  test('skipOosEarly true/false 均对拍手写循环', () async {
     final bridge = ChanBridge.instance;
     bridge.ensureInitialized();
     final bars = bridge
@@ -30,12 +30,11 @@ void main() {
           tickSource: 'protocol',
         )
         .bars;
-    final h = driveStepHarness(bars);
+    final h = await driveStepHarness(bars);
     final env = SearchEnv(bars, h, code, period, begin, end);
     final cands =
         buildCandidates(VariablePool(h.maxKn), const CandidateBuildOptions.legacyFull());
-    final splitX = splitIndexOf(bars.length);
-    final outEndX = env.outSampleEndX;
+    final splitX = splitBarIdx(bars);
     final runner = IndicatorSearchRunner();
 
     for (var i = 0; i < 250 && i < cands.length; i++) {
@@ -45,7 +44,6 @@ void main() {
           c: c,
           env: env,
           splitX: splitX,
-          outEndX: outEndX,
           gate: gate,
           maxKn: h.maxKn,
           skipOosEarly: skip,
@@ -54,7 +52,6 @@ void main() {
           c: c,
           env: env,
           splitX: splitX,
-          outEndX: outEndX,
           gate: gate,
           maxKn: h.maxKn,
           skipOosEarly: skip,

@@ -9,6 +9,9 @@ import '../indicator_search/search_core.dart';
 import '../indicator_search/search_env.dart';
 import '../indicator_search/variable_pool.dart';
 import '../backtest/backtest_step_harness.dart';
+import '../backtest/strategy_config.dart';
+import '../models/bar_feature_lookup.dart';
+import '../models/chip_config.dart';
 import '../models/kline_bar.dart';
 import '../models/math_indicator_config.dart';
 import '../settings/indicator_search_last_result_store.dart';
@@ -25,6 +28,11 @@ class IndicatorSearchDialog extends StatefulWidget {
     required this.dataRoot,
     required this.tickSource,
     required this.mathConfig,
+    required this.chipConfig,
+    required this.strategyConfig,
+    this.featureLookup,
+    this.truncationCheck = true,
+    this.mainSessionHarness,
     this.initialBars,
   });
 
@@ -35,6 +43,12 @@ class IndicatorSearchDialog extends StatefulWidget {
   final String dataRoot;
   final String tickSource;
   final MathIndicatorConfig mathConfig;
+  final ChipConfig chipConfig;
+  final StrategyConfig strategyConfig;
+  final BarFeatureLookup? featureLookup;
+  final bool truncationCheck;
+  /// 非空时直接复用主界面冻结仓，跳过 harness 重冻。
+  final BacktestStepHarnessResult? mainSessionHarness;
   final List<KlineBar>? initialBars;
 
   @override
@@ -53,6 +67,8 @@ class _IndicatorSearchDialogState extends State<IndicatorSearchDialog> {
   int _barCount = 0;
   int _maxKn = 16;
   IndicatorSearchSettings _settings = IndicatorSearchSettingsStore.current;
+  CandidateBuildSummary? _buildSummary;
+  IndicatorSearchAlignSnapshot? _alignSnap;
 
   @override
   void initState() {
@@ -68,6 +84,8 @@ class _IndicatorSearchDialogState extends State<IndicatorSearchDialog> {
   }
 
   Future<void> _run() async {
+    await IndicatorSearchSettingsStore.load();
+    _settings = IndicatorSearchSettingsStore.current;
     final logPath = (await IndicatorSearchSettingsStore.logFile()).path;
     _resultsPath = (await IndicatorSearchSettingsStore.resultsFile()).path;
     try {
@@ -94,40 +112,73 @@ class _IndicatorSearchDialogState extends State<IndicatorSearchDialog> {
       _barCount = bars.length;
       logProgress('载入 ${bars.length} 根', logFilePath: logPath);
 
-      setState(() {
-        _phase = '步进冻结';
-        _detail = '共 ${bars.length} 根 K0（与主界面步进同口径）';
-        _progress = 0;
-      });
-      final freezeStarted = DateTime.now();
-      final h = await Future(() => driveStepHarnessWithProgress(
-            bars,
-            mathConfig: widget.mathConfig,
-            onProgress: (d, t) {
-              if (!mounted) return;
-              setState(() {
-                _progress = d / t;
-                _detail = '冻结 $d / $t · 已用 '
-                    '${DateTime.now().difference(freezeStarted).inSeconds}s';
-              });
-            },
-          ));
-      logProgress('冻结完成 maxKn=${h.maxKn}', logFilePath: logPath);
+      final BacktestStepHarnessResult h;
+      final session = widget.mainSessionHarness;
+      if (session != null) {
+        if (session.bars.length != bars.length) {
+          throw Exception(
+            '主图已载入 ${session.bars.length} 根，与寻优区间 ${bars.length} 根不一致',
+          );
+        }
+        setState(() {
+          _phase = '主图冻结';
+          _detail = '复用当前会话冻结仓（与策略回测同源，共 ${bars.length} 根）';
+          _progress = 1;
+        });
+        logProgress('复用主图会话冻结 maxKn=${session.maxKn}', logFilePath: logPath);
+        h = session;
+      } else {
+        setState(() {
+          _phase = '步进冻结';
+          _detail = '共 ${bars.length} 根 K0（独立 harness，无主图会话时）';
+          _progress = 0;
+        });
+        final freezeStarted = DateTime.now();
+        h = await driveStepHarnessWithProgress(
+          bars,
+          mathConfig: widget.mathConfig,
+          chipConfig: widget.chipConfig,
+          truncationCheck: widget.truncationCheck,
+          onProgress: (d, t) {
+            if (!mounted) return;
+            setState(() {
+              _progress = d / t;
+              _detail = '冻结 $d / $t · 已用 '
+                  '${DateTime.now().difference(freezeStarted).inSeconds}s';
+            });
+          },
+        );
+        logProgress('冻结完成 maxKn=${h.maxKn}', logFilePath: logPath);
+      }
       _maxKn = h.maxKn;
 
       final pool = VariablePool(h.maxKn);
       final opts = _settings.toBuildOptions();
       final cands = buildCandidates(pool, opts);
-      logProgress('候选 ${cands.length} 条 profile=${opts.profile.name}',
-          logFilePath: logPath);
+      _buildSummary = summarizeCandidates(cands);
+      logProgress(
+        '候选 ${cands.length} 条 profile=${opts.profile.name} · ${_buildSummary!.toDisplayLine()}',
+        logFilePath: logPath,
+      );
 
       setState(() {
         _phase = '回测扫描';
-        _detail = '候选 ${cands.length} 条 · 预编译复用 + 样本外早停=${_settings.skipOosEarly}';
+        _detail =
+            '候选 ${cands.length} 条 · 预编译复用 · '
+            '内段不过关则外段不参与双达标=${_settings.skipOosEarly}';
         _progress = 0;
         _livePassed = const [];
       });
 
+      final workbenchAlign = SearchWorkbenchAlign(
+        strategyTemplate: widget.strategyConfig,
+        features: widget.featureLookup,
+        bucketStep: widget.chipConfig.bucketStep,
+        bollN: widget.mathConfig.bollN,
+        donchianN: widget.mathConfig.donchianN,
+        regressK: widget.mathConfig.regressK,
+      );
+      _alignSnap = IndicatorSearchAlignSnapshot.fromAlign(workbenchAlign);
       final env = SearchEnv(
         bars,
         h,
@@ -135,12 +186,14 @@ class _IndicatorSearchDialogState extends State<IndicatorSearchDialog> {
         widget.period,
         widget.beginText,
         widget.endText,
+        align: workbenchAlign,
       );
       const gate = PassGate();
+      final tmpResults = '${_resultsPath!}.tmp';
       try {
-        File(_resultsPath!).writeAsStringSync('');
+        File(tmpResults).writeAsStringSync('');
       } catch (_) {}
-      final sink = VerdictSink(_resultsPath!);
+      final sink = VerdictSink(tmpResults);
       final runner = IndicatorSearchRunner();
       final stats = await runner.runAll(
         bars: bars,
@@ -167,6 +220,14 @@ class _IndicatorSearchDialogState extends State<IndicatorSearchDialog> {
         },
       );
       sink.close();
+      try {
+        File(tmpResults).renameSync(_resultsPath!);
+      } catch (_) {
+        try {
+          File(tmpResults).copySync(_resultsPath!);
+          File(tmpResults).deleteSync();
+        } catch (_) {}
+      }
 
       logProgress(
         '完成 达标${stats.passed} 耗时${stats.elapsed.inSeconds}s',
@@ -183,6 +244,9 @@ class _IndicatorSearchDialogState extends State<IndicatorSearchDialog> {
           barCount: _barCount,
           stats: stats,
           resultsFilePath: _resultsPath!,
+          maxKn: h.maxKn,
+          skipOosEarly: _settings.skipOosEarly,
+          align: _alignSnap,
         ),
       );
 
@@ -249,16 +313,19 @@ class _IndicatorSearchDialogState extends State<IndicatorSearchDialog> {
               Expanded(
                 child: IndicatorSearchResultPanel(
                   header: reportHeader(
-                    widget.code,
-                    widget.period,
-                    _barCount,
-                    _stats!.splitX,
-                    const PassGate().minTrades,
+                    code: widget.code,
+                    period: widget.period,
+                    bars: _barCount,
+                    splitX: _stats!.splitX,
+                    gateTrades: const PassGate().minTrades,
+                    align: _alignSnap,
                   ),
                   verdicts: _stats!.verdicts,
                   resultsFilePath: _resultsPath!,
                   elapsed: _stats!.elapsed,
                   maxKn: _maxKn,
+                  skipOosEarly: _settings.skipOosEarly,
+                  buildSummary: _buildSummary,
                 ),
               ),
             ] else if (_running)
@@ -280,6 +347,7 @@ class _IndicatorSearchDialogState extends State<IndicatorSearchDialog> {
 Future<void> showIndicatorSearchLastResultDialog(BuildContext context) async {
   await IndicatorSearchLastResultStore.load();
   final snap = IndicatorSearchLastResultStore.current;
+  if (!context.mounted) return;
   if (snap == null || snap.verdicts.isEmpty) {
     await showDialog<void>(
       context: context,
@@ -294,15 +362,17 @@ Future<void> showIndicatorSearchLastResultDialog(BuildContext context) async {
     return;
   }
 
+  if (!context.mounted) return;
   final size = MediaQuery.sizeOf(context);
   final w = size.width > 900 ? 880.0 : size.width * 0.92;
   final h = size.height > 700 ? 620.0 : size.height * 0.85;
   final header = reportHeader(
-    snap.code,
-    snap.period,
-    snap.barCount,
-    snap.splitX,
-    const PassGate().minTrades,
+    code: snap.code,
+    period: snap.period,
+    bars: snap.barCount,
+    splitX: snap.splitX,
+    gateTrades: const PassGate().minTrades,
+    align: snap.align,
   );
 
   await showDialog<void>(
@@ -320,6 +390,9 @@ Future<void> showIndicatorSearchLastResultDialog(BuildContext context) async {
           verdicts: snap.verdicts,
           resultsFilePath: snap.resultsFilePath,
           elapsed: snap.elapsed,
+          maxKn: snap.maxKn,
+          skipOosEarly: snap.skipOosEarly,
+          buildSummary: null,
         ),
       ),
       actions: [
@@ -337,11 +410,12 @@ Future<void> showIndicatorSearchHelp(BuildContext context) async {
       content: const SingleChildScrollView(
         child: Text(
           '操作步骤：\n'
-          '1. 在设置里选好股票、周期、加载起止时间，并先「加载 K 线」（也可用当前已载入区间）。\n'
-          '2. 点「寻优」：后台连续单步冻结 → 枚举可交易组合 → 样本内/外回测。\n'
+          '1. 在设置里选好股票、周期、加载起止时间，并先「加载 K 线」。\n'
+          '2. 须步进到区间最后一根 K（可一键跳末），再点「寻优」：直接复用主图冻结仓（与策略回测同源）→ 枚举组合 → 样本内外回测。\n'
           '3. 结果以表格展示（双达标 / 保守分 Top）；完整列表见 TSV。\n'
           '4. 进度条含剩余时间估算；日志见 indicator_search_progress.log。\n'
-          '5. 默认优化枚举 + 候选上限 + 样本外早停（编排层提速，单条分数仍走同一回测引擎）。\n'
+          '5. 默认优化枚举 + 候选上限；可开启「内段不过关则外段不参与双达标」（全区间仍回测一次，外段标「未测」）。\n'
+          '   关闭该开关后外段参与门槛判定；报告头会写明成交价与费率等复现参数。\n'
           '6. 跑完后可在设置点「上次寻优结果」查看快照（与当次表格一致）。\n\n'
           '注意：寻优占用 CPU，勿同时开机器学习；非投资建议。',
           style: TextStyle(fontSize: 13, height: 1.45),
@@ -393,8 +467,10 @@ Future<IndicatorSearchSettings?> showIndicatorSearchSettingsSheet(
                   ),
                 ),
                 SwitchListTile(
-                  title: const Text('样本外早停'),
-                  subtitle: const Text('样本内未过门槛或保守分为 0 时跳过样本外回测（提速）'),
+                  title: const Text('内段不过关则外段不参与双达标'),
+                  subtitle: const Text(
+                    '全区间仍回测一次；内段未过门槛时外段不计入双达标且表中标「未测」（与 0 笔区分）',
+                  ),
                   value: cfg.skipOosEarly,
                   onChanged: (v) => setLocal(() => cfg = cfg.copyWith(skipOosEarly: v)),
                 ),
@@ -409,6 +485,7 @@ Future<IndicatorSearchSettings?> showIndicatorSearchSettingsSheet(
                     FilledButton(
                       onPressed: () async {
                         await IndicatorSearchSettingsStore.save(cfg);
+                        if (!ctx.mounted) return;
                         Navigator.pop(ctx, cfg);
                       },
                       child: const Text('保存'),

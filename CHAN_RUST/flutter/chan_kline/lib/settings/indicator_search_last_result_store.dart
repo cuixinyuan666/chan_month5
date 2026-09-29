@@ -1,10 +1,12 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../indicator_search/indicator_search_runner.dart';
 import '../indicator_search/search_core.dart';
+import '../indicator_search/search_env.dart';
 
 /// 最近一次寻优快照（供设置里「上次寻优结果」查看，不依赖 TSV 解析）。
 class IndicatorSearchLastResult {
@@ -21,6 +23,9 @@ class IndicatorSearchLastResult {
   final int elapsedSeconds;
   final String resultsFilePath;
   final List<ComboVerdict> verdicts;
+  final int maxKn;
+  final bool skipOosEarly;
+  final IndicatorSearchAlignSnapshot? align;
 
   const IndicatorSearchLastResult({
     required this.finishedAt,
@@ -36,6 +41,9 @@ class IndicatorSearchLastResult {
     required this.elapsedSeconds,
     required this.resultsFilePath,
     required this.verdicts,
+    this.maxKn = 16,
+    this.skipOosEarly = true,
+    this.align,
   });
 
   Duration get elapsed => Duration(seconds: elapsedSeconds);
@@ -53,6 +61,9 @@ class IndicatorSearchLastResult {
         'passed': passed,
         'elapsedSeconds': elapsedSeconds,
         'resultsFilePath': resultsFilePath,
+        'maxKn': maxKn,
+        'skipOosEarly': skipOosEarly,
+        if (align != null) 'align': align!.toJson(),
         'verdicts': verdicts.map((e) => e.toJson()).toList(),
       };
 
@@ -83,6 +94,15 @@ class IndicatorSearchLastResult {
       passed: (m['passed'] as num?)?.toInt() ?? 0,
       elapsedSeconds: (m['elapsedSeconds'] as num?)?.toInt() ?? 0,
       resultsFilePath: m['resultsFilePath'] as String? ?? '',
+      maxKn: (m['maxKn'] as num?)?.toInt() ?? 16,
+      skipOosEarly: m.containsKey('skipOosEarly')
+          ? m['skipOosEarly'] == true
+          : false,
+      align: IndicatorSearchAlignSnapshot.fromJsonMap(
+        m['align'] is Map
+            ? Map<String, dynamic>.from(m['align'] as Map)
+            : null,
+      ),
       verdicts: verdicts,
     );
   }
@@ -96,6 +116,9 @@ class IndicatorSearchLastResult {
     required int barCount,
     required IndicatorSearchRunStats stats,
     required String resultsFilePath,
+    int maxKn = 16,
+    bool skipOosEarly = true,
+    IndicatorSearchAlignSnapshot? align,
   }) {
     return IndicatorSearchLastResult(
       finishedAt: finishedAt,
@@ -110,6 +133,9 @@ class IndicatorSearchLastResult {
       passed: stats.passed,
       elapsedSeconds: stats.elapsed.inSeconds,
       resultsFilePath: resultsFilePath,
+      maxKn: maxKn,
+      skipOosEarly: skipOosEarly,
+      align: align,
       verdicts: stats.verdicts,
     );
   }
@@ -141,7 +167,9 @@ abstract final class IndicatorSearchLastResultStore {
       await f.writeAsString(
         const JsonEncoder.withIndent('  ').convert(result.toJson()),
       );
-    } catch (_) {}
+    } catch (e, st) {
+      debugPrint('IndicatorSearchLastResultStore.save failed: $e\n$st');
+    }
   }
 
   static Future<File> _file() async {

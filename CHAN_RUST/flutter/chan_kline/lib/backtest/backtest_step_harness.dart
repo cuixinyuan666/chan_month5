@@ -5,7 +5,6 @@ import 'package:chan_kline/models/bs_verdict_frame.dart';
 import 'package:chan_kline/compute/class1_bs_compute.dart';
 import 'package:chan_kline/compute/class2_bs_compute.dart';
 import 'package:chan_kline/compute/class_n_bs_compute.dart';
-import 'package:chan_kline/compute/divergence_compute.dart';
 import 'package:chan_kline/compute/divergence_freeze_store.dart';
 import 'package:chan_kline/compute/fractal_judgment_compute.dart';
 import 'package:chan_kline/compute/line_slope_compute.dart';
@@ -22,6 +21,7 @@ import 'package:chan_kline/models/buy1_frame.dart';
 import 'package:chan_kline/models/buy2_frame.dart';
 import 'package:chan_kline/models/buy_n_frame.dart';
 import 'package:chan_kline/models/chart_indicator.dart';
+import 'package:chan_kline/models/chip_config.dart';
 import 'package:chan_kline/models/kline_bar.dart';
 import 'package:chan_kline/models/kline_combine_bundle.dart';
 import 'package:chan_kline/models/level_models.dart';
@@ -43,6 +43,7 @@ class BacktestStepHarnessResult {
   final List<BarCrosshairFeature> barFeatures;
   final int maxKn;
   final MathIndicatorConfig mathConfig;
+  final double chipBucketStep;
 
   const BacktestStepHarnessResult({
     required this.bars,
@@ -56,7 +57,39 @@ class BacktestStepHarnessResult {
     required this.barFeatures,
     required this.maxKn,
     required this.mathConfig,
+    this.chipBucketStep = 0.1,
   });
+
+  /// 主界面当前会话已步进冻结仓（与策略回测工作台同源，寻优不再 replay harness）。
+  factory BacktestStepHarnessResult.fromMainSession({
+    required List<KlineBar> bars,
+    required List<LevelBundle> levels,
+    required MathSeriesFreezeStore mathFreeze,
+    required ChanEventStore chanEvents,
+    required ZhongshuObjectStore zsObjects,
+    required DivergenceRelationStore diverRelations,
+    required ChartLineStore lineSeries,
+    required ChipPeakFreezeStore chipPeaks,
+    required List<BarCrosshairFeature> barFeatures,
+    required int maxKn,
+    required MathIndicatorConfig mathConfig,
+    required double chipBucketStep,
+  }) {
+    return BacktestStepHarnessResult(
+      bars: bars,
+      levels: levels,
+      mathFreeze: mathFreeze,
+      chanEvents: chanEvents,
+      zsObjects: zsObjects,
+      diverRelations: diverRelations,
+      lineSeries: lineSeries,
+      chipPeaks: chipPeaks,
+      barFeatures: barFeatures,
+      maxKn: maxKn,
+      mathConfig: mathConfig,
+      chipBucketStep: chipBucketStep,
+    );
+  }
 }
 
 int? _activeSegIdx(KlineCombineBundle bundle, int kn) {
@@ -96,21 +129,63 @@ List<LevelBundle> _levelsWithFrozenBs({
 }
 
 /// 连续单步冻结（无进度回调）。
-BacktestStepHarnessResult driveStepHarness(
+void _ingestChipPeakSchemes({
+  required ChipPeakFreezeStore store,
+  required int asOf,
+  required List<KlineBar> bars,
+  required ChipConfig chipConfig,
+}) {
+  store.ingestThrough(
+    asOf: asOf,
+    bars: bars,
+    bucketStep: chipConfig.bucketStep,
+    rank: chipConfig.peakRankSpatialConfig,
+  );
+  store.ingestThrough(
+    asOf: asOf,
+    bars: bars,
+    bucketStep: chipConfig.bucketStep,
+    rank: chipConfig.peakRankVolumeConfig,
+  );
+  store.ingestThrough(
+    asOf: asOf,
+    bars: bars,
+    bucketStep: chipConfig.bucketStep,
+    rank: chipConfig.peakRankPureConfig,
+  );
+}
+
+/// 连续单步冻结（无进度回调、不交出事件循环）。
+Future<BacktestStepHarnessResult> driveStepHarness(
   List<KlineBar> bars, {
   MathIndicatorConfig mathConfig = const MathIndicatorConfig(),
+  ChipConfig? chipConfig,
+  bool truncationCheck = true,
 }) {
-  return driveStepHarnessWithProgress(bars, mathConfig: mathConfig);
+  return driveStepHarnessWithProgress(
+    bars,
+    mathConfig: mathConfig,
+    chipConfig: chipConfig,
+    truncationCheck: truncationCheck,
+    uiYield: false,
+  );
 }
 
 /// 与 [driveStepHarness] 同口径，可上报步进进度。
-BacktestStepHarnessResult driveStepHarnessWithProgress(
+Future<BacktestStepHarnessResult> driveStepHarnessWithProgress(
   List<KlineBar> bars, {
   MathIndicatorConfig mathConfig = const MathIndicatorConfig(),
+  ChipConfig? chipConfig,
+  bool truncationCheck = true,
   void Function(int done, int total)? onProgress,
-  int progressEvery = 200,
-}) {
-  final sess = ChanPipelineSession.create(preferDelta: true);
+  int progressEvery = 50,
+  bool uiYield = true,
+}) async {
+  final chipBucketStep = chipConfig?.bucketStep ?? 0.1;
+  final sess = ChanPipelineSession.create(
+    preferDelta: true,
+    truncationCheck: truncationCheck,
+  );
   final buy1 = <int, List<Buy1Frame>>{};
   final sell1 = <int, List<Sell1Frame>>{};
   final buy2 = <int, List<Buy2Frame>>{};
@@ -285,9 +360,22 @@ BacktestStepHarnessResult driveStepHarnessWithProgress(
       );
     }
 
-    if (onProgress != null &&
-        (step == 0 || step == total - 1 || step % progressEvery == 0)) {
-      onProgress(step + 1, total);
+    if (chipConfig != null) {
+      _ingestChipPeakSchemes(
+        store: chipPeaks,
+        asOf: step,
+        bars: growing,
+        chipConfig: chipConfig,
+      );
+    }
+
+    final reportProgress = onProgress != null &&
+        (step == 0 || step == total - 1 || step % progressEvery == 0);
+    if (reportProgress) {
+      onProgress!(step + 1, total);
+    }
+    if (uiYield && reportProgress) {
+      await Future<void>.delayed(Duration.zero);
     }
   }
 
@@ -331,5 +419,6 @@ BacktestStepHarnessResult driveStepHarnessWithProgress(
     barFeatures: last.barFeatures,
     maxKn: maxKn,
     mathConfig: mathConfig,
+    chipBucketStep: chipBucketStep,
   );
 }

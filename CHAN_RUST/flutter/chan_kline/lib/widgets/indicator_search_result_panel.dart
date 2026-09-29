@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../backtest/condition_ast.dart';
+import '../indicator_search/candidate_builder.dart';
 import '../indicator_search/search_core.dart';
 import '../indicator_search/search_env.dart';
 import '../indicator_search/search_verdict_views.dart';
@@ -14,6 +15,8 @@ class IndicatorSearchResultPanel extends StatelessWidget {
     required this.resultsFilePath,
     required this.elapsed,
     this.maxKn = 16,
+    this.skipOosEarly = true,
+    this.buildSummary,
   });
 
   final String header;
@@ -21,12 +24,16 @@ class IndicatorSearchResultPanel extends StatelessWidget {
   final String resultsFilePath;
   final Duration elapsed;
   final int maxKn;
+  final bool skipOosEarly;
+  final CandidateBuildSummary? buildSummary;
 
   @override
   Widget build(BuildContext context) {
     final dual = SearchVerdictBuckets.dualPassed(verdicts);
     final inOnly = SearchVerdictBuckets.inSampleOnly(verdicts);
     final outOnly = SearchVerdictBuckets.outSampleOnly(verdicts);
+    final skippedOos =
+        verdicts.where((e) => e.outSampleSkipped).length;
     final outStrong = SearchVerdictBuckets.outSegmentStrong(verdicts);
     final rankNotDual = SearchVerdictBuckets.rankPositiveNotDual(verdicts);
     final allRank = SearchVerdictBuckets.byRankDesc(verdicts);
@@ -43,13 +50,36 @@ class IndicatorSearchResultPanel extends StatelessWidget {
           const SizedBox(height: 6),
           Text(
             '耗时 ${elapsed.inMinutes}分${elapsed.inSeconds % 60}秒 · '
-            '跑通 ${verdicts.length} · 双达标 ${dual.length}',
+            '跑通 ${verdicts.length} · 双达标 ${dual.length}'
+            '${skippedOos > 0 ? ' · 外段未测 $skippedOos' : ''}',
             style: TextStyle(fontSize: 11, color: Colors.grey.shade700),
           ),
           Text(
             '完整 TSV：$resultsFilePath',
             style: TextStyle(fontSize: 10, color: Colors.grey.shade600),
           ),
+          if (buildSummary != null) ...[
+            const SizedBox(height: 4),
+            Text(
+              buildSummary!.toDisplayLine(),
+              style: TextStyle(fontSize: 10, color: Colors.grey.shade700),
+            ),
+          ],
+          if (skipOosEarly) ...[
+            const SizedBox(height: 6),
+            Material(
+              color: Colors.amber.shade50,
+              borderRadius: BorderRadius.circular(6),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                child: Text(
+                  '内段不过关则外段不参与双达标：「仅外达标」「外段过线」等 Tab 可能为空或偏少；'
+                  '外段未测见摘要计数与表「未测」。要看完整外段判定请在寻优参数里关闭该开关。',
+                  style: TextStyle(fontSize: 10, color: Colors.brown.shade800),
+                ),
+              ),
+            ),
+          ],
           const SizedBox(height: 6),
           TabBar(
             isScrollable: true,
@@ -58,6 +88,7 @@ class IndicatorSearchResultPanel extends StatelessWidget {
               Tab(text: '双达标(${dual.length})'),
               Tab(text: '仅内达标(${inOnly.length})'),
               Tab(text: '仅外达标(${outOnly.length})'),
+              // 早停开启时「仅外达标」不含未测外段；见摘要「外段未测」计数
               Tab(text: '外段过线(${outStrong.length})'),
               Tab(text: '有分未双标(${rankNotDual.length})'),
               Tab(text: '保守分全量(${allRank.length})'),
@@ -236,9 +267,18 @@ class _VerdictDataRow extends StatelessWidget {
           Expanded(flex: 1, child: numCell('${i.trades}')),
           Expanded(flex: 1, child: numCell(pctText(i.winRate))),
           Expanded(flex: 1, child: numCell(fxText(i.payoff))),
-          Expanded(flex: 1, child: numCell('${o.trades}')),
-          Expanded(flex: 1, child: numCell(pctText(o.winRate))),
-          Expanded(flex: 1, child: numCell(fxText(o.payoff))),
+          Expanded(
+            flex: 1,
+            child: numCell(v.outSampleSkipped ? '未测' : '${o.trades}'),
+          ),
+          Expanded(
+            flex: 1,
+            child: numCell(v.outSampleSkipped ? '—' : pctText(o.winRate)),
+          ),
+          Expanded(
+            flex: 1,
+            child: numCell(v.outSampleSkipped ? '—' : fxText(o.payoff)),
+          ),
           Expanded(
             flex: 1,
             child: numCell(v.inRankScore.toStringAsFixed(3)),

@@ -53,11 +53,11 @@ class IndicatorSearchRunStats {
 class IndicatorSearchRunner {
   final Map<String, StrategyCompileResult> _compileCache = {};
 
-  String _compileKey(TradeAst buy, TradeAst sell) =>
-      '${astConditionText(buy)}||${astConditionText(sell)}';
+  String _compileKey(TradeAst buy, TradeAst sell, int maxKn) =>
+      '$maxKn||${astConditionText(buy)}||${astConditionText(sell)}';
 
   StrategyCompileOk? compileOk(ComboCand c, int maxKn) {
-    final key = _compileKey(c.buyAst, c.sellAst);
+    final key = _compileKey(c.buyAst, c.sellAst, maxKn);
     final cached = _compileCache[key];
     if (cached != null) {
       return cached is StrategyCompileOk ? cached : null;
@@ -76,15 +76,21 @@ class IndicatorSearchRunner {
     required ComboCand c,
     required SearchEnv env,
     required int splitX,
-    required int outEndX,
     required PassGate gate,
     required int maxKn,
     bool skipOosEarly = false,
   }) {
     final okCompile = compileOk(c, maxKn);
     if (okCompile == null) return null;
-    final rIn = env.runAtCompiled(okCompile, c.buyAst, c.sellAst, splitX);
-    if (rIn == null) return null;
+    // 全区间只回测一次；skipOosEarly 仅影响外段是否参与门槛与展示（不省算力）。
+    final seg = env.runInOutFromSingleFull(
+      okCompile,
+      c.buyAst,
+      c.sellAst,
+      splitX,
+    );
+    if (seg == null) return null;
+    final rIn = seg.inSample;
     final rank = rankScoreOf(rIn, minTrades: gate.minTrades);
     RawScore rOut;
     final skipOos = skipOosEarly &&
@@ -92,10 +98,7 @@ class IndicatorSearchRunner {
     if (skipOos) {
       rOut = RawScore.empty;
     } else {
-      final raw =
-          env.runAtCompiled(okCompile, c.buyAst, c.sellAst, outEndX);
-      if (raw == null) return null;
-      rOut = raw;
+      rOut = seg.outSample;
     }
     final passed = gate.okSegment(rIn) && gate.okSegment(rOut);
     return ComboVerdict(
@@ -107,6 +110,7 @@ class IndicatorSearchRunner {
       inRankScore: rank,
       passed: passed,
       splitX: splitX,
+      outSampleSkipped: skipOos,
     );
   }
 
@@ -122,8 +126,7 @@ class IndicatorSearchRunner {
     VerdictSink? sink,
     int sinkFlushEvery = 80,
   }) async {
-    final splitX = splitIndexOf(bars.length);
-    final outEndX = env.outSampleEndX;
+    final splitX = splitBarIdx(bars);
     var compiled = 0, ran = 0, passed = 0;
     final all = <ComboVerdict>[];
     final recentPassed = <ComboVerdict>[];
@@ -146,7 +149,6 @@ class IndicatorSearchRunner {
         c: c,
         env: env,
         splitX: splitX,
-        outEndX: outEndX,
         gate: gate,
         maxKn: maxKn,
         skipOosEarly: skipOosEarly,

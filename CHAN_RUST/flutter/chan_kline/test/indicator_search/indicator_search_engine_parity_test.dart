@@ -14,7 +14,7 @@ void main() {
   const begin = '2004/07/19 09:30:00';
   const end = '2004/07/20 15:00:00';
 
-  test('SearchEnv 与 executeStrategyBacktest 指标一致', () {
+  test('SearchEnv 与 executeStrategyBacktest 指标一致', () async {
     final bridge = ChanBridge.instance;
     bridge.ensureInitialized();
     final bars = bridge
@@ -27,7 +27,7 @@ void main() {
           tickSource: 'protocol',
         )
         .bars;
-    final h = driveStepHarness(bars);
+    final h = await driveStepHarness(bars);
     final env = SearchEnv(bars, h, code, period, begin, end);
     final cands = buildCandidates(
       VariablePool(h.maxKn),
@@ -58,6 +58,10 @@ void main() {
         diverRelations: h.diverRelations,
         lineSeries: h.lineSeries,
         chipPeaks: h.chipPeaks,
+        bucketStep: 0.1,
+        bollN: h.mathConfig.bollN,
+        donchianN: h.mathConfig.donchianN,
+        regressK: h.mathConfig.regressK,
         maxKn: h.maxKn,
         barFeatures: h.barFeatures,
         mathConfig: h.mathConfig,
