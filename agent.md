@@ -32,6 +32,7 @@
 
 ## 启动方式
 
+- 首次启用：复制 `a_Data/robot_verify/session.json.example` → `session.json`（后者仅本机，已 gitignore），再将 `active` 设为 `true`。  
 - `session.json` 为 `active: true` 时，用户正常启动 App 即进入机器人验证。  
 - 可选环境变量：`CHAN_REPO_ROOT`、`CHAN_KLINE_ROOT`。
 
