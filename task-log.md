@@ -4043,3 +4043,30 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 
 ---
 
+### 2026-09-30 · Cursor · 验证 · 机器人数据探测与连续单步+探针
+
+- **执行者**：Cursor Agent
+- **任务类型**：验证 / 工程健壮性
+- **操作**：
+  1. `robot_verify_data`：按 `CHAN_DATA_ROOT`、仓库 `a_Data`、Rust 默认根、仓库内浅搜 `002003/*.txt` 收集候选；先本地文件再通达信协议探测固定区间 002003。
+  2. `continuous_step_freeze` 用统一加载方案跑 1m+分笔对拍，分笔末态仍挂 T1/T2 `auditProbe`；无数据时 `skipReason=no_verify_data` 并附带探测记录。
+  3. `offline_tick_files` 与 `run_to_end_vs_step_freeze_test` 对齐：单测可走协议，无数据则 `markTestSkipped` 而非硬失败。
+- **结果**：本机 `flutter test test/run_to_end_vs_step_freeze_test.dart` 约 7 分钟通过（协议拉分笔）；`indicator_search`+`step_freeze_signatures` 13 项通过。`session.json` 已为 active，需你重编后开 App 粘贴机器人 JSON 做半自动验收。
+- **演示**：机器人模式跑完后 JSON 里 `continuous_step_freeze` 非 skipped，`cases` 含 `via:tdx_protocol` 或 `local_txt`，分笔 `auditProbe.ok:true`。
+- **测试**：`flutter test test/run_to_end_vs_step_freeze_test.dart`；`flutter test test/step_freeze_signatures_test.dart test/indicator_search/`。
+- **注意事项 / 待办**：协议依赖行情服务器与网络；可把备份放在任意候选根下的 `002003/` 而不必拷进仓库。
+
+---
+
+### 2026-09-30 · 用户半自动 · 验收 · indicator_search_opt 机器人全套件通过
+
+- **执行者**：用户粘贴剪贴板 JSON（半自动机器人验证）
+- **任务类型**：验收
+- **操作**：套件 `indicator_search_opt_20260930`，约 12:13～12:21 跑完三阶段。
+- **结果**：`ok:true`；寻优 flutter 20/20；进程内 cap/事件池/穿越单位等检查全绿；连续单步冻结未 skip——1m 289 根、分笔 988 根，数据来自 worktree `decisive-berry/a_Data` 本地 txt；分笔末态探针 T1 节奏保持、T2 尖端同步均通过。
+- **演示**：步进走完分笔区间后副图语义与「一次性走完瘦包」对拍一致，末根 K 上探针与预期 11.726 对齐。
+- **测试**：以本次 JSON 为准（`harness:StepFreezeMerger`）。
+- **注意事项 / 待办**：任务收尾请将 `session.json` 的 `active` 改回 `false`；步退 `asofKeep` 仍无单独机器人阶段。
+
+---
+

@@ -9,14 +9,6 @@ import 'robot_verify_model.dart';
 /// 连续单步冻结对拍 + 探针场景（与主图 `StepFreezeMerger` 同源）。
 Future<RobotVerifyPhase> runContinuousStepFreezePhase({String? klineRoot}) async {
   const phaseId = 'continuous_step_freeze';
-  if (!hasOffline002003Data(klineRoot: klineRoot)) {
-    return RobotVerifyPhase(
-      id: phaseId,
-      ok: true,
-      skipped: true,
-      skipReason: 'no_offline_002003',
-    );
-  }
 
   try {
     ChanBridge.instance.ensureInitialized();
@@ -48,12 +40,42 @@ Future<RobotVerifyPhase> runContinuousStepFreezePhase({String? klineRoot}) async
     );
   }
 
+  final plan = await resolveRobotVerify002003LoadPlan(klineRoot: klineRoot);
+  if (plan == null) {
+    return RobotVerifyPhase(
+      id: phaseId,
+      ok: true,
+      skipped: true,
+      skipReason: 'no_verify_data',
+      details: {
+        'message': '本地未找到可用分笔且协议拉取失败',
+        'localBackup': hasLocal002003TickBackup(klineRoot: klineRoot),
+        'attempts': lastRobotVerifyDataResolveAttempts(),
+      },
+    );
+  }
+
   final driver = StepFreezeParityDriver(truncationCheck: true);
   final cases = <Map<String, Object?>>[];
   var allOk = true;
 
   for (final spec in _periodSpecs) {
-    final bars = _loadBars(period: spec.period);
+    List<KlineBar> bars;
+    try {
+      bars = loadRobotVerifyBars(plan: plan, period: spec.period);
+    } catch (e) {
+      allOk = false;
+      cases.add({
+        'period': spec.period,
+        'ok': false,
+        'error': 'load_failed',
+        'message': '$e',
+        'dataRoot': plan.dataRoot,
+        'tickSource': plan.tickSource,
+        'via': plan.via,
+      });
+      continue;
+    }
     if (bars.length < spec.minBars) {
       allOk = false;
       cases.add({
@@ -62,6 +84,9 @@ Future<RobotVerifyPhase> runContinuousStepFreezePhase({String? klineRoot}) async
         'error': 'insufficient_bars',
         'bars': bars.length,
         'minBars': spec.minBars,
+        'dataRoot': plan.dataRoot,
+        'tickSource': plan.tickSource,
+        'via': plan.via,
       });
       continue;
     }
@@ -73,6 +98,9 @@ Future<RobotVerifyPhase> runContinuousStepFreezePhase({String? klineRoot}) async
       'steps': bars.length,
       'lastSegN': result.lastSegN,
       'midSnapSegN': result.midSnapSegN,
+      'dataRoot': plan.dataRoot,
+      'tickSource': plan.tickSource,
+      'via': plan.via,
       if (!result.ok) 'mismatches': result.mismatches,
     };
     if (spec.period == 'tick' && result.ok) {
@@ -111,14 +139,3 @@ const _periodSpecs = [
   _PeriodSpec('1m', 40),
   _PeriodSpec('tick', 80),
 ];
-
-List<KlineBar> _loadBars({required String period}) {
-  final bridge = ChanBridge.instance;
-  return bridge.loadKlines(
-    dataRoot: bridge.defaultDataRoot(),
-    code: '002003',
-    beginDate: '2004/07/19 10:47:00',
-    endDate: '2004/07/20 13:09:00',
-    period: period,
-  );
-}

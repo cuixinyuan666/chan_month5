@@ -2,8 +2,6 @@ import 'package:chan_kline/bridge/chan_bridge.dart';
 import 'package:chan_kline/robot_verify/continuous_step_verify.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'offline_tick_files.dart';
-
 /// 后台对拍：连续单步冻结 vs 一次性走完瘦包（实现见 continuous_step_verify.dart）。
 void main() {
   setUpAll(() {
@@ -24,7 +22,10 @@ void main() {
     '002003 连续单步冻结对拍（1m + tick）',
     () async {
       final phase = await runContinuousStepFreezePhase();
-      expect(phase.skipped, isFalse, reason: phase.skipReason);
+      if (phase.skipped) {
+        markTestSkipped(phase.skipReason ?? 'no_verify_data');
+        return;
+      }
       expect(phase.ok, isTrue, reason: '${phase.details}');
       final cases = phase.details['cases'] as List<dynamic>?;
       expect(cases, isNotNull);
@@ -35,6 +36,5 @@ void main() {
       }
     },
     timeout: const Timeout(Duration(minutes: 15)),
-    skip: hasOffline002003TickFiles() ? false : kNoOffline002003Skip,
   );
 }
