@@ -1,4 +1,4 @@
-﻿# 任务日志
+# 任务日志
 
 > 所有智能体在完成任务后，应在此文件末尾追加。格式见下。本文件是**唯一**任务日志：已按时间从早到晚合并根目录原 `task-log.md`、`CHAN_RUST/TASK_LOG.md`（口径条目前加【口径】）、`CHAN_RUST/tooltip_audit_2026-08-14.md`（【审计】）。
 
@@ -3956,6 +3956,75 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **演示**：设置候选上限 2000 后枚举构成应明显少于 14180 且仍有穿越/阈值；寻优结果「仅外达标」在内段弱时能看到外段笔数/胜率（未测只表示未参与双达标）。
 - **测试**：`flutter test test/indicator_search/`。
 - **注意事项 / 待办**：样本内外仍是一次全跑再切单（P0 切段未动）；主图寻优仍须步进到末根验收。
+
+---
+
+### 2026-09-30 · Cursor · 新增 · 机器人验证规则与套件
+
+- **执行者**：Cursor Agent
+- **任务类型**：工程规范 / 自动验收
+- **操作**：
+  1. 新增 [`agent.md`](agent.md)（口头授权、会话 `a_Data/robot_verify/session.json`、任务结束默认清除）。
+  2. `CHAN_RUST/scripts/robot_verify.ps1`：编库 → `flutter test test/indicator_search/` → 启动 App（`CHAN_ROBOT_VERIFY=1`）进程内自检 → 剪贴板 + `last_report.txt` → 退出。
+  3. 套件 `indicator_search_opt_20260930` 已对本任务授权跑通。
+- **结果**：脚本 exit 0；12/12 indicator_search 测试通过；备份报告见 `a_Data/robot_verify/last_report.txt`。
+- **演示**：口头授权后执行 `powershell -File CHAN_RUST/scripts/robot_verify.ps1`，粘贴剪贴板或打开 `last_report.txt` 查看总评。
+- **测试**：同上脚本 + `flutter test test/indicator_search/`。
+- **注意事项 / 待办**：下一无关任务开始前须清除 `session.json` 的 `active`；DLL 被占用时脚本会跳过复制并告警。
+
+---
+
+### 2026-09-30 · Cursor · 优化 · 机器人验证 UI 与收尾分工
+
+- **执行者**：Cursor Agent
+- **任务类型**：工程规范 / 验收体验
+- **操作**：验证模式常驻进度窗（步骤+进度条）；结束后仅简短提示、全文自动进剪贴板；取消自动关 App；`agent.md` 改为用户手动关窗并粘贴结果。
+- **结果**：需用户重编后启动 App 验收新界面。
+- **演示**：`session active` 启动后应见「机器人验证模式已开启」与阶段勾选；完成后提示剪贴板，窗口不关。
+- **测试**：重编 + 半自动跑一轮机器人验证。
+- **注意事项 / 待办**：无。
+
+---
+
+### 2026-09-30 · Cursor · Bug修复 · build_rust 预编译后直接启 exe
+
+- **执行者**：Cursor Agent
+- **任务类型**：Bug修复 / 构建脚本
+- **操作**：
+  1. 根因：`flutter build windows --debug` 已成功，但 `flutter run` 再次触发 `flutter_assemble`，MSB8066 失败；且 PowerShell 曾把 run 的 stdout 误当退出码。
+  2. `build_rust.ps1` 改为预编译成功后直接运行 `build\windows\x64\runner\Debug\chan_kline.exe`，并设置 `CHAN_REPO_ROOT` / `CHAN_KLINE_ROOT` 供机器人验证找路径。
+  3. 构建输出写入 `build_windows_last.log`；若退出码非 0 但 exe 已生成则继续（常见于 Flutter 资源镜像 stderr 警告）。
+- **结果**：本地 `flutter build windows --debug` 可产出 exe；请用 `.\build_rust.ps1` 编库并启动，不再依赖 `flutter run`。
+- **演示**：在 `CHAN_RUST\scripts` 执行 `.\build_rust.ps1`，应看到 `Launch (no flutter run)` 后 App 窗口打开；`session.json` 为 active 时进入机器人验证进度窗。
+- **测试**：未在本机完整跑通脚本端到端（会拉起 GUI）；单独 flutter build 已通过。
+- **注意事项 / 待办**：需要热重载时可在成功 build 后自行 `flutter attach`；仍失败则先关 chan_kline 再 `flutter clean`。
+
+---
+
+### 2026-09-30 · Cursor · 验证 · 机器人验证 indicator_search_opt 全绿
+
+- **执行者**：用户半自动跑套件 + Cursor 解读报告
+- **任务类型**：验证
+- **操作**：`build_rust.ps1` 启 App → 套件 `indicator_search_opt_20260930`：`flutter test test/indicator_search/` + 进程内自检（候选上限、穿越分桶、事件池、ADJACENT_RATIO、相对收盘阈值等）。
+- **结果**：**ALL PASS**（12/12 单测约 1m43s；进程内 9 项 OK）。报告落盘 `a_Data/robot_verify/last_report.txt`。
+- **演示**：报告总评 ALL PASS 即本轮寻优修复验收通过；与步进/K 线无关，未做连续单步主图验收。
+- **测试**：见用户粘贴报告与 `last_report.txt`。
+- **注意事项 / 待办**：报告里 test 用例中文乱码为 Windows 控制台编码，不影响结论；样本内外「单次全跑再切段」仍按约定未改；日常用 App 前请将 `session.json` 的 `active` 设为 `false`。
+
+---
+
+### 2026-09-30 · Cursor · 优化 · 机器人验证 JSON 报告 + 连续单步对拍
+
+- **执行者**：Cursor Agent
+- **任务类型**：工程规范 / 自动验收
+- **操作**：
+  1. 剪贴板与落盘改为单行 UTF-8 JSON（`v`/`ok`/`phases[]`），不再附带框线长文；`flutter test` 用 JSON reporter + utf8 解码汇总，避免 Windows 控制台乱码进报告。
+  2. 新增阶段 `continuous_step_freeze`：002003 1m/分笔逐 K 步进冻结 vs 走完瘦包，对拍买卖点/中枢/分型/比例/斜率/节奏（逻辑在 `continuous_step_verify.dart`，单测与机器人共用）。
+  3. `agent.md` / `robot_verify_agent_finish.ps1` 优先读 `last_report.json`。
+- **结果**：`lib/robot_verify` 分析无告警；`flutter test test/indicator_search/` 仍 12/12；需用户重编后跑一轮机器人验证验收新 JSON 与单步阶段耗时。
+- **演示**：粘贴剪贴板 JSON，`ok:true` 且 `continuous_step_freeze` 非 skipped 且 `cases[].ok` 全 true；进度窗多一步「连续单步冻结对拍」。
+- **测试**：`dart analyze lib/robot_verify`；`flutter test test/indicator_search/`；可选 `flutter test test/run_to_end_vs_step_freeze_test.dart`（需 dll + a_Data/002003）。
+- **注意事项 / 待办**：连续单步为管道+副图语义对拍，非像素级主图截图；无离线 002003 时该阶段 `skipped` 仍算总评通过。
 
 ---
 

@@ -94,9 +94,62 @@ import 'widgets/yin_yang_mark.dart';
 import 'widgets/yin_yang_native_overlay.dart';
 import 'widgets/test_ohlc_editor_dialog.dart';
 import 'window_work_area.dart';
+import 'robot_verify/robot_verify_app.dart';
+import 'robot_verify/robot_verify_paths.dart';
+
+const _robotVerifyDefine = bool.fromEnvironment('ROBOT_VERIFY');
+const _robotVerifySuiteDefine = String.fromEnvironment(
+  'ROBOT_VERIFY_SUITE',
+  defaultValue: 'indicator_search_opt_20260930',
+);
+const _chanKlineRootDefine = String.fromEnvironment('CHAN_KLINE_ROOT');
+
+bool _robotVerifyEnabled() =>
+    _robotVerifyDefine ||
+    Platform.environment['CHAN_ROBOT_VERIFY'] == '1' ||
+    RobotVerifyPaths.sessionAuthorized(
+      klineRoot: Platform.environment['CHAN_KLINE_ROOT'] ?? _chanKlineRootDefine,
+    );
+
+String _robotVerifySuite() {
+  final fromEnv = Platform.environment['CHAN_ROBOT_VERIFY_SUITE'];
+  if (fromEnv != null && fromEnv.isNotEmpty) return fromEnv;
+  final fromSession = readSuiteIdFromSession(
+    klineRoot: Platform.environment['CHAN_KLINE_ROOT'] ?? _chanKlineRootDefine,
+  );
+  if (fromSession != null && fromSession.isNotEmpty) return fromSession;
+  return _robotVerifySuiteDefine;
+}
+
+String _chanKlineRoot() =>
+    Platform.environment['CHAN_KLINE_ROOT'] ?? _chanKlineRootDefine;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  if (_robotVerifyEnabled()) {
+    final klineRoot = _chanKlineRoot();
+    if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+      await windowManager.ensureInitialized();
+      const opts = WindowOptions(
+        size: Size(480, 420),
+        center: true,
+        title: '机器人验证',
+        titleBarStyle: TitleBarStyle.normal,
+        backgroundColor: Color(0xFF121212),
+      );
+      await windowManager.waitUntilReadyToShow(opts, () async {
+        await windowManager.show();
+        await windowManager.focus();
+      });
+    }
+    runApp(
+      RobotVerifyApp(
+        suiteId: _robotVerifySuite(),
+        klineRoot: klineRoot,
+      ),
+    );
+    return;
+  }
   if (Platform.isAndroid) {
     await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     SystemChrome.setSystemUIOverlayStyle(
