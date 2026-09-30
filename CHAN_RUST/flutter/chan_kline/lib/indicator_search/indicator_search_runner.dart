@@ -56,7 +56,16 @@ class IndicatorSearchRunner {
   final Map<String, StrategyCompileResult> _compileCache = {};
   bool _cancelRequested = false;
 
-  void requestCancel() => _cancelRequested = true;
+  /// 仅供机器人验证的 Widget 测试注入：取消信号回调（生产为 null）。
+  /// 对话框点「取消扫描」时与 [requestCancel] 一并触发，便于测试观测。
+  final void Function()? onCancelRequested;
+
+  IndicatorSearchRunner({this.onCancelRequested});
+
+  void requestCancel() {
+    _cancelRequested = true;
+    onCancelRequested?.call();
+  }
 
   String _compileKey(TradeAst buy, TradeAst sell, int maxKn) =>
       '$maxKn||${astConditionCacheKey(buy)}||${astConditionCacheKey(sell)}';

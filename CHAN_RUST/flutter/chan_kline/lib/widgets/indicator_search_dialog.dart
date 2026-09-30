@@ -34,6 +34,9 @@ class IndicatorSearchDialog extends StatefulWidget {
     this.truncationCheck = true,
     this.mainSessionHarness,
     this.initialBars,
+    this.runnerFactory,
+    this.candidateOverride,
+    this.scanYieldEvery,
   });
 
   final String code;
@@ -50,6 +53,16 @@ class IndicatorSearchDialog extends StatefulWidget {
   /// 非空时直接复用主界面冻结仓，跳过 harness 重冻。
   final BacktestStepHarnessResult? mainSessionHarness;
   final List<KlineBar>? initialBars;
+
+  /// 仅供机器人验证的 Widget 测试注入：替换扫描器（生产路径为 null）。
+  final IndicatorSearchRunner Function()? runnerFactory;
+
+  /// 仅供机器人验证的 Widget 测试注入：直接给定候选，跳过枚举。
+  final List<ComboCand>? candidateOverride;
+
+  /// 仅供机器人验证的 Widget 测试注入：扫描让出频率（生产为 null → 默认 25）。
+  /// 设为 1 可让每条候选之间都让出事件循环，便于测试在中途点「取消扫描」。
+  final int? scanYieldEvery;
 
   @override
   State<IndicatorSearchDialog> createState() => _IndicatorSearchDialogState();
@@ -155,7 +168,7 @@ class _IndicatorSearchDialogState extends State<IndicatorSearchDialog> {
 
       final pool = VariablePool(h.maxKn);
       final opts = _settings.toBuildOptions();
-      final cands = buildCandidates(pool, opts);
+      final cands = widget.candidateOverride ?? buildCandidates(pool, opts);
       _buildSummary = summarizeCandidates(cands);
       logProgress(
         '候选 ${cands.length} 条 profile=${opts.profile.name} · ${_buildSummary!.toDisplayLine()}',
@@ -195,7 +208,7 @@ class _IndicatorSearchDialogState extends State<IndicatorSearchDialog> {
         File(tmpResults).writeAsStringSync('');
       } catch (_) {}
       final sink = VerdictSink(tmpResults);
-      final runner = IndicatorSearchRunner();
+      final runner = widget.runnerFactory?.call() ?? IndicatorSearchRunner();
       _activeRunner = runner;
       final stats = await runner.runAll(
         bars: bars,
@@ -204,6 +217,7 @@ class _IndicatorSearchDialogState extends State<IndicatorSearchDialog> {
         gate: gate,
         maxKn: h.maxKn,
         skipOosEarly: _settings.skipOosEarly,
+        yieldEvery: widget.scanYieldEvery ?? 25,
         sink: sink,
         onProgress: (p) {
           if (!mounted) return;

@@ -4122,3 +4122,21 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **演示**：请你本地重编开 App（`session.json` 仍 active）走一遍半自动窗，剪贴板 JSON 应与 `a_Data/robot_verify/last_report.json` 三阶段一致。
 - **测试**：`flutter test test/robot_verify_full_suite_test.dart`。
 - **注意事项 / 待办**：`PassGate` 仍不可在 UI 改；App 半自动仍需你编译+开窗+粘贴剪贴板复核。
+
+### 2026-09-30 19:40 — 寻优三条人工 spot-check 全部转为机器人自动验收
+
+- **执行者**：Cline（AI 编码机器人）
+- **任务类型**：测试建设 / 验收自动化
+- **上下文**：原先「请人工开寻优看一眼」的三条 spot-check（报告头「内外各独立重跑」文案、「内弱外强不再被切点前占仓扭曲」、「取消扫描」→「已取消」）不在机器人验证套件注册表内，只能靠人眼。本次把这三条全部落成自动化测试，最大化替代人工。
+- **关键操作**：
+  1. 先把改动前的工作区（寻优内外段独立重跑等 13 个文件）提交并推送云端（`15548a38`），再动代码。
+  2. 新增 `test/indicator_search/indicator_search_report_header_test.dart`（7 条）：`reportHeader()` 口径断言（各独立重跑 / 本金重置 / 不再「全跑再切单」/ 切点 K 根号），外加 `testWidgets` 断言结果面板**真的渲染出**报告头、六个分桶 Tab 计数（双达标/仅内/仅外/外段过线）、早停说明卡片与枚举构成行。
+  3. 新增 `test/indicator_search/indicator_search_slot_distortion_test.dart`（4 条）：用合成 K + 手工信号**确定性**复现「切点前未平仓占位 → 切点后买点被拒（已有仓位再次BUY）」，并证明内外独立重跑（先滤 executeX>切点、空仓起算）不再拒、外段自成闭环；另加 002003 真实数据逐候选不变量（外段成交根全 > 切点、笔数 ≥ 全跑切单）。
+  4. 新增 `test/indicator_search/indicator_search_cancel_test.dart`（3 条）：Runner 层 `requestCancel` 语义（cancelled=true、保留部分 verdicts、未取消时为 false）+ 真实 `IndicatorSearchDialog` 经 `showDialog` 挂载、tap「取消扫描」→ 断言阶段「已取消」、按钮消失、保留部分 TSV。
+  5. 为让 Widget 测试可控，给生产类加 4 个**仅测试用、生产路径为 null** 的可选钩子（不改任何生产语义）：`IndicatorSearchDialog.runnerFactory` / `candidateOverride` / `scanYieldEvery`，`IndicatorSearchRunner.onCancelRequested`；`pubspec.yaml` 的 `dev_dependencies` 加 `path_provider_platform_interface` 以替换测试环境的 path_provider。
+  6. `test/robot_verify_full_suite_test.dart` 的用例数断言由硬编码 12 改为下界 26；`agent.md` 覆盖表把三条从「未覆盖」移入「已覆盖」，并新增「寻优 UI 层已可机器人替代的 spot-check」小节 + Widget 测试踩坑清单。
+- **结果**：新增 3 个文件共 14 条用例**逐文件全部通过**（报告头 7 / 占仓扭曲 4 / 取消扫描 3）。机器人套件第一阶段 `flutter_test_indicator_search` 会自动纳入这三个文件，用例总数由 12 增至 26。
+- **注意事项**：
+  - **全量 `flutter test test/indicator_search/` 一次跑完未验证成功**：并行负载下原有的 `indicator_search_oos_slice_test.dart` 出现日志停滞（+11 无失败后长时间无输出），已终止。该问题在改动前即存在（多文件并行各自重载 harness），非本次新增测试引入；建议后续单独排查或改为串行 `-j 1`。
+  - Widget 测试踩坑已写入 `agent.md`：必须 `showDialog` 挂载；FakeAsync 两面性（真实 IO 用 `runAsync`、扫描定时器用 pump）；`pump(duration)` 会一次排空零时长定时器，想中途插手要用无时长 `pump()`；点完取消要改用带时长 pump 才能推进到循环开头的取消检查。
+- **演示**：走到第 202 根 K 打开寻优，报告头第一行应显示「样本内、样本外各独立重跑（本金重置、单仓只做多）」；扫描刚开始点「取消扫描」，阶段立刻跳到「已取消」，按钮消失、出现「关闭」，副图那份 TSV 保留已扫描的部分。切点前那一笔没平仓的单，不再会把切点后的买点挤掉——内外两段各自从空仓重跑，各算各的。

@@ -67,8 +67,42 @@ powershell -NoProfile -File CHAN_RUST/scripts/robot_verify_agent_finish.ps1 -NoC
 | Kn 比例、斜率、节奏会话历史 | **Math/背驰冻结仓**、截断开关 `_truncationCheck` 传入差异 |
 | 002003 固定区间 1m + 分笔 | 任意代码/区间、验收探针 T1/T2 锚点（如分笔 77–114 节奏持值） |
 | 末态签名 + 半程快照冻段数 | 每一根中间步的「肉眼点位」抽检（只验末态对拍，不逐步列印全历史） |
+| **寻优报告头文案 + 结果面板 Tab 计数**（`indicator_search_report_header_test.dart`，含 `testWidgets`） | 报告头在**真实主图会话**下的观感（字号/换行是否溢出，仍需人眼） |
+| **「内弱外强不被切点前占仓扭曲」回归**（`indicator_search_slot_distortion_test.dart`：合成信号确定性证明 + 002003 逐候选不变量） | 其它标的/区间上「差异确实发生」的样本量（非固定数据集，差异可能为 0） |
+| **取消扫描**（`indicator_search_cancel_test.dart`：Runner 语义 + 真实对话框 tap「取消扫描」→「已取消」） | 取消时**正在落盘的大 TSV** 人工查看是否可读 |
 
 **结论**：`continuous_step_verify` **没有**相对原 `run_to_end_vs_step_freeze_test` 做阉割；**有**相对「主图完整步进语义」的**范围缺口**。若要缩小缺口，应在该文件（或共享 harness）**增补**合并项/场景，而不是改 UI。
+
+### 寻优 UI 层：已可机器人替代的 spot-check（2026-09-30 增补）
+
+原先「请人工开寻优看一眼」的三条，现已全部进入 `test/indicator_search/`，**随第一阶段 `flutter_test_indicator_search` 一并跑**（用例数由 12 增至 25）：
+
+| 原人工 spot-check | 现状 | 用例 |
+|------------------|------|------|
+| 报告头「内外各独立重跑」文案 | ✅ 自动：`reportHeader()` 断言 + `testWidgets` 断言面板**真的渲染出**该行 | `indicator_search_report_header_test.dart` |
+| 「内弱外强不再被切点前占仓扭曲」 | ✅ 自动：合成信号确定性复现「切点前占仓 → 切点后买点被拒」，并证明独立重跑不拒；002003 逐候选断言外段成交根全 > 切点、笔数 ≥ 旧切单 | `indicator_search_slot_distortion_test.dart` |
+| 「取消扫描」→「已取消」 | ✅ 自动：Runner `requestCancel` 语义 + 真实 `IndicatorSearchDialog` tap「取消扫描」→ 断言阶段「已取消」、按钮消失、保留部分 TSV | `indicator_search_cancel_test.dart` |
+
+仍需人眼的只剩**观感类**：报告头在真实主图会话下的换行/字号是否溢出、取消时那份大 TSV 手工打开是否可读。
+
+> **落地要点（Widget 测试踩坑，务必照做）**
+>
+> 1. `path_provider` 测试环境无插件 → `pubspec.yaml` 的 `dev_dependencies` 已加
+>    `path_provider_platform_interface`，测试内注入指向临时目录的假实现。
+> 2. 对话框返回 `AlertDialog`，**必须 `showDialog` 挂载**；直接塞进 `body` 不会
+>    渲染出按钮（`find.text('取消扫描')` 恒空）。
+> 3. **FakeAsync 两面性，缺一不可**：
+>    - 真实 IO / FFI（取路径、落盘、冻结）只在 `tester.runAsync()` 里推进；
+>    - 扫描循环挂在 `Future.delayed(Duration.zero)` 上，属 FakeAsync 定时器，
+>      **无时长 `pump()` 不会唤醒它**，点完取消后必须改用**带时长** `pump(1ms)`
+>      才能推进到循环开头的取消检查。
+> 4. `pump(duration)` 会把窗口内零时长定时器**一次性排空** —— 想在扫描中途插
+>    手，就用**无时长** `pump()` 逐步推进（配合 `scanYieldEvery: 1`）。
+> 5. 为此给生产类加了 4 个**仅测试用、生产路径为 null** 的钩子：
+>    `IndicatorSearchDialog.runnerFactory` / `candidateOverride` / `scanYieldEvery`，
+>    以及 `IndicatorSearchRunner.onCancelRequested`（证明取消信号真的送达了扫描器）。
+>    均为可选命名参数，**不改变任何生产语义**。
+
 
 无 `a_Data/002003` 时阶段 `skipped`（`skipReason: no_offline_002003`），总评仍可通过；有数据则失败即真失败。
 

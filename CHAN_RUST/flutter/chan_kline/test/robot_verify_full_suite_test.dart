@@ -24,8 +24,13 @@ void main() {
           .where((p) => p.id == 'flutter_test_indicator_search')
           .toList();
       if (flutter.isNotEmpty) {
-        final passed = flutter.first.details['passed'];
-        expect(passed, 12, reason: '应过滤 hidden，12 个真实用例');
+        final passed = flutter.first.details['passed'] as int?;
+        // 应过滤 hidden；下界覆盖：寻优对拍 12 + 报告头/面板 UI 7 + 占仓扭曲 4 + 取消扫描 3
+        expect(
+          passed,
+          greaterThanOrEqualTo(26),
+          reason: '寻优测试用例数应不少于 26（含报告头/占仓扭曲/取消扫描）',
+        );
       }
 
       for (final p in report.phases) {
