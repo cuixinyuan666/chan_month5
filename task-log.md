@@ -4028,3 +4028,18 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 
 ---
 
+### 2026-09-30 · Cursor · 重构 · StepFreeze harness 与机器人全仓对拍
+
+- **执行者**：Cursor Agent（用户确认执行）
+- **任务类型**：重构 / 自动验收
+- **操作**：
+  1. 抽出 `lib/step_freeze/`：`StepFreezeSessionState`、`StepFreezeMerger`（对齐 `_rebuildCombine` 全合并链：分型/买卖/中枢/裁决/比例斜率节奏/Math/背驰/筹码峰）、`StepFreezeParityDriver`、`StepFreezeSignatures`、`AuditProbeAssertions`（T1/T2）。
+  2. `main.dart` 冻结合并改调 `StepFreezeMerger`，状态收敛到 `_stepFreeze`。
+  3. 机器人 `continuous_step_freeze` 改用同源 driver；分笔末态挂探针断言写入 JSON `auditProbe`。
+- **结果**：`flutter test test/indicator_search/` 12/12；`step_freeze_signatures_test` 通过；`run_to_end_vs_step_freeze_test` 本机无 002003 离线数据时为 skip，有数据时需机器人验证或该单测验收。
+- **演示**：`session active` + 重编后跑机器人验证；JSON 中 `continuous_step_freeze.details.harness=StepFreezeMerger`，分笔含 `auditProbe.ok`。
+- **测试**：见上；有 `a_Data/002003` 时务必跑一轮机器人验证或 `flutter test test/run_to_end_vs_step_freeze_test.dart`。
+- **注意事项 / 待办**：步退 `asofKeep` 未单独加阶段；无离线数据时连续单步仍 skipped。
+
+---
+

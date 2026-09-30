@@ -56,7 +56,7 @@ powershell -NoProfile -File CHAN_RUST/scripts/robot_verify_agent_finish.ps1 -NoC
 
 ### 连续单步验收：含义与是否「阉割」
 
-**含义（不是截图）**：用与主图相同的 `ChanPipelineSession.syncTo` 逐根 K 喂数据，把本步 Rust 结构喂进与主图相同的 **冻结会话合并函数**（买卖点、中枢信号、分型判断、Kn 比例/斜率/节奏），再与「一次性走完 + 瘦增量」路径的**同口径数据签名**对拍。这是仓库里 `run_to_end_vs_step_freeze_test` 的同一套逻辑，迁到 `lib` 供机器人验证调用。
+**含义（不是截图）**：主图 `_rebuildCombine` 冻结合并已抽到 `lib/step_freeze/step_freeze_merger.dart`（`StepFreezeSessionState` + `StepFreezeMerger`），机器人 `StepFreezeParityDriver` 与主图**同源**。逐根 K `syncTo` 后合并全类冻结仓，再与「走完瘦包」路径做签名对拍；分笔另跑探针 T1/T2（`audit_probe_assertions.dart`）。
 
 **能否 100% 替代你在界面上「连续点单步 + 眼看主图」？** **不能。** 机器人做的是**可重复的数据对拍**，不操作 Widget、不模拟键盘点击。相对主图 `_rebuildCombine` 全链路，当前对拍是**有意收窄的子集**（不是把已有对拍逻辑砍短）：
 
