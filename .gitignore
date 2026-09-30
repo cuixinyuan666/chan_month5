@@ -58,6 +58,15 @@ a_Data/robot_verify/*
 !a_Data/robot_verify/README.md
 !a_Data/robot_verify/session.json.example
 
+# 本机编库/调试临时日志（仓库根）
+/build_err.txt
+/build_log.txt
+/fv.txt
+/fv2.txt
+
+# build_rust 复制 DLL 时若文件被占用留下的备份
+CHAN_RUST/flutter/chan_kline/windows/native/chan_ffi.dll.locked_*
+
 # 通达信协议分笔缓存（运行时按日生成，勿提交）
 a_Data/.tdx_protocol_cache/
 CHAN_RUST/a_Data/.tdx_protocol_cache/
