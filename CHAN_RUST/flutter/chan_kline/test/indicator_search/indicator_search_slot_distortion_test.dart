@@ -8,7 +8,6 @@ import 'package:chan_kline/backtest/trade_clock.dart';
 import 'package:chan_kline/backtest/trade_operand.dart';
 import 'package:chan_kline/bridge/chan_bridge.dart';
 import 'package:chan_kline/indicator_search/candidate_builder.dart';
-import 'package:chan_kline/indicator_search/indicator_search_runner.dart';
 import 'package:chan_kline/indicator_search/search_core.dart';
 import 'package:chan_kline/indicator_search/search_env.dart';
 import 'package:chan_kline/indicator_search/variable_pool.dart';
@@ -16,41 +15,40 @@ import 'package:chan_kline/models/kline_bar.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 KlineBar _bar(int idx, double close) => KlineBar(
-      idx: idx,
-      timeMs: idx * 60000,
-      timeText: 't$idx',
-      open: close,
-      high: close + 1,
-      low: close - 1,
-      close: close,
-      volume: 1,
-      amount: 1,
-    );
+  idx: idx,
+  timeMs: idx * 60000,
+  timeText: 't$idx',
+  open: close,
+  high: close + 1,
+  low: close - 1,
+  close: close,
+  volume: 1,
+  amount: 1,
+);
 
 SignalEvent _sig({
   required String id,
   required TradeSide side,
   required int discoveryX,
-}) =>
-    SignalEvent(
-      signalId: id,
-      ruleId: side == TradeSide.buy ? 'r_buy' : 'r_sell',
-      side: side,
-      op: side == TradeSide.buy
-          ? TradeBinaryOp.crossBelow
-          : TradeBinaryOp.crossAbove,
-      displayKn: 0,
-      clockFamily: TradeClockFamily.zsMath,
-      evalIndex: 0,
-      discoveryX: discoveryX,
-      availableAt: discoveryX,
-      signalPrice: 10.0 + discoveryX,
-      source: 'test',
-      leftValue: 10.0 + discoveryX,
-      rightValue: 10.0 + discoveryX,
-      leftId: 'RAW.K0.CLOSE',
-      rightId: 'RAW.K0.OPEN',
-    );
+}) => SignalEvent(
+  signalId: id,
+  ruleId: side == TradeSide.buy ? 'r_buy' : 'r_sell',
+  side: side,
+  op: side == TradeSide.buy
+      ? TradeBinaryOp.crossBelow
+      : TradeBinaryOp.crossAbove,
+  displayKn: 0,
+  clockFamily: TradeClockFamily.zsMath,
+  evalIndex: 0,
+  discoveryX: discoveryX,
+  availableAt: discoveryX,
+  signalPrice: 10.0 + discoveryX,
+  source: 'test',
+  leftValue: 10.0 + discoveryX,
+  rightValue: 10.0 + discoveryX,
+  leftId: 'RAW.K0.CLOSE',
+  rightId: 'RAW.K0.OPEN',
+);
 
 void main() {
   group('单仓占仓语义：内外独立重跑 vs 全跑再切单', () {
@@ -72,8 +70,9 @@ void main() {
         initialCash: 100000,
         fillPriceMode: TradeFillPriceMode.sameBarClose,
       );
-      final rejected =
-          r.orders.where((o) => o.status == OrderStatus.rejected).toList();
+      final rejected = r.orders
+          .where((o) => o.status == OrderStatus.rejected)
+          .toList();
       expect(rejected, isNotEmpty);
       expect(rejected.first.rejectReason, contains('已有仓位'));
       // 闭合交易只有一笔，且是切点前进场的那笔
@@ -95,10 +94,7 @@ void main() {
         initialCash: 100000,
         fillPriceMode: TradeFillPriceMode.sameBarClose,
       );
-      expect(
-        r.orders.where((o) => o.status == OrderStatus.rejected),
-        isEmpty,
-      );
+      expect(r.orders.where((o) => o.status == OrderStatus.rejected), isEmpty);
       // 外段自成闭环一笔，且成交根全部在切点之后
       expect(r.trades.length, 1);
       final t = r.trades.single;
@@ -174,12 +170,20 @@ void main() {
         );
         if (comp is! StrategyCompileOk) continue;
 
-        final seg =
-            env.runInOutFromSingleFull(comp, c.buyAst, c.sellAst, splitX);
+        final seg = env.runInOutFromSingleFull(
+          comp,
+          c.buyAst,
+          c.sellAst,
+          splitX,
+        );
         if (seg == null) continue;
         // 旧口径：全区间跑完再按 entryX>切点 切单
-        final oosSliced =
-            env.outSampleClosedTrades(comp, c.buyAst, c.sellAst, splitX);
+        final oosSliced = env.outSampleClosedTrades(
+          comp,
+          c.buyAst,
+          c.sellAst,
+          splitX,
+        );
         if (oosSliced == null) continue;
 
         for (final t in oosSliced) {
@@ -189,7 +193,8 @@ void main() {
         expect(
           seg.outSample.trades,
           greaterThanOrEqualTo(oosSliced.length),
-          reason: '候选 ${c.name}：外段独立重跑 ${seg.outSample.trades} 笔，'
+          reason:
+              '候选 ${c.name}：外段独立重跑 ${seg.outSample.trades} 笔，'
               '不应少于全跑切单 ${oosSliced.length} 笔',
         );
         if (seg.outSample.trades > oosSliced.length) distorted++;
@@ -202,4 +207,3 @@ void main() {
     }, timeout: const Timeout(Duration(minutes: 10)));
   });
 }
-

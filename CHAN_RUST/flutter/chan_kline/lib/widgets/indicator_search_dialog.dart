@@ -50,6 +50,7 @@ class IndicatorSearchDialog extends StatefulWidget {
   final StrategyConfig strategyConfig;
   final BarFeatureLookup? featureLookup;
   final bool truncationCheck;
+
   /// 非空时直接复用主界面冻结仓，跳过 harness 重冻。
   final BacktestStepHarnessResult? mainSessionHarness;
   final List<KlineBar>? initialBars;
@@ -157,7 +158,8 @@ class _IndicatorSearchDialogState extends State<IndicatorSearchDialog> {
             if (!mounted) return;
             setState(() {
               _progress = d / t;
-              _detail = '冻结 $d / $t · 已用 '
+              _detail =
+                  '冻结 $d / $t · 已用 '
                   '${DateTime.now().difference(freezeStarted).inSeconds}s';
             });
           },
@@ -315,7 +317,10 @@ class _IndicatorSearchDialogState extends State<IndicatorSearchDialog> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text('阶段：$_phase', style: const TextStyle(fontWeight: FontWeight.w600)),
+            Text(
+              '阶段：$_phase',
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
             const SizedBox(height: 4),
             Text(_detail, style: const TextStyle(fontSize: 12)),
             if (_progress != null) ...[
@@ -324,15 +329,20 @@ class _IndicatorSearchDialogState extends State<IndicatorSearchDialog> {
             ],
             if (_running && _livePassed.isNotEmpty) ...[
               const SizedBox(height: 8),
-              Text('最新双达标', style: TextStyle(fontSize: 11, color: Colors.green.shade800)),
-              ..._livePassed.take(3).map(
-                (v) => Text(
-                  '· ${v.categoryLabel} 买:${v.buyText} 卖:${v.sellText}',
-                  style: const TextStyle(fontSize: 10),
-                  maxLines: 3,
-                  overflow: TextOverflow.ellipsis,
-                ),
+              Text(
+                '最新双达标',
+                style: TextStyle(fontSize: 11, color: Colors.green.shade800),
               ),
+              ..._livePassed
+                  .take(3)
+                  .map(
+                    (v) => Text(
+                      '· ${v.categoryLabel} 买:${v.buyText} 卖:${v.sellText}',
+                      style: const TextStyle(fontSize: 10),
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
             ],
             if (_error != null) ...[
               const SizedBox(height: 12),
@@ -390,7 +400,10 @@ Future<void> showIndicatorSearchLastResultDialog(BuildContext context) async {
         title: const Text('上次寻优结果'),
         content: const Text('暂无已保存的寻优快照，请先完整跑完一次寻优。'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('关闭')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('关闭'),
+          ),
         ],
       ),
     );
@@ -431,7 +444,10 @@ Future<void> showIndicatorSearchLastResultDialog(BuildContext context) async {
         ),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('关闭')),
+        TextButton(
+          onPressed: () => Navigator.pop(ctx),
+          child: const Text('关闭'),
+        ),
       ],
     ),
   );
@@ -457,7 +473,10 @@ Future<void> showIndicatorSearchHelp(BuildContext context) async {
         ),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('知道了')),
+        TextButton(
+          onPressed: () => Navigator.pop(ctx),
+          child: const Text('知道了'),
+        ),
       ],
     ),
   );
@@ -479,15 +498,21 @@ Future<IndicatorSearchSettings?> showIndicatorSearchSettingsSheet(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('寻优参数', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+                const Text(
+                  '寻优参数',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                ),
                 SwitchListTile(
                   title: const Text('优化枚举（推荐）'),
                   subtitle: const Text('模板 + 事件全量 + 数值/阈值有上限；关闭=全量枚举（极慢）'),
                   value: cfg.useOptimizedBuild,
-                  onChanged: (v) => setLocal(() => cfg = cfg.copyWith(useOptimizedBuild: v)),
+                  onChanged: (v) =>
+                      setLocal(() => cfg = cfg.copyWith(useOptimizedBuild: v)),
                 ),
                 ListTile(
-                  title: Text('候选上限：${cfg.useOptimizedBuild ? cfg.maxCandidates : "无"}'),
+                  title: Text(
+                    '候选上限：${cfg.useOptimizedBuild ? cfg.maxCandidates : "无"}',
+                  ),
                   subtitle: Slider(
                     value: cfg.maxCandidates.clamp(2000, 50000).toDouble(),
                     min: 2000,
@@ -496,18 +521,20 @@ Future<IndicatorSearchSettings?> showIndicatorSearchSettingsSheet(
                     label: '${cfg.maxCandidates}',
                     onChanged: cfg.useOptimizedBuild
                         ? (v) => setLocal(
-                              () => cfg = cfg.copyWith(maxCandidates: v.round()),
-                            )
+                            () => cfg = cfg.copyWith(maxCandidates: v.round()),
+                          )
                         : null,
                   ),
                 ),
                 SwitchListTile(
                   title: const Text('内段不过关则外段不参与双达标'),
                   subtitle: const Text(
-                    '全区间仍回测一次；内段未过门槛时外段不计入双达标且表中标「未测」（与 0 笔区分）',
+                    '不省算力：全区间始终回测一次，内段未过门槛时外段不计入双达标且表中标「未测」'
+                    '（与 0 笔区分）。关闭后内外段一律同权评比。',
                   ),
                   value: cfg.skipOosEarly,
-                  onChanged: (v) => setLocal(() => cfg = cfg.copyWith(skipOosEarly: v)),
+                  onChanged: (v) =>
+                      setLocal(() => cfg = cfg.copyWith(skipOosEarly: v)),
                 ),
                 const SizedBox(height: 8),
                 Row(

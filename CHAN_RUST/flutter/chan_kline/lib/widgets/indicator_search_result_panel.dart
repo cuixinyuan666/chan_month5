@@ -32,11 +32,15 @@ class IndicatorSearchResultPanel extends StatelessWidget {
     final dual = SearchVerdictBuckets.dualPassed(verdicts);
     final inOnly = SearchVerdictBuckets.inSampleOnly(verdicts);
     final outOnly = SearchVerdictBuckets.outSampleOnly(verdicts);
-    final skippedOos =
-        verdicts.where((e) => e.outSampleSkipped).length;
+    final skippedOos = verdicts.where((e) => e.outSampleSkipped).length;
     final outStrong = SearchVerdictBuckets.outSegmentStrong(verdicts);
     final rankNotDual = SearchVerdictBuckets.rankPositiveNotDual(verdicts);
     final allRank = SearchVerdictBuckets.byRankDesc(verdicts);
+    // P2 体检：只在「榜首被小样本∞占据」这种真正需要警惕时占界面，
+    // 避免常态下多挤一行把下方 TabBar 顶出视口。
+    final infDiag = SearchInfPayoffDiagnostics.of(verdicts);
+    final infAlert = infDiag.infInTop > 0 && infDiag.topMinTrades < 10;
+    final infLine = infAlert ? infDiag.toDisplayLine() : null;
 
     return DefaultTabController(
       length: 6,
@@ -65,6 +69,17 @@ class IndicatorSearchResultPanel extends StatelessWidget {
               style: TextStyle(fontSize: 10, color: Colors.grey.shade700),
             ),
           ],
+          if (infLine != null) ...[
+            const SizedBox(height: 4),
+            Text(
+              infLine,
+              style: TextStyle(
+                fontSize: 10,
+                color: infAlert ? Colors.brown.shade800 : Colors.grey.shade700,
+                fontWeight: infAlert ? FontWeight.w600 : FontWeight.normal,
+              ),
+            ),
+          ],
           if (skipOosEarly) ...[
             const SizedBox(height: 6),
             Material(
@@ -74,7 +89,7 @@ class IndicatorSearchResultPanel extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
                 child: Text(
                   '内段不过关则外段不参与双达标（外段绩效仍会列出，表列「未测」仅表示未参与双达标门槛）。'
-                  '要内段弱时仍参与双达标评比，请在寻优参数里关闭该开关。',
+                  '注意：该开关不省算力，外段照样回测一次；关闭后「仅外达标」「外段过线」等分桶才会收录这类组合。',
                   style: TextStyle(fontSize: 10, color: Colors.brown.shade800),
                 ),
               ),
@@ -160,7 +175,7 @@ class _VerdictTableState extends State<_VerdictTable> {
             child: ListView.separated(
               controller: _vertical,
               itemCount: sorted.length,
-              separatorBuilder: (_, __) => const Divider(height: 1),
+              separatorBuilder: (_, _) => const Divider(height: 1),
               itemBuilder: (_, i) =>
                   _VerdictDataRow(v: sorted[i], maxKn: widget.maxKn),
             ),
@@ -172,10 +187,7 @@ class _VerdictTableState extends State<_VerdictTable> {
 }
 
 class _VerdictHeaderRow extends StatelessWidget {
-  const _VerdictHeaderRow({
-    required this.sort,
-    required this.onSort,
-  });
+  const _VerdictHeaderRow({required this.sort, required this.onSort});
 
   final VerdictSortState sort;
   final void Function(VerdictSortColumn) onSort;
@@ -183,12 +195,13 @@ class _VerdictHeaderRow extends StatelessWidget {
   Widget _cell(String label, VerdictSortColumn? col, {int flex = 1}) {
     Widget child;
     if (col == null) {
-      child = Text(label, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600));
+      child = Text(
+        label,
+        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
+      );
     } else {
       final active = sort.column == col;
-      final arrow = !active
-          ? ''
-          : (sort.ascending ? ' ↑' : ' ↓');
+      final arrow = !active ? '' : (sort.ascending ? ' ↑' : ' ↓');
       child = InkWell(
         onTap: () => onSort(col),
         child: Padding(
@@ -200,7 +213,9 @@ class _VerdictHeaderRow extends StatelessWidget {
               fontWeight: FontWeight.w600,
               color: active ? Colors.blue.shade700 : null,
             ),
-            textAlign: col == VerdictSortColumn.type ? TextAlign.left : TextAlign.center,
+            textAlign: col == VerdictSortColumn.type
+                ? TextAlign.left
+                : TextAlign.center,
           ),
         ),
       );
@@ -279,10 +294,7 @@ class _VerdictDataRow extends StatelessWidget {
             flex: 1,
             child: numCell(v.outSampleSkipped ? '—' : fxText(o.payoff)),
           ),
-          Expanded(
-            flex: 1,
-            child: numCell(v.inRankScore.toStringAsFixed(3)),
-          ),
+          Expanded(flex: 1, child: numCell(v.inRankScore.toStringAsFixed(3))),
         ],
       ),
     );

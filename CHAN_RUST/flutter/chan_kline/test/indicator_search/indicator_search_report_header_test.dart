@@ -17,32 +17,31 @@ RawScore _score({
   double? payoff,
   double? profitFactor,
   double netProfit = 0,
-}) =>
-    RawScore(
-      trades: trades,
-      winRate: winRate,
-      payoff: payoff,
-      profitFactor: profitFactor,
-      netProfit: netProfit,
-    );
+}) => RawScore(
+  trades: trades,
+  winRate: winRate,
+  payoff: payoff,
+  profitFactor: profitFactor,
+  netProfit: netProfit,
+);
 
 /// 过线（胜率 70% / 盈亏比 2.0 / 8 笔）
 RawScore get _strong => _score(
-      trades: 8,
-      winRate: 0.7,
-      payoff: 2.0,
-      profitFactor: 2.1,
-      netProfit: 1200,
-    );
+  trades: 8,
+  winRate: 0.7,
+  payoff: 2.0,
+  profitFactor: 2.1,
+  netProfit: 1200,
+);
 
 /// 不过线（胜率 30% / 盈亏比 0.8 / 8 笔）
 RawScore get _weak => _score(
-      trades: 8,
-      winRate: 0.3,
-      payoff: 0.8,
-      profitFactor: 0.7,
-      netProfit: -400,
-    );
+  trades: 8,
+  winRate: 0.3,
+  payoff: 0.8,
+  profitFactor: 0.7,
+  netProfit: -400,
+);
 
 ComboVerdict _verdict(
   String name, {
@@ -51,18 +50,17 @@ ComboVerdict _verdict(
   bool passed = false,
   bool outSampleSkipped = false,
   double rank = 1.2,
-}) =>
-    ComboVerdict(
-      name: name,
-      buyText: '买：收盘上穿 X',
-      sellText: '卖：收盘下穿 X',
-      inSample: inSample,
-      outSample: outSample,
-      inRankScore: rank,
-      passed: passed,
-      splitX: _splitX,
-      outSampleSkipped: outSampleSkipped,
-    );
+}) => ComboVerdict(
+  name: name,
+  buyText: '买：收盘上穿 X',
+  sellText: '卖：收盘下穿 X',
+  inSample: inSample,
+  outSample: outSample,
+  inRankScore: rank,
+  passed: passed,
+  splitX: _splitX,
+  outSampleSkipped: outSampleSkipped,
+);
 
 void main() {
   group('寻优报告头：内外各独立重跑口径', () {
@@ -89,6 +87,21 @@ void main() {
       expect(header, contains('胜率≥60%'));
       expect(header, contains('盈亏比≥1.5'));
       expect(header, contains('净利绝对值勿横向对比强弱'));
+    });
+
+    test('P0：显式声明外段 asOf 至末尾且逐根因果（避免被误读成前视）', () {
+      final header = reportHeader(
+        code: _code,
+        period: _period,
+        bars: _bars,
+        splitX: _splitX,
+        gateTrades: const PassGate().minTrades,
+        align: const IndicatorSearchAlignSnapshot(),
+      );
+      // 外段条件可见全区间，但必须是「逐根因果」而非「用了未来信息」。
+      expect(header, contains('外段条件求值 asOf 至最后一根'));
+      expect(header, contains('逐根因果，无未来函数'));
+      expect(header, contains('K0#$_splitX 更保守'));
     });
 
     test('无快照（旧版）时给出复现参数兜底文案，不空缺', () {
@@ -169,8 +182,12 @@ void main() {
 
     testWidgets('面板展示耗时 / 跑通 / 双达标摘要行', (tester) async {
       await pumpPanel(tester, [
-        _verdict('模板｜双达标甲',
-            inSample: _strong, outSample: _strong, passed: true),
+        _verdict(
+          '模板｜双达标甲',
+          inSample: _strong,
+          outSample: _strong,
+          passed: true,
+        ),
         _verdict('模板｜仅内乙', inSample: _strong, outSample: _weak),
       ]);
       expect(find.textContaining('耗时 3分5秒'), findsOneWidget);
@@ -179,8 +196,7 @@ void main() {
 
     testWidgets('分桶 Tab 计数正确：双达标/仅内/仅外/外段过线', (tester) async {
       final v = [
-        _verdict('模板｜双达标',
-            inSample: _strong, outSample: _strong, passed: true),
+        _verdict('模板｜双达标', inSample: _strong, outSample: _strong, passed: true),
         _verdict('模板｜仅内达标', inSample: _strong, outSample: _weak),
         _verdict('模板｜仅外达标', inSample: _weak, outSample: _strong),
         _verdict(

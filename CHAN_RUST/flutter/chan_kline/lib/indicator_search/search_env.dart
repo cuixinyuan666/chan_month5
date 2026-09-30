@@ -61,16 +61,16 @@ class IndicatorSearchAlignSnapshot {
   }
 
   Map<String, dynamic> toJson() => {
-        'quantity': quantity,
-        'initialCapital': initialCapital,
-        'commissionRate': commissionRate,
-        'slippageAmount': slippageAmount,
-        'fillPriceMode': fillPriceMode,
-        'bucketStep': bucketStep,
-        'bollN': bollN,
-        'donchianN': donchianN,
-        'regressK': regressK,
-      };
+    'quantity': quantity,
+    'initialCapital': initialCapital,
+    'commissionRate': commissionRate,
+    'slippageAmount': slippageAmount,
+    'fillPriceMode': fillPriceMode,
+    'bucketStep': bucketStep,
+    'bollN': bollN,
+    'donchianN': donchianN,
+    'regressK': regressK,
+  };
 
   static IndicatorSearchAlignSnapshot? fromJsonMap(Map<String, dynamic>? m) {
     if (m == null || m.isEmpty) return null;
@@ -188,36 +188,24 @@ RawScore rawScoreFromClosedTrades(
 }
 
 /// 样本内：进场与平仓均在切点及之前（闭合在 splitX 内）。
-List<TradeRecord> inSampleClosedTrades(
-  List<TradeRecord> all,
-  int splitX,
-) =>
+List<TradeRecord> inSampleClosedTrades(List<TradeRecord> all, int splitX) =>
     all.where((t) => t.entryX <= splitX && t.exitX <= splitX).toList();
 
 /// 样本外：进场严格晚于切点。
 List<TradeRecord> outSampleClosedTradesList(
   List<TradeRecord> all,
   int splitX,
-) =>
-    all.where((t) => t.entryX > splitX).toList();
+) => all.where((t) => t.entryX > splitX).toList();
 
 /// 切点两侧都不计入的跨界闭合单（进场≤split、平仓>split）。
-List<TradeRecord> crossSplitClosedTrades(
-  List<TradeRecord> all,
-  int splitX,
-) =>
-    all
-        .where((t) => t.entryX <= splitX && t.exitX > splitX)
-        .toList();
+List<TradeRecord> crossSplitClosedTrades(List<TradeRecord> all, int splitX) =>
+    all.where((t) => t.entryX <= splitX && t.exitX > splitX).toList();
 
 class InOutSegmentScores {
   final RawScore inSample;
   final RawScore outSample;
 
-  const InOutSegmentScores({
-    required this.inSample,
-    required this.outSample,
-  });
+  const InOutSegmentScores({required this.inSample, required this.outSample});
 }
 
 class SearchEnv {
@@ -381,7 +369,8 @@ class SearchEnv {
   }
 }
 
-String pctText(double? x) => x == null ? '—' : '${(x * 100).toStringAsFixed(1)}%';
+String pctText(double? x) =>
+    x == null ? '—' : '${(x * 100).toStringAsFixed(1)}%';
 
 String fxText(double? x) {
   if (x == null) return '—';
@@ -402,15 +391,17 @@ void logProgress(String text, {String? logFilePath}) {
 
 String fmtList(Iterable<ComboVerdict> rows) {
   if (rows.isEmpty) return '（无）';
-  return rows.map((v) {
-    final i = v.inSample, o = v.outSample;
-    final outNote = v.outSampleSkipped ? '（外段未测）' : '';
-    return '${v.passed ? "✔" : "·"} ${v.name}\n'
-        '    样本内 ${i.trades}笔 胜率${pctText(i.winRate)} 盈亏比${fxText(i.payoff)} '
-        'PF${fxText(i.profitFactor)} 净利${i.netProfit.toStringAsFixed(0)}\n'
-        '    样本外${outNote} ${o.trades}笔 胜率${pctText(o.winRate)} 盈亏比${fxText(o.payoff)} '
-        'PF${fxText(o.profitFactor)} 净利${o.netProfit.toStringAsFixed(0)}';
-  }).join('\n');
+  return rows
+      .map((v) {
+        final i = v.inSample, o = v.outSample;
+        final outNote = v.outSampleSkipped ? '（外段未测）' : '';
+        return '${v.passed ? "✔" : "·"} ${v.name}\n'
+            '    样本内 ${i.trades}笔 胜率${pctText(i.winRate)} 盈亏比${fxText(i.payoff)} '
+            'PF${fxText(i.profitFactor)} 净利${i.netProfit.toStringAsFixed(0)}\n'
+            '    样本外$outNote ${o.trades}笔 胜率${pctText(o.winRate)} 盈亏比${fxText(o.payoff)} '
+            'PF${fxText(o.profitFactor)} 净利${o.netProfit.toStringAsFixed(0)}';
+      })
+      .join('\n');
 }
 
 String reportHeader({
@@ -424,14 +415,14 @@ String reportHeader({
   final fillLabel = align != null
       ? tradeFillPriceModeLabel(align.fillPriceModeEnum)
       : '（快照未记录，默认本周期收盘）';
-  final replayLine = align?.replayParamLine ??
-      '复现参数：未写入快照（旧版）；当时以主界面策略回测参数为准';
+  final replayLine = align?.replayParamLine ?? '复现参数：未写入快照（旧版）；当时以主界面策略回测参数为准';
   return '''
 ========== 高胜率高盈亏比 指标组合榜（$code $period $bars根K0）==========
 口径：单仓只做多 / 成交价：$fillLabel / 与回测工作台同撮合与数学指标参数
 $replayLine
 方法：样本内、样本外各独立重跑（本金重置、单仓只做多）—— 内段 asOf 至 K0#$splitX；外段仅撮合成交根 > K0#$splitX 的信号
 跨界：不再「全跑再切单」；内外段成交路径互不影响
+口径：外段条件求值 asOf 至最后一根（每根只用该根及之前信息，逐根因果，无未来函数）；内段 asOf 截断至 K0#$splitX 更保守
 门槛：样本内外都需 胜率≥60% 且 盈亏比≥1.5（∞ 计达标） 且 ≥$gateTrades笔
 净利：内外均为所计闭合交易的 netPnL 合计（统计口径相同）
 警示：内外段 K 根数不同，净利绝对值勿横向对比强弱

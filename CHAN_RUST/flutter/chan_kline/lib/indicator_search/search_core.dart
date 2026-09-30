@@ -40,20 +40,20 @@ class RawScore {
   );
 
   Map<String, dynamic> toJson() => {
-        'trades': trades,
-        'winRate': winRate,
-        'payoff': _encodeOptionalDouble(payoff),
-        'profitFactor': _encodeOptionalDouble(profitFactor),
-        'netProfit': netProfit,
-      };
+    'trades': trades,
+    'winRate': winRate,
+    'payoff': _encodeOptionalDouble(payoff),
+    'profitFactor': _encodeOptionalDouble(profitFactor),
+    'netProfit': netProfit,
+  };
 
   static RawScore fromJson(Map<String, dynamic> m) => RawScore(
-        trades: (m['trades'] as num?)?.toInt() ?? 0,
-        winRate: (m['winRate'] as num?)?.toDouble(),
-        payoff: _decodeOptionalDouble(m['payoff']),
-        profitFactor: _decodeOptionalDouble(m['profitFactor']),
-        netProfit: (m['netProfit'] as num?)?.toDouble() ?? 0,
-      );
+    trades: (m['trades'] as num?)?.toInt() ?? 0,
+    winRate: (m['winRate'] as num?)?.toDouble(),
+    payoff: _decodeOptionalDouble(m['payoff']),
+    profitFactor: _decodeOptionalDouble(m['profitFactor']),
+    netProfit: (m['netProfit'] as num?)?.toDouble() ?? 0,
+  );
 }
 
 Object? _encodeOptionalDouble(double? v) {
@@ -78,6 +78,7 @@ class ComboVerdict {
   final double inRankScore;
   final bool passed;
   final int splitX;
+
   /// 内段不过关时外段不参与双达标（内外仍各回测一次；与「外段 0 笔」区分）。
   final bool outSampleSkipped;
 
@@ -101,32 +102,32 @@ class ComboVerdict {
   }
 
   Map<String, dynamic> toJson() => {
-        'name': name,
-        'buyText': buyText,
-        'sellText': sellText,
-        'inSample': inSample.toJson(),
-        'outSample': outSample.toJson(),
-        'inRankScore': inRankScore,
-        'passed': passed,
-        'splitX': splitX,
-        'outSampleSkipped': outSampleSkipped,
-      };
+    'name': name,
+    'buyText': buyText,
+    'sellText': sellText,
+    'inSample': inSample.toJson(),
+    'outSample': outSample.toJson(),
+    'inRankScore': inRankScore,
+    'passed': passed,
+    'splitX': splitX,
+    'outSampleSkipped': outSampleSkipped,
+  };
 
   static ComboVerdict fromJson(Map<String, dynamic> m) => ComboVerdict(
-        name: m['name'] as String? ?? '',
-        buyText: m['buyText'] as String? ?? '',
-        sellText: m['sellText'] as String? ?? '',
-        inSample: RawScore.fromJson(
-          Map<String, dynamic>.from(m['inSample'] as Map? ?? {}),
-        ),
-        outSample: RawScore.fromJson(
-          Map<String, dynamic>.from(m['outSample'] as Map? ?? {}),
-        ),
-        inRankScore: (m['inRankScore'] as num?)?.toDouble() ?? 0,
-        passed: m['passed'] == true,
-        splitX: (m['splitX'] as num?)?.toInt() ?? 0,
-        outSampleSkipped: m['outSampleSkipped'] == true,
-      );
+    name: m['name'] as String? ?? '',
+    buyText: m['buyText'] as String? ?? '',
+    sellText: m['sellText'] as String? ?? '',
+    inSample: RawScore.fromJson(
+      Map<String, dynamic>.from(m['inSample'] as Map? ?? {}),
+    ),
+    outSample: RawScore.fromJson(
+      Map<String, dynamic>.from(m['outSample'] as Map? ?? {}),
+    ),
+    inRankScore: (m['inRankScore'] as num?)?.toDouble() ?? 0,
+    passed: m['passed'] == true,
+    splitX: (m['splitX'] as num?)?.toInt() ?? 0,
+    outSampleSkipped: m['outSampleSkipped'] == true,
+  );
 }
 
 class PassGate {
@@ -187,6 +188,104 @@ int splitBarIdx(List<KlineBar> bars, {double inRatio = 0.7}) {
     return true;
   }());
   return bars[ix].idx;
+}
+
+/// 寻优「全胜小样本」体检（只读诊断，不改任何判定）。
+///
+/// 背景：`rankScoreOf` 对 `payoff=∞` 用 [kRankScoreInfinitePayoffCap]=8.0 封顶，
+/// 而小样本惩罚 `shrink=n/(n+6)` 在 n=5 时仅 0.455、`conf` 因子有 0.35 兜底，
+/// 导致「5 笔全胜」得分(≈3.13)压过「50 笔胜率60%盈亏比2.0」(≈1.18)。
+/// 叠加上万候选无多重比较校正，榜首容易被小样本噪声占据。
+/// 本统计只把事实摆出来，供人工判断是否需要收紧门槛或 cap。
+class SearchInfPayoffDiagnostics {
+  /// 进入统计的候选总数（跑通并产出 verdict）。
+  final int total;
+
+  /// 样本内 `payoff` 为 ∞ 的候选数。
+  final int infCount;
+
+  /// 保守分前 [topN] 名中样本内 `payoff` 为 ∞ 的个数。
+  final int infInTop;
+
+  /// 保守分前 [topN] 名中的最小样本内笔数（小样本噪声的直接证据）。
+  final int topMinTrades;
+
+  /// 双达标组合中的最小样本内笔数。
+  final int passedMinTrades;
+
+  /// 双达标组合中样本内 `payoff` 为 ∞ 的个数。
+  final int passedInfCount;
+
+  /// 双达标组合数。
+  final int passedCount;
+
+  const SearchInfPayoffDiagnostics({
+    required this.total,
+    required this.infCount,
+    required this.infInTop,
+    required this.topMinTrades,
+    required this.passedMinTrades,
+    required this.passedInfCount,
+    required this.passedCount,
+  });
+
+  static const empty = SearchInfPayoffDiagnostics(
+    total: 0,
+    infCount: 0,
+    infInTop: 0,
+    topMinTrades: 0,
+    passedMinTrades: 0,
+    passedInfCount: 0,
+    passedCount: 0,
+  );
+
+  static bool _isInf(RawScore s) => s.payoff != null && s.payoff!.isInfinite;
+
+  factory SearchInfPayoffDiagnostics.of(
+    List<ComboVerdict> verdicts, {
+    int topN = 20,
+  }) {
+    if (verdicts.isEmpty) return empty;
+    final byRank = [...verdicts]
+      ..sort((a, b) => b.inRankScore.compareTo(a.inRankScore));
+    final top = byRank.take(topN).toList();
+    final passed = verdicts.where((e) => e.passed).toList();
+    return SearchInfPayoffDiagnostics(
+      total: verdicts.length,
+      infCount: verdicts.where((e) => _isInf(e.inSample)).length,
+      infInTop: top.where((e) => _isInf(e.inSample)).length,
+      topMinTrades: top.isEmpty
+          ? 0
+          : top.map((e) => e.inSample.trades).reduce((a, b) => a < b ? a : b),
+      passedMinTrades: passed.isEmpty
+          ? 0
+          : passed
+                .map((e) => e.inSample.trades)
+                .reduce((a, b) => a < b ? a : b),
+      passedInfCount: passed.where((e) => _isInf(e.inSample)).length,
+      passedCount: passed.length,
+    );
+  }
+
+  /// 供报告头/结果面板展示的一行体检结论（无数据时返回 null）。
+  String? toDisplayLine({int topN = 20}) {
+    if (total == 0) return null;
+    final buf = StringBuffer()
+      ..write('全胜体检：样本内盈亏比∞ $infCount/$total')
+      ..write(' · 前$topN名中∞ $infInTop 个、最小笔数 $topMinTrades');
+    if (passedCount > 0) {
+      buf.write(
+        ' · 双达标 $passedCount 个中最小笔数 $passedMinTrades、∞ $passedInfCount 个',
+      );
+    } else {
+      buf.write(' · 双达标 0 个');
+    }
+    // 榜首被小样本占据时给出明确告警（这是最值得警惕的形态）。
+    if (infInTop > 0 && topMinTrades > 0 && topMinTrades < 10) {
+      buf.write(' ⚠ 榜首含盈亏比∞的小样本组合，请核对笔数后再看排名');
+    }
+    return buf.toString();
+  }
 }
 
 class VerdictSink {

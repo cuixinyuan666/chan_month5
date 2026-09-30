@@ -10,7 +10,6 @@ import 'package:chan_kline/indicator_search/search_env.dart';
 import 'package:chan_kline/indicator_search/variable_pool.dart';
 import 'package:chan_kline/models/chip_config.dart';
 import 'package:chan_kline/models/math_indicator_config.dart';
-import 'package:chan_kline/settings/indicator_search_settings_store.dart';
 import 'package:chan_kline/backtest/strategy_config.dart';
 import 'package:chan_kline/widgets/indicator_search_dialog.dart';
 import 'package:flutter/material.dart';
@@ -45,7 +44,6 @@ class _TempPathProvider extends PathProviderPlatform {
   Future<String?> getDownloadsPath() async => root;
 }
 
-
 void main() {
   const code = '002003';
   const period = '1m';
@@ -53,48 +51,52 @@ void main() {
   const end = '2004/07/20 15:00:00';
 
   group('取消扫描：Runner 语义', () {
-    test('扫描开始后 requestCancel → stats.cancelled=true 且提前收尾', () async {
-      final bridge = ChanBridge.instance;
-      bridge.ensureInitialized();
-      final bars = bridge
-          .loadKlinesEx(
-            dataRoot: bridge.defaultDataRoot(),
-            code: code,
-            beginDate: begin,
-            endDate: end,
-            period: period,
-            tickSource: 'protocol',
-          )
-          .bars;
-      expect(bars.length, greaterThan(100));
-      final h = await driveStepHarness(bars);
-      final env = SearchEnv(bars, h, code, period, begin, end);
-      final cands = buildCandidates(
-        VariablePool(h.maxKn),
-        const CandidateBuildOptions.optimized(maxCandidates: 300),
-      );
-      expect(cands.length, greaterThan(20));
+    test(
+      '扫描开始后 requestCancel → stats.cancelled=true 且提前收尾',
+      () async {
+        final bridge = ChanBridge.instance;
+        bridge.ensureInitialized();
+        final bars = bridge
+            .loadKlinesEx(
+              dataRoot: bridge.defaultDataRoot(),
+              code: code,
+              beginDate: begin,
+              endDate: end,
+              period: period,
+              tickSource: 'protocol',
+            )
+            .bars;
+        expect(bars.length, greaterThan(100));
+        final h = await driveStepHarness(bars);
+        final env = SearchEnv(bars, h, code, period, begin, end);
+        final cands = buildCandidates(
+          VariablePool(h.maxKn),
+          const CandidateBuildOptions.optimized(maxCandidates: 300),
+        );
+        expect(cands.length, greaterThan(20));
 
-      final runner = IndicatorSearchRunner();
-      final stats = await runner.runAll(
-        bars: bars,
-        env: env,
-        cands: cands,
-        gate: const PassGate(minTrades: 2),
-        maxKn: h.maxKn,
-        yieldEvery: 1,
-        onProgress: (p) {
-          // 第一次进度回调就请求取消
-          if (p.done >= 1) runner.requestCancel();
-        },
-      );
+        final runner = IndicatorSearchRunner();
+        final stats = await runner.runAll(
+          bars: bars,
+          env: env,
+          cands: cands,
+          gate: const PassGate(minTrades: 2),
+          maxKn: h.maxKn,
+          yieldEvery: 1,
+          onProgress: (p) {
+            // 第一次进度回调就请求取消
+            if (p.done >= 1) runner.requestCancel();
+          },
+        );
 
-      expect(stats.cancelled, isTrue);
-      // 取消后保留已跑出的部分结果（供「保留部分 TSV」文案）
-      expect(stats.verdicts, isNotEmpty);
-      expect(stats.ran, lessThan(cands.length));
-      expect(stats.ran, stats.verdicts.length);
-    }, timeout: const Timeout(Duration(minutes: 10)));
+        expect(stats.cancelled, isTrue);
+        // 取消后保留已跑出的部分结果（供「保留部分 TSV」文案）
+        expect(stats.verdicts, isNotEmpty);
+        expect(stats.ran, lessThan(cands.length));
+        expect(stats.ran, stats.verdicts.length);
+      },
+      timeout: const Timeout(Duration(minutes: 10)),
+    );
 
     test('未取消时 stats.cancelled=false', () async {
       final bridge = ChanBridge.instance;
@@ -243,7 +245,8 @@ void main() {
           // 还没点：每轮 runAsync(真实 IO) + 无时长 pump(避免一次跑完 40 条)，
           // 让「回测扫描」阶段先稳定出现。
           await tester.runAsync(
-              () => Future<void>.delayed(const Duration(milliseconds: 1)));
+            () => Future<void>.delayed(const Duration(milliseconds: 1)),
+          );
           await tester.pump();
         }
         steps++;
@@ -263,14 +266,18 @@ void main() {
       expect(tapped, isTrue, reason: '未能在扫描阶段点到「取消扫描」');
       // 取消信号确实送到了扫描器（不只是按钮被点了一下）
       expect(cancelSignalled, isTrue, reason: '点取消后扫描器未收到取消信号');
-      expect(cancelled, isTrue, reason: () {
-        final all = tester
-            .widgetList<Text>(find.byType(Text))
-            .map((t) => t.data ?? '')
-            .where((s) => s.isNotEmpty)
-            .toList();
-        return 'pump $steps 步后仍未见「已取消」，当前界面文本：$all';
-      }());
+      expect(
+        cancelled,
+        isTrue,
+        reason: () {
+          final all = tester
+              .widgetList<Text>(find.byType(Text))
+              .map((t) => t.data ?? '')
+              .where((s) => s.isNotEmpty)
+              .toList();
+          return 'pump $steps 步后仍未见「已取消」，当前界面文本：$all';
+        }(),
+      );
       expect(find.textContaining('阶段：已取消'), findsOneWidget);
 
       expect(find.text('取消扫描'), findsNothing);
