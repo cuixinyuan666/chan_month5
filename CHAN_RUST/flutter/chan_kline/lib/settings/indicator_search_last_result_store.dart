@@ -25,6 +25,8 @@ class IndicatorSearchLastResult {
   final List<ComboVerdict> verdicts;
   final int maxKn;
   final bool skipOosEarly;
+  final bool useOptimizedBuild;
+  final int maxCandidates;
   final IndicatorSearchAlignSnapshot? align;
 
   const IndicatorSearchLastResult({
@@ -43,6 +45,8 @@ class IndicatorSearchLastResult {
     required this.verdicts,
     this.maxKn = 16,
     this.skipOosEarly = true,
+    this.useOptimizedBuild = true,
+    this.maxCandidates = 12000,
     this.align,
   });
 
@@ -63,6 +67,8 @@ class IndicatorSearchLastResult {
         'resultsFilePath': resultsFilePath,
         'maxKn': maxKn,
         'skipOosEarly': skipOosEarly,
+        'useOptimizedBuild': useOptimizedBuild,
+        'maxCandidates': maxCandidates,
         if (align != null) 'align': align!.toJson(),
         'verdicts': verdicts.map((e) => e.toJson()).toList(),
       };
@@ -97,7 +103,9 @@ class IndicatorSearchLastResult {
       maxKn: (m['maxKn'] as num?)?.toInt() ?? 16,
       skipOosEarly: m.containsKey('skipOosEarly')
           ? m['skipOosEarly'] == true
-          : false,
+          : true,
+      useOptimizedBuild: m['useOptimizedBuild'] != false,
+      maxCandidates: (m['maxCandidates'] as num?)?.toInt() ?? 12000,
       align: IndicatorSearchAlignSnapshot.fromJsonMap(
         m['align'] is Map
             ? Map<String, dynamic>.from(m['align'] as Map)
@@ -118,6 +126,8 @@ class IndicatorSearchLastResult {
     required String resultsFilePath,
     int maxKn = 16,
     bool skipOosEarly = true,
+    bool useOptimizedBuild = true,
+    int maxCandidates = 12000,
     IndicatorSearchAlignSnapshot? align,
   }) {
     return IndicatorSearchLastResult(
@@ -135,6 +145,8 @@ class IndicatorSearchLastResult {
       resultsFilePath: resultsFilePath,
       maxKn: maxKn,
       skipOosEarly: skipOosEarly,
+      useOptimizedBuild: useOptimizedBuild,
+      maxCandidates: maxCandidates,
       align: align,
       verdicts: stats.verdicts,
     );

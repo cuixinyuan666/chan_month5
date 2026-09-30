@@ -1,4 +1,4 @@
-# 任务日志
+﻿# 任务日志
 
 > 所有智能体在完成任务后，应在此文件末尾追加。格式见下。本文件是**唯一**任务日志：已按时间从早到晚合并根目录原 `task-log.md`、`CHAN_RUST/TASK_LOG.md`（口径条目前加【口径】）、`CHAN_RUST/tooltip_audit_2026-08-14.md`（【审计】）。
 
@@ -3939,6 +3939,23 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **演示**：改策略回测成交价后寻优，报告头应显示对应中文；开「外段不参与双达标」时内段不过关外段标未测；跑完结果窗有枚举构成一行。
 - **测试**：`flutter test test/indicator_search/`（含 optimized(0) 枚举回归）。
 - **注意事项 / 待办**：早停仍不省算力（内段切片需全区间闭合单）；主图与 harness 公共管道仍为技术债。
+
+---
+
+### 2026-09-30 · Cursor · 修正 · 寻优枚举与早停展示（未改内外段切段）
+
+- **执行者**：Cursor Agent
+- **任务类型**：寻优 / Bug修复与枚举口径（未改 `runInOutFromSingleFull` 切段内核）
+- **操作**：
+  1. 优化枚举：`maxCandidates` 为事件/穿越/阈值预留预算，事件层轮询截断；`maxKn=16` 下候选数不再锁死 14180。
+  2. 穿越分桶加 `unit`；事件买卖池改目录字段 `searchEventBuyPool/SellPool`（背驰/分型/中枢确认等进池）。
+  3. 阈值：`ADJACENT_RATIO` 分支顺序修正；布林/均线/唐奇安/回归/中枢/筹码峰等增「相对同层收盘」阈值项；`sign` 给 ±1/0。
+  4. `skipOosEarly` 仍算全区间外段，但不再把外段绩效写成空；双达标门槛与 Tab「未测」分离。
+  5. 快照补 `useOptimizedBuild`/`maxCandidates`；编译缓存 key 用完整 variableId；TSV/设置 JSON/进度节奏等小修。
+- **结果**：`flutter test test/indicator_search/` 全绿（含 chartMaxKn=16 上限与事件池单测）。
+- **演示**：设置候选上限 2000 后枚举构成应明显少于 14180 且仍有穿越/阈值；寻优结果「仅外达标」在内段弱时能看到外段笔数/胜率（未测只表示未参与双达标）。
+- **测试**：`flutter test test/indicator_search/`。
+- **注意事项 / 待办**：样本内外仍是一次全跑再切单（P0 切段未动）；主图寻优仍须步进到末根验收。
 
 ---
 

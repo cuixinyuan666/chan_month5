@@ -78,6 +78,10 @@ class TradeVariableDef {
   final String fieldLabel;
   /// 给人看的来源说明（诊断面板）
   final String description;
+  /// 寻优枚举：可作买条件的事件（仅 [TradeValueType.event]）。
+  final bool searchEventBuyPool;
+  /// 寻优枚举：可作卖条件的事件（仅 [TradeValueType.event]）。
+  final bool searchEventSellPool;
 
   const TradeVariableDef({
     required this.variableId,
@@ -99,6 +103,8 @@ class TradeVariableDef {
     this.groupLabel = '',
     this.fieldLabel = '',
     this.description = '',
+    this.searchEventBuyPool = false,
+    this.searchEventSellPool = false,
   });
 
   bool get expressionReady => readiness == TradeReadiness.registered;
@@ -671,6 +677,8 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
         groupLabel: 'N类BS',
         fieldLabel: e.$1,
         description: 'EVENT_EXISTS；禁止比较/穿越',
+        searchEventBuyPool: e.$1.startsWith('BUY'),
+        searchEventSellPool: e.$1.startsWith('SELL'),
       ));
     }
     for (var cls = kTradeMinBsClass; cls <= kTradeUiMaxBsClass; cls++) {
@@ -692,6 +700,7 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
         groupLabel: 'N类BS',
         fieldLabel: '${tradeBsClassCn(cls)}买',
         description: 'BUY_N(class=$cls) EVENT_EXISTS；禁止比较/穿越',
+        searchEventBuyPool: true,
       ));
       out.add(TradeVariableDef(
         variableId: sellNVarId(kn, cls),
@@ -711,6 +720,7 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
         groupLabel: 'N类BS',
         fieldLabel: '${tradeBsClassCn(cls)}卖',
         description: 'SELL_N(class=$cls) EVENT_EXISTS；禁止比较/穿越',
+        searchEventSellPool: true,
       ));
     }
     out.add(TradeVariableDef(
@@ -733,6 +743,8 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
       groupLabel: '分型确认',
       fieldLabel: '确认',
         description: 'EVENT_EXISTS；当根脉冲；连线钟，不能和布林直接比；AND/OR 可跨层，须同一根 K0 刚发生',
+        searchEventBuyPool: true,
+        searchEventSellPool: true,
       ));
     out.add(TradeVariableDef(
       variableId: fractalJudgmentId(kn),
@@ -752,6 +764,8 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
       groupLabel: '分型判断',
       fieldLabel: '判断',
       description: 'EVENT_EXISTS；连线钟，不能和布林直接比；AND/OR 可跨层，须同一根 K0 刚发生',
+      searchEventBuyPool: true,
+      searchEventSellPool: true,
     ));
     // 分型判断方向符号：顶=+1 / 底=-1（脉冲，仅分型当根有值）；配合 ==1 / ==-1 过滤顶/底
     out.add(TradeVariableDef(
@@ -815,6 +829,8 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
       groupLabel: '中枢确认',
       fieldLabel: '确认',
         description: 'EVENT_EXISTS；AND/OR 可跨层，须同一根 K0 刚发生',
+        searchEventBuyPool: true,
+        searchEventSellPool: true,
     ));
     // 中枢确认方向符号：上个中枢空间趋势 抬高(升)=+1 / 下移(降)=-1（脉冲，仅确认当根有值）
     out.add(TradeVariableDef(
@@ -855,6 +871,8 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
       groupLabel: '中枢判断',
       fieldLabel: '判断',
       description: 'EVENT_EXISTS；AND/OR 可跨层，须同一根 K0 刚发生',
+      searchEventBuyPool: true,
+      searchEventSellPool: true,
     ));
     // 中枢判断方向符号：上个中枢空间趋势 抬高(升)=+1 / 下移(降)=-1（脉冲，仅判断当根有值）
     out.add(TradeVariableDef(
@@ -1198,6 +1216,8 @@ List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
       groupLabel: '背驰',
       fieldLabel: '出现',
       description: 'EVENT_EXISTS；禁止比较/穿越；默认 MACD 面积',
+      searchEventBuyPool: true,
+      searchEventSellPool: true,
     ));
     out.add(TradeVariableDef(
       variableId: diverRatioId(kn),
@@ -1392,6 +1412,8 @@ TradeVariableDef _classNDef(int kn, int cls, {required bool buy}) {
     description: all
         ? '${buy ? "BUY_N" : "SELL_N"}(class=0/-1) 一类+二类+三类及以上 EVENT_EXISTS；禁止比较/穿越'
         : '${buy ? "BUY_N" : "SELL_N"}(class=$cls) EVENT_EXISTS；禁止比较/穿越',
+    searchEventBuyPool: buy,
+    searchEventSellPool: !buy,
   );
 }
 
@@ -1461,6 +1483,8 @@ TradeVariableDef _demarkCompleteDef(int kn, {required bool buy}) {
     groupLabel: 'Demark',
     fieldLabel: buy ? '德马克买' : '德马克卖',
     description: 'EVENT_EXISTS；AND/OR 可跨层，须同一根 K0 刚发生',
+    searchEventBuyPool: buy,
+    searchEventSellPool: !buy,
   );
 }
 

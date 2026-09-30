@@ -206,7 +206,7 @@ class VerdictSink {
       _headerWritten = true;
     }
     _pending.writeln(
-      '${v.name}\t${v.inSample.trades}\t${_f(v.inSample.winRate)}'
+      '${_tsvCell(v.name)}\t${v.inSample.trades}\t${_f(v.inSample.winRate)}'
       '\t${_f(v.inSample.payoff)}\t${v.outSample.trades}'
       '\t${_f(v.outSample.winRate)}\t${_f(v.outSample.payoff)}'
       '\t${v.inRankScore.toStringAsFixed(4)}\t${v.passed}\t${v.outSampleSkipped}',
@@ -236,6 +236,9 @@ class VerdictSink {
     }
     flush();
   }
+
+  static String _tsvCell(String s) =>
+      s.replaceAll('\t', ' ').replaceAll('\r', ' ').replaceAll('\n', ' ');
 
   static String _f(double? x) {
     if (x == null) return '-';

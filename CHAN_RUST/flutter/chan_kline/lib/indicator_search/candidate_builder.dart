@@ -44,14 +44,11 @@ List<ComboCand> _buildLegacyFull(VariablePool pool) {
 List<ComboCand> _buildOptimized(VariablePool pool, CandidateBuildOptions opt) {
   final out = <ComboCand>[];
   _appendCompositeTemplates(pool, out);
-  _appendEventCross(pool, out);
   final cap = opt.maxCandidates;
   if (!opt.capped) {
+    _appendEventCross(pool, out);
     _appendNumericCross(pool, out, cap: null);
     _appendThresholds(pool, out, cap: null);
-    return out;
-  }
-  if (cap <= out.length) {
     return out;
   }
   final reserveThreshold =
@@ -59,6 +56,14 @@ List<ComboCand> _buildOptimized(VariablePool pool, CandidateBuildOptions opt) {
   final reserveUpperEntries =
       (cap * 0.28).round().clamp(0, math.min(4000, cap ~/ 2));
   final minUpperKPairs = reserveUpperEntries ~/ 2;
+  final eventPairBudget = math.max(
+    0,
+    cap - out.length - reserveThreshold - reserveUpperEntries,
+  ).toInt();
+  _appendEventCross(pool, out, maxPairs: eventPairBudget);
+  if (out.length >= cap) {
+    return out.sublist(0, cap);
+  }
   final crossCap = (cap - reserveThreshold).clamp(0, cap).toInt();
   _appendNumericCrossLayered(
     pool,
@@ -66,9 +71,8 @@ List<ComboCand> _buildOptimized(VariablePool pool, CandidateBuildOptions opt) {
     cap: crossCap,
     minUpperKPairs: minUpperKPairs,
   );
-  final thresholdCap = (out.length + reserveThreshold).clamp(0, cap).toInt();
   if (out.length < cap) {
-    _appendThresholds(pool, out, cap: thresholdCap);
+    _appendThresholds(pool, out, cap: cap);
   }
   if (out.length > cap) {
     return out.sublist(0, cap);
@@ -101,7 +105,7 @@ class CandidateBuildSummary {
 
 CandidateBuildSummary summarizeCandidates(List<ComboCand> cands) {
   var templates = 0, events = 0, crosses = 0, crossesK1Plus = 0, thresholds = 0;
-  final k1Re = RegExp(r'K[1-9]');
+  final k1Re = RegExp(r'K(?!0)\d+');
   for (final c in cands) {
     if (c.name.startsWith('模板｜')) {
       templates++;
@@ -148,14 +152,31 @@ void _appendCompositeTemplates(VariablePool pool, List<ComboCand> out) {
   }
 }
 
-void _appendEventCross(VariablePool pool, List<ComboCand> out) {
-  for (final b in pool.buyEvents()) {
-    for (final s in pool.sellEvents()) {
-      out.add(ComboCand(
-        '事件｜买${b.displayName} 卖${s.displayName}',
-        TradeEventAst(b.variableId),
-        TradeEventAst(s.variableId),
-      ));
+void _appendEventCross(
+  VariablePool pool,
+  List<ComboCand> out, {
+  int? maxPairs,
+}) {
+  final buys = pool.buyEvents();
+  final sells = pool.sellEvents();
+  if (buys.isEmpty || sells.isEmpty) return;
+  final total = buys.length * sells.length;
+  final limit = maxPairs == null ? total : math.min(maxPairs, total);
+  var bi = 0;
+  var si = 0;
+  for (var n = 0; n < limit; n++) {
+    final b = buys[bi];
+    final s = sells[si];
+    out.add(ComboCand(
+      '事件｜买${b.displayName} 卖${s.displayName}',
+      TradeEventAst(b.variableId),
+      TradeEventAst(s.variableId),
+    ));
+    si++;
+    if (si >= sells.length) {
+      si = 0;
+      bi++;
+      if (bi >= buys.length) break;
     }
   }
 }
@@ -271,7 +292,6 @@ void _appendThresholds(
   for (final d in pool.numeric) {
     if (cap != null && out.length >= cap) return;
     final consts = VariablePool.constantsFor(d);
-    if (consts.isEmpty) continue;
     for (final c in consts) {
       for (final op in const [TradeBinaryOp.gt, TradeBinaryOp.lt]) {
         if (cap != null && out.length >= cap) return;
@@ -282,6 +302,22 @@ void _appendThresholds(
           TradeCmpAst(
             left: TradeVarRef(d.variableId),
             right: TradeConstRef(c),
+            op: op,
+          ),
+          sell,
+        ));
+      }
+    }
+    for (final anchor in VariablePool.thresholdCloseAnchors(d)) {
+      for (final op in const [TradeBinaryOp.gt, TradeBinaryOp.lt]) {
+        if (cap != null && out.length >= cap) return;
+        final sell = sellPool[k % sellPool.length];
+        k++;
+        out.add(ComboCand(
+          '阈值｜${d.displayName} ${tradeOpLabelCn(op)} ${anchor.$2}',
+          TradeCmpAst(
+            left: TradeVarRef(d.variableId),
+            right: TradeVarRef(anchor.$1),
             op: op,
           ),
           sell,

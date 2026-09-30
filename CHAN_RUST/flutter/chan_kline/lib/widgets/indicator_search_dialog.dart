@@ -65,7 +65,7 @@ class _IndicatorSearchDialogState extends State<IndicatorSearchDialog> {
   List<ComboVerdict> _livePassed = const [];
   String? _resultsPath;
   int _barCount = 0;
-  int _maxKn = 16;
+  int _maxKn = 0;
   IndicatorSearchSettings _settings = IndicatorSearchSettingsStore.current;
   CandidateBuildSummary? _buildSummary;
   IndicatorSearchAlignSnapshot? _alignSnap;
@@ -246,6 +246,8 @@ class _IndicatorSearchDialogState extends State<IndicatorSearchDialog> {
           resultsFilePath: _resultsPath!,
           maxKn: h.maxKn,
           skipOosEarly: _settings.skipOosEarly,
+          useOptimizedBuild: _settings.useOptimizedBuild,
+          maxCandidates: _settings.maxCandidates,
           align: _alignSnap,
         ),
       );

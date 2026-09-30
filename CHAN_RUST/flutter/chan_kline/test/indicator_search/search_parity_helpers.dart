@@ -34,10 +34,10 @@ void expectVerdictMatchesLegacyLoop({
   }
   final rIn = seg.inSample;
   final rank = rankScoreOf(rIn, minTrades: gate.minTrades);
+  final rOut = seg.outSample;
   final skipOos =
       skipOosEarly && (rank == 0 || !gate.okSegment(rIn));
-  final rOut = skipOos ? RawScore.empty : seg.outSample;
-  final ok = gate.okSegment(rIn) && gate.okSegment(rOut);
+  final ok = gate.okSegment(rIn) && !skipOos && gate.okSegment(rOut);
 
   expect(viaRunner, isNotNull);
   final v = viaRunner!;

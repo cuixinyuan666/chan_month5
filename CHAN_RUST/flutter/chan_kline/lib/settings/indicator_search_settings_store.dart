@@ -41,10 +41,22 @@ class IndicatorSearchSettings {
   static IndicatorSearchSettings fromJson(Map<String, dynamic>? map) {
     if (map == null) return const IndicatorSearchSettings();
     return IndicatorSearchSettings(
-      useOptimizedBuild: map['useOptimizedBuild'] != false,
+      useOptimizedBuild: _readBool(map['useOptimizedBuild'], defaultValue: true),
       maxCandidates: (map['maxCandidates'] as num?)?.toInt() ?? 12000,
-      skipOosEarly: map['skipOosEarly'] != false,
+      skipOosEarly: _readBool(map['skipOosEarly'], defaultValue: true),
     );
+  }
+
+  static bool _readBool(dynamic raw, {required bool defaultValue}) {
+    if (raw == null) return defaultValue;
+    if (raw is bool) return raw;
+    if (raw is num) return raw != 0;
+    if (raw is String) {
+      final s = raw.trim().toLowerCase();
+      if (s == 'true' || s == '1') return true;
+      if (s == 'false' || s == '0') return false;
+    }
+    return defaultValue;
   }
 }
 

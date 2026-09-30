@@ -73,8 +73,8 @@ class IndicatorSearchResultPanel extends StatelessWidget {
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
                 child: Text(
-                  '内段不过关则外段不参与双达标：「仅外达标」「外段过线」等 Tab 可能为空或偏少；'
-                  '外段未测见摘要计数与表「未测」。要看完整外段判定请在寻优参数里关闭该开关。',
+                  '内段不过关则外段不参与双达标（外段绩效仍会列出，表列「未测」仅表示未参与双达标门槛）。'
+                  '要内段弱时仍参与双达标评比，请在寻优参数里关闭该开关。',
                   style: TextStyle(fontSize: 10, color: Colors.brown.shade800),
                 ),
               ),

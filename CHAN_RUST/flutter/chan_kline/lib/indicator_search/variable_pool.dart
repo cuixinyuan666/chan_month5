@@ -33,7 +33,7 @@ class VariablePool {
     for (final d in numeric) {
       final kn = d.displayKn;
       if (kn == null) continue;
-      final key = 'K$kn|${d.clockFamily.name}';
+      final key = 'K$kn|${d.clockFamily.name}|${d.unit}';
       buckets.putIfAbsent(key, () => <TradeVariableDef>[]).add(d);
     }
     final out = <(TradeVariableDef, TradeVariableDef)>[];
@@ -48,33 +48,52 @@ class VariablePool {
     return out;
   }
 
-  List<TradeVariableDef> buyEvents() => events.where(isBuyEvent).toList();
-  List<TradeVariableDef> sellEvents() => events.where(isSellEvent).toList();
+  List<TradeVariableDef> buyEvents() =>
+      events.where((d) => d.searchEventBuyPool).toList();
 
-  static bool isBuyEvent(TradeVariableDef d) {
-    final u = d.variableId.toUpperCase();
-    if (u.contains('SELL')) return false;
-    if (u.contains('BUY')) return true;
-    return false;
-  }
+  List<TradeVariableDef> sellEvents() =>
+      events.where((d) => d.searchEventSellPool).toList();
 
-  static bool isSellEvent(TradeVariableDef d) {
-    final u = d.variableId.toUpperCase();
-    if (u.contains('BUY') && !u.contains('SELL')) return false;
-    if (u.contains('SELL')) return true;
-    return false;
-  }
+  static bool isBuyEvent(TradeVariableDef d) =>
+      d.valueType == TradeValueType.event && d.searchEventBuyPool;
 
+  static bool isSellEvent(TradeVariableDef d) =>
+      d.valueType == TradeValueType.event && d.searchEventSellPool;
+
+  /// 数值常量阈值（与 [thresholdCloseAnchors] 互补）。
   static List<double> constantsFor(TradeVariableDef d) {
     final u = d.variableId.toUpperCase();
+    if (u.contains('ADJACENT_RATIO')) return const [0];
     if (u.contains('.RSI.')) return const [20, 30, 50, 70, 80];
     if (u.contains('.KDJ.')) return const [20, 50, 80];
+    if (u.contains('LINE_SLOPE')) return const [0];
     if (u.contains('RATIO')) return const [0.8, 1.0, 1.2];
     if (u.contains('MACD')) return const [0];
-    if (u.contains('LINE_SLOPE') || u.contains('ADJACENT_RATIO')) {
-      return const [0];
-    }
+    if (d.unit == 'sign') return const [-1, 0, 1];
     if (u.contains('VOLUME') || u.contains('TICK_COUNT')) return const [];
     return const [];
+  }
+
+  /// 价格轴指标：与同层收盘比较（站上/跌破均线、布林等）。
+  static List<(String anchorId, String anchorLabel)> thresholdCloseAnchors(
+    TradeVariableDef d,
+  ) {
+    const priceGroups = {
+      'boll',
+      'ma',
+      'regress',
+      'donchian',
+      'zsCurrent',
+      'zsActive',
+      'chipPeakPrice',
+      'tickPeakPrice',
+      'fxBottomSnug',
+      'fxTopSnug',
+    };
+    final kn = d.displayKn;
+    if (kn == null || d.unit != 'price') return const [];
+    if (!priceGroups.contains(d.groupKey)) return const [];
+    if (d.groupKey == 'ohlc') return const [];
+    return [(rawOhlcId(kn, 'CLOSE'), 'K$kn收盘')];
   }
 }

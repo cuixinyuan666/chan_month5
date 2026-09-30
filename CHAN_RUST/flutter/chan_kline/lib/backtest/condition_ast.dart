@@ -369,6 +369,27 @@ String snapshotVarLabel(String variableId) {
   return variableId;
 }
 
+String _tradeValueCacheKey(TradeValueRef ref) {
+  if (ref is TradeConstRef) return 'c:${ref.value}';
+  if (ref is TradeEnumRef) return 'e:${ref.token}';
+  if (ref is TradeVarRef) return 'v:${ref.variableId}';
+  return '?';
+}
+
+/// 编译缓存用：保留完整 variableId，避免 compact 文案碰撞。
+String astConditionCacheKey(TradeAst ast) {
+  switch (ast) {
+    case TradeCmpAst(:final left, :final right, :final op):
+      return 'cmp|${_tradeValueCacheKey(left)}|${tradeOpToken(op)}|${_tradeValueCacheKey(right)}';
+    case TradeEventAst(:final variableId):
+      return 'ev|$variableId';
+    case TradeAndAst(:final left, :final right):
+      return 'and|${astConditionCacheKey(left)}|${astConditionCacheKey(right)}';
+    case TradeOrAst(:final left, :final right):
+      return 'or|${astConditionCacheKey(left)}|${astConditionCacheKey(right)}';
+  }
+}
+
 /// 多行条件文案（AND/OR 单独一行），给信号解释用
 String astConditionText(TradeAst ast, {String? parentKind}) {
   switch (ast) {

@@ -54,7 +54,7 @@ class IndicatorSearchRunner {
   final Map<String, StrategyCompileResult> _compileCache = {};
 
   String _compileKey(TradeAst buy, TradeAst sell, int maxKn) =>
-      '$maxKn||${astConditionText(buy)}||${astConditionText(sell)}';
+      '$maxKn||${astConditionCacheKey(buy)}||${astConditionCacheKey(sell)}';
 
   StrategyCompileOk? compileOk(ComboCand c, int maxKn) {
     final key = _compileKey(c.buyAst, c.sellAst, maxKn);
@@ -91,16 +91,13 @@ class IndicatorSearchRunner {
     );
     if (seg == null) return null;
     final rIn = seg.inSample;
+    final rOut = seg.outSample;
     final rank = rankScoreOf(rIn, minTrades: gate.minTrades);
-    RawScore rOut;
     final skipOos = skipOosEarly &&
         (rank == 0 || !gate.okSegment(rIn));
-    if (skipOos) {
-      rOut = RawScore.empty;
-    } else {
-      rOut = seg.outSample;
-    }
-    final passed = gate.okSegment(rIn) && gate.okSegment(rOut);
+    final passed = gate.okSegment(rIn) &&
+        !skipOos &&
+        gate.okSegment(rOut);
     return ComboVerdict(
       name: c.name,
       buyText: astConditionTextCn(c.buyAst, maxKn: maxKn),
@@ -166,7 +163,9 @@ class IndicatorSearchRunner {
       if (sinkPending >= sinkFlushEvery) flushSink();
 
       if (onProgress != null &&
-          (i == 0 || i == cands.length - 1 || i % 20 == 0)) {
+          (i == 0 ||
+              i == cands.length - 1 ||
+              (yieldEvery > 0 && i % yieldEvery == 0))) {
         final elapsed = DateTime.now().difference(started);
         Duration? eta;
         if (i > 0) {
