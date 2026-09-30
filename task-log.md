@@ -4158,7 +4158,7 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   - **P4「release 下 assert 失效致切点算错」撤回**：`splitBarIdx` 取的是 `bars[ix].idx`（实际那根的 idx），与连续性无关，assert 仅为冗余体检。
   - **P3「同 buy 不同 sell 同义重复」撤回**：每个 pair 发 `crossAbove`/`crossBelow` 两个候选，buy AST 天然互异，不存在重复；我原先提的验证方法（去重率）本身是无效命题。
   - **P5/P6 降级**：编译缓存不含 bars 是**正确的**（编译只依赖 AST）；TSV 表头仅在「零进度取消且全部编译失败」时才有理论边界。
-- **结果**：**全量 `flutter test test/indicator_search/` 42 条全部通过（2 分 45 秒，0 失败）**；`flutter analyze`（改动范围 5 项）**No issues found**；`dart format` 20 文件 0 改动。逐文件实测：体检 15（全过）、报告头 8（全过）、取消扫描 3（全过）、占仓扭曲 4（全过，`checked=60` 内外独立多出外段笔数的候选 0）。套件下界按实测总数由 26 提到 **42**。
+- **结果**：**全量 `flutter test test/indicator_search/` 42 条全部通过（3 分 03 秒，0 失败）**；`flutter analyze`（改动范围 5 项）**No issues found**；`dart format` 22 文件 0 改动。逐文件实测：体检 15（全过）、报告头 8（全过）、取消扫描 3（全过）、占仓扭曲 4（全过，`checked=60` 内外独立多出外段笔数的候选 0）。套件下界按实测总数由 26 提到 **42**。回退 12 个被 `dart format` 全目录波及但与本轮无关的文件后重跑，仍 `+42 All tests passed`，确保 diff 只含真实改动（提交 `fd3483d1`，10 文件）。
 - **注意事项**：
   - **`.cmd` 必须纯 ASCII**：UTF-8 的 `.cmd` 被 cmd.exe 按 GBK 解析，中文注释的字节错位会产生 `|`、`&` 等元字符，导致「xxx 不是内部或外部命令」。已改为英文注释，并另备 PowerShell 版（`.ps1` 可含中文）。
   - 诊断**刻意不修正排序**：诊断只暴露「榜首含 ∞ 小样本」，是否收紧 cap / 提高 `minTrades` 等真实数据出来再定，避免凭猜测改门槛。
