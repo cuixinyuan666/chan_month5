@@ -4070,3 +4070,55 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 
 ---
 
+
+---
+
+### 2026-09-30 · OpenCode · 审查 · 远端寻优批次（a33d8a70~847d04c5）只读代码审查
+
+- **执行者**：OpenCode
+- **任务类型**：代码审查（只读；未改 app / Rust 任何关键逻辑）
+- **操作**：
+  1. 通读寻优主链：候选枚举 → AST 预编译 → 全区间单次回测 → 交易切段样本内外 → TSV/JSON 落盘 → 主图冻结仓复用。
+  2. 追冻结仓取值链（`catalog_lookup.dart` `readEvalClockSeries` / `_plotEvalSeries`）与 `main.dart` `_visibleBars` 口径，排除前视与虚拟 K 错位。
+  3. 实跑：`flutter test test/indicator_search/`（12 项全过，约 4.5 分钟）、`flutter test test/run_to_end_vs_step_freeze_test.dart`（通过，约 10 分钟，1m 289 根 + tick 988 根，未 skip）、`flutter analyze --no-pub`（94 项 0 error）。
+  4. 拆机器人验收报告 `last_report.json`，用 `--reporter json` 单文件复现核对计数口径。
+- **结果**：发现 2 个必修缺陷 + 4 个口径/运维隐患。
+  - **必修①（验收计数虚高）**：`robot_verify_flutter_test.dart` 只判 `result=='success'` 不看 `hidden`，把每个测试文件的「loading <path>」影子用例也算通过。实测 1 文件 1 用例计成 2；`test/indicator_search/` 8 文件 12 用例被计成 **20**。报告里的「flutter 20/20 全过」实为 12/12（结论没错，数字虚高 8），已写进 `task-log` 当基线。建议按 `hidden` 过滤并加 `passed>0` 断言。
+  - **必修②（对拍不比对数值）**：`step_freeze_signatures.dart` 的 `math` 签名只比 MACD/布林/RSI 的**层号键名**，`diver` 只比层数、`chip` 只比已并根数、`diverRel` 只比空否。寻优的条件变量正是从这些冻结仓取值（MA/布林/MACD/RSI/KDJ），一旦「连续单步 vs 走完瘦包」在这些值上漂移，对拍照样 PASS —— 副图取数与寻优基建的回归网有洞。
+  - **隐患③（跳过即绿灯）**：`RobotVerifyReport.ok` 忽略 `skipped`；无分笔数据时 `continuous_step_freeze` 记 `ok:true, skipped:true`；`CHAN_ROBOT_TEST_LOG` 只要指向存在的文件，Flutter 阶段就记 `ok:true, skipped:true` 且不校验内容/时间。本次已核：三个阶段均无 `skipped`，是真跑真过，风险尚未兑现。
+  - **隐患④（截断校验口径分叉）**：`backtest_step_harness.dart` 的 `truncationCheck` 只透传给 `ChanPipelineSession`，6 个 collect/merge 全走默认 `true`；主图关掉截断校验时，独立 harness 仍截断。当前只被「无主图会话」兜底路径用到，无测试覆盖。
+  - **隐患⑤**：`indicator_search_settings_store.dart` 读 `maxCandidates` 无校验，0/负数会让 optimized 变全量枚举（UI 滑块已 clamp 2000~50000，仅手改 JSON 可触发）。
+  - **隐患⑥**：`PassGate` 硬编码 5 笔/60%/1.5，全胜时 `payoff=infinity` 直接过线；1.2 万候选多重比较无校正。寻优对话框运行中不可取消、不可关闭。
+- **演示**：走到最后一根 K 打开「指标寻优」，跑满候选时副图那几根 MA/布林取值与策略回测完全一致（已验无前视：`_plotEvalSeries` 严格按 `asOf` 截断，`_visibleBars` 就是 `_allBars` 前缀，虚拟 K 不参与错位）。机器人验收 JSON 里 `flutter_test_indicator_search.passed` 应读作「真实用例数 - 文件数」。
+- **注意事项 / 待办**：本次为只读审查，未改任何逻辑。`session.json` 仍是 `active:true`（套件 `indicator_search_opt_20260930`），按约定等你重编开 App 粘贴报告后再决定是否清 `active`；建议清 `active` 前先把上面必修①②修掉再重跑验收，否则报告数字仍会虚高。
+
+---
+
+### 2026-09-30 · Cursor · 修正 · 寻优内外段独立回测 + 机器人计数 + 冻结对拍
+
+- **执行者**：Cursor
+- **任务类型**：Bug修复 / 寻优口径 / 验收
+- **操作**：
+  1. **P0**：`runInOutFromSingleFull` 改为样本内 `asOf=切点`、样本外 `executeX>切点` 各独立重跑（本金重置），不再「全跑再切单」；报告头与寻优说明同步。
+  2. **必修①**：机器人 JSON  reporter 过滤 `hidden`，且 `passed>0` 才算阶段通过（寻优 flutter 应显示 12 而非 20）。
+  3. **必修②**：`StepFreezeSignatures` 对 math/diver/chip/diverRel 写入数值级摘要，寻优用的 MACD/布林/RSI/KDJ 漂移会对拍失败。
+  4. **隐患⑤（局部）**：设置 JSON 读 `maxCandidates` 时 ≤0 回落 12000，并 clamp 2000～50000。
+- **结果**：`flutter test test/indicator_search/` + `test/step_freeze_signatures_test.dart` 全过（约 3.5 分钟）。
+- **演示**：步进到末根后开寻优，内段弱、外段强的组合不再被切点前持仓「占仓拒买」污染；重跑机器人套件时 `flutter_test_indicator_search.details.passed` 应为 **12**。
+- **测试**：`flutter test test/indicator_search/ test/step_freeze_signatures_test.dart`。
+- **注意事项 / 待办**：截断校验 harness 分叉（隐患④）、寻优不可取消（⑥）未动；改口径后请冷启重编再跑 `indicator_search_opt_20260930` 粘贴新 JSON。
+
+---
+
+### 2026-09-30 · Cursor · 修正+验收 · 机器人全套件 CLI 对拍
+
+- **执行者**：Cursor
+- **任务类型**：Bug修复 / 机器人验证
+- **操作**：
+  1. **隐患④**：`backtest_step_harness` 将 `truncationCheck` 透传到分型判断、比例/斜率/节奏、Math 冻结合并。
+  2. **隐患⑥（局部）**：寻优对话框增加「取消扫描」，`IndicatorSearchRunner.requestCancel` 在候选循环内生效。
+  3. 新增 `test/robot_verify_full_suite_test.dart`，与 App 同调 `runFullRobotVerify`。
+- **结果**：CLI 跑套件 **ok:true**（约 14 分钟）；`flutter_test_indicator_search.passed=12`；连续单步 1m 289 + 分笔 988 未 skip，探针 T1/T2 通过。
+- **演示**：请你本地重编开 App（`session.json` 仍 active）走一遍半自动窗，剪贴板 JSON 应与 `a_Data/robot_verify/last_report.json` 三阶段一致。
+- **测试**：`flutter test test/robot_verify_full_suite_test.dart`。
+- **注意事项 / 待办**：`PassGate` 仍不可在 UI 改；App 半自动仍需你编译+开窗+粘贴剪贴板复核。

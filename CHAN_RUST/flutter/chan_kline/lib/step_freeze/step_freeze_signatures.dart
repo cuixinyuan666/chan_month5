@@ -1,3 +1,4 @@
+import '../compute/divergence_freeze_store.dart';
 import '../compute/math_series_freeze_store.dart';
 import '../models/bs_verdict_frame.dart';
 import '../models/buy1_frame.dart';
@@ -6,6 +7,8 @@ import '../models/buy_n_frame.dart';
 import '../models/sell1_frame.dart';
 import '../models/sell2_frame.dart';
 import '../models/sell_n_frame.dart';
+import '../backtest/chip_peak_store.dart';
+import '../backtest/divergence_relation_store.dart';
 import '../compute/adjacent_ratio_compute.dart';
 import '../compute/fractal_judgment_compute.dart';
 import '../compute/line_slope_compute.dart';
@@ -30,9 +33,9 @@ class StepFreezeSignatures {
         'slope': _slopeSig(state.lineSlopeHistoryByKn),
         'rhythm': _rhythmSig(state.stepRhythmHistoryByKn),
         'math': _mathSig(state.mathFreezeStore),
-        'diver': 'kn:${state.diverFreezeStore.byKn.length}',
-        'chip': 'bars:${state.chipPeakStore.ingestedBarCount}',
-        'diverRel': 'empty:${state.diverRelationStore.isEmpty}',
+        'diver': _diverSig(state.diverFreezeStore),
+        'chip': _chipSig(state.chipPeakStore),
+        'diverRel': _diverRelSig(state.diverRelationStore),
       };
 
   static List<String> diff(StepFreezeSessionState a, StepFreezeSessionState b) {
@@ -98,9 +101,82 @@ class StepFreezeSignatures {
           '${e.key}:${e.value.map((p) => '${p.x}|${p.key}|${p.value.toStringAsFixed(4)}').join(',')}')
       .join(';');
 
-  static String _mathSig(MathSeriesFreezeStore store) {
-    return 'macdKn:${store.macdByKn.keys.join(",")}|'
-        'bollKn:${store.bollByKn.keys.join(",")}|'
-        'rsiKn:${store.rsiByKn.keys.join(",")}';
+  static String _nullableDoubles(List<double?>? s) {
+    if (s == null || s.isEmpty) return '';
+    return s.map((v) => v == null ? '_' : v.toStringAsFixed(6)).join(',');
   }
+
+  static String _intSeries(List<int> s) =>
+      s.isEmpty ? '' : s.map((v) => v.toString()).join(',');
+
+  static String _mathSig(MathSeriesFreezeStore store) {
+    final kns = {
+      ...store.macdByKn.keys,
+      ...store.bollByKn.keys,
+      ...store.rsiByKn.keys,
+      ...store.kdjByKn.keys,
+      ...store.donchianByKn.keys,
+      ...store.meanByKn.keys,
+      ...store.channelByKn.keys,
+    }.toList()
+      ..sort();
+    final parts = <String>[];
+    for (final kn in kns) {
+      final m = store.macdByKn[kn];
+      if (m != null) {
+        parts.add(
+          'macd$kn:dif=${_nullableDoubles(m.dif)};dea=${_nullableDoubles(m.dea)};'
+          'macd=${_nullableDoubles(m.macd)}',
+        );
+      }
+      final b = store.bollByKn[kn];
+      if (b != null) {
+        parts.add(
+          'boll$kn:mid=${_nullableDoubles(b.mid)};up=${_nullableDoubles(b.up)};'
+          'dn=${_nullableDoubles(b.down)}',
+        );
+      }
+      final r = store.rsiByKn[kn];
+      if (r != null) {
+        parts.add('rsi$kn:${_nullableDoubles(r)}');
+      }
+      final k = store.kdjByKn[kn];
+      if (k != null) {
+        parts.add(
+          'kdj$kn:k=${_nullableDoubles(k.k)};d=${_nullableDoubles(k.d)};'
+          'j=${_nullableDoubles(k.j)}',
+        );
+      }
+      final d = store.donchianByKn[kn];
+      if (d != null) {
+        parts.add(
+          'don$kn:up=${_nullableDoubles(d.up)};mid=${_nullableDoubles(d.mid)};'
+          'dn=${_nullableDoubles(d.down)}',
+        );
+      }
+    }
+    return parts.join('|');
+  }
+
+  static String _diverSig(DivergenceFreezeStore store) {
+    final keys = store.byKn.keys.toList()..sort();
+    if (keys.isEmpty) return '';
+    return keys.map((kn) {
+      final algos = store.byKn[kn]!;
+      final algoKeys = algos.keys.toList()
+        ..sort((a, b) => a.name.compareTo(b.name));
+      final body = algoKeys.map((algo) {
+        final s = algos[algo]!;
+        return '${algo.name}:diver=${_intSeries(s.diverAt)};'
+            'in=${_nullableDoubles(s.inAt)};out=${_nullableDoubles(s.outAt)}';
+      }).join(',');
+      return '$kn:$body';
+    }).join(';');
+  }
+
+  static String _chipSig(ChipPeakFreezeStore store) =>
+      store.stepFreezeParityDigest();
+
+  static String _diverRelSig(DivergenceRelationStore store) =>
+      store.stepFreezeParityDigest();
 }

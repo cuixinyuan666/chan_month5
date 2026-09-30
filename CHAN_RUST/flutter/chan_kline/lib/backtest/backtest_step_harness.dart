@@ -224,6 +224,7 @@ Future<BacktestStepHarnessResult> driveStepHarnessWithProgress(
           bars: growing,
           levels: last.levels,
           barFeatures: last.barFeatures,
+          truncationCheck: truncationCheck,
         ),
       );
     }
@@ -311,6 +312,7 @@ Future<BacktestStepHarnessResult> driveStepHarnessWithProgress(
         maxDisplayKn: maxDisplayKn,
         bars: growing,
         barFeatures: last.barFeatures,
+        truncationCheck: truncationCheck,
       );
       mergeLineSlopeForStep(
         historyByKn: slope,
@@ -319,6 +321,7 @@ Future<BacktestStepHarnessResult> driveStepHarnessWithProgress(
         maxDisplayKn: maxDisplayKn,
         bars: growing,
         barFeatures: last.barFeatures,
+        truncationCheck: truncationCheck,
       );
       mergeStepRhythmForStep(
         historyByKn: rhythm,
@@ -328,6 +331,7 @@ Future<BacktestStepHarnessResult> driveStepHarnessWithProgress(
         maxDisplayKn: maxDisplayKn,
         bars: growing,
         barFeatures: last.barFeatures,
+        truncationCheck: truncationCheck,
       );
     }
 
@@ -339,6 +343,7 @@ Future<BacktestStepHarnessResult> driveStepHarnessWithProgress(
       maxDisplayKn: maxKn,
       asOf: step,
       barFeatures: last.barFeatures,
+      truncationCheck: truncationCheck,
     );
     mergeDivergenceForStep(
       store: diverFreeze,

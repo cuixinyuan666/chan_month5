@@ -42,9 +42,16 @@ class IndicatorSearchSettings {
     if (map == null) return const IndicatorSearchSettings();
     return IndicatorSearchSettings(
       useOptimizedBuild: _readBool(map['useOptimizedBuild'], defaultValue: true),
-      maxCandidates: (map['maxCandidates'] as num?)?.toInt() ?? 12000,
+      maxCandidates: _readMaxCandidates(map['maxCandidates']),
       skipOosEarly: _readBool(map['skipOosEarly'], defaultValue: true),
     );
+  }
+
+  static int _readMaxCandidates(dynamic raw) {
+    if (raw == null) return 12000;
+    final v = (raw as num).toInt();
+    if (v <= 0) return 12000;
+    return v.clamp(2000, 50000);
   }
 
   static bool _readBool(dynamic raw, {required bool defaultValue}) {

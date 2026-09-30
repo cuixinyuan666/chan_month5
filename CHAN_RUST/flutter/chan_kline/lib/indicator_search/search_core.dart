@@ -78,7 +78,7 @@ class ComboVerdict {
   final double inRankScore;
   final bool passed;
   final int splitX;
-  /// 内段不过关时外段不参与双达标（全区间仍回测一次；与「外段 0 笔」区分）。
+  /// 内段不过关时外段不参与双达标（内外仍各回测一次；与「外段 0 笔」区分）。
   final bool outSampleSkipped;
 
   const ComboVerdict({

@@ -15,7 +15,7 @@ void main() {
   const begin = '2004/07/19 09:30:00';
   const end = '2004/07/20 15:00:00';
 
-  test('外段闭合交易 entryX 严格大于 splitX', () async {
+  test('全跑切单 helpers 与外段独立重跑口径', () async {
     final bridge = ChanBridge.instance;
     bridge.ensureInitialized();
     final bars = bridge
@@ -64,6 +64,8 @@ void main() {
           isFalse,
         );
       }
+      final seg = env.runInOutFromSingleFull(comp, c.buyAst, c.sellAst, splitX);
+      expect(seg, isNotNull);
       final v = runner.evaluateCandidate(
         c: c,
         env: env,
@@ -72,8 +74,12 @@ void main() {
         maxKn: h.maxKn,
         skipOosEarly: false,
       );
-      if (v != null && v.outSample.trades > 0) {
-        expect(v.outSample.trades, oosTrades.length);
+      if (v != null) {
+        expect(v.outSample.trades, seg!.outSample.trades);
+        expect(v.inSample.trades, seg.inSample.trades);
+        for (final t in oosTrades) {
+          expect(t.entryX, greaterThan(splitX));
+        }
       }
       checked++;
     }

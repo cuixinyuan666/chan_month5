@@ -54,6 +54,30 @@ class ChipPeakFreezeStore {
 
   void clear() => _schemes.clear();
 
+  /// 连续单步对拍：各方案已写入根数 + 抽样峰价校验和。
+  String stepFreezeParityDigest() {
+    if (isEmpty) return 'empty:true';
+    final parts = <String>[];
+    final schemeKeys = _schemes.keys.toList()..sort();
+    for (final key in schemeKeys) {
+      final sd = _schemes[key]!;
+      final written = sd.written.toList()..sort();
+      var checksum = 0.0;
+      for (final x in written) {
+        checksum += x;
+        for (final kindCells in sd.cells.values) {
+          final row = kindCells[key];
+          if (row == null || x >= row.length) continue;
+          final cell = row[x];
+          if (cell == null) continue;
+          checksum += cell.price + cell.b + cell.s + cell.g;
+        }
+      }
+      parts.add('$key:w${written.length}:cs${checksum.toStringAsFixed(4)}');
+    }
+    return parts.join('|');
+  }
+
   void ingestThrough({
     required int asOf,
     required List<KlineBar> bars,

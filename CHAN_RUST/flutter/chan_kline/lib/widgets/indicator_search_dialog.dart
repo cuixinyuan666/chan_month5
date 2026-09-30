@@ -69,6 +69,7 @@ class _IndicatorSearchDialogState extends State<IndicatorSearchDialog> {
   IndicatorSearchSettings _settings = IndicatorSearchSettingsStore.current;
   CandidateBuildSummary? _buildSummary;
   IndicatorSearchAlignSnapshot? _alignSnap;
+  IndicatorSearchRunner? _activeRunner;
 
   @override
   void initState() {
@@ -195,6 +196,7 @@ class _IndicatorSearchDialogState extends State<IndicatorSearchDialog> {
       } catch (_) {}
       final sink = VerdictSink(tmpResults);
       final runner = IndicatorSearchRunner();
+      _activeRunner = runner;
       final stats = await runner.runAll(
         bars: bars,
         env: env,
@@ -220,6 +222,17 @@ class _IndicatorSearchDialogState extends State<IndicatorSearchDialog> {
         },
       );
       sink.close();
+      _activeRunner = null;
+      if (stats.cancelled) {
+        if (!mounted) return;
+        setState(() {
+          _running = false;
+          _phase = '已取消';
+          _detail = '已扫描 ${stats.ran} 条，保留部分 TSV';
+          _stats = stats;
+        });
+        return;
+      }
       try {
         File(tmpResults).renameSync(_resultsPath!);
       } catch (_) {
@@ -263,6 +276,7 @@ class _IndicatorSearchDialogState extends State<IndicatorSearchDialog> {
         _progress = 1;
       });
     } catch (e) {
+      _activeRunner = null;
       logProgress('失败 $e', logFilePath: logPath);
       if (!mounted) return;
       setState(() {
@@ -336,6 +350,11 @@ class _IndicatorSearchDialogState extends State<IndicatorSearchDialog> {
         ),
       ),
       actions: [
+        if (_running)
+          TextButton(
+            onPressed: () => _activeRunner?.requestCancel(),
+            child: const Text('取消扫描'),
+          ),
         TextButton(
           onPressed: _running ? null : () => Navigator.pop(context),
           child: const Text('关闭'),
@@ -416,7 +435,7 @@ Future<void> showIndicatorSearchHelp(BuildContext context) async {
           '2. 须步进到区间最后一根 K（可一键跳末），再点「寻优」：直接复用主图冻结仓（与策略回测同源）→ 枚举组合 → 样本内外回测。\n'
           '3. 结果以表格展示（双达标 / 保守分 Top）；完整列表见 TSV。\n'
           '4. 进度条含剩余时间估算；日志见 indicator_search_progress.log。\n'
-          '5. 默认优化枚举 + 候选上限；可开启「内段不过关则外段不参与双达标」（全区间仍回测一次，外段标「未测」）。\n'
+          '5. 默认优化枚举 + 候选上限；可开启「内段不过关则外段不参与双达标」（内外各独立回测一次，外段标「未测」仅表示未参与双达标）。\n'
           '   关闭该开关后外段参与门槛判定；报告头会写明成交价与费率等复现参数。\n'
           '6. 跑完后可在设置点「上次寻优结果」查看快照（与当次表格一致）。\n\n'
           '注意：寻优占用 CPU，勿同时开机器学习；非投资建议。',

@@ -152,9 +152,30 @@ RawScore rawScoreFromClosedTrades(
       netProfit: 0,
     );
   }
+  final net = trades.fold(0.0, (a, t) => a + t.netPnL);
+  final endX = trades.last.exitX;
   final m = computeBacktestMetrics(
     initialCapital: initialCapital,
-    equityCurve: const [],
+    equityCurve: [
+      EquityPoint(
+        x: trades.first.entryX,
+        cash: initialCapital,
+        positionQty: 0,
+        positionValue: 0,
+        equity: initialCapital,
+        realizedPnL: 0,
+        unrealizedPnL: 0,
+      ),
+      EquityPoint(
+        x: endX,
+        cash: initialCapital + net,
+        positionQty: 0,
+        positionValue: 0,
+        equity: initialCapital + net,
+        realizedPnL: net,
+        unrealizedPnL: 0,
+      ),
+    ],
     closedTrades: trades,
   );
   return RawScore(
@@ -162,7 +183,7 @@ RawScore rawScoreFromClosedTrades(
     winRate: m.winRate.isFinite ? m.winRate.value : null,
     payoff: _metricToDouble(m.payoffRatio),
     profitFactor: _metricToDouble(m.profitFactor),
-    netProfit: trades.fold(0.0, (a, t) => a + t.netPnL),
+    netProfit: net,
   );
 }
 
@@ -236,22 +257,35 @@ class SearchEnv {
     return rawScoreFromMetrics(run.result!.metrics);
   }
 
-  /// 全区间只跑一次，按闭合交易切样本内/外（跨界未闭环不计入任一段）。
+  /// 样本内/外各独立重跑：内段 asOf=切点；外段全区间求信号但仅撮合 executeX>切点。
   InOutSegmentScores? runInOutFromSingleFull(
     StrategyCompileOk? compiled,
     TradeAst buy,
     TradeAst sell,
     int splitX,
   ) {
-    final all = allClosedTradesFromFull(compiled, buy, sell);
-    if (all == null) return null;
-    final cap = align.strategyTemplate.initialCapital;
-    final ins = inSampleClosedTrades(all, splitX);
-    final outs = outSampleClosedTradesList(all, splitX);
-    return InOutSegmentScores(
-      inSample: rawScoreFromClosedTrades(ins, initialCapital: cap),
-      outSample: rawScoreFromClosedTrades(outs, initialCapital: cap),
+    final rIn = runAtCompiled(compiled, buy, sell, splitX);
+    if (rIn == null) return null;
+    final rOut = _runOutSampleCompiled(compiled, buy, sell, splitX);
+    if (rOut == null) return null;
+    return InOutSegmentScores(inSample: rIn, outSample: rOut);
+  }
+
+  RawScore? _runOutSampleCompiled(
+    StrategyCompileOk? compiled,
+    TradeAst buy,
+    TradeAst sell,
+    int splitX,
+  ) {
+    final run = _executeBacktest(
+      compiled,
+      buy,
+      sell,
+      outSampleEndX,
+      minExecuteXExclusive: splitX,
     );
+    if (run == null || !run.ok || run.result == null) return null;
+    return rawScoreFromMetrics(run.result!.metrics);
   }
 
   List<TradeRecord>? allClosedTradesFromFull(
@@ -303,8 +337,9 @@ class SearchEnv {
     StrategyCompileOk? compiled,
     TradeAst buy,
     TradeAst sell,
-    int endX,
-  ) {
+    int endX, {
+    int? minExecuteXExclusive,
+  }) {
     final tpl = align.strategyTemplate;
     return executeStrategyBacktest(
       config: StrategyConfig(
@@ -341,6 +376,7 @@ class SearchEnv {
       regressK: align.regressK,
       barFeatures: h.barFeatures,
       mathConfig: h.mathConfig,
+      minExecuteXExclusive: minExecuteXExclusive,
     );
   }
 }
@@ -394,8 +430,8 @@ String reportHeader({
 ========== 高胜率高盈亏比 指标组合榜（$code $period $bars根K0）==========
 口径：单仓只做多 / 成交价：$fillLabel / 与回测工作台同撮合与数学指标参数
 $replayLine
-方法：全区间回测一次，仅统计闭合交易 —— 样本内进场与平仓均 ≤ K0#$splitX；样本外进场 > K0#$splitX
-跨界：切点前开仓、切点后平仓的闭合单不计入任一段；未平仓不计入
+方法：样本内、样本外各独立重跑（本金重置、单仓只做多）—— 内段 asOf 至 K0#$splitX；外段仅撮合成交根 > K0#$splitX 的信号
+跨界：不再「全跑再切单」；内外段成交路径互不影响
 门槛：样本内外都需 胜率≥60% 且 盈亏比≥1.5（∞ 计达标） 且 ≥$gateTrades笔
 净利：内外均为所计闭合交易的 netPnL 合计（统计口径相同）
 警示：内外段 K 根数不同，净利绝对值勿横向对比强弱

@@ -71,6 +71,8 @@ BacktestRun executeStrategyBacktest({
   String? runId,
   /// 寻优等批量场景：外层已编译则跳过重编 AST（求值/撮合口径不变）。
   StrategyCompileOk? precompiled,
+  /// 仅保留计划成交根 `executeX` 严格大于该值的信号（样本外独立重跑）。
+  int? minExecuteXExclusive,
 }) {
   final started = now ?? DateTime.now();
   final id = runId ?? 'run_${started.millisecondsSinceEpoch}';
@@ -128,7 +130,7 @@ BacktestRun executeStrategyBacktest({
     barFeatures: barFeatures,
     mathConfig: mathConfig,
   );
-  final signals = <SignalEvent>[
+  var signals = <SignalEvent>[
     ...evalCompiledCond(
       cond: ok.buy,
       side: TradeSide.buy,
@@ -142,6 +144,18 @@ BacktestRun executeStrategyBacktest({
       ctx: ctx,
     ),
   ];
+  if (minExecuteXExclusive != null) {
+    final floor = minExecuteXExclusive;
+    signals = signals.where((sig) {
+      if (!sig.isTradable) return false;
+      final plan = planFill(
+        sig: sig,
+        bars: bars,
+        fillPriceMode: config.fillPriceMode,
+      );
+      return plan != null && plan.executeX > floor;
+    }).toList();
+  }
   final result = runMiniLoopFromSignals(
     signals: signals,
     bars: bars,

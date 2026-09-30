@@ -39,6 +39,7 @@ class IndicatorSearchRunStats {
   final int splitX;
   final List<ComboVerdict> verdicts;
   final Duration elapsed;
+  final bool cancelled;
 
   const IndicatorSearchRunStats({
     required this.compiled,
@@ -47,11 +48,15 @@ class IndicatorSearchRunStats {
     required this.splitX,
     required this.verdicts,
     required this.elapsed,
+    this.cancelled = false,
   });
 }
 
 class IndicatorSearchRunner {
   final Map<String, StrategyCompileResult> _compileCache = {};
+  bool _cancelRequested = false;
+
+  void requestCancel() => _cancelRequested = true;
 
   String _compileKey(TradeAst buy, TradeAst sell, int maxKn) =>
       '$maxKn||${astConditionCacheKey(buy)}||${astConditionCacheKey(sell)}';
@@ -82,7 +87,7 @@ class IndicatorSearchRunner {
   }) {
     final okCompile = compileOk(c, maxKn);
     if (okCompile == null) return null;
-    // 全区间只回测一次；skipOosEarly 仅影响外段是否参与门槛与展示（不省算力）。
+    // 内外段各回测一次；skipOosEarly 仅影响外段是否参与双达标门槛（不省算力）。
     final seg = env.runInOutFromSingleFull(
       okCompile,
       c.buyAst,
@@ -123,8 +128,10 @@ class IndicatorSearchRunner {
     VerdictSink? sink,
     int sinkFlushEvery = 80,
   }) async {
+    _cancelRequested = false;
     final splitX = splitBarIdx(bars);
     var compiled = 0, ran = 0, passed = 0;
+    var cancelled = false;
     final all = <ComboVerdict>[];
     final recentPassed = <ComboVerdict>[];
     final started = DateTime.now();
@@ -136,6 +143,10 @@ class IndicatorSearchRunner {
     }
 
     for (var i = 0; i < cands.length; i++) {
+      if (_cancelRequested) {
+        cancelled = true;
+        break;
+      }
       final c = cands[i];
       if (tryCompile(c, maxKn)) {
         compiled++;
@@ -200,6 +211,7 @@ class IndicatorSearchRunner {
       splitX: splitX,
       verdicts: all,
       elapsed: DateTime.now().difference(started),
+      cancelled: cancelled,
     );
   }
 

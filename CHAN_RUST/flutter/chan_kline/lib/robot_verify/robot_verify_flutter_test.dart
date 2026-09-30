@@ -46,6 +46,7 @@ Future<RobotVerifyPhase> runFlutterTestJsonPhase({
       final ev = jsonDecode(t) as Map<String, dynamic>;
       final type = ev['type'] as String?;
       if (type == 'testDone') {
+        if (ev['hidden'] == true) continue;
         final result = ev['result'] as String?;
         if (result == 'success') {
           passed++;
@@ -63,7 +64,7 @@ Future<RobotVerifyPhase> runFlutterTestJsonPhase({
     }
   }
 
-  final ok = exitCode == 0 && failed == 0;
+  final ok = exitCode == 0 && failed == 0 && passed > 0;
   return RobotVerifyPhase(
     id: phaseId,
     ok: ok,
@@ -71,6 +72,7 @@ Future<RobotVerifyPhase> runFlutterTestJsonPhase({
       'exitCode': exitCode,
       'passed': passed,
       'failed': failed,
+      if (passed == 0 && exitCode == 0) 'error': 'no_visible_tests_passed',
       if (failures.isNotEmpty) 'failures': failures,
       if (!ok && stderrStr.trim().isNotEmpty)
         'stderrTail': _tailLines(stderrStr, 12),
