@@ -66,6 +66,17 @@
   - 静默忽略看不懂的句子；
 - 回复用户时**必须用完全明确的中文**：不用拼音缩写、不用英文术语替代中文、结论写全。
 
+
+### Skills（能力包索引）
+
+本仓库的 skills 放在 `.trae/skills/<name>/SKILL.md`（`SKILL.md` 带 YAML frontmatter 的 `name` / `description` 即为可发现入口）。
+改动前**先查对应 skill**，别自己造轮子、别重复实现已规范化的口径：
+
+| Skill | 何时必须先读 |
+| --- | --- |
+| [`grill-me`](.trae/skills/grill-me/SKILL.md) | 需要把一个方案/设计问透、逐分支钉死决策时；用户说「grill me」「质询」 |
+| [`obsidian`](.trae/skills/obsidian/SKILL.md) | 任务收尾同步 Obsidian（task-log → 日笔记 → MOC） |
+
 ### 常见错误与解法（记忆库）
 
 智能体反复犯的错、踩过的坑与解法，统一记在 error remember.md。
