@@ -2,6 +2,8 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import '../agent_handoff/agent_handoff_button.dart';
+import '../agent_handoff/agent_handoff_package.dart';
 import '../bridge/chan_bridge.dart';
 import '../indicator_search/candidate_builder.dart';
 import '../indicator_search/indicator_search_runner.dart';
@@ -444,6 +446,13 @@ Future<void> showIndicatorSearchLastResultDialog(BuildContext context) async {
         ),
       ),
       actions: [
+        AgentHandoffButton(
+          buildPackage: () async {
+            final f = await AgentHandoffPackage.buildIndicatorSearch(snap);
+            return f.path;
+          },
+        ),
+
         TextButton(
           onPressed: () => Navigator.pop(ctx),
           child: const Text('关闭'),

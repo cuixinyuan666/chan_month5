@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../agent_handoff/agent_handoff_button.dart';
+import '../agent_handoff/agent_handoff_package.dart';
 import '../key_point_stats/key_point_collect.dart';
 import '../key_point_stats/key_point_stat_align.dart';
 import '../key_point_stats/key_point_stat_export.dart';
@@ -213,6 +215,14 @@ class _KeyPointStatsDialogState extends State<KeyPointStatsDialog> {
                   ),
       ),
       actions: [
+        if (_result != null)
+          AgentHandoffButton(
+            buildPackage: () async {
+              final f = await AgentHandoffPackage.buildKeyPointStats(_result!);
+              return f.path;
+            },
+          ),
+
         TextButton(
           onPressed: _running ? null : () => Navigator.pop(context),
           child: const Text('关闭'),
