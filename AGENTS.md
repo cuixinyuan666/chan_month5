@@ -1,4 +1,4 @@
-### 机器人验证（高优先级 · 见 [`agent.md`](agent.md)）
+### 机器人验证（高优先级 · 见 [`ROBOT_VERIFY.md`](ROBOT_VERIFY.md)）
 
 - **半自动**：用户**手动编译 + 打开 App**；App **展示进度**、结束后**自动复制剪贴板**、**不自动关窗**；用户粘贴结果回对话。  
 - 会话 `a_Data/robot_verify/session.json`；新任务默认清除 `active`，除非再次口头授权且 `suiteId` 相同。
@@ -11,6 +11,7 @@
 
 ### 本文件定位
 本文件是本仓库智能体规则的**唯一正文**。其它工具入口（`CLAUDE.md` / `OPENCODE.md` / WorkBuddy / Trae）只指向这里。
+机器人验证的**专属执行逻辑**（人机分工、界面行为、启用条件、套件登记、连续单步验收口径）见 [`ROBOT_VERIFY.md`](ROBOT_VERIFY.md) —— 注意**不是**本文件，也**不是** `agent.md`（该文件名已于 2026-10-02 改名，避免与 `AGENTS.md` 混淆）。
 
 ### 确认执行门禁（最高优先级）
 

@@ -1,4 +1,4 @@
-# USER manual flow only (see agent.md). Do NOT use for full automation.
+# USER manual flow only (see ROBOT_VERIFY.md). Do NOT use for full automation.
 # 1) User: build_rust.ps1 or flutter build windows
 # 2) User: ensure a_Data/robot_verify/session.json active=true
 # 3) User: set CHAN_REPO_ROOT (optional) and launch chan_kline.exe

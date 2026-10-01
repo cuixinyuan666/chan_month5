@@ -14,7 +14,7 @@
 3. 用户自行编译并启动 App；结束后将剪贴板 JSON 粘贴回对话。
 4. 任务结束后将 `active` 改回 `false`，或删除 `session.json`。
 
-套件登记见仓库根 [`agent.md`](../../agent.md)。
+套件登记见仓库根 [`ROBOT_VERIFY.md`](../../ROBOT_VERIFY.md)。
 
 ## 连续单步数据（002003）
 

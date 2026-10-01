@@ -1,14 +1,17 @@
 # 机器人验证（专属执行逻辑 · 高优先级）
 
-> **权限**：用户口头授权且会话 `active` 时生效；**不得**擅自替用户编译或启动 App。  
-> 与 [`AGENTS.md`](AGENTS.md) 关系：总则见 `AGENTS.md`；**启停与分工以本文件为准**。
+> **权限**：用户口头授权且会话 `active` 时生效；**不得擅自关闭 App**。  
+> 与 [`AGENTS.md`](AGENTS.md) 关系：**总则见 `AGENTS.md`**（含确认门禁、编译与重启、提交与推送）；本文件只管**机器人验证专属**的启停、界面与验收口径。  
+> **编译与启动按 `AGENTS.md`「完成后 · 编译与重启」节执行**：由智能体后台（detached）跑 `build_rust.ps1`，它会自动杀旧 App、编译，并在编译成功后自动拉起新 App。
 
 ## 人机协同（半自动）分工
 
 | 步骤 | 执行者 |
 |------|--------|
 | 口头授权、写入/更新 `session.json` | 用户 + 智能体（按对话） |
-| **编译**、**打开 App** | **仅用户** |
+| **编译** | 智能体（后台 `build_rust.ps1`，见 `AGENTS.md` 编译与重启节） |
+| **打开 App** | 智能体（脚本编译成功后自动拉起） |
+| App 内点「开始」、肉眼验界面 | **仅用户**（需在场操作） |
 | App 内跑完整套件 + **可视化进度** | App 自动 |
 | **完整报告复制到剪贴板** | **App 自动**（结束时） |
 | **关闭 App** | **仅用户**（手动关窗） |
@@ -60,7 +63,7 @@ powershell -NoProfile -File CHAN_RUST/scripts/robot_verify_agent_finish.ps1 -NoC
 
 | 阶段 | id | 验什么 |
 |------|----|--------|
-| 1 | `flutter_test_jiyou` | `flutter test test/jiyou/`（79 例：统计算子 / 关键点位收集 / 编排落盘 / 门控·诊断·差异度·复现参数 / UI 面板与对话框） |
+| 1 | `flutter_test_jiyou` | `flutter test test/jiyou/`（80 例：统计算子 / 关键点位收集 / 编排落盘 / 门控·诊断·差异度·复现参数 / UI 面板与对话框） |
 | 2 | `inprocess_jiyou_keypoint` | 002003 1m 连续单步 → 建冻结账 → 收转折点 → 出表；15 项断言（点位去重、只收已确认、分组非空、均值夹在最小最大、中位数夹在四分位、众数命中 ≤ 样本数、同输入重跑逐字节一致、JSON/TSV 可序列化） |
 | 3 | **`jiyou_contrast_walk`** | **机器人自己连续单步走到末根** → 收点 → 出表 → 顶底差异度；断言「每步只喂 1 根且步数 = K0 总根数」（`StepFreezeWalkTrace.isOneByOne`，从根上排除「一次性喂满再算」）、差异度降序单调、与手工重算对拍；`details.topContrast` 输出 Top-10 差异清单 |
 | 4 | `continuous_step_freeze` | 002003 1m + 分笔 连续单步 vs 走完瘦包 对拍（自动挂载） |
