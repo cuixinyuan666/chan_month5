@@ -4303,3 +4303,11 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **演示**：你说「要看机器人验证怎么跑」，我直奔 ROBOT_VERIFY.md；你说「总则是什么」，看 AGENTS.md。两个文件不再互相冒充。
 
 - **注意事项**：task-log.md 里 8 处历史引用刻意不动（过往日志，改了失真）；尚未 push，等用户确认。
+
+## 2026-10-02 · Cline · 功能 · 新增 skills 与「智能体交流」按钮（两个按钮）
+
+- **skills**：新建 grill-me（从 GitHub alirezarezvani/claude-skills 取原文，Matt Pocock 面试纪律）与 obsidian（从本仓 .cursor 版整理），放在 .trae/skills/。AGENTS.md 新增「Skills」节指引它们。
+- **「智能体交流」按钮**（新增，两个，现有按钮行为一字未改）：计优对话框 + 「上次寻优结果」对话框各加一个。点击后生成结构化交接包 JSON（落盘到 app 支持目录 agent_handoff/）→ 自动复制到剪贴板 → 弹窗告知交接包已生成。
+- **导出范围**：只导结论层（口径、Top-N 顶底差异、分组、复现参数），全量明细仍走各模式自己的 TSV/JSON 文件，不塞剪贴板。
+- **验证**：flutter analyze lib test → **0 error**（92 个全是既有 warning/info）；flutter test test/jiyou/ → **80/80 通过**。
+- **注意事项**：本轮未重编与未开应用验证，待下一轮统一编译后由用户在界面上实验两个按钮。
