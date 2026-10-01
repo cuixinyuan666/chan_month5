@@ -83,6 +83,7 @@ import 'settings/math_indicator_settings_store.dart';
 import 'settings/indicator_search_last_result_store.dart';
 import 'settings/indicator_search_settings_store.dart';
 import 'widgets/indicator_search_dialog.dart';
+import 'widgets/key_point_stats_dialog.dart';
 import 'models/math_indicator_config.dart';
 import 'models/trend_model_config.dart';
 import 'widgets/datetime_picker_dialog.dart';
@@ -102,7 +103,7 @@ import 'step_freeze/step_freeze_session_state.dart';
 const _robotVerifyDefine = bool.fromEnvironment('ROBOT_VERIFY');
 const _robotVerifySuiteDefine = String.fromEnvironment(
   'ROBOT_VERIFY_SUITE',
-  defaultValue: 'indicator_search_opt_20260930',
+  defaultValue: 'jiyou_keypoint_20261001',
 );
 const _chanKlineRootDefine = String.fromEnvironment('CHAN_KLINE_ROOT');
 
@@ -501,6 +502,9 @@ class _KlineHomePageState extends State<KlineHomePage> {
   bool _backtestSplitDragging = false;
 
   bool _indicatorSearchRunning = false;
+
+  /// 计优（关键点位指标统计）运行中；仅置位/复位，不参与任何缠论计算。
+  bool _keyPointStatRunning = false;
 
   /// 十字线 tooltip 桥：KlineChart 向本层广播「是否显示 + 当前行」，停靠为左侧子窗口。
   final CrosshairTooltipBridge _tooltipBridge = CrosshairTooltipBridge();
@@ -2414,6 +2418,29 @@ class _KlineHomePageState extends State<KlineHomePage> {
           ],
         ),
         const SizedBox(height: SettingsPanelTheme.fieldGap),
+        SettingsFilledButton(
+          label: _keyPointStatRunning ? '计优（进行中）' : '计优',
+          icon: Icons.analytics_outlined,
+          onPressed: _keyPointStatRunning ||
+                  _mlSession.isActive ||
+                  (_busy && !_keyPointStatRunning)
+              ? null
+              : () => _openKeyPointStats(closeSettingsSheet: forMobileSheet),
+          onHelp: () => showKeyPointStatsHelp(context),
+          helpTooltip: '计优说明',
+        ),
+        Align(
+          alignment: Alignment.centerRight,
+          child: TextButton(
+            onPressed: _keyPointStatRunning
+                ? null
+                : () async {
+                    await showKeyPointStatsSettingsSheet(context);
+                  },
+            child: const Text('计优参数', style: TextStyle(fontSize: 12)),
+          ),
+        ),
+        const SizedBox(height: SettingsPanelTheme.fieldGap),
         SwitchListTile(
           contentPadding: EdgeInsets.zero,
           dense: true,
@@ -2750,6 +2777,65 @@ class _KlineHomePageState extends State<KlineHomePage> {
     if (!mounted) return;
     setState(() => _indicatorSearchRunning = false);
     _msgHistory.append('指标寻优结束');
+  }
+
+  /// 计优：跑完的缠论/指标冻结账 → 各级别连线转折点的指标统计。
+///
+/// 前置条件与寻优一致：必须已步进到区间最后一根 K（全部指标跑完）。
+/// **只读** 冻结账（`_pipelineSession.cache.lookup`），不写冻结仓、不改主图语义。
+Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
+    if (_mlSession.isActive) {
+      _showSnack('请先退出机器学习');
+      return;
+    }
+    final code = _selectedCode;
+    if (code == null) {
+      _showSnack('请先选择股票');
+      return;
+    }
+    if (!_hasSession || _allBars.isEmpty) {
+      _showSnack('请先加载 K 线');
+      return;
+    }
+    if (_stepIdx < 0) {
+      _showSnack('请先步进至少一根 K 线');
+      return;
+    }
+    if (_stepIdx < _allBars.length - 1) {
+      _showSnack('计优需要全部指标先跑完：请先步进到区间最后一根 K（可一键跳末）');
+      return;
+    }
+    final lookup = _pipelineSession?.cache.lookup;
+    if (lookup == null || lookup.byIdx.isEmpty) {
+      _showSnack('主图冻结账为空：请先步进 K 线再点计优');
+      return;
+    }
+    if (closeSettingsSheet && Navigator.canPop(context)) {
+      Navigator.pop(context);
+      _settingsSheetSetState = null;
+    }
+    setState(() => _keyPointStatRunning = true);
+    _msgHistory.appendKeyPointStatsStart(code, _period);
+    final maxKn = chartMaxKn(levels: _levels, k0Lines: _k0Lines);
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => KeyPointStatsDialog(
+        code: code,
+        period: _period,
+        beginText: _fmtDateTime(_beginDate),
+        endText: _fmtDateTime(_endDate),
+        bars: List<KlineBar>.from(_allBars),
+        levels: _levels,
+        lookup: lookup,
+        maxKn: maxKn,
+        k0Confirms: _k0ConfirmSignals,
+        k0Lines: _k0Lines,
+      ),
+    );
+    if (!mounted) return;
+    setState(() => _keyPointStatRunning = false);
+    _msgHistory.appendKeyPointStatsEnd();
   }
 
   void _openBacktestWorkbench({bool closeSettingsSheet = false}) {

@@ -48,6 +48,9 @@ class MsgHistory {
   /// 全类 BSP 在线对错
   static bool _bsVerdictLogged = false;
 
+  /// 计优口径是否已记录（进程内去重）
+  static bool _keyPointStatSpecLogged = false;
+
   final List<MsgHistoryEntry> _rows = [];
 
   List<MsgHistoryEntry> get rows => List.unmodifiable(_rows);
@@ -70,6 +73,36 @@ class MsgHistory {
     if (reason != null && reason.trim().isNotEmpty) {
       append('历史记录已清空：$reason');
     }
+  }
+
+  /// 计优：开始（口径写进历史，免得日后翻记录看不懂这张表是怎么来的）。
+  void appendKeyPointStatsStart(String code, String period) {
+    append(
+      '计优：$code $period · 关键点位=各级别连线转折点（顶/底）· '
+      '取值=转折极点 K 的指标冻结值（主图逐K冻结账，与十字线/ML同源）· '
+      '分组=级别×顶/底 · 只统计已确认冻结的转折点',
+    );
+  }
+
+  /// 计优：结束。
+  void appendKeyPointStatsEnd() {
+    append('计优结束（结果表见当时窗口；JSON/TSV 落应用支持目录）');
+  }
+
+  /// 计优口径（进程内去重一次，便于从历史记录复现统计定义）。
+  void appendKeyPointStatsSpec() {
+    if (_keyPointStatSpecLogged) return;
+    _keyPointStatSpecLogged = true;
+    append(
+      '【口径·计优】事后统计模式（AGENTS.md「当下性」例外）：'
+      '跑完缠论与指标后，对关键点位做汇总统计，不参与任何缠论计算、不回写冻结仓。\n'
+      '关键点位：各级别连线转折点。K0连线取分型组内极值K（TOP首个最高high、BOTTOM首个最低low）；'
+      'K1+连线取已冻结段的起止端点K；只收 confirmX<=asOf 的已确认点，进行中段不计。\n'
+      '取值：读 BarFeatureLookup.byIdx[poleX]（逐K冻结账），即转折真正发生那根K的指标值；'
+      '同时记 confirmX 供审计但不参与取值。\n'
+      '统计：数值型给样本/非空率/平均/中位/标准差/最小/最大/P25/P75/众数（分桶近似）；'
+      '类别型给样本/精确众数/众数占比；空样本一律「—」，不补0、不前向填充。',
+    );
   }
 
   /// 方案B：Flutter 彻底改层号（Rust structure 0 起编；连线族 kn==displayKn）。

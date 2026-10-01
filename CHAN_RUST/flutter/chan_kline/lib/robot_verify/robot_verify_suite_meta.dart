@@ -16,6 +16,10 @@ const Map<String, RobotVerifySuiteMeta> kRobotVerifySuiteMetas = {
     id: 'indicator_search_opt_20260930',
     continuousStepFreeze: true,
   ),
+  'jiyou_keypoint_20261001': RobotVerifySuiteMeta(
+    id: 'jiyou_keypoint_20261001',
+    continuousStepFreeze: true,
+  ),
 };
 
 RobotVerifySuiteMeta? metaForSuite(String suiteId) =>

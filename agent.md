@@ -49,10 +49,24 @@ powershell -NoProfile -File CHAN_RUST/scripts/robot_verify_agent_finish.ps1 -NoC
 | suiteId | 用途 | 连续单步冻结对拍 |
 |---------|------|------------------|
 | `indicator_search_opt_20260930` | 寻优枚举 2026-09-30 批次 | **是** |
+| `jiyou_keypoint_20261001` | **计优**（关键点位指标统计）2026-10-01 批次 | **是** |
 
 - 注册表：`lib/robot_verify/robot_verify_registry.dart`
 - 能力开关：`lib/robot_verify/robot_verify_suite_meta.dart`（`continuousStepFreeze: true` 时自动挂载 `continuous_step_freeze` 阶段）
 - 对拍实现（**已保存、可单独调用**）：`lib/robot_verify/continuous_step_verify.dart` → `runContinuousStepFreezePhase`
+- 计优套件实现（**已保存、可单独调用**）：`lib/robot_verify/suites/jiyou_keypoint_20261001.dart` → `runJiyouKeyPointInProcess`
+
+### 计优套件的三阶段（`jiyou_keypoint_20261001`）
+
+| 阶段 | id | 验什么 |
+|------|----|--------|
+| 1 | `flutter_test_jiyou` | `flutter test test/jiyou/`（55 例：统计算子 / 关键点位收集 / 编排 / UI 面板与对话框） |
+| 2 | `inprocess_jiyou_keypoint` | 002003 1m 连续单步冻结 → 建冻结账 → 收集转折点 → 出统计表；14 项断言（点位去重、只收已确认、分组非空、数值/类别分流、均值夹在最小最大、中位数夹在四分位、众数命中 ≤ 样本数、同输入重跑逐字节一致、JSON/TSV 可序列化） |
+| 3 | `continuous_step_freeze` | 002003 1m + 分笔 连续单步 vs 走完瘦包 对拍（自动挂载） |
+
+无 `a_Data/002003` 时阶段 2/3 `skipped`（`skipReason: no_verify_data`），总评仍可通过。
+
+**计优口径（验收时按这个判）**：关键点位 = 各级别连线**已确认冻结**的转折点（顶/底）；取值 = **转折极点 K 那一行**的指标冻结值（读 `BarFeatureLookup.byIdx[poleX]`，与十字线/ML 同源），`confirmX` 只作审计不参与取值；分组 = 级别 × 顶/底 + 全部汇总；数值型给 均值/中位/标准差/最小/最大/P25/P75/众数（分桶近似），类别型给精确众数 + 占比；空样本一律「—」不补 0。
 
 ### 连续单步验收：含义与是否「阉割」
 
