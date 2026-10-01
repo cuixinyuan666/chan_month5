@@ -3,6 +3,8 @@ __pycache__
 *-checkpoint.ipynb
 *.vscode
 *.log
+*.log.err
+CHAN_RUST/flutter/chan_kline/build_rust_run.log
 *.db
 *.gitignore
 config.yaml

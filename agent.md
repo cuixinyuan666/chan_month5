@@ -56,17 +56,20 @@ powershell -NoProfile -File CHAN_RUST/scripts/robot_verify_agent_finish.ps1 -NoC
 - 对拍实现（**已保存、可单独调用**）：`lib/robot_verify/continuous_step_verify.dart` → `runContinuousStepFreezePhase`
 - 计优套件实现（**已保存、可单独调用**）：`lib/robot_verify/suites/jiyou_keypoint_20261001.dart` → `runJiyouKeyPointInProcess`
 
-### 计优套件的三阶段（`jiyou_keypoint_20261001`）
+### 计优套件的四个阶段（`jiyou_keypoint_20261001`）
 
 | 阶段 | id | 验什么 |
 |------|----|--------|
-| 1 | `flutter_test_jiyou` | `flutter test test/jiyou/`（55 例：统计算子 / 关键点位收集 / 编排 / UI 面板与对话框） |
-| 2 | `inprocess_jiyou_keypoint` | 002003 1m 连续单步冻结 → 建冻结账 → 收集转折点 → 出统计表；14 项断言（点位去重、只收已确认、分组非空、数值/类别分流、均值夹在最小最大、中位数夹在四分位、众数命中 ≤ 样本数、同输入重跑逐字节一致、JSON/TSV 可序列化） |
-| 3 | `continuous_step_freeze` | 002003 1m + 分笔 连续单步 vs 走完瘦包 对拍（自动挂载） |
+| 1 | `flutter_test_jiyou` | `flutter test test/jiyou/`（79 例：统计算子 / 关键点位收集 / 编排落盘 / 门控·诊断·差异度·复现参数 / UI 面板与对话框） |
+| 2 | `inprocess_jiyou_keypoint` | 002003 1m 连续单步 → 建冻结账 → 收转折点 → 出表；15 项断言（点位去重、只收已确认、分组非空、均值夹在最小最大、中位数夹在四分位、众数命中 ≤ 样本数、同输入重跑逐字节一致、JSON/TSV 可序列化） |
+| 3 | **`jiyou_contrast_walk`** | **机器人自己连续单步走到末根** → 收点 → 出表 → 顶底差异度；断言「每步只喂 1 根且步数 = K0 总根数」（`StepFreezeWalkTrace.isOneByOne`，从根上排除「一次性喂满再算」）、差异度降序单调、与手工重算对拍；`details.topContrast` 输出 Top-10 差异清单 |
+| 4 | `continuous_step_freeze` | 002003 1m + 分笔 连续单步 vs 走完瘦包 对拍（自动挂载） |
 
-无 `a_Data/002003` 时阶段 2/3 `skipped`（`skipReason: no_verify_data`），总评仍可通过。
+无 `a_Data/002003` 时阶段 2/3/4 `skipped`（`skipReason: no_verify_data`），总评仍可通过。
 
-**计优口径（验收时按这个判）**：关键点位 = 各级别连线**已确认冻结**的转折点（顶/底）；取值 = **转折极点 K 那一行**的指标冻结值（读 `BarFeatureLookup.byIdx[poleX]`，与十字线/ML 同源），`confirmX` 只作审计不参与取值；分组 = 级别 × 顶/底 + 全部汇总；数值型给 均值/中位/标准差/最小/最大/P25/P75/众数（分桶近似），类别型给精确众数 + 占比；空样本一律「—」不补 0。
+**阶段 3 为什么存在**：原先「冷启动连续单步走到末根 K → 点计优 → 看顶底差异有没有洞察」只能靠人眼，且规定不许用「一键跳末」代替。现在这条由机器人自己跑完：`StepFreezeParityDriver.walkWithTrace` 在原本的逐根循环里留下轨迹（纯记录，不改任何计算语义），用它证明确实是逐根。**但「有没有洞察」是主观判断、写不成断言** —— 所以只把 Top-N 差异清单原样输出到 JSON，由人看报告判读；机器人负责证明链路正确（逐根走完 → 账是逐根冻的 → 面板第一行确实是差异最大的），不假装能理解洞察。
+
+**计优口径（验收时按这个判）**：关键点位 = 各级别连线**已确认冻结**的转折点（顶/底）；取值 = **转折极点 K 那一行**的指标冻结值（读 `BarFeatureLookup.byIdx[poleX]`，与十字线/ML 同源），`confirmX` 只作审计不参与取值；分组 = 级别 × 顶/底 + 全部汇总；数值型给 均值/中位/标准差/最小/最大/P25/P75/众数（分桶近似，**桶命中占比低于阈值即判「无显著众数」**），类别型给精确众数 + 占比；空样本一律「—」不补 0；默认分组样本下限 3；面板默认按**顶底差异度** `|顶均值−底均值| / RMS(两组标准差)` 降序。
 
 ### 连续单步验收：含义与是否「阉割」
 
