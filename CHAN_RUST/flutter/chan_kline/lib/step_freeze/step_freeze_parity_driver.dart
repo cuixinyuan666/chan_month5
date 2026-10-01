@@ -47,6 +47,27 @@ class StepFreezeParityDriver {
     );
   }
 
+  /// 只连续单步路径，**额外留下每一步喂进去几根 K 的轨迹**。
+  ///
+  /// 用途：让机器人验证能证明「真的是一根一根走到末根」，而不是一次性喂满再补算 ——
+  /// 轨迹若每次只 +1、长度又等于 K0 总根数，就排除了「先喂满再算」的可能。
+  /// **不改变任何计算语义**，只是把循环里已有的两个计数记下来。
+  StepFreezeWalkTrace walkWithTrace(List<KlineBar> bars) {
+    final fed = <int>[];
+    final featLen = <int>[];
+    final out = _drive(bars, slimMiddle: false, onStepTrace: (n, f) {
+      fed.add(n);
+      featLen.add(f);
+    });
+    return StepFreezeWalkTrace(
+      fedCounts: fed,
+      barFeatureCounts: featLen,
+      totalBars: bars.length,
+      lastBundle: out.lastBundle,
+      state: out.state,
+    );
+  }
+
   StepFreezeParityResult run(List<KlineBar> bars) {
     final step = _drive(bars, slimMiddle: false);
     final run = _drive(bars, slimMiddle: true);
@@ -63,7 +84,11 @@ class StepFreezeParityDriver {
     );
   }
 
-  _RunOut _drive(List<KlineBar> bars, {required bool slimMiddle}) {
+  _RunOut _drive(
+    List<KlineBar> bars, {
+    required bool slimMiddle,
+    void Function(int fed, int barFeatures)? onStepTrace,
+  }) {
     final sess = ChanPipelineSession.create(
       preferDelta: preferDelta,
       truncationCheck: truncationCheck,
@@ -91,6 +116,7 @@ class StepFreezeParityDriver {
         copyForPaint: false,
         ingestChip: true,
       );
+      onStepTrace?.call(growing.length, last.barFeatures.length);
     }
     final midSnap = sess.cache.snapshotAt(bars[mid].idx);
     final midSeg = midSnap == null ? -1 : _segN(midSnap);
@@ -119,6 +145,48 @@ class StepFreezeAccumulateResult {
   final StepFreezeSessionState state;
   final KlineCombineBundle lastBundle;
   final List<KlineBar> bars;
+}
+
+/// 连续单步轨迹：每一步喂进去几根 K、该步之后冻结账里已有几根 barFeatures。
+class StepFreezeWalkTrace {
+  const StepFreezeWalkTrace({
+    required this.fedCounts,
+    required this.barFeatureCounts,
+    required this.totalBars,
+    required this.lastBundle,
+    required this.state,
+  });
+
+  final List<int> fedCounts;
+
+  /// 与 [fedCounts] 等长：每步之后累计的 barFeatures 根数。
+  final List<int> barFeatureCounts;
+
+  final int totalBars;
+  final KlineCombineBundle lastBundle;
+  final StepFreezeSessionState state;
+
+  /// 步数（每根 K 走一步）。
+  int get steps => fedCounts.length;
+
+  /// 轨迹是否「每步只 +1」——排除「一次性喂满再算」的关键证据。
+  bool get isOneByOne {
+    if (fedCounts.isEmpty) return false;
+    if (fedCounts.first != 1) return false;
+    for (var i = 1; i < fedCounts.length; i++) {
+      if (fedCounts[i] != fedCounts[i - 1] + 1) return false;
+    }
+    return fedCounts.last == totalBars;
+  }
+
+  /// barFeatures 是否同步一步一根地长（逐 K 冻结的又一佐证）。
+  bool get featuresGrowOneByOne {
+    if (barFeatureCounts.length != fedCounts.length) return false;
+    for (var i = 0; i < barFeatureCounts.length; i++) {
+      if (barFeatureCounts[i] != fedCounts[i]) return false;
+    }
+    return true;
+  }
 }
 
 class _RunOut {

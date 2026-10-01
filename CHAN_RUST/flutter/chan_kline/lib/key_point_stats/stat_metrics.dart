@@ -47,8 +47,15 @@ class StatSummary {
   /// 类别众数（精确值）。
   final String? modeLabel;
 
-  /// 众数占比（0..1）。
+  /// 类别众数占比（0..1）。
   final double? modeShare;
+
+  /// 数值型众数桶命中数占样本数的比例（0..1）；类别型同义。
+  ///
+  /// 这是**显著性**的唯一判据：浮点指标的众数本质是分桶近似，当占比过低
+  /// （例如 62 个转折点里只有 1 个落进同一桶），这个「众数」等于噪声冒充信息，
+  /// 展示层应当改显「无显著众数」而不是照样画一个数字。
+  double? get modeShareRatio => modeShare;
 
   const StatSummary({
     required this.metricKey,
@@ -90,6 +97,7 @@ class StatSummary {
           'p75': p75,
           'mode': mode,
           'mode_count': modeCount,
+          'mode_share': modeShare,
         } else ...{
           'mode_label': modeLabel,
           'mode_share': modeShare,
@@ -208,6 +216,7 @@ StatSummary numericStat({
     p75: statPercentile(values, 0.75),
     mode: mode.value,
     modeCount: mode.count,
+    modeShare: values.isEmpty ? null : mode.count / values.length,
   );
 }
 

@@ -2831,6 +2831,12 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
         maxKn: maxKn,
         k0Confirms: _k0ConfirmSignals,
         k0Lines: _k0Lines,
+        // 复现参数：截断开关会改转折点位置；数学指标/筹码参数决定每格的值
+        truncationCheck: _truncationCheck,
+        maxBsClass: _maxBsClass,
+        mathConfig: _mathIndicatorConfig,
+        chipBucketStep: _chipConfig.bucketStep,
+        peakRankMode: _chipConfig.peakRankConfig.schemeId,
       ),
     );
     if (!mounted) return;

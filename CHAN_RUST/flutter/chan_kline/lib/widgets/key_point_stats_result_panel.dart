@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 
+import '../key_point_stats/key_point_stat_diagnostics.dart';
 import '../key_point_stats/key_point_stat_runner.dart';
 import '../key_point_stats/stat_metrics.dart';
 
 enum KeyPointStatSort {
+  /// 顶底差异度（默认）：把「哪些指标在转折顶上最高、底下最低」放到第一屏。
+  contrast,
   name,
   samples,
   mean,
@@ -29,16 +32,34 @@ class KeyPointStatsResultPanel extends StatefulWidget {
 }
 
 class _KeyPointStatsResultPanelState extends State<KeyPointStatsResultPanel> {
-  KeyPointStatSort _sort = KeyPointStatSort.name;
-  bool _ascending = true;
+  /// 默认按顶底差异度排序 —— 这是计优相对寻优唯一不可替代的价值。
+  KeyPointStatSort _sort = KeyPointStatSort.contrast;
+  bool _ascending = false;
   StatValueKind? _kindFilter;
+
+  late final KeyPointStatDiagnostics _diag =
+      KeyPointStatDiagnostics.of(widget.result);
 
   List<StatSummary> _rows(KeyPointStatGroup g) {
     final list = g.stats
         .where((e) => _kindFilter == null || e.kind == _kindFilter)
         .toList();
+    final lv = widget.result.levelOfGroup(g.groupKey);
+    final contrastByKey = {
+      for (final c in widget.result.contrasts)
+        if (c.level == lv) c.metricKey: c
+    };
+
     int cmp(StatSummary a, StatSummary b) {
       switch (_sort) {
+        case KeyPointStatSort.contrast:
+          final ca = contrastByKey[a.metricKey]?.contrast;
+          final cb = contrastByKey[b.metricKey]?.contrast;
+          // 无差异度的排到末尾（保持稳定序，避免“没有的”挤走“有的”）
+          if (ca == null && cb == null) return a.labelCn.compareTo(b.labelCn);
+          if (ca == null) return 1;
+          if (cb == null) return -1;
+          return ca.compareTo(cb);
         case KeyPointStatSort.name:
           return a.labelCn.compareTo(b.labelCn);
         case KeyPointStatSort.samples:
@@ -120,6 +141,18 @@ class _KeyPointStatsResultPanelState extends State<KeyPointStatsResultPanel> {
               '找不到极值 ${r.collect.skippedNoPole}',
               style: TextStyle(fontSize: 10, color: Colors.grey.shade600),
             ),
+          if (_diag.toDisplayLine() != null) ...[
+            const SizedBox(height: 4),
+            Text(
+              _diag.toDisplayLine()!,
+              style: TextStyle(
+                fontSize: 10,
+                height: 1.3,
+                color: _diag.hasRisk ? Colors.brown.shade800 : Colors.grey.shade700,
+                fontWeight: _diag.hasRisk ? FontWeight.w600 : FontWeight.normal,
+              ),
+            ),
+          ],
           const SizedBox(height: 4),
           Row(
             children: [
@@ -183,6 +216,20 @@ class _KeyPointStatsResultPanelState extends State<KeyPointStatsResultPanel> {
   }
 static const List<int> _flexes = [4, 1, 1, 2, 2, 2, 2, 2, 2];
 
+  /// 众数列：数值型未达显著性阈值时显「无显著众数」，不拿噪声冒充信息。
+  String _modeText(StatSummary s) {
+    if (s.kind == StatValueKind.categorical) {
+      return '${s.modeLabel ?? '—'} (${s.modeCount})';
+    }
+    if (s.mode == null) return '—';
+    final share = s.modeShare ?? 0;
+    final thr = widget.result.settings.modeMinShare;
+    if (share < thr) {
+      return '无显著众数(${(share * 100).round()}%)';
+    }
+    return '${_num(s.mode)} (${s.modeCount})';
+  }
+
   Widget _cell(String label, KeyPointStatSort? sort, {int index = 0}) {
     final active = sort != null && _sort == sort;
     final arrow = !active ? '' : (_ascending ? ' ↑' : ' ↓');
@@ -213,7 +260,7 @@ static const List<int> _flexes = [4, 1, 1, 2, 2, 2, 2, 2, 2];
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          _cell('指标', KeyPointStatSort.name, index: 0),
+          _cell('指标', KeyPointStatSort.contrast, index: 0),
           _cell('样本', KeyPointStatSort.samples, index: 1),
           _cell('非空', null, index: 2),
           _cell('平均数', KeyPointStatSort.mean, index: 3),
@@ -232,9 +279,7 @@ static const List<int> _flexes = [4, 1, 1, 2, 2, 2, 2, 2, 2];
     const nameStyle = TextStyle(fontSize: 11, height: 1.25);
     const valStyle = TextStyle(fontSize: 11, height: 1.25);
 
-    final modeText = isNum
-        ? '${_num(s.mode)} (${s.modeCount})'
-        : '${s.modeLabel ?? '—'} (${s.modeCount})';
+    final modeText = _modeText(s);
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),

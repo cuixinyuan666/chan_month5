@@ -51,6 +51,11 @@ KeyPoint _kp(int level, String fx, int poleX, int confirmX) => KeyPoint(
       confirmX: confirmX,
       source: 'test',
     );
+/// 本文件夹具每侧只有 2 个转折点，而产品默认 `minPoints=3`（防止 n=2 的
+/// 均值/标准差误导）。这里显式降到 1，好让这些用例专心验「取值口径 /
+/// 分流 / 落盘」；默认门槛本身由另一条用例单独钉住。
+const KeyPointStatSettings _base = KeyPointStatSettings(minPoints: 1);
+
 void main() {
   // 4 个转折点；confirmX 故意与 poleX 不同且值不同 —— 用来证明「只读极点 K」。
   final lookup = BarFeatureLookup.fromCached(
@@ -78,11 +83,11 @@ void main() {
   KeyPointStatResult runWith([KeyPointStatSettings? cfg]) => KeyPointStatRunner.run(
         lookup: lookup,
         collect: collect,
-        settings: cfg ?? const KeyPointStatSettings(),
+        settings: cfg ?? _base,
       );
 
   group('分组', () {
-    test('默认按级别 × 顶/底 分组，外加全部汇总', () {
+    test('按级别 × 顶/底 分组，外加全部汇总', () {
       final r = runWith();
       expect(
         r.groups.map((e) => e.groupKey).toList(),
@@ -92,6 +97,21 @@ void main() {
       expect(r.groups[0].pointCount, 2);
       expect(r.groups[2].groupLabel, '全部转折点');
       expect(r.groups[2].pointCount, 4);
+    });
+
+    test('默认样本下限是 3：2 个点的分组会被过滤掉（防止 n=2 误导）', () {
+      final r = KeyPointStatRunner.run(
+        lookup: lookup,
+        collect: collect,
+        settings: const KeyPointStatSettings(),
+      );
+      // 每侧只有 2 个点 < 3 → 顶/底两张表都不出，只剩 4 个点的汇总表
+      expect(r.groups.map((e) => e.groupKey).toList(), ['ALL']);
+      expect(
+        const KeyPointStatSettings().minPoints,
+        3,
+        reason: '默认值不得被改回 1',
+      );
     });
 
     test('关闭分组开关 → 每级顶底合并成一张表', () {
@@ -110,7 +130,7 @@ void main() {
       final r = KeyPointStatRunner.run(
         lookup: lookup,
         collect: const KeyPointCollectResult(keyPoints: []),
-        settings: const KeyPointStatSettings(),
+        settings: _base,
       );
       expect(r.groups, isEmpty);
       expect(r.metricCount, 0);

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../key_point_stats/key_point_collect.dart';
+import '../key_point_stats/key_point_stat_align.dart';
 import '../key_point_stats/key_point_stat_export.dart';
 import '../key_point_stats/key_point_stat_runner.dart';
 import '../models/bar_feature_lookup.dart';
@@ -8,6 +9,7 @@ import '../models/k0_confirm_signal.dart';
 import '../models/k0_line.dart';
 import '../models/kline_bar.dart';
 import '../models/level_models.dart';
+import '../models/math_indicator_config.dart';
 import '../settings/key_point_stats_settings_store.dart';
 
 import 'key_point_stats_result_panel.dart';
@@ -29,6 +31,11 @@ class KeyPointStatsDialog extends StatefulWidget {
     required this.maxKn,
     this.k0Confirms = const [],
     this.k0Lines = const [],
+    this.truncationCheck = true,
+    this.maxBsClass = 9,
+    this.mathConfig = const MathIndicatorConfig(),
+    this.chipBucketStep = 0.01,
+    this.peakRankMode = 'spatial',
     /// 仅供机器人验证的 Widget 测试注入：直接给定统计结果，跳过真跑。
     this.resultOverride,
   });
@@ -43,6 +50,14 @@ class KeyPointStatsDialog extends StatefulWidget {
   final int maxKn;
   final List<K0ConfirmSignal> k0Confirms;
   final List<K0Line> k0Lines;
+
+  /// 复现参数用：截断开关会改转折点位置，必须随表一起记。
+  final bool truncationCheck;
+
+  final int maxBsClass;
+  final MathIndicatorConfig mathConfig;
+  final double chipBucketStep;
+  final String peakRankMode;
   final KeyPointStatResult? resultOverride;
 
   @override
@@ -106,6 +121,20 @@ class _KeyPointStatsDialogState extends State<KeyPointStatsDialog> {
           endText: widget.endText,
           barCount: widget.bars.length,
           maxKn: widget.maxKn,
+          align: KeyPointStatAlign(
+            code: widget.code,
+            period: widget.period,
+            beginText: widget.beginText,
+            endText: widget.endText,
+            barCount: widget.bars.length,
+            asOf: _asOf(),
+            maxKn: widget.maxKn,
+            truncationCheck: widget.truncationCheck,
+            maxBsClass: widget.maxBsClass,
+            mathConfig: widget.mathConfig,
+            bucketStep: widget.chipBucketStep,
+            peakRankMode: widget.peakRankMode,
+          ),
         );
       }
 
@@ -287,6 +316,24 @@ Future<KeyPointStatSettings?> showKeyPointStatsSettingsSheet(
                 label: '${cfg.modeDigits}',
                 onChanged: (v) =>
                     setLocal(() => cfg = cfg.copyWith(modeDigits: v.round())),
+              ),
+              ListTile(
+                title: Text(
+                  '众数显著性阈值：${(cfg.modeMinShare * 100).round()}%',
+                ),
+                subtitle: const Text(
+                  '数值型众数是分桶近似；桶命中占比低于此值就标「无显著众数」，'
+                  '不再拿一个只出现过一次的值冒充众数（类别型众数不受影响，它本来就是精确的）',
+                ),
+              ),
+              Slider(
+                value: cfg.modeMinShare,
+                min: 0,
+                max: 1,
+                divisions: 10,
+                label: '${(cfg.modeMinShare * 100).round()}%',
+                onChanged: (v) =>
+                    setLocal(() => cfg = cfg.copyWith(modeMinShare: v)),
               ),
               ListTile(
                 title: Text('分组样本下限：${cfg.minPoints}'),

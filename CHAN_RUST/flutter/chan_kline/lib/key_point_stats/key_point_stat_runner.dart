@@ -5,6 +5,8 @@ import '../settings/key_point_stats_settings_store.dart';
 
 import 'key_point.dart';
 import 'key_point_collect.dart';
+import 'key_point_contrast.dart';
+import 'key_point_stat_align.dart';
 import 'stat_metrics.dart';
 
 /// 一张统计表 = 一个分组（级别 ×顶/底，或某级顶底合并，或全部汇总）。
@@ -49,9 +51,17 @@ class KeyPointStatResult {
   final int barCount;
   final int maxKn;
   final KeyPointStatSettings settings;
+
+  /// 复现参数（点位口径 + 指标参数两层）。
+  final KeyPointStatAlign align;
+
   final KeyPointCollectResult collect;
   final List<KeyPoint> keyPoints;
   final List<KeyPointStatGroup> groups;
+
+  /// 全部顶底差异度，按差异度降序（跨级别混排：差异越大的越靠前）。
+  final List<KeyPointContrast> contrasts;
+
   final int elapsedMs;
 
   const KeyPointStatResult({
@@ -63,23 +73,47 @@ class KeyPointStatResult {
     required this.barCount,
     required this.maxKn,
     required this.settings,
+    required this.align,
     required this.collect,
     required this.keyPoints,
     required this.groups,
+    required this.contrasts,
     required this.elapsedMs,
   });
+
+  /// 取某级别的顶底差异清单（降序）。
+  List<KeyPointContrast> contrastsForLevel(int level) {
+    final out = <KeyPointContrast>[];
+    for (final c in contrasts) {
+      if (c.level == level) out.add(c);
+    }
+    return out;
+  }
+
+  /// 该分组所属级别（汇总组 ALL 返回 -1）。
+  int levelOfGroup(String groupKey) {
+    if (groupKey == 'ALL' || !groupKey.startsWith('L')) return -1;
+    final us = groupKey.indexOf('_');
+    if (us <= 1) return -1;
+    return int.tryParse(groupKey.substring(1, us)) ?? -1;
+  }
 
   int get metricCount =>
       groups.isEmpty ? 0 : groups.first.stats.length;
 
   Duration get elapsed => Duration(milliseconds: elapsedMs);
 
-  /// 面板顶部口径行：白话写清「事后统计 + 极点K取值 + 桶宽」。
+  /// 面板顶部口径行：**复现参数两行** + 统计口径 + 事后统计声明。
+  ///
+  /// 前两行是复现参数（点位口径 / 指标参数），缺了就无法解释这张表 ——
+  /// 截断开关会改转折点位置，布林 N 会改每格的值；
+  /// 后两行是统计口径与「事后统计」声明，防止把数值众数当精确值、把转折点当事前可知。
   String get headerLine =>
-      '计优口径：关键点位=各级别连线转折点（顶/底）；取值=转折极点 K 那一根的指标冻结值'
+      '${align.headerLines}\n'
+      '统计口径：关键点位=各级别连线转折点（顶/底）；取值=转折极点 K 那一根的指标冻结值'
       '（主图逐K冻结账，与十字线/ML同源）；${settings.replayLine}。\n'
       '这是事后统计（AGENTS.md「当下性」例外）：转折点是回头认定的，'
-      '但每个读到的值仍只用该 K 及之前的数据。数值众数为分桶近似，类别众数才是精确值。';
+      '但读到的每个值仍只用该 K 及之前的数据。数值众数为分桶近似，类别众数才是精确值。';
 
   Map<String, dynamic> toJson() => {
         'type': 'key_point_stat_report',
@@ -92,9 +126,11 @@ class KeyPointStatResult {
         'max_kn': maxKn,
         'elapsed_ms': elapsedMs,
         'settings': settings.toJson(),
+        'align': align.toJson(),
         'collect': collect.toJson(),
         'key_points': keyPoints.map((e) => e.toJson()).toList(),
         'groups': groups.map((e) => e.toJson()).toList(),
+        'contrasts': [for (final c in contrasts) c.toJson()],
       };
 }
 
@@ -130,9 +166,20 @@ class KeyPointStatRunner {
     String endText = '',
     int barCount = 0,
     int maxKn = 0,
+    KeyPointStatAlign? align,
   }) {
     final started = DateTime.now();
     final points = collect.keyPoints;
+    final alignSnapshot = align ??
+        KeyPointStatAlign(
+          code: code,
+          period: period,
+          beginText: beginText,
+          endText: endText,
+          barCount: barCount > 0 ? barCount : points.length,
+          asOf: points.isEmpty ? -1 : points.last.poleX,
+          maxKn: maxKn,
+        );
 
     // 分组：级别×顶/底（可关），外加「全部转折点」汇总。
     final groups = <KeyPointStatGroup>[];
@@ -174,6 +221,31 @@ class KeyPointStatRunner {
       ));
     }
 
+    // 顶底差异度：逐级配对「顶组」与「底组」，只算两侧都达样本下限的指标。
+    // 这是计优相对寻优唯一不可替代的价值 —— 把顶/底的差别放到第一屏。
+    final contrasts = <KeyPointContrast>[];
+    if (settings.splitTopBottom) {
+      for (final lv in levels) {
+        final top = groups.where((g) => g.groupKey == 'L${lv}_TOP').toList();
+        final bottom =
+            groups.where((g) => g.groupKey == 'L${lv}_BOTTOM').toList();
+        if (top.isEmpty || bottom.isEmpty) continue;
+        contrasts.addAll(computeContrasts(
+          topStats: top.first.stats,
+          bottomStats: bottom.first.stats,
+          level: lv,
+          minPoints: settings.minPoints,
+        ));
+      }
+      contrasts.sort((a, b) {
+        final c = b.contrast.compareTo(a.contrast);
+        if (c != 0) return c;
+        final l = a.labelCn.compareTo(b.labelCn);
+        if (l != 0) return l;
+        return a.metricKey.compareTo(b.metricKey);
+      });
+    }
+
     return KeyPointStatResult(
       finishedAt: DateTime.now(),
       code: code,
@@ -183,9 +255,11 @@ class KeyPointStatRunner {
       barCount: barCount > 0 ? barCount : points.length,
       maxKn: maxKn,
       settings: settings,
+      align: alignSnapshot,
       collect: collect,
       keyPoints: points,
       groups: groups,
+      contrasts: contrasts,
       elapsedMs: DateTime.now().difference(started).inMilliseconds,
     );
   }

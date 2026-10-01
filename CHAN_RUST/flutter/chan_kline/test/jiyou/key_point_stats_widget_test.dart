@@ -44,7 +44,7 @@ List<KlineBar> _bars(int n) => [
         ),
     ];
 
-Map<String, dynamic> _row(int idx, {required String fx}) => {
+Map<String, dynamic> _row(int idx, {required String fx, double? rsi}) => {
       'idx': idx,
       'time_ms': idx * 60000,
       'time_text': '2004/07/19 09:30:00',
@@ -56,38 +56,34 @@ Map<String, dynamic> _row(int idx, {required String fx}) => {
       'volume': 1000 + idx.toDouble(),
       'combine_fx': fx,
       'sub': <String, dynamic>{
-        'rsi_0': 40.0 + idx,
+        'rsi_0': rsi ?? (40.0 + idx),
         'fractal_judgment_0': fx,
       },
     };
 
 KeyPointStatResult _result({int topCount = 3, int bottomCount = 3}) {
-  final pts = <KeyPoint>[
-    for (var i = 0; i < topCount; i++)
-      KeyPoint(
-        level: 1,
-        fx: 'TOP',
-        poleX: i * 3,
-        confirmX: i * 3 + 1,
-        source: 't',
-      ),
-    for (var i = 0; i < bottomCount; i++)
-      KeyPoint(
+  final pts = <KeyPoint>[];
+  final byIdx = <int, Map<String, dynamic>>{};
+  var i = 0;
+  for (var k = 0; k < topCount; k++) {
+    pts.add(KeyPoint(
+        level: 1, fx: 'TOP', poleX: i * 2, confirmX: i * 2 + 1, source: 't'));
+    // 顶 RSI 远高于底 → 差异度最大，应排在第一行
+    byIdx[i * 2] = _row(i * 2, fx: 'TOP', rsi: 80.0 + k);
+    i++;
+  }
+  for (var k = 0; k < bottomCount; k++) {
+    pts.add(KeyPoint(
         level: 1,
         fx: 'BOTTOM',
-        poleX: i * 3 + 1,
-        confirmX: i * 3 + 2,
-        source: 't',
-      ),
-  ];
-  final lookup = BarFeatureLookup.fromCached(
-    byIdx: {
-      for (var i = 0; i < topCount + bottomCount; i++)
-        i: _row(i, fx: i.isEven ? 'TOP' : 'BOTTOM'),
-    },
-  );
+        poleX: i * 2,
+        confirmX: i * 2 + 1,
+        source: 't'));
+    byIdx[i * 2] = _row(i * 2, fx: 'BOTTOM', rsi: 20.0 + k);
+    i++;
+  }
   return KeyPointStatRunner.run(
-    lookup: lookup,
+    lookup: BarFeatureLookup.fromCached(byIdx: byIdx),
     collect: KeyPointCollectResult(keyPoints: pts),
     settings: const KeyPointStatSettings(),
     code: '002003',
@@ -177,6 +173,37 @@ void main() {
       expect(find.textContaining('关键点位 6 个'), findsWidgets);
       expect(find.textContaining('统计分组 3 张'), findsWidgets);
       expect(find.textContaining('key_point_stats_002003_1m.tsv'), findsWidgets);
+    });
+
+    testWidgets('渲染复现参数两行（点位口径 / 指标参数）', (tester) async {
+      await pumpPanel(tester, _result());
+      expect(find.textContaining('点位口径：'), findsWidgets);
+      expect(find.textContaining('指标参数：'), findsWidgets);
+      expect(find.textContaining('布林20'), findsWidgets);
+      expect(find.textContaining('截断监察'), findsWidgets);
+    });
+
+    testWidgets('渲染计优体检行', (tester) async {
+      await pumpPanel(tester, _result());
+      expect(find.textContaining('计优体检：转折点 6 个'), findsWidgets);
+    });
+
+    testWidgets('默认按顶底差异度排序：第一行是差异最大的指标（RSI）', (tester) async {
+      final r = _result();
+      expect(r.contrasts, isNotEmpty);
+      expect(
+        r.contrasts.first.metricKey,
+        'sub.rsi_0',
+        reason: 'RSI 顶高底低，差异度应最大',
+      );
+      await pumpPanel(tester, r);
+      // 表头「指标」列带 ↓ 箭头（降序）即说明当前按差异排
+      expect(find.textContaining('指标 ↓'), findsWidgets);
+    });
+
+    testWidgets('众数不显著时显示「无显著众数」而不是数字', (tester) async {
+      await pumpPanel(tester, _result());
+      expect(find.textContaining('无显著众数'), findsWidgets);
     });
 
     testWidgets('无转折点时给出中文引导而不是空白表', (tester) async {
