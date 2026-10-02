@@ -5,7 +5,7 @@ use chrono::{Datelike, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Timelike, 
 
 use crate::error::{ChanDataError, Result};
 use crate::kline::{KlineBar, KlinePeriod};
-use crate::tick::{assign_intramute_times, normalize_native, read_tick_file, TickRow};
+use crate::tick::{assign_intramute_times, normalize_native, read_tick_file, TickQuality, TickRow};
 
 /// 默认 a_Data：优先 `chan.py/a_Data`（CHAN_RUST 的上一级），其次 `CHAN_RUST/a_Data`。
 pub fn default_data_root() -> PathBuf {
@@ -161,6 +161,48 @@ pub fn load_klines(
     end_date: &str,
     period: KlinePeriod,
 ) -> Result<Vec<KlineBar>> {
+    Ok(load_klines_with_source(data_root, code, begin_date, end_date, period, TickSource::File)?.bars)
+}
+
+/// 分笔从哪来：file=本地 txt（单测/test 股）；protocol=通达信 7709（APP 默认）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TickSource {
+    File,
+    Protocol,
+}
+
+impl TickSource {
+    pub fn parse(raw: Option<&str>) -> Self {
+        match raw.unwrap_or("").trim().to_ascii_lowercase().as_str() {
+            "protocol" | "tdx" => Self::Protocol,
+            _ => Self::File,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::File => "file",
+            Self::Protocol => "protocol",
+        }
+    }
+}
+
+/// 加载结果：K 线 + 分笔质量（给界面弹窗用）。
+#[derive(Clone, Debug)]
+pub struct LoadKlinesOut {
+    pub bars: Vec<KlineBar>,
+    pub quality: TickQuality,
+}
+
+/// 按数据源加载。test 股即使请求 protocol 也走文件（含 custom.ohlc.csv）。
+pub fn load_klines_with_source(
+    data_root: &Path,
+    code: &str,
+    begin_date: &str,
+    end_date: &str,
+    period: KlinePeriod,
+    source: TickSource,
+) -> Result<LoadKlinesOut> {
     let code_key = folder_from_code(code);
     let begin_dt = parse_datetime_bound(begin_date, BoundKind::Begin)?;
     let end_dt = parse_datetime_bound(end_date, BoundKind::End)?;
@@ -182,30 +224,65 @@ pub fn load_klines(
                 )));
             }
             let _ = period; // 自定义 OHLC 不做周期重采样
-            return Ok(bars);
+            return Ok(LoadKlinesOut {
+                bars,
+                quality: TickQuality {
+                    source: "ohlc".into(),
+                    skip_prompts: true,
+                    ..TickQuality::default()
+                },
+            });
         }
     }
 
-    let folder = data_root.join(&code_key);
-    let b8 = date8_from_datetime(begin_dt);
-    let e8 = date8_from_datetime(end_dt);
-    let paths = list_tick_paths(&folder, &code_key, b8, e8)?;
-    if paths.is_empty() {
-        return Err(ChanDataError::msg(format!(
-            "未找到离线分笔：{folder:?} 区间 {begin_date}~{end_date}"
-        )));
-    }
-    let mut rows = Vec::new();
-    for p in paths {
-        rows.extend(read_tick_file(&p)?);
-    }
-    // 稳定排序：同分钟保留文件行序，便于合成秒
+    let source = if code_key == TEST_STOCK_FOLDER {
+        TickSource::File
+    } else {
+        source
+    };
+
+    let rows = match source {
+        TickSource::File => {
+            let folder = data_root.join(&code_key);
+            let b8 = date8_from_datetime(begin_dt);
+            let e8 = date8_from_datetime(end_dt);
+            let paths = list_tick_paths(&folder, &code_key, b8, e8)?;
+            if paths.is_empty() {
+                return Err(ChanDataError::msg(format!(
+                    "未找到离线分笔：{folder:?} 区间 {begin_date}~{end_date}"
+                )));
+            }
+            let mut rows = Vec::new();
+            for p in paths {
+                rows.extend(read_tick_file(&p)?);
+            }
+            rows
+        }
+        TickSource::Protocol => crate::tdx::load_protocol_ticks(data_root, &code_key, begin_dt, end_dt)?,
+    };
+
+    let (bars, used_rows) = bars_from_tick_rows(rows, begin_dt, end_dt, period, begin_date, end_date)?;
+    Ok(LoadKlinesOut {
+        bars,
+        quality: TickQuality::from_rows(&used_rows, source.as_str()),
+    })
+}
+
+/// 分笔 → 排序/滤区间/合成秒 → 周期 K → 筹码 bins。
+fn bars_from_tick_rows(
+    mut rows: Vec<TickRow>,
+    begin_dt: NaiveDateTime,
+    end_dt: NaiveDateTime,
+    period: KlinePeriod,
+    begin_date: &str,
+    end_date: &str,
+) -> Result<(Vec<KlineBar>, Vec<TickRow>)> {
+    // 稳定排序：同分钟保留文件/协议行序，便于合成秒
     rows.sort_by_key(|r| r.dt);
     let mut rows = normalize_native(rows);
-    // 先按分钟精度滤区间，再合成秒（合成后仍可能被 filter_bars 收紧）
     rows.retain(|r| r.dt >= begin_dt && r.dt <= end_dt);
     if rows.is_empty() {
-        return Err(ChanDataError::msg("分笔文件在日期区间内无有效成交行"));
+        return Err(ChanDataError::msg("所选区间内无有效分笔"));
     }
     assign_intramute_times(&mut rows);
 
@@ -224,7 +301,7 @@ pub fn load_klines(
     }
     // 筹码：分笔价量直加写入 chip_tick_bins（无则前端/profile 走三角兜底）
     crate::chip::enrich_bars_with_chip_tick_bins(&mut bars, &rows, period);
-    Ok(bars)
+    Ok((bars, rows))
 }
 
 /// 校验单根 OHLC：high/low 包住 open/close。
@@ -935,6 +1012,83 @@ mod tests {
         .unwrap();
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].high, 2.0);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_stock_forces_file_even_if_protocol() {
+        let root = std::env::temp_dir().join(format!("chan_ohlc_proto_{}", std::process::id()));
+        let test_dir = root.join("test");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&test_dir).unwrap();
+        let bars = vec![KlineBar {
+            idx: 0,
+            time_ms: 0,
+            time_text: "2026/07/10 09:30:00".into(),
+            open: 1.0,
+            high: 2.0,
+            low: 1.0,
+            close: 2.0,
+            volume: 10.0,
+            amount: 0.0,
+            metrics: Default::default(),
+        }];
+        save_test_ohlc(&root, &bars).unwrap();
+        let out = load_klines_with_source(
+            &root,
+            "test",
+            "2026/07/10 09:00:00",
+            "2026/07/10 10:00:00",
+            KlinePeriod::Day,
+            TickSource::Protocol,
+        )
+        .unwrap();
+        assert_eq!(out.bars.len(), 1);
+        assert!(out.quality.skip_prompts);
+        assert_eq!(out.quality.source, "ohlc");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn protocol_source_uses_tdx_cache_not_adata_txt() {
+        let root = std::env::temp_dir().join(format!("chan_tdx_root_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("002003")).unwrap();
+        // 旧导出 txt 故意写成另一价，协议缓存才是权威
+        std::fs::write(
+            root.join("002003").join("20180110_002003.txt"),
+            " 时间\t价格\t成交\t笔数\n09:30\t1.00\t1\t1\tB\n",
+        )
+        .unwrap();
+        let cache_dir = root.join(".tdx_protocol_cache").join("002003");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        std::fs::write(
+            cache_dir.join("20180110_002003.txt"),
+            "                  20180110 (002003)\n 时间\t    价格\t    成交\t笔数\t\n09:30\t11.5000\t100\t3\tB\n#数据来源:通达信协议\n",
+        )
+        .unwrap();
+        let file_out = load_klines_with_source(
+            &root,
+            "002003",
+            "2018/01/10 09:30:00",
+            "2018/01/10 09:30:59",
+            KlinePeriod::Tick,
+            TickSource::File,
+        )
+        .unwrap();
+        assert!((file_out.bars[0].close - 1.0).abs() < 1e-9);
+        let proto = load_klines_with_source(
+            &root,
+            "002003",
+            "2018/01/10 09:30:00",
+            "2018/01/10 09:30:59",
+            KlinePeriod::Tick,
+            TickSource::Protocol,
+        )
+        .unwrap();
+        assert_eq!(proto.quality.source, "protocol");
+        assert!((proto.bars[0].close - 11.5).abs() < 1e-9);
+        assert!(!proto.quality.zero_tick_count);
         let _ = std::fs::remove_dir_all(&root);
     }
 }

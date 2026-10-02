@@ -8,9 +8,20 @@ class KlineViewport {
   static const double padL = 4;
   /// 右侧几乎不留白：主/副图画到价格数字处，价格标签叠在图上
   static const double padR = 2;
+  /// 桌面主图顶留白
   static const double padT = 28;
+  /// 手机主图「主图」收纳钮行高
+  static const double mainIndicatorToggleBand = 30;
+  /// 主图指标 chip 区最大占位（防多行撑入副图）
+  static const double mainIndicatorChipMaxBand = 56;
+  /// 副图指标 chip 区最大占位（为标记区保底高度）
+  static const double subIndicatorChipMaxBand = 40;
+  /// 副图标记/曲线最小绘制高度（chip 再长也不挤没标记）
+  static const double minSubMarkerPlotH = 52;
   /// 副图顶留白：避开左上角指标名按钮，标记不被盖
   static const double subIndicatorChipBand = 26;
+  /// 副图全关时仍保留的收纳钮占位（主图底 / X 轴上方）
+  static const double subIndicatorEntryBand = 28;
   /// 主图底边距（与副图分隔）
   static const double padB = 4;
   /// 底部 X 轴时间刻度带高度
@@ -152,10 +163,16 @@ class KlineViewport {
       newMin = allXMin;
       newMax = newMin + newSpan;
     }
-    final rightMax = allXMax + newSpan * 2;
-    if (newMax > rightMax) {
-      newMax = rightMax;
-      newMin = newMax - newSpan;
+    // 右侧留白：超出时整体左移视窗，避免 span 变小后 rightMax 收紧把视窗硬拽回、缩放失效
+    final rightLimit = allXMax + newSpan * 2;
+    if (newMax > rightLimit) {
+      final shift = newMax - rightLimit;
+      newMin -= shift;
+      newMax -= shift;
+      if (newMin < allXMin) {
+        newMin = allXMin;
+        newMax = newMin + newSpan;
+      }
     }
 
     viewXMin = newMin;
@@ -166,15 +183,15 @@ class KlineViewport {
     }
   }
 
+  /// 双指/滚轮纵向缩放：factor>1 放大，<1 缩小。
+  void zoomYBy(double factor) {
+    if (!ready || factor <= 0) return;
+    yZoomRatio = (yZoomRatio * factor).clamp(0.2, 20.0);
+  }
+
   /// 滚轮 + Ctrl：纵向缩放。
   void zoomY(bool zoomIn) {
-    if (!ready) return;
-    if (zoomIn) {
-      yZoomRatio *= zoomFactor;
-    } else {
-      yZoomRatio /= zoomFactor;
-    }
-    yZoomRatio = yZoomRatio.clamp(0.2, 20.0);
+    zoomYBy(zoomIn ? zoomFactor : 1 / zoomFactor);
   }
 
   /// 左键拖拽平移：dx/dy 为像素位移。

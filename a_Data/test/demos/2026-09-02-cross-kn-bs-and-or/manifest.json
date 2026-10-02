@@ -1,0 +1,30 @@
+{
+  "id": "2026-09-02-cross-kn-bs-and-or",
+  "title": "策略里一类/二类/N类买卖点可以跨层用 AND 或 OR",
+  "completedAt": "2026-09-02",
+  "agent": "cursor",
+  "isNewFeature": false,
+  "beforeSummary": "买条件、卖条件里，K0 的一类买和 K1 的三类买不能用 AND 或 OR 拼在一起，会提示混层。收盘和 RSI 跨层同样不行。",
+  "afterSummary": "一类、二类、N 类买卖点可以跨层用 AND 或 OR。AND 必须同一根 K 上两边都刚出现；OR 是哪一层出现就出信号。收盘、RSI、分型确认仍然不能把 K0 和 K1 拼在一棵树上。",
+  "verificationPoints": [
+    "002003 默认区间，连续单步，先看副图上 K0、K1 有没有一类或 N 类买卖点",
+    "打开策略回测，买条件添加两行：一层选 K0 一类买，一层选 K1 一类买或三类买，中间选 AND，应能编过、能跑",
+    "同一组改成 OR，两层各自出现时应各出策略买信号（主图策略箭头，不是缠论 1Ba）",
+    "AND 时如果两层点不在同一根 K 上，没有策略买信号是预期，不是坏了",
+    "买条件若改成 K0 一类买 AND K1 RSI，仍应编不过",
+    "历史记录三个按钮还在"
+  ],
+  "keySteps": [0, 80, 200],
+  "defaultStock": {
+    "code": "002003",
+    "period": "1min",
+    "note": "默认区间；先连续单步把多层买卖点走出来，再开策略回测"
+  },
+  "autoLaunchOnStartup": false,
+  "walkthroughSteps": [
+    { "stepIdx": 0, "phase": "both", "caption": "002003 默认区间。先不要跳到末尾，准备一步一步点。" },
+    { "stepIdx": 80, "phase": "before", "caption": "原本：策略里 K0 一类买和 K1 一类买不能 AND，也不能 OR。" },
+    { "stepIdx": 80, "phase": "after", "caption": "这次：走到这里若副图已有多层买卖点，策略里可以跨层 AND 或 OR；AND 要同一根才算。" },
+    { "stepIdx": 200, "phase": "after", "caption": "再往后点：已经出现的缠论买卖点不能消失。策略信号和缠论点是两套标记。" }
+  ]
+}

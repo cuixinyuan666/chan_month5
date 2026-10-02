@@ -1,12 +1,15 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'bridge/chan_bridge.dart';
+import 'data/mobile_data_root.dart';
+import 'ui/mobile/android_shell.dart';
 import 'compute/adjacent_ratio_compute.dart';
 import 'compute/line_slope_compute.dart';
 import 'compute/chip_profile_compute.dart';
@@ -42,12 +45,17 @@ import 'backtest/order_models.dart';
 import 'backtest/signal_event.dart';
 import 'backtest/strategy_config.dart';
 import 'backtest/strategy_trade_round.dart';
+import 'backtest/backtest_step_harness.dart';
 import 'backtest/backtest_workbench.dart';
 import 'backtest/chan_event_store.dart';
 import 'backtest/chart_line_store.dart';
 import 'backtest/chip_peak_store.dart';
+import 'backtest/condition_indicators.dart';
 import 'backtest/divergence_relation_store.dart';
 import 'backtest/zhongshu_object_store.dart';
+import 'app/background_keep_alive.dart';
+import 'settings/interaction_mode_store.dart';
+import 'ui/settings_panel_widgets.dart';
 import 'models/zs_frame.dart';
 import 'models/buy1_frame.dart';
 import 'models/sell1_frame.dart';
@@ -57,6 +65,7 @@ import 'models/buy_n_frame.dart';
 import 'models/sell_n_frame.dart';
 import 'models/bs_verdict_frame.dart';
 import 'models/kline_bar.dart';
+import 'models/tick_quality.dart';
 import 'models/k0_confirm_signal.dart';
 import 'models/bar_crosshair_feature.dart';
 import 'models/bar_feature_lookup.dart';
@@ -71,23 +80,90 @@ import 'models/k1_analysis.dart';
 import 'models/kline_combine_bundle.dart';
 import 'settings/chip_settings_store.dart';
 import 'settings/math_indicator_settings_store.dart';
-import 'settings/task_demo_settings_store.dart';
+import 'settings/indicator_search_last_result_store.dart';
+import 'settings/indicator_search_settings_store.dart';
+import 'widgets/indicator_search_dialog.dart';
+import 'widgets/key_point_stats_dialog.dart';
 import 'models/math_indicator_config.dart';
 import 'models/trend_model_config.dart';
 import 'widgets/datetime_picker_dialog.dart';
 import 'widgets/edge_control_panel.dart';
 import 'widgets/kline_chart.dart';
+import 'widgets/crosshair_tooltip_panel.dart';
+import 'widgets/crosshair_tooltip_bridge.dart';
+import 'widgets/yin_yang_mark.dart';
+import 'widgets/yin_yang_native_overlay.dart';
 import 'widgets/test_ohlc_editor_dialog.dart';
-import 'task_demo/task_demo_compare_page.dart';
-import 'task_demo/task_demo_data_loader.dart';
-import 'task_demo/task_demo_loader.dart';
-import 'task_demo/task_demo_manifest.dart';
-import 'task_demo/task_demo_walkthrough_overlay.dart';
-import 'task_demo/task_demo_walkthrough_step.dart';
 import 'window_work_area.dart';
+import 'robot_verify/robot_verify_app.dart';
+import 'robot_verify/robot_verify_paths.dart';
+import 'step_freeze/step_freeze_merger.dart';
+import 'step_freeze/step_freeze_session_state.dart';
+
+const _robotVerifyDefine = bool.fromEnvironment('ROBOT_VERIFY');
+const _robotVerifySuiteDefine = String.fromEnvironment(
+  'ROBOT_VERIFY_SUITE',
+  defaultValue: 'jiyou_keypoint_20261001',
+);
+const _chanKlineRootDefine = String.fromEnvironment('CHAN_KLINE_ROOT');
+
+bool _robotVerifyEnabled() =>
+    _robotVerifyDefine ||
+    Platform.environment['CHAN_ROBOT_VERIFY'] == '1' ||
+    RobotVerifyPaths.sessionAuthorized(
+      klineRoot: Platform.environment['CHAN_KLINE_ROOT'] ?? _chanKlineRootDefine,
+    );
+
+String _robotVerifySuite() {
+  final fromEnv = Platform.environment['CHAN_ROBOT_VERIFY_SUITE'];
+  if (fromEnv != null && fromEnv.isNotEmpty) return fromEnv;
+  final fromSession = readSuiteIdFromSession(
+    klineRoot: Platform.environment['CHAN_KLINE_ROOT'] ?? _chanKlineRootDefine,
+  );
+  if (fromSession != null && fromSession.isNotEmpty) return fromSession;
+  return _robotVerifySuiteDefine;
+}
+
+String _chanKlineRoot() =>
+    Platform.environment['CHAN_KLINE_ROOT'] ?? _chanKlineRootDefine;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  if (_robotVerifyEnabled()) {
+    final klineRoot = _chanKlineRoot();
+    if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+      await windowManager.ensureInitialized();
+      const opts = WindowOptions(
+        size: Size(480, 420),
+        center: true,
+        title: '机器人验证',
+        titleBarStyle: TitleBarStyle.normal,
+        backgroundColor: Color(0xFF121212),
+      );
+      await windowManager.waitUntilReadyToShow(opts, () async {
+        await windowManager.show();
+        await windowManager.focus();
+      });
+    }
+    runApp(
+      RobotVerifyApp(
+        suiteId: _robotVerifySuite(),
+        klineRoot: klineRoot,
+      ),
+    );
+    return;
+  }
+  if (Platform.isAndroid) {
+    await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    SystemChrome.setSystemUIOverlayStyle(
+      const SystemUiOverlayStyle(
+        statusBarColor: Colors.transparent,
+        statusBarIconBrightness: Brightness.light,
+        systemNavigationBarColor: Color(0xFF121212),
+        systemNavigationBarIconBrightness: Brightness.light,
+      ),
+    );
+  }
   // 方案B：Flutter 层号彻底改（structure 0 起编）
   MsgHistory.instance.appendPlanBLayerRemap();
   // 命名变更追踪：笔/线段 → K0连线/K1连线；中枢/买卖点口径见 appendZSSplitNormalOverSeg
@@ -129,19 +205,26 @@ Future<void> main() async {
   MsgHistory.instance.appendBsOnlineVerdict();
   MsgHistory.instance.appendPipelineStateSession();
   MsgHistory.instance.appendIncrementalLookup();
+  MsgHistory.instance.appendSessionAsOfSnapshot();
   // Kn相邻比例 + Kn步进节奏（节奏已迁主图）
   MsgHistory.instance.appendAdjacentRatioAndStepRhythm();
   MsgHistory.instance.appendStepRhythmToMainAndTipCats();
   MsgHistory.instance.appendStepRhythmHoldBeforeChildReopen();
   // Kn连线斜率副图（全层同构；复用比例出现链）
   MsgHistory.instance.appendKnLineSlope();
-  // 主图 Kn三型平移线 / Kn四型对线
+  // 主图 K{n}三极平行线 / K{n}顶底对弦线
   MsgHistory.instance.appendKnFxExtendLines();
   // 主图 Kn趋势线（段内支撑/压力）
   MsgHistory.instance.appendKnTrendLine();
+  // 主图 K{n}底极贴合线 / K{n}顶极贴合线
+  MsgHistory.instance.appendKnFxPoleSnug();
   // 主图 Kn均线 / Kn通道 + MACD/BOLL/RSI/KDJ/Demark
   MsgHistory.instance.appendKnTrendModel();
   MsgHistory.instance.appendKnMathClassicIndicators();
+  // 主图 Kn回归通道（父层连线绑定；已接入冻结仓/回测 MAIN.Kn.REGRESS.* / 十字读数）
+  MsgHistory.instance.appendKnRegressionChannel();
+  // 主图 Kn唐奇安通道（经典海龟口径；已接入冻结仓/回测 MAIN.Kn.DONCHIAN.* / 十字读数）
+  MsgHistory.instance.appendKnDonchianChannel();
   MsgHistory.instance.appendKnDivergenceIndicators();
   MsgHistory.instance.appendDiverLineSlopeAsciiKey();
   MsgHistory.instance.appendTickK0NativePeriod();
@@ -153,14 +236,18 @@ Future<void> main() async {
   MsgHistory.instance.appendSeedContainTruncation();
   // test 自定义 OHLC：前端编辑 → custom.ohlc.csv 直读上图
   MsgHistory.instance.appendTestCustomOhlc();
-  // 智能体长期记忆：Task Log + test 任务演示前后对比
+  // 智能体长期记忆：Task Log + test 验收口径（a_Data/test）
   MsgHistory.instance.appendAgentLongTermMemory();
-  // 开发演示阶段：启动自动加载最新任务 + 点击下一步步进
-  MsgHistory.instance.appendDevelopmentDemoPhaseLaunch();
   // 确认执行门禁 + 演示白话 + 接任务必读
   MsgHistory.instance.appendAgentConfirmExecuteGate();
   // 桌面：工作区全屏不盖任务栏；tooltip 分隔线贴边框
   MsgHistory.instance.appendDesktopWorkAreaAndTooltipSep();
+  MsgHistory.instance.appendAndroidBundledDataRoot();
+  MsgHistory.instance.appendAndroidMobileLayout();
+  MsgHistory.instance.appendAndroidTouchUiAndBacktestSplit();
+  MsgHistory.instance.appendDualPlatformUiOptimization();
+  MsgHistory.instance.appendTickLoadYinYangAndTooltipPass();
+  MsgHistory.instance.appendTickYinYangFullscreen();
   MsgHistory.instance.appendAuditProbeCopyButton();
   MsgHistory.instance.appendAuditFixBsZsFeature();
   MsgHistory.instance.appendAuditBatch2ProbePeakAsOf();
@@ -213,8 +300,18 @@ Future<void> main() async {
   MsgHistory.instance.appendTradeSignalTable();
   MsgHistory.instance.appendTradeFillPriceMode();
   MsgHistory.instance.appendTradeRoundLabel();
-    MsgHistory.instance.appendTradeCatalogFull();
-    MsgHistory.instance.appendChipPeakVars();
+  MsgHistory.instance.appendTradeCatalogFull();
+  MsgHistory.instance.appendChipPeakVars();
+  MsgHistory.instance.appendChipPeakDerivedVars();
+  MsgHistory.instance.appendP0TrustGates();
+  MsgHistory.instance.appendCrossKnBsJoin();
+  MsgHistory.instance.appendWorkbenchLayoutAndK0BarEvents();
+  MsgHistory.instance.appendWorkbenchBelowCaptionAndClose();
+  MsgHistory.instance.appendTdxProtocolTicks();
+  MsgHistory.instance.appendK0BarJoinYinYangCenterPriceAxis();
+  MsgHistory.instance.appendUiBsPickerSettings20260905();
+  MsgHistory.instance.appendBsNAllClass20260905();
+  MsgHistory.instance.appendCrossKnIndicatorJoin20260905();
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     await windowManager.ensureInitialized();
     const opts = WindowOptions(
@@ -308,8 +405,30 @@ class _KlineHomePageState extends State<KlineHomePage> {
   String _defaultK0Policy = 'pending';
   bool _bootstrapping = false;
   bool _loadingChart = false;
+  /// 分笔：加载中/刚进图时铺满屏幕太极；点一下或步进后收起。
+  bool _tickYinYangCover = false;
+  bool _runningToEnd = false;
+  bool _cancelRunToEnd = false;
+  bool _nativeYinYangActive = false;
+  final YinYangNativeOverlay _runToEndYinYang = YinYangNativeOverlay();
+  final ValueNotifier<String> _longOpHint = ValueNotifier<String>('');
+  /// 计算库缺失/版本不对：中文停机，禁止继续算出另一套点。
+  bool _libHalt = false;
+  String? _libHaltMessage;
   bool _panelExpanded = false;
   int _panelEdge = 1; // 默认右贴边（设置按钮在右上）
+  /// Android 设置抽屉局部刷新（开关即时反馈）
+  StateSetter? _settingsSheetSetState;
+  /// 是否走安卓交互（手势/壳层）；默认跟随系统，可手动覆盖。
+  bool _useAndroidInteraction = InteractionModeStore.resolveUseAndroidLogic();
+  bool? _interactionManualOverride = InteractionModeStore.manualOverride;
+  late final BackgroundKeepAlive _keepAlive = BackgroundKeepAlive(
+    onSessionActive: () =>
+        _playing ||
+        _runningToEnd ||
+        _backtestPanelOpen ||
+      _mlSession.isActive,
+  );
   /// 截断监察：开=当前口径；关=添加截断前旧行为（暴力反转被吸收）
   bool _truncationCheck = true;
   /// 构建中合并框（虚线）开关：开=末组合并画虚线；关=全部实线（默认开）
@@ -318,64 +437,36 @@ class _KlineHomePageState extends State<KlineHomePage> {
   ChipConfig _chipConfig = const ChipConfig();
   /// 笔数分布配置（主图左侧；同 JSON 嵌套 tickDist）
   TickDistConfig _tickDistConfig = const TickDistConfig();
+  /// 本会话是否允许筹码/笔数依赖（弹窗选「不继续」后关掉，不改落盘）
+  bool _chipTickDepsAllowed = true;
+  /// 本会话是否画笔数分布（「分笔笔数为 0」弹窗专用）
+  bool _tickDistSessionAllowed = true;
+
+  ChipConfig get _sessionChipConfig => _chipTickDepsAllowed
+      ? _chipConfig
+      : _chipConfig.copyWith(enabled: false, peakLineEnabled: false);
+
+  TickDistConfig get _sessionTickDistConfig => _tickDistSessionAllowed
+      ? _tickDistConfig
+      : _tickDistConfig.copyWith(enabled: false, peakLineEnabled: false);
+
+  Set<SubChartIndicator> get _sessionSubIndicators {
+    if (_chipTickDepsAllowed) return _subIndicators;
+    return _subIndicators
+        .where((e) => e.kind != SubIndicatorKind.tickCount)
+        .toSet();
+  }
+
+  String _tickSourceFor(String code) => code == 'test' ? 'file' : 'protocol';
   /// 数学指标参数（均线/通道/MACD/BOLL/RSI/KDJ/Demark）
   MathIndicatorConfig _mathIndicatorConfig = const MathIndicatorConfig();
-  /// Math/均线/通道/Demark 会话冻结（Kn≥1 禁整表回写）
-  final MathSeriesFreezeStore _mathFreezeStore = MathSeriesFreezeStore();
-  final DivergenceFreezeStore _diverFreezeStore = DivergenceFreezeStore();
-  final ChipPeakFreezeStore _chipPeakStore = ChipPeakFreezeStore();
+  /// 步进冻结仓（与机器人验证 `StepFreezeMerger` 同源）
+  final StepFreezeSessionState _stepFreeze = StepFreezeSessionState();
   /// chip 分支：仅显示筹码分布，关闭所有缠论渲染（关=正常缠论+筹码可并存）
   final bool _chipOnlyMode = false;
 
-  /// 开发演示阶段（默认开）：启动 exe 自动加载最新任务演示
-  bool _devDemoPhaseEnabled = true;
-  bool _taskDemoWalkActive = false;
-  TaskDemoManifest? _taskDemoManifest;
-  List<TaskDemoWalkthroughStep> _taskDemoSteps = const [];
-  int _taskDemoWalkIndex = 0;
-  String? _taskDemoBeforeMd;
-  bool _taskDemoHasBeforePng = false;
-  bool _taskDemoAutoPlay = false;
-  Timer? _taskDemoAutoTimer;
-
-  /// 分型判断步进事件日志：kn → 追加式历史（换股/重载才清空；不因重算丢点）
-  Map<int, List<FractalJudgmentEvent>> _judgmentHistoryByKn = {};
-
-  /// 中枢判断/确定会话历史（与中枢同号；换股/重载清空）。
-  Map<int, List<ZsSignalEvent>> _zsJudgmentHistoryByKn = {};
-  Map<int, List<ZsSignalEvent>> _zsConfirmHistoryByKn = {};
-  /// 中枢结构对象仓：步进喂入现有帧，交易变量只读确认中枢投影
-  final ZhongshuObjectStore _zsObjectStore = ZhongshuObjectStore();
-  /// 背驰结构关系仓：只读现有冻结仓，不重算背驰
-  final DivergenceRelationStore _diverRelationStore = DivergenceRelationStore();
-
-  /// 一类BS 会话历史：对齐分型判断（K0 步进颗粒度 + 动态 Kn）；换股/重载清空。
-  /// 踩坑：禁止只用「层|段|标签」去重——同动态 active 延伸时下一步会无新 x。
-  Map<int, List<Buy1Frame>> _buy1HistoryByKn = {};
-  Map<int, List<Sell1Frame>> _sell1HistoryByKn = {};
-
-  /// 二类BS 会话历史（与一类同框同构冻结）。
-  Map<int, List<Buy2Frame>> _buy2HistoryByKn = {};
-  Map<int, List<Sell2Frame>> _sell2HistoryByKn = {};
-
-  /// 三类+BS 会话历史（链升类；双键冻结同构）。
-  Map<int, List<BuyNFrame>> _buyNHistoryByKn = {};
-  Map<int, List<SellNFrame>> _sellNHistoryByKn = {};
-
-  /// BSP 在线对错（Rust 唯一源；Flutter 只冻/展示）
-  Map<int, List<BsVerdictFrame>> _bsVerdictHistoryByKn = {};
   /// 副图 Kn类BS 错标叠加 X；对的不叠加
   bool _overlayBsVerdictWrong = true;
-
-  /// Kn相邻比例会话历史（按显示层；换股/重载清空）。
-  Map<int, List<AdjacentRatioPoint>> _adjacentRatioHistoryByKn = {};
-
-  /// Kn连线斜率会话历史（按显示层；换股/重载清空）。
-  Map<int, List<LineSlopePoint>> _lineSlopeHistoryByKn = {};
-
-  /// Kn步进节奏会话历史 + 每层方向状态。
-  Map<int, List<StepRhythmLinePoint>> _stepRhythmHistoryByKn = {};
-  final Map<int, StepRhythmState> _stepRhythmStateByKn = {};
 
   /// 机器学习会话：true=主区挂 ML（不展示 K 线图）
   final MlSessionController _mlSession = MlSessionController();
@@ -398,24 +489,185 @@ class _KlineHomePageState extends State<KlineHomePage> {
   bool _backtestPanelOpen = false;
   StrategyConfig _strategyConfig = const StrategyConfig();
   BacktestRun? _backtestRun;
-  BacktestReportTab _btTab = BacktestReportTab.metrics;
+  BacktestWorkbenchTab _btTab = BacktestWorkbenchTab.conditions;
   String? _btSelectedSignalId;
   String? _btSelectedTradeId;
   Set<String> _btHighlightIds = {};
   int? _btFocusBarIdx;
   int _btFocusEpoch = 0;
+  /// 策略回测打开时：桌面=K 线占横向比例；手机竖屏=K 线占竖向比例
+  double _backtestChartFraction = Platform.isAndroid ? 0.42 : 0.64;
+  static const _minBacktestChartFraction = 0.22;
+  static const _maxBacktestChartFraction = 0.85;
+  bool _backtestSplitDragging = false;
+
+  bool _indicatorSearchRunning = false;
+
+  /// 计优（关键点位指标统计）运行中；仅置位/复位，不参与任何缠论计算。
+  bool _keyPointStatRunning = false;
+
+  /// 十字线 tooltip 桥：KlineChart 向本层广播「是否显示 + 当前行」，停靠为左侧子窗口。
+  final CrosshairTooltipBridge _tooltipBridge = CrosshairTooltipBridge();
+  /// 左侧停靠子窗口宽度（可拖拽调整）
+  double _tooltipPanelWidth = 320.0;
+  static const double _minTooltipPanelWidth = 200.0;
+  static const double _maxTooltipPanelWidth = 600.0;
+  bool _tooltipPanelDragging = false;
+  double _backtestSplitDragStartY = 0;
+  double _backtestSplitDragStartFraction = 0.58;
 
   /// catalog 三类..N 类上限（至少 9；随会话观察到的更高类扩大）
   int get _maxBsClass => math.max(
         9,
         maxBuyNClassObserved(
-          buyNHistoryByKn: _buyNHistoryByKn,
-          sellNHistoryByKn: _sellNHistoryByKn,
+          buyNHistoryByKn: _stepFreeze.buyNHistoryByKn,
+          sellNHistoryByKn: _stepFreeze.sellNHistoryByKn,
         ),
       );
 
-  bool get _busy => _bootstrapping || _loadingChart;
+  bool get _busy =>
+      _bootstrapping || _loadingChart || _runningToEnd || _libHalt;
   bool get _hasSession => _allBars.isNotEmpty;
+
+  /// 其它周期加载用小转圈；分笔走全屏太极层。
+  Widget _chartLoadingIndicator() {
+    return const SizedBox(
+      width: 22,
+      height: 22,
+      child: CircularProgressIndicator(strokeWidth: 2),
+    );
+  }
+
+  void _dismissTickYinYang() {
+    if (!_tickYinYangCover) return;
+    setState(() => _tickYinYangCover = false);
+  }
+
+  /// 分笔太极：正圆，直径=当前窗口高度。
+  Widget _buildTickYinYangOverlay(BuildContext context) {
+    return Positioned.fill(
+      child: Listener(
+        behavior: HitTestBehavior.opaque,
+        onPointerDown: _loadingChart ? null : (_) => _dismissTickYinYang(),
+        child: const YinYangFullscreenCover(),
+      ),
+    );
+  }
+
+  /// 一次性走完：Windows 用独立窗口转太极；其它平台仍用 Flutter 层。
+  /// 正中心对齐当前窗口（含标题条），不再为进度条/边距人为下移。
+  Widget _buildRunToEndYinYangOverlay(BuildContext context) {
+    if (_nativeYinYangActive) {
+      return const SizedBox.shrink();
+    }
+    return const Positioned.fill(
+      child: IgnorePointer(
+        child: YinYangFullscreenCover(
+          heightFactor: 0.25,
+          opacity: 0.5,
+          dimBackground: false,
+        ),
+      ),
+    );
+  }
+
+  /// 计算库对不上：全屏中文停机说明。
+  Widget _buildLibHaltOverlay() {
+    final msg = _libHaltMessage ?? '缠论计算库不可用。';
+    return Positioned.fill(
+      child: ColoredBox(
+        color: const Color(0xF2121212),
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 520),
+            child: Material(
+              color: const Color(0xFF1E1E1E),
+              borderRadius: BorderRadius.circular(8),
+              child: Padding(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      '计算库对不上，已停机',
+                      style: TextStyle(
+                        color: Colors.orange,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      msg,
+                      style: const TextStyle(
+                        color: Color(0xFFE2E8F0),
+                        fontSize: 14,
+                        height: 1.45,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    const Text(
+                      '请覆盖为本次安装包里的那一份动态库，关掉软件再打开。不要混用旧备份，否则副图买卖点会对成另一套。',
+                      style: TextStyle(color: Color(0xFF94A3B8), fontSize: 12, height: 1.4),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 走完/长播放进度条：只刷这行字，不刷整张图。
+  Widget _buildLongOpBanner({double top = 44}) {
+    if (!_runningToEnd && !_playing) return const SizedBox.shrink();
+    final total = _allBars.length;
+    return Positioned(
+      left: 12,
+      right: 12,
+      top: top,
+      child: Material(
+        color: const Color(0xE61A1A1A),
+        borderRadius: BorderRadius.circular(8),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(
+            children: [
+              const SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _runningToEnd
+                    ? ValueListenableBuilder<String>(
+                        valueListenable: _longOpHint,
+                        builder: (_, hint, __) => Text(
+                          hint.isEmpty ? '一次性走完，请稍候…' : hint,
+                          style: const TextStyle(color: Colors.white, fontSize: 13),
+                        ),
+                      )
+                    : Text(
+                        '自动播放 ${_stepIdx + 1} / $total',
+                        style: const TextStyle(color: Colors.white, fontSize: 13),
+                      ),
+              ),
+              if (_runningToEnd)
+                TextButton(
+                  onPressed: () => _cancelRunToEnd = true,
+                  child: const Text('取消'),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   int get _visibleCount => _stepIdx < 0 ? 0 : math.min(_stepIdx + 1, _allBars.length);
   List<KlineBar> get _visibleBars =>
       _visibleCount <= 0 ? const [] : _allBars.sublist(0, _visibleCount);
@@ -457,14 +709,25 @@ class _KlineHomePageState extends State<KlineHomePage> {
   @override
   void initState() {
     super.initState();
-    _loadChipConfig();
+    _keepAlive.attach();
+    _loadInteractionMode();
     _loadMathIndicatorConfig();
-    _bootstrapWithDemo();
+    IndicatorSearchSettingsStore.load();
+    IndicatorSearchLastResultStore.load();
+    _bootstrapApp();
   }
 
-  Future<void> _bootstrapWithDemo() async {
-    _devDemoPhaseEnabled =
-        await TaskDemoSettingsStore.isDevelopmentDemoPhaseEnabled();
+  Future<void> _loadInteractionMode() async {
+    await InteractionModeStore.load();
+    if (!mounted) return;
+    setState(() {
+      _interactionManualOverride = InteractionModeStore.manualOverride;
+      _useAndroidInteraction = InteractionModeStore.resolveUseAndroidLogic();
+    });
+  }
+
+  Future<void> _bootstrapApp() async {
+    await _loadChipConfig();
     await _bootstrap();
   }
 
@@ -487,10 +750,10 @@ class _KlineHomePageState extends State<KlineHomePage> {
     setState(() => _mathIndicatorConfig = cfg);
     await MathIndicatorSettingsStore.save(cfg);
     // 参数变了：清空 Math/背驰冻结仓，再从 0 步进重冻到当前（避免旧参数残值）
-    _mathFreezeStore.clear();
-    _diverFreezeStore.clear();
-    _chipPeakStore.clear();
-    _diverRelationStore.clear();
+    _stepFreeze.mathFreezeStore.clear();
+    _stepFreeze.diverFreezeStore.clear();
+    _stepFreeze.chipPeakStore.clear();
+    _stepFreeze.diverRelationStore.clear();
     if (_hasSession && !_chipOnlyMode && _stepIdx >= 0) {
       _refreezeMathFromStart();
     }
@@ -533,14 +796,20 @@ class _KlineHomePageState extends State<KlineHomePage> {
   Future<void> _updateChipConfig(ChipConfig cfg) async {
     final stepChanged =
         (cfg.bucketStep - _chipConfig.bucketStep).abs() > 1e-12;
-    setState(() => _chipConfig = cfg);
+    final rankChanged = cfg.peakRankSpatialConfig.schemeId !=
+            _chipConfig.peakRankSpatialConfig.schemeId ||
+        cfg.peakRankVolumeConfig.schemeId !=
+            _chipConfig.peakRankVolumeConfig.schemeId ||
+        cfg.peakRankPureConfig.schemeId !=
+            _chipConfig.peakRankPureConfig.schemeId;
+    _panelUi(() => _chipConfig = cfg);
     await ChipSettingsStore.save(cfg, tickDist: _tickDistConfig);
-    if (stepChanged) {
-      _chipPeakStore.clear();
+    if (stepChanged || rankChanged) {
+      _stepFreeze.chipPeakStore.clear();
       ChipProfileCompute.clearCache();
       TickDistProfileCompute.clearCache();
       if (_hasSession && _stepIdx >= 0 && _visibleBars.isNotEmpty) {
-        _chipPeakStore.ingestThrough(
+        _ingestAllChipPeakSchemes(
           asOf: _stepIdx,
           bars: _visibleBars,
           bucketStep: cfg.bucketStep,
@@ -549,18 +818,59 @@ class _KlineHomePageState extends State<KlineHomePage> {
     }
   }
 
+  /// 一次性写入空间序 / 量级序 / 纯量级三套编号方案（按 scheme 分区，互不覆盖）。
+  void _ingestAllChipPeakSchemes({
+    required int asOf,
+    required List<KlineBar> bars,
+    required double bucketStep,
+  }) {
+    StepFreezeMerger.ingestAllChipPeakSchemes(
+      state: _stepFreeze,
+      asOf: asOf,
+      bars: bars,
+      chipConfig: _chipConfig,
+    );
+  }
+
   Future<void> _updateTickDistConfig(TickDistConfig cfg) async {
-    setState(() => _tickDistConfig = cfg);
+    _panelUi(() => _tickDistConfig = cfg);
     await ChipSettingsStore.save(_chipConfig, tickDist: cfg);
+  }
+
+  /// 设置面板与主界面同步刷新（底部抽屉内开关即时可见）
+  void _panelUi(VoidCallback fn, {StateSetter? sheetSetState}) {
+    setState(fn);
+    (sheetSetState ?? _settingsSheetSetState)?.call(() {});
+  }
+
+  void _applyBucketStepFromSettings(
+    String text, {
+    StateSetter? sheetSetState,
+  }) {
+    final v = double.tryParse(text.trim());
+    if (v == null || !v.isFinite || v < 0.01) {
+      _showSnack('桶宽无效：请输入不小于 0.01 的数字');
+      return;
+    }
+    _updateChipConfig(_chipConfig.copyWith(bucketStep: v));
+    _updateTickDistConfig(_tickDistConfig.copyWith(bucketStep: v));
+    _panelUi(() {}, sheetSetState: sheetSetState);
+    _msgHistory.append('筹码/笔数分布桶宽=${v.toStringAsFixed(2)}');
   }
 
   @override
   void dispose() {
+    _keepAlive.detach();
     _playTimer?.cancel();
-    _stopTaskDemoAutoPlay();
+    _longOpHint.dispose();
     _disposePipelineSession();
+    // 整个 app 收摊才拆 overlay 窗口（拆窗+注销窗口类+isolate 自行退出）
+    unawaited(_runToEndYinYang.dispose());
+    _tooltipBridge.dispose();
     super.dispose();
   }
+
+  void _refreshKeepAlive() => _keepAlive.refresh();
 
   /// 释放 Rust 侧 PipelineState（换股/换周期/关页/截断开关重建前）
   void _disposePipelineSession() {
@@ -568,7 +878,12 @@ class _KlineHomePageState extends State<KlineHomePage> {
     _pipelineSession = null;
   }
 
-  /// 取与可见前缀同步的 bundle：前进 append，步退/变短 reset+replay
+  /// 清空会话冻结历史：回首 K / 从 0 重跑走完前必须清，避免重复 merge 崩溃。
+  void _clearSessionFreezeHistory() {
+    _stepFreeze.clear();
+  }
+
+  /// 取与可见前缀同步的 bundle：前进 append；步退优先当步仓，无仓才 reset+replay
   KlineCombineBundle _bundleForVisible(List<KlineBar> visible) {
     if (_pipelineSession == null ||
         !_pipelineSession!.isAlive ||
@@ -589,18 +904,18 @@ class _KlineHomePageState extends State<KlineHomePage> {
     final maxKn = chartMaxKn(levels: bundle.levels, k0Lines: bundle.k0Lines);
     sess.cache.syncLookup(
       bars: bars,
-      buy1HistoryByKn: _buy1HistoryByKn,
-      sell1HistoryByKn: _sell1HistoryByKn,
-      buy2HistoryByKn: _buy2HistoryByKn,
-      sell2HistoryByKn: _sell2HistoryByKn,
-      buyNHistoryByKn: _buyNHistoryByKn,
-      sellNHistoryByKn: _sellNHistoryByKn,
-      adjacentRatioHistoryByKn: _adjacentRatioHistoryByKn,
-      stepRhythmHistoryByKn: _stepRhythmHistoryByKn,
-      lineSlopeHistoryByKn: _lineSlopeHistoryByKn,
-      judgmentHistoryByKn: _judgmentHistoryByKn,
-      zsJudgmentHistoryByKn: _zsJudgmentHistoryByKn,
-      zsConfirmHistoryByKn: _zsConfirmHistoryByKn,
+      buy1HistoryByKn: _stepFreeze.buy1HistoryByKn,
+      sell1HistoryByKn: _stepFreeze.sell1HistoryByKn,
+      buy2HistoryByKn: _stepFreeze.buy2HistoryByKn,
+      sell2HistoryByKn: _stepFreeze.sell2HistoryByKn,
+      buyNHistoryByKn: _stepFreeze.buyNHistoryByKn,
+      sellNHistoryByKn: _stepFreeze.sellNHistoryByKn,
+      adjacentRatioHistoryByKn: _stepFreeze.adjacentRatioHistoryByKn,
+      stepRhythmHistoryByKn: _stepFreeze.stepRhythmHistoryByKn,
+      lineSlopeHistoryByKn: _stepFreeze.lineSlopeHistoryByKn,
+      judgmentHistoryByKn: _stepFreeze.judgmentHistoryByKn,
+      zsJudgmentHistoryByKn: _stepFreeze.zsJudgmentHistoryByKn,
+      zsConfirmHistoryByKn: _stepFreeze.zsConfirmHistoryByKn,
       subIndicators: buildSubIndicatorCatalog(
         maxKn,
         truncationCheck: _truncationCheck,
@@ -608,14 +923,20 @@ class _KlineHomePageState extends State<KlineHomePage> {
       ).toSet(),
       truncationCheck: _truncationCheck,
       mathIndicatorConfig: _mathIndicatorConfig,
-      mathFreezeStore: _mathFreezeStore,
-      diverFreezeStore: _diverFreezeStore,
+      mathFreezeStore: _stepFreeze.mathFreezeStore,
+      diverFreezeStore: _stepFreeze.diverFreezeStore,
       maxBsClass: _maxBsClass,
     );
   }
 
   /// 切换股票时对齐各自默认加载区间。
   void _syncDateRangeForCode(String code) {
+    // Android 内置种子仅含 002003 的 2025Q1
+    if (Platform.isAndroid && code == MobileDataRoot.bundledStockCode) {
+      _beginDate = MobileDataRoot.bundledBeginDate;
+      _endDate = MobileDataRoot.bundledEndDate;
+      return;
+    }
     // test + 已有 custom.ohlc.csv：用文件首末时间填区间
     if (code == 'test' && _hasTestOhlcCsv()) {
       try {
@@ -708,13 +1029,24 @@ class _KlineHomePageState extends State<KlineHomePage> {
     await _loadKlines();
   }
 
+  Future<String> _resolveDataRoot() async {
+    if (Platform.isAndroid) {
+      return MobileDataRoot.ensureReady();
+    }
+    final env = Platform.environment['CHAN_DATA_ROOT']?.trim();
+    if (env != null && env.isNotEmpty) {
+      return env;
+    }
+    return _bridge.defaultDataRoot();
+  }
+
   Future<void> _bootstrap() async {
     setState(() {
       _bootstrapping = true;
       _error = null;
     });
     try {
-      final root = _bridge.defaultDataRoot();
+      final root = await _resolveDataRoot();
       final codes = _bridge.listStockCodes(dataRoot: root);
       if (codes.isEmpty) {
         throw StateError('a_Data 下未找到股票目录，请检查: $root');
@@ -731,9 +1063,14 @@ class _KlineHomePageState extends State<KlineHomePage> {
         '根目录=$_dataRoot；口径=K0原始K/K1=K0连线/K2=K1连线/Kn第n层；'
         '截断=${_truncationCheck ? "开" : "关"}',
       );
-      await _maybeAutoStartLatestTaskDemo();
     } catch (e) {
-      setState(() => _error = e.toString());
+      setState(() {
+        _error = e.toString();
+        if (e is ChanFfiVersionException) {
+          _libHalt = true;
+          _libHaltMessage = e.message;
+        }
+      });
       _msgHistory.append('启动失败：$e');
     } finally {
       if (mounted) setState(() => _bootstrapping = false);
@@ -750,49 +1087,62 @@ class _KlineHomePageState extends State<KlineHomePage> {
     setState(() {
       _loadingChart = true;
       _error = null;
+      _tickYinYangCover = _period == 'tick';
+      _chipTickDepsAllowed = true;
+      _tickDistSessionAllowed = true;
     });
     _disposePipelineSession();
+    TickQuality? quality;
     try {
-      final bars = _bridge.loadKlines(
+      final loaded = _bridge.loadKlinesEx(
         dataRoot: _dataRoot,
         code: code,
         beginDate: _fmtDateTime(_beginDate),
         endDate: _fmtDateTime(_endDate),
         period: _period,
+        tickSource: _tickSourceFor(code),
       );
+      quality = loaded.quality;
+      final bars = loaded.bars;
+      final tickDistOn = _tickDistConfig.enabled;
+      final pendingMute = quality.shouldPrompt(tickDistEnabled: tickDistOn);
       setState(() {
         _allBars = bars;
         _stepIdx = bars.isEmpty ? -1 : 0;
         _defaultK0Purged = false;
-        _judgmentHistoryByKn.clear();
-        _zsJudgmentHistoryByKn.clear();
-        _zsConfirmHistoryByKn.clear();
-        _zsObjectStore.clear();
-        _diverRelationStore.clear();
-        _buy1HistoryByKn.clear();
-        _sell1HistoryByKn.clear();
-        _buy2HistoryByKn.clear();
-        _sell2HistoryByKn.clear();
-        _buyNHistoryByKn.clear();
-        _sellNHistoryByKn.clear();
-        _bsVerdictHistoryByKn.clear();
-        _adjacentRatioHistoryByKn.clear();
-        _lineSlopeHistoryByKn.clear();
-        _stepRhythmHistoryByKn.clear();
-        for (final s in _stepRhythmStateByKn.values) {
+        _chipTickDepsAllowed = true;
+        _tickDistSessionAllowed = !pendingMute;
+        _stepFreeze.judgmentHistoryByKn.clear();
+        _stepFreeze.zsJudgmentHistoryByKn.clear();
+        _stepFreeze.zsConfirmHistoryByKn.clear();
+        _stepFreeze.zsObjectStore.clear();
+        _stepFreeze.diverRelationStore.clear();
+        _stepFreeze.buy1HistoryByKn.clear();
+        _stepFreeze.sell1HistoryByKn.clear();
+        _stepFreeze.buy2HistoryByKn.clear();
+        _stepFreeze.sell2HistoryByKn.clear();
+        _stepFreeze.buyNHistoryByKn.clear();
+        _stepFreeze.sellNHistoryByKn.clear();
+        _stepFreeze.bsVerdictHistoryByKn.clear();
+        _stepFreeze.adjacentRatioHistoryByKn.clear();
+        _stepFreeze.lineSlopeHistoryByKn.clear();
+        _stepFreeze.stepRhythmHistoryByKn.clear();
+        for (final s in _stepFreeze.stepRhythmStateByKn.values) {
           s.reset();
         }
-        _stepRhythmStateByKn.clear();
-        _mathFreezeStore.clear();
-        _diverFreezeStore.clear();
-        _chipPeakStore.clear();
+        _stepFreeze.stepRhythmStateByKn.clear();
+        _stepFreeze.mathFreezeStore.clear();
+        _stepFreeze.diverFreezeStore.clear();
+        _stepFreeze.chipPeakStore.clear();
         _clearBacktestSession();
       });
       final directOhlc = code == 'test' && _hasTestOhlcCsv();
+      final srcHint = directOhlc
+          ? '（直读custom.ohlc.csv，忽略周期聚合）'
+          : (quality.source == 'protocol' ? '（通达信协议分笔）' : '（本地分笔文件）');
       _msgHistory.append(
         '加载K0：$code ${_fmtDateTime(_beginDate)}~${_fmtDateTime(_endDate)} '
-        '${_periods[_period] ?? _period} 共${bars.length}根'
-        '${directOhlc ? "（直读custom.ohlc.csv，忽略周期聚合）" : ""}',
+        '${_periods[_period] ?? _period} 共${bars.length}根$srcHint',
       );
       if (_chipOnlyMode) {
         // 仅筹码分布：跳过缠论合并/线段/中枢/BS 计算，清空相关数据
@@ -851,34 +1201,100 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _buyNK0Frames = [];
         _sellNK0Frames = [];
         _stepIdx = -1;
-        _judgmentHistoryByKn.clear();
-        _zsJudgmentHistoryByKn.clear();
-        _zsConfirmHistoryByKn.clear();
-        _zsObjectStore.clear();
-        _diverRelationStore.clear();
-        _buy1HistoryByKn.clear();
-        _sell1HistoryByKn.clear();
-        _buy2HistoryByKn.clear();
-        _sell2HistoryByKn.clear();
-        _buyNHistoryByKn.clear();
-        _sellNHistoryByKn.clear();
-        _bsVerdictHistoryByKn.clear();
-        _adjacentRatioHistoryByKn.clear();
-        _lineSlopeHistoryByKn.clear();
-        _stepRhythmHistoryByKn.clear();
-        for (final s in _stepRhythmStateByKn.values) {
+        _chipTickDepsAllowed = true;
+        _tickDistSessionAllowed = true;
+        _stepFreeze.judgmentHistoryByKn.clear();
+        _stepFreeze.zsJudgmentHistoryByKn.clear();
+        _stepFreeze.zsConfirmHistoryByKn.clear();
+        _stepFreeze.zsObjectStore.clear();
+        _stepFreeze.diverRelationStore.clear();
+        _stepFreeze.buy1HistoryByKn.clear();
+        _stepFreeze.sell1HistoryByKn.clear();
+        _stepFreeze.buy2HistoryByKn.clear();
+        _stepFreeze.sell2HistoryByKn.clear();
+        _stepFreeze.buyNHistoryByKn.clear();
+        _stepFreeze.sellNHistoryByKn.clear();
+        _stepFreeze.bsVerdictHistoryByKn.clear();
+        _stepFreeze.adjacentRatioHistoryByKn.clear();
+        _stepFreeze.lineSlopeHistoryByKn.clear();
+        _stepFreeze.stepRhythmHistoryByKn.clear();
+        for (final s in _stepFreeze.stepRhythmStateByKn.values) {
           s.reset();
         }
-        _stepRhythmStateByKn.clear();
-        _mathFreezeStore.clear();
-        _diverFreezeStore.clear();
-        _chipPeakStore.clear();
+        _stepFreeze.stepRhythmStateByKn.clear();
+        _stepFreeze.mathFreezeStore.clear();
+        _stepFreeze.diverFreezeStore.clear();
+        _stepFreeze.chipPeakStore.clear();
         _clearBacktestSession();
       });
       _msgHistory.append('加载K0失败：$e');
     } finally {
       if (mounted) setState(() => _loadingChart = false);
     }
+    if (quality != null && mounted) {
+      await _promptTickQuality(quality);
+    }
+  }
+
+  /// 笔数分布已开启且笔数为 0 时询问是否继续用该图。
+  Future<void> _promptTickQuality(TickQuality q) async {
+    final tickDistOn = _tickDistConfig.enabled;
+    final need = q.shouldPrompt(tickDistEnabled: tickDistOn);
+    if (q.skipPrompts || !need) {
+      if (!_tickDistSessionAllowed) {
+        setState(() => _tickDistSessionAllowed = true);
+      }
+      return;
+    }
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted) return;
+    var allow = true;
+    if (q.zeroTickCount && tickDistOn) {
+      final go = await _askChipTickContinue(
+        title: '分笔笔数为 0',
+        body: '笔数分布图已开启，但所选区间里有分笔的笔数是 0。'
+            '主图左侧笔数分布会没有柱。'
+            '要继续用笔数分布吗？\n\n'
+            '点「不继续」：K 线和缠论仍加载；本会话关掉笔数分布（不改你保存的设置）。',
+      );
+      allow = go && allow;
+    }
+    if (!mounted) return;
+    setState(() {
+      _tickDistSessionAllowed = allow;
+    });
+    if (!allow) {
+      _msgHistory.append(
+        '本会话已关掉笔数分布（K 线与缠论仍在；不改保存的设置）',
+      );
+    } else {
+      _msgHistory.append('已选择继续使用笔数分布');
+    }
+  }
+
+  Future<bool> _askChipTickContinue({
+    required String title,
+    required String body,
+  }) async {
+    final go = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => SelectionArea(child: AlertDialog(
+        title: Text(title),
+        content: SingleChildScrollView(child: Text(body)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('不继续'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('继续用'),
+          ),
+        ],
+      ),
+    ));
+    return go == true;
   }
 
   /// 把当前可见窗口的展示轨分型判断并入会话日志（追加去重，不删旧点）。
@@ -887,228 +1303,58 @@ class _KlineHomePageState extends State<KlineHomePage> {
     required List<LevelBundle> levels,
     required List<BarCrosshairFeature> barFeatures,
     required List<K0Line> k0Lines,
+    bool copyForPaint = true,
   }) {
-    if (bars.isEmpty) return;
-    // 方案B：分型判断 kn=0..chartMaxKn-1
-    final maxKnProbe = chartMaxKn(levels: levels, k0Lines: k0Lines);
-    final knHi = maxKnProbe < 1 ? 1 : maxKnProbe;
-    final nextHistory = <int, List<FractalJudgmentEvent>>{
-      for (final e in _judgmentHistoryByKn.entries)
-        e.key: List<FractalJudgmentEvent>.from(e.value),
-    };
-    for (var kn = 0; kn < knHi; kn++) {
-      final log = nextHistory.putIfAbsent(kn, () => <FractalJudgmentEvent>[]);
-      mergeFractalJudgmentEventLog(
-        log,
-        collectFractalJudgmentEvents(
-          kn: kn,
-          bars: bars,
-          levels: levels,
-          barFeatures: barFeatures,
-          truncationCheck: _truncationCheck,
-        ),
-      );
-    }
-    _judgmentHistoryByKn = nextHistory;
+    StepFreezeMerger.mergeJudgmentHistory(
+      state: _stepFreeze,
+      bars: bars,
+      levels: levels,
+      barFeatures: barFeatures,
+      k0Lines: k0Lines,
+      stepIdx: _stepIdx,
+      truncationCheck: _truncationCheck,
+      copyForPaint: copyForPaint,
+    );
   }
 
   /// 本步中枢帧 → 判断/确认会话历史（先确认后判断；确认同拍共点）。
   /// 返回各层本步新确认的 x1（供背驰本枢启动）。
-  Map<int, Set<int>> _mergeZsSignalHistory(KlineCombineBundle bundle) {
-    final discoveryX = _stepIdx < 0 ? 0 : _stepIdx;
-    final nextJudge = <int, List<ZsSignalEvent>>{
-      for (final e in _zsJudgmentHistoryByKn.entries)
-        e.key: List<ZsSignalEvent>.from(e.value),
-    };
-    final nextConfirm = <int, List<ZsSignalEvent>>{
-      for (final e in _zsConfirmHistoryByKn.entries)
-        e.key: List<ZsSignalEvent>.from(e.value),
-    };
-    final confirmedByKn = <int, Set<int>>{};
-    final collected = collectZsFramesByKn(bundle);
-    _zsObjectStore.ingestCollected(collected, asOf: discoveryX);
-    for (final e in collected.entries) {
-      final cLog = nextConfirm.putIfAbsent(e.key, () => <ZsSignalEvent>[]);
-      final confirmed = mergeZsConfirmEventLog(
-        cLog,
-        e.value,
-        kn: e.key,
-        discoveryX: discoveryX,
-      );
-      confirmedByKn[e.key] = confirmed;
-      final jLog = nextJudge.putIfAbsent(e.key, () => <ZsSignalEvent>[]);
-      mergeZsJudgmentEventLog(
-        jLog,
-        e.value,
-        kn: e.key,
-        discoveryX: discoveryX,
-        // 刚确认的未确认框 → 同拍打判断，与确认重叠（K0 无动态Kn 时常处处重叠）
-        confirmedX1ThisStep: confirmed,
-      );
-    }
-    _zsJudgmentHistoryByKn = nextJudge;
-    _zsConfirmHistoryByKn = nextConfirm;
-    return confirmedByKn;
+  Map<int, Set<int>> _mergeZsSignalHistory(
+    KlineCombineBundle bundle, {
+    bool copyForPaint = true,
+  }) {
+    return StepFreezeMerger.mergeZsSignalHistory(
+      state: _stepFreeze,
+      bundle: bundle,
+      stepIdx: _stepIdx,
+      copyForPaint: copyForPaint,
+    );
   }
 
-  /// Kn≥1：本步动态 active 段 idx；K0 无 active（分钟K段不延伸）。
-  /// 方案B：display kn → structure level==kn-1。
-  int? _activeSegIdxForKn(KlineCombineBundle bundle, int kn) {
-    if (kn <= 0) return null;
-    for (final lv in bundle.levels) {
-      if (lv.level == kn - 1) return lv.activeUnit?.idx;
-    }
-    return null;
-  }
-
-  /// 把本步 Rust 一类/二类/三类+BS 并入会话历史。
-  /// 对齐分型判断：K0 步进颗粒度；传 activeSegIdx 使动态 Kn 延伸步仍追加本步 x。
-  void _mergeBsHistory(KlineCombineBundle bundle) {
-    final discoveryX = _stepIdx < 0 ? 0 : _stepIdx;
-    final nextBuy = <int, List<Buy1Frame>>{
-      for (final e in _buy1HistoryByKn.entries)
-        e.key: List<Buy1Frame>.from(e.value),
-    };
-    final nextSell = <int, List<Sell1Frame>>{
-      for (final e in _sell1HistoryByKn.entries)
-        e.key: List<Sell1Frame>.from(e.value),
-    };
-    final nextBuy2 = <int, List<Buy2Frame>>{
-      for (final e in _buy2HistoryByKn.entries)
-        e.key: List<Buy2Frame>.from(e.value),
-    };
-    final nextSell2 = <int, List<Sell2Frame>>{
-      for (final e in _sell2HistoryByKn.entries)
-        e.key: List<Sell2Frame>.from(e.value),
-    };
-    final nextBuyN = <int, List<BuyNFrame>>{
-      for (final e in _buyNHistoryByKn.entries)
-        e.key: List<BuyNFrame>.from(e.value),
-    };
-    final nextSellN = <int, List<SellNFrame>>{
-      for (final e in _sellNHistoryByKn.entries)
-        e.key: List<SellNFrame>.from(e.value),
-    };
-    for (final e in collectBuy1EventsByKn(bundle).entries) {
-      final log = nextBuy.putIfAbsent(e.key, () => <Buy1Frame>[]);
-      mergeBuy1EventLog(
-        log,
-        e.value,
-        discoveryX: discoveryX,
-        activeSegIdx: _activeSegIdxForKn(bundle, e.key),
-      );
-    }
-    for (final e in collectSell1EventsByKn(bundle).entries) {
-      final log = nextSell.putIfAbsent(e.key, () => <Sell1Frame>[]);
-      mergeSell1EventLog(
-        log,
-        e.value,
-        discoveryX: discoveryX,
-        activeSegIdx: _activeSegIdxForKn(bundle, e.key),
-      );
-    }
-    for (final e in collectBuy2EventsByKn(bundle).entries) {
-      final log = nextBuy2.putIfAbsent(e.key, () => <Buy2Frame>[]);
-      mergeBuy2EventLog(
-        log,
-        e.value,
-        discoveryX: discoveryX,
-        activeSegIdx: _activeSegIdxForKn(bundle, e.key),
-      );
-    }
-    for (final e in collectSell2EventsByKn(bundle).entries) {
-      final log = nextSell2.putIfAbsent(e.key, () => <Sell2Frame>[]);
-      mergeSell2EventLog(
-        log,
-        e.value,
-        discoveryX: discoveryX,
-        activeSegIdx: _activeSegIdxForKn(bundle, e.key),
-      );
-    }
-    for (final e in collectBuyNEventsByKn(bundle).entries) {
-      final log = nextBuyN.putIfAbsent(e.key, () => <BuyNFrame>[]);
-      mergeBuyNEventLog(
-        log,
-        e.value,
-        discoveryX: discoveryX,
-        activeSegIdx: _activeSegIdxForKn(bundle, e.key),
-      );
-    }
-    for (final e in collectSellNEventsByKn(bundle).entries) {
-      final log = nextSellN.putIfAbsent(e.key, () => <SellNFrame>[]);
-      mergeSellNEventLog(
-        log,
-        e.value,
-        discoveryX: discoveryX,
-        activeSegIdx: _activeSegIdxForKn(bundle, e.key),
-      );
-    }
-    _buy1HistoryByKn = nextBuy;
-    _sell1HistoryByKn = nextSell;
-    _buy2HistoryByKn = nextBuy2;
-    _sell2HistoryByKn = nextSell2;
-    _buyNHistoryByKn = nextBuyN;
-    _sellNHistoryByKn = nextSellN;
-    final nextVerdict = <int, List<BsVerdictFrame>>{
-      for (final e in _bsVerdictHistoryByKn.entries)
-        e.key: List<BsVerdictFrame>.from(e.value),
-    };
-    for (final e in collectBsVerdictByKn(bundle).entries) {
-      final log = nextVerdict.putIfAbsent(e.key, () => <BsVerdictFrame>[]);
-      mergeBsVerdictLog(log, e.value);
-    }
-    _bsVerdictHistoryByKn = nextVerdict;
+  void _mergeBsHistory(KlineCombineBundle bundle, {bool copyForPaint = true}) {
+    StepFreezeMerger.mergeBsHistory(
+      state: _stepFreeze,
+      bundle: bundle,
+      stepIdx: _stepIdx,
+      copyForPaint: copyForPaint,
+    );
   }
 
   /// 本步相邻比例 + 步进节奏 + 连线斜率并入会话（全层；禁止整表覆盖消点）。
   /// 指标遵循动态计算：传入 bars/barFeatures，子线含展示轨虚线。
-  void _mergeRatioAndRhythm(KlineCombineBundle bundle) {
-    final displayX = _stepIdx < 0 ? 0 : _stepIdx;
-    final maxKn = chartMaxKn(levels: bundle.levels, k0Lines: bundle.k0Lines);
-    // 连线显示层 0..maxKn-1
-    final maxDisplayKn = maxKn <= 0 ? -1 : maxKn - 1;
-    if (maxDisplayKn < 0) return;
-    mergeAdjacentRatioForStep(
-      historyByKn: _adjacentRatioHistoryByKn,
-      levels: bundle.levels,
-      displayX: displayX,
-      maxDisplayKn: maxDisplayKn,
-      bars: _visibleBars,
-      barFeatures: bundle.barFeatures,
+  void _mergeRatioAndRhythm(
+    KlineCombineBundle bundle, {
+    List<KlineBar>? bars,
+    bool copyForPaint = true,
+  }) {
+    StepFreezeMerger.mergeRatioAndRhythm(
+      state: _stepFreeze,
+      bundle: bundle,
+      bars: bars ?? _visibleBars,
+      stepIdx: _stepIdx,
       truncationCheck: _truncationCheck,
+      copyForPaint: copyForPaint,
     );
-    mergeStepRhythmForStep(
-      historyByKn: _stepRhythmHistoryByKn,
-      stateByKn: _stepRhythmStateByKn,
-      levels: bundle.levels,
-      displayX: displayX,
-      maxDisplayKn: maxDisplayKn,
-      bars: _visibleBars,
-      barFeatures: bundle.barFeatures,
-      truncationCheck: _truncationCheck,
-    );
-    mergeLineSlopeForStep(
-      historyByKn: _lineSlopeHistoryByKn,
-      levels: bundle.levels,
-      displayX: displayX,
-      maxDisplayKn: maxDisplayKn,
-      bars: _visibleBars,
-      barFeatures: bundle.barFeatures,
-      truncationCheck: _truncationCheck,
-    );
-    // 新 Map 引用，便于 painter shouldRepaint 感知
-    _adjacentRatioHistoryByKn = {
-      for (final e in _adjacentRatioHistoryByKn.entries)
-        e.key: List<AdjacentRatioPoint>.from(e.value),
-    };
-    _stepRhythmHistoryByKn = {
-      for (final e in _stepRhythmHistoryByKn.entries)
-        e.key: List<StepRhythmLinePoint>.from(e.value),
-    };
-    _lineSlopeHistoryByKn = {
-      for (final e in _lineSlopeHistoryByKn.entries)
-        e.key: List<LineSlopePoint>.from(e.value),
-    };
   }
 
   /// 本步 Math/均线/通道/Demark 并入会话冻结（禁 activeUnit 整表回写）。
@@ -1116,23 +1362,18 @@ class _KlineHomePageState extends State<KlineHomePage> {
     KlineCombineBundle bundle, {
     List<KlineBar>? bars,
     int? asOf,
+    bool ingestChip = true,
   }) {
-    final visible = bars ?? _visibleBars;
-    if (visible.isEmpty) return;
-    final displayX = asOf ?? (_stepIdx < 0 ? 0 : _stepIdx);
-    final maxKn = chartMaxKn(levels: bundle.levels, k0Lines: bundle.k0Lines);
-    mergeMathSeriesForStep(
-      store: _mathFreezeStore,
-      bars: visible,
-      levels: bundle.levels,
-      config: _mathIndicatorConfig,
-      maxDisplayKn: maxKn,
-      asOf: displayX,
-    );
-    _chipPeakStore.ingestThrough(
-      asOf: displayX,
-      bars: visible,
-      bucketStep: _chipConfig.bucketStep,
+    StepFreezeMerger.mergeMathFreeze(
+      state: _stepFreeze,
+      bundle: bundle,
+      bars: bars ?? _visibleBars,
+      stepIdx: _stepIdx,
+      truncationCheck: _truncationCheck,
+      mathConfig: _mathIndicatorConfig,
+      chipConfig: _chipConfig,
+      ingestChip: ingestChip,
+      asOf: asOf,
     );
   }
 
@@ -1143,56 +1384,40 @@ class _KlineHomePageState extends State<KlineHomePage> {
     int? asOf,
     Map<int, Set<int>> confirmedX1ByKn = const {},
   }) {
-    final visible = bars ?? _visibleBars;
-    if (visible.isEmpty) return;
-    final displayX = asOf ?? (_stepIdx < 0 ? 0 : _stepIdx);
-    final maxKn = chartMaxKn(levels: bundle.levels, k0Lines: bundle.k0Lines);
-    mergeDivergenceForStep(
-      store: _diverFreezeStore,
-      mathStore: _mathFreezeStore,
-      bars: visible,
-      levels: bundle.levels,
-      zsK0Frames: bundle.zsK0Frames,
-      config: _mathIndicatorConfig,
-      maxDisplayKn: maxKn,
-      asOf: displayX,
+    StepFreezeMerger.mergeDivergenceFreeze(
+      state: _stepFreeze,
+      bundle: bundle,
+      bars: bars ?? _visibleBars,
+      stepIdx: _stepIdx,
+      mathConfig: _mathIndicatorConfig,
       confirmedX1ByKn: confirmedX1ByKn,
+      asOf: asOf,
     );
-    // 交易层只读冻结仓，把当步确认背驰收成有身份的关系，不另算一套
-    final zsByKn = collectZsFramesByKn(bundle);
-    for (var kn = 0; kn <= maxKn; kn++) {
-      _diverRelationStore.ingestFromFreeze(
-        displayKn: kn,
-        asOf: displayX,
-        freeze: _diverFreezeStore,
-        zsFrames: zsByKn[kn] ?? const [],
-      );
-    }
   }
 
   List<LevelBundle> _levelsWithFrozenBs(List<LevelBundle> levels) {
     final with1 = levelsWithFrozenClass1Bs(
       levels,
-      buy1HistoryByKn: _buy1HistoryByKn,
-      sell1HistoryByKn: _sell1HistoryByKn,
+      buy1HistoryByKn: _stepFreeze.buy1HistoryByKn,
+      sell1HistoryByKn: _stepFreeze.sell1HistoryByKn,
     );
     final with2 = levelsWithFrozenClass2Bs(
       with1,
-      buy2HistoryByKn: _buy2HistoryByKn,
-      sell2HistoryByKn: _sell2HistoryByKn,
+      buy2HistoryByKn: _stepFreeze.buy2HistoryByKn,
+      sell2HistoryByKn: _stepFreeze.sell2HistoryByKn,
     );
     final withN = levelsWithFrozenClassNBs(
       with2,
-      buyNHistoryByKn: _buyNHistoryByKn,
-      sellNHistoryByKn: _sellNHistoryByKn,
+      buyNHistoryByKn: _stepFreeze.buyNHistoryByKn,
+      sellNHistoryByKn: _stepFreeze.sellNHistoryByKn,
     );
     return levelsWithFrozenBsVerdict(
       withN,
-      historyByKn: _bsVerdictHistoryByKn,
+      historyByKn: _stepFreeze.bsVerdictHistoryByKn,
     );
   }
 
-  void _rebuildCombine() {
+  void _rebuildCombine({bool skipFreezeMerge = false}) {
     if (_chipOnlyMode) return;
     if (_visibleBars.isEmpty) {
       _pipelineSession?.cache.reset();
@@ -1212,28 +1437,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _sell2K0Frames = [];
         _buyNK0Frames = [];
         _sellNK0Frames = [];
-        _judgmentHistoryByKn.clear();
-        _zsJudgmentHistoryByKn.clear();
-        _zsConfirmHistoryByKn.clear();
-        _zsObjectStore.clear();
-        _diverRelationStore.clear();
-        _buy1HistoryByKn.clear();
-        _sell1HistoryByKn.clear();
-        _buy2HistoryByKn.clear();
-        _sell2HistoryByKn.clear();
-        _buyNHistoryByKn.clear();
-        _sellNHistoryByKn.clear();
-        _bsVerdictHistoryByKn.clear();
-        _adjacentRatioHistoryByKn.clear();
-        _lineSlopeHistoryByKn.clear();
-        _stepRhythmHistoryByKn.clear();
-        for (final s in _stepRhythmStateByKn.values) {
-          s.reset();
-        }
-        _stepRhythmStateByKn.clear();
-        _mathFreezeStore.clear();
-        _diverFreezeStore.clear();
-        _chipPeakStore.clear();
+        _stepFreeze.clear();
       });
       return;
     }
@@ -1251,19 +1455,25 @@ class _KlineHomePageState extends State<KlineHomePage> {
         virtualBars = const [];
       }
       final k1Views = buildK1BarViews(virtualBars);
-      // 本步展示轨判断事件 → 追加进会话日志
-      _mergeJudgmentHistory(
-        bars: _visibleBars,
-        levels: bundle.levels,
-        barFeatures: bundle.barFeatures,
-        k0Lines: bundle.k0Lines,
-      );
-      // 会话冻结：并入本步一类BS，禁止下一步整表覆盖消掉上步显示
-      _mergeBsHistory(bundle);
-      final zsConfirmed = _mergeZsSignalHistory(bundle);
-      _mergeRatioAndRhythm(bundle);
-      _mergeMathFreeze(bundle);
-      _mergeDivergenceFreeze(bundle, confirmedX1ByKn: zsConfirmed);
+      // 管道仍长于画面：步退用当步仓，冻结历史已有，禁止再合并
+      final sessNow = _pipelineSession;
+      final asofKeep = sessNow != null && sessNow.len > _visibleCount;
+      Map<int, Set<int>> zsConfirmed = const {};
+      if (!asofKeep && !skipFreezeMerge) {
+        // 本步展示轨判断事件 → 追加进会话日志
+        _mergeJudgmentHistory(
+          bars: _visibleBars,
+          levels: bundle.levels,
+          barFeatures: bundle.barFeatures,
+          k0Lines: bundle.k0Lines,
+        );
+        // 会话冻结：并入本步一类BS，禁止下一步整表覆盖消掉上步显示
+        _mergeBsHistory(bundle);
+        zsConfirmed = _mergeZsSignalHistory(bundle);
+        _mergeRatioAndRhythm(bundle);
+        _mergeMathFreeze(bundle);
+        _mergeDivergenceFreeze(bundle, confirmedX1ByKn: zsConfirmed);
+      }
       _syncPresentationLookup(_visibleBars, bundle);
       final frozenLevels = _levelsWithFrozenBs(bundle.levels);
       setState(() {
@@ -1277,12 +1487,12 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _defaultK0Policy = bundle.defaultK0Policy;
         _levels = frozenLevels;
         _zsK0Frames = bundle.zsK0Frames;
-        _buy1K0Frames = _buy1HistoryByKn[0] ?? const [];
-        _sell1K0Frames = _sell1HistoryByKn[0] ?? const [];
-        _buy2K0Frames = _buy2HistoryByKn[0] ?? const [];
-        _sell2K0Frames = _sell2HistoryByKn[0] ?? const [];
-        _buyNK0Frames = _buyNHistoryByKn[0] ?? const [];
-        _sellNK0Frames = _sellNHistoryByKn[0] ?? const [];
+        _buy1K0Frames = _stepFreeze.buy1HistoryByKn[0] ?? const [];
+        _sell1K0Frames = _stepFreeze.sell1HistoryByKn[0] ?? const [];
+        _buy2K0Frames = _stepFreeze.buy2HistoryByKn[0] ?? const [];
+        _sell2K0Frames = _stepFreeze.sell2HistoryByKn[0] ?? const [];
+        _buyNK0Frames = _stepFreeze.buyNHistoryByKn[0] ?? const [];
+        _sellNK0Frames = _stepFreeze.sellNHistoryByKn[0] ?? const [];
         // 按当前最高 Kn 动态裁剪已选指标（层变少时去掉失效项）
         final maxKn = chartMaxKn(
           levels: _levels,
@@ -1355,61 +1565,98 @@ class _KlineHomePageState extends State<KlineHomePage> {
     );
   }
 
-  Future<void> _copyHistoryRecords() async {
-    final ok = await _msgHistory.copyToClipboard(
-      context: mounted ? context : null,
-      okMsg: '历史记录已复制',
-    );
-    if (ok) {
-      _msgHistory.append('已一键复制历史记录（共${_msgHistory.rows.length}条）');
-    }
+  String _shortProbeTime(DateTime t) {
+    return '${t.hour.toString().padLeft(2, '0')}:'
+        '${t.minute.toString().padLeft(2, '0')}:'
+        '${t.second.toString().padLeft(2, '0')}';
   }
 
-  Future<void> _copyDebugSnapshot() async {
-    final text = _buildDebugSnapshotText();
-    if (text.trim().isEmpty) {
-      _showSnack('没有可复制的内容');
-      return;
+  /// 整合排查快照：页面状态（已去静态口径文档）+ 最近历史 + 验收探针，去重精简。
+  /// 替代原「一键复制历史记录 / 查看历史记录 / 复制页面快照 / 复制调试信息」四个按钮。
+  String _buildConsolidatedProbeText() {
+    final buf = StringBuffer();
+    // 1) 页面状态快照（AppDebugSnapshot 已移除静态口径文档与历史尾，避免重复）
+    buf.writeln(_buildDebugSnapshotText());
+    buf.writeln();
+    // 2) 最近历史（紧凑尾段，替代原全量复制 + 快照“最近10条”两处重复）
+    final hist = MsgHistory.instance.rows;
+    buf.writeln('【历史记录最近20条】');
+    if (hist.isEmpty) {
+      buf.writeln('（无）');
+    } else {
+      final tail = hist.length <= 20 ? hist : hist.sublist(hist.length - 20);
+      for (final e in tail) {
+        buf.writeln('[${_shortProbeTime(e.time)}] ${e.text}');
+      }
     }
-    await Clipboard.setData(ClipboardData(text: text));
-    _msgHistory.append(
-      '已复制页面快照（step=$_stepIdx 可见K0=$_visibleCount Kn层=${_levels.length}）',
-    );
-    _showSnack('页面快照已复制，可粘贴排查');
+    buf.writeln();
+    // 3) 验收探针（常驻：T1/T2 验收，保留为段落）
+    if (_allBars.isNotEmpty && _stepIdx >= 0) {
+      try {
+        final fed = _allBars.take(_stepIdx + 1).toList();
+        final probe = AuditProbeSnapshot.build(
+          code: _selectedCode ?? '',
+          period: _period,
+          periodLabel: _periods[_period] ?? _period,
+          beginDate: _fmtDateTime(_beginDate),
+          endDate: _fmtDateTime(_endDate),
+          stepIdx: _stepIdx,
+          bars: fed,
+          sessionLevels: _levels,
+          barFeatures: _barFeatures,
+          stepRhythmHistoryByKn: _stepFreeze.stepRhythmHistoryByKn,
+        );
+        buf.writeln(probe);
+      } catch (e) {
+        buf.writeln('【验收探针生成失败】$e');
+      }
+    } else {
+      buf.writeln('【验收探针】尚未加载或步进，跳过。');
+    }
+    return buf.toString().trim();
   }
 
-  /// 本次任务验收探针：设置「复制调试信息」（常驻，勿当临时调试删）。
-  Future<void> _copyAuditProbeDebug() async {
-    if (_allBars.isEmpty || _stepIdx < 0) {
-      _showSnack('请先加载并步进/跳末后再复制');
-      return;
-    }
-    _showSnack('正在生成审计调试信息…');
-    final fed = _allBars.take(_stepIdx + 1).toList();
-    String text;
-    try {
-      text = AuditProbeSnapshot.build(
-        code: _selectedCode ?? '',
-        period: _period,
-        periodLabel: _periods[_period] ?? _period,
-        beginDate: _fmtDateTime(_beginDate),
-        endDate: _fmtDateTime(_endDate),
-        stepIdx: _stepIdx,
-        bars: fed,
-        sessionLevels: _levels,
-        barFeatures: _barFeatures,
-        stepRhythmHistoryByKn: _stepRhythmHistoryByKn,
-      );
-    } catch (e) {
-      _showSnack('生成失败：$e');
-      _msgHistory.append('复制调试信息失败：$e');
-      return;
-    }
-    await Clipboard.setData(ClipboardData(text: text));
-    _msgHistory.append(
-      '已复制验收调试信息（本批T1 K1节奏持值·T2 tip同源；step=$_stepIdx bars=${fed.length}）',
+  /// 单按钮：弹窗查看整合快照（可滚动 + 可复制），底部「复制」带走；
+  /// 「完整历史」次级入口保留全量历史浏览与清空能力。
+  void _showConsolidatedProbeDialog(BuildContext context) {
+    final text = _buildConsolidatedProbeText();
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => SelectionArea(
+        child: AlertDialog(
+          title: const Text('排查快照'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: SingleChildScrollView(
+              child: SelectableText(
+                text,
+                style: const TextStyle(fontSize: 12, fontFamily: 'monospace'),
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => _msgHistory.showDialog(context),
+              child: const Text('完整历史'),
+            ),
+            TextButton(
+              onPressed: () async {
+                await Clipboard.setData(ClipboardData(text: text));
+                if (!mounted) return;
+                Navigator.pop(ctx);
+                _msgHistory.append('已复制排查快照（含最近历史+验收探针）');
+                _showSnack('排查快照已复制');
+              },
+              child: const Text('复制'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('关闭'),
+            ),
+          ],
+        ),
+      ),
     );
-    _showSnack('调试信息已复制，请粘贴给助手');
   }
 
   void _showSnack(String msg) {
@@ -1430,27 +1677,42 @@ class _KlineHomePageState extends State<KlineHomePage> {
     if (_playing) {
       _stopPlay();
       setState(() {});
+      _refreshKeepAlive();
       return;
     }
     setState(() => _playing = true);
-    // 异步步进：先让出事件循环，优先消化左/中/右点击（尤其暂停），再做重算
-    _playTimer = Timer.periodic(const Duration(milliseconds: 120), (_) async {
-      if (!mounted || !_playing) return;
-      if (_stepIdx >= _allBars.length - 1) {
-        _stopPlay();
-        setState(() {});
-        return;
-      }
-      setState(() => _stepIdx += 1);
-      await Future<void>.delayed(Duration.zero);
-      if (!mounted || !_playing) return;
-      _rebuildCombine();
+    _dismissTickYinYang();
+    _refreshKeepAlive();
+    unawaited(_playNextTick());
+  }
+
+  /// 链式播放：重算后再等至少一帧，避免 periodic 在重算>120ms 时把步进叠死。
+  Future<void> _playNextTick() async {
+    _playTimer?.cancel();
+    _playTimer = null;
+    if (!mounted || !_playing) return;
+    if (_stepIdx >= _allBars.length - 1) {
+      _stopPlay();
+      setState(() {});
+      return;
+    }
+    setState(() => _stepIdx += 1);
+    await Future<void>.delayed(Duration.zero);
+    if (!mounted || !_playing) return;
+    final sw = Stopwatch()..start();
+    _rebuildCombine();
+    if (!mounted || !_playing) return;
+    final elapsed = sw.elapsedMilliseconds;
+    final wait = math.max(16, 120 - elapsed);
+    _playTimer = Timer(Duration(milliseconds: wait), () {
+      unawaited(_playNextTick());
     });
   }
 
   void _stepForward() {
     if (!_hasSession || _stepIdx >= _allBars.length - 1) return;
     _stopPlay();
+    _dismissTickYinYang();
     setState(() => _stepIdx += 1);
     _rebuildCombine();
   }
@@ -1458,6 +1720,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
   void _stepBack() {
     if (!_hasSession || _stepIdx <= 0) return;
     _stopPlay();
+    _dismissTickYinYang();
     setState(() => _stepIdx -= 1);
     _rebuildCombine();
   }
@@ -1465,12 +1728,15 @@ class _KlineHomePageState extends State<KlineHomePage> {
   void _resetStep() {
     if (!_hasSession) return;
     _stopPlay();
+    _dismissTickYinYang();
+    _clearSessionFreezeHistory();
+    _disposePipelineSession();
     setState(() => _stepIdx = 0);
     _rebuildCombine();
   }
 
-  void _runToEnd({MlBspSampler? mlSampler}) {
-    if (!_hasSession) return;
+  Future<void> _runToEnd({MlBspSampler? mlSampler}) async {
+    if (!_hasSession || _runningToEnd) return;
     _stopPlay();
     final end = _allBars.length - 1;
     final start = _stepIdx < 0 ? 0 : _stepIdx;
@@ -1486,77 +1752,165 @@ class _KlineHomePageState extends State<KlineHomePage> {
       );
       return;
     }
-    for (var i = start; i <= end; i++) {
-      _stepIdx = i;
-      final visible = _allBars.sublist(0, i + 1);
+    _cancelRunToEnd = false;
+    _runningToEnd = true;
+    final total = end - start + 1;
+    _longOpHint.value = '一次性走完 0 / $total，请稍候…';
+    setState(() {});
+    _refreshKeepAlive();
+    _dismissTickYinYang();
+    if (Platform.isWindows) {
       try {
-        final bundle = _bundleForVisible(visible);
-        if (bundle.defaultK0Policy == 'purged') {
-          _defaultK0Purged = true;
-        }
-        _mergeJudgmentHistory(
-          bars: visible,
-          levels: bundle.levels,
-          barFeatures: bundle.barFeatures,
-          k0Lines: bundle.k0Lines,
+        await _runToEndYinYang.showCentered(
+          heightFactor: 0.25,
+          opacity: 0.5,
         );
-        // 一类/二类BS 也逐K并入会话冻结，避免一次性走完只剩末态
-        _mergeBsHistory(bundle);
-        final zsConfirmed = _mergeZsSignalHistory(bundle);
-        _mergeRatioAndRhythm(bundle);
-        _mergeMathFreeze(bundle, bars: visible, asOf: i);
-        _mergeDivergenceFreeze(
-          bundle,
-          bars: visible,
-          asOf: i,
-          confirmedX1ByKn: zsConfirmed,
-        );
-        _syncPresentationLookup(visible, bundle);
-        // 仅 ML 路径：采 K0 一类 BS 当下特征（不改复盘语义）
-        mlSampler?.onStep(
-          stepIdx: i,
-          visibleBars: visible,
-          buy1K0: _buy1HistoryByKn[0] ?? const [],
-          sell1K0: _sell1HistoryByKn[0] ?? const [],
-          buildLookup: () => _buildMlLookupFor(
-            bars: visible,
-            combineFrames: bundle.frames,
-            k0Confirms: bundle.k0Confirms,
-            barFeatures: bundle.barFeatures,
-            k0Lines: bundle.k0Lines,
-            levels: bundle.levels,
-            k1CombineFrames: bundle.k1CombineFrames,
-            k1Analysis: bundle.k1Analysis,
-            zsK0Frames: bundle.zsK0Frames,
-          ),
-        );
-        // α：展望窗到期用**当步 live 一类**打标，不用跳末末态
-        if (mlSampler != null) {
-          final liveBuy = collectBuy1EventsByKn(bundle)[0] ?? const [];
-          final liveSell = collectSell1EventsByKn(bundle)[0] ?? const [];
-          MlBspLabeler.labelDueSamples(
-            samples: mlSampler.samples,
-            asOfIdx: i,
-            horizonBars: _mlLabelConfig.horizonBars,
-            isLastBar: i == end,
-            liveBuy1: liveBuy,
-            liveSell1: liveSell,
-            k0LinesAsOf: bundle.k0Lines,
-            barsAsOf: visible,
-          );
-        }
-      } catch (e) {
-        _msgHistory.append('一次性走完@step=$i 失败：$e');
-        break;
+        _nativeYinYangActive = _runToEndYinYang.isShowing;
+        if (mounted) setState(() {});
+      } catch (_) {
+        _nativeYinYangActive = false;
       }
     }
-    // 末态刷新图面（merge 幂等，不会删旧点）
-    _rebuildCombine();
-    _logCombineSummary(prefix: '一次性走完');
+    var cancelled = false;
+    var lastYield = DateTime.fromMillisecondsSinceEpoch(0);
+    if (start == 0) {
+      _clearSessionFreezeHistory();
+      _disposePipelineSession();
+    }
+    try {
+      final growing =
+          start > 0 ? _allBars.sublist(0, start) : <KlineBar>[];
+      final sess = _pipelineSession;
+      sess?.slimDeltaStructure = true;
+      for (var i = start; i <= end; i++) {
+        _stepIdx = i;
+        growing.add(_allBars[i]);
+        if (i == end) {
+          sess?.slimDeltaStructure = false;
+        }
+        try {
+          final bundle = _bundleForVisible(growing);
+          if (bundle.defaultK0Policy == 'purged') {
+            _defaultK0Purged = true;
+          }
+          _mergeJudgmentHistory(
+            bars: growing,
+            levels: bundle.levels,
+            barFeatures: bundle.barFeatures,
+            k0Lines: bundle.k0Lines,
+            copyForPaint: false,
+          );
+          // 一类/二类BS 也逐K并入会话冻结，避免一次性走完只剩末态
+          _mergeBsHistory(bundle, copyForPaint: false);
+          final zsConfirmed = _mergeZsSignalHistory(
+            bundle,
+            copyForPaint: false,
+          );
+          _mergeRatioAndRhythm(
+            bundle,
+            bars: growing,
+            copyForPaint: false,
+          );
+          _mergeMathFreeze(
+            bundle,
+            bars: growing,
+            asOf: i,
+            ingestChip: false,
+          );
+          _mergeDivergenceFreeze(
+            bundle,
+            bars: growing,
+            asOf: i,
+            confirmedX1ByKn: zsConfirmed,
+          );
+          // 画面只在末态刷新：循环内不刷 Lookup（冻结仍逐步 merge）
+          // 仅 ML 路径：采 K0 一类 BS 当下特征（不改复盘语义）
+          mlSampler?.onStep(
+            stepIdx: i,
+            visibleBars: growing,
+            buy1K0: _stepFreeze.buy1HistoryByKn[0] ?? const [],
+            sell1K0: _stepFreeze.sell1HistoryByKn[0] ?? const [],
+            buildLookup: () => _buildMlLookupFor(
+              bars: growing,
+              combineFrames: bundle.frames,
+              k0Confirms: bundle.k0Confirms,
+              barFeatures: bundle.barFeatures,
+              k0Lines: bundle.k0Lines,
+              levels: bundle.levels,
+              k1CombineFrames: bundle.k1CombineFrames,
+              k1Analysis: bundle.k1Analysis,
+              zsK0Frames: bundle.zsK0Frames,
+            ),
+          );
+          // α：展望窗到期用**当步 live 一类**打标，不用跳末末态
+          if (mlSampler != null) {
+            final liveBuy = collectBuy1EventsByKn(bundle)[0] ?? const [];
+            final liveSell = collectSell1EventsByKn(bundle)[0] ?? const [];
+            MlBspLabeler.labelDueSamples(
+              samples: mlSampler.samples,
+              asOfIdx: i,
+              horizonBars: _mlLabelConfig.horizonBars,
+              isLastBar: i == end,
+              liveBuy1: liveBuy,
+              liveSell1: liveSell,
+              k0LinesAsOf: bundle.k0Lines,
+              barsAsOf: growing,
+            );
+          }
+        } catch (e) {
+          _msgHistory.append('一次性走完@step=$i 失败：$e');
+          break;
+        }
+        final now = DateTime.now();
+        if (i == start ||
+            i == end ||
+            now.difference(lastYield).inMilliseconds >= 200) {
+          final done = i - start + 1;
+          _longOpHint.value =
+              '一次性走完 $done / $total（第 ${i + 1} 根），请稍候…';
+          await Future<void>.delayed(Duration.zero);
+          lastYield = DateTime.now();
+          if (!mounted) return;
+          if (_cancelRunToEnd) {
+            cancelled = true;
+            sess?.slimDeltaStructure = false;
+            _msgHistory.append('一次性走完已取消，停在第 ${i + 1} 根（冻结保留到这里）');
+            break;
+          }
+        }
+      }
+      final chipAsOf = growing.isEmpty ? end : growing.last.idx;
+      _ingestAllChipPeakSchemes(
+        asOf: chipAsOf,
+        bars: growing,
+        bucketStep: _chipConfig.bucketStep,
+      );
+      // 循环里已逐 K 合并冻结，末态只刷查表和画面，避免再合一遍
+      _rebuildCombine(skipFreezeMerge: true);
+      _logCombineSummary(prefix: cancelled ? '一次性走完(取消)' : '一次性走完');
+    } finally {
+      _pipelineSession?.slimDeltaStructure = false;
+      _runningToEnd = false;
+      _nativeYinYangActive = false;
+      await _runToEndYinYang.hide();
+      if (mounted) {
+        _longOpHint.value = '';
+        setState(() {});
+        _refreshKeepAlive();
+      }
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    if (_useAndroidInteraction) {
+      return _buildAndroidShell(context);
+    }
+    return _buildDesktopShell(context);
+  }
+
+  /// 桌面：图表铺满 + 透明标题条 + 左右设置浮层。
+  Widget _buildDesktopShell(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF121212),
       // 图表铺满；标题按钮叠在右上角之上，可点且不挡视觉延伸
@@ -1565,7 +1919,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         children: [
           Positioned.fill(
             child: Padding(
-              padding: const EdgeInsets.all(4),
+              padding: const EdgeInsets.all(kDesktopShellInset),
               child: DecoratedBox(
                 decoration: BoxDecoration(
                   color: const Color(0xFF121212),
@@ -1644,53 +1998,185 @@ class _KlineHomePageState extends State<KlineHomePage> {
               onCycleEdge: () => setState(() => _panelEdge = 1 - _panelEdge),
               child: _buildPanelBody(),
             ),
+          if (_period == 'tick' &&
+              (_loadingChart || _tickYinYangCover) &&
+              !_mlSession.isActive)
+            _buildTickYinYangOverlay(context),
+          if (_runningToEnd && !_mlSession.isActive)
+            _buildRunToEndYinYangOverlay(context),
           // 最上层：拖动区 + 设置 + 最小/最大/关闭
           Positioned(
             left: 0,
             right: 0,
             top: 0,
-            height: 36,
+            height: kDesktopCaptionBarHeight,
             child: _buildCaptionBar(),
           ),
-          if (_loadingChart)
-            const Positioned(
-              top: 44,
-              right: 16,
-              child: SizedBox(
-                width: 22,
-                height: 22,
-                child: CircularProgressIndicator(strokeWidth: 2),
+          if (_runningToEnd || _playing) _buildLongOpBanner(),
+          if (_loadingChart && _period != 'tick')
+            Positioned.fill(
+              child: IgnorePointer(
+                child: Center(child: _chartLoadingIndicator()),
               ),
             ),
-          if (_taskDemoWalkActive &&
-              _taskDemoManifest != null &&
-              !_mlSession.isActive)
-            Positioned(
-              left: 0,
-              right: 0,
-              bottom: 0,
-              height: math.min(
-                360,
-                MediaQuery.of(context).size.height * 0.42,
-              ),
-              child: TaskDemoWalkthroughOverlay(
-                manifest: _taskDemoManifest!,
-                steps: _taskDemoSteps,
-                walkIndex: _taskDemoWalkIndex,
-                currentStepIdx: _stepIdx < 0 ? 0 : _stepIdx,
-                beforeMd: _taskDemoBeforeMd,
-                hasBeforePng: _taskDemoHasBeforePng,
-                autoPlayActive: _taskDemoAutoPlay,
-                onToggleAutoPlay: _toggleTaskDemoAutoPlay,
-                onPrev: _taskDemoWalkPrev,
-                onNext: _taskDemoWalkNext,
-                onExitWalkthrough: _exitTaskDemoWalkthrough,
-                onExitDevelopmentPhase: _exitDevelopmentDemoPhase,
-              ),
-            ),
+          if (_libHalt) _buildLibHaltOverlay(),
         ],
       ),
     );
+  }
+
+  /// 手机：全屏图表 + 浮动设置钮；股票/周期在设置抽屉。
+  Widget _buildAndroidShell(BuildContext context) {
+    final topInset = MediaQuery.paddingOf(context).top;
+    return Scaffold(
+      backgroundColor: const Color(0xFF121212),
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          Positioned.fill(
+            child: _mlSession.isActive
+                ? MlWorkbench(
+                    statusLine: _mlStatusLine(),
+                    progressHint: _mlProgressHint,
+                    phase: _mlPhase,
+                    splitConfig: _mlSplitConfig,
+                    onSplitConfigChanged: _onMlSplitConfigChanged,
+                    labelConfig: _mlLabelConfig,
+                    onLabelConfigChanged: (c) =>
+                        setState(() => _mlLabelConfig = c),
+                    testLocked: _mlTestLocked,
+                    code: _selectedCode ?? '',
+                    period: _period,
+                    dataRoot: _dataRoot,
+                    isXgbMode: _isXgbMode,
+                    onTrainerKindChanged: (k) {
+                      if (_mlTestLocked) {
+                        _showSnack('测试已锁定：不可切换训练器');
+                        return;
+                      }
+                      setState(() {
+                        _isXgbMode = k == MlTrainerKind.xgb;
+                        _mlReport = null;
+                        _mlSamples = [];
+                        _mlPhase = MlPreparePhase.setup;
+                        _mlError = null;
+                      });
+                    },
+                    xgbParams: _xgbParams,
+                    onXgbParamsChanged: (p) {
+                      if (_mlTestLocked) return;
+                      setState(() => _xgbParams = p);
+                    },
+                    forceXgbRetrain: _forceXgbRetrain,
+                    onForceXgbRetrainChanged: (v) {
+                      if (_mlTestLocked) return;
+                      setState(() => _forceXgbRetrain = v);
+                    },
+                    samples: _mlSamples,
+                    report: _mlReport,
+                    errorText: _mlError,
+                    onExit: _exitMlSession,
+                    onLoad: _loadMlRun,
+                  )
+                : Padding(
+                    padding: const EdgeInsets.fromLTRB(2, 0, 2, 0),
+                    child: _buildReplayBody(),
+                  ),
+          ),
+          if (_error != null)
+            Positioned(
+              left: 8,
+              right: 56,
+              top: topInset + 4,
+              child: Material(
+                color: const Color(0x33FF9800),
+                borderRadius: BorderRadius.circular(4),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  child: Text(
+                    _error!,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: Colors.orange, fontSize: 12),
+                  ),
+                ),
+              ),
+            ),
+          if (_period == 'tick' &&
+              (_loadingChart || _tickYinYangCover) &&
+              !_mlSession.isActive)
+            _buildTickYinYangOverlay(context),
+          if (_runningToEnd && !_mlSession.isActive)
+            _buildRunToEndYinYangOverlay(context),
+          if (!_mlSession.isActive)
+            Positioned(
+              top: topInset + 2,
+              right: 4,
+              child: Material(
+                color: const Color(0xCC1A1A1A),
+                shape: const CircleBorder(),
+                child: IconButton(
+                  tooltip: '设置',
+                  onPressed: _bootstrapping || _busy
+                      ? null
+                      : _openAndroidSettings,
+                  icon: const Icon(Icons.tune, color: Color(0xFFE2E8F0)),
+                ),
+              ),
+            ),
+          if (_loadingChart && _period != 'tick')
+            Positioned.fill(
+              child: IgnorePointer(
+                child: Center(child: _chartLoadingIndicator()),
+              ),
+            ),
+          if (_runningToEnd || _playing) _buildLongOpBanner(top: topInset + 48),
+          if (_libHalt) _buildLibHaltOverlay(),
+        ],
+      ),
+    );
+  }
+
+  void _openAndroidSettings() {
+    showAndroidSettingsSheet(
+      context: context,
+      onClosed: () => _settingsSheetSetState = null,
+      builder: (ctx, sheetSetState) {
+        _settingsSheetSetState = sheetSetState;
+        return _buildPanelBody(forMobileSheet: true, sheetSetState: sheetSetState);
+      },
+    );
+  }
+
+  void _openAndroidStockPicker() {
+    _refreshStockList();
+    showAndroidStockPicker(
+      context: context,
+      codes: _codes,
+      selected: _selectedCode,
+      onSelected: (v) {
+        setState(() {
+          _selectedCode = v;
+          _syncDateRangeForCode(v);
+        });
+        _loadKlines();
+      },
+    );
+  }
+
+  /// 刷新股票列表（仅重新列举 a_Data 下股票目录，不改当前选择、不重载 K 线）。
+  /// 用于「点击股票下拉框」时自动刷新；原「刷新股票列表」按钮已移除。
+  void _refreshStockList() {
+    if (_dataRoot == null || _busy) return;
+    final codes = _bridge.listStockCodes(dataRoot: _dataRoot);
+    if (codes.isEmpty) return;
+    final keep = _selectedCode != null && codes.contains(_selectedCode)
+        ? _selectedCode!
+        : _preferredCode(codes);
+    _panelUi(() {
+      _codes = codes;
+      _selectedCode = keep;
+    });
   }
 
   /// 透明标题条：左侧穿透点击主图指标；窗控前窄条拖窗；右侧设置/最小化/最大化/关闭。
@@ -1701,13 +2187,13 @@ class _KlineHomePageState extends State<KlineHomePage> {
       children: [
         const Expanded(
           child: IgnorePointer(
-            child: SizedBox(height: 36),
+            child: SizedBox(height: kDesktopCaptionBarHeight),
           ),
         ),
         DragToMoveArea(
           child: SizedBox(
             width: dragGripW,
-            height: 36,
+            height: kDesktopCaptionBarHeight,
             child: Container(color: Colors.transparent),
           ),
         ),
@@ -1716,7 +2202,10 @@ class _KlineHomePageState extends State<KlineHomePage> {
           child: IconButton(
             onPressed: () => setState(() => _panelExpanded = !_panelExpanded),
             padding: EdgeInsets.zero,
-            constraints: const BoxConstraints.tightFor(width: 36, height: 36),
+            constraints: const BoxConstraints.tightFor(
+              width: kDesktopCaptionBarHeight,
+              height: kDesktopCaptionBarHeight,
+            ),
             icon: Icon(
               _panelExpanded ? Icons.close : Icons.settings,
               size: 18,
@@ -1756,61 +2245,70 @@ class _KlineHomePageState extends State<KlineHomePage> {
     );
   }
 
-  Widget _buildPanelBody() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        DropdownButtonFormField<String>(
-          isExpanded: true,
-          value: _codes.contains(_selectedCode) ? _selectedCode : null,
-          hint: Text(_codes.isEmpty ? '无股票' : '选择股票'),
-          decoration: InputDecoration(
-            labelText: '股票 (${_codes.length})',
-            isDense: true,
-            border: const OutlineInputBorder(),
+  Widget _buildPanelBody({
+    bool forMobileSheet = false,
+    StateSetter? sheetSetState,
+  }) {
+    final advanced = _buildPanelAdvancedSection(
+      sheetSetState: sheetSetState,
+      forMobileSheet: forMobileSheet,
+    );
+    // 设置面板内所有文字（标签、开关标题、按钮文字等）支持鼠标拖选 + Ctrl+C 复制；
+    // 由设置面板打开的各子对话框（说明/参数/确认弹窗，含子子UI 参数对话框）同样用
+    // SelectionArea 包裹，故设置内所有层级的字符串均可复制。单击仍触发按钮/输入框，
+    // 拖拽才进入选择，二者不冲突。
+    return SelectionArea(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+        if (forMobileSheet)
+          SettingsOutlinedButton(
+            label: _selectedCode == null
+                ? '选择股票 (${_codes.length})'
+                : '股票：$_selectedCode',
+            icon: Icons.list_alt,
+            onPressed: _bootstrapping || _busy || _codes.isEmpty
+                ? null
+                : _openAndroidStockPicker,
+          )
+        else
+          DropdownButtonFormField<String>(
+            isExpanded: true,
+            onTap: _refreshStockList,
+            value: _codes.contains(_selectedCode) ? _selectedCode : null,
+            hint: Text(_codes.isEmpty ? '无股票' : '选择股票'),
+            decoration: InputDecoration(
+              labelText: '股票 (${_codes.length})',
+              isDense: true,
+              border: const OutlineInputBorder(),
+            ),
+            items: _codes
+                .map(
+                  (c) => DropdownMenuItem(
+                    value: c,
+                    child: Text(c, overflow: TextOverflow.ellipsis),
+                  ),
+                )
+                .toList(),
+            onChanged: _bootstrapping || _codes.isEmpty
+                ? null
+                : (v) {
+                    if (v == null) return;
+                    _panelUi(() {
+                      _selectedCode = v;
+                      _syncDateRangeForCode(v);
+                    }, sheetSetState: sheetSetState);
+                    _loadKlines();
+                  },
           ),
-          items: _codes
-              .map(
-                (c) => DropdownMenuItem(
-                  value: c,
-                  child: Text(c, overflow: TextOverflow.ellipsis),
-                ),
-              )
-              .toList(),
-          onChanged: _bootstrapping || _codes.isEmpty
-              ? null
-              : (v) {
-                  if (v == null) return;
-                  setState(() {
-                    _selectedCode = v;
-                    _syncDateRangeForCode(v);
-                  });
-                  _loadKlines();
-                },
-        ),
         if (_selectedCode == 'test') ...[
           const SizedBox(height: 8),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: _busy ? null : _openTestOhlcEditor,
-                  icon: const Icon(Icons.edit_note, size: 18),
-                  label: const Text('编辑/加载自定义 OHLC'),
-                ),
-              ),
-              IconButton(
-                tooltip: '自定义 OHLC 说明',
-                icon: const Icon(Icons.help_outline, size: 18),
-                onPressed: _showTestOhlcHelp,
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          OutlinedButton.icon(
-            onPressed: _busy ? null : _openTaskDemoList,
-            icon: const Icon(Icons.compare, size: 18),
-            label: const Text('任务演示 / 前后对比'),
+          SettingsOutlinedButton(
+            label: '编辑/加载自定义 OHLC',
+            icon: Icons.edit_note,
+            onPressed: _busy ? null : _openTestOhlcEditor,
+            onHelp: _showTestOhlcHelp,
+            helpTooltip: '自定义 OHLC 说明',
           ),
         ],
         const SizedBox(height: 10),
@@ -1838,9 +2336,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
                     ? null
                     : (v) {
                         final next = v ?? 'tick';
-                        setState(() => _period = next);
-                        // 切周期立即按新周期重载：否则图表用「新周期蜡烛画法」重绘
-                        // 仍停留在内存的 tick 数据（每根 O=H=L=C），会全部显示成一字线
+                        _panelUi(() => _period = next,
+                            sheetSetState: sheetSetState);
                         if (_selectedCode != null) _loadKlines();
                         _msgHistory.appendPeriodAutoReload();
                         _showPeriodHelp();
@@ -1867,6 +2364,128 @@ class _KlineHomePageState extends State<KlineHomePage> {
           onTap: _busy ? null : () => _pickDateTime(isBegin: false),
         ),
         const SizedBox(height: 8),
+        TextFormField(
+          key: ValueKey(_chipConfig.bucketStep),
+          initialValue: _chipConfig.bucketStep.toStringAsFixed(2),
+          enabled: !_busy,
+          decoration: const InputDecoration(
+            labelText: '筹码分布桶宽',
+            helperText: '最小 0.01；筹码/笔数分布共用',
+            isDense: true,
+            border: OutlineInputBorder(),
+          ),
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          onFieldSubmitted: (text) =>
+              _applyBucketStepFromSettings(text, sheetSetState: sheetSetState),
+        ),
+        const SizedBox(height: SettingsPanelTheme.fieldGap),
+        SettingsOutlinedButton(
+          label: _backtestPanelOpen ? '策略回测（已打开）' : '策略回测',
+          icon: Icons.show_chart,
+          onPressed: (_busy && !_backtestPanelOpen) || _mlSession.isActive
+              ? null
+              : () => _openBacktestWorkbench(closeSettingsSheet: forMobileSheet),
+        ),
+        const SizedBox(height: SettingsPanelTheme.fieldGap),
+        SettingsFilledButton(
+          label: _indicatorSearchRunning ? '寻优（进行中）' : '寻优',
+          icon: Icons.travel_explore,
+          onPressed: _indicatorSearchRunning ||
+                  _mlSession.isActive ||
+                  (_busy && !_indicatorSearchRunning)
+              ? null
+              : () => _openIndicatorSearch(closeSettingsSheet: forMobileSheet),
+          onHelp: () => showIndicatorSearchHelp(context),
+          helpTooltip: '指标寻优说明',
+        ),
+        Row(
+          children: [
+            TextButton(
+              onPressed: _indicatorSearchRunning
+                  ? null
+                  : () => showIndicatorSearchLastResultDialog(context),
+              child: const Text('上次寻优结果', style: TextStyle(fontSize: 12)),
+            ),
+            const Spacer(),
+            TextButton(
+              onPressed: _indicatorSearchRunning
+                  ? null
+                  : () async {
+                      await showIndicatorSearchSettingsSheet(context);
+                    },
+              child: const Text('寻优参数', style: TextStyle(fontSize: 12)),
+            ),
+          ],
+        ),
+        const SizedBox(height: SettingsPanelTheme.fieldGap),
+        SettingsFilledButton(
+          label: _keyPointStatRunning ? '计优（进行中）' : '计优',
+          icon: Icons.analytics_outlined,
+          onPressed: _keyPointStatRunning ||
+                  _mlSession.isActive ||
+                  (_busy && !_keyPointStatRunning)
+              ? null
+              : () => _openKeyPointStats(closeSettingsSheet: forMobileSheet),
+          onHelp: () => showKeyPointStatsHelp(context),
+          helpTooltip: '计优说明',
+        ),
+        Align(
+          alignment: Alignment.centerRight,
+          child: TextButton(
+            onPressed: _keyPointStatRunning
+                ? null
+                : () async {
+                    await showKeyPointStatsSettingsSheet(context);
+                  },
+            child: const Text('计优参数', style: TextStyle(fontSize: 12)),
+          ),
+        ),
+        const SizedBox(height: SettingsPanelTheme.fieldGap),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          dense: true,
+          title: const Text('是否启用安卓操作逻辑', style: TextStyle(fontSize: 13)),
+          subtitle: Text(
+            _interactionManualOverride == null
+                ? '自动：当前为${_useAndroidInteraction ? "安卓" : "Windows"}交互'
+                : (_useAndroidInteraction
+                    ? '手动：安卓手势与布局'
+                    : '手动：Windows手势与布局'),
+            style: const TextStyle(fontSize: 11),
+          ),
+          value: _useAndroidInteraction,
+          onChanged: _busy
+              ? null
+              : (v) async {
+                  await InteractionModeStore.saveManualOverride(v);
+                  _panelUi(() {
+                    _interactionManualOverride = v;
+                    _useAndroidInteraction = v;
+                  }, sheetSetState: sheetSetState);
+                  _msgHistory.append(
+                    '交互模式=${v ? "安卓操作逻辑" : "Windows操作逻辑"}（手动）',
+                  );
+                },
+        ),
+        if (_interactionManualOverride != null)
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton(
+              onPressed: _busy
+                  ? null
+                  : () async {
+                      await InteractionModeStore.saveManualOverride(null);
+                      _panelUi(() {
+                        _interactionManualOverride = null;
+                        _useAndroidInteraction =
+                            InteractionModeStore.resolveUseAndroidLogic();
+                      }, sheetSetState: sheetSetState);
+                      _msgHistory.append('交互模式=跟随系统自动');
+                    },
+              child: const Text('恢复跟随系统自动', style: TextStyle(fontSize: 12)),
+            ),
+          ),
+        const SizedBox(height: 8),
         // 截断监察开关：对照「加截断前」旧行为
         SwitchListTile(
           contentPadding: EdgeInsets.zero,
@@ -1880,7 +2499,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
           onChanged: _busy
               ? null
               : (v) {
-                  setState(() {
+                  _panelUi(() {
                     _truncationCheck = v;
                     _defaultK0Purged = false;
                     // 关截断时从副图勾选里摘掉 Kn截断（目录也不可选）
@@ -1896,7 +2515,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
                         maxBsClass: _maxBsClass,
                       ),
                     );
-                  });
+                  }, sheetSetState: sheetSetState);
                   // opt 变了：重建 PipelineState 会话再重算
                   _disposePipelineSession();
                   _msgHistory.append('截断机制=${v ? "开" : "关"}，重算当前步进');
@@ -1923,9 +2542,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
           onChanged: _busy
               ? null
               : (v) {
-                  setState(() {
-                    _showBuildingDash = v;
-                  });
+                  _panelUi(() => _showBuildingDash = v,
+                      sheetSetState: sheetSetState);
                   _msgHistory.append('构建中虚线=${v ? "开" : "关"}');
                 },
           secondary: IconButton(
@@ -1949,9 +2567,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
           onChanged: _busy
               ? null
               : (v) {
-                  setState(() {
-                    _overlayBsVerdictWrong = v;
-                  });
+                  _panelUi(() => _overlayBsVerdictWrong = v,
+                      sheetSetState: sheetSetState);
                   _msgHistory.append('BSP对错叠加X=${v ? "开" : "关"}');
                 },
           secondary: IconButton(
@@ -1966,16 +2583,6 @@ class _KlineHomePageState extends State<KlineHomePage> {
           contentPadding: EdgeInsets.zero,
           dense: true,
           title: const Text('数学指标参数', style: TextStyle(fontSize: 13)),
-          subtitle: Text(
-            '均线 ${_mathIndicatorConfig.meanPeriods.join(',')}；'
-            '通道 ${_mathIndicatorConfig.channelPeriods.join(',')}；'
-            'MACD ${_mathIndicatorConfig.macdFast}/${_mathIndicatorConfig.macdSlow}/${_mathIndicatorConfig.macdSignal}；'
-            'BOLL ${_mathIndicatorConfig.bollN}；RSI ${_mathIndicatorConfig.rsiPeriod}；'
-            'KDJ ${_mathIndicatorConfig.kdjPeriod}；Demark ${_mathIndicatorConfig.demarkLen}；'
-            '背驰率 ${_mathIndicatorConfig.divergenceRate}；'
-            '桶宽 ${_chipConfig.bucketStep.toStringAsFixed(2)}',
-            style: const TextStyle(fontSize: 11),
-          ),
           trailing: IconButton(
             tooltip: '数学指标说明与设置',
             icon: const Icon(Icons.help_outline, size: 18),
@@ -1983,25 +2590,28 @@ class _KlineHomePageState extends State<KlineHomePage> {
           ),
           onTap: _busy ? null : _editMathIndicatorParams,
         ),
+        const SizedBox(height: 8),
+        // 筹码 / 笔数分布：单一总开关（右侧筹码+左侧笔数同时显隐）；峰延长线合并为共享开关（颜色按 ±档自动区分）
         SwitchListTile(
           contentPadding: EdgeInsets.zero,
           dense: true,
-          title: const Text('筹码分布', style: TextStyle(fontSize: 13)),
+          title: const Text('筹码 / 笔数分布', style: TextStyle(fontSize: 13)),
           subtitle: Text(
-            _chipConfig.enabled
-                ? '已开启（主图右侧绘制 K0筹码）'
-                : '已关闭（主图右侧不绘制）',
+            _chipConfig.enabled && _tickDistConfig.enabled
+                ? '已开启（右侧筹码 + 左侧笔数，仅 K0）'
+                : '已关闭',
             style: const TextStyle(fontSize: 11),
           ),
-          value: _chipConfig.enabled,
+          value: _chipConfig.enabled && _tickDistConfig.enabled,
           onChanged: _busy
               ? null
               : (v) {
                   _updateChipConfig(_chipConfig.copyWith(enabled: v));
-                  _msgHistory.append('筹码分布总开关=${v ? "开" : "关"}');
+                  _updateTickDistConfig(_tickDistConfig.copyWith(enabled: v));
+                  _msgHistory.append('筹码/笔数分布总开关=${v ? "开" : "关"}');
                 },
           secondary: IconButton(
-            tooltip: '筹码分布说明',
+            tooltip: '筹码/笔数分布说明',
             icon: const Icon(Icons.help_outline, size: 18),
             onPressed: _showChipHelp,
           ),
@@ -2009,182 +2619,76 @@ class _KlineHomePageState extends State<KlineHomePage> {
         SwitchListTile(
           contentPadding: EdgeInsets.zero,
           dense: true,
-          title: const Text('筹码峰延长线', style: TextStyle(fontSize: 13)),
+          title: const Text('峰延长线（按 ±档配色）', style: TextStyle(fontSize: 13)),
           subtitle: Text(
-            _chipConfig.peakLineEnabled ? '已开启' : '已关闭',
+            _chipConfig.peakLineEnabled && _tickDistConfig.peakLineEnabled
+                ? '已开启（±1同色、±2同色…；框内 INn 另色）'
+                : '已关闭',
             style: const TextStyle(fontSize: 11),
           ),
-          value: _chipConfig.peakLineEnabled,
-          onChanged: !_chipConfig.enabled || _busy
+          value: _chipConfig.peakLineEnabled && _tickDistConfig.peakLineEnabled,
+          onChanged: (!_chipConfig.enabled && !_tickDistConfig.enabled) || _busy
               ? null
               : (v) {
                   _updateChipConfig(_chipConfig.copyWith(peakLineEnabled: v));
-                  _msgHistory.append('筹码峰延长线=${v ? "开" : "关"}');
-                },
-        ),
-        SwitchListTile(
-          contentPadding: EdgeInsets.zero,
-          dense: true,
-          title: const Text('笔数分布', style: TextStyle(fontSize: 13)),
-          subtitle: Text(
-            _tickDistConfig.enabled
-                ? '已开启（主图左侧绘制 K0笔数分布）'
-                : '已关闭（主图左侧不绘制）',
-            style: const TextStyle(fontSize: 11),
-          ),
-          value: _tickDistConfig.enabled,
-          onChanged: _busy
-              ? null
-              : (v) {
-                  _updateTickDistConfig(_tickDistConfig.copyWith(enabled: v));
-                  _msgHistory.append('笔数分布总开关=${v ? "开" : "关"}');
-                },
-          secondary: IconButton(
-            tooltip: '笔数分布说明',
-            icon: const Icon(Icons.help_outline, size: 18),
-            onPressed: _showTickDistHelp,
-          ),
-        ),
-        SwitchListTile(
-          contentPadding: EdgeInsets.zero,
-          dense: true,
-          title: const Text('笔数峰延长线', style: TextStyle(fontSize: 13)),
-          subtitle: Text(
-            _tickDistConfig.peakLineEnabled ? '已开启' : '已关闭',
-            style: const TextStyle(fontSize: 11),
-          ),
-          value: _tickDistConfig.peakLineEnabled,
-          onChanged: !_tickDistConfig.enabled || _busy
-              ? null
-              : (v) {
                   _updateTickDistConfig(
                       _tickDistConfig.copyWith(peakLineEnabled: v));
-                  _msgHistory.append('笔数峰延长线=${v ? "开" : "关"}');
+                  _msgHistory.append('峰延长线=${v ? "开" : "关"}');
                 },
         ),
+        if (forMobileSheet)
+          ExpansionTile(
+            tilePadding: EdgeInsets.zero,
+            title: const Text(
+              '高级与工具',
+              style: TextStyle(fontSize: 13, color: Color(0xFFE2E8F0)),
+            ),
+            children: advanced,
+          )
+        else
+          ...advanced,
+      ],
+      ),
+    );
+  }
+
+  /// 设置面板：历史记录 / ML / 回测等（手机端收进 ExpansionTile）。
+  List<Widget> _buildPanelAdvancedSection({
+    StateSetter? sheetSetState,
+    bool forMobileSheet = false,
+  }) {
+    return [
         const SizedBox(height: 12),
-        SwitchListTile(
-          contentPadding: EdgeInsets.zero,
-          dense: true,
-          title: const Text('开发演示阶段', style: TextStyle(fontSize: 13)),
-          subtitle: Text(
-            _devDemoPhaseEnabled
-                ? '已开启：启动自动加载最新任务演示（可点下一步步进）'
-                : '已关闭：自行选择股票/演示内容',
-            style: const TextStyle(fontSize: 11),
-          ),
-          value: _devDemoPhaseEnabled,
-          onChanged: _busy
-              ? null
-              : (v) async {
-                  await TaskDemoSettingsStore.setDevelopmentDemoPhaseEnabled(v);
-                  setState(() => _devDemoPhaseEnabled = v);
-                  if (!v) {
-                    _exitTaskDemoWalkthrough();
-                  } else {
-                    _msgHistory.append('开发演示阶段=开（下次启动自动加载最新任务演示）');
-                  }
-                  _msgHistory.append('开发演示阶段=${v ? "开" : "关"}');
-                },
-          secondary: IconButton(
-            tooltip: '开发演示阶段说明',
-            icon: const Icon(Icons.help_outline, size: 18),
-            onPressed: _showDevDemoPhaseHelp,
-          ),
-        ),
-        if (!_devDemoPhaseEnabled) ...[
-          const SizedBox(height: 6),
-          OutlinedButton.icon(
-            onPressed: _busy ? null : _openLatestTaskDemoWalkthrough,
-            icon: const Icon(Icons.play_lesson, size: 18),
-            label: const Text('手动打开最新任务演示'),
-          ),
-        ],
-        const SizedBox(height: 8),
-        OutlinedButton.icon(
-          onPressed: _busy ? null : _openTaskDemoList,
-          icon: const Icon(Icons.list_alt, size: 18),
-          label: const Text('任务演示列表 / 前后对比'),
-        ),
-        const SizedBox(height: 12),
-        OutlinedButton.icon(
-          onPressed: _busy ? null : _bootstrap,
-          icon: const Icon(Icons.refresh, size: 18),
-          label: const Text('刷新股票列表'),
-        ),
-        const SizedBox(height: 10),
-        // 常驻：一键复制历史记录（合并到 main / 清理 UI 时不得删除）
-        OutlinedButton.icon(
-          onPressed: _copyHistoryRecords,
-          icon: const Icon(Icons.copy_all, size: 18),
-          label: const Text('一键复制历史记录'),
-        ),
-        const SizedBox(height: 8),
-        OutlinedButton.icon(
-          onPressed: () => _msgHistory.showDialog(context),
-          icon: const Icon(Icons.history, size: 18),
-          label: const Text('查看历史记录'),
-        ),
-        const SizedBox(height: 8),
-        OutlinedButton.icon(
-          onPressed: _copyDebugSnapshot,
-          icon: const Icon(Icons.content_copy, size: 18),
-          label: const Text('复制页面快照'),
-        ),
-        const SizedBox(height: 8),
-        // 常驻：验收调试信息（内容随当前任务更新；勿删按钮）
-        OutlinedButton.icon(
-          onPressed: _busy ? null : _copyAuditProbeDebug,
-          icon: const Icon(Icons.bug_report_outlined, size: 18),
-          label: const Text('复制调试信息'),
+        const SizedBox(height: SettingsPanelTheme.sectionGap),
+        SettingsOutlinedButton(
+          label: '复制排查信息',
+          icon: Icons.summarize,
+          onPressed: _busy ? null : () => _showConsolidatedProbeDialog(context),
         ),
         const SizedBox(height: 4),
         Text(
-          '本次验收：T1 K1节奏关窗持值（分笔·77–114续上个0-0）·T2 tip与主图同源；'
-          '建议跳末后点按，稍等后粘贴全文。',
+          '弹窗查看整合全文，底部「复制」一键带走；含页面状态、最近历史与验收探针，已去重精简。',
           style: TextStyle(fontSize: 11, color: Colors.grey.shade700, height: 1.3),
         ),
-        const SizedBox(height: 12),
-        OutlinedButton.icon(
-          onPressed: (_busy && !_backtestPanelOpen) || _mlSession.isActive
+        const SizedBox(height: SettingsPanelTheme.fieldGap),
+        SettingsFilledButton(
+          label: _mlSession.isActive ? '机器学习（进行中）' : '机器学习',
+          icon: Icons.psychology,
+          onPressed: (_busy && !_mlSession.isActive) || _mlSession.isActive
               ? null
-              : _openBacktestWorkbench,
-          icon: const Icon(Icons.show_chart, size: 18),
-          label: Text(_backtestPanelOpen ? '策略回测（已打开）' : '策略回测'),
-        ),
-        const SizedBox(height: 8),
-        // 机器学习：不加载K线图；后台算样本后看训练/考试结果
-        Row(
-          children: [
-            Expanded(
-              child: FilledButton.icon(
-                onPressed: (_busy && !_mlSession.isActive) ||
-                        _mlSession.isActive
-                    ? null
-                    : () => _enterMlSession(),
-                icon: const Icon(Icons.psychology, size: 18),
-                label: Text(
-                  _mlSession.isActive ? '机器学习（进行中）' : '机器学习',
-                ),
-              ),
-            ),
-            IconButton(
-              tooltip: '机器学习说明',
-              onPressed: _showMlHelp,
-              icon: const Icon(Icons.help_outline, size: 20),
-            ),
-          ],
+              : () => _enterMlSession(),
+          onHelp: _showMlHelp,
+          helpTooltip: '机器学习说明',
         ),
         if (_mlSession.isActive) ...[
-          const SizedBox(height: 8),
-          OutlinedButton.icon(
+          const SizedBox(height: SettingsPanelTheme.fieldGap),
+          SettingsOutlinedButton(
+            label: '退出机器学习',
+            icon: Icons.exit_to_app,
             onPressed: _exitMlSession,
-            icon: const Icon(Icons.exit_to_app, size: 18),
-            label: const Text('退出机器学习'),
           ),
         ],
-      ],
-    );
+    ];
   }
 
   void _clearBacktestSession() {
@@ -2195,79 +2699,436 @@ class _KlineHomePageState extends State<KlineHomePage> {
     _btFocusBarIdx = null;
   }
 
-  void _openBacktestWorkbench() {
+  void _closeBacktestWorkbench() {
+    setState(() => _backtestPanelOpen = false);
+    _refreshKeepAlive();
+  }
+
+  BacktestStepHarnessResult _mainSessionHarnessForSearch() {
+    final maxKn = chartMaxKn(levels: _levels, k0Lines: _k0Lines);
+    return BacktestStepHarnessResult.fromMainSession(
+      bars: List<KlineBar>.from(_allBars),
+      levels: _levels,
+      mathFreeze: _stepFreeze.mathFreezeStore,
+      chanEvents: _chanEventStore(),
+      zsObjects: _stepFreeze.zsObjectStore,
+      diverRelations: _stepFreeze.diverRelationStore,
+      lineSeries: _chartLineStore(),
+      chipPeaks: _stepFreeze.chipPeakStore,
+      barFeatures: _barFeatures,
+      maxKn: maxKn,
+      mathConfig: _mathIndicatorConfig,
+      chipBucketStep: _chipConfig.bucketStep,
+    );
+  }
+
+  Future<void> _openIndicatorSearch({bool closeSettingsSheet = false}) async {
     if (_mlSession.isActive) {
       _showSnack('请先退出机器学习');
       return;
+    }
+    final code = _selectedCode;
+    if (code == null) {
+      _showSnack('请先选择股票');
+      return;
+    }
+    if (!_hasSession || _allBars.isEmpty) {
+      _showSnack('请先加载 K 线');
+      return;
+    }
+    if (_stepIdx < 0) {
+      _showSnack('请先步进至少一根 K 线');
+      return;
+    }
+    if (_stepIdx < _allBars.length - 1) {
+      _showSnack(
+        '寻优与策略回测共用主图冻结：请先步进到区间最后一根 K（可一键跳末）',
+      );
+      return;
+    }
+    if (closeSettingsSheet && Navigator.canPop(context)) {
+      Navigator.pop(context);
+      _settingsSheetSetState = null;
+    }
+    setState(() => _indicatorSearchRunning = true);
+    _msgHistory.append(
+      '指标寻优：$code ${_periods[_period] ?? _period} '
+      '${_fmtDateTime(_beginDate)}~${_fmtDateTime(_endDate)}',
+    );
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => IndicatorSearchDialog(
+        code: code,
+        period: _period,
+        beginText: _fmtDateTime(_beginDate),
+        endText: _fmtDateTime(_endDate),
+        dataRoot: _dataRoot,
+        tickSource: _tickSourceFor(code),
+        mathConfig: _mathIndicatorConfig,
+        chipConfig: _chipConfig,
+        strategyConfig: _strategyConfig,
+        featureLookup: _pipelineSession?.cache.lookup,
+        truncationCheck: _truncationCheck,
+        mainSessionHarness: _mainSessionHarnessForSearch(),
+        initialBars: List<KlineBar>.from(_allBars),
+      ),
+    );
+    if (!mounted) return;
+    setState(() => _indicatorSearchRunning = false);
+    _msgHistory.append('指标寻优结束');
+  }
+
+  /// 计优：跑完的缠论/指标冻结账 → 各级别连线转折点的指标统计。
+///
+/// 前置条件与寻优一致：必须已步进到区间最后一根 K（全部指标跑完）。
+/// **只读** 冻结账（`_pipelineSession.cache.lookup`），不写冻结仓、不改主图语义。
+Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
+    if (_mlSession.isActive) {
+      _showSnack('请先退出机器学习');
+      return;
+    }
+    final code = _selectedCode;
+    if (code == null) {
+      _showSnack('请先选择股票');
+      return;
+    }
+    if (!_hasSession || _allBars.isEmpty) {
+      _showSnack('请先加载 K 线');
+      return;
+    }
+    if (_stepIdx < 0) {
+      _showSnack('请先步进至少一根 K 线');
+      return;
+    }
+    if (_stepIdx < _allBars.length - 1) {
+      _showSnack('计优需要全部指标先跑完：请先步进到区间最后一根 K（可一键跳末）');
+      return;
+    }
+    final lookup = _pipelineSession?.cache.lookup;
+    if (lookup == null || lookup.byIdx.isEmpty) {
+      _showSnack('主图冻结账为空：请先步进 K 线再点计优');
+      return;
+    }
+    if (closeSettingsSheet && Navigator.canPop(context)) {
+      Navigator.pop(context);
+      _settingsSheetSetState = null;
+    }
+    setState(() => _keyPointStatRunning = true);
+    _msgHistory.appendKeyPointStatsStart(code, _period);
+    final maxKn = chartMaxKn(levels: _levels, k0Lines: _k0Lines);
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => KeyPointStatsDialog(
+        code: code,
+        period: _period,
+        beginText: _fmtDateTime(_beginDate),
+        endText: _fmtDateTime(_endDate),
+        bars: List<KlineBar>.from(_allBars),
+        levels: _levels,
+        lookup: lookup,
+        maxKn: maxKn,
+        k0Confirms: _k0ConfirmSignals,
+        k0Lines: _k0Lines,
+        // 复现参数：截断开关会改转折点位置；数学指标/筹码参数决定每格的值
+        truncationCheck: _truncationCheck,
+        maxBsClass: _maxBsClass,
+        mathConfig: _mathIndicatorConfig,
+        chipBucketStep: _chipConfig.bucketStep,
+        peakRankMode: _chipConfig.peakRankConfig.schemeId,
+      ),
+    );
+    if (!mounted) return;
+    setState(() => _keyPointStatRunning = false);
+    _msgHistory.appendKeyPointStatsEnd();
+  }
+
+  void _openBacktestWorkbench({bool closeSettingsSheet = false}) {
+    if (_mlSession.isActive) {
+      _showSnack('请先退出机器学习');
+      return;
+    }
+    if (closeSettingsSheet && Navigator.canPop(context)) {
+      Navigator.pop(context);
+      _settingsSheetSetState = null;
     }
     setState(() {
       _backtestPanelOpen = true;
       _panelExpanded = false;
     });
+    _refreshKeepAlive();
+  }
+
+  void _onBacktestSplitDown(PointerDownEvent e) {
+    if (e.buttons != kPrimaryButton) return;
+    _backtestSplitDragging = true;
+    _backtestSplitDragStartY = _useAndroidInteraction
+        ? e.localPosition.dy
+        : e.localPosition.dx;
+    _backtestSplitDragStartFraction = _backtestChartFraction;
+  }
+
+  void _onBacktestSplitMove(PointerMoveEvent e, double total) {
+    if (!_backtestSplitDragging || total <= 0) return;
+    final pos =
+        _useAndroidInteraction ? e.localPosition.dy : e.localPosition.dx;
+    final delta = pos - _backtestSplitDragStartY;
+    setState(() {
+      _backtestChartFraction =
+          ((_backtestSplitDragStartFraction * total + delta) / total)
+              .clamp(_minBacktestChartFraction, _maxBacktestChartFraction);
+    });
+  }
+
+  void _onBacktestSplitUp(PointerUpEvent e) {
+    _backtestSplitDragging = false;
+  }
+
+  Widget _buildBacktestSplitBar(double total, {required bool vertical}) {
+    return MouseRegion(
+      cursor: vertical
+          ? SystemMouseCursors.resizeUpDown
+          : SystemMouseCursors.resizeLeftRight,
+      child: Listener(
+        behavior: HitTestBehavior.opaque,
+        onPointerDown: _onBacktestSplitDown,
+        onPointerMove: (e) => _onBacktestSplitMove(e, total),
+        onPointerUp: _onBacktestSplitUp,
+        child: vertical
+            ? SizedBox(
+                height: 8,
+                child: Center(
+                  child: Container(
+                    height: _backtestSplitDragging ? 3 : 2,
+                    margin: const EdgeInsets.symmetric(horizontal: 8),
+                    decoration: BoxDecoration(
+                      color: _backtestSplitDragging
+                          ? const Color(0xAA42A5F5)
+                          : const Color(0x55FFFFFF),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+              )
+            : SizedBox(
+                width: 8,
+                child: Center(
+                  child: Container(
+                    width: _backtestSplitDragging ? 3 : 2,
+                    margin: const EdgeInsets.symmetric(vertical: 8),
+                    decoration: BoxDecoration(
+                      color: _backtestSplitDragging
+                          ? const Color(0xAA42A5F5)
+                          : const Color(0x55FFFFFF),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+              ),
+      ),
+    );
   }
 
   Widget _buildReplayBody() {
     final chart = _buildKlineChart();
-    if (!_backtestPanelOpen) return chart;
+    if (!_backtestPanelOpen) return _withTooltipDock(chart);
     final maxKn = chartMaxKn(levels: _levels, k0Lines: _k0Lines);
-    return Column(
-      children: [
-        Expanded(flex: 3, child: chart),
-        SizedBox(
-          height: 286,
-          child: BacktestWorkbench(
-            config: _strategyConfig,
-            maxKn: maxKn,
-            onConfigChanged: (c) => setState(() => _strategyConfig = c),
-            onRun: _runStrategyBacktest,
-            onClose: () => setState(() => _backtestPanelOpen = false),
-            onHelp: _showBacktestHelp,
-            run: _backtestRun,
-            bars: _visibleBars,
-            currentStepIdx: _stepIdx < 0 ? 0 : _stepIdx,
-            tab: _btTab,
-            onTab: (t) => setState(() => _btTab = t),
-            selectedSignalId: _btSelectedSignalId,
-            selectedTradeId: _btSelectedTradeId,
-            onSelectTrade: _onBacktestSelectTrade,
-            onSelectSignal: _onBacktestSelectSignal,
-            onJumpX: _jumpBacktestBar,
-            focusX: _btFocusBarIdx,
-            levels: _levels,
-            mathFreeze: _mathFreezeStore,
-            chanEvents: _chanEventStore(),
-            zsObjects: _zsObjectStore,
-            diverRelations: _diverRelationStore,
-            lineSeries: _chartLineStore(),
-            features: _pipelineSession?.cache.lookup,
-            chipPeaks: _chipPeakStore,
-            bucketStep: _chipConfig.bucketStep,
+    final workbench = BacktestWorkbench(
+      config: _strategyConfig,
+      maxKn: maxKn,
+      onConfigChanged: (c) => setState(() => _strategyConfig = c),
+      onRun: _runStrategyBacktest,
+      onClose: _closeBacktestWorkbench,
+      onHelp: _showBacktestHelp,
+      run: _backtestRun,
+      bars: _visibleBars,
+      currentStepIdx: _stepIdx < 0 ? 0 : _stepIdx,
+      tab: _btTab,
+      onTab: (t) => setState(() => _btTab = t),
+      selectedSignalId: _btSelectedSignalId,
+      selectedTradeId: _btSelectedTradeId,
+      onSelectTrade: _onBacktestSelectTrade,
+      onSelectSignal: _onBacktestSelectSignal,
+      onJumpX: _jumpBacktestBar,
+      focusX: _btFocusBarIdx,
+      levels: _levels,
+      mathFreeze: _stepFreeze.mathFreezeStore,
+      chanEvents: _chanEventStore(),
+      zsObjects: _stepFreeze.zsObjectStore,
+      diverRelations: _stepFreeze.diverRelationStore,
+      lineSeries: _chartLineStore(),
+      features: _pipelineSession?.cache.lookup,
+      chipPeaks: _stepFreeze.chipPeakStore,
+      bucketStep: _chipConfig.bucketStep,
+      compactLayout: _useAndroidInteraction,
+    );
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final sideBySide = !_useAndroidInteraction;
+        if (sideBySide) {
+          final totalW = constraints.maxWidth;
+          if (totalW <= 0) return chart;
+          const splitW = 8.0;
+          const minChartW = 240.0;
+          const minBenchW = 300.0;
+          final maxChartW = math.max(minChartW, totalW - minBenchW - splitW);
+          final minFrac = minChartW / totalW;
+          final maxFrac = maxChartW / totalW;
+          final frac = _backtestChartFraction.clamp(minFrac, maxFrac);
+          final chartW = frac * totalW;
+          final benchW = totalW - chartW - splitW;
+          return Row(
+            children: [
+              // 桌面并排：chart 仍要包 _withTooltipDock，否则左边 tooltip 停靠子窗口
+              // 没有 _tooltipBridge 的消费者，十字线 tooltip 界面无法调出。
+              // dock 只在 chart 区域内出现（关面板时不占宽），工作台宽度 benchW 不变，
+              // split 拖动改 _backtestChartFraction 仍然生效。
+              SizedBox(width: chartW, child: _withTooltipDock(chart)),
+              _buildBacktestSplitBar(totalW, vertical: false),
+              SizedBox(width: benchW, child: workbench),
+            ],
+          );
+        }
+        final totalH = constraints.maxHeight;
+        if (totalH <= 0) return chart;
+        const splitBarH = 8.0;
+        const minChartH = 120.0;
+        const minBacktestH = 160.0;
+        final maxChartH = math.max(minChartH, totalH - minBacktestH - splitBarH);
+        final minFrac = minChartH / totalH;
+        final maxFrac = maxChartH / totalH;
+        final frac = _backtestChartFraction.clamp(minFrac, maxFrac);
+        final chartH = frac * totalH;
+        final backtestH = totalH - chartH - splitBarH;
+        return _withTooltipDock(
+          Column(
+            children: [
+              SizedBox(height: chartH, child: chart),
+              _buildBacktestSplitBar(totalH, vertical: true),
+              SizedBox(height: backtestH, child: workbench),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  /// 桌面：把十字线 tooltip 停靠为左侧独立子窗口（chart 缩小到剩余宽），原悬浮态关闭。
+  /// 移动端：KlineChart 用内部悬浮面板，这里直接返回 child。
+  ///
+  /// 关键：Row 结构必须**始终存在**（用 Offstage 控制左栏显隐），不能在
+  /// 「直接返回 child」与「Row>Expanded 包裹 child」之间切换 —— 否则 KlineChart
+  /// 在树中的位置/深度变化且无 GlobalKey，Element 连同 State 会被整体重建，
+  /// 十字线坐标、视口缩放等内部状态全部丢失（表现为 tooltip 一出现十字线就消失）。
+  Widget _withTooltipDock(Widget child) {
+    if (_useAndroidInteraction) return child;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final h = constraints.maxHeight;
+        return ValueListenableBuilder<bool>(
+          valueListenable: _tooltipBridge.shown,
+          builder: (context, shown, _) {
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Offstage(
+                  offstage: !shown,
+                  child: SizedBox(
+                    width: _tooltipPanelWidth,
+                    child: _buildDockedTooltipPanel(h),
+                  ),
+                ),
+                Offstage(offstage: !shown, child: _buildTooltipDragHandle()),
+                Expanded(child: child),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  /// 左侧停靠的 tooltip 子窗口内容（随十字线移动刷新行）
+  Widget _buildDockedTooltipPanel(double h) {
+    return ValueListenableBuilder<List<CrosshairTooltipRow>>(
+      valueListenable: _tooltipBridge.rows,
+      builder: (context, rows, _) {
+        return Container(
+          decoration: BoxDecoration(
+            border: Border(
+              right: BorderSide(
+                color: const Color(0x33556677),
+                width: 1,
+              ),
+            ),
+          ),
+          child: CrosshairTooltipPanel(
+            rows: rows,
+            scrollController: _tooltipBridge.scrollController!,
+            maxWidth: _tooltipPanelWidth,
+            maxHeight: h,
+            onClose: () => _tooltipBridge.onRequestClose?.call(),
+          ),
+        );
+      },
+    );
+  }
+
+  /// 左侧子窗口与 K 线之间的可拖拽分隔条（调整面板宽度）
+  Widget _buildTooltipDragHandle() {
+    return MouseRegion(
+      cursor: SystemMouseCursors.resizeLeftRight,
+      child: Listener(
+        behavior: HitTestBehavior.opaque,
+        onPointerDown: (e) => setState(() => _tooltipPanelDragging = true),
+        onPointerMove: (e) {
+          if (e.buttons == 0) return;
+          setState(() {
+            _tooltipPanelWidth = (_tooltipPanelWidth + e.delta.dx)
+                .clamp(_minTooltipPanelWidth, _maxTooltipPanelWidth);
+          });
+        },
+        onPointerUp: (e) => setState(() => _tooltipPanelDragging = false),
+        child: SizedBox(
+          width: 8,
+          child: Center(
+            child: Container(
+              width: _tooltipPanelDragging ? 3 : 2,
+              margin: const EdgeInsets.symmetric(vertical: 8),
+              decoration: BoxDecoration(
+                color: _tooltipPanelDragging
+                    ? const Color(0xAA42A5F5)
+                    : const Color(0x55FFFFFF),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
           ),
         ),
-      ],
+      ),
     );
   }
 
   ChanEventStore _chanEventStore() {
     return ChanEventStore(
-      buy1ByKn: _buy1HistoryByKn,
-      sell1ByKn: _sell1HistoryByKn,
-      buy2ByKn: _buy2HistoryByKn,
-      sell2ByKn: _sell2HistoryByKn,
-      buyNByKn: _buyNHistoryByKn,
-      sellNByKn: _sellNHistoryByKn,
-      zsConfirmByKn: _zsConfirmHistoryByKn,
-      zsJudgmentByKn: _zsJudgmentHistoryByKn,
-      fractalJudgmentByKn: _judgmentHistoryByKn,
+      buy1ByKn: _stepFreeze.buy1HistoryByKn,
+      sell1ByKn: _stepFreeze.sell1HistoryByKn,
+      buy2ByKn: _stepFreeze.buy2HistoryByKn,
+      sell2ByKn: _stepFreeze.sell2HistoryByKn,
+      buyNByKn: _stepFreeze.buyNHistoryByKn,
+      sellNByKn: _stepFreeze.sellNHistoryByKn,
+      zsConfirmByKn: _stepFreeze.zsConfirmHistoryByKn,
+      zsJudgmentByKn: _stepFreeze.zsJudgmentHistoryByKn,
+      fractalJudgmentByKn: _stepFreeze.judgmentHistoryByKn,
       k0FractalConfirms: _k0ConfirmSignals,
     );
   }
 
   ChartLineStore _chartLineStore() {
     return ChartLineStore(
-      adjacentRatioByKn: _adjacentRatioHistoryByKn,
-      lineSlopeByKn: _lineSlopeHistoryByKn,
-      stepRhythmByKn: _stepRhythmHistoryByKn,
+      adjacentRatioByKn: _stepFreeze.adjacentRatioHistoryByKn,
+      lineSlopeByKn: _stepFreeze.lineSlopeHistoryByKn,
+      stepRhythmByKn: _stepFreeze.stepRhythmHistoryByKn,
     );
   }
 
@@ -2290,16 +3151,20 @@ class _KlineHomePageState extends State<KlineHomePage> {
       scope: scope,
       bars: _visibleBars,
       levels: _levels,
-      mathFreeze: _mathFreezeStore,
+      mathFreeze: _stepFreeze.mathFreezeStore,
       chanEvents: _chanEventStore(),
-      zsObjects: _zsObjectStore,
-      diverRelations: _diverRelationStore,
+      zsObjects: _stepFreeze.zsObjectStore,
+      diverRelations: _stepFreeze.diverRelationStore,
       lineSeries: _chartLineStore(),
       features: _pipelineSession?.cache.lookup,
-      chipPeaks: _chipPeakStore,
+      chipPeaks: _stepFreeze.chipPeakStore,
       bucketStep: _chipConfig.bucketStep,
       bollN: _mathIndicatorConfig.bollN,
+      donchianN: _mathIndicatorConfig.donchianN,
       maxKn: maxKn,
+      regressK: _mathIndicatorConfig.regressK,
+      barFeatures: _barFeatures,
+      mathConfig: _mathIndicatorConfig,
     );
     setState(() {
       _strategyConfig = cfg;
@@ -2309,6 +3174,18 @@ class _KlineHomePageState extends State<KlineHomePage> {
       _btSelectedTradeId = null;
       _btHighlightIds = {};
       _panelExpanded = false;
+      // 运行回测后：自动把条件里引用的指标并入主/副图（叠加，不清空原有勾选）；
+      // 关面板不自动关这些指标（叠加语义天然保留）。
+      final merged = mergeStrategyIndicators(
+        main: _mainIndicators,
+        sub: _subIndicators,
+        cfg: cfg,
+        maxKn: maxKn,
+        truncationCheck: _truncationCheck,
+        maxBsClass: _maxBsClass,
+      );
+      _mainIndicators = merged.main;
+      _subIndicators = merged.sub;
     });
     if (run.error != null) {
       _showSnack(run.error!);
@@ -2342,7 +3219,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       _btSelectedSignalId = same ? t.exitSignalId : t.entrySignalId;
       _btFocusBarIdx = same ? t.exitX : t.entryX;
       _btFocusEpoch++;
-      _btTab = BacktestReportTab.trades;
+      _btTab = BacktestWorkbenchTab.trades;
     });
   }
 
@@ -2367,32 +3244,36 @@ class _KlineHomePageState extends State<KlineHomePage> {
           : {s.signalId};
       _btFocusBarIdx = s.discoveryX;
       _btFocusEpoch++;
-      if (openChain) _btTab = BacktestReportTab.chain;
+      if (openChain) _btTab = BacktestWorkbenchTab.chain;
     });
   }
 
   void _showBacktestHelp() {
     showDialog<void>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => SelectionArea(child: AlertDialog(
         title: const Text('策略回测说明'),
         content: const SingleChildScrollView(
           child: Text(
-            '先加载股票并走到你要回测的那根 K，再打开策略回测。\n\n'
+            '先加载股票并走到你要回测的那根 K，再打开策略回测。\n'
+            '电脑上整块工作台在窗口最小/最大/关闭下面，避免挡住那三个键。'
+            '点工作台右上角关闭（X）只关策略回测、K 线铺回整屏；设置里还能再打开。不是关软件窗口。\n\n'
             '买卖条件各自用积木搭：比较（> < >= <=）、上穿/下穿，'
             '多条之间用 AND / OR。左右可以是同一层的收开高低、布林三轨、'
             'MACD（DIF/DEA/柱）、RSI、KDJ，K0 还可以用成交量；右边也可以填常数。'
             '也可以选一类/二类买卖点、分型确认、中枢确认、背驰出现：这些是「出现一次」的事件，'
             '每颗点当根出一次信号，连着两颗确认不会把后面那颗吞掉。'
-            '只能和同层同钟的条件用 AND/OR 拼，不能拿去比较或上穿下穿。'
+            '事件只能用 AND/OR 拼（须同一根 K 两边都刚发生），不能拿去比较或上穿下穿。'
             '买卖都选分型确认时，同一根先平后开：空仓只开，有仓先平再开。'
             '确认中枢的高/低/中轴是数值：先认定「当前这层最新一个已经确认的中枢」，再取当时能看见的高低，'
             '不是事后扩大后的末态。没有确认中枢就是不可用，不会当成 0。'
             '背驰是「哪一个结构对比哪一个结构、在哪根 K 被发现」的关系，不是一根 K 看起来像背驰。'
             '力度比可以拿去和数字比，方向只能选向上或向下，不能把整个背驰拿去比大小或上穿下穿。'
-            '同一条比较必须同层同钟，K0 和 K1 不能拼在同一棵树上。'
+            '同一条比较必须同层同钟：K0 最低价不能去穿 K1 布林。'
+            '但两层各自穿完自己的布林，再用 AND/OR 拼是可以的，AND 必须撞在同一根 K 上。'
             '成交量这一版只开放 K0，没有另造 Kn 成交量和均量。\n\n'
             '点运行后，图上按组合组显示「买1/卖1」「买2/卖2」（红买绿卖），画在发现当根，被拒的不画。'
+            '买1/卖1 用三角，买2/卖2 用箭头，买3/卖3 再三角，按组号奇偶交替。'
             '默认按本周期收盘价成交；也可在设置里改次周期开盘价。这不是缠论的 1Ba/1Sa。'
             '报告里的净利润、胜率、盈亏比、回撤都来自这一次回测结果，界面不会再算一遍。'
             '左侧变量诊断只读图上已冻住的格子和计算钟样本，不会现场重算指标。\n\n'
@@ -2408,7 +3289,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
           ),
         ],
       ),
-    );
+    ));
   }
 
   /// 复盘 K 线（ML 期间主区不挂本组件）。
@@ -2436,29 +3317,31 @@ class _KlineHomePageState extends State<KlineHomePage> {
       truncationCheck: _truncationCheck,
       showBuildingDash: _showBuildingDash,
       chipOnlyMode: _chipOnlyMode,
-      chipConfig: _chipConfig,
-      tickDistConfig: _tickDistConfig,
+      chipConfig: _sessionChipConfig,
+      tickDistConfig: _sessionTickDistConfig,
       mathIndicatorConfig: _mathIndicatorConfig,
-      mathFreezeStore: _mathFreezeStore,
-      diverFreezeStore: _diverFreezeStore,
-      judgmentHistoryByKn: _judgmentHistoryByKn,
-      zsJudgmentHistoryByKn: _zsJudgmentHistoryByKn,
-      zsConfirmHistoryByKn: _zsConfirmHistoryByKn,
-      buy1HistoryByKn: _buy1HistoryByKn,
-      sell1HistoryByKn: _sell1HistoryByKn,
-      buy2HistoryByKn: _buy2HistoryByKn,
-      sell2HistoryByKn: _sell2HistoryByKn,
-      buyNHistoryByKn: _buyNHistoryByKn,
-      sellNHistoryByKn: _sellNHistoryByKn,
-      bsVerdictHistoryByKn: _bsVerdictHistoryByKn,
+      mathFreezeStore: _stepFreeze.mathFreezeStore,
+      diverFreezeStore: _stepFreeze.diverFreezeStore,
+      chipPeakStore: _stepFreeze.chipPeakStore,
+      judgmentHistoryByKn: _stepFreeze.judgmentHistoryByKn,
+      zsJudgmentHistoryByKn: _stepFreeze.zsJudgmentHistoryByKn,
+      zsConfirmHistoryByKn: _stepFreeze.zsConfirmHistoryByKn,
+      buy1HistoryByKn: _stepFreeze.buy1HistoryByKn,
+      sell1HistoryByKn: _stepFreeze.sell1HistoryByKn,
+      buy2HistoryByKn: _stepFreeze.buy2HistoryByKn,
+      sell2HistoryByKn: _stepFreeze.sell2HistoryByKn,
+      buyNHistoryByKn: _stepFreeze.buyNHistoryByKn,
+      sellNHistoryByKn: _stepFreeze.sellNHistoryByKn,
+      bsVerdictHistoryByKn: _stepFreeze.bsVerdictHistoryByKn,
       overlayBsVerdictWrong: _overlayBsVerdictWrong,
-      adjacentRatioHistoryByKn: _adjacentRatioHistoryByKn,
-      stepRhythmHistoryByKn: _stepRhythmHistoryByKn,
-      lineSlopeHistoryByKn: _lineSlopeHistoryByKn,
+      adjacentRatioHistoryByKn: _stepFreeze.adjacentRatioHistoryByKn,
+      stepRhythmHistoryByKn: _stepFreeze.stepRhythmHistoryByKn,
+      lineSlopeHistoryByKn: _stepFreeze.lineSlopeHistoryByKn,
       lookupEngine: _pipelineSession?.cache.lookupEngine,
+      sessionAsOfBundle: (asOf) => _pipelineSession?.cache.snapshotAt(asOf),
       mainIndicators: _mainIndicators,
       onMainIndicatorsChanged: (v) => setState(() => _mainIndicators = v),
-      subIndicators: _subIndicators,
+      subIndicators: _sessionSubIndicators,
       onSubIndicatorsChanged: (v) => setState(
             () => _subIndicators = ensureMacdForDivergenceArea(v),
           ),
@@ -2472,16 +3355,23 @@ class _KlineHomePageState extends State<KlineHomePage> {
       onTapStepForward: gesturesOn ? _stepForward : null,
       onLongPressReset: gesturesOn ? _resetStep : null,
       onLongPressReload: _busy ? null : _loadKlines,
-      onLongPressRunToEnd: gesturesOn ? _runToEnd : null,
-      strategySignals: _backtestRun?.result?.signals ?? const [],
-      strategyFills: _backtestRun?.result?.fills ?? const [],
-      strategyRoundBySignalId: _backtestRun?.result == null
+      onLongPressRunToEnd: gesturesOn ? () { unawaited(_runToEnd()); } : null,
+      strategySignals: _backtestPanelOpen
+          ? (_backtestRun?.result?.signals ?? const [])
+          : const [],
+      strategyFills: _backtestPanelOpen
+          ? (_backtestRun?.result?.fills ?? const [])
+          : const [],
+      strategyRoundBySignalId: (!_backtestPanelOpen || _backtestRun?.result == null)
           ? const {}
           : buildStrategyRoundIndex(_backtestRun!.result!).roundBySignalId,
       highlightedStrategyIds: _btHighlightIds,
       focusBarIdx: _btFocusBarIdx,
       focusBarEpoch: _btFocusEpoch,
       onStrategySignalTap: _onChartStrategySignalTap,
+      mobileLayout: _useAndroidInteraction,
+      tooltipBridge: _tooltipBridge,
+      dockTooltipPanel: !_useAndroidInteraction,
     );
   }
 
@@ -2514,7 +3404,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       return;
     }
     if (_dataRoot.isEmpty) {
-      _showSnack('数据根目录未就绪，请稍候或刷新股票列表');
+      _showSnack('数据根目录未就绪，请稍候或重新打开股票下拉框');
       return;
     }
     if (_playing) {
@@ -2532,6 +3422,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       _mlTestLocked = false;
       _panelExpanded = false;
     });
+    _refreshKeepAlive();
     _msgHistory.append(
       '进入机器学习：当前股票=$_selectedCode · ${_mlLabelConfig.summary} · '
       '时序三截+验证调参+测试一次锁定'
@@ -2576,7 +3467,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       });
       await Future<void>.delayed(Duration.zero);
       if (!mounted) return;
-      _runToEnd(mlSampler: _mlSampler);
+      await _runToEnd(mlSampler: _mlSampler);
       if (!mounted) return;
 
       setState(() {
@@ -2691,6 +3582,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       _mlTestLocked = false;
       _mlSampler.reset();
     });
+    _refreshKeepAlive();
     _msgHistory.append('退出机器学习：解锁测试锁定，回到复盘界面');
     _showSnack('已退出机器学习');
   }
@@ -2698,7 +3590,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
   void _showMlHelp() {
     showDialog<void>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => SelectionArea(child: AlertDialog(
         title: const Text('机器学习说明（防未来/防窥探）'),
         content: const SingleChildScrollView(
           child: Text(
@@ -2719,7 +3611,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
           ),
         ],
       ),
-    );
+    ));
   }
 
   /// 跳末逐步采样用：用当步 cache 增量 Lookup（与图表同源，禁止再 Full build）。
@@ -2754,30 +3646,30 @@ class _KlineHomePageState extends State<KlineHomePage> {
       k1Analysis: k1Analysis,
       levels: levels,
       k1CombineFrames: k1CombineFrames,
-      buy1HistoryByKn: _buy1HistoryByKn,
-      sell1HistoryByKn: _sell1HistoryByKn,
-      buy2HistoryByKn: _buy2HistoryByKn,
-      sell2HistoryByKn: _sell2HistoryByKn,
-      buyNHistoryByKn: _buyNHistoryByKn,
-      sellNHistoryByKn: _sellNHistoryByKn,
-      adjacentRatioHistoryByKn: _adjacentRatioHistoryByKn,
-      stepRhythmHistoryByKn: _stepRhythmHistoryByKn,
-      lineSlopeHistoryByKn: _lineSlopeHistoryByKn,
-      buy1K0Frames: _buy1HistoryByKn[0] ?? const [],
-      sell1K0Frames: _sell1HistoryByKn[0] ?? const [],
-      buy2K0Frames: _buy2HistoryByKn[0] ?? const [],
-      sell2K0Frames: _sell2HistoryByKn[0] ?? const [],
-      buyNK0Frames: _buyNHistoryByKn[0] ?? const [],
-      sellNK0Frames: _sellNHistoryByKn[0] ?? const [],
+      buy1HistoryByKn: _stepFreeze.buy1HistoryByKn,
+      sell1HistoryByKn: _stepFreeze.sell1HistoryByKn,
+      buy2HistoryByKn: _stepFreeze.buy2HistoryByKn,
+      sell2HistoryByKn: _stepFreeze.sell2HistoryByKn,
+      buyNHistoryByKn: _stepFreeze.buyNHistoryByKn,
+      sellNHistoryByKn: _stepFreeze.sellNHistoryByKn,
+      adjacentRatioHistoryByKn: _stepFreeze.adjacentRatioHistoryByKn,
+      stepRhythmHistoryByKn: _stepFreeze.stepRhythmHistoryByKn,
+      lineSlopeHistoryByKn: _stepFreeze.lineSlopeHistoryByKn,
+      buy1K0Frames: _stepFreeze.buy1HistoryByKn[0] ?? const [],
+      sell1K0Frames: _stepFreeze.sell1HistoryByKn[0] ?? const [],
+      buy2K0Frames: _stepFreeze.buy2HistoryByKn[0] ?? const [],
+      sell2K0Frames: _stepFreeze.sell2HistoryByKn[0] ?? const [],
+      buyNK0Frames: _stepFreeze.buyNHistoryByKn[0] ?? const [],
+      sellNK0Frames: _stepFreeze.sellNHistoryByKn[0] ?? const [],
       subIndicators: allSubs,
       truncationCheck: _truncationCheck,
-      judgmentHistoryByKn: _judgmentHistoryByKn,
-      zsJudgmentHistoryByKn: _zsJudgmentHistoryByKn,
-      zsConfirmHistoryByKn: _zsConfirmHistoryByKn,
+      judgmentHistoryByKn: _stepFreeze.judgmentHistoryByKn,
+      zsJudgmentHistoryByKn: _stepFreeze.zsJudgmentHistoryByKn,
+      zsConfirmHistoryByKn: _stepFreeze.zsConfirmHistoryByKn,
       asOf: asOf,
       mathIndicatorConfig: _mathIndicatorConfig,
-      mathFreezeStore: _mathFreezeStore,
-      diverFreezeStore: _diverFreezeStore,
+      mathFreezeStore: _stepFreeze.mathFreezeStore,
+      diverFreezeStore: _stepFreeze.diverFreezeStore,
       zsK0Frames: zsK0Frames,
       maxBsClass: _maxBsClass,
     );
@@ -2807,7 +3699,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
   void _showTruncationHelp() {
     showDialog<void>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => SelectionArea(child: AlertDialog(
         title: const Text('截断机制说明'),
         content: const SingleChildScrollView(
           child: Text(
@@ -2837,13 +3729,13 @@ class _KlineHomePageState extends State<KlineHomePage> {
           ),
         ],
       ),
-    );
+    ));
   }
 
   void _showPeriodHelp() {
     showDialog<void>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => SelectionArea(child: AlertDialog(
         title: const Text('周期说明'),
         content: const SingleChildScrollView(
           child: Text(
@@ -2870,244 +3762,14 @@ class _KlineHomePageState extends State<KlineHomePage> {
           ),
         ],
       ),
-    );
+    ));
   }
 
-  Future<void> _maybeAutoStartLatestTaskDemo() async {
-    if (!_devDemoPhaseEnabled || _taskDemoWalkActive || _mlSession.isActive) {
-      return;
-    }
-    if (_dataRoot.isEmpty) return;
-    final latest = await TaskDemoLoader.latestDemo(_dataRoot);
-    if (latest == null || !mounted) return;
-    await _startTaskDemoWalkthrough(latest, fromAutoLaunch: true);
-  }
-
-  Future<void> _openLatestTaskDemoWalkthrough() async {
-    if (_dataRoot.isEmpty) {
-      _showSnack('数据根目录未就绪');
-      return;
-    }
-    final latest = await TaskDemoLoader.latestDemo(
-      _dataRoot,
-      onlyAutoLaunch: false,
-    );
-    if (latest == null) {
-      _showSnack('暂无任务演示条目');
-      return;
-    }
-    await _startTaskDemoWalkthrough(latest);
-  }
-
-  Future<void> _startTaskDemoWalkthrough(
-    TaskDemoManifest m, {
-    bool fromAutoLaunch = false,
-  }) async {
-    if (_dataRoot.isEmpty) return;
-    _exitTaskDemoWalkthrough(silent: true);
-    final prep = await TaskDemoDataLoader.prepareForManifest(
-      dataRoot: _dataRoot,
-      manifest: m,
-    );
-    if (prep.bars != null && prep.bars!.isNotEmpty) {
-      final b0 = _tryParseBarTime(prep.bars!.first.timeText);
-      final b1 = _tryParseBarTime(prep.bars!.last.timeText);
-      setState(() {
-        _selectedCode = 'test';
-        if (b0 != null && b1 != null) {
-          _beginDate = b0;
-          _endDate = b1;
-        }
-      });
-      await _loadKlines();
-    } else if (prep.useTest) {
-      setState(() => _selectedCode = 'test');
-      _syncDateRangeForCode('test');
-      await _loadKlines();
-    } else {
-      final code = m.defaultStockCode?.trim();
-      if (code != null && code.isNotEmpty) {
-        setState(() {
-          _selectedCode = code;
-          if (m.defaultStockPeriod != null &&
-              _periods.containsKey(m.defaultStockPeriod)) {
-            _period = m.defaultStockPeriod!;
-          }
-        });
-        _syncDateRangeForCode(code);
-        await _loadKlines();
-      }
-    }
-    final sep = Platform.pathSeparator;
-    final beforeMd = await TaskDemoLoader.readTextIfExists(
-      '${m.demoDirPath}${sep}before.md',
-    );
-    final hasPng = await TaskDemoLoader.hasImage(m.demoDirPath, 'before.png');
-    final steps = m.resolvedWalkthroughSteps();
-    if (!mounted) return;
-    setState(() {
-      _taskDemoManifest = m;
-      _taskDemoSteps = steps;
-      _taskDemoWalkIndex = 0;
-      _taskDemoBeforeMd = beforeMd;
-      _taskDemoHasBeforePng = hasPng;
-      _taskDemoWalkActive = steps.isNotEmpty;
-    });
-    if (steps.isNotEmpty) {
-      await _applyTaskDemoWalkIndex(0);
-    }
-    _msgHistory.append(
-      '任务演示步进：${m.id}${fromAutoLaunch ? "（启动自动加载）" : ""} '
-      '步数=${steps.length}',
-    );
-    if (fromAutoLaunch) {
-      _showSnack('已自动加载最新任务演示：${m.title}');
-    }
-  }
-
-  Future<void> _applyTaskDemoWalkIndex(int walkIndex) async {
-    if (walkIndex < 0 || walkIndex >= _taskDemoSteps.length) return;
-    final s = _taskDemoSteps[walkIndex];
-    _stopPlay();
-    if (!_hasSession || _allBars.isEmpty) {
-      setState(() => _taskDemoWalkIndex = walkIndex);
-      return;
-    }
-    final maxIdx = _allBars.length - 1;
-    final target = s.stepIdx.clamp(0, maxIdx);
-    setState(() {
-      _taskDemoWalkIndex = walkIndex;
-      _stepIdx = target;
-    });
-    _rebuildCombine();
-  }
-
-  void _taskDemoWalkNext() {
-    if (_taskDemoWalkIndex >= _taskDemoSteps.length - 1) {
-      _stopTaskDemoAutoPlay();
-      _showSnack('演示已到最后一步');
-      return;
-    }
-    _applyTaskDemoWalkIndex(_taskDemoWalkIndex + 1);
-  }
-
-  void _taskDemoWalkPrev() {
-    if (_taskDemoWalkIndex <= 0) return;
-    _applyTaskDemoWalkIndex(_taskDemoWalkIndex - 1);
-  }
-
-  void _stopTaskDemoAutoPlay() {
-    _taskDemoAutoTimer?.cancel();
-    _taskDemoAutoTimer = null;
-    _taskDemoAutoPlay = false;
-  }
-
-  void _toggleTaskDemoAutoPlay() {
-    if (_taskDemoAutoPlay) {
-      _stopTaskDemoAutoPlay();
-      setState(() {});
-      return;
-    }
-    if (_taskDemoWalkIndex >= _taskDemoSteps.length - 1) return;
-    setState(() => _taskDemoAutoPlay = true);
-    _taskDemoAutoTimer = Timer.periodic(const Duration(milliseconds: 1400), (_) {
-      if (!mounted || !_taskDemoAutoPlay) return;
-      if (_taskDemoWalkIndex >= _taskDemoSteps.length - 1) {
-        _stopTaskDemoAutoPlay();
-        if (mounted) setState(() {});
-        return;
-      }
-      _taskDemoWalkNext();
-    });
-  }
-
-  void _exitTaskDemoWalkthrough({bool silent = false}) {
-    _stopTaskDemoAutoPlay();
-    setState(() {
-      _taskDemoWalkActive = false;
-      _taskDemoManifest = null;
-      _taskDemoSteps = const [];
-      _taskDemoWalkIndex = 0;
-      _taskDemoBeforeMd = null;
-      _taskDemoHasBeforePng = false;
-    });
-    if (!silent) {
-      _msgHistory.append('已退出本次任务演示步进');
-      _showSnack('已退出本次演示，可自行选择加载内容');
-    }
-  }
-
-  Future<void> _exitDevelopmentDemoPhase() async {
-    await TaskDemoSettingsStore.setDevelopmentDemoPhaseEnabled(false);
-    setState(() => _devDemoPhaseEnabled = false);
-    _exitTaskDemoWalkthrough();
-    _msgHistory.append('用户退出开发演示阶段：启动不再自动加载任务演示');
-    _showSnack('已退出开发演示阶段；下次启动不再自动加载，可自行选择内容');
-  }
-
-  void _showDevDemoPhaseHelp() {
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('开发演示阶段'),
-        content: const SingleChildScrollView(
-          child: Text(
-            '开发阶段（默认开启）\n'
-            '· 打开软件后自动加载最新一次任务完成说明；\n'
-            '· 底下左右分别是「改之前 / 改之后」；\n'
-            '· 点「下一步」或播放，主图一格一格走到对应 K 线；\n'
-            '· 说明尽量用白话，不要堆代码名。\n\n'
-            '退出演示阶段\n'
-            '· 设置里关「开发演示阶段」，或点「退出演示阶段」；\n'
-            '· 关了之后下次打开不再自动弹，你自己选股或开演示列表。\n\n'
-            '给智能体：接任务先读 AGENT_LONG_TERM_MEMORY.md；\n'
-            '你没说「确认执行」不能改关键逻辑。',
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('知道了'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _openTaskDemoList() {
-    if (_dataRoot.isEmpty) {
-      _showSnack('数据根目录未就绪，请稍候或刷新股票列表');
-      return;
-    }
-    Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(
-        builder: (_) => TaskDemoListPage(
-          dataRoot: _dataRoot,
-          onLoadDemoCsv: _onTaskDemoCsvLoaded,
-        ),
-      ),
-    );
-  }
-
-  Future<void> _onTaskDemoCsvLoaded(List<KlineBar> bars) async {
-    if (bars.isNotEmpty) {
-      final b0 = _tryParseBarTime(bars.first.timeText);
-      final b1 = _tryParseBarTime(bars.last.timeText);
-      if (b0 != null && b1 != null) {
-        setState(() {
-          _selectedCode = 'test';
-          _beginDate = b0;
-          _endDate = b1;
-        });
-      }
-    }
-    await _loadKlines();
-  }
 
   void _showTestOhlcHelp() {
     showDialog<void>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => SelectionArea(child: AlertDialog(
         title: const Text('自定义 OHLC 说明'),
         content: const SingleChildScrollView(
           child: Text(
@@ -3125,7 +3787,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
           ),
         ],
       ),
-    );
+    ));
   }
 
   Future<void> _openTestOhlcEditor() async {
@@ -3181,7 +3843,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
   void _showBuildingDashHelp() {
     showDialog<void>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => SelectionArea(child: AlertDialog(
         title: const Text('构建中/未确认虚线说明'),
         content: const SingleChildScrollView(
           child: Text(
@@ -3212,13 +3874,13 @@ class _KlineHomePageState extends State<KlineHomePage> {
           ),
         ],
       ),
-    );
+    ));
   }
 
   void _showBsVerdictOverlayHelp() {
     showDialog<void>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => SelectionArea(child: AlertDialog(
         title: const Text('BSP对错叠加X说明'),
         content: const SingleChildScrollView(
           child: Text(
@@ -3248,14 +3910,14 @@ class _KlineHomePageState extends State<KlineHomePage> {
           ),
         ],
       ),
-    );
+    ));
   }
 
   /// 筹码分布说明弹窗。
   void _showChipHelp() {
     showDialog<void>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => SelectionArea(child: AlertDialog(
         title: const Text('筹码分布说明'),
         content: const SingleChildScrollView(
           child: Text(
@@ -3263,7 +3925,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
             '（上市/区间首根 → 当前步进/十字 as-of）。\n\n'
             '怎么看\n'
             '· 主图右侧水平柱：左绿=S（卖），右红=B（买）；\n'
-            '· 筹码峰：局部量峰打点，虚线延长到主图左侧；\n'
+            '· 筹码峰：局部量峰打点，虚线延长到主图左侧；'
+            '按 ±档自动配色：+1/-1 同色、+2/-2 同色…，框内 INn 另色；\n'
             '· 由设置面板总开关控制，不参与主图指标勾选；仅 K0 分支。\n\n'
             '数据与当下性\n'
             '· 离线分笔写入 chip_tick_bins（价量直加）；tick 禁止三角；'
@@ -3274,7 +3937,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
             '1. 设置里打开「筹码分布」总开关；\n'
             '2. 主图右侧立即绘制 K0 筹码；\n'
             '3. 桶宽在「数学指标参数」里用输入框设置（最小 0.01，与笔数分布共用）；\n'
-            '4. 可调「筹码峰延长线」；配置写入 .chan_chip_config.json。',
+            '4. 可调「峰延长线（按 ±档配色）」（与笔数分布共享开关）；配置写入 .chan_chip_config.json。',
           ),
         ),
         actions: [
@@ -3284,61 +3947,40 @@ class _KlineHomePageState extends State<KlineHomePage> {
           ),
         ],
       ),
-    );
-  }
-
-  void _showTickDistHelp() {
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('笔数分布说明'),
-        content: const SingleChildScrollView(
-          child: Text(
-            '作用：与筹码分布同构，按价格累计分笔笔数（第4列），'
-            '画在主图左侧；价签画在笔数分布右侧。\n\n'
-            '怎么看\n'
-            '· 水平柱 B/S/G 着色同筹码；\n'
-            '· 笔数峰：局部笔数峰打点，虚线延长进主图；\n'
-            '· 十字 tooltip：K0笔数峰-/+n（编号规则同筹码峰）。\n\n'
-            '数据\n'
-            '· Rust 写入 chip_tick_count_bins（按价累加 ticks）；'
-            '桶宽与筹码共用（在「数学指标参数」输入，最小 0.01）。\n\n'
-            '操作步骤\n'
-            '1. 设置打开「笔数分布」；\n'
-            '2. 主图左侧绘制；可开「笔数峰延长线」；\n'
-            '3. 桶宽到「数学指标参数」修改；重编 DLL 后冷启载入笔数桶。',
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('知道了'),
-          ),
-        ],
-      ),
-    );
+    ));
   }
 
   /// 数学指标说明弹窗。
   void _showMathIndicatorHelp() {
     showDialog<void>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => SelectionArea(child: AlertDialog(
         title: const Text('数学指标参数'),
         content: const SingleChildScrollView(
           child: Text(
-            '作用：移植旧工程 Math——均线/通道/MACD/BOLL/RSI/KDJ/Demark/背驰；\n'
+            '作用：移植旧工程 Math——均线/通道/BOLL/回归通道/MACD/RSI/KDJ/Demark/背驰；\n'
             '另含筹码/笔数分布共用桶宽。\n'
             '口径（全层同构）\n'
             '· K0：原生 K 线 OHLC；Kn≥1：unitBars+active；\n'
+            '· 回归通道：父层 K{n+1}连线最后一段绑定——段内最小二乘回归=中轨，上下轨=中轨±k×残差标准差，'
+            '外推到 asOf（与布林不同源；不进冻结仓）；\n'
             '· Demark：主图标注；Countdown 宽松/严、完美9、反向打断可配；\n'
             '· 背驰：进出段力度比 + diver∈{1,-1,0}；无 turnrate（离线无换手）；\n'
             '· 桶宽：最小 0.01 元，筹码与笔数分布共用；\n'
             '· K0 颗粒度展开；无未来函数；十字 asOf 截断。\n\n'
             '操作步骤\n'
-            '1. 主图勾选布林/Demark；副图勾选 MACD/RSI/KDJ/背驰_*；\n'
-            '2. 点本项或「?」编辑参数（Demark/背驰率/桶宽）；\n'
-            '3. Math 写入 .chan_trend_model_config.json；桶宽写入筹码配置。',
+            '1. 主图勾选布林/回归通道/Demark；副图勾选 MACD/RSI/KDJ/背驰_*；\n'
+            '2. 点本项或「?」编辑参数（回归通道 k、Demark/背驰率/桶宽）；\n'
+            '3. Math 写入 .chan_trend_model_config.json；桶宽写入筹码配置。\n\n'
+            '回归通道（详细说明）\n'
+            '· 基准区间：父层 K{n+1}连线（K0回归通道看 K1连线、K1看 K2…）在 asOf 视图下的最后一段'
+            '（倒数第二个极点 → 最后一个极点）；端点含分型判断与构建中开口尾端；\n'
+            '· 父层一出现新段，整条通道换基准（旧的整条不留，不拼阶梯）；\n'
+            '· 回归：以 K0 格点 x 为自变量最小二乘 → 中轨（带斜率）；上下轨 = 中轨 ± k×残差总体标准差（与本项目布林同口径）；\n'
+            '· 平行外推到 asOf 截断（宽度恒定，非喇叭口），asOf 右侧不画；十字 asOf 回退不泄漏未来；\n'
+            '· 已接入：回测变量 MAIN.Kn.REGRESS.MID/UP/DOWN + 十字读数 regress_mid/up/down（按 asOf 现算，不进冻结仓）；\n'
+            '· 不参与任何信号计算的未来函数；父层未成形或样本不足 2 根 → 该层整条不出线；\n'
+            '· 与布林区别：布林=滑窗均值（水平线）全图连续；回归通道=父层连线段内回归线（带斜率）只画最新一段。',
           ),
         ),
         actions: [
@@ -3355,8 +3997,9 @@ class _KlineHomePageState extends State<KlineHomePage> {
           ),
         ],
       ),
-    );
+    ));
   }
+
 
   /// 编辑数学指标参数。
   Future<void> _editMathIndicatorParams() async {
@@ -3371,6 +4014,10 @@ class _KlineHomePageState extends State<KlineHomePage> {
     final macdSigCtl =
         TextEditingController(text: '${_mathIndicatorConfig.macdSignal}');
     final bollCtl = TextEditingController(text: '${_mathIndicatorConfig.bollN}');
+    final donchianCtl =
+        TextEditingController(text: '${_mathIndicatorConfig.donchianN}');
+    final regressKCtl = TextEditingController(
+        text: _mathIndicatorConfig.regressK.toStringAsFixed(2));
     final rsiCtl =
         TextEditingController(text: '${_mathIndicatorConfig.rsiPeriod}');
     final kdjCtl =
@@ -3387,6 +4034,9 @@ class _KlineHomePageState extends State<KlineHomePage> {
         text: '${_mathIndicatorConfig.divergenceRate}');
     final bucketCtl = TextEditingController(
         text: _chipConfig.bucketStep.toStringAsFixed(2));
+    final peakRankNctl = TextEditingController(
+        text: '${_chipConfig.chipPeakPureRank}');
+    var peakLineMode = _chipConfig.peakLineMode;
     var demarkCdMode = _mathIndicatorConfig.demarkCountdownMode;
     var demarkPerfect9 = _mathIndicatorConfig.demarkPerfect9;
     var demarkInterruptCd =
@@ -3403,7 +4053,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
     }
     final ok = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => SelectionArea(child: AlertDialog(
         title: const Text('设置数学指标参数'),
         content: StatefulBuilder(
           builder: (ctx, setLocal) => SingleChildScrollView(
@@ -3443,6 +4093,23 @@ class _KlineHomePageState extends State<KlineHomePage> {
                   controller: bollCtl,
                   decoration: const InputDecoration(labelText: 'BOLL N'),
                   keyboardType: TextInputType.number,
+                ),
+                TextField(
+                  controller: donchianCtl,
+                  decoration: const InputDecoration(
+                    labelText: '唐奇安 N',
+                    hintText: '窗口根数，默认 20',
+                  ),
+                  keyboardType: TextInputType.number,
+                ),
+                TextField(
+                  controller: regressKCtl,
+                  decoration: const InputDecoration(
+                    labelText: '回归通道 k',
+                    hintText: '上下轨倍数，默认 2.00',
+                  ),
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
                 ),
                 TextField(
                   controller: rsiCtl,
@@ -3562,6 +4229,38 @@ class _KlineHomePageState extends State<KlineHomePage> {
                   keyboardType:
                       const TextInputType.numberWithOptions(decimal: true),
                 ),
+                TextField(
+                  controller: peakRankNctl,
+                  decoration: const InputDecoration(
+                    labelText: '筹码峰数量 N（纯量级取前 N 个峰）',
+                    hintText: '1..12，默认 7',
+                  ),
+                  keyboardType: TextInputType.number,
+                ),
+                DropdownButtonFormField<PeakLineMode>(
+                  value: peakLineMode,
+                  decoration: const InputDecoration(
+                    labelText: '峰线型（筹码峰延长线）',
+                  ),
+                  items: const [
+                    DropdownMenuItem(
+                      value: PeakLineMode.solid,
+                      child: Text('全实线'),
+                    ),
+                    DropdownMenuItem(
+                      value: PeakLineMode.dashed,
+                      child: Text('全虚线'),
+                    ),
+                    DropdownMenuItem(
+                      value: PeakLineMode.bySign,
+                      child: Text('按符号（默认）'),
+                    ),
+                  ],
+                  onChanged: (v) {
+                    if (v == null) return;
+                    setLocal(() => peakLineMode = v);
+                  },
+                ),
               ],
             ),
           ),
@@ -3577,7 +4276,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
           ),
         ],
       ),
-    );
+    ));
     if (ok != true || !mounted) {
       for (final c in [
         meanCtl,
@@ -3586,6 +4285,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
         macdSlowCtl,
         macdSigCtl,
         bollCtl,
+        donchianCtl,
+        regressKCtl,
         rsiCtl,
         kdjCtl,
         demarkLenCtl,
@@ -3613,6 +4314,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
       macdSlow: parseInt(macdSlowCtl.text, 26),
       macdSignal: parseInt(macdSigCtl.text, 9),
       bollN: parseInt(bollCtl.text, 20),
+      donchianN: parseInt(donchianCtl.text, 20),
+      regressK: parseDouble(regressKCtl.text, 2.0),
       rsiPeriod: parseInt(rsiCtl.text, 14),
       kdjPeriod: parseInt(kdjCtl.text, 9),
       demarkLen: parseInt(demarkLenCtl.text, 9),
@@ -3631,6 +4334,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       macdSlowCtl,
       macdSigCtl,
       bollCtl,
+      donchianCtl,
       rsiCtl,
       kdjCtl,
       demarkLenCtl,
@@ -3639,6 +4343,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       demarkMaxCtl,
       diverRateCtl,
       bucketCtl,
+      peakRankNctl,
     ]) {
       c.dispose();
     }
@@ -3651,9 +4356,22 @@ class _KlineHomePageState extends State<KlineHomePage> {
       await _updateTickDistConfig(
           _tickDistConfig.copyWith(bucketStep: bucketStep));
     }
+    final peakN = parseInt(peakRankNctl.text, _chipConfig.chipPeakPureRank)
+        .clamp(1, 12);
+    if (peakN != _chipConfig.chipPeakPureRank ||
+        peakLineMode != _chipConfig.peakLineMode) {
+      await _updateChipConfig(_chipConfig.copyWith(
+        chipPeakPureRank: peakN,
+        peakLineMode: peakLineMode,
+      ));
+      _msgHistory.append(
+        '筹码峰参数：数量N=$peakN；线型=${peakLineMode.name}',
+      );
+    }
     _msgHistory.append(
       '数学指标：均线=${cfg.meanPeriods.join(",")}；通道=${cfg.channelPeriods.join(",")}；'
       'MACD=${cfg.macdFast}/${cfg.macdSlow}/${cfg.macdSignal}；BOLL=${cfg.bollN}；'
+      '唐奇安N=${cfg.donchianN}；'
       'RSI=${cfg.rsiPeriod}；KDJ=${cfg.kdjPeriod}；Demark=${cfg.demarkLen}'
       '/${cfg.demarkCountdownMode.name}'
       '/完美9=${cfg.demarkPerfect9}'

@@ -2,6 +2,7 @@ import 'package:chan_kline/backtest/backtest_run.dart';
 import 'package:chan_kline/backtest/condition_ast.dart';
 import 'package:chan_kline/backtest/condition_eval.dart';
 import 'package:chan_kline/backtest/mini_loop.dart';
+import 'package:chan_kline/backtest/signal_data_catalog.dart';
 import 'package:chan_kline/backtest/signal_event.dart';
 import 'package:chan_kline/backtest/signal_normalize.dart';
 import 'package:chan_kline/backtest/strategy_compile.dart';
@@ -9,6 +10,7 @@ import 'package:chan_kline/backtest/strategy_config.dart';
 import 'package:chan_kline/backtest/trade_operand.dart';
 import 'package:chan_kline/compute/math_series_freeze_store.dart';
 import 'package:chan_kline/models/kline_bar.dart';
+import 'package:chan_kline/models/level_models.dart';
 import 'package:chan_kline/models/math_indicator_config.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -88,7 +90,7 @@ void main() {
       expect(compileConditionAst(mixed, maxKn: 2), isA<CondCompileIllegal>());
     });
 
-    test('AND/OR 同层合法；K0 AND K1 非法', () {
+    test('AND/OR 同层合法；K0 AND K1 各自算完也可拼', () {
       final same = TradeAndAst(
         bollBuyAst(1),
         const TradeCmpAst(
@@ -110,7 +112,85 @@ void main() {
           op: TradeBinaryOp.gt,
         ),
       );
-      expect(compileConditionAst(mixed, maxKn: 2), isA<CondCompileIllegal>());
+      expect(compileConditionAst(mixed, maxKn: 2), isA<CondCompileOk>());
+      expect(
+        compileConditionAst(k0LowCrossBollAndK1LowCrossBollAst(), maxKn: 2),
+        isA<CondCompileOk>(),
+      );
+    });
+
+    test('K0 比例>=1.382 AND 最低价<=筹码峰-1 合法（同一根K，不是混层）', () {
+      final ast = TradeAndAst(
+        TradeCmpAst(
+          left: TradeVarRef(adjacentRatioId(0)),
+          right: const TradeConstRef(1.382),
+          op: TradeBinaryOp.ge,
+        ),
+        TradeCmpAst(
+          left: const TradeVarRef('RAW.K0.LOW'),
+          right: TradeVarRef(chipPeakVarId(kind: 'chip', token: 'M1')),
+          op: TradeBinaryOp.le,
+        ),
+      );
+      expect(compileConditionAst(ast, maxKn: 2), isA<CondCompileOk>());
+      final cfg = StrategyConfig(
+        buyAst: ast,
+        sellAst: TradeCmpAst(
+          left: TradeVarRef(adjacentRatioId(0)),
+          right: const TradeConstRef(1.382),
+          op: TradeBinaryOp.ge,
+        ),
+      );
+      expect(compileStrategyConfig(cfg, maxKn: 2), isA<StrategyCompileOk>());
+    });
+
+    test('K0 比例不能直接和收盘比；K0 比例 AND K1 收盘可以拼', () {
+      expect(
+        compileConditionAst(
+          TradeCmpAst(
+            left: TradeVarRef(adjacentRatioId(0)),
+            right: const TradeVarRef('RAW.K0.CLOSE'),
+            op: TradeBinaryOp.gt,
+          ),
+          maxKn: 2,
+        ),
+        isA<CondCompileIllegal>(),
+      );
+      expect(
+        compileConditionAst(
+          TradeAndAst(
+            TradeCmpAst(
+              left: TradeVarRef(adjacentRatioId(0)),
+              right: const TradeConstRef(1.382),
+              op: TradeBinaryOp.ge,
+            ),
+            const TradeCmpAst(
+              left: TradeVarRef('RAW.K1.CLOSE'),
+              right: TradeConstRef(10),
+              op: TradeBinaryOp.gt,
+            ),
+          ),
+          maxKn: 2,
+        ),
+        isA<CondCompileOk>(),
+      );
+    });
+
+    test('K0 分型确认 AND K0 RSI 合法（都按这一根K取值）', () {
+      expect(
+        compileConditionAst(
+          const TradeAndAst(
+            TradeEventAst('SUB.K0.FRACTAL_CONFIRM'),
+            TradeCmpAst(
+              left: TradeVarRef('SUB.K0.RSI.VALUE'),
+              right: TradeConstRef(50),
+              op: TradeBinaryOp.lt,
+            ),
+          ),
+          maxKn: 2,
+        ),
+        isA<CondCompileOk>(),
+      );
     });
 
     test('K1 综合买卖策略能编过；买卖各自独立', () {
@@ -263,7 +343,7 @@ void main() {
   });
 
   group('同一套 AST → 现有回测核心', () {
-    test('默认布林穿越 AST 与旧 CROSS 路径发现点一致', () {
+    test('布林穿越 AST 与旧 CROSS 路径发现点一致', () {
       final bars = <KlineBar>[
         for (var i = 0; i < 24; i++) _bar(i, 100, open: 100),
         for (var i = 24; i < 40; i++) _bar(i, 40, open: 41),
@@ -288,7 +368,7 @@ void main() {
         bollN: 20,
       );
       final run = executeStrategyBacktest(
-        config: const StrategyConfig(),
+        config: StrategyConfig.bollLayers(buyKn: 0, sellKn: 0),
         scope: _scope(bars.last.idx),
         bars: bars,
         mathFreeze: store,
@@ -334,6 +414,123 @@ void main() {
           isA<StrategyCompileOk>());
       expect(run.ok, isTrue);
       expect(run.error, isNull);
+    });
+  });
+
+  group('跨层指标 AND/OR（同一根 K0；穿越不沿用）', () {
+    List<LevelBundle> k1Levels() => [
+          const LevelBundle(
+            level: 0,
+            unitBars: [
+              LevelUnitBar(
+                idx: 0,
+                dir: 1,
+                x1: 0,
+                x2: 2,
+                open: 8,
+                high: 9,
+                low: 7,
+                close: 8,
+              ),
+              LevelUnitBar(
+                idx: 1,
+                dir: -1,
+                x1: 2,
+                x2: 5,
+                open: 8,
+                high: 12,
+                low: 8,
+                close: 11,
+              ),
+              LevelUnitBar(
+                idx: 2,
+                dir: 1,
+                x1: 5,
+                x2: 8,
+                open: 11,
+                high: 12,
+                low: 10,
+                close: 12,
+              ),
+            ],
+          ),
+        ];
+
+    CondEvalCtx knCtx(List<KlineBar> bars) => CondEvalCtx(
+          asOf: bars.last.idx,
+          bars: bars,
+          levels: k1Levels(),
+          mathFreeze: MathSeriesFreezeStore(),
+          maxKn: 2,
+        );
+
+    const andAst = TradeAndAst(
+      TradeCmpAst(
+        left: TradeVarRef('RAW.K0.CLOSE'),
+        right: TradeConstRef(10),
+        op: TradeBinaryOp.crossAbove,
+      ),
+      TradeCmpAst(
+        left: TradeVarRef('RAW.K1.CLOSE'),
+        right: TradeConstRef(10),
+        op: TradeBinaryOp.crossAbove,
+      ),
+    );
+    const orAst = TradeOrAst(
+      TradeCmpAst(
+        left: TradeVarRef('RAW.K0.CLOSE'),
+        right: TradeConstRef(10),
+        op: TradeBinaryOp.crossAbove,
+      ),
+      TradeCmpAst(
+        left: TradeVarRef('RAW.K1.CLOSE'),
+        right: TradeConstRef(10),
+        op: TradeBinaryOp.crossAbove,
+      ),
+    );
+
+    test('K0 上穿 AND K1 上穿：同一根才出信号', () {
+      final bars = [
+        for (var i = 0; i <= 8; i++) _bar(i, i < 5 ? 8.0 : (i == 5 ? 11.0 : 12.0)),
+      ];
+      final compiled = compileConditionAst(andAst, maxKn: 2) as CondCompileOk;
+      final ev = evalCompiledCond(
+        cond: compiled.root,
+        side: TradeSide.buy,
+        ruleId: 'cross_kn_and',
+        ctx: knCtx(bars),
+      );
+      expect(ev.map((e) => e.discoveryX).toList(), [5]);
+    });
+
+    test('K0 上穿 AND K1 上穿：错开不出（不把 K1 下穿往后延）', () {
+      final bars = [
+        for (var i = 0; i <= 8; i++) _bar(i, i < 4 ? 8.0 : (i == 4 ? 11.0 : 12.0)),
+      ];
+      final compiled = compileConditionAst(andAst, maxKn: 2) as CondCompileOk;
+      expect(
+        evalCompiledCond(
+          cond: compiled.root,
+          side: TradeSide.buy,
+          ruleId: 'cross_kn_and',
+          ctx: knCtx(bars),
+        ),
+        isEmpty,
+      );
+    });
+
+    test('K0 上穿 OR K1 上穿：错开各打一次', () {
+      final bars = [
+        for (var i = 0; i <= 8; i++) _bar(i, i < 4 ? 8.0 : (i == 4 ? 11.0 : 12.0)),
+      ];
+      final compiled = compileConditionAst(orAst, maxKn: 2) as CondCompileOk;
+      final ev = evalCompiledCond(
+        cond: compiled.root,
+        side: TradeSide.buy,
+        ruleId: 'cross_kn_or',
+        ctx: knCtx(bars),
+      );
+      expect(ev.map((e) => e.discoveryX).toList(), [4, 5]);
     });
   });
 }

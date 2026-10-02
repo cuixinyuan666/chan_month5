@@ -27,7 +27,7 @@ class TradeEventAst extends TradeAst {
   const TradeEventAst(this.variableId);
 }
 
-/// 并且：左右都真才真（按计算钟对齐后的样本）
+/// 并且：左右都真才真（各支先在自己的钟上算，再映到同一根 K0）
 class TradeAndAst extends TradeAst {
   final TradeAst left;
   final TradeAst right;
@@ -152,6 +152,18 @@ TradeCmpAst k0VolumeGtAst(double threshold) => TradeCmpAst(
       op: TradeBinaryOp.gt,
     );
 
+/// K0 一类买点出现
+const TradeEventAst k0Buy1EventAst = TradeEventAst('STRUCTURE.K0.BUY1');
+
+/// K0 一类卖点出现
+const TradeEventAst k0Sell1EventAst = TradeEventAst('STRUCTURE.K0.SELL1');
+
+/// 买条件默认：K0 一类买点出现
+const TradeEventAst kDefaultBuyAst = k0Buy1EventAst;
+
+/// 卖条件默认：K0 一类卖点出现
+const TradeEventAst kDefaultSellAst = k0Sell1EventAst;
+
 /// K1 一类买点出现
 const TradeEventAst k1Buy1EventAst = TradeEventAst('STRUCTURE.K1.BUY1');
 
@@ -234,6 +246,60 @@ TradeAst k1BuyN3OrBuy1Ast() => TradeOrAst(
       k1Buy1EventAst,
     );
 
+/// 买：K0 一类买 并且 K1 一类买（跨层；须同一根 K0 两边都出现）
+TradeAst k0Buy1AndK1Buy1Ast() => const TradeAndAst(
+      k0Buy1EventAst,
+      k1Buy1EventAst,
+    );
+
+/// 买：K0 最低价下穿下轨 并且 K1 最低价下穿下轨（各算各层；AND 须同一根 K0 刚发生）
+TradeAst k0LowCrossBollAndK1LowCrossBollAst() => const TradeAndAst(
+      TradeCmpAst(
+        left: TradeVarRef('RAW.K0.LOW'),
+        right: TradeVarRef('MAIN.K0.BOLL.DOWN'),
+        op: TradeBinaryOp.crossBelow,
+      ),
+      TradeCmpAst(
+        left: TradeVarRef('RAW.K1.LOW'),
+        right: TradeVarRef('MAIN.K1.BOLL.DOWN'),
+        op: TradeBinaryOp.crossBelow,
+      ),
+    );
+
+/// 买：K0 一类买 或者 K1 三类买（跨层；各层出现各打一次）
+TradeAst k0Buy1OrK1BuyN3Ast() => TradeOrAst(
+      k0Buy1EventAst,
+      TradeEventAst(buyNVarId(1, 3)),
+    );
+
+/// K0 分型确认出现
+const TradeEventAst k0FractalConfirmAst =
+    TradeEventAst('SUB.K0.FRACTAL_CONFIRM');
+
+/// 买：K0 分型确认 并且 K1 一类买（都是当根事件，可跨层）
+TradeAst k0FxConfirmAndK1Buy1Ast() => const TradeAndAst(
+      k0FractalConfirmAst,
+      k1Buy1EventAst,
+    );
+
+/// 买：K0 分型确认 或者 K1 一类买
+TradeAst k0FxConfirmOrK1Buy1Ast() => const TradeOrAst(
+      k0FractalConfirmAst,
+      k1Buy1EventAst,
+    );
+
+/// 买：K0 中枢确认 并且 K1 一类买
+TradeAst k0ZsConfirmAndK1Buy1Ast() => const TradeAndAst(
+      TradeEventAst('SUB.K0.ZS_CONFIRM'),
+      k1Buy1EventAst,
+    );
+
+/// 买：K0 Demark 完成买 并且 K1 一类买
+TradeAst k0DemarkBuyAndK1Buy1Ast() => TradeAndAst(
+      TradeEventAst(demarkCompleteId(0, buy: true)),
+      k1Buy1EventAst,
+    );
+
 /// 买：K1 三类买点 并且 RSI < 50
 TradeAst k1BuyN3AndRsiAst() => TradeAndAst(
       TradeEventAst(buyNVarId(1, 3)),
@@ -303,6 +369,27 @@ String snapshotVarLabel(String variableId) {
   return variableId;
 }
 
+String _tradeValueCacheKey(TradeValueRef ref) {
+  if (ref is TradeConstRef) return 'c:${ref.value}';
+  if (ref is TradeEnumRef) return 'e:${ref.token}';
+  if (ref is TradeVarRef) return 'v:${ref.variableId}';
+  return '?';
+}
+
+/// 编译缓存用：保留完整 variableId，避免 compact 文案碰撞。
+String astConditionCacheKey(TradeAst ast) {
+  switch (ast) {
+    case TradeCmpAst(:final left, :final right, :final op):
+      return 'cmp|${_tradeValueCacheKey(left)}|${tradeOpToken(op)}|${_tradeValueCacheKey(right)}';
+    case TradeEventAst(:final variableId):
+      return 'ev|$variableId';
+    case TradeAndAst(:final left, :final right):
+      return 'and|${astConditionCacheKey(left)}|${astConditionCacheKey(right)}';
+    case TradeOrAst(:final left, :final right):
+      return 'or|${astConditionCacheKey(left)}|${astConditionCacheKey(right)}';
+  }
+}
+
 /// 多行条件文案（AND/OR 单独一行），给信号解释用
 String astConditionText(TradeAst ast, {String? parentKind}) {
   switch (ast) {
@@ -319,6 +406,84 @@ String astConditionText(TradeAst ast, {String? parentKind}) {
           '${astConditionText(left, parentKind: 'or')}\nOR\n${astConditionText(right, parentKind: 'or')}';
       return parentKind != null && parentKind != 'or' ? '($inner)' : inner;
   }
+}
+
+String _tradeValueLabelCn(TradeValueRef ref, {required int maxKn}) {
+  if (ref is TradeConstRef) return tradeValueLabel(ref);
+  if (ref is TradeEnumRef) return tradeValueLabel(ref);
+  if (ref is TradeVarRef) {
+    final def = lookupTradeVariable(ref.variableId, maxKn: maxKn);
+    return def?.displayName ?? compactVarId(ref.variableId);
+  }
+  return '?';
+}
+
+/// 寻优/设置展示用：变量中文名 + 中文运算符（与引擎 AST 一致，仅文案不同）。
+String astConditionTextCn(TradeAst ast, {int maxKn = 16, String? parentKind}) {
+  switch (ast) {
+    case TradeCmpAst(:final left, :final right, :final op):
+      return '${_tradeValueLabelCn(left, maxKn: maxKn)} ${tradeOpLabelCn(op)} ${_tradeValueLabelCn(right, maxKn: maxKn)}';
+    case TradeEventAst(:final variableId):
+      final def = lookupTradeVariable(variableId, maxKn: maxKn);
+      final name = def?.displayName ?? compactVarId(variableId);
+      return '$name 出现';
+    case TradeAndAst(:final left, :final right):
+      final inner =
+          '${astConditionTextCn(left, maxKn: maxKn, parentKind: 'and')}\n且\n${astConditionTextCn(right, maxKn: maxKn, parentKind: 'and')}';
+      return parentKind != null && parentKind != 'and' ? '（$inner）' : inner;
+    case TradeOrAst(:final left, :final right):
+      final inner =
+          '${astConditionTextCn(left, maxKn: maxKn, parentKind: 'or')}\n或\n${astConditionTextCn(right, maxKn: maxKn, parentKind: 'or')}';
+      return parentKind != null && parentKind != 'or' ? '（$inner）' : inner;
+  }
+}
+
+final _displayNameByMaxKn = <int, Map<String, String?>>{};
+
+String? _displayNameForCompactId(String compact, int maxKn) {
+  final cache = _displayNameByMaxKn.putIfAbsent(maxKn, () => {});
+  final hit = cache[compact];
+  if (hit != null || cache.containsKey(compact)) return hit;
+  for (final d in buildRegisteredTradeVariables(maxKn)) {
+    if (d.variableId == compact || compactVarId(d.variableId) == compact) {
+      cache[compact] = d.displayName;
+      return d.displayName;
+    }
+  }
+  cache[compact] = null;
+  return null;
+}
+
+/// 把旧版英文条件行转成中文（快照/TSV 兼容）。
+String conditionDisplayText(String text, {int maxKn = 16}) {
+  if (text.contains('出现') || text.contains('且') || text.contains('或')) {
+    return text;
+  }
+  final lines = text.split('\n');
+  return lines.map((line) => _conditionLineToCn(line.trim(), maxKn)).join('\n');
+}
+
+String _conditionLineToCn(String line, int maxKn) {
+  if (line.isEmpty) return line;
+  if (line == 'AND') return '且';
+  if (line == 'OR') return '或';
+  if (line.endsWith(' EVENT_EXISTS')) {
+    final compact = line.substring(0, line.length - ' EVENT_EXISTS'.length).trim();
+    final name = _displayNameForCompactId(compact, maxKn) ?? compact;
+    return '$name 出现';
+  }
+  for (final op in TradeBinaryOp.values) {
+    final en = tradeOpToken(op);
+    final token = ' $en ';
+    if (!line.contains(token)) continue;
+    final parts = line.split(token);
+    if (parts.length != 2) continue;
+    final cn = tradeOpLabelCn(op);
+    final l = _displayNameForCompactId(parts[0].trim(), maxKn) ?? parts[0].trim();
+    final r = _displayNameForCompactId(parts[1].trim(), maxKn) ?? parts[1].trim();
+    return '$l $cn $r';
+  }
+  return line;
 }
 
 void collectAstVarIds(TradeAst ast, List<String> out) {
@@ -403,7 +568,7 @@ StrategyVarSpec? specByKey(String key) {
 
 /// 叶子链折回 AST（左结合）
 TradeAst foldAstChain(List<TradeAst> leaves, List<CondJoin> joins) {
-  if (leaves.isEmpty) return kDefaultBollBuyAst;
+  if (leaves.isEmpty) return kDefaultBuyAst;
   TradeAst acc = leaves.first;
   for (var i = 0; i < joins.length && i + 1 < leaves.length; i++) {
     final next = leaves[i + 1];

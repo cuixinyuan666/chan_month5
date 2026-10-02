@@ -1,4 +1,5 @@
 use chrono::{Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
+use serde::{Deserialize, Serialize};
 
 use crate::error::{ChanDataError, Result};
 
@@ -12,8 +13,54 @@ pub struct TickRow {
     pub has_bs: bool,
     pub price_lo: Option<f64>,
     pub price_hi: Option<f64>,
-    /// 第 4 列成交笔数（`HH:MM 价格 量 笔数 [B/S]`；无列/非数字按 1 笔；显式 0 保留 0）
+    /// 第 4 列成交笔数（`HH:MM 价格 量 笔数 [B/S]`；无列/非数字记 0；显式 0 保留 0）
     pub ticks: f64,
+}
+
+/// 所选区间分笔质量：笔数是否有 0、买/卖/中性是否缺。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TickQuality {
+    /// 存在笔数为 0 的分笔
+    pub zero_tick_count: bool,
+    /// 存在主动买（B）
+    pub has_buy: bool,
+    /// 存在主动卖（S）
+    pub has_sell: bool,
+    /// 存在中性/无方向（无 B/S）
+    pub has_neutral: bool,
+    /// file / protocol / ohlc
+    #[serde(default)]
+    pub source: String,
+    /// 自定义 OHLC 等无分笔：界面不要弹笔数/买卖窗
+    #[serde(default)]
+    pub skip_prompts: bool,
+}
+
+impl TickQuality {
+    pub fn from_rows(rows: &[TickRow], source: &str) -> Self {
+        let mut q = Self {
+            source: source.to_string(),
+            ..Self::default()
+        };
+        for r in rows {
+            if r.ticks == 0.0 {
+                q.zero_tick_count = true;
+            }
+            if r.has_bs && r.side.eq_ignore_ascii_case("B") {
+                q.has_buy = true;
+            } else if r.has_bs && r.side.eq_ignore_ascii_case("S") {
+                q.has_sell = true;
+            } else {
+                q.has_neutral = true;
+            }
+        }
+        q
+    }
+
+    /// 缺主动买、主动卖或中性标记
+    pub fn missing_bs_labels(&self) -> bool {
+        !self.has_buy || !self.has_sell || !self.has_neutral
+    }
 }
 
 impl TickRow {
@@ -62,8 +109,8 @@ pub fn parse_tick_line(line: &str, y: i32, mo: u32, d: u32) -> Option<TickRow> {
         }
     }
     // 第 4 列为笔数（B/S 前的那一列）：
-    // 显式数字（含 0）原样用；无列或第 4 列是 B/S（老文件）按 1 笔
-    let mut ticks = 1.0;
+    // 显式数字（含 0）原样用；无列或第 4 列是 B/S → 记 0，不再默认填 1
+    let mut ticks = 0.0;
     if let Some(tok) = parts.get(3) {
         if let Some(v) = parse_float(tok) {
             if v.is_finite() && v >= 0.0 {
@@ -215,9 +262,9 @@ mod tests {
         let row = parse_tick_line("09:25\t35.07\t144\t25", 2024, 1, 2).unwrap();
         assert!((row.ticks - 25.0).abs() < 1e-9);
         assert!(!row.has_bs);
-        // 老文件无笔数列：按 1 笔
+        // 老文件无笔数列：记 0（不再默认填 1）
         let row = parse_tick_line("09:30\t35.10\t60\tB", 2024, 1, 2).unwrap();
-        assert!((row.ticks - 1.0).abs() < 1e-9);
+        assert!((row.ticks - 0.0).abs() < 1e-9);
         // 显式 0：保留 0（勿当成缺列默认 1）
         let row = parse_tick_line("09:30\t11.72\t33\t0\tS", 2004, 7, 19).unwrap();
         assert!((row.ticks - 0.0).abs() < 1e-9);
@@ -267,5 +314,20 @@ mod tests {
         // normalize_native 不得把无 BS 改成 B（灰度语义来源）
         let rows = normalize_native(vec![row]);
         assert!(rows[0].side.is_empty());
+    }
+
+    #[test]
+    fn tick_quality_flags_zero_and_missing_bs() {
+        let buy = parse_tick_line("09:30\t10.00\t1\t0\tB", 2004, 7, 19).unwrap();
+        let sell = parse_tick_line("09:31\t10.00\t1\t2\tS", 2004, 7, 19).unwrap();
+        let gray = parse_tick_line("09:25\t10.00\t1\t3", 2004, 7, 19).unwrap();
+        let q = TickQuality::from_rows(&[buy.clone(), sell, gray], "protocol");
+        assert!(q.zero_tick_count);
+        assert!(q.has_buy && q.has_sell && q.has_neutral);
+        assert!(!q.missing_bs_labels());
+        let only_buy = TickQuality::from_rows(&[buy], "file");
+        assert!(only_buy.missing_bs_labels());
+        assert!(!only_buy.has_sell);
+        assert!(!only_buy.has_neutral);
     }
 }
