@@ -1,4 +1,4 @@
-import 'package:chan_kline/bridge/chan_bridge.dart';
+﻿import 'package:chan_kline/bridge/chan_bridge.dart';
 import 'package:chan_kline/compute/adjacent_ratio_compute.dart';
 import 'package:chan_kline/compute/bs_verdict_compute.dart';
 import 'package:chan_kline/models/bs_verdict_frame.dart';
@@ -6,6 +6,7 @@ import 'package:chan_kline/compute/class1_bs_compute.dart';
 import 'package:chan_kline/compute/class2_bs_compute.dart';
 import 'package:chan_kline/compute/class_n_bs_compute.dart';
 import 'package:chan_kline/compute/divergence_freeze_store.dart';
+import 'package:chan_kline/compute/kn_clock_timeline.dart';
 import 'package:chan_kline/compute/fractal_judgment_compute.dart';
 import 'package:chan_kline/compute/line_slope_compute.dart';
 import 'package:chan_kline/compute/math_series_freeze_store.dart';
@@ -45,6 +46,9 @@ class BacktestStepHarnessResult {
   final MathIndicatorConfig mathConfig;
   final double chipBucketStep;
 
+  /// K1+ 采样钟的 asOf 当时段划分时间线（动态段口径）；null=退回最终态口径。
+  final KnClockTimeline? knClock;
+
   const BacktestStepHarnessResult({
     required this.bars,
     required this.levels,
@@ -58,6 +62,7 @@ class BacktestStepHarnessResult {
     required this.maxKn,
     required this.mathConfig,
     this.chipBucketStep = 0.1,
+    this.knClock,
   });
 
   /// 主界面当前会话已步进冻结仓（与策略回测工作台同源，寻优不再 replay harness）。
@@ -74,6 +79,7 @@ class BacktestStepHarnessResult {
     required int maxKn,
     required MathIndicatorConfig mathConfig,
     required double chipBucketStep,
+    KnClockTimeline? knClock,
   }) {
     return BacktestStepHarnessResult(
       bars: bars,
@@ -88,6 +94,7 @@ class BacktestStepHarnessResult {
       maxKn: maxKn,
       mathConfig: mathConfig,
       chipBucketStep: chipBucketStep,
+      knClock: knClock,
     );
   }
 }
@@ -205,6 +212,7 @@ Future<BacktestStepHarnessResult> driveStepHarnessWithProgress(
   final diverRelations = DivergenceRelationStore();
   final zsObjects = ZhongshuObjectStore();
   final chipPeaks = ChipPeakFreezeStore();
+  final knClockRec = KnClockTimelineRecorder();
   final growing = <KlineBar>[];
   KlineCombineBundle last = KlineCombineBundle.empty();
   final total = bars.length;
@@ -212,6 +220,9 @@ Future<BacktestStepHarnessResult> driveStepHarnessWithProgress(
   for (var step = 0; step < total; step++) {
     growing.add(bars[step]);
     last = sess.syncTo(growing);
+    // K1+ 采样钟：记下这一步「当时」的段划分（动态段口径）
+    final u0 = level0Units(last.levels);
+    knClockRec.record(step, u0.unitBars, u0.activeUnit);
     final maxKn = chartMaxKn(levels: last.levels, k0Lines: last.k0Lines);
     final knHi = maxKn < 1 ? 1 : maxKn;
     final maxDisplayKn = maxKn <= 0 ? -1 : maxKn - 1;
@@ -400,6 +411,7 @@ Future<BacktestStepHarnessResult> driveStepHarnessWithProgress(
   return BacktestStepHarnessResult(
     bars: growing,
     levels: frozenLevels,
+    knClock: knClockRec.timeline,
     mathFreeze: mathFreeze,
     chanEvents: ChanEventStore(
       buy1ByKn: buy1,

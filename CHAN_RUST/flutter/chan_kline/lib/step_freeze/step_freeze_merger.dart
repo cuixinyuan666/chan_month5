@@ -1,10 +1,11 @@
-import '../compute/adjacent_ratio_compute.dart';
+﻿import '../compute/adjacent_ratio_compute.dart';
 import '../compute/bs_verdict_compute.dart';
 import '../compute/class1_bs_compute.dart';
 import '../compute/class2_bs_compute.dart';
 import '../compute/class_n_bs_compute.dart';
 import '../compute/divergence_freeze_store.dart';
 import '../compute/fractal_judgment_compute.dart';
+import '../compute/kn_clock_timeline.dart';
 import '../compute/line_slope_compute.dart';
 import '../compute/math_series_freeze_store.dart';
 import '../compute/step_rhythm_compute.dart';
@@ -28,6 +29,27 @@ import 'step_freeze_session_state.dart';
 
 /// `_rebuildCombine` 冻结合并链（主图与机器人验证共用）。
 class StepFreezeMerger {
+  /// 记一步的 K1+ 采样钟快照（asOf 当时的已确认段增量 + 正在生长的那段）。
+  ///
+  /// 条件求值用它还原「当时那一段走到哪」，从而让动态段中途成立的 K1+ 穿越信号
+  /// 在当根就能判定，而不是被最终态段划分推到段尾。详见 [KnClockTimeline]。
+  static void recordKnClockStep({
+    required StepFreezeSessionState state,
+    required KlineCombineBundle bundle,
+    required int stepIdx,
+  }) {
+    final u0 = level0Units(bundle.levels);
+    final t = state.knClockTimeline;
+    // 时间线按步长单调；重复步（回刷同一步）直接跳过，避免重复累加增量。
+    if (!t.isEmpty && t.lastAsOf >= stepIdx) return;
+    final seen = state.knClockSeenUnits;
+    final fresh = seen < u0.unitBars.length
+        ? u0.unitBars.sublist(seen)
+        : const <LevelUnitBar>[];
+    state.knClockSeenUnits = u0.unitBars.length;
+    t.record(stepIdx, newlyConfirmed: fresh, activeUnit: u0.activeUnit);
+  }
+
   static int? activeSegIdxForKn(KlineCombineBundle bundle, int kn) {
     if (kn <= 0) return null;
     for (final lv in bundle.levels) {
@@ -71,6 +93,7 @@ class StepFreezeMerger {
       stepIdx: stepIdx,
       copyForPaint: copyForPaint,
     );
+    recordKnClockStep(state: state, bundle: bundle, stepIdx: stepIdx);
     mergeRatioAndRhythm(
       state: state,
       bundle: bundle,

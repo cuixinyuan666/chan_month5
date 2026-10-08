@@ -1,8 +1,9 @@
-import '../backtest/chip_peak_store.dart';
+﻿import '../backtest/chip_peak_store.dart';
 import '../backtest/divergence_relation_store.dart';
 import '../backtest/zhongshu_object_store.dart';
 import '../compute/adjacent_ratio_compute.dart';
 import '../compute/divergence_freeze_store.dart';
+import '../compute/kn_clock_timeline.dart';
 import '../compute/fractal_judgment_compute.dart';
 import '../compute/line_slope_compute.dart';
 import '../compute/math_series_freeze_store.dart';
@@ -41,6 +42,13 @@ class StepFreezeSessionState {
   final DivergenceFreezeStore diverFreezeStore = DivergenceFreezeStore();
   final ChipPeakFreezeStore chipPeakStore = ChipPeakFreezeStore();
 
+  /// K1+ 采样钟的「当时段划分」时间线（动态段口径）。
+  /// 条件求值按 asOf 还原当时的段边界，不使用最终态结构。
+  final KnClockTimeline knClockTimeline = KnClockTimeline();
+
+  /// [knClockTimeline] 已吃掉的 level0 已确认段数（增量记录的游标）。
+  int knClockSeenUnits = 0;
+
   void clear() {
     judgmentHistoryByKn.clear();
     zsJudgmentHistoryByKn.clear();
@@ -64,5 +72,7 @@ class StepFreezeSessionState {
     mathFreezeStore.clear();
     diverFreezeStore.clear();
     chipPeakStore.clear();
+knClockTimeline.clear();
+    knClockSeenUnits = 0;
   }
 }

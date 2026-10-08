@@ -1,5 +1,6 @@
-import '../compute/fractal_judgment_compute.dart';
+﻿import '../compute/fractal_judgment_compute.dart';
 import '../compute/fx_extend_line_compute.dart';
+import '../compute/kn_clock_timeline.dart';
 import '../compute/kn_ohlc_sample_compute.dart';
 import '../compute/kn_volume_series_compute.dart';
 import '../compute/math_classic_compute.dart';
@@ -47,6 +48,7 @@ TradeScalar lookupTradeNumeric({
   int donchianN = 20,
   double regressK = 2.0,
   List<BarCrosshairFeature> barFeatures = const [],
+  KnClockTimeline? knClock,
 }) {
   if (bars.isEmpty || asOf < 0) return const TradeScalar.unavailable();
 
@@ -79,6 +81,7 @@ TradeScalar lookupTradeNumeric({
       asOf: asOf,
       bars: bars,
       levels: levels,
+      knClock: knClock,
     );
   }
   final zs = _lookupZsCurrent(
@@ -207,6 +210,7 @@ TradeScalar _lookupRaw({
   required int asOf,
   required List<KlineBar> bars,
   required List<LevelBundle> levels,
+  KnClockTimeline? knClock,
 }) {
   if (field.length != 1) return const TradeScalar.unavailable();
   final f = field[0];
@@ -237,11 +241,12 @@ TradeScalar _lookupRaw({
     }
   }
   if (f == 'VOLUME') return const TradeScalar.unavailable();
-  final samples = collectKnOhlcSamples(
-    displayKn: kn,
+  final samples = _knSamples(
+    kn: kn,
     bars: bars,
     levels: levels,
     asOf: asOf,
+    knClock: knClock,
   );
   final pts = <({int x, double v})>[];
   for (final s in samples) {
@@ -333,7 +338,7 @@ TradeScalar? _lookupRegressionPlot({
   required List<LevelBundle> levels,
   BarFeatureLookup? features,
   Map<int, List<FractalJudgmentEvent>> fractalJudgmentByKn = const {},
-  double regressK = 2.0,
+double regressK = 2.0,
   List<BarCrosshairFeature> barFeatures = const [],
 }) {
   if (!_isRegressionPlotId(parsed)) return null;
@@ -360,7 +365,7 @@ List<EvalClockPoint> _regressionEvalSeries({
   required List<LevelBundle> levels,
   BarFeatureLookup? features,
   Map<int, List<FractalJudgmentEvent>> fractalJudgmentByKn = const {},
-  double regressK = 2.0,
+double regressK = 2.0,
   List<BarCrosshairFeature> barFeatures = const [],
 }) {
   final out = <EvalClockPoint>[];
@@ -493,6 +498,7 @@ List<EvalClockPoint> readEvalClockSeries({
   int donchianN = 20,
   double regressK = 2.0,
   List<BarCrosshairFeature> barFeatures = const [],
+  KnClockTimeline? knClock,
 }) {
   if (bars.isEmpty || asOf < 0) return const [];
   final def = lookupTradeVariable(variableId, maxKn: 32);
@@ -518,6 +524,7 @@ List<EvalClockPoint> readEvalClockSeries({
       asOf: asOf,
       bars: bars,
       levels: levels,
+      knClock: knClock,
     );
   }
   final zsProj = _zsProjectionOf(parsed);
@@ -530,6 +537,7 @@ List<EvalClockPoint> readEvalClockSeries({
       bars: bars,
       levels: levels,
       zsObjects: zsObjects,
+      knClock: knClock,
     );
   }
   final diverField = _diverProjectionField(parsed);
@@ -565,6 +573,7 @@ List<EvalClockPoint> readEvalClockSeries({
       asOf: asOf,
       bars: bars,
       levels: levels,
+      knClock: knClock,
     );
   }
   if (_isRegressionPlotId(parsed)) {
@@ -590,6 +599,7 @@ List<EvalClockPoint> readEvalClockSeries({
     asOf: asOf,
     bars: bars,
     levels: levels,
+    knClock: knClock,
   );
 }
 
@@ -620,12 +630,33 @@ List<EvalClockPoint> readSubIndicatorPlotGridSeries({
   );
 }
 
+/// K1+ 采样钟取样：有 [knClock] 用 asOf 当时的段划分（动态段口径，回测/寻优用）；
+/// 否则退回最终态 levels（绘图/诊断用）。
+List<KnOhlcSample> _knSamples({
+  required int kn,
+  required List<KlineBar> bars,
+  required List<LevelBundle> levels,
+  required int? asOf,
+  KnClockTimeline? knClock,
+}) {
+  if (knClock != null && !knClock.isEmpty) {
+    return collectKnOhlcSamplesAt(displayKn: kn, timeline: knClock, asOf: asOf);
+  }
+  return collectKnOhlcSamples(
+    displayKn: kn,
+    bars: bars,
+    levels: levels,
+    asOf: asOf,
+  );
+}
+
 List<EvalClockPoint> _rawEvalSeries({
   required int kn,
   required String field,
   required int asOf,
   required List<KlineBar> bars,
   required List<LevelBundle> levels,
+  KnClockTimeline? knClock,
 }) {
   if (kn == 0) {
     final out = <EvalClockPoint>[];
@@ -648,11 +679,12 @@ List<EvalClockPoint> _rawEvalSeries({
     return out;
   }
   if (field == 'VOLUME') return const [];
-  final samples = collectKnOhlcSamples(
-    displayKn: kn,
+  final samples = _knSamples(
+    kn: kn,
     bars: bars,
     levels: levels,
     asOf: asOf,
+    knClock: knClock,
   );
   final out = <EvalClockPoint>[];
   for (var i = 0; i < samples.length; i++) {
@@ -679,6 +711,7 @@ List<EvalClockPoint> _plotEvalSeries({
   required int asOf,
   required List<KlineBar> bars,
   required List<LevelBundle> levels,
+  KnClockTimeline? knClock,
 }) {
   if (evalClock == TradeEvalClock.k0Bar) {
     final out = <EvalClockPoint>[];
@@ -694,11 +727,12 @@ List<EvalClockPoint> _plotEvalSeries({
     return out;
   }
 
-  final samples = collectKnOhlcSamples(
-    displayKn: kn,
+  final samples = _knSamples(
+    kn: kn,
     bars: bars,
     levels: levels,
     asOf: asOf,
+    knClock: knClock,
   );
   final out = <EvalClockPoint>[];
   for (var i = 0; i < samples.length; i++) {
@@ -792,6 +826,7 @@ List<EvalClockPoint> _zsCurrentEvalSeries({
   required List<KlineBar> bars,
   required List<LevelBundle> levels,
   required ZhongshuObjectStore? zsObjects,
+  KnClockTimeline? knClock,
 }) {
   if (zsObjects == null || zsObjects.isEmpty) return const [];
   final grid = _rawEvalSeries(
@@ -800,6 +835,7 @@ List<EvalClockPoint> _zsCurrentEvalSeries({
     asOf: asOf,
     bars: bars,
     levels: levels,
+    knClock: knClock,
   );
   final out = <EvalClockPoint>[];
   var i = 0;

@@ -1,4 +1,4 @@
-import 'dart:io';
+﻿import 'dart:io';
 
 import 'package:chan_kline/backtest/backtest_metrics.dart';
 import 'package:chan_kline/backtest/backtest_run.dart';
@@ -365,6 +365,7 @@ class SearchEnv {
       barFeatures: h.barFeatures,
       mathConfig: h.mathConfig,
       minExecuteXExclusive: minExecuteXExclusive,
+      knClock: h.knClock,
     );
   }
 }

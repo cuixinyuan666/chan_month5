@@ -1,3 +1,4 @@
+﻿import '../compute/kn_clock_timeline.dart';
 import '../compute/math_series_freeze_store.dart';
 import '../models/bar_crosshair_feature.dart';
 import '../models/bar_feature_lookup.dart';
@@ -73,6 +74,9 @@ BacktestRun executeStrategyBacktest({
   StrategyCompileOk? precompiled,
   /// 仅保留计划成交根 `executeX` 严格大于该值的信号（样本外独立重跑）。
   int? minExecuteXExclusive,
+  /// K1+ 采样钟的 asOf 当时段划分时间线（动态段口径）。
+  /// 传了就用「当时那一段走到哪」采样；为 null 退回最终态 levels（仅诊断用）。
+  KnClockTimeline? knClock,
 }) {
   final started = now ?? DateTime.now();
   final id = runId ?? 'run_${started.millisecondsSinceEpoch}';
@@ -129,6 +133,7 @@ BacktestRun executeStrategyBacktest({
     regressK: regressK,
     barFeatures: barFeatures,
     mathConfig: mathConfig,
+    knClock: knClock,
   );
   var signals = <SignalEvent>[
     ...evalCompiledCond(

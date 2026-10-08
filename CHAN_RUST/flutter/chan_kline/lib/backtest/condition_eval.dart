@@ -1,3 +1,4 @@
+﻿import '../compute/kn_clock_timeline.dart';
 import '../compute/math_series_freeze_store.dart';
 import '../models/bar_crosshair_feature.dart';
 import '../models/bar_feature_lookup.dart';
@@ -277,6 +278,10 @@ class CondEvalCtx {
   final List<BarCrosshairFeature> barFeatures;
   final MathIndicatorConfig mathConfig;
 
+  /// K1+ 采样钟的 asOf 当时段划分时间线（动态段口径）。
+  /// 为 null 时退回最终态 levels 采样（仅供诊断/绘图，不用于回测口径）。
+  final KnClockTimeline? knClock;
+
   const CondEvalCtx({
     required this.asOf,
     required this.bars,
@@ -295,6 +300,7 @@ class CondEvalCtx {
     this.regressK = 2.0,
     this.barFeatures = const [],
     this.mathConfig = const MathIndicatorConfig(),
+    this.knClock,
   });
 }
 
@@ -490,11 +496,19 @@ List<_BoolPt> _evalCmp(CompiledCmp cond, CondEvalCtx ctx) {
   final rightByAt = <int, EvalClockPoint>{
     for (final p in right) p.availableAt: p,
   };
-  final aligned = <({EvalClockPoint a, EvalClockPoint b})>[];
+  // 空档标记：true = 与上一配对点之间，本侧序列还有别的采样点（说明对侧那几格无值）。
+  // 未确认中枢「盖住才有数」，框外的格会被丢；那些格之间发生了什么当下不可知，
+  // 所以**不许跨空档比较**——空档之后的第一格判 false，相邻两点必须真的是相邻。
+  final aligned = <({EvalClockPoint a, EvalClockPoint b, bool gapBefore})>[];
+  var sinceLastKept = 0;
   for (final a in left) {
     final b = rightByAt[a.availableAt];
-    if (b == null) continue;
-    aligned.add((a: a, b: b));
+    if (b == null) {
+      sinceLastKept++;
+      continue;
+    }
+    aligned.add((a: a, b: b, gapBefore: sinceLastKept > 0));
+    sinceLastKept = 0;
   }
   aligned.sort((x, y) => x.a.availableAt.compareTo(y.a.availableAt));
   if (aligned.isEmpty) return const [];
@@ -530,7 +544,7 @@ List<_BoolPt> _evalCmp(CompiledCmp cond, CondEvalCtx ctx) {
 
 bool _cmpAt(
   TradeBinaryOp op,
-  List<({EvalClockPoint a, EvalClockPoint b})> aligned,
+  List<({EvalClockPoint a, EvalClockPoint b, bool gapBefore})> aligned,
   int i, {
   int? eqDisplayDigits,
 }) {
@@ -553,11 +567,13 @@ bool _cmpAt(
       return a == b;
     case TradeBinaryOp.crossAbove:
       if (i == 0) return false;
+      if (aligned[i].gapBefore) return false;
       final pa = aligned[i - 1].a.value;
       final pb = aligned[i - 1].b.value;
       return pa <= pb && a > b;
     case TradeBinaryOp.crossBelow:
       if (i == 0) return false;
+      if (aligned[i].gapBefore) return false;
       final pa = aligned[i - 1].a.value;
       final pb = aligned[i - 1].b.value;
       return pa >= pb && a < b;
@@ -880,6 +896,7 @@ List<EvalClockPoint> _readRef(
       donchianN: ctx.donchianN,
       regressK: ctx.regressK,
       barFeatures: ctx.barFeatures,
+      knClock: ctx.knClock,
     );
     return [
       for (final p in grid)
@@ -913,6 +930,7 @@ List<EvalClockPoint> _readRef(
       donchianN: ctx.donchianN,
       regressK: ctx.regressK,
       barFeatures: ctx.barFeatures,
+      knClock: ctx.knClock,
     );
     return [
       for (final p in grid)
@@ -944,6 +962,7 @@ List<EvalClockPoint> _readRef(
     donchianN: ctx.donchianN,
     regressK: ctx.regressK,
     barFeatures: ctx.barFeatures,
+    knClock: ctx.knClock,
   );
 }
 

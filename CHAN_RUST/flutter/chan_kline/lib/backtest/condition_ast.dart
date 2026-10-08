@@ -578,3 +578,84 @@ TradeAst foldAstChain(List<TradeAst> leaves, List<CondJoin> joins) {
   }
   return acc;
 }
+
+/// ----- JSON 序列化（供寻优快照保存 / 导入买卖 AST）-----
+Map<String, dynamic> _astToJson(TradeAst ast) => switch (ast) {
+      TradeCmpAst(:final left, :final right, :final op) => {
+        't': 'cmp',
+        'left': _valueRefToJson(left),
+        'right': _valueRefToJson(right),
+        'op': op.name,
+      },
+      TradeEventAst(:final variableId) => {'t': 'ev', 'var': variableId},
+      TradeAndAst(:final left, :final right) => {
+        't': 'and',
+        'left': _astToJson(left),
+        'right': _astToJson(right),
+      },
+      TradeOrAst(:final left, :final right) => {
+        't': 'or',
+        'left': _astToJson(left),
+        'right': _astToJson(right),
+      },
+    };
+
+Map<String, dynamic> _valueRefToJson(TradeValueRef ref) => switch (ref) {
+      TradeVarRef(:final variableId) => {'t': 'var', 'id': variableId},
+      TradeConstRef(:final value) => {'t': 'const', 'v': value},
+      TradeEnumRef(:final token) => {'t': 'enum', 'tok': token},
+    };
+
+extension TradeAstJson on TradeAst {
+  Map<String, dynamic> toJson() => _astToJson(this);
+}
+
+extension TradeValueRefJson on TradeValueRef {
+  Map<String, dynamic> toJson() => _valueRefToJson(this);
+}
+
+TradeBinaryOp tradeBinaryOpFromName(String name) {
+  for (final e in TradeBinaryOp.values) {
+    if (e.name == name) return e;
+  }
+  return TradeBinaryOp.gt;
+}
+
+TradeAst tradeAstFromJson(Map<String, dynamic> m) {
+  switch (m['t']) {
+    case 'cmp':
+      return TradeCmpAst(
+        left: tradeValueRefFromJson(m['left'] as Map<String, dynamic>),
+        right: tradeValueRefFromJson(m['right'] as Map<String, dynamic>),
+        op: tradeBinaryOpFromName(m['op'] as String? ?? 'gt'),
+      );
+    case 'ev':
+      return TradeEventAst(m['var'] as String? ?? '');
+    case 'and':
+      return TradeAndAst(
+        tradeAstFromJson(m['left'] as Map<String, dynamic>),
+        tradeAstFromJson(m['right'] as Map<String, dynamic>),
+      );
+    case 'or':
+      return TradeOrAst(
+        tradeAstFromJson(m['left'] as Map<String, dynamic>),
+        tradeAstFromJson(m['right'] as Map<String, dynamic>),
+      );
+    default:
+      return TradeEventAst('');
+  }
+}
+
+TradeValueRef tradeValueRefFromJson(Map<String, dynamic> m) {
+  switch (m['t']) {
+    case 'var':
+      return TradeVarRef(m['id'] as String? ?? '');
+    case 'const':
+      final v = m['v'];
+      return TradeConstRef(v is num ? v.toDouble() : 0.0);
+    case 'enum':
+      return TradeEnumRef(m['tok'] as String? ?? '');
+    default:
+      return TradeVarRef('');
+  }
+}
