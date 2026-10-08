@@ -4415,3 +4415,14 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **结果**：flutter analyze lib/ test/ 0 error；flutter test test/indicator_search/ 15 条全过（远端基线条数，我的 full_volume 测试不在其中）。
 - **白话总结**：先把本地对齐到远端那条线，再把本次改动重新贴上去。站得住的是「K1 采样钟改成每根 K 都在场判」这一整套（含空档切断）、投图完全替换、多线图例、寻优弹窗可关闭可复制。没贴上去的是寻优结果宽表那两个 UI 小改（列名白话 tooltip、右键复制整行）和一条回归测试，因为远端把那块重构过，强行贴会编译不过。K1 采样钟现在能用但没有测试锁住，这个缺口记在这里，下一轮必须补。
 - **注意**：①核心修复缺少自动回归保护，属已知缺口；②寻优结果面板的 tooltip/右键复制功能在本次丢失，需在新 API 上重做；③未跑全量 flutter test（只跑了 test/indicator_search/）。
+
+### 2026-10-06 寻优宽表两个 UI 功能按远端新结构重做
+
+- **背景**：上一条「基于远端重放」里，列名白话 tooltip 与右键复制整行因远端重构了结果面板 API 而丢失，用户要求「无冲突则加入」——核对后确认冲突可解（按新结构重做即可），本条补回。
+- **远端面板现状**：`indicator_search_result_panel.dart` 改为 `_VerdictTable` + `_VerdictHeaderRow` + `_VerdictDataRow` 三段式，列共 10 列：类型 / 买入条件 / 卖出条件 / 内笔 / 内胜率 / 内盈亏比 / 外笔 / 外胜率 / 外盈亏比 / 保守分；排序用远端 `VerdictSortState`，合格判定用 `PassGate`（我曾删除的达标筛选，远端保留并扩展）。
+- **改动1 列名 tooltip**：新增顶层 `_colTip(label, key, scope, plain, [note])`，10 列全部给出中文算法 + 英文键 + 三态说明；「保守分」注明只按样本内算、越大越好、笔数不足门槛记 0、小样本与极端盈亏比会被压缩（依据 `rankScoreOf`：`wrAdj * poFinite * (0.35+0.65*conf)`，∞ 盈亏比按 cap 压缩）。
+- **改动2 右键复制整行**：`_VerdictDataRow` 包 `GestureDetector(onSecondaryTapUp)`，按表头列序拼 10 列 TSV（买卖条件走面板同一套 `conditionDisplayText`，制表符/换行已清洗），弹 1.2 秒提示；外段未测算时按显示值写「未测」「—」。
+- **改动3 表头上方加一行操作说明**（拖选复制 / 悬停看口径 / 右键复制整行）。
+- **结果**：`flutter analyze lib/ test/` **0 error**；`test/indicator_search/` + `kn_clock_causality_test` **47 条全过**。
+- **白话总结**：寻优结果表每个列名鼠标悬停都告诉你这一列怎么算的（内胜率＝盈利笔数÷已平仓总笔数、外笔数没测算时显示「未测」、保守分只按样本内算越大约越好等）；在任意一行上点鼠标右键，这一整行 10 列按表头顺序用制表符进剪贴板，直接贴进 Excel 就是一条记录。
+- **注意**：端到端目视验收（悬停 tooltip、右键复制、外段未测显示）待用户在 App 内实测；实测确认后再 push。
