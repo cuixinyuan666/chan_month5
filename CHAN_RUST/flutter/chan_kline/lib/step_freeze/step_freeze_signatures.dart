@@ -36,6 +36,10 @@ class StepFreezeSignatures {
         'diver': _diverSig(state.diverFreezeStore),
         'chip': _chipSig(state.chipPeakStore),
         'diverRel': _diverRelSig(state.diverRelationStore),
+        // 中枢对象快照（此前不在指纹清单里，靠约定保证不回写；现由对拍盯住）
+        'zsObject': state.zsObjectStore.signature(),
+        // K1+ 采样钟时间线：逐 bar 穿越判定全靠它
+        'knClock': _knClockSig(state),
       };
 
   static List<String> diff(StepFreezeSessionState a, StepFreezeSessionState b) {
@@ -179,4 +183,12 @@ class StepFreezeSignatures {
 
   static String _diverRelSig(DivergenceRelationStore store) =>
       store.stepFreezeParityDigest();
+
+  /// K1+ 采样钟时间线：每一步当时的段边界 + 当时动态段。
+  /// 逐 bar 穿越判定全靠它，变了就会改变信号。
+  static String _knClockSig(StepFreezeSessionState state) {
+    final t = state.knClockTimeline;
+    if (t.isEmpty) return '';
+    return '${t.length}@${t.lastAsOf}:${t.signature(null)}';
+  }
 }
