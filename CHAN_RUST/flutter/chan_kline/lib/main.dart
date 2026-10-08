@@ -47,6 +47,7 @@ import 'backtest/strategy_config.dart';
 import 'backtest/strategy_trade_round.dart';
 import 'backtest/backtest_step_harness.dart';
 import 'backtest/backtest_workbench.dart';
+import 'backtest/condition_ast.dart';
 import 'backtest/chan_event_store.dart';
 import 'backtest/chart_line_store.dart';
 import 'backtest/chip_peak_store.dart';
@@ -517,8 +518,15 @@ class _KlineHomePageState extends State<KlineHomePage> {
   double _backtestSplitDragStartY = 0;
   double _backtestSplitDragStartFraction = 0.58;
 
-  /// 寻优会话快照（「返回寻优结果」用）。
+  /// 「在 K 线图查看」后缓存的可恢复寻优会话（排序/展开/身份）。
+  /// 供回测台横幅上的「返回寻优结果」原样恢复，无需重新扫描。主图会话变更时清空。
   IndicatorSearchSessionSnapshot? _lastSearchSession;
+
+  /// 桌面窗控实测总宽：拖动条 28 + 设置钮 36 + 最小化/最大化/关闭各 46。
+  /// 回测台横幅贴在 body 顶部，而窗控是叠在 body 之上的 `Positioned`，
+  /// 横幅右侧必须让出这段宽，否则「返回寻优结果」按钮被窗控盖住点不到。
+  static const double _desktopCaptionControlsWidth = 28 + 36 + 46 * 3;
+
   /// catalog 三类..N 类上限（至少 9；随会话观察到的更高类扩大）
   int get _maxBsClass => math.max(
         9,
@@ -2726,7 +2734,10 @@ class _KlineHomePageState extends State<KlineHomePage> {
     );
   }
 
-  Future<void> _openIndicatorSearch({bool closeSettingsSheet = false}) async {
+  Future<void> _openIndicatorSearch({
+    bool closeSettingsSheet = false,
+    IndicatorSearchSessionSnapshot? restore,
+  }) async {
     if (_mlSession.isActive) {
       _showSnack('请先退出机器学习');
       return;
@@ -2750,14 +2761,31 @@ class _KlineHomePageState extends State<KlineHomePage> {
       );
       return;
     }
+    // 恢复模式：主图会话必须还指着同一份数据，否则重开上一次的宽表没有意义
+    // ——它跑的就是旧区间的结果，拿它对现在的图做判断会出错。
+    if (restore != null) {
+      final same = _selectedCode == restore.code &&
+          _period == restore.period &&
+          _fmtDateTime(_beginDate) == restore.beginText &&
+          _fmtDateTime(_endDate) == restore.endText &&
+          _allBars.length == restore.barCount;
+      if (!same) {
+        _lastSearchSession = null;
+        _showSnack('主图会话已变更，缓存的寻优结果作废，请重新寻优');
+        return;
+      }
+    }
     if (closeSettingsSheet && Navigator.canPop(context)) {
       Navigator.pop(context);
       _settingsSheetSetState = null;
     }
     setState(() => _indicatorSearchRunning = true);
     _msgHistory.append(
-      '指标寻优：$code ${_periods[_period] ?? _period} '
-      '${_fmtDateTime(_beginDate)}~${_fmtDateTime(_endDate)}',
+      restore != null
+          ? '返回寻优结果：$code ${_periods[_period] ?? _period} '
+              '${_fmtDateTime(_beginDate)}~${_fmtDateTime(_endDate)}'
+          : '指标寻优：$code ${_periods[_period] ?? _period} '
+              '${_fmtDateTime(_beginDate)}~${_fmtDateTime(_endDate)}',
     );
     await showDialog<void>(
       context: context,
@@ -2777,11 +2805,23 @@ class _KlineHomePageState extends State<KlineHomePage> {
         truncationCheck: _truncationCheck,
         mainSessionHarness: _mainSessionHarnessForSearch(),
         initialBars: List<KlineBar>.from(_allBars),
+        // 「眼睛 → 在 K 线图查看」：把该行买卖条件投到主图，并把本次会话缓存下来，
+        // 供回测台横幅上的「返回寻优结果」原样恢复（排序/展开都在，不重扫）。
+        onApplyToChart: _applySearchBacktestToChart,
+        onCacheSession: (snap) => _lastSearchSession = snap,
+        restoreSnapshot: restore,
       ),
     );
     if (!mounted) return;
     setState(() => _indicatorSearchRunning = false);
-    _msgHistory.append('指标寻优结束');
+    _msgHistory.append(restore != null ? '返回寻优结果结束' : '指标寻优结束');
+  }
+
+  /// 回测台横幅上的「返回寻优结果」：用缓存会话原样重开上次那张宽表，不重新扫描。
+  Future<void> _returnToSearch() async {
+    final s = _lastSearchSession;
+    if (s == null) return;
+    await _openIndicatorSearch(restore: s);
   }
 
   /// 计优：跑完的缠论/指标冻结账 → 各级别连线转折点的指标统计。
@@ -3074,7 +3114,7 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
       bucketStep: _chipConfig.bucketStep,
       compactLayout: _useAndroidInteraction,
     );
-    return LayoutBuilder(
+    final body = LayoutBuilder(
       builder: (context, constraints) {
         final sideBySide = !_useAndroidInteraction;
         if (sideBySide) {
@@ -3122,6 +3162,77 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
           ),
         );
       },
+    );
+
+    // 回测台横幅：寻优某行点了「在 K 线图查看」之后常驻顶部，写清图上生效的买卖条件，
+    // 右端一个「返回寻优结果」按钮，原样回到那张宽表（排序/展开都在，不重扫）。
+    if (_lastSearchSession != null) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _searchReturnBanner(),
+          Expanded(child: body),
+        ],
+      );
+    }
+    return body;
+  }
+
+  /// 寻优横幅：显示当前图上生效的买卖条件 + 「返回寻优结果」入口。
+  ///
+  /// 踩坑：桌面标题栏（拖动条/设置/最小化/最大化/关闭）是 `Positioned(top:0,height:36)`
+  /// 叠在 body **之上**，横幅同样贴在 body 顶部 → 右侧按钮会被最小化/关闭压住点不到，
+  /// 故横幅右侧必须让出窗控总宽（移动端没有窗控，不占宽）。
+  /// 口径来源就是 `_strategyConfig`，与图上买卖标记、工作台条件页同源，不另存一份。
+  Widget _searchReturnBanner() {
+    final rightInset = _useAndroidInteraction ? 0.0 : _desktopCaptionControlsWidth;
+    final maxKn = chartMaxKn(levels: _levels, k0Lines: _k0Lines);
+    final buyText = astConditionTextCn(_strategyConfig.buyAst, maxKn: maxKn)
+        .replaceAll('\n', ' ');
+    final sellText = astConditionTextCn(_strategyConfig.sellAst, maxKn: maxKn)
+        .replaceAll('\n', ' ');
+    Widget condLine(String tag, String text, Color color) => Row(
+          children: [
+            Text(
+              '$tag ',
+              style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: color),
+            ),
+            Expanded(
+              child: Text(
+                text,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 11, color: color),
+              ),
+            ),
+          ],
+        );
+    return Container(
+      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+      padding: EdgeInsets.fromLTRB(8, 4, 8 + rightInset, 4),
+      child: Row(
+        children: [
+          const Icon(Icons.history, size: 16),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                condLine('买', buyText, const Color(0xFFE53935)),
+                condLine('卖', sellText, const Color(0xFF43A047)),
+              ],
+            ),
+          ),
+          Tooltip(
+            message: '回到上次那张寻优结果表：排序与展开行已保留，不重新扫描',
+            child: TextButton(
+              onPressed: _indicatorSearchRunning ? null : () => _returnToSearch(),
+              child: const Text('返回寻优结果'),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
