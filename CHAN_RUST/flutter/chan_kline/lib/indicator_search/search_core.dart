@@ -1,13 +1,11 @@
 import 'dart:io';
-import 'dart:math' as math;
 
 import 'package:chan_kline/backtest/condition_ast.dart';
+import 'package:chan_kline/backtest/backtest_metrics.dart';
+import 'package:chan_kline/backtest/equity_curve.dart';
 import 'package:chan_kline/models/kline_bar.dart';
 
-/// 全胜无亏损时 payoff=∞ 仍过门槛；排序时用有限 cap，避免压过样本更多的有限组合。
-const double kRankScoreInfinitePayoffCap = 8.0;
-
-/// 指标组合寻优的公共部件：候选枚举、样本内外切分、稳健评分、结果落盘。
+/// 寻优公共部件：候选枚举、样本内外切分、结果落盘。
 class ComboCand {
   final String name;
   final TradeAst buyAst;
@@ -16,71 +14,15 @@ class ComboCand {
   const ComboCand(this.name, this.buyAst, this.sellAst);
 }
 
-class RawScore {
-  final int trades;
-  final double? winRate;
-  final double? payoff;
-  final double? profitFactor;
-  final double netProfit;
-
-  const RawScore({
-    required this.trades,
-    required this.winRate,
-    required this.payoff,
-    required this.profitFactor,
-    required this.netProfit,
-  });
-
-  static const empty = RawScore(
-    trades: 0,
-    winRate: null,
-    payoff: null,
-    profitFactor: null,
-    netProfit: 0,
-  );
-
-  Map<String, dynamic> toJson() => {
-    'trades': trades,
-    'winRate': winRate,
-    'payoff': _encodeOptionalDouble(payoff),
-    'profitFactor': _encodeOptionalDouble(profitFactor),
-    'netProfit': netProfit,
-  };
-
-  static RawScore fromJson(Map<String, dynamic> m) => RawScore(
-    trades: (m['trades'] as num?)?.toInt() ?? 0,
-    winRate: (m['winRate'] as num?)?.toDouble(),
-    payoff: _decodeOptionalDouble(m['payoff']),
-    profitFactor: _decodeOptionalDouble(m['profitFactor']),
-    netProfit: (m['netProfit'] as num?)?.toDouble() ?? 0,
-  );
-}
-
-Object? _encodeOptionalDouble(double? v) {
-  if (v == null) return null;
-  if (v.isInfinite) return 'inf';
-  return v;
-}
-
-double? _decodeOptionalDouble(Object? v) {
-  if (v == null) return null;
-  if (v == 'inf') return double.infinity;
-  if (v is num) return v.toDouble();
-  return null;
-}
-
 class ComboVerdict {
   final String name;
   final String buyText;
   final String sellText;
-  final RawScore inSample;
-  final RawScore outSample;
-  final double inRankScore;
-  final bool passed;
+  final SegmentMetrics inSample;
+  final SegmentMetrics outSample;
+  final TradeAst? buyAst;
+  final TradeAst? sellAst;
   final int splitX;
-
-  /// 内段不过关时外段不参与双达标（内外仍各回测一次；与「外段 0 笔」区分）。
-  final bool outSampleSkipped;
 
   const ComboVerdict({
     required this.name,
@@ -88,10 +30,9 @@ class ComboVerdict {
     required this.sellText,
     required this.inSample,
     required this.outSample,
-    required this.inRankScore,
-    required this.passed,
+    this.buyAst,
+    this.sellAst,
     required this.splitX,
-    this.outSampleSkipped = false,
   });
 
   /// 展示用短标签（「事件｜…」→「事件」）。
@@ -101,71 +42,123 @@ class ComboVerdict {
     return name.substring(0, i);
   }
 
+  /// 快照是否带可导入的买卖 AST（旧版快照没有 → 禁用导入并提示重新寻优）。
+  bool get hasAst => buyAst != null && sellAst != null;
+
   Map<String, dynamic> toJson() => {
     'name': name,
     'buyText': buyText,
     'sellText': sellText,
-    'inSample': inSample.toJson(),
-    'outSample': outSample.toJson(),
-    'inRankScore': inRankScore,
-    'passed': passed,
+    'inSample': _segmentToJson(inSample),
+    'outSample': _segmentToJson(outSample),
+    if (buyAst != null) 'buyAst': buyAst!.toJson(),
+    if (sellAst != null) 'sellAst': sellAst!.toJson(),
     'splitX': splitX,
-    'outSampleSkipped': outSampleSkipped,
   };
 
-  static ComboVerdict fromJson(Map<String, dynamic> m) => ComboVerdict(
-    name: m['name'] as String? ?? '',
-    buyText: m['buyText'] as String? ?? '',
-    sellText: m['sellText'] as String? ?? '',
-    inSample: RawScore.fromJson(
-      Map<String, dynamic>.from(m['inSample'] as Map? ?? {}),
-    ),
-    outSample: RawScore.fromJson(
-      Map<String, dynamic>.from(m['outSample'] as Map? ?? {}),
-    ),
-    inRankScore: (m['inRankScore'] as num?)?.toDouble() ?? 0,
-    passed: m['passed'] == true,
-    splitX: (m['splitX'] as num?)?.toInt() ?? 0,
-    outSampleSkipped: m['outSampleSkipped'] == true,
-  );
-}
-
-class PassGate {
-  final double minWinRate;
-  final double minPayoff;
-  final int minTrades;
-
-  const PassGate({
-    this.minWinRate = 0.60,
-    this.minPayoff = 1.5,
-    this.minTrades = 5,
-  });
-
-  bool okSegment(RawScore s) =>
-      s.trades >= minTrades &&
-      (s.winRate ?? 0) >= minWinRate &&
-      _payoffMeetsGate(s.payoff, minPayoff);
-
-  static bool _payoffMeetsGate(double? payoff, double minPayoff) {
-    if (payoff != null && payoff.isInfinite) return true;
-    return (payoff ?? 0) >= minPayoff;
+  static ComboVerdict fromJson(Map<String, dynamic> m) {
+    final inM = m['inSample'] as Map?;
+    final outM = m['outSample'] as Map?;
+    return ComboVerdict(
+      name: m['name'] as String? ?? '',
+      buyText: m['buyText'] as String? ?? '',
+      sellText: m['sellText'] as String? ?? '',
+      inSample: inM == null
+          ? SegmentMetrics.empty
+          : _segmentFromJson(inM as Map<String, dynamic>),
+      outSample: outM == null
+          ? SegmentMetrics.empty
+          : _segmentFromJson(outM as Map<String, dynamic>),
+      buyAst: m['buyAst'] is Map
+          ? tradeAstFromJson(m['buyAst'] as Map<String, dynamic>)
+          : null,
+      sellAst: m['sellAst'] is Map
+          ? tradeAstFromJson(m['sellAst'] as Map<String, dynamic>)
+          : null,
+      splitX: (m['splitX'] as num?)?.toInt() ?? 0,
+    );
   }
-
-  bool ok(ComboVerdict v) => okSegment(v.inSample) && okSegment(v.outSample);
 }
 
-double rankScoreOf(RawScore s, {required int minTrades}) {
-  final n = s.trades;
-  if (n < minTrades) return 0;
-  final wr = s.winRate;
-  final po = s.payoff;
-  if (wr == null || po == null) return 0;
-  final poFinite = po.isInfinite ? kRankScoreInfinitePayoffCap : po;
-  final shrink = n / (n + 6.0);
-  final wrAdj = 0.5 + (wr - 0.5) * shrink;
-  final conf = math.log(1 + n / 5.0) / math.log(1 + 50 / 5.0);
-  return wrAdj * poFinite * (0.35 + 0.65 * conf);
+Object? _mn(MetricNum m) =>
+    m.isInfinity ? 'inf' : (m.isFinite ? m.value : null);
+
+MetricNum _mnBack(Object? v) {
+  if (v == null) return const MetricNum.unavailable();
+  if (v == 'inf') return const MetricNum.infinity();
+  if (v is num) return MetricNum.finite(v.toDouble());
+  return const MetricNum.unavailable();
 }
+
+Map<String, dynamic> _segmentToJson(SegmentMetrics s) => {
+  'trades': s.trades,
+  'winning': s.winning,
+  'losing': s.losing,
+  'flat': s.flat,
+  'winRate': _mn(s.winRate),
+  'grossProfit': s.grossProfit,
+  'grossLoss': s.grossLoss,
+  'netProfit': s.netProfit,
+  'returnPct': _mn(s.returnPct),
+  'payoffRatio': _mn(s.payoffRatio),
+  'profitFactor': _mn(s.profitFactor),
+  'expectancy': _mn(s.expectancy),
+  'averageWin': _mn(s.averageWin),
+  'averageLoss': _mn(s.averageLoss),
+  'largestWin': _mn(s.largestWin),
+  'largestLoss': _mn(s.largestLoss),
+  'maxConsecutiveWins': s.maxConsecutiveWins,
+  'maxConsecutiveLosses': s.maxConsecutiveLosses,
+  'maxDrawdown': s.maxDrawdown,
+  'maxDrawdownPct': s.maxDrawdownPct,
+  'maxDrawdownStartX': s.maxDrawdownStartX,
+  'maxDrawdownEndX': s.maxDrawdownEndX,
+  'recoveryX': s.recoveryX,
+  'avgHoldBars': _mn(s.avgHoldBars),
+  'medianHoldBars': _mn(s.medianHoldBars),
+  'maxHoldBars': _mn(s.maxHoldBars),
+  'holdTimeRatio': _mn(s.holdTimeRatio),
+  'annualReturn': _mn(s.annualReturn),
+  'annualVol': _mn(s.annualVol),
+  'sharpe': _mn(s.sharpe),
+  'sortino': _mn(s.sortino),
+  'calmar': _mn(s.calmar),
+};
+
+SegmentMetrics _segmentFromJson(Map<String, dynamic> m) => SegmentMetrics(
+  trades: (m['trades'] as num?)?.toInt() ?? 0,
+  winning: (m['winning'] as num?)?.toInt() ?? 0,
+  losing: (m['losing'] as num?)?.toInt() ?? 0,
+  flat: (m['flat'] as num?)?.toInt() ?? 0,
+  winRate: _mnBack(m['winRate']),
+  grossProfit: (m['grossProfit'] as num?)?.toDouble() ?? 0,
+  grossLoss: (m['grossLoss'] as num?)?.toDouble() ?? 0,
+  netProfit: (m['netProfit'] as num?)?.toDouble() ?? 0,
+  returnPct: _mnBack(m['returnPct']),
+  payoffRatio: _mnBack(m['payoffRatio']),
+  profitFactor: _mnBack(m['profitFactor']),
+  expectancy: _mnBack(m['expectancy']),
+  averageWin: _mnBack(m['averageWin']),
+  averageLoss: _mnBack(m['averageLoss']),
+  largestWin: _mnBack(m['largestWin']),
+  largestLoss: _mnBack(m['largestLoss']),
+  maxConsecutiveWins: (m['maxConsecutiveWins'] as num?)?.toInt() ?? 0,
+  maxConsecutiveLosses: (m['maxConsecutiveLosses'] as num?)?.toInt() ?? 0,
+  maxDrawdown: (m['maxDrawdown'] as num?)?.toDouble() ?? 0,
+  maxDrawdownPct: (m['maxDrawdownPct'] as num?)?.toDouble() ?? 0,
+  maxDrawdownStartX: (m['maxDrawdownStartX'] as num?)?.toInt(),
+  maxDrawdownEndX: (m['maxDrawdownEndX'] as num?)?.toInt(),
+  recoveryX: (m['recoveryX'] as num?)?.toInt(),
+  avgHoldBars: _mnBack(m['avgHoldBars']),
+  medianHoldBars: _mnBack(m['medianHoldBars']),
+  maxHoldBars: _mnBack(m['maxHoldBars']),
+  holdTimeRatio: _mnBack(m['holdTimeRatio']),
+  annualReturn: _mnBack(m['annualReturn']),
+  annualVol: _mnBack(m['annualVol']),
+  sharpe: _mnBack(m['sharpe']),
+  sortino: _mnBack(m['sortino']),
+  calmar: _mnBack(m['calmar']),
+);
 
 int splitIndexOf(int total, {double inRatio = 0.7}) {
   if (total <= 0) return 0;
@@ -190,104 +183,6 @@ int splitBarIdx(List<KlineBar> bars, {double inRatio = 0.7}) {
   return bars[ix].idx;
 }
 
-/// 寻优「全胜小样本」体检（只读诊断，不改任何判定）。
-///
-/// 背景：`rankScoreOf` 对 `payoff=∞` 用 [kRankScoreInfinitePayoffCap]=8.0 封顶，
-/// 而小样本惩罚 `shrink=n/(n+6)` 在 n=5 时仅 0.455、`conf` 因子有 0.35 兜底，
-/// 导致「5 笔全胜」得分(≈3.13)压过「50 笔胜率60%盈亏比2.0」(≈1.18)。
-/// 叠加上万候选无多重比较校正，榜首容易被小样本噪声占据。
-/// 本统计只把事实摆出来，供人工判断是否需要收紧门槛或 cap。
-class SearchInfPayoffDiagnostics {
-  /// 进入统计的候选总数（跑通并产出 verdict）。
-  final int total;
-
-  /// 样本内 `payoff` 为 ∞ 的候选数。
-  final int infCount;
-
-  /// 保守分前 [topN] 名中样本内 `payoff` 为 ∞ 的个数。
-  final int infInTop;
-
-  /// 保守分前 [topN] 名中的最小样本内笔数（小样本噪声的直接证据）。
-  final int topMinTrades;
-
-  /// 双达标组合中的最小样本内笔数。
-  final int passedMinTrades;
-
-  /// 双达标组合中样本内 `payoff` 为 ∞ 的个数。
-  final int passedInfCount;
-
-  /// 双达标组合数。
-  final int passedCount;
-
-  const SearchInfPayoffDiagnostics({
-    required this.total,
-    required this.infCount,
-    required this.infInTop,
-    required this.topMinTrades,
-    required this.passedMinTrades,
-    required this.passedInfCount,
-    required this.passedCount,
-  });
-
-  static const empty = SearchInfPayoffDiagnostics(
-    total: 0,
-    infCount: 0,
-    infInTop: 0,
-    topMinTrades: 0,
-    passedMinTrades: 0,
-    passedInfCount: 0,
-    passedCount: 0,
-  );
-
-  static bool _isInf(RawScore s) => s.payoff != null && s.payoff!.isInfinite;
-
-  factory SearchInfPayoffDiagnostics.of(
-    List<ComboVerdict> verdicts, {
-    int topN = 20,
-  }) {
-    if (verdicts.isEmpty) return empty;
-    final byRank = [...verdicts]
-      ..sort((a, b) => b.inRankScore.compareTo(a.inRankScore));
-    final top = byRank.take(topN).toList();
-    final passed = verdicts.where((e) => e.passed).toList();
-    return SearchInfPayoffDiagnostics(
-      total: verdicts.length,
-      infCount: verdicts.where((e) => _isInf(e.inSample)).length,
-      infInTop: top.where((e) => _isInf(e.inSample)).length,
-      topMinTrades: top.isEmpty
-          ? 0
-          : top.map((e) => e.inSample.trades).reduce((a, b) => a < b ? a : b),
-      passedMinTrades: passed.isEmpty
-          ? 0
-          : passed
-                .map((e) => e.inSample.trades)
-                .reduce((a, b) => a < b ? a : b),
-      passedInfCount: passed.where((e) => _isInf(e.inSample)).length,
-      passedCount: passed.length,
-    );
-  }
-
-  /// 供报告头/结果面板展示的一行体检结论（无数据时返回 null）。
-  String? toDisplayLine({int topN = 20}) {
-    if (total == 0) return null;
-    final buf = StringBuffer()
-      ..write('全胜体检：样本内盈亏比∞ $infCount/$total')
-      ..write(' · 前$topN名中∞ $infInTop 个、最小笔数 $topMinTrades');
-    if (passedCount > 0) {
-      buf.write(
-        ' · 双达标 $passedCount 个中最小笔数 $passedMinTrades、∞ $passedInfCount 个',
-      );
-    } else {
-      buf.write(' · 双达标 0 个');
-    }
-    // 榜首被小样本占据时给出明确告警（这是最值得警惕的形态）。
-    if (infInTop > 0 && topMinTrades > 0 && topMinTrades < 10) {
-      buf.write(' ⚠ 榜首含盈亏比∞的小样本组合，请核对笔数后再看排名');
-    }
-    return buf.toString();
-  }
-}
-
 class VerdictSink {
   VerdictSink(this.path, {this.writeHeader = true});
 
@@ -299,16 +194,21 @@ class VerdictSink {
   void add(ComboVerdict v) {
     if (writeHeader && !_headerWritten) {
       _pending.writeln(
-        'name\tin_trades\tin_winrate\tin_payoff\tout_trades\tout_winrate'
-        '\tout_payoff\trank\tpassed\tout_skipped',
+        'name\tin_t\tin_wr\tin_po\tin_pf\tin_net\tin_sh\tin_calmar'
+        '\tout_t\tout_wr\tout_po\tout_pf\tout_net\tout_sh\tout_calmar',
       );
       _headerWritten = true;
     }
+    final i = v.inSample, o = v.outSample;
     _pending.writeln(
-      '${_tsvCell(v.name)}\t${v.inSample.trades}\t${_f(v.inSample.winRate)}'
-      '\t${_f(v.inSample.payoff)}\t${v.outSample.trades}'
-      '\t${_f(v.outSample.winRate)}\t${_f(v.outSample.payoff)}'
-      '\t${v.inRankScore.toStringAsFixed(4)}\t${v.passed}\t${v.outSampleSkipped}',
+      '${_tsvCell(v.name)}\t${i.trades}\t${_numCell(i.winRate, pct: true)}'
+      '\t${_numCell(i.payoffRatio)}\t${_numCell(i.profitFactor)}\t'
+      '${i.netProfit.toStringAsFixed(0)}\t${_numCell(i.sharpe)}\t'
+      '${_numCell(i.calmar)}\t'
+      '${o.trades}\t${_numCell(o.winRate, pct: true)}'
+      '\t${_numCell(o.payoffRatio)}\t${_numCell(o.profitFactor)}\t'
+      '${o.netProfit.toStringAsFixed(0)}\t${_numCell(o.sharpe)}\t'
+      '${_numCell(o.calmar)}',
     );
   }
 
@@ -328,8 +228,8 @@ class VerdictSink {
   void close() {
     if (writeHeader && !_headerWritten) {
       _pending.writeln(
-        'name\tin_trades\tin_winrate\tin_payoff\tout_trades\tout_winrate'
-        '\tout_payoff\trank\tpassed\tout_skipped',
+        'name\tin_t\tin_wr\tin_po\tin_pf\tin_net\tin_sh\tin_calmar'
+        '\tout_t\tout_wr\tout_po\tout_pf\tout_net\tout_sh\tout_calmar',
       );
       _headerWritten = true;
     }
@@ -339,9 +239,10 @@ class VerdictSink {
   static String _tsvCell(String s) =>
       s.replaceAll('\t', ' ').replaceAll('\r', ' ').replaceAll('\n', ' ');
 
-  static String _f(double? x) {
-    if (x == null) return '-';
-    if (x.isInfinite) return 'inf';
-    return x.toStringAsFixed(4);
+  static String _numCell(MetricNum m, {bool pct = false}) {
+    if (m.isUnavailable) return '—';
+    if (m.isInfinity) return 'inf';
+    final v = m.value!;
+    return pct ? '${(v * 100).toStringAsFixed(1)}' : v.toStringAsFixed(3);
   }
 }

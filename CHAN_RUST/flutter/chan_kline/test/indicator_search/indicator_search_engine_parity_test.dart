@@ -72,10 +72,11 @@ void main() {
       }
       expect(viaEnv, isNotNull);
       final m = viaBt.result!.metrics;
-      expect(viaEnv!.trades, m.totalTrades);
-      expect(viaEnv.netProfit, closeTo(m.netProfit, 1e-6));
+      final em = viaEnv!.result!.metrics;
+      expect(em.totalTrades, m.totalTrades);
+      expect(em.netProfit, closeTo(m.netProfit, 1e-6));
       if (m.winRate.value != null) {
-        expect(viaEnv.winRate, closeTo(m.winRate.value!, 1e-9));
+        expect(em.winRate.value!, closeTo(m.winRate.value!, 1e-9));
       }
       n++;
     }

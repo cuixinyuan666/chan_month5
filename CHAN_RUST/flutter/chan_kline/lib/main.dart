@@ -82,6 +82,7 @@ import 'settings/chip_settings_store.dart';
 import 'settings/math_indicator_settings_store.dart';
 import 'settings/indicator_search_last_result_store.dart';
 import 'settings/indicator_search_settings_store.dart';
+import 'indicator_search/search_verdict_views.dart';
 import 'widgets/indicator_search_dialog.dart';
 import 'widgets/key_point_stats_dialog.dart';
 import 'models/math_indicator_config.dart';
@@ -516,6 +517,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
   double _backtestSplitDragStartY = 0;
   double _backtestSplitDragStartFraction = 0.58;
 
+  /// 寻优会话快照（「返回寻优结果」用）。
+  IndicatorSearchSessionSnapshot? _lastSearchSession;
   /// catalog 三类..N 类上限（至少 9；随会话观察到的更高类扩大）
   int get _maxBsClass => math.max(
         9,
@@ -2403,7 +2406,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
             TextButton(
               onPressed: _indicatorSearchRunning
                   ? null
-                  : () => showIndicatorSearchLastResultDialog(context),
+                  : () => _showLastSearchResultDialog(),
               child: const Text('上次寻优结果', style: TextStyle(fontSize: 12)),
             ),
             const Spacer(),
@@ -2846,6 +2849,112 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
     _msgHistory.appendKeyPointStatsEnd();
   }
 
+  /// 设置 · 上次寻优结果（读本地快照，与当次一致：同摘要/同排序/同头部）。
+  /// 当前主图区间与快照一致时才支持眼睛预览与「在 K 线图查看」全套路径。
+  Future<void> _showLastSearchResultDialog() async {
+    await IndicatorSearchLastResultStore.load();
+    final snap = IndicatorSearchLastResultStore.current;
+    if (snap == null || snap.verdicts.isEmpty) {
+      _showSnack('暂无已保存的寻优快照，请先完整跑完一次寻优');
+      return;
+    }
+    if (_mlSession.isActive) {
+      _showSnack('请先退出机器学习');
+      return;
+    }
+    if (!_hasSession || _allBars.isEmpty) {
+      _showSnack('请先加载 K 线');
+      return;
+    }
+    if (_stepIdx < _allBars.length - 1) {
+      _showSnack('寻优与策略回测共用主图冻结：请先步进到区间最后一根 K（可一键跳末）');
+      return;
+    }
+    final matches = _selectedCode == snap.code &&
+        _period == snap.period &&
+        _fmtDateTime(_beginDate) == snap.beginText &&
+        _fmtDateTime(_endDate) == snap.endText &&
+        _allBars.length == snap.barCount;
+    final session = IndicatorSearchSessionSnapshot(
+      verdicts: snap.verdicts,
+      compiled: snap.compiled,
+      ran: snap.ran,
+      splitX: snap.splitX,
+      elapsed: snap.elapsed,
+      code: snap.code,
+      period: snap.period,
+      beginText: snap.beginText,
+      endText: snap.endText,
+      barCount: snap.barCount,
+      align: snap.align,
+      maxKn: snap.maxKn,
+      resultsFilePath: snap.resultsFilePath,
+    );
+    await showDialog<void>(
+      context: context,
+      // 点遮罩＝关闭；恢复态不扫描，同 PopScope 允许 pop
+      barrierDismissible: true,
+      builder: (ctx) => IndicatorSearchDialog(
+        code: snap.code,
+        period: snap.period,
+        beginText: snap.beginText,
+        endText: snap.endText,
+        dataRoot: _dataRoot,
+        tickSource: _tickSourceFor(snap.code),
+        mathConfig: _mathIndicatorConfig,
+        chipConfig: _chipConfig,
+        strategyConfig: _strategyConfig,
+        featureLookup: _pipelineSession?.cache.lookup,
+        truncationCheck: _truncationCheck,
+        mainSessionHarness: matches ? _mainSessionHarnessForSearch() : null,
+        initialBars: matches ? List<KlineBar>.from(_allBars) : null,
+        onApplyToChart: matches ? _applySearchBacktestToChart : null,
+        onCacheSession: (snap) => _lastSearchSession = snap,
+        enablePreview: matches,
+        restoreSnapshot: session,
+      ),
+    );
+  }
+
+  /// 眼睛覆盖层「在 K 线图查看」：把寻优该行跑出的回测投到主界面 K 线图。
+  /// 复用既有上图逻辑（替换策略 + 写回测 + 并入指标 + 开面板），随后关掉寻优弹窗。
+  void _applySearchBacktestToChart(BacktestRun run, StrategyConfig cfg) {
+    if (!mounted) return;
+    final maxKn = chartMaxKn(levels: _levels, k0Lines: _k0Lines);
+    setState(() {
+      _strategyConfig = cfg;
+      _backtestRun = run;
+      _backtestPanelOpen = true;
+      _btSelectedSignalId = null;
+      _btSelectedTradeId = null;
+      _btHighlightIds = {};
+      _panelExpanded = false;
+      // 投图显示口径（与策略回测入口同源）：完全按本行策略条件重设主/副图显示，
+      // 不保留上一次投图或手工勾选的指标；并固定带上每个 K{n} 层的 K{n} 与 K{n}连线。
+      final merged = strategyDisplayIndicators(
+        cfg: cfg,
+        maxKn: maxKn,
+        truncationCheck: _truncationCheck,
+        maxBsClass: _maxBsClass,
+      );
+      _mainIndicators = merged.main;
+      _subIndicators = merged.sub;
+    });
+    if (run.error != null) {
+      _showSnack(run.error!);
+      _msgHistory.append('寻优策略投图未跑成：${run.error}');
+    } else {
+      final m = run.result!.metrics;
+      _msgHistory.append(
+        '寻优策略投图：${cfg.buyLabel} / ${cfg.sellLabel}；'
+        '净利${m.netProfit.toStringAsFixed(2)} 胜率${m.winRate.display} '
+        '最大回撤${m.maxDrawdown.toStringAsFixed(2)}（图上已画买卖标记）',
+      );
+      _showSnack('已在 K 线图显示该策略回测');
+    }
+    // 关掉寻优弹窗 → 露出主 K 线图，此时已画出该策略买卖标记。
+    if (Navigator.canPop(context)) Navigator.pop(context);
+  }
   void _openBacktestWorkbench({bool closeSettingsSheet = false}) {
     if (_mlSession.isActive) {
       _showSnack('请先退出机器学习');

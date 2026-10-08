@@ -19,15 +19,17 @@ class IndicatorSearchLastResult {
   final int splitX;
   final int compiled;
   final int ran;
-  final int passed;
   final int elapsedSeconds;
   final String resultsFilePath;
   final List<ComboVerdict> verdicts;
   final int maxKn;
-  final bool skipOosEarly;
   final bool useOptimizedBuild;
   final int maxCandidates;
   final IndicatorSearchAlignSnapshot? align;
+
+  /// 本口径不做达标/排名筛选，故恒为 false；保留字段仅为兼容「智能体交流」交接包。
+  final bool passed;
+  final bool skipOosEarly;
 
   const IndicatorSearchLastResult({
     required this.finishedAt,
@@ -39,15 +41,15 @@ class IndicatorSearchLastResult {
     required this.splitX,
     required this.compiled,
     required this.ran,
-    required this.passed,
     required this.elapsedSeconds,
     required this.resultsFilePath,
     required this.verdicts,
     this.maxKn = 16,
-    this.skipOosEarly = true,
     this.useOptimizedBuild = true,
     this.maxCandidates = 12000,
     this.align,
+    this.passed = false,
+    this.skipOosEarly = false,
   });
 
   Duration get elapsed => Duration(seconds: elapsedSeconds);
@@ -62,11 +64,9 @@ class IndicatorSearchLastResult {
         'splitX': splitX,
         'compiled': compiled,
         'ran': ran,
-        'passed': passed,
         'elapsedSeconds': elapsedSeconds,
         'resultsFilePath': resultsFilePath,
         'maxKn': maxKn,
-        'skipOosEarly': skipOosEarly,
         'useOptimizedBuild': useOptimizedBuild,
         'maxCandidates': maxCandidates,
         if (align != null) 'align': align!.toJson(),
@@ -97,13 +97,9 @@ class IndicatorSearchLastResult {
       splitX: (m['splitX'] as num?)?.toInt() ?? 0,
       compiled: (m['compiled'] as num?)?.toInt() ?? 0,
       ran: (m['ran'] as num?)?.toInt() ?? 0,
-      passed: (m['passed'] as num?)?.toInt() ?? 0,
       elapsedSeconds: (m['elapsedSeconds'] as num?)?.toInt() ?? 0,
       resultsFilePath: m['resultsFilePath'] as String? ?? '',
       maxKn: (m['maxKn'] as num?)?.toInt() ?? 16,
-      skipOosEarly: m.containsKey('skipOosEarly')
-          ? m['skipOosEarly'] == true
-          : true,
       useOptimizedBuild: m['useOptimizedBuild'] != false,
       maxCandidates: (m['maxCandidates'] as num?)?.toInt() ?? 12000,
       align: IndicatorSearchAlignSnapshot.fromJsonMap(
@@ -125,7 +121,6 @@ class IndicatorSearchLastResult {
     required IndicatorSearchRunStats stats,
     required String resultsFilePath,
     int maxKn = 16,
-    bool skipOosEarly = true,
     bool useOptimizedBuild = true,
     int maxCandidates = 12000,
     IndicatorSearchAlignSnapshot? align,
@@ -140,11 +135,9 @@ class IndicatorSearchLastResult {
       splitX: stats.splitX,
       compiled: stats.compiled,
       ran: stats.ran,
-      passed: stats.passed,
       elapsedSeconds: stats.elapsed.inSeconds,
       resultsFilePath: resultsFilePath,
       maxKn: maxKn,
-      skipOosEarly: skipOosEarly,
       useOptimizedBuild: useOptimizedBuild,
       maxCandidates: maxCandidates,
       align: align,

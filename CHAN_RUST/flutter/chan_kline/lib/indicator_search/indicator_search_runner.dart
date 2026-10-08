@@ -12,11 +12,10 @@ class IndicatorSearchProgress {
   final int total;
   final int compiled;
   final int ran;
-  final int passed;
   final double? phaseFraction;
   final Duration? elapsed;
   final Duration? eta;
-  final List<ComboVerdict> recentPassed;
+  final List<ComboVerdict> recentRan;
 
   const IndicatorSearchProgress({
     required this.phase,
@@ -24,18 +23,17 @@ class IndicatorSearchProgress {
     required this.total,
     required this.compiled,
     required this.ran,
-    required this.passed,
     this.phaseFraction,
     this.elapsed,
     this.eta,
-    this.recentPassed = const [],
+    this.recentRan = const [],
   });
 }
 
 class IndicatorSearchRunStats {
   final int compiled;
   final int ran;
-  final int passed;
+  final int total;
   final int splitX;
   final List<ComboVerdict> verdicts;
   final Duration elapsed;
@@ -44,7 +42,7 @@ class IndicatorSearchRunStats {
   const IndicatorSearchRunStats({
     required this.compiled,
     required this.ran,
-    required this.passed,
+    required this.total,
     required this.splitX,
     required this.verdicts,
     required this.elapsed,
@@ -86,17 +84,15 @@ class IndicatorSearchRunner {
 
   bool tryCompile(ComboCand c, int maxKn) => compileOk(c, maxKn) != null;
 
+  /// 内外段各独立重跑一次，产出含完整指标与买卖 AST 的结果（不做达标/排名筛选）。
   ComboVerdict? evaluateCandidate({
     required ComboCand c,
     required SearchEnv env,
     required int splitX,
-    required PassGate gate,
     required int maxKn,
-    bool skipOosEarly = false,
   }) {
     final okCompile = compileOk(c, maxKn);
     if (okCompile == null) return null;
-    // 内外段各回测一次；skipOosEarly 仅影响外段是否参与双达标门槛（不省算力）。
     final seg = env.runInOutFromSingleFull(
       okCompile,
       c.buyAst,
@@ -104,24 +100,15 @@ class IndicatorSearchRunner {
       splitX,
     );
     if (seg == null) return null;
-    final rIn = seg.inSample;
-    final rOut = seg.outSample;
-    final rank = rankScoreOf(rIn, minTrades: gate.minTrades);
-    final skipOos = skipOosEarly &&
-        (rank == 0 || !gate.okSegment(rIn));
-    final passed = gate.okSegment(rIn) &&
-        !skipOos &&
-        gate.okSegment(rOut);
     return ComboVerdict(
       name: c.name,
       buyText: astConditionTextCn(c.buyAst, maxKn: maxKn),
       sellText: astConditionTextCn(c.sellAst, maxKn: maxKn),
-      inSample: rIn,
-      outSample: rOut,
-      inRankScore: rank,
-      passed: passed,
+      inSample: seg.inSample,
+      outSample: seg.outSample,
+      buyAst: c.buyAst,
+      sellAst: c.sellAst,
       splitX: splitX,
-      outSampleSkipped: skipOos,
     );
   }
 
@@ -129,9 +116,7 @@ class IndicatorSearchRunner {
     required List<KlineBar> bars,
     required SearchEnv env,
     required List<ComboCand> cands,
-    required PassGate gate,
     required int maxKn,
-    bool skipOosEarly = true,
     void Function(IndicatorSearchProgress p)? onProgress,
     int yieldEvery = 25,
     VerdictSink? sink,
@@ -139,10 +124,10 @@ class IndicatorSearchRunner {
   }) async {
     _cancelRequested = false;
     final splitX = splitBarIdx(bars);
-    var compiled = 0, ran = 0, passed = 0;
+    var compiled = 0, ran = 0;
     var cancelled = false;
     final all = <ComboVerdict>[];
-    final recentPassed = <ComboVerdict>[];
+    final recentRan = <ComboVerdict>[];
     final started = DateTime.now();
     var sinkPending = 0;
 
@@ -166,17 +151,12 @@ class IndicatorSearchRunner {
         c: c,
         env: env,
         splitX: splitX,
-        gate: gate,
         maxKn: maxKn,
-        skipOosEarly: skipOosEarly,
       );
       if (v == null) continue;
       ran++;
-      if (v.passed) {
-        passed++;
-        recentPassed.insert(0, v);
-        if (recentPassed.length > 5) recentPassed.removeLast();
-      }
+      recentRan.insert(0, v);
+      if (recentRan.length > 5) recentRan.removeLast();
       all.add(v);
       sink?.add(v);
       sinkPending++;
@@ -200,11 +180,10 @@ class IndicatorSearchRunner {
           total: cands.length,
           compiled: compiled,
           ran: ran,
-          passed: passed,
           phaseFraction: (i + 1) / cands.length,
           elapsed: elapsed,
           eta: eta,
-          recentPassed: List<ComboVerdict>.from(recentPassed),
+          recentRan: List<ComboVerdict>.from(recentRan),
         ));
       }
       if (yieldEvery > 0 && i % yieldEvery == 0) {
@@ -216,24 +195,11 @@ class IndicatorSearchRunner {
     return IndicatorSearchRunStats(
       compiled: compiled,
       ran: ran,
-      passed: passed,
+      total: cands.length,
       splitX: splitX,
       verdicts: all,
       elapsed: DateTime.now().difference(started),
       cancelled: cancelled,
     );
-  }
-
-  static List<ComboVerdict> sortForDisplay(List<ComboVerdict> all) {
-    final passedList = [...all]..sort((a, b) {
-        if (a.passed != b.passed) return a.passed ? -1 : 1;
-        return b.inRankScore.compareTo(a.inRankScore);
-      });
-    return passedList;
-  }
-
-  static List<ComboVerdict> topByRank(List<ComboVerdict> all) {
-    final byScore = [...all]..sort((a, b) => b.inRankScore.compareTo(a.inRankScore));
-    return byScore;
   }
 }

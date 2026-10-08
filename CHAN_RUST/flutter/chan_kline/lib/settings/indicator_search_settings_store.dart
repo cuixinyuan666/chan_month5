@@ -5,16 +5,14 @@ import 'package:path_provider/path_provider.dart';
 
 import '../indicator_search/candidate_builder.dart';
 
-/// 设置 · 寻优：枚举模式、候选上限、内段不过关则外段不参与双达标等。
+/// 设置 · 寻优：枚举模式、候选上限。
 class IndicatorSearchSettings {
   final bool useOptimizedBuild;
   final int maxCandidates;
-  final bool skipOosEarly;
 
   const IndicatorSearchSettings({
     this.useOptimizedBuild = true,
     this.maxCandidates = 12000,
-    this.skipOosEarly = true,
   });
 
   CandidateBuildOptions toBuildOptions() => useOptimizedBuild
@@ -24,18 +22,15 @@ class IndicatorSearchSettings {
   IndicatorSearchSettings copyWith({
     bool? useOptimizedBuild,
     int? maxCandidates,
-    bool? skipOosEarly,
   }) =>
       IndicatorSearchSettings(
         useOptimizedBuild: useOptimizedBuild ?? this.useOptimizedBuild,
         maxCandidates: maxCandidates ?? this.maxCandidates,
-        skipOosEarly: skipOosEarly ?? this.skipOosEarly,
       );
 
   Map<String, dynamic> toJson() => {
         'useOptimizedBuild': useOptimizedBuild,
         'maxCandidates': maxCandidates,
-        'skipOosEarly': skipOosEarly,
       };
 
   static IndicatorSearchSettings fromJson(Map<String, dynamic>? map) {
@@ -43,7 +38,6 @@ class IndicatorSearchSettings {
     return IndicatorSearchSettings(
       useOptimizedBuild: _readBool(map['useOptimizedBuild'], defaultValue: true),
       maxCandidates: _readMaxCandidates(map['maxCandidates']),
-      skipOosEarly: _readBool(map['skipOosEarly'], defaultValue: true),
     );
   }
 

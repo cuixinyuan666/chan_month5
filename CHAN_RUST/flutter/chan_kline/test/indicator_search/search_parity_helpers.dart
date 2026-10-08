@@ -1,62 +1,12 @@
-import 'package:chan_kline/backtest/condition_ast.dart';
+import 'package:chan_kline/backtest/backtest_run.dart';
 import 'package:chan_kline/backtest/strategy_compile.dart';
 import 'package:chan_kline/backtest/strategy_config.dart';
-import 'package:chan_kline/indicator_search/search_core.dart';
 import 'package:chan_kline/indicator_search/search_env.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-void expectVerdictMatchesLegacyLoop({
-  required ComboCand c,
-  required SearchEnv env,
-  required int splitX,
-  required PassGate gate,
-  required int maxKn,
-  required bool skipOosEarly,
-  required ComboVerdict? viaRunner,
-}) {
-  final comp = compileStrategyConfig(
-    StrategyConfig(buyAst: c.buyAst, sellAst: c.sellAst),
-    maxKn: maxKn,
-  );
-  if (comp is StrategyCompileIllegal) {
-    expect(viaRunner, isNull);
-    return;
-  }
-  final seg = env.runInOutFromSingleFull(
-    null,
-    c.buyAst,
-    c.sellAst,
-    splitX,
-  );
-  if (seg == null) {
-    expect(viaRunner, isNull);
-    return;
-  }
-  final rIn = seg.inSample;
-  final rank = rankScoreOf(rIn, minTrades: gate.minTrades);
-  final rOut = seg.outSample;
-  final skipOos =
-      skipOosEarly && (rank == 0 || !gate.okSegment(rIn));
-  final ok = gate.okSegment(rIn) && !skipOos && gate.okSegment(rOut);
+import 'package:chan_kline/backtest/condition_ast.dart';
 
-  expect(viaRunner, isNotNull);
-  final v = viaRunner!;
-  expect(v.name, c.name);
-  expect(v.inRankScore, closeTo(rank, 1e-9));
-  expect(v.passed, ok);
-  expect(v.outSampleSkipped, skipOos);
-  expect(v.inSample.trades, rIn.trades);
-  expect(v.inSample.netProfit, closeTo(rIn.netProfit, 1e-6));
-  expect(v.outSample.trades, rOut.trades);
-  expect(v.outSample.netProfit, closeTo(rOut.netProfit, 1e-6));
-  if (rIn.winRate != null) {
-    expect(v.inSample.winRate, closeTo(rIn.winRate!, 1e-9));
-  }
-  if (rOut.winRate != null) {
-    expect(v.outSample.winRate, closeTo(rOut.winRate!, 1e-9));
-  }
-}
-
+/// 预编译路径 vs 每次重编：对同一买卖条件，回测结果一致（不依赖任何门槛/排名）。
 void expectPrecompiledMatchesRunAt({
   required SearchEnv env,
   required StrategyCompileOk compiled,
@@ -64,21 +14,22 @@ void expectPrecompiledMatchesRunAt({
   required TradeAst sell,
   required int endX,
 }) {
-  final a = env.runAt(buy, sell, endX);
-  final b = env.runAtCompiled(compiled, buy, sell, endX);
-  if (a == null) {
-    expect(b, isNull);
+  final a = env.runAtCompiled(compiled, buy, sell, endX);
+  final b = env.runAt(buy, sell, endX);
+  if (a == null || b == null) {
+    expect(a, b); // 都应为 null 或都非 null
     return;
   }
-  expect(b, isNotNull);
-  expect(b!.trades, a.trades);
-  expect(b.netProfit, closeTo(a.netProfit, 1e-6));
-  if (a.winRate != null) {
-    expect(b.winRate, closeTo(a.winRate!, 1e-9));
+  expect(a.ok, b.ok);
+  final ma = a.result?.metrics;
+  final mb = b.result?.metrics;
+  if (ma == null || mb == null) {
+    expect(ma, mb);
+    return;
   }
-  if (a.payoff != null && a.payoff!.isInfinite) {
-    expect(b.payoff?.isInfinite, isTrue);
-  } else if (a.payoff != null) {
-    expect(b.payoff, closeTo(a.payoff!, 1e-9));
+  expect(ma.totalTrades, mb.totalTrades);
+  expect(ma.netProfit, closeTo(mb.netProfit, 1e-6));
+  if (ma.winRate.value != null && mb.winRate.value != null) {
+    expect(ma.winRate.value!, closeTo(mb.winRate.value!, 1e-9));
   }
 }

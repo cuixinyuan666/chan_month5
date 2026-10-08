@@ -1,4 +1,4 @@
-﻿import 'dart:io';
+import 'dart:io';
 
 import 'package:chan_kline/backtest/backtest_metrics.dart';
 import 'package:chan_kline/backtest/backtest_run.dart';
@@ -91,6 +91,21 @@ class IndicatorSearchAlignSnapshot {
       '复现参数：数量 $quantity · 本金 ${initialCapital.toStringAsFixed(0)} · '
       '费率 $commissionRate · 滑点 $slippageAmount · '
       '布林N $bollN · 唐奇安N $donchianN · 回归K $regressK · 筹码步长 $bucketStep';
+
+  /// 反解回回测工作台对齐参数（用于恢复/快照界面重建 SearchEnv 做预览）。
+  SearchWorkbenchAlign toAlign() => SearchWorkbenchAlign(
+        strategyTemplate: StrategyConfig(
+          quantity: quantity,
+          initialCapital: initialCapital,
+          commissionRate: commissionRate,
+          slippageAmount: slippageAmount,
+          fillPriceMode: fillPriceModeEnum,
+        ),
+        bucketStep: bucketStep,
+        bollN: bollN,
+        donchianN: donchianN,
+        regressK: regressK,
+      );
 }
 
 /// 与回测工作台对齐的撮合/指标参数（买卖 AST 仍由候选决定）。
@@ -122,68 +137,14 @@ class SearchWorkbenchAlign {
   }
 }
 
-double? _metricToDouble(MetricNum m) {
-  if (m.isInfinity) return double.infinity;
-  if (m.isFinite) return m.value;
-  return null;
-}
-
-RawScore rawScoreFromMetrics(BacktestMetrics m) {
-  return RawScore(
-    trades: m.totalTrades,
-    winRate: m.winRate.isFinite ? m.winRate.value : null,
-    payoff: _metricToDouble(m.payoffRatio),
-    profitFactor: _metricToDouble(m.profitFactor),
-    netProfit: m.netProfit,
-  );
-}
-
-/// 按闭合交易列表汇总（不依赖净值曲线；用于样本外 entry 切片）。
-RawScore rawScoreFromClosedTrades(
-  List<TradeRecord> trades, {
-  double initialCapital = 100000,
-}) {
-  if (trades.isEmpty) {
-    return const RawScore(
-      trades: 0,
-      winRate: null,
-      payoff: null,
-      profitFactor: null,
-      netProfit: 0,
-    );
-  }
-  final net = trades.fold(0.0, (a, t) => a + t.netPnL);
-  final endX = trades.last.exitX;
-  final m = computeBacktestMetrics(
-    initialCapital: initialCapital,
-    equityCurve: [
-      EquityPoint(
-        x: trades.first.entryX,
-        cash: initialCapital,
-        positionQty: 0,
-        positionValue: 0,
-        equity: initialCapital,
-        realizedPnL: 0,
-        unrealizedPnL: 0,
-      ),
-      EquityPoint(
-        x: endX,
-        cash: initialCapital + net,
-        positionQty: 0,
-        positionValue: 0,
-        equity: initialCapital + net,
-        realizedPnL: net,
-        unrealizedPnL: 0,
-      ),
-    ],
-    closedTrades: trades,
-  );
-  return RawScore(
-    trades: m.totalTrades,
-    winRate: m.winRate.isFinite ? m.winRate.value : null,
-    payoff: _metricToDouble(m.payoffRatio),
-    profitFactor: _metricToDouble(m.profitFactor),
-    netProfit: net,
+SegmentMetrics segmentMetricsFromRun(BacktestRun run, {int? cutX}) {
+  final r = run.result;
+  if (r == null) return SegmentMetrics.empty;
+  return computeSegmentMetrics(
+    r.trades,
+    r.equityCurve,
+    r.initialCapital,
+    cutX: cutX,
   );
 }
 
@@ -202,8 +163,8 @@ List<TradeRecord> crossSplitClosedTrades(List<TradeRecord> all, int splitX) =>
     all.where((t) => t.entryX <= splitX && t.exitX > splitX).toList();
 
 class InOutSegmentScores {
-  final RawScore inSample;
-  final RawScore outSample;
+  final SegmentMetrics inSample;
+  final SegmentMetrics outSample;
 
   const InOutSegmentScores({required this.inSample, required this.outSample});
 }
@@ -229,12 +190,12 @@ class SearchEnv {
 
   int get outSampleEndX => bars.isEmpty ? 0 : bars.last.idx;
 
-  RawScore? runAt(TradeAst buy, TradeAst sell, int endX) {
+  BacktestRun? runAt(TradeAst buy, TradeAst sell, int endX) {
     return runAtCompiled(null, buy, sell, endX);
   }
 
   /// [compiled] 非空时跳过 AST 重编（与 [runAt] 求值结果一致）。
-  RawScore? runAtCompiled(
+  BacktestRun? runAtCompiled(
     StrategyCompileOk? compiled,
     TradeAst buy,
     TradeAst sell,
@@ -242,10 +203,11 @@ class SearchEnv {
   ) {
     final run = _executeBacktest(compiled, buy, sell, endX);
     if (run == null || !run.ok || run.result == null) return null;
-    return rawScoreFromMetrics(run.result!.metrics);
+    return run;
   }
 
   /// 样本内/外各独立重跑：内段 asOf=切点；外段全区间求信号但仅撮合 executeX>切点。
+  /// 外段净值曲线裁剪到切点之后再算年化（去掉前段平台期），避免污染波动率/Sharpe。
   InOutSegmentScores? runInOutFromSingleFull(
     StrategyCompileOk? compiled,
     TradeAst buy,
@@ -256,10 +218,13 @@ class SearchEnv {
     if (rIn == null) return null;
     final rOut = _runOutSampleCompiled(compiled, buy, sell, splitX);
     if (rOut == null) return null;
-    return InOutSegmentScores(inSample: rIn, outSample: rOut);
+    return InOutSegmentScores(
+      inSample: segmentMetricsFromRun(rIn),
+      outSample: segmentMetricsFromRun(rOut, cutX: splitX + 1),
+    );
   }
 
-  RawScore? _runOutSampleCompiled(
+  BacktestRun? _runOutSampleCompiled(
     StrategyCompileOk? compiled,
     TradeAst buy,
     TradeAst sell,
@@ -273,7 +238,14 @@ class SearchEnv {
       minExecuteXExclusive: splitX,
     );
     if (run == null || !run.ok || run.result == null) return null;
-    return rawScoreFromMetrics(run.result!.metrics);
+    return run;
+  }
+
+  /// 眼睛按钮用：以整组买卖条件替换当前策略，跑全区间（asOf 至最后一根）回测。
+  BacktestRun? runFull(TradeAst buy, TradeAst sell, int endX) {
+    final run = _executeBacktest(null, buy, sell, endX);
+    if (run == null || !run.ok || run.result == null) return null;
+    return run;
   }
 
   List<TradeRecord>? allClosedTradesFromFull(
@@ -287,7 +259,7 @@ class SearchEnv {
   }
 
   /// 全区间回测后，仅统计进场 K0# > [splitX] 的闭合交易。
-  RawScore? runOutSampleFromFull(
+  SegmentMetrics? runOutSampleFromFull(
     StrategyCompileOk? compiled,
     TradeAst buy,
     TradeAst sell,
@@ -390,17 +362,21 @@ void logProgress(String text, {String? logFilePath}) {
   } catch (_) {}
 }
 
+String _mnTxt(MetricNum m) =>
+    m.isUnavailable ? '—' : (m.isInfinity ? '∞' : m.value!.toStringAsFixed(2));
+
 String fmtList(Iterable<ComboVerdict> rows) {
   if (rows.isEmpty) return '（无）';
   return rows
       .map((v) {
         final i = v.inSample, o = v.outSample;
-        final outNote = v.outSampleSkipped ? '（外段未测）' : '';
-        return '${v.passed ? "✔" : "·"} ${v.name}\n'
-            '    样本内 ${i.trades}笔 胜率${pctText(i.winRate)} 盈亏比${fxText(i.payoff)} '
-            'PF${fxText(i.profitFactor)} 净利${i.netProfit.toStringAsFixed(0)}\n'
-            '    样本外$outNote ${o.trades}笔 胜率${pctText(o.winRate)} 盈亏比${fxText(o.payoff)} '
-            'PF${fxText(o.profitFactor)} 净利${o.netProfit.toStringAsFixed(0)}';
+        return '${v.name}\n'
+            '    样本内 ${i.trades}笔 胜率${pctText(i.winRate.isFinite ? i.winRate.value : null)} '
+            '盈亏比${_mnTxt(i.payoffRatio)} PF${_mnTxt(i.profitFactor)} '
+            '净利${i.netProfit.toStringAsFixed(0)} Sharpe${_mnTxt(i.sharpe)} Calmar${_mnTxt(i.calmar)}\n'
+            '    样本外 ${o.trades}笔 胜率${pctText(o.winRate.isFinite ? o.winRate.value : null)} '
+            '盈亏比${_mnTxt(o.payoffRatio)} PF${_mnTxt(o.profitFactor)} '
+            '净利${o.netProfit.toStringAsFixed(0)} Sharpe${_mnTxt(o.sharpe)} Calmar${_mnTxt(o.calmar)}';
       })
       .join('\n');
 }
@@ -410,7 +386,6 @@ String reportHeader({
   required String period,
   required int bars,
   required int splitX,
-  required int gateTrades,
   IndicatorSearchAlignSnapshot? align,
 }) {
   final fillLabel = align != null
@@ -418,16 +393,15 @@ String reportHeader({
       : '（快照未记录，默认本周期收盘）';
   final replayLine = align?.replayParamLine ?? '复现参数：未写入快照（旧版）；当时以主界面策略回测参数为准';
   return '''
-========== 高胜率高盈亏比 指标组合榜（$code $period $bars根K0）==========
+========== 指标组合全量寻优（$code $period $bars根K0）==========
 口径：单仓只做多 / 成交价：$fillLabel / 与回测工作台同撮合与数学指标参数
 $replayLine
 方法：样本内、样本外各独立重跑（本金重置、单仓只做多）—— 内段 asOf 至 K0#$splitX；外段仅撮合成交根 > K0#$splitX 的信号
 跨界：不再「全跑再切单」；内外段成交路径互不影响
-口径：外段条件求值 asOf 至最后一根（每根只用该根及之前信息，逐根因果，无未来函数）；内段 asOf 截断至 K0#$splitX 更保守
-门槛：样本内外都需 胜率≥60% 且 盈亏比≥1.5（∞ 计达标） 且 ≥$gateTrades笔
-净利：内外均为所计闭合交易的 netPnL 合计（统计口径相同）
+口径：外段条件求值 asOf 至最后一根，每根只用该根及之前信息，逐根因果；K1+ 穿越按「动态段逐根在场」判（每根 K 都是采样点），K0 变量按原生 K0 逐根判；内段 asOf 截断至 K0#$splitX 更保守
+展示：所有可编译候选均列出（含 0 成交），不做达标/排名筛选；不可计算值显示「—」
+指标：年化按 252 交易日、无风险利率 0（仅展示，不参与筛选）；回撤/年化均基于真实净值曲线，不合成
 警示：内外段 K 根数不同，净利绝对值勿横向对比强弱
-提示：全胜小样本时盈亏比可能为 ∞，请结合笔数审慎看待双达标
 （非投资建议；样本量有限时请扩大区间或多标的复验）
 ''';
 }

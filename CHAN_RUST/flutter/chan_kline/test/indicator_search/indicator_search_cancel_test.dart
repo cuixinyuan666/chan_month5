@@ -80,7 +80,6 @@ void main() {
           bars: bars,
           env: env,
           cands: cands,
-          gate: const PassGate(minTrades: 2),
           maxKn: h.maxKn,
           yieldEvery: 1,
           onProgress: (p) {
@@ -122,7 +121,6 @@ void main() {
         bars: bars,
         env: env,
         cands: cands,
-        gate: const PassGate(minTrades: 2),
         maxKn: h.maxKn,
       );
       expect(stats.cancelled, isFalse);
