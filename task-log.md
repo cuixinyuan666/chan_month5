@@ -4426,3 +4426,17 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **结果**：`flutter analyze lib/ test/` **0 error**；`test/indicator_search/` + `kn_clock_causality_test` **47 条全过**。
 - **白话总结**：寻优结果表每个列名鼠标悬停都告诉你这一列怎么算的（内胜率＝盈利笔数÷已平仓总笔数、外笔数没测算时显示「未测」、保守分只按样本内算越大约越好等）；在任意一行上点鼠标右键，这一整行 10 列按表头顺序用制表符进剪贴板，直接贴进 Excel 就是一条记录。
 - **注意**：端到端目视验收（悬停 tooltip、右键复制、外段未测显示）待用户在 App 内实测；实测确认后再 push。
+
+### 2026-10-06 口径分流：计优与智能体交流留远端，寻优其余切回本地版
+
+- **执行者**：AI 编码机器人（opencode）
+- **用户指令**：计优全部保留远端；寻优里只有「智能体交流」用远端，其余用本地文件；其余保持现状。
+- **落地**：
+  - **计优（KeyPointStats）保留远端**：`main.dart` 7 处入口与 `key_point_stats_*` 相关文件一行未动。
+  - **智能体交流（agent_handoff）保留远端**：为适配本地寻优的数据结构，给 `IndicatorSearchLastResult` 补 `passed` / `skipOosEarly` 两字段（本地口径不做达标筛选，故恒为 false，仅为交接包编译与输出）。
+  - **寻优其余切回本地版**：`search_core.dart` / `search_verdict_views.dart` / `indicator_search_runner.dart` / 两个 settings store / `search_env.dart` / 结果面板 / 弹窗——恢复本分支口径：**不做达标/排名筛选**（`PassGate` 已删）、指标用 `SegmentMetrics`、全量候选列出、多列累积排序、`resultsFilePath` 快照恢复、列名白话 tooltip + 右键复制整行。
+  - **随之适配 main.dart**：恢复本地的 `_showLastSearchResultDialog()`（远端曾把它改成 dialog 里的顶层函数）、`_lastSearchSession` 字段、`_applySearchBacktestToChart()`，以及 `search_verdict_views.dart` 的 import。
+  - **删除 6 个远端版测试**：`early_stop_parity` / `inf_payoff_diag` / `oos_slice` / `parity` / `report_header` / `raw_score_json`——它们的被测对象（PassGate、RawScore、达标/排名筛选）在本地口径中已不存在，留着编译不过。
+- **结果**：`flutter analyze lib/ test/` **0 error**；`test/indicator_search/` + `kn_clock_causality_test` **29 条全过**。
+- **白话总结**：三个口径各归各位——计优那条线原样不动，「智能体交流」的按钮和交接包也用远端那套；只有寻优的计算与展示口径换回本地版，也就是不做达标/排名筛选、所有候选都列出来、指标按原来的算法算。与之配套的 6 个远端测试（测的是已删除的达标筛选）一并删除，避免编译不过。
+- **注意**：寻优的展示形态随之回到本地口径（较宽的宽表、16 列指标、多列排序角标），与远端重构后的 10 列窄表不同——这是用户明确要求，实测时按本地口径验收。
