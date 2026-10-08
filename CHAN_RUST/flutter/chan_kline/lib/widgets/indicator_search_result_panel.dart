@@ -1,4 +1,5 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../backtest/condition_ast.dart';
 import '../indicator_search/candidate_builder.dart';
@@ -162,6 +163,14 @@ class _VerdictTableState extends State<_VerdictTable> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(8, 4, 8, 2),
+          child: Text(
+            '任意文字可拖选复制；列名悬停看白话口径；鼠标右键点某一行＝复制该行整行'
+            '（制表符分列，列序与表头一致，可直接贴进表格）',
+            style: TextStyle(fontSize: 10, color: Colors.grey.shade600),
+          ),
+        ),
         Material(
           color: headerBg,
           elevation: 1,
@@ -186,13 +195,28 @@ class _VerdictTableState extends State<_VerdictTable> {
   }
 }
 
+/// 列名 tooltip：白话口径 + 英文键（寻优结果宽表列说明的唯一落点）。
+///
+/// [scope] 取「样本内 / 样本外 / 排序用」；[plain] 是该列的白话算法；[note] 补三态说明。
+String _colTip(
+  String label,
+  String key,
+  String scope,
+  String plain, [
+  String? note,
+]) =>
+    note == null
+        ? '$label：$plain（$scope）\n$key'
+        : '$label：$plain（$scope）\n$key（$note）';
+
 class _VerdictHeaderRow extends StatelessWidget {
   const _VerdictHeaderRow({required this.sort, required this.onSort});
 
   final VerdictSortState sort;
   final void Function(VerdictSortColumn) onSort;
 
-  Widget _cell(String label, VerdictSortColumn? col, {int flex = 1}) {
+  Widget _cell(String label, VerdictSortColumn? col,
+      {int flex = 1, String? tooltip}) {
     Widget child;
     if (col == null) {
       child = Text(
@@ -220,7 +244,16 @@ class _VerdictHeaderRow extends StatelessWidget {
         ),
       );
     }
-    return Expanded(flex: flex, child: child);
+    return Expanded(
+      flex: flex,
+      child: col == null
+          ? child
+          : Tooltip(
+              message: tooltip ?? label,
+              waitDuration: const Duration(milliseconds: 300),
+              child: child,
+            ),
+    );
   }
 
   @override
@@ -230,16 +263,67 @@ class _VerdictHeaderRow extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          _cell('类型', VerdictSortColumn.type, flex: 1),
-          _cell('买入条件', null, flex: 3),
-          _cell('卖出条件', null, flex: 3),
-          _cell('内笔', VerdictSortColumn.inTrades),
-          _cell('内胜率', VerdictSortColumn.inWinRate),
-          _cell('内盈亏比', VerdictSortColumn.inPayoff),
-          _cell('外笔', VerdictSortColumn.outTrades),
-          _cell('外胜率', VerdictSortColumn.outWinRate),
-          _cell('外盈亏比', VerdictSortColumn.outPayoff),
-          _cell('保守分', VerdictSortColumn.rank),
+          _cell(
+            '类型',
+            VerdictSortColumn.type,
+            flex: 1,
+            tooltip: _colTip('类型', 'type', '标识',
+                '这行买卖条件取自哪一类信号族'),
+          ),
+          _cell(
+            '买入条件',
+            null,
+            flex: 3,
+            tooltip: '买入条件：这组合的开仓触发条件\n(buy)',
+          ),
+          _cell(
+            '卖出条件',
+            null,
+            flex: 3,
+            tooltip: '卖出条件：这组合的平仓触发条件\n(sell)',
+          ),
+          _cell(
+            '内笔',
+            VerdictSortColumn.inTrades,
+            tooltip: _colTip('内笔', 'in_trades', '样本内', '已平仓笔数'),
+          ),
+          _cell(
+            '内胜率',
+            VerdictSortColumn.inWinRate,
+            tooltip: _colTip('内胜率', 'in_win_rate', '样本内',
+                '盈利笔数 ÷ 已平仓总笔数'),
+          ),
+          _cell(
+            '内盈亏比',
+            VerdictSortColumn.inPayoff,
+            tooltip: _colTip('内盈亏比', 'in_payoff', '样本内',
+                '单笔平均盈利 ÷ 单笔平均亏损', '全胜无亏显示 ∞'),
+          ),
+          _cell(
+            '外笔',
+            VerdictSortColumn.outTrades,
+            tooltip: _colTip('外笔', 'out_trades', '样本外', '已平仓笔数',
+                '未测算时显示「未测」'),
+          ),
+          _cell(
+            '外胜率',
+            VerdictSortColumn.outWinRate,
+            tooltip: _colTip('外胜率', 'out_win_rate', '样本外',
+                '盈利笔数 ÷ 已平仓总笔数', '未测算时显示「—」'),
+          ),
+          _cell(
+            '外盈亏比',
+            VerdictSortColumn.outPayoff,
+            tooltip: _colTip('外盈亏比', 'out_payoff', '样本外',
+                '单笔平均盈利 ÷ 单笔平均亏损', '未测算时显示「—」'),
+          ),
+          _cell(
+            '保守分',
+            VerdictSortColumn.rank,
+            tooltip: _colTip(
+                '保守分', 'in_rank_score', '排序用', '只按样本内算的打分，越大越好',
+                '笔数不足门槛记 0；小样本与极端盈亏比都会被压缩'),
+          ),
         ],
       ),
     );
@@ -252,6 +336,35 @@ class _VerdictDataRow extends StatelessWidget {
   final ComboVerdict v;
   final int maxKn;
 
+  /// 该行整行的 TSV（列序与表头一致，买卖条件用面板同一套中文口径）。
+  String _rowTsv(String buy, String sell) {
+    final i = v.inSample;
+    final o = v.outSample;
+    String one(String s) => s.replaceAll('\t', ' ').replaceAll('\n', ' ');
+    return [
+      one(v.categoryLabel),
+      one(buy),
+      one(sell),
+      '${i.trades}',
+      pctText(i.winRate),
+      fxText(i.payoff),
+      v.outSampleSkipped ? '未测' : '${o.trades}',
+      v.outSampleSkipped ? '—' : pctText(o.winRate),
+      v.outSampleSkipped ? '—' : fxText(o.payoff),
+      v.inRankScore.toStringAsFixed(3),
+    ].join('\t');
+  }
+
+  void _copyRow(BuildContext context, String buy, String sell) {
+    Clipboard.setData(ClipboardData(text: _rowTsv(buy, sell)));
+    ScaffoldMessenger.maybeOf(context)
+      ?..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        content: Text('已复制该行（${v.categoryLabel}）整行文本'),
+        duration: const Duration(milliseconds: 1200),
+      ));
+  }
+
   @override
   Widget build(BuildContext context) {
     final i = v.inSample, o = v.outSample;
@@ -263,39 +376,43 @@ class _VerdictDataRow extends StatelessWidget {
     Widget numCell(String t) =>
         Text(t, style: dataStyle, textAlign: TextAlign.center);
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(
-            flex: 1,
-            child: Text(
-              v.passed ? '✔ ${v.categoryLabel}' : v.categoryLabel,
-              style: dataStyle.copyWith(
-                fontWeight: v.passed ? FontWeight.w600 : FontWeight.normal,
+    return GestureDetector(
+      // 鼠标右键＝复制该行整行（桌面端；触屏走拖选复制）
+      onSecondaryTapUp: (_) => _copyRow(context, buy, sell),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              flex: 1,
+              child: Text(
+                v.passed ? '✔ ${v.categoryLabel}' : v.categoryLabel,
+                style: dataStyle.copyWith(
+                  fontWeight: v.passed ? FontWeight.w600 : FontWeight.normal,
+                ),
               ),
             ),
-          ),
-          Expanded(flex: 3, child: Text(buy, style: ruleStyle)),
-          Expanded(flex: 3, child: Text(sell, style: ruleStyle)),
-          Expanded(flex: 1, child: numCell('${i.trades}')),
-          Expanded(flex: 1, child: numCell(pctText(i.winRate))),
-          Expanded(flex: 1, child: numCell(fxText(i.payoff))),
-          Expanded(
-            flex: 1,
-            child: numCell(v.outSampleSkipped ? '未测' : '${o.trades}'),
-          ),
-          Expanded(
-            flex: 1,
-            child: numCell(v.outSampleSkipped ? '—' : pctText(o.winRate)),
-          ),
-          Expanded(
-            flex: 1,
-            child: numCell(v.outSampleSkipped ? '—' : fxText(o.payoff)),
-          ),
-          Expanded(flex: 1, child: numCell(v.inRankScore.toStringAsFixed(3))),
-        ],
+            Expanded(flex: 3, child: Text(buy, style: ruleStyle)),
+            Expanded(flex: 3, child: Text(sell, style: ruleStyle)),
+            Expanded(flex: 1, child: numCell('${i.trades}')),
+            Expanded(flex: 1, child: numCell(pctText(i.winRate))),
+            Expanded(flex: 1, child: numCell(fxText(i.payoff))),
+            Expanded(
+              flex: 1,
+              child: numCell(v.outSampleSkipped ? '未测' : '${o.trades}'),
+            ),
+            Expanded(
+              flex: 1,
+              child: numCell(v.outSampleSkipped ? '—' : pctText(o.winRate)),
+            ),
+            Expanded(
+              flex: 1,
+              child: numCell(v.outSampleSkipped ? '—' : fxText(o.payoff)),
+            ),
+            Expanded(flex: 1, child: numCell(v.inRankScore.toStringAsFixed(3))),
+          ],
+        ),
       ),
     );
   }
