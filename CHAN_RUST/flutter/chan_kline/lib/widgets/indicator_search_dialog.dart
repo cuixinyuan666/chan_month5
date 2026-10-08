@@ -1,4 +1,4 @@
-import 'dart:io';
+﻿import 'dart:io';
 
 import 'package:flutter/material.dart';
 
@@ -311,8 +311,13 @@ class _IndicatorSearchDialogState extends State<IndicatorSearchDialog> {
     final w = size.width > 900 ? 880.0 : size.width * 0.92;
     final h = size.height > 700 ? 620.0 : size.height * 0.85;
 
-    return AlertDialog(
-      title: const Text('指标寻优'),
+    // 扫描进行中禁止关闭（点遮罩/ESC/返回都不生效），跑完出结果后才可点非结果处关闭；
+    // 整块包 SelectionArea：弹窗内所有字符串（含结果宽表每一行、展开明细）都可拖选复制。
+    return PopScope(
+      canPop: !_running,
+      child: SelectionArea(
+        child: AlertDialog(
+          title: const Text('指标寻优'),
       content: SizedBox(
         width: w,
         height: h,
@@ -383,9 +388,11 @@ class _IndicatorSearchDialogState extends State<IndicatorSearchDialog> {
           ),
         TextButton(
           onPressed: _running ? null : () => Navigator.pop(context),
-          child: const Text('关闭'),
+child: const Text('关闭'),
         ),
       ],
+        ),
+      ),
     );
   }
 }

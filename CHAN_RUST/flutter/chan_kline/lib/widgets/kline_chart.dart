@@ -69,6 +69,7 @@ import 'chart_level_line_style.dart';
 import 'crosshair_tooltip_panel.dart';
 import 'crosshair_tooltip_bridge.dart';
 import 'fractal_confirm_paint.dart';
+import 'indicator_legend.dart';
 import 'indicator_picker_chip.dart';
 import 'indicator_picker_overlay.dart';
 import 'kline_axis_format.dart';
@@ -353,6 +354,8 @@ class _KlineChartState extends State<KlineChart> {
   /// 左上角单击灰度关闭的指标（仍在选择集中，再点可打开）
   Set<MainChartIndicator> _mutedMains = {};
   Set<SubChartIndicator> _mutedSubs = {};
+  /// 右上角多线指标图例：默认收起，点「图例」钮展开（只色块+名称，不带值）
+  bool _legendOpen = false;
   final _mainChipBarKey = GlobalKey();
   final _subChipBarKey = GlobalKey();
   double _mainChipBarHeight = 0;
@@ -1613,6 +1616,12 @@ class _KlineChartState extends State<KlineChart> {
     });
   }
 
+  /// 右上角图例钮：展开/收起多线指标图例（不影响主图几何，不回写 plotTop）。
+  void _toggleLegend() {
+    if (!widget.indicatorsEnabled) return;
+    setState(() => _legendOpen = !_legendOpen);
+  }
+
   Widget _buildIndicatorPickerOverlay() {
     if (_pickerPane == _IndicatorPickerPane.none) {
       return const SizedBox.shrink();
@@ -1659,6 +1668,147 @@ class _KlineChartState extends State<KlineChart> {
         color: const Color(0x22111111),
         borderRadius: BorderRadius.circular(4),
         child: child,
+      ),
+    );
+  }
+
+  /// 当前显示中的多线指标图例分组（已扣灰度集）。
+  List<IndicatorLegendGroup> get _legendGroups => buildIndicatorLegends(
+        mains: _drawnMains,
+        subs: _drawnSubs,
+        mathConfig: widget.mathIndicatorConfig,
+        stepRhythmByKn: widget.stepRhythmHistoryByKn,
+      );
+
+  /// 右上角图例钮：无多线指标时整枚隐藏。
+  Widget _buildLegendButton() {
+    final groups = _legendGroups;
+    if (groups.isEmpty) return const SizedBox.shrink();
+    return _buildIndicatorToggleShell(
+      child: Tooltip(
+        message: _legendOpen
+            ? '收起多线指标图例\n（色块名称与图上线条一一对应）'
+            : '展开多线指标图例\n（色块名称与图上线条一一对应）',
+        waitDuration: const Duration(milliseconds: 500),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(4),
+          onTap: _toggleLegend,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  '图例',
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: Color(0x99AAAAAA),
+                  ),
+                ),
+                const SizedBox(width: 3),
+                Icon(
+                  _legendOpen ? Icons.expand_less : Icons.expand_more,
+                  size: 14,
+                  color: const Color(0x99AAAAAA),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 图例面板：浮在钮下方、右对齐；十字 tooltip 钉右上时向下顺让。
+  Widget _buildLegendPanel(double chartW) {
+    final groups = _legendGroups;
+    if (!_legendOpen || groups.isEmpty) return const SizedBox.shrink();
+    final maxW = math.min(320.0, math.max(180.0, chartW * 0.42));
+    return IgnorePointer(
+      child: Container(
+        constraints: BoxConstraints(maxWidth: maxW, maxHeight: 260),
+        decoration: BoxDecoration(
+          color: const Color(0xEE121212),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: const Color(0x55E2E8F0)),
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (final g in groups) ...[
+                Text(
+                  g.title,
+                  style: const TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFFE2E8F0),
+                  ),
+                ),
+                const SizedBox(height: 2),
+                for (final l in g.lines) _legendLineRow(l),
+                const SizedBox(height: 5),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _legendLineRow(LegendLine l) {
+    final swatch = Container(
+      width: 14,
+      height: 3,
+      decoration: BoxDecoration(
+        color: l.bar
+            ? null
+            : l.color,
+        gradient: l.bar && l.color2 != null
+            ? LinearGradient(colors: [l.color, l.color2!])
+            : null,
+        borderRadius: BorderRadius.circular(2),
+        border: l.dashed
+            ? Border.all(color: l.color.withValues(alpha: 0.9), width: 0.5)
+            : null,
+      ),
+    );
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 1.5),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SizedBox(
+            width: 18,
+            child: Center(
+              child: l.dashed
+                  ? Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        for (var i = 0; i < 3; i++) ...[
+                          Container(
+                            width: 3,
+                            height: 3,
+                            decoration: BoxDecoration(
+                              color: l.color,
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                          if (i < 2) const SizedBox(width: 2),
+                        ],
+                      ],
+                    )
+                  : swatch,
+            ),
+          ),
+          const SizedBox(width: 4),
+          Text(
+            l.label,
+            style: const TextStyle(fontSize: 10, color: Color(0xFFCBD5E1)),
+          ),
+        ],
       ),
     );
   }
@@ -2255,7 +2405,8 @@ class _KlineChartState extends State<KlineChart> {
               Positioned(
                 left: widget.mobileLayout ? 72 : 76,
                 top: overlayTop,
-                right: widget.mobileLayout ? 52 : 140,
+                // 右侧 76px 让给图例钮（指标勾得很多时不撞车）
+                right: widget.mobileLayout ? 128 : 216,
                 child: Builder(
                   key: _mainChipBarKey,
                   builder: (_) {
@@ -2277,6 +2428,24 @@ class _KlineChartState extends State<KlineChart> {
                     );
                   },
                 ),
+              ),
+            // 右上角多线指标图例（钮默认收起；展开面板浮在图上，不改 plotTop）
+            Positioned(
+              right: widget.mobileLayout ? 48 : 136,
+              top: overlayTop,
+              child: Opacity(
+                opacity: widget.indicatorsEnabled ? 1 : 0.35,
+                child: IgnorePointer(
+                  ignoring: !widget.indicatorsEnabled,
+                  child: _buildLegendButton(),
+                ),
+              ),
+            ),
+            if (_legendOpen)
+              Positioned(
+                right: widget.mobileLayout ? 48 : 136,
+                top: overlayTop + 26,
+                child: _buildLegendPanel(w),
               ),
             // 副图收纳钮：副图收起时贴在主图底 / X 轴上方
             Positioned(
@@ -3970,8 +4139,7 @@ class _KlineCompositePainter extends CustomPainter {
       final t = periods[i];
       final series = seriesMap[t];
       if (series == null) continue;
-      final hue = (i * 0.17) % 1.0;
-      final color = HSVColor.fromAHSV(1, hue * 360, 0.75, 0.95).toColor();
+      final color = IndicatorLinePalette.meanLine(i);
       _paintPriceSeries(
         canvas,
         w,
@@ -4017,10 +4185,8 @@ class _KlineCompositePainter extends CustomPainter {
       final t = periods[i];
       final pair = seriesMap[t];
       if (pair == null) continue;
-      final hue = (0.05 + i * 0.21) % 1.0;
-      final top = HSVColor.fromAHSV(1, hue * 360, 0.8, 0.95).toColor();
-      final bot = HSVColor.fromAHSV(1, ((hue + 0.45) % 1.0) * 360, 0.8, 0.9)
-          .toColor();
+      final top = IndicatorLinePalette.channelTop(i);
+      final bot = IndicatorLinePalette.channelBottom(i);
       _paintPriceSeries(
         canvas,
         w,
@@ -4118,6 +4284,7 @@ class _KlineCompositePainter extends CustomPainter {
           asOf: asOf,
         );
     final midColor = ChartLevelLineStyle.colorForDisplayKn(kn);
+    final sideColor = IndicatorLinePalette.bandSide(midColor);
     _paintPriceSeries(
       canvas,
       w,
@@ -4135,7 +4302,7 @@ class _KlineCompositePainter extends CustomPainter {
       plotH,
       slotW,
       series: boll.up,
-      color: midColor.withValues(alpha: 0.55),
+      color: sideColor,
       strokeWidth: 1.0,
     );
     _paintPriceSeries(
@@ -4145,7 +4312,7 @@ class _KlineCompositePainter extends CustomPainter {
       plotH,
       slotW,
       series: boll.down,
-      color: midColor.withValues(alpha: 0.55),
+      color: sideColor,
       strokeWidth: 1.0,
     );
   }
@@ -4172,6 +4339,7 @@ class _KlineCompositePainter extends CustomPainter {
           asOf: asOf,
         );
     final midColor = ChartLevelLineStyle.colorForDisplayKn(kn);
+    final sideColor = IndicatorLinePalette.bandSide(midColor);
     // 中轨：实线（与布林中轨同型）
     _paintPriceSeries(
       canvas,
@@ -4191,7 +4359,7 @@ class _KlineCompositePainter extends CustomPainter {
       plotH,
       slotW,
       series: don.up,
-      color: midColor.withValues(alpha: 0.55),
+      color: sideColor,
       strokeWidth: 1.0,
     );
     _paintPriceSeries(
@@ -4201,7 +4369,7 @@ class _KlineCompositePainter extends CustomPainter {
       plotH,
       slotW,
       series: don.down,
-      color: midColor.withValues(alpha: 0.55),
+      color: sideColor,
       strokeWidth: 1.0,
     );
   }
@@ -5651,8 +5819,8 @@ class _KlineCompositePainter extends CustomPainter {
       }
     }
 
-    final upBar = Paint()..color = const Color(0xCCDC2626);
-    final dnBar = Paint()..color = const Color(0xCC16A34A);
+    final upBar = Paint()..color = IndicatorLinePalette.histUp;
+    final dnBar = Paint()..color = IndicatorLinePalette.histDown;
     final halfW = math.max(1.0, barW * 0.3);
     var prevFlag = 0;
     for (var i = 0; i < bars.length && i < series.diverAt.length; i++) {
@@ -5971,8 +6139,8 @@ class _KlineCompositePainter extends CustomPainter {
       }
     }
 
-    final upBar = Paint()..color = const Color(0xCCDC2626);
-    final dnBar = Paint()..color = const Color(0xCC16A34A);
+    final upBar = Paint()..color = IndicatorLinePalette.histUp;
+    final dnBar = Paint()..color = IndicatorLinePalette.histDown;
     final halfW = math.max(1.0, barW * 0.35);
     for (var i = 0; i < nMacd; i++) {
       final x = bars[i].idx;
@@ -5992,12 +6160,12 @@ class _KlineCompositePainter extends CustomPainter {
     }
 
     final difPaint = Paint()
-      ..color = const Color(0xFF2563EB)
+      ..color = IndicatorLinePalette.macdDif
       ..strokeWidth = 1.2
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round;
     final deaPaint = Paint()
-      ..color = const Color(0xFFF59E0B)
+      ..color = IndicatorLinePalette.macdDea
       ..strokeWidth = 1.2
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round;
@@ -6132,17 +6300,17 @@ class _KlineCompositePainter extends CustomPainter {
     final maxX = asOf ?? bars.last.idx;
     final paints = <Paint>[
       Paint()
-        ..color = const Color(0xFF2563EB)
+        ..color = IndicatorLinePalette.kdjK
         ..strokeWidth = 1.2
         ..style = PaintingStyle.stroke
         ..strokeCap = StrokeCap.round,
       Paint()
-        ..color = const Color(0xFFF59E0B)
+        ..color = IndicatorLinePalette.kdjD
         ..strokeWidth = 1.2
         ..style = PaintingStyle.stroke
         ..strokeCap = StrokeCap.round,
       Paint()
-        ..color = const Color(0xFF9333EA)
+        ..color = IndicatorLinePalette.kdjJ
         ..strokeWidth = 1.2
         ..style = PaintingStyle.stroke
         ..strokeCap = StrokeCap.round,
@@ -6175,35 +6343,9 @@ class _KlineCompositePainter extends CustomPainter {
   }
 
   /// 升组暖色（同父级 roundRef 共用一色：0-0/0-1/0-2…）
-  static const _rhythmWarmColors = <Color>[
-    Color(0xFFE11D48), // 玫红
-    Color(0xFFF59E0B), // 琥珀
-    Color(0xFFF97316), // 橙
-    Color(0xFFEF4444), // 红
-    Color(0xFFD97706), // 深琥珀
-    Color(0xFFFB7185), // 浅玫
-    Color(0xFFEA580C), // 深橙
-    Color(0xFFB45309), // 棕橙
-    Color(0xFFF43F5E), // 玫
-  ];
-
-  /// 降组冷色（同父级 roundRef 共用一色）
-  static const _rhythmCoolColors = <Color>[
-    Color(0xFF2563EB), // 蓝
-    Color(0xFF0EA5E9), // 天蓝
-    Color(0xFF14B8A6), // 青
-    Color(0xFF6366F1), // 靛
-    Color(0xFF06B6D4), // 青蓝
-    Color(0xFF3B82F6), // 亮蓝
-    Color(0xFF8B5CF6), // 紫（偏冷）
-    Color(0xFF0284C7), // 深蓝
-    Color(0xFF0D9488), // 深青
-  ];
-
-  Color _rhythmColorFor(StepRhythmLinePoint p) {
-    final palette = p.dir == 'up' ? _rhythmWarmColors : _rhythmCoolColors;
-    return palette[p.roundRef.clamp(0, palette.length - 1)];
-  }
+  /// 节奏点取色（升暖降冷，同父级 roundRef 共用一色）：与图例同源。
+  Color _rhythmColorFor(StepRhythmLinePoint p) =>
+      IndicatorLinePalette.rhythm(p);
 
   /// 主图 Kn步进节奏：value=节奏投影价，挂价轴；Δx==1 点线续连；名在左侧；同父级同色；升暖降冷。
   void _drawStepRhythmMain(

@@ -2719,6 +2719,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
       maxKn: maxKn,
       mathConfig: _mathIndicatorConfig,
       chipBucketStep: _chipConfig.bucketStep,
+      knClock: _stepFreeze.knClockTimeline,
     );
   }
 
@@ -2757,7 +2758,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
     );
     await showDialog<void>(
       context: context,
-      barrierDismissible: false,
+      // 点非结果界面＝关闭；扫描中由弹窗内 PopScope 挡住（见 IndicatorSearchDialog）
+      barrierDismissible: true,
       builder: (ctx) => IndicatorSearchDialog(
         code: code,
         period: _period,
@@ -3165,6 +3167,7 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
       regressK: _mathIndicatorConfig.regressK,
       barFeatures: _barFeatures,
       mathConfig: _mathIndicatorConfig,
+      knClock: _stepFreeze.knClockTimeline,
     );
     setState(() {
       _strategyConfig = cfg;
@@ -3174,11 +3177,9 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
       _btSelectedTradeId = null;
       _btHighlightIds = {};
       _panelExpanded = false;
-      // 运行回测后：自动把条件里引用的指标并入主/副图（叠加，不清空原有勾选）；
-      // 关面板不自动关这些指标（叠加语义天然保留）。
-      final merged = mergeStrategyIndicators(
-        main: _mainIndicators,
-        sub: _subIndicators,
+      // 投图显示口径：完全按本策略条件重设主/副图显示，不保留上一次投图或手工勾选的指标；
+      // 并固定带上每个 K{n} 层的 K{n} 与 K{n}连线。
+      final merged = strategyDisplayIndicators(
         cfg: cfg,
         maxKn: maxKn,
         truncationCheck: _truncationCheck,
