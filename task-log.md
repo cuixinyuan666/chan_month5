@@ -4329,3 +4329,26 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   3. label 未中文化：macd_hist / line_slope / combine_range_low 等多个指标的 label 直接是英文 key。
 - **数据发现四**：387 个点里有 2 个只进入 ALL 汇总组、未进任何顶底分组（385 vs 387）—— 属正常（高级别样本不足不出表，但仍计入汇总）。
 - **复现参数已全**：点位口径（截断开关开、maxBsClass=12）+ 19 项指标参数 + 筹码桶宽 0.01 + 峰编号方案。
+
+---
+
+## 2026-10-06 基于远端重放本次改动（对齐远端 10 个提交后再落地）
+
+- **执行者**：AI 编码机器人（opencode）
+- **类型**：分支对齐 + 改动重放（先 reset --hard origin/ANDROID_RUST，再在新基线上重做）
+- **背景**：远端 ANDROID_RUST 领先 10 个提交（另一条工作线：计优模式、智能体交流按钮/AgentHandoff 交接包、ROBOT_VERIFY.md 改名、Skills 索引、当下性节等）。首次 merge 手工合并时发现 Dart 冲突无法安全自动处理（远端重构了「上次寻优结果」入口与结果面板 API，且其文件中有一行中文疑似已损坏），遂按用户指示回退合并，改为本地对齐远端后重放。
+- **重放方式**：整仓备份到 Temp（638MB）→ reset --hard origin/ANDROID_RUST → 从备份逐文件重放。40 个改动文件中 28 个无重叠直接重放，6 个重叠（AGENTS.md / main.dart / step_freeze_signatures.dart / indicator_search_dialog.dart / PITFALLS.md / task-log.md）在新基线上手工重做。
+- **已成功重放（analyze lib/ test/ 0 error；test/indicator_search/ 15 条全过）**：
+  - K1+ 采样钟「动态段逐根在场」（本次核心）：kn_clock_timeline.dart 新增、kn_ohlc_sample_compute.dart 的 collectKnOhlcSamplesAt、catalog_lookup.dart 四处 K1 采样点、condition_eval.dart 的 gapBefore 空档切断、backtest_run.dart 的 knClock 参数、backtest_step_harness.dart 的逐步记录、step_freeze/ 三个文件、search_env.dart 的 knClock、main.dart 的 harness 传参。
+  - 投图完全替换：condition_indicators.dart 的 strategyDisplayIndicators + main.dart 两处调用。
+  - 多线指标图例：indicator_legend.dart 新增 + kline_chart.dart 取色单一出处与右上角图例钮/面板。
+  - 寻优结果交互：寻优弹窗 PopScope + SelectionArea、main.dart 的 barrierDismissible: true。
+- **交还远端版（放弃我的旧版覆盖）**：indicator_search_runner.dart / search_core.dart / search_verdict_views.dart / settings 两个 store / search_env.dart（仅重放 knClock 一行）/ indicator_search_result_panel.dart。
+  原因：我的分支曾删除「达标/排名筛选」（PassGate、skipOosEarly、双达标、内段排名），远端保留并扩展了它（新增 skipOosEarly 开关）。这是功能语义分歧，机械覆盖会编译失败并丢掉远端新能力。
+- **⚠️ 暂缓、需后续重做（重要）**：
+  - kn_clock_causality_test.dart（K1 采样钟回归 6 条）未能重放——依赖已交还的 SearchEnv.runAt（远端返回 RawScore 而非 BacktestRun）。核心代码已落地但目前没有自动回归锁住，需按新 API 重写。
+  - 寻优结果宽表的「列名白话 tooltip」与「右键复制整行」未重放——远端已把该面板重构为多列排序 API（onClearSort/onRemoveSort），我的版本基于旧 API。
+  - indicator_search_full_volume_test.dart、indicator_search_cancel_test.dart、indicator_search_engine_parity_test.dart、search_parity_helpers.dart 同理交还远端版。
+- **结果**：flutter analyze lib/ test/ 0 error；flutter test test/indicator_search/ 15 条全过（远端基线条数，我的 full_volume 测试不在其中）。
+- **白话总结**：先把本地对齐到远端那条线，再把本次改动重新贴上去。站得住的是「K1 采样钟改成每根 K 都在场判」这一整套（含空档切断）、投图完全替换、多线图例、寻优弹窗可关闭可复制。没贴上去的是寻优结果宽表那两个 UI 小改（列名白话 tooltip、右键复制整行）和一条回归测试，因为远端把那块重构过，强行贴会编译不过。K1 采样钟现在能用但没有测试锁住，这个缺口记在这里，下一轮必须补。
+- **注意**：①核心修复缺少自动回归保护，属已知缺口；②寻优结果面板的 tooltip/右键复制功能在本次丢失，需在新 API 上重做；③未跑全量 flutter test（只跑了 test/indicator_search/）。
