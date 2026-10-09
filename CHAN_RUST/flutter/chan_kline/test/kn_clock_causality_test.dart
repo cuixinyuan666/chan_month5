@@ -1,4 +1,4 @@
-﻿import 'package:chan_kline/backtest/backtest_run.dart';
+import 'package:chan_kline/backtest/backtest_run.dart';
 import 'package:chan_kline/backtest/backtest_step_harness.dart';
 import 'package:chan_kline/backtest/catalog_lookup.dart';
 import 'package:chan_kline/backtest/chart_line_store.dart';
@@ -10,6 +10,7 @@ import 'package:chan_kline/backtest/structure_object.dart';
 import 'package:chan_kline/backtest/trade_operand.dart';
 import 'package:chan_kline/bridge/chan_bridge.dart';
 import 'package:chan_kline/compute/demark_compute.dart';
+import 'package:chan_kline/compute/kn_clock_timeline.dart';
 import 'package:chan_kline/compute/kn_ohlc_sample_compute.dart';
 import 'package:chan_kline/compute/line_slope_compute.dart';
 import 'package:chan_kline/compute/math_series_freeze_store.dart';
@@ -282,6 +283,42 @@ void main() {
           reason: '$id 在目录里已登记，此前求值白名单漏了它 → 恒无样本、'
               '引用它的策略永远不出信号且不报错（V4）');
     }
+  });
+
+  test('采样钟退场会被计数，不许静默退回冻段（S6）', () {
+    KnClockDiagnostics.reset();
+    _signals(_buyAst(), _sellAst(), bars.last.idx);
+    expect(KnClockDiagnostics.totalFallbacks, 0,
+        reason: '走采样钟时不得有任何一次退回最终态段划分；'
+            '此前这条兜底无声发生，正是「信号被推到段尾且测试全绿」的成因');
+
+    // 反向验证探针本身有效：拿掉采样钟必须被计上。
+    final run = executeStrategyBacktest(
+      config: StrategyConfig(buyAst: _buyAst(), sellAst: _sellAst()),
+      scope: BacktestDataScope(
+        code: _code,
+        period: _period,
+        barCount: bars.length,
+        asOfX: bars.last.idx,
+        beginText: _begin,
+        endText: _end,
+      ),
+      bars: bars,
+      levels: h.levels,
+      mathFreeze: h.mathFreeze,
+      chanEvents: h.chanEvents,
+      zsObjects: h.zsObjects,
+      diverRelations: h.diverRelations,
+      lineSeries: h.lineSeries,
+      chipPeaks: h.chipPeaks,
+      maxKn: h.maxKn,
+      barFeatures: h.barFeatures,
+      mathConfig: h.mathConfig,
+    );
+    expect(run.result!.signals, isNotEmpty);
+    expect(KnClockDiagnostics.missingTimelineFallbacks, greaterThan(0),
+        reason: '探针无效：没传采样钟却没计数，说明这条断言测不到东西');
+    KnClockDiagnostics.reset();
   });
 
   test('空档切断：K2 穿越信号的前一点必与它相邻（无单侧空档）', () {

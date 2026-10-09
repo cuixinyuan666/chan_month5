@@ -634,6 +634,10 @@ List<EvalClockPoint> readSubIndicatorPlotGridSeries({
 
 /// K1+ 采样钟取样：有 [knClock] 用 asOf 当时的段划分（动态段口径，回测/寻优用）；
 /// 否则退回最终态 levels（绘图/诊断用）。
+///
+/// **[2026-10-09 · S6] 退化不再无声**：两类退场各计一次
+/// （见 [KnClockDiagnostics]）。回归测试断言它们为 0 —— 此前这条兜底
+/// 让「主图没记采样钟」这种错一路静默通过，是 error remember.md 第 11 条的成因。
 List<KnOhlcSample> _knSamples({
   required int kn,
   required List<KlineBar> bars,
@@ -643,6 +647,11 @@ List<KnOhlcSample> _knSamples({
 }) {
   if (knClock != null && !knClock.isEmpty) {
     return collectKnOhlcSamplesAt(displayKn: kn, timeline: knClock, asOf: asOf);
+  }
+  if (knClock == null) {
+    KnClockDiagnostics.missingTimelineFallbacks++;
+  } else {
+    KnClockDiagnostics.emptyTimelineFallbacks++;
   }
   return collectKnOhlcSamples(
     displayKn: kn,

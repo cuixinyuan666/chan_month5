@@ -195,6 +195,30 @@ class KnClockTimeline {
   }
 }
 
+/// 采样钟退场诊断（防止「静默退回冻段口径」再次无声发生）。
+///
+/// 背景：K1+ 采样点取不到时，`catalog_lookup` 会退回最终态段划分（冻段口径）。
+/// 这条退化**不崩、不报错、测试全绿**，只是把信号推到段尾 —— `error remember.md`
+/// 第 11 条记的就是它。因此这里做两个静态计数器：任一非零就说明有路径退化过，
+/// 回归测试可断言它为 0。
+class KnClockDiagnostics {
+  KnClockDiagnostics._();
+
+  /// 传了 knClock 但它是空的（时间线没记上）→ 退回最终态。
+  static int emptyTimelineFallbacks = 0;
+
+  /// 压根没传 knClock → 退回最终态（绘图/诊断属正常，求值链出现即为退化）。
+  static int missingTimelineFallbacks = 0;
+
+  /// 累计（两类之和）。
+  static int get totalFallbacks => emptyTimelineFallbacks + missingTimelineFallbacks;
+
+  static void reset() {
+    emptyTimelineFallbacks = 0;
+    missingTimelineFallbacks = 0;
+  }
+}
+
 /// 步进时用的增量记录器：比较各层 bundle 里 unitBars 数量变化，得出本步新确认的段。
 class KnClockTimelineRecorder {
   final KnClockTimeline timeline = KnClockTimeline();
