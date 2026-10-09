@@ -2537,7 +2537,12 @@ class _KlineHomePageState extends State<KlineHomePage> {
                       ),
                     );
                   }, sheetSetState: sheetSetState);
-                  // opt 变了：重建 PipelineState 会话再重算
+                  // opt 变了：重建 PipelineState 会话再重算。
+                  // 截断机制会改段划分 → 段变化会让采样钟时间线与冻结仓整体作废，
+                  // 必须连冻结仓一起清（与 :1752 / :1797 两条兄弟路径同口径）。
+                  // 只 dispose 不清 → 时间线保留旧口径，且 recordKnClockStep 的
+                  // lastAsOf>=stepIdx 守卫会让它不再重记，采样钟与新段划分对不上。
+                  _clearSessionFreezeHistory();
                   _disposePipelineSession();
                   _msgHistory.append('截断机制=${v ? "开" : "关"}，重算当前步进');
                   _rebuildCombine();
