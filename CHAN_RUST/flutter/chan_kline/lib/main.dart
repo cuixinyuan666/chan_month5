@@ -1145,6 +1145,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _stepFreeze.mathFreezeStore.clear();
         _stepFreeze.diverFreezeStore.clear();
         _stepFreeze.chipPeakStore.clear();
+        _stepFreeze.knClockTimeline.clear();
+        _stepFreeze.knClockSeenUnits = 0;
         _clearBacktestSession();
       });
       final directOhlc = code == 'test' && _hasTestOhlcCsv();
@@ -1236,6 +1238,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _stepFreeze.mathFreezeStore.clear();
         _stepFreeze.diverFreezeStore.clear();
         _stepFreeze.chipPeakStore.clear();
+        _stepFreeze.knClockTimeline.clear();
+        _stepFreeze.knClockSeenUnits = 0;
         _clearBacktestSession();
       });
       _msgHistory.append('加载K0失败：$e');
@@ -1406,6 +1410,21 @@ class _KlineHomePageState extends State<KlineHomePage> {
     );
   }
 
+  /// K1+ 采样钟：记下本步「当时」的 K1 段划分（已确认段增量 + 正在生长的那段）。
+  ///
+  /// 每根 K 都要记一条：K1 及以上的穿越/事件按「虚拟 K 样本」取样，采样点落在哪根 K
+  /// 取决于当时那一段走到哪。少了这一步，主图会话的采样钟时间线恒为空，
+  /// 策略回测 / 寻优会退回「一段一个点」的最终态口径，把动态段中途成立的信号推到段尾。
+  /// 独立 harness 走 `StepFreezeMerger.mergeRebuildCombineFreeze`（内含这一步），
+  /// 主图这两条合并链是逐个 statics 手写的，必须自己补上，否则两条口径不等。
+  void _recordKnClockStep(KlineCombineBundle bundle) {
+    StepFreezeMerger.recordKnClockStep(
+      state: _stepFreeze,
+      bundle: bundle,
+      stepIdx: _stepIdx,
+    );
+  }
+
   List<LevelBundle> _levelsWithFrozenBs(List<LevelBundle> levels) {
     final with1 = levelsWithFrozenClass1Bs(
       levels,
@@ -1481,6 +1500,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         // 会话冻结：并入本步一类BS，禁止下一步整表覆盖消掉上步显示
         _mergeBsHistory(bundle);
         zsConfirmed = _mergeZsSignalHistory(bundle);
+        _recordKnClockStep(bundle);
         _mergeRatioAndRhythm(bundle);
         _mergeMathFreeze(bundle);
         _mergeDivergenceFreeze(bundle, confirmedX1ByKn: zsConfirmed);
@@ -1817,6 +1837,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
             bundle,
             copyForPaint: false,
           );
+          _recordKnClockStep(bundle);
           _mergeRatioAndRhythm(
             bundle,
             bars: growing,
