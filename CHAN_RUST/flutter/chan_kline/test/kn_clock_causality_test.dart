@@ -1,13 +1,16 @@
 ﻿import 'package:chan_kline/backtest/backtest_run.dart';
 import 'package:chan_kline/backtest/backtest_step_harness.dart';
 import 'package:chan_kline/backtest/catalog_lookup.dart';
+import 'package:chan_kline/backtest/chan_event_store.dart';
 import 'package:chan_kline/backtest/condition_ast.dart';
 import 'package:chan_kline/backtest/signal_event.dart';
 import 'package:chan_kline/backtest/strategy_config.dart';
 import 'package:chan_kline/backtest/structure_object.dart';
 import 'package:chan_kline/backtest/trade_operand.dart';
 import 'package:chan_kline/bridge/chan_bridge.dart';
+import 'package:chan_kline/compute/demark_compute.dart';
 import 'package:chan_kline/compute/kn_ohlc_sample_compute.dart';
+import 'package:chan_kline/compute/math_series_freeze_store.dart';
 import 'package:chan_kline/models/kline_bar.dart';
 import 'package:chan_kline/models/level_models.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -201,6 +204,56 @@ void main() {
     final again = h.zsObjects
         .projectActive(displayKn: 1, asOf: 528, projection: ZsProjection.center);
     expect(again, before, reason: '同一 asOf 的中枢快照不得被后续数据改写');
+  });
+
+  test('背驰力度比/方向接了采样钟（V2 回归）', () {
+    List<double> _ratio({required bool withClock}) => readEvalClockSeries(
+          variableId: 'STRUCTURE.K1.DIVERGENCE.RATIO',
+          asOf: bars.last.idx,
+          bars: bars,
+          levels: h.levels,
+          diverRelations: h.diverRelations,
+          knClock: withClock ? h.knClock : null,
+        ).map((e) => e.value).toList();
+    final withClock = _ratio(withClock: true);
+    final noClock = _ratio(withClock: false);
+    expect(withClock, isNotEmpty, reason: 'K1 背驰力度比应有样本');
+    expect(withClock, isNot(equals(noClock)),
+        reason: '接/不接采样钟结果必须不同（相同 = 采样钟根本没起作用，V2 未修）');
+    expect(withClock.length, greaterThan(noClock.length * 3),
+        reason: '接采样钟后应逐根在场（远多于段尾制的一层一点）');
+  });
+
+  test('Demark 事件读冻结仓而非现算最终态（V3 回归）', () {
+    // 造一份只含「K1 在 K0#3 完成买」的冻结仓；现算路径在这份数据上不出该标记。
+    final store = MathSeriesFreezeStore();
+    store.demarkByKn[1] = DemarkK0Series([
+      for (var i = 0; i <= 3; i++)
+        i == 3
+            ? [const DemarkMark(type: 'complete', dir: -1, idx: 3)]
+            : null,
+    ]);
+    final viaStore = listTradeChanEvents(
+      variableId: 'MAIN.K1.DEMARK.COMPLETE_BUY',
+      asOf: 3,
+      store: h.chanEvents,
+      levels: h.levels,
+      mathFreeze: store,
+      bars: bars,
+      maxKn: h.maxKn,
+    );
+    expect(viaStore.map((e) => e.availableAt), contains(3),
+        reason: 'Demark 完成标记必须从冻结仓读出（逐根当步算好的那份）');
+    final viaLive = listTradeChanEvents(
+      variableId: 'MAIN.K1.DEMARK.COMPLETE_BUY',
+      asOf: 3,
+      store: h.chanEvents,
+      levels: h.levels,
+      bars: bars,
+      maxKn: h.maxKn,
+    );
+    expect(viaLive.map((e) => e.availableAt), isNot(contains(3)),
+        reason: '现算（最终态段尾制）本就不该给出这格——否则本测试无法区分两条路');
   });
 
   test('空档切断：K2 穿越信号的前一点必与它相邻（无单侧空档）', () {

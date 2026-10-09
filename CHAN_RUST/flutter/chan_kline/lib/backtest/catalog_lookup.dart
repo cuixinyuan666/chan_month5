@@ -549,6 +549,7 @@ List<EvalClockPoint> readEvalClockSeries({
       bars: bars,
       levels: levels,
       diverRelations: diverRelations,
+      knClock: knClock,
     );
   }
   final extraPlot = _extendedPlotSeries(
@@ -899,6 +900,10 @@ TradeScalar? _lookupDiverProjection({
 }
 
 /// 背驰投影跟该层收盘同一套计算钟：K0 一根一根，K1+ 虚拟K右端。
+///
+/// **[knClock] 必传（2026-10-09 修）**：此前漏传，导致 K1+ 背驰力度比/方向的采样点
+/// 取自**最终态**段划分（冻段口径），信号被推到段尾，且不报错——与同函数里
+/// RAW 分支、中枢分支都传了 knClock 的写法自相矛盾。
 List<EvalClockPoint> _diverEvalSeries({
   required int kn,
   required String field,
@@ -906,6 +911,7 @@ List<EvalClockPoint> _diverEvalSeries({
   required List<KlineBar> bars,
   required List<LevelBundle> levels,
   required DivergenceRelationStore? diverRelations,
+  KnClockTimeline? knClock,
 }) {
   if (diverRelations == null || diverRelations.isEmpty) return const [];
   final grid = _rawEvalSeries(
@@ -914,6 +920,7 @@ List<EvalClockPoint> _diverEvalSeries({
     asOf: asOf,
     bars: bars,
     levels: levels,
+    knClock: knClock,
   );
   final out = <EvalClockPoint>[];
   var i = 0;
