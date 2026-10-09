@@ -168,10 +168,20 @@ Map<int, List<double>> computeAllKnFromK0Series({
   );
 }
 
+/// **asOf 当时**该层的段划分：已确认的段 + 当时的动态段。
+///
+/// 由调用方从 `KnClockTimeline.at(level, asOf)` 整体取回（字段名与
+/// `KnClockState` 一致，两者可直接互换，省掉一层搬运代码）。
+/// 传进来则区间划分完全受限于当前时刻；不传则退回 `levels` 里的**最终态**
+/// 段划分（绘图 / 诊断路径，属既有行为）。
+typedef KnUnitsAsOf = ({List<LevelUnitBar> unitBars, LevelUnitBar? activeUnit});
+
 typedef _KnAccumulateFn = List<double> Function({
   required List<double> lowerIncrements,
   required LevelBundle bundle,
   required List<KlineBar> bars,
+  KnUnitsAsOf? asOfUnits,
+  int? asOf,
 });
 
 /// 内部复用：从 K0 系列出发，逐一累积各层系列。
@@ -180,6 +190,8 @@ Map<int, List<double>> _computeAllKnFromK0({
   required List<LevelBundle> levels,
   required List<KlineBar> bars,
   required _KnAccumulateFn accumulate,
+  Map<int, KnUnitsAsOf>? unitsAsOf,
+  int? asOf,
 }) {
   final n = bars.length;
   final out = <int, List<double>>{};
@@ -197,6 +209,8 @@ Map<int, List<double>> _computeAllKnFromK0({
       lowerIncrements: increments,
       bundle: bundle,
       bars: bars,
+      asOfUnits: unitsAsOf?[bundle.level],
+      asOf: asOf,
     );
     out[displayKn] = series;
     increments = _cumulativeToIncrements(series);
@@ -209,12 +223,18 @@ Map<int, List<double>> computeAllKnVolumeSeries({
   required List<KlineBar> bars,
   required List<LevelBundle> levels,
   List<BarCrosshairFeature> barFeatures = const [],
+  /// S3：传 asOf 当时的段划分（`KnClockTimeline.at(level, asOf)`），
+  /// 使 K1+ 的区间划分完全受限于当前时刻，不被后来的段合并/延伸回改。
+  Map<int, KnUnitsAsOf>? unitsAsOf,
+  int? asOf,
 }) {
   return _computeAllKnFromK0(
     k0Series: computeK0VolumeSeries(bars),
     levels: levels,
     bars: bars,
     accumulate: _accumulateConfirmGated,
+    unitsAsOf: unitsAsOf,
+    asOf: asOf,
   );
 }
 
@@ -281,12 +301,17 @@ Map<int, List<double>> computeAllKnTickCountSeries({
   required List<KlineBar> bars,
   required List<LevelBundle> levels,
   List<BarCrosshairFeature> barFeatures = const [],
+  /// S3：同上，asOf 当时的段划分。
+  Map<int, KnUnitsAsOf>? unitsAsOf,
+  int? asOf,
 }) {
   return _computeAllKnFromK0(
     k0Series: computeK0TickCountSeries(bars),
     levels: levels,
     bars: bars,
     accumulate: _accumulateIntervalRunning,
+    unitsAsOf: unitsAsOf,
+    asOf: asOf,
   );
 }
 
@@ -348,23 +373,29 @@ List<double> _accumulateConfirmGated({
   required List<double> lowerIncrements,
   required LevelBundle bundle,
   required List<KlineBar> bars,
+  KnUnitsAsOf? asOfUnits,
+  int? asOf,
 }) {
   final n = bars.length;
   final out = List<double>.filled(n, 0.0);
   if (n == 0) return out;
   final idxToI = <int, int>{for (var i = 0; i < n; i++) bars[i].idx: i};
   final lastIdx = bars.last.idx;
+  // 动态段尾只到当前时刻：asOf 之前不该被后来的 K 线撑开
+  final capIdx = (asOf != null && asOf < lastIdx) ? asOf : lastIdx;
 
+  // S3：asOf 当时的段划分（已确认段 + 当时动态段）；null 则用最终态。
+  final confirmed = asOfUnits?.unitBars ?? bundle.unitBars;
+  final active = asOfUnits != null ? asOfUnits.activeUnit : bundle.activeUnit;
   final units = <LevelUnitBar>[
-    ...bundle.unitBars,
-    if (bundle.activeUnit != null) bundle.activeUnit!,
+    ...confirmed,
+    if (active != null) active,
   ];
   if (units.isEmpty) return out;
 
   LevelUnitBar? prev;
   for (final u in units) {
-    final isActiveTail =
-        bundle.activeUnit != null && identical(u, bundle.activeUnit);
+    final isActiveTail = active != null && identical(u, active);
 
     late final int sumStart;
     late final int displayStart;
@@ -379,11 +410,11 @@ List<double> _accumulateConfirmGated({
 
     final int endX;
     if (isActiveTail) {
-      endX = lastIdx;
+      endX = capIdx;
     } else if (u.confirmX >= 0) {
       endX = u.confirmX - 1;
     } else {
-      endX = u.x2;
+      endX = u.x2 < capIdx ? u.x2 : capIdx;
     }
     if (endX < sumStart) {
       prev = u;
@@ -409,23 +440,29 @@ List<double> _accumulateIntervalRunning({
   required List<double> lowerIncrements,
   required LevelBundle bundle,
   required List<KlineBar> bars,
+  KnUnitsAsOf? asOfUnits,
+  int? asOf,
 }) {
   final n = bars.length;
   final out = List<double>.filled(n, 0.0);
   if (n == 0) return out;
   final idxToI = <int, int>{for (var i = 0; i < n; i++) bars[i].idx: i};
   final lastIdx = bars.last.idx;
+  // 动态段尾只到当前时刻：asOf 之前不该被后来的 K 线撑开
+  final capIdx = (asOf != null && asOf < lastIdx) ? asOf : lastIdx;
 
+  // S3：asOf 当时的段划分（已确认段 + 当时动态段）；null 则用最终态。
+  final confirmed = asOfUnits?.unitBars ?? bundle.unitBars;
+  final active = asOfUnits != null ? asOfUnits.activeUnit : bundle.activeUnit;
   final units = <LevelUnitBar>[
-    ...bundle.unitBars,
-    if (bundle.activeUnit != null) bundle.activeUnit!,
+    ...confirmed,
+    if (active != null) active,
   ];
   if (units.isEmpty) return out;
 
   LevelUnitBar? prev;
   for (final u in units) {
-    final isActiveTail =
-        bundle.activeUnit != null && identical(u, bundle.activeUnit);
+    final isActiveTail = active != null && identical(u, active);
 
     late final int sumStart;
     if (prev == null) {
@@ -437,11 +474,11 @@ List<double> _accumulateIntervalRunning({
 
     final int endX;
     if (isActiveTail) {
-      endX = lastIdx;
+      endX = capIdx;
     } else if (u.confirmX >= 0) {
       endX = u.confirmX - 1;
     } else {
-      endX = u.x2;
+      endX = u.x2 < capIdx ? u.x2 : capIdx;
     }
     if (endX < sumStart) {
       prev = u;

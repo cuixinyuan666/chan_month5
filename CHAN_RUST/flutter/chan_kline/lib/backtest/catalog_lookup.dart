@@ -1,4 +1,4 @@
-﻿import '../compute/fractal_judgment_compute.dart';
+import '../compute/fractal_judgment_compute.dart';
 import '../compute/fx_extend_line_compute.dart';
 import '../compute/fx_pole_snug_compute.dart';
 import '../compute/kn_clock_timeline.dart';
@@ -102,6 +102,7 @@ TradeScalar lookupTradeNumeric({
     asOf: asOf,
     bars: bars,
     levels: levels,
+    knClock: knClock,
     lineSeries: lineSeries,
     features: features,
     chipPeaks: chipPeaks,
@@ -615,6 +616,7 @@ List<EvalClockPoint> readEvalClockSeries({
     asOf: asOf,
     bars: bars,
     levels: levels,
+    knClock: knClock,
     lineSeries: lineSeries,
     features: features,
     chipPeaks: chipPeaks,
@@ -1038,6 +1040,7 @@ TradeScalar? _lookupExtendedNumeric({
   required int asOf,
   required List<KlineBar> bars,
   required List<LevelBundle> levels,
+  KnClockTimeline? knClock,
   required ChartLineStore? lineSeries,
   required BarFeatureLookup? features,
   required ChipPeakFreezeStore? chipPeaks,
@@ -1050,6 +1053,7 @@ TradeScalar? _lookupExtendedNumeric({
     asOf: asOf,
     bars: bars,
     levels: levels,
+    knClock: knClock,
     lineSeries: lineSeries,
     features: features,
     chipPeaks: chipPeaks,
@@ -1067,6 +1071,7 @@ List<double?>? _extendedPlotSeries({
   required int asOf,
   required List<KlineBar> bars,
   required List<LevelBundle> levels,
+  KnClockTimeline? knClock,
   required ChartLineStore? lineSeries,
   required BarFeatureLookup? features,
   required ChipPeakFreezeStore? chipPeaks,
@@ -1125,9 +1130,20 @@ List<double?>? _extendedPlotSeries({
       parsed.rest.length == 1 &&
       (parsed.rest[0] == 'VOLUME' || parsed.rest[0] == 'TICK_COUNT') &&
       parsed.kn >= 1) {
+    // S3（2026-10-09）：K1+ 的量/笔，区间划分必须取 **asOf 当时** 的段，
+    // 否则就是「用后来定型的段划分去回溯当时」的假当下性 —— 后来一段合并
+    // 或延伸，会把当时的 K1 累计值整段改写。
+    // 数据源直接取 KnClockTimeline.at(level, asOf)（V1 起就是按层分轨的
+    // 权威快照），不在这里另造一套截断逻辑，避免同口径两份实现漂移。
+    Map<int, KnUnitsAsOf>? unitsAsOf;
+    if (knClock != null && !knClock.isEmpty && parsed.kn >= 1) {
+      unitsAsOf = {parsed.kn - 1: knClock.at(parsed.kn - 1, asOf)};
+    }
     final all = parsed.rest[0] == 'VOLUME'
-        ? computeAllKnVolumeSeries(bars: bars, levels: levels)
-        : computeAllKnTickCountSeries(bars: bars, levels: levels);
+        ? computeAllKnVolumeSeries(
+            bars: bars, levels: levels, unitsAsOf: unitsAsOf, asOf: asOf)
+        : computeAllKnTickCountSeries(
+            bars: bars, levels: levels, unitsAsOf: unitsAsOf, asOf: asOf);
     final series = all[parsed.kn];
     if (series == null) return List<double?>.filled(n, null);
     return [

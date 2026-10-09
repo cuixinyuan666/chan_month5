@@ -13,6 +13,7 @@ import 'package:chan_kline/bridge/chan_bridge.dart';
 import 'package:chan_kline/compute/demark_compute.dart';
 import 'package:chan_kline/compute/kn_clock_timeline.dart';
 import 'package:chan_kline/compute/kn_ohlc_sample_compute.dart';
+import 'package:chan_kline/compute/kn_volume_series_compute.dart';
 import 'package:chan_kline/compute/line_slope_compute.dart';
 import 'package:chan_kline/compute/math_series_freeze_store.dart';
 import 'package:chan_kline/compute/step_rhythm_compute.dart';
@@ -92,7 +93,6 @@ void main() {
       chipPeaks: hz.chipPeaks,
       maxKn: hz.maxKn,
       barFeatures: hz.barFeatures,
-      mathConfig: hz.mathConfig,
       knClock: hz.knClock,
     );
     return run.result!.signals;
@@ -354,7 +354,6 @@ void main() {
       chipPeaks: h.chipPeaks,
       maxKn: h.maxKn,
       barFeatures: h.barFeatures,
-      mathConfig: h.mathConfig,
     );
     expect(run.result!.signals, isNotEmpty);
     expect(KnClockDiagnostics.missingTimelineFallbacks, greaterThan(0),
@@ -494,5 +493,126 @@ void main() {
     expect(_sig(slopeUp), isEmpty,
         reason: 'K0#1 与 K0#3 之间，节奏列在 K0#2 有值而斜率列没有 → 中间不可知，'
             '这次上穿必须被切断，不许出信号');
+  });
+
+  // ------------------------------------------------------------------
+  // S3（2026-10-09）：K1+ 的量/笔，区间划分必须取 asOf 当时的段。
+  //
+  // 过去的 bug：evaluate 路径直接拿全量最终态 levels 去算 K1 累计量。
+  // 全量最终态里含「asOf 之后才确认的段」，它们一旦合并/延伸此前的段，
+  // 就会把当时的 K1 累计值整段改写 —— 看着是 K1 指标，实则是未来数据。
+  //
+  // 断言方式 = 前缀重放对拍：只喂 bars[0..asOf] 重算一遍（那时只有最终态、
+  // 不可能含未来段），它必须与「全量 + 采样钟」在 x=asOf 处**逐层相等**。
+  // ------------------------------------------------------------------
+  test('S3：K1+ 量/笔与前缀重放一致（区间划分不借未来）', () async {
+    final fullMax = h.levels.isEmpty
+        ? 0
+        : h.levels.map((e) => e.level).reduce((a, b) => a > b ? a : b);
+
+    // 挑几个中段 asOf（含段中，不能只挑段尾）
+    const probes = <int>[137, 400, 900, 1500];
+    var checked = 0;
+    var mismatch = <String>[];
+
+    for (final asOf in probes) {
+      if (asOf >= bars.length) continue;
+      final prefix = bars.sublist(0, asOf + 1);
+      final hp = await driveStepHarness(prefix);
+
+      for (final vid in const [
+        'SUB.K1.VOLUME',
+        'SUB.K2.VOLUME',
+        'SUB.K1.TICK_COUNT',
+        'SUB.K2.TICK_COUNT',
+      ]) {
+        final kn = int.parse(vid.split('.')[1].substring(1));
+        if (kn > fullMax) continue;
+
+        // 走「全量 + 采样钟」的求值路径（寻优/回测实际用的那条）
+        final live = lookupTradeNumeric(
+          variableId: vid,
+          asOf: asOf,
+          bars: bars,
+          levels: h.levels,
+          mathFreeze: h.mathFreeze,
+          zsObjects: h.zsObjects,
+          diverRelations: h.diverRelations,
+          lineSeries: h.lineSeries,
+          chipPeaks: h.chipPeaks,
+          barFeatures: h.barFeatures,
+          knClock: h.knClock,
+        );
+        // 只喂前缀重算（不可能含未来段）；knClock 传 null = 走最终态路径
+        final replay = lookupTradeNumeric(
+          variableId: vid,
+          asOf: asOf,
+          bars: prefix,
+          levels: hp.levels,
+          mathFreeze: hp.mathFreeze,
+          zsObjects: hp.zsObjects,
+          diverRelations: hp.diverRelations,
+          lineSeries: hp.lineSeries,
+          chipPeaks: hp.chipPeaks,
+          barFeatures: hp.barFeatures,
+        );
+
+        if (live.isUnavailable) continue; // 该层在此 asOf 尚不存在
+        checked++;
+        if (live.value != replay.value) {
+          mismatch.add('$vid @x=$asOf: 全量钟=${live.value} vs 前缀重放=${replay.value}');
+        }
+      }
+    }
+
+    expect(checked, greaterThanOrEqualTo(4),
+        reason: '探针没打到有效取值，测试等于没跑');
+    expect(mismatch, isEmpty,
+        reason: 'K1+ 量/笔用到了 asOf 之后的段信息（未来数据）');
+  });
+
+  test('S3：该层尚未确认任何段时，不再提前报出 K2 累计量', () {
+    // 002003 早期：level1 一段都还没确认，K2 当时根本不该有值。
+    // 修复前走最终态 levels，却已报出 2000+ 的量 —— 那是从未来段借来的。
+    const asOf = 6;
+    const lv = 1; // displayKn = lv + 1 = K2
+
+    final st = h.knClock!.at(lv, asOf);
+    expect(st.unitBars, isEmpty,
+        reason: '探针前提：该层在 asOf 当时还没确认任何段');
+    expect(st.activeUnit, isNull,
+        reason: '探针前提：当时连动态段都没有');
+
+    final withClock = computeAllKnVolumeSeries(
+      bars: bars,
+      levels: h.levels,
+      unitsAsOf: {lv: st},
+      asOf: asOf,
+    )[lv + 1]!;
+    final noClock =
+        computeAllKnVolumeSeries(bars: bars, levels: h.levels)[lv + 1]!;
+
+    expect(withClock[asOf], 0.0,
+        reason: '采样钟口径：当时无段可累，K2 应为 0');
+    expect(noClock[asOf], greaterThan(0.0),
+        reason: '探针失效：最终态口径此处也没值，说明这段行情不再复现未来数据泄漏，'
+            '换一个 asOf 再验');
+
+    // 目录层同样不得提前给值
+    final live = lookupTradeNumeric(
+      variableId: 'SUB.K2.VOLUME',
+      asOf: asOf,
+      bars: bars,
+      levels: h.levels,
+      mathFreeze: h.mathFreeze,
+      zsObjects: h.zsObjects,
+      diverRelations: h.diverRelations,
+      lineSeries: h.lineSeries,
+      chipPeaks: h.chipPeaks,
+      barFeatures: h.barFeatures,
+      knClock: h.knClock,
+    );
+    expect(live.isUnavailable || live.value == 0.0, isTrue,
+        reason: '目录层在无段时刻给出了 K2 数值：${live.value}');
   });
 }
