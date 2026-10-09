@@ -1,6 +1,4 @@
-import 'package:chan_kline/backtest/backtest_run.dart';
 import 'package:chan_kline/backtest/strategy_compile.dart';
-import 'package:chan_kline/backtest/strategy_config.dart';
 import 'package:chan_kline/indicator_search/search_env.dart';
 import 'package:flutter_test/flutter_test.dart';
 

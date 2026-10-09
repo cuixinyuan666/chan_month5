@@ -10,7 +10,6 @@ import 'package:chan_kline/backtest/strategy_config.dart';
 import 'package:chan_kline/backtest/structure_object.dart';
 import 'package:chan_kline/backtest/trade_clock.dart';
 import 'package:chan_kline/backtest/trade_operand.dart';
-import 'package:chan_kline/backtest/trade_value.dart';
 import 'package:chan_kline/backtest/trade_var_diagnose.dart';
 import 'package:chan_kline/backtest/zhongshu_object_store.dart';
 import 'package:chan_kline/compute/math_series_freeze_store.dart';

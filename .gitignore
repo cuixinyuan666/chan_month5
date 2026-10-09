@@ -51,6 +51,8 @@ CHAN_RUST/flutter/chan_kline/test/indicator_search/proc.txt
 *.tmp
 *.temp
 test_*.py
+# 调试探针落盘（仓库根 .tmp_*.txt：git 告警噪声等，调试完即删，勿提交）
+/.tmp_*.txt
 
 # 发布打包产物
 dist/
