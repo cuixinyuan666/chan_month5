@@ -3,78 +3,94 @@
 /// K1+ 采样钟的「当时快照」时间线（动态段口径 / 当下性）。
 ///
 /// **为什么需要它**：K1 及以上的穿越/事件条件按「虚拟 K 样本」取样，而样本点落在哪根 K，
-/// 取决于**当时那一段走到哪了**。若事后用最终态的段划分来采样，「当时正在生长、还没定型」
+/// 取决于**当时那一层走到哪了**。若事后用最终态的段划分来采样，「当时正在生长、还没定型」
 /// 的那一段会被划到别处，asOf 那一刻就没有采样点，动态段中途成立的信号因此丢失或被推迟到段尾。
 ///
 /// 本时间线在步进重放时**每一步**记下「这一步新确认了哪些段」+「这一步正在生长的是哪一段」，
 /// 求值时按 asOf 还原当时的段划分，从而与实盘当时真正能看到的一致。
 ///
-/// **只存增量**：每步大约记 0~1 个新确认段 + 1 个动态段，内存与步数成正比（不与段数平方成正比）。
-class KnClockStep {
-  /// 本步新确认（定型）的段。
+/// **按层分轨（2026-10-09 修）**：displayKn 的采样父层是 `level == displayKn - 1`
+/// （与最终态口径 `bundleAtLevel(levels, displayKn - 1)` 一致）。此前本时间线**只记 level 0**，
+/// 于是 `collectKnOhlcSamplesAt` 对 K2 及以上一律返回 level0 的采样点 ——
+/// `RAW.K2.CLOSE` 拿到的是 K1 的收盘，违反「全层同构」。现在每层各记一条轨。
+///
+/// **只存增量**：每步每层大约记 0~1 个新确认段 + 1 个动态段，内存与步数×层数成正比
+/// （不与段数平方成正比）。
+class KnClockLevelStep {
+  /// 本层本步新确认（定型）的段。
   final List<LevelUnitBar> newlyConfirmed;
 
-  /// 本步正在生长、尚未定型的那一段（离开则为 null）。
+  /// 本层本步正在生长、尚未定型的那一段（离开则为 null）。
   final LevelUnitBar? activeUnit;
 
-  const KnClockStep({required this.newlyConfirmed, required this.activeUnit});
+  const KnClockLevelStep({required this.newlyConfirmed, required this.activeUnit});
 }
 
-/// asOf 当时的段划分还原结果。
+/// 某一层在 asOf 当时的段划分还原结果。
 typedef KnClockState = ({List<LevelUnitBar> unitBars, LevelUnitBar? activeUnit});
 
 class KnClockTimeline {
   /// 记录步序（升序）。步进是连续递增的，用数组即可；查最近一步走二分。
   final List<int> _asOfKeys = <int>[];
 
-  final List<KnClockStep> _steps = <KnClockStep>[];
-  final Map<int?, KnClockState> _cache = <int?, KnClockState>{};
-  final Map<int?, List<int>> _sampleEndsCache = <int?, List<int>>{};
+  /// layer → 该层每一步的快照（索引与 [_asOfKeys] 一一对应）。
+  final Map<int, List<KnClockLevelStep>> _stepsByLevel = <int, List<KnClockLevelStep>>{};
 
-  bool get isEmpty => _steps.isEmpty;
+  final Map<(int, int?), KnClockState> _cache = <(int, int?), KnClockState>{};
+  final Map<(int, int?), List<int>> _sampleEndsCache = <(int, int?), List<int>>{};
+
+  bool get isEmpty => _asOfKeys.isEmpty;
+
+  /// 已记录过快照的层号（升序）。
+  List<int> get levels => _stepsByLevel.keys.toList()..sort();
 
   /// 清空（换标的 / 重来 / 步退到根）。
   void clear() {
     _asOfKeys.clear();
-    _steps.clear();
+    _stepsByLevel.clear();
     _cache.clear();
     _sampleEndsCache.clear();
   }
 
   /// 已记录的步数。
-  int get length => _steps.length;
+  int get length => _asOfKeys.length;
 
   /// 最后记录的 asOf（空时为 -1）。
   int get lastAsOf => _asOfKeys.isEmpty ? -1 : _asOfKeys.last;
 
   /// 记一步。重复 asOf 会被忽略（步进每根 K 只记一次）。
-  void record(
-    int asOf, {
-    required List<LevelUnitBar> newlyConfirmed,
-    required LevelUnitBar? activeUnit,
-  }) {
+  ///
+  /// [byLevel] 的 key 是采样父层 level（= displayKn - 1）；某层本步不存在就整层不出现在
+  /// map 里（等价于「该层当刻没有已确认段也没有动态段」）。
+  void record(int asOf, Map<int, KnClockLevelStep> byLevel) {
     if (_asOfKeys.isNotEmpty && _asOfKeys.last == asOf) return;
     _asOfKeys.add(asOf);
-    _steps.add(KnClockStep(
-      newlyConfirmed: List<LevelUnitBar>.unmodifiable(newlyConfirmed),
-      activeUnit: activeUnit,
-    ));
+    for (final e in byLevel.entries) {
+      final steps = _stepsByLevel.putIfAbsent(e.key, () => <KnClockLevelStep>[]);
+      // 某层可能晚于其它层才出现；补齐它缺席的早期步（空快照 = 当刻该层无段）。
+      while (steps.length < _asOfKeys.length - 1) {
+        steps.add(const KnClockLevelStep(newlyConfirmed: [], activeUnit: null));
+      }
+      steps.add(e.value);
+    }
     _cache.clear();
     _sampleEndsCache.clear();
   }
 
-  /// 还原 asOf 当时的段划分：[asOf] 为 null 表示最后一步。
+  /// 还原 asOf 当时 [level] 层的段划分：[asOf] 为 null 表示最后一步。
   ///
   /// 累计 asOf 之前（含）各步新确认的段，并取那一步的动态段。
-  KnClockState at(int? asOf) {
-    final cached = _cache[asOf];
+  KnClockState at(int level, int? asOf) {
+    final cached = _cache[(level, asOf)];
     if (cached != null) return cached;
-    if (_steps.isEmpty) {
-      return _cache[asOf] = (unitBars: const <LevelUnitBar>[], activeUnit: null);
+    final steps = _stepsByLevel[level];
+    if (steps == null || steps.isEmpty || _asOfKeys.isEmpty) {
+      return _cache[(level, asOf)] =
+          (unitBars: const <LevelUnitBar>[], activeUnit: null);
     }
     // 找 <= asOf 的最后一步（asOf 为 null 取最后一步）
     var hi = _asOfKeys.length;
-    var stepIndex = _steps.length;
+    var stepIndex = steps.length;
     if (asOf != null) {
       var lo = 0;
       while (lo < hi) {
@@ -88,27 +104,32 @@ class KnClockTimeline {
       stepIndex = lo;
       if (lo == 0) {
         // asOf 早于第一次记录：当时什么都还没有
-        return _cache[asOf] =
+        return _cache[(level, asOf)] =
             (unitBars: const <LevelUnitBar>[], activeUnit: null);
       }
     }
     final last = stepIndex - 1;
     final unitBars = <LevelUnitBar>[];
     for (var i = 0; i <= last; i++) {
-      unitBars.addAll(_steps[i].newlyConfirmed);
+      unitBars.addAll(steps[i].newlyConfirmed);
     }
     unitBars.sort((a, b) => a.x2.compareTo(b.x2));
-    return _cache[asOf] = (unitBars: unitBars, activeUnit: _steps[last].activeUnit);
+    return _cache[(level, asOf)] =
+        (unitBars: unitBars, activeUnit: steps[last].activeUnit);
   }
 
-  /// 指纹（供前缀重放对拍比对）。
+  /// 指纹（供前缀重放对拍比对）：覆盖**所有层**，少一层就等于漏盯一块。
   String signature(int? asOf) {
-    final s = at(asOf);
-    final conf = s.unitBars
-        .map((u) => '${u.x1}-${u.x2}d${u.dir}')
-        .join(',');
-    final a = s.activeUnit;
-    return '$conf|act=${a == null ? '-' : '${a.x1}-${a.x2}d${a.dir}@${a.close}'}';
+    final parts = <String>[];
+    for (final lv in levels) {
+      final s = at(lv, asOf);
+      final conf = s.unitBars
+          .map((u) => '${u.x1}-${u.x2}d${u.dir}')
+          .join(',');
+      final a = s.activeUnit;
+      parts.add('L$lv[$conf|act=${a == null ? '-' : '${a.x1}-${a.x2}d${a.dir}@${a.close}'}]');
+    }
+    return parts.join(';');
   }
 
   // ---------------------------------------------------------------------
@@ -117,33 +138,42 @@ class KnClockTimeline {
   // 上一段「一段一个采样点」的做法只对 asOf=末根成立：一次性判全区间时，
   // 「第 x 根那里有一个采样点」这件事只有走到 x 才知道，单点求值永远拿不到。
   // 实盘是**每根 K 都在场判一次**，所以采样点必须是：
-  //   所有 x ≤ asOf 且「x 那一刻存在正在生长的段（dir≠0）」的 bar。
+  //   所有 x ≤ asOf 且「x 那一刻 [level] 层存在正在生长的段（dir≠0）」的 bar。
   // 段定型那一根也算（那一刻它就是 active 段末端），因此已确认段的右端天然被覆盖。
   // ---------------------------------------------------------------------
 
-  /// 逐 bar 采样点右端（升序、去重）。结果按 asOf 缓存。
-  List<int> sampleEnds(int? asOf) {
-    final cached = _sampleEndsCache[asOf];
+  /// 逐 bar 采样点右端（升序、去重）。结果按 (level, asOf) 缓存。
+  List<int> sampleEnds(int level, int? asOf) {
+    final cached = _sampleEndsCache[(level, asOf)];
     if (cached != null) return cached;
-    final limit = asOf ?? (_asOfKeys.isEmpty ? -1 : _asOfKeys.last);
+    final steps = _stepsByLevel[level];
+    if (steps == null || steps.isEmpty) {
+      return _sampleEndsCache[(level, asOf)] = const <int>[];
+    }
+    final limit = asOf ?? _asOfKeys.last;
     final seen = <int>{};
     final out = <int>[];
-    for (var i = 0; i < _asOfKeys.length; i++) {
+    for (var i = 0; i < _asOfKeys.length && i < steps.length; i++) {
       if (_asOfKeys[i] > limit) break;
-      final a = _steps[i].activeUnit;
+      final a = steps[i].activeUnit;
       if (a == null || (a.dir != 1 && a.dir != -1) || a.x2 < 0) continue;
       if (a.x1 > _asOfKeys[i]) continue;
       if (seen.add(_asOfKeys[i])) out.add(_asOfKeys[i]);
     }
     out.sort();
-    return _sampleEndsCache[asOf] = out;
+    return _sampleEndsCache[(level, asOf)] = out;
   }
 
-  /// x 那一刻的动态段 OHLC（x 必须是采样点）。
-  ({double open, double high, double low, double close})? activeOhlcAt(int x) {
+  /// x 那一刻 [level] 层动态段的 OHLC（x 必须是该层的采样点）。
+  ({double open, double high, double low, double close})? activeOhlcAt(
+    int level,
+    int x,
+  ) {
     final i = _indexOfAsOf(x);
     if (i < 0) return null;
-    final a = _steps[i].activeUnit;
+    final steps = _stepsByLevel[level];
+    if (steps == null || i >= steps.length) return null;
+    final a = steps[i].activeUnit;
     if (a == null || (a.dir != 1 && a.dir != -1) || a.x2 < 0) return null;
     return (open: a.open, high: a.high, low: a.low, close: a.close);
   }
@@ -165,34 +195,47 @@ class KnClockTimeline {
   }
 }
 
-/// 步进时用的增量记录器：比较 bundle 里 unitBars 数量变化，得出本步新确认的段。
+/// 步进时用的增量记录器：比较各层 bundle 里 unitBars 数量变化，得出本步新确认的段。
 class KnClockTimelineRecorder {
   final KnClockTimeline timeline = KnClockTimeline();
-  int _seenUnits = 0;
+  final Map<int, int> _seenUnits = <int, int>{};
 
   void reset() {
-    _seenUnits = 0;
+    _seenUnits.clear();
   }
 
-  /// [unitBars] 取 level 0（displayKn=1 的父层）的已确认段；[activeUnit] 同层动态段。
-  void record(int asOf, List<LevelUnitBar> unitBars, LevelUnitBar? activeUnit) {
-    final start = _seenUnits > unitBars.length ? unitBars.length : _seenUnits;
-    final fresh = start < unitBars.length
-        ? unitBars.sublist(start)
-        : const <LevelUnitBar>[];
-    _seenUnits = unitBars.length;
-    timeline.record(asOf, newlyConfirmed: fresh, activeUnit: activeUnit);
-  }
+  /// [levels] 是当刻整条 bundle；每层各记一条轨（level = displayKn - 1）。
+  void record(int asOf, List<LevelBundle> levels) =>
+      recordKnClockStepInto(
+        timeline: timeline,
+        levels: levels,
+        seenUnits: _seenUnits,
+        asOf: asOf,
+      );
 }
 
-/// 取 level 0 的已确认段与动态段（displayKn=1 的采样父层）。
-({List<LevelUnitBar> unitBars, LevelUnitBar? activeUnit}) level0Units(
-  List<LevelBundle> levels,
-) {
+/// 把一步的各层快照记进 [timeline]，并推进 [seenUnits] 增量游标（就地修改）。
+///
+/// 主图合并链（[StepFreezeSessionState.knClockSeenUnits]）与独立 harness
+/// （[KnClockTimelineRecorder]）共用这一步，保证两条链产出的时间线一致。
+void recordKnClockStepInto({
+  required KnClockTimeline timeline,
+  required List<LevelBundle> levels,
+  required Map<int, int> seenUnits,
+  required int asOf,
+}) {
+  final byLevel = <int, KnClockLevelStep>{};
   for (final lv in levels) {
-    if (lv.level == 0) {
-      return (unitBars: lv.unitBars, activeUnit: lv.activeUnit);
-    }
+    final seen = seenUnits[lv.level] ?? 0;
+    // 游标可能被步退/重算打乱（新的 unitBars 比上次短），此时从当前长度重新起算。
+    final start = seen > lv.unitBars.length ? lv.unitBars.length : seen;
+    byLevel[lv.level] = KnClockLevelStep(
+      newlyConfirmed: start < lv.unitBars.length
+          ? lv.unitBars.sublist(start)
+          : const <LevelUnitBar>[],
+      activeUnit: lv.activeUnit,
+    );
+    seenUnits[lv.level] = lv.unitBars.length;
   }
-  return (unitBars: const <LevelUnitBar>[], activeUnit: null);
+  timeline.record(asOf, byLevel);
 }

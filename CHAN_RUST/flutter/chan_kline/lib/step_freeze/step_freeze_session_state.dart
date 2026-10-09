@@ -42,12 +42,12 @@ class StepFreezeSessionState {
   final DivergenceFreezeStore diverFreezeStore = DivergenceFreezeStore();
   final ChipPeakFreezeStore chipPeakStore = ChipPeakFreezeStore();
 
-  /// K1+ 采样钟的「当时段划分」时间线（动态段口径）。
-  /// 条件求值按 asOf 还原当时的段边界，不使用最终态结构。
+  /// K1+ 采样钟的「当时段划分」时间线（动态段口径，按层分轨）。
+  /// 条件求值按 asOf 还原当时**该层**的段边界，不使用最终态结构。
   final KnClockTimeline knClockTimeline = KnClockTimeline();
 
-  /// [knClockTimeline] 已吃掉的 level0 已确认段数（增量记录的游标）。
-  int knClockSeenUnits = 0;
+  /// [knClockTimeline] 各层已吃掉的已确认段数（增量记录的游标，key = 采样父层 level）。
+  final Map<int, int> knClockSeenUnits = <int, int>{};
 
   void clear() {
     judgmentHistoryByKn.clear();
@@ -73,6 +73,6 @@ class StepFreezeSessionState {
     diverFreezeStore.clear();
     chipPeakStore.clear();
 knClockTimeline.clear();
-    knClockSeenUnits = 0;
+    knClockSeenUnits.clear();
   }
 }

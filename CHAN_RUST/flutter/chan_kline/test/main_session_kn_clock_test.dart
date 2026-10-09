@@ -139,7 +139,7 @@ void main() {
   });
 
   test('主图会话的采样钟逐根在场（不是一段一个点）', () {
-    final ends = mainSession.knClock!.sampleEnds(null);
+    final ends = mainSession.knClock!.sampleEnds(0, null);
     expect(ends.length, greaterThan(bars.length ~/ 2),
         reason: 'K1+ 采样点应接近每根 K 一根（动态段逐根在场）');
   });

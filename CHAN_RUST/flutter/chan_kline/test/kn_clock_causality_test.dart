@@ -130,6 +130,48 @@ void main() {
     expect(inBody, isNotEmpty, reason: '段中必须有采样点（动态段口径）');
   });
 
+  test('按层同构：K2 的采样点/取值取自 level1，不是 level0（V1 回归）', () {
+    final clock = h.knClock!;
+    // 时间线必须每一层都记了轨（此前只记 level0，K2 全靠 K1 的格）
+    expect(clock.levels, containsAll(<int>[0, 1]),
+        reason: '采样钟必须按层分轨；只有 level0 会让 K2 拿到 K1 的虚拟K');
+    expect(clock.levels.length, greaterThan(1),
+        reason: '实际数据存在 K2 及以上，只记一层即违反全层同构');
+
+    // K2 的采样点集合 == level1 的采样点集合，且与 level0 不同
+    final k2Ends = collectKnOhlcSamplesAt(displayKn: 2, timeline: clock, asOf: null)
+        .map((e) => e.endX)
+        .toList();
+    expect(k2Ends, clock.sampleEnds(1, null),
+        reason: 'displayKn=2 的采样父层必须是 level1');
+    expect(k2Ends, isNot(equals(clock.sampleEnds(0, null))),
+        reason: 'K2 的采样点若与 K1 完全相同，说明仍在用 level0（V1 未修）');
+
+    // RAW.K2.HIGH 必须取自 level1 的动态段，而不是 level0 的。
+    // （close 用不了：正在生长的虚拟K收盘都等于当根 K0 收盘，两层天然相同；
+    //   high/low 才带出聚合区间的差异，是判层的有效探针。）
+    final rawK2 = readEvalClockSeries(
+      variableId: 'RAW.K2.HIGH',
+      asOf: bars.last.idx,
+      bars: bars,
+      levels: h.levels,
+      knClock: clock,
+    );
+    final rawK1 = readEvalClockSeries(
+      variableId: 'RAW.K1.HIGH',
+      asOf: bars.last.idx,
+      bars: bars,
+      levels: h.levels,
+      knClock: clock,
+    );
+    expect(rawK2, isNotEmpty, reason: 'K2 最高价应有样本');
+    final k1ByX = {for (final e in rawK1) e.availableAt: e.value};
+    final differing =
+        rawK2.where((e) => k1ByX[e.availableAt] != e.value).length;
+    expect(differing, greaterThan(0),
+        reason: 'K2 最高价与 K1 最高价在所有公共采样根上都相同 = 取错层（V1 未修）');
+  });
+
   test('段中信号可产生：买信号不再全是段尾', () {
     final xs = _signals(_buyAst(), _sellAst(), bars.last.idx)
         .where((s) => s.op.name == 'crossBelow')

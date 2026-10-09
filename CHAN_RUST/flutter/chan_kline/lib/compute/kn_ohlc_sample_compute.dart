@@ -67,20 +67,25 @@ List<KnOhlcSample> collectKnOhlcSamples({
 
 /// 用 asOf **当时**的动态段收样本（K1+ 穿越判定的正确口径 / 当下性）。
 ///
-/// 采样点 = 所有「x ≤ asOf 且 x 那一刻存在正在生长的段」的 bar——**每根 K 都在场判一次**，
-/// 与实盘一致。段定型那一根同样是采样点（那一刻它就是 active 段末端）。
+/// 采样点 = 所有「x ≤ asOf 且 x 那一刻 [displayKn 的采样父层] 存在正在生长的段」的 bar
+/// ——**每根 K 都在场判一次**，与实盘一致。段定型那一根同样是采样点（那一刻它就是 active 段末端）。
 /// 这与 [collectKnOhlcSamples] 的「一段一个点」不同：后者只在 asOf 恰好是段尾时等价。
+///
+/// **层号对齐（2026-10-09 修）**：采样父层取 `displayKn - 1`，与最终态口径
+/// `bundleAtLevel(levels, displayKn - 1)` 完全一致。此前本函数忽略 displayKn、一律用
+/// level0，于是 K2 及以上拿到的是 K1 的虚拟 K（`RAW.K2.CLOSE` 返回 K1 收盘），违反全层同构。
 List<KnOhlcSample> collectKnOhlcSamplesAt({
   required int displayKn,
   required KnClockTimeline timeline,
   int? asOf,
 }) {
   if (displayKn <= 0) return const [];
-  final ends = timeline.sampleEnds(asOf);
+  final level = displayKn - 1;
+  final ends = timeline.sampleEnds(level, asOf);
   if (ends.isEmpty) return const [];
   final out = <KnOhlcSample>[];
   for (final x in ends) {
-    final o = timeline.activeOhlcAt(x);
+    final o = timeline.activeOhlcAt(level, x);
     if (o == null) continue;
     out.add(KnOhlcSample(
       endX: x,

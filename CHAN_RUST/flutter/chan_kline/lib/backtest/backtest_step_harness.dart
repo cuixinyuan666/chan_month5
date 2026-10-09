@@ -220,9 +220,8 @@ Future<BacktestStepHarnessResult> driveStepHarnessWithProgress(
   for (var step = 0; step < total; step++) {
     growing.add(bars[step]);
     last = sess.syncTo(growing);
-    // K1+ 采样钟：记下这一步「当时」的段划分（动态段口径）
-    final u0 = level0Units(last.levels);
-    knClockRec.record(step, u0.unitBars, u0.activeUnit);
+    // K1+ 采样钟：记下这一步「当时」各层的段划分（动态段口径）
+    knClockRec.record(step, last.levels);
     final maxKn = chartMaxKn(levels: last.levels, k0Lines: last.k0Lines);
     final knHi = maxKn < 1 ? 1 : maxKn;
     final maxDisplayKn = maxKn <= 0 ? -1 : maxKn - 1;

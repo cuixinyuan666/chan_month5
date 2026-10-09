@@ -29,25 +29,27 @@ import 'step_freeze_session_state.dart';
 
 /// `_rebuildCombine` 冻结合并链（主图与机器人验证共用）。
 class StepFreezeMerger {
-  /// 记一步的 K1+ 采样钟快照（asOf 当时的已确认段增量 + 正在生长的那段）。
+  /// 记一步的 K1+ 采样钟快照（asOf 当时各层已确认段增量 + 正在生长的那段）。
   ///
-  /// 条件求值用它还原「当时那一段走到哪」，从而让动态段中途成立的 K1+ 穿越信号
+  /// 条件求值用它还原「当时那一层走到哪」，从而让动态段中途成立的 K1+ 穿越信号
   /// 在当根就能判定，而不是被最终态段划分推到段尾。详见 [KnClockTimeline]。
+  ///
+  /// **每层都记**（level = displayKn - 1）：只记 level0 会让 K2 及以上的采样点
+  /// 全部取到 K1 的格（`RAW.K2.CLOSE` 返回 K1 收盘），违反全层同构。
   static void recordKnClockStep({
     required StepFreezeSessionState state,
     required KlineCombineBundle bundle,
     required int stepIdx,
   }) {
-    final u0 = level0Units(bundle.levels);
     final t = state.knClockTimeline;
     // 时间线按步长单调；重复步（回刷同一步）直接跳过，避免重复累加增量。
     if (!t.isEmpty && t.lastAsOf >= stepIdx) return;
-    final seen = state.knClockSeenUnits;
-    final fresh = seen < u0.unitBars.length
-        ? u0.unitBars.sublist(seen)
-        : const <LevelUnitBar>[];
-    state.knClockSeenUnits = u0.unitBars.length;
-    t.record(stepIdx, newlyConfirmed: fresh, activeUnit: u0.activeUnit);
+    recordKnClockStepInto(
+      timeline: t,
+      levels: bundle.levels,
+      seenUnits: state.knClockSeenUnits,
+      asOf: stepIdx,
+    );
   }
 
   static int? activeSegIdxForKn(KlineCombineBundle bundle, int kn) {

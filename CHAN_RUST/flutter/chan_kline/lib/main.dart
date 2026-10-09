@@ -1,4 +1,4 @@
-﻿import 'dart:async';
+import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 
@@ -1135,7 +1135,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _stepFreeze.diverFreezeStore.clear();
         _stepFreeze.chipPeakStore.clear();
         _stepFreeze.knClockTimeline.clear();
-        _stepFreeze.knClockSeenUnits = 0;
+        _stepFreeze.knClockSeenUnits.clear();
         _clearBacktestSession();
       });
       final directOhlc = code == 'test' && _hasTestOhlcCsv();
@@ -1228,7 +1228,7 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _stepFreeze.diverFreezeStore.clear();
         _stepFreeze.chipPeakStore.clear();
         _stepFreeze.knClockTimeline.clear();
-        _stepFreeze.knClockSeenUnits = 0;
+        _stepFreeze.knClockSeenUnits.clear();
         _clearBacktestSession();
       });
       _msgHistory.append('加载K0失败：$e');
