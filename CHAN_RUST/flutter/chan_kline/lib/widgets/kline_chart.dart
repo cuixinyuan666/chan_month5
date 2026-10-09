@@ -1760,22 +1760,6 @@ class _KlineChartState extends State<KlineChart> {
   }
 
   Widget _legendLineRow(LegendLine l) {
-    final swatch = Container(
-      width: 14,
-      height: 3,
-      decoration: BoxDecoration(
-        color: l.bar
-            ? null
-            : l.color,
-        gradient: l.bar && l.color2 != null
-            ? LinearGradient(colors: [l.color, l.color2!])
-            : null,
-        borderRadius: BorderRadius.circular(2),
-        border: l.dashed
-            ? Border.all(color: l.color.withValues(alpha: 0.9), width: 0.5)
-            : null,
-      ),
-    );
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 1.5),
       child: Row(
@@ -1783,25 +1767,9 @@ class _KlineChartState extends State<KlineChart> {
         children: [
           SizedBox(
             width: 18,
+            height: 12,
             child: Center(
-              child: l.dashed
-                  ? Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        for (var i = 0; i < 3; i++) ...[
-                          Container(
-                            width: 3,
-                            height: 3,
-                            decoration: BoxDecoration(
-                              color: l.color,
-                              shape: BoxShape.circle,
-                            ),
-                          ),
-                          if (i < 2) const SizedBox(width: 2),
-                        ],
-                      ],
-                    )
-                  : swatch,
+              child: _LegendSwatch(l),
             ),
           ),
           const SizedBox(width: 4),
@@ -4287,6 +4255,7 @@ class _KlineCompositePainter extends CustomPainter {
     final midColor = ChartLevelLineStyle.colorForDisplayKn(kn);
     final upperColor = IndicatorLinePalette.bandUpper(midColor);
     final lowerColor = IndicatorLinePalette.bandLower(midColor);
+    // 布林线型签名：中轨实线、上轨实线、下轨虚线（与唐奇安完全不同的签名）
     _paintPriceSeries(
       canvas,
       w,
@@ -4296,8 +4265,8 @@ class _KlineCompositePainter extends CustomPainter {
       series: boll.mid,
       color: midColor,
       strokeWidth: 1.4,
+      dashPattern: LegendDash.solid,
     );
-    // 上下轨：上实下虚、深浅分级（与图例同源，2026-10-09）
     _paintPriceSeries(
       canvas,
       w,
@@ -4307,6 +4276,7 @@ class _KlineCompositePainter extends CustomPainter {
       series: boll.up,
       color: upperColor,
       strokeWidth: 1.0,
+      dashPattern: LegendDash.solid,
     );
     _paintPriceSeries(
       canvas,
@@ -4317,7 +4287,7 @@ class _KlineCompositePainter extends CustomPainter {
       series: boll.down,
       color: lowerColor,
       strokeWidth: 1.0,
-      dashPattern: const [5, 3],
+      dashPattern: LegendDash.dash,
     );
   }
 
@@ -4345,7 +4315,8 @@ class _KlineCompositePainter extends CustomPainter {
     final midColor = ChartLevelLineStyle.colorForDisplayKn(kn);
     final upperColor = IndicatorLinePalette.bandUpper(midColor);
     final lowerColor = IndicatorLinePalette.bandLower(midColor);
-    // 中轨：实线（与布林中轨同型）
+    // 唐奇安线型签名：中轨长虚线、上轨点虚线、下轨实线
+    // （与布林「中实/上实/下虚」完全不同，三类通道一眼可分）
     _paintPriceSeries(
       canvas,
       w,
@@ -4355,8 +4326,8 @@ class _KlineCompositePainter extends CustomPainter {
       series: don.mid,
       color: midColor,
       strokeWidth: 1.4,
+      dashPattern: LegendDash.longDash,
     );
-    // 上下轨：突破轨，上实下虚、深浅分级（与布林同型、与图例同源，2026-10-09）
     _paintPriceSeries(
       canvas,
       w,
@@ -4366,6 +4337,7 @@ class _KlineCompositePainter extends CustomPainter {
       series: don.up,
       color: upperColor,
       strokeWidth: 1.0,
+      dashPattern: LegendDash.dotDash,
     );
     _paintPriceSeries(
       canvas,
@@ -4376,7 +4348,7 @@ class _KlineCompositePainter extends CustomPainter {
       series: don.down,
       color: lowerColor,
       strokeWidth: 1.0,
-      dashPattern: const [5, 3],
+      dashPattern: LegendDash.solid,
     );
   }
 
@@ -7504,5 +7476,90 @@ class _KlineCompositePainter extends CustomPainter {
             oldDelegate.chipConfig != chipConfig ||
             oldDelegate.bars != bars;
     }
+  }
+}
+
+/// 图例里的线/柱小样：**按图上真实的虚线节距画**，不再一律画三个点。
+///
+/// 2026-10-09：此前虚线条一律画「三个圆点」，长虚线与点虚线在图例上长得一样，
+/// 区分不出唐奇安的中轨 / 上轨。现在直接拿 `LegendLine.dashPattern` 走同一套
+/// 虚线算法（与 `_paintPriceSeries` 同源），图例看到的就是图上的。
+class _LegendSwatch extends StatelessWidget {
+  const _LegendSwatch(this.line);
+
+  final LegendLine line;
+
+  @override
+  Widget build(BuildContext context) {
+    if (line.bar) {
+      return Container(
+        width: 16,
+        height: 5,
+        decoration: BoxDecoration(
+          gradient:
+              line.color2 != null ? LinearGradient(colors: [line.color, line.color2!]) : null,
+          color: line.color2 == null ? line.color : null,
+          borderRadius: BorderRadius.circular(1.5),
+        ),
+      );
+    }
+    return CustomPaint(
+      size: const Size(16, 12),
+      painter: _LegendLinePainter(
+        color: line.color,
+        dashPattern: line.dashPattern,
+      ),
+    );
+  }
+}
+
+class _LegendLinePainter extends CustomPainter {
+  const _LegendLinePainter({required this.color, required this.dashPattern});
+
+  final Color color;
+  final List<double>? dashPattern;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 1.6
+      ..strokeCap = StrokeCap.round
+      ..style = PaintingStyle.stroke;
+    final y = size.height / 2;
+    final pattern = dashPattern;
+    if (pattern == null) {
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
+      return;
+    }
+    // 与 _paintPriceSeries 同一套「按节距累加走线」算法
+    var x = 0.0;
+    var on = true;
+    var i = 0;
+    while (x < size.width) {
+      final len = pattern[i % pattern.length];
+      if (on) {
+        canvas.drawLine(
+          Offset(x, y),
+          Offset(x + len > size.width ? size.width : x + len, y),
+          paint,
+        );
+      }
+      x += len;
+      on = !on;
+      i++;
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _LegendLinePainter old) {
+    final a = old.dashPattern;
+    final b = dashPattern;
+    if (a == null || b == null) return a != b;
+    if (a.length != b.length) return true;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return true;
+    }
+    return false;
   }
 }

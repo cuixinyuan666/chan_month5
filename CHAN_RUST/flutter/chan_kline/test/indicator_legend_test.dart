@@ -68,37 +68,39 @@ void main() {
     expect(kdj.title, 'K0KDJ(9)');
   });
 
-  test('布林 / 唐奇安：上轨与下轨在图例上可区分（透明度分级 + 下轨虚线）', () {
-    for (final ind in [MainChartIndicator.boll(0), MainChartIndicator.donchian(0)]) {
-      final g = _one(ind);
-      expect(g.lines.length, 3);
-      final mid = g.lines[0];
-      final up = g.lines[1];
-      final down = g.lines[2];
-      expect(mid.label, '中轨');
-      expect(up.label, '上轨');
-      expect(down.label, '下轨');
-      expect(mid.dashed, isFalse, reason: '中轨实线');
-      expect(up.dashed, isFalse, reason: '上轨实线');
-      expect(down.dashed, isTrue, reason: '下轨虚线（突破轨惯例）');
-      // 透明度：下轨明显最淡，且与上轨不同（层色主色的 alpha 因层而异，不做跨层假设）
-      double a(Color c) => c.a;
-      expect(a(down.color), lessThan(a(up.color)));
-      expect(a(up.color), isNot(a(down.color)),
-          reason: '上/下轨色块同色同型就是分不出来的那次回归');
-    }
-  });
-
-  test('三类通道在图例上签名互不相同', () {
-    String sig(IndicatorLegendGroup g) =>
-        g.lines.map((l) => '${l.label}:${l.dashed}:${l.color.a.toStringAsFixed(2)}').join('|');
+  test('布林 / 唐奇安：上下轨可区分，且两者线型签名完全不同', () {
     final boll = _one(MainChartIndicator.boll(0));
     final don = _one(MainChartIndicator.donchian(0));
+
+    // 布林：中轨实线、上轨实线、下轨虚线（突破轨惯例）
+    expect(boll.lines[0].dashPattern, isNull, reason: '布林中轨实线');
+    expect(boll.lines[1].dashPattern, isNull, reason: '布林上轨实线');
+    expect(boll.lines[2].dashPattern, isNotNull, reason: '布林下轨虚线');
+
+    // 唐奇安：中轨长虚线、上轨点虚线、下轨实线
+    expect(don.lines[0].dashPattern, LegendDash.longDash);
+    expect(don.lines[1].dashPattern, LegendDash.dotDash);
+    expect(don.lines[2].dashPattern, isNull);
+
+    for (final g in [boll, don]) {
+      expect(g.lines.map((l) => l.label).toList(), ['中轨', '上轨', '下轨']);
+      // 上/下轨的线型必须不同（否则图例上分不出哪条是上轨哪条是下轨）
+      expect(g.lines[1].dashPattern, isNot(equals(g.lines[2].dashPattern)));
+      // 透明度：下轨最淡，且与上轨不同
+      double a(Color c) => c.a;
+      expect(a(g.lines[2].color), lessThan(a(g.lines[1].color)));
+    }
+
+    // 三类通道签名互不相同
+    String sig(IndicatorLegendGroup g) => g.lines
+        .map((l) => '${l.label}:${l.dashPattern?.join(",") ?? "solid"}'
+            ':${l.color.a.toStringAsFixed(2)}')
+        .join('|');
     final reg = _one(MainChartIndicator.regressionChannel(0));
-    expect(sig(reg), isNot(sig(boll)), reason: '回归通道（全虚线+更淡）须与布林不同');
-    expect(sig(reg), isNot(sig(don)), reason: '回归通道须与唐奇安不同');
-    // 布林与唐奇安在图上本就是同一层色系，靠标题+参数区分（既有设计，不动层色）
-    expect(boll.title, isNot(don.title));
+    expect(sig(boll), isNot(sig(don)),
+        reason: '布林与唐奇安在同一层同色，必须靠线型签名区分开');
+    expect(sig(reg), isNot(sig(boll)));
+    expect(sig(reg), isNot(sig(don)));
   });
 
   test('图例取色与画布取色同源（禁止图例自己另算一套色）', () {

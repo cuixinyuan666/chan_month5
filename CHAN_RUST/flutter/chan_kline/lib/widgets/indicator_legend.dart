@@ -16,8 +16,10 @@ class LegendLine {
   /// 主色（线色 / 柱的正色）。
   final Color color;
 
-  /// 虚线（回归通道、延伸族点线）。
-  final bool dashed;
+  /// 虚线节距（单位 px），null = 实线。
+  /// **与画布 `_paintPriceSeries(dashPattern:)` 用同一份数值**，
+  /// 图例小样按它画，图上就按它画 —— 不会「图上是长虚线、图例画三个点」。
+  final List<double>? dashPattern;
 
   /// 柱状元素（MACD 柱、背驰 ±1 柱）。
   final bool bar;
@@ -28,10 +30,29 @@ class LegendLine {
   const LegendLine(
     this.label, {
     required this.color,
-    this.dashed = false,
+    this.dashPattern,
     this.bar = false,
     this.color2,
   });
+
+  /// 是否虚线（供绘制与测试判定）。
+  bool get dashed => dashPattern != null;
+}
+
+/// 各类线条的**线型签名**，图上与图例共用的唯一落点。
+///
+/// 2026-10-09：布林与唐奇安原先在图上完全同型（同层同色、三条都实线），
+/// 图例两行色块也一模一样。现在用「中/上/下三档各自的实虚」把三类通道区分开：
+/// - 布林：中轨实线、上轨实线、下轨虚线（突破轨惯例）
+/// - 唐奇安：中轨长虚线、上轨点虚线、下轨实线（与布林签名完全不同）
+/// - 回归通道：三条全虚线、整体更淡（既有形态，不动）
+class LegendDash {
+  const LegendDash._();
+
+  static const List<double>? solid = null;
+  static const List<double> dash = [4, 3];
+  static const List<double> longDash = [7, 4];
+  static const List<double> dotDash = [2, 3];
 }
 
 class IndicatorLegendGroup {
@@ -174,38 +195,47 @@ List<IndicatorLegendGroup> buildIndicatorLegends({
       case MainIndicatorKind.boll:
         final mid = ChartLevelLineStyle.colorForDisplayKn(m.kn);
         out.add(IndicatorLegendGroup('${m.label}(${mathConfig.bollN})', [
-          LegendLine('中轨', color: mid),
-          LegendLine('上轨', color: IndicatorLinePalette.bandUpper(mid)),
-          LegendLine(
-              '下轨', color: IndicatorLinePalette.bandLower(mid), dashed: true),
+          LegendLine('中轨', color: mid, dashPattern: LegendDash.solid),
+          LegendLine('上轨',
+              color: IndicatorLinePalette.bandUpper(mid),
+              dashPattern: LegendDash.solid),
+          LegendLine('下轨',
+              color: IndicatorLinePalette.bandLower(mid),
+              dashPattern: LegendDash.dash),
         ]));
       case MainIndicatorKind.donchian:
         final mid = ChartLevelLineStyle.colorForDisplayKn(m.kn);
         out.add(IndicatorLegendGroup('${m.label}(${mathConfig.donchianN})', [
-          LegendLine('中轨', color: mid),
-          LegendLine('上轨', color: IndicatorLinePalette.bandUpper(mid)),
-          LegendLine(
-              '下轨', color: IndicatorLinePalette.bandLower(mid), dashed: true),
+          // 与布林完全不同的线型签名：中长虚 / 上点虚 / 下实线
+          LegendLine('中轨', color: mid, dashPattern: LegendDash.longDash),
+          LegendLine('上轨',
+              color: IndicatorLinePalette.bandUpper(mid),
+              dashPattern: LegendDash.dotDash),
+          LegendLine('下轨',
+              color: IndicatorLinePalette.bandLower(mid),
+              dashPattern: LegendDash.solid),
         ]));
       case MainIndicatorKind.regressionChannel:
         final c = ChartLevelLineStyle.forDisplayKn(m.kn).color;
         final k = mathConfig.regressK.toStringAsFixed(1);
         out.add(IndicatorLegendGroup('${m.label}(k=$k)', [
-          LegendLine('中轨', color: c, dashed: true),
-          LegendLine('上轨', color: c.withValues(alpha: 0.39), dashed: true),
-          LegendLine('下轨', color: c.withValues(alpha: 0.39), dashed: true),
+          LegendLine('中轨', color: c, dashPattern: LegendDash.dash),
+          LegendLine('上轨',
+              color: c.withValues(alpha: 0.39), dashPattern: LegendDash.dash),
+          LegendLine('下轨',
+              color: c.withValues(alpha: 0.39), dashPattern: LegendDash.dash),
         ]));
       case MainIndicatorKind.trendLine:
         final c = ChartLevelLineStyle.forDisplayKn(m.kn).color;
         out.add(IndicatorLegendGroup(m.label, [
-          LegendLine('支撑', color: c, dashed: true),
-          LegendLine('压力', color: c, dashed: true),
+          LegendLine('支撑', color: c, dashPattern: LegendDash.dash),
+          LegendLine('压力', color: c, dashPattern: LegendDash.dash),
         ]));
       case MainIndicatorKind.fxQuadPair:
         final c = ChartLevelLineStyle.forDisplayKn(m.kn).color;
         out.add(IndicatorLegendGroup(m.label, [
-          LegendLine('顶线', color: c, dashed: true),
-          LegendLine('底线', color: c, dashed: true),
+          LegendLine('顶线', color: c, dashPattern: LegendDash.dash),
+          LegendLine('底线', color: c, dashPattern: LegendDash.dash),
         ]));
       case MainIndicatorKind.stepRhythm:
         final pts = stepRhythmByKn[m.kn] ?? const <StepRhythmLinePoint>[];
