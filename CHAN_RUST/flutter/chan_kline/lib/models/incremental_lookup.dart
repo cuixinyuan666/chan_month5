@@ -1,4 +1,4 @@
-﻿import '../compute/adjacent_ratio_compute.dart';
+import '../compute/adjacent_ratio_compute.dart';
 import '../compute/class_n_bs_compute.dart';
 import '../compute/demark_compute.dart';
 import '../compute/divergence_compute.dart';
@@ -42,6 +42,10 @@ class IncrementalBarFeatureLookup {
 
   final Set<String> _sureZs = {};
   final Map<String, ({int x1, int x2, int kn})> _unsureZs = {};
+
+  /// 未确认中枢框上一次写进 lookup 的 seq（key 同 [_unsureZs]）。
+  /// 框合并后 seq 会变，靠它把「旧 seq 盖住的那一段」清干净（V6）。
+  final Map<String, int> _lastUnsureSeqByKey = {};
   final Set<String> _writtenHist = {};
   MathIndicatorConfig _mathCfg = const MathIndicatorConfig();
   MathSeriesFreezeStore? _mathFreeze;
@@ -70,6 +74,7 @@ class IncrementalBarFeatureLookup {
     maxBsClass = 9;
     _sureZs.clear();
     _unsureZs.clear();
+    _lastUnsureSeqByKey.clear();
     _writtenHist.clear();
     _mathCfg = const MathIndicatorConfig();
     _mathFreeze = null;
@@ -166,6 +171,7 @@ class IncrementalBarFeatureLookup {
     this.maxBsClass = full.maxBsClass;
     _sureZs.clear();
     _unsureZs.clear();
+    _lastUnsureSeqByKey.clear();
     _writtenHist.clear();
     _rebuildRegressSpans();
     _bindMath(
@@ -1455,14 +1461,22 @@ class IncrementalBarFeatureLookup {
       }
     }
 
-    void clear(int x1, int x2, int kn) {
-      for (var xi = x1; xi <= x2; xi++) {
+    void clear(int x1, int x2, int kn, Set<int> seqs) {
+      final lo = x1 <= x2 ? x1 : x2;
+      final hi = x1 <= x2 ? x2 : x1;
+      for (var xi = lo; xi <= hi; xi++) {
         final row = byIdx[xi];
         if (row == null) continue;
         final sub = row['sub'];
-        if (sub is Map<String, dynamic> && sub['zs_seq_$kn'] != null) {
-          // 只清本 seq 覆盖；若已被别的框盖住，后面 paint 会写回
-        }
+        if (sub is! Map<String, dynamic>) continue;
+        // 只清**本框自己盖住**的格（seq 对得上）；若已被别的框接手，就不动它
+        // （那个框在自己的 handle 里会写回）。
+        final s = sub['zs_seq_$kn'];
+        if (s is! int || !seqs.contains(s)) continue;
+        sub['zs_high_$kn'] = null;
+        sub['zs_low_$kn'] = null;
+        sub['zs_sure_$kn'] = null;
+        sub['zs_seq_$kn'] = null;
       }
     }
 
@@ -1474,12 +1488,28 @@ class IncrementalBarFeatureLookup {
           _sureZs.add(key);
         }
         _unsureZs.remove(key);
+        _lastUnsureSeqByKey.remove(key);
         return;
       }
+      // 未确认框会随段延伸被收窄/加长，同一根 K 上「当时那版」的中枢高低必须换掉，
+      // 否则历史格留着上一版的中轴 —— 违反「冻结不回写」，
+      // 并且会污染 ML 特征与计优统计（这两个都读这份 lookup）。
+      // [2026-10-09 修 · V6] 此前 clear() 只有注释没有实现，等于不清。
       final prev = _unsureZs[key];
-      if (prev != null) clear(prev.x1, prev.x2, kn);
+      final oldSeq = _lastUnsureSeqByKey[key];
+      if (prev != null) clear(prev.x1, prev.x2, kn, {f.seq});
+      // 合并后 seq 可能变：把旧 seq 盖住、新框又要接手的那一段也清掉。
+      if (prev != null && oldSeq != null && oldSeq != f.seq) {
+        clear(
+          prev.x1 < f.x1 ? f.x1 : prev.x1,
+          prev.x2 > f.x2 ? prev.x2 : f.x2,
+          kn,
+          {oldSeq},
+        );
+      }
       paint(f, kn);
       _unsureZs[key] = (x1: f.x1, x2: f.x2, kn: kn);
+      _lastUnsureSeqByKey[key] = f.seq;
     }
 
     for (final f in bundle.zsK0Frames) {
