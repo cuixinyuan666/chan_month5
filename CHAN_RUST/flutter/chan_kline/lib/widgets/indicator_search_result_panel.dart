@@ -8,6 +8,7 @@ import '../backtest/equity_curve.dart';
 import '../indicator_search/candidate_builder.dart';
 import '../indicator_search/search_core.dart';
 import '../indicator_search/search_env.dart';
+import '../indicator_search/search_result_columns.dart';
 import '../indicator_search/search_verdict_views.dart';
 
 /// 把两个 ScrollController 的偏移互相同步（冻结列 / 主体共用一份纵向滚动）。
@@ -43,12 +44,10 @@ class _SyncedScroll {
 }
 
 /// 三态指标格式化：不可用→「—」，∞→「∞」，否则定点小数 / 百分比。
-String _mn(MetricNum m, {bool pct = false, int digits = 2}) {
-  if (m.isUnavailable) return '—';
-  if (m.isInfinity) return '∞';
-  final v = m.value!;
-  return pct ? '${(v * 100).toStringAsFixed(1)}%' : v.toStringAsFixed(digits);
-}
+/// 2026-10-09 起本函数只在**点行明细卡**里用；宽表主列改由
+/// `search_result_columns.dart` 的列注册表渲染（与复制、TSV 同源）。
+String _mn(MetricNum m, {bool pct = false, int digits = 2}) =>
+    renderMetric(m, pct: pct, digits: digits);
 
 const List<String> _circled = [
   '①',
@@ -141,13 +140,7 @@ class _IndicatorSearchResultPanelState extends State<IndicatorSearchResultPanel>
   static const double _mainRowH = 44;
   static const double _detailH = 184;
 
-  // 主体可排序数值列宽（加宽避免「内盈利因子」等中文截断）
-  static const double _colTrades = 56;
-  static const double _colRate = 64;
-  static const double _colRatio = 64;
-  static const double _colPf = 62;
-  static const double _colNet = 78;
-  static const double _colScore = 74;
+  // 数值列宽统一在 search_result_columns.dart（kColTrades / kColRate / …）。
 
   @override
   void initState() {
@@ -197,12 +190,12 @@ class _IndicatorSearchResultPanelState extends State<IndicatorSearchResultPanel>
 
   List<ComboVerdict> get _sorted => sortVerdicts(widget.verdicts, widget.sort);
 
-  /// 主体总宽（用于横向滚动容器）。
-  double get _bodyW =>
-      _buyW +
-      _sellW +
-      (_colTrades + _colRate + _colRatio + _colPf + _colNet + _colScore + _colScore) *
-          2;
+/// 主体总宽（用于横向滚动容器）。由列注册表求和 —— 加列不再手算魔数。
+double get _bodyW =>
+    _buyW +
+    _sellW +
+    kInResultColumns.fold(0.0, (a, c) => a + c.width) +
+    kOutResultColumns.fold(0.0, (a, c) => a + c.width);
 
   @override
   Widget build(BuildContext context) {
@@ -270,10 +263,17 @@ class _IndicatorSearchResultPanelState extends State<IndicatorSearchResultPanel>
                 ),
               Padding(
                 padding: const EdgeInsets.only(top: 2),
-                child: Text(
-                  '任意文字可拖选复制；点行展开明细；鼠标右键点某一行＝复制该行整行（制表符分列，与 TSV 同列序）',
-                  style:
-                      TextStyle(fontSize: 10, color: Colors.grey.shade600),
+                child: Tooltip(
+                  // 悬停给出复制/落盘的完整列序（表头），粘进表格时不用猜
+                  message: '复制与落盘 TSV 的表头：\n$tsvHeaderLine',
+                  waitDuration: const Duration(milliseconds: 300),
+                  child: Text(
+                    '任意文字可拖选复制；点行展开明细；鼠标右键点某一行＝复制该行整行'
+                    '（制表符分列：候选名/买条件/卖条件 + 全部数值列）\n'
+                    '与落盘 TSV 由同一份列注册表生成，列数列序必然一致（悬停看列序）',
+                    style:
+                        TextStyle(fontSize: 10, color: Colors.grey.shade600),
+                  ),
                 ),
               ),
             ],
@@ -461,30 +461,23 @@ class _IndicatorSearchResultPanelState extends State<IndicatorSearchResultPanel>
   bool _eyeEnabled(ComboVerdict v) =>
       widget.onPreviewBacktest != null && v.hasAst;
 
-  /// 该行整行的 TSV 文本（列序与表头一致，买/卖条件用面板同一套中文口径）。
+  /// 该行整行的 TSV 文本：**候选名 + 买条件 + 卖条件 + 列注册表的全部数值列**。
+  ///
+  /// 2026-10-09 起与落盘 `VerdictSink` 共用 `buildResultTsvRow`，
+  /// 列数与列序由注册表决定，结构上不可能再与落盘文件错位。
   String _rowTsv(ComboVerdict v) {
-    final i = v.inSample;
-    final o = v.outSample;
     final maxKn = widget.maxKn;
-    return [
+    final head = [
+      v.name.replaceAll('\t', ' ').replaceAll('\r', ' ').replaceAll('\n', ' '),
       conditionDisplayText(v.buyText, maxKn: maxKn).replaceAll('\t', ' '),
       conditionDisplayText(v.sellText, maxKn: maxKn).replaceAll('\t', ' '),
-      i.trades,
-      _mn(i.winRate, pct: true),
-      _mn(i.payoffRatio),
-      _mn(i.profitFactor),
-      i.netProfit.toStringAsFixed(0),
-      _mn(i.sharpe),
-      _mn(i.calmar),
-      o.trades,
-      _mn(o.winRate, pct: true),
-      _mn(o.payoffRatio),
-      _mn(o.profitFactor),
-      o.netProfit.toStringAsFixed(0),
-      _mn(o.sharpe),
-      _mn(o.calmar),
     ].join('\t');
+    return '$head\t${buildResultTsvRow(inSample: v.inSample, outSample: v.outSample)}';
   }
+
+  /// 复制 / 落盘 TSV 的表头（同样由列注册表生成，便于直接粘进表格、对齐列）。
+  static String get tsvHeaderLine =>
+      'name\tbuy\tsell\t${buildResultTsvHeader()}';
 
   /// 右键整行复制：写入剪贴板并给一条短提示。
   void _copyRow(ComboVerdict v) {
@@ -509,19 +502,13 @@ class _IndicatorSearchResultPanelState extends State<IndicatorSearchResultPanel>
     return '以该行买卖条件替换当前策略并打开回测台';
   }
 
-  /// 表头列名 tooltip：白话口径 + 英文列键（寻优结果宽表列说明的唯一落点）。
-  ///
-  /// [scope] 取「样本内 / 样本外」；[plain] 是该指标的白话算法；[note] 补三态说明。
-  static String _colTip(
-    String label,
-    String key,
-    String scope,
-    String plain, [
-    String? note,
-  ]) =>
-      note == null
-          ? '$label：$plain（$scope）\n$key'
-          : '$label：$plain（$scope）\n$key（$note）';
+  /// 数值列表头：列名 / tooltip / 排序键全部来自列注册表（唯一落点）。
+  Widget _numericHeaderCell(SearchResultColumn c, String scope) =>
+      _sortableHeaderCell(
+        '${scope}${c.label}',
+        c.sort,
+        tooltip: c.tip(scope),
+      ).w(c.width);
 
   Widget _bodyHeader() => Listener(
         onPointerSignal: (n) {
@@ -548,98 +535,8 @@ class _IndicatorSearchResultPanelState extends State<IndicatorSearchResultPanel>
                 tooltip: '卖出条件：该组合的平仓触发条件\n'
                     '点本行可展开看全文\n(sell)',
               ),
-              _sortableHeaderCell(
-                '内笔数',
-                VerdictSortColumn.inTrades,
-                tooltip: _colTip('内笔数', 'in_trades', '样本内',
-                    '已平仓笔数（盈利＋亏损＋持平）'),
-              ).w(_colTrades),
-              _sortableHeaderCell(
-                '内胜率',
-                VerdictSortColumn.inWinRate,
-                tooltip: _colTip('内胜率', 'in_win_rate', '样本内',
-                    '盈利笔数 ÷ 已平仓总笔数'),
-              ).w(_colRate),
-              _sortableHeaderCell(
-                '内盈亏比',
-                VerdictSortColumn.inPayoff,
-                tooltip: _colTip(
-                    '内盈亏比', 'in_payoff_ratio', '样本内', '单笔平均盈利 ÷ 单笔平均亏损',
-                    '全胜无亏显示 ∞'),
-              ).w(_colRatio),
-              _sortableHeaderCell(
-                '内盈利因子',
-                VerdictSortColumn.inPf,
-                tooltip: _colTip(
-                    '内盈利因子', 'in_profit_factor', '样本内', '毛利 ÷ 毛亏',
-                    '无亏损显示 ∞，0 成交显示 —'),
-              ).w(_colPf),
-              _sortableHeaderCell(
-                '内净利',
-                VerdictSortColumn.inNet,
-                tooltip: _colTip('内净利', 'in_net_profit', '样本内',
-                    '末净值 − 初始本金（已扣费用与滑点）'),
-              ).w(_colNet),
-              _sortableHeaderCell(
-                '内夏普',
-                VerdictSortColumn.inSharpe,
-                tooltip: _colTip(
-                    '内夏普', 'in_sharpe', '样本内', '每笔收益均值 ÷ 每笔收益标准差，按 252 根 K 年化',
-                    '标准差为 0 显示 —'),
-              ).w(_colScore),
-              _sortableHeaderCell(
-                '内卡玛',
-                VerdictSortColumn.inCalmar,
-                tooltip: _colTip(
-                    '内卡玛', 'in_calmar', '样本内', '年化收益 ÷ 最大回撤幅度',
-                    '回撤为 0 显示 —'),
-              ).w(_colScore),
-              _sortableHeaderCell(
-                '外笔数',
-                VerdictSortColumn.outTrades,
-                tooltip: _colTip('外笔数', 'out_trades', '样本外',
-                    '已平仓笔数（盈利＋亏损＋持平）'),
-              ).w(_colTrades),
-              _sortableHeaderCell(
-                '外胜率',
-                VerdictSortColumn.outWinRate,
-                tooltip: _colTip('外胜率', 'out_win_rate', '样本外',
-                    '盈利笔数 ÷ 已平仓总笔数'),
-              ).w(_colRate),
-              _sortableHeaderCell(
-                '外盈亏比',
-                VerdictSortColumn.outPayoff,
-                tooltip: _colTip(
-                    '外盈亏比', 'out_payoff_ratio', '样本外', '单笔平均盈利 ÷ 单笔平均亏损',
-                    '全胜无亏显示 ∞'),
-              ).w(_colRatio),
-              _sortableHeaderCell(
-                '外盈利因子',
-                VerdictSortColumn.outPf,
-                tooltip: _colTip(
-                    '外盈利因子', 'out_profit_factor', '样本外', '毛利 ÷ 毛亏',
-                    '无亏损显示 ∞，0 成交显示 —'),
-              ).w(_colPf),
-              _sortableHeaderCell(
-                '外净利',
-                VerdictSortColumn.outNet,
-                tooltip: _colTip('外净利', 'out_net_profit', '样本外',
-                    '末净值 − 初始本金（已扣费用与滑点）'),
-              ).w(_colNet),
-              _sortableHeaderCell(
-                '外夏普',
-                VerdictSortColumn.outSharpe,
-                tooltip: _colTip(
-                    '外夏普', 'out_sharpe', '样本外', '每笔收益均值 ÷ 每笔收益标准差，按 252 根 K 年化',
-                    '标准差为 0 显示 —'),
-              ).w(_colScore),
-              _sortableHeaderCell(
-                '外卡玛',
-                VerdictSortColumn.outCalmar,
-                tooltip: _colTip(
-                    '外卡玛', 'out_calmar', '样本外', '年化收益 ÷ 最大回撤幅度',
-                    '回撤为 0 显示 —'),
-              ).w(_colScore),
+              for (final c in kInResultColumns) _numericHeaderCell(c, '内'),
+              for (final c in kOutResultColumns) _numericHeaderCell(c, '外'),
             ],
           ),
         ),
@@ -677,20 +574,11 @@ class _IndicatorSearchResultPanelState extends State<IndicatorSearchResultPanel>
                 children: [
                   _ruleCell(v.buyText),
                   _ruleCell(v.sellText),
-                  _numCell('${i.trades}', _colTrades),
-                  _numCell(_mn(i.winRate, pct: true), _colRate),
-                  _numCell(_mn(i.payoffRatio), _colRatio),
-                  _numCell(_mn(i.profitFactor), _colPf),
-                  _numCell(i.netProfit.toStringAsFixed(0), _colNet),
-                  _numCell(_mn(i.sharpe), _colScore),
-                  _numCell(_mn(i.calmar), _colScore),
-                  _numCell('${o.trades}', _colTrades),
-                  _numCell(_mn(o.winRate, pct: true), _colRate),
-                  _numCell(_mn(o.payoffRatio), _colRatio),
-                  _numCell(_mn(o.profitFactor), _colPf),
-                  _numCell(o.netProfit.toStringAsFixed(0), _colNet),
-                  _numCell(_mn(o.sharpe), _colScore),
-                  _numCell(_mn(o.calmar), _colScore),
+                  // 数值列由列注册表驱动：文案 / 宽度与表头、复制、TSV 同源
+                  for (final c in kInResultColumns)
+                    _numCell(c.text(i), c.width),
+                  for (final c in kOutResultColumns)
+                    _numCell(c.text(o), c.width),
                 ],
               ),
             ),

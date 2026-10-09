@@ -3,8 +3,13 @@ import 'package:chan_kline/indicator_search/search_env.dart';
 import 'package:chan_kline/indicator_search/candidate_builder.dart';
 
 import 'search_core.dart';
+// 列注册表反过来引用本文件的 VerdictSortColumn —— Dart 允许这种库级循环导入。
+import 'search_result_columns.dart';
 
 /// 结果排序列。默认（无列）保持候选生成顺序，不隐含优劣排名。
+///
+/// 列的**宽度 / 文案 / tooltip / 取值 / tsvKey** 全在 `search_result_columns.dart`
+/// 的注册表里，本枚举只承担「列身份」与「快照里存了哪几列」。
 enum VerdictSortColumn {
   type,
   inTrades,
@@ -14,6 +19,13 @@ enum VerdictSortColumn {
   inNet,
   inSharpe,
   inCalmar,
+  // 2026-10-09 新增主列（值本来就是算好的，只提升为可排）
+  inDdPct,
+  inSortino,
+  inExpectancy,
+  inLossStreak,
+  /// 样本内平均持仓 K 数。此项原本是「有枚举、无列绑定」的死枚举，现正式接上。
+  avgHoldBars,
   outTrades,
   outWinRate,
   outPayoff,
@@ -21,7 +33,11 @@ enum VerdictSortColumn {
   outNet,
   outSharpe,
   outCalmar,
-  avgHoldBars,
+  outDdPct,
+  outSortino,
+  outExpectancy,
+  outLossStreak,
+  outAvgHoldBars,
 }
 
 /// 单键排序状态：列 + 升/降序。
@@ -81,41 +97,20 @@ int _cmpMetric(MetricNum a, MetricNum b) {
 }
 
 /// 取某列在两行上的原始比较值（不乘方向；方向由调用方按键处理）。
+///
+/// 2026-10-09 起**由列注册表驱动**：数值列一律取 `resultColumnOf(col).metric(...)`，
+/// 与表头显示的那一列永远同源，杜绝「加了显示列却忘了加排序分支」或反之。
+/// `type` 列不是数值列，保留字符串比较。
 int _compareCol(ComboVerdict a, ComboVerdict b, VerdictSortColumn col) {
-  switch (col) {
-    case VerdictSortColumn.type:
-      return a.categoryLabel.compareTo(b.categoryLabel);
-    case VerdictSortColumn.inTrades:
-      return a.inSample.trades.compareTo(b.inSample.trades);
-    case VerdictSortColumn.inWinRate:
-      return _cmpMetric(a.inSample.winRate, b.inSample.winRate);
-    case VerdictSortColumn.inPayoff:
-      return _cmpMetric(a.inSample.payoffRatio, b.inSample.payoffRatio);
-    case VerdictSortColumn.inPf:
-      return _cmpMetric(a.inSample.profitFactor, b.inSample.profitFactor);
-    case VerdictSortColumn.inNet:
-      return a.inSample.netProfit.compareTo(b.inSample.netProfit);
-    case VerdictSortColumn.inSharpe:
-      return _cmpMetric(a.inSample.sharpe, b.inSample.sharpe);
-    case VerdictSortColumn.inCalmar:
-      return _cmpMetric(a.inSample.calmar, b.inSample.calmar);
-    case VerdictSortColumn.outTrades:
-      return a.outSample.trades.compareTo(b.outSample.trades);
-    case VerdictSortColumn.outWinRate:
-      return _cmpMetric(a.outSample.winRate, b.outSample.winRate);
-    case VerdictSortColumn.outPayoff:
-      return _cmpMetric(a.outSample.payoffRatio, b.outSample.payoffRatio);
-    case VerdictSortColumn.outPf:
-      return _cmpMetric(a.outSample.profitFactor, b.outSample.profitFactor);
-    case VerdictSortColumn.outNet:
-      return a.outSample.netProfit.compareTo(b.outSample.netProfit);
-    case VerdictSortColumn.outSharpe:
-      return _cmpMetric(a.outSample.sharpe, b.outSample.sharpe);
-    case VerdictSortColumn.outCalmar:
-      return _cmpMetric(a.outSample.calmar, b.outSample.calmar);
-    case VerdictSortColumn.avgHoldBars:
-      return _cmpMetric(a.inSample.avgHoldBars, b.inSample.avgHoldBars);
+  if (col == VerdictSortColumn.type) {
+    return a.categoryLabel.compareTo(b.categoryLabel);
   }
+  final spec = resultColumnOf(col);
+  if (spec == null) return 0;
+  final out = col.name.startsWith('out');
+  final ma = spec.metric(out ? a.outSample : a.inSample);
+  final mb = spec.metric(out ? b.outSample : b.inSample);
+  return _cmpMetric(ma, mb);
 }
 
 List<ComboVerdict> sortVerdicts(

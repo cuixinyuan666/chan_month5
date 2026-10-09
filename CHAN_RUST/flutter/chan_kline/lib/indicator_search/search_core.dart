@@ -5,6 +5,8 @@ import 'package:chan_kline/backtest/backtest_metrics.dart';
 import 'package:chan_kline/backtest/equity_curve.dart';
 import 'package:chan_kline/models/kline_bar.dart';
 
+import 'search_result_columns.dart';
+
 /// 寻优公共部件：候选枚举、样本内外切分、结果落盘。
 class ComboCand {
   final String name;
@@ -184,32 +186,33 @@ int splitBarIdx(List<KlineBar> bars, {double inRatio = 0.7}) {
 }
 
 class VerdictSink {
-  VerdictSink(this.path, {this.writeHeader = true});
+  VerdictSink(this.path, {this.writeHeader = true, this.maxKn = 16});
 
   final String path;
   final bool writeHeader;
+
+  /// 买卖条件转中文口径时要用的层数上限（与面板同源）。
+  final int maxKn;
+
   final StringBuffer _pending = StringBuffer();
   bool _headerWritten = false;
 
   void add(ComboVerdict v) {
-    if (writeHeader && !_headerWritten) {
-      _pending.writeln(
-        'name\tin_t\tin_wr\tin_po\tin_pf\tin_net\tin_sh\tin_calmar'
-        '\tout_t\tout_wr\tout_po\tout_pf\tout_net\tout_sh\tout_calmar',
-      );
-      _headerWritten = true;
-    }
-    final i = v.inSample, o = v.outSample;
-    _pending.writeln(
-      '${_tsvCell(v.name)}\t${i.trades}\t${_numCell(i.winRate, pct: true)}'
-      '\t${_numCell(i.payoffRatio)}\t${_numCell(i.profitFactor)}\t'
-      '${i.netProfit.toStringAsFixed(0)}\t${_numCell(i.sharpe)}\t'
-      '${_numCell(i.calmar)}\t'
-      '${o.trades}\t${_numCell(o.winRate, pct: true)}'
-      '\t${_numCell(o.payoffRatio)}\t${_numCell(o.profitFactor)}\t'
-      '${o.netProfit.toStringAsFixed(0)}\t${_numCell(o.sharpe)}\t'
-      '${_numCell(o.calmar)}',
-    );
+    _ensureHeader();
+    _pending.writeln([
+      _clean(v.name),
+      _clean(conditionDisplayText(v.buyText, maxKn: maxKn)),
+      _clean(conditionDisplayText(v.sellText, maxKn: maxKn)),
+      buildResultTsvRow(inSample: v.inSample, outSample: v.outSample),
+    ].join('\t'));
+  }
+
+  /// 表头与数据行都由 `search_result_columns.dart` 的列注册表生成，
+  /// 与面板表头、右键复制**同一份列序与渲染**（2026-10-09 起）。
+  void _ensureHeader() {
+    if (!writeHeader || _headerWritten) return;
+    _pending.writeln('name\tbuy\tsell\t${buildResultTsvHeader()}');
+    _headerWritten = true;
   }
 
   /// 将缓冲追加落盘（不用长期 [IOSink]，避免 Windows 上 flush 报 StreamSink bound）。
@@ -226,23 +229,10 @@ class VerdictSink {
   }
 
   void close() {
-    if (writeHeader && !_headerWritten) {
-      _pending.writeln(
-        'name\tin_t\tin_wr\tin_po\tin_pf\tin_net\tin_sh\tin_calmar'
-        '\tout_t\tout_wr\tout_po\tout_pf\tout_net\tout_sh\tout_calmar',
-      );
-      _headerWritten = true;
-    }
+    _ensureHeader();
     flush();
   }
 
-  static String _tsvCell(String s) =>
+  static String _clean(String s) =>
       s.replaceAll('\t', ' ').replaceAll('\r', ' ').replaceAll('\n', ' ');
-
-  static String _numCell(MetricNum m, {bool pct = false}) {
-    if (m.isUnavailable) return '—';
-    if (m.isInfinity) return 'inf';
-    final v = m.value!;
-    return pct ? '${(v * 100).toStringAsFixed(1)}' : v.toStringAsFixed(3);
-  }
 }
