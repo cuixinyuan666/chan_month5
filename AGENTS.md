@@ -95,6 +95,11 @@
 | [`grill-me`](.trae/skills/grill-me/SKILL.md) | 需要把一个方案/设计问透、逐分支钉死决策时；用户说「grill me」「质询」 |
 | [`obsidian`](.trae/skills/obsidian/SKILL.md) | 任务收尾同步 Obsidian（task-log → 日笔记 → MOC） |
 
+> **`.trae/skills/` 下另有 11 个 `chan-*` 目录，一律不要读**（2026-10-09 核实）：它们的内容指向
+> 另一个老工程（Python 的 `a_replay_trainer.py` / `ZS/ZSList.py` / `a_rust_core/chan-core/src/zs.rs`），
+> 与本工程（Flutter + Rust `CHAN_RUST`）没有对应文件，路径全是失效的。留在原地只为不误删。
+> 本工程的规则一律以本文件 / `knowledge.md` / `error remember.md` / `ROBOT_VERIFY.md` 为准。
+
 ### 解释性内容（[`knowledge.md`](knowledge.md)）
 
 - 回答「**这是什么意思 / 为什么这样 / 这个词指什么**」这类问题时，**先查 [`knowledge.md`](knowledge.md)**；**已在篇内的概念，直接引用该篇，不要重新推导、不要顺手改代码**。
