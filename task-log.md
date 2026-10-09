@@ -69,7 +69,7 @@
 
 - **要点**：离开 Kn 仅在确认态且与上一中枢不重叠时，上一虚框才变实线定型；动态 Kn 离开不得定型。新增 `find_zs_with_confirmed(n_confirmed)`，绘制跟 `is_sure`。
 - **关键路径**：`CHAN_RUST/rust/chan_data/src/zs.rs`、`pipeline.rs`、`CHAN_RUST/flutter/chan_kline/lib/widgets/kline_chart.dart`、`lib/history/msg_history.dart`
-- **注意**：改 Rust 后需 `build_rust.ps1` 重载 DLL；全层同构。
+- **注意**：改 Rust 后需 `b`` 重载 DLL；全层同构。
 
 ---
 
@@ -196,14 +196,14 @@
 
 - **要点**：一买同枢更高低不标；标签改 `1Ba/1Bb…`；镜像落地一卖 `1Sa…`（ZD_curr>ZG_prev）；副图改名「Kn一类BS」买卖同画（+1/-1）。
 - **相关路径**：`buy1.rs`、`pipeline.rs`、`combine.rs`；Flutter `sell1_frame.dart`、`chart_indicator.dart`、`kline_chart.dart`、`msg_history.dart`
-- **注意**：native `chan_ffi.dll` 若被占用需关应用后重跑 `build_rust.ps1`；Debug 目录 DLL 已更新。
+- **注意**：native `chan_ffi.dll` 若被占用需关应用后重跑 `b``；Debug 目录 DLL 已更新。
 
 ---
 
 ### 2026-07-29 — 一类BS副图标签色与DLL重载
 
 - **要点**：关掉占用中的 chan_kline 后重编并复制 chan_ffi.dll，使副图标签切到 1Ba/1Sa；买点固定红、卖点固定绿。
-- **相关路径**：`scripts/build_rust.ps1`、`kline_chart.dart` `_drawKnClass1BsSubChart`
+- **相关路径**：`scripts/b``、`kline_chart.dart` `_drawKnClass1BsSubChart`
 
 ---
 
@@ -485,7 +485,7 @@ Rust `buy2.rs`（新）→ pipeline/combine → Flutter 会话双键冻结（`cl
 
 - **要点**：默认 `period=tick` 一字线画点；同分钟 `+i ms` 不撞戳；聚合周期仍 ticks→1m 并扩展多周期。标题条左开孔改为屏宽-140（修右侧指标单击被拖动区挡住）。tick 筹码按分笔序写 bins、禁三角。
 - **相关路径**：`chan_data/{kline,tick,offline,chip}.rs`、`main.dart`、`kline_chart.dart`、`chip_profile_compute.dart`、`msg_history.dart`
-- **注意**：冷启；native `chan_ffi.dll` 若占用需关进程后再 `build_rust.ps1`；长区间建议收窄日期。
+- **注意**：冷启；native `chan_ffi.dll` 若占用需关进程后再 `b``；长区间建议收窄日期。
 
 ---
 
@@ -496,9 +496,9 @@ Rust `buy2.rs`（新）→ pipeline/combine → Flutter 会话双键冻结（`cl
 
 ---
 
-### 2026-08-01 — 【口径】build_rust.ps1 自动关闭运行中 app
+### 2026-08-01 — 【口径】b` 自动关闭运行中 app
 
-- **问题**：chan_kline 运行时 `chan_ffi.dll` 被占用，`build_rust.ps1` 复制 DLL 失败。
+- **问题**：chan_kline 运行时 `chan_ffi.dll` 被占用，`b`` 复制 DLL 失败。
 - **变更**：脚本内新增「检测→Stop-Process 强制关闭→WaitForExit 等待句柄释放」逻辑；两处 DLL 复制改为带 5 次重试的 `Copy-Dll`。
 - **踩坑**：脚本原为 UTF-16 LE 编码（PowerShell 5.1 原生支持中文）；若写成无 BOM UTF-8 会被 5.1 按 GBK 误读，中文乱码且 `$` 被吞（`$($App.Id)` 变字面），修改后必须还原 UTF-16 LE。
 - **验证**：启动 app 后跑脚本，自动关闭（PID 输出正确）、两处复制均成功。
@@ -595,8 +595,8 @@ Rust `buy2.rs`（新）→ pipeline/combine → Flutter 会话双键冻结（`cl
 
 - **合并 GG/DD ≠ 框体高低**：Rust `MergeEngine` 向上合并取「高高/高低」，框体低点会被抬高；tooltip 的 GG/DD 必须在合并组内按原始K（Kn 用当步单元）重算 max(high)/min(low)。框体高低点只配 MG/MD。勿再把 `combine_high/low` 当 GG/DD。
 - **切周期一字线 ≠ 聚合坏了**：Rust 聚合产出真 OHLC；前端若只 `setState(_period)` 不重载，会用「新周期蜡烛画法」画内存里仍是 tick 的数据（O=H=L=C）→ 整屏一字线。下拉选周期后必须立刻 `_loadKlines()`。排查先分清后端/前端，可用 ctypes 直调 `chan_ffi.dll` 证聚合。
-- **DLL 复制仍失败**：`build_rust.ps1` 会杀 `chan_kline` 进程并重试复制；若终端里仍挂着 `flutter run`，`windows/native/chan_ffi.dll` 可能继续被占用。应先在该终端 `q` 退出 `flutter run`（或结束整个 Flutter/Dart 树）再跑脚本。
-- **build_rust.ps1 编码（再踩）**：必须 **UTF-16 LE + BOM（FF FE）**。无 BOM 的 UTF-16 会被 PS 按系统码页误读 → 中文乱码 + `Missing closing ')'`（`$($App.Id)` 被拆坏）。编辑后应用解析检查确认 `PARSE_OK`，勿只看文件「看起来像 UTF-16」。
+- **DLL 复制仍失败**：`b`` 会杀 `chan_kline` 进程并重试复制；若终端里仍挂着 `flutter run`，`windows/native/chan_ffi.dll` 可能继续被占用。应先在该终端 `q` 退出 `flutter run`（或结束整个 Flutter/Dart 树）再跑脚本。
+- **b` 编码（再踩）**：必须 **UTF-16 LE + BOM（FF FE）**。无 BOM 的 UTF-16 会被 PS 按系统码页误读 → 中文乱码 + `Missing closing ')'`（`$($App.Id)` 被拆坏）。编辑后应用解析检查确认 `PARSE_OK`，勿只看文件「看起来像 UTF-16」。
 - **落盘位置**：口径正文见下方 2026-08-01 两条；UI 常驻历史见 `msg_history.appendMergeRangeExtreme` / `appendPeriodAutoReload`。
 
 ---
@@ -1021,14 +1021,14 @@ Rust `buy2.rs`（新）→ pipeline/combine → Flutter 会话双键冻结（`cl
 
 - **要点**：Rust 钉死一类/二类 discovery x；`try_combine` 跳过已 `is_sure`；`bar_features` 增 `zs_hits`/`bs1_hits`；tip 三类+跟 `maxBsClass`。「复制调试信息」改绑本轮 A/B/C/D 验收。须重编 `chan_ffi.dll`。
 - **相关路径**：`pipeline.rs`、`zs.rs`、`feature.rs`、`combine.rs`、`bar_crosshair_feature.dart`、`bar_feature_lookup.dart`、`audit_probe_snapshot.dart`
-- **注意**：冷启后跳末→复制调试信息看判定；flutter run 占用 DLL 时先 `q` 再跑 `build_rust.ps1`
+- **注意**：冷启后跳末→复制调试信息看判定；flutter run 占用 DLL 时先 `q` 再跑 `b``
 
 ---
 
-### 2026-08-08 — build_rust.ps1 编完后自动 flutter run -d windows
+### 2026-08-08 — b` 编完后自动 flutter run -d windows
 
-- **要点**：`CHAN_RUST/scripts/build_rust.ps1` 在复制 `chan_ffi.dll` 后进入 `flutter/chan_kline` 执行 `flutter run -d windows`。
-- **相关路径**：`CHAN_RUST/scripts/build_rust.ps1`
+- **要点**：`CHAN_RUST/scripts/b`` 在复制 `chan_ffi.dll` 后进入 `flutter/chan_kline` 执行 `flutter run -d windows`。
+- **相关路径**：`CHAN_RUST/scripts/b``
 - **注意**：脚本会先杀占用中的 `chan_kline`；`flutter run` 占住该终端
 
 ---
@@ -2668,18 +2668,18 @@ Rust `buy2.rs`（新）→ pipeline/combine → Flutter 会话双键冻结（`cl
 
 ---
 
-### 2026-09-09 09:55 — 加固 build_rust.ps1 清理残留插件联接
+### 2026-09-09 09:55 — 加固 b` 清理残留插件联接
 
 - **执行者**：cursor
 - **任务类型**：脚本 / 文档
-- **上下文**：`build_rust.ps1` 编完 DLL 后 `flutter run` 报 PathExistsException：`windows/flutter/ephemeral/.plugin_symlinks/jni` 已存在（errno 183）。上次异常退出联接残留；在 `scripts` 目录执行 `flutter clean` 无效。
+- **上下文**：`b`` 编完 DLL 后 `flutter run` 报 PathExistsException：`windows/flutter/ephemeral/.plugin_symlinks/jni` 已存在（errno 183）。上次异常退出联接残留；在 `scripts` 目录执行 `flutter clean` 无效。
 - **关键操作**：
-  1. `build_rust.ps1` 启动前只拆 `.plugin_symlinks`（不删整个 ephemeral）；联接用 `rmdir`，避免 `Remove-Item -Recurse` 跟进 pub 缓存
+  1. `b`` 启动前只拆 `.plugin_symlinks`（不删整个 ephemeral）；联接用 `rmdir`，避免 `Remove-Item -Recurse` 跟进 pub 缓存
   2. `flutter run` 30 秒内非 0 退出则再清一次并重试一次
   3. 未删 `CHAN_RUST/scripts` 其它文件（发布/Android/闸门脚本均有调用方）；README 补全脚本列表，并写明 Flutter 命令必须在 `chan_kline` 下执行
 - **结果**：启动脚本可自清残留 `jni` 联接；未改缠论步进/冻结内核
 - **演示**：全新功能·免对比（脚本加固）
-- **注意事项**：无需重编 DLL。仍用 `.\CHAN_RUST\scripts\build_rust.ps1` 启动即可
+- **注意事项**：无需重编 DLL。仍用 `.\CHAN_RUST\scripts\b`` 启动即可
 
 ---
 
@@ -3992,10 +3992,10 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **任务类型**：Bug修复 / 构建脚本
 - **操作**：
   1. 根因：`flutter build windows --debug` 已成功，但 `flutter run` 再次触发 `flutter_assemble`，MSB8066 失败；且 PowerShell 曾把 run 的 stdout 误当退出码。
-  2. `build_rust.ps1` 改为预编译成功后直接运行 `build\windows\x64\runner\Debug\chan_kline.exe`，并设置 `CHAN_REPO_ROOT` / `CHAN_KLINE_ROOT` 供机器人验证找路径。
+  2. `b`` 改为预编译成功后直接运行 `build\windows\x64\runner\Debug\chan_kline.exe`，并设置 `CHAN_REPO_ROOT` / `CHAN_KLINE_ROOT` 供机器人验证找路径。
   3. 构建输出写入 `build_windows_last.log`；若退出码非 0 但 exe 已生成则继续（常见于 Flutter 资源镜像 stderr 警告）。
-- **结果**：本地 `flutter build windows --debug` 可产出 exe；请用 `.\build_rust.ps1` 编库并启动，不再依赖 `flutter run`。
-- **演示**：在 `CHAN_RUST\scripts` 执行 `.\build_rust.ps1`，应看到 `Launch (no flutter run)` 后 App 窗口打开；`session.json` 为 active 时进入机器人验证进度窗。
+- **结果**：本地 `flutter build windows --debug` 可产出 exe；请用 `.\b`` 编库并启动，不再依赖 `flutter run`。
+- **演示**：在 `CHAN_RUST\scripts` 执行 `.\b``，应看到 `Launch (no flutter run)` 后 App 窗口打开；`session.json` 为 active 时进入机器人验证进度窗。
 - **测试**：未在本机完整跑通脚本端到端（会拉起 GUI）；单独 flutter build 已通过。
 - **注意事项 / 待办**：需要热重载时可在成功 build 后自行 `flutter attach`；仍失败则先关 chan_kline 再 `flutter clean`。
 
@@ -4005,7 +4005,7 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 
 - **执行者**：用户半自动跑套件 + Cursor 解读报告
 - **任务类型**：验证
-- **操作**：`build_rust.ps1` 启 App → 套件 `indicator_search_opt_20260930`：`flutter test test/indicator_search/` + 进程内自检（候选上限、穿越分桶、事件池、ADJACENT_RATIO、相对收盘阈值等）。
+- **操作**：`b`` 启 App → 套件 `indicator_search_opt_20260930`：`flutter test test/indicator_search/` + 进程内自检（候选上限、穿越分桶、事件池、ADJACENT_RATIO、相对收盘阈值等）。
 - **结果**：**ALL PASS**（12/12 单测约 1m43s；进程内 9 项 OK）。报告落盘 `a_Data/robot_verify/last_report.txt`。
 - **演示**：报告总评 ALL PASS 即本轮寻优修复验收通过；与步进/K 线无关，未做连续单步主图验收。
 - **测试**：见用户粘贴报告与 `last_report.txt`。
@@ -4195,7 +4195,7 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 
 - **执行者**：Cline（AI 编码机器人）解读用户粘贴的报告（半自动机器人验证）
 - **任务类型**：验收
-- **上下文**：上一条实现完成后，用户编译 App 跑机器人验证。**中途踩了一个坑**：App 没进验证模式 —— 根因是 `a_Data/robot_verify/session.json` 压根没建（只有模板），`build_rust.ps1` 又只设 `CHAN_REPO_ROOT`/`CHAN_KLINE_ROOT`、不设 `CHAN_ROBOT_VERIFY`，三个触发条件全不成立。经用户口头授权后补建会话文件即解决；顺带修掉 `main.dart` 里 `--dart-define` 兜底套件仍写旧批次的遗留。
+- **上下文**：上一条实现完成后，用户编译 App 跑机器人验证。**中途踩了一个坑**：App 没进验证模式 —— 根因是 `a_Data/robot_verify/session.json` 压根没建（只有模板），`b`` 又只设 `CHAN_REPO_ROOT`/`CHAN_KLINE_ROOT`、不设 `CHAN_ROBOT_VERIFY`，三个触发条件全不成立。经用户口头授权后补建会话文件即解决；顺带修掉 `main.dart` 里 `--dart-define` 兜底套件仍写旧批次的遗留。
 - **关键操作**：
   1. 建 `a_Data/robot_verify/session.json`（`active:true` + 本批 suiteId），确认被 `.gitignore` 忽略。
   2. 清理一处**我自己造成的污染**：先前跑 analyze/test 触发 `flutter pub get`，把 `pubspec.lock` 里 72 个包的源地址从国内镜像 `pub.flutter-io.cn` 改成 `pub.dev`，已 `git checkout` 还原。
@@ -4211,7 +4211,7 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **注意事项 / 待办**：
   - 机器人验证覆盖的是**数据层**（收点、统计、冻结对拍），**没覆盖人眼观感**：真实主图会话下点「计优」的表格排版、436 行滚动是否流畅、页签是否溢出，仍需用户冷启动**连续单步**走到末根 K 后点一次「计优」亲眼看（不替代验收，等价于「一键跳末」）。
   - **关键点位目前只到 K2 连线**：4 个 Kn 层里 K3/K4 在这一天的 1m 区间内没有已确认转折点（分组只出了 6 个 + 汇总），换更长区间才会出现更多层级。
-  - 启动陷阱备忘：`session.json` 是运行时读的，但 `resolveRepoRoot()` 依赖 `CHAN_REPO_ROOT`/`CHAN_KLINE_ROOT`（或 cwd 含 `chan_kline`），**双击 exe 会退回普通主图**，必须用 `build_rust.ps1` 或手动设这两个变量启动。
+  - 启动陷阱备忘：`session.json` 是运行时读的，但 `resolveRepoRoot()` 依赖 `CHAN_REPO_ROOT`/`CHAN_KLINE_ROOT`（或 cwd 含 `chan_kline`），**双击 exe 会退回普通主图**，必须用 `b`` 或手动设这两个变量启动。
   - Obsidian 同步仍未做：本机找不到 Vault（`D:\ObsidianVault\chan-month5\` 不存在），待用户提供实际路径。
 ---
 
@@ -4257,25 +4257,25 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 
 ## 2026-10-02 · Cline · 规则 · AGENTS.md 新增「编译与重启」与「用户转述词汇表」（仅改规则，未动代码）
 
-- **操作**：仅修改 `AGENTS.md`，加入三块内容；`agent.md` 与 `CHAN_RUST/scripts/build_rust.ps1` **一字未动**（按用户指定）。补丁前先通过全文读 `build_rust.ps1` 核实其真实行为，否定了“App 内快捷键”这条路径（脚本本身已处理 exe/DLL 锁，且用户已明说不要在 App 运行时编译）。
-  - ① **「完成后」节新增编译与重启条款**：需重启 App 验证时由智能体跑 `build_rust.ps1`（杀旧 App → cargo 编 Rust → 替换 `chan_ffi.dll` → `flutter build windows --debug` → 自动启动新 App）。已写明两条硬约束：**必须后台 detached 运行**（否则脚本末尾以前台拉起 exe 会一直阻塞到用户关 App）；**必须读 `build_windows_last.log` 判成败，禁止静默通过**。纯文档/记忆/规则类改动不触发编译。
+- **操作**：仅修改 `AGENTS.md`，加入三块内容；`agent.md` 与 `CHAN_RUST/scripts/b`` **一字未动**（按用户指定）。补丁前先通过全文读 `b`` 核实其真实行为，否定了“App 内快捷键”这条路径（脚本本身已处理 exe/DLL 锁，且用户已明说不要在 App 运行时编译）。
+  - ① **「完成后」节新增编译与重启条款**：需重启 App 验证时由智能体跑 `b``（杀旧 App → cargo 编 Rust → 替换 `chan_ffi.dll` → `flutter build windows --debug` → 自动启动新 App）。已写明两条硬约束：**必须后台 detached 运行**（否则脚本末尾以前台拉起 exe 会一直阻塞到用户关 App）；**必须读 `build_windows_last.log` 判成败，禁止静默通过**。纯文档/记忆/规则类改动不触发编译。
   - ② **「与提问者的交流」补三条**：用户可能全程用中文拼音或英文，必须主动识别；拼音多音同形有歧义必须停下来问、并复述「我听到的是 X，指的是 Y 吗」；列了 **4 类禁止的应付行为**（反复试探、默认按最常见意思硬做、嘴上说大概明白了就改代码、静默忽略）；回复必须用完全明确的中文。
   - ③ **新增「用户转述词汇表」**：8 条已知对照，含本次两个关键词 `bianyi`=编译、`queren`=确认（与门禁授权同等）；表外有歧义一律走「停下来问」。
 - **结果**：`git diff --stat` 仅 `AGENTS.md | 30 ++`，**零删除**，三处定位均已逐行核对。编译合规：本次属规则类改动，**不触发编译**（无代码改动，不需重编 `chan_ffi.dll`）。
-- **演示**：你说一句「需要重启 App 验证」，我应该自动去后台跑 `build_rust.ps1` 把 Rust 内核和 Flutter 都编好、并把新 App 开起来；编好后只需等日志里出现成功标记、然后报给你，不用自己去终端手动编一次。反过来，你说一句含不懂的拼音，我必须先问你「我听到的是 X，指的是 Y 吗」，不能自己猜一个意思就开始改代码。
-- **注意事项**：本次未跑 run test。待用户在场时实跑一次 `build_rust.ps1`（会无条件杀掉正在运行的 `chan_kline`），验证“编译成功 + App 自动重启”本身。第二轮计优的 `deterministic_rerun` 也仍需重跑一次机器人验证才能绿灯，且本轮代码尚未提交。
+- **演示**：你说一句「需要重启 App 验证」，我应该自动去后台跑 `b`` 把 Rust 内核和 Flutter 都编好、并把新 App 开起来；编好后只需等日志里出现成功标记、然后报给你，不用自己去终端手动编一次。反过来，你说一句含不懂的拼音，我必须先问你「我听到的是 X，指的是 Y 吗」，不能自己猜一个意思就开始改代码。
+- **注意事项**：本次未跑 run test。待用户在场时实跑一次 `b``（会无条件杀掉正在运行的 `chan_kline`），验证“编译成功 + App 自动重启”本身。第二轮计优的 `deterministic_rerun` 也仍需重跑一次机器人验证才能绿灯，且本轮代码尚未提交。
 
 ## 2026-10-02 · Cline · 规则 · 词汇表瘦身并外移到 error remember.md（含 run test 实跑）
 
-- **操作**：三件事。① 按用户要求**不逐条堆拼音**，把 `AGENTS.md` 里已堆到 20 条的词汇表整节删掉，替换为「常见错误与解法（记忆库）」小节，只留指向新文件的说明。② 新建 `error remember.md`（仓库根），收纳「用户转述词汇表（只记两类）」+「常犯的错与解法」+「怎么用」。③ 实跑一次 `build_rust.ps1` 做 run test。
+- **操作**：三件事。① 按用户要求**不逐条堆拼音**，把 `AGENTS.md` 里已堆到 20 条的词汇表整节删掉，替换为「常见错误与解法（记忆库）」小节，只留指向新文件的说明。② 新建 `error remember.md`（仓库根），收纳「用户转述词汇表（只记两类）」+「常犯的错与解法」+「怎么用」。③ 实跑一次 `b`` 做 run test。
 
 - **收录标准（按用户口径）**：只收①**映射到本工程具体文件/脚本、工作里检索时用得上**的，②**不看表就一定会误解**的；靠上下文就能猜准的（如 wancheng=完成、tianjia=添加）**一律不记** —— 表一大就没人维护，必然失效。词汇从 20 条瘦身到 **5 条**：bianyi=编译、chongqi=重启、yanzheng=验证、queren=确认、ceshi / run test=测试。
 
-- **六个已记录的踩坑**：①把 `bianyi` 当「变异」绕三个来回；②编译输出重定向到 `build_windows_last.log`，与脚本自身第 13 行的构建日志变量撞句柄，导致脚本第 70 行 out-file 失败；③前台跑 `build_rust.ps1` 会被前台 exe 阻塞；④PowerShell 吞反引号；⑤here-string 收尾 `@` 必须独占一行；⑥App 运行时 exe/DLL 被锁。
+- **六个已记录的踩坑**：①把 `bianyi` 当「变异」绕三个来回；②编译输出重定向到 `build_windows_last.log`，与脚本自身第 13 行的构建日志变量撞句柄，导致脚本第 70 行 out-file 失败；③前台跑 `b`` 会被前台 exe 阻塞；④PowerShell 吞反引号；⑤here-string 收尾 `@` 必须独占一行；⑥App 运行时 exe/DLL 被锁。
 
 - **run test 结果**：第 ① 次**失败**并已定位（重定向撞句柄），第 ② 次**通过** —— cargo 编 Rust、两处替换 `chan_ffi.dll`、`flutter build windows --debug` 全过，脚本自动拉起新 App（`chan_kline.exe` PID 22568，Dart VM service 起在 127.0.0.1:8604）。据此把 `AGENTS.md` 里的日志文件名从 `build_windows_last.log` 改正为 **`build_rust_run.log`**，并写明后者才是脚本输出重定向的去处。
 
-- **演示**：你说一句含 `bianyi`，我直接去跑 `build_rust.ps1` 把新 App 开起来，不再问你；日志落在 `build_rust_run.log`，看到 `>> Launch` 就算编成。反过来，你说的拼音我拿不准时，先查 `error remember.md` 里的 5 条；查不到就问你，绝不猜。
+- **演示**：你说一句含 `bianyi`，我直接去跑 `b`` 把新 App 开起来，不再问你；日志落在 `build_rust_run.log`，看到 `>> Launch` 就算编成。反过来，你说的拼音我拿不准时，先查 `error remember.md` 里的 5 条；查不到就问你，绝不猜。
 
 - **注意事项**：`error remember.md` 是**新文件**（`git status` 显示未跟踪），提交时要一并带上。机器人验证结果待用户发送；第二轮计优代码仍未提交。
 
@@ -4291,10 +4291,10 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 
 - **起因（用户提问）**：agent.md 是否和机器人验证有关？文件名会不会与 AGENTS.md 歧义或重复？要不要改名？
 - **结论**：该文件**整份都是机器人验证专属**（130 行，标题即「机器人验证（专属执行逻辑）」），与 AGENTS.md **内容不重复**（后者只有 4 行入口），但**文件名只差一个 S**，Windows 上敲 agent.md 想开总则极易误开验证说明书 —— **歧义属实**。故改名。
-- **改动（7 处）**：① git mv agent.md -> ROBOT_VERIFY.md（保留历史）；② 文件头权限行由「不得擅自替用户编译或启动 App」改为「不得擅自关闭 App」；③ 补一行指向 AGENTS.md 编译与重启节；④ 分工表拆三行：编译=智能体（后台 build_rust.ps1）、打开 App=智能体（脚本自动拉起）、**App 内点开始与肉眼验界面=仅用户**；⑤ AGENTS.md 首行链接更新；⑥ a_Data/robot_verify/README.md 第 17 行更新；⑦ CHAN_RUST/scripts/robot_verify.ps1 首行注释更新。
+- **改动（7 处）**：① git mv agent.md -> ROBOT_VERIFY.md（保留历史）；② 文件头权限行由「不得擅自替用户编译或启动 App」改为「不得擅自关闭 App」；③ 补一行指向 AGENTS.md 编译与重启节；④ 分工表拆三行：编译=智能体（后台 b`）、打开 App=智能体（脚本自动拉起）、**App 内点开始与肉眼验界面=仅用户**；⑤ AGENTS.md 首行链接更新；⑥ a_Data/robot_verify/README.md 第 17 行更新；⑦ CHAN_RUST/scripts/robot_verify.ps1 首行注释更新。
 另在 AGENTS.md「本文件定位」补一句交叉指引（含「不是 agent.md」的显式说明），并把套件说明里「79 例」订正为 80 例（实测值）。
 
-- **修掉的真矛盾**：改名前 agent.md 写着「编译、打开 App = 仅用户」「不得擅自替用户编译或启动 App」，与我本次新增的 AGENTS.md「由智能体后台跑 build_rust.ps1、自动启动新 App」**直接打架** —— 本次任务正好撞上。现已统一以 AGENTS.md 为准。
+- **修掉的真矛盾**：改名前 agent.md 写着「编译、打开 App = 仅用户」「不得擅自替用户编译或启动 App」，与我本次新增的 AGENTS.md「由智能体后台跑 b`、自动启动新 App」**直接打架** —— 本次任务正好撞上。现已统一以 AGENTS.md 为准。
 
 - **演示**：你说「要看机器人验证怎么跑」，我直奔 ROBOT_VERIFY.md；你说「总则是什么」，看 AGENTS.md。两个文件不再互相冒充。
 
@@ -4456,7 +4456,7 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   5. **补上一层同样丢了的线**：实时寻优路径（`_openIndicatorSearch`）此前没传 `onApplyToChart` / `onCacheSession`，导致新跑出来的寻优宽表里「在 K 线图查看」按钮被隐藏、会话也不缓存——即便有了横幅也永远不会亮。现在实时寻优与「上次寻优结果」两个入口都已接上。
   6. 新增 `_returnToSearch()`：取缓存会话重开同一弹窗，走同一套前置检查（机器学习占用、已加载 K 线、已步进到末根）。
   7. `indicator_search_dialog.dart` 帮助文案第 4 步补一句：投图后回测台顶部常驻横幅，右侧可原样回到那张宽表。
-- **结果**：`flutter analyze --no-pub` 对两个改动文件 **0 error**（余 21 条为既有 info/warning，与改动前后基线一致）；`flutter test test/indicator_search/` **24 条全过**（清掉代理环境变量后运行）。未重编 Rust/未动 App（纯 Dart 层改动，等用户下次 `build_rust.ps1` 一起出包）。
+- **结果**：`flutter analyze --no-pub` 对两个改动文件 **0 error**（余 21 条为既有 info/warning，与改动前后基线一致）；`flutter test test/indicator_search/` **24 条全过**（清掉代理环境变量后运行）。未重编 Rust/未动 App（纯 Dart 层改动，等用户下次 `b`` 一起出包）。
 - **白话总结**：先把某行策略投到主图之后，回测台上方会留一条横幅，写明图上现在生效的是哪两条买卖规则（买红、卖绿），右端一个「返回寻优结果」——点一下就原样回到刚那张宽表，之前排好的序列、展开看的那几行都还在，不用重扫一遍。顺带把「新跑的寻优也能投到主图」这条线也接回去了（那次对齐时被甩掉，实时寻优先前连投图按钮都没有）。
 - **注意**：①端到端目视验收需桌面端实跑一次「寻优 → 眼睛 → 在 K 线图查看 → 点横幅返回」，本机只完成静态分析与单测；②横幅右侧让位宽度是窗控实测值，若以后改动桌面标题栏布局（加/减按钮）必须重测该宽度；③缓存失效仍以「返回时校验主图身份」为准，未在主会话切换处主动清空（与旧实现同口径，如希望换股立即作废可后再议）。
 
@@ -4481,7 +4481,7 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   1. `lib/main.dart` 新增 `_recordKnClockStep(bundle)` 包装（与既有 `_mergeXxx` 同风格），在**两条**合并链里各调一次，位置与 `mergeRebuildCombineFreeze` 一致（`_mergeZsSignalHistory` 之后、`_mergeRatioAndRhythm` 之前），同在 `!asofKeep && !skipFreezeMerge` 闸门内。
   2. `lib/main.dart` 两处「加载 K 线 / 加载失败」的会话清空块补上 `knClockTimeline.clear()` + `knClockSeenUnits = 0`（原先逐字段手工清空冻结仓时漏了采样钟；不清会跨标的残留，而记录函数遇到 `lastAsOf >= stepIdx` 会直接跳过 → 换股后采样钟被旧数据钉死）。
   3. 新增 `test/main_session_kn_clock_test.dart`（4 条）：①主图合并链信号 == 独立 harness 信号；②采样点数量 ≈ 每根 K 一根（证明逐根在场）；③去掉采样钟信号必须变（证明这一步不可省）；④源码守卫——`main.dart` 两条链都调了 `_recordKnClockStep`。
-- **结果**：`flutter analyze lib/main.dart test/main_session_kn_clock_test.dart` **0 error**（余 21 条为 `main.dart` 既有 info/warning，与基线一致）；新测试 **4 条全过**；`kn_clock_causality_test`（6 条）、`step_freeze_signatures_test` 全过；已跑 `CHAN_RUST/scripts/build_rust.ps1`，`kernel_blob.bin` 重建、App 已自动启动（PID 1352）。
+- **结果**：`flutter analyze lib/main.dart test/main_session_kn_clock_test.dart` **0 error**（余 21 条为 `main.dart` 既有 info/warning，与基线一致）；新测试 **4 条全过**；`kn_clock_causality_test`（6 条）、`step_freeze_signatures_test` 全过；已跑 `CHAN_RUST/scripts/b``，`kernel_blob.bin` 重建、App 已自动启动（PID 1352）。
 - **⚠️ 一条既有失败（与本次改动无关，已用 stash 复核）**：`run_to_end_vs_step_freeze_test.dart` 的 tick 用例红在审计探针 `T1_rhythm_hold`（span 38 / miss 5 / mismatch 0，toX=114）；把本次 `main.dart` 改动 stash 掉后同样复现，属既有问题，本次未处理。
 - **白话总结**：之前那版「K1 每根都在场判」的修复只落在测试和机器人验证走的那条路上，App 主图自己走的是另一条手工串起来的合并链，漏了「记一下当时那一段走到哪」这一步，于是寻优悄悄退回「等这段走完才算」的老口径——图上第 71 根就该响的信号，被压到这段的第 74 根才响。现在主图两条合并链都补上了这一步，换股重载时也会清干净。默认数据上再跑同一条条件，买信号回到 K0#71。
 - **注意**：①App 内端到端验收仍需用户确认：加载默认数据 → 步进到末根 → 寻优，看该条件落点是否为 K0#71；②寻优数字会普遍变差、扫描变慢（采样点 O(段数)→O(K 数)，已按 asOf 缓存），这是真实水平不是回归；③切「截断机制」开关后建议重新步进（该开关会重建 PipelineState，冻结仓本身就不完整，与既有行为一致，本次未扩大改动）。
@@ -4508,5 +4508,38 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **结果**：`flutter analyze lib test` **0 error / 88 issues**（清理前 103，全部为 info/warning 级 lint，删的 15 条即 unused/unnecessary import）；冒烟 `test/condition_ast_test.dart` **19 条全过**。
 - **白话总结**：仓库根上那 17 个 `.tmp_*.txt` 是调 K1 采样钟时留下的 git 告警抄本（约 440KB 纯噪声），已删并加了忽略规则防止再犯。另外找出 3 个 Dart 文件全项目没人调用——两个是旧版「指标选择弹窗」，2026-09-15 重做后就成了孤儿；一个是旧的「均线/通道参数落盘」，同一个配置文件已由新的落盘类接管。`D:\2` 根目录那 4 个一键验证脚本引用着 10 月 6 日已经删掉的两份测试，现在跑必然报错，属于死脚本，连同它们的输出和一份 9 月 30 日的一次性说明文档一并清掉。回归测试套件按你的选择**整套保留**。
 - **注意**：①未重编 App——删掉的是从未被引用的文件与多余 import，运行行为不变，当前正在运行的 App（含本日 K1 采样钟修复）仍然有效；②余下 88 条 analyze 提示全是 lint 偏好（测试里局部变量带下划线等），刻意没动，避免无意义改动刷 diff；③如需「一键跑全部回归」的入口，目前仓库没有（那 4 个死脚本本想提供这个），需要的话可另加 `CHAN_RUST/scripts/run_tests.ps1`，说一声我就补。
+
+---
+### 2026-10-09 采样钟六项违规修复：V1 按层同构 / V2 背驰接钟 / V3 Demark 读冻结仓 / V4 三变量补白名单 / V5 空档切断对称 / V6 clear() 空壳，另 S4-S6（确认执行）
+
+- **执行者**：AI 编码机器人（opencode）
+- **类型**：口径修复（回测内核求值路径 + 展示层冻结不回写；不动缠论合并/分型/段算法）
+- **用户指令**：先出审计报告，用户逐条复核后回复「按照我的建议顺序，确认执行」，授权 V1→V2→V3→V4→V5→V6 + S 系列。
+- **背景**：2026-10-06 与 10-09 两轮「K1+ 采样钟逐根在场」修复都只覆盖了主力层。复核时静态走完整条求值链，发现 6 项确认违规 + 6 项疑似漏网；本轮把 6 项确认违规全部修掉，疑似项里 S4/S5/S6 一并处理，S1/S2/S3 属口径选择题（见「未做」）。
+- **根因与改动（逐条独立 commit）**：
+
+  | 编号 | 根因 | 改法 | commit |
+  |---|---|---|---|
+  | V1 | `KnClockTimeline` 只记 level0（`KnClockTimelineRecorder` 注释明写「取 level 0」），而 `collectKnOhlcSamplesAt` 收了 `displayKn` 却只拿它挡 `<=0`，之后一律取 level0 —— 与最终态口径 `bundleAtLevel(levels, displayKn-1)` **不是同一层** | 时间线改为**每层一条轨**（`record(asOf, byLevel)` / `at(level,asOf)` / `sampleEnds(level,asOf)` / `activeOhlcAt(level,x)`），`collectKnOhlcSamplesAt` 取 `displayKn-1`；主图链与独立 harness 共用 `recordKnClockStepInto`；`knClockSeenUnits` 由 int 改 `Map<int,int>` | `2c696994` |
+  | V2 | `readEvalClockSeries` 里 RAW 分支（:527）与中枢分支（:540）都传了 `knClock`，**唯独背驰分支没传** | `_diverEvalSeries` 加 `knClock` 参数并透传 | `4b260c0f` |
+  | V3 | `_demarkSeriesForEvents` 只要 `bars` 非空就永远现算 `computeDemarkForLevel`，而它内部用 `collectKnOhlcSamples`（最终态段尾制）；逐根当步算好的那份**已经冻在 `MathSeriesFreezeStore` 里却没用** | 优先读冻结仓（按 asOf 截断），没有才退回现算 | `a9a4accb` |
+  | V4 | `FX_CHORD_TRANSLATED` / `FX_BOTTOM_SNUG` / `FX_TOP_SNUG` 在目录已登记、`bar_feature_lookup` 也逐根算了值，但 `_extendedPlotSeries` 白名单只有 `FX_TRIPLE/FX_QUAD/TREND_LINE`，整条链覆盖不到 | 白名单补三个头；`_geometryPriceSeries` 补 `featureKey` 与无仓时的按 asOf 前缀现算 | `c14dfde3` |
+  | V5 | `_evalCmp` 只遍历 `left`，`sinceLastKept` 只统计「left 有、right 没有」，于是同一条件的两种写法结果不同 | 按两侧 `availableAt` 的**并集**顺序走一遍，任一侧单独出现即置 `gapPending`；配对点集合与顺序不变 | `6376329b` |
+  | V6 | `incremental_lookup` 的局部 `clear()` **函数体只有注释、什么都不清** —— 未确认中枢延伸后，历史格留着上一版中轴（污染 ML 特征与计优统计） | `clear()` 按 seq 守卫真置 null；新增 `_lastUnsureSeqByKey` 处理「合并后 seq 变了」 | `090e6866` |
+  | S4 | 变量诊断面板不传 `knClock`，K1+ 变量显示的是段尾制样本数，与真实回测对不上 | `BacktestWorkbench` → `StrategyConfigForm` → `diagnoseTradeVariable` 一路透传 | `12281751` |
+  | S5 | 切「截断机制」只 `_disposePipelineSession()`，**没清会话冻结仓**；时间线留着旧口径且因 `lastAsOf>=stepIdx` 守卫不再重记 | 与 `:1752`/`:1797` 两条兄弟路径同口径，先 `_clearSessionFreezeHistory()` | `8ed03606` |
+  | S6 | `_knSamples` 拿不到采样钟时**无条件静默退回**最终态 —— 这正是 error remember 第 11 条的成因 | 新增 `KnClockDiagnostics` 两类退场各计一次；绘图/诊断路径读数照旧 | `b5e1ffa5` |
+
+- **实测数字（002003 / 1m / 2025-09-29~10-10 / 988 根）**：
+  - V2：K1 背驰力度比**接采样钟 958 个采样点 vs 不接 95 个**（此前 95 个 = 一层一点）。
+  - V4：K0 三族由**恒 0** 变为 对弦平移 975 / 底极贴合 855 / 顶极贴合 801 个样本；K1 对弦平移 764 个。K1+ 的顶/底极贴合在本数据集本就没有父段极点数据（数据属性，非本缺陷）。
+  - V1：K2 的采样点集合 == `sampleEnds(1)` 且 != `sampleEnds(0)`；`RAW.K2.HIGH` 与 `RAW.K1.HIGH` 在公共采样根上存在差异（此前恒等 = 取错层）。
+  - V5：合成数据（斜率列稀疏 K0#1/3/5、节奏列稠密 K0#1..5）下，去掉修复前 `Set:[3]`、修复后 `Set:[]` —— 敏感性已验证。
+- **回归**：`kn_clock_causality_test` 由 5 条增至 **11 条全过**（新增：按层同构 / 背驰接钟 / Demark 读冻结仓 / 三变量有样本 / 采样钟退场计数 / 空档切断左右对称·合成数据；原「空档切断端到端」改为**参照答案（oracle）**比对并同时验两种写法）。`incremental_lookup_session_test` 增 2 条（全量对拍 + 结构守卫）。`indicator_search/` 24 条、`main_session_kn_clock_test` 4 条、`step_freeze_signatures`、`condition_ast`、`backtest_result`、`cross_eval` 全过。`flutter analyze lib test` **0 error**。
+- **全量测试**：`flutter test` **493 过 / 11 失败**。**11 条全部在基线 `befdc42f` 复现**（已逐条 checkout 基线复核：`backtest_workbench` / `catalog_full_var` / `chip_profile` / `incremental_lookup` / `indicator_var_ext` / `mini_loop` / `robot_verify_full_suite` / `run_to_end_vs_step_freeze` / `signal_data_catalog` ×2 / `widget_test`），**本次改动零新增失败**。
+- **白话总结**：之前那两轮「K1 每根都在场判」的修复只管了主力层。这次把每一条路都走了一遍，发现**层号取错**（K2 以上拿的是 K1 的格，等于拿 K1 的尺子量 K2）、**背驰和 Demark 两族压根没接上采样钟**（悄悄退回老口径）、**三个对弦平移类变量登记了却读不出来**（引用了永远不出信号还不报错）、**空档切断只看左边**（同一个条件左右换个写法结果不一样）、以及**未确认中枢那段「清空」代码是空的**（中枢框拉长收窄后历史格留着旧中轴，污染机器学习样本和计优统计）。六条全部修掉，每条都配了「改之前必须红」的回归。另把两处同类毛病一并收了：变量诊断面板报的样本数和真实回测对不上、切「截断机制」开关时冻结仓没清导致采样钟与新段划分错位；还有那条「悄悄退回老口径」的兜底加了计数，以后退化会被测试挡住。
+- **未做（需用户拍板）**：①S1/S2 回归通道 —— 目录声明 K1+ 走「虚拟K样本钟」，实现却是逐根且内部用最终态段尾制采样，**声明与实现必须二选一**：要么把它改成真走采样钟（与其它 K1+ 变量同构，但回测数字会变），要么把目录声明改成 K0 逐根（数字不变，但承认它不是 K1+ 样本钟）。这是口径选择题，按门禁先问用户。②S3 K1+ 量/笔分段边界取自最终态 `levels`，改法要动 `kn_volume_series_compute`，风险与收益待评估。③图例显示优化、寻优加列、寻优提速、文档修断链 —— 上一轮已出方案，用户尚未从选项里挑。
+- **踩坑（本次新记）**：用 PowerShell 双引号 here-string 往 `task-log.md` 追加长条目时，**反引号被当转义符吞掉**（`` `b ``→退格、`` `f ``→换页、其余被删），把 `backtest_result` / `flutter` / `befdc42f` / `build_rust.ps1` 的首字母吃掉。这是 `error remember.md` 第 7 条的复发，**追加 task-log 长文本一律改用 base64 中转或 write 工具落盘再拼接**，不要走 here-string。
+- **注意**：①本轮全部为 Dart 侧改动，**未触碰 Rust 内核**，故未跑 `CHAN_RUST/scripts/build_rust.ps1`；App 端到端验收仍待用户在机器人验证模式或冷启动连续单步下确认。②采样点与信号落点会变（K2 以上换层、背驰从 95 点变 958 点、Demark 改读冻结仓），**寻优数字会普遍变化，属真实水平不是回归**。③`incremental_lookup_session_test` 的「Incremental Lookup == Full Lookup · step24–28」在基线即失败（`combine.fx` TOP/UNKNOWN + K1 量），与本轮无关，未处理。
 
 ---
