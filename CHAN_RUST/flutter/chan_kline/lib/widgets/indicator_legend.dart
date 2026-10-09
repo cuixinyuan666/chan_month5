@@ -64,8 +64,23 @@ class IndicatorLinePalette {
     return HSVColor.fromAHSV(1, ((hue + 0.45) % 1.0) * 360, 0.8, 0.9).toColor();
   }
 
-  /// 布林/唐奇安：上下轨 = 中轨色降透明度。
-  static Color bandSide(Color mid) => mid.withValues(alpha: 0.55);
+  /// 布林 / 唐奇安：**上下轨透明度分级**（2026-10-09）。
+  ///
+  /// 原先上轨与下轨用同一个 alpha，图例上两行色块完全同色同型、肉眼分不出。
+  /// 现在上轨更实、下轨更淡**且下轨画虚线** —— 与市面软件「突破轨」的惯例一致，
+  /// 颜色淡的一眼就知道是下轨。三类通道的签名：
+  /// - 布林 / 唐奇安：中轨实线 + 上轨实线 + 下轨虚线（深浅分级）
+  /// - 回归通道：三条全虚线、整体更淡（既有形态，不动）
+  ///
+  /// 同层主色仍取 [ChartLevelLineStyle]（全工程统一的层色），不动。
+  static Color bandSide(Color mid, {double alpha = 0.55}) =>
+      mid.withValues(alpha: alpha);
+
+  /// 上轨：偏实。
+  static Color bandUpper(Color mid) => bandSide(mid, alpha: 0.8);
+
+  /// 下轨：偏淡（配合虚线，图例上一眼分得开）。
+  static Color bandLower(Color mid) => bandSide(mid, alpha: 0.45);
 
   /// MACD DIF / DEA / KDJ K·D。
   static const macdDif = Color(0xFF2563EB);
@@ -157,17 +172,25 @@ List<IndicatorLegendGroup> buildIndicatorLegends({
           ],
         ]));
       case MainIndicatorKind.boll:
+        final mid = ChartLevelLineStyle.colorForDisplayKn(m.kn);
+        out.add(IndicatorLegendGroup('${m.label}(${mathConfig.bollN})', [
+          LegendLine('中轨', color: mid),
+          LegendLine('上轨', color: IndicatorLinePalette.bandUpper(mid)),
+          LegendLine(
+              '下轨', color: IndicatorLinePalette.bandLower(mid), dashed: true),
+        ]));
       case MainIndicatorKind.donchian:
         final mid = ChartLevelLineStyle.colorForDisplayKn(m.kn);
-        final side = IndicatorLinePalette.bandSide(mid);
-        out.add(IndicatorLegendGroup(m.label, [
+        out.add(IndicatorLegendGroup('${m.label}(${mathConfig.donchianN})', [
           LegendLine('中轨', color: mid),
-          LegendLine('上轨', color: side),
-          LegendLine('下轨', color: side),
+          LegendLine('上轨', color: IndicatorLinePalette.bandUpper(mid)),
+          LegendLine(
+              '下轨', color: IndicatorLinePalette.bandLower(mid), dashed: true),
         ]));
       case MainIndicatorKind.regressionChannel:
         final c = ChartLevelLineStyle.forDisplayKn(m.kn).color;
-        out.add(IndicatorLegendGroup(m.label, [
+        final k = mathConfig.regressK.toStringAsFixed(1);
+        out.add(IndicatorLegendGroup('${m.label}(k=$k)', [
           LegendLine('中轨', color: c, dashed: true),
           LegendLine('上轨', color: c.withValues(alpha: 0.39), dashed: true),
           LegendLine('下轨', color: c.withValues(alpha: 0.39), dashed: true),
@@ -221,22 +244,27 @@ List<IndicatorLegendGroup> buildIndicatorLegends({
   for (final s in sortedSubs) {
     switch (s.kind) {
       case SubIndicatorKind.macd:
-        out.add(IndicatorLegendGroup(s.label, const [
-          LegendLine('DIF', color: IndicatorLinePalette.macdDif),
-          LegendLine('DEA', color: IndicatorLinePalette.macdDea),
-          LegendLine(
-            'MACD柱',
-            color: IndicatorLinePalette.histUp,
-            bar: true,
-            color2: IndicatorLinePalette.histDown,
-          ),
-        ]));
+        out.add(IndicatorLegendGroup(
+            '${s.label}(${mathConfig.macdFast}/${mathConfig.macdSlow}/'
+            '${mathConfig.macdSignal})',
+            const [
+              LegendLine('DIF', color: IndicatorLinePalette.macdDif),
+              LegendLine('DEA', color: IndicatorLinePalette.macdDea),
+              LegendLine(
+                'MACD柱',
+                color: IndicatorLinePalette.histUp,
+                bar: true,
+                color2: IndicatorLinePalette.histDown,
+              ),
+            ]));
       case SubIndicatorKind.kdj:
-        out.add(IndicatorLegendGroup(s.label, const [
-          LegendLine('K', color: IndicatorLinePalette.kdjK),
-          LegendLine('D', color: IndicatorLinePalette.kdjD),
-          LegendLine('J', color: IndicatorLinePalette.kdjJ),
-        ]));
+        out.add(IndicatorLegendGroup(
+            '${s.label}(${mathConfig.kdjPeriod})',
+            const [
+              LegendLine('K', color: IndicatorLinePalette.kdjK),
+              LegendLine('D', color: IndicatorLinePalette.kdjD),
+              LegendLine('J', color: IndicatorLinePalette.kdjJ),
+            ]));
       case SubIndicatorKind.divergence:
         final c = ChartLevelLineStyle.colorForDisplayKn(s.kn);
         out.add(IndicatorLegendGroup(s.label, [

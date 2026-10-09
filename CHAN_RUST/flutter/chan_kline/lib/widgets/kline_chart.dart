@@ -354,8 +354,9 @@ class _KlineChartState extends State<KlineChart> {
   /// 左上角单击灰度关闭的指标（仍在选择集中，再点可打开）
   Set<MainChartIndicator> _mutedMains = {};
   Set<SubChartIndicator> _mutedSubs = {};
-  /// 右上角多线指标图例：默认收起，点「图例」钮展开（只色块+名称，不带值）
-  bool _legendOpen = false;
+  /// 右上角多线指标图例：**默认展开**（2026-10-09），点「图例」钮可收起。
+  /// 不落盘、不随会话保存、**没有分组级折叠**（只有整体开/关这一个布尔）。
+  bool _legendOpen = true;
   final _mainChipBarKey = GlobalKey();
   final _subChipBarKey = GlobalKey();
   double _mainChipBarHeight = 0;
@@ -1720,39 +1721,39 @@ class _KlineChartState extends State<KlineChart> {
   }
 
   /// 图例面板：浮在钮下方、右对齐；十字 tooltip 钉右上时向下顺让。
+  /// 2026-10-09 去掉外层 `IgnorePointer` —— 此前它把面板内所有指针事件吞掉，
+  /// 里面的 `SingleChildScrollView` 鼠标滚轮滚不动、条目也点不了。
   Widget _buildLegendPanel(double chartW) {
     final groups = _legendGroups;
     if (!_legendOpen || groups.isEmpty) return const SizedBox.shrink();
     final maxW = math.min(320.0, math.max(180.0, chartW * 0.42));
-    return IgnorePointer(
-      child: Container(
-        constraints: BoxConstraints(maxWidth: maxW, maxHeight: 260),
-        decoration: BoxDecoration(
-          color: const Color(0xEE121212),
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: const Color(0x55E2E8F0)),
-        ),
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-        child: SingleChildScrollView(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              for (final g in groups) ...[
-                Text(
-                  g.title,
-                  style: const TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w700,
-                    color: Color(0xFFE2E8F0),
-                  ),
+    return Container(
+      constraints: BoxConstraints(maxWidth: maxW, maxHeight: 260),
+      decoration: BoxDecoration(
+        color: const Color(0xEE121212),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: const Color(0x55E2E8F0)),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      child: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final g in groups) ...[
+              Text(
+                g.title,
+                style: const TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFFE2E8F0),
                 ),
-                const SizedBox(height: 2),
-                for (final l in g.lines) _legendLineRow(l),
-                const SizedBox(height: 5),
-              ],
+              ),
+              const SizedBox(height: 2),
+              for (final l in g.lines) _legendLineRow(l),
+              const SizedBox(height: 5),
             ],
-          ),
+          ],
         ),
       ),
     );
@@ -4284,7 +4285,8 @@ class _KlineCompositePainter extends CustomPainter {
           asOf: asOf,
         );
     final midColor = ChartLevelLineStyle.colorForDisplayKn(kn);
-    final sideColor = IndicatorLinePalette.bandSide(midColor);
+    final upperColor = IndicatorLinePalette.bandUpper(midColor);
+    final lowerColor = IndicatorLinePalette.bandLower(midColor);
     _paintPriceSeries(
       canvas,
       w,
@@ -4295,6 +4297,7 @@ class _KlineCompositePainter extends CustomPainter {
       color: midColor,
       strokeWidth: 1.4,
     );
+    // 上下轨：上实下虚、深浅分级（与图例同源，2026-10-09）
     _paintPriceSeries(
       canvas,
       w,
@@ -4302,7 +4305,7 @@ class _KlineCompositePainter extends CustomPainter {
       plotH,
       slotW,
       series: boll.up,
-      color: sideColor,
+      color: upperColor,
       strokeWidth: 1.0,
     );
     _paintPriceSeries(
@@ -4312,8 +4315,9 @@ class _KlineCompositePainter extends CustomPainter {
       plotH,
       slotW,
       series: boll.down,
-      color: sideColor,
+      color: lowerColor,
       strokeWidth: 1.0,
+      dashPattern: const [5, 3],
     );
   }
 
@@ -4339,7 +4343,8 @@ class _KlineCompositePainter extends CustomPainter {
           asOf: asOf,
         );
     final midColor = ChartLevelLineStyle.colorForDisplayKn(kn);
-    final sideColor = IndicatorLinePalette.bandSide(midColor);
+    final upperColor = IndicatorLinePalette.bandUpper(midColor);
+    final lowerColor = IndicatorLinePalette.bandLower(midColor);
     // 中轨：实线（与布林中轨同型）
     _paintPriceSeries(
       canvas,
@@ -4351,7 +4356,7 @@ class _KlineCompositePainter extends CustomPainter {
       color: midColor,
       strokeWidth: 1.4,
     );
-    // 上下轨：突破轨，实线略细、降透明度（与布林上下轨同型）
+    // 上下轨：突破轨，上实下虚、深浅分级（与布林同型、与图例同源，2026-10-09）
     _paintPriceSeries(
       canvas,
       w,
@@ -4359,7 +4364,7 @@ class _KlineCompositePainter extends CustomPainter {
       plotH,
       slotW,
       series: don.up,
-      color: sideColor,
+      color: upperColor,
       strokeWidth: 1.0,
     );
     _paintPriceSeries(
@@ -4369,8 +4374,9 @@ class _KlineCompositePainter extends CustomPainter {
       plotH,
       slotW,
       series: don.down,
-      color: sideColor,
+      color: lowerColor,
       strokeWidth: 1.0,
+      dashPattern: const [5, 3],
     );
   }
 
