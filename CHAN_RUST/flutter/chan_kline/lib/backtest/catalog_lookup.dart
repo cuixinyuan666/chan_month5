@@ -121,6 +121,7 @@ TradeScalar lookupTradeNumeric({
     fractalJudgmentByKn: fractalJudgmentByKn,
     regressK: regressK,
     barFeatures: barFeatures,
+    knClock: knClock,
   );
   if (regress != null) return regress;
   return _lookupFrozenPlot(
@@ -304,7 +305,18 @@ double? _regressionBandValueAt({
   List<BarCrosshairFeature> barFeatures = const [],
   Map<int, List<FractalJudgmentEvent>> fractalJudgmentByKn = const {},
   double regressK = 2.0,
+  KnClockTimeline? knClock,
 }) {
+  // [knClock] 有 → 拟合样本也走 asOf 当时的动态段（逐根在场），
+  // 与其它 K1+ 变量同一套采样钟（S1/S2 · 2026-10-09 用户定「甲」）。
+  // 没有 → 退回最终态段尾制（绘图 / 十字 / 诊断路径，属正常）。
+  final useSamples = knClock != null && !knClock.isEmpty && displayKn > 0
+      ? collectKnOhlcSamplesAt(
+          displayKn: displayKn,
+          timeline: knClock,
+          asOf: asOf,
+        )
+      : null;
   final rc = computeRegressionChannelForLevel(
     displayKn: displayKn,
     bars: bars,
@@ -320,6 +332,7 @@ double? _regressionBandValueAt({
     ),
     k: regressK,
     asOf: asOf,
+    samples: useSamples,
   );
   final series = switch (band) {
     'MID' => rc.mid,
@@ -341,6 +354,7 @@ TradeScalar? _lookupRegressionPlot({
   Map<int, List<FractalJudgmentEvent>> fractalJudgmentByKn = const {},
 double regressK = 2.0,
   List<BarCrosshairFeature> barFeatures = const [],
+  KnClockTimeline? knClock,
 }) {
   if (!_isRegressionPlotId(parsed)) return null;
   final band = parsed.rest[1];
@@ -353,11 +367,51 @@ double regressK = 2.0,
     barFeatures: barFeatures,
     fractalJudgmentByKn: fractalJudgmentByKn,
     regressK: regressK,
+    knClock: knClock,
   );
   if (v == null) return const TradeScalar.unavailable();
   return TradeScalar.num(v);
 }
 
+/// 回归通道的 K0 铺平格：每根 K 一个值（供绘图 / 十字 / ML 与求值同源）。
+List<double?> _regressionPlotGrid({
+  required int kn,
+  required String band,
+  required int asOf,
+  required List<KlineBar> bars,
+  required List<LevelBundle> levels,
+  BarFeatureLookup? features,
+  Map<int, List<FractalJudgmentEvent>> fractalJudgmentByKn = const {},
+  double regressK = 2.0,
+  List<BarCrosshairFeature> barFeatures = const [],
+  KnClockTimeline? knClock,
+}) {
+  final n = bars.isEmpty ? 0 : bars.last.idx + 1;
+  final out = List<double?>.filled(n, null);
+  if (n == 0) return out;
+  for (var x = 0; x < n && x <= asOf; x++) {
+    out[x] = _regressionBandValueAt(
+      displayKn: kn,
+      band: band,
+      asOf: x,
+      bars: bars,
+      levels: levels,
+      barFeatures: barFeatures,
+      fractalJudgmentByKn: fractalJudgmentByKn,
+      regressK: regressK,
+      knClock: knClock,
+    );
+  }
+  return out;
+}
+
+/// 回归通道的求值样本。
+///
+/// **[2026-10-09 · S1/S2，用户定「甲」]** 此前直接按 K0 逐根产出，与目录声明的
+/// `evalClock = knSample`（K1+ 虚拟K样本钟）**自相矛盾** —— 同一个条件里，
+/// 写 K1 均线在左还是在右会得到不同的对齐结果。现改为：
+/// ①值仍按 K0 逐根现算（与图上/十字同源，一格一个值）；
+/// ②K1+ 的**采样点**交给 [_plotEvalSeries] 按 knSample 走（与其余 K1+ 变量同一套钟）。
 List<EvalClockPoint> _regressionEvalSeries({
   required int kn,
   required String band,
@@ -368,26 +422,29 @@ List<EvalClockPoint> _regressionEvalSeries({
   Map<int, List<FractalJudgmentEvent>> fractalJudgmentByKn = const {},
 double regressK = 2.0,
   List<BarCrosshairFeature> barFeatures = const [],
+  KnClockTimeline? knClock,
 }) {
-  final out = <EvalClockPoint>[];
-  var i = 0;
-  for (final b in bars) {
-    if (b.idx > asOf) continue;
-    final v = _regressionBandValueAt(
-      displayKn: kn,
-      band: band,
-      asOf: b.idx,
-      bars: bars,
-      levels: levels,
-      barFeatures: barFeatures,
-      fractalJudgmentByKn: fractalJudgmentByKn,
-      regressK: regressK,
-    );
-    if (v == null) continue;
-    out.add(EvalClockPoint(evalIndex: i, availableAt: b.idx, value: v));
-    i++;
-  }
-  return out;
+  final plot = _regressionPlotGrid(
+    kn: kn,
+    band: band,
+    asOf: asOf,
+    bars: bars,
+    levels: levels,
+    features: features,
+    fractalJudgmentByKn: fractalJudgmentByKn,
+    regressK: regressK,
+    barFeatures: barFeatures,
+    knClock: knClock,
+  );
+  return _plotEvalSeries(
+    kn: kn,
+    evalClock: evalClockForDisplayKn(kn),
+    plot: plot,
+    asOf: asOf,
+    bars: bars,
+    levels: levels,
+    knClock: knClock,
+  );
 }
 
 /// 图上/十字用的铺平格子：只读冻结仓，禁止现算第二套 MACD/RSI/KDJ/布林。
@@ -589,6 +646,7 @@ List<EvalClockPoint> readEvalClockSeries({
       fractalJudgmentByKn: fractalJudgmentByKn,
       regressK: regressK,
       barFeatures: barFeatures,
+      knClock: knClock,
     );
   }
   if (mathFreeze == null) return const [];

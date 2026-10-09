@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:chan_kline/backtest/backtest_run.dart';
 import 'package:chan_kline/backtest/backtest_step_harness.dart';
 import 'package:chan_kline/backtest/catalog_lookup.dart';
@@ -283,6 +284,46 @@ void main() {
           reason: '$id 在目录里已登记，此前求值白名单漏了它 → 恒无样本、'
               '引用它的策略永远不出信号且不报错（V4）');
     }
+  });
+
+  test('回归通道：K0 逐根不变 + K1+ 采样点交给统一钟（S1/S2 · 甲）', () {
+    // K0 回归通道：值与采样点都必须与改动前逐根一致（k0Bar 钟不碰采样钟）。
+    final k0 = readEvalClockSeries(
+      variableId: 'MAIN.K0.REGRESS.MID',
+      asOf: bars.last.idx,
+      bars: bars,
+      levels: h.levels,
+      mathFreeze: h.mathFreeze,
+      barFeatures: h.barFeatures,
+      knClock: h.knClock,
+    );
+    final k0NoClock = readEvalClockSeries(
+      variableId: 'MAIN.K0.REGRESS.MID',
+      asOf: bars.last.idx,
+      bars: bars,
+      levels: h.levels,
+      mathFreeze: h.mathFreeze,
+      barFeatures: h.barFeatures,
+    );
+    expect(k0, isNotEmpty, reason: 'K0 回归通道应有样本');
+    expect(k0.length, k0NoClock.length,
+        reason: 'K0 走 K0 逐根钟，不该被采样钟改变');
+    final k0At = {for (final e in k0) e.availableAt};
+    expect(k0At.every((x) => x < bars.length), isTrue);
+
+    // K1+ 回归通道：本数据集上父层连线跨度不足，K1+ 本就没有样本（改动前后都是空），
+    // 因此这里用源码守卫钉住「采样点交给 _plotEvalSeries 按 evalClockForDisplayKn 走」，
+    // 免得将来又退回 K0 逐根 —— 那正是本次修掉的声明/实现不一致。
+    final src = File('lib/backtest/catalog_lookup.dart').readAsStringSync();
+    final body = src.substring(
+      src.indexOf('List<EvalClockPoint> _regressionEvalSeries('),
+      src.indexOf('List<double?> _geometryPriceSeries('),
+    );
+    expect(body.contains('_plotEvalSeries('), isTrue,
+        reason: '回归通道的采样点必须交给 _plotEvalSeries 按各自 evalClock 走');
+    expect(body.contains('evalClock: evalClockForDisplayKn(kn)'),
+        isTrue,
+        reason: '钟必须取 evalClockForDisplayKn（K1+ = knSample），不能写死逐根');
   });
 
   test('采样钟退场会被计数，不许静默退回冻段（S6）', () {
