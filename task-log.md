@@ -4486,4 +4486,27 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **白话总结**：之前那版「K1 每根都在场判」的修复只落在测试和机器人验证走的那条路上，App 主图自己走的是另一条手工串起来的合并链，漏了「记一下当时那一段走到哪」这一步，于是寻优悄悄退回「等这段走完才算」的老口径——图上第 71 根就该响的信号，被压到这段的第 74 根才响。现在主图两条合并链都补上了这一步，换股重载时也会清干净。默认数据上再跑同一条条件，买信号回到 K0#71。
 - **注意**：①App 内端到端验收仍需用户确认：加载默认数据 → 步进到末根 → 寻优，看该条件落点是否为 K0#71；②寻优数字会普遍变差、扫描变慢（采样点 O(段数)→O(K 数)，已按 asOf 缓存），这是真实水平不是回归；③切「截断机制」开关后建议重新步进（该开关会重建 PipelineState，冻结仓本身就不完整，与既有行为一致，本次未扩大改动）。
 
+---### 2026-10-09 清理僵尸代码与临时产物：仓库根探针残留、3 个无引用 lib 文件、D:\2 根目录体检（确认执行）
+
+- **执行者**：AI 编码机器人（opencode）
+- **类型**：工程清理（删未引用文件 / 未用 import / 一次性脚本；不动缠论内核、不动回归测试套件）
+- **用户指令**：删除项目中的测试和僵尸代码；体检 `D:\2` 下的 md / txt / cmd，必要的移入 `D:\2\chan_month5` 的合适位置；最后 commit + push。**范围已与用户确认**：只删临时 / 僵尸产物，**保留回归测试套件**（test/ 79 个文件、18306 行是锁口径的自动回归，删了口径再退化时没人拦）。
+- **判定与处置**：
+
+  | 对象 | 判定依据 | 处置 |
+  |---|---|---|
+  | 仓库根 `.tmp_*.txt` × 17（约 440KB） | 未跟踪的调试探针残留，内容是 git 的 rename 检测告警噪声 | 删除，并往 `.gitignore` 加 `/.tmp_*.txt` 防复发 |
+  | `lib/settings/trend_model_settings_store.dart`（37 行） | 全仓**从未被 import**；它写的 `.chan_trend_model_config.json` 已由 `math_indicator_settings_store.dart` 接管（该文件注释即写「兼容旧 .chan_trend_model_config.json」） | `git rm` |
+  | `lib/widgets/main_indicator_picker.dart`（219 行）、`lib/widgets/sub_indicator_picker.dart`（239 行） | 全仓**从未被 import**（`showMainIndicatorPicker` / `showSubIndicatorPicker` 零引用）；2026-09-15 提交 `96605580`「展开直选指标」重做选择器后的遗留 | `git rm` |
+  | `main.dart` 11 处 + 3 个测试文件 3 处未用 import | `flutter analyze` 报 unused / unnecessary | 删除（BOM、行尾已核对与原文件一致） |
+  | `D:\2\verify_p2.cmd` / `verify_p2.ps1` / `verify_p2_cont.cmd` / `verify_fast.cmd` | 都引用 `indicator_search_inf_payoff_diag_test.dart` 与 `indicator_search_report_header_test.dart`，这两个文件已在 2026-10-06 分支对齐时**删除**（task-log 4439 行）→ 现在跑必然报错；且属一次性「P2 验证」脚本，仓库已有 `CHAN_RUST/scripts/robot_verify.ps1` / `run_release_gate.ps1` | 删除（**未移入仓库**：内容已失效，移进去只是换个地方烂掉） |
+  | `D:\2\p2_verify_result.txt` | 上述脚本的输出产物，2026-10-01 之后再无更新 | 删除 |
+  | `D:\2\量化P2验证说明.md`（2026-09-30，3.4KB） | 一次性里程碑说明，其内容（inf_payoff 12 条 / report_header 8 条 / analyzer `.reduce` 提示 / 测试条数口径）已完整进 `task-log.md` 2026-09-30 条目与 Obsidian `2026-09-30.md` | 删除（源权威在仓库，不在 D:\2 根目录） |
+
+- **D:\2 根目录体检结论**：清完后 `D:\2` 下只剩 `chan_month5` 一个目录，没有需要「搬进仓库」的东西——那 4 个脚本是**断链**而非**错放**，搬进去只会把失效引用固化。
+- **未动**：`test/` 下 79 个回归测试文件（18306 行，含 2026-10-06 起的 KN 采样钟 6 条与本日新增的主图采样钟 4 条）；`lib/` 其余 195 个文件（按 import 图逐文件核过，只有上述 3 个是零引用）。
+- **结果**：`flutter analyze lib test` **0 error / 88 issues**（清理前 103，全部为 info/warning 级 lint，删的 15 条即 unused/unnecessary import）；冒烟 `test/condition_ast_test.dart` **19 条全过**。
+- **白话总结**：仓库根上那 17 个 `.tmp_*.txt` 是调 K1 采样钟时留下的 git 告警抄本（约 440KB 纯噪声），已删并加了忽略规则防止再犯。另外找出 3 个 Dart 文件全项目没人调用——两个是旧版「指标选择弹窗」，2026-09-15 重做后就成了孤儿；一个是旧的「均线/通道参数落盘」，同一个配置文件已由新的落盘类接管。`D:\2` 根目录那 4 个一键验证脚本引用着 10 月 6 日已经删掉的两份测试，现在跑必然报错，属于死脚本，连同它们的输出和一份 9 月 30 日的一次性说明文档一并清掉。回归测试套件按你的选择**整套保留**。
+- **注意**：①未重编 App——删掉的是从未被引用的文件与多余 import，运行行为不变，当前正在运行的 App（含本日 K1 采样钟修复）仍然有效；②余下 88 条 analyze 提示全是 lint 偏好（测试里局部变量带下划线等），刻意没动，避免无意义改动刷 diff；③如需「一键跑全部回归」的入口，目前仓库没有（那 4 个死脚本本想提供这个），需要的话可另加 `CHAN_RUST/scripts/run_tests.ps1`，说一声我就补。
+
 ---
