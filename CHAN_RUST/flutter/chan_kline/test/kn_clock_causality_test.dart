@@ -256,6 +256,31 @@ void main() {
         reason: '现算（最终态段尾制）本就不该给出这格——否则本测试无法区分两条路');
   });
 
+  test('对弦平移 / 顶极贴合 / 底极贴合不再恒无样本（V4 回归）', () {
+    // 白名单补齐后至少 K0 三族都有样本；K1 对弦平移同样可读。
+    // （顶/底极贴合依赖「父段内极点拟合」，父层无数据时本就为空——那是数据属性，
+    //   与本次白名单缺失是两回事。）
+    const ids = [
+      'MAIN.K0.FX_CHORD_TRANSLATED.PRICE',
+      'MAIN.K0.FX_BOTTOM_SNUG.PRICE',
+      'MAIN.K0.FX_TOP_SNUG.PRICE',
+      'MAIN.K1.FX_CHORD_TRANSLATED.PRICE',
+    ];
+    for (final id in ids) {
+      final s = readEvalClockSeries(
+        variableId: id,
+        asOf: bars.last.idx,
+        bars: bars,
+        levels: h.levels,
+        k0Confirms: h.chanEvents.k0FractalConfirms,
+        knClock: h.knClock,
+      );
+      expect(s, isNotEmpty,
+          reason: '$id 在目录里已登记，此前求值白名单漏了它 → 恒无样本、'
+              '引用它的策略永远不出信号且不报错（V4）');
+    }
+  });
+
   test('空档切断：K2 穿越信号的前一点必与它相邻（无单侧空档）', () {
     // K2 实测空档 128 个（K0/K1 为 0），用它做端到端断言。
     final buy = const TradeCmpAst(

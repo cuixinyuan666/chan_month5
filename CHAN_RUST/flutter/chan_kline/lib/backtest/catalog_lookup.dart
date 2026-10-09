@@ -1,5 +1,6 @@
 ﻿import '../compute/fractal_judgment_compute.dart';
 import '../compute/fx_extend_line_compute.dart';
+import '../compute/fx_pole_snug_compute.dart';
 import '../compute/kn_clock_timeline.dart';
 import '../compute/kn_ohlc_sample_compute.dart';
 import '../compute/kn_volume_series_compute.dart';
@@ -1071,7 +1072,12 @@ List<double?>? _extendedPlotSeries({
     final head = parsed.rest[0];
     if (head == 'FX_TRIPLE' ||
         head == 'FX_QUAD' ||
-        head == 'TREND_LINE') {
+        head == 'TREND_LINE' ||
+        // 2026-10-09 补（V4）：这三个在目录里已登记，却没进白名单，
+        // 条件求值恒返回空 → 引用它们的策略永远不出信号且不报错。
+        head == 'FX_CHORD_TRANSLATED' ||
+        head == 'FX_BOTTOM_SNUG' ||
+        head == 'FX_TOP_SNUG') {
       return _geometryPriceSeries(
         parsed: parsed,
         asOf: asOf,
@@ -1159,6 +1165,12 @@ List<double?> _geometryPriceSeries({
         : parsed.rest[1] == 'RESIST'
             ? 'trend_resist_price_$kn'
             : null;
+  } else if (parsed.rest[0] == 'FX_CHORD_TRANSLATED') {
+    featureKey = 'fx_chord_translated_price_$kn';
+  } else if (parsed.rest[0] == 'FX_BOTTOM_SNUG') {
+    featureKey = 'fx_bottom_snug_price_$kn';
+  } else if (parsed.rest[0] == 'FX_TOP_SNUG') {
+    featureKey = 'fx_top_snug_price_$kn';
   }
   var filled = 0;
   if (featureKey != null && features != null) {
@@ -1210,6 +1222,43 @@ List<double?> _geometryPriceSeries({
         focusX: x,
       );
       out[x] = parsed.rest[1] == 'SUPPORT' ? tl.support : tl.resistance;
+    } else if (parsed.rest[0] == 'FX_CHORD_TRANSLATED') {
+      final poles = collectLevelFxPoles(
+        displayKn: kn,
+        bars: bars,
+        k0Confirms: k0Confirms,
+        levels: levels,
+        asOf: x,
+      );
+      out[x] = chordTranslatedPriceReadout(
+        calcAllChordTranslatedGroups(poles),
+        atX: x,
+        focusX: x,
+      );
+    } else if (parsed.rest[0] == 'FX_BOTTOM_SNUG') {
+      out[x] = bottomSnugPriceReadout(
+        calcBottomSnugGroupsForLevel(
+          displayKn: kn,
+          bars: bars,
+          k0Confirms: k0Confirms,
+          levels: levels,
+          asOf: x,
+        ),
+        atX: x,
+        focusX: x,
+      );
+    } else if (parsed.rest[0] == 'FX_TOP_SNUG') {
+      out[x] = topSnugPriceReadout(
+        calcTopSnugGroupsForLevel(
+          displayKn: kn,
+          bars: bars,
+          k0Confirms: k0Confirms,
+          levels: levels,
+          asOf: x,
+        ),
+        atX: x,
+        focusX: x,
+      );
     }
   }
   return out;
