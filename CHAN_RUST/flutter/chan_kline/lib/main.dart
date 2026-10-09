@@ -3127,6 +3127,7 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
       features: _pipelineSession?.cache.lookup,
       chipPeaks: _stepFreeze.chipPeakStore,
       bucketStep: _chipConfig.bucketStep,
+      knClock: _stepFreeze.knClockTimeline,
       compactLayout: _useAndroidInteraction,
     );
     final body = LayoutBuilder(

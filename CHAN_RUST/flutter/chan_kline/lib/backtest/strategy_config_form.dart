@@ -7,6 +7,7 @@ import '../models/kline_bar.dart';
 import '../models/level_models.dart';
 import 'chan_event_store.dart';
 import 'chart_line_store.dart';
+import '../compute/kn_clock_timeline.dart';
 import 'chip_peak_store.dart';
 import 'condition_ast.dart';
 import 'buy_n_var.dart';
@@ -42,6 +43,8 @@ class StrategyConfigForm extends StatefulWidget {
   final ChipPeakFreezeStore? chipPeaks;
   final double bucketStep;
   final int asOf;
+  /// K1+ 采样钟（变量诊断面板按真实采样点报样本数）
+  final KnClockTimeline? knClock;
 
   const StrategyConfigForm({
     super.key,
@@ -63,6 +66,7 @@ class StrategyConfigForm extends StatefulWidget {
     this.chipPeaks,
     this.bucketStep = 0.1,
     this.asOf = 0,
+    this.knClock,
   });
 
   @override
@@ -875,6 +879,7 @@ class _StrategyConfigFormState extends State<StrategyConfigForm> {
       chipPeaks: widget.chipPeaks,
       bucketStep: widget.bucketStep,
       maxKn: widget.maxKn < 0 ? 0 : widget.maxKn,
+      knClock: widget.knClock,
     );
     return Container(
       padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),

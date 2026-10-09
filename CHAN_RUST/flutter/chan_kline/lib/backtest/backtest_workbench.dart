@@ -8,6 +8,7 @@ import 'backtest_report_panel.dart';
 import 'backtest_run.dart';
 import 'chan_event_store.dart';
 import 'chart_line_store.dart';
+import '../compute/kn_clock_timeline.dart';
 import 'chip_peak_store.dart';
 import 'divergence_relation_store.dart';
 import 'order_models.dart';
@@ -58,6 +59,9 @@ class BacktestWorkbench extends StatelessWidget {
   final BarFeatureLookup? features;
   final ChipPeakFreezeStore? chipPeaks;
   final double bucketStep;
+
+  /// K1+ 采样钟（诊断面板要用它算真实采样点，否则给用户看的是冻段口径的样本数）。
+  final KnClockTimeline? knClock;
   /// 与 K 线图 mobileLayout 一致：窄屏仍可竖向贴在图下。
   final bool compactLayout;
 
@@ -90,6 +94,7 @@ class BacktestWorkbench extends StatelessWidget {
     this.features,
     this.chipPeaks,
     this.bucketStep = 0.1,
+    this.knClock,
     this.compactLayout = false,
   });
 
@@ -177,6 +182,7 @@ class BacktestWorkbench extends StatelessWidget {
                           features: features,
                           chipPeaks: chipPeaks,
                           bucketStep: bucketStep,
+                          knClock: knClock,
                           asOf: currentStepIdx,
                         ),
                       )

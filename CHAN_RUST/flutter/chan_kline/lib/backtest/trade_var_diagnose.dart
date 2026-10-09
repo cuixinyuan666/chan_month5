@@ -1,3 +1,4 @@
+import '../compute/kn_clock_timeline.dart';
 import '../compute/math_series_freeze_store.dart';
 import '../models/bar_feature_lookup.dart';
 import '../models/kline_bar.dart';
@@ -210,6 +211,7 @@ TradeVarDiagnosis diagnoseTradeVariable({
   ChipPeakFreezeStore? chipPeaks,
   double bucketStep = 0.1,
   int maxKn = 8,
+  KnClockTimeline? knClock,
 }) {
   final def = lookupTradeVariable(variableId, maxKn: maxKn);
   final parsed = parseTradeVariableId(variableId);
@@ -350,6 +352,7 @@ TradeVarDiagnosis diagnoseTradeVariable({
     zsConfirmByKn: chanEvents.zsConfirmByKn,
   );
   final series = readEvalClockSeries(
+    knClock: knClock,
     variableId: variableId,
     asOf: asOf,
     bars: bars,
