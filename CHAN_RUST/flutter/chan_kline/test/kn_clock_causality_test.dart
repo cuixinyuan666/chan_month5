@@ -1,6 +1,7 @@
 ﻿import 'package:chan_kline/backtest/backtest_run.dart';
 import 'package:chan_kline/backtest/backtest_step_harness.dart';
 import 'package:chan_kline/backtest/catalog_lookup.dart';
+import 'package:chan_kline/backtest/chart_line_store.dart';
 import 'package:chan_kline/backtest/chan_event_store.dart';
 import 'package:chan_kline/backtest/condition_ast.dart';
 import 'package:chan_kline/backtest/signal_event.dart';
@@ -10,7 +11,9 @@ import 'package:chan_kline/backtest/trade_operand.dart';
 import 'package:chan_kline/bridge/chan_bridge.dart';
 import 'package:chan_kline/compute/demark_compute.dart';
 import 'package:chan_kline/compute/kn_ohlc_sample_compute.dart';
+import 'package:chan_kline/compute/line_slope_compute.dart';
 import 'package:chan_kline/compute/math_series_freeze_store.dart';
+import 'package:chan_kline/compute/step_rhythm_compute.dart';
 import 'package:chan_kline/models/kline_bar.dart';
 import 'package:chan_kline/models/level_models.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -283,16 +286,6 @@ void main() {
 
   test('空档切断：K2 穿越信号的前一点必与它相邻（无单侧空档）', () {
     // K2 实测空档 128 个（K0/K1 为 0），用它做端到端断言。
-    final buy = const TradeCmpAst(
-      left: TradeVarRef('MAIN.K2.MA.10'),
-      right: TradeVarRef('STRUCTURE.K2.ZS.ACTIVE.CENTER'),
-      op: TradeBinaryOp.crossBelow,
-    );
-    final sigXs = _signals(buy, _sellAst(), bars.last.idx)
-        .where((s) => s.op.name == 'crossBelow')
-        .map((s) => s.discoveryX)
-        .toList()
-      ..sort();
     final ma = readEvalClockSeries(
       variableId: 'MAIN.K2.MA.10',
       asOf: bars.last.idx,
@@ -310,17 +303,118 @@ void main() {
       zsObjects: h.zsObjects,
       knClock: h.knClock,
     );
-    final maAt = {for (final e in ma) e.availableAt};
-    final zsAt = {for (final e in zs) e.availableAt};
-    final both = maAt.intersection(zsAt);
-    expect(sigXs, isNotEmpty, reason: 'K2 该条件应有信号');
-    for (final x in sigXs) {
-      final prev = both.where((y) => y < x).toList()..sort();
-      expect(prev, isNotEmpty);
-      final y = prev.last;
-      final gapInside = maAt.where((t) => t > y && t < x && !zsAt.contains(t));
-      expect(gapInside, isEmpty,
-          reason: '信号 K$x 的前一点 K$y 与它之间存在空档（应被切断）');
+    final maAt = {for (final e in ma) e.availableAt: e.value};
+    final zsAt = {for (final e in zs) e.availableAt: e.value};
+    final both = maAt.keys.toSet().intersection(zsAt.keys.toSet()).toList()
+      ..sort();
+    final allAt = <int>{...maAt.keys, ...zsAt.keys};
+
+    // 参照答案（oracle）：按两侧都有值的采样点顺序，相邻两点**真相邻**才允许穿越。
+    bool gapBetween(int y, int x) => allAt.any(
+        (t) => t > y && t < x && (!maAt.containsKey(t) || !zsAt.containsKey(t)));
+    final expected = <int>{};
+    for (var i = 1; i < both.length; i++) {
+      final y = both[i - 1];
+      final x = both[i];
+      if (gapBetween(y, x)) continue;
+      if (maAt[y]! >= zsAt[y]! && maAt[x]! < zsAt[x]!) expected.add(x);
     }
+    expect(both.length, greaterThan(100), reason: 'K2 两侧都应有样本');
+
+    // 「MA 下穿中枢」与「中枢上穿 MA」是**同一个条件**的两种写法，空档切断必须对称生效。
+    for (final e in <String, TradeCmpAst>{
+      'MA下穿中枢': const TradeCmpAst(
+        left: TradeVarRef('MAIN.K2.MA.10'),
+        right: TradeVarRef('STRUCTURE.K2.ZS.ACTIVE.CENTER'),
+        op: TradeBinaryOp.crossBelow,
+      ),
+      '中枢上穿MA': const TradeCmpAst(
+        left: TradeVarRef('STRUCTURE.K2.ZS.ACTIVE.CENTER'),
+        right: TradeVarRef('MAIN.K2.MA.10'),
+        op: TradeBinaryOp.crossAbove,
+      ),
+    }.entries) {
+      final sigXs = _signals(e.value, _sellAst(), bars.last.idx)
+          .where((s) => s.op.name == e.value.op.name)
+          .map((s) => s.discoveryX)
+          .toSet();
+      expect(sigXs, expected,
+          reason: '${e.key}写法的信号集合必须等于「真相邻且发生穿越」的参照答案；'
+              '多出来的就是跨空档的假信号（V5）');
+    }
+  });
+
+  test('空档切断左右对称：同一条件两种写法结果一致（V5 · 合成数据）', () {
+    // 真实数据上 K2 的空档恰好没落在任何一次穿越之前，端到端测不出不对称；
+    // 这里用可控的稀疏/稠密两列把单侧空档钉死在一次「本该发生」的穿越之前。
+    // 斜率列在 K0#1/3/5（稀疏），节奏列在 K0#1..5（稠密）；K0#3 本该上穿。
+    final lines = ChartLineStore(
+      lineSlopeByKn: {
+        0: const [
+          LineSlopePoint(x: 1, displayKn: 0, slope: 0, dir: 'up', childIdx: 1),
+          LineSlopePoint(x: 3, displayKn: 0, slope: 5, dir: 'up', childIdx: 3),
+          LineSlopePoint(x: 5, displayKn: 0, slope: 0, dir: 'down', childIdx: 5),
+        ],
+      },
+      stepRhythmByKn: {
+        0: [
+          for (var x = 1; x <= 5; x++)
+            StepRhythmLinePoint(
+              x: x,
+              displayKn: 0,
+              key: 'r$x',
+              value: 2,
+              ratio: 1,
+              dir: 'up',
+              roundCurrent: 0,
+              roundRef: 0,
+              layer: 0,
+              label: '$x',
+              currentBiIdx: x,
+              refBiIdx: x,
+              retraceBiIdx: x,
+            ),
+        ],
+      },
+    );
+    Set<int> _sig(TradeAst ast) {
+      final run = executeStrategyBacktest(
+        config: StrategyConfig(buyAst: ast, sellAst: _sellAst()),
+        scope: BacktestDataScope(
+          code: _code,
+          period: _period,
+          barCount: 6,
+          asOfX: 5,
+          beginText: _begin,
+          endText: _end,
+        ),
+        bars: bars,
+        levels: h.levels,
+        mathFreeze: h.mathFreeze,
+        lineSeries: lines,
+        maxKn: h.maxKn,
+      );
+      return run.result!.signals
+          .where((s) => s.side?.name == 'buy')
+          .map((s) => s.discoveryX)
+          .toSet();
+    }
+
+    const slopeUp = TradeCmpAst(
+      left: TradeVarRef('SUB.K0.LINE_SLOPE'),
+      right: TradeVarRef('MAIN.K0.STEP_RHYTHM'),
+      op: TradeBinaryOp.crossAbove,
+    );
+    const rhythmDown = TradeCmpAst(
+      left: TradeVarRef('MAIN.K0.STEP_RHYTHM'),
+      right: TradeVarRef('SUB.K0.LINE_SLOPE'),
+      op: TradeBinaryOp.crossBelow,
+    );
+    expect(_sig(slopeUp), _sig(rhythmDown),
+        reason: '同一条件的两种写法必须同结果；旧实现只看 left 侧，'
+            '把「稠密在右」的空档全漏了（V5）');
+    expect(_sig(slopeUp), isEmpty,
+        reason: 'K0#1 与 K0#3 之间，节奏列在 K0#2 有值而斜率列没有 → 中间不可知，'
+            '这次上穿必须被切断，不许出信号');
   });
 }

@@ -493,24 +493,33 @@ List<_BoolPt> _evalCmp(CompiledCmp cond, CondEvalCtx ctx) {
   final eqDigits = usePlotGrid && cond.op == TradeBinaryOp.eq
       ? _subNumericDisplayDigits(cond)
       : null;
+  final leftByAt = <int, EvalClockPoint>{
+    for (final p in left) p.availableAt: p,
+  };
   final rightByAt = <int, EvalClockPoint>{
     for (final p in right) p.availableAt: p,
   };
-  // 空档标记：true = 与上一配对点之间，本侧序列还有别的采样点（说明对侧那几格无值）。
+  // 空档标记：true = 与上一配对点之间，两侧序列里还有**没配上对**的采样点
+  // （说明有一侧那几格无值）。
   // 未确认中枢「盖住才有数」，框外的格会被丢；那些格之间发生了什么当下不可知，
   // 所以**不许跨空档比较**——空档之后的第一格判 false，相邻两点必须真的是相邻。
+  //
+  // **[2026-10-09 修 · V5] 改为左右对称**：旧实现只遍历 left，只统计「left 有、right 没有」
+  // 的失配点，于是 `A 下穿 B` 与 `B 下穿 A`（语义等价的两种写法）结果不同 ——
+  // 右侧（稀疏在左）留的空档完全不可见。现按两侧 availableAt 的并集顺序走一遍。
   final aligned = <({EvalClockPoint a, EvalClockPoint b, bool gapBefore})>[];
-  var sinceLastKept = 0;
-  for (final a in left) {
-    final b = rightByAt[a.availableAt];
-    if (b == null) {
-      sinceLastKept++;
+  var gapPending = false;
+  final allX = <int>{...leftByAt.keys, ...rightByAt.keys}.toList()..sort();
+  for (final x in allX) {
+    final a = leftByAt[x];
+    final b = rightByAt[x];
+    if (a == null || b == null) {
+      gapPending = true;
       continue;
     }
-    aligned.add((a: a, b: b, gapBefore: sinceLastKept > 0));
-    sinceLastKept = 0;
+    aligned.add((a: a, b: b, gapBefore: gapPending));
+    gapPending = false;
   }
-  aligned.sort((x, y) => x.a.availableAt.compareTo(y.a.availableAt));
   if (aligned.isEmpty) return const [];
 
   final leftId = cond.left is TradeVarRef
