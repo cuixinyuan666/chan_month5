@@ -44,6 +44,11 @@ class BacktestResult {
 }
 
 /// 用成交回放净值，再算绩效；账户期末仓位单独记未平仓。
+///
+/// [computeRulePerf] = false 时跳过「按规则归因」（`computeRulePerformance` 内部对
+/// **每笔交易**扫一遍**全净值曲线**，是 O(笔数 × K 数)）。寻优对
+/// `rulePerformances` **零消费**（唯一消费者是回测台报告面板），寻优路径传 false。
+/// 默认 true，保证回测工作台与既有测试行为一字不变。
 BacktestResult buildBacktestResult({
   required List<SignalEvent> signals,
   required List<Order> orders,
@@ -53,6 +58,7 @@ BacktestResult buildBacktestResult({
   required List<KlineBar> bars,
   required double initialCapital,
   required OpenPosition? openPosition,
+  bool computeRulePerf = true,
 }) {
   final curve = buildEquityCurve(
     bars: bars,
@@ -76,11 +82,13 @@ BacktestResult buildBacktestResult({
     account: account,
     lastPrice: lastPrice,
     initialCapital: initialCapital,
-    rulePerformances: computeRulePerformance(
-      signals: signals,
-      orders: orders,
-      trades: trades,
-      equityCurve: curve,
-    ),
+    rulePerformances: computeRulePerf
+        ? computeRulePerformance(
+            signals: signals,
+            orders: orders,
+            trades: trades,
+            equityCurve: curve,
+          )
+        : const <RulePerformance>[],
   );
 }

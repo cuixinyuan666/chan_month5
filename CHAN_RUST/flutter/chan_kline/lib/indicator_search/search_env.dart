@@ -338,6 +338,9 @@ class SearchEnv {
       mathConfig: h.mathConfig,
       minExecuteXExclusive: minExecuteXExclusive,
       knClock: h.knClock,
+      // 寻优对 rulePerformances 零消费（唯一消费者是回测台报告面板），
+      // 而 computeRulePerformance 是 O(笔数 × K 数) —— 寻优链路关掉（T3）。
+      computeRulePerf: false,
     );
   }
 }

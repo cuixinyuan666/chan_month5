@@ -1,4 +1,4 @@
-﻿import '../compute/kn_clock_timeline.dart';
+import '../compute/kn_clock_timeline.dart';
 import '../compute/math_series_freeze_store.dart';
 import '../models/bar_crosshair_feature.dart';
 import '../models/bar_feature_lookup.dart';
@@ -77,6 +77,8 @@ BacktestRun executeStrategyBacktest({
   /// K1+ 采样钟的 asOf 当时段划分时间线（动态段口径）。
   /// 传了就用「当时那一段走到哪」采样；为 null 退回最终态 levels（仅诊断用）。
   KnClockTimeline? knClock,
+  /// 寻优等批量场景传 false：跳过「按规则归因」（寻优零消费，代价见 buildBacktestResult）。
+  bool computeRulePerf = true,
 }) {
   final started = now ?? DateTime.now();
   final id = runId ?? 'run_${started.millisecondsSinceEpoch}';
@@ -173,6 +175,7 @@ BacktestRun executeStrategyBacktest({
     slippage: config.slippageAmount <= 0
         ? const ZeroSlippage()
         : AbsoluteSlippage(config.slippageAmount),
+    computeRulePerf: computeRulePerf,
   );
   return BacktestRun(
     runId: id,

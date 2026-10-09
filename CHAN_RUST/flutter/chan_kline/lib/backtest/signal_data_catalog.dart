@@ -397,9 +397,28 @@ List<TradeVarGroupSpec> groupedRegisteredVars(int kn, int maxKn) {
   ];
 }
 
-/// 阶段0已登记、可以进条件表达式的变量。
+/// 变量目录的进程级 memo（2026-10-09 · 寻优提速 T3）。
+///
+/// `buildRegisteredTradeVariables` 是**纯函数**（只依赖 maxKn），但每次调用都会
+/// 重新 new 出上千个 `TradeVariableDef`（含 displayName 等字符串插值）再线性扫。
+/// 寻优里 `lookupTradeVariable` 每候选被调用数次（编译期绑定 + 求值期取样本），
+/// 开销可观。memo 后返回同一个不可变列表，口径零变化。
+final Map<int, List<TradeVariableDef>> _registeredByMaxKn =
+    <int, List<TradeVariableDef>>{};
+
 /// [maxKn] 与图上 chartMaxKn 同口径：布林 0..maxKn；虚拟K收盘 1..maxKn。
 List<TradeVariableDef> buildRegisteredTradeVariables(int maxKn) {
+  final hi = maxKn < 0 ? 0 : maxKn;
+  final memo = _registeredByMaxKn[hi];
+  if (memo != null) return memo;
+  final out = buildRegisteredTradeVariablesUncached(hi);
+  // 返回不可变视图：调用方若原地 sort/append 会污染全局缓存。
+  _registeredByMaxKn[hi] = List<TradeVariableDef>.unmodifiable(out);
+  return _registeredByMaxKn[hi]!;
+}
+
+/// 未 memo 的原始构建（只由 [buildRegisteredTradeVariables] 调用）。
+List<TradeVariableDef> buildRegisteredTradeVariablesUncached(int maxKn) {
   final hi = maxKn < 0 ? 0 : maxKn;
   final out = <TradeVariableDef>[];
 
