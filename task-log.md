@@ -4462,3 +4462,28 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 
 ---
 
+
+### 2026-10-09 主图会话补记 K1+ 采样钟：寻优信号不再被推到段尾（确认执行）
+
+- **执行者**：AI 编码机器人（opencode）
+- **类型**：修复回测 / 寻优的 K1+ 采样钟口径（步进冻结链补一步；不改缠论内核取值）
+- **背景（用户报的现象）**：默认数据（002003 / tick / 2004-07-19 10:47 ~ 07-20 13:09，942 根）上，「K1均线5 下穿 K1未确认中枢中轴」在 K0#71 就已成立，寻优却到 K0#74 才出信号——74 正是那一段（68..74 下跌段）的**段尾**。
+- **实测对照**（同一条条件、同一份数据）：
+
+  | 口径 | 买信号落点 |
+  |---|---|
+  | 采样钟有记录（动态段逐根在场） | **K0#71**（K70：MA5 11.872 > 中轴 11.870；K71：MA5 11.868 < 11.870 → 当根穿越） |
+  | 采样钟为空（退回最终态段尾制） | **K0#74**（段 68..74 的右端） |
+
+- **根因**：K1+ 采样钟「动态段逐根在场」虽已在 2026-10-06 落地，但**记时间线的那一步** `StepFreezeMerger.recordKnClockStep` 只存在于 `mergeRebuildCombineFreeze` 一条链里（独立 harness / 机器人验证走它）。主图会话是逐个 statics 手写的合并链（`main.dart` 的 `_rebuildCombine` 与「一次性走完」循环），**两条都没调它** → `_stepFreeze.knClockTimeline` 恒空 → `catalog_lookup.dart` 的 `_knSamples` 守卫 `knClock != null && !knClock.isEmpty` 不成立 → 退回 `collectKnOhlcSamples`（最终态段划分、一段一个点）= 冻段口径，动态段中途成立的信号被推到段尾。策略回测工作台（`main.dart:3390`）与寻优（复用主图会话冻结）吃的是同一份冻结，所以两处一起中招。
+- **为什么回归没抓到**：`test/kn_clock_causality_test.dart` 走 `driveStepHarness`，那条路会记采样钟；测的不是主图会话这条链。
+- **改动**：
+  1. `lib/main.dart` 新增 `_recordKnClockStep(bundle)` 包装（与既有 `_mergeXxx` 同风格），在**两条**合并链里各调一次，位置与 `mergeRebuildCombineFreeze` 一致（`_mergeZsSignalHistory` 之后、`_mergeRatioAndRhythm` 之前），同在 `!asofKeep && !skipFreezeMerge` 闸门内。
+  2. `lib/main.dart` 两处「加载 K 线 / 加载失败」的会话清空块补上 `knClockTimeline.clear()` + `knClockSeenUnits = 0`（原先逐字段手工清空冻结仓时漏了采样钟；不清会跨标的残留，而记录函数遇到 `lastAsOf >= stepIdx` 会直接跳过 → 换股后采样钟被旧数据钉死）。
+  3. 新增 `test/main_session_kn_clock_test.dart`（4 条）：①主图合并链信号 == 独立 harness 信号；②采样点数量 ≈ 每根 K 一根（证明逐根在场）；③去掉采样钟信号必须变（证明这一步不可省）；④源码守卫——`main.dart` 两条链都调了 `_recordKnClockStep`。
+- **结果**：`flutter analyze lib/main.dart test/main_session_kn_clock_test.dart` **0 error**（余 21 条为 `main.dart` 既有 info/warning，与基线一致）；新测试 **4 条全过**；`kn_clock_causality_test`（6 条）、`step_freeze_signatures_test` 全过；已跑 `CHAN_RUST/scripts/build_rust.ps1`，`kernel_blob.bin` 重建、App 已自动启动（PID 1352）。
+- **⚠️ 一条既有失败（与本次改动无关，已用 stash 复核）**：`run_to_end_vs_step_freeze_test.dart` 的 tick 用例红在审计探针 `T1_rhythm_hold`（span 38 / miss 5 / mismatch 0，toX=114）；把本次 `main.dart` 改动 stash 掉后同样复现，属既有问题，本次未处理。
+- **白话总结**：之前那版「K1 每根都在场判」的修复只落在测试和机器人验证走的那条路上，App 主图自己走的是另一条手工串起来的合并链，漏了「记一下当时那一段走到哪」这一步，于是寻优悄悄退回「等这段走完才算」的老口径——图上第 71 根就该响的信号，被压到这段的第 74 根才响。现在主图两条合并链都补上了这一步，换股重载时也会清干净。默认数据上再跑同一条条件，买信号回到 K0#71。
+- **注意**：①App 内端到端验收仍需用户确认：加载默认数据 → 步进到末根 → 寻优，看该条件落点是否为 K0#71；②寻优数字会普遍变差、扫描变慢（采样点 O(段数)→O(K 数)，已按 asOf 缓存），这是真实水平不是回归；③切「截断机制」开关后建议重新步进（该开关会重建 PipelineState，冻结仓本身就不完整，与既有行为一致，本次未扩大改动）。
+
+---
