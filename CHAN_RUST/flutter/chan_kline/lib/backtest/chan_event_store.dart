@@ -311,6 +311,13 @@ List<TradeChanEvent> _firstFractalJudgment(
   );
 }
 
+/// Demark 事件取值：**优先读冻结仓**（每步当步算好、逐格冻结、不回写）。
+///
+/// [2026-10-09 修 · V3] 此前只要 `bars` 非空就永远现算 `computeDemarkForLevel`，
+/// 而它内部的采样取自**最终态**段划分（`collectKnOhlcSamples` 一段一个点 = 冻段口径），
+/// 于是 K1+ 的 Demark 完成标记被推到段尾。现成的冻结仓里那份正是逐根当步算对的。
+///
+/// 冻结仓没有该层（例如没跑过步进、只给了最终态 levels）时才退回现算。
 DemarkK0Series? _demarkSeriesForEvents({
   required int kn,
   required int asOf,
@@ -319,6 +326,15 @@ DemarkK0Series? _demarkSeriesForEvents({
   required MathIndicatorConfig mathConfig,
   MathSeriesFreezeStore? mathFreeze,
 }) {
+  final frozen = mathFreeze?.demark(kn);
+  if (frozen != null && frozen.marksAt.isNotEmpty) {
+    final n = asOf + 1;
+    if (frozen.marksAt.length >= n) return frozen;
+    return DemarkK0Series([
+      for (var i = 0; i < n; i++)
+        i < frozen.marksAt.length ? frozen.marksAt[i] : null,
+    ]);
+  }
   if (bars.isNotEmpty) {
     return computeDemarkForLevel(
       displayKn: kn,
