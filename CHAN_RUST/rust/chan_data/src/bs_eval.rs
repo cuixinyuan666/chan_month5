@@ -1164,18 +1164,35 @@ mod tests {
         assert!(evs.iter().any(|e| e.cls == 7 && e.side == BsSide::Sell));
     }
 
-    fn load_002003_m1() -> Vec<crate::kline::KlineBar> {
+    fn load_002003_m1() -> Option<Vec<crate::kline::KlineBar>> {
         let data_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../a_Data");
-        assert!(data_root.join("002003").exists(), "a_Data/002003 missing");
+        let folder = data_root.join("002003");
+        let has_txt = folder.is_dir()
+            && std::fs::read_dir(&folder).ok().map(|it| {
+                it.filter_map(|e| e.ok()).any(|e| {
+                    e.path()
+                        .extension()
+                        .and_then(|s| s.to_str())
+                        .map(|s| s.eq_ignore_ascii_case("txt"))
+                        .unwrap_or(false)
+                })
+            })
+            .unwrap_or(false);
+        if !has_txt {
+            eprintln!("skip: a_Data/002003 无离线分笔 txt");
+            return None;
+        }
         let root = crate::resolve_data_root(Some(data_root.to_str().unwrap()));
-        crate::load_klines(
-            &root,
-            "002003",
-            "2004/07/19 10:47:00",
-            "2004/07/20 13:09:00",
-            crate::KlinePeriod::M1,
+        Some(
+            crate::load_klines(
+                &root,
+                "002003",
+                "2004/07/19 10:47:00",
+                "2004/07/20 13:09:00",
+                crate::KlinePeriod::M1,
+            )
+            .expect("load 002003"),
         )
-        .expect("load 002003")
     }
 
     fn k0_verdict_at(
@@ -1210,7 +1227,9 @@ mod tests {
     /// 强制验收：002003 1min K0 idx=12 的 4Sa，首次证伪在升破本框 ZG 的 step=17。
     #[test]
     fn k0_1min_idx12_4sa_wrong_at_17() {
-        let bars = load_002003_m1();
+        let Some(bars) = load_002003_m1() else {
+            return;
+        };
         assert!(bars.len() > 17);
         for asof in 12..17 {
             let v = k0_verdict_at(&bars, asof, "4Sa", 12);
@@ -1232,7 +1251,9 @@ mod tests {
     /// 强制验收：同窗 1Ba@12，同框新低 11.68 在 step=14 首次证伪。
     #[test]
     fn k0_1min_idx12_1ba_wrong_at_14() {
-        let bars = load_002003_m1();
+        let Some(bars) = load_002003_m1() else {
+            return;
+        };
         assert!(bars.len() > 14);
         for asof in 12..14 {
             let v = k0_verdict_at(&bars, asof, "1Ba", 12);

@@ -271,7 +271,7 @@ void main() {
       expect(t3.map((e) => e.kn), [0, 1]);
 
       final d = defaultMainIndicatorsK0();
-      expect(d.any((e) => e.kind == MainIndicatorKind.trendLine), isTrue);
+      expect(d.any((e) => e.kind == MainIndicatorKind.trendLine), isFalse);
       final lv0 = mainIndicatorsForLevel(0, buildMainIndicatorCatalog(1));
       expect(lv0.any((e) => e.kind == MainIndicatorKind.trendLine), isTrue);
     });

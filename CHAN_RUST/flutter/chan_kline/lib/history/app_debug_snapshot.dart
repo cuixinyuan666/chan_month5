@@ -15,9 +15,8 @@ import '../models/kline_bar.dart';
 import '../models/kline_combine_frame.dart';
 import '../models/level_models.dart';
 import '../models/k1_analysis.dart';
-import 'msg_history.dart';
 
-/// 生成可复制页面快照（含最近历史记录，便于粘贴排查）。
+/// 生成可复制页面快照（动态状态；历史见整合排查输出）。
 /// 常驻功能：勿当临时调试代码删除；合并到 main 时必须保留。
 class AppDebugSnapshot {
   static String build({
@@ -61,70 +60,7 @@ class AppDebugSnapshot {
     buf.writeln('时间=$ts');
     buf.writeln();
 
-    buf.writeln('【命名与口径】');
-    buf.writeln(
-      '层级：K0=原始K，K1=K0连线，K2=K1连线，Kn=第n层；旧「n段」=Kn；'
-      '主图/副图统一层号：指标 kn=层号(1..maxKn)，展示名比层号小1（主图 K(n-1)连线/K(n-1)合并；'
-      '副图 K(n-1)分型确认/K(n-1)分型极点距/K(n-1)截断）；旧「笔连线」=K0连线（曾称K1连线），线段=K1连线；合并不偏移。',
-    );
-    buf.writeln(
-      'Kn流水线：K(n-1)→包含合并→三元素分型确认→锚定配对→Kn；'
-      '全层同构：必须等下层单元确认冻结后才能参与上层（含截断）；'
-      '逐K当下冻结，未来结构不回写旧标签。',
-    );
-    buf.writeln(
-      '十字线 tooltip 走 bar_features.levels[] 各层 LevelSnap；'
-      '进行中单元可只读探测上层合并态（仅展示）；主图连线可含末态展示修正。'
-      '十字线开启时：K0合并/K1合并/Kn中枢与逐步口径对齐，本地 as-of 重算框；'
-      '关闭十字线仍画 Rust 末态 frames。',
-    );
-    buf.writeln(
-      '十字线 tooltip：两列表格对齐（日期时间/K0/Kn 分层，==== 分隔）；'
-      '半透明底不挡 K 线；内容过长滚轮下翻；'
-      '显示 tooltip 时滚轮不缩放，仅十字线(关tooltip)时滚轮可缩放。'
-      '十字线双击三态（仅中间1/3热区自管双击；左右不走系统双击）：'
-      '①开十字线+价格标签+tooltip；'
-      '②关 tooltip（线与价格标签保留）；③全关并恢复鼠标抓取。'
-      '十字线激活期间：屏蔽左步退/中播放及长按复位·重载·跑到末尾；'
-      '右步进仅在十字线移到最右端后按→触发（贴右步进：步进后十字线吸附新最右端可连续按住）；'
-      '点击仅跟线；仅中间双击可切三态。非十字线态：左/右点击立刻步退/步进，连点即加速。'
-      '键盘：方向键←/→ 在十字线态=十字线左/右移；向右已到最右端再按→转为步进（贴右步进，长按连发且越按越快），'
-      '十字线态方向键永不步退。非十字线态=左步退/右步进（按住连发加速，与点击同义）。',
-    );
-    buf.writeln(
-      '副图目录：Kn成交量(K0=原生；Kn=归属序列) + Kn分型确认/极点距 + Kn一类BS + Kn二类BS；'
-      'Kn截断仅 truncation_check=开 时可选；'
-      '极点距数值不画在折线上，十字线激活时在副图右上角固定读数。'
-      '十字线激活时副图与主图同构：确认/判断/极点距/截断/成交量/一类BS/二类BS均按 segAsOf 过滤 x>asOf，右侧不画。'
-      'Kn成交量：K0原生；K(n+1)=下层增量在本层单元上动态累加步进；'
-      '共享极点归已确认段，新动态不占末根；不回写 unit.volume；'
-      '十字线副图右上读数含 Kn成交量。'
-      'Kn一类BS：与 Kn中枢同层同号；买=枢下移标1Ba…、卖=镜像标1Sa…；'
-      '同枢仅建框/新极值标一类（等高/更弱归二类）；B比框最低、S比框最高（跳过不改参照）；'
-      'Kn二类BS：与一类同框；买=low≥已见最低标2Ba…、卖镜像2Sa…；'
-      '对齐分型判断=K0颗粒度+动态Kn；稳定键+颗粒度键含x；不回写。'
-      '选择栏默认叠加+「Kn指标」层全选；左上角同层/跨层※、单击灰度开关（再点打开）。',
-    );
-    buf.writeln(
-      '首段策略：种子合并框（口径A，首两单元不做包含）；'
-      'default_k0_policy=$defaultK0Policy；'
-      '截断机制 truncation_check=${truncationCheck ? "开" : "关"}。'
-      '画线：JUDGE两线虚 / CONFIRM则A→B实(冻结段)、B→C虚。',
-    );
-    buf.writeln(
-      '模块说明：已删除跨段中枢(KuaDuan)；zs.rs 统一中枢（JSON：zs_frames）；'
-      '主图指标「K(n)中枢」（斜线填充、只画框不标字），全层同构；'
-      '与同层合并/连线同色（K0蓝/K1黄/K2粉…）。',
-    );
-    buf.writeln(
-      '命名变更（2026-07-15）：代码取消「笔/线段」概念，统一 K0/K1/…/KN。'
-      '笔=K0连线、线段=K1连线；笔虚拟K=K1、线段虚拟K=K2。'
-      '字段 bi_*→k0_*/k1_*、seg_*→k1_*（如 bi_segments→k0_lines、bi_combine_frames→k1_combine_frames、seg_lines→k1_lines）；'
-      'Rust 类型 BiSegment→K0Line、BiVirtualBar→K1Bar、SegLine→K1Line、SegAnalysisBundle→K1AnalysisBundle 等；'
-      '已重建 chan_ffi.dll；JSON key 同步变更。内部 level 1-based 不变；泛用 segment 英文词（LevelSegment/segments/segment_policy）保留。',
-    );
-    buf.writeln();
-
+    buf.writeln('口径版本：chan_kline 命名/层级口径 v2026-07-15（K0/K1/…/KN 统一，术语表见 Obsidian 笔记 chan-month5/docs/GLOSSARY）；本快照仅含动态状态，历史见整合输出。');
     buf.writeln('【基础参数】');
     buf.writeln(
       '代码=${code ?? "-"}；周期=$periodLabel($period)；开始=$beginDate；结束=$endDate',
@@ -190,15 +126,6 @@ class AppDebugSnapshot {
       buf.writeln();
     }
 
-    final hist = MsgHistory.instance.rows;
-    if (hist.isNotEmpty) {
-      buf.writeln('【历史记录最近10条】');
-      final tail = hist.length <= 10 ? hist : hist.sublist(hist.length - 10);
-      for (final e in tail) {
-        buf.writeln('[${_shortTime(e.time)}] ${e.text}');
-      }
-      buf.writeln();
-    }
 
     buf.writeln('【复制说明】');
     buf.writeln(

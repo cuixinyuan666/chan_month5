@@ -185,6 +185,17 @@ class DivergenceRelationStore {
     return last;
   }
 
+  /// 连续单步对拍：关系身份 + 末快照摘要（不含长文案）。
+  String stepFreezeParityDigest() {
+    if (isEmpty) return 'empty:true';
+    final keys = _snaps.keys.toList()..sort();
+    return keys.map((k) {
+      final last = _snaps[k]!.last;
+      final ratio = last.ratio?.toStringAsFixed(6) ?? '_';
+      return '$k@${last.availableAt}|$ratio|${last.direction.name}';
+    }).join(';');
+  }
+
   void _append(DivergenceRelation rel) {
     final list = _snaps.putIfAbsent(rel.relationId, () => []);
     if (list.any((s) => s.availableAt == rel.availableAt)) return;

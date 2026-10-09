@@ -88,23 +88,38 @@ void main() {
       expect((r as CondCompileIllegal).kind, TradeCompileErrorKind.type);
     });
 
-    test('K0 AND K1 是 ClockError', () {
-      final r = compileConditionAst(
-        const TradeAndAst(
-          TradeCmpAst(
-            left: TradeVarRef('RAW.K0.CLOSE'),
-            right: TradeConstRef(10),
-            op: TradeBinaryOp.gt,
-          ),
-          TradeCmpAst(
-            left: TradeVarRef('RAW.K1.CLOSE'),
-            right: TradeConstRef(10),
-            op: TradeBinaryOp.gt,
-          ),
+    test('K0 CLOSE 直接穿 K1 布林仍是 ClockError；K0 AND K1 各自穿越可拼', () {
+      final mixedCmp = compileConditionAst(
+        const TradeCmpAst(
+          left: TradeVarRef('RAW.K0.CLOSE'),
+          right: TradeVarRef('MAIN.K1.BOLL.DOWN'),
+          op: TradeBinaryOp.crossBelow,
         ),
         maxKn: 2,
       );
-      expect((r as CondCompileIllegal).kind, TradeCompileErrorKind.clock);
+      expect((mixedCmp as CondCompileIllegal).kind, TradeCompileErrorKind.clock);
+      expect(
+        compileConditionAst(k0LowCrossBollAndK1LowCrossBollAst(), maxKn: 2),
+        isA<CondCompileOk>(),
+      );
+      expect(
+        compileConditionAst(
+          const TradeAndAst(
+            TradeCmpAst(
+              left: TradeVarRef('RAW.K0.CLOSE'),
+              right: TradeConstRef(10),
+              op: TradeBinaryOp.gt,
+            ),
+            TradeCmpAst(
+              left: TradeVarRef('RAW.K1.CLOSE'),
+              right: TradeConstRef(10),
+              op: TradeBinaryOp.gt,
+            ),
+          ),
+          maxKn: 2,
+        ),
+        isA<CondCompileOk>(),
+      );
     });
 
     test('整个背驰对象比大小是 Unavailable', () {

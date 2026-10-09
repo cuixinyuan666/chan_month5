@@ -3,6 +3,8 @@ __pycache__
 *-checkpoint.ipynb
 *.vscode
 *.log
+*.log.err
+CHAN_RUST/flutter/chan_kline/build_rust_run.log
 *.db
 *.gitignore
 config.yaml
@@ -10,14 +12,7 @@ OpenConfig.yaml
 gotify_push.py
 cos_config.yaml
 
-# 本地运行缓存
-a_replay_cache/a_perf_engine_cache/
-a_replay_cache/kline_sessions/
-a_replay_record/*/*.pkl
-a_replay_record/*/*.meta.json
-
 # Rust 编译产物
-a_rust_core/target/
 CHAN_RUST/rust/target/
 CHAN_RUST/rust/target_alt/
 
@@ -25,6 +20,9 @@ CHAN_RUST/rust/target_alt/
 CHAN_RUST/flutter/chan_kline/build/
 CHAN_RUST/flutter/chan_kline/.dart_tool/
 CHAN_RUST/flutter/chan_kline/.idea/
+# Gradle 本机构建缓存（含 8.14/ 版本目录、buildOutputCleanup、vcs-1；android 构建自动重建）
+# 2026-09-27 加入：仅 Android 平台产物，勿提交
+CHAN_RUST/flutter/chan_kline/android/.gradle/
 
 # 筹码分布本机偏好（bucketStep 等；运行时落盘，勿提交）
 CHAN_RUST/flutter/chan_kline/.chan_chip_config.json
@@ -35,10 +33,56 @@ CHAN_RUST/flutter/chan_kline/.chan_chip_config.json
 # CodeBuddy 运行时数据（含工作记忆，非源码，勿删但勿提交）
 .codebuddy/
 
+# WorkBuddy 本地工作记忆（权威任务记录见 task-log.md / Obsidian）
+.workbuddy/
+
 # ML 导出文件（运行时生成的模型和特征文件，勿提交）
 a_Data/ml_exports/
+
+# 指标寻优测试落盘（长任务进度/榜单，勿提交）
+CHAN_RUST/flutter/chan_kline/test/indicator_search/*.out
+CHAN_RUST/flutter/chan_kline/test/indicator_search/*.err
+CHAN_RUST/flutter/chan_kline/test/indicator_search/progress.log
+CHAN_RUST/flutter/chan_kline/test/indicator_search/results.tsv
+CHAN_RUST/flutter/chan_kline/test/indicator_search/report.txt
+CHAN_RUST/flutter/chan_kline/test/indicator_search/proc.txt
 
 # 临时测试文件
 *.tmp
 *.temp
 test_*.py
+# 调试探针落盘（仓库根 .tmp_*.txt：git 告警噪声等，调试完即删，勿提交）
+/.tmp_*.txt
+
+# 发布打包产物
+dist/
+
+# 机器人验证运行时落盘（模板：a_Data/robot_verify/session.json.example）
+a_Data/robot_verify/*
+!a_Data/robot_verify/README.md
+!a_Data/robot_verify/session.json.example
+
+# 本机编库/调试临时日志（仓库根）
+/build_err.txt
+/build_log.txt
+/fv.txt
+/fv2.txt
+
+# build_rust 复制 DLL 时若文件被占用留下的备份
+CHAN_RUST/flutter/chan_kline/windows/native/chan_ffi.dll.locked_*
+
+# 通达信协议分笔缓存（运行时按日生成，勿提交）
+a_Data/.tdx_protocol_cache/
+CHAN_RUST/a_Data/.tdx_protocol_cache/
+
+# Kilo 本地配置/缓存
+.kilo/
+.kilocode/
+
+# Flutter 本机生成物（含本机 flutter/sdk/pub-cache 路径，因人而异；flutter 会自动重建）
+# 2026-09-25 已 git rm --cached 取消跟踪，勿再提交
+CHAN_RUST/flutter/chan_kline/.flutter-plugins-dependencies
+CHAN_RUST/flutter/chan_kline/android/local.properties
+CHAN_RUST/flutter/chan_kline/linux/flutter/ephemeral/.plugin_symlinks/
+CHAN_RUST/flutter/chan_kline/windows/flutter/ephemeral/.plugin_symlinks/
+CHAN_RUST/flutter/chan_kline/windows/flutter/ephemeral/generated_config.cmake

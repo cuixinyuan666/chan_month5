@@ -1,7 +1,7 @@
 import 'condition_eval.dart';
 import 'strategy_config.dart';
 
-/// 策略编译：买/卖两棵 AST 都必须过同层同钟门禁，失败则根本不进求值。
+/// 策略编译：买/卖两棵 AST 都必须过门禁（单条比较同层同钟；AND/OR 可跨层），失败则根本不进求值。
 sealed class StrategyCompileResult {
   const StrategyCompileResult();
 }
@@ -21,7 +21,7 @@ final class StrategyCompileIllegal extends StrategyCompileResult {
   const StrategyCompileIllegal(this.reason);
 }
 
-/// 把买/卖 AST 编成可求值树。混层在这里就会被挡住。
+/// 把买/卖 AST 编成可求值树。单条比较混层仍会挡住；AND/OR 跨层在求值时对齐同一根 K0。
 StrategyCompileResult compileStrategyConfig(
   StrategyConfig config, {
   int maxKn = 8,

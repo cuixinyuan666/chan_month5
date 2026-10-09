@@ -16,6 +16,8 @@ import 'package:chan_kline/models/kline_bar.dart';
 import 'package:chan_kline/models/math_indicator_config.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'offline_tick_files.dart';
+
 KlineBar _bar(int idx, double close, {double vol = 1, double? open}) {
   final o = open ?? close;
   return KlineBar(
@@ -246,7 +248,7 @@ void main() {
         expect(rsiEval.map((e) => e.availableAt).toList(),
             eval.map((e) => e.availableAt).toList());
       }
-    });
+    }, skip: hasOffline002003TickFiles() ? false : kNoOffline002003Skip);
   });
 
   group('综合策略链路', () {
@@ -385,7 +387,7 @@ void main() {
         expect(f.executeX, sig.discoveryX);
       }
       expect(run.result!.equityCurve, isNotEmpty);
-    });
+    }, skip: hasOffline002003TickFiles() ? false : kNoOffline002003Skip);
   });
 
   group('变量诊断', () {
