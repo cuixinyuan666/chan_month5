@@ -632,9 +632,10 @@ class MsgHistory {
       '【踩坑·比例/节奏·2026-07-31 / 持值2026-08-09】'
       '①方案B：显示层 displayKn→数据 LevelBundle.level==displayKn；节奏父切组用 displayKn+1 的分型 confirms，勿用父段 end_confirm；'
       '②比例子线须含展示轨虚线/种子，勿只读冻段；按 beginX 出现序勿按 endConfirmX；'
-      '③节奏命名 0-0 起（label=$roundRef-${roundCurrent-roundRef}）；关窗持同 key/同 value；切组清 holdLines；'
+      '③节奏命名 0-0 起（label 由「roundRef」与「roundCurrent 减 roundRef」两数拼成，形如 0-0 / 0-1 / 1-0）；'
+      '关窗持同 key/同 value；切组清 holdLines；'
       '⚠2026-10-10 更正：旧说明写「例分笔 K1：77–114 续上个 0-0」有误 —— roundCurrent 由 0 推进到 1 时 0-0 按设计就该消失（分笔实测 x=110 起变为 0-1+1-0），'
-      '持值区间应取该标签的**实际存活段**，不得写死上界；续写上一轮结构等于拿旧数据冒充当下。详见 audit_probe_assertions.dart T1；'
+      '持值区间应取该标签的实际存活段，不得写死上界；续写上一轮结构等于拿旧数据冒充当下。详见 audit_probe_assertions.dart T1；'
       '④验收连续单步非跳末。详见 TASK_LOG / AGENTS.md。',
     );
   }
