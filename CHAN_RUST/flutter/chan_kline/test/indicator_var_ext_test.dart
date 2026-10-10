@@ -16,6 +16,7 @@ import 'package:chan_kline/models/kline_bar.dart';
 import 'package:chan_kline/models/math_indicator_config.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'math_freeze_step_fill.dart';
 import 'offline_tick_files.dart';
 
 KlineBar _bar(int idx, double close, {double vol = 1, double? open}) {
@@ -192,9 +193,9 @@ void main() {
       const asOf = 80;
       final prefix = bars.where((b) => b.idx <= asOf).toList();
       final bundle = bridge.buildKlineCombineBundle(prefix);
-      final store = MathSeriesFreezeStore();
-      mergeMathSeriesForStep(
-        store: store,
+      // 逐根步进建仓（跳步建仓只有当根一格，K1+ 采样序列会塌成 1 个点）。
+      // 见 math_freeze_step_fill.dart 的说明。
+      final store = fillMathFreezeByStepping(
         bars: prefix,
         levels: bundle.levels,
         config: const MathIndicatorConfig(),
