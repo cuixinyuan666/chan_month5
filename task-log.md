@@ -4808,3 +4808,86 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **`T1_rhythm_hold`**：是否另开一轮定位修复（属既有问题，非本轮引入）。
 
 ---
+
+### 2026-10-10 修 T1_rhythm_hold：探针锚点过期（非计算 bug）
+
+- **执行者**：AI 编码机器人（opencode）
+- **类型**：修复类 / 验收探针（**非** app 计算逻辑）
+- **用户指令**：「先修 T1_rhythm_hold」——定位并修那条长期红的基线失败
+- **本轮提交**：`4450a9fa`（探针）、`1aaeafab`（口径说明）、`629f5ba6`（修自己引入的编译错误）、`4a4f1523`（记忆库第 17 条）
+
+#### 根因：**探针锚点过期，不是计算 bug**
+
+- 节奏标签规则是 `roundRef` 拼 `roundCurrent - roundRef`（`step_rhythm_compute.dart:391`）。
+  `roundCurrent` 从 0 推进到 1 时，`0-0` **按设计就该消失**。
+- 002003 分笔实测（`walkWithTrace` 逐根走 942 根后 dump）：
+
+  | x 区间 | 标签 | roundCurrent |
+  |---|---|---|
+  | 49–109 | `0-0` | 0 |
+  | 110 起 | `0-1` + `1-0` | 1 |
+
+- 原探针写死「`[77,114]` 每根都必须是 `0-0`」，等于要求**拿上一轮结构继续冒充当下**，与本工程当下性核心相悖。
+
+#### 三条佐证「不是计算坏」
+
+1. `mismatch = 0` —— `[77,109]` 每根的 `0-0` **key 与 value 都与锚点完全一致**，持值逻辑工作正常；
+2. 110 起是 `0-1` + `1-0` **成对**出现 —— 自洽的新结构，不是缺数据/脏数据；
+3. 探针文件自建起**只有一次提交**（`982a0d34`，2026-09-30），锚点沿用自更早快照，
+   之后未随结构演进更新；`msg_history.dart` 两处口径说明也停留在旧期望。
+
+#### 改法：换成**更强**的不变式，不是放宽判据
+
+- 锚点区间取该标签的**实际存活段**（`holdFromX..aliveTo`），不再写死上界；
+- `miss` 只统计存活段**中间断档**（真 bug），尾部消失不算；
+- **新增 `superseded` 断言**：该标签消失必须由「结构推进」解释
+  （下一根上 `roundCurrent`/`groupId` 确实变了），否则判红 —— 比原来**多验一条**。
+
+**反向验证（确认非空转）**：
+
+| 场景 | 结果 |
+|---|---|
+| 真实数据 | `ok=true span=33 miss=0 mismatch=0 aliveTo=109 superseded=true refRound=0 → after=1/g0` |
+| **人为在 x=95 挖一个洞** | `ok=false miss=1` ← 断档被抓到 |
+
+#### 过程中我自己引入并修掉的编译错误（`629f5ba6`）
+
+改 `msg_history.dart` 时在**单引号**字符串里写了 `${roundCurrent-roundRef}` ——
+**Dart 单引号字符串同样做插值**，被解析成对不存在的 `MsgHistory.roundRef` 的引用 →
+编译失败 → **App 内的 `flutter test` 子进程静默卡死 30 分钟**（`status.json` 不推进、
+`flutter_tester` CPU 零增长、不产出报告）。
+
+一度误判为「App 与测试子进程抢 `.dart_tool` 死锁」「`flutter build` 退出 1 污染产物」。
+真因定位靠**脱离 App 直接跑同一条 `flutter test`**，一步切开「环境问题」与「代码问题」。
+教训写入 `error remember` 第 17 条。
+
+#### 验收（机器人 E2E，套件 `e2e_20261010`）
+
+```
+总 ok = True    阶段 4 / 失败 0 / 跳过 0
+  [OK] flutter_test_e2e
+  [OK] inprocess_s3_presence       8/8 断言，非空转（steps=287 oneByOne=True probed=4）
+  [OK] inprocess_legend_signature  6/6
+  [OK] continuous_step_freeze      1m OK；tick OK
+        T1_rhythm_hold  span=33 miss=0 mismatch=0 aliveTo=109 superseded=True 1/g0
+        T2_tip_sync     OK
+```
+
+- **全量 `flutter test`：11 失败 → 10 失败**，`run_to_end_vs_step_freeze_test` 已出列，
+  剩余 10 项与本轮开工前基线同一批，零新增。
+- `flutter analyze lib test`：**0 error**。
+
+#### 另一个教训：`-SkipBuild` 会测到旧二进制
+
+改了 Dart 源码后用 `-SkipBuild` 跑机器人验证，报告仍是**旧格式**
+（`span 38 / miss 5`，缺新加的 `aliveTo`/`superseded`）。**改了 `lib/` 就必须重编**，
+否则验的是上一版产物 —— 这点要在自动化脚本的提示语里写死。
+
+#### 待定 / 需拍板
+
+- **push**：待推 `origin/ANDROID_RUST`，提交数与文件数见下，等用户明确同意后执行。
+- 剩余 10 项基线失败（`backtest_workbench` / `catalog_full_var` / `chip_profile` /
+  `incremental_lookup` / `indicator_var_ext` / `mini_loop` / `robot_verify_full_suite` /
+  `signal_data_catalog` ×2 / `widget_test`）是否另开一轮处理。
+
+---
