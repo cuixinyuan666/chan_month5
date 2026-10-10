@@ -4947,3 +4947,77 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - 5 项过期测试的修法都是「改断言/改期望值」，属测试层，可与真问题脱钩分批做。
 
 ---
+
+### 2026-10-10 修 #1 过期断言 + 坑点沉淀（#10 判定推翻，不改）
+
+- **执行者**：AI 编码机器人（opencode）
+- **类型**：测试修复 + 文档订正 + 记忆库沉淀
+- **用户指令**：「改改 #10 和 #1」「你遇到的坑写入相关文档」
+- **本轮提交**：`46922f1e`
+
+#### 一、#1 已修（`catalog_full_var_test`），且**顺带加强了覆盖**
+
+- `MAIN.K1.CHANNEL.20.MAX` 在 `57a7539e`（2026-09-23「回归通道对齐」）**整族删除**
+  （`channelVarId` / `parseChannelVarId` / `_channelDef`），由 **布林 / 唐奇安 / 回归通道** 三族取代。
+- 旧断言只盯一个**已不存在**的族；改为钉住三族齐备：
+  `MAIN.K1.BOLL.UP` / `MAIN.K1.DONCHIAN.UP` / `MAIN.K1.REGRESS.MID` —— **覆盖变强，不是变弱**。
+- 单独跑：**4 tests, All tests passed**。
+
+#### 二、#10 **不改** —— 上一轮我的判断是错的
+
+用户让我改 #10，照做前先核「它守的是什么」，结果**推翻了上一轮的结论**：
+
+`robot_verify_full_suite_test` 的 `minExpected = 42` **不是过期魔数，是报警器**。
+
+`b7d0729d`（2026-10-08「寻优口径切回本地版」）在**重写寻优核心约 2000 行**的
+**同一次提交**里删除了 **5 个测试文件约 700 行**：
+
+| 文件 | 行数 |
+|---|---|
+| `indicator_search_report_header_test.dart` | -243 |
+| `indicator_search_inf_payoff_diag_test.dart` | -212 |
+| `indicator_search_early_stop_parity_test.dart` | -63 |
+| `indicator_search_oos_slice_test.dart` | -88 |
+| `indicator_search_parity_test.dart` | -66 |
+
+同批重写：`result_panel.dart` **1043 行**、`search_core.dart` 363、`search_verdict_views.dart` 227。
+
+**连带后果**：`reportHeader()`（`search_env.dart:387`）**失去唯一调用方，已成死代码**；
+而 `ROBOT_VERIFY.md` 原文**仍把它列为「已可机器人替代的 spot-check」** —— 文档失真。
+
+**把 42 改成 24 就是拆掉报警器、掩盖覆盖回退**，正是 `error remember` 第 11 条的病根。
+正确处置是**恢复被删的测试**（注意被测 API 已在该提交大改，旧用例未必还能编译）。
+
+#### 三、`ROBOT_VERIFY.md` 两处订正
+
+1. **删掉虚假声称**：原表把已删的 `report_header_test` 标成「✅ 自动」。改为标注
+   「❌ 覆盖已丢失」，并附完整回退清单、连带后果与处置建议。
+2. **新增「覆盖边界（必读）」章节**：
+   `main.dart:123` 显示机器人验证启用时 `main()` 直接返回 `RobotVerifyApp`，
+   **完全绕过 `ChanKlineApp` / `KlineHomePage`**。
+   故 **「E2E ALL PASS」不能作为主界面正常的证据**。附 30 秒程序化判定法
+   （关 `active` → 启动 exe 并重定向日志 → 看进程存活/`Responding`/异常关键字）。
+
+#### 四、`error remember.md` 补 18-22 条
+
+| 条 | 要点 |
+|---|---|
+| 18 | 冻结仓 `mergeLevel(onlyX:)` 是**逐格冻结**，跳步建仓只有一格 → 4 条测试同踩；已封装 `fillMathFreezeByStepping()` |
+| 19 | 机器人验证绕过主 UI，「E2E 全绿」≠ 主界面正常；附程序化判定法 |
+| 20 | 改了 `lib/` 却用 `-SkipBuild` = **测旧二进制**；报告里看不到自己新加的字段就是信号 |
+| 21 | 测试里的魔数**可能是报警器**：改之前先按注释里的文件名 `Test-Path` 核一遍 |
+| 22 | 判定「测试失败对 App 有无影响」要分三层；定位失败要抓 `[E]` **前后 ±30 行**（Flutter 根因打在 `[E]` 之前） |
+
+#### 验收
+
+- `catalog_full_var_test` + A 类三件：**27 tests, All tests passed**
+- 全量基线失败：**6 → 5**（`#1` 出列；`#10` 按上述理由保留为红灯报警器）
+- `ROBOT_VERIFY.md` / `error remember.md` U+FFFD = 0
+
+#### 待定 / 需拍板
+
+- **寻优覆盖回退**（`b7d0729d` 删掉的 5 个测试约 700 行）：是否另开一轮恢复？
+  注意被测 API 已大改，旧用例未必能直接编译。
+- **剩余 5 项基线失败**对 App 影响均为 0（已实测主界面不崩）。
+
+---
