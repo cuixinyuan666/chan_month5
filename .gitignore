@@ -75,6 +75,11 @@ CHAN_RUST/flutter/chan_kline/windows/native/chan_ffi.dll.locked_*
 a_Data/.tdx_protocol_cache/
 CHAN_RUST/a_Data/.tdx_protocol_cache/
 
+# 默认测试/调试数据（002003 按日逐笔；test/ 下采样钟·寻优·回测用例的事实基准）
+# 2026-10-10 加入：保留文件但不入库，避免 247 个 ?? 淹没 git status。
+# ⚠ 被忽略 => `git clean -fdx` 会删掉；清理前用 `git clean -nd` 先看。详见 a_Data/002003/README.md
+a_Data/002003/*.txt
+
 # Kilo 本地配置/缓存
 .kilo/
 .kilocode/
