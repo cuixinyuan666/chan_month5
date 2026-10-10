@@ -20,6 +20,11 @@ const Map<String, RobotVerifySuiteMeta> kRobotVerifySuiteMetas = {
     id: 'jiyou_keypoint_20261001',
     continuousStepFreeze: true,
   ),
+  // 本轮（S3 当下性 + 线型签名 + 工程治理）端到端验收
+  'e2e_20261010': RobotVerifySuiteMeta(
+    id: 'e2e_20261010',
+    continuousStepFreeze: true,
+  ),
 };
 
 RobotVerifySuiteMeta? metaForSuite(String suiteId) =>

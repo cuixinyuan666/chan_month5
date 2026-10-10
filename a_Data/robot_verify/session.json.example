@@ -1,7 +1,7 @@
 {
   "active": false,
-  "mode": "semi_auto",
-  "suiteId": "jiyou_keypoint_20261001",
+  "mode": "auto",
+  "suiteId": "e2e_20261010",
   "taskTitle": "",
   "authorizedAt": "",
   "authorizedBy": ""
