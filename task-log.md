@@ -4891,3 +4891,59 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   `signal_data_catalog` ×2 / `widget_test`）是否另开一轮处理。
 
 ---
+
+### 2026-10-10 逐条定位 10 项基线失败（T1 修完后剩 10 项）
+
+- **执行者**：AI 编码机器人（opencode）
+- **类型**：诊断类（**只定位，未改任何代码**）
+- **用户指令**：「这 10 项是错误吗，无论什么，先逐条定位」
+- **背景**：修完 `T1_rhythm_hold` 后全量失败由 11 降到 10，对剩余 10 项逐条取证
+
+#### 判定结果：5 项真问题 + 5 项过期/过粗测试
+
+| # | 文件:行 | 报错 | 判定 |
+|---|---|---|---|
+| 1 | `catalog_full_var_test.dart:34` | `Null check operator used on a null value` | **过期测试** |
+| 2 | `chip_profile_test.dart:40` | `Expected: false / Actual: true` | **断言过粗** |
+| 3 | `signal_data_catalog_test.dart:229` | K0 布林期望 `2.0` 实得 `null` | **真问题** |
+| 4 | `signal_data_catalog_test.dart`（K1 收盘） | 铺平取样 xs 列表不匹配 | **真问题** |
+| 5 | `incremental_lookup_session_test.dart:103` | `combine.fx: TOP`(全量) vs `UNKNOWN`(增量) | **真问题（最严重）** |
+| 6 | `indicator_var_ext_test.dart:233` | `SUB.K1.MACD.DIF` 期望 `22` 实得 `1` | **真问题** |
+| 7 | `mini_loop_test.dart:280` | `Expected: non-empty / Actual: []` | **真问题** |
+| 8 | `widget_test.dart:9` | 找不到含「截断」的文本 | **过期测试** |
+| 9 | `backtest_workbench_test.dart:466` | 找不到 `Text` `'<'` | **过期测试** |
+| 10 | `robot_verify_full_suite_test.dart` | 期望 `>=42` 实得 `24` | **过期魔法数** |
+
+#### 过期 / 过粗的 5 项（含证据）
+
+- **#1**：`MAIN.K1.CHANNEL.20.MAX` 在 **`57a7533e`（2026-09-23）整族删除**
+  （`channelVarId` / `parseChannelVarId` / `_channelDef` 全删，被 布林/唐奇安/回归通道 取代）。
+  测试写于 `4ca21b6a`，**从未跟着改**。全仓 `lib/` 已无任何 `CHANNEL` 变量。
+- **#2**：断言用 `label.contains('筹码')`，把「筹码**分布**」和「筹码**峰**」混为一谈。
+  `4ca21b6a` 之后 `chipPeakSpatial/Volume/Pure` **合法**进 catalog（`chart_indicator.dart:633-635`），
+  而 `buildMainIndicatorCatalog` 注释明写「筹码**分布**已迁设置·仅K0，不在目录」——
+  **分布确实没回来**，是断言粒度太粗误伤。
+- **#8**：全仓「截断」只出现在代码注释与策略配置里（`search_env.dart` / `candidate_builder.dart` /
+  `chan_bridge.dart` 等），**首页 UI 不渲染该字样**，测试的观测点已不存在。
+- **#9**：`tradeOpLabelCn(TradeBinaryOp.lt)` 仍返回 `'<'`（`condition_ast.dart:330`），
+  算子本身没删；`find.text('<')` 只匹配 `Text`/`EditableText`，**大概率算子已移进下拉/菜单，
+  未展开时不在树里**。
+- **#10**：`test/indicator_search/` **实测就是 24 个用例（7 个文件）且全部通过**。
+  测试写死 `minExpected = 42`，注释还留着「实测总数 42」——该数字早已不成立。
+
+#### 真问题 5 项（均属本轮 V1~V6 + S3 采样钟/冻结仓同一条脉络）
+
+- **#5 最严重**：同一步（step24, idx=5）**增量 lookup 与全量 lookup 给出不同的 `combine.fx`**
+  （`TOP` vs `UNKNOWN`）。两条路径不一致 = 增量会话的冻结格不可信，属实打实的数据路径分叉。
+- **#6**：`SUB.K1.MACD.DIF` 采样点数 **22 → 1**，K1+ 采样几乎塌缩成单点。
+- **#3**：K0 布林「只读冻结仓、没仓则不可用」这条口径取不到值（得 `null`）。
+- **#4**：K1 收盘「走虚拟 K 取样铺平」的 xs 列表与期望不符。
+- **#7**：BOLL CROSS 真实闭环**一条信号都不出**，回测链路断开。
+
+#### 未做 / 待用户拍板
+
+- **本轮只做定位，没有改任何一行代码**（严守确认门禁：这 5 项真问题都触及采样钟/冻结仓核心逻辑）。
+- 建议处理顺序：**#5 → #6 → #3/#4 → #7**（前两项影响回测数字可信度，后两项影响单点可用性）。
+- 5 项过期测试的修法都是「改断言/改期望值」，属测试层，可与真问题脱钩分批做。
+
+---
