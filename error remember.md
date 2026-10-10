@@ -144,3 +144,27 @@ moc: "[[chan-month5/index-memory]]"
 - **现象**：画布上区分开了「长虚线」和「点虚线」，图例小样却一律画三个圆点 —— **图例等于没改**。
 - **解法**：`dashPattern` 走同一套「按节距累加走线」算法（`CustomPaint` + 与画布同算法），不要在图例里另画一套近似。线型常量（如 `LegendDash`）集中到共享文件，画布与图例引用同一份，杜绝「各写各的字面量」。
 - **推广**：凡是「同一个语义在两处呈现」的地方（主线/副图、图例/tooltip、主图/ML 文案），都要有一条「同源」测试钉住。
+
+
+### 17. 改完 Dart 源码只看 analyze「条数」不看 error 行 → 编译错误伪装成「环境卡死」
+- **现象（2026-10-10 亲历，代价 = 一次 30 分钟的假故障排查）**：
+  机器人验证在阶段 1（App 内 spawn 的 `flutter test`）静默挂住 —— `status.json`
+  永远停在 `phase=running`、`flutter_tester.exe` CPU 零增长、App 主进程几乎不耗 CPU。
+  一度判成「App 与测试子进程抢 `.dart_tool` 死锁」「`flutter build` 退出 1 污染了产物」
+  「`-SkipBuild` 也挂所以不是构建问题」……全是**误判方向**。
+- **真因**：前一条 commit 在 `msg_history.dart` 的**单引号**字符串里写了
+  `'label=$roundRef-${roundCurrent-roundRef}'` —— **Dart 单引号字符串同样做插值**，
+  被解析成对 `MsgHistory.roundRef` 的引用，而该 getter 不存在：
+  `lib/history/msg_history.dart:635:51: Error: The getter 'roundRef' isn't defined`。
+- **为什么没当场发现**：我跑完 `flutter analyze` 只看了 `Select-Object -Last 2` 的
+  **「N issues found」**（显示 5 issues），没 grep `error -`。5 条看着像既有 lint。
+  而 `flutter analyze lib/step_freeze` 那次是单独跑的、没覆盖到 `lib/history`。
+- **解法（务必照做）**：
+  1. 改完任何 `lib/` 源码，**必须**跑并**只看 error 行**：
+     `flutter analyze --no-pub lib test 2>&1 | Select-String "error -"`
+     ——条数只作参考，**条数不变也可能藏着 error**（本例 analyze 从 98 变 99，看着像 +1 条 lint）。
+  2. 机器人验证若在阶段 1 长时间无 CPU 增长，**先怀疑编译失败**，别先怀疑环境：
+     脱离 App 直接跑同一条 `flutter test`，能秒出 `Error:` 行。**这一步能把
+     「环境问题」与「代码问题」一刀切开**。
+- **推广**：任何"自动化卡住/无响应"的故障，先做一次**脱离被测系统的直接复现**，
+  再谈系统交互问题。否则会在错误方向上耗掉几十分钟。
