@@ -31,7 +31,17 @@ void main() {
   group('目录补全', () {
     test('均线/通道/未确认中枢/判断/斜率/节奏已登记', () {
       expect(lookupTradeVariable('MAIN.K0.MA.5')!.expressionReady, isTrue);
-      expect(lookupTradeVariable('MAIN.K1.CHANNEL.20.MAX')!.expressionReady, isTrue);
+      // K1+ 通道类：原 CHANNEL 族（channelVarId/parseChannelVarId/_channelDef）
+      // 已于 57a7533e（2026-09-23）「回归通道对齐」整族删除，由
+      // 布林 / 唐奇安 / 回归通道 三族取代。断言随之改为**登记在册的替代族**，
+      // 顺带把「K1+ 通道必须齐三族」钉住（旧断言只覆盖了一个已不存在的族）。
+      for (final id in const [
+        'MAIN.K1.BOLL.UP',
+        'MAIN.K1.DONCHIAN.UP',
+        'MAIN.K1.REGRESS.MID',
+      ]) {
+        expect(lookupTradeVariable(id)!.expressionReady, isTrue, reason: id);
+      }
       expect(
         lookupTradeVariable('STRUCTURE.K0.ZS.ACTIVE.HIGH')!.expressionReady,
         isTrue,

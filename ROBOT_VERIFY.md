@@ -31,6 +31,28 @@
 
 验证：`flutter test`（indicator_search，JSON 汇总）+ 进程内自检 + **连续单步冻结对拍**（002003 1m/tick，与主图步进同管道）；报告为 **单行 UTF-8 JSON**（剪贴板 / `last_report.json` / `last_report.txt` 同内容），`status.json` 仍为摘要。
 
+## 覆盖边界（必读 · 2026-10-10 实测补充）
+
+**机器人验证走的是 `RobotVerifyApp`，完全绕过主界面。**
+`main.dart:123` 里 `_robotVerifyEnabled()` 为真时 `main()` 直接返回 `RobotVerifyApp(...)`，
+**根本不会构建 `ChanKlineApp` / `KlineHomePage`**。
+
+因此：
+
+> **「E2E ALL PASS」不能作为主界面正常的证据。**
+
+要验主界面，必须先 `a_Data/robot_verify/session.json` → `active:false`，再直接启动 exe。
+
+**判定主界面是否崩，不用眼睛**（崩了必退进程 + 必打堆栈）：
+
+1. `session.json` 置 `active:false`；
+2. 启动 exe 并**把 stdout/stderr 重定向到文件**；
+3. 等 30~60 秒，看：① 进程是否还活着 ② `Responding` 是否 `True`
+   ③ 日志里有无 `EXCEPTION` / `Null check operator`。
+
+2026-10-10 实测：进程存活 256 秒、`Responding=True`、日志无异常 → **主界面不崩**。
+`widget_test` 那次空指针是**测试环境无数据源、K 线图未挂载**导致的假崩溃。
+
 ## 启用条件
 
 1. **默认由智能体自行启用**，无需用户在场；`session.json` → `active: true` 即可。
@@ -133,13 +155,35 @@ powershell -NoProfile -File CHAN_RUST/scripts/robot_verify_agent_finish.ps1 -NoC
 
 ### 寻优 UI 层：已可机器人替代的 spot-check（2026-09-30 增补）
 
-原先「请人工开寻优看一眼」的三条，现已全部进入 `test/indicator_search/`，**随第一阶段 `flutter_test_indicator_search` 一并跑**（用例数由 12 增至 25）：
+原先「请人工开寻优看一眼」的三条，**随第一阶段 `flutter_test_indicator_search` 一并跑**：
 
 | 原人工 spot-check | 现状 | 用例 |
 |------------------|------|------|
-| 报告头「内外各独立重跑」文案 | ✅ 自动：`reportHeader()` 断言 + `testWidgets` 断言面板**真的渲染出**该行 | `indicator_search_report_header_test.dart` |
+| 报告头「内外各独立重跑」文案 | ❌ **覆盖已丢失**（见下方警告） | ~~`indicator_search_report_header_test.dart`~~ **已被 `b7d0729d` 删除** |
 | 「内弱外强不再被切点前占仓扭曲」 | ✅ 自动：合成信号确定性复现「切点前占仓 → 切点后买点被拒」，并证明独立重跑不拒；002003 逐候选断言外段成交根全 > 切点、笔数 ≥ 旧切单 | `indicator_search_slot_distortion_test.dart` |
-| 「取消扫描」→「已取消」 | ✅ 自动：Runner `requestCancel` 语义 + 真实 `IndicatorSearchDialog` tap「取消扫描」→ 断言阶段「已取消」、按钮消失、保留部分 TSV | `indicator_search_cancel_test.dart` |
+| 「取消扫描」→「已已取消」 | ✅ 自动：Runner `requestCancel` 语义 + 真实 `IndicatorSearchDialog` tap「取消扫描」→ 断言阶段「已取消」、按钮消失、保留部分 TSV | `indicator_search_cancel_test.dart` |
+
+> ### ⚠️ 覆盖回退警告（2026-10-10 核实）
+>
+> `b7d0729d`（2026-10-08「寻优口径切回本地版」）在**重写寻优核心约 2000 行**
+> （`search_core.dart` 363 / `search_verdict_views.dart` 227 /
+> `result_panel.dart` **1043 行**）的**同一次提交**里，删除了 5 个测试文件约 700 行：
+>
+> ```
+> indicator_search_report_header_test.dart      -243
+> indicator_search_inf_payoff_diag_test.dart    -212
+> indicator_search_early_stop_parity_test.dart   -63
+> indicator_search_oos_slice_test.dart           -88
+> indicator_search_parity_test.dart              -66
+> ```
+>
+> 连带后果：`reportHeader()`（`search_env.dart:387`）**失去唯一调用方，已成死代码**；
+> 本文件上一版本却仍把它列为「已可机器人替代的 spot-check」—— **文档失真**。
+>
+> **`robot_verify_full_suite_test.dart` 里 `minExpected = 42` 那个魔数是报警器，
+> 不是过期数字**（实测 `test/indicator_search/` 现存 24 例且全过）。
+> **不要把它改成 24** —— 那等于拆掉报警器、掩盖覆盖回退。
+> 正确处置是**恢复被删的测试**（注意被测 API 已在该提交大改，旧用例未必还能编译）。
 
 仍需人眼的只剩**观感类**：报告头在真实主图会话下的换行/字号是否溢出、取消时那份大 TSV 手工打开是否可读。
 
