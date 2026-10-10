@@ -1,51 +1,74 @@
 # 机器人验证（专属执行逻辑 · 高优先级）
 
-> **权限**：用户口头授权且会话 `active` 时生效；**不得擅自关闭 App**。  
+> **权限（2026-10-10 起 · 用户明确要求放开）**：**默认全自动化，由 agent 全程负责**。
+> 唯一硬约束：**不得关闭用户正在手动使用的 App**。
 > 与 [`AGENTS.md`](AGENTS.md) 关系：**总则见 `AGENTS.md`**（含确认门禁、编译与重启、提交与推送）；本文件只管**机器人验证专属**的启停、界面与验收口径。  
 > **编译与启动按 `AGENTS.md`「完成后 · 编译与重启」节执行**：由智能体后台（detached）跑 `build_rust.ps1`，它会自动杀旧 App、编译，并在编译成功后自动拉起新 App。
 
-## 人机协同（半自动）分工
+## 人机协同（**全自动**）分工
 
 | 步骤 | 执行者 |
 |------|--------|
-| 口头授权、写入/更新 `session.json` | 用户 + 智能体（按对话） |
-| **编译** | 智能体（后台 `build_rust.ps1`，见 `AGENTS.md` 编译与重启节） |
-| **打开 App** | 智能体（脚本编译成功后自动拉起） |
-| App 内点「开始」、肉眼验界面 | **仅用户**（需在场操作） |
-| App 内跑完整套件 + **可视化进度** | App 自动 |
-| **完整报告复制到剪贴板** | **App 自动**（结束时） |
-| **关闭 App** | **仅用户**（手动关窗） |
-| 将剪贴板内容粘贴回对话 | 用户 |
+| 写/更新 `session.json`（`active:true` + `suiteId`） | **智能体**（默认自动，无需逐次授权） |
+| **编译** | **智能体**（后台 `build_rust.ps1`，见 `AGENTS.md` 编译与重启节） |
+| **打开 App**（自动进入机器人验证模式） | **智能体**（脚本编译成功后自动拉起） |
+| App 内点「开始」、跑完整套件 | **App 自动** |
+| 轮询 `status.json` 等待 `phase=done` | **智能体** |
+| **关闭 App** | **智能体**（`robot_verify_auto.ps1` 自动关；`-NoClose` 可保留窗口） |
+| 读取报告（`last_report.json` 优先，剪贴板兜底） | **智能体** |
+| **分析报告、产出验收结论**（逐条列出失败项） | **智能体** |
+| 是否 push | **智能体**（验收通过后可直接 push；**不通过必须如实报告，不得放宽判据放行**） |
 
-智能体**默认不再**关 App、**默认不再**替用户复制剪贴板（除非用户明确要求，可用 `robot_verify_agent_finish.ps1 -NoClose` 仅从 `last_report.txt` 重试复制）。
+> **唯一的例外**：若探测到 `chan_kline` **已在运行且不是本次 agent 启动的**，
+> 说明用户正在手动使用 —— 此时**不得关闭**，应提示用户并改用其它取报告方式。
+> 确认逻辑见 `robot_verify_auto.ps1` 的 `-Force` 参数（默认不杀外部已开进程）。
 
 ## 界面行为
 
 1. **启用即可见**：独立「机器人验证」窗口，步骤清单 + 进度条，确认模式已开启。  
 2. **结束后**：界面**仅**显示「验证已完成」、通过/失败摘要、剪贴板提示；**不展示**报告全文。  
-3. **不自动退出**：用户自行关闭窗口。
+3. **可自动退出**：agent 全自动模式下由脚本关闭；人工旁观时仍可手动关窗。  
 
 验证：`flutter test`（indicator_search，JSON 汇总）+ 进程内自检 + **连续单步冻结对拍**（002003 1m/tick，与主图步进同管道）；报告为 **单行 UTF-8 JSON**（剪贴板 / `last_report.json` / `last_report.txt` 同内容），`status.json` 仍为摘要。
 
 ## 启用条件
 
-1. **仅用户口头授权**。  
-2. **仅限当前任务**验收。  
-3. 下一任务开始前默认 **`session.json` → `active: false`**；再次口头授权且 **`suiteId` 相同**可保留套件定义。
+1. **默认由智能体自行启用**，无需用户在场；`session.json` → `active: true` 即可。
+2. 套件按当前任务选（见「当前登记套件」），**为本轮改动新建/复用的套件须登记在册**。
+3. 下一任务开始前由 agent 默认把 `session.json` → `active: false`；同一 `suiteId` 可保留套件定义。
+
+## 一键全自动化（推荐入口）
+
+```powershell
+# 写 session.json -> 后台编译 -> 启动 App -> 轮询 -> 自动关 App -> 读报告 -> 打印结论
+powershell -NoProfile -File CHAN_RUST/scripts/robot_verify_auto.ps1 -SuiteId <suiteId>
+```
+
+| 参数 | 作用 |
+| --- | --- |
+| `-SuiteId` | 要跑哪个套件（写入 `session.json`）；默认取 `session.json` 里已有值 |
+| `-SkipBuild` | 跳过编译（App 已是本轮最新产物时用，省时间） |
+| `-NoClose` | 跑完**不关 App**（人工旁观时用） |
+| `-TimeoutSec` | 轮询超时上限，默认 1800 秒 |
+| `-Json` | 只把报告 JSON 打到标准输出，便于 agent 解析 |
+
+**报告读取优先级**：`last_report.json` → `last_report.txt` → 剪贴板。
+**结论判定**：agent 读 `ok` 字段；任一 phase `ok:false` 即整体不通过，
+`skipped` 视同通过（但要在结论里如实注明「被跳过的项」）。
 
 ## 启动方式
 
 - 首次启用：复制 `a_Data/robot_verify/session.json.example` → `session.json`（后者仅本机，已 gitignore），再将 `active` 设为 `true`。  
-- `session.json` 为 `active: true` 时，用户正常启动 App 即进入机器人验证。  
+- `session.json` 为 `active: true` 时，启动 App 即进入机器人验证。  
 - 可选环境变量：`CHAN_REPO_ROOT`、`CHAN_KLINE_ROOT`。
 
-## 可选：智能体仅重试剪贴板
+## 可选：仅重试取报告（不启动 App）
 
 ```powershell
 powershell -NoProfile -File CHAN_RUST/scripts/robot_verify_agent_finish.ps1 -NoClose
 ```
 
-（默认脚本也不关 App；`-Close` 才会结束进程。）
+（默认脚本也不关 App；`-Close` 才会结束进程。全自动场景请直接用上面的 `robot_verify_auto.ps1`。）
 
 ## 当前登记套件
 
@@ -53,11 +76,26 @@ powershell -NoProfile -File CHAN_RUST/scripts/robot_verify_agent_finish.ps1 -NoC
 |---------|------|------------------|
 | `indicator_search_opt_20260930` | 寻优枚举 2026-09-30 批次 | **是** |
 | `jiyou_keypoint_20261001` | **计优**（关键点位指标统计）2026-10-01 批次 | **是** |
+| **`e2e_20261010`** | **本轮 E2E**（S3 当下性 + 线型签名 + 工程治理），见下节 | **是** |
 
 - 注册表：`lib/robot_verify/robot_verify_registry.dart`
 - 能力开关：`lib/robot_verify/robot_verify_suite_meta.dart`（`continuousStepFreeze: true` 时自动挂载 `continuous_step_freeze` 阶段）
 - 对拍实现（**已保存、可单独调用**）：`lib/robot_verify/continuous_step_verify.dart` → `runContinuousStepFreezePhase`
 - 计优套件实现（**已保存、可单独调用**）：`lib/robot_verify/suites/jiyou_keypoint_20261001.dart` → `runJiyouKeyPointInProcess`
+
+### 本轮 E2E 套件（`e2e_20261010` · 2026-10-10 增补）
+
+| 阶段 | id | 验什么 |
+|------|----|--------|
+| 1 | `flutter_test_e2e` | `kn_clock_causality_test.dart`（采样钟因果，含 S3 两条）+ `indicator_legend_test.dart`（线型签名） |
+| 2 | **`inprocess_s3_presence`** | **本轮核心**：走**回测出信号的那条链**（`readEvalClockSeries`），逐 `asOf` 与「只喂 `bars[0..asOf]` 重算」的前缀重放对拍；另钉死「该层无段时刻不得提前报值」，并反向断言「旧最终态口径此处确实报了值」防止探针失效 |
+| 3 | `inprocess_legend_signature` | 布林 `中实/上实/下虚`、唐奇安 `中长虚/上点虚/下实`、回归全虚 —— 三类签名互不相同；且**同层必须同色**（颜色不同反而说明层色体系被破坏） |
+| 4 | `continuous_step_freeze` | 002003 1m + 分笔 连续单步 vs 走完瘦包 对拍（自动挂载） |
+
+**阶段 2 为什么必须走 `readEvalClockSeries`**：`lookupTradeNumeric`（取值/tooltip）与
+`readEvalClockSeries`（出信号）是**两条不同的链**，只验前者会漏掉真正的求值路径。
+**前缀侧必须带自己的时钟**，否则两侧采样格点不同，比的是采样密度而不是因果性
+（`error remember` 第 13 条）。
 
 ### 计优套件的四个阶段（`jiyou_keypoint_20261001`）
 

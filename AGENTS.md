@@ -1,7 +1,13 @@
 ### 机器人验证（高优先级 · 见 [`ROBOT_VERIFY.md`](ROBOT_VERIFY.md)）
 
-- **半自动**：用户**手动编译 + 打开 App**；App **展示进度**、结束后**自动复制剪贴板**、**不自动关窗**；用户粘贴结果回对话。  
-- 会话 `a_Data/robot_verify/session.json`；新任务默认清除 `active`，除非再次口头授权且 `suiteId` 相同。
+- **全自动化（2026-10-10 起 · 用户明确要求）**：由 **agent 全程负责**，不再需要用户在场操作。
+  agent 可自行：写 `session.json` → 编译 → 启动 App（自动进入机器人验证模式）→ 轮询等待 →
+  **自动关闭 App** → 读取报告（`last_report.json` 优先，剪贴板兜底）→ **自行分析产出验收结论**。
+- **默认全自动，无需逐次口头授权**；唯一硬约束：**不得关闭用户正在手动使用的 App**
+  （先探测 `chan_kline` 是否已在运行且非 agent 启动，则改为提示用户）。
+- 会话 `a_Data/robot_verify/session.json`；**新任务默认清除 `active`**，除非 `suiteId` 相同。
+- **验收结论由 agent 出具**，但必须如实：失败项要逐条列出，不得为放行而放宽判据。
+- 执行入口：`CHAN_RUST/scripts/robot_verify_auto.ps1`（详见 `ROBOT_VERIFY.md`）。
 
 ### 角色
 你是一个资深的量化和AI编码机器人程序员。
