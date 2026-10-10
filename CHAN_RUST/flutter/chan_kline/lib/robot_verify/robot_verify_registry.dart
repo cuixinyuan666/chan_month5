@@ -25,11 +25,6 @@ Future<List<RobotVerifyPhase>> runRobotVerifySuitePhases({
         klineRoot: klineRoot,
         runFlutterTest: !skipFlutterTest,
       );
-    case kJiYouKeyPointSuiteId:
-      return runJiyouKeyPointPhases(
-        klineRoot: klineRoot,
-        runFlutterTest: !skipFlutterTest,
-      );
     default:
       return [
         RobotVerifyPhase(

@@ -3,7 +3,11 @@ import 'package:chan_kline/bridge/chan_bridge.dart';
 import 'package:chan_kline/compute/kn_volume_series_compute.dart';
 import 'package:chan_kline/models/chart_indicator.dart';
 import 'package:chan_kline/models/math_indicator_config.dart';
+import 'package:chan_kline/compute/kn_clock_timeline.dart';
+import 'package:chan_kline/models/kline_bar.dart';
+import 'package:chan_kline/models/level_models.dart';
 import 'package:chan_kline/step_freeze/step_freeze_parity_driver.dart';
+import 'package:chan_kline/step_freeze/step_freeze_session_state.dart';
 import 'package:chan_kline/widgets/indicator_legend.dart';
 
 import '../continuous_step_verify.dart';
@@ -29,13 +33,21 @@ const String kE2e20261010SuiteId = 'e2e_20261010';
 /// 另有 `flutter test` 阶段跑本轮改动的对应单测，以及自动挂载的连续单步冻结对拍。
 
 /// 读取一条回测求值序列（真实出信号走的就是它）。
+///
+/// `SUB.K{n}.VOLUME / TICK_COUNT` 在 `readEvalClockSeries` 里走
+/// `_extendedPlotSeries` → `_plotEvalSeries`，这条链**只用到**
+/// `bars` / `levels` / `knClock`（外加目录里登记的 evalClock），
+/// 其余冻结仓参数根本走不到，因此这里刻意不传 —— 少传一个用不上的
+/// 参数，就少一处「类型对不上」的编译期噪音。
+///
+/// 踩过的坑：曾把 `walkWithTrace` 的返回值当数据容器传，
+/// 报 `NoSuchMethodError: StepFreezeWalkTrace has no instance getter 'mathFreeze'`。
 List<double> _evalSeries({
   required String variableId,
   required int asOf,
-  required bars,
-  required levels,
-  required h,
-  clock,
+  required List<KlineBar> bars,
+  required List<LevelBundle> levels,
+  KnClockTimeline? clock,
 }) =>
     [
       for (final p in readEvalClockSeries(
@@ -43,12 +55,6 @@ List<double> _evalSeries({
         asOf: asOf,
         bars: bars,
         levels: levels,
-        mathFreeze: h.mathFreeze,
-        zsObjects: h.zsObjects,
-        diverRelations: h.diverRelations,
-        lineSeries: h.lineSeries,
-        chipPeaks: h.chipPeaks,
-        barFeatures: h.barFeatures,
         knClock: clock,
       ))
         p.value,
@@ -168,7 +174,6 @@ Future<RobotVerifyPhase> runE2eS3PresencePhase({String? klineRoot}) async {
         asOf: asOf,
         bars: prefix,
         levels: rt.lastBundle.levels,
-        h: rt,
         clock: rt.state.knClockTimeline,
       );
       final now = _evalSeries(
@@ -176,7 +181,6 @@ Future<RobotVerifyPhase> runE2eS3PresencePhase({String? klineRoot}) async {
         asOf: asOf,
         bars: bars,
         levels: bundle.levels,
-        h: trace,
         clock: clock,
       );
       final old = _evalSeries(
@@ -184,7 +188,6 @@ Future<RobotVerifyPhase> runE2eS3PresencePhase({String? klineRoot}) async {
         asOf: asOf,
         bars: bars,
         levels: bundle.levels,
-        h: trace,
         clock: null,
       );
       if (replay.isEmpty && now.isEmpty) continue;
@@ -235,9 +238,31 @@ Future<RobotVerifyPhase> runE2eLegendSignaturePhase() async {
       .map((l) => '${l.label}:${l.dashPattern?.join(",") ?? "solid"}')
       .join('|');
 
-  add('boll_signature', sig(boll) == '中轨:solid|上轨:solid|下轨:4,3',
+  // 用**数值**比节距，不要比 join 出来的字符串 ——
+  // List<double>.join(",") 产出的是 "4.0,3.0" 而非 "4,3"，
+  // 踩过：写死字符串期望值会误判成 FAIL，而实际线型完全正确。
+  bool dashIs(LegendLine l, List<double>? want) {
+    if (want == null) return l.dashPattern == null;
+    if (l.dashPattern == null || l.dashPattern!.length != want.length) {
+      return false;
+    }
+    for (var i = 0; i < want.length; i++) {
+      if ((l.dashPattern![i] - want[i]).abs() > 1e-9) return false;
+    }
+    return true;
+  }
+
+  // 布林：中实 / 上实 / 下虚[4,3]
+  add('boll_signature',
+      dashIs(boll.lines[0], null) &&
+          dashIs(boll.lines[1], null) &&
+          dashIs(boll.lines[2], const [4, 3]),
       {'sig': sig(boll)});
-  add('donchian_signature', sig(don) == '中轨:7,4|上轨:2,3|下轨:solid',
+  // 唐奇安：中长虚[7,4] / 上点虚[2,3] / 下实
+  add('donchian_signature',
+      dashIs(don.lines[0], const [7, 4]) &&
+          dashIs(don.lines[1], const [2, 3]) &&
+          dashIs(don.lines[2], null),
       {'sig': sig(don)});
   add('boll_vs_donchian_distinct', sig(boll) != sig(don));
   add('regression_distinct', sig(reg) != sig(boll) && sig(reg) != sig(don),
