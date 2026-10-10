@@ -4747,3 +4747,64 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **未 push**：本轮 4 个 commit + 之前 3 个（`1ea2d664` / `eb1686c4` / `479e49d8`）均未推。
 
 ---
+
+### 2026-10-10 机器人验证放开全自动化 + 本轮 E2E 验收实跑
+
+- **执行者**：AI 编码机器人（opencode）
+- **类型**：规则放开 + 验证基础设施 + E2E 验收（用户明确要求：全自动 + 验完 push）
+- **用户指令**：① 把 `AGENTS.md` 里机器人验证的限制改为 agent 可全面自动化（含启用验证模式、自动关 App、取剪贴板/报告、自行出结论）；② 完善本轮 E2E 验收逻辑，用机器人全面验证本轮涉及部分；③ 验证通过则 push
+- **本轮提交**：`597d5ffe`（规则）、`332fb588`（自动化入口 + 套件）、`0a24314d`（修自身缺陷）
+
+#### 一、规则放开：半自动 -> agent 全自动（`597d5ffe`）
+
+- **`AGENTS.md`**：机器人验证小节改为全自动化，默认无需逐次口头授权；唯一硬约束「不得关闭用户正在手动使用的 App」（先探测进程来源）；明确「验收结论由 agent 出具但必须如实，不得为放行放宽判据」；入口指向新脚本。
+- **`ROBOT_VERIFY.md`**：人机协同表整表重写为全自动分工；新增「一键全自动化」参数表；明确报告读取优先级 `last_report.json` → `last_report.txt` → 剪贴板；明确 `skipped` 视同通过但**必须在结论里如实注明**。
+
+#### 二、自动化入口与 E2E 套件（`332fb588`）
+
+- **`CHAN_RUST/scripts/robot_verify_auto.ps1`**（新建，agent 专用一键入口）：
+  写 `session.json` → 后台编译 → 启动 App（自动进验证模式）→ 轮询 `status.json` → 自动关 App → 读报告 → 打印验收结论（总 ok / 阶段明细 / 跳过项 / **失败明细逐条**）。
+  唯一硬约束落实：启动前若已存在 `chan_kline` 进程，判定「用户手动在用」并默认拒绝，需显式 `-Force`；另有 `-Attach` 只接管轮询、`-SkipBuild`、`-NoClose`、`-TimeoutSec`、`-Json`。
+- **套件 `e2e_20261010`**（四阶段）：`flutter_test_e2e` → `inprocess_s3_presence`（核心）→ `inprocess_legend_signature` → `continuous_step_freeze`（自动挂载）。
+
+#### 三、实跑 E2E 结果（如实记录）
+
+套件 `e2e_20261010`，002003（1m 287 根 / tick 942 根），总判定 **ok = false**，4 阶段：
+
+| 阶段 | 结果 | 说明 |
+|---|---|---|
+| `flutter_test_e2e` | **OK** | 采样钟因果（含 S3 两条）+ 图例线型签名 |
+| `inprocess_s3_presence` | **OK** | **8/8 断言全过，非空转**：`oneByOne=True`、`steps=287`、`prefixReplayProbed=4`、`s3_matches_prefix_replay`、`s3_old_path_was_wrong` 均成立 |
+| `inprocess_legend_signature` | **OK** | 布林「中实/上实/下虚[4,3]」、唐奇安「中长虚[7,4]/上点虚[2,3]/下实」、回归全虚，三类互不相同；同层同色成立 |
+| `continuous_step_freeze` | **FAIL** | 1m 用例 OK；**tick 用例红在 `T1_rhythm_hold`**（span 38 / miss 5 / mismatch 0 / toX 114） |
+
+**`T1_rhythm_hold` 与本轮无关，三重证明**：
+
+1. 本轮代码改动只涉及 `catalog_lookup.dart`、`kn_volume_series_compute.dart`、图例三件，**全不进入节奏/斜率链路**；
+2. 节奏/斜率计算文件最后修改于 `8c482338`、`a4e55f95`、`d82837ac` 等旧 commit；
+3. `task-log.md:4494` 早已记录同一失败签名，且**当时 stash 掉改动后同样复现**，判定为既有问题。
+
+#### 四、跑通过程中 agent 自身的四个缺陷（已修，`0a24314d`）
+
+| 缺陷 | 现象 | 修法 |
+|---|---|---|
+| `[switch]$Json` 与局部变量 `$json` 大小写撞名 | 赋值报「无法转换为 SwitchParameter」 | 局部变量改名 `$sessionText` |
+| 漏做 `build_rust.ps1` 的输出重定向 | 等 `Launch` 行永远等不到（该脚本自己不写日志） | 补 `-RedirectStandardOutput`，并以「App 进程已出现」作兜底判据 |
+| `-Attach` 仍执行「清空上一轮报告」 | **把 App 刚写的异常报告擦掉了**，只剩 `message:exception` | 仅在真要启动 App 时才清 |
+| 图例签名断言写死 `"下轨:4,3"` | `List<double>.join(",")` 产出 `4.0,3.0` → 实际正确却误判 FAIL | 改为**数值比节距** |
+| 注册表新 case 加在 `default` 之后 | `unreachable_switch_case` | 移到 `default` 之前 |
+
+另修一处类型错误：把 `walkWithTrace` 的返回值当数据容器传（`NoSuchMethodError: mathFreeze`）——量/笔链路只用到 `bars/levels/knClock`，改为只传这三个。
+
+#### 五、验收结论（agent 出具）
+
+- **本轮改动本身：全部通过。** S3 当下性（`inprocess_s3_presence` 8/8）、图例线型签名（`inprocess_legend_signature` 全过）、对应单测（`flutter_test_e2e` 全过）。
+- **唯一失败项 `T1_rhythm_hold` 是本轮之前即存在的基线问题**，与本轮无关，且已有 stash 复核记录 —— 按规则如实列出，不隐藏、不放宽判据。
+- 因此**总判定仍为 `ok = false`**（1 个失败阶段），是否放行 push 交由用户拍板。
+
+#### 待定 / 需拍板
+
+- **push**：待推 `origin/ANDROID_RUST` 共 **27 个提交、44 个文件（+2985 / -580）**，按 `AGENTS.md` 需用户明确同意后执行。
+- **`T1_rhythm_hold`**：是否另开一轮定位修复（属既有问题，非本轮引入）。
+
+---
