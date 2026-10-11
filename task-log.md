@@ -5028,3 +5028,12 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **结果**：全仓已无 `error remember` / `error%20remember` 残留（已 grep 验证，大小写不敏感）；`lessons_learned.md` 现含「定位 / 记录纪律 / 一·用户转述词汇 / 二·常犯的错与解法 / 三·怎么用」；已提交 `5ac0b0df`（未 push）。
 - **演示**：动代码/脚本前读 `lessons_learned.md`；改 AGENTS.md 须你本人先开口，否则 agent 不动它。
 - **注意事项**：Obsidian 副本（chan-month5/docs 下若有同名笔记）未同步改名，需你确认后我再走 obsidian-writer；本次未 push。
+
+---
+
+## 2026-10-11 · WorkBuddy · 规则 · 新增多 Agent 协同规则（AGENTS.md 入口 + multi_agent.md 细节）
+
+- **操作**：① 经 `grill-me` 采访构想多 agent 协同规则（触发→选模式→选 agent→拆解→开 worktree→派发→裁决→交付→销毁→资源）；② 新建 `multi_agent.md` 落地完整细节（L0–L7、七模式表含执行参数/轮次/终止条件/近似模式边界、一句话选法、门禁铁律、本机可用 agent 清单、默认假设）；③ 在 AGENTS.md 末尾加「多 Agent 协同规则（入口）」节，仅留指针，细节交 `multi_agent.md`。
+- **结果**：模式全集 7 种（协同/考试/辩论/评审/红队/委员会/流水线），方案 A 保留并加边界说明消重复（红队=评审对抗变体、委员会=考试离散决策变体）；主 agent=当前会话、子 agent 只汇报主 agent；子 agent 各开独立 worktree、拥有其内全部权限，但「禁止改 AGENTS.md」门禁同样生效，总任务完毕销毁 worktree 与终端；L7 自适应按本机负载动态并发/串行/multiple；未 push。
+- **演示**：你说"多agent"触发；L1 逐模式人话说明；L1.5 实时获取本机 agent 并三途径选型（手动/智能择优 top N/自指定 llm）；L2 派发前你会被要求确认。
+- **注意事项**：freellmapi「智能排行前十选 agent」能力待实测确认（无内置则由主 agent 按标签打分 top N）；Obsidian 副本未同步；本次未 push。
