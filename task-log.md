@@ -2745,7 +2745,7 @@ Rust `buy2.rs`（新）→ pipeline/combine → Flutter 会话双键冻结（`cl
 > 等怪字符，非法字节对则变成 `U+FFFD`。该批文本**从未以干净形式存在于任何 commit**，
 > Obsidian 副本始于 2026-09-24 也未收录，故**原文不可恢复**。
 > 可佐证：紧邻的上一条结尾写明「后续口径变更只需更新 README.md，无需同步 AGENTS.md」，
-> 本条即 README.md 的建立/迁出那一动作。根因与预防见 `error remember.md`。
+> 本条即 README.md 的建立/迁出那一动作。根因与预防见 `lessons_learned.md`。
 >
 > **未臆造原文**：只保留可确证的结构信息，缺失文字一律标注「不可恢复」，不用推测填补历史记录。
 
@@ -4274,9 +4274,9 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **演示**：你说一句「需要重启 App 验证」，我应该自动去后台跑 `b`` 把 Rust 内核和 Flutter 都编好、并把新 App 开起来；编好后只需等日志里出现成功标记、然后报给你，不用自己去终端手动编一次。反过来，你说一句含不懂的拼音，我必须先问你「我听到的是 X，指的是 Y 吗」，不能自己猜一个意思就开始改代码。
 - **注意事项**：本次未跑 run test。待用户在场时实跑一次 `b``（会无条件杀掉正在运行的 `chan_kline`），验证“编译成功 + App 自动重启”本身。第二轮计优的 `deterministic_rerun` 也仍需重跑一次机器人验证才能绿灯，且本轮代码尚未提交。
 
-## 2026-10-02 · Cline · 规则 · 词汇表瘦身并外移到 error remember.md（含 run test 实跑）
+## 2026-10-02 · Cline · 规则 · 词汇表瘦身并外移到 lessons_learned.md（含 run test 实跑）
 
-- **操作**：三件事。① 按用户要求**不逐条堆拼音**，把 `AGENTS.md` 里已堆到 20 条的词汇表整节删掉，替换为「常见错误与解法（记忆库）」小节，只留指向新文件的说明。② 新建 `error remember.md`（仓库根），收纳「用户转述词汇表（只记两类）」+「常犯的错与解法」+「怎么用」。③ 实跑一次 `b`` 做 run test。
+- **操作**：三件事。① 按用户要求**不逐条堆拼音**，把 `AGENTS.md` 里已堆到 20 条的词汇表整节删掉，替换为「常见错误与解法（记忆库）」小节，只留指向新文件的说明。② 新建 `lessons_learned.md`（仓库根），收纳「用户转述词汇表（只记两类）」+「常犯的错与解法」+「怎么用」。③ 实跑一次 `b`` 做 run test。
 
 - **收录标准（按用户口径）**：只收①**映射到本工程具体文件/脚本、工作里检索时用得上**的，②**不看表就一定会误解**的；靠上下文就能猜准的（如 wancheng=完成、tianjia=添加）**一律不记** —— 表一大就没人维护，必然失效。词汇从 20 条瘦身到 **5 条**：bianyi=编译、chongqi=重启、yanzheng=验证、queren=确认、ceshi / run test=测试。
 
@@ -4284,9 +4284,9 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 
 - **run test 结果**：第 ① 次**失败**并已定位（重定向撞句柄），第 ② 次**通过** —— cargo 编 Rust、两处替换 `chan_ffi.dll`、`flutter build windows --debug` 全过，脚本自动拉起新 App（`chan_kline.exe` PID 22568，Dart VM service 起在 127.0.0.1:8604）。据此把 `AGENTS.md` 里的日志文件名从 `build_windows_last.log` 改正为 **`build_rust_run.log`**，并写明后者才是脚本输出重定向的去处。
 
-- **演示**：你说一句含 `bianyi`，我直接去跑 `b`` 把新 App 开起来，不再问你；日志落在 `build_rust_run.log`，看到 `>> Launch` 就算编成。反过来，你说的拼音我拿不准时，先查 `error remember.md` 里的 5 条；查不到就问你，绝不猜。
+- **演示**：你说一句含 `bianyi`，我直接去跑 `b`` 把新 App 开起来，不再问你；日志落在 `build_rust_run.log`，看到 `>> Launch` 就算编成。反过来，你说的拼音我拿不准时，先查 `lessons_learned.md` 里的 5 条；查不到就问你，绝不猜。
 
-- **注意事项**：`error remember.md` 是**新文件**（`git status` 显示未跟踪），提交时要一并带上。机器人验证结果待用户发送；第二轮计优代码仍未提交。
+- **注意事项**：`lessons_learned.md` 是**新文件**（`git status` 显示未跟踪），提交时要一并带上。机器人验证结果待用户发送；第二轮计优代码仍未提交。
 
 ## 2026-10-02 · Cline · 规则 · 计优第二轮机器人验证全绿 + 新增 commit/push 规则
 
@@ -4537,7 +4537,7 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   | V6 | `incremental_lookup` 的局部 `clear()` **函数体只有注释、什么都不清** —— 未确认中枢延伸后，历史格留着上一版中轴（污染 ML 特征与计优统计） | `clear()` 按 seq 守卫真置 null；新增 `_lastUnsureSeqByKey` 处理「合并后 seq 变了」 | `090e6866` |
   | S4 | 变量诊断面板不传 `knClock`，K1+ 变量显示的是段尾制样本数，与真实回测对不上 | `BacktestWorkbench` → `StrategyConfigForm` → `diagnoseTradeVariable` 一路透传 | `12281751` |
   | S5 | 切「截断机制」只 `_disposePipelineSession()`，**没清会话冻结仓**；时间线留着旧口径且因 `lastAsOf>=stepIdx` 守卫不再重记 | 与 `:1752`/`:1797` 两条兄弟路径同口径，先 `_clearSessionFreezeHistory()` | `8ed03606` |
-  | S6 | `_knSamples` 拿不到采样钟时**无条件静默退回**最终态 —— 这正是 error remember 第 11 条的成因 | 新增 `KnClockDiagnostics` 两类退场各计一次；绘图/诊断路径读数照旧 | `b5e1ffa5` |
+  | S6 | `_knSamples` 拿不到采样钟时**无条件静默退回**最终态 —— 这正是 lessons_learned 第 11 条的成因 | 新增 `KnClockDiagnostics` 两类退场各计一次；绘图/诊断路径读数照旧 | `b5e1ffa5` |
 
 - **实测数字（002003 / 1m / 2025-09-29~10-10 / 988 根）**：
   - V2：K1 背驰力度比**接采样钟 958 个采样点 vs 不接 95 个**（此前 95 个 = 一层一点）。
@@ -4548,7 +4548,7 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **全量测试**：`flutter test` **493 过 / 11 失败**。**11 条全部在基线 `befdc42f` 复现**（已逐条 checkout 基线复核：`backtest_workbench` / `catalog_full_var` / `chip_profile` / `incremental_lookup` / `indicator_var_ext` / `mini_loop` / `robot_verify_full_suite` / `run_to_end_vs_step_freeze` / `signal_data_catalog` ×2 / `widget_test`），**本次改动零新增失败**。
 - **白话总结**：之前那两轮「K1 每根都在场判」的修复只管了主力层。这次把每一条路都走了一遍，发现**层号取错**（K2 以上拿的是 K1 的格，等于拿 K1 的尺子量 K2）、**背驰和 Demark 两族压根没接上采样钟**（悄悄退回老口径）、**三个对弦平移类变量登记了却读不出来**（引用了永远不出信号还不报错）、**空档切断只看左边**（同一个条件左右换个写法结果不一样）、以及**未确认中枢那段「清空」代码是空的**（中枢框拉长收窄后历史格留着旧中轴，污染机器学习样本和计优统计）。六条全部修掉，每条都配了「改之前必须红」的回归。另把两处同类毛病一并收了：变量诊断面板报的样本数和真实回测对不上、切「截断机制」开关时冻结仓没清导致采样钟与新段划分错位；还有那条「悄悄退回老口径」的兜底加了计数，以后退化会被测试挡住。
 - **未做（需用户拍板）**：①S1/S2 回归通道 —— 目录声明 K1+ 走「虚拟K样本钟」，实现却是逐根且内部用最终态段尾制采样，**声明与实现必须二选一**：要么把它改成真走采样钟（与其它 K1+ 变量同构，但回测数字会变），要么把目录声明改成 K0 逐根（数字不变，但承认它不是 K1+ 样本钟）。这是口径选择题，按门禁先问用户。②S3 K1+ 量/笔分段边界取自最终态 `levels`，改法要动 `kn_volume_series_compute`，风险与收益待评估。③图例显示优化、寻优加列、寻优提速、文档修断链 —— 上一轮已出方案，用户尚未从选项里挑。
-- **踩坑（本次新记）**：用 PowerShell 双引号 here-string 往 `task-log.md` 追加长条目时，**反引号被当转义符吞掉**（`` `b ``→退格、`` `f ``→换页、其余被删），把 `backtest_result` / `flutter` / `befdc42f` / `build_rust.ps1` 的首字母吃掉。这是 `error remember.md` 第 7 条的复发，**追加 task-log 长文本一律改用 base64 中转或 write 工具落盘再拼接**，不要走 here-string。
+- **踩坑（本次新记）**：用 PowerShell 双引号 here-string 往 `task-log.md` 追加长条目时，**反引号被当转义符吞掉**（`` `b ``→退格、`` `f ``→换页、其余被删），把 `backtest_result` / `flutter` / `befdc42f` / `build_rust.ps1` 的首字母吃掉。这是 `lessons_learned.md` 第 7 条的复发，**追加 task-log 长文本一律改用 base64 中转或 write 工具落盘再拼接**，不要走 here-string。
 - **注意**：①本轮全部为 Dart 侧改动，**未触碰 Rust 内核**，故未跑 `CHAN_RUST/scripts/build_rust.ps1`；App 端到端验收仍待用户在机器人验证模式或冷启动连续单步下确认。②采样点与信号落点会变（K2 以上换层、背驰从 95 点变 958 点、Demark 改读冻结仓），**寻优数字会普遍变化，属真实水平不是回归**。③`incremental_lookup_session_test` 的「Incremental Lookup == Full Lookup · step24–28」在基线即失败（`combine.fx` TOP/UNKNOWN + K1 量），与本轮无关，未处理。
 
 
@@ -4567,8 +4567,8 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 
 #### 二、T4 文档修断链 — `e30c11b2`
 
-- **断链扫描**：全仓 135 处疑似，**权威文档里只有 3 处**是真断链 —— `knowledge.md:8`、`knowledge.md:161`、`future/future.md:142`，全部指向已于 2026-10-02 并入 `error remember.md` 后删除的 `PITFALLS.md`。
-- **改法**：按内容实际去处改链（不新建空文件假装修好）：「别再犯什么」→ `error remember.md`；「四·4.1 规则 3」→ `error remember.md` 第 8 条「通用排查手法 · 前缀重放对拍」。
+- **断链扫描**：全仓 135 处疑似，**权威文档里只有 3 处**是真断链 —— `knowledge.md:8`、`knowledge.md:161`、`future/future.md:142`，全部指向已于 2026-10-02 并入 `lessons_learned.md` 后删除的 `PITFALLS.md`。
+- **改法**：按内容实际去处改链（不新建空文件假装修好）：「别再犯什么」→ `lessons_learned.md`；「四·4.1 规则 3」→ `lessons_learned.md` 第 8 条「通用排查手法 · 前缀重放对拍」。
 - **附带**：AGENTS.md 的 Skills 索引补一条边界说明 —— `.trae/skills/` 下另有 11 个 `chan-*` 目录，内容指向另一个老工程（Python `a_replay_trainer.py` / `a_rust_core/chan-core/src/zs.rs` 等），在本仓全是失效路径，标明**不要读**。
 - **未处理并说明理由**：扫描命中项里 `.cursor/plans` 历史计划、`.kilo/worktrees` 陈旧工作树副本、skill 里的 `file://` 绝对路径，均不在权威文档内；`task-log.md` 里 2026-10-06 的历史流水原文提到 PITFALLS.md —— **流水不改写**。
 - **验收**：权威文档内相对链接全部可解析（脚本复扫通过）。
@@ -4664,7 +4664,7 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 
 **问题**：回测求值路径直接拿**全量最终态**的段划分去算 K1/K2 的累计成交量与笔数。最终态里含 asOf 之后才确认的段，它们一旦合并或延伸此前的段，就会把当时的累计值整段改写——名义上是 K1 指标，实际用了未来数据。
 
-**口径选择**：不新造截断逻辑，直接取 `KnClockTimeline.at(level, asOf)`——V1 起它就是按层分轨的权威快照（已确认段 + 当时的动态段），且自带缓存。另写一套截断逻辑等于同口径两份实现，将来必然漂移，这正是 error remember 第 11 条的病根。`KnUnitsAsOf` 字段名与 `KnClockState` 对齐，两者可直接互换。
+**口径选择**：不新造截断逻辑，直接取 `KnClockTimeline.at(level, asOf)`——V1 起它就是按层分轨的权威快照（已确认段 + 当时的动态段），且自带缓存。另写一套截断逻辑等于同口径两份实现，将来必然漂移，这正是 lessons_learned 第 11 条的病根。`KnUnitsAsOf` 字段名与 `KnClockState` 对齐，两者可直接互换。
 
 **改动**：两个累积器接受 asOf 段划分与 asOf 上界，动态段尾封顶到 asOf（不被后来的 K 线撑开）；`knClock` 一路透传到 `_extendedPlotSeries`；不传钟的路径（绘图/诊断）保持最终态不变。
 
@@ -4695,8 +4695,8 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 
 - **执行者**：AI 编码机器人（opencode）
 - **类型**：文档治理 + 规则强化（非业务逻辑）
-- **用户指令**：① 本轮弯路记入 `error remember.md`；② 检查 `AGENTS.md` 有没有强制自动沉淀义务与重要性声明，缺则补；③ `a_Data/002003/` 去留由机器人从「速度 + agent 能否找到入口」角度决定；④ 修复 `task-log.md` 的 GBK 损坏段（属实才修）
-- **本轮提交**：`36484ac6`（task-log 修复）、`7a93ce12`（error remember 12-16）、`3cd57712`（AGENTS.md）、`2365d52a`（a_Data）
+- **用户指令**：① 本轮弯路记入 `lessons_learned.md`；② 检查 `AGENTS.md` 有没有强制自动沉淀义务与重要性声明，缺则补；③ `a_Data/002003/` 去留由机器人从「速度 + agent 能否找到入口」角度决定；④ 修复 `task-log.md` 的 GBK 损坏段（属实才修）
+- **本轮提交**：`36484ac6`（task-log 修复）、`7a93ce12`（lessons_learned 12-16）、`3cd57712`（AGENTS.md）、`2365d52a`（a_Data）
 
 #### 四、task-log.md 编码损坏修复（属实，已修 · `36484ac6`）
 
@@ -4710,7 +4710,7 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   - U+FFFD 计数 **54 → 0**
 - **过程中的两次自伤（已纠正）**：第一次立碑数组 21 行，把**下一条 2026-09-09 桌面脚本条目的标题和元信息一起覆盖掉了**；第二次把两个不相邻的损坏组（idx 2733 和 4605）当成一个连续区间处理，**中间 1864 行正常内容被删光**（4684 → 2828 行）。两次都靠「从 HEAD 重建 + 显式区间 + 断言校验」纠正。最终 4684 → 4693 行（+17 立碑 −8 损坏），相邻条目完整。
 
-#### 一、`error remember.md` 补 12-16 条（`7a93ce12`）
+#### 一、`lessons_learned.md` 补 12-16 条（`7a93ce12`）
 
 - **12 非 UTF-8 字节被当 UTF-8 解码 → U+FFFD 静默腐蚀 md**（含识别特征、扫码点代码、中文 `.ps1` 加 BOM 的修法、本轮**复发**记录）
 - **13 前缀重放对拍时基线侧漏传时钟 → 比的是采样密度不是因果性**（本轮一度误判 S3 修复无效的假失败）
@@ -4719,11 +4719,11 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **16 图例/绘制类改动：图例小样必须复用画布的真实线型**（否则图上区分了、图例没区分）
 - 另修：撰写时不小心在正文里嵌入了一个**真的 U+FFFD 字符**当举例，已替换为文字描述。
 
-#### 二、`AGENTS.md` 把 `error remember.md` 提升为必读前置（`3cd57712`）
+#### 二、`AGENTS.md` 把 `lessons_learned.md` 提升为必读前置（`3cd57712`）
 
-- **改前的问题**：原「常见错误与解法」只有一句「直接追加到 error remember.md」——**没有触发时机、没有强制性、没有重要性声明**，偷懒的 agent 很容易滑过去。
-- **改动 1**：「本文件定位」新增「**配套三件套**」表，把 `error remember.md` / `knowledge.md` / `ROBOT_VERIFY.md` 列为与本文件同等必读，并写明各自触发时机。
-- **改动 2**：记忆库小节重写为五条 —— ① 开工前必读（点名「不许当成有空再看」，说明这些坑**不会在报错里提示**）；② **自动沉淀义务** + 四条触发条件（踩坑/文档失效/新隐性契约/更优解法/可复用验收法），写明「**不必等用户提醒**，当场追加」；③ 不要记的（防表大失维护）；④ 写法格式 + **与 task-log 的分工**（task-log 记「做了什么」，error remember 记「为什么不能那样做」）；⑤ 含中文 `.ps1` 一律加 UTF-8 BOM。
+- **改前的问题**：原「常见错误与解法」只有一句「直接追加到 lessons_learned.md」——**没有触发时机、没有强制性、没有重要性声明**，偷懒的 agent 很容易滑过去。
+- **改动 1**：「本文件定位」新增「**配套三件套**」表，把 `lessons_learned.md` / `knowledge.md` / `ROBOT_VERIFY.md` 列为与本文件同等必读，并写明各自触发时机。
+- **改动 2**：记忆库小节重写为五条 —— ① 开工前必读（点名「不许当成有空再看」，说明这些坑**不会在报错里提示**）；② **自动沉淀义务** + 四条触发条件（踩坑/文档失效/新隐性契约/更优解法/可复用验收法），写明「**不必等用户提醒**，当场追加」；③ 不要记的（防表大失维护）；④ 写法格式 + **与 task-log 的分工**（task-log 记「做了什么」，lessons_learned 记「为什么不能那样做」）；⑤ 含中文 `.ps1` 一律加 UTF-8 BOM。
 - **未改动**：`Skills` 一节已声明 `.trae/skills/` 下 11 个 `chan-*` 指向另一老工程、不许读，本次无需动。
 
 #### 三、`a_Data/002003/` 定性：保留文件、不入库、补入口（`2365d52a`）
@@ -4736,7 +4736,7 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 #### 验收
 
 - `task-log.md` U+FFFD **54 → 0**，行数 4684 → 4693，相邻条目完整。
-- `error remember.md` U+FFFD = 0，新增 12-16 条。
+- `lessons_learned.md` U+FFFD = 0，新增 12-16 条。
 - `AGENTS.md` U+FFFD = 0，147 → 181 行。
 - `git status` **249 行 → 2 行**。
 - 全程纯文档与 `.gitignore`，未触碰任何计算逻辑，未触发 `build_rust.ps1`。
@@ -4859,7 +4859,7 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 
 一度误判为「App 与测试子进程抢 `.dart_tool` 死锁」「`flutter build` 退出 1 污染产物」。
 真因定位靠**脱离 App 直接跑同一条 `flutter test`**，一步切开「环境问题」与「代码问题」。
-教训写入 `error remember` 第 17 条。
+教训写入 `lessons_learned` 第 17 条。
 
 #### 验收（机器人 E2E，套件 `e2e_20261010`）
 
@@ -4985,7 +4985,7 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 **连带后果**：`reportHeader()`（`search_env.dart:387`）**失去唯一调用方，已成死代码**；
 而 `ROBOT_VERIFY.md` 原文**仍把它列为「已可机器人替代的 spot-check」** —— 文档失真。
 
-**把 42 改成 24 就是拆掉报警器、掩盖覆盖回退**，正是 `error remember` 第 11 条的病根。
+**把 42 改成 24 就是拆掉报警器、掩盖覆盖回退**，正是 `lessons_learned` 第 11 条的病根。
 正确处置是**恢复被删的测试**（注意被测 API 已在该提交大改，旧用例未必还能编译）。
 
 #### 三、`ROBOT_VERIFY.md` 两处订正
@@ -4998,7 +4998,7 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
    故 **「E2E ALL PASS」不能作为主界面正常的证据**。附 30 秒程序化判定法
    （关 `active` → 启动 exe 并重定向日志 → 看进程存活/`Responding`/异常关键字）。
 
-#### 四、`error remember.md` 补 18-22 条
+#### 四、`lessons_learned.md` 补 18-22 条
 
 | 条 | 要点 |
 |---|---|
@@ -5012,7 +5012,7 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 
 - `catalog_full_var_test` + A 类三件：**27 tests, All tests passed**
 - 全量基线失败：**6 → 5**（`#1` 出列；`#10` 按上述理由保留为红灯报警器）
-- `ROBOT_VERIFY.md` / `error remember.md` U+FFFD = 0
+- `ROBOT_VERIFY.md` / `lessons_learned.md` U+FFFD = 0
 
 #### 待定 / 需拍板
 

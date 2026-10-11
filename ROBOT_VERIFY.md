@@ -117,7 +117,7 @@ powershell -NoProfile -File CHAN_RUST/scripts/robot_verify_agent_finish.ps1 -NoC
 **阶段 2 为什么必须走 `readEvalClockSeries`**：`lookupTradeNumeric`（取值/tooltip）与
 `readEvalClockSeries`（出信号）是**两条不同的链**，只验前者会漏掉真正的求值路径。
 **前缀侧必须带自己的时钟**，否则两侧采样格点不同，比的是采样密度而不是因果性
-（`error remember` 第 13 条）。
+（`lessons_learned` 第 13 条）。
 
 ### 计优套件的四个阶段（`jiyou_keypoint_20261001`）
 

@@ -5,7 +5,7 @@
 >
 > **边界**：
 > - 本篇只讲**概念与口径**。要改行为 → 走 [`AGENTS.md`](AGENTS.md) 确认执行门禁。
-> - 要看「这次做了什么」→ [`task-log.md`](task-log.md)；要看「别再犯什么」→ [`error remember.md`](error%20remember.md)。
+> - 要看「这次做了什么」→ [`task-log.md`](task-log.md)；要看「别再犯什么」→ [`lessons_learned.md`](lessons_learned.md)。
 > - 与核心思想不符、但回测数字漂亮的逻辑 → [`future/future.md`](future/future.md)。
 >
 > 收录标准：一个概念被问到 **两次以上**，或解释一次要超过三句话。
@@ -103,7 +103,7 @@
   主图会话自己走的是另一条手写合并链，一开始没写 → 时间线恒空 →
   求值时守卫不成立，**静默退回冻段口径**，信号被推到段尾，且不报错、测试全绿。
   症状对照：图上第 N 根就该响，寻优记在那一段的段尾 → 先怀疑这条，别先怀疑缠论。
-  详见 [`error remember.md`](error%20remember.md) 第 11 条。
+  详见 [`lessons_learned.md`](lessons_learned.md) 第 11 条。
 
 ---
 
@@ -158,7 +158,7 @@
 拿"末根那根"当基准会被边界效应误导（最后一根没有下一根可撮合）。
 正确做法是：**全量跑到底，再按 `discoveryX <= a` 过滤**，当作"前 a 根"的基准。
 
-详见 [`error remember.md`](error%20remember.md) 第 8 条「通用排查手法 · 前缀重放对拍」里的取样注意。
+详见 [`lessons_learned.md`](lessons_learned.md) 第 8 条「通用排查手法 · 前缀重放对拍」里的取样注意。
 
 ---
 
