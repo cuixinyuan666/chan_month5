@@ -5021,3 +5021,10 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **剩余 5 项基线失败**对 App 影响均为 0（已实测主界面不崩）。
 
 ---
+
+## 2026-10-11 · WorkBuddy · 规则 · error remember.md 改名 lessons_learned.md 并迁移记录纪律 + 加 AGENTS.md 修改门禁
+
+- **操作**：① 将仓库根 `error remember.md` 改名为英文 `lessons_learned.md`（对应 错误/经验/教训），`git mv` 保留历史；② 全仓 8 个文件的引用（AGENTS.md / knowledge.md / future.md / ROBOT_VERIFY.md / task-log.md / 两处 Dart 注释）同步改为新名；③ 把 AGENTS.md「常见错误与解法」整节的记录纪律（①②③④⑤ + 开工前必读声明）迁入 `lessons_learned.md` 的「记录纪律」节，AGENTS.md 仅留一句话指针；④ 在 AGENTS.md「确认执行门禁」新增：除非用户自己提出改 AGENTS.md，否则任何 agent 不得修改 AGENTS.md（本条即确认门禁）。
+- **结果**：全仓已无 `error remember` / `error%20remember` 残留（已 grep 验证，大小写不敏感）；`lessons_learned.md` 现含「定位 / 记录纪律 / 一·用户转述词汇 / 二·常犯的错与解法 / 三·怎么用」；已提交 `5ac0b0df`（未 push）。
+- **演示**：动代码/脚本前读 `lessons_learned.md`；改 AGENTS.md 须你本人先开口，否则 agent 不动它。
+- **注意事项**：Obsidian 副本（chan-month5/docs 下若有同名笔记）未同步改名，需你确认后我再走 obsidian-writer；本次未 push。
