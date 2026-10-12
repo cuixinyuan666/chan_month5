@@ -5,8 +5,13 @@
 # 模型名填 <模型> 占位待补；本文件随 git 版本化、团队可复现。
 # =====================================================================
 
-# 用户指定示例：辩论/评审模式偏好 opencode+bigpickle
-opencode+bigpickle
+# 辩论/评审模式偏好 opencode（走 FreeLLMAPI 免费网关）
+# ⚠ bigpickle 是悬空占位符，无真实模型！opencode 配置只有 openai/flm-auto / openai/auto。
+#   免费槽位请用 freellmapi 真实 id：free-router / claude-haiku-4-5 / claude-sonnet-4-5 / claude-opus-4-5
+#   （写法 opencode+free-router 等，见 multi_agent.md ⑥-a）
+opencode+flm-auto
+# opencode+free-router
+# opencode+claude-haiku-4-5
 
 # 如需限定本项目可用后端，继续追加，例如：
 # freellmapi+glm-5.2

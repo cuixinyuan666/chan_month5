@@ -263,3 +263,27 @@ moc: "[[chan-month5/index-memory]]"
   `EXCEPTION CAUGHT BY …` 块里，必须连着往上翻。
 - **推广**：定位失败用例要抓 **`[E]` 前后 ±30 行**，不要只看 `Expected/Actual`。
   同理，判断「是否影响 App」能实测就别推演（第 19 条给了 30 秒实测法）。
+
+### 23. 多 agent 派发前没提示轮次 / agent 数 / 模型，还静默替换占位符（违反 L1.5 选型主权）
+
+- **现象（2026-10-11/12 辩论复盘）**：按 multi_agent.md 跑「验收辩论」，但派发前**没问用户**辩论几轮、几个 agent、用哪个 `backend+model`；还把注册表里的 `opencode+bigpickle` 占位符**静默替换**成 `openai/flm-auto` 去跑，用户全程没机会选 LLM。
+- **根因**：把 L2「确认执行门禁」当成一次性确认，没把「轮次 / agent 数 / 每个角色的 backend+model」拆成可选项让用户逐项拍板；把用户随手写的别名当成了可解析模型名。
+- **解法**：① 派发前**显式问** a.辩论轮次（默认 3） b.辩论 agent 数（默认 4） c.每个角色的 `backend+model`（从 L1.5 扫描∪注册表清单勾选）；② 注册表 `<模型>` 占位符（bigpickle 等）**绝不自作主张 assign**，等你补真实 id 或勾选；③ 确认清单里把这三项列清楚再执行（已写入 multi_agent.md L1.5 / L2 / ④ / ⑦）。
+
+### 24. `opencode+bigpickle` 是悬空占位符，真实「免费模型」要显式指
+
+- **现象**：注册表写 `opencode+bigpickle`，但 opencode 配置只有 `openai/flm-auto`、`openai/auto`；freellmapi（31416）模型清单里也**没有 bigpickle**。`flm-auto` 的 name 是 "alias of FreeLLMAPI auto router"——即走你本地免费网关的自动路由，**不是某个叫 bigpickle 的模型**。
+- **根因**：把用户随手写的别名当成真实模型串去调。
+- **解法**：opencode 调用一律用 `opencode run --standalone --model openai/<freellmapi 真实 id>`；若你要「免费模型」，freellmapi 明确暴露的免费槽位是 `free-router`、`claude-haiku-4-5` / `claude-sonnet-4-5` / `claude-opus-4-5`（都标 "auto-routed to a free model"），写成 `openai/free-router` 或 `openai/claude-haiku-4-5`。占位符先跟你确认映射，绝不大胆替换。
+
+### 25. 涉及本地项目文件的辩论禁止纯文本，必须 worktree + 命令取证 + 轮次结束销毁
+
+- **现象**：本轮辩论主题是对仓库 `agent_handoff_*.dart` 的验收，却走了**纯文本辩论**——子 agent 没有代码访问权、没在 worktree 里跑 grep/diff/analyze，结论靠「主 agent 读代码后转述」支撑，不是「子 agent 用命令取证」。这等于无证据空辩。
+- **根因**：把旧 L2.5「纯文本 / 不产生文件可跳过 worktree」套用到「本地文件取证类辩论」；而这类问题恰恰需要强制 worktree + 命令验证。
+- **解法（已写入 multi_agent.md L2.5 / L6）**：凡是问题涉及本地项目文件（读/核实仓库代码、diff、测试、构建），辩论模式**强制开 worktree**（不可跳过），每个辩论 agent 在 worktree 内跑命令取证（grep/diff/`flutter analyze`/`flutter test` 输出），**禁止纯文本辩论**；**所有轮次结束后立即 `git worktree remove` 销毁**（L6 强制），不得留到下次会话。
+
+### 26. opencode TUI 在本机崩 → 必须用 `run --standalone` / `web`
+
+- **现象（2026-10-11 亲历）**：直跑 `opencode`（TUI）在本机会因 Bun segfault 崩，会话起不来。
+- **根因**：CPU 无 AVX 路径，Bun 运行时崩（`start-opencode-freellmapi.bat` 里也写了 "Default TUI crashes on this CPU"）。
+- **解法**：一律 `opencode run --standalone --model openai/flm-auto`（非交互、可 `--session <id>` resume）；或 `opencode web --hostname 127.0.0.1 --port 4096`。freellmapi（31416）必须先启动，否则 opencode 连不上 baseURL。

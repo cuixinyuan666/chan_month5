@@ -24,11 +24,14 @@
     - 仓库级覆盖/追加：`<仓库>/multi_agent.agents`（项目专用）
     - 格式：每行一条 `backend+model`，如 `opencode+bigpickle`、`pi+<模型>`、`deepseek+<模型>`、`reasonix+<模型>`、`freellmapi+glm-5.2`、`claude+<模型>`、`codex+<模型>`、`dsh+<模型>`、`builtin_subagent+general-purpose`。
     - **模型名规则**：扫描尽力探测，扫到的列出；**扫不到的留 `<模型>` 占位等你补**（桌面应用 / 本地模型的模型名扫不准，必须由你定——呼应"选 agent 包括 llm 交给你"）。
-  - **选型主权 100% 归你**：主 agent 呈现"扫描 ∪ 注册表"合并清单后，**由你为每个角色挑选 `backend+model`**；主 agent **绝不自作主张 assign llm**。选型途径：
+  - **选型主权 100% 归你**：主 agent 呈现“扫描 ∪ 注册表”合并清单后，**由你为每个角色挑选 `backend+model`**；主 agent **绝不自作主张 assign llm**。**注册表中 `<模型>` 占位符（如你写的 `opencode+bigpickle`）不是真实模型串**——opencode 实际只有 `openai/flm-auto`/`openai/auto`，freellmapi 也无 bigpickle；占位符必须等你补真实 id 或勾选，主 agent **不得静默解析/替换**（见 ⑥-a）。选型途径：
     ① 你从清单手动勾选；② 智能择优（freellmapi 池按能力标签打分取 top N；若无内置排行则主 agent 按标签打分取 top N，但**最终仍须你确认**）；③ 你自指定任意 `backend+model`。
   - **记录**：选型时须一并记录每个子 agent 的 `backend+model`（如 `opencode+bigpickle`、`builtin_subagent+general-purpose`），供 L5 原文呈现。
-- **L2 模式化拆解**：用 L1.5 选定 agent 落成「子 agent 任务卡」（派谁、**哪个 `backend+model`**、输入、输出、汇总；若是辩论/评审/红队类须注入 ④ 的诚实宪章）；**列出派发方案，必须请你确认后才执行**（确认执行门禁覆盖多 agent 派发）。
-- **L2.5 开 worktree**：为每个需要落盘代码的子 agent `git worktree add` 新建独立分支（`multiagent/<任务>-<序号>`），子 agent 在该 worktree 内拥有全部权限。**仅当该子 agent 需要落盘代码时执行**；纯文本 / 不产生文件任务的模式可跳过，但须向你说明原因。
+- **L2 模式化拆解**：用 L1.5 选定 agent 落成「子 agent 任务卡」（派谁、**哪个 `backend+model`**、输入、输出、汇总；若是辩论/评审/红队类须注入 ④ 的诚实宪章）；**列出派发方案，必须请你确认后才执行**（确认执行门禁覆盖多 agent 派发）。**确认内容必须显式列出三项**：① 辩论/评审**轮次**（默认 R=3）② 参与 **agent 数量**（辩论默认 4）③ 每个角色的 **`backend+model`**（从 L1.5 清单勾选，**绝不自作主张 assign llm**）。
+- **L2.5 开 worktree（含本地文件类问题强制）**：为每个需要落盘代码的子 agent `git worktree add` 新建独立分支（`multiagent/<任务>-<序号>`），子 agent 在该 worktree 内拥有全部权限。
+  - **默认**：仅当该子 agent 需要落盘代码时执行；纯文本 / 不产生文件任务的模式可跳过，但须向你说明原因。
+  - **⚠️ 强制（不可跳过）**：**凡问题涉及本地项目文件（读取 / 核实仓库代码、diff、测试、构建产物）**，无论辩论 / 评审 / 红队 / 考试，**一律强制开 worktree**；且辩论 / 评审类**禁止纯文本辩论**——每个对抗 agent 必须在 worktree 内**跑命令取证**（`grep` / `diff` / `flutter analyze` / `flutter test` 等真实输出），用代码与命令结果当论据，**不得仅靠主 agent 转述**。理由：此类问题结论必须对得准代码，纯文本辩论等于无证据空辩。
+  - 新开 worktree 的分支名避免与主树冲突；销毁见 L6。
 - **L2.6 常驻实例 + resume（强制 · 所有模式通用）**：每个（角色 / 立场 / 子任务）**只首次用 `Agent` 拉起一个实例并记下其 `agent_id`**；后续每一轮 / 每一阶段**必须对该 `agent_id` 用 `Agent` 的 `resume` 续跑**。**严禁**为同一角色每轮新建一个 agent 实例、靠把历史塞进 prompt 来"假装连续对话"。即：轮次之间的上下文连续由 agent 自身记忆（resume）保证，而非由主 agent 重新拼 prompt 注入来伪造。
 - **L2.7 中转保真 + 全闭环传递（强制 · 所有模式通用）**：
   - **全闭环传递**：当子 agent 数 **N≥2**，每个 agent 的回复必须**原样传递给其余所有 agent**（a→{b,c}、b→{a,c}、c→{a,b}…）。主 agent 每轮结束组装 `context packet` = 本轮所有 agent 的原文回复，下一轮 `resume` 每个 agent 时把**完整 packet 注入**（N 个 agent 各拿 N-1 份 peer 原文）。**严禁只做顺序接力**（a→b→c）。
@@ -41,8 +44,9 @@
     - **末轮子 agent 互评**：每个 agent 明确陈述「我 concede 了对方哪些点 / 仍坚持哪些点 / 哪些已达成一致」；
     - **可选独立裁判子 agent**：若需第三方裁定，由你在 L1.5/L2 从注册表选一个 `backend+model` 担任；**主 agent 必须向其注入本模式全量上下文包**（原始问题 / 背景、执行过程与轮次、全部辩论原文取自 L5、当前收敛地图），裁判只能基于该全量包下结论，**禁止只看末轮或摘要**（即"前世今生"全给，不得空穴来判）。
   - **主 agent 只做收敛统计**：维护「议题表」，每轮把每项标记 `分歧 / 部分统一 / 统一`，最终交付**收敛地图（convergence map）**而非主观胜负结论。
+  - **一致度提前收口（辩论 / 评审通用）**：裁判（独立裁判子 agent 或主 agent 兼任）**每轮末**基于收敛地图给「一致度」评分（统一议题数 / 总议题数）；达到阈值（默认 **≥90% 议题统一**）即**提前收口**，不必跑满默认轮次。该评分须写入 L5 transcript 供审计；若用户指定「必须跑满 R 轮」则忽略此条。
 - **L5 汇总交付（含原文呈现 · 强制）**：主 agent 整合为最终交付，对你负责。**必须在总结中原文呈现**：每个子 agent、**每一轮次**的 ① 被问（主 agent 发出的 prompt 原文）② 回复（子 agent 返回原文）③ 该子 agent 的 `backend+model`（L1.5/L2 记录值）。**不得改写、摘要或只给结论——逐轮逐 agent 贴原文**，以便你直接核验每句话的来源；并附 L2.7 的传递矩阵与 L4 的收敛地图。
-- **L6 销毁 worktree 与终端**：总任务完毕，销毁各自 worktree（`git worktree remove`）+ 关闭各自启用的终端（仅当 L2.5 开了 worktree / 终端时执行；纯文本模式无 worktree 则跳过）。
+- **L6 销毁 worktree 与终端**：总任务完毕，销毁各自 worktree（`git worktree remove`）+ 关闭各自启用的终端（仅当 L2.5 开了 worktree / 终端时执行；纯文本模式无 worktree 则跳过）。**强制项**：涉及本地项目文件的辩论 / 评审 / 红队，**所有轮次结束后立即销毁新开的 worktree**（不得保留到下次会话）；销毁前确认无未提交且需保留的改动（此类模式 worktree 改动按 ⑤ 默认直接丢弃，无需合并）。
 - **L7 资源（三选一 + 自适应）**：你选 **并发 / 串行 / 自适应（推荐）**；自适应按本机负载动态调度三态（探测 CPU%、可用内存%、freellmapi 负载；`CPU<50% 且 内存>30%`→并发，`50–80%`→限流≤2–3，`>80%`或内存紧张→串行；执行中动态降级 graceful）。
 - **L8 失败兜底（所有模式通用）**：
   - **触发条件**：超时 / 报错 / 输出空或无效 / 模型不可用 / 限流 / 进程崩。
@@ -59,7 +63,7 @@
 |---|---|---|---|---|
 | **协同** Collaboration | 大活拆互补块并行做，我拼起来 | 各块并行；拼接校验对齐；参与方数=块数 | 全块交付且对齐无冲突 | vs 流水线：并行↔串行两极 |
 | **考试** Exam | 同活复制 N 份各做，挑最好的 | 份数 **N=3**；评分=正确性/完整度/简洁；择优=最高分或融合 top2 | 凑齐 N 份或超时 | vs 委员会：产出连续解↔离散决策；vs 评审：从零做↔改已有 |
-| **辩论** Debate | 多方站对立面互怼，收敛为共识 | **轮次 R=3**；参与方默认**正/反方 2 个（可加到 3+ 方）**；角色模板=正/反方（可改名/增减） | 一方重复/认输、轮次用尽、或收敛地图显示全统一→收口 | vs 红队：观点交锋↔实现攻击；有交互↔单向 |
+| **辩论** Debate | 多方站对立面互怼，收敛为共识 | **轮次 R=3（默认，可改）**；**阵容默认 = 正方×2 + 反方×2（共 4 个 opencode 辩论实例，本地文件类问题须在 worktree 内自行跑 `grep`/`diff`/`flutter analyze`/`flutter test` 取证、不得纯文本空辩）+ 验证官 1（builtin_subagent，负责命令取证产出证据包）+ 裁判由主 agent 兼任（不做独立 session；如需独立第三方裁定则另开第 5 个 session）**；4 个辩论实例可改名/增减；**派发前必须向你确认轮次与 agent 数量** | 一方重复/认输、轮次用尽、**或裁判（主 agent 兼任）每轮末评估「一致度」达阈值（默认 ≥90% 议题标记为「统一」）**→提前收口（不必跑满 R） | vs 红队：观点交锋↔实现攻击；有交互↔单向 |
 | **评审** Review | 先出东西再派人挑刺，我改 | **轮次 K=2**（初评+覆评）；只提问题 | 无新问题/达成共识/轮次上限→修订定稿 | vs 红队：红队=评审的对抗强化版（更狠偏安全） |
 | **红队** Red-Team | 派"对手"专找漏洞打穿，我补 | **攻击轮次=2**；假设敌找 exploit | 无可 exploit 或轮次上限→补强清单 | 近似评审（见上） |
 | **委员会** Committee | 多人独立投票，少数服从多数 | 参与方 **3~5**；多数决；平票主 agent **程序性加投（非内容裁定）** | 投票完成 | 近似考试（离散决策版） |
@@ -109,12 +113,24 @@
 - **项目级 skills** (chan_month5)：`auto-commit-obsidian` / `obsidian-task-recorder`
 - **Claude Code 全局 skills**（可作 agent 池，30+）：含 `cross-review` / `zen-review`（评审）、`research`（调研）、`plan`、`agent-browser`
 
+### ⑥-a agent 启动经验 / 坑点（2026-10-12 复盘补充）
+
+- **opencode 在本机 TUI 必崩**：Bun segfault（CPU 无 AVX 路径，`start-opencode-freellmapi.bat` 也写了 "Default TUI crashes on this CPU"）。**一律非交互模式**：`opencode run --standalone --model openai/<freellmapi真实id> --title <名>`，续跑加 `--session <id>`；或 `opencode web --hostname 127.0.0.1 --port 4096`。不要直跑 TUI。
+- **`opencode+bigpickle` 是悬空占位符**：你注册表里写的 `opencode+bigpickle` 没有对应真实模型。opencode 配置（`~/.config/opencode/opencode.jsonc`）只有 `openai/flm-auto` 与 `openai/auto`；freellmapi（31416）也无 `bigpickle`。`flm-auto` 的 name 是 "alias of FreeLLMAPI auto router"——即走你本地免费网关的自动路由，**不是某个叫 bigpickle 的模型**。
+  - **若你要「免费模型」**，freellmapi 明确暴露的免费槽位：`free-router`（Free Router）、`claude-haiku-4-5` / `claude-sonnet-4-5` / `claude-opus-4-5`（均标 "auto-routed to a free model"）。opencode 调用应写为 `openai/free-router` 或 `openai/claude-haiku-4-5`。
+  - **铁律**：注册表 `<模型>` 占位符（bigpickle 等）必须等你补真实 id 或勾选，**主 agent 不得静默解析/替换**（违反 L1.5 选型主权）。
+- **freellmapi 必须先在跑**：opencode 模型 baseURL 是 `127.0.0.1:31416/v1`，freellmapi 桌面端没启动则 opencode 直接连不上。派发前先确认 31416 在监听。
+- **opencode `run` 实测可用参数**：`--standalone`（避开后台服务依赖）、`--model openai/flm-auto`、`--session <id>`（resume）、`--title <名>`（首次命名会话，便于取 id）。最小验证：`opencode run --standalone --model openai/flm-auto "Reply OK"`。
+- **⚠️ freellmapi chat 端点只接受路由模型（2026-10-12 实测）**：`/v1/models` 列出的 `claude-sonnet-4-5` / `claude-haiku-4-5` / `free-router` 等只是**目录条目**；经 opencode→freellmapi 的 **chat 调用直接报 `Model 'claude-sonnet-4-5' is not in the catalog`**。实际可用的免费模型**只有 `flm-auto` / `auto`**（FreeLLMAPI 自动路由到免费强模型）。用户选 `claude-sonnet-4-5` 会 Model unavailable——此时 fallback 到 `openai/flm-auto` 即可（它走的就是免费网关，不必改模型）。
+- **⚠️ opencode 子 agent 读文件被拦 / 取证的权限处理（2026-10-12 实测 + 修正）**：opencode 默认对 `external_directory` 的 Read/Bash 会 **auto-reject**（报 "The user declined this tool call"）。**正确做法（满足 L2.5 强制取证）**：把 opencode 的工作目录 `cwd` 直接设在 worktree 里（使其算「项目内」而非「外部目录」），或在 `opencode.jsonc` 把 worktree 路径加入 `permissions.allow`（如 `Read`、`Bash`），使辩论 agent 能在 worktree 内自行跑 `grep`/`diff`/`flutter analyze`/`flutter test` 取证——这才能让 4 个辩论实例各自独立验证，而非只消费验证官的证据包（符合「外部 agent 也该有 worktree 权限」的要求，**权限可授予、并非不可能**）。**仅当权限确实无法授予时**，才退而用「提示词去掉路径 + 声明只读证据包」的兜底（取证全压在 builtin 验证官身上，属降级方案，辩论质量弱于各 agent 自证）。
+- **每 `run` 不带 `--session` 会新建会话（2026-10-12 实测）**：即使同 `--title` 也会开新会话（本次因此产生多个同名 DEBATE-* 会话）；resume 必须 `--session <id>`，用 `opencode session list` 取**最新**的 R1 会话 id 续跑（旧失败会话别误用）。
+
 ### L1.5 扫描命令参考
 `command -v opencode codex claude dsh`；遍历 `AppData\Local`、`AppData\Roaming`、`Program Files` 抓 `opencode|codex|claude|freellm|deepseek|reasonix|pi|openhands|copilot`；列 freellmapi 安装目录与各级 skills 目录（`~\.workbuddy\skills`、`~\.claude\skills`、`<项目>\.workbuddy\skills`）。**桌面应用靠 `AppData` 目录名命中，不依赖 PATH。**
 
 ## ⑦ 默认假设（写入后可改）
 
-- 辩论 **R=3** / 评审 **K=2** / 考试 **N=3** / 委员会 **3~5 方** / 红队 **攻击=2** —— 均为**推荐默认**，你可在 L1/L2 改写。
+- 辩论 **R=3 / 阵容 = 正方×2+反方×2（4 个 opencode 辩论实例）+ 验证官 1（builtin）+ 裁判主 agent 兼任** / 评审 **K=2** / 考试 **N=3** / 委员会 **3~5 方** / 红队 **攻击=2** —— 均为**推荐默认**，你可在 L1/L2 改写；**派发前必须向你确认轮次与 agent 数量**。**辩论收敛默认启用「一致度提前收口」：裁判（主 agent 兼任）每轮末评估一致度，达到阈值（默认 ≥90% 议题统一）即提前收口，不必跑满 R=3**。
 - 自适应阈值：CPU 50% / 80% 分界，内存可用 30% 分界。
 - 失败兜底：同后端重试 **1 次**；agent 级 `fallback=backend+model` 优先，否则走 `global_fallback=` 全局列表。
 - freellmapi 智能排行若无内置则主 agent 按模型/技能标签打分取 top N，但仍须你最终确认。
