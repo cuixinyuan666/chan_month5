@@ -196,7 +196,7 @@ void main() {
       expect(whole!.expressionReady, isFalse);
     });
 
-    test('EXISTS 不能比较/穿越；DIRECTION 只能等于；混层混钟非法', () {
+    test('EXISTS 不能比较/穿越；DIRECTION 只能等于；混层直接比仍非法', () {
       expect(
         compileValuePair(
           left: const TradeVarRef('STRUCTURE.K1.DIVERGENCE.EXISTS'),
@@ -263,7 +263,7 @@ void main() {
           ),
           maxKn: 2,
         ),
-        isA<CondCompileIllegal>(),
+        isA<CondCompileOk>(),
       );
       expect(
         compileConditionAst(k1Buy1AndDiverAst(), maxKn: 2),

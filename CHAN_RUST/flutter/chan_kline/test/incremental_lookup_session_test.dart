@@ -1,3 +1,6 @@
+import 'dart:io';
+import 'dart:math' as math;
+
 import 'package:chan_kline/bridge/chan_bridge.dart';
 import 'package:chan_kline/compute/class1_bs_compute.dart';
 import 'package:chan_kline/compute/class2_bs_compute.dart';
@@ -15,6 +18,8 @@ import 'package:chan_kline/models/sell1_frame.dart';
 import 'package:chan_kline/models/sell2_frame.dart';
 import 'package:chan_kline/models/sell_n_frame.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import 'offline_tick_files.dart';
 
 List<KlineBar> _load002003() {
   final bridge = ChanBridge.instance;
@@ -99,6 +104,10 @@ void _expectRowsEq(
 }
 
 void main() {
+  if (!hasOffline002003TickFiles()) {
+    test('002003 Incremental Lookup', () {}, skip: kNoOffline002003Skip);
+    return;
+  }
   late List<KlineBar> bars;
 
   setUpAll(() {
@@ -192,16 +201,100 @@ void main() {
     }
   });
 
-  test('reset+replay 后 Incremental == Full', () {
+  test('步退后 Incremental 不 Full 种仓，asOfView == Full', () {
     final sess = ChanPipelineSession.create(preferDelta: true);
     addTearDown(sess.dispose);
     sess.syncTo(bars.sublist(0, 29));
     sess.cache.syncLookup(bars: bars.sublist(0, 29), subIndicators: _subs(sess.cachedBundle));
-    final replayed = sess.syncTo(bars.sublist(0, 28));
-    sess.cache.syncLookup(bars: bars.sublist(0, 28), subIndicators: _subs(replayed));
-    final full = _full(bars.sublist(0, 28), replayed);
-    _expectRowsEq(sess.cache.lookup.at(27), full.at(27), 'replay current');
-    _expectRowsEq(sess.cache.lookup.at(5), full.at(5), 'replay frozen');
+    expect(sess.cache.lookupEngine.step, 28);
+    final shortened = sess.syncTo(bars.sublist(0, 28));
+    sess.cache.syncLookup(bars: bars.sublist(0, 28), subIndicators: _subs(shortened));
+    expect(sess.cache.lookupEngine.step, 28);
+    final inc = sess.cache.lookupEngine.asOfView(
+      asOf: 27,
+      asOfBundle: shortened,
+      prefixBars: bars.sublist(0, 28),
+    );
+    final full = _full(bars.sublist(0, 28), shortened, asOf: 27);
+    _expectRowsEq(inc.at(27), full.at(27), 'asof_keep current');
+    _expectRowsEq(inc.at(5), full.at(5), 'asof_keep frozen');
+  });
+
+  test('逐格步进：增量回归通道槽位 == Full（父层换段后旧段清空）', () {
+    final sess = ChanPipelineSession.create(preferDelta: true);
+    addTearDown(sess.dispose);
+    for (var step = 0; step <= 28; step++) {
+      final visible = bars.sublist(0, step + 1);
+      final bundle = sess.syncTo(visible);
+      sess.cache.syncLookup(
+        bars: visible,
+        subIndicators: _subs(bundle),
+      );
+      final inc = sess.cache.lookup;
+      final full = _full(visible, bundle);
+      for (var x = 0; x <= step; x++) {
+        for (var dkn = 0; dkn <= 2; dkn++) {
+          for (final key in const [
+            'regress_mid',
+            'regress_up',
+            'regress_down',
+          ]) {
+            final k = '${key}_$dkn';
+            expect(inc.at(x)?['sub']?[k], full.at(x)?['sub']?[k],
+                reason: 'step=$step x=$x $k');
+          }
+        }
+      }
+    }
+  });
+
+  test('逐格步进：增量未确认中枢槽位 == Full（框延伸后旧段清空）', () {
+    // 未确认中枢会随段延伸被收窄/加长，增量必须先清掉自己上一版盖住的格再重画，
+    // 否则历史格留着上一版的中轴（clear() 曾是空壳，等于不清）。
+    // 该 lookup 会被 ML 特征与计优统计读取 → 陈旧值 = 口径污染。
+    // 全量对照每步都建太慢，改为逐格步进 + 每 25 根做一次全量对拍。
+    final sess = ChanPipelineSession.create(preferDelta: true);
+    addTearDown(sess.dispose);
+    final lastStep = math.min(bars.length - 1, 600);
+    for (var step = 0; step <= lastStep; step++) {
+      final visible = bars.sublist(0, step + 1);
+      final bundle = sess.syncTo(visible);
+      sess.cache.syncLookup(
+        bars: visible,
+        subIndicators: _subs(bundle),
+      );
+      if (step % 25 != 0 && step != lastStep) continue;
+      final inc = sess.cache.lookup;
+      final full = _full(visible, bundle);
+      for (var x = 0; x <= step; x++) {
+        for (var dkn = 0; dkn <= 2; dkn++) {
+          for (final key in const [
+            'zs_high',
+            'zs_low',
+            'zs_sure',
+            'zs_seq',
+          ]) {
+            final k = '${key}_$dkn';
+            expect(inc.at(x)?['sub']?[k], full.at(x)?['sub']?[k],
+                reason: 'step=$step x=$x $k');
+          }
+        }
+      }
+    }
+  });
+
+  test('未确认中枢 clear 不许退回空壳（V6 · 源码守卫）', () {
+    // 上面那条对拍在当前离线数据上恰好没踩到「框收窄」这一格（实测 600 根内两者一致），
+    // 所以再补一条结构守卫：clear() 必须真的把四个槽位置 null。
+    // 曾经的 bug 就是函数体只有注释、什么都不清 —— 这种退化必须被挡住。
+    final src = File('lib/models/incremental_lookup.dart').readAsStringSync();
+    for (final key in const ['zs_high', 'zs_low', 'zs_sure', 'zs_seq']) {
+      expect(src.contains("sub['${key}_\$kn'] = null;"), isTrue,
+          reason: 'clear() 必须把 $key 置 null（空壳清法会让历史格留上一版中枢值）');
+    }
+    expect(src.contains('_lastUnsureSeqByKey'),
+        isTrue,
+        reason: '合并后 seq 会变，必须记住上一次写的 seq 才能把旧段清干净');
   });
 
   test('asOf 24–28 不跑全表 build：冻结格 + 结构覆盖 == Full', () {

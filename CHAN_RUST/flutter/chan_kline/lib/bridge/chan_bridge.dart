@@ -9,7 +9,11 @@ import '../models/kline_combine_bundle.dart';
 import '../models/kline_combine_frame.dart';
 import '../models/pipeline_delta.dart';
 import '../models/presentation_cache.dart';
+import '../models/tick_quality.dart';
 import '../widgets/kline_chip.dart';
+import 'chan_ffi_abi.dart';
+
+export 'chan_ffi_abi.dart';
 
 /// Rust `chan_ffi` 动态库桥接（纯 FFI：全部计算在 Rust，Dart 无回退实现）。
 class ChanBridge {
@@ -19,10 +23,19 @@ class ChanBridge {
 
   late final DynamicLibrary _lib;
   bool _ready = false;
+  int _abiVersion = -1;
+  String _openedLibraryPath = '';
+
+  /// 已加载库的协议号；未初始化为 -1。
+  int get loadedFfiAbiVersion {
+    ensureInitialized();
+    return _abiVersion;
+  }
 
   void ensureInitialized() {
     if (_ready) return;
     _lib = _openLibrary();
+    _assertAbiVersion();
     _ready = true;
   }
 
@@ -32,22 +45,55 @@ class ChanBridge {
       final devAbs =
           '${Directory.current.path}${Platform.pathSeparator}windows${Platform.pathSeparator}native${Platform.pathSeparator}chan_ffi.dll';
       if (File(devAbs).existsSync()) {
-        return DynamicLibrary.open(devAbs);
+        return _openNamed(devAbs);
       }
       final exeDir = File(Platform.resolvedExecutable).parent.path;
       final besideExe = '$exeDir${Platform.pathSeparator}chan_ffi.dll';
       if (File(besideExe).existsSync()) {
-        return DynamicLibrary.open(besideExe);
+        return _openNamed(besideExe);
       }
-      return DynamicLibrary.open('chan_ffi.dll');
+      return _openNamed('chan_ffi.dll');
+    }
+    if (Platform.isAndroid) {
+      // Android 由 jniLibs/<abi>/libchan_ffi.so 打包进 APK
+      return _openNamed('libchan_ffi.so');
     }
     if (Platform.isLinux) {
-      return DynamicLibrary.open('libchan_ffi.so');
+      return _openNamed('libchan_ffi.so');
     }
     if (Platform.isMacOS) {
-      return DynamicLibrary.open('libchan_ffi.dylib');
+      return _openNamed('libchan_ffi.dylib');
     }
     throw UnsupportedError('当前平台暂不支持 FFI: ${Platform.operatingSystem}');
+  }
+
+  DynamicLibrary _openNamed(String path) {
+    _openedLibraryPath = path;
+    try {
+      return DynamicLibrary.open(path);
+    } catch (e) {
+      throw ChanFfiVersionException(
+        chanFfiMissingLibraryMessage(triedPath: path, cause: e),
+      );
+    }
+  }
+
+  void _assertAbiVersion() {
+    int got;
+    try {
+      got = _lib.lookupFunction<Uint32 Function(), int Function()>(
+        'chan_ffi_abi_version',
+      )();
+    } catch (_) {
+      throw ChanFfiVersionException(chanFfiMissingAbiSymbolMessage());
+    }
+    _abiVersion = got;
+    if (got != kChanFfiAbiVersion) {
+      throw ChanFfiVersionException(
+        '${chanFfiAbiMismatchMessage(got: got, expected: kChanFfiAbiVersion)}'
+        ' 当前库：$_openedLibraryPath',
+      );
+    }
   }
 
   Pointer<Utf8> _toNative(String? text) {
@@ -100,6 +146,26 @@ class ChanBridge {
                 Pointer<Utf8>,
                 Pointer<Utf8>,
               )>>('chan_load_klines')
+      .asFunction();
+
+  late final Pointer<Utf8> Function(
+    Pointer<Utf8>,
+    Pointer<Utf8>,
+    Pointer<Utf8>,
+    Pointer<Utf8>,
+    Pointer<Utf8>,
+    Pointer<Utf8>,
+  ) _loadKlinesEx = _lib
+      .lookup<
+          NativeFunction<
+              Pointer<Utf8> Function(
+                Pointer<Utf8>,
+                Pointer<Utf8>,
+                Pointer<Utf8>,
+                Pointer<Utf8>,
+                Pointer<Utf8>,
+                Pointer<Utf8>,
+              )>>('chan_load_klines_ex')
       .asFunction();
 
   late final Pointer<Utf8> Function(Pointer<Utf8>) _saveTestOhlc = _lib
@@ -242,6 +308,47 @@ class ChanBridge {
     }
   }
 
+  /// 加载 K 线并带回分笔质量。tickSource：`file`（单测/test）或 `protocol`（通达信）。
+  ({List<KlineBar> bars, TickQuality quality}) loadKlinesEx({
+    String? dataRoot,
+    required String code,
+    required String beginDate,
+    required String endDate,
+    String period = 'day',
+    String tickSource = 'file',
+  }) {
+    ensureInitialized();
+    final pRoot = _toNative(dataRoot);
+    final pCode = _toNative(code);
+    final pBegin = _toNative(beginDate);
+    final pEnd = _toNative(endDate);
+    final pPeriod = _toNative(period);
+    final pSource = _toNative(tickSource);
+    try {
+      final data = _decode(
+        _takeJson(
+          _loadKlinesEx(pRoot, pCode, pBegin, pEnd, pPeriod, pSource),
+        ),
+      );
+      final map = Map<String, dynamic>.from(data as Map);
+      final bars = (map['bars'] as List? ?? const [])
+          .map((e) => KlineBar.fromJson(Map<String, dynamic>.from(e as Map)))
+          .toList();
+      return (
+        bars: bars,
+        quality: TickQuality.fromJson(
+          map['quality'] is Map
+              ? Map<String, dynamic>.from(map['quality'] as Map)
+              : null,
+        ),
+      );
+    } finally {
+      for (final p in [pRoot, pCode, pBegin, pEnd, pPeriod, pSource]) {
+        if (p != nullptr) calloc.free(p);
+      }
+    }
+  }
+
   /// 保存 test 自定义 OHLC → `a_Data/test/custom.ohlc.csv`。
   ({String path, int count}) saveTestOhlc({
     String? dataRoot,
@@ -312,14 +419,20 @@ class ChanBridge {
     final ptr = _toNative(jsonEncode(bar.toJson()));
     try {
       final data = _decode(_takeJson(_pipelineAppend(handle, ptr)));
-      return KlineCombineBundle.fromJson(Map<String, dynamic>.from(data as Map));
+      return KlineCombineBundle.fromJson(
+        Map<String, dynamic>.from(data as Map),
+      );
     } finally {
       if (ptr != nullptr) calloc.free(ptr);
     }
   }
 
   /// 逐根 append，返回 PipelineDelta（历史 bar_features 不重复）。
-  PipelineDelta pipelineAppendDelta(int handle, KlineBar bar) {
+  PipelineDelta pipelineAppendDelta(
+    int handle,
+    KlineBar bar, {
+    bool slim = false,
+  }) {
     ensureInitialized();
     _ensureAppendDeltaLookup();
     final fn = _pipelineAppendDeltaFn;
@@ -328,8 +441,12 @@ class ChanBridge {
     }
     final ptr = _toNative(jsonEncode(bar.toJson()));
     try {
-      final data = _decode(_takeJson(fn(handle, ptr)));
-      return PipelineDelta.fromJson(Map<String, dynamic>.from(data as Map));
+      final raw = _takeJson(fn(handle, ptr));
+      final data = _decode(raw);
+      return PipelineDelta.fromJson(
+        Map<String, dynamic>.from(data as Map),
+        slim: slim,
+      );
     } finally {
       if (ptr != nullptr) calloc.free(ptr);
     }
@@ -414,7 +531,8 @@ class ChanBridge {
 
 /// Phase 1.5：图表会话 = 一个 Rust PipelineState；Flutter 只存 handle + presentation cache。
 /// 前进：首包 Full Snapshot，其后 append_delta + mergeDelta；失败回退 snapshot。
-/// 步退/复位/换 opt：reset + replay。asOf 仍走无状态 Full。
+/// 步退：有当步仓则直接返回快照（Rust 仓保持最长前缀），禁止整段 reset+replay。
+/// 无当步仓才 reset + replay。换股/换周期/截断开关仍 dispose 后重建。
 class ChanPipelineSession {
   ChanPipelineSession._(
     this._bridge,
@@ -429,6 +547,9 @@ class ChanPipelineSession {
 
   /// false=全程 Full Snapshot（对照路径）；true=首包 Full + 后续 Delta。
   final bool preferDelta;
+  /// 走完循环可跳过 k1 分析等纯展示表；冻段/合并框仍解析（比例/节奏与单步同口径）。
+  /// 末根关掉，补齐 k1 展示字段。
+  bool slimDeltaStructure = false;
   final PresentationCache cache = PresentationCache();
   int _len = 0;
   bool _alive = true;
@@ -459,7 +580,7 @@ class ChanPipelineSession {
     cache.reset();
   }
 
-  /// 同步到可见前缀：短则 reset+replay，长则继续 append。
+  /// 同步到可见前缀：短则优先当步仓，无仓才 reset+replay；长则继续 append。
   KlineCombineBundle syncTo(List<KlineBar> visible) {
     if (!_alive) {
       throw StateError('PipelineSession 已 dispose');
@@ -471,6 +592,11 @@ class ChanPipelineSession {
       return KlineCombineBundle.empty();
     }
     if (_len > visible.length) {
+      final asOf = visible.last.idx;
+      final snap = cache.snapshotAt(asOf, withBarFeatures: true);
+      if (snap != null) {
+        return snap;
+      }
       _resetLocal();
     }
     while (_len < visible.length) {
@@ -486,7 +612,11 @@ class ChanPipelineSession {
         cache.len == _len;
     if (canDelta) {
       try {
-        final d = _bridge.pipelineAppendDelta(handle, bar);
+        final d = _bridge.pipelineAppendDelta(
+          handle,
+          bar,
+          slim: slimDeltaStructure,
+        );
         cache.mergeDelta(d);
         _len += 1;
         return;

@@ -361,6 +361,8 @@ class LevelBundle {
       confirms: (json['confirms'] as List? ?? const [])
           .map((e) => LevelConfirm.fromJson(Map<String, dynamic>.from(e as Map)))
           .toList(),
+      // 冻段/合并框：走完瘦包也必须解析。比例/斜率/节奏按冻段出现链算，
+      // 跳过会把中间步冻成「只有虚线」，和单步对不上。
       segments: (json['segments'] as List? ?? const [])
           .map((e) => LevelSegmentN.fromJson(Map<String, dynamic>.from(e as Map)))
           .toList(),
@@ -368,8 +370,10 @@ class LevelBundle {
           .map((e) => LevelUnitBar.fromJson(Map<String, dynamic>.from(e as Map)))
           .toList(),
       combineFrames: (json['combine_frames'] as List? ?? const [])
-          .map((e) =>
-              KlineCombineFrame.fromJson(Map<String, dynamic>.from(e as Map)))
+          .map(
+            (e) =>
+                KlineCombineFrame.fromJson(Map<String, dynamic>.from(e as Map)),
+          )
           .toList(),
       zsFrames: (json['zs_frames'] as List? ?? const [])
           .map((e) => ZSFrame.fromJson(Map<String, dynamic>.from(e as Map)))
