@@ -5037,3 +5037,11 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **结果**：模式全集 7 种（协同/考试/辩论/评审/红队/委员会/流水线），方案 A 保留并加边界说明消重复（红队=评审对抗变体、委员会=考试离散决策变体）；主 agent=当前会话、子 agent 只汇报主 agent；子 agent 各开独立 worktree、拥有其内全部权限，但「禁止改 AGENTS.md」门禁同样生效，总任务完毕销毁 worktree 与终端；L7 自适应按本机负载动态并发/串行/multiple；未 push。
 - **演示**：你说"多agent"触发；L1 逐模式人话说明；L1.5 实时获取本机 agent 并三途径选型（手动/智能择优 top N/自指定 llm）；L2 派发前你会被要求确认。
 - **注意事项**：freellmapi「智能排行前十选 agent」能力待实测确认（无内置则由主 agent 按标签打分 top N）；Obsidian 副本未同步；本次未 push。
+
+
+## 2026-10-24 · Codex · 规则文档 · 新增全局 Agent 调度与 Token 优化规则
+
+- **操作**：在 D:\ 根目录新建 a_codex_agent_orchestration_rules.md，规定任务规划与委派、FreeLLMAPI 免费模型优先、模型/思考强度/上下文动态选择、子 Agent 状态监控与切换重试、无固定轮次上限的进展终止条件，以及隐私、权限和验收边界；用户复核后将范围扩展为多个主 Agent 通用。按用户明确确认，在 Codex 用户级全局 AGENTS.md 写入精简指针。
+- **结果**：规则正文现适用于 Codex、WorkBuddy、zcode 等有用户级指令入口的主 Agent。已在 C:\Users\Administrator\.codex\AGENTS.md 写入文档指针；Codex 后续加载用户级全局指令时可发现该规则，完整内容按需读取。遵守系统、工具权限、用户当前要求与项目级更严格边界。仓库原有 kline_chart.dart 未触碰。
+- **验收**：D 盘规则文档当前为 10560 字节；Codex 用户级 AGENTS.md 指针为 UTF-8 无 BOM、LF 行尾，515 字节。任务日志与 Obsidian 条目已同步；纯规则文档，没有运行代码测试或构建。
+- **演示**：Codex 全局指令现在引用 D 盘规则；后续主 Agent 可按任务需要委派、优先选择可用的免费模型、监控和切换子 Agent，并压缩上下文及整理长输出。
