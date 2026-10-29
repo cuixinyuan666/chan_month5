@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 
@@ -59,8 +61,7 @@ import 'models/tick_quality.dart';
 import 'models/k0_confirm_signal.dart';
 import 'models/bar_crosshair_feature.dart';
 import 'models/bar_feature_lookup.dart';
-import 'models/k0_line.dart';
-import 'models/k1_bar_view.dart';
+import 'models/k0_line.dart';import 'models/k1_bar_view.dart';
 import 'models/chart_indicator.dart';
 import 'models/chip_config.dart';
 import 'models/tick_dist_config.dart';
@@ -82,6 +83,7 @@ import 'widgets/edge_control_panel.dart';
 import 'widgets/kline_chart.dart';
 import 'widgets/crosshair_tooltip_panel.dart';
 import 'widgets/crosshair_tooltip_bridge.dart';
+import 'widgets/kline_axis_format.dart';
 import 'widgets/yin_yang_mark.dart';
 import 'widgets/yin_yang_native_overlay.dart';
 import 'widgets/test_ohlc_editor_dialog.dart';
@@ -90,6 +92,8 @@ import 'robot_verify/robot_verify_app.dart';
 import 'robot_verify/robot_verify_paths.dart';
 import 'step_freeze/step_freeze_merger.dart';
 import 'step_freeze/step_freeze_session_state.dart';
+import 'agent_api/agent_api_host.dart';
+import 'agent_api/agent_api_server.dart';
 
 const _robotVerifyDefine = bool.fromEnvironment('ROBOT_VERIFY');
 const _robotVerifySuiteDefine = String.fromEnvironment(
@@ -355,7 +359,7 @@ class KlineHomePage extends StatefulWidget {
   State<KlineHomePage> createState() => _KlineHomePageState();
 }
 
-class _KlineHomePageState extends State<KlineHomePage> {
+class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
   final _bridge = ChanBridge.instance;
   final _msgHistory = MsgHistory.instance;
   /// Phase 1.5：Rust PipelineState 会话句柄（Flutter 不存核心 state）
@@ -420,6 +424,12 @@ class _KlineHomePageState extends State<KlineHomePage> {
         _backtestPanelOpen ||
       _mlSession.isActive,
   );
+  /// Agent API 服务器（仅在 agent 模式下启动；robot_verify 模式不启动）。
+  AgentApiServer? _agentApiServer;
+  /// 图表 RepaintBoundary key（用于智能体验证截图）。
+  final GlobalKey _chartRepaintKey = GlobalKey();
+  /// 启动时刻（用于智能体验证计算运行时长）。
+  late final DateTime _startedAt = DateTime.now();
   /// 截断监察：开=当前口径；关=添加截断前旧行为（暴力反转被吸收）
   bool _truncationCheck = true;
   /// 构建中合并框（虚线）开关：开=末组合并画虚线；关=全部实线（默认开）
@@ -729,6 +739,10 @@ class _KlineHomePageState extends State<KlineHomePage> {
   Future<void> _bootstrapApp() async {
     await _loadChipConfig();
     await _bootstrap();
+    // 首帧后注册截图回调（需 _chartRepaintKey 已挂载）。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _registerScreenshotCallback();
+    });
   }
 
   Future<void> _loadChipConfig() async {
@@ -737,6 +751,18 @@ class _KlineHomePageState extends State<KlineHomePage> {
     setState(() {
       _chipConfig = both.$1;
       _tickDistConfig = both.$2;
+    });
+  }
+
+  /// 注册截图回调供智能体验证使用。
+  void _registerScreenshotCallback() {
+    if (!mounted) return;
+    final renderBox = _chartRepaintKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
+    if (renderBox == null) return;
+    AgentApiServer.bindScreenshot(() async {
+      final image = await renderBox.toImage(pixelRatio: 1.0);
+      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+      return byteData?.buffer.asUint8List() ?? <int>[];
     });
   }
 
@@ -867,7 +893,258 @@ class _KlineHomePageState extends State<KlineHomePage> {
     // 整个 app 收摊才拆 overlay 窗口（拆窗+注销窗口类+isolate 自行退出）
     unawaited(_runToEndYinYang.dispose());
     _tooltipBridge.dispose();
+    _agentApiServer?.stop();
     super.dispose();
+  }
+
+  // ================= AgentApiHost 实现 =================
+
+  @override
+  bool get hasSession => _hasSession;
+
+  @override
+  String? get selectedCode => _selectedCode;
+
+  @override
+  String get period => _period;
+
+  @override
+  String get periodLabel => _periods[_period] ?? _period;
+
+  @override
+  String get dataRoot => _dataRoot;
+
+  @override
+  int get stepIdx => _stepIdx;
+
+  @override
+  int get totalBars => _allBars.length;
+
+  @override
+  bool get isPlaying => _playing;
+
+  @override
+  Set<MainChartIndicator> get mainIndicators => _mainIndicators;
+
+  @override
+  Set<SubChartIndicator> get subIndicators => _subIndicators;
+
+  @override
+  ChipConfig get chipConfig => _chipConfig;
+
+  @override
+  TickDistConfig get tickDistConfig => _tickDistConfig;
+
+  @override
+  MathIndicatorConfig get mathIndicatorConfig => _mathIndicatorConfig;
+
+  @override
+  bool get truncationCheck => _truncationCheck;
+
+  @override
+  DateTime get startedAt => _startedAt;
+
+  @override
+  String get appVersion => '1.0.9+9';
+
+  @override
+  int get ffiAbiVersion => _bridge.loadedFfiAbiVersion;
+
+  @override
+  void stepTo(int idx) {
+    if (!_hasSession) return;
+    _stopPlay();
+    _dismissTickYinYang();
+    final target = idx.clamp(0, _allBars.length - 1);
+    if (target == _stepIdx) return;
+    setState(() => _stepIdx = target);
+    _rebuildCombine();
+  }
+
+  @override
+  void stepRelative(int dir) {
+    if (!_hasSession) return;
+    _stopPlay();
+    _dismissTickYinYang();
+    if (dir > 0) {
+      _stepForward();
+    } else if (dir < 0) {
+      _stepBack();
+    }
+  }
+
+  @override
+  void togglePlay() => _togglePlay();
+
+  @override
+  Future<void> runToEnd() => _runToEnd();
+
+  @override
+  void stop() => _stopPlay();
+
+  @override
+  Future<void> loadCode({required String code, String? period}) async {
+    if (_bootstrapping || _busy) return;
+    if (period != null && period != _period) {
+      setState(() => _period = period);
+      _syncDateRangeForCode(code);
+    } else if (_selectedCode != code) {
+      _syncDateRangeForCode(code);
+    }
+    setState(() => _selectedCode = code);
+    await _loadKlines();
+  }
+
+  @override
+  Future<void> setPeriod(String period) async {
+    if (_bootstrapping || _busy) return;
+    if (_period == period) return;
+    setState(() => _period = period);
+    await _loadKlines();
+  }
+
+  @override
+  List<AgentTooltipRow> tooltipRowsAt(int idx) {
+    if (!_hasSession || idx < 0 || idx >= _allBars.length) return const [];
+    final bar = _allBars[idx];
+    final asOf = bar.idx;
+    final asOfBundle = _bundleForVisible(_visibleBars);
+    // 复用现有 tooltip 构建逻辑：委托给 KlineChart 的公开静态辅助（见下方）。
+    return _buildTooltipRowsForBar(bar, asOf, asOfBundle);
+  }
+
+  @override
+  AgentSnapshot snapshot() {
+    if (!_hasSession) {
+      return AgentSnapshot(
+        code: _selectedCode ?? '',
+        period: _period,
+        periodLabel: periodLabel,
+        stepIdx: _stepIdx,
+        totalBars: _allBars.length,
+        isPlaying: _playing,
+        maxKn: 0,
+        levels: const [],
+        zsK0Frames: const [],
+        buy1K0Frames: const [],
+        sell1K0Frames: const [],
+        buy2K0Frames: const [],
+        sell2K0Frames: const [],
+        buyNK0Frames: const [],
+        sellNK0Frames: const [],
+        k0Confirms: const [],
+        k0Lines: const [],
+        tailBarFeature: null,
+      );
+    }
+    final bundle = _bundleForVisible(_visibleBars);
+    final tail = _visibleBars.isNotEmpty ? _visibleBars.last : null;
+    AgentBarFeature? tailFeature;
+    if (tail != null && _barFeatures.isNotEmpty) {
+      final feat = _barFeatures.firstWhere(
+        (f) => f.idx == tail.idx,
+        orElse: () => _barFeatures.last,
+      );
+      tailFeature = toAgentBarFeature(feat);
+    }
+    return bundleToSnapshot(
+      bundle: bundle,
+      code: _selectedCode ?? '',
+      period: _period,
+      periodLabel: periodLabel,
+      stepIdx: _stepIdx,
+      totalBars: _allBars.length,
+      isPlaying: _playing,
+      tailBarFeature: tailFeature,
+    );
+  }
+
+  @override
+  AgentHealth health() {
+    return AgentHealth(
+      appVersion: appVersion,
+      ffiAbiVersion: ffiAbiVersion,
+      pid: 0, // 占位：Dart 无跨平台获取当前进程 ID 的公开 API
+      dataRoot: dataRoot,
+      uptime: DateTime.now().difference(startedAt),
+    );
+  }
+
+  /// 第 idx 根 K 的 tooltip 行（与画面 tooltip 同源）。
+  /// 需要 KlineChart 的 `_tooltipRowsForBar` 逻辑，这里通过主界面已有的
+  /// bundle + bar_feature 组装轻量行（OHLC + 中枢 + 分型）。
+  List<AgentTooltipRow> _buildTooltipRowsForBar(
+    KlineBar bar,
+    int asOf,
+    KlineCombineBundle bundle,
+  ) {
+    final rows = <AgentTooltipRow>[];
+    final minuteLike = KlineAxisFormat.isMinuteLike(_allBars);
+    final secondLike = _period == 'tick' || KlineAxisFormat.isSecondLike(_allBars);
+    final timePart = KlineAxisFormat.xLabel(
+      bar.timeText,
+      minuteLike: minuteLike,
+      secondLike: secondLike,
+    );
+    rows.add(AgentTooltipRow(label: '日期时间', value: timePart));
+    rows.add(AgentTooltipRow(
+      label: 'K0 idx',
+      value: AgentTooltipRow.boxNum(bar.idx),
+    ));
+    rows.add(AgentTooltipRow(
+      label: 'K0',
+      value: AgentTooltipRow.boxNumInString(
+        'O${bar.open.toStringAsFixed(2)} H${bar.high.toStringAsFixed(2)} '
+        'L${bar.low.toStringAsFixed(2)} C${bar.close.toStringAsFixed(2)} '
+        'V${bar.volume}',
+      ),
+    ));
+    // K0 分型确认（当步）。
+    final confirmsAt = bundle.k0Confirms.where((c) => c.x == bar.idx).toList();
+    for (final c in confirmsAt) {
+      rows.add(AgentTooltipRow(
+        label: 'K0分型 ${c.fx}',
+        value: 'x=${c.x} value=${c.value.toStringAsFixed(2)}',
+      ));
+    }
+    // 各层中枢命中。
+    final feat = _barFeatures.firstWhere(
+      (f) => f.idx == bar.idx,
+      orElse: () => _barFeatures.isNotEmpty ? _barFeatures.last : null!,
+    );
+    for (final z in feat.zsHits) {
+      rows.add(AgentTooltipRow(
+        label: 'K${z.kn}中枢#${z.seq}',
+        value: 'ZG=${z.high.toStringAsFixed(2)} ZD=${z.low.toStringAsFixed(2)} ${z.isSure ? '确定' : ''}',
+      ));
+    }
+    // 一类BS。
+    for (final b in feat.bs1Hits) {
+      rows.add(AgentTooltipRow(
+        label: 'K${b.kn}一类${b.side}',
+        value: '${b.label} x=${b.x} price=${b.price.toStringAsFixed(2)}',
+      ));
+    }
+    return rows;
+  }
+
+  // ================= Agent API 生命周期 =================
+
+  /// 启动智能体验证（仅在非 robot_verify 模式且满足条件时调用）。
+  Future<void> _startAgentApiIfEnabled() async {
+    final env = Platform.environment['CHAN_AGENT_API']?.trim();
+    final enabled = env == '1' || env == 'true' || env == 'yes';
+    if (!enabled) return;
+    try {
+      _agentApiServer = await AgentApiServer.start(
+        host: this,
+        startedAt: _startedAt,
+        appVersion: appVersion,
+      );
+      _msgHistory.append('智能体验证已启动：127.0.0.1:12321（令牌见 a_Data/agent_live/agent_api_token.txt）');
+    } catch (e) {
+      _msgHistory.append('智能体验证启动失败：$e');
+    }
   }
 
   void _refreshKeepAlive() => _keepAlive.refresh();
@@ -1238,6 +1515,10 @@ class _KlineHomePageState extends State<KlineHomePage> {
     if (quality != null && mounted) {
       await _promptTickQuality(quality);
     }
+    // 智能体验证：K 线加载成功后启动 HTTP API + 文件轮询（不在 robot_verify 专用模式下启用）
+    if (mounted && !_robotVerifyEnabled() && _allBars.isNotEmpty) {
+      await _startAgentApiIfEnabled();
+    }
   }
 
   /// 笔数分布已开启且笔数为 0 时询问是否继续用该图。
@@ -1531,6 +1812,8 @@ class _KlineHomePageState extends State<KlineHomePage> {
           ),
         );
       });
+      // 智能体验证：刷新文件轮询状态
+      _agentApiServer?.refreshStateFile();
     } catch (e) {
       setState(() => _error = e.toString());
       _msgHistory.append('Kn合并计算失败：$e');
@@ -3532,7 +3815,9 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
   /// 复盘 K 线（ML 期间主区不挂本组件）。
   Widget _buildKlineChart() {
     final gesturesOn = _hasSession && !_busy;
-    return KlineChart(
+    return RepaintBoundary(
+      key: _chartRepaintKey,
+      child: KlineChart(
       bars: _visibleBars,
       period: _period,
       combineFrames: _combineFrames,
@@ -3609,7 +3894,8 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
       mobileLayout: _useAndroidInteraction,
       tooltipBridge: _tooltipBridge,
       dockTooltipPanel: !_useAndroidInteraction,
-    );
+    ),
+  );
   }
 
   String _mlStatusLine() {
