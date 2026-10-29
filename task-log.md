@@ -5045,3 +5045,10 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **结果**：规则正文现适用于 Codex、WorkBuddy、zcode 等有用户级指令入口的主 Agent。已在 C:\Users\Administrator\.codex\AGENTS.md 写入文档指针；Codex 后续加载用户级全局指令时可发现该规则，完整内容按需读取。遵守系统、工具权限、用户当前要求与项目级更严格边界。仓库原有 kline_chart.dart 未触碰。
 - **验收**：D 盘规则文档当前为 10560 字节；Codex 用户级 AGENTS.md 指针为 UTF-8 无 BOM、LF 行尾，515 字节。任务日志与 Obsidian 条目已同步；纯规则文档，没有运行代码测试或构建。
 - **演示**：Codex 全局指令现在引用 D 盘规则；后续主 Agent 可按任务需要委派、优先选择可用的免费模型、监控和切换子 Agent，并压缩上下文及整理长输出。
+
+## 2026-10-29 · Claude Code · 功能开发 · 新增「智能体验证」模式（本地 Agent API）
+
+- **操作**：① 新增 `lib/agent_api/agent_api_host.dart`（契约层：AgentApiHost 接口 + AgentSnapshot/AgentCommand 等 DTO）；② 新增 `lib/agent_api/agent_api_server.dart`（HTTP 服务器 127.0.0.1:12321 + 文件轮询 a_Data/agent_live/ 双通道）；③ `main.dart` 实现 AgentApiHost、K 线加载成功后按 `CHAN_AGENT_API=1` 启动、图表 RepaintBoundary 截图回调、换股/换周期防重复启动；④ 根目录新增 `AGENT_VERIFY.md` 说明两种验证模式的命名与分工。
+- **命名**：原有「机器人验证」（ROBOT_VERIFY.md，批次式、绕过主界面）与新的「智能体验证」（长驻式、主界面 + 本地 API，供 AI 智能体实时读状态/发命令/截屏）并列；二者可互调（智能体验证可经 run_robot_verify 命令触发机器人验证）。
+- **结果**：`flutter analyze` 0 error，`flutter build windows --debug` 通过。真机实测：/health /state /snapshot /tooltip /screenshot 正常；/command 的 step_to/step 生效且 state.json 同步；无令牌返回 401；command.json→result.json 文件轮询端到端可用。修复文件轮询 mtime 比较反了的 bug（新命令永不执行）、重复 start 覆盖令牌的隐患。a_Data/agent_live/ 已 gitignore（令牌等运行时产物不入库）。
+- **注意事项**：纯 Dart 新增层，未改 Rust/FFI/缠论逻辑；`set_indicators` 未实现（需 label→类映射）；pid 字段暂恒为 0（Dart 无跨进程 ID API）；提交 f9cc587d + a1a863a8。

@@ -54,21 +54,22 @@ class AgentApiServer {
     required DateTime startedAt,
     required String appVersion,
   }) async {
-    // 1) 令牌：随机，写入本地文件。
+    // 1) 目录准备。
     final token = _generateToken();
     final repoRoot = RobotVerifyPaths.resolveRepoRoot(klineRoot: null);
     final liveDir = Directory(
       '${repoRoot ?? Directory.current.path}${Platform.pathSeparator}a_Data${Platform.pathSeparator}$_liveDirName',
     );
     if (!liveDir.existsSync()) liveDir.createSync(recursive: true);
-    final tokenFile = File('${liveDir.path}${Platform.pathSeparator}$_tokenFileName');
-    await tokenFile.writeAsString(token, flush: true);
 
-    // 2) HTTP 服务器：只绑 127.0.0.1。
+    // 2) HTTP 服务器：只绑 127.0.0.1。先 bind 成功再写令牌，
+    //    避免第二个实例绑定失败时覆盖运行中实例的令牌文件。
     final server = await HttpServer.bind(
       InternetAddress.loopbackIPv4,
       _agentApiPort,
     );
+    final tokenFile = File('${liveDir.path}${Platform.pathSeparator}$_tokenFileName');
+    await tokenFile.writeAsString(token, flush: true);
 
     final instance = AgentApiServer._(
       host: host,

@@ -1132,6 +1132,8 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
 
   /// 启动智能体验证（仅在非 robot_verify 模式且满足条件时调用）。
   Future<void> _startAgentApiIfEnabled() async {
+    // 已在运行：换股/换周期会再次走到这里，不可重复 bind，也不可覆盖令牌文件。
+    if (_agentApiServer != null) return;
     final env = Platform.environment['CHAN_AGENT_API']?.trim();
     final enabled = env == '1' || env == 'true' || env == 'yes';
     if (!enabled) return;
