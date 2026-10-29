@@ -92,3 +92,6 @@ CHAN_RUST/flutter/chan_kline/linux/flutter/ephemeral/.plugin_symlinks/
 CHAN_RUST/flutter/chan_kline/windows/flutter/ephemeral/.plugin_symlinks/
 CHAN_RUST/flutter/chan_kline/windows/flutter/ephemeral/generated_config.cmake
 a_Data/multiagent_debate_transcript_2026-10-11.md
+
+# 智能体验证运行时落盘（令牌/命令/状态/截图，勿提交）
+a_Data/agent_live/

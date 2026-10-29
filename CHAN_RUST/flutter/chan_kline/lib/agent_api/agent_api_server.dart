@@ -88,6 +88,9 @@ class AgentApiServer {
     // 4) 文件轮询（备选，无 HTTP 客户端的 agent 可用）。
     instance._startFilePoller();
 
+    // 5) 启动即写一次 state.json，方便文件轮询的 agent 立刻有读数。
+    instance._writeState();
+
     return instance;
   }
 
@@ -254,6 +257,8 @@ class AgentApiServer {
     final cmd = AgentCommand.fromJson(json);
     final result = _executeCommand(cmd, self.host);
     final data = await result;
+    // 命令可能异步改变界面状态：执行后刷新 state.json（文件轮询通道可见）。
+    self._writeState();
     await _respond(req, {'ok': data.ok, 'message': data.message, 'data': data.data});
   }
 
@@ -354,7 +359,8 @@ class AgentApiServer {
     final cmdFile = _commandFile!;
     if (!cmdFile.existsSync()) return;
     final mtime = cmdFile.lastModifiedSync();
-    if (!_commandMtime.isAfter(mtime)) return;
+    // 只处理比上次已执行命令更新的文件。
+    if (!mtime.isAfter(_commandMtime)) return;
     _commandMtime = mtime;
 
     final text = cmdFile.readAsStringSync();
