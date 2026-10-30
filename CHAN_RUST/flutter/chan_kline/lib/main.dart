@@ -94,6 +94,7 @@ import 'step_freeze/step_freeze_merger.dart';
 import 'step_freeze/step_freeze_session_state.dart';
 import 'agent_api/agent_api_host.dart';
 import 'agent_api/agent_api_server.dart';
+import 'agent_api/agent_config_key.dart';
 import 'agent_api/indicator_label_map.dart';
 
 const _robotVerifyDefine = bool.fromEnvironment('ROBOT_VERIFY');
@@ -1100,6 +1101,92 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
       changed.add('副图 ${resolved.sub.length} 项');
     }
     return '指标已切换：${changed.join(' / ')}';
+  }
+
+  @override
+  Future<String> updateConfig(String key, String value) async {
+    final change = parseAgentConfigChange(key, value);
+    switch (change.key) {
+      case AgentConfigKey.chipEnabled:
+        final v = change.asBool!;
+        await _updateChipConfig(_chipConfig.copyWith(enabled: v));
+        _msgHistory.append('筹码开关=${v ? "开" : "关"}（Agent API）');
+        return 'chip_enabled=$v';
+      case AgentConfigKey.tickEnabled:
+        final v = change.asBool!;
+        await _updateTickDistConfig(_tickDistConfig.copyWith(enabled: v));
+        _msgHistory.append('笔数分布开关=${v ? "开" : "关"}（Agent API）');
+        return 'tick_enabled=$v';
+      case AgentConfigKey.chipBucket:
+        final v = change.asNum!;
+        await _updateChipConfig(_chipConfig.copyWith(bucketStep: v));
+        _msgHistory.append('筹码桶宽=${v.toStringAsFixed(2)}（Agent API）');
+        // GUI 一个输入框同时写筹码与笔数分布；走 API 只改本侧，
+        // 要与手动操作完全等价请再设 tick_bucket 为同值。
+        return 'chip_bucket=${v.toStringAsFixed(2)}'
+            '（GUI 同框双写：等价手动请再设 tick_bucket）';
+      case AgentConfigKey.tickBucket:
+        final v = change.asNum!;
+        await _updateTickDistConfig(_tickDistConfig.copyWith(bucketStep: v));
+        _msgHistory.append('笔数分布桶宽=${v.toStringAsFixed(2)}（Agent API）');
+        return 'tick_bucket=${v.toStringAsFixed(2)}'
+            '（GUI 同框双写：等价手动请再设 chip_bucket）';
+      case AgentConfigKey.truncationCheck:
+        final v = change.asBool!;
+        _setTruncationCheck(v);
+        return 'truncation_check=$v';
+      case AgentConfigKey.bollN:
+        final v = change.asInt!;
+        await _updateMathIndicatorConfig(_mathIndicatorConfig.copyWith(bollN: v));
+        _msgHistory.append('BOLL 窗口 N=$v（Agent API）');
+        return 'boll_n=$v';
+      case AgentConfigKey.donchianN:
+        final v = change.asInt!;
+        await _updateMathIndicatorConfig(
+          _mathIndicatorConfig.copyWith(donchianN: v),
+        );
+        _msgHistory.append('唐奇安窗口 N=$v（Agent API）');
+        return 'donchian_n=$v';
+      case AgentConfigKey.regressK:
+        final v = change.asNum!;
+        await _updateMathIndicatorConfig(
+          _mathIndicatorConfig.copyWith(regressK: v),
+        );
+        _msgHistory.append('回归通道倍数 k=$v（Agent API）');
+        return 'regress_k=$v';
+    }
+  }
+
+  /// 截断监察开关落地（设置面板开关与 Agent API 共用同一条路径）。
+  ///
+  /// 截断机制会改段划分 → 段变化会让采样钟时间线与冻结仓整体作废，
+  /// 必须连冻结仓一起清（与 :1752 / :1797 两条兄弟路径同口径）。
+  /// 只 dispose 不清 → 时间线保留旧口径，且 recordKnClockStep 的
+  /// lastAsOf>=stepIdx 守卫会让它不再重记，采样钟与新段划分对不上。
+  void _setTruncationCheck(bool v, {StateSetter? sheetSetState}) {
+    _panelUi(() {
+      _truncationCheck = v;
+      _defaultK0Purged = false;
+      // 关截断时从副图勾选里摘掉 Kn截断（目录也不可选）
+      final maxKn = chartMaxKn(
+        levels: _levels,
+        k0Lines: _k0Lines,
+      );
+      _subIndicators = pruneIndicators(
+        _subIndicators,
+        buildSubIndicatorCatalog(
+          maxKn,
+          truncationCheck: v,
+          maxBsClass: _maxBsClass,
+        ),
+      );
+    }, sheetSetState: sheetSetState);
+    // opt 变了：重建 PipelineState 会话再重算。
+    _clearSessionFreezeHistory();
+    _disposePipelineSession();
+    _msgHistory.append('截断机制=${v ? "开" : "关"}，重算当前步进');
+    _rebuildCombine();
+    _logCombineSummary(prefix: '截断开关后汇总');
   }
 
   @override
@@ -2847,35 +2934,7 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
           value: _truncationCheck,
           onChanged: _busy
               ? null
-              : (v) {
-                  _panelUi(() {
-                    _truncationCheck = v;
-                    _defaultK0Purged = false;
-                    // 关截断时从副图勾选里摘掉 Kn截断（目录也不可选）
-                    final maxKn = chartMaxKn(
-                      levels: _levels,
-                      k0Lines: _k0Lines,
-                    );
-                    _subIndicators = pruneIndicators(
-                      _subIndicators,
-                      buildSubIndicatorCatalog(
-                        maxKn,
-                        truncationCheck: v,
-                        maxBsClass: _maxBsClass,
-                      ),
-                    );
-                  }, sheetSetState: sheetSetState);
-                  // opt 变了：重建 PipelineState 会话再重算。
-                  // 截断机制会改段划分 → 段变化会让采样钟时间线与冻结仓整体作废，
-                  // 必须连冻结仓一起清（与 :1752 / :1797 两条兄弟路径同口径）。
-                  // 只 dispose 不清 → 时间线保留旧口径，且 recordKnClockStep 的
-                  // lastAsOf>=stepIdx 守卫会让它不再重记，采样钟与新段划分对不上。
-                  _clearSessionFreezeHistory();
-                  _disposePipelineSession();
-                  _msgHistory.append('截断机制=${v ? "开" : "关"}，重算当前步进');
-                  _rebuildCombine();
-                  _logCombineSummary(prefix: '截断开关后汇总');
-                },
+              : (v) => _setTruncationCheck(v, sheetSetState: sheetSetState),
           secondary: IconButton(
             tooltip: '截断机制说明',
             icon: const Icon(Icons.help_outline, size: 18),

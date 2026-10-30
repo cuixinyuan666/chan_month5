@@ -107,6 +107,14 @@ abstract class AgentApiHost {
   /// 否则抛 [AgentApiError]（明确拒绝，不静默忽略）。
   Future<String> setIndicators({Set<String>? mainLabels, Set<String>? subLabels});
 
+  /// 按 key 修改一项设置（等价用户在设置面板操作）。
+  ///
+  /// key 见 `agent_config_key.dart` 的 [AgentConfigKey]（chip_enabled /
+  /// chip_bucket / tick_enabled / tick_bucket / truncation_check /
+  /// boll_n / donchian_n / regress_k）。
+  /// 取值非法时抛 [AgentApiError]（说明合法范围），**不改变状态**。
+  Future<String> updateConfig(String key, String value);
+
   /// 程序基础信息（版本、DLL 协议号、进程号、数据目录、运行时长）。
   AgentHealth health();
 
@@ -762,7 +770,7 @@ class AgentHealth {
 
 /// Agent 可发出的命令（通过 POST /command 或 command.json 发送）。
 class AgentCommand {
-  /// 命令类型：step_to | step | play | pause | stop | run_to_end | load_code | set_period | set_indicators
+  /// 命令类型：step_to | step | play | pause | stop | run_to_end | load_code | set_period | set_indicators | set_config
   final String type;
 
   /// step_to 的目标索引。
@@ -781,6 +789,10 @@ class AgentCommand {
   final String? mainIndicators;
   final String? subIndicators;
 
+  /// set_config 时的配置键与取值（取值一律用字符串，由宿主校验）。
+  final String? configKey;
+  final String? configValue;
+
   AgentCommand({
     required this.type,
     this.idx,
@@ -789,6 +801,8 @@ class AgentCommand {
     this.period,
     this.mainIndicators,
     this.subIndicators,
+    this.configKey,
+    this.configValue,
   });
 
   factory AgentCommand.fromJson(Map<String, dynamic> json) {
@@ -800,6 +814,8 @@ class AgentCommand {
       period: json['period'] as String?,
       mainIndicators: json['main_indicators'] as String?,
       subIndicators: json['sub_indicators'] as String?,
+      configKey: json['config_key'] as String?,
+      configValue: json['config_value']?.toString(),
     );
   }
 
@@ -812,6 +828,8 @@ class AgentCommand {
       if (period != null) 'period': period,
       if (mainIndicators != null) 'main_indicators': mainIndicators,
       if (subIndicators != null) 'sub_indicators': subIndicators,
+      if (configKey != null) 'config_key': configKey,
+      if (configValue != null) 'config_value': configValue,
     };
   }
 }

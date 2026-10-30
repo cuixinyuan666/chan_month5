@@ -4,6 +4,7 @@
 /// 只实现契约里的「状态读取 + 命令落地」，用于断言端点返回结构与参数生效；
 /// 真实计算语义由主界面接线测试覆盖。
 import 'package:chan_kline/agent_api/agent_api_host.dart';
+import 'package:chan_kline/agent_api/agent_config_key.dart';
 import 'package:chan_kline/models/chart_indicator.dart';
 import 'package:chan_kline/models/chip_config.dart';
 import 'package:chan_kline/models/kline_bar.dart';
@@ -43,6 +44,11 @@ class MockAgentHost implements AgentApiHost {
 
   Set<MainChartIndicator> _main = {const MainChartIndicator.kn(0)};
   Set<SubChartIndicator> _sub = {const SubChartIndicator.volume(0)};
+  ChipConfig _chip = const ChipConfig(enabled: true, bucketStep: 0.05);
+  TickDistConfig _tick = const TickDistConfig(enabled: true, bucketStep: 0.05);
+  MathIndicatorConfig _math =
+      const MathIndicatorConfig(bollN: 20, donchianN: 20, regressK: 2.0);
+  bool _trunc = true;
 
   @override
   Future<String> setIndicators({
@@ -63,6 +69,32 @@ class MockAgentHost implements AgentApiHost {
     }
     log.add('set_indicators:${mainLabels ?? '-'}:${subLabels ?? '-'}');
     return 'mock set_indicators ok';
+  }
+
+  @override
+  Future<String> updateConfig(String key, String value) async {
+    // 复用真实校验器：本 mock 只负责落地，不重写口径。
+    final change = parseAgentConfigChange(key, value);
+    switch (change.key) {
+      case AgentConfigKey.chipEnabled:
+        _chip = _chip.copyWith(enabled: change.asBool);
+      case AgentConfigKey.tickEnabled:
+        _tick = _tick.copyWith(enabled: change.asBool);
+      case AgentConfigKey.chipBucket:
+        _chip = _chip.copyWith(bucketStep: change.asNum);
+      case AgentConfigKey.tickBucket:
+        _tick = _tick.copyWith(bucketStep: change.asNum);
+      case AgentConfigKey.truncationCheck:
+        _trunc = change.asBool!;
+      case AgentConfigKey.bollN:
+        _math = _math.copyWith(bollN: change.asInt);
+      case AgentConfigKey.donchianN:
+        _math = _math.copyWith(donchianN: change.asInt);
+      case AgentConfigKey.regressK:
+        _math = _math.copyWith(regressK: change.asNum);
+    }
+    log.add('set_config:$key:$value');
+    return 'mock set_config $key=$value';
   }
 
   @override
@@ -99,18 +131,16 @@ class MockAgentHost implements AgentApiHost {
   Set<SubChartIndicator> get subIndicators => _sub;
 
   @override
-  ChipConfig get chipConfig => const ChipConfig(enabled: true, bucketStep: 0.05);
+  ChipConfig get chipConfig => _chip;
 
   @override
-  TickDistConfig get tickDistConfig =>
-      const TickDistConfig(enabled: true, bucketStep: 0.05);
+  TickDistConfig get tickDistConfig => _tick;
 
   @override
-  MathIndicatorConfig get mathIndicatorConfig =>
-      const MathIndicatorConfig(bollN: 20, donchianN: 20, regressK: 2.0);
+  MathIndicatorConfig get mathIndicatorConfig => _math;
 
   @override
-  bool get truncationCheck => true;
+  bool get truncationCheck => _trunc;
 
   @override
   void stepTo(int idx) {

@@ -8,6 +8,7 @@ import 'dart:io';
 import 'dart:math';
 
 import '../agent_api/agent_api_host.dart';
+import '../agent_api/agent_config_key.dart';
 import '../compute/kn_volume_series_compute.dart';
 import '../robot_verify/robot_verify_paths.dart';
 import '../robot_verify/robot_verify_runner.dart';
@@ -237,6 +238,11 @@ class AgentApiServer {
         'bucket_step': host.tickDistConfig.bucketStep,
       },
       'truncation_check': host.truncationCheck,
+      'math_config': {
+        'boll_n': host.mathIndicatorConfig.bollN,
+        'donchian_n': host.mathIndicatorConfig.donchianN,
+        'regress_k': host.mathIndicatorConfig.regressK,
+      },
     };
   }
 
@@ -416,6 +422,34 @@ class AgentApiServer {
             data: {
               'main_indicators': host.mainIndicators.map((e) => e.label).toList(),
               'sub_indicators': host.subIndicators.map((e) => e.label).toList(),
+            },
+          );
+        } on AgentApiError catch (e) {
+          return AgentCommandResult(ok: false, message: e.message);
+        }
+      case 'set_config':
+        final key = (cmd.configKey ?? '').trim();
+        final value = cmd.configValue ?? '';
+        if (key.isEmpty) {
+          return AgentCommandResult(
+            ok: false,
+            message: 'set_config 需要 config_key（可用：$agentConfigKeyList）',
+          );
+        }
+        try {
+          final msg = await host.updateConfig(key, value);
+          return AgentCommandResult(
+            ok: true,
+            message: msg,
+            data: {
+              'chip_enabled': host.chipConfig.enabled,
+              'chip_bucket': host.chipConfig.bucketStep,
+              'tick_enabled': host.tickDistConfig.enabled,
+              'tick_bucket': host.tickDistConfig.bucketStep,
+              'truncation_check': host.truncationCheck,
+              'boll_n': host.mathIndicatorConfig.bollN,
+              'donchian_n': host.mathIndicatorConfig.donchianN,
+              'regress_k': host.mathIndicatorConfig.regressK,
             },
           );
         } on AgentApiError catch (e) {
