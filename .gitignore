@@ -27,6 +27,9 @@ CHAN_RUST/flutter/chan_kline/android/.gradle/
 # 筹码分布本机偏好（bucketStep 等；运行时落盘，勿提交）
 CHAN_RUST/flutter/chan_kline/.chan_chip_config.json
 
+# 数学指标本机偏好（BOLL/唐奇安/回归 k；运行时落在启动目录，勿提交）
+CHAN_RUST/flutter/chan_kline/.chan_trend_model_config.json
+
 # IDE 快照/备份（如 *.dart.head）
 *.dart.head
 
