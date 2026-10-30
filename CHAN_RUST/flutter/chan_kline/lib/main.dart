@@ -942,6 +942,9 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
   bool get truncationCheck => _truncationCheck;
 
   @override
+  List<KlineBar> get bars => List<KlineBar>.unmodifiable(_allBars);
+
+  @override
   DateTime get startedAt => _startedAt;
 
   @override

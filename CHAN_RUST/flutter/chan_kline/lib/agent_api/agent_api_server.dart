@@ -8,11 +8,16 @@ import 'dart:io';
 import 'dart:math';
 
 import '../agent_api/agent_api_host.dart';
+import '../compute/kn_volume_series_compute.dart';
 import '../robot_verify/robot_verify_paths.dart';
 import '../robot_verify/robot_verify_runner.dart';
 
 /// Agent API 端口（固定，agent 约定）。
 const int _agentApiPort = 12321;
+
+/// `/klines` 默认返回根数上限与硬上限（R12：不一次塞爆内存）。
+const int _kDefaultKlineLimit = 5000;
+const int _kMaxKlineLimit = 50000;
 
 /// 令牌文件（启动时写入，agent 请求需带 `X-Agent-Token`）。
 const String _tokenFileName = 'agent_api_token.txt';
@@ -48,25 +53,34 @@ class AgentApiServer {
 
   static final Random _secureRandom = Random.secure();
 
+  /// 实际监听端口（测试注入 `port: 0` 时用于取系统分配端口）。
+  int get port => _httpServer?.port ?? 0;
+
+  /// 运行时目录（测试注入时指向临时目录）。
+  String get liveDirPath => _liveDir?.path ?? '';
+
   /// 启动（仅在 agent 模式下调用）。
+  ///
+  /// [port] / [liveDirPath] 仅供离线单测注入；生产一律用固定端口与仓库 `a_Data/agent_live/`。
   static Future<AgentApiServer> start({
     required AgentApiHost host,
     required DateTime startedAt,
     required String appVersion,
+    int port = _agentApiPort,
+    String? liveDirPath,
   }) async {
     // 1) 目录准备。
     final token = _generateToken();
-    final repoRoot = RobotVerifyPaths.resolveRepoRoot(klineRoot: null);
-    final liveDir = Directory(
-      '${repoRoot ?? Directory.current.path}${Platform.pathSeparator}a_Data${Platform.pathSeparator}$_liveDirName',
-    );
+    final liveDir = liveDirPath != null
+        ? Directory(liveDirPath)
+        : _defaultLiveDir();
     if (!liveDir.existsSync()) liveDir.createSync(recursive: true);
 
     // 2) HTTP 服务器：只绑 127.0.0.1。先 bind 成功再写令牌，
     //    避免第二个实例绑定失败时覆盖运行中实例的令牌文件。
     final server = await HttpServer.bind(
       InternetAddress.loopbackIPv4,
-      _agentApiPort,
+      port,
     );
     final tokenFile = File('${liveDir.path}${Platform.pathSeparator}$_tokenFileName');
     await tokenFile.writeAsString(token, flush: true);
@@ -93,6 +107,14 @@ class AgentApiServer {
     instance._writeState();
 
     return instance;
+  }
+
+  /// 生产运行时目录：仓库根下 `a_Data/agent_live/`。
+  static Directory _defaultLiveDir() {
+    final repoRoot = RobotVerifyPaths.resolveRepoRoot(klineRoot: null);
+    return Directory(
+      '${repoRoot ?? Directory.current.path}${Platform.pathSeparator}a_Data${Platform.pathSeparator}$_liveDirName',
+    );
   }
 
   /// 停止。
@@ -128,6 +150,8 @@ class AgentApiServer {
           await _respond(req, _healthJson(self));
         } else if (method == 'GET' && path == '/state') {
           await _respond(req, _stateJson(self.host));
+        } else if (method == 'GET' && path == '/klines') {
+          await _respond(req, _klinesJson(self.host, req.uri.queryParameters));
         } else if (method == 'GET' && path == '/snapshot') {
           await _respond(req, _snapshotJson(self.host));
         } else if (method == 'GET' && path.startsWith('/tooltip')) {
@@ -213,6 +237,75 @@ class AgentApiServer {
         'bucket_step': host.tickDistConfig.bucketStep,
       },
       'truncation_check': host.truncationCheck,
+    };
+  }
+
+  /// `GET /klines[?period=&days=&limit=]`：当前会话原始 K 线（OHLCV+笔数）。
+  Map<String, dynamic> _klinesJson(AgentApiHost host, Map<String, String> q) {
+    final bars = host.bars;
+    if (bars.isEmpty) {
+      return {
+        'ok': false,
+        'code': host.selectedCode,
+        'period': host.period,
+        'message': '当前无 K 线数据：请先 load_code（会按协议自动下载本地缓存）或 set_period',
+      };
+    }
+    final wantPeriod = (q['period'] ?? '').trim();
+    if (wantPeriod.isNotEmpty && wantPeriod != host.period) {
+      return {
+        'ok': false,
+        'code': host.selectedCode,
+        'period': host.period,
+        'message': 'period=$wantPeriod 与当前会话不一致（当前 ${host.period}）：'
+            '请先 set_period 或 load_code 后再取数',
+      };
+    }
+    final daysRaw = (q['days'] ?? '').trim();
+    int? days;
+    if (daysRaw.isNotEmpty) {
+      days = int.tryParse(daysRaw);
+      if (days == null || days <= 0) {
+        return {
+          'ok': false,
+          'message': 'days 必须为正整数（按自然日取末 N 天）',
+        };
+      }
+    }
+    final limitRaw = (q['limit'] ?? '').trim();
+    final limitParsed = limitRaw.isEmpty ? null : int.tryParse(limitRaw);
+    if (limitRaw.isNotEmpty && (limitParsed == null || limitParsed <= 0)) {
+      return {'ok': false, 'message': 'limit 必须为正整数'};
+    }
+    final limit = min(limitParsed ?? _kDefaultKlineLimit, _kMaxKlineLimit);
+
+    var view = bars;
+    int? beginTs;
+    if (days != null) {
+      final endMs = bars.last.timeMs;
+      final cut = endMs - Duration(days: days).inMilliseconds;
+      beginTs = cut;
+      view = bars.where((b) => b.timeMs >= cut).toList();
+    }
+    final truncated = view.length > limit;
+    final outBars = truncated ? view.sublist(view.length - limit) : view;
+    // 笔数口径与副图「笔数」同源（metrics.tick_count，旧数据回退 bins）。
+    final ticks = computeK0TickCountSeries(outBars);
+    return {
+      'ok': true,
+      'code': host.selectedCode,
+      'period': host.period,
+      'total': bars.length,
+      'filtered': view.length,
+      'returned': outBars.length,
+      'truncated': truncated,
+      'limit': limit,
+      if (days != null) 'days': days,
+      if (beginTs != null) 'begin_ts': beginTs,
+      'bars': [
+        for (var i = 0; i < outBars.length; i++)
+          agentBarJson(outBars[i], tickCount: ticks[i]),
+      ],
     };
   }
 

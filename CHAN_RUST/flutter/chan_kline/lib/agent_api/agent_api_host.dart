@@ -7,11 +7,23 @@ import 'dart:convert';
 import '../models/bar_crosshair_feature.dart';
 import '../models/bar_feature_lookup.dart';
 import '../models/chart_indicator.dart';
+import '../models/kline_bar.dart';
 import '../models/kline_combine_bundle.dart';
 import '../models/level_models.dart';
 import '../models/chip_config.dart';
 import '../models/tick_dist_config.dart';
 import '../models/math_indicator_config.dart';
+
+/// Agent 命令执行失败（可读原因）：Server 捕获后回 `ok:false`。
+/// 用于「参数非法 / label 不存在 / 配置值越界」这类**不改变状态**的拒绝。
+class AgentApiError implements Exception {
+  final String message;
+
+  AgentApiError(this.message);
+
+  @override
+  String toString() => message;
+}
 
 /// Agent 能读取/操作的全部接口契约。主界面（_KlineHomePageState）
 /// 实现此抽象类即可；Agent API 层本身不引用任何 Widget，可离线测试。
@@ -57,6 +69,9 @@ abstract class AgentApiHost {
 
   /// 截断监察开关。
   bool get truncationCheck;
+
+  /// 当前已加载会话的 K 线序列（与主图同源，只读快照）。
+  List<KlineBar> get bars;
 
   /// 应用可见前缀（0..stepIdx）并重算缠论；等价于用户“步进到第 N 根”。
   void stepTo(int idx);
@@ -1130,6 +1145,26 @@ AgentSnapshot bundleToSnapshot({
 
 /// JSON 编码辅助（紧凑单行，便于剪贴板/文件）。
 String agentJsonEncode(Object? value) => const JsonEncoder.withIndent('  ').convert(value);
+
+/// 单根 K 线的 Agent JSON：
+/// `idx / ts / time_text / open / high / low / close / volume / amount / tick_count`。
+/// [tickCount] 缺省时取 `metrics.tick_count`（与副图笔数同源）；完整系列请用
+/// `computeK0TickCountSeries` 取口径一致的笔数再传入。
+Map<String, dynamic> agentBarJson(KlineBar bar, {double? tickCount}) {
+  final raw = bar.metrics['tick_count'];
+  return {
+    'idx': bar.idx,
+    'ts': bar.timeMs,
+    'time_text': bar.timeText,
+    'open': bar.open,
+    'high': bar.high,
+    'low': bar.low,
+    'close': bar.close,
+    'volume': bar.volume,
+    'amount': bar.amount,
+    'tick_count': tickCount ?? (raw is num ? raw.toDouble() : 0.0),
+  };
+}
 
 /// JSON 解码辅助。
 Map<String, dynamic>? agentJsonDecode(String? text) {
