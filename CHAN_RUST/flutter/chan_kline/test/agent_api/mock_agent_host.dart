@@ -41,6 +41,30 @@ class MockAgentHost implements AgentApiHost {
   int lastStepTo = -1;
   final List<String> log = [];
 
+  Set<MainChartIndicator> _main = {const MainChartIndicator.kn(0)};
+  Set<SubChartIndicator> _sub = {const SubChartIndicator.volume(0)};
+
+  @override
+  Future<String> setIndicators({
+    Set<String>? mainLabels,
+    Set<String>? subLabels,
+  }) async {
+    if (mainLabels != null) {
+      _main = {
+        for (final l in mainLabels)
+          if (l == 'K0') const MainChartIndicator.kn(0),
+      };
+    }
+    if (subLabels != null) {
+      _sub = {
+        for (final l in subLabels)
+          if (l == 'K0成交量') const SubChartIndicator.volume(0),
+      };
+    }
+    log.add('set_indicators:${mainLabels ?? '-'}:${subLabels ?? '-'}');
+    return 'mock set_indicators ok';
+  }
+
   @override
   List<KlineBar> get bars => List<KlineBar>.unmodifiable(_bars);
 
@@ -69,10 +93,10 @@ class MockAgentHost implements AgentApiHost {
   bool get isPlaying => false;
 
   @override
-  Set<MainChartIndicator> get mainIndicators => {const MainChartIndicator.kn(0)};
+  Set<MainChartIndicator> get mainIndicators => _main;
 
   @override
-  Set<SubChartIndicator> get subIndicators => {const SubChartIndicator.volume(0)};
+  Set<SubChartIndicator> get subIndicators => _sub;
 
   @override
   ChipConfig get chipConfig => const ChipConfig(enabled: true, bucketStep: 0.05);

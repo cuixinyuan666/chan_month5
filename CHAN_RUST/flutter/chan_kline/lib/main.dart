@@ -94,6 +94,7 @@ import 'step_freeze/step_freeze_merger.dart';
 import 'step_freeze/step_freeze_session_state.dart';
 import 'agent_api/agent_api_host.dart';
 import 'agent_api/agent_api_server.dart';
+import 'agent_api/indicator_label_map.dart';
 
 const _robotVerifyDefine = bool.fromEnvironment('ROBOT_VERIFY');
 const _robotVerifySuiteDefine = String.fromEnvironment(
@@ -1060,6 +1061,45 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
       isPlaying: _playing,
       tailBarFeature: tailFeature,
     );
+  }
+
+  /// 主图勾选指标落地（设置面板/图表弹窗/Agent API 共用同一条路径）。
+  void _applyMainIndicators(Set<MainChartIndicator> v) {
+    setState(() => _mainIndicators = v);
+  }
+
+  /// 副图勾选指标落地（同上；MACD 类背驰会自动并入同号 MACD）。
+  void _applySubIndicators(Set<SubChartIndicator> v) {
+    setState(() => _subIndicators = ensureMacdForDivergenceArea(v));
+  }
+
+  @override
+  Future<String> setIndicators({
+    Set<String>? mainLabels,
+    Set<String>? subLabels,
+  }) async {
+    final maxKn = chartMaxKn(levels: _levels, k0Lines: _k0Lines);
+    final resolved = resolveIndicatorLabels(
+      mainLabels: mainLabels ?? const <String>{},
+      subLabels: subLabels ?? const <String>{},
+      mainCatalog: buildMainIndicatorCatalog(maxKn),
+      subCatalog: buildSubIndicatorCatalog(
+        maxKn,
+        truncationCheck: _truncationCheck,
+        maxBsClass: _maxBsClass,
+      ),
+    );
+    if (resolved.hasUnknown) throw AgentApiError(resolved.unknownMessage);
+    final changed = <String>[];
+    if (mainLabels != null) {
+      _applyMainIndicators(resolved.main);
+      changed.add('主图 ${resolved.main.length} 项');
+    }
+    if (subLabels != null) {
+      _applySubIndicators(resolved.sub);
+      changed.add('副图 ${resolved.sub.length} 项');
+    }
+    return '指标已切换：${changed.join(' / ')}';
   }
 
   @override
@@ -3867,11 +3907,9 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
       lookupEngine: _pipelineSession?.cache.lookupEngine,
       sessionAsOfBundle: (asOf) => _pipelineSession?.cache.snapshotAt(asOf),
       mainIndicators: _mainIndicators,
-      onMainIndicatorsChanged: (v) => setState(() => _mainIndicators = v),
+      onMainIndicatorsChanged: _applyMainIndicators,
       subIndicators: _sessionSubIndicators,
-      onSubIndicatorsChanged: (v) => setState(
-            () => _subIndicators = ensureMacdForDivergenceArea(v),
-          ),
+      onSubIndicatorsChanged: _applySubIndicators,
       indicatorsEnabled: _hasSession,
       autoFollowLatest: true,
       isPlaying: _playing,

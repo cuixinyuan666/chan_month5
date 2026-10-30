@@ -396,10 +396,31 @@ class AgentApiServer {
         await host.setPeriod(cmd.period!);
         return AgentCommandResult(ok: true, message: 'set_period ${cmd.period}');
       case 'set_indicators':
-        return AgentCommandResult(
-          ok: false,
-          message: 'set_indicators 需在主界面实现 label->类映射',
-        );
+        final mainLabels = _splitIndicatorLabels(cmd.mainIndicators);
+        final subLabels = _splitIndicatorLabels(cmd.subIndicators);
+        if (mainLabels == null && subLabels == null) {
+          return AgentCommandResult(
+            ok: false,
+            message: 'set_indicators 需要 main_indicators 和/或 sub_indicators'
+                '（逗号分隔的目录 label，空字符串表示清空该侧）',
+          );
+        }
+        try {
+          final msg = await host.setIndicators(
+            mainLabels: mainLabels,
+            subLabels: subLabels,
+          );
+          return AgentCommandResult(
+            ok: true,
+            message: msg,
+            data: {
+              'main_indicators': host.mainIndicators.map((e) => e.label).toList(),
+              'sub_indicators': host.subIndicators.map((e) => e.label).toList(),
+            },
+          );
+        } on AgentApiError catch (e) {
+          return AgentCommandResult(ok: false, message: e.message);
+        }
       case 'run_robot_verify':
         final suiteId = cmd.period ?? 'jiyou_keypoint_20261001';
         final klineRoot = host.dataRoot.isEmpty
@@ -437,6 +458,18 @@ class AgentApiServer {
       default:
         return AgentCommandResult(ok: false, message: '未知命令 ${cmd.type}');
     }
+  }
+
+  /// 逗号分隔的 label 列表 → Set（null=该侧不改；空串=清空该侧）。
+  /// label 里允许全角逗号，避免 agent 手打中文标点被判非法。
+  static Set<String>? _splitIndicatorLabels(String? raw) {
+    if (raw == null) return null;
+    final s = raw.replaceAll('，', ',').trim();
+    if (s.isEmpty) return const {};
+    return {
+      for (final part in s.split(','))
+        if (part.trim().isNotEmpty) part.trim(),
+    };
   }
 
   /// ---------------- 文件轮询备选 ----------------

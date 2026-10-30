@@ -100,6 +100,13 @@ abstract class AgentApiHost {
   /// 返回当前会话快照（各层段、分型确认、买卖点、中枢、末根 bar_feature）。
   AgentSnapshot snapshot();
 
+  /// 按目录 label 设置主/副图指标集（等价用户在面板勾选，触发重绘）。
+  ///
+  /// [mainLabels] / [subLabels] 为 null 表示该侧不改；空集表示清空该侧。
+  /// label 必须能在 `buildMainIndicatorCatalog` / `buildSubIndicatorCatalog` 里查到，
+  /// 否则抛 [AgentApiError]（明确拒绝，不静默忽略）。
+  Future<String> setIndicators({Set<String>? mainLabels, Set<String>? subLabels});
+
   /// 程序基础信息（版本、DLL 协议号、进程号、数据目录、运行时长）。
   AgentHealth health();
 
