@@ -1157,6 +1157,18 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
     }
   }
 
+  /// 运行消息历史（与界面「历史记录」同源，按时间正序取末 N 条）。
+  @override
+  List<AgentMessageRow> historyMessages({int limit = 50}) {
+    final rows = MsgHistory.instance.rows;
+    if (limit <= 0) return const [];
+    final begin = rows.length > limit ? rows.length - limit : 0;
+    return [
+      for (var i = begin; i < rows.length; i++)
+        AgentMessageRow(time: rows[i].time, text: rows[i].text),
+    ];
+  }
+
   /// 截断监察开关落地（设置面板开关与 Agent API 共用同一条路径）。
   ///
   /// 截断机制会改段划分 → 段变化会让采样钟时间线与冻结仓整体作废，

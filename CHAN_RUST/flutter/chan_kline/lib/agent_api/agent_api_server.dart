@@ -20,6 +20,10 @@ const int _agentApiPort = 12321;
 const int _kDefaultKlineLimit = 5000;
 const int _kMaxKlineLimit = 50000;
 
+/// `/messages` 默认条数与硬上限（MsgHistory 本身最多保留 500 条）。
+const int _kDefaultMessageLimit = 50;
+const int _kMaxMessageLimit = 500;
+
 /// 令牌文件（启动时写入，agent 请求需带 `X-Agent-Token`）。
 const String _tokenFileName = 'agent_api_token.txt';
 
@@ -153,6 +157,8 @@ class AgentApiServer {
           await _respond(req, _stateJson(self.host));
         } else if (method == 'GET' && path == '/klines') {
           await _respond(req, _klinesJson(self.host, req.uri.queryParameters));
+        } else if (method == 'GET' && path == '/messages') {
+          await _respond(req, _messagesJson(self.host, req.uri.queryParameters));
         } else if (method == 'GET' && path == '/snapshot') {
           await _respond(req, _snapshotJson(self.host));
         } else if (method == 'GET' && path.startsWith('/tooltip')) {
@@ -312,6 +318,26 @@ class AgentApiServer {
         for (var i = 0; i < outBars.length; i++)
           agentBarJson(outBars[i], tickCount: ticks[i]),
       ],
+    };
+  }
+
+  /// `GET /messages[?limit=]`：运行消息历史末 N 条（与界面「历史记录」同源）。
+  Map<String, dynamic> _messagesJson(AgentApiHost host, Map<String, String> q) {
+    final raw = (q['limit'] ?? '').trim();
+    var limit = _kDefaultMessageLimit;
+    if (raw.isNotEmpty) {
+      final parsed = int.tryParse(raw);
+      if (parsed == null || parsed <= 0) {
+        return {'ok': false, 'message': 'limit 必须为正整数'};
+      }
+      limit = min(parsed, _kMaxMessageLimit);
+    }
+    final rows = host.historyMessages(limit: limit);
+    return {
+      'ok': true,
+      'limit': limit,
+      'returned': rows.length,
+      'rows': rows.map((e) => e.toJson()).toList(),
     };
   }
 

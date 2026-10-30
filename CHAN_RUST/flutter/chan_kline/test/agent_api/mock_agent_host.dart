@@ -97,6 +97,16 @@ class MockAgentHost implements AgentApiHost {
     return 'mock set_config $key=$value';
   }
 
+  /// 测试可预置的消息历史（按时间正序）。
+  final List<AgentMessageRow> messages = [];
+
+  @override
+  List<AgentMessageRow> historyMessages({int limit = 50}) {
+    if (limit <= 0) return const [];
+    final begin = messages.length > limit ? messages.length - limit : 0;
+    return messages.sublist(begin);
+  }
+
   @override
   List<KlineBar> get bars => List<KlineBar>.unmodifiable(_bars);
 

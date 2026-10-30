@@ -115,6 +115,9 @@ abstract class AgentApiHost {
   /// 取值非法时抛 [AgentApiError]（说明合法范围），**不改变状态**。
   Future<String> updateConfig(String key, String value);
 
+  /// 运行消息历史（与界面「历史记录」同源），按时间正序返回末 [limit] 条。
+  List<AgentMessageRow> historyMessages({int limit = 50});
+
   /// 程序基础信息（版本、DLL 协议号、进程号、数据目录、运行时长）。
   AgentHealth health();
 
@@ -738,6 +741,28 @@ class AgentBs1Hit {
       'x': x,
       'price': price,
     };
+  }
+}
+
+/// 一条运行消息历史（与界面「历史记录」同源）。
+class AgentMessageRow {
+  final DateTime time;
+  final String text;
+
+  AgentMessageRow({required this.time, required this.text});
+
+  Map<String, dynamic> toJson() {
+    return {
+      'time_text': _fmtTime(time),
+      'ts': time.millisecondsSinceEpoch,
+      'text': text,
+    };
+  }
+
+  static String _fmtTime(DateTime t) {
+    String two(int v) => v.toString().padLeft(2, '0');
+    return '${t.year}/${two(t.month)}/${two(t.day)} '
+        '${two(t.hour)}:${two(t.minute)}:${two(t.second)}';
   }
 }
 
