@@ -5052,3 +5052,40 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **命名**：原有「机器人验证」（ROBOT_VERIFY.md，批次式、绕过主界面）与新的「智能体验证」（长驻式、主界面 + 本地 API，供 AI 智能体实时读状态/发命令/截屏）并列；二者可互调（智能体验证可经 run_robot_verify 命令触发机器人验证）。
 - **结果**：`flutter analyze` 0 error，`flutter build windows --debug` 通过。真机实测：/health /state /snapshot /tooltip /screenshot 正常；/command 的 step_to/step 生效且 state.json 同步；无令牌返回 401；command.json→result.json 文件轮询端到端可用。修复文件轮询 mtime 比较反了的 bug（新命令永不执行）、重复 start 覆盖令牌的隐患。a_Data/agent_live/ 已 gitignore（令牌等运行时产物不入库）。
 - **注意事项**：纯 Dart 新增层，未改 Rust/FFI/缠论逻辑；`set_indicators` 未实现（需 label→类映射）；pid 字段暂恒为 0（Dart 无跨进程 ID API）；提交 f9cc587d + a1a863a8。
+
+## 2026-10-30 · OpenCode · 功能开发 · 智能体验证 P0：取数与设置的四个出口（/klines、set_indicators、set_config、/messages）
+
+- **操作**：按 `agent_api_expansion_plan_2026-10-30.md`（提交 `da81be4f`）执行 P0，全部只动 Flutter/Dart 出口层，**未改 Rust `chan_data`、未改 `chan_ffi.dll`、未动 FFI 协议号、未动任何缠论/回测/寻优计算口径**：
+  1. P0-1 `GET /klines`：当前会话原始 K 线（OHLCV+笔数），`days` 按末根往前推自然日，`limit` 默认 5000 / 硬上限 50000，`period` 与会话不一致直接拒绝；提交 `08a167d4`。
+  2. P0-2 `set_indicators`：主/副图指标勾选，label 一律从真实目录（`buildMainIndicatorCatalog` / `buildSubIndicatorCatalog`）反查（`lib/agent_api/indicator_label_map.dart`），未知名逐条报错；与 GUI 共用 `_applyMainIndicators` / `_applySubIndicators`；提交 `a5ca1229`。
+  3. P0-3 `set_config` + `/state.math_config`：筹码/笔数开关与桶宽、截断开关、BOLL/唐奇安/回归 k；校验唯一实现在 `lib/agent_api/agent_config_key.dart`（桶宽 ≥0.01 且 2 位小数、窗口 ≥1、`regress_k>0`），越界只回 `ok:false` 不改状态；截断开关走 GUI 同一条 `_setTruncationCheck`（会重建会话、清冻结仓，与手动操作等价，未额外清仓）；提交 `7b4d5539`。
+  4. P0-4 `GET /messages`：运行消息历史末 N 条，默认 50 / 硬上限 500，与界面「历史记录」同源；提交 `c5cff571`。
+  5. 文档：`AGENT_VERIFY.md` 端点表补齐四个出口 + 配置键表 + PowerShell 示例；提交 `5ade5201`。
+- **结果**：`flutter analyze --no-pub lib test` 的 `error -` 行为空（基线 103 issues / 0 error 不变）；`test/agent_api` 全绿；真机（`CHAN_AGENT_API=1`）实测：`/klines` 返回末 5 根且字段 `idx/ts/time_text/open/high/low/close/volume/amount/tick_count` 齐全、`truncated=true`；`period=1d` 与会话不一致被拒；`/messages` 与 App 内提示一致；`set_indicators` 未知 label 被拒并说明原因；`set_config boll_n=0` 被拒并给出合法范围。
+- **演示**：智能体发一条「把主图切成 K0 + K0中枢、副图切 K0成交量」，主图图例立刻变成 `K0/K0中枢`，副图变「K0成交量」；再把 BOLL 窗口改 15，设置面板读数跟着变——和用户手动点面板的结果一致。
+- **注意事项**：桶宽在 GUI 是「开关 + 桶宽一个框写两份」，API 按 key 分开写，要完全等价手动需同时设 `chip_enabled`+`tick_enabled`（已在文档注明）；本次未 push。
+
+---
+
+## 2026-10-30 · OpenCode · 功能开发 · 智能体验证 P1：寻优 / 回测异步任务接口 + 真机联调
+
+- **操作**：
+  1. P1-1 寻优：把对话框里「取数→冻结→枚举→扫描」的驱动循环抽成 `lib/indicator_search/indicator_search_job.dart`，对话框与新接口**共用同一个 job**；新增 `lib/agent_api/agent_task.dart`（任务状态机 running→done/cancelled/failed）；契约加 `startSearch` / `searchTaskStatus` / `cancelSearch`，服务端加 `GET /search_task`、`run_search`、`cancel_search`；`search_core.dart` 的段指标序列化公开为 `segmentMetricsToJson`；`IndicatorSearchRunner.runAll` 增加 `inRatio` 透传 `splitBarIdx`；提交 `061b6136`。
+  2. P1-2 回测：从 `_runStrategyBacktest` 抽出「只算不改界面」的 `_computeStrategyBacktest`（回测台与接口共用同一条执行路径）；新增 `lib/agent_api/agent_backtest_json.dart`（`BacktestMetrics` 全字段 + `computeSegmentMetrics` 段指标 + 逐笔 `trades` 序列化，只做序列化不重算）；契约加 `runBacktest` / `backtestTaskStatus` / `cancelBacktest`，服务端加 `GET /backtest_task`、`run_backtest`、`cancel_backtest`；买卖条件直接走既有 `tradeAstFromJson`，不另造条件语言；撮合参数缺省 = 回测台默认（100 股 / 10 万本金 / 0 费率 / 0 滑点 / 本周期收盘），可覆盖；`/state` 的 `tasks` 同时含寻优与回测摘要；提交 `2ce1da1c`。
+  3. 文档 `AGENT_VERIFY.md` 补 P1 两个任务端点、前置条件（必须 `run_to_end` 到末根、代码/周期/区间与会话一致）、AST 写法、撮合参数表、分页与取消语义；提交 `327f01b3`。顺手把运行时落盘的 `.chan_trend_model_config.json` 加入 `.gitignore`；提交 `ce680709`。
+- **结果（代码级）**：`flutter analyze` 0 error；`test/agent_api` **43 条全绿**（P1-2 新增 8 条：参数透传、缺 AST、分页、非法 offset/limit、取消、重复取消、`/state.tasks`）；`test/indicator_search` **24 条全绿**；`backtest_result_test` / `condition_ast_test` 全绿。已知基线红灯：`test/backtest_workbench_test.dart` 有 1 条「配置 UI 条件构建」失败，**与本任务无关**（`git stash` 后在 HEAD 上同样失败）。
+- **结果（真机联调，2026-10-30）**：本机 `a_Data/002003` 只剩 README（真实分笔数据不在），故用仓库自带的 `a_Data/test/custom.ohlc.csv` 造了一个**临时数据根**（`%TEMP%\chan_agent_verify`，用 `CHAN_DATA_ROOT` 指过去，98 根 K0，**未动仓库任何数据与设置文件**），启动 `CHAN_AGENT_API=1` 走通全链路：
+  - `/health` / `/state` 正常（code=test、98 根、tasks 随任务增长）；
+  - `run_to_end` → `step_idx=97/98`；
+  - `run_search`（`max_candidates=80`）→ `phase=done`、跑通 80、`split_x=69`、`verdicts_total=80`、首条候选「模板｜布林 K0」；大候选 12000 发起后 1.5 秒取消 → `phase=cancelled`、跑通 2476/11620，未跑完；
+  - `run_backtest`（K0 一类买点→K0 一类卖点）→ `phase=done`、闭合 8 笔、净利 680.00、胜率 0.75、最大回撤 200.00、信号 57；把费率设成 0.01 再跑 → 净利 508.20、回撤 210.70（方向合理）；逐笔 `trades` 分页字段齐全（`net_pnl=50.0` 等）；
+  - 非法输入被拒：缺 `buy_ast`/`sell_ast`、`commission_rate=-1`、`fill_price_mode=xyz` 均 `ok:false` 且说明合法值；
+  - 文件轮询通道：写 `command.json` 改 `donchian_n=12` → `result.json` 回 `ok:true` 且 `/state` 生效；
+  - 主界面不崩检查：进程存活 2 分钟以上、`Responding=True`、stdout/stderr 无 `EXCEPTION`/`Null check operator`，`/screenshot` 出的主图与刚用 API 设的指标一致（K0 + K0中枢 + K0成交量）。验证完毕由 agent 关闭测试用 App。
+- **演示**：一句话——「先让 App 走到最后一根，再让 agent 报一句『K0 一类买点买、K0 一类卖点卖』，它就把 8 笔闭合交易、净利 680、胜率 75%、最大回撤 200 全报回来；把手续费从 0 调到 1%，净利自动降到 508.2。问它寻优，它能报出 80 条候选、切点在 69 根，喊停就停在 2476/11620。」
+- **注意事项 / 遗留**：
+  1. **未做 GUI 面板逐数字对拍**：本机没有 GUI 自动化手段，回测台/寻优对话框的表格数字没有逐项对照；保障来自「同一函数复用」（对话框与接口共用 `IndicatorSearchJob`；回测台与接口共用 `_computeStrategyBacktest`）+ 实机数值合理，**不等于逐指标对拍通过**，后续若要严格对拍需人工开面板核一次。
+  2. 回测在主 isolate 上同步计算（必须复用主图冻结仓对象，不能换 isolate）：算的时候界面会短暂无响应；`cancel_backtest` 只在开始计算前有效。
+  3. `cancel_search` 取消后 `fraction` 仍显示 1（沿用 P1-1 口径，`phase=cancelled` 已如实），未改。
+  4. `command.json` 在 App 重启后会被重放一次（`_commandMtime` 从 0 起算，属既有行为，本次未改）；测试后已删除测试用 `command.json`/`result.json`，避免下次启动重放。
+  5. 本次**未 push**，待用户确认。
