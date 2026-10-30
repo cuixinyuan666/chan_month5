@@ -43,6 +43,9 @@ FillPlan? planFill({
 typedef MiniLoopResult = BacktestResult;
 
 KlineBar? k0BarAt(List<KlineBar> bars, int idx) {
+  // T3：bars 绝大多数情况 idx 连续（0..len-1），直接下标命中；
+  // 不连续时退回线性扫（结果完全一致，纯查找路径优化）。
+  if (idx >= 0 && idx < bars.length && bars[idx].idx == idx) return bars[idx];
   for (final b in bars) {
     if (b.idx == idx) return b;
   }
@@ -59,6 +62,8 @@ BacktestResult runMiniLoopFromSignals({
   TradeFillPriceMode fillPriceMode = kDefaultTradeFillPriceMode,
   CommissionModel commission = const ZeroCommission(),
   SlippageModel slippage = const ZeroSlippage(),
+  /// false = 跳过按规则归因（寻优批量场景，零消费）。默认 true 保持既有行为。
+  bool computeRulePerf = true,
 }) {
   final tradable = [...signals.where((s) => s.isTradable)]
     ..sort((a, b) {
@@ -221,6 +226,7 @@ BacktestResult runMiniLoopFromSignals({
     bars: bars,
     initialCapital: initialCash,
     openPosition: open,
+    computeRulePerf: computeRulePerf,
   );
 }
 
@@ -238,6 +244,8 @@ BacktestResult runMiniLongOnlyLoop({
   TradeFillPriceMode fillPriceMode = kDefaultTradeFillPriceMode,
   CommissionModel commission = const ZeroCommission(),
   SlippageModel slippage = const ZeroSlippage(),
+  /// false = 跳过按规则归因（寻优批量场景，零消费）。默认 true 保持既有行为。
+  bool computeRulePerf = true,
 }) {
   final cut = asOf < 0
       ? (bars.isEmpty ? 0 : bars.last.idx)

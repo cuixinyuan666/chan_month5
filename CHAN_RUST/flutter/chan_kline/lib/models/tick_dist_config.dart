@@ -5,18 +5,16 @@ import 'chip_config.dart';
 /// 笔数分布配置（主图左侧；与筹码同构，仅 K0）。
 class TickDistConfig {
   const TickDistConfig({
-    this.enabled = true,
-    this.bucketStep = 0.1,
+    this.enabled = false,
+    this.bucketStep = 0.01,
     this.stretchLevel = 5,
     this.paneWidth = 88,
     this.sColor = const Color(0xC722C55E),
     this.bColor = const Color(0xC7DC2626),
     this.wColor = const Color(0xC79CA3AF),
-    this.peakLineEnabled = true,
-    this.peakLineColor = const Color(0xFF7C3AED),
+    this.peakLineEnabled = false,
     this.peakLineWidth = 1.2,
-    this.peakLineDashed = true,
-    this.peakDotColor = const Color(0xFFA78BFA),
+    this.peakLineMode = PeakLineMode.bySign,
     this.peakDotRadius = 2.5,
   });
 
@@ -28,10 +26,8 @@ class TickDistConfig {
   final Color bColor;
   final Color wColor;
   final bool peakLineEnabled;
-  final Color peakLineColor;
   final double peakLineWidth;
-  final bool peakLineDashed;
-  final Color peakDotColor;
+  final PeakLineMode peakLineMode;
   final double peakDotRadius;
 
   ChipConfig toChipConfig() => ChipConfig(
@@ -43,10 +39,8 @@ class TickDistConfig {
         bColor: bColor,
         wColor: wColor,
         peakLineEnabled: peakLineEnabled,
-        peakLineColor: peakLineColor,
         peakLineWidth: peakLineWidth,
-        peakLineDashed: peakLineDashed,
-        peakDotColor: peakDotColor,
+        peakLineMode: peakLineMode,
         peakDotRadius: peakDotRadius,
       );
 
@@ -66,10 +60,8 @@ class TickDistConfig {
       bColor: bColor,
       wColor: wColor,
       peakLineEnabled: peakLineEnabled ?? this.peakLineEnabled,
-      peakLineColor: peakLineColor,
       peakLineWidth: peakLineWidth,
-      peakLineDashed: peakLineDashed,
-      peakDotColor: peakDotColor,
+      peakLineMode: peakLineMode,
       peakDotRadius: peakDotRadius,
     );
   }
@@ -80,16 +72,18 @@ class TickDistConfig {
         'stretchLevel': stretchLevel,
         'paneWidth': paneWidth,
         'peakLineEnabled': peakLineEnabled,
+        'peakLineMode': peakLineMode.name,
       };
 
   factory TickDistConfig.fromJson(Map<String, dynamic>? json) {
     if (json == null) return const TickDistConfig();
     return TickDistConfig(
-      enabled: json['enabled'] as bool? ?? true,
-      bucketStep: (json['bucketStep'] as num?)?.toDouble() ?? 0.1,
+      enabled: json['enabled'] as bool? ?? false,
+      bucketStep: (json['bucketStep'] as num?)?.toDouble() ?? 0.01,
       stretchLevel: (json['stretchLevel'] as num?)?.toInt() ?? 5,
       paneWidth: (json['paneWidth'] as num?)?.toDouble() ?? 88,
-      peakLineEnabled: json['peakLineEnabled'] as bool? ?? true,
+      peakLineEnabled: json['peakLineEnabled'] as bool? ?? false,
+      peakLineMode: peakLineModeFromJson(json),
     );
   }
 
@@ -100,9 +94,16 @@ class TickDistConfig {
       other.bucketStep == bucketStep &&
       other.stretchLevel == stretchLevel &&
       other.paneWidth == paneWidth &&
+      other.peakLineMode == peakLineMode &&
       other.peakLineEnabled == peakLineEnabled;
 
   @override
-  int get hashCode =>
-      Object.hash(enabled, bucketStep, stretchLevel, paneWidth, peakLineEnabled);
+  int get hashCode => Object.hash(
+        enabled,
+        bucketStep,
+        stretchLevel,
+        paneWidth,
+        peakLineMode,
+        peakLineEnabled,
+      );
 }

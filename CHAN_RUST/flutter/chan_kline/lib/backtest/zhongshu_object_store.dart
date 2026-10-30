@@ -15,6 +15,28 @@ class ZhongshuObjectStore {
 
   bool get isEmpty => _idents.isEmpty;
 
+  /// 全仓指纹（供前缀重放对拍）。
+  ///
+  /// 覆盖每格快照的 **身份 / availableAt / 区间 / 高低中轴 / 确认状态**，
+  /// 任何「历史 asOf 快照被回写」都会让指纹变化并被抓到。
+  String signature() {
+    final parts = <String>[];
+    final ids = _idents.keys.toList()..sort();
+    for (final id in ids) {
+      final ident = _idents[id]!;
+      final snaps = _snaps[id] ?? const <ZhongshuObject>[];
+      final body = snaps
+          .map((s) => '${s.availableAt}:${s.startX}-${s.endX}'
+              '/${s.high.toStringAsFixed(4)}/${s.low.toStringAsFixed(4)}'
+              '/${s.center.toStringAsFixed(4)}'
+              '${s.confirmed ? 'S' : 'A'}')
+          .join(',');
+      parts.add('$id|K${ident.displayKn}|d${ident.discoveryX}'
+          'c${ident.confirmX ?? -1}|$body');
+    }
+    return parts.join(';');
+  }
+
   void clear() {
     _idents.clear();
     _snaps.clear();

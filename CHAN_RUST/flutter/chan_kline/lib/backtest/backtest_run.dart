@@ -1,7 +1,10 @@
+import '../compute/kn_clock_timeline.dart';
 import '../compute/math_series_freeze_store.dart';
+import '../models/bar_crosshair_feature.dart';
 import '../models/bar_feature_lookup.dart';
 import '../models/kline_bar.dart';
 import '../models/level_models.dart';
+import '../models/math_indicator_config.dart';
 import 'backtest_result.dart';
 import 'backtest_run_context.dart';
 import 'chan_event_store.dart';
@@ -60,9 +63,22 @@ BacktestRun executeStrategyBacktest({
   ChipPeakFreezeStore? chipPeaks,
   double bucketStep = 0.1,
   int bollN = 20,
+  int donchianN = 20,
   int maxKn = 8,
+  double regressK = 2.0,
+  List<BarCrosshairFeature> barFeatures = const [],
+  MathIndicatorConfig mathConfig = const MathIndicatorConfig(),
   DateTime? now,
   String? runId,
+  /// 寻优等批量场景：外层已编译则跳过重编 AST（求值/撮合口径不变）。
+  StrategyCompileOk? precompiled,
+  /// 仅保留计划成交根 `executeX` 严格大于该值的信号（样本外独立重跑）。
+  int? minExecuteXExclusive,
+  /// K1+ 采样钟的 asOf 当时段划分时间线（动态段口径）。
+  /// 传了就用「当时那一段走到哪」采样；为 null 退回最终态 levels（仅诊断用）。
+  KnClockTimeline? knClock,
+  /// 寻优等批量场景传 false：跳过「按规则归因」（寻优零消费，代价见 buildBacktestResult）。
+  bool computeRulePerf = true,
 }) {
   final started = now ?? DateTime.now();
   final id = runId ?? 'run_${started.millisecondsSinceEpoch}';
@@ -72,7 +88,9 @@ BacktestRun executeStrategyBacktest({
     config: config.copyWith(dataScope: scope),
     scope: scope,
   );
-  final compiled = compileStrategyConfig(config, maxKn: maxKn);
+  final StrategyCompileResult compiled = precompiled != null
+      ? precompiled
+      : compileStrategyConfig(config, maxKn: maxKn);
   if (compiled is StrategyCompileIllegal) {
     return BacktestRun(
       runId: id,
@@ -112,9 +130,14 @@ BacktestRun executeStrategyBacktest({
     chipPeaks: chipPeaks,
     bucketStep: bucketStep,
     bollN: bollN,
+    donchianN: donchianN,
     maxKn: maxKn,
+    regressK: regressK,
+    barFeatures: barFeatures,
+    mathConfig: mathConfig,
+    knClock: knClock,
   );
-  final signals = <SignalEvent>[
+  var signals = <SignalEvent>[
     ...evalCompiledCond(
       cond: ok.buy,
       side: TradeSide.buy,
@@ -128,6 +151,18 @@ BacktestRun executeStrategyBacktest({
       ctx: ctx,
     ),
   ];
+  if (minExecuteXExclusive != null) {
+    final floor = minExecuteXExclusive;
+    signals = signals.where((sig) {
+      if (!sig.isTradable) return false;
+      final plan = planFill(
+        sig: sig,
+        bars: bars,
+        fillPriceMode: config.fillPriceMode,
+      );
+      return plan != null && plan.executeX > floor;
+    }).toList();
+  }
   final result = runMiniLoopFromSignals(
     signals: signals,
     bars: bars,
@@ -140,6 +175,7 @@ BacktestRun executeStrategyBacktest({
     slippage: config.slippageAmount <= 0
         ? const ZeroSlippage()
         : AbsoluteSlippage(config.slippageAmount),
+    computeRulePerf: computeRulePerf,
   );
   return BacktestRun(
     runId: id,

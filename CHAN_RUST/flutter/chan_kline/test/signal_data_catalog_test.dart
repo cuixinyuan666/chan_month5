@@ -10,6 +10,9 @@ import 'package:chan_kline/models/kline_bar.dart';
 import 'package:chan_kline/models/math_indicator_config.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'math_freeze_step_fill.dart';
+import 'offline_tick_files.dart';
+
 KlineBar _bar(int idx, double close, {double vol = 1}) {
   return KlineBar(
     idx: idx,
@@ -207,9 +210,9 @@ void main() {
       );
       expect(noFreeze.isUnavailable, isTrue);
 
-      final store = MathSeriesFreezeStore();
-      mergeMathSeriesForStep(
-        store: store,
+      // 逐根步进建仓：mergeMathSeriesForStep 每次只写当根一格，跳步建仓拿不到历史格。
+      // 见 math_freeze_step_fill.dart 的说明。
+      final store = fillMathFreezeByStepping(
         bars: bars,
         levels: const [],
         config: const MathIndicatorConfig(bollN: 3),
@@ -288,9 +291,7 @@ void main() {
       expect(k0.isAvailable, isTrue);
       // 动态段收盘偶尔会等于当根 K0 收盘，不强制不相等；只锁「K1 必须等于取样铺平」
 
-      final store = MathSeriesFreezeStore();
-      mergeMathSeriesForStep(
-        store: store,
+      final store = fillMathFreezeByStepping(
         bars: prefix,
         levels: bundle.levels,
         config: const MathIndicatorConfig(),
@@ -329,6 +330,6 @@ void main() {
       expect(evalBoll, isNotEmpty);
       expect(evalBoll.map((e) => e.availableAt).toList(),
           evalClose.map((e) => e.availableAt).toList());
-    });
+    }, skip: hasOffline002003TickFiles() ? false : kNoOffline002003Skip);
   });
 }

@@ -265,7 +265,7 @@ pub fn enrich_bars_with_chip_tick_bins(
         if !(t.price > 0.0) || !(t.vol > 0.0) || !t.price.is_finite() || !t.vol.is_finite() {
             continue;
         }
-        // 显式 0 不入 count bins（与 parse：0 保留 0、缺列才默认 1 一致）
+        // 显式 0 / 缺列记 0：都不入 count bins（副图/笔数分布无柱）
         if t.ticks > 0.0 && t.ticks.is_finite() {
             key_to_tick_rows
                 .entry(bk)

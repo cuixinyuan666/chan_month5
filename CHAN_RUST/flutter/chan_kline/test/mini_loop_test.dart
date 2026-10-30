@@ -9,6 +9,8 @@ import 'package:chan_kline/models/kline_bar.dart';
 import 'package:chan_kline/models/math_indicator_config.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'math_freeze_step_fill.dart';
+
 KlineBar _bar(int idx, double close, {double? open}) {
   final o = open ?? close;
   return KlineBar(
@@ -258,9 +260,9 @@ void main() {
         for (var i = 24; i < 40; i++) _bar(i, 40, open: 41),
         for (var i = 40; i < 56; i++) _bar(i, 180, open: 179),
       ];
-      final store = MathSeriesFreezeStore();
-      mergeMathSeriesForStep(
-        store: store,
+      // 逐根步进建仓：跳步建仓只有末根一格，仓里就没有 CROSS 可检测的序列。
+      // 见 math_freeze_step_fill.dart 的说明。
+      final store = fillMathFreezeByStepping(
         bars: bars,
         levels: const [],
         config: const MathIndicatorConfig(bollN: 20),

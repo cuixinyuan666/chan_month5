@@ -19,6 +19,7 @@ mod pipeline;
 mod seg_eigen;
 mod segment_first;
 mod tick;
+mod tdx;
 mod zs;
 
 pub use bs_eval::{
@@ -62,8 +63,9 @@ pub use feature::{
 pub use kline::{KlineBar, KlinePeriod};
 pub use ml_predict::{predict_dense as ml_predict_dense, MISSING as ML_MISSING};
 pub use offline::{
-    default_data_root, list_stock_codes, load_klines, load_test_ohlc_csv, resolve_data_root,
-    save_test_ohlc, save_test_ohlc_csv, test_ohlc_csv_path,
+    default_data_root, list_stock_codes, load_klines, load_klines_with_source, load_test_ohlc_csv,
+    resolve_data_root, save_test_ohlc, save_test_ohlc_csv, test_ohlc_csv_path, LoadKlinesOut,
+    TickSource,
 };
 pub use pipeline::{
     run_pipeline, LevelBundleOut, LevelConfirm, LevelSegment, LevelSnap, LevelUnitBar,
@@ -73,6 +75,7 @@ pub use segment_first::{aggregate_unit_range, pole_x_in_range};
 pub use seg_eigen::{
     BarSubSnapshot, EigenFrame, FirstSegDirSignal, K1AnalysisBundle, K1ConfirmSignal, K1Line,
 };
+pub use tick::TickQuality;
 pub use zs::{
     build_zs_for_levels, find_zs, find_zs_with_confirmed, level_zs_frames, zs_frames_from_list,
     zs_to_frames, ZS, ZSConfig, ZSFrame, ZSCombineMode, ZSIncEngine,

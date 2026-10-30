@@ -5,7 +5,7 @@ import '../models/k1_analysis.dart';
 import '../models/kline_bar.dart';
 import '../models/level_models.dart';
 
-/// 本次任务验收探针（设置「复制调试信息」）。
+/// 本次任务验收探针（设置「复制排查信息」对话框的「验收探针」段落，常驻）。
 /// 只含：T1 K1节奏关窗持值（默认分笔·77–114 续上个 0-0）；T2 tip 与主图历史同源。
 /// 常驻按钮；内容随当前验收项更新（勿删按钮）。
 class AuditProbeSnapshot {

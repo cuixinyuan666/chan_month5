@@ -3,6 +3,7 @@ import 'divergence_relation_store.dart';
 import 'signal_event.dart';
 import 'trade_operand.dart';
 import 'zhongshu_object_store.dart';
+import '../models/bar_crosshair_feature.dart';
 import '../models/kline_bar.dart';
 import '../models/level_models.dart';
 import '../compute/math_series_freeze_store.dart';
@@ -96,7 +97,10 @@ CrossEvalResult evalCross({
   ZhongshuObjectStore? zsObjects,
   DivergenceRelationStore? diverRelations,
   int bollN = 20,
+  int donchianN = 20,
   int maxKn = 8,
+  double regressK = 2.0,
+  List<BarCrosshairFeature> barFeatures = const [],
 }) {
   if (op != TradeBinaryOp.crossAbove && op != TradeBinaryOp.crossBelow) {
     return const CrossEvalIllegal('本阶段只求值 CROSS_ABOVE / CROSS_BELOW');
@@ -120,6 +124,9 @@ CrossEvalResult evalCross({
     zsObjects: zsObjects,
     diverRelations: diverRelations,
     bollN: bollN,
+    donchianN: donchianN,
+    regressK: regressK,
+    barFeatures: barFeatures,
   );
   final right = readEvalClockSeries(
     variableId: rightId,
@@ -130,6 +137,9 @@ CrossEvalResult evalCross({
     zsObjects: zsObjects,
     diverRelations: diverRelations,
     bollN: bollN,
+    donchianN: donchianN,
+    regressK: regressK,
+    barFeatures: barFeatures,
   );
   return CrossEvalOk(detectCrossOnEvalSeries(
     left: left,
