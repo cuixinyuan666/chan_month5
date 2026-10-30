@@ -175,6 +175,18 @@ class AgentApiServer {
               ),
             ),
           );
+        } else if (method == 'GET' && path == '/backtest_task') {
+          await _respond(
+            req,
+            _taskStatusJson(
+              req.uri.queryParameters,
+              (id, off, lim) => self.host.backtestTaskStatus(
+                id,
+                offset: off,
+                limit: lim,
+              ),
+            ),
+          );
         } else if (method == 'GET' && path == '/snapshot') {
           await _respond(req, _snapshotJson(self.host));
         } else if (method == 'GET' && path.startsWith('/tooltip')) {
@@ -554,6 +566,54 @@ class AgentApiServer {
         return AgentCommandResult(
           ok: accepted,
           message: accepted ? '已请求取消 $taskId' : '任务 $taskId 不存在或已结束',
+          data: {'task_id': taskId},
+        );
+      case 'run_backtest':
+        final buyAst = cmd.buyAst;
+        final sellAst = cmd.sellAst;
+        if (buyAst == null || sellAst == null) {
+          return AgentCommandResult(
+            ok: false,
+            message: 'run_backtest 需要 buy_ast 和 sell_ast'
+                '（TradeAst JSON，如 {"t":"ev","var":"STRUCTURE.K0.BUY1"}）',
+          );
+        }
+        try {
+          final taskId = await host.runBacktest(
+            buyAst: buyAst,
+            sellAst: sellAst,
+            code: cmd.code,
+            period: cmd.period,
+            begin: cmd.begin,
+            end: cmd.end,
+            quantity: cmd.quantity,
+            commissionRate: cmd.commissionRate,
+            slippageAmount: cmd.slippageAmount,
+            fillPriceMode: cmd.fillPriceMode,
+          );
+          return AgentCommandResult(
+            ok: true,
+            message: '回测已启动：$taskId'
+                '（用 GET /backtest_task?task_id=$taskId 轮询）',
+            data: {'task_id': taskId},
+          );
+        } on AgentApiError catch (e) {
+          return AgentCommandResult(ok: false, message: e.message);
+        }
+      case 'cancel_backtest':
+        final taskId = (cmd.taskId ?? '').trim();
+        if (taskId.isEmpty) {
+          return AgentCommandResult(
+            ok: false,
+            message: 'cancel_backtest 需要 task_id',
+          );
+        }
+        final accepted = host.cancelBacktest(taskId);
+        return AgentCommandResult(
+          ok: accepted,
+          message: accepted
+              ? '已请求取消 $taskId（回测为同步计算，仅计算开始前生效）'
+              : '任务 $taskId 不存在或已结束',
           data: {'task_id': taskId},
         );
       case 'run_robot_verify':

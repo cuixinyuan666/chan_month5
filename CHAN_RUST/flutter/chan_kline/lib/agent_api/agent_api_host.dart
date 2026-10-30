@@ -143,6 +143,40 @@ abstract class AgentApiHost {
   /// 请求取消寻优任务（冻结阶段取消后无结果；扫描阶段保留部分结果）。
   bool cancelSearch(String taskId);
 
+  /// 启动一次策略回测（复用回测工作台的 `executeStrategyBacktest` 全链路），
+  /// 返回任务 ID。
+  ///
+  /// 买卖条件为 `backtest/condition_ast.dart` 的 TradeAst JSON
+  /// （`{"t":"ev","var":"STRUCTURE.K0.BUY1"}` / `{"t":"cmp",...}`），
+  /// 由 `tradeAstFromJson` 还原，**不另造条件语言**。
+  /// [code]/[period]/[begin]/[end] 缺省取当前会话，显式给出时必须与会话一致；
+  /// 与寻优同口径，要求已 `run_to_end` 步进到区间最后一根。
+  /// 撮合参数缺省同回测台默认（quantity=100 / 初始资金 100000 / 费率 0 /
+  /// 滑点 0 / 本周期收盘价）；[fillPriceMode] 取 `sameBarClose` / `nextBarOpen`。
+  Future<String> runBacktest({
+    required Map<String, dynamic> buyAst,
+    required Map<String, dynamic> sellAst,
+    String? code,
+    String? period,
+    String? begin,
+    String? end,
+    int? quantity,
+    double? commissionRate,
+    double? slippageAmount,
+    String? fillPriceMode,
+  });
+
+  /// 查询回测任务：进度 + 摘要 + 指标 + 分页 trades（`agentTradeJson`）。
+  /// 未知 taskId 抛 [AgentApiError]。
+  Map<String, dynamic> backtestTaskStatus(
+    String taskId, {
+    int offset = 0,
+    int limit = 200,
+  });
+
+  /// 请求取消回测任务（回测同步计算不可中断：计算开始前生效）。
+  bool cancelBacktest(String taskId);
+
   /// 最近的后台任务（寻优/回测）状态，仅摘要（不含分页数据）。
   List<Map<String, dynamic>> agentTasks();
 
@@ -823,7 +857,7 @@ class AgentHealth {
 
 /// Agent 可发出的命令（通过 POST /command 或 command.json 发送）。
 class AgentCommand {
-  /// 命令类型：step_to | step | play | pause | stop | run_to_end | load_code | set_period | set_indicators | set_config | run_search | cancel_search
+  /// 命令类型：step_to | step | play | pause | stop | run_to_end | load_code | set_period | set_indicators | set_config | run_search | cancel_search | run_backtest | cancel_backtest
   final String type;
 
   /// step_to 的目标索引。
@@ -857,6 +891,18 @@ class AgentCommand {
   final String? begin;
   final String? end;
 
+  /// 回测买卖条件（`condition_ast.dart` 的 TradeAst JSON）。
+  final Map<String, dynamic>? buyAst;
+  final Map<String, dynamic>? sellAst;
+
+  /// 回测撮合参数（缺省同回测台默认）。
+  final int? quantity;
+  final double? commissionRate;
+  final double? slippageAmount;
+
+  /// 成交价模式：`sameBarClose`（本周期收盘，默认）/ `nextBarOpen`（次周期开盘）。
+  final String? fillPriceMode;
+
   AgentCommand({
     required this.type,
     this.idx,
@@ -872,7 +918,16 @@ class AgentCommand {
     this.inRatio,
     this.begin,
     this.end,
+    this.buyAst,
+    this.sellAst,
+    this.quantity,
+    this.commissionRate,
+    this.slippageAmount,
+    this.fillPriceMode,
   });
+
+  static Map<String, dynamic>? _asMap(Object? v) =>
+      v is Map ? Map<String, dynamic>.from(v) : null;
 
   factory AgentCommand.fromJson(Map<String, dynamic> json) {
     return AgentCommand(
@@ -890,6 +945,12 @@ class AgentCommand {
       inRatio: (json['in_ratio'] as num?)?.toDouble(),
       begin: json['begin'] as String?,
       end: json['end'] as String?,
+      buyAst: _asMap(json['buy_ast']),
+      sellAst: _asMap(json['sell_ast']),
+      quantity: (json['quantity'] as num?)?.toInt(),
+      commissionRate: (json['commission_rate'] as num?)?.toDouble(),
+      slippageAmount: (json['slippage_amount'] as num?)?.toDouble(),
+      fillPriceMode: json['fill_price_mode'] as String?,
     );
   }
 
@@ -909,6 +970,12 @@ class AgentCommand {
       if (inRatio != null) 'in_ratio': inRatio,
       if (begin != null) 'begin': begin,
       if (end != null) 'end': end,
+      if (buyAst != null) 'buy_ast': buyAst,
+      if (sellAst != null) 'sell_ast': sellAst,
+      if (quantity != null) 'quantity': quantity,
+      if (commissionRate != null) 'commission_rate': commissionRate,
+      if (slippageAmount != null) 'slippage_amount': slippageAmount,
+      if (fillPriceMode != null) 'fill_price_mode': fillPriceMode,
     };
   }
 }

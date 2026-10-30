@@ -4,9 +4,11 @@
 /// 只实现契约里的「状态读取 + 命令落地」，用于断言端点返回结构与参数生效；
 /// 真实计算语义由主界面接线测试覆盖。
 import 'package:chan_kline/agent_api/agent_api_host.dart';
+import 'package:chan_kline/agent_api/agent_backtest_json.dart';
 import 'package:chan_kline/agent_api/agent_config_key.dart';
 import 'package:chan_kline/agent_api/agent_task.dart';
 import 'package:chan_kline/backtest/backtest_metrics.dart';
+import 'package:chan_kline/backtest/order_models.dart';
 import 'package:chan_kline/indicator_search/search_core.dart';
 import 'package:chan_kline/models/chart_indicator.dart';
 import 'package:chan_kline/models/chip_config.dart';
@@ -189,6 +191,98 @@ class MockAgentHost implements AgentApiHost {
   List<Map<String, dynamic>> agentTasks() => [
         for (final t in tasks.values) t.toJson(),
       ];
+
+  /// ---------------- 回测任务（假实现，只验路由/分页/取消口径） ----------------
+
+  final Map<String, List<TradeRecord>> taskTrades = {};
+
+  @override
+  Future<String> runBacktest({
+    required Map<String, dynamic> buyAst,
+    required Map<String, dynamic> sellAst,
+    String? code,
+    String? period,
+    String? begin,
+    String? end,
+    int? quantity,
+    double? commissionRate,
+    double? slippageAmount,
+    String? fillPriceMode,
+  }) async {
+    final t = AgentTask(
+      id: 'backtest_${++_taskSeq}',
+      kind: 'backtest',
+      startedAt: DateTime(2024),
+    )
+      ..detail = '回测计算中…'
+      ..done = 0
+      ..total = 1
+      ..fraction = 0;
+    tasks[t.id] = t;
+    taskTrades[t.id] = [
+      TradeRecord(
+        tradeId: 'tr1',
+        entrySignalId: 's1',
+        exitSignalId: 's2',
+        entryX: 1,
+        exitX: 3,
+        entryPrice: 10.0,
+        exitPrice: 11.0,
+        quantity: quantity ?? 100,
+        grossPnL: 100.0,
+        commission: commissionRate ?? 0,
+        slippage: slippageAmount ?? 0,
+      ),
+    ];
+    log.add(
+      'run_backtest:${buyAst['t']}:${sellAst['t']}:${code ?? '-'}:'
+      '${period ?? '-'}:${begin ?? '-'}:${end ?? '-'}:'
+      '${quantity ?? 0}:${commissionRate ?? 0}:${slippageAmount ?? 0}:'
+      '${fillPriceMode ?? '-'}',
+    );
+    return t.id;
+  }
+
+  @override
+  Map<String, dynamic> backtestTaskStatus(
+    String taskId, {
+    int offset = 0,
+    int limit = 200,
+  }) {
+    final t = tasks[taskId];
+    if (t == null) throw AgentApiError('未知 task_id：$taskId');
+    final all = taskTrades[taskId] ?? const <TradeRecord>[];
+    final begin = offset.clamp(0, all.length);
+    final end = (begin + limit).clamp(begin, all.length);
+    return {
+      ...t.toJson(),
+      'summary': {
+        'signals': all.length,
+        'orders': all.length,
+        'fills': all.length,
+        'trades': all.length,
+        'equity_points': all.length,
+      },
+      'trades_total': all.length,
+      'offset': begin,
+      'limit': limit,
+      'trades': [
+        for (var i = begin; i < end; i++) agentTradeJson(all[i]),
+      ],
+    };
+  }
+
+  @override
+  bool cancelBacktest(String taskId) {
+    final t = tasks[taskId];
+    if (t == null || !t.running) return false;
+    t
+      ..phase = 'cancelled'
+      ..finishedAt = DateTime(2024)
+      ..detail = '已请求取消';
+    log.add('cancel_backtest:$taskId');
+    return true;
+  }
 
   @override
   List<KlineBar> get bars => List<KlineBar>.unmodifiable(_bars);

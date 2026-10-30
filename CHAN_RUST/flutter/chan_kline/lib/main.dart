@@ -43,6 +43,7 @@ import 'backtest/strategy_trade_round.dart';
 import 'backtest/backtest_step_harness.dart';
 import 'backtest/backtest_workbench.dart';
 import 'backtest/condition_ast.dart';
+import 'backtest/trade_clock.dart';
 import 'backtest/chan_event_store.dart';
 import 'backtest/chart_line_store.dart';
 import 'backtest/condition_indicators.dart';
@@ -94,6 +95,7 @@ import 'step_freeze/step_freeze_merger.dart';
 import 'step_freeze/step_freeze_session_state.dart';
 import 'agent_api/agent_api_host.dart';
 import 'agent_api/agent_api_server.dart';
+import 'agent_api/agent_backtest_json.dart';
 import 'agent_api/agent_config_key.dart';
 import 'agent_api/agent_task.dart';
 import 'agent_api/indicator_label_map.dart';
@@ -1186,7 +1188,11 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
       final finished = _agentTasks.values.where((t) => !t.running).toList()
         ..sort((a, b) => a.startedAt.compareTo(b.startedAt));
       if (finished.isEmpty) break;
-      _agentTasks.remove(finished.first.id);
+      final drop = finished.first.id;
+      _agentTasks.remove(drop);
+      _agentBacktestRuns.remove(drop);
+      _agentBacktestJson.remove(drop);
+      _agentSearchJobs.remove(drop);
     }
     return task;
   }
@@ -1201,18 +1207,18 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
     return task;
   }
 
-  @override
-  Future<String> startSearch({
+  /// 寻优 / 回测共用前置校验：会话已加载、已步进到区间末根、代码/周期/区间一致。
+  ///
+  /// 两条任务都读主图冻结仓，必须保证「区间末根」这一前提；不一致必须让 agent
+  /// 显式 load_code / set_period，**不偷偷替它换会话**。
+  ({String code, String period, String begin, String end})
+      _requireAgentFrozenSession({
+    required String taskLabel,
     String? code,
     String? period,
     String? begin,
     String? end,
-    int? maxCandidates,
-    double inRatio = 0.7,
-  }) async {
-    if (_mlSession.isActive) {
-      throw AgentApiError('机器学习运行中：请先退出机器学习再寻优');
-    }
+  }) {
     if (!_hasSession || _allBars.isEmpty) {
       throw AgentApiError('请先加载 K 线（load_code）');
     }
@@ -1221,7 +1227,7 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
     }
     if (_stepIdx < _allBars.length - 1) {
       throw AgentApiError(
-        '寻优与策略回测共用主图冻结：当前 step_idx=$_stepIdx，'
+        '$taskLabel与策略回测共用主图冻结：当前 step_idx=$_stepIdx，'
         '请先 run_to_end 步进到区间最后一根（idx=${_allBars.length - 1}）',
       );
     }
@@ -1252,6 +1258,32 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
         '请先用 load_code 指定同一区间',
       );
     }
+    return (code: curCode, period: curPeriod, begin: curBegin, end: curEnd);
+  }
+
+  @override
+  Future<String> startSearch({
+    String? code,
+    String? period,
+    String? begin,
+    String? end,
+    int? maxCandidates,
+    double inRatio = 0.7,
+  }) async {
+    if (_mlSession.isActive) {
+      throw AgentApiError('机器学习运行中：请先退出机器学习再寻优');
+    }
+    final sess = _requireAgentFrozenSession(
+      taskLabel: '寻优',
+      code: code,
+      period: period,
+      begin: begin,
+      end: end,
+    );
+    final curCode = sess.code;
+    final curPeriod = sess.period;
+    final curBegin = sess.begin;
+    final curEnd = sess.end;
     if (inRatio <= 0 || inRatio >= 1) {
       throw AgentApiError('in_ratio 必须在 (0,1) 之间（默认 0.7）');
     }
@@ -1387,6 +1419,194 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
     job.cancel();
     task.detail = '已请求取消…';
     return true;
+  }
+
+  /// ---------------- Agent 回测任务 ----------------
+
+  /// 已完成回测的原始结果（trades 分页从这里取，不重复计算）。
+  final Map<String, BacktestRun> _agentBacktestRuns = {};
+
+  /// 已完成回测的摘要 JSON（指标 + 段指标，避免每次轮询重算）。
+  final Map<String, Map<String, dynamic>> _agentBacktestJson = {};
+
+  /// 已请求取消、尚未开始计算的回测任务。
+  final Set<String> _agentBacktestCancelRequests = {};
+
+  @override
+  Future<String> runBacktest({
+    required Map<String, dynamic> buyAst,
+    required Map<String, dynamic> sellAst,
+    String? code,
+    String? period,
+    String? begin,
+    String? end,
+    int? quantity,
+    double? commissionRate,
+    double? slippageAmount,
+    String? fillPriceMode,
+  }) async {
+    if (_mlSession.isActive) {
+      throw AgentApiError('机器学习运行中：请先退出机器学习再回测');
+    }
+    _requireAgentFrozenSession(
+      taskLabel: '回测',
+      code: code,
+      period: period,
+      begin: begin,
+      end: end,
+    );
+    if (quantity != null && quantity <= 0) {
+      throw AgentApiError('quantity 必须为正整数（默认 100）');
+    }
+    if (commissionRate != null && commissionRate < 0) {
+      throw AgentApiError('commission_rate 不能为负（0=免手续费）');
+    }
+    if (slippageAmount != null && slippageAmount < 0) {
+      throw AgentApiError('slippage_amount 不能为负（0=无滑点）');
+    }
+    final fillMode = _parseAgentFillPriceMode(fillPriceMode);
+    if (_hasRunningAgentTask('backtest')) {
+      throw AgentApiError('已有回测任务在跑：请先 cancel_backtest 或等它结束');
+    }
+
+    final TradeAst buy;
+    final TradeAst sell;
+    try {
+      buy = tradeAstFromJson(buyAst);
+      sell = tradeAstFromJson(sellAst);
+    } catch (e) {
+      throw AgentApiError('买卖条件 AST 无法解析：$e');
+    }
+    // 基准一律用 StrategyConfig 默认值（与回测台默认一致），
+    // 不继承 GUI 上一次对话框里的临时参数，保证 agent 结果可复现。
+    final cfg = StrategyConfig(
+      buyAst: buy,
+      sellAst: sell,
+      quantity: quantity ?? 100,
+      commissionRate: commissionRate ?? 0,
+      slippageAmount: slippageAmount ?? 0,
+      fillPriceMode: fillMode ?? kDefaultTradeFillPriceMode,
+    );
+    final task = _newAgentTask('backtest');
+    _msgHistory.append(
+      '智能体回测开始：${_selectedCode ?? ""} ${cfg.buyLabel} / ${cfg.sellLabel} '
+      'task=${task.id}',
+    );
+    unawaited(_runAgentBacktest(task, cfg));
+    return task.id;
+  }
+
+  Future<void> _runAgentBacktest(AgentTask task, StrategyConfig cfg) async {
+    // 先让出一拍，把 task_id 回给 HTTP/文件通道，再跑重计算。
+    await Future<void>.delayed(Duration.zero);
+    if (_agentBacktestCancelRequests.remove(task.id)) {
+      task
+        ..finishedAt = DateTime.now()
+        ..phase = 'cancelled'
+        ..detail = '已取消（未开始计算）';
+      _msgHistory.append('智能体回测已取消：task=${task.id}');
+      _agentApiServer?.refreshStateFile();
+      return;
+    }
+    try {
+      task.detail = '回测计算中…（同步执行，界面可能短暂无响应）';
+      final run = _computeStrategyBacktest(cfg);
+      final json = agentBacktestRunJson(run);
+      _agentBacktestRuns[task.id] = run;
+      _agentBacktestJson[task.id] = json;
+      task
+        ..finishedAt = DateTime.now()
+        ..payload = run
+        ..summary = {
+          'ok': json['ok'],
+          'run_id': json['run_id'],
+          'engine_version': json['engine_version'],
+          'scope': json['scope'],
+          'config': json['config'],
+          if (json['ok'] == true) ...{
+            'metrics': json['metrics'],
+            'summary': json['summary'],
+          },
+          if (json['ok'] != true) 'error': json['error'],
+        };
+      if (json['ok'] == true) {
+        final m = run.result!.metrics;
+        task
+          ..phase = 'done'
+          ..fraction = 1
+          ..detail = '闭合${m.totalTrades} 笔 · 净利${m.netProfit.toStringAsFixed(2)} '
+              '· 胜率${m.winRate.display}';
+        _msgHistory.append(
+          '智能体回测完成：${cfg.buyLabel} / ${cfg.sellLabel}；'
+          '净利${m.netProfit.toStringAsFixed(2)} 胜率${m.winRate.display} '
+          '最大回撤${m.maxDrawdown.toStringAsFixed(2)} task=${task.id}',
+        );
+      } else {
+        task
+          ..phase = 'failed'
+          ..error = '${json['error']}'
+          ..detail = '回测未跑成：${json['error']}';
+        _msgHistory.append('智能体回测未跑成：${json['error']} task=${task.id}');
+      }
+    } catch (e) {
+      task
+        ..finishedAt = DateTime.now()
+        ..phase = 'failed'
+        ..error = '$e'
+        ..detail = '失败';
+      _msgHistory.append('智能体回测失败：$e task=${task.id}');
+    } finally {
+      _agentBacktestCancelRequests.remove(task.id);
+      _agentApiServer?.refreshStateFile();
+    }
+  }
+
+  @override
+  Map<String, dynamic> backtestTaskStatus(
+    String taskId, {
+    int offset = 0,
+    int limit = 200,
+  }) {
+    final task = _requireAgentTask(taskId);
+    final run = _agentBacktestRuns[taskId];
+    final result = run?.result;
+    final trades = result?.trades ?? const <TradeRecord>[];
+    final begin = offset.clamp(0, trades.length);
+    final end = (begin + limit).clamp(begin, trades.length);
+    final json = _agentBacktestJson[taskId];
+    return {
+      ...task.toJson(),
+      if (json != null) ...json,
+      'trades_total': trades.length,
+      'offset': begin,
+      'limit': limit,
+      'trades': [
+        for (var i = begin; i < end; i++) agentTradeJson(trades[i]),
+      ],
+    };
+  }
+
+  @override
+  bool cancelBacktest(String taskId) {
+    final task = _agentTasks[taskId];
+    if (task == null || task.kind != 'backtest' || !task.running) return false;
+    _agentBacktestCancelRequests.add(taskId);
+    task.detail = '已请求取消…';
+    return true;
+  }
+
+  /// 成交价模式：接受 `sameBarClose` / `nextBarOpen`（忽略大小写与下划线）。
+  TradeFillPriceMode? _parseAgentFillPriceMode(String? raw) {
+    final text = (raw ?? '').trim();
+    if (text.isEmpty) return null;
+    final norm = text.replaceAll('_', '').toLowerCase();
+    for (final mode in TradeFillPriceMode.values) {
+      if (mode.name.toLowerCase() == norm) return mode;
+    }
+    throw AgentApiError(
+      'fill_price_mode=$text 不合法（可用：sameBarClose=本周期收盘 / '
+      'nextBarOpen=次周期开盘）',
+    );
   }
 
   bool _hasRunningAgentTask(String kind) =>
@@ -4004,11 +4224,10 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
     );
   }
 
-  void _runStrategyBacktest(StrategyConfig cfg) {
-    if (!_hasSession || _visibleBars.isEmpty) {
-      _showSnack('请先加载 K 线并走到至少一根');
-      return;
-    }
+  /// 只算不改界面：回测工作台与 Agent API 共用这条执行路径。
+  ///
+  /// 会话口径全部取自当前主图（可见前缀 / 冻结仓 / 采样钟），与手动回测等价。
+  BacktestRun _computeStrategyBacktest(StrategyConfig cfg) {
     final maxKn = chartMaxKn(levels: _levels, k0Lines: _k0Lines);
     final scope = BacktestDataScope(
       code: _selectedCode ?? '',
@@ -4018,7 +4237,7 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
       beginText: _fmtDateTime(_beginDate),
       endText: _fmtDateTime(_endDate),
     );
-    final run = executeStrategyBacktest(
+    return executeStrategyBacktest(
       config: cfg,
       scope: scope,
       bars: _visibleBars,
@@ -4039,6 +4258,16 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
       mathConfig: _mathIndicatorConfig,
       knClock: _stepFreeze.knClockTimeline,
     );
+  }
+
+  void _runStrategyBacktest(StrategyConfig cfg) {
+    if (!_hasSession || _visibleBars.isEmpty) {
+      _showSnack('请先加载 K 线并走到至少一根');
+      return;
+    }
+    final maxKn = chartMaxKn(levels: _levels, k0Lines: _k0Lines);
+    final run = _computeStrategyBacktest(cfg);
+    final scope = run.sourceRange;
     setState(() {
       _strategyConfig = cfg;
       _backtestRun = run;
