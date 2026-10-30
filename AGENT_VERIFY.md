@@ -47,7 +47,9 @@ build\windows\x64\runner\Debug\chan_kline.exe
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/health` | 版本、FFI ABI、PID、数据根、运行时长、令牌文件路径 |
-| GET | `/state` | 代码/周期/stepIdx/总根数/播放状态/指标集/筹码与笔数分布配置/截断开关 |
+| GET | `/state` | 代码/周期/stepIdx/总根数/播放状态/指标集/筹码与笔数分布配置/截断开关/`math_config`（BOLL、唐奇安、回归 k） |
+| GET | `/klines?period=&days=&limit=` | 当前会话原始 K 线（OHLCV+笔数）；`days` 从末根往前推自然日，`limit` 默认 5000、硬上限 50000 |
+| GET | `/messages?limit=` | 运行消息历史末 N 条（与界面「历史记录」同源），`limit` 默认 50、硬上限 500 |
 | GET | `/snapshot` | 全量会话快照：各层段、分型确认、买卖点、中枢、末根 bar_feature |
 | GET | `/tooltip?idx=N` | 第 N 根 K 的十字线 tooltip 行（与画面 tooltip 同源） |
 | GET | `/screenshot` | 图表 RepaintBoundary 的 PNG 截图 |
@@ -65,9 +67,26 @@ build\windows\x64\runner\Debug\chan_kline.exe
 | `load_code` | `code`, `period?` | 换股（可同时换周期） |
 | `set_period` | `period` | 只换周期 |
 | `run_robot_verify` | `period`（套件 ID，缺省 `jiyou_keypoint_20261001`） | 触发一次机器人验证并返回摘要 |
-| `set_indicators` | — | **未实现**（需主界面 label→类映射，当前返回失败说明） |
+| `set_indicators` | `main_indicators`, `sub_indicators`（逗号分隔标签，支持全角逗号） | 勾选主/副图指标；只给一侧则另一侧不动，空字符串清空该侧；未知名 label 明确报错 |
+| `set_config` | `config_key`, `config_value` | 改一项设置，键与合法值见下方「配置键」表 |
 
 响应统一为 `{"ok": bool, "message": string, "data": ...}`。
+
+### 配置键（`set_config` 的 `config_key`）
+
+| key | 取值 | 说明 |
+|---|---|---|
+| `chip_enabled` | 布尔（`true/false`、`1/0`、`开/关`） | 右侧筹码开关 |
+| `tick_enabled` | 同上 | 左侧笔数分布开关 |
+| `chip_bucket` | ≥ 0.01 的数字（按 2 位小数） | 筹码桶宽 |
+| `tick_bucket` | 同上 | 笔数分布桶宽 |
+| `truncation_check` | 布尔 | 截断机制开关（会重建会话、清冻结仓后重算） |
+| `boll_n` | ≥ 1 的整数 | BOLL 窗口 N |
+| `donchian_n` | ≥ 1 的整数 | 唐奇安窗口 N |
+| `regress_k` | > 0 的数字 | 回归通道带宽倍数 k |
+
+> 设置面板里「筹码/笔数分布」总开关与桶宽输入框是**一处写两份**；走 API 时按 key 分开写，
+> 要完全等价手动操作需同时设 `chip_enabled` + `tick_enabled`（桶宽同理：`chip_bucket` + `tick_bucket`）。
 
 ## 五、文件轮询通道（无 HTTP 客户端的 agent 用）
 
@@ -96,6 +115,16 @@ Invoke-RestMethod -Uri 'http://127.0.0.1:12321/snapshot' -Headers $h
 Invoke-RestMethod -Uri 'http://127.0.0.1:12321/command' -Method Post -Headers $h `
   -ContentType 'application/json' -Body '{"type":"step_to","idx":10}'
 
+# 取最近 200 根 K 线 / 最近 20 条历史
+Invoke-RestMethod -Uri 'http://127.0.0.1:12321/klines?limit=200' -Headers $h
+Invoke-RestMethod -Uri 'http://127.0.0.1:12321/messages?limit=20' -Headers $h
+
+# 切换指标 / 改参数
+Invoke-RestMethod -Uri 'http://127.0.0.1:12321/command' -Method Post -Headers $h `
+  -ContentType 'application/json' -Body '{"type":"set_indicators","main_indicators":"K0,K0中枢"}'
+Invoke-RestMethod -Uri 'http://127.0.0.1:12321/command' -Method Post -Headers $h `
+  -ContentType 'application/json' -Body '{"type":"set_config","config_key":"boll_n","config_value":"15"}'
+
 # 截屏存盘
 Invoke-WebRequest -Uri 'http://127.0.0.1:12321/screenshot' -Headers $h -OutFile screenshot.png
 ```
@@ -108,7 +137,10 @@ Invoke-WebRequest -Uri 'http://127.0.0.1:12321/screenshot' -Headers $h -OutFile 
   `KlineChart` 内部完整 tooltip；需要逐字段比对时以画面 tooltip 为准。
 - 截图是图表区域（`RepaintBoundary`），不含整个窗口边框与系统标题栏。
 - `pid` 字段当前恒为 `0`：Dart 无跨平台读取当前进程 ID 的公开 API。
-- `set_indicators` 未实现：主界面指标是强类型枚举集，label→类映射未开放。
+- `set_indicators` 的 label 一律从真实目录（`buildMainIndicatorCatalog` / `buildSubIndicatorCatalog`）反查，
+  不硬编码指标名；查不到直接 `ok:false` 并逐条列出，不静默丢弃。
+- `set_config` 的合法范围与 GUI 同口径（桶宽最小 0.01、2 位小数）；越界只回 `ok:false`，不改变状态。
+- `/klines` 返回的是**当前会话已加载**的 K 线（与主图同源）；`period` 与会话不一致时拒绝，需先 `set_period` / `load_code`。
 - 端口固定 `12321`；如与其它本地服务冲突需改代码常量 `_agentApiPort`。
 
 ---
