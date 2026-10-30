@@ -462,12 +462,27 @@ void main() {
       expect(find.text('AND'), findsWidgets);
       expect(find.text('OR'), findsWidgets);
       expect(find.text('K0收盘穿K1布林'), findsNothing);
-      // 新叶子是比较积木，打开关系可切到下穿/上穿
-      expect(find.text('<'), findsWidgets);
-      await tester.tap(find.text('<').first);
-      await tester.pumpAndSettle();
+      // 新条件默认复制上一条（2026-09-23 起），仍是一类买点「出现」，不会自带比较关系
+      expect(find.text('出现'), findsNWidgets(3));
+      expect(find.text('<'), findsNothing);
+
+      Future<void> tapAndSettle(Finder finder) async {
+        await tester.ensureVisible(finder);
+        await tester.pumpAndSettle();
+        await tester.tap(finder);
+        await tester.pumpAndSettle();
+      }
+
+      // 把复制出来的第二条左边换成数值变量（连线斜率），关系才变成比较积木
+      await tapAndSettle(find.byType(DropdownButtonFormField<String>).at(1));
+      await tapAndSettle(find.text('连线斜率').last);
+      // 数值变量默认关系是 >，可选里面才有比较与穿越
+      expect(find.text('>'), findsOneWidget);
+      await tapAndSettle(find.text('>'));
       expect(find.text('下穿'), findsWidgets);
       expect(find.text('上穿'), findsWidgets);
+      await tapAndSettle(find.text('<').last);
+      expect(find.text('<'), findsOneWidget);
     });
   });
 
