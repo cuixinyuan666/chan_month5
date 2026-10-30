@@ -5,6 +5,9 @@
 /// 真实计算语义由主界面接线测试覆盖。
 import 'package:chan_kline/agent_api/agent_api_host.dart';
 import 'package:chan_kline/agent_api/agent_config_key.dart';
+import 'package:chan_kline/agent_api/agent_task.dart';
+import 'package:chan_kline/backtest/backtest_metrics.dart';
+import 'package:chan_kline/indicator_search/search_core.dart';
 import 'package:chan_kline/models/chart_indicator.dart';
 import 'package:chan_kline/models/chip_config.dart';
 import 'package:chan_kline/models/kline_bar.dart';
@@ -106,6 +109,86 @@ class MockAgentHost implements AgentApiHost {
     final begin = messages.length > limit ? messages.length - limit : 0;
     return messages.sublist(begin);
   }
+
+  /// ---------------- 寻优任务（假实现，只验路由/分页/取消口径） ----------------
+
+  final Map<String, AgentTask> tasks = {};
+  final Map<String, List<ComboVerdict>> taskVerdicts = {};
+  int _taskSeq = 0;
+
+  @override
+  Future<String> startSearch({
+    String? code,
+    String? period,
+    String? begin,
+    String? end,
+    int? maxCandidates,
+    double inRatio = 0.7,
+  }) async {
+    final t = AgentTask(
+      id: 'search_${++_taskSeq}',
+      kind: 'search',
+      startedAt: DateTime(2024),
+    )
+      ..detail = '回测扫描：0/3'
+      ..done = 0
+      ..total = 3
+      ..fraction = 0;
+    tasks[t.id] = t;
+    taskVerdicts[t.id] = [
+      for (var i = 0; i < 3; i++)
+        ComboVerdict(
+          name: '事件｜候选$i',
+          buyText: '买$i',
+          sellText: '卖$i',
+          inSample: SegmentMetrics.empty,
+          outSample: SegmentMetrics.empty,
+          splitX: 7,
+        ),
+    ];
+    log.add(
+      'start_search:${code ?? '-'}:${period ?? '-'}:'
+      '${begin ?? '-'}:${end ?? '-'}:${maxCandidates ?? 0}:$inRatio',
+    );
+    return t.id;
+  }
+
+  @override
+  Map<String, dynamic> searchTaskStatus(
+    String taskId, {
+    int offset = 0,
+    int limit = 200,
+  }) {
+    final t = tasks[taskId];
+    if (t == null) throw AgentApiError('未知 task_id：$taskId');
+    final all = taskVerdicts[taskId] ?? const <ComboVerdict>[];
+    final begin = offset.clamp(0, all.length);
+    final end = (begin + limit).clamp(begin, all.length);
+    return {
+      ...t.toJson(),
+      'verdicts_total': all.length,
+      'offset': begin,
+      'limit': limit,
+      'verdicts': [for (var i = begin; i < end; i++) all[i].toJson()],
+    };
+  }
+
+  @override
+  bool cancelSearch(String taskId) {
+    final t = tasks[taskId];
+    if (t == null || !t.running) return false;
+    t
+      ..phase = 'cancelled'
+      ..finishedAt = DateTime(2024)
+      ..detail = '已请求取消';
+    log.add('cancel_search:$taskId');
+    return true;
+  }
+
+  @override
+  List<Map<String, dynamic>> agentTasks() => [
+        for (final t in tasks.values) t.toJson(),
+      ];
 
   @override
   List<KlineBar> get bars => List<KlineBar>.unmodifiable(_bars);

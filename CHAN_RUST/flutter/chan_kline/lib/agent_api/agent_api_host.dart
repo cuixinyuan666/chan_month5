@@ -118,6 +118,34 @@ abstract class AgentApiHost {
   /// 运行消息历史（与界面「历史记录」同源），按时间正序返回末 [limit] 条。
   List<AgentMessageRow> historyMessages({int limit = 50});
 
+  /// 启动一次指标寻优（复用主界面会话冻结仓与寻优 job），返回任务 ID。
+  ///
+  /// [code] / [period] / [begin] / [end] 缺省取当前会话；**显式给出时必须与
+  /// 会话一致**（否则需先 load_code / set_period）。寻优要求已 `run_to_end`
+  /// 步进到区间最后一根、且未在机器学习。
+  Future<String> startSearch({
+    String? code,
+    String? period,
+    String? begin,
+    String? end,
+    int? maxCandidates,
+    double inRatio = 0.7,
+  });
+
+  /// 查询寻优任务：进度 + 摘要 + 分页 verdicts（`ComboVerdict.toJson`）。
+  /// 未知 taskId 抛 [AgentApiError]。
+  Map<String, dynamic> searchTaskStatus(
+    String taskId, {
+    int offset = 0,
+    int limit = 200,
+  });
+
+  /// 请求取消寻优任务（冻结阶段取消后无结果；扫描阶段保留部分结果）。
+  bool cancelSearch(String taskId);
+
+  /// 最近的后台任务（寻优/回测）状态，仅摘要（不含分页数据）。
+  List<Map<String, dynamic>> agentTasks();
+
   /// 程序基础信息（版本、DLL 协议号、进程号、数据目录、运行时长）。
   AgentHealth health();
 
@@ -795,7 +823,7 @@ class AgentHealth {
 
 /// Agent 可发出的命令（通过 POST /command 或 command.json 发送）。
 class AgentCommand {
-  /// 命令类型：step_to | step | play | pause | stop | run_to_end | load_code | set_period | set_indicators | set_config
+  /// 命令类型：step_to | step | play | pause | stop | run_to_end | load_code | set_period | set_indicators | set_config | run_search | cancel_search
   final String type;
 
   /// step_to 的目标索引。
@@ -818,6 +846,17 @@ class AgentCommand {
   final String? configKey;
   final String? configValue;
 
+  /// 任务 ID（`cancel_search` / 查询用）。
+  final String? taskId;
+
+  /// 寻优参数：候选上限、样本内比例。
+  final int? maxCandidates;
+  final double? inRatio;
+
+  /// 起止时间文本（寻优/回测；缺省取当前会话区间）。
+  final String? begin;
+  final String? end;
+
   AgentCommand({
     required this.type,
     this.idx,
@@ -828,6 +867,11 @@ class AgentCommand {
     this.subIndicators,
     this.configKey,
     this.configValue,
+    this.taskId,
+    this.maxCandidates,
+    this.inRatio,
+    this.begin,
+    this.end,
   });
 
   factory AgentCommand.fromJson(Map<String, dynamic> json) {
@@ -841,6 +885,11 @@ class AgentCommand {
       subIndicators: json['sub_indicators'] as String?,
       configKey: json['config_key'] as String?,
       configValue: json['config_value']?.toString(),
+      taskId: json['task_id'] as String?,
+      maxCandidates: (json['max_candidates'] as num?)?.toInt(),
+      inRatio: (json['in_ratio'] as num?)?.toDouble(),
+      begin: json['begin'] as String?,
+      end: json['end'] as String?,
     );
   }
 
@@ -855,6 +904,11 @@ class AgentCommand {
       if (subIndicators != null) 'sub_indicators': subIndicators,
       if (configKey != null) 'config_key': configKey,
       if (configValue != null) 'config_value': configValue,
+      if (taskId != null) 'task_id': taskId,
+      if (maxCandidates != null) 'max_candidates': maxCandidates,
+      if (inRatio != null) 'in_ratio': inRatio,
+      if (begin != null) 'begin': begin,
+      if (end != null) 'end': end,
     };
   }
 }

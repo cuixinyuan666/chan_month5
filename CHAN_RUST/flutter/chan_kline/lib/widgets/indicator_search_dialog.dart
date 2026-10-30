@@ -1,13 +1,10 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 
-import '../bridge/chan_bridge.dart';
 import '../indicator_search/candidate_builder.dart';
+import '../indicator_search/indicator_search_job.dart';
 import '../indicator_search/indicator_search_runner.dart';
 import '../indicator_search/search_core.dart';
 import '../indicator_search/search_env.dart';
-import '../indicator_search/variable_pool.dart';
 import '../indicator_search/search_verdict_views.dart';
 import '../backtest/backtest_step_harness.dart';
 import '../backtest/backtest_run.dart';
@@ -20,11 +17,6 @@ import '../models/math_indicator_config.dart';
 import '../settings/indicator_search_last_result_store.dart';
 import '../settings/indicator_search_settings_store.dart';
 import 'indicator_search_result_panel.dart';
-
-/// 冻结阶段取消了扫描：用于从 harness onProgress 抛出、提前收尾。
-class _SearchCancel {
-  const _SearchCancel();
-}
 
 class IndicatorSearchDialog extends StatefulWidget {
   const IndicatorSearchDialog({
@@ -102,7 +94,6 @@ class _IndicatorSearchDialogState extends State<IndicatorSearchDialog> {
   double? _progress;
   bool _running = true;
   bool _cancelling = false;
-  bool _searchCancelled = false;
   String? _error;
   IndicatorSearchRunStats? _stats;
   List<ComboVerdict> _liveRan = const [];
@@ -110,10 +101,9 @@ class _IndicatorSearchDialogState extends State<IndicatorSearchDialog> {
   int _barCount = 0;
   int _maxKn = 0;
   int _splitX = 0;
-  IndicatorSearchSettings _settings = IndicatorSearchSettingsStore.current;
   CandidateBuildSummary? _buildSummary;
   IndicatorSearchAlignSnapshot? _alignSnap;
-  IndicatorSearchRunner? _activeRunner;
+  IndicatorSearchJob? _activeJob;
   SearchEnv? _env;
   List<KlineBar> _bars = const [];
 
@@ -189,199 +179,72 @@ class _IndicatorSearchDialogState extends State<IndicatorSearchDialog> {
     } catch (_) {}
   }
 
-  String _fmtEta(Duration? d) {
-    if (d == null) return '—';
-    if (d.inHours > 0) return '约 ${d.inHours}h${d.inMinutes % 60}m';
-    if (d.inMinutes > 0) return '约 ${d.inMinutes}m${d.inSeconds % 60}s';
-    return '约 ${d.inSeconds}s';
-  }
-
   Future<void> _run() async {
-    await IndicatorSearchSettingsStore.load();
-    _settings = IndicatorSearchSettingsStore.current;
     final logPath = (await IndicatorSearchSettingsStore.logFile()).path;
     _resultsPath = (await IndicatorSearchSettingsStore.resultsFile()).path;
+    final job = IndicatorSearchJob(
+      IndicatorSearchJobParams(
+        code: widget.code,
+        period: widget.period,
+        beginText: widget.beginText,
+        endText: widget.endText,
+        dataRoot: widget.dataRoot,
+        tickSource: widget.tickSource,
+        mathConfig: widget.mathConfig,
+        chipConfig: widget.chipConfig,
+        strategyConfig: widget.strategyConfig,
+        resultsPath: _resultsPath!,
+        logPath: logPath,
+        featureLookup: widget.featureLookup,
+        truncationCheck: widget.truncationCheck,
+        mainSessionHarness: widget.mainSessionHarness,
+        initialBars: widget.initialBars,
+        candidateOverride: widget.candidateOverride,
+        scanYieldEvery: widget.scanYieldEvery ?? 25,
+      ),
+      runner: widget.runnerFactory?.call(),
+    );
+    _activeJob = job;
     try {
-      setState(() {
-        _phase = '取数';
-        _detail = '${widget.code} ${widget.period}';
-        _progress = null;
-      });
-      List<KlineBar> bars;
-      if (widget.initialBars != null && widget.initialBars!.isNotEmpty) {
-        bars = List<KlineBar>.from(widget.initialBars!);
-      } else {
-        final loaded = ChanBridge.instance.loadKlinesEx(
-          dataRoot: widget.dataRoot,
-          code: widget.code,
-          beginDate: widget.beginText,
-          endDate: widget.endText,
-          period: widget.period,
-          tickSource: widget.tickSource,
-        );
-        bars = loaded.bars;
-      }
-      if (bars.isEmpty) throw Exception('区间内无 K 线');
-      _barCount = bars.length;
-      _splitX = splitBarIdx(bars);
-      logProgress('载入 ${bars.length} 根', logFilePath: logPath);
-
-      final BacktestStepHarnessResult h;
-      final session = widget.mainSessionHarness;
-      if (session != null) {
-        if (session.bars.length != bars.length) {
-          throw Exception(
-            '主图已载入 ${session.bars.length} 根，与寻优区间 ${bars.length} 根不一致',
-          );
-        }
-        setState(() {
-          _phase = '主图冻结';
-          _detail = '复用当前会话冻结仓（与策略回测同源，共 ${bars.length} 根）';
-          _progress = 1;
-        });
-        logProgress('复用主图会话冻结 maxKn=${session.maxKn}', logFilePath: logPath);
-        h = session;
-      } else {
-        setState(() {
-          _phase = '步进冻结';
-          _detail = '共 ${bars.length} 根 K0（独立 harness，无主图会话时）';
-          _progress = 0;
-        });
-        final freezeStarted = DateTime.now();
-        try {
-          h = await driveStepHarnessWithProgress(
-            bars,
-            mathConfig: widget.mathConfig,
-            chipConfig: widget.chipConfig,
-            truncationCheck: widget.truncationCheck,
-            onProgress: (d, t) {
-              if (_searchCancelled) throw const _SearchCancel();
-              if (!mounted) return;
-              setState(() {
-                _progress = d / t;
-                _detail = '冻结 $d / $t · 已用 '
-                    '${DateTime.now().difference(freezeStarted).inSeconds}s';
-              });
-            },
-          );
-        } on _SearchCancel {
-          if (!mounted) return;
-          setState(() {
-            _running = false;
-            _phase = '已取消';
-            _detail = '冻结阶段已取消（未产生结果）';
-            _progress = 1;
-          });
-          logProgress('cancelled during freeze', logFilePath: logPath);
-          return;
-        }
-        logProgress('冻结完成 maxKn=${h.maxKn}', logFilePath: logPath);
-      }
-      _maxKn = h.maxKn;
-
-      final pool = VariablePool(h.maxKn);
-      final opts = _settings.toBuildOptions();
-      final cands = widget.candidateOverride ?? buildCandidates(pool, opts);
-      _buildSummary = summarizeCandidates(cands);
-      logProgress(
-        '候选 ${cands.length} 条 profile=${opts.profile.name} · ${_buildSummary!.toDisplayLine()}',
-        logFilePath: logPath,
-      );
-
-      setState(() {
-        _phase = '回测扫描';
-        _detail = '候选 ${cands.length} 条 · 预编译复用 · 全量列出（不筛选/不排名）';
-        _progress = 0;
-        _liveRan = const [];
-      });
-
-      final workbenchAlign = SearchWorkbenchAlign(
-        strategyTemplate: widget.strategyConfig,
-        features: widget.featureLookup,
-        bucketStep: widget.chipConfig.bucketStep,
-        bollN: widget.mathConfig.bollN,
-        donchianN: widget.mathConfig.donchianN,
-        regressK: widget.mathConfig.regressK,
-      );
-      _alignSnap = IndicatorSearchAlignSnapshot.fromAlign(workbenchAlign);
-      final env = SearchEnv(
-        bars,
-        h,
-        widget.code,
-        widget.period,
-        widget.beginText,
-        widget.endText,
-        align: workbenchAlign,
-      );
-      _env = env;
-      _bars = bars;
-      final tmpResults = '${_resultsPath!}.tmp';
-      try {
-        File(tmpResults).writeAsStringSync('');
-      } catch (_) {}
-      final sink = VerdictSink(tmpResults);
-      final runner = widget.runnerFactory?.call() ?? IndicatorSearchRunner();
-      _activeRunner = runner;
-      final stats = await runner.runAll(
-        bars: bars,
-        env: env,
-        cands: cands,
-        maxKn: h.maxKn,
-        yieldEvery: widget.scanYieldEvery ?? 25,
-        sink: sink,
-        onProgress: (p) {
-          if (!mounted) return;
-          logProgress(
-            '扫描 ${p.done}/${p.total} 跑通${p.ran} eta=${_fmtEta(p.eta)}',
-            logFilePath: logPath,
-          );
-          setState(() {
-            _progress = p.phaseFraction;
-            _detail = '${p.done}/${p.total} · 编译${p.compiled} 跑通${p.ran} · '
-                '已用 ${p.elapsed?.inMinutes ?? 0}m${(p.elapsed?.inSeconds ?? 0) % 60}s · '
-                '剩余 ${_fmtEta(p.eta)}';
-            _liveRan = p.recentRan;
-          });
-        },
-      );
-      sink.close();
-      _activeRunner = null;
-      if (stats.cancelled) {
-        // 保留部分 TSV，使「完整 TSV」链接在取消后仍有效。
-        try {
-          File(tmpResults).renameSync(_resultsPath!);
-        } catch (_) {
-          try {
-            File(tmpResults).copySync(_resultsPath!);
-            File(tmpResults).deleteSync();
-          } catch (_) {}
-        }
-        logProgress(
-          'cancelled at ${stats.ran}/${stats.total}',
-          logFilePath: logPath,
-        );
+      final result = await job.run(onProgress: (p) {
         if (!mounted) return;
+        setState(() {
+          _phase = p.phase;
+          _detail = p.detail;
+          _progress = p.fraction;
+          if (p.recentRan.isNotEmpty) _liveRan = p.recentRan;
+        });
+      });
+      _activeJob = null;
+      if (!mounted) return;
+      if (result == null) {
         setState(() {
           _running = false;
           _phase = '已取消';
-          _detail = '已扫描 ${stats.ran} 条，保留部分 TSV';
-          _stats = stats;
+          _detail = '冻结阶段已取消（未产生结果）';
+          _progress = 1;
         });
         return;
       }
-      try {
-        File(tmpResults).renameSync(_resultsPath!);
-      } catch (_) {
-        try {
-          File(tmpResults).copySync(_resultsPath!);
-          File(tmpResults).deleteSync();
-        } catch (_) {}
-      }
+      _barCount = result.barCount;
+      _splitX = result.splitX;
+      _maxKn = result.maxKn;
+      _buildSummary = result.buildSummary;
+      _alignSnap = result.align;
+      _env = result.env;
+      _bars = result.bars;
+      _resultsPath = result.resultsPath;
 
-      logProgress(
-        '完成 跑通${stats.ran} 耗时${stats.elapsed.inSeconds}s',
-        logFilePath: logPath,
-      );
+      if (result.cancelled) {
+        // 保留部分 TSV，使「完整 TSV」链接在取消后仍有效。
+        setState(() {
+          _running = false;
+          _phase = '已取消';
+          _detail = '已扫描 ${result.stats.ran} 条，保留部分 TSV';
+          _stats = result.stats;
+        });
+        return;
+      }
 
       await IndicatorSearchLastResultStore.save(
         IndicatorSearchLastResult.fromRun(
@@ -390,27 +253,29 @@ class _IndicatorSearchDialogState extends State<IndicatorSearchDialog> {
           period: widget.period,
           beginText: widget.beginText,
           endText: widget.endText,
-          barCount: _barCount,
-          stats: stats,
-          resultsFilePath: _resultsPath!,
-          maxKn: h.maxKn,
-          useOptimizedBuild: _settings.useOptimizedBuild,
-          maxCandidates: _settings.maxCandidates,
-          align: _alignSnap,
+          barCount: result.barCount,
+          stats: result.stats,
+          resultsFilePath: result.resultsPath,
+          maxKn: result.maxKn,
+          useOptimizedBuild: result.useOptimizedBuild,
+          maxCandidates: result.maxCandidates,
+          align: result.align,
         ),
       );
 
       if (!mounted) return;
       setState(() {
         _running = false;
-        _stats = stats;
+        _stats = result.stats;
         _phase = '完成';
-        _detail = '编译${stats.compiled} 跑通${stats.ran} · '
-            '耗时 ${stats.elapsed.inMinutes}分${stats.elapsed.inSeconds % 60}秒';
+        _detail = '编译${result.stats.compiled} 跑通${result.stats.ran} · '
+            '耗时 ${result.stats.elapsed.inMinutes}分'
+            '${result.stats.elapsed.inSeconds % 60}秒';
         _progress = 1;
+        _liveRan = const [];
       });
     } catch (e) {
-      _activeRunner = null;
+      _activeJob = null;
       logProgress('失败 $e', logFilePath: logPath);
       if (!mounted) return;
       setState(() {
@@ -555,8 +420,7 @@ class _IndicatorSearchDialogState extends State<IndicatorSearchDialog> {
                       _detail = '正在取消扫描…';
                       _cancelling = true;
                     });
-                    _searchCancelled = true;
-                    _activeRunner?.requestCancel();
+                    _activeJob?.cancel();
                   },
             child: Text(_cancelling ? '正在取消…' : '取消扫描'),
           ),

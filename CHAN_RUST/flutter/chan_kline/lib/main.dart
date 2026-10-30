@@ -95,7 +95,10 @@ import 'step_freeze/step_freeze_session_state.dart';
 import 'agent_api/agent_api_host.dart';
 import 'agent_api/agent_api_server.dart';
 import 'agent_api/agent_config_key.dart';
+import 'agent_api/agent_task.dart';
 import 'agent_api/indicator_label_map.dart';
+import 'indicator_search/indicator_search_job.dart';
+import 'indicator_search/search_core.dart';
 
 const _robotVerifyDefine = bool.fromEnvironment('ROBOT_VERIFY');
 const _robotVerifySuiteDefine = String.fromEnvironment(
@@ -1156,6 +1159,238 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
         return 'regress_k=$v';
     }
   }
+
+  /// ---------------- Agent 异步任务（寻优 / 回测） ----------------
+
+  /// 后台任务表（ID → 状态）；只保留近期任务，避免长时间挂机越积越多。
+  final Map<String, AgentTask> _agentTasks = {};
+  int _agentTaskSeq = 0;
+  final Map<String, IndicatorSearchJob> _agentSearchJobs = {};
+
+  @override
+  List<Map<String, dynamic>> agentTasks() =>
+      (_agentTasks.values.toList()
+            ..sort((a, b) => b.startedAt.compareTo(a.startedAt)))
+          .map((t) => t.toJson())
+          .toList();
+
+  AgentTask _newAgentTask(String kind) {
+    final task = AgentTask(
+      id: '${kind}_${++_agentTaskSeq}',
+      kind: kind,
+      startedAt: DateTime.now(),
+    );
+    _agentTasks[task.id] = task;
+    // 超过 20 条时，从最老的终态任务开始清。
+    while (_agentTasks.length > 20) {
+      final finished = _agentTasks.values.where((t) => !t.running).toList()
+        ..sort((a, b) => a.startedAt.compareTo(b.startedAt));
+      if (finished.isEmpty) break;
+      _agentTasks.remove(finished.first.id);
+    }
+    return task;
+  }
+
+  AgentTask _requireAgentTask(String id) {
+    final task = _agentTasks[id];
+    if (task == null) {
+      throw AgentApiError(
+        '未知 task_id：$id（可用：${_agentTasks.keys.join(",")}）',
+      );
+    }
+    return task;
+  }
+
+  @override
+  Future<String> startSearch({
+    String? code,
+    String? period,
+    String? begin,
+    String? end,
+    int? maxCandidates,
+    double inRatio = 0.7,
+  }) async {
+    if (_mlSession.isActive) {
+      throw AgentApiError('机器学习运行中：请先退出机器学习再寻优');
+    }
+    if (!_hasSession || _allBars.isEmpty) {
+      throw AgentApiError('请先加载 K 线（load_code）');
+    }
+    if (_stepIdx < 0) {
+      throw AgentApiError('尚未步进：请先 step 或 run_to_end 至少到第 0 根');
+    }
+    if (_stepIdx < _allBars.length - 1) {
+      throw AgentApiError(
+        '寻优与策略回测共用主图冻结：当前 step_idx=$_stepIdx，'
+        '请先 run_to_end 步进到区间最后一根（idx=${_allBars.length - 1}）',
+      );
+    }
+    final curCode = _selectedCode ?? '';
+    final wantCode = (code ?? curCode).trim();
+    if (wantCode.isEmpty) {
+      throw AgentApiError('未选择股票：请先 load_code');
+    }
+    if (wantCode != curCode) {
+      throw AgentApiError(
+        'code=$wantCode 与当前会话 $curCode 不一致：请先 load_code 同一代码',
+      );
+    }
+    final curPeriod = _period;
+    final wantPeriod = (period ?? curPeriod).trim();
+    if (wantPeriod != curPeriod) {
+      throw AgentApiError(
+        'period=$wantPeriod 与当前会话 $curPeriod 不一致：请先 set_period',
+      );
+    }
+    final curBegin = _fmtDateTime(_beginDate);
+    final curEnd = _fmtDateTime(_endDate);
+    final wantBegin = (begin ?? curBegin).trim();
+    final wantEnd = (end ?? curEnd).trim();
+    if (wantBegin != curBegin || wantEnd != curEnd) {
+      throw AgentApiError(
+        'begin/end=$wantBegin~$wantEnd 与当前会话区间 $curBegin~$curEnd 不一致：'
+        '请先用 load_code 指定同一区间',
+      );
+    }
+    if (inRatio <= 0 || inRatio >= 1) {
+      throw AgentApiError('in_ratio 必须在 (0,1) 之间（默认 0.7）');
+    }
+    if (maxCandidates != null && maxCandidates < 1) {
+      throw AgentApiError('max_candidates 必须为正整数');
+    }
+    if (_hasRunningAgentTask('search')) {
+      throw AgentApiError('已有寻优任务在跑：请先 cancel_search 或等它结束');
+    }
+
+    final resultsPath =
+        (await IndicatorSearchSettingsStore.resultsFile()).path;
+    final logPath = (await IndicatorSearchSettingsStore.logFile()).path;
+    if (!mounted) throw AgentApiError('主界面未就绪');
+    final task = _newAgentTask('search');
+    final job = IndicatorSearchJob(IndicatorSearchJobParams(
+      code: curCode,
+      period: curPeriod,
+      beginText: curBegin,
+      endText: curEnd,
+      dataRoot: _dataRoot,
+      tickSource: _tickSourceFor(curCode),
+      mathConfig: _mathIndicatorConfig,
+      chipConfig: _chipConfig,
+      strategyConfig: _strategyConfig,
+      resultsPath: resultsPath,
+      logPath: logPath,
+      featureLookup: _pipelineSession?.cache.lookup,
+      truncationCheck: _truncationCheck,
+      mainSessionHarness: _mainSessionHarnessForSearch(),
+      initialBars: List<KlineBar>.from(_allBars),
+      maxCandidates: maxCandidates,
+      inRatio: inRatio,
+    ));
+    _agentSearchJobs[task.id] = job;
+    setState(() => _indicatorSearchRunning = true);
+    _msgHistory.append('智能体寻优开始：$curCode $curPeriod task=${task.id}');
+    unawaited(_runAgentSearch(task, job));
+    return task.id;
+  }
+
+  Future<void> _runAgentSearch(AgentTask task, IndicatorSearchJob job) async {
+    try {
+      final result = await job.run(onProgress: (p) {
+        task.detail = '${p.phase}：${p.detail}';
+        task.fraction = p.fraction;
+        final m = RegExp(r'(\d+)/(\d+)').firstMatch(p.detail);
+        if (m != null) {
+          task.done = int.parse(m.group(1)!);
+          task.total = int.parse(m.group(2)!);
+        }
+        _agentApiServer?.refreshStateFile();
+      });
+      task.finishedAt = DateTime.now();
+      if (result == null) {
+        task.phase = 'cancelled';
+        task.detail = '冻结阶段已取消（未产生结果）';
+        _msgHistory.append('智能体寻优已取消（冻结阶段）task=${task.id}');
+      } else {
+        task.done = result.stats.ran;
+        task.total = result.stats.total;
+        task.fraction = 1;
+        task.payload = result.stats.verdicts;
+        task.summary = {
+          'code': job.params.code,
+          'period': job.params.period,
+          'begin': job.params.beginText,
+          'end': job.params.endText,
+          'bar_count': result.barCount,
+          'max_kn': result.maxKn,
+          'split_x': result.splitX,
+          'in_ratio': job.params.inRatio,
+          'compiled': result.stats.compiled,
+          'ran': result.stats.ran,
+          'total': result.stats.total,
+          'cancelled': result.stats.cancelled,
+          'elapsed_seconds': result.stats.elapsed.inSeconds,
+          'results_path': result.resultsPath,
+          'use_optimized_build': result.useOptimizedBuild,
+          'candidate_limit': result.maxCandidates,
+          'build_summary': result.buildSummary.toDisplayLine(),
+        };
+        task.phase = result.stats.cancelled ? 'cancelled' : 'done';
+        task.detail = '编译${result.stats.compiled} 跑通${result.stats.ran} · '
+            '耗时 ${result.stats.elapsed.inMinutes}分'
+            '${result.stats.elapsed.inSeconds % 60}秒';
+        _msgHistory.append(
+          '智能体寻优${result.stats.cancelled ? "已取消" : "完成"}：'
+          '跑通${result.stats.ran}条 task=${task.id}',
+        );
+      }
+    } catch (e) {
+      task.finishedAt = DateTime.now();
+      task.phase = 'failed';
+      task.error = '$e';
+      task.detail = '失败';
+      _msgHistory.append('智能体寻优失败：$e task=${task.id}');
+    } finally {
+      _agentSearchJobs.remove(task.id);
+      if (mounted) setState(() => _indicatorSearchRunning = false);
+      _agentApiServer?.refreshStateFile();
+    }
+  }
+
+  @override
+  Map<String, dynamic> searchTaskStatus(
+    String taskId, {
+    int offset = 0,
+    int limit = 200,
+  }) {
+    final task = _requireAgentTask(taskId);
+    final payload = task.payload;
+    final verdicts = payload is List<ComboVerdict> ? payload : const <ComboVerdict>[];
+    final begin = offset.clamp(0, verdicts.length);
+    final end = (begin + limit).clamp(begin, verdicts.length);
+    return {
+      ...task.toJson(),
+      'verdicts_total': verdicts.length,
+      'offset': begin,
+      'limit': limit,
+      'verdicts': [
+        for (var i = begin; i < end; i++) verdicts[i].toJson(),
+      ],
+    };
+  }
+
+  @override
+  bool cancelSearch(String taskId) {
+    final task = _agentTasks[taskId];
+    if (task == null || task.kind != 'search' || !task.running) return false;
+    final job = _agentSearchJobs[taskId];
+    if (job == null) return false;
+    job.cancel();
+    task.detail = '已请求取消…';
+    return true;
+  }
+
+  bool _hasRunningAgentTask(String kind) =>
+      _agentTasks.values.any((t) => t.kind == kind && t.running);
 
   /// 运行消息历史（与界面「历史记录」同源，按时间正序取末 N 条）。
   @override

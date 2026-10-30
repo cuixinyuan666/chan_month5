@@ -121,9 +121,10 @@ class IndicatorSearchRunner {
     int yieldEvery = 25,
     VerdictSink? sink,
     int sinkFlushEvery = 80,
+    double inRatio = 0.7,
   }) async {
     _cancelRequested = false;
-    final splitX = splitBarIdx(bars);
+    final splitX = splitBarIdx(bars, inRatio: inRatio);
     var compiled = 0, ran = 0;
     var cancelled = false;
     final all = <ComboVerdict>[];

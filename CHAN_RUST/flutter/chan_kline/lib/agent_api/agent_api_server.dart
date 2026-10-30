@@ -24,6 +24,10 @@ const int _kMaxKlineLimit = 50000;
 const int _kDefaultMessageLimit = 50;
 const int _kMaxMessageLimit = 500;
 
+/// 任务查询的 verdicts 分页默认条数与硬上限（全量请读 TSV）。
+const int _kDefaultTaskPage = 200;
+const int _kMaxTaskPage = 2000;
+
 /// 令牌文件（启动时写入，agent 请求需带 `X-Agent-Token`）。
 const String _tokenFileName = 'agent_api_token.txt';
 
@@ -159,6 +163,18 @@ class AgentApiServer {
           await _respond(req, _klinesJson(self.host, req.uri.queryParameters));
         } else if (method == 'GET' && path == '/messages') {
           await _respond(req, _messagesJson(self.host, req.uri.queryParameters));
+        } else if (method == 'GET' && path == '/search_task') {
+          await _respond(
+            req,
+            _taskStatusJson(
+              req.uri.queryParameters,
+              (id, off, lim) => self.host.searchTaskStatus(
+                id,
+                offset: off,
+                limit: lim,
+              ),
+            ),
+          );
         } else if (method == 'GET' && path == '/snapshot') {
           await _respond(req, _snapshotJson(self.host));
         } else if (method == 'GET' && path.startsWith('/tooltip')) {
@@ -249,6 +265,7 @@ class AgentApiServer {
         'donchian_n': host.mathIndicatorConfig.donchianN,
         'regress_k': host.mathIndicatorConfig.regressK,
       },
+      'tasks': host.agentTasks(),
     };
   }
 
@@ -339,6 +356,35 @@ class AgentApiServer {
       'returned': rows.length,
       'rows': rows.map((e) => e.toJson()).toList(),
     };
+  }
+
+  /// 任务状态查询公共件：`task_id` 必填，`offset`/`limit` 控制 verdicts 分页。
+  Map<String, dynamic> _taskStatusJson(
+    Map<String, String> q,
+    Map<String, dynamic> Function(String id, int offset, int limit) load,
+  ) {
+    final id = (q['task_id'] ?? '').trim();
+    if (id.isEmpty) {
+      return {'ok': false, 'message': '需要 task_id 参数'};
+    }
+    final offsetRaw = (q['offset'] ?? '').trim();
+    final limitRaw = (q['limit'] ?? '').trim();
+    final offset = offsetRaw.isEmpty ? 0 : int.tryParse(offsetRaw);
+    final limit = limitRaw.isEmpty ? _kDefaultTaskPage : int.tryParse(limitRaw);
+    if (offset == null || offset < 0) {
+      return {'ok': false, 'message': 'offset 必须为非负整数'};
+    }
+    if (limit == null || limit <= 0) {
+      return {'ok': false, 'message': 'limit 必须为正整数'};
+    }
+    try {
+      return {
+        'ok': true,
+        ...load(id, offset, min(limit, _kMaxTaskPage)),
+      };
+    } on AgentApiError catch (e) {
+      return {'ok': false, 'message': e.message};
+    }
   }
 
   Map<String, dynamic> _snapshotJson(AgentApiHost host) {
@@ -481,6 +527,35 @@ class AgentApiServer {
         } on AgentApiError catch (e) {
           return AgentCommandResult(ok: false, message: e.message);
         }
+      case 'run_search':
+        try {
+          final taskId = await host.startSearch(
+            code: cmd.code,
+            period: cmd.period,
+            begin: cmd.begin,
+            end: cmd.end,
+            maxCandidates: cmd.maxCandidates,
+            inRatio: cmd.inRatio ?? 0.7,
+          );
+          return AgentCommandResult(
+            ok: true,
+            message: '寻优已启动：$taskId（用 GET /search_task?task_id=$taskId 轮询）',
+            data: {'task_id': taskId},
+          );
+        } on AgentApiError catch (e) {
+          return AgentCommandResult(ok: false, message: e.message);
+        }
+      case 'cancel_search':
+        final taskId = (cmd.taskId ?? '').trim();
+        if (taskId.isEmpty) {
+          return AgentCommandResult(ok: false, message: 'cancel_search 需要 task_id');
+        }
+        final accepted = host.cancelSearch(taskId);
+        return AgentCommandResult(
+          ok: accepted,
+          message: accepted ? '已请求取消 $taskId' : '任务 $taskId 不存在或已结束',
+          data: {'task_id': taskId},
+        );
       case 'run_robot_verify':
         final suiteId = cmd.period ?? 'jiyou_keypoint_20261001';
         final klineRoot = host.dataRoot.isEmpty

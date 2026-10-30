@@ -51,8 +51,8 @@ class ComboVerdict {
     'name': name,
     'buyText': buyText,
     'sellText': sellText,
-    'inSample': _segmentToJson(inSample),
-    'outSample': _segmentToJson(outSample),
+    'inSample': segmentMetricsToJson(inSample),
+    'outSample': segmentMetricsToJson(outSample),
     if (buyAst != null) 'buyAst': buyAst!.toJson(),
     if (sellAst != null) 'sellAst': sellAst!.toJson(),
     'splitX': splitX,
@@ -92,7 +92,8 @@ MetricNum _mnBack(Object? v) {
   return const MetricNum.unavailable();
 }
 
-Map<String, dynamic> _segmentToJson(SegmentMetrics s) => {
+/// 段指标转 JSON（寻优 / 回测共用；`inf` 用字符串保留，不可计算为 null）。
+Map<String, dynamic> segmentMetricsToJson(SegmentMetrics s) => {
   'trades': s.trades,
   'winning': s.winning,
   'losing': s.losing,
