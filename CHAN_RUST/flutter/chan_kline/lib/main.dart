@@ -11,6 +11,7 @@ import 'package:window_manager/window_manager.dart';
 
 import 'bridge/chan_bridge.dart';
 import 'data/mobile_data_root.dart';
+import 'data/telegram_data_source.dart';
 import 'ui/mobile/android_shell.dart';
 import 'compute/chip_profile_compute.dart';
 import 'compute/tick_dist_profile_compute.dart';
@@ -50,6 +51,7 @@ import 'backtest/condition_indicators.dart';
 import 'app/background_keep_alive.dart';
 import 'settings/interaction_mode_store.dart';
 import 'ui/settings_panel_widgets.dart';
+import 'ui/telegram_settings_dialog.dart';
 import 'models/zs_frame.dart';
 import 'models/buy1_frame.dart';
 import 'models/sell1_frame.dart';
@@ -71,6 +73,7 @@ import 'models/level_models.dart';
 import 'models/k1_analysis.dart';
 import 'models/kline_combine_bundle.dart';
 import 'settings/chip_settings_store.dart';
+import 'settings/telegram_settings_store.dart';
 import 'settings/math_indicator_settings_store.dart';
 import 'settings/indicator_search_last_result_store.dart';
 import 'settings/indicator_search_settings_store.dart';
@@ -445,6 +448,7 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
   ChipConfig _chipConfig = const ChipConfig();
   /// 笔数分布配置（主图左侧；同 JSON 嵌套 tickDist）
   TickDistConfig _tickDistConfig = const TickDistConfig();
+  TelegramSettings _telegramSettings = const TelegramSettings();
   /// 本会话是否允许筹码/笔数依赖（弹窗选「不继续」后关掉，不改落盘）
   bool _chipTickDepsAllowed = true;
   /// 本会话是否画笔数分布（「分笔笔数为 0」弹窗专用）
@@ -466,6 +470,26 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
   }
 
   String _tickSourceFor(String code) => code == 'test' ? 'file' : 'protocol';
+
+  bool get _useTelegramDaily =>
+      _telegramSettings.telegramEnabled &&
+      _period == 'day' &&
+      _selectedCode != 'test';
+
+  Future<void> _openTelegramSettings({bool closeSettingsSheet = false}) async {
+    if (closeSettingsSheet && Navigator.canPop(context)) {
+      Navigator.pop(context);
+    }
+    final next = await showTelegramSettingsDialog(context, _telegramSettings);
+    if (next == null || !mounted) return;
+    setState(() => _telegramSettings = next);
+    await TelegramSettingsStore.save(next);
+    _msgHistory.append(
+      next.telegramEnabled
+          ? '已启用 Telegram 日线数据源（分笔仍走通达信/本地缓存）'
+          : '已切回通达信协议数据源',
+    );
+  }
   /// 数学指标参数（均线/通道/MACD/BOLL/RSI/KDJ/Demark）
   MathIndicatorConfig _mathIndicatorConfig = const MathIndicatorConfig();
   /// 步进冻结仓（与机器人验证 `StepFreezeMerger` 同源）
@@ -754,10 +778,14 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
 
   Future<void> _loadChipConfig() async {
     final both = await ChipSettingsStore.loadBoth();
+    final tg = await TelegramSettingsStore.load();
     if (!mounted) return;
     setState(() {
       _chipConfig = both.$1;
       _tickDistConfig = both.$2;
+      if (tg.botToken.isNotEmpty || tg.chatId.isNotEmpty) {
+        _telegramSettings = tg;
+      }
     });
   }
 
@@ -1969,17 +1997,62 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
     });
     _disposePipelineSession();
     TickQuality? quality;
+    List<KlineBar> bars = const [];
+    var srcHint = '';
     try {
-      final loaded = _bridge.loadKlinesEx(
-        dataRoot: _dataRoot,
-        code: code,
-        beginDate: _fmtDateTime(_beginDate),
-        endDate: _fmtDateTime(_endDate),
-        period: _period,
-        tickSource: _tickSourceFor(code),
-      );
-      quality = loaded.quality;
-      final bars = loaded.bars;
+      if (_useTelegramDaily) {
+        try {
+          final tg = TelegramDataSource(
+            settings: _telegramSettings,
+            cacheRoot: Directory(_dataRoot),
+          );
+          bars = await tg.loadDailyBars(
+            code: code,
+            begin: _beginDate,
+            end: _endDate,
+          );
+          quality = const TickQuality(
+            source: 'telegram',
+            skipPrompts: true,
+            hasBuy: true,
+            hasSell: true,
+            hasNeutral: true,
+          );
+          srcHint = '（Telegram 日线 CSV）';
+        } catch (e) {
+          _msgHistory.append('Telegram 取数失败，回退通达信：$e');
+          final loaded = _bridge.loadKlinesEx(
+            dataRoot: _dataRoot,
+            code: code,
+            beginDate: _fmtDateTime(_beginDate),
+            endDate: _fmtDateTime(_endDate),
+            period: _period,
+            tickSource: _tickSourceFor(code),
+          );
+          quality = loaded.quality;
+          bars = loaded.bars;
+          srcHint = loaded.quality.source == 'protocol'
+              ? '（通达信协议分笔）'
+              : '（本地分笔文件）';
+        }
+      } else {
+        final loaded = _bridge.loadKlinesEx(
+          dataRoot: _dataRoot,
+          code: code,
+          beginDate: _fmtDateTime(_beginDate),
+          endDate: _fmtDateTime(_endDate),
+          period: _period,
+          tickSource: _tickSourceFor(code),
+        );
+        quality = loaded.quality;
+        bars = loaded.bars;
+        final directOhlc = code == 'test' && _hasTestOhlcCsv();
+        srcHint = directOhlc
+            ? '（直读custom.ohlc.csv，忽略周期聚合）'
+            : (quality.source == 'protocol'
+                ? '（通达信协议分笔）'
+                : '（本地分笔文件）');
+      }
       final tickDistOn = _tickDistConfig.enabled;
       final pendingMute = quality.shouldPrompt(tickDistEnabled: tickDistOn);
       setState(() {
@@ -2015,9 +2088,13 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
         _clearBacktestSession();
       });
       final directOhlc = code == 'test' && _hasTestOhlcCsv();
-      final srcHint = directOhlc
-          ? '（直读custom.ohlc.csv，忽略周期聚合）'
-          : (quality.source == 'protocol' ? '（通达信协议分笔）' : '（本地分笔文件）');
+      if (srcHint.isEmpty) {
+        srcHint = directOhlc
+            ? '（直读custom.ohlc.csv，忽略周期聚合）'
+            : (quality!.source == 'protocol'
+                ? '（通达信协议分笔）'
+                : '（本地分笔文件）');
+      }
       _msgHistory.append(
         '加载K0：$code ${_fmtDateTime(_beginDate)}~${_fmtDateTime(_endDate)} '
         '${_periods[_period] ?? _period} 共${bars.length}根$srcHint',
@@ -3265,6 +3342,16 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
           label: '加载截止时间',
           value: _fmtDateTime(_endDate),
           onTap: _busy ? null : () => _pickDateTime(isBegin: false),
+        ),
+        const SizedBox(height: 10),
+        SettingsOutlinedButton(
+          label: _telegramSettings.telegramEnabled
+              ? 'Telegram 数据源（已启用日线）'
+              : 'Telegram 数据源',
+          icon: Icons.cloud_download_outlined,
+          onPressed: _busy ? null : () => _openTelegramSettings(),
+          onHelp: () => _openTelegramSettings(),
+          helpTooltip: 'Telegram 取数说明',
         ),
         const SizedBox(height: 8),
         TextFormField(

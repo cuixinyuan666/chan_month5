@@ -31,23 +31,49 @@ from pathlib import Path
 API = "https://api.telegram.org/bot{token}/{method}"
 
 
-def api_call(token: str, method: str, payload: dict | None = None, timeout: int = 60) -> dict:
+def api_call(
+    token: str,
+    method: str,
+    payload: dict | None = None,
+    timeout: int = 120,
+    retries: int = 5,
+) -> dict:
     url = API.format(token=token, method=method)
     data = None
     headers = {}
     if payload is not None:
         data = json.dumps(payload).encode("utf-8")
         headers["Content-Type"] = "application/json"
-    req = urllib.request.Request(url, data=data, headers=headers, method="POST" if data else "GET")
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", errors="replace")
+    last_err: Exception | None = None
+    for attempt in range(retries):
+        req = urllib.request.Request(
+            url, data=data, headers=headers, method="POST" if data else "GET"
+        )
+        proxies = urllib.request.getproxies()
+        handlers = []
+        if proxies.get("https") or proxies.get("http"):
+            handlers.append(urllib.request.ProxyHandler(proxies))
+        handlers.append(urllib.request.HTTPSHandler())
+        opener = urllib.request.build_opener(*handlers)
         try:
-            return json.loads(body)
-        except Exception:
-            return {"ok": False, "error_code": e.code, "description": body}
+            with opener.open(req, timeout=timeout) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="replace")
+            try:
+                return json.loads(body)
+            except Exception:
+                last_err = e
+                if e.code >= 500:
+                    time.sleep(2 + attempt * 2)
+                    continue
+                return {"ok": False, "error_code": e.code, "description": body}
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            last_err = e
+            time.sleep(2 + attempt * 2)
+    if last_err:
+        raise last_err
+    return {"ok": False, "description": "重试耗尽"}
 
 
 def multipart(fields: dict, file_field: str, file_path: Path) -> tuple[bytes, str]:
@@ -77,10 +103,16 @@ def send_document(token: str, chat_id: str, path: Path, caption: str, retries: i
         path,
     )
     url = API.format(token=token, method="sendDocument")
+    proxies = urllib.request.getproxies()
+    handlers = []
+    if proxies.get("https") or proxies.get("http"):
+        handlers.append(urllib.request.ProxyHandler(proxies))
+    handlers.append(urllib.request.HTTPSHandler())
+    opener = urllib.request.build_opener(*handlers)
     for attempt in range(retries):
         req = urllib.request.Request(url, data=body, headers={"Content-Type": ctype}, method="POST")
         try:
-            with urllib.request.urlopen(req, timeout=180) as resp:
+            with opener.open(req, timeout=180) as resp:
                 return json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             text = e.read().decode("utf-8", errors="replace")
@@ -222,6 +254,17 @@ def main() -> int:
     index["count"] = len(state["files"])
     index["generated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
     save_json(index_path, index)
+
+    # 供 App 设置读取（不含 token）
+    app_hint = out / "telegram_app_hint.json"
+    save_json(
+        app_hint,
+        {
+            "chat_id": args.chat_id,
+            "index_file_id": state.get("index_file_id", ""),
+            "count": index["count"],
+        },
+    )
 
     # 上传索引本身
     resp = send_document(

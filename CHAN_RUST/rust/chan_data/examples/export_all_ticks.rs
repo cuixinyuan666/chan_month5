@@ -281,7 +281,7 @@ fn main() {
         .unwrap_or_else(today8);
     let begin = arg_value(&args, "--begin")
         .and_then(|v| v.parse().ok())
-        .unwrap_or(end);
+        .unwrap_or(19900101);
     let threads: usize = arg_value(&args, "--threads")
         .and_then(|v| v.parse().ok())
         .unwrap_or(12)
