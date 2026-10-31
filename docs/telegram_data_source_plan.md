@@ -41,9 +41,16 @@ bot 聊天记录
 | `lib/main.dart` | `_loadKlines` 增加 Telegram 分支（复用现有 K 线装载出口） |
 | `test/data/telegram_data_source_test.dart` | 新增：索引解析、CSV 解析、缺失回退的单测 |
 
-**边界**：不改 Rust 缠论内核、不改 `chan_bridge` 管道、不改步进/冻结语义；Telegram 只是「取 K 线」的又一个数据源。
+**边界**：不改 Rust 缠论内核、不改 `chan_bridge` 管道、不改步进/冻结语义；Telegram 只是「取 K 线/分笔」的又一个数据源。
 
-## 五、需要用户提供
+## 五、分笔数据（新增 · 2026-10-31）
+
+- **数据源**：通达信 `0x0fc6`（带笔数、买卖方向），与 App 现有 `.tdx_protocol_cache/<code>/<date8>_<code>.txt` **同格式**。
+- **导出器**：`cargo run --release -p chan_data --example export_all_ticks`（参数 `--begin/--end/--codes/--threads/--cache-root`）。
+- **智能体验证驱动**：App 设 `CHAN_AGENT_API=1` 后，`POST /command`：`type=export_ticks`，字段 `code=000001,600519`（逗号分隔）、`begin/end=YYYYMMDD`、`quantity=线程数`；进度与异常：`GET /export_task?task_id=…`。
+- **全历史体量（实测外推）**：3 只 × 4 交易日 ≈ 1.1 MB、5.1 万行 → 约 **94 KB/股票·日**；全 A 约 5223 只 × 5000 交易日 ≈ **2.4 TB**，Telegram 与单机磁盘均不现实。**全量拉取前必须先约定时间窗口**（例如最近 20 个交易日 ≈ 10 GB 量级）。
+
+## 六、需要用户提供
 
 1. `TG_BOT_TOKEN`（@BotFather 生成）
 2. `TG_CHAT_ID`（与 bot 的会话 id；可先给 bot 发一条消息，再用 `getUpdates` 取）

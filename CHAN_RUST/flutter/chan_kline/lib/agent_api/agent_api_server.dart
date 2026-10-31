@@ -9,6 +9,7 @@ import 'dart:math';
 
 import '../agent_api/agent_api_host.dart';
 import '../agent_api/agent_config_key.dart';
+import '../agent_api/agent_data_export_runner.dart';
 import '../compute/kn_volume_series_compute.dart';
 import '../robot_verify/robot_verify_paths.dart';
 import '../robot_verify/robot_verify_runner.dart';
@@ -187,6 +188,8 @@ class AgentApiServer {
               ),
             ),
           );
+        } else if (method == 'GET' && path == '/export_task') {
+          await _respond(req, _exportTaskJson(req.uri.queryParameters));
         } else if (method == 'GET' && path == '/snapshot') {
           await _respond(req, _snapshotJson(self.host));
         } else if (method == 'GET' && path.startsWith('/tooltip')) {
@@ -277,7 +280,10 @@ class AgentApiServer {
         'donchian_n': host.mathIndicatorConfig.donchianN,
         'regress_k': host.mathIndicatorConfig.regressK,
       },
-      'tasks': host.agentTasks(),
+      'tasks': [
+        ...host.agentTasks(),
+        ...AgentDataExportRunner.instance.listTasksJson(),
+      ],
     };
   }
 
@@ -397,6 +403,18 @@ class AgentApiServer {
     } on AgentApiError catch (e) {
       return {'ok': false, 'message': e.message};
     }
+  }
+
+  Map<String, dynamic> _exportTaskJson(Map<String, String> q) {
+    final id = (q['task_id'] ?? '').trim();
+    if (id.isEmpty) {
+      return {'ok': false, 'message': '需要 task_id 参数'};
+    }
+    final t = AgentDataExportRunner.instance.task(id);
+    if (t == null) {
+      return {'ok': false, 'message': '任务不存在：$id'};
+    }
+    return {'ok': true, ...t.toJson()};
   }
 
   Map<String, dynamic> _snapshotJson(AgentApiHost host) {
@@ -614,6 +632,48 @@ class AgentApiServer {
           message: accepted
               ? '已请求取消 $taskId（回测为同步计算，仅计算开始前生效）'
               : '任务 $taskId 不存在或已结束',
+          data: {'task_id': taskId},
+        );
+      case 'export_ticks':
+      case 'export_daily':
+        try {
+          final kind = cmd.type == 'export_daily' ? 'daily' : 'ticks';
+          final threads = (cmd.quantity != null && cmd.quantity! > 0)
+              ? cmd.quantity!
+              : 12;
+          final task = await AgentDataExportRunner.instance.start(
+            kind: kind,
+            codes: cmd.code,
+            begin: cmd.begin,
+            end: cmd.end,
+            threads: threads,
+          );
+          return AgentCommandResult(
+            ok: true,
+            message:
+                '数据导出已启动：${task.id}，GET /export_task?task_id=${task.id} 查询进度与异常',
+            data: {
+              'task_id': task.id,
+              'kind': kind,
+              'log_path': task.logPath,
+              'out_dir': task.outDir,
+            },
+          );
+        } catch (e) {
+          return AgentCommandResult(ok: false, message: '$e');
+        }
+      case 'cancel_export':
+        final taskId = (cmd.taskId ?? '').trim();
+        if (taskId.isEmpty) {
+          return AgentCommandResult(
+            ok: false,
+            message: 'cancel_export 需要 task_id',
+          );
+        }
+        final accepted = AgentDataExportRunner.instance.cancel(taskId);
+        return AgentCommandResult(
+          ok: accepted,
+          message: accepted ? '已取消导出 $taskId' : '任务 $taskId 不存在或已结束',
           data: {'task_id': taskId},
         );
       case 'run_robot_verify':
