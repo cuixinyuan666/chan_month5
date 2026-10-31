@@ -20,6 +20,7 @@ mod seg_eigen;
 mod segment_first;
 mod tick;
 mod tdx;
+mod tdx_daily;
 mod zs;
 
 pub use bs_eval::{
@@ -74,6 +75,10 @@ pub use pipeline::{
 pub use segment_first::{aggregate_unit_range, pole_x_in_range};
 pub use seg_eigen::{
     BarSubSnapshot, EigenFrame, FirstSegDirSignal, K1AnalysisBundle, K1ConfirmSignal, K1Line,
+};
+pub use tdx_daily::{
+    is_a_share, market_of_code as tdx_market_of_code, DailyBar, SecurityInfo, TdxSession,
+    BARS_PAGE, LIST_PAGE,
 };
 pub use tick::TickQuality;
 pub use zs::{
