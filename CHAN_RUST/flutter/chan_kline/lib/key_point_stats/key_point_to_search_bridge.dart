@@ -14,7 +14,7 @@ import 'key_point_combo_contrast.dart';
 
 /// 一个计优键翻译出的交易变量。翻译不了返回 null。
 String? tradeVarIdOf(String statKey) {
-  final m = RegExp(r'^sub\.(rsi|macd_dif|macd_dea|macd_hist|kdj_k|kdj_d|kdj_j)_(\d+)$')
+  final m = RegExp(r'^sub\.(rsi|macd_dif|macd_dea|macd_hist|kdj_k|kdj_d|kdj_j|volume)_(\d+)$')
       .firstMatch(statKey);
   if (m == null) return null;
   final kind = m.group(1)!;
@@ -34,6 +34,8 @@ String? tradeVarIdOf(String statKey) {
       return kdjFieldId(kn, 'D');
     case 'kdj_j':
       return kdjFieldId(kn, 'J');
+    case 'volume':
+      return knVolumeId(kn);
   }
   return null;
 }
@@ -41,27 +43,33 @@ String? tradeVarIdOf(String statKey) {
 /// 把一个组合区分度结果翻译成一条寻优候选。
 ///
 /// [midpoints] 给出每个指标的分界值（通常取顶底两组均值的中点）。
-/// 组合里任何一个指标翻译不了或没有分界值，整条返回 null，不产出半截条件。
+///
+/// 翻译不了的指标（寻优没有对应交易变量）单独跳过，其余指标照常拼成组合；
+/// 至少剩一个指标才产出候选。整条丢弃会让「三个指标里有一个没登记」的组合
+/// 全部作废，而它剩下的两个条件本身仍然是实测有效的顶底分界。
+/// 候选名只列真正进了条件的指标，不拿没翻译的部分充数。
 ComboCand? searchCandidateFromCombo(
   KeyPointComboContrast combo,
   Map<String, double> midpoints,
 ) {
+  final used = <String>[];
   TradeAst? buy;
   TradeAst? sell;
   for (var i = 0; i < combo.metricKeys.length; i++) {
     final key = combo.metricKeys[i];
     final varId = tradeVarIdOf(key);
     final mid = midpoints[key];
-    if (varId == null || mid == null) return null;
+    if (varId == null || mid == null) continue;
     final higherOnTop = combo.topHigher[i];
     // 买入站在「偏向底」的一侧，卖出站在「偏向顶」的一侧。
     final buyOp = higherOnTop ? TradeBinaryOp.lt : TradeBinaryOp.gt;
     final sellOp = higherOnTop ? TradeBinaryOp.gt : TradeBinaryOp.lt;
     buy = _and(buy, _cmp(varId, mid, buyOp));
     sell = _and(sell, _cmp(varId, mid, sellOp));
+    used.add('${combo.labelCns[i]}（${higherOnTop ? '顶更高' : '底更高'}）');
   }
   if (buy == null || sell == null) return null;
-  return ComboCand('计优组合｜${combo.ruleText}', buy, sell);
+  return ComboCand('计优组合｜K${combo.level}：${used.join(' 且 ')}', buy, sell);
 }
 
 TradeAst _cmp(String varId, double mid, TradeBinaryOp op) => TradeCmpAst(

@@ -2,10 +2,12 @@ import 'package:flutter/material.dart';
 
 import '../agent_handoff/agent_handoff_button.dart';
 import '../agent_handoff/agent_handoff_package.dart';
+import '../indicator_search/search_core.dart';
 import '../key_point_stats/key_point_collect.dart';
 import '../key_point_stats/key_point_stat_align.dart';
 import '../key_point_stats/key_point_stat_export.dart';
 import '../key_point_stats/key_point_stat_runner.dart';
+import '../key_point_stats/key_point_to_search_bridge.dart';
 import '../models/bar_feature_lookup.dart';
 import '../models/k0_confirm_signal.dart';
 import '../models/k0_line.dart';
@@ -40,6 +42,10 @@ class KeyPointStatsDialog extends StatefulWidget {
     this.peakRankMode = 'spatial',
     /// 仅供机器人验证的 Widget 测试注入：直接给定统计结果，跳过真跑。
     this.resultOverride,
+
+    /// 把计优找出的指标组合翻译成寻优候选后交回主界面去跑。
+    /// null = 不显示「拿去寻优」按钮（机器人验证等场景）。
+    this.onSearchWithCombos,
   });
 
   final String code;
@@ -61,6 +67,7 @@ class KeyPointStatsDialog extends StatefulWidget {
   final double chipBucketStep;
   final String peakRankMode;
   final KeyPointStatResult? resultOverride;
+  final Future<void> Function(List<ComboCand> cands)? onSearchWithCombos;
 
   @override
   State<KeyPointStatsDialog> createState() => _KeyPointStatsDialogState();
@@ -171,6 +178,33 @@ class _KeyPointStatsDialogState extends State<KeyPointStatsDialog> {
 
   int _asOf() => widget.bars.isEmpty ? -1 : widget.bars.last.idx;
 
+  /// 把组合区分度翻译成寻优候选：分界值取顶底两组均值的中点。
+  ///
+  /// 翻译不了的指标（筹码分箱等计优有、寻优没有的键）整条跳过，不产出半截条件。
+  Future<void> _searchWithCombos() async {
+    final r = _result;
+    final cb = widget.onSearchWithCombos;
+    if (r == null || cb == null) return;
+    final midpoints = <String, double>{
+      for (final c in r.contrasts)
+        if (c.topMean.isFinite && c.bottomMean.isFinite)
+          c.metricKey: (c.topMean + c.bottomMean) / 2,
+    };
+    final cands = <ComboCand>[];
+    for (final combo in r.comboContrasts) {
+      final cand = searchCandidateFromCombo(combo, midpoints);
+      if (cand != null) cands.add(cand);
+    }
+    if (cands.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('这些组合里没有能翻译成寻优条件的指标')),
+      );
+      return;
+    }
+    Navigator.pop(context);
+    await cb(cands);
+  }
+
   @override
   Widget build(BuildContext context) {
     final size = MediaQuery.sizeOf(context);
@@ -215,6 +249,13 @@ class _KeyPointStatsDialogState extends State<KeyPointStatsDialog> {
                   ),
       ),
       actions: [
+        if (_result != null &&
+            widget.onSearchWithCombos != null &&
+            _result!.comboContrasts.isNotEmpty)
+          TextButton(
+            onPressed: _searchWithCombos,
+            child: const Text('拿去寻优'),
+          ),
         if (_result != null)
           AgentHandoffButton(
             buildPackage: () async {

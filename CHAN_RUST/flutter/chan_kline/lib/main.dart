@@ -3838,11 +3838,51 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
         mathConfig: _mathIndicatorConfig,
         chipBucketStep: _chipConfig.bucketStep,
         peakRankMode: _chipConfig.peakRankConfig.schemeId,
+        // 计优找出的指标组合 → 寻优候选，直接开寻优验证「能不能赚钱、样本外稳不稳」。
+        onSearchWithCombos: (cands) async {
+          if (!mounted) return;
+          await _openIndicatorSearchWithCandidates(cands);
+        },
       ),
     );
     if (!mounted) return;
     setState(() => _keyPointStatRunning = false);
     _msgHistory.appendKeyPointStatsEnd();
+  }
+
+  /// 用计优桥生成的候选直接开寻优（跳过枚举，只跑这几条）。
+  Future<void> _openIndicatorSearchWithCandidates(List<ComboCand> cands) async {
+    if (_mlSession.isActive) {
+      _showSnack('请先退出机器学习');
+      return;
+    }
+    final code = _selectedCode;
+    if (code == null) {
+      _showSnack('请先选择股票');
+      return;
+    }
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      builder: (ctx) => IndicatorSearchDialog(
+        code: code,
+        period: _period,
+        beginText: _fmtDateTime(_beginDate),
+        endText: _fmtDateTime(_endDate),
+        dataRoot: _dataRoot,
+        tickSource: _tickSourceFor(code),
+        mathConfig: _mathIndicatorConfig,
+        chipConfig: _chipConfig,
+        strategyConfig: _strategyConfig,
+        featureLookup: _pipelineSession?.cache.lookup,
+        truncationCheck: _truncationCheck,
+        mainSessionHarness: _mainSessionHarnessForSearch(),
+        initialBars: List<KlineBar>.from(_allBars),
+        candidateOverride: cands,
+        onApplyToChart: _applySearchBacktestToChart,
+        onCacheSession: (snap) => _lastSearchSession = snap,
+      ),
+    );
   }
 
   /// 设置 · 上次寻优结果（读本地快照，与当次一致：同摘要/同排序/同头部）。

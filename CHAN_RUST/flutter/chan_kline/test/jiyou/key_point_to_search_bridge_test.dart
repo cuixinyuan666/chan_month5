@@ -13,6 +13,7 @@ void main() {
     expect(tradeVarIdOf('sub.rsi_1'), 'SUB.K1.RSI.VALUE');
     expect(tradeVarIdOf('sub.macd_dif_2'), 'SUB.K2.MACD.DIF');
     expect(tradeVarIdOf('sub.kdj_k_0'), 'SUB.K0.KDJ.K');
+    expect(tradeVarIdOf('sub.volume_0'), 'RAW.K0.VOLUME');
     expect(tradeVarIdOf('sub.unknown_1'), isNull);
     expect(tradeVarIdOf('rsi_1'), isNull);
   });
@@ -47,7 +48,7 @@ void main() {
     expect((sell.right as TradeCmpAst).op, TradeBinaryOp.lt);
   });
 
-  test('有指标翻译不了时整条不产出', () {
+  test('翻译不了的指标单独跳过，剩下的照常产出', () {
     final combo = KeyPointComboContrast(
       metricKeys: ['sub.rsi_1', 'metrics.chip.something'],
       labelCns: ['RSI', '筹码'],
@@ -56,9 +57,24 @@ void main() {
       lift: 0,
       level: 1,
     );
-    expect(
-      searchCandidateFromCombo(combo, {'sub.rsi_1': 50}),
-      isNull,
+    final cand = searchCandidateFromCombo(combo, {'sub.rsi_1': 50});
+    expect(cand, isNotNull);
+    // 只剩一个条件，不再包一层「并且」。
+    expect(cand!.buyAst, isA<TradeCmpAst>());
+    // 名字只列真正进了条件的指标，不能把没翻译的筹码写进去。
+    expect(cand.name, contains('RSI'));
+    expect(cand.name, isNot(contains('筹码')));
+  });
+
+  test('一个都翻译不了才返回 null', () {
+    final combo = KeyPointComboContrast(
+      metricKeys: ['metrics.chip.something'],
+      labelCns: ['筹码'],
+      topHigher: [true],
+      contrast: 1,
+      lift: 0,
+      level: 1,
     );
+    expect(searchCandidateFromCombo(combo, const {}), isNull);
   });
 }

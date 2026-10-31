@@ -292,7 +292,13 @@ class KeyPointStatRunner {
     const topK = 6;
     final out = <KeyPointComboContrast>[];
     for (final lv in levels) {
-      final ranked = contrasts.where((c) => c.level == lv).take(topK).toList();
+      // 组合只在指标账（sub.* / main.*）里找：价格、成交量、序号这类顶层列
+      // 也会排进单指标差异度，但它们不是「指标」，拿它们拼出来的组合只是
+      // 在复述价格趋势，实战里没有增量信息，也没法翻译成寻优条件。
+      final ranked = contrasts
+          .where((c) => c.level == lv && _isIndicatorKey(c.metricKey))
+          .take(topK)
+          .toList();
       if (ranked.length < 2) continue;
       final want = ranked.map((c) => c.metricKey).toSet();
       final columns = <String, MetricColumn>{};
@@ -324,6 +330,10 @@ class KeyPointStatRunner {
     out.sort((a, b) => b.contrast.compareTo(a.contrast));
     return out;
   }
+
+  /// 是否指标账里的键（`sub.xxx` / `main.xxx`），而非顶层价格列。
+  static bool _isIndicatorKey(String key) =>
+      key.startsWith('sub.') || key.startsWith('main.');
 
   /// 按点号路径读取一个数值（如 `sub.rsi_1`）。读不到或不是数返回 null。
   static double? _readNumeric(Map<String, dynamic> row, String key) {
