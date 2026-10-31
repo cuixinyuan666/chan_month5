@@ -269,6 +269,67 @@ impl TdxClient {
     }
 }
 
+/// 单只股票分笔批量导出用的拉取器：复用一个连接，失败自动重连。
+pub struct TickFetcher {
+    client: Option<TdxClient>,
+}
+
+impl Default for TickFetcher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TickFetcher {
+    pub fn new() -> Self {
+        Self { client: None }
+    }
+
+    /// 拉取某市场/代码/交易日的分笔（0x0fc6，带笔数与买卖方向）。
+    /// 目标市场无数据时按 深→沪 回退，兼容北交所代码市场号差异。
+    pub fn fetch_day(&mut self, market: u16, code: &str, date8: i32) -> Result<Vec<TickRow>> {
+        fn attempt(c: &mut TdxClient, market: u16, code: &str, date8: i32) -> Result<Vec<TickRow>> {
+            let mut ticks = c.history_day(market, code, date8)?;
+            if ticks.is_empty() && market != 0 {
+                ticks = c.history_day(0, code, date8)?;
+            }
+            if ticks.is_empty() && market != 1 {
+                ticks = c.history_day(1, code, date8)?;
+            }
+            Ok(ticks)
+        }
+        match attempt(ensure_client(&mut self.client)?, market, code, date8) {
+            Ok(t) => Ok(t),
+            Err(_) => {
+                self.client = Some(TdxClient::connect()?);
+                attempt(ensure_client(&mut self.client)?, market, code, date8)
+            }
+        }
+    }
+
+    /// 主动断开，下次调用重新选服务器。
+    pub fn reconnect(&mut self) {
+        self.client = None;
+    }
+}
+
+/// 分笔缓存文件路径：`<data_root>/.tdx_protocol_cache/<code>/<date8>_<code>.txt`。
+pub fn tick_cache_path(data_root: &Path, code: &str, date8: i32) -> PathBuf {
+    cache_path(data_root, code, date8)
+}
+
+/// 按 App 现有格式写一天分笔缓存，返回落盘路径。
+pub fn write_tick_cache(
+    data_root: &Path,
+    code: &str,
+    date8: i32,
+    ticks: &[TickRow],
+) -> Result<PathBuf> {
+    let path = cache_path(data_root, code, date8);
+    write_cache(&path, date8, code, ticks)?;
+    Ok(path)
+}
+
 /// 带笔数的历史分笔（命令 0x0fc6）。
 fn history_pkg(market: u16, code: &str, date: u32, start: u16, count: u16) -> Vec<u8> {
     let mut pkg = hex_bytes("0c013002020112001200c60f").unwrap_or_default();

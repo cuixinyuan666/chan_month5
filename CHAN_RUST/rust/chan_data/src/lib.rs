@@ -76,11 +76,12 @@ pub use segment_first::{aggregate_unit_range, pole_x_in_range};
 pub use seg_eigen::{
     BarSubSnapshot, EigenFrame, FirstSegDirSignal, K1AnalysisBundle, K1ConfirmSignal, K1Line,
 };
+pub use tdx::{load_protocol_ticks, tick_cache_path, write_tick_cache, TickFetcher};
 pub use tdx_daily::{
     is_a_share, market_of_code as tdx_market_of_code, DailyBar, SecurityInfo, TdxSession,
     BARS_PAGE, LIST_PAGE,
 };
-pub use tick::TickQuality;
+pub use tick::{TickQuality, TickRow};
 pub use zs::{
     build_zs_for_levels, find_zs, find_zs_with_confirmed, level_zs_frames, zs_frames_from_list,
     zs_to_frames, ZS, ZSConfig, ZSFrame, ZSCombineMode, ZSIncEngine,
