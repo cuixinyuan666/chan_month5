@@ -20,7 +20,19 @@ class ComboAtom {
   /// 中文短名，拼进组合名称里让人读得懂。
   final String label;
 
-  const ComboAtom({required this.key, required this.ast, required this.label});
+  /// 该基元实际读的那个变量（如 `SUB.K0.KDJ.D`）。
+  ///
+  /// 同一个变量只允许在组合里出现一次：`KDJ.D > 50 且 KDJ.D > 20` 里宽的那条
+  /// 被窄的完全覆盖，等于白加一条，会让组合数虚高、结果看起来像「找到了很多组合」。
+  /// null = 提取不出单一变量（组合式基元），退化为按 [key] 去重。
+  final String? variableKey;
+
+  const ComboAtom({
+    required this.key,
+    required this.ast,
+    required this.label,
+    this.variableKey,
+  });
 }
 
 /// 搜索产出的一个组合。
@@ -107,14 +119,15 @@ List<ComboCandidate> beamComboSearch({
         next.add(ComboCandidate(buys: buys, sells: sells, score: score));
       }
 
-      final haveBuy = cur.buys.map((a) => a.key).toSet();
+      // 同一变量在同一侧只允许出现一次（阈值宽的那条会被窄的完全覆盖）。
+      final haveBuy = cur.buys.map(_identity).toSet();
       for (final b in buyAtoms) {
-        if (haveBuy.contains(b.key)) continue;
+        if (haveBuy.contains(_identity(b))) continue;
         tryAdd([...cur.buys, b], cur.sells);
       }
-      final haveSell = cur.sells.map((a) => a.key).toSet();
+      final haveSell = cur.sells.map(_identity).toSet();
       for (final s in sellAtoms) {
-        if (haveSell.contains(s.key)) continue;
+        if (haveSell.contains(_identity(s))) continue;
         tryAdd(cur.buys, [...cur.sells, s]);
       }
     }
@@ -135,6 +148,9 @@ List<ComboCandidate> beamComboSearch({
     });
   return out;
 }
+
+/// 基元的去重身份：能提取出变量就按变量，否则按基元键。
+String _identity(ComboAtom a) => a.variableKey ?? a.key;
 
 List<ComboCandidate> _dedup(List<ComboCandidate> xs) {
   final seen = <String>{};

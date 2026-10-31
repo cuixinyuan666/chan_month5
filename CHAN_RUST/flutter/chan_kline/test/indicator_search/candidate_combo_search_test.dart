@@ -99,6 +99,38 @@ void main() {
     expect(wide.size, 3);
   });
 
+  test('同一变量不会被加进同一侧两次（阈值宽的被窄的覆盖）', () {
+    // 两个基元读同一个变量，只是阈值不同。
+    final wide = ComboAtom(
+      key: '买:kdj>20',
+      ast: const TradeEventAst('SUB.K0.KDJ.D'),
+      label: 'KDJ.D > 20',
+      variableKey: 'SUB.K0.KDJ.D',
+    );
+    final narrow = ComboAtom(
+      key: '买:kdj>50',
+      ast: const TradeEventAst('SUB.K0.KDJ.D'),
+      label: 'KDJ.D > 50',
+      variableKey: 'SUB.K0.KDJ.D',
+    );
+    double score(List<ComboAtom> buys, List<ComboAtom> sells) =>
+        (buys.length + sells.length).toDouble();
+
+    final found = beamComboSearch(
+      buyAtoms: [wide, narrow],
+      sellAtoms: [atom('卖')],
+      scoreOf: score,
+      beamWidth: 8,
+      maxSize: 3,
+      minGain: 0.5,
+    );
+    for (final c in found) {
+      final vars = c.buys.map((a) => a.variableKey).toList();
+      expect(vars.toSet().length, vars.length,
+          reason: '组合 ${c.name} 里同一个变量出现了两次');
+    }
+  });
+
   test('粗筛只留样本内成交够多且净利为正的候选', () {
     ComboCand cand(String name) =>
         ComboCand(name, const TradeEventAst('b'), const TradeEventAst('s'));

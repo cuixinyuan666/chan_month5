@@ -1,5 +1,6 @@
 import '../backtest/backtest_metrics.dart';
 import '../backtest/condition_ast.dart';
+import '../backtest/trade_operand.dart';
 
 import 'candidate_combo_search.dart';
 import 'indicator_search_runner.dart';
@@ -51,8 +52,20 @@ List<ComboAtom> atomsOf(TradeAst ast, String prefix) {
       key: '$prefix:${astConditionCacheKey(ast)}',
       ast: ast,
       label: astConditionTextCn(ast),
+      variableKey: _variableOf(ast),
     ),
   ];
+}
+
+/// 提取基元实际读的变量，供「同一变量只加一次」去重。
+/// 组合式或提取不出单一变量时返回 null，退化为按基元键去重。
+String? _variableOf(TradeAst ast) {
+  if (ast is TradeEventAst) return ast.variableId;
+  if (ast is TradeCmpAst) {
+    final left = ast.left;
+    if (left is TradeVarRef) return left.variableId;
+  }
+  return null;
 }
 
 /// 执行一次智能寻优。
@@ -67,6 +80,7 @@ Future<SmartSearchOutcome> runSmartSearch({
   required int maxKn,
   int maxComboSize = 3,
   int beamWidth = 8,
+  int atomPoolPerSide = 8,
   void Function(String detail)? onProgress,
 }) async {
   onProgress?.call('粗筛：先看样本内，去掉成交太少或亏钱的');
@@ -89,70 +103,136 @@ Future<SmartSearchOutcome> runSmartSearch({
   );
   onProgress?.call('粗筛后剩 ${survivors.length} / ${cands.length} 条');
 
-  final buyAtoms = <String, ComboAtom>{};
-  final sellAtoms = <String, ComboAtom>{};
+  // 基元池按「所在存活候选的样本内得分」排序后截断。全量基元两两配对会产生
+  // 几千个种子对，每个都跑回测比旧方法还贵；只留每侧最好的若干个即可。
+  final buyAtoms = <String, _AtomRank>{};
+  final sellAtoms = <String, _AtomRank>{};
   for (final c in survivors) {
+    final score = scoreSegment(inSample[c]!);
     for (final a in atomsOf(c.buyAst, '买')) {
-      buyAtoms.putIfAbsent(a.key, () => a);
+      final prev = buyAtoms[a.key];
+      if (prev == null || score > prev.score) {
+        buyAtoms[a.key] = _AtomRank(a, score);
+      }
     }
     for (final a in atomsOf(c.sellAst, '卖')) {
-      sellAtoms.putIfAbsent(a.key, () => a);
+      final prev = sellAtoms[a.key];
+      if (prev == null || score > prev.score) {
+        sellAtoms[a.key] = _AtomRank(a, score);
+      }
     }
+  }
+  List<ComboAtom> topAtoms(Map<String, _AtomRank> pool) {
+    final list = pool.values.toList()
+      ..sort((a, b) => b.score.compareTo(a.score));
+    return [for (final r in list.take(atomPoolPerSide)) r.atom];
   }
 
   onProgress?.call('组合搜索：把单条条件拼成并且组合');
   final combos = beamComboSearch(
-    buyAtoms: buyAtoms.values.toList(),
-    sellAtoms: sellAtoms.values.toList(),
+    buyAtoms: topAtoms(buyAtoms),
+    sellAtoms: topAtoms(sellAtoms),
     beamWidth: beamWidth,
     maxSize: maxComboSize,
     minGain: 0.0,
+    // 搜索阶段只跑样本内：组合只是候选生成器，最终排名仍以样本外为准。
+    // 若搜索阶段就按样本外打分，每个种子对都要跑两段回测，比旧方法更慢。
     scoreOf: (buys, sells) {
       final cand = ComboCandidate(buys: buys, sells: sells, score: 0).toComboCand();
-      final v = runner.evaluateCandidate(
+      final m = runner.evaluateInSample(
         c: cand,
         env: env,
         splitX: splitX,
         maxKn: maxKn,
       );
-      if (v == null) return null;
-      return robustRankScore(v.inSample, v.outSample);
+      if (m == null) return null;
+      return scoreSegment(m);
     },
   );
 
   final comboCands = [for (final c in combos) c.toComboCand()];
   onProgress?.call('生成 ${comboCands.length} 个组合，开始按样本外打分');
 
+  // 记录每个候选由几个基元拼成，去重时优先保留更简单的规则。
+  final atomCount = <String, int>{
+    for (final c in survivors) c.name: 1,
+    for (final combo in combos) combo.toComboCand().name: combo.size,
+  };
+
   final verdicts = <ComboVerdict>[];
   final realCost = <ComboVerdict, double>{};
   final seen = <String>{};
-  for (final c in [...survivors, ...comboCands]) {
-    if (!seen.add(c.name)) continue;
-    final compiled = runner.compileOk(c, maxKn);
+
+  /// 统一的「评估」：存活者复用粗筛的样本内结果，组合跑完整两段。
+  void evaluate(ComboCand c) {
+    if (!seen.add(c.name)) return;
+    final precomputed = inSample[c];
+    final ComboVerdict? v;
+    if (precomputed != null) {
+      // 样本内已经跑过，只补样本外。
+      v = runner.evaluateCandidateWithInSample(
+        c: c,
+        env: env,
+        splitX: splitX,
+        maxKn: maxKn,
+        inSample: precomputed,
+      );
+    } else {
+      v = runner.evaluateCandidate(
+        c: c,
+        env: env,
+        splitX: splitX,
+        maxKn: maxKn,
+      );
+    }
+    if (v != null) verdicts.add(v);
+  }
+
+  for (final c in survivors) {
+    evaluate(c);
+  }
+  for (final c in comboCands) {
+    evaluate(c);
+  }
+
+  final ranked = rankVerdicts(verdicts);
+
+  // 行为去重：两个组合如果在内段和外段的成交结果完全一样，它们在真实数据上
+  // 就是同一条策略，只是写法不同。只留规则最简单的那条（基元最少），
+  // 免得前几名被同一行为的多种写法占满，看起来像「找到了很多组合」。
+  final byBehavior = <String, RankedVerdict>{};
+  for (final r in ranked) {
+    final key = _behaviorKey(r.verdict);
+    final prev = byBehavior[key];
+    if (prev == null ||
+        (atomCount[r.verdict.name] ?? 99) < (atomCount[prev.verdict.name] ?? 99)) {
+      byBehavior[key] = r;
+    }
+  }
+  final deduped = byBehavior.values.toList()
+    ..sort((a, b) {
+      final c = b.rankScore.compareTo(a.rankScore);
+      if (c != 0) return c;
+      return a.verdict.name.compareTo(b.verdict.name);
+    });
+
+  // 真实成本只算排名前 [kRealCostTopN] 名：换撮合参数必须重跑两段，
+  // 全部候选都算会让扫描时间翻倍，而用户真正会看的就是前几名。
+  const kRealCostTopN = 30;
+  onProgress?.call('给前 $kRealCostTopN 名另算真实成本分（万 3 + 0.01 滑点）');
+  final rankedTop = deduped.take(kRealCostTopN);
+  for (final r in rankedTop) {
+    final v = r.verdict;
+    if (v.buyAst == null || v.sellAst == null) continue;
+    final compiled = runner.compileOk(
+      ComboCand(v.name, v.buyAst!, v.sellAst!),
+      maxKn,
+    );
     if (compiled == null) continue;
-    final seg = env.runInOutFromSingleFull(
-      compiled,
-      c.buyAst,
-      c.sellAst,
-      splitX,
-    );
-    if (seg == null) continue;
-    final v = ComboVerdict(
-      name: c.name,
-      buyText: astConditionTextCn(c.buyAst, maxKn: maxKn),
-      sellText: astConditionTextCn(c.sellAst, maxKn: maxKn),
-      inSample: seg.inSample,
-      outSample: seg.outSample,
-      buyAst: c.buyAst,
-      sellAst: c.sellAst,
-      splitX: splitX,
-    );
-    verdicts.add(v);
-    // 真实成本另算一列，不改默认撮合参数。
     final costSeg = env.runInOutWithRealCost(
       compiled,
-      c.buyAst,
-      c.sellAst,
+      v.buyAst!,
+      v.sellAst!,
       splitX,
     );
     if (costSeg != null) {
@@ -160,9 +240,8 @@ Future<SmartSearchOutcome> runSmartSearch({
     }
   }
 
-  final ranked = rankVerdicts(verdicts);
   final withScore = [
-    for (final r in ranked)
+    for (final r in deduped)
       ComboVerdict(
         name: r.verdict.name,
         buyText: r.verdict.buyText,
@@ -183,4 +262,31 @@ Future<SmartSearchOutcome> runSmartSearch({
     combosBuilt: comboCands.length,
     ranked: withScore,
   );
+}
+
+/// 基元及其「所在候选的样本内得分」，用于基元池排序截断。
+class _AtomRank {
+  final ComboAtom atom;
+  final double score;
+  const _AtomRank(this.atom, this.score);
+}
+
+/// 行为指纹：内外两段的成交结果完全一样，就认为在真实数据上是同一条策略。
+///
+/// 用笔数、盈亏与回撤这类离散结果做指纹，不用浮点分数 —— 分数相同不代表
+/// 成交相同，但成交相同必然导致分数相同。
+String _behaviorKey(ComboVerdict v) {
+  String seg(SegmentMetrics s) => [
+        s.trades,
+        s.winning,
+        s.losing,
+        s.flat,
+        s.netProfit.toStringAsFixed(4),
+        s.grossProfit.toStringAsFixed(4),
+        s.grossLoss.toStringAsFixed(4),
+        s.maxDrawdown.toStringAsFixed(4),
+        s.maxDrawdownPct.toStringAsFixed(8),
+        s.maxConsecutiveLosses,
+      ].join(',');
+  return '${seg(v.inSample)}|${seg(v.outSample)}';
 }

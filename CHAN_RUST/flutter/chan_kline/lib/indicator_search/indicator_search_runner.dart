@@ -100,6 +100,31 @@ class IndicatorSearchRunner {
     return segmentMetricsFromRun(run);
   }
 
+  /// 复用已算好的样本内结果，只补跑样本外。粗筛已经把样本内跑过了，
+  /// 完整评估时再跑一遍纯属浪费。
+  ComboVerdict? evaluateCandidateWithInSample({
+    required ComboCand c,
+    required SearchEnv env,
+    required int splitX,
+    required int maxKn,
+    required SegmentMetrics inSample,
+  }) {
+    final okCompile = compileOk(c, maxKn);
+    if (okCompile == null) return null;
+    final out = env.runOutSampleOnly(okCompile, c.buyAst, c.sellAst, splitX);
+    if (out == null) return null;
+    return ComboVerdict(
+      name: c.name,
+      buyText: astConditionTextCn(c.buyAst, maxKn: maxKn),
+      sellText: astConditionTextCn(c.sellAst, maxKn: maxKn),
+      inSample: inSample,
+      outSample: out,
+      buyAst: c.buyAst,
+      sellAst: c.sellAst,
+      splitX: splitX,
+    );
+  }
+
   /// 内外段各独立重跑一次，产出含完整指标与买卖 AST 的结果（不做达标/排名筛选）。
   ComboVerdict? evaluateCandidate({
     required ComboCand c,

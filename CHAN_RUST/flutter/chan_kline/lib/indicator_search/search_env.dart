@@ -259,6 +259,18 @@ class SearchEnv {
     );
   }
 
+  /// 只跑样本外一段。供已算过样本内的调用方复用，避免重复回测。
+  SegmentMetrics? runOutSampleOnly(
+    StrategyCompileOk? compiled,
+    TradeAst buy,
+    TradeAst sell,
+    int splitX,
+  ) {
+    final run = _runOutSampleCompiled(compiled, buy, sell, splitX);
+    if (run == null) return null;
+    return segmentMetricsFromRun(run, cutX: splitX + 1);
+  }
+
   BacktestRun? _runOutSampleCompiled(
     StrategyCompileOk? compiled,
     TradeAst buy,
