@@ -1,19 +1,35 @@
 param(
   [string]$Dir = "D:\2\chan_month5\exports\a_shares_daily",
+  [string]$StateDir = "G:\chan_month5_data\state\daily",
   [string]$Token = $env:TG_BOT_TOKEN,
   [string]$ChatId = $env:TG_CHAT_ID,
   [double]$Rate = 6,
-  [int]$Limit = 0
+  [int]$Limit = 0,
+  [switch]$ForceReupload,
+  [switch]$DeleteCsvAfterUpload
 )
 $ErrorActionPreference = 'Stop'
 if (-not $Token -or -not $ChatId) { throw 'Need TG_BOT_TOKEN and TG_CHAT_ID' }
 
 Add-Type -AssemblyName System.Net.Http
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+
+New-Item -ItemType Directory -Force -Path $StateDir | Out-Null
 
 $daily = Join-Path $Dir 'daily'
-$statePath = Join-Path $Dir 'upload_state.json'
-$indexPath = Join-Path $Dir 'index.json'
+$statePath = Join-Path $StateDir 'upload_state.json'
+$indexPath = Join-Path $StateDir 'index.json'
 $hintPath = Join-Path $Dir 'telegram_app_hint.json'
+$summaryPath = Join-Path $Dir 'summary.csv'
+
+$summaryMap = @{}
+if (Test-Path $summaryPath) {
+  $lines = Get-Content $summaryPath -Encoding utf8
+  for ($i = 1; $i -lt $lines.Count; $i++) {
+    $p = $lines[$i].Split(',')
+    if ($p.Length -ge 8) { $summaryMap[$p[0].Trim()] = $p }
+  }
+}
 
 function Read-State {
   if (-not (Test-Path $statePath)) { return @{ files = @{} } }
@@ -29,7 +45,14 @@ function Write-State($st) {
   $out = @{ files = $st.files }
   if ($st.index_file_id) { $out.index_file_id = $st.index_file_id }
   if ($st.index_message_id) { $out.index_message_id = $st.index_message_id }
-  ($out | ConvertTo-Json -Depth 8) | Set-Content -Path $statePath -Encoding utf8
+  $tmp = "$statePath.tmp"
+  try {
+    ($out | ConvertTo-Json -Depth 8) | Set-Content -Path $tmp -Encoding utf8 -ErrorAction Stop
+    Move-Item -Path $tmp -Destination $statePath -Force
+  } catch {
+    if (Test-Path $tmp) { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
+    throw
+  }
 }
 
 function Send-Doc([string]$Path, [string]$Caption) {
@@ -62,6 +85,7 @@ function Send-Doc([string]$Path, [string]$Caption) {
 }
 
 $st = Read-State
+if ($ForceReupload) { $st = @{ files = @{} } }
 $all = @(Get-ChildItem (Join-Path $daily '*.csv') | Sort-Object Name)
 if ($Limit -gt 0) { $all = $all | Select-Object -First $Limit }
 Write-Host "upload $($all.Count) files; state has $($st.files.Count)"
@@ -86,10 +110,15 @@ foreach ($f in $all) {
     continue
   }
   $doc = $resp.result.document
-  $st.files[$code] = @{
-    file_id = $doc.file_id
-    message_id = $resp.result.message_id
-    size = $f.Length
+  $meta = @{ file_id = $doc.file_id; message_id = $resp.result.message_id; size = $f.Length }
+  if ($summaryMap.ContainsKey($code)) {
+    $p = $summaryMap[$code]
+    $meta.name = $p[1]; $meta.market = [int]$p[2]; $meta.bars = [int]$p[4]
+    $meta.first = $p[5]; $meta.last = $p[6]
+  }
+  $st.files[$code] = $meta
+  if ($DeleteCsvAfterUpload) {
+    Remove-Item $f.FullName -Force -ErrorAction SilentlyContinue
   }
   $n++
   if ($n % 25 -eq 0) {

@@ -104,3 +104,6 @@ a_Data/agent_live/
 
 # full-market export (large files, not tracked)
 exports/
+
+# Telegram 本机凭据（含 token，勿提交）
+CHAN_RUST/flutter/chan_kline/.chan_telegram_settings.json
