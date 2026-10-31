@@ -5128,3 +5128,12 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **App**：设置里「Telegram 数据源」；日 K 周期走 bot CSV，失败回退通达信；分笔仍协议/本地缓存。
 - **智能体验证**：start_agent_app.bat + gent_export_watch.py 已启动全市场分笔 19900101~今；状态 _Data/agent_live/export_watch.json。
 - **遗留**：全历史上传/拉取 TB 级需长期跑；push 未做。
+
+## 2026-11-01 · OpenCode · Telegram 全量日线 + 分笔流式流水线（用户确认 C 先 A 后 B）
+
+- **日线**：5223 只全部重传成功，新 index_file_id 写入 .chan_telegram_settings.json；本地 daily CSV 已按约定删除，保留 summary/hint。
+- **App**：Telegram 数据源支持 HTTP 代理（127.0.0.1:19828）；实测 600519 日线 241 根，消息显示「Telegram 日线 CSV」。
+- **分笔**：旧缓存按年分卷 zip 上传（整股 zip 触发 413，已改按年）；新流水线 pipeline_stream_ticks.py 单股股内 48 线程拉取 → 按年 zip → 上传 → 删目录。
+- **实测**：000060 共 4924 交易日、21 个年包，164 秒完成；D 盘从 0 恢复到 16GB+。
+- **ETA**：5162 只 × 164s ≈ 235 小时（约 10 天）连续运行。
+- **遗留**：push 未做；App 分笔从 Telegram 取数尚未接入（当前只接了日线）。
