@@ -31,8 +31,17 @@ LOG = Path(r"G:\chan_month5_data\pipeline_stream.log")
 
 TOKEN = os.environ.get("TG_BOT_TOKEN", "")
 CHAT_ID = os.environ.get("TG_CHAT_ID", "")
+PROXY = os.environ.get("TG_PROXY", "127.0.0.1:19828").strip()
 MAX_ZIP_MB = 45
 RATE = 2.5
+
+
+def _opener():
+    handlers = []
+    if PROXY:
+        p = PROXY if "://" in PROXY else f"http://{PROXY}"
+        handlers.append(urllib.request.ProxyHandler({"http": p, "https": p}))
+    return urllib.request.build_opener(*handlers)
 
 
 def log(msg: str) -> None:
@@ -76,9 +85,7 @@ def api(method: str, fields: dict | None = None) -> dict:
         req = urllib.request.Request(
             url, data=body, headers={"Content-Type": f"multipart/form-data; boundary={boundary}"}
         )
-    proxies = urllib.request.getproxies()
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler(proxies))
-    with opener.open(req, timeout=600) as resp:
+    with _opener().open(req, timeout=600) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 
@@ -105,9 +112,7 @@ def send_doc(path: Path, caption: str) -> dict:
     req = urllib.request.Request(
         url, data=body, headers={"Content-Type": f"multipart/form-data; boundary={boundary}"}
     )
-    proxies = urllib.request.getproxies()
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler(proxies))
-    with opener.open(req, timeout=600) as resp:
+    with _opener().open(req, timeout=600) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 
