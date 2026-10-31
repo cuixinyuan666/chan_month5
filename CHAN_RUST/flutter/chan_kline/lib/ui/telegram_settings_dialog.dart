@@ -12,6 +12,7 @@ Future<TelegramSettings?> showTelegramSettingsDialog(
   final tokenCtrl = TextEditingController(text: initial.botToken);
   final chatCtrl = TextEditingController(text: initial.chatId);
   final indexCtrl = TextEditingController(text: initial.indexFileId);
+  final proxyCtrl = TextEditingController(text: initial.proxy);
 
   return showDialog<TelegramSettings>(
     context: context,
@@ -86,6 +87,15 @@ Future<TelegramSettings?> showTelegramSettingsDialog(
                   isDense: true,
                 ),
               ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: proxyCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'HTTP 代理（如 127.0.0.1:19828；直连留空）',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
+              ),
             ],
           ),
         ),
@@ -103,6 +113,7 @@ Future<TelegramSettings?> showTelegramSettingsDialog(
                   botToken: tokenCtrl.text.trim(),
                   chatId: chatCtrl.text.trim(),
                   indexFileId: indexCtrl.text.trim(),
+                  proxy: proxyCtrl.text.trim(),
                 ),
               );
             },

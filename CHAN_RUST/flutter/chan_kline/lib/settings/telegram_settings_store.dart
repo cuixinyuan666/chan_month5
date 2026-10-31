@@ -13,6 +13,7 @@ class TelegramSettings {
     this.botToken = '',
     this.chatId = '',
     this.indexFileId = '',
+    this.proxy = '',
   });
 
   final KlineDataSourceKind source;
@@ -21,6 +22,9 @@ class TelegramSettings {
 
   /// 索引文件在 Telegram 上的 file_id（首次同步后可缓存，加速拉 index.json）。
   final String indexFileId;
+
+  /// HTTP 代理（如 `127.0.0.1:19828`）；留空 = 直连。
+  final String proxy;
 
   bool get telegramEnabled =>
       source == KlineDataSourceKind.telegram &&
@@ -31,12 +35,14 @@ class TelegramSettings {
     String? botToken,
     String? chatId,
     String? indexFileId,
+    String? proxy,
   }) {
     return TelegramSettings(
       source: source ?? this.source,
       botToken: botToken ?? this.botToken,
       chatId: chatId ?? this.chatId,
       indexFileId: indexFileId ?? this.indexFileId,
+      proxy: proxy ?? this.proxy,
     );
   }
 
@@ -50,6 +56,7 @@ class TelegramSettings {
       botToken: (json['bot_token'] as String?)?.trim() ?? '',
       chatId: (json['chat_id'] as String?)?.trim() ?? '',
       indexFileId: (json['index_file_id'] as String?)?.trim() ?? '',
+      proxy: (json['proxy'] as String?)?.trim() ?? '',
     );
   }
 
@@ -58,6 +65,7 @@ class TelegramSettings {
         'bot_token': botToken,
         'chat_id': chatId,
         if (indexFileId.isNotEmpty) 'index_file_id': indexFileId,
+        if (proxy.isNotEmpty) 'proxy': proxy,
       };
 }
 

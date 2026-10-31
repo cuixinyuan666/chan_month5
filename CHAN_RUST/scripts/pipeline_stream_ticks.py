@@ -170,7 +170,14 @@ def upload_year_files(code: str, tag: str, files: list[Path]) -> dict:
 
 
 def fetch_stock(code: str) -> bool:
-    """调用 Rust 导出器拉单只全历史到 G 缓存。"""
+    """调用 Rust 导出器拉单只全历史到 G 缓存；D 盘已有缓存则先搬过来。"""
+    src = Path(r"D:\2\chan_month5\a_Data\.tdx_protocol_cache") / code
+    dst = CACHE_ROOT / ".tdx_protocol_cache" / code
+    if src.is_dir() and not dst.is_dir():
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["cmd", "/c", "move", str(src), str(dst)], capture_output=True)
+    if dst.is_dir() and any(dst.glob("*.txt")):
+        return True
     cmd = [
         str(EXE),
         "--codes", code,

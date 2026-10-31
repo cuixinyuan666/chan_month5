@@ -24,6 +24,16 @@ class TelegramDataSource {
     '${_indexDir.path}${Platform.pathSeparator}index.json',
   );
 
+  HttpClient _newClient() {
+    final client = HttpClient();
+    final proxy = settings.proxy.trim();
+    if (proxy.isNotEmpty) {
+      client.findProxy = (uri) => 'PROXY $proxy';
+    }
+    client.connectionTimeout = const Duration(seconds: 30);
+    return client;
+  }
+
   Future<Map<String, dynamic>> _apiGet(String method,
       [Map<String, String>? query]) async {
     final token = settings.botToken.trim();
@@ -32,7 +42,7 @@ class TelegramDataSource {
       url +=
           '?${query.entries.map((e) => '${Uri.encodeQueryComponent(e.key)}=${Uri.encodeQueryComponent(e.value)}').join('&')}';
     }
-    final client = HttpClient();
+    final client = _newClient();
     try {
       final req = await client.getUrl(Uri.parse(url));
       final resp = await req.close();
@@ -62,7 +72,7 @@ class TelegramDataSource {
     if (!dest.parent.existsSync()) {
       dest.parent.createSync(recursive: true);
     }
-    final client = HttpClient();
+    final client = _newClient();
     try {
       final req = await client.getUrl(Uri.parse(url));
       final resp = await req.close();
