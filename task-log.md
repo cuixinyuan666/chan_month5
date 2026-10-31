@@ -5097,3 +5097,15 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **结果**：lutter test test/backtest_workbench_test.dart → **15/15 全过**（此前 14 过 1 红）；lutter analyze --no-pub lib test 的 error - 行为空（该文件仅剩两条既有的 unnecessary_import info，未新增告警）。提交 c73d2b53。
 - **演示**：以前点「添加条件」会蹦出一条「收盘 < 布林轨」，现在点它只是把上一条抄一份——默认策略抄出来还是「一类买点 出现」。想比大小，得自己把左边换成数值项，关系那一格才会出现 > < 这些符号。测试现在描述的就是这个新脾气。
 - **注意事项**：仅测试文件改动，无编译需求、未跑真机；本次**未 push**。
+
+## 2026-10-31 · OpenCode · 数据导出 · 全 A 股日线全历史导出（通达信 2026-09 新协议）
+
+- **背景**：用户要求「用本软件取数能力拿到全部 A 股全部历史数据，再传进自己的 Telegram bot，后续 App 直接从 bot 精准取数」。旧 pytdx 版本标识 2026-09-10 起被服务端拒绝；`chan_data` 原分笔链路仍可用，但日线请求要换成版本标识 `0x01007b18`，且 vol/amount 由 u32 改成 f32。
+- **操作**：新增 `chan_data/src/tdx_daily.rs`（证券列表 + 单只日线全历史，独立于原 `tdx.rs` 分笔链路，不改任何缠论计算）；新增 `examples/export_all_a_shares.rs`（多线程、断点续传、manifest/summary）；新增 `CHAN_RUST/scripts/telegram_upload.py`（按只上传 + index.json + 429 退避 + 断点续传）。
+- **结果**：全量导出 **5225 只（成功 5223 / 无数据 2）**，共 **16,762,313 根日线**，覆盖 1991-04-03 ~ 2026-10-30，落盘 `exports/a_shares_daily/daily/*.csv`（843 MB），`manifest.json` / `summary.csv` / `failures.txt` 齐全。CSV 校验：5223 个文件表头、7 列、日期严格升序、末根均 ≥ 2026-08-01，全部通过。北交所（4/8/92 开头）当前行情服务器不提供列表/日线，未纳入。
+- **演示**：`sz000001.csv` 第一行 1991-04-03，最后一行 2026-10-30 收盘 11.64；`sh600519.csv` 最后一根 2026-10-30 收盘 1392.05。5223 只、1676 万根日线，16 线程 96 秒拉完。
+- **注意事项 / 遗留**：
+  1. Telegram 上传尚未执行：缺 `TG_BOT_TOKEN` 与 `TG_CHAT_ID`，等用户提供后运行 `telegram_upload.py`。
+  2. 001381 皇冠新材、688827 钶锐锶无日线数据（疑似未上市/停牌），已记入 `failures.txt`。
+  3. App 从 bot 精准取数方案见 `docs/telegram_data_source_plan.md`，**未改 App 代码**，待用户确认。
+  4. 本次未 push。
