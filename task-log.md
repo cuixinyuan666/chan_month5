@@ -5109,3 +5109,14 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   2. 001381 皇冠新材、688827 钶锐锶无日线数据（疑似未上市/停牌），已记入 `failures.txt`。
   3. App 从 bot 精准取数方案见 `docs/telegram_data_source_plan.md`，**未改 App 代码**，待用户确认。
   4. 本次未 push。
+
+## 2026-10-31 · OpenCode · 分笔导出 · 全市场分笔拉取 + 智能体验证驱动
+
+- **背景**：用户在 goal 中要求「全 A 股全量分笔（App 同口径 0x0fc6），代码完成后由智能体验证先测 3 只再全量；异常回传 agent 处理」。并提供了 Telegram bot token（@datacome_bot）。
+- **操作**：`tdx.rs` 新增 `TickFetcher` / `write_tick_cache` 公开 API；新增 `examples/export_all_ticks.rs`（多线程、断点续传、写 `a_Data/.tdx_protocol_cache`）；Agent API 新增 `export_ticks`/`export_daily`/`cancel_export` 与 `GET /export_task`；脚本 `agent_export_client.py`。
+- **结果**：
+  - 命令行实测 3 只（000001/600519/002003）× 4 交易日：51378 行、1.1 MB，0 失败，缓存格式与 App 一致。
+  - **智能体验证**：App `CHAN_AGENT_API=1` 启动后 `POST /command type=export_ticks` → 任务 `export_ticks_1` **phase=done**，12 股票日全部缓存命中，summary 与命令行一致。
+  - 全历史外推：约 **94 KB/股票·日** → 5223 只 × ~5000 日 ≈ **2.4 TB**（Telegram/单机不可行，需先约定时间窗口）。
+- **演示**：给 bot 发消息后拿 chat_id，日线 843 MB 可上传；分笔建议按「股票×日期段」打包策略再传 bot，否则文件数爆炸。
+- **遗留**：① `getUpdates` 仍空，缺 **TG_CHAT_ID**，日线尚未上传；② 全市场分笔全历史未跑，等你选定窗口（如最近 20/60/250 交易日）；③ App 从 Telegram 精准取数仍待你「确认」后改代码。
