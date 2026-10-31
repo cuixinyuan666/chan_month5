@@ -564,6 +564,14 @@ Future<IndicatorSearchSettings?> showIndicatorSearchSettingsSheet(
                   style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
                 ),
                 SwitchListTile(
+                  title: const Text('智能寻优'),
+                  subtitle: const Text(
+                    '先用样本内去掉成交太少或亏钱的，再把单条条件拼成并且组合，按样本外稳健分排名；关闭=全量列出',
+                  ),
+                  value: cfg.smartSearch,
+                  onChanged: (v) => setLocal(() => cfg = cfg.copyWith(smartSearch: v)),
+                ),
+                SwitchListTile(
                   title: const Text('优化枚举（推荐）'),
                   subtitle: const Text('模板 + 事件全量 + 数值/阈值有上限；关闭=全量枚举（极慢）'),
                   value: cfg.useOptimizedBuild,

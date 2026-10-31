@@ -1,3 +1,4 @@
+import 'package:chan_kline/backtest/backtest_metrics.dart';
 import 'package:chan_kline/backtest/condition_ast.dart';
 import 'package:chan_kline/backtest/strategy_compile.dart';
 import 'package:chan_kline/backtest/strategy_config.dart';
@@ -83,6 +84,21 @@ class IndicatorSearchRunner {
   }
 
   bool tryCompile(ComboCand c, int maxKn) => compileOk(c, maxKn) != null;
+
+  /// 只跑样本内一段，供粗筛用。比完整的内外两段便宜一半。
+  /// 编译失败或回测失败返回 null。
+  SegmentMetrics? evaluateInSample({
+    required ComboCand c,
+    required SearchEnv env,
+    required int splitX,
+    required int maxKn,
+  }) {
+    final okCompile = compileOk(c, maxKn);
+    if (okCompile == null) return null;
+    final run = env.runAtCompiled(okCompile, c.buyAst, c.sellAst, splitX);
+    if (run == null) return null;
+    return segmentMetricsFromRun(run);
+  }
 
   /// 内外段各独立重跑一次，产出含完整指标与买卖 AST 的结果（不做达标/排名筛选）。
   ComboVerdict? evaluateCandidate({

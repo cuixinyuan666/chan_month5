@@ -130,6 +130,22 @@ class _KeyPointStatsResultPanelState extends State<KeyPointStatsResultPanel> {
             '耗时 ${r.elapsed.inMilliseconds}ms',
             style: TextStyle(fontSize: 11, color: Colors.grey.shade700),
           ),
+          if (r.comboContrasts.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(
+              '组合区分度（哪几个指标一起看时顶底分得最开）',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: Colors.grey.shade800,
+              ),
+            ),
+            for (final c in r.comboContrasts.take(5))
+              Text(
+                c.ruleText,
+                style: const TextStyle(fontSize: 11, height: 1.4),
+              ),
+          ],
           Text(
             'JSON：${widget.jsonPath}\nTSV：${widget.tsvPath}',
             style: TextStyle(fontSize: 10, color: Colors.grey.shade600),

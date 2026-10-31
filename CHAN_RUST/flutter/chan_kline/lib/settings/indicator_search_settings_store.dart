@@ -5,14 +5,20 @@ import 'package:path_provider/path_provider.dart';
 
 import '../indicator_search/candidate_builder.dart';
 
-/// 设置 · 寻优：枚举模式、候选上限。
+/// 设置 · 寻优：枚举模式、候选上限、智能寻优。
 class IndicatorSearchSettings {
   final bool useOptimizedBuild;
   final int maxCandidates;
 
+  /// 智能寻优：先用样本内粗筛掉成交太少或亏钱的候选，再把存活的单条条件
+  /// 用「并且」拼成组合，最后按样本外稳健分排名。
+  /// 关闭时走原来的全量列出，结果与旧版完全一致。
+  final bool smartSearch;
+
   const IndicatorSearchSettings({
     this.useOptimizedBuild = true,
     this.maxCandidates = 12000,
+    this.smartSearch = false,
   });
 
   CandidateBuildOptions toBuildOptions() => useOptimizedBuild
@@ -22,15 +28,18 @@ class IndicatorSearchSettings {
   IndicatorSearchSettings copyWith({
     bool? useOptimizedBuild,
     int? maxCandidates,
+    bool? smartSearch,
   }) =>
       IndicatorSearchSettings(
         useOptimizedBuild: useOptimizedBuild ?? this.useOptimizedBuild,
         maxCandidates: maxCandidates ?? this.maxCandidates,
+        smartSearch: smartSearch ?? this.smartSearch,
       );
 
   Map<String, dynamic> toJson() => {
         'useOptimizedBuild': useOptimizedBuild,
         'maxCandidates': maxCandidates,
+        'smartSearch': smartSearch,
       };
 
   static IndicatorSearchSettings fromJson(Map<String, dynamic>? map) {
@@ -38,6 +47,7 @@ class IndicatorSearchSettings {
     return IndicatorSearchSettings(
       useOptimizedBuild: _readBool(map['useOptimizedBuild'], defaultValue: true),
       maxCandidates: _readMaxCandidates(map['maxCandidates']),
+      smartSearch: _readBool(map['smartSearch'], defaultValue: false),
     );
   }
 

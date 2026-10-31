@@ -38,6 +38,11 @@ enum VerdictSortColumn {
   outExpectancy,
   outLossStreak,
   outAvgHoldBars,
+  /// 稳健排名分：以样本外为准，扣掉样本内外不一致的过拟合惩罚。
+  /// 未打分（旧口径）显示「—」。
+  rankScore,
+  /// 真实成本口径下的稳健分（万 3 手续费 + 0.01 滑点）。未算显示「—」。
+  realCostScore,
 }
 
 /// 单键排序状态：列 + 升/降序。
@@ -104,6 +109,16 @@ int _cmpMetric(MetricNum a, MetricNum b) {
 int _compareCol(ComboVerdict a, ComboVerdict b, VerdictSortColumn col) {
   if (col == VerdictSortColumn.type) {
     return a.categoryLabel.compareTo(b.categoryLabel);
+  }
+  // 稳健分与真实成本分存在候选上而不是单段指标上，单独比较。未打分沉底。
+  if (col == VerdictSortColumn.rankScore) {
+    return _cmpMetric(rankScoreMetric(a.rankScore), rankScoreMetric(b.rankScore));
+  }
+  if (col == VerdictSortColumn.realCostScore) {
+    return _cmpMetric(
+      rankScoreMetric(a.realCostScore),
+      rankScoreMetric(b.realCostScore),
+    );
   }
   final spec = resultColumnOf(col);
   if (spec == null) return 0;
