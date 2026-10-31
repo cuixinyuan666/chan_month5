@@ -274,6 +274,84 @@ fn scan_cache(path: &Path) -> Option<(usize, u64)> {
     }
 }
 
+/// 单只股票「股内按交易日并行」拉取；返回 (有数据天数, 失败天数, 行数, 字节数)。
+fn fetch_single_stock_by_day(
+    target: &Target,
+    days: &[i32],
+    cache_root: &Path,
+    day_threads: usize,
+    failures: &Mutex<Vec<String>>,
+) -> (usize, usize, usize, u64) {
+    let next_day = AtomicUsize::new(0);
+    let day_ok = AtomicUsize::new(0);
+    let day_fail = AtomicUsize::new(0);
+    std::thread::scope(|scope| {
+        for _ in 0..day_threads {
+            let next_day = &next_day;
+            let day_ok = &day_ok;
+            let day_fail = &day_fail;
+            let failures = failures;
+            let cache_root = cache_root.to_path_buf();
+            scope.spawn(move || {
+                let mut fetcher = TickFetcher::new();
+                loop {
+                    let i = next_day.fetch_add(1, Ordering::SeqCst);
+                    if i >= days.len() {
+                        break;
+                    }
+                    let date8 = days[i];
+                    let path = chan_data::tick_cache_path(&cache_root, &target.code, date8);
+                    if scan_cache(&path).is_some() {
+                        day_ok.fetch_add(1, Ordering::SeqCst);
+                        continue;
+                    }
+                    let mut attempt = 0;
+                    loop {
+                        match fetcher.fetch_day(target.market, &target.code, date8) {
+                            Ok(v) => {
+                                if !v.is_empty() {
+                                    let _ = chan_data::write_tick_cache(
+                                        &cache_root, &target.code, date8, &v,
+                                    );
+                                }
+                                day_ok.fetch_add(1, Ordering::SeqCst);
+                                break;
+                            }
+                            Err(e) => {
+                                fetcher.reconnect();
+                                attempt += 1;
+                                if attempt >= 3 {
+                                    day_fail.fetch_add(1, Ordering::SeqCst);
+                                    failures
+                                        .lock()
+                                        .unwrap()
+                                        .push(format!("{}\t{date8}\t{e}", target.code));
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+    });
+    let mut rows = 0usize;
+    let mut bytes = 0u64;
+    for &date8 in days {
+        let path = chan_data::tick_cache_path(cache_root, &target.code, date8);
+        if let Some((r, b)) = scan_cache(&path) {
+            rows += r;
+            bytes += b;
+        }
+    }
+    (
+        day_ok.load(Ordering::SeqCst),
+        day_fail.load(Ordering::SeqCst),
+        rows,
+        bytes,
+    )
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let end = arg_value(&args, "--end")
@@ -368,6 +446,35 @@ fn main() {
     let results: Mutex<Vec<StockResult>> = Mutex::new(Vec::new());
     let failures: Mutex<Vec<String>> = Mutex::new(Vec::new());
     let total = targets.len();
+    let day_threads: usize = arg_value(&args, "--day-threads")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0)
+        .clamp(0, 64);
+
+    if day_threads > 1 && targets.len() == 1 {
+        let t = &targets[0];
+        println!("      单股股内并行：{day_threads} 线程按交易日拉取");
+        let (okd, faild, rows, bytes) =
+            fetch_single_stock_by_day(t, &days, &cache_root, day_threads, &failures);
+        ok_days.store(okd, Ordering::SeqCst);
+        fail_days.store(faild, Ordering::SeqCst);
+        total_rows.store(rows, Ordering::SeqCst);
+        total_bytes.store(bytes as usize, Ordering::SeqCst);
+        done.store(1, Ordering::SeqCst);
+        results.lock().unwrap().push(StockResult {
+            code: t.code.clone(),
+            name: t.name.clone(),
+            market: t.market,
+            days: okd,
+            rows,
+            bytes,
+            fail_days: faild,
+        });
+        println!(
+            "      单股完成：{okd} 天有数据，{faild} 天失败（{}s）",
+            start.elapsed().as_secs()
+        );
+    } else {
 
     std::thread::scope(|scope| {
         for _ in 0..threads {
@@ -478,6 +585,7 @@ fn main() {
             });
         }
     });
+    }
 
     println!("[3/3] 汇总…");
     let elapsed = start.elapsed().as_secs();
