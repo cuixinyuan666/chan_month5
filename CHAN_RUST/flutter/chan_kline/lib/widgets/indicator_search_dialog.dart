@@ -62,7 +62,8 @@ class IndicatorSearchDialog extends StatefulWidget {
   /// 仅供机器人验证的 Widget 测试注入：替换扫描器（生产路径为 null）。
   final IndicatorSearchRunner Function()? runnerFactory;
 
-  /// 仅供机器人验证的 Widget 测试注入：直接给定候选，跳过枚举。
+  /// 非空时跳过枚举，直接扫描这些候选：
+  /// 计优「拿去寻优」传组合候选，机器人验证用它注入固定候选。
   final List<ComboCand>? candidateOverride;
 
   /// 仅供机器人验证的 Widget 测试注入：扫描让出频率（生产为 null → 默认 25）。

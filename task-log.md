@@ -5151,5 +5151,6 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **组件测试揪出两个真问题**：
   1. 组合区分度那几行把计优面板顶部撑溢出 21px（800×600 小窗必现，真机会出现黄黑条）。顶部口径区改为「表格之外还剩多少就多高」的可滚动区，组合条数、诊断行、路径再长也不会挤掉表格。
   2. 组合里混进 close/volume 这类顶层价格列，桥接时整条翻译失败，按钮拿到 0 个候选。现在组合只在指标账（sub./main.）里找 —— 价格列不是指标，拿它拼组合只是复述价格趋势；桥接遇到翻译不了的指标改为单独跳过、其余照常产出（不再整条作废），候选名只列真正进了条件的指标；新增 sub.volume_n → RAW.K0.VOLUME / SUB.Kn.VOLUME 映射。
-- **验收**：`flutter test test/indicator_search test/indicator_search_result_columns_test.dart test/jiyou` 共 134 条全部通过；真实数据 002003/1m 端到端：旧全量 33.3s vs 新智能 18.7s（-44%，全套并行跑时；单独跑 -53%），前 5 名样本外全稳健。
+- **真实数据端到端**：新增 test/jiyou/jiyou_to_search_e2e_test.dart。002003 真实 1 分钟 K 线：102 个转折点、323 条单指标差异度、4 条指标组合，全部翻译成可编译候选并在样本外成交（5/6/6/10 笔）。顺带补 MACD/BOLL 中文名，规则里不再出现 sub.macd_hist_0 这类原始键。
+- **验收**：`flutter test test/indicator_search test/indicator_search_result_columns_test.dart test/jiyou test/ml_feature_label_test.dart` 共 139 条全部通过；真实数据 002003/1m 端到端：旧全量 33~45s vs 新智能 18s 左右（-44%~-59%，随机器负载波动），前 5 名样本外全稳健。
 - **遗留**：未做并行加速；push 未做。

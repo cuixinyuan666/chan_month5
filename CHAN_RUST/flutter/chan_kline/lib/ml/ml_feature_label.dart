@@ -50,6 +50,38 @@ class MlFeatureLabel {
       final kn = key.split('_').last;
       return 'K$kn RSI';
     }
+    // MACD
+    if (key.startsWith('sub.macd_')) {
+      final parts = key.split('_');
+      if (parts.length >= 3) {
+        final kn = parts[2];
+        switch (parts[1]) {
+          case 'dif':
+            return 'K$kn MACD-DIF';
+          case 'dea':
+            return 'K$kn MACD-DEA';
+          case 'hist':
+            return 'K$kn MACD-柱';
+        }
+      }
+      return key;
+    }
+    // BOLL
+    if (key.startsWith('sub.boll_')) {
+      final parts = key.split('_');
+      if (parts.length >= 3) {
+        final kn = parts[2];
+        switch (parts[1]) {
+          case 'mid':
+            return 'K$kn BOLL中轨';
+          case 'up':
+            return 'K$kn BOLL上轨';
+          case 'down':
+            return 'K$kn BOLL下轨';
+        }
+      }
+      return key;
+    }
     // 分型极点距
     if (key.startsWith('sub.fractal_peak_dist')) {
       if (key == 'sub.fractal_peak_dist') return '分型极点距(通用)';

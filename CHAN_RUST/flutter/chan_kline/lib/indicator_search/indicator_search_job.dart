@@ -73,7 +73,7 @@ class IndicatorSearchJobParams {
   final BacktestStepHarnessResult? mainSessionHarness;
   final List<KlineBar>? initialBars;
 
-  /// 仅供测试注入：直接给定候选，跳过枚举。
+  /// 非空时跳过枚举，直接扫描这些候选（计优「拿去寻优」与测试注入共用）。
   final List<ComboCand>? candidateOverride;
 
   /// 扫描让出频率（测试可设 1 以便中途取消）。
