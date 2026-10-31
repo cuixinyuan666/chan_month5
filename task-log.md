@@ -5120,3 +5120,11 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   - 全历史外推：约 **94 KB/股票·日** → 5223 只 × ~5000 日 ≈ **2.4 TB**（Telegram/单机不可行，需先约定时间窗口）。
 - **演示**：给 bot 发消息后拿 chat_id，日线 843 MB 可上传；分笔建议按「股票×日期段」打包策略再传 bot，否则文件数爆炸。
 - **遗留**：① `getUpdates` 仍空，缺 **TG_CHAT_ID**，日线尚未上传；② 全市场分笔全历史未跑，等你选定窗口（如最近 20/60/250 交易日）；③ App 从 Telegram 精准取数仍待你「确认」后改代码。
+
+## 2026-10-31 · OpenCode · Telegram + 全量分笔 D · 用户确认执行
+
+- **用户确认**：chat_id=8194035177；分笔窗口 **D 全历史**；App 从 Telegram 精准取数 **确认**；智能体验证全自动监控。
+- **Telegram 日线上传**：改用 	elegram_upload.ps1（.NET HttpClient）；试传 2 只成功，全量 5223 只后台上传中（exports/telegram_upload_full.log），产物 	elegram_app_hint.json（含 index_file_id）。
+- **App**：设置里「Telegram 数据源」；日 K 周期走 bot CSV，失败回退通达信；分笔仍协议/本地缓存。
+- **智能体验证**：start_agent_app.bat + gent_export_watch.py 已启动全市场分笔 19900101~今；状态 _Data/agent_live/export_watch.json。
+- **遗留**：全历史上传/拉取 TB 级需长期跑；push 未做。
