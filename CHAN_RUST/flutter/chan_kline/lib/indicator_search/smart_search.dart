@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import '../backtest/backtest_metrics.dart';
 import '../backtest/condition_ast.dart';
 import '../backtest/trade_operand.dart';
@@ -6,6 +8,7 @@ import 'candidate_combo_search.dart';
 import 'indicator_search_runner.dart';
 import 'search_core.dart';
 import 'search_env.dart';
+import 'search_isolate.dart';
 import 'search_ranking.dart';
 import 'search_scoring.dart';
 
@@ -81,27 +84,47 @@ Future<SmartSearchOutcome> runSmartSearch({
   int maxComboSize = 3,
   int beamWidth = 8,
   int atomPoolPerSide = 8,
+  int? workers,
   void Function(String detail)? onProgress,
 }) async {
-  onProgress?.call('粗筛：先看样本内，去掉成交太少或亏钱的');
+  // 候选少时开隔离区反而更慢（每个 worker 要复制一份冻结仓）。
+  // 默认按核数，上限 8；候选不足 64 条时退回串行。
+  final workerCount = workers ??
+      (cands.length < 64 ? 1 : Platform.numberOfProcessors.clamp(2, 8));
 
+  onProgress?.call(
+    workerCount > 1
+        ? '粗筛：先看样本内，去掉成交太少或亏钱的（$workerCount 个分片并行）'
+        : '粗筛：先看样本内，去掉成交太少或亏钱的',
+  );
+
+  final screenResults = await runBatchInParallel(
+    env: env,
+    candidates: cands,
+    splitX: splitX,
+    maxKn: maxKn,
+    mode: SearchBatchMode.inSampleOnly,
+    workers: workerCount,
+  );
   final inSample = <ComboCand, SegmentMetrics>{};
-  for (final c in cands) {
-    final m = runner.evaluateInSample(
-      c: c,
-      env: env,
-      splitX: splitX,
-      maxKn: maxKn,
-    );
-    if (m != null) inSample[c] = m;
+  for (var i = 0; i < cands.length; i++) {
+    final m = screenResults[i].inSample;
+    if (m != null) inSample[cands[i]] = m;
   }
-
   final survivors = screenByInSample(
     cands: cands,
     inSampleTrades: (c) => inSample[c]?.trades,
     inSampleNetProfit: (c) => inSample[c]?.netProfit,
   );
   onProgress?.call('粗筛后剩 ${survivors.length} / ${cands.length} 条');
+  if (runner.cancelRequested) {
+    return SmartSearchOutcome(
+      beforeScreen: cands.length,
+      afterScreen: survivors.length,
+      combosBuilt: 0,
+      ranked: const [],
+    );
+  }
 
   // 基元池按「所在存活候选的样本内得分」排序后截断。全量基元两两配对会产生
   // 几千个种子对，每个都跑回测比旧方法还贵；只留每侧最好的若干个即可。
@@ -128,71 +151,103 @@ Future<SmartSearchOutcome> runSmartSearch({
     return [for (final r in list.take(atomPoolPerSide)) r.atom];
   }
 
-  onProgress?.call('组合搜索：把单条条件拼成并且组合');
-  final combos = beamComboSearch(
-    buyAtoms: topAtoms(buyAtoms),
-    sellAtoms: topAtoms(sellAtoms),
-    beamWidth: beamWidth,
-    maxSize: maxComboSize,
-    minGain: 0.0,
-    // 搜索阶段只跑样本内：组合只是候选生成器，最终排名仍以样本外为准。
-    // 若搜索阶段就按样本外打分，每个种子对都要跑两段回测，比旧方法更慢。
-    scoreOf: (buys, sells) {
-      final cand = ComboCandidate(buys: buys, sells: sells, score: 0).toComboCand();
-      final m = runner.evaluateInSample(
-        c: cand,
-        env: env,
-        splitX: splitX,
-        maxKn: maxKn,
-      );
-      if (m == null) return null;
-      return scoreSegment(m);
-    },
-  );
-
-  final comboCands = [for (final c in combos) c.toComboCand()];
-  onProgress?.call('生成 ${comboCands.length} 个组合，开始按样本外打分');
-
-  // 记录每个候选由几个基元拼成，去重时优先保留更简单的规则。
-  final atomCount = <String, int>{
-    for (final c in survivors) c.name: 1,
-    for (final combo in combos) combo.toComboCand().name: combo.size,
-  };
-
   final verdicts = <ComboVerdict>[];
-  final realCost = <ComboVerdict, double>{};
   final seen = <String>{};
 
-  /// 统一的「评估」：存活者复用粗筛的样本内结果，组合跑完整两段。
-  void evaluate(ComboCand c) {
-    if (!seen.add(c.name)) return;
-    final precomputed = inSample[c];
-    final ComboVerdict? v;
-    if (precomputed != null) {
-      // 样本内已经跑过，只补样本外。
-      v = runner.evaluateCandidateWithInSample(
-        c: c,
-        env: env,
-        splitX: splitX,
-        maxKn: maxKn,
-        inSample: precomputed,
-      );
-    } else {
-      v = runner.evaluateCandidate(
-        c: c,
-        env: env,
-        splitX: splitX,
-        maxKn: maxKn,
-      );
-    }
-    if (v != null) verdicts.add(v);
+  // 取消只在批与批之间检查：隔离区里的回测无法中途打断，但一批最多几秒，
+  // 足够让「取消扫描」有响应。检查到取消就抛出去，用已算出的部分继续排名。
+  void checkCancel() {
+    if (runner.cancelRequested) throw const _SmartSearchCancelled();
   }
 
-  for (final c in survivors) {
-    evaluate(c);
-  }
-  for (final c in comboCands) {
-    evaluate(c);
+  // 存活者先补样本外：这批单条候选已经付过样本内的成本，先算完意味着
+  // 即使后面组合搜索跑到一半被取消，也有可用的排名结果可落盘。
+  final survivorBatch = [
+    for (final c in survivors)
+      if (seen.add(c.name)) c,
+  ];
+  final knownInSample = <String, SegmentMetrics>{
+    for (final c in survivorBatch)
+      if (inSample[c] != null) c.name: inSample[c]!,
+  };
+
+  var comboCands = const <ComboCand>[];
+  final atomCount = <String, int>{
+    for (final c in survivors) c.name: 1,
+  };
+
+  try {
+    checkCancel();
+    onProgress?.call('按样本外打分：存活候选 ${survivorBatch.length} 条');
+    final outResults = await runBatchInParallel(
+      env: env,
+      candidates: survivorBatch,
+      splitX: splitX,
+      maxKn: maxKn,
+      mode: SearchBatchMode.outSampleOnly,
+      knownInSample: knownInSample,
+      workers: workerCount,
+    );
+    for (final r in outResults) {
+      final v = r.verdict;
+      if (v != null) verdicts.add(v);
+    }
+
+    checkCancel();
+    onProgress?.call('组合搜索：把单条条件拼成并且组合');
+    final combos = await beamComboSearchAsync(
+      buyAtoms: topAtoms(buyAtoms),
+      sellAtoms: topAtoms(sellAtoms),
+      beamWidth: beamWidth,
+      maxSize: maxComboSize,
+      minGain: 0.0,
+      // 搜索阶段只跑样本内：组合只是候选生成器，最终排名仍以样本外为准。
+      // 若搜索阶段就按样本外打分，每个种子对都要跑两段回测，比旧方法更慢。
+      scoreBatch: (batch) async {
+        checkCancel();
+        final batchCands = [for (final c in batch) c.toComboCand()];
+        final results = await runBatchInParallel(
+          env: env,
+          candidates: batchCands,
+          splitX: splitX,
+          maxKn: maxKn,
+          mode: SearchBatchMode.inSampleOnly,
+          workers: workerCount,
+        );
+        return [
+          for (final r in results)
+            r.inSample == null ? null : scoreSegment(r.inSample!),
+        ];
+      },
+    );
+
+    comboCands = [for (final c in combos) c.toComboCand()];
+    onProgress?.call('生成 ${comboCands.length} 个组合，按样本外打分');
+    // 记录每个候选由几个基元拼成，去重时优先保留更简单的规则。
+    for (final combo in combos) {
+      atomCount[combo.toComboCand().name] = combo.size;
+    }
+
+    // 组合：内外两段都跑。
+    final comboBatch = [
+      for (final c in comboCands)
+        if (seen.add(c.name)) c,
+    ];
+    checkCancel();
+    final comboResults = await runBatchInParallel(
+      env: env,
+      candidates: comboBatch,
+      splitX: splitX,
+      maxKn: maxKn,
+      mode: SearchBatchMode.full,
+      workers: workerCount,
+    );
+    for (final r in comboResults) {
+      final v = r.verdict;
+      if (v != null) verdicts.add(v);
+    }
+  } on _SmartSearchCancelled {
+    onProgress?.call('已取消：用已算出的 ${verdicts.length} 条结果排名');
   }
 
   final ranked = rankVerdicts(verdicts);
@@ -219,25 +274,31 @@ Future<SmartSearchOutcome> runSmartSearch({
   // 真实成本只算排名前 [kRealCostTopN] 名：换撮合参数必须重跑两段，
   // 全部候选都算会让扫描时间翻倍，而用户真正会看的就是前几名。
   const kRealCostTopN = 30;
-  onProgress?.call('给前 $kRealCostTopN 名另算真实成本分（万 3 + 0.01 滑点）');
-  final rankedTop = deduped.take(kRealCostTopN);
-  for (final r in rankedTop) {
-    final v = r.verdict;
-    if (v.buyAst == null || v.sellAst == null) continue;
-    final compiled = runner.compileOk(
-      ComboCand(v.name, v.buyAst!, v.sellAst!),
-      maxKn,
+  final realCost = <String, double>{};
+  try {
+    checkCancel();
+    onProgress?.call('给前 $kRealCostTopN 名另算真实成本分（万 3 + 0.01 滑点）');
+    final costCands = [
+      for (final r in deduped.take(kRealCostTopN))
+        if (r.verdict.buyAst != null && r.verdict.sellAst != null)
+          ComboCand(r.verdict.name, r.verdict.buyAst!, r.verdict.sellAst!),
+    ];
+    final costResults = await runBatchInParallel(
+      env: env,
+      candidates: costCands,
+      splitX: splitX,
+      maxKn: maxKn,
+      mode: SearchBatchMode.fullRealCost,
+      workers: workerCount,
     );
-    if (compiled == null) continue;
-    final costSeg = env.runInOutWithRealCost(
-      compiled,
-      v.buyAst!,
-      v.sellAst!,
-      splitX,
-    );
-    if (costSeg != null) {
-      realCost[v] = robustRankScore(costSeg.inSample, costSeg.outSample);
+    for (final r in costResults) {
+      final v = r.verdict;
+      if (v != null) {
+        realCost[v.name] = robustRankScore(v.inSample, v.outSample);
+      }
     }
+  } on _SmartSearchCancelled {
+    // 取消：真实成本分留空即可，不阻塞已有结果落盘。
   }
 
   final withScore = [
@@ -252,7 +313,7 @@ Future<SmartSearchOutcome> runSmartSearch({
         sellAst: r.verdict.sellAst,
         splitX: r.verdict.splitX,
         rankScore: r.rankScore,
-        realCostScore: realCost[r.verdict],
+        realCostScore: realCost[r.verdict.name],
       ),
   ];
 
@@ -262,6 +323,14 @@ Future<SmartSearchOutcome> runSmartSearch({
     combosBuilt: comboCands.length,
     ranked: withScore,
   );
+}
+
+/// 内部信号：扫描已被取消，提前结束剩余阶段。
+///
+/// 只在智能寻优内部流转，不外抛：取消后仍要把已经算出的结果排名落盘，
+/// 让用户看到「保留部分 TSV」而不是一个空结果。
+class _SmartSearchCancelled implements Exception {
+  const _SmartSearchCancelled();
 }
 
 /// 基元及其「所在候选的样本内得分」，用于基元池排序截断。

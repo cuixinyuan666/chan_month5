@@ -149,6 +149,116 @@ List<ComboCandidate> beamComboSearch({
   return out;
 }
 
+/// [beamComboSearch] 的异步版：每轮的候选先攒成一批，由 [scoreBatch] 一次算完。
+///
+/// 用于把回测丢进多个隔离区并行。评分顺序变了，但每条组合的分数不变、
+/// 候选构造顺序不变，所以选出的组合与同步版完全一致（有对拍测试钉住）。
+Future<List<ComboCandidate>> beamComboSearchAsync({
+  required List<ComboAtom> buyAtoms,
+  required List<ComboAtom> sellAtoms,
+  required Future<List<double?>> Function(List<ComboCandidate> batch) scoreBatch,
+  int beamWidth = 8,
+  int maxSize = 3,
+  double minGain = 0.0,
+}) async {
+  // 种子：买卖两侧各取一条，全交叉。
+  final seedPairs = <ComboCandidate>[
+    for (final b in buyAtoms)
+      for (final s in sellAtoms)
+        ComboCandidate(buys: [b], sells: [s], score: 0),
+  ];
+  final seedScores = await _scoreDeduped(seedPairs, scoreBatch);
+  final seeds = <ComboCandidate>[];
+  for (var i = 0; i < seedPairs.length; i++) {
+    final sc = seedScores[i];
+    if (sc == null || sc <= 0) continue;
+    seeds.add(ComboCandidate(
+      buys: seedPairs[i].buys,
+      sells: seedPairs[i].sells,
+      score: sc,
+    ));
+  }
+  seeds.sort((a, b) => b.score.compareTo(a.score));
+  var beam = seeds.take(beamWidth).toList();
+  if (beam.isEmpty) return const [];
+
+  final best = <String, ComboCandidate>{
+    for (final c in beam) c.name: c,
+  };
+
+  while (beam.isNotEmpty && beam.first.size < maxSize) {
+    final pending = <ComboCandidate>[];
+    // 与 pending 一一对应的基准分：同一个子组合可能从不同父组合生成，
+    // 基准分不同，门槛必须逐条判断（不能按名字合并）。
+    final baseScores = <double>[];
+    for (final cur in beam) {
+      void add(List<ComboAtom> buys, List<ComboAtom> sells) {
+        if (buys.length + sells.length > maxSize) return;
+        pending.add(ComboCandidate(buys: buys, sells: sells, score: 0));
+        baseScores.add(cur.score);
+      }
+
+      final haveBuy = cur.buys.map(_identity).toSet();
+      for (final b in buyAtoms) {
+        if (haveBuy.contains(_identity(b))) continue;
+        add([...cur.buys, b], cur.sells);
+      }
+      final haveSell = cur.sells.map(_identity).toSet();
+      for (final s in sellAtoms) {
+        if (haveSell.contains(_identity(s))) continue;
+        add(cur.buys, [...cur.sells, s]);
+      }
+    }
+    if (pending.isEmpty) break;
+
+    final scores = await _scoreDeduped(pending, scoreBatch);
+    final next = <ComboCandidate>[];
+    for (var i = 0; i < pending.length; i++) {
+      final sc = scores[i];
+      if (sc == null) continue;
+      if (sc - baseScores[i] < minGain) continue;
+      next.add(ComboCandidate(
+        buys: pending[i].buys,
+        sells: pending[i].sells,
+        score: sc,
+      ));
+    }
+    if (next.isEmpty) break;
+    next.sort((a, b) => b.score.compareTo(a.score));
+    beam = _dedup(next).take(beamWidth).toList();
+    for (final c in beam) {
+      final prev = best[c.name];
+      if (prev == null || c.score > prev.score) best[c.name] = c;
+    }
+  }
+
+  final out = best.values.toList()
+    ..sort((a, b) {
+      final c = b.score.compareTo(a.score);
+      if (c != 0) return c;
+      return a.name.compareTo(b.name);
+    });
+  return out;
+}
+
+/// 先按名称去重再批量打分，最后展开回原顺序。同名组合只算一次。
+Future<List<double?>> _scoreDeduped(
+  List<ComboCandidate> pending,
+  Future<List<double?>> Function(List<ComboCandidate> batch) scoreBatch,
+) async {
+  final unique = <String, ComboCandidate>{};
+  for (final c in pending) {
+    unique.putIfAbsent(c.name, () => c);
+  }
+  final names = unique.keys.toList();
+  final scores = await scoreBatch([for (final n in names) unique[n]!]);
+  final byName = <String, double?>{
+    for (var i = 0; i < names.length; i++)
+      names[i]: i < scores.length ? scores[i] : null,
+  };
+  return [for (final c in pending) byName[c.name]];
+}
+
 /// 基元的去重身份：能提取出变量就按变量，否则按基元键。
 String _identity(ComboAtom a) => a.variableKey ?? a.key;
 

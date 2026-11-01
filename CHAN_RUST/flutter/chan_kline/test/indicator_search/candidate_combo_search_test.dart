@@ -73,7 +73,7 @@ void main() {
     final found = beamComboSearch(
       buyAtoms: [atom('RSI低于30')],
       sellAtoms: [atom('RSI高于70')],
-      scoreOf: (_, __) => 1,
+      scoreOf: (_, _) => 1,
     );
     expect(found, hasLength(1));
     final cand = found.single.toComboCand();
@@ -129,6 +129,47 @@ void main() {
       expect(vars.toSet().length, vars.length,
           reason: '组合 ${c.name} 里同一个变量出现了两次');
     }
+  });
+
+  test('异步批量版与同步版选出完全相同的组合', () async {
+    final buys = [atom('A'), atom('B'), atom('C')];
+    final sells = [atom('S1'), atom('S2')];
+
+    // 确定性分数：按组合里出现的键累加，含 'C' 的组合偶尔判为不可用。
+    double? score(List<ComboAtom> bs, List<ComboAtom> ss) {
+      final keys = [...bs, ...ss].map((a) => a.key).toList();
+      if (keys.contains('C') && keys.length > 2) return null;
+      var s = 0.0;
+      for (final k in keys) {
+        s += k == 'A' ? 1.0 : (k == 'B' ? 0.6 : 0.3);
+      }
+      return s;
+    }
+
+    final sync = beamComboSearch(
+      buyAtoms: buys,
+      sellAtoms: sells,
+      scoreOf: score,
+      beamWidth: 4,
+      maxSize: 3,
+      minGain: 0.1,
+    );
+    final async = await beamComboSearchAsync(
+      buyAtoms: buys,
+      sellAtoms: sells,
+      scoreBatch: (batch) async => [
+        for (final c in batch) score(c.buys, c.sells),
+      ],
+      beamWidth: 4,
+      maxSize: 3,
+      minGain: 0.1,
+    );
+
+    expect(
+      async.map((c) => '${c.name}|${c.score}').toList(),
+      sync.map((c) => '${c.name}|${c.score}').toList(),
+      reason: '异步版只改变评分顺序，不该改变选出的组合',
+    );
   });
 
   test('粗筛只留样本内成交够多且净利为正的候选', () {

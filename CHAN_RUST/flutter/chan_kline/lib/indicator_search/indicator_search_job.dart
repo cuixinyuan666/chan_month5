@@ -302,6 +302,7 @@ class IndicatorSearchJob {
     // 智能寻优：粗筛 + 组合搜索 + 样本外排名，结果按稳健分落盘。
     // 关闭时走下面的全量列出，口径与旧版完全一致。
     if (settings.smartSearch) {
+      final smartStarted = DateTime.now();
       final outcome = await runSmartSearch(
         runner: runner,
         env: env,
@@ -331,7 +332,7 @@ class IndicatorSearchJob {
           total: cands.length,
           splitX: splitBarIdx(bars, inRatio: p.inRatio),
           verdicts: outcome.ranked,
-          elapsed: Duration.zero,
+          elapsed: DateTime.now().difference(smartStarted),
           cancelled: _cancelRequested,
         ),
         bars: bars,
