@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -116,62 +117,73 @@ def send_doc(path: Path, caption: str) -> dict:
         return json.loads(resp.read().decode("utf-8"))
 
 
-def upload_year(code: str, year: str, files: list[Path]) -> dict:
-    tag = year
-    if len(files) > 300:
-        pass
+def _zip_and_size(code: str, tag: str, files: list[Path]) -> tuple[Path, float]:
     zip_path = ZIP_DIR / f"{code}_{tag}_ticks.zip"
     if zip_path.exists():
         zip_path.unlink()
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:
         for f in files:
             z.write(f, arcname=f.name)
-    mb = zip_path.stat().st_size / 1024 / 1024
+    return zip_path, zip_path.stat().st_size / 1024 / 1024
+
+
+def upload_chunk(code: str, tag: str, files: list[Path], depth: int = 0) -> dict:
+    """上传一个年/年段包；超过 40MB 时按年份对半拆（最多拆两层）。"""
+    zip_path, mb = _zip_and_size(code, tag, files)
     if mb > MAX_ZIP_MB:
-        # 按半年再拆
-        zip_path.unlink()
-        h1 = [f for f in files if int(f.name[4:6]) <= 6]
-        h2 = [f for f in files if int(f.name[4:6]) > 6]
+        zip_path.unlink(missing_ok=True)
+        if depth >= 2 or len(files) <= 1:
+            raise RuntimeError(f"chunk {code} {tag} too large {mb:.1f}MB")
+        years = sorted({f.name[:4] for f in files})
+        mid = len(years) // 2
+        left = [f for f in files if f.name[:4] in set(years[:mid])]
+        right = [f for f in files if f.name[:4] in set(years[mid:])]
         out = {}
-        for sub_tag, sub in ((f"{year}H1", h1), (f"{year}H2", h2)):
+        for sub_tag, sub in ((f"{years[0]}-{years[mid-1]}", left), (f"{years[mid]}-{years[-1]}", right)):
             if sub:
-                out[sub_tag] = upload_year_files(code, sub_tag, sub)
-        return {"split": out}
+                out[sub_tag] = upload_chunk(code, sub_tag, sub, depth + 1)
+        return {"__split__": out}
     time.sleep(1.0 / RATE)
-    resp = send_doc(zip_path, f"#ticks {code} {tag} ({len(files)}d)")
+    last_err = None
+    for attempt in range(3):
+        try:
+            resp = send_doc(zip_path, f"#ticks {code} {tag} ({len(files)}d)")
+            if resp.get("ok"):
+                return {
+                    "file_id": resp["result"]["document"]["file_id"],
+                    "message_id": resp["result"]["message_id"],
+                    "days": len(files),
+                    "zip_mb": round(mb, 1),
+                    "from": files[0].name[:8],
+                    "to": files[-1].name[:8],
+                }
+            last_err = resp
+        except Exception as e:
+            last_err = e
+        time.sleep(2 + attempt * 2)
     zip_path.unlink(missing_ok=True)
-    if not resp.get("ok"):
-        raise RuntimeError(f"upload reject: {resp}")
-    return {
-        "file_id": resp["result"]["document"]["file_id"],
-        "message_id": resp["result"]["message_id"],
-        "days": len(files),
-        "zip_mb": round(mb, 1),
-    }
+    raise RuntimeError(f"upload reject: {last_err}")
 
 
-def upload_year_files(code: str, tag: str, files: list[Path]) -> dict:
-    zip_path = ZIP_DIR / f"{code}_{tag}_ticks.zip"
-    if zip_path.exists():
-        zip_path.unlink()
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:
-        for f in files:
-            z.write(f, arcname=f.name)
-    mb = zip_path.stat().st_size / 1024 / 1024
-    if mb > MAX_ZIP_MB:
-        zip_path.unlink()
-        raise RuntimeError(f"chunk {code} {tag} too large {mb:.1f}MB")
-    time.sleep(1.0 / RATE)
-    resp = send_doc(zip_path, f"#ticks {code} {tag} ({len(files)}d)")
-    zip_path.unlink(missing_ok=True)
-    if not resp.get("ok"):
-        raise RuntimeError(f"upload reject: {resp}")
-    return {
-        "file_id": resp["result"]["document"]["file_id"],
-        "message_id": resp["result"]["message_id"],
-        "days": len(files),
-        "zip_mb": round(mb, 1),
-    }
+def plan_chunks(by_year: dict[str, list[Path]], recent_years: set[str]) -> list[tuple[str, list[Path]]]:
+    """近 3 年按年单独打包；更早年份每 8 年（或 ~120MB 原始）一包。"""
+    chunks: list[tuple[str, list[Path]]] = []
+    for y in sorted(by_year):
+        if y in recent_years:
+            chunks.append((y, by_year[y]))
+    older = [y for y in sorted(by_year) if y not in recent_years]
+    batch: list[str] = []
+    batch_bytes = 0
+    for y in older:
+        sz = sum(f.stat().st_size for f in by_year[y])
+        if batch and (len(batch) >= 8 or batch_bytes + sz > 120 * 1024 * 1024):
+            chunks.append((f"{batch[0]}-{batch[-1]}", [f for yy in batch for f in by_year[yy]]))
+            batch, batch_bytes = [], 0
+        batch.append(y)
+        batch_bytes += sz
+    if batch:
+        chunks.append((f"{batch[0]}-{batch[-1]}", [f for yy in batch for f in by_year[yy]]))
+    return chunks
 
 
 def fetch_stock(code: str) -> bool:
@@ -218,9 +230,16 @@ def main() -> int:
     st = load_state()
     done = set(st["files"].keys())
     todo = [c for c in codes if c not in done]
+    limit = int(os.environ.get("PIPE_LIMIT", "0") or 0)
+    if limit > 0:
+        todo = todo[:limit]
     log(f"total codes {len(codes)}, done {len(done)}, todo {len(todo)}")
 
     for i, code in enumerate(todo, 1):
+        free_gb = shutil.disk_usage(CACHE_ROOT).free / (1024 ** 3)
+        if free_gb < 5:
+            log(f"disk low on {CACHE_ROOT}: {free_gb:.1f}GB free -> stop")
+            break
         t0 = time.time()
         log(f"[{i}/{len(todo)}] {code} fetch ...")
         if not fetch_stock(code):
@@ -233,26 +252,34 @@ def main() -> int:
         by_year: dict[str, list[Path]] = {}
         for f in files:
             by_year.setdefault(f.name[:4], []).append(f)
+        now_year = time.localtime().tm_year
+        recent = {str(y) for y in range(now_year - 2, now_year + 1)}
+        chunks = plan_chunks(by_year, recent)
         entry = {"years": {}}
         ok = True
-        for year in sorted(by_year):
-            if year in entry["years"]:
+        for tag, chunk_files in chunks:
+            if tag in entry["years"]:
                 continue
             try:
-                entry["years"][year] = upload_year(code, year, by_year[year])
+                r = upload_chunk(code, tag, chunk_files)
+                if "__split__" in r:
+                    for sub_tag, sub in r["__split__"].items():
+                        entry["years"][sub_tag] = sub
+                else:
+                    entry["years"][tag] = r
                 save_state({**st, "files": {**st["files"], code: entry}})
             except Exception as e:
                 ok = False
-                log(f"  fail {code} {year}: {e}")
+                log(f"  fail {code} {tag}: {e}")
         st["files"][code] = entry
         save_state(st)
         if ok:
             subprocess.run(["cmd", "/c", "rmdir", "/s", "/q", str(d)], capture_output=True)
-            log(f"  {code} done {len(files)}d in {time.time()-t0:.0f}s (uploaded {len(entry['years'])}y)")
+            log(f"  {code} done {len(files)}d in {time.time()-t0:.0f}s (uploaded {len(entry['years'])} packs)")
 
     index = {
-        "version": 2,
-        "kind": "ticks_zip_yearly",
+        "version": 3,
+        "kind": "ticks_zip_hybrid",
         "count": len(st["files"]),
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "files": st["files"],
