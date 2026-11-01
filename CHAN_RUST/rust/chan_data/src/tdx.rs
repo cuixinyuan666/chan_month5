@@ -269,10 +269,25 @@ impl TdxClient {
     }
 }
 
-/// 单只股票分笔批量导出用的拉取器：复用一个连接，失败自动重连。
+/// 单只股票分笔批量导出用的拉取器：走 2026-09 新协议主机（新认证），
+/// 每个线程持有一个会话，失败自动换主机重连。
 pub struct TickFetcher {
-    client: Option<TdxClient>,
+    session: Option<crate::tdx_daily::TdxSession>,
+    hosts: Vec<String>,
+    idx: usize,
 }
+
+/// 默认分笔主机（新协议，已验证可用）。
+const DEFAULT_TICK_HOSTS: &[&str] = &[
+    "101.33.225.16",
+    "101.35.121.35",
+    "119.97.185.59",
+    "82.156.174.84",
+    "116.205.163.254",
+    "101.42.164.241",
+    "110.41.147.114",
+    "124.71.187.122",
+];
 
 impl Default for TickFetcher {
     fn default() -> Self {
@@ -282,34 +297,66 @@ impl Default for TickFetcher {
 
 impl TickFetcher {
     pub fn new() -> Self {
-        Self { client: None }
+        Self::with_hosts(&[])
     }
 
-    /// 拉取某市场/代码/交易日的分笔（0x0fc6，带笔数与买卖方向）。
-    /// 目标市场无数据时按 深→沪 回退，兼容北交所代码市场号差异。
+    /// 指定主机列表（轮询使用）；传空则用内置默认。
+    pub fn with_hosts(hosts: &[&str]) -> Self {
+        Self {
+            session: None,
+            hosts: hosts.iter().map(|s| (*s).to_string()).collect(),
+            idx: 0,
+        }
+    }
+
+    fn connect(&mut self) -> Result<()> {
+        if self.hosts.is_empty() {
+            self.hosts = DEFAULT_TICK_HOSTS.iter().map(|s| (*s).to_string()).collect();
+        }
+        let n = self.hosts.len();
+        let mut last = ChanDataError::msg("通达信行情服务器均无法连接");
+        for k in 0..n {
+            let host = self.hosts[(self.idx + k) % n].clone();
+            match crate::tdx_daily::TdxSession::connect(&host) {
+                Ok(s) => {
+                    self.session = Some(s);
+                    self.idx = (self.idx + k + 1) % n;
+                    return Ok(());
+                }
+                Err(e) => last = e,
+            }
+        }
+        Err(last)
+    }
+
+    /// 拉取某市场/代码/交易日的分笔；目标市场无数据时按 深→沪 回退。
     pub fn fetch_day(&mut self, market: u16, code: &str, date8: i32) -> Result<Vec<TickRow>> {
-        fn attempt(c: &mut TdxClient, market: u16, code: &str, date8: i32) -> Result<Vec<TickRow>> {
-            let mut ticks = c.history_day(market, code, date8)?;
+        if self.session.is_none() {
+            self.connect()?;
+        }
+        let attempt = |s: &mut crate::tdx_daily::TdxSession| -> Result<Vec<TickRow>> {
+            let mut ticks = s.day_ticks(market, code, date8)?;
             if ticks.is_empty() && market != 0 {
-                ticks = c.history_day(0, code, date8)?;
+                ticks = s.day_ticks(0, code, date8)?;
             }
             if ticks.is_empty() && market != 1 {
-                ticks = c.history_day(1, code, date8)?;
+                ticks = s.day_ticks(1, code, date8)?;
             }
             Ok(ticks)
-        }
-        match attempt(ensure_client(&mut self.client)?, market, code, date8) {
+        };
+        match attempt(self.session.as_mut().expect("刚连上")) {
             Ok(t) => Ok(t),
             Err(_) => {
-                self.client = Some(TdxClient::connect()?);
-                attempt(ensure_client(&mut self.client)?, market, code, date8)
+                self.session = None;
+                self.connect()?;
+                attempt(self.session.as_mut().expect("刚连上"))
             }
         }
     }
 
     /// 主动断开，下次调用重新选服务器。
     pub fn reconnect(&mut self) {
-        self.client = None;
+        self.session = None;
     }
 }
 
@@ -331,7 +378,7 @@ pub fn write_tick_cache(
 }
 
 /// 带笔数的历史分笔（命令 0x0fc6）。
-fn history_pkg(market: u16, code: &str, date: u32, start: u16, count: u16) -> Vec<u8> {
+pub(crate) fn history_pkg(market: u16, code: &str, date: u32, start: u16, count: u16) -> Vec<u8> {
     let mut pkg = hex_bytes("0c013002020112001200c60f").unwrap_or_default();
     pkg.extend_from_slice(&date.to_le_bytes());
     pkg.extend_from_slice(&market.to_le_bytes());
@@ -345,7 +392,7 @@ fn history_pkg(market: u16, code: &str, date: u32, start: u16, count: u16) -> Ve
     pkg
 }
 
-fn parse_history_c6(body: &[u8], date: NaiveDate) -> Result<Vec<TickRow>> {
+pub(crate) fn parse_history_c6(body: &[u8], date: NaiveDate) -> Result<Vec<TickRow>> {
     if body.len() < 6 {
         return Ok(Vec::new());
     }

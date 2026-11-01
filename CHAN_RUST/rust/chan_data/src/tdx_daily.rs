@@ -11,8 +11,10 @@ use std::net::{SocketAddr, TcpStream};
 use std::time::Duration;
 
 use flate2::read::ZlibDecoder;
+use chrono::NaiveDate;
 
 use crate::error::{ChanDataError, Result};
+use crate::tick::TickRow;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(6);
 const IO_TIMEOUT: Duration = Duration::from_secs(12);
@@ -122,6 +124,34 @@ impl TdxSession {
         dec.read_to_end(&mut out)
             .map_err(|e| ChanDataError::msg(format!("行情解压失败: {e}")))?;
         Ok(out)
+    }
+
+    /// 拉取某市场某交易日的分笔（0x0fc6，带笔数与买卖方向）。
+    pub fn day_ticks(&mut self, market: u16, code: &str, date8: i32) -> Result<Vec<TickRow>> {
+        let date = NaiveDate::from_ymd_opt(
+            date8 / 10000,
+            (date8 / 100 % 100) as u32,
+            (date8 % 100) as u32,
+        )
+        .ok_or_else(|| ChanDataError::msg(format!("非法日期 {date8}")))?;
+        let mut all: Vec<TickRow> = Vec::new();
+        let mut start: u16 = 0;
+        loop {
+            let pkg = crate::tdx::history_pkg(market, code, date8 as u32, start, 800);
+            let body = self.send_recv(&pkg)?;
+            let page = crate::tdx::parse_history_c6(&body, date)?;
+            if page.is_empty() {
+                break;
+            }
+            let n = page.len() as u16;
+            all.extend(page);
+            if n < 800 || start > 40000 {
+                break;
+            }
+            start = start.saturating_add(n);
+        }
+        all.sort_by_key(|r| r.dt);
+        Ok(all)
     }
 
     /// 拉取某市场全部证券（分页）。
