@@ -105,7 +105,7 @@ def target_date(now: datetime | None = None) -> date:
     return d
 
 
-def fetch_day(target: date, threads: int, codes: str = "") -> bool:
+def fetch_day(target: date, threads: int, codes: str = "", codes_file: Path | None = None) -> bool:
     """调用 Rust 导出器拉全市场某一天的分笔到 G 缓存。"""
     cmd = [
         str(EXE),
@@ -114,7 +114,7 @@ def fetch_day(target: date, threads: int, codes: str = "") -> bool:
         "--threads", str(threads),
         "--cache-root", str(CACHE),
         "--out", str(WORK / "manifest"),
-        "--codes-from", str(SUMMARY),
+        "--codes-from", str(codes_file or SUMMARY),
     ]
     if codes.strip():
         cmd += ["--codes", codes.strip()]
@@ -123,6 +123,32 @@ def fetch_day(target: date, threads: int, codes: str = "") -> bool:
         log("fetch failed: " + (r.stderr or r.stdout)[-500:])
         return False
     return True
+
+
+def acquire_lock() -> bool:
+    """单实例锁：已有实例在跑就直接退出，避免计划任务与 App 按钮重复上传。"""
+    lock = WORK / "update.lock"
+    if lock.is_file():
+        try:
+            pid = int(lock.read_text(encoding="utf-8").strip())
+            r = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+            )
+            if str(pid) in (r.stdout or ""):
+                log(f"another instance is running (pid {pid}), exit")
+                return False
+        except Exception:
+            pass
+    lock.write_text(str(os.getpid()), encoding="utf-8")
+    return True
+
+
+def release_lock() -> None:
+    try:
+        (WORK / "update.lock").unlink(missing_ok=True)
+    except Exception:
+        pass
 
 
 def main() -> int:
@@ -147,17 +173,10 @@ def main() -> int:
     CACHE.mkdir(parents=True, exist_ok=True)
     ZIP_DIR.mkdir(parents=True, exist_ok=True)
     INDEX_DIR.mkdir(parents=True, exist_ok=True)
-
-    t0 = time.time()
-    if not fetch_day(target, args.threads, args.codes):
-        return 3
-    dirs = sorted((CACHE / ".tdx_protocol_cache").glob("*"))
-    if args.codes.strip():
-        want = {c.strip() for c in args.codes.split(",") if c.strip()}
-        dirs = [d for d in dirs if d.name in want]
-    if args.limit:
-        dirs = dirs[: args.limit]
-    log(f"fetched {len(dirs)} stocks in {time.time()-t0:.0f}s")
+    if not acquire_lock():
+        return 0
+    import atexit
+    atexit.register(release_lock)
 
     month = target.strftime("%Y-%m")
     index_path = INDEX_DIR / f"ticks_daily_{month}.json"
@@ -169,7 +188,44 @@ def main() -> int:
             pass
     files = index.setdefault("files", {})
 
+    # 只抓「还没上传过」的股票：异常退出后重启不重复下载/上传
+    summary_rows = []
+    with SUMMARY.open(encoding="utf-8") as f:
+        next(f)
+        for line in f:
+            p = line.rstrip("\n").split(",")
+            if len(p) >= 3 and len(p[0]) == 6:
+                summary_rows.append(p)
+    if args.codes.strip():
+        want = {c.strip() for c in args.codes.split(",") if c.strip()}
+        summary_rows = [p for p in summary_rows if p[0] in want]
+    missing = [
+        p for p in summary_rows
+        if not (files.get(p[0], {}).get(tag, {}) or {}).get("file_id")
+    ]
+    if args.limit:
+        missing = missing[: args.limit]
+    if not missing:
+        log(f"{tag} 已全部上传，无需重复执行")
+        return 0
+    todo_csv = WORK / f"todo_{tag}.csv"
+    with todo_csv.open("w", encoding="utf-8", newline="") as f:
+        f.write("code,name,market,exchange,bars,first,last,status\n")
+        for p in missing:
+            name = p[1].replace(",", " ")
+            f.write(f"{p[0]},{name},{p[2]},,0,,,todo\n")
+    log(f"待更新 {len(missing)} 只（已上传 {len(summary_rows)-len(missing)} 只跳过）")
+
+    t0 = time.time()
+    if not fetch_day(target, args.threads, args.codes, todo_csv):
+        return 3
+    dirs = sorted((CACHE / ".tdx_protocol_cache").glob("*"))
+    want_codes = {p[0] for p in missing}
+    dirs = [d for d in dirs if d.name in want_codes]
+    log(f"fetched {len(dirs)} stocks in {time.time()-t0:.0f}s")
+
     ok = fail = 0
+    last_flush = 0
     for d in dirs:
         code = d.name
         txts = sorted(d.glob("*.txt"))
@@ -206,6 +262,10 @@ def main() -> int:
             log(f"  fail {code}: {e}")
         finally:
             zip_path.unlink(missing_ok=True)
+        # 每 10 只落盘一次索引：异常退出后重启最多重传 10 只
+        if ok - last_flush >= 10:
+            index_path.write_text(json.dumps(index, ensure_ascii=False, indent=1), encoding="utf-8")
+            last_flush = ok
         if (ok + fail) % 200 == 0:
             index_path.write_text(json.dumps(index, ensure_ascii=False, indent=1), encoding="utf-8")
             log(f"  progress {ok+fail}/{len(dirs)} ok={ok} fail={fail}")
