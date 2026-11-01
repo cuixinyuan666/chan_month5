@@ -13,6 +13,7 @@ Future<TelegramSettings?> showTelegramSettingsDialog(
   final chatCtrl = TextEditingController(text: initial.chatId);
   final indexCtrl = TextEditingController(text: initial.indexFileId);
   final proxyCtrl = TextEditingController(text: initial.proxy);
+  final tickIndexCtrl = TextEditingController(text: initial.tickIndexFileId);
 
   return showDialog<TelegramSettings>(
     context: context,
@@ -89,6 +90,15 @@ Future<TelegramSettings?> showTelegramSettingsDialog(
               ),
               const SizedBox(height: 10),
               TextField(
+                controller: tickIndexCtrl,
+                decoration: const InputDecoration(
+                  labelText: '分笔索引 ticks_index.json 的 file_id（可选）',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
+              ),
+              const SizedBox(height: 10),
+              TextField(
                 controller: proxyCtrl,
                 decoration: const InputDecoration(
                   labelText: 'HTTP 代理（如 127.0.0.1:19828；直连留空）',
@@ -113,6 +123,7 @@ Future<TelegramSettings?> showTelegramSettingsDialog(
                   botToken: tokenCtrl.text.trim(),
                   chatId: chatCtrl.text.trim(),
                   indexFileId: indexCtrl.text.trim(),
+                  tickIndexFileId: tickIndexCtrl.text.trim(),
                   proxy: proxyCtrl.text.trim(),
                 ),
               );

@@ -12,6 +12,7 @@ import 'package:window_manager/window_manager.dart';
 import 'bridge/chan_bridge.dart';
 import 'data/mobile_data_root.dart';
 import 'data/telegram_data_source.dart';
+import 'data/telegram_tick_source.dart';
 import 'ui/mobile/android_shell.dart';
 import 'compute/chip_profile_compute.dart';
 import 'compute/tick_dist_profile_compute.dart';
@@ -475,6 +476,50 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
       _telegramSettings.telegramEnabled &&
       _period == 'day' &&
       _selectedCode != 'test';
+
+  /// 需要分笔的周期（分笔 + 各分钟级）；日线及以上不需要。
+  static bool _needsTickData(String period) {
+    const noTick = {
+      'day',
+      '3d',
+      'week',
+      'month',
+      '3mon',
+      '6mon',
+      '9mon',
+      '12mon',
+      'quarter',
+      'year',
+      '3y',
+      '6y',
+    };
+    return !noTick.contains(period);
+  }
+
+  /// 从 Telegram 预取分笔到本地缓存（命中后 protocol 不再联网）。
+  Future<void> _prefetchTelegramTicks(String code) async {
+    if (!_telegramSettings.telegramEnabled ||
+        !_needsTickData(_period) ||
+        code == 'test') {
+      return;
+    }
+    try {
+      final ts = TelegramTickSource(
+        settings: _telegramSettings,
+        cacheRoot: Directory(_dataRoot),
+      );
+      final ok = await ts.ensureTicks(
+        code: code,
+        begin: _beginDate,
+        end: _endDate,
+      );
+      if (!ok) {
+        _msgHistory.append('Telegram 分笔部分包缺失，剩余日期将走通达信');
+      }
+    } catch (e) {
+      _msgHistory.append('Telegram 分笔不可用，回退通达信：$e');
+    }
+  }
 
   Future<void> _openTelegramSettings({bool closeSettingsSheet = false}) async {
     if (closeSettingsSheet && Navigator.canPop(context)) {
@@ -2036,6 +2081,7 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
               : '（本地分笔文件）';
         }
       } else {
+        await _prefetchTelegramTicks(code);
         final loaded = _bridge.loadKlinesEx(
           dataRoot: _dataRoot,
           code: code,

@@ -286,11 +286,10 @@ def main() -> int:
     }
     INDEX.write_text(json.dumps(index, ensure_ascii=False, indent=1), encoding="utf-8")
     try:
-        resp = send_doc(INDEX, f"#ticks_index {len(st['files'])}")
-        if resp.get("ok"):
-            log(f"index uploaded file_id={resp['result']['document']['file_id']}")
+        import publish_ticks_index as pub
+        pub.main()
     except Exception as e:
-        log(f"index upload fail: {e}")
+        log(f"index publish fail: {e}")
     return 0
 
 
