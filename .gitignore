@@ -107,3 +107,6 @@ exports/
 
 # Telegram 本机凭据（含 token，勿提交）
 CHAN_RUST/flutter/chan_kline/.chan_telegram_settings.json
+
+# Telegram 本机缓存（索引/股票 CSV，不入库）
+a_Data/.telegram_cache/
