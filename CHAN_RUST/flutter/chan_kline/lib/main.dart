@@ -99,6 +99,7 @@ import 'step_freeze/step_freeze_merger.dart';
 import 'step_freeze/step_freeze_session_state.dart';
 import 'agent_api/agent_api_host.dart';
 import 'agent_api/agent_api_server.dart';
+import 'agent_api/agent_data_export_runner.dart';
 import 'agent_api/agent_backtest_json.dart';
 import 'agent_api/agent_config_key.dart';
 import 'agent_api/agent_task.dart';
@@ -527,7 +528,11 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
     if (closeSettingsSheet && Navigator.canPop(context)) {
       Navigator.pop(context);
     }
-    final next = await showTelegramSettingsDialog(context, _telegramSettings);
+    final next = await showTelegramSettingsDialog(
+      context,
+      _telegramSettings,
+      onUpdateTicksNow: () => _triggerTicksDailyUpdate(),
+    );
     if (next == null || !mounted) return;
     setState(() => _telegramSettings = next);
     await TelegramSettingsStore.save(next);
@@ -536,6 +541,47 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
           ? '已启用 Telegram 日线数据源（分笔仍走通达信/本地缓存）'
           : '已切回通达信协议数据源',
     );
+  }
+
+  Timer? _ticksDailyTimer;
+  String? _lastTicksDailyRun;
+
+  File get _ticksDailyMarkFile =>
+      File('${_dataRoot}${Platform.pathSeparator}.chan_ticks_daily_last.txt');
+
+  void _startTicksDailyScheduler() {
+    _ticksDailyTimer?.cancel();
+    _ticksDailyTimer = Timer.periodic(
+      const Duration(minutes: 5),
+      (_) => unawaited(_maybeAutoTicksDaily()),
+    );
+  }
+
+  Future<void> _maybeAutoTicksDaily() async {
+    if (!_telegramSettings.telegramEnabled || !_telegramSettings.autoTicksDaily) {
+      return;
+    }
+    final now = DateTime.now();
+    if (now.weekday >= 6) return;
+    if (now.hour < 15 || (now.hour == 15 && now.minute < 35)) return;
+    final today = '${now.year}-${now.month}-${now.day}';
+    if (_lastTicksDailyRun == today) return;
+    _lastTicksDailyRun = today;
+    try {
+      _ticksDailyMarkFile.writeAsStringSync(today, flush: true);
+    } catch (_) {}
+    await _triggerTicksDailyUpdate(auto: true);
+  }
+
+  Future<void> _triggerTicksDailyUpdate({bool auto = false}) async {
+    try {
+      final task = await AgentDataExportRunner.instance.startTicksDaily();
+      _msgHistory.append(
+        '${auto ? "自动" : "手动"}分笔日更已启动：${task.id}（目标日期由盘中/收盘规则自动判定）',
+      );
+    } catch (e) {
+      _msgHistory.append('分笔日更启动失败：$e');
+    }
   }
   /// 数学指标参数（均线/通道/MACD/BOLL/RSI/KDJ/Demark）
   MathIndicatorConfig _mathIndicatorConfig = const MathIndicatorConfig();
@@ -834,6 +880,12 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
         _telegramSettings = tg;
       }
     });
+    try {
+      if (_ticksDailyMarkFile.existsSync()) {
+        _lastTicksDailyRun = _ticksDailyMarkFile.readAsStringSync().trim();
+      }
+    } catch (_) {}
+    _startTicksDailyScheduler();
   }
 
   /// 注册截图回调供智能体验证使用。

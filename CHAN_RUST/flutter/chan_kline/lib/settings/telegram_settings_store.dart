@@ -15,6 +15,7 @@ class TelegramSettings {
     this.indexFileId = '',
     this.tickIndexFileId = '',
     this.proxy = '',
+    this.autoTicksDaily = false,
   });
 
   final KlineDataSourceKind source;
@@ -30,6 +31,9 @@ class TelegramSettings {
   /// HTTP 代理（如 `127.0.0.1:19828`）；留空 = 直连。
   final String proxy;
 
+  /// 每个交易日 15:35 自动把当天分笔增量上传 Telegram。
+  final bool autoTicksDaily;
+
   bool get telegramEnabled =>
       source == KlineDataSourceKind.telegram &&
       botToken.trim().isNotEmpty && chatId.trim().isNotEmpty;
@@ -41,6 +45,7 @@ class TelegramSettings {
     String? indexFileId,
     String? tickIndexFileId,
     String? proxy,
+    bool? autoTicksDaily,
   }) {
     return TelegramSettings(
       source: source ?? this.source,
@@ -49,6 +54,7 @@ class TelegramSettings {
       indexFileId: indexFileId ?? this.indexFileId,
       tickIndexFileId: tickIndexFileId ?? this.tickIndexFileId,
       proxy: proxy ?? this.proxy,
+      autoTicksDaily: autoTicksDaily ?? this.autoTicksDaily,
     );
   }
 
@@ -64,6 +70,7 @@ class TelegramSettings {
       indexFileId: (json['index_file_id'] as String?)?.trim() ?? '',
       tickIndexFileId: (json['tick_index_file_id'] as String?)?.trim() ?? '',
       proxy: (json['proxy'] as String?)?.trim() ?? '',
+      autoTicksDaily: json['auto_ticks_daily'] == true,
     );
   }
 
@@ -74,6 +81,7 @@ class TelegramSettings {
         if (indexFileId.isNotEmpty) 'index_file_id': indexFileId,
         if (tickIndexFileId.isNotEmpty) 'tick_index_file_id': tickIndexFileId,
         if (proxy.isNotEmpty) 'proxy': proxy,
+        'auto_ticks_daily': autoTicksDaily,
       };
 }
 

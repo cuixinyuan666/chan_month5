@@ -6,9 +6,11 @@ import '../ui/settings_panel_widgets.dart';
 /// Telegram 数据源设置弹窗（含操作步骤说明）。
 Future<TelegramSettings?> showTelegramSettingsDialog(
   BuildContext context,
-  TelegramSettings initial,
-) async {
+  TelegramSettings initial, {
+  VoidCallback? onUpdateTicksNow,
+}) async {
   final source = ValueNotifier(initial.source);
+  final autoDaily = ValueNotifier(initial.autoTicksDaily);
   final tokenCtrl = TextEditingController(text: initial.botToken);
   final chatCtrl = TextEditingController(text: initial.chatId);
   final indexCtrl = TextEditingController(text: initial.indexFileId);
@@ -106,6 +108,25 @@ Future<TelegramSettings?> showTelegramSettingsDialog(
                   isDense: true,
                 ),
               ),
+              const Divider(height: 24),
+              ValueListenableBuilder<bool>(
+                valueListenable: autoDaily,
+                builder: (_, v, __) => SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('每个交易日自动更新分笔'),
+                  subtitle: const Text('收盘后 15:35 自动上传当天分笔到 Telegram；盘中只补到上一交易日'),
+                  value: v,
+                  onChanged: (x) => autoDaily.value = x,
+                ),
+              ),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: OutlinedButton.icon(
+                  icon: const Icon(Icons.upload_file, size: 18),
+                  label: const Text('立即更新分笔到 Telegram'),
+                  onPressed: onUpdateTicksNow,
+                ),
+              ),
             ],
           ),
         ),
@@ -125,6 +146,7 @@ Future<TelegramSettings?> showTelegramSettingsDialog(
                   indexFileId: indexCtrl.text.trim(),
                   tickIndexFileId: tickIndexCtrl.text.trim(),
                   proxy: proxyCtrl.text.trim(),
+                  autoTicksDaily: autoDaily.value,
                 ),
               );
             },

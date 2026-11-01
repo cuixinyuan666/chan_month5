@@ -83,6 +83,77 @@ class AgentDataExportRunner {
     return true;
   }
 
+  /// 启动「每日分笔增量更新」Python 脚本（手动/自动共用）。
+  Future<AgentExportTask> startTicksDaily({String? date, int limit = 0}) async {
+    final repo = RobotVerifyPaths.resolveRepoRoot(klineRoot: null);
+    if (repo == null || repo.isEmpty) throw StateError('无法解析仓库根目录');
+    final script = File(
+      '$repo${Platform.pathSeparator}CHAN_RUST${Platform.pathSeparator}scripts'
+      '${Platform.pathSeparator}update_ticks_daily.py',
+    );
+    if (!script.existsSync()) {
+      throw StateError('找不到脚本：${script.path}');
+    }
+    final liveDir = Directory(
+      '$repo${Platform.pathSeparator}a_Data${Platform.pathSeparator}agent_live',
+    );
+    if (!liveDir.existsSync()) liveDir.createSync(recursive: true);
+
+    final id = 'daily_ticks_${++_seq}';
+    final logPath = '${liveDir.path}${Platform.pathSeparator}export_$id.log';
+    final task = AgentExportTask(
+      id: id,
+      kind: 'ticks_daily',
+      startedAt: DateTime.now(),
+      logPath: logPath,
+      outDir: '$repo${Platform.pathSeparator}exports',
+    );
+    _tasks[id] = task;
+
+    final args = <String>[script.path];
+    if (date != null && date.trim().isNotEmpty) {
+      args.addAll(['--date', date.trim()]);
+    }
+    if (limit > 0) {
+      args.addAll(['--limit', '$limit']);
+    }
+    task.detail = '分笔日更启动：${args.join(' ')}';
+    final logFile = File(logPath);
+    final sink = logFile.openWrite(mode: FileMode.write);
+    sink.writeln('# ticks daily ${DateTime.now()}');
+
+    final proc = await Process.start(
+      'python',
+      args,
+      workingDirectory: '$repo${Platform.pathSeparator}CHAN_RUST'
+          '${Platform.pathSeparator}scripts',
+      runInShell: false,
+    );
+    task.process = proc;
+    proc.stdout.listen((d) {
+      sink.write(utf8.decode(d, allowMalformed: true));
+    });
+    proc.stderr.listen((d) {
+      sink.write(utf8.decode(d, allowMalformed: true));
+    });
+    unawaited(proc.exitCode.then((code) async {
+      await sink.flush();
+      await sink.close();
+      task.finishedAt = DateTime.now();
+      if (task.phase == 'cancelled') return;
+      if (code != 0) {
+        task.phase = 'failed';
+        task.error = '退出码 $code（详见 log_path）';
+        task.detail = task.error!;
+        return;
+      }
+      task.phase = 'done';
+      task.detail = '分笔日更完成';
+      task.fraction = 1.0;
+    }));
+    return task;
+  }
+
   /// 启动导出。 [kind] = ticks | daily。
   Future<AgentExportTask> start({
     required String kind,

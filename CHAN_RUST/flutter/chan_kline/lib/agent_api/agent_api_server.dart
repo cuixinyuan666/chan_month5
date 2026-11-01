@@ -662,6 +662,24 @@ class AgentApiServer {
         } catch (e) {
           return AgentCommandResult(ok: false, message: '$e');
         }
+      case 'update_ticks_daily':
+        try {
+          final task = await AgentDataExportRunner.instance.startTicksDaily(
+            date: cmd.begin,
+          );
+          return AgentCommandResult(
+            ok: true,
+            message:
+                '分笔日更已启动：${task.id}，GET /export_task?task_id=${task.id} 查询进度',
+            data: {
+              'task_id': task.id,
+              'kind': task.kind,
+              'log_path': task.logPath,
+            },
+          );
+        } catch (e) {
+          return AgentCommandResult(ok: false, message: '$e');
+        }
       case 'cancel_export':
         final taskId = (cmd.taskId ?? '').trim();
         if (taskId.isEmpty) {
