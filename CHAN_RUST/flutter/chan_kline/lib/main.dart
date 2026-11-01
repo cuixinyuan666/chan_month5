@@ -497,11 +497,11 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
   }
 
   /// 从 Telegram 预取分笔到本地缓存（命中后 protocol 不再联网）。
-  Future<void> _prefetchTelegramTicks(String code) async {
+  Future<bool> _prefetchTelegramTicks(String code) async {
     if (!_telegramSettings.telegramEnabled ||
         !_needsTickData(_period) ||
         code == 'test') {
-      return;
+      return false;
     }
     try {
       final ts = TelegramTickSource(
@@ -516,8 +516,10 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
       if (!ok) {
         _msgHistory.append('Telegram 分笔部分包缺失，剩余日期将走通达信');
       }
+      return ok;
     } catch (e) {
       _msgHistory.append('Telegram 分笔不可用，回退通达信：$e');
+      return false;
     }
   }
 
@@ -2081,7 +2083,7 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
               : '（本地分笔文件）';
         }
       } else {
-        await _prefetchTelegramTicks(code);
+        final tgTicks = await _prefetchTelegramTicks(code);
         final loaded = _bridge.loadKlinesEx(
           dataRoot: _dataRoot,
           code: code,
@@ -2095,9 +2097,11 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
         final directOhlc = code == 'test' && _hasTestOhlcCsv();
         srcHint = directOhlc
             ? '（直读custom.ohlc.csv，忽略周期聚合）'
-            : (quality.source == 'protocol'
-                ? '（通达信协议分笔）'
-                : '（本地分笔文件）');
+            : tgTicks
+                ? '（Telegram 分笔包 + 本地缓存）'
+                : (quality.source == 'protocol'
+                    ? '（通达信协议分笔）'
+                    : '（本地分笔文件）');
       }
       final tickDistOn = _tickDistConfig.enabled;
       final pendingMute = quality.shouldPrompt(tickDistEnabled: tickDistOn);
