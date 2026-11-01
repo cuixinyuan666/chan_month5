@@ -5,7 +5,6 @@ import 'package:chan_kline/backtest/backtest_step_harness.dart';
 import 'package:chan_kline/bridge/chan_bridge.dart';
 import 'package:chan_kline/indicator_search/candidate_builder.dart';
 import 'package:chan_kline/indicator_search/indicator_search_runner.dart';
-import 'package:chan_kline/indicator_search/search_core.dart';
 import 'package:chan_kline/indicator_search/search_env.dart';
 import 'package:chan_kline/indicator_search/variable_pool.dart';
 import 'package:chan_kline/models/chip_config.dart';
@@ -227,7 +226,11 @@ void main() {
       //    只能 pump() 逐步推进；且必须用**无时长** pump —— pump(duration)
       //    会把窗口内零时长定时器一次性排空，一次就把 2000 条跑完，来不及取消。
       //
-      // 取消时机：阶段切到「回测扫描」即 _activeRunner 已创建（runnerCreated）。
+      // 取消时机：必须等阶段真的切到「回测扫描」再点。
+      // runnerFactory 在作业构造时就已调用（runnerCreated 早早就为 true），
+      // 但作业要过完取路径/准备才把 runner 挂到 _runner 上；在那之前点取消，
+      // 信号只落在作业的 _cancelRequested 上，runner 的 onCancelRequested 不会响，
+      // 本用例就会假失败（此前偶发挂掉正是这个竞态）。
       // 点一次即可 —— onCancelRequested 钩子会证明取消信号确实送达扫描器。
       var steps = 0;
       var tapped = false;
@@ -254,6 +257,7 @@ void main() {
         }
         if (!tapped &&
             runnerCreated &&
+            find.textContaining('阶段：回测扫描').evaluate().isNotEmpty &&
             find.text('取消扫描').evaluate().isNotEmpty) {
           await tester.tap(find.text('取消扫描'));
           await tester.pump();
