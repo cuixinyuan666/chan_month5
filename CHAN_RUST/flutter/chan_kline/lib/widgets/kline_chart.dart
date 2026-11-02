@@ -199,6 +199,7 @@ class KlineChart extends StatefulWidget {
     this.tooltipBridge,
     this.dockTooltipPanel = false,
     this.interactive = true,
+    this.ownsKeyboard = true,
     this.sync,
     this.displayLevel,
     this.forceSubPane = false,
@@ -313,11 +314,17 @@ class KlineChart extends StatefulWidget {
   /// 移动端传 false，保持原悬浮态。
   final bool dockTooltipPanel;
 
-  /// 本窗是否可交互（层级分窗时只有含 K0 的窗为 true）。
+  /// 本窗是否可交互（第二版：分窗里每一格都是 true）。
   ///
-  /// false 时：不注册全局键盘监听、不接手势/滚轮、不写共享视口、
-  /// 不向 tooltip 桥广播；十字线与 as-of 全部只读 [sync] 的广播值。
+  /// 保留该开关是为了「仅筹码」等只读展示场景；层级分窗不再靠它区分主/被动窗，
+  /// 每窗都接手势、都有自己的视口与指标面板。
   final bool interactive;
+
+  /// 是否由本窗注册全局键盘监听。
+  ///
+  /// 分窗时只有一格为 true：`HardwareKeyboard` 是全局的，若每窗都注册，
+  /// 按一次方向键会步进 N 次。其余窗仍可用鼠标点左/中/右热区步进。
+  final bool ownsKeyboard;
 
   /// 层级分窗联动控制器；单图模式为 null（行为与分窗功能上线前完全一致）。
   final ChartSyncController? sync;
@@ -353,10 +360,19 @@ class KlineChart extends StatefulWidget {
 }
 
 class _KlineChartState extends State<KlineChart> {
-  /// 分窗时与所有窗共用同一份（见 [ChartSyncController.viewport]）；
-  /// 单图模式各图表自持一份，行为与分窗功能上线前完全一致。
-  late final KlineViewport _viewport =
-      widget.sync?.viewport ?? KlineViewport();
+  /// 本窗自己的视口：分窗时按层号从 [ChartSyncController.viewportFor] 取，
+  /// 单图模式自持一份。第二版起不再全窗共用一个对象（各窗可独立缩放/平移）。
+  late KlineViewport _viewport = _resolveViewport();
+
+  KlineViewport _resolveViewport() {
+    final s = widget.sync;
+    final lv = widget.displayLevel;
+    if (s != null && lv != null) return s.viewportFor(lv);
+    return KlineViewport();
+  }
+
+  /// 副图整块是否被「小眼睛」收起（只影响本窗，不落盘）。
+  bool _subPaneHidden = false;
   /// 双击三态：开十字线 → 关 tooltip → 全关
   CrosshairMode _crosshairMode = CrosshairMode.off;
   double? _crosshairX;
@@ -654,9 +670,30 @@ class _KlineChartState extends State<KlineChart> {
   List<SubChartIndicator> get _subCatalog =>
       buildSubIndicatorCatalog(_maxKn, truncationCheck: widget.truncationCheck);
 
+  /// 指标选择面板实际列出的主图条目。
+  ///
+  /// 第二版口径：每窗只列本层指标（K1 窗只有 K1 的主图项，K0 窗只有 K0 的），
+  /// 勾选也只作用于本层；单图集成（[KlineChart.displayLevel] 为 null）仍列全部层。
+  List<MainChartIndicator> get _pickerMainCatalog {
+    final lv = widget.displayLevel;
+    if (lv == null) return _mainCatalog;
+    return _mainCatalog.where((e) => e.displayLevel == lv).toList();
+  }
+
+  /// 同 [_pickerMainCatalog]，副图版。
+  List<SubChartIndicator> get _pickerSubCatalog {
+    final lv = widget.displayLevel;
+    if (lv == null) return _subCatalog;
+    return _subCatalog.where((e) => e.displayLevel == lv).toList();
+  }
+
   /// 副图是否展开（无勾选副图指标则收起整块副图区）。
   /// 分窗模式 [KlineChart.forceSubPane] 恒为真：各窗几何必须一致，否则十字横线对不齐。
-  bool get _showSubPane => _activeSubs.isNotEmpty || widget.forceSubPane;
+  /// 第二版起再叠一层「小眼睛」：收起后主图吃满，但勾选不丢，点眼睛可恢复。
+  bool get _showSubPane => !_subPaneHidden && _subPaneVisible;
+
+  /// 本窗是否存在副图块（有勾选副图，或分窗强制占位）。
+  bool get _subPaneVisible => _activeSubs.isNotEmpty || widget.forceSubPane;
 
   double _resolveMainPlotTop(BuildContext context) {
     if (!widget.mobileLayout) return KlineViewport.padT;
@@ -749,13 +786,17 @@ class _KlineChartState extends State<KlineChart> {
 
   bool _crosshairBroadcastScheduled = false;
 
-  /// 上次广播出去的视口签名：平移/缩放/步进后要让被动窗一起重画。
-  String? _publishedViewportSignature;
+  /// 本窗当前是不是十字线「主窗」：只有主窗会广播。
+  ///
+  /// 非主窗的十字线是联动控制器画上去的，若它们也广播，会把主窗刚设的
+  /// bar/价格原样盖回去，甚至互相抢主窗。只有用户在本窗开十字线/点图/按方向键
+  /// 时才升级为主窗（见 `_cycleCrosshair` / `_onZoneTapAt` / `_moveCrosshairBy`）。
+  bool _iAmCrosshairOwner = false;
 
   /// 本帧结束后把十字线状态广播给其余窗（只能在帧后做：广播会触发别的窗 setState，
   /// 在 build 期间直接 notify 会撞「setState during build」）。
   void _scheduleCrosshairBroadcast() {
-    if (!widget.interactive || widget.sync == null) return;
+    if (widget.sync == null) return;
     if (_crosshairBroadcastScheduled) return;
     _crosshairBroadcastScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -765,23 +806,25 @@ class _KlineChartState extends State<KlineChart> {
     });
   }
 
-  /// 把本窗十字线广播出去：bar 下标 + 该像素对应的价格。
-  /// 用价格而不是像素：各窗按同一价格反算 y，横线才会落在同一行。
+  /// 把本窗十字线广播出去：bar 下标 + 该像素对应的价格 + 主窗层号。
+  ///
+  /// 主窗层号变化时，[ChartSyncController] 会把其余窗视口切到主窗同一段，
+  /// 这样「同一根 K 同一列、同一价格同一行」只在十字线开启时成立；
+  /// 平时各窗各缩各的，互不牵连。
   void _publishCrosshairNow() {
     final s = widget.sync;
-    if (s == null || !widget.interactive) return;
-    // 共享视口变了（平移/缩放/步进）：叫醒被动窗，否则它们会停在旧位置。
-    final sig = '${_viewport.viewXMin}/${_viewport.viewXMax}/'
-        '${_viewport.yZoomRatio}/${_viewport.yShiftRatio}';
-    if (sig != _publishedViewportSignature) {
-      _publishedViewportSignature = sig;
-      s.notifyViewportChanged();
-    }
+    if (s == null || !_iAmCrosshairOwner) return;
     final on = _crosshairEnabled && _crosshairBarIdx != null;
+    if (!on) {
+      _iAmCrosshairOwner = false;
+      s.publishCrosshair(on: false);
+      return;
+    }
     s.publishCrosshair(
-      on: on,
+      on: true,
       barIdx: _crosshairBarIdx,
-      price: on ? _crosshairPriceNow() : null,
+      price: _crosshairPriceNow(),
+      ownerLevel: widget.displayLevel,
     );
   }
 
@@ -817,8 +860,14 @@ class _KlineChartState extends State<KlineChart> {
     }
     final plotH = math.max(1.0, contentBottom - plotTop);
     _crosshairMode = CrosshairMode.linesOnly;
-    _crosshairBarIdx = barIdx.clamp(0, widget.bars.length - 1);
-    _crosshairX = _viewport.barCenterX(_crosshairBarIdx!, width);
+    final idx = barIdx.clamp(0, widget.bars.length - 1);
+    // 十字线那根 K 不在本窗视窗里（用户在本窗缩/拖走了）：只平移把它带进可见区，
+    // 不改缩放 —— 对应「保持它自己的比例，但必须回到该层 K 的位置」。
+    if (idx < _viewport.viewXMin || idx > _viewport.viewXMax) {
+      _viewport.ensureBarVisible(idx);
+    }
+    _crosshairBarIdx = idx;
+    _crosshairX = _viewport.barCenterX(idx, width);
     final price = s.crosshairPrice;
     final y = price == null
         ? plotTop + plotH / 2
@@ -829,17 +878,15 @@ class _KlineChartState extends State<KlineChart> {
   @override
   void initState() {
     super.initState();
-    // 非交互窗不碰共享视口：视口由含 K0 的窗初始化/推进，否则每挂一格就重置一次缩放。
-    if (widget.interactive || widget.sync == null) {
-      _resetViewport();
-    }
+    // 第二版：每窗一份视口，各自初始化，互不牵连。
+    _resetViewport();
     _tickIdleYinYang = widget.period == 'tick';
     _syncMutedWithSelection();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       if (_mainIndicatorReadoutExpanded) _measureMainChipBar();
       if (_subIndicatorReadoutExpanded) _measureSubChipBar();
-      if (widget.interactive) _publishCrosshairNow();
+      if (_iAmCrosshairOwner) _publishCrosshairNow();
     });
     _bindInteraction();
     // tooltip 桥：注入 scroll 控制器与关闭回调，供父层停靠子窗口复用
@@ -849,19 +896,51 @@ class _KlineChartState extends State<KlineChart> {
     }
   }
 
-  /// 绑定交互能力：可交互窗接管全局键盘；其余窗只监听联动控制器。
+  /// 绑定交互：
+  /// - 全局键盘只由 [KlineChart.ownsKeyboard] 那一格注册（方向键是全局事件，
+  ///   N 个窗各注册一次会一次步进 N 根）；
+  /// - 所有分窗都监听联动控制器（十字线接管、主副比例变化）。
   void _bindInteraction() {
-    if (widget.interactive) {
-      // 全局键盘监听：方向键←/→（十字线态=十字线左右移；非十字线态=步退/步进）。
-      // 分窗时只有含 K0 的窗能注册，否则按一次右箭头会同时步进 N 次。
+    if (widget.ownsKeyboard) {
       HardwareKeyboard.instance.addHandler(_handleHardwareKey);
-    } else {
-      widget.sync?.addListener(_onSyncChanged);
     }
+    widget.sync?.addListener(_onSyncChanged);
   }
 
   void _onSyncChanged() {
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    final s = widget.sync;
+    if (s != null) {
+      // 别的窗把十字线关了：本地状态跟着清（含 tooltip）。
+      // 但「本窗刚开、还没广播出去」这一段不能清：联动控制器此时仍是 off，
+      // 若在此清掉，十字线会在广播前自我消失（副图比例变化等任何一次 notify 都会触发）。
+      if (!s.crosshairOn &&
+          _crosshairMode != CrosshairMode.off &&
+          !_iAmCrosshairOwner) {
+        setState(_clearCrosshairState);
+        return;
+      }
+      // 主窗换到别处：旧主窗必须放手，否则会继续广播、把新主窗又拽回来。
+      final owner = s.crosshairOwnerLevel;
+      if (s.crosshairOn &&
+          owner != null &&
+          owner != widget.displayLevel &&
+          _iAmCrosshairOwner) {
+        setState(_clearCrosshairState);
+        return;
+      }
+    }
+    setState(() {});
+  }
+
+  void _clearCrosshairState() {
+    _crosshairMode = CrosshairMode.off;
+    _crosshairX = null;
+    _crosshairY = null;
+    _crosshairBarIdx = null;
+    _crosshairPinRightmost = false;
+    _tooltipScrollBarIdx = null;
+    _iAmCrosshairOwner = false;
   }
 
   @override
@@ -870,26 +949,30 @@ class _KlineChartState extends State<KlineChart> {
     _arrowStartTimer?.cancel();
     _arrowRepeatTimer?.cancel();
     _tooltipScroll.dispose();
-    if (widget.interactive) {
+    if (widget.ownsKeyboard) {
       HardwareKeyboard.instance.removeHandler(_handleHardwareKey);
-    } else {
-      widget.sync?.removeListener(_onSyncChanged);
     }
+    widget.sync?.removeListener(_onSyncChanged);
     super.dispose();
   }
 
   @override
   void didUpdateWidget(covariant KlineChart oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // 交互权换手：层级被换到别的槽位时，键盘监听/联动监听要跟着搬。
-    if (oldWidget.interactive != widget.interactive ||
+    // 键盘归属/联动控制器换手：监听要跟着搬。
+    if (oldWidget.ownsKeyboard != widget.ownsKeyboard ||
         oldWidget.sync != widget.sync) {
-      if (oldWidget.interactive) {
+      if (oldWidget.ownsKeyboard) {
         HardwareKeyboard.instance.removeHandler(_handleHardwareKey);
-      } else {
-        oldWidget.sync?.removeListener(_onSyncChanged);
       }
+      oldWidget.sync?.removeListener(_onSyncChanged);
       _bindInteraction();
+    }
+    // 层级换了槽位：换成该层自己的视口（同层重建仍沿用原缩放）。
+    if (oldWidget.sync != widget.sync ||
+        oldWidget.displayLevel != widget.displayLevel) {
+      _viewport = _resolveViewport();
+      _resetViewport();
     }
 
     final lenChanged = oldWidget.bars.length != widget.bars.length;
@@ -897,18 +980,15 @@ class _KlineChartState extends State<KlineChart> {
         oldWidget.bars.isEmpty ||
         oldWidget.bars.first.timeMs != widget.bars.first.timeMs;
 
-    // 视口只由「可交互窗」或「单图」推进；非交互窗只读共享视口。
-    final drivesViewport = widget.interactive || widget.sync == null;
-    if (drivesViewport) {
-      if (widget.bars.isEmpty) {
-        _resetViewport();
-      } else if (seriesChanged) {
-        _resetViewport();
-      } else if (lenChanged) {
-        _viewport.allXMax = math.max(0, widget.bars.length - 1).toDouble();
-        if (widget.autoFollowLatest) {
-          _viewport.syncWindowOnStep(widget.bars.length - 1);
-        }
+    // 每窗推进自己的视口。
+    if (widget.bars.isEmpty) {
+      _resetViewport();
+    } else if (seriesChanged) {
+      _resetViewport();
+    } else if (lenChanged) {
+      _viewport.allXMax = math.max(0, widget.bars.length - 1).toDouble();
+      if (widget.autoFollowLatest) {
+        _viewport.syncWindowOnStep(widget.bars.length - 1);
       }
     }
 
@@ -1121,6 +1201,7 @@ class _KlineChartState extends State<KlineChart> {
   /// 任何手动移线都解除“贴右步进”标记（左移到非最右端即恢复普通移线）。
   void _moveCrosshairBy(int dir) {
     _crosshairPinRightmost = false;
+    if (_crosshairEnabled) _iAmCrosshairOwner = true;
     if (widget.bars.isEmpty || _chartSize.width <= 0) return;
     int barIdx = _crosshairBarIdx ??
         _viewport.barIndexAtCanvasX(
@@ -1204,6 +1285,9 @@ class _KlineChartState extends State<KlineChart> {
   void _onWheel(PointerScrollEvent e, double mainPlotH) {
     _clearTickIdleYinYang();
     if (widget.bars.isEmpty || !_viewport.ready || _chartSize.width <= 0) return;
+    // 十字线开着时在本窗缩放：本窗接管为主窗，其余窗跟着切到同一视口，
+    // 否则竖线/横线会与其它窗错位。
+    if (_crosshairEnabled) _iAmCrosshairOwner = true;
 
     // 显示 tooltip：滚轮只翻信息框，不缩放 K 线；仅线(关tooltip)时仍可缩放
     if (_crosshairShowTooltip) {
@@ -1499,6 +1583,7 @@ class _KlineChartState extends State<KlineChart> {
       // 与鼠标中键保持同一顺序；回到「全关」后下一次必定从「仅十字线」重新开始。
       switch (_crosshairMode) {
         case CrosshairMode.off:
+          _iAmCrosshairOwner = true;
           _crosshairMode = CrosshairMode.linesOnly;
           _tooltipScrollBarIdx = null;
           _updateCrosshairAt(pos, plotTop, contentBottom);
@@ -1530,6 +1615,7 @@ class _KlineChartState extends State<KlineChart> {
       switch (_crosshairMode) {
         case CrosshairMode.off:
           // 第一次：只开十字线，不显示 tooltip（滚轮仍可缩放）
+          _iAmCrosshairOwner = true;
           _crosshairMode = CrosshairMode.linesOnly;
           _tooltipScrollBarIdx = null;
           _updateCrosshairAt(pos, plotTop, contentBottom);
@@ -1595,6 +1681,8 @@ class _KlineChartState extends State<KlineChart> {
 
     // 十字线激活：屏蔽步退/步进/播放，只保留中间双击切三态 + 点击跟线
     if (_crosshairEnabled) {
+      // 在别的窗点线也接管主窗：各窗视口本来就已对齐，不会跳。
+      _iAmCrosshairOwner = true;
       if (zone != 1) {
         _middleTapTimer?.cancel();
         _lastMiddleTapAt = null;
@@ -1693,6 +1781,8 @@ class _KlineChartState extends State<KlineChart> {
   void _onPanStart(DragStartDetails d, double mainPlotH) {
     if (widget.mobileLayout || widget.bars.isEmpty || _splitDragging) return;
     _clearTickIdleYinYang();
+    // 十字线开着时在本窗拖动：本窗接管为主窗（同 _onWheel）。
+    if (_crosshairEnabled) _iAmCrosshairOwner = true;
     _panning = true;
     _panStart = d.localPosition;
     _panStartViewMin = _viewport.viewXMin;
@@ -1861,8 +1951,8 @@ class _KlineChartState extends State<KlineChart> {
     if (isMain) {
       return IndicatorPickerOverlay<MainChartIndicator>(
         key: const ValueKey('main-indicator-picker'),
-        title: '主图指标',
-        catalog: _mainCatalog,
+        title: widget.displayLevel == null ? '主图指标' : '主图指标（K${widget.displayLevel}）',
+        catalog: _pickerMainCatalog,
         selected: _activeMains,
         onToggle: _toggleMainSelection,
         labelOf: (e) => e.label,
@@ -1876,8 +1966,8 @@ class _KlineChartState extends State<KlineChart> {
     final subValues = _subChipValueByInd();
     return IndicatorPickerOverlay<SubChartIndicator>(
       key: const ValueKey('sub-indicator-picker'),
-      title: '副图指标',
-      catalog: _subCatalog,
+      title: widget.displayLevel == null ? '副图指标' : '副图指标（K${widget.displayLevel}）',
+      catalog: _pickerSubCatalog,
       selected: _activeSubs,
       onToggle: _toggleSubSelection,
       labelOf: (e) => e.label,
@@ -2202,6 +2292,37 @@ class _KlineChartState extends State<KlineChart> {
     return _buildSubIndicatorControlRow();
   }
 
+  /// 副图小眼睛：收起整块副图（主图吃满），再点恢复。
+  ///
+  /// 只影响本窗显示，不改勾选集 —— 收起期间指标仍被记住，恢复后原样回来。
+  Widget _buildSubPaneEyeButton() {
+    final hidden = _subPaneHidden;
+    return Tooltip(
+      message: hidden ? '展开副图' : '收起副图',
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () => setState(() => _subPaneHidden = !_subPaneHidden),
+          child: Container(
+            width: 22,
+            height: 22,
+            decoration: BoxDecoration(
+              color: const Color(0x33111111),
+              borderRadius: BorderRadius.circular(4),
+              border: Border.all(color: const Color(0x22AAAAAA)),
+            ),
+            child: Icon(
+              hidden ? Icons.visibility_off : Icons.visibility,
+              size: 15,
+              color: const Color(0x8890A4AE),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   void _toggleMainSelection(MainChartIndicator item) {
     if (!widget.indicatorsEnabled) return;
     final next = Set<MainChartIndicator>.from(_activeMains);
@@ -2326,10 +2447,15 @@ class _KlineChartState extends State<KlineChart> {
         _zonePlotTop = plotTop;
         _zoneContentBottom = contentBottom;
 
-        // 分窗被动窗：把含 K0 的窗广播的十字线落到本窗坐标系。
+        // 非主窗：把主窗广播的十字线落到本窗坐标系。
         // 按「bar 下标 + 价格」换算：竖线是同一根 K，横线是同一价格；
-        // 各窗几何一致时，两者都落在同一像素。
-        if (!widget.interactive) {
+        // 十字线开启时各窗视口已被控制器切到同一段，两者落在同一像素。
+        // 主窗自己绝不走这一支：主窗刚开、还没广播时 crosshairOwnerLevel 还是 null，
+        // 若按「层号不相等」判断会把主窗自己的十字线当场清掉。
+        final syncedCrosshair = widget.sync != null &&
+            !_iAmCrosshairOwner &&
+            widget.sync!.crosshairOwnerLevel != widget.displayLevel;
+        if (syncedCrosshair) {
           _applySyncedCrosshair(
             width: w,
             plotTop: plotTop,
@@ -2398,10 +2524,9 @@ class _KlineChartState extends State<KlineChart> {
               crosshairBarIdx: _crosshairBarIdx,
               truncationCheck: widget.truncationCheck,
               showBuildingDash: widget.showBuildingDash,
-              // 被动窗没有胶囊条：用可交互窗广播的高度，副图内区才与 K0 窗同高。
-              subChipBarHeight: widget.interactive
-                  ? _subChipBarHeight
-                  : (widget.sync?.subChipBand ?? _subChipBarHeight),
+              // 分窗：全窗照抄同一个胶囊条占位，副图内区才同高。
+              subChipBarHeight:
+                  widget.sync?.subChipBand ?? _subChipBarHeight,
               defaultK0Policy: widget.defaultK0Policy,
               segAsOf: segAsOf,
               judgmentHistoryByKn: widget.judgmentHistoryByKn,
@@ -2713,7 +2838,7 @@ class _KlineChartState extends State<KlineChart> {
                         overlayTop + 4,
                         mainH - KlineViewport.subIndicatorEntryBand,
                       ),
-                right: 4,
+                right: 30,
                 child: Builder(
                   key: _subChipBarKey,
                   builder: (_) {
@@ -2739,6 +2864,21 @@ class _KlineChartState extends State<KlineChart> {
                       ),
                     );
                   },
+                ),
+              ),
+            // 副图小眼睛：收起/展开整块副图（单图与分窗都有）。
+            if (widget.interactive && _subPaneVisible)
+              Positioned(
+                right: _showSubPane ? 4 : 58,
+                top: _showSubPane
+                    ? mainH + 2
+                    : math.max(overlayTop + 4, mainH - 26),
+                child: Opacity(
+                  opacity: widget.indicatorsEnabled ? 1 : 0.35,
+                  child: IgnorePointer(
+                    ignoring: !widget.indicatorsEnabled,
+                    child: _buildSubPaneEyeButton(),
+                  ),
                 ),
               ),
             _buildIndicatorPickerOverlay(),
