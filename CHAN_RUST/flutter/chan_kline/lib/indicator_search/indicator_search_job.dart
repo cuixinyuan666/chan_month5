@@ -45,6 +45,7 @@ class IndicatorSearchJobParams {
     this.mainSessionHarness,
     this.initialBars,
     this.candidateOverride,
+    this.candidatesOnly = false,
     this.scanYieldEvery = 25,
     this.maxCandidates,
     this.inRatio = 0.7,
@@ -75,6 +76,10 @@ class IndicatorSearchJobParams {
 
   /// 非空时跳过枚举，直接扫描这些候选（计优「拿去寻优」与测试注入共用）。
   final List<ComboCand>? candidateOverride;
+
+  /// 只评估 [candidateOverride] 里的候选：不粗筛、不再拼组合。
+  /// 计优「拿去寻优」用它保证结果就是用户选的那几条。
+  final bool candidatesOnly;
 
   /// 扫描让出频率（测试可设 1 以便中途取消）。
   final int scanYieldEvery;
@@ -309,6 +314,7 @@ class IndicatorSearchJob {
         cands: cands,
         splitX: splitBarIdx(bars, inRatio: p.inRatio),
         maxKn: h.maxKn,
+        candidatesOnly: p.candidatesOnly,
         onProgress: (detail) {
           report('智能寻优', detail);
           logProgress(detail, logFilePath: logPath);

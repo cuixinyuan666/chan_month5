@@ -85,12 +85,71 @@ Future<SmartSearchOutcome> runSmartSearch({
   int beamWidth = 8,
   int atomPoolPerSide = 8,
   int? workers,
+  bool candidatesOnly = false,
   void Function(String detail)? onProgress,
 }) async {
   // 候选少时开隔离区反而更慢（每个 worker 要复制一份冻结仓）。
   // 默认按核数，上限 8；候选不足 64 条时退回串行。
   final workerCount = workers ??
       (cands.length < 64 ? 1 : Platform.numberOfProcessors.clamp(2, 8));
+
+  // 计优「拿去寻优」：只评估给定的这几条，不粗筛、不再拼组合。
+  // 普通智能寻优会把 0 成交/样本内亏钱的候选筛掉，还会用基元再拼出新组合；
+  // 那会让用户点完「拿去寻优」后看到的不是自己选的那几条。
+  if (candidatesOnly) {
+    onProgress?.call('只跑计优组合：${cands.length} 条（不粗筛、不再拼组合）');
+    final verdicts = <ComboVerdict>[];
+    for (final c in cands) {
+      if (runner.cancelRequested) break;
+      final v = runner.evaluateCandidate(
+        c: c,
+        env: env,
+        splitX: splitX,
+        maxKn: maxKn,
+      );
+      if (v != null) verdicts.add(v);
+    }
+    final ranked = rankVerdicts(verdicts);
+
+    // 真实成本分只算前 30 名，与普通智能寻优同口径。
+    const kRealCostTopN = 30;
+    final realCost = <String, double>{};
+    for (final r in ranked.take(kRealCostTopN)) {
+      if (runner.cancelRequested) break;
+      final v = r.verdict;
+      if (v.buyAst == null || v.sellAst == null) continue;
+      final cost = runner.evaluateCandidateWithRealCost(
+        c: ComboCand(v.name, v.buyAst!, v.sellAst!),
+        env: env,
+        splitX: splitX,
+        maxKn: maxKn,
+      );
+      if (cost != null) {
+        realCost[v.name] = robustRankScore(cost.inSample, cost.outSample);
+      }
+    }
+
+    return SmartSearchOutcome(
+      beforeScreen: cands.length,
+      afterScreen: cands.length,
+      combosBuilt: 0,
+      ranked: [
+        for (final r in ranked)
+          ComboVerdict(
+            name: r.verdict.name,
+            buyText: r.verdict.buyText,
+            sellText: r.verdict.sellText,
+            inSample: r.verdict.inSample,
+            outSample: r.verdict.outSample,
+            buyAst: r.verdict.buyAst,
+            sellAst: r.verdict.sellAst,
+            splitX: r.verdict.splitX,
+            rankScore: r.rankScore,
+            realCostScore: realCost[r.verdict.name],
+          ),
+      ],
+    );
+  }
 
   onProgress?.call(
     workerCount > 1

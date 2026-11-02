@@ -36,6 +36,7 @@ class IndicatorSearchDialog extends StatefulWidget {
     this.initialBars,
     this.runnerFactory,
     this.candidateOverride,
+    this.candidatesOnly = false,
     this.scanYieldEvery,
     this.onApplyToChart,
     this.enablePreview = true,
@@ -65,6 +66,9 @@ class IndicatorSearchDialog extends StatefulWidget {
   /// 非空时跳过枚举，直接扫描这些候选：
   /// 计优「拿去寻优」传组合候选，机器人验证用它注入固定候选。
   final List<ComboCand>? candidateOverride;
+
+  /// 只评估 [candidateOverride]：不粗筛、不再拼组合（计优「拿去寻优」）。
+  final bool candidatesOnly;
 
   /// 仅供机器人验证的 Widget 测试注入：扫描让出频率（生产为 null → 默认 25）。
   /// 设为 1 可让每条候选之间都让出事件循环，便于测试在中途点「取消扫描」。
@@ -201,6 +205,7 @@ class _IndicatorSearchDialogState extends State<IndicatorSearchDialog> {
         mainSessionHarness: widget.mainSessionHarness,
         initialBars: widget.initialBars,
         candidateOverride: widget.candidateOverride,
+        candidatesOnly: widget.candidatesOnly,
         scanYieldEvery: widget.scanYieldEvery ?? 25,
       ),
       runner: widget.runnerFactory?.call(),

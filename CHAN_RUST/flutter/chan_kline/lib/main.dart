@@ -3879,6 +3879,8 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
         mainSessionHarness: _mainSessionHarnessForSearch(),
         initialBars: List<KlineBar>.from(_allBars),
         candidateOverride: cands,
+        // 计优选出来的候选只跑这些：不粗筛、不再拼组合。
+        candidatesOnly: true,
         onApplyToChart: _applySearchBacktestToChart,
         onCacheSession: (snap) => _lastSearchSession = snap,
       ),
