@@ -3457,7 +3457,7 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
           title: const Text('层级分窗（每层一个窗口）', style: TextStyle(fontSize: 13)),
           subtitle: Text(
             LevelWindowSettingsStore.enabled
-                ? '已开启（${LevelWindowSettingsStore.count} 窗，含 K0 的那格可操作）'
+                ? '已开启（${LevelWindowSettingsStore.count} 窗，每窗都能步进/缩放）'
                 : '已关闭（单图集成，与原来完全一致）',
             style: const TextStyle(fontSize: 11),
           ),
@@ -4466,29 +4466,34 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
               count: LevelWindowSettingsStore.count,
               levels: LevelWindowSettingsStore.activeLevels,
               maxKn: chartMaxKn(levels: _levels, k0Lines: _k0Lines),
-              paneBuilder: (context, slot, level, interactive) =>
+              paneBuilder: (context, slot, level, primary) =>
                   _buildKlinePane(
                 level: level,
-                interactive: interactive,
+                primary: primary,
                 split: true,
               ),
             )
-          : _buildKlinePane(level: 0, interactive: true, split: false),
+          : _buildKlinePane(level: 0, primary: true, split: false),
     );
   }
 
   /// 单窗：`split=true` 时只画 [level] 那一层，并接入联动控制器。
+  ///
+  /// 第二版：分窗里每一格都可交互（各自步进/缩放/平移/十字线）；
+  /// [primary] 只决定「谁独占全局键盘、谁挂筹码/回测/tooltip 这些全局浮层」，
+  /// 避免同一份全局资源在 N 个窗里各画一遍。
   Widget _buildKlinePane({
     required int level,
-    required bool interactive,
+    required bool primary,
     required bool split,
   }) {
-    final gesturesOn = _hasSession && !_busy && interactive;
+    final gesturesOn = _hasSession && !_busy;
     return KlineChart(
       // 每窗独立 State：层级换槽位时不复用旧窗的十字线/静音状态。
       key: ValueKey<String>(split ? 'level-$level' : 'single'),
-      // ── 分窗联动：全窗共用视口 / 主副比例 / 十字线 / as-of 缓存 ──
-      interactive: interactive,
+      // ── 分窗联动：每窗独立视口 / 主副比例共用 / 十字线接管 / as-of 缓存 ──
+      interactive: true,
+      ownsKeyboard: split ? primary : true,
       sync: split ? _chartSync : null,
       displayLevel: split ? level : null,
       // 副图恒定占位：各窗几何一致，十字横线才能对到同一行。
@@ -4514,10 +4519,9 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
       truncationCheck: _truncationCheck,
       showBuildingDash: _showBuildingDash,
       chipOnlyMode: _chipOnlyMode,
-      // 筹码 / 笔数分布只在可操作窗生效：其余窗跟随，不需要自己那份浮层。
-      chipConfig: interactive ? _sessionChipConfig : const ChipConfig(),
-      tickDistConfig:
-          interactive ? _sessionTickDistConfig : const TickDistConfig(),
+      // 筹码 / 笔数分布只在主窗生效：其余窗各自可操作，但不需要重复一份浮层。
+      chipConfig: primary ? _sessionChipConfig : const ChipConfig(),
+      tickDistConfig: primary ? _sessionTickDistConfig : const TickDistConfig(),
       mathIndicatorConfig: _mathIndicatorConfig,
       mathFreezeStore: _stepFreeze.mathFreezeStore,
       diverFreezeStore: _stepFreeze.diverFreezeStore,
@@ -4542,37 +4546,37 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
       onMainIndicatorsChanged: _applyMainIndicators,
       subIndicators: _sessionSubIndicators,
       onSubIndicatorsChanged: _applySubIndicators,
-      indicatorsEnabled: _hasSession && interactive,
+      indicatorsEnabled: _hasSession,
       autoFollowLatest: true,
       isPlaying: _playing,
+      // 第二版：每窗都能步进/播放，颗粒度统一走 K0 的一根 K。
       onTapStepBack: gesturesOn ? _stepBack : null,
-      onTapPlay: !interactive || !_hasSession
-          ? null
-          : (_busy && !_playing ? null : _togglePlay),
+      onTapPlay: !_hasSession ? null : (_busy && !_playing ? null : _togglePlay),
       onTapStepForward: gesturesOn ? _stepForward : null,
       onLongPressReset: gesturesOn ? _resetStep : null,
-      onLongPressReload: (interactive && !_busy) ? _loadKlines : null,
+      onLongPressReload: !_busy ? _loadKlines : null,
       onLongPressRunToEnd: gesturesOn ? () { unawaited(_runToEnd()); } : null,
-      // 回测买卖点/高亮/聚焦只挂在可操作窗：其余窗只负责跟随显示该层结构，
+      // 回测买卖点/高亮/聚焦只挂在主窗：其余窗只负责显示该层结构，
       // 否则同一批标记会在 N 个窗里各画一遍。
-      strategySignals: interactive && _backtestPanelOpen
+      strategySignals: primary && _backtestPanelOpen
           ? (_backtestRun?.result?.signals ?? const [])
           : const [],
-      strategyFills: interactive && _backtestPanelOpen
+      strategyFills: primary && _backtestPanelOpen
           ? (_backtestRun?.result?.fills ?? const [])
           : const [],
       strategyRoundBySignalId:
-          (!interactive || !_backtestPanelOpen || _backtestRun?.result == null)
+          (!primary || !_backtestPanelOpen || _backtestRun?.result == null)
               ? const {}
               : buildStrategyRoundIndex(_backtestRun!.result!).roundBySignalId,
-      highlightedStrategyIds: interactive ? _btHighlightIds : const <String>{},
-      focusBarIdx: interactive ? _btFocusBarIdx : null,
+      highlightedStrategyIds: primary ? _btHighlightIds : const <String>{},
+      focusBarIdx: primary ? _btFocusBarIdx : null,
       focusBarEpoch: _btFocusEpoch,
-      onStrategySignalTap: interactive ? _onChartStrategySignalTap : null,
+      onStrategySignalTap: primary ? _onChartStrategySignalTap : null,
       // 分窗固定走桌面布局：安卓交互壳层（顶部手势/浮动按钮）只应出现在单图。
       mobileLayout: split ? false : _useAndroidInteraction,
-      tooltipBridge: interactive ? _tooltipBridge : null,
-      dockTooltipPanel: interactive && !_useAndroidInteraction,
+      // tooltip 停靠面板只有一块：只挂主窗，避免 N 个窗抢同一份 bridge。
+      tooltipBridge: primary ? _tooltipBridge : null,
+      dockTooltipPanel: primary && !_useAndroidInteraction,
     );
   }
 
@@ -5085,6 +5089,8 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
   }) async {
     await LevelWindowSettingsStore.save(enabled: v);
     if (!mounted) return;
+    // 重新开分窗时副图胶囊条从头量起，避免沿用上一次运行的高占位。
+    _chartSync.resetSubChipBand();
     _panelUi(() {}, sheetSetState: sheetSetState);
     _msgHistory.append(
       v
@@ -5113,6 +5119,8 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
     _chartSync.asOfCache.clear();
     _chartSync.zsAsOfKey = null;
     _chartSync.zsAsOfBundle = null;
+    // 窗口数/层级换了：副图胶囊条占位重新量。
+    _chartSync.resetSubChipBand();
     _panelUi(() {}, sheetSetState: sheetSetState);
     final names = cfg.slots.take(cfg.count).map((e) => 'K$e').join(' / ');
     _msgHistory.append('层级分窗：${cfg.count} 窗（$names）');
@@ -5137,11 +5145,22 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
             '· 由你自己逐个指定（K0 到 K9），同一层级只能占用一个窗口；\n'
             '· 必须包含 K0：没有 K0 就弹窗警告并拒绝应用；\n'
             '· 缩窗时若会把 K0 挤出可见范围，会自动把 K0 换到第 1 窗并提示。\n\n'
-            '联动与操作\n'
-            '· 只有含 K0 的窗口能操作：步进、左右平移、缩放、十字线；\n'
-            '· 其余窗口完全跟随：不接收鼠标、不注册键盘，步进与十字线全部同步；\n'
-            '· 开启十字线后，同一根 K 的竖线在所有窗口落在同一列，'
-            '同一价格的横线落在同一行（各窗共用视口与主副比例）。\n\n'
+            '每窗都能操作\n'
+            '· 每一窗都支持步进、播放、长按复位/重载/跑到底，操作热区与 K0 窗一致'
+            '（左＝步退、中＝播放/暂停、右＝步进、双击切十字线）；\n'
+            '· 步进颗粒度永远是 K0 的一根 K，所有窗同步看到同一步；\n'
+            '· 每窗各自缩放、各自平移，互不牵连；主副图分割比例仍全窗共用，'
+            '拖任一窗分割线全窗一起变；\n'
+            '· 指标面板只列本层指标（主图与副图都是），勾选只作用于本层。\n\n'
+            '十字线\n'
+            '· 任一窗都能开启；开启瞬间该窗成为主窗，其余窗立刻切到主窗同一段'
+            '（同一根 K 同一列、同一价格同一行）；\n'
+            '· 若某窗看不到十字线那根 K，该窗只平移把它带进可见区，不改缩放；\n'
+            '· 关闭十字线后，其余窗恢复各自开启前的缩放与位置。\n\n'
+            '副图小眼睛\n'
+            '· 副图区最右侧的眼睛按钮：点一下收起整块副图、主图吃满，'
+            '图标变「眼睛+斜线」；再点恢复；\n'
+            '· 每窗独立控制，单图集成模式也有。\n\n'
             '操作步骤\n'
             '1. 打开右上角设置；\n'
             '2. 打开「层级分窗（每层一个窗口）」；\n'

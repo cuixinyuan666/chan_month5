@@ -15,7 +15,7 @@ class LevelWindowConfig {
 /// 规则（2026-11-02 用户确认）：
 /// - 数量只能偶数 2/4/6/8/10；
 /// - 每窗层级由用户逐个指定，不允许重复；
-/// - **必须含 K0**，否则弹模态警告并拒绝应用（只有含 K0 的窗能操作）。
+/// - **必须含 K0**，否则弹模态警告并拒绝应用（K0 窗是全局键盘的唯一归属窗）。
 class LevelWindowSettingsDialog extends StatefulWidget {
   const LevelWindowSettingsDialog({
     super.key,
@@ -114,9 +114,10 @@ class _LevelWindowSettingsDialogState extends State<LevelWindowSettingsDialog> {
                 '布局规则：2 窗为左右排布；4/6/8/10 窗为上 N 下 N'
                 '（4 窗上 2 下 2、6 窗上 3 下 3，以此类推）。\n'
                 '窗口按「左→右、上→下」依次取用下面的设置。\n'
-                '只有含 K0 的窗口可以操作（步进、平移、缩放、十字线）；'
-                '其余窗口完全跟随，不接收鼠标与键盘。\n'
-                '开启十字线时，同一根 K 的竖线、同一价格的横线在所有窗口落在同一像素。',
+                '每一窗都能操作：步进（颗粒度＝K0 一根 K）、播放、缩放、平移、十字线；'
+                '各窗缩放/位置互不影响。\n'
+                '开启十字线时，其余窗会切到开启窗同一段视口：'
+                '同一根 K 的竖线、同一价格的横线落在同一像素；关闭后各窗恢复原位。',
                 style: TextStyle(fontSize: 12, height: 1.6),
               ),
               const SizedBox(height: 12),
@@ -173,7 +174,7 @@ class _LevelWindowSettingsDialogState extends State<LevelWindowSettingsDialog> {
                               enabled: usedByOther[lv] == null ||
                                   usedByOther[lv] == i,
                               child: Text(
-                                lv == 0 ? 'K0（可操作）' : 'K$lv',
+                                lv == 0 ? 'K0（键盘归属）' : 'K$lv',
                               ),
                             ),
                         ],
