@@ -5201,3 +5201,10 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **验收**：`flutter test test/jiyou test/indicator_search` 共 135 条全部通过（含新增的切点前拟合、跨级别中点、候选隔离、零差异不搭便车回归）；`flutter analyze --no-pub lib test` 无 `error -` 行，改动文件无新增告警。全量 `flutter test` 594 过 4 红，4 条均为既有且与本改动无关：`chip_profile_test`（主图 catalog 仍含「筹码」）、`incremental_lookup_session_test`（002003 step24–28 的 combine.fx 不一致）、`robot_verify_full_suite_test`（用例数下限 42 vs 实际 41）、`widget_test`（首屏找不到「截断」）。前三条已单独复现，robot 那条是既有阈值；本次未顺手改，避免放宽判据。
 - **演示**：在计优面板点「拿去寻优」，现在打开寻优后只会看到计优那几条组合；每条的分界只用切点前的顶底均值，样本外不再偷看后 30% 的行情。真实数据上，旧口径能在样本外造出成交，新口径造不出来——这不是变差，是把前视拿掉后的真实结果。
 - **遗留**：未 push；寻优对话框当前不暴露训练/验证切分比例，桥接与寻优都按 70/30；计优组合尚未写入 TSV / agent 交接。App 正在运行（用户手动使用），未执行会关闭 App 的机器人验证。
+
+## 2026-11-02 · Claude · 集成 · 合并 optimize-search-stats 到 ANDROID_RUST
+
+- **操作**：把工作树 `worktree-optimize-search-stats` 合并进 `ANDROID_RUST`；冲突只在 `task-log.md`，按时间顺序保留两边条目；合并提交 `1d38bb26`。
+- **验收**：合并后的主工作区 `flutter test test/jiyou test/indicator_search` 共 135 条全部通过；`flutter analyze --no-pub lib test` 无 `error -` 行（130 条既有 info/warning）。
+- **推送**：`origin/ANDROID_RUST` 已更新到 `1d38bb26`（本次推送含 37 个提交、64 个文件）。
+- **清理**：工作树已从 Git 注销，分支 `worktree-optimize-search-stats` 已删除；目录因 App（PID 1052）正从该目录的构建产物运行而暂未删净，关闭 App 后可删除。
