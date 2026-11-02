@@ -3735,6 +3735,7 @@ class _KlineCompositePainter extends CustomPainter {
     final seedTop = snap.seedFx == 'TOP';
     final aPrice = _polePriceAt(snap.drawAX, useHigh: seedTop);
     final bPrice = _polePriceAt(snap.drawBX, useHigh: !seedTop);
+    final labelColor = style?.color ?? ChartLineColors.bi;
 
     void paintSeg(int x0, double p0, int x1, double p1, {required bool dashed}) {
       final geomMin = math.min(x0, x1);
@@ -3789,6 +3790,45 @@ class _KlineCompositePainter extends CustomPainter {
         paintSeg(snap.drawBX, bPrice, snap.drawCX, cPrice, dashed: true);
       }
     }
+    // A/B/C 文字标注：A、B 在 JUDGE/CONFIRM 均存在；C 仅有值时标
+    _drawSeedLabel(canvas, w, plotTop, plotH, slotW, snap.drawAX, aPrice, 'A', labelColor);
+    _drawSeedLabel(canvas, w, plotTop, plotH, slotW, snap.drawBX, bPrice, 'B', labelColor);
+    if (snap.drawCX >= 0) {
+      final cPrice = _polePriceAt(snap.drawCX, useHigh: seedTop);
+      _drawSeedLabel(canvas, w, plotTop, plotH, slotW, snap.drawCX, cPrice, 'C', labelColor);
+    }
+  }
+
+  /// 种子框 A/B/C 文字标注：与相位线同色的小字，置于各点上方，避免压线。
+  void _drawSeedLabel(
+    Canvas canvas,
+    double w,
+    double plotTop,
+    double plotH,
+    double slotW,
+    int x,
+    double price,
+    String label,
+    Color color,
+  ) {
+    if (x < 0) return;
+    if (x < viewport.viewXMin - 1 || x > viewport.viewXMax + 1) return;
+    final cx = _barCenterX(x, w, slotW);
+    final py = priceRange.yOf(price, plotTop, plotH);
+    final tp = TextPainter(
+      textAlign: TextAlign.center,
+      textDirection: TextDirection.ltr,
+    );
+    tp.text = TextSpan(
+      text: label,
+      style: TextStyle(
+        color: color,
+        fontSize: 11,
+        fontWeight: FontWeight.w700,
+      ),
+    );
+    tp.layout();
+    tp.paint(canvas, Offset(cx - tp.width / 2, py - tp.height - 3));
   }
 
   /// 种子合并框叠加（确认前可虚线，确认后实线；色=同层合并色）
@@ -3832,6 +3872,35 @@ class _KlineCompositePainter extends CustomPainter {
       lastAsBuilding: !snap.seedConfirmed && showBuildingDash,
       buildingDashPattern: buildingDashPattern,
     );
+    // 盒子文字标注「种子框」（矩形左上角内侧）
+    _drawSeedBoxLabel(canvas, w, plotTop, plotH, slotW, snap, seedColor);
+  }
+
+  /// 种子框矩形文字标注：在 group0 框左上角内侧标「种子框」小字。
+  void _drawSeedBoxLabel(
+    Canvas canvas,
+    double w,
+    double plotTop,
+    double plotH,
+    double slotW,
+    LevelSnap snap,
+    Color color,
+  ) {
+    if (snap.seedBoxX1 < 0 || snap.seedBoxX2 < 0) return;
+    if (!snap.seedBoxHigh.isFinite || !snap.seedBoxLow.isFinite) return;
+    final cx = _barCenterX(snap.seedBoxX1, w, slotW);
+    final py = priceRange.yOf(snap.seedBoxHigh, plotTop, plotH);
+    final tp = TextPainter(textAlign: TextAlign.left, textDirection: TextDirection.ltr);
+    tp.text = TextSpan(
+      text: '种子框',
+      style: TextStyle(
+        color: color,
+        fontSize: 10,
+        fontWeight: FontWeight.w600,
+      ),
+    );
+    tp.layout();
+    tp.paint(canvas, Offset(cx + 2, py + 2));
   }
 
   /// K0 构建中虚线：动态 K1 bar（asOfK1Bars）当确认段画虚线；确认纠正/改实线。
