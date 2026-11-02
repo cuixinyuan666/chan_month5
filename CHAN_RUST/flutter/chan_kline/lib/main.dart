@@ -74,6 +74,7 @@ import 'settings/chip_settings_store.dart';
 import 'settings/math_indicator_settings_store.dart';
 import 'settings/indicator_search_last_result_store.dart';
 import 'settings/indicator_search_settings_store.dart';
+import 'settings/level_window_settings_store.dart';
 import 'indicator_search/search_verdict_views.dart';
 import 'widgets/indicator_search_dialog.dart';
 import 'widgets/key_point_stats_dialog.dart';
@@ -82,6 +83,9 @@ import 'models/trend_model_config.dart';
 import 'widgets/datetime_picker_dialog.dart';
 import 'widgets/edge_control_panel.dart';
 import 'widgets/kline_chart.dart';
+import 'widgets/chart_sync_controller.dart';
+import 'widgets/level_chart_grid.dart';
+import 'widgets/level_window_settings_dialog.dart';
 import 'widgets/crosshair_tooltip_panel.dart';
 import 'widgets/crosshair_tooltip_bridge.dart';
 import 'widgets/kline_axis_format.dart';
@@ -369,6 +373,9 @@ class KlineHomePage extends StatefulWidget {
 class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
   final _bridge = ChanBridge.instance;
   final _msgHistory = MsgHistory.instance;
+  /// 层级分窗联动：所有窗共用同一份视口 / 主副比例 / 十字线 / as-of 缓存。
+  /// 单图模式下不传给 KlineChart，行为与分窗上线前完全一致。
+  final _chartSync = ChartSyncController();
   /// Phase 1.5：Rust PipelineState 会话句柄（Flutter 不存核心 state）
   ChanPipelineSession? _pipelineSession;
   /// 工作区全屏前的窗口矩形（还原用）
@@ -729,9 +736,18 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
     _keepAlive.attach();
     _loadInteractionMode();
     _loadMathIndicatorConfig();
+    _loadLevelWindowSettings();
     IndicatorSearchSettingsStore.load();
     IndicatorSearchLastResultStore.load();
     _bootstrapApp();
+  }
+
+  /// 层级分窗本机偏好（开关 / 窗口数 / 每窗层级）。
+  /// 默认关闭：读不到或没开时主界面与分窗上线前完全一致。
+  Future<void> _loadLevelWindowSettings() async {
+    await LevelWindowSettingsStore.load();
+    if (!mounted) return;
+    setState(() {});
   }
 
   Future<void> _loadInteractionMode() async {
@@ -900,6 +916,7 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
     // 整个 app 收摊才拆 overlay 窗口（拆窗+注销窗口类+isolate 自行退出）
     unawaited(_runToEndYinYang.dispose());
     _tooltipBridge.dispose();
+    _chartSync.dispose();
     _agentApiServer?.stop();
     super.dispose();
   }
@@ -3433,6 +3450,46 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
           ),
         ),
         const SizedBox(height: 8),
+        // 层级分窗：默认关闭 = 现在这张「各层集成在一张图」的单图；开启后按所选层级切格。
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          dense: true,
+          title: const Text('层级分窗（每层一个窗口）', style: TextStyle(fontSize: 13)),
+          subtitle: Text(
+            LevelWindowSettingsStore.enabled
+                ? '已开启（${LevelWindowSettingsStore.count} 窗，含 K0 的那格可操作）'
+                : '已关闭（单图集成，与原来完全一致）',
+            style: const TextStyle(fontSize: 11),
+          ),
+          value: LevelWindowSettingsStore.enabled,
+          onChanged: (v) => unawaited(
+            _setLevelWindowSplitEnabled(v, sheetSetState: sheetSetState),
+          ),
+          secondary: IconButton(
+            tooltip: '层级分窗说明',
+            icon: const Icon(Icons.help_outline, size: 18),
+            onPressed: _showLevelWindowSplitHelp,
+          ),
+        ),
+        ListTile(
+          contentPadding: EdgeInsets.zero,
+          dense: true,
+          title: const Text('窗口数量与每窗层级', style: TextStyle(fontSize: 13)),
+          subtitle: Text(
+            LevelWindowSettingsStore.enabled
+                ? '当前：${LevelWindowSettingsStore.activeLevels.map((e) => "K$e").join(" / ")}'
+                : '开关关闭时不可调；请先打开上面的层级分窗',
+            style: const TextStyle(fontSize: 11),
+          ),
+          enabled: LevelWindowSettingsStore.enabled,
+          trailing: const Icon(Icons.tune, size: 18),
+          onTap: LevelWindowSettingsStore.enabled
+              ? () => unawaited(
+                    _editLevelWindowLayout(sheetSetState: sheetSetState),
+                  )
+              : null,
+        ),
+        const SizedBox(height: 8),
         SwitchListTile(
           contentPadding: EdgeInsets.zero,
           dense: true,
@@ -4393,11 +4450,49 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
   }
 
   /// 复盘 K 线（ML 期间主区不挂本组件）。
+  ///
+  /// 单图 / 层级分窗两条路径：
+  /// - 总开关关闭（默认）→ 与原来完全一致的整图集成；
+  /// - 总开关打开 → 按用户选定的层级切片，每窗只画自己那层。
+  /// 安卓交互与「仅筹码」模式强制走单图（这两条路径没有多窗语义）。
   Widget _buildKlineChart() {
-    final gesturesOn = _hasSession && !_busy;
+    final split = !_useAndroidInteraction &&
+        !_chipOnlyMode &&
+        LevelWindowSettingsStore.enabled;
     return RepaintBoundary(
       key: _chartRepaintKey,
-      child: KlineChart(
+      child: split
+          ? LevelChartGrid(
+              count: LevelWindowSettingsStore.count,
+              levels: LevelWindowSettingsStore.activeLevels,
+              maxKn: chartMaxKn(levels: _levels, k0Lines: _k0Lines),
+              paneBuilder: (context, slot, level, interactive) =>
+                  _buildKlinePane(
+                level: level,
+                interactive: interactive,
+                split: true,
+              ),
+            )
+          : _buildKlinePane(level: 0, interactive: true, split: false),
+    );
+  }
+
+  /// 单窗：`split=true` 时只画 [level] 那一层，并接入联动控制器。
+  Widget _buildKlinePane({
+    required int level,
+    required bool interactive,
+    required bool split,
+  }) {
+    final gesturesOn = _hasSession && !_busy && interactive;
+    return KlineChart(
+      // 每窗独立 State：层级换槽位时不复用旧窗的十字线/静音状态。
+      key: ValueKey<String>(split ? 'level-$level' : 'single'),
+      // ── 分窗联动：全窗共用视口 / 主副比例 / 十字线 / as-of 缓存 ──
+      interactive: interactive,
+      sync: split ? _chartSync : null,
+      displayLevel: split ? level : null,
+      // 副图恒定占位：各窗几何一致，十字横线才能对到同一行。
+      forceSubPane: split,
       bars: _visibleBars,
       period: _period,
       combineFrames: _combineFrames,
@@ -4419,8 +4514,10 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
       truncationCheck: _truncationCheck,
       showBuildingDash: _showBuildingDash,
       chipOnlyMode: _chipOnlyMode,
-      chipConfig: _sessionChipConfig,
-      tickDistConfig: _sessionTickDistConfig,
+      // 筹码 / 笔数分布只在可操作窗生效：其余窗跟随，不需要自己那份浮层。
+      chipConfig: interactive ? _sessionChipConfig : const ChipConfig(),
+      tickDistConfig:
+          interactive ? _sessionTickDistConfig : const TickDistConfig(),
       mathIndicatorConfig: _mathIndicatorConfig,
       mathFreezeStore: _stepFreeze.mathFreezeStore,
       diverFreezeStore: _stepFreeze.diverFreezeStore,
@@ -4445,35 +4542,38 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
       onMainIndicatorsChanged: _applyMainIndicators,
       subIndicators: _sessionSubIndicators,
       onSubIndicatorsChanged: _applySubIndicators,
-      indicatorsEnabled: _hasSession,
+      indicatorsEnabled: _hasSession && interactive,
       autoFollowLatest: true,
       isPlaying: _playing,
       onTapStepBack: gesturesOn ? _stepBack : null,
-      onTapPlay: !_hasSession
+      onTapPlay: !interactive || !_hasSession
           ? null
           : (_busy && !_playing ? null : _togglePlay),
       onTapStepForward: gesturesOn ? _stepForward : null,
       onLongPressReset: gesturesOn ? _resetStep : null,
-      onLongPressReload: _busy ? null : _loadKlines,
+      onLongPressReload: (interactive && !_busy) ? _loadKlines : null,
       onLongPressRunToEnd: gesturesOn ? () { unawaited(_runToEnd()); } : null,
-      strategySignals: _backtestPanelOpen
+      // 回测买卖点/高亮/聚焦只挂在可操作窗：其余窗只负责跟随显示该层结构，
+      // 否则同一批标记会在 N 个窗里各画一遍。
+      strategySignals: interactive && _backtestPanelOpen
           ? (_backtestRun?.result?.signals ?? const [])
           : const [],
-      strategyFills: _backtestPanelOpen
+      strategyFills: interactive && _backtestPanelOpen
           ? (_backtestRun?.result?.fills ?? const [])
           : const [],
-      strategyRoundBySignalId: (!_backtestPanelOpen || _backtestRun?.result == null)
-          ? const {}
-          : buildStrategyRoundIndex(_backtestRun!.result!).roundBySignalId,
-      highlightedStrategyIds: _btHighlightIds,
-      focusBarIdx: _btFocusBarIdx,
+      strategyRoundBySignalId:
+          (!interactive || !_backtestPanelOpen || _backtestRun?.result == null)
+              ? const {}
+              : buildStrategyRoundIndex(_backtestRun!.result!).roundBySignalId,
+      highlightedStrategyIds: interactive ? _btHighlightIds : const <String>{},
+      focusBarIdx: interactive ? _btFocusBarIdx : null,
       focusBarEpoch: _btFocusEpoch,
-      onStrategySignalTap: _onChartStrategySignalTap,
-      mobileLayout: _useAndroidInteraction,
-      tooltipBridge: _tooltipBridge,
-      dockTooltipPanel: !_useAndroidInteraction,
-    ),
-  );
+      onStrategySignalTap: interactive ? _onChartStrategySignalTap : null,
+      // 分窗固定走桌面布局：安卓交互壳层（顶部手势/浮动按钮）只应出现在单图。
+      mobileLayout: split ? false : _useAndroidInteraction,
+      tooltipBridge: interactive ? _tooltipBridge : null,
+      dockTooltipPanel: interactive && !_useAndroidInteraction,
+    );
   }
 
   String _mlStatusLine() {
@@ -4976,6 +5076,87 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
         ],
       ),
     ));
+  }
+
+  /// 层级分窗总开关落地（设置面板与分窗配置共用同一条路径）。
+  Future<void> _setLevelWindowSplitEnabled(
+    bool v, {
+    StateSetter? sheetSetState,
+  }) async {
+    await LevelWindowSettingsStore.save(enabled: v);
+    if (!mounted) return;
+    _panelUi(() {}, sheetSetState: sheetSetState);
+    _msgHistory.append(
+      v
+          ? '层级分窗=开（${LevelWindowSettingsStore.count} 窗）'
+          : '层级分窗=关（回到单图集成）',
+    );
+  }
+
+  /// 打开「窗口数量 + 每窗层级」设置弹窗；应用后落盘并重建图表。
+  Future<void> _editLevelWindowLayout({StateSetter? sheetSetState}) async {
+    final cfg = await showDialog<LevelWindowConfig>(
+      context: context,
+      builder: (_) => LevelWindowSettingsDialog(
+        initialCount: LevelWindowSettingsStore.count,
+        initialSlots: LevelWindowSettingsStore.slots,
+      ),
+    );
+    if (cfg == null) return;
+    await LevelWindowSettingsStore.save(
+      enabled: true,
+      count: cfg.count,
+      slots: cfg.slots,
+    );
+    if (!mounted) return;
+    // 槽位换了，旧的 as-of 仓与查找缓存立即作废（避免串层）。
+    _chartSync.asOfCache.clear();
+    _chartSync.zsAsOfKey = null;
+    _chartSync.zsAsOfBundle = null;
+    _panelUi(() {}, sheetSetState: sheetSetState);
+    final names = cfg.slots.take(cfg.count).map((e) => 'K$e').join(' / ');
+    _msgHistory.append('层级分窗：${cfg.count} 窗（$names）');
+  }
+
+  /// 层级分窗操作说明弹窗（按 AGENTS：新增设置必须有操作逻辑与步骤说明）。
+  void _showLevelWindowSplitHelp() {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => SelectionArea(child: AlertDialog(
+        title: const Text('层级分窗说明'),
+        content: const SingleChildScrollView(
+          child: Text(
+            '作用：把现在「各层级集成在同一张 K 线图」的显示方式，拆成多个窗口，'
+            '每个窗口只画一个层级（K0 真 K 线、K1 虚拟 K 线、K2+ 该层单元 K 线），'
+            '并叠加该层自己的合并框、中枢、连线与买卖点。\n\n'
+            '布局规则\n'
+            '· 2 窗：左右排布；\n'
+            '· 4 窗：上 2 下 2；6 窗：上 3 下 3；8 窗：上 4 下 4；10 窗：上 5 下 5；\n'
+            '· 窗口按「左→右、上→下」依次取用设置里的层级。\n\n'
+            '每窗层级\n'
+            '· 由你自己逐个指定（K0 到 K9），同一层级只能占用一个窗口；\n'
+            '· 必须包含 K0：没有 K0 就弹窗警告并拒绝应用；\n'
+            '· 缩窗时若会把 K0 挤出可见范围，会自动把 K0 换到第 1 窗并提示。\n\n'
+            '联动与操作\n'
+            '· 只有含 K0 的窗口能操作：步进、左右平移、缩放、十字线；\n'
+            '· 其余窗口完全跟随：不接收鼠标、不注册键盘，步进与十字线全部同步；\n'
+            '· 开启十字线后，同一根 K 的竖线在所有窗口落在同一列，'
+            '同一价格的横线落在同一行（各窗共用视口与主副比例）。\n\n'
+            '操作步骤\n'
+            '1. 打开右上角设置；\n'
+            '2. 打开「层级分窗（每层一个窗口）」；\n'
+            '3. 点「窗口数量与每窗层级」，选数量、逐窗选层级，点「应用」；\n'
+            '4. 关掉总开关即回到原来的单图集成，指标与副图不受影响。',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('知道了'),
+          ),
+        ],
+      )),
+    );
   }
 
   void _showBsVerdictOverlayHelp() {
