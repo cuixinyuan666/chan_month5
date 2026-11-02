@@ -18,6 +18,7 @@ import 'candidate_builder.dart';
 import 'indicator_search_runner.dart';
 import 'search_core.dart';
 import 'search_env.dart';
+import 'smart_search.dart';
 import 'variable_pool.dart';
 
 /// 冻结阶段被取消：内部用于提前收尾（不向外抛）。
@@ -44,6 +45,7 @@ class IndicatorSearchJobParams {
     this.mainSessionHarness,
     this.initialBars,
     this.candidateOverride,
+    this.candidatesOnly = false,
     this.scanYieldEvery = 25,
     this.maxCandidates,
     this.inRatio = 0.7,
@@ -72,8 +74,12 @@ class IndicatorSearchJobParams {
   final BacktestStepHarnessResult? mainSessionHarness;
   final List<KlineBar>? initialBars;
 
-  /// 仅供测试注入：直接给定候选，跳过枚举。
+  /// 非空时跳过枚举，直接扫描这些候选（计优「拿去寻优」与测试注入共用）。
   final List<ComboCand>? candidateOverride;
+
+  /// 只评估 [candidateOverride] 里的候选：不粗筛、不再拼组合。
+  /// 计优「拿去寻优」用它保证结果就是用户选的那几条。
+  final bool candidatesOnly;
 
   /// 扫描让出频率（测试可设 1 以便中途取消）。
   final int scanYieldEvery;
@@ -263,7 +269,9 @@ class IndicatorSearchJob {
 
     report(
       '回测扫描',
-      '候选 ${cands.length} 条 · 预编译复用 · 全量列出（不筛选/不排名）',
+      settings.smartSearch
+          ? '候选 ${cands.length} 条 · 智能寻优（粗筛 + 组合 + 样本外排名）'
+          : '候选 ${cands.length} 条 · 预编译复用 · 全量列出（不筛选/不排名）',
       fraction: 0,
     );
 
@@ -295,6 +303,57 @@ class IndicatorSearchJob {
     final runner = _injectedRunner ?? IndicatorSearchRunner();
     _runner = runner;
     if (_cancelRequested) runner.requestCancel();
+
+    // 智能寻优：粗筛 + 组合搜索 + 样本外排名，结果按稳健分落盘。
+    // 关闭时走下面的全量列出，口径与旧版完全一致。
+    if (settings.smartSearch) {
+      final smartStarted = DateTime.now();
+      final outcome = await runSmartSearch(
+        runner: runner,
+        env: env,
+        cands: cands,
+        splitX: splitBarIdx(bars, inRatio: p.inRatio),
+        maxKn: h.maxKn,
+        candidatesOnly: p.candidatesOnly,
+        onProgress: (detail) {
+          report('智能寻优', detail);
+          logProgress(detail, logFilePath: logPath);
+        },
+      );
+      for (final v in outcome.ranked) {
+        sink.add(v);
+      }
+      sink.close();
+      _runner = null;
+      _promoteTmp(tmpResults, p.resultsPath);
+      logProgress(
+        '智能寻优完成 粗筛 ${outcome.beforeScreen}→${outcome.afterScreen}'
+        ' 组合${outcome.combosBuilt} 排名${outcome.ranked.length}',
+        logFilePath: logPath,
+      );
+      return IndicatorSearchJobResult(
+        stats: IndicatorSearchRunStats(
+          compiled: outcome.ranked.length,
+          ran: outcome.ranked.length,
+          total: cands.length,
+          splitX: splitBarIdx(bars, inRatio: p.inRatio),
+          verdicts: outcome.ranked,
+          elapsed: DateTime.now().difference(smartStarted),
+          cancelled: _cancelRequested,
+        ),
+        bars: bars,
+        env: env,
+        barCount: barCount,
+        maxKn: h.maxKn,
+        splitX: splitBarIdx(bars, inRatio: p.inRatio),
+        buildSummary: buildSummary,
+        align: align,
+        resultsPath: p.resultsPath,
+        useOptimizedBuild: settings.useOptimizedBuild,
+        maxCandidates: settings.maxCandidates,
+      );
+    }
+
     final stats = await runner.runAll(
       bars: bars,
       env: env,

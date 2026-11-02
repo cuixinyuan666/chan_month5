@@ -195,7 +195,9 @@ double get _bodyW =>
     _buyW +
     _sellW +
     kInResultColumns.fold(0.0, (a, c) => a + c.width) +
-    kOutResultColumns.fold(0.0, (a, c) => a + c.width);
+    kOutResultColumns.fold(0.0, (a, c) => a + c.width) +
+    kRankScoreColumn.width +
+    kRealCostScoreColumn.width;
 
   @override
   Widget build(BuildContext context) {
@@ -472,7 +474,7 @@ double get _bodyW =>
       conditionDisplayText(v.buyText, maxKn: maxKn).replaceAll('\t', ' '),
       conditionDisplayText(v.sellText, maxKn: maxKn).replaceAll('\t', ' '),
     ].join('\t');
-    return '$head\t${buildResultTsvRow(inSample: v.inSample, outSample: v.outSample)}';
+    return '$head\t${buildResultTsvRow(inSample: v.inSample, outSample: v.outSample, rankScore: v.rankScore, realCostScore: v.realCostScore)}';
   }
 
   /// 复制 / 落盘 TSV 的表头（同样由列注册表生成，便于直接粘进表格、对齐列）。
@@ -537,6 +539,8 @@ double get _bodyW =>
               ),
               for (final c in kInResultColumns) _numericHeaderCell(c, '内'),
               for (final c in kOutResultColumns) _numericHeaderCell(c, '外'),
+              _numericHeaderCell(kRankScoreColumn, ''),
+              _numericHeaderCell(kRealCostScoreColumn, ''),
             ],
           ),
         ),
@@ -579,6 +583,8 @@ double get _bodyW =>
                     _numCell(c.text(i), c.width),
                   for (final c in kOutResultColumns)
                     _numCell(c.text(o), c.width),
+                  _numCell(rankScoreText(v.rankScore), kRankScoreColumn.width),
+                  _numCell(rankScoreText(v.realCostScore), kRealCostScoreColumn.width),
                 ],
               ),
             ),

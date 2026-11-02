@@ -5,6 +5,7 @@ import '../settings/key_point_stats_settings_store.dart';
 
 import 'key_point.dart';
 import 'key_point_collect.dart';
+import 'key_point_combo_contrast.dart';
 import 'key_point_contrast.dart';
 import 'key_point_stat_align.dart';
 import 'stat_metrics.dart';
@@ -62,6 +63,9 @@ class KeyPointStatResult {
   /// 全部顶底差异度，按差异度降序（跨级别混排：差异越大的越靠前）。
   final List<KeyPointContrast> contrasts;
 
+  /// 组合区分度：哪几个指标一起看时顶底分得最开。按区分度降序。
+  final List<KeyPointComboContrast> comboContrasts;
+
   final int elapsedMs;
 
   const KeyPointStatResult({
@@ -78,6 +82,7 @@ class KeyPointStatResult {
     required this.keyPoints,
     required this.groups,
     required this.contrasts,
+    this.comboContrasts = const [],
     required this.elapsedMs,
   });
 
@@ -131,6 +136,7 @@ class KeyPointStatResult {
         'key_points': keyPoints.map((e) => e.toJson()).toList(),
         'groups': groups.map((e) => e.toJson()).toList(),
         'contrasts': [for (final c in contrasts) c.toJson()],
+        'combo_contrasts': [for (final c in comboContrasts) c.toJson()],
       };
 }
 
@@ -246,6 +252,17 @@ class KeyPointStatRunner {
       });
     }
 
+    // 组合区分度：在单指标差异度之上，找哪几个指标一起看顶底分得最开。
+    final comboContrasts = <KeyPointComboContrast>[];
+    if (settings.computeCombos && settings.splitTopBottom) {
+      comboContrasts.addAll(_comboContrasts(
+        lookup: lookup,
+        points: points,
+        contrasts: contrasts,
+        levels: levels,
+      ));
+    }
+
     return KeyPointStatResult(
       finishedAt: DateTime.now(),
       code: code,
@@ -260,8 +277,76 @@ class KeyPointStatRunner {
       keyPoints: points,
       groups: groups,
       contrasts: contrasts,
+      comboContrasts: comboContrasts,
       elapsedMs: DateTime.now().difference(started).inMilliseconds,
     );
+  }
+
+  /// 逐级计算组合区分度。只取该级别差异度最高的前 6 个指标，控制计算量。
+  static List<KeyPointComboContrast> _comboContrasts({
+    required BarFeatureLookup lookup,
+    required List<KeyPoint> points,
+    required List<KeyPointContrast> contrasts,
+    required List<int> levels,
+  }) {
+    const topK = 6;
+    final out = <KeyPointComboContrast>[];
+    for (final lv in levels) {
+      // 组合只在指标账（sub.* / main.*）里找：价格、成交量、序号这类顶层列
+      // 也会排进单指标差异度，但它们不是「指标」，拿它们拼出来的组合只是
+      // 在复述价格趋势，实战里没有增量信息，也没法翻译成寻优条件。
+      final ranked = contrasts
+          .where((c) => c.level == lv && _isIndicatorKey(c.metricKey))
+          .take(topK)
+          .toList();
+      if (ranked.length < 2) continue;
+      final want = ranked.map((c) => c.metricKey).toSet();
+      final columns = <String, MetricColumn>{};
+      for (final key in want) {
+        final topVals = <double>[];
+        final bottomVals = <double>[];
+        for (final p in points.where((p) => p.level == lv)) {
+          final row = lookup.byIdx[p.poleX];
+          if (row == null) continue;
+          final v = _readNumeric(row, key);
+          if (v == null) continue;
+          (p.fx == 'TOP' ? topVals : bottomVals).add(v);
+        }
+        final label = ranked.firstWhere((c) => c.metricKey == key).labelCn;
+        columns[key] = MetricColumn(
+          metricKey: key,
+          labelCn: label,
+          topValues: topVals,
+          bottomValues: bottomVals,
+        );
+      }
+      out.addAll(computeComboContrasts(
+        ranked: ranked,
+        columns: columns,
+        level: lv,
+        topK: topK,
+      ));
+    }
+    out.sort((a, b) => b.contrast.compareTo(a.contrast));
+    return out;
+  }
+
+  /// 是否指标账里的键（`sub.xxx` / `main.xxx`），而非顶层价格列。
+  static bool _isIndicatorKey(String key) =>
+      key.startsWith('sub.') || key.startsWith('main.');
+
+  /// 按点号路径读取一个数值（如 `sub.rsi_1`）。读不到或不是数返回 null。
+  static double? _readNumeric(Map<String, dynamic> row, String key) {
+    Object? cur = row;
+    for (final part in key.split('.')) {
+      if (cur is Map && cur.containsKey(part)) {
+        cur = cur[part];
+      } else {
+        return null;
+      }
+    }
+    if (cur is num) return cur.toDouble();
+    return null;
   }
 static KeyPointStatGroup _buildGroup({
     required BarFeatureLookup lookup,

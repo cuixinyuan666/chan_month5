@@ -1,3 +1,4 @@
+import 'package:chan_kline/backtest/backtest_metrics.dart';
 import 'package:chan_kline/backtest/condition_ast.dart';
 import 'package:chan_kline/backtest/strategy_compile.dart';
 import 'package:chan_kline/backtest/strategy_config.dart';
@@ -65,6 +66,10 @@ class IndicatorSearchRunner {
     onCancelRequested?.call();
   }
 
+  /// 是否已请求取消。并行分片在隔离区里跑，无法中途打断，
+  /// 调用方在每批之间用这个值决定要不要继续。
+  bool get cancelRequested => _cancelRequested;
+
   String _compileKey(TradeAst buy, TradeAst sell, int maxKn) =>
       '$maxKn||${astConditionCacheKey(buy)}||${astConditionCacheKey(sell)}';
 
@@ -83,6 +88,75 @@ class IndicatorSearchRunner {
   }
 
   bool tryCompile(ComboCand c, int maxKn) => compileOk(c, maxKn) != null;
+
+  /// 只跑样本内一段，供粗筛用。比完整的内外两段便宜一半。
+  /// 编译失败或回测失败返回 null。
+  SegmentMetrics? evaluateInSample({
+    required ComboCand c,
+    required SearchEnv env,
+    required int splitX,
+    required int maxKn,
+  }) {
+    final okCompile = compileOk(c, maxKn);
+    if (okCompile == null) return null;
+    final run = env.runAtCompiled(okCompile, c.buyAst, c.sellAst, splitX);
+    if (run == null) return null;
+    return segmentMetricsFromRun(run);
+  }
+
+  /// 复用已算好的样本内结果，只补跑样本外。粗筛已经把样本内跑过了，
+  /// 完整评估时再跑一遍纯属浪费。
+  ComboVerdict? evaluateCandidateWithInSample({
+    required ComboCand c,
+    required SearchEnv env,
+    required int splitX,
+    required int maxKn,
+    required SegmentMetrics inSample,
+  }) {
+    final okCompile = compileOk(c, maxKn);
+    if (okCompile == null) return null;
+    final out = env.runOutSampleOnly(okCompile, c.buyAst, c.sellAst, splitX);
+    if (out == null) return null;
+    return ComboVerdict(
+      name: c.name,
+      buyText: astConditionTextCn(c.buyAst, maxKn: maxKn),
+      sellText: astConditionTextCn(c.sellAst, maxKn: maxKn),
+      inSample: inSample,
+      outSample: out,
+      buyAst: c.buyAst,
+      sellAst: c.sellAst,
+      splitX: splitX,
+    );
+  }
+
+  /// 用真实成本口径（万 3 + 0.01 滑点）重跑内外两段，只用于另算一列分数。
+  /// 默认撮合参数不变，这里只是临时换费率与滑点。
+  ComboVerdict? evaluateCandidateWithRealCost({
+    required ComboCand c,
+    required SearchEnv env,
+    required int splitX,
+    required int maxKn,
+  }) {
+    final okCompile = compileOk(c, maxKn);
+    if (okCompile == null) return null;
+    final seg = env.runInOutWithRealCost(
+      okCompile,
+      c.buyAst,
+      c.sellAst,
+      splitX,
+    );
+    if (seg == null) return null;
+    return ComboVerdict(
+      name: c.name,
+      buyText: astConditionTextCn(c.buyAst, maxKn: maxKn),
+      sellText: astConditionTextCn(c.sellAst, maxKn: maxKn),
+      inSample: seg.inSample,
+      outSample: seg.outSample,
+      buyAst: c.buyAst,
+      sellAst: c.sellAst,
+      splitX: splitX,
+    );
+  }
 
   /// 内外段各独立重跑一次，产出含完整指标与买卖 AST 的结果（不做达标/排名筛选）。
   ComboVerdict? evaluateCandidate({

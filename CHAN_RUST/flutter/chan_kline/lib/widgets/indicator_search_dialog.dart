@@ -36,6 +36,7 @@ class IndicatorSearchDialog extends StatefulWidget {
     this.initialBars,
     this.runnerFactory,
     this.candidateOverride,
+    this.candidatesOnly = false,
     this.scanYieldEvery,
     this.onApplyToChart,
     this.enablePreview = true,
@@ -62,8 +63,12 @@ class IndicatorSearchDialog extends StatefulWidget {
   /// 仅供机器人验证的 Widget 测试注入：替换扫描器（生产路径为 null）。
   final IndicatorSearchRunner Function()? runnerFactory;
 
-  /// 仅供机器人验证的 Widget 测试注入：直接给定候选，跳过枚举。
+  /// 非空时跳过枚举，直接扫描这些候选：
+  /// 计优「拿去寻优」传组合候选，机器人验证用它注入固定候选。
   final List<ComboCand>? candidateOverride;
+
+  /// 只评估 [candidateOverride]：不粗筛、不再拼组合（计优「拿去寻优」）。
+  final bool candidatesOnly;
 
   /// 仅供机器人验证的 Widget 测试注入：扫描让出频率（生产为 null → 默认 25）。
   /// 设为 1 可让每条候选之间都让出事件循环，便于测试在中途点「取消扫描」。
@@ -200,6 +205,7 @@ class _IndicatorSearchDialogState extends State<IndicatorSearchDialog> {
         mainSessionHarness: widget.mainSessionHarness,
         initialBars: widget.initialBars,
         candidateOverride: widget.candidateOverride,
+        candidatesOnly: widget.candidatesOnly,
         scanYieldEvery: widget.scanYieldEvery ?? 25,
       ),
       runner: widget.runnerFactory?.call(),
@@ -562,6 +568,14 @@ Future<IndicatorSearchSettings?> showIndicatorSearchSettingsSheet(
                 const Text(
                   '寻优参数',
                   style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                ),
+                SwitchListTile(
+                  title: const Text('智能寻优'),
+                  subtitle: const Text(
+                    '先用样本内去掉成交太少或亏钱的，再把单条条件拼成并且组合，按样本外稳健分排名；关闭=全量列出',
+                  ),
+                  value: cfg.smartSearch,
+                  onChanged: (v) => setLocal(() => cfg = cfg.copyWith(smartSearch: v)),
                 ),
                 SwitchListTile(
                   title: const Text('优化枚举（推荐）'),

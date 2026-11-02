@@ -20,11 +20,15 @@ class KeyPointStatSettings {
   /// 「众数」其实是分桶取最小值的结果（噪声冒充信息），展示层必须如实标出。
   final double modeMinShare;
 
+  /// 是否计算组合区分度：在单指标差异度之上，找出哪几个指标一起看时顶底分得最开。
+  final bool computeCombos;
+
   const KeyPointStatSettings({
     this.splitTopBottom = true,
     this.modeDigits = 4,
     this.minPoints = 3,
     this.modeMinShare = 0.3,
+    this.computeCombos = true,
   });
 
   KeyPointStatSettings copyWith({
@@ -32,12 +36,14 @@ class KeyPointStatSettings {
     int? modeDigits,
     int? minPoints,
     double? modeMinShare,
+    bool? computeCombos,
   }) =>
       KeyPointStatSettings(
         splitTopBottom: splitTopBottom ?? this.splitTopBottom,
         modeDigits: modeDigits ?? this.modeDigits,
         minPoints: minPoints ?? this.minPoints,
         modeMinShare: modeMinShare ?? this.modeMinShare,
+        computeCombos: computeCombos ?? this.computeCombos,
       );
 
   /// 面板顶部口径行（写清桶宽与分组，免得把近似众数当精确值读）。
@@ -54,6 +60,7 @@ class KeyPointStatSettings {
         'modeDigits': modeDigits,
         'minPoints': minPoints,
         'modeMinShare': modeMinShare,
+        'computeCombos': computeCombos,
       };
 
   static KeyPointStatSettings fromJson(Map<String, dynamic>? map) {
@@ -64,6 +71,7 @@ class KeyPointStatSettings {
       minPoints: ((map['minPoints'] as num?)?.toInt() ?? 3).clamp(1, 10000),
       modeMinShare:
           ((map['modeMinShare'] as num?)?.toDouble() ?? 0.3).clamp(0.0, 1.0),
+      computeCombos: map['computeCombos'] != false,
     );
   }
 }

@@ -73,7 +73,10 @@ void main() {
       expect(a.tsvKey, startsWith('in_'));
       expect(b.width, a.width);
     }
-    expect(kAllResultColumns.length, kInResultColumns.length * 2);
+    expect(kAllResultColumns.length, kInResultColumns.length * 2 + 2);
+    expect(kAllResultColumns[kAllResultColumns.length - 2].sort,
+        VerdictSortColumn.rankScore);
+    expect(kAllResultColumns.last.sort, VerdictSortColumn.realCostScore);
   });
 
   test('落盘 TSV 的表头列数 == 数据行列数（复制与落盘同源）', () {
@@ -113,6 +116,8 @@ void main() {
     final expectRow = buildResultTsvRow(
       inSample: v.inSample,
       outSample: v.outSample,
+      rankScore: v.rankScore,
+      realCostScore: v.realCostScore,
     ).split('\t');
     expect(cells.skip(3).toList(), expectRow);
   });

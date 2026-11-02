@@ -262,10 +262,48 @@ final List<SearchResultColumn> kInResultColumns =
 final List<SearchResultColumn> kOutResultColumns =
     buildResultColumns(inSample: false);
 
-/// 全部数值列（样本内在前、样本外在后）—— 表头 / 数据行 / 复制 / TSV 落盘都按这个顺序。
+/// 稳健排名分列（整行级别，不属于样本内或样本外区段）。
+///
+/// 取值走 [rankScoreMetric]，因为分数存在候选上而不是单段指标上；
+/// 这里的 metric/text 只是占位，保证「每个排序枚举都有列绑定」的守卫不破。
+final SearchResultColumn kRankScoreColumn = SearchResultColumn(
+  sort: VerdictSortColumn.rankScore,
+  label: '稳健分',
+  tsvKey: 'rank_score',
+  width: kColScore,
+  metric: (_) => const MetricNum.unavailable(),
+  text: (_) => '—',
+  plain: '以样本外为准的综合分，扣掉样本内外不一致的过拟合惩罚',
+  note: '未打分（旧口径）显示 —；笔数不足、样本外亏钱或盈利因子低于 1 时为 0',
+);
+
+/// 真实成本分列：万 3 手续费 + 0.01 滑点下的稳健分。
+final SearchResultColumn kRealCostScoreColumn = SearchResultColumn(
+  sort: VerdictSortColumn.realCostScore,
+  label: '真实成本分',
+  tsvKey: 'real_cost_score',
+  width: kColScore,
+  metric: (_) => const MetricNum.unavailable(),
+  text: (_) => '—',
+  plain: '按万 3 手续费加 0.01 元滑点重算后的稳健分',
+  note: '未算显示 —；默认撮合参数不变，这一列只是对照',
+);
+
+/// 稳健分的真实取值：未打分为不可用（显示「—」），打过分为有限数。
+MetricNum rankScoreMetric(double? rankScore) => rankScore == null
+    ? const MetricNum.unavailable()
+    : MetricNum.finite(rankScore);
+
+/// 稳健分的显示文本。
+String rankScoreText(double? rankScore) =>
+    renderMetric(rankScoreMetric(rankScore), digits: 3);
+
+/// 全部数值列（样本内在前、样本外在后、稳健分、真实成本分在最后）—— 表头 / 数据行 / 复制 / TSV 落盘都按这个顺序。
 final List<SearchResultColumn> kAllResultColumns = [
   ...kInResultColumns,
   ...kOutResultColumns,
+  kRankScoreColumn,
+  kRealCostScoreColumn,
 ];
 
 /// TSV 表头行（制表符分隔），由列注册表生成，与数据行列序必然一致。
@@ -276,10 +314,14 @@ String buildResultTsvHeader() =>
 String buildResultTsvRow({
   required SegmentMetrics inSample,
   required SegmentMetrics outSample,
+  double? rankScore,
+  double? realCostScore,
 }) =>
     [
       for (final c in kInResultColumns) c.text(inSample),
       for (final c in kOutResultColumns) c.text(outSample),
+      rankScoreText(rankScore),
+      rankScoreText(realCostScore),
     ].join('\t');
 
 /// 按排序键找列定义（`_compareCol` 用它，保证排序值与显示列永远同源）。

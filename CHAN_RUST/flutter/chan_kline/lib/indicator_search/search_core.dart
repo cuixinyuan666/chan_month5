@@ -26,6 +26,14 @@ class ComboVerdict {
   final TradeAst? sellAst;
   final int splitX;
 
+  /// 稳健排名分（样本外为准，扣过拟合惩罚）。
+  /// null = 还没打分（旧快照、或「全部列出」旧口径），面板显示「—」。
+  final double? rankScore;
+
+  /// 真实成本口径下的稳健分（万 3 手续费 + 0.01 滑点）。
+  /// null = 没算过。默认撮合参数不变，这一列只是另算的对照。
+  final double? realCostScore;
+
   const ComboVerdict({
     required this.name,
     required this.buyText,
@@ -35,6 +43,8 @@ class ComboVerdict {
     this.buyAst,
     this.sellAst,
     required this.splitX,
+    this.rankScore,
+    this.realCostScore,
   });
 
   /// 展示用短标签（「事件｜…」→「事件」）。
@@ -56,6 +66,8 @@ class ComboVerdict {
     if (buyAst != null) 'buyAst': buyAst!.toJson(),
     if (sellAst != null) 'sellAst': sellAst!.toJson(),
     'splitX': splitX,
+    if (rankScore != null) 'rankScore': rankScore,
+    if (realCostScore != null) 'realCostScore': realCostScore,
   };
 
   static ComboVerdict fromJson(Map<String, dynamic> m) {
@@ -78,6 +90,8 @@ class ComboVerdict {
           ? tradeAstFromJson(m['sellAst'] as Map<String, dynamic>)
           : null,
       splitX: (m['splitX'] as num?)?.toInt() ?? 0,
+      rankScore: (m['rankScore'] as num?)?.toDouble(),
+      realCostScore: (m['realCostScore'] as num?)?.toDouble(),
     );
   }
 }
@@ -204,7 +218,12 @@ class VerdictSink {
       _clean(v.name),
       _clean(conditionDisplayText(v.buyText, maxKn: maxKn)),
       _clean(conditionDisplayText(v.sellText, maxKn: maxKn)),
-      buildResultTsvRow(inSample: v.inSample, outSample: v.outSample),
+      buildResultTsvRow(
+        inSample: v.inSample,
+        outSample: v.outSample,
+        rankScore: v.rankScore,
+        realCostScore: v.realCostScore,
+      ),
     ].join('\t'));
   }
 

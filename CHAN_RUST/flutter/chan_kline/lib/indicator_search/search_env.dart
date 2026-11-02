@@ -176,7 +176,9 @@ class SearchEnv {
   final String period;
   final String begin;
   final String end;
-  final SearchWorkbenchAlign align;
+
+  /// 撮合与指标参数。默认为 final 语义，只有 [runInOutWithRealCost] 会临时替换再还原。
+  SearchWorkbenchAlign align;
 
   SearchEnv(
     this.bars,
@@ -206,6 +208,39 @@ class SearchEnv {
     return run;
   }
 
+  /// 真实成本口径：万 3 手续费 + 0.01 元滑点。
+  ///
+  /// 这是 future.md 第六节记录的口径。默认撮合参数（费 0、滑点 0）按用户决定不动，
+  /// 所以真实成本只作为额外一列另算，不替换默认结果。
+  static const double realCostCommissionRate = 3e-4;
+  static const double realCostSlippageAmount = 0.01;
+
+  /// 用真实成本重算样本内外两段。只换撮合参数里的费率与滑点，其余口径不变。
+  InOutSegmentScores? runInOutWithRealCost(
+    StrategyCompileOk? compiled,
+    TradeAst buy,
+    TradeAst sell,
+    int splitX,
+  ) {
+    final saved = align;
+    align = SearchWorkbenchAlign(
+      strategyTemplate: saved.strategyTemplate.copyWith(
+        commissionRate: realCostCommissionRate,
+        slippageAmount: realCostSlippageAmount,
+      ),
+      features: saved.features,
+      bucketStep: saved.bucketStep,
+      bollN: saved.bollN,
+      donchianN: saved.donchianN,
+      regressK: saved.regressK,
+    );
+    try {
+      return runInOutFromSingleFull(compiled, buy, sell, splitX);
+    } finally {
+      align = saved;
+    }
+  }
+
   /// 样本内/外各独立重跑：内段 asOf=切点；外段全区间求信号但仅撮合 executeX>切点。
   /// 外段净值曲线裁剪到切点之后再算年化（去掉前段平台期），避免污染波动率/Sharpe。
   InOutSegmentScores? runInOutFromSingleFull(
@@ -222,6 +257,18 @@ class SearchEnv {
       inSample: segmentMetricsFromRun(rIn),
       outSample: segmentMetricsFromRun(rOut, cutX: splitX + 1),
     );
+  }
+
+  /// 只跑样本外一段。供已算过样本内的调用方复用，避免重复回测。
+  SegmentMetrics? runOutSampleOnly(
+    StrategyCompileOk? compiled,
+    TradeAst buy,
+    TradeAst sell,
+    int splitX,
+  ) {
+    final run = _runOutSampleCompiled(compiled, buy, sell, splitX);
+    if (run == null) return null;
+    return segmentMetricsFromRun(run, cutX: splitX + 1);
   }
 
   BacktestRun? _runOutSampleCompiled(

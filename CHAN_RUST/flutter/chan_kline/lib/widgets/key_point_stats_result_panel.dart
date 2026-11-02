@@ -116,72 +116,122 @@ class _KeyPointStatsResultPanelState extends State<KeyPointStatsResultPanel> {
 
     return DefaultTabController(
       length: r.groups.length,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            r.headerLine,
-            style: const TextStyle(fontSize: 11, height: 1.35),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            '关键点位 ${r.collect.keyPoints.length} 个 · '
-            '统计分组 ${r.groups.length} 张 · 每张 ${r.metricCount} 项指标 · '
-            '耗时 ${r.elapsed.inMilliseconds}ms',
-            style: TextStyle(fontSize: 11, color: Colors.grey.shade700),
-          ),
-          Text(
-            'JSON：${widget.jsonPath}\nTSV：${widget.tsvPath}',
-            style: TextStyle(fontSize: 10, color: Colors.grey.shade600),
-          ),
-          if (r.collect.skippedUnconfirmed > 0 ||
-              r.collect.skippedNoPole > 0)
-            Text(
-              '已排除：进行中未确认 ${r.collect.skippedUnconfirmed} · '
-              '找不到极值 ${r.collect.skippedNoPole}',
-              style: TextStyle(fontSize: 10, color: Colors.grey.shade600),
-            ),
-          if (_diag.toDisplayLine() != null) ...[
-            const SizedBox(height: 4),
-            Text(
-              _diag.toDisplayLine()!,
-              style: TextStyle(
-                fontSize: 10,
-                height: 1.3,
-                color: _diag.hasRisk ? Colors.brown.shade800 : Colors.grey.shade700,
-                fontWeight: _diag.hasRisk ? FontWeight.w600 : FontWeight.normal,
-              ),
-            ),
-          ],
-          const SizedBox(height: 4),
-          Row(
+      child: LayoutBuilder(
+        builder: (context, cons) {
+          // 顶部口径区（组合区分度、诊断行、路径）条数不固定：组合多、诊断长时
+          // 会把这列撑溢出，短窗口下尤其明显。给它一个「表格之外还剩多少」的
+          // 上限，超了就在内部滚动，绝不挤掉下面的表。
+          const minTableArea = 120.0;
+          final headerMax = (cons.maxHeight - minTableArea)
+              .clamp(0.0, double.infinity)
+              .toDouble();
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const Text('过滤：', style: TextStyle(fontSize: 11)),
-              _filterChip('全部', null),
-              const SizedBox(width: 6),
-              _filterChip('数值型', StatValueKind.numeric),
-              const SizedBox(width: 6),
-              _filterChip('类别型', StatValueKind.categorical),
+              ConstrainedBox(
+                constraints: BoxConstraints(maxHeight: headerMax),
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        r.headerLine,
+                        style: const TextStyle(fontSize: 11, height: 1.35),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '关键点位 ${r.collect.keyPoints.length} 个 · '
+                        '统计分组 ${r.groups.length} 张 · 每张 ${r.metricCount} 项指标 · '
+                        '耗时 ${r.elapsed.inMilliseconds}ms',
+                        style: TextStyle(fontSize: 11, color: Colors.grey.shade700),
+                      ),
+                      if (r.comboContrasts.isNotEmpty) ...[
+                        const SizedBox(height: 6),
+                        Text(
+                          '组合区分度（哪几个指标一起看时顶底分得最开）',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.grey.shade800,
+                          ),
+                        ),
+                        for (final c in r.comboContrasts.take(5))
+                          Text(
+                            c.ruleText,
+                            style: const TextStyle(fontSize: 11, height: 1.4),
+                          ),
+                        const SizedBox(height: 2),
+                        Text(
+                          '「拿去寻优」只用寻优切点前的关键点重新拟合组合/方向/分界，'
+                          '与上表全样本统计可能不同。',
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: Colors.grey.shade600,
+                          ),
+                        ),
+                      ],
+                      Text(
+                        'JSON：${widget.jsonPath}\nTSV：${widget.tsvPath}',
+                        style: TextStyle(fontSize: 10, color: Colors.grey.shade600),
+                      ),
+                      if (r.collect.skippedUnconfirmed > 0 ||
+                          r.collect.skippedNoPole > 0)
+                        Text(
+                          '已排除：进行中未确认 ${r.collect.skippedUnconfirmed} · '
+                          '找不到极值 ${r.collect.skippedNoPole}',
+                          style: TextStyle(fontSize: 10, color: Colors.grey.shade600),
+                        ),
+                      if (_diag.toDisplayLine() != null) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          _diag.toDisplayLine()!,
+                          style: TextStyle(
+                            fontSize: 10,
+                            height: 1.3,
+                            color: _diag.hasRisk
+                                ? Colors.brown.shade800
+                                : Colors.grey.shade700,
+                            fontWeight: _diag.hasRisk
+                                ? FontWeight.w600
+                                : FontWeight.normal,
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 4),
+                      Row(
+                        children: [
+                          const Text('过滤：', style: TextStyle(fontSize: 11)),
+                          _filterChip('全部', null),
+                          const SizedBox(width: 6),
+                          _filterChip('数值型', StatValueKind.numeric),
+                          const SizedBox(width: 6),
+                          _filterChip('类别型', StatValueKind.categorical),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 4),
+              TabBar(
+                isScrollable: true,
+                tabAlignment: TabAlignment.start,
+                labelPadding: const EdgeInsets.symmetric(horizontal: 10),
+                tabs: [
+                  for (final g in r.groups)
+                    Tab(text: '${g.groupLabel} (${g.pointCount})'),
+                ],
+              ),
+              Expanded(
+                child: TabBarView(
+                  children: [
+                    for (final g in r.groups) _groupView(g),
+                  ],
+                ),
+              ),
             ],
-          ),
-          const SizedBox(height: 4),
-          TabBar(
-            isScrollable: true,
-            tabAlignment: TabAlignment.start,
-            labelPadding: const EdgeInsets.symmetric(horizontal: 10),
-            tabs: [
-              for (final g in r.groups)
-                Tab(text: '${g.groupLabel} (${g.pointCount})'),
-            ],
-          ),
-          Expanded(
-            child: TabBarView(
-              children: [
-                for (final g in r.groups) _groupView(g),
-              ],
-            ),
-          ),
-        ],
+          );
+        },
       ),
     );
   }
