@@ -75,6 +75,30 @@ void main() {
     expect(found.where((c) => c.metricKeys.contains('n')), isEmpty);
   });
 
+  test('均值相同但有离散度的指标不能搭便车进组合', () {
+    final a = MetricColumn(
+      metricKey: 'a',
+      labelCn: '甲',
+      topValues: [3, 3.1, 2.9, 3],
+      bottomValues: [0, 0.1, -0.1, 0],
+    );
+    // 单指标差异度为 0（顶底均值相同），但有离散度 —— 它对组合区分度
+    // 的贡献是 0，不能因为「以它为基座再加甲」的增益看起来大就混进来。
+    final flat = MetricColumn(
+      metricKey: 'f',
+      labelCn: '零差异',
+      topValues: [1, 2, 1, 2],
+      bottomValues: [1, 2, 1, 2],
+    );
+
+    final found = computeComboContrasts(
+      ranked: [contrast('a', '甲', 3), contrast('f', '零差异', 0)],
+      columns: {'a': a, 'f': flat},
+      level: 1,
+    );
+    expect(found.where((c) => c.metricKeys.contains('f')), isEmpty);
+  });
+
   test('候选不足两个时不产出组合', () {
     final found = computeComboContrasts(
       ranked: [contrast('a', '甲', 1)],

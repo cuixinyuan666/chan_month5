@@ -96,6 +96,10 @@ List<KeyPointComboContrast> computeComboContrasts({
   for (final c in ranked.take(topK)) {
     final col = columns[c.metricKey];
     if (col == null) continue;
+    // 单指标差异度为 0 的指标对组合区分度贡献也是 0（d=0）。把它留在
+    // 基座里会让「以它为基座再加最强指标」的增益看起来最大，噪声指标
+    // 因此搭便车混进组合。直接排除，组合里只留真正有贡献的指标。
+    if (c.contrast <= 0) continue;
     if (col.topValues.length < 2 || col.bottomValues.length < 2) continue;
     seeds.add(_Seed(contrast: c, column: col));
   }
