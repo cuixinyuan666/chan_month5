@@ -180,24 +180,40 @@ class _KeyPointStatsDialogState extends State<KeyPointStatsDialog> {
 
   /// 把组合区分度翻译成寻优候选：分界值取顶底两组均值的中点。
   ///
-  /// 翻译不了的指标（筹码分箱等计优有、寻优没有的键）整条跳过，不产出半截条件。
+  /// **无前视**：只用寻优切点之前的已确认关键点重新拟合组合、方向和中点。
+  /// 面板上的 `_result` 是全样本统计，直接拿它做候选会把样本外那 30% 的
+  /// 顶底均值带进分界，样本外指标就不再是样本外。
+  ///
+  /// 翻译不了的指标（筹码分箱等计优有、寻优没有的键）逐条跳过，不产出半截条件。
   Future<void> _searchWithCombos() async {
     final r = _result;
     final cb = widget.onSearchWithCombos;
     if (r == null || cb == null) return;
-    final midpoints = <String, double>{
-      for (final c in r.contrasts)
-        if (c.topMean.isFinite && c.bottomMean.isFinite)
-          c.metricKey: (c.topMean + c.bottomMean) / 2,
-    };
-    final cands = <ComboCand>[];
-    for (final combo in r.comboContrasts) {
-      final cand = searchCandidateFromCombo(combo, midpoints);
-      if (cand != null) cands.add(cand);
-    }
+
+    // 与寻优默认的 70/30 切分保持一致；寻优对话框当前不暴露 inRatio。
+    final splitX = splitBarIdx(widget.bars);
+    final cands = bridgeCandidatesAsOf(
+      bars: widget.bars,
+      levels: widget.levels,
+      lookup: widget.lookup,
+      settings: KeyPointStatSettingsStore.current,
+      asOf: splitX,
+      k0Confirms: widget.k0Confirms,
+      k0Lines: widget.k0Lines,
+      code: widget.code,
+      period: widget.period,
+      beginText: widget.beginText,
+      endText: widget.endText,
+      maxKn: widget.maxKn,
+    );
     if (cands.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('这些组合里没有能翻译成寻优条件的指标')),
+        const SnackBar(
+          content: Text(
+            '切点前（前 70%）没有拟合出可翻译的组合；'
+            '面板上的全样本组合不能直接用于样本外验证',
+          ),
+        ),
       );
       return;
     }
@@ -296,6 +312,12 @@ Future<void> showKeyPointStatsHelp(BuildContext context) async {
           '· 类别型（如顶/底、是否截断、背驰标志）：样本数 / 精确众数 / 众数占比；\n'
           '· 数值众数是按小数位分桶的近似值（面板会写桶宽），类别众数才是精确值；\n'
           '· 没有样本一律显示「—」，不补 0、不拿上一根的值顶替。\n\n'
+          '组合区分度\n'
+          '· 在单指标差异度之上，找出哪几个指标一起看时顶底分得最开；\n'
+          '· 面板顶部列前 5 条，全量在 JSON 的 combo_contrasts；\n'
+          '· 「拿去寻优」只用寻优切点前（前 70%）已确认的关键点重新拟合\n'
+          '  组合、方向与分界，再打开寻优回测，避免样本外前视；\n'
+          '· 翻译不了的指标逐条跳过，候选名只列真正进了条件的指标。\n\n'
           '关于「当下性」\n'
           '· 计优是跑完之后回头统计，按 AGENTS.md 属于事后统计例外；\n'
           '· 转折点是回头认定的，但读到的每个指标值仍然只用该 K 及之前的数据。\n\n'

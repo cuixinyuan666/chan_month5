@@ -160,6 +160,15 @@ class _KeyPointStatsResultPanelState extends State<KeyPointStatsResultPanel> {
                             c.ruleText,
                             style: const TextStyle(fontSize: 11, height: 1.4),
                           ),
+                        const SizedBox(height: 2),
+                        Text(
+                          '「拿去寻优」只用寻优切点前的关键点重新拟合组合/方向/分界，'
+                          '与上表全样本统计可能不同。',
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: Colors.grey.shade600,
+                          ),
+                        ),
                       ],
                       Text(
                         'JSON：${widget.jsonPath}\nTSV：${widget.tsvPath}',

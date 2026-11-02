@@ -1,10 +1,10 @@
 import 'dart:io';
 
 import 'package:chan_kline/indicator_search/search_core.dart';
-import 'package:chan_kline/key_point_stats/key_point.dart';
 import 'package:chan_kline/key_point_stats/key_point_collect.dart';
 import 'package:chan_kline/key_point_stats/key_point_stat_runner.dart';
 import 'package:chan_kline/models/bar_feature_lookup.dart';
+import 'package:chan_kline/models/k0_confirm_signal.dart';
 import 'package:chan_kline/models/kline_bar.dart';
 import 'package:chan_kline/settings/key_point_stats_settings_store.dart';
 import 'package:chan_kline/widgets/key_point_stats_dialog.dart';
@@ -71,33 +71,45 @@ Map<String, dynamic> _row(int idx, {required String fx}) {
   };
 }
 
+/// 4 个顶 + 4 个底，前 3 个底在切点（20 根的 70% = 14）之前确认。
+List<K0ConfirmSignal> _signals() => [
+      for (var i = 0; i < 4; i++)
+        K0ConfirmSignal(
+          x: i * 2 + 1,
+          fx: 'TOP',
+          value: 1,
+          fractalX1: i * 2,
+          fractalX2: i * 2,
+        ),
+      for (var i = 4; i < 8; i++)
+        K0ConfirmSignal(
+          x: i * 2 + 1,
+          fx: 'BOTTOM',
+          value: -1,
+          fractalX1: i * 2,
+          fractalX2: i * 2,
+        ),
+    ];
+
+Map<int, Map<String, dynamic>> _byIdx() => {
+      for (final s in _signals())
+        s.fractalX1: _row(s.fractalX1, fx: s.fx),
+    };
+
 KeyPointStatResult _result() {
-  final pts = <KeyPoint>[];
-  final byIdx = <int, Map<String, dynamic>>{};
-  var i = 0;
-  for (var k = 0; k < 4; k++) {
-    pts.add(KeyPoint(
-        level: 1, fx: 'TOP', poleX: i * 2, confirmX: i * 2 + 1, source: 't'));
-    byIdx[i * 2] = _row(i * 2, fx: 'TOP');
-    i++;
-  }
-  for (var k = 0; k < 4; k++) {
-    pts.add(KeyPoint(
-        level: 1,
-        fx: 'BOTTOM',
-        poleX: i * 2,
-        confirmX: i * 2 + 1,
-        source: 't'));
-    byIdx[i * 2] = _row(i * 2, fx: 'BOTTOM');
-    i++;
-  }
+  final bs = _bars(20);
   return KeyPointStatRunner.run(
-    lookup: BarFeatureLookup.fromCached(byIdx: byIdx),
-    collect: KeyPointCollectResult(keyPoints: pts),
+    lookup: BarFeatureLookup.fromCached(byIdx: _byIdx()),
+    collect: collectKeyPoints(
+      bars: bs,
+      levels: const [],
+      k0Confirms: _signals(),
+      asOf: 19,
+    ),
     settings: const KeyPointStatSettings(),
     code: '002003',
     period: '1m',
-    barCount: 16,
+    barCount: 20,
     maxKn: 1,
   );
 }
@@ -150,10 +162,11 @@ void main() {
                     period: '1m',
                     beginText: '2004/07/19 09:30:00',
                     endText: '2004/07/20 15:00:00',
-                    bars: _bars(16),
+                    bars: _bars(20),
                     levels: const [],
-                    lookup: BarFeatureLookup.fromCached(byIdx: {}),
+                    lookup: BarFeatureLookup.fromCached(byIdx: _byIdx()),
                     maxKn: 1,
+                    k0Confirms: _signals(),
                     resultOverride: result,
                     onSearchWithCombos: (cands) async => captured = cands,
                   ),
@@ -197,7 +210,7 @@ void main() {
                     period: '1m',
                     beginText: '2004/07/19 09:30:00',
                     endText: '2004/07/20 15:00:00',
-                    bars: _bars(16),
+                    bars: _bars(20),
                     levels: const [],
                     lookup: BarFeatureLookup.fromCached(byIdx: {}),
                     maxKn: 1,

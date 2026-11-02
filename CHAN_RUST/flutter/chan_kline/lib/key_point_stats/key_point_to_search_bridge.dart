@@ -2,8 +2,17 @@ import '../backtest/condition_ast.dart';
 import '../backtest/signal_data_catalog.dart';
 import '../backtest/trade_operand.dart';
 import '../indicator_search/search_core.dart';
+import '../models/bar_feature_lookup.dart';
+import '../models/k0_confirm_signal.dart';
+import '../models/k0_line.dart';
+import '../models/kline_bar.dart';
+import '../models/level_models.dart';
+import '../settings/key_point_stats_settings_store.dart';
 
+import 'key_point_collect.dart';
 import 'key_point_combo_contrast.dart';
+import 'key_point_contrast.dart';
+import 'key_point_stat_runner.dart';
 
 /// 计优到寻优的桥：把「哪几个指标一起看顶底分得最开」翻译成可回测的买卖条件。
 ///
@@ -40,9 +49,26 @@ String? tradeVarIdOf(String statKey) {
   return null;
 }
 
+/// 每个级别自己的中点表：level → (metricKey → (顶均值 + 底均值) / 2)。
+///
+/// 同一个指标会在多个关键点级别出现（`sub.rsi_1` 在 K0/K1/K2 的顶底均值
+/// 各不相同）。中点必须按组合所在级别取，不能压成一张只按 metricKey 索引
+/// 的表 —— 否则后写的级别会覆盖前面的，K1 组合可能拿到 K0 的分界。
+Map<int, Map<String, double>> midpointsByLevelOf(
+  Iterable<KeyPointContrast> contrasts,
+) {
+  final out = <int, Map<String, double>>{};
+  for (final c in contrasts) {
+    if (!c.topMean.isFinite || !c.bottomMean.isFinite) continue;
+    (out[c.level] ??= <String, double>{})[c.metricKey] =
+        (c.topMean + c.bottomMean) / 2;
+  }
+  return out;
+}
+
 /// 把一个组合区分度结果翻译成一条寻优候选。
 ///
-/// [midpoints] 给出每个指标的分界值（通常取顶底两组均值的中点）。
+/// [midpointsByLevel] 给出每个级别的分界值（通常取该级别顶底两组均值的中点）。
 ///
 /// 翻译不了的指标（寻优没有对应交易变量）单独跳过，其余指标照常拼成组合；
 /// 至少剩一个指标才产出候选。整条丢弃会让「三个指标里有一个没登记」的组合
@@ -50,11 +76,12 @@ String? tradeVarIdOf(String statKey) {
 /// 候选名只列真正进了条件的指标，不拿没翻译的部分充数。
 ComboCand? searchCandidateFromCombo(
   KeyPointComboContrast combo,
-  Map<String, double> midpoints,
+  Map<int, Map<String, double>> midpointsByLevel,
 ) {
   final used = <String>[];
   TradeAst? buy;
   TradeAst? sell;
+  final midpoints = midpointsByLevel[combo.level] ?? const <String, double>{};
   for (var i = 0; i < combo.metricKeys.length; i++) {
     final key = combo.metricKeys[i];
     final varId = tradeVarIdOf(key);
@@ -70,6 +97,62 @@ ComboCand? searchCandidateFromCombo(
   }
   if (buy == null || sell == null) return null;
   return ComboCand('计优组合｜K${combo.level}：${used.join(' 且 ')}', buy, sell);
+}
+
+/// 从一次计优结果生成全部可翻译的寻优候选。
+///
+/// 组合、方向和中点都来自同一个 [result]；调用方要保证 result 只包含
+/// 寻优切点之前的数据（见 [bridgeCandidatesAsOf]），否则样本外会被前视污染。
+List<ComboCand> candidatesFromResult(KeyPointStatResult result) {
+  final midpoints = midpointsByLevelOf(result.contrasts);
+  final out = <ComboCand>[];
+  for (final combo in result.comboContrasts) {
+    final cand = searchCandidateFromCombo(combo, midpoints);
+    if (cand != null) out.add(cand);
+  }
+  return out;
+}
+
+/// 用 [asOf] 之前**已确认**的关键点重新拟合计优，生成无前视的寻优候选。
+///
+/// 计优面板上的全样本统计是事后描述，可以看全区间；但把它直接翻译成
+/// 寻优候选时，分界和方向会带上样本外那一段的顶底均值，样本外指标就不再
+/// 是样本外。这里把收集、统计、组合、翻译全部限制在 asOf 及之前：
+/// `collectKeyPoints` 只收 `confirmX <= asOf` 的点，读到的指标值也仍然
+/// 只用该 K 及之前的数据。
+List<ComboCand> bridgeCandidatesAsOf({
+  required List<KlineBar> bars,
+  required List<LevelBundle> levels,
+  required BarFeatureLookup lookup,
+  required KeyPointStatSettings settings,
+  required int asOf,
+  List<K0ConfirmSignal> k0Confirms = const [],
+  List<K0Line> k0Lines = const [],
+  String code = '',
+  String period = '',
+  String beginText = '',
+  String endText = '',
+  int maxKn = 0,
+}) {
+  final collect = collectKeyPoints(
+    bars: bars,
+    levels: levels,
+    k0Confirms: k0Confirms,
+    k0Lines: k0Lines,
+    asOf: asOf,
+  );
+  final result = KeyPointStatRunner.run(
+    lookup: lookup,
+    collect: collect,
+    settings: settings,
+    code: code,
+    period: period,
+    beginText: beginText,
+    endText: endText,
+    barCount: bars.where((b) => b.idx <= asOf).length,
+    maxKn: maxKn,
+  );
+  return candidatesFromResult(result);
 }
 
 TradeAst _cmp(String varId, double mid, TradeBinaryOp op) => TradeCmpAst(

@@ -1,14 +1,49 @@
 import 'package:chan_kline/backtest/condition_ast.dart';
 import 'package:chan_kline/backtest/trade_operand.dart';
 import 'package:chan_kline/key_point_stats/key_point_combo_contrast.dart';
+import 'package:chan_kline/key_point_stats/key_point_contrast.dart';
 import 'package:chan_kline/key_point_stats/key_point_to_search_bridge.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// 计优到寻优的键名桥回归。
 ///
-/// 钉死两件事：冻结账的键能翻译成交易变量；翻译出的候选买卖方向正确
-/// （顶上更高的指标，买入取低于分界、卖出取高于分界）。
+/// 钉死三件事：冻结账的键能翻译成交易变量；翻译出的候选买卖方向正确
+/// （顶上更高的指标，买入取低于分界、卖出取高于分界）；分界按组合所在
+/// 级别取，不能拿别的级别的中点。
 void main() {
+  KeyPointContrast contrast({
+    required int level,
+    required String key,
+    required double topMean,
+    required double bottomMean,
+  }) =>
+      KeyPointContrast(
+        level: level,
+        metricKey: key,
+        labelCn: 'RSI',
+        topMean: topMean,
+        bottomMean: bottomMean,
+        deltaMean: topMean - bottomMean,
+        pooledSigma: 1,
+        contrast: (topMean - bottomMean).abs(),
+        topPoints: 4,
+        bottomPoints: 4,
+      );
+
+  double? constOf(TradeAst ast, String variableId) {
+    if (ast is TradeAndAst) {
+      return constOf(ast.left, variableId) ?? constOf(ast.right, variableId);
+    }
+    if (ast is TradeCmpAst) {
+      final left = ast.left;
+      if (left is TradeVarRef && left.variableId == variableId) {
+        final right = ast.right;
+        if (right is TradeConstRef) return right.value;
+      }
+    }
+    return null;
+  }
+
   test('冻结账键翻译成交易变量', () {
     expect(tradeVarIdOf('sub.rsi_1'), 'SUB.K1.RSI.VALUE');
     expect(tradeVarIdOf('sub.macd_dif_2'), 'SUB.K2.MACD.DIF');
@@ -28,8 +63,10 @@ void main() {
       level: 1,
     );
     final cand = searchCandidateFromCombo(combo, {
-      'sub.rsi_1': 50,
-      'sub.kdj_k_1': 40,
+      1: {
+        'sub.rsi_1': 50,
+        'sub.kdj_k_1': 40,
+      },
     });
     expect(cand, isNotNull);
     expect(cand!.name, startsWith('计优组合｜'));
@@ -48,6 +85,34 @@ void main() {
     expect((sell.right as TradeCmpAst).op, TradeBinaryOp.lt);
   });
 
+  test('同一指标在不同级别各取各的中点', () {
+    final k1 = KeyPointComboContrast(
+      metricKeys: ['sub.rsi_1'],
+      labelCns: ['K1 RSI'],
+      topHigher: [true],
+      contrast: 1,
+      lift: 0,
+      level: 1,
+    );
+    final k2 = KeyPointComboContrast(
+      metricKeys: ['sub.rsi_1'],
+      labelCns: ['K1 RSI'],
+      topHigher: [true],
+      contrast: 1,
+      lift: 0,
+      level: 2,
+    );
+    final midpoints = midpointsByLevelOf([
+      contrast(level: 1, key: 'sub.rsi_1', topMean: 60, bottomMean: 40),
+      contrast(level: 2, key: 'sub.rsi_1', topMean: 80, bottomMean: 40),
+    ]);
+
+    expect(constOf(searchCandidateFromCombo(k1, midpoints)!.buyAst,
+        'SUB.K1.RSI.VALUE'), 50);
+    expect(constOf(searchCandidateFromCombo(k2, midpoints)!.buyAst,
+        'SUB.K1.RSI.VALUE'), 60);
+  });
+
   test('翻译不了的指标单独跳过，剩下的照常产出', () {
     final combo = KeyPointComboContrast(
       metricKeys: ['sub.rsi_1', 'metrics.chip.something'],
@@ -57,7 +122,9 @@ void main() {
       lift: 0,
       level: 1,
     );
-    final cand = searchCandidateFromCombo(combo, {'sub.rsi_1': 50});
+    final cand = searchCandidateFromCombo(combo, {
+      1: {'sub.rsi_1': 50},
+    });
     expect(cand, isNotNull);
     // 只剩一个条件，不再包一层「并且」。
     expect(cand!.buyAst, isA<TradeCmpAst>());

@@ -1,6 +1,7 @@
 import 'package:chan_kline/backtest/backtest_step_harness.dart';
 import 'package:chan_kline/bridge/chan_bridge.dart';
 import 'package:chan_kline/indicator_search/indicator_search_runner.dart';
+import 'package:chan_kline/indicator_search/search_core.dart';
 import 'package:chan_kline/indicator_search/search_env.dart';
 import 'package:chan_kline/key_point_stats/key_point_collect.dart';
 import 'package:chan_kline/key_point_stats/key_point_stat_runner.dart';
@@ -11,18 +12,19 @@ import 'package:flutter_test/flutter_test.dart';
 
 /// 计优 → 寻优的真实数据端到端（002003）。
 ///
-/// 钉死整条链：真实冻结账上算出的组合区分度，能翻译成可编译的买卖条件，
-/// 并且在样本外真的能成交 —— 不是只在合成数据上好看。
+/// 钉死两件事：① 面板上的全样本组合能翻译成可编译的买卖条件；
+/// ② 「拿去寻优」的生产路径只用切点前已确认的关键点重新拟合。
 ///
-/// 判据只看链路是否成立（有组合、能翻译、能编译、样本外有成交），
-/// 不把某一档收益写死：绝对数字随行情变，写死会把测试变成脆测试。
+/// 第 ② 条用真实数据对照：全样本分界（旧口径）会把切点后的顶底均值
+/// 带进条件，在样本外造出成交；切点前拟合在本数据集上没有新的假→真信号，
+/// 样本外成交为 0。零成交不是收益判据 —— 它只说明分界没有偷看后 30%。
 void main() {
   const code = '002003';
   const period = '1m';
   const begin = '2004/07/19 09:30:00';
   const end = '2004/07/20 15:00:00';
 
-  test('真实数据：计优组合能翻译成寻优候选并在样本外成交', () async {
+  test('真实数据：切点前拟合的计优组合不再沿用全样本分界', () async {
     final bridge = ChanBridge.instance;
     bridge.ensureInitialized();
     final bars = bridge
@@ -75,21 +77,28 @@ void main() {
       }
     }
 
-    final midpoints = <String, double>{
-      for (final c in result.contrasts)
-        if (c.topMean.isFinite && c.bottomMean.isFinite)
-          c.metricKey: (c.topMean + c.bottomMean) / 2,
-    };
+    // 面板上的组合是全样本事后统计；「拿去寻优」走的是切点前重新拟合。
+    final splitX = splitBarIdx(bars);
+    final cands = bridgeCandidatesAsOf(
+      bars: bars,
+      levels: h.levels,
+      lookup: lookup,
+      settings: const KeyPointStatSettings(),
+      asOf: splitX,
+      code: code,
+      period: period,
+      beginText: begin,
+      endText: end,
+      maxKn: h.maxKn,
+    );
+    expect(cands, isNotEmpty, reason: '切点前应能拟合出可翻译的组合');
+
     final env = SearchEnv(bars, h, code, period, begin, end);
     final runner = IndicatorSearchRunner();
-    final splitX = (bars.length * 0.7).floor();
-
-    var translated = 0;
-    var tradedOutSample = 0;
-    for (final c in result.comboContrasts) {
-      final cand = searchCandidateFromCombo(c, midpoints);
-      if (cand == null) continue;
-      translated++;
+    var preIn = 0;
+    var preOut = 0;
+    for (final cand in cands) {
+      expect(cand.name, startsWith('计优组合｜'));
       final compiled = runner.compileOk(cand, h.maxKn);
       expect(compiled, isNotNull, reason: '翻译出的候选必须能编译：${cand.name}');
       final v = runner.evaluateCandidate(
@@ -98,11 +107,31 @@ void main() {
         splitX: splitX,
         maxKn: h.maxKn,
       );
-      if (v != null && v.outSample.trades > 0) tradedOutSample++;
+      if (v == null) continue;
+      preIn += v.inSample.trades;
+      if (v.outSample.trades > 0) preOut++;
     }
+    expect(preIn, greaterThan(0), reason: '切点前拟合至少要有一条候选在样本内成交');
+    expect(preOut, 0,
+        reason: '本数据集上切点前分界在样本外没有新进场；'
+            '若变成 >0，先检查是否又把切点后的顶底均值混进了分界');
 
-    expect(translated, greaterThan(0), reason: '至少要有一条组合能翻译成候选');
-    expect(tradedOutSample, greaterThan(0),
-        reason: '至少有一条候选在样本外真的成交（否则桥接没有实战价值）');
+    // 对照组：全样本拟合（旧口径）会把切点后的顶底均值带进分界。
+    // 旧路径在样本外有成交，正是「样本外不是真样本外」的实证。
+    final fullCands = candidatesFromResult(result);
+    var fullOut = 0;
+    for (final cand in fullCands) {
+      final compiled = runner.compileOk(cand, h.maxKn);
+      if (compiled == null) continue;
+      final v = runner.evaluateCandidate(
+        c: cand,
+        env: env,
+        splitX: splitX,
+        maxKn: h.maxKn,
+      );
+      if (v != null && v.outSample.trades > 0) fullOut++;
+    }
+    expect(fullOut, greaterThan(0),
+        reason: '全样本对照组应复现旧口径的样本外成交（前视污染）');
   });
 }
