@@ -846,6 +846,55 @@ Set<SubChartIndicator> defaultSubIndicatorsK0({bool truncationCheck = true}) {
       .toSet();
 }
 
+/// 层级分窗默认主图勾选：每个可见窗显示本层 Kn + 本层连线。
+///
+/// 合并/中枢/均线等其余主图指标一律不默认启用；
+/// 副图同理默认一项不勾（分窗不再自动补量柱）。
+Set<MainChartIndicator> defaultLevelWindowMainIndicators(
+  Iterable<int> levels,
+) {
+  return <MainChartIndicator>{
+    for (final lv in levels) ...[
+      MainChartIndicator.kn(lv),
+      MainChartIndicator.line(lv),
+    ],
+  };
+}
+
+/// 分窗单窗实际绘制的主图指标（纯函数，供单测）。
+///
+/// 只画本层已勾选项，并兜底保留本层 K 线本身；不再自动补合并/中枢/连线。
+Set<MainChartIndicator> drawnMainIndicatorsForLevel({
+  required int level,
+  required Set<MainChartIndicator> selected,
+  required Set<MainChartIndicator> muted,
+  required List<MainChartIndicator> catalog,
+}) {
+  final base = selected
+      .where((e) => e.displayLevel == level)
+      .toSet()
+      .difference(muted);
+  final allowed = catalog.toSet();
+  final out = base.where(allowed.contains).toSet();
+  final own = MainChartIndicator.kn(level);
+  if (allowed.contains(own)) out.add(own);
+  return out;
+}
+
+/// 分窗单窗实际绘制的副图指标：只画本层已勾选项，没勾就留空。
+///
+/// 分窗不再默认补一根该层量柱（副图带高度仍由 `forceSubPane` 保证一致）。
+Set<SubChartIndicator> drawnSubIndicatorsForLevel({
+  required int level,
+  required Set<SubChartIndicator> selected,
+  required Set<SubChartIndicator> muted,
+}) {
+  return selected
+      .where((e) => e.displayLevel == level)
+      .toSet()
+      .difference(muted);
+}
+
 /// 层全选后默认「实际绘制」的主图（用于文档/测试口径）。
 /// Android 收纳列表：白字=已选=绘制，不再维护独立 muted 集。
 bool isDefaultDrawnMain(MainChartIndicator e) {
