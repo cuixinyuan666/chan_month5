@@ -287,3 +287,14 @@ moc: "[[chan-month5/index-memory]]"
 - **现象（2026-10-11 亲历）**：直跑 `opencode`（TUI）在本机会因 Bun segfault 崩，会话起不来。
 - **根因**：CPU 无 AVX 路径，Bun 运行时崩（`start-opencode-freellmapi.bat` 里也写了 "Default TUI crashes on this CPU"）。
 - **解法**：一律 `opencode run --standalone --model openai/flm-auto`（非交互、可 `--session <id>` resume）；或 `opencode web --hostname 127.0.0.1 --port 4096`。freellmapi（31416）必须先启动，否则 opencode 连不上 baseURL。
+### 27. worktree 路径过长时 `flutter build windows` 必失败（MSB3491 / C1083），要先用 subst 短盘符构建
+
+- **现象（2026-11-04 亲历）**：在 `C:\Users\86185\.local\share\opencode\worktree\a17f3d\kline-level-windows` 跑 `build_rust.ps1`，构建连续失败：先报 `cpp_client_wrapper\*.cc` C1083「无法打开源文件」，把文件补回后又报 `MSB3491：…超过 OS 最大路径限制（260 字符）`；脚本仍打印「flutter exit 1 but EXE exists」，容易误以为构建成功，其实启动的是旧 exe。
+- **根因**：worktree 绝对路径太长，`build\windows\x64\plugins\<plugin>\<plugin>.dir\Debug\…tlog` 这类中间路径超过 260 字符；脚本对「EXE 已存在」的兜底会把构建失败当成功继续。
+- **解法**：用仓库已建好的 subst 短盘构建（`Z:` → worktree 根，盘符记录在 `CHAN_RUST/scripts/.subst_drive`）：`powershell -File Z:\CHAN_RUST\scripts\build_rust.ps1`。长路径失败可能把 `windows\flutter\ephemeral\cpp_client_wrapper` 弄成只剩 `include`，从 `C:\src\flutter\bin\cache\artifacts\engine\windows-x64\cpp_client_wrapper` 拷回即可。判成败看 `build_windows_last.log` 末尾是否有 `Built build\windows\x64\runner\Debug\chan_kline.exe`，不要只看脚本有没有打印 Launch。
+
+### 28. PowerShell `cd` 不改进程工作目录，.NET 相对路径会读到别的仓库
+
+- **现象（2026-11-04 亲历）**：`cd` 到 worktree 后用 `[IO.File]::ReadAllBytes("task-log.md")` 校验追加结果，读到的是**主仓库**的旧 `task-log.md`（比 worktree 少最后两天条目），差点把任务日志追加错地方；同一路径用 `Get-Content task-log.md` 却是对的。
+- **根因**：PowerShell 的 `Set-Location` / `cd` 只改 PowerShell 当前位置，**不改进程 CWD**；`Get-Content` 走 PowerShell 提供程序，`[IO.File]` / `System.IO` 走进程 CWD，于是同一个相对路径指向两个仓库。
+- **解法**：脚本或校验里一律用**绝对路径**（`Join-Path $wt 'task-log.md'`），不要依赖 `cd` 之后的相对路径；`git` 命令同理，尽量显式 `-C <worktree>`。
