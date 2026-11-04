@@ -5292,6 +5292,17 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 
 ---
 
+### 2026-11-04 14:25 — 桌面快捷方式：智能识别 WorkBuddy 仓库并按需编译启动
+
+- **执行者**：OpenCode
+- **任务类型**：配置 / 工具
+- **上下文**：用户要在本机桌面一键打开最新版 chan_kline，自动识别 WorkBuddy 项目路径与是否需要重新编译。
+- **关键操作**：新增 `CHAN_RUST/scripts/launch_chan_kline_smart.ps1`（候选仓库含 Downloads 主克隆、OpenCode worktree、环境变量 `CHAN_REPO_ROOT`；优先含 `.workbuddy` 与脚本所在仓库；长路径自动 subst；对比 Rust/DLL/Flutter 与 exe 时间戳决定是否调用 `build_rust.ps1`）；在用户桌面创建快捷方式「缠论K线-智能启动.lnk」指向该脚本。
+- **结果**：脚本已提交 `e78baa55`；桌面快捷方式已生成（图标绑定 Debug exe）。
+- **注意事项**：首次或源码更新后会走完整 `build_rust`（会结束正在运行的 chan_kline 并可能前台拉起 App）；源码未改时第二次点击应显示 skip build 并直接启动。**未 push**。
+
+---
+
 ### 2026-11-04 14:05 — 分窗合入 ANDROID_RUST + 撤销种子框文字标注 + 默认 Kn/连线 + 播放胶囊
 
 - **执行者**：OpenCode
