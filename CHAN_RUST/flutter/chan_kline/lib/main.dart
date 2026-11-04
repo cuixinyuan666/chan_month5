@@ -406,6 +406,12 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
   // 默认=选择栏「K0指标」层全选（主图 K0/K0合并/K0中枢/K0连线；副图同层）
   Set<MainChartIndicator> _mainIndicators = defaultMainIndicatorsK0();
   Set<SubChartIndicator> _subIndicators = defaultSubIndicatorsK0();
+  // 层级分窗专用勾选：与单图完全分开，互不影响。
+  // 默认每窗只勾本层 Kn（K 线本身），其余主图指标与副图一项不启用。
+  Set<MainChartIndicator> _splitMainIndicators = <MainChartIndicator>{};
+  Set<SubChartIndicator> _splitSubIndicators = <SubChartIndicator>{};
+  /// 分窗指标是否已按当前层级初始化过（首次开分窗时铺默认）。
+  bool _splitIndicatorsReady = false;
   int _stepIdx = -1; // -1 表示尚未步进
   bool _playing = false;
   Timer? _playTimer;
@@ -468,6 +474,14 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
   Set<SubChartIndicator> get _sessionSubIndicators {
     if (_chipTickDepsAllowed) return _subIndicators;
     return _subIndicators
+        .where((e) => e.kind != SubIndicatorKind.tickCount)
+        .toSet();
+  }
+
+  /// 分窗副图勾选（同 [_sessionSubIndicators] 的依赖过滤，但走分窗专用集合）。
+  Set<SubChartIndicator> get _sessionSplitSubIndicators {
+    if (_chipTickDepsAllowed) return _splitSubIndicators;
+    return _splitSubIndicators
         .where((e) => e.kind != SubIndicatorKind.tickCount)
         .toSet();
   }
@@ -747,6 +761,8 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
   Future<void> _loadLevelWindowSettings() async {
     await LevelWindowSettingsStore.load();
     if (!mounted) return;
+    // 启动时若分窗已开启，按落盘层级铺默认：每窗只有本层 Kn，副图不勾。
+    if (LevelWindowSettingsStore.enabled) _resetSplitIndicators();
     setState(() {});
   }
 
@@ -1096,6 +1112,31 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
     setState(() => _subIndicators = ensureMacdForDivergenceArea(v));
   }
 
+  /// 分窗主图勾选落地：只改分窗集合，不动单图设置。
+  void _applySplitMainIndicators(Set<MainChartIndicator> v) {
+    setState(() => _splitMainIndicators = v);
+  }
+
+  /// 分窗副图勾选落地：只改分窗集合，不动单图设置。
+  void _applySplitSubIndicators(Set<SubChartIndicator> v) {
+    setState(() => _splitSubIndicators = ensureMacdForDivergenceArea(v));
+  }
+
+  /// 按当前可见层级重置分窗指标：每窗只勾本层 Kn，副图一项不勾。
+  void _resetSplitIndicators() {
+    _splitIndicatorsReady = true;
+    _splitMainIndicators = defaultLevelWindowMainIndicators(
+      LevelWindowSettingsStore.activeLevels,
+    );
+    _splitSubIndicators = <SubChartIndicator>{};
+  }
+
+  /// 首次进分窗时铺默认；已初始化过则保留用户本轮在窗内的勾选。
+  void _ensureSplitIndicators() {
+    if (_splitIndicatorsReady) return;
+    _resetSplitIndicators();
+  }
+
   @override
   Future<String> setIndicators({
     Set<String>? mainLabels,
@@ -1116,10 +1157,17 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
     final changed = <String>[];
     if (mainLabels != null) {
       _applyMainIndicators(resolved.main);
+      // 分窗开着时同步到分窗集合，Agent API 才能看到指标变化。
+      if (LevelWindowSettingsStore.enabled) {
+        _applySplitMainIndicators(resolved.main);
+      }
       changed.add('主图 ${resolved.main.length} 项');
     }
     if (subLabels != null) {
       _applySubIndicators(resolved.sub);
+      if (LevelWindowSettingsStore.enabled) {
+        _applySplitSubIndicators(resolved.sub);
+      }
       changed.add('副图 ${resolved.sub.length} 项');
     }
     return '指标已切换：${changed.join(' / ')}';
@@ -3905,6 +3953,12 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
       );
       _mainIndicators = merged.main;
       _subIndicators = merged.sub;
+      // 分窗开着时，投图也同步到分窗集合，否则主窗看不到策略标记。
+      if (LevelWindowSettingsStore.enabled) {
+        _splitMainIndicators = merged.main;
+        _splitSubIndicators = merged.sub;
+        _splitIndicatorsReady = true;
+      }
     });
     if (run.error != null) {
       _showSnack(run.error!);
@@ -4343,6 +4397,12 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
       );
       _mainIndicators = merged.main;
       _subIndicators = merged.sub;
+      // 分窗开着时，投图也同步到分窗集合，否则主窗看不到策略标记。
+      if (LevelWindowSettingsStore.enabled) {
+        _splitMainIndicators = merged.main;
+        _splitSubIndicators = merged.sub;
+        _splitIndicatorsReady = true;
+      }
     });
     if (run.error != null) {
       _showSnack(run.error!);
@@ -4542,10 +4602,12 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
       lineSlopeHistoryByKn: _stepFreeze.lineSlopeHistoryByKn,
       lookupEngine: _pipelineSession?.cache.lookupEngine,
       sessionAsOfBundle: (asOf) => _pipelineSession?.cache.snapshotAt(asOf),
-      mainIndicators: _mainIndicators,
-      onMainIndicatorsChanged: _applyMainIndicators,
-      subIndicators: _sessionSubIndicators,
-      onSubIndicatorsChanged: _applySubIndicators,
+      mainIndicators: split ? _splitMainIndicators : _mainIndicators,
+      onMainIndicatorsChanged:
+          split ? _applySplitMainIndicators : _applyMainIndicators,
+      subIndicators: split ? _sessionSplitSubIndicators : _sessionSubIndicators,
+      onSubIndicatorsChanged:
+          split ? _applySplitSubIndicators : _applySubIndicators,
       indicatorsEnabled: _hasSession,
       autoFollowLatest: true,
       isPlaying: _playing,
@@ -5089,6 +5151,8 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
   }) async {
     await LevelWindowSettingsStore.save(enabled: v);
     if (!mounted) return;
+    // 首次开分窗：每窗默认只勾本层 Kn，其余指标由用户自行勾选。
+    if (v) _ensureSplitIndicators();
     // 重新开分窗时副图胶囊条从头量起，避免沿用上一次运行的高占位。
     _chartSync.resetSubChipBand();
     _panelUi(() {}, sheetSetState: sheetSetState);
@@ -5115,6 +5179,8 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
       slots: cfg.slots,
     );
     if (!mounted) return;
+    // 层级换了：分窗指标重新按新层级铺默认（每窗只有本层 Kn，副图不勾）。
+    _resetSplitIndicators();
     // 槽位换了，旧的 as-of 仓与查找缓存立即作废（避免串层）。
     _chartSync.asOfCache.clear();
     _chartSync.zsAsOfKey = null;
@@ -5135,8 +5201,9 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
         content: const SingleChildScrollView(
           child: Text(
             '作用：把现在「各层级集成在同一张 K 线图」的显示方式，拆成多个窗口，'
-            '每个窗口只画一个层级（K0 真 K 线、K1 虚拟 K 线、K2+ 该层单元 K 线），'
-            '并叠加该层自己的合并框、中枢、连线与买卖点。\n\n'
+            '每个窗口只画一个层级（K0 真 K 线、K1 虚拟 K 线、K2+ 该层单元 K 线）。\n'
+            '默认每窗只显示本层 Kn（K 线本身）：合并框、中枢、连线、买卖点与副图'
+            '一律不默认启用；要看就点该窗对应的指标面板自行勾选。\n\n'
             '布局规则\n'
             '· 2 窗：左右排布；\n'
             '· 4 窗：上 2 下 2；6 窗：上 3 下 3；8 窗：上 4 下 4；10 窗：上 5 下 5；\n'
@@ -5151,7 +5218,8 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
             '· 步进颗粒度永远是 K0 的一根 K，所有窗同步看到同一步；\n'
             '· 每窗各自缩放、各自平移，互不牵连；主副图分割比例仍全窗共用，'
             '拖任一窗分割线全窗一起变；\n'
-            '· 指标面板只列本层指标（主图与副图都是），勾选只作用于本层。\n\n'
+            '· 指标面板只列本层指标（主图与副图都是），勾选只作用于本层；'
+            '默认只勾本层 K 线，副图默认一项不勾。\n\n'
             '十字线\n'
             '· 任一窗都能开启；开启瞬间该窗成为主窗，其余窗立刻切到主窗同一段'
             '（同一根 K 同一列、同一价格同一行）；\n'

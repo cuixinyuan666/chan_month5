@@ -203,7 +203,7 @@ class KlineChart extends StatefulWidget {
     this.sync,
     this.displayLevel,
     this.forceSubPane = false,
-    this.subPanePlaceholder = '该层暂无副图指标',
+    this.subPanePlaceholder = '副图未启用（点副图左上角指标按钮可勾选）',
   });
 
   final List<KlineBar> bars;
@@ -611,38 +611,27 @@ class _KlineChartState extends State<KlineChart> {
   /// 分窗时再按 [KlineChart.displayLevel] 过滤：本窗只画自己那层。
   /// 指标选择面板仍拿全量 `widget.mainIndicators`，所以这里不能改 `_activeMains`。
   Set<MainChartIndicator> get _drawnMains {
-    final base = _levelMains.difference(_mutedMains);
     final lv = widget.displayLevel;
-    if (lv == null) return base;
-    // 只留本层且在目录内的项：层数变化后旧勾选不会把越界指标带进绘制。
-    final allowed = _mainCatalog.toSet();
-    final out = base.where(allowed.contains).toSet();
-    // 一个「层级窗口」至少要有该层 K 线本身，否则这格没有任何可看的内容。
-    final own = MainChartIndicator.kn(lv);
-    if (allowed.contains(own)) out.add(own);
-    // 该层还没被勾过任何主图指标时，补上该层核心结构（合并/中枢/连线），
-    // 避免刚开分窗时 K1+ 只剩几根淡蜡烛、看起来像没数据。
-    if (_levelMains.isEmpty) {
-      for (final e in mainIndicatorsForLevel(lv, _mainCatalog)) {
-        if (e.kind == MainIndicatorKind.combine ||
-            e.kind == MainIndicatorKind.zs ||
-            e.kind == MainIndicatorKind.line) {
-          out.add(e);
-        }
-      }
-    }
-    return out;
+    if (lv == null) return _levelMains.difference(_mutedMains);
+    return drawnMainIndicatorsForLevel(
+      level: lv,
+      selected: _activeMains,
+      muted: _mutedMains,
+      catalog: _mainCatalog,
+    );
   }
 
-  /// 实际绘制的副图指标：分窗时只画本层；该层没勾过副图时默认给一根该层量柱
-  /// （副图带高度仍由 [KlineChart.forceSubPane] 保证一致，不影响十字横线对齐）。
+  /// 实际绘制的副图指标：分窗时只画本层；本层没勾副图就留空
+  /// （分窗不再默认补量柱；副图带高度仍由 [KlineChart.forceSubPane] 保证一致，
+  /// 不影响十字横线对齐）。
   Set<SubChartIndicator> get _drawnSubs {
-    final base = _levelSubs.difference(_mutedSubs);
     final lv = widget.displayLevel;
-    if (lv == null) return base;
-    if (base.isNotEmpty) return base;
-    final vol = SubChartIndicator.volume(lv);
-    return _subCatalog.contains(vol) ? {vol} : <SubChartIndicator>{};
+    if (lv == null) return _levelSubs.difference(_mutedSubs);
+    return drawnSubIndicatorsForLevel(
+      level: lv,
+      selected: _activeSubs,
+      muted: _mutedSubs,
+    );
   }
 
   /// 本窗显示层在全局勾选集里的子集（分窗时用于 chip 展示与读数）。
