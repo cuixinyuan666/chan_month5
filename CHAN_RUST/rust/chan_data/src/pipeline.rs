@@ -38,6 +38,10 @@ pub struct PipelineOptions {
     pub truncation_check: bool,
     /// 原生缠论中枢（ZS）配置
     pub zs_config: ZSConfig,
+    /// 层级早生成动态单元（默认开启）：
+    /// 每层首个单元在父层首个单元确认当根以动态态出现；
+    /// 关闭时回到经典口径（必须等引擎自己攒够输入）。
+    pub early_dynamic_unit: bool,
 }
 
 impl Default for PipelineOptions {
@@ -47,6 +51,7 @@ impl Default for PipelineOptions {
             max_levels: 16,
             truncation_check: true,
             zs_config: ZSConfig::default(),
+            early_dynamic_unit: true,
         }
     }
 }
@@ -136,9 +141,10 @@ pub struct LevelUnitBar {
 /// 每根 K0 × 每层 Kn 的十字线快照（逐K当下冻结，ML/tooltip 同源）
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LevelSnap {
-    /// 层级：1=K1(K0连线)，2=K2(K1连线)，…（旧称 n段）
+    /// 结构层号（0 起）：0=K0连线/笔，1=K1连线/线段，…（与数组下标一致）
     pub level: i32,
-    /// 当步所属 Kn 序号（进行中或刚冻结；首确认前=None）
+    /// 当步所属该层单元序号（进行中或刚冻结）；
+    /// 首确认前=Some(0)（预锚动态单元）；关闭 early_dynamic_unit 时为 None。
     pub unit_idx: Option<i64>,
     pub unit_dir: i32,
     /// 当步 Kn 的 K0 区间（进行中段 x2=当步K；查表重绘用）
@@ -264,7 +270,9 @@ pub struct LevelBundleOut {
     /// 首 N 段方向：0 未定
     pub first_dir: i32,
     pub first_dir_x: i32,
-    /// 末步进行中 N 段K线（锚点极点 → 末K；尚未冻结）
+    /// 末步进行中 N 段K线（锚点极点 → 末K；尚未冻结）。
+    /// 首确认前为预锚动态单元（idx=0，只读投影，不进 unit_bars）；
+    /// 关闭 early_dynamic_unit 时首确认前为 None。
     #[serde(default)]
     pub active_unit: Option<LevelUnitBar>,
     /// 首段策略：seed=种子框未确认 / retained=已有锚点成段（JSON 兼容，不再有 trial 三态）
@@ -482,6 +490,10 @@ struct LevelState {
     validity_check: bool,
     /// 截断监察开关
     truncation_check: bool,
+    /// 层级早生成动态单元开关（从 PipelineOptions 拷入）
+    early_dynamic_unit: bool,
+    /// 本层首个永久输入单元的方向（0=未知；结构层>=1 由 propagate 记录）
+    first_input_dir: i32,
     engine: CombineEngine,
     /// 种子框首段状态：0=未, 1=A→B已发射, 2=B→C已发射
     seed_phase: u8,
@@ -542,6 +554,8 @@ impl LevelState {
             level,
             validity_check: opt.validity_check,
             truncation_check: opt.truncation_check,
+            early_dynamic_unit: opt.early_dynamic_unit,
+            first_input_dir: 0,
             zs_config: opt.zs_config,
             zs_inc: ZSIncEngine::new(level, opt.zs_config),
             engine: CombineEngine::new(),
@@ -572,8 +586,59 @@ impl LevelState {
         }
     }
 
+    /// 预锚动态单元：本层尚无锚点/确认段时，首个自然段的演化中形态。
+    /// `bar_x` = 当步 K0 序号（禁止用 `bars.len()-1`，run_pipeline 传入的是全量切片）。
+    /// 只读：不写 unit_bars / anchor / engine；确认当根由 on_confirm(First) 自然接管。
+    fn pre_anchor_unit(&self, bars: &[KlineBar], bar_x: i32) -> Option<LevelUnitBar> {
+        if !self.early_dynamic_unit || self.anchor.is_some() || !self.segments.is_empty() {
+            return None;
+        }
+        let g0 = self.engine.groups().first()?;
+        let end_x = bar_x.min(bars.len().checked_sub(1)? as i32);
+        if end_x < 0 {
+            return None;
+        }
+        // 方向：结构层>=1 用首个输入单元方向；结构层 0 用种子离开方向/首根K兜底。
+        // 注意 engine.rs 首组 dir 固定写 MergeDir::Up 占位，不能当方向用。
+        let dir = if self.first_input_dir != 0 {
+            if self.first_input_dir > 0 { 1 } else { -1 }
+        } else {
+            let leave = self
+                .engine
+                .groups()
+                .last()
+                .map(|last| seed_leave_dir(g0.high, g0.low, last.high, last.low))
+                .unwrap_or(0);
+            if leave != 0 {
+                leave
+            } else {
+                let b = &bars[g0.x1.clamp(0, end_x) as usize];
+                if b.close >= b.open { 1 } else { -1 }
+            }
+        };
+        let seed_fx = if dir > 0 { FxKind::Bottom } else { FxKind::Top };
+        let begin_pole = fx_pole_x(bars, g0.x1, g0.x2, seed_fx);
+        if begin_pole < 0 || begin_pole > end_x {
+            return None;
+        }
+        let (open, high, low, close, volume) =
+            kn_unit_ohlcv(bars, dir, begin_pole, end_x, g0.high, g0.low);
+        Some(LevelUnitBar {
+            idx: 0,
+            dir,
+            x1: begin_pole,
+            x2: end_x,
+            open,
+            high,
+            low,
+            close,
+            volume,
+            confirm_x: end_x,
+        })
+    }
+
     /// 进行中单元（与 export 同口径），供中枢/BS 当下计算。
-    fn active_unit_now(&self, bars: &[KlineBar]) -> Option<LevelUnitBar> {
+    fn active_unit_now(&self, bars: &[KlineBar], bar_x: i32) -> Option<LevelUnitBar> {
         match (&self.anchor, &self.prov) {
             (Some(a), Some(c)) if c.last_x < bars.len() => {
                 let dir = if a.fx == FxKind::Bottom { 1 } else { -1 };
@@ -592,7 +657,7 @@ impl LevelState {
                     confirm_x: c.last_x as i32,
                 })
             }
-            _ => None,
+            _ => self.pre_anchor_unit(bars, bar_x),
         }
     }
 
@@ -602,7 +667,7 @@ impl LevelState {
         bars: &[KlineBar],
         bar_x: i32,
     ) -> (Vec<BarZsHit>, Vec<BarBs1Hit>) {
-        let active_unit = self.active_unit_now(bars);
+        let active_unit = self.active_unit_now(bars, bar_x);
         let n_confirmed = self.segments.len();
         let segs_for_zs =
             crate::zs::segments_with_optional_active(&self.segments, active_unit.as_ref());
@@ -970,6 +1035,7 @@ impl LevelState {
     fn snapshot(
         &self,
         bars: &[KlineBar],
+        bar_x: i32,
         upper: Option<&CombineEngine>,
         prov: Option<&(MergeUnit, f64, f64, f64)>,
         pending_input: Option<&MergeUnit>,
@@ -1020,6 +1086,24 @@ impl LevelState {
         // 种子框动态展示：尚无锚点、首段未确认前
         if self.anchor.is_none() {
             let mut snap = LevelSnap::empty(self.level);
+            // 预锚动态单元：该层首个自然段的演化中形态（不进 unit_bars）
+            if let Some(ub) = self.pre_anchor_unit(bars, bar_x) {
+                snap.unit_idx = Some(ub.idx);
+                snap.unit_dir = ub.dir;
+                snap.unit_x1 = ub.x1;
+                snap.unit_x2 = ub.x2;
+                snap.unit_open = ub.open;
+                snap.unit_high = ub.high;
+                snap.unit_low = ub.low;
+                snap.unit_close = ub.close;
+                snap.unit_volume = ub.volume;
+                snap.merge_inner_seq = 0;
+                snap.merge_count = 1;
+                snap.combine_high = ub.high;
+                snap.combine_low = ub.low;
+                snap.combine_x1 = ub.x1;
+                snap.merge_box_seq = -1;
+            }
             self.fill_seed_snap(&mut snap, bars, pending_input);
             return snap;
         }
@@ -1229,7 +1313,8 @@ impl LevelState {
 
     fn export(&mut self, bars: &[KlineBar]) -> LevelBundleOut {
         // 末步进行中单元：prov 缓存（快照阶段已推进到末K）
-        let active_unit = self.active_unit_now(bars);
+        let active_unit =
+            self.active_unit_now(bars, bars.len().saturating_sub(1) as i32);
         // 展示轨：冻段 + 进行中 active_unit 喂 find_zs（动态离开不定型，禁未来）
         let n_confirmed = self.segments.len();
         let segs_for_zs =
@@ -1387,6 +1472,10 @@ fn propagate(
             high: ub.high,
             low: ub.low,
         };
+        // 本层首个永久输入方向（结构层>=1 的预锚单元方向依据；K0 原始单元 dir=0 不记录）
+        if levels[li].engine.groups().is_empty() && ub.dir != 0 {
+            levels[li].first_input_dir = ub.dir;
+        }
         // 截断监察随喂随判：命中则左框当场分型确认 + 单元强制断开成新组
         let guard = levels[li].trunc_guard();
         if let Some(ev) = levels[li].engine.feed_guarded(&mu, guard.as_ref()) {
@@ -1699,6 +1788,7 @@ impl PipelineState {
             };
             snaps.push(self.levels[li].snapshot(
                 &self.bars,
+                i as i32,
                 upper,
                 provs[li].as_ref(),
                 pending_input,
@@ -1893,7 +1983,7 @@ pub fn run_pipeline(bars: &[KlineBar], opt: &PipelineOptions) -> PipelineResult 
             } else {
                 provs[li - 1].as_ref().map(|(u, _, _, _)| u)
             };
-            snaps.push(levels[li].snapshot(bars, upper, provs[li].as_ref(), pending_input));
+            snaps.push(levels[li].snapshot(bars, bar_x, upper, provs[li].as_ref(), pending_input));
         }
         bar_level_snaps.push(snaps);
 
@@ -2587,6 +2677,145 @@ mod tests {
         assert_eq!(
             snap.seed_leave_dir, 1,
             "动态末组 probe 后 leave 应与展示轨对齐"
+        );
+    }
+
+    // ========== 预锚动态单元（层级早生成，默认开）==========
+
+    /// 结构层 0：bar 0 起即有预锚动态单元 idx=0；首确认当根由冻结段 idx=0 接管，
+    /// 同根结构层 1 出现预锚动态单元 idx=0；转正不重复 push。
+    #[test]
+    fn pre_anchor_unit_from_bar0_and_first_confirm_handoff() {
+        let bars = vec![
+            bar(0, 10.0, 9.0),
+            bar(1, 9.0, 8.0),  // 底分型中组
+            bar(2, 10.5, 9.5), // 底分型确认当根
+            bar(3, 9.5, 8.5),
+        ];
+        let pr = run_pipeline(&bars, &PipelineOptions::default());
+
+        // bar 0：只有结构层 0；预锚动态单元 idx=0，区间 [0,0]
+        assert_eq!(pr.bar_level_snaps[0].len(), 1);
+        let s0 = &pr.bar_level_snaps[0][0];
+        assert_eq!(s0.unit_idx, Some(0), "bar0 应有预锚动态单元");
+        assert_eq!((s0.unit_x1, s0.unit_x2), (0, 0));
+        assert_eq!(s0.unit_dir, 1, "仅一组时首根阳线兜底为向上首段");
+        assert!(!s0.seed_confirmed);
+
+        // bar 1（首确认前）：仍是同一预锚单元 idx=0，末端跟到当根；
+        // 第二组向下离开种子 → 方向翻为 -1（动态期允许随结构修正）
+        let s1 = &pr.bar_level_snaps[1][0];
+        assert_eq!(s1.unit_idx, Some(0));
+        assert_eq!(s1.unit_x2, 1);
+        assert_eq!(s1.unit_dir, -1);
+        // 预锚末形态与首确认段起点/方向同口径（A 点=种子极点）
+        assert_eq!(s1.unit_x1, pr.levels[0].segments[0].begin_pole_x);
+        assert_eq!(s1.unit_dir, pr.levels[0].segments[0].dir);
+
+        // 首确认当根 bar 2：结构层 0 冻结段 idx=0；结构层 1 同根出现预锚 idx=0
+        let s2 = &pr.bar_level_snaps[2];
+        assert!(s2.len() >= 2, "首确认当根应创建结构层 1");
+        assert_eq!(pr.levels[0].segments[0].idx, 0);
+        assert_eq!(pr.levels[0].unit_bars[0].confirm_x, 2);
+        assert_eq!(s2[1].unit_idx, Some(0), "K2 预锚动态单元应在首确认同根出现");
+        assert_eq!(s2[1].unit_dir, -1);
+
+        // 转正无重复：unit_bars 中 idx=0 只出现一次；末根进行中单元编号=已冻结段数
+        assert_eq!(
+            pr.levels[0].unit_bars.iter().filter(|u| u.idx == 0).count(),
+            1,
+            "预锚单元转正不得重复 push idx=0"
+        );
+        assert_eq!(
+            pr.levels[0].active_unit.as_ref().map(|u| u.idx),
+            Some(pr.levels[0].segments.len() as i64)
+        );
+        for (i, seg) in pr.levels[0].segments.iter().enumerate() {
+            assert_eq!(seg.idx, i as i64, "段编号应从 0 连续");
+        }
+    }
+
+    /// 开关关闭：完全回到经典口径（首确认前无动态单元，无预锚层）。
+    #[test]
+    fn early_dynamic_unit_off_restores_classic() {
+        let bars = vec![
+            bar(0, 10.0, 9.0),
+            bar(1, 9.0, 8.0),
+            bar(2, 10.5, 9.5),
+            bar(3, 9.5, 8.5),
+        ];
+        let off = run_pipeline(
+            &bars,
+            &PipelineOptions {
+                early_dynamic_unit: false,
+                ..PipelineOptions::default()
+            },
+        );
+        // bar 0 / 首确认前：无任何动态单元
+        assert_eq!(off.bar_level_snaps[0][0].unit_idx, None);
+        assert_eq!(off.bar_level_snaps[1][0].unit_idx, None);
+        // 首确认当根：结构层 0 为刚冻结段；结构层 1 无预锚单元
+        let s2 = &off.bar_level_snaps[2];
+        assert_eq!(s2[0].unit_idx, Some(0));
+        assert_eq!(s2[1].unit_idx, None, "关闭后结构层 1 不得出现预锚单元");
+
+        // 开关只影响动态展示，不写永久结构：段/单元与开启时一致
+        let on = run_pipeline(&bars, &PipelineOptions::default());
+        assert_eq!(on.levels[0].segments.len(), off.levels[0].segments.len());
+        assert_eq!(on.levels[0].unit_bars.len(), off.levels[0].unit_bars.len());
+        for (a, b) in on.levels[0].segments.iter().zip(&off.levels[0].segments) {
+            assert_eq!(a.idx, b.idx);
+            assert_eq!(a.dir, b.dir);
+            assert_eq!((a.begin_pole_x, a.end_pole_x), (b.begin_pole_x, b.end_pole_x));
+        }
+    }
+
+    /// 递归：结构层 1 首个确认当根，结构层 1 冻结段 idx=0，结构层 2 出现预锚 idx=0。
+    #[test]
+    fn pre_anchor_unit_recurses_to_next_level_on_first_confirm() {
+        let bars = zigzag(120);
+        let opt = PipelineOptions::default();
+        let full = run_pipeline(&bars, &opt);
+        assert!(full.levels.len() >= 2, "zigzag120 应至少建到结构层 1");
+        let l1 = &full.levels[1];
+        let first = l1.confirms.first().expect("结构层 1 应有首个确认");
+        assert_eq!(l1.segments[0].idx, 0);
+        assert_eq!(
+            l1.unit_bars.first().map(|u| u.confirm_x),
+            Some(first.x),
+            "结构层 1 首个冻结单元应等于首个确认 x"
+        );
+        assert_eq!(
+            l1.unit_bars.iter().filter(|u| u.idx == 0).count(),
+            1,
+            "结构层 1 转正也不得重复 push idx=0"
+        );
+
+        // 确认前一根：预锚形态应与首确认段的起点/方向同口径（A 点=同一种子极点）
+        let cx = first.x as usize;
+        let before = run_pipeline(&bars[..cx], &opt);
+        if before.levels.len() >= 2 {
+            let act = before.levels[1]
+                .active_unit
+                .as_ref()
+                .expect("结构层1首确认前应有预锚单元");
+            assert_eq!(act.idx, 0);
+            assert_eq!(act.x1, l1.segments[0].begin_pole_x);
+            assert_eq!(act.dir, l1.segments[0].dir);
+        }
+
+        // 确认当根前缀：结构层 2 出现预锚动态单元 idx=0
+        let part = run_pipeline(&bars[..=cx], &opt);
+        let snaps = part.bar_level_snaps.last().expect("snaps");
+        assert!(
+            snaps.len() >= 3,
+            "结构层1首确认当根应创建结构层2，实际层数={}",
+            snaps.len()
+        );
+        assert_eq!(
+            snaps[2].unit_idx,
+            Some(0),
+            "K3 预锚动态单元应在结构层1首确认同根出现"
         );
     }
 

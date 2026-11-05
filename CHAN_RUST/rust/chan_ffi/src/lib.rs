@@ -52,7 +52,7 @@ fn cstr_to_str<'a>(ptr: *const c_char) -> Option<&'a str> {
 
 /// 动态库协议号：必须与 Flutter `kChanFfiAbiVersion` 相同。
 /// 改管道 JSON / 冻结语义时两边一起加一，禁止静默混用旧库。
-pub const CHAN_FFI_ABI_VERSION: u32 = 2;
+pub const CHAN_FFI_ABI_VERSION: u32 = 3;
 
 /// 返回协议号（裸 u32，不走 JSON）。缺此符号=旧库，界面应停机。
 #[no_mangle]
@@ -214,7 +214,7 @@ pub extern "C" fn chan_save_test_ohlc(req_json: *const c_char) -> *mut c_char {
 /// 对已加载 K 线做 Kn 流水线。
 /// 入参两种：
 /// 1) 纯 bars 数组（兼容旧调用，截断默认开）
-/// 2) `{ "bars": [...], "truncation_check": true/false }`
+/// 2) `{ "bars": [...], "truncation_check": true/false, "early_dynamic_unit": true/false }`
 #[no_mangle]
 pub extern "C" fn chan_kline_combine_frames(bars_json: *const c_char) -> *mut c_char {
     let Some(raw) = cstr_to_str(bars_json) else {
@@ -232,6 +232,9 @@ struct CombineRequest {
     /// 缺省=开启截断（与 PipelineOptions::default 一致）
     #[serde(default)]
     truncation_check: Option<bool>,
+    /// 缺省=开启层级预锚动态单元（与 PipelineOptions::default 一致）
+    #[serde(default)]
+    early_dynamic_unit: Option<bool>,
     /// 缺省=中枢共用配置（need_combine/combine_mode）
     #[serde(default)]
     zs_config: Option<ZSConfig>,
@@ -249,6 +252,9 @@ fn parse_combine_request(raw: &str) -> Result<(Vec<KlineBar>, PipelineOptions), 
     let mut opt = PipelineOptions::default();
     if let Some(v) = req.truncation_check {
         opt.truncation_check = v;
+    }
+    if let Some(v) = req.early_dynamic_unit {
+        opt.early_dynamic_unit = v;
     }
     if let Some(z) = req.zs_config {
         opt.zs_config = z;
@@ -282,6 +288,8 @@ fn parse_pipeline_opt(raw: &str) -> Result<PipelineOptions, String> {
         #[serde(default)]
         truncation_check: Option<bool>,
         #[serde(default)]
+        early_dynamic_unit: Option<bool>,
+        #[serde(default)]
         zs_config: Option<ZSConfig>,
     }
     let req: OptReq =
@@ -290,13 +298,16 @@ fn parse_pipeline_opt(raw: &str) -> Result<PipelineOptions, String> {
     if let Some(v) = req.truncation_check {
         opt.truncation_check = v;
     }
+    if let Some(v) = req.early_dynamic_unit {
+        opt.early_dynamic_unit = v;
+    }
     if let Some(z) = req.zs_config {
         opt.zs_config = z;
     }
     Ok(opt)
 }
 
-/// 创建流水线会话。入参 JSON：`{ truncation_check?, zs_config? }`（可空/`{}`）。
+/// 创建流水线会话。入参 JSON：`{ truncation_check?, early_dynamic_unit?, zs_config? }`（可空/`{}`）。
 /// 返回 `{ ok, data: { handle: u64 } }`
 #[no_mangle]
 pub extern "C" fn chan_pipeline_create(opt_json: *const c_char) -> *mut c_char {
