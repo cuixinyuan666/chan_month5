@@ -499,6 +499,21 @@ fn bootstrap_child_from_parent(
     if parent.segments.is_empty() {
         return None;
     }
+    // 父层 idx=1+ 早解锁进行中 → 子层 idx=0 动态几何
+    if let Some(ed) = &parent.early_dynamic {
+        return Some(LevelUnitBar {
+            idx: 0,
+            dir: ed.dir,
+            x1: ed.x1,
+            x2: ed.x2,
+            open: ed.open,
+            high: ed.high,
+            low: ed.low,
+            close: ed.close,
+            volume: ed.volume,
+            confirm_x: bar_x,
+        });
+    }
     if let Some(act) = parent.active_unit_now(bars) {
         return Some(LevelUnitBar {
             idx: 0,
@@ -543,6 +558,10 @@ fn apply_early_layer_bootstrap(
         return;
     }
     for lv in levels.iter_mut() {
+        // cascade 写入的 idx>=1 sibling 动态保留
+        if lv.early_dynamic.as_ref().is_some_and(|u| u.idx > 0) {
+            continue;
+        }
         lv.early_dynamic = None;
     }
     for li in 0..opt.max_levels {
@@ -572,6 +591,148 @@ fn apply_early_layer_bootstrap(
             }
             levels[child_li].early_dynamic = Some(u);
         }
+    }
+}
+
+/// 早解锁 idx=0 动态单元 → 冻段（父层分型确认当根同步子层 idx=0 确认）
+fn early_unit_to_segment(ub: &LevelUnitBar, bar_x: i32, pc: &LevelConfirm) -> LevelSegment {
+    LevelSegment {
+        idx: ub.idx,
+        dir: ub.dir,
+        begin_confirm_x: bar_x,
+        end_confirm_x: bar_x,
+        begin_pole_x: ub.x1,
+        end_pole_x: ub.x2,
+        open: ub.open,
+        high: ub.high,
+        low: ub.low,
+        close: ub.close,
+        volume: ub.volume,
+        begin_fractal_x1: pc.fractal_x1,
+        begin_fractal_x2: pc.fractal_x2,
+        end_fractal_x1: pc.fractal_x1,
+        end_fractal_x2: pc.fractal_x2,
+        begin_fractal_high: pc.fractal_high,
+        begin_fractal_low: pc.fractal_low,
+        end_fractal_high: pc.fractal_high,
+        end_fractal_low: pc.fractal_low,
+        is_bootstrap: false,
+        is_promoted_default: false,
+    }
+}
+
+/// 父层 idx=0 冻段后，同根起 idx=1 动态（展示轨）
+fn bootstrap_sibling_dynamic_after_freeze(
+    bars: &[KlineBar],
+    bar_x: i32,
+    frozen: &LevelSegment,
+) -> LevelUnitBar {
+    let mut x1 = frozen.end_pole_x;
+    let x2 = bar_x;
+    if x2 < x1 {
+        x1 = x2;
+    }
+    let dir = -frozen.dir;
+    let (o, h, l, c, v) = kn_unit_ohlcv(
+        bars,
+        dir,
+        x1,
+        x2,
+        frozen.end_fractal_high,
+        frozen.end_fractal_low,
+    );
+    LevelUnitBar {
+        idx: frozen.idx + 1,
+        dir,
+        x1,
+        x2,
+        open: o,
+        high: h,
+        low: l,
+        close: c,
+        volume: v,
+        confirm_x: bar_x,
+    }
+}
+
+/// 父层分型确认当根：子层 idx=0 冻段 + idx=1 动态；同根可级联多层（L0→L1→L2…）
+fn apply_early_layer_cascade(
+    levels: &mut Vec<LevelState>,
+    bar_x: i32,
+    bars: &[KlineBar],
+    opt: &PipelineOptions,
+) {
+    if !opt.early_layer_dynamic {
+        return;
+    }
+    let max = opt.max_levels;
+    for li in 0..max.saturating_sub(1) {
+        if li >= levels.len() {
+            break;
+        }
+        let pc = levels[li]
+            .confirms
+            .iter()
+            .find(|c| {
+                c.x == bar_x
+                    && c.used
+                    && c.trigger_uid != -1
+                    && (c.fx == "TOP" || c.fx == "BOTTOM")
+            })
+            .cloned();
+        let Some(pc) = pc else {
+            continue;
+        };
+        let child_li = li + 1;
+        if child_li >= max {
+            break;
+        }
+        if levels.len() <= child_li {
+            levels.push(LevelState::new(child_li as i32, opt));
+        }
+        if !levels[child_li].segments.is_empty() {
+            continue;
+        }
+        let unit0 = {
+            let child = &levels[child_li];
+            child
+                .early_dynamic
+                .clone()
+                .or_else(|| {
+                    if li == 0 {
+                        bootstrap_l0_to_l1(bars, bar_x)
+                    } else {
+                        bootstrap_child_from_parent(&levels[li], bars, bar_x)
+                    }
+                })
+        };
+        let Some(mut u0) = unit0 else {
+            continue;
+        };
+        u0.idx = 0;
+        let seg = early_unit_to_segment(&u0, bar_x, &pc);
+        let child = &mut levels[child_li];
+        child.segments.push(seg.clone());
+        let seg_idx = child.segments.len() - 1;
+        child.zs_inc.on_new_seg(&child.segments, seg_idx);
+        child.unit_bars.push(u0);
+        child.confirms.push(LevelConfirm {
+            x: pc.x,
+            fx: pc.fx.clone(),
+            value: pc.value,
+            fractal_x1: pc.fractal_x1,
+            fractal_x2: pc.fractal_x2,
+            fractal_high: pc.fractal_high,
+            fractal_low: pc.fractal_low,
+            pole_x: pc.pole_x,
+            trigger_uid: -1,
+            used: true,
+            truncated: pc.truncated,
+        });
+        child.early_dynamic = Some(bootstrap_sibling_dynamic_after_freeze(
+            bars, bar_x, &seg,
+        ));
+        child.freshly_first_seg = true;
     }
 }
 
@@ -1794,6 +1955,8 @@ impl PipelineState {
             &self.opt,
         );
         apply_early_layer_bootstrap(&mut self.levels, bar_x, &self.bars, &self.opt);
+        apply_early_layer_cascade(&mut self.levels, bar_x, &self.bars, &self.opt);
+        apply_early_layer_bootstrap(&mut self.levels, bar_x, &self.bars, &self.opt);
 
         let bar = &self.bars[i];
         let ksnap = self.levels[0]
@@ -1987,6 +2150,8 @@ pub fn run_pipeline(bars: &[KlineBar], opt: &PipelineOptions) -> PipelineResult 
             confirm_x: bar_x,
         };
         propagate(&mut levels, 0, vec![ku], bar_x, bars, opt);
+        apply_early_layer_bootstrap(&mut levels, bar_x, bars, opt);
+        apply_early_layer_cascade(&mut levels, bar_x, bars, opt);
         apply_early_layer_bootstrap(&mut levels, bar_x, bars, opt);
 
         // 2) 快照（逐K当下冻结）
