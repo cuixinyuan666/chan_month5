@@ -244,6 +244,36 @@ void main() {
       isFalse,
     );
 
+    final earlyParent = [
+      LevelBundle(
+        level: 0,
+        activeUnit: LevelUnitBar(
+          idx: 0,
+          dir: 1,
+          x1: 0,
+          x2: 5,
+          open: 10,
+          high: 11,
+          low: 9,
+          close: 10.5,
+          volume: 1,
+          confirmX: 5,
+        ),
+        segmentPolicy: 'pending',
+      ),
+      const LevelBundle(level: 1),
+    ];
+    expect(
+      levelLineDrawAllowed(
+        levels: earlyParent,
+        barFeatures: feats,
+        level: 1,
+        asOf: 5,
+      ),
+      isTrue,
+      reason: '层级早解锁：父层 bundle.activeUnit 即允许 K1 连线',
+    );
+
     final withParent = [
       LevelBundle(
         level: 0,

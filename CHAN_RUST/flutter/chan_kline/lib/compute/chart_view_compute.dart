@@ -254,9 +254,16 @@ bool levelLineDrawAllowed({
   if (bundleAtStructureLevel(levels, level) == null) return false;
 
   final parentLevel = level - 1;
+  final parentBundle = bundleAtStructureLevel(levels, parentLevel);
   final parentFrozen =
       asOfLevelSegments(levels: levels, level: parentLevel, asOf: asOf);
   final parentSnap = levelSnapAt(barFeatures, level: parentLevel, asOf: asOf);
+  final parentActive = parentBundle?.activeUnit;
+  if (parentActive != null &&
+      parentActive.x1 <= asOf &&
+      parentActive.x2 <= asOf) {
+    return true;
+  }
   return parentFrozen.isNotEmpty || parentSnap?.unitIdx != null;
 }
 
@@ -457,6 +464,13 @@ List<K1Bar> asOfK1Bars({
 
   final unitIdx = snap?.unitIdx;
   if (unitIdx == null) {
+    if (includeBuilding && frozen.isEmpty) {
+      final active = l0?.activeUnit;
+      if (active != null && active.x1 <= bx && active.x2 <= bx) {
+        frozen.add(levelUnitToK1Bar(active));
+        return frozen;
+      }
+    }
     // 首K0连线确认前：pending 策略给默认 K1 bar 展示
     if (defaultK0Policy == 'pending' && frozen.isEmpty) {
       final d = preConfirmDefaultK1Bar(bars, bx);
@@ -582,6 +596,12 @@ List<K1Bar> asOfLevelVirtualK1Bars({
 
   final unitIdx = snap?.unitIdx;
   if (unitIdx == null) {
+    if (includeBuilding && frozen.isEmpty) {
+      final active = bundle.activeUnit;
+      if (active != null && active.x1 <= asOf && active.x2 <= asOf) {
+        return [levelUnitToK1Bar(active)];
+      }
+    }
     if (bundle.segmentPolicy == 'pending' &&
         frozen.isEmpty &&
         bundle.pendingUnit != null &&
