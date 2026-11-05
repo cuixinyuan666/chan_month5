@@ -5323,3 +5323,20 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **结果**：`flutter test`（indicator_draw_sync / level_window_*）**42/42 通过**；本地 `ANDROID_RUST` 领先 origin **18** 提交（含 merge + 远端已拉条目）；`engine.rs` WIP 仍在 stash。
 - **演示**：打开层级分窗四格 K0–K3：每格只有该层 K 线 + 同色连线；种子框不再标 A/B/C 字；点中间播放后顶部小胶囊显示进度，再点中间暂停。
 - **注意事项**：**未 push**（待用户确认）；真机 UI 未在本轮重跑；合并提交 `2293ea5c` 含分窗与本次 UI 改动（未再拆 commit）。
+
+
+---
+
+### 2026-11-05 · OpenCode · 修复 · 层级早解锁：确认态线段端点塌缩 + 段 idx 重复 + 前缀重放对拍
+
+- **执行者**：OpenCode Agent
+- **任务类型**：缠论内核 / 展示轨 / 回归修复
+- **上下文**：用户反馈「当前软件严重偏离预期」。复核发现：**数据层已符合预期**（002003 默认区间 K0 首确认就在 idx=8，K1 idx=0 确认 + idx=1 动态 + K2 idx=0 动态全部成立），偏差在**画线层与编号层**。
+- **关键操作**（Rust `chan_data/src/pipeline.rs`）：
+  1. `early_unit_to_segment`：早解锁冻段的**两端分型框**改「起点=父层种子框区间 / 终点=父层当步分型」。原先两端都写父层同一组 `pc` → 确认态线段两端解析到**同一根 K**（画成一个点，不是线）。
+  2. `next_seg_idx`：引擎冻结时用编号基准而非硬编码 `idx=0`。原先 `Action::First` 硬编码 idx=0，早解锁已占用 idx=0 → 引擎日后自己冻出**第二个 idx=0 段**（idx 重复，画线/虚拟K 索引错位）。
+  3. `LevelConfirm.from_early_unlock` + `trigger_uid`：早解锁确认的 trigger 指向**父层已冻结单元**（原先 -1），并打标记避免级联时误当原生源重复触发。
+  4. `fill_seed_snap`：无种子框时 `seed_box_high/low` 由 `NaN` 改 `0.0`。`NaN != NaN` 让「前缀重放对拍」恒不等（level≥1 引擎空时必现）。
+- **结果**：`cargo test -p chan_data` **146 通过 / 9 失败**（基线 140/15）。9 个失败全为**数据缺失**（002003 / 688687 / 001312 分笔不在本机该路径），基线同样失败。顺带修好基线里的 `upper_confirm_requires_frozen_lower_unit_*`（早解锁豁免时间序断言：`from_early_unlock` 的确认允许不等下层冻完）。
+- **演示**：默认 002003 走到 idx=8：K1 那条确认态线段现在从 idx=0 拉到 idx=6（**有长度的一条线**），不再是 idx=6 上的一个点；再往后 L1 段号 0→1→2 依次排开、不再出现两个 idx=0。
+- **注意事项**：未 push；主图 UI 未在本轮肉眼复验（机器人验证走 RobotVerifyApp，不验主图绘制）。
