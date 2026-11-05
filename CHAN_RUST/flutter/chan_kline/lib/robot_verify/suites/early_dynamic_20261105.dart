@@ -1,4 +1,5 @@
 import 'package:chan_kline/bridge/chan_bridge.dart';
+import 'package:chan_kline/compute/adjacent_ratio_compute.dart';
 import 'package:chan_kline/compute/chart_view_compute.dart';
 import 'package:chan_kline/compute/kn_clock_timeline.dart';
 import 'package:chan_kline/models/chart_indicator.dart';
@@ -217,6 +218,26 @@ Future<RobotVerifyPhase> runEarlyDynamicInProcessPhase({String? klineRoot}) asyn
       },
     );
 
+    // 预锚单元只服务 K 蜡烛，不得在本层多画构建中连线 / 比例虚线。
+    final k2LineUnits = asOfLevelVirtualK1Bars(
+      levels: at.levels,
+      barFeatures: at.barFeatures,
+      level: 1,
+      asOf: fx,
+      includePreAnchor: false,
+    );
+    add('first_confirm_line_units_no_pre_anchor', k2LineUnits.isEmpty,
+        {'count': k2LineUnits.length});
+    final ratioAtFx = buildRatioChildren(
+      levels: at.levels,
+      displayKn: 1,
+      bars: bars.sublist(0, fx + 1),
+      barFeatures: at.barFeatures,
+      displayX: fx,
+    );
+    add('first_confirm_ratio_no_pre_anchor', ratioAtFx.isEmpty,
+        {'children': ratioAtFx.length});
+
     // --- ③ 递归：K1 首分型确认当根 → K2 确认 + K3 idx=0 预锚 ---
     final l1Seg = full.levels.length < 2 || full.levels[1].segments.isEmpty
         ? null
@@ -254,6 +275,25 @@ Future<RobotVerifyPhase> runEarlyDynamicInProcessPhase({String? klineRoot}) asyn
           'activeIdx': bl2?.activeUnit?.idx,
           'activeX2': bl2?.activeUnit?.x2,
         },
+      );
+      // 有确认段后：连线单元与蜡烛单元一致，构建中段照常保留。
+      List<int> lineIdx() => asOfLevelVirtualK1Bars(
+            levels: at2.levels,
+            barFeatures: at2.barFeatures,
+            level: 1,
+            asOf: fx2,
+            includePreAnchor: false,
+          ).map((e) => e.idx).toList();
+      List<int> candleIdx() => asOfLevelVirtualK1Bars(
+            levels: at2.levels,
+            barFeatures: at2.barFeatures,
+            level: 1,
+            asOf: fx2,
+          ).map((e) => e.idx).toList();
+      add(
+        'second_confirm_line_keeps_building_unit',
+        lineIdx().join(',') == candleIdx().join(','),
+        {'line': lineIdx(), 'candle': candleIdx()},
       );
     }
 

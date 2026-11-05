@@ -1,4 +1,5 @@
 import 'package:chan_kline/bridge/chan_bridge.dart';
+import 'package:chan_kline/compute/adjacent_ratio_compute.dart';
 import 'package:chan_kline/compute/chart_view_compute.dart';
 import 'package:chan_kline/models/chart_indicator.dart';
 import 'package:chan_kline/models/kline_bar.dart';
@@ -171,5 +172,64 @@ void main() {
     expect(off.levels.length, greaterThanOrEqualTo(2));
     expect(off.levels[1].activeUnit, isNull, reason: '关闭后不得出现预锚单元');
     expect(chartMaxKn(levels: off.levels), 2, reason: '关闭后 K2 窗口应不可用');
+  });
+
+  test('预锚单元不画成本层连线/比例；蜡烛与合并框仍保留', () {
+    final full = bundleOfPrefix(bars.length);
+    final fx = full.levels[0].segments.first.endConfirmX;
+    final on = bundleOfPrefix(fx + 1);
+
+    // 蜡烛路径：K2 窗口仍能看到 idx=0 预锚单元
+    final candle = asOfLevelVirtualK1Bars(
+      levels: on.levels,
+      barFeatures: on.barFeatures,
+      level: 1,
+      asOf: fx,
+    );
+    expect(candle.length, 1);
+    expect(candle.single.idx, 0);
+
+    // 连线路径：同一时点不接收预锚单元
+    final lineUnits = asOfLevelVirtualK1Bars(
+      levels: on.levels,
+      barFeatures: on.barFeatures,
+      level: 1,
+      asOf: fx,
+      includePreAnchor: false,
+    );
+    expect(lineUnits, isEmpty, reason: '该层无确认段时不得把预锚单元当构建中段');
+
+    final lines = computeDisplayBuildingLines(
+      bars: bars.sublist(0, fx + 1),
+      asOf: fx,
+      virtualUnits: lineUnits,
+      frozenIdx: const {},
+    );
+    expect(lines, isEmpty, reason: '没有连线单元就不应有构建中连线');
+
+    // 相邻比例同源：不得出现预锚产生的虚线子线
+    final ratio = buildRatioChildren(
+      levels: on.levels,
+      displayKn: 1,
+      bars: bars.sublist(0, fx + 1),
+      barFeatures: on.barFeatures,
+      displayX: fx,
+    );
+    expect(ratio, isEmpty, reason: '相邻比例不得凭空多出预锚子线');
+
+    // 有确认段后：连线单元与蜡烛单元一致，构建中段照常保留
+    if (full.levels.length > 1 && full.levels[1].segments.isNotEmpty) {
+      final fx2 = full.levels[1].segments.first.endConfirmX;
+      final later = bundleOfPrefix(fx2 + 1);
+      List<int> idxOf({required bool preAnchor}) => asOfLevelVirtualK1Bars(
+            levels: later.levels,
+            barFeatures: later.barFeatures,
+            level: 1,
+            asOf: fx2,
+            includePreAnchor: preAnchor,
+          ).map((e) => e.idx).toList();
+      expect(idxOf(preAnchor: false), idxOf(preAnchor: true),
+          reason: '有确认段后，预锚开关不应影响连线单元');
+    }
   });
 }
