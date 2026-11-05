@@ -251,7 +251,18 @@ bool levelLineDrawAllowed({
   required int asOf,
 }) {
   if (level < 1) return true;
-  if (bundleAtStructureLevel(levels, level) == null) return false;
+  final self = bundleAtStructureLevel(levels, level);
+  if (self == null) return false;
+
+  // 层级早解锁：本层尚无冻段但已有 idx=0 动态单元 → 允许画本层连线
+  if (self.segments.where((s) => s.endConfirmX <= asOf).isEmpty) {
+    final selfActive = self.activeUnit;
+    if (selfActive != null &&
+        selfActive.x1 <= asOf &&
+        selfActive.x2 <= asOf) {
+      return true;
+    }
+  }
 
   final parentLevel = level - 1;
   final parentBundle = bundleAtStructureLevel(levels, parentLevel);

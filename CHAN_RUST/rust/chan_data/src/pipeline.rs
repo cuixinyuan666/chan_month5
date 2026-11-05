@@ -499,17 +499,32 @@ fn bootstrap_child_from_parent(
     if parent.segments.is_empty() {
         return None;
     }
-    let act = parent.active_unit_now(bars)?;
+    if let Some(act) = parent.active_unit_now(bars) {
+        return Some(LevelUnitBar {
+            idx: 0,
+            dir: act.dir,
+            x1: act.x1,
+            x2: act.x2,
+            open: act.open,
+            high: act.high,
+            low: act.low,
+            close: act.close,
+            volume: act.volume,
+            confirm_x: bar_x,
+        });
+    }
+    // 父层刚冻首段、尚未起锚/进行中：用末段几何作子层 idx=0 动态（同根解锁 Kn+1）
+    let seg = parent.segments.last()?;
     Some(LevelUnitBar {
         idx: 0,
-        dir: act.dir,
-        x1: act.x1,
-        x2: act.x2,
-        open: act.open,
-        high: act.high,
-        low: act.low,
-        close: act.close,
-        volume: act.volume,
+        dir: seg.dir,
+        x1: seg.begin_pole_x,
+        x2: seg.end_pole_x,
+        open: seg.open,
+        high: seg.high,
+        low: seg.low,
+        close: seg.close,
+        volume: seg.volume,
         confirm_x: bar_x,
     })
 }
@@ -3029,5 +3044,44 @@ mod tests {
             pr0_old.levels.iter().all(|l| l.level != 1),
             "旧口径 bar0 不应创建 level1"
         );
+    }
+
+    #[test]
+    fn custom_ohlc_prefix8_level_snapshot() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../a_Data/test/custom.ohlc.csv");
+        if !root.exists() {
+            return;
+        }
+        let bars = crate::offline::load_test_ohlc_csv(&root).expect("csv");
+        assert!(bars.len() >= 9);
+        let mut opt = PipelineOptions::default();
+        opt.early_layer_dynamic = true;
+        let pr = run_pipeline(&bars[..=8], &opt);
+        let l0 = pr.levels.iter().find(|l| l.level == 0).expect("l0");
+        let l1 = pr.levels.iter().find(|l| l.level == 1);
+        let l2 = pr.levels.iter().find(|l| l.level == 2);
+        eprintln!(
+            "custom@8: l0.segs={} l1={:?} l2={:?}",
+            l0.segments.len(),
+            l1.map(|l| (l.segments.len(), l.active_unit.is_some())),
+            l2.map(|l| (l.segments.len(), l.active_unit.is_some())),
+        );
+        assert!(!l0.segments.is_empty());
+        let cx = l0.confirms.first().map(|c| c.x);
+        eprintln!("custom first k0 confirm x={cx:?}");
+        for n in 0..=20.min(bars.len() - 1) {
+            let p = run_pipeline(&bars[..=n], &opt);
+            let l1s = p
+                .levels
+                .iter()
+                .find(|l| l.level == 1)
+                .map(|l| l.segments.len())
+                .unwrap_or(0);
+            if l1s > 0 {
+                eprintln!("l1 first frozen seg at bar n={n} segs={l1s}");
+                break;
+            }
+        }
     }
 }
