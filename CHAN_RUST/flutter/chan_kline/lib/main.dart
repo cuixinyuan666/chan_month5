@@ -458,7 +458,7 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
   /// 截断监察：开=当前口径；关=添加截断前旧行为（暴力反转被吸收）
   bool _truncationCheck = true;
 
-  /// 层级早解锁：开=首根K0起K1动态、Kn首段确认即Kn+1动态（默认）；关=等下层首次分型确认后再解上层
+  /// 层级早解锁：开=首根K0起K1动态；K0/Kn 分型确认当根同步子层 idx=0 确认 + idx=1 动态 + 再下层 idx=0 动态（默认）
   bool _earlyLayerDynamic = true;
   /// 构建中合并框（虚线）开关：开=末组合并画虚线；关=全部实线（默认开）
   bool _showBuildingDash = true;
@@ -5306,8 +5306,9 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
               '作用：控制「上一层动态 K 线」何时出现（主图连线、虚拟 K、回测采样钟等全链路）。\n\n'
               '开启（默认）\n'
               '· K0 idx=0：K1 idx=0 即生成且为动态（不必等 K0 首次分型确认）。\n'
-              '· 当 Kn idx=0 在本层确认：同根 K 上 Kn+1 idx=0 动态出现，且本层 idx=1 动态继续。\n'
-              '· 展示用 early 单元不进永久 feed，不改变下层分型确认门槛。\n\n'
+              '· K0（或本层）分型确认当根：下一层 idx=0 同步确认（副图 Kn 分型确认），本层 idx=1 动态；再下一层 idx=0 仅动态（同根不连冻两层）。\n'
+              '· 002003 默认区间示例：idx=8 为 K0 首确认 → 同根 K1 idx=0 确认 + K1 idx=1 动态 + K2 idx=0 动态。\n'
+              '· 展示用 early/级联冻段不进下层永久 feed 的配对门槛替换，仅同步展示与采样轨。\n\n'
               '关闭\n'
               '· 恢复改前经典口径：通常要等下层首次分型确认后，上层才有完整永久/展示链。\n'
               '· 便于与旧行为对照。\n\n'

@@ -14,7 +14,10 @@ Future<List<RobotVerifyPhase>> runEarlyLayer20261105Phases({
       await runFlutterTestJsonPhase(
         phaseId: 'flutter_test_early_layer_accept',
         workingDirectory: klineRoot,
-        testPathArgs: ['test/early_layer_dynamic_accept_test.dart'],
+        testPathArgs: [
+          'test/early_layer_002003_accept_test.dart',
+          'test/early_layer_dynamic_accept_test.dart',
+        ],
       ),
     );
   }
