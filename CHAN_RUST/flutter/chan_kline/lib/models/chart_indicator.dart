@@ -564,6 +564,13 @@ int subIndicatorPickerOrder(SubChartIndicator e) {
 
 /// 方案B：chartMaxKn = structureMax+1；无 levels 有 k0Lines→1；全空→0。
 /// 有 structure level==0 时勿再走「m==0 && k0Lines→1」旧逻辑。
+///
+/// 预锚动态单元（层级早生成）开启时，最新层的 `activeUnit` 已经能作为
+/// 下一窗口的 K 蜡烛来源，所以可用窗口 = 最高「有单元」的结构层 + 2。
+/// - 无任何 unitBars/activeUnit → 退回经典 structureMax+1（开关关闭零差异）；
+/// - 关闭开关时新层没有预锚 active，最高有单元层仍是 structureMax-1，
+///   公式自动等于 structureMax+1，不需要额外传开关；
+/// - 夹到指标搜索既有上限 16，避免多出预锚层把窗口顶成 17。
 int chartMaxKn({
   required List<LevelBundle> levels,
   List<K0Line> k0Lines = const [],
@@ -572,10 +579,17 @@ int chartMaxKn({
     return k0Lines.isNotEmpty ? 1 : 0;
   }
   var structureMax = 0;
+  var highestWithUnit = -1;
   for (final lv in levels) {
     if (lv.level > structureMax) structureMax = lv.level;
+    if (lv.unitBars.isNotEmpty || lv.activeUnit != null) {
+      if (lv.level > highestWithUnit) highestWithUnit = lv.level;
+    }
   }
-  return structureMax + 1;
+  final classic = structureMax + 1;
+  final byUnits = highestWithUnit >= 0 ? highestWithUnit + 2 : classic;
+  final out = byUnits > classic ? byUnits : classic;
+  return out > 16 ? 16 : out;
 }
 
 List<MainChartIndicator> buildMainIndicatorCatalog(int maxKn) {

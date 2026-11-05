@@ -257,6 +257,7 @@ List<RatioChild> buildRatioChildren({
   }
 
   // ② 展示轨虚线（与主图 _drawBuildingLevelLine 同源；已跳过冻段覆盖）
+  // 构建中 N 段取本层（level）自己的冻段+active，与实线同源。
   final virtualUnits = asOfLevelVirtualK1Bars(
     levels: levels,
     barFeatures: barFeatures,

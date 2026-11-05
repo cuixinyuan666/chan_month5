@@ -10,10 +10,11 @@ import 'bs_verdict_frame.dart';
 
 /// 每根 K0 × 每层 Kn 十字线快照（Rust `LevelSnap`，逐K当下冻结）。
 class LevelSnap {
-  /// 层级：1=K1(K0连线)，2=K2(K1连线)，…（旧称 n段）
+  /// 结构层号（0 起）：0=K0连线/笔，1=K1连线/线段，…（与 Rust `LevelSnap.level` 一致）
   final int level;
 
-  /// 当步所属 Kn 序号（进行中或刚冻结；首段确认前=null）
+  /// 当步所属该层单元序号（进行中或刚冻结；首确认前=Some(0) 预锚动态单元，
+  /// 关闭「层级早生成动态单元」时仍为 null）
   final int? unitIdx;
   final int unitDir;
 

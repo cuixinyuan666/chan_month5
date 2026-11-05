@@ -457,6 +457,9 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
   late final DateTime _startedAt = DateTime.now();
   /// 截断监察：开=当前口径；关=添加截断前旧行为（暴力反转被吸收）
   bool _truncationCheck = true;
+  /// 层级早生成动态单元：开=每层首个单元在父层首确认当根以动态态出现；
+  /// 关=经典口径（等引擎自己攒够输入）。默认开，可在设置里切换。
+  bool _earlyDynamicUnit = true;
   /// 构建中合并框（虚线）开关：开=末组合并画虚线；关=全部实线（默认开）
   bool _showBuildingDash = true;
   /// 筹码分布配置（落盘 .chan_chip_config.json）
@@ -906,6 +909,13 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
   Future<void> _loadLevelWindowSettings() async {
     await LevelWindowSettingsStore.load();
     if (!mounted) return;
+    final early = LevelWindowSettingsStore.earlyDynamicUnit;
+    if (early != _earlyDynamicUnit) {
+      _earlyDynamicUnit = early;
+      // 开关口径变了：旧会话按旧 opt 建，必须丢弃；冻结仓同步作废。
+      _disposePipelineSession();
+      _clearSessionFreezeHistory();
+    }
     // 启动时若分窗已开启，按落盘层级铺默认：每窗只有本层 Kn，副图不勾。
     if (LevelWindowSettingsStore.enabled) _resetSplitIndicators();
     setState(() {});
@@ -1360,6 +1370,10 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
         final v = change.asBool!;
         _setTruncationCheck(v);
         return 'truncation_check=$v';
+      case AgentConfigKey.earlyDynamicUnit:
+        final v = change.asBool!;
+        _setEarlyDynamicUnit(v);
+        return 'early_dynamic_unit=$v';
       case AgentConfigKey.bollN:
         final v = change.asInt!;
         await _updateMathIndicatorConfig(_mathIndicatorConfig.copyWith(bollN: v));
@@ -1533,6 +1547,7 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
       logPath: logPath,
       featureLookup: _pipelineSession?.cache.lookup,
       truncationCheck: _truncationCheck,
+      earlyDynamicUnit: _earlyDynamicUnit,
       mainSessionHarness: _mainSessionHarnessForSearch(),
       initialBars: List<KlineBar>.from(_allBars),
       maxCandidates: maxCandidates,
@@ -1876,6 +1891,22 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
     _logCombineSummary(prefix: '截断开关后汇总');
   }
 
+  /// 层级早生成动态单元开关落地（设置面板与 Agent API 共用同一条路径）。
+  ///
+  /// 该开关改变每层首个单元的可见时点 → 采样钟/冻结仓必须整体作废，
+  /// 只 dispose 会话不清冻结仓会残留旧口径的“第0根”记录。
+  void _setEarlyDynamicUnit(bool v, {StateSetter? sheetSetState}) {
+    _panelUi(() {
+      _earlyDynamicUnit = v;
+    }, sheetSetState: sheetSetState);
+    unawaited(LevelWindowSettingsStore.save(earlyDynamicUnit: v));
+    _clearSessionFreezeHistory();
+    _disposePipelineSession();
+    _msgHistory.append('层级早生成动态单元=${v ? "开" : "关"}，重算当前步进');
+    _rebuildCombine();
+    _logCombineSummary(prefix: '层级早生成开关后汇总');
+  }
+
   @override
   AgentHealth health() {
     return AgentHealth(
@@ -1983,10 +2014,12 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
   KlineCombineBundle _bundleForVisible(List<KlineBar> visible) {
     if (_pipelineSession == null ||
         !_pipelineSession!.isAlive ||
-        _pipelineSession!.truncationCheck != _truncationCheck) {
+        _pipelineSession!.truncationCheck != _truncationCheck ||
+        _pipelineSession!.earlyDynamicUnit != _earlyDynamicUnit) {
       _disposePipelineSession();
       _pipelineSession = ChanPipelineSession.create(
         truncationCheck: _truncationCheck,
+        earlyDynamicUnit: _earlyDynamicUnit,
         bridge: _bridge,
       );
     }
@@ -3691,6 +3724,28 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
           ),
         ),
         const SizedBox(height: 8),
+        // 层级早生成动态单元：每层首个单元在父层首确认当根以动态态出现，默认开
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          dense: true,
+          title: const Text('层级早生成动态单元', style: TextStyle(fontSize: 13)),
+          subtitle: Text(
+            _earlyDynamicUnit
+                ? '已开启（K0首根见K1动态；首确认当根见下一层动态）'
+                : '已关闭（经典口径：等引擎自己攒够输入）',
+            style: const TextStyle(fontSize: 11),
+          ),
+          value: _earlyDynamicUnit,
+          onChanged: _busy
+              ? null
+              : (v) => _setEarlyDynamicUnit(v, sheetSetState: sheetSetState),
+          secondary: IconButton(
+            tooltip: '层级早生成动态单元说明',
+            icon: const Icon(Icons.help_outline, size: 18),
+            onPressed: _showEarlyDynamicUnitHelp,
+          ),
+        ),
+        const SizedBox(height: 8),
         // 构建中/未确认虚线开关：末组合并框 + K0/K1/KN 构建中连线统一用虚线区分，默认开
         SwitchListTile(
           contentPadding: EdgeInsets.zero,
@@ -3994,6 +4049,7 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
         strategyConfig: _strategyConfig,
         featureLookup: _pipelineSession?.cache.lookup,
         truncationCheck: _truncationCheck,
+        earlyDynamicUnit: _earlyDynamicUnit,
         mainSessionHarness: _mainSessionHarnessForSearch(),
         initialBars: List<KlineBar>.from(_allBars),
         // 「眼睛 → 在 K 线图查看」：把该行买卖条件投到主图，并把本次会话缓存下来，
@@ -4111,6 +4167,7 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
         strategyConfig: _strategyConfig,
         featureLookup: _pipelineSession?.cache.lookup,
         truncationCheck: _truncationCheck,
+        earlyDynamicUnit: _earlyDynamicUnit,
         mainSessionHarness: _mainSessionHarnessForSearch(),
         initialBars: List<KlineBar>.from(_allBars),
         candidateOverride: cands,
@@ -4179,6 +4236,7 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
         strategyConfig: _strategyConfig,
         featureLookup: _pipelineSession?.cache.lookup,
         truncationCheck: _truncationCheck,
+        earlyDynamicUnit: _earlyDynamicUnit,
         mainSessionHarness: matches ? _mainSessionHarnessForSearch() : null,
         initialBars: matches ? List<KlineBar>.from(_allBars) : null,
         onApplyToChart: matches ? _applySearchBacktestToChart : null,
@@ -4836,6 +4894,7 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
       sellNK0Frames: _sellNK0Frames,
       defaultK0Policy: _defaultK0Policy,
       truncationCheck: _truncationCheck,
+      earlyDynamicUnit: _earlyDynamicUnit,
       showBuildingDash: _showBuildingDash,
       chipOnlyMode: _chipOnlyMode,
       // 筹码 / 笔数分布只在主窗生效：其余窗各自可操作，但不需要重复一份浮层。
@@ -5256,6 +5315,44 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
         ],
       ),
     ));
+  }
+
+  void _showEarlyDynamicUnitHelp() {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => SelectionArea(child: AlertDialog(
+        title: const Text('层级早生成动态单元说明'),
+        content: const SingleChildScrollView(
+          child: Text(
+            '作用：控制每层首个单元（K 蜡烛）在什么时候出现。\n\n'
+            '开启（默认）\n'
+            '· K0 第一根：K1 窗口就有 idx=0 的动态 K（尚未确认，随行情演化）。\n'
+            '· K0 首个分型确认当根：K1 的 idx=0 冻结为确认态、idx=1 动态；'
+            '同时 K2 窗口出现 idx=0 动态 K。\n'
+            '· 递归：Kn 的 idx=0 确认当根，K(n+1) 的 idx=0 以动态态出现。\n'
+            '· 动态单元只是该层首个自然段的“演化中形态”，不合成确认段、'
+            '不重编号；该层自己首个分型确认时，由经典流程转正为同一个 idx=0。\n'
+            '· 参与全链路：主/副图、中枢/买卖点、采样钟、冻结仓与回测同一口径。\n\n'
+            '关闭\n'
+            '· 回到经典口径：必须等引擎自己攒够输入，才出现该层首个单元；'
+            'K1/K2 窗口相应延后可用。\n\n'
+            '说明\n'
+            '· 动态期方向/高低允许随结构修正；确认当根以实际分型为准。\n'
+            '· 切换开关会清空冻结历史并从当前可见前缀重放，采样钟同步重算。\n\n'
+            '操作步骤\n'
+            '1. 打开右上角设置；\n'
+            '2. 拨动「层级早生成动态单元」开关；\n'
+            '3. 当前步进会立刻按新口径重算并刷新所有窗口。',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('知道了'),
+          ),
+        ],
+      )),
+    );
   }
 
   void _showPeriodHelp() {

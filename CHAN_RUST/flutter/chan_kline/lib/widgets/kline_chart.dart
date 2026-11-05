@@ -153,6 +153,7 @@ class KlineChart extends StatefulWidget {
     this.sellNK0Frames = const [],
     this.defaultK0Policy = 'pending',
     this.truncationCheck = true,
+    this.earlyDynamicUnit = true,
     this.showBuildingDash = true,
     this.judgmentHistoryByKn = const {},
     this.zsJudgmentHistoryByKn = const {},
@@ -238,6 +239,8 @@ class KlineChart extends StatefulWidget {
   final String defaultK0Policy;
   /// 截断监察：十字线 as-of 本地重算K1合并时与 Rust 同开关
   final bool truncationCheck;
+  /// 层级早生成动态单元：十字线 as-of 本地重算 bundle 时与 Rust 同开关
+  final bool earlyDynamicUnit;
   /// 构建中/未确认元素虚线开关：开=末组合并框虚线 + K0/K1/KN 构建中连线虚线；关=全部实线（不区分构建中）
   final bool showBuildingDash;
   /// 分型判断会话事件日志（main 步进累积；换股才清空）
@@ -504,6 +507,7 @@ class _KlineChartState extends State<KlineChart> {
       final bundle = ChanBridge.instance.buildKlineCombineBundle(
         slice,
         truncationCheck: widget.truncationCheck,
+        earlyDynamicUnit: widget.earlyDynamicUnit,
       );
       _zsAsOfCacheKey = asOf;
       _zsAsOfBundle = bundle;
@@ -4096,6 +4100,9 @@ class _KlineCompositePainter extends CustomPainter {
   }
 
   /// 主图 Kn 合并（kn≥2）：只描该层**展示轨**合并框（冻+进行中）；淡实体线已拆出到 KN 指标。
+  ///
+  /// 窗口 Kn 的 K 蜡烛/合并框来自结构层 `kn-1` 的虚拟单元（K1 窗口同口径：
+  /// K0 蜡烛取 level 0）；连线仍取 level `kn`。此处只负责 K 蜡烛侧。
   void _drawLevelCombineOnMainChart(
     Canvas canvas,
     double w,
@@ -4105,9 +4112,10 @@ class _KlineCompositePainter extends CustomPainter {
     double slotW,
     int kn,
   ) {
+    final unitLevel = kn - 1;
     LevelBundle? bundle;
     for (final b in levels) {
-      if (b.level == kn) {
+      if (b.level == unitLevel) {
         bundle = b;
         break;
       }
@@ -4121,7 +4129,7 @@ class _KlineCompositePainter extends CustomPainter {
         ? asOfLevelVirtualK1Bars(
             levels: levels,
             barFeatures: barFeatures,
-            level: kn,
+            level: unitLevel,
             asOf: asOf,
             includeBuilding: true,
           )
@@ -4135,7 +4143,7 @@ class _KlineCompositePainter extends CustomPainter {
     }
 
     // 单元 view 仅用于合并框横向对齐（不再在此画淡实体；淡实体由 KN 指标统一控制）
-    final views = _levelUnitViewsForLevel(kn);
+    final views = _levelUnitViewsForLevel(unitLevel);
 
     // 展示轨合并框：不画永久 combineFrames，改由虚拟单元重算
     if (virtualUnits.isEmpty || barsForCombine.isEmpty) return;
@@ -4174,11 +4182,13 @@ class _KlineCompositePainter extends CustomPainter {
     );
   }
 
-  /// 取某层（kn≥1）的单元 view（用于合并框横向对齐 / KN 指标画淡实体），含十字线 as-of 重算。
-  List<LevelUnitBarView> _levelUnitViewsForLevel(int kn) {
+  /// 取某结构层 `unitLevel` 的单元 view（用于合并框横向对齐 / KN 指标画淡实体），
+  /// 含十字线 as-of 重算。**参数是结构层（单元所在层），不是窗口号**：
+  /// 窗口 Kn 的 K 蜡烛传 `kn-1`，K1 窗口的 level 0 同口径。
+  List<LevelUnitBarView> _levelUnitViewsForLevel(int unitLevel) {
     LevelBundle? bundle;
     for (final b in levels) {
-      if (b.level == kn) {
+      if (b.level == unitLevel) {
         bundle = b;
         break;
       }
@@ -4189,7 +4199,7 @@ class _KlineCompositePainter extends CustomPainter {
         ? asOfLevelVirtualK1Bars(
             levels: levels,
             barFeatures: barFeatures,
-            level: kn,
+            level: unitLevel,
             asOf: asOf,
             includeBuilding: true,
           )
@@ -4204,9 +4214,10 @@ class _KlineCompositePainter extends CustomPainter {
       return _levelUnitViewsFromVirtualK1Bars(
         virtualUnits,
         frozenIdx: {
+          // 与 virtualUnits 同层：该层已冻结段 idx（段 idx 与单元 idx 一对一）
           for (final s in asOfLevelSegments(
             levels: levels,
-            level: kn,
+            level: unitLevel,
             asOf: asOf,
           ))
             s.idx,
@@ -4222,6 +4233,7 @@ class _KlineCompositePainter extends CustomPainter {
   }
 
   /// KN 指标用的单层淡实体蜡烛（原内嵌于 KN合并；拆出后由 KN 指标统一控制）。
+  /// 窗口 Kn 的 K 蜡烛来自结构层 `kn-1`。
   void _drawLevelUnitCandlesOnMainChart(
     Canvas canvas,
     double w,
@@ -4231,7 +4243,8 @@ class _KlineCompositePainter extends CustomPainter {
     double slotW,
     int kn,
   ) {
-    final views = _levelUnitViewsForLevel(kn);
+    if (kn < 2) return;
+    final views = _levelUnitViewsForLevel(kn - 1);
     if (views.isNotEmpty) {
       _drawLevelUnitCandles(
         canvas,
@@ -5473,6 +5486,8 @@ class _KlineCompositePainter extends CustomPainter {
       // 旧路径无进行中动态单元：全部当冻结，虚线跳过（实线已画）
       frozenIdx = {for (final u in virtualUnits) u.idx};
     } else {
+      // 构建中 N 段 = 本层（level）自己的进行中段；虚拟单元取 level 自身的
+      // 冻段+active（与 _drawOneLevelLines 的实线同源）。
       virtualUnits = asOfLevelVirtualK1Bars(
         levels: levels,
         barFeatures: barFeatures,

@@ -117,7 +117,8 @@ class MsgHistory {
       '中枢/Math/volume/BS/背驰：K0=原生 k0；K1+ 取 structure level==kn-1。'
       'collect*ByKn：out[0]=k0，pipeline 写 out[lv.level+1]；'
       'levelsWithFrozen*Bs history 键 display=lv.level+1。'
-      'chartMaxKn=structureMax+1（无 levels 有 k0Lines→1；全空→0）。'
+      'chartMaxKn=structureMax+1；有预锚动态单元（unitBars/activeUnit）时'
+      '取最高有单元层+2，并夹到 16（无 levels 有 k0Lines→1；全空→0）。'
       'asOfLevel* 按 lv.level==level 查找（允许 0）。勿再改回旧 1 起编。',
     );
   }
