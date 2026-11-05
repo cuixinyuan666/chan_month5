@@ -1,0 +1,423 @@
+import 'package:chan_kline/bridge/chan_bridge.dart';
+import 'package:chan_kline/compute/chart_view_compute.dart';
+import 'package:chan_kline/compute/kn_clock_timeline.dart';
+import 'package:chan_kline/models/chart_indicator.dart';
+import 'package:chan_kline/models/kline_bar.dart';
+import 'package:chan_kline/models/kline_combine_bundle.dart';
+
+import '../continuous_step_verify.dart';
+import '../robot_verify_data.dart';
+import '../robot_verify_flutter_test.dart';
+import '../robot_verify_model.dart';
+import '../robot_verify_suite_meta.dart';
+
+const String kEarlyDynamic20261105SuiteId = 'early_dynamic_20261105';
+
+/// 层级早生成动态单元（预锚）验收套件（2026-11-05）。
+///
+/// 验的是用户确认的时间线：
+///  - K0 idx=0：K1 idx=0 以**动态态**存在（尚无任何确认段）。
+///  - K0 首分型确认当根：K1 idx=0 确认、K1 idx=1 动态；
+///    同一根 K2 idx=0 以动态态初生成。
+///  - 递归：K1 首分型确认当根，K2 确认 + K3 idx=0 动态。
+///  - 关闭开关：以上全部回到经典口径（bar0 无动态单元、首确认不提前给上层单元）。
+///
+/// 阶段：
+///  1. `flutter_test_early_dynamic` —— 本轮新增/改写的单测。
+///  2. `inprocess_early_dynamic_unit` —— 用主图同源管道逐前缀构建，
+///     在真实 002003 数据上钉死上述时点；并做开关关闭对照。
+///  3. `continuous_step_freeze` —— 自动挂载（逐根单步 vs 走完瘦包）。
+Future<RobotVerifyPhase> runEarlyDynamicFlutterTestPhase({
+  required String klineRoot,
+}) {
+  return runFlutterTestJsonPhase(
+    phaseId: 'flutter_test_early_dynamic',
+    workingDirectory: klineRoot,
+    testPathArgs: [
+      'test/early_dynamic_unit_test.dart',
+      'test/kn_clock_causality_test.dart',
+    ],
+  );
+}
+
+/// 阶段：预锚动态单元时间线（前缀构建 + 采样钟增量 + 开关对照）。
+Future<RobotVerifyPhase> runEarlyDynamicInProcessPhase({String? klineRoot}) async {
+  const phaseId = 'inprocess_early_dynamic_unit';
+
+  try {
+    ChanBridge.instance.ensureInitialized();
+  } catch (e) {
+    return RobotVerifyPhase(
+      id: phaseId,
+      ok: false,
+      details: {'error': 'ffi_init_failed', 'message': '$e'},
+    );
+  }
+  final bridge = ChanBridge.instance;
+  if (bridge.loadedFfiAbiVersion != kChanFfiAbiVersion) {
+    return RobotVerifyPhase(
+      id: phaseId,
+      ok: false,
+      details: {
+        'error': 'ffi_abi_mismatch',
+        'loaded': bridge.loadedFfiAbiVersion,
+        'expected': kChanFfiAbiVersion,
+      },
+    );
+  }
+
+  final plan = await resolveRobotVerify002003LoadPlan(klineRoot: klineRoot);
+  if (plan == null) {
+    return RobotVerifyPhase(
+      id: phaseId,
+      ok: true,
+      skipped: true,
+      skipReason: 'no_verify_data',
+      details: {'attempts': lastRobotVerifyDataResolveAttempts()},
+    );
+  }
+
+  final bars = loadRobotVerifyBars(plan: plan, period: '1m');
+  if (bars.length < 60) {
+    return RobotVerifyPhase(
+      id: phaseId,
+      ok: false,
+      details: {'error': 'insufficient_bars', 'bars': bars.length},
+    );
+  }
+
+  final checks = <RobotVerifyCheck>[];
+  void add(String id, bool ok, [Map<String, Object?> data = const {}]) =>
+      checks.add(RobotVerifyCheck(id: id, ok: ok, data: data));
+
+  // 前缀构建与主图 `_bundleForVisible` 同源：只喂 [0, count)。
+  KlineCombineBundle bundleOf(int count, {bool early = true}) =>
+      bridge.buildKlineCombineBundle(
+        bars.sublist(0, count),
+        earlyDynamicUnit: early,
+      );
+
+  // --- ① bar 0：K1 idx=0 动态存在 ---
+  final on0 = bundleOf(1);
+  final l0 = on0.levels.isEmpty ? null : on0.levels[0];
+  final a0 = l0?.activeUnit;
+  add(
+    'bar0_pre_anchor_present',
+    l0 != null &&
+        l0.segments.isEmpty &&
+        l0.unitBars.isEmpty &&
+        a0 != null &&
+        a0.idx == 0 &&
+        a0.x1 == 0 &&
+        a0.x2 == 0,
+    {
+      'segments': l0?.segments.length,
+      'unitBars': l0?.unitBars.length,
+      'activeIdx': a0?.idx,
+      'activeX1': a0?.x1,
+      'activeX2': a0?.x2,
+      'activeDir': a0?.dir,
+    },
+  );
+  add(
+    'bar0_k1_window_available',
+    chartMaxKn(levels: on0.levels) == 2,
+    {'chartMaxKn': chartMaxKn(levels: on0.levels)},
+  );
+  final k1At0 = asOfLevelVirtualK1Bars(
+    levels: on0.levels,
+    barFeatures: on0.barFeatures,
+    level: 0,
+    asOf: 0,
+  );
+  add(
+    'bar0_virtual_k1_has_pre_anchor',
+    k1At0.length == 1 && k1At0.single.idx == 0 && k1At0.single.x2 == 0,
+    {
+      'count': k1At0.length,
+      'idx': k1At0.isEmpty ? null : k1At0.single.idx,
+      'x2': k1At0.isEmpty ? null : k1At0.single.x2,
+    },
+  );
+
+  // --- ② 首确认当根：本层 idx=0 冻结、idx=1 动态，同时下一层 idx=0 预锚 ---
+  final full = bundleOf(bars.length);
+  final firstSeg = full.levels.isEmpty || full.levels[0].segments.isEmpty
+      ? null
+      : full.levels[0].segments.first;
+  final fx = firstSeg?.endConfirmX ?? -1;
+  add('first_confirm_probe_available', firstSeg != null && fx > 0,
+      {'bars': bars.length, 'firstConfirmX': fx});
+  if (firstSeg != null && fx > 0 && fx + 1 <= bars.length) {
+    final before = bundleOf(fx);
+    add(
+      'before_first_confirm_no_next_level',
+      before.levels.length == 1,
+      {'levels': before.levels.length, 'prefix': fx},
+    );
+
+    final at = bundleOf(fx + 1);
+    final al0 = at.levels.isEmpty ? null : at.levels[0];
+    final al1 = at.levels.length < 2 ? null : at.levels[1];
+    final au0 = al0?.activeUnit;
+    final au1 = al1?.activeUnit;
+    add(
+      'first_confirm_unit0_frozen_once',
+      al0 != null &&
+          al0.unitBars.isNotEmpty &&
+          al0.unitBars.first.idx == 0 &&
+          al0.unitBars.first.confirmX == fx &&
+          al0.unitBars.where((u) => u.idx == 0).length == 1,
+      {
+        'unitBars': al0?.unitBars.length,
+        'firstConfirmX': al0 == null || al0.unitBars.isEmpty
+            ? null
+            : al0.unitBars.first.confirmX,
+        'idx0Count':
+            al0?.unitBars.where((u) => u.idx == 0).length,
+      },
+    );
+    add(
+      'first_confirm_next_unit_dynamic',
+      au0 != null && au0.idx == 1,
+      {'activeIdx': au0?.idx},
+    );
+    add(
+      'first_confirm_next_level_pre_anchor',
+      al1 != null &&
+          al1.segments.isEmpty &&
+          au1 != null &&
+          au1.idx == 0 &&
+          au1.x2 == fx,
+      {
+        'levels': at.levels.length,
+        'segments': al1?.segments.length,
+        'activeIdx': au1?.idx,
+        'activeX2': au1?.x2,
+      },
+    );
+    add(
+      'first_confirm_k2_window_available',
+      chartMaxKn(levels: at.levels) == 3,
+      {'chartMaxKn': chartMaxKn(levels: at.levels)},
+    );
+    final k2AtFx = asOfLevelVirtualK1Bars(
+      levels: at.levels,
+      barFeatures: at.barFeatures,
+      level: 1,
+      asOf: fx,
+    );
+    add(
+      'first_confirm_virtual_k2_has_pre_anchor',
+      k2AtFx.length == 1 && k2AtFx.single.idx == 0 && k2AtFx.single.x2 == fx,
+      {
+        'count': k2AtFx.length,
+        'idx': k2AtFx.isEmpty ? null : k2AtFx.single.idx,
+        'x2': k2AtFx.isEmpty ? null : k2AtFx.single.x2,
+      },
+    );
+
+    // --- ③ 递归：K1 首分型确认当根 → K2 确认 + K3 idx=0 预锚 ---
+    final l1Seg = full.levels.length < 2 || full.levels[1].segments.isEmpty
+        ? null
+        : full.levels[1].segments.first;
+    final fx2 = l1Seg?.endConfirmX ?? -1;
+    add('second_level_confirm_probe_available', l1Seg != null && fx2 > fx,
+        {'firstConfirmX': fx, 'secondLevelConfirmX': fx2});
+    if (l1Seg != null && fx2 > 0 && fx2 + 1 <= bars.length) {
+      final at2 = bundleOf(fx2 + 1);
+      final bl1 = at2.levels.length < 2 ? null : at2.levels[1];
+      final bl2 = at2.levels.length < 3 ? null : at2.levels[2];
+      add(
+        'second_confirm_unit0_frozen_once',
+        bl1 != null &&
+            bl1.unitBars.isNotEmpty &&
+            bl1.unitBars.first.idx == 0 &&
+            bl1.unitBars.first.confirmX == fx2 &&
+            bl1.unitBars.where((u) => u.idx == 0).length == 1,
+        {
+          'unitBars': bl1?.unitBars.length,
+          'firstConfirmX': bl1 == null || bl1.unitBars.isEmpty
+              ? null
+              : bl1.unitBars.first.confirmX,
+        },
+      );
+      add(
+        'second_confirm_level2_pre_anchor',
+        bl2 != null &&
+            bl2.segments.isEmpty &&
+            bl2.activeUnit != null &&
+            bl2.activeUnit!.idx == 0 &&
+            bl2.activeUnit!.x2 == fx2,
+        {
+          'levels': at2.levels.length,
+          'activeIdx': bl2?.activeUnit?.idx,
+          'activeX2': bl2?.activeUnit?.x2,
+        },
+      );
+    }
+
+    // --- ④ 开关关闭：经典口径零差异 ---
+    final off0 = bundleOf(1, early: false);
+    final offL0 = off0.levels.isEmpty ? null : off0.levels[0];
+    add(
+      'off_bar0_no_pre_anchor',
+      offL0 != null && offL0.activeUnit == null,
+      {'active': offL0?.activeUnit != null},
+    );
+    add(
+      'off_bar0_window_classic',
+      chartMaxKn(levels: off0.levels) == 1,
+      {'chartMaxKn': chartMaxKn(levels: off0.levels)},
+    );
+    final offK1At0 = asOfLevelVirtualK1Bars(
+      levels: off0.levels,
+      barFeatures: off0.barFeatures,
+      level: 0,
+      asOf: 0,
+    );
+    add('off_bar0_no_virtual_k1', offK1At0.isEmpty,
+        {'count': offK1At0.length});
+
+    final offAt = bundleOf(fx + 1, early: false);
+    final offL1 = offAt.levels.length < 2 ? null : offAt.levels[1];
+    add(
+      'off_first_confirm_no_next_level_active',
+      offAt.levels.length >= 2 && offL1?.activeUnit == null,
+      {
+        'levels': offAt.levels.length,
+        'active': offL1?.activeUnit != null,
+      },
+    );
+    add(
+      'off_first_confirm_window_classic',
+      chartMaxKn(levels: offAt.levels) == 2,
+      {'chartMaxKn': chartMaxKn(levels: offAt.levels)},
+    );
+
+    // 冻结结构（segments/unitBars）逐层同构：开关只影响 activeUnit，不得改确认结果
+    final structDiffs = <String>[];
+    if (at.levels.length != offAt.levels.length) {
+      structDiffs.add('levels ${at.levels.length}/${offAt.levels.length}');
+    }
+    for (var i = 0; i < at.levels.length && i < offAt.levels.length; i++) {
+      final a = at.levels[i];
+      final b = offAt.levels[i];
+      if (a.segments.length != b.segments.length) {
+        structDiffs.add('L$i segN ${a.segments.length}/${b.segments.length}');
+      }
+      if (a.unitBars.length != b.unitBars.length) {
+        structDiffs.add('L$i unitN ${a.unitBars.length}/${b.unitBars.length}');
+      }
+      final n = a.segments.length < b.segments.length
+          ? a.segments.length
+          : b.segments.length;
+      for (var j = 0; j < n; j++) {
+        final sa = a.segments[j];
+        final sb = b.segments[j];
+        if (sa.idx != sb.idx ||
+            sa.beginPoleX != sb.beginPoleX ||
+            sa.endPoleX != sb.endPoleX ||
+            sa.dir != sb.dir) {
+          structDiffs.add('L$i seg$j');
+          break;
+        }
+      }
+    }
+    add('off_confirmed_structure_identical', structDiffs.isEmpty,
+        {'diffs': structDiffs});
+  }
+
+  // --- ⑤ 采样钟：bar0 记到动态单元；首确认只记一次 idx=0，无重复 ---
+  final sess = ChanPipelineSession.create(earlyDynamicUnit: true);
+  final recorder = KnClockTimelineRecorder();
+  final growing = <KlineBar>[];
+  var walked = 0;
+  try {
+    for (var i = 0; i < bars.length; i++) {
+      growing.add(bars[i]);
+      final b = sess.syncTo(growing);
+      recorder.record(i, b.levels);
+      walked++;
+    }
+  } finally {
+    sess.dispose();
+  }
+  final clock = recorder.timeline;
+  final s0 = clock.at(0, 0);
+  add(
+    'clock_bar0_active_idx0',
+    walked == bars.length &&
+        s0.unitBars.isEmpty &&
+        s0.activeUnit != null &&
+        s0.activeUnit!.idx == 0 &&
+        s0.activeUnit!.x2 == 0,
+    {
+      'walked': walked,
+      'unitBars': s0.unitBars.length,
+      'activeIdx': s0.activeUnit?.idx,
+      'activeX2': s0.activeUnit?.x2,
+    },
+  );
+  if (fx > 0) {
+    final sf = clock.at(0, fx);
+    add(
+      'clock_first_confirm_once',
+      sf.unitBars.where((u) => u.idx == 0).length == 1 &&
+          sf.unitBars.isNotEmpty &&
+          sf.unitBars.first.confirmX == fx,
+      {
+        'idx0Count': sf.unitBars.where((u) => u.idx == 0).length,
+        'firstConfirmX':
+            sf.unitBars.isEmpty ? null : sf.unitBars.first.confirmX,
+      },
+    );
+    add(
+      'clock_first_confirm_next_active',
+      sf.activeUnit != null && sf.activeUnit!.idx == 1,
+      {'activeIdx': sf.activeUnit?.idx},
+    );
+    final s1 = clock.at(1, fx);
+    add(
+      'clock_next_level_pre_anchor',
+      s1.unitBars.isEmpty &&
+          s1.activeUnit != null &&
+          s1.activeUnit!.idx == 0 &&
+          s1.activeUnit!.x2 == fx,
+      {
+        'unitBars': s1.unitBars.length,
+        'activeIdx': s1.activeUnit?.idx,
+        'activeX2': s1.activeUnit?.x2,
+      },
+    );
+  }
+
+  return RobotVerifyPhase(
+    id: phaseId,
+    ok: checks.every((c) => c.ok),
+    details: {
+      'bars': bars.length,
+      'firstConfirmX': fx,
+      'dataRoot': plan.dataRoot,
+      'checks': checks.map((c) => c.toJson()).toList(),
+    },
+  );
+}
+
+/// 套件编排。
+Future<List<RobotVerifyPhase>> runEarlyDynamic20261105Phases({
+  required String klineRoot,
+  bool runFlutterTest = true,
+}) async {
+  final phases = <RobotVerifyPhase>[];
+  if (runFlutterTest) {
+    phases.add(await runEarlyDynamicFlutterTestPhase(klineRoot: klineRoot));
+  }
+  phases.add(await runEarlyDynamicInProcessPhase(klineRoot: klineRoot));
+
+  final meta = metaForSuite(kEarlyDynamic20261105SuiteId);
+  if (meta?.continuousStepFreeze == true) {
+    phases.add(await runContinuousStepFreezePhase(klineRoot: klineRoot));
+  }
+  return phases;
+}

@@ -99,6 +99,7 @@ powershell -NoProfile -File CHAN_RUST/scripts/robot_verify_agent_finish.ps1 -NoC
 | `indicator_search_opt_20260930` | 寻优枚举 2026-09-30 批次 | **是** |
 | `jiyou_keypoint_20261001` | **计优**（关键点位指标统计）2026-10-01 批次 | **是** |
 | **`e2e_20261010`** | **本轮 E2E**（S3 当下性 + 线型签名 + 工程治理），见下节 | **是** |
+| **`early_dynamic_20261105`** | **层级早生成动态单元**（预锚）2026-11-05 批次，见下节 | **是** |
 
 - 注册表：`lib/robot_verify/robot_verify_registry.dart`
 - 能力开关：`lib/robot_verify/robot_verify_suite_meta.dart`（`continuousStepFreeze: true` 时自动挂载 `continuous_step_freeze` 阶段）
@@ -118,6 +119,16 @@ powershell -NoProfile -File CHAN_RUST/scripts/robot_verify_agent_finish.ps1 -NoC
 `readEvalClockSeries`（出信号）是**两条不同的链**，只验前者会漏掉真正的求值路径。
 **前缀侧必须带自己的时钟**，否则两侧采样格点不同，比的是采样密度而不是因果性
 （`lessons_learned` 第 13 条）。
+
+### 层级早生成动态单元套件（`early_dynamic_20261105` · 2026-11-05 增补）
+
+| 阶段 | id | 验什么 |
+|------|----|--------|
+| 1 | `flutter_test_early_dynamic` | `early_dynamic_unit_test.dart` + `kn_clock_causality_test.dart` |
+| 2 | **`inprocess_early_dynamic_unit`** | 002003 1m 前缀构建：bar0 出现 K1 idx=0 动态；K0 首确认当根 K1 idx=0 冻结、idx=1 动态，同根 K2 idx=0 预锚；K1 首确认当根 K2 确认 + K3 idx=0 预锚；采样钟只记一次 idx=0；关闭开关后以上全部回到经典且确认结构逐层一致 |
+| 3 | `continuous_step_freeze` | 002003 1m + 分笔 连续单步 vs 走完瘦包 对拍（自动挂载） |
+
+无 `a_Data/002003` 时阶段 2/3 `skipped`（`skipReason: no_verify_data`），总评仍可通过。
 
 ### 计优套件的四个阶段（`jiyou_keypoint_20261001`）
 

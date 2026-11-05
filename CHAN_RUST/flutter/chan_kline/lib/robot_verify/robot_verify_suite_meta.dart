@@ -25,6 +25,11 @@ const Map<String, RobotVerifySuiteMeta> kRobotVerifySuiteMetas = {
     id: 'e2e_20261010',
     continuousStepFreeze: true,
   ),
+  // 层级早生成动态单元（预锚）验收
+  'early_dynamic_20261105': RobotVerifySuiteMeta(
+    id: 'early_dynamic_20261105',
+    continuousStepFreeze: true,
+  ),
 };
 
 RobotVerifySuiteMeta? metaForSuite(String suiteId) =>
