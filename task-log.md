@@ -5340,3 +5340,6 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **结果**：`cargo test -p chan_data` **146 通过 / 9 失败**（基线 140/15）。9 个失败全为**数据缺失**（002003 / 688687 / 001312 分笔不在本机该路径），基线同样失败。顺带修好基线里的 `upper_confirm_requires_frozen_lower_unit_*`（早解锁豁免时间序断言：`from_early_unlock` 的确认允许不等下层冻完）。
 - **演示**：默认 002003 走到 idx=8：K1 那条确认态线段现在从 idx=0 拉到 idx=6（**有长度的一条线**），不再是 idx=6 上的一个点；再往后 L1 段号 0→1→2 依次排开、不再出现两个 idx=0。
 - **注意事项**：未 push；主图 UI 未在本轮肉眼复验（机器人验证走 RobotVerifyApp，不验主图绘制）。
+
+- **复验结果**：`cargo test -p chan_data` **146 通过 / 9 失败**（基线 140/15，失败全是数据缺失：002003 / 688687 / 001312 分笔不在本机该路径）；`flutter test` 全量 **MINE=23 / BASE=24** 失败，逐条比对**无新增回归**（基线既有失败，含 indicator_search 寻优、run_to_end 对拍等）。机器人验证套件 `early_layer_20261105` 报告 **ok:true**（6 passed / 0 failed）。
+- **提交**：`110ad3d2`（Rust 修复）、`9f0ffdf9`（验收测试）、`350b4144`（本日志）。**未 push**。
