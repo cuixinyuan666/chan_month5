@@ -42,6 +42,7 @@ class IndicatorSearchJobParams {
     this.logPath,
     this.featureLookup,
     this.truncationCheck = true,
+    this.earlyDynamicUnit = true,
     this.mainSessionHarness,
     this.initialBars,
     this.candidateOverride,
@@ -69,6 +70,7 @@ class IndicatorSearchJobParams {
 
   final BarFeatureLookup? featureLookup;
   final bool truncationCheck;
+  final bool earlyDynamicUnit;
 
   /// 非空时复用主界面冻结仓（跳过 harness 重冻）。
   final BacktestStepHarnessResult? mainSessionHarness;
@@ -236,6 +238,7 @@ class IndicatorSearchJob {
           mathConfig: p.mathConfig,
           chipConfig: p.chipConfig,
           truncationCheck: p.truncationCheck,
+          earlyDynamicUnit: p.earlyDynamicUnit,
           onProgress: (d, t) {
             if (_cancelRequested) throw const _JobCancel();
             report(

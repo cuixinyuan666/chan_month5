@@ -27,12 +27,14 @@ class StepFreezeParityResult {
 class StepFreezeParityDriver {
   StepFreezeParityDriver({
     this.truncationCheck = true,
+    this.earlyDynamicUnit = true,
     this.mathConfig = const MathIndicatorConfig(),
     this.chipConfig = const ChipConfig(),
     this.preferDelta = true,
   });
 
   final bool truncationCheck;
+  final bool earlyDynamicUnit;
   final MathIndicatorConfig mathConfig;
   final ChipConfig chipConfig;
   final bool preferDelta;
@@ -92,6 +94,7 @@ class StepFreezeParityDriver {
     final sess = ChanPipelineSession.create(
       preferDelta: preferDelta,
       truncationCheck: truncationCheck,
+      earlyDynamicUnit: earlyDynamicUnit,
     );
     final state = StepFreezeSessionState();
     final growing = <KlineBar>[];

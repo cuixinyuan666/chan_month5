@@ -16,7 +16,13 @@ abstract final class LevelWindowSettingsStore {
   static int _count = kLevelWindowDefaultCount;
   static List<int> _slots = defaultLevelWindowSlots();
 
+  /// 层级早生成动态单元：开=每层首个单元在父层首确认当根以动态态出现。
+  /// 默认开；关闭时回到经典口径。与「层级分窗」总开关相互独立。
+  static bool _earlyDynamicUnit = true;
+
   static bool get enabled => _enabled;
+
+  static bool get earlyDynamicUnit => _earlyDynamicUnit;
 
   static int get count => _count;
 
@@ -34,6 +40,8 @@ abstract final class LevelWindowSettingsStore {
       final obj = jsonDecode(await f.readAsString());
       if (obj is! Map) return;
       _enabled = obj['enabled'] == true;
+      // 缺省 true：旧设置文件没有该键时按新默认口径。
+      _earlyDynamicUnit = obj['early_dynamic_unit'] != false;
       _count = normalizeLevelWindowCount(
         obj['count'] is int ? obj['count'] as int : null,
       );
@@ -61,10 +69,12 @@ abstract final class LevelWindowSettingsStore {
 
   static Future<void> save({
     bool? enabled,
+    bool? earlyDynamicUnit,
     int? count,
     List<int>? slots,
   }) async {
     if (enabled != null) _enabled = enabled;
+    if (earlyDynamicUnit != null) _earlyDynamicUnit = earlyDynamicUnit;
     if (count != null) _count = normalizeLevelWindowCount(count);
     if (slots != null) {
       _slots = fillLevelWindowSlots(
@@ -77,6 +87,7 @@ abstract final class LevelWindowSettingsStore {
       await f.writeAsString(
         const JsonEncoder.withIndent('  ').convert(<String, dynamic>{
           'enabled': _enabled,
+          'early_dynamic_unit': _earlyDynamicUnit,
           'count': _count,
           'slots': _slots,
         }),

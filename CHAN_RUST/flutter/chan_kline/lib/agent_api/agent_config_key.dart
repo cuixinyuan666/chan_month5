@@ -16,6 +16,7 @@ enum AgentConfigKey {
   tickEnabled('tick_enabled'),
   tickBucket('tick_bucket'),
   truncationCheck('truncation_check'),
+  earlyDynamicUnit('early_dynamic_unit'),
   bollN('boll_n'),
   donchianN('donchian_n'),
   regressK('regress_k');
@@ -73,6 +74,7 @@ AgentConfigChange parseAgentConfigChange(String key, String value) {
     case AgentConfigKey.chipEnabled:
     case AgentConfigKey.tickEnabled:
     case AgentConfigKey.truncationCheck:
+    case AgentConfigKey.earlyDynamicUnit:
       return AgentConfigChange.bool(k, _parseBool(raw, k.wireName));
     case AgentConfigKey.chipBucket:
     case AgentConfigKey.tickBucket:

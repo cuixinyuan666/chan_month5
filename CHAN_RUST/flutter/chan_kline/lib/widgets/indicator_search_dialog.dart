@@ -32,6 +32,7 @@ class IndicatorSearchDialog extends StatefulWidget {
     required this.strategyConfig,
     this.featureLookup,
     this.truncationCheck = true,
+    this.earlyDynamicUnit = true,
     this.mainSessionHarness,
     this.initialBars,
     this.runnerFactory,
@@ -55,6 +56,7 @@ class IndicatorSearchDialog extends StatefulWidget {
   final StrategyConfig strategyConfig;
   final BarFeatureLookup? featureLookup;
   final bool truncationCheck;
+  final bool earlyDynamicUnit;
 
   /// 非空时直接复用主界面冻结仓，跳过 harness 重冻。
   final BacktestStepHarnessResult? mainSessionHarness;
@@ -202,6 +204,7 @@ class _IndicatorSearchDialogState extends State<IndicatorSearchDialog> {
         logPath: logPath,
         featureLookup: widget.featureLookup,
         truncationCheck: widget.truncationCheck,
+        earlyDynamicUnit: widget.earlyDynamicUnit,
         mainSessionHarness: widget.mainSessionHarness,
         initialBars: widget.initialBars,
         candidateOverride: widget.candidateOverride,

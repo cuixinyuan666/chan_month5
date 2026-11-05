@@ -168,12 +168,14 @@ Future<BacktestStepHarnessResult> driveStepHarness(
   MathIndicatorConfig mathConfig = const MathIndicatorConfig(),
   ChipConfig? chipConfig,
   bool truncationCheck = true,
+  bool earlyDynamicUnit = true,
 }) {
   return driveStepHarnessWithProgress(
     bars,
     mathConfig: mathConfig,
     chipConfig: chipConfig,
     truncationCheck: truncationCheck,
+    earlyDynamicUnit: earlyDynamicUnit,
     uiYield: false,
   );
 }
@@ -184,6 +186,7 @@ Future<BacktestStepHarnessResult> driveStepHarnessWithProgress(
   MathIndicatorConfig mathConfig = const MathIndicatorConfig(),
   ChipConfig? chipConfig,
   bool truncationCheck = true,
+  bool earlyDynamicUnit = true,
   void Function(int done, int total)? onProgress,
   int progressEvery = 50,
   bool uiYield = true,
@@ -192,6 +195,7 @@ Future<BacktestStepHarnessResult> driveStepHarnessWithProgress(
   final sess = ChanPipelineSession.create(
     preferDelta: true,
     truncationCheck: truncationCheck,
+    earlyDynamicUnit: earlyDynamicUnit,
   );
   final buy1 = <int, List<Buy1Frame>>{};
   final sell1 = <int, List<Sell1Frame>>{};
