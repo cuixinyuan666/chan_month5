@@ -5343,3 +5343,19 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 
 - **复验结果**：`cargo test -p chan_data` **146 通过 / 9 失败**（基线 140/15，失败全是数据缺失：002003 / 688687 / 001312 分笔不在本机该路径）；`flutter test` 全量 **MINE=23 / BASE=24** 失败，逐条比对**无新增回归**（基线既有失败，含 indicator_search 寻优、run_to_end 对拍等）。机器人验证套件 `early_layer_20261105` 报告 **ok:true**（6 passed / 0 failed）。
 - **提交**：`110ad3d2`（Rust 修复）、`9f0ffdf9`（验收测试）、`350b4144`（本日志）。**未 push**。
+
+
+---
+
+### 2026-11-05 · OpenCode · 回退 · 移除层级早解锁，恢复到 9ea6cf13 的经典口径
+
+- **执行者**：OpenCode Agent
+- **任务类型**：回退 / 缠论内核
+- **上下文**：用户明确要求「把层级早解锁这个逻辑删除掉，恢复这个逻辑创建之前」。经确认采用「新增回退提交（保留历史）+ 旧记录保留并追加本条」。
+- **回退范围**：`9ea6cf13..ff5ea142` 共 10 个提交，全部只服务层级早解锁，无夹带其它修复。
+  - 恢复 9 个改动文件到 `9ea6cf13` 内容：`chan_data/src/pipeline.rs`、`chan_ffi/src/lib.rs`、`main.dart`、`chan_bridge.dart`、`chart_view_compute.dart`、`kline_chart.dart`、`robot_verify_registry.dart`、`robot_verify_suite_meta.dart`、`chart_view_compute_test.dart`。
+  - 删除 3 个新增文件：`suites/early_layer_20261105.dart`、`early_layer_002003_accept_test.dart`、`early_layer_dynamic_accept_test.dart`。
+  - 核对：`git diff 9ea6cf13 -- CHAN_RUST` 输出为空；全仓库 `git grep` 已无 `earlyLayerDynamic` / `early_layer_dynamic` / `early_dynamic` / `from_early_unlock` / `层级早解锁` 引用。
+- **结果**：cargo test -p chan_data 144 通过 / 9 失败（全部为「未找到离线分笔」的数据缺失，无逻辑失败）；chart_view_compute_test + indicator_draw_sync_test 27 项全过；代码树与 9ea6cf13 零差异
+- **演示**：主图不再有任何早解锁产生的「提前确认/提前动态」层；K1/K2 回到经典口径——只在下层真实冻结单元逐层喂入后，才出现上层的段与分型确认。
+- **注意事项**：**未 push**。App 内「层级早解锁」设置项已随回退消失，无需再手动关闭。机器人验证会话的失效套件号已改回 `jiyou_keypoint_20261001`。
