@@ -64,6 +64,21 @@ void main() {
         earlyDynamicUnit: earlyDynamicUnit,
       );
 
+  /// 预锚动态单元的「高高」：区间 [x1,x2] 内 high 取最高 high，low 取最高 low。
+  void expectHighHigh(LevelUnitBar u, List<KlineBar> bars) {
+    final x1 = u.x1.clamp(0, bars.length - 1);
+    final x2 = u.x2.clamp(0, bars.length - 1);
+    var hi = double.negativeInfinity;
+    var lo = double.negativeInfinity;
+    for (var i = x1; i <= x2; i++) {
+      if (bars[i].high > hi) hi = bars[i].high;
+      if (bars[i].low > lo) lo = bars[i].low;
+    }
+    expect(u.high, closeTo(hi, 1e-9), reason: 'high 取区间最高');
+    expect(u.low, closeTo(lo, 1e-9), reason: 'low 取区间最高的低');
+    expect(u.close, closeTo(bars[x2].close, 1e-9));
+  }
+
   test('chartMaxKn：有单元的最高层 +2，夹到 16；无单元退回经典', () {
     // 只有 level0 动态预锚 → K1 窗口可用（2）
     expect(
@@ -105,6 +120,7 @@ void main() {
     expect(l0.activeUnit!.idx, 0);
     expect(l0.activeUnit!.x1, 0);
     expect(l0.activeUnit!.x2, 0, reason: '动态单元末端=当步K0');
+    expectHighHigh(l0.activeUnit!, bars);
     expect(chartMaxKn(levels: on.levels), 2, reason: 'K1 窗口应可用');
 
     final k1Units = asOfLevelVirtualK1Bars(
@@ -139,9 +155,35 @@ void main() {
     final fx = first.endConfirmX;
     expect(fx, greaterThan(0));
 
-    // 确认前一根：下一层尚未懒创建
+    // 确认前一根：下一层尚未懒创建；本层预锚单元取「高高」
     final before = bundleOfPrefix(fx); // 取 [0, fx)，不含确认当根
     expect(before.levels.length, 1, reason: '首确认前不应创建结构层1');
+    final preA = before.levels[0].activeUnit!;
+    expect(preA.x2, fx - 1);
+    expectHighHigh(preA, bars);
+
+    // K0 首确认前：只有一条构建中虚线，端点取预锚单元 open→close
+    final preBars = bars.sublist(0, fx);
+    final k1Units = asOfK1Bars(
+      bars: preBars,
+      levels: before.levels,
+      barFeatures: before.barFeatures,
+      defaultK0Policy: 'pending',
+      asOf: fx - 1,
+      includeBuilding: true,
+    );
+    expect(k1Units.length, 1, reason: 'K0 首确认前只有预锚单元这一条');
+    final k0Lines = computeDisplayBuildingLines(
+      bars: preBars,
+      asOf: fx - 1,
+      virtualUnits: k1Units,
+      frozenIdx: const {},
+    );
+    expect(k0Lines.length, 1, reason: '十字线回看不得多出第二条线');
+    expect(k0Lines.single.begin.barIdx, preA.x1);
+    expect(k0Lines.single.begin.price, closeTo(preA.open, 1e-9));
+    expect(k0Lines.single.end.barIdx, preA.x2);
+    expect(k0Lines.single.end.price, closeTo(preA.close, 1e-9));
 
     final on = bundleOfPrefix(fx + 1);
     expect(on.levels.length, greaterThanOrEqualTo(2));
@@ -153,6 +195,7 @@ void main() {
     expect(l1.activeUnit, isNotNull, reason: '首确认同根应出现 K2 预锚单元');
     expect(l1.activeUnit!.idx, 0);
     expect(l1.activeUnit!.x2, fx, reason: 'K2 动态单元末端=当根');
+    expectHighHigh(l1.activeUnit!, bars);
     expect(chartMaxKn(levels: on.levels), 3, reason: 'K2 窗口应可用');
 
     final k2Units = asOfLevelVirtualK1Bars(
@@ -167,6 +210,37 @@ void main() {
 
     // 转正不重复：冻结单元 idx=0 只出现一次
     expect(l0.unitBars.where((u) => u.idx == 0).length, 1);
+
+    // 确认当根恢复经典真实 OHLC（不是动态期的高高）
+    final u0 = l0.unitBars.first;
+    final s0 = l0.segments.first;
+    expect(u0.high, closeTo(s0.high, 1e-9));
+    expect(u0.low, closeTo(s0.low, 1e-9));
+    var bodyLow = double.infinity;
+    for (var i = s0.beginPoleX + 1; i <= s0.endPoleX; i++) {
+      if (bars[i].low < bodyLow) bodyLow = bars[i].low;
+    }
+    final beginOpen = s0.dir > 0 ? s0.beginFractalLow : s0.beginFractalHigh;
+    final expectedLow = bodyLow < beginOpen ? bodyLow : beginOpen;
+    expect(u0.low, closeTo(expectedLow, 1e-9),
+        reason: '确认段 low=min(段身最低, open)');
+
+    // 无未来：前缀快照与长前缀同 bar 快照逐字段一致
+    final long = full;
+    for (final n in {0, 1, fx - 1}) {
+      final short = bundleOfPrefix(n + 1);
+      final u = short.levels[0].activeUnit!;
+      final snap = long.barFeatures
+          .firstWhere((f) => f.idx == n)
+          .levels
+          .firstWhere((s) => s.level == 0);
+      expect(snap.unitX2, u.x2);
+      expect(snap.unitOpen, closeTo(u.open, 1e-9));
+      expect(snap.unitHigh, closeTo(u.high, 1e-9));
+      expect(snap.unitLow, closeTo(u.low, 1e-9));
+      expect(snap.unitClose, closeTo(u.close, 1e-9));
+      expect(snap.unitVolume, closeTo(u.volume, 1e-9));
+    }
 
     final off = bundleOfPrefix(fx + 1, earlyDynamicUnit: false);
     expect(off.levels.length, greaterThanOrEqualTo(2));
@@ -231,5 +305,12 @@ void main() {
       expect(idxOf(preAnchor: false), idxOf(preAnchor: true),
           reason: '有确认段后，预锚开关不应影响连线单元');
     }
+  });
+
+  test('种子相绘制开关：仅层级早生成开启时隐藏', () {
+    expect(seedPhaseVisible(earlyDynamicUnit: true), isFalse,
+        reason: '开关开：种子框/开口/ABC 不画');
+    expect(seedPhaseVisible(earlyDynamicUnit: false), isTrue,
+        reason: '开关关：经典种子绘制照旧');
   });
 }

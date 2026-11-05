@@ -5,6 +5,7 @@ import 'package:chan_kline/compute/kn_clock_timeline.dart';
 import 'package:chan_kline/models/chart_indicator.dart';
 import 'package:chan_kline/models/kline_bar.dart';
 import 'package:chan_kline/models/kline_combine_bundle.dart';
+import 'package:chan_kline/models/level_models.dart';
 
 import '../continuous_step_verify.dart';
 import '../robot_verify_data.dart';
@@ -98,6 +99,40 @@ Future<RobotVerifyPhase> runEarlyDynamicInProcessPhase({String? klineRoot}) asyn
         earlyDynamicUnit: early,
       );
 
+  bool near(double a, double b) => (a - b).abs() <= 1e-9;
+
+  /// 预锚「高高」：区间 [x1,x2] 内 high 取最高 high，low 取最高 low；
+  /// close 取区间末根收盘（与 Rust `pre_anchor_unit_ohlcv` 同口径）。
+  (bool, Map<String, Object?>) checkHighHigh(LevelUnitBar? u, {int? wantX2}) {
+    if (u == null) return (false, {'error': 'no_unit'});
+    final x1 = u.x1.clamp(0, bars.length - 1);
+    final x2 = u.x2.clamp(0, bars.length - 1);
+    var hi = double.negativeInfinity;
+    var lo = double.negativeInfinity;
+    for (var i = x1; i <= x2; i++) {
+      if (bars[i].high > hi) hi = bars[i].high;
+      if (bars[i].low > lo) lo = bars[i].low;
+    }
+    final ok = (wantX2 == null || u.x2 == wantX2) &&
+        near(u.high, hi) &&
+        near(u.low, lo) &&
+        near(u.close, bars[x2].close);
+    return (
+      ok,
+      {
+        'x1': u.x1,
+        'x2': u.x2,
+        'wantX2': wantX2,
+        'high': u.high,
+        'maxHigh': hi,
+        'low': u.low,
+        'maxLow': lo,
+        'close': u.close,
+        'barClose': bars[x2].close,
+      },
+    );
+  }
+
   // --- ① bar 0：K1 idx=0 动态存在 ---
   final on0 = bundleOf(1);
   final l0 = on0.levels.isEmpty ? null : on0.levels[0];
@@ -156,6 +191,9 @@ Future<RobotVerifyPhase> runEarlyDynamicInProcessPhase({String? klineRoot}) asyn
       before.levels.length == 1,
       {'levels': before.levels.length, 'prefix': fx},
     );
+    final preA = before.levels.isEmpty ? null : before.levels[0].activeUnit;
+    final (hh0, hh0Data) = checkHighHigh(preA, wantX2: fx - 1);
+    add('pre_anchor_high_high_level0', hh0, hh0Data);
 
     final at = bundleOf(fx + 1);
     final al0 = at.levels.isEmpty ? null : at.levels[0];
@@ -197,6 +235,32 @@ Future<RobotVerifyPhase> runEarlyDynamicInProcessPhase({String? klineRoot}) asyn
         'activeX2': au1?.x2,
       },
     );
+    final (hh1, hh1Data) = checkHighHigh(au1, wantX2: fx);
+    add('pre_anchor_high_high_level1', hh1, hh1Data);
+
+    // 首确认当根起恢复确认段真实 OHLC（不是动态期的「高高」）。
+    final u0 = al0 == null || al0.unitBars.isEmpty ? null : al0.unitBars.first;
+    final s0 = al0 == null || al0.segments.isEmpty ? null : al0.segments.first;
+    var handoffOk = u0 != null && s0 != null &&
+        near(u0.high, s0.high) && near(u0.low, s0.low);
+    var expectedLow = double.nan;
+    if (s0 != null) {
+      var bodyLow = double.infinity;
+      for (var i = s0.beginPoleX + 1; i <= s0.endPoleX; i++) {
+        if (bars[i].low < bodyLow) bodyLow = bars[i].low;
+      }
+      final open = s0.dir > 0 ? s0.beginFractalLow : s0.beginFractalHigh;
+      expectedLow = bodyLow < open ? bodyLow : open;
+      handoffOk = handoffOk && near(u0.low, expectedLow);
+    }
+    add('confirmed_handoff_real_ohlc', handoffOk, {
+      'unitHigh': u0?.high,
+      'segHigh': s0?.high,
+      'unitLow': u0?.low,
+      'segLow': s0?.low,
+      'expectedLow': expectedLow,
+      'preAnchorLow': preA?.low,
+    });
     add(
       'first_confirm_k2_window_available',
       chartMaxKn(levels: at.levels) == 3,
@@ -237,6 +301,39 @@ Future<RobotVerifyPhase> runEarlyDynamicInProcessPhase({String? klineRoot}) asyn
     );
     add('first_confirm_ratio_no_pre_anchor', ratioAtFx.isEmpty,
         {'children': ratioAtFx.length});
+
+    // 无未来：短前缀的预锚单元与长前缀同 bar 快照逐字段一致。
+    final noFutureDiffs = <String>[];
+    for (final n in {0, 1, fx - 1}) {
+      final short = n == fx - 1 ? before : bundleOf(n + 1);
+      final u = short.levels.isEmpty ? null : short.levels[0].activeUnit;
+      LevelSnap? snap;
+      for (final f in full.barFeatures) {
+        if (f.idx != n) continue;
+        for (final s in f.levels) {
+          if (s.level == 0) {
+            snap = s;
+            break;
+          }
+        }
+        break;
+      }
+      if (u == null || snap == null) {
+        noFutureDiffs.add('n=$n missing');
+        continue;
+      }
+      if (snap.unitX1 != u.x1 ||
+          snap.unitX2 != u.x2 ||
+          !near(snap.unitOpen, u.open) ||
+          !near(snap.unitHigh, u.high) ||
+          !near(snap.unitLow, u.low) ||
+          !near(snap.unitClose, u.close) ||
+          !near(snap.unitVolume, u.volume)) {
+        noFutureDiffs.add('n=$n fields');
+      }
+    }
+    add('pre_anchor_no_future_snapshot', noFutureDiffs.isEmpty,
+        {'diffs': noFutureDiffs});
 
     // --- ③ 递归：K1 首分型确认当根 → K2 确认 + K3 idx=0 预锚 ---
     final l1Seg = full.levels.length < 2 || full.levels[1].segments.isEmpty
