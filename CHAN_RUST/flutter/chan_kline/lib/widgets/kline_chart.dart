@@ -993,6 +993,16 @@ class _KlineChartState extends State<KlineChart> {
       widget.sync?.zsAsOfBundle = null;
     }
 
+    // 层级早生成开关切换：as-of 缓存只按 asOf 命中，必须整体作废，
+    // 否则十字线回看会命中旧开关的 bundle（种子/预锚口径不一致）。
+    if (oldWidget.earlyDynamicUnit != widget.earlyDynamicUnit) {
+      _zsAsOfCacheKey = null;
+      _zsAsOfBundle = null;
+      _asOfCache.clear();
+      widget.sync?.zsAsOfKey = null;
+      widget.sync?.zsAsOfBundle = null;
+    }
+
     if (widget.period != 'tick') {
       _tickIdleYinYang = false;
     } else if (seriesChanged) {
@@ -2517,6 +2527,7 @@ class _KlineChartState extends State<KlineChart> {
               crosshairBarIdx: _crosshairBarIdx,
               truncationCheck: widget.truncationCheck,
               showBuildingDash: widget.showBuildingDash,
+              earlyDynamicUnit: widget.earlyDynamicUnit,
               // 分窗：全窗照抄同一个胶囊条占位，副图内区才同高。
               subChipBarHeight:
                   widget.sync?.subChipBand ?? _subChipBarHeight,
@@ -2938,6 +2949,7 @@ class _KlineCompositePainter extends CustomPainter {
     required this.crosshairBarIdx,
     this.truncationCheck = true,
     this.showBuildingDash = true,
+    this.earlyDynamicUnit = true,
     this.subChipBarHeight = KlineViewport.subIndicatorChipBand,
     this.defaultK0Policy = 'pending',
     this.segAsOf,
@@ -3014,6 +3026,8 @@ class _KlineCompositePainter extends CustomPainter {
   final bool truncationCheck;
   /// 构建中/未确认元素虚线开关：开=末组合并框虚线 + K0/K1/KN 构建中连线虚线；关=全部实线（不区分构建中）
   final bool showBuildingDash;
+  /// 层级早生成动态单元：开=隐藏种子框/种子相虚线，K0 首确认前由预锚单元画构建中虚线
+  final bool earlyDynamicUnit;
   /// 副图左上指标开关按钮实际高度（自 px 落点下方 2px 起算；动态测量防覆盖）
   final double subChipBarHeight;
   /// 与 asOfK1Bars 同构的默认 K0 策略（pending/purged）
@@ -3578,7 +3592,9 @@ class _KlineCompositePainter extends CustomPainter {
     double plotH,
     double slotW,
   ) {
-    if (k0Lines.isEmpty && k0ConfirmSignals.isEmpty) return;
+    // 层级早生成开启时，首确认前也要用预锚动态单元画构建中虚线；
+    // 种子线已由 _drawSeedPhaseLines 隐藏，因此只剩这一条。
+    if (!earlyDynamicUnit && k0Lines.isEmpty && k0ConfirmSignals.isEmpty) return;
 
     // 十字线 as-of：只展示已确认且 <= asOf 的 K0连线，与 K1 逐K当下冻结口径对齐
     final asOf = segAsOf;
@@ -3637,6 +3653,17 @@ class _KlineCompositePainter extends CustomPainter {
     return null;
   }
 
+  /// 合并帧是否就是该层种子框（与 LevelSnap.seed_box_* 几何对齐）。
+  /// K0 窗口的第一组合并帧与种子框是同一矩形；隐藏种子框时需一并跳过。
+  bool _isSeedBoxFrame(KlineCombineFrame f, int level) {
+    final snap = _asOfSeedSnap(level);
+    if (snap == null || snap.seedBoxSeq < 0) return false;
+    return f.x1 == snap.seedBoxX1 &&
+        f.x2 == snap.seedBoxX2 &&
+        (f.high - snap.seedBoxHigh).abs() < 1e-9 &&
+        (f.low - snap.seedBoxLow).abs() < 1e-9;
+  }
+
   double _polePriceAt(int x, {required bool useHigh}) {
     if (x < 0 || x >= bars.length) return 0;
     return useHigh ? bars[x].high : bars[x].low;
@@ -3652,6 +3679,7 @@ class _KlineCompositePainter extends CustomPainter {
     required int level,
     required ChartLevelLineStyle? style,
   }) {
+    if (!seedPhaseVisible(earlyDynamicUnit: earlyDynamicUnit)) return;
     _drawSeedUnknownOpenTip(
       canvas,
       w,
@@ -3795,6 +3823,7 @@ class _KlineCompositePainter extends CustomPainter {
     required int level,
     List<double> buildingDashPattern = const [4, 3],
   }) {
+    if (!seedPhaseVisible(earlyDynamicUnit: earlyDynamicUnit)) return;
     final snap = _asOfSeedSnap(level);
     if (snap == null || snap.seedBoxSeq < 0) return;
     if (snap.seedBoxX1 < 0 || snap.seedBoxX2 < 0) return;
@@ -5675,6 +5704,12 @@ class _KlineCompositePainter extends CustomPainter {
     double slotW,
   ) {
     if (combineFrames.isEmpty) return;
+    // 开关开时，K0 合并帧的第一组就是种子框（与 _drawSeedBoxOverlay 同矩形）；
+    // 种子框已要求删除，这里一并跳过，否则只隐藏 overlay 仍会留下同一只框。
+    final frames = earlyDynamicUnit && _isSeedBoxFrame(combineFrames.first, 0)
+        ? combineFrames.sublist(1)
+        : combineFrames;
+    if (frames.isEmpty) return;
     // 末组=构建中合并（虚线）；前组=已冻结合并（实线）。
     // 信号取 CombineEngine.groups 末项（已在 combineFrames 末尾），不是 activeUnit（那是进行中段）。
     // 方案B：K0 displayKn=0
@@ -5686,7 +5721,7 @@ class _KlineCompositePainter extends CustomPainter {
       plotH,
       barW,
       slotW,
-      combineFrames,
+      frames,
       k0Style.color,
       k0Style.color.withValues(alpha: 0.13),
       lastAsBuilding: showBuildingDash,
@@ -7838,6 +7873,7 @@ class _KlineCompositePainter extends CustomPainter {
         oldDelegate.subIndicators != subIndicators ||
         oldDelegate.truncationCheck != truncationCheck ||
         oldDelegate.showBuildingDash != showBuildingDash ||
+        oldDelegate.earlyDynamicUnit != earlyDynamicUnit ||
         oldDelegate.subChipBarHeight != subChipBarHeight ||
         oldDelegate.defaultK0Policy != defaultK0Policy ||
         oldDelegate.judgmentHistoryByKn != judgmentHistoryByKn ||

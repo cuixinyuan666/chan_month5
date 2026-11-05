@@ -651,6 +651,11 @@ LevelLineEndpoint? seedBoxDepartEndpoint({
   return null;
 }
 
+/// 主图是否绘制种子框/种子相虚线。
+/// 「层级早生成动态单元」开启时，首段由预锚动态单元接管，种子框、种子开口与 ABC 全部不画；
+/// 关闭时保持经典种子绘制。只影响主图绘制，不影响种子数据与相邻比例指标。
+bool seedPhaseVisible({required bool earlyDynamicUnit}) => !earlyDynamicUnit;
+
 /// 种子 UNKNOWN 开口虚线（方案2·D2·S-b，**全层同构**：K1/K2/…/Kn 同一函数、同口径）：
 /// - 仅 `firstFxState==UNKNOWN` 且 `seedLeaveDir!=0`（已有 group1，「离开种子」方向）；
 /// - 仅 group0 时 leaveDir=0 → 不画连线，只留虚线种子框；

@@ -3731,8 +3731,8 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
           title: const Text('层级早生成动态单元', style: TextStyle(fontSize: 13)),
           subtitle: Text(
             _earlyDynamicUnit
-                ? '已开启（K0首根见K1动态；首确认当根见下一层动态）'
-                : '已关闭（经典口径：等引擎自己攒够输入）',
+                ? '已开启（动态K取高高；种子框不画）'
+                : '已关闭（经典口径：种子框照旧）',
             style: const TextStyle(fontSize: 11),
           ),
           value: _earlyDynamicUnit,
@@ -5332,10 +5332,15 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
             '· 递归：Kn 的 idx=0 确认当根，K(n+1) 的 idx=0 以动态态出现。\n'
             '· 动态单元只是该层首个自然段的“演化中形态”，不合成确认段、'
             '不重编号；该层自己首个分型确认时，由经典流程转正为同一个 idx=0。\n'
+            '· 动态期高低取「高高」：起点极点→当步 K，high 取最高 high，'
+            'low 取最高的 low；确认当根起恢复确认段真实 OHLC。\n'
+            '· 种子框、种子开口虚线、种子 ABC 不画；K0 首确认前保留一条'
+            '预锚动态单元的构建中虚线。\n'
             '· 参与全链路：主/副图、中枢/买卖点、采样钟、冻结仓与回测同一口径。\n\n'
             '关闭\n'
             '· 回到经典口径：必须等引擎自己攒够输入，才出现该层首个单元；'
-            'K1/K2 窗口相应延后可用。\n\n'
+            'K1/K2 窗口相应延后可用。\n'
+            '· 种子框与经典 K0 早退逻辑照旧。\n\n'
             '说明\n'
             '· 动态期方向/高低允许随结构修正；确认当根以实际分型为准。\n'
             '· 切换开关会清空冻结历史并从当前可见前缀重放，采样钟同步重算。\n\n'
