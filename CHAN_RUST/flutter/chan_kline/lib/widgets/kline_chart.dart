@@ -3574,24 +3574,10 @@ class _KlineCompositePainter extends CustomPainter {
     double plotH,
     double slotW,
   ) {
-    final asOf = segAsOf;
-    final tailIdx = asOf ?? (bars.isEmpty ? -1 : bars.last.idx);
-    final hasBuildingInput = tailIdx >= 0 &&
-        asOfK1Bars(
-          bars: bars,
-          levels: levels,
-          barFeatures: barFeatures,
-          defaultK0Policy: defaultK0Policy,
-          asOf: tailIdx,
-          includeBuilding: true,
-        ).isNotEmpty;
-    if (k0Lines.isEmpty &&
-        k0ConfirmSignals.isEmpty &&
-        !hasBuildingInput) {
-      return;
-    }
+    if (k0Lines.isEmpty && k0ConfirmSignals.isEmpty) return;
 
     // 十字线 as-of：只展示已确认且 <= asOf 的 K0连线，与 K1 逐K当下冻结口径对齐
+    final asOf = segAsOf;
     final segs = (asOf == null)
         ? k0Lines
         : k0Lines.where((s) => s.endConfirmX <= asOf).toList();

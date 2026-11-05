@@ -25,9 +25,6 @@ const Map<String, RobotVerifySuiteMeta> kRobotVerifySuiteMetas = {
     id: 'e2e_20261010',
     continuousStepFreeze: true,
   ),
-  'early_layer_20261105': RobotVerifySuiteMeta(
-    id: 'early_layer_20261105',
-  ),
 };
 
 RobotVerifySuiteMeta? metaForSuite(String suiteId) =>

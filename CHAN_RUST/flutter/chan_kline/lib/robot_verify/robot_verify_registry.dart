@@ -1,5 +1,4 @@
 import 'robot_verify_model.dart';
-import 'suites/early_layer_20261105.dart';
 import 'suites/e2e_20261010.dart';
 import 'suites/indicator_search_opt_20260930.dart';
 import 'suites/jiyou_keypoint_20261001.dart';
@@ -23,11 +22,6 @@ Future<List<RobotVerifyPhase>> runRobotVerifySuitePhases({
       );
     case kE2e20261010SuiteId:
       return runE2e20261010Phases(
-        klineRoot: klineRoot,
-        runFlutterTest: !skipFlutterTest,
-      );
-    case kEarlyLayer20261105SuiteId:
-      return runEarlyLayer20261105Phases(
         klineRoot: klineRoot,
         runFlutterTest: !skipFlutterTest,
       );
