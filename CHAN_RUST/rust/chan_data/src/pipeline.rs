@@ -436,6 +436,37 @@ fn kn_unit_ohlcv(
     )
 }
 
+/// 预锚动态单元 OHLCV（层级早生成专用）：
+/// 区间 [begin_pole, end_x] 内 high 取最高 high，low 取最高 low（「高高」）。
+/// open/close/volume 与经典单元同口径；确认后由 on_confirm(First) 的 kn_unit_ohlcv 接管。
+fn pre_anchor_unit_ohlcv(
+    bars: &[KlineBar],
+    dir: i32,
+    begin_pole: i32,
+    end_x: i32,
+    begin_fx_high: f64,
+    begin_fx_low: f64,
+) -> (f64, f64, f64, f64, f64) {
+    let open = kn_segment_open(dir, begin_fx_high, begin_fx_low);
+    if bars.is_empty() {
+        return (open, open, open, open, 0.0);
+    }
+    let start = (begin_pole.max(0) as usize).min(bars.len() - 1);
+    let end = (end_x.max(0) as usize).min(bars.len() - 1);
+    if start > end {
+        return (open, open, open, open, 0.0);
+    }
+    let mut hi = f64::NEG_INFINITY;
+    let mut lo = f64::NEG_INFINITY; // 关键：low 也取最高，而不是最低
+    let mut vol = 0.0;
+    for b in &bars[start..=end] {
+        hi = hi.max(b.high);
+        lo = lo.max(b.low);
+        vol += b.volume;
+    }
+    (open, hi, lo, bars[end].close, vol)
+}
+
 fn make_unit_bar(
     bars: &[KlineBar],
     idx: i64,
@@ -622,7 +653,7 @@ impl LevelState {
             return None;
         }
         let (open, high, low, close, volume) =
-            kn_unit_ohlcv(bars, dir, begin_pole, end_x, g0.high, g0.low);
+            pre_anchor_unit_ohlcv(bars, dir, begin_pole, end_x, g0.high, g0.low);
         Some(LevelUnitBar {
             idx: 0,
             dir,
@@ -2701,6 +2732,12 @@ mod tests {
         assert_eq!((s0.unit_x1, s0.unit_x2), (0, 0));
         assert_eq!(s0.unit_dir, 1, "仅一组时首根阳线兜底为向上首段");
         assert!(!s0.seed_confirmed);
+        // 「高高」：bar0 单根区间 [0,0] → high=最高 high，low=最高 low；不再是一字线
+        assert_eq!(s0.unit_open, 9.0);
+        assert_eq!(s0.unit_high, 10.0);
+        assert_eq!(s0.unit_low, 9.0);
+        assert_eq!(s0.unit_close, 10.0);
+        assert_eq!(s0.unit_volume, 1.0);
 
         // bar 1（首确认前）：仍是同一预锚单元 idx=0，末端跟到当根；
         // 第二组向下离开种子 → 方向翻为 -1（动态期允许随结构修正）
@@ -2711,6 +2748,12 @@ mod tests {
         // 预锚末形态与首确认段起点/方向同口径（A 点=种子极点）
         assert_eq!(s1.unit_x1, pr.levels[0].segments[0].begin_pole_x);
         assert_eq!(s1.unit_dir, pr.levels[0].segments[0].dir);
+        // 高高：区间 [0,1] → high=max(10,9)=10，low=max(9,8)=9（经典 min low 会是 8）
+        assert_eq!(s1.unit_open, 10.0);
+        assert_eq!(s1.unit_high, 10.0);
+        assert_eq!(s1.unit_low, 9.0);
+        assert_eq!(s1.unit_close, 9.0);
+        assert_eq!(s1.unit_volume, 2.0);
 
         // 首确认当根 bar 2：结构层 0 冻结段 idx=0；结构层 1 同根出现预锚 idx=0
         let s2 = &pr.bar_level_snaps[2];
@@ -2719,6 +2762,16 @@ mod tests {
         assert_eq!(pr.levels[0].unit_bars[0].confirm_x, 2);
         assert_eq!(s2[1].unit_idx, Some(0), "K2 预锚动态单元应在首确认同根出现");
         assert_eq!(s2[1].unit_dir, -1);
+        // 全层同构的高高：level1 的 g0 为首个 level0 单元 [0,1]，begin_pole=0，end_x=2
+        assert_eq!(s2[1].unit_open, 10.0);
+        assert_eq!(s2[1].unit_high, 10.5);
+        assert_eq!(s2[1].unit_low, 9.5);
+        assert_eq!(s2[1].unit_close, 10.5);
+        assert_eq!(s2[1].unit_volume, 3.0);
+
+        // 确认当根恢复经典真实 OHLC：low=min(body low, open)=min(8,10)=8，不是动态期的 9
+        assert_eq!(pr.levels[0].unit_bars[0].low, 8.0);
+        assert_eq!(pr.levels[0].segments[0].low, 8.0);
 
         // 转正无重复：unit_bars 中 idx=0 只出现一次；末根进行中单元编号=已冻结段数
         assert_eq!(
@@ -2768,6 +2821,13 @@ mod tests {
             assert_eq!(a.dir, b.dir);
             assert_eq!((a.begin_pole_x, a.end_pole_x), (b.begin_pole_x, b.end_pole_x));
         }
+        // 开关只影响动态展示：确认单元的 OHLCV 也必须逐项一致
+        for (a, b) in on.levels[0].unit_bars.iter().zip(&off.levels[0].unit_bars) {
+            assert_eq!(
+                (a.open, a.high, a.low, a.close, a.volume),
+                (b.open, b.high, b.low, b.close, b.volume)
+            );
+        }
     }
 
     /// 递归：结构层 1 首个确认当根，结构层 1 冻结段 idx=0，结构层 2 出现预锚 idx=0。
@@ -2802,6 +2862,26 @@ mod tests {
             assert_eq!(act.idx, 0);
             assert_eq!(act.x1, l1.segments[0].begin_pole_x);
             assert_eq!(act.dir, l1.segments[0].dir);
+            // 高高：区间 [x1,x2] 内 high=max(high)，low=max(low)
+            let ax1 = act.x1.max(0) as usize;
+            let ax2 = act.x2.max(0) as usize;
+            let mut hi = f64::NEG_INFINITY;
+            let mut lo = f64::NEG_INFINITY;
+            for b in &bars[ax1..=ax2] {
+                hi = hi.max(b.high);
+                lo = lo.max(b.low);
+            }
+            assert_eq!(act.high, hi);
+            assert_eq!(act.low, lo);
+            assert_eq!(act.close, bars[ax2].close);
+            // 无未来：全量 run 在同一 bar 的快照与前缀 run 的 active 单元一致
+            let snap_before = &full.bar_level_snaps[cx - 1];
+            if snap_before.len() >= 2 {
+                assert_eq!(snap_before[1].unit_x2, act.x2);
+                assert_eq!(snap_before[1].unit_high, act.high);
+                assert_eq!(snap_before[1].unit_low, act.low);
+                assert_eq!(snap_before[1].unit_close, act.close);
+            }
         }
 
         // 确认当根前缀：结构层 2 出现预锚动态单元 idx=0
