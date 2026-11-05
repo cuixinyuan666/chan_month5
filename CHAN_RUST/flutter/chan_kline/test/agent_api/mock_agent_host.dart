@@ -54,6 +54,7 @@ class MockAgentHost implements AgentApiHost {
   MathIndicatorConfig _math =
       const MathIndicatorConfig(bollN: 20, donchianN: 20, regressK: 2.0);
   bool _trunc = true;
+  bool _earlyDynamic = true;
 
   @override
   Future<String> setIndicators({
@@ -91,6 +92,8 @@ class MockAgentHost implements AgentApiHost {
         _tick = _tick.copyWith(bucketStep: change.asNum);
       case AgentConfigKey.truncationCheck:
         _trunc = change.asBool!;
+      case AgentConfigKey.earlyDynamicUnit:
+        _earlyDynamic = change.asBool!;
       case AgentConfigKey.bollN:
         _math = _math.copyWith(bollN: change.asInt);
       case AgentConfigKey.donchianN:
@@ -328,6 +331,8 @@ class MockAgentHost implements AgentApiHost {
 
   @override
   bool get truncationCheck => _trunc;
+
+  bool get earlyDynamicUnit => _earlyDynamic;
 
   @override
   void stepTo(int idx) {

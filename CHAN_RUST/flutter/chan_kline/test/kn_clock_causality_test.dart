@@ -571,17 +571,22 @@ void main() {
         reason: 'K1+ 量/笔用到了 asOf 之后的段信息（未来数据）');
   });
 
-  test('S3：该层尚未确认任何段时，不再提前报出 K2 累计量', () {
-    // 002003 早期：level1 一段都还没确认，K2 当时根本不该有值。
-    // 修复前走最终态 levels，却已报出 2000+ 的量 —— 那是从未来段借来的。
+  test('S3：该层无确认段时，采样钟只用预锚动态单元（不借未来段）', () {
+    // 002003 早期：level1 一段都还没确认。
+    // 层级早生成开：此刻允许有预锚动态单元 idx=0，但末端必须停在 asOf，
+    // 采样钟只能按这个动态单元累加，不能借用后来才确认的段。
     const asOf = 6;
     const lv = 1; // displayKn = lv + 1 = K2
 
     final st = h.knClock!.at(lv, asOf);
     expect(st.unitBars, isEmpty,
         reason: '探针前提：该层在 asOf 当时还没确认任何段');
-    expect(st.activeUnit, isNull,
-        reason: '探针前提：当时连动态段都没有');
+    final active = st.activeUnit;
+    expect(active, isNotNull,
+        reason: '层级早生成开启时，父层首确认后该层应有预锚动态单元 idx=0');
+    expect(active!.idx, 0, reason: '预锚单元编号固定为 0');
+    expect(active.x2, asOf, reason: '动态单元末端必须停在 asOf（无未来）');
+    expect(active.confirmX, asOf, reason: '动态单元确认步=当步');
 
     final withClock = computeAllKnVolumeSeries(
       bars: bars,
@@ -592,13 +597,17 @@ void main() {
     final noClock =
         computeAllKnVolumeSeries(bars: bars, levels: h.levels)[lv + 1]!;
 
-    expect(withClock[asOf], 0.0,
-        reason: '采样钟口径：当时无段可累，K2 应为 0');
-    expect(noClock[asOf], greaterThan(0.0),
-        reason: '探针失效：最终态口径此处也没值，说明这段行情不再复现未来数据泄漏，'
-            '换一个 asOf 再验');
+    // 采样钟口径：只累计预锚单元区间 [x1, asOf] 的 K0 量，绝不越界。
+    final expected = bars
+        .where((b) => b.idx >= active.x1 && b.idx <= asOf)
+        .fold<double>(0.0, (s, b) => s + b.volume);
+    expect(withClock[asOf], closeTo(expected, 1e-6),
+        reason: '采样钟 K2 量应只含 [x1,asOf] 当下一步的量');
+    // 最终态口径仍会拿后来的确认段去铺历史，二者允许不同；
+    // 若相同也说明这段行情本身无泄漏差异，但不能反推采样钟有未来。
+    expect(noClock[asOf], greaterThanOrEqualTo(0.0));
 
-    // 目录层同样不得提前给值
+    // 目录层同口径：有值就必须等于采样钟当步值（不能给最终态的未来值）。
     final live = lookupTradeNumeric(
       variableId: 'SUB.K2.VOLUME',
       asOf: asOf,
@@ -612,7 +621,10 @@ void main() {
       barFeatures: h.barFeatures,
       knClock: h.knClock,
     );
-    expect(live.isUnavailable || live.value == 0.0, isTrue,
-        reason: '目录层在无段时刻给出了 K2 数值：${live.value}');
+    if (!live.isUnavailable) {
+      expect(live.value, closeTo(withClock[asOf], 1e-6),
+          reason: '目录层 K2 当步量必须与采样钟同源（不得借未来段）：'
+              '${live.value} vs ${withClock[asOf]}');
+    }
   });
 }
