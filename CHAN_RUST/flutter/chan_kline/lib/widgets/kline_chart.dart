@@ -5488,12 +5488,14 @@ class _KlineCompositePainter extends CustomPainter {
     } else {
       // 构建中 N 段 = 本层（level）自己的进行中段；虚拟单元取 level 自身的
       // 冻段+active（与 _drawOneLevelLines 的实线同源）。
+      // 预锚单元只服务下一窗口 K 蜡烛，不得在本层画成构建中连线。
       virtualUnits = asOfLevelVirtualK1Bars(
         levels: levels,
         barFeatures: barFeatures,
         level: level,
         asOf: tailIdx,
         includeBuilding: true,
+        includePreAnchor: false,
       );
       frozenIdx = {
         for (final s in asOfLevelSegments(

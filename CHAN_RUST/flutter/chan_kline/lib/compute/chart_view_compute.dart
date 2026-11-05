@@ -314,6 +314,8 @@ List<LevelSegmentN> asOfLevelSegments({
     level: level,
     asOf: asOf,
     includeBuilding: true,
+    // 预锚单元不是连线；该层无确认段时基准应保持为空（经典口径）。
+    includePreAnchor: false,
   );
   final frozenIdx = <int>{for (final s in frozen) s.idx};
   for (final l in computeDisplayBuildingLines(
@@ -544,12 +546,17 @@ List<K1Bar> levelBundleVirtualK1Bars(LevelBundle bundle) {
 }
 
 /// as-of 展示轨虚拟单元（全层同构）：冻结段 + 可选当步进行中（LevelSnap）。
+///
+/// [includePreAnchor]：是否把「预锚动态单元」计入。预锚单元只服务下一窗口的
+/// K 蜡烛/合并框（以及虚拟K、采样钟、中枢/买卖点）；本层连线、相邻比例、
+/// 回归基准必须传 false，否则该层还没有任何确认段时会多画一条构建中连线。
 List<K1Bar> asOfLevelVirtualK1Bars({
   required List<LevelBundle> levels,
   required List<BarCrosshairFeature> barFeatures,
   required int level,
   required int asOf,
   bool includeBuilding = true,
+  bool includePreAnchor = true,
 }) {
   // 方案B：按 lv.level==level 查找，允许 level==0
   if (level < 0) return const [];
@@ -593,6 +600,9 @@ List<K1Bar> asOfLevelVirtualK1Bars({
   if (!includeBuilding) return frozen;
 
   final s = snap!;
+  // 预锚动态单元 = 该层此刻还没有任何确认段时的“演化中首段”。
+  // 它只给下一窗口当 K 蜡烛（快照 unit_*），不能当成本层构建中段喂给连线。
+  if (!includePreAnchor && frozen.isEmpty) return frozen;
   final contained = frozen.any((v) => v.idx == unitIdx && v.x2 >= s.unitX2);
   if (!contained && s.unitX1 >= 0 && s.unitX2 >= s.unitX1) {
     frozen.add(K1Bar(
