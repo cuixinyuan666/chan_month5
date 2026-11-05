@@ -232,6 +232,9 @@ struct CombineRequest {
     /// 缺省=开启截断（与 PipelineOptions::default 一致）
     #[serde(default)]
     truncation_check: Option<bool>,
+    /// 缺省=开启层级早解锁（与 PipelineOptions::default 一致）
+    #[serde(default)]
+    early_layer_dynamic: Option<bool>,
     /// 缺省=中枢共用配置（need_combine/combine_mode）
     #[serde(default)]
     zs_config: Option<ZSConfig>,
@@ -249,6 +252,9 @@ fn parse_combine_request(raw: &str) -> Result<(Vec<KlineBar>, PipelineOptions), 
     let mut opt = PipelineOptions::default();
     if let Some(v) = req.truncation_check {
         opt.truncation_check = v;
+    }
+    if let Some(v) = req.early_layer_dynamic {
+        opt.early_layer_dynamic = v;
     }
     if let Some(z) = req.zs_config {
         opt.zs_config = z;
@@ -282,6 +288,8 @@ fn parse_pipeline_opt(raw: &str) -> Result<PipelineOptions, String> {
         #[serde(default)]
         truncation_check: Option<bool>,
         #[serde(default)]
+        early_layer_dynamic: Option<bool>,
+        #[serde(default)]
         zs_config: Option<ZSConfig>,
     }
     let req: OptReq =
@@ -290,13 +298,16 @@ fn parse_pipeline_opt(raw: &str) -> Result<PipelineOptions, String> {
     if let Some(v) = req.truncation_check {
         opt.truncation_check = v;
     }
+    if let Some(v) = req.early_layer_dynamic {
+        opt.early_layer_dynamic = v;
+    }
     if let Some(z) = req.zs_config {
         opt.zs_config = z;
     }
     Ok(opt)
 }
 
-/// 创建流水线会话。入参 JSON：`{ truncation_check?, zs_config? }`（可空/`{}`）。
+/// 创建流水线会话。入参 JSON：`{ truncation_check?, early_layer_dynamic?, zs_config? }`（可空/`{}`）。
 /// 返回 `{ ok, data: { handle: u64 } }`
 #[no_mangle]
 pub extern "C" fn chan_pipeline_create(opt_json: *const c_char) -> *mut c_char {

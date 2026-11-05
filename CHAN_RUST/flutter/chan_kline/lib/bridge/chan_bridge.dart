@@ -379,11 +379,13 @@ class ChanBridge {
   KlineCombineBundle buildKlineCombineBundle(
     List<KlineBar> bars, {
     bool truncationCheck = true,
+    bool earlyLayerDynamic = true,
   }) {
     ensureInitialized();
     final payload = <String, dynamic>{
       'bars': bars.map((b) => b.toJson()).toList(),
       'truncation_check': truncationCheck,
+      'early_layer_dynamic': earlyLayerDynamic,
     };
     final ptr = _toNative(jsonEncode(payload));
     try {
@@ -400,9 +402,15 @@ class ChanBridge {
   }
 
   /// Phase 1.5：创建持久 PipelineState 会话（Flutter 只持 handle）。
-  int pipelineCreate({bool truncationCheck = true}) {
+  int pipelineCreate({
+    bool truncationCheck = true,
+    bool earlyLayerDynamic = true,
+  }) {
     ensureInitialized();
-    final payload = <String, dynamic>{'truncation_check': truncationCheck};
+    final payload = <String, dynamic>{
+      'truncation_check': truncationCheck,
+      'early_layer_dynamic': earlyLayerDynamic,
+    };
     final ptr = _toNative(jsonEncode(payload));
     try {
       final data = _decode(_takeJson(_pipelineCreate(ptr)));
@@ -537,13 +545,15 @@ class ChanPipelineSession {
   ChanPipelineSession._(
     this._bridge,
     this.handle,
-    this.truncationCheck, {
+    this.truncationCheck,
+    this.earlyLayerDynamic, {
     this.preferDelta = true,
   });
 
   final ChanBridge _bridge;
   final int handle;
   final bool truncationCheck;
+  final bool earlyLayerDynamic;
 
   /// false=全程 Full Snapshot（对照路径）；true=首包 Full + 后续 Delta。
   final bool preferDelta;
@@ -557,15 +567,20 @@ class ChanPipelineSession {
   /// 创建会话（Rust 侧 new PipelineState）
   factory ChanPipelineSession.create({
     bool truncationCheck = true,
+    bool earlyLayerDynamic = true,
     bool preferDelta = true,
     ChanBridge? bridge,
   }) {
     final b = bridge ?? ChanBridge.instance;
-    final h = b.pipelineCreate(truncationCheck: truncationCheck);
+    final h = b.pipelineCreate(
+      truncationCheck: truncationCheck,
+      earlyLayerDynamic: earlyLayerDynamic,
+    );
     return ChanPipelineSession._(
       b,
       h,
       truncationCheck,
+      earlyLayerDynamic,
       preferDelta: preferDelta,
     );
   }

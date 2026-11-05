@@ -457,6 +457,9 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
   late final DateTime _startedAt = DateTime.now();
   /// 截断监察：开=当前口径；关=添加截断前旧行为（暴力反转被吸收）
   bool _truncationCheck = true;
+
+  /// 层级早解锁：开=首根K0起K1动态、Kn首段确认即Kn+1动态（默认）；关=等下层首次分型确认后再解上层
+  bool _earlyLayerDynamic = true;
   /// 构建中合并框（虚线）开关：开=末组合并画虚线；关=全部实线（默认开）
   bool _showBuildingDash = true;
   /// 筹码分布配置（落盘 .chan_chip_config.json）
@@ -1135,6 +1138,7 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
 
   @override
   bool get truncationCheck => _truncationCheck;
+  bool get earlyLayerDynamic => _earlyLayerDynamic;
 
   @override
   List<KlineBar> get bars => List<KlineBar>.unmodifiable(_allBars);
@@ -1876,6 +1880,16 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
     _logCombineSummary(prefix: '截断开关后汇总');
   }
 
+  /// 层级早解锁开关（与截断开关同口径：改 opt → 清冻结仓 → 重建 PipelineState）。
+  void _setEarlyLayerDynamic(bool v, {StateSetter? sheetSetState}) {
+    _panelUi(() => _earlyLayerDynamic = v, sheetSetState: sheetSetState);
+    _clearSessionFreezeHistory();
+    _disposePipelineSession();
+    _msgHistory.append('层级早解锁=${v ? "开" : "关"}，重算当前步进');
+    _rebuildCombine();
+    _logCombineSummary(prefix: '层级早解锁后汇总');
+  }
+
   @override
   AgentHealth health() {
     return AgentHealth(
@@ -1983,10 +1997,12 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
   KlineCombineBundle _bundleForVisible(List<KlineBar> visible) {
     if (_pipelineSession == null ||
         !_pipelineSession!.isAlive ||
-        _pipelineSession!.truncationCheck != _truncationCheck) {
+        _pipelineSession!.truncationCheck != _truncationCheck ||
+        _pipelineSession!.earlyLayerDynamic != _earlyLayerDynamic) {
       _disposePipelineSession();
       _pipelineSession = ChanPipelineSession.create(
         truncationCheck: _truncationCheck,
+        earlyLayerDynamic: _earlyLayerDynamic,
         bridge: _bridge,
       );
     }
@@ -3691,6 +3707,27 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
           ),
         ),
         const SizedBox(height: 8),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          dense: true,
+          title: const Text('层级早解锁', style: TextStyle(fontSize: 13)),
+          subtitle: Text(
+            _earlyLayerDynamic
+                ? '已开启（首K即上层动态，默认）'
+                : '已关闭（经典：等下层首次分型确认）',
+            style: const TextStyle(fontSize: 11),
+          ),
+          value: _earlyLayerDynamic,
+          onChanged: _busy
+              ? null
+              : (v) => _setEarlyLayerDynamic(v, sheetSetState: sheetSetState),
+          secondary: IconButton(
+            tooltip: '层级早解锁说明',
+            icon: const Icon(Icons.help_outline, size: 18),
+            onPressed: _showEarlyLayerDynamicHelp,
+          ),
+        ),
+        const SizedBox(height: 8),
         // 构建中/未确认虚线开关：末组合并框 + K0/K1/KN 构建中连线统一用虚线区分，默认开
         SwitchListTile(
           contentPadding: EdgeInsets.zero,
@@ -5256,6 +5293,39 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
         ],
       ),
     ));
+  }
+
+  void _showEarlyLayerDynamicHelp() {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => SelectionArea(
+        child: AlertDialog(
+          title: const Text('层级早解锁说明'),
+          content: const SingleChildScrollView(
+            child: Text(
+              '作用：控制「上一层动态 K 线」何时出现（主图连线、虚拟 K、回测采样钟等全链路）。\n\n'
+              '开启（默认）\n'
+              '· K0 idx=0：K1 idx=0 即生成且为动态（不必等 K0 首次分型确认）。\n'
+              '· 当 Kn idx=0 在本层确认：同根 K 上 Kn+1 idx=0 动态出现，且本层 idx=1 动态继续。\n'
+              '· 展示用 early 单元不进永久 feed，不改变下层分型确认门槛。\n\n'
+              '关闭\n'
+              '· 恢复改前经典口径：通常要等下层首次分型确认后，上层才有完整永久/展示链。\n'
+              '· 便于与旧行为对照。\n\n'
+              '操作步骤\n'
+              '1. 打开右上角设置；\n'
+              '2. 拨动「层级早解锁」；\n'
+              '3. 步进与冻结仓会重算并刷新主/副图。',
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('知道了'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   void _showPeriodHelp() {

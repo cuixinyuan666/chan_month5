@@ -38,6 +38,8 @@ pub struct PipelineOptions {
     pub truncation_check: bool,
     /// 原生缠论中枢（ZS）配置
     pub zs_config: ZSConfig,
+    /// 层级早解锁：首根 K0 起即生成 K1 动态；Kn 首段确认当根即生成 Kn+1 动态（关=旧口径：等下层首次分型确认后再解上层）
+    pub early_layer_dynamic: bool,
 }
 
 impl Default for PipelineOptions {
@@ -47,6 +49,7 @@ impl Default for PipelineOptions {
             max_levels: 16,
             truncation_check: true,
             zs_config: ZSConfig::default(),
+            early_layer_dynamic: true,
         }
     }
 }
@@ -454,6 +457,109 @@ fn make_unit_bar(
     }
 }
 
+/// 层级早解锁：K0 尚无确认段时，K1 idx=0 动态（与 Flutter `preConfirmDefaultK1Bar` 同口径）。
+fn bootstrap_l0_to_l1(bars: &[KlineBar], bar_x: i32) -> Option<LevelUnitBar> {
+    if bars.is_empty() || bar_x < 0 {
+        return None;
+    }
+    let end = (bar_x as usize).min(bars.len().saturating_sub(1));
+    let mut hi = f64::NEG_INFINITY;
+    let mut lo = f64::INFINITY;
+    let mut vol = 0.0;
+    for i in 0..=end {
+        hi = hi.max(bars[i].high);
+        lo = lo.min(bars[i].low);
+        vol += bars[i].volume;
+    }
+    let dir = if bars[end].close >= bars[0].open {
+        1
+    } else {
+        -1
+    };
+    Some(LevelUnitBar {
+        idx: 0,
+        dir,
+        x1: 0,
+        x2: bar_x,
+        open: bars[0].open,
+        high: hi,
+        low: lo,
+        close: bars[end].close,
+        volume: vol,
+        confirm_x: bar_x,
+    })
+}
+
+/// 层级早解锁：下层已有冻段 + 进行中段 → 子层 idx=0 动态。
+fn bootstrap_child_from_parent(
+    parent: &LevelState,
+    bars: &[KlineBar],
+    bar_x: i32,
+) -> Option<LevelUnitBar> {
+    if parent.segments.is_empty() {
+        return None;
+    }
+    let act = parent.active_unit_now(bars)?;
+    Some(LevelUnitBar {
+        idx: 0,
+        dir: act.dir,
+        x1: act.x1,
+        x2: act.x2,
+        open: act.open,
+        high: act.high,
+        low: act.low,
+        close: act.close,
+        volume: act.volume,
+        confirm_x: bar_x,
+    })
+}
+
+/// 每根 K 末：按「层级早解锁」规则写入各层 `early_dynamic`（关则清空）。
+fn apply_early_layer_bootstrap(
+    levels: &mut Vec<LevelState>,
+    bar_x: i32,
+    bars: &[KlineBar],
+    opt: &PipelineOptions,
+) {
+    if !opt.early_layer_dynamic {
+        for lv in levels.iter_mut() {
+            lv.early_dynamic = None;
+        }
+        return;
+    }
+    for lv in levels.iter_mut() {
+        lv.early_dynamic = None;
+    }
+    for li in 0..opt.max_levels {
+        if li >= levels.len() {
+            break;
+        }
+        let child_li = li + 1;
+        if child_li >= opt.max_levels {
+            break;
+        }
+        if child_li < levels.len() && !levels[child_li].segments.is_empty() {
+            continue;
+        }
+        let parent = &levels[li];
+        let unit = if parent.segments.is_empty() {
+            if li == 0 {
+                bootstrap_l0_to_l1(bars, bar_x)
+            } else {
+                None
+            }
+        } else {
+            bootstrap_child_from_parent(parent, bars, bar_x)
+        };
+        if let Some(u) = unit {
+            if levels.len() <= child_li {
+                levels.push(LevelState::new(child_li as i32, opt));
+            }
+            levels[child_li].early_dynamic = Some(u);
+        }
+    }
+}
+
 /// 最近已用端点分型（锚定配对基准）
 #[derive(Debug, Clone)]
 struct Anchor {
@@ -525,6 +631,8 @@ struct LevelState {
     frozen_sell2_x: HashMap<i64, i32>,
     /// 本层 BSP verdict 终态冻结（跨步；不回写 BSP）
     verdict_store: HashMap<String, crate::bs_eval::BsVerdictFrame>,
+    /// 层级早解锁：展示轨/虚拟K 用的上层 idx=0 动态单元（不进永久 feed / 不改合并引擎）
+    early_dynamic: Option<LevelUnitBar>,
 }
 
 /// 有效性校验：顶极值 > 底极值（最低限度，可配置关闭）
@@ -569,6 +677,7 @@ impl LevelState {
             frozen_buy2_x: HashMap::new(),
             frozen_sell2_x: HashMap::new(),
             verdict_store: HashMap::new(),
+            early_dynamic: None,
         }
     }
 
@@ -1229,11 +1338,15 @@ impl LevelState {
 
     fn export(&mut self, bars: &[KlineBar]) -> LevelBundleOut {
         // 末步进行中单元：prov 缓存（快照阶段已推进到末K）
-        let active_unit = self.active_unit_now(bars);
+        let active_unit = self
+            .active_unit_now(bars)
+            .or_else(|| self.early_dynamic.clone());
+        // 中枢/BS 仍只认真实冻段 + 真实进行中（不含 early_dynamic 展示注入）
+        let zs_active = self.active_unit_now(bars);
         // 展示轨：冻段 + 进行中 active_unit 喂 find_zs（动态离开不定型，禁未来）
         let n_confirmed = self.segments.len();
         let segs_for_zs =
-            crate::zs::segments_with_optional_active(&self.segments, active_unit.as_ref());
+            crate::zs::segments_with_optional_active(&self.segments, zs_active.as_ref());
         // 帧上 level=显示中枢号(structure+1)，避免与 zs_k0(level=0) 撞号
         let display_zs_level = self.level + 1;
         // 离开才定型：禁「无 active 时强制末枢 is_sure」末态补丁
@@ -1243,7 +1356,7 @@ impl LevelState {
             &self.zs_config,
             n_confirmed,
         );
-        let active_idx = active_unit.as_ref().map(|u| u.idx);
+        let active_idx = zs_active.as_ref().map(|u| u.idx);
         let mut buy1_frames = crate::buy1::find_buy1_with_active(
             &zs_list,
             &segs_for_zs,
@@ -1325,7 +1438,15 @@ impl LevelState {
             first_dir: self.first_dir,
             first_dir_x: self.first_dir_x,
             active_unit,
-            segment_policy: if self.seed_confirmed {
+            segment_policy: if !self.segments.is_empty() {
+                if self.seed_confirmed {
+                    "retained".to_string()
+                } else {
+                    "seed".to_string()
+                }
+            } else if self.early_dynamic.is_some() {
+                "pending".to_string()
+            } else if self.seed_confirmed {
                 "retained".to_string()
             } else {
                 "seed".to_string()
@@ -1657,6 +1778,7 @@ impl PipelineState {
             &self.bars,
             &self.opt,
         );
+        apply_early_layer_bootstrap(&mut self.levels, bar_x, &self.bars, &self.opt);
 
         let bar = &self.bars[i];
         let ksnap = self.levels[0]
@@ -1850,6 +1972,7 @@ pub fn run_pipeline(bars: &[KlineBar], opt: &PipelineOptions) -> PipelineResult 
             confirm_x: bar_x,
         };
         propagate(&mut levels, 0, vec![ku], bar_x, bars, opt);
+        apply_early_layer_bootstrap(&mut levels, bar_x, bars, opt);
 
         // 2) 快照（逐K当下冻结）
         // 进行中单元只读探测仅发生在 snapshot 内（展示用），不在此提前 on_confirm。
@@ -2867,6 +2990,44 @@ mod tests {
         assert!(
             naive.as_secs_f64() > incr.as_secs_f64() * 2.0,
             "期望显著加速(>=2x): naive={naive:?} incr={incr:?}"
+        );
+    }
+
+    #[test]
+    fn early_layer_dynamic_bar0_k1_and_bar8_k2() {
+        let mut opt = PipelineOptions::default();
+        opt.early_layer_dynamic = true;
+        let bars = zigzag(30);
+        let pr0 = run_pipeline(&bars[..=0], &opt);
+        let l1 = pr0
+            .levels
+            .iter()
+            .find(|l| l.level == 1)
+            .expect("bar0 应有 level1");
+        assert!(l1.segments.is_empty(), "bar0 K1 首段仍动态");
+        assert!(l1.active_unit.is_some(), "bar0 应有 K1 idx=0 动态 active");
+        assert_eq!(l1.active_unit.as_ref().unwrap().idx, 0);
+
+        let pr8 = run_pipeline(&bars[..=8], &opt);
+        let l1_8 = pr8.levels.iter().find(|l| l.level == 1).expect("L1");
+        assert!(!l1_8.segments.is_empty(), "bar8 K1 idx=0 应已确认冻段");
+        let l2 = pr8.levels.iter().find(|l| l.level == 2);
+        if l1_8.active_unit.is_some() {
+            assert!(l2.is_some(), "K1 有进行中段时应有 level2");
+            let l2 = l2.unwrap();
+            if l2.segments.is_empty() {
+                assert!(
+                    l2.active_unit.is_some(),
+                    "bar8 K2 idx=0 动态（父层首段已确认路径）"
+                );
+            }
+        }
+
+        opt.early_layer_dynamic = false;
+        let pr0_old = run_pipeline(&bars[..=0], &opt);
+        assert!(
+            pr0_old.levels.iter().all(|l| l.level != 1),
+            "旧口径 bar0 不应创建 level1"
         );
     }
 }
