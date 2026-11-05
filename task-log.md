@@ -5292,6 +5292,13 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 
 ---
 
+### 2026-11-05 — 层级早解锁（默认开）+ 设置开关
+
+- **背景**：用户要求全链路（主图连线/虚拟K/回测采样钟）按新规则：K0 idx=0 即 K1 idx=0 动态；Kn idx=0 确认当根即 Kn+1 idx=0 动态；保留旧逻辑并可切换。
+- **操作**：Rust `PipelineOptions.early_layer_dynamic`（默认 true）+ 每步 `apply_early_layer_bootstrap` 写入 `early_dynamic` 并 export 为 `active_unit`/`pending` 策略；FFI 透传 `early_layer_dynamic`；Flutter 设置「层级早解锁」开关（默认开，关=经典口径），切换时清冻结仓并重建 PipelineSession。
+- **结果**：`cargo test -p chan_data early_layer_dynamic` 通过；`build_rust.ps1` 已编 DLL 并拉起 App（用户手动验收 idx=0/idx=8）。
+- **演示**：test 股票默认数据——idx=0 看 K1 已有 idx=0 动态；步进到 idx=8 看 K1 idx=0 实线 + K1 idx=1 动态 + K2 idx=0 动态；设置关「层级早解锁」对照旧行为。
+
 ### 2026-11-04 14:25 — 桌面快捷方式：智能识别 WorkBuddy 仓库并按需编译启动
 
 - **执行者**：OpenCode
