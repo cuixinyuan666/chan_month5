@@ -5542,3 +5542,17 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **结果**：`test/candle_wick_test.dart` 五项全过。`flutter build windows --debug` 成功，内核快照 21:53，已启动（pid 见本次终端）。未改缠论计算。
 - **演示**：缩放主图使柱体变宽/变窄，影线应成比例变粗/变细，且仍不穿过实体中间。
 - **注意事项**：**未 push**，等用户确认。
+
+### 2026-11-06 22:16 — K线影线再加强 + 步进未确认/确认态动态变粗
+
+- **执行者**：Claude Code Agent
+- **任务类型**：显示层
+- **上下文**：用户反馈动态显示时影线变化不明显，且进入确认态后也应随柱体/状态调节粗细。此前仅为实体约 26%、最粗 8px，且无「构建中 vs 已确认」区分。
+- **关键操作**：
+  1. `candle_wick.dart`：基础比例改为实体约 **32%**，clamp **1～11**；支持 `widthMult`（0.5～1.5）再乘一档。
+  2. `KlineChart` 增加 `stepIdx`（与主界面 `_stepIdx` 一致）， painter 传入；`shouldRepaint` 纳入 `stepIdx`。
+  3. K0 蜡烛：`stepIdx < 0` 时一律按略粗；否则 `idx < stepIdx` 为已走过根略粗（×1.15），`idx == stepIdx` 为当步构建根略细（×0.88）。
+  4. K1/Kn 单元：`confirmX` 有效时 `stepIdx < confirmX` 为构建中略细，`stepIdx >= confirmX` 为已确认略粗。
+- **结果**：`candle_wick_test` 六项全过；`dart analyze` 改动文件无新问题。`flutter build windows --debug` 成功，内核 22:16，已启动（pid 86308）。未改缠论计算。
+- **演示**：步进时看最右一根：未确认时影线略细，步进到确认当步或下根后该段变粗；缩放柱体宽窄时影线同步变化。
+- **注意事项**：**未 push**，等用户确认。
