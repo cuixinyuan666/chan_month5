@@ -192,3 +192,39 @@ List<int> fillLevelWindowSlots({
   out[k0Slot] = first;
   return (out, true);
 }
+
+/// 桌面标题条高度。与 `kDesktopCaptionBarHeight` 同值；
+/// 此处不引用界面文件，保持本文件无 Flutter 依赖。
+const double kLevelBadgeCaptionHeight = 36.0;
+
+/// 桌面图表四周留白。与 `kDesktopShellInset` 同值。
+const double kLevelBadgeShellInset = 4.0;
+
+/// 标题栏右侧窗控占位：设置钮 + 最小化 + 最大化 + 关闭。
+///
+/// 图表铺满后标题栏叠在最上层。分窗只在桌面出现，右上角那一格
+/// （两窗的右侧窗、四窗及以上的右上角窗）的右缘贴着窗口右缘，
+/// 层级标签若贴格子右缘，会正好压在关闭钮上。
+const double kCaptionWindowControlsWidth = kLevelBadgeCaptionHeight * 4;
+
+/// 层级标签与设置钮之间的缝。
+/// 2026-11-06 用户反馈 8 像素仍与设置钮重叠，加大到 56（约一个半按钮宽）。
+const double kLevelBadgeGapBeforeSettings = 56.0;
+
+/// 右上角那一格的层级标签，距该格右缘的像素。
+///
+/// 右上角那格的右缘就在窗口右缘内侧 [paneRightInset] 处，
+/// 与格子本身多宽无关：标签整段落到设置钮左侧。
+/// 其余格子远离标题栏窗控，保持贴格子右缘。
+double levelBadgeRightInset({
+  required bool topRightPane,
+  double paneRightInset = kLevelBadgeShellInset,
+  double captionControlsWidth = kCaptionWindowControlsWidth,
+  double gapBeforeSettings = kLevelBadgeGapBeforeSettings,
+  double edgeInset = 6,
+}) {
+  if (!topRightPane) return edgeInset;
+  final need = captionControlsWidth + gapBeforeSettings - paneRightInset;
+  if (need <= edgeInset) return edgeInset;
+  return need;
+}

@@ -51,11 +51,14 @@ class LevelChartGrid extends StatelessWidget {
         final level = slot < levels.length ? levels[slot] : slot;
         final primary = level == 0;
         final available = level == 0 || level < maxKn;
+        // 右上角那一格会顶到标题栏的设置/关闭钮，标签要让开。
+        final topRightPane = r == 0 && c == grid.cols - 1;
         cells.add(
           Expanded(
             child: _PaneChrome(
               level: level,
               primary: primary,
+              topRightPane: topRightPane,
               child: available
                   ? paneBuilder(context, slot, level, primary)
                   : _EmptyLevelPlaceholder(level: level),
@@ -100,25 +103,32 @@ class _GridDivider extends StatelessWidget {
 ///
 /// 角标只占顶部 24px（`KlineViewport.padT = 28` 之上），不压价格标签；
 /// 用 [IgnorePointer] 包住，绝不抢鼠标。
+///
+/// 右上角那一格（两窗布局的右侧窗、四窗及以上的右上角窗）的标签
+/// 按标题栏窗控宽度左移，落到设置钮左侧，避免压住设置与关闭。
+/// 让位与格子多宽无关：那一格的右缘贴着窗口右缘。
 class _PaneChrome extends StatelessWidget {
   const _PaneChrome({
     required this.level,
     required this.primary,
+    required this.topRightPane,
     required this.child,
   });
 
   final int level;
   final bool primary;
+  final bool topRightPane;
   final Widget child;
 
   @override
   Widget build(BuildContext context) {
+    final right = levelBadgeRightInset(topRightPane: topRightPane);
     return Stack(
       fit: StackFit.expand,
       children: [
         child,
         Positioned(
-          right: 6,
+          right: right,
           top: 3,
           child: IgnorePointer(
             child: DecoratedBox(

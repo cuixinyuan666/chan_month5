@@ -183,4 +183,44 @@ void main() {
       expect(out, slots);
     });
   });
+
+  group('右上角层级标签让位', () {
+    test('贴着窗口右缘的格子：标签落到设置钮左侧', () {
+      // 默认按桌面四周留白计算，不传格子宽度。
+      final right = levelBadgeRightInset(topRightPane: true);
+      expect(
+        right,
+        kCaptionWindowControlsWidth +
+            kLevelBadgeGapBeforeSettings -
+            kLevelBadgeShellInset,
+      );
+      expect(right, greaterThan(6), reason: '必须离开格子右缘，否则压住关闭钮');
+    });
+
+    test('格子右缘已经在窗控左侧：保持贴右缘', () {
+      final right = levelBadgeRightInset(
+        topRightPane: true,
+        paneRightInset: kCaptionWindowControlsWidth + kLevelBadgeGapBeforeSettings + 40,
+      );
+      expect(right, 6);
+    });
+
+    test('不是右上角那一格：不受窗控影响', () {
+      final right = levelBadgeRightInset(
+        topRightPane: false,
+        paneRightInset: 0,
+        captionControlsWidth: kCaptionWindowControlsWidth,
+      );
+      expect(right, 6);
+    });
+
+    test('窗口变窄时让位跟着变，不会算成负数', () {
+      final right = levelBadgeRightInset(
+        topRightPane: true,
+        paneRightInset: 20,
+        captionControlsWidth: 100,
+      );
+      expect(right, 100 + kLevelBadgeGapBeforeSettings - 20);
+    });
+  });
 }
