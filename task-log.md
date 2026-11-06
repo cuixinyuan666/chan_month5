@@ -5450,3 +5450,18 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **结果**：新增 `test/crosshair_level_rows_test.dart` 4 项；视口跟随与分窗联动共 25 项全过；`flutter analyze` 改动文件无错误无警告。
 - **演示**：任意窗口点步进或播放，最新 K 停在距右边界约 1/4；开十字线后鼠标从 K0 窗拖进 K1 窗，十字线跟着走，第二次滚轮单击后信息只剩 K1。
 - **注意事项**：**未 push**，等用户确认。主界面未重启，需重新编译后才能在界面上看到。
+
+---
+
+### 2026-11-06 12:13 — 修复：K1+ 首分型前补构建中虚线、取消种子框
+
+- **执行者**：Claude Code Agent
+- **任务类型**：显示层修复（Dart 绘制，无 Rust 内核改动）
+- **上下文**：用户确认方案 A：首个分型确认前全层统一取高（Rust 预锚单元已实现），K1/K2/K3 取消种子框；首分型前补一条构建中虚线，端点沿用 K0 的 open→close；且只在「层级早生成动态单元」开关开启时生效。
+- **关键操作**：
+  1. 新增 `combineFramesWithoutSeed`（chart_view_compute）：开关开且首组合并帧与本层种子框同矩形时跳过首组；K0/K1/Kn 三个绘制入口统一调用，删除 painter 内重复的 `_isSeedBoxFrame`。
+  2. `_drawBuildingLevelLine` 的 `includePreAnchor` 改为跟随 `earlyDynamicUnit`：开关开且本层尚无确认段时，用预锚单元补一条 open→close 构建中虚线；开关关时保持经典口径（不补线）。
+  3. 新增/调整单测：helper 几何筛选、K1 首分型前虚线 on/off、K1/K2 合并帧跳种子框；旧「预锚单元不画成本层连线」用例改名并限定为相邻比例/经典口径。
+- **结果**：`early_dynamic_unit_test` 8 项、`chart_view_compute_test` 24 项、`k0_building_line_same_price_test` 1 项全过；相关绘制/布局 58 项全过；`flutter analyze` 改动文件无错误（全仓 130 条为基线既有）；`flutter build windows --debug` 成功。全量 `flutter test` 跑到 591 项时出现 5 条失败（chip_profile / incremental_lookup_session ×3 / line_slope），均在主仓基线复跑同样失败，与本轮无关。
+- **演示**：开关开时，K1 窗口从首分型确认前就有一条从本层首单元 open 拉到当前 close 的虚线，种子框不再出现；K2 的种子框首组同样被合并帧跳过。开关关时恢复经典种子框与旧口径。
+- **注意事项**：**未 push**，等用户确认。主界面正被用户使用，本轮未重启 App 做目视验收。
