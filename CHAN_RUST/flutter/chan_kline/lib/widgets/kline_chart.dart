@@ -5855,24 +5855,35 @@ class _KlineCompositePainter extends CustomPainter {
     return (cx1 + cx2) / 2;
   }
 
+  /// 步进当步对应的 **K 线索引 idx**（与 `confirmX` / `bar.idx` 同坐标系）。
+  ///
+  /// [stepIdx] 来自 main 是 **可见 bars 的下标**（0..len-1），不是分钟 K 的 idx。
+  /// 与 confirmX 直接比较会把「未确认」误判成已确认，动态框走实线。
+  int? get _stepAsOfBarIdx {
+    if (bars.isEmpty) return null;
+    if (stepIdx < 0) return bars.last.idx;
+    final i = stepIdx.clamp(0, bars.length - 1);
+    return bars[i].idx;
+  }
+
   /// 影线额外乘档：未到确认步略细，达到确认步及之后略粗。
   ///
-  /// - K1/Kn：[confirmX] 为连线/单元确认当步，`stepIdx < confirmX` 时末根仍在构建。
-  /// - K0 蜡烛没有独立确认步，传 `confirmX == null` 时用 [barIdx] 与 [stepIdx] 比。
+  /// - K1/Kn：[confirmX] 为确认当步 idx；当前步 idx < confirmX 时仍在构建。
+  /// - K0 无 confirm 时：用 [barIdx] 与当步 idx 比。
   double _wickWidthMultForConfirmStep({int? confirmX, required int barIdx}) {
-    if (stepIdx < 0) return 1.15;
+    final cap = _stepAsOfBarIdx;
+    if (cap == null) return 1.15;
     final cx = confirmX;
     if (cx == null || cx < 0) {
-      return barIdx < stepIdx ? 1.15 : 0.88;
+      return barIdx < cap ? 1.15 : 0.88;
     }
-    return stepIdx < cx ? 0.88 : 1.15;
+    return cap < cx ? 0.88 : 1.15;
   }
 
   /// K1/Kn 单元：未到确认步=动态（虚线框），达到确认步=确认（实线框）。
   bool _unitBarIsBuilding({required int confirmX, required int viewX2}) {
-    final cap = stepIdx < 0
-        ? (bars.isEmpty ? viewX2 : bars.last.idx)
-        : stepIdx;
+    final cap = _stepAsOfBarIdx;
+    if (cap == null) return true;
     if (confirmX >= 0) return cap < confirmX;
     return viewX2 > cap;
   }
