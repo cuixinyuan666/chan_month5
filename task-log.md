@@ -5556,3 +5556,17 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **结果**：`candle_wick_test` 六项全过；`dart analyze` 改动文件无新问题。`flutter build windows --debug` 成功，内核 22:16，已启动（pid 86308）。未改缠论计算。
 - **演示**：步进时看最右一根：未确认时影线略细，步进到确认当步或下根后该段变粗；缩放柱体宽窄时影线同步变化。
 - **注意事项**：**未 push**，等用户确认。
+
+### 2026-11-06 23:04 — 分窗副图无「暂无指标」+ 动态K虚线框 + 影线接头不变粗
+
+- **执行者**：Claude Code Agent
+- **任务类型**：显示层
+- **上下文**：用户要求：子窗口模式下副图区域删除「暂无已选指标」；动态 K 用虚线边框、确认态用实线边框；影线与实体交接处肉眼不得看起来线体加粗。
+- **关键操作**：
+  1. `IndicatorPickerChip`：`showEmptyPlaceholder`，分窗（`displayLevel != null`）展开读数时无条目不再显示「暂无已选指标」。
+  2. `KlineChart`：分窗且无副图指标时仍占副图高度（十字对齐），但子窗不显示 `subPanePlaceholder` 文案。
+  3. K1/Kn 合并蜡烛：用 `confirmX` 与当前步进判定构建中；构建中用同层 `buildingDashPattern` 虚线矩形描边，确认后用实线；描边半线宽内缩，减轻与填充重叠。
+  4. `_drawCandleWick`：影线端点离开实体边约 `min(0.85, 0.35*stroke)`，避免与 1.6px 实体框叠粗。
+- **结果**：`dart analyze` 涉及文件无新增 error；`flutter test test/candle_wick_test.dart` 通过。`flutter build windows --debug` 成功，内核 23:04，已启动 pid 89980。未改缠论计算。
+- **演示**：开层级分窗、副图无勾选：副图带高仍在，无灰字/「暂无已选指标」；主图 K1/Kn 底层动态单元为虚线框，步进到确认步后变实线；影线与实体接头不再发糊变粗。
+- **注意事项**：**未 push**，等用户确认。

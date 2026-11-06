@@ -2863,7 +2863,11 @@ class _KlineChartState extends State<KlineChart> {
               }),
             // 分窗几何占位：该层没有副图指标时也要占满同样高度，
             // 否则各窗绘图区高度不同，十字横线就落不到同一行。
-            if (widget.forceSubPane && _drawnSubs.isEmpty)
+            // 分窗几何占位：无副图指标时仍占高度（十字线对齐）。
+            // 子窗口下不显示占位文案，避免挡图形。
+            if (widget.forceSubPane &&
+                _drawnSubs.isEmpty &&
+                widget.displayLevel == null)
               Positioned(
                 left: 0,
                 right: 0,
@@ -2880,6 +2884,16 @@ class _KlineChartState extends State<KlineChart> {
                     ),
                   ),
                 ),
+              ),
+            if (widget.forceSubPane &&
+                _drawnSubs.isEmpty &&
+                widget.displayLevel != null)
+              Positioned(
+                left: 0,
+                right: 0,
+                top: mainH,
+                height: math.max(0.0, volH - KlineViewport.xAxisH),
+                child: const IgnorePointer(child: SizedBox.expand()),
               ),
             // 主副图分割：显式拖动手柄（不再隐式拖整条）。只有含 K0 的窗能拖。
             if (_showSubPane && widget.interactive)
@@ -2961,6 +2975,7 @@ class _KlineChartState extends State<KlineChart> {
                               : math.max(120.0, w - 220),
                           maxHeight: KlineViewport.mainIndicatorChipMaxBand,
                           horizontalScroll: widget.mobileLayout,
+                          showEmptyPlaceholder: widget.displayLevel == null,
                         ),
                       ),
                     );
@@ -3034,6 +3049,7 @@ class _KlineChartState extends State<KlineChart> {
                                 : math.max(120.0, w - 220),
                             maxHeight: KlineViewport.subIndicatorChipMaxBand,
                             horizontalScroll: widget.mobileLayout,
+                            showEmptyPlaceholder: widget.displayLevel == null,
                           ),
                         ),
                       ),
@@ -3760,12 +3776,15 @@ class _KlineCompositePainter extends CustomPainter {
         widthMult: _wickWidthMultForConfirmStep(confirmX: v.confirmX, barIdx: v.viewX2),
       );
       canvas.drawRect(rect, Paint()..color = isUp ? upBody : dnBody);
-      canvas.drawRect(
+      final building =
+          _unitBarIsBuilding(confirmX: v.confirmX, viewX2: v.viewX2);
+      final dash = ChartLevelLineStyle.forDisplayKn(1).buildingDashPattern;
+      _strokeUnitBarFrame(
+        canvas,
         rect,
-        Paint()
-          ..color = isUp ? upStroke : dnStroke
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.6,
+        color: isUp ? upStroke : dnStroke,
+        dashed: building,
+        dashPattern: dash,
       );
     }
   }
@@ -4468,6 +4487,7 @@ class _KlineCompositePainter extends CustomPainter {
         barW,
         slotW,
         views,
+        displayKn: kn,
         faint: true,
       );
     }
@@ -5442,6 +5462,7 @@ class _KlineCompositePainter extends CustomPainter {
     double barW,
     double slotW,
     List<LevelUnitBarView> views, {
+    required int displayKn,
     bool faint = false,
   }) {
     if (views.isEmpty) return;
@@ -5480,12 +5501,17 @@ class _KlineCompositePainter extends CustomPainter {
             _wickWidthMultForConfirmStep(confirmX: v.bar.confirmX, barIdx: v.viewX2),
       );
       canvas.drawRect(rect, Paint()..color = isUp ? upBody : dnBody);
-      canvas.drawRect(
+      final building = _unitBarIsBuilding(
+        confirmX: v.bar.confirmX,
+        viewX2: v.viewX2,
+      );
+      final dash = ChartLevelLineStyle.forDisplayKn(displayKn).buildingDashPattern;
+      _strokeUnitBarFrame(
+        canvas,
         rect,
-        Paint()
-          ..color = isUp ? upStroke : dnStroke
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.6,
+        color: isUp ? upStroke : dnStroke,
+        dashed: building,
+        dashPattern: dash,
       );
     }
   }
@@ -5842,6 +5868,42 @@ class _KlineCompositePainter extends CustomPainter {
     return stepIdx < cx ? 0.88 : 1.15;
   }
 
+  /// K1/Kn 单元：未到确认步=动态（虚线框），达到确认步=确认（实线框）。
+  bool _unitBarIsBuilding({required int confirmX, required int viewX2}) {
+    final cap = stepIdx < 0
+        ? (bars.isEmpty ? viewX2 : bars.last.idx)
+        : stepIdx;
+    if (confirmX >= 0) return cap < confirmX;
+    return viewX2 > cap;
+  }
+
+  void _strokeUnitBarFrame(
+    Canvas canvas,
+    Rect rect, {
+    required Color color,
+    required bool dashed,
+    List<double>? dashPattern,
+  }) {
+    final strokeW = 1.6;
+    final p = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = strokeW
+      ..strokeJoin = StrokeJoin.miter;
+    if (!dashed || dashPattern == null || dashPattern.isEmpty) {
+      canvas.drawRect(rect, p);
+      return;
+    }
+    // inset 半线宽，避免与填充边界锯齿重叠产生“加粗”感。
+    final inset = strokeW * 0.5;
+    final r = rect.deflate(inset);
+    if (r.width <= 0 || r.height <= 0) {
+      canvas.drawRect(rect, p);
+      return;
+    }
+    _strokeDashedRect(canvas, r, p, dashPattern);
+  }
+
   void _drawCandles(
     Canvas canvas,
     double w,
@@ -5931,15 +5993,22 @@ class _KlineCompositePainter extends CustomPainter {
     required Color color,
     double widthMult = 1.0,
   }) {
+    final sw = candleWickWidth(bodyWidth, widthMult: widthMult);
     final wick = Paint()
       ..color = color
-      ..strokeWidth = candleWickWidth(bodyWidth, widthMult: widthMult)
+      ..strokeWidth = sw
       ..strokeCap = StrokeCap.butt;
+    // 与实体描边（约 1.6）叠在一条线上会显得更粗：端点略离开实体边沿。
+    final gap = math.min(0.85, sw * 0.35);
     if (yHigh < bodyTop - 0.5) {
-      canvas.drawLine(Offset(cx, yHigh), Offset(cx, bodyTop), wick);
+      final yStop = bodyTop - gap;
+      final yStart = math.min(yHigh, yStop);
+      canvas.drawLine(Offset(cx, yStart), Offset(cx, yStop), wick);
     }
     if (yLow > bodyBottom + 0.5) {
-      canvas.drawLine(Offset(cx, bodyBottom), Offset(cx, yLow), wick);
+      final yStart = bodyBottom + gap;
+      final yStop = math.max(yLow, yStart);
+      canvas.drawLine(Offset(cx, yStart), Offset(cx, yStop), wick);
     }
   }
 

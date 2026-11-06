@@ -28,12 +28,15 @@ class IndicatorPickerChip extends StatefulWidget {
     this.maxWidth = 280,
     this.maxHeight = 120,
     this.horizontalScroll = false,
+    /// 分窗子图等场景：无已选指标时可不显示「暂无已选指标」。
+    this.showEmptyPlaceholder = true,
   });
 
   final List<IndicatorChipEntry> entries;
   final double maxWidth;
   final double maxHeight;
   final bool horizontalScroll;
+  final bool showEmptyPlaceholder;
 
   @override
   State<IndicatorPickerChip> createState() => _IndicatorPickerChipState();
@@ -152,14 +155,16 @@ class _IndicatorPickerChipState extends State<IndicatorPickerChip> {
             child: Padding(
               padding: const EdgeInsets.fromLTRB(6, 2, 6, 2),
               child: entries.isEmpty
-                  ? const Text(
-                      '暂无已选指标',
-                      style: TextStyle(
-                        color: _mutedColor,
-                        fontSize: 12,
-                        height: 1.2,
-                      ),
-                    )
+                  ? (widget.showEmptyPlaceholder
+                      ? const Text(
+                          '暂无已选指标',
+                          style: TextStyle(
+                            color: _mutedColor,
+                            fontSize: 12,
+                            height: 1.2,
+                          ),
+                        )
+                      : const SizedBox.shrink())
                   : widget.horizontalScroll
                       ? _horizontalList(entries)
                       : SingleChildScrollView(
