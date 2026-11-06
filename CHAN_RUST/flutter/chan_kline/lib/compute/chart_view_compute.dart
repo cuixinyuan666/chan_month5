@@ -3,6 +3,7 @@ import '../models/fractal_judgment_event.dart';
 import '../models/k0_confirm_signal.dart';
 import '../models/k1_bar.dart';
 import '../models/kline_bar.dart';
+import '../models/kline_combine_frame.dart';
 import '../models/level_models.dart';
 
 /// 纯视图组装（十字线 as-of 重绘）：全部数据来自 Rust 冻结产物 + 逐K快照，
@@ -547,9 +548,10 @@ List<K1Bar> levelBundleVirtualK1Bars(LevelBundle bundle) {
 
 /// as-of 展示轨虚拟单元（全层同构）：冻结段 + 可选当步进行中（LevelSnap）。
 ///
-/// [includePreAnchor]：是否把「预锚动态单元」计入。预锚单元只服务下一窗口的
-/// K 蜡烛/合并框（以及虚拟K、采样钟、中枢/买卖点）；本层连线、相邻比例、
-/// 回归基准必须传 false，否则该层还没有任何确认段时会多画一条构建中连线。
+/// [includePreAnchor]：是否把「预锚动态单元」计入。预锚单元主要服务下一窗口的
+/// K 蜡烛/合并框（以及虚拟K、采样钟、中枢/买卖点）；本层「构建中连线」在
+/// 层级早生成开启时也按它补首分型前虚线（2026-11-06 口径），相邻比例与回归基准
+/// 仍必须传 false，否则该层还没有任何确认段时会多出一条基准/子线。
 List<K1Bar> asOfLevelVirtualK1Bars({
   required List<LevelBundle> levels,
   required List<BarCrosshairFeature> barFeatures,
@@ -655,6 +657,26 @@ LevelLineEndpoint? seedBoxDepartEndpoint({
 /// 「层级早生成动态单元」开启时，首段由预锚动态单元接管，种子框、种子开口与 ABC 全部不画；
 /// 关闭时保持经典种子绘制。只影响主图绘制，不影响种子数据与相邻比例指标。
 bool seedPhaseVisible({required bool earlyDynamicUnit}) => !earlyDynamicUnit;
+
+/// 合并帧剔除「本层种子框」首组（全层同构，K0/K1/K2…/Kn 同一口径）。
+///
+/// 层级早生成开启时，首段由预锚动态单元接管，种子框不再绘制；而该层合并帧的
+/// 第一组与种子框同矩形（同 x 区间、同 high/low），必须一并跳过，否则同一只框
+/// 仍会以「合并框」名义留在图上。开关关闭时原样返回，保持经典种子绘制。
+List<KlineCombineFrame> combineFramesWithoutSeed({
+  required List<KlineCombineFrame> frames,
+  required LevelSnap? snap,
+  required bool earlyDynamicUnit,
+}) {
+  if (!earlyDynamicUnit || frames.isEmpty || snap == null) return frames;
+  if (snap.seedBoxSeq < 0) return frames;
+  final first = frames.first;
+  final sameAsSeed = first.x1 == snap.seedBoxX1 &&
+      first.x2 == snap.seedBoxX2 &&
+      (first.high - snap.seedBoxHigh).abs() < 1e-9 &&
+      (first.low - snap.seedBoxLow).abs() < 1e-9;
+  return sameAsSeed ? frames.sublist(1) : frames;
+}
 
 /// 种子 UNKNOWN 开口虚线（方案2·D2·S-b，**全层同构**：K1/K2/…/Kn 同一函数、同口径）：
 /// - 仅 `firstFxState==UNKNOWN` 且 `seedLeaveDir!=0`（已有 group1，「离开种子」方向）；

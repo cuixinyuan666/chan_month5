@@ -5,6 +5,7 @@ import 'package:chan_kline/models/k0_confirm_signal.dart';
 import 'package:chan_kline/models/bar_crosshair_feature.dart';
 import 'package:chan_kline/models/k1_bar.dart';
 import 'package:chan_kline/models/kline_bar.dart';
+import 'package:chan_kline/models/kline_combine_frame.dart';
 import 'package:chan_kline/models/level_models.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -1287,6 +1288,83 @@ void main() {
         seedConfirmed: true,
       ),
       isNull,
+    );
+  });
+
+  test('合并帧跳过本层种子框首组：仅开关开且几何同框时生效', () {
+    const frames = [
+      KlineCombineFrame(
+        x1: 4,
+        x2: 76,
+        t1: '',
+        t2: '',
+        high: 10.1,
+        low: 9.93,
+        fx: 'UNKNOWN',
+        count: 1,
+      ),
+      KlineCombineFrame(
+        x1: 76,
+        x2: 90,
+        t1: '',
+        t2: '',
+        high: 10.2,
+        low: 10.0,
+        fx: 'TOP',
+        count: 2,
+      ),
+    ];
+    const snap = LevelSnap(
+      level: 2,
+      seedBoxSeq: 0,
+      seedBoxX1: 4,
+      seedBoxX2: 76,
+      seedBoxHigh: 10.1,
+      seedBoxLow: 9.93,
+    );
+
+    // 开关开 + 首组与种子框同矩形 → 跳过首组
+    expect(
+      combineFramesWithoutSeed(
+        frames: frames,
+        snap: snap,
+        earlyDynamicUnit: true,
+      ),
+      hasLength(1),
+    );
+    // 开关关 → 经典种子口径，原样返回（不复制）
+    expect(
+      combineFramesWithoutSeed(
+        frames: frames,
+        snap: snap,
+        earlyDynamicUnit: false,
+      ),
+      same(frames),
+    );
+    // 无种子框 → 原样返回
+    expect(
+      combineFramesWithoutSeed(
+        frames: frames,
+        snap: const LevelSnap(level: 2),
+        earlyDynamicUnit: true,
+      ),
+      same(frames),
+    );
+    // 首组高低与种子框不一致 → 不是同一只框，原样返回
+    expect(
+      combineFramesWithoutSeed(
+        frames: frames,
+        snap: const LevelSnap(
+          level: 2,
+          seedBoxSeq: 0,
+          seedBoxX1: 4,
+          seedBoxX2: 76,
+          seedBoxHigh: 10.1,
+          seedBoxLow: 9.92,
+        ),
+        earlyDynamicUnit: true,
+      ),
+      same(frames),
     );
   });
 }

@@ -3696,17 +3696,6 @@ class _KlineCompositePainter extends CustomPainter {
     return null;
   }
 
-  /// 合并帧是否就是该层种子框（与 LevelSnap.seed_box_* 几何对齐）。
-  /// K0 窗口的第一组合并帧与种子框是同一矩形；隐藏种子框时需一并跳过。
-  bool _isSeedBoxFrame(KlineCombineFrame f, int level) {
-    final snap = _asOfSeedSnap(level);
-    if (snap == null || snap.seedBoxSeq < 0) return false;
-    return f.x1 == snap.seedBoxX1 &&
-        f.x2 == snap.seedBoxX2 &&
-        (f.high - snap.seedBoxHigh).abs() < 1e-9 &&
-        (f.low - snap.seedBoxLow).abs() < 1e-9;
-  }
-
   double _polePriceAt(int x, {required bool useHigh}) {
     if (x < 0 || x >= bars.length) return 0;
     return useHigh ? bars[x].high : bars[x].low;
@@ -4226,21 +4215,31 @@ class _KlineCompositePainter extends CustomPainter {
     );
     if (displayFrames.isEmpty) return;
 
-    final style = ChartLevelLineStyle.forDisplayKn(kn);
-    _drawCombineFramesOnMainChart(
-      canvas,
-      w,
-      plotTop,
-      plotH,
-      barW,
-      slotW,
-      displayFrames,
-      style.color.withValues(alpha: 0.85),
-      style.color.withValues(alpha: 0.08),
-      levelUnitViews: views.isNotEmpty ? views : null,
-      lastAsBuilding: showBuildingDash,
-      buildingDashPattern: style.buildingDashPattern,
+    // 开关开时，本层合并帧的第一组就是本层种子框（与 _drawSeedBoxOverlay 同矩形）；
+    // 首段已由预锚动态单元接管，这里一并跳过，避免同一只框重复出现。
+    final frames = combineFramesWithoutSeed(
+      frames: displayFrames,
+      snap: _asOfSeedSnap(kn),
+      earlyDynamicUnit: earlyDynamicUnit,
     );
+
+    final style = ChartLevelLineStyle.forDisplayKn(kn);
+    if (frames.isNotEmpty) {
+      _drawCombineFramesOnMainChart(
+        canvas,
+        w,
+        plotTop,
+        plotH,
+        barW,
+        slotW,
+        frames,
+        style.color.withValues(alpha: 0.85),
+        style.color.withValues(alpha: 0.08),
+        levelUnitViews: views.isNotEmpty ? views : null,
+        lastAsBuilding: showBuildingDash,
+        buildingDashPattern: style.buildingDashPattern,
+      );
+    }
     // 种子合并框：用 LevelSnap.seed_box_*（全层同构，不限 displayFrames.first）
     _drawSeedBoxOverlay(
       canvas,
@@ -5560,14 +5559,16 @@ class _KlineCompositePainter extends CustomPainter {
     } else {
       // 构建中 N 段 = 本层（level）自己的进行中段；虚拟单元取 level 自身的
       // 冻段+active（与 _drawOneLevelLines 的实线同源）。
-      // 预锚单元只服务下一窗口 K 蜡烛，不得在本层画成构建中连线。
+      // 层级早生成开启、且本层还没有任何确认段时，首段由预锚动态单元接管：
+      // 此时纳入预锚单元，按本层 open→close 补一条构建中虚线；种子线已隐藏，只留这一条。
+      // 开关关闭时保持经典口径：预锚单元不参与本层连线。
       virtualUnits = asOfLevelVirtualK1Bars(
         levels: levels,
         barFeatures: barFeatures,
         level: level,
         asOf: tailIdx,
         includeBuilding: true,
-        includePreAnchor: false,
+        includePreAnchor: earlyDynamicUnit,
       );
       frozenIdx = {
         for (final s in asOfLevelSegments(
@@ -5749,9 +5750,11 @@ class _KlineCompositePainter extends CustomPainter {
     if (combineFrames.isEmpty) return;
     // 开关开时，K0 合并帧的第一组就是种子框（与 _drawSeedBoxOverlay 同矩形）；
     // 种子框已要求删除，这里一并跳过，否则只隐藏 overlay 仍会留下同一只框。
-    final frames = earlyDynamicUnit && _isSeedBoxFrame(combineFrames.first, 0)
-        ? combineFrames.sublist(1)
-        : combineFrames;
+    final frames = combineFramesWithoutSeed(
+      frames: combineFrames,
+      snap: _asOfSeedSnap(0),
+      earlyDynamicUnit: earlyDynamicUnit,
+    );
     if (frames.isEmpty) return;
     // 末组=构建中合并（虚线）；前组=已冻结合并（实线）。
     // 信号取 CombineEngine.groups 末项（已在 combineFrames 末尾），不是 activeUnit（那是进行中段）。
@@ -5861,7 +5864,15 @@ class _KlineCompositePainter extends CustomPainter {
   ) {
     if (k1CombineFrames.isEmpty && k1BarViews.isEmpty) return;
 
-    if (k1CombineFrames.isNotEmpty) {
+    // 开关开时，K1 合并帧的第一组就是本层种子框（与 _drawSeedBoxOverlay 同矩形）；
+    // 首段已由预锚动态单元接管，这里一并跳过，避免同一只框重复出现。
+    final frames = combineFramesWithoutSeed(
+      frames: k1CombineFrames,
+      snap: _asOfSeedSnap(1),
+      earlyDynamicUnit: earlyDynamicUnit,
+    );
+
+    if (frames.isNotEmpty) {
       // 方案B：K1 displayKn=1
       final k1Style = ChartLevelLineStyle.forDisplayKn(1);
       _drawCombineFramesOnMainChart(
@@ -5871,7 +5882,7 @@ class _KlineCompositePainter extends CustomPainter {
         plotH,
         barW,
         slotW,
-        k1CombineFrames,
+        frames,
         k1Style.color.withValues(alpha: 0.85),
         k1Style.color.withValues(alpha: 0.08),
         alignK1CombineWithViews: true,
