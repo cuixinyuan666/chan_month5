@@ -3,10 +3,13 @@ import 'dart:math' as math;
 /// 上下影线粗细：跟随实体宽度。
 ///
 /// 实体越宽影线越粗，避免 K 放宽后影线细成一条缝；
-/// 最细 1 像素（缩到最小仍能看见），最粗 8 像素（再粗会压过细 K）。
-/// 比例取实体宽度约 **26%**（约四分之一），比初版 16% 更易辨认。
-double candleWickWidth(double bodyWidth) =>
-    (bodyWidth * 0.26).clamp(1.0, 8.0).toDouble();
+/// 最细 1 像素（缩到最小仍能看见），最粗 11 像素（再粗会压过细 K）。
+/// 比例取实体宽度约 **32%**（约三分之一）。
+/// [widthMult]：按状态再乘一档（构建中略细、确认后略粗）。
+double candleWickWidth(double bodyWidth, {double widthMult = 1.0}) {
+  final m = widthMult.clamp(0.5, 1.5).toDouble();
+  return (bodyWidth * 0.32 * m).clamp(1.0, 11.0).toDouble();
+}
 
 /// 影线是否穿过实体。
 ///

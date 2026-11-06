@@ -4901,6 +4901,7 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
       buyNK0Frames: _buyNK0Frames,
       sellNK0Frames: _sellNK0Frames,
       defaultK0Policy: _defaultK0Policy,
+      stepIdx: _stepIdx,
       truncationCheck: _truncationCheck,
       earlyDynamicUnit: _earlyDynamicUnit,
       showBuildingDash: _showBuildingDash,

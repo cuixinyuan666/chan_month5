@@ -206,6 +206,9 @@ class KlineChart extends StatefulWidget {
     this.displayLevel,
     this.forceSubPane = false,
     this.subPanePlaceholder = '副图未启用（点副图左上角指标按钮可勾选）',
+    /// 步进当步下标（与主界面 `_stepIdx` 同构）：用于末根 K 影线粗细（未确认 vs 已确认）。
+    /// -1 表示未步进或未知，一律按已确认处理。
+    this.stepIdx = -1,
   });
 
   final List<KlineBar> bars;
@@ -317,6 +320,9 @@ class KlineChart extends StatefulWidget {
   /// 是否将 tooltip 停靠为左侧独立子窗口（由父布局渲染），而非 chart 内部悬浮。
   /// 移动端传 false，保持原悬浮态。
   final bool dockTooltipPanel;
+
+  /// 当前步进到哪一根（`idx`）；与主界面步进一致。-1=不按末根态加粗影线。
+  final int stepIdx;
 
   /// 本窗是否可交互（第二版：分窗里每一格都是 true）。
   ///
@@ -2697,6 +2703,7 @@ class _KlineChartState extends State<KlineChart> {
                   widget.sync?.subChipBand ?? _subChipBarHeight,
               defaultK0Policy: widget.defaultK0Policy,
               segAsOf: segAsOf,
+              stepIdx: widget.stepIdx,
               judgmentHistoryByKn: widget.judgmentHistoryByKn,
               zsJudgmentHistoryByKn: widget.zsJudgmentHistoryByKn,
               zsConfirmHistoryByKn: widget.zsConfirmHistoryByKn,
@@ -3117,6 +3124,7 @@ class _KlineCompositePainter extends CustomPainter {
     this.subChipBarHeight = KlineViewport.subIndicatorChipBand,
     this.defaultK0Policy = 'pending',
     this.segAsOf,
+    this.stepIdx = -1,
     this.judgmentHistoryByKn = const {},
     this.zsJudgmentHistoryByKn = const {},
     this.zsConfirmHistoryByKn = const {},
@@ -3198,6 +3206,8 @@ class _KlineCompositePainter extends CustomPainter {
   final String defaultK0Policy;
   /// 十字线 as-of 2 段连线截止 K（null=末态全量）
   final int? segAsOf;
+  /// 步进当步下标：末根 K 影线在「未确认 / 已确认」之间切换。
+  final int stepIdx;
 
   /// 分型判断会话事件日志（步进追加；绘制扫全部历史点）
   final Map<int, List<FractalJudgmentEvent>> judgmentHistoryByKn;
@@ -3747,6 +3757,7 @@ class _KlineCompositePainter extends CustomPainter {
         bodyBottom: rect.bottom,
         bodyWidth: spanW,
         color: isUp ? upStroke : dnStroke,
+        widthMult: _wickWidthMultForConfirmStep(confirmX: v.confirmX, barIdx: v.viewX2),
       );
       canvas.drawRect(rect, Paint()..color = isUp ? upBody : dnBody);
       canvas.drawRect(
@@ -5465,6 +5476,8 @@ class _KlineCompositePainter extends CustomPainter {
         bodyBottom: rect.bottom,
         bodyWidth: spanW,
         color: isUp ? upStroke : dnStroke,
+        widthMult:
+            _wickWidthMultForConfirmStep(confirmX: v.bar.confirmX, barIdx: v.viewX2),
       );
       canvas.drawRect(rect, Paint()..color = isUp ? upBody : dnBody);
       canvas.drawRect(
@@ -5816,6 +5829,19 @@ class _KlineCompositePainter extends CustomPainter {
     return (cx1 + cx2) / 2;
   }
 
+  /// 影线额外乘档：未到确认步略细，达到确认步及之后略粗。
+  ///
+  /// - K1/Kn：[confirmX] 为连线/单元确认当步，`stepIdx < confirmX` 时末根仍在构建。
+  /// - K0 蜡烛没有独立确认步，传 `confirmX == null` 时用 [barIdx] 与 [stepIdx] 比。
+  double _wickWidthMultForConfirmStep({int? confirmX, required int barIdx}) {
+    if (stepIdx < 0) return 1.15;
+    final cx = confirmX;
+    if (cx == null || cx < 0) {
+      return barIdx < stepIdx ? 1.15 : 0.88;
+    }
+    return stepIdx < cx ? 0.88 : 1.15;
+  }
+
   void _drawCandles(
     Canvas canvas,
     double w,
@@ -5879,6 +5905,7 @@ class _KlineCompositePainter extends CustomPainter {
         bodyBottom: top + bodyH,
         bodyWidth: barW,
         color: color,
+        widthMult: _wickWidthMultForConfirmStep(barIdx: idx),
       );
 
       canvas.drawRect(
@@ -5891,8 +5918,8 @@ class _KlineCompositePainter extends CustomPainter {
   /// 上下影线：只画实体之外的两段，粗细随实体宽度走。
   ///
   /// 以前影线固定 1.2 像素，K 放宽后影线细得看不清；实体中间那截竖杠
-  /// 又把阳线、阴线从中劈开。这里影线取实体宽度约 **26%**（最细 1、
-  /// 最粗 8 像素），且两端都停在实体边沿，不再穿过实体。
+  /// 又把阳线、阴线从中劈开。这里影线取实体宽度约 **32%**（最细 1、
+  /// 最粗 11 像素），可选 [widthMult] 再乘一档（末根未确认略细、确认后略粗）。
   void _drawCandleWick(
     Canvas canvas, {
     required double cx,
@@ -5902,10 +5929,11 @@ class _KlineCompositePainter extends CustomPainter {
     required double bodyBottom,
     required double bodyWidth,
     required Color color,
+    double widthMult = 1.0,
   }) {
     final wick = Paint()
       ..color = color
-      ..strokeWidth = candleWickWidth(bodyWidth)
+      ..strokeWidth = candleWickWidth(bodyWidth, widthMult: widthMult)
       ..strokeCap = StrokeCap.butt;
     if (yHigh < bodyTop - 0.5) {
       canvas.drawLine(Offset(cx, yHigh), Offset(cx, bodyTop), wick);
@@ -8097,6 +8125,7 @@ class _KlineCompositePainter extends CustomPainter {
         oldDelegate.earlyDynamicUnit != earlyDynamicUnit ||
         oldDelegate.subChipBarHeight != subChipBarHeight ||
         oldDelegate.defaultK0Policy != defaultK0Policy ||
+        oldDelegate.stepIdx != stepIdx ||
         oldDelegate.judgmentHistoryByKn != judgmentHistoryByKn ||
         oldDelegate.zsJudgmentHistoryByKn != zsJudgmentHistoryByKn ||
         oldDelegate.zsConfirmHistoryByKn != zsConfirmHistoryByKn ||
