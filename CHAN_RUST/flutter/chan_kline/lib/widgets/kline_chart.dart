@@ -996,7 +996,19 @@ class _KlineChartState extends State<KlineChart> {
     } else if (lenChanged) {
       _viewport.allXMax = math.max(0, widget.bars.length - 1).toDouble();
       if (widget.autoFollowLatest) {
-        _viewport.syncWindowOnStep(widget.bars.length - 1);
+        final last = widget.bars.length - 1;
+        // 子窗口（displayLevel 非空）每步都把最新 K 放到视窗正中；
+        // 单图保持原口径：没手动调过缩放就展示全量。
+        final center = widget.displayLevel != null;
+        _viewport.syncWindowOnStep(last, centerLatest: center);
+        if (center) {
+          // 垂直也按本窗自己的 K 居中：K1/K2 窗口画的不是底层 K0，
+          // 用 K0 的价格会把层级 K 顶到窗口上下沿。
+          _viewport.centerLatestVertically(
+            _barsForVerticalCenter(last),
+            last,
+          );
+        }
       }
     }
 
@@ -1299,6 +1311,69 @@ class _KlineChartState extends State<KlineChart> {
 
   void _resetViewport() {
     _viewport.resetForBarCount(widget.bars.length);
+    // 子窗口一进来就居中，不等用户先缩放一次。
+    if (widget.displayLevel != null &&
+        widget.autoFollowLatest &&
+        widget.bars.isNotEmpty) {
+      final last = widget.bars.length - 1;
+      _viewport.syncWindowOnStep(last, centerLatest: true);
+      _viewport.centerLatestVertically(_barsForVerticalCenter(last), last);
+    }
+  }
+
+  /// 垂直居中用的 K 序列：必须是本窗实际画出来的那些 K。
+  ///
+  /// K0 窗口画底层 K，直接用 bars。K1 窗口画 K1，K2 及以上画该层单元 K，
+  /// 价格区间和底层 K0 不是一回事。取不到本层 K 时退回 bars，
+  /// 至少不比原来更偏。
+  List<KlineBar> _barsForVerticalCenter(int lastIdx) {
+    final lv = widget.displayLevel;
+    if (lv == null || lv <= 0) return widget.bars;
+    final units = lv == 1
+        ? widget.k1BarViews
+            .map((v) => (x: v.viewX2, low: v.low, high: v.high))
+            .toList()
+        : _levelUnitViewsForCenter(lv)
+            .map((v) => (x: v.viewX2, low: v.low, high: v.high))
+            .toList();
+    if (units.isEmpty) return widget.bars;
+
+    // 步进当下：只取右端不超过当前最新 K 的单元，不用未来段的价格。
+    ({int x, double low, double high})? latest;
+    for (final u in units) {
+      if (u.x > lastIdx) continue;
+      if (latest == null || u.x >= latest.x) latest = u;
+    }
+    if (latest == null) return widget.bars;
+    // 垂直居中只看最新一根本层 K 的高低：把整段历史高低都算进去，
+    // 价格走远后最新 K 仍会被顶到窗口上下沿。
+    return [
+      KlineBar(
+        idx: lastIdx,
+        timeMs: 0,
+        timeText: '',
+        open: latest.low,
+        high: latest.high,
+        low: latest.low,
+        close: latest.high,
+        volume: 0,
+        amount: 0,
+      ),
+    ];
+  }
+
+  /// 本层单元 K（未开十字线时的当前态）。K2 窗口对应结构层 1。
+  List<LevelUnitBarView> _levelUnitViewsForCenter(int displayLevel) {
+    final unitLevel = displayLevel - 1;
+    for (final b in widget.levels) {
+      if (b.level != unitLevel) continue;
+      return buildLevelUnitBarViews(
+        b.unitBars,
+        activeUnit: b.activeUnit ??
+            (b.segmentPolicy == 'pending' ? b.pendingUnit : null),
+      );
+    }
+    return const [];
   }
 
   void _scheduleRedraw() {

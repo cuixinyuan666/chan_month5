@@ -75,15 +75,19 @@ class KlineViewport {
     ready = count > 0;
   }
 
-  /// 步进/播放时最新 K 在视窗内的相对位置：0.75 = 距右边界约 1/4。
+  /// 步进/播放时最新 K 在视窗内的相对位置。0.5 = 视窗正中。
   ///
-  /// 各子窗口各自一份视口，但跟随口径同此：任何窗点步进或播放，
-  /// 最新 K 都固定靠右，不得滑出可视区。
-  static const double stepFollowPos = 0.75;
+  /// 上一版用 0.75（距右边界约 1/4），用户看了仍觉得贴着右缘；
+  /// 再改到 0.6 也一样：数据不够长时左边界会把视窗顶回去，最新 K 又贴到最右。
+  /// 2026-11-06 改为 0.5，并允许视窗左端低于数据起点（左侧留白），
+  /// 这样从第一根起最新 K 就在正中，不会被左边界顶偏。
+  /// 各子窗口各自一份视口，但跟随口径同此。
+  static const double stepFollowPos = 0.5;
 
-  /// 对齐 a_replay ensureLatestKVisible：把最新 K 固定到距右边界约 1/4 处。
+  /// 步进/播放时把最新 K 固定到视窗水平正中。
   ///
-  /// 不再等最新 K 滑出右边界才拽回：每一步都重新落位，保持靠右显示。
+  /// 不再等最新 K 滑出右边界才拽回：每一步都重新落位。
+  /// 数据刚开始、目标位置落在数据起点之前时，左侧留白，不把视窗顶回去。
   void ensureLatestVisible(int lastIdx) {
     if (!ready) return;
 
@@ -96,10 +100,8 @@ class KlineViewport {
 
     var newMin = lastIdx - span * stepFollowPos;
     var newMax = newMin + span;
-    if (newMin < allXMin) {
-      newMin = allXMin;
-      newMax = newMin + span;
-    }
+    // 右侧最多留两个视窗宽的空白；超出就整体左移。
+    // 左侧不再卡在数据起点：卡住会把最新 K 顶到最右，居中就做不到。
     final rightMax = allXMax + span * 2;
     if (newMax > rightMax) {
       newMax = rightMax;
@@ -107,6 +109,32 @@ class KlineViewport {
     }
     viewXMin = newMin;
     viewXMax = newMax;
+  }
+
+  /// 步进/播放时把最新 K 的价格拉回垂直居中。
+  ///
+  /// 纵向平移不会随步进自动清掉：价格走高或走低后，
+  /// 最新 K 会慢慢漂到窗口上沿或下沿。这里按「当前可见 K 的高低区间」
+  /// 反推平移量，使最新 K 的中间价落在区间中部；用户设过的纵向缩放保留。
+  /// [bars] 必须是本窗实际画的那些 K：子窗口画的是该层自己的 K，
+  /// 不能用底层 K0 的价格代替，否则层级价格跑出 K0 区间后会贴到窗口上下沿。
+  void centerLatestVertically(List<KlineBar> bars, int lastIdx) {
+    if (!ready || bars.isEmpty) return;
+    if (lastIdx < 0) return;
+    // 取序列最后一根，不按下标取：子窗口只把本层最新一根传进来时，
+    // 它的下标是 0，而 lastIdx 是底层 K 的序号，按下标取会直接越界返回。
+    final bar = bars.last;
+    final mid = (bar.high + bar.low) / 2;
+
+    var yMin = bars.first.low;
+    var yMax = bars.first.high;
+    for (final b in bars) {
+      yMin = math.min(yMin, b.low);
+      yMax = math.max(yMax, b.high);
+    }
+    final baseSpan = math.max(1e-6, yMax - yMin);
+    final rangeMid = (yMax + yMin) / 2;
+    yShiftRatio = ((mid - rangeMid) / baseSpan).clamp(-maxYShift, maxYShift);
   }
 
   /// 把指定 K0 滚进视窗中间附近（报告点交易时跳图）。
@@ -130,10 +158,25 @@ class KlineViewport {
     markUserAdjusted();
   }
 
-  /// 逐K步进后同步视窗（未手动调视图则展示全量，已调视图则跟随最新 K）。
-  void syncWindowOnStep(int lastIdx) {
+  /// 逐K步进后同步视窗。
+  ///
+  /// [centerLatest] 为真（子窗口）时：每一步都把最新 K 放到视窗正中，
+  /// 不管用户有没有手动缩放过。没调过的窗口用「至少 40 根」的视窗宽居中，
+  /// 数据还少于 40 根时左侧留白；用户调过的缩放宽度原样保留。
+  /// [centerLatest] 为假（单图）时保持原口径：没手动调过就展示全量，
+  /// 调过才跟随最新 K。
+  void syncWindowOnStep(int lastIdx, {bool centerLatest = false}) {
     if (!ready) return;
     allXMax = math.max(allXMax, lastIdx.toDouble());
+    if (centerLatest) {
+      if (!userAdjustedView) {
+        const minSpan = 40.0;
+        viewXMin = lastIdx - minSpan * stepFollowPos;
+        viewXMax = viewXMin + minSpan;
+      }
+      ensureLatestVisible(lastIdx);
+      return;
+    }
     if (!userAdjustedView) {
       viewXMin = allXMin;
       viewXMax = allXMax;
