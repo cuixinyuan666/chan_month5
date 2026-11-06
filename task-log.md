@@ -5420,3 +5420,18 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   - 机器人套件 `early_dynamic_20261105`：**ok:true，3 阶段全过、0 失败、0 跳过**；`inprocess_early_dynamic_unit` 30 项 checks 全真，含新增 4 项。002003 1m 289 根，首确认 x=8。
 - **演示**：默认数据 idx=0..7，K1 窗口的动态 K 高低为区间最高 high / 最高 low（不再探到区间最低）；K0 窗口只有一条构建中虚线，种子框消失；idx=8 首确认当根 K1 idx=0 转确认、K2 idx=0 以动态态出现，确认 K 的低点恢复真实低点。关闭设置开关后种子框与经典画面恢复。
 - **注意事项**：**未 push**，等用户确认。预锚「高高」的 low 可能高于动态 K 的 close，蜡烛实体可能落到下影线之外，这是用户明确选择的字面口径；确认当根起恢复经典真实 OHLC。
+
+---
+
+### 2026-11-06 08:26 — 修复：K0 构建中虚线在同价位合并框内被拉长
+
+- **执行者**：Claude Code Agent
+- **任务类型**：显示层修复
+- **上下文**：用户确认：同价位属于合并框场景，虚线端点应固定在该价位首次出现位置。默认 tick 数据 idx=0/1 同为 11.66 时不应画线；idx=4/5/6 同为 11.7 时端点应固定在 idx=4，不随合并框内新 K 拉长；后续分型判断线逻辑正常，仅首分型前异常。
+- **关键操作**：
+  1. `computeDisplayBuildingLines` 无确认回退分支：open==close 的同价单元不画线；末端连续同价时，端点由 `_samePriceRunStart` 固定在连续同价区间首根。判断分支（后续分型）不动。
+  2. 新增 `test/k0_building_line_same_price_test.dart`：默认 002003 tick 942 根，断言 idx=0/1 无虚线、idx=4/5/6 端点固定 4、idx=7 新价跟到 7；纳入机器人套件 phase 1。
+  3. ROBOT_VERIFY 阶段 1 文件清单同步。
+- **结果**：新增用例通过；相关 60 项（early_dynamic / chart_view_compute / adjacent_ratio / fractal_judgment / kn_clock）全过；`flutter analyze` 无问题。机器人套件本轮未复跑（主界面正被用户手动查看，按规则不关闭）；phase 1 已包含新增用例。
+- **演示**：默认 tick 数据 idx=0/1 不再出现水平虚线；idx=4/5/6 的构建中虚线端点停在 idx=4；idx=7 才跟到新价；idx=8 之后的判断线照旧。
+- **注意事项**：**未 push**，等用户确认。
