@@ -5,6 +5,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'candle_wick.dart';
 import 'chart_sync_controller.dart';
 import '../backtest/order_models.dart';
 import '../backtest/signal_event.dart';
@@ -769,6 +770,18 @@ class _KlineChartState extends State<KlineChart> {
   void _closeTooltipKeepCrosshair() {
     if (!_crosshairShowTooltip) return;
     setState(() => _crosshairMode = CrosshairMode.linesOnly);
+    // 分窗时信息开关存在联动控制器里：只改本窗，广播仍带着「开着」，
+    // 面板会立刻被重新打开，关闭按钮等于没点。这里把开关一起关掉。
+    final s = widget.sync;
+    if (s != null && s.crosshairOn && _iAmCrosshairOwner) {
+      s.publishCrosshair(
+        on: true,
+        barIdx: _crosshairBarIdx,
+        price: _crosshairPriceNow(),
+        ownerLevel: widget.displayLevel,
+        tooltip: false,
+      );
+    }
     _publishTooltipToBridge();
   }
 
@@ -780,7 +793,8 @@ class _KlineChartState extends State<KlineChart> {
     // 分窗时信息只由鼠标所在的主窗发布：被动窗也广播会把别的层盖上来。
     final s = widget.sync;
     if (s != null && s.crosshairOn && !_iAmCrosshairOwner) {
-      b.shown.value = false;
+      // 主窗已经换走：只是不再由本窗写内容，面板本身不能在这里关掉。
+      // 以前直接置 false，鼠标一跨窗，信息面板就消失了。
       return;
     }
     b.shown.value = _crosshairShowTooltip;
@@ -1101,6 +1115,20 @@ class _KlineChartState extends State<KlineChart> {
     // 指标选择面板打开时，十字线不响应：避免桌面 onHover 持续重绘（重建风暴）打断面板内点击
     if (_pickerPane != _IndicatorPickerPane.none) return;
     _crosshairPinRightmost = false;
+    // 鼠标从别的子窗口移进来：十字线此前是联动控制器画的，本窗本地还是关的。
+    // 先按控制器的状态接手（含信息开关），信息面板才能立刻换成这一窗的统计，
+    // 而不是等下一次点击才出现。
+    final s = widget.sync;
+    if (s != null &&
+        s.crosshairOn &&
+        !_crosshairEnabled &&
+        widget.bars.isNotEmpty &&
+        _chartSize.width > 0) {
+      _iAmCrosshairOwner = true;
+      _crosshairMode = s.crosshairTooltip
+          ? CrosshairMode.withTooltip
+          : CrosshairMode.linesOnly;
+    }
     if (!_crosshairEnabled || widget.bars.isEmpty || _chartSize.width <= 0) return;
     // 鼠标进到本窗：本窗成为主窗，其余窗跟着本窗的位置走。
     if (widget.sync != null) _iAmCrosshairOwner = true;
@@ -3683,23 +3711,33 @@ class _KlineCompositePainter extends CustomPainter {
       final cx = (left + right) / 2;
       final spanW = math.max(2.0, right - left);
       final isUp = v.isUp;
-      final stroke = Paint()
-        ..color = isUp ? upStroke : dnStroke
-        ..strokeWidth = 1.6;
-      final fill = Paint()..color = isUp ? upBody : dnBody;
 
       final yH = priceRange.yOf(v.high, plotTop, plotH);
       final yL = priceRange.yOf(v.low, plotTop, plotH);
       final yO = priceRange.yOf(v.open, plotTop, plotH);
       final yC = priceRange.yOf(v.close, plotTop, plotH);
-
-      canvas.drawLine(Offset(cx, yH), Offset(cx, yL), stroke);
-
       final top = math.min(yO, yC);
       final bottom = math.max(yO, yC);
       final rect = Rect.fromLTWH(left, top, spanW, math.max(1.0, bottom - top));
-      canvas.drawRect(rect, fill);
-      canvas.drawRect(rect, stroke);
+      // 影线只画实体之外的上下两段，实体中间不再留竖杠。
+      _drawCandleWick(
+        canvas,
+        cx: cx,
+        yHigh: yH,
+        yLow: yL,
+        bodyTop: rect.top,
+        bodyBottom: rect.bottom,
+        bodyWidth: spanW,
+        color: isUp ? upStroke : dnStroke,
+      );
+      canvas.drawRect(rect, Paint()..color = isUp ? upBody : dnBody);
+      canvas.drawRect(
+        rect,
+        Paint()
+          ..color = isUp ? upStroke : dnStroke
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.6,
+      );
     }
   }
 
@@ -5391,22 +5429,33 @@ class _KlineCompositePainter extends CustomPainter {
       final cx = (left + right) / 2;
       final spanW = math.max(2.0, right - left);
       final isUp = v.isUp;
-      final stroke = Paint()
-        ..color = isUp ? upStroke : dnStroke
-        ..strokeWidth = 1.6;
-      final fill = Paint()..color = isUp ? upBody : dnBody;
 
       final yH = priceRange.yOf(v.high, plotTop, plotH);
       final yL = priceRange.yOf(v.low, plotTop, plotH);
       final yO = priceRange.yOf(v.open, plotTop, plotH);
       final yC = priceRange.yOf(v.close, plotTop, plotH);
-
-      canvas.drawLine(Offset(cx, yH), Offset(cx, yL), stroke);
       final top = math.min(yO, yC);
       final bottom = math.max(yO, yC);
       final rect = Rect.fromLTWH(left, top, spanW, math.max(1.0, bottom - top));
-      canvas.drawRect(rect, fill);
-      canvas.drawRect(rect, stroke);
+      // 影线只画实体之外的上下两段，实体中间不再留竖杠。
+      _drawCandleWick(
+        canvas,
+        cx: cx,
+        yHigh: yH,
+        yLow: yL,
+        bodyTop: rect.top,
+        bodyBottom: rect.bottom,
+        bodyWidth: spanW,
+        color: isUp ? upStroke : dnStroke,
+      );
+      canvas.drawRect(rect, Paint()..color = isUp ? upBody : dnBody);
+      canvas.drawRect(
+        rect,
+        Paint()
+          ..color = isUp ? upStroke : dnStroke
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.6,
+      );
     }
   }
 
@@ -5760,7 +5809,6 @@ class _KlineCompositePainter extends CustomPainter {
     // tick：一字线画点；其它周期：红涨绿跌实体+影线
     const up = Color(0xFFE53935);
     const down = Color(0xFF26A69A);
-    final wick = Paint()..strokeWidth = 1.2;
     final drawDots = period == 'tick';
     final dotR = math.max(1.2, math.min(barW * 0.45, slotW * 0.35));
 
@@ -5795,20 +5843,57 @@ class _KlineCompositePainter extends CustomPainter {
       }
 
       final x = cx - barW / 2;
-      wick.color = color;
 
       final yH = priceRange.yOf(b.high, plotTop, plotH);
       final yL = priceRange.yOf(b.low, plotTop, plotH);
       final yO = priceRange.yOf(b.open, plotTop, plotH);
       final yC = priceRange.yOf(b.close, plotTop, plotH);
-      canvas.drawLine(Offset(cx, yH), Offset(cx, yL), wick);
-
       final top = math.min(yO, yC);
       final bottom = math.max(yO, yC);
+      final bodyH = math.max(1.0, bottom - top);
+      // 影线只画实体之外的上下两段，实体中间不再留竖杠。
+      _drawCandleWick(
+        canvas,
+        cx: cx,
+        yHigh: yH,
+        yLow: yL,
+        bodyTop: top,
+        bodyBottom: top + bodyH,
+        bodyWidth: barW,
+        color: color,
+      );
+
       canvas.drawRect(
-        Rect.fromLTWH(x, top, barW, math.max(1.0, bottom - top)),
+        Rect.fromLTWH(x, top, barW, bodyH),
         Paint()..color = color,
       );
+    }
+  }
+
+  /// 上下影线：只画实体之外的两段，粗细随实体宽度走。
+  ///
+  /// 以前影线固定 1.2 像素，K 放宽后影线细得看不清；实体中间那截竖杠
+  /// 又把阳线、阴线从中劈开。这里影线取实体宽度的约 1/6，最细 1 像素、
+  /// 最粗 6 像素，且两端都停在实体边沿，不再穿过实体。
+  void _drawCandleWick(
+    Canvas canvas, {
+    required double cx,
+    required double yHigh,
+    required double yLow,
+    required double bodyTop,
+    required double bodyBottom,
+    required double bodyWidth,
+    required Color color,
+  }) {
+    final wick = Paint()
+      ..color = color
+      ..strokeWidth = candleWickWidth(bodyWidth)
+      ..strokeCap = StrokeCap.butt;
+    if (yHigh < bodyTop - 0.5) {
+      canvas.drawLine(Offset(cx, yHigh), Offset(cx, bodyTop), wick);
+    }
+    if (yLow > bodyBottom + 0.5) {
+      canvas.drawLine(Offset(cx, bodyBottom), Offset(cx, yLow), wick);
     }
   }
 
