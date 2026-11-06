@@ -5590,3 +5590,13 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **结果**：`dart analyze lib/widgets/kline_chart.dart` 无新增 error；`flutter test test/candle_wick_test.dart` 通过。未改缠论计算。
 - **演示**：打开 K1（或 Kn）底层合并蜡烛，步进在确认前应对 **虚线框**，步过 `confirmX` 后 **实线框**。
 - **注意事项**：**未 push**。需重编 App。
+
+### 2026-11-07 — 修复：confirmX 未给时尾柱动态 K 仍用实线框（viewX2==当步）
+
+- **执行者**：Claude Code Agent
+- **任务类型**：显示层 bugfix
+- **上下文**：用户确认预期：K0 已确认、K1 末根仍在构建时应画虚线外框。根因：`confirmX < 0`（Rust 未给确认步）时 `_unitBarIsBuilding` 用 `viewX2 > cap` 判构建中；尾柱动态的视窗右沿常等于当步 `bars[stepIdx].idx`（`viewX2 == cap`），相等时不满足 `>`，被误判为已确认，边框走实线。分窗下各层 Kn 蜡烛同路径，现象为「动态 K 虚线始终未实现」。
+- **关键操作**：`kline_chart.dart` `_unitBarIsBuilding`：`confirmX < 0` 时改为 `cap <= viewX2` 视为仍在构建（与尾柱即当步一致）；并补注释说明与 `confirmX >= 0` 分支口径。
+- **结果**：`flutter test test/candle_wick_test.dart` 全过。`dart analyze lib/widgets/kline_chart.dart` 无新增 error（文件内原有 warning/info 未改）。未改缠论计算与 Rust。
+- **演示**：步进到末根正在延伸、且该层 bar 暂无有效 `confirm_x` 时，K1/Kn 底层合并柱外框应为虚线；`confirmX` 有效且已超过当步 idx 后为实线。
+- **注意事项**：**未 push**，等用户确认。需热重载/重编 App 后肉眼验收。
