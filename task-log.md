@@ -5610,3 +5610,16 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **结果**：`flutter test test/candle_wick_test.dart` 全过。`dart analyze lib/widgets/kline_chart.dart` 无新增 error（文件内原有 warning/info 未改）。未改缠论计算与 Rust。
 - **演示**：你举的口径——K0 当步已确认、K1 `idx=1` 仍在 `activeUnit` 延伸——该柱外框应 **虚线**；下一步 `activeUnit` 已冻结且 `cap > confirmX` 后 **实线**。
 - **注意事项**：**未 push**，等用户确认。**必须** `flutter build windows --debug`（或项目脚本重编）后 exe 才含本逻辑；仅启动旧 `build\...\chan_kline.exe` 不会变。
+
+### 2026-11-07 — 动态K上下影线改虚线 + 影线加粗
+
+- **执行者**：Claude Code Agent
+- **任务类型**：显示层
+- **上下文**：用户反馈：动态 K 外框已接近预期，但**上下影线仍是实线**；且影线相对实体仍**偏细**。
+- **关键操作**：
+  1. `candle_wick.dart`：实体宽度比例由 **32%** 调至 **40%**，clamp 上限由 11 调至 **12**。
+  2. `kline_chart.dart` `_drawCandleWick`：支持 `dashed` + `dashPattern`，构建中时用 `_drawPatternLine`；K1 / Kn 底层柱在 `_unitBarIsBuilding` 且 `showBuildingDash` 时影线与同层 `buildingDashPattern` 一致。
+  3. K0 `_drawCandles`：当步那根（`idx == _stepAsOfBarIdx`）且开构建虚线时，影线同样虚线。
+- **结果**：`flutter test test/candle_wick_test.dart` 全过。`dart analyze` 涉及文件无新增 error。
+- **演示**：构建中：外框虚线 + **上下影线虚线**；确认后外框与影线均实线。影线略粗于改前。
+- **注意事项**：**未 push**。须重编 exe；关闭「构建中虚线」则影线仍为实线（与合并框同开关）。
