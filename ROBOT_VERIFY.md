@@ -124,7 +124,7 @@ powershell -NoProfile -File CHAN_RUST/scripts/robot_verify_agent_finish.ps1 -NoC
 
 | 阶段 | id | 验什么 |
 |------|----|--------|
-| 1 | `flutter_test_early_dynamic` | `early_dynamic_unit_test.dart` + `kn_clock_causality_test.dart` |
+| 1 | `flutter_test_early_dynamic` | `early_dynamic_unit_test.dart` + `k0_building_line_same_price_test.dart`（同价位合并框端点固定首次出现根）+ `kn_clock_causality_test.dart` |
 | 2 | **`inprocess_early_dynamic_unit`** | 002003 1m 前缀构建：bar0 出现 K1 idx=0 动态；K0 首确认当根 K1 idx=0 冻结、idx=1 动态，同根 K2 idx=0 预锚；K1 首确认当根 K2 确认 + K3 idx=0 预锚；**预锚单元高低取「高高」**（区间 `[起点极点, 当步K]` 内 high=最高 high、low=最高 low，`pre_anchor_high_high_level0/level1`）；**无未来**（短前缀预锚单元与长前缀同 bar 快照逐字段一致，`pre_anchor_no_future_snapshot`）；**确认当根恢复真实 OHLC**（`confirmed_handoff_real_ohlc`，low=经典 `min(段身最低, open)`，不是动态期高高）；预锚单元只服务 K 蜡烛，不参与本层构建中连线/相邻比例；采样钟只记一次 idx=0；关闭开关后以上全部回到经典且确认结构逐层一致 |
 | 3 | `continuous_step_freeze` | 002003 1m + 分笔 连续单步 vs 走完瘦包 对拍（自动挂载） |
 

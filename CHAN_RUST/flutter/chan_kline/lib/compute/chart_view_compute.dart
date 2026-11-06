@@ -1054,6 +1054,23 @@ List<DisplayBuildingLine> _linesFromPoles({
   return out;
 }
 
+/// 同价位合并框的末端首根：在 [x1, x2] 内，从 x2 向前找与末端同价的连续区间起点。
+/// 用于构建中虚线端点——价位相等不拉线，端点固定在首次出现那根。
+int _samePriceRunStart(
+  List<KlineBar> bars,
+  int x1,
+  int x2,
+  double price,
+) {
+  final hi = x2.clamp(0, bars.length - 1);
+  final lo = x1.clamp(0, bars.length - 1);
+  var x = hi;
+  while (x > lo && (bars[x - 1].close - price).abs() < 1e-9) {
+    x--;
+  }
+  return x;
+}
+
 /// 动态KN + 当下分型判断拆段的构建中连线（全层同构）。
 ///
 /// [liveJudgments]：as-of 当下重算的有效判断（禁止用会话历史，否则失效判断自动回退）。
@@ -1106,9 +1123,13 @@ List<DisplayBuildingLine> computeDisplayBuildingLines({
       final out = <DisplayBuildingLine>[];
       for (final u in virtualUnits) {
         if (frozenIdx.contains(u.idx) || u.x1 > asOf || u.dir == 0) continue;
+        // 同价位属于合并框：末端连续同价时，虚线端点固定在该价位首次出现那根，
+        // 不随合并框内的新 K 继续拉长（K0 首分型前 idx=0/1、idx=4/5/6 同价场景）。
+        if ((u.open - u.close).abs() < 1e-9) continue;
+        final endX = _samePriceRunStart(bars, u.x1, u.x2, u.close);
         out.add(DisplayBuildingLine(
           begin: LevelLineEndpoint(barIdx: u.x1, price: u.open),
-          end: LevelLineEndpoint(barIdx: u.x2, price: u.close),
+          end: LevelLineEndpoint(barIdx: endX, price: u.close),
           dir: u.dir,
           unitIdx: u.idx,
           anchorX: u.x1,

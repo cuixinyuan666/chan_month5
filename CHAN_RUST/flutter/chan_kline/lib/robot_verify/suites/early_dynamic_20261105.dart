@@ -37,6 +37,7 @@ Future<RobotVerifyPhase> runEarlyDynamicFlutterTestPhase({
     workingDirectory: klineRoot,
     testPathArgs: [
       'test/early_dynamic_unit_test.dart',
+      'test/k0_building_line_same_price_test.dart',
       'test/kn_clock_causality_test.dart',
     ],
   );
