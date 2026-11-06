@@ -1,6 +1,7 @@
 import 'package:chan_kline/bridge/chan_bridge.dart';
 import 'package:chan_kline/compute/adjacent_ratio_compute.dart';
 import 'package:chan_kline/compute/chart_view_compute.dart';
+import 'package:chan_kline/compute/fractal_judgment_compute.dart';
 import 'package:chan_kline/compute/k1_combine_compute.dart';
 import 'package:chan_kline/models/chart_indicator.dart';
 import 'package:chan_kline/models/k1_bar.dart';
@@ -433,6 +434,58 @@ void main() {
     expect(line.end.price, isNot(closeTo(wide[asOf].low, 1e-9)),
         reason: '不得落到当根最低价');
     expect(line.asSolid, isFalse);
+  });
+
+  test('层级早生成：首个分型判断出现时第一条虚线收成实线', () {
+    final bridge = ChanBridge.instance;
+    final wide = bridge
+        .loadKlinesEx(
+          dataRoot: bridge.defaultDataRoot(),
+          code: '002003',
+          beginDate: '2004/07/19 10:47:00',
+          endDate: '2004/07/20 13:09:00',
+          period: '1m',
+          tickSource: 'file',
+        )
+        .bars;
+    const asOf = 58;
+    final sub = wide.sublist(0, asOf + 1);
+    final b = bridge.buildKlineCombineBundle(sub, earlyDynamicUnit: true);
+    final units = asOfLevelVirtualK1Bars(
+      levels: b.levels,
+      barFeatures: b.barFeatures,
+      level: 1,
+      asOf: asOf,
+      includeBuilding: true,
+      includePreAnchor: true,
+    );
+    final js = collectFractalJudgmentEvents(
+      kn: 1,
+      bars: wide,
+      levels: b.levels,
+      barFeatures: b.barFeatures,
+      asOf: asOf,
+      truncationCheck: true,
+    );
+    expect(js, isNotEmpty, reason: '第 58 根应出现首个分型判断');
+    final lines = computeDisplayBuildingLines(
+      bars: wide,
+      asOf: asOf,
+      virtualUnits: units,
+      frozenIdx: const {},
+      levelConfirms: b.levels[1].confirms,
+      liveJudgments: js,
+    );
+    final solid = lines.where((l) => l.asSolid).toList();
+    final dash = lines.where((l) => !l.asSolid).toList();
+    expect(solid, hasLength(1), reason: '第一条应收成实线，不得消失');
+    expect(solid.single.begin.barIdx, 0);
+    expect(solid.single.begin.price, closeTo(11.66, 1e-9));
+    expect(solid.single.end.barIdx, 44);
+    expect(solid.single.end.price, closeTo(11.97, 1e-9));
+    expect(dash, hasLength(1), reason: '开口仍是第二条虚线');
+    expect(dash.single.begin.barIdx, 44);
+    expect(dash.single.end.barIdx, 55);
   });
 
   test('层级早生成：K1 合并帧跳过本层种子框首组', () {

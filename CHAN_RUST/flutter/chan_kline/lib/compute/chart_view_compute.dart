@@ -1122,6 +1122,54 @@ DisplayBuildingLine? _preConfirmExtremeLine(
   );
 }
 
+/// 首个分型判断出现后，判断极点之前那段收成实线。
+///
+/// 出发端仍按本层方向取区间内首次极值（升=首次最低 low，降=首次最高 high），
+/// 到达端钉在首个判断极点。与开口虚线不重叠；两端同点不画。
+DisplayBuildingLine? _seedLineBeforeFirstPole({
+  required List<KlineBar> bars,
+  required int asOf,
+  required List<K1Bar> virtualUnits,
+  required Set<int> frozenIdx,
+  required _DashPole firstPole,
+}) {
+  K1Bar? unit;
+  for (final u in virtualUnits) {
+    if (frozenIdx.contains(u.idx) || u.dir == 0 || u.x1 > asOf) continue;
+    if (u.x1 <= firstPole.poleX) {
+      unit = u;
+      break;
+    }
+  }
+  if (unit == null) return null;
+  final lo = unit.x1.clamp(0, bars.length - 1);
+  final hi = firstPole.poleX.clamp(0, bars.length - 1);
+  if (lo > hi) return null;
+  final up = unit.dir > 0;
+  final begin = buildingTailEndpoint(
+    bars: bars,
+    afterConfirmX: lo - 1,
+    asOfX: hi,
+    buildingDir: up ? -1 : 1,
+  );
+  if (begin == null) return null;
+  if (begin.barIdx == firstPole.poleX &&
+      (begin.price - firstPole.endpoint.price).abs() < 1e-9) {
+    return null;
+  }
+  return DisplayBuildingLine(
+    begin: begin,
+    end: firstPole.endpoint,
+    dir: unit.dir,
+    unitIdx: unit.idx,
+    anchorX: begin.barIdx,
+    beginSrc: 'dynamic',
+    endSrc: 'judgment',
+    asSolid: true,
+    isOpenTip: false,
+  );
+}
+
 /// 动态KN + 当下分型判断拆段的构建中连线（全层同构）。
 ///
 /// [liveJudgments]：as-of 当下重算的有效判断（禁止用会话历史，否则失效判断自动回退）。
@@ -1182,6 +1230,27 @@ List<DisplayBuildingLine> computeDisplayBuildingLines({
       }
       return out;
     }
+
+    // 首个分型判断出现时，判断极点之前那段不再整段丢掉：
+    // 收成实线（出发极值 → 判断极点），开口虚线仍由极点链负责。
+    final seeded = _seedLineBeforeFirstPole(
+      bars: bars,
+      asOf: asOf,
+      virtualUnits: virtualUnits,
+      frozenIdx: frozenIdx,
+      firstPole: poles.first,
+    );
+    return [
+      if (seeded != null) seeded,
+      ..._linesFromPoles(
+        bars: bars,
+        asOf: asOf,
+        poles: poles,
+        virtualUnits: virtualUnits,
+        frozenIdx: frozenIdx,
+        js: js,
+      ),
+    ];
   } else {
     poles = <_DashPole>[...confirmPoles];
     final lastConfirmTrig = confirmPoles.last.triggerX;
