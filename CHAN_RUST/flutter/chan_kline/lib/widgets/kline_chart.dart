@@ -5560,7 +5560,8 @@ class _KlineCompositePainter extends CustomPainter {
       // 构建中 N 段 = 本层（level）自己的进行中段；虚拟单元取 level 自身的
       // 冻段+active（与 _drawOneLevelLines 的实线同源）。
       // 层级早生成开启、且本层还没有任何确认段时，首段由预锚动态单元接管：
-      // 此时纳入预锚单元，按本层 open→close 补一条构建中虚线；种子线已隐藏，只留这一条。
+      // 此时纳入预锚单元，按本层方向扫区间内首次极值补一条构建中虚线
+      // （升段 low→high，与首个分型之后的开口虚线同一套扫价）。
       // 开关关闭时保持经典口径：预锚单元不参与本层连线。
       virtualUnits = asOfLevelVirtualK1Bars(
         levels: levels,
