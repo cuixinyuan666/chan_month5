@@ -1,7 +1,10 @@
 import 'package:chan_kline/bridge/chan_bridge.dart';
 import 'package:chan_kline/compute/adjacent_ratio_compute.dart';
 import 'package:chan_kline/compute/chart_view_compute.dart';
+import 'package:chan_kline/compute/fractal_judgment_compute.dart';
+import 'package:chan_kline/compute/k1_combine_compute.dart';
 import 'package:chan_kline/models/chart_indicator.dart';
+import 'package:chan_kline/models/k1_bar.dart';
 import 'package:chan_kline/models/kline_bar.dart';
 import 'package:chan_kline/models/kline_combine_bundle.dart';
 import 'package:chan_kline/models/level_models.dart';
@@ -162,7 +165,8 @@ void main() {
     expect(preA.x2, fx - 1);
     expectHighHigh(preA, bars);
 
-    // K0 首确认前：只有一条构建中虚线，端点取预锚单元 open→close
+    // K0 首确认前：只有一条构建中虚线。
+    // 升段两端取区间内首次最低 low → 首次最高 high（与首个分型后的开口虚线同口径）。
     final preBars = bars.sublist(0, fx);
     final k1Units = asOfK1Bars(
       bars: preBars,
@@ -180,10 +184,21 @@ void main() {
       frozenIdx: const {},
     );
     expect(k0Lines.length, 1, reason: '十字线回看不得多出第二条线');
-    expect(k0Lines.single.begin.barIdx, preA.x1);
-    expect(k0Lines.single.begin.price, closeTo(preA.open, 1e-9));
-    expect(k0Lines.single.end.barIdx, preA.x2);
-    expect(k0Lines.single.end.price, closeTo(preA.close, 1e-9));
+    final pre = k1Units.single;
+    var trough = double.infinity;
+    var peak = double.negativeInfinity;
+    final lo = pre.x1.clamp(0, preBars.length - 1);
+    final hi = pre.x2.clamp(0, preBars.length - 1);
+    for (var i = lo; i <= hi; i++) {
+      if (preBars[i].low < trough) trough = preBars[i].low;
+      if (preBars[i].high > peak) peak = preBars[i].high;
+    }
+    final up = pre.dir > 0;
+    expect(k0Lines.single.begin.price, closeTo(up ? trough : peak, 1e-9),
+        reason: '起点取区间内方向出发极值');
+    expect(k0Lines.single.end.price, closeTo(up ? peak : trough, 1e-9),
+        reason: '终点取区间内方向到达极值');
+    expect(k0Lines.single.asSolid, isFalse);
 
     final on = bundleOfPrefix(fx + 1);
     expect(on.levels.length, greaterThanOrEqualTo(2));
@@ -248,7 +263,7 @@ void main() {
     expect(chartMaxKn(levels: off.levels), 2, reason: '关闭后 K2 窗口应不可用');
   });
 
-  test('预锚单元不画成本层连线/比例；蜡烛与合并框仍保留', () {
+  test('预锚单元：蜡烛/合并框保留；相邻比例与经典连线口径不受影响', () {
     final full = bundleOfPrefix(bars.length);
     final fx = full.levels[0].segments.first.endConfirmX;
     final on = bundleOfPrefix(fx + 1);
@@ -263,7 +278,7 @@ void main() {
     expect(candle.length, 1);
     expect(candle.single.idx, 0);
 
-    // 连线路径：同一时点不接收预锚单元
+    // 经典连线口径（includePreAnchor=false）：同一时点不接收预锚单元
     final lineUnits = asOfLevelVirtualK1Bars(
       levels: on.levels,
       barFeatures: on.barFeatures,
@@ -312,5 +327,240 @@ void main() {
         reason: '开关开：种子框/开口/ABC 不画');
     expect(seedPhaseVisible(earlyDynamicUnit: false), isTrue,
         reason: '开关关：经典种子绘制照旧');
+  });
+
+  /// 本轮口径（2026-11-06）：首个分型确认前，本层构建中虚线由预锚动态单元接管。
+  /// 升段两端取区间内首次最低 low → 首次最高 high，与首个分型之后的开口虚线同一套扫价；
+  /// 开关关时保持经典口径（不补线）。
+  test('层级早生成：K1 首分型前用预锚单元补一条构建中虚线', () {
+    final full = bundleOfPrefix(bars.length);
+    final fx = full.levels[0].segments.first.endConfirmX;
+    final on = bundleOfPrefix(fx + 1);
+    expect(on.levels[1].confirms, isEmpty, reason: '此刻 K1 尚未有确认段');
+
+    List<K1Bar> unitsOf({required bool preAnchor}) => asOfLevelVirtualK1Bars(
+          levels: on.levels,
+          barFeatures: on.barFeatures,
+          level: 1,
+          asOf: fx,
+          includeBuilding: true,
+          includePreAnchor: preAnchor,
+        );
+
+    final unitsOn = unitsOf(preAnchor: true);
+    expect(unitsOn, hasLength(1), reason: 'K1 此刻只有预锚动态单元');
+    final linesOn = computeDisplayBuildingLines(
+      bars: bars.sublist(0, fx + 1),
+      asOf: fx,
+      virtualUnits: unitsOn,
+      frozenIdx: const {},
+      levelConfirms: on.levels[1].confirms,
+    );
+    expect(linesOn, hasLength(1), reason: '开关开：首分型前应有一条构建中虚线');
+    final line = linesOn.single;
+    final pre = unitsOn.single;
+    final lo = pre.x1.clamp(0, bars.length - 1);
+    final hi = pre.x2.clamp(0, bars.length - 1);
+    var trough = double.infinity;
+    var peak = double.negativeInfinity;
+    var troughX = lo;
+    var peakX = lo;
+    for (var i = lo; i <= hi; i++) {
+      if (bars[i].low < trough) {
+        trough = bars[i].low;
+        troughX = i;
+      }
+      if (bars[i].high > peak) {
+        peak = bars[i].high;
+        peakX = i;
+      }
+    }
+    final up = pre.dir > 0;
+    expect(line.begin.barIdx, up ? troughX : peakX,
+        reason: '起点钉在区间内方向出发极值（升=首次最低 low，降=首次最高 high）');
+    expect(line.begin.price, closeTo(up ? trough : peak, 1e-9));
+    expect(line.end.barIdx, up ? peakX : troughX,
+        reason: '终点钉在区间内方向到达极值，不跟当根收盘');
+    expect(line.end.price, closeTo(up ? peak : trough, 1e-9));
+    expect(line.asSolid, isFalse, reason: '未确认段必须是虚线');
+
+    final linesOff = computeDisplayBuildingLines(
+      bars: bars.sublist(0, fx + 1),
+      asOf: fx,
+      virtualUnits: unitsOf(preAnchor: false),
+      frozenIdx: const {},
+      levelConfirms: on.levels[1].confirms,
+    );
+    expect(linesOff, isEmpty, reason: '开关关：经典口径不补首分型前虚线');
+  });
+
+  test('层级早生成：K1 步进到第 32 根时首条虚线仍钉在高高极值', () {
+    final bridge = ChanBridge.instance;
+    final wide = bridge
+        .loadKlinesEx(
+          dataRoot: bridge.defaultDataRoot(),
+          code: '002003',
+          beginDate: '2004/07/19 10:47:00',
+          endDate: '2004/07/20 13:09:00',
+          period: '1m',
+          tickSource: 'file',
+        )
+        .bars;
+    const asOf = 32;
+    final sub = wide.sublist(0, asOf + 1);
+    final b = bridge.buildKlineCombineBundle(sub, earlyDynamicUnit: true);
+    final units = asOfLevelVirtualK1Bars(
+      levels: b.levels,
+      barFeatures: b.barFeatures,
+      level: 1,
+      asOf: asOf,
+      includeBuilding: true,
+      includePreAnchor: true,
+    );
+    expect(units, hasLength(1));
+    final lines = computeDisplayBuildingLines(
+      bars: wide,
+      asOf: asOf,
+      virtualUnits: units,
+      frozenIdx: const {},
+      levelConfirms: b.levels[1].confirms,
+    );
+    expect(lines, hasLength(1), reason: '第 32 根时首条虚线不得消失');
+    final line = lines.single;
+    expect(line.begin.barIdx, 0);
+    expect(line.begin.price, closeTo(11.66, 1e-9));
+    expect(line.end.barIdx, 21, reason: '终点钉在区间内首次最高 high 那根');
+    expect(line.end.price, closeTo(11.89, 1e-9));
+    expect(line.end.price, isNot(closeTo(wide[asOf].low, 1e-9)),
+        reason: '不得落到当根最低价');
+    expect(line.asSolid, isFalse);
+  });
+
+  test('层级早生成：首个分型判断出现时第一条虚线收成实线', () {
+    final bridge = ChanBridge.instance;
+    final wide = bridge
+        .loadKlinesEx(
+          dataRoot: bridge.defaultDataRoot(),
+          code: '002003',
+          beginDate: '2004/07/19 10:47:00',
+          endDate: '2004/07/20 13:09:00',
+          period: '1m',
+          tickSource: 'file',
+        )
+        .bars;
+    const asOf = 58;
+    final sub = wide.sublist(0, asOf + 1);
+    final b = bridge.buildKlineCombineBundle(sub, earlyDynamicUnit: true);
+    final units = asOfLevelVirtualK1Bars(
+      levels: b.levels,
+      barFeatures: b.barFeatures,
+      level: 1,
+      asOf: asOf,
+      includeBuilding: true,
+      includePreAnchor: true,
+    );
+    final js = collectFractalJudgmentEvents(
+      kn: 1,
+      bars: wide,
+      levels: b.levels,
+      barFeatures: b.barFeatures,
+      asOf: asOf,
+      truncationCheck: true,
+    );
+    expect(js, isNotEmpty, reason: '第 58 根应出现首个分型判断');
+    final lines = computeDisplayBuildingLines(
+      bars: wide,
+      asOf: asOf,
+      virtualUnits: units,
+      frozenIdx: const {},
+      levelConfirms: b.levels[1].confirms,
+      liveJudgments: js,
+    );
+    final solid = lines.where((l) => l.asSolid).toList();
+    final dash = lines.where((l) => !l.asSolid).toList();
+    expect(solid, hasLength(1), reason: '第一条应收成实线，不得消失');
+    expect(solid.single.begin.barIdx, 0);
+    expect(solid.single.begin.price, closeTo(11.66, 1e-9));
+    expect(solid.single.end.barIdx, 44);
+    expect(solid.single.end.price, closeTo(11.97, 1e-9));
+    expect(dash, hasLength(1), reason: '开口仍是第二条虚线');
+    expect(dash.single.begin.barIdx, 44);
+    expect(dash.single.end.barIdx, 55);
+  });
+
+  test('层级早生成：K1 合并帧跳过本层种子框首组', () {
+    final on = bundleOfPrefix(bars.length);
+    final asOf = bars.length - 1;
+    final snap = levelSnapAt(on.barFeatures, level: 1, asOf: asOf);
+    expect(snap, isNotNull);
+    expect(snap!.seedBoxSeq, 0, reason: 'K1 种子框应存在');
+
+    final frames = on.k1CombineFrames;
+    expect(frames, isNotEmpty);
+    final first = frames.first;
+    expect(first.x1, snap.seedBoxX1);
+    expect(first.x2, snap.seedBoxX2);
+    expect(first.high, closeTo(snap.seedBoxHigh, 1e-9));
+    expect(first.low, closeTo(snap.seedBoxLow, 1e-9));
+
+    final kept = combineFramesWithoutSeed(
+      frames: frames,
+      snap: snap,
+      earlyDynamicUnit: true,
+    );
+    expect(kept.length, frames.length - 1, reason: '开关开：种子框首组被跳过');
+    expect(kept.first.x1, frames[1].x1);
+    expect(
+      combineFramesWithoutSeed(
+        frames: frames,
+        snap: snap,
+        earlyDynamicUnit: false,
+      ),
+      same(frames),
+      reason: '开关关：经典种子口径保留原合并帧',
+    );
+  });
+
+  test('层级早生成：K2 合并帧同样跳过二级种子框首组', () async {
+    final bridge = ChanBridge.instance;
+    final wide = bridge
+        .loadKlinesEx(
+          dataRoot: bridge.defaultDataRoot(),
+          code: code,
+          beginDate: begin,
+          endDate: '2025/09/30 15:00:00',
+          period: period,
+          tickSource: 'protocol',
+        )
+        .bars;
+    const n = 136;
+    const asOf = n - 1;
+    final sub = wide.sublist(0, n);
+    final b = bridge.buildKlineCombineBundle(sub, earlyDynamicUnit: true);
+    final snap = levelSnapAt(b.barFeatures, level: 2, asOf: asOf);
+    expect(snap, isNotNull, reason: 'K2 种子快照应已出现');
+    expect(snap!.seedBoxSeq, 0);
+
+    final vu = asOfLevelVirtualK1Bars(
+      levels: b.levels,
+      barFeatures: b.barFeatures,
+      level: 1,
+      asOf: asOf,
+      includeBuilding: true,
+    );
+    final frames = computeK1CombineFrames(sub, vu);
+    expect(frames, isNotEmpty);
+    expect(frames.first.x1, snap.seedBoxX1);
+    expect(frames.first.x2, snap.seedBoxX2);
+    expect(frames.first.high, closeTo(snap.seedBoxHigh, 1e-9));
+    expect(frames.first.low, closeTo(snap.seedBoxLow, 1e-9));
+
+    final kept = combineFramesWithoutSeed(
+      frames: frames,
+      snap: snap,
+      earlyDynamicUnit: true,
+    );
+    expect(kept.length, frames.length - 1,
+        reason: 'K2 种子框首组同样跳过（全层同构）');
   });
 }

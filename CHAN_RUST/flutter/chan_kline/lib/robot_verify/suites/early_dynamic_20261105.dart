@@ -1,7 +1,9 @@
 import 'package:chan_kline/bridge/chan_bridge.dart';
 import 'package:chan_kline/compute/adjacent_ratio_compute.dart';
 import 'package:chan_kline/compute/chart_view_compute.dart';
+import 'package:chan_kline/compute/k1_combine_compute.dart';
 import 'package:chan_kline/compute/kn_clock_timeline.dart';
+import 'package:chan_kline/models/bar_crosshair_feature.dart';
 import 'package:chan_kline/models/chart_indicator.dart';
 import 'package:chan_kline/models/kline_bar.dart';
 import 'package:chan_kline/models/kline_combine_bundle.dart';
@@ -101,6 +103,43 @@ Future<RobotVerifyPhase> runEarlyDynamicInProcessPhase({String? klineRoot}) asyn
       );
 
   bool near(double a, double b) => (a - b).abs() <= 1e-9;
+
+  /// 首分型前虚线：升段起点=区间内首次最低 low、终点=首次最高 high；降段对调。
+  bool _firstExtremeMatches({
+    required List<KlineBar> bars,
+    required int x1,
+    required int x2,
+    required LevelLineEndpoint begin,
+    required LevelLineEndpoint end,
+    required int dir,
+  }) {
+    if (dir == 0 || bars.isEmpty) return false;
+    final lo = x1.clamp(0, bars.length - 1);
+    final hi = x2.clamp(0, bars.length - 1);
+    if (lo > hi) return false;
+    var trough = double.infinity;
+    var peak = double.negativeInfinity;
+    var troughX = lo;
+    var peakX = lo;
+    for (var i = lo; i <= hi; i++) {
+      if (bars[i].low < trough) {
+        trough = bars[i].low;
+        troughX = i;
+      }
+      if (bars[i].high > peak) {
+        peak = bars[i].high;
+        peakX = i;
+      }
+    }
+    final startX = dir > 0 ? troughX : peakX;
+    final startPrice = dir > 0 ? trough : peak;
+    final stopX = dir > 0 ? peakX : troughX;
+    final stopPrice = dir > 0 ? peak : trough;
+    return begin.barIdx == startX &&
+        near(begin.price, startPrice) &&
+        end.barIdx == stopX &&
+        near(end.price, stopPrice);
+  }
 
   /// 预锚「高高」：区间 [x1,x2] 内 high 取最高 high，low 取最高 low；
   /// close 取区间末根收盘（与 Rust `pre_anchor_unit_ohlcv` 同口径）。
@@ -283,16 +322,68 @@ Future<RobotVerifyPhase> runEarlyDynamicInProcessPhase({String? klineRoot}) asyn
       },
     );
 
-    // 预锚单元只服务 K 蜡烛，不得在本层多画构建中连线 / 比例虚线。
-    final k2LineUnits = asOfLevelVirtualK1Bars(
+    // 2026-11-06 口径：开关开时，本层首分型前由预锚单元补一条构建中虚线。
+    // 升段两端取区间内首次最低 low → 首次最高 high，与首个分型后的开口虚线同一套扫价；
+    // 相邻比例仍不得凭空多出子线。
+    final lineUnitsOn = asOfLevelVirtualK1Bars(
       levels: at.levels,
       barFeatures: at.barFeatures,
       level: 1,
       asOf: fx,
+      includeBuilding: true,
+      includePreAnchor: true,
+    );
+    final k1LinesOn = computeDisplayBuildingLines(
+      bars: bars,
+      asOf: fx,
+      virtualUnits: lineUnitsOn,
+      frozenIdx: const {},
+      levelConfirms: al1?.confirms ?? const [],
+    );
+    final preUnit = lineUnitsOn.length == 1 ? lineUnitsOn.single : null;
+    add(
+      'first_confirm_line_units_with_pre_anchor',
+      preUnit != null &&
+          k1LinesOn.length == 1 &&
+          _firstExtremeMatches(
+            bars: bars,
+            x1: preUnit.x1,
+            x2: preUnit.x2,
+            begin: k1LinesOn.single.begin,
+            end: k1LinesOn.single.end,
+            dir: preUnit.dir,
+          ) &&
+          !k1LinesOn.single.asSolid,
+      {
+        'units': lineUnitsOn.length,
+        'lines': k1LinesOn.length,
+        'unitLow': preUnit?.low,
+        'unitHigh': preUnit?.high,
+        'beginX': k1LinesOn.isEmpty ? null : k1LinesOn.single.begin.barIdx,
+        'endX': k1LinesOn.isEmpty ? null : k1LinesOn.single.end.barIdx,
+        'beginPrice': k1LinesOn.isEmpty ? null : k1LinesOn.single.begin.price,
+        'endPrice': k1LinesOn.isEmpty ? null : k1LinesOn.single.end.price,
+        'solid': k1LinesOn.isEmpty ? null : k1LinesOn.single.asSolid,
+      },
+    );
+    // 开关关闭：经典口径不得补这条线。
+    final lineUnitsOff = asOfLevelVirtualK1Bars(
+      levels: at.levels,
+      barFeatures: at.barFeatures,
+      level: 1,
+      asOf: fx,
+      includeBuilding: true,
       includePreAnchor: false,
     );
-    add('first_confirm_line_units_no_pre_anchor', k2LineUnits.isEmpty,
-        {'count': k2LineUnits.length});
+    final k1LinesOff = computeDisplayBuildingLines(
+      bars: bars,
+      asOf: fx,
+      virtualUnits: lineUnitsOff,
+      frozenIdx: const {},
+      levelConfirms: al1?.confirms ?? const [],
+    );
+    add('first_confirm_line_units_no_pre_anchor', k1LinesOff.isEmpty,
+        {'units': lineUnitsOff.length, 'lines': k1LinesOff.length});
     final ratioAtFx = buildRatioChildren(
       levels: at.levels,
       displayKn: 1,
@@ -302,6 +393,136 @@ Future<RobotVerifyPhase> runEarlyDynamicInProcessPhase({String? klineRoot}) asyn
     );
     add('first_confirm_ratio_no_pre_anchor', ratioAtFx.isEmpty,
         {'children': ratioAtFx.length});
+
+    // 2026-11-06 口径：开关开时，合并帧首组与本层种子框同矩形 → 跳过；
+    // 开关关时保留原样（经典种子口径）。
+    final seed1 = levelSnapAt(at.barFeatures, level: 1, asOf: fx);
+    final frames1 = at.k1CombineFrames;
+    final firstFrame1 = frames1.isEmpty ? null : frames1.first;
+    final seed1Matched = seed1 != null &&
+        seed1.seedBoxSeq >= 0 &&
+        firstFrame1 != null &&
+        firstFrame1.x1 == seed1.seedBoxX1 &&
+        firstFrame1.x2 == seed1.seedBoxX2 &&
+        near(firstFrame1.high, seed1.seedBoxHigh) &&
+        near(firstFrame1.low, seed1.seedBoxLow);
+    final kept1 = combineFramesWithoutSeed(
+      frames: frames1,
+      snap: seed1,
+      earlyDynamicUnit: true,
+    );
+    add(
+      'first_confirm_seed_frame_skipped_level1',
+      seed1Matched && kept1.length == frames1.length - 1,
+      {
+        'seedSeq': seed1?.seedBoxSeq,
+        'seedX1': seed1?.seedBoxX1,
+        'seedX2': seed1?.seedBoxX2,
+        'frames': frames1.length,
+        'kept': kept1.length,
+        'matched': seed1Matched,
+      },
+    );
+    final kept1Off = combineFramesWithoutSeed(
+      frames: frames1,
+      snap: seed1,
+      earlyDynamicUnit: false,
+    );
+    add(
+      'first_confirm_seed_frame_kept_when_off',
+      kept1Off.length == frames1.length,
+      {'frames': frames1.length, 'kept': kept1Off.length},
+    );
+
+    // 全层同构：K2 首组种子框同样跳过，且首分型前同样有预锚构建中虚线。
+    BarCrosshairFeature? k2SeedFeat;
+    for (final f in full.barFeatures) {
+      for (final s in f.levels) {
+        if (s.level == 2 && s.seedBoxSeq >= 0) {
+          k2SeedFeat = f;
+          break;
+        }
+      }
+      if (k2SeedFeat != null) break;
+    }
+    var k2SeedSkipped = false;
+    var k2LineBuilt = false;
+    final k2Data = <String, Object?>{'found': k2SeedFeat != null};
+    if (k2SeedFeat != null) {
+      final asOf2 = k2SeedFeat.idx;
+      final at2seed = bundleOf(asOf2 + 1);
+      final snap2 = levelSnapAt(at2seed.barFeatures, level: 2, asOf: asOf2);
+      final vu2 = asOfLevelVirtualK1Bars(
+        levels: at2seed.levels,
+        barFeatures: at2seed.barFeatures,
+        level: 1,
+        asOf: asOf2,
+        includeBuilding: true,
+      );
+      final frames2 = computeK1CombineFrames(
+        bars.sublist(0, asOf2 + 1),
+        vu2,
+      );
+      final firstFrame2 = frames2.isEmpty ? null : frames2.first;
+      final matched2 = snap2 != null &&
+          snap2.seedBoxSeq >= 0 &&
+          firstFrame2 != null &&
+          firstFrame2.x1 == snap2.seedBoxX1 &&
+          firstFrame2.x2 == snap2.seedBoxX2 &&
+          near(firstFrame2.high, snap2.seedBoxHigh) &&
+          near(firstFrame2.low, snap2.seedBoxLow);
+      final kept2 = combineFramesWithoutSeed(
+        frames: frames2,
+        snap: snap2,
+        earlyDynamicUnit: true,
+      );
+      k2SeedSkipped = matched2 && kept2.length == frames2.length - 1;
+
+      final lv2 = at2seed.levels.where((l) => l.level == 2).toList();
+      final units2 = asOfLevelVirtualK1Bars(
+        levels: at2seed.levels,
+        barFeatures: at2seed.barFeatures,
+        level: 2,
+        asOf: asOf2,
+        includeBuilding: true,
+        includePreAnchor: true,
+      );
+      final lines2 = computeDisplayBuildingLines(
+        bars: bars,
+        asOf: asOf2,
+        virtualUnits: units2,
+        frozenIdx: const {},
+        levelConfirms: lv2.isEmpty ? const [] : lv2.first.confirms,
+      );
+      final pre2 = units2.length == 1 ? units2.single : null;
+      k2LineBuilt = pre2 != null &&
+          lines2.length == 1 &&
+          _firstExtremeMatches(
+            bars: bars,
+            x1: pre2.x1,
+            x2: pre2.x2,
+            begin: lines2.single.begin,
+            end: lines2.single.end,
+            dir: pre2.dir,
+          ) &&
+          !lines2.single.asSolid;
+      k2Data.addAll({
+        'asOf': asOf2,
+        'seedSeq': snap2?.seedBoxSeq,
+        'seedX1': snap2?.seedBoxX1,
+        'seedX2': snap2?.seedBoxX2,
+        'frames': frames2.length,
+        'kept': kept2.length,
+        'matched': matched2,
+        'units': units2.length,
+        'lines': lines2.length,
+        'lineSolid': lines2.isEmpty ? null : lines2.single.asSolid,
+        'lineBegin': lines2.isEmpty ? null : lines2.single.begin.price,
+        'lineEnd': lines2.isEmpty ? null : lines2.single.end.price,
+      });
+    }
+    add('level2_seed_frame_skipped', k2SeedSkipped, k2Data);
+    add('level2_pre_confirm_building_line', k2LineBuilt, k2Data);
 
     // 无未来：短前缀的预锚单元与长前缀同 bar 快照逐字段一致。
     final noFutureDiffs = <String>[];

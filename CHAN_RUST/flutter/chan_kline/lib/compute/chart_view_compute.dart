@@ -3,6 +3,7 @@ import '../models/fractal_judgment_event.dart';
 import '../models/k0_confirm_signal.dart';
 import '../models/k1_bar.dart';
 import '../models/kline_bar.dart';
+import '../models/kline_combine_frame.dart';
 import '../models/level_models.dart';
 
 /// 纯视图组装（十字线 as-of 重绘）：全部数据来自 Rust 冻结产物 + 逐K快照，
@@ -547,9 +548,11 @@ List<K1Bar> levelBundleVirtualK1Bars(LevelBundle bundle) {
 
 /// as-of 展示轨虚拟单元（全层同构）：冻结段 + 可选当步进行中（LevelSnap）。
 ///
-/// [includePreAnchor]：是否把「预锚动态单元」计入。预锚单元只服务下一窗口的
-/// K 蜡烛/合并框（以及虚拟K、采样钟、中枢/买卖点）；本层连线、相邻比例、
-/// 回归基准必须传 false，否则该层还没有任何确认段时会多画一条构建中连线。
+/// [includePreAnchor]：是否把「预锚动态单元」计入。预锚单元主要服务下一窗口的
+/// K 蜡烛/合并框（以及虚拟K、采样钟、中枢/买卖点）；本层「构建中连线」在
+/// 层级早生成开启时也按它补首分型前虚线（2026-11-06 口径：升段取区间内
+/// 首次最低 low → 首次最高 high），相邻比例与回归基准仍必须传 false，
+/// 否则该层还没有任何确认段时会多出一条基准/子线。
 List<K1Bar> asOfLevelVirtualK1Bars({
   required List<LevelBundle> levels,
   required List<BarCrosshairFeature> barFeatures,
@@ -655,6 +658,26 @@ LevelLineEndpoint? seedBoxDepartEndpoint({
 /// 「层级早生成动态单元」开启时，首段由预锚动态单元接管，种子框、种子开口与 ABC 全部不画；
 /// 关闭时保持经典种子绘制。只影响主图绘制，不影响种子数据与相邻比例指标。
 bool seedPhaseVisible({required bool earlyDynamicUnit}) => !earlyDynamicUnit;
+
+/// 合并帧剔除「本层种子框」首组（全层同构，K0/K1/K2…/Kn 同一口径）。
+///
+/// 层级早生成开启时，首段由预锚动态单元接管，种子框不再绘制；而该层合并帧的
+/// 第一组与种子框同矩形（同 x 区间、同 high/low），必须一并跳过，否则同一只框
+/// 仍会以「合并框」名义留在图上。开关关闭时原样返回，保持经典种子绘制。
+List<KlineCombineFrame> combineFramesWithoutSeed({
+  required List<KlineCombineFrame> frames,
+  required LevelSnap? snap,
+  required bool earlyDynamicUnit,
+}) {
+  if (!earlyDynamicUnit || frames.isEmpty || snap == null) return frames;
+  if (snap.seedBoxSeq < 0) return frames;
+  final first = frames.first;
+  final sameAsSeed = first.x1 == snap.seedBoxX1 &&
+      first.x2 == snap.seedBoxX2 &&
+      (first.high - snap.seedBoxHigh).abs() < 1e-9 &&
+      (first.low - snap.seedBoxLow).abs() < 1e-9;
+  return sameAsSeed ? frames.sublist(1) : frames;
+}
 
 /// 种子 UNKNOWN 开口虚线（方案2·D2·S-b，**全层同构**：K1/K2/…/Kn 同一函数、同口径）：
 /// - 仅 `firstFxState==UNKNOWN` 且 `seedLeaveDir!=0`（已有 group1，「离开种子」方向）；
@@ -1054,21 +1077,97 @@ List<DisplayBuildingLine> _linesFromPoles({
   return out;
 }
 
-/// 同价位合并框的末端首根：在 [x1, x2] 内，从 x2 向前找与末端同价的连续区间起点。
-/// 用于构建中虚线端点——价位相等不拉线，端点固定在首次出现那根。
-int _samePriceRunStart(
+/// 首分型确认前的构建中虚线：区间内按方向扫「首次极值」。
+///
+/// 升段起点=区间内首次最低 low、终点=首次最高 high；降段对调。
+/// 与首个分型之后的开口虚线同一套扫价（[buildingTailEndpoint]），
+/// 端点钉在极值第一次出现的那根，不跟当根收盘价、也不跟当根最低价。
+/// 两端落在同一根（还没走出第二根极值）时返回 null，不画点。
+DisplayBuildingLine? _preConfirmExtremeLine(
   List<KlineBar> bars,
-  int x1,
-  int x2,
-  double price,
+  K1Bar unit,
+  int asOf,
 ) {
-  final hi = x2.clamp(0, bars.length - 1);
-  final lo = x1.clamp(0, bars.length - 1);
-  var x = hi;
-  while (x > lo && (bars[x - 1].close - price).abs() < 1e-9) {
-    x--;
+  if (unit.dir == 0 || bars.isEmpty) return null;
+  final lo = unit.x1.clamp(0, bars.length - 1);
+  final hi = (unit.x2 < asOf ? unit.x2 : asOf).clamp(0, bars.length - 1);
+  if (lo > hi) return null;
+  final up = unit.dir > 0;
+  final begin = buildingTailEndpoint(
+    bars: bars,
+    afterConfirmX: lo - 1,
+    asOfX: hi,
+    buildingDir: up ? -1 : 1,
+  );
+  final end = buildingTailEndpoint(
+    bars: bars,
+    afterConfirmX: lo - 1,
+    asOfX: hi,
+    buildingDir: up ? 1 : -1,
+  );
+  if (begin == null || end == null) return null;
+  if (begin.barIdx == end.barIdx && (begin.price - end.price).abs() < 1e-9) {
+    return null;
   }
-  return x;
+  return DisplayBuildingLine(
+    begin: begin,
+    end: end,
+    dir: unit.dir,
+    unitIdx: unit.idx,
+    anchorX: begin.barIdx,
+    beginSrc: 'dynamic',
+    endSrc: 'dynamic',
+    asSolid: false,
+    isOpenTip: true,
+  );
+}
+
+/// 首个分型判断出现后，判断极点之前那段收成实线。
+///
+/// 出发端仍按本层方向取区间内首次极值（升=首次最低 low，降=首次最高 high），
+/// 到达端钉在首个判断极点。与开口虚线不重叠；两端同点不画。
+DisplayBuildingLine? _seedLineBeforeFirstPole({
+  required List<KlineBar> bars,
+  required int asOf,
+  required List<K1Bar> virtualUnits,
+  required Set<int> frozenIdx,
+  required _DashPole firstPole,
+}) {
+  K1Bar? unit;
+  for (final u in virtualUnits) {
+    if (frozenIdx.contains(u.idx) || u.dir == 0 || u.x1 > asOf) continue;
+    if (u.x1 <= firstPole.poleX) {
+      unit = u;
+      break;
+    }
+  }
+  if (unit == null) return null;
+  final lo = unit.x1.clamp(0, bars.length - 1);
+  final hi = firstPole.poleX.clamp(0, bars.length - 1);
+  if (lo > hi) return null;
+  final up = unit.dir > 0;
+  final begin = buildingTailEndpoint(
+    bars: bars,
+    afterConfirmX: lo - 1,
+    asOfX: hi,
+    buildingDir: up ? -1 : 1,
+  );
+  if (begin == null) return null;
+  if (begin.barIdx == firstPole.poleX &&
+      (begin.price - firstPole.endpoint.price).abs() < 1e-9) {
+    return null;
+  }
+  return DisplayBuildingLine(
+    begin: begin,
+    end: firstPole.endpoint,
+    dir: unit.dir,
+    unitIdx: unit.idx,
+    anchorX: begin.barIdx,
+    beginSrc: 'dynamic',
+    endSrc: 'judgment',
+    asSolid: true,
+    isOpenTip: false,
+  );
 }
 
 /// 动态KN + 当下分型判断拆段的构建中连线（全层同构）。
@@ -1123,24 +1222,35 @@ List<DisplayBuildingLine> computeDisplayBuildingLines({
       final out = <DisplayBuildingLine>[];
       for (final u in virtualUnits) {
         if (frozenIdx.contains(u.idx) || u.x1 > asOf || u.dir == 0) continue;
-        // 同价位属于合并框：末端连续同价时，虚线端点固定在该价位首次出现那根，
-        // 不随合并框内的新 K 继续拉长（K0 首分型前 idx=0/1、idx=4/5/6 同价场景）。
-        if ((u.open - u.close).abs() < 1e-9) continue;
-        final endX = _samePriceRunStart(bars, u.x1, u.x2, u.close);
-        out.add(DisplayBuildingLine(
-          begin: LevelLineEndpoint(barIdx: u.x1, price: u.open),
-          end: LevelLineEndpoint(barIdx: endX, price: u.close),
-          dir: u.dir,
-          unitIdx: u.idx,
-          anchorX: u.x1,
-          beginSrc: 'dynamic',
-          endSrc: 'dynamic',
-          asSolid: false,
-          isOpenTip: true,
-        ));
+        // 首分型前没有极点可钉：按本层单元方向扫区间首次极值。
+        // 升段 low→high，降段 high→low；与首个分型之后的开口虚线同一套扫价。
+        // 两端同点（还没走出第二根极值）不画线。
+        final line = _preConfirmExtremeLine(bars, u, asOf);
+        if (line != null) out.add(line);
       }
       return out;
     }
+
+    // 首个分型判断出现时，判断极点之前那段不再整段丢掉：
+    // 收成实线（出发极值 → 判断极点），开口虚线仍由极点链负责。
+    final seeded = _seedLineBeforeFirstPole(
+      bars: bars,
+      asOf: asOf,
+      virtualUnits: virtualUnits,
+      frozenIdx: frozenIdx,
+      firstPole: poles.first,
+    );
+    return [
+      if (seeded != null) seeded,
+      ..._linesFromPoles(
+        bars: bars,
+        asOf: asOf,
+        poles: poles,
+        virtualUnits: virtualUnits,
+        frozenIdx: frozenIdx,
+        js: js,
+      ),
+    ];
   } else {
     poles = <_DashPole>[...confirmPoles];
     final lastConfirmTrig = confirmPoles.last.triggerX;
