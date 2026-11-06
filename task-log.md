@@ -5600,3 +5600,13 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **结果**：`flutter test test/candle_wick_test.dart` 全过。`dart analyze lib/widgets/kline_chart.dart` 无新增 error（文件内原有 warning/info 未改）。未改缠论计算与 Rust。
 - **演示**：步进到末根正在延伸、且该层 bar 暂无有效 `confirm_x` 时，K1/Kn 底层合并柱外框应为虚线；`confirmX` 有效且已超过当步 idx 后为实线。
 - **注意事项**：**未 push**，等用户确认。需热重载/重编 App 后肉眼验收。
+
+### 2026-11-07 — 修复：当步 idx == confirmX 但 activeUnit 仍在延伸时，K1/Kn 外框仍虚线
+
+- **执行者**：Claude Code Agent
+- **任务类型**：显示层 bugfix
+- **上下文**：用户反馈重编后动态 K 外框仍为实线。根因：`_unitBarIsBuilding` 在 `confirmX >= 0` 时仅用 `cap < confirmX`；当 **`cap == confirmX`**（分型确认发生在当步）但 **`LevelBundle.activeUnit` 仍指向该单元 idx**（结构层仍在延伸）时，`cap < confirmX` 为假，边框被判为**已确认实线**。
+- **关键操作**：`kline_chart.dart` 新增 `_levelActiveUnitMatchesBar`；`_unitBarIsBuilding` 增加 `barIdx` / `unitLevelForActive`：若 `cap == confirmX` 且对应结构层 `activeUnit?.idx == barIdx`，仍判 **构建中虚线**。K1 蜡烛传 `unitLevelForActive: 0`，Kn 单元蜡烛传 `displayKn - 1`。
+- **结果**：`flutter test test/candle_wick_test.dart` 全过。`dart analyze lib/widgets/kline_chart.dart` 无新增 error（文件内原有 warning/info 未改）。未改缠论计算与 Rust。
+- **演示**：你举的口径——K0 当步已确认、K1 `idx=1` 仍在 `activeUnit` 延伸——该柱外框应 **虚线**；下一步 `activeUnit` 已冻结且 `cap > confirmX` 后 **实线**。
+- **注意事项**：**未 push**，等用户确认。**必须** `flutter build windows --debug`（或项目脚本重编）后 exe 才含本逻辑；仅启动旧 `build\...\chan_kline.exe` 不会变。
