@@ -104,6 +104,43 @@ Future<RobotVerifyPhase> runEarlyDynamicInProcessPhase({String? klineRoot}) asyn
 
   bool near(double a, double b) => (a - b).abs() <= 1e-9;
 
+  /// 首分型前虚线：升段起点=区间内首次最低 low、终点=首次最高 high；降段对调。
+  bool _firstExtremeMatches({
+    required List<KlineBar> bars,
+    required int x1,
+    required int x2,
+    required LevelLineEndpoint begin,
+    required LevelLineEndpoint end,
+    required int dir,
+  }) {
+    if (dir == 0 || bars.isEmpty) return false;
+    final lo = x1.clamp(0, bars.length - 1);
+    final hi = x2.clamp(0, bars.length - 1);
+    if (lo > hi) return false;
+    var trough = double.infinity;
+    var peak = double.negativeInfinity;
+    var troughX = lo;
+    var peakX = lo;
+    for (var i = lo; i <= hi; i++) {
+      if (bars[i].low < trough) {
+        trough = bars[i].low;
+        troughX = i;
+      }
+      if (bars[i].high > peak) {
+        peak = bars[i].high;
+        peakX = i;
+      }
+    }
+    final startX = dir > 0 ? troughX : peakX;
+    final startPrice = dir > 0 ? trough : peak;
+    final stopX = dir > 0 ? peakX : troughX;
+    final stopPrice = dir > 0 ? peak : trough;
+    return begin.barIdx == startX &&
+        near(begin.price, startPrice) &&
+        end.barIdx == stopX &&
+        near(end.price, stopPrice);
+  }
+
   /// 预锚「高高」：区间 [x1,x2] 内 high 取最高 high，low 取最高 low；
   /// close 取区间末根收盘（与 Rust `pre_anchor_unit_ohlcv` 同口径）。
   (bool, Map<String, Object?>) checkHighHigh(LevelUnitBar? u, {int? wantX2}) {
@@ -285,8 +322,9 @@ Future<RobotVerifyPhase> runEarlyDynamicInProcessPhase({String? klineRoot}) asyn
       },
     );
 
-    // 2026-11-06 口径：开关开时，本层首分型前由预锚单元补一条
-    // open→close 构建中虚线；相邻比例仍不得凭空多出子线。
+    // 2026-11-06 口径：开关开时，本层首分型前由预锚单元补一条构建中虚线。
+    // 升段两端取区间内首次最低 low → 首次最高 high，与首个分型后的开口虚线同一套扫价；
+    // 相邻比例仍不得凭空多出子线。
     final lineUnitsOn = asOfLevelVirtualK1Bars(
       levels: at.levels,
       barFeatures: at.barFeatures,
@@ -307,16 +345,20 @@ Future<RobotVerifyPhase> runEarlyDynamicInProcessPhase({String? klineRoot}) asyn
       'first_confirm_line_units_with_pre_anchor',
       preUnit != null &&
           k1LinesOn.length == 1 &&
-          k1LinesOn.single.begin.barIdx == preUnit.x1 &&
-          near(k1LinesOn.single.begin.price, preUnit.open) &&
-          k1LinesOn.single.end.barIdx == preUnit.x2 &&
-          near(k1LinesOn.single.end.price, preUnit.close) &&
+          _firstExtremeMatches(
+            bars: bars,
+            x1: preUnit.x1,
+            x2: preUnit.x2,
+            begin: k1LinesOn.single.begin,
+            end: k1LinesOn.single.end,
+            dir: preUnit.dir,
+          ) &&
           !k1LinesOn.single.asSolid,
       {
         'units': lineUnitsOn.length,
         'lines': k1LinesOn.length,
-        'unitOpen': preUnit?.open,
-        'unitClose': preUnit?.close,
+        'unitLow': preUnit?.low,
+        'unitHigh': preUnit?.high,
         'beginX': k1LinesOn.isEmpty ? null : k1LinesOn.single.begin.barIdx,
         'endX': k1LinesOn.isEmpty ? null : k1LinesOn.single.end.barIdx,
         'beginPrice': k1LinesOn.isEmpty ? null : k1LinesOn.single.begin.price,
@@ -455,10 +497,14 @@ Future<RobotVerifyPhase> runEarlyDynamicInProcessPhase({String? klineRoot}) asyn
       final pre2 = units2.length == 1 ? units2.single : null;
       k2LineBuilt = pre2 != null &&
           lines2.length == 1 &&
-          lines2.single.begin.barIdx == pre2.x1 &&
-          near(lines2.single.begin.price, pre2.open) &&
-          lines2.single.end.barIdx == pre2.x2 &&
-          near(lines2.single.end.price, pre2.close) &&
+          _firstExtremeMatches(
+            bars: bars,
+            x1: pre2.x1,
+            x2: pre2.x2,
+            begin: lines2.single.begin,
+            end: lines2.single.end,
+            dir: pre2.dir,
+          ) &&
           !lines2.single.asSolid;
       k2Data.addAll({
         'asOf': asOf2,
