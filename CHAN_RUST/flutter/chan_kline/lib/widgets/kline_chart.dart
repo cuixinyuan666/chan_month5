@@ -5881,11 +5881,15 @@ class _KlineCompositePainter extends CustomPainter {
   }
 
   /// K1/Kn 单元：未到确认步=动态（虚线框），达到确认步=确认（实线框）。
+  ///
+  /// [confirmX] < 0：Rust 未给确认步时，用视窗右沿 [viewX2] 与当步 idx 比。
+  /// 须含 **viewX2 == cap**：尾柱动态时右沿常等于当步 minute idx，原先 `viewX2 > cap`
+  /// 在相等时误判为已确认实线框。
   bool _unitBarIsBuilding({required int confirmX, required int viewX2}) {
     final cap = _stepAsOfBarIdx;
     if (cap == null) return true;
     if (confirmX >= 0) return cap < confirmX;
-    return viewX2 > cap;
+    return cap <= viewX2;
   }
 
   void _strokeUnitBarFrame(
