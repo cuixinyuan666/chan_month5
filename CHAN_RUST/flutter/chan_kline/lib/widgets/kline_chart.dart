@@ -846,7 +846,11 @@ class _KlineChartState extends State<KlineChart> {
       barIdx: _crosshairBarIdx,
       price: _crosshairPriceNow(),
       ownerLevel: widget.displayLevel,
-      tooltip: _crosshairMode == CrosshairMode.withTooltip,
+      // 信息开关只升不降：鼠标刚跨进本窗时，本窗本地还停在「只有十字线」，
+      // 若按本地状态广播会把共用开关关掉，面板跟着消失。
+      // 关掉信息只能走关闭按钮（它直接发 tooltip:false）。
+      tooltip: s.crosshairTooltip ||
+          _crosshairMode == CrosshairMode.withTooltip,
     );
   }
 
@@ -881,7 +885,11 @@ class _KlineChartState extends State<KlineChart> {
       return;
     }
     final plotH = math.max(1.0, contentBottom - plotTop);
-    _crosshairMode = CrosshairMode.linesOnly;
+    // 信息开关跟着共用状态走：鼠标还没进本窗时，本窗也要知道信息开着，
+    // 否则鼠标一进来就按「只有十字线」广播，把面板关掉。
+    _crosshairMode = s.crosshairTooltip
+        ? CrosshairMode.withTooltip
+        : CrosshairMode.linesOnly;
     final idx = barIdx.clamp(0, widget.bars.length - 1);
     // 十字线那根 K 不在本窗视窗里（用户在本窗缩/拖走了）：只平移把它带进可见区，
     // 不改缩放 —— 对应「保持它自己的比例，但必须回到该层 K 的位置」。
@@ -1467,12 +1475,12 @@ class _KlineChartState extends State<KlineChart> {
   }
 
   /// 组装当前十字线 tooltip 行（含副图）。
-  /// 层级早生成开启且本窗只画某一层时，只留该层：K0 窗只出 K0，K1 窗只出 K1。
+  /// 分窗时只留本窗这一层：K0 窗只出 K0，K1 窗只出 K1，与「层级早生成」开关无关。
+  /// 单图（displayLevel 为空）仍聚合全部层级。
   List<CrosshairTooltipRow> _tooltipRowsForBar(int barIdx) {
     final rows = _tooltipRowsAllLevels(barIdx);
-    if (widget.earlyDynamicUnit && widget.displayLevel != null) {
-      return crosshairRowsForLevel(rows, widget.displayLevel!);
-    }
+    final lv = widget.displayLevel;
+    if (lv != null) return crosshairRowsForLevel(rows, lv);
     return rows;
   }
 

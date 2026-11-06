@@ -80,4 +80,43 @@ void main() {
     expect(sync.crosshairOn, isFalse);
     expect(sync.crosshairTooltip, isFalse);
   });
+
+  test('信息开着时，新窗口按自己本地状态广播不得把信息关掉', () {
+    // 复现：鼠标移进新窗口，该窗本地还停在「只有十字线」，
+    // 下一帧广播若按本地状态发 tooltip:false，面板就消失。
+    // 口径：信息开关只升不降，关掉只能显式发 tooltip:false。
+    final sync = ChartSyncController();
+    sync.viewportFor(0).resetForBarCount(100);
+    sync.viewportFor(1).resetForBarCount(100);
+
+    sync.publishCrosshair(
+      on: true,
+      barIdx: 10,
+      price: 5,
+      ownerLevel: 0,
+      tooltip: true,
+    );
+
+    final keep = sync.crosshairTooltip || false;
+    sync.publishCrosshair(
+      on: true,
+      barIdx: 11,
+      price: 5.2,
+      ownerLevel: 1,
+      tooltip: keep,
+    );
+    expect(sync.crosshairOwnerLevel, 1, reason: '主窗换成鼠标所在的窗口');
+    expect(sync.crosshairTooltip, isTrue, reason: '跨窗不得把已开的信息关掉');
+
+    // 关闭按钮：显式发 tooltip:false 才关。
+    sync.publishCrosshair(
+      on: true,
+      barIdx: 11,
+      price: 5.2,
+      ownerLevel: 1,
+      tooltip: false,
+    );
+    expect(sync.crosshairOn, isTrue);
+    expect(sync.crosshairTooltip, isFalse);
+  });
 }
