@@ -5570,3 +5570,13 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **结果**：`dart analyze` 涉及文件无新增 error；`flutter test test/candle_wick_test.dart` 通过。`flutter build windows --debug` 成功，内核 23:04，已启动 pid 89980。未改缠论计算。
 - **演示**：开层级分窗、副图无勾选：副图带高仍在，无灰字/「暂无已选指标」；主图 K1/Kn 底层动态单元为虚线框，步进到确认步后变实线；影线与实体接头不再发糊变粗。
 - **注意事项**：**未 push**，等用户确认。
+
+### 2026-11-06 — 修复：动态K虚线框在薄实体上退回实线
+
+- **执行者**：Claude Code Agent
+- **任务类型**：显示层 bugfix
+- **上下文**：用户反馈「动态K线还是实线」。根因：`_strokeUnitBarFrame` 对虚线框先 `deflate(半线宽)`，一字线或极扁实体宽高过小，deflate 后 `width/height <= 0`，原逻辑退回 `canvas.drawRect`（实线），构建中一直看起来像实线框。
+- **关键操作**：deflate 失败时减小 inset 或对原始 rect 仍走 `_strokeDashedRect`，不再退回实线 `drawRect`。
+- **结果**：`dart analyze lib/widgets/kline_chart.dart` 无新增 error；`flutter test test/candle_wick_test.dart` 通过。未改缠论计算。
+- **演示**：开 K1/Kn 底层合并柱，构建中、实体很扁或一字线时，边框应为虚线；确认步后变实线。
+- **注意事项**：**未 push**，需用户重编 App 后肉眼确认。
