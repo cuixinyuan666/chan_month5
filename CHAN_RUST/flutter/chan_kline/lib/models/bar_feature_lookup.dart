@@ -89,6 +89,39 @@ class CrosshairTooltipRow {
       s.replaceAllMapped(_numRe, (m) => '【${m.group(0)}】');
 }
 
+/// 十字信息只留某一层。
+///
+/// 行按 `===` 分隔线切块：第 0 块是日期头，第 1 块是 K0，第 2 块是 K1……
+/// [kn] 为窗口层级（K0 窗传 0，K1 窗传 1）。日期头始终保留，其余层整块去掉。
+/// 单图模式不调用本函数，仍显示全部层。
+List<CrosshairTooltipRow> crosshairRowsForLevel(
+  List<CrosshairTooltipRow> rows,
+  int kn,
+) {
+  if (kn < 0) return rows;
+  final blocks = <List<CrosshairTooltipRow>>[];
+  var cur = <CrosshairTooltipRow>[];
+  for (final r in rows) {
+    if (r.isSeparator) {
+      blocks.add(cur);
+      cur = <CrosshairTooltipRow>[];
+    } else {
+      cur.add(r);
+    }
+  }
+  blocks.add(cur);
+
+  // 第 0 块是日期头，层级 kn 对应第 kn+1 块。
+  final blockIdx = kn + 1;
+  if (blockIdx >= blocks.length) return const [];
+
+  return [
+    ...blocks[0],
+    const CrosshairTooltipRow.separator(),
+    ...blocks[blockIdx],
+  ];
+}
+
 /// 逐 K 字典式特征索引（ML / 十字线 tooltip 同源，均用 barFeatures 逐步冻结快照）。
 class BarFeatureLookup {
   BarFeatureLookup._({

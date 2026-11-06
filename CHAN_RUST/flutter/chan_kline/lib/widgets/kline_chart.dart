@@ -387,7 +387,15 @@ class _KlineChartState extends State<KlineChart> {
   bool _crosshairPinRightmost = false;
 
   bool get _crosshairEnabled => _crosshairMode != CrosshairMode.off;
-  bool get _crosshairShowTooltip => _crosshairMode == CrosshairMode.withTooltip;
+
+  /// 十字信息是否显示。
+  /// 分窗时以联动控制器为准：鼠标跨到别的窗，信息跟着新主窗走，
+  /// 不因为本窗本地还停在「只开线」就把信息弄丢。
+  bool get _crosshairShowTooltip {
+    final s = widget.sync;
+    if (s != null && s.crosshairOn) return s.crosshairTooltip;
+    return _crosshairMode == CrosshairMode.withTooltip;
+  }
   /// tooltip 滚轮下翻（显示 tooltip 时接管滚轮，不缩放）
   final _tooltipScroll = ScrollController();
   int? _tooltipScrollBarIdx;
@@ -769,6 +777,12 @@ class _KlineChartState extends State<KlineChart> {
   void _publishTooltipToBridge() {
     final b = widget.tooltipBridge;
     if (b == null || !widget.dockTooltipPanel) return;
+    // 分窗时信息只由鼠标所在的主窗发布：被动窗也广播会把别的层盖上来。
+    final s = widget.sync;
+    if (s != null && s.crosshairOn && !_iAmCrosshairOwner) {
+      b.shown.value = false;
+      return;
+    }
     b.shown.value = _crosshairShowTooltip;
     if (_crosshairShowTooltip && _crosshairBarIdx != null) {
       b.rows.value = _tooltipRowsForBar(_crosshairBarIdx!);
@@ -818,6 +832,7 @@ class _KlineChartState extends State<KlineChart> {
       barIdx: _crosshairBarIdx,
       price: _crosshairPriceNow(),
       ownerLevel: widget.displayLevel,
+      tooltip: _crosshairMode == CrosshairMode.withTooltip,
     );
   }
 
@@ -1067,11 +1082,16 @@ class _KlineChartState extends State<KlineChart> {
   }
 
   /// 十字线跟随鼠标：竖线吸附 K 线中心，横线跟价格。鼠标移线解除贴右步进标记。
+  ///
+  /// 分窗时鼠标进入本窗即由本窗接管：竖线按本窗的 K 吸附，横线按本窗价格，
+  /// 并广播给其余窗口（同一根 K 同一列、同一价格同一行）。
   void _updateCrosshairAt(Offset pos, double plotTop, double contentBottom) {
     // 指标选择面板打开时，十字线不响应：避免桌面 onHover 持续重绘（重建风暴）打断面板内点击
     if (_pickerPane != _IndicatorPickerPane.none) return;
     _crosshairPinRightmost = false;
     if (!_crosshairEnabled || widget.bars.isEmpty || _chartSize.width <= 0) return;
+    // 鼠标进到本窗：本窗成为主窗，其余窗跟着本窗的位置走。
+    if (widget.sync != null) _iAmCrosshairOwner = true;
     final barIdx = _viewport.barIndexAtCanvasX(
       pos.dx,
       _chartSize.width,
@@ -1311,30 +1331,49 @@ class _KlineChartState extends State<KlineChart> {
     _scheduleRedraw();
   }
 
+  /// 十字信息实际用的滚动控制器。
+  /// 停靠面板全窗共用一份（挂在桥上）；悬浮态各窗用自己的。
+  /// 这样鼠标跨到任意窗口，滚轮翻的都是同一块信息面板。
+  ScrollController get _tooltipScroller =>
+      widget.dockTooltipPanel && widget.tooltipBridge?.scrollController != null
+          ? widget.tooltipBridge!.scrollController!
+          : _tooltipScroll;
+
   void _scrollTooltipBy(double dy) {
-    if (!_tooltipScroll.hasClients) return;
-    final pos = _tooltipScroll.position;
+    final sc = _tooltipScroller;
+    if (!sc.hasClients) return;
+    final pos = sc.position;
     final next = (pos.pixels + dy).clamp(0.0, pos.maxScrollExtent);
     if (next != pos.pixels) {
-      _tooltipScroll.jumpTo(next);
+      sc.jumpTo(next);
     }
   }
 
   void _resetTooltipScrollIfNeeded(int? barIdx) {
     if (barIdx != _tooltipScrollBarIdx) {
       _tooltipScrollBarIdx = barIdx;
-      if (_tooltipScroll.hasClients) {
-        _tooltipScroll.jumpTo(0);
+      final sc = _tooltipScroller;
+      if (sc.hasClients) {
+        sc.jumpTo(0);
       } else {
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (_tooltipScroll.hasClients) _tooltipScroll.jumpTo(0);
+          if (sc.hasClients) sc.jumpTo(0);
         });
       }
     }
   }
 
-  /// 组装当前十字线 tooltip 行（含副图）
+  /// 组装当前十字线 tooltip 行（含副图）。
+  /// 层级早生成开启且本窗只画某一层时，只留该层：K0 窗只出 K0，K1 窗只出 K1。
   List<CrosshairTooltipRow> _tooltipRowsForBar(int barIdx) {
+    final rows = _tooltipRowsAllLevels(barIdx);
+    if (widget.earlyDynamicUnit && widget.displayLevel != null) {
+      return crosshairRowsForLevel(rows, widget.displayLevel!);
+    }
+    return rows;
+  }
+
+  List<CrosshairTooltipRow> _tooltipRowsAllLevels(int barIdx) {
     final bar = widget.bars[barIdx.clamp(0, widget.bars.length - 1)];
     final minuteLike = KlineAxisFormat.isMinuteLike(widget.bars);
     // tick 周期十字时间也到秒
@@ -1606,7 +1645,10 @@ class _KlineChartState extends State<KlineChart> {
     _publishTooltipToBridge();
   }
 
-  /// 鼠标中键：关闭 → 仅十字线（滚轮可缩放）→ 十字线+tooltip → 全关，三态循环。
+  /// 鼠标中键：
+  /// - 层级早生成开启：关闭 → 只开十字线 → 十字线+十字信息 → 全关。
+  ///   第一次单击只出线，第二次单击才出信息；信息只显示光标所在窗口那一层。
+  /// - 关闭时：同为三态，但信息仍聚合全部层级（经典口径）。
   /// 回到「全关」后下一次点击必定从「仅十字线」重新开始（纯状态机，无需额外步数计数）。
   void _toggleTooltipKeepCrosshair(Offset pos) {
     _clearTickIdleYinYang(rebuild: false);
@@ -1617,17 +1659,18 @@ class _KlineChartState extends State<KlineChart> {
     setState(() {
       switch (_crosshairMode) {
         case CrosshairMode.off:
-          // 第一次：只开十字线，不显示 tooltip（滚轮仍可缩放）
+          // 第一次：只开十字线，不显示信息（滚轮仍可缩放）
           _iAmCrosshairOwner = true;
           _crosshairMode = CrosshairMode.linesOnly;
           _tooltipScrollBarIdx = null;
           _updateCrosshairAt(pos, plotTop, contentBottom);
         case CrosshairMode.linesOnly:
-          // 第二次：十字线 + tooltip
+          // 第二次：十字线 + 十字信息
+          _iAmCrosshairOwner = true;
           _crosshairMode = CrosshairMode.withTooltip;
           _resetTooltipScrollIfNeeded(_crosshairBarIdx);
         case CrosshairMode.withTooltip:
-          // 第三次：全关（十字线+tooltip 一起关），释放鼠标与滚轮
+          // 第三次：全关（十字线+信息一起关），释放鼠标与滚轮
           _crosshairMode = CrosshairMode.off;
           _crosshairX = null;
           _crosshairY = null;

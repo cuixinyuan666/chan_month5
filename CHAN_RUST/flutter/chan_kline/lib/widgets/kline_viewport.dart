@@ -75,10 +75,17 @@ class KlineViewport {
     ready = count > 0;
   }
 
-  /// 对齐 a_replay ensureLatestKVisible：最新 K 滑出视窗时右对齐跟随。
+  /// 步进/播放时最新 K 在视窗内的相对位置：0.75 = 距右边界约 1/4。
+  ///
+  /// 各子窗口各自一份视口，但跟随口径同此：任何窗点步进或播放，
+  /// 最新 K 都固定靠右，不得滑出可视区。
+  static const double stepFollowPos = 0.75;
+
+  /// 对齐 a_replay ensureLatestKVisible：把最新 K 固定到距右边界约 1/4 处。
+  ///
+  /// 不再等最新 K 滑出右边界才拽回：每一步都重新落位，保持靠右显示。
   void ensureLatestVisible(int lastIdx) {
     if (!ready) return;
-    if (lastIdx >= viewXMin && lastIdx <= viewXMax) return;
 
     final span = xSpan;
     if (span <= 1) {
@@ -87,8 +94,7 @@ class KlineViewport {
       return;
     }
 
-    const pos = 0.85;
-    var newMin = lastIdx - span * pos;
+    var newMin = lastIdx - span * stepFollowPos;
     var newMax = newMin + span;
     if (newMin < allXMin) {
       newMin = allXMin;

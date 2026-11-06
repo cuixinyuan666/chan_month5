@@ -110,6 +110,10 @@ class ChartSyncController extends ChangeNotifier {
   double? _crosshairPrice;
   int? _crosshairOwnerLevel;
 
+  /// 十字信息是否打开（第二次滚轮单击）。
+  /// 各窗只看这一份：鼠标进到哪个窗，信息就由那个窗算、那个窗显示。
+  bool _crosshairTooltip = false;
+
   /// 每次「十字线开启 / 换主窗」自增；窗用它判断要不要重新接管视口。
   int _crosshairTakeoverSeq = 0;
 
@@ -123,6 +127,7 @@ class ChartSyncController extends ChangeNotifier {
   int? get crosshairBarIdx => _crosshairBarIdx;
   double? get crosshairPrice => _crosshairPrice;
   int? get crosshairOwnerLevel => _crosshairOwnerLevel;
+  bool get crosshairTooltip => _crosshairTooltip;
   int get crosshairTakeoverSeq => _crosshairTakeoverSeq;
 
   /// 副图胶囊条高度上报（只增不减）；超过上限按上限算。
@@ -146,20 +151,23 @@ class ChartSyncController extends ChangeNotifier {
   /// 广播十字线。`barIdx` 是 bars 下标（各窗共享同一份 bars），
   /// `price` 是该像素对应的价格（其余窗用自己的价格区间反算 y）。
   ///
-  /// [ownerLevel] 为驱动十字线的窗（开十字线的那一格）。开启或换主窗时
+  /// [ownerLevel] 为驱动十字线的窗（鼠标当前所在的那一格）。开启或换主窗时
   /// 会把其余窗视口切到主窗同一段；关闭时还原各窗各自的视口。
+  /// [tooltip] 为十字信息是否打开：鼠标跨窗后信息跟着新主窗走。
   void publishCrosshair({
     required bool on,
     int? barIdx,
     double? price,
     int? ownerLevel,
+    bool tooltip = false,
   }) {
     if (!on) {
-      final changed = _crosshairOn || _crosshairBarIdx != null;
+      final changed = _crosshairOn || _crosshairBarIdx != null || _crosshairTooltip;
       _crosshairOn = false;
       _crosshairBarIdx = null;
       _crosshairPrice = null;
       _crosshairOwnerLevel = null;
+      _crosshairTooltip = false;
       _ownerViewportSig = null;
       _restoreViewports();
       if (changed) notifyListeners();
@@ -169,12 +177,14 @@ class ChartSyncController extends ChangeNotifier {
     final owner = ownerLevel;
     final wasOn = _crosshairOn;
     final ownerChanged = owner != null && owner != _crosshairOwnerLevel;
+    final tooltipChanged = _crosshairTooltip != tooltip;
     final contentChanged =
         !wasOn || _crosshairBarIdx != barIdx || _crosshairPrice != price;
 
     _crosshairOn = true;
     _crosshairBarIdx = barIdx;
     _crosshairPrice = price;
+    _crosshairTooltip = tooltip;
 
     var viewportChanged = false;
     if (owner != null && (!wasOn || ownerChanged)) {
@@ -194,7 +204,11 @@ class ChartSyncController extends ChangeNotifier {
       }
     }
 
-    if (contentChanged || viewportChanged || !wasOn || ownerChanged) {
+    if (contentChanged ||
+        tooltipChanged ||
+        viewportChanged ||
+        !wasOn ||
+        ownerChanged) {
       notifyListeners();
     }
   }

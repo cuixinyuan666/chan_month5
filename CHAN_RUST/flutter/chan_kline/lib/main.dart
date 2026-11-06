@@ -4954,9 +4954,10 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
       onStrategySignalTap: primary ? _onChartStrategySignalTap : null,
       // 分窗固定走桌面布局：安卓交互壳层（顶部手势/浮动按钮）只应出现在单图。
       mobileLayout: split ? false : _useAndroidInteraction,
-      // tooltip 停靠面板只有一块：只挂主窗，避免 N 个窗抢同一份 bridge。
-      tooltipBridge: primary ? _tooltipBridge : null,
-      dockTooltipPanel: primary && !_useAndroidInteraction,
+      // tooltip 停靠面板只有一块，但每个窗都要能往里写：
+      // 鼠标跨到哪个窗，信息就换成那个窗所在层级的内容。
+      tooltipBridge: _tooltipBridge,
+      dockTooltipPanel: !_useAndroidInteraction,
     );
   }
 
@@ -5336,6 +5337,9 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
             'low 取最高的 low；确认当根起恢复确认段真实 OHLC。\n'
             '· 种子框、种子开口虚线、种子 ABC 不画；K0 首确认前保留一条'
             '预锚动态单元的构建中虚线。\n'
+            '· 十字线可跨所有窗口移动：鼠标进到哪个窗口就在那个窗口定位，'
+            '其余窗口跟着联动。滚轮单击第一次只开十字线，第二次才开十字信息；'
+            '十字信息只显示光标所在窗口那一层（K0 窗只出 K0，K1 窗只出 K1）。\n'
             '· 参与全链路：主/副图、中枢/买卖点、采样钟、冻结仓与回测同一口径。\n\n'
             '关闭\n'
             '· 回到经典口径：必须等引擎自己攒够输入，才出现该层首个单元；'
