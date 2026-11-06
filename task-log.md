@@ -5580,3 +5580,13 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **结果**：`dart analyze lib/widgets/kline_chart.dart` 无新增 error；`flutter test test/candle_wick_test.dart` 通过。未改缠论计算。
 - **演示**：开 K1/Kn 底层合并柱，构建中、实体很扁或一字线时，边框应为虚线；确认步后变实线。
 - **注意事项**：**未 push**，需用户重编 App 后肉眼确认。
+
+### 2026-11-06 — 修复：动态K虚线框误判（stepIdx 与 idx 同坐标）
+
+- **执行者**：Claude Code Agent
+- **任务类型**：显示层 bugfix
+- **上下文**：用户仍看不到动态 K 虚线外框。根因：`KlineChart.stepIdx` 来自主界面 **`_stepIdx` = 可见 bars 的列表下标**，而 `confirmX` / `bar.idx` / `viewX2` 均为 **K 的 idx**。`_unitBarIsBuilding` / `_wickWidthMultForConfirmStep` 曾用 `stepIdx` 与 `confirmX` 直接比较，`stepIdx` 远小于真实 idx，导致 `cap < confirmX` 恒为假，**构建中也被判成已确认**，边框始终实线。
+- **关键操作**：新增 `_stepAsOfBarIdx`：`stepIdx < 0` 用 `bars.last.idx`，否则 `bars[stepIdx].idx`；`_unitBarIsBuilding` 与影线倍数均以该 idx 与 `confirmX` / `barIdx` 比较。
+- **结果**：`dart analyze lib/widgets/kline_chart.dart` 无新增 error；`flutter test test/candle_wick_test.dart` 通过。未改缠论计算。
+- **演示**：打开 K1（或 Kn）底层合并蜡烛，步进在确认前应对 **虚线框**，步过 `confirmX` 后 **实线框**。
+- **注意事项**：**未 push**。需重编 App。
