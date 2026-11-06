@@ -10,15 +10,15 @@ void main() {
       expect(candleWickWidth(40), greaterThan(candleWickWidth(20)));
     });
 
-    test('最细 1 像素，最粗 6 像素', () {
+    test('最细 1 像素，最粗 8 像素', () {
       expect(candleWickWidth(2), 1.0);
-      expect(candleWickWidth(4), closeTo(1.0, 1e-9));
-      expect(candleWickWidth(100), 6.0);
+      expect(candleWickWidth(4), closeTo(1.04, 1e-9));
+      expect(candleWickWidth(100), 8.0);
     });
 
-    test('常见宽度按实体的约六分之一', () {
-      expect(candleWickWidth(12), closeTo(1.92, 1e-9));
-      expect(candleWickWidth(30), closeTo(4.8, 1e-9));
+    test('常见宽度按实体约四分之一', () {
+      expect(candleWickWidth(12), closeTo(3.12, 1e-9));
+      expect(candleWickWidth(30), closeTo(7.8, 1e-9));
     });
   });
 
