@@ -3776,8 +3776,12 @@ class _KlineCompositePainter extends CustomPainter {
         widthMult: _wickWidthMultForConfirmStep(confirmX: v.confirmX, barIdx: v.viewX2),
       );
       canvas.drawRect(rect, Paint()..color = isUp ? upBody : dnBody);
-      final building =
-          _unitBarIsBuilding(confirmX: v.confirmX, viewX2: v.viewX2);
+      final building = _unitBarIsBuilding(
+        confirmX: v.confirmX,
+        viewX2: v.viewX2,
+        barIdx: v.idx,
+        unitLevelForActive: 0,
+      );
       final dash = ChartLevelLineStyle.forDisplayKn(1).buildingDashPattern;
       _strokeUnitBarFrame(
         canvas,
@@ -5504,6 +5508,8 @@ class _KlineCompositePainter extends CustomPainter {
       final building = _unitBarIsBuilding(
         confirmX: v.bar.confirmX,
         viewX2: v.viewX2,
+        barIdx: v.bar.idx,
+        unitLevelForActive: displayKn - 1,
       );
       final dash = ChartLevelLineStyle.forDisplayKn(displayKn).buildingDashPattern;
       _strokeUnitBarFrame(
@@ -5880,15 +5886,50 @@ class _KlineCompositePainter extends CustomPainter {
     return cap < cx ? 0.88 : 1.15;
   }
 
+  /// 某结构层 [unitLevel] 的 [activeUnit] 是否与 [barIdx] 为同一根单元 K。
+  ///
+  /// 用于确认当步 `cap == confirmX`：分型已在当步确认，但单元仍在
+  /// `LevelBundle.activeUnit` 中延伸时，外框应继续虚线。
+  bool _levelActiveUnitMatchesBar({
+    required int unitLevel,
+    required int barIdx,
+  }) {
+    for (final b in levels) {
+      if (b.level != unitLevel) continue;
+      final a = b.activeUnit;
+      return a != null && a.idx == barIdx;
+    }
+    return false;
+  }
+
   /// K1/Kn 单元：未到确认步=动态（虚线框），达到确认步=确认（实线框）。
   ///
   /// [confirmX] < 0：Rust 未给确认步时，用视窗右沿 [viewX2] 与当步 idx 比。
-  /// 须含 **viewX2 == cap**：尾柱动态时右沿常等于当步 minute idx，原先 `viewX2 > cap`
-  /// 在相等时误判为已确认实线框。
-  bool _unitBarIsBuilding({required int confirmX, required int viewX2}) {
+  /// 须含 **viewX2 == cap**：尾柱动态时右沿常等于当步 minute idx。
+  ///
+  /// [barIdx] / [unitLevelForActive]：`cap == confirmX` 且该层 [activeUnit] 仍为本柱时，
+  /// 视为构建中（虚线）。
+  bool _unitBarIsBuilding({
+    required int confirmX,
+    required int viewX2,
+    int? barIdx,
+    int? unitLevelForActive,
+  }) {
     final cap = _stepAsOfBarIdx;
     if (cap == null) return true;
-    if (confirmX >= 0) return cap < confirmX;
+    if (confirmX >= 0) {
+      if (cap < confirmX) return true;
+      if (cap == confirmX &&
+          barIdx != null &&
+          unitLevelForActive != null &&
+          _levelActiveUnitMatchesBar(
+            unitLevel: unitLevelForActive,
+            barIdx: barIdx,
+          )) {
+        return true;
+      }
+      return false;
+    }
     return cap <= viewX2;
   }
 
