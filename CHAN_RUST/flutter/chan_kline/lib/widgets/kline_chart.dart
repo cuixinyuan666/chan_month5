@@ -5895,13 +5895,19 @@ class _KlineCompositePainter extends CustomPainter {
       return;
     }
     // inset 半线宽，避免与填充边界锯齿重叠产生“加粗”感。
-    final inset = strokeW * 0.5;
-    final r = rect.deflate(inset);
+    // 薄实体 deflate 后宽高可能为 0，若退回 `drawRect` 会变成**实线**，动态 K 看起来像从未切虚线。
+    var inset = strokeW * 0.5;
+    var r = rect.deflate(inset);
     if (r.width <= 0 || r.height <= 0) {
-      canvas.drawRect(rect, p);
-      return;
+      final m = math.min(rect.width, rect.height);
+      inset = m > 0 ? math.min(strokeW * 0.25, m * 0.5 - 1e-3) : 0.0;
+      r = rect.deflate(math.max(0.0, inset));
     }
-    _strokeDashedRect(canvas, r, p, dashPattern);
+    if (r.width <= 0 || r.height <= 0) {
+      _strokeDashedRect(canvas, rect, p, dashPattern);
+    } else {
+      _strokeDashedRect(canvas, r, p, dashPattern);
+    }
   }
 
   void _drawCandles(
