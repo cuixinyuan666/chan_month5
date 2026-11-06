@@ -4588,7 +4588,15 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
             scrollController: _tooltipBridge.scrollController!,
             maxWidth: _tooltipPanelWidth,
             maxHeight: h,
-            onClose: () => _tooltipBridge.onRequestClose?.call(),
+            // 面板自己先关：各窗注入的关闭回调互相覆盖，点下去可能打到
+            // 一个并不持有十字线的窗口，回调什么都不做。这里直接关面板，
+            // 再通知各窗把共用的信息开关关掉。
+            onClose: () {
+              _tooltipBridge.suppressTooltipUntilMs =
+                  DateTime.now().millisecondsSinceEpoch + 600;
+              _tooltipBridge.shown.value = false;
+              _tooltipBridge.onRequestClose?.call();
+            },
           ),
         );
       },

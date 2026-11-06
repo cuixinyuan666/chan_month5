@@ -770,10 +770,18 @@ class _KlineChartState extends State<KlineChart> {
   void _closeTooltipKeepCrosshair() {
     if (!_crosshairShowTooltip) return;
     setState(() => _crosshairMode = CrosshairMode.linesOnly);
+    // 关闭钮在面板上，面板在主图外面：点下去的瞬间鼠标会被算进主窗口，
+    // 主窗口接手十字线后会把信息开关重新打开。短暂禁止升回，关闭才生效。
+    final b = widget.tooltipBridge;
+    if (b != null) {
+      b.suppressTooltipUntilMs =
+          DateTime.now().millisecondsSinceEpoch + 600;
+      b.shown.value = false;
+    }
     // 分窗时信息开关存在联动控制器里：只改本窗，广播仍带着「开着」，
-    // 面板会立刻被重新打开，关闭按钮等于没点。这里把开关一起关掉。
+    // 面板会立刻被重新打开。这里把共用开关一起关掉。
     final s = widget.sync;
-    if (s != null && s.crosshairOn && _iAmCrosshairOwner) {
+    if (s != null && s.crosshairOn) {
       s.publishCrosshair(
         on: true,
         barIdx: _crosshairBarIdx,
@@ -848,9 +856,11 @@ class _KlineChartState extends State<KlineChart> {
       ownerLevel: widget.displayLevel,
       // 信息开关只升不降：鼠标刚跨进本窗时，本窗本地还停在「只有十字线」，
       // 若按本地状态广播会把共用开关关掉，面板跟着消失。
-      // 关掉信息只能走关闭按钮（它直接发 tooltip:false）。
-      tooltip: s.crosshairTooltip ||
-          _crosshairMode == CrosshairMode.withTooltip,
+      // 关掉信息只能走关闭按钮（它直接发 tooltip:false，并在随后一小段时间
+      // 禁止这里升回去，否则点关闭时鼠标进入主窗又把它打开）。
+      tooltip: (s.crosshairTooltip ||
+              _crosshairMode == CrosshairMode.withTooltip) &&
+          !(widget.tooltipBridge?.tooltipSuppressed ?? false),
     );
   }
 

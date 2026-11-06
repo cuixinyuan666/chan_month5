@@ -16,6 +16,16 @@ class CrosshairTooltipBridge {
   ScrollController? scrollController;
   VoidCallback? onRequestClose;
 
+  /// 点了关闭钮之后的这一小段时间（毫秒时间戳）。
+  ///
+  /// 关闭钮在面板上，面板在主图外面：点下去时鼠标会先被算进主窗口，
+  /// 主窗口随即接手十字线并把信息开关重新打开，关闭等于没点。
+  /// 这段时间内主窗口不得把信息开关升回去。
+  int suppressTooltipUntilMs = 0;
+
+  bool get tooltipSuppressed =>
+      DateTime.now().millisecondsSinceEpoch < suppressTooltipUntilMs;
+
   void dispose() {
     shown.dispose();
     rows.dispose();
