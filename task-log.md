@@ -5805,15 +5805,15 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 
 ---
 
-### 2026-11-08 · AI · 修复 · 子窗口模式下动态K影线虚线样式不一致
+### 2026-11-08 · AI · 修复 · 子窗口模式下动态K影线改为实线，外框保持虚线
 
 - **执行者**：AI Agent
 - **任务类型**：UI样式修复
 - **操作**：
-  1. 修改 `_drawK1Candles` 方法：将 K1 bar 的影线（wick） `dashed` 逻辑统一为 `building`（移除 `showBuildingDash` 限制），使用与实体框相同的虚线样式。
-  2. 修改 `_drawLevelUnitCandles` 方法：将 Kn (K2+) bar 的影线同样统一为 `dashed: building, dashPattern: wickDash`。
-  3. 实体框（frame）样式保持不变，两者现在使用完全相同的虚线外框样式。
-- **结果**：子窗口模式下动态K的影线和实体框在构建中时使用相同的虚线样式，消除”条纹状”的视觉差异。
-- **演示**：打开带有 K1/K2+ 子窗口的分笔，步进到构建中（末根）K，影线和实体框都会显示相同的虚线样式。
+  1. 修改 `_drawK1Candles` 方法：K1 bar 的影线（wick）改为实线 `dashed: false, dashPattern: null`。
+  2. 修改 `_drawLevelUnitCandles` 方法：Kn (K2+) bar 的影线同样改为实线 `dashed: false, dashPattern: null`。
+  3. 实体框（frame，`_strokeUnitBarFrame`）保持构建中虚线外框样式不变。
+- **结果**：子窗口模式下动态K的影线是实线，只有实体框是虚线外框，消除影线被画成虚线的”条纹状”视觉效果。
+- **演示**：打开带有 K1/K2+ 子窗口的分笔，步进到构建中（末根）K，影线为实线、实体框为虚线。
 - **测试**：dart analyze 无新增 error。
-- **注意事项 / 待办**：需要编译主图软件验证实际效果。未 commit / 未 push。
+- **注意事项 / 待办**：需要编译主图软件验证实际效果。已 commit，未 push。
