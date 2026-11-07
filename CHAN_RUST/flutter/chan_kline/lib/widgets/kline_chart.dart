@@ -3771,7 +3771,7 @@ class _KlineCompositePainter extends CustomPainter {
       );
       final wickDash = ChartLevelLineStyle.forDisplayKn(1).buildingDashPattern;
       // 影线只画实体之外的上下两段，实体中间不再留竖杠。
-      // 子窗口模式下影线用和实体框同样的虚线外框样式，避免条纹状。
+      // 子窗口模式下影线实线：只用虚线外框即可，避免条纹状。
       _drawCandleWick(
         canvas,
         cx: cx,
@@ -3782,8 +3782,8 @@ class _KlineCompositePainter extends CustomPainter {
         bodyWidth: spanW,
         color: isUp ? upStroke : dnStroke,
         widthMult: _wickWidthMultForConfirmStep(confirmX: v.confirmX, barIdx: v.viewX2),
-        dashed: building,
-        dashPattern: wickDash,
+        dashed: false,
+        dashPattern: null,
       );
       canvas.drawRect(rect, Paint()..color = isUp ? upBody : dnBody);
       final dash = wickDash;
@@ -5503,7 +5503,7 @@ class _KlineCompositePainter extends CustomPainter {
       );
       final wickDash = ChartLevelLineStyle.forDisplayKn(displayKn).buildingDashPattern;
       // 影线只画实体之外的上下两段，实体中间不再留竖杠。
-      // 子窗口模式下影线用和实体框同样的虚线外框样式，避免条纹状。
+      // 子窗口模式下影线实线：只用虚线外框即可，避免条纹状。
       _drawCandleWick(
         canvas,
         cx: cx,
@@ -5515,8 +5515,8 @@ class _KlineCompositePainter extends CustomPainter {
         color: isUp ? upStroke : dnStroke,
         widthMult:
             _wickWidthMultForConfirmStep(confirmX: v.bar.confirmX, barIdx: v.viewX2),
-        dashed: building,
-        dashPattern: wickDash,
+        dashed: false,
+        dashPattern: null,
       );
       canvas.drawRect(rect, Paint()..color = isUp ? upBody : dnBody);
       final dash = wickDash;
