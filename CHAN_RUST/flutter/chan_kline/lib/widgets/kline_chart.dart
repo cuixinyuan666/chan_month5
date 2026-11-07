@@ -3771,6 +3771,7 @@ class _KlineCompositePainter extends CustomPainter {
       );
       final wickDash = ChartLevelLineStyle.forDisplayKn(1).buildingDashPattern;
       // 影线只画实体之外的上下两段，实体中间不再留竖杠。
+      // 子窗口模式下影线用和实体框同样的虚线外框样式，避免条纹状。
       _drawCandleWick(
         canvas,
         cx: cx,
@@ -3781,7 +3782,7 @@ class _KlineCompositePainter extends CustomPainter {
         bodyWidth: spanW,
         color: isUp ? upStroke : dnStroke,
         widthMult: _wickWidthMultForConfirmStep(confirmX: v.confirmX, barIdx: v.viewX2),
-        dashed: showBuildingDash && building,
+        dashed: building,
         dashPattern: wickDash,
       );
       canvas.drawRect(rect, Paint()..color = isUp ? upBody : dnBody);
@@ -5502,6 +5503,7 @@ class _KlineCompositePainter extends CustomPainter {
       );
       final wickDash = ChartLevelLineStyle.forDisplayKn(displayKn).buildingDashPattern;
       // 影线只画实体之外的上下两段，实体中间不再留竖杠。
+      // 子窗口模式下影线用和实体框同样的虚线外框样式，避免条纹状。
       _drawCandleWick(
         canvas,
         cx: cx,
@@ -5513,7 +5515,7 @@ class _KlineCompositePainter extends CustomPainter {
         color: isUp ? upStroke : dnStroke,
         widthMult:
             _wickWidthMultForConfirmStep(confirmX: v.bar.confirmX, barIdx: v.viewX2),
-        dashed: showBuildingDash && building,
+        dashed: building,
         dashPattern: wickDash,
       );
       canvas.drawRect(rect, Paint()..color = isUp ? upBody : dnBody);
@@ -5753,14 +5755,15 @@ class _KlineCompositePainter extends CustomPainter {
     } else {
       // 构建中 N 段 = 本层（level）自己的进行中段；虚拟单元取 level 自身的
       // 冻段+active（与 _drawOneLevelLines 的实线同源）。
-      // 预锚单元只服务下一窗口 K 蜡烛，不得在本层画成构建中连线。
+      // 层级早生成开启时，本层还没有确认段也接收预锚单元，用来补首分型前虚线；
+      // 开关关闭时不接收，保持经典口径。
       virtualUnits = asOfLevelVirtualK1Bars(
         levels: levels,
         barFeatures: barFeatures,
         level: level,
         asOf: tailIdx,
         includeBuilding: true,
-        includePreAnchor: false,
+        includePreAnchor: earlyDynamicUnit,
       );
       frozenIdx = {
         for (final s in asOfLevelSegments(
