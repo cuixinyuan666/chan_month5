@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 
 import '../settings/telegram_settings_store.dart';
-import '../ui/settings_panel_widgets.dart';
 
 /// Telegram 数据源设置弹窗（含操作步骤说明）。
 Future<TelegramSettings?> showTelegramSettingsDialog(
@@ -114,7 +113,10 @@ Future<TelegramSettings?> showTelegramSettingsDialog(
                 builder: (_, v, __) => SwitchListTile(
                   contentPadding: EdgeInsets.zero,
                   title: const Text('每个交易日自动更新分笔'),
-                  subtitle: const Text('收盘后 15:35 自动上传当天分笔到 Telegram；盘中只补到上一交易日'),
+                  subtitle: const Text(
+                    '收盘后 15:35 自动上传当天分笔到 Telegram；盘中只补到上一交易日。'
+                    '全市场历史上传完成前请先关掉此开关，避免两台重复传当天分笔。',
+                  ),
                   value: v,
                   onChanged: (x) => autoDaily.value = x,
                 ),
@@ -126,6 +128,11 @@ Future<TelegramSettings?> showTelegramSettingsDialog(
                   label: const Text('立即更新分笔到 Telegram'),
                   onPressed: onUpdateTicksNow,
                 ),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                '全市场分笔上传和进度已放在主图设置里。',
+                style: TextStyle(fontSize: 12, height: 1.35),
               ),
             ],
           ),
@@ -147,6 +154,7 @@ Future<TelegramSettings?> showTelegramSettingsDialog(
                   tickIndexFileId: tickIndexCtrl.text.trim(),
                   proxy: proxyCtrl.text.trim(),
                   autoTicksDaily: autoDaily.value,
+                  shareDir: initial.shareDir,
                 ),
               );
             },

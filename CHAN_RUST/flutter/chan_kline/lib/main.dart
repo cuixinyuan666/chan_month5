@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
@@ -53,6 +54,7 @@ import 'app/background_keep_alive.dart';
 import 'settings/interaction_mode_store.dart';
 import 'ui/settings_panel_widgets.dart';
 import 'ui/telegram_settings_dialog.dart';
+import 'ui/ticks_full_upload_panel.dart';
 import 'models/zs_frame.dart';
 import 'models/buy1_frame.dart';
 import 'models/sell1_frame.dart';
@@ -375,7 +377,9 @@ class KlineHomePage extends StatefulWidget {
   State<KlineHomePage> createState() => _KlineHomePageState();
 }
 
-class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
+class _KlineHomePageState extends State<KlineHomePage>
+    with WindowListener
+    implements AgentApiHost {
   final _bridge = ChanBridge.instance;
   final _msgHistory = MsgHistory.instance;
   /// 层级分窗联动：所有窗共用同一份视口 / 主副比例 / 十字线 / as-of 缓存。
@@ -565,6 +569,406 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
           ? '已启用 Telegram 日线数据源（分笔仍走通达信/本地缓存）'
           : '已切回通达信协议数据源',
     );
+  }
+
+  bool _closePromptOpen = false;
+
+  /// 关主图：下载还在时，问要不要留在托盘里继续。
+  Future<void> _requestCloseApp() async {
+    if (_closePromptOpen) return;
+    final running = (Platform.isWindows || Platform.isLinux || Platform.isMacOS) &&
+        await ticksUploadSupervisorAlive(_fullUploadDataRoot());
+    if (!mounted) return;
+    if (!running) {
+      await windowManager.destroy();
+      return;
+    }
+    _closePromptOpen = true;
+    final action = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('全市场分笔还在下载'),
+        content: const Text(
+          '关闭主图后，下载可以留在任务栏托盘里继续。\n'
+          '托盘上能看到进度，右键可以暂停或结束本机任务。',
+          style: TextStyle(fontSize: 14, height: 1.4),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, 'stop'),
+            child: const Text('停止下载并关闭'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, 'tray'),
+            child: const Text('托盘继续并关闭主图'),
+          ),
+        ],
+      ),
+    );
+    _closePromptOpen = false;
+    if (!mounted || action == null) return;
+    if (action == 'stop') {
+      final repo = RobotVerifyPaths.resolveRepoRoot(klineRoot: _chanKlineRoot());
+      final jobDir = (repo == null || repo.isEmpty)
+          ? ''
+          : '$repo${Platform.pathSeparator}a_Data${Platform.pathSeparator}agent_live';
+      await stopTicksUploadTask(
+        dataRoot: _fullUploadDataRoot(),
+        jobDir: jobDir,
+      );
+    }
+    await windowManager.destroy();
+  }
+
+  @override
+  void onWindowClose() {
+    unawaited(_requestCloseApp());
+  }
+
+  /// 分笔缓存盘：有 G 盘用 G，否则用 D，再否则用当前数据根。
+  String _fullUploadDataRoot() {
+    if (Directory(r'G:\').existsSync()) return r'G:\chan_month5_data';
+    if (Directory(r'D:\').existsSync()) return r'D:\chan_month5_data';
+    if (_dataRoot.isNotEmpty) return _dataRoot;
+    return r'C:\chan_month5_data';
+  }
+
+  /// 从环境变量、当前目录、程序所在目录往上找登记脚本，避免工作目录一变就找不到仓库。
+  String? _resolveFullUploadRepoRoot() {
+    final sep = Platform.pathSeparator;
+    bool hasScript(String root) {
+      if (root.trim().isEmpty) return false;
+      return File(
+        '$root${sep}CHAN_RUST${sep}scripts${sep}register_ticks_full_upload.ps1',
+      ).existsSync();
+    }
+
+    final env = Platform.environment['CHAN_REPO_ROOT']?.trim() ?? '';
+    if (hasScript(env)) return env;
+
+    final starts = <String>[
+      Directory.current.path,
+      File(Platform.resolvedExecutable).parent.path,
+      _chanKlineRoot(),
+    ];
+    for (final start in starts) {
+      if (start.trim().isEmpty) continue;
+      var dir = Directory(start);
+      for (var i = 0; i < 8; i++) {
+        if (hasScript(dir.path)) return dir.path;
+        final parent = dir.parent;
+        if (parent.path == dir.path) break;
+        dir = parent;
+      }
+    }
+    final fallback = RobotVerifyPaths.resolveRepoRoot(klineRoot: _chanKlineRoot());
+    if (fallback != null && hasScript(fallback)) return fallback;
+    return null;
+  }
+
+  Future<String> _createFullTicksUploadTask(TelegramSettings draft) async {
+    final share = draft.shareDir.trim();
+    final token = draft.botToken.trim();
+    final chat = draft.chatId.trim();
+    String finish(String msg) {
+      _msgHistory.append(msg);
+      return msg;
+    }
+
+    if (share.isEmpty) {
+      return finish('请先填写共享进度目录');
+    }
+    if (token.isEmpty || chat.isEmpty) {
+      return finish('请先在电报设置里保存机器人令牌和聊天号');
+    }
+
+    final next = draft;
+    setState(() => _telegramSettings = next);
+    await TelegramSettingsStore.save(next);
+
+    final repo = _resolveFullUploadRepoRoot();
+    if (repo == null || repo.isEmpty) {
+      return finish('找不到仓库，无法登记本机上传任务');
+    }
+    final sep = Platform.pathSeparator;
+    final scriptsDir = '$repo${sep}CHAN_RUST${sep}scripts';
+    final regPs1 = File('$scriptsDir${sep}register_ticks_full_upload.ps1');
+    if (!regPs1.existsSync()) {
+      return finish('找不到登记脚本：${regPs1.path}');
+    }
+
+    final liveDir = Directory('$repo${sep}a_Data${sep}agent_live');
+    if (!liveDir.existsSync()) {
+      liveDir.createSync(recursive: true);
+    }
+    final jobPath = '${liveDir.path}${sep}ticks_full_upload_job.json';
+    final resultPath =
+        '${liveDir.path}${sep}ticks_full_upload_register_result.json';
+    final dataRoot = _fullUploadDataRoot();
+    final aliveBefore = await ticksUploadSupervisorAlive(dataRoot);
+    final jobFile = File(jobPath);
+    String? previousJob;
+    if (jobFile.existsSync()) {
+      try {
+        previousJob = await jobFile.readAsString();
+      } catch (_) {}
+    }
+    final job = <String, dynamic>{
+      'shareDir': share,
+      'settingsPath': TelegramSettingsStore.settingsFilePath,
+      'machineName': Platform.localHostname,
+      'dataRoot': dataRoot,
+      'repoRoot': repo,
+      'scriptsDir': scriptsDir,
+    };
+    await jobFile.writeAsString(
+      const JsonEncoder.withIndent('  ').convert(job),
+    );
+    final resultFile = File(resultPath);
+    if (resultFile.existsSync()) {
+      try {
+        resultFile.deleteSync();
+      } catch (_) {}
+    }
+
+    try {
+      final run = await _runHiddenPowerShell(<String>[
+        '-File',
+        regPs1.path,
+        '-JobPath',
+        jobPath,
+        '-ScriptsDir',
+        scriptsDir,
+        '-ResultPath',
+        resultPath,
+      ]);
+      if (run.timedOut) {
+        final still = await ticksUploadSupervisorAlive(dataRoot);
+        if (aliveBefore || still) {
+          return finish('登记超时。本机监视已在跑，没有再开一个。');
+        }
+        return finish('登记超时（超过 60 秒没有返回）。请再点一次；若托盘已有图标，说明已经在跑。');
+      }
+      var raw = '';
+      if (resultFile.existsSync()) {
+        raw = await resultFile.readAsString();
+      }
+      if (raw.trim().isEmpty) raw = run.stdout;
+      final parsed = _extractJsonObject(raw);
+      final code = '${parsed?['code'] ?? ''}';
+      const keepJob = {'started', 'already_running', 'run_failed'};
+      if (!keepJob.contains(code)) {
+        await _restoreUploadJob(jobFile, previousJob);
+      }
+      final msg = await _describeUploadRegister(
+        raw: raw,
+        exitCode: run.code,
+        stderr: run.stderr,
+        dataRoot: dataRoot,
+        repo: repo,
+      );
+      return finish(msg);
+    } catch (e) {
+      if (!await ticksUploadSupervisorAlive(dataRoot)) {
+        await _restoreUploadJob(jobFile, previousJob);
+      }
+      return finish('登记失败：$e');
+    }
+  }
+
+  Future<void> _restoreUploadJob(File jobFile, String? previous) async {
+    try {
+      if (previous == null) {
+        if (jobFile.existsSync()) jobFile.deleteSync();
+      } else {
+        await jobFile.writeAsString(previous);
+      }
+    } catch (_) {}
+  }
+
+  /// 隐藏窗口跑 PowerShell，同时读完两路输出，避免编码错误把结果弄丢。
+  Future<({int code, String stdout, String stderr, bool timedOut})>
+      _runHiddenPowerShell(List<String> args) async {
+    final proc = await Process.start(
+      'powershell.exe',
+      <String>[
+        '-NoProfile',
+        '-NonInteractive',
+        '-WindowStyle',
+        'Hidden',
+        '-ExecutionPolicy',
+        'Bypass',
+        ...args,
+      ],
+      runInShell: false,
+    );
+    final outBytes = <int>[];
+    final errBytes = <int>[];
+    final outDone = proc.stdout
+        .listen((chunk) => outBytes.addAll(chunk))
+        .asFuture<void>();
+    final errDone = proc.stderr
+        .listen((chunk) => errBytes.addAll(chunk))
+        .asFuture<void>();
+    var timedOut = false;
+    var code = -1;
+    try {
+      code = await proc.exitCode.timeout(const Duration(seconds: 60));
+    } on TimeoutException {
+      timedOut = true;
+      try {
+        proc.kill();
+      } catch (_) {}
+    }
+    try {
+      await outDone.timeout(const Duration(seconds: 2));
+    } catch (_) {}
+    try {
+      await errDone.timeout(const Duration(seconds: 2));
+    } catch (_) {}
+    return (
+      code: code,
+      stdout: _decodeProcessText(outBytes),
+      stderr: _decodeProcessText(errBytes),
+      timedOut: timedOut,
+    );
+  }
+
+  Future<String> _describeUploadRegister({
+    required String raw,
+    required int exitCode,
+    required String stderr,
+    required String dataRoot,
+    required String repo,
+  }) async {
+    final map = _extractJsonObject(raw);
+    if (map == null) {
+      final extra = stderr.trim().isNotEmpty ? stderr.trim() : raw.trim();
+      final short = extra.length > 180 ? extra.substring(0, 180) : extra;
+      final why = short.isEmpty ? '脚本没有说明原因' : short;
+      return '登记失败（退出码 $exitCode）。$why';
+    }
+    final code = '${map['code'] ?? ''}';
+    final detail = '${map['message'] ?? ''}'.trim();
+    final reported = map['exitCode'];
+    final shownCode = reported is int ? reported : exitCode;
+    switch (code) {
+      case 'started':
+        final alive = await _waitUploadSupervisor(dataRoot);
+        if (alive) return '本机上传任务已登记，监视已在跑。';
+        final log = _tailLocalLog(dataRoot);
+        final stop = _uploadStopFlagPresent(dataRoot, repo);
+        final extra = <String>[
+          if (stop) '本机还有停止标记',
+          if (log.isNotEmpty) '最近：$log',
+        ].join('。');
+        final tail = extra.isEmpty ? '' : '$extra。';
+        return '计划任务已登记，启动命令已发出，但监视进程没有留住（退出码 $shownCode）。$tail';
+      case 'already_running':
+        return '本机监视已在跑。登录任务已更新，没有再开一个。';
+      case 'run_failed':
+        final runExit = map['runExit'] ?? shownCode;
+        final why = detail.isEmpty ? '' : ' $detail';
+        return '任务已登记，但启动失败（退出码 $runExit）。$why';
+      case 'share_missing':
+        final where = detail.isEmpty ? '路径为空' : detail;
+        return '共享进度目录不存在或读不到：$where（退出码 $shownCode）';
+      case 'no_pythonw':
+        return '本机没有找到 pythonw，无法在不弹出黑框的情况下启动监视（退出码 $shownCode）。';
+      case 'no_supervisor':
+        return '找不到监视脚本（退出码 $shownCode）。${detail.isEmpty ? '' : ' $detail'}';
+      case 'schtasks_create':
+        final why = detail.isEmpty ? '' : ' $detail';
+        return '登记计划任务失败（退出码 $shownCode）。$why';
+      default:
+        if (map['ok'] == true) {
+          return '本机上传任务已登记。';
+        }
+        final why = detail.isEmpty ? '脚本没有说明原因' : detail;
+        return '登记失败（退出码 $shownCode）。$why';
+    }
+  }
+
+  Future<bool> _waitUploadSupervisor(String dataRoot) async {
+    // conda 的 pythonw 起来可能要几秒，锁文件写在托盘之前。
+    for (var i = 0; i < 24; i++) {
+      if (await ticksUploadSupervisorAlive(dataRoot)) return true;
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+    }
+    return false;
+  }
+
+  bool _uploadStopFlagPresent(String dataRoot, String repo) {
+    final sep = Platform.pathSeparator;
+    final paths = <String>[
+      '$dataRoot${sep}local${sep}stop.flag',
+      '$repo${sep}a_Data${sep}agent_live${sep}stop.flag',
+    ];
+    for (final path in paths) {
+      try {
+        if (File(path).existsSync()) return true;
+      } catch (_) {}
+    }
+    return false;
+  }
+
+  String _tailLocalLog(String dataRoot) {
+    try {
+      final log = File(
+        '$dataRoot${Platform.pathSeparator}local${Platform.pathSeparator}supervisor.log',
+      );
+      if (!log.existsSync()) return '';
+      final lines = log
+          .readAsStringSync()
+          .split(RegExp(r'\r?\n'))
+          .where((e) => e.trim().isNotEmpty)
+          .toList();
+      if (lines.isEmpty) return '';
+      final last = lines.last.trim();
+      if (last.length <= 160) return last;
+      return last.substring(last.length - 160);
+    } catch (_) {
+      return '';
+    }
+  }
+
+  String _decodeProcessText(List<int> bytes) {
+    if (bytes.isEmpty) return '';
+    var nul = 0;
+    for (final b in bytes) {
+      if (b == 0) nul++;
+    }
+    final bom = bytes.length >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE;
+    if (bom || nul * 4 > bytes.length) {
+      final codes = <int>[];
+      var i = bom ? 2 : 0;
+      if (i == 0 && bytes.length.isOdd) {
+        return utf8.decode(bytes, allowMalformed: true).trim();
+      }
+      for (; i + 1 < bytes.length; i += 2) {
+        codes.add(bytes[i] | (bytes[i + 1] << 8));
+      }
+      return String.fromCharCodes(codes).replaceAll('\u0000', '').trim();
+    }
+    return utf8.decode(bytes, allowMalformed: true).trim();
+  }
+
+  Map<String, dynamic>? _extractJsonObject(String raw) {
+    var text = raw.trim();
+    if (text.isEmpty) return null;
+    if (text.codeUnitAt(0) == 0xFEFF) text = text.substring(1).trim();
+    final start = text.indexOf('{');
+    final end = text.lastIndexOf('}');
+    if (start < 0 || end <= start) return null;
+    try {
+      final obj = jsonDecode(text.substring(start, end + 1));
+      if (obj is Map) return Map<String, dynamic>.from(obj);
+    } catch (_) {}
+    return null;
   }
 
   Timer? _ticksDailyTimer;
@@ -895,6 +1299,10 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
   @override
   void initState() {
     super.initState();
+    if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+      windowManager.addListener(this);
+      unawaited(windowManager.setPreventClose(true));
+    }
     _keepAlive.attach();
     _loadInteractionMode();
     _loadMathIndicatorConfig();
@@ -1090,6 +1498,9 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
 
   @override
   void dispose() {
+    if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+      windowManager.removeListener(this);
+    }
     _keepAlive.detach();
     _playTimer?.cancel();
     _longOpHint.dispose();
@@ -3447,7 +3858,7 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
         ),
         WindowCaptionButton.close(
           brightness: Brightness.dark,
-          onPressed: () => windowManager.close(),
+          onPressed: () => _requestCloseApp(),
         ),
       ],
     );
@@ -3580,6 +3991,16 @@ class _KlineHomePageState extends State<KlineHomePage> implements AgentApiHost {
           onPressed: _busy ? null : () => _openTelegramSettings(),
           onHelp: () => _openTelegramSettings(),
           helpTooltip: 'Telegram 取数说明',
+        ),
+        TicksFullUploadPanel(
+          settings: _telegramSettings,
+          dataRoot: _fullUploadDataRoot(),
+          onCreateTask: _createFullTicksUploadTask,
+          onShareDir: (share) async {
+            final next = _telegramSettings.copyWith(shareDir: share);
+            setState(() => _telegramSettings = next);
+            await TelegramSettingsStore.save(next);
+          },
         ),
         const SizedBox(height: 8),
         TextFormField(

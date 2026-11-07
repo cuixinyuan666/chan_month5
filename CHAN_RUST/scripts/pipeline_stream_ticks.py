@@ -2,39 +2,157 @@
 # -*- coding: utf-8 -*-
 """全市场分笔流水线：按股票串行 —— 下载全历史 → 按年分卷 zip → 上传 → 删本地。
 
-- 下载：调用 Rust export_all_ticks.exe（单股、16 线程），缓存写 G 盘
-- 上传：Telegram sendDocument（按年 zip，单卷 ≤ 45MB）
-- 删：该股全部年份上传成功后，删本地缓存目录与 zip
-- 断点续传：ticks_stream_state.json 记录 code → {years: {year: file_id...}}
+支持两机抢传：进度/claims/锁放在共享目录；本机缓存仍用本机 dataRoot。
+配置来自 --job job.json 或环境变量；令牌从 settings JSON 读取，不写死在脚本里。
 """
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import time
 import urllib.request
 import zipfile
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Iterator
 
+# 子进程不另开控制台，避免每下一只股票弹出一个黑框
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def _run_hidden(cmd: list[str], **kwargs):
+    if _NO_WINDOW:
+        kwargs["creationflags"] = kwargs.get("creationflags", 0) | _NO_WINDOW
+    return subprocess.run(cmd, **kwargs)
+
+# ---- defaults (overridden by configure) ----
 REPO = Path(r"D:\2\chan_month5")
 EXE = REPO / "CHAN_RUST" / "rust" / "target" / "release" / "examples" / "export_all_ticks.exe"
 SUMMARY = REPO / "exports" / "a_shares_daily" / "summary.csv"
-CACHE_ROOT = Path(r"G:\chan_month5_data\tdx_cache")
-OUT_DIR = Path(r"G:\chan_month5_data\export_tmp")
-ZIP_DIR = Path(r"G:\chan_month5_data\zips")
-STATE_DIR = Path(r"G:\chan_month5_data\state\ticks")
+DATA_ROOT = Path(r"G:\chan_month5_data")
+CACHE_ROOT = DATA_ROOT / "tdx_cache"
+OUT_DIR = DATA_ROOT / "export_tmp"
+ZIP_DIR = DATA_ROOT / "zips_work"
+STATE_DIR = DATA_ROOT / "state" / "ticks"
 STATE = STATE_DIR / "ticks_stream_state.json"
 INDEX = STATE_DIR / "ticks_stream_index.json"
-LOG = Path(r"G:\chan_month5_data\pipeline_stream.log")
+CLAIMS_DIR = STATE_DIR / "claims"
+LOCK = STATE_DIR / "state.lock"
+LOG = DATA_ROOT / "pipeline_stream.log"
+LOCAL_DIR = DATA_ROOT / "local"
+CURRENT_CODE_FILE = LOCAL_DIR / "current_code.txt"
+STATUS_JSON = LOCAL_DIR / "status.json"
+INDEX_PUBLISHED_FLAG = STATE_DIR / "index_published.flag"
 
-TOKEN = os.environ.get("TG_BOT_TOKEN", "")
-CHAT_ID = os.environ.get("TG_CHAT_ID", "")
-PROXY = os.environ.get("TG_PROXY", "127.0.0.1:19828").strip()
+MACHINE = socket.gethostname()
+TOKEN = ""
+CHAT_ID = ""
+PROXY = "127.0.0.1:19828"
+SETTINGS_PATH: Path | None = None
+JOB_DIR: Path | None = None
+SHARE_DIR: Path | None = None
+
 MAX_ZIP_MB = 45
 RATE = 2.5
+LOCK_STALE_SEC = 30
+CLAIM_STALE_SEC = 600  # 10 min
+HEARTBEAT_INTERVAL = 60
+
+_last_heartbeat = 0.0
+_current_code: str | None = None
+
+
+def configure(
+    *,
+    share_dir: str | None = None,
+    settings_path: str | None = None,
+    machine: str | None = None,
+    data_root: str | None = None,
+    repo_root: str | None = None,
+    job_path: str | None = None,
+) -> None:
+    global REPO, EXE, SUMMARY, DATA_ROOT, CACHE_ROOT, OUT_DIR, ZIP_DIR
+    global STATE_DIR, STATE, INDEX, CLAIMS_DIR, LOCK, LOG
+    global LOCAL_DIR, CURRENT_CODE_FILE, STATUS_JSON, INDEX_PUBLISHED_FLAG
+    global MACHINE, TOKEN, CHAT_ID, PROXY, SETTINGS_PATH, JOB_DIR, SHARE_DIR
+
+    if job_path:
+        JOB_DIR = Path(job_path).resolve().parent
+        job = json.loads(Path(job_path).read_text(encoding="utf-8-sig"))
+        share_dir = share_dir or job.get("shareDir") or job.get("share_dir")
+        settings_path = settings_path or job.get("settingsPath") or job.get("settings_path")
+        machine = machine or job.get("machineName") or job.get("machine")
+        data_root = data_root or job.get("dataRoot") or job.get("data_root")
+        repo_root = repo_root or job.get("repoRoot") or job.get("repo_root")
+
+    share_dir = share_dir or os.environ.get("TICKS_SHARE_DIR") or ""
+    settings_path = settings_path or os.environ.get("TICKS_SETTINGS_PATH") or ""
+    machine = machine or os.environ.get("TICKS_MACHINE") or socket.gethostname()
+    data_root = data_root or os.environ.get("TICKS_DATA_ROOT") or r"G:\chan_month5_data"
+    repo_root = repo_root or os.environ.get("TICKS_REPO_ROOT") or str(REPO)
+
+    MACHINE = str(machine).strip() or socket.gethostname()
+    DATA_ROOT = Path(data_root)
+    REPO = Path(repo_root)
+    EXE = REPO / "CHAN_RUST" / "rust" / "target" / "release" / "examples" / "export_all_ticks.exe"
+    SUMMARY = REPO / "exports" / "a_shares_daily" / "summary.csv"
+    CACHE_ROOT = DATA_ROOT / "tdx_cache"
+    OUT_DIR = DATA_ROOT / "export_tmp"
+    ZIP_DIR = DATA_ROOT / "zips_work"
+    LOG = DATA_ROOT / "pipeline_stream.log"
+    LOCAL_DIR = DATA_ROOT / "local"
+    CURRENT_CODE_FILE = LOCAL_DIR / "current_code.txt"
+    STATUS_JSON = LOCAL_DIR / "status.json"
+
+    if share_dir.strip():
+        SHARE_DIR = Path(share_dir.strip())
+        STATE_DIR = SHARE_DIR
+    else:
+        SHARE_DIR = None
+        STATE_DIR = DATA_ROOT / "state" / "ticks"
+
+    STATE = STATE_DIR / "ticks_stream_state.json"
+    INDEX = STATE_DIR / "ticks_stream_index.json"
+    CLAIMS_DIR = STATE_DIR / "claims"
+    LOCK = STATE_DIR / "state.lock"
+    INDEX_PUBLISHED_FLAG = STATE_DIR / "index_published.flag"
+
+    if settings_path.strip():
+        SETTINGS_PATH = Path(settings_path.strip())
+    else:
+        # 常见落点：仓库 flutter 工程 cwd
+        candidates = [
+            REPO / "CHAN_RUST" / "flutter" / "chan_kline" / ".chan_telegram_settings.json",
+            Path.cwd() / ".chan_telegram_settings.json",
+        ]
+        SETTINGS_PATH = next((p for p in candidates if p.is_file()), candidates[0])
+
+    _load_credentials()
+
+
+def _load_credentials() -> None:
+    global TOKEN, CHAT_ID, PROXY
+    TOKEN = os.environ.get("TG_BOT_TOKEN", "").strip()
+    CHAT_ID = os.environ.get("TG_CHAT_ID", "").strip()
+    PROXY = os.environ.get("TG_PROXY", "").strip()
+    if SETTINGS_PATH and SETTINGS_PATH.is_file():
+        try:
+            s = json.loads(SETTINGS_PATH.read_text(encoding="utf-8-sig"))
+            if not TOKEN:
+                TOKEN = (s.get("bot_token") or "").strip()
+            if not CHAT_ID:
+                CHAT_ID = (s.get("chat_id") or "").strip()
+            if not PROXY and s.get("proxy"):
+                PROXY = str(s.get("proxy") or "").strip()
+        except Exception as e:
+            log(f"settings read fail: {e}")
+    if not PROXY:
+        PROXY = "127.0.0.1:19828"
 
 
 def _opener():
@@ -48,8 +166,12 @@ def _opener():
 def log(msg: str) -> None:
     line = f"[{time.strftime('%H:%M:%S')}] {msg}"
     print(line, flush=True)
-    with LOG.open("a", encoding="utf-8") as f:
-        f.write(line + "\n")
+    try:
+        LOG.parent.mkdir(parents=True, exist_ok=True)
+        with LOG.open("a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception:
+        pass
 
 
 def load_state() -> dict:
@@ -62,9 +184,289 @@ def load_state() -> dict:
 
 
 def save_state(st: dict) -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(st, ensure_ascii=False, indent=1)
     tmp = STATE.with_suffix(".tmp")
-    tmp.write_text(json.dumps(st, ensure_ascii=False, indent=1), encoding="utf-8")
-    tmp.replace(STATE)
+    tmp.write_text(payload, encoding="utf-8")
+    try:
+        tmp.replace(STATE)
+        return
+    except OSError:
+        pass
+    try:
+        if STATE.exists():
+            STATE.unlink()
+        tmp.replace(STATE)
+        return
+    except OSError:
+        pass
+    STATE.write_text(payload, encoding="utf-8")
+    try:
+        tmp.unlink()
+    except OSError:
+        pass
+
+
+def _lock_payload() -> bytes:
+    return json.dumps(
+        {"pid": os.getpid(), "machine": MACHINE, "time": time.time()},
+        ensure_ascii=False,
+    ).encode("utf-8")
+
+
+def _lock_is_stale(path: Path) -> bool:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        t = float(data.get("time") or 0)
+        return (time.time() - t) > LOCK_STALE_SEC
+    except Exception:
+        # 无法解析：看 mtime
+        try:
+            return (time.time() - path.stat().st_mtime) > LOCK_STALE_SEC
+        except Exception:
+            return True
+
+
+@contextmanager
+def state_lock(timeout: float = 30.0) -> Iterator[None]:
+    """短锁：O_CREAT|O_EXCL；超时/心跳过期可抢。"""
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    deadline = time.time() + timeout
+    acquired = False
+    while time.time() < deadline:
+        try:
+            fd = os.open(str(LOCK), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            try:
+                os.write(fd, _lock_payload())
+            finally:
+                os.close(fd)
+            acquired = True
+            break
+        except FileExistsError:
+            if LOCK.is_file() and _lock_is_stale(LOCK):
+                try:
+                    LOCK.unlink()
+                except OSError:
+                    pass
+            time.sleep(0.05)
+        except OSError:
+            time.sleep(0.05)
+    if not acquired:
+        raise TimeoutError(f"state.lock timeout: {LOCK}")
+    try:
+        yield
+    finally:
+        try:
+            LOCK.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _read_claim(path: Path) -> dict | None:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _claim_alive(meta: dict | None) -> bool:
+    if not meta:
+        return False
+    try:
+        hb = float(meta.get("heartbeat_at") or meta.get("started_at") or 0)
+    except (TypeError, ValueError):
+        return False
+    return (time.time() - hb) <= CLAIM_STALE_SEC
+
+
+def _claim_is_ours(meta: dict | None) -> bool:
+    if not meta:
+        return False
+    try:
+        pid = int(meta.get("pid") or 0)
+    except (TypeError, ValueError):
+        return False
+    return meta.get("machine") == MACHINE and pid == os.getpid()
+
+
+def _settled_codes(st: dict) -> set:
+    """已上传或已确认没有分笔文件的股票，都不再抢。"""
+    return set((st.get("files") or {}).keys()) | set((st.get("skipped") or {}).keys())
+
+
+def skip_no_files(code: str) -> None:
+    """下载成功但没有任何分笔文件：记入跳过，避免两台反复抢同一只。"""
+    with state_lock():
+        st = load_state()
+        skipped = st.setdefault("skipped", {})
+        skipped[code] = {
+            "reason": "no_files",
+            "at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "machine": MACHINE,
+        }
+        save_state(st)
+        release_claim(code)
+    log(f"  {code} skip no files (skipped={len(skipped)})")
+    # #region agent log
+    try:
+        dbg = Path(r"d:\2\chan_month5\.cursor\debug-ac456b.log")
+        dbg.parent.mkdir(parents=True, exist_ok=True)
+        dbg.open("a", encoding="utf-8").write(
+            json.dumps(
+                {
+                    "sessionId": "ac456b",
+                    "hypothesisId": "E",
+                    "location": "pipeline_stream_ticks.py:skip_no_files",
+                    "message": "empty stock skipped",
+                    "data": {"code": code, "skipped": len(skipped)},
+                    "timestamp": int(time.time() * 1000),
+                },
+                ensure_ascii=False,
+            )
+            + "\n"
+        )
+    except Exception:
+        pass
+    # #endregion
+
+
+def claim_next(codes: list[str]) -> str | None:
+    """持短锁写下占用后立刻放锁，再读回确认是自己，避免两台抢到同一只。"""
+    CLAIMS_DIR.mkdir(parents=True, exist_ok=True)
+    for _attempt in range(8):
+        chosen: str | None = None
+        with state_lock():
+            st = load_state()
+            done = _settled_codes(st)
+            for p in list(CLAIMS_DIR.glob("*.json")):
+                meta = _read_claim(p)
+                if not _claim_alive(meta):
+                    try:
+                        p.unlink()
+                    except OSError:
+                        pass
+            live = {p.stem for p in CLAIMS_DIR.glob("*.json")}
+            for code in codes:
+                if code in done or code in live:
+                    continue
+                now = time.time()
+                payload = {
+                    "machine": MACHINE,
+                    "pid": os.getpid(),
+                    "started_at": now,
+                    "heartbeat_at": now,
+                    "code": code,
+                }
+                claim_path = CLAIMS_DIR / f"{code}.json"
+                claim_path.write_text(
+                    json.dumps(payload, ensure_ascii=False, indent=1),
+                    encoding="utf-8",
+                )
+                chosen = code
+                break
+        if not chosen:
+            return None
+        time.sleep(0.4)
+        owned = _read_claim(CLAIMS_DIR / f"{chosen}.json")
+        if _claim_is_ours(owned):
+            return chosen
+        log(f"  lost claim race {chosen} -> {(owned or {}).get('machine')}")
+    return None
+
+
+def heartbeat(code: str) -> None:
+    global _last_heartbeat
+    path = CLAIMS_DIR / f"{code}.json"
+    if not path.is_file():
+        return
+    try:
+        meta = _read_claim(path) or {}
+        if meta.get("machine") not in (None, MACHINE) or int(meta.get("pid") or 0) not in (0, os.getpid()):
+            return
+        meta["heartbeat_at"] = time.time()
+        meta["machine"] = MACHINE
+        meta["pid"] = os.getpid()
+        meta["code"] = code
+        path.write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
+        _last_heartbeat = time.time()
+    except Exception as e:
+        log(f"  heartbeat fail {code}: {e}")
+
+
+def maybe_heartbeat(code: str) -> None:
+    global _last_heartbeat
+    if time.time() - _last_heartbeat >= HEARTBEAT_INTERVAL:
+        heartbeat(code)
+
+
+def release_claim(code: str) -> None:
+    path = CLAIMS_DIR / f"{code}.json"
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def complete_code(code: str, entry: dict) -> None:
+    with state_lock():
+        st = load_state()
+        st.setdefault("files", {})[code] = entry
+        save_state(st)
+        release_claim(code)
+
+
+def write_current_code(code: str | None) -> None:
+    global _current_code
+    _current_code = code
+    LOCAL_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        if code:
+            CURRENT_CODE_FILE.write_text(code, encoding="utf-8")
+        elif CURRENT_CODE_FILE.is_file():
+            CURRENT_CODE_FILE.write_text("", encoding="utf-8")
+    except Exception:
+        pass
+
+
+def write_status(done: int, total: int, current: str | None) -> None:
+    LOCAL_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        STATUS_JSON.write_text(
+            json.dumps(
+                {
+                    "done": done,
+                    "total": total,
+                    "current": current or "",
+                    "machine": MACHINE,
+                    "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                },
+                ensure_ascii=False,
+                indent=1,
+            ),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
+def _flag_paths(name: str) -> list[Path]:
+    paths: list[Path] = []
+    if JOB_DIR is not None:
+        paths.append(JOB_DIR / name)
+    paths.append(LOCAL_DIR / name)
+    paths.append(DATA_ROOT / "state" / "local" / name)
+    if SHARE_DIR is not None:
+        paths.append(SHARE_DIR.parent / name)
+        paths.append(SHARE_DIR / name)
+    return paths
+
+
+def pause_flag_exists() -> bool:
+    return any(p.is_file() for p in _flag_paths("pause.flag"))
+
+
+def stop_flag_exists() -> bool:
+    return any(p.is_file() for p in _flag_paths("stop.flag"))
 
 
 def api(method: str, fields: dict | None = None) -> dict:
@@ -128,7 +530,8 @@ def _zip_and_size(code: str, tag: str, files: list[Path]) -> tuple[Path, float]:
 
 
 def upload_chunk(code: str, tag: str, files: list[Path], depth: int = 0) -> dict:
-    """上传一个年/年段包；超过 40MB 时按年份对半拆（最多拆两层）。"""
+    """上传一个年/年段包；超过上限时按年份对半拆（最多拆两层）。"""
+    maybe_heartbeat(code)
     zip_path, mb = _zip_and_size(code, tag, files)
     if mb > MAX_ZIP_MB:
         zip_path.unlink(missing_ok=True)
@@ -146,9 +549,11 @@ def upload_chunk(code: str, tag: str, files: list[Path], depth: int = 0) -> dict
     time.sleep(1.0 / RATE)
     last_err = None
     for attempt in range(3):
+        maybe_heartbeat(code)
         try:
             resp = send_doc(zip_path, f"#ticks {code} {tag} ({len(files)}d)")
             if resp.get("ok"):
+                zip_path.unlink(missing_ok=True)
                 return {
                     "file_id": resp["result"]["document"]["file_id"],
                     "message_id": resp["result"]["message_id"],
@@ -187,12 +592,13 @@ def plan_chunks(by_year: dict[str, list[Path]], recent_years: set[str]) -> list[
 
 
 def fetch_stock(code: str) -> bool:
-    """调用 Rust 导出器拉单只全历史到 G 缓存；D 盘已有缓存则先搬过来。"""
-    src = Path(r"D:\2\chan_month5\a_Data\.tdx_protocol_cache") / code
+    """调用 Rust 导出器拉单只全历史到本机缓存。"""
+    maybe_heartbeat(code)
+    src = REPO / "a_Data" / ".tdx_protocol_cache" / code
     dst = CACHE_ROOT / ".tdx_protocol_cache" / code
     if src.is_dir() and not dst.is_dir():
         dst.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(["cmd", "/c", "move", str(src), str(dst)], capture_output=True)
+        _run_hidden(["cmd", "/c", "move", str(src), str(dst)], capture_output=True)
     if dst.is_dir() and any(dst.glob("*.txt")):
         return True
     cmd = [
@@ -206,90 +612,221 @@ def fetch_stock(code: str) -> bool:
         "--out", str(OUT_DIR),
         "--codes-from", str(SUMMARY),
     ]
-    r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    r = _run_hidden(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
     if r.returncode != 0:
         log(f"  fetch fail {code}: {(r.stderr or r.stdout)[-300:]}")
         return False
     return True
 
 
-def main() -> int:
-    if not TOKEN or not CHAT_ID:
-        log("missing TG_BOT_TOKEN / TG_CHAT_ID")
-        return 2
-    for p in (CACHE_ROOT, OUT_DIR, ZIP_DIR, STATE_DIR):
-        p.mkdir(parents=True, exist_ok=True)
+def _clear_code_cache(code: str) -> None:
+    d = CACHE_ROOT / ".tdx_protocol_cache" / code
+    _run_hidden(["cmd", "/c", "rmdir", "/s", "/q", str(d)], capture_output=True)
 
-    codes = []
+
+def _live_claims() -> list[str]:
+    CLAIMS_DIR.mkdir(parents=True, exist_ok=True)
+    live = []
+    for p in CLAIMS_DIR.glob("*.json"):
+        meta = _read_claim(p)
+        if _claim_alive(meta):
+            live.append(p.stem)
+        else:
+            try:
+                p.unlink()
+            except OSError:
+                pass
+    return live
+
+
+def try_publish_index(total_codes: int) -> None:
+    """仅当全部完成且无活占用时发布一次；index_published.flag 防双发。"""
+    with state_lock():
+        if INDEX_PUBLISHED_FLAG.is_file():
+            log("index already published (flag exists), skip")
+            return
+        st = load_state()
+        done_n = len(st.get("files") or {})
+        skipped_n = len(st.get("skipped") or {})
+        live = _live_claims()
+        # 只把真有 file_id 的年份放进索引；日志补种的股票只用来跳过，不写进索引
+        publish_files = {}
+        for code, meta in (st.get("files") or {}).items():
+            years = (meta or {}).get("years") or {}
+            kept = {k: v for k, v in years.items() if isinstance(v, dict) and v.get("file_id")}
+            if kept:
+                publish_files[code] = {**(meta or {}), "years": kept}
+        if done_n + skipped_n < total_codes or live:
+            log(f"index not ready: done={done_n} skipped={skipped_n}/{total_codes} live_claims={live}")
+            return
+        index = {
+            "version": 3,
+            "kind": "ticks_zip_hybrid",
+            "count": len(publish_files),
+            "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "files": publish_files,
+        }
+        INDEX.write_text(json.dumps(index, ensure_ascii=False, indent=1), encoding="utf-8")
+        published_ok = True
+        if os.environ.get("TICKS_SKIP_INDEX_PUBLISH") == "1":
+            log("index publish skipped by TICKS_SKIP_INDEX_PUBLISH")
+        else:
+            try:
+                import publish_ticks_index as pub
+
+                pub.STATE_DIR = STATE_DIR
+                pub.INDEX = STATE_DIR / "ticks_index.json"
+                pub.HINT = STATE_DIR / "ticks_index_hint.json"
+                pub.TOKEN = TOKEN
+                pub.CHAT_ID = CHAT_ID
+                pub.PROXY = PROXY
+                if SETTINGS_PATH:
+                    pub.APP_SETTINGS = SETTINGS_PATH
+                rc = pub.main()
+                if rc not in (0, None):
+                    published_ok = False
+                    log(f"index publish rc={rc}, flag not written")
+            except Exception as e:
+                published_ok = False
+                log(f"index publish fail: {e}")
+        if not published_ok:
+            return
+        INDEX_PUBLISHED_FLAG.write_text(
+            json.dumps(
+                {"at": time.strftime("%Y-%m-%d %H:%M:%S"), "machine": MACHINE, "count": done_n},
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        log(f"index published flag written, count={done_n}")
+
+
+def load_codes() -> list[str]:
+    codes: list[str] = []
     with SUMMARY.open(encoding="utf-8") as f:
         next(f)
         for line in f:
             p = line.split(",")
             if len(p) >= 3 and len(p[0]) == 6:
                 codes.append(p[0])
-    st = load_state()
-    done = set(st["files"].keys())
-    todo = [c for c in codes if c not in done]
-    limit = int(os.environ.get("PIPE_LIMIT", "0") or 0)
-    if limit > 0:
-        todo = todo[:limit]
-    log(f"total codes {len(codes)}, done {len(done)}, todo {len(todo)}")
+    return codes
 
-    for i, code in enumerate(todo, 1):
+
+def process_one(code: str) -> bool:
+    """下载/打包/上传一只；成功 True。失败释放 claim 并清缓存。"""
+    global _last_heartbeat
+    t0 = time.time()
+    heartbeat(code)
+    _last_heartbeat = time.time()
+    write_current_code(code)
+    if not fetch_stock(code):
+        release_claim(code)
+        _clear_code_cache(code)
+        write_current_code(None)
+        return False
+    d = CACHE_ROOT / ".tdx_protocol_cache" / code
+    files = sorted(d.glob("*.txt")) if d.is_dir() else []
+    if not files:
+        log(f"  {code} no files")
+        skip_no_files(code)
+        _clear_code_cache(code)
+        write_current_code(None)
+        return False
+    by_year: dict[str, list[Path]] = {}
+    for f in files:
+        by_year.setdefault(f.name[:4], []).append(f)
+    now_year = time.localtime().tm_year
+    recent = {str(y) for y in range(now_year - 2, now_year + 1)}
+    chunks = plan_chunks(by_year, recent)
+    entry: dict = {"years": {}}
+    ok = True
+    for tag, chunk_files in chunks:
+        if stop_flag_exists():
+            ok = False
+            log(f"  stop.flag seen, abort {code}")
+            break
+        try:
+            maybe_heartbeat(code)
+            r = upload_chunk(code, tag, chunk_files)
+            if "__split__" in r:
+                for sub_tag, sub in r["__split__"].items():
+                    entry["years"][sub_tag] = sub
+            else:
+                entry["years"][tag] = r
+        except Exception as e:
+            ok = False
+            log(f"  fail {code} {tag}: {e}")
+            break
+    if ok:
+        complete_code(code, entry)
+        _clear_code_cache(code)
+        log(f"  {code} done {len(files)}d in {time.time()-t0:.0f}s (uploaded {len(entry['years'])} packs)")
+        write_current_code(None)
+        return True
+    release_claim(code)
+    _clear_code_cache(code)
+    log(f"  {code} failed {len(entry['years'])} packs, cache cleared, will retry")
+    write_current_code(None)
+    return False
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="ticks stream pipeline (shared claim)")
+    parser.add_argument("--job", default="", help="path to job.json")
+    args = parser.parse_args(argv)
+
+    configure(job_path=args.job or None)
+
+    if not TOKEN or not CHAT_ID:
+        log("missing bot_token / chat_id (settings or TG_BOT_TOKEN/TG_CHAT_ID)")
+        return 2
+
+    for p in (CACHE_ROOT, OUT_DIR, ZIP_DIR, STATE_DIR, CLAIMS_DIR, LOCAL_DIR):
+        p.mkdir(parents=True, exist_ok=True)
+
+    codes = load_codes()
+    limit = int(os.environ.get("PIPE_LIMIT", "0") or 0)
+    claimed = 0
+    log(
+        f"machine={MACHINE} share={STATE_DIR} dataRoot={DATA_ROOT} "
+        f"total={len(codes)} limit={limit or 'none'}"
+    )
+
+    while True:
+        if stop_flag_exists():
+            log("stop.flag present -> exit")
+            write_current_code(None)
+            return 0
+        if pause_flag_exists():
+            write_status(len(load_state().get("files") or {}), len(codes), None)
+            time.sleep(3)
+            continue
+
         free_gb = shutil.disk_usage(CACHE_ROOT).free / (1024 ** 3)
         if free_gb < 5:
             log(f"disk low on {CACHE_ROOT}: {free_gb:.1f}GB free -> stop")
             break
-        t0 = time.time()
-        log(f"[{i}/{len(todo)}] {code} fetch ...")
-        if not fetch_stock(code):
-            continue
-        d = CACHE_ROOT / ".tdx_protocol_cache" / code
-        files = sorted(d.glob("*.txt")) if d.is_dir() else []
-        if not files:
-            log(f"  {code} no files")
-            continue
-        by_year: dict[str, list[Path]] = {}
-        for f in files:
-            by_year.setdefault(f.name[:4], []).append(f)
-        now_year = time.localtime().tm_year
-        recent = {str(y) for y in range(now_year - 2, now_year + 1)}
-        chunks = plan_chunks(by_year, recent)
-        entry = {"years": {}}
-        ok = True
-        for tag, chunk_files in chunks:
-            if tag in entry["years"]:
-                continue
-            try:
-                r = upload_chunk(code, tag, chunk_files)
-                if "__split__" in r:
-                    for sub_tag, sub in r["__split__"].items():
-                        entry["years"][sub_tag] = sub
-                else:
-                    entry["years"][tag] = r
-                save_state({**st, "files": {**st["files"], code: entry}})
-            except Exception as e:
-                ok = False
-                log(f"  fail {code} {tag}: {e}")
-        st["files"][code] = entry
-        save_state(st)
-        if ok:
-            subprocess.run(["cmd", "/c", "rmdir", "/s", "/q", str(d)], capture_output=True)
-            log(f"  {code} done {len(files)}d in {time.time()-t0:.0f}s (uploaded {len(entry['years'])} packs)")
 
-    index = {
-        "version": 3,
-        "kind": "ticks_zip_hybrid",
-        "count": len(st["files"]),
-        "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "files": st["files"],
-    }
-    INDEX.write_text(json.dumps(index, ensure_ascii=False, indent=1), encoding="utf-8")
-    try:
-        import publish_ticks_index as pub
-        pub.main()
-    except Exception as e:
-        log(f"index publish fail: {e}")
+        if limit > 0 and claimed >= limit:
+            log(f"PIPE_LIMIT={limit} reached")
+            break
+
+        st = load_state()
+        done_n = len(st.get("files") or {})
+        write_status(done_n, len(codes), None)
+
+        code = claim_next(codes)
+        if not code:
+            log(f"no more codes to claim (done={done_n}/{len(codes)})")
+            try_publish_index(len(codes))
+            break
+
+        claimed += 1
+        log(f"[claim #{claimed}] {code} (done {done_n}/{len(codes)})")
+        write_status(done_n, len(codes), code)
+        process_one(code)
+
+    write_current_code(None)
     return 0
 
 

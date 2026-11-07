@@ -16,6 +16,7 @@ class TelegramSettings {
     this.tickIndexFileId = '',
     this.proxy = '',
     this.autoTicksDaily = false,
+    this.shareDir = '',
   });
 
   final KlineDataSourceKind source;
@@ -34,6 +35,9 @@ class TelegramSettings {
   /// 每个交易日 15:35 自动把当天分笔增量上传 Telegram。
   final bool autoTicksDaily;
 
+  /// 两机抢传共享进度目录（如 `\\电脑名\共享名`）。
+  final String shareDir;
+
   bool get telegramEnabled =>
       source == KlineDataSourceKind.telegram &&
       botToken.trim().isNotEmpty && chatId.trim().isNotEmpty;
@@ -46,6 +50,7 @@ class TelegramSettings {
     String? tickIndexFileId,
     String? proxy,
     bool? autoTicksDaily,
+    String? shareDir,
   }) {
     return TelegramSettings(
       source: source ?? this.source,
@@ -55,6 +60,7 @@ class TelegramSettings {
       tickIndexFileId: tickIndexFileId ?? this.tickIndexFileId,
       proxy: proxy ?? this.proxy,
       autoTicksDaily: autoTicksDaily ?? this.autoTicksDaily,
+      shareDir: shareDir ?? this.shareDir,
     );
   }
 
@@ -71,6 +77,7 @@ class TelegramSettings {
       tickIndexFileId: (json['tick_index_file_id'] as String?)?.trim() ?? '',
       proxy: (json['proxy'] as String?)?.trim() ?? '',
       autoTicksDaily: json['auto_ticks_daily'] == true,
+      shareDir: (json['share_dir'] as String?)?.trim() ?? '',
     );
   }
 
@@ -82,6 +89,7 @@ class TelegramSettings {
         if (tickIndexFileId.isNotEmpty) 'tick_index_file_id': tickIndexFileId,
         if (proxy.isNotEmpty) 'proxy': proxy,
         'auto_ticks_daily': autoTicksDaily,
+        if (shareDir.isNotEmpty) 'share_dir': shareDir,
       };
 }
 
@@ -90,6 +98,13 @@ abstract final class TelegramSettingsStore {
     final base = Directory.current.path;
     return '$base${Platform.pathSeparator}.chan_telegram_settings.json';
   }
+
+  /// 设置文件绝对路径（供登记本机上传任务写入 job.json）。
+  static String get settingsFilePath =>
+      File(_path).absolute.path;
+
+  /// 同 [settingsFilePath]。
+  static String get path => settingsFilePath;
 
   static Future<TelegramSettings> load() async {
     try {
