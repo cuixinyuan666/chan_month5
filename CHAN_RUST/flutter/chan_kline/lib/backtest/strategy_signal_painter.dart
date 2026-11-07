@@ -17,6 +17,69 @@ const Color kStrategySellColor = Color(0xFF00E676);
 Color strategySideColor(TradeSide side) =>
     side == TradeSide.buy ? kStrategyBuyColor : kStrategySellColor;
 
+/// 买1/卖1 三角，买2/卖2 箭头，买3/卖3 再三角，按组号奇偶交替。
+enum StrategyMarkerGlyph { triangle, arrow }
+
+StrategyMarkerGlyph strategyMarkerGlyph(int? round) {
+  final n = (round == null || round < 1) ? 1 : round;
+  return n.isOdd ? StrategyMarkerGlyph.triangle : StrategyMarkerGlyph.arrow;
+}
+
+void _paintStrategyMarkerGlyph({
+  required Canvas canvas,
+  required Offset c,
+  required Color color,
+  required bool isBuy,
+  required StrategyMarkerGlyph glyph,
+  required bool hot,
+}) {
+  final path = Path();
+  if (glyph == StrategyMarkerGlyph.triangle) {
+    const r = 7.0;
+    if (isBuy) {
+      // 买点在柱下，尖朝上对着蜡烛
+      path.moveTo(c.dx, c.dy - r);
+      path.lineTo(c.dx - r, c.dy + r * 0.7);
+      path.lineTo(c.dx + r, c.dy + r * 0.7);
+    } else {
+      // 卖点在柱上，尖朝下对着蜡烛
+      path.moveTo(c.dx, c.dy + r);
+      path.lineTo(c.dx - r, c.dy - r * 0.7);
+      path.lineTo(c.dx + r, c.dy - r * 0.7);
+    }
+    path.close();
+  } else {
+    const r = 8.0;
+    const shaft = 2.2;
+    if (isBuy) {
+      path.moveTo(c.dx, c.dy - r);
+      path.lineTo(c.dx - r * 0.72, c.dy - r * 0.12);
+      path.lineTo(c.dx - shaft, c.dy - r * 0.12);
+      path.lineTo(c.dx - shaft, c.dy + r);
+      path.lineTo(c.dx + shaft, c.dy + r);
+      path.lineTo(c.dx + shaft, c.dy - r * 0.12);
+      path.lineTo(c.dx + r * 0.72, c.dy - r * 0.12);
+    } else {
+      path.moveTo(c.dx, c.dy + r);
+      path.lineTo(c.dx - r * 0.72, c.dy + r * 0.12);
+      path.lineTo(c.dx - shaft, c.dy + r * 0.12);
+      path.lineTo(c.dx - shaft, c.dy - r);
+      path.lineTo(c.dx + shaft, c.dy - r);
+      path.lineTo(c.dx + shaft, c.dy + r * 0.12);
+      path.lineTo(c.dx + r * 0.72, c.dy + r * 0.12);
+    }
+    path.close();
+  }
+  canvas.drawPath(path, Paint()..color = color);
+  canvas.drawPath(
+    path,
+    Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = hot ? 1.8 : 1.0,
+  );
+}
+
 KlineBar? klineBarByIdx(List<KlineBar> bars, int idx) {
   if (idx >= 0 && idx < bars.length && bars[idx].idx == idx) {
     return bars[idx];
@@ -72,6 +135,66 @@ Offset? strategyMarkerCenter({
   return Offset(cx, y);
 }
 
+/// 与蜡烛同一套柱心 X / 价轴 Y，平移时跟 K 线走。
+void paintStrategyMarkersOnChart({
+  required Canvas canvas,
+  required List<SignalEvent> signals,
+  required List<KlineBar> bars,
+  required double Function(int x) barCenterX,
+  required PriceRange priceRange,
+  required double plotTop,
+  required double plotH,
+  required int? asOf,
+  required bool isTickPeriod,
+  List<Fill> fills = const [],
+  Map<String, int> roundBySignalId = const {},
+  Set<String> highlightedIds = const {},
+}) {
+  if (signals.isEmpty || bars.isEmpty) return;
+  final cut = asOf;
+  for (final s in signals) {
+    if (s.side == null) continue;
+    final x = strategyMarkerPlotX(signal: s, fills: fills);
+    if (x == null) continue;
+    if (cut != null && x > cut) continue;
+    final bar = klineBarByIdx(bars, x);
+    if (bar == null) continue;
+    final cx = barCenterX(x);
+    final isBuy = s.side == TradeSide.buy;
+    final y = isBuy
+        ? priceRange.yOf(bar.low, plotTop, plotH) + 10
+        : priceRange.yOf(bar.high, plotTop, plotH) - 10;
+    final c = Offset(cx, y);
+    final color = strategySideColor(s.side!);
+    final hot = highlightedIds.contains(s.signalId);
+    if (hot) {
+      canvas.drawCircle(c, 14, Paint()..color = color.withValues(alpha: 0.28));
+    }
+    _paintStrategyMarkerGlyph(
+      canvas: canvas,
+      c: c,
+      color: color,
+      isBuy: isBuy,
+      glyph: strategyMarkerGlyph(roundBySignalId[s.signalId]),
+      hot: hot,
+    );
+    final tp = TextPainter(textDirection: TextDirection.ltr);
+    tp.text = TextSpan(
+      text: strategySideLabel(s.side!, round: roundBySignalId[s.signalId]),
+      style: TextStyle(
+        color: color,
+        fontSize: 9,
+        fontWeight: FontWeight.w700,
+      ),
+    );
+    tp.layout();
+    final ly = isBuy
+        ? (isTickPeriod ? c.dy + 10 : c.dy + 8)
+        : c.dy - 8 - tp.height;
+    tp.paint(canvas, Offset(c.dx - tp.width / 2, ly));
+  }
+}
+
 StrategyMarkerHit? hitTestStrategySignal({
   required Offset local,
   required List<SignalEvent> signals,
@@ -112,7 +235,7 @@ StrategyMarkerHit? hitTestStrategySignal({
   return best;
 }
 
-/// 独立覆盖层：策略买/卖三角，与缠论一类/二类 BS 分离。
+/// 独立覆盖层：策略买/卖三角与箭头，与缠论一类/二类 BS 分离。
 class StrategySignalPainter extends CustomPainter {
   final List<KlineBar> bars;
   final List<SignalEvent> signals;
@@ -123,6 +246,7 @@ class StrategySignalPainter extends CustomPainter {
   final PriceRange priceRange;
   final double mainH;
   final int? asOf;
+  final bool isTickPeriod;
   /// 视口是可变对象：平移时同一份被改掉，必须把当时的窗拷下来，否则点不跟 K 线走。
   final double _viewXMin;
   final double _viewXMax;
@@ -139,6 +263,7 @@ class StrategySignalPainter extends CustomPainter {
     required this.priceRange,
     required this.mainH,
     this.asOf,
+    this.isTickPeriod = false,
   })  : _viewXMin = viewport.viewXMin,
         _viewXMax = viewport.viewXMax,
         _yZoom = viewport.yZoomRatio,
@@ -146,74 +271,22 @@ class StrategySignalPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    if (signals.isEmpty || bars.isEmpty) return;
     final plotTop = KlineViewport.padT;
     final plotH = math.max(1.0, mainH - KlineViewport.padB - plotTop);
-    final cut = asOf;
-    final tp = TextPainter(textDirection: TextDirection.ltr);
-    for (final s in signals) {
-      if (s.side == null) continue;
-      final x = strategyMarkerPlotX(signal: s, fills: fills);
-      if (x == null) continue;
-      if (cut != null && x > cut) continue;
-      final c = strategyMarkerCenter(
-        signal: s,
-        bars: bars,
-        viewport: viewport,
-        priceRange: priceRange,
-        canvasW: size.width,
-        plotTop: plotTop,
-        plotH: plotH,
-        fills: fills,
-      );
-      if (c == null) continue;
-      final side = s.side!;
-      final color = strategySideColor(side);
-      final hot = highlightedIds.contains(s.signalId);
-      if (hot) {
-        canvas.drawCircle(
-          c,
-          14,
-          Paint()..color = color.withValues(alpha: 0.28),
-        );
-      }
-      final path = Path();
-      const r = 7.0;
-      final buy = side == TradeSide.buy;
-      if (buy) {
-        // 尖朝上：买
-        path.moveTo(c.dx, c.dy - r);
-        path.lineTo(c.dx - r, c.dy + r * 0.7);
-        path.lineTo(c.dx + r, c.dy + r * 0.7);
-      } else {
-        path.moveTo(c.dx, c.dy + r);
-        path.lineTo(c.dx - r, c.dy - r * 0.7);
-        path.lineTo(c.dx + r, c.dy - r * 0.7);
-      }
-      path.close();
-      canvas.drawPath(path, Paint()..color = color);
-      canvas.drawPath(
-        path,
-        Paint()
-          ..color = Colors.white
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = hot ? 1.8 : 1.0,
-      );
-      tp.text = TextSpan(
-        text: strategySideLabel(
-          side,
-          round: roundBySignalId[s.signalId],
-        ),
-        style: TextStyle(
-          color: color,
-          fontSize: 9,
-          fontWeight: FontWeight.w700,
-        ),
-      );
-      tp.layout();
-      final ly = buy ? c.dy + 8 : c.dy - 8 - tp.height;
-      tp.paint(canvas, Offset(c.dx - tp.width / 2, ly));
-    }
+    paintStrategyMarkersOnChart(
+      canvas: canvas,
+      signals: signals,
+      bars: bars,
+      barCenterX: (x) => viewport.barCenterX(x, size.width),
+      priceRange: priceRange,
+      plotTop: plotTop,
+      plotH: plotH,
+      asOf: asOf,
+      isTickPeriod: isTickPeriod,
+      fills: fills,
+      roundBySignalId: roundBySignalId,
+      highlightedIds: highlightedIds,
+    );
   }
 
   @override
@@ -225,6 +298,7 @@ class StrategySignalPainter extends CustomPainter {
         old.bars != bars ||
         old.mainH != mainH ||
         old.asOf != asOf ||
+        old.isTickPeriod != isTickPeriod ||
         old._viewXMin != _viewXMin ||
         old._viewXMax != _viewXMax ||
         old._yZoom != _yZoom ||

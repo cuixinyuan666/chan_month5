@@ -3,6 +3,7 @@ import '../models/fractal_judgment_event.dart';
 import '../models/k0_confirm_signal.dart';
 import '../models/k1_bar.dart';
 import '../models/kline_bar.dart';
+import '../models/kline_combine_frame.dart';
 import '../models/level_models.dart';
 
 /// 纯视图组装（十字线 as-of 重绘）：全部数据来自 Rust 冻结产物 + 逐K快照，
@@ -206,11 +207,58 @@ LevelLineEndpoint? levelConfirmEndpoint(
 }
 
 /// 方案B：按 lv.level==level 查找，允许 level==0。
-LevelBundle? _bundleAtStructureLevel(List<LevelBundle> levels, int level) {
+LevelBundle? bundleAtStructureLevel(List<LevelBundle> levels, int level) {
   for (final lv in levels) {
     if (lv.level == level) return lv;
   }
   return null;
+}
+
+LevelBundle? _bundleAtStructureLevel(List<LevelBundle> levels, int level) =>
+    bundleAtStructureLevel(levels, level);
+
+/// 取 as-of 当步层级快照（与 [asOfLevelVirtualK1Bars] 同源）。
+LevelSnap? levelSnapAt(
+  List<BarCrosshairFeature> barFeatures, {
+  required int level,
+  required int asOf,
+}) {
+  if (barFeatures.isEmpty || asOf < 0) return null;
+  BarCrosshairFeature? feat;
+  if (asOf < barFeatures.length && barFeatures[asOf].idx == asOf) {
+    feat = barFeatures[asOf];
+  } else {
+    for (final f in barFeatures) {
+      if (f.idx == asOf) {
+        feat = f;
+        break;
+      }
+    }
+  }
+  if (feat == null) return null;
+  for (final ls in feat.levels) {
+    if (ls.level == level) return ls;
+  }
+  return null;
+}
+
+/// Kn连线（structure level≥1）是否允许绘制；全层同构。
+/// 规则：父层（level-1）首根虚拟单元未形成前禁止，避免下层判断链整批画成 Kn连线。
+/// 例：K1连线看 level0；K2连线看 level1；K3连线看 level2 …
+bool levelLineDrawAllowed({
+  required List<LevelBundle> levels,
+  required List<BarCrosshairFeature> barFeatures,
+  required int level,
+  required int asOf,
+}) {
+  if (level < 1) return true;
+  if (bundleAtStructureLevel(levels, level) == null) return false;
+
+  final parentLevel = level - 1;
+  final parentFrozen =
+      asOfLevelSegments(levels: levels, level: parentLevel, asOf: asOf);
+  final parentSnap = levelSnapAt(barFeatures, level: parentLevel, asOf: asOf);
+  return parentFrozen.isNotEmpty || parentSnap?.unitIdx != null;
 }
 
 /// as-of 已冻结 N 段（`endConfirmX <= asOf`）。
@@ -223,6 +271,69 @@ List<LevelSegmentN> asOfLevelSegments({
   final bundle = _bundleAtStructureLevel(levels, level);
   if (bundle == null) return const [];
   return bundle.segments.where((s) => s.endConfirmX <= asOf).toList();
+}
+
+/// K{level}连线在 as-of 视图下的「最后一段」两端 K0 格点（含构建中虚线端点）。
+///
+/// 冻段取 beginPoleX/endPoleX；构建中虚线取 [computeDisplayBuildingLines] 的首尾端点
+/// （虚线是 pole→pole→开口尾端 一串，取末段即「倒数第二极点 → 末极点」）。
+/// 供 K{n}回归通道当基准区间（父层 = level = displayKn+1；全层同构）。
+/// 返回 null = 该层此刻还没有能当基准的连线。
+({int x1, int x2})? lastLevelLineSpanAtAsOf({
+  required List<KlineBar> bars,
+  required List<LevelBundle> levels,
+  required List<BarCrosshairFeature> barFeatures,
+  required int level,
+  required int asOf,
+  List<FractalJudgmentEvent> liveJudgments = const [],
+}) {
+  if (level < 1 || bars.isEmpty) return null;
+  if (asOf < 0 || asOf >= bars.length) return null;
+  final bundle = bundleAtStructureLevel(levels, level);
+  if (bundle == null) return null;
+
+  int? lo;
+  int? hi;
+  void take(int a, int b) {
+    final l = a <= b ? a : b;
+    final h = a <= b ? b : a;
+    if (hi == null || h >= hi!) {
+      lo = l;
+      hi = h;
+    }
+  }
+
+  final frozen = asOfLevelSegments(levels: levels, level: level, asOf: asOf);
+  for (final s in frozen) {
+    if (s.beginPoleX < 0 || s.endPoleX < 0) continue;
+    take(s.beginPoleX, s.endPoleX);
+  }
+
+  final virtualUnits = asOfLevelVirtualK1Bars(
+    levels: levels,
+    barFeatures: barFeatures,
+    level: level,
+    asOf: asOf,
+    includeBuilding: true,
+    // 预锚单元不是连线；该层无确认段时基准应保持为空（经典口径）。
+    includePreAnchor: false,
+  );
+  final frozenIdx = <int>{for (final s in frozen) s.idx};
+  for (final l in computeDisplayBuildingLines(
+    bars: bars,
+    asOf: asOf,
+    virtualUnits: virtualUnits,
+    frozenIdx: frozenIdx,
+    levelConfirms: bundle.confirms,
+    liveJudgments: liveJudgments,
+  )) {
+    take(l.begin.barIdx, l.end.barIdx);
+  }
+
+  if (lo == null || hi == null) return null;
+  final end = hi! > asOf ? asOf : hi!;
+  if (end <= lo!) return null;
+  return (x1: lo!, x2: end);
 }
 
 /// as-of 前末次 N 段分型确认（TOP/BOTTOM）。
@@ -436,12 +547,19 @@ List<K1Bar> levelBundleVirtualK1Bars(LevelBundle bundle) {
 }
 
 /// as-of 展示轨虚拟单元（全层同构）：冻结段 + 可选当步进行中（LevelSnap）。
+///
+/// [includePreAnchor]：是否把「预锚动态单元」计入。预锚单元主要服务下一窗口的
+/// K 蜡烛/合并框（以及虚拟K、采样钟、中枢/买卖点）；本层「构建中连线」在
+/// 层级早生成开启时也按它补首分型前虚线（2026-11-06 口径：升段取区间内
+/// 首次最低 low → 首次最高 high），相邻比例与回归基准仍必须传 false，
+/// 否则该层还没有任何确认段时会多出一条基准/子线。
 List<K1Bar> asOfLevelVirtualK1Bars({
   required List<LevelBundle> levels,
   required List<BarCrosshairFeature> barFeatures,
   required int level,
   required int asOf,
   bool includeBuilding = true,
+  bool includePreAnchor = true,
 }) {
   // 方案B：按 lv.level==level 查找，允许 level==0
   if (level < 0) return const [];
@@ -485,6 +603,9 @@ List<K1Bar> asOfLevelVirtualK1Bars({
   if (!includeBuilding) return frozen;
 
   final s = snap!;
+  // 预锚动态单元 = 该层此刻还没有任何确认段时的“演化中首段”。
+  // 它只给下一窗口当 K 蜡烛（快照 unit_*），不能当成本层构建中段喂给连线。
+  if (!includePreAnchor && frozen.isEmpty) return frozen;
   final contained = frozen.any((v) => v.idx == unitIdx && v.x2 >= s.unitX2);
   if (!contained && s.unitX1 >= 0 && s.unitX2 >= s.unitX1) {
     frozen.add(K1Bar(
@@ -531,6 +652,31 @@ LevelLineEndpoint? seedBoxDepartEndpoint({
     }
   }
   return null;
+}
+
+/// 主图是否绘制种子框/种子相虚线。
+/// 「层级早生成动态单元」开启时，首段由预锚动态单元接管，种子框、种子开口与 ABC 全部不画；
+/// 关闭时保持经典种子绘制。只影响主图绘制，不影响种子数据与相邻比例指标。
+bool seedPhaseVisible({required bool earlyDynamicUnit}) => !earlyDynamicUnit;
+
+/// 合并帧剔除「本层种子框」首组（全层同构，K0/K1/K2…/Kn 同一口径）。
+///
+/// 层级早生成开启时，首段由预锚动态单元接管，种子框不再绘制；而该层合并帧的
+/// 第一组与种子框同矩形（同 x 区间、同 high/low），必须一并跳过，否则同一只框
+/// 仍会以「合并框」名义留在图上。开关关闭时原样返回，保持经典种子绘制。
+List<KlineCombineFrame> combineFramesWithoutSeed({
+  required List<KlineCombineFrame> frames,
+  required LevelSnap? snap,
+  required bool earlyDynamicUnit,
+}) {
+  if (!earlyDynamicUnit || frames.isEmpty || snap == null) return frames;
+  if (snap.seedBoxSeq < 0) return frames;
+  final first = frames.first;
+  final sameAsSeed = first.x1 == snap.seedBoxX1 &&
+      first.x2 == snap.seedBoxX2 &&
+      (first.high - snap.seedBoxHigh).abs() < 1e-9 &&
+      (first.low - snap.seedBoxLow).abs() < 1e-9;
+  return sameAsSeed ? frames.sublist(1) : frames;
 }
 
 /// 种子 UNKNOWN 开口虚线（方案2·D2·S-b，**全层同构**：K1/K2/…/Kn 同一函数、同口径）：
@@ -931,6 +1077,99 @@ List<DisplayBuildingLine> _linesFromPoles({
   return out;
 }
 
+/// 首分型确认前的构建中虚线：区间内按方向扫「首次极值」。
+///
+/// 升段起点=区间内首次最低 low、终点=首次最高 high；降段对调。
+/// 与首个分型之后的开口虚线同一套扫价（[buildingTailEndpoint]），
+/// 端点钉在极值第一次出现的那根，不跟当根收盘价、也不跟当根最低价。
+/// 两端落在同一根（还没走出第二根极值）时返回 null，不画点。
+DisplayBuildingLine? _preConfirmExtremeLine(
+  List<KlineBar> bars,
+  K1Bar unit,
+  int asOf,
+) {
+  if (unit.dir == 0 || bars.isEmpty) return null;
+  final lo = unit.x1.clamp(0, bars.length - 1);
+  final hi = (unit.x2 < asOf ? unit.x2 : asOf).clamp(0, bars.length - 1);
+  if (lo > hi) return null;
+  final up = unit.dir > 0;
+  final begin = buildingTailEndpoint(
+    bars: bars,
+    afterConfirmX: lo - 1,
+    asOfX: hi,
+    buildingDir: up ? -1 : 1,
+  );
+  final end = buildingTailEndpoint(
+    bars: bars,
+    afterConfirmX: lo - 1,
+    asOfX: hi,
+    buildingDir: up ? 1 : -1,
+  );
+  if (begin == null || end == null) return null;
+  if (begin.barIdx == end.barIdx && (begin.price - end.price).abs() < 1e-9) {
+    return null;
+  }
+  return DisplayBuildingLine(
+    begin: begin,
+    end: end,
+    dir: unit.dir,
+    unitIdx: unit.idx,
+    anchorX: begin.barIdx,
+    beginSrc: 'dynamic',
+    endSrc: 'dynamic',
+    asSolid: false,
+    isOpenTip: true,
+  );
+}
+
+/// 首个分型判断出现后，判断极点之前那段收成实线。
+///
+/// 出发端仍按本层方向取区间内首次极值（升=首次最低 low，降=首次最高 high），
+/// 到达端钉在首个判断极点。与开口虚线不重叠；两端同点不画。
+DisplayBuildingLine? _seedLineBeforeFirstPole({
+  required List<KlineBar> bars,
+  required int asOf,
+  required List<K1Bar> virtualUnits,
+  required Set<int> frozenIdx,
+  required _DashPole firstPole,
+}) {
+  K1Bar? unit;
+  for (final u in virtualUnits) {
+    if (frozenIdx.contains(u.idx) || u.dir == 0 || u.x1 > asOf) continue;
+    if (u.x1 <= firstPole.poleX) {
+      unit = u;
+      break;
+    }
+  }
+  if (unit == null) return null;
+  final lo = unit.x1.clamp(0, bars.length - 1);
+  final hi = firstPole.poleX.clamp(0, bars.length - 1);
+  if (lo > hi) return null;
+  final up = unit.dir > 0;
+  final begin = buildingTailEndpoint(
+    bars: bars,
+    afterConfirmX: lo - 1,
+    asOfX: hi,
+    buildingDir: up ? -1 : 1,
+  );
+  if (begin == null) return null;
+  if (begin.barIdx == firstPole.poleX &&
+      (begin.price - firstPole.endpoint.price).abs() < 1e-9) {
+    return null;
+  }
+  return DisplayBuildingLine(
+    begin: begin,
+    end: firstPole.endpoint,
+    dir: unit.dir,
+    unitIdx: unit.idx,
+    anchorX: begin.barIdx,
+    beginSrc: 'dynamic',
+    endSrc: 'judgment',
+    asSolid: true,
+    isOpenTip: false,
+  );
+}
+
 /// 动态KN + 当下分型判断拆段的构建中连线（全层同构）。
 ///
 /// [liveJudgments]：as-of 当下重算的有效判断（禁止用会话历史，否则失效判断自动回退）。
@@ -983,20 +1222,35 @@ List<DisplayBuildingLine> computeDisplayBuildingLines({
       final out = <DisplayBuildingLine>[];
       for (final u in virtualUnits) {
         if (frozenIdx.contains(u.idx) || u.x1 > asOf || u.dir == 0) continue;
-        out.add(DisplayBuildingLine(
-          begin: LevelLineEndpoint(barIdx: u.x1, price: u.open),
-          end: LevelLineEndpoint(barIdx: u.x2, price: u.close),
-          dir: u.dir,
-          unitIdx: u.idx,
-          anchorX: u.x1,
-          beginSrc: 'dynamic',
-          endSrc: 'dynamic',
-          asSolid: false,
-          isOpenTip: true,
-        ));
+        // 首分型前没有极点可钉：按本层单元方向扫区间首次极值。
+        // 升段 low→high，降段 high→low；与首个分型之后的开口虚线同一套扫价。
+        // 两端同点（还没走出第二根极值）不画线。
+        final line = _preConfirmExtremeLine(bars, u, asOf);
+        if (line != null) out.add(line);
       }
       return out;
     }
+
+    // 首个分型判断出现时，判断极点之前那段不再整段丢掉：
+    // 收成实线（出发极值 → 判断极点），开口虚线仍由极点链负责。
+    final seeded = _seedLineBeforeFirstPole(
+      bars: bars,
+      asOf: asOf,
+      virtualUnits: virtualUnits,
+      frozenIdx: frozenIdx,
+      firstPole: poles.first,
+    );
+    return [
+      if (seeded != null) seeded,
+      ..._linesFromPoles(
+        bars: bars,
+        asOf: asOf,
+        poles: poles,
+        virtualUnits: virtualUnits,
+        frozenIdx: frozenIdx,
+        js: js,
+      ),
+    ];
   } else {
     poles = <_DashPole>[...confirmPoles];
     final lastConfirmTrig = confirmPoles.last.triggerX;

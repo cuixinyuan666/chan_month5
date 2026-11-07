@@ -233,7 +233,8 @@ List<RatioChild> buildRatioChildren({
 
   // 无 bars：仅冻段 + active（单测兼容）
   if (bars.isEmpty || asOf < 0) {
-    final act = lv.activeUnit;
+    // 预锚单元不代表本层已有连线，不能在此凭空生成比例子线。
+    final act = lv.segments.isEmpty ? null : lv.activeUnit;
     if (act != null && (act.dir == 1 || act.dir == -1)) {
       final begin = act.dir > 0 ? act.low : act.high;
       final end = act.dir > 0 ? act.high : act.low;
@@ -257,12 +258,15 @@ List<RatioChild> buildRatioChildren({
   }
 
   // ② 展示轨虚线（与主图 _drawBuildingLevelLine 同源；已跳过冻段覆盖）
+  // 构建中 N 段取本层（level）自己的冻段+active，与实线同源。
+  // 预锚单元只服务下一窗口 K 蜡烛，不参与本层连线/比例。
   final virtualUnits = asOfLevelVirtualK1Bars(
     levels: levels,
     barFeatures: barFeatures,
     level: level,
     asOf: asOf,
     includeBuilding: true,
+    includePreAnchor: false,
   );
   final liveJudgments = collectFractalJudgmentEvents(
     kn: level,

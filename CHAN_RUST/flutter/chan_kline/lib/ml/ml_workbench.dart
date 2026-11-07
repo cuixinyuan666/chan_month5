@@ -96,6 +96,7 @@ class _MlWorkbenchState extends State<MlWorkbench> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        const SizedBox(height: 36),
         _topBar(),
         if (widget.statusLine.isNotEmpty)
           Padding(
@@ -129,7 +130,7 @@ class _MlWorkbenchState extends State<MlWorkbench> {
     return Material(
       color: const Color(0xFF1E3A5F),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
         child: Row(
           children: [
             const Icon(Icons.psychology, color: Colors.white70, size: 18),

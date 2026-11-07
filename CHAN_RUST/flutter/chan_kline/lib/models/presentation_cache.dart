@@ -3,6 +3,7 @@ import 'chart_indicator.dart';
 import 'incremental_lookup.dart';
 import 'kline_bar.dart';
 import 'kline_combine_bundle.dart';
+import 'bar_crosshair_feature.dart';
 import 'pipeline_delta.dart';
 import '../compute/adjacent_ratio_compute.dart';
 import '../compute/class1_bs_compute.dart';
@@ -68,6 +69,13 @@ KlineCombineBundle applyPipelineDelta(
 class PresentationCache {
   KlineCombineBundle _bundle = KlineCombineBundle.empty();
   final IncrementalBarFeatureLookup lookupEngine = IncrementalBarFeatureLookup();
+  /// 可增长特征表：delta 只追加，禁止每步拷整段。
+  final List<BarCrosshairFeature> _feats = [];
+
+  /// 每步当步仓（与当时 Full asOf 同构）。十字回看用这份，禁止再打一遍无状态 Full。
+  /// 只留最近 [_maxAsOfSnaps] 步，避免超长序列把所有历史结构都钉在内存里。
+  final Map<int, KlineCombineBundle> _asOfByIdx = {};
+  static const int _maxAsOfSnaps = 4096;
 
   KlineCombineBundle get bundle => _bundle;
 
@@ -77,18 +85,92 @@ class PresentationCache {
 
   int get len => _bundle.barFeatures.length;
 
+  int get asOfSnapshotCount => _asOfByIdx.length;
+
   void reset() {
     _bundle = KlineCombineBundle.empty();
     lookupEngine.reset();
+    _asOfByIdx.clear();
+    _feats.clear();
+  }
+
+  /// 十字/步退 asOf：命中当步仓则返回当时快照（末根永远用当前仓）。
+  /// [withBarFeatures] 仅步退展示需要；十字只要结构，避免每根再拷前缀。
+  KlineCombineBundle? snapshotAt(int asOf, {bool withBarFeatures = false}) {
+    if (_bundle.barFeatures.isEmpty) return null;
+    final last = _bundle.barFeatures.last.idx;
+    if (asOf == last) return _bundle;
+    if (asOf > last || asOf < 0) return null;
+    final slim = _asOfByIdx[asOf];
+    if (slim == null) return null;
+    if (!withBarFeatures) return slim;
+    final feats = _bundle.barFeatures;
+    final n = asOf + 1;
+    if (n <= feats.length && feats[n - 1].idx == asOf) {
+      return slim.withBarFeatures(feats.sublist(0, n));
+    }
+    return slim.withBarFeatures(
+      feats.where((f) => f.idx <= asOf).toList(),
+    );
+  }
+
+  /// 钉当步结构（含 BS 框）；不钉逐根 bar_features，避免 1+2+…+n 把内存撑爆。
+  static KlineCombineBundle _slimAsOf(KlineCombineBundle b) {
+    return KlineCombineBundle(
+      frames: b.frames,
+      k0Confirms: b.k0Confirms,
+      k0Lines: b.k0Lines,
+      k1Analysis: b.k1Analysis,
+      k1Bars: b.k1Bars,
+      k1CombineFrames: b.k1CombineFrames,
+      defaultK0Policy: b.defaultK0Policy,
+      defaultSegmentPolicies: b.defaultSegmentPolicies,
+      levelSegments: b.levelSegments,
+      levelVirtualUnits: b.levelVirtualUnits,
+      levels: b.levels,
+      zsK0Frames: b.zsK0Frames,
+      buy1K0Frames: b.buy1K0Frames,
+      sell1K0Frames: b.sell1K0Frames,
+      buy2K0Frames: b.buy2K0Frames,
+      sell2K0Frames: b.sell2K0Frames,
+      buyNK0Frames: b.buyNK0Frames,
+      sellNK0Frames: b.sellNK0Frames,
+      bsVerdictK0Frames: b.bsVerdictK0Frames,
+    );
+  }
+
+  void _rememberAsOf(KlineCombineBundle b) {
+    if (b.barFeatures.isEmpty) return;
+    _asOfByIdx[b.barFeatures.last.idx] = _slimAsOf(b);
+    if (_asOfByIdx.length <= _maxAsOfSnaps) return;
+    final keys = _asOfByIdx.keys.toList()..sort();
+    final drop = _asOfByIdx.length - _maxAsOfSnaps + 512;
+    for (var i = 0; i < drop && i < keys.length; i++) {
+      _asOfByIdx.remove(keys[i]);
+    }
   }
 
   /// 首包或回退：整表 Full Snapshot（Lookup 等 syncLookup 再种，以便带上 History）。
   void seedFromFull(KlineCombineBundle full) {
-    _bundle = full;
+    _feats
+      ..clear()
+      ..addAll(full.barFeatures);
+    _bundle = full.withBarFeatures(_feats);
+    _rememberAsOf(_bundle);
   }
 
   void mergeDelta(PipelineDelta d) {
+    if (d.idx == _feats.length) {
+      _feats.add(d.barFeature);
+      _bundle = d.structure.withBarFeatures(_feats);
+      _rememberAsOf(_bundle);
+      return;
+    }
     _bundle = applyPipelineDelta(_bundle, d);
+    _feats
+      ..clear()
+      ..addAll(_bundle.barFeatures);
+    _rememberAsOf(_bundle);
   }
 
   /// 与当前 [bundle] 对齐增量 Lookup。步退/复位后 engine 已空 → 逐步 replay。
@@ -118,9 +200,7 @@ class PresentationCache {
       return;
     }
     final last = bars.last.idx;
-    if (lookupEngine.isEmpty ||
-        lookupEngine.step > last ||
-        lookupEngine.step < last - 1) {
+    if (lookupEngine.isEmpty || lookupEngine.step < last - 1) {
       // 首包 / 复位 replay / 跳步：一次 Full 种仓（非逐步热路径）
       lookupEngine.seedFromFull(
         bars: bars,
@@ -146,7 +226,8 @@ class PresentationCache {
       );
       return;
     }
-    if (lookupEngine.step == last) return;
+    // 步退：引擎仍是更长前缀，结构用 asOf 仓，禁止 Full 种仓把 UI 卡死
+    if (lookupEngine.step >= last) return;
     lookupEngine.applyStep(
       bars: bars,
       bundle: _bundle,

@@ -18,6 +18,8 @@ import 'package:chan_kline/models/math_indicator_config.dart';
 import 'package:chan_kline/models/sell1_frame.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'offline_tick_files.dart';
+
 /// 真实数据评估：当前 tip 同源特征是否值得做。
 void main() {
   test('特征价值评估（002003 1m）', () {
@@ -199,7 +201,7 @@ Top: ${corrHits.take(8).map((e) => '${e.name}=${e.corr.toStringAsFixed(3)}').joi
 
     expect(dim, greaterThan(0));
     expect(samples, isNotEmpty);
-  }, timeout: const Timeout(Duration(minutes: 8)));
+  }, timeout: const Timeout(Duration(minutes: 8)), skip: hasOffline002003TickFiles() ? false : kNoOffline002003Skip);
 }
 
 double _pearson(List<double> x, List<double> y) {

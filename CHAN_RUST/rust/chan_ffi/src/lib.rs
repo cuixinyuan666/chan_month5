@@ -7,8 +7,9 @@ use std::sync::{Mutex, OnceLock};
 
 use chan_data::{
     build_kline_combine_bundle_from_state, build_kline_combine_bundle_with, chip_profile,
-    default_data_root, list_stock_codes, load_klines, ml_predict_dense, resolve_data_root,
-    save_test_ohlc, KlineBar, KlinePeriod, PipelineOptions, PipelineState, ZSConfig,
+    default_data_root, list_stock_codes, load_klines, load_klines_with_source, ml_predict_dense,
+    resolve_data_root, save_test_ohlc, KlineBar, KlinePeriod, LoadKlinesOut, PipelineOptions,
+    PipelineState, TickSource, ZSConfig,
 };
 use serde::{Deserialize, Serialize};
 
@@ -47,6 +48,16 @@ fn cstr_to_str<'a>(ptr: *const c_char) -> Option<&'a str> {
     } else {
         unsafe { CStr::from_ptr(ptr).to_str().ok() }
     }
+}
+
+/// 动态库协议号：必须与 Flutter `kChanFfiAbiVersion` 相同。
+/// 改管道 JSON / 冻结语义时两边一起加一，禁止静默混用旧库。
+pub const CHAN_FFI_ABI_VERSION: u32 = 3;
+
+/// 返回协议号（裸 u32，不走 JSON）。缺此符号=旧库，界面应停机。
+#[no_mangle]
+pub extern "C" fn chan_ffi_abi_version() -> u32 {
+    CHAN_FFI_ABI_VERSION
 }
 
 /// 释放 `chan_*` 返回的字符串。
@@ -118,6 +129,53 @@ pub extern "C" fn chan_load_klines(
     }
 }
 
+/// 加载 K 线（带分笔来源与质量）。tick_source：file / protocol。
+/// 返回 `{ bars, quality }`；test 股即使 protocol 也走文件。
+#[no_mangle]
+pub extern "C" fn chan_load_klines_ex(
+    data_root: *const c_char,
+    code: *const c_char,
+    begin_date: *const c_char,
+    end_date: *const c_char,
+    period: *const c_char,
+    tick_source: *const c_char,
+) -> *mut c_char {
+    let Some(code) = cstr_to_str(code) else {
+        return to_json_err("code 不能为空");
+    };
+    let Some(begin_date) = cstr_to_str(begin_date) else {
+        return to_json_err("begin_date 不能为空");
+    };
+    let Some(end_date) = cstr_to_str(end_date) else {
+        return to_json_err("end_date 不能为空");
+    };
+    let period_s = cstr_to_str(period)
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "day".to_string());
+    let Some(period_enum) = KlinePeriod::parse(&period_s) else {
+        return to_json_err(&format!("不支持的周期: {period_s}"));
+    };
+    let source = TickSource::parse(cstr_to_str(tick_source));
+
+    let root_s = cstr_to_str(data_root).map(|s| s.to_string());
+    let root = resolve_data_root(root_s.as_deref());
+
+    match load_klines_with_source(
+        &root,
+        code,
+        begin_date,
+        end_date,
+        period_enum,
+        source,
+    ) {
+        Ok(LoadKlinesOut { bars, quality }) => to_json_ok(serde_json::json!({
+            "bars": bars,
+            "quality": quality,
+        })),
+        Err(e) => to_json_err(&e.to_string()),
+    }
+}
+
 /// 保存 test 自定义 OHLC 到 `a_Data/test/custom.ohlc.csv`。
 /// 入参 JSON：`{ "data_root": "...?", "bars": [KlineBar...] }`
 #[no_mangle]
@@ -156,7 +214,7 @@ pub extern "C" fn chan_save_test_ohlc(req_json: *const c_char) -> *mut c_char {
 /// 对已加载 K 线做 Kn 流水线。
 /// 入参两种：
 /// 1) 纯 bars 数组（兼容旧调用，截断默认开）
-/// 2) `{ "bars": [...], "truncation_check": true/false }`
+/// 2) `{ "bars": [...], "truncation_check": true/false, "early_dynamic_unit": true/false }`
 #[no_mangle]
 pub extern "C" fn chan_kline_combine_frames(bars_json: *const c_char) -> *mut c_char {
     let Some(raw) = cstr_to_str(bars_json) else {
@@ -174,6 +232,9 @@ struct CombineRequest {
     /// 缺省=开启截断（与 PipelineOptions::default 一致）
     #[serde(default)]
     truncation_check: Option<bool>,
+    /// 缺省=开启层级预锚动态单元（与 PipelineOptions::default 一致）
+    #[serde(default)]
+    early_dynamic_unit: Option<bool>,
     /// 缺省=中枢共用配置（need_combine/combine_mode）
     #[serde(default)]
     zs_config: Option<ZSConfig>,
@@ -191,6 +252,9 @@ fn parse_combine_request(raw: &str) -> Result<(Vec<KlineBar>, PipelineOptions), 
     let mut opt = PipelineOptions::default();
     if let Some(v) = req.truncation_check {
         opt.truncation_check = v;
+    }
+    if let Some(v) = req.early_dynamic_unit {
+        opt.early_dynamic_unit = v;
     }
     if let Some(z) = req.zs_config {
         opt.zs_config = z;
@@ -224,6 +288,8 @@ fn parse_pipeline_opt(raw: &str) -> Result<PipelineOptions, String> {
         #[serde(default)]
         truncation_check: Option<bool>,
         #[serde(default)]
+        early_dynamic_unit: Option<bool>,
+        #[serde(default)]
         zs_config: Option<ZSConfig>,
     }
     let req: OptReq =
@@ -232,13 +298,16 @@ fn parse_pipeline_opt(raw: &str) -> Result<PipelineOptions, String> {
     if let Some(v) = req.truncation_check {
         opt.truncation_check = v;
     }
+    if let Some(v) = req.early_dynamic_unit {
+        opt.early_dynamic_unit = v;
+    }
     if let Some(z) = req.zs_config {
         opt.zs_config = z;
     }
     Ok(opt)
 }
 
-/// 创建流水线会话。入参 JSON：`{ truncation_check?, zs_config? }`（可空/`{}`）。
+/// 创建流水线会话。入参 JSON：`{ truncation_check?, early_dynamic_unit?, zs_config? }`（可空/`{}`）。
 /// 返回 `{ ok, data: { handle: u64 } }`
 #[no_mangle]
 pub extern "C" fn chan_pipeline_create(opt_json: *const c_char) -> *mut c_char {

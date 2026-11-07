@@ -5,6 +5,7 @@ import 'package:chan_kline/models/k0_confirm_signal.dart';
 import 'package:chan_kline/models/bar_crosshair_feature.dart';
 import 'package:chan_kline/models/k1_bar.dart';
 import 'package:chan_kline/models/kline_bar.dart';
+import 'package:chan_kline/models/kline_combine_frame.dart';
 import 'package:chan_kline/models/level_models.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -215,6 +216,179 @@ void main() {
     expect(at5.first.idx, 0);
     final at8 = asOfLevelSegments(levels: levels, level: 1, asOf: 8);
     expect(at8.length, 2);
+  });
+
+  test('levelLineDrawAllowed：父层首根K1未形成前禁止K1连线', () {
+    final feats = [
+      for (var i = 0; i < 6; i++)
+        BarCrosshairFeature(
+          idx: i,
+          weekday: '周一',
+          mergeInnerSeq: 0,
+          levels: const [
+            LevelSnap(level: 0),
+            LevelSnap(level: 1),
+          ],
+        ),
+    ];
+    const levels = [
+      LevelBundle(level: 0),
+      LevelBundle(level: 1),
+    ];
+    expect(
+      levelLineDrawAllowed(
+        levels: levels,
+        barFeatures: feats,
+        level: 1,
+        asOf: 5,
+      ),
+      isFalse,
+    );
+
+    final withParent = [
+      LevelBundle(
+        level: 0,
+        segments: [
+          LevelSegmentN(
+            idx: 0,
+            dir: 1,
+            beginConfirmX: 1,
+            endConfirmX: 3,
+            beginPoleX: 0,
+            endPoleX: 2,
+            open: 10,
+            high: 11,
+            low: 9,
+            close: 10.5,
+            volume: 1,
+          ),
+        ],
+      ),
+      const LevelBundle(level: 1),
+    ];
+    final featsWithUnit = [
+      for (var i = 0; i < 6; i++)
+        BarCrosshairFeature(
+          idx: i,
+          weekday: '周一',
+          mergeInnerSeq: 0,
+          levels: [
+            LevelSnap(level: 0, unitIdx: i >= 3 ? 0 : null),
+            const LevelSnap(level: 1),
+          ],
+        ),
+    ];
+    expect(
+      levelLineDrawAllowed(
+        levels: withParent,
+        barFeatures: featsWithUnit,
+        level: 1,
+        asOf: 5,
+      ),
+      isTrue,
+    );
+  });
+
+  test('levelLineDrawAllowed：K2/K3 全层同构——看父层 level-1', () {
+    const seg = LevelSegmentN(
+      idx: 0,
+      dir: 1,
+      beginConfirmX: 1,
+      endConfirmX: 3,
+      beginPoleX: 0,
+      endPoleX: 2,
+      open: 10,
+      high: 11,
+      low: 9,
+      close: 10.5,
+      volume: 1,
+    );
+    final featsL2 = [
+      for (var i = 0; i < 8; i++)
+        BarCrosshairFeature(
+          idx: i,
+          weekday: '周一',
+          mergeInnerSeq: 0,
+          levels: const [
+            LevelSnap(level: 0),
+            LevelSnap(level: 1),
+            LevelSnap(level: 2),
+          ],
+        ),
+    ];
+    // K2：父层 level1 无段 → 禁止
+    expect(
+      levelLineDrawAllowed(
+        levels: const [
+          LevelBundle(level: 0, segments: [seg]),
+          LevelBundle(level: 1),
+          LevelBundle(level: 2),
+        ],
+        barFeatures: featsL2,
+        level: 2,
+        asOf: 7,
+      ),
+      isFalse,
+    );
+    // K2：父层 level1 有段 → 允许
+    expect(
+      levelLineDrawAllowed(
+        levels: const [
+          LevelBundle(level: 0, segments: [seg]),
+          LevelBundle(level: 1, segments: [seg]),
+          LevelBundle(level: 2),
+        ],
+        barFeatures: featsL2,
+        level: 2,
+        asOf: 7,
+      ),
+      isTrue,
+    );
+
+    final featsL3 = [
+      for (var i = 0; i < 8; i++)
+        BarCrosshairFeature(
+          idx: i,
+          weekday: '周一',
+          mergeInnerSeq: 0,
+          levels: const [
+            LevelSnap(level: 0),
+            LevelSnap(level: 1),
+            LevelSnap(level: 2),
+            LevelSnap(level: 3),
+          ],
+        ),
+    ];
+    // K3：父层 level2 无段 → 禁止
+    expect(
+      levelLineDrawAllowed(
+        levels: const [
+          LevelBundle(level: 0, segments: [seg]),
+          LevelBundle(level: 1, segments: [seg]),
+          LevelBundle(level: 2),
+          LevelBundle(level: 3),
+        ],
+        barFeatures: featsL3,
+        level: 3,
+        asOf: 7,
+      ),
+      isFalse,
+    );
+    // K3：父层 level2 有段 → 允许
+    expect(
+      levelLineDrawAllowed(
+        levels: const [
+          LevelBundle(level: 0, segments: [seg]),
+          LevelBundle(level: 1, segments: [seg]),
+          LevelBundle(level: 2, segments: [seg]),
+          LevelBundle(level: 3),
+        ],
+        barFeatures: featsL3,
+        level: 3,
+        asOf: 7,
+      ),
+      isTrue,
+    );
   });
 
   test('首K0连线确认前：pending 给默认K1 bar，purged 为空', () {
@@ -1114,6 +1288,83 @@ void main() {
         seedConfirmed: true,
       ),
       isNull,
+    );
+  });
+
+  test('合并帧跳过本层种子框首组：仅开关开且几何同框时生效', () {
+    const frames = [
+      KlineCombineFrame(
+        x1: 4,
+        x2: 76,
+        t1: '',
+        t2: '',
+        high: 10.1,
+        low: 9.93,
+        fx: 'UNKNOWN',
+        count: 1,
+      ),
+      KlineCombineFrame(
+        x1: 76,
+        x2: 90,
+        t1: '',
+        t2: '',
+        high: 10.2,
+        low: 10.0,
+        fx: 'TOP',
+        count: 2,
+      ),
+    ];
+    const snap = LevelSnap(
+      level: 2,
+      seedBoxSeq: 0,
+      seedBoxX1: 4,
+      seedBoxX2: 76,
+      seedBoxHigh: 10.1,
+      seedBoxLow: 9.93,
+    );
+
+    // 开关开 + 首组与种子框同矩形 → 跳过首组
+    expect(
+      combineFramesWithoutSeed(
+        frames: frames,
+        snap: snap,
+        earlyDynamicUnit: true,
+      ),
+      hasLength(1),
+    );
+    // 开关关 → 经典种子口径，原样返回（不复制）
+    expect(
+      combineFramesWithoutSeed(
+        frames: frames,
+        snap: snap,
+        earlyDynamicUnit: false,
+      ),
+      same(frames),
+    );
+    // 无种子框 → 原样返回
+    expect(
+      combineFramesWithoutSeed(
+        frames: frames,
+        snap: const LevelSnap(level: 2),
+        earlyDynamicUnit: true,
+      ),
+      same(frames),
+    );
+    // 首组高低与种子框不一致 → 不是同一只框，原样返回
+    expect(
+      combineFramesWithoutSeed(
+        frames: frames,
+        snap: const LevelSnap(
+          level: 2,
+          seedBoxSeq: 0,
+          seedBoxX1: 4,
+          seedBoxX2: 76,
+          seedBoxHigh: 10.1,
+          seedBoxLow: 9.92,
+        ),
+        earlyDynamicUnit: true,
+      ),
+      same(frames),
     );
   });
 }

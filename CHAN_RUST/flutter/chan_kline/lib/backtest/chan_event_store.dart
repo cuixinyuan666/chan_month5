@@ -9,7 +9,9 @@ import '../models/buy2_frame.dart';
 import '../models/buy_n_frame.dart';
 import '../models/fractal_judgment_event.dart';
 import '../models/k0_confirm_signal.dart';
+import '../models/kline_bar.dart';
 import '../models/level_models.dart';
+import '../models/math_indicator_config.dart';
 import '../models/sell1_frame.dart';
 import '../models/sell2_frame.dart';
 import '../models/sell_n_frame.dart';
@@ -82,6 +84,8 @@ List<TradeChanEvent> listTradeChanEvents({
   List<LevelBundle> levels = const [],
   DivergenceRelationStore? diverRelations,
   MathSeriesFreezeStore? mathFreeze,
+  List<KlineBar> bars = const [],
+  MathIndicatorConfig mathConfig = const MathIndicatorConfig(),
   int maxKn = 8,
 }) {
   final id = canonicalizeTradeVarId(variableId);
@@ -120,14 +124,28 @@ List<TradeChanEvent> listTradeChanEvents({
       );
     case 'DEMARK.COMPLETE_BUY':
       return _firstDemarkComplete(
-        mathFreeze?.demark(kn),
+        _demarkSeriesForEvents(
+          kn: kn,
+          asOf: asOf,
+          bars: bars,
+          levels: levels,
+          mathConfig: mathConfig,
+          mathFreeze: mathFreeze,
+        ),
         kn,
         asOf,
         buy: true,
       );
     case 'DEMARK.COMPLETE_SELL':
       return _firstDemarkComplete(
-        mathFreeze?.demark(kn),
+        _demarkSeriesForEvents(
+          kn: kn,
+          asOf: asOf,
+          bars: bars,
+          levels: levels,
+          mathConfig: mathConfig,
+          mathFreeze: mathFreeze,
+        ),
         kn,
         asOf,
         buy: false,
@@ -141,6 +159,11 @@ List<TradeChanEvent> listTradeChanEvents({
     default:
       final n = parseClassNVarId(id);
       if (n != null && n.kn == kn) {
+        if (isChanBsAllClass(n.cls)) {
+          return n.buy
+              ? _firstBuyAll(store, kn, asOf)
+              : _firstSellAll(store, kn, asOf);
+        }
         if (n.buy) {
           return _firstBuyN(store.buyNByKn[kn] ?? const [], kn, n.cls, asOf);
         }
@@ -288,6 +311,42 @@ List<TradeChanEvent> _firstFractalJudgment(
   );
 }
 
+/// Demark 事件取值：**优先读冻结仓**（每步当步算好、逐格冻结、不回写）。
+///
+/// [2026-10-09 修 · V3] 此前只要 `bars` 非空就永远现算 `computeDemarkForLevel`，
+/// 而它内部的采样取自**最终态**段划分（`collectKnOhlcSamples` 一段一个点 = 冻段口径），
+/// 于是 K1+ 的 Demark 完成标记被推到段尾。现成的冻结仓里那份正是逐根当步算对的。
+///
+/// 冻结仓没有该层（例如没跑过步进、只给了最终态 levels）时才退回现算。
+DemarkK0Series? _demarkSeriesForEvents({
+  required int kn,
+  required int asOf,
+  required List<KlineBar> bars,
+  required List<LevelBundle> levels,
+  required MathIndicatorConfig mathConfig,
+  MathSeriesFreezeStore? mathFreeze,
+}) {
+  final frozen = mathFreeze?.demark(kn);
+  if (frozen != null && frozen.marksAt.isNotEmpty) {
+    final n = asOf + 1;
+    if (frozen.marksAt.length >= n) return frozen;
+    return DemarkK0Series([
+      for (var i = 0; i < n; i++)
+        i < frozen.marksAt.length ? frozen.marksAt[i] : null,
+    ]);
+  }
+  if (bars.isNotEmpty) {
+    return computeDemarkForLevel(
+      displayKn: kn,
+      bars: bars,
+      levels: levels,
+      config: mathConfig,
+      asOf: asOf,
+    );
+  }
+  return mathFreeze?.demark(kn);
+}
+
 bool _demarkHasComplete(List<DemarkMark>? marks, {required bool buy}) {
   if (marks == null) return false;
   for (final m in marks) {
@@ -316,9 +375,9 @@ List<TradeChanEvent> _firstDemarkComplete(
         displayKn: kn,
         discoveryX: x,
         availableAt: x,
-        label: buy ? '完成买' : '完成卖',
+        label: buy ? '德马克买' : '德马克卖',
         price: 0,
-        source: 'Demark 冻结仓完成买/卖边沿（阶梯持值不重复出事件）',
+        source: 'Demark 德马克买/卖边沿（按 asOf 现算，与主图标记同源）',
       ));
     }
     prev = now;
@@ -375,26 +434,59 @@ List<TradeChanEvent> _firstKnFractal(
   );
 }
 
+List<TradeChanEvent> _firstBuyAll(ChanEventStore store, int kn, int asOf) {
+  final out = <TradeChanEvent>[
+    ..._firstBuy1(store.buy1ByKn[kn] ?? const [], kn, asOf),
+    ..._firstBuy2(store.buy2ByKn[kn] ?? const [], kn, asOf),
+    ..._firstBuyN(
+      store.buyNByKn[kn] ?? const [],
+      kn,
+      null,
+      asOf,
+    ),
+  ]..sort((a, b) => a.discoveryX.compareTo(b.discoveryX));
+  return out;
+}
+
+List<TradeChanEvent> _firstSellAll(ChanEventStore store, int kn, int asOf) {
+  final out = <TradeChanEvent>[
+    ..._firstSell1(store.sell1ByKn[kn] ?? const [], kn, asOf),
+    ..._firstSell2(store.sell2ByKn[kn] ?? const [], kn, asOf),
+    ..._firstSellN(
+      store.sellNByKn[kn] ?? const [],
+      kn,
+      null,
+      asOf,
+    ),
+  ]..sort((a, b) => a.discoveryX.compareTo(b.discoveryX));
+  return out;
+}
+
 List<TradeChanEvent> _firstBuyN(
   List<BuyNFrame> hist,
   int kn,
-  int cls,
+  int? cls,
   int asOf,
 ) {
-  final filtered = [for (final p in hist) if (p.cls == cls) p];
+  final filtered = [
+    for (final p in hist)
+      if (cls == null || p.cls == cls) p,
+  ];
   return _firstByX(
     items: filtered,
     asOf: asOf,
     xOf: (p) => p.x,
     stableOf: buyNStableKey,
     toEvent: (p) => TradeChanEvent(
-      eventId: 'BUY_N|$kn|$cls|${p.segIdx}|${p.label}',
+      eventId: 'BUY_N|$kn|${p.cls}|${p.segIdx}|${p.label}',
       displayKn: kn,
       discoveryX: p.x,
       availableAt: p.x,
       label: p.label,
       price: p.price,
-      source: 'N类买点会话历史（class=$cls；稳定身份首次发现；动态后续 x 不重复出信号）',
+      source: cls == null
+          ? 'N类买点会话历史（全部类号；稳定身份首次发现；动态后续 x 不重复出信号）'
+          : 'N类买点会话历史（class=$cls；稳定身份首次发现；动态后续 x 不重复出信号）',
     ),
   );
 }
@@ -402,23 +494,28 @@ List<TradeChanEvent> _firstBuyN(
 List<TradeChanEvent> _firstSellN(
   List<SellNFrame> hist,
   int kn,
-  int cls,
+  int? cls,
   int asOf,
 ) {
-  final filtered = [for (final p in hist) if (p.cls == cls) p];
+  final filtered = [
+    for (final p in hist)
+      if (cls == null || p.cls == cls) p,
+  ];
   return _firstByX(
     items: filtered,
     asOf: asOf,
     xOf: (p) => p.x,
     stableOf: sellNStableKey,
     toEvent: (p) => TradeChanEvent(
-      eventId: 'SELL_N|$kn|$cls|${p.segIdx}|${p.label}',
+      eventId: 'SELL_N|$kn|${p.cls}|${p.segIdx}|${p.label}',
       displayKn: kn,
       discoveryX: p.x,
       availableAt: p.x,
       label: p.label,
       price: p.price,
-      source: 'N类卖点会话历史（class=$cls；发现边沿；不把持续存在铺成 true）',
+      source: cls == null
+          ? 'N类卖点会话历史（全部类号；发现边沿；不把持续存在铺成 true）'
+          : 'N类卖点会话历史（class=$cls；发现边沿；不把持续存在铺成 true）',
     ),
   );
 }

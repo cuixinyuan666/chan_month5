@@ -50,6 +50,38 @@ class MlFeatureLabel {
       final kn = key.split('_').last;
       return 'K$kn RSI';
     }
+    // MACD
+    if (key.startsWith('sub.macd_')) {
+      final parts = key.split('_');
+      if (parts.length >= 3) {
+        final kn = parts[2];
+        switch (parts[1]) {
+          case 'dif':
+            return 'K$kn MACD-DIF';
+          case 'dea':
+            return 'K$kn MACD-DEA';
+          case 'hist':
+            return 'K$kn MACD-柱';
+        }
+      }
+      return key;
+    }
+    // BOLL
+    if (key.startsWith('sub.boll_')) {
+      final parts = key.split('_');
+      if (parts.length >= 3) {
+        final kn = parts[2];
+        switch (parts[1]) {
+          case 'mid':
+            return 'K$kn BOLL中轨';
+          case 'up':
+            return 'K$kn BOLL上轨';
+          case 'down':
+            return 'K$kn BOLL下轨';
+        }
+      }
+      return key;
+    }
     // 分型极点距
     if (key.startsWith('sub.fractal_peak_dist')) {
       if (key == 'sub.fractal_peak_dist') return '分型极点距(通用)';
@@ -172,10 +204,13 @@ class MlFeatureLabel {
     if (key == 'combine.in_merge') return '合并框内合并';
     if (key == 'combine_range_high_2') return 'K2 合并区间高';
     if (key == 'combine_range_low_2') return 'K2 合并区间低';
-    // 三型/四型价
-    if (key == 'sub.fx_triple_price_0') return 'K0 三型价';
-    if (key == 'sub.fx_triple_price_1') return 'K1 三型价';
-    if (key == 'sub.fx_quad_top_price_1') return 'K1 四型顶价';
+    // 三极平行/顶底对弦/对弦平移价
+    if (key == 'sub.fx_triple_price_0') return 'K0 三极平行价';
+    if (key == 'sub.fx_triple_price_1') return 'K1 三极平行价';
+    if (key == 'sub.fx_quad_top_price_1') return 'K1 顶底对弦顶价';
+    if (key == 'sub.fx_quad_bottom_price_1') return 'K1 顶底对弦底价';
+    if (key == 'sub.fx_chord_translated_price_0') return 'K0 对弦平移价';
+    if (key == 'sub.fx_chord_translated_price_1') return 'K1 对弦平移价';
     // 趋势线
     if (key == 'sub.trend_support_price_0') return 'K0 趋势支撑';
     if (key == 'sub.trend_resist_price_1') return 'K1 趋势阻力';

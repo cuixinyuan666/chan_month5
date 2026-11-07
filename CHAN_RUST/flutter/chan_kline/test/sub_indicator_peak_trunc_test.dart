@@ -3,7 +3,6 @@ import 'package:chan_kline/models/bar_crosshair_feature.dart';
 import 'package:chan_kline/models/bar_feature_lookup.dart';
 import 'package:chan_kline/models/chart_indicator.dart';
 import 'package:chan_kline/models/kline_bar.dart';
-import 'package:chan_kline/models/level_models.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 KlineBar _bar(int i) => KlineBar(
