@@ -3743,8 +3743,9 @@ class _KlineCompositePainter extends CustomPainter {
     // faint：主图K1合并底层，低不透明度以免压住 1 分钟 K
     final upBody = faint ? const Color(0x38E53935) : const Color(0x88E53935);
     final dnBody = faint ? const Color(0x3826A69A) : const Color(0x8826A69A);
-    final upStroke = faint ? const Color(0x55E53935) : const Color(0xFFE53935);
-    final dnStroke = faint ? const Color(0x5526A69A) : const Color(0xFF26A69A);
+    // 外框用实色，和 K 线合并框一样能看清虚实。填充可以淡。
+    const upFrame = Color(0xFFE53935);
+    const dnFrame = Color(0xFF26A69A);
 
     for (final v in k1BarViews) {
       if (v.viewX2 < viewport.viewXMin - 1 || v.viewX1 > viewport.viewXMax + 1) {
@@ -3770,25 +3771,44 @@ class _KlineCompositePainter extends CustomPainter {
         unitLevelForActive: 0,
       );
       final wickDash = ChartLevelLineStyle.forDisplayKn(1).buildingDashPattern;
-      // 影线只画实体之外的上下两段，实体中间不再留竖杠。
-      // 影线跟实心柱体一样，画成连续实线。虚线只留在柱体外框，避免粗影线变成一截一截。
-      _drawCandleWick(
-        canvas,
-        cx: cx,
-        yHigh: yH,
-        yLow: yL,
-        bodyTop: rect.top,
-        bodyBottom: rect.bottom,
-        bodyWidth: spanW,
-        color: isUp ? upStroke : dnStroke,
-        widthMult: _wickWidthMultForConfirmStep(confirmX: v.confirmX, barIdx: v.viewX2),
+      final frameDashed = building && showBuildingDash;
+      // 正在走的这根：影线虚线外框居中，宽度约为柱体四成。确认后的影线仍是实线。
+      if (frameDashed) {
+        _strokeWickDashFrame(
+          canvas,
+          cx: cx,
+          bodyWidth: spanW,
+          widthMult: _wickWidthMultForConfirmStep(confirmX: v.confirmX, barIdx: v.viewX2),
+          yHigh: yH,
+          yLow: yL,
+          bodyTop: rect.top,
+          bodyBottom: rect.bottom,
+          color: isUp ? upFrame : dnFrame,
+          fillColor: isUp ? upBody : dnBody,
+          dashPattern: wickDash,
+        );
+      } else {
+        _drawCandleWick(
+          canvas,
+          cx: cx,
+          yHigh: yH,
+          yLow: yL,
+          bodyTop: rect.top,
+          bodyBottom: rect.bottom,
+          bodyWidth: spanW,
+          color: isUp ? upBody : dnBody,
+          widthMult: _wickWidthMultForConfirmStep(confirmX: v.confirmX, barIdx: v.viewX2),
+        );
+      }
+      canvas.drawRect(
+        _candleBodyFillRect(rect, dashed: frameDashed),
+        Paint()..color = isUp ? upBody : dnBody,
       );
-      canvas.drawRect(rect, Paint()..color = isUp ? upBody : dnBody);
       _strokeUnitBarFrame(
         canvas,
         rect,
-        color: isUp ? upStroke : dnStroke,
-        dashed: building,
+        color: isUp ? upFrame : dnFrame,
+        dashed: frameDashed,
         dashPattern: wickDash,
       );
     }
@@ -5473,8 +5493,8 @@ class _KlineCompositePainter extends CustomPainter {
     if (views.isEmpty) return;
     final upBody = faint ? const Color(0x38E53935) : const Color(0x88E53935);
     final dnBody = faint ? const Color(0x3826A69A) : const Color(0x8826A69A);
-    final upStroke = faint ? const Color(0x55E53935) : const Color(0xFFE53935);
-    final dnStroke = faint ? const Color(0x5526A69A) : const Color(0xFF26A69A);
+    const upFrame = Color(0xFFE53935);
+    const dnFrame = Color(0xFF26A69A);
 
     for (final v in views) {
       if (v.viewX2 < viewport.viewXMin - 1 || v.viewX1 > viewport.viewXMax + 1) {
@@ -5499,26 +5519,47 @@ class _KlineCompositePainter extends CustomPainter {
         unitLevelForActive: displayKn - 1,
       );
       final wickDash = ChartLevelLineStyle.forDisplayKn(displayKn).buildingDashPattern;
-      // 影线只画实体之外的上下两段，实体中间不再留竖杠。
-      // 影线跟实心柱体一样，画成连续实线。虚线只留在柱体外框，避免粗影线变成一截一截。
-      _drawCandleWick(
-        canvas,
-        cx: cx,
-        yHigh: yH,
-        yLow: yL,
-        bodyTop: rect.top,
-        bodyBottom: rect.bottom,
-        bodyWidth: spanW,
-        color: isUp ? upStroke : dnStroke,
-        widthMult:
-            _wickWidthMultForConfirmStep(confirmX: v.bar.confirmX, barIdx: v.viewX2),
+      final frameDashed = building && showBuildingDash;
+      if (frameDashed) {
+        _strokeWickDashFrame(
+          canvas,
+          cx: cx,
+          bodyWidth: spanW,
+          widthMult: _wickWidthMultForConfirmStep(
+            confirmX: v.bar.confirmX,
+            barIdx: v.viewX2,
+          ),
+          yHigh: yH,
+          yLow: yL,
+          bodyTop: rect.top,
+          bodyBottom: rect.bottom,
+          color: isUp ? upFrame : dnFrame,
+          fillColor: isUp ? upBody : dnBody,
+          dashPattern: wickDash,
+        );
+      } else {
+        _drawCandleWick(
+          canvas,
+          cx: cx,
+          yHigh: yH,
+          yLow: yL,
+          bodyTop: rect.top,
+          bodyBottom: rect.bottom,
+          bodyWidth: spanW,
+          color: isUp ? upBody : dnBody,
+          widthMult:
+              _wickWidthMultForConfirmStep(confirmX: v.bar.confirmX, barIdx: v.viewX2),
+        );
+      }
+      canvas.drawRect(
+        _candleBodyFillRect(rect, dashed: frameDashed),
+        Paint()..color = isUp ? upBody : dnBody,
       );
-      canvas.drawRect(rect, Paint()..color = isUp ? upBody : dnBody);
       _strokeUnitBarFrame(
         canvas,
         rect,
-        color: isUp ? upStroke : dnStroke,
-        dashed: building,
+        color: isUp ? upFrame : dnFrame,
+        dashed: frameDashed,
         dashPattern: wickDash,
       );
     }
@@ -5910,8 +5951,8 @@ class _KlineCompositePainter extends CustomPainter {
   /// [confirmX] < 0：Rust 未给确认步时，用视窗右沿 [viewX2] 与当步 idx 比。
   /// 须含 **viewX2 == cap**：尾柱动态时右沿常等于当步 minute idx。
   ///
-  /// [barIdx] / [unitLevelForActive]：`cap == confirmX` 且该层 [activeUnit] 仍为本柱时，
-  /// 视为构建中（虚线）。
+  /// [barIdx] / [unitLevelForActive]：该层 [activeUnit] 仍是本柱时，外框继续虚线。
+  /// 不能只在 `cap == confirmX` 才认，步子走过确认点后这根影线仍在延伸，外框必须还是虚线。
   bool _unitBarIsBuilding({
     required int confirmX,
     required int viewX2,
@@ -5919,21 +5960,30 @@ class _KlineCompositePainter extends CustomPainter {
     int? unitLevelForActive,
   }) {
     final cap = _stepAsOfBarIdx;
-    if (cap == null) return true;
-    if (confirmX >= 0) {
-      if (cap < confirmX) return true;
-      if (cap == confirmX &&
-          barIdx != null &&
-          unitLevelForActive != null &&
-          _levelActiveUnitMatchesBar(
-            unitLevel: unitLevelForActive,
-            barIdx: barIdx,
-          )) {
-        return true;
-      }
-      return false;
+    final active = barIdx != null &&
+        unitLevelForActive != null &&
+        _levelActiveUnitMatchesBar(
+          unitLevel: unitLevelForActive,
+          barIdx: barIdx,
+        );
+    final bool building;
+    if (cap == null || active) {
+      building = true;
+    } else if (confirmX >= 0) {
+      building = cap < confirmX;
+    } else {
+      building = cap <= viewX2;
     }
-    return cap <= viewX2;
+    return building;
+  }
+
+  /// 虚线外框时，填充收到框内，避免实心色块的外沿盖住虚线，看起来仍是实线。
+  Rect _candleBodyFillRect(Rect rect, {required bool dashed}) {
+    if (!dashed) return rect;
+    const inset = 1.4;
+    final r = rect.deflate(inset);
+    if (r.width < 1 || r.height < 1) return rect;
+    return r;
   }
 
   void _strokeUnitBarFrame(
@@ -5943,7 +5993,8 @@ class _KlineCompositePainter extends CustomPainter {
     required bool dashed,
     List<double>? dashPattern,
   }) {
-    final strokeW = 1.6;
+    // 与 K 线合并框同一线宽，虚线直接描在外沿，不再缩进填充里。
+    final strokeW = 1.4;
     final p = Paint()
       ..color = color
       ..style = PaintingStyle.stroke
@@ -5953,20 +6004,7 @@ class _KlineCompositePainter extends CustomPainter {
       canvas.drawRect(rect, p);
       return;
     }
-    // inset 半线宽，避免与填充边界锯齿重叠产生“加粗”感。
-    // 薄实体 deflate 后宽高可能为 0，若退回 `drawRect` 会变成**实线**，动态 K 看起来像从未切虚线。
-    var inset = strokeW * 0.5;
-    var r = rect.deflate(inset);
-    if (r.width <= 0 || r.height <= 0) {
-      final m = math.min(rect.width, rect.height);
-      inset = m > 0 ? math.min(strokeW * 0.25, m * 0.5 - 1e-3) : 0.0;
-      r = rect.deflate(math.max(0.0, inset));
-    }
-    if (r.width <= 0 || r.height <= 0) {
-      _strokeDashedRect(canvas, rect, p, dashPattern);
-    } else {
-      _strokeDashedRect(canvas, r, p, dashPattern);
-    }
+    _strokeDashedRect(canvas, rect, p, dashPattern);
   }
 
   void _drawCandles(
@@ -6022,23 +6060,49 @@ class _KlineCompositePainter extends CustomPainter {
       final top = math.min(yO, yC);
       final bottom = math.max(yO, yC);
       final bodyH = math.max(1.0, bottom - top);
-      // 影线只画实体之外的上下两段，实体中间不再留竖杠。
-      // 底层柱体是实心色块，影线同样实线。
-      _drawCandleWick(
-        canvas,
-        cx: cx,
-        yHigh: yH,
-        yLow: yL,
-        bodyTop: top,
-        bodyBottom: top + bodyH,
-        bodyWidth: barW,
-        color: color,
-        widthMult: _wickWidthMultForConfirmStep(barIdx: idx),
-      );
+      final bodyRect = Rect.fromLTWH(x, top, barW, bodyH);
+      final cap0 = _stepAsOfBarIdx;
+      final k0Dashed = cap0 != null && showBuildingDash && idx == cap0;
+      final k0Dash = ChartLevelLineStyle.forDisplayKn(0).buildingDashPattern;
+      // 正在走的这根：影线画成虚线外框。已经确认的仍用实线影线。
+      if (k0Dashed) {
+        _strokeWickDashFrame(
+          canvas,
+          cx: cx,
+          bodyWidth: barW,
+          widthMult: _wickWidthMultForConfirmStep(barIdx: idx),
+          yHigh: yH,
+          yLow: yL,
+          bodyTop: top,
+          bodyBottom: top + bodyH,
+          color: color,
+          fillColor: color,
+          dashPattern: k0Dash,
+        );
+      } else {
+        _drawCandleWick(
+          canvas,
+          cx: cx,
+          yHigh: yH,
+          yLow: yL,
+          bodyTop: top,
+          bodyBottom: top + bodyH,
+          bodyWidth: barW,
+          color: color,
+          widthMult: _wickWidthMultForConfirmStep(barIdx: idx),
+        );
+      }
 
       canvas.drawRect(
-        Rect.fromLTWH(x, top, barW, bodyH),
+        _candleBodyFillRect(bodyRect, dashed: k0Dashed),
         Paint()..color = color,
+      );
+      _strokeUnitBarFrame(
+        canvas,
+        bodyRect,
+        color: color,
+        dashed: k0Dashed,
+        dashPattern: k0Dash,
       );
     }
   }
@@ -6048,7 +6112,51 @@ class _KlineCompositePainter extends CustomPainter {
   /// 以前影线固定 1.2 像素，K 放宽后影线细得看不清；实体中间那截竖杠
   /// 又把阳线、阴线从中劈开。这里影线取实体宽度约四成（最细 1、最粗 12），
   /// 可选 [widthMult] 再乘一档（末根未确认略细、确认后略粗）。
-  /// 蜡烛影线固定走实线。柱体外框在构建中可以是虚线，影线不跟着断开。
+  /// 正在走的影线：虚线外框居中，宽度约为柱体四成（最宽 12），不铺满柱体。
+  /// 框线本身仍是 1.4，虚线节奏与柱体外框相同。
+  void _strokeWickDashFrame(
+    Canvas canvas, {
+    required double cx,
+    required double bodyWidth,
+    double widthMult = 1.0,
+    required double yHigh,
+    required double yLow,
+    required double bodyTop,
+    required double bodyBottom,
+    required Color color,
+    required Color fillColor,
+    required List<double> dashPattern,
+  }) {
+    const sw = 1.4;
+    final wickW = candleWickWidth(bodyWidth, widthMult: widthMult);
+    final left = cx - wickW / 2;
+    final right = cx + wickW / 2;
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = sw
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.butt;
+    final fill = Paint()..color = fillColor;
+    void seg(double x0, double y0, double x1, double y1) {
+      if ((Offset(x1, y1) - Offset(x0, y0)).distance < 0.5) return;
+      _drawPatternLine(canvas, Offset(x0, y0), Offset(x1, y1), paint, dashPattern);
+    }
+
+    if (yHigh < bodyTop - 0.5) {
+      canvas.drawRect(Rect.fromLTRB(left, yHigh, right, bodyTop), fill);
+      seg(left, yHigh, right, yHigh);
+      seg(left, yHigh, left, bodyTop);
+      seg(right, yHigh, right, bodyTop);
+    }
+    if (yLow > bodyBottom + 0.5) {
+      canvas.drawRect(Rect.fromLTRB(left, bodyBottom, right, yLow), fill);
+      seg(left, bodyBottom, left, yLow);
+      seg(right, bodyBottom, right, yLow);
+      seg(left, yLow, right, yLow);
+    }
+  }
+
+  /// 已确认影线走实线。正在走的影线改走 [_strokeWickDashFrame]。
   void _drawCandleWick(
     Canvas canvas, {
     required double cx,
@@ -6065,9 +6173,18 @@ class _KlineCompositePainter extends CustomPainter {
     final sw = candleWickWidth(bodyWidth, widthMult: widthMult);
     final wick = Paint()
       ..color = color
-      ..strokeWidth = sw
-      ..strokeCap = StrokeCap.butt;
-    // 与实体描边（约 1.6）叠在一条线上会显得更粗：端点略离开实体边沿。
+      ..style = PaintingStyle.fill;
+    final half = sw / 2;
+    // 已确认影线用柱体同色填实，宽度仍约为柱体四成。
+    if (!dashed) {
+      if (yHigh < bodyTop - 0.5) {
+        canvas.drawRect(Rect.fromLTRB(cx - half, yHigh, cx + half, bodyTop), wick);
+      }
+      if (yLow > bodyBottom + 0.5) {
+        canvas.drawRect(Rect.fromLTRB(cx - half, bodyBottom, cx + half, yLow), wick);
+      }
+      return;
+    }
     final gap = math.min(0.85, sw * 0.35);
     final pat = dashPattern;
     final useDash = dashed && pat != null && pat.isNotEmpty;
