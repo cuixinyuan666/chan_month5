@@ -3771,7 +3771,7 @@ class _KlineCompositePainter extends CustomPainter {
       );
       final wickDash = ChartLevelLineStyle.forDisplayKn(1).buildingDashPattern;
       // 影线只画实体之外的上下两段，实体中间不再留竖杠。
-      // 虚实与柱体外框同一套：构建中虚线，确认后实线。
+      // 影线跟实心柱体一样，画成连续实线。虚线只留在柱体外框，避免粗影线变成一截一截。
       _drawCandleWick(
         canvas,
         cx: cx,
@@ -3782,8 +3782,6 @@ class _KlineCompositePainter extends CustomPainter {
         bodyWidth: spanW,
         color: isUp ? upStroke : dnStroke,
         widthMult: _wickWidthMultForConfirmStep(confirmX: v.confirmX, barIdx: v.viewX2),
-        dashed: building,
-        dashPattern: wickDash,
       );
       canvas.drawRect(rect, Paint()..color = isUp ? upBody : dnBody);
       _strokeUnitBarFrame(
@@ -5502,7 +5500,7 @@ class _KlineCompositePainter extends CustomPainter {
       );
       final wickDash = ChartLevelLineStyle.forDisplayKn(displayKn).buildingDashPattern;
       // 影线只画实体之外的上下两段，实体中间不再留竖杠。
-      // 虚实与柱体外框同一套：构建中虚线，确认后实线。
+      // 影线跟实心柱体一样，画成连续实线。虚线只留在柱体外框，避免粗影线变成一截一截。
       _drawCandleWick(
         canvas,
         cx: cx,
@@ -5514,8 +5512,6 @@ class _KlineCompositePainter extends CustomPainter {
         color: isUp ? upStroke : dnStroke,
         widthMult:
             _wickWidthMultForConfirmStep(confirmX: v.bar.confirmX, barIdx: v.viewX2),
-        dashed: building,
-        dashPattern: wickDash,
       );
       canvas.drawRect(rect, Paint()..color = isUp ? upBody : dnBody);
       _strokeUnitBarFrame(
@@ -6052,7 +6048,7 @@ class _KlineCompositePainter extends CustomPainter {
   /// 以前影线固定 1.2 像素，K 放宽后影线细得看不清；实体中间那截竖杠
   /// 又把阳线、阴线从中劈开。这里影线取实体宽度约四成（最细 1、最粗 12），
   /// 可选 [widthMult] 再乘一档（末根未确认略细、确认后略粗）。
-  /// [dashed] 为真且 [dashPattern] 非空时，用 [_drawPatternLine] 画虚线，与这根柱体外框同一套虚线。
+  /// 蜡烛影线固定走实线。柱体外框在构建中可以是虚线，影线不跟着断开。
   void _drawCandleWick(
     Canvas canvas, {
     required double cx,
