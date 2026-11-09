@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../chart/level_window_layout.dart';
+import 'package:chan_kline/theme/app_palette.dart';
 
 /// 层级分窗网格：只负责切格子、分隔线与角标，不碰任何绘制/计算逻辑。
 ///
@@ -94,7 +95,7 @@ class _GridDivider extends StatelessWidget {
     return Container(
       width: vertical ? 1 : null,
       height: vertical ? null : 1,
-      color: const Color(0x33FFFFFF),
+      color: AppPalette.rgb(0x33FFFFFF),
     );
   }
 }
@@ -134,12 +135,12 @@ class _PaneChrome extends StatelessWidget {
             child: DecoratedBox(
               decoration: BoxDecoration(
                 // 深色底 + 亮字：浅色主题与深色主题下都能看清（灰底灰字会糊成一片）。
-                color: const Color(0xE61A1A1A),
+                color: AppPalette.rgb(0xE61A1A1A),
                 borderRadius: BorderRadius.circular(4),
                 border: Border.all(
                   color: primary
-                      ? const Color(0xFF42A5F5)
-                      : const Color(0x66FFFFFF),
+                      ? AppPalette.rgb(0xFF42A5F5)
+                      : AppPalette.rgb(0x66FFFFFF),
                 ),
               ),
               child: Padding(
@@ -150,8 +151,8 @@ class _PaneChrome extends StatelessWidget {
                     fontSize: 11,
                     height: 1.2,
                     color: primary
-                        ? const Color(0xFF9CD2FF)
-                        : const Color(0xFFCFCFCF),
+                        ? AppPalette.rgb(0xFF9CD2FF)
+                        : AppPalette.rgb(0xFFCFCFCF),
                   ),
                 ),
               ),
@@ -172,15 +173,15 @@ class _EmptyLevelPlaceholder extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ColoredBox(
-      color: const Color(0xFF121212),
+      color: AppPalette.rgb(0xFF121212),
       child: Center(
         child: Text(
           'K$level 暂无数据\n（该层级尚未生成，继续步进后自动出现）',
           textAlign: TextAlign.center,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 12,
             height: 1.6,
-            color: Color(0xFF757575),
+            color: AppPalette.rgb(0xFF757575),
           ),
         ),
       ),

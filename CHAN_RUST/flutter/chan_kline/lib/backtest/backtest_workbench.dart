@@ -16,6 +16,7 @@ import 'signal_event.dart';
 import 'strategy_config.dart';
 import 'strategy_config_form.dart';
 import 'zhongshu_object_store.dart';
+import 'package:chan_kline/theme/app_palette.dart';
 
 export 'backtest_report_panel.dart'
     show BacktestReportTab, BacktestWorkbenchTab, reportTabOf;
@@ -106,7 +107,7 @@ class BacktestWorkbench extends StatelessWidget {
     final reportTab = reportTabOf(tab);
 
     final panel = Material(
-      color: const Color(0xF01A1A1A),
+      color: AppPalette.rgb(0xF01A1A1A),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -149,11 +150,11 @@ class BacktestWorkbench extends StatelessWidget {
           const Divider(height: 1),
           _tabBar(),
           if (stale)
-            const Padding(
+            Padding(
               padding: EdgeInsets.fromLTRB(10, 4, 10, 0),
               child: Text(
                 'K 线已继续走，这是上一轮结果。要按当前根重跑，再点一次运行。',
-                style: TextStyle(fontSize: 11, color: Color(0xFFFFB74D)),
+                style: TextStyle(fontSize: 11, color: AppPalette.rgb(0xFFFFB74D)),
               ),
             ),
           Expanded(
@@ -187,11 +188,11 @@ class BacktestWorkbench extends StatelessWidget {
                         ),
                       )
                     : (run == null
-                        ? const Center(
+                        ? Center(
                             child: Text(
                               '搭好买卖条件后点运行。图上买/卖按组显示在发现当根，被拒的不画。',
                               style:
-                                  TextStyle(color: Color(0xFF94A3B8), fontSize: 13),
+                                  TextStyle(color: AppPalette.rgb(0xFF94A3B8), fontSize: 13),
                             ),
                           )
                         : BacktestReportPanel(
@@ -255,18 +256,18 @@ class BacktestWorkbench extends StatelessWidget {
   /// Column + 两个 Expanded 而非整体滚动，避免嵌套 Expanded/ListView 无界报错。
   Widget _performancePanel(BacktestRun? run) {
     if (run == null) {
-      return const Center(
+      return Center(
         child: Text(
           '搭好买卖条件后点运行。图上买/卖按组显示在发现当根，被拒的不画。',
-          style: TextStyle(color: Color(0xFF94A3B8), fontSize: 13),
+          style: TextStyle(color: AppPalette.rgb(0xFF94A3B8), fontSize: 13),
         ),
       );
     }
     if (!run.ok) {
-      return const Center(
+      return Center(
         child: Text(
           '本轮回测未产出结果。',
-          style: TextStyle(color: Color(0xFF94A3B8), fontSize: 13),
+          style: TextStyle(color: AppPalette.rgb(0xFF94A3B8), fontSize: 13),
         ),
       );
     }
@@ -289,7 +290,7 @@ class BacktestWorkbench extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         section(BacktestReportTab.metrics),
-        const Divider(height: 1, color: Color(0xFF334155)),
+        Divider(height: 1, color: AppPalette.rgb(0xFF334155)),
         section(BacktestReportTab.equity),
       ],
     );

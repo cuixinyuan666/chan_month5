@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:chan_kline/theme/app_palette.dart';
 
 /// 设置面板统一间距与按钮样式。
 abstract final class SettingsPanelTheme {
@@ -15,8 +16,8 @@ abstract final class SettingsPanelTheme {
         minimumSize: const Size.fromHeight(buttonHeight),
         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
         padding: const EdgeInsets.symmetric(horizontal: 12),
-        foregroundColor: const Color(0xFFE2E8F0),
-        side: const BorderSide(color: Color(0x55FFFFFF)),
+        foregroundColor: AppPalette.rgb(0xFFE2E8F0),
+        side: BorderSide(color: AppPalette.rgb(0x55FFFFFF)),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
       );
 
@@ -24,8 +25,8 @@ abstract final class SettingsPanelTheme {
         minimumSize: const Size.fromHeight(buttonHeight),
         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
         padding: const EdgeInsets.symmetric(horizontal: 12),
-        backgroundColor: const Color(0xFF2563EB),
-        foregroundColor: Colors.white,
+        backgroundColor: AppPalette.rgb(0xFF2563EB),
+        foregroundColor: AppPalette.rgb(0xFFFFFFFF),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
       );
 }
@@ -47,10 +48,10 @@ class SettingsSection extends StatelessWidget {
       children: [
         Text(
           title,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 12,
             fontWeight: FontWeight.w600,
-            color: Color(0xFF94A3B8),
+            color: AppPalette.rgb(0xFF94A3B8),
           ),
         ),
         const SizedBox(height: 8),
@@ -65,7 +66,7 @@ Widget settingsButtonWithLeftHelp({
   required Widget button,
   required VoidCallback onHelp,
   required String helpTooltip,
-  Color iconColor = const Color(0xFFE2E8F0),
+  Color? iconColor,
 }) {
   return Stack(
     alignment: Alignment.center,
@@ -80,7 +81,7 @@ Widget settingsButtonWithLeftHelp({
           onPressed: onHelp,
           visualDensity: VisualDensity.compact,
           padding: const EdgeInsets.symmetric(horizontal: 8),
-          icon: Icon(Icons.help_outline, size: 20, color: iconColor),
+          icon: Icon(Icons.help_outline, size: 20, color: iconColor ?? AppPalette.rgb(0xFFE2E8F0)),
         ),
       ),
     ],
@@ -171,7 +172,7 @@ class SettingsFilledButton extends StatelessWidget {
       button: button,
       onHelp: onHelp!,
       helpTooltip: helpTooltip ?? '说明',
-      iconColor: Colors.white,
+      iconColor: AppPalette.rgb(0xFFFFFFFF),
     );
   }
 }

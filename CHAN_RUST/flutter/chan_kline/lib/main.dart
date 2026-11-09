@@ -115,6 +115,9 @@ import 'agent_api/agent_task.dart';
 import 'agent_api/indicator_label_map.dart';
 import 'indicator_search/indicator_search_job.dart';
 import 'indicator_search/search_core.dart';
+import 'package:chan_kline/theme/app_palette.dart';
+import 'package:chan_kline/theme/theme_settings_store.dart';
+import 'package:chan_kline/theme/theme_chooser.dart';
 
 const _robotVerifyDefine = bool.fromEnvironment('ROBOT_VERIFY');
 const _robotVerifySuiteDefine = String.fromEnvironment(
@@ -145,16 +148,18 @@ String _chanKlineRoot() =>
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // 先把主题偏好读回来（深色/浅色/护眼），第一帧就用对的配色
+  AppThemeController.instance.loadFromDisk();
   if (_robotVerifyEnabled()) {
     final klineRoot = _chanKlineRoot();
     if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
       await windowManager.ensureInitialized();
-      const opts = WindowOptions(
+      final opts = WindowOptions(
         size: Size(480, 420),
         center: true,
         title: '机器人验证',
         titleBarStyle: TitleBarStyle.normal,
-        backgroundColor: Color(0xFF121212),
+        backgroundColor: AppPalette.rgb(0xFF121212),
       );
       await windowManager.waitUntilReadyToShow(opts, () async {
         await windowManager.show();
@@ -172,10 +177,10 @@ Future<void> main() async {
   if (Platform.isAndroid) {
     await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     SystemChrome.setSystemUIOverlayStyle(
-      const SystemUiOverlayStyle(
-        statusBarColor: Colors.transparent,
+      SystemUiOverlayStyle(
+        statusBarColor: AppPalette.rgb(0x00000000),
         statusBarIconBrightness: Brightness.light,
-        systemNavigationBarColor: Color(0xFF121212),
+        systemNavigationBarColor: AppPalette.rgb(0xFF121212),
         systemNavigationBarIconBrightness: Brightness.light,
       ),
     );
@@ -330,10 +335,10 @@ Future<void> main() async {
   MsgHistory.instance.appendCrossKnIndicatorJoin20260905();
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
     await windowManager.ensureInitialized();
-    const opts = WindowOptions(
+    final opts = WindowOptions(
       // 隐藏系统标题文字与白底标题栏，自绘右上角三键
       titleBarStyle: TitleBarStyle.hidden,
-      backgroundColor: Color(0xFF121212),
+      backgroundColor: AppPalette.rgb(0xFF121212),
     );
     await windowManager.waitUntilReadyToShow(opts, () async {
       await windowManager.setTitle('');
@@ -352,20 +357,48 @@ Future<void> main() async {
   runApp(app);
 }
 
-class ChanKlineApp extends StatelessWidget {
+class ChanKlineApp extends StatefulWidget {
   const ChanKlineApp({super.key});
 
   @override
+  State<ChanKlineApp> createState() => _ChanKlineAppState();
+}
+
+class _ChanKlineAppState extends State<ChanKlineApp> {
+  final _theme = AppThemeController.instance;
+
+  @override
+  void initState() {
+    super.initState();
+    _theme.addListener(_onThemeChanged);
+  }
+
+  @override
+  void dispose() {
+    _theme.removeListener(_onThemeChanged);
+    super.dispose();
+  }
+
+  void _onThemeChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
   Widget build(BuildContext context) {
+    // 深色/浅色/护眼：整棵树跟着重建，绘图代码里的颜色都从 AppPalette 取，画布不会被漏掉
+    final isDark = _theme.mode == AppThemeMode.dark;
+    final brightness = isDark ? Brightness.dark : Brightness.light;
     return MaterialApp(
       title: 'CHAN_RUST K线',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        brightness: Brightness.dark,
+        brightness: brightness,
         colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF42A5F5),
-          brightness: Brightness.dark,
+          seedColor: AppPalette.accent,
+          brightness: brightness,
         ),
+        scaffoldBackgroundColor: AppPalette.canvasBg,
+        canvasColor: AppPalette.canvasBg,
         useMaterial3: true,
       ),
       home: const KlineHomePage(),
@@ -1175,12 +1208,12 @@ class _KlineHomePageState extends State<KlineHomePage>
     final msg = _libHaltMessage ?? '缠论计算库不可用。';
     return Positioned.fill(
       child: ColoredBox(
-        color: const Color(0xF2121212),
+        color: AppPalette.rgb(0xF2121212),
         child: Center(
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 520),
             child: Material(
-              color: const Color(0xFF1E1E1E),
+              color: AppPalette.rgb(0xFF1E1E1E),
               borderRadius: BorderRadius.circular(8),
               child: Padding(
                 padding: const EdgeInsets.all(20),
@@ -1188,10 +1221,10 @@ class _KlineHomePageState extends State<KlineHomePage>
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
+                    Text(
                       '计算库对不上，已停机',
                       style: TextStyle(
-                        color: Colors.orange,
+                        color: AppPalette.rgb(0xFFFFA726),
                         fontSize: 18,
                         fontWeight: FontWeight.w600,
                       ),
@@ -1199,16 +1232,16 @@ class _KlineHomePageState extends State<KlineHomePage>
                     const SizedBox(height: 12),
                     Text(
                       msg,
-                      style: const TextStyle(
-                        color: Color(0xFFE2E8F0),
+                      style: TextStyle(
+                        color: AppPalette.rgb(0xFFE2E8F0),
                         fontSize: 14,
                         height: 1.45,
                       ),
                     ),
                     const SizedBox(height: 12),
-                    const Text(
+                    Text(
                       '请覆盖为本次安装包里的那一份动态库，关掉软件再打开。不要混用旧备份，否则副图买卖点会对成另一套。',
-                      style: TextStyle(color: Color(0xFF94A3B8), fontSize: 12, height: 1.4),
+                      style: TextStyle(color: AppPalette.rgb(0xFF94A3B8), fontSize: 12, height: 1.4),
                     ),
                   ],
                 ),
@@ -1231,7 +1264,7 @@ class _KlineHomePageState extends State<KlineHomePage>
         right: 12,
         top: top,
         child: Material(
-          color: const Color(0xE61A1A1A),
+          color: AppPalette.rgb(0xE61A1A1A),
           borderRadius: BorderRadius.circular(8),
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -1248,7 +1281,7 @@ class _KlineHomePageState extends State<KlineHomePage>
                     valueListenable: _longOpHint,
                     builder: (_, hint, __) => Text(
                       hint.isEmpty ? '一次性走完，请稍候…' : hint,
-                      style: const TextStyle(color: Colors.white, fontSize: 13),
+                      style: TextStyle(color: AppPalette.rgb(0xFFFFFFFF), fontSize: 13),
                     ),
                   ),
                 ),
@@ -1269,7 +1302,7 @@ class _KlineHomePageState extends State<KlineHomePage>
       top: top,
       child: Center(
         child: Material(
-          color: const Color(0xE61A1A1A),
+          color: AppPalette.rgb(0xE61A1A1A),
           borderRadius: BorderRadius.circular(20),
           elevation: 4,
           child: Padding(
@@ -1285,7 +1318,7 @@ class _KlineHomePageState extends State<KlineHomePage>
                 const SizedBox(width: 8),
                 Text(
                   '自动播放 ${_stepIdx + 1} / $total',
-                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                  style: TextStyle(color: AppPalette.rgb(0xFFFFFFFF), fontSize: 13),
                 ),
               ],
             ),
@@ -3568,7 +3601,7 @@ class _KlineHomePageState extends State<KlineHomePage>
   /// 桌面：图表铺满 + 透明标题条 + 左右设置浮层。
   Widget _buildDesktopShell(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF121212),
+      backgroundColor: AppPalette.rgb(0xFF121212),
       // 图表铺满；标题按钮叠在右上角之上，可点且不挡视觉延伸
       body: Stack(
         fit: StackFit.expand,
@@ -3578,9 +3611,9 @@ class _KlineHomePageState extends State<KlineHomePage>
               padding: const EdgeInsets.all(kDesktopShellInset),
               child: DecoratedBox(
                 decoration: BoxDecoration(
-                  color: const Color(0xFF121212),
+                  color: AppPalette.rgb(0xFF121212),
                   borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: const Color(0x33FFFFFF)),
+                  border: Border.all(color: AppPalette.rgb(0x33FFFFFF)),
                 ),
                 // ML：主区只挂成果页（无 K 线图）；否则复盘 K 线
                 child: _mlSession.isActive
@@ -3636,7 +3669,7 @@ class _KlineHomePageState extends State<KlineHomePage>
               left: 12,
               right: 120,
               top: 40,
-              child: Text(_error!, style: const TextStyle(color: Colors.orange)),
+              child: Text(_error!, style: TextStyle(color: AppPalette.rgb(0xFFFFA726))),
             ),
           // 设置打开时：点非面板区域关闭，不穿透到 K 线播放手势
           if (_panelExpanded)
@@ -3644,7 +3677,7 @@ class _KlineHomePageState extends State<KlineHomePage>
               child: GestureDetector(
                 behavior: HitTestBehavior.opaque,
                 onTap: () => setState(() => _panelExpanded = false),
-                child: const ColoredBox(color: Color(0x33000000)),
+                child: ColoredBox(color: AppPalette.rgb(0x33000000)),
               ),
             ),
           if (_panelExpanded)
@@ -3685,7 +3718,7 @@ class _KlineHomePageState extends State<KlineHomePage>
   Widget _buildAndroidShell(BuildContext context) {
     final topInset = MediaQuery.paddingOf(context).top;
     return Scaffold(
-      backgroundColor: const Color(0xFF121212),
+      backgroundColor: AppPalette.rgb(0xFF121212),
       body: Stack(
         fit: StackFit.expand,
         children: [
@@ -3745,7 +3778,7 @@ class _KlineHomePageState extends State<KlineHomePage>
               right: 56,
               top: topInset + 4,
               child: Material(
-                color: const Color(0x33FF9800),
+                color: AppPalette.rgb(0x33FF9800),
                 borderRadius: BorderRadius.circular(4),
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -3753,7 +3786,7 @@ class _KlineHomePageState extends State<KlineHomePage>
                     _error!,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: Colors.orange, fontSize: 12),
+                    style: TextStyle(color: AppPalette.rgb(0xFFFFA726), fontSize: 12),
                   ),
                 ),
               ),
@@ -3769,14 +3802,14 @@ class _KlineHomePageState extends State<KlineHomePage>
               top: topInset + 2,
               right: 4,
               child: Material(
-                color: const Color(0xCC1A1A1A),
+                color: AppPalette.rgb(0xCC1A1A1A),
                 shape: const CircleBorder(),
                 child: IconButton(
                   tooltip: '设置',
                   onPressed: _bootstrapping || _busy
                       ? null
                       : _openAndroidSettings,
-                  icon: const Icon(Icons.tune, color: Color(0xFFE2E8F0)),
+                  icon: Icon(Icons.tune, color: AppPalette.rgb(0xFFE2E8F0)),
                 ),
               ),
             ),
@@ -3850,7 +3883,7 @@ class _KlineHomePageState extends State<KlineHomePage>
           child: SizedBox(
             width: dragGripW,
             height: kDesktopCaptionBarHeight,
-            child: Container(color: Colors.transparent),
+            child: Container(color: AppPalette.rgb(0x00000000)),
           ),
         ),
         Tooltip(
@@ -3865,7 +3898,7 @@ class _KlineHomePageState extends State<KlineHomePage>
             icon: Icon(
               _panelExpanded ? Icons.close : Icons.settings,
               size: 18,
-              color: const Color(0xFFE2E8F0),
+              color: AppPalette.rgb(0xFFE2E8F0),
             ),
           ),
         ),
@@ -4227,7 +4260,7 @@ class _KlineHomePageState extends State<KlineHomePage>
             onPressed: _showBuildingDashHelp,
           ),
         ),
-        const SizedBox(height: 8),
+        SizedBox(height: 8),
         // 层级分窗：默认关闭 = 现在这张「各层集成在一张图」的单图；开启后按所选层级切格。
         SwitchListTile(
           contentPadding: EdgeInsets.zero,
@@ -4354,9 +4387,9 @@ class _KlineHomePageState extends State<KlineHomePage>
         if (forMobileSheet)
           ExpansionTile(
             tilePadding: EdgeInsets.zero,
-            title: const Text(
+            title: Text(
               '高级与工具',
-              style: TextStyle(fontSize: 13, color: Color(0xFFE2E8F0)),
+              style: TextStyle(fontSize: 13, color: AppPalette.rgb(0xFFE2E8F0)),
             ),
             children: advanced,
           )
@@ -4375,6 +4408,8 @@ class _KlineHomePageState extends State<KlineHomePage>
     final syncCfg = PeerSyncSettingsStore.loadSync();
     return [
         const SizedBox(height: 12),
+        const ThemeChooser(),
+        const SizedBox(height: SettingsPanelTheme.fieldGap),
         const SizedBox(height: SettingsPanelTheme.sectionGap),
         SettingsOutlinedButton(
           label: '复制排查信息',
@@ -4384,7 +4419,7 @@ class _KlineHomePageState extends State<KlineHomePage>
         const SizedBox(height: 4),
         Text(
           '弹窗查看整合全文，底部「复制」一键带走；含页面状态、最近历史与验收探针，已去重精简。',
-          style: TextStyle(fontSize: 11, color: Colors.grey.shade700, height: 1.3),
+          style: TextStyle(fontSize: 11, color: AppPalette.rgb(0xFF616161), height: 1.3),
         ),
         const SizedBox(height: SettingsPanelTheme.fieldGap),
         // 双机同步：把本机当前项目推到局域网另一台（那边自动关/拉 App、校验指纹）
@@ -4408,7 +4443,7 @@ class _KlineHomePageState extends State<KlineHomePage>
           ),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: TextStyle(fontSize: 11, color: Colors.grey.shade700, height: 1.3),
+          style: TextStyle(fontSize: 11, color: AppPalette.rgb(0xFF616161), height: 1.3),
         ),
         const SizedBox(height: SettingsPanelTheme.fieldGap),
         SettingsFilledButton(
@@ -4835,8 +4870,8 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
                     margin: const EdgeInsets.symmetric(horizontal: 8),
                     decoration: BoxDecoration(
                       color: _backtestSplitDragging
-                          ? const Color(0xAA42A5F5)
-                          : const Color(0x55FFFFFF),
+                          ? AppPalette.rgb(0xAA42A5F5)
+                          : AppPalette.rgb(0x55FFFFFF),
                       borderRadius: BorderRadius.circular(2),
                     ),
                   ),
@@ -4850,8 +4885,8 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
                     margin: const EdgeInsets.symmetric(vertical: 8),
                     decoration: BoxDecoration(
                       color: _backtestSplitDragging
-                          ? const Color(0xAA42A5F5)
-                          : const Color(0x55FFFFFF),
+                          ? AppPalette.rgb(0xAA42A5F5)
+                          : AppPalette.rgb(0x55FFFFFF),
                       borderRadius: BorderRadius.circular(2),
                     ),
                   ),
@@ -5000,8 +5035,8 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                condLine('买', buyText, const Color(0xFFE53935)),
-                condLine('卖', sellText, const Color(0xFF43A047)),
+                condLine('买', buyText, AppPalette.rgb(0xFFE53935)),
+                condLine('卖', sellText, AppPalette.rgb(0xFF43A047)),
               ],
             ),
           ),
@@ -5061,7 +5096,7 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
           decoration: BoxDecoration(
             border: Border(
               right: BorderSide(
-                color: const Color(0x33556677),
+                color: AppPalette.rgb(0x33556677),
                 width: 1,
               ),
             ),
@@ -5109,8 +5144,8 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
               margin: const EdgeInsets.symmetric(vertical: 8),
               decoration: BoxDecoration(
                 color: _tooltipPanelDragging
-                    ? const Color(0xAA42A5F5)
-                    : const Color(0x55FFFFFF),
+                    ? AppPalette.rgb(0xAA42A5F5)
+                    : AppPalette.rgb(0x55FFFFFF),
                 borderRadius: BorderRadius.circular(2),
               ),
             ),

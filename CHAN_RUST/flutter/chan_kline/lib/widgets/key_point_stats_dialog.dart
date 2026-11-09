@@ -17,6 +17,7 @@ import '../models/math_indicator_config.dart';
 import '../settings/key_point_stats_settings_store.dart';
 
 import 'key_point_stats_result_panel.dart';
+import 'package:chan_kline/theme/app_palette.dart';
 
 /// 计优对话框：收集关键点位 → 读冻结账 → 出统计表 → 落盘 JSON/TSV。
 ///
@@ -252,7 +253,7 @@ class _KeyPointStatsDialogState extends State<KeyPointStatsDialog> {
                           _detail,
                           style: TextStyle(
                             fontSize: 12,
-                            color: Colors.grey.shade700,
+                            color: AppPalette.rgb(0xFF616161),
                           ),
                         ),
                       const Spacer(),
@@ -423,7 +424,7 @@ Future<KeyPointStatSettings?> showKeyPointStatsSettingsSheet(
               ),
               Text(
                 '当前口径：${cfg.replayLine}',
-                style: TextStyle(fontSize: 11, color: Colors.grey.shade700),
+                style: TextStyle(fontSize: 11, color: AppPalette.rgb(0xFF616161)),
               ),
               const SizedBox(height: 8),
               Row(

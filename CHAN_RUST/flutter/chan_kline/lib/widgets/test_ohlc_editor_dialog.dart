@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/kline_bar.dart';
+import 'package:chan_kline/theme/app_palette.dart';
 
 /// 自定义 OHLC 编辑结果。
 class TestOhlcEditorResult {
@@ -286,7 +287,7 @@ class _TestOhlcEditorDialogState extends State<_TestOhlcEditorDialog> {
                 padding: const EdgeInsets.only(bottom: 8),
                 child: Text(
                   _error!,
-                  style: const TextStyle(color: Color(0xFFEF5350), fontSize: 13),
+                  style: TextStyle(color: AppPalette.rgb(0xFFEF5350), fontSize: 13),
                 ),
               ),
             Expanded(

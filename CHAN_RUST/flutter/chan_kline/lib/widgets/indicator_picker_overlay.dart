@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:chan_kline/theme/app_palette.dart';
 
 /// 分类下只有一项时，点击分类直接勾选，不再展开子列表。
 bool pickerHasUniqueChild<T>(List<T> items) => items.length == 1;
@@ -53,11 +54,11 @@ class IndicatorPickerOverlay<T> extends StatefulWidget {
 }
 
 class _IndicatorPickerOverlayState<T> extends State<IndicatorPickerOverlay<T>> {
-  static const _activeColor = Color(0xFFFFFFFF);
-  static const _inactiveColor = Color(0xFF6B7280);
-  static const _valueColor = Color(0xFF38BDF8);
-  static const _hintColor = Color(0xFF94A3B8);
-  static const _sectionColor = Color(0xFFCBD5E1);
+  static final _activeColor = AppPalette.rgb(0xFFFFFFFF);
+  static final _inactiveColor = AppPalette.rgb(0xFF6B7280);
+  static final _valueColor = AppPalette.rgb(0xFF38BDF8);
+  static final _hintColor = AppPalette.rgb(0xFF94A3B8);
+  static final _sectionColor = AppPalette.rgb(0xFFCBD5E1);
 
   late Set<int> _expandedLevels;
   late Set<String> _expandedCategories;
@@ -234,7 +235,7 @@ class _IndicatorPickerOverlayState<T> extends State<IndicatorPickerOverlay<T>> {
                 children: [
                   Text(
                     title,
-                    style: const TextStyle(
+                    style: TextStyle(
                       color: _sectionColor,
                       fontSize: 15,
                       fontWeight: FontWeight.w600,
@@ -245,7 +246,7 @@ class _IndicatorPickerOverlayState<T> extends State<IndicatorPickerOverlay<T>> {
                       padding: const EdgeInsets.only(top: 3),
                       child: Text(
                         subtitle,
-                        style: const TextStyle(
+                        style: TextStyle(
                           color: _hintColor,
                           fontSize: 12,
                         ),
@@ -311,7 +312,7 @@ class _IndicatorPickerOverlayState<T> extends State<IndicatorPickerOverlay<T>> {
 
   Widget _body() {
     if (widget.catalog.isEmpty) {
-      return const Center(
+      return Center(
         child: Text(
           '暂无可选指标',
           style: TextStyle(color: _inactiveColor, fontSize: 14),
@@ -320,7 +321,7 @@ class _IndicatorPickerOverlayState<T> extends State<IndicatorPickerOverlay<T>> {
     }
     final levels = _levels;
     if (levels.isEmpty) {
-      return const Center(
+      return Center(
         child: Text(
           '暂无可选指标',
           style: TextStyle(color: _inactiveColor, fontSize: 14),
@@ -330,11 +331,11 @@ class _IndicatorPickerOverlayState<T> extends State<IndicatorPickerOverlay<T>> {
     return ListView.separated(
       padding: const EdgeInsets.symmetric(vertical: 4),
       itemCount: levels.length,
-      separatorBuilder: (_, __) => const Divider(
+      separatorBuilder: (_, __) => Divider(
         height: 1,
         indent: 14,
         endIndent: 14,
-        color: Color(0x22FFFFFF),
+        color: AppPalette.rgb(0x22FFFFFF),
       ),
       itemBuilder: (_, i) => _levelBlock(levels[i]),
     );
@@ -357,7 +358,7 @@ class _IndicatorPickerOverlayState<T> extends State<IndicatorPickerOverlay<T>> {
         behavior: HitTestBehavior.opaque,
         onTap: widget.onClose,
         child: Container(
-          color: const Color(0x99000000),
+          color: AppPalette.rgb(0x99000000),
           alignment: Alignment.center,
           padding: EdgeInsets.fromLTRB(marginH, marginV, marginH, marginV),
           child: GestureDetector(
@@ -369,7 +370,7 @@ class _IndicatorPickerOverlayState<T> extends State<IndicatorPickerOverlay<T>> {
                 maxHeight: maxH,
               ),
               child: Material(
-                  color: const Color(0xF01A1A1A),
+                  color: AppPalette.rgb(0xF01A1A1A),
                   borderRadius: BorderRadius.circular(10),
                   child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -382,26 +383,26 @@ class _IndicatorPickerOverlayState<T> extends State<IndicatorPickerOverlay<T>> {
                             tooltip: '关闭',
                             visualDensity: VisualDensity.compact,
                             onPressed: widget.onClose,
-                            icon: const Icon(
+                            icon: Icon(
                               Icons.close,
                               size: 22,
-                              color: Color(0xFF94A3B8),
+                              color: AppPalette.rgb(0xFF94A3B8),
                             ),
                           ),
                           Expanded(
                             child: Text(
                               widget.title,
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontSize: 16,
                                 fontWeight: FontWeight.w600,
-                                color: Color(0xFFE2E8F0),
+                                color: AppPalette.rgb(0xFFE2E8F0),
                               ),
                             ),
                           ),
                         ],
                       ),
                     ),
-                    const Divider(height: 1, color: Color(0x33FFFFFF)),
+                    Divider(height: 1, color: AppPalette.rgb(0x33FFFFFF)),
                     Expanded(child: _body()),
                   ],
                 ),

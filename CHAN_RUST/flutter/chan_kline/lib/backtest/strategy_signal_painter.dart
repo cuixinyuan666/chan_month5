@@ -7,12 +7,13 @@ import '../widgets/kline_viewport.dart';
 import 'order_models.dart';
 import 'signal_event.dart';
 import 'strategy_trade_round.dart';
+import 'package:chan_kline/theme/app_palette.dart';
 
 export 'strategy_trade_round.dart' show strategySideLabel;
 
 /// 策略买卖点颜色：买=红、卖=绿，与缠论 1Ba/1Sa 标签区分。
-const Color kStrategyBuyColor = Color(0xFFEF5350);
-const Color kStrategySellColor = Color(0xFF00E676);
+final Color kStrategyBuyColor = AppPalette.rgb(0xFFEF5350);
+final Color kStrategySellColor = AppPalette.rgb(0xFF00E676);
 
 Color strategySideColor(TradeSide side) =>
     side == TradeSide.buy ? kStrategyBuyColor : kStrategySellColor;
@@ -74,7 +75,7 @@ void _paintStrategyMarkerGlyph({
   canvas.drawPath(
     path,
     Paint()
-      ..color = Colors.white
+      ..color = AppPalette.rgb(0xFFFFFFFF)
       ..style = PaintingStyle.stroke
       ..strokeWidth = hot ? 1.8 : 1.0,
   );

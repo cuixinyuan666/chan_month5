@@ -19,6 +19,7 @@ import 'trade_clock.dart';
 import 'trade_operand.dart';
 import 'trade_var_diagnose.dart';
 import 'zhongshu_object_store.dart';
+import 'package:chan_kline/theme/app_palette.dart';
 
 /// 工作台标签：一次只展示一块，避免条件和报告叠在一起。
 enum StrategyFormSection { conditions, capital, all }
@@ -337,7 +338,7 @@ class _StrategyConfigFormState extends State<StrategyConfigForm> {
             const SizedBox(height: 8),
             Text(
               compiled.reason,
-              style: const TextStyle(fontSize: 11, color: Color(0xFFFFB74D)),
+              style: TextStyle(fontSize: 11, color: AppPalette.rgb(0xFFFFB74D)),
             ),
           ],
         ],
@@ -425,7 +426,7 @@ class _StrategyConfigFormState extends State<StrategyConfigForm> {
       children: [
         Text(
           title,
-          style: const TextStyle(fontSize: 12, color: Color(0xFF94A3B8)),
+          style: TextStyle(fontSize: 12, color: AppPalette.rgb(0xFF94A3B8)),
         ),
         const SizedBox(height: 4),
         for (var i = 0; i < draft.leaves.length; i++) ...[
@@ -526,7 +527,7 @@ class _StrategyConfigFormState extends State<StrategyConfigForm> {
       margin: const EdgeInsets.only(bottom: 4),
       padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
       decoration: BoxDecoration(
-        color: const Color(0xFF1E293B),
+        color: AppPalette.rgb(0xFF1E293B),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Column(
@@ -884,24 +885,24 @@ class _StrategyConfigFormState extends State<StrategyConfigForm> {
     return Container(
       padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
       decoration: BoxDecoration(
-        color: const Color(0xFF111827),
+        color: AppPalette.rgb(0xFF111827),
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: const Color(0xFF334155)),
+        border: Border.all(color: AppPalette.rgb(0xFF334155)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
+          Text(
             '变量诊断（只读：看图上已冻住的格子和计算钟，不会现场重算条件）',
-            style: TextStyle(fontSize: 11, color: Color(0xFF94A3B8)),
+            style: TextStyle(fontSize: 11, color: AppPalette.rgb(0xFF94A3B8)),
           ),
           const SizedBox(height: 4),
           SelectableText(
             d.text,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 11,
               height: 1.35,
-              color: Color(0xFFE2E8F0),
+              color: AppPalette.rgb(0xFFE2E8F0),
               fontFamily: 'monospace',
             ),
           ),

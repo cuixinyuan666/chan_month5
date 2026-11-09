@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../settings/peer_sync_settings_store.dart';
 import '../sync/peer_sync_service.dart';
+import 'package:chan_kline/theme/app_palette.dart';
 
 /// 把对端代理返回的 data 压成一行，给日志用（别把整段 JSON 塞进 200 高的小框）。
 String _briefPeer(Object? data) {
@@ -160,10 +161,10 @@ Future<PeerSyncSettings?> showPeerSyncDialog(
                         style: const TextStyle(fontSize: 13)),
                     const SizedBox(height: 4),
                     Text('旧侧独有的 $moveN 个文件 → 移进那台的备份目录（不直接删）',
-                        style: TextStyle(fontSize: 12, color: Colors.grey.shade700)),
+                        style: TextStyle(fontSize: 12, color: AppPalette.rgb(0xFF616161))),
                     const SizedBox(height: 4),
                     Text('同步完成后自动重编那台的 DLL 与 App（cargo + flutter），并重启它的界面',
-                        style: TextStyle(fontSize: 12, color: Colors.blue.shade700)),
+                        style: TextStyle(fontSize: 12, color: AppPalette.rgb(0xFF1976D2))),
                     const SizedBox(height: 6),
                     const Text('不含：.git 历史、对端验证现场、各家的工具缓存目录。',
                         style: TextStyle(fontSize: 12)),
@@ -382,7 +383,7 @@ Future<PeerSyncSettings?> showPeerSyncDialog(
                 const Expanded(child: Text('双机同步')),
                 IconButton(
                   tooltip: '说明',
-                  icon: const Icon(Icons.help_outline, size: 20),
+                  icon: Icon(Icons.help_outline, size: 20),
                   onPressed: () => showDialog<void>(
                     context: ctx,
                     builder: (c4) => AlertDialog(
@@ -449,7 +450,7 @@ Future<PeerSyncSettings?> showPeerSyncDialog(
                     Text(
                       '本机：${PeerSyncService.selfLabel}（${PeerSyncService.hostName}）　脚本：'
                       '${PeerSyncService.scriptsReady ? '已就位' : '缺失'}',
-                      style: TextStyle(fontSize: 11, color: Colors.grey.shade700),
+                      style: TextStyle(fontSize: 11, color: AppPalette.rgb(0xFF616161)),
                     ),
                     const SizedBox(height: 10),
                     Wrap(
@@ -526,7 +527,7 @@ Future<PeerSyncSettings?> showPeerSyncDialog(
                             '$status　$lastLine',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: TextStyle(fontSize: 11, color: Colors.grey.shade700),
+                            style: TextStyle(fontSize: 11, color: AppPalette.rgb(0xFF616161)),
                           ),
                         ),
                       ],
@@ -537,19 +538,19 @@ Future<PeerSyncSettings?> showPeerSyncDialog(
                       width: double.infinity,
                       padding: const EdgeInsets.all(8),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF1B1C1F),
+                        color: AppPalette.rgb(0xFF1B1C1F),
                         borderRadius: BorderRadius.circular(6),
-                        border: Border.all(color: Colors.grey.shade600),
+                        border: Border.all(color: AppPalette.rgb(0xFF757575)),
                       ),
                       child: SingleChildScrollView(
                         controller: logScroll,
                         child: SelectableText(
                           log.isEmpty ? '（还没有输出）' : log.join('\n'),
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 11.5,
                             height: 1.45,
                             fontFamily: 'Consolas',
-                            color: Color(0xFFD7D7D7),
+                            color: AppPalette.rgb(0xFFD7D7D7),
                           ),
                         ),
                       ),
@@ -561,7 +562,7 @@ Future<PeerSyncSettings?> showPeerSyncDialog(
                         style: TextStyle(
                           fontSize: 12,
                           fontWeight: FontWeight.w600,
-                          color: resultOk ? const Color(0xFF1B7F3B) : const Color(0xFFB3261E),
+                          color: resultOk ? AppPalette.rgb(0xFF1B7F3B) : AppPalette.rgb(0xFFB3261E),
                         ),
                       ),
                     ],

@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'robot_verify_model.dart';
 import 'robot_verify_paths.dart';
 import 'robot_verify_runner.dart';
+import 'package:chan_kline/theme/app_palette.dart';
 
 /// 机器人验证 UI：全程可见进度；结束后仅简短提示，详情进剪贴板（见 agent.md）。
 class RobotVerifyApp extends StatefulWidget {
@@ -132,17 +133,17 @@ class _RobotVerifyAppState extends State<RobotVerifyApp> {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       home: Scaffold(
-        backgroundColor: const Color(0xFF121212),
+        backgroundColor: AppPalette.rgb(0xFF121212),
         body: SafeArea(
           child: Padding(
             padding: const EdgeInsets.all(28),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const Text(
+                Text(
                   '机器人验证',
                   style: TextStyle(
-                    color: Colors.white,
+                    color: AppPalette.rgb(0xFFFFFFFF),
                     fontSize: 22,
                     fontWeight: FontWeight.w600,
                   ),
@@ -160,7 +161,7 @@ class _RobotVerifyAppState extends State<RobotVerifyApp> {
                     value: _fraction,
                     minHeight: 6,
                     backgroundColor: Colors.white12,
-                    color: Colors.tealAccent,
+                    color: AppPalette.rgb(0xFF64FFDA),
                   ),
                   const SizedBox(height: 16),
                   Text(
@@ -182,9 +183,9 @@ class _RobotVerifyAppState extends State<RobotVerifyApp> {
                                     ? Icons.radio_button_checked
                                     : Icons.radio_button_off,
                             color: done
-                                ? Colors.greenAccent
+                                ? AppPalette.rgb(0xFF69F0AE)
                                 : active
-                                    ? Colors.tealAccent
+                                    ? AppPalette.rgb(0xFF64FFDA)
                                     : Colors.white24,
                             size: 20,
                           ),
@@ -194,7 +195,7 @@ class _RobotVerifyAppState extends State<RobotVerifyApp> {
                               _steps[i],
                               style: TextStyle(
                                 color: done || active
-                                    ? Colors.white
+                                    ? AppPalette.rgb(0xFFFFFFFF)
                                     : Colors.white38,
                                 fontSize: 13,
                               ),
@@ -208,15 +209,15 @@ class _RobotVerifyAppState extends State<RobotVerifyApp> {
                   Icon(
                     _passed == true ? Icons.verified : Icons.warning_amber,
                     color: _passed == true
-                        ? Colors.greenAccent
-                        : Colors.orangeAccent,
+                        ? AppPalette.rgb(0xFF69F0AE)
+                        : AppPalette.rgb(0xFFFFAB40),
                     size: 56,
                   ),
                   const SizedBox(height: 16),
                   Text(
                     '验证已完成',
-                    style: const TextStyle(
-                      color: Colors.white,
+                    style: TextStyle(
+                      color: AppPalette.rgb(0xFFFFFFFF),
                       fontSize: 20,
                       fontWeight: FontWeight.w600,
                     ),

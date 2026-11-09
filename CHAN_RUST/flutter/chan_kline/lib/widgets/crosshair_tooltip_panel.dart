@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/bar_feature_lookup.dart';
+import 'package:chan_kline/theme/app_palette.dart';
 
 /// 十字线 tooltip：两列对齐 + 半透明底 + 可滚轮下翻。
 class CrosshairTooltipPanel extends StatelessWidget {
@@ -20,22 +21,22 @@ class CrosshairTooltipPanel extends StatelessWidget {
   /// 关闭 tooltip，保留十字线
   final VoidCallback? onClose;
 
-  static const _labelStyle = TextStyle(
-    color: Color(0xFFE2E8F0),
+  static final _labelStyle = TextStyle(
+    color: AppPalette.rgb(0xFFE2E8F0),
     fontSize: 11,
     fontWeight: FontWeight.w600,
     fontFamily: 'Consolas',
     height: 1.35,
   );
-  static const _valueStyle = TextStyle(
-    color: Color(0xFFE2E8F0),
+  static final _valueStyle = TextStyle(
+    color: AppPalette.rgb(0xFFE2E8F0),
     fontSize: 11,
     fontWeight: FontWeight.w500,
     fontFamily: 'Consolas',
     height: 1.35,
   );
-  static const _sepStyle = TextStyle(
-    color: Color(0x99E2E8F0),
+  static final _sepStyle = TextStyle(
+    color: AppPalette.rgb(0x99E2E8F0),
     fontSize: 10,
     fontFamily: 'Consolas',
     height: 1.1,
@@ -47,14 +48,14 @@ class CrosshairTooltipPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: Colors.transparent,
+      color: AppPalette.rgb(0x00000000),
       elevation: 4,
       child: Container(
         constraints: BoxConstraints(maxWidth: maxWidth, maxHeight: maxHeight),
         decoration: BoxDecoration(
           // 深色实底（近不透明）：与图表价签同调，浅色字对比强、不再黑白混色
-          color: const Color(0xEE121212),
-          border: Border.all(color: const Color(0x55E2E8F0), width: 1),
+          color: AppPalette.rgb(0xEE121212),
+          border: Border.all(color: AppPalette.rgb(0x55E2E8F0), width: 1),
           borderRadius: BorderRadius.circular(2),
         ),
         child: Column(
@@ -65,13 +66,13 @@ class CrosshairTooltipPanel extends StatelessWidget {
               height: 28,
               child: Row(
                 children: [
-                  const Expanded(
+                  Expanded(
                     child: Padding(
                       padding: EdgeInsets.only(left: 8),
                       child: Text(
                         '十字信息',
                         style: TextStyle(
-                          color: Color(0xFF94A3B8),
+                          color: AppPalette.rgb(0xFF94A3B8),
                           fontSize: 10,
                           fontWeight: FontWeight.w600,
                         ),
@@ -88,15 +89,15 @@ class CrosshairTooltipPanel extends StatelessWidget {
                       ),
                       iconSize: 16,
                       onPressed: onClose,
-                      icon: const Icon(
+                      icon: Icon(
                         Icons.close,
-                        color: Color(0xFFE2E8F0),
+                        color: AppPalette.rgb(0xFFE2E8F0),
                       ),
                     ),
                 ],
               ),
             ),
-            const Divider(height: 1, color: Color(0x33FFFFFF)),
+            Divider(height: 1, color: AppPalette.rgb(0x33FFFFFF)),
             ConstrainedBox(
               constraints: BoxConstraints(
                 maxHeight: maxHeight > 40 ? maxHeight - 32 : maxHeight,

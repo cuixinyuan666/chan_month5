@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 
 import '../settings/telegram_settings_store.dart';
 import 'settings_panel_widgets.dart';
+import 'package:chan_kline/theme/app_palette.dart';
 
 /// 局域网默认共享进度目录：PCA 本机优先走本地盘，别的机器走共享。
 const String kTicksShareDirLocal = r'D:\chan_ticks_share\live';
@@ -563,7 +564,7 @@ class _TicksFullUploadPanelState extends State<TicksFullUploadPanel> {
   }
 
   Color _noteColor(String note) {
-    if (note.startsWith('正在')) return const Color(0xFF93C5FD);
+    if (note.startsWith('正在')) return AppPalette.rgb(0xFF93C5FD);
     if (note.contains('失败') ||
         note.contains('请先') ||
         note.contains('找不到') ||
@@ -571,9 +572,9 @@ class _TicksFullUploadPanelState extends State<TicksFullUploadPanel> {
         note.contains('没有找到') ||
         note.contains('没有留住') ||
         note.contains('超时')) {
-      return const Color(0xFFFCA5A5);
+      return AppPalette.rgb(0xFFFCA5A5);
     }
-    return const Color(0xFF86EFAC);
+    return AppPalette.rgb(0xFF86EFAC);
   }
 
   void _onCreatePressed() {
@@ -704,16 +705,16 @@ class _TicksFullUploadPanelState extends State<TicksFullUploadPanel> {
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
       decoration: BoxDecoration(
-        color: const Color(0xFF0B1220),
+        color: AppPalette.rgb(0xFF0B1220),
         borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: const Color(0xFF1E293B)),
+        border: Border.all(color: AppPalette.rgb(0xFF1E293B)),
       ),
       child: SelectableText(
         lines.join('\n'),
-        style: const TextStyle(
+        style: TextStyle(
           fontSize: 12,
           height: 1.45,
-          color: Color(0xFFCBD5E1),
+          color: AppPalette.rgb(0xFFCBD5E1),
           fontFamily: 'Consolas',
         ),
       ),
@@ -737,7 +738,7 @@ class _TicksFullUploadPanelState extends State<TicksFullUploadPanel> {
     return showDialog<void>(
       context: context,
       builder: (ctx) => Dialog(
-        backgroundColor: const Color(0xFF0F172A),
+        backgroundColor: AppPalette.rgb(0xFF0F172A),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 640, maxHeight: 640),
@@ -749,13 +750,13 @@ class _TicksFullUploadPanelState extends State<TicksFullUploadPanel> {
               children: [
                 Row(
                   children: [
-                    const Expanded(
+                    Expanded(
                       child: Text(
                         '全市场分笔上传 · 进度',
                         style: TextStyle(
                           fontSize: 15,
                           fontWeight: FontWeight.w600,
-                          color: Color(0xFFE2E8F0),
+                          color: AppPalette.rgb(0xFFE2E8F0),
                         ),
                       ),
                     ),
@@ -777,13 +778,13 @@ class _TicksFullUploadPanelState extends State<TicksFullUploadPanel> {
                     child: ValueListenableBuilder<TicksUploadSnapshot?>(
                       valueListenable: _snapVN,
                       builder: (c, snap, _) => snap == null
-                          ? const Padding(
+                          ? Padding(
                               padding: EdgeInsets.all(8),
                               child: Text(
                                 '进度读取中…',
                                 style: TextStyle(
                                   fontSize: 12,
-                                  color: Color(0xFFCBD5E1),
+                                  color: AppPalette.rgb(0xFFCBD5E1),
                                 ),
                               ),
                             )
@@ -794,12 +795,12 @@ class _TicksFullUploadPanelState extends State<TicksFullUploadPanel> {
                 const SizedBox(height: 6),
                 Row(
                   children: [
-                    const Expanded(
+                    Expanded(
                       child: Text(
                         '每 5 秒自动刷新 · 两台机器共用同一个共享进度目录',
                         style: TextStyle(
                           fontSize: 11,
-                          color: Color(0xFF94A3B8),
+                          color: AppPalette.rgb(0xFF94A3B8),
                         ),
                       ),
                     ),
@@ -861,7 +862,7 @@ class _TicksFullUploadPanelState extends State<TicksFullUploadPanel> {
             padding: const EdgeInsets.only(top: 4),
             child: Text(
               '留空会用默认：$kTicksShareDirUnc',
-              style: const TextStyle(fontSize: 11, color: Color(0xFF94A3B8)),
+              style: TextStyle(fontSize: 11, color: AppPalette.rgb(0xFF94A3B8)),
             ),
           ),
         const SizedBox(height: 8),
@@ -874,7 +875,7 @@ class _TicksFullUploadPanelState extends State<TicksFullUploadPanel> {
           const SizedBox(height: 8),
           DecoratedBox(
             decoration: BoxDecoration(
-              color: const Color(0xFF0F172A),
+              color: AppPalette.rgb(0xFF0F172A),
               borderRadius: BorderRadius.circular(6),
               border: Border.all(color: _noteColor(_actionNote)),
             ),

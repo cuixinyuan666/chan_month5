@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../chart/level_window_layout.dart';
+import 'package:chan_kline/theme/app_palette.dart';
 
 /// 用户确认后的分窗配置。
 class LevelWindowConfig {
@@ -191,23 +192,23 @@ class _LevelWindowSettingsDialogState extends State<LevelWindowSettingsDialog> {
                     ),
                   ],
                 ),
-                const SizedBox(height: 6),
+                SizedBox(height: 6),
               ],
               if (_hint != null) ...[
                 const SizedBox(height: 4),
                 Text(
                   _hint!,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 11,
                     height: 1.5,
-                    color: Color(0xFFFFB74D),
+                    color: AppPalette.rgb(0xFFFFB74D),
                   ),
                 ),
               ],
               const SizedBox(height: 4),
-              const Text(
+              Text(
                 '同一层级只能占用一个窗口；必须包含 K0。',
-                style: TextStyle(fontSize: 11, color: Color(0xFF9E9E9E)),
+                style: TextStyle(fontSize: 11, color: AppPalette.rgb(0xFF9E9E9E)),
               ),
             ],
           ),

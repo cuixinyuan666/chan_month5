@@ -10,6 +10,7 @@ import '../indicator_search/search_core.dart';
 import '../indicator_search/search_env.dart';
 import '../indicator_search/search_result_columns.dart';
 import '../indicator_search/search_verdict_views.dart';
+import 'package:chan_kline/theme/app_palette.dart';
 
 /// 把两个 ScrollController 的偏移互相同步（冻结列 / 主体共用一份纵向滚动）。
 class _SyncedScroll {
@@ -245,14 +246,14 @@ double get _bodyW =>
                   padding: const EdgeInsets.only(top: 2),
                   child: Text(
                     widget.align!.replayParamLine,
-                    style: TextStyle(fontSize: 10, color: Colors.grey.shade700),
+                    style: TextStyle(fontSize: 10, color: AppPalette.rgb(0xFF616161)),
                   ),
                 ),
               Padding(
                 padding: const EdgeInsets.only(top: 2),
                 child: Text(
                   '完整 TSV：${widget.resultsFilePath}',
-                  style: TextStyle(fontSize: 10, color: Colors.grey.shade600),
+                  style: TextStyle(fontSize: 10, color: AppPalette.rgb(0xFF757575)),
                 ),
               ),
               if (widget.buildSummary != null)
@@ -260,7 +261,7 @@ double get _bodyW =>
                   padding: const EdgeInsets.only(top: 2),
                   child: Text(
                     widget.buildSummary!.toDisplayLine(),
-                    style: TextStyle(fontSize: 10, color: Colors.grey.shade700),
+                    style: TextStyle(fontSize: 10, color: AppPalette.rgb(0xFF616161)),
                   ),
                 ),
               Padding(
@@ -274,7 +275,7 @@ double get _bodyW =>
                     '（制表符分列：候选名/买条件/卖条件 + 全部数值列）\n'
                     '与落盘 TSV 由同一份列注册表生成，列数列序必然一致（悬停看列序）',
                     style:
-                        TextStyle(fontSize: 10, color: Colors.grey.shade600),
+                        TextStyle(fontSize: 10, color: AppPalette.rgb(0xFF757575)),
                   ),
                 ),
               ),
@@ -365,7 +366,7 @@ double get _bodyW =>
                 child: Icon(
                   Icons.visibility,
                   size: 14,
-                  color: Colors.grey.shade600,
+                  color: AppPalette.rgb(0xFF757575),
                 ),
               ),
             ),
@@ -393,7 +394,7 @@ double get _bodyW =>
     final badge = priority >= 0 ? _badge(priority) : '';
     return Tooltip(
       message: tooltip ?? label,
-      waitDuration: const Duration(milliseconds: 300),
+      waitDuration: Duration(milliseconds: 300),
       child: InkWell(
         onTap: () => _onSort(col),
         onLongPress: active ? () => _onRemove(col) : null,
@@ -403,7 +404,7 @@ double get _bodyW =>
             style: TextStyle(
               fontSize: 11,
               fontWeight: FontWeight.w600,
-              color: active ? Colors.blue.shade700 : null,
+              color: active ? AppPalette.rgb(0xFF1976D2) : null,
             ),
             textAlign: TextAlign.center,
             overflow: TextOverflow.ellipsis,
@@ -434,8 +435,8 @@ double get _bodyW =>
                         Icons.visibility,
                         size: 18,
                         color: _eyeEnabled(v)
-                            ? Colors.blue.shade600
-                            : Colors.grey.shade400,
+                            ? AppPalette.rgb(0xFF1E88E5)
+                            : AppPalette.rgb(0xFFBDBDBD),
                       ),
                       tooltip: _eyeTooltip(v),
                       onPressed: _eyeEnabled(v)
@@ -625,7 +626,7 @@ double get _bodyW =>
       width: double.infinity,
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surfaceContainerLow,
-        border: Border.all(color: Colors.grey.shade300),
+        border: Border.all(color: AppPalette.rgb(0xFFE0E0E0)),
       ),
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
       child: Row(

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:chan_kline/theme/app_palette.dart';
 
 /// Android 设置：全宽底部抽屉（替代桌面侧边面板）。
 Future<void> showAndroidSettingsSheet({
@@ -10,7 +11,7 @@ Future<void> showAndroidSettingsSheet({
   return showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
-    backgroundColor: const Color(0xFF1A1A1A),
+    backgroundColor: AppPalette.rgb(0xFF1A1A1A),
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(12)),
     ),
@@ -29,24 +30,24 @@ Future<void> showAndroidSettingsSheet({
                     child: Row(
                       children: [
                         const SizedBox(width: 12),
-                        const Expanded(
+                        Expanded(
                           child: Text(
                             '加载与显示设置',
                             style: TextStyle(
                               fontSize: 15,
                               fontWeight: FontWeight.w600,
-                              color: Color(0xFFE2E8F0),
+                              color: AppPalette.rgb(0xFFE2E8F0),
                             ),
                           ),
                         ),
                         IconButton(
                           onPressed: () => Navigator.pop(sheetCtx),
-                          icon: const Icon(Icons.close, color: Color(0xFF94A3B8)),
+                          icon: Icon(Icons.close, color: AppPalette.rgb(0xFF94A3B8)),
                         ),
                       ],
                     ),
                   ),
-                  const Divider(height: 1, color: Color(0x33FFFFFF)),
+                  Divider(height: 1, color: AppPalette.rgb(0x33FFFFFF)),
                   Expanded(
                     child: SingleChildScrollView(
                       padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
@@ -72,7 +73,7 @@ Future<void> showAndroidStockPicker({
 }) {
   return showModalBottomSheet<void>(
     context: context,
-    backgroundColor: const Color(0xFF1A1A1A),
+    backgroundColor: AppPalette.rgb(0xFF1A1A1A),
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(12)),
     ),
@@ -81,14 +82,14 @@ Future<void> showAndroidStockPicker({
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Padding(
+            Padding(
               padding: EdgeInsets.all(12),
               child: Text(
                 '选择股票',
                 style: TextStyle(
                   fontSize: 15,
                   fontWeight: FontWeight.w600,
-                  color: Color(0xFFE2E8F0),
+                  color: AppPalette.rgb(0xFFE2E8F0),
                 ),
               ),
             ),
@@ -104,12 +105,12 @@ Future<void> showAndroidStockPicker({
                     title: Text(
                       c,
                       style: TextStyle(
-                        color: sel ? const Color(0xFF42A5F5) : const Color(0xFFE2E8F0),
+                        color: sel ? AppPalette.rgb(0xFF42A5F5) : AppPalette.rgb(0xFFE2E8F0),
                         fontWeight: sel ? FontWeight.w600 : FontWeight.normal,
                       ),
                     ),
                     trailing: sel
-                        ? const Icon(Icons.check, color: Color(0xFF42A5F5), size: 20)
+                        ? Icon(Icons.check, color: AppPalette.rgb(0xFF42A5F5), size: 20)
                         : null,
                     onTap: () {
                       Navigator.pop(ctx);

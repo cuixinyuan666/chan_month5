@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../key_point_stats/key_point_stat_diagnostics.dart';
 import '../key_point_stats/key_point_stat_runner.dart';
 import '../key_point_stats/stat_metrics.dart';
+import 'package:chan_kline/theme/app_palette.dart';
 
 enum KeyPointStatSort {
   /// 顶底差异度（默认）：把「哪些指标在转折顶上最高、底下最低」放到第一屏。
@@ -143,7 +144,7 @@ class _KeyPointStatsResultPanelState extends State<KeyPointStatsResultPanel> {
                         '关键点位 ${r.collect.keyPoints.length} 个 · '
                         '统计分组 ${r.groups.length} 张 · 每张 ${r.metricCount} 项指标 · '
                         '耗时 ${r.elapsed.inMilliseconds}ms',
-                        style: TextStyle(fontSize: 11, color: Colors.grey.shade700),
+                        style: TextStyle(fontSize: 11, color: AppPalette.rgb(0xFF616161)),
                       ),
                       if (r.comboContrasts.isNotEmpty) ...[
                         const SizedBox(height: 6),
@@ -152,7 +153,7 @@ class _KeyPointStatsResultPanelState extends State<KeyPointStatsResultPanel> {
                           style: TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.w600,
-                            color: Colors.grey.shade800,
+                            color: AppPalette.rgb(0xFF424242),
                           ),
                         ),
                         for (final c in r.comboContrasts.take(5))
@@ -166,20 +167,20 @@ class _KeyPointStatsResultPanelState extends State<KeyPointStatsResultPanel> {
                           '与上表全样本统计可能不同。',
                           style: TextStyle(
                             fontSize: 10,
-                            color: Colors.grey.shade600,
+                            color: AppPalette.rgb(0xFF757575),
                           ),
                         ),
                       ],
                       Text(
                         'JSON：${widget.jsonPath}\nTSV：${widget.tsvPath}',
-                        style: TextStyle(fontSize: 10, color: Colors.grey.shade600),
+                        style: TextStyle(fontSize: 10, color: AppPalette.rgb(0xFF757575)),
                       ),
                       if (r.collect.skippedUnconfirmed > 0 ||
                           r.collect.skippedNoPole > 0)
                         Text(
                           '已排除：进行中未确认 ${r.collect.skippedUnconfirmed} · '
                           '找不到极值 ${r.collect.skippedNoPole}',
-                          style: TextStyle(fontSize: 10, color: Colors.grey.shade600),
+                          style: TextStyle(fontSize: 10, color: AppPalette.rgb(0xFF757575)),
                         ),
                       if (_diag.toDisplayLine() != null) ...[
                         const SizedBox(height: 4),
@@ -189,8 +190,8 @@ class _KeyPointStatsResultPanelState extends State<KeyPointStatsResultPanel> {
                             fontSize: 10,
                             height: 1.3,
                             color: _diag.hasRisk
-                                ? Colors.brown.shade800
-                                : Colors.grey.shade700,
+                                ? AppPalette.rgb(0xFF4E342E)
+                                : AppPalette.rgb(0xFF616161),
                             fontWeight: _diag.hasRisk
                                 ? FontWeight.w600
                                 : FontWeight.normal,
@@ -292,7 +293,7 @@ static const List<int> _flexes = [4, 1, 1, 2, 2, 2, 2, 2, 2];
           style: TextStyle(
             fontSize: 11,
             fontWeight: FontWeight.w600,
-            color: active ? Colors.blue.shade700 : null,
+            color: active ? AppPalette.rgb(0xFF1976D2) : null,
           ),
           textAlign: index == 0 ? TextAlign.left : TextAlign.right,
         ),
@@ -305,7 +306,7 @@ static const List<int> _flexes = [4, 1, 1, 2, 2, 2, 2, 2, 2];
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6),
       decoration: BoxDecoration(
-        border: Border(bottom: BorderSide(color: Colors.grey.shade400)),
+        border: Border(bottom: BorderSide(color: AppPalette.rgb(0xFFBDBDBD))),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
@@ -334,7 +335,7 @@ static const List<int> _flexes = [4, 1, 1, 2, 2, 2, 2, 2, 2];
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
       decoration: BoxDecoration(
-        border: Border(bottom: BorderSide(color: Colors.grey.shade200)),
+        border: Border(bottom: BorderSide(color: AppPalette.rgb(0xFFEEEEEE))),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
@@ -343,7 +344,7 @@ static const List<int> _flexes = [4, 1, 1, 2, 2, 2, 2, 2, 2];
             flex: _flexes[0],
             child: Text(
               '${s.labelCn}  ·  ${isNum ? '' : '类别 '}${s.metricKey}',
-              style: nameStyle.copyWith(color: Colors.grey.shade700),
+              style: nameStyle.copyWith(color: AppPalette.rgb(0xFF616161)),
             ),
           ),
           Expanded(

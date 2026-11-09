@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../compute/chart_view_compute.dart';
 import '../models/fractal_judgment_event.dart';
 import '../models/k1_bar.dart';
+import 'package:chan_kline/theme/app_palette.dart';
 
 /// 消息历史（对齐 a_replay_trainer 的 appendMsgHistory / 一键复制）。
 /// 常驻功能：放在 lib/history/，合并到 main / 清理 UI 时不得删除。
@@ -1822,7 +1823,7 @@ class MsgHistory {
     return showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
-      backgroundColor: const Color(0xFF1E1E1E),
+      backgroundColor: AppPalette.rgb(0xFF1E1E1E),
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(12)),
       ),

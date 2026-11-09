@@ -4,6 +4,7 @@ import '../compute/step_rhythm_compute.dart';
 import '../models/chart_indicator.dart';
 import '../models/math_indicator_config.dart';
 import 'chart_level_line_style.dart';
+import 'package:chan_kline/theme/app_palette.dart';
 
 /// 指标图例：一条线一行（色块 + 名称），一个指标一段。
 ///
@@ -104,43 +105,43 @@ class IndicatorLinePalette {
   static Color bandLower(Color mid) => bandSide(mid, alpha: 0.45);
 
   /// MACD DIF / DEA / KDJ K·D。
-  static const macdDif = Color(0xFF2563EB);
-  static const macdDea = Color(0xFFF59E0B);
-  static const kdjK = Color(0xFF2563EB);
-  static const kdjD = Color(0xFFF59E0B);
-  static const kdjJ = Color(0xFF9333EA);
+  static final macdDif = AppPalette.rgb(0xFF2563EB);
+  static final macdDea = AppPalette.rgb(0xFFF59E0B);
+  static final kdjK = AppPalette.rgb(0xFF2563EB);
+  static final kdjD = AppPalette.rgb(0xFFF59E0B);
+  static final kdjJ = AppPalette.rgb(0xFF9333EA);
 
   /// MACD 柱 / 背驰 ±1 柱：正红负绿。
-  static const histUp = Color(0xCCDC2626);
-  static const histDown = Color(0xCC16A34A);
+  static final histUp = AppPalette.rgb(0xCCDC2626);
+  static final histDown = AppPalette.rgb(0xCC16A34A);
 
   /// 副图零轴 / 参考虚线。
-  static const axisRef = Color(0x6694A3B8);
+  static final axisRef = AppPalette.rgb(0x6694A3B8);
 
   /// 步进节奏：升组暖色（同 roundRef 共用一色）。
-  static const rhythmWarm = <Color>[
-    Color(0xFFE11D48), // 玫红
-    Color(0xFFF59E0B), // 琥珀
-    Color(0xFFF97316), // 橙
-    Color(0xFFEF4444), // 红
-    Color(0xFFD97706), // 深琥珀
-    Color(0xFFFB7185), // 浅玫
-    Color(0xFFEA580C), // 深橙
-    Color(0xFFB45309), // 棕橙
-    Color(0xFFF43F5E), // 玫
+  static final rhythmWarm = <Color>[
+    AppPalette.rgb(0xFFE11D48), // 玫红
+    AppPalette.rgb(0xFFF59E0B), // 琥珀
+    AppPalette.rgb(0xFFF97316), // 橙
+    AppPalette.rgb(0xFFEF4444), // 红
+    AppPalette.rgb(0xFFD97706), // 深琥珀
+    AppPalette.rgb(0xFFFB7185), // 浅玫
+    AppPalette.rgb(0xFFEA580C), // 深橙
+    AppPalette.rgb(0xFFB45309), // 棕橙
+    AppPalette.rgb(0xFFF43F5E), // 玫
   ];
 
   /// 步进节奏：降组冷色。
-  static const rhythmCool = <Color>[
-    Color(0xFF2563EB), // 蓝
-    Color(0xFF0EA5E9), // 天蓝
-    Color(0xFF14B8A6), // 青
-    Color(0xFF6366F1), // 靛
-    Color(0xFF06B6D4), // 青蓝
-    Color(0xFF3B82F6), // 亮蓝
-    Color(0xFF8B5CF6), // 紫（偏冷）
-    Color(0xFF0284C7), // 深蓝
-    Color(0xFF0D9488), // 深青
+  static final rhythmCool = <Color>[
+    AppPalette.rgb(0xFF2563EB), // 蓝
+    AppPalette.rgb(0xFF0EA5E9), // 天蓝
+    AppPalette.rgb(0xFF14B8A6), // 青
+    AppPalette.rgb(0xFF6366F1), // 靛
+    AppPalette.rgb(0xFF06B6D4), // 青蓝
+    AppPalette.rgb(0xFF3B82F6), // 亮蓝
+    AppPalette.rgb(0xFF8B5CF6), // 紫（偏冷）
+    AppPalette.rgb(0xFF0284C7), // 深蓝
+    AppPalette.rgb(0xFF0D9488), // 深青
   ];
 
   /// 节奏点取色（升暖降冷，按 roundRef 上色）。
@@ -277,7 +278,7 @@ List<IndicatorLegendGroup> buildIndicatorLegends({
         out.add(IndicatorLegendGroup(
             '${s.label}(${mathConfig.macdFast}/${mathConfig.macdSlow}/'
             '${mathConfig.macdSignal})',
-            const [
+            [
               LegendLine('DIF', color: IndicatorLinePalette.macdDif),
               LegendLine('DEA', color: IndicatorLinePalette.macdDea),
               LegendLine(
@@ -290,7 +291,7 @@ List<IndicatorLegendGroup> buildIndicatorLegends({
       case SubIndicatorKind.kdj:
         out.add(IndicatorLegendGroup(
             '${s.label}(${mathConfig.kdjPeriod})',
-            const [
+            [
               LegendLine('K', color: IndicatorLinePalette.kdjK),
               LegendLine('D', color: IndicatorLinePalette.kdjD),
               LegendLine('J', color: IndicatorLinePalette.kdjJ),

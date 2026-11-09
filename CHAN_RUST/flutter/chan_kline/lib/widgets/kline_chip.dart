@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../models/chip_config.dart';
+import 'package:chan_kline/theme/app_palette.dart';
 
 /// Rust/Dart 共用的筹码分桶结果。
 class ChipProfileData {
@@ -100,9 +101,9 @@ abstract final class ChipProfilePainter {
     final gamma = 1.0 / (1.0 + stretch * 0.08);
     final maxT = profile.maxTotal;
 
-    final sPaint = Paint()..color = config.sColor;
-    final bPaint = Paint()..color = config.bColor;
-    final wPaint = Paint()..color = config.wColor;
+    final sPaint = Paint()..color = config.sColorResolved;
+    final bPaint = Paint()..color = config.bColorResolved;
+    final wPaint = Paint()..color = config.wColorResolved;
 
     for (var i = 0; i < profile.prices.length; i++) {
       final price = profile.prices[i];
@@ -168,7 +169,7 @@ abstract final class ChipProfilePainter {
       Offset(edgeX, plotTop),
       Offset(edgeX, plotBottom),
       Paint()
-        ..color = const Color(0x33FFFFFF)
+        ..color = AppPalette.rgb(0x33FFFFFF)
         ..strokeWidth = 0.8,
     );
 
@@ -231,8 +232,8 @@ abstract final class ChipProfilePainter {
       final tp = TextPainter(
         text: TextSpan(
           text: 'K$highlightKn',
-          style: const TextStyle(
-            color: Color(0xAAE5E7EB),
+          style: TextStyle(
+            color: AppPalette.rgb(0xAAE5E7EB),
             fontSize: 12,
             fontWeight: FontWeight.w600,
           ),
@@ -278,7 +279,7 @@ abstract final class ChipProfilePainter {
     final sumS = sumOf(profile.s);
     final sumW = sumOf(profile.w);
     final full = 'B:${fmt(sumB)}, S:${fmt(sumS)}, 灰度:${fmt(sumW)}';
-    final style = const TextStyle(color: Color(0x99FFFFFF), fontSize: 12);
+    final style = TextStyle(color: AppPalette.rgb(0x99FFFFFF), fontSize: 12);
     final avail = math.max(10.0, chipRight - chipLeft - 6);
     final xRight = chipRight - 3;
     var y = plotTop + 3;
@@ -307,23 +308,23 @@ abstract final class ChipProfilePainter {
 
     if (hoverBar == null) return;
     // 悬停单根：分色高亮，区别于累计角标
-    final dim = const TextStyle(color: Color(0x66FFFFFF), fontSize: 12);
+    final dim = TextStyle(color: AppPalette.rgb(0x66FFFFFF), fontSize: 12);
     final valStyle = const TextStyle(fontSize: 12, fontWeight: FontWeight.w700);
     final hSpan = TextSpan(children: [
       TextSpan(text: '当前 ', style: dim),
       TextSpan(
         text: 'B:${fmt(hoverBar.b)}',
-        style: valStyle.copyWith(color: config.bColor),
+        style: valStyle.copyWith(color: config.bColorResolved),
       ),
       TextSpan(text: ' ', style: dim),
       TextSpan(
         text: 'S:${fmt(hoverBar.s)}',
-        style: valStyle.copyWith(color: config.sColor),
+        style: valStyle.copyWith(color: config.sColorResolved),
       ),
       TextSpan(text: ' ', style: dim),
       TextSpan(
         text: '灰:${fmt(hoverBar.w)}',
-        style: valStyle.copyWith(color: config.wColor),
+        style: valStyle.copyWith(color: config.wColorResolved),
       ),
     ]);
     final ht = TextPainter(text: hSpan, textDirection: TextDirection.ltr)
@@ -363,30 +364,30 @@ abstract final class ChipProfilePainter {
 
   /// 峰延长线按档配色：外侧 ±n 取绝对值同色（+1 与 -1 同色、+2 与 -2 同色…）；
   /// 框内 INn 另给一组中性色，便于与对称档区分。
-  static const List<Color> _outerRingPalette = <Color>[
-    Color(0xFF22D3EE), // 1 青
-    Color(0xFF34D399), // 2 翠绿
-    Color(0xFFFBBF24), // 3 琥珀
-    Color(0xFFFB923C), // 4 橙
-    Color(0xFFF472B6), // 5 粉
-    Color(0xFFA78BFA), // 6 紫
-    Color(0xFF38BDF8), // 7 天蓝
+  static final List<Color> _outerRingPalette = <Color>[
+    AppPalette.rgb(0xFF22D3EE), // 1 青
+    AppPalette.rgb(0xFF34D399), // 2 翠绿
+    AppPalette.rgb(0xFFFBBF24), // 3 琥珀
+    AppPalette.rgb(0xFFFB923C), // 4 橙
+    AppPalette.rgb(0xFFF472B6), // 5 粉
+    AppPalette.rgb(0xFFA78BFA), // 6 紫
+    AppPalette.rgb(0xFF38BDF8), // 7 天蓝
   ];
-  static const List<Color> _inBoxPalette = <Color>[
-    Color(0xFFCBD5E1), // IN1 浅岩灰
-    Color(0xFF94A3B8), // IN2 岩灰
-    Color(0xFF64748B), // IN3 深岩灰
+  static final List<Color> _inBoxPalette = <Color>[
+    AppPalette.rgb(0xFFCBD5E1), // IN1 浅岩灰
+    AppPalette.rgb(0xFF94A3B8), // IN2 岩灰
+    AppPalette.rgb(0xFF64748B), // IN3 深岩灰
   ];
   /// 纯量级筹码峰（PURE1..PUREn）配色：暖色系按量降序，避免与 ±档/框内混淆。
-  static const List<Color> _purePalette = <Color>[
-    Color(0xFFEF4444), // 1 红
-    Color(0xFFF97316), // 2 橙
-    Color(0xFFEAB308), // 3 黄
-    Color(0xFF84CC16), // 4 黄绿
-    Color(0xFF14B8A6), // 5 青绿
-    Color(0xFF3B82F6), // 6 蓝
-    Color(0xFF8B5CF6), // 7 紫
-    Color(0xFFEC4899), // 8 玫红
+  static final List<Color> _purePalette = <Color>[
+    AppPalette.rgb(0xFFEF4444), // 1 红
+    AppPalette.rgb(0xFFF97316), // 2 橙
+    AppPalette.rgb(0xFFEAB308), // 3 黄
+    AppPalette.rgb(0xFF84CC16), // 4 黄绿
+    AppPalette.rgb(0xFF14B8A6), // 5 青绿
+    AppPalette.rgb(0xFF3B82F6), // 6 蓝
+    AppPalette.rgb(0xFF8B5CF6), // 7 紫
+    AppPalette.rgb(0xFFEC4899), // 8 玫红
   ];
 
   /// 由峰后缀（-1/+2/IN3/PURE3）解析配色。

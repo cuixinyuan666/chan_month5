@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'peak_rank_config.dart';
+import 'package:chan_kline/theme/app_palette.dart';
 
 /// 筹码/笔数峰延长线线型：solid 全实线 / dashed 全虚线 / bySign 按符号（+虚 −实 IN实）。
 enum PeakLineMode {
@@ -35,9 +36,9 @@ class ChipConfig {
     this.maxInBoxRank = 3,
     this.chipPeakPureRank = 7,
     this.paneWidth = 88,
-    this.sColor = const Color(0xC722C55E),
-    this.bColor = const Color(0xC7DC2626),
-    this.wColor = const Color(0xC79CA3AF),
+    this.sColor,
+    this.bColor,
+    this.wColor,
     this.peakLineEnabled = false,
     this.peakLineWidth = 1.2,
     this.peakLineMode = PeakLineMode.bySign,
@@ -88,10 +89,15 @@ class ChipConfig {
         maxInBoxRank: maxInBoxRank,
         maxPureRank: chipPeakPureRank,
       );
-  final Color sColor;
-  final Color bColor;
+  /// 显式配色；null = 跟随当前主题（切浅色/护眼时筹码柱一起变）。
+  final Color? sColor;
+  final Color? bColor;
   /// 灰度（无方向分笔）柱色
-  final Color wColor;
+  final Color? wColor;
+
+  Color get sColorResolved => sColor ?? AppPalette.rgb(0xC722C55E);
+  Color get bColorResolved => bColor ?? AppPalette.rgb(0xC7DC2626);
+  Color get wColorResolved => wColor ?? AppPalette.rgb(0xC79CA3AF);
   final bool peakLineEnabled;
   final double peakLineWidth;
   final PeakLineMode peakLineMode;

@@ -77,6 +77,7 @@ import 'indicator_picker_overlay.dart';
 import 'kline_axis_format.dart';
 import 'kline_chip.dart';
 import 'kline_viewport.dart';
+import 'package:chan_kline/theme/app_palette.dart';
 
 /// 由 K0 截止根的 low/high/close 与编号配置，给筹码/笔数峰按 ±档上色，生成延长线标记。
 /// label=档号（-1/+2/IN1…），画在延长线左端。
@@ -2159,7 +2160,7 @@ class _KlineChartState extends State<KlineChart> {
     return Opacity(
       opacity: 0.42,
       child: Material(
-        color: const Color(0x22111111),
+        color: AppPalette.rgb(0x22111111),
         borderRadius: BorderRadius.circular(4),
         child: child,
       ),
@@ -2194,16 +2195,16 @@ class _KlineChartState extends State<KlineChart> {
               children: [
                 Text(
                   '图例',
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 11,
-                    color: Color(0x99AAAAAA),
+                    color: AppPalette.rgb(0x99AAAAAA),
                   ),
                 ),
                 const SizedBox(width: 3),
                 Icon(
                   _legendOpen ? Icons.expand_less : Icons.expand_more,
                   size: 14,
-                  color: const Color(0x99AAAAAA),
+                  color: AppPalette.rgb(0x99AAAAAA),
                 ),
               ],
             ),
@@ -2223,9 +2224,9 @@ class _KlineChartState extends State<KlineChart> {
     return Container(
       constraints: BoxConstraints(maxWidth: maxW, maxHeight: 260),
       decoration: BoxDecoration(
-        color: const Color(0xEE121212),
+        color: AppPalette.rgb(0xEE121212),
         borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: const Color(0x55E2E8F0)),
+        border: Border.all(color: AppPalette.rgb(0x55E2E8F0)),
       ),
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
       child: SingleChildScrollView(
@@ -2236,10 +2237,10 @@ class _KlineChartState extends State<KlineChart> {
             for (final g in groups) ...[
               Text(
                 g.title,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 10,
                   fontWeight: FontWeight.w700,
-                  color: Color(0xFFE2E8F0),
+                  color: AppPalette.rgb(0xFFE2E8F0),
                 ),
               ),
               const SizedBox(height: 2),
@@ -2268,7 +2269,7 @@ class _KlineChartState extends State<KlineChart> {
           const SizedBox(width: 4),
           Text(
             l.label,
-            style: const TextStyle(fontSize: 10, color: Color(0xFFCBD5E1)),
+            style: TextStyle(fontSize: 10, color: AppPalette.rgb(0xFFCBD5E1)),
           ),
         ],
       ),
@@ -2286,17 +2287,17 @@ class _KlineChartState extends State<KlineChart> {
             ),
             onTap: _toggleMainIndicatorPicker,
             child: Padding(
-              padding: const EdgeInsets.all(6),
+              padding: EdgeInsets.all(6),
               child: Icon(
                 _pickerPane == _IndicatorPickerPane.main
                     ? Icons.expand_less
                     : Icons.expand_more,
                 size: 18,
-                color: const Color(0x99AAAAAA),
+                color: AppPalette.rgb(0x99AAAAAA),
               ),
             ),
           ),
-          Container(width: 1, height: 18, color: const Color(0x22FFFFFF)),
+          Container(width: 1, height: 18, color: AppPalette.rgb(0x22FFFFFF)),
           InkWell(
             borderRadius: const BorderRadius.horizontal(
               right: Radius.circular(4),
@@ -2309,7 +2310,7 @@ class _KlineChartState extends State<KlineChart> {
                     ? Icons.chevron_left
                     : Icons.chevron_right,
                 size: 18,
-                color: const Color(0x99AAAAAA),
+                color: AppPalette.rgb(0x99AAAAAA),
               ),
             ),
           ),
@@ -2329,17 +2330,17 @@ class _KlineChartState extends State<KlineChart> {
             ),
             onTap: _toggleSubIndicatorPicker,
             child: Padding(
-              padding: const EdgeInsets.all(6),
+              padding: EdgeInsets.all(6),
               child: Icon(
                 _pickerPane == _IndicatorPickerPane.sub
                     ? Icons.expand_less
                     : Icons.expand_more,
                 size: 18,
-                color: const Color(0x99AAAAAA),
+                color: AppPalette.rgb(0x99AAAAAA),
               ),
             ),
           ),
-          Container(width: 1, height: 18, color: const Color(0x22FFFFFF)),
+          Container(width: 1, height: 18, color: AppPalette.rgb(0x22FFFFFF)),
           InkWell(
             borderRadius: const BorderRadius.horizontal(
               right: Radius.circular(4),
@@ -2352,7 +2353,7 @@ class _KlineChartState extends State<KlineChart> {
                     ? Icons.chevron_left
                     : Icons.chevron_right,
                 size: 18,
-                color: const Color(0x99AAAAAA),
+                color: AppPalette.rgb(0x99AAAAAA),
               ),
             ),
           ),
@@ -2481,14 +2482,14 @@ class _KlineChartState extends State<KlineChart> {
             width: 22,
             height: 22,
             decoration: BoxDecoration(
-              color: const Color(0x33111111),
+              color: AppPalette.rgb(0x33111111),
               borderRadius: BorderRadius.circular(4),
-              border: Border.all(color: const Color(0x22AAAAAA)),
+              border: Border.all(color: AppPalette.rgb(0x22AAAAAA)),
             ),
             child: Icon(
               hidden ? Icons.visibility_off : Icons.visibility,
               size: 15,
-              color: const Color(0x8890A4AE),
+              color: AppPalette.rgb(0x8890A4AE),
             ),
           ),
         ),
@@ -2877,9 +2878,9 @@ class _KlineChartState extends State<KlineChart> {
                   child: Center(
                     child: Text(
                       widget.subPanePlaceholder,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 11,
-                        color: Color(0xFF666666),
+                        color: AppPalette.rgb(0xFF666666),
                       ),
                     ),
                   ),
@@ -2917,12 +2918,12 @@ class _KlineChartState extends State<KlineChart> {
                         height: 22,
                         decoration: BoxDecoration(
                           color: _splitDragging
-                              ? const Color(0x551E3A5F)
-                              : const Color(0x33111111),
+                              ? AppPalette.rgb(0x551E3A5F)
+                              : AppPalette.rgb(0x33111111),
                           border: Border.all(
                             color: _splitDragging
-                                ? const Color(0x6642A5F5)
-                                : const Color(0x22AAAAAA),
+                                ? AppPalette.rgb(0x6642A5F5)
+                                : AppPalette.rgb(0x22AAAAAA),
                           ),
                           borderRadius: BorderRadius.circular(11),
                         ),
@@ -2930,8 +2931,8 @@ class _KlineChartState extends State<KlineChart> {
                           Icons.drag_handle,
                           size: 16,
                           color: _splitDragging
-                              ? const Color(0x8842A5F5)
-                              : const Color(0x66888888),
+                              ? AppPalette.rgb(0x8842A5F5)
+                              : AppPalette.rgb(0x66888888),
                         ),
                       ),
                     ),
@@ -3741,11 +3742,11 @@ class _KlineCompositePainter extends CustomPainter {
     if (k1BarViews.isEmpty) return;
 
     // faint：主图K1合并底层，低不透明度以免压住 1 分钟 K
-    final upBody = faint ? const Color(0x38E53935) : const Color(0x88E53935);
-    final dnBody = faint ? const Color(0x3826A69A) : const Color(0x8826A69A);
+    final upBody = faint ? AppPalette.rgb(0x38E53935) : AppPalette.rgb(0x88E53935);
+    final dnBody = faint ? AppPalette.rgb(0x3826A69A) : AppPalette.rgb(0x8826A69A);
     // 外框用实色，和 K 线合并框一样能看清虚实。填充可以淡。
-    const upFrame = Color(0xFFE53935);
-    const dnFrame = Color(0xFF26A69A);
+    final upFrame = AppPalette.rgb(0xFFE53935);
+    final dnFrame = AppPalette.rgb(0xFF26A69A);
 
     for (final v in k1BarViews) {
       if (v.viewX2 < viewport.viewXMin - 1 || v.viewX1 > viewport.viewXMax + 1) {
@@ -5162,12 +5163,12 @@ class _KlineCompositePainter extends CustomPainter {
   Color _demarkMarkColor(DemarkMark m) {
     final isBuy = m.dir < 0;
     if (m.type == 'complete') {
-      return isBuy ? const Color(0xFFB91C1C) : const Color(0xFF15803D);
+      return isBuy ? AppPalette.rgb(0xFFB91C1C) : AppPalette.rgb(0xFF15803D);
     }
     if (m.type == 'setup') {
-      return isBuy ? const Color(0xFFDC2626) : const Color(0xFF16A34A);
+      return isBuy ? AppPalette.rgb(0xFFDC2626) : AppPalette.rgb(0xFF16A34A);
     }
-    return isBuy ? const Color(0xFFF97316) : const Color(0xFF0D9488);
+    return isBuy ? AppPalette.rgb(0xFFF97316) : AppPalette.rgb(0xFF0D9488);
   }
 
   /// 主图 Kn趋势线（父段内支撑/压力；子线层同号）。方案B：kn==displayKn。
@@ -5491,10 +5492,10 @@ class _KlineCompositePainter extends CustomPainter {
     bool faint = false,
   }) {
     if (views.isEmpty) return;
-    final upBody = faint ? const Color(0x38E53935) : const Color(0x88E53935);
-    final dnBody = faint ? const Color(0x3826A69A) : const Color(0x8826A69A);
-    const upFrame = Color(0xFFE53935);
-    const dnFrame = Color(0xFF26A69A);
+    final upBody = faint ? AppPalette.rgb(0x38E53935) : AppPalette.rgb(0x88E53935);
+    final dnBody = faint ? AppPalette.rgb(0x3826A69A) : AppPalette.rgb(0x8826A69A);
+    final upFrame = AppPalette.rgb(0xFFE53935);
+    final dnFrame = AppPalette.rgb(0xFF26A69A);
 
     for (final v in views) {
       if (v.viewX2 < viewport.viewXMin - 1 || v.viewX1 > viewport.viewXMax + 1) {
@@ -6016,8 +6017,8 @@ class _KlineCompositePainter extends CustomPainter {
     double slotW,
   ) {
     // tick：一字线画点；其它周期：红涨绿跌实体+影线
-    const up = Color(0xFFE53935);
-    const down = Color(0xFF26A69A);
+    final up = AppPalette.rgb(0xFFE53935);
+    final down = AppPalette.rgb(0xFF26A69A);
     final drawDots = period == 'tick';
     final dotR = math.max(1.2, math.min(barW * 0.45, slotW * 0.35));
 
@@ -6728,7 +6729,7 @@ class _KlineCompositePainter extends CustomPainter {
     double subY(double v) => innerTop + (maxV - v) / span * innerH;
 
     final zeroPaint = Paint()
-      ..color = const Color(0x6694A3B8)
+      ..color = AppPalette.rgb(0x6694A3B8)
       ..strokeWidth = 1
       ..style = PaintingStyle.stroke;
     _drawDashedLine(
@@ -6760,8 +6761,8 @@ class _KlineCompositePainter extends CustomPainter {
           }
         }
 
-        paintBand(cmp.inLoX, cmp.inHiX, const Color(0x552563EB));
-        paintBand(cmp.outLoX, cmp.outHiX, const Color(0x55F59E0B));
+        paintBand(cmp.inLoX, cmp.inHiX, AppPalette.rgb(0x552563EB));
+        paintBand(cmp.outLoX, cmp.outHiX, AppPalette.rgb(0x55F59E0B));
       }
     }
 
@@ -6841,7 +6842,7 @@ class _KlineCompositePainter extends CustomPainter {
 
     // 参考线 1.000 / 1.382
     final refPaint = Paint()
-      ..color = const Color(0x6694A3B8)
+      ..color = AppPalette.rgb(0x6694A3B8)
       ..strokeWidth = 1
       ..style = PaintingStyle.stroke;
     for (final ref in [1.0, 1.382]) {
@@ -6856,7 +6857,7 @@ class _KlineCompositePainter extends CustomPainter {
     }
 
     final linePaint = Paint()
-      ..color = const Color(0xFF2563EB)
+      ..color = AppPalette.rgb(0xFF2563EB)
       ..strokeWidth = 1.5
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round;
@@ -6916,7 +6917,7 @@ class _KlineCompositePainter extends CustomPainter {
     double subY(double v) => innerTop + (maxV - v) / span * innerH;
 
     final zeroPaint = Paint()
-      ..color = const Color(0x6694A3B8)
+      ..color = AppPalette.rgb(0x6694A3B8)
       ..strokeWidth = 1
       ..style = PaintingStyle.stroke;
     _drawDashedLine(
@@ -6933,10 +6934,10 @@ class _KlineCompositePainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round;
     final upDot = Paint()
-      ..color = const Color(0xFFE11D48)
+      ..color = AppPalette.rgb(0xFFE11D48)
       ..style = PaintingStyle.fill;
     final downDot = Paint()
-      ..color = const Color(0xFF2563EB)
+      ..color = AppPalette.rgb(0xFF2563EB)
       ..style = PaintingStyle.fill;
 
     Offset? prev;
@@ -7014,7 +7015,7 @@ class _KlineCompositePainter extends CustomPainter {
     double subY(double v) => innerTop + (maxV - v) / span * innerH;
 
     final zeroPaint = Paint()
-      ..color = const Color(0x6694A3B8)
+      ..color = AppPalette.rgb(0x6694A3B8)
       ..strokeWidth = 1
       ..style = PaintingStyle.stroke;
     _drawDashedLine(
@@ -7076,11 +7077,11 @@ class _KlineCompositePainter extends CustomPainter {
           );
         }
 
-        paintXs(hl.inXs, const Color(0x552563EB)); // in 蓝
-        paintXs(hl.outXs, const Color(0x55F59E0B)); // out 琥珀
+        paintXs(hl.inXs, AppPalette.rgb(0x552563EB)); // in 蓝
+        paintXs(hl.outXs, AppPalette.rgb(0x55F59E0B)); // out 琥珀
         if (hl.algo == DivergenceAlgo.peak) {
-          paintPeakMark(hl.inPeakX, const Color(0xFF2563EB));
-          paintPeakMark(hl.outPeakX, const Color(0xFFF59E0B));
+          paintPeakMark(hl.inPeakX, AppPalette.rgb(0xFF2563EB));
+          paintPeakMark(hl.outPeakX, AppPalette.rgb(0xFFF59E0B));
         }
       }
     }
@@ -7176,7 +7177,7 @@ class _KlineCompositePainter extends CustomPainter {
     final span = maxV - minV;
     double subY(double v) => innerTop + (maxV - v) / span * innerH;
     final refPaint = Paint()
-      ..color = const Color(0x6694A3B8)
+      ..color = AppPalette.rgb(0x6694A3B8)
       ..strokeWidth = 1
       ..style = PaintingStyle.stroke;
     for (final ref in [30.0, 70.0]) {
@@ -7416,7 +7417,7 @@ class _KlineCompositePainter extends CustomPainter {
 
   void _paintWrongX(Canvas canvas, double cx, double y, double r) {
     final p = Paint()
-      ..color = const Color(0xFFE53935)
+      ..color = AppPalette.rgb(0xFFE53935)
       ..strokeWidth = math.max(1.6, r * 0.42)
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round;
@@ -7765,13 +7766,13 @@ class _KlineCompositePainter extends CustomPainter {
         if (sellH > 0) {
           canvas.drawRect(
             Rect.fromLTWH(x, innerBottom - sellH, barW, sellH),
-            Paint()..color = const Color(0x6626A69A),
+            Paint()..color = AppPalette.rgb(0x6626A69A),
           );
         }
         if (buyH > 0) {
           canvas.drawRect(
             Rect.fromLTWH(x, innerBottom - sellH - buyH, barW, buyH),
-            Paint()..color = const Color(0x66E53935),
+            Paint()..color = AppPalette.rgb(0x66E53935),
           );
         }
       } else {
@@ -7782,18 +7783,18 @@ class _KlineCompositePainter extends CustomPainter {
           color = _tickSideColor(b);
         } else if (hasBsColored) {
           if (buyIdxs.contains(idx)) {
-            color = const Color(0x66E53935);
+            color = AppPalette.rgb(0x66E53935);
           } else if (sellIdxs.contains(idx)) {
-            color = const Color(0x6626A69A);
+            color = AppPalette.rgb(0x6626A69A);
           } else {
-            color = const Color(0x669CA3AF);
+            color = AppPalette.rgb(0x669CA3AF);
           }
         } else if (levelTint != null) {
           color = levelTint;
         } else {
           color = b.isUp
-              ? const Color(0x66E53935)
-              : const Color(0x6626A69A);
+              ? AppPalette.rgb(0x66E53935)
+              : AppPalette.rgb(0x6626A69A);
         }
         canvas.drawRect(
           Rect.fromLTWH(x, innerBottom - bh, barW, bh),
@@ -7807,9 +7808,9 @@ class _KlineCompositePainter extends CustomPainter {
   Color _tickSideColor(KlineBar b) {
     final side = b.metrics['tick_side'];
     if (side is String) {
-      if (side == 'B') return const Color(0x66E53935);
-      if (side == 'S') return const Color(0x6626A69A);
-      return const Color(0x669CA3AF);
+      if (side == 'B') return AppPalette.rgb(0x66E53935);
+      if (side == 'S') return AppPalette.rgb(0x6626A69A);
+      return AppPalette.rgb(0x669CA3AF);
     }
     bool hasQty(List<dynamic>? v) {
       if (v == null) return false;
@@ -7822,13 +7823,13 @@ class _KlineCompositePainter extends CustomPainter {
     final bins = b.metrics['chip_tick_bins'];
     if (bins is Map) {
       if (hasQty(bins['b'] as List<dynamic>?)) {
-        return const Color(0x66E53935);
+        return AppPalette.rgb(0x66E53935);
       }
       if (hasQty(bins['s'] as List<dynamic>?)) {
-        return const Color(0x6626A69A);
+        return AppPalette.rgb(0x6626A69A);
       }
     }
-    return const Color(0x669CA3AF);
+    return AppPalette.rgb(0x669CA3AF);
   }
 
   /// 单层 Kn 分型确认（自定义色：底分型红 / 顶分型蓝；形状按 Kn）。
@@ -8048,7 +8049,7 @@ class _KlineCompositePainter extends CustomPainter {
         n,
         (i) => i < barFeatures.length ? barFeatures[i].fractalPeakDist : 0,
       );
-      color = const Color(0xFF38BDF8);
+      color = AppPalette.rgb(0xFF38BDF8);
     } else if (bundle != null) {
       series = _peakDistSeries(n, bundle.confirms);
       color = ChartLevelLineStyle.forDisplayKn(level).color;
@@ -8173,7 +8174,7 @@ class _KlineCompositePainter extends CustomPainter {
     double plotH,
     PriceRange pr,
   ) {
-    const style = TextStyle(color: Color(0x99FFFFFF), fontSize: 9);
+    final style = TextStyle(color: AppPalette.rgb(0x99FFFFFF), fontSize: 9);
     for (var i = 0; i <= 4; i++) {
       final p = pr.max - pr.span * i / 4;
       final y = plotTop + plotH * i / 4;
@@ -8202,9 +8203,9 @@ class _KlineCompositePainter extends CustomPainter {
     final startX = ((viewport.viewXMin / interval).ceil() * interval).toInt();
     final endX = viewport.viewXMax.ceil().clamp(0, bars.length - 1);
     final tickPaint = Paint()
-      ..color = const Color(0x33FFFFFF)
+      ..color = AppPalette.rgb(0x33FFFFFF)
       ..strokeWidth = 1;
-    const labelStyle = TextStyle(color: Color(0x99FFFFFF), fontSize: 9);
+    final labelStyle = TextStyle(color: AppPalette.rgb(0x99FFFFFF), fontSize: 9);
 
     for (var xi = startX; xi <= endX; xi += interval) {
       if (xi < 0 || xi >= bars.length) continue;
@@ -8243,7 +8244,7 @@ class _KlineCompositePainter extends CustomPainter {
     final plotH = math.max(1.0, mainH - mainPlotTop - KlineViewport.padB);
 
     final paint = Paint()
-      ..color = const Color(0xFFE2E8F0)
+      ..color = AppPalette.rgb(0xFFE2E8F0)
       ..strokeWidth = 1.2;
 
     canvas.drawLine(Offset(x, plotTop), Offset(x, contentBottom), paint);
@@ -8255,14 +8256,14 @@ class _KlineCompositePainter extends CustomPainter {
 
     final price = pr.priceFromY(y, plotTop, plotH);
 
-    final labelBg = Paint()..color = const Color(0xF0FFFFFF);
+    final labelBg = Paint()..color = AppPalette.rgb(0xF0FFFFFF);
     final labelBorder = Paint()
-      ..color = Colors.black
+      ..color = AppPalette.rgb(0xFF000000)
       ..style = PaintingStyle.stroke;
     final tp = TextPainter(
       text: TextSpan(
         text: price.toStringAsFixed(2),
-        style: const TextStyle(color: Colors.black, fontSize: 11, fontWeight: FontWeight.bold),
+        style: TextStyle(color: AppPalette.rgb(0xFF000000), fontSize: 11, fontWeight: FontWeight.bold),
       ),
       textDirection: TextDirection.ltr,
     )..layout();

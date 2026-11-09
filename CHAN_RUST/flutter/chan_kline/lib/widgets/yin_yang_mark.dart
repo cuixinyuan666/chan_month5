@@ -1,17 +1,22 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:chan_kline/theme/app_palette.dart';
 
 /// 在画布上画完整太极（阴阳鱼+对眼+外圈），不裁切图案本身。
 void drawYinYangSymbol(
   Canvas canvas,
   Offset center,
   double radius, {
-  Color yang = const Color(0xFFF4F1EA),
-  Color yin = const Color(0xFF141414),
-  Color ring = const Color(0xFFC9A227),
+  Color? yang,
+  Color? yin,
+  Color? ring,
 }) {
   if (radius <= 0) return;
+  // 主题色：调用方没指定就跟当前主题（浅色/护眼底上的太极不能还是黑底）
+  final yangC = yang ?? AppPalette.rgb(0xFFF4F1EA);
+  final yinC = yin ?? AppPalette.rgb(0xFF141414);
+  final ringC = ring ?? AppPalette.rgb(0xFFC9A227);
   final bodyR = radius;
   canvas.save();
   canvas.translate(center.dx, center.dy);
@@ -19,10 +24,10 @@ void drawYinYangSymbol(
     Path()..addOval(Rect.fromCircle(center: Offset.zero, radius: bodyR)),
   );
   final yangPaint = Paint()
-    ..color = yang
+    ..color = yangC
     ..isAntiAlias = true;
   final yinPaint = Paint()
-    ..color = yin
+    ..color = yinC
     ..isAntiAlias = true;
   canvas.drawRect(Rect.fromLTWH(-bodyR, -bodyR, bodyR, bodyR * 2), yangPaint);
   canvas.drawRect(Rect.fromLTWH(0, -bodyR, bodyR, bodyR * 2), yinPaint);
@@ -37,7 +42,7 @@ void drawYinYangSymbol(
     center,
     bodyR,
     Paint()
-      ..color = ring
+      ..color = ringC
       ..style = PaintingStyle.stroke
       ..strokeWidth = math.max(bodyR * 0.045, bodyR * 0.02)
       ..isAntiAlias = true,
@@ -61,7 +66,7 @@ class YinYangFullscreenCover extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ColoredBox(
-      color: dimBackground ? const Color(0xF0121212) : const Color(0x00000000),
+      color: dimBackground ? AppPalette.rgb(0xF0121212) : AppPalette.rgb(0x00000000),
       child: SizedBox.expand(
         child: YinYangFillSpin(heightFactor: heightFactor, opacity: opacity),
       ),
@@ -186,7 +191,7 @@ class _YinYangLoadingMarkState extends State<YinYangLoadingMark>
         turns: _spin,
         child: CustomPaint(
           size: Size.square(s),
-          painter: const YinYangPainter(),
+          painter: YinYangPainter(),
         ),
       ),
     );
@@ -195,11 +200,10 @@ class _YinYangLoadingMarkState extends State<YinYangLoadingMark>
 
 /// 标准太极图：白阳 / 黑阴 + 对眼，外圈描边保证深色底上也能看全。
 class YinYangPainter extends CustomPainter {
-  const YinYangPainter({
-    this.yang = const Color(0xFFF4F1EA),
-    this.yin = const Color(0xFF141414),
-    this.ring = const Color(0xFFC9A227),
-  });
+  YinYangPainter({Color? yang, Color? yin, Color? ring})
+      : yang = yang ?? AppPalette.rgb(0xFFF4F1EA),
+        yin = yin ?? AppPalette.rgb(0xFF141414),
+        ring = ring ?? AppPalette.rgb(0xFFC9A227);
 
   final Color yang;
   final Color yin;

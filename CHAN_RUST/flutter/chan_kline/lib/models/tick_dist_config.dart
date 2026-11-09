@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'chip_config.dart';
+import 'package:chan_kline/theme/app_palette.dart';
 
 /// 笔数分布配置（主图左侧；与筹码同构，仅 K0）。
 class TickDistConfig {
@@ -9,9 +10,9 @@ class TickDistConfig {
     this.bucketStep = 0.01,
     this.stretchLevel = 5,
     this.paneWidth = 88,
-    this.sColor = const Color(0xC722C55E),
-    this.bColor = const Color(0xC7DC2626),
-    this.wColor = const Color(0xC79CA3AF),
+    this.sColor,
+    this.bColor,
+    this.wColor,
     this.peakLineEnabled = false,
     this.peakLineWidth = 1.2,
     this.peakLineMode = PeakLineMode.bySign,
@@ -22,9 +23,13 @@ class TickDistConfig {
   final double bucketStep;
   final int stretchLevel;
   final double paneWidth;
-  final Color sColor;
-  final Color bColor;
-  final Color wColor;
+  final Color? sColor;
+  final Color? bColor;
+  final Color? wColor;
+
+  Color get sColorResolved => sColor ?? AppPalette.rgb(0xC722C55E);
+  Color get bColorResolved => bColor ?? AppPalette.rgb(0xC7DC2626);
+  Color get wColorResolved => wColor ?? AppPalette.rgb(0xC79CA3AF);
   final bool peakLineEnabled;
   final double peakLineWidth;
   final PeakLineMode peakLineMode;

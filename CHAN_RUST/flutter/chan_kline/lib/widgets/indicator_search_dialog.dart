@@ -17,6 +17,7 @@ import '../models/math_indicator_config.dart';
 import '../settings/indicator_search_last_result_store.dart';
 import '../settings/indicator_search_settings_store.dart';
 import 'indicator_search_result_panel.dart';
+import 'package:chan_kline/theme/app_palette.dart';
 
 class IndicatorSearchDialog extends StatefulWidget {
   const IndicatorSearchDialog({
@@ -352,7 +353,7 @@ class _IndicatorSearchDialogState extends State<IndicatorSearchDialog> {
                   style: const TextStyle(fontWeight: FontWeight.w600),
                 ),
                 const SizedBox(height: 4),
-                Text(_detail, style: const TextStyle(fontSize: 12)),
+                Text(_detail, style: TextStyle(fontSize: 12)),
                 if (_progress != null) ...[
                   const SizedBox(height: 8),
                   LinearProgressIndicator(
@@ -363,7 +364,7 @@ class _IndicatorSearchDialogState extends State<IndicatorSearchDialog> {
                   const SizedBox(height: 8),
                   Text(
                     '最近跑通',
-                    style: TextStyle(fontSize: 11, color: Colors.green.shade800),
+                    style: TextStyle(fontSize: 11, color: AppPalette.rgb(0xFF2E7D32)),
                   ),
                   ..._liveRan
                       .take(3)
@@ -378,7 +379,7 @@ class _IndicatorSearchDialogState extends State<IndicatorSearchDialog> {
                 ],
                 if (_error != null) ...[
                   const SizedBox(height: 12),
-                  Text(_error!, style: TextStyle(color: Colors.red.shade700)),
+                  Text(_error!, style: TextStyle(color: AppPalette.rgb(0xFFD32F2F))),
                 ],
                 // 只以 _stats 为准：恢复模式（返回寻优结果 / 上次寻优结果）下
                 // _resultsPath 可能要异步补齐，若一并当条件会在补齐前整帧空表。

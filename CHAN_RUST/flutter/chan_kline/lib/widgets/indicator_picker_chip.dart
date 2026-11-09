@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:chan_kline/theme/app_palette.dart';
 
 /// 单个已选指标条目（单击：灰度关闭 / 再点打开）。
 class IndicatorChipEntry {
@@ -45,11 +46,11 @@ class IndicatorPickerChip extends StatefulWidget {
 class _IndicatorPickerChipState extends State<IndicatorPickerChip> {
   bool _hovered = false;
 
-  static const _activeColor = Color(0xFFFFFFFF);
-  static const _mutedColor = Color(0xFF6B7280);
-  static const _sepActive = Color(0xAAFFFFFF);
-  static const _sepMuted = Color(0x556B7280);
-  static const _valueColor = Color(0xFF38BDF8);
+  static final _activeColor = AppPalette.rgb(0xFFFFFFFF);
+  static final _mutedColor = AppPalette.rgb(0xFF6B7280);
+  static final _sepActive = AppPalette.rgb(0xAAFFFFFF);
+  static final _sepMuted = AppPalette.rgb(0x556B7280);
+  static final _valueColor = AppPalette.rgb(0xFF38BDF8);
 
   Widget _separator(IndicatorChipEntry cur, IndicatorChipEntry prev) {
     final bothMuted = cur.muted && prev.muted;
@@ -145,7 +146,7 @@ class _IndicatorPickerChipState extends State<IndicatorPickerChip> {
         duration: const Duration(milliseconds: 120),
         opacity: opacity,
         child: Material(
-          color: const Color(0xCC1A1A1A),
+          color: AppPalette.rgb(0xCC1A1A1A),
           borderRadius: BorderRadius.circular(4),
           child: ConstrainedBox(
             constraints: BoxConstraints(
@@ -156,7 +157,7 @@ class _IndicatorPickerChipState extends State<IndicatorPickerChip> {
               padding: const EdgeInsets.fromLTRB(6, 2, 6, 2),
               child: entries.isEmpty
                   ? (widget.showEmptyPlaceholder
-                      ? const Text(
+                      ? Text(
                           '暂无已选指标',
                           style: TextStyle(
                             color: _mutedColor,
