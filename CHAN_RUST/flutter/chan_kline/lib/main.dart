@@ -674,7 +674,10 @@ class _KlineHomePageState extends State<KlineHomePage>
   }
 
   Future<String> _createFullTicksUploadTask(TelegramSettings draft) async {
-    final share = draft.shareDir.trim();
+    // 共享进度目录留空就用局域网默认目录，不再报「请先填写」
+    final share = draft.shareDir.trim().isEmpty
+        ? defaultTicksShareDir()
+        : draft.shareDir.trim();
     final token = draft.botToken.trim();
     final chat = draft.chatId.trim();
     String finish(String msg) {
@@ -682,9 +685,6 @@ class _KlineHomePageState extends State<KlineHomePage>
       return msg;
     }
 
-    if (share.isEmpty) {
-      return finish('请先填写共享进度目录');
-    }
     if (token.isEmpty || chat.isEmpty) {
       return finish('请先在电报设置里保存机器人令牌和聊天号');
     }
