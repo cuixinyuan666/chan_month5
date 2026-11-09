@@ -6017,3 +6017,22 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **测试**：`flutter analyze` 131 issues、**0 error**（与改动前同基线）；`flutter build windows --debug` 成功（26.6s）；真机回退一次成功、紧接着正向同步一次成功。
 - **注意事项 / 待办**：回退后要记得再同步一次，否则对端停留在快照那一刻；「关闭」那个文字按钮对鼠标落点很挑，`Esc` 也可关。
 - **相关文件**：`lib/sync/peer_sync_service.dart`（`restore()` 增 `onLine`）、`lib/ui/peer_sync_dialog.dart`（回退全程回显 + 异常兜底 + 写回上次同步）。
+### 2026-11-09 · Doubao · 双机协同 · PCA↔PCB 双向拉起 App 与「全市场分笔上传」
+
+- **执行者**：Doubao Agent
+- **任务类型**：双机协同 / 远程拉起能力补齐
+- **操作**：
+  1. 目标口径按用户原话落地：「PCA 能拉起 PCB，PCB 也能拉起 PCA，并且它们的全市场分笔上传都可以互相拉起」。此前只有「拉 App」和「推项目」，上传两个方向都做不到——代理 13 个动作里没有触发计划任务的通道，而远端起上传实质就一行 `schtasks /Run /TN Chan\TicksFullUpload`。
+  2. 代理 `remote_app_agent.ps1` 升到 **1.3.0**：新增 `Do-Task`，任务名与白名单 `@('Chan\TicksFullUpload')` 逐字比对（`-ieq`），不在名单直接 throw；`op` 只收 `run / end / query`；执行 `schtasks.exe /Run|/End|/Query /TN <name> /FO LIST`；`Invoke-Action` 加 `'task'` 分支。**不是任意执行入口**，拿 `Microsoft\Windows\Defrag\ScheduledDefrag` 试过被拒（退出码 1）。
+  3. `remote_ctl.ps1` 的 `-Action` ValidateSet 加 `task`，新增 `-TaskName`（默认 `Chan\TicksFullUpload`）与 `-TaskOp`（默认 `run`），`$argsObj` 里带 `name` 与 `op`。
+  4. App：`PeerSyncService` 加 `peerApp(peer, launch)`（`start -Mode ui` / `stop`，超时 150/45 秒）与 `peerUpload(peer, op)`（`task`，超时 90 秒）；「双机同步」对话框加三颗按钮（拉起对端 App / 拉起对端上传 / 停对端上传）+ `_briefPeer()` 把 data 压成一行 + `doPeerCtl()` 逐行透传并给结论。
+  5. 两处新坑现场修掉：① `remote_ctl.ps1 -Json` 是把整段 JSON 打到 stdout、没有 `===JSON===` 标记，`runScript` 只认标记块 → 界面只剩一句"对端已执行"，改为在 `jsonText` 为空且整段 stdout 以 `{` 开头 `}` 结尾时兜底 `jsonDecode`；② `schtasks` 的中文提示经控制台代码页到 App 变 `◆◆◆` → 代理额外产出英文稳定 `state`（`accepted` / `run-failed` / `stop-requested` / `end-failed` / `registered` / `not-registered`），`output` 只留可读 ASCII（截 200 字），界面按 `state` 判成败。
+- **结果**：两台代理都换代到 1.3.0（PCA pid 107060、PCB pid 5880，`ping` 复核 `agent_version: 1.3.0`）；双向 `task query` 都回 `state: registered`。从 PCA 的 App 真机点「拉起对端上传」→ `state=accepted, exitCode=0`，共享进度里 20 秒内出现 `machine: cxy` 的 claim（`002945` / `002959` / `002971` 与本机 `002943` / `002957` / `002968` 成对出现），**两台并行抢活**；点「停对端上传」→ `state=stop-requested`，`cxy` 的 claim 消失、本机继续；点「拉起对端 App」→ 结论 `pid=12308`，`-Action ps` 复核 PCB 上 `responding true`。最后把新 Dart 代码与新编译产物推给 PCB（`overwrite 9 / same 905 / onlyInPeer 74`、快照 9 个文件、双指纹一致、对端 App 自动关掉后重新拉起）。
+- **演示**：设置面板 →「双机同步」→ 三颗新按钮，日志里出现 `machine=CXY, name=Chan\TicksFullUpload, op=run, state=accepted, exitCode=0` 即成功；「停对端上传」同理看 `state=stop-requested`。
+- **测试**：`flutter analyze` 131 issues、0 error；`flutter build windows --debug` 成功（25.8s）；双向 `task query` 退 0；白名单拒绝测试退 1；App 内三次按钮点击全部有结论行、无静默。
+- **注意事项 / 待办**：
+  1. 两端代理都必须 ≥1.3.0，否则 `task` 被当未知动作拒掉；换代 `remote_ctl.ps1 -SharePath <该机仓库> -Action reload`，等 3–5 秒再 `ping`；
+  2. 白名单是有意收窄的，**别**为了省事改成「任意任务名或任意命令」——代理信箱在对端匿名可读共享上；
+  3. 反向（PCB 点按钮拉 PCA）脚本层与信箱双向已验（把 `-SharePath` 换 `\\192.168.1.5\chan_month5` 后 `task query` / `ps` 均被 PCA 代理正常处理），但**还没在 PCB 的界面里真点过一次**：PCB App 是无边框 1080×690 单窗布局，远程点不到齿轮入口（试过 (990,20) 无反应），这一步留给人在 PCB 上点；
+  4. 停对端上传是 `schtasks /End`（打断 pythonw），supervisor 下次启动会自清 `stop.flag`，不会把对端卡死。
+- **相关文件**：`CHAN_RUST\scripts\remote_app_agent.ps1`（`Do-Task`、`state`、1.3.0）、`CHAN_RUST\scripts\remote_ctl.ps1`（`-TaskName` / `-TaskOp`）、`CHAN_RUST\flutter\chan_kline\lib\sync\peer_sync_service.dart`（`peerApp` / `peerUpload` / JSON 兜底）、`lib\ui\peer_sync_dialog.dart`（三颗按钮 + `doPeerCtl` + `_briefPeer`）、`CHAN_RUST\scripts\README_sync_remote.md`（新增「双向拉起」整节）。

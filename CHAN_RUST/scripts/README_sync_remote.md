@@ -1,4 +1,4 @@
-# 双机同步与远程拉起（sync_to_remote.ps1 / remote_app_agent.ps1 / remote_ctl.ps1）
+﻿# 双机同步与远程拉起（sync_to_remote.ps1 / remote_app_agent.ps1 / remote_ctl.ps1）
 
 两台机器：本机 `LAPTOP-NA22IFPU`，另一台 `192.168.1.6`（项目在 `D:\2\chan_month5`，
 本机通过管理共享 `\\192.168.1.6\D$\2\chan_month5` 读写）。
@@ -211,8 +211,17 @@ remote_ctl.ps1 -Action windows
 
 ### 白名单与约束
 
-只认 12 个动作：`ping` / `start` / `stop` / `status` / `snapshot` / `screenshot` / `command` /
-`report` / `ps` / `reload` / `click` / `windows`。**没有“执行任意脚本”这个动作**。
+只认 13 个动作：`ping` / `start` / `stop` / `status` / `snapshot` / `screenshot` / `command` /
+`report` / `ps` / `reload` / `click` / `windows` / `task`。**没有“执行任意脚本”这个动作**。
+
+`task` 是**单任务名白名单**的特例，只为「全市场分笔上传」开的口子：
+
+- 参数 `name`（任务名）+ `op`（`run` / `end` / `query`），任务名必须与白名单 `Chan\TicksFullUpload`
+  逐字命中（`-ieq`，大小写不敏感），**不在名单直接 throw**——拿 `Microsoft\Windows\Defrag\ScheduledDefrag`
+  试过会被拒（退出码 1），证明它不是任意命令执行入口；
+- 返回里 `state` 是**英文稳定枚举**（`accepted` / `run-failed` / `stop-requested` / `end-failed` /
+  `registered` / `not-registered`），界面按它判成败；`output` 只保留可读 ASCII（`schtasks` 的中文提示
+  经控制台代码页到 App 会变乱码，所以截掉非 ASCII、限 200 字）。
 
 - 令牌：`remote_ctl\token.txt`，本机只读、不改；对不上直接拒，请求落 `done\`。
 - 单实例：`agent.lock` 独占打开，第二个实例直接退出。
@@ -246,3 +255,55 @@ Agent API 也就不会启动（12321 不监听）。代理的 `start` 已固定�
 `RobotVerifyApp`，不构建主界面，所以**没有 12321 的 Agent API**——那种模式只能读
 `status.json` / `last_report.json`，`status` / `snapshot` / `screenshot` / `command` 一定失败。
 要这些能力，必须用 `-Mode ui` 拉起（并保证 `CHAN_AGENT_API=1`，代理已自动设置）。
+
+---
+
+## 双向拉起：App 与「全市场分笔上传」
+
+目标口径（用户原话）：同一局域网两台 PC（PCA / PCB）**互为对端、双向对称**——任一端点一下就能
+① 把项目目录推给对方、② 拉起对方的 App、③ 拉起对方的「全市场分笔上传」。①② 早已真机验收，③ 是后补的。
+
+### 为什么必须靠常驻代理
+
+远程执行这条路在本工程是**验证过不通**的：`schtasks /S 192.168.1.6` 直接 Access denied；
+CIM/WinRM 要 HTTPS + TrustedHosts；DCOM 拒绝访问。所以进程/任务级远程启动只能靠那台机器上的
+常驻代理 `remote_app_agent.ps1` 代劳——它监听自己仓库里的信箱目录（`a_Data\remote_ctl`），
+本机往共享里写请求、等结果。
+
+### 两条新通道
+
+| 目的 | 本机命令（示例） | 对端实际做的事 |
+| --- | --- | --- |
+| 拉起对端 App | `remote_ctl.ps1 -SharePath <对端仓库> -Action start -Mode ui` | 按固定路径拉起 `chan_kline.exe`、设三个环境变量、自动点掉分笔太极 |
+| 停对端 App | `remote_ctl.ps1 -SharePath <对端仓库> -Action stop` | 只关自己记录在案的 pid |
+| 拉起对端上传 | `remote_ctl.ps1 -SharePath <对端仓库> -Action task -TaskOp run` | `schtasks /Run /TN Chan\TicksFullUpload` |
+| 停对端上传 | `remote_ctl.ps1 -SharePath <对端仓库> -Action task -TaskOp end` | `schtasks /End /TN Chan\TicksFullUpload` |
+| 查对端任务 | `remote_ctl.ps1 -SharePath <对端仓库> -Action task -TaskOp query` | `schtasks /Query /TN Chan\TicksFullUpload /FO LIST` |
+
+`-TaskName` 默认就是 `Chan\TicksFullUpload`，改别的名字会被白名单拒掉，这是有意为之。
+
+### App 内三颗按钮
+
+设置面板最底下「双机同步」对话框里，除原来的「测试连接 / 立即同步到对端 / 按快照回退」外，新增：
+
+- **拉起对端 App** —— 走 `start -Mode ui`（超时 150 秒）；
+- **拉起对端上传** —— 走 `task run`（超时 90 秒）；
+- **停对端上传** —— 走 `task end`。
+
+日志框逐行透传，末尾给 `>> 结论：machine=CXY, name=..., op=run, state=accepted, exitCode=0`，
+`state` 就是成败判据，不再依赖 `schtasks` 的中文提示（那串中文到 App 会变乱码）。
+
+**前提**：两端代理都要 `1.3.0` 以上（`ping` 看 `agent_version`），换代用
+`remote_ctl.ps1 -SharePath <该机仓库> -Action reload`，等 3–5 秒再 ping。
+
+### 真机验收（2026-11-09）
+
+- 从 PCA 的 App 点「拉起对端 App」→ 结论 `pid=12308`；`-Action ps` 复核 PCB 上 `pid 12308 / responding true`。
+- 点「拉起对端上传」→ `state=accepted, exitCode=0`；20 秒后共享进度
+  `D:\chan_ticks_share\live\claims` 出现 `002945.json`（`machine: cxy`，pid 13020），本机同时在抢 `002943`
+  ——**两台并行抢活**。后续几次同样成对出现（`cxy/002959` 与本机 `002957`、`cxy/002971` 与本机 `002968`）。
+- 点「停对端上传」→ `state=stop-requested, exitCode=0`；`task query` 回到"就绪"，共享进度里 `cxy` 的 claim 消失。
+- 反向（PCB 视角）用同一套脚本、把 `-SharePath` 换成 `\\192.168.1.5\chan_month5` 验过：
+  `task query` 与 `ps` 都被 PCA 代理正常处理并回包。**但尚未在 PCB 的界面里真点过一次**——
+  PCB 的 App 是无边框 1080×690 单窗布局，远程点不到齿轮入口（点 (990,20) 画面无变化），
+  这一小步留给人在 PCB 上点。
