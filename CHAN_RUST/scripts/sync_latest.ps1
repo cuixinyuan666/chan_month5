@@ -73,7 +73,10 @@ $ExcludeFiles = @(
     '*.pyc', '*.pyo', '*.tmp', '*.orig', '*.rej', 'Thumbs.db', '.DS_Store',
     # 编译产物：chan_ffi.dll 是 cargo 现编出来的，没入库（git ls-files 查不到），
     # 哪一侧刚编过就更"新"，会把方向判反、把对端的 DLL 拷回来。编译由 -Build 各自负责。
-    '*.dll', '*.pdb', '*.ilk'
+    '*.dll', '*.pdb', '*.ilk',
+    # flutter 每次 build / pub get 都会重写这两个，内容是本机路径与依赖快照：
+    # 谁刚编译过谁的 mtime 就最新，曾把方向判反并覆盖掉本机刚改的 task-log（2026-11-09 22:44 实踩）。
+    '.flutter-plugins-dependencies', '.flutter-plugins', 'local.properties'
 )
 
 # 按「目录名」排除的运行时/工具缓存：出现在任意层级都排（__pycache__ 常嵌在 scripts 下面）。
