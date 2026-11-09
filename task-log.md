@@ -6141,3 +6141,14 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **注意事项 / 待办**：① 默认主题仍是深色，切回深色保证与旧版一致，是这次改造的安全底线；② 调色板对长尾色的换算是启发式（中性灰明度取反、彩色保留色相压到明度 0.28~0.52、护眼再压色相 42），观感若有偏差只需改 `app_palette.dart` 一个文件，不用再动业务代码；③ 因为 `AppPalette.rgb()` 不是编译期常量，`ChipConfig` / `TickDistConfig` / `YinYangPainter` 的默认色改成「可空 + 运行时解析」，声明处按需从 `const` 改成 `final`；④ 备份与验证用的 `.chan_theme_settings.json` 已加进 `.gitignore`，不入库；⑤ 设置面板的齿轮按钮本轮自动化点击没打中（坐标偏移），面板内三选一的实际点击效果由 widget 测试兜住，人工点一次即可确认。
 - **相关文件**：`CHAN_RUST/flutter/chan_kline/lib/theme/app_palette.dart`、`lib/theme/theme_settings_store.dart`、`lib/theme/theme_chooser.dart`、`lib/main.dart`、`lib/widgets/kline_chart.dart`、`lib/widgets/chart_level_line_style.dart`、`lib/widgets/kline_chip.dart`、`test/theme_chooser_test.dart`。
 
+### 2026-11-09 · Doubao · 修复 · K0 idx=0 时动态 K1 被画成「小蛇」
+
+- **执行者**：Doubao Agent
+- **任务类型**：主图绘制缺陷修复（纯绘制层，未动任何计算口径）
+- **操作**：`kline_chart.dart` 的单元外框 `_strokeUnitBarFrame` 增加「极扁实体」分支——实体高 < 3 像素（一字线/几乎一字线）时不再按矩形四边描虚线，改为只描一条居中横线，且虚线按该横杠宽度对称排「实-空-实」（定长虚线在一字线上只剩 1.2 像素残段，正是观感锯齿的来源）；`_strokeWickDashFrame` 增加极扁保护——实体 < 3 像素且上下影线合计 < 4 像素时不再画上下两个影线框（两个框会挤在一两个像素里互相错位）。
+- **结果**：K0 只有 idx=0 一根时，K1 那根预锚动态单元（open=high=low=close=11.66，横向 10.2 像素、实体高 1 像素）从「错位锯齿／像一条小蛇」变成一根规整的虚线小横杠（对称两段、3 像素厚），已确认的一字线仍是实线小横杠，虚线=构建中的语义不变。
+- **演示**：App 冷启动停在首根 K（K0 一个红点、K1 一根小横杠），放大 8 倍看边缘平直，无台阶、无残段。
+- **测试**：① 临时在 `_drawK1Candles` 加一次性落盘日志取证，实测 `idx=0 x1=0 x2=0 left=318.8 right=329.0 top=145.2 bottom=146.2 building=true o=h=l=c=11.66`，确认是一字线走虚线框，因 `x1==x2` 无可衔接邻根；取证后调试代码与 `dart:io` 引用已全部删除；② 改后重编（`build=0`、kernel 73,196,624B / 23:35:59、App 新实例 23:36:11）截图逐像素比对：改前 8/5/3 错位三行、改后 5/5/5 对称两段；③ `flutter analyze --no-pub` → error = 0（warning 34 / info 97 均为存量）。
+- **注意事项 / 待办**：① 只改了两个描边函数，判断阈值（3 像素 / 4 像素）是视觉经验值，若日后觉得极扁单元仍偏虚可调阈值；② 已确认一字线不受影响（走的仍是实线分支）；③ 本次只在本机验证，PCB 侧待同步后随编译生效。
+- **相关文件**：`CHAN_RUST/flutter/chan_kline/lib/widgets/kline_chart.dart`。
+
