@@ -14,6 +14,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 import zipfile
@@ -67,6 +68,7 @@ HEARTBEAT_INTERVAL = 60
 
 _last_heartbeat = 0.0
 _current_code: str | None = None
+_hb_lock = threading.Lock()
 
 # 进度上报：最近 10 分钟完成时刻，用来算「只/分」；以及 status 写入节流
 _done_marks: list[float] = []
@@ -407,8 +409,15 @@ def heartbeat(code: str) -> None:
 
 def maybe_heartbeat(code: str) -> None:
     global _last_heartbeat
-    if time.time() - _last_heartbeat >= HEARTBEAT_INTERVAL:
+    if time.time() - _last_heartbeat < HEARTBEAT_INTERVAL:
+        return
+    # 并发上传时可能有多个线程同时到期，用非阻塞锁保证只有一路真正去写 claim 文件
+    if not _hb_lock.acquire(blocking=False):
+        return
+    try:
         heartbeat(code)
+    finally:
+        _hb_lock.release()
 
 
 def release_claim(code: str) -> None:
