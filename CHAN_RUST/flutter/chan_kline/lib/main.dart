@@ -632,12 +632,46 @@ class _KlineHomePageState extends State<KlineHomePage>
     unawaited(_requestCloseApp());
   }
 
-  /// 分笔缓存盘：有 G 盘用 G，否则用 D，再否则用当前数据根。
+  /// 分笔缓存盘：优先可写的 G，其次 D，再其次当前数据根。
+  ///
+  /// 2026-11-09 补：原来只看 G 盘存不存在。PCB 的 G 盘随后出现文件系统损坏
+  /// （缓存目录里全是乱码文件名、体积虚报成 2~4GB），预览「存在」照样通过，
+  /// 结果整批任务空跑成 1 天残包。改为真写一个探针文件再读回来，
+  /// 坏盘直接跳过，落到下一个盘。
   String _fullUploadDataRoot() {
-    if (Directory(r'G:\').existsSync()) return r'G:\chan_month5_data';
-    if (Directory(r'D:\').existsSync()) return r'D:\chan_month5_data';
-    if (_dataRoot.isNotEmpty) return _dataRoot;
-    return r'C:\chan_month5_data';
+    final roots = <String>[
+      r'G:\chan_month5_data',
+      r'D:\chan_month5_data',
+      if (_dataRoot.isNotEmpty) _dataRoot,
+      r'C:\chan_month5_data',
+    ];
+    for (final root in roots) {
+      final drive = '${root.substring(0, 2)}\\';
+      if (!Directory(drive).existsSync()) continue;
+      if (!_dataRootUsable(root)) continue;
+      return root;
+    }
+    return _dataRoot.isNotEmpty ? _dataRoot : r'C:\chan_month5_data';
+  }
+
+  /// 试写 + 读回 + 删除，任一步失败就判这个数据根不可用。
+  bool _dataRootUsable(String root) {
+    File? probe;
+    try {
+      final dir = Directory('$root\\local');
+      if (!dir.existsSync()) dir.createSync(recursive: true);
+      final stamp = 'probe-${DateTime.now().microsecondsSinceEpoch}';
+      probe = File('$root\\local\\.data_root_probe');
+      probe.writeAsStringSync(stamp, flush: true);
+      final back = probe.readAsStringSync().trim();
+      probe.deleteSync();
+      return back == stamp;
+    } catch (_) {
+      try {
+        probe?.deleteSync();
+      } catch (_) {}
+      return false;
+    }
   }
 
   /// 从环境变量、当前目录、程序所在目录往上找登记脚本，避免工作目录一变就找不到仓库。
