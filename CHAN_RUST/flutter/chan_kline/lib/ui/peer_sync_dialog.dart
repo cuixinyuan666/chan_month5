@@ -161,6 +161,9 @@ Future<PeerSyncSettings?> showPeerSyncDialog(
                     const SizedBox(height: 4),
                     Text('旧侧独有的 $moveN 个文件 → 移进那台的备份目录（不直接删）',
                         style: TextStyle(fontSize: 12, color: Colors.grey.shade700)),
+                    const SizedBox(height: 4),
+                    Text('同步完成后自动重编那台的 DLL 与 App（cargo + flutter），并重启它的界面',
+                        style: TextStyle(fontSize: 12, color: Colors.blue.shade700)),
                     const SizedBox(height: 6),
                     const Text('不含：.git 历史、对端验证现场、各家的工具缓存目录。',
                         style: TextStyle(fontSize: 12)),
@@ -192,7 +195,11 @@ Future<PeerSyncSettings?> showPeerSyncDialog(
               direction: dir,
               onLine: (l) {
                 if (!alive) return;
-                setDlg(() => addLog(l));
+                final isBuild = l.contains('开始编译') || l.contains('编译中') || l.contains('编译已启动');
+                setDlg(() {
+                  addLog(l);
+                  if (isBuild) status = '正在重编并重启 App……';
+                });
               },
             );
 
@@ -202,11 +209,14 @@ Future<PeerSyncSettings?> showPeerSyncDialog(
                 '${now.day.toString().padLeft(2, '0')} '
                 '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
             final summary = PeerSyncService.latestSummaryLine(out);
+            final buildFailed = out.json?['buildOk'] == false;
             setDlg(() {
               busy = false;
               hasResult = true;
               resultOk = out.ok;
-              status = out.ok ? '同步完成' : '同步失败';
+              status = buildFailed
+                  ? '同步完成，但重编没成功（看下面日志）'
+                  : (out.ok ? '同步完成' : '同步失败');
               lastLine = PeerSyncService.lastSyncLine(stamp, out.ok, summary);
               addLog('>> 脚本退出码 ${out.exitCode}');
               addLog('>> 结论：$summary');

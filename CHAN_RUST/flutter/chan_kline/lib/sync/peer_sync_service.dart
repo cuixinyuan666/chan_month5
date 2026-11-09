@@ -163,12 +163,14 @@ abstract final class PeerSyncService {
       }
     }
 
+    // 脚本自己写在 JSON 里的 ok 优先：退出码 7 = 同步成了、只是编译没出成品，
+    // 那种情况不该把整轮报成失败（界面另有一行黄色提示）。
     final okFlag = json != null ? (json['ok'] == true) : (code == 0);
     final err = json != null
         ? ((json['error'] as String?) ?? '').trim()
         : (errText.isNotEmpty ? errText : '脚本退出码 $code');
     return PeerSyncOutcome(
-      ok: okFlag && code == 0,
+      ok: okFlag,
       exitCode: code,
       json: json,
       error: err,
@@ -191,9 +193,12 @@ abstract final class PeerSyncService {
   /// 按「最新一方」真同步：把旧的一侧对齐到新的一侧（方向由 plan 给出）。
   ///
   /// direction 取 plan 返回的 `direction`；'auto' 表示让脚本再判一次。
+  /// build=true 时，同步完自动编译「刚被对齐的那一侧」（cargo 编 chan_ffi.dll →
+  /// flutter build --debug → 重启那台的 App），本机就直接编，对端就走远端代理。
   static Future<PeerSyncOutcome> latestSync({
     required String peer,
     String direction = 'auto',
+    bool build = true,
     void Function(String line)? onLine,
   }) {
     final d = switch (direction) {
@@ -203,7 +208,15 @@ abstract final class PeerSyncService {
     };
     return runScript(
       script: latestScript,
-      args: ['-PeerPath', peer, '-Apply', '-Json', '-Direction', d],
+      args: [
+        '-PeerPath',
+        peer,
+        '-Apply',
+        '-Json',
+        '-Direction',
+        d,
+        if (build) '-Build',
+      ],
       onLine: onLine,
       timeout: const Duration(minutes: 40),
     );
@@ -361,11 +374,22 @@ abstract final class PeerSyncService {
     final copied = (j['copied'] as num?)?.toInt() ?? 0;
     final moved = (j['movedAside'] as num?)?.toInt() ?? 0;
     final left = (j['verifyLeft'] as num?)?.toInt() ?? 0;
+    final buildOk = j['buildOk'];
+    final buildSide = (j['buildSide'] as String?) ?? '';
+    final buildSec = (j['buildSec'] as num?)?.toInt() ?? 0;
+    final buildNote = (j['buildNote'] as String?)?.trim() ?? '';
+    final buildPart = buildOk == true && buildSide.isNotEmpty
+        ? '已重编${buildSide == 'local' ? '本机' : '对端'}并重启 App'
+            '${buildSec > 0 ? '（$buildSec 秒）' : ''}'
+        : buildOk == false
+            ? '重编没成功'
+            : buildNote;
     final parts = <String>[
       '以 $newer 为准',
       '对齐 $copied 个文件',
       if (moved > 0) '移出 $moved 个到备份',
       if (left > 0) '仍有 $left 处差异' else '复核一致',
+      if (buildPart.isNotEmpty) buildPart,
     ];
     return parts.join('，');
   }
