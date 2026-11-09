@@ -5983,3 +5983,24 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   1. 太极图在 BitBlt 普通抓屏里永远看不见，凡"图上没有但人眼有"的现象，先怀疑分层窗口。
   2. `click` 依赖代理在**已登录桌面会话**（session ≠ 0）里跑；session 0 下合成鼠标无效。
 - **相关文件**：`CHAN_RUST\scripts\remote_app_agent.ps1`（1.2.0，新增 click/windows、BitBlt 抓屏、start 自动点击）、`remote_ctl.ps1`（动作白名单扩到 12 个，新增 `-Source/-X/-Y`）、`README_sync_remote.md`。
+
+### 2026-11-09 · Doubao · 双机协同 · App 内置「双机同步」按钮 + 反向链路打通（PCA↔PCB）
+
+- **执行者**：Doubao Agent
+- **任务类型**：双机协同 / Flutter 设置面板 / PowerShell 部署
+- **操作**：
+  1. 设置面板（齿轮 → 面板滚到底，位于「复制排查信息」下方）新增蓝色 **「双机同步」** 按钮与一行「上次同步」，点开是独立对话框：对端项目路径（按主机名自动填，PCA→`\\192.168.1.6\D$\2\chan_month5`、PCB→`\\192.168.1.5\chan_month5`）、「测试连接」「立即同步到对端」「按快照回退」与一页说明。新增 `lib/settings/peer_sync_settings_store.dart`（设置落盘 `Directory.current\.chan_sync_settings.json`，该文件已进同步排除表）、`lib/sync/peer_sync_service.dart`（找仓库根 / 挑 PowerShell / 拉脚本逐行透传 / 解析 `===JSON===`）、`lib/ui/peer_sync_dialog.dart`；`main.dart` 在 `_buildPanelAdvancedSection` 插入按钮与「上次同步」行。
+  2. 界面修整：日志框改深色底 `0xFF1B1C1F` + 字色 `0xFFD7D7D7`（原来浅底浅字看不清）；失败原因与「上次同步」都改单行省略（`maxLines:1` + ellipsis，`lastSyncLine()` 对 summary 截 40 字），不再把对话框撑开。
+  3. 脚本层新增：纯 .NET 的 `Get-Sha256`（App 用 `-File` 拉起的子进程落到 5.1，`Get-FileHash` 在那套环境里 `CommandNotFoundException`，改掉对它的依赖）、`-DiffOnly / -Backup / -Json` 三个开关、`$Result.psExe/psVersion`、`Walk-FileMap/Measure-Layer` 的 `excludeMode`（code 层 `all`、build 层 `files`，build 层 robocopy 补 `/XF`，杜绝 `.chan_sync_settings.json` 被推到对端）；`sync_restore.ps1` 删掉名不副实的 `-LocalRoot`，语义纠正为「把对端被覆盖的文件从对端快照拷回对端」。
+  4. 反向（PCB→PCA）落地：PCA 建共享 `chan_month5`（`share_repo.ps1`，提权后 `Everyone` 全控）；确认 PCA 登录账号 `86185` 是**微软账号绑定**账户、SMB 网络登录必 `1326`，于是另建纯本地账号 `chansync`（非管理员组，仅授权仓库目录 `Modify`，`make_sync_account.ps1`）；PCB 用 `连上PCA_双击这里.bat` 先清旧会话再 `New-SmbMapping -Persistent`；`check_reverse.ps1` 做只读自检并把全过程写 `reverse_check.log`；PCA 代理挂 `HKCU\...\Run\ChanRemoteAgent` 开机自启，反向真推时替 PCA 自己的 App「让路」并在推完拉回。
+  5. 代理功能扩到 13 个动作：新增 `scroll`（`WHEEL=0x0800`，`-Delta` 正数向上），用于远程驱动对端界面。
+- **结果**：App 内四条路径真机点通——「测试连接」返回 `共享可达 / 代理在线 / 差异四计数 / 对端 App 未占产物`；「立即同步到对端」依次走确认弹窗 → 快照 → robocopy 两层 → 指纹校验，11:25 那次 `新增 0 / 覆盖 12 / 相同 896 / 指纹一致 / 快照 12 个文件`、结论成功；「按快照回退」确认框与执行都通。反向链路 13:02 自检退出码 `0`：`共享可达：是`、`chansync` 建映射成功、差异 `新增 74 / 覆盖 1 / 相同 910 / 对端独有 3`。随后一次正向 `-Apply -Backup -RestartRemoteApp` 把新脚本与文档补齐（新增 3 / 覆盖 1 / 保留对端独有 74 / 快照 1 文件 / 对端 App 停后又被拉回 `pid=7720`），退出码 `0`。
+- **演示**：本机 App 设置面板 →「双机同步」→「立即同步到对端」= 一键走完「算差异→确认→快照→推源码→推产物→校验指纹→拉起对端 App」；「测试连接」只读不改盘。
+- **测试**：`flutter analyze` 131 条全是仓库既有 info/warning、无 error；`flutter build windows --debug` 两次成功（41.0s / 32.7s）；App 内同步两次成功（11:12、11:25）；`sync_restore.ps1 -Stamp 20261109_110717` 退 `0`、2 个文件退回快照值；反向 `check_reverse.ps1` 退 `0`。
+- **注意事项 / 待办**：
+  1. 这类脚本必须 **UTF-8 单 BOM**：双 BOM（首字节 `EF BB BF EF`）会让 5.1 把 `param` 块判成非法赋值，症状是双击后无输出、无日志；
+  2. 桌面上的 bat 不能靠 `%~dp0` 找同级 ps1（`%~dp0` 是桌面），启动器要写死绝对路径；
+  3. 不给代理加「任意执行命令」动作：代理信箱在仓库内、对端是匿名可读共享，加了等于同网段可远程执行代码；
+  4. 反向「App 自己退出让路」仍由 PCA 代理代劳（停 + 拉回），未做 App 内自退；
+  5. 从 PCB 点按钮推 PCA 的最终一次真人验收还没做（脚本层已证读写通）。
+- **相关文件**：`CHAN_RUST\flutter\chan_kline\lib\settings\peer_sync_settings_store.dart`、`lib\sync\peer_sync_service.dart`、`lib\ui\peer_sync_dialog.dart`、`lib\main.dart`、`CHAN_RUST\scripts\sync_to_remote.ps1`、`sync_restore.ps1`、`remote_app_agent.ps1`、`remote_ctl.ps1`、`share_repo.ps1`、`make_sync_account.ps1`、`check_reverse.ps1`、`开共享_双击这里.bat`、`连上PCA_双击这里.bat`、`README_sync_remote.md`。

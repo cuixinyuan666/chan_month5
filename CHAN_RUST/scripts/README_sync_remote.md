@@ -15,7 +15,23 @@ powershell -NoProfile -File CHAN_RUST\scripts\sync_to_remote.ps1 -Apply
 # 只推源码 / 只推产物
 ... -Apply -Include code
 ... -Apply -Include build
+
+# 只算差异、一个文件都不写（给 App 的「测试连接 / 差异预览」用）
+... -DiffOnly
+
+# 覆盖前先把「将被覆盖的文件」在对端存一份快照（留最近 3 份）
+... -Apply -Backup
+
+# 结尾额外吐一段机器可读结论（App 靠它拼结论行）
+... -Json
 ```
+
+`-Json` 段格式固定：`===JSON=== {...} ===END===`，键为 `ok / peer / local / include /
+dryRun / diffOnly / new / overwrite / same / onlyInPeer / backupDir / backupFiles /
+peerAppWasLocked / peerAppStopped / peerAppRestarted / peerAppPid / hashes / error /
+psExe / psVersion`。`psExe`+`psVersion` 是为了下次一眼看出「这条到底是 5.1 还是 7 跑的」——
+App 用 `-File` 拉起的子进程可能落到 5.1，那套环境里部分 cmdlet 不可靠（2026-11-09 踩到
+`Get-FileHash` 报 `CommandNotFoundException`，已改成纯 .NET 的 SHA256，不再依赖该 cmdlet）。
 
 **白名单**（不在里面的都不推）：源码层排除 `.git`、`.kilo`、`.kilocode`、`.workbuddy`、
 `.codebuddy`、`.wt`、`exports`、`dist`、`CHAN_RUST\rust\target*`、`flutter\chan_kline\build`、
@@ -33,8 +49,12 @@ powershell -NoProfile -File CHAN_RUST\scripts\sync_to_remote.ps1 -Apply
    `session.json` / `status.json` / `last_report.*` 一律不动——那是各机自己的验证现场。
 
 退出码：`0` 成功；`2` 共享不可达；`3` 远端 exe/dll 被占用（那台 App 在跑，先关再推）；
-`4` robocopy 失败（日志在 `%TEMP%\chan_sync_logs\`）；`5` 产物指纹不一致。
+`4` robocopy 失败（日志在 `%TEMP%\chan_sync_logs\`）；`5` 产物指纹不一致；`6` 本机没有产物目录。
 robocopy 自己的 `3`（有复制 + 目标端有额外文件）算成功，`>=8` 才算失败。
+
+**回退**：`sync_restore.ps1` 把对端被上次同步覆盖掉的文件，从对端自己的快照里拷回对端
+（撤销那次覆盖，本机仓库不动）；默认用最近一份，`-Stamp` 指定，`-Json` 给 App 解析；
+退 `0/2/4`。
 
 **产物被占用的处理（那台 App 正开着）**：`-Apply` 默认会先调 `remote_ctl.ps1 -Action stop`
 关掉**代理记录在案的那一个** App——只是它自己拉起的，你手动开的窗口不动（`stop` 会校验 exe 路径），
@@ -43,6 +63,63 @@ robocopy 自己的 `3`（有复制 + 目标端有额外文件）算成功，`>=8
 
 > 四个脚本本身存为 **UTF-8 带 BOM**：远端用 Windows PowerShell 5.1 跑中文脚本时会按 ANSI 误读
 > 无 BOM 的文件，甚至解析失败静默退出（2026-11-09 踩过两次）。补 BOM 对 pwsh 7 无害。
+
+## 一·补充、App 里的「双机同步」按钮（2026-11-09 起）
+
+设置面板（齿轮 → 面板滚到底）在「复制排查信息」下面新增 **「双机同步」**，与「电报通知 / 机器学习」同级；
+按钮下方常驻一行「上次同步」。点开是独立对话框：
+
+| 控件 | 干什么 |
+| --- | --- |
+| 对端项目路径 | 按主机名自动填：PCA（`LAPTOP-NA22IFPU`）→ `\\192.168.1.6\D$\2\chan_month5`；PCB（`CXY`）→ `\\192.168.1.5\chan_month5`；右边「默认」可复位 |
+| 测试连接 | 只读：共享是否可达、对端代理在不在线、差异四计数、对端 App 是否占着产物 |
+| 立即同步到对端 | 先算差异 → 弹确认（新增 / 覆盖 / 相同 / 对端独有不删 / 对端 App 在不在跑 / 本次不再询问）→ 真写 |
+| 按快照回退 | 把对端最近一份快照里的文件拷回对端（撤销上次覆盖），带二次确认 |
+| ? | 一页说明（做什么 / 步骤 / 覆盖什么 / 失败怎么办 / 不同步什么） |
+
+实现：`lib/sync/peer_sync_service.dart` 负责找仓库根、挑 PowerShell、`Process.start` 拉起脚本并逐行透传
+stdout、解析 `===JSON===`；`lib/ui/peer_sync_dialog.dart` 是界面；设置项落盘 `Directory.current` 下的
+`.chan_sync_settings.json`（该文件已进排除表，不会跟着同步跑过去）。
+
+**反向（从 PCB 点按钮推 PCA）怎么落地（2026-11-09 实测）**
+
+反向不是把脚本反过来调就能通，卡的是**认证**：PCA 的登录账号 `86185` 是**微软账号绑定**账户，
+SMB 网络登录不认「本地别名 + 密码」，一律 `System error 1326`。所以另开一个纯本地账号。
+
+PCA 侧（每台只做一次）：
+
+1. 共享：双击 `CHAN_RUST\scripts\开共享_双击这里.bat`（弹一次 UAC）→ `chan_month5 → 仓库根`，Everyone 全控；
+   普通权限 shell 直接 `New-SmbShare` 会「拒绝访问」；
+2. 专用账号：`CHAN_RUST\scripts\make_sync_account.ps1`（弹一次 UAC）→ 建本地账号 `chansync`（非管理员组），
+   只给它对仓库目录的 `Modify`（`icacls /grant chansync:(OI)(CI)M /T`）。密码写在脚本里
+   （`ChanSync2026!`），要换就改一处、两边重推。要撤：`Remove-LocalUser chansync` +
+   `icacls <仓库根> /remove:g chansync`；
+3. 代理：`remote_app_agent.ps1 -RepoRoot <仓库根>`，已挂 `HKCU\...\Run\ChanRemoteAgent`（登录即起）。
+   反向真推时由它替 PCA 自己的 App「让路」（停）+ 推完再拉回。
+
+PCB 侧（每台只做一次）：双击 `连上PCA_双击这里.bat`（桌面那份是写死绝对路径的启动器，
+脚本目录那份用 `%~dp0`）。它内部先清掉到 `192.168.1.5` 的旧会话（旧会话会锁死身份，报
+「目前是以其他用户名和密码进行映射的」），再 `New-SmbMapping -UserName chansync -Persistent $true`。
+持久映射做好一次，重启后自动恢复，之后按钮不再问密码。
+
+自检（不动一个文件）：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File CHAN_RUST\scripts\check_reverse.ps1
+```
+
+全程写 `a_Data\remote_ctl\reverse_check.log`：清会话 → 建映射 → 列目录 → `-DiffOnly` 算差异。
+`共享可达：是` 且退出码 `0` 即链路通。实测（PCB→PCA）新增 74 / 覆盖 1 / 相同 910 / 对端独有 3。
+
+两个踩过的坑：
+
+- **脚本必须 UTF-8 单 BOM**：双 BOM（首字节 `EF BB BF EF`）会让 Windows PowerShell 5.1 把 `param`
+  块判成「非法赋值」，症状是双击后什么都不做、也没有日志；
+- **桌面上的 bat 不能靠 `%~dp0` 找 ps1**：`%~dp0` 指向 bat 自己所在目录（桌面），ps1 在
+  `CHAN_RUST\scripts` 下，于是静默闪退。
+
+没做也不打算做：给代理加「任意执行命令」的动作。代理信箱在仓库内，而对端是匿名可读共享，
+加这个口子等于同网段任何设备都能在 PCB 上执行代码。
 
 ## 二、远程拉起 App（本机控制那台）
 
