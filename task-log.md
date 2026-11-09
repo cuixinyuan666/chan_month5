@@ -6080,3 +6080,16 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **测试**：4MB 假包直发 Telegram（chat_id=0，返回 400 但传输走完）直连 45–56KB/s、代理 49KB/s；三路并发直连 130KB/s、代理 94KB/s（合成包），真机并发上传时网卡聚合仅 62.9KB/s。
 - **注意事项 / 待办**：并发改动在真机无收益，已回退，只保留「心跳写 claim 加锁」这一条安全修正；**PCB 那 118 只 1 天的残包需要重跑**（本质是它取不到历史，属于数据质量事故）。
 - **相关文件**：`CHAN_RUST\scripts\pipeline_stream_ticks.py`（`maybe_heartbeat` / `_hb_lock`）。
+### 2026-11-09 · Doubao · 排查 · PCB 分笔上传为空跑：143 只全是 1 天残包，真实历史 0 只
+
+- **执行者**：Doubao Agent
+- **任务类型**：数据质量排查 / 远程处置
+- **操作**：把 003015 从共享状态摘掉做重传探针 → cxy 领走后直接判 `no_files`；再按 `machine=cxy` 全量清点；远程结束 PCB 的 `Chan\TicksFullUpload`，并用 `stop.flag` 让残留 worker 退出。
+- **结果**：
+  1. cxy 名下 143 只全部是「1 个包、1 天、体积≈0MB」，**真正传了历史的 0 只**；另有 22 只被判 `no_files`；
+  2. 对照：老记录 1446 只累计 119.5 万天（真实）、PCA 本轮 11 只累计 3.3 万天（真实）；
+  3. 结论：PCB 的「1.5 只/分」是空跑刷出来的，它取不到分笔数据；PCA 慢是因为它一个人在做真活。
+- **演示**：打开「上传进度」弹窗，两台明细里 cxy 每只体积 0MB。
+- **测试**：003015 重传 → cxy 返回 `reason=no_files`；已把它恢复回原状（files 里保留 1 天残包、skipped 清空）。
+- **注意事项 / 待办**：PCB 的 `dataRoot=G:\chan_month5_data` 未共享（`G$` 也不可达），要定位「为什么取不到文件」必须先能读到它的 `supervisor.log` / `pipeline_stream.log`；PCB 任务已停、`stop.flag` 已删，随时可再启。
+- **相关文件**：`D:\chan_ticks_share\live\ticks_stream_state.json`、`D:\chan_month5_data\local\state_backup\ticks_stream_state_20261109_153647.json`。
