@@ -15,12 +15,14 @@
 #   ... -Action command -Command '{"type":"step","dir":1}'
 #   ... -Action report                  # 把远端验证报告收进 inbox 并解析 ok
 #   ... -Action stop                    # 只关代理启动的那个 pid
+#   ... -Action task -TaskOp run        # 拉起对端的「全市场分笔上传」（代理只放行 Chan\TicksFullUpload）
+#   ... -Action task -TaskOp query      # 查那个计划任务在不在跑
 #
 # 退出码：0 结果 ok；1 结果 ok=false（远端返回失败）；2 超时/代理未响应；3 共享不可达
 param(
     [string]$SharePath = '\\192.168.1.6\D$\2\chan_month5',
     [Parameter(Mandatory = $true)]
-    [ValidateSet('ping', 'start', 'stop', 'status', 'snapshot', 'screenshot', 'command', 'report', 'reload', 'ps', 'click', 'scroll', 'windows')]
+    [ValidateSet('ping', 'start', 'stop', 'status', 'snapshot', 'screenshot', 'command', 'report', 'reload', 'ps', 'click', 'scroll', 'windows', 'task')]
     [string]$Action,
     [ValidateSet('ui', 'verify')][string]$Mode = 'ui',
     [string]$SuiteId = '',
@@ -29,6 +31,8 @@ param(
     [int]$X = -1,
     [int]$Y = -1,
     [int]$Delta = -3,
+    [string]$TaskName = 'Chan\TicksFullUpload',
+    [ValidateSet('run', 'end', 'query')][string]$TaskOp = 'run',
     [int]$TimeoutSec = 60,
     [switch]$Json
 )
@@ -74,6 +78,10 @@ if ($Action -eq 'scroll') {
     if ($X -ge 0) { $argsObj['x'] = $X }
     if ($Y -ge 0) { $argsObj['y'] = $Y }
     $argsObj['delta'] = $Delta
+}
+if ($Action -eq 'task') {
+    $argsObj['name'] = $TaskName
+    $argsObj['op'] = $TaskOp
 }
 
 $req = [pscustomobject]@{

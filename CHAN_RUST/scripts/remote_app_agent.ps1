@@ -19,7 +19,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$AgentVersion = '1.2.0'
+$AgentVersion = '1.3.0'
 $CtlDir = Join-Path $RepoRoot 'a_Data\remote_ctl'
 $ReqDir = Join-Path $CtlDir 'requests'
 $ResDir = Join-Path $CtlDir 'results'
@@ -501,6 +501,63 @@ function Do-Report($a) {
     return [pscustomobject]@{ ok = $ok; copied = $copied; inbox = $dest }
 }
 
+function Do-Task($a) {
+    # 只放行「全市场分笔上传」这一个计划任务。代理不提供任意执行命令：
+    # 任务名必须逐字匹配白名单，别的一律拒绝，避免变成同网段的后门。
+    $name = 'Chan\TicksFullUpload'
+    if ($null -ne $a -and $null -ne $a.name -and ([string]$a.name).Trim() -ne '') {
+        $name = ([string]$a.name).Trim()
+    }
+    $allowed = @('Chan\TicksFullUpload')
+    $hit = $false
+    foreach ($n in $allowed) { if ($n -ieq $name) { $hit = $true; $name = $n } }
+    if (-not $hit) { throw ("任务名不在白名单：$name（只允许 " + ($allowed -join ' / ') + "）") }
+
+    $op = 'run'
+    if ($null -ne $a -and $null -ne $a.op -and ([string]$a.op).Trim() -ne '') {
+        $op = ([string]$a.op).Trim().ToLowerInvariant()
+    }
+    if (@('run', 'end', 'query') -notcontains $op) { throw "task 只接受 op = run / end / query（收到：$op）" }
+
+    $sch = Join-Path $env:SystemRoot 'System32\schtasks.exe'
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        switch ($op) {
+            'run' { $text = (& $sch /Run /TN $name 2>&1 | Out-String); $code = $LASTEXITCODE }
+            'end' { $text = (& $sch /End /TN $name 2>&1 | Out-String); $code = $LASTEXITCODE }
+            'query' { $text = (& $sch /Query /TN $name /FO LIST 2>&1 | Out-String); $code = $LASTEXITCODE }
+        }
+    } finally {
+        $ErrorActionPreference = $prev
+    }
+    $text = ($text -replace '[\r\n]+', ' ').Trim()
+    # schtasks 的提示文字是控制台代码页（GBK）出来的，经代理管道到 App 会变乱码，
+    # 所以只保留可读 ASCII，另外给一个稳定的英文 state，界面按 state 判断成败。
+    $ascii = ($text -replace '[^\x20-\x7E]', ' ' -replace '\s+', ' ').Trim()
+    if ($ascii.Length -gt 200) { $ascii = $ascii.Substring(0, 200) }
+    $state = 'unknown'
+    if ($op -eq 'run') { if ($code -eq 0) { $state = 'accepted' } else { $state = 'run-failed' } }
+    if ($op -eq 'end') { if ($code -eq 0) { $state = 'stop-requested' } else { $state = 'end-failed' } }
+    if ($op -eq 'query') { if ($code -eq 0) { $state = 'registered' } else { $state = 'not-registered' } }
+
+    $result = [pscustomobject]@{
+        ok       = ($code -eq 0)
+        name     = $name
+        op       = $op
+        state    = $state
+        exitCode = [int]$code
+        machine  = $env:COMPUTERNAME
+        output   = $ascii
+    }
+    if ($code -ne 0) {
+        $hint = '计划任务可能还没在这台登记过：先在画面里点一次「生成本机上传任务」'
+        if ($text -match 'already running|正在运行') { $hint = '任务已在运行中（可先 query 看状态）' }
+        $result | Add-Member -NotePropertyName hint -NotePropertyValue $hint -Force
+    }
+    return $result
+}
+
 function Invoke-Action([string]$action, $a) {
     switch ($action) {
         'ping' { return (Do-Ping $a) }
@@ -516,7 +573,8 @@ function Invoke-Action([string]$action, $a) {
         'click' { return (Do-Click $a) }
         'scroll' { return (Do-Scroll $a) }
         'windows' { return (Do-Windows $a) }
-        default { throw "未知动作：$action（只接受 ping/start/stop/status/snapshot/screenshot/command/report/reload/ps/click/scroll/windows）" }
+        'task' { return (Do-Task $a) }
+        default { throw "未知动作：$action（只接受 ping/start/stop/status/snapshot/screenshot/command/report/reload/ps/click/scroll/windows/task）" }
     }
 }
 
