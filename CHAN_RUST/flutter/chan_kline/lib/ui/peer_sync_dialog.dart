@@ -180,6 +180,7 @@ Future<PeerSyncSettings?> showPeerSyncDialog(
               resultOk = out.ok;
               status = out.ok ? '同步完成' : '同步失败';
               lastLine = PeerSyncService.lastSyncLine(stamp, out.ok, summary);
+              addLog('>> 脚本退出码 ${out.exitCode}');
               addLog('>> 结论：$summary');
             });
             final saved = initial.copyWith(
@@ -194,6 +195,15 @@ Future<PeerSyncSettings?> showPeerSyncDialog(
 
           Future<void> doRestore() async {
             final target = peerCtrl.text.trim();
+            if (target.isEmpty) {
+              setDlg(() {
+                status = '先填对端路径';
+                hasResult = true;
+                resultOk = false;
+                addLog('!! 对端路径为空：先在输入框填对端共享路径');
+              });
+              return;
+            }
             final ok = await showDialog<bool>(
               context: ctx,
               builder: (c2) => AlertDialog(
@@ -209,24 +219,71 @@ Future<PeerSyncSettings?> showPeerSyncDialog(
                 ],
               ),
             );
-            if (ok != true || !alive) return;
+            if (ok != true || !alive) {
+              if (alive) {
+                setDlg(() {
+                  status = '已取消回退（对端没有改动）';
+                  hasResult = true;
+                  resultOk = true;
+                  addLog('>> 已取消，没有动任何文件');
+                });
+              }
+              return;
+            }
             setDlg(() {
               busy = true;
               status = '回退中……';
               hasResult = false;
               log.clear();
+              addLog('>> 按快照回退（对端：$target）');
             });
-            final out = await PeerSyncService.restore(peer: target);
+            PeerSyncOutcome out;
+            try {
+              out = await PeerSyncService.restore(
+                peer: target,
+                onLine: (l) {
+                  if (!alive) return;
+                  setDlg(() => addLog(l));
+                },
+              );
+            } catch (e) {
+              if (!alive) return;
+              setDlg(() {
+                busy = false;
+                hasResult = true;
+                resultOk = false;
+                status = '回退异常';
+                addLog('!! 启动或等待回退脚本时异常：$e');
+              });
+              return;
+            }
             if (!alive) return;
+            final restored = out.json?['restored'];
+            final stampUsed = (out.json?['stamp'] ?? '').toString();
+            final now = DateTime.now();
+            final ts = '${now.year}-${now.month.toString().padLeft(2, '0')}-'
+                '${now.day.toString().padLeft(2, '0')} '
+                '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+            final line = out.ok
+                ? '已回退 ${restored ?? 0} 个文件到快照 ${stampUsed.isEmpty ? '-' : stampUsed}（对端）'
+                : '回退失败：${out.error}';
             setDlg(() {
               busy = false;
               hasResult = true;
               resultOk = out.ok;
               status = out.ok ? '回退完成' : '回退失败';
-              addLog(out.ok
-                  ? '>> 已回退 ${out.json?['restored']} 个文件（快照 ${out.json?['stamp']}）'
-                  : '!! ${out.error}');
+              lastLine = PeerSyncService.lastSyncLine(ts, out.ok, line);
+              addLog('>> 脚本退出码 ${out.exitCode}');
+              addLog(out.ok ? '>> 结论：$line' : '!! 结论：$line');
             });
+            final saved = initial.copyWith(
+              peerPath: target,
+              lastSyncAt: ts,
+              lastSyncOk: out.ok,
+              lastSyncSummary: line,
+            );
+            await PeerSyncSettingsStore.save(saved);
+            initial = saved;
           }
 
           final bool canAct = !busy;

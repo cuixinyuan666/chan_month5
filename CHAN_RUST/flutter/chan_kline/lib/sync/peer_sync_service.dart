@@ -234,10 +234,15 @@ abstract final class PeerSyncService {
   }
 
   /// 按对端最近一份快照回退。
-  static Future<PeerSyncOutcome> restore({required String peer, String stamp = ''}) {
+  static Future<PeerSyncOutcome> restore({
+    required String peer,
+    String stamp = '',
+    void Function(String line)? onLine,
+  }) {
     return runScript(
       script: restoreScript,
       args: ['-SharePath', peer, '-Json', if (stamp.isNotEmpty) '-Stamp', stamp],
+      onLine: onLine,
     );
   }
 
