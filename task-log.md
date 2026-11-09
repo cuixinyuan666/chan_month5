@@ -6093,3 +6093,19 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **测试**：003015 重传 → cxy 返回 `reason=no_files`；已把它恢复回原状（files 里保留 1 天残包、skipped 清空）。
 - **注意事项 / 待办**：PCB 的 `dataRoot=G:\chan_month5_data` 未共享（`G$` 也不可达），要定位「为什么取不到文件」必须先能读到它的 `supervisor.log` / `pipeline_stream.log`；PCB 任务已停、`stop.flag` 已删，随时可再启。
 - **相关文件**：`D:\chan_ticks_share\live\ticks_stream_state.json`、`D:\chan_month5_data\local\state_backup\ticks_stream_state_20261109_153647.json`。
+
+### 2026-11-09 · Doubao · 修复 · PCB 分笔上传空跑的真因是 G 盘文件系统损坏，数据根切到 D 盘后恢复真实历史
+
+- **执行者**：Doubao Agent
+- **任务类型**：故障定位 / 数据修复 / 代码防护
+- **操作**：读 `\\192.168.1.6\G\chan_month5_data` 的日志、`export_tmp\manifest.json`、`summary.csv` 与 `tdx_cache\.tdx_protocol_cache` 目录项；把 PCB 的 job 文件 `dataRoot` 从 `G:\chan_month5_data` 改为 `D:\chan_month5_data`（原件备份 `.bak_20261109`）；在 PCB D 盘建好 `local/state/tdx_cache/export_tmp/zips` 并写读探测回读；远程 `remote_ctl` 启 `Chan\TicksFullUpload`；最后把 cxy 名下 143 只 1 天残包与 22 条 `no_files` 跳过作废，让它们重新排队。
+- **结果**：
+  1. **真因**：G 盘文件系统损坏。缓存目录里 8 个「文件」名字是乱码、体积虚报成 2.9GB / 3.5GB、日期跑到 1601 年与 2094 年，`dir` 报 36GB 而卷上只余 30GB，逻辑不自洽；`summary.csv` 写着 `300141,和顺电气,0,9616,792,16129,0` —— 号称导出 9616 天，实际只 792 行、16KB；
+  2. **修复后**：PCB 传 `300143` 得 **9 包 / 3453 天 / 20.8MB / 269 秒**，`300144` 得 **14 包 / 3772 天 / 279 秒**，与 PCA 同档；此前是「1 包 / 1 天 / 35 秒」的空跑；
+  3. **重排**：摘掉 143 只残包、作废 22 条 `no_files`，剩余完成数 1460；随后 PCB 领到 002399，PCA 领到 002273，两台都在做真活；
+  4. **容量**：PCB D 盘剩 24.1GB，单只临时峰值实测 `tdx_cache` 200.9MB，PCA 整盘稳态 0.94GB —— 每只传完即清缓存，余量约 25 倍；
+  5. **代码防护**：`_fullUploadDataRoot()` 原来只看 `G:\` 存不存在，坏盘也能「通过」，已改为试写+读回+删除探测，坏盘跳过落到下一个盘（提交 `5a0985e8`）。
+- **演示**：打开「上传进度」弹窗，两台明细里 cxy 的体积不再恒为 0MB。
+- **测试**：PCB 新日志 `[15:58:35] 300143 done 3453d in 269s (uploaded 9 packs)`；共享状态按 machine 分组：`cxy 2 只 / 23 包 / 7225 天 / 59.2MB`、`LAPTOP-NA22IFPU 14 只 / 134 包 / 44422 天 / 349.9MB`、旧记录 1446 只 / 119.5 万天。
+- **注意事项 / 待办**：G 盘的坏道本身没修，需要在 PCB 上跑 `chkdsk G: /f`（或干脆废掉这块盘）；App 的分笔数据根探测只改了源码，还需重编并同步到 PCB 才生效；PCB 的 App 面板仍按旧数据根读数，重编前看进度以共享 `status` 为准。
+- **相关文件**：`\\192.168.1.6\D$\2\chan_month5\a_Data\agent_live\ticks_full_upload_job.json`（+`.bak_20261109`）、`D:\chan_month5_data\local\state_backup\ticks_stream_state_20261109_160008.json`、`CHAN_RUST\flutter\chan_kline\lib\main.dart`。
