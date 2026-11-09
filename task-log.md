@@ -5953,3 +5953,18 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   2. `stop_remote_agent.ps1` 只按命令行匹配 `remote_app_agent.ps1` 且排除自身，用于 bat 换代；不会动其他 PowerShell 进程。
   3. Obsidian 副本仍未同步：本机 `D:\ObsidianVault` 与其下 `chan-month5` 都不存在，需要提供真实 vault 路径。
 - **相关文件**：`CHAN_RUST\scripts\remote_app_agent.ps1`（1.1.3）、`remote_ctl.ps1`、`stop_remote_agent.ps1`（新增）、`README_sync_remote.md`（补三变量硬约束与两条截图腿）。
+### 2026-11-09 · Doubao · 双机协同 · 同步脚本自动让路：推产物前关远端 App，推完可再拉起
+
+- **执行者**：Doubao Agent
+- **任务类型**：双机协同 / 同步脚本增强
+- **操作**：
+  1. 实测发现：远端 App 在跑时 `sync_to_remote.ps1 -Apply` 必然以退出码 `3` 中止（exe/dll 被独占），"本机任何操作同步过去"这条预期被自己的远端进程挡住。
+  2. `-Apply` 新增默认行为：探到产物被独占时，先调 `remote_ctl.ps1 -Action stop` 关掉**代理记录在案的那一个** App（`stop` 自带 exe 路径校验，手开窗口不会被动），关不掉才中止退 `3`；新增 `-AutoCloseRemoteApp 0` 让用户自己关，新增 `-RestartRemoteApp` 推完再拉起。`-DryRun` 一律不关任何东西，只提示真跑会发生什么。
+  3. 修掉本轮自己造的一个坑：`sync_to_remote.ps1` 里用 `System32\WindowsPowerShell\v1.0\powershell.exe` 去调 `remote_ctl.ps1`，而该脚本是无 BOM 的中文 UTF-8，5.1 直接解析失败（`Unexpected token ')'`），于是"关闭远端失败"被误报成"那台跑的是手开 App"。改为 `(Get-Process -Id $PID).Path` 跟随当前宿主，并把四个脚本统一改存 **UTF-8 带 BOM**。
+- **结果**：一次 `-Apply -RestartRemoteApp` 全链路跑通——先关远端 App → 推 code 层（robocopy 3）与 build 层（robocopy 2）→ `robot_verify` 只同步模板 → 远端代理脚本自动补 BOM → `chan_kline.exe` 1028608 与 `chan_ffi.dll` 1341440 指纹一致 → `lib` 224/224、`rust\chan_data` 26/26、`a_Data\002003` 249/249 → 重新拉起 App，`status` 读回 `002003 / tick / step 0 / 942 根`。
+- **演示**：本机 `sync_to_remote.ps1 -Apply -RestartRemoteApp` 一条命令完成"停 App→同步→校验→再拉起"；不加 `-RestartRemoteApp` 则同步完远端保持关闭。
+- **测试**：`-DryRun` 在占用状态下退出码 `0`（旧版是 `3`），提示"真跑时会先关代理拉起的那个 App"；`-Apply` 退出码 `0`；重拉后 `ping` 仍报 `agent_version=1.1.3`、`session_id=1`。
+- **注意事项 / 待办**：
+  1. 四个脚本现均为 UTF-8 BOM；改动它们时**必须保持 BOM**，否则 5.1 下必解析失败。
+  2. `-RestartRemoteApp` 依赖远端代理在线；代理不在线时 `start` 会退 `2`，脚本只提示不假装成功。
+- **相关文件**：`CHAN_RUST\scripts\sync_to_remote.ps1`（新增两开关 + 自动让路）、`README_sync_remote.md`（补占用处理与 BOM 口径）、`remote_ctl.ps1` / `remote_app_agent.ps1` / `stop_remote_agent.ps1`（改 BOM）。
