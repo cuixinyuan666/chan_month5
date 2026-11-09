@@ -57,7 +57,9 @@ SETTINGS_PATH: Path | None = None
 JOB_DIR: Path | None = None
 SHARE_DIR: Path | None = None
 
-MAX_ZIP_MB = 45
+# 本机代理（127.0.0.1:19828）实测单次上传阈值：3MB/5MB 可过（33~38KB/s），
+# 6MB 传到一半被远端断开、10MB 立刻断 TLS。故包上限压到 4MB 留余量。
+MAX_ZIP_MB = 4
 RATE = 2.5
 LOCK_STALE_SEC = 30
 CLAIM_STALE_SEC = 600  # 10 min
@@ -488,7 +490,7 @@ def api(method: str, fields: dict | None = None) -> dict:
         req = urllib.request.Request(
             url, data=body, headers={"Content-Type": f"multipart/form-data; boundary={boundary}"}
         )
-    with _opener().open(req, timeout=600) as resp:
+    with _opener().open(req, timeout=300) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 
@@ -515,7 +517,7 @@ def send_doc(path: Path, caption: str) -> dict:
     req = urllib.request.Request(
         url, data=body, headers={"Content-Type": f"multipart/form-data; boundary={boundary}"}
     )
-    with _opener().open(req, timeout=600) as resp:
+    with _opener().open(req, timeout=300) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 
@@ -530,22 +532,32 @@ def _zip_and_size(code: str, tag: str, files: list[Path]) -> tuple[Path, float]:
 
 
 def upload_chunk(code: str, tag: str, files: list[Path], depth: int = 0) -> dict:
-    """上传一个年/年段包；超过上限时按年份对半拆（最多拆两层）。"""
+    """上传一个包；超上限时把文件序列对半拆，递归到每包 <= MAX_ZIP_MB。
+
+    实测本机代理只可靠支持 5MB 以内的单次上传（6MB 会被远端断开），
+    所以不再按「年」二分并限制两层，而是按文件序列无限细分，保证每包都能过。
+    """
     maybe_heartbeat(code)
     zip_path, mb = _zip_and_size(code, tag, files)
     if mb > MAX_ZIP_MB:
         zip_path.unlink(missing_ok=True)
-        if depth >= 2 or len(files) <= 1:
+        if len(files) <= 1:
             raise RuntimeError(f"chunk {code} {tag} too large {mb:.1f}MB")
-        years = sorted({f.name[:4] for f in files})
-        mid = len(years) // 2
-        left = [f for f in files if f.name[:4] in set(years[:mid])]
-        right = [f for f in files if f.name[:4] in set(years[mid:])]
-        out = {}
-        for sub_tag, sub in ((f"{years[0]}-{years[mid-1]}", left), (f"{years[mid]}-{years[-1]}", right)):
-            if sub:
-                out[sub_tag] = upload_chunk(code, sub_tag, sub, depth + 1)
-        return {"__split__": out}
+        mid = len(files) // 2
+        left, right = files[:mid], files[mid:]
+        flat = {}
+        for sub, name in (
+            (left, f"{left[0].name[:8]}-{left[-1].name[:8]}"),
+            (right, f"{right[0].name[:8]}-{right[-1].name[:8]}"),
+        ):
+            if not sub:
+                continue
+            r = upload_chunk(code, name, sub, depth + 1)
+            if "__split__" in r:
+                flat.update(r["__split__"])
+            else:
+                flat[name] = r
+        return {"__split__": flat}
     time.sleep(1.0 / RATE)
     last_err = None
     for attempt in range(3):
