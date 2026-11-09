@@ -5880,3 +5880,76 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **演示**：打开 App 设置里的「全市场分笔上传」面板，完成数从 1215 继续往上走、当前代码依次推进（002756、002757 在改动之前已由恢复后的链路跑完）。
 - **测试**：`py_compile` 通过；新 worker 实测完成一只股票。只改上传脚本，未动缠论内核与 Flutter，不需要重编 App。
 - **注意事项 / 待办**：夜里代理抖动时 5MB 以上仍会断，故上限保守取 4MB；将来换到稳定高速节点，可把上限回调到 8MB 以减少包数。未 push。
+
+---
+
+### 2026-11-09 · Doubao · 双机同步 · 本机推源码与 Debug 产物到 192.168.1.6，并拉回 002003 数据
+
+- **执行者**：Doubao Agent
+- **任务类型**：双机同步 / 环境治理
+- **操作**：
+  1. 从 `\\192.168.1.6\D$\2\chan_month5` 拉回 `a_Data\002003` 的 247 个 `*.txt`（12.48 MB），本机原来只有 `.gitkeep` 与 `README.md`；抽样 5 个 SHA256 全部一致。
+  2. 按白名单把本机源码工作树推到远端，排除 `.git`、`.kilo`、`.kilocode`、`.workbuddy`、`.codebuddy`、`.wt`、`exports`、`dist`、`rust\target`、`flutter\build`、`.dart_tool`、`windows|linux|macos` 下的 `flutter\ephemeral`、`android\.gradle`、`a_Data\.tdx_protocol_cache`、`.telegram_cache`、`agent_live`、`ml_exports`；文件级再排除 `*.log`、`*.locked*`、`*.bak*` 与临时启动脚本。
+  3. 第一次跑退出码 11：`linux\flutter\ephemeral\.plugin_symlinks` 是符号链接，SMB 上建不了链接、重试到上限。加 `/XJ` 后重跑，退出码 3（有复制 + 目标端有额外文件），无失败项。
+  4. 推 Debug 产物：`chan_kline.exe` 与 `chan_ffi.dll` 两端 SHA256 完全一致（1028608 / 1341440 字节）。
+  5. 远端原本是「老 exe（09-24，575488 字节）+ 新 dll（11-06，1342976 字节）」的错配，本次一并换成同一版本。
+- **结果**：`lib` 224/224、`rust\chan_data` 26/26、`a_Data\002003` 249/249 全对齐；抽样 30 个源码文件哈希 30/30 一致；顶层 `AGENTS.md`、`task-log.md`、`knowledge.md`、`lessons_learned.md`、`ROBOT_VERIFY.md`、`.gitignore` 全部一致。远端独有 15 个文件全是垃圾（10 个 `indicator_search` 的 `.out/.err/.log/.txt`、1 个 `.broken_20261107`、4 个 `__pycache__` 的 `.pyc`），未删除。
+- **演示**：到那台打开 `D:\2\chan_month5`，主图 exe 与 dll 已与这台同版本；`002003` 的 247 个逐笔文件本机已就位，连续单步阶段不会再因缺数据被整段跳过。
+- **测试**：robocopy 退出码 3（成功，非 8 及以上）；两端文件数与 SHA256 对拍；本机 `git status` 仍是原来那 4 个未跟踪临时文件，未被污染。
+- **注意事项 / 待办**：
+  1. **本次有过失**：`a_Data\robot_verify` 未列入排除清单，导致远端 `session.json`、`status.json`、`last_report.json/.txt` 被本机 11-06 的版本覆盖。`session.json` 已按原值还原（suiteId `indicator_search_opt_20260930`、authorizedAt `2026-11-02T11:12:16`、mode `manual_check`）；远端 11-02 那次 `status` 与报告无法恢复。**后续同步必须排除 `a_Data\robot_verify`**（只保留 `README.md` 与 `session.json.example`）。
+  2. 推产物前远端 `chan_kline.exe` 正被占用（那台 App 在跑），由用户手动关闭后才推；这条对应「不得关闭用户正在用的 App」的硬约束。
+  3. 「本机拉起远端 App」的代理与固化脚本见同日后一条（双机协同）；未 commit、未 push。
+
+---
+
+### 2026-11-09 · Doubao · 双机协同 · 同步固化成脚本，远端拉起代理落地
+
+- **执行者**：Doubao Agent
+- **任务类型**：双机协同 / 脚本固化
+- **操作**：
+  1. 新增 `CHAN_RUST/scripts/sync_to_remote.ps1`：把上一轮临时拼的 robocopy 命令固化成脚本，默认只试运行（`-Apply` 才真写），带 `-Include code|build|all`；白名单把 `.git`/`.kilo`/`rust\target`/`flutter\build`/`.dart_tool`/三平台 `ephemeral` 等排除，并强制 `/XJ`；`a_Data\robot_verify` 整体排除，只单独复制 `README.md` 与 `session.json.example`。
+  2. 新增 `CHAN_RUST/scripts/remote_app_agent.ps1`（跑在那台桌面会话里的常驻代理）+ `remote_ctl.ps1`（本机发指令）。信箱在 `a_Data\remote_ctl\`：`requests` / `results` / `done` / `shots` / `log` / `token.txt`，用令牌 + 单实例锁，动作白名单只 8 个：ping / start / stop / status / snapshot / screenshot / command / report。
+  3. 用临时目录当“假远端”做了端到端联调：ping 通、令牌自动生成、错令牌被拒、无实例时 stop 明确报否。期间修了三处自造缺陷——函数参数误用 PowerShell 自动变量 `$args`、函数调用写成 `Get-ApiToken()`（PowerShell 不接受括号调用）、以及“远端说没做”却被算成退出码 0。
+  4. 远端已就位：三个脚本与 `README_sync_remote.md` 已推过去；`a_Data\remote_ctl` 六个目录与令牌已预建。
+- **结果**：同步脚本真跑退出码 0，`chan_kline.exe`/`chan_ffi.dll` 指纹仍一致，`lib` 224/224、`rust\chan_data` 26/26、`002003` 249/249；本轮**没有**再碰 `robot_verify` 的运行现场（`session.json` 仍是我 9:22 还原的 11-02 那份）。`remote_ctl -Action ping` 在代理没启动时如实返回“远端还没有 remote_ctl 目录 / 代理未响应”，退出码 3/2，不伪造。
+- **演示**：本机敲 `remote_ctl.ps1 -Action status` 就能读到那台的当前股票、周期、步进位置（前提是那台代理已启动、App 以 ui 模式拉起）。
+- **测试**：三个脚本 `[ScriptBlock]::Create` 语法校验全过；信箱协议四项联调全过；同步试运行 + 真跑各一次；远端 robot_verify 时间戳未变。
+- **注意事项 / 待办**：
+  1. 代理**必须在那台已登录的桌面**上手动启动一次（GUI 程序在 session 0 起不来）；未注册开机自启的计划任务。
+  2. 验证模式没有 12321 的 Agent API（`main.dart` 直接进 `RobotVerifyApp`，不建主界面），要 `/state`、`/snapshot`、`/screenshot`、`/command` 必须用 `-Mode ui` 拉起。
+  3. 远端 11-02 那份 `status` 与报告仍是不可恢复状态；未 commit、未 push。
+
+---
+
+### 2026-11-09 · Doubao · 双机协同 · 远端代理解锁尝试与自启项落位
+
+- **执行者**：Doubao Agent
+- **任务类型**：双机协同 / 环境探测
+- **操作**：
+  1. 实测三条远程启动进程的通道，全部不可用：`schtasks /S 192.168.1.6` 返回 Access is denied；DCOM（`New-CimSession -Protocol` 走 `New-CimSessionOption`）返回「拒绝访问」；WinRM 未配 TrustedHosts 且需凭据。该机对本机只开放 SMB 文件通道（`C$`、`D$` 读写可用）。
+  2. 尝试用本机已在跑的 Deskflow（服务端，client1 连在本机下方，热键 `Ctrl+Alt+F9`）合成按键切屏，再在那边敲 `Win+R` 启动：合成输入被 Deskflow 过滤，日志里没有任何切换记录（只有 09:43 的物理切换），该路放弃，未在远端点任何东西。
+  3. 改为「自启项」方案：在远端 `C$\Users\Administrator\...\Startup\` 放 `chan_remote_agent.bat`（隐藏窗口拉起代理，下次登录生效）；同时在 `D:\2\chan_month5\` 放 `start_remote_agent.bat` 与中文名同功能入口，可双击。
+- **结果**：远端代理仍未启动，`remote_ctl -Action ping` 如实返回「代理未响应」，退出码 2；未伪造成功。
+- **演示**：那台重新登录（或双击 `start_remote_agent.bat`）之后，本机 `ping` 立刻能返回主机名与会话 id。
+- **测试**：SMB 通道写入回读通过；热键试验用 Deskflow 日志判定失败（无切换记录）。
+- **注意事项 / 待办**：
+  1. 自启项是我加的持久化项，路径 `C$\Users\Administrator\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\chan_remote_agent.bat`，不想要直接删这一个文件即可。
+  2. 若要在本机完全远程启动（不等登录），需要那台的管理员凭据走 `schtasks /IT`，或先在那台打开 WinRM —— 两者都未执行。
+### 2026-11-09 · Doubao · 双机协同 · 远端代理打通：拉起 / 读进度 / 发命令 / 关闭
+
+- **执行者**：Doubao Agent
+- **任务类型**：双机协同 / 远程控制台账
+- **操作**：
+  1. 用户在那台双击 `启动远端代理.bat` 后代理上线（`host=CXY`、`session_id=1`、桌面会话可起 GUI）。`start -Mode ui` 能拉起 App，但 `status` 一直报「无法连接到远程服务器」——12321 没监听。
+  2. 给代理补「不依赖 API 的 GDI 整屏抓图」（先试 App 的 `/screenshot`，失败落 `CopyFromScreen`，按虚拟桌面抓全多屏）、`ps`（看 chan_kline 进程 pid / 响应 / 窗口标题 / 会话 / 启动时刻）与 `reload`（释放锁→拉起自己→退出，实测换代成功，以后升代理不用人工双击）。抓图拿到关键证据：界面首行 `Bad state: a_Data 下未找到股票目录，请检查: C:\Users\86185\Downloads\chan\...`。
+  3. 定位根因：`chan_ffi.dll` 的 `default_data_root()` 是**编译期常量** `env!("CARGO_MANIFEST_DIR")`（`rust\chan_data\src\offline.rs:11`），本机编的产物到那台仍去找本机的 `a_Data`；且 `RobotVerifyPaths.resolveRepoRoot()` 把 `CHAN_KLINE_ROOT` 当 **chan_kline 目录**再 `parent×3`，我先前给成仓库根，导致根目录算成 `D:\`、令牌写进 `D:\a_Data\agent_live`，请求全部 `401`。
+  4. `start` 固定设置三个环境变量：`CHAN_REPO_ROOT=<仓库根>`、`CHAN_KLINE_ROOT=<...\flutter\chan_kline>`、`CHAN_DATA_ROOT=<仓库根\a_Data>`，并在这三行上方写明理由，防以后被删。
+- **结果**：端到端打通并逐项取证——拉起（`pid=3632`、`step_idx=0`、`total_bars=942`、`code=002003`、`period=tick`）；读进度（`/state` 返回完整指标与配置）；发命令（`{"type":"step","dir":1}` → `step_idx` 0→1）；关闭（`stop` 关掉 pid 14344，`ps` 计数归 0）；抓图两种腿都验证（`method=agent_api` 与 `method=gdi_desktop`）；`reload` 换代（1.1.0→1.1.1→1.1.2→1.1.3 均为自重启）。顺手删掉我算错根目录时在那台 `D:\` 根下误建的 `a_Data`（只含当天新建的 `agent_live` 与空 `robot_verify`）。
+- **演示**：本机执行 `remote_ctl.ps1 -Action status -Json` 即打印那台的股票/周期/步进位置；`-Action screenshot` 回传画面；`-Action command -Command '{"type":"step","dir":1}'` 让它走一根；`-Action stop` 关掉。
+- **测试**：`ping` 报 `agent_version=1.1.3`、`session_id=1`；`screenshot` 返回 23298 字节 PNG（K0/K1 有数据、K2/K3 因未步进显示「暂无数据」）；`stop` 后 `ps` count=0；`start` 再起后 status 正常。两端 Debug 目录 9 个条目逐一对齐，`data` 仅远端多 1 个陈旧文件。
+- **注意事项 / 待办**：
+  1. 判断 API 是否起来，只看 `a_Data\agent_live\agent_api_token.txt` 的修改时间（dart 侧“先 bind 成功再写令牌”）；`start` 返回的 `responding=true` **不可当证据**——GUI 进程未建主窗口时它也返回 true，本轮据此误判过一次。
+  2. `stop_remote_agent.ps1` 只按命令行匹配 `remote_app_agent.ps1` 且排除自身，用于 bat 换代；不会动其他 PowerShell 进程。
+  3. Obsidian 副本仍未同步：本机 `D:\ObsidianVault` 与其下 `chan-month5` 都不存在，需要提供真实 vault 路径。
+- **相关文件**：`CHAN_RUST\scripts\remote_app_agent.ps1`（1.1.3）、`remote_ctl.ps1`、`stop_remote_agent.ps1`（新增）、`README_sync_remote.md`（补三变量硬约束与两条截图腿）。
