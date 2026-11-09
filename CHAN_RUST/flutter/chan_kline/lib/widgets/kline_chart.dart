@@ -3899,6 +3899,48 @@ class _KlineCompositePainter extends CustomPainter {
     return useHigh ? bars[x].high : bars[x].low;
   }
 
+  /// 首分型前：把旧种子合并框改写成「高高」框（全层同构）——
+  /// 取该层预锚单元在 `[seed.x1, seed.x2]` 区间内 high=max(high)、low=max(low)。
+  /// 与动态 K 蜡烛同源：确认始起由真实 OHLC 接管，故此处只对首段生效。
+  KlineCombineFrame? _highHighFrameFromUnits(
+    int level,
+    KlineCombineFrame seed,
+  ) {
+    final asOf = segAsOf ?? (bars.isEmpty ? -1 : bars.last.idx);
+    if (asOf < 0) return null;
+    final units = asOfLevelVirtualK1Bars(
+      levels: levels,
+      barFeatures: barFeatures,
+      level: level,
+      asOf: asOf,
+      includeBuilding: true,
+      includePreAnchor: true,
+    );
+    if (units.isEmpty) return null;
+    double? hi;
+    double? lo;
+    var x1 = seed.x1;
+    var x2 = seed.x2;
+    for (final u in units) {
+      if (u.x2 < seed.x1 || u.x1 > seed.x2) continue;
+      hi = hi == null ? u.high : math.max(hi, u.high);
+      lo = lo == null ? u.low : math.max(lo, u.low);
+      x1 = math.min(x1, u.x1);
+      x2 = math.max(x2, u.x2);
+    }
+    if (hi == null || lo == null) return null;
+    return KlineCombineFrame(
+      x1: x1,
+      x2: x2,
+      t1: seed.t1,
+      t2: seed.t2,
+      high: hi,
+      low: lo,
+      fx: seed.fx,
+      count: math.max(1, seed.count),
+    );
+  }
+
   /// 种子框画线全层同构入口：UNKNOWN→开口虚线；JUDGE/CONFIRM→ABC（互斥）。
   void _drawSeedPhaseLines(
     Canvas canvas,
@@ -6243,11 +6285,16 @@ class _KlineCompositePainter extends CustomPainter {
     double slotW,
   ) {
     if (combineFrames.isEmpty) return;
-    // 开关开时，K0 合并帧的第一组就是种子框（与 _drawSeedBoxOverlay 同矩形）；
-    // 种子框已要求删除，这里一并跳过，否则只隐藏 overlay 仍会留下同一只框。
-    final frames = earlyDynamicUnit && _isSeedBoxFrame(combineFrames.first, 0)
-        ? combineFrames.sublist(1)
-        : combineFrames;
+    // 开关开时（首分型前走「高高」）：旧的种子组合并框不再画，
+    // 改为用该层预锚单元重建成「高高」首组框（high 取最高、low 也取最高），
+    // 与动态 K 蜡烛/连线同一输入，全层同构。
+    var frames = combineFrames;
+    if (earlyDynamicUnit && _isSeedBoxFrame(combineFrames.first, 0)) {
+      final hh = _highHighFrameFromUnits(0, combineFrames.first);
+      frames = hh == null
+          ? combineFrames.sublist(1)
+          : <KlineCombineFrame>[hh, ...combineFrames.sublist(1)];
+    }
     if (frames.isEmpty) return;
     // 末组=构建中合并（虚线）；前组=已冻结合并（实线）。
     // 信号取 CombineEngine.groups 末项（已在 combineFrames 末尾），不是 activeUnit（那是进行中段）。
@@ -6356,6 +6403,14 @@ class _KlineCompositePainter extends CustomPainter {
     double slotW,
   ) {
     if (k1CombineFrames.isEmpty && k1BarViews.isEmpty) return;
+
+    // 开关开（首分型前走「高高」）：不再用永久 k1CombineFrames（其首组就是旧种子框，
+    // 低点取区间真实最低），改走与 Kn≥2 同一套「按当层虚拟单元重算」路径，
+    // 预锚单元本身即高高，从而蜡烛/合并框/连线三层口径一致。
+    if (earlyDynamicUnit) {
+      _drawLevelCombineOnMainChart(canvas, w, plotTop, plotH, barW, slotW, 1);
+      return;
+    }
 
     if (k1CombineFrames.isNotEmpty) {
       // 方案B：K1 displayKn=1
