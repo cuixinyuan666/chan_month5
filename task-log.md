@@ -6130,3 +6130,14 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **测试**：① 对端代理 reload 后 `ping` 回 `agent_version=1.4.0`；② 直接下发 `build`：PCB `pid 14460` 起编，kernel_blob 22:19:49、App 新实例 `pid 11836`（22:19:57，335MB）；③ 本机同脚本重编：kernel_blob 22:22:03、App `pid 117356`（22:22:10）；④ 本机 kernel_blob 内含「按最新方同步」「正在重编并重启」「自动重编那台的 DLL」三条新文案；⑤ **端到端真跑**（本机 `sync_latest.ps1 -Apply -Build`）：判本机最新 → 复制 3 个 → 对端起编 → **36 秒编完并重启**，JSON 回 `buildSide=peer / buildOk=true`，整轮 46 秒、退出码 0。
 - **注意事项 / 待办**：① `chan_ffi.dll` 是编译产物、未入库，试跑时曾被判成「对端更新」并把对端的 DLL 拷回本机 —— 已在清单排除 `*.dll / *.pdb / *.ilk`；② 只改非 Dart 文件时 flutter 复用缓存、`kernel_blob.bin` 不刷新，完成判据不能只看它，已改成「日志出现 `Launch (no flutter run)` 或 kernel 或 dll 任一刷新」；③ 对端代理回的是它自己的盘符路径，本机读不到，已按共享路径重映射后再盯日志（这两条都是实跑时踩出来的）；④ 对端代理必须是 1.4.0（改完要 reload 一次）才认 `build`；⑤ PCB 现存 5 个 32KB 的 chan_kline 空壳进程，提权杀不掉，不影响新实例。
 - **相关文件**：`CHAN_RUST/scripts/remote_app_agent.ps1`、`CHAN_RUST/scripts/remote_ctl.ps1`、`CHAN_RUST/scripts/sync_latest.ps1`、`CHAN_RUST/flutter/chan_kline/lib/sync/peer_sync_service.dart`、`CHAN_RUST/flutter/chan_kline/lib/ui/peer_sync_dialog.dart`。
+### 2026-11-09 · Doubao · 功能 · App 主题做成深色/浅色/护眼三选一（颜色全收进调色板）
+
+- **执行者**：Doubao Agent
+- **任务类型**：功能改造 / 全局配色重构 / 主题持久化
+- **操作**：新增 `lib/theme/app_palette.dart`（三套色板的唯一出入口：具名 token 画布/面板/文字/涨跌/网格/浮层 + 长尾换算 `AppPalette.rgb(0x...)`）、`lib/theme/theme_settings_store.dart`（`.chan_theme_settings.json` 落盘 + `AppThemeController` 切换总线）、`lib/theme/theme_chooser.dart`（设置里的三选一芯片）；把 32 个 dart 文件里 413 处写死色改成走调色板，`ChanKlineApp` 改为跟随主题重建，`MaterialApp` 的 brightness / 底色也从调色板取。
+- **结果**：设置面板高级区第一块是「主题外观」，点深色/浅色/护眼立刻整张图重刷（K 线画布、坐标轴、图例、筹码/笔数柱、十字 tooltip、回测与指标检索面板、分笔上传弹窗一起换），不再只换外壳；重启保留上次选的。
+- **演示**：深色=原来的黑底，与改造前逐像素一致；浅色=白底深字，红 K/绿 K 保留色相只是压明度；护眼=米黄底，中性灰转暖色。太极加载遮罩也跟着变浅、不再是一块黑饼。
+- **测试**：① `flutter analyze --no-pub` → error = 0（warning 34 / info 97 全是存量）；② 新增 `test/theme_chooser_test.dart` 四项全过：点浅色后画布底色变 `0xFFF6F7F9` 且写死字面量不再返回 `0xFF121212`、点护眼变 `0xFFF4EFDF`、点深色回到 `0xFF121212`、写盘后读回同一主题；③ `flutter build windows --debug` 成功（kernel_blob 73,193,288B / 23:15:22）；④ 三套主题各真机截一张图核对（深色/浅色/护眼都出对），浅色与护眼底上 K 线、坐标、K2/K3 空态提示都读得清。
+- **注意事项 / 待办**：① 默认主题仍是深色，切回深色保证与旧版一致，是这次改造的安全底线；② 调色板对长尾色的换算是启发式（中性灰明度取反、彩色保留色相压到明度 0.28~0.52、护眼再压色相 42），观感若有偏差只需改 `app_palette.dart` 一个文件，不用再动业务代码；③ 因为 `AppPalette.rgb()` 不是编译期常量，`ChipConfig` / `TickDistConfig` / `YinYangPainter` 的默认色改成「可空 + 运行时解析」，声明处按需从 `const` 改成 `final`；④ 备份与验证用的 `.chan_theme_settings.json` 已加进 `.gitignore`，不入库；⑤ 设置面板的齿轮按钮本轮自动化点击没打中（坐标偏移），面板内三选一的实际点击效果由 widget 测试兜住，人工点一次即可确认。
+- **相关文件**：`CHAN_RUST/flutter/chan_kline/lib/theme/app_palette.dart`、`lib/theme/theme_settings_store.dart`、`lib/theme/theme_chooser.dart`、`lib/main.dart`、`lib/widgets/kline_chart.dart`、`lib/widgets/chart_level_line_style.dart`、`lib/widgets/kline_chip.dart`、`test/theme_chooser_test.dart`。
+
