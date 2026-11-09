@@ -117,3 +117,5 @@ a_Data/remote_ctl/
 # 构建与启动临时文件
 build_launch_user.*
 a_Data/tmp_build_launch_*.ps1
+
+CHAN_RUST/flutter/chan_kline/.chan_theme_settings.json
