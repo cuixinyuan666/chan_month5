@@ -6004,3 +6004,16 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   4. 反向「App 自己退出让路」仍由 PCA 代理代劳（停 + 拉回），未做 App 内自退；
   5. 从 PCB 点按钮推 PCA 的最终一次真人验收还没做（脚本层已证读写通）。
 - **相关文件**：`CHAN_RUST\flutter\chan_kline\lib\settings\peer_sync_settings_store.dart`、`lib\sync\peer_sync_service.dart`、`lib\ui\peer_sync_dialog.dart`、`lib\main.dart`、`CHAN_RUST\scripts\sync_to_remote.ps1`、`sync_restore.ps1`、`remote_app_agent.ps1`、`remote_ctl.ps1`、`share_repo.ps1`、`make_sync_account.ps1`、`check_reverse.ps1`、`开共享_双击这里.bat`、`连上PCA_双击这里.bat`、`README_sync_remote.md`。
+### 2026-11-09 · Doubao · 双机协同 · 修掉「按快照回退」不回显日志
+
+- **执行者**：Doubao Agent
+- **任务类型**：双机协同 / App 界面缺陷修复
+- **操作**：
+  1. 先证伪：把 `sync_restore.ps1 -SharePath <不存在目录> -Json` 用 `Start-Process -RedirectStandardOutput` 跑一遍，stdout 里 `!! 没有快照目录` 与 `===JSON===…===END===` 都在——脚本侧输出正常，问题在界面层。
+  2. 根因是回退这条链只调了 `PeerSyncService.restore()`，既没接 `onLine`（脚本进度全丢），成功后也没有任何「结论 / 退出码」回显，失败时 `out.error` 为空就彻底静默；而且回退结果不写回「上次同步」。
+  3. 改法：`restore()` 增加 `onLine` 并透传；`doRestore()` 先写 `>> 按快照回退（对端：…）`，运行期间逐行透传，结束后写 `>> 脚本退出码 N` 与 `>> 结论：已回退 X 个文件到快照 Y（对端）`（失败写 `!! 结论：…`）；整段包 `try/catch`，异常也写成日志行；`busy=false` 与 `hasResult` 一并复位；顺带把回退结果写进设置并刷新「上次同步」行；`doSync()` 也补一行退出码。
+- **结果**：真机点「按快照回退」→ 确认 → 日志框五行齐全（对端路径 / 用的快照 / 已回退 1 个文件 / 退出码 0 / 结论），状态行「回退完成」、下方「结论：成功」、面板「上次同步：2026-11-09 13:14 成功（已回退 1 个文件到快照 20261109_130404（对端））」。随后一次正向同步把被回退的文件推回（覆盖 12 / 新增 0 / 对端独有 74 保留 / 快照 12 个文件 / 退 0）。
+- **演示**：设置 →「双机同步」→「按快照回退」，能看见每一步在做什么，不再"点了没反应"。
+- **测试**：`flutter analyze` 131 issues、**0 error**（与改动前同基线）；`flutter build windows --debug` 成功（26.6s）；真机回退一次成功、紧接着正向同步一次成功。
+- **注意事项 / 待办**：回退后要记得再同步一次，否则对端停留在快照那一刻；「关闭」那个文字按钮对鼠标落点很挑，`Esc` 也可关。
+- **相关文件**：`lib/sync/peer_sync_service.dart`（`restore()` 增 `onLine`）、`lib/ui/peer_sync_dialog.dart`（回退全程回显 + 异常兜底 + 写回上次同步）。
