@@ -6036,3 +6036,21 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   3. 反向（PCB 点按钮拉 PCA）脚本层与信箱双向已验（把 `-SharePath` 换 `\\192.168.1.5\chan_month5` 后 `task query` / `ps` 均被 PCA 代理正常处理），但**还没在 PCB 的界面里真点过一次**：PCB App 是无边框 1080×690 单窗布局，远程点不到齿轮入口（试过 (990,20) 无反应），这一步留给人在 PCB 上点；
   4. 停对端上传是 `schtasks /End`（打断 pythonw），supervisor 下次启动会自清 `stop.flag`，不会把对端卡死。
 - **相关文件**：`CHAN_RUST\scripts\remote_app_agent.ps1`（`Do-Task`、`state`、1.3.0）、`CHAN_RUST\scripts\remote_ctl.ps1`（`-TaskName` / `-TaskOp`）、`CHAN_RUST\flutter\chan_kline\lib\sync\peer_sync_service.dart`（`peerApp` / `peerUpload` / JSON 兜底）、`lib\ui\peer_sync_dialog.dart`（三颗按钮 + `doPeerCtl` + `_briefPeer`）、`CHAN_RUST\scripts\README_sync_remote.md`（新增「双向拉起」整节）。
+### 2026-11-09 · Doubao · 双机协同 · 全市场分笔上传状态区重做（进度 / 速率 / 各机占用）
+
+- **执行者**：Doubao Agent
+- **任务类型**：双机协同 / 状态显示治理
+- **操作**：
+  1. 把用户看到的三个坏显示逐个追到根：`已完成：还不知道` 是 `loadTicksUploadSnapshot` 读 725KB 的 `ticks_stream_state.json` 时偶发解析失败、被 `catch (_) {}` 静默吞掉，`done` 停在 null；`本机正在传：无` 是只信 `current_code.txt`，而 `status.json` 里明明写着 `current=002990`；`各机占用：无` 是只把 claim 拼成一句，没有任何时间与速率信息。共享目录本身没丢：`D:\chan_ticks_share\live` 与 `\\192.168.1.5\chan_ticks_state\live` 都在、都能读。
+  2. 脚本侧（`pipeline_stream_ticks.py`）：完成时给条目补 `machine` 与 `at`；`write_status` 除本机 `status.json` 外再写一份到 `<共享目录>\status\<机器名>.json`，内容含 done / total / current / machine / pid / `rate_per_min` / `session_done` / `updated_at` / `updated_epoch`；速率取最近 10 分钟完成时刻滚动算，观察窗口不足时按实际跨度算不虚高；claim 心跳里顺带每 30 秒刷一次 status，免得单只大票传几分钟时界面像停住。
+  3. 面板侧（`ticks_full_upload_panel.dart` 重写）：合并三路数据——共享 `status\*.json`（各机的机器名、正在传、本轮完成数、速率、上报时间、pid）、`claims\*.json`（谁此刻拿着哪只，心跳时间）、本机 `local\status.json` 与 `supervisor.lock`（进程是否真在）；JSON 读取改成 4 次重试，撞上另一台正在写也不会再退回"还不知道"；显示分五段：总进度与百分比、逐机速率与合计、各机占用（正在传 / 本轮 +N / 速率 / 上报多久前）、最近 10 只完成（代码 + 机器 + 时间）、共享目录可读性与本机日志末行。
+  4. 共享进度目录内置默认：`defaultTicksShareDir()` 在 PCA 上取 `D:\chan_ticks_share\live`，别的机器取 `\\192.168.1.5\chan_ticks_state\live`；设置里留空时面板自动填入并落盘，`_createFullTicksUploadTask` 也不再报「请先填写共享进度目录」。
+- **结果**：PCA 面板实拍为 `正在下载（2 台并行）（2 台在跑）` / `进度：1471/5225（28.2%）· 跳过 20` / `速率：本机 0.2 · cxy 1.6 · 合计 1.8/分` / `● LAPTOP-NA22IFPU（本机） 在跑 上报 1 分钟前 · 传 003037 · 本轮 +2 · 0.2/分` / `● cxy 在跑 上报 35 秒前 · 传 003042 · 本轮 +16 · 1.6/分` / 最近完成四行（003041 / 003040 / 003039 / 003038，均标 cxy）。共享目录里两台各自有 `status\LAPTOP-NA22IFPU.json` 与 `status\cxy.json`，条目带 `machine` / `at`。PCB 侧同步推过去后 `kernel_blob.bin` 与 PCA **逐字节一致**（73180896B，SHA256 前缀 `0F8FF934A1AC7A7E`），其上传任务已用新脚本重启并在 `status\cxy.json` 持续上报。
+- **演示**：设置面板 →「全市场分笔上传」下方那块深色状态区，能直接读到两台各自在传哪只、本轮传了几只、每分钟几只、多久前上报过，以及最近十只完成明细。
+- **测试**：`flutter analyze` 131 issues、0 error；`flutter build windows --debug` 成功；两侧 supervisor 停→起各一次，共享 `status\` 双双出现；真机截图逐段核对文案与实际数值一致。
+- **注意事项 / 待办**：
+  1. 老条目（本次改造前的 1446 只）没有 `at` 字段，所以「最近完成」只列新条目，跑够几只会自然填满；
+  2. 速率是「最近 10 分钟窗口」，进程刚重启时显示 0.0，属正常，传完一两只会回升；
+  3. PCB 的无边框单窗仍然远程点不到齿轮（试 1012,16 无反应），面板在 PCB 上的观感要人点一次确认，功能链已由「它自己在往共享目录写 status」证过；
+  4. 本轮两个提交 `02381ae3` / `5cba512e` 未 push，等用户一句话。
+- **相关文件**：`CHAN_RUST\scripts\pipeline_stream_ticks.py`（`complete_code` 补 machine/at、`write_status` 双写 + 速率、`heartbeat` 刷状态）、`CHAN_RUST\flutter\chan_kline\lib\ui\ticks_full_upload_panel.dart`（整块重写 + `defaultTicksShareDir`）、`lib\main.dart`（`_createFullTicksUploadTask` 用默认目录兜底）。
