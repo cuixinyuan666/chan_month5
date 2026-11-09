@@ -5979,8 +5979,7 @@ class _KlineCompositePainter extends CustomPainter {
   }
 
   /// 虚线外框时，填充收到框内，避免实心色块的外沿盖住虚线，看起来仍是实线。
-  Rect _candleBodyFillRect(Rect rect, {required bool dashed}) {
-    if (!dashed) return rect;
+  Rect _candleBodyFillRect(Rect rect, {required bool dashed}) {    if (!dashed) return rect;
     const inset = 1.4;
     final r = rect.deflate(inset);
     if (r.width < 1 || r.height < 1) return rect;
@@ -6001,6 +6000,23 @@ class _KlineCompositePainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeWidth = strokeW
       ..strokeJoin = StrokeJoin.miter;
+    // 实体极扁（一字线/几乎一字线）：上下两条边只隔一两个像素，四边虚线会挤成
+    // 一段错位的锯齿（看着像一条小蛇）。此时只描一条居中横线；虚线按此宽度
+    // 对称排「实-空-实」，避免定长 pattern 在一字线上只剩一小截残段。
+    if (rect.height < 3.0) {
+      final y = rect.center.dy;
+      final a = Offset(rect.left, y);
+      final b = Offset(rect.right, y);
+      if (!dashed || dashPattern == null || dashPattern.isEmpty) {
+        canvas.drawLine(a, b, p);
+      } else {
+        final span = rect.width;
+        final dash = math.max(2.0, span * 0.32);
+        final gap = math.max(1.5, span - dash * 2);
+        _drawPatternLine(canvas, a, b, p, [dash, gap, dash]);
+      }
+      return;
+    }
     if (!dashed || dashPattern == null || dashPattern.isEmpty) {
       canvas.drawRect(rect, p);
       return;
@@ -6138,6 +6154,13 @@ class _KlineCompositePainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.butt;
     final fill = Paint()..color = fillColor;
+    // 极扁单元（实体不到 3 像素、上下影线合计不到 4 像素）：两个影线框会挤在
+    // 一两个像素里，虚线互相错位，画出来像一条扭曲的小蛇。此时不画影线框，
+    // 由实体框 [_strokeUnitBarFrame] 退化的那条横线负责标示。
+    if (bodyBottom - bodyTop < 3.0 &&
+        (bodyTop - yHigh) + (yLow - bodyBottom) < 4.0) {
+      return;
+    }
     void seg(double x0, double y0, double x1, double y1) {
       if ((Offset(x1, y1) - Offset(x0, y0)).distance < 0.5) return;
       _drawPatternLine(canvas, Offset(x0, y0), Offset(x1, y1), paint, dashPattern);
@@ -6156,7 +6179,6 @@ class _KlineCompositePainter extends CustomPainter {
       seg(left, yLow, right, yLow);
     }
   }
-
   /// 已确认影线走实线。正在走的影线改走 [_strokeWickDashFrame]。
   void _drawCandleWick(
     Canvas canvas, {
