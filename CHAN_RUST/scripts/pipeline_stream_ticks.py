@@ -68,6 +68,13 @@ HEARTBEAT_INTERVAL = 60
 _last_heartbeat = 0.0
 _current_code: str | None = None
 
+# 进度上报：最近 10 分钟完成时刻，用来算「只/分」；以及 status 写入节流
+_done_marks: list[float] = []
+_session_start = time.time()
+_last_status_at = 0.0
+_status_done = 0
+_status_total = 0
+
 
 def configure(
     *,
@@ -391,6 +398,9 @@ def heartbeat(code: str) -> None:
         meta["code"] = code
         path.write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
         _last_heartbeat = time.time()
+        # 单只股票可能要传好几分钟，顺手刷新 status，别让界面看着像停住了
+        if time.time() - _last_status_at >= 30:
+            write_status(_status_done, _status_total, code)
     except Exception as e:
         log(f"  heartbeat fail {code}: {e}")
 
@@ -410,11 +420,16 @@ def release_claim(code: str) -> None:
 
 
 def complete_code(code: str, entry: dict) -> None:
+    # 记下是谁、什么时候传完的：多机共用一个进度文件，界面才能按机器分账
+    entry = dict(entry or {})
+    entry["machine"] = MACHINE
+    entry["at"] = time.strftime("%Y-%m-%d %H:%M:%S")
     with state_lock():
         st = load_state()
         st.setdefault("files", {})[code] = entry
         save_state(st)
         release_claim(code)
+    _done_marks.append(time.time())
 
 
 def write_current_code(code: str | None) -> None:
@@ -430,25 +445,52 @@ def write_current_code(code: str | None) -> None:
         pass
 
 
+def _trim_marks(now: float) -> None:
+    horizon = now - 600.0
+    while _done_marks and _done_marks[0] < horizon:
+        _done_marks.pop(0)
+
+
+def rate_per_min(window_sec: float = 600.0) -> float:
+    """最近 window_sec 的完成速度（只/分）。观察窗口不足时按实际跨度算，不虚高。"""
+    now = time.time()
+    _trim_marks(now)
+    kept = [t for t in _done_marks if t >= now - window_sec]
+    if not kept:
+        return 0.0
+    span = min(window_sec, max(60.0, now - _session_start))
+    return round(len(kept) / (span / 60.0), 2)
+
+
 def write_status(done: int, total: int, current: str | None) -> None:
+    global _last_status_at, _status_done, _status_total
+    _status_done, _status_total = done, total
+    _last_status_at = time.time()
+    payload = {
+        "done": done,
+        "total": total,
+        "current": current or "",
+        "machine": MACHINE,
+        "pid": os.getpid(),
+        "rate_per_min": rate_per_min(),
+        "session_done": len(_done_marks),
+        "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "updated_epoch": round(time.time(), 3),
+    }
+    text = json.dumps(payload, ensure_ascii=False, indent=1)
     LOCAL_DIR.mkdir(parents=True, exist_ok=True)
     try:
-        STATUS_JSON.write_text(
-            json.dumps(
-                {
-                    "done": done,
-                    "total": total,
-                    "current": current or "",
-                    "machine": MACHINE,
-                    "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-                },
-                ensure_ascii=False,
-                indent=1,
-            ),
-            encoding="utf-8",
-        )
+        STATUS_JSON.write_text(text, encoding="utf-8")
     except Exception:
         pass
+    # 再写一份到共享目录：别的电脑（和另一台 App）靠它看到「这一台」的进度与速率
+    if SHARE_DIR is not None:
+        try:
+            status_dir = SHARE_DIR / "status"
+            status_dir.mkdir(parents=True, exist_ok=True)
+            (status_dir / f"{MACHINE}.json").write_text(text, encoding="utf-8")
+        except Exception:
+            pass
 
 
 def _flag_paths(name: str) -> list[Path]:
