@@ -17,12 +17,14 @@
 #   ... -Action stop                    # 只关代理启动的那个 pid
 #   ... -Action task -TaskOp run        # 拉起对端的「全市场分笔上传」（代理只放行 Chan\TicksFullUpload）
 #   ... -Action task -TaskOp query      # 查那个计划任务在不在跑
+#   ... -Action build                   # 让对端跑 build_rust.ps1（编 chan_ffi.dll → flutter build → 拉起 App）
+#   ... -Action buildstatus             # 查对端那次编译的进度（running/done/产物时间/日志尾巴）
 #
 # 退出码：0 结果 ok；1 结果 ok=false（远端返回失败）；2 超时/代理未响应；3 共享不可达
 param(
     [string]$SharePath = '\\192.168.1.6\D$\2\chan_month5',
     [Parameter(Mandatory = $true)]
-    [ValidateSet('ping', 'start', 'stop', 'status', 'snapshot', 'screenshot', 'command', 'report', 'reload', 'ps', 'click', 'scroll', 'windows', 'task')]
+    [ValidateSet('ping', 'start', 'stop', 'status', 'snapshot', 'screenshot', 'command', 'report', 'reload', 'ps', 'click', 'scroll', 'windows', 'task', 'build', 'buildstatus')]
     [string]$Action,
     [ValidateSet('ui', 'verify')][string]$Mode = 'ui',
     [string]$SuiteId = '',

@@ -5,6 +5,7 @@
 #
 # 它只做白名单动作，不执行任意命令：
 #   ping / start / stop / status / snapshot / screenshot / command / report
+#   build / buildstatus   （只跑仓库内固定脚本 build_rust.ps1：编 chan_ffi.dll + flutter build + 拉起 App）
 #
 # 协议（全部在仓库内 a_Data\remote_ctl 下）：
 #   本机写 requests\<id>.json  ->  代理读 -> 执行 -> 写 results\<id>.json -> 请求移入 done\
@@ -19,7 +20,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$AgentVersion = '1.3.0'
+$AgentVersion = '1.4.0'
 $CtlDir = Join-Path $RepoRoot 'a_Data\remote_ctl'
 $ReqDir = Join-Path $CtlDir 'requests'
 $ResDir = Join-Path $CtlDir 'results'
@@ -558,9 +559,74 @@ function Do-Task($a) {
     return $result
 }
 
+function Do-Build($a) {
+    # 只跑仓库里固定的 build_rust.ps1（cargo 编 chan_ffi.dll → 拷 DLL → flutter build --debug → 拉起 App），
+    # 不接受任意脚本/命令，和 Do-Task 一样是白名单语义。
+    $script = Join-Path $RepoRoot 'CHAN_RUST\scripts\build_rust.ps1'
+    if (-not (Test-Path -LiteralPath $script)) { throw "找不到 build_rust.ps1：$script" }
+    $buildDir = Join-Path $CtlDir 'build'
+    if (-not (Test-Path -LiteralPath $buildDir)) { New-Item -ItemType Directory -Path $buildDir -Force | Out-Null }
+    $stamp = Get-Date
+    $log = Join-Path $buildDir ($stamp.ToString('yyyyMMdd_HHmmss') + '.log')
+    $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $p = Start-Process -FilePath $ps -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $script) `
+        -WorkingDirectory $RepoRoot -WindowStyle Hidden -PassThru `
+        -RedirectStandardOutput $log -RedirectStandardError ($log + '.err')
+    $status = [pscustomobject]@{
+        running   = $true
+        pid       = $p.Id
+        started   = $stamp.ToString('yyyy-MM-dd HH:mm:ss')
+        startedIso = $stamp.ToString('s')
+        log       = $log
+        machine   = $env:COMPUTERNAME
+    }
+    Write-JsonFile (Join-Path $buildDir 'build_status.json') $status
+    Write-Log "开始编译：pid=$($p.Id) 日志=$log"
+    return $status
+}
+
+function Do-BuildStatus($a) {
+    $buildDir = Join-Path $CtlDir 'build'
+    $statusFile = Join-Path $buildDir 'build_status.json'
+    $kernel = Join-Path $RepoRoot 'CHAN_RUST\flutter\chan_kline\build\windows\x64\runner\Debug\data\flutter_assets\kernel_blob.bin'
+    $dll = Join-Path $RepoRoot 'CHAN_RUST\flutter\chan_kline\windows\native\chan_ffi.dll'
+    $obj = [pscustomobject]@{ running = $false; pid = 0; started = ''; log = ''; done = $false; kernelAt = ''; dllAt = ''; appPid = 0; tail = @() }
+    if (Test-Path -LiteralPath $statusFile) {
+        try {
+            $s = ([IO.File]::ReadAllText($statusFile) | ConvertFrom-Json)
+            $obj.pid = [int]$s.pid
+            $obj.started = [string]$s.started
+            $obj.log = [string]$s.log
+            $p = Get-Process -Id $obj.pid -ErrorAction SilentlyContinue
+            $obj.running = ($null -ne $p)
+        } catch { }
+    }
+    if (Test-Path -LiteralPath $kernel) {
+        $obj.kernelAt = (Get-Item -LiteralPath $kernel).LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
+        if ($obj.started -ne '') {
+            try { if ((Get-Item -LiteralPath $kernel).LastWriteTime -gt [datetime]$obj.started) { $obj.done = $true } } catch { }
+        }
+    }
+    if (Test-Path -LiteralPath $dll) {
+        $obj.dllAt = (Get-Item -LiteralPath $dll).LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss')
+    }
+    $apps = @(Get-Process -Name chan_kline -ErrorAction SilentlyContinue)
+    if ($apps.Count -gt 0) { $obj.appPid = [int]$apps[0].Id }
+    if ($obj.log -ne '' -and (Test-Path -LiteralPath $obj.log)) {
+        try { $obj.tail = @(Get-Content -LiteralPath $obj.log -Tail 6 -ErrorAction Stop) } catch { }
+        # 日志出现 Launch 行 = build_rust.ps1 已把 App 拉起来；Dart 没改动时 kernel 不会刷新，不能只看它的时间
+        try {
+            if (Select-String -LiteralPath $obj.log -Pattern 'Launch \(no flutter run\)' -Quiet -ErrorAction Stop) { $obj.done = $true }
+        } catch { }
+    }
+    return $obj
+}
+
 function Invoke-Action([string]$action, $a) {
     switch ($action) {
         'ping' { return (Do-Ping $a) }
+        'build' { return (Do-Build $a) }
+        'buildstatus' { return (Do-BuildStatus $a) }
         'start' { return (Do-Start $a) }
         'stop' { return (Do-Stop $a) }
         'status' { return (Do-Status $a) }
@@ -574,7 +640,7 @@ function Invoke-Action([string]$action, $a) {
         'scroll' { return (Do-Scroll $a) }
         'windows' { return (Do-Windows $a) }
         'task' { return (Do-Task $a) }
-        default { throw "未知动作：$action（只接受 ping/start/stop/status/snapshot/screenshot/command/report/reload/ps/click/scroll/windows/task）" }
+        default { throw "未知动作：$action（只接受 ping/start/stop/status/snapshot/screenshot/command/report/reload/ps/click/scroll/windows/task/build/buildstatus）" }
     }
 }
 
