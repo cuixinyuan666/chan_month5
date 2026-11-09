@@ -110,3 +110,10 @@ CHAN_RUST/flutter/chan_kline/.chan_telegram_settings.json
 
 # Telegram �������棨����/��Ʊ CSV������⣩
 a_Data/.telegram_cache/
+
+# 远端代理信箱（令牌/请求/结果/截图，运行时落盘，勿提交）
+a_Data/remote_ctl/
+
+# 构建与启动临时文件
+build_launch_user.*
+a_Data/tmp_build_launch_*.ps1
