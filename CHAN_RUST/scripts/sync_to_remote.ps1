@@ -1,4 +1,4 @@
-# sync_to_remote.ps1 —— 本机 -> 局域网另一台（白名单镜像，只覆盖不删除）
+﻿# sync_to_remote.ps1 —— 本机 -> 局域网另一台（白名单镜像，只覆盖不删除）
 #
 # 设计要点（踩过的坑都写在这里）：
 #   1. 不用 /MIR：远端有它自己的报告、调试产物、数据，全盘镜像会把它们删掉。
@@ -24,6 +24,8 @@ param(
     [ValidateSet('all', 'code', 'build')][string]$Include = 'all',
     [switch]$DryRun,
     [switch]$Apply,
+    [bool]$AutoCloseRemoteApp = $true,
+    [switch]$RestartRemoteApp,
     [int]$TimeoutSec = 600
 )
 
@@ -80,18 +82,47 @@ function Test-Locked([string]$path) {
     } catch { return $true }
 }
 
+$script:RemoteAppStopped = $false
 $artifactLocked = $false
 foreach ($n in @('chan_kline.exe', 'chan_ffi.dll')) {
     if (Test-Locked (Join-Path $RemoteArtifact $n)) { $artifactLocked = $true }
 }
 if ($artifactLocked) {
     Write-Host "!! 远端 chan_kline.exe / chan_ffi.dll 正被占用（那台 App 在跑）"
-    Write-Host "!! 请先在远端关闭 App 再推产物；源码层不受影响。"
-    if ($Include -eq 'build' -or $Include -eq 'all') {
-        Write-Host "!! -Include=$Include 需要产物层，已中止（不改远端任何文件）。"
+    $needBuild = ($Include -eq 'build' -or $Include -eq 'all')
+    if ($DryRun) {
+        if ($needBuild) { Write-Say '试运行：真跑(-Apply)时会先关掉「代理拉起的那一个」App 再推产物' }
+        else { Write-Say '产物层被占用：本次只推源码' }
+    } elseif ($needBuild -and $AutoCloseRemoteApp) {
+        # 只关代理 state.json 记录在案的实例；手开的窗口它一概不碰（stop 自己会校验 exe 路径）
+        $ctl = Join-Path $PSScriptRoot 'remote_ctl.ps1'
+        if (-not (Test-Path -LiteralPath $ctl)) {
+            Write-Host "!! 找不到 remote_ctl.ps1，无法自动关闭远端 App；请手动关闭后重跑（-AutoCloseRemoteApp 0 可关掉本行为）"
+            exit 3
+        }
+        $psExe = (Get-Process -Id $PID).Path
+        if ($null -eq $psExe -or $psExe -eq '') { $psExe = 'powershell.exe' }
+        Write-Say '远端 App 占着产物，先关它（仅代理记录在案的 pid）……'
+        & $psExe -NoProfile -ExecutionPolicy Bypass -File $ctl -Action stop -SharePath $SharePath -TimeoutSec 60 | Out-Null
+        $rc = $LASTEXITCODE
+        if ($rc -ne 0) {
+            Write-Host "!! 远端关闭失败（remote_ctl 退出码 $rc）：那台跑的可能是你手动开的 App，本脚本不替你关"
+            exit 3
+        }
+        Start-Sleep -Seconds 2
+        $artifactLocked = $false
+        foreach ($n in @('chan_kline.exe', 'chan_ffi.dll')) {
+            if (Test-Locked (Join-Path $RemoteArtifact $n)) { $artifactLocked = $true }
+        }
+        if ($artifactLocked) { Write-Host "!! 关闭后产物仍被占用，中止（不改远端任何文件）"; exit 3 }
+        $script:RemoteAppStopped = $true
+        Write-Say '远端 App 已关闭，继续推产物'
+    } elseif ($needBuild) {
+        Write-Host "!! -Include=$Include 需要产物层，已中止（不改远端任何文件）。加 -Apply 时默认会自动关远端 App；想手动关就加 -AutoCloseRemoteApp 0"
         exit 3
+    } else {
+        Write-Say '产物层被占用：本次只推源码，不动产物'
     }
-    Write-Say "产物层被占用：本次只推源码，不动产物"
 }
 
 # ---------- ③ 源码层 ----------
@@ -191,4 +222,17 @@ foreach ($rel in @('CHAN_RUST\flutter\chan_kline\lib', 'CHAN_RUST\rust\chan_data
 if ($hashBad -gt 0) { Write-Host "!! 指纹校验未通过（$hashBad 项）"; exit 5 }
 
 Write-Say '同步完成。'
+
+# ---------- ⑦ 可选：把刚才关掉的远端 App 再拉起来 ----------
+if ($RestartRemoteApp -and $script:RemoteAppStopped) {
+    $ctl = Join-Path $PSScriptRoot 'remote_ctl.ps1'
+    if (Test-Path -LiteralPath $ctl) {
+        $psExe = (Get-Process -Id $PID).Path
+        if ($null -eq $psExe -or $psExe -eq '') { $psExe = 'powershell.exe' }
+        Write-Say '按 -RestartRemoteApp 重新拉起远端 App……'
+        & $psExe -NoProfile -ExecutionPolicy Bypass -File $ctl -Action start -Mode ui -SharePath $SharePath -TimeoutSec 180 | Out-Null
+        if ($LASTEXITCODE -eq 0) { Write-Say '远端 App 已重新拉起（进度用 remote_ctl.ps1 -Action status 读）' }
+        else { Write-Host "!! 重新拉起失败（remote_ctl 退出码 $LASTEXITCODE）" }
+    }
+}
 exit 0

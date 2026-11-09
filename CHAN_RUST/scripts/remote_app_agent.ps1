@@ -1,4 +1,4 @@
-# remote_app_agent.ps1 —— 远端常驻代理（跑在「另一台」的已登录桌面会话里）
+﻿# remote_app_agent.ps1 —— 远端常驻代理（跑在「另一台」的已登录桌面会话里）
 #
 # 为什么必须跑在桌面会话：chan_kline 是 GUI 程序。远程 PowerShell / WinRM 落在 session 0，
 # 拉起的窗口看不见也起不来。所以这个代理要在那台的桌面上启动（双击或「登录时运行」计划任务）。

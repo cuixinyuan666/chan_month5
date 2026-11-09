@@ -36,6 +36,14 @@ powershell -NoProfile -File CHAN_RUST\scripts\sync_to_remote.ps1 -Apply
 `4` robocopy 失败（日志在 `%TEMP%\chan_sync_logs\`）；`5` 产物指纹不一致。
 robocopy 自己的 `3`（有复制 + 目标端有额外文件）算成功，`>=8` 才算失败。
 
+**产物被占用的处理（那台 App 正开着）**：`-Apply` 默认会先调 `remote_ctl.ps1 -Action stop`
+关掉**代理记录在案的那一个** App——只是它自己拉起的，你手动开的窗口不动（`stop` 会校验 exe 路径），
+关不掉才中止并退 `3`。想自己先关：`-AutoCloseRemoteApp 0`；推完想让它继续跑：加 `-RestartRemoteApp`，
+脚本会在指纹校验通过后重新拉起，并把 `status` 交回给你读。`-DryRun` 不关任何东西，只提示。
+
+> 四个脚本本身存为 **UTF-8 带 BOM**：远端用 Windows PowerShell 5.1 跑中文脚本时会按 ANSI 误读
+> 无 BOM 的文件，甚至解析失败静默退出（2026-11-09 踩过两次）。补 BOM 对 pwsh 7 无害。
+
 ## 二、远程拉起 App（本机控制那台）
 
 ### 那台要做的一次性动作
