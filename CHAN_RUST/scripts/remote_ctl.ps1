@@ -8,7 +8,10 @@
 #   ... -Action start -Mode ui          # 主界面模式（带 CHAN_AGENT_API=1，可查状态/发命令）
 #   ... -Action start -Mode verify -SuiteId early_dynamic_20261105
 #   ... -Action status                  # 当前股票/周期/步进位置
-#   ... -Action screenshot              # 存一张图到远端 remote_ctl\shots
+#   ... -Action screenshot              # 存一张图到远端 remote_ctl\shots（App 自己截的那块）
+#   ... -Action screenshot -Source desktop   # 抓真人看到的整屏（看得到分笔太极/窗口）
+#   ... -Action click                   # 点那台 App 窗口正中（收起分笔太极）
+#   ... -Action click -X 800 -Y 500     # 指定屏幕坐标点一下
 #   ... -Action command -Command '{"type":"step","dir":1}'
 #   ... -Action report                  # 把远端验证报告收进 inbox 并解析 ok
 #   ... -Action stop                    # 只关代理启动的那个 pid
@@ -17,11 +20,14 @@
 param(
     [string]$SharePath = '\\192.168.1.6\D$\2\chan_month5',
     [Parameter(Mandatory = $true)]
-    [ValidateSet('ping', 'start', 'stop', 'status', 'snapshot', 'screenshot', 'command', 'report', 'reload', 'ps')]
+    [ValidateSet('ping', 'start', 'stop', 'status', 'snapshot', 'screenshot', 'command', 'report', 'reload', 'ps', 'click', 'windows')]
     [string]$Action,
     [ValidateSet('ui', 'verify')][string]$Mode = 'ui',
     [string]$SuiteId = '',
     [string]$Command = '',
+    [ValidateSet('app', 'desktop')][string]$Source = 'app',
+    [int]$X = -1,
+    [int]$Y = -1,
     [int]$TimeoutSec = 60,
     [switch]$Json
 )
@@ -57,6 +63,11 @@ if ($Action -eq 'start') {
 if ($Action -eq 'command') {
     if ($Command -eq '') { Write-Host '!! -Action command 需要 -Command "<JSON>"'; exit 1 }
     try { $argsObj['body'] = ($Command | ConvertFrom-Json) } catch { Write-Host "!! -Command 不是合法 JSON：$Command"; exit 1 }
+}
+if ($Action -eq 'screenshot') { $argsObj['source'] = $Source }
+if ($Action -eq 'click') {
+    if ($X -ge 0) { $argsObj['x'] = $X }
+    if ($Y -ge 0) { $argsObj['y'] = $Y }
 }
 
 $req = [pscustomobject]@{

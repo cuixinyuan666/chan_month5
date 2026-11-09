@@ -105,13 +105,37 @@ powershell -NoProfile -File CHAN_RUST\scripts\remote_ctl.ps1 -Action reload
 API 没起（12321 未监听）时自动落 GDI 整屏抓图（`method: gdi_desktop`），
 多显示器按虚拟桌面一次抓全。**画面看不出来就等于没查**，这条是专为诊断留的。
 
+加 `-Source desktop` 可以跳过 App、直接抓真人看到的那块屏。整屏抓图用的是
+**BitBlt + `CAPTUREBLT`**，不是 `Graphics.CopyFromScreen`：后者的 BitBlt 不带 `CAPTUREBLT`，
+**抓不到 `WS_EX_LAYERED` 的分层窗口**——分笔的阴阳鱼正好在独立分层窗上，2026-11-09 就是被它骗了
+（点击前后两次 GDI 图字节数完全一样，误以为"没有太极"）。
+
+### 分笔太极：拉起后必须点那一下
+
+分笔（`tick`）刚进图时，App 会在独立分层窗上铺一张**直径等于窗口高度**的阴阳鱼，
+只有「点一下 / 步进 / 播放」才收起（见 `msg_history.dart` 的【分笔太极】条目）。远程拉起后如果不管它，
+那台屏幕上就**一直停在太极上**，看不到真界面——用户 2026-11-09 亲眼确认过。
+
+代理已内置处理：`start` 在主窗口出现后**替用户点一下窗口正中**（`clicked: true`），
+再抓一张整屏存到 `shots\` 一起返回（`screenshot` 字段），所以拉完就是真界面。
+想保留太极（比如要截它）就传 `noClick: true`，或单用 `-Action click` 手动点：
+
+```
+# 点 App 窗口正中（收起太极）
+remote_ctl.ps1 -Action click
+# 指定屏幕坐标点一下
+remote_ctl.ps1 -Action click -X 800 -Y 500
+# 列出那台所有可见顶层窗口（含子窗/覆盖窗，用来确认到底有几个窗口）
+remote_ctl.ps1 -Action windows
+```
+
 退出码：`0` 成功；`1` 远端返回失败（含“没有我启动的实例”这种）；`2` 代理未响应（超时）；
 `3` 共享不可达 / 信箱目录不存在（代理没启动）。
 
 ### 白名单与约束
 
-只认 10 个动作：`ping` / `start` / `stop` / `status` / `snapshot` / `screenshot` / `command` /
-`report` / `ps` / `reload`。**没有“执行任意脚本”这个动作**。
+只认 12 个动作：`ping` / `start` / `stop` / `status` / `snapshot` / `screenshot` / `command` /
+`report` / `ps` / `reload` / `click` / `windows`。**没有“执行任意脚本”这个动作**。
 
 - 令牌：`remote_ctl\token.txt`，本机只读、不改；对不上直接拒，请求落 `done\`。
 - 单实例：`agent.lock` 独占打开，第二个实例直接退出。

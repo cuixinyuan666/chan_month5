@@ -19,7 +19,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$AgentVersion = '1.1.3'
+$AgentVersion = '1.2.0'
 $CtlDir = Join-Path $RepoRoot 'a_Data\remote_ctl'
 $ReqDir = Join-Path $CtlDir 'requests'
 $ResDir = Join-Path $CtlDir 'results'
@@ -170,15 +170,46 @@ function Do-Start($a) {
     try { $p.Refresh() } catch { }
     if ($p.HasExited) { try { $exitCode = $p.ExitCode } catch { } } else { try { $title = $p.MainWindowTitle } catch { } }
 
+    # 分笔刚进图会在独立分层窗上铺一张铺满高度的阴阳鱼，只有「点一下 / 步进 / 播放」才收起。
+    # 拉起后替用户点那一下，否则那台屏幕就停在太极上、看不到真界面（2026-11-09 实测）。
+    $clicked = $false
+    $shot = ''
+    if ($mode -eq 'ui') {
+        $noClick = $false
+        if ($null -ne $a) { if ($a.noClick) { $noClick = $true } }
+        if (-not $noClick) {
+            $winDeadline = (Get-Date).AddSeconds(30)
+            while ((Get-Date) -lt $winDeadline) {
+                try { $p.Refresh() } catch { }
+                if ($p.HasExited) { break }
+                try { if ([int64]$p.MainWindowHandle -ne 0) { break } } catch { }
+                Start-Sleep -Milliseconds 500
+            }
+            try {
+                $cr = Do-Click $null
+                if ($null -ne $cr -and $cr.ok) { $clicked = $true }
+            } catch {
+                Write-Log ('拉起后自动点击失败：' + $_.Exception.Message)
+            }
+            Start-Sleep -Seconds 2
+            try {
+                $s = Do-Screenshot @{ source = 'desktop' }
+                if ($null -ne $s -and $s.ok) { $shot = $s.file }
+            } catch { }
+        }
+    }
+
     return [pscustomobject]@{
-        pid         = $p.Id
-        mode        = $mode
-        suite_id    = $suiteId
-        responding  = $responding
-        exited      = $p.HasExited
-        exit_code   = $exitCode
+        pid          = $p.Id
+        mode         = $mode
+        suite_id     = $suiteId
+        responding   = $responding
+        exited       = $p.HasExited
+        exit_code    = $exitCode
         window_title = $title
-        exe         = $ExePath
+        clicked      = $clicked
+        screenshot   = $shot
+        exe          = $ExePath
     }
 }
 
@@ -220,8 +251,11 @@ function Do-Snapshot($a) {
 function Do-Screenshot($a) {
     $name = 'shot_' + (Get-Date -Format 'yyyyMMdd_HHmmss') + '.png'
     $out = Join-Path $ShotDir $name
-    # 先走 App 自己的 /screenshot
+    # 先走 App 自己的 /screenshot；source=desktop 时跳过它，直接抓真人看到的那块屏
+    $forceDesk = $false
+    if ($null -ne $a) { if ("$($a.source)" -eq 'desktop') { $forceDesk = $true } }
     try {
+        if ($forceDesk) { throw 'force desktop' }
         $tok = Get-ApiToken
         if ($null -ne $tok -and $tok -ne '') {
             $h = @{ 'X-Agent-Token' = $tok }
@@ -234,19 +268,28 @@ function Do-Screenshot($a) {
         # API 没起（12321 未监听 / K 线没加载），落到桌面抓图
     }
     # 兜底：抓整个虚拟桌面（多显示器也能一次抓全）
+    # 用 BitBlt + CAPTUREBLT 而不是 Graphics.CopyFromScreen：后者不带 CAPTUREBLT，
+    # 抓不到 WS_EX_LAYERED 的分层窗口（分笔太极就在那个独立分层窗上，2026-11-09 踩过）
     try {
+        Ensure-Win32
         Add-Type -AssemblyName System.Windows.Forms
         Add-Type -AssemblyName System.Drawing
         $vs = [System.Windows.Forms.SystemInformation]::VirtualScreen
-        $bmp = New-Object System.Drawing.Bitmap $vs.Width, $vs.Height
-        $g = [System.Drawing.Graphics]::FromImage($bmp)
-        $g.CopyFromScreen($vs.Left, $vs.Top, 0, 0, (New-Object System.Drawing.Size $vs.Width, $vs.Height))
+        $hdc = [ChanWin32]::GetDC([IntPtr]::Zero)
+        $mem = [ChanWin32]::CreateCompatibleDC($hdc)
+        $hbm = [ChanWin32]::CreateCompatibleBitmap($hdc, $vs.Width, $vs.Height)
+        [ChanWin32]::SelectObject($mem, $hbm) | Out-Null
+        # SRCCOPY 0x00CC0020 | CAPTUREBLT 0x40000000
+        [ChanWin32]::BitBlt($mem, 0, 0, $vs.Width, $vs.Height, $hdc, $vs.Left, $vs.Top, [uint32]0x40CC0020) | Out-Null
+        $bmp = [System.Drawing.Image]::FromHbitmap($hbm)
         $bmp.Save($out, [System.Drawing.Imaging.ImageFormat]::Png)
-        $g.Dispose()
         $bmp.Dispose()
+        [ChanWin32]::DeleteObject($hbm) | Out-Null
+        [ChanWin32]::DeleteDC($mem) | Out-Null
+        [ChanWin32]::ReleaseDC([IntPtr]::Zero, $hdc) | Out-Null
         $size = 0
         if (Test-Path -LiteralPath $out) { $size = (Get-Item -LiteralPath $out).Length }
-        return [pscustomobject]@{ ok = ($size -gt 0); method = 'gdi_desktop'; file = $out; bytes = $size; session = (Get-Process -Id $PID).SessionId; screens = [System.Windows.Forms.Screen]::AllScreens.Count }
+        return [pscustomobject]@{ ok = ($size -gt 0); method = 'gdi_desktop'; file = $out; bytes = $size; session = (Get-Process -Id $PID).SessionId; screens = [System.Windows.Forms.Screen]::AllScreens.Count; capture = 'bitblt_captureblt' }
     } catch {
         return [pscustomobject]@{ ok = $false; method = 'none'; error = "$($_.Exception.Message)" }
     }
@@ -268,6 +311,123 @@ function Do-Ps($a) {
         }
     }
     return [pscustomobject]@{ ok = $true; count = $list.Count; processes = $list }
+}
+
+# ---------- 鼠标：点一下那台的窗口（收起分笔太极） ----------
+# 分笔（tick）周期刚进图时，App 会在窗口正中铺一张铺满高度的阴阳鱼，
+# 设计上"点一下屏幕 / 步进 / 播放"才收起（见 msg_history.dart 的【分笔太极】条目）。
+# 代理跑在对方的桌面会话里（session != 0），所以能直接合成鼠标事件。
+$script:Win32Ready = $false
+function Ensure-Win32 {
+    if ($script:Win32Ready) { return }
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public class ChanWin32 {
+    [StructLayout(LayoutKind.Sequential)]
+    public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
+    public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+    [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+    [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, IntPtr extra);
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int cmd);
+    [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+    [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc cb, IntPtr lParam);
+    [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowTextW(IntPtr hWnd, System.Text.StringBuilder sb, int max);
+    [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetClassNameW(IntPtr hWnd, System.Text.StringBuilder sb, int max);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
+    [DllImport("user32.dll")] public static extern IntPtr GetDC(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern int ReleaseDC(IntPtr hWnd, IntPtr hdc);
+    [DllImport("user32.dll")] public static extern IntPtr GetDesktopWindow();
+    [DllImport("gdi32.dll")] public static extern IntPtr CreateCompatibleDC(IntPtr hdc);
+    [DllImport("gdi32.dll")] public static extern IntPtr CreateCompatibleBitmap(IntPtr hdc, int w, int h);
+    [DllImport("gdi32.dll")] public static extern IntPtr SelectObject(IntPtr hdc, IntPtr obj);
+    [DllImport("gdi32.dll")] public static extern bool BitBlt(IntPtr dst, int x, int y, int w, int h, IntPtr src, int sx, int sy, uint rop);
+    [DllImport("gdi32.dll")] public static extern bool DeleteObject(IntPtr obj);
+    [DllImport("gdi32.dll")] public static extern bool DeleteDC(IntPtr hdc);
+}
+'@ -ErrorAction Stop
+    $script:Win32Ready = $true
+}
+
+function Get-AppWindow {
+    $st = Get-AppState
+    if ($null -eq $st -or $null -eq $st.pid) { return $null }
+    $p = Get-Process -Id ([int]$st.pid) -ErrorAction SilentlyContinue
+    if ($null -eq $p) { return $null }
+    try { $p.Refresh() } catch { }
+    if ([int64]$p.MainWindowHandle -eq 0) { return $null }
+    return $p
+}
+
+function Do-Click($a) {
+    Ensure-Win32
+    $p = Get-AppWindow
+    if ($null -eq $p) {
+        return [pscustomobject]@{ ok = $false; error = '没有可点的 chan_kline 窗口（先 start，或窗口还没建出来）' }
+    }
+    $h = [IntPtr]([int64]$p.MainWindowHandle)
+    [ChanWin32]::ShowWindow($h, 9) | Out-Null      # 9 = SW_RESTORE：最小化/未激活的先还原
+    [ChanWin32]::SetForegroundWindow($h) | Out-Null
+
+    $r = New-Object ChanWin32+RECT
+    [ChanWin32]::GetWindowRect($h, [ref]$r) | Out-Null
+    $cx = [int](($r.Left + $r.Right) / 2)
+    $cy = [int](($r.Top + $r.Bottom) / 2)
+
+    $x = $cx; $y = $cy
+    if ($null -ne $a) {
+        if ($null -ne $a.x) { $x = [int]$a.x }
+        if ($null -ne $a.y) { $y = [int]$a.y }
+    }
+
+    # 先移到目标点上停一瞬，再按下抬起：有些自绘控件只认真实的 hover->down 序列
+    [ChanWin32]::SetCursorPos($x, $y) | Out-Null
+    Start-Sleep -Milliseconds 120
+    [ChanWin32]::mouse_event(0x0002, 0, 0, 0, [IntPtr]::Zero)   # LEFTDOWN
+    Start-Sleep -Milliseconds 60
+    [ChanWin32]::mouse_event(0x0004, 0, 0, 0, [IntPtr]::Zero)   # LEFTUP
+
+    return [pscustomobject]@{
+        ok = $true; pid = $p.Id; title = $p.MainWindowTitle
+        click_x = $x; click_y = $y
+        window = [pscustomobject]@{ left = $r.Left; top = $r.Top; right = $r.Right; bottom = $r.Bottom }
+        note = '已点左键；分笔太极若本就在，会被收起（App 设计如此）'
+    }
+}
+
+function Do-Windows($a) {
+    Ensure-Win32
+    $script:WinList = @()
+    $cb = [ChanWin32+EnumWindowsProc]{
+        param($h, $l)
+        try {
+            if ([ChanWin32]::IsWindowVisible($h)) {
+                $sb = New-Object System.Text.StringBuilder 512
+                [ChanWin32]::GetWindowTextW($h, $sb, 512) | Out-Null
+                $cls = New-Object System.Text.StringBuilder 256
+                [ChanWin32]::GetClassNameW($h, $cls, 256) | Out-Null
+                $wp = 0
+                [ChanWin32]::GetWindowThreadProcessId($h, [ref]$wp) | Out-Null
+                $r = New-Object ChanWin32+RECT
+                [ChanWin32]::GetWindowRect($h, [ref]$r) | Out-Null
+                $w = $r.Right - $r.Left; $hh = $r.Bottom - $r.Top
+                if ($w -gt 40 -and $hh -gt 40) {
+                    $name = ''
+                    try { $name = (Get-Process -Id ([int]$wp) -ErrorAction SilentlyContinue).ProcessName } catch { }
+                    $script:WinList += [pscustomobject]@{
+                        hwnd = [int64]$h; pid = [int]$wp; proc = $name
+                        title = $sb.ToString(); cls = $cls.ToString()
+                        rect = "$($r.Left),$($r.Top),$($r.Right),$($r.Bottom)"; w = $w; h = $hh
+                    }
+                }
+            }
+        } catch { }
+        return $true
+    }
+    [ChanWin32]::EnumWindows($cb, [IntPtr]::Zero) | Out-Null
+    return [pscustomobject]@{ ok = $true; count = $script:WinList.Count; windows = $script:WinList }
 }
 
 function Do-Reload($a) {
@@ -315,7 +475,9 @@ function Invoke-Action([string]$action, $a) {
         'report' { return (Do-Report $a) }
         'reload' { return (Do-Reload $a) }
         'ps' { return (Do-Ps $a) }
-        default { throw "未知动作：$action（只接受 ping/start/stop/status/snapshot/screenshot/command/report/reload/ps）" }
+        'click' { return (Do-Click $a) }
+        'windows' { return (Do-Windows $a) }
+        default { throw "未知动作：$action（只接受 ping/start/stop/status/snapshot/screenshot/command/report/reload/ps/click/windows）" }
     }
 }
 
