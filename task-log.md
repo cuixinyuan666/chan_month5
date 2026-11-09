@@ -6109,3 +6109,13 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **测试**：PCB 新日志 `[15:58:35] 300143 done 3453d in 269s (uploaded 9 packs)`；共享状态按 machine 分组：`cxy 2 只 / 23 包 / 7225 天 / 59.2MB`、`LAPTOP-NA22IFPU 14 只 / 134 包 / 44422 天 / 349.9MB`、旧记录 1446 只 / 119.5 万天。
 - **注意事项 / 待办**：G 盘的坏道本身没修，需要在 PCB 上跑 `chkdsk G: /f`（或干脆废掉这块盘）；App 的分笔数据根探测只改了源码，还需重编并同步到 PCB 才生效；PCB 的 App 面板仍按旧数据根读数，重编前看进度以共享 `status` 为准。
 - **相关文件**：`\\192.168.1.6\D$\2\chan_month5\a_Data\agent_live\ticks_full_upload_job.json`（+`.bak_20261109`）、`D:\chan_month5_data\local\state_backup\ticks_stream_state_20261109_160008.json`、`CHAN_RUST\flutter\chan_kline\lib\main.dart`。
+### 2026-11-09 · Doubao · 功能 · 双机同步改为「以最新一方为准」的双向同步
+
+- **执行者**：Doubao Agent
+- **任务类型**：功能改造 / 新增脚本 / UI 接线
+- **操作**：新增 `CHAN_RUST/scripts/sync_latest.ps1`（两侧清单对比 → 判哪台最新 → 复制对齐 → 旧侧独有文件移进备份 → 同步后复核）；`peer_sync_service.dart` 增加 `latestPlan` / `latestSync`；`peer_sync_dialog.dart` 把「立即同步到对端」换成「按最新方同步」，确认弹窗先亮「哪台最新、要改几个文件」再动手。
+- **结果**：方向自动判，不用人工选推/拉。判据：逐文件比修改时间与内容，差异项最后改动时间差 60 秒以上即定方向；打平退到差异计数、再退到 git 最近提交。旧侧独有文件不直接删，移进该侧 `a_Data\remote_ctl\sync_backup\latest_<时间戳>\`。同步后必须复核到 0 差异才报成功。
+- **演示**：双机同步弹窗按钮已是「按最新方同步」；点一次先出「最新的一方：PCA（本机 → 对端），另一台将被对齐：复制/覆盖 N 个文件，旧侧独有 M 个移进备份」，确认后才写。
+- **测试**：① PCA→PCB 真跑：判本机最新，复制 3 个（新脚本 + 两个 dart），对端 14 个残留移进 `latest_20261109_215712`，复核 0 差异；② 反向用临时目录验证（对端 x.txt 更新、y.txt 只在对端、本机 z.txt 只在本机）→ 判对端为准，复制 2、移出 1、复核一致；③ `dart analyze` 两个文件 0 issue；④ `flutter build windows --debug` 成功，`kernel_blob.bin` 内含新文案。
+- **注意事项 / 待办**：判方向依赖文件修改时间，两台时钟若偏差大会把方向判反（今天两台一致）；只同步代码层，编译产物仍需重编后另推；老脚本 `sync_to_remote.ps1` 保留未删，命令行仍可用。
+- **相关文件**：`CHAN_RUST/scripts/sync_latest.ps1`、`CHAN_RUST/flutter/chan_kline/lib/sync/peer_sync_service.dart`、`CHAN_RUST/flutter/chan_kline/lib/ui/peer_sync_dialog.dart`。
