@@ -101,6 +101,7 @@ abstract final class PeerSyncService {
         .listen(stderrBuf.write);
 
     final jsonLines = <String>[];
+    final allLines = <String>[];
     var inJson = false;
     String? jsonText;
 
@@ -122,6 +123,7 @@ abstract final class PeerSyncService {
         jsonLines.add(line);
         continue;
       }
+      allLines.add(line);
       onLine?.call(line);
     }
 
@@ -147,6 +149,17 @@ abstract final class PeerSyncService {
         final obj = jsonDecode(jsonText);
         if (obj is Map) json = Map<String, dynamic>.from(obj);
       } catch (_) {}
+    }
+    // 兜底：remote_ctl -Json 这类脚本直接吐一整段 JSON（没有 ===JSON=== 标记），
+    // 这里从整段 stdout 里抠出来解析，免得界面只剩一句「对端已执行」。
+    if (json == null) {
+      final whole = allLines.join('\n').trim();
+      if (whole.startsWith('{') && whole.endsWith('}')) {
+        try {
+          final obj = jsonDecode(whole);
+          if (obj is Map) json = Map<String, dynamic>.from(obj);
+        } catch (_) {}
+      }
     }
 
     final okFlag = json != null ? (json['ok'] == true) : (code == 0);
@@ -243,6 +256,49 @@ abstract final class PeerSyncService {
       script: restoreScript,
       args: ['-SharePath', peer, '-Json', if (stamp.isNotEmpty) '-Stamp', stamp],
       onLine: onLine,
+    );
+  }
+
+  /// 拉起 / 关闭对端的 App（走对端常驻代理；代理不在线时明确报未响应）。
+  static Future<PeerSyncOutcome> peerApp({required String peer, bool launch = true}) {
+    return runScript(
+      script: ctlScript,
+      args: [
+        '-SharePath',
+        peer,
+        '-Action',
+        launch ? 'start' : 'stop',
+        if (launch) ...['-Mode', 'ui'],
+        '-Json',
+        '-TimeoutSec',
+        launch ? '120' : '30',
+      ],
+      timeout: Duration(seconds: launch ? 150 : 45),
+    );
+  }
+
+  /// 拉起 / 停 / 查对端的「全市场分笔上传」。
+  ///
+  /// 对端代理只放行 `Chan\TicksFullUpload` 这一个计划任务名（它不是任意执行入口），
+  /// 所以这里传的任务名是固定值，界面上没有可编辑的地方。
+  static Future<PeerSyncOutcome> peerUpload({
+    required String peer,
+    String op = 'run',
+  }) {
+    return runScript(
+      script: ctlScript,
+      args: [
+        '-SharePath',
+        peer,
+        '-Action',
+        'task',
+        '-TaskName',
+        r'Chan\TicksFullUpload',
+        '-TaskOp',
+        op,
+        '-Json',
+      ],
+      timeout: const Duration(seconds: 90),
     );
   }
 

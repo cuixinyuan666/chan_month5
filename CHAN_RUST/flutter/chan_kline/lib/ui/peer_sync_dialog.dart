@@ -3,6 +3,21 @@ import 'package:flutter/material.dart';
 import '../settings/peer_sync_settings_store.dart';
 import '../sync/peer_sync_service.dart';
 
+/// 把对端代理返回的 data 压成一行，给日志用（别把整段 JSON 塞进 200 高的小框）。
+String _briefPeer(Object? data) {
+  if (data == null) return '';
+  if (data is! Map) return data.toString();
+  final parts = <String>[];
+  for (final k in ['machine', 'pid', 'name', 'op', 'state', 'exitCode', 'output']) {
+    if (!data.containsKey(k)) continue;
+    var v = data[k].toString().trim();
+    if (v.length > 70) v = '${v.substring(0, 70)}…';
+    if (v.isEmpty) continue;
+    parts.add('$k=$v');
+  }
+  return parts.join('，');
+}
+
 /// 双机同步弹窗：测试连接 → 差异清单 → 真同步 → 结论 / 按快照回退。
 ///
 /// 口径全在 `CHAN_RUST/scripts/sync_to_remote.ps1`：发起方为准覆盖同名文件、
@@ -193,6 +208,57 @@ Future<PeerSyncSettings?> showPeerSyncDialog(
             initial = saved;
           }
 
+          /// 走对端常驻代理由本机发一条动作：拉起对端 App / 拉起对端上传 / 停对端上传。
+          Future<void> doPeerCtl(
+            String label,
+            Future<PeerSyncOutcome> Function(String target) run,
+          ) async {
+            final target = peerCtrl.text.trim();
+            if (target.isEmpty) {
+              setDlg(() {
+                status = '先填对端路径';
+                hasResult = true;
+                resultOk = false;
+                addLog('!! 对端路径为空：先点「默认」或手填对端共享路径');
+              });
+              return;
+            }
+            setDlg(() {
+              busy = true;
+              status = '$label……';
+              hasResult = false;
+              log.clear();
+              addLog('>> $label（对端：$target）');
+            });
+            PeerSyncOutcome out;
+            try {
+              out = await run(target);
+            } catch (e) {
+              if (!alive) return;
+              setDlg(() {
+                busy = false;
+                hasResult = true;
+                resultOk = false;
+                status = '$label异常';
+                addLog('!! 发起请求时异常：$e');
+              });
+              return;
+            }
+            if (!alive) return;
+            final brief = _briefPeer(out.json?['data']);
+            final msg = out.ok
+                ? (brief.isEmpty ? '对端已执行' : brief)
+                : (out.error.isEmpty ? '对端返回失败（退出码 ${out.exitCode}）' : out.error);
+            setDlg(() {
+              busy = false;
+              hasResult = true;
+              resultOk = out.ok;
+              status = out.ok ? '$label完成' : '$label失败';
+              addLog('>> 脚本退出码 ${out.exitCode}');
+              addLog(out.ok ? '>> 结论：$msg' : '!! 结论：$msg');
+            });
+          }
+
           Future<void> doRestore() async {
             final target = peerCtrl.text.trim();
             if (target.isEmpty) {
@@ -309,7 +375,9 @@ Future<PeerSyncSettings?> showPeerSyncDialog(
                           '4. 进度逐行显示：探测占用 → 关对端 App → 推源码 → 推产物 → 模板与 BOM → 指纹校验 → 重拉对端 App。\n\n'
                           '会覆盖什么：对端同名文件（以这台为准）；不会删除对端独有的文件。\n'
                           '被覆盖的文件会先在对端 a_Data\\remote_ctl\\sync_backup\\<时间戳>\\ 存一份，留最近 3 份。\n\n'
-                          '对端 App：若它正开着，同步时会先关掉（只关代理拉起的那个），推完自动拉回并点掉太极。\n\n'
+                          '对端 App：若它正开着，同步时会先关掉（只关代理拉起的那个），推完自动拉回并点掉太极。\n'
+                          '也可以手动点「拉起对端 App」「拉起对端上传」「停对端上传」——这三颗走对端常驻代理，'
+                          '两台互为对端都能用；上传那颗只认 Chan\\TicksFullUpload 这一个计划任务名，不是任意执行入口。\n\n'
                           '失败怎么办：任何一步失败立刻停，不会继续推后续层；按「按快照回退」可还原被覆盖的文件。\n\n'
                           '不同步什么：.git 历史、对端的验证现场（a_Data\\robot_verify）、对端独有的数据。',
                           style: TextStyle(fontSize: 13, height: 1.4),
@@ -381,6 +449,44 @@ Future<PeerSyncSettings?> showPeerSyncDialog(
                           onPressed: canAct ? doRestore : null,
                           icon: const Icon(Icons.undo, size: 18),
                           label: const Text('按快照回退'),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    // 对端那台的「拉起 App / 拉起上传」也在这里一键做（互为对端，两台都有这三颗）
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        OutlinedButton.icon(
+                          onPressed: canAct
+                              ? () => doPeerCtl(
+                                    '拉起对端 App',
+                                    (t) => PeerSyncService.peerApp(peer: t),
+                                  )
+                              : null,
+                          icon: const Icon(Icons.play_circle_outline, size: 18),
+                          label: const Text('拉起对端 App'),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: canAct
+                              ? () => doPeerCtl(
+                                    '拉起对端上传',
+                                    (t) => PeerSyncService.peerUpload(peer: t, op: 'run'),
+                                  )
+                              : null,
+                          icon: const Icon(Icons.cloud_upload_outlined, size: 18),
+                          label: const Text('拉起对端上传'),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: canAct
+                              ? () => doPeerCtl(
+                                    '停对端上传',
+                                    (t) => PeerSyncService.peerUpload(peer: t, op: 'end'),
+                                  )
+                              : null,
+                          icon: const Icon(Icons.stop_circle_outlined, size: 18),
+                          label: const Text('停对端上传'),
                         ),
                       ],
                     ),
