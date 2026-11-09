@@ -6119,3 +6119,14 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **测试**：① PCA→PCB 真跑：判本机最新，复制 3 个（新脚本 + 两个 dart），对端 14 个残留移进 `latest_20261109_215712`，复核 0 差异；② 反向用临时目录验证（对端 x.txt 更新、y.txt 只在对端、本机 z.txt 只在本机）→ 判对端为准，复制 2、移出 1、复核一致；③ `dart analyze` 两个文件 0 issue；④ `flutter build windows --debug` 成功，`kernel_blob.bin` 内含新文案。
 - **注意事项 / 待办**：判方向依赖文件修改时间，两台时钟若偏差大会把方向判反（今天两台一致）；只同步代码层，编译产物仍需重编后另推；老脚本 `sync_to_remote.ps1` 保留未删，命令行仍可用。
 - **相关文件**：`CHAN_RUST/scripts/sync_latest.ps1`、`CHAN_RUST/flutter/chan_kline/lib/sync/peer_sync_service.dart`、`CHAN_RUST/flutter/chan_kline/lib/ui/peer_sync_dialog.dart`。
+
+### 2026-11-09 · Doubao · 功能 · 同步后自动重编「被对齐那台」并重启 App
+
+- **执行者**：Doubao Agent
+- **任务类型**：功能改造 / 远端代理扩动作 / 编译流水线自动化
+- **操作**：`remote_app_agent.ps1` 升到 1.4.0，新增两个白名单动作 `build` / `buildstatus`（只跑仓库内固定的 `build_rust.ps1`，不接受任意命令）；`remote_ctl.ps1` 放行这两个动作；`sync_latest.ps1` 新增 `-Build`：同步完成且确有文件变化时，自动编译**刚被对齐的那一侧**（本机就本机编，对端就经代理编）；App 侧 `latestSync` 默认带 `-Build`，确认弹窗写明会重编并重启，日志里带「正在重编并重启 App」阶段提示。
+- **结果**：一次点击走完「判方向 → 对齐文件 → 编 chan_ffi.dll → flutter build --debug → 重启那台的界面」。退出码新增 7 = 同步成了但编译没出成品（界面黄字提示，不算整轮失败）。
+- **演示**：点「按最新方同步」，确认窗多一行「同步完成后自动重编那台的 DLL 与 App」，跑完结论行会带「已重编对端并重启 App（N 秒）」。
+- **测试**：① 对端代理 reload 后 `ping` 回 `agent_version=1.4.0`；② 直接下发 `build`：PCB `pid 14460` 起编，kernel_blob 22:19:49、App 新实例 `pid 11836`（22:19:57，335MB）；③ 本机同脚本重编：kernel_blob 22:22:03、App `pid 117356`（22:22:10）；④ 本机 kernel_blob 内含「按最新方同步」「正在重编并重启」「自动重编那台的 DLL」三条新文案；⑤ **端到端真跑**（本机 `sync_latest.ps1 -Apply -Build`）：判本机最新 → 复制 3 个 → 对端起编 → **36 秒编完并重启**，JSON 回 `buildSide=peer / buildOk=true`，整轮 46 秒、退出码 0。
+- **注意事项 / 待办**：① `chan_ffi.dll` 是编译产物、未入库，试跑时曾被判成「对端更新」并把对端的 DLL 拷回本机 —— 已在清单排除 `*.dll / *.pdb / *.ilk`；② 只改非 Dart 文件时 flutter 复用缓存、`kernel_blob.bin` 不刷新，完成判据不能只看它，已改成「日志出现 `Launch (no flutter run)` 或 kernel 或 dll 任一刷新」；③ 对端代理回的是它自己的盘符路径，本机读不到，已按共享路径重映射后再盯日志（这两条都是实跑时踩出来的）；④ 对端代理必须是 1.4.0（改完要 reload 一次）才认 `build`；⑤ PCB 现存 5 个 32KB 的 chan_kline 空壳进程，提权杀不掉，不影响新实例。
+- **相关文件**：`CHAN_RUST/scripts/remote_app_agent.ps1`、`CHAN_RUST/scripts/remote_ctl.ps1`、`CHAN_RUST/scripts/sync_latest.ps1`、`CHAN_RUST/flutter/chan_kline/lib/sync/peer_sync_service.dart`、`CHAN_RUST/flutter/chan_kline/lib/ui/peer_sync_dialog.dart`。
