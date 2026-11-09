@@ -6067,3 +6067,16 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **测试**：`flutter analyze lib/ui/ticks_full_upload_panel.dart` 0 error / 0 warning；`flutter build windows --debug` 成功；真机连点两次都能开窗，关窗后面板状态不丢。
 - **注意事项 / 待办**：按钮文案只显示「几台 · 百分比」，要绝对值（多少只 / 总计多少）请开窗看；这轮 4 个提交仍未 push。
 - **相关文件**：`CHAN_RUST\flutter\chan_kline\lib\ui\ticks_full_upload_panel.dart`（`_summaryLabel` / `_openStatusDialog` / `_snapVN`）。
+### 2026-11-09 · Doubao · 排查 · PCA 上传比 PCB 慢一个档位的真因
+
+- **执行者**：Doubao Agent
+- **任务类型**：性能排查 / 数据质量核对
+- **操作**：用三组证据交叉验证——(1) PCA 自己的 `supervisor.log` 逐只耗时；(2) 两台共享 `status` 与 `ticks_stream_state.json` 里每条记录的天数/包数/体积；(3) 从 PCA 直接对 Telegram 发 4MB 假包，量单流与三路并发的真实上行。
+- **结果**：
+  1. **逻辑没有不同**：两台跑同一份 `pipeline_stream_ticks.py`、同一个导出器（SHA 相同、626176 字节）、同一 bot、同一 4MB 分包上限、同一 `proxy=127.0.0.1:19828`；
+  2. **工作量不同**：PCA 最近 10 只是 5–13 包、20–39MB、1400–4095 天；PCB 的 118 只**每只只有 1 个包、1 天、体积≈0MB**（都是上市首日），累计只有 120 天数据，而 PCA 累计 29504 天。所以 PCB 的「1.5 只/分」是残包刷出来的假快；
+  3. **PCA 的真瓶颈是出口上行**：单流对 Telegram 上行只有 33–55KB/s（4MB 包 74–82 秒），三路并发聚合只到 62.9KB/s，几乎无收益；代理 4MB 上传 27 秒即被远端掐断（对应 14:28 那条 `upload reject: Remote end closed connection`）。链路本身：PCA 走 2.4GHz Wi-Fi（信道 4，链路 130Mbps），直连到境外 4MB 上行 386KB/s，但到 Telegram 只有 56KB/s。
+- **演示**：打开「上传进度」弹窗对比两台：`LAPTOP-NA22IFPU` 传一只 300xxx 要 8–13 分钟，`cxy` 每 30 秒一只。
+- **测试**：4MB 假包直发 Telegram（chat_id=0，返回 400 但传输走完）直连 45–56KB/s、代理 49KB/s；三路并发直连 130KB/s、代理 94KB/s（合成包），真机并发上传时网卡聚合仅 62.9KB/s。
+- **注意事项 / 待办**：并发改动在真机无收益，已回退，只保留「心跳写 claim 加锁」这一条安全修正；**PCB 那 118 只 1 天的残包需要重跑**（本质是它取不到历史，属于数据质量事故）。
+- **相关文件**：`CHAN_RUST\scripts\pipeline_stream_ticks.py`（`maybe_heartbeat` / `_hb_lock`）。
