@@ -23,14 +23,19 @@
 #   ... -Apply -Json
 #   # 顶层明确方向（auto 判不出来时用）
 #   ... -Apply -Direction toLocal -Json
+#   # 同步完顺手把「被更新的那一台」重编并重启 App（cargo 编 chan_ffi.dll + flutter build --debug）
+#   ... -Apply -Build -Json
 #
-# 退出码：0 成功（含「已一致」）；2 对端不可达；4 复制/移出失败；5 同步后复核仍有差异；6 方向判不出来
+# 退出码：0 成功（含「已一致」）；2 对端不可达；4 复制/移出失败；5 同步后复核仍有差异；6 方向判不出来；
+#         7 同步成功但编译没出成品（看 buildLog）
 
 param(
     [string]$PeerPath = '\\192.168.1.6\D$\2\chan_month5',
     [string]$LocalRoot = '',
     [ValidateSet('auto', 'toPeer', 'toLocal')][string]$Direction = 'auto',
     [switch]$Apply,
+    [switch]$Build,
+    [int]$BuildTimeoutSec = 900,
     [switch]$Json
 )
 
@@ -65,7 +70,10 @@ $ExcludeFiles = @(
     '.chan_telegram_settings.json', '.chan_chip_config.json', '.chan_trend_model_config.json',
     '.chan_sync_settings.json',
     '*.locked*', '*.bak*',
-    '*.pyc', '*.pyo', '*.tmp', '*.orig', '*.rej', 'Thumbs.db', '.DS_Store'
+    '*.pyc', '*.pyo', '*.tmp', '*.orig', '*.rej', 'Thumbs.db', '.DS_Store',
+    # 编译产物：chan_ffi.dll 是 cargo 现编出来的，没入库（git ls-files 查不到），
+    # 哪一侧刚编过就更"新"，会把方向判反、把对端的 DLL 拷回来。编译由 -Build 各自负责。
+    '*.dll', '*.pdb', '*.ilk'
 )
 
 # 按「目录名」排除的运行时/工具缓存：出现在任意层级都排（__pycache__ 常嵌在 scripts 下面）。
@@ -98,11 +106,16 @@ $script:Result = [ordered]@{
     backupDir   = ''
     verifyLeft  = 0
     samples     = @()
+    buildSide   = ''
+    buildOk     = $null
+    buildNote   = ''
+    buildLog    = ''
+    buildSec    = 0
     error       = ''
 }
 
 function Finish([int]$code, [string]$err) {
-    $script:Result.ok = ($code -eq 0)
+    $script:Result.ok = (($code -eq 0) -or ($code -eq 7))
     if ($err -ne '') { $script:Result.error = $err }
     if ($Json) {
         Write-Host '===JSON==='
@@ -428,4 +441,122 @@ if ($left -gt 0) {
 }
 
 Write-Say '同步完成：两边文件已一致。'
+
+# ---------------- 编译（-Build） ----------------
+# 只编「刚被更新的那一侧」：最新方本来就是刚编过的，被对齐的那台才需要重编才生效。
+# 编译用的是仓库里固定的 build_rust.ps1（cargo 编 chan_ffi.dll → 拷 DLL → flutter build --debug → 拉起 App）。
+if ($Build) {
+    if (($decided -eq 'same') -or (($copied + $moved) -le 0)) {
+        $script:Result.buildNote = '没有文件变化，跳过编译'
+        $script:Result.buildOk = $true
+        Write-Say '没有文件变化，跳过编译'
+    } else {
+        $side = $(if ($decided -eq 'local-to-peer') { 'peer' } else { 'local' })
+        $root = $(if ($side -eq 'local') { $LocalRoot } else { $PeerPath })
+        $script:Result.buildSide = $side
+        $who = $(if ($side -eq 'local') { '本机' } else { '对端' })
+        Write-Say "开始编译被更新的那一侧（$who）：编 chan_ffi.dll + flutter build + 重启 App"
+
+        $kernel = Join-Path $root 'CHAN_RUST\flutter\chan_kline\build\windows\x64\runner\Debug\data\flutter_assets\kernel_blob.bin'
+        $dllPath = Join-Path $root 'CHAN_RUST\flutter\chan_kline\windows\native\chan_ffi.dll'
+        $t0 = Get-Date
+        $started = $false
+
+        if ($side -eq 'local') {
+            $bs = Join-Path $LocalRoot 'CHAN_RUST\scripts\build_rust.ps1'
+            if (-not (Test-Path -LiteralPath $bs)) {
+                $script:Result.buildOk = $false
+                $script:Result.buildNote = "找不到 build_rust.ps1：$bs"
+            } else {
+                $bdir = Join-Path $LocalRoot 'a_Data\remote_ctl\build'
+                if (-not (Test-Path -LiteralPath $bdir)) { New-Item -ItemType Directory -Path $bdir -Force | Out-Null }
+                $blog = Join-Path $bdir ((Get-Date -Format 'yyyyMMdd_HHmmss') + '_local.log')
+                $ps51 = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+                if (-not (Test-Path -LiteralPath $ps51)) { $ps51 = 'powershell.exe' }
+                $p = Start-Process -FilePath $ps51 -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $bs) `
+                    -WorkingDirectory $LocalRoot -WindowStyle Hidden -PassThru `
+                    -RedirectStandardOutput $blog -RedirectStandardError ($blog + '.err')
+                $script:Result.buildLog = $blog
+                Write-Say ("本机编译已启动 pid=" + $p.Id + "，日志 " + $blog)
+                $started = $true
+            }
+        } else {
+            # 让对端代理跑同一套固定脚本（代理只认 build 这个白名单动作）
+            $ctl = Join-Path $PeerPath 'a_Data\remote_ctl'
+            $reqDir = Join-Path $ctl 'requests'
+            $resDir = Join-Path $ctl 'results'
+            $tokFile = Join-Path $ctl 'token.txt'
+            if ((-not (Test-Path -LiteralPath $reqDir)) -or (-not (Test-Path -LiteralPath $tokFile))) {
+                $script:Result.buildOk = $false
+                $script:Result.buildNote = '对端代理没在跑（缺 requests 目录或 token.txt），没触发编译'
+            } else {
+                $tok = ([IO.File]::ReadAllText($tokFile)).Trim()
+                $rid = (Get-Date -Format 'yyyyMMdd_HHmmss_fff') + '_' + (Get-Random -Minimum 1000 -Maximum 9999)
+                $req = [pscustomobject]@{ id = $rid; action = 'build'; token = $tok; args = @{}; createdAt = (Get-Date).ToString('s') }
+                $enc = New-Object Text.UTF8Encoding($false)
+                [IO.File]::WriteAllText((Join-Path $reqDir ($rid + '.json')), ($req | ConvertTo-Json -Depth 6), $enc)
+                $resPath = Join-Path $resDir ($rid + '.json')
+                $dl = (Get-Date).AddSeconds(40)
+                $got = $null
+                while ((Get-Date) -lt $dl) {
+                    Start-Sleep -Milliseconds 500
+                    if (Test-Path -LiteralPath $resPath) {
+                        try { $got = ([IO.File]::ReadAllText($resPath) | ConvertFrom-Json) } catch { $got = $null }
+                        if ($null -ne $got) { break }
+                    }
+                }
+                if ($null -eq $got -or -not $got.ok) {
+                    $why = $(if ($null -eq $got) { '对端代理 40 秒没响应（可能没启动）' } else { "对端代理拒绝：$($got.error)" })
+                    $script:Result.buildOk = $false
+                    $script:Result.buildNote = $why
+                } else {
+                    # 代理回的是对端本机路径（D:\...），本机读不到，换成共享路径再盯着看
+                    $leaf = Split-Path -Leaf ([string]$got.data.log)
+                    $script:Result.buildLog = Join-Path (Join-Path $PeerPath 'a_Data\remote_ctl\build') $leaf
+                    Write-Say ("对端编译已启动 pid=" + $got.data.pid + "，日志 " + $script:Result.buildLog)
+                    $started = $true
+                }
+            }
+        }
+
+        if ($started) {
+            $dl = (Get-Date).AddSeconds($BuildTimeoutSec)
+            $lastSay = Get-Date
+            $okBuild = $false
+            # 完成判据三条任一命中：
+            #   1) 构建日志出现 "Launch (no flutter run)"（build_rust.ps1 打完 App 必打这行）；
+            #   2) kernel_blob.bin 比开始时间新（Dart 有改动时才会刷新）；
+            #   3) chan_ffi.dll 比开始时间新（Rust 有改动时才会刷新）。
+            # 只改了非 Dart 文件（比如 task-log）时 flutter 复用缓存、kernel 不刷新，单看 2) 会一直等到超时。
+            while ((Get-Date) -lt $dl) {
+                Start-Sleep -Seconds 5
+                $logDone = $false
+                $logPath = $script:Result.buildLog
+                if ($logPath -ne '' -and (Test-Path -LiteralPath $logPath)) {
+                    try {
+                        $logDone = Select-String -LiteralPath $logPath -Pattern 'Launch \(no flutter run\)' -SimpleMatch:$false -Quiet -ErrorAction Stop
+                    } catch { $logDone = $false }
+                }
+                $kbOk = (Test-Path -LiteralPath $kernel) -and ((Get-Item -LiteralPath $kernel).LastWriteTime -gt $t0)
+                $dllOk = (Test-Path -LiteralPath $dllPath) -and ((Get-Item -LiteralPath $dllPath).LastWriteTime -gt $t0)
+                if ($logDone -or $kbOk -or $dllOk) { $okBuild = $true; break }
+                if (((Get-Date) - $lastSay).TotalSeconds -ge 25) {
+                    Write-Say ("编译中（" + [int]((Get-Date) - $t0).TotalSeconds + " 秒）：正在编…")
+                    $lastSay = Get-Date
+                }
+            }
+            $script:Result.buildSec = [int]((Get-Date) - $t0).TotalSeconds
+            $script:Result.buildOk = $okBuild
+            if ($okBuild) {
+                $script:Result.buildNote = "编译完成并已重启 App（用时 $($script:Result.buildSec) 秒）"
+                Write-Say $script:Result.buildNote
+            } else {
+                $script:Result.buildNote = "编译超时或没出成品（>$BuildTimeoutSec 秒），看日志：$($script:Result.buildLog)"
+                Write-Host "!! $($script:Result.buildNote)"
+                Finish 7 $script:Result.buildNote
+            }
+        }
+    }
+}
+
 Finish 0 ''
