@@ -18,10 +18,11 @@ String _briefPeer(Object? data) {
   return parts.join('，');
 }
 
-/// 双机同步弹窗：测试连接 → 差异清单 → 真同步 → 结论 / 按快照回退。
+/// 双机同步弹窗：测试连接 → 判哪台最新 → 按最新方同步 → 结论 / 按快照回退。
 ///
-/// 口径全在 `CHAN_RUST/scripts/sync_to_remote.ps1`：发起方为准覆盖同名文件、
-/// 不删对端独有文件、覆盖前把被覆盖文件存一份快照、推完把对端 App 拉回。
+/// 口径全在 `CHAN_RUST/scripts/sync_latest.ps1`：先比两侧清单判「哪台更新」，
+/// 再把旧的一侧对齐到新的一侧；旧侧独有文件移进备份目录，不直接删。
+/// 旧脚本 `sync_to_remote.ps1`（固定 本机→对端）保留，供命令行单独用。
 Future<PeerSyncSettings?> showPeerSyncDialog(
   BuildContext context, {
   required PeerSyncSettings initial,
@@ -90,93 +91,105 @@ Future<PeerSyncSettings?> showPeerSyncDialog(
             }
             setDlg(() {
               busy = true;
-              status = '统计差异……';
+              status = '检测哪台更新……';
               log.clear();
               hasResult = false;
-              addLog('>> 统计差异（不动任何文件）');
+              addLog('>> 检测两侧文件（不动任何文件）');
             });
-            final diff = await PeerSyncService.diff(peer: target);
+            final plan = await PeerSyncService.latestPlan(peer: target);
             if (!alive) return;
-            if (diff.json == null || !diff.ok) {
+            if (plan.json == null || !plan.ok) {
               setDlg(() {
                 busy = false;
-                status = '差异统计失败，已中止（没有写任何文件）';
+                status = '检测失败，已中止（没有写任何文件）';
                 hasResult = true;
                 resultOk = false;
-                addLog('!! ${diff.error}');
+                addLog('!! ${plan.error}');
               });
               return;
             }
-            final j = diff.json!;
-            final added = (j['new'] as num?)?.toInt() ?? 0;
-            final over = (j['overwrite'] as num?)?.toInt() ?? 0;
-            final same = (j['same'] as num?)?.toInt() ?? 0;
-            final only = (j['onlyInPeer'] as num?)?.toInt() ?? 0;
-            final locked = j['peerAppWasLocked'] == true;
+            final j = plan.json!;
+            final dir = (j['direction'] as String?) ?? '';
+            final newer = (j['newerSide'] as String?) ?? '';
+            final onlyLocal = (j['onlyLocal'] as num?)?.toInt() ?? 0;
+            final onlyPeer = (j['onlyPeer'] as num?)?.toInt() ?? 0;
+            final bothDiff = (j['bothDiff'] as num?)?.toInt() ?? 0;
 
-            bool skipConfirm = false;
-            if (added + over > 0) {
-              if (!alive || !ctx.mounted) return;
-              final confirmed = await showDialog<bool>(
-                context: ctx,
-                builder: (c2) => AlertDialog(
-                  title: const Text('确认同步到对端'),
-                  content: StatefulBuilder(
-                    builder: (c3, setC3) => Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('对端：$target',
-                            style: const TextStyle(fontSize: 12)),
-                        const SizedBox(height: 8),
-                        Text('新增 $added 个，覆盖 $over 个，相同 $same 个',
-                            style: const TextStyle(fontSize: 13)),
-                        const SizedBox(height: 4),
-                        Text('对端独有 $only 个文件不会被删除',
-                            style: TextStyle(
-                                fontSize: 12, color: Colors.grey.shade700)),
-                        const SizedBox(height: 4),
-                        Text(
-                          locked
-                              ? '对端 App 正在运行：同步时会先把它关掉（仅代理拉起的那个），推完再拉回。'
-                              : '对端 App 没在运行。',
-                          style: const TextStyle(fontSize: 12, height: 1.35),
-                        ),
-                        const SizedBox(height: 8),
-                        CheckboxListTile(
-                          value: skipConfirm,
-                          dense: true,
-                          contentPadding: EdgeInsets.zero,
-                          title: const Text('本次不再询问', style: TextStyle(fontSize: 12)),
-                          onChanged: (v) => setC3(() => skipConfirm = v ?? false),
-                        ),
-                      ],
+            if (dir == 'same') {
+              setDlg(() {
+                busy = false;
+                status = '两台文件已经一致，不需要同步';
+                hasResult = true;
+                resultOk = true;
+                addLog('>> 逐文件比对：0 处差异');
+              });
+              return;
+            }
+            if (dir.isEmpty) {
+              setDlg(() {
+                busy = false;
+                status = '判不出哪台更新，已中止';
+                hasResult = true;
+                resultOk = false;
+                addLog('!! 两侧票数与时间都打平：请先做一处改动，或让一侧的修改时间更清楚');
+              });
+              return;
+            }
+
+            final isToPeer = dir == 'local-to-peer';
+            final copyN = isToPeer ? onlyLocal + bothDiff : onlyPeer + bothDiff;
+            final moveN = isToPeer ? onlyPeer : onlyLocal;
+
+            if (!alive || !ctx.mounted) return;
+            final confirmed = await showDialog<bool>(
+              context: ctx,
+              builder: (c2) => AlertDialog(
+                title: Text('以「$newer」为准同步'),
+                content: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('对端：$target', style: const TextStyle(fontSize: 12)),
+                    const SizedBox(height: 8),
+                    Text(
+                      '最新的一方：$newer　（${PeerSyncService.directionText(newer)}）',
+                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
                     ),
-                  ),
-                  actions: [
-                    TextButton(onPressed: () => Navigator.of(c2).pop(false), child: const Text('取消')),
-                    FilledButton(onPressed: () => Navigator.of(c2).pop(true), child: const Text('开始同步')),
+                    const SizedBox(height: 6),
+                    Text('另一台将被对齐：复制 / 覆盖 $copyN 个文件',
+                        style: const TextStyle(fontSize: 13)),
+                    const SizedBox(height: 4),
+                    Text('旧侧独有的 $moveN 个文件 → 移进那台的备份目录（不直接删）',
+                        style: TextStyle(fontSize: 12, color: Colors.grey.shade700)),
+                    const SizedBox(height: 6),
+                    const Text('不含：.git 历史、对端验证现场、各家的工具缓存目录。',
+                        style: TextStyle(fontSize: 12)),
                   ],
                 ),
-              );
-              if (confirmed != true || !alive) {
-                setDlg(() {
-                  busy = false;
-                  status = '已取消（没有写任何文件）';
-                  hasResult = true;
-                  resultOk = true;
-                });
-                return;
-              }
+                actions: [
+                  TextButton(onPressed: () => Navigator.of(c2).pop(false), child: const Text('取消')),
+                  FilledButton(onPressed: () => Navigator.of(c2).pop(true), child: const Text('开始同步')),
+                ],
+              ),
+            );
+            if (confirmed != true || !alive) {
+              setDlg(() {
+                busy = false;
+                status = '已取消（没有写任何文件）';
+                hasResult = true;
+                resultOk = true;
+              });
+              return;
             }
 
             setDlg(() {
-              status = '同步中……';
-              addLog('>> 开始同步');
+              status = '同步中（以$newer为准）……';
+              addLog('>> 开始同步：以 $newer 为准（$dir）');
             });
 
-            final out = await PeerSyncService.sync(
+            final out = await PeerSyncService.latestSync(
               peer: target,
+              direction: dir,
               onLine: (l) {
                 if (!alive) return;
                 setDlg(() => addLog(l));
@@ -188,7 +201,7 @@ Future<PeerSyncSettings?> showPeerSyncDialog(
             final stamp = '${now.year}-${now.month.toString().padLeft(2, '0')}-'
                 '${now.day.toString().padLeft(2, '0')} '
                 '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
-            final summary = out.summaryLine;
+            final summary = PeerSyncService.latestSummaryLine(out);
             setDlg(() {
               busy = false;
               hasResult = true;
@@ -366,20 +379,18 @@ Future<PeerSyncSettings?> showPeerSyncDialog(
                       title: const Text('双机同步 · 说明'),
                       content: const SingleChildScrollView(
                         child: Text(
-                          '它做什么：把「这台」的项目（源码 + 编译产物 + 数据目录）推到「对端」，'
-                          '让另一台跑的是同一份最新代码。\n\n'
+                          '它做什么：比对两台的项目文件，判断哪一台更新，然后把旧的那一台整体对齐到新的那一台。'
+                          '方向是自动判的，不用你选「推」还是「拉」。\n\n'
                           '操作步骤：\n'
                           '1. 确认对端路径（默认按主机名自动填：PCA↔PCB）。\n'
                           '2. 点「测试连接」：只读探测共享是否可达、对端代理在不在、对端 App 是否占着产物。\n'
-                          '3. 点「立即同步到对端」：先出差异清单（新增 / 覆盖 / 相同），确认后才真写。\n'
-                          '4. 进度逐行显示：探测占用 → 关对端 App → 推源码 → 推产物 → 模板与 BOM → 指纹校验 → 重拉对端 App。\n\n'
-                          '会覆盖什么：对端同名文件（以这台为准）；不会删除对端独有的文件。\n'
-                          '被覆盖的文件会先在对端 a_Data\\remote_ctl\\sync_backup\\<时间戳>\\ 存一份，留最近 3 份。\n\n'
-                          '对端 App：若它正开着，同步时会先关掉（只关代理拉起的那个），推完自动拉回并点掉太极。\n'
-                          '也可以手动点「拉起对端 App」「拉起对端上传」「停对端上传」——这三颗走对端常驻代理，'
-                          '两台互为对端都能用；上传那颗只认 Chan\\TicksFullUpload 这一个计划任务名，不是任意执行入口。\n\n'
-                          '失败怎么办：任何一步失败立刻停，不会继续推后续层；按「按快照回退」可还原被覆盖的文件。\n\n'
-                          '不同步什么：.git 历史、对端的验证现场（a_Data\\robot_verify）、对端独有的数据。',
+                          '3. 点「按最新方同步」：先逐文件比对出「哪台最新、要改哪些文件」，确认后才真写。\n'
+                          '4. 进度逐行显示：列两侧清单 → 判方向 → 复制 → 旧侧独有文件移进备份 → 复核两边是否一致。\n\n'
+                          '判「最新」的口径：逐文件比修改时间与内容；差异项最后改动晚的那一台为准'
+                          '（时间打平才退到计数、再退到 git 最近提交）。\n'
+                          '会改什么：新的一侧有的文件（含新增与内容不同）复制到旧的一侧；'
+                          '旧的一侧独有的文件不直接删，移进那台的 a_Data\\remote_ctl\\sync_backup\\latest_<时间戳>\\，可回退。\n'
+                          '不同步什么：.git 历史、对端验证现场（a_Data\\robot_verify）、各家的工具缓存目录（__pycache__、.remember 等）。',
                           style: TextStyle(fontSize: 13, height: 1.4),
                         ),
                       ),
@@ -443,7 +454,7 @@ Future<PeerSyncSettings?> showPeerSyncDialog(
                         FilledButton.icon(
                           onPressed: canAct ? doSync : null,
                           icon: const Icon(Icons.sync, size: 18),
-                          label: const Text('立即同步到对端'),
+                          label: const Text('按最新方同步'),
                         ),
                         OutlinedButton.icon(
                           onPressed: canAct ? doRestore : null,

@@ -38,6 +38,7 @@ abstract final class PeerSyncService {
   static String get _sep => Platform.pathSeparator;
   static String get scriptsDir => '$repoRoot${_sep}CHAN_RUST${_sep}scripts';
   static String get syncScript => '$scriptsDir${_sep}sync_to_remote.ps1';
+  static String get latestScript => '$scriptsDir${_sep}sync_latest.ps1';
   static String get ctlScript => '$scriptsDir${_sep}remote_ctl.ps1';
   static String get restoreScript => '$scriptsDir${_sep}sync_restore.ps1';
 
@@ -172,6 +173,39 @@ abstract final class PeerSyncService {
       json: json,
       error: err,
       rawError: errText,
+    );
+  }
+
+  /// 判「哪台更新」并列出差异清单（不动任何文件）。
+  ///
+  /// `sync_latest.ps1` 的口径：逐文件比修改时间与内容，判定以哪一侧为准，
+  /// 返回 direction = local-to-peer / peer-to-local / same。
+  static Future<PeerSyncOutcome> latestPlan({required String peer}) {
+    return runScript(
+      script: latestScript,
+      args: ['-PeerPath', peer, '-Json'],
+      timeout: const Duration(minutes: 10),
+    );
+  }
+
+  /// 按「最新一方」真同步：把旧的一侧对齐到新的一侧（方向由 plan 给出）。
+  ///
+  /// direction 取 plan 返回的 `direction`；'auto' 表示让脚本再判一次。
+  static Future<PeerSyncOutcome> latestSync({
+    required String peer,
+    String direction = 'auto',
+    void Function(String line)? onLine,
+  }) {
+    final d = switch (direction) {
+      'local-to-peer' => 'toPeer',
+      'peer-to-local' => 'toLocal',
+      _ => 'auto',
+    };
+    return runScript(
+      script: latestScript,
+      args: ['-PeerPath', peer, '-Apply', '-Json', '-Direction', d],
+      onLine: onLine,
+      timeout: const Duration(minutes: 40),
     );
   }
 
@@ -310,6 +344,35 @@ abstract final class PeerSyncService {
     final tail = s.isEmpty ? '' : '（$s）';
     return '上次同步：$lastSyncAt ${ok ? '成功' : '失败'}$tail';
   }
+
+  /// 「以最新一侧为准」的结果摘要（单行）。
+  static String latestSummaryLine(PeerSyncOutcome out) {
+    final j = out.json;
+    if (j == null) return out.ok ? '完成' : (out.error.isEmpty ? '失败' : out.error);
+    final dir = (j['direction'] as String?) ?? '';
+    final newer = (j['newerSide'] as String?) ?? '';
+    if (dir == 'same') return '两台已经一致';
+    if (!out.ok) {
+      final e = (j['error'] as String?)?.trim() ?? '';
+      final left = (j['verifyLeft'] as num?)?.toInt() ?? 0;
+      if (e.isNotEmpty) return e;
+      return left > 0 ? '仍有 $left 处差异' : '失败（退出码 ${out.exitCode}）';
+    }
+    final copied = (j['copied'] as num?)?.toInt() ?? 0;
+    final moved = (j['movedAside'] as num?)?.toInt() ?? 0;
+    final left = (j['verifyLeft'] as num?)?.toInt() ?? 0;
+    final parts = <String>[
+      '以 $newer 为准',
+      '对齐 $copied 个文件',
+      if (moved > 0) '移出 $moved 个到备份',
+      if (left > 0) '仍有 $left 处差异' else '复核一致',
+    ];
+    return parts.join('，');
+  }
+
+  /// 方向的自然语言说明（给确认弹窗用）。
+  static String directionText(String newerSide) =>
+      newerSide == '本机' ? '本机 → 对端' : '对端 → 本机';
 }
 
 class PeerSyncOutcome {
