@@ -515,6 +515,7 @@ class TicksFullUploadPanel extends StatefulWidget {
 class _TicksFullUploadPanelState extends State<TicksFullUploadPanel> {
   late final TextEditingController _shareCtrl;
   TicksUploadSnapshot? _snap;
+  final ValueNotifier<TicksUploadSnapshot?> _snapVN = ValueNotifier(null);
   Timer? _timer;
   String _actionNote = '';
   bool _creating = false;
@@ -546,6 +547,7 @@ class _TicksFullUploadPanelState extends State<TicksFullUploadPanel> {
   @override
   void dispose() {
     _timer?.cancel();
+    _snapVN.dispose();
     _shareCtrl.dispose();
     super.dispose();
   }
@@ -556,6 +558,7 @@ class _TicksFullUploadPanelState extends State<TicksFullUploadPanel> {
       dataRoot: widget.dataRoot,
     );
     if (!mounted) return;
+    _snapVN.value = snap;
     setState(() => _snap = snap);
   }
 
@@ -617,7 +620,7 @@ class _TicksFullUploadPanelState extends State<TicksFullUploadPanel> {
           '\n2. 两台电脑填同一个共享进度目录；留空会自动填默认值。'
           '\n3. 先在「Telegram 数据源」里保存机器人令牌、聊天号和代理。'
           '\n4. 点「生成本机上传任务」。按钮上方会写出正在登记、成功，或失败原因。成功后本机会登记登录后自动跑的任务，并在任务栏托盘显示。'
-          '\n5. 这里的进度块会逐项写明：总进度与百分比、两台各自的速率、每台正在传的代码与心跳、最近完成的股票、跳过统计、以及本机日志末行。'
+          '\n5. 点「上传进度」按钮会弹出进度窗：总进度与百分比、两台各自的速率、每台正在传的代码与心跳、最近完成的股票、跳过统计、以及本机日志末行。按钮上也会直接写「几台在跑 · 进度百分比」。'
           '\n6. 关闭主图时，可以选择让下载留在托盘里继续。',
           style: TextStyle(fontSize: 13, height: 1.4),
         ),
@@ -717,6 +720,103 @@ class _TicksFullUploadPanelState extends State<TicksFullUploadPanel> {
     );
   }
 
+  /// 按钮上那一行摘要：不开弹窗也能一眼看出跑了几台、进度到哪。
+  String _summaryLabel(TicksUploadSnapshot? snap) {
+    if (snap == null) return '上传进度（读取中…）';
+    final running = snap.runningCount;
+    if (running == 0) return '上传进度（没有机器在跑）';
+    final done = snap.done;
+    final total = snap.total;
+    if (done == null) return '上传进度（$running 台 · 进度未读到）';
+    if (total == null || total <= 0) return '上传进度（$running 台 · $done 只）';
+    return '上传进度（$running 台 · ${(done * 100 / total).toStringAsFixed(1)}%）';
+  }
+
+  /// 把整块状态收进一个弹窗，设置面板只留一颗按钮。
+  Future<void> _openStatusDialog() {
+    return showDialog<void>(
+      context: context,
+      builder: (ctx) => Dialog(
+        backgroundColor: const Color(0xFF0F172A),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 640, maxHeight: 640),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    const Expanded(
+                      child: Text(
+                        '全市场分笔上传 · 进度',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFFE2E8F0),
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: '立即刷新',
+                      onPressed: () => unawaited(_reload()),
+                      icon: const Icon(Icons.refresh, size: 18),
+                    ),
+                    IconButton(
+                      tooltip: '关闭',
+                      onPressed: () => Navigator.pop(ctx),
+                      icon: const Icon(Icons.close, size: 18),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Flexible(
+                  child: SingleChildScrollView(
+                    child: ValueListenableBuilder<TicksUploadSnapshot?>(
+                      valueListenable: _snapVN,
+                      builder: (c, snap, _) => snap == null
+                          ? const Padding(
+                              padding: EdgeInsets.all(8),
+                              child: Text(
+                                '进度读取中…',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Color(0xFFCBD5E1),
+                                ),
+                              ),
+                            )
+                          : _logBox(snap),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Row(
+                  children: [
+                    const Expanded(
+                      child: Text(
+                        '每 5 秒自动刷新 · 两台机器共用同一个共享进度目录',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Color(0xFF94A3B8),
+                        ),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      child: const Text('关闭'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final snap = _snap;
@@ -764,21 +864,11 @@ class _TicksFullUploadPanelState extends State<TicksFullUploadPanel> {
               style: const TextStyle(fontSize: 11, color: Color(0xFF94A3B8)),
             ),
           ),
-        const SizedBox(height: 6),
-        if (snap == null)
-          const Text(
-            '进度读取中…',
-            style: TextStyle(fontSize: 12, color: Color(0xFFCBD5E1)),
-          )
-        else
-          _logBox(snap),
         const SizedBox(height: 8),
         SettingsOutlinedButton(
-          label: '刷新进度',
-          icon: Icons.refresh,
-          onPressed: () {
-            _reload();
-          },
+          label: _summaryLabel(snap),
+          icon: Icons.monitor_heart_outlined,
+          onPressed: _openStatusDialog,
         ),
         if (_actionNote.isNotEmpty) ...[
           const SizedBox(height: 8),
