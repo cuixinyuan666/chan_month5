@@ -52,7 +52,10 @@ import 'backtest/chart_line_store.dart';
 import 'backtest/condition_indicators.dart';
 import 'app/background_keep_alive.dart';
 import 'settings/interaction_mode_store.dart';
+import 'settings/peer_sync_settings_store.dart';
+import 'sync/peer_sync_service.dart';
 import 'ui/settings_panel_widgets.dart';
+import 'ui/peer_sync_dialog.dart';
 import 'ui/telegram_settings_dialog.dart';
 import 'ui/ticks_full_upload_panel.dart';
 import 'models/zs_frame.dart';
@@ -4335,6 +4338,7 @@ class _KlineHomePageState extends State<KlineHomePage>
     StateSetter? sheetSetState,
     bool forMobileSheet = false,
   }) {
+    final syncCfg = PeerSyncSettingsStore.loadSync();
     return [
         const SizedBox(height: 12),
         const SizedBox(height: SettingsPanelTheme.sectionGap),
@@ -4346,6 +4350,30 @@ class _KlineHomePageState extends State<KlineHomePage>
         const SizedBox(height: 4),
         Text(
           '弹窗查看整合全文，底部「复制」一键带走；含页面状态、最近历史与验收探针，已去重精简。',
+          style: TextStyle(fontSize: 11, color: Colors.grey.shade700, height: 1.3),
+        ),
+        const SizedBox(height: SettingsPanelTheme.fieldGap),
+        // 双机同步：把本机当前项目推到局域网另一台（那边自动关/拉 App、校验指纹）
+        SettingsFilledButton(
+          label: '双机同步',
+          icon: Icons.sync,
+          onPressed: _busy
+              ? null
+              : () async {
+                  final cfg = PeerSyncSettingsStore.loadSync();
+                  await showPeerSyncDialog(context, initial: cfg);
+                  if (mounted) setState(() {});
+                },
+        ),
+        const SizedBox(height: 4),
+        Text(
+          PeerSyncService.lastSyncLine(
+            syncCfg.lastSyncAt,
+            syncCfg.lastSyncOk,
+            syncCfg.lastSyncSummary,
+          ),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
           style: TextStyle(fontSize: 11, color: Colors.grey.shade700, height: 1.3),
         ),
         const SizedBox(height: SettingsPanelTheme.fieldGap),
