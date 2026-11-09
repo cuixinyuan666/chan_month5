@@ -5968,3 +5968,18 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   1. 四个脚本现均为 UTF-8 BOM；改动它们时**必须保持 BOM**，否则 5.1 下必解析失败。
   2. `-RestartRemoteApp` 依赖远端代理在线；代理不在线时 `start` 会退 `2`，脚本只提示不假装成功。
 - **相关文件**：`CHAN_RUST\scripts\sync_to_remote.ps1`（新增两开关 + 自动让路）、`README_sync_remote.md`（补占用处理与 BOM 口径）、`remote_ctl.ps1` / `remote_app_agent.ps1` / `stop_remote_agent.ps1`（改 BOM）。
+### 2026-11-09 · Doubao · 双机协同 · 远端代理补「点击」与窗口枚举：拉起后自动收起分笔太极
+
+- **执行者**：Doubao Agent
+- **任务类型**：双机协同 / 远端代理增强
+- **操作**：
+  1. 用户反馈：PCB（192.168.1.6）拉起后界面停在太极图上，要手动点一下左键才进真界面。核查源码：分笔（tick）刚进图时 `_tickIdleYinYang` 为真，Windows 端在**独立分层窗**上铺直径=窗口高度的阴阳鱼，只有「点一下 / 步进 / 播放」才收起（`kline_chart.dart:410/929/1128`、`yin_yang_native_overlay.dart`）。
+  2. 代理升 1.2.0：新增 `click`（`ShowWindow(SW_RESTORE)` + `SetForegroundWindow` + `SetCursorPos` + `mouse_event` 左键，坐标缺省取 App 窗口正中）、`windows`（`EnumWindows` 列全部可见顶层窗口：hwid/pid/进程/title/class/矩形）；`start`（ui 模式）在主窗口出现后**自动点一下**并抓整屏返回，支持 `noClick:true` 关闭该行为。
+  3. 修掉一个导致误判的抓图缺陷：整屏抓图原用 `Graphics.CopyFromScreen`（BitBlt 不带 `CAPTUREBLT`），**抓不到 `WS_EX_LAYERED` 分层窗口**，于是"太极"在图上根本看不到。改为 `BitBlt | CAPTUREBLT`，并在返回值里标 `capture: bitblt_captureblt`。
+- **结果**：同一实例对照实验，像素级证实了机制——重启后 18 秒整屏 29776 字节（太极铺满，右侧一只白圆），`click` 后 4 秒 13964 字节（K0 窗、价格轴 11.16~12.16、日期 2004/07/19 10:47、一颗红点）。改为自动点击后，`start` 返回 `clicked:true` 并附整屏，画面已是真界面。
+- **演示**：`remote_ctl.ps1 -Action start -Mode ui` 一条命令 → 那台自动进入真界面并回一张整屏；`-Action click` 可单独点，`-X/-Y` 可点任意坐标。
+- **测试**：新起实例 `pid=15472`、`clicked=true`；`status` 读回 `002003 / tick / step 0 / 942 根`；发 `{"type":"step","dir":1}` 后 `step_idx` 0→1；`windows` 列出 4 个可见顶层窗（chan_kline 1080x690 + cua-driver + TextInputHost + explorer），确认那台只有**一个** App 主窗、无残留覆盖窗。
+- **注意事项 / 待办**：
+  1. 太极图在 BitBlt 普通抓屏里永远看不见，凡"图上没有但人眼有"的现象，先怀疑分层窗口。
+  2. `click` 依赖代理在**已登录桌面会话**（session ≠ 0）里跑；session 0 下合成鼠标无效。
+- **相关文件**：`CHAN_RUST\scripts\remote_app_agent.ps1`（1.2.0，新增 click/windows、BitBlt 抓屏、start 自动点击）、`remote_ctl.ps1`（动作白名单扩到 12 个，新增 `-Source/-X/-Y`）、`README_sync_remote.md`。
