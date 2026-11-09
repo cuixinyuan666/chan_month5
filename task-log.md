@@ -6054,3 +6054,16 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   3. PCB 的无边框单窗仍然远程点不到齿轮（试 1012,16 无反应），面板在 PCB 上的观感要人点一次确认，功能链已由「它自己在往共享目录写 status」证过；
   4. 本轮两个提交 `02381ae3` / `5cba512e` 未 push，等用户一句话。
 - **相关文件**：`CHAN_RUST\scripts\pipeline_stream_ticks.py`（`complete_code` 补 machine/at、`write_status` 双写 + 速率、`heartbeat` 刷状态）、`CHAN_RUST\flutter\chan_kline\lib\ui\ticks_full_upload_panel.dart`（整块重写 + `defaultTicksShareDir`）、`lib\main.dart`（`_createFullTicksUploadTask` 用默认目录兜底）。
+### 2026-11-09 · Doubao · UI 收敛 · 全市场分笔上传状态收进一个弹窗
+
+- **执行者**：Doubao Agent
+- **任务类型**：UI 收敛 / 设置面板减负
+- **操作**：
+  1. 用户的原始不满：状态块常驻展开，把整个设置面板撑得太长，「占用太多」。改成设置面板里只保留一颗按钮「上传进度（2 台 · 29.2%）」——按钮文案本身带机器数与总进度百分比，不开窗也能一眼看到概况。
+  2. 点按钮弹出「全市场分笔上传 · 进度」窗：标题右侧两个图标（刷新、关闭），中间是原来那块完整日志（总进度与百分比、逐机速率与合计、各机器正在传什么/本轮+几/多久前上报、最近十只完成明细、共享目录可读性、本机日志末行），底部一行小字说明「每 5 秒自动刷新 · 两台机器共用同一个共享进度目录」与「关闭」按钮。
+  3. 数据源没有复制一份：面板里的 5 秒轮询继续跑，弹窗用 `ValueNotifier` 订阅同一份快照，所以窗开着也是实时跳动，不需要另起定时器。操作说明（问号）第 5 条也同步改成介绍这颗按钮。
+- **结果**：面板从原来「一屏多半屏都是日志」缩到 标题 + 共享目录输入 + 一颗按钮 + 生成任务按钮；真机点开弹窗内容完整、每 5 秒自己刷新（实拍：进度 1524/5225（29.2%）· 跳过 21，速率 本机 0.2 · cxy 1.6 · 合计 1.8/分，两台各一行明细与心跳，最近完成十行，共享目录「可读」，本机日志末行）。新构建已推 PCB（覆盖 9 文件、对端 App 自动重启）。
+- **演示**：设置 →「全市场分笔上传」→ 点「上传进度」→ 弹窗；按 Esc 或右上 × 关闭。
+- **测试**：`flutter analyze lib/ui/ticks_full_upload_panel.dart` 0 error / 0 warning；`flutter build windows --debug` 成功；真机连点两次都能开窗，关窗后面板状态不丢。
+- **注意事项 / 待办**：按钮文案只显示「几台 · 百分比」，要绝对值（多少只 / 总计多少）请开窗看；这轮 4 个提交仍未 push。
+- **相关文件**：`CHAN_RUST\flutter\chan_kline\lib\ui\ticks_full_upload_panel.dart`（`_summaryLabel` / `_openStatusDialog` / `_snapVN`）。
