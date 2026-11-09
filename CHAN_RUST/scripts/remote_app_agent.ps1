@@ -397,6 +397,44 @@ function Do-Click($a) {
     }
 }
 
+function Do-Scroll($a) {
+    Ensure-Win32
+    $p = Get-AppWindow
+    if ($null -eq $p) {
+        return [pscustomobject]@{ ok = $false; error = '没有可滚动的 chan_kline 窗口（先 start）' }
+    }
+    $h = [IntPtr]([int64]$p.MainWindowHandle)
+    [ChanWin32]::ShowWindow($h, 9) | Out-Null
+    [ChanWin32]::SetForegroundWindow($h) | Out-Null
+
+    $r = New-Object ChanWin32+RECT
+    [ChanWin32]::GetWindowRect($h, [ref]$r) | Out-Null
+    $cx = [int](($r.Left + $r.Right) / 2)
+    $cy = [int](($r.Top + $r.Bottom) / 2)
+
+    $x = $cx; $y = $cy; $delta = -3
+    if ($null -ne $a) {
+        if ($null -ne $a.x) { $x = [int]$a.x }
+        if ($null -ne $a.y) { $y = [int]$a.y }
+        if ($null -ne $a.delta) { $delta = [int]$a.delta }
+    }
+    if ($delta -eq 0) { $delta = -3 }
+
+    [ChanWin32]::SetCursorPos($x, $y) | Out-Null
+    Start-Sleep -Milliseconds 120
+    $step = $(if ($delta -gt 0) { 120 } else { -120 })   # 一格 = 120
+    for ($i = 0; $i -lt [Math]::Abs($delta); $i++) {
+        [ChanWin32]::mouse_event(0x0800, 0, 0, $step, [IntPtr]::Zero)   # WHEEL
+        Start-Sleep -Milliseconds 80
+    }
+
+    return [pscustomobject]@{
+        ok = $true; pid = $p.Id; title = $p.MainWindowTitle
+        scroll_x = $x; scroll_y = $y; delta = $delta
+        note = '已滚动滚轮；正数向上、负数向下'
+    }
+}
+
 function Do-Windows($a) {
     Ensure-Win32
     $script:WinList = @()
@@ -476,8 +514,9 @@ function Invoke-Action([string]$action, $a) {
         'reload' { return (Do-Reload $a) }
         'ps' { return (Do-Ps $a) }
         'click' { return (Do-Click $a) }
+        'scroll' { return (Do-Scroll $a) }
         'windows' { return (Do-Windows $a) }
-        default { throw "未知动作：$action（只接受 ping/start/stop/status/snapshot/screenshot/command/report/reload/ps/click/windows）" }
+        default { throw "未知动作：$action（只接受 ping/start/stop/status/snapshot/screenshot/command/report/reload/ps/click/scroll/windows）" }
     }
 }
 

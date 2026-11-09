@@ -20,7 +20,7 @@
 param(
     [string]$SharePath = '\\192.168.1.6\D$\2\chan_month5',
     [Parameter(Mandatory = $true)]
-    [ValidateSet('ping', 'start', 'stop', 'status', 'snapshot', 'screenshot', 'command', 'report', 'reload', 'ps', 'click', 'windows')]
+    [ValidateSet('ping', 'start', 'stop', 'status', 'snapshot', 'screenshot', 'command', 'report', 'reload', 'ps', 'click', 'scroll', 'windows')]
     [string]$Action,
     [ValidateSet('ui', 'verify')][string]$Mode = 'ui',
     [string]$SuiteId = '',
@@ -28,6 +28,7 @@ param(
     [ValidateSet('app', 'desktop')][string]$Source = 'app',
     [int]$X = -1,
     [int]$Y = -1,
+    [int]$Delta = -3,
     [int]$TimeoutSec = 60,
     [switch]$Json
 )
@@ -68,6 +69,11 @@ if ($Action -eq 'screenshot') { $argsObj['source'] = $Source }
 if ($Action -eq 'click') {
     if ($X -ge 0) { $argsObj['x'] = $X }
     if ($Y -ge 0) { $argsObj['y'] = $Y }
+}
+if ($Action -eq 'scroll') {
+    if ($X -ge 0) { $argsObj['x'] = $X }
+    if ($Y -ge 0) { $argsObj['y'] = $Y }
+    $argsObj['delta'] = $Delta
 }
 
 $req = [pscustomobject]@{
