@@ -6399,6 +6399,11 @@ class _KlineCompositePainter extends CustomPainter {
         continue;
       }
 
+      // 只有一根 K 的段不画合并框（全层同构）：单根没有「合并」语义，
+      // 早期 idx=0 时曾因极窄框四边虚线描边被看成一条「小蛇」。
+      if (f.x2 <= f.x1) {
+        continue;
+      }
       final (xLeft, xRight) = alignK1CombineWithViews
           ? _k1CombineFrameSpan(f, w, slotW, barW)
           : (levelUnitViews != null && levelUnitViews.isNotEmpty)
