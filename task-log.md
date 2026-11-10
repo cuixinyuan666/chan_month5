@@ -6310,3 +6310,12 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - 结果：脚本小样例自测正确（休市日不误判、未上市期不误判、空缺/空数据均抓到）；本机无 G: 索引目录时优雅报错提示去跑每日更新的机器生成；flutter analyze 无新增告警。
 - 演示：打开「全市场分笔上传 · 进度」弹窗，下方出现「── 台账与健康 ──」区块。
 
+
+## 2026-11-11 · OpenCode(cxy-all) · 规则外杂项 · for-telegram 分支合回主分支
+
+- 执行者：OpenCode（cxy-all）
+- 类型：git 合并（用户确认后执行）
+- 操作：将 for-telegram 分支（4 个 commit：加载转圈时间范围、进度弹窗数据范围、台账脚本、台账 UI 区块）以 ort 策略合入 ANDROID_RUST，合并 commit 662e5c5d，共 4 文件 +473 行。
+- 结果：flutter analyze 无 error（仅存量 info）；合并后 PCA pull 主分支即可用上台账与健康功能。
+- 演示：PCA 上「全市场分笔上传 · 进度」弹窗出现「台账与健康」区块，点「生成台账」后共享目录产出 ticks_health_record.json，本机可抓取存档进 git。
+
