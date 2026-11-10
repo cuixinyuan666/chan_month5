@@ -14,6 +14,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $taskName = 'Chan\TicksFullUpload'
+$schtasksExe = if ($env:SystemRoot) { Join-Path $env:SystemRoot 'System32\schtasks.exe' } else { 'C:\Windows\System32\schtasks.exe' }
 
 function Write-Result {
     param(
@@ -134,13 +135,30 @@ try {
     )
     $prev = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
-    $createText = (& schtasks.exe @createArgs 2>&1 | Out-String)
+    $createText = (& $schtasksExe @createArgs 2>&1 | Out-String)
     $createCode = $LASTEXITCODE
     $ErrorActionPreference = $prev
     if ($null -eq $createCode -or $createCode -ne 0) {
         if ($null -eq $createCode) { $createCode = 1 }
-        Write-Result -Ok $false -Code 'schtasks_create' -Message $createText -ExitCode ([int]$createCode) -RunExit ([int]$createCode)
-        exit 1
+        # 非管理员会话无法用 /Create /F 覆盖已有任务（拒绝访问）。
+        # 若任务已存在且指向同一 supervisor + job，则复用，继续走后面的 /Run。
+        $reuseOk = $false
+        try {
+            $existing = Get-ScheduledTask -TaskPath '\Chan\' -TaskName 'TicksFullUpload' -ErrorAction Stop
+        } catch {
+            $existing = $null
+        }
+        if ($existing) {
+            $act = $existing.Actions | Select-Object -First 1
+            if ($act -and $act.Arguments -like ('*' + $supervisor + '*') -and $act.Arguments -like ('*' + $JobPath + '*')) {
+                $reuseOk = $true
+            }
+        }
+        if (-not $reuseOk) {
+            Write-Result -Ok $false -Code 'schtasks_create' -Message $createText -ExitCode ([int]$createCode) -RunExit ([int]$createCode)
+            exit 1
+        }
+        Write-Output ('reuse_existing_task: ' + ($createText -replace '[\r\n]+', ' '))
     }
 
     if ($alive) {
@@ -149,7 +167,7 @@ try {
     }
 
     $ErrorActionPreference = 'Continue'
-    $runText = (& schtasks.exe /Run /TN $taskName 2>&1 | Out-String)
+    $runText = (& $schtasksExe /Run /TN $taskName 2>&1 | Out-String)
     $runCode = $LASTEXITCODE
     $ErrorActionPreference = 'Stop'
     if ($null -eq $runCode -or $runCode -ne 0) {
