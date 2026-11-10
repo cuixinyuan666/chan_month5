@@ -3888,32 +3888,48 @@ class _KlineCompositePainter extends CustomPainter {
     return useHigh ? bars[x].high : bars[x].low;
   }
 
-  /// 首分型前的第一组框（全层同构）：把左端延伸到该层第一根 K（idx=0）。
+  /// 首分型前的合并框（全层同构）：从该层第一根 K 起到首个分型之前，
+  /// 合成**一个**框，而不是把 idx=0 单独包成一个。
   ///
-  /// 第一组框在首分型前 `fx=UNKNOWN` 且 `x1=0`。经典首组的 x1 是首个极点
-  /// （默认数据在 idx=6），会把第一根 K 留在框外；这里把左端收到 idx=0，
-  /// 让第一个合并框包住该层 idx=0。high/low 仍取该组原值（高高），不改几何。
+  /// 经典口径在首分型前就会拆出多组（默认数据 idx=13 时 K1 已是两组：
+  /// 种子组低低 + 其后高高）。这里把开头连续的、尚未标分型（fx=UNKNOWN）
+  /// 且从 idx=0 起的组合并：x 从 0 收到最后一组右端，
+  /// high=max(各组 high)、low=max(各组 low)（高高）。
   /// 第一个分型确认后该组 fx 不再是 UNKNOWN，框按原样绘制。
-  List<KlineCombineFrame> _extendFirstFrameToBar0(
+  List<KlineCombineFrame> _mergePreFractalFrames(
     List<KlineCombineFrame> frames,
   ) {
     if (!earlyDynamicUnit || frames.isEmpty) return frames;
-    final first = frames.first;
-    if (first.fx != 'UNKNOWN' || first.x1 <= 0) return frames;
-    final t0 = bars.isEmpty ? first.t1 : bars.first.timeText;
+    if (frames.first.x1 > 0) return frames;
+    var end = 0;
+    while (end < frames.length && frames[end].fx == 'UNKNOWN') {
+      end++;
+    }
+    if (end <= 1) return frames;
+    final head = frames.sublist(0, end);
+    final last = head.last;
+    var hi = head.first.high;
+    var lo = head.first.low;
+    var count = 0;
+    for (final f in head) {
+      if (f.high > hi) hi = f.high;
+      if (f.low > lo) lo = f.low;
+      count += f.count;
+    }
+    final t0 = bars.isEmpty ? head.first.t1 : bars.first.timeText;
     return <KlineCombineFrame>[
       KlineCombineFrame(
         x1: 0,
-        x2: first.x2,
+        x2: last.x2,
         t1: t0,
-        t2: first.t2,
-        high: first.high,
-        low: first.low,
-        fx: first.fx,
-        count: first.count,
-        endAtLeftHalf: first.endAtLeftHalf,
+        t2: last.t2,
+        high: hi,
+        low: lo,
+        fx: 'UNKNOWN',
+        count: count,
+        endAtLeftHalf: last.endAtLeftHalf,
       ),
-      ...frames.sublist(1),
+      ...frames.sublist(end),
     ];
   }
 
@@ -4431,9 +4447,9 @@ class _KlineCompositePainter extends CustomPainter {
     );
     if (displayFrames.isEmpty) return;
 
-    // 开关开（全层同构）：首分型前的第一组框左端收到该层第一根 K，
-    // 让第一个合并框包住 idx=0；子窗口同时弃用种子框（seedPhaseVisible 已 gate）。
-    final frames = _extendFirstFrameToBar0(displayFrames);
+    // 开关开（全层同构）：首分型前从第一根 K 起合成一个框（高高）；
+    // 子窗口同时弃用种子框（seedPhaseVisible 已 gate）。
+    final frames = _mergePreFractalFrames(displayFrames);
 
     final style = ChartLevelLineStyle.forDisplayKn(kn);
     _drawCombineFramesOnMainChart(
@@ -6268,9 +6284,8 @@ class _KlineCompositePainter extends CustomPainter {
     // 开关开时（首分型前走「高高」）：旧的种子组合并框不再画，
     // 改为用该层预锚单元重建成「高高」首组框（high 取最高、low 也取最高），
     // 与动态 K 蜡烛/连线同一输入，全层同构。
-    // 开关开（全层同构）：首分型前的第一组框左端收到第一根 K，
-    // 让第一个合并框包住 idx=0。
-    final frames = _extendFirstFrameToBar0(combineFrames);
+    // 开关开（全层同构）：首分型前从第一根 K 起合成一个框（高高）。
+    final frames = _mergePreFractalFrames(combineFrames);
     if (frames.isEmpty) return;
     // 末组=构建中合并（虚线）；前组=已冻结合并（实线）。
     // 信号取 CombineEngine.groups 末项（已在 combineFrames 末尾），不是 activeUnit（那是进行中段）。
