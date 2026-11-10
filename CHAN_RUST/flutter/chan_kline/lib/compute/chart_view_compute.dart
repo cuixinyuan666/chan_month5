@@ -1132,6 +1132,7 @@ DisplayBuildingLine? _seedLineBeforeFirstPole({
   required List<K1Bar> virtualUnits,
   required Set<int> frozenIdx,
   required _DashPole firstPole,
+  bool asSolid = true,
 }) {
   K1Bar? unit;
   for (final u in virtualUnits) {
@@ -1165,7 +1166,7 @@ DisplayBuildingLine? _seedLineBeforeFirstPole({
     anchorX: begin.barIdx,
     beginSrc: 'dynamic',
     endSrc: 'judgment',
-    asSolid: true,
+    asSolid: asSolid,
     isOpenTip: false,
   );
 }
@@ -1191,6 +1192,7 @@ List<DisplayBuildingLine> computeDisplayBuildingLines({
   List<LevelConfirm> levelConfirms = const [],
   List<K0ConfirmSignal> k0Confirms = const [],
   List<FractalJudgmentEvent> liveJudgments = const [],
+  bool seedBeforeFirstPoleSolid = true,
 }) {
   if (bars.isEmpty || asOf < 0 || asOf >= bars.length) return const [];
 
@@ -1231,14 +1233,15 @@ List<DisplayBuildingLine> computeDisplayBuildingLines({
       return out;
     }
 
-    // 首个分型判断出现时，判断极点之前那段不再整段丢掉：
-    // 收成实线（出发极值 → 判断极点），开口虚线仍由极点链负责。
+    // 首个分型判断出现时，判断极点之前那段不再整段丢掉。
+    // K1 这一段保持虚线：顶分型前最低点 → 顶分型最高点。
     final seeded = _seedLineBeforeFirstPole(
       bars: bars,
       asOf: asOf,
       virtualUnits: virtualUnits,
       frozenIdx: frozenIdx,
       firstPole: poles.first,
+      asSolid: seedBeforeFirstPoleSolid,
     );
     return [
       if (seeded != null) seeded,

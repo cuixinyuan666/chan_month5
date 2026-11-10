@@ -5884,6 +5884,8 @@ class _KlineCompositePainter extends CustomPainter {
       frozenIdx: frozenIdx,
       levelConfirms: levelConfirms,
       liveJudgments: liveJudgments,
+      // K1：第一段（顶分型前最低点 → 顶分型最高点）保持虚线。
+      seedBeforeFirstPoleSolid: level != 1,
     );
     MsgHistory.instance.appendDisplayBuildingLinesRuntime(
       kn: level,
