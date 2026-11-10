@@ -1165,12 +1165,24 @@ class _KlineHomePageState extends State<KlineHomePage>
       _bootstrapping || _loadingChart || _runningToEnd || _libHalt;
   bool get _hasSession => _allBars.isNotEmpty;
 
-  /// 其它周期加载用小转圈；分笔走全屏太极层。
+  /// 其它周期加载用小转圈 + 取数时间范围提示；分笔走全屏太极层。
   Widget _chartLoadingIndicator() {
-    return const SizedBox(
-      width: 22,
-      height: 22,
-      child: CircularProgressIndicator(strokeWidth: 2),
+    final rangeText =
+        '获取数据 ${_fmtDateTime(_beginDate)} ~ ${_fmtDateTime(_endDate)}';
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const SizedBox(
+          width: 22,
+          height: 22,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          rangeText,
+          style: const TextStyle(fontSize: 12, color: Colors.white70),
+        ),
+      ],
     );
   }
 
