@@ -6249,3 +6249,13 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **结果**：非管理员会话复跑 exit=0，输出 `reuse_existing_task: Access is denied.` + `{"code":"already_running","ok":true}`；`schtasks /Run` 拉起 supervisor（pid 136876），`status.json` 继续推进（current 300416→300435）。
 - **测试**：非管理员会话实跑一次脚本；计划任务 State=Ready，Arguments 全为 D 盘路径。
 - **相关文件**：`CHAN_RUST/scripts/register_ticks_full_upload.ps1`（commit `d99e691f`）。
+
+### 2026-11-10 · 豆包 · 修复 · 分笔上传 worker 反复 exit 1：`export_all_ticks.exe` 在 cargo clean 后丢失
+
+- **执行者**：豆包（MainAgent）
+- **任务类型**：运维/构建链路修复（未动缠论计算与步进口径）
+- **上下文**：迁移后点"拉起本机上传任务"，`supervisor.log` 反复出现 `worker exit 1`，`pipeline_stream.log` 报 `FileNotFoundError: [WinError 2] 系统找不到指定的文件`，堆栈落在 `fetch_stock` 调 `_run_hidden(cmd)`。根因：worker 靠 `rust\target\release\examples\export_all_ticks.exe` 抓分笔，而这个 example 在迁移时那次全量 `cargo clean` 中被删；`build_rust.ps1` 只编 `chan_ffi`，从不编 example，所以 clean 后它永久缺失。
+- **操作**：① `cargo build --release -p chan_data --example export_all_ticks` 补编（5.4 s，产物存在）；② `build_rust.ps1` 在 `cargo build -p chan_ffi` 之后补一段 example 编译，按原文件 UTF-16 LE + BOM 编码原地写入。
+- **结果**：worker 自动重启后正常，`export_all_ticks.exe --codes 300476` 跑完落盘 2768 个分笔 txt，随后生成 `300476_20240705-20241231_ticks.zip`（2.68 MB），`status.json` 从 23:32:11 推进到 23:34:35。
+- **测试**：`build_rust.ps1` 语法解析 error=0；blob 哈希核对 HEAD 与工作区一致（补丁确已入库）。顺手把上一轮 `register_ticks_full_upload.ps1` 的复用修复一起复跑了。
+- **相关文件**：`CHAN_RUST/scripts/build_rust.ps1`（commit `9c432dee`）、`CHAN_RUST/scripts/pipeline_stream_ticks.py`（承 `EXE` 常量）。
