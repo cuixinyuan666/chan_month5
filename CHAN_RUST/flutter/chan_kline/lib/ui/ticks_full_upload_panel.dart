@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import '../agent_api/agent_data_export_runner.dart';
 import '../settings/telegram_settings_store.dart';
 import 'settings_panel_widgets.dart';
 import 'package:chan_kline/theme/app_palette.dart';
@@ -517,6 +518,11 @@ class _TicksFullUploadPanelState extends State<TicksFullUploadPanel> {
   late final TextEditingController _shareCtrl;
   TicksUploadSnapshot? _snap;
   final ValueNotifier<TicksUploadSnapshot?> _snapVN = ValueNotifier(null);
+
+  /// 台账与健康：record.json 内容与当前操作说明。
+  final ValueNotifier<Map<String, dynamic>?> _healthVN = ValueNotifier(null);
+  final ValueNotifier<String> _healthNoteVN = ValueNotifier('');
+  bool _healthBusy = false;
   Timer? _timer;
   String _actionNote = '';
   bool _creating = false;
@@ -549,6 +555,8 @@ class _TicksFullUploadPanelState extends State<TicksFullUploadPanel> {
   void dispose() {
     _timer?.cancel();
     _snapVN.dispose();
+    _healthVN.dispose();
+    _healthNoteVN.dispose();
     _shareCtrl.dispose();
     super.dispose();
   }
@@ -561,6 +569,182 @@ class _TicksFullUploadPanelState extends State<TicksFullUploadPanel> {
     if (!mounted) return;
     _snapVN.value = snap;
     setState(() => _snap = snap);
+    await _reloadHealth();
+  }
+
+  /// 读共享目录里的台账 JSON（ticks_health_check.py 生成）。
+  Future<void> _reloadHealth() async {
+    try {
+      final f = File(
+        '${_shareCtrl.text.trim()}${Platform.pathSeparator}ticks_health_record.json',
+      );
+      if (!f.existsSync()) {
+        _healthVN.value = null;
+        return;
+      }
+      final obj = jsonDecode(await f.readAsString());
+      _healthVN.value = obj is Map<String, dynamic> ? obj : null;
+    } catch (_) {
+      _healthVN.value = null;
+    }
+  }
+
+  /// 生成/刷新台账：跑 ticks_health_check.py（需本机有每日索引目录）。
+  Future<void> _genHealth() async {
+    if (_healthBusy) return;
+    _healthBusy = true;
+    _healthNoteVN.value = '正在生成台账…（全量盘点，几分钟量级）';
+    try {
+      final t = await AgentDataExportRunner.instance.startTicksHealthCheck();
+      while (t.running && mounted) {
+        await Future<void>.delayed(const Duration(seconds: 2));
+        _healthNoteVN.value = '正在生成台账…';
+      }
+      _healthNoteVN.value = t.phase == 'done'
+          ? '台账已生成'
+          : '生成失败：${t.error ?? t.detail}；本机若没有每日索引目录，请到跑每日更新的机器上生成';
+    } catch (e) {
+      _healthNoteVN.value = '生成失败：$e';
+    } finally {
+      _healthBusy = false;
+      await _reload();
+    }
+  }
+
+  /// 按台账逐日补数据：缺哪天就调 update_ticks_daily.py --date 补哪天。
+  Future<void> _fillGaps() async {
+    if (_healthBusy) return;
+    final rec = _healthVN.value;
+    final days = ((rec?['missing_days'] as List?) ?? const [])
+        .map((e) => '$e')
+        .toList();
+    if (days.isEmpty) {
+      _healthNoteVN.value = '台账里没有缺数据的日子，无需补。';
+      return;
+    }
+    final todo = days.length > 30 ? days.sublist(0, 30) : days;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('按台账补数据'),
+        content: Text(
+          '台账共缺 ${days.length} 天的数据，本次从最早的 ${todo.first} 起补 ${todo.length} 天'
+          '${days.length > 30 ? '（剩下的再点一次继续）' : ''}。\n'
+          '每天会重新拉全市场分笔并上传，耗时较长，确定开始？',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('开始补'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    _healthBusy = true;
+    var doneOk = 0;
+    var failN = 0;
+    try {
+      for (var i = 0; i < todo.length; i++) {
+        final d = todo[i];
+        _healthNoteVN.value = '正在补第 ${i + 1}/${todo.length} 天（$d）…';
+        final t = await AgentDataExportRunner.instance.startTicksDaily(date: d);
+        while (t.running && mounted) {
+          await Future<void>.delayed(const Duration(seconds: 2));
+        }
+        if (t.phase == 'done') {
+          doneOk++;
+        } else {
+          failN++;
+        }
+        if (!mounted) break;
+      }
+      final remain = days.length - todo.length;
+      _healthNoteVN.value = '补数据结束：成功 $doneOk 天，失败 $failN 天'
+          '${remain > 0 ? '，还有 $remain 天未补，再点一次继续' : ''}。';
+    } catch (e) {
+      _healthNoteVN.value = '补数据失败：$e';
+    } finally {
+      _healthBusy = false;
+      await _reload();
+    }
+  }
+
+  /// 「台账与健康」区块：台账摘要 + 生成/补数据按钮。
+  Widget _healthSection() {
+    return ValueListenableBuilder<Map<String, dynamic>?>(
+      valueListenable: _healthVN,
+      builder: (c, rec, _) {
+        final textStyle = TextStyle(fontSize: 12, color: AppPalette.rgb(0xFFCBD5E1), height: 1.4);
+        final List<Widget> lines;
+        if (rec == null) {
+          lines = [
+            Text(
+              '还没有台账：点「生成台账」做一次全量盘点（需在跑每日更新的机器上生成）。',
+              style: textStyle,
+            ),
+          ];
+        } else {
+          final range = (rec['range'] as Map?) ?? const {};
+          final gapTop = ((rec['gap_days_top'] as List?) ?? const [])
+              .take(3)
+              .map((e) => '${e['date']}（缺 ${e['missing']} 只）')
+              .join('、');
+          lines = [
+            Text(
+              '台账 ${range['begin']}~${range['end']} · 交易日 ${rec['trading_days']} 天'
+              ' · 覆盖 ${rec['coverage_pct']}%（生成于 ${rec['generated_at']}）',
+              style: textStyle,
+            ),
+            Text(
+              '缺 ${rec['missing_pairs']} 个（股票×日）/ ${(rec['missing_days'] as List?)?.length ?? 0} 天'
+              ' · 空数据 ${rec['empty_data_count']} 处 · 行数异常 ${rec['low_rows_count']} 处',
+              style: textStyle,
+            ),
+            if (gapTop.isNotEmpty)
+              Text('缺得最多：$gapTop', style: textStyle),
+          ];
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              '── 台账与健康 ──',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: AppPalette.rgb(0xFF94A3B8),
+              ),
+            ),
+            const SizedBox(height: 4),
+            ...lines,
+            const SizedBox(height: 4),
+            ValueListenableBuilder<String>(
+              valueListenable: _healthNoteVN,
+              builder: (c, note, _) => note.isEmpty
+                  ? const SizedBox.shrink()
+                  : Text(note, style: TextStyle(fontSize: 12, color: _noteColor(note))),
+            ),
+            Row(
+              children: [
+                TextButton(
+                  onPressed: _healthBusy ? null : () => unawaited(_genHealth()),
+                  child: const Text('生成台账'),
+                ),
+                TextButton(
+                  onPressed: _healthBusy ? null : () => unawaited(_fillGaps()),
+                  child: const Text('按台账补数据'),
+                ),
+              ],
+            ),
+          ],
+        );
+      },
+    );
   }
 
   Color _noteColor(String note) {
@@ -688,10 +872,16 @@ class _TicksFullUploadPanelState extends State<TicksFullUploadPanel> {
   }
 
   Widget _logBox(TicksUploadSnapshot snap) {
+    // 下载口径与 pipeline_stream_ticks.py 一致：每只股票从 1990-01-01 拉到今天。
+    final now = DateTime.now();
+    final today =
+        '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
     final lines = <String>[
       '${snap.headline}（${snap.runningCount} 台在跑）',
       _progressText(snap),
       _rateText(snap),
+      '── 数据范围 ──',
+      '1990-01-01 ~ $today（每只股票全历史）',
       '── 机器 ──',
       ..._machineLines(snap),
       '── 最近完成 ──',
@@ -792,6 +982,10 @@ class _TicksFullUploadPanelState extends State<TicksFullUploadPanel> {
                     ),
                   ),
                 ),
+                const SizedBox(height: 6),
+                const Divider(height: 1),
+                const SizedBox(height: 6),
+                _healthSection(),
                 const SizedBox(height: 6),
                 Row(
                   children: [
