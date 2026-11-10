@@ -3930,6 +3930,42 @@ class _KlineCompositePainter extends CustomPainter {
     );
   }
 
+  /// 子窗口首框（K1 及以上）：首组恒为单单元（K1 idx=0），直接按它的
+  /// view 区间画成合并框，不再沿用种子框/经典首组的低低几何。
+  ///
+  /// 口径：x 取首组框的 x1..x2；high=max(逐根 high)、low=max(逐根 low)。
+  /// 注意必须按**逐根 K** 取高高，不能拿单元聚合后的 low 再取最大——
+  /// 首组只有一个单元，聚合 low 就是区间最低点，结果仍是低低大框
+  /// （这正是 K1 窗口首框一直不变高高的原因）。
+  KlineCombineFrame? _firstUnitHighHighFrame(KlineCombineFrame firstFrame) {
+    final asOf = segAsOf ?? (bars.isEmpty ? -1 : bars.last.idx);
+    if (asOf < 0) return null;
+    final x1 = math.max(0, firstFrame.x1);
+    final x2 = math.min(asOf, firstFrame.x2);
+    if (x2 < x1) return null;
+    double? hi;
+    double? lo;
+    for (final b in bars) {
+      if (b.idx < x1) continue;
+      if (b.idx > x2) continue;
+      hi = hi == null ? b.high : math.max(hi, b.high);
+      lo = lo == null ? b.low : math.max(lo, b.low);
+    }
+    if (hi == null || lo == null) return null;
+    return KlineCombineFrame(
+      x1: x1,
+      x2: x2,
+      t1: firstFrame.t1,
+      t2: firstFrame.t2,
+      high: hi,
+      low: lo,
+      fx: firstFrame.fx,
+      count: math.max(1, firstFrame.count),
+      endAtLeftHalf: firstFrame.endAtLeftHalf,
+      startAtRightHalf: firstFrame.startAtRightHalf,
+    );
+  }
+
   /// 种子框画线全层同构入口：UNKNOWN→开口虚线；JUDGE/CONFIRM→ABC（互斥）。
   void _drawSeedPhaseLines(
     Canvas canvas,
@@ -4444,6 +4480,16 @@ class _KlineCompositePainter extends CustomPainter {
     );
     if (displayFrames.isEmpty) return;
 
+    var frames = displayFrames;
+    // 开关开：子窗口首框直接用该层第一个单元（K1 idx=0）画，
+    // high/low 按逐根 K 取高高，不再沿用种子框/经典首组的低低几何。
+    if (earlyDynamicUnit) {
+      final hh = _firstUnitHighHighFrame(frames.first);
+      if (hh != null) {
+        frames = <KlineCombineFrame>[hh, ...frames.sublist(1)];
+      }
+    }
+
     final style = ChartLevelLineStyle.forDisplayKn(kn);
     _drawCombineFramesOnMainChart(
       canvas,
@@ -4452,7 +4498,7 @@ class _KlineCompositePainter extends CustomPainter {
       plotH,
       barW,
       slotW,
-      displayFrames,
+      frames,
       style.color.withValues(alpha: 0.85),
       style.color.withValues(alpha: 0.08),
       levelUnitViews: views.isNotEmpty ? views : null,
