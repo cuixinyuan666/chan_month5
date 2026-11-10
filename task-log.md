@@ -6271,3 +6271,14 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **测试**：`py_compile` error=0；`_save_partial` / `_partial_years` / `_drop_partial` 自检写入与删除均正常且未污染 `files`；重启后新 worker 正常认领 300420 并持续落账；`git status` 干净。
 - **注意事项 / 待办**：旧目录残件被外部进程持有目录句柄（停 `CodexSandboxService.OpenAI.Codex` 仍不释放），删除与重命名均被拒，需重启后或句柄释放后再删；1446 条老台账记录缺 `at`/`machine` 属历史缺口，未回填；项目目录需用户自行改选到 `D:\2\chan_month5`。
 - **相关文件**：`.gitignore`、`CHAN_RUST/scripts/pipeline_stream_ticks.py`、`CHAN_RUST/scripts/DESIGN_app_sync.md`。
+
+### 2026-11-11 · 豆包 · 修复 · 双机同步大部分按钮失效：本机代理没在跑 + 对端缺开机自启
+
+- **执行者**：豆包（MainAgent）
+- **任务类型**：多机协作链路修复（未动缠论计算、步进与冻段口径）
+- **上下文**：用户报「双机同步的大部分功能都失效了」。先证伪脚本层：`sync_latest.ps1 -Json` 判出 `direction=local-to-peer`（本机 32 票 / 对端 0 票，本机 897 文件），`sync_to_remote.ps1 -DiffOnly -Json` exit=0；对端 192.168.1.6 可达、`\\192.168.1.6\D$\2\chan_month5` 存在。真正断在代理层：本机 `remote_app_agent.ps1` 进程不存在（`HKCU\Run\ChanRemoteAgent` 值已指 D，但迁移期间被杀后没重起）；CXY 那台 `HKCU\Run` 里根本没有 `ChanRemoteAgent` 项，代理 pid 6608 是 11-09 手动拉起的，一旦重启就永久掉线——这正是「大多数按钮点了没反应」的来源。
+- **操作**：① 本机按注册表同一条命令拉起代理（pid 72312，日志 `会话 id=1，可以拉起 GUI`）；② CXY 补写 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\ChanRemoteAgent`，指向 `D:\2\chan_month5\CHAN_RUST\scripts\remote_app_agent.ps1 -RepoRoot D:\2\chan_month5`；③ `launch_chan_kline_smart.ps1` 增 `Ensure-RemoteAgent`：启动 App 前先查 `remote_app_agent` 进程，没有就用同一条隐藏命令补起，避免代理掉线后无人复位；④ 该脚本同步到对端仓库并推远端。
+- **结果**：本机自 ping `ok`（LAPTOP-NA22IFPU / v1.4.0 / session 1）；对端 ping `ok`（CXY / v1.4.0 / pid 6608）；`-Action start -Mode ui` 成功拉起 CXY 的 App（pid 9228，`responding=true`，exe 在 D 盘，并留了截图）；随后 `-Action status` 返回 `ok`（`002003`/分笔）；`-Action task -TaskOp query` 返回 `state=registered`；CXY 上传 supervisor 在跑（`done 1880 / 5225`，`current 300423`）。
+- **测试**：`sync_latest.ps1 -Json`、`sync_to_remote.ps1 -DiffOnly -Json`、`remote_ctl.ps1` 的 ping / status / task query / start 全部实跑；改动后的启动脚本 AST 解析 `error=0`；两台代理与 App 现均在线。
+- **注意事项 / 待办**：代理靠登录自启，崩溃后不会自己复活，`Ensure-RemoteAgent` 只在「启动 App」这一刻兜底；若长时间不启动 App，仍建议每晚看一眼 ping。`sync_latest.ps1 -Apply -Build` 的写操作本轮未跑（会覆盖对端文件并触发重编），留给用户主动点。
+- **相关文件**：`CHAN_RUST/scripts/launch_chan_kline_smart.ps1`（commit `7f0eb2b6`）；`HKCU\Run\ChanRemoteAgent`（两台各一条）。
