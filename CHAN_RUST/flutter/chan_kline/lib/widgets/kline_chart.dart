@@ -3883,17 +3883,6 @@ class _KlineCompositePainter extends CustomPainter {
     return null;
   }
 
-  /// 合并帧是否就是该层种子框（与 LevelSnap.seed_box_* 几何对齐）。
-  /// K0 窗口的第一组合并帧与种子框是同一矩形；隐藏种子框时需一并跳过。
-  bool _isSeedBoxFrame(KlineCombineFrame f, int level) {
-    final snap = _asOfSeedSnap(level);
-    if (snap == null || snap.seedBoxSeq < 0) return false;
-    return f.x1 == snap.seedBoxX1 &&
-        f.x2 == snap.seedBoxX2 &&
-        (f.high - snap.seedBoxHigh).abs() < 1e-9 &&
-        (f.low - snap.seedBoxLow).abs() < 1e-9;
-  }
-
   double _polePriceAt(int x, {required bool useHigh}) {
     if (x < 0 || x >= bars.length) return 0;
     return useHigh ? bars[x].high : bars[x].low;
@@ -6289,11 +6278,13 @@ class _KlineCompositePainter extends CustomPainter {
     // 改为用该层预锚单元重建成「高高」首组框（high 取最高、low 也取最高），
     // 与动态 K 蜡烛/连线同一输入，全层同构。
     var frames = combineFrames;
-    if (earlyDynamicUnit && _isSeedBoxFrame(combineFrames.first, 0)) {
+    // 开关开：首段一组（第一个分型确认之前）不沿用经典种子几何/经典吸收低点，
+    // 一律按该层预锚单元重算成「高高」框（high=max(high)、low=max(low)）。
+    if (earlyDynamicUnit) {
       final hh = _highHighFrameFromUnits(0, combineFrames.first);
-      frames = hh == null
-          ? combineFrames.sublist(1)
-          : <KlineCombineFrame>[hh, ...combineFrames.sublist(1)];
+      if (hh != null) {
+        frames = <KlineCombineFrame>[hh, ...combineFrames.sublist(1)];
+      }
     }
     if (frames.isEmpty) return;
     // 末组=构建中合并（虚线）；前组=已冻结合并（实线）。
