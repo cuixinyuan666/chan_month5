@@ -6282,3 +6282,11 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **测试**：`sync_latest.ps1 -Json`、`sync_to_remote.ps1 -DiffOnly -Json`、`remote_ctl.ps1` 的 ping / status / task query / start 全部实跑；改动后的启动脚本 AST 解析 `error=0`；两台代理与 App 现均在线。
 - **注意事项 / 待办**：代理靠登录自启，崩溃后不会自己复活，`Ensure-RemoteAgent` 只在「启动 App」这一刻兜底；若长时间不启动 App，仍建议每晚看一眼 ping。`sync_latest.ps1 -Apply -Build` 的写操作本轮未跑（会覆盖对端文件并触发重编），留给用户主动点。
 - **相关文件**：`CHAN_RUST/scripts/launch_chan_kline_smart.ps1`（commit `7f0eb2b6`）；`HKCU\Run\ChanRemoteAgent`（两台各一条）。
+## 2026-11-11 · OpenCode(cxy-all) · UI · 加载转圈显示取数时间范围
+
+- 执行者：OpenCode（cxy-all），worktree：D:\2\for-telegram（分支 for-telegram，commit 49f0112c）
+- 类型：功能（纯 UI 显示，未动计算/步进/冻结逻辑）
+- 操作：_chartLoadingIndicator 由「只有小转圈」改为「转圈 + 一行文字：获取数据 起止日期」，日期取当前设置的起止日期；桌面与手机两处加载层共用，分笔全屏太极层不变。
+- 结果：flutter analyze 无新增告警；主分支未提交该改动（已还原，改动落在 for-telegram worktree）。
+- 演示：加载 K0 时图中央小转圈下方出现「获取数据 2025-01-01 00:00 ~ 2026-11-10 00:00」。
+
