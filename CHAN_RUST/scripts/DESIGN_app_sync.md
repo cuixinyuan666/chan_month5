@@ -22,7 +22,7 @@
 
 ### 1. PCA 开一个专属共享
 
-- 共享名 `chan_month5` → `C:\Users\86185\Downloads\chan\chan_month5`
+- 共享名 `chan_month5` → `D:\2\chan_month5`（2026-11-10 迁移后）
 - 权限给 `Everyone` 读写（不走账号密码：PCA 是用户 `86185`、PCB 是 `Administrator`，跨机器走 `C$` 必然 401）
 - 对端访问路径：`\\192.168.1.5\chan_month5`
 
@@ -30,7 +30,7 @@
 
 **这一条是本设计对早前判断的修正**：在 PCB 上点按钮时，挡路的是 **PCA 自己的 App**（它锁着自己的 `chan_kline.exe`/`chan_ffi.dll`），而 PCB 远程关不掉它——远端建进程这条路（`schtasks /S`、CIM、DCOM、合成按键）已实测全部不通。所以两边都需要「在自己机器上关自己 App」的能力。
 
-- 做法：把现有 `remote_app_agent.ps1` 在 PCA 上同样启动一次（`-RepoRoot C:\Users\86185\Downloads\chan\chan_month5`），并加一个 Startup 入口；
+- 做法：把现有 `remote_app_agent.ps1` 在 PCA 上同样启动一次（`-RepoRoot D:\2\chan_month5`），并加一个 Startup 入口；
 - 复用现有 `启动远端代理.bat`（改一处 `RepoRoot`），不新增代码；
 - 退化路径：**对端没代理也能推**——只要对端此刻没开 App（exe/dll 没被占用）就照常同步，只是不能自动关/拉。
 
