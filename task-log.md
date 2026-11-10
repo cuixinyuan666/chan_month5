@@ -6217,3 +6217,15 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **测试**：`flutter analyze --no-pub lib/widgets/kline_chart.dart` error=0（5 条存量 warning/info）；第二实例三处截图核对通过。未 push。
 - **注意事项 / 待办**：存量失败用例 `k0_building_line_same_price_test.dart` 仍未处理（与本轮无关）。
 - **相关文件**：`CHAN_RUST/flutter/chan_kline/lib/widgets/kline_chart.dart`。
+
+### 2026-11-10 · Claude · 修复 · 该层只有一个单元时不画合并框（全层同构，虚线也不画）
+
+- **执行者**：Claude Code
+- **任务类型**：主图绘制语义修复（未动 Rust 计算）
+- **上下文**：用户指出全层级第一根 K 仍画了合并框（虚线）。上一版只按「框的 x1==x2」跳过，但只有一根 K 时，K1/Kn 的动态单元外框仍按四边虚线描边，看起来就是一只合并框。实测 idx=7 时 K2 只有一个单元（横向 x=0..7），底部露出一排虚线点。
+- **操作**：`_drawK1Candles` 与 `_drawLevelUnitCandles`：该层单元数 <= 1 时不描外框（虚线实线都不描），实体填充照常保留；`_drawCombineFramesOnMainChart`：全图只有一组且该组只有一个单元时不画合并框。
+- **结果**：idx=0 时 K1 只有一根红色柱、没有框；idx=7 时 K2 只有一根 K、红色柱没有虚线框；idx=13（K1 已有多个单元）顶部高高合并框照常出现，K2 仍只有一根、没有框。
+- **演示**：默认 002003 分笔，勾选 K1合并/K2合并，连续单步 0→7→13 三张图对照。
+- **测试**：`flutter analyze --no-pub lib/widgets/kline_chart.dart` error=0（5 条存量 warning/info）；第二实例三处截图核对通过。未 push。
+- **注意事项 / 待办**：存量失败用例 `k0_building_line_same_price_test.dart` 仍未处理（与本轮无关）。
+- **相关文件**：`CHAN_RUST/flutter/chan_kline/lib/widgets/kline_chart.dart`。
