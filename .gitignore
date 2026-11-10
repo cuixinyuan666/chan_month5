@@ -119,3 +119,11 @@ build_launch_user.*
 a_Data/tmp_build_launch_*.ps1
 
 CHAN_RUST/flutter/chan_kline/.chan_theme_settings.json
+
+# Flutter iOS/macOS local generated files (machine-specific SDK path; flutter regenerates)
+CHAN_RUST/flutter/chan_kline/ios/Flutter/ephemeral/
+CHAN_RUST/flutter/chan_kline/ios/Flutter/Generated.xcconfig
+CHAN_RUST/flutter/chan_kline/ios/Flutter/flutter_export_environment.sh
+CHAN_RUST/flutter/chan_kline/macos/Flutter/ephemeral/
+CHAN_RUST/flutter/chan_kline/macos/Flutter/Generated.xcconfig
+CHAN_RUST/flutter/chan_kline/macos/Flutter/flutter_export_environment.sh
