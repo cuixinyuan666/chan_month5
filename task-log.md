@@ -6205,3 +6205,15 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **测试**：`flutter analyze --no-pub lib/widgets/kline_chart.dart` error=0（5 条存量 warning/info）；第二实例步进 idx=13 截图核对通过。未 push。
 - **注意事项 / 待办**：存量失败用例 `k0_building_line_same_price_test.dart` 仍未处理（与本轮无关）。
 - **相关文件**：`CHAN_RUST/flutter/chan_kline/lib/widgets/kline_chart.dart`。
+
+### 2026-11-10 · Claude · 修复 · 首分型前从第一根 K 起合成一个高高合并框（全层同构）
+
+- **执行者**：Claude Code
+- **任务类型**：主图绘制语义修复（受「层级早生成动态单元」开关门控；未动 Rust 计算）
+- **上下文**：用户明确两条口径——取高高不是把 idx=0 单独包成一个框，而是首分型前的 idx=0、1、2… 合成一个合并框；任何层级只有一根 K 线时不画合并框。
+- **操作**：新增 `_mergePreFractalFrames`，K0/K1/Kn 三个入口共用——开关开时把开头连续的、尚未标分型（fx=UNKNOWN）且从 idx=0 起的组合并成一个框：x 从 0 收到最后一组右端，high=max(各组 high)、low=max(各组 low)。第一个分型确认后该组 fx 不再是 UNKNOWN，框按原样绘制。只有一根 K 的段不画框沿用上一提交。
+- **结果**：默认数据 idx=13（K1 首分型前）只有一个框，从第一根 K 起到最右，贴顶 11.73/11.72；idx=0 只有一个小点、没有框；idx=40（K1 首分型已确认）K1 恢复多个框，K2 仍是首分型前的一个框。
+- **演示**：默认 002003 分笔，勾选 K1合并/K2合并，连续单步 0→13→40 三张图对照。
+- **测试**：`flutter analyze --no-pub lib/widgets/kline_chart.dart` error=0（5 条存量 warning/info）；第二实例三处截图核对通过。未 push。
+- **注意事项 / 待办**：存量失败用例 `k0_building_line_same_price_test.dart` 仍未处理（与本轮无关）。
+- **相关文件**：`CHAN_RUST/flutter/chan_kline/lib/widgets/kline_chart.dart`。
