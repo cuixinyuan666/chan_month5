@@ -441,6 +441,50 @@ def complete_code(code: str, entry: dict) -> None:
     _done_marks.append(time.time())
 
 
+def _partial_years(code: str) -> dict:
+    """取本机已成功传过的分段落账，中断后接着传，不重复上传。"""
+    try:
+        st = load_state()
+    except Exception:
+        return {}
+    p = st.get("partial")
+    if not isinstance(p, dict):
+        return {}
+    v = p.get(code)
+    if not isinstance(v, dict) or v.get("machine") != MACHINE:
+        return {}
+    years = v.get("years")
+    return dict(years) if isinstance(years, dict) else {}
+
+
+def _save_partial(code: str, years: dict) -> None:
+    """每传完一个包就落一次账（只写 partial 段，不计入 files 完成数）。"""
+    try:
+        with state_lock():
+            st = load_state()
+            partial = st.setdefault("partial", {})
+            partial[code] = {
+                "years": dict(years or {}),
+                "machine": MACHINE,
+                "at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            }
+            save_state(st)
+    except Exception as e:
+        log(f"  partial save failed {code}: {e}")
+
+
+def _drop_partial(code: str) -> None:
+    try:
+        with state_lock():
+            st = load_state()
+            partial = st.get("partial")
+            if isinstance(partial, dict) and code in partial:
+                partial.pop(code, None)
+                save_state(st)
+    except Exception:
+        pass
+
+
 def write_current_code(code: str | None) -> None:
     global _current_code
     _current_code = code
@@ -801,9 +845,12 @@ def process_one(code: str) -> bool:
     now_year = time.localtime().tm_year
     recent = {str(y) for y in range(now_year - 2, now_year + 1)}
     chunks = plan_chunks(by_year, recent)
-    entry: dict = {"years": {}}
+    entry: dict = {"years": _partial_years(code)}
     ok = True
     for tag, chunk_files in chunks:
+        if tag in entry["years"]:
+            log(f"  resume {code} {tag}: already uploaded, skip")
+            continue
         if stop_flag_exists():
             ok = False
             log(f"  stop.flag seen, abort {code}")
@@ -816,12 +863,14 @@ def process_one(code: str) -> bool:
                     entry["years"][sub_tag] = sub
             else:
                 entry["years"][tag] = r
+            _save_partial(code, entry["years"])
         except Exception as e:
             ok = False
             log(f"  fail {code} {tag}: {e}")
             break
     if ok:
         complete_code(code, entry)
+        _drop_partial(code)
         _clear_code_cache(code)
         log(f"  {code} done {len(files)}d in {time.time()-t0:.0f}s (uploaded {len(entry['years'])} packs)")
         write_current_code(None)
