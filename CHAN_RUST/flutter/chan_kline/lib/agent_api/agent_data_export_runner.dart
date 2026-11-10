@@ -154,6 +154,71 @@ class AgentDataExportRunner {
     return task;
   }
 
+  /// 启动「分笔台账与健康检查」Python 脚本：汇总每日索引 → 台账 JSON。
+  Future<AgentExportTask> startTicksHealthCheck() async {
+    final repo = RobotVerifyPaths.resolveRepoRoot(klineRoot: null);
+    if (repo == null || repo.isEmpty) throw StateError('无法解析仓库根目录');
+    final script = File(
+      '$repo${Platform.pathSeparator}CHAN_RUST${Platform.pathSeparator}scripts'
+      '${Platform.pathSeparator}ticks_health_check.py',
+    );
+    if (!script.existsSync()) {
+      throw StateError('找不到脚本：${script.path}');
+    }
+    final liveDir = Directory(
+      '$repo${Platform.pathSeparator}a_Data${Platform.pathSeparator}agent_live',
+    );
+    if (!liveDir.existsSync()) liveDir.createSync(recursive: true);
+
+    final id = 'ticks_health_${++_seq}';
+    final logPath = '${liveDir.path}${Platform.pathSeparator}export_$id.log';
+    final task = AgentExportTask(
+      id: id,
+      kind: 'ticks_health',
+      startedAt: DateTime.now(),
+      logPath: logPath,
+      outDir: '$repo${Platform.pathSeparator}exports',
+    );
+    _tasks[id] = task;
+
+    final args = <String>[script.path];
+    task.detail = '台账生成中…';
+    final logFile = File(logPath);
+    final sink = logFile.openWrite(mode: FileMode.write);
+    sink.writeln('# ticks health ${DateTime.now()}');
+
+    final proc = await Process.start(
+      'python',
+      args,
+      workingDirectory: '$repo${Platform.pathSeparator}CHAN_RUST'
+          '${Platform.pathSeparator}scripts',
+      runInShell: false,
+    );
+    task.process = proc;
+    proc.stdout.listen((d) {
+      sink.write(utf8.decode(d, allowMalformed: true));
+    });
+    proc.stderr.listen((d) {
+      sink.write(utf8.decode(d, allowMalformed: true));
+    });
+    unawaited(proc.exitCode.then((code) async {
+      await sink.flush();
+      await sink.close();
+      task.finishedAt = DateTime.now();
+      if (task.phase == 'cancelled') return;
+      if (code != 0) {
+        task.phase = 'failed';
+        task.error = '退出码 $code（本机若没有每日索引目录会失败，详见 log_path）';
+        task.detail = task.error!;
+        return;
+      }
+      task.phase = 'done';
+      task.detail = '台账已生成';
+      task.fraction = 1.0;
+    }));
+    return task;
+  }
+
   /// 启动导出。 [kind] = ticks | daily。
   Future<AgentExportTask> start({
     required String kind,
