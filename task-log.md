@@ -6229,3 +6229,13 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **测试**：`flutter analyze --no-pub lib/widgets/kline_chart.dart` error=0（5 条存量 warning/info）；第二实例三处截图核对通过。未 push。
 - **注意事项 / 待办**：存量失败用例 `k0_building_line_same_price_test.dart` 仍未处理（与本轮无关）。
 - **相关文件**：`CHAN_RUST/flutter/chan_kline/lib/widgets/kline_chart.dart`。
+
+### 2026-11-10 · 豆包 · 运维迁移 · 仓库整体从 C 盘搬到 D:\2\chan_month5
+
+- **执行者**：豆包（MainAgent）
+- **任务类型**：环境迁移（未动缠论计算、步进与冻段口径）
+- **上下文**：C 盘空间紧张，用户确认整仓迁到 D 盘。项目里有多处外部引用，且有一处「编译期写死仓库路径」，不能只搬目录。
+- **操作**：关 App 后 `flutter clean`，robocopy 整仓复制（14620 文件 / 1.731 GB / 0 失败）；Rust `default_data_root()` 的 `env!("CARGO_MANIFEST_DIR")` 会把仓库路径编进 `chan_ffi.dll`，普通 `cargo build` 命中旧缓存直接跳过，改为全量 `cargo clean` 后重编；`flutter build windows --debug` 重出 exe；改桌面快捷方式、`HKCU\Run\ChanRemoteAgent`、启动脚本候选顺序、`ticks_full_upload_job.json` 内 4 处旧路径；`git worktree repair` 修好两个 worktree 指针。
+- **结果**：新 DLL 内已无旧 C 路径、含 `D:\2\chan_month5`；新 exe 启动后主图正常（K0/K0合并/K0连线），并往 D 副本 `a_Data` 写缓存，说明数据根正确；git 正常，脚本改动已 commit `7db25f9b`。
+- **未完成 / 待办**：计划任务 `\Chan\TicksFullUpload` 与 SMB 共享 `chan_month5` 受 ACL / 管理员保护，两次 UAC 均无人确认；已留桌面「完成迁移-点我一次.bat」，需用户点一次「是」。确认无问题后可删 C 盘旧目录，并把项目目录改选到 `D:\2\chan_month5`。
+- **相关文件**：`CHAN_RUST/scripts/launch_chan_kline_smart.ps1`、`a_Data/agent_live/ticks_full_upload_job.json`。
