@@ -688,10 +688,16 @@ class _TicksFullUploadPanelState extends State<TicksFullUploadPanel> {
   }
 
   Widget _logBox(TicksUploadSnapshot snap) {
+    // 下载口径与 pipeline_stream_ticks.py 一致：每只股票从 1990-01-01 拉到今天。
+    final now = DateTime.now();
+    final today =
+        '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
     final lines = <String>[
       '${snap.headline}（${snap.runningCount} 台在跑）',
       _progressText(snap),
       _rateText(snap),
+      '── 数据范围 ──',
+      '1990-01-01 ~ $today（每只股票全历史）',
       '── 机器 ──',
       ..._machineLines(snap),
       '── 最近完成 ──',
