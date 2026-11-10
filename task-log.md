@@ -6259,3 +6259,15 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **结果**：worker 自动重启后正常，`export_all_ticks.exe --codes 300476` 跑完落盘 2768 个分笔 txt，随后生成 `300476_20240705-20241231_ticks.zip`（2.68 MB），`status.json` 从 23:32:11 推进到 23:34:35。
 - **测试**：`build_rust.ps1` 语法解析 error=0；blob 哈希核对 HEAD 与工作区一致（补丁确已入库）。顺手把上一轮 `register_ticks_full_upload.ps1` 的复用修复一起复跑了。
 - **相关文件**：`CHAN_RUST/scripts/build_rust.ps1`（commit `9c432dee`）、`CHAN_RUST/scripts/pipeline_stream_ticks.py`（承 `EXE` 常量）。
+
+
+### 2026-11-11 · 豆包 · 运维迁移收尾 · 执行清单：推远端、生成文件除踪、上传增量记账、清旧目录
+
+- **执行者**：豆包（MainAgent）
+- **任务类型**：运维收尾 + 上传链路改进（未动缠论计算、步进与冻段口径）
+- **上下文**：迁移主体与收尾完成后，用户说「全部按照你的建议执行」，授权执行上一轮 8 项清单。
+- **操作**：① `git push origin ANDROID_RUST`（`edd1dd77..07b5b314`）；② `.gitignore` 增 iOS/macOS Flutter 本机生成物规则，`git rm --cached` 6 个随机器变化的文件（`Generated.xcconfig`、`ephemeral/*`），提交 `e201ce67`；③ `pipeline_stream_ticks.py` 增 `_partial_years` / `_save_partial` / `_drop_partial`：每传完一个年包就把该段写进共享台账的 `partial` 段（不写 `files`，完成数不虚增），中断后重跑按段跳过已传包，整只收尾时再写 `files` 并清 `partial`，提交 `e48854d2`；④ 重启 supervisor 让新代码生效；⑤ 删 C 盘旧仓库（1.73 GB 清到剩 6 项 1.3 MB）；⑥ 清桌面 `完成迁移-点我一次.bat` 与 `%TEMP%` 迁移脚本；⑦ `DESIGN_app_sync.md` 两处旧 C 路径、Obsidian `MOC.md` 仓库外链改 D。
+- **结果**：`origin/ANDROID_RUST` 与本地一致（未推数 0）；`done 1876 / 5225`、`current 300420`，共享台账 `partial` 段出现 300420 的 2 个已传包（`machine=LAPTOP-NA22IFPU`），`files` 仍 1876；旧仓库只剩 `windows\native\chan_ffi.dll.locked_68496` 与 5 层空目录，1.3 MB。
+- **测试**：`py_compile` error=0；`_save_partial` / `_partial_years` / `_drop_partial` 自检写入与删除均正常且未污染 `files`；重启后新 worker 正常认领 300420 并持续落账；`git status` 干净。
+- **注意事项 / 待办**：旧目录残件被外部进程持有目录句柄（停 `CodexSandboxService.OpenAI.Codex` 仍不释放），删除与重命名均被拒，需重启后或句柄释放后再删；1446 条老台账记录缺 `at`/`machine` 属历史缺口，未回填；项目目录需用户自行改选到 `D:\2\chan_month5`。
+- **相关文件**：`.gitignore`、`CHAN_RUST/scripts/pipeline_stream_ticks.py`、`CHAN_RUST/scripts/DESIGN_app_sync.md`。
