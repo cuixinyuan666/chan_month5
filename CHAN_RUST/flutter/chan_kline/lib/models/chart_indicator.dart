@@ -860,9 +860,9 @@ Set<SubChartIndicator> defaultSubIndicatorsK0({bool truncationCheck = true}) {
       .toSet();
 }
 
-/// 层级分窗默认主图勾选：每个可见窗显示本层 Kn + 本层连线。
+/// 层级分窗默认主图勾选：每个可见窗显示本层 Kn + 本层合并 + 本层连线。
 ///
-/// 合并/中枢/均线等其余主图指标一律不默认启用；
+/// 中枢/均线等其余主图指标一律不默认启用；
 /// 副图同理默认一项不勾（分窗不再自动补量柱）。
 Set<MainChartIndicator> defaultLevelWindowMainIndicators(
   Iterable<int> levels,
@@ -870,6 +870,7 @@ Set<MainChartIndicator> defaultLevelWindowMainIndicators(
   return <MainChartIndicator>{
     for (final lv in levels) ...[
       MainChartIndicator.kn(lv),
+      MainChartIndicator.combine(lv),
       MainChartIndicator.line(lv),
     ],
   };

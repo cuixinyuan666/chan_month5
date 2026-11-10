@@ -26,19 +26,22 @@ void main() {
     expect(drawn.contains(const MainChartIndicator.boll(0)), isFalse);
   });
 
-  test('层级分窗默认每个窗勾本层 Kn 与连线，其余主图指标全不启用', () {
+  test('层级分窗默认每个窗勾本层 Kn、合并与连线，其余主图指标全不启用', () {
     final mains = defaultLevelWindowMainIndicators(const [0, 1, 3, 5]);
     expect(mains, <MainChartIndicator>{
       const MainChartIndicator.kn(0),
+      const MainChartIndicator.combine(0),
       const MainChartIndicator.line(0),
       const MainChartIndicator.kn(1),
+      const MainChartIndicator.combine(1),
       const MainChartIndicator.line(1),
       const MainChartIndicator.kn(3),
+      const MainChartIndicator.combine(3),
       const MainChartIndicator.line(3),
       const MainChartIndicator.kn(5),
+      const MainChartIndicator.combine(5),
       const MainChartIndicator.line(5),
     });
-    expect(mains.contains(const MainChartIndicator.combine(0)), isFalse);
     expect(mains.contains(const MainChartIndicator.zs(0)), isFalse);
   });
 
