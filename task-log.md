@@ -6178,3 +6178,18 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **测试**：① `flutter test test/early_dynamic_unit_test.dart` 10 项全过；② `flutter analyze --no-pub lib/widgets/kline_chart.dart` error=0（5 条存量 warning/info）；③ 机器人套件 `early_dynamic_20261105`：3 阶段 2 过 1 失败——`inprocess_early_dynamic_unit` 35 项全真、`continuous_step_freeze` 1m 287 步 + 分笔 942 步全过；`flutter_test_early_dynamic` 因**存量**用例 `k0_building_line_same_price_test.dart`（同价位首分型前不拉线：期望 end=4、实际 3）失败。已用 `git stash` 在 HEAD 上复跑同一条用例，结果完全一致，确认与本次绘制改动无关；未放宽判据。
 - **注意事项 / 待办**：① 首组恒为单单元（`computeK1CombineFrames` 首两单元强制独立），故首框 x 直接取 `frames.first`；② 高高会让框体低点抬高、不再包住区间最低 K，这是用户确认的字面口径；③ 存量失败用例 `k0_building_line_same_price_test.dart` 需要单独定性（是数据变化还是口径变化），未在本轮处理；④ 未 push。
 - **相关文件**：`CHAN_RUST/flutter/chan_kline/lib/widgets/kline_chart.dart`。
+
+### 2026-11-10 · Claude · 修复 · 首分型前第一组框不画（全层同构）
+
+- **执行者**：Claude Code
+- **任务类型**：主图绘制语义修复（受「层级早生成动态单元」开关门控；未动 Rust 计算）
+- **上下文**：用户截图指出默认数据 K1 合并框仍不对，并明确三条口径——第一根 K 不画合并框（全层同构）；子窗口去掉种子框；首分型前从第一根 K 起取高高。
+- **操作**：
+  1. 取证：默认 tick 数据 idx=13 时，K1 第一组框是经典几何 x=6..13、high=11.71、low=11.66，正是截图里那只橙色大框；上一版只改写「第一根 K」的框，这个框横跨多根，没进改写范围。K2 那只虚线大框是预锚动态 K 蜡烛（high=low=11.73，已是高高），不是合并框。
+  2. K0/K1/Kn 三个合并框入口统一：开关开且首组框 `fx=UNKNOWN` 且 `x1=0`（首分型前的第一组）时跳过不画；其后各组照旧。
+  3. 删除已无引用的 `_firstUnitHighHighFrame` 与 `_highHighFrameFromUnits`。种子框叠加本就由 `seedPhaseVisible` 在开关开时关闭，子窗口不再画种子框。
+- **结果**：idx=13 时 K1 窗口只剩顶部第二组虚线框（11.73/11.72，高高），从 11.66 拉到 11.71 的橙色大框消失；K2 动态 K 蜡烛保持高高。从第一根 K 起的「高高」由预锚动态单元（K 蜡烛/连线）承担。
+- **演示**：默认 002003 分笔步进到 idx=13，勾选 K1合并：K1 窗口第一根没有合并框，只有顶部一条虚线框。
+- **测试**：`flutter analyze --no-pub lib/widgets/kline_chart.dart` error=0（5 条存量 warning/info）；`flutter test test/early_dynamic_unit_test.dart` 10 项全过；第二实例步进 idx=13 截图核对通过。未 push。
+- **注意事项 / 待办**：① 首组判定用 `fx=UNKNOWN 且 x1=0`，第一个分型确认后该组 fx 不再是 UNKNOWN，框会恢复绘制；② 存量失败用例 `k0_building_line_same_price_test.dart` 仍未处理（与本轮无关，已在 HEAD 复现）。
+- **相关文件**：`CHAN_RUST/flutter/chan_kline/lib/widgets/kline_chart.dart`。
