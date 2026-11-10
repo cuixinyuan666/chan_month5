@@ -6163,3 +6163,18 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **注意事项 / 待办**：① 只对齐了「合并框 + 连线 + K 蜡烛替身」三件；中枢、相邻比例、买卖点等派生指标尚未逐条改为读预锚单元，需要时另开一条；② 高高会让框体低点抬高、可能不再包住区间最低 K，这是用户确认的字面口径；③ 开关关闭时经典种子框口径完全不变，可随时对照回退。
 - **相关文件**：`CHAN_RUST/flutter/chan_kline/lib/widgets/kline_chart.dart`。
 
+
+### 2026-11-10 · Claude · 修复 · 子窗口首框（K1+）按逐根 K 取高高
+
+- **执行者**：Claude Code
+- **任务类型**：主图绘制语义修复（受「层级早生成动态单元」开关门控；未动 Rust 计算）
+- **操作**：
+  1. `_drawLevelCombineOnMainChart`（K1/Kn≥2 子窗口）：开关开时把首组框替换为 `_firstUnitHighHighFrame` 的结果——首组恒为单单元（该层 idx=0），x 取首组 view 区间，high=max(逐根 high)、low=max(逐根 low)，不再沿用种子框/经典首组的低低几何。
+  2. 新增 `_firstUnitHighHighFrame`：必须按**逐根 K** 取高高；不能拿单元聚合后的 low 再取最大（首组只有一个单元，聚合 low 就是区间最低点，结果仍是低低大框——这正是 K1 窗口首框一直不变高高的原因）。
+  3. `_drawKlineCombineOnMainChart`（K0 窗口）：去掉 `_isSeedBoxFrame` 几何判定，开关开时首组一律按预锚单元重算高高；删除已无引用的 `_isSeedBoxFrame`。
+  4. `_drawCombineFramesOnMainChart`：只有一根 K 的段不画合并框（全层同构），避免 idx=0 极窄框四边虚线被看成小蛇。
+- **结果**：默认数据走到 idx=7（用户示例的首确认当根）时，K1 窗口首框的 low 由 11.66 抬到 11.71，框体收成贴顶的一条细框；idx=8/9 继续保持高高，第二组正常向右生长。K1 蜡烛本体与连线不变；开关关时与改前完全一致。
+- **演示**：默认 002003 分笔，连续单步 5→7→8→9：K1 窗口首框从「压到区间最低的大框」变为「贴区间最高的一条细框」；逐像素核对首框顶部有橙色合并框线、底部没有（即 high=low=11.71）。
+- **测试**：① `flutter test test/early_dynamic_unit_test.dart` 10 项全过；② `flutter analyze --no-pub lib/widgets/kline_chart.dart` error=0（5 条存量 warning/info）；③ 机器人套件 `early_dynamic_20261105`：3 阶段 2 过 1 失败——`inprocess_early_dynamic_unit` 35 项全真、`continuous_step_freeze` 1m 287 步 + 分笔 942 步全过；`flutter_test_early_dynamic` 因**存量**用例 `k0_building_line_same_price_test.dart`（同价位首分型前不拉线：期望 end=4、实际 3）失败。已用 `git stash` 在 HEAD 上复跑同一条用例，结果完全一致，确认与本次绘制改动无关；未放宽判据。
+- **注意事项 / 待办**：① 首组恒为单单元（`computeK1CombineFrames` 首两单元强制独立），故首框 x 直接取 `frames.first`；② 高高会让框体低点抬高、不再包住区间最低 K，这是用户确认的字面口径；③ 存量失败用例 `k0_building_line_same_price_test.dart` 需要单独定性（是数据变化还是口径变化），未在本轮处理；④ 未 push。
+- **相关文件**：`CHAN_RUST/flutter/chan_kline/lib/widgets/kline_chart.dart`。
