@@ -6290,3 +6290,13 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - 结果：flutter analyze 无新增告警；主分支未提交该改动（已还原，改动落在 for-telegram worktree）。
 - 演示：加载 K0 时图中央小转圈下方出现「获取数据 2025-01-01 00:00 ~ 2026-11-10 00:00」。
 
+
+## 2026-11-11 · OpenCode(cxy-all) · UI · 分笔上传进度弹窗显示数据范围
+
+- 执行者：OpenCode（cxy-all），worktree：D:\2\for-telegram（分支 for-telegram，commit aa1887f1）
+- 类型：功能（纯 UI 显示）
+- 背景：用户反馈「进度里面没看到」，实为看的是全市场分笔下载的进度弹窗，不是图表加载小转圈。
+- 操作：进度弹窗（ticks_full_upload_panel 的 _logBox）在「总速率」后新增「── 数据范围 ──」一行：1990-01-01 ~ 今天（每只股票全历史），口径与下载脚本 pipeline_stream_ticks.py 的 --begin 19900101 --end 当天 一致。
+- 结果：该文件 flutter analyze 无告警。
+- 演示：打开「全市场分笔上传 · 进度」弹窗，总速率下方应出现「1990-01-01 ~ 2026-11-11（每只股票全历史）」。
+
