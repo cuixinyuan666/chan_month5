@@ -6239,3 +6239,13 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **结果**：新 DLL 内已无旧 C 路径、含 `D:\2\chan_month5`；新 exe 启动后主图正常（K0/K0合并/K0连线），并往 D 副本 `a_Data` 写缓存，说明数据根正确；git 正常，脚本改动已 commit `7db25f9b`。
 - **收尾（23:07 提权执行成功）**：计划任务 `\Chan\TicksFullUpload` 已重建为 pythonw + `pipeline_ticks_supervisor.py --job D:\2\chan_month5\a_Data\agent_live\ticks_full_upload_job.json`，登录触发、State=Ready；SMB 共享 `chan_month5` 已从 C 改指 `D:\2\chan_month5`，`\\LAPTOP-NA22IFPU\chan_month5` 本机实测可访问。剩余待办：用户确认无问题后可删 C 盘旧目录，并把项目目录改选到 `D:\2\chan_month5`。
 - **相关文件**：`CHAN_RUST/scripts/launch_chan_kline_smart.ps1`、`a_Data/agent_live/ticks_full_upload_job.json`。
+
+### 2026-11-10 · 豆包 · 修复 · 注册脚本在非管理员会话下"拒绝访问"，改为复用已有计划任务
+
+- **执行者**：豆包（MainAgent）
+- **任务类型**：运维脚本修复（未动缠论计算与步进口径）
+- **上下文**：点"拉起本机上传任务"时 `register_ticks_full_upload.ps1` 报 `schtasks.exe 拒绝访问`、退出码 1。两条原因：① `/Create /F` 覆盖计划任务必须管理员；② 脚本用裸名 `schtasks.exe`，调用方 PATH 缺 System32 时连命令都找不到。
+- **操作**：把 `schtasks.exe` 换成 `$env:SystemRoot\System32\schtasks.exe` 绝对路径；`/Create` 失败时先查已有任务，若 `Actions.Arguments` 同时含 supervisor 路径与 job 路径，判定可复用，不再 exit，继续走 `/Run`。
+- **结果**：非管理员会话复跑 exit=0，输出 `reuse_existing_task: Access is denied.` + `{"code":"already_running","ok":true}`；`schtasks /Run` 拉起 supervisor（pid 136876），`status.json` 继续推进（current 300416→300435）。
+- **测试**：非管理员会话实跑一次脚本；计划任务 State=Ready，Arguments 全为 D 盘路径。
+- **相关文件**：`CHAN_RUST/scripts/register_ticks_full_upload.ps1`（commit `d99e691f`）。
