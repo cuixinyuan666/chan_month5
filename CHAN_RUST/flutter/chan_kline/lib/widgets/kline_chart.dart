@@ -3888,6 +3888,35 @@ class _KlineCompositePainter extends CustomPainter {
     return useHigh ? bars[x].high : bars[x].low;
   }
 
+  /// 首分型前的第一组框（全层同构）：把左端延伸到该层第一根 K（idx=0）。
+  ///
+  /// 第一组框在首分型前 `fx=UNKNOWN` 且 `x1=0`。经典首组的 x1 是首个极点
+  /// （默认数据在 idx=6），会把第一根 K 留在框外；这里把左端收到 idx=0，
+  /// 让第一个合并框包住该层 idx=0。high/low 仍取该组原值（高高），不改几何。
+  /// 第一个分型确认后该组 fx 不再是 UNKNOWN，框按原样绘制。
+  List<KlineCombineFrame> _extendFirstFrameToBar0(
+    List<KlineCombineFrame> frames,
+  ) {
+    if (!earlyDynamicUnit || frames.isEmpty) return frames;
+    final first = frames.first;
+    if (first.fx != 'UNKNOWN' || first.x1 <= 0) return frames;
+    final t0 = bars.isEmpty ? first.t1 : bars.first.timeText;
+    return <KlineCombineFrame>[
+      KlineCombineFrame(
+        x1: 0,
+        x2: first.x2,
+        t1: t0,
+        t2: first.t2,
+        high: first.high,
+        low: first.low,
+        fx: first.fx,
+        count: first.count,
+        endAtLeftHalf: first.endAtLeftHalf,
+      ),
+      ...frames.sublist(1),
+    ];
+  }
+
   /// 种子框画线全层同构入口：UNKNOWN→开口虚线；JUDGE/CONFIRM→ABC（互斥）。
   void _drawSeedPhaseLines(
     Canvas canvas,
@@ -4402,15 +4431,9 @@ class _KlineCompositePainter extends CustomPainter {
     );
     if (displayFrames.isEmpty) return;
 
-    var frames = displayFrames;
-    // 开关开（全层同构）：首分型前的第一组框不画——该层第一根 K 没有
-    // 「合并」语义；子窗口同时弃用种子框（seedPhaseVisible 已 gate）。
-    // 从第一根 K 起的「高高」由预锚动态单元（K 蜡烛/连线）承担，不另画框。
-    if (earlyDynamicUnit &&
-        frames.first.fx == 'UNKNOWN' &&
-        frames.first.x1 <= 0) {
-      frames = frames.sublist(1);
-    }
+    // 开关开（全层同构）：首分型前的第一组框左端收到该层第一根 K，
+    // 让第一个合并框包住 idx=0；子窗口同时弃用种子框（seedPhaseVisible 已 gate）。
+    final frames = _extendFirstFrameToBar0(displayFrames);
 
     final style = ChartLevelLineStyle.forDisplayKn(kn);
     _drawCombineFramesOnMainChart(
@@ -6245,14 +6268,9 @@ class _KlineCompositePainter extends CustomPainter {
     // 开关开时（首分型前走「高高」）：旧的种子组合并框不再画，
     // 改为用该层预锚单元重建成「高高」首组框（high 取最高、low 也取最高），
     // 与动态 K 蜡烛/连线同一输入，全层同构。
-    var frames = combineFrames;
-    // 开关开（全层同构）：首分型前的第一组框不画——第一根 K 没有「合并」语义；
-    // 从第一根 K 起的「高高」由预锚动态单元（K 蜡烛/连线）承担，不另画框。
-    if (earlyDynamicUnit &&
-        combineFrames.first.fx == 'UNKNOWN' &&
-        combineFrames.first.x1 <= 0) {
-      frames = combineFrames.sublist(1);
-    }
+    // 开关开（全层同构）：首分型前的第一组框左端收到第一根 K，
+    // 让第一个合并框包住 idx=0。
+    final frames = _extendFirstFrameToBar0(combineFrames);
     if (frames.isEmpty) return;
     // 末组=构建中合并（虚线）；前组=已冻结合并（实线）。
     // 信号取 CombineEngine.groups 末项（已在 combineFrames 末尾），不是 activeUnit（那是进行中段）。
