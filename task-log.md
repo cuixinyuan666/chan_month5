@@ -6193,3 +6193,15 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **测试**：`flutter analyze --no-pub lib/widgets/kline_chart.dart` error=0（5 条存量 warning/info）；`flutter test test/early_dynamic_unit_test.dart` 10 项全过；第二实例步进 idx=13 截图核对通过。未 push。
 - **注意事项 / 待办**：① 首组判定用 `fx=UNKNOWN 且 x1=0`，第一个分型确认后该组 fx 不再是 UNKNOWN，框会恢复绘制；② 存量失败用例 `k0_building_line_same_price_test.dart` 仍未处理（与本轮无关，已在 HEAD 复现）。
 - **相关文件**：`CHAN_RUST/flutter/chan_kline/lib/widgets/kline_chart.dart`。
+
+### 2026-11-10 · Claude · 修复 · 首分型前第一组框左端收到第一根 K（全层同构）
+
+- **执行者**：Claude Code
+- **任务类型**：主图绘制语义修复（受「层级早生成动态单元」开关门控；未动 Rust 计算）
+- **上下文**：用户截图指出 K1 的第一个合并框没有把 K1 idx=0 包进去，要求全层同构。上一版把首分型前的第一组框直接跳过，图上看到的第一个框其实是第二组，从第二根 K 才开始。
+- **操作**：新增 `_extendFirstFrameToBar0`，K0/K1/Kn 三个合并框入口共用——开关开且首组框 `fx=UNKNOWN` 且 `x1>0` 时，把该框左端收到 idx=0，high/low 保持该组原值（高高）；第一个分型确认后该组 fx 不再是 UNKNOWN，框按原样绘制。
+- **结果**：默认数据 idx=13 时，K1 第一个合并框从第一根 K（10:47:00）的左边缘起，包住 idx=0，high/low 仍是 11.73/11.72；K2 同口径，粉色细框也从第一根 K 起。
+- **演示**：默认 002003 分笔步进到 idx=13，勾选 K1合并/K2合并：两个窗口的第一个合并框都从最左边第一根 K 开始。
+- **测试**：`flutter analyze --no-pub lib/widgets/kline_chart.dart` error=0（5 条存量 warning/info）；第二实例步进 idx=13 截图核对通过。未 push。
+- **注意事项 / 待办**：存量失败用例 `k0_building_line_same_price_test.dart` 仍未处理（与本轮无关）。
+- **相关文件**：`CHAN_RUST/flutter/chan_kline/lib/widgets/kline_chart.dart`。
