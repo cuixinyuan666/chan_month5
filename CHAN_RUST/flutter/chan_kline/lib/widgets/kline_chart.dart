@@ -3755,6 +3755,9 @@ class _KlineCompositePainter extends CustomPainter {
 
       final (left, right) = _k1BarHSpan(v, w, slotW, barW);
       final cx = (left + right) / 2;
+      // 该层只有一个单元时不画外框（全层同构，虚线也不画）：只有一根 K 没有
+      // 「合并」语义，四边虚线描边会被看成一只合并框。实体填充照常保留。
+      final singleBar = k1BarViews.length <= 1;
       final spanW = math.max(2.0, right - left);
       final isUp = v.isUp;
 
@@ -3773,6 +3776,13 @@ class _KlineCompositePainter extends CustomPainter {
       );
       final wickDash = ChartLevelLineStyle.forDisplayKn(1).buildingDashPattern;
       final frameDashed = building && showBuildingDash;
+      if (singleBar) {
+        canvas.drawRect(
+          _candleBodyFillRect(rect, dashed: false),
+          Paint()..color = isUp ? upBody : dnBody,
+        );
+        continue;
+      }
       // 正在走的这根：影线虚线外框居中，宽度约为柱体四成。确认后的影线仍是实线。
       if (frameDashed) {
         _strokeWickDashFrame(
@@ -5541,6 +5551,9 @@ class _KlineCompositePainter extends CustomPainter {
       }
       final (left, right) = _levelUnitBarHSpan(v, w, slotW, barW);
       final cx = (left + right) / 2;
+      // 该层只有一个单元时不画外框（全层同构，虚线也不画）：只有一根 K 没有
+      // 「合并」语义，四边虚线描边会被看成一只合并框。实体填充照常保留。
+      final singleBar = views.length <= 1;
       final spanW = math.max(2.0, right - left);
       final isUp = v.isUp;
 
@@ -5559,6 +5572,13 @@ class _KlineCompositePainter extends CustomPainter {
       );
       final wickDash = ChartLevelLineStyle.forDisplayKn(displayKn).buildingDashPattern;
       final frameDashed = building && showBuildingDash;
+      if (singleBar) {
+        canvas.drawRect(
+          _candleBodyFillRect(rect, dashed: false),
+          Paint()..color = isUp ? upBody : dnBody,
+        );
+        continue;
+      }
       if (frameDashed) {
         _strokeWickDashFrame(
           canvas,
@@ -6353,9 +6373,9 @@ class _KlineCompositePainter extends CustomPainter {
         continue;
       }
 
-      // 只有一根 K 的段不画合并框（全层同构）：单根没有「合并」语义，
-      // 早期 idx=0 时曾因极窄框四边虚线描边被看成一条「小蛇」。
-      if (f.x2 <= f.x1) {
+      // 只有一根 K 时不画合并框（全层同构，虚线也不画）：该层只有一个单元
+      // 就没有「合并」语义。单根被拉宽后四边虚线仍会露出一排点。
+      if (frames.length <= 1 && f.count <= 1) {
         continue;
       }
       final (xLeft, xRight) = alignK1CombineWithViews
