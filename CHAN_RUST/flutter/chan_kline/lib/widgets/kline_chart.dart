@@ -802,18 +802,22 @@ class _KlineChartState extends State<KlineChart> {
 
   /// 向父层桥广播 tooltip 状态（停靠子窗口用）：显示态 + 当前聚焦 K 的行。
   /// 无桥或内部悬浮态(dockTooltipPanel=false)时为空操作。
-  void _publishTooltipToBridge() {
+  void _publishTooltipToBridge({bool? forceShown}) {
     final b = widget.tooltipBridge;
     if (b == null || !widget.dockTooltipPanel) return;
     // 分窗时信息只由鼠标所在的主窗发布：被动窗也广播会把别的层盖上来。
     final s = widget.sync;
-    if (s != null && s.crosshairOn && !_iAmCrosshairOwner) {
+    if (forceShown == null &&
+        s != null &&
+        s.crosshairOn &&
+        !_iAmCrosshairOwner) {
       // 主窗已经换走：只是不再由本窗写内容，面板本身不能在这里关掉。
       // 以前直接置 false，鼠标一跨窗，信息面板就消失了。
       return;
     }
-    b.shown.value = _crosshairShowTooltip;
-    if (_crosshairShowTooltip && _crosshairBarIdx != null) {
+    final show = forceShown ?? _crosshairShowTooltip;
+    b.shown.value = show;
+    if (show && _crosshairBarIdx != null) {
       b.rows.value = _tooltipRowsForBar(_crosshairBarIdx!);
     }
   }
@@ -828,6 +832,7 @@ class _KlineChartState extends State<KlineChart> {
   /// bar/价格原样盖回去，甚至互相抢主窗。只有用户在本窗开十字线/点图/按方向键
   /// 时才升级为主窗（见 `_cycleCrosshair` / `_onZoneTapAt` / `_moveCrosshairBy`）。
   bool _iAmCrosshairOwner = false;
+  bool _sawCrosshairOn = false;
 
   /// 本帧结束后把十字线状态广播给其余窗（只能在帧后做：广播会触发别的窗 setState，
   /// 在 build 期间直接 notify 会撞「setState during build」）。
@@ -957,6 +962,9 @@ class _KlineChartState extends State<KlineChart> {
   void _onSyncChanged() {
     if (!mounted) return;
     final s = widget.sync;
+    final crosshairOn = s?.crosshairOn ?? false;
+    final turnedOff = _sawCrosshairOn && !crosshairOn;
+    _sawCrosshairOn = crosshairOn;
     if (s != null) {
       // 别的窗把十字线关了：本地状态跟着清（含 tooltip）。
       // 但「本窗刚开、还没广播出去」这一段不能清：联动控制器此时仍是 off，
@@ -964,7 +972,12 @@ class _KlineChartState extends State<KlineChart> {
       if (!s.crosshairOn &&
           _crosshairMode != CrosshairMode.off &&
           !_iAmCrosshairOwner) {
-        setState(_clearCrosshairState);
+        setState(() {
+          _clearCrosshairState();
+          if (widget.displayLevel != null && widget.bars.isNotEmpty) {
+            _viewport.showAllBars();
+          }
+        });
         return;
       }
       // 主窗换到别处：旧主窗必须放手，否则会继续广播、把新主窗又拽回来。
@@ -976,6 +989,11 @@ class _KlineChartState extends State<KlineChart> {
         setState(_clearCrosshairState);
         return;
       }
+    }
+    if (turnedOff &&
+        widget.displayLevel != null &&
+        widget.bars.isNotEmpty) {
+      _viewport.showAllBars();
     }
     setState(() {});
   }
@@ -1036,17 +1054,22 @@ class _KlineChartState extends State<KlineChart> {
       _viewport.allXMax = math.max(0, widget.bars.length - 1).toDouble();
       if (widget.autoFollowLatest) {
         final last = widget.bars.length - 1;
-        // 子窗口（displayLevel 非空）每步都把最新 K 放到视窗正中；
-        // 单图保持原口径：没手动调过缩放就展示全量。
-        final center = widget.displayLevel != null;
-        _viewport.syncWindowOnStep(last, centerLatest: center);
-        if (center) {
-          // 垂直也按本窗自己的 K 居中：K1/K2 窗口画的不是底层 K0，
-          // 用 K0 的价格会把层级 K 顶到窗口上下沿。
+        if (widget.displayLevel != null && !_crosshairEnabled) {
+          // 没盯住某一根 K：各窗按根数把全部 K 放进来，并略靠右。
+          _viewport.showAllBars();
+        } else if (widget.displayLevel != null) {
+          // 十字线开着才维持局部视窗，最新 K 比正中再靠右一截。
+          _viewport.syncWindowOnStep(
+            last,
+            centerLatest: true,
+            followPos: KlineViewport.stepFollowPosRight,
+          );
           _viewport.centerLatestVertically(
             _barsForVerticalCenter(last),
             last,
           );
+        } else {
+          _viewport.syncWindowOnStep(last);
         }
       }
     }
@@ -1369,8 +1392,16 @@ class _KlineChartState extends State<KlineChart> {
         widget.autoFollowLatest &&
         widget.bars.isNotEmpty) {
       final last = widget.bars.length - 1;
-      _viewport.syncWindowOnStep(last, centerLatest: true);
-      _viewport.centerLatestVertically(_barsForVerticalCenter(last), last);
+      if (!_crosshairEnabled) {
+        _viewport.showAllBars();
+      } else {
+        _viewport.syncWindowOnStep(
+          last,
+          centerLatest: true,
+          followPos: KlineViewport.stepFollowPosRight,
+        );
+        _viewport.centerLatestVertically(_barsForVerticalCenter(last), last);
+      }
     }
   }
 
@@ -1448,7 +1479,32 @@ class _KlineChartState extends State<KlineChart> {
 
     final ctrl = HardwareKeyboard.instance.isControlPressed ||
         HardwareKeyboard.instance.isMetaPressed;
-    if (ctrl) {
+    if (widget.displayLevel != null) {
+      // 子窗口：滚轮同时拉横向和纵向，焦点钉在鼠标位置。
+      _viewport.markUserAdjusted();
+      final factor = e.scrollDelta.dy > 0
+          ? 1 / KlineViewport.zoomFactor
+          : KlineViewport.zoomFactor;
+      final plotTop = _zonePlotTop;
+      final plotH = math.max(1.0, mainPlotH);
+      final visible = _viewport.visibleBars(widget.bars);
+      final range = _hitPriceRange ?? _viewport.priceRangeFor(visible);
+      final anchorPrice = range.priceFromY(e.localPosition.dy, plotTop, plotH);
+      final rel = ((e.localPosition.dy - plotTop) / plotH).clamp(0.0, 1.0);
+      _viewport.zoomXAt(
+        factor,
+        e.localPosition.dx,
+        _chartSize.width,
+        allowLeftBlank: true,
+      );
+      _viewport.zoomYBy(factor);
+      final after = _viewport.visibleBars(widget.bars);
+      _viewport.pinPriceAtPlotFraction(
+        bars: after.isEmpty ? visible : after,
+        price: anchorPrice,
+        relFromTop: rel,
+      );
+    } else if (ctrl) {
       _viewport.markUserAdjusted();
       _viewport.zoomY(e.scrollDelta.dy < 0);
     } else {
@@ -1807,7 +1863,25 @@ class _KlineChartState extends State<KlineChart> {
           _tooltipScrollBarIdx = null;
       }
     });
-    _publishTooltipToBridge();
+    // 中键三态以本窗刚写入的模式为准。停靠窗口若去读联动里还没更新的旧开关，
+    // 第二下打不开窗口，第三下也关不掉。
+    final showTip = _crosshairMode == CrosshairMode.withTooltip;
+    _publishTooltipToBridge(forceShown: showTip);
+    final sync = widget.sync;
+    if (sync != null) {
+      if (!_crosshairEnabled || _crosshairBarIdx == null) {
+        _iAmCrosshairOwner = false;
+        sync.publishCrosshair(on: false);
+      } else {
+        sync.publishCrosshair(
+          on: true,
+          barIdx: _crosshairBarIdx,
+          price: _crosshairPriceNow(),
+          ownerLevel: widget.displayLevel,
+          tooltip: showTip,
+        );
+      }
+    }
   }
 
   /// 左/中/右三等分热区
@@ -2699,6 +2773,7 @@ class _KlineChartState extends State<KlineChart> {
               truncationCheck: widget.truncationCheck,
               showBuildingDash: widget.showBuildingDash,
               earlyDynamicUnit: widget.earlyDynamicUnit,
+              subWindow: widget.displayLevel != null,
               // 分窗：全窗照抄同一个胶囊条占位，副图内区才同高。
               subChipBarHeight:
                   widget.sync?.subChipBand ?? _subChipBarHeight,
@@ -3138,6 +3213,7 @@ class _KlineCompositePainter extends CustomPainter {
     this.truncationCheck = true,
     this.showBuildingDash = true,
     this.earlyDynamicUnit = true,
+    this.subWindow = false,
     this.subChipBarHeight = KlineViewport.subIndicatorChipBand,
     this.defaultK0Policy = 'pending',
     this.segAsOf,
@@ -3217,6 +3293,9 @@ class _KlineCompositePainter extends CustomPainter {
   final bool showBuildingDash;
   /// 层级早生成动态单元：开=隐藏种子框/种子相虚线，K0 首确认前由预锚单元画构建中虚线
   final bool earlyDynamicUnit;
+
+  /// 子窗口模式：「只有一根 K 不画合并框」只在这里、且首个分型出现前生效。
+  final bool subWindow;
   /// 副图左上指标开关按钮实际高度（自 px 落点下方 2px 起算；动态测量防覆盖）
   final double subChipBarHeight;
   /// 与 asOfK1Bars 同构的默认 K0 策略（pending/purged）
@@ -3755,9 +3834,6 @@ class _KlineCompositePainter extends CustomPainter {
 
       final (left, right) = _k1BarHSpan(v, w, slotW, barW);
       final cx = (left + right) / 2;
-      // 该层只有一个单元时不画外框（全层同构，虚线也不画）：只有一根 K 没有
-      // 「合并」语义，四边虚线描边会被看成一只合并框。实体填充照常保留。
-      final singleBar = k1BarViews.length <= 1;
       final spanW = math.max(2.0, right - left);
       final isUp = v.isUp;
 
@@ -3776,13 +3852,6 @@ class _KlineCompositePainter extends CustomPainter {
       );
       final wickDash = ChartLevelLineStyle.forDisplayKn(1).buildingDashPattern;
       final frameDashed = building && showBuildingDash;
-      if (singleBar) {
-        canvas.drawRect(
-          _candleBodyFillRect(rect, dashed: false),
-          Paint()..color = isUp ? upBody : dnBody,
-        );
-        continue;
-      }
       // 正在走的这根：影线虚线外框居中，宽度约为柱体四成。确认后的影线仍是实线。
       if (frameDashed) {
         _strokeWickDashFrame(
@@ -3898,22 +3967,54 @@ class _KlineCompositePainter extends CustomPainter {
     return useHigh ? bars[x].high : bars[x].low;
   }
 
-  /// 首分型前的合并框（全层同构）：从该层第一根 K 起到首个分型之前，
-  /// 合成**一个**框，而不是把 idx=0 单独包成一个。
+  /// 首分型前的合并框（全层同构）：只有一根时不画框；
+  /// 两根及以上时合成一个框，左端含第一根 K，而不是把第一根单独包成一个。
   ///
   /// 经典口径在首分型前就会拆出多组（默认数据 idx=13 时 K1 已是两组：
-  /// 种子组低低 + 其后高高）。这里把开头连续的、尚未标分型（fx=UNKNOWN）
-  /// 且从 idx=0 起的组合并：x 从 0 收到最后一组右端，
-  /// high=max(各组 high)、low=max(各组 low)（高高）。
-  /// 第一个分型确认后该组 fx 不再是 UNKNOWN，框按原样绘制。
+  /// 种子组低低 + 其后高高）。这里把「首个分型所在组之前」的全部组合并：
+  /// 首分型确认后它的 fx 会被标成 TOP/BOTTOM，所以取第一个非 UNKNOWN 组的下标，
+  /// 而不是只合开头连续的 UNKNOWN 组（否则它前面那组会单独留下）。
+  /// x 从 0 收到最后一组右端，high=max(各组 high)、low=max(各组 low)（高高）。
+  /// 首个分型所在组及其后的框按原样绘制。
   List<KlineCombineFrame> _mergePreFractalFrames(
     List<KlineCombineFrame> frames,
   ) {
     if (!earlyDynamicUnit || frames.isEmpty) return frames;
     if (frames.first.x1 > 0) return frames;
-    var end = 0;
-    while (end < frames.length && frames[end].fx == 'UNKNOWN') {
-      end++;
+    // 不用 `== 'UNKNOWN'`：debug kernel 下该字符串比较会把 'TOP' 也判成相等
+    // （已用逐码位日志核实），改按码位判断（见 _fxIsUnknown）。
+    var end = -1;
+    for (var i = 0; i < frames.length; i++) {
+      if (!_fxIsUnknown(frames[i].fx)) {
+        end = i;
+        break;
+      }
+    }
+    if (end < 0) end = frames.length;
+    // 顶分型落在第二组时，第一根不能单独拆出去：
+    // 并进后面那个框，左端仍从第一根 K 起。只有整层一根时不画框。
+    if (end == 1 &&
+        frames.length > 1 &&
+        frames.first.x1 <= 0 &&
+        frames.first.count <= 1) {
+      final a = frames.first;
+      final b = frames[1];
+      final hi = a.high > b.high ? a.high : b.high;
+      final lo = a.low > b.low ? a.low : b.low;
+      return <KlineCombineFrame>[
+        KlineCombineFrame(
+          x1: a.x1,
+          x2: b.x2,
+          t1: a.t1,
+          t2: b.t2,
+          high: hi,
+          low: lo,
+          fx: b.fx,
+          count: a.count + b.count,
+          endAtLeftHalf: b.endAtLeftHalf,
+        ),
+        ...frames.sublist(2),
+      ];
     }
     if (end <= 1) return frames;
     final head = frames.sublist(0, end);
@@ -3926,10 +4027,10 @@ class _KlineCompositePainter extends CustomPainter {
       if (f.low > lo) lo = f.low;
       count += f.count;
     }
-    final t0 = bars.isEmpty ? head.first.t1 : bars.first.timeText;
+    final t0 = head.first.t1;
     return <KlineCombineFrame>[
       KlineCombineFrame(
-        x1: 0,
+        x1: head.first.x1,
         x2: last.x2,
         t1: t0,
         t2: last.t2,
@@ -4457,8 +4558,8 @@ class _KlineCompositePainter extends CustomPainter {
     );
     if (displayFrames.isEmpty) return;
 
-    // 开关开（全层同构）：首分型前从第一根 K 起合成一个框（高高）；
-    // 子窗口同时弃用种子框（seedPhaseVisible 已 gate）。
+    // 全层：首分型前两根及以上合成一个框，左端含第一根 K。
+    // 只有一根时不画框（在绘制处按总根数跳过）。
     final frames = _mergePreFractalFrames(displayFrames);
 
     final style = ChartLevelLineStyle.forDisplayKn(kn);
@@ -4475,6 +4576,7 @@ class _KlineCompositePainter extends CustomPainter {
       levelUnitViews: views.isNotEmpty ? views : null,
       lastAsBuilding: showBuildingDash,
       buildingDashPattern: style.buildingDashPattern,
+      subWindow: subWindow,
     );
     // 种子合并框：用 LevelSnap.seed_box_*（全层同构，不限 displayFrames.first）
     _drawSeedBoxOverlay(
@@ -5551,9 +5653,6 @@ class _KlineCompositePainter extends CustomPainter {
       }
       final (left, right) = _levelUnitBarHSpan(v, w, slotW, barW);
       final cx = (left + right) / 2;
-      // 该层只有一个单元时不画外框（全层同构，虚线也不画）：只有一根 K 没有
-      // 「合并」语义，四边虚线描边会被看成一只合并框。实体填充照常保留。
-      final singleBar = views.length <= 1;
       final spanW = math.max(2.0, right - left);
       final isUp = v.isUp;
 
@@ -5572,13 +5671,6 @@ class _KlineCompositePainter extends CustomPainter {
       );
       final wickDash = ChartLevelLineStyle.forDisplayKn(displayKn).buildingDashPattern;
       final frameDashed = building && showBuildingDash;
-      if (singleBar) {
-        canvas.drawRect(
-          _candleBodyFillRect(rect, dashed: false),
-          Paint()..color = isUp ? upBody : dnBody,
-        );
-        continue;
-      }
       if (frameDashed) {
         _strokeWickDashFrame(
           canvas,
@@ -6325,6 +6417,7 @@ class _KlineCompositePainter extends CustomPainter {
       k0Style.color.withValues(alpha: 0.13),
       lastAsBuilding: showBuildingDash,
       buildingDashPattern: k0Style.buildingDashPattern,
+      subWindow: subWindow,
     );
     // 种子框（K0合并层=structure 0）
     _drawSeedBoxOverlay(
@@ -6337,6 +6430,17 @@ class _KlineCompositePainter extends CustomPainter {
       level: 0,
       buildingDashPattern: ChartLevelLineStyle.forDisplayKn(0).buildingDashPattern,
     );
+  }
+
+  /// UNKNOWN 按码位判断。调试内核里字符串相等会把别的分型也判成相等。
+  bool _fxIsUnknown(String fx) {
+    const units = <int>[85, 78, 75, 78, 79, 87, 78];
+    final u = fx.codeUnits;
+    if (u.length != units.length) return false;
+    for (var i = 0; i < u.length; i++) {
+      if (u[i] != units[i]) return false;
+    }
+    return true;
   }
 
   /// 主图 K线合并 / K1合并线框：按真实价格坐标叠加。
@@ -6356,6 +6460,7 @@ class _KlineCompositePainter extends CustomPainter {
     List<LevelUnitBarView>? levelUnitViews,
     bool lastAsBuilding = false,
     List<double> buildingDashPattern = const <double>[5, 4],
+    bool subWindow = false,
   }) {
     if (frames.isEmpty) return;
 
@@ -6369,15 +6474,22 @@ class _KlineCompositePainter extends CustomPainter {
       ..style = PaintingStyle.fill;
 
     final last = frames.length - 1;
+    var totalUnits = 0;
+    var beforeFirstFx = true;
+    for (final f in frames) {
+      totalUnits += f.count;
+      if (!_fxIsUnknown(f.fx)) beforeFirstFx = false;
+    }
     for (var i = 0; i < frames.length; i++) {
       final f = frames[i];
       if (f.x2 < viewport.viewXMin - 1 || f.x1 > viewport.viewXMax + 1) {
         continue;
       }
 
-      // 只有一根 K 时不画合并框（全层同构，虚线也不画）：该层只有一个单元
-      // 就没有「合并」语义。单根被拉宽后四边虚线仍会露出一排点。
-      if (frames.length <= 1 && f.count <= 1) {
+      // 全层、子窗口、首分型前：整层只有一根时不画合并框。
+      // 两根及以上的框左端含第一根，顶分型出现后也不把第一根拆出去。
+      // 动态 K 的虚线外框在蜡烛绘制里，这里不碰。
+      if (subWindow && beforeFirstFx && totalUnits <= 1) {
         continue;
       }
       final (xLeft, xRight) = alignK1CombineWithViews
@@ -6444,6 +6556,7 @@ class _KlineCompositePainter extends CustomPainter {
         k1Style.color.withValues(alpha: 0.85),
         k1Style.color.withValues(alpha: 0.08),
         alignK1CombineWithViews: true,
+        subWindow: subWindow,
         // 末组=构建中合并（虚线）；前组=已冻结合并（实线）；showBuildingDash 关则全实线
         lastAsBuilding: showBuildingDash,
         buildingDashPattern: k1Style.buildingDashPattern,

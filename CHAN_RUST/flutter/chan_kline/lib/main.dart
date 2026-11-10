@@ -93,6 +93,7 @@ import 'widgets/datetime_picker_dialog.dart';
 import 'widgets/edge_control_panel.dart';
 import 'widgets/kline_chart.dart';
 import 'widgets/chart_sync_controller.dart';
+import 'chart/level_window_layout.dart';
 import 'widgets/level_chart_grid.dart';
 import 'widgets/level_window_settings_dialog.dart';
 import 'widgets/crosshair_tooltip_panel.dart';
@@ -452,8 +453,11 @@ class _KlineHomePageState extends State<KlineHomePage>
   Set<MainChartIndicator> _mainIndicators = defaultMainIndicatorsK0();
   Set<SubChartIndicator> _subIndicators = defaultSubIndicatorsK0();
   // 层级分窗专用勾选：与单图完全分开，互不影响。
-  // 默认每窗勾本层 Kn + 本层连线，其余主图指标与副图一项不启用。
+  // 默认每窗勾本层 Kn + 本层合并 + 本层连线，其余主图指标与副图一项不启用。
   Set<MainChartIndicator> _splitMainIndicators = <MainChartIndicator>{};
+
+  /// 子窗口全屏：非空时只显示这一层，占满图表区；再点一次回到分窗网格。
+  int? _splitFullscreenLevel;
   Set<SubChartIndicator> _splitSubIndicators = <SubChartIndicator>{};
   /// 分窗指标是否已按当前层级初始化过（首次开分窗时铺默认）。
   bool _splitIndicatorsReady = false;
@@ -1768,7 +1772,7 @@ class _KlineHomePageState extends State<KlineHomePage>
     setState(() => _splitSubIndicators = ensureMacdForDivergenceArea(v));
   }
 
-  /// 按当前可见层级重置分窗指标：每窗勾本层 Kn + 连线，副图一项不勾。
+  /// 按当前可见层级重置分窗指标：每窗勾本层 Kn + 合并 + 连线，副图一项不勾。
   void _resetSplitIndicators() {
     _splitIndicatorsReady = true;
     _splitMainIndicators = defaultLevelWindowMainIndicators(
@@ -5362,20 +5366,23 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
     final split = !_useAndroidInteraction &&
         !_chipOnlyMode &&
         LevelWindowSettingsStore.enabled;
+    final fullscreen = split ? _splitFullscreenLevel : null;
     return RepaintBoundary(
       key: _chartRepaintKey,
       child: split
-          ? LevelChartGrid(
-              count: LevelWindowSettingsStore.count,
-              levels: LevelWindowSettingsStore.activeLevels,
-              maxKn: chartMaxKn(levels: _levels, k0Lines: _k0Lines),
-              paneBuilder: (context, slot, level, primary) =>
-                  _buildKlinePane(
-                level: level,
-                primary: primary,
-                split: true,
-              ),
-            )
+          ? (fullscreen != null
+              ? _buildKlinePane(level: fullscreen, primary: true, split: true)
+              : LevelChartGrid(
+                  count: LevelWindowSettingsStore.count,
+                  levels: LevelWindowSettingsStore.activeLevels,
+                  maxKn: chartMaxKn(levels: _levels, k0Lines: _k0Lines),
+                  paneBuilder: (context, slot, level, primary) =>
+                      _buildKlinePane(
+                    level: level,
+                    primary: primary,
+                    split: true,
+                  ),
+                ))
           : _buildKlinePane(level: 0, primary: true, split: false),
     );
   }
@@ -5391,7 +5398,7 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
     required bool split,
   }) {
     final gesturesOn = _hasSession && !_busy;
-    return KlineChart(
+    final chart = KlineChart(
       // 每窗独立 State：层级换槽位时不复用旧窗的十字线/静音状态。
       key: ValueKey<String>(split ? 'level-$level' : 'single'),
       // ── 分窗联动：每窗独立视口 / 主副比例共用 / 十字线接管 / as-of 缓存 ──
@@ -5485,6 +5492,45 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
       // 鼠标跨到哪个窗，信息就换成那个窗所在层级的内容。
       tooltipBridge: _tooltipBridge,
       dockTooltipPanel: !_useAndroidInteraction,
+    );
+    if (!split) return chart;
+    // 子窗口全屏按钮：放在层级标签左侧，不与右上角标签/标题栏窗控重叠。
+    // 全屏后这一格占满窗口右上角，退出钮要跟角标一样让开最大化，不能贴回右缘。
+    final fullscreen = _splitFullscreenLevel == level;
+    final grid = LevelWindowGrid(LevelWindowSettingsStore.count);
+    final levels = LevelWindowSettingsStore.activeLevels;
+    final slot = levels.indexOf(level);
+    final topRightPane = fullscreen ||
+        (slot >= 0 &&
+            slot % grid.cols == grid.cols - 1 &&
+            slot ~/ grid.cols == 0);
+    final badgeRight = levelBadgeRightInset(topRightPane: topRightPane);
+    final buttonRight = fullscreen ? badgeRight : badgeRight + 46;
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        chart,
+        Positioned(
+          right: buttonRight,
+          top: 2,
+          child: Tooltip(
+            message: fullscreen ? '退出全屏' : '全屏',
+            child: IconButton(
+              onPressed: () => setState(() {
+                _splitFullscreenLevel = fullscreen ? null : level;
+              }),
+              padding: EdgeInsets.zero,
+              constraints:
+                  const BoxConstraints.tightFor(width: 22, height: 22),
+              icon: Icon(
+                fullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
+                size: 16,
+                color: AppPalette.rgb(0xFFCFCFCF),
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 

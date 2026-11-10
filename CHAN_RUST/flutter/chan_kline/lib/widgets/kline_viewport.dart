@@ -84,11 +84,14 @@ class KlineViewport {
   /// 各子窗口各自一份视口，但跟随口径同此。
   static const double stepFollowPos = 0.5;
 
+  /// 子窗口盯住某根 K 时，最新 K 比正中再靠右一截。
+  static const double stepFollowPosRight = 0.65;
+
   /// 步进/播放时把最新 K 固定到视窗水平正中。
   ///
   /// 不再等最新 K 滑出右边界才拽回：每一步都重新落位。
   /// 数据刚开始、目标位置落在数据起点之前时，左侧留白，不把视窗顶回去。
-  void ensureLatestVisible(int lastIdx) {
+  void ensureLatestVisible(int lastIdx, {double followPos = stepFollowPos}) {
     if (!ready) return;
 
     final span = xSpan;
@@ -98,7 +101,7 @@ class KlineViewport {
       return;
     }
 
-    var newMin = lastIdx - span * stepFollowPos;
+    var newMin = lastIdx - span * followPos;
     var newMax = newMin + span;
     // 右侧最多留两个视窗宽的空白；超出就整体左移。
     // 左侧不再卡在数据起点：卡住会把最新 K 顶到最右，居中就做不到。
@@ -165,16 +168,20 @@ class KlineViewport {
   /// 数据还少于 40 根时左侧留白；用户调过的缩放宽度原样保留。
   /// [centerLatest] 为假（单图）时保持原口径：没手动调过就展示全量，
   /// 调过才跟随最新 K。
-  void syncWindowOnStep(int lastIdx, {bool centerLatest = false}) {
+  void syncWindowOnStep(
+    int lastIdx, {
+    bool centerLatest = false,
+    double followPos = stepFollowPos,
+  }) {
     if (!ready) return;
     allXMax = math.max(allXMax, lastIdx.toDouble());
     if (centerLatest) {
       if (!userAdjustedView) {
         const minSpan = 40.0;
-        viewXMin = lastIdx - minSpan * stepFollowPos;
+        viewXMin = lastIdx - minSpan * followPos;
         viewXMax = viewXMin + minSpan;
       }
-      ensureLatestVisible(lastIdx);
+      ensureLatestVisible(lastIdx, followPos: followPos);
       return;
     }
     if (!userAdjustedView) {
@@ -185,8 +192,29 @@ class KlineViewport {
     }
   }
 
+  /// 没盯住某一根 K 时：按当前 K 线根数把整段放进视窗。
+  /// 右侧留一截空白，步进/播放时最新 K 不贴右边界。
+  void showAllBars({
+    double leftBlankRatio = 0.08,
+    double rightBlankRatio = 0.22,
+  }) {
+    if (!ready) return;
+    final dataSpan = math.max(1.0, allXMax - allXMin);
+    viewXMin = allXMin - dataSpan * leftBlankRatio;
+    viewXMax = allXMax + dataSpan * rightBlankRatio;
+    yZoomRatio = 1.0;
+    yShiftRatio = 0.0;
+    userAdjustedView = false;
+  }
+
   /// 滚轮横向缩放，锚点为画布内 X（像素）。
-  void zoomXAt(double factor, double anchorCanvasX, double canvasWidth) {
+  /// [allowLeftBlank] 为真时左端也可以扩出去，左右一起变，不再只朝右边挤。
+  void zoomXAt(
+    double factor,
+    double anchorCanvasX,
+    double canvasWidth, {
+    bool allowLeftBlank = false,
+  }) {
     if (!ready || allXMax < allXMin) return;
     final barCount = (allXMax - allXMin + 1).round();
     if (barCount <= 1) return;
@@ -208,7 +236,7 @@ class KlineViewport {
     var newMin = xAtMouse - rel * newSpan;
     var newMax = newMin + newSpan;
 
-    if (newMin < allXMin) {
+    if (!allowLeftBlank && newMin < allXMin) {
       newMin = allXMin;
       newMax = newMin + newSpan;
     }
@@ -226,10 +254,35 @@ class KlineViewport {
 
     viewXMin = newMin;
     viewXMax = newMax;
-    if (viewXMin < allXMin) viewXMin = allXMin;
+    if (!allowLeftBlank && viewXMin < allXMin) viewXMin = allXMin;
     if (viewXMax <= viewXMin) {
       viewXMax = math.min(allXMax, viewXMin + minSpanFor(barCount));
     }
+  }
+
+  /// 纵向缩放后，把 [price] 钉在绘图区从上往下 [relFromTop] 的位置（0 顶，1 底）。
+  /// 滚轮以鼠标为焦点时，鼠标下的价格不乱跑。
+  void pinPriceAtPlotFraction({
+    required List<KlineBar> bars,
+    required double price,
+    required double relFromTop,
+  }) {
+    if (!ready || bars.isEmpty) return;
+    var yMin = bars.first.low;
+    var yMax = bars.first.high;
+    for (final b in bars) {
+      yMin = math.min(yMin, b.low);
+      yMax = math.max(yMax, b.high);
+    }
+    if ((yMax - yMin).abs() < 1e-9) {
+      yMin -= 0.5;
+      yMax += 0.5;
+    }
+    final baseSpan = math.max(1e-6, yMax - yMin);
+    final mid = (yMax + yMin) / 2;
+    final rel = relFromTop.clamp(0.0, 1.0);
+    final shift = (price - mid) / baseSpan + (rel - 0.5) / yZoomRatio;
+    yShiftRatio = shift.clamp(-maxYShift, maxYShift);
   }
 
   /// 双指/滚轮纵向缩放：factor>1 放大，<1 缩小。
