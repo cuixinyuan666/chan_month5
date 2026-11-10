@@ -3888,84 +3888,6 @@ class _KlineCompositePainter extends CustomPainter {
     return useHigh ? bars[x].high : bars[x].low;
   }
 
-  /// 首分型前：把旧种子合并框改写成「高高」框（全层同构）——
-  /// 取该层预锚单元在 `[seed.x1, seed.x2]` 区间内 high=max(high)、low=max(low)。
-  /// 与动态 K 蜡烛同源：确认始起由真实 OHLC 接管，故此处只对首段生效。
-  KlineCombineFrame? _highHighFrameFromUnits(
-    int level,
-    KlineCombineFrame seed,
-  ) {
-    final asOf = segAsOf ?? (bars.isEmpty ? -1 : bars.last.idx);
-    if (asOf < 0) return null;
-    final units = asOfLevelVirtualK1Bars(
-      levels: levels,
-      barFeatures: barFeatures,
-      level: level,
-      asOf: asOf,
-      includeBuilding: true,
-      includePreAnchor: true,
-    );
-    if (units.isEmpty) return null;
-    double? hi;
-    double? lo;
-    var x1 = seed.x1;
-    var x2 = seed.x2;
-    for (final u in units) {
-      if (u.x2 < seed.x1 || u.x1 > seed.x2) continue;
-      hi = hi == null ? u.high : math.max(hi, u.high);
-      lo = lo == null ? u.low : math.max(lo, u.low);
-      x1 = math.min(x1, u.x1);
-      x2 = math.max(x2, u.x2);
-    }
-    if (hi == null || lo == null) return null;
-    return KlineCombineFrame(
-      x1: x1,
-      x2: x2,
-      t1: seed.t1,
-      t2: seed.t2,
-      high: hi,
-      low: lo,
-      fx: seed.fx,
-      count: math.max(1, seed.count),
-    );
-  }
-
-  /// 子窗口首框（K1 及以上）：首组恒为单单元（K1 idx=0），直接按它的
-  /// view 区间画成合并框，不再沿用种子框/经典首组的低低几何。
-  ///
-  /// 口径：x 取首组框的 x1..x2；high=max(逐根 high)、low=max(逐根 low)。
-  /// 注意必须按**逐根 K** 取高高，不能拿单元聚合后的 low 再取最大——
-  /// 首组只有一个单元，聚合 low 就是区间最低点，结果仍是低低大框
-  /// （这正是 K1 窗口首框一直不变高高的原因）。
-  KlineCombineFrame? _firstUnitHighHighFrame(KlineCombineFrame firstFrame) {
-    final asOf = segAsOf ?? (bars.isEmpty ? -1 : bars.last.idx);
-    if (asOf < 0) return null;
-    final x1 = math.max(0, firstFrame.x1);
-    final x2 = math.min(asOf, firstFrame.x2);
-    if (x2 < x1) return null;
-    double? hi;
-    double? lo;
-    for (final b in bars) {
-      if (b.idx < x1) continue;
-      if (b.idx > x2) continue;
-      hi = hi == null ? b.high : math.max(hi, b.high);
-      lo = lo == null ? b.low : math.max(lo, b.low);
-    }
-    if (hi == null || lo == null) return null;
-    return KlineCombineFrame(
-      x1: x1,
-      x2: x2,
-      t1: firstFrame.t1,
-      t2: firstFrame.t2,
-      high: hi,
-      low: lo,
-      fx: firstFrame.fx,
-      count: math.max(1, firstFrame.count),
-      endAtLeftHalf: firstFrame.endAtLeftHalf,
-      startAtRightHalf: firstFrame.startAtRightHalf,
-    );
-  }
-
   /// 种子框画线全层同构入口：UNKNOWN→开口虚线；JUDGE/CONFIRM→ABC（互斥）。
   void _drawSeedPhaseLines(
     Canvas canvas,
@@ -4481,13 +4403,13 @@ class _KlineCompositePainter extends CustomPainter {
     if (displayFrames.isEmpty) return;
 
     var frames = displayFrames;
-    // 开关开：子窗口首框直接用该层第一个单元（K1 idx=0）画，
-    // high/low 按逐根 K 取高高，不再沿用种子框/经典首组的低低几何。
-    if (earlyDynamicUnit) {
-      final hh = _firstUnitHighHighFrame(frames.first);
-      if (hh != null) {
-        frames = <KlineCombineFrame>[hh, ...frames.sublist(1)];
-      }
+    // 开关开（全层同构）：首分型前的第一组框不画——该层第一根 K 没有
+    // 「合并」语义；子窗口同时弃用种子框（seedPhaseVisible 已 gate）。
+    // 从第一根 K 起的「高高」由预锚动态单元（K 蜡烛/连线）承担，不另画框。
+    if (earlyDynamicUnit &&
+        frames.first.fx == 'UNKNOWN' &&
+        frames.first.x1 <= 0) {
+      frames = frames.sublist(1);
     }
 
     final style = ChartLevelLineStyle.forDisplayKn(kn);
@@ -6324,13 +6246,12 @@ class _KlineCompositePainter extends CustomPainter {
     // 改为用该层预锚单元重建成「高高」首组框（high 取最高、low 也取最高），
     // 与动态 K 蜡烛/连线同一输入，全层同构。
     var frames = combineFrames;
-    // 开关开：首段一组（第一个分型确认之前）不沿用经典种子几何/经典吸收低点，
-    // 一律按该层预锚单元重算成「高高」框（high=max(high)、low=max(low)）。
-    if (earlyDynamicUnit) {
-      final hh = _highHighFrameFromUnits(0, combineFrames.first);
-      if (hh != null) {
-        frames = <KlineCombineFrame>[hh, ...combineFrames.sublist(1)];
-      }
+    // 开关开（全层同构）：首分型前的第一组框不画——第一根 K 没有「合并」语义；
+    // 从第一根 K 起的「高高」由预锚动态单元（K 蜡烛/连线）承担，不另画框。
+    if (earlyDynamicUnit &&
+        combineFrames.first.fx == 'UNKNOWN' &&
+        combineFrames.first.x1 <= 0) {
+      frames = combineFrames.sublist(1);
     }
     if (frames.isEmpty) return;
     // 末组=构建中合并（虚线）；前组=已冻结合并（实线）。
