@@ -187,6 +187,22 @@ function Start-ChanApp([string]$repoRoot, [string]$flutterDir, [string]$exePath)
 }
 
 $repoRoot = Select-RepoRoot
+
+function Ensure-RemoteAgent([string]$root) {
+    $agent = Join-Path $root "CHAN_RUST\scripts\remote_app_agent.ps1"
+    if (-not (Test-Path -LiteralPath $agent)) { return }
+    $running = Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -and $_.CommandLine -match 'remote_app_agent' }
+    if ($running) { return }
+    Write-Step "agent: start remote_app_agent"
+    Start-Process -FilePath "powershell.exe" -ArgumentList @(
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
+        "-File", $agent, "-RepoRoot", $root
+    ) -WindowStyle Hidden
+}
+
+Ensure-RemoteAgent $repoRoot
+
 $wb = Test-Path (Join-Path $repoRoot ".workbuddy")
 Write-Step "repo: $repoRoot $(if ($wb) { '[WorkBuddy]' } else { '' })"
 
