@@ -12,8 +12,8 @@ function Find-RepoCandidates {
 
     foreach ($p in @(
             $env:CHAN_REPO_ROOT,
-            (Join-Path $env:USERPROFILE "Downloads\chan\chan_month5"),
-            "D:\2\chan_month5"
+            "D:\2\chan_month5",
+            (Join-Path $env:USERPROFILE "Downloads\chan\chan_month5")
         )) {
         if ([string]::IsNullOrWhiteSpace($p)) { continue }
         try {
