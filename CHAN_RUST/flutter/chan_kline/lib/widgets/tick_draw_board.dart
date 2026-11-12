@@ -3,11 +3,13 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../chart/level_window_layout.dart';
-import '../compute/chart_view_compute.dart';
-import '../models/k1_bar.dart';
+import '../compute/k1_bar_view_compute.dart';
+import '../models/chart_indicator.dart';
+import '../models/k1_bar_view.dart';
 import '../models/kline_bar.dart';
 import '../models/kline_combine_bundle.dart';
-import '../theme/app_palette.dart';
+import 'kline_chart.dart';
+import 'level_chart_grid.dart';
 
 /// 分笔画板的纯数据口径：只编辑 K0，K1 及以上由现有缠论计算自动生成。
 class TickDrawPoint {
@@ -74,8 +76,14 @@ class TickDrawBoardModel {
         for (final bar in bars) TickDrawPoint(price: bar.close, volume: bar.volume),
       ],
       windowCount: kLevelWindowDefaultCount,
+      selected: bars.length - 1,
       start: bars.first.timeText,
     );
+  }
+
+  TickDrawBoardModel selectPoint(int index) {
+    if (points.isEmpty) return this;
+    return copyWith(selected: index.clamp(0, points.length - 1));
   }
 
   TickDrawBoardModel addPoint() {
@@ -94,19 +102,24 @@ class TickDrawBoardModel {
 
   TickDrawBoardModel duplicatePoint() => addPoint();
 
-  TickDrawBoardModel movePoint(int index, Offset delta, {required double rowHeight}) {
-    if (index < 0 || index >= points.length) return this;
-    final priceSteps = -(delta.dy / math.max(1, rowHeight / 20)).round();
-    final slotSteps = (delta.dx / 28).round();
+  /// 设置当前选中分笔的价格（按 [priceStep] 网格吸附）。
+  TickDrawBoardModel setSelectedPrice(double price) {
+    if (points.isEmpty) return this;
+    final i = safeSelected;
     final next = [...points];
-    final moved = next.removeAt(index);
-    final target = (index + slotSteps).clamp(0, next.length);
-    next.insert(
-      target,
-      moved.copyWith(
-        price: _snap(moved.price + priceSteps * priceStep),
-      ),
-    );
+    next[i] = next[i].copyWith(price: _snap(price));
+    return copyWith(points: next);
+  }
+
+  /// 沿时间轴平移当前选中分笔（正数向后、负数向前），选中位置跟随。
+  TickDrawBoardModel shiftSelected(int delta) {
+    if (points.isEmpty || delta == 0) return this;
+    final i = safeSelected;
+    final target = (i + delta).clamp(0, points.length - 1);
+    if (target == i) return this;
+    final next = [...points];
+    final moved = next.removeAt(i);
+    next.insert(target, moved);
     return copyWith(points: next, selected: target);
   }
 
@@ -121,14 +134,6 @@ class TickDrawBoardModel {
       for (var i = 0; i < points.length; i++)
         _barAt(startTime.add(Duration(seconds: i * 3)), i, points[i]),
     ];
-  }
-
-  List<K1Bar> generatedBars({
-    required int level,
-    required KlineCombineBundle bundle,
-  }) {
-    if (level <= 0 || level >= bundle.levels.length) return const [];
-    return levelBundleVirtualK1Bars(bundle.levels[level - 1]);
   }
 }
 
@@ -165,44 +170,73 @@ DateTime? _parse(String text) {
   );
 }
 
-class TickDrawBoard extends StatelessWidget {
+/// 分笔画板：窗口直接用原 `KlineChart`（K 线形态/指标/十字线全同原分窗）。
+/// K0 额外叠一层拖拽编辑手势；K1 及以上只读。
+class TickDrawBoard extends StatefulWidget {
   const TickDrawBoard({
     super.key,
     required this.model,
     required this.bundle,
+    required this.mainIndicators,
+    required this.subIndicators,
+    required this.truncationCheck,
+    required this.earlyDynamicUnit,
+    required this.showBuildingDash,
     required this.onChanged,
+    required this.onMainIndicatorsChanged,
+    required this.onSubIndicatorsChanged,
     required this.onSave,
     required this.onClose,
   });
 
   final TickDrawBoardModel model;
   final KlineCombineBundle bundle;
+  final Set<MainChartIndicator> mainIndicators;
+  final Set<SubChartIndicator> subIndicators;
+  final bool truncationCheck;
+  final bool earlyDynamicUnit;
+  final bool showBuildingDash;
   final ValueChanged<TickDrawBoardModel> onChanged;
+  final ValueChanged<Set<MainChartIndicator>> onMainIndicatorsChanged;
+  final ValueChanged<Set<SubChartIndicator>> onSubIndicatorsChanged;
   final VoidCallback onSave;
   final VoidCallback onClose;
 
   @override
+  State<TickDrawBoard> createState() => _TickDrawBoardState();
+}
+
+class _TickDrawBoardState extends State<TickDrawBoard> {
+  bool _dragMode = false;
+  double _dragStartPrice = 0;
+  int _dragAppliedSteps = 0;
+  double _dragAccumDx = 0;
+  double _dragAccumDy = 0;
+
+  TickDrawBoardModel get model => widget.model;
+  KlineCombineBundle get bundle => widget.bundle;
+
+  @override
   Widget build(BuildContext context) {
-    final grid = LevelWindowGrid(model.windowCount);
+    final bars = model.toTickBars();
+    final k1Views = buildK1BarViews(bundle.k1Bars);
+    final maxKn = chartMaxKn(levels: bundle.levels, k0Lines: bundle.k0Lines);
     return Material(
-      color: const Color(0xCC111827),
+      color: const Color(0xF2121722),
       child: SafeArea(
         child: Column(
           children: [
-            _toolbar(context),
+            _toolbar(),
             Expanded(
-              child: Column(
-                children: [
-                  for (var row = 0; row < grid.rows; row++)
-                    Expanded(
-                      child: Row(
-                        children: [
-                          for (var col = 0; col < grid.cols; col++)
-                            Expanded(child: _pane(row * grid.cols + col)),
-                        ],
-                      ),
-                    ),
-                ],
+              child: LevelChartGrid(
+                count: model.windowCount,
+                levels: [for (var i = 0; i < model.windowCount; i++) i],
+                maxKn: maxKn,
+                paneBuilder: (context, slot, level, primary) => _pane(
+                  level: level,
+                  bars: bars,
+                  k1Views: k1Views,
+                ),
               ),
             ),
           ],
@@ -211,9 +245,9 @@ class TickDrawBoard extends StatelessWidget {
     );
   }
 
-  Widget _toolbar(BuildContext context) {
+  Widget _toolbar() {
     return Container(
-      height: 48,
+      height: 44,
       padding: const EdgeInsets.symmetric(horizontal: 8),
       child: Row(
         children: [
@@ -228,29 +262,40 @@ class TickDrawBoard extends StatelessWidget {
                 DropdownMenuItem(value: count, child: Text('$count窗')),
             ],
             onChanged: (count) {
-              if (count != null) onChanged(model.copyWith(windowCount: count));
+              if (count != null) widget.onChanged(model.copyWith(windowCount: count));
             },
           ),
-          const Spacer(),
+          const SizedBox(width: 12),
+          Text(
+            '选中第 ${model.safeSelected + 1}/${model.points.length} 笔',
+            style: const TextStyle(color: Colors.white70, fontSize: 12),
+          ),
+          const SizedBox(width: 8),
           IconButton(
             tooltip: '增加',
-            onPressed: () => onChanged(model.addPoint()),
+            onPressed: () => widget.onChanged(model.addPoint()),
             icon: const Icon(Icons.add, color: Colors.white),
           ),
           IconButton(
             tooltip: '减少',
-            onPressed: () => onChanged(model.removePoint()),
+            onPressed: () => widget.onChanged(model.removePoint()),
             icon: const Icon(Icons.remove, color: Colors.white),
           ),
           IconButton(
             tooltip: '复制',
-            onPressed: () => onChanged(model.duplicatePoint()),
+            onPressed: () => widget.onChanged(model.duplicatePoint()),
             icon: const Icon(Icons.copy, color: Colors.white),
           ),
-          TextButton(onPressed: onSave, child: const Text('保存并加载')),
+          FilterChip(
+            label: const Text('拖拽'),
+            selected: _dragMode,
+            onSelected: (v) => setState(() => _dragMode = v),
+          ),
+          const Spacer(),
+          TextButton(onPressed: widget.onSave, child: const Text('保存并加载')),
           IconButton(
             tooltip: '关闭',
-            onPressed: onClose,
+            onPressed: widget.onClose,
             icon: const Icon(Icons.close, color: Colors.white),
           ),
         ],
@@ -258,116 +303,108 @@ class TickDrawBoard extends StatelessWidget {
     );
   }
 
-  Widget _pane(int level) {
-    final bars = level == 0
-        ? model.toTickBars()
-        : model.generatedBars(level: level, bundle: bundle);
-    return Container(
-      margin: const EdgeInsets.all(4),
-      decoration: BoxDecoration(
-        border: Border.all(color: AppPalette.rgb(0xFF334155)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(4),
-            child: Text('K$level', style: const TextStyle(color: Colors.white70, fontSize: 12)),
-          ),
-          Expanded(
-            child: level == 0 ? _editablePane(bars.cast<KlineBar>()) : _generatedPane(bars.cast<K1Bar>()),
-          ),
-        ],
-      ),
+  Widget _pane({
+    required int level,
+    required List<KlineBar> bars,
+    required List<K1BarView> k1Views,
+  }) {
+    final chart = KlineChart(
+      key: ValueKey<String>('tick-draw-$level-${model.windowCount}'),
+      interactive: level == 0 ? !_dragMode : true,
+      ownsKeyboard: level == 0 && !_dragMode,
+      displayLevel: level,
+      forceSubPane: true,
+      bars: bars,
+      period: 'tick',
+      combineFrames: bundle.frames,
+      k0ConfirmSignals: bundle.k0Confirms,
+      barFeatures: bundle.barFeatures,
+      k0Lines: bundle.k0Lines,
+      k1BarViews: k1Views,
+      k1CombineFrames: bundle.k1CombineFrames,
+      k1Analysis: bundle.k1Analysis,
+      levels: bundle.levels,
+      zsK0Frames: bundle.zsK0Frames,
+      buy1K0Frames: bundle.buy1K0Frames,
+      sell1K0Frames: bundle.sell1K0Frames,
+      buy2K0Frames: bundle.buy2K0Frames,
+      sell2K0Frames: bundle.sell2K0Frames,
+      buyNK0Frames: bundle.buyNK0Frames,
+      sellNK0Frames: bundle.sellNK0Frames,
+      defaultK0Policy: bundle.defaultK0Policy,
+      stepIdx: bars.length - 1,
+      stepSerial: model.points.length,
+      truncationCheck: widget.truncationCheck,
+      earlyDynamicUnit: widget.earlyDynamicUnit,
+      showBuildingDash: widget.showBuildingDash,
+      mainIndicators: widget.mainIndicators,
+      subIndicators: widget.subIndicators,
+      onMainIndicatorsChanged: widget.onMainIndicatorsChanged,
+      onSubIndicatorsChanged: widget.onSubIndicatorsChanged,
+      indicatorsEnabled: true,
+      autoFollowLatest: true,
+    );
+    if (level != 0 || !_dragMode) return chart;
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        chart,
+        _dragLayer(),
+      ],
     );
   }
 
-  Widget _editablePane(List<KlineBar> bars) {
+  Widget _dragLayer() {
     return LayoutBuilder(
       builder: (context, constraints) {
+        final bars = model.toTickBars();
+        final span = _priceSpan(bars);
+        final n = math.max(1, model.points.length);
+        final slotWidth = constraints.maxWidth / n;
         return GestureDetector(
-          onPanUpdate: (details) => onChanged(
-            model.movePoint(
-              model.safeSelected,
-              details.delta,
-              rowHeight: constraints.maxHeight,
-            ),
-          ),
-          child: CustomPaint(
-            painter: _TickGridPainter(
-              values: [for (final bar in bars) bar.close],
-              selected: model.safeSelected,
-              editable: true,
-            ),
-            child: const SizedBox.expand(),
-          ),
+          behavior: HitTestBehavior.opaque,
+          onTapDown: (d) {
+            final i = (d.localPosition.dx / slotWidth).floor().clamp(0, n - 1);
+            widget.onChanged(model.selectPoint(i));
+          },
+          onPanStart: (d) {
+            final i = (d.localPosition.dx / slotWidth).floor().clamp(0, n - 1);
+            _dragStartPrice = model.points[i].price;
+            _dragAppliedSteps = 0;
+            _dragAccumDx = 0;
+            _dragAccumDy = 0;
+            widget.onChanged(model.selectPoint(i));
+          },
+          onPanUpdate: (d) {
+            _dragAccumDx += d.delta.dx;
+            _dragAccumDy += d.delta.dy;
+            var next = model;
+            final steps = slotWidth <= 0 ? 0 : (_dragAccumDx / slotWidth).round();
+            final deltaSteps = steps - _dragAppliedSteps;
+            if (deltaSteps != 0) {
+              next = next.shiftSelected(deltaSteps);
+              _dragAppliedSteps = steps;
+            }
+            final price = _dragStartPrice -
+                (_dragAccumDy / math.max(1, constraints.maxHeight)) * span;
+            widget.onChanged(next.setSelectedPrice(price));
+          },
+          onPanEnd: (_) {
+            _dragAppliedSteps = 0;
+          },
         );
       },
     );
   }
 
-  Widget _generatedPane(List<K1Bar> bars) {
-    return CustomPaint(
-      painter: _TickGridPainter(
-        values: [for (final bar in bars) bar.close],
-        selected: -1,
-        editable: false,
-      ),
-      child: const SizedBox.expand(),
-    );
-  }
-}
-
-class _TickGridPainter extends CustomPainter {
-  const _TickGridPainter({
-    required this.values,
-    required this.selected,
-    required this.editable,
-  });
-
-  final List<double> values;
-  final int selected;
-  final bool editable;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final grid = Paint()
-      ..color = const Color(0x33475569)
-      ..strokeWidth = 1;
-    for (var i = 1; i < 6; i++) {
-      final y = size.height * i / 6;
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), grid);
+  double _priceSpan(List<KlineBar> bars) {
+    if (bars.isEmpty) return 0.01;
+    var hi = double.negativeInfinity;
+    var lo = double.infinity;
+    for (final bar in bars) {
+      hi = math.max(hi, bar.high);
+      lo = math.min(lo, bar.low);
     }
-    for (var i = 1; i < values.length; i++) {
-      final x = size.width * i / math.max(1, values.length);
-      canvas.drawLine(Offset(x, 0), Offset(x, size.height), grid);
-    }
-    if (values.isEmpty) return;
-    final minValue = values.reduce(math.min);
-    final maxValue = values.reduce(math.max);
-    final span = math.max(0.01, maxValue - minValue);
-    final paint = Paint()
-      ..color = editable ? Colors.white : Colors.lightBlueAccent
-      ..strokeWidth = 1.5
-      ..style = PaintingStyle.stroke;
-    final path = Path();
-    for (var i = 0; i < values.length; i++) {
-      final x = values.length == 1 ? size.width / 2 : size.width * i / (values.length - 1);
-      final y = size.height - ((values[i] - minValue) / span) * (size.height - 12) - 6;
-      if (i == 0) {
-        path.moveTo(x, y);
-      } else {
-        path.lineTo(x, y);
-      }
-      if (i == selected) {
-        canvas.drawCircle(Offset(x, y), 4, Paint()..color = Colors.orangeAccent);
-      }
-    }
-    canvas.drawPath(path, paint);
-  }
-
-  @override
-  bool shouldRepaint(covariant _TickGridPainter oldDelegate) {
-    return oldDelegate.values != values || oldDelegate.selected != selected;
+    return math.max(0.01, hi - lo);
   }
 }

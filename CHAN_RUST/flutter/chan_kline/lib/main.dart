@@ -3886,7 +3886,14 @@ class _KlineHomePageState extends State<KlineHomePage>
               child: TickDrawBoard(
                 model: _tickDrawBoard!,
                 bundle: _tickDrawBundle!,
+                mainIndicators: _splitMainIndicators,
+                subIndicators: _sessionSplitSubIndicators,
+                truncationCheck: _truncationCheck,
+                earlyDynamicUnit: _earlyDynamicUnit,
+                showBuildingDash: _showBuildingDash,
                 onChanged: _updateTickDrawBoard,
+                onMainIndicatorsChanged: _applySplitMainIndicators,
+                onSubIndicatorsChanged: _applySplitSubIndicators,
                 onSave: _saveTickDrawBoard,
                 onClose: () => setState(() => _tickDrawBoardOpen = false),
               ),
@@ -6277,9 +6284,11 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
               '1. 股票选择 test；\n'
               '2. 点「分笔画板」，在 K 线页面拉出画板；\n'
               '3. 选择窗口数量，窗口按 K0、K1、K2 依次显示；\n'
-              '4. 只在 K0 窗口增加、减少、复制分笔，拖拽原点按网格对齐；\n'
-              '5. K1 及以上窗口自动生成；\n'
-              '6. 点「保存并加载」，写入 a_Data/test/custom.ohlc.csv 并重新加载。',
+              '4. 每个窗口都是原分窗样式，K 线/指标/十字线可直接使用；\n'
+              '5. 只在 K0 窗口增加、减少、复制分笔；打开「拖拽」后拖动原点，'
+              '价格按网格吸附、左右拖动换 K 线位置；\n'
+              '6. K1 及以上窗口自动生成；\n'
+              '7. 点「保存并加载」，写入 a_Data/test/custom.ohlc.csv 并重新加载。',
             ),
           ),
           actions: [
@@ -6312,6 +6321,14 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
       earlyDynamicUnit: _earlyDynamicUnit,
       truncationCheck: _truncationCheck,
     );
+    // 画板子窗沿用分窗指标集合：首次进入补默认 Kn/Kn连线，已选过的保留。
+    _splitIndicatorsReady = true;
+    _splitMainIndicators = <MainChartIndicator>{
+      ..._splitMainIndicators,
+      ...defaultLevelWindowMainIndicators([
+        for (var i = 0; i < model.windowCount; i++) i,
+      ]),
+    };
     setState(() {
       _tickDrawBoard = model;
       _tickDrawBundle = bundle;

@@ -1,6 +1,5 @@
 import 'package:chan_kline/models/kline_bar.dart';
 import 'package:chan_kline/widgets/tick_draw_board.dart';
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -22,10 +21,13 @@ void main() {
     final added = model.addPoint().duplicatePoint();
     expect(added.points.length, 3);
 
-    final moved = added.movePoint(1, const Offset(30, -20), rowHeight: 200);
-    expect(moved.points[2].price, closeTo(10.02, 1e-9));
+    final moved = added.setSelectedPrice(10.017);
+    expect(moved.points[moved.safeSelected].price, closeTo(10.02, 1e-9));
 
-    final removed = moved.removePoint();
+    final shifted = moved.shiftSelected(-1);
+    expect(shifted.points.length, 3);
+
+    final removed = shifted.removePoint();
     expect(removed.points.length, 2);
   });
 
