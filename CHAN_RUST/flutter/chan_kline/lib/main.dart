@@ -101,6 +101,7 @@ import 'widgets/kline_axis_format.dart';
 import 'widgets/yin_yang_mark.dart';
 import 'widgets/yin_yang_native_overlay.dart';
 import 'widgets/test_ohlc_editor_dialog.dart';
+import 'widgets/tick_draw_board.dart';
 import 'window_work_area.dart';
 import 'robot_verify/robot_verify_app.dart';
 import 'robot_verify/robot_verify_paths.dart';
@@ -521,6 +522,10 @@ class _KlineHomePageState extends State<KlineHomePage>
   bool _earlyDynamicUnit = true;
   /// 构建中合并框（虚线）开关：开=末组合并画虚线；关=全部实线（默认开）
   bool _showBuildingDash = true;
+  /// 分笔画板：只在 TEST 股票设置中打开，编辑 K0 后自动生成上层窗口。
+  bool _tickDrawBoardOpen = false;
+  TickDrawBoardModel? _tickDrawBoard;
+  KlineCombineBundle? _tickDrawBundle;
   /// 筹码分布配置（落盘 .chan_chip_config.json）
   ChipConfig _chipConfig = const ChipConfig();
   /// 笔数分布配置（主图左侧；同 JSON 嵌套 tickDist）
@@ -3874,6 +3879,18 @@ class _KlineHomePageState extends State<KlineHomePage>
               ),
             ),
           if (_libHalt) _buildLibHaltOverlay(),
+          if (_tickDrawBoardOpen &&
+              _tickDrawBoard != null &&
+              _tickDrawBundle != null)
+            Positioned.fill(
+              child: TickDrawBoard(
+                model: _tickDrawBoard!,
+                bundle: _tickDrawBundle!,
+                onChanged: _updateTickDrawBoard,
+                onSave: _saveTickDrawBoard,
+                onClose: () => setState(() => _tickDrawBoardOpen = false),
+              ),
+            ),
         ],
       ),
           ),
@@ -4275,6 +4292,14 @@ class _KlineHomePageState extends State<KlineHomePage>
             onPressed: _busy ? null : _openTestOhlcEditor,
             onHelp: _showTestOhlcHelp,
             helpTooltip: '自定义 OHLC 说明',
+          ),
+          const SizedBox(height: 8),
+          SettingsOutlinedButton(
+            label: '分笔画板',
+            icon: Icons.gesture,
+            onPressed: _busy ? null : _openTickDrawBoard,
+            onHelp: _showTickDrawBoardHelp,
+            helpTooltip: '分笔画板说明',
           ),
         ],
         const SizedBox(height: 10),
@@ -6238,6 +6263,97 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
         ],
       ),
     ));
+  }
+
+  void _showTickDrawBoardHelp() {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => SelectionArea(
+        child: AlertDialog(
+          title: const Text('分笔画板说明'),
+          content: const SingleChildScrollView(
+            child: Text(
+              '操作步骤：\n'
+              '1. 股票选择 test；\n'
+              '2. 点「分笔画板」，在 K 线页面拉出画板；\n'
+              '3. 选择窗口数量，窗口按 K0、K1、K2 依次显示；\n'
+              '4. 只在 K0 窗口增加、减少、复制分笔，拖拽原点按网格对齐；\n'
+              '5. K1 及以上窗口自动生成；\n'
+              '6. 点「保存并加载」，写入 a_Data/test/custom.ohlc.csv 并重新加载。',
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('知道了'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openTickDrawBoard() async {
+    List<KlineBar> seed = _allBars;
+    if (_hasTestOhlcCsv()) {
+      try {
+        seed = _bridge.loadKlines(
+          dataRoot: _dataRoot,
+          code: 'test',
+          beginDate: '1990/01/01 00:00:00',
+          endDate: '2100/12/31 23:59:59',
+          period: 'tick',
+        );
+      } catch (_) {}
+    }
+    final model = TickDrawBoardModel.fromBars(seed);
+    final bundle = _bridge.buildKlineCombineBundle(
+      model.toTickBars(),
+      earlyDynamicUnit: _earlyDynamicUnit,
+      truncationCheck: _truncationCheck,
+    );
+    setState(() {
+      _tickDrawBoard = model;
+      _tickDrawBundle = bundle;
+      _tickDrawBoardOpen = true;
+    });
+  }
+
+  void _updateTickDrawBoard(TickDrawBoardModel model) {
+    final bundle = _bridge.buildKlineCombineBundle(
+      model.toTickBars(),
+      earlyDynamicUnit: _earlyDynamicUnit,
+      truncationCheck: _truncationCheck,
+    );
+    setState(() {
+      _tickDrawBoard = model;
+      _tickDrawBundle = bundle;
+    });
+  }
+
+  Future<void> _saveTickDrawBoard() async {
+    final model = _tickDrawBoard;
+    if (model == null) return;
+    final bars = model.toTickBars();
+    try {
+      final saved = _bridge.saveTestOhlc(dataRoot: _dataRoot, bars: bars);
+      _msgHistory.append('分笔画板：保存${saved.count}根 → ${saved.path}');
+      if (bars.isNotEmpty) {
+        final begin = _tryParseBarTime(bars.first.timeText);
+        final end = _tryParseBarTime(bars.last.timeText);
+        if (begin != null && end != null) {
+          setState(() {
+            _beginDate = begin;
+            _endDate = end;
+            _tickDrawBoardOpen = false;
+          });
+        }
+      }
+      await _loadKlines();
+    } catch (e) {
+      setState(() => _error = e.toString());
+      _msgHistory.append('分笔画板保存失败：$e');
+    }
   }
 
   Future<void> _openTestOhlcEditor() async {
