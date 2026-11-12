@@ -1190,7 +1190,7 @@ class _KlineHomePageState extends State<KlineHomePage>
         const SizedBox(height: 8),
         Text(
           rangeText,
-          style: const TextStyle(fontSize: 12, color: Colors.white70),
+          style: TextStyle(fontSize: 12, color: AppPalette.rgb(0xB3FFFFFF)),
         ),
       ],
     );
@@ -4106,7 +4106,7 @@ class _KlineHomePageState extends State<KlineHomePage>
           child: Icon(
             Icons.fast_rewind,
             size: 16,
-            color: AppPalette.rgb(0xFFE2E8F0),
+            color: AppPalette.controlInk,
           ),
         ),
         // 步进至最后：原窗口右边界长按功能迁到顶栏（右边界长按改为播放/暂停）。
@@ -4116,7 +4116,7 @@ class _KlineHomePageState extends State<KlineHomePage>
           child: Icon(
             Icons.fast_forward,
             size: 16,
-            color: AppPalette.rgb(0xFFE2E8F0),
+            color: AppPalette.controlInk,
           ),
         ),
         // 子窗口全屏：点开下拉选择目标子窗口；已全屏时显示退出按钮。
@@ -4129,7 +4129,7 @@ class _KlineHomePageState extends State<KlineHomePage>
             child: Icon(
               Icons.fullscreen_exit,
               size: 16,
-              color: AppPalette.rgb(0xFFE2E8F0),
+              color: AppPalette.controlInk,
             ),
           )
         else if (_splitActive)
@@ -4140,7 +4140,7 @@ class _KlineHomePageState extends State<KlineHomePage>
               child: Icon(
                 Icons.fullscreen,
                 size: 16,
-                color: AppPalette.rgb(0xFFE2E8F0),
+                color: AppPalette.controlInk,
               ),
             ),
           ),
@@ -4151,7 +4151,7 @@ class _KlineHomePageState extends State<KlineHomePage>
           child: Icon(
             Icons.autorenew,
             size: 16,
-            color: AppPalette.rgb(0xFFE2E8F0),
+            color: AppPalette.controlInk,
           ),
         ),
         _CaptionBarButton(
@@ -4160,7 +4160,7 @@ class _KlineHomePageState extends State<KlineHomePage>
           child: Icon(
             _panelExpanded ? Icons.close : Icons.settings,
             size: 16,
-            color: AppPalette.rgb(0xFFE2E8F0),
+            color: AppPalette.controlInk,
           ),
         ),
         _CaptionBarButton(
@@ -4169,7 +4169,7 @@ class _KlineHomePageState extends State<KlineHomePage>
           child: Icon(
             Icons.remove,
             size: 16,
-            color: AppPalette.rgb(0xFFE2E8F0),
+            color: AppPalette.controlInk,
           ),
         ),
         _CaptionBarButton(
@@ -4178,7 +4178,7 @@ class _KlineHomePageState extends State<KlineHomePage>
           child: Icon(
             Icons.crop_square,
             size: 14,
-            color: AppPalette.rgb(0xFFE2E8F0),
+            color: AppPalette.controlInk,
           ),
         ),
         _CaptionBarButton(
@@ -4187,7 +4187,7 @@ class _KlineHomePageState extends State<KlineHomePage>
           child: Icon(
             Icons.close,
             size: 16,
-            color: AppPalette.rgb(0xFFE2E8F0),
+            color: AppPalette.controlInk,
           ),
         ),
       ],

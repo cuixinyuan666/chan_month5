@@ -8,10 +8,10 @@ import 'package:chan_kline/theme/app_palette.dart';
 /// - 顶分型（TOP，value<0）= 蓝
 /// 踩坑：旧口径「红涨绿跌」已废；截断同色相 + 橙描边区分。
 abstract final class FractalConfirmColors {
-  static final bottom = AppPalette.rgb(0xFFE53935); // 底分型：红
-  static final top = AppPalette.rgb(0xFF1E88E5); // 顶分型：蓝
+  static Color get bottom => AppPalette.rgb(0xFFE53935); // 底分型：红
+  static Color get top => AppPalette.rgb(0xFF1E88E5); // 顶分型：蓝
   /// 浅描边，叠画时从下层标记里“抠”出来
-  static final outline = AppPalette.rgb(0xCC121212);
+  static Color get outline => AppPalette.rgb(0xCC121212);
 
   static Color of(int value) => value > 0 ? bottom : top;
 }
@@ -20,8 +20,8 @@ abstract final class FractalConfirmColors {
 /// 统一口径：对「上个中枢」——相对前一中枢中轴抬高=升红，下移=降绿。
 /// （勿用框 first.dir：常与位置升降相反，例 85 确认抬高却 dir=-1）
 abstract final class ZsSignalColors {
-  static final rise = AppPalette.rgb(0xFFE53935); // 上升中枢（抬高）
-  static final fall = AppPalette.rgb(0xFF16A34A); // 下降中枢（下移）
+  static Color get rise => AppPalette.rgb(0xFFE53935); // 上升中枢（抬高）
+  static Color get fall => AppPalette.rgb(0xFF16A34A); // 下降中枢（下移）
   static Color of(int value) => value > 0 ? rise : fall;
 }
 
@@ -73,7 +73,7 @@ double confirmStackOffsetX({
 /// - 顶分型截断（value<0）= 蓝
 /// 另加橙描边，与「分型确认」实心点区分。
 abstract final class TruncationMarkerColors {
-  static final accent = AppPalette.rgb(0xFFFFB74D); // 橙描边：截断专属
+  static Color get accent => AppPalette.rgb(0xFFFFB74D); // 橙描边：截断专属
   static Color of(int value) => FractalConfirmColors.of(value);
 }
 

@@ -54,11 +54,11 @@ class IndicatorPickerOverlay<T> extends StatefulWidget {
 }
 
 class _IndicatorPickerOverlayState<T> extends State<IndicatorPickerOverlay<T>> {
-  static final _activeColor = AppPalette.rgb(0xFFFFFFFF);
-  static final _inactiveColor = AppPalette.rgb(0xFF6B7280);
-  static final _valueColor = AppPalette.rgb(0xFF38BDF8);
-  static final _hintColor = AppPalette.rgb(0xFF94A3B8);
-  static final _sectionColor = AppPalette.rgb(0xFFCBD5E1);
+  static Color get _activeColor => AppPalette.rgb(0xFFFFFFFF);
+  static Color get _inactiveColor => AppPalette.rgb(0xFF6B7280);
+  static Color get _valueColor => AppPalette.rgb(0xFF38BDF8);
+  static Color get _hintColor => AppPalette.rgb(0xFF94A3B8);
+  static Color get _sectionColor => AppPalette.rgb(0xFFCBD5E1);
 
   late Set<int> _expandedLevels;
   late Set<String> _expandedCategories;

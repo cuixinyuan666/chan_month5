@@ -46,11 +46,11 @@ class IndicatorPickerChip extends StatefulWidget {
 class _IndicatorPickerChipState extends State<IndicatorPickerChip> {
   bool _hovered = false;
 
-  static final _activeColor = AppPalette.rgb(0xFFFFFFFF);
-  static final _mutedColor = AppPalette.rgb(0xFF6B7280);
-  static final _sepActive = AppPalette.rgb(0xAAFFFFFF);
-  static final _sepMuted = AppPalette.rgb(0x556B7280);
-  static final _valueColor = AppPalette.rgb(0xFF38BDF8);
+  static Color get _activeColor => AppPalette.rgb(0xFFFFFFFF);
+  static Color get _mutedColor => AppPalette.rgb(0xFF6B7280);
+  static Color get _sepActive => AppPalette.rgb(0xAAFFFFFF);
+  static Color get _sepMuted => AppPalette.rgb(0x556B7280);
+  static Color get _valueColor => AppPalette.rgb(0xFF38BDF8);
 
   Widget _separator(IndicatorChipEntry cur, IndicatorChipEntry prev) {
     final bothMuted = cur.muted && prev.muted;

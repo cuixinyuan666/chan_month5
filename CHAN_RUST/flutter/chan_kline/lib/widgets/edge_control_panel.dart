@@ -49,7 +49,11 @@ class EdgeControlPanel extends StatelessWidget {
                     onPressed: onClose,
                     padding: EdgeInsets.zero,
                     constraints: const BoxConstraints.tightFor(width: 36, height: 36),
-                    icon: Icon(Icons.close, color: AppPalette.rgb(0xFFE2E8F0), size: 18),
+                    icon: Icon(
+                      Icons.close,
+                      color: AppPalette.controlInk,
+                      size: 18,
+                    ),
                   ),
                   const Expanded(
                     child: Text(
@@ -64,7 +68,11 @@ class EdgeControlPanel extends StatelessWidget {
                     onPressed: onCycleEdge,
                     padding: EdgeInsets.zero,
                     constraints: const BoxConstraints.tightFor(width: 36, height: 36),
-                    icon: const Icon(Icons.swap_horiz, size: 18),
+                     icon: Icon(
+                       Icons.swap_horiz,
+                       color: AppPalette.controlInk,
+                       size: 18,
+                     ),
                   ),
                 ],
               ),

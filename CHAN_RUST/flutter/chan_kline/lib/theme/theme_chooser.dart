@@ -12,42 +12,85 @@ class ThemeChooser extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cur = AppThemeController.instance.mode;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          '主题外观',
-          style: TextStyle(
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
-            color: AppPalette.textSecondary,
-          ),
-        ),
-        const SizedBox(height: 6),
-        Wrap(
-          spacing: 8,
-          runSpacing: 6,
+    // 自监听：主题切换 / 护眼暖色拖动都来自 AppThemeController，
+    // 外层即使传入同一个 const 实例，本控件也会随 notifyListeners 重建，
+    // 保证对勾、滑杆始终与当前模式/强度同步。
+    return ListenableBuilder(
+      listenable: AppThemeController.instance,
+      builder: (context, _) {
+        final cur = AppThemeController.instance.mode;
+        final warmth = AppThemeController.instance.eyeWarmth;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            for (final m in AppThemeMode.values)
-              ChoiceChip(
-                key: ValueKey<String>('theme_chip_${m.id}'),
-                label: Text(m.label),
-                selected: cur == m,
-                onSelected: (_) => AppThemeController.instance.setMode(m),
+            Text(
+              '主题外观',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: AppPalette.textSecondary,
               ),
+            ),
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 8,
+              runSpacing: 6,
+              children: [
+                for (final m in AppThemeMode.values)
+                  ChoiceChip(
+                    key: ValueKey<String>('theme_chip_${m.id}'),
+                    label: Text(m.label),
+                    selected: cur == m,
+                    onSelected: (_) => AppThemeController.instance.setMode(m),
+                  ),
+              ],
+            ),
+            if (cur == AppThemeMode.eyeCare) ...[
+              const SizedBox(height: 4),
+              Row(
+                children: [
+                  Expanded(
+                    child: Slider(
+                      key: const ValueKey('theme_eye_warmth'),
+                      value: warmth,
+                      min: 0.0,
+                      max: 1.0,
+                      onChanged: (v) => AppThemeController.instance.setEyeWarmth(v),
+                    ),
+                  ),
+                  SizedBox(
+                    width: 44,
+                    child: Text(
+                      '${(warmth * 100).round()}%',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: AppPalette.textSecondary,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              Text(
+                '暖色强度：越高越米黄，越低越接近纯白；拖动即时生效并保留。',
+                style: TextStyle(
+                  fontSize: 11,
+                  color: AppPalette.textSecondary,
+                  height: 1.3,
+                ),
+              ),
+            ],
+            const SizedBox(height: 4),
+            Text(
+              '深色=原来的黑底；浅色=白底；护眼=米黄底。切换即时生效，K 线画布/坐标/图例一起换，重启后保留。',
+              style: TextStyle(
+                fontSize: 11,
+                color: AppPalette.textSecondary,
+                height: 1.3,
+              ),
+            ),
           ],
-        ),
-        const SizedBox(height: 4),
-        Text(
-          '深色=原来的黑底；浅色=白底；护眼=米黄底。切换即时生效，K 线画布/坐标/图例一起换，重启后保留。',
-          style: TextStyle(
-            fontSize: 11,
-            color: AppPalette.textSecondary,
-            height: 1.3,
-          ),
-        ),
-      ],
+        );
+      },
     );
   }
 }
