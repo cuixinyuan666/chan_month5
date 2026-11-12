@@ -6465,3 +6465,20 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **结果**：`flutter test test/tick_draw_board_test.dart` 2/2 通过；`flutter test test/early_dynamic_unit_test.dart` 10/10 通过；`flutter analyze` 无新增错误。
 - **注意事项**：未 push；未改缠论计算口径。
 
+---
+
+### 2026-11-12 23:18 — 画板对齐主题并改为圆点选中上下拖动
+
+- **执行者**：opencode
+- **任务类型**：功能修正（分笔画板交互）
+- **上下文**：用户反馈画板主题与设置中的 K 线图仍有色差；新增 K 线不应左右移动；选中框过高；只有点中圆点形状才算选中；十字线开关与十字信息窗要严格沿用老操作；同价提示应为短暂闪烁且不限制上下移动。
+- **关键操作**：
+  1. 画板底色、工具栏、下拉框、文字改用 `AppPalette` 的 canvasBg / surface / surfaceAlt / border / textPrimary，与设置里的 K 线图严格同源。
+  2. 去掉左右移动：拖动只改价格，且价格不设上下限，按 0.01 网格吸附。
+  3. 选中框按圆点大小绘制，只包住该圆点；拖动热区也只放在该圆点附近。
+  4. 选中判定改为命中圆点：计算每根 tick 圆点的屏幕坐标，点击距离在命中半径内才算选中；点空白只取消选中。
+  5. 点击监听只认左键，且不进入手势竞技场，中键/滚轮/拖拽十字线等原操作完全保留。
+  6. 同价提示改为短暂闪烁（520ms 渐隐），频繁同价会重新触发；不限制继续向上或向下拖动。
+- **结果**：`flutter test test/tick_draw_board_test.dart` 2/2 通过；`flutter test test/early_dynamic_unit_test.dart` 10/10 通过；`flutter test test/test_ohlc_editor_dialog_test.dart` 8/8 通过；`flutter analyze` 无新增错误。
+- **注意事项**：未 push；未改缠论计算口径。
+
