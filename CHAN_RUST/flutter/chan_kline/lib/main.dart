@@ -6284,11 +6284,13 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
               '1. 股票选择 test；\n'
               '2. 点「分笔画板」，在 K 线页面拉出画板；\n'
               '3. 选择窗口数量，窗口按 K0、K1、K2 依次显示；\n'
-              '4. 每个窗口都是原分窗样式，K 线/指标/十字线可直接使用；\n'
-              '5. 只在 K0 窗口增加、减少、复制分笔；打开「拖拽」后拖动原点，'
-              '价格按网格吸附、左右拖动换 K 线位置；\n'
-              '6. K1 及以上窗口自动生成；\n'
-              '7. 点「保存并加载」，写入 a_Data/test/custom.ohlc.csv 并重新加载。',
+              '4. 每个窗口都是原分窗样式，K 线/指标/十字线/信息窗可直接使用；\n'
+              '5. 放大、缩小、平移和十字线全窗同步；\n'
+              '6. 点击 K 线选中并聚焦；选中后拖住该 K 线可改价格（网格吸附）'
+              '或左右移动，拖动中与相邻同价 K 线会合并显示同价框；\n'
+              '7. 复制、删除只作用于选中的 K 线；未选中时拖拽只移动十字线；\n'
+              '8. K1 及以上窗口自动生成；\n'
+              '9. 点「保存并加载」，写入 a_Data/test/custom.ohlc.csv 并重新加载。',
             ),
           ),
           actions: [
@@ -6342,6 +6344,14 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
       earlyDynamicUnit: _earlyDynamicUnit,
       truncationCheck: _truncationCheck,
     );
+    // 窗口数量变化时补新层的默认 K 线/连线指标，避免子窗口空白。
+    _splitIndicatorsReady = true;
+    _splitMainIndicators = <MainChartIndicator>{
+      ..._splitMainIndicators,
+      ...defaultLevelWindowMainIndicators([
+        for (var i = 0; i < model.windowCount; i++) i,
+      ]),
+    };
     setState(() {
       _tickDrawBoard = model;
       _tickDrawBundle = bundle;
