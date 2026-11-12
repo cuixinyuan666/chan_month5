@@ -207,6 +207,7 @@ class KlineChart extends StatefulWidget {
     this.interactive = true,
     this.ownsKeyboard = true,
     this.sync,
+    this.onViewportChanged,
     this.displayLevel,
     this.forceSubPane = false,
     this.subPanePlaceholder = '副图未启用（点副图左上角指标按钮可勾选）',
@@ -350,6 +351,9 @@ class KlineChart extends StatefulWidget {
   /// 层级分窗联动控制器；单图模式为 null（行为与分窗功能上线前完全一致）。
   final ChartSyncController? sync;
 
+  /// 视口（缩放/平移/换数据）变化后的回调：画板用它刷新圆点命中与聚焦框。
+  final VoidCallback? onViewportChanged;
+
   /// 本窗只画哪一层：null = 单图集成（现状，按勾选画全部层）；0..9 = 只画该层。
   ///
   /// 注意：`mainIndicators` / `subIndicators` 仍传**全量**勾选集，
@@ -451,6 +455,8 @@ class _KlineChartState extends State<KlineChart> {
   double _pinchAccumDy = 0;
   static const _pinchAxisLockSlop = 10.0;
   Size _chartSize = Size.zero;
+  /// 上次通知外部的视口签名（只在真变化时回调，避免自激重建）。
+  String? _lastNotifiedViewportSig;
 
   /// 左中右热区：用 Listener 优先吃点击（避免卡顿时被 GestureDetector 拖拽抢走）
   Offset? _zonePointerDown;
@@ -2728,6 +2734,19 @@ class _KlineChartState extends State<KlineChart> {
         final priceRange = _viewport.priceRangeFor(visible);
         _hitPriceRange = priceRange;
         _hitMainH = mainH;
+
+        // 视口变化（缩放/平移/换数据/宽度变化）后通知外部：画板据此重算
+        // 圆点屏幕坐标与聚焦框，避免放大后点不中、框不跟着走。
+        final vp = _viewport;
+        final vpSig =
+            '${vp.viewXMin}/${vp.viewXMax}/${vp.yZoomRatio}/${vp.yShiftRatio}/${vp.allXMax}/$w/$h';
+        if (widget.onViewportChanged != null &&
+            vpSig != _lastNotifiedViewportSig) {
+          _lastNotifiedViewportSig = vpSig;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) widget.onViewportChanged?.call();
+          });
+        }
 
         final cursor = _crosshairEnabled
             ? SystemMouseCursors.precise

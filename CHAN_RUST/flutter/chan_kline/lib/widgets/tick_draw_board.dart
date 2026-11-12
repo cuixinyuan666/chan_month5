@@ -414,30 +414,24 @@ class _TickDrawBoardState extends State<TickDrawBoard>
       indicatorsEnabled: true,
       autoFollowLatest: true,
       sync: _sync,
+      onViewportChanged: level == 0 ? _onViewportChanged : null,
       tooltipBridge: _tooltipBridge,
       dockTooltipPanel: true,
     );
     if (level != 0) return chart;
     return LayoutBuilder(
       builder: (context, constraints) {
-        final vp = _sync.viewportFor(0);
         final width = constraints.maxWidth;
         final height = constraints.maxHeight;
-        final mainH = height * _sync.mainFraction;
-        final plotH = math.max(
-          1.0,
-          mainH - KlineViewport.padT - KlineViewport.padB,
-        );
-        final range = vp.priceRangeFor(vp.visibleBars(bars));
-        final slotWidth = vp.barSlotWidth(width);
-        final dotR = math.max(2.0, math.min(slotWidth * 0.35, 4.0));
-        final hitR = math.max(9.0, dotR + 6);
+        final g = _geometry(width, height, bars);
         Offset dotAt(int i) => Offset(
-              vp.barCenterX(i, width),
-              range.yOf(bars[i].close, KlineViewport.padT, plotH),
+              g.vp.barCenterX(i, width),
+              g.range.yOf(bars[i].close, KlineViewport.padT, g.plotH),
             );
         final selected = model.safeSelected;
         final selDot = model.hasSelection ? dotAt(selected) : Offset.zero;
+        final focusSide = math.max(6.0, g.dotR * 2 + 4);
+        final dragSide = math.max(10.0, g.dotR * 2 + 6);
         return Stack(
           fit: StackFit.expand,
           children: [
@@ -460,7 +454,21 @@ class _TickDrawBoardState extends State<TickDrawBoard>
                 onPointerUp: (e) {
                   // 只认左键单击：中键/右键的十字线老操作原样放行。
                   if (_tapMoved || _tapButtons != 1) return;
-                  final hit = _hitDot(e.localPosition, bars, dotAt, hitR);
+                  // 命中现算：放大/缩小后视口已变，不能复用 build 时的旧坐标。
+                  final now = _geometry(width, height, bars);
+                  final hit = _hitDot(
+                    e.localPosition,
+                    bars,
+                    (i) => Offset(
+                      now.vp.barCenterX(i, width),
+                      now.range.yOf(
+                        bars[i].close,
+                        KlineViewport.padT,
+                        now.plotH,
+                      ),
+                    ),
+                    now.dotR,
+                  );
                   if (hit == null) {
                     if (model.hasSelection) {
                       widget.onChanged(model.clearSelection());
@@ -482,7 +490,7 @@ class _TickDrawBoardState extends State<TickDrawBoard>
                   if (t <= 0.01) return const SizedBox.shrink();
                   final a = dotAt(_flashRun!.start);
                   final b = dotAt(_flashRun!.end);
-                  final r = math.max(6.0, dotR + 4);
+                  final r = math.max(4.0, g.dotR + 3);
                   return Positioned(
                     left: a.dx - r,
                     top: a.dy - r,
@@ -497,23 +505,24 @@ class _TickDrawBoardState extends State<TickDrawBoard>
                   );
                 },
               ),
-            if (model.hasSelection) ...[
-              // 聚焦框只包住圆点本身，不再拉到整列高度。
+            if (model.hasSelection)
+              // 聚焦框只包住圆点本身，大小跟随真实圆点半径。
               Positioned(
-                left: selDot.dx - math.max(6.0, dotR + 4),
-                top: selDot.dy - math.max(6.0, dotR + 4),
-                width: math.max(12.0, dotR * 2 + 8),
-                height: math.max(12.0, dotR * 2 + 8),
+                left: selDot.dx - focusSide / 2,
+                top: selDot.dy - focusSide / 2,
+                width: focusSide,
+                height: focusSide,
                 child: IgnorePointer(
                   child: CustomPaint(painter: _FocusBandPainter()),
                 ),
               ),
+            if (model.hasSelection)
               // 拖动热区也只放在圆点上：上下改价，不允许左右移动。
               Positioned(
-                left: selDot.dx - hitR,
-                top: selDot.dy - hitR,
-                width: hitR * 2,
-                height: hitR * 2,
+                left: selDot.dx - dragSide / 2,
+                top: selDot.dy - dragSide / 2,
+                width: dragSide,
+                height: dragSide,
                 child: GestureDetector(
                   behavior: HitTestBehavior.opaque,
                   onPanStart: (_) {
@@ -521,16 +530,44 @@ class _TickDrawBoardState extends State<TickDrawBoard>
                     _dragStartPrice = model.points[selected].price;
                   },
                   onPanUpdate: (d) =>
-                      _onDragVertical(d.delta.dy, range, plotH),
+                      _onDragVertical(d.delta.dy, g.range, g.plotH),
                   onPanEnd: (_) => _endDrag(),
                   onPanCancel: _endDrag,
                 ),
               ),
-            ],
           ],
         );
       },
     );
+  }
+
+  void _onViewportChanged() {
+    if (mounted) setState(() {});
+  }
+
+  /// 与 KlineChart 的 tick 圆点完全同口径的几何：
+  /// barW = max(1, slotW*0.65)，dotR = max(1.2, min(barW*0.45, slotW*0.35))。
+  ({
+    KlineViewport vp,
+    PriceRange range,
+    double plotH,
+    double slotW,
+    double dotR,
+  }) _geometry(
+    double width,
+    double height,
+    List<KlineBar> bars,
+  ) {
+    final vp = _sync.viewportFor(0);
+    final mainH = height * _sync.mainFraction;
+    final plotH = math.max(
+      1.0,
+      mainH - KlineViewport.padT - KlineViewport.padB,
+    );
+    final range = vp.priceRangeFor(vp.visibleBars(bars));
+    final slotW = vp.barSlotWidth(width);
+    final dotR = math.max(1.2, slotW * 0.2925);
+    return (vp: vp, range: range, plotH: plotH, slotW: slotW, dotR: dotR);
   }
 
   int? _hitDot(
