@@ -6376,3 +6376,17 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   5. `theme_runtime_resolved_test.dart`：新增三主题暖色/亮度生效、深色零暖零亮差逐像素不变、JSON 往返与旧键兼容用例。
 - **结果**：flutter analyze 131 issues（= 基线，无新增，0 error）；主题+回归测试 72 项全部通过；flutter build windows --debug 成功，应用已启动（PID 14128）待人工验证。commit 54d16396。
 - **注意事项**：人工验证清单：设置页「主题外观」三主题均见暖色/亮度滑杆；拖暖色滑杆观察底色与文字明显转暖（深色→暖黑、浅色→米白、护眼→满暖橙）；拖亮度滑杆观察整体明暗变化；切回深色确认底色仍为 0xFF121212（未手动调过暖色时）。
+
+---
+
+### 2026-11-12 12:00 — 清理 for-telegram worktree 与分支
+
+- **执行者**：opencode
+- **任务类型**：仓库维护（worktree / 分支清理）
+- **上下文**：用户要求列出本项目所有 worktree 分支并判断可删除性。盘点结果：当前 worktree 仅 2 个——主 worktree `D:/2/chan_month5`（ANDROID_RUST，不可删）与 `D:/2/for-telegram`（for-telegram）。后者内容已全部合入 ANDROID_RUST（`ANDROID_RUST..for-telegram` 为空，历史中存在 Merge 提交），工作区残留仅为自动生成文件（各平台 GeneratedPluginRegistrant / generated_plugins.cmake）与 pubspec.lock 的换行格式差异，无实质内容。
+- **关键操作**：
+  1. `git worktree list` / `git branch -a` 盘点全部 worktree 与本地分支；
+  2. `git worktree remove --force D:/2/for-telegram`（脏文件均为生成物，需 force）；
+  3. `git branch -d for-telegram`（已合入，-d 安全删除，原指向 be76339a）。
+- **结果**：worktree 仅剩主目录 `D:/2/chan_month5 [ANDROID_RUST]`；`for-telegram` 分支已删除。其余本地分支（CHAN_RUST / a / ar / clear / codex/rust-performance-engine / feat/kline-level-windows / full-optimization / main）未挂 worktree，是否可删需逐个比对合并关系，本次未动。
+- **注意事项**：无后续。若日后还要查分笔台账与健康检查功能的历史提交，ANDROID_RUST 主分支上已包含（be76339a 及其以下）。
