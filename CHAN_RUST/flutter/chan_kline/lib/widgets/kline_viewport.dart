@@ -192,6 +192,24 @@ class KlineViewport {
     }
   }
 
+  /// 逐 K 步进时**保持最新 K 的当前屏幕位置**。
+  ///
+  /// 仅用户手动缩放/平移过（[userAdjustedView]）后使用：视窗按数据增量
+  /// 整体平移（进度退一步就反向平移），跨度（缩放）与纵轴缩放/位移一概不动，
+  /// 因此最新 K 停在原屏幕位置，不会再被拉回正中/全量。
+  /// 调用方负责在未手动调整时走旧口径（[syncWindowOnStep]/[showAllBars]）。
+  void holdLatestThroughStep({
+    required int lastIdx,
+    required int prevLastIdx,
+  }) {
+    if (!ready) return;
+    allXMax = math.max(allXMax, lastIdx.toDouble());
+    final delta = lastIdx - prevLastIdx;
+    if (delta == 0) return;
+    viewXMin += delta;
+    viewXMax += delta;
+  }
+
   /// 没盯住某一根 K 时：按当前 K 线根数把整段放进视窗。
   /// 右侧留一截空白，步进/播放时最新 K 不贴右边界。
   void showAllBars({

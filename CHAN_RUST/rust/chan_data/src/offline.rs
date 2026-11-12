@@ -212,26 +212,50 @@ pub fn load_klines_with_source(
         )));
     }
 
-    // test：若有 custom.ohlc.csv 则直读（忽略 period 聚合）
+    // test：custom.ohlc.csv 即分笔数据源。
+    // - 分笔(tick)周期：一行一笔直接返回（O=H=L=C 一字线）；
+    // - 其它周期：把每行当作一笔分笔，按分笔规则聚合（1m → 目标周期），
+    //   与真实分笔数据同构，无需再选模板。
     if code_key == TEST_STOCK_FOLDER {
         let ohlc_path = test_ohlc_csv_path(data_root);
         if ohlc_path.is_file() {
             let bars = load_test_ohlc_csv(&ohlc_path)?;
-            let bars = filter_bars_by_datetime(bars, begin_dt, end_dt);
-            if bars.is_empty() {
-                return Err(ChanDataError::msg(format!(
-                    "区间内无 K 线：{begin_date}~{end_date}"
-                )));
+            if period.is_tick() {
+                let bars = filter_bars_by_datetime(bars, begin_dt, end_dt);
+                if bars.is_empty() {
+                    return Err(ChanDataError::msg(format!(
+                        "区间内无 K 线：{begin_date}~{end_date}"
+                    )));
+                }
+                return Ok(LoadKlinesOut {
+                    bars,
+                    quality: TickQuality {
+                        source: "ohlc".into(),
+                        skip_prompts: true,
+                        ..TickQuality::default()
+                    },
+                });
             }
-            let _ = period; // 自定义 OHLC 不做周期重采样
-            return Ok(LoadKlinesOut {
-                bars,
-                quality: TickQuality {
-                    source: "ohlc".into(),
-                    skip_prompts: true,
-                    ..TickQuality::default()
-                },
-            });
+            let rows: Vec<TickRow> = bars
+                .iter()
+                .map(|b| TickRow {
+                    dt: parse_datetime_bound(&b.time_text, BoundKind::Begin)
+                        .unwrap_or(begin_dt),
+                    price: b.close,
+                    vol: b.volume,
+                    side: String::new(),
+                    has_bs: false,
+                    price_lo: Some(b.low),
+                    price_hi: Some(b.high),
+                    ticks: 0.0,
+                })
+                .collect();
+            let (bars, used_rows) = bars_from_tick_rows(
+                rows, begin_dt, end_dt, period, begin_date, end_date,
+            )?;
+            let mut quality = TickQuality::from_rows(&used_rows, "ohlc");
+            quality.skip_prompts = true;
+            return Ok(LoadKlinesOut { bars, quality });
         }
     }
 

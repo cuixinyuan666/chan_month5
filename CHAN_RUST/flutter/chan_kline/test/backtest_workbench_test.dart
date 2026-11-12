@@ -534,9 +534,9 @@ void main() {
     });
 
     testWidgets('电脑整块下移避开标题栏，手机不再加顶距', (tester) async {
-      expect(kDesktopCaptionBarHeight, 36);
+      expect(kDesktopCaptionBarHeight, 28);
       expect(kDesktopShellInset, 4);
-      expect(kDesktopBacktestWorkbenchTopInset, 36);
+      expect(kDesktopBacktestWorkbenchTopInset, 28);
 
       await tester.pumpWidget(pumpBench(onClose: () {}, compact: false));
       final pad = tester.widget<Padding>(

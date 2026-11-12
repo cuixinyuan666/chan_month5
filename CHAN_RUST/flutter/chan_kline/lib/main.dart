@@ -93,7 +93,6 @@ import 'widgets/datetime_picker_dialog.dart';
 import 'widgets/edge_control_panel.dart';
 import 'widgets/kline_chart.dart';
 import 'widgets/chart_sync_controller.dart';
-import 'chart/level_window_layout.dart';
 import 'widgets/level_chart_grid.dart';
 import 'widgets/level_window_settings_dialog.dart';
 import 'widgets/crosshair_tooltip_panel.dart';
@@ -422,6 +421,12 @@ class _KlineHomePageState extends State<KlineHomePage>
   /// 层级分窗联动：所有窗共用同一份视口 / 主副比例 / 十字线 / as-of 缓存。
   /// 单图模式下不传给 KlineChart，行为与分窗上线前完全一致。
   final _chartSync = ChartSyncController();
+  /// 步进序号：每次 `_stepIdx` 变化 +1，随 KlineChart 传入。
+  /// 图表据此区分「步进」与「换股/换周期/重载」——只有步进才走
+  /// 「保持最新 K 屏幕位置」的新口径（且需用户手动缩放/平移过）。
+  int _stepSerial = 0;
+  /// 「恢复布局」序号：点一次 +1，各窗视口复位并清除手动调整标记。
+  int _resetViewSerial = 0;
   /// Phase 1.5：Rust PipelineState 会话句柄（Flutter 不存核心 state）
   ChanPipelineSession? _pipelineSession;
   /// 工作区全屏前的窗口矩形（还原用）
@@ -458,12 +463,22 @@ class _KlineHomePageState extends State<KlineHomePage>
 
   /// 子窗口全屏：非空时只显示这一层，占满图表区；再点一次回到分窗网格。
   int? _splitFullscreenLevel;
+  /// 当前是否为层级分窗模式（桌面、非筹码-only、设置开启）。
+  bool get _splitActive =>
+      !_useAndroidInteraction &&
+      !_chipOnlyMode &&
+      LevelWindowSettingsStore.enabled;
   Set<SubChartIndicator> _splitSubIndicators = <SubChartIndicator>{};
   /// 分窗指标是否已按当前层级初始化过（首次开分窗时铺默认）。
   bool _splitIndicatorsReady = false;
   int _stepIdx = -1; // -1 表示尚未步进
   bool _playing = false;
+  /// 静默播放：右边界长按触发的播放不弹「自动播放」胶囊；中间区域播放仍弹。
+  bool _silentPlay = false;
   Timer? _playTimer;
+  /// 左边界长按：按住连续步退、松开即停。
+  bool _stepBackHolding = false;
+  Timer? _stepBackTimer;
   String? _error;
   bool _defaultK0Purged = false;
   String _defaultK0Policy = 'pending';
@@ -1147,11 +1162,6 @@ class _KlineHomePageState extends State<KlineHomePage>
   /// 供回测台横幅上的「返回寻优结果」原样恢复，无需重新扫描。主图会话变更时清空。
   IndicatorSearchSessionSnapshot? _lastSearchSession;
 
-  /// 桌面窗控实测总宽：拖动条 28 + 设置钮 36 + 最小化/最大化/关闭各 46。
-  /// 回测台横幅贴在 body 顶部，而窗控是叠在 body 之上的 `Positioned`，
-  /// 横幅右侧必须让出这段宽，否则「返回寻优结果」按钮被窗控盖住点不到。
-  static const double _desktopCaptionControlsWidth = 28 + 36 + 46 * 3;
-
   /// catalog 三类..N 类上限（至少 9；随会话观察到的更高类扩大）
   int get _maxBsClass => math.max(
         9,
@@ -1270,8 +1280,10 @@ class _KlineHomePageState extends State<KlineHomePage>
   }
 
   /// 走完进度条 / 自动播放悬浮胶囊：只刷这行字，不刷整张图。
+  /// 仅在「中间区域触发的播放」时显示；右/左边界长按的按住播放/步退为静默模式，不弹胶囊。
   Widget _buildLongOpBanner({double top = 44}) {
     if (!_runningToEnd && !_playing) return const SizedBox.shrink();
+    if (_playing && _silentPlay) return const SizedBox.shrink();
     final total = _allBars.length;
 
     if (_runningToEnd) {
@@ -1589,6 +1601,7 @@ class _KlineHomePageState extends State<KlineHomePage>
     }
     _keepAlive.detach();
     _playTimer?.cancel();
+    _stepBackTimer?.cancel();
     _longOpHint.dispose();
     _disposePipelineSession();
     // 整个 app 收摊才拆 overlay 窗口（拆窗+注销窗口类+isolate 自行退出）
@@ -1662,7 +1675,10 @@ class _KlineHomePageState extends State<KlineHomePage>
     _dismissTickYinYang();
     final target = idx.clamp(0, _allBars.length - 1);
     if (target == _stepIdx) return;
-    setState(() => _stepIdx = target);
+    setState(() {
+      _stepIdx = target;
+      _stepSerial += 1;
+    });
     _rebuildCombine();
   }
 
@@ -2563,27 +2579,30 @@ class _KlineHomePageState extends State<KlineHomePage>
       _endDate = MobileDataRoot.bundledEndDate;
       return;
     }
-    // test + 已有 custom.ohlc.csv：用文件首末时间填区间
-    if (code == 'test' && _hasTestOhlcCsv()) {
-      try {
-        final bars = _bridge.loadKlines(
-          dataRoot: _dataRoot,
-          code: 'test',
-          beginDate: '1990/01/01 00:00:00',
-          endDate: '2100/12/31 23:59:59',
-          period: _period,
-        );
-        if (bars.isNotEmpty) {
-          final b0 = _tryParseBarTime(bars.first.timeText);
-          final b1 = _tryParseBarTime(bars.last.timeText);
-          if (b0 != null && b1 != null) {
-            _beginDate = b0;
-            _endDate = b1;
-            return;
+    // test：数据源即分笔（custom.ohlc.csv），周期、起止时间自动对齐分笔配置。
+    if (code == 'test') {
+      _period = 'tick';
+      if (_hasTestOhlcCsv()) {
+        try {
+          final bars = _bridge.loadKlines(
+            dataRoot: _dataRoot,
+            code: 'test',
+            beginDate: '1990/01/01 00:00:00',
+            endDate: '2100/12/31 23:59:59',
+            period: 'tick',
+          );
+          if (bars.isNotEmpty) {
+            final b0 = _tryParseBarTime(bars.first.timeText);
+            final b1 = _tryParseBarTime(bars.last.timeText);
+            if (b0 != null && b1 != null) {
+              _beginDate = b0;
+              _endDate = b1;
+              return;
+            }
           }
+        } catch (_) {
+          // 回落标准区间
         }
-      } catch (_) {
-        // 回落标准区间
       }
     }
     final range = _codeDefaultRanges[code];
@@ -3374,20 +3393,42 @@ class _KlineHomePageState extends State<KlineHomePage>
     _playTimer?.cancel();
     _playTimer = null;
     _playing = false;
+    _silentPlay = false;
+    // 互斥：开始播放/步退任一方时另一方必须停。
+    _stepBackTimer?.cancel();
+    _stepBackTimer = null;
+    _stepBackHolding = false;
   }
 
   void _togglePlay() {
     if (!_hasSession || _stepIdx >= _allBars.length - 1) return;
     if (_playing) {
-      _stopPlay();
-      setState(() {});
-      _refreshKeepAlive();
+      _pausePlay();
       return;
     }
+    _startPlay(silent: false);
+  }
+
+  /// 开始播放。
+  ///
+  /// [silent]：true（默认）= 右边界长按触发的按住播放，不弹「自动播放」胶囊；
+  /// false = 中间区域点击触发的播放，仍弹胶囊。
+  void _startPlay({bool silent = true}) {
+    if (!_hasSession || _playing || _stepIdx >= _allBars.length - 1) return;
+    _stopPlay();
+    _silentPlay = silent;
     setState(() => _playing = true);
     _dismissTickYinYang();
     _refreshKeepAlive();
     unawaited(_playNextTick());
+  }
+
+  /// 暂停播放（长按松开）。
+  void _pausePlay() {
+    if (!_playing) return;
+    _stopPlay();
+    setState(() {});
+    _refreshKeepAlive();
   }
 
   /// 链式播放：重算后再等至少一帧，避免 periodic 在重算>120ms 时把步进叠死。
@@ -3400,7 +3441,10 @@ class _KlineHomePageState extends State<KlineHomePage>
       setState(() {});
       return;
     }
-    setState(() => _stepIdx += 1);
+    setState(() {
+      _stepIdx += 1;
+      _stepSerial += 1;
+    });
     await Future<void>.delayed(Duration.zero);
     if (!mounted || !_playing) return;
     final sw = Stopwatch()..start();
@@ -3416,8 +3460,10 @@ class _KlineHomePageState extends State<KlineHomePage>
   void _stepForward() {
     if (!_hasSession || _stepIdx >= _allBars.length - 1) return;
     _stopPlay();
-    _dismissTickYinYang();
-    setState(() => _stepIdx += 1);
+    _dismissTickYinYang();    setState(() {
+      _stepIdx += 1;
+      _stepSerial += 1;
+    });
     _rebuildCombine();
   }
 
@@ -3425,11 +3471,35 @@ class _KlineHomePageState extends State<KlineHomePage>
     if (!_hasSession || _stepIdx <= 0) return;
     _stopPlay();
     _dismissTickYinYang();
-    setState(() => _stepIdx -= 1);
+    setState(() {
+      _stepIdx -= 1;
+      _stepSerial += 1;
+    });
     _rebuildCombine();
   }
 
-  void _resetStep() {
+  /// 左边界长按：按住连续步退，松开即停（与右边界"按住播放"同构）。
+  void _startStepBackHold() {
+    if (!_hasSession || _stepBackHolding || _stepIdx <= 0) return;
+    _stopPlay();
+    _stepBackHolding = true;
+    _dismissTickYinYang();
+    _refreshKeepAlive();
+    unawaited(_stepBackNextTick());
+  }
+
+  /// 左边界长按松开：停止连续步退。
+  void _stopStepBackHold() {
+    if (!_stepBackHolding) return;
+    _stepBackHolding = false;
+    _stepBackTimer?.cancel();
+    _stepBackTimer = null;
+    setState(() {});
+    _refreshKeepAlive();
+  }
+
+  /// 顶栏「步退至开始」：回到首根 K、重置步进会话（恢复左边界长按原重置逻辑）。
+  void _restartFromBeginning() {
     if (!_hasSession) return;
     _stopPlay();
     _dismissTickYinYang();
@@ -3437,6 +3507,83 @@ class _KlineHomePageState extends State<KlineHomePage>
     _disposePipelineSession();
     setState(() => _stepIdx = 0);
     _rebuildCombine();
+  }
+
+  /// 链式连续步退：每次步退一根 K；退到首根自动停。
+  Future<void> _stepBackNextTick() async {
+    _stepBackTimer?.cancel();
+    _stepBackTimer = null;
+    if (!mounted || !_stepBackHolding) return;
+    if (_stepIdx <= 0) {
+      _stepBackHolding = false;
+      setState(() {});
+      return;
+    }
+    setState(() {
+      _stepIdx -= 1;
+      _stepSerial += 1;
+    });
+    await Future<void>.delayed(Duration.zero);
+    if (!mounted || !_stepBackHolding) return;
+    final sw = Stopwatch()..start();
+    _rebuildCombine();
+    if (!mounted || !_stepBackHolding) return;
+    final wait = math.max(16, 120 - sw.elapsedMilliseconds);
+    _stepBackTimer = Timer(Duration(milliseconds: wait), () {
+      unawaited(_stepBackNextTick());
+    });
+  }
+
+  /// 「恢复布局」：各窗视口复位到默认布局，并清除"手动调整过"标记——
+  /// 之后的步进回到旧的自动归位口径（全量/居中），直到再次手动缩放/平移。
+  void _resetLayout() {
+    if (_bootstrapping || _busy) return;
+    setState(() => _resetViewSerial += 1);
+  }
+
+  /// 顶栏「子窗口全屏」下拉：列出各分窗层级，选中的层铺满图表区。
+  void _showSplitFullscreenMenu(BuildContext btnCtx) {
+    final levels = LevelWindowSettingsStore.activeLevels;
+    final overlay =
+        Overlay.of(btnCtx).context.findRenderObject() as RenderBox?;
+    final btn = btnCtx.findRenderObject() as RenderBox?;
+    Navigator.of(btnCtx)
+        .push<int>(
+      _SplitFullscreenPopupRoute(
+        items: [
+          for (final lv in levels)
+            PopupMenuItem<int>(
+              value: lv,
+              height: 32,
+              child: Text(
+                'K$lv',
+                style: const TextStyle(fontSize: 13),
+              ),
+            ),
+        ],
+        position: btn != null && overlay != null
+            ? RelativeRect.fromRect(
+                Rect.fromPoints(
+                  btn.localToGlobal(
+                    Offset(0, btn.size.height),
+                    ancestor: overlay,
+                  ),
+                  btn.localToGlobal(
+                    btn.size.bottomRight(Offset.zero),
+                    ancestor: overlay,
+                  ),
+                ),
+                Offset.zero & overlay.size,
+              )
+            : RelativeRect.fromLTRB(0, 0, 0, 0),
+      ),
+    )
+        .then((picked) {
+      if (picked != null && mounted) {
+        setState(() => _splitFullscreenLevel = picked);
+        _msgHistory.append('子窗口全屏：K$picked');
+      }
+    });
   }
 
   Future<void> _runToEnd({MlBspSampler? mlSampler}) async {
@@ -3618,8 +3765,17 @@ class _KlineHomePageState extends State<KlineHomePage>
   Widget _buildDesktopShell(BuildContext context) {
     return Scaffold(
       backgroundColor: AppPalette.rgb(0xFF121212),
-      // 图表铺满；标题按钮叠在右上角之上，可点且不挡视觉延伸
-      body: Stack(
+      // 工具条化：标题条作为 Column 第一行占位，图表整体下移一条
+      // （kDesktopCaptionBarHeight），子窗口 K 标签贴极右缘不再压窗控。
+      body: Column(
+        children: [
+          SizedBox(
+            height: kDesktopCaptionBarHeight,
+            width: double.infinity,
+            child: _buildCaptionBar(),
+          ),
+          Expanded(
+        child: Stack(
         fit: StackFit.expand,
         children: [
           Positioned.fill(
@@ -3684,7 +3840,8 @@ class _KlineHomePageState extends State<KlineHomePage>
             Positioned(
               left: 12,
               right: 120,
-              top: 40,
+              // 标题条已工具条化占位到 body 之上，横幅贴 body 顶部即可。
+              top: 8,
               child: Text(_error!, style: TextStyle(color: AppPalette.rgb(0xFFFFA726))),
             ),
           // 设置打开时：点非面板区域关闭，不穿透到 K 线播放手势
@@ -3709,14 +3866,6 @@ class _KlineHomePageState extends State<KlineHomePage>
             _buildTickYinYangOverlay(context),
           if (_runningToEnd && !_mlSession.isActive)
             _buildRunToEndYinYangOverlay(context),
-          // 最上层：拖动区 + 设置 + 最小/最大/关闭
-          Positioned(
-            left: 0,
-            right: 0,
-            top: 0,
-            height: kDesktopCaptionBarHeight,
-            child: _buildCaptionBar(),
-          ),
           if (_runningToEnd || _playing) _buildLongOpBanner(),
           if (_loadingChart && _period != 'tick')
             Positioned.fill(
@@ -3725,6 +3874,9 @@ class _KlineHomePageState extends State<KlineHomePage>
               ),
             ),
           if (_libHalt) _buildLibHaltOverlay(),
+        ],
+      ),
+          ),
         ],
       ),
     );
@@ -3817,16 +3969,61 @@ class _KlineHomePageState extends State<KlineHomePage>
             Positioned(
               top: topInset + 2,
               right: 4,
-              child: Material(
-                color: AppPalette.rgb(0xCC1A1A1A),
-                shape: const CircleBorder(),
-                child: IconButton(
-                  tooltip: '设置',
-                  onPressed: _bootstrapping || _busy
-                      ? null
-                      : _openAndroidSettings,
-                  icon: Icon(Icons.tune, color: AppPalette.rgb(0xFFE2E8F0)),
-                ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Material(
+                    color: AppPalette.rgb(0xCC1A1A1A),
+                    shape: const CircleBorder(),
+                    child: IconButton(
+                      tooltip: '步退至开始',
+                      onPressed: !_hasSession || _busy
+                          ? null
+                          : _restartFromBeginning,
+                      icon: Icon(Icons.fast_rewind,
+                          color: AppPalette.rgb(0xFFE2E8F0)),
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  Material(
+                    color: AppPalette.rgb(0xCC1A1A1A),
+                    shape: const CircleBorder(),
+                    child: IconButton(
+                      tooltip: '步进至最后',
+                      onPressed: !_hasSession || _busy
+                          ? null
+                          : () { unawaited(_runToEnd()); },
+                      icon: Icon(Icons.fast_forward,
+                          color: AppPalette.rgb(0xFFE2E8F0)),
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  Material(
+                    color: AppPalette.rgb(0xCC1A1A1A),
+                    shape: const CircleBorder(),
+                    child: IconButton(
+                      tooltip: '恢复布局',
+                      onPressed: _bootstrapping || _busy ? null : _resetLayout,
+                      icon: Icon(
+                        Icons.autorenew,
+                        size: 24,
+                        color: AppPalette.rgb(0xFFE2E8F0),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  Material(
+                    color: AppPalette.rgb(0xCC1A1A1A),
+                    shape: const CircleBorder(),
+                    child: IconButton(
+                      tooltip: '设置',
+                      onPressed: _bootstrapping || _busy
+                          ? null
+                          : _openAndroidSettings,
+                      icon: Icon(Icons.tune, color: AppPalette.rgb(0xFFE2E8F0)),
+                    ),
+                  ),
+                ],
               ),
             ),
           if (_loadingChart && _period != 'tick')
@@ -3884,74 +4081,138 @@ class _KlineHomePageState extends State<KlineHomePage>
     });
   }
 
-  /// 透明标题条：左侧穿透点击主图指标；窗控前窄条拖窗；右侧设置/最小化/最大化/关闭。
-  /// 踩坑：勿用「屏宽-140 固定开孔 + Expanded」——窗控实际约 174px，会 RIGHT OVERFLOW。
+  /// 标题条：左侧空白拖拽区 + 右侧 [恢复布局][设置][最小化][最大化][关闭]。
+  ///
+  /// 工具条化：整条作为 Column 第一行占位（不再叠在图表上），图表整体下移。
+  /// 五键统一 28×28 自绘，**不用** `WindowCaptionButton`（强制 46×32）和
+  /// `IconButton`（强制 48px 最小命中区）——28px 工具条里会溢出并与相邻按钮
+  /// 叠在一起（用户反馈「设置左边出现了两个重叠按钮」的根因）。
   Widget _buildCaptionBar() {
-    const dragGripW = 28.0;
     return Row(
       children: [
+        // 左侧空白：整条可拖动（双击最大化/还原），不再是穿透区。
         const Expanded(
-          child: IgnorePointer(
-            child: SizedBox(height: kDesktopCaptionBarHeight),
-          ),
-        ),
-        DragToMoveArea(
-          child: SizedBox(
-            width: dragGripW,
-            height: kDesktopCaptionBarHeight,
-            child: Container(color: AppPalette.rgb(0x00000000)),
-          ),
-        ),
-        Tooltip(
-          message: '设置',
-          child: IconButton(
-            onPressed: () => setState(() => _panelExpanded = !_panelExpanded),
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints.tightFor(
-              width: kDesktopCaptionBarHeight,
+          child: DragToMoveArea(
+            child: SizedBox(
               height: kDesktopCaptionBarHeight,
+              child: ColoredBox(color: Color(0x00000000)),
             ),
-            icon: Icon(
-              _panelExpanded ? Icons.close : Icons.settings,
-              size: 18,
+          ),
+        ),
+        // 步退至开始：回到首根 K（双向左箭头），与「步进至最后」成对。
+        _CaptionBarButton(
+          tooltip: '步退至开始',
+          onTap: !_hasSession || _busy ? null : _restartFromBeginning,
+          child: Icon(
+            Icons.fast_rewind,
+            size: 16,
+            color: AppPalette.rgb(0xFFE2E8F0),
+          ),
+        ),
+        // 步进至最后：原窗口右边界长按功能迁到顶栏（右边界长按改为播放/暂停）。
+        _CaptionBarButton(
+          tooltip: '步进至最后',
+          onTap: !_hasSession || _busy ? null : () { unawaited(_runToEnd()); },
+          child: Icon(
+            Icons.fast_forward,
+            size: 16,
+            color: AppPalette.rgb(0xFFE2E8F0),
+          ),
+        ),
+        // 子窗口全屏：点开下拉选择目标子窗口；已全屏时显示退出按钮。
+        if (_splitFullscreenLevel != null)
+          _CaptionBarButton(
+            tooltip: '退出子窗口全屏',
+            onTap: _busy
+                ? null
+                : () => setState(() => _splitFullscreenLevel = null),
+            child: Icon(
+              Icons.fullscreen_exit,
+              size: 16,
               color: AppPalette.rgb(0xFFE2E8F0),
             ),
+          )
+        else if (_splitActive)
+          Builder(
+            builder: (btnCtx) => _CaptionBarButton(
+              tooltip: '子窗口全屏（选择目标层）',
+              onTap: _busy ? null : () => _showSplitFullscreenMenu(btnCtx),
+              child: Icon(
+                Icons.fullscreen,
+                size: 16,
+                color: AppPalette.rgb(0xFFE2E8F0),
+              ),
+            ),
+          ),
+        // 恢复布局：复位各窗视口，并恢复旧的步进自动归位逻辑。
+        _CaptionBarButton(
+          tooltip: '恢复布局',
+          onTap: _bootstrapping || _busy ? null : _resetLayout,
+          child: Icon(
+            Icons.autorenew,
+            size: 16,
+            color: AppPalette.rgb(0xFFE2E8F0),
           ),
         ),
-        WindowCaptionButton.minimize(
-          brightness: Brightness.dark,
-          onPressed: () => windowManager.minimize(),
+        _CaptionBarButton(
+          tooltip: _panelExpanded ? '收起设置' : '设置',
+          onTap: () => setState(() => _panelExpanded = !_panelExpanded),
+          child: Icon(
+            _panelExpanded ? Icons.close : Icons.settings,
+            size: 16,
+            color: AppPalette.rgb(0xFFE2E8F0),
+          ),
         ),
-        WindowCaptionButton.maximize(
-          brightness: Brightness.dark,
-          onPressed: () async {
-            // 铺满工作区 ↔ 还原；不走原生 maximize（会盖任务栏）
-            if (await isFillingWorkArea()) {
-              if (await windowManager.isMaximized()) {
-                await windowManager.unmaximize();
-              } else if (_preWorkAreaBounds != null) {
-                await windowManager.setBounds(_preWorkAreaBounds!);
-              } else {
-                await windowManager.setSize(const Size(1280, 720));
-                await windowManager.center();
-              }
-              _preWorkAreaBounds = null;
-            } else {
-              _preWorkAreaBounds = await windowManager.getBounds();
-              await fillDesktopWorkArea();
-            }
-          },
+        _CaptionBarButton(
+          tooltip: '最小化',
+          onTap: () => windowManager.minimize(),
+          child: Icon(
+            Icons.remove,
+            size: 16,
+            color: AppPalette.rgb(0xFFE2E8F0),
+          ),
         ),
-        WindowCaptionButton.close(
-          brightness: Brightness.dark,
-          onPressed: () => _requestCloseApp(),
+        _CaptionBarButton(
+          tooltip: '最大化',
+          onTap: _toggleFillWorkArea,
+          child: Icon(
+            Icons.crop_square,
+            size: 14,
+            color: AppPalette.rgb(0xFFE2E8F0),
+          ),
+        ),
+        _CaptionBarButton(
+          tooltip: '关闭',
+          onTap: _requestCloseApp,
+          child: Icon(
+            Icons.close,
+            size: 16,
+            color: AppPalette.rgb(0xFFE2E8F0),
+          ),
         ),
       ],
     );
   }
 
-  Widget _buildPanelBody({
-    bool forMobileSheet = false,
+  /// 铺满工作区 ↔ 还原；不走原生 maximize（会盖任务栏）。
+  Future<void> _toggleFillWorkArea() async {
+    if (await isFillingWorkArea()) {
+      if (await windowManager.isMaximized()) {
+        await windowManager.unmaximize();
+      } else if (_preWorkAreaBounds != null) {
+        await windowManager.setBounds(_preWorkAreaBounds!);
+      } else {
+        await windowManager.setSize(const Size(1280, 720));
+        await windowManager.center();
+      }
+      _preWorkAreaBounds = null;
+    } else {
+      _preWorkAreaBounds = await windowManager.getBounds();
+      await fillDesktopWorkArea();
+    }
+  }
+
+  Widget _buildPanelBody({    bool forMobileSheet = false,
     StateSetter? sheetSetState,
   }) {
     final advanced = _buildPanelAdvancedSection(
@@ -5012,12 +5273,11 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
 
   /// 寻优横幅：显示当前图上生效的买卖条件 + 「返回寻优结果」入口。
   ///
-  /// 踩坑：桌面标题栏（拖动条/设置/最小化/最大化/关闭）是 `Positioned(top:0,height:36)`
-  /// 叠在 body **之上**，横幅同样贴在 body 顶部 → 右侧按钮会被最小化/关闭压住点不到，
-  /// 故横幅右侧必须让出窗控总宽（移动端没有窗控，不占宽）。
+  /// 2026-11-11 工具条化后标题条独立成一行，不再叠在 body 之上，
+  /// 横幅右侧无需再为窗控让宽（移动端同样不占）。
   /// 口径来源就是 `_strategyConfig`，与图上买卖标记、工作台条件页同源，不另存一份。
   Widget _searchReturnBanner() {
-    final rightInset = _useAndroidInteraction ? 0.0 : _desktopCaptionControlsWidth;
+    const rightInset = 0.0;
     final maxKn = chartMaxKn(levels: _levels, k0Lines: _k0Lines);
     final buyText = astConditionTextCn(_strategyConfig.buyAst, maxKn: maxKn)
         .replaceAll('\n', ' ');
@@ -5439,6 +5699,8 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
       sellNK0Frames: _sellNK0Frames,
       defaultK0Policy: _defaultK0Policy,
       stepIdx: _stepIdx,
+      stepSerial: _stepSerial,
+      resetViewSerial: _resetViewSerial,
       truncationCheck: _truncationCheck,
       earlyDynamicUnit: _earlyDynamicUnit,
       showBuildingDash: _showBuildingDash,
@@ -5479,9 +5741,13 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
       onTapStepBack: gesturesOn ? _stepBack : null,
       onTapPlay: !_hasSession ? null : (_busy && !_playing ? null : _togglePlay),
       onTapStepForward: gesturesOn ? _stepForward : null,
-      onLongPressReset: gesturesOn ? _resetStep : null,
+      // 左边界长按（原首K重置）：按住步退、松开即停。
+      onLongPressReset: gesturesOn ? _startStepBackHold : null,
+      onLongPressResetStop: gesturesOn ? _stopStepBackHold : null,
       onLongPressReload: !_busy ? _loadKlines : null,
-      onLongPressRunToEnd: gesturesOn ? () { unawaited(_runToEnd()); } : null,
+      // 右边界长按：按住播放、松开暂停（原「一次性走完」已迁到顶栏按钮）。
+      onLongPressPlayStart: gesturesOn ? _startPlay : null,
+      onLongPressPlayStop: gesturesOn ? _pausePlay : null,
       // 回测买卖点/高亮/聚焦只挂在主窗：其余窗只负责显示该层结构，
       // 否则同一批标记会在 N 个窗里各画一遍。
       strategySignals: primary && _backtestPanelOpen
@@ -5505,45 +5771,9 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
       tooltipBridge: _tooltipBridge,
       dockTooltipPanel: !_useAndroidInteraction,
     );
-    if (!split) return chart;
-    // 子窗口全屏按钮：放在层级标签左侧，不与右上角标签/标题栏窗控重叠。
-    // 全屏后这一格占满窗口右上角，退出钮要跟角标一样让开最大化，不能贴回右缘。
-    final fullscreen = _splitFullscreenLevel == level;
-    final grid = LevelWindowGrid(LevelWindowSettingsStore.count);
-    final levels = LevelWindowSettingsStore.activeLevels;
-    final slot = levels.indexOf(level);
-    final topRightPane = fullscreen ||
-        (slot >= 0 &&
-            slot % grid.cols == grid.cols - 1 &&
-            slot ~/ grid.cols == 0);
-    final badgeRight = levelBadgeRightInset(topRightPane: topRightPane);
-    final buttonRight = fullscreen ? badgeRight : badgeRight + 46;
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        chart,
-        Positioned(
-          right: buttonRight,
-          top: 2,
-          child: Tooltip(
-            message: fullscreen ? '退出全屏' : '全屏',
-            child: IconButton(
-              onPressed: () => setState(() {
-                _splitFullscreenLevel = fullscreen ? null : level;
-              }),
-              padding: EdgeInsets.zero,
-              constraints:
-                  const BoxConstraints.tightFor(width: 22, height: 22),
-              icon: Icon(
-                fullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
-                size: 16,
-                color: AppPalette.rgb(0xFFCFCFCF),
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
+    // 子窗口全屏按钮已迁到顶栏（下拉选目标子窗口）；窗格内不再放按钮，
+    // K 标签统一贴格子右缘（由 LevelChartGrid 的 _PaneChrome 绘制）。
+    return chart;
   }
 
   String _mlStatusLine() {
@@ -5969,7 +6199,8 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
             '操作步骤\n'
             '1. 设置里选周期，立即自动按新周期重载（无需手动加载）；\n'
             '2. 也可改加载起止时间 / 长按中区重载；\n'
-            '3. test+custom.ohlc.csv 仍直读行即 K，忽略周期。',
+            '3. test+custom.ohlc.csv：分笔直读行即 K0，'
+            '其余周期由这些分笔按规则聚合生成。',
           ),
         ),
         actions: [
@@ -5992,9 +6223,11 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
           child: Text(
             '操作步骤：\n'
             '1. 股票选择 test；\n'
-            '2. 点「编辑/加载自定义 OHLC」填写时间与开高低收；\n'
-            '3. 「仅保存」或「保存并加载」写入 a_Data/test/custom.ohlc.csv。\n\n'
-            '口径：行即最终 K 线（忽略周期聚合）；有 CSV 优先直读，无则回退分笔。',
+            '2. 点「编辑/加载自定义 OHLC」，默认启用分笔模板：\n'
+            '   填价格与量，时间按每 3 秒一笔自动生成，开高低收联动；\n'
+            '3. 「仅保存」或「保存并加载」写入 a_Data/test/custom.ohlc.csv\n'
+            '   （即分笔数据源；选其它周期时由这些分笔自动聚合）。\n\n'
+            '口径：分笔(tick)周期一行一笔直读；聚合周期按规则生成。',
           ),
         ),
         actions: [
@@ -6008,7 +6241,8 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
   }
 
   Future<void> _openTestOhlcEditor() async {
-    // 预填：优先 CSV 全量；否则当前图上 bars；再否则空表模板
+    // 预填：优先 CSV 全量（用 tick 直读分笔原文，不用聚合周期）；
+    // 否则当前图上 bars；再否则空表模板
     List<KlineBar> seed = _allBars;
     if (_hasTestOhlcCsv()) {
       try {
@@ -6017,7 +6251,7 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
           code: 'test',
           beginDate: '1990/01/01 00:00:00',
           endDate: '2100/12/31 23:59:59',
-          period: _period,
+          period: 'tick',
         );
       } catch (_) {
         // 保持 seed=_allBars
@@ -6026,6 +6260,8 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
     final result = await showTestOhlcEditorDialog(
       context: context,
       initialBars: seed,
+      // 分笔模板默认启用：每 3 秒一笔 + 开高低收联动 + 时间自动生成。
+      tickTemplate: true,
     );
     if (result == null || !mounted) return;
     try {
@@ -6163,8 +6399,9 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
             '· 必须包含 K0：没有 K0 就弹窗警告并拒绝应用；\n'
             '· 缩窗时若会把 K0 挤出可见范围，会自动把 K0 换到第 1 窗并提示。\n\n'
             '每窗都能操作\n'
-            '· 每一窗都支持步进、播放、长按复位/重载/跑到底，操作热区与 K0 窗一致'
-            '（左＝步退、中＝播放/暂停、右＝步进、双击切十字线）；\n'
+            '· 每一窗都支持步进/步退、播放、长按步退/重载/播放，操作热区与 K0 窗一致'
+            '（左＝步退、中＝播放/暂停、右＝步进、双击切十字线；'
+            '左边界按住连续步退、右边界按住连续播放，松开即停）；\n'
             '· 步进颗粒度永远是 K0 的一根 K，所有窗同步看到同一步；\n'
             '· 每窗各自缩放、各自平移，互不牵连；主副图分割比例仍全窗共用，'
             '拖任一窗分割线全窗一起变；\n'
@@ -6698,4 +6935,129 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
       '背驰率=${cfg.divergenceRate}；桶宽=$bucketStep',
     );
   }
+}
+
+/// 标题条紧凑按钮：严格 28×28（= kDesktopCaptionBarHeight），自绘 hover 底色。
+///
+/// 不用 Material `IconButton`——它内部强制 48px 最小命中区，在 28px 工具条里
+/// 会与相邻按钮的命中区叠在一起（用户反馈的重叠根因）；也不用
+/// `WindowCaptionButton`——它强制 minWidth 46 / minHeight 32，必然溢出工具条。
+class _CaptionBarButton extends StatefulWidget {
+  const _CaptionBarButton({
+    required this.tooltip,
+    required this.onTap,
+    required this.child,
+  });
+
+  final String tooltip;
+  final VoidCallback? onTap;
+  final Widget child;
+
+  @override
+  State<_CaptionBarButton> createState() => _CaptionBarButtonState();
+}
+
+class _CaptionBarButtonState extends State<_CaptionBarButton> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = widget.onTap != null;
+    return Tooltip(
+      message: widget.tooltip,
+      waitDuration: const Duration(milliseconds: 500),
+      child: MouseRegion(
+        cursor:
+            enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
+        onEnter: (_) => setState(() => _hovered = true),
+        onExit: (_) => setState(() => _hovered = false),
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: widget.onTap,
+          child: Container(
+            width: kDesktopCaptionBarHeight,
+            height: kDesktopCaptionBarHeight,
+            alignment: Alignment.center,
+            color: _hovered && enabled
+                ? AppPalette.rgb(0x33FFFFFF)
+                : const Color(0x00000000),
+            child: Opacity(
+              opacity: enabled ? 1.0 : 0.4,
+              child: widget.child,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 顶栏「子窗口全屏」下拉弹层：`PopupMenuItem<int>` 列出各分窗层级。
+class _SplitFullscreenPopupRoute extends PopupRoute<int> {
+  _SplitFullscreenPopupRoute({
+    required this.items,
+    required this.position,
+  });
+
+  final List<PopupMenuEntry<int>> items;
+  final RelativeRect position;
+
+  @override
+  Color? get barrierColor => const Color(0x00000000);
+
+  @override
+  bool get barrierDismissible => true;
+
+  @override
+  String? get barrierLabel => '子窗口全屏';
+
+  @override
+  Duration get transitionDuration => const Duration(milliseconds: 120);
+
+  @override
+  Widget buildPage(BuildContext context, Animation<double> animation,
+      Animation<double> secondary) {
+    return MediaQuery.removePadding(
+      context: context,
+      removeTop: true,
+      child: CustomSingleChildLayout(
+        delegate: _SplitFullscreenLayoutDelegate(position),
+        child: Material(
+          color: const Color(0xFF1A1A1A),
+          borderRadius: BorderRadius.circular(6),
+          child: IntrinsicWidth(
+            child: Container(
+              constraints: const BoxConstraints(minWidth: 96),
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: items,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SplitFullscreenLayoutDelegate extends SingleChildLayoutDelegate {
+  _SplitFullscreenLayoutDelegate(this.position);
+
+  final RelativeRect position;
+
+  @override
+  Offset getPositionForChild(Size size, Size childSize) {
+    return Offset(
+      position.right > 0
+          ? math.max(8.0, size.width - childSize.width - position.right)
+          : math.max(8.0, size.width - childSize.width - 8),
+      position.top > 0 ? position.top : kDesktopCaptionBarHeight + 2,
+    );
+  }
+
+  @override
+  bool shouldRelayout(covariant _SplitFullscreenLayoutDelegate old) =>
+      old.position != position;
 }

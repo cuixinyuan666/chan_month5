@@ -6319,3 +6319,18 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - 结果：flutter analyze 无 error（仅存量 info）；合并后 PCA pull 主分支即可用上台账与健康功能。
 - 演示：PCA 上「全市场分笔上传 · 进度」弹窗出现「台账与健康」区块，点「生成台账」后共享目录产出 ticks_health_record.json，本机可抓取存档进 git。
 
+
+---
+
+### 2026-11-11 17:25 — test 股分笔模板 + 顶栏步进/子窗口全屏迁移 + 右边界长按播放
+
+- **执行者**：Claude Code
+- **任务类型**：功能开发（UI 交互 + 数据管线）
+- **上下文**：用户要求把 test 股自定义 OHLC 作为分笔数据源：编辑弹窗默认启用分笔模板（每 3 秒一笔、约 20 笔/分钟、开高低收一字联动、时间自动生成、量可改）；选中 test 后周期/起止时间自动对齐分笔配置；其它周期一律由分笔聚合；窗口右边界长按由「步进至最后」改为「按住播放、松开暂停」，原步进至最后迁入顶栏；原窗格右侧全屏按钮迁入顶栏，点开下拉选择目标子窗口，全屏后保留退出按钮。
+- **关键操作**：
+  1. `offline.rs`：test 的 `custom.ohlc.csv` 按分笔源处理——tick 周期直读过滤区间；非 tick 周期将每行映射为 TickRow（close 为价、low/high 为区间）走 `bars_from_tick_rows` 聚合，`TickQuality.source="ohlc"` 且 `skip_prompts`。
+  2. `test_ohlc_editor_dialog.dart`：分笔模板默认开启；起始时间 + 每行 i×3s 自动时间（只读）；任一价格输入联动整行 O/H/L/C；量保持可编辑；复制/删除行自动重排时间；模板关闭时保留原自由编辑。
+  3. `main.dart`：选中 test 自动切 `period='tick'` 并按首末分笔同步起止时间；顶栏新增「步进至最后」与「子窗口全屏」下拉（自绘 PopupRoute，按 `activeLevels` 列出可全屏层级）；全屏后按钮变为「退出子窗口全屏」；移除窗格内旧全屏按钮。
+  4. `kline_chart.dart`：右边界长按改为 `onLongPressPlayStart` / `onLongPressEnd` → `onLongPressPlayStop`（按住播放、松开暂停）；中间点击播放不变；左/中长按重置/重载不变。
+- **结果**：`flutter analyze` 131 issues（与基线持平，无新增）；相关测试 58 项全部通过（`test_ohlc_editor_dialog_test.dart` 新增分笔模板组）；Rust release 构建成功并替换 `chan_ffi.dll`；`flutter build windows --debug` 成功，应用已启动（PID 152332）待人工验证。
+- **注意事项**：全量 `flutter test` 因系统内存不足被系统终止（非测试失败），未重跑；建议关闭其它占内存程序后再跑一次全量。人工验证清单：test 选股后周期/起止自动变为分笔；编辑弹窗默认分笔模板、3 秒时间、四价联动、量可改；顶栏「步进至最后」；右边界长按按住播放/松开暂停；顶栏全屏下拉选层 + 退出全屏按钮。

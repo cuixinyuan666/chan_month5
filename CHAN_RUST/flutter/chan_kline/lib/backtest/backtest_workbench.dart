@@ -22,7 +22,9 @@ export 'backtest_report_panel.dart'
     show BacktestReportTab, BacktestWorkbenchTab, reportTabOf;
 
 /// 桌面自绘标题条高度（与 main 顶栏最小/最大/关闭一致）。
-const kDesktopCaptionBarHeight = 36.0;
+/// 2026-11-11 收紧到 28：让窗控/恢复布局/设置三键不再因 48px 最小命中区
+/// 溢出工具条，K 线图区域最大化。
+const kDesktopCaptionBarHeight = 28.0;
 
 /// 桌面图表区四周留白（与 main Padding 一致）。
 const kDesktopShellInset = 4.0;

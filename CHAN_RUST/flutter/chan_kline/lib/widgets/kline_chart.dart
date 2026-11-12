@@ -180,8 +180,10 @@ class KlineChart extends StatefulWidget {
     this.onTapPlay,
     this.onTapStepForward,
     this.onLongPressReset,
+    this.onLongPressResetStop,
     this.onLongPressReload,
-    this.onLongPressRunToEnd,
+    this.onLongPressPlayStart,
+    this.onLongPressPlayStop,
     this.chipConfig = const ChipConfig(),
     this.tickDistConfig = const TickDistConfig(),
     this.mathIndicatorConfig = const MathIndicatorConfig(),
@@ -210,6 +212,8 @@ class KlineChart extends StatefulWidget {
     /// 步进当步下标（与主界面 `_stepIdx` 同构）：用于末根 K 影线粗细（未确认 vs 已确认）。
     /// -1 表示未步进或未知，一律按已确认处理。
     this.stepIdx = -1,
+    this.stepSerial = 0,
+    this.resetViewSerial = 0,
   });
 
   final List<KlineBar> bars;
@@ -283,6 +287,11 @@ class KlineChart extends StatefulWidget {
   final bool autoFollowLatest;
   /// 是否正在逐K播放（中间区单击立即暂停，不走双击延迟）
   final bool isPlaying;
+  /// 步进序号：主界面每步进一次 +1。数据长度变化时据此区分
+  /// 「步进」与「换股/换周期/重载」，只有步进才走保持位置口径。
+  final int stepSerial;
+  /// 恢复布局序号：主界面点「恢复布局」+1，各窗复位视口并恢复旧自动归位逻辑。
+  final int resetViewSerial;
   /// 筹码分布配置（总开关/桶宽/峰线等）
   final ChipConfig chipConfig;
   /// 笔数分布配置（主图左侧；仅 K0）
@@ -361,10 +370,13 @@ class KlineChart extends StatefulWidget {
   final VoidCallback? onTapPlay;
   final VoidCallback? onTapStepForward;
 
-  /// 长按左/中/右：首K / 重新加载 / 一次性走完
+  /// 长按左/中/右：左=按住步退（松开停）/ 重新加载 / 右=按住播放（松开暂停）
   final VoidCallback? onLongPressReset;
+  final VoidCallback? onLongPressResetStop;
   final VoidCallback? onLongPressReload;
-  final VoidCallback? onLongPressRunToEnd;
+  /// 右边界长按开始/结束：按住持续播放，松开即暂停（原「一次性走完」已迁到顶栏）。
+  final VoidCallback? onLongPressPlayStart;
+  final VoidCallback? onLongPressPlayStop;
 
   @override
   State<KlineChart> createState() => _KlineChartState();
@@ -1039,6 +1051,10 @@ class _KlineChartState extends State<KlineChart> {
       _viewport = _resolveViewport();
       _resetViewport();
     }
+    // 「恢复布局」：各窗复位视口（并清除手动调整标记，步进回到旧自动归位逻辑）。
+    if (widget.resetViewSerial != oldWidget.resetViewSerial) {
+      _resetViewport();
+    }
 
     final lenChanged = oldWidget.bars.length != widget.bars.length;
     final seriesChanged = widget.bars.isEmpty ||
@@ -1054,7 +1070,18 @@ class _KlineChartState extends State<KlineChart> {
       _viewport.allXMax = math.max(0, widget.bars.length - 1).toDouble();
       if (widget.autoFollowLatest) {
         final last = widget.bars.length - 1;
-        if (widget.displayLevel != null && !_crosshairEnabled) {
+        // 新口径：用户手动缩放/平移过、且这次确实是「步进」时，视窗按数据
+        // 增量整体平移，最新 K 保持当前屏幕位置；跨度与纵轴缩放/位移都不动。
+        // 换股/换周期/重载（stepSerial 没变）仍走旧口径复位。
+        final hold = widget.stepSerial != oldWidget.stepSerial &&
+            _viewport.userAdjustedView &&
+            oldWidget.bars.isNotEmpty;
+        if (hold) {
+          _viewport.holdLatestThroughStep(
+            lastIdx: last,
+            prevLastIdx: oldWidget.bars.length - 1,
+          );
+        } else if (widget.displayLevel != null && !_crosshairEnabled) {
           // 没盯住某一根 K：各窗按根数把全部 K 放进来，并略靠右。
           _viewport.showAllBars();
         } else if (widget.displayLevel != null) {
@@ -2012,18 +2039,31 @@ class _KlineChartState extends State<KlineChart> {
     });
   }
 
+  /// 长按开始时的热区（0 左 / 1 中 / 2 右），松手时据此决定是否停播。
+  int? _longPressZone;
+
   void _onZoneLongPress(LongPressStartDetails d) {
-    // 十字线激活时屏蔽长按：复位/重载/跑到末尾
+    // 十字线激活时屏蔽长按：步退/重载/播放
     if (_crosshairEnabled) return;
     if (widget.bars.isEmpty && _hotZone(d.localPosition) != 1) return;
-    switch (_hotZone(d.localPosition)) {
+    _longPressZone = _hotZone(d.localPosition);
+    switch (_longPressZone) {
       case 0:
+        // 左边界：按住连续步退，松开（onLongPressResetStop）即停。
         widget.onLongPressReset?.call();
       case 1:
         widget.onLongPressReload?.call();
       default:
-        widget.onLongPressRunToEnd?.call();
+        // 右边界：按住即播放，松开（onLongPressPlayStop）即暂停。
+        widget.onLongPressPlayStart?.call();
     }
+  }
+
+  void _onZoneLongPressEnd(LongPressEndDetails d) {
+    final zone = _longPressZone;
+    _longPressZone = null;
+    if (zone == 0) widget.onLongPressResetStop?.call();
+    if (zone == 2) widget.onLongPressPlayStop?.call();
   }
 
   void _onPanStart(DragStartDetails d, double mainPlotH) {
@@ -2851,6 +2891,7 @@ class _KlineChartState extends State<KlineChart> {
                       child: GestureDetector(
                         behavior: HitTestBehavior.opaque,
                         onLongPressStart: _onZoneLongPress,
+                        onLongPressEnd: _onZoneLongPressEnd,
                         onScaleStart: _onPinchScaleStart,
                         onScaleUpdate: (d) => _onPinchScaleUpdate(
                           d,
@@ -2889,6 +2930,7 @@ class _KlineChartState extends State<KlineChart> {
                       child: GestureDetector(
                         behavior: HitTestBehavior.translucent,
                         onLongPressStart: _onZoneLongPress,
+                        onLongPressEnd: _onZoneLongPressEnd,
                         onPanStart: (d) => _onPanStart(
                           d,
                           mainH - KlineViewport.padT - KlineViewport.padB,

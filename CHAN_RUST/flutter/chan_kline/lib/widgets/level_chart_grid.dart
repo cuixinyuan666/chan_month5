@@ -106,8 +106,8 @@ class _GridDivider extends StatelessWidget {
 /// 用 [IgnorePointer] 包住，绝不抢鼠标。
 ///
 /// 右上角那一格（两窗布局的右侧窗、四窗及以上的右上角窗）的标签
-/// 按标题栏窗控宽度左移，落到设置钮左侧，避免压住设置与关闭。
-/// 让位与格子多宽无关：那一格的右缘贴着窗口右缘。
+/// 曾按标题栏窗控宽度左移避让；2026-11-11 标题条工具条化（独立成一行、
+/// 图表整体下移）后不再压图表，标签与其它窗格一致贴格子右缘 6px。
 class _PaneChrome extends StatelessWidget {
   const _PaneChrome({
     required this.level,
@@ -123,7 +123,13 @@ class _PaneChrome extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final right = levelBadgeRightInset(topRightPane: topRightPane);
+    // 工具条化后标题条独立成一行，图表整体下移，窗控不再压图表：
+    // 所有窗格（含右上角）的 K 标签统一贴格子右缘 6px，视觉一致。
+    final right = levelBadgeRightInset(
+      topRightPane: topRightPane,
+      captionControlsWidth: 0,
+      gapBeforeSettings: 0,
+    );
     return Stack(
       fit: StackFit.expand,
       children: [
