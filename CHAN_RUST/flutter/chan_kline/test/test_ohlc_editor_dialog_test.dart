@@ -46,6 +46,21 @@ void main() {
     expect(_cellText(tester, 0, 5), '2');
   });
 
+  testWidgets('行尾加号可点击并复制本行到下方', (tester) async {
+    await openFree(tester, _seedBars(2));
+
+    expect(_rowCount(tester), 2);
+    expect(_cellText(tester, 0, 1), '3');
+    expect(_cellText(tester, 1, 1), '3.1');
+
+    await tester.tap(_rowAddAt(tester, 0));
+    await tester.pump();
+
+    expect(_rowCount(tester), 3);
+    expect(_cellText(tester, 1, 1), '3');
+    expect(_cellText(tester, 2, 1), '3.1');
+  });
+
   testWidgets('悬停格内滚轮调值且表格不滚；非悬停时滚轮滚表格不动值', (tester) async {
     await openFree(tester, _seedBars(30));
 
@@ -285,6 +300,9 @@ Finder _stepAt(WidgetTester tester, int row, int cell, IconData icon,
 /// 行数 = 行尾「+」按钮个数。
 int _rowCount(WidgetTester tester) =>
     tester.widgetList(find.byIcon(Icons.add_circle_outline)).length;
+
+Finder _rowAddAt(WidgetTester tester, int row) =>
+    find.byIcon(Icons.add_circle_outline).at(row);
 
 /// 表格自身的 Scrollable（SingleChildScrollView 内部那一个）。
 Finder _tableScrollable() => find
