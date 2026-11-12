@@ -6404,3 +6404,18 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **结果**：`flutter test test/first_fractal_rule_test.dart` 7/7 通过；`flutter analyze --no-pub` 0 error、131 issues（= 基线，无新增）；`flutter test` 全量 +695 -9，9 项失败经 `git stash` 对照确认为**基线既有**（chip_profile / incremental_lookup_session / robot_verify_full_suite，与本改动无关）。
 - **注意事项**：① Rust 永久结构（分型确认 / 段 / 买卖点 / 中枢）**未动** —— 本次只改子窗口显示层，子窗口总开关一关即完全回退；② 判定输入是「该层画出来的框」，K1~Kn 层用该层虚拟单元，故同一层内 K0 跨度较大（如 U[0] 覆盖 K0[0..3]），这是全层同构的正确形态，不是缺陷；③ Rust `engine.rs` 与 Dart 两套合并实现仍是人工对齐关系，本次只改 Dart 展示层，Rust 侧未同步（若日后要改 Rust 结构，须同步 Dart 镜像）。
 
+---
+
+### 2026-11-12 19:23 — 预锚动态 K 线恢复真实高低价
+
+- **执行者**：opencode
+- **任务类型**：Bug修复（缠论动态 K 线口径）
+- **上下文**：用户确认「高高 / 低低」只属于合并框，不应套到动态 K 线。此前各层第一根预锚动态 K 在 `pre_anchor_unit_ohlcv` 中把最低价取成区间内最高的 low，导致 K2 动态 K 与 K1 动态 K 不对齐。
+- **关键操作**：
+  1. `pipeline.rs`：预锚动态 K 改为从父层 K 线区间取真实高低价，最高价取最高 high，最低价取最低 low；开盘价仍按段方向取分型极值。
+  2. 合并框逻辑未改，向上合并仍取高高，向下合并仍取低低。
+  3. 同步更新 Rust 单测、Flutter 动态 K 测试、机器人验证口径和设置说明。
+  4. 重编并替换本地 `chan_ffi.dll`，但 DLL 被 `.gitignore` 忽略，不入库。
+- **结果**：`cargo test -p chan_data --lib pre_anchor_unit` 2/2 通过；`flutter test test/early_dynamic_unit_test.dart` 10/10 通过；`flutter analyze` 无新增错误。完整 `chan_data` 测试为 150 通过、6 失败：其中 3 个是本次改动后的旧动态 K 断言，3 个是工作区已有 `a_Data/test/custom.ohlc.csv` 改动导致，未纳入本次提交。
+- **注意事项**：未 push。若要在 App 里看到新口径，需要使用本次已替换的本地 DLL 冷启动验证。
+
