@@ -32,10 +32,7 @@ void main() {
     final priced = duplicated.setSelectedPrice(10.017);
     expect(priced.points[priced.safeSelected].price, closeTo(10.02, 1e-9));
 
-    final moved = priced.moveSelectedTo(0);
-    expect(moved.safeSelected, 0);
-
-    final removed = moved.removePoint();
+    final removed = priced.removePoint();
     expect(removed.points.length, 2);
   });
 

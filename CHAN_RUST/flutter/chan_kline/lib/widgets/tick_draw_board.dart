@@ -9,6 +9,7 @@ import '../models/chart_indicator.dart';
 import '../models/k1_bar_view.dart';
 import '../models/kline_bar.dart';
 import '../models/kline_combine_bundle.dart';
+import '../theme/app_palette.dart';
 import 'chart_sync_controller.dart';
 import 'crosshair_tooltip_bridge.dart';
 import 'crosshair_tooltip_panel.dart';
@@ -133,18 +134,6 @@ class TickDrawBoardModel {
     return copyWith(points: next);
   }
 
-  /// 把当前选中分笔移动到 [target] 位置。
-  TickDrawBoardModel moveSelectedTo(int target) {
-    if (!hasSelection) return this;
-    final i = safeSelected;
-    final t = target.clamp(0, points.length - 1);
-    if (t == i) return this;
-    final next = [...points];
-    final moved = next.removeAt(i);
-    next.insert(t, moved);
-    return copyWith(points: next, selected: t);
-  }
-
   double _snap(double value) {
     final step = priceStep <= 0 ? 0.01 : priceStep;
     return (value / step).round() * step;
@@ -234,23 +223,33 @@ class TickDrawBoard extends StatefulWidget {
   State<TickDrawBoard> createState() => _TickDrawBoardState();
 }
 
-class _TickDrawBoardState extends State<TickDrawBoard> {
+class _TickDrawBoardState extends State<TickDrawBoard>
+    with SingleTickerProviderStateMixin {
   /// 画板内所有窗口共享一份视口：放大/缩小/平移/十字线全同步。
   final ChartSyncController _sync =
       ChartSyncController(sharedViewport: true);
   final CrosshairTooltipBridge _tooltipBridge = CrosshairTooltipBridge();
 
-  bool _dragging = false;
-  int? _runStart;
-  int? _runEnd;
+  /// 同价闪烁：只在两/多根同价瞬间亮一下，不限制上下移动。
+  late final AnimationController _flash = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 520),
+  );
+  ({int start, int end})? _flashRun;
+  String? _flashKey;
+
   Offset _tapDown = Offset.zero;
+  int _tapButtons = 0;
   bool _tapMoved = false;
+  double _dragDy = 0;
+  double _dragStartPrice = 0;
 
   TickDrawBoardModel get model => widget.model;
   KlineCombineBundle get bundle => widget.bundle;
 
   @override
   void dispose() {
+    _flash.dispose();
     _sync.dispose();
     _tooltipBridge.dispose();
     super.dispose();
@@ -261,13 +260,12 @@ class _TickDrawBoardState extends State<TickDrawBoard> {
     final bars = model.toTickBars();
     final k1Views = buildK1BarViews(bundle.k1Bars);
     final maxKn = chartMaxKn(levels: bundle.levels, k0Lines: bundle.k0Lines);
-    final theme = Theme.of(context);
     return Material(
-      color: theme.colorScheme.surface,
+      color: AppPalette.canvasBg,
       child: SafeArea(
         child: Column(
           children: [
-            _toolbar(theme),
+            _toolbar(),
             Expanded(
               child: LayoutBuilder(
                 builder: (context, constraints) {
@@ -282,7 +280,6 @@ class _TickDrawBoardState extends State<TickDrawBoard> {
                             child: SizedBox(
                               width: _tooltipPanelWidth,
                               child: _buildDockedTooltipPanel(
-                                theme,
                                 constraints.maxHeight,
                               ),
                             ),
@@ -315,19 +312,23 @@ class _TickDrawBoardState extends State<TickDrawBoard> {
     );
   }
 
-  Widget _toolbar(ThemeData theme) {
-    final onSurface = theme.colorScheme.onSurface;
+  Widget _toolbar() {
+    final onSurface = AppPalette.textPrimary;
     final hasSel = model.hasSelection;
     return Container(
       height: 44,
       padding: const EdgeInsets.symmetric(horizontal: 8),
+      decoration: BoxDecoration(
+        color: AppPalette.surface,
+        border: Border(bottom: BorderSide(color: AppPalette.border)),
+      ),
       child: Row(
         children: [
           Text('分笔画板', style: TextStyle(color: onSurface)),
           const SizedBox(width: 8),
           DropdownButton<int>(
             value: normalizeLevelWindowCount(model.windowCount),
-            dropdownColor: theme.colorScheme.surfaceContainerHighest,
+            dropdownColor: AppPalette.surfaceAlt,
             style: TextStyle(color: onSurface),
             items: [
               for (final count in kLevelWindowCountChoices)
@@ -342,7 +343,7 @@ class _TickDrawBoardState extends State<TickDrawBoard> {
             hasSel
                 ? '已选第 ${model.safeSelected + 1}/${model.points.length} 笔（再点同根取消）'
                 : '点击 K 线选中；未选中时拖拽为十字线/平移',
-            style: TextStyle(color: onSurface.withValues(alpha: 0.7), fontSize: 12),
+            style: TextStyle(color: AppPalette.textSecondary, fontSize: 12),
           ),
           const SizedBox(width: 8),
           IconButton(
@@ -420,22 +421,35 @@ class _TickDrawBoardState extends State<TickDrawBoard> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final vp = _sync.viewportFor(0);
-        final n = math.max(1, model.points.length);
         final width = constraints.maxWidth;
         final height = constraints.maxHeight;
+        final mainH = height * _sync.mainFraction;
+        final plotH = math.max(
+          1.0,
+          mainH - KlineViewport.padT - KlineViewport.padB,
+        );
+        final range = vp.priceRangeFor(vp.visibleBars(bars));
         final slotWidth = vp.barSlotWidth(width);
+        final dotR = math.max(2.0, math.min(slotWidth * 0.35, 4.0));
+        final hitR = math.max(9.0, dotR + 6);
+        Offset dotAt(int i) => Offset(
+              vp.barCenterX(i, width),
+              range.yOf(bars[i].close, KlineViewport.padT, plotH),
+            );
         final selected = model.safeSelected;
+        final selDot = model.hasSelection ? dotAt(selected) : Offset.zero;
         return Stack(
           fit: StackFit.expand,
           children: [
             chart,
-            // 只处理点击（不含拖动）：点 K 线选中；拖动仍归原图平移/十字线。
-            // 用 Listener 而不是 GestureDetector，避免抢掉指标按钮的点击。
+            // 点击必须落在圆点 K 线附近才算选中；空白处只取消选中。
+            // 用 Listener 不抢指针竞技场：原双轮/中键/拖拽十字操作全部保留。
             Positioned.fill(
               child: Listener(
                 behavior: HitTestBehavior.translucent,
                 onPointerDown: (e) {
                   _tapDown = e.localPosition;
+                  _tapButtons = e.buttons;
                   _tapMoved = false;
                 },
                 onPointerMove: (e) {
@@ -444,72 +458,72 @@ class _TickDrawBoardState extends State<TickDrawBoard> {
                   }
                 },
                 onPointerUp: (e) {
-                  if (!_tapMoved && _tapDown.dy > _topOverlayGuard) {
-                    _onTapSelect(e.localPosition, width, n);
+                  // 只认左键单击：中键/右键的十字线老操作原样放行。
+                  if (_tapMoved || _tapButtons != 1) return;
+                  final hit = _hitDot(e.localPosition, bars, dotAt, hitR);
+                  if (hit == null) {
+                    if (model.hasSelection) {
+                      widget.onChanged(model.clearSelection());
+                    }
+                    return;
                   }
+                  final next = model.hasSelection && model.safeSelected == hit
+                      ? model.clearSelection()
+                      : model.selectPoint(hit);
+                  widget.onChanged(next);
                 },
               ),
             ),
-            if (_dragging && _runStart != null && _runEnd != null &&
-                _runEnd! > _runStart!)
-              Positioned(
-                left: vp.barCenterX(_runStart!, width) - slotWidth / 2,
-                width: slotWidth * (_runEnd! - _runStart! + 1),
-                top: 0,
-                bottom: 0,
-                child: IgnorePointer(
-                  child: CustomPaint(
-                    painter: _SamePriceBandPainter(),
-                  ),
-                ),
+            if (_flashRun != null)
+              AnimatedBuilder(
+                animation: _flash,
+                builder: (context, _) {
+                  final t = (1 - _flash.value).clamp(0.0, 1.0);
+                  if (t <= 0.01) return const SizedBox.shrink();
+                  final a = dotAt(_flashRun!.start);
+                  final b = dotAt(_flashRun!.end);
+                  final r = math.max(6.0, dotR + 4);
+                  return Positioned(
+                    left: a.dx - r,
+                    top: a.dy - r,
+                    width: (b.dx - a.dx).abs() + r * 2,
+                    height: r * 2,
+                    child: IgnorePointer(
+                      child: Opacity(
+                        opacity: t,
+                        child: CustomPaint(painter: _SamePriceBandPainter()),
+                      ),
+                    ),
+                  );
+                },
               ),
             if (model.hasSelection) ...[
-              // 聚焦框：只显示选中的那一根。
+              // 聚焦框只包住圆点本身，不再拉到整列高度。
               Positioned(
-                left: vp.barCenterX(selected, width) - math.max(5, slotWidth / 2),
-                width: math.max(10, slotWidth),
-                top: _topOverlayGuard,
-                bottom: 0,
+                left: selDot.dx - math.max(6.0, dotR + 4),
+                top: selDot.dy - math.max(6.0, dotR + 4),
+                width: math.max(12.0, dotR * 2 + 8),
+                height: math.max(12.0, dotR * 2 + 8),
                 child: IgnorePointer(
                   child: CustomPaint(painter: _FocusBandPainter()),
                 ),
               ),
-              // 选中态整块可拖：拖非 K 线区域也改选中 K 线（题意：选中后进入编辑）。
+              // 拖动热区也只放在圆点上：上下改价，不允许左右移动。
               Positioned(
-                left: 0,
-                right: 0,
-                top: _topOverlayGuard,
-                bottom: 0,
+                left: selDot.dx - hitR,
+                top: selDot.dy - hitR,
+                width: hitR * 2,
+                height: hitR * 2,
                 child: GestureDetector(
                   behavior: HitTestBehavior.opaque,
-                  onTapUp: (d) => _onTapSelect(d.localPosition, width, n),
                   onPanStart: (_) {
-                    setState(() {
-                      _dragging = true;
-                      _runStart = null;
-                      _runEnd = null;
-                    });
+                    _dragDy = 0;
+                    _dragStartPrice = model.points[selected].price;
                   },
-                  onPanUpdate: (d) => _onDrag(
-                    d.localPosition,
-                    width,
-                    height,
-                    bars,
-                  ),
-                  onPanEnd: (_) {
-                    setState(() {
-                      _dragging = false;
-                      _runStart = null;
-                      _runEnd = null;
-                    });
-                  },
-                  onPanCancel: () {
-                    setState(() {
-                      _dragging = false;
-                      _runStart = null;
-                      _runEnd = null;
-                    });
-                  },
+                  onPanUpdate: (d) =>
+                      _onDragVertical(d.delta.dy, range, plotH),
+                  onPanEnd: (_) => _endDrag(),
+                  onPanCancel: _endDrag,
                 ),
               ),
             ],
@@ -519,42 +533,56 @@ class _TickDrawBoardState extends State<TickDrawBoard> {
     );
   }
 
-  void _onTapSelect(Offset local, double width, int n) {
-    final vp = _sync.viewportFor(0);
-    final i = vp.barIndexAtCanvasX(local.dx, width, n);
-    final next = model.hasSelection && model.safeSelected == i
-        ? model.clearSelection()
-        : model.selectPoint(i);
+  int? _hitDot(
+    Offset p,
+    List<KlineBar> bars,
+    Offset Function(int) dotAt,
+    double hitR,
+  ) {
+    int? best;
+    var bestD = hitR;
+    for (var i = 0; i < bars.length; i++) {
+      final d = (dotAt(i) - p).distance;
+      if (d <= bestD) {
+        bestD = d;
+        best = i;
+      }
+    }
+    return best;
+  }
+
+  void _onDragVertical(double dy, PriceRange range, double plotH) {
+    if (!model.hasSelection) return;
+    _dragDy += dy;
+    final span = math.max(1e-9, range.max - range.min);
+    final price = _dragStartPrice - _dragDy * span / math.max(1.0, plotH);
+    final next = model.setSelectedPrice(price);
+    _updateFlash(next);
     widget.onChanged(next);
-    if (!next.hasSelection) {
+  }
+
+  void _updateFlash(TickDrawBoardModel m) {
+    final run = _priceRun(m, m.safeSelected);
+    if (run.end > run.start) {
+      final key = '${m.points[m.safeSelected].price}/${run.start}/${run.end}';
+      if (key != _flashKey) {
+        _flashKey = key;
+        setState(() => _flashRun = run);
+        _flash.forward(from: 0);
+      }
+    } else if (_flashRun != null) {
       setState(() {
-        _dragging = false;
-        _runStart = null;
-        _runEnd = null;
+        _flashRun = null;
+        _flashKey = null;
       });
     }
   }
 
-  void _onDrag(Offset local, double width, double height, List<KlineBar> bars) {
-    final vp = _sync.viewportFor(0);
-    final n = math.max(1, model.points.length);
-    final mainH = height * _sync.mainFraction;
-    final plotH = math.max(
-      1.0,
-      mainH - KlineViewport.padT - KlineViewport.padB,
-    );
-    final range = vp.priceRangeFor(vp.visibleBars(bars));
-    final price = range.priceFromY(local.dy, KlineViewport.padT, plotH);
-    final target = vp.barIndexAtCanvasX(local.dx, width, n);
-    var next = model;
-    if (next.safeSelected != target) next = next.moveSelectedTo(target);
-    next = next.setSelectedPrice(price);
-    final run = _priceRun(next, next.safeSelected);
+  void _endDrag() {
     setState(() {
-      _runStart = run.start;
-      _runEnd = run.end;
+      _flashRun = null;
+      _flashKey = null;
     });
-    widget.onChanged(next);
   }
 
   ({int start, int end}) _priceRun(TickDrawBoardModel m, int index) {
@@ -572,16 +600,14 @@ class _TickDrawBoardState extends State<TickDrawBoard> {
     return (start: start, end: end);
   }
 
-  Widget _buildDockedTooltipPanel(ThemeData theme, double h) {
+  Widget _buildDockedTooltipPanel(double h) {
     return ValueListenableBuilder<List<CrosshairTooltipRow>>(
       valueListenable: _tooltipBridge.rows,
       builder: (context, rows, _) {
         return Container(
           decoration: BoxDecoration(
             border: Border(
-              right: BorderSide(
-                color: theme.colorScheme.outline.withValues(alpha: 0.3),
-              ),
+              right: BorderSide(color: AppPalette.border),
             ),
           ),
           child: CrosshairTooltipPanel(
@@ -602,9 +628,6 @@ class _TickDrawBoardState extends State<TickDrawBoard> {
   }
 
   static const double _tooltipPanelWidth = 360;
-
-  /// 顶部指标按钮/胶囊条占位：点击选中与拖拽条都从这里往下开始。
-  static const double _topOverlayGuard = 56;
 }
 
 class _FocusBandPainter extends CustomPainter {
