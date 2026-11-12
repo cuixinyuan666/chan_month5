@@ -6482,3 +6482,19 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **结果**：`flutter test test/tick_draw_board_test.dart` 2/2 通过；`flutter test test/early_dynamic_unit_test.dart` 10/10 通过；`flutter test test/test_ohlc_editor_dialog_test.dart` 8/8 通过；`flutter analyze` 无新增错误。
 - **注意事项**：未 push；未改缠论计算口径。
 
+---
+
+### 2026-11-12 23:41 — 画板随视口刷新圆点命中与选中框
+
+- **执行者**：opencode
+- **任务类型**：功能修正（分笔画板缩放后选中）
+- **上下文**：用户反馈放大缩小后点击 K 线没有出现选择框；要求自适应并严格按圆形 K 线的真实大小判断命中，点在圆内才算选中。
+- **关键操作**：
+  1. `KlineChart` 增加可选 `onViewportChanged` 回调：视口缩放、平移、换数据或宽度变化后，用签名比对只回调一次，避免自激重建。
+  2. 画板 K0 窗口接收该回调并刷新自身，聚焦框与拖动热区跟随缩放后的圆点位置。
+  3. 圆点半径严格对齐 `KlineChart` 的 tick 口径：`barW=max(1,slotW*0.65)`、`dotR=max(1.2,min(barW*0.45,slotW*0.35))`。
+  4. 点击命中改为现算视口坐标，距离必须落在 `dotR` 内才算选中，不再用固定 9 像素容差；点空白只取消选中。
+  5. 聚焦框与拖动热区大小随 `dotR` 自适应。
+- **结果**：`flutter test test/tick_draw_board_test.dart` 2/2 通过；`flutter test test/early_dynamic_unit_test.dart` 10/10 通过；`flutter analyze` 无新增错误。
+- **注意事项**：未 push；未改缠论计算口径。
+
