@@ -6360,3 +6360,19 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   5. `test/theme_runtime_resolved_test.dart` 扩 4 组：JSON 往返含 eyeWarmth、满暖/零暖/插值语义、controlInk 三模式取值、ThemeChooser 滑杆仅在护眼显示且切走切回保留强度。
 - **结果**：`flutter analyze` 0 error（131 条全为存量）；`theme_runtime_resolved_test.dart` 8/8 通过；已重新 `flutter build windows --debug` 并启动验证（Debug 目录下 chan_ffi.dll 就位，PID 8512 运行中；日志中 TicksFullUploadPanel 的 setState-during-build 为存量无害告警，与本次改动无关）。
 - **演示**：设置页「主题外观」点护眼 → 对勾落在护眼上且界面即时变米黄，下方出现「暖色强度」滑杆，拖到 0% 变纯白、100% 回米黄；切浅色/护眼后右上角最小化/最大化/关闭按钮及设置齿轮、浮层侧边切换均显示为黑色，对比清晰。
+
+---
+
+### 2026-11-12 10:55 — 暖色强度/亮度三主题通用 + 扩大暖色区间
+
+- **执行者**：Claude Code
+- **任务类型**：功能开发（主题系统）
+- **上下文**：此前仅护眼模式支持暖色强度调节且效果不明显；要求深色/浅色/护眼三主题均开放暖色强度调节并扩大区间，另新增亮度调节项，两项参数对三个主题全部生效。
+- **关键操作**：
+  1. `app_palette.dart`：`eyeWarmth` 泛化为 `warmth`（三主题通用），新增 `brightness`（0.5=各主题基准明度，0~1 → 明度倍率 0.6~1.4）。`_t()` 与 `c()` 两级换算均接入这两项。
+  2. 暖色派生重写：固定暖色相 38°、饱和 0.42、保持源色明度（近白→米白/暖白、暗色→暖黑），修掉旧版把近白洗成纯白、色相绕远路跑绿的问题，暖色可感区间显著扩大。
+  3. `theme_settings_store.dart`：落盘 schema 升级为 `{mode, warmth, brightness}`，兼容旧 `eyeWarmth` 键（旧文件护眼按满暖 1.0 读入）。深色默认 warmth=0/brightness=0.5 → 切回深色逐像素与旧版一致；用户手动拖过暖色后其值全局沿用；未手动调过时按主题给默认（护眼=1、深色/浅色=0）。
+  4. `theme_chooser.dart`：暖色强度与亮度两条滑杆改为三主题常显（不再仅护眼），各自带百分比与说明文案。
+  5. `theme_runtime_resolved_test.dart`：新增三主题暖色/亮度生效、深色零暖零亮差逐像素不变、JSON 往返与旧键兼容用例。
+- **结果**：flutter analyze 131 issues（= 基线，无新增，0 error）；主题+回归测试 72 项全部通过；flutter build windows --debug 成功，应用已启动（PID 14128）待人工验证。commit 54d16396。
+- **注意事项**：人工验证清单：设置页「主题外观」三主题均见暖色/亮度滑杆；拖暖色滑杆观察底色与文字明显转暖（深色→暖黑、浅色→米白、护眼→满暖橙）；拖亮度滑杆观察整体明暗变化；切回深色确认底色仍为 0xFF121212（未手动调过暖色时）。
