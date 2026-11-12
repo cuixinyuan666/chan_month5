@@ -141,7 +141,7 @@ class _MlWorkbenchState extends State<MlWorkbench> {
                 '$title · schema v${MlFeatureSchema.schemaVersion}'
                 '${widget.isXgbMode ? " · XGB" : " · LR"}',
                 style: TextStyle(
-                  color: AppPalette.rgb(0xFFFFFFFF),
+                  color: Colors.white,
                   fontSize: 13,
                   fontWeight: FontWeight.w600,
                 ),
@@ -339,9 +339,9 @@ class _MlWorkbenchState extends State<MlWorkbench> {
                     SwitchListTile(
                       contentPadding: EdgeInsets.zero,
                       dense: true,
-                      title: const Text(
+                      title: Text(
                         '强制重训（关闭则指纹一致时可复用 model）',
-                        style: TextStyle(color: Colors.white70, fontSize: 12),
+                        style: TextStyle(color: AppPalette.rgb(0xB3FFFFFF), fontSize: 12),
                       ),
                       value: widget.forceXgbRetrain,
                       onChanged:
@@ -391,7 +391,7 @@ class _MlWorkbenchState extends State<MlWorkbench> {
       children: [
         SizedBox(
           width: 36,
-          child: Text(label, style: const TextStyle(color: Colors.white70)),
+          child: Text(label, style: TextStyle(color: AppPalette.rgb(0xB3FFFFFF))),
         ),
         Expanded(
           child: Slider(

@@ -1180,7 +1180,7 @@ class _KlineHomePageState extends State<KlineHomePage>
         const SizedBox(height: 8),
         Text(
           rangeText,
-          style: const TextStyle(fontSize: 12, color: Colors.white70),
+          style: TextStyle(fontSize: 12, color: AppPalette.rgb(0xB3FFFFFF)),
         ),
       ],
     );
@@ -3914,16 +3914,16 @@ class _KlineHomePageState extends State<KlineHomePage>
             icon: Icon(
               _panelExpanded ? Icons.close : Icons.settings,
               size: 18,
-              color: AppPalette.rgb(0xFFE2E8F0),
+              color: AppPalette.controlInk,
             ),
           ),
         ),
         WindowCaptionButton.minimize(
-          brightness: Brightness.dark,
+          brightness: AppPalette.isDark ? Brightness.dark : Brightness.light,
           onPressed: () => windowManager.minimize(),
         ),
         WindowCaptionButton.maximize(
-          brightness: Brightness.dark,
+          brightness: AppPalette.isDark ? Brightness.dark : Brightness.light,
           onPressed: () async {
             // 铺满工作区 ↔ 还原；不走原生 maximize（会盖任务栏）
             if (await isFillingWorkArea()) {
@@ -3943,7 +3943,7 @@ class _KlineHomePageState extends State<KlineHomePage>
           },
         ),
         WindowCaptionButton.close(
-          brightness: Brightness.dark,
+          brightness: AppPalette.isDark ? Brightness.dark : Brightness.light,
           onPressed: () => _requestCloseApp(),
         ),
       ],

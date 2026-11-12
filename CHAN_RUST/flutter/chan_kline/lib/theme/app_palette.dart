@@ -44,6 +44,7 @@ enum AppThemeMode {
 /// 深色模式下 `rgb()` 原样返回传入值，保证老界面零变化。
 abstract final class AppPalette {
   static AppThemeMode _mode = AppThemeMode.dark;
+  static double _eyeWarmth = 1.0;
 
   static AppThemeMode get mode => _mode;
 
@@ -53,10 +54,25 @@ abstract final class AppPalette {
 
   static bool get isDark => _mode == AppThemeMode.dark;
 
+  /// 护眼暖色强度 0~1：0=纯中性（等同浅色反色），1=满暖调（当前默认）。
+  static double get eyeWarmth => _eyeWarmth;
+
+  static void setEyeWarmth(double v) {
+    _eyeWarmth = v.clamp(0.0, 1.0);
+  }
+
+  /// 窗控 / 伸缩延展类控件墨水色：深色保持浅墨，浅色与护眼统一近黑。
+  static Color get controlInk => switch (_mode) {
+        AppThemeMode.dark => const Color(0xFFE2E8F0),
+        AppThemeMode.light => const Color(0xFF111111),
+        AppThemeMode.eyeCare => const Color(0xFF111111),
+      };
+
+  /// 三模式命名单色（dark 保持原始，light 为独立调色，eye 在 light 与暖色值间按暖色强度插值）。
   static Color _t(Color dark, Color light, Color eye) => switch (_mode) {
         AppThemeMode.dark => dark,
         AppThemeMode.light => light,
-        AppThemeMode.eyeCare => eye,
+        AppThemeMode.eyeCare => Color.lerp(light, eye, _eyeWarmth) ?? eye,
       };
 
   // ---------------- 具名 token ----------------
@@ -135,15 +151,15 @@ abstract final class AppPalette {
     if (achromatic) {
       l2 = (1.0 - l).clamp(0.06, 0.96);
       if (_mode == AppThemeMode.eyeCare) {
-        h2 = 42.0;
-        s2 = 0.10;
+        h2 = 42.0 * _eyeWarmth;
+        s2 = 0.10 * _eyeWarmth;
       }
     } else if (_mode == AppThemeMode.light) {
       l2 = l.clamp(0.28, 0.52);
     } else {
       l2 = l.clamp(0.30, 0.55);
-      s2 = (s * 0.88).clamp(0.0, 1.0);
-      h2 = h2 - 2.0 < 0 ? 358.0 : h2;
+      s2 = (s * (1.0 - 0.12 * _eyeWarmth)).clamp(0.0, 1.0);
+      h2 = h2 - 2.0 * _eyeWarmth < 0 ? 358.0 : h2;
     }
     return hsl
         .withLightness(l2)

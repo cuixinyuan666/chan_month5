@@ -364,7 +364,7 @@ abstract final class ChipProfilePainter {
 
   /// 峰延长线按档配色：外侧 ±n 取绝对值同色（+1 与 -1 同色、+2 与 -2 同色…）；
   /// 框内 INn 另给一组中性色，便于与对称档区分。
-  static final List<Color> _outerRingPalette = <Color>[
+  static List<Color> get _outerRingPalette => <Color>[
     AppPalette.rgb(0xFF22D3EE), // 1 青
     AppPalette.rgb(0xFF34D399), // 2 翠绿
     AppPalette.rgb(0xFFFBBF24), // 3 琥珀
@@ -373,13 +373,13 @@ abstract final class ChipProfilePainter {
     AppPalette.rgb(0xFFA78BFA), // 6 紫
     AppPalette.rgb(0xFF38BDF8), // 7 天蓝
   ];
-  static final List<Color> _inBoxPalette = <Color>[
+  static List<Color> get _inBoxPalette => <Color>[
     AppPalette.rgb(0xFFCBD5E1), // IN1 浅岩灰
     AppPalette.rgb(0xFF94A3B8), // IN2 岩灰
     AppPalette.rgb(0xFF64748B), // IN3 深岩灰
   ];
   /// 纯量级筹码峰（PURE1..PUREn）配色：暖色系按量降序，避免与 ±档/框内混淆。
-  static final List<Color> _purePalette = <Color>[
+  static List<Color> get _purePalette => <Color>[
     AppPalette.rgb(0xFFEF4444), // 1 红
     AppPalette.rgb(0xFFF97316), // 2 橙
     AppPalette.rgb(0xFFEAB308), // 3 黄

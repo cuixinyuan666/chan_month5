@@ -105,21 +105,21 @@ class IndicatorLinePalette {
   static Color bandLower(Color mid) => bandSide(mid, alpha: 0.45);
 
   /// MACD DIF / DEA / KDJ K·D。
-  static final macdDif = AppPalette.rgb(0xFF2563EB);
-  static final macdDea = AppPalette.rgb(0xFFF59E0B);
-  static final kdjK = AppPalette.rgb(0xFF2563EB);
-  static final kdjD = AppPalette.rgb(0xFFF59E0B);
-  static final kdjJ = AppPalette.rgb(0xFF9333EA);
+  static Color get macdDif => AppPalette.rgb(0xFF2563EB);
+  static Color get macdDea => AppPalette.rgb(0xFFF59E0B);
+  static Color get kdjK => AppPalette.rgb(0xFF2563EB);
+  static Color get kdjD => AppPalette.rgb(0xFFF59E0B);
+  static Color get kdjJ => AppPalette.rgb(0xFF9333EA);
 
   /// MACD 柱 / 背驰 ±1 柱：正红负绿。
-  static final histUp = AppPalette.rgb(0xCCDC2626);
-  static final histDown = AppPalette.rgb(0xCC16A34A);
+  static Color get histUp => AppPalette.rgb(0xCCDC2626);
+  static Color get histDown => AppPalette.rgb(0xCC16A34A);
 
   /// 副图零轴 / 参考虚线。
-  static final axisRef = AppPalette.rgb(0x6694A3B8);
+  static Color get axisRef => AppPalette.rgb(0x6694A3B8);
 
   /// 步进节奏：升组暖色（同 roundRef 共用一色）。
-  static final rhythmWarm = <Color>[
+  static List<Color> get rhythmWarm => [
     AppPalette.rgb(0xFFE11D48), // 玫红
     AppPalette.rgb(0xFFF59E0B), // 琥珀
     AppPalette.rgb(0xFFF97316), // 橙
@@ -132,7 +132,7 @@ class IndicatorLinePalette {
   ];
 
   /// 步进节奏：降组冷色。
-  static final rhythmCool = <Color>[
+  static List<Color> get rhythmCool => [
     AppPalette.rgb(0xFF2563EB), // 蓝
     AppPalette.rgb(0xFF0EA5E9), // 天蓝
     AppPalette.rgb(0xFF14B8A6), // 青

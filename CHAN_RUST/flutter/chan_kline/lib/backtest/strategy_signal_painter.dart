@@ -12,8 +12,8 @@ import 'package:chan_kline/theme/app_palette.dart';
 export 'strategy_trade_round.dart' show strategySideLabel;
 
 /// 策略买卖点颜色：买=红、卖=绿，与缠论 1Ba/1Sa 标签区分。
-final Color kStrategyBuyColor = AppPalette.rgb(0xFFEF5350);
-final Color kStrategySellColor = AppPalette.rgb(0xFF00E676);
+Color get kStrategyBuyColor => AppPalette.rgb(0xFFEF5350);
+Color get kStrategySellColor => AppPalette.rgb(0xFF00E676);
 
 Color strategySideColor(TradeSide side) =>
     side == TradeSide.buy ? kStrategyBuyColor : kStrategySellColor;

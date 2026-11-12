@@ -7,19 +7,30 @@ import 'app_palette.dart';
 
 /// 主题偏好（落盘 `.chan_theme_settings.json`，只存一个主题名，重启保留）。
 class ThemeSettings {
-  const ThemeSettings({this.mode = AppThemeMode.dark});
+  const ThemeSettings({this.mode = AppThemeMode.dark, this.eyeWarmth = 1.0});
 
   final AppThemeMode mode;
 
-  ThemeSettings copyWith({AppThemeMode? mode}) =>
-      ThemeSettings(mode: mode ?? this.mode);
+  /// 护眼暖色强度 0~1（0=中性灰，1=满暖调；仅 eyeCare 生效）。
+  final double eyeWarmth;
+
+  ThemeSettings copyWith({AppThemeMode? mode, double? eyeWarmth}) =>
+      ThemeSettings(
+        mode: mode ?? this.mode,
+        eyeWarmth: eyeWarmth ?? this.eyeWarmth,
+      );
 
   factory ThemeSettings.fromJson(Map<String, dynamic>? json) {
     if (json == null) return const ThemeSettings();
-    return ThemeSettings(mode: AppThemeMode.parse(json['mode'] as String?));
+    final rawWarmth = json['eyeWarmth'];
+    final warmth = rawWarmth is num ? rawWarmth.toDouble() : 1.0;
+    return ThemeSettings(
+      mode: AppThemeMode.parse(json['mode'] as String?),
+      eyeWarmth: warmth.clamp(0.0, 1.0),
+    );
   }
 
-  Map<String, dynamic> toJson() => {'mode': mode.id};
+  Map<String, dynamic> toJson() => {'mode': mode.id, 'eyeWarmth': eyeWarmth};
 }
 
 abstract final class ThemeSettingsStore {
@@ -62,16 +73,30 @@ class AppThemeController extends ChangeNotifier {
 
   AppThemeMode get mode => _cfg.mode;
 
+  double get eyeWarmth => _cfg.eyeWarmth;
+
   /// 启动时调用：读盘 → 刷到调色板，但不通知（首帧还没人监听）。
   void loadFromDisk() {
     _cfg = ThemeSettingsStore.loadSync();
     AppPalette.setMode(_cfg.mode);
+    AppPalette.setEyeWarmth(_cfg.eyeWarmth);
   }
 
   Future<void> setMode(AppThemeMode mode) async {
     if (_cfg.mode == mode) return;
     _cfg = _cfg.copyWith(mode: mode);
     AppPalette.setMode(mode);
+    AppPalette.setEyeWarmth(_cfg.eyeWarmth);
+    notifyListeners();
+    await ThemeSettingsStore.save(_cfg);
+  }
+
+  /// 护眼暖色强度（0~1）：即时生效并落盘，供护眼模式下拖动。
+  Future<void> setEyeWarmth(double v) async {
+    final warmth = v.clamp(0.0, 1.0);
+    if ((_cfg.eyeWarmth - warmth).abs() < 0.005) return;
+    _cfg = _cfg.copyWith(eyeWarmth: warmth);
+    AppPalette.setEyeWarmth(warmth);
     notifyListeners();
     await ThemeSettingsStore.save(_cfg);
   }

@@ -6319,3 +6319,32 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - 结果：flutter analyze 无 error（仅存量 info）；合并后 PCA pull 主分支即可用上台账与健康功能。
 - 演示：PCA 上「全市场分笔上传 · 进度」弹窗出现「台账与健康」区块，点「生成台账」后共享目录产出 ticks_health_record.json，本机可抓取存档进 git。
 
+
+---
+
+### 2026-11-12 01:40 — opencode — 主题颜色冲突收尾：颜色常量静态缓存改实时解析
+
+- **执行者**：opencode
+- **任务类型**：主题修复（ANDROID_RUST 分支 worktree `chan_month5_android_rust`，延续 2026-11-09 三套主题上线后的颜色冲突问题）
+- **根因**：主题(1/3)(2/3) 之后仍有多个颜色表写成 `static final` / 顶层 `final` 缓存 `AppPalette.rgb(...)`，JIT 首次访问时按启动时的深色模式算一次就不再变；切到浅色/护眼后画布变亮，缓存的深色值形成「亮底配深色」或「彩条配黑字」冲突。
+- **操作**：
+  1. `widgets/fractal_confirm_paint.dart`、`widgets/indicator_legend.dart`、`widgets/indicator_picker_chip.dart`、`widgets/indicator_picker_overlay.dart`、`widgets/chart_level_line_style.dart`（主图层色/K线买卖点色）、`widgets/kline_chip.dart`（峰环/框内/纯量级筹码配色）、`backtest/strategy_signal_painter.dart`（kStrategyBuy/SellColor）：全部 `static final`/顶层 `final` 颜色改 `static Color get`/`static List<Color> get` 运行时解析，深色下原值不变。
+  2. `main.dart` 取数转圈提示 `Colors.white70` → `AppPalette.rgb(0xB3FFFFFF)`（深色逐像素不变，浅色转 70% 黑）。
+  3. `ml/ml_workbench.dart`：蓝条标题改 `Colors.white`（彩条三套主题下保持中深，白字全模式可读）；卡片内 `Colors.white70` 两处改 `AppPalette.rgb(0xB3FFFFFF)`。
+  4. 新增 `test/theme_runtime_resolved_test.dart` 回归守卫：切主题后取色重解析、切回深色逐像素一致。
+- **结果**：`flutter analyze` 0 error（仅存量 lint）；主题/图例/选择器/分型 5 个相关测试全过（25 passed）；全量测试失败集与改动前基线逐条一致（20 个存量失败：缺 chan_ffi.dll、真实数据回归、机器人验证套等环境问题），无新增回归。
+- **演示**：启动 App → 切浅色/护眼，主图 K0-K6 层色、买卖点 1-9 类色、MACD/KDJ 图例、分型截断标记、指标读数条/选择弹层、ML 工作台顶栏全部跟随主题重着色；切回深色与旧版逐像素一致。
+
+### 2026-11-12 上午 — opencode — 主题体验增强：护眼暖色强度 + 浅色/护眼控件黑墨 + 对勾即时同步
+
+- **执行者**：opencode
+- **任务类型**：主题功能（ANDROID_RUST 分支 worktree `chan_month5_android_rust`，延续 2026-11-12 01:40 静态缓存修复）
+- **需求**：1) 设置页「主题外观」点选后对勾定位在选中项上、界面即时生效（无需退出设置页）；2) 浅色与护眼辨识度不足 → 护眼为暖色调并支持色调强度调节；3) 浅色/护眼模式下右上角最小化/最大化/关闭按钮及伸缩延展类控件显示不清晰 → 统一改为黑色。
+- **操作**：
+  1. `theme/app_palette.dart`：新增 `_eyeWarmth`（0~1，默认 1=满暖）+ `setEyeWarmth`；护眼分支暖调按强度缩放——无彩色：色相 42°·暖色 0.10 → `42*w`·`0.10*w`（w=0 时纯中性灰，等同浅色反色）；有彩色：饱和度降档 `s*(1-0.12w)`、色相微移 `h-2w`。新增 `controlInk` 控件墨水 token：深色 `0xFFE2E8F0`，浅色/护眼统一 `0xFF111111` 近黑。
+  2. `theme/theme_settings_store.dart`：`ThemeSettings` 增 `eyeWarmth` 字段并落盘 `.chan_theme_settings.json`（旧文件无该键默认 1.0，越界收敛 0~1）；`AppThemeController` 增 `setEyeWarmth`（即时 notify+保存），`loadFromDisk`/`setMode` 同步刷新调色板暖强度。
+  3. `theme/theme_chooser.dart`：护眼模式下 chips 下方出现「暖色强度」滑杆（0-100%，拖动即时生效+百分比读数）；整体改自监听 `ListenableBuilder(listenable: AppThemeController.instance)`——修复 const 实例跨重建被框架跳过导致「切主题后对勾/滑杆不同步」的根因，对勾始终定位在选中项、切换无需退出设置页。
+  4. `main.dart` 标题条：设置齿轮/浮层关闭/侧边切换图标改 `AppPalette.controlInk`；`WindowCaptionButton.minimize/maximize/close` 亮度 `isDark ? dark : light`——浅色/护眼下窗控图标统一黑色（窗控 hover 仍为系统红）。
+  5. `test/theme_runtime_resolved_test.dart` 扩 4 组：JSON 往返含 eyeWarmth、满暖/零暖/插值语义、controlInk 三模式取值、ThemeChooser 滑杆仅在护眼显示且切走切回保留强度。
+- **结果**：`flutter analyze` 0 error（131 条全为存量）；`theme_runtime_resolved_test.dart` 8/8 通过；已重新 `flutter build windows --debug` 并启动验证（Debug 目录下 chan_ffi.dll 就位，PID 8512 运行中；日志中 TicksFullUploadPanel 的 setState-during-build 为存量无害告警，与本次改动无关）。
+- **演示**：设置页「主题外观」点护眼 → 对勾落在护眼上且界面即时变米黄，下方出现「暖色强度」滑杆，拖到 0% 变纯白、100% 回米黄；切浅色/护眼后右上角最小化/最大化/关闭按钮及设置齿轮、浮层侧边切换均显示为黑色，对比清晰。

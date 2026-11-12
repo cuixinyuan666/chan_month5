@@ -32,7 +32,7 @@ class ChartLevelLineStyle {
   });
 
   /// 展示层色表：下标=displayKn（0=K0…）；合并/连线/中枢共用。
-  static final _displayKnColors = <Color>[
+  static List<Color> get _displayKnColors => <Color>[
     AppPalette.rgb(0xCC6366F1), // K0：蓝（原 K0 合并色）
     AppPalette.rgb(0xCCF59E0B), // K1：黄/琥珀
     AppPalette.rgb(0xCCEC4899), // K2：粉
@@ -136,7 +136,7 @@ class ChartLevelLineStyle {
 
   /// 买卖点配色：B=暖色族、S=冷色族；cls 越大同族内更浅。
   /// cls=1..9 分档；越界夹到 1..9。副图 BS，不跟主图层色。
-  static final _bspBuyColors = <Color>[
+  static List<Color> get _bspBuyColors => <Color>[
     AppPalette.rgb(0xFFC62828), // 一类买：深红
     AppPalette.rgb(0xFFE53935), // 二类买：红
     AppPalette.rgb(0xFFFB8C00), // 三类买：橙
@@ -147,7 +147,7 @@ class ChartLevelLineStyle {
     AppPalette.rgb(0xFFFFE082), // 八类买
     AppPalette.rgb(0xFFFFF59D), // 九类买：浅暖黄
   ];
-  static final _bspSellColors = <Color>[
+  static List<Color> get _bspSellColors => <Color>[
     AppPalette.rgb(0xFF1565C0), // 一类卖：深蓝
     AppPalette.rgb(0xFF1E88E5), // 二类卖：蓝
     AppPalette.rgb(0xFF00ACC1), // 三类卖：青
