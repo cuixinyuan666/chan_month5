@@ -141,17 +141,17 @@ Future<RobotVerifyPhase> runEarlyDynamicInProcessPhase({String? klineRoot}) asyn
         near(end.price, stopPrice);
   }
 
-  /// 预锚「高高」：区间 [x1,x2] 内 high 取最高 high，low 取最高 low；
+  /// 预锚动态 K 的真实高低：区间 [x1,x2] 内 high 取最高 high，low 取最低 low；
   /// close 取区间末根收盘（与 Rust `pre_anchor_unit_ohlcv` 同口径）。
-  (bool, Map<String, Object?>) checkHighHigh(LevelUnitBar? u, {int? wantX2}) {
+  (bool, Map<String, Object?>) checkRealRange(LevelUnitBar? u, {int? wantX2}) {
     if (u == null) return (false, {'error': 'no_unit'});
     final x1 = u.x1.clamp(0, bars.length - 1);
     final x2 = u.x2.clamp(0, bars.length - 1);
     var hi = double.negativeInfinity;
-    var lo = double.negativeInfinity;
+    var lo = double.infinity;
     for (var i = x1; i <= x2; i++) {
       if (bars[i].high > hi) hi = bars[i].high;
-      if (bars[i].low > lo) lo = bars[i].low;
+      if (bars[i].low < lo) lo = bars[i].low;
     }
     final ok = (wantX2 == null || u.x2 == wantX2) &&
         near(u.high, hi) &&
@@ -232,7 +232,7 @@ Future<RobotVerifyPhase> runEarlyDynamicInProcessPhase({String? klineRoot}) asyn
       {'levels': before.levels.length, 'prefix': fx},
     );
     final preA = before.levels.isEmpty ? null : before.levels[0].activeUnit;
-    final (hh0, hh0Data) = checkHighHigh(preA, wantX2: fx - 1);
+    final (hh0, hh0Data) = checkRealRange(preA, wantX2: fx - 1);
     add('pre_anchor_high_high_level0', hh0, hh0Data);
 
     final at = bundleOf(fx + 1);
@@ -275,7 +275,7 @@ Future<RobotVerifyPhase> runEarlyDynamicInProcessPhase({String? klineRoot}) asyn
         'activeX2': au1?.x2,
       },
     );
-    final (hh1, hh1Data) = checkHighHigh(au1, wantX2: fx);
+    final (hh1, hh1Data) = checkRealRange(au1, wantX2: fx);
     add('pre_anchor_high_high_level1', hh1, hh1Data);
 
     // 首确认当根起恢复确认段真实 OHLC（不是动态期的「高高」）。

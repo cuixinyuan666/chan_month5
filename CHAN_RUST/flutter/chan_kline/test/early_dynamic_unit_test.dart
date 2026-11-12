@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:chan_kline/bridge/chan_bridge.dart';
 import 'package:chan_kline/compute/adjacent_ratio_compute.dart';
 import 'package:chan_kline/compute/chart_view_compute.dart';
@@ -67,19 +69,25 @@ void main() {
         earlyDynamicUnit: earlyDynamicUnit,
       );
 
-  /// 预锚动态单元的「高高」：区间 [x1,x2] 内 high 取最高 high，low 取最高 low。
-  void expectHighHigh(LevelUnitBar u, List<KlineBar> bars) {
-    final x1 = u.x1.clamp(0, bars.length - 1);
-    final x2 = u.x2.clamp(0, bars.length - 1);
+  /// 预锚动态单元的真实高低：
+  /// high 取父层输入区间最高 high，low 取父层输入区间最低 low。
+  /// 动态 K 的 x1 是分型极点，OHLC 输入起点则是父层首组 x1，两者不能混用。
+  void expectRealRange(
+    LevelUnitBar u,
+    List<KlineBar> source, {
+    int? inputStart,
+  }) {
+    final start = (inputStart ?? u.x1).clamp(0, source.length - 1);
+    final end = u.x2.clamp(0, source.length - 1);
     var hi = double.negativeInfinity;
-    var lo = double.negativeInfinity;
-    for (var i = x1; i <= x2; i++) {
-      if (bars[i].high > hi) hi = bars[i].high;
-      if (bars[i].low > lo) lo = bars[i].low;
+    var lo = double.infinity;
+    for (var i = start; i <= end; i++) {
+      if (source[i].high > hi) hi = source[i].high;
+      if (source[i].low < lo) lo = source[i].low;
     }
     expect(u.high, closeTo(hi, 1e-9), reason: 'high 取区间最高');
-    expect(u.low, closeTo(lo, 1e-9), reason: 'low 取区间最高的低');
-    expect(u.close, closeTo(bars[x2].close, 1e-9));
+    expect(u.low, closeTo(lo, 1e-9), reason: 'low 取区间最低');
+    expect(u.close, closeTo(source[end].close, 1e-9));
   }
 
   test('chartMaxKn：有单元的最高层 +2，夹到 16；无单元退回经典', () {
@@ -123,7 +131,7 @@ void main() {
     expect(l0.activeUnit!.idx, 0);
     expect(l0.activeUnit!.x1, 0);
     expect(l0.activeUnit!.x2, 0, reason: '动态单元末端=当步K0');
-    expectHighHigh(l0.activeUnit!, bars);
+    expectRealRange(l0.activeUnit!, bars);
     expect(chartMaxKn(levels: on.levels), 2, reason: 'K1 窗口应可用');
 
     final k1Units = asOfLevelVirtualK1Bars(
@@ -158,12 +166,16 @@ void main() {
     final fx = first.endConfirmX;
     expect(fx, greaterThan(0));
 
-    // 确认前一根：下一层尚未懒创建；本层预锚单元取「高高」
+    // 确认前一根：下一层尚未懒创建；本层预锚单元取真实高低。
     final before = bundleOfPrefix(fx); // 取 [0, fx)，不含确认当根
     expect(before.levels.length, 1, reason: '首确认前不应创建结构层1');
     final preA = before.levels[0].activeUnit!;
     expect(preA.x2, fx - 1);
-    expectHighHigh(preA, bars);
+    expectRealRange(
+      preA,
+      bars,
+      inputStart: before.levels[0].combineFrames.first.x1,
+    );
 
     // K0 首确认前：只有一条构建中虚线。
     // 升段两端取区间内首次最低 low → 首次最高 high（与首个分型后的开口虚线同口径）。
@@ -210,7 +222,25 @@ void main() {
     expect(l1.activeUnit, isNotNull, reason: '首确认同根应出现 K2 预锚单元');
     expect(l1.activeUnit!.idx, 0);
     expect(l1.activeUnit!.x2, fx, reason: 'K2 动态单元末端=当根');
-    expectHighHigh(l1.activeUnit!, bars);
+    final parent = [
+      for (final u in l0.unitBars)
+        KlineBar(
+          idx: u.idx,
+          timeMs: u.confirmX,
+          timeText: '',
+          open: u.open,
+          high: u.high,
+          low: u.low,
+          close: u.close,
+          volume: u.volume,
+          amount: 0,
+        ),
+    ];
+    final a = l1.activeUnit!;
+    final parentLow = parent.map((b) => b.low).reduce(math.min);
+    final parentHigh = parent.map((b) => b.high).reduce(math.max);
+    expect(a.low, lessThanOrEqualTo(parentLow + 1e-9), reason: 'K2 最低价不得被合并框抬高');
+    expect(a.high, greaterThanOrEqualTo(parentHigh - 1e-9), reason: 'K2 最高价不得被合并框压低');
     expect(chartMaxKn(levels: on.levels), 3, reason: 'K2 窗口应可用');
 
     final k2Units = asOfLevelVirtualK1Bars(
