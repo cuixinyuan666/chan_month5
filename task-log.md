@@ -6390,3 +6390,17 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   3. `git branch -d for-telegram`（已合入，-d 安全删除，原指向 be76339a）。
 - **结果**：worktree 仅剩主目录 `D:/2/chan_month5 [ANDROID_RUST]`；`for-telegram` 分支已删除。其余本地分支（CHAN_RUST / a / ar / clear / codex/rust-performance-engine / feat/kline-level-windows / full-optimization / main）未挂 worktree，是否可删需逐个比对合并关系，本次未动。
 - **注意事项**：无后续。若日后还要查分笔台账与健康检查功能的历史提交，ANDROID_RUST 主分支上已包含（be76339a 及其以下）。
+
+### 2026-11-12 12:40 — 子窗口首分型逐对判定（双低/双高直接判分型，不取高合并）
+
+- **执行者**：Claude Code
+- **任务类型**：缠论内核显示口径（Flutter 展示层；子窗口模式专属，受「层级分窗」总开关门控）
+- **上下文**：子窗口模式下，第一个合并框仍把「双低/双高」这类 K 线合并，不符合预期。用户明确口径：若第二根 K 线最高价、最低价均低于第一根 → 不再采用取高策略，直接判定为顶分型、分型顶点取第一根 K 线；镜像规则（均高于）→ 底分型、顶点取第一根 K 线；**仅当**两根 K 线存在包含关系（内包含、外包含）时才执行取高策略。后经两轮澄清补齐两条约束：① 判定只需相邻两根（第二根到来时第一根即成立，故首分型可早于标准三元素出现）；② **顶底交替铁律** —— idx=0 判顶分型后，下一个分型必须是底分型，故 idx=1、idx=2 都不算分型；③ 顶点取第一根 K，判成分型后**不合并**；④ **全层同构**（所有层级同一套口径）。
+- **关键操作**：
+  1. 新增 `CHAN_RUST/flutter/chan_kline/lib/compute/first_fractal_rule.dart`：逐对判定内核。`fractalPairRel` 判定顺序与引擎 `test_combine_range`（engine.rs:242）一致 —— 先判双低/双高，其余归入「包含」（故「高低交叉」在本口径下不可达，与引擎同构）；`applyFirstPairFractalToFrames` 重排首分型前的框序列：包含关系 → 取高合并（high/low 各取 max）；双低/双高 → **不合并**，前一根单独成框并判分型（顶点=前一根 high/low）；顶底交替，同向丢弃；标准三元素首分型所在框及其后各框原样保留，但该框作为跨界配对的伙伴参与判定。`fxIsUnknownCodeUnit` 按码位判 UNKNOWN（debug 内核下字符串相等会误判，painter 里已有同款先例）。
+  2. `lib/widgets/kline_chart.dart`：`_mergePreFractalFrames` 增加 `subWindow` 分支走新规则，单图集成模式（`subWindow == false`）完全走原逻辑不变。`subWindow` 源头为 `displayLevel != null`（main.dart:5680 `displayLevel: split ? level : null`），即层级分窗总开关打开即为 true；两个调用点（K0 层 `:6444`、K1~Kn 层 `:4605`）均覆盖，故全层同构。
+  3. 新增 `test/first_fractal_rule_test.dart`：7 条用例钉死双低→顶分型不合并、双高→底分型不合并、包含→取高合并、顶底交替（idx=0 后 idx=1/2 不判）、与标准首分型同向的候选被丢弃、标准首分型之后原样保留。
+- **实测口径**（test 股 `a_Data/test/custom.ohlc.csv`，98 根扁平分笔：双低 43 / 双高 54 / 包含 0）：K0 层首框由原「x[0..2] h=10.0 l=10.0 cnt=3」改为「x[0..0] h=10.0 l=10.0 fx=TOP cnt=1」，随后 BOTTOM@3、TOP@7…；与标准三元素序列**自 idx=3 起完全一致**，仅多出提前认定的 TOP@0。各层（L0~L6）首框形态一致 `x[0..3] h=10.0 l=8.8 fx=BOTTOM cnt=1`（各层用本层相邻单元判定，非逐根 K0）。
+- **结果**：`flutter test test/first_fractal_rule_test.dart` 7/7 通过；`flutter analyze --no-pub` 0 error、131 issues（= 基线，无新增）；`flutter test` 全量 +695 -9，9 项失败经 `git stash` 对照确认为**基线既有**（chip_profile / incremental_lookup_session / robot_verify_full_suite，与本改动无关）。
+- **注意事项**：① Rust 永久结构（分型确认 / 段 / 买卖点 / 中枢）**未动** —— 本次只改子窗口显示层，子窗口总开关一关即完全回退；② 判定输入是「该层画出来的框」，K1~Kn 层用该层虚拟单元，故同一层内 K0 跨度较大（如 U[0] 覆盖 K0[0..3]），这是全层同构的正确形态，不是缺陷；③ Rust `engine.rs` 与 Dart 两套合并实现仍是人工对齐关系，本次只改 Dart 展示层，Rust 侧未同步（若日后要改 Rust 结构，须同步 Dart 镜像）。
+
