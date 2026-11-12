@@ -13,6 +13,7 @@ import '../backtest/strategy_signal_painter.dart';
 import '../compute/k0_combine_compute.dart';
 import '../compute/k1_combine_compute.dart';
 import '../compute/k1_bar_view_compute.dart';
+import '../compute/first_fractal_rule.dart';
 import '../compute/chart_view_compute.dart';
 import '../compute/fractal_judgment_compute.dart';
 import '../compute/zs_signal_compute.dart';
@@ -4018,6 +4019,11 @@ class _KlineCompositePainter extends CustomPainter {
   /// 而不是只合开头连续的 UNKNOWN 组（否则它前面那组会单独留下）。
   /// x 从 0 收到最后一组右端，high=max(各组 high)、low=max(各组 low)（高高）。
   /// 首个分型所在组及其后的框按原样绘制。
+  ///
+  /// **子窗口模式**（[subWindow] = true，层级分窗总开关打开时）走逐对判定
+  /// （见 `first_fractal_rule.dart`，全层同构）：相邻两根双低 → 前一根直接判顶分型
+  /// （顶点=前一根 high）、双高 → 判底分型（顶点=前一根 low），**都不再合并**；
+  /// 仅当存在包含关系时才取高合并。顶底交替，同向丢弃。
   List<KlineCombineFrame> _mergePreFractalFrames(
     List<KlineCombineFrame> frames,
   ) {
@@ -4033,6 +4039,14 @@ class _KlineCompositePainter extends CustomPainter {
       }
     }
     if (end < 0) end = frames.length;
+    // 子窗口模式：逐对判定（全层同构）。双低/双高 → 前一根直接判分型且不合并；
+    // 仅包含关系才取高合并。顶底交替。
+    if (subWindow) {
+      return applyFirstPairFractalToFrames(
+        frames,
+        standardFirstFx: end < frames.length ? frames[end].fx : null,
+      );
+    }
     // 顶分型落在第二组时，第一根不能单独拆出去：
     // 并进后面那个框，左端仍从第一根 K 起。只有整层一根时不画框。
     if (end == 1 &&
