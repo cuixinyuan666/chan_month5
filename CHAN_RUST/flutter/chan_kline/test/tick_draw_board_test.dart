@@ -18,16 +18,24 @@ void main() {
     ]).copyWith(windowCount: 4);
 
     expect(model.windowCount, 4);
-    final added = model.addPoint().duplicatePoint();
-    expect(added.points.length, 3);
+    expect(model.hasSelection, isFalse, reason: '初始不选中，拖拽只走十字线');
+    expect(model.selectPoint(0).hasSelection, isTrue);
+    expect(model.selectPoint(0).clearSelection().hasSelection, isFalse);
 
-    final moved = added.setSelectedPrice(10.017);
-    expect(moved.points[moved.safeSelected].price, closeTo(10.02, 1e-9));
+    final added = model.addPoint();
+    expect(added.points.length, 2);
+    expect(added.hasSelection, isTrue);
 
-    final shifted = moved.shiftSelected(-1);
-    expect(shifted.points.length, 3);
+    final duplicated = added.duplicatePoint();
+    expect(duplicated.points.length, 3);
 
-    final removed = shifted.removePoint();
+    final priced = duplicated.setSelectedPrice(10.017);
+    expect(priced.points[priced.safeSelected].price, closeTo(10.02, 1e-9));
+
+    final moved = priced.moveSelectedTo(0);
+    expect(moved.safeSelected, 0);
+
+    final removed = moved.removePoint();
     expect(removed.points.length, 2);
   });
 
