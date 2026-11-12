@@ -60,30 +60,47 @@ void main() {
     expect(ChipProfilePainter.peakRingColor('PURE1'), darkPure1);
   });
 
-  test('ThemeSettings JSON 往返 + 护眼暖色强度默认值', () {
-    const src = ThemeSettings(mode: AppThemeMode.eyeCare, eyeWarmth: 0.4);
+  test('ThemeSettings JSON 往返 + 暖色/亮度默认值 + 旧键兼容', () {
+    const src = ThemeSettings(
+      mode: AppThemeMode.eyeCare,
+      warmth: 0.4,
+      brightness: 0.7,
+    );
     final json = src.toJson();
-    expect(json, {'mode': 'eye', 'eyeWarmth': 0.4});
+    expect(json, {'mode': 'eye', 'warmth': 0.4, 'brightness': 0.7});
     final back = ThemeSettings.fromJson(json);
     expect(back.mode, AppThemeMode.eyeCare);
-    expect(back.eyeWarmth, 0.4);
-    // 旧文件只有 mode 键时默认满暖
-    final legacy = ThemeSettings.fromJson(const {'mode': 'eye'});
-    expect(legacy.eyeWarmth, 1.0);
+    expect(back.warmth, 0.4);
+    expect(back.brightness, 0.7);
+
+    // 旧文件：仅 eyeWarmth 键 → 按旧护眼默认 1.0 读入，亮度回基准 0.5
+    final legacy = ThemeSettings.fromJson(const {'mode': 'eye', 'eyeWarmth': 0.6});
+    expect(legacy.warmth, 0.6);
+    expect(legacy.brightness, 0.5);
+    final legacyOnlyMode = ThemeSettings.fromJson(const {'mode': 'eye'});
+    expect(legacyOnlyMode.warmth, 1.0);
+
+    // 全新文件（无键）：深色默认 warmth=0、brightness=0.5（逐像素与旧版一致）
+    final fresh = ThemeSettings.fromJson(const {'mode': 'dark'});
+    expect(fresh.warmth, 0.0);
+    expect(fresh.brightness, 0.5);
+
     // 越界值收敛
-    final clamped = ThemeSettings.fromJson(const {'mode': 'eye', 'eyeWarmth': 7.0});
-    expect(clamped.eyeWarmth, 1.0);
+    final clamped = ThemeSettings.fromJson(
+        const {'mode': 'eye', 'warmth': 7.0, 'brightness': -3.0});
+    expect(clamped.warmth, 1.0);
+    expect(clamped.brightness, 0.0);
   });
 
-  group('护眼暖色强度', () {
-    test('满暖=原米黄，零暖=浅色反色，中间按 lerp 插值', () {
+  group('暖色强度与亮度（三主题通用）', () {
+    test('护眼满暖=原米黄，零暖=浅色中性，中间按 lerp 插值（旧语义兼容）', () {
       AppThemeController.instance.setMode(AppThemeMode.eyeCare);
-      AppPalette.setEyeWarmth(1.0);
+      AppPalette.setWarmth(1.0);
       final full = AppPalette.canvasBg;
       expect(full.toARGB32(), const Color(0xFFF4EFDF).toARGB32());
       final fullRgb = AppPalette.rgb(0xFF94A3B8);
 
-      AppPalette.setEyeWarmth(0.0);
+      AppPalette.setWarmth(0.0);
       final zeroRgb = AppPalette.rgb(0xFF94A3B8);
       expect(AppPalette.canvasBg, const Color(0xFFF6F7F9));
       expect(zeroRgb, isNot(fullRgb));
@@ -91,21 +108,66 @@ void main() {
       final hsl0 = HSLColor.fromColor(AppPalette.rgb(0xFF808080));
       expect(hsl0.saturation, closeTo(0.0, 0.02));
 
-      AppPalette.setEyeWarmth(0.5);
+      AppPalette.setWarmth(0.5);
       final mid = AppPalette.canvasBg;
       expect(
         mid,
         Color.lerp(const Color(0xFFF6F7F9), const Color(0xFFF4EFDF), 0.5),
       );
-      AppPalette.setEyeWarmth(1.0);
+      AppPalette.setWarmth(1.0);
     });
 
-    test('setEyeWarmth 收敛到 0~1', () {
-      AppPalette.setEyeWarmth(4.0);
-      expect(AppPalette.eyeWarmth, 1.0);
-      AppPalette.setEyeWarmth(-2.0);
-      expect(AppPalette.eyeWarmth, 0.0);
-      AppPalette.setEyeWarmth(1.0);
+    test('深色零暖零亮差=原值逐像素不变；暖色/亮度可调', () {
+      // 深色 + warmth=0 + brightness=0.5：三处取色必须逐像素等于深色原字面量。
+      AppThemeController.instance.setMode(AppThemeMode.dark);
+      AppPalette.setWarmth(0.0);
+      AppPalette.setBrightness(0.5);
+      expect(AppPalette.canvasBg, const Color(0xFF121212));
+      expect(AppPalette.rgb(0xFF94A3B8), const Color(0xFF94A3B8));
+
+      // 暖色注入深色：三处应变暖（红通道 ↑ 或整体非原值）。
+      AppPalette.setWarmth(1.0);
+      final warmCanvas = AppPalette.canvasBg;
+      expect(warmCanvas, isNot(const Color(0xFF121212)));
+      final hWarm = HSLColor.fromColor(warmCanvas);
+      expect(hWarm.hue, inExclusiveRange(15, 60));
+      AppPalette.setWarmth(0.0);
+
+      // 亮度提亮深色。
+      AppPalette.setBrightness(0.8);
+      final brightCanvas = HSLColor.fromColor(AppPalette.canvasBg);
+      expect(brightCanvas.lightness, greaterThan(0.07));
+      AppPalette.setBrightness(0.5);
+    });
+
+    test('浅色暖色/亮度可调', () {
+      AppThemeController.instance.setMode(AppThemeMode.light);
+      AppPalette.setWarmth(0.0);
+      AppPalette.setBrightness(0.5);
+      expect(AppPalette.canvasBg, const Color(0xFFF6F7F9));
+      AppPalette.setWarmth(1.0);
+      final warm = HSLColor.fromColor(AppPalette.canvasBg);
+      expect(warm.hue, inExclusiveRange(15, 60));
+      AppPalette.setWarmth(0.0);
+      AppPalette.setBrightness(0.2);
+      expect(
+        HSLColor.fromColor(AppPalette.canvasBg).lightness,
+        lessThan(0.9),
+      );
+      AppPalette.setBrightness(0.5);
+    });
+
+    test('setWarmth/setBrightness 收敛到 0~1', () {
+      AppPalette.setWarmth(4.0);
+      expect(AppPalette.warmth, 1.0);
+      AppPalette.setWarmth(-2.0);
+      expect(AppPalette.warmth, 0.0);
+      AppPalette.setBrightness(2.0);
+      expect(AppPalette.brightness, 1.0);
+      AppPalette.setBrightness(-1.0);
+      expect(AppPalette.brightness, 0.0);
+      AppPalette.setWarmth(1.0);
+      AppPalette.setBrightness(0.5);
     });
   });
 
@@ -122,24 +184,20 @@ void main() {
     });
   });
 
-  group('ThemeChooser 护眼暖色强度滑杆', () {
-    testWidgets('仅护眼模式显示滑杆，对勾定位在选中项上，切走切回保留强度',
+  group('ThemeChooser 暖色/亮度滑杆（三主题通用）', () {
+    testWidgets('三主题均显示暖色+亮度滑杆，对勾定位在选中项上，切走切回保留',
         (tester) async {
       for (final m in AppThemeMode.values) {
         AppThemeController.instance.setMode(m);
         await tester.pumpWidget(
           const MaterialApp(home: Scaffold(body: ThemeChooser())),
         );
-        final warmthKey = const ValueKey('theme_eye_warmth');
-        if (m == AppThemeMode.eyeCare) {
-          expect(find.byKey(warmthKey), findsOneWidget);
-        } else {
-          expect(find.byKey(warmthKey), findsNothing);
-        }
+        expect(find.byKey(const ValueKey('theme_warmth')), findsOneWidget);
+        expect(find.byKey(const ValueKey('theme_brightness')), findsOneWidget);
         // 对勾（选中 chip）始终定位在选中项上
         expect(find.byKey(ValueKey('theme_chip_${m.id}')), findsOneWidget);
       }
-      // 切走再切回护眼：滑杆按保存值（默认 1.0）恢复
+      // 切走再切回：滑杆按保存值恢复
       AppThemeController.instance.setMode(AppThemeMode.light);
       await tester.pumpWidget(
         const MaterialApp(home: Scaffold(body: ThemeChooser())),
@@ -149,8 +207,7 @@ void main() {
         const MaterialApp(home: Scaffold(body: ThemeChooser())),
       );
       expect(
-        tester.widget<Slider>(find.byKey(const ValueKey('theme_eye_warmth')))
-            .value,
+        tester.widget<Slider>(find.byKey(const ValueKey('theme_warmth'))).value,
         1.0,
       );
       AppThemeController.instance.setMode(AppThemeMode.dark);

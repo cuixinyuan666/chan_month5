@@ -44,7 +44,10 @@ enum AppThemeMode {
 /// 深色模式下 `rgb()` 原样返回传入值，保证老界面零变化。
 abstract final class AppPalette {
   static AppThemeMode _mode = AppThemeMode.dark;
-  static double _eyeWarmth = 1.0;
+  /// 暖色强度 0~1：0=纯中性，1=满暖调。三模式通用；深色默认 0（与旧版逐像素一致）。
+  static double _warmth = 0.0;
+  /// 亮度 0~1：0.5=各主题基准明度（与旧版一致），<0.5 压暗，>0.5 提亮。三模式通用。
+  static double _brightness = 0.5;
 
   static AppThemeMode get mode => _mode;
 
@@ -54,11 +57,23 @@ abstract final class AppPalette {
 
   static bool get isDark => _mode == AppThemeMode.dark;
 
-  /// 护眼暖色强度 0~1：0=纯中性（等同浅色反色），1=满暖调（当前默认）。
-  static double get eyeWarmth => _eyeWarmth;
+  /// 暖色强度 0~1（三模式通用）。
+  static double get warmth => _warmth;
 
-  static void setEyeWarmth(double v) {
-    _eyeWarmth = v.clamp(0.0, 1.0);
+  static void setWarmth(double v) {
+    _warmth = v.clamp(0.0, 1.0);
+  }
+
+  /// 兼容旧名：护眼暖色强度。等价于 [warmth]。
+  static double get eyeWarmth => _warmth;
+
+  static void setEyeWarmth(double v) => setWarmth(v);
+
+  /// 亮度 0~1（三模式通用）；0.5 为基准。
+  static double get brightness => _brightness;
+
+  static void setBrightness(double v) {
+    _brightness = v.clamp(0.0, 1.0);
   }
 
   /// 窗控 / 伸缩延展类控件墨水色：深色保持浅墨，浅色与护眼统一近黑。
@@ -68,12 +83,55 @@ abstract final class AppPalette {
         AppThemeMode.eyeCare => const Color(0xFF111111),
       };
 
-  /// 三模式命名单色（dark 保持原始，light 为独立调色，eye 在 light 与暖色值间按暖色强度插值）。
-  static Color _t(Color dark, Color light, Color eye) => switch (_mode) {
-        AppThemeMode.dark => dark,
-        AppThemeMode.light => light,
-        AppThemeMode.eyeCare => Color.lerp(light, eye, _eyeWarmth) ?? eye,
-      };
+  /// 三模式命名单色。
+  ///
+  /// 暖色强度 [warmth] 与亮度 [brightness] 三模式通用：
+  /// - dark/light：warmth=0 时为原主题中性色（深色默认 0，保证切回深色逐像素不变）；
+  ///   warmth>0 时向「暖色版」插值（扩大可感区间：满暖把中性灰推向暖橙黄）。
+  /// - eyeCare：warmth=1 时为满暖米黄（旧默认），warmth=0 退回浅色中性。
+  /// - brightness：0.5 为基准（输出不变），<0.5 压暗、>0.5 提亮，对三模式统一生效。
+  static Color _t(Color dark, Color light, Color eye) {
+    final Color base;
+    final Color warm;
+    switch (_mode) {
+      case AppThemeMode.dark:
+        base = dark;
+        // 暗底满暖：把中性暗色推向暖橙调（明度略升、色相偏暖），区间显著大于旧版。
+        warm = _warmVariant(dark, strength: 0.55);
+      case AppThemeMode.light:
+        base = light;
+        warm = _warmVariant(light, strength: 0.6);
+      case AppThemeMode.eyeCare:
+        base = light;
+        warm = eye;
+    }
+    final c = Color.lerp(base, warm, _warmth) ?? base;
+    return _applyBrightness(c);
+  }
+
+  /// 由一个中性色派生暖色版：固定暖色相（38°、适中的暖饱和），明度与源色一致，
+  /// 再按 [strength] 从源色插值过去。这样近白→米白/暖白，暗色→暖黑，不会洗白或跑绿。
+  /// [strength] 控制暖化幅度（0~1），越大越暖。
+  static Color _warmVariant(Color src, {required double strength}) {
+    final hsl = HSLColor.fromColor(src);
+    final anchor = HSLColor.fromAHSL(
+      hsl.alpha,
+      38.0, // 暖橙黄色相
+      0.42, // 暖色饱和（近白/近黑都会被拉出明显暖调）
+      hsl.lightness, // 保持明度，避免亮度被暖色顺带改掉
+    ).toColor();
+    return Color.lerp(src, anchor, strength) ?? src;
+  }
+
+  /// 亮度调节：0.5 基准不变；滑块 0~1 线性映射到明度倍率 0.6~1.4。
+  static Color _applyBrightness(Color c) {
+    if ((_brightness - 0.5).abs() < 0.005) return c;
+    final scale = 0.6 + _brightness * 0.8; // 0.6 ... 1.4
+    final hsl = HSLColor.fromColor(c);
+    return hsl
+        .withLightness((hsl.lightness * scale).clamp(0.0, 1.0))
+        .toColor();
+  }
 
   // ---------------- 具名 token ----------------
 
@@ -137,34 +195,48 @@ abstract final class AppPalette {
   static Color rgb(int argb) => c(Color(argb));
 
   /// 同上，入参是 Color。
+  ///
+  /// 暖色强度 [warmth] 与亮度 [brightness] 三模式通用：
+  /// - 深色 warmth=0（默认）时原样返回 dark（切回深色逐像素不变）；warmth>0 注入暖色。
+  /// - 浅色/护眼：中性灰反相后按 warmth 注入暖橙；彩色保留色相按 warmth 微调。
+  /// - brightness 偏离 0.5 时统一拉伸明度。
   static Color c(Color dark) {
-    if (_mode == AppThemeMode.dark) return dark;
     final hsl = HSLColor.fromColor(dark);
     final l = hsl.lightness;
     final s = hsl.saturation;
-    // 彩色（红绿蓝等）保留色相，只把明度压到浅底上也看得清的范围；
-    // 中性灰则整体反过来（暗底↔亮底、亮字↔暗字），透明度一律不动。
     final bool achromatic = s < 0.12;
+
+    // 深色：默认（warmth=0）原样返回；warmth>0 时向暖色版插值。
+    if (_mode == AppThemeMode.dark) {
+      if (_warmth <= 0.0) return _applyBrightness(dark);
+      final warm = _warmVariant(dark, strength: 0.55);
+      return _applyBrightness(Color.lerp(dark, warm, _warmth) ?? dark);
+    }
+
     double l2;
     double s2 = s;
     double h2 = hsl.hue;
     if (achromatic) {
       l2 = (1.0 - l).clamp(0.06, 0.96);
-      if (_mode == AppThemeMode.eyeCare) {
-        h2 = 42.0 * _eyeWarmth;
-        s2 = 0.10 * _eyeWarmth;
-      }
+      // 浅色/护眼：按 warmth 注入暖橙（旧版仅护眼注入，现三模式一致；深色在上面单独处理）。
+      h2 = 42.0 * _warmth;
+      s2 = 0.10 * _warmth;
     } else if (_mode == AppThemeMode.light) {
       l2 = l.clamp(0.28, 0.52);
+      // 浅色也按 warmth 微暖（旧版无此，现三模式一致）。
+      s2 = (s * (1.0 - 0.12 * _warmth)).clamp(0.0, 1.0);
+      h2 = h2 - 2.0 * _warmth < 0 ? 358.0 : h2;
     } else {
+      // eyeCare
       l2 = l.clamp(0.30, 0.55);
-      s2 = (s * (1.0 - 0.12 * _eyeWarmth)).clamp(0.0, 1.0);
-      h2 = h2 - 2.0 * _eyeWarmth < 0 ? 358.0 : h2;
+      s2 = (s * (1.0 - 0.12 * _warmth)).clamp(0.0, 1.0);
+      h2 = h2 - 2.0 * _warmth < 0 ? 358.0 : h2;
     }
-    return hsl
+    final out = hsl
         .withLightness(l2)
         .withSaturation(s2)
         .withHue(h2)
         .toColor();
+    return _applyBrightness(out);
   }
 }

@@ -19,7 +19,8 @@ class ThemeChooser extends StatelessWidget {
       listenable: AppThemeController.instance,
       builder: (context, _) {
         final cur = AppThemeController.instance.mode;
-        final warmth = AppThemeController.instance.eyeWarmth;
+        final warmth = AppThemeController.instance.warmth;
+        final brightness = AppThemeController.instance.brightness;
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -45,40 +46,72 @@ class ThemeChooser extends StatelessWidget {
                   ),
               ],
             ),
-            if (cur == AppThemeMode.eyeCare) ...[
-              const SizedBox(height: 4),
-              Row(
-                children: [
-                  Expanded(
-                    child: Slider(
-                      key: const ValueKey('theme_eye_warmth'),
-                      value: warmth,
-                      min: 0.0,
-                      max: 1.0,
-                      onChanged: (v) => AppThemeController.instance.setEyeWarmth(v),
-                    ),
+            // 暖色强度 + 亮度：三模式全部开放，即时生效并落盘。
+            const SizedBox(height: 4),
+            Row(
+              children: [
+                Expanded(
+                  child: Slider(
+                    key: const ValueKey('theme_warmth'),
+                    value: warmth,
+                    min: 0.0,
+                    max: 1.0,
+                    onChanged: (v) => AppThemeController.instance.setWarmth(v),
                   ),
-                  SizedBox(
-                    width: 44,
-                    child: Text(
-                      '${(warmth * 100).round()}%',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: AppPalette.textSecondary,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              Text(
-                '暖色强度：越高越米黄，越低越接近纯白；拖动即时生效并保留。',
-                style: TextStyle(
-                  fontSize: 11,
-                  color: AppPalette.textSecondary,
-                  height: 1.3,
                 ),
+                SizedBox(
+                  width: 44,
+                  child: Text(
+                    '${(warmth * 100).round()}%',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: AppPalette.textSecondary,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            Text(
+              '暖色强度：三主题通用，越高越暖（米黄/暖橙），越低越中性；拖动即时生效并保留。',
+              style: TextStyle(
+                fontSize: 11,
+                color: AppPalette.textSecondary,
+                height: 1.3,
               ),
-            ],
+            ),
+            const SizedBox(height: 4),
+            Row(
+              children: [
+                Expanded(
+                  child: Slider(
+                    key: const ValueKey('theme_brightness'),
+                    value: brightness,
+                    min: 0.0,
+                    max: 1.0,
+                    onChanged: (v) =>
+                        AppThemeController.instance.setBrightness(v),
+                  ),
+                ),
+                SizedBox(
+                  width: 44,
+                  child: Text(
+                    '${(brightness * 100).round()}%',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: AppPalette.textSecondary,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            Text(
+              '亮度：三主题通用，0~100%（50% 为各主题基准明度），拖动即时生效并保留。',
+              style: TextStyle(
+                fontSize: 11,
+                color: AppPalette.textSecondary,
+                height: 1.3,
+              ),
+            ),
             const SizedBox(height: 4),
             Text(
               '深色=原来的黑底；浅色=白底；护眼=米黄底。切换即时生效，K 线画布/坐标/图例一起换，重启后保留。',
