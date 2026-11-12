@@ -98,9 +98,9 @@ class _MiniIconButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Tooltip(
         message: tooltip,
-        child: InkResponse(
-          radius: 14,
+        child: InkWell(
           onTap: onTap,
+          borderRadius: BorderRadius.circular(size / 2),
           child: SizedBox(
             width: size,
             height: size,
@@ -643,7 +643,7 @@ class _TestOhlcEditorDialogState extends State<_TestOhlcEditorDialog> {
                       4: FlexColumnWidth(1),
                       5: FlexColumnWidth(1),
                       6: FlexColumnWidth(1),
-                      7: FixedColumnWidth(68),
+                      7: FixedColumnWidth(84),
                     },
                     defaultVerticalAlignment: TableCellVerticalAlignment.middle,
                     children: [
@@ -713,26 +713,29 @@ class _TestOhlcEditorDialogState extends State<_TestOhlcEditorDialog> {
                               onStep: (k, dir) =>
                                   _step(k, _rows[i], _rows[i].volume, dir),
                             ),
-                            Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                _MiniIconButton(
-                                  size: 32,
-                                  tooltip: '复制本行插入到下方',
-                                  icon: Icons.add_circle_outline,
-                                  onTap: () => _duplicateRow(i),
-                                ),
-                                const SizedBox(width: 4),
-                                _MiniIconButton(
-                                  size: 32,
-                                  tooltip: '删除本行',
-                                  icon: Icons.remove_circle_outline,
-                                  onTap: () => _removeRow(i),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
+                            SizedBox(
+                              width: 76,
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  _MiniIconButton(
+                                    size: 32,
+                                    tooltip: '复制本行插入到下方',
+                                    icon: Icons.add_circle_outline,
+                                    onTap: () => _duplicateRow(i),
+                                  ),
+                                  const SizedBox(width: 4),
+                                  _MiniIconButton(
+                                    size: 32,
+                                    tooltip: '删除本行',
+                                    icon: Icons.remove_circle_outline,
+                                    onTap: () => _removeRow(i),
+                                  ),
+                                 ],
+                               ),
+                             ),
+                           ],
+                         ),
                     ],
                   ),
                 ),
