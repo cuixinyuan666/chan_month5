@@ -6419,3 +6419,18 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **结果**：`cargo test -p chan_data --lib pre_anchor_unit` 2/2 通过；`flutter test test/early_dynamic_unit_test.dart` 10/10 通过；`flutter analyze` 无新增错误。完整 `chan_data` 测试为 150 通过、6 失败：其中 3 个是本次改动后的旧动态 K 断言，3 个是工作区已有 `a_Data/test/custom.ohlc.csv` 改动导致，未纳入本次提交。
 - **注意事项**：未 push。若要在 App 里看到新口径，需要使用本次已替换的本地 DLL 冷启动验证。
 
+---
+
+### 2026-11-12 20:58 — 新增分笔画板
+
+- **执行者**：opencode
+- **任务类型**：功能开发（TEST 分笔编辑）
+- **上下文**：用户要求在设置中新增「分笔画板」。画板覆盖在 K 线页面上，可选择窗口数量；K0 用于绘制分笔，K1 及以上窗口根据 K0 自动生成。
+- **关键操作**：
+  1. 在 TEST 股票设置里的「编辑/加载自定义 OHLC」下方增加「分笔画板」按钮和说明。
+  2. 新增画板覆盖层，支持 2 到 10 的偶数窗口，窗口层级按 K0、K1、K2 依次显示。
+  3. K0 提供增加、减少、复制和拖拽原点；拖拽按网格吸附。
+  4. 保存继续调用现有自定义 OHLC 保存逻辑，写入 `a_Data/test/custom.ohlc.csv` 后重新加载。
+- **结果**：`flutter test test/tick_draw_board_test.dart` 2/2 通过；`flutter analyze` 无新增错误。
+- **注意事项**：未改缠论计算口径。上层窗口使用现有层级计算结果自动生成。
+
