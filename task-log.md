@@ -6498,3 +6498,18 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **结果**：`flutter test test/tick_draw_board_test.dart` 2/2 通过；`flutter test test/early_dynamic_unit_test.dart` 10/10 通过；`flutter analyze` 无新增错误。
 - **注意事项**：未 push；未改缠论计算口径。
 
+---
+
+### 2026-11-13 08:44 — 统一主图/画板/默认股术语并默认加载 TEST 股票
+
+- **执行者**：opencode
+- **任务类型**：规则文档修订 + 行为调整
+- **上下文**：用户明确要求更新 `AGENTS.md`：K 线区域（含单图与多子窗口）统一命名为「主图」；「分笔画板」正式改称「画板」；默认数据指定为 TEST 自定义股票，软件启动默认加载 TEST 股票数据；并同步修订文档。
+- **关键操作**：
+  1. `AGENTS.md` 新增「术语定义」节：主图（含单图与多子窗口）、画板（原名分笔画板）、TEST 自定义股票（代码键 `test`）。
+  2. `knowledge.md` 同步新增「主图」「画板」「TEST 自定义股票（默认股）」三节，写清口径与易混点。
+  3. 启动默认股票改为 `test` 优先，兜底顺序 `test` → `002003` → 列表第一个。
+  4. `a_Data/test/demos/README.md` 的「默认股票 002003」改为「默认股（TEST 自定义股票）」。
+- **结果**：`flutter test test/tick_draw_board_test.dart` 2/2 通过；`flutter test test/early_dynamic_unit_test.dart` 10/10 通过；`flutter analyze` 无新增错误。
+- **注意事项**：任务日志是历史记录，未改写既往条目里的旧称。未 push。
+
