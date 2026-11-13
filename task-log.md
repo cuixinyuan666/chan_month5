@@ -6513,3 +6513,18 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **结果**：`flutter test test/tick_draw_board_test.dart` 2/2 通过；`flutter test test/early_dynamic_unit_test.dart` 10/10 通过；`flutter analyze` 无新增错误。
 - **注意事项**：任务日志是历史记录，未改写既往条目里的旧称。未 push。
 
+---
+
+### 2026-11-13 09:05 — 画板子窗口视口独立并修复缩小后拖拽失效
+
+- **执行者**：opencode
+- **任务类型**：功能修正（画板交互）
+- **上下文**：用户要求画板子窗口的 K 线拖拽与缩放逻辑对齐主图；单个子窗口缩放或平移时其他子窗口独立、不联动；并修复缩小到一定程度后 K 线区域拖拽失效的问题。
+- **关键操作**：
+  1. `ChartSyncController` 去掉画板专用的共享视口模式，画板与主图分窗统一为「每窗一份视口」，各子窗口缩放、平移互不牵连。
+  2. 画板 K0 的拖拽热区只留在选中圆点附近，不再整块覆盖画布；此前整块覆盖会抢走主图的平移手势，表现为缩小后拖不动。
+  3. `KlineViewport.panByPixels` 边界改为按视窗实际跨度留等量空白：视窗大于数据跨度时两侧都能拖，不再把左端硬钳死在数据起点。
+  4. 画板残留的硬编码颜色改走 `AppPalette`，亮度与暖色与主图同源同步；指标名称列沿用主图同一个组件，按层过滤。
+- **结果**：`flutter test test/tick_draw_board_test.dart` 2/2 通过；新增 `chart_viewport_independent_test.dart` 3/3 通过；`flutter test test/early_dynamic_unit_test.dart` 10/10 通过；`flutter analyze` 无新增错误。
+- **注意事项**：未 push；未改缠论计算口径。
+
