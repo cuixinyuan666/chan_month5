@@ -208,6 +208,10 @@ class KlineChart extends StatefulWidget {
     this.ownsKeyboard = true,
     this.sync,
     this.onViewportChanged,
+    this.onTickDotTap,
+    this.onTickDotDrag,
+    this.onTickDotDragEnd,
+    this.selectedTickIdx = -1,
     this.displayLevel,
     this.forceSubPane = false,
     this.subPanePlaceholder = '副图未启用（点副图左上角指标按钮可勾选）',
@@ -354,6 +358,20 @@ class KlineChart extends StatefulWidget {
   /// 视口（缩放/平移/换数据）变化后的回调：画板用它刷新圆点命中与聚焦框。
   final VoidCallback? onViewportChanged;
 
+  /// 分笔（tick）圆点被点击时的回调：画板用它做「点圆点=选中」。
+  /// 只在分笔周期生效。
+  final void Function(int barIdx)? onTickDotTap;
+
+  /// 分笔圆点被拖动时的回调：dx/dy 为像素位移，参数为被拖圆点下标。
+  /// 画板用它改价格（上下）与位置提示。
+  final void Function(int barIdx, double dx, double dy)? onTickDotDrag;
+
+  /// 分笔圆点拖动结束（松手）。
+  final VoidCallback? onTickDotDragEnd;
+
+  /// 当前被选中的分笔圆点下标（-1=无）。画板用它画聚焦标识。
+  final int selectedTickIdx;
+
   /// 本窗只画哪一层：null = 单图集成（现状，按勾选画全部层）；0..9 = 只画该层。
   ///
   /// 注意：`mainIndicators` / `subIndicators` 仍传**全量**勾选集，
@@ -457,6 +475,10 @@ class _KlineChartState extends State<KlineChart> {
   Size _chartSize = Size.zero;
   /// 上次通知外部的视口签名（只在真变化时回调，避免自激重建）。
   String? _lastNotifiedViewportSig;
+  /// 画板：正在拖动的分笔圆点下标（null=未在拖）。
+  int? _tickDragIdx;
+  Offset? _tickDragStart;
+  bool _tickDragMoved = false;
 
   /// 左中右热区：用 Listener 优先吃点击（避免卡顿时被 GestureDetector 拖拽抢走）
   Offset? _zonePointerDown;
@@ -1738,7 +1760,53 @@ class _KlineChartState extends State<KlineChart> {
     return Offset(boxX, boxY);
   }
 
+  /// 画板：命中分笔圆点（按 tick 圆点真实半径）。未命中返回 null。
+  double _stateBarCenterX(int barIdx, double w, double slotW) =>
+      _viewport.indexToX(barIdx.toDouble(), w) + slotW / 2;
+
+  int? _hitTickDot(Offset p) {
+    if (widget.period != 'tick' || widget.bars.isEmpty) return null;
+    final w = _chartSize.width;
+    final h = _chartSize.height;
+    if (w <= 0 || h <= 0) return null;
+    final plotTop = _resolveMainPlotTop(context);
+    final mainH = _hitMainH > 1 ? _hitMainH : h * 0.79;
+    final plotH = math.max(1.0, mainH - plotTop - KlineViewport.padB);
+    final visible = _viewport.visibleBars(widget.bars);
+    final range = _hitPriceRange ?? _viewport.priceRangeFor(visible);
+    final slotW = _viewport.barSlotWidth(w);
+    final barW = math.max(1.0, slotW * 0.65);
+    final dotR = math.max(1.2, math.min(barW * 0.45, slotW * 0.35));
+    // 命中半径略大于圆点半径，便于手指/鼠标点中。
+    final hitR = math.max(dotR + 4.0, dotR * 1.8);
+    int? best;
+    var bestD = hitR;
+    for (final b in visible) {
+      final cx = _stateBarCenterX(b.idx, w, slotW);
+      final cy = range.yOf(b.close, plotTop, plotH);
+      final d = (Offset(cx, cy) - p).distance;
+      if (d <= bestD) {
+        bestD = d;
+        best = b.idx;
+      }
+    }
+    return best;
+  }
+
   void _onPointerDown(PointerDownEvent e) {
+    // 画板：分笔圆点被按住 → 进入「拖圆点改价」，不再走十字线/平移。
+    if (widget.onTickDotDrag != null) {
+      final hit = _hitTickDot(e.localPosition);
+      if (hit != null) {
+        _tickDragIdx = hit;
+        _tickDragStart = e.localPosition;
+        _tickDragMoved = false;
+        _zonePointerDown = null;
+        _zonePointerId = null;
+        _zoneMoved = true;
+        return;
+      }
+    }
     // 信息框整体不接鼠标；关闭钮按位置判定（仅内部悬浮态；停靠子窗口由面板自身关闭钮处理）
     if (_crosshairShowTooltip && !widget.dockTooltipPanel) {
       final box = _tooltipKey.currentContext?.findRenderObject() as RenderBox?;
@@ -1768,6 +1836,17 @@ class _KlineChartState extends State<KlineChart> {
   }
 
   void _onPointerMove(PointerMoveEvent e, double mainPlotH, double contentBottom) {
+    // 画板：正在拖分笔圆点 → 交给外部改价（不参与平移/十字）。
+    if (_tickDragIdx != null && _tickDragStart != null) {
+      final dx = e.localPosition.dx - _tickDragStart!.dx;
+      final dy = e.localPosition.dy - _tickDragStart!.dy;
+      if ((e.localPosition - _tickDragStart!).distance > 3) {
+        _tickDragMoved = true;
+      }
+      widget.onTickDotDrag?.call(_tickDragIdx!, dx, dy);
+      _tickDragStart = e.localPosition;
+      return;
+    }
     if (_zonePointerId == e.pointer &&
         _zonePointerDown != null &&
         (e.localPosition - _zonePointerDown!).distance > _zoneTapSlop) {
@@ -1801,6 +1880,20 @@ class _KlineChartState extends State<KlineChart> {
   }
 
   void _onPointerUp(PointerUpEvent e) {
+    // 画板：拖圆点结束（点击即选中由 pointerDown 时的命中决定）。
+    if (_tickDragIdx != null) {
+      final dragged = _tickDragMoved;
+      final idx = _tickDragIdx!;
+      _tickDragIdx = null;
+      _tickDragStart = null;
+      _tickDragMoved = false;
+      if (!dragged && widget.onTickDotTap != null) {
+        widget.onTickDotTap!(idx);
+      } else {
+        widget.onTickDotDragEnd?.call();
+      }
+      return;
+    }
     if (_splitDragging) {
       _onSplitUp(e);
       _zonePointerDown = null;
