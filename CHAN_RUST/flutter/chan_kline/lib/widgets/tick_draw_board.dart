@@ -6,7 +6,9 @@ import '../chart/level_window_layout.dart';
 import '../compute/k1_bar_view_compute.dart';
 import '../models/bar_feature_lookup.dart';
 import '../models/chart_indicator.dart';
+import '../models/chip_config.dart';
 import '../models/k1_bar_view.dart';
+import '../models/tick_dist_config.dart';
 import '../models/kline_bar.dart';
 import '../models/kline_combine_bundle.dart';
 import '../theme/app_palette.dart';
@@ -16,6 +18,59 @@ import 'crosshair_tooltip_panel.dart';
 import 'kline_chart.dart';
 import 'kline_viewport.dart';
 import 'level_chart_grid.dart';
+
+/// 画板顶边栏高度（与主界面标题条同高）。
+const double kTickDrawCaptionBarHeight = 28.0;
+
+/// 顶边栏紧凑按钮：严格 28×28，自绘 hover 底色（不用 IconButton 的 48px 命中区）。
+class _CaptionButton extends StatefulWidget {
+  const _CaptionButton({
+    required this.tooltip,
+    required this.onTap,
+    required this.child,
+  });
+
+  final String tooltip;
+  final VoidCallback? onTap;
+  final Widget child;
+
+  @override
+  State<_CaptionButton> createState() => _CaptionButtonState();
+}
+
+class _CaptionButtonState extends State<_CaptionButton> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = widget.onTap != null;
+    return Tooltip(
+      message: widget.tooltip,
+      waitDuration: const Duration(milliseconds: 500),
+      child: MouseRegion(
+        cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
+        onEnter: (_) => setState(() => _hovered = true),
+        onExit: (_) => setState(() => _hovered = false),
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: widget.onTap,
+          child: Container(
+            width: kTickDrawCaptionBarHeight,
+            height: kTickDrawCaptionBarHeight,
+            alignment: Alignment.center,
+            color: _hovered && enabled
+                ? AppPalette.rgb(0x33FFFFFF)
+                : const Color(0x00000000),
+            child: Opacity(
+              opacity: enabled ? 1.0 : 0.4,
+              child: widget.child,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
 
 /// 分笔画板的纯数据口径：只编辑 K0，K1 及以上由现有缠论计算自动生成。
 class TickDrawPoint {
@@ -199,11 +254,15 @@ class TickDrawBoard extends StatefulWidget {
     required this.truncationCheck,
     required this.earlyDynamicUnit,
     required this.showBuildingDash,
+    required this.chipConfig,
+    required this.tickDistConfig,
     required this.onChanged,
     required this.onMainIndicatorsChanged,
     required this.onSubIndicatorsChanged,
     required this.onSave,
     required this.onClose,
+    required this.onMinimize,
+    required this.onMaximize,
   });
 
   final TickDrawBoardModel model;
@@ -213,11 +272,15 @@ class TickDrawBoard extends StatefulWidget {
   final bool truncationCheck;
   final bool earlyDynamicUnit;
   final bool showBuildingDash;
+  final ChipConfig chipConfig;
+  final TickDistConfig tickDistConfig;
   final ValueChanged<TickDrawBoardModel> onChanged;
   final ValueChanged<Set<MainChartIndicator>> onMainIndicatorsChanged;
   final ValueChanged<Set<SubChartIndicator>> onSubIndicatorsChanged;
   final VoidCallback onSave;
   final VoidCallback onClose;
+  final VoidCallback onMinimize;
+  final VoidCallback onMaximize;
 
   @override
   State<TickDrawBoard> createState() => _TickDrawBoardState();
@@ -312,24 +375,29 @@ class _TickDrawBoardState extends State<TickDrawBoard>
     );
   }
 
+  /// 画板顶边栏：名称在左上、窗口下拉在最小化左侧、保存并加载、最小化/最大化/关闭。
   Widget _toolbar() {
     final onSurface = AppPalette.textPrimary;
-    final hasSel = model.hasSelection;
     return Container(
-      height: 44,
-      padding: const EdgeInsets.symmetric(horizontal: 8),
+      height: kTickDrawCaptionBarHeight,
+      padding: const EdgeInsets.symmetric(horizontal: 6),
       decoration: BoxDecoration(
         color: AppPalette.surface,
         border: Border(bottom: BorderSide(color: AppPalette.border)),
       ),
       child: Row(
         children: [
-          Text('分笔画板', style: TextStyle(color: onSurface)),
-          const SizedBox(width: 8),
+          Text(
+            '分笔画板',
+            style: TextStyle(color: onSurface, fontSize: 12),
+          ),
+          const Spacer(),
           DropdownButton<int>(
             value: normalizeLevelWindowCount(model.windowCount),
             dropdownColor: AppPalette.surfaceAlt,
-            style: TextStyle(color: onSurface),
+            style: TextStyle(color: onSurface, fontSize: 12),
+            underline: const SizedBox.shrink(),
+            isDense: true,
             items: [
               for (final count in kLevelWindowCountChoices)
                 DropdownMenuItem(value: count, child: Text('$count窗')),
@@ -338,35 +406,31 @@ class _TickDrawBoardState extends State<TickDrawBoard>
               if (count != null) widget.onChanged(model.copyWith(windowCount: count));
             },
           ),
-          const SizedBox(width: 12),
-          Text(
-            hasSel
-                ? '已选第 ${model.safeSelected + 1}/${model.points.length} 笔（再点同根取消）'
-                : '点击 K 线选中；未选中时拖拽为十字线/平移',
-            style: TextStyle(color: AppPalette.textSecondary, fontSize: 12),
+          const SizedBox(width: 6),
+          _CaptionButton(
+            tooltip: '最小化',
+            onTap: widget.onMinimize,
+            child: Icon(Icons.remove, size: 14, color: onSurface),
           ),
-          const SizedBox(width: 8),
-          IconButton(
-            tooltip: '增加（在选中后插入）',
-            onPressed: () => widget.onChanged(model.addPoint()),
-            icon: Icon(Icons.add, color: onSurface),
+          _CaptionButton(
+            tooltip: '最大化',
+            onTap: widget.onMaximize,
+            child: Icon(Icons.crop_square, size: 13, color: onSurface),
           ),
-          IconButton(
-            tooltip: '减少（删除选中）',
-            onPressed: hasSel ? () => widget.onChanged(model.removePoint()) : null,
-            icon: Icon(Icons.remove, color: hasSel ? onSurface : onSurface.withValues(alpha: 0.3)),
-          ),
-          IconButton(
-            tooltip: '复制（复制选中）',
-            onPressed: hasSel ? () => widget.onChanged(model.duplicatePoint()) : null,
-            icon: Icon(Icons.copy, color: hasSel ? onSurface : onSurface.withValues(alpha: 0.3)),
-          ),
-          const Spacer(),
-          TextButton(onPressed: widget.onSave, child: const Text('保存并加载')),
-          IconButton(
+          _CaptionButton(
             tooltip: '关闭',
-            onPressed: widget.onClose,
-            icon: Icon(Icons.close, color: onSurface),
+            onTap: widget.onClose,
+            child: Icon(Icons.close, size: 14, color: onSurface),
+          ),
+          const SizedBox(width: 4),
+          TextButton(
+            onPressed: widget.onSave,
+            style: TextButton.styleFrom(
+              foregroundColor: onSurface,
+              visualDensity: VisualDensity.compact,
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+            ),
+            child: const Text('保存并加载', style: TextStyle(fontSize: 12)),
           ),
         ],
       ),
@@ -407,6 +471,8 @@ class _TickDrawBoardState extends State<TickDrawBoard>
       truncationCheck: widget.truncationCheck,
       earlyDynamicUnit: widget.earlyDynamicUnit,
       showBuildingDash: widget.showBuildingDash,
+      chipConfig: widget.chipConfig,
+      tickDistConfig: widget.tickDistConfig,
       mainIndicators: widget.mainIndicators,
       subIndicators: widget.subIndicators,
       onMainIndicatorsChanged: widget.onMainIndicatorsChanged,
@@ -506,16 +572,19 @@ class _TickDrawBoardState extends State<TickDrawBoard>
                 },
               ),
             if (model.hasSelection)
-              // 聚焦框只包住圆点本身，大小跟随真实圆点半径。
+              // 聚焦光点：以正方形为基准，四角沿对角线向内指向圆点。
               Positioned(
                 left: selDot.dx - focusSide / 2,
                 top: selDot.dy - focusSide / 2,
                 width: focusSide,
                 height: focusSide,
                 child: IgnorePointer(
-                  child: CustomPaint(painter: _FocusBandPainter()),
+                  child: CustomPaint(painter: _FocusCornersPainter()),
                 ),
               ),
+            if (model.hasSelection)
+              // 三个编辑按钮：放在选中 K 线右侧无遮挡处，避开其它 K 线。
+              ..._selectionActions(selDot, width, height, g),
             if (model.hasSelection)
               // 拖动热区只放在圆点上：上下改价。
               // 绝不整块覆盖画布，否则会抢走主图的平移手势（缩小后拖拽失效）。
@@ -540,6 +609,88 @@ class _TickDrawBoardState extends State<TickDrawBoard>
         );
       },
     );
+  }
+
+  /// 选中 K 线右侧的三个编辑按钮（增加/减少/复制）。
+  /// 位置：选中点右侧；右边放不下时翻到左侧，避免压住其它 K 线。
+  List<Widget> _selectionActions(
+    Offset selDot,
+    double width,
+    double height,
+    ({
+      KlineViewport vp,
+      PriceRange range,
+      double plotH,
+      double slotW,
+      double dotR,
+    }) g,
+  ) {
+    const btn = 24.0;
+    const gap = 2.0;
+    final total = btn * 3 + gap * 2;
+    final rightSpace = width - selDot.dx - g.dotR - 4;
+    final onRight = rightSpace >= total;
+    final left = onRight
+        ? selDot.dx + g.dotR + 4
+        : math.max(0.0, selDot.dx - g.dotR - 4 - total);
+    // 垂直位置：靠近选中点，但别压到顶部指标条。
+    final top = (selDot.dy - btn / 2)
+        .clamp(
+          KlineViewport.padT.toDouble(),
+          math.max(0.0, height - btn),
+        )
+        .toDouble();
+    Widget circle(IconData icon, String tip, VoidCallback? onTap) {
+      return Tooltip(
+        message: tip,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: onTap,
+          child: Container(
+            width: btn,
+            height: btn,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: AppPalette.rgb(0xCC1A1A1A),
+              shape: BoxShape.circle,
+              border: Border.all(color: AppPalette.rgb(0x55FFFFFF)),
+            ),
+            child: Icon(
+              icon,
+              size: 13,
+              color: onTap == null
+                  ? AppPalette.textSecondary
+                  : AppPalette.textPrimary,
+            ),
+          ),
+        ),
+      );
+    }
+
+    return [
+      Positioned(
+        left: left,
+        top: top,
+        width: total.toDouble(),
+        height: btn,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            circle(Icons.add, '增加（在选中后插入）', () {
+              widget.onChanged(model.addPoint());
+            }),
+            const SizedBox(width: gap),
+            circle(Icons.remove, '减少（删除选中）', () {
+              widget.onChanged(model.removePoint());
+            }),
+            const SizedBox(width: gap),
+            circle(Icons.copy, '复制（复制选中）', () {
+              widget.onChanged(model.duplicatePoint());
+            }),
+          ],
+        ),
+      ),
+    ];
   }
 
   void _onViewportChanged() {
@@ -668,27 +819,34 @@ class _TickDrawBoardState extends State<TickDrawBoard>
   static const double _tooltipPanelWidth = 360;
 }
 
-class _FocusBandPainter extends CustomPainter {
+/// 聚焦光点：以正方形为基准，四角各放一个沿对角线向内指向圆点的小光点。
+class _FocusCornersPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
-    final rect = Rect.fromLTWH(1, 1, size.width - 2, size.height - 2);
-    canvas.drawRect(
-      rect,
-      Paint()
-        ..color = AppPalette.rgb(0x3342A5F5)
-        ..style = PaintingStyle.fill,
-    );
-    canvas.drawRect(
-      rect,
-      Paint()
-        ..color = AppPalette.rgb(0xCC42A5F5)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.5,
-    );
+    final half = size.width / 2;
+    final halfH = size.height / 2;
+    final r = math.max(1.6, size.width * 0.13);
+    // 四角相对圆心（正方形中心）的对角方向单位向量。
+    const dirs = [
+      Offset(-1, -1),
+      Offset(1, -1),
+      Offset(1, 1),
+      Offset(-1, 1),
+    ];
+    final paint = Paint()
+      ..color = AppPalette.rgb(0xFF42A5F5)
+      ..style = PaintingStyle.fill
+      ..isAntiAlias = true;
+    for (final d in dirs) {
+      final n = d / math.sqrt(d.dx * d.dx + d.dy * d.dy);
+      final center = Offset(half + n.dx * (half - r * 1.2),
+          halfH + n.dy * (halfH - r * 1.2));
+      canvas.drawCircle(center, r, paint);
+    }
   }
 
   @override
-  bool shouldRepaint(covariant _FocusBandPainter oldDelegate) => false;
+  bool shouldRepaint(covariant _FocusCornersPainter oldDelegate) => false;
 }
 
 class _SamePriceBandPainter extends CustomPainter {
