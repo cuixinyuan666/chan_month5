@@ -2643,7 +2643,10 @@ class _KlineHomePageState extends State<KlineHomePage>
     );
   }
 
+  /// 默认加载的股票：TEST 自定义股票（`a_Data/test`）。
+  /// 取不到 `test` 目录时回退到 `002003`，再回退到列表第一个。
   String? _preferredCode(List<String> codes) {
+    if (codes.contains('test')) return 'test';
     if (codes.contains('002003')) return '002003';
     return codes.isEmpty ? null : codes.first;
   }
