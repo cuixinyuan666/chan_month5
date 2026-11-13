@@ -322,10 +322,24 @@ class KlineViewport {
     final dxBars = (-dx / usableW) * span;
     var newMin = viewXMin + dxBars;
     var newMax = viewXMax + dxBars;
-    if (newMin < allXMin) {
-      newMin = allXMin;
+    // 边界：缩小到视窗大于数据跨度时，左右会留出空白。
+    // 旧口径把 newMin 硬钳到 allXMin，于是「空白留在左边」的一侧完全拖不动
+    // （缩小到一定程度后拖拽失效）。这里改成按视窗实际跨度留出等量空白，
+    // 视窗仍整体夹在数据左右边界附近，但两侧都能拖。
+    final dataSpan = math.max(1.0, allXMax - allXMin + 1);
+    final slack = math.max(0.0, span - dataSpan);
+    final leftFloor = allXMin - slack;
+    final rightCeil = allXMax + slack;
+    if (newMin < leftFloor) {
+      newMin = leftFloor;
       newMax = newMin + span;
     }
+    if (newMax > rightCeil) {
+      newMax = rightCeil;
+      newMin = newMax - span;
+    }
+    if (newMin < leftFloor) newMin = leftFloor;
+    if (newMax <= newMin) newMax = newMin + span;
     viewXMin = newMin;
     viewXMax = newMax;
     yShiftRatio += dy / math.max(1, plotH);

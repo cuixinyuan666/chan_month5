@@ -68,27 +68,19 @@ class _ViewportSnapshot {
 ///   （只平移、不改缩放，见 `KlineChart._applySyncedCrosshair`）；
 /// - as-of 结构（中枢/合并/连线）全窗同源，禁止非主窗看见末态未来数据。
 class ChartSyncController extends ChangeNotifier {
-  ChartSyncController({
-    double mainFraction = kDefaultMainFraction,
-    bool sharedViewport = false,
-  })  : _sharedViewportMode = sharedViewport,
-        _mainFraction = mainFraction;
+  ChartSyncController({double mainFraction = kDefaultMainFraction})
+      : _mainFraction = mainFraction;
 
   /// 主图占「主+副」区域比例的默认值（与单图口径一致）。
   static const double kDefaultMainFraction = 0.79;
 
   /// 每层一份视口。层级在分窗里不会重复占用，故用层号作键。
+  /// 画板与主图分窗同口径：各子窗口的缩放/平移互不牵连。
   final Map<int, KlineViewport> _viewports = <int, KlineViewport>{};
 
-  /// 画板模式：所有层共用同一份视口（放大/缩小/平移全窗同步）。
-  /// 原分窗保持「每层一份」不变。
-  final bool _sharedViewportMode;
-  final KlineViewport _sharedViewport = KlineViewport();
-
   /// 取某层视口；没有就现建一份（重建同层时沿用原缩放）。
-  KlineViewport viewportFor(int level) => _sharedViewportMode
-      ? _sharedViewport
-      : _viewports.putIfAbsent(level, () => KlineViewport());
+  KlineViewport viewportFor(int level) =>
+      _viewports.putIfAbsent(level, () => KlineViewport());
 
   /// 全窗共享的 as-of 查找缓存。
   final AsOfLookupCache asOfCache = AsOfLookupCache();
@@ -223,7 +215,8 @@ class ChartSyncController extends ChangeNotifier {
   }
 
   String _viewportSignature(int level) {
-    final v = viewportFor(level);
+    final v = _viewports[level];
+    if (v == null) return '';
     return '${v.viewXMin}/${v.viewXMax}/${v.yZoomRatio}/${v.yShiftRatio}';
   }
 

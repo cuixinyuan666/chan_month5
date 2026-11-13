@@ -225,9 +225,9 @@ class TickDrawBoard extends StatefulWidget {
 
 class _TickDrawBoardState extends State<TickDrawBoard>
     with SingleTickerProviderStateMixin {
-  /// 画板内所有窗口共享一份视口：放大/缩小/平移/十字线全同步。
-  final ChartSyncController _sync =
-      ChartSyncController(sharedViewport: true);
+  /// 画板内各窗口与主图分窗同口径：每窗一份视口，缩放/平移互不联动；
+  /// 十字线仍按原分窗规则由「主窗」接管并广播。
+  final ChartSyncController _sync = ChartSyncController();
   final CrosshairTooltipBridge _tooltipBridge = CrosshairTooltipBridge();
 
   /// 同价闪烁：只在两/多根同价瞬间亮一下，不限制上下移动。
@@ -517,7 +517,8 @@ class _TickDrawBoardState extends State<TickDrawBoard>
                 ),
               ),
             if (model.hasSelection)
-              // 拖动热区也只放在圆点上：上下改价，不允许左右移动。
+              // 拖动热区只放在圆点上：上下改价。
+              // 绝不整块覆盖画布，否则会抢走主图的平移手势（缩小后拖拽失效）。
               Positioned(
                 left: selDot.dx - dragSide / 2,
                 top: selDot.dy - dragSide / 2,
@@ -674,13 +675,13 @@ class _FocusBandPainter extends CustomPainter {
     canvas.drawRect(
       rect,
       Paint()
-        ..color = const Color(0x3342A5F5)
+        ..color = AppPalette.rgb(0x3342A5F5)
         ..style = PaintingStyle.fill,
     );
     canvas.drawRect(
       rect,
       Paint()
-        ..color = const Color(0xCC42A5F5)
+        ..color = AppPalette.rgb(0xCC42A5F5)
         ..style = PaintingStyle.stroke
         ..strokeWidth = 1.5,
     );
@@ -697,13 +698,13 @@ class _SamePriceBandPainter extends CustomPainter {
     canvas.drawRect(
       rect,
       Paint()
-        ..color = const Color(0x22FFC107)
+        ..color = AppPalette.rgb(0x22FFC107)
         ..style = PaintingStyle.fill,
     );
     canvas.drawRect(
       rect,
       Paint()
-        ..color = const Color(0xEEFFC107)
+        ..color = AppPalette.rgb(0xEEFFC107)
         ..style = PaintingStyle.stroke
         ..strokeWidth = 1.5,
     );
