@@ -2731,7 +2731,25 @@ class _KlineChartState extends State<KlineChart> {
         }
 
         final visible = _viewport.visibleBars(widget.bars);
-        final priceRange = _viewport.priceRangeFor(visible);
+        var priceRange = _viewport.priceRangeFor(visible);
+        // K0（tick）画的是圆点：价格区间正好等于可见 K 极值时，最上/最下的
+        // 圆点有一半落在绘图区外被裁掉。这里给区间留出半个圆点的余量，
+        // 保证「原点完整渲染、不裁剪」（2026-11-13 用户明确）。
+        if (widget.period == 'tick' && visible.isNotEmpty) {
+          final slotW0 = _viewport.barSlotWidth(w);
+          final barW0 = math.max(1.0, slotW0 * 0.65);
+          final dotR0 = math.max(1.2, math.min(barW0 * 0.45, slotW0 * 0.35));
+          final plotH0 = math.max(1.0, mainH - _resolveMainPlotTop(context));
+          final pad = priceRange.max == priceRange.min
+              ? dotR0
+              : dotR0 * plotH0 / math.max(1e-9, priceRange.max - priceRange.min);
+          if (pad > 0) {
+            priceRange = PriceRange(
+              priceRange.min - pad,
+              priceRange.max + pad,
+            );
+          }
+        }
         _hitPriceRange = priceRange;
         _hitMainH = mainH;
 
