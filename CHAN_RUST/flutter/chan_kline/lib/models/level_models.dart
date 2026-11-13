@@ -356,6 +356,30 @@ class LevelBundle {
     this.pendingUnit,
   });
 
+  /// 只换合并框（首分型前口径重排用），其余字段原样带过去。
+  LevelBundle withCombineFrames(List<KlineCombineFrame> frames) {
+    return LevelBundle(
+      level: level,
+      confirms: confirms,
+      segments: segments,
+      unitBars: unitBars,
+      combineFrames: frames,
+      zsFrames: zsFrames,
+      buy1Frames: buy1Frames,
+      sell1Frames: sell1Frames,
+      buy2Frames: buy2Frames,
+      sell2Frames: sell2Frames,
+      buyNFrames: buyNFrames,
+      sellNFrames: sellNFrames,
+      bsVerdictFrames: bsVerdictFrames,
+      firstDir: firstDir,
+      firstDirX: firstDirX,
+      activeUnit: activeUnit,
+      segmentPolicy: segmentPolicy,
+      pendingUnit: pendingUnit,
+    );
+  }
+
   factory LevelBundle.fromJson(Map<String, dynamic> json) {
     return LevelBundle(
       level: (json['level'] as num?)?.toInt() ?? 1,
