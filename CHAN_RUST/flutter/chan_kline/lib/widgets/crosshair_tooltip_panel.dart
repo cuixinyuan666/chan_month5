@@ -21,22 +21,22 @@ class CrosshairTooltipPanel extends StatelessWidget {
   /// 关闭 tooltip，保留十字线
   final VoidCallback? onClose;
 
-  static final _labelStyle = TextStyle(
-    color: AppPalette.rgb(0xFFE2E8F0),
+  static TextStyle get _labelStyle => TextStyle(
+    color: AppPalette.textPrimary,
     fontSize: 11,
     fontWeight: FontWeight.w600,
     fontFamily: 'Consolas',
     height: 1.35,
   );
-  static final _valueStyle = TextStyle(
-    color: AppPalette.rgb(0xFFE2E8F0),
+  static TextStyle get _valueStyle => TextStyle(
+    color: AppPalette.textPrimary,
     fontSize: 11,
     fontWeight: FontWeight.w500,
     fontFamily: 'Consolas',
     height: 1.35,
   );
-  static final _sepStyle = TextStyle(
-    color: AppPalette.rgb(0x99E2E8F0),
+  static TextStyle get _sepStyle => TextStyle(
+    color: AppPalette.textSecondary,
     fontSize: 10,
     fontFamily: 'Consolas',
     height: 1.1,
@@ -53,9 +53,9 @@ class CrosshairTooltipPanel extends StatelessWidget {
       child: Container(
         constraints: BoxConstraints(maxWidth: maxWidth, maxHeight: maxHeight),
         decoration: BoxDecoration(
-          // 深色实底（近不透明）：与图表价签同调，浅色字对比强、不再黑白混色
-          color: AppPalette.rgb(0xEE121212),
-          border: Border.all(color: AppPalette.rgb(0x55E2E8F0), width: 1),
+          // 跟主题走：深色主题近黑底，浅色/护眼主题浅底，不再写死纯黑。
+          color: AppPalette.overlayBg,
+          border: Border.all(color: AppPalette.border, width: 1),
           borderRadius: BorderRadius.circular(2),
         ),
         child: Column(
@@ -91,7 +91,7 @@ class CrosshairTooltipPanel extends StatelessWidget {
                       onPressed: onClose,
                       icon: Icon(
                         Icons.close,
-                        color: AppPalette.rgb(0xFFE2E8F0),
+                        color: AppPalette.textPrimary,
                       ),
                     ),
                 ],

@@ -130,42 +130,44 @@ class _PaneChrome extends StatelessWidget {
       captionControlsWidth: 0,
       gapBeforeSettings: 0,
     );
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        child,
-        Positioned(
-          right: right,
-          top: 3,
-          child: IgnorePointer(
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                // 深色底 + 亮字：浅色主题与深色主题下都能看清（灰底灰字会糊成一片）。
-                color: AppPalette.rgb(0xE61A1A1A),
-                borderRadius: BorderRadius.circular(4),
-                border: Border.all(
-                  color: primary
-                      ? AppPalette.rgb(0xFF42A5F5)
-                      : AppPalette.rgb(0x66FFFFFF),
+    return ColoredBox(
+      color: AppPalette.canvasBg,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          child,
+          Positioned(
+            right: right,
+            top: 3,
+            child: IgnorePointer(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  // 底色跟主题走，浅色主题下不再是一块纯黑。
+                  color: AppPalette.overlayBg,
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(
+                    color: primary ? AppPalette.accent : AppPalette.border,
+                  ),
                 ),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                child: Text(
-                  'K$level',
-                  style: TextStyle(
-                    fontSize: 11,
-                    height: 1.2,
-                    color: primary
-                        ? AppPalette.rgb(0xFF9CD2FF)
-                        : AppPalette.rgb(0xFFCFCFCF),
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                  child: Text(
+                    'K$level',
+                    style: TextStyle(
+                      fontSize: 11,
+                      height: 1.2,
+                      color: primary
+                          ? AppPalette.accent
+                          : AppPalette.textSecondary,
+                    ),
                   ),
                 ),
               ),
             ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }

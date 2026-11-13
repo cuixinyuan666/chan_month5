@@ -54,11 +54,11 @@ class IndicatorPickerOverlay<T> extends StatefulWidget {
 }
 
 class _IndicatorPickerOverlayState<T> extends State<IndicatorPickerOverlay<T>> {
-  static Color get _activeColor => AppPalette.rgb(0xFFFFFFFF);
-  static Color get _inactiveColor => AppPalette.rgb(0xFF6B7280);
-  static Color get _valueColor => AppPalette.rgb(0xFF38BDF8);
-  static Color get _hintColor => AppPalette.rgb(0xFF94A3B8);
-  static Color get _sectionColor => AppPalette.rgb(0xFFCBD5E1);
+  static Color get _activeColor => AppPalette.textPrimary;
+  static Color get _inactiveColor => AppPalette.textMuted;
+  static Color get _valueColor => AppPalette.accent;
+  static Color get _hintColor => AppPalette.textSecondary;
+  static Color get _sectionColor => AppPalette.textPrimary;
 
   late Set<int> _expandedLevels;
   late Set<String> _expandedCategories;
@@ -335,7 +335,7 @@ class _IndicatorPickerOverlayState<T> extends State<IndicatorPickerOverlay<T>> {
         height: 1,
         indent: 14,
         endIndent: 14,
-        color: AppPalette.rgb(0x22FFFFFF),
+        color: AppPalette.border,
       ),
       itemBuilder: (_, i) => _levelBlock(levels[i]),
     );
@@ -358,7 +358,7 @@ class _IndicatorPickerOverlayState<T> extends State<IndicatorPickerOverlay<T>> {
         behavior: HitTestBehavior.opaque,
         onTap: widget.onClose,
         child: Container(
-          color: AppPalette.rgb(0x99000000),
+          color: AppPalette.scrim,
           alignment: Alignment.center,
           padding: EdgeInsets.fromLTRB(marginH, marginV, marginH, marginV),
           child: GestureDetector(
@@ -370,7 +370,7 @@ class _IndicatorPickerOverlayState<T> extends State<IndicatorPickerOverlay<T>> {
                 maxHeight: maxH,
               ),
               child: Material(
-                  color: AppPalette.rgb(0xF01A1A1A),
+                  color: AppPalette.overlayBg,
                   borderRadius: BorderRadius.circular(10),
                   child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -386,7 +386,7 @@ class _IndicatorPickerOverlayState<T> extends State<IndicatorPickerOverlay<T>> {
                             icon: Icon(
                               Icons.close,
                               size: 22,
-                              color: AppPalette.rgb(0xFF94A3B8),
+                              color: AppPalette.textSecondary,
                             ),
                           ),
                           Expanded(
@@ -395,14 +395,14 @@ class _IndicatorPickerOverlayState<T> extends State<IndicatorPickerOverlay<T>> {
                               style: TextStyle(
                                 fontSize: 16,
                                 fontWeight: FontWeight.w600,
-                                color: AppPalette.rgb(0xFFE2E8F0),
+                                color: AppPalette.textPrimary,
                               ),
                             ),
                           ),
                         ],
                       ),
                     ),
-                    Divider(height: 1, color: AppPalette.rgb(0x33FFFFFF)),
+                    Divider(height: 1, color: AppPalette.border),
                     Expanded(child: _body()),
                   ],
                 ),

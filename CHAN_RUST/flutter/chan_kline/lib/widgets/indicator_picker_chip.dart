@@ -46,11 +46,13 @@ class IndicatorPickerChip extends StatefulWidget {
 class _IndicatorPickerChipState extends State<IndicatorPickerChip> {
   bool _hovered = false;
 
-  static Color get _activeColor => AppPalette.rgb(0xFFFFFFFF);
-  static Color get _mutedColor => AppPalette.rgb(0xFF6B7280);
-  static Color get _sepActive => AppPalette.rgb(0xAAFFFFFF);
-  static Color get _sepMuted => AppPalette.rgb(0x556B7280);
-  static Color get _valueColor => AppPalette.rgb(0xFF38BDF8);
+  // 名称列的字色跟主题走：深色主题下是浅字，浅色/护眼主题下是深字。
+  // 之前写死纯白，浅色主题下白字贴在浅底上，整列看起来发灰发暗。
+  static Color get _activeColor => AppPalette.textPrimary;
+  static Color get _mutedColor => AppPalette.textMuted;
+  static Color get _sepActive => AppPalette.textSecondary;
+  static Color get _sepMuted => AppPalette.border;
+  static Color get _valueColor => AppPalette.textSecondary;
 
   Widget _separator(IndicatorChipEntry cur, IndicatorChipEntry prev) {
     final bothMuted = cur.muted && prev.muted;
@@ -146,7 +148,7 @@ class _IndicatorPickerChipState extends State<IndicatorPickerChip> {
         duration: const Duration(milliseconds: 120),
         opacity: opacity,
         child: Material(
-          color: AppPalette.rgb(0xCC1A1A1A),
+          color: AppPalette.canvasBg.withValues(alpha: 0.8),
           borderRadius: BorderRadius.circular(4),
           child: ConstrainedBox(
             constraints: BoxConstraints(
