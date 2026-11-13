@@ -179,7 +179,7 @@ class _EmptyLevelPlaceholder extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ColoredBox(
-      color: AppPalette.rgb(0xFF121212),
+      color: AppPalette.canvasBg,
       child: Center(
         child: Text(
           'K$level 暂无数据\n（该层级尚未生成，继续步进后自动出现）',
@@ -187,7 +187,7 @@ class _EmptyLevelPlaceholder extends StatelessWidget {
           style: TextStyle(
             fontSize: 12,
             height: 1.6,
-            color: AppPalette.rgb(0xFF757575),
+            color: AppPalette.textSecondary,
           ),
         ),
       ),
