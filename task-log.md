@@ -6599,3 +6599,18 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   6. 设置面板在「层级早生成动态单元」下方新增下拉与说明弹窗；改动只重算当前步进（不 dispose 会话、不清冻结仓）并落盘。
 - **结果**：`flutter analyze` 无 error；新增 `test/pre_first_fractal_mode_test.dart` 14 条全通过；`first_fractal_rule_test.dart` 7 条全通过；`flutter build windows --debug` 编译通过。全量 `flutter test` 剩 8 条失败，已用 `git stash` 做改动前基线对比，确认均为既有失败（筹码 catalog、增量 vs Full 对拍、同价位首分型拉线、斜率子线、寻优用例数、widget 挂载、FFI 环境），与本次无关。
 - **注意事项**：未 push；未改缠论计算口径（不涉及 Rust，无需重编 chan_ffi.dll）。运行态观感（切下拉后框与 MG/MD 是否即时同步）需在软件里点一次确认。
+
+
+---
+
+### 2026-11-14 00:36 · 把主仓库未提交的画板改动接进本 worktree
+
+- **执行者**：opencode
+- **任务类型**：同步 + 重编译
+- **上下文**：用户发现这个 worktree 编出来的 App 缺了一些已有的变化。核实后确认：分支并没有落后，基点就是 ANDROID_RUST 的尖端，领先 4 、落后 0；缺的是主仓库工作区里改了但还没提交的东西，worktree 只能拿到已提交的内容。用户选择把源码三处改动搬过来并重编译。
+- **关键操作**：
+  1. 从主仓库导出未提交差分，先用 git apply --check 确认能干净合上，再应用到本 worktree。三处改动：按住圆点改价时关掉整图平移，让每根 K0 都能单独上下拖动；画板选中 K 线旁边的增加／减少／复制三个按钮由横排改成竖排；配套单测。
+  2. lutter test test/tick_draw_board_test.dart 4 条全通过。
+  3. 本次只改界面、缠论内核没动，跳过两段不必要的 Rust 重编，直接 lutter build windows --debug，日志末尾确认编出新的 chan_kline.exe，并启动。
+- **结果**：新 App 已启动（进程 47044），同时带上首分型前合并框三种口径与这两处画板修复。
+- **注意事项**：未 push；未改缠论计算口径。主仓库那边的未提交改动仍原样留着，本次只是拷贝，没有动它。主仓库的 TEST 自定义股票数据（只剩 5 根 K）未同步，本 worktree 仍是旧的 98 根，是否要一并搬过来待用户决定。
