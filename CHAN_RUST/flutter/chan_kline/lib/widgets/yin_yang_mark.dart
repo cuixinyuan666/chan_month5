@@ -4,6 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:chan_kline/theme/app_palette.dart';
 
 /// 在画布上画完整太极（阴阳鱼+对眼+外圈），不裁切图案本身。
+///
+/// 配色**固定黑白**，不跟随主题色/亮度/暖色变动（用户 2026-11-13 明确）。
+/// 阳=白、阴=黑、外圈=灰，保证任何主题下都是同一个太极。
 void drawYinYangSymbol(
   Canvas canvas,
   Offset center,
@@ -13,10 +16,10 @@ void drawYinYangSymbol(
   Color? ring,
 }) {
   if (radius <= 0) return;
-  // 主题色：调用方没指定就跟当前主题（浅色/护眼底上的太极不能还是黑底）
-  final yangC = yang ?? AppPalette.rgb(0xFFF4F1EA);
-  final yinC = yin ?? AppPalette.rgb(0xFF141414);
-  final ringC = ring ?? AppPalette.rgb(0xFFC9A227);
+  // 固定黑白：不走 AppPalette，避免主题色/亮度/暖色把太极染色。
+  final yangC = yang ?? const Color(0xFFFFFFFF);
+  final yinC = yin ?? const Color(0xFF000000);
+  final ringC = ring ?? const Color(0xFF9E9E9E);
   final bodyR = radius;
   canvas.save();
   canvas.translate(center.dx, center.dy);
@@ -199,11 +202,12 @@ class _YinYangLoadingMarkState extends State<YinYangLoadingMark>
 }
 
 /// 标准太极图：白阳 / 黑阴 + 对眼，外圈描边保证深色底上也能看全。
+/// 配色固定黑白，不跟随主题色。
 class YinYangPainter extends CustomPainter {
   YinYangPainter({Color? yang, Color? yin, Color? ring})
-      : yang = yang ?? AppPalette.rgb(0xFFF4F1EA),
-        yin = yin ?? AppPalette.rgb(0xFF141414),
-        ring = ring ?? AppPalette.rgb(0xFFC9A227);
+      : yang = yang ?? const Color(0xFFFFFFFF),
+        yin = yin ?? const Color(0xFF000000),
+        ring = ring ?? const Color(0xFF9E9E9E);
 
   final Color yang;
   final Color yin;
