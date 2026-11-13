@@ -6581,3 +6581,21 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   5. 色差：指标名称列、图例、十字信息窗、分窗格子底色此前写死深色底浅色字，浅色和护眼主题下整列发暗。统一改走主题色板，底色与主图同一套画布底色，字色随主题变深浅。
 - **结果**：`flutter test` 画板与圆点口径 7 条通过；`flutter analyze` 无新增错误；已用最新代码重新编译并启动软件。
 - **注意事项**：未 push；未改缠论计算口径。圆点是否仍被裁、箭头是否贴住圆心、浅色主题下色差是否消除，需在软件里切到浅色主题打开画板看一眼确认。
+
+
+---
+
+### 2026-11-14 10:40 · 首分型前合并框口径（种子框 / 高高 / 低低）设置项
+
+- **执行者**：opencode
+- **任务类型**：功能完成
+- **上下文**：用户要求设置面板新增下拉，选择「首个分型之前」那段合并框的取值口径：种子框（不合并）/ 高高（high、low 都取最大，默认）/ 低低（high、low 都取最小）。明确只改合并框绘制与合并框相关 tooltip 的 MG/MD，不动 GG/DD、动态 K 蜡烛、连线、枢与买卖点。
+- **关键操作**：
+  1. 新增 `models/pre_first_fractal_mode.dart`：枚举 `seedBox`（种子框）/ `highHigh`（高高）/ `lowLow`（低低），默认高高，落盘键 `pre_first_fractal_mode`，缺键或脏值一律回落高高。
+  2. 新增 `compute/pre_first_fractal_compute.dart`：唯一实现 `applyPreFirstFractalMode`（绘制与 tooltip 共用），种子框直接原样返回、不合并；高高/低低把首分型前各框并成一个框，x 从第一根起到最后一个框右端。
+  3. `first_fractal_rule.dart` 新增 `mergePreFractalBox`：包含关系并框的高/低按所选口径取最大或最小；逐对判定本身（双低判顶、双高判底、顶底交替）不变，种子框下不跑逐对判定。
+  4. 主图与各子窗口：`KlineChart` 增加 `preFirstFractalMode`，painter 统一走纯函数，切换后只重画。
+  5. tooltip：`_lookupForPaint` 对 K0 合并框 / 各层合并框 / K1 合并框套同一口径；增量 Lookup 记住口径并重种，十字线上的 MG/MD 与画出来的框同源。
+  6. 设置面板在「层级早生成动态单元」下方新增下拉与说明弹窗；改动只重算当前步进（不 dispose 会话、不清冻结仓）并落盘。
+- **结果**：`flutter analyze` 无 error；新增 `test/pre_first_fractal_mode_test.dart` 14 条全通过；`first_fractal_rule_test.dart` 7 条全通过；`flutter build windows --debug` 编译通过。全量 `flutter test` 剩 8 条失败，已用 `git stash` 做改动前基线对比，确认均为既有失败（筹码 catalog、增量 vs Full 对拍、同价位首分型拉线、斜率子线、寻优用例数、widget 挂载、FFI 环境），与本次无关。
+- **注意事项**：未 push；未改缠论计算口径（不涉及 Rust，无需重编 chan_ffi.dll）。运行态观感（切下拉后框与 MG/MD 是否即时同步）需在软件里点一次确认。
