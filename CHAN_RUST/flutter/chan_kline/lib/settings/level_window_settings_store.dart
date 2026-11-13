@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 
 import '../chart/level_window_layout.dart';
+import '../models/pre_first_fractal_mode.dart';
 
 /// 层级分窗本机偏好（落盘 `.chan_level_windows.json`）。
 ///
@@ -20,9 +21,15 @@ abstract final class LevelWindowSettingsStore {
   /// 默认开；关闭时回到经典口径。与「层级分窗」总开关相互独立。
   static bool _earlyDynamicUnit = true;
 
+  /// 首分型前合并框口径：种子框 / 高高 / 低低。
+  /// 缺键（老设置文件）一律按高高，与历史上线口径一致。
+  static PreFirstFractalMode _preFirstFractalMode = PreFirstFractalMode.defaultMode;
+
   static bool get enabled => _enabled;
 
   static bool get earlyDynamicUnit => _earlyDynamicUnit;
+
+  static PreFirstFractalMode get preFirstFractalMode => _preFirstFractalMode;
 
   static int get count => _count;
 
@@ -42,6 +49,8 @@ abstract final class LevelWindowSettingsStore {
       _enabled = obj['enabled'] == true;
       // 缺省 true：旧设置文件没有该键时按新默认口径。
       _earlyDynamicUnit = obj['early_dynamic_unit'] != false;
+      _preFirstFractalMode =
+          PreFirstFractalMode.fromStorage(obj['pre_first_fractal_mode']);
       _count = normalizeLevelWindowCount(
         obj['count'] is int ? obj['count'] as int : null,
       );
@@ -70,11 +79,13 @@ abstract final class LevelWindowSettingsStore {
   static Future<void> save({
     bool? enabled,
     bool? earlyDynamicUnit,
+    PreFirstFractalMode? preFirstFractalMode,
     int? count,
     List<int>? slots,
   }) async {
     if (enabled != null) _enabled = enabled;
     if (earlyDynamicUnit != null) _earlyDynamicUnit = earlyDynamicUnit;
+    if (preFirstFractalMode != null) _preFirstFractalMode = preFirstFractalMode;
     if (count != null) _count = normalizeLevelWindowCount(count);
     if (slots != null) {
       _slots = fillLevelWindowSlots(
@@ -88,6 +99,7 @@ abstract final class LevelWindowSettingsStore {
         const JsonEncoder.withIndent('  ').convert(<String, dynamic>{
           'enabled': _enabled,
           'early_dynamic_unit': _earlyDynamicUnit,
+          'pre_first_fractal_mode': _preFirstFractalMode.storageValue,
           'count': _count,
           'slots': _slots,
         }),

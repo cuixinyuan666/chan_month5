@@ -14,7 +14,7 @@ import '../backtest/strategy_signal_painter.dart';
 import '../compute/k0_combine_compute.dart';
 import '../compute/k1_combine_compute.dart';
 import '../compute/k1_bar_view_compute.dart';
-import '../compute/first_fractal_rule.dart';
+import '../compute/pre_first_fractal_compute.dart';
 import '../compute/chart_view_compute.dart';
 import '../compute/fractal_judgment_compute.dart';
 import '../compute/zs_signal_compute.dart';
@@ -65,6 +65,7 @@ import '../models/chip_config.dart';
 import '../models/tick_dist_config.dart';
 import '../models/peak_rank_config.dart';
 import '../models/kline_combine_frame.dart';
+import '../models/pre_first_fractal_mode.dart';
 import '../models/bar_feature_lookup.dart';
 import '../models/incremental_lookup.dart';
 import '../models/level_models.dart';
@@ -158,6 +159,7 @@ class KlineChart extends StatefulWidget {
     this.defaultK0Policy = 'pending',
     this.truncationCheck = true,
     this.earlyDynamicUnit = true,
+    this.preFirstFractalMode = PreFirstFractalMode.defaultMode,
     this.showBuildingDash = true,
     this.judgmentHistoryByKn = const {},
     this.zsJudgmentHistoryByKn = const {},
@@ -257,6 +259,9 @@ class KlineChart extends StatefulWidget {
   final bool truncationCheck;
   /// 层级早生成动态单元：十字线 as-of 本地重算 bundle 时与 Rust 同开关
   final bool earlyDynamicUnit;
+  /// 首分型前合并框口径（种子框 / 高高 / 低低）：只影响首分型前那段合并框
+  /// 的绘制与 tooltip 的 MG/MD，其它结构不受影响。
+  final PreFirstFractalMode preFirstFractalMode;
   /// 构建中/未确认元素虚线开关：开=末组合并框虚线 + K0/K1/KN 构建中连线虚线；关=全部实线（不区分构建中）
   final bool showBuildingDash;
   /// 分型判断会话事件日志（main 步进累积；换股才清空）
@@ -630,15 +635,37 @@ class _KlineChartState extends State<KlineChart> {
     final tipZsK0 = asOf != null
         ? (asOfBundle?.zsK0Frames ?? const <ZSFrame>[])
         : widget.zsK0Frames;
+    // 首分型前合并框口径：绘制与 tooltip 必须同源，否则十字线上写的 MG/MD
+    // 会和纸上画的框对不上。只动合并框（K0 / 各层 / K1），GG/DD 等其它字段不碰。
+    final pfSubWindow = widget.displayLevel != null;
+    final pfMode = widget.preFirstFractalMode;
+    final pfK0Frames = applyPreFirstFractalMode(
+      _effectiveK0CombineFrames,
+      mode: pfMode,
+      subWindow: pfSubWindow,
+      earlyDynamicUnit: widget.earlyDynamicUnit,
+    );
+    final pfK1Frames = applyPreFirstFractalMode(
+      _effectiveK1CombineFrames,
+      mode: pfMode,
+      subWindow: pfSubWindow,
+      earlyDynamicUnit: widget.earlyDynamicUnit,
+    );
+    final pfLevels = applyPreFirstFractalToLevels(
+      tipLevels,
+      mode: pfMode,
+      subWindow: pfSubWindow,
+      earlyDynamicUnit: widget.earlyDynamicUnit,
+    );
     return BarFeatureLookup.build(
       bars: widget.bars,
-      combineFrames: _effectiveK0CombineFrames,
+      combineFrames: pfK0Frames,
       k0Confirms: tipK0Confirms,
       barFeatures: widget.barFeatures,
       k0Lines: widget.k0Lines,
       k1Analysis: widget.k1Analysis,
-      levels: tipLevels,
-      k1CombineFrames: _effectiveK1CombineFrames,
+      levels: pfLevels,
+      k1CombineFrames: pfK1Frames,
       buy1HistoryByKn: widget.buy1HistoryByKn,
       sell1HistoryByKn: widget.sell1HistoryByKn,
       buy2HistoryByKn: widget.buy2HistoryByKn,
@@ -2939,6 +2966,7 @@ class _KlineChartState extends State<KlineChart> {
               showBuildingDash: widget.showBuildingDash,
               earlyDynamicUnit: widget.earlyDynamicUnit,
               subWindow: widget.displayLevel != null,
+              preFirstFractalMode: widget.preFirstFractalMode,
               // 分窗：全窗照抄同一个胶囊条占位，副图内区才同高。
               subChipBarHeight:
                   widget.sync?.subChipBand ?? _subChipBarHeight,
@@ -3381,6 +3409,7 @@ class _KlineCompositePainter extends CustomPainter {
     this.showBuildingDash = true,
     this.earlyDynamicUnit = true,
     this.subWindow = false,
+    this.preFirstFractalMode = PreFirstFractalMode.defaultMode,
     this.subChipBarHeight = KlineViewport.subIndicatorChipBand,
     this.defaultK0Policy = 'pending',
     this.segAsOf,
@@ -3463,6 +3492,8 @@ class _KlineCompositePainter extends CustomPainter {
 
   /// 子窗口模式：「只有一根 K 不画合并框」只在这里、且首个分型出现前生效。
   final bool subWindow;
+  /// 首分型前合并框口径：种子框=不合并 / 高高 / 低低（绘制与 tooltip 同源）。
+  final PreFirstFractalMode preFirstFractalMode;
   /// 副图左上指标开关按钮实际高度（自 px 落点下方 2px 起算；动态测量防覆盖）
   final double subChipBarHeight;
   /// 与 asOfK1Bars 同构的默认 K0 策略（pending/purged）
@@ -4137,91 +4168,27 @@ class _KlineCompositePainter extends CustomPainter {
   /// 首分型前的合并框（全层同构）：只有一根时不画框；
   /// 两根及以上时合成一个框，左端含第一根 K，而不是把第一根单独包成一个。
   ///
-  /// 经典口径在首分型前就会拆出多组（默认数据 idx=13 时 K1 已是两组：
-  /// 种子组低低 + 其后高高）。这里把「首个分型所在组之前」的全部组合并：
-  /// 首分型确认后它的 fx 会被标成 TOP/BOTTOM，所以取第一个非 UNKNOWN 组的下标，
-  /// 而不是只合开头连续的 UNKNOWN 组（否则它前面那组会单独留下）。
-  /// x 从 0 收到最后一组右端，high=max(各组 high)、low=max(各组 low)（高高）。
-  /// 首个分型所在组及其后的框按原样绘制。
+  /// 口径由设置项「首分型前合并框」决定（见 [PreFirstFractalMode]）：
+  /// - 种子框：**不合并**，按引擎原框画（第一根框即种子框，后续框各自独立）；
+  /// - 高高：并成一个框，high / low 都取各框最大（历史口径）；
+  /// - 低低：并成一个框，high / low 都取各框最小。
   ///
-  /// **子窗口模式**（[subWindow] = true，层级分窗总开关打开时）走逐对判定
-  /// （见 `first_fractal_rule.dart`，全层同构）：相邻两根双低 → 前一根直接判顶分型
-  /// （顶点=前一根 high）、双高 → 判底分型（顶点=前一根 low），**都不再合并**；
-  /// 仅当存在包含关系时才取高合并。顶底交替，同向丢弃。
+  /// **子窗口模式**（[subWindow] = true，层级分窗总开关打开时）在高高/低低 下
+  /// 还走逐对判定（见 first_fractal_rule.dart 的逐对判定，全层同构）：相邻两根双低 →
+  /// 前一根直接判顶分型（顶点=前一根 high）、双高 → 判底分型（顶点=前一根 low），
+  /// **都不再合并**；仅当存在包含关系时才并框。顶底交替，同向丢弃。
+  /// 种子框口径下不跑逐对判定（保持原框）。
+  ///
+  /// 实现集中在 [applyPreFirstFractalMode]，绘制与 tooltip 同源。
   List<KlineCombineFrame> _mergePreFractalFrames(
     List<KlineCombineFrame> frames,
   ) {
-    if (!earlyDynamicUnit || frames.isEmpty) return frames;
-    if (frames.first.x1 > 0) return frames;
-    // 不用 `== 'UNKNOWN'`：debug kernel 下该字符串比较会把 'TOP' 也判成相等
-    // （已用逐码位日志核实），改按码位判断（见 _fxIsUnknown）。
-    var end = -1;
-    for (var i = 0; i < frames.length; i++) {
-      if (!_fxIsUnknown(frames[i].fx)) {
-        end = i;
-        break;
-      }
-    }
-    if (end < 0) end = frames.length;
-    // 子窗口模式：逐对判定（全层同构）。双低/双高 → 前一根直接判分型且不合并；
-    // 仅包含关系才取高合并。顶底交替。
-    if (subWindow) {
-      return applyFirstPairFractalToFrames(
-        frames,
-        standardFirstFx: end < frames.length ? frames[end].fx : null,
-      );
-    }
-    // 顶分型落在第二组时，第一根不能单独拆出去：
-    // 并进后面那个框，左端仍从第一根 K 起。只有整层一根时不画框。
-    if (end == 1 &&
-        frames.length > 1 &&
-        frames.first.x1 <= 0 &&
-        frames.first.count <= 1) {
-      final a = frames.first;
-      final b = frames[1];
-      final hi = a.high > b.high ? a.high : b.high;
-      final lo = a.low > b.low ? a.low : b.low;
-      return <KlineCombineFrame>[
-        KlineCombineFrame(
-          x1: a.x1,
-          x2: b.x2,
-          t1: a.t1,
-          t2: b.t2,
-          high: hi,
-          low: lo,
-          fx: b.fx,
-          count: a.count + b.count,
-          endAtLeftHalf: b.endAtLeftHalf,
-        ),
-        ...frames.sublist(2),
-      ];
-    }
-    if (end <= 1) return frames;
-    final head = frames.sublist(0, end);
-    final last = head.last;
-    var hi = head.first.high;
-    var lo = head.first.low;
-    var count = 0;
-    for (final f in head) {
-      if (f.high > hi) hi = f.high;
-      if (f.low > lo) lo = f.low;
-      count += f.count;
-    }
-    final t0 = head.first.t1;
-    return <KlineCombineFrame>[
-      KlineCombineFrame(
-        x1: head.first.x1,
-        x2: last.x2,
-        t1: t0,
-        t2: last.t2,
-        high: hi,
-        low: lo,
-        fx: 'UNKNOWN',
-        count: count,
-        endAtLeftHalf: last.endAtLeftHalf,
-      ),
-      ...frames.sublist(end),
-    ];
+    return applyPreFirstFractalMode(
+      frames,
+      mode: preFirstFractalMode,
+      subWindow: subWindow,
+      earlyDynamicUnit: earlyDynamicUnit,
+    );
   }
 
   /// 种子框画线全层同构入口：UNKNOWN→开口虚线；JUDGE/CONFIRM→ABC（互斥）。
@@ -8783,6 +8750,7 @@ class _KlineCompositePainter extends CustomPainter {
         oldDelegate.truncationCheck != truncationCheck ||
         oldDelegate.showBuildingDash != showBuildingDash ||
         oldDelegate.earlyDynamicUnit != earlyDynamicUnit ||
+        oldDelegate.preFirstFractalMode != preFirstFractalMode ||
         oldDelegate.subChipBarHeight != subChipBarHeight ||
         oldDelegate.defaultK0Policy != defaultK0Policy ||
         oldDelegate.stepIdx != stepIdx ||
