@@ -1,3 +1,4 @@
+import 'package:chan_kline/chart/tick_dot_geometry.dart';
 import 'package:chan_kline/models/kline_bar.dart';
 import 'package:chan_kline/widgets/kline_viewport.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -56,5 +57,15 @@ void main() {
     expect(visible.length, 50);
     expect(visible.first.idx, 0);
     expect(visible.last.idx, 49);
+  });
+
+  test('圆点余量按像素除以绘图高度换算，不能乘', () {
+    // 4 元的价格跨度、400 像素高、圆点半径 4 像素：
+    // 正确留量是 4 * 4 / 400 = 0.04 元；
+    // 若误写成乘，留量会变成 4 * 400 / 4 = 400 元，圆点全挤在中间。
+    const raw = PriceRange(8, 12);
+    final padded = tickDotPaddedRange(raw: raw, dotR: 4, plotH: 400);
+    expect(padded.min, closeTo(7.96, 1e-9));
+    expect(padded.max, closeTo(12.04, 1e-9));
   });
 }
