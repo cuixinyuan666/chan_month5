@@ -5,6 +5,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../chart/tick_dot_geometry.dart';
 import 'candle_wick.dart';
 import 'chart_sync_controller.dart';
 import '../backtest/order_models.dart';
@@ -478,7 +479,6 @@ class _KlineChartState extends State<KlineChart> {
   /// 画板：正在拖动的分笔圆点下标（null=未在拖）。
   int? _tickDragIdx;
   Offset? _tickDragStart;
-  bool _tickDragMoved = false;
 
   /// 左中右热区：用 Listener 优先吃点击（避免卡顿时被 GestureDetector 拖拽抢走）
   Offset? _zonePointerDown;
@@ -1775,9 +1775,7 @@ class _KlineChartState extends State<KlineChart> {
     final visible = _viewport.visibleBars(widget.bars);
     final range = _hitPriceRange ?? _viewport.priceRangeFor(visible);
     final slotW = _viewport.barSlotWidth(w);
-    final barW = math.max(1.0, slotW * 0.65);
-    final dotR = math.max(1.2, math.min(barW * 0.45, slotW * 0.35));
-    // 命中半径略大于圆点半径，便于手指/鼠标点中。
+    final dotR = tickDotRadius(slotW);
     final hitR = math.max(dotR + 4.0, dotR * 1.8);
     int? best;
     var bestD = hitR;
@@ -1795,12 +1793,16 @@ class _KlineChartState extends State<KlineChart> {
 
   void _onPointerDown(PointerDownEvent e) {
     // 画板：分笔圆点被按住 → 进入「拖圆点改价」，不再走十字线/平移。
+    // 未选中的圆点也允许直接按下拖动：先选中再改价，
+    // 否则用户必须先点一下再拖，表现为「按住 K 线无法移动」。
     if (widget.onTickDotDrag != null) {
       final hit = _hitTickDot(e.localPosition);
       if (hit != null) {
+        if (widget.selectedTickIdx != hit) {
+          widget.onTickDotTap?.call(hit);
+        }
         _tickDragIdx = hit;
         _tickDragStart = e.localPosition;
-        _tickDragMoved = false;
         _zonePointerDown = null;
         _zonePointerId = null;
         _zoneMoved = true;
@@ -1840,9 +1842,6 @@ class _KlineChartState extends State<KlineChart> {
     if (_tickDragIdx != null && _tickDragStart != null) {
       final dx = e.localPosition.dx - _tickDragStart!.dx;
       final dy = e.localPosition.dy - _tickDragStart!.dy;
-      if ((e.localPosition - _tickDragStart!).distance > 3) {
-        _tickDragMoved = true;
-      }
       widget.onTickDotDrag?.call(_tickDragIdx!, dx, dy);
       _tickDragStart = e.localPosition;
       return;
@@ -1880,18 +1879,12 @@ class _KlineChartState extends State<KlineChart> {
   }
 
   void _onPointerUp(PointerUpEvent e) {
-    // 画板：拖圆点结束（点击即选中由 pointerDown 时的命中决定）。
+    // 画板：拖圆点结束。选中已在按下时完成，这里只收尾，
+    // 不再补一次点击（否则「按下即选中」会被这次抬起反选掉）。
     if (_tickDragIdx != null) {
-      final dragged = _tickDragMoved;
-      final idx = _tickDragIdx!;
       _tickDragIdx = null;
       _tickDragStart = null;
-      _tickDragMoved = false;
-      if (!dragged && widget.onTickDotTap != null) {
-        widget.onTickDotTap!(idx);
-      } else {
-        widget.onTickDotDragEnd?.call();
-      }
+      widget.onTickDotDragEnd?.call();
       return;
     }
     if (_splitDragging) {
@@ -2374,7 +2367,7 @@ class _KlineChartState extends State<KlineChart> {
     return Opacity(
       opacity: 0.42,
       child: Material(
-        color: AppPalette.rgb(0x22111111),
+        color: AppPalette.canvasBg.withValues(alpha: 0.13),
         borderRadius: BorderRadius.circular(4),
         child: child,
       ),
@@ -2411,14 +2404,14 @@ class _KlineChartState extends State<KlineChart> {
                   '图例',
                   style: TextStyle(
                     fontSize: 11,
-                    color: AppPalette.rgb(0x99AAAAAA),
+                    color: AppPalette.textSecondary,
                   ),
                 ),
                 const SizedBox(width: 3),
                 Icon(
                   _legendOpen ? Icons.expand_less : Icons.expand_more,
                   size: 14,
-                  color: AppPalette.rgb(0x99AAAAAA),
+                  color: AppPalette.textSecondary,
                 ),
               ],
             ),
@@ -2438,9 +2431,9 @@ class _KlineChartState extends State<KlineChart> {
     return Container(
       constraints: BoxConstraints(maxWidth: maxW, maxHeight: 260),
       decoration: BoxDecoration(
-        color: AppPalette.rgb(0xEE121212),
+        color: AppPalette.overlayBg,
         borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: AppPalette.rgb(0x55E2E8F0)),
+        border: Border.all(color: AppPalette.border),
       ),
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
       child: SingleChildScrollView(
@@ -2454,7 +2447,7 @@ class _KlineChartState extends State<KlineChart> {
                 style: TextStyle(
                   fontSize: 10,
                   fontWeight: FontWeight.w700,
-                  color: AppPalette.rgb(0xFFE2E8F0),
+                  color: AppPalette.textPrimary,
                 ),
               ),
               const SizedBox(height: 2),
@@ -2483,7 +2476,7 @@ class _KlineChartState extends State<KlineChart> {
           const SizedBox(width: 4),
           Text(
             l.label,
-            style: TextStyle(fontSize: 10, color: AppPalette.rgb(0xFFCBD5E1)),
+            style: TextStyle(fontSize: 10, color: AppPalette.textSecondary),
           ),
         ],
       ),
@@ -2507,11 +2500,11 @@ class _KlineChartState extends State<KlineChart> {
                     ? Icons.expand_less
                     : Icons.expand_more,
                 size: 18,
-                color: AppPalette.rgb(0x99AAAAAA),
+                color: AppPalette.textSecondary,
               ),
             ),
           ),
-          Container(width: 1, height: 18, color: AppPalette.rgb(0x22FFFFFF)),
+          Container(width: 1, height: 18, color: AppPalette.border),
           InkWell(
             borderRadius: const BorderRadius.horizontal(
               right: Radius.circular(4),
@@ -2524,7 +2517,7 @@ class _KlineChartState extends State<KlineChart> {
                     ? Icons.chevron_left
                     : Icons.chevron_right,
                 size: 18,
-                color: AppPalette.rgb(0x99AAAAAA),
+                color: AppPalette.textSecondary,
               ),
             ),
           ),
@@ -2550,11 +2543,11 @@ class _KlineChartState extends State<KlineChart> {
                     ? Icons.expand_less
                     : Icons.expand_more,
                 size: 18,
-                color: AppPalette.rgb(0x99AAAAAA),
+                color: AppPalette.textSecondary,
               ),
             ),
           ),
-          Container(width: 1, height: 18, color: AppPalette.rgb(0x22FFFFFF)),
+          Container(width: 1, height: 18, color: AppPalette.border),
           InkWell(
             borderRadius: const BorderRadius.horizontal(
               right: Radius.circular(4),
@@ -2567,7 +2560,7 @@ class _KlineChartState extends State<KlineChart> {
                     ? Icons.chevron_left
                     : Icons.chevron_right,
                 size: 18,
-                color: AppPalette.rgb(0x99AAAAAA),
+                color: AppPalette.textSecondary,
               ),
             ),
           ),
@@ -2696,9 +2689,9 @@ class _KlineChartState extends State<KlineChart> {
             width: 22,
             height: 22,
             decoration: BoxDecoration(
-              color: AppPalette.rgb(0x33111111),
+              color: AppPalette.canvasBg.withValues(alpha: 0.2),
               borderRadius: BorderRadius.circular(4),
-              border: Border.all(color: AppPalette.rgb(0x22AAAAAA)),
+              border: Border.all(color: AppPalette.border),
             ),
             child: Icon(
               hidden ? Icons.visibility_off : Icons.visibility,
@@ -2829,19 +2822,20 @@ class _KlineChartState extends State<KlineChart> {
         // 圆点有一半落在绘图区外被裁掉。这里给区间留出半个圆点的余量，
         // 保证「原点完整渲染、不裁剪」（2026-11-13 用户明确）。
         if (widget.period == 'tick' && visible.isNotEmpty) {
+          // 余量必须是「圆点半径对应的价格」，即 dotR * span / plotH。
+          // 之前写成 dotR * plotH / span，把区间撑大几百倍，圆点全挤在
+          // 绘图区上下边缘、看起来仍被裁掉（2026-11-13 用户复测仍被裁）。
           final slotW0 = _viewport.barSlotWidth(w);
-          final barW0 = math.max(1.0, slotW0 * 0.65);
-          final dotR0 = math.max(1.2, math.min(barW0 * 0.45, slotW0 * 0.35));
-          final plotH0 = math.max(1.0, mainH - _resolveMainPlotTop(context));
-          final pad = priceRange.max == priceRange.min
-              ? dotR0
-              : dotR0 * plotH0 / math.max(1e-9, priceRange.max - priceRange.min);
-          if (pad > 0) {
-            priceRange = PriceRange(
-              priceRange.min - pad,
-              priceRange.max + pad,
-            );
-          }
+          final dotR0 = tickDotRadius(slotW0);
+          final plotH0 = math.max(
+            1.0,
+            mainH - _resolveMainPlotTop(context) - KlineViewport.padB,
+          );
+          priceRange = tickDotPaddedRange(
+            raw: priceRange,
+            dotR: dotR0,
+            plotH: plotH0,
+          );
         }
         _hitPriceRange = priceRange;
         _hitMainH = mainH;
@@ -3128,7 +3122,7 @@ class _KlineChartState extends State<KlineChart> {
                       widget.subPanePlaceholder,
                       style: TextStyle(
                         fontSize: 11,
-                        color: AppPalette.rgb(0xFF666666),
+                        color: AppPalette.textMuted,
                       ),
                     ),
                   ),
@@ -3166,12 +3160,12 @@ class _KlineChartState extends State<KlineChart> {
                         height: 22,
                         decoration: BoxDecoration(
                           color: _splitDragging
-                              ? AppPalette.rgb(0x551E3A5F)
-                              : AppPalette.rgb(0x33111111),
+                              ? AppPalette.accent.withValues(alpha: 0.33)
+                              : AppPalette.canvasBg.withValues(alpha: 0.2),
                           border: Border.all(
                             color: _splitDragging
-                                ? AppPalette.rgb(0x6642A5F5)
-                                : AppPalette.rgb(0x22AAAAAA),
+                                ? AppPalette.accent.withValues(alpha: 0.4)
+                                : AppPalette.border,
                           ),
                           borderRadius: BorderRadius.circular(11),
                         ),
@@ -3179,8 +3173,8 @@ class _KlineChartState extends State<KlineChart> {
                           Icons.drag_handle,
                           size: 16,
                           color: _splitDragging
-                              ? AppPalette.rgb(0x8842A5F5)
-                              : AppPalette.rgb(0x66888888),
+                              ? AppPalette.accent
+                              : AppPalette.textMuted,
                         ),
                       ),
                     ),
@@ -6374,7 +6368,7 @@ class _KlineCompositePainter extends CustomPainter {
     final up = AppPalette.rgb(0xFFE53935);
     final down = AppPalette.rgb(0xFF26A69A);
     final drawDots = period == 'tick';
-    final dotR = math.max(1.2, math.min(barW * 0.45, slotW * 0.35));
+    final dotR = tickDotRadius(slotW);
 
     // 踩坑：之前 _drawCandles 遍历 bars 全部索引（5 万+），每帧都在空转循环；
     // 改为只扫视口附近 ±2 根，大幅降低滚动/缩放时的 CPU 开销。
@@ -8568,7 +8562,7 @@ class _KlineCompositePainter extends CustomPainter {
     double plotH,
     PriceRange pr,
   ) {
-    final style = TextStyle(color: AppPalette.rgb(0x99FFFFFF), fontSize: 9);
+    final style = TextStyle(color: AppPalette.textSecondary, fontSize: 9);
     for (var i = 0; i <= 4; i++) {
       final p = pr.max - pr.span * i / 4;
       final y = plotTop + plotH * i / 4;
@@ -8597,9 +8591,9 @@ class _KlineCompositePainter extends CustomPainter {
     final startX = ((viewport.viewXMin / interval).ceil() * interval).toInt();
     final endX = viewport.viewXMax.ceil().clamp(0, bars.length - 1);
     final tickPaint = Paint()
-      ..color = AppPalette.rgb(0x33FFFFFF)
+      ..color = AppPalette.border
       ..strokeWidth = 1;
-    final labelStyle = TextStyle(color: AppPalette.rgb(0x99FFFFFF), fontSize: 9);
+    final labelStyle = TextStyle(color: AppPalette.textSecondary, fontSize: 9);
 
     for (var xi = startX; xi <= endX; xi += interval) {
       if (xi < 0 || xi >= bars.length) continue;
@@ -8638,7 +8632,7 @@ class _KlineCompositePainter extends CustomPainter {
     final plotH = math.max(1.0, mainH - mainPlotTop - KlineViewport.padB);
 
     final paint = Paint()
-      ..color = AppPalette.rgb(0xFFE2E8F0)
+      ..color = AppPalette.textPrimary
       ..strokeWidth = 1.2;
 
     canvas.drawLine(Offset(x, plotTop), Offset(x, contentBottom), paint);
@@ -8650,14 +8644,18 @@ class _KlineCompositePainter extends CustomPainter {
 
     final price = pr.priceFromY(y, plotTop, plotH);
 
-    final labelBg = Paint()..color = AppPalette.rgb(0xF0FFFFFF);
+    final labelBg = Paint()..color = AppPalette.overlayBg;
     final labelBorder = Paint()
-      ..color = AppPalette.rgb(0xFF000000)
+      ..color = AppPalette.textPrimary
       ..style = PaintingStyle.stroke;
     final tp = TextPainter(
       text: TextSpan(
         text: price.toStringAsFixed(2),
-        style: TextStyle(color: AppPalette.rgb(0xFF000000), fontSize: 11, fontWeight: FontWeight.bold),
+        style: TextStyle(
+          color: AppPalette.textPrimary,
+          fontSize: 11,
+          fontWeight: FontWeight.bold,
+        ),
       ),
       textDirection: TextDirection.ltr,
     )..layout();
