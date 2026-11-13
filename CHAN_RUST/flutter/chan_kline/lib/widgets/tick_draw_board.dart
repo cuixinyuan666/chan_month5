@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../chart/level_window_layout.dart';
+import '../chart/tick_dot_geometry.dart';
 import '../compute/k1_bar_view_compute.dart';
 import '../models/bar_feature_lookup.dart';
 import '../models/chart_indicator.dart';
@@ -307,51 +308,8 @@ class _TickDrawBoardState extends State<TickDrawBoard>
                 },
               ),
             ),
-            // 画板名称与窗口数量下拉：贴在画板左上（窗口控制按钮由主顶边栏提供）。
-            Positioned(
-              left: 4,
-              top: 4,
-              child: _floatingBar(),
-            ),
           ],
         ),
-      ),
-    );
-  }
-
-  /// 画板左上角浮动条：名称 + 窗口数量下拉。
-  Widget _floatingBar() {
-    final onSurface = AppPalette.textPrimary;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-      decoration: BoxDecoration(
-        color: AppPalette.surface,
-        borderRadius: BorderRadius.circular(4),
-        border: Border.all(color: AppPalette.border),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            '分笔画板',
-            style: TextStyle(color: onSurface, fontSize: 12),
-          ),
-          const SizedBox(width: 6),
-          DropdownButton<int>(
-            value: normalizeLevelWindowCount(model.windowCount),
-            dropdownColor: AppPalette.surfaceAlt,
-            style: TextStyle(color: onSurface, fontSize: 12),
-            underline: const SizedBox.shrink(),
-            isDense: true,
-            items: [
-              for (final count in kLevelWindowCountChoices)
-                DropdownMenuItem(value: count, child: Text('$count窗')),
-            ],
-            onChanged: (count) {
-              if (count != null) widget.onChanged(model.copyWith(windowCount: count));
-            },
-          ),
-        ],
       ),
     );
   }
@@ -419,13 +377,11 @@ class _TickDrawBoardState extends State<TickDrawBoard>
           _lastPaneHeight = height;
         }
         final g = _geometry(width, height, bars);
-        Offset dotAt(int i) => Offset(
-              g.vp.barCenterX(i, width),
-              g.range.yOf(bars[i].close, KlineViewport.padT, g.plotH),
-            );
+        Offset dotAt(int i) => g.centerOf(i, bars[i].close);
         final selected = model.safeSelected;
         final selDot = model.hasSelection ? dotAt(selected) : Offset.zero;
-        final focusSide = math.max(8.0, g.dotR * 2 + 8);
+        // 聚焦框边长 = 圆点直径 + 两侧各留一点缝，圆心与圆点圆心重合。
+        final focusSide = g.dotR * 2 + 10;
         return Stack(
           fit: StackFit.expand,
           children: [
@@ -461,7 +417,9 @@ class _TickDrawBoardState extends State<TickDrawBoard>
                 width: focusSide,
                 height: focusSide,
                 child: IgnorePointer(
-                  child: CustomPaint(painter: _FocusArrowsPainter()),
+                  child: CustomPaint(
+                    painter: _FocusArrowsPainter(dotR: g.dotR),
+                  ),
                 ),
               ),
             if (model.hasSelection)
@@ -483,7 +441,13 @@ class _TickDrawBoardState extends State<TickDrawBoard>
 
   /// 拖动分笔圆点：按纵向位移改价格（网格吸附）。
   void _onTickDotDrag(int idx, double dx, double dy) {
-    if (!model.hasSelection || model.safeSelected != idx) return;
+    // 按下时若该点尚未选中，先选中它，随后到达的位移就能直接改价，
+    // 不必等用户先点一下再拖。
+    if (!model.hasSelection || model.safeSelected != idx) {
+      widget.onChanged(model.selectPoint(idx));
+      _dragDy = 0;
+      return;
+    }
     final g = _geometry(_lastPaneWidth, _lastPaneHeight, model.toTickBars());
     if (_dragDy == 0) {
       _dragStartPrice = model.points[idx].price;
@@ -502,13 +466,7 @@ class _TickDrawBoardState extends State<TickDrawBoard>
     Offset selDot,
     double width,
     double height,
-    ({
-      KlineViewport vp,
-      PriceRange range,
-      double plotH,
-      double slotW,
-      double dotR,
-    }) g,
+    TickDotGeometry g,
   ) {
     const btn = 24.0;
     const gap = 2.0;
@@ -536,9 +494,9 @@ class _TickDrawBoardState extends State<TickDrawBoard>
             height: btn,
             alignment: Alignment.center,
             decoration: BoxDecoration(
-              color: AppPalette.rgb(0xCC1A1A1A),
+              color: AppPalette.canvasBg.withValues(alpha: 0.8),
               shape: BoxShape.circle,
-              border: Border.all(color: AppPalette.rgb(0x55FFFFFF)),
+              border: Border.all(color: AppPalette.border),
             ),
             child: Icon(
               icon,
@@ -582,29 +540,33 @@ class _TickDrawBoardState extends State<TickDrawBoard>
     if (mounted) setState(() {});
   }
 
-  /// 与 KlineChart 的 tick 圆点完全同口径的几何：
-  /// barW = max(1, slotW*0.65)，dotR = max(1.2, min(barW*0.45, slotW*0.35))。
-  ({
-    KlineViewport vp,
-    PriceRange range,
-    double plotH,
-    double slotW,
-    double dotR,
-  }) _geometry(
+  /// 与 KlineChart 的 tick 圆点完全同口径的几何：半径、留白后的价格区间
+  /// 都走 [tick_dot_geometry]，聚焦框圆心才能落在圆点圆心上。
+  TickDotGeometry _geometry(
     double width,
     double height,
     List<KlineBar> bars,
   ) {
     final vp = _sync.viewportFor(0);
     final mainH = height * _sync.mainFraction;
-    final plotH = math.max(
-      1.0,
-      mainH - KlineViewport.padT - KlineViewport.padB,
-    );
-    final range = vp.priceRangeFor(vp.visibleBars(bars));
+    const plotTop = KlineViewport.padT;
+    final plotH = math.max(1.0, mainH - plotTop - KlineViewport.padB);
     final slotW = vp.barSlotWidth(width);
-    final dotR = math.max(1.2, slotW * 0.2925);
-    return (vp: vp, range: range, plotH: plotH, slotW: slotW, dotR: dotR);
+    final dotR = tickDotRadius(slotW);
+    final range = tickDotPaddedRange(
+      raw: vp.priceRangeFor(vp.visibleBars(bars)),
+      dotR: dotR,
+      plotH: plotH,
+    );
+    return TickDotGeometry(
+      viewport: vp,
+      slotW: slotW,
+      dotR: dotR,
+      plotTop: plotTop,
+      plotH: plotH,
+      width: width,
+      range: range,
+    );
   }
 
   void _updateFlash(TickDrawBoardModel m) {
@@ -679,8 +641,13 @@ class _TickDrawBoardState extends State<TickDrawBoard>
   static const double _tooltipPanelWidth = 360;
 }
 
-/// 聚焦标识：四个箭头沿对角线指向圆心。
+/// 聚焦标识：四个箭头沿对角线指向圆心，箭头尖端落在圆点边缘。
 class _FocusArrowsPainter extends CustomPainter {
+  const _FocusArrowsPainter({required this.dotR});
+
+  /// 圆点半径：箭头尖端停在圆心外这么远，避免压进圆点里。
+  final double dotR;
+
   @override
   void paint(Canvas canvas, Size size) {
     final half = size.width / 2;
@@ -697,18 +664,18 @@ class _FocusArrowsPainter extends CustomPainter {
       Offset(1, 1),
       Offset(-1, 1),
     ];
-    const headLen = 5.0;
     const headHalf = 3.0;
     for (final d in dirs) {
       final n = d / math.sqrt(d.dx * d.dx + d.dy * d.dy);
-      // 箭尾在正方形角附近，箭头指向圆心。
+      // 箭头尖端落在圆点边缘（圆心外 dotR），箭尾贴在正方形角上，
+      // 这样四支箭头沿对角线指向圆心，且紧贴圆点。
+      final tip = Offset(
+        half + n.dx * dotR,
+        halfH + n.dy * dotR,
+      );
       final tail = Offset(
         half + n.dx * (half - 2),
         halfH + n.dy * (halfH - 2),
-      );
-      final tip = Offset(
-        half + n.dx * (half - headLen - 2),
-        halfH + n.dy * (halfH - headLen - 2),
       );
       final path = Path()
         ..moveTo(tip.dx, tip.dy)
@@ -726,7 +693,8 @@ class _FocusArrowsPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant _FocusArrowsPainter oldDelegate) => false;
+  bool shouldRepaint(covariant _FocusArrowsPainter oldDelegate) =>
+      oldDelegate.dotR != dotR;
 }
 
 class _SamePriceBandPainter extends CustomPainter {

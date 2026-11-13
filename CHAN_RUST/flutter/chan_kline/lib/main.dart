@@ -93,6 +93,7 @@ import 'widgets/datetime_picker_dialog.dart';
 import 'widgets/edge_control_panel.dart';
 import 'widgets/kline_chart.dart';
 import 'widgets/chart_sync_controller.dart';
+import 'chart/level_window_layout.dart';
 import 'widgets/level_chart_grid.dart';
 import 'widgets/level_window_settings_dialog.dart';
 import 'widgets/crosshair_tooltip_panel.dart';
@@ -4062,9 +4063,12 @@ class _KlineHomePageState extends State<KlineHomePage>
   /// 叠在一起（用户反馈「设置左边出现了两个重叠按钮」的根因）。
   Widget _buildCaptionBar() {
     // 画板模式：**替换**整组按钮（不是另加一条栏）；切回主图自动恢复原按钮。
+    // 左侧放画板名称，窗口数量下拉放在「保存并加载」与「最小化」之间。
     if (_tickDrawBoardOpen) {
       return Row(
         children: [
+          const SizedBox(width: 10),
+          _buildTickDrawBoardTitle(),
           const Expanded(
             child: DragToMoveArea(
               child: SizedBox(
@@ -4183,6 +4187,45 @@ class _KlineHomePageState extends State<KlineHomePage>
     );
   }
 
+  /// 画板顶边栏左侧的名称。
+  Widget _buildTickDrawBoardTitle() {
+    return Text(
+      '分笔画板',
+      style: TextStyle(
+        color: AppPalette.textPrimary,
+        fontSize: 13,
+        fontWeight: FontWeight.w600,
+      ),
+    );
+  }
+
+  /// 画板顶边栏的窗口数量下拉：放在「保存并加载」与「最小化」之间。
+  Widget _buildTickDrawWindowCountDropdown() {
+    final board = _tickDrawBoard;
+    final count = normalizeLevelWindowCount(board?.windowCount);
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 6),
+      child: DropdownButton<int>(
+        value: count,
+        dropdownColor: AppPalette.surfaceAlt,
+        style: TextStyle(color: AppPalette.textPrimary, fontSize: 12),
+        underline: const SizedBox.shrink(),
+        isDense: true,
+        items: [
+          for (final c in kLevelWindowCountChoices)
+            DropdownMenuItem(value: c, child: Text('$c窗')),
+        ],
+        onChanged: board == null
+            ? null
+            : (next) {
+                if (next != null) {
+                  _updateTickDrawBoard(board.copyWith(windowCount: next));
+                }
+              },
+      ),
+    );
+  }
+
   /// 画板模式下的顶边栏按钮组：**替换**主图顶边栏的原有按钮（不是另加一条栏）。
   /// 切回主图时 [main.dart] 自动恢复原按钮。
   Widget _buildTickDrawCaptionButtons() {
@@ -4198,6 +4241,7 @@ class _KlineHomePageState extends State<KlineHomePage>
             color: AppPalette.controlInk,
           ),
         ),
+        _buildTickDrawWindowCountDropdown(),
         _CaptionBarButton(
           tooltip: '最小化',
           onTap: () => windowManager.minimize(),
