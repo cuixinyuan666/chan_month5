@@ -464,7 +464,7 @@ class _TickDrawBoardState extends State<TickDrawBoard>
     widget.onChanged(next);
   }
 
-  /// 选中 K 线右侧的三个编辑按钮（增加/减少/复制）。
+  /// 选中 K 线右侧的三个编辑按钮（增加/减少/复制），竖向排列。
   /// 位置：选中点右侧；右边放不下时翻到左侧，避免压住其它 K 线。
   List<Widget> _selectionActions(
     Offset selDot,
@@ -474,17 +474,18 @@ class _TickDrawBoardState extends State<TickDrawBoard>
   ) {
     const btn = 24.0;
     const gap = 2.0;
-    final total = btn * 3 + gap * 2;
+    // 竖排：水平方向只占一个按钮宽，垂直方向占 三个按钮 + 两道间隙。
+    final totalH = btn * 3 + gap * 2;
     final rightSpace = width - selDot.dx - g.dotR - 4;
-    final onRight = rightSpace >= total;
+    final onRight = rightSpace >= btn;
     final left = onRight
         ? selDot.dx + g.dotR + 4
-        : math.max(0.0, selDot.dx - g.dotR - 4 - total);
-    // 垂直位置：靠近选中点，但别压到顶部指标条。
-    final top = (selDot.dy - btn / 2)
+        : math.max(0.0, selDot.dx - g.dotR - 4 - btn);
+    // 垂直位置：以选中点为中心上下展开，但别压到顶部指标条与底部留白。
+    final top = (selDot.dy - totalH / 2)
         .clamp(
           KlineViewport.padT.toDouble(),
-          math.max(0.0, height - btn),
+          math.max(0.0, height - totalH),
         )
         .toDouble();
     Widget circle(IconData icon, String tip, VoidCallback? onTap) {
@@ -518,19 +519,19 @@ class _TickDrawBoardState extends State<TickDrawBoard>
       Positioned(
         left: left,
         top: top,
-        width: total.toDouble(),
-        height: btn,
-        child: Row(
+        width: btn,
+        height: totalH,
+        child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             circle(Icons.add, '增加（在选中后插入）', () {
               widget.onChanged(model.addPoint());
             }),
-            const SizedBox(width: gap),
+            const SizedBox(height: gap),
             circle(Icons.remove, '减少（删除选中）', () {
               widget.onChanged(model.removePoint());
             }),
-            const SizedBox(width: gap),
+            const SizedBox(height: gap),
             circle(Icons.copy, '复制（复制选中）', () {
               widget.onChanged(model.duplicatePoint());
             }),

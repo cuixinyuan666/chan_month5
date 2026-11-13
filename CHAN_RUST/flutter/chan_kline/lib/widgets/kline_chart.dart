@@ -1806,6 +1806,9 @@ class _KlineChartState extends State<KlineChart> {
     final hitR = math.max(dotR + 4.0, dotR * 1.8);
     int? best;
     var bestD = hitR;
+    // 圆点是按序号字段画的（见 _drawCandles 用 bars[i].idx 取中心），
+    // 命中必须用同一套序号，否则画出的点和能按住的点对不上，
+    // 表现为有的 K 线按住拖不动。
     for (final b in visible) {
       final cx = _stateBarCenterX(b.idx, w, slotW);
       final cy = range.yOf(b.close, plotTop, plotH);
@@ -2188,6 +2191,10 @@ class _KlineChartState extends State<KlineChart> {
 
   void _onPanStart(DragStartDetails d, double mainPlotH) {
     if (widget.mobileLayout || widget.bars.isEmpty || _splitDragging) return;
+    // 画板：按住圆点改价时，整图平移不能同时生效。
+    // 否则圆点跟着图一起走，看起来按住的那根没动，只能靠拖别的根
+    // 把图挪开，间接改变它的相对位置。
+    if (_tickDragIdx != null) return;
     _clearTickIdleYinYang();
     // 十字线开着时在本窗拖动：本窗接管为主窗（同 _onWheel）。
     if (_crosshairEnabled) _iAmCrosshairOwner = true;
