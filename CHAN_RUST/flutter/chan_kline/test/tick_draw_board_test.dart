@@ -2,6 +2,7 @@ import 'package:chan_kline/models/kline_bar.dart';
 import 'package:chan_kline/widgets/tick_draw_board.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+/// 画板口径：选中语义、增删复制、同价框、窗口数量、画布数据。
 void main() {
   test('窗口数量、增删复制和网格吸附', () {
     final model = TickDrawBoardModel.fromBars(const [
@@ -34,6 +35,21 @@ void main() {
 
     final removed = priced.removePoint();
     expect(removed.points.length, 2);
+  });
+
+  test('未选中时增加按钮追加到末尾并选中新点', () {
+    final model = const TickDrawBoardModel(
+      points: [
+        TickDrawPoint(price: 10),
+        TickDrawPoint(price: 11),
+      ],
+      windowCount: 2,
+    );
+    expect(model.hasSelection, isFalse);
+    final added = model.addPoint();
+    expect(added.points.length, 3);
+    expect(added.points.last.price, 11);
+    expect(added.safeSelected, 2);
   });
 
   test('保存数据沿用自定义 OHLC 分笔口径', () {
