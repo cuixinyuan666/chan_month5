@@ -160,7 +160,7 @@ Future<void> main() async {
         center: true,
         title: '机器人验证',
         titleBarStyle: TitleBarStyle.normal,
-        backgroundColor: AppPalette.rgb(0xFF121212),
+        backgroundColor: AppPalette.canvasBg,
       );
       await windowManager.waitUntilReadyToShow(opts, () async {
         await windowManager.show();
@@ -181,7 +181,7 @@ Future<void> main() async {
       SystemUiOverlayStyle(
         statusBarColor: AppPalette.rgb(0x00000000),
         statusBarIconBrightness: Brightness.light,
-        systemNavigationBarColor: AppPalette.rgb(0xFF121212),
+        systemNavigationBarColor: AppPalette.canvasBg,
         systemNavigationBarIconBrightness: Brightness.light,
       ),
     );
@@ -339,7 +339,7 @@ Future<void> main() async {
     final opts = WindowOptions(
       // 隐藏系统标题文字与白底标题栏，自绘右上角三键
       titleBarStyle: TitleBarStyle.hidden,
-      backgroundColor: AppPalette.rgb(0xFF121212),
+      backgroundColor: AppPalette.canvasBg,
     );
     await windowManager.waitUntilReadyToShow(opts, () async {
       await windowManager.setTitle('');
@@ -2742,7 +2742,7 @@ class _KlineHomePageState extends State<KlineHomePage>
     setState(() {
       _loadingChart = true;
       _error = null;
-      _tickYinYangCover = _period == 'tick';
+      _tickYinYangCover = _period == 'tick' && _yinYangEnabled;
       _chipTickDepsAllowed = true;
       _tickDistSessionAllowed = true;
     });
@@ -3774,7 +3774,7 @@ class _KlineHomePageState extends State<KlineHomePage>
   /// 桌面：图表铺满 + 透明标题条 + 左右设置浮层。
   Widget _buildDesktopShell(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppPalette.rgb(0xFF121212),
+      backgroundColor: AppPalette.canvasBg,
       // 工具条化：标题条作为 Column 第一行占位，图表整体下移一条
       // （kDesktopCaptionBarHeight），子窗口 K 标签贴极右缘不再压窗控。
       body: Column(
@@ -3793,7 +3793,7 @@ class _KlineHomePageState extends State<KlineHomePage>
               padding: const EdgeInsets.all(kDesktopShellInset),
               child: DecoratedBox(
                 decoration: BoxDecoration(
-                  color: AppPalette.rgb(0xFF121212),
+                  color: AppPalette.canvasBg,
                   borderRadius: BorderRadius.circular(8),
                   border: Border.all(color: AppPalette.rgb(0x33FFFFFF)),
                 ),
@@ -3901,10 +3901,6 @@ class _KlineHomePageState extends State<KlineHomePage>
                 onChanged: _updateTickDrawBoard,
                 onMainIndicatorsChanged: _applySplitMainIndicators,
                 onSubIndicatorsChanged: _applySplitSubIndicators,
-                onSave: _saveTickDrawBoard,
-                onClose: _closeTickDrawBoard,
-                onMinimize: () => windowManager.minimize(),
-                onMaximize: _toggleFillWorkArea,
               ),
             ),
         ],
@@ -3919,7 +3915,7 @@ class _KlineHomePageState extends State<KlineHomePage>
   Widget _buildAndroidShell(BuildContext context) {
     final topInset = MediaQuery.paddingOf(context).top;
     return Scaffold(
-      backgroundColor: AppPalette.rgb(0xFF121212),
+      backgroundColor: AppPalette.canvasBg,
       body: Stack(
         fit: StackFit.expand,
         children: [
@@ -4065,6 +4061,22 @@ class _KlineHomePageState extends State<KlineHomePage>
   /// `IconButton`（强制 48px 最小命中区）——28px 工具条里会溢出并与相邻按钮
   /// 叠在一起（用户反馈「设置左边出现了两个重叠按钮」的根因）。
   Widget _buildCaptionBar() {
+    // 画板模式：**替换**整组按钮（不是另加一条栏）；切回主图自动恢复原按钮。
+    if (_tickDrawBoardOpen) {
+      return Row(
+        children: [
+          const Expanded(
+            child: DragToMoveArea(
+              child: SizedBox(
+                height: kDesktopCaptionBarHeight,
+                child: ColoredBox(color: Color(0x00000000)),
+              ),
+            ),
+          ),
+          _buildTickDrawCaptionButtons(),
+        ],
+      );
+    }
     return Row(
       children: [
         // 左侧空白：整条可拖动（双击最大化/还原），不再是穿透区。
@@ -4161,6 +4173,52 @@ class _KlineHomePageState extends State<KlineHomePage>
         _CaptionBarButton(
           tooltip: '关闭',
           onTap: _requestCloseApp,
+          child: Icon(
+            Icons.close,
+            size: 16,
+            color: AppPalette.controlInk,
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 画板模式下的顶边栏按钮组：**替换**主图顶边栏的原有按钮（不是另加一条栏）。
+  /// 切回主图时 [main.dart] 自动恢复原按钮。
+  Widget _buildTickDrawCaptionButtons() {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _CaptionBarButton(
+          tooltip: '保存并加载',
+          onTap: _saveTickDrawBoard,
+          child: Icon(
+            Icons.save_alt,
+            size: 16,
+            color: AppPalette.controlInk,
+          ),
+        ),
+        _CaptionBarButton(
+          tooltip: '最小化',
+          onTap: () => windowManager.minimize(),
+          child: Icon(
+            Icons.remove,
+            size: 16,
+            color: AppPalette.controlInk,
+          ),
+        ),
+        _CaptionBarButton(
+          tooltip: '最大化',
+          onTap: _toggleFillWorkArea,
+          child: Icon(
+            Icons.crop_square,
+            size: 14,
+            color: AppPalette.controlInk,
+          ),
+        ),
+        _CaptionBarButton(
+          tooltip: '关闭画板',
+          onTap: _closeTickDrawBoard,
           child: Icon(
             Icons.close,
             size: 16,
@@ -4523,25 +4581,8 @@ class _KlineHomePageState extends State<KlineHomePage>
           ),
         ),
         SizedBox(height: 8),
-        // 太极图总开关：默认关闭（资源保留，后续按需开启）。
-        SwitchListTile(
-          contentPadding: EdgeInsets.zero,
-          dense: true,
-          title: const Text('太极图', style: TextStyle(fontSize: 13)),
-          subtitle: Text(
-            _yinYangEnabled ? '已开启（固定黑白样式）' : '已关闭（默认，保留资源）',
-            style: const TextStyle(fontSize: 11),
-          ),
-          value: _yinYangEnabled,
-          onChanged: _busy
-              ? null
-              : (v) {
-                  _panelUi(() => _yinYangEnabled = v,
-                      sheetSetState: sheetSetState);
-                  _msgHistory.append('太极图=${v ? "开" : "关"}');
-                },
-        ),
-        SizedBox(height: 8),
+        // 太极图总开关（2026-11-13 用户明确）：**从设置面板隐藏**，默认关闭、
+        // 资源保留，后续可按需开启。App 启动直接展示主图，不进太极层。
         // 层级分窗：默认关闭 = 现在这张「各层集成在一张图」的单图；开启后按所选层级切格。
         SwitchListTile(
           contentPadding: EdgeInsets.zero,
