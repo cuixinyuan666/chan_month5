@@ -487,6 +487,8 @@ class _KlineHomePageState extends State<KlineHomePage>
   bool _loadingChart = false;
   /// 分笔：加载中/刚进图时铺满屏幕太极；点一下或步进后收起。
   bool _tickYinYangCover = false;
+  /// 太极图总开关（2026-11-13 用户明确）：默认关闭，资源保留，后续可按需开启。
+  bool _yinYangEnabled = false;
   bool _runningToEnd = false;
   bool _cancelRunToEnd = false;
   bool _nativeYinYangActive = false;
@@ -3894,11 +3896,15 @@ class _KlineHomePageState extends State<KlineHomePage>
                 truncationCheck: _truncationCheck,
                 earlyDynamicUnit: _earlyDynamicUnit,
                 showBuildingDash: _showBuildingDash,
+                chipConfig: _chipConfig,
+                tickDistConfig: _tickDistConfig,
                 onChanged: _updateTickDrawBoard,
                 onMainIndicatorsChanged: _applySplitMainIndicators,
                 onSubIndicatorsChanged: _applySplitSubIndicators,
                 onSave: _saveTickDrawBoard,
-                onClose: () => setState(() => _tickDrawBoardOpen = false),
+                onClose: _closeTickDrawBoard,
+                onMinimize: () => windowManager.minimize(),
+                onMaximize: _toggleFillWorkArea,
               ),
             ),
         ],
@@ -3992,67 +3998,8 @@ class _KlineHomePageState extends State<KlineHomePage>
             _buildTickYinYangOverlay(context),
           if (_runningToEnd && !_mlSession.isActive)
             _buildRunToEndYinYangOverlay(context),
-          if (!_mlSession.isActive)
-            Positioned(
-              top: topInset + 2,
-              right: 4,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Material(
-                    color: AppPalette.rgb(0xCC1A1A1A),
-                    shape: const CircleBorder(),
-                    child: IconButton(
-                      tooltip: '步退至开始',
-                      onPressed: !_hasSession || _busy
-                          ? null
-                          : _restartFromBeginning,
-                      icon: Icon(Icons.fast_rewind,
-                          color: AppPalette.rgb(0xFFE2E8F0)),
-                    ),
-                  ),
-                  const SizedBox(width: 4),
-                  Material(
-                    color: AppPalette.rgb(0xCC1A1A1A),
-                    shape: const CircleBorder(),
-                    child: IconButton(
-                      tooltip: '步进至最后',
-                      onPressed: !_hasSession || _busy
-                          ? null
-                          : () { unawaited(_runToEnd()); },
-                      icon: Icon(Icons.fast_forward,
-                          color: AppPalette.rgb(0xFFE2E8F0)),
-                    ),
-                  ),
-                  const SizedBox(width: 4),
-                  Material(
-                    color: AppPalette.rgb(0xCC1A1A1A),
-                    shape: const CircleBorder(),
-                    child: IconButton(
-                      tooltip: '恢复布局',
-                      onPressed: _bootstrapping || _busy ? null : _resetLayout,
-                      icon: Icon(
-                        Icons.autorenew,
-                        size: 24,
-                        color: AppPalette.rgb(0xFFE2E8F0),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 4),
-                  Material(
-                    color: AppPalette.rgb(0xCC1A1A1A),
-                    shape: const CircleBorder(),
-                    child: IconButton(
-                      tooltip: '设置',
-                      onPressed: _bootstrapping || _busy
-                          ? null
-                          : _openAndroidSettings,
-                      icon: Icon(Icons.tune, color: AppPalette.rgb(0xFFE2E8F0)),
-                    ),
-                  ),
-                ],
-              ),
-            ),
+          // 2026-11-13 用户明确：顶边栏下方原有次级栏（步退/步进/恢复布局/设置等）
+          // 全部移除，功能统一在顶边栏提供。
           if (_loadingChart && _period != 'tick')
             Positioned.fill(
               child: IgnorePointer(
@@ -4066,6 +4013,9 @@ class _KlineHomePageState extends State<KlineHomePage>
     );
   }
 
+  /// 安卓设置抽屉入口（2026-11-13 起桌面次级栏移除后暂无调用方，资源保留，
+  /// 安卓侧可按需接回；桌面对应入口是顶边栏的「设置」按钮）。
+  // ignore: unused_element
   void _openAndroidSettings() {
     showAndroidSettingsSheet(
       context: context,
@@ -4571,6 +4521,25 @@ class _KlineHomePageState extends State<KlineHomePage>
             icon: const Icon(Icons.help_outline, size: 18),
             onPressed: _showBuildingDashHelp,
           ),
+        ),
+        SizedBox(height: 8),
+        // 太极图总开关：默认关闭（资源保留，后续按需开启）。
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          dense: true,
+          title: const Text('太极图', style: TextStyle(fontSize: 13)),
+          subtitle: Text(
+            _yinYangEnabled ? '已开启（固定黑白样式）' : '已关闭（默认，保留资源）',
+            style: const TextStyle(fontSize: 11),
+          ),
+          value: _yinYangEnabled,
+          onChanged: _busy
+              ? null
+              : (v) {
+                  _panelUi(() => _yinYangEnabled = v,
+                      sheetSetState: sheetSetState);
+                  _msgHistory.append('太极图=${v ? "开" : "关"}');
+                },
         ),
         SizedBox(height: 8),
         // 层级分窗：默认关闭 = 现在这张「各层集成在一张图」的单图；开启后按所选层级切格。
@@ -6360,6 +6329,11 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
       _tickDrawBoard = model;
       _tickDrawBundle = bundle;
     });
+  }
+
+  /// 关闭画板：只关画板，返回主图界面（不动 App 生命周期）。
+  void _closeTickDrawBoard() {
+    setState(() => _tickDrawBoardOpen = false);
   }
 
   Future<void> _saveTickDrawBoard() async {
