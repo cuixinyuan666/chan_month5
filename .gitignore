@@ -127,3 +127,5 @@ CHAN_RUST/flutter/chan_kline/ios/Flutter/flutter_export_environment.sh
 CHAN_RUST/flutter/chan_kline/macos/Flutter/ephemeral/
 CHAN_RUST/flutter/chan_kline/macos/Flutter/Generated.xcconfig
 CHAN_RUST/flutter/chan_kline/macos/Flutter/flutter_export_environment.sh
+*.log.*
+CHAN_RUST/flutter/chan_kline/.chan_sync_settings.json
