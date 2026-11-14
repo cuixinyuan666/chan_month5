@@ -10,7 +10,18 @@ List<EquityPoint> buildEquityCurve({
   required double initialCash,
 }) {
   if (bars.isEmpty) return const [];
-  final ordered = [...bars]..sort((a, b) => a.idx.compareTo(b.idx));
+  // T3：bars 在寻优/回测里由 pipeline 或 harness 产出，idx 严格连续升序。
+  // 先做一次 O(N) 的「是否已升序」判定，是则直接用原 list（省掉每候选一次
+  // 全量拷贝 + O(N log N) 排序）；否则退回原有的拷贝+排序。
+  // 判定是纯比较，浮点运算与结果一字未动。
+  var orderedIsSorted = true;
+  for (var i = 1; i < bars.length; i++) {
+    if (bars[i].idx < bars[i - 1].idx) {
+      orderedIsSorted = false;
+      break;
+    }
+  }
+  final ordered = orderedIsSorted ? bars : ([...bars]..sort((a, b) => a.idx.compareTo(b.idx)));
   final byX = <int, List<Fill>>{};
   for (final f in fills) {
     byX.putIfAbsent(f.executeX, () => []).add(f);

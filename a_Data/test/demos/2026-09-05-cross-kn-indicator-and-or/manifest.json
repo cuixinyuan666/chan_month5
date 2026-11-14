@@ -1,0 +1,30 @@
+{
+  "id": "2026-09-05-cross-kn-indicator-and-or",
+  "title": "策略里各层指标可以 AND/OR，须同一根 K 刚发生",
+  "completedAt": "2026-09-05",
+  "agent": "cursor",
+  "isNewFeature": false,
+  "beforeSummary": "买条件若写成 K0 最低价下穿布林下轨并且 K1 最低价下穿布林下轨，会提示一边按这一根 K 取值、另一边按更高层虚拟K取样，编不过。收盘、RSI、布林跨层都不能拼。",
+  "afterSummary": "各层指标各自算完后可以用 AND 或 OR 拼。AND 必须同一根 K 上两边都刚发生，不是以前下穿过就算。K0 最低价去穿 K1 布林这种一条里混层，仍然不行。",
+  "verificationPoints": [
+    "002003 默认区间，连续单步，先让图上出现 K0、K1 布林",
+    "打开策略回测，买条件两行：K0 最低价下穿 K0 布林下轨，并且 K1 最低价下穿 K1 布林下轨，应能编过、能跑",
+    "卖条件可只写 K0 最高价上穿 K0 布林上轨",
+    "AND 时两层下穿若不在同一根 K，没有策略买信号是预期",
+    "故意写成 K0 最低价下穿 K1 布林下轨（一条里混层），仍应编不过",
+    "历史记录三个按钮还在"
+  ],
+  "keySteps": [0, 80, 200],
+  "defaultStock": {
+    "code": "002003",
+    "period": "1min",
+    "note": "默认区间；连续单步后再开策略回测搭跨层布林条件"
+  },
+  "autoLaunchOnStartup": false,
+  "walkthroughSteps": [
+    { "stepIdx": 0, "phase": "both", "caption": "002003 默认区间。先不要跳到末尾，准备一步一步点。" },
+    { "stepIdx": 80, "phase": "before", "caption": "原本：策略里 K0 下穿布林和 K1 下穿布林不能 AND，会提示不能拼。" },
+    { "stepIdx": 80, "phase": "after", "caption": "这次：两层各自下穿自己的布林可以 AND；必须撞在同一根 K 上才买。" },
+    { "stepIdx": 200, "phase": "after", "caption": "再往后点：已经出现的缠论结构不能消失。策略买点和缠论买点是两套标记。" }
+  ]
+}

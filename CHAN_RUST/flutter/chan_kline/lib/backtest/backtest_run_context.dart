@@ -33,7 +33,7 @@ class BacktestRunContext {
 }
 
 const String kStrategyAstVersion = 'ast-v2';
-const String kDataContractVersion = 'catalog-v4-chip-peaks';
+const String kDataContractVersion = 'catalog-v5-chip-peaks-derived';
 const String kStructureSemanticVersion = 'structure-v2';
 
 String describeCostModel({

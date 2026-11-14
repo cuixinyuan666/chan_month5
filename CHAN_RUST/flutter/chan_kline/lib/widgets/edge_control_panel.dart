@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:chan_kline/theme/app_palette.dart';
 
 /// 加载设置浮层（由标题栏「设置」按钮打开，可贴左/右）。
 class EdgeControlPanel extends StatelessWidget {
@@ -30,7 +31,7 @@ class EdgeControlPanel extends StatelessWidget {
       width: panelW,
       child: Material(
         elevation: 8,
-        color: const Color(0xF01A1A1A),
+        color: AppPalette.rgb(0xF01A1A1A),
         clipBehavior: Clip.hardEdge,
         borderRadius: BorderRadius.horizontal(
           left: _left ? Radius.zero : const Radius.circular(8),
@@ -48,7 +49,11 @@ class EdgeControlPanel extends StatelessWidget {
                     onPressed: onClose,
                     padding: EdgeInsets.zero,
                     constraints: const BoxConstraints.tightFor(width: 36, height: 36),
-                    icon: const Icon(Icons.close, color: Color(0xFFE2E8F0), size: 18),
+                    icon: Icon(
+                      Icons.close,
+                      color: AppPalette.controlInk,
+                      size: 18,
+                    ),
                   ),
                   const Expanded(
                     child: Text(
@@ -63,7 +68,11 @@ class EdgeControlPanel extends StatelessWidget {
                     onPressed: onCycleEdge,
                     padding: EdgeInsets.zero,
                     constraints: const BoxConstraints.tightFor(width: 36, height: 36),
-                    icon: const Icon(Icons.swap_horiz, size: 18),
+                     icon: Icon(
+                       Icons.swap_horiz,
+                       color: AppPalette.controlInk,
+                       size: 18,
+                     ),
                   ),
                 ],
               ),

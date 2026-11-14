@@ -8,9 +8,20 @@ class KlineViewport {
   static const double padL = 4;
   /// 右侧几乎不留白：主/副图画到价格数字处，价格标签叠在图上
   static const double padR = 2;
+  /// 桌面主图顶留白
   static const double padT = 28;
+  /// 手机主图「主图」收纳钮行高
+  static const double mainIndicatorToggleBand = 30;
+  /// 主图指标 chip 区最大占位（防多行撑入副图）
+  static const double mainIndicatorChipMaxBand = 56;
+  /// 副图指标 chip 区最大占位（为标记区保底高度）
+  static const double subIndicatorChipMaxBand = 40;
+  /// 副图标记/曲线最小绘制高度（chip 再长也不挤没标记）
+  static const double minSubMarkerPlotH = 52;
   /// 副图顶留白：避开左上角指标名按钮，标记不被盖
   static const double subIndicatorChipBand = 26;
+  /// 副图全关时仍保留的收纳钮占位（主图底 / X 轴上方）
+  static const double subIndicatorEntryBand = 28;
   /// 主图底边距（与副图分隔）
   static const double padB = 4;
   /// 底部 X 轴时间刻度带高度
@@ -64,10 +75,24 @@ class KlineViewport {
     ready = count > 0;
   }
 
-  /// 对齐 a_replay ensureLatestKVisible：最新 K 滑出视窗时右对齐跟随。
-  void ensureLatestVisible(int lastIdx) {
+  /// 步进/播放时最新 K 在视窗内的相对位置。0.5 = 视窗正中。
+  ///
+  /// 上一版用 0.75（距右边界约 1/4），用户看了仍觉得贴着右缘；
+  /// 再改到 0.6 也一样：数据不够长时左边界会把视窗顶回去，最新 K 又贴到最右。
+  /// 2026-11-06 改为 0.5，并允许视窗左端低于数据起点（左侧留白），
+  /// 这样从第一根起最新 K 就在正中，不会被左边界顶偏。
+  /// 各子窗口各自一份视口，但跟随口径同此。
+  static const double stepFollowPos = 0.5;
+
+  /// 子窗口盯住某根 K 时，最新 K 比正中再靠右一截。
+  static const double stepFollowPosRight = 0.65;
+
+  /// 步进/播放时把最新 K 固定到视窗水平正中。
+  ///
+  /// 不再等最新 K 滑出右边界才拽回：每一步都重新落位。
+  /// 数据刚开始、目标位置落在数据起点之前时，左侧留白，不把视窗顶回去。
+  void ensureLatestVisible(int lastIdx, {double followPos = stepFollowPos}) {
     if (!ready) return;
-    if (lastIdx >= viewXMin && lastIdx <= viewXMax) return;
 
     final span = xSpan;
     if (span <= 1) {
@@ -76,13 +101,10 @@ class KlineViewport {
       return;
     }
 
-    const pos = 0.85;
-    var newMin = lastIdx - span * pos;
+    var newMin = lastIdx - span * followPos;
     var newMax = newMin + span;
-    if (newMin < allXMin) {
-      newMin = allXMin;
-      newMax = newMin + span;
-    }
+    // 右侧最多留两个视窗宽的空白；超出就整体左移。
+    // 左侧不再卡在数据起点：卡住会把最新 K 顶到最右，居中就做不到。
     final rightMax = allXMax + span * 2;
     if (newMax > rightMax) {
       newMax = rightMax;
@@ -90,6 +112,32 @@ class KlineViewport {
     }
     viewXMin = newMin;
     viewXMax = newMax;
+  }
+
+  /// 步进/播放时把最新 K 的价格拉回垂直居中。
+  ///
+  /// 纵向平移不会随步进自动清掉：价格走高或走低后，
+  /// 最新 K 会慢慢漂到窗口上沿或下沿。这里按「当前可见 K 的高低区间」
+  /// 反推平移量，使最新 K 的中间价落在区间中部；用户设过的纵向缩放保留。
+  /// [bars] 必须是本窗实际画的那些 K：子窗口画的是该层自己的 K，
+  /// 不能用底层 K0 的价格代替，否则层级价格跑出 K0 区间后会贴到窗口上下沿。
+  void centerLatestVertically(List<KlineBar> bars, int lastIdx) {
+    if (!ready || bars.isEmpty) return;
+    if (lastIdx < 0) return;
+    // 取序列最后一根，不按下标取：子窗口只把本层最新一根传进来时，
+    // 它的下标是 0，而 lastIdx 是底层 K 的序号，按下标取会直接越界返回。
+    final bar = bars.last;
+    final mid = (bar.high + bar.low) / 2;
+
+    var yMin = bars.first.low;
+    var yMax = bars.first.high;
+    for (final b in bars) {
+      yMin = math.min(yMin, b.low);
+      yMax = math.max(yMax, b.high);
+    }
+    final baseSpan = math.max(1e-6, yMax - yMin);
+    final rangeMid = (yMax + yMin) / 2;
+    yShiftRatio = ((mid - rangeMid) / baseSpan).clamp(-maxYShift, maxYShift);
   }
 
   /// 把指定 K0 滚进视窗中间附近（报告点交易时跳图）。
@@ -113,10 +161,29 @@ class KlineViewport {
     markUserAdjusted();
   }
 
-  /// 逐K步进后同步视窗（未手动调视图则展示全量，已调视图则跟随最新 K）。
-  void syncWindowOnStep(int lastIdx) {
+  /// 逐K步进后同步视窗。
+  ///
+  /// [centerLatest] 为真（子窗口）时：每一步都把最新 K 放到视窗正中，
+  /// 不管用户有没有手动缩放过。没调过的窗口用「至少 40 根」的视窗宽居中，
+  /// 数据还少于 40 根时左侧留白；用户调过的缩放宽度原样保留。
+  /// [centerLatest] 为假（单图）时保持原口径：没手动调过就展示全量，
+  /// 调过才跟随最新 K。
+  void syncWindowOnStep(
+    int lastIdx, {
+    bool centerLatest = false,
+    double followPos = stepFollowPos,
+  }) {
     if (!ready) return;
     allXMax = math.max(allXMax, lastIdx.toDouble());
+    if (centerLatest) {
+      if (!userAdjustedView) {
+        const minSpan = 40.0;
+        viewXMin = lastIdx - minSpan * followPos;
+        viewXMax = viewXMin + minSpan;
+      }
+      ensureLatestVisible(lastIdx, followPos: followPos);
+      return;
+    }
     if (!userAdjustedView) {
       viewXMin = allXMin;
       viewXMax = allXMax;
@@ -125,8 +192,47 @@ class KlineViewport {
     }
   }
 
+  /// 逐 K 步进时**保持最新 K 的当前屏幕位置**。
+  ///
+  /// 仅用户手动缩放/平移过（[userAdjustedView]）后使用：视窗按数据增量
+  /// 整体平移（进度退一步就反向平移），跨度（缩放）与纵轴缩放/位移一概不动，
+  /// 因此最新 K 停在原屏幕位置，不会再被拉回正中/全量。
+  /// 调用方负责在未手动调整时走旧口径（[syncWindowOnStep]/[showAllBars]）。
+  void holdLatestThroughStep({
+    required int lastIdx,
+    required int prevLastIdx,
+  }) {
+    if (!ready) return;
+    allXMax = math.max(allXMax, lastIdx.toDouble());
+    final delta = lastIdx - prevLastIdx;
+    if (delta == 0) return;
+    viewXMin += delta;
+    viewXMax += delta;
+  }
+
+  /// 没盯住某一根 K 时：按当前 K 线根数把整段放进视窗。
+  /// 右侧留一截空白，步进/播放时最新 K 不贴右边界。
+  void showAllBars({
+    double leftBlankRatio = 0.08,
+    double rightBlankRatio = 0.22,
+  }) {
+    if (!ready) return;
+    final dataSpan = math.max(1.0, allXMax - allXMin);
+    viewXMin = allXMin - dataSpan * leftBlankRatio;
+    viewXMax = allXMax + dataSpan * rightBlankRatio;
+    yZoomRatio = 1.0;
+    yShiftRatio = 0.0;
+    userAdjustedView = false;
+  }
+
   /// 滚轮横向缩放，锚点为画布内 X（像素）。
-  void zoomXAt(double factor, double anchorCanvasX, double canvasWidth) {
+  /// [allowLeftBlank] 为真时左端也可以扩出去，左右一起变，不再只朝右边挤。
+  void zoomXAt(
+    double factor,
+    double anchorCanvasX,
+    double canvasWidth, {
+    bool allowLeftBlank = false,
+  }) {
     if (!ready || allXMax < allXMin) return;
     final barCount = (allXMax - allXMin + 1).round();
     if (barCount <= 1) return;
@@ -148,33 +254,64 @@ class KlineViewport {
     var newMin = xAtMouse - rel * newSpan;
     var newMax = newMin + newSpan;
 
-    if (newMin < allXMin) {
+    if (!allowLeftBlank && newMin < allXMin) {
       newMin = allXMin;
       newMax = newMin + newSpan;
     }
-    final rightMax = allXMax + newSpan * 2;
-    if (newMax > rightMax) {
-      newMax = rightMax;
-      newMin = newMax - newSpan;
+    // 右侧留白：超出时整体左移视窗，避免 span 变小后 rightMax 收紧把视窗硬拽回、缩放失效
+    final rightLimit = allXMax + newSpan * 2;
+    if (newMax > rightLimit) {
+      final shift = newMax - rightLimit;
+      newMin -= shift;
+      newMax -= shift;
+      if (newMin < allXMin) {
+        newMin = allXMin;
+        newMax = newMin + newSpan;
+      }
     }
 
     viewXMin = newMin;
     viewXMax = newMax;
-    if (viewXMin < allXMin) viewXMin = allXMin;
+    if (!allowLeftBlank && viewXMin < allXMin) viewXMin = allXMin;
     if (viewXMax <= viewXMin) {
       viewXMax = math.min(allXMax, viewXMin + minSpanFor(barCount));
     }
   }
 
+  /// 纵向缩放后，把 [price] 钉在绘图区从上往下 [relFromTop] 的位置（0 顶，1 底）。
+  /// 滚轮以鼠标为焦点时，鼠标下的价格不乱跑。
+  void pinPriceAtPlotFraction({
+    required List<KlineBar> bars,
+    required double price,
+    required double relFromTop,
+  }) {
+    if (!ready || bars.isEmpty) return;
+    var yMin = bars.first.low;
+    var yMax = bars.first.high;
+    for (final b in bars) {
+      yMin = math.min(yMin, b.low);
+      yMax = math.max(yMax, b.high);
+    }
+    if ((yMax - yMin).abs() < 1e-9) {
+      yMin -= 0.5;
+      yMax += 0.5;
+    }
+    final baseSpan = math.max(1e-6, yMax - yMin);
+    final mid = (yMax + yMin) / 2;
+    final rel = relFromTop.clamp(0.0, 1.0);
+    final shift = (price - mid) / baseSpan + (rel - 0.5) / yZoomRatio;
+    yShiftRatio = shift.clamp(-maxYShift, maxYShift);
+  }
+
+  /// 双指/滚轮纵向缩放：factor>1 放大，<1 缩小。
+  void zoomYBy(double factor) {
+    if (!ready || factor <= 0) return;
+    yZoomRatio = (yZoomRatio * factor).clamp(0.2, 20.0);
+  }
+
   /// 滚轮 + Ctrl：纵向缩放。
   void zoomY(bool zoomIn) {
-    if (!ready) return;
-    if (zoomIn) {
-      yZoomRatio *= zoomFactor;
-    } else {
-      yZoomRatio /= zoomFactor;
-    }
-    yZoomRatio = yZoomRatio.clamp(0.2, 20.0);
+    zoomYBy(zoomIn ? zoomFactor : 1 / zoomFactor);
   }
 
   /// 左键拖拽平移：dx/dy 为像素位移。
@@ -185,10 +322,24 @@ class KlineViewport {
     final dxBars = (-dx / usableW) * span;
     var newMin = viewXMin + dxBars;
     var newMax = viewXMax + dxBars;
-    if (newMin < allXMin) {
-      newMin = allXMin;
+    // 边界：缩小到视窗大于数据跨度时，左右会留出空白。
+    // 旧口径把 newMin 硬钳到 allXMin，于是「空白留在左边」的一侧完全拖不动
+    // （缩小到一定程度后拖拽失效）。这里改成按视窗实际跨度留出等量空白，
+    // 视窗仍整体夹在数据左右边界附近，但两侧都能拖。
+    final dataSpan = math.max(1.0, allXMax - allXMin + 1);
+    final slack = math.max(0.0, span - dataSpan);
+    final leftFloor = allXMin - slack;
+    final rightCeil = allXMax + slack;
+    if (newMin < leftFloor) {
+      newMin = leftFloor;
       newMax = newMin + span;
     }
+    if (newMax > rightCeil) {
+      newMax = rightCeil;
+      newMin = newMax - span;
+    }
+    if (newMin < leftFloor) newMin = leftFloor;
+    if (newMax <= newMin) newMax = newMin + span;
     viewXMin = newMin;
     viewXMax = newMax;
     yShiftRatio += dy / math.max(1, plotH);
