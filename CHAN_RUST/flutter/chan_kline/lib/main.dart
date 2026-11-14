@@ -6524,7 +6524,25 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
 
   Future<void> _openTickDrawBoard() async {
     List<KlineBar> seed = _allBars;
-    if (_hasTestOhlcCsv()) {
+    var loadedFromMinute = false;
+    if (_hasTestMinuteCsv()) {
+      // custom.1m.csv 存在时，Rust 的 tick 加载会报错（它优先读 1 分钟文件）。
+      // 这里直接按 1 分钟周期加载，再转成分笔点喂给画板，
+      // 保证「打开分笔画板就能看到 K线画板画的东西」。
+      try {
+        final minuteBars = _bridge.loadKlines(
+          dataRoot: _dataRoot,
+          code: 'test',
+          beginDate: '1990/01/01 00:00:00',
+          endDate: '2100/12/31 23:59:59',
+          period: '1m',
+        );
+        if (minuteBars.isNotEmpty) {
+          seed = minuteBars;
+          loadedFromMinute = true;
+        }
+      } catch (_) {}
+    } else if (_hasTestOhlcCsv()) {
       try {
         seed = _bridge.loadKlines(
           dataRoot: _dataRoot,
@@ -6554,6 +6572,9 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
       _tickDrawBundle = bundle;
       _tickDrawBoardOpen = true;
     });
+    if (loadedFromMinute) {
+      _showSnack('已载入 K线画板的自定义 1 分钟数据（custom.1m.csv），按收盘价转成分笔点');
+    }
   }
 
   void _updateTickDrawBoard(TickDrawBoardModel model) {
@@ -6593,9 +6614,11 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
               '2. 点「K线画板」；\n'
               '3. 在 K0 窗口按住左键拖动，松手生成一根 1 分钟 K 线；\n'
               '4. 起点是开盘价，终点是收盘价，拖动路径的最高、最低分别是最高价、最低价；\n'
-              '5. 每个窗口标题同时显示层级和周期，例如 K0 · 1分钟、K1 · 5分钟；\n'
-              '6. K0 固定 1 分钟，其它窗口可选择更大周期；\n'
-              '7. 点「保存并加载」，写入 a_Data/test/custom.1m.csv。',
+              '5. 新 K 线落在光标所在的 K 位置；\n'
+              '6. 按住已画好的 K 线可拖动改价：拖实体中段改开/收盘价，拖影线端点改最高/最低价；\n'
+              '7. 每个窗口标题同时显示层级和周期，例如 K0 · 1分钟、K1 · 5分钟；\n'
+              '8. K0 固定 1 分钟，其它窗口可选择更大周期；\n'
+              '9. 点「保存并加载」，写入 a_Data/test/custom.1m.csv。',
             ),
           ),
           actions: [
@@ -6675,6 +6698,10 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
         _period = '1m';
         _klineDrawBoardOpen = false;
       });
+      if (_hasTestOhlcCsv()) {
+        _showSnack('已写入 custom.1m.csv；custom.ohlc.csv 仍在，'
+            '分笔周期加载会优先读 1 分钟文件');
+      }
       await _loadKlines();
     } catch (e) {
       setState(() => _error = e.toString());
@@ -6699,6 +6726,10 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
             _tickDrawBoardOpen = false;
           });
         }
+      }
+      if (_hasTestMinuteCsv()) {
+        _showSnack('已写入 custom.ohlc.csv，但 custom.1m.csv 仍在，'
+            '加载时优先读 1 分钟文件，分笔数据暂不生效');
       }
       await _loadKlines();
     } catch (e) {
