@@ -17,6 +17,7 @@
 library;
 
 import '../models/kline_combine_frame.dart';
+import '../models/pre_first_fractal_mode.dart';
 
 /// 相邻两根框 / 单元的关系。
 enum FractalPairRel {
@@ -70,10 +71,29 @@ String? fractalPairFx(FractalPairRel rel) {
 /// 顶底交替：同向丢弃。
 bool fractalFxOpposite(String? lastFx, String fx) => lastFx != fx;
 
+/// 首分型前合并框的高/低取值（绘制与 tooltip 共用，避免两处各写一套）。
+///
+/// - [PreFirstFractalMode.highHigh]：`high` / `low` **都取最大**（历史口径）；
+/// - [PreFirstFractalMode.lowLow]：`high` / `low` **都取最小**；
+/// - [PreFirstFractalMode.seedBox]：不合并，调用方不应走到这里；兜底按高高。
+({double high, double low}) mergePreFractalBox(
+  double h1,
+  double l1,
+  double h2,
+  double l2,
+  PreFirstFractalMode mode,
+) {
+  if (mode == PreFirstFractalMode.lowLow) {
+    return (high: h1 < h2 ? h1 : h2, low: l1 < l2 ? l1 : l2);
+  }
+  return (high: h1 > h2 ? h1 : h2, low: l1 > l2 ? l1 : l2);
+}
+
 /// 首分型前的框序列按逐对判定重排（全层同构，子窗口专用）。
 ///
 /// 规则：
-/// - 相邻两根有包含关系 → **取高合并**（high/low 各取 max），合为一个框；
+/// - 相邻两根有包含关系 → **合并**（高/低取值按 [mergeMode]：高高=都取最大、
+///   低低=都取最小），合为一个框；
 /// - 相邻两根双低 / 双高 → **不合并**，前一根判分型（顶点=前一根 high/low），
 ///   顶底交替，同向丢弃；
 /// - 标准三元素首分型所在框及其后各框原样保留（该框作为跨界配对的伙伴参与判定，
@@ -82,10 +102,13 @@ bool fractalFxOpposite(String? lastFx, String fx) => lastFx != fx;
 /// [standardFirstFx]：标准三元素首分型的方向；候选与它同向时丢弃
 /// （分型必须顶底交替）。
 ///
+/// [mergeMode]：包含关系合并时的高/低取值口径（高高 / 低低）。
+///
 /// 返回新列表；原列表不变。
 List<KlineCombineFrame> applyFirstPairFractalToFrames(
   List<KlineCombineFrame> frames, {
   String? standardFirstFx,
+  PreFirstFractalMode mergeMode = PreFirstFractalMode.highHigh,
 }) {
   if (frames.length <= 1) return frames;
   // 标准首分型所在框下标；frames.length 表示尚无标准首分型。
@@ -115,15 +138,17 @@ List<KlineCombineFrame> applyFirstPairFractalToFrames(
       final b = frames[i + 1];
       final rel = fractalPairRel(a.high, a.low, b.high, b.low);
       if (rel == FractalPairRel.contained) {
-        // 仅包含关系才取高合并（high/low 各取 max）；保留右框 fx（标准首分型标记）
+        // 仅包含关系才合并；高/低取值按设置口径（高高=都取最大，低低=都取最小）。
+        // 保留右框 fx（标准首分型标记）
+        final box = mergePreFractalBox(a.high, a.low, b.high, b.low, mergeMode);
         out.add(
           KlineCombineFrame(
             x1: a.x1,
             x2: b.x2,
             t1: a.t1,
             t2: b.t2,
-            high: a.high > b.high ? a.high : b.high,
-            low: a.low > b.low ? a.low : b.low,
+            high: box.high,
+            low: box.low,
             fx: b.fx,
             count: a.count + b.count,
             endAtLeftHalf: b.endAtLeftHalf,

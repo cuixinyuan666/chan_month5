@@ -3,6 +3,7 @@ import 'chart_indicator.dart';
 import 'incremental_lookup.dart';
 import 'kline_bar.dart';
 import 'kline_combine_bundle.dart';
+import 'pre_first_fractal_mode.dart';
 import 'bar_crosshair_feature.dart';
 import 'pipeline_delta.dart';
 import '../compute/adjacent_ratio_compute.dart';
@@ -190,6 +191,9 @@ class PresentationCache {
     Map<int, List<ZsSignalEvent>> zsConfirmHistoryByKn = const {},
     Set<SubChartIndicator> subIndicators = const {},
     bool truncationCheck = true,
+    PreFirstFractalMode preFirstFractalMode = PreFirstFractalMode.defaultMode,
+    bool preFirstFractalSubWindow = false,
+    bool earlyDynamicUnit = true,
     MathIndicatorConfig mathIndicatorConfig = const MathIndicatorConfig(),
     MathSeriesFreezeStore? mathFreezeStore,
     DivergenceFreezeStore? diverFreezeStore,
@@ -198,6 +202,14 @@ class PresentationCache {
     if (bars.isEmpty) {
       lookupEngine.reset();
       return;
+    }
+    // 首分型前口径变了：已写进每行的 MG/MD 全部作废，重种一次（用户手动改设置才发生）。
+    if (lookupEngine.configurePreFirstFractal(
+      mode: preFirstFractalMode,
+      subWindow: preFirstFractalSubWindow,
+      earlyDynamicUnit: earlyDynamicUnit,
+    )) {
+      lookupEngine.reset();
     }
     final last = bars.last.idx;
     if (lookupEngine.isEmpty || lookupEngine.step < last - 1) {

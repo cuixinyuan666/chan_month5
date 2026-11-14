@@ -75,6 +75,7 @@ import 'models/chart_indicator.dart';
 import 'models/chip_config.dart';
 import 'models/tick_dist_config.dart';
 import 'models/kline_combine_frame.dart';
+import 'models/pre_first_fractal_mode.dart';
 import 'models/level_models.dart';
 import 'models/k1_analysis.dart';
 import 'models/kline_combine_bundle.dart';
@@ -523,6 +524,9 @@ class _KlineHomePageState extends State<KlineHomePage>
   /// 层级早生成动态单元：开=每层首个单元在父层首确认当根以动态态出现；
   /// 关=经典口径（等引擎自己攒够输入）。默认开，可在设置里切换。
   bool _earlyDynamicUnit = true;
+  /// 首分型前合并框口径：种子框=不合并 / 高高（默认）/ 低低。
+  /// 只影响首分型前那段合并框的绘制与 tooltip 的 MG/MD，不动其它结构。
+  PreFirstFractalMode _preFirstFractalMode = PreFirstFractalMode.defaultMode;
   /// 构建中合并框（虚线）开关：开=末组合并画虚线；关=全部实线（默认开）
   bool _showBuildingDash = true;
   /// 分笔画板：只在 TEST 股票设置中打开，编辑 K0 后自动生成上层窗口。
@@ -1430,6 +1434,7 @@ class _KlineHomePageState extends State<KlineHomePage>
       _disposePipelineSession();
       _clearSessionFreezeHistory();
     }
+    _preFirstFractalMode = LevelWindowSettingsStore.preFirstFractalMode;
     // 启动时若分窗已开启，按落盘层级铺默认：每窗只有本层 Kn，副图不勾。
     if (LevelWindowSettingsStore.enabled) _resetSplitIndicators();
     setState(() {});
@@ -2428,6 +2433,22 @@ class _KlineHomePageState extends State<KlineHomePage>
     _logCombineSummary(prefix: '层级早生成开关后汇总');
   }
 
+  /// 首分型前合并框口径落地（设置面板与 Agent API 共用同一条路径）。
+  ///
+  /// 只改「首个分型之前」那段合并框的绘制与 tooltip 的 MG/MD：
+  /// 不动结构计算、不动会话管道与冻结仓，重算当前步进只为让增量 Lookup
+  /// 把这一口径的行重种一遍（否则十字线上的 MG/MD 还是旧口径）。
+  void _setPreFirstFractalMode(
+    PreFirstFractalMode mode, {
+    StateSetter? sheetSetState,
+  }) {
+    if (_preFirstFractalMode == mode) return;
+    _panelUi(() => _preFirstFractalMode = mode, sheetSetState: sheetSetState);
+    unawaited(LevelWindowSettingsStore.save(preFirstFractalMode: mode));
+    _msgHistory.append('首分型前合并框=${mode.label}');
+    _rebuildCombine();
+  }
+
   @override
   AgentHealth health() {
     return AgentHealth(
@@ -2572,6 +2593,9 @@ class _KlineHomePageState extends State<KlineHomePage>
         maxBsClass: _maxBsClass,
       ).toSet(),
       truncationCheck: _truncationCheck,
+      preFirstFractalMode: _preFirstFractalMode,
+      preFirstFractalSubWindow: LevelWindowSettingsStore.enabled,
+      earlyDynamicUnit: _earlyDynamicUnit,
       mathIndicatorConfig: _mathIndicatorConfig,
       mathFreezeStore: _stepFreeze.mathFreezeStore,
       diverFreezeStore: _stepFreeze.diverFreezeStore,
@@ -3896,6 +3920,7 @@ class _KlineHomePageState extends State<KlineHomePage>
                 subIndicators: _sessionSplitSubIndicators,
                 truncationCheck: _truncationCheck,
                 earlyDynamicUnit: _earlyDynamicUnit,
+                preFirstFractalMode: _preFirstFractalMode,
                 showBuildingDash: _showBuildingDash,
                 chipConfig: _chipConfig,
                 tickDistConfig: _tickDistConfig,
@@ -4598,6 +4623,46 @@ class _KlineHomePageState extends State<KlineHomePage>
             tooltip: '层级早生成动态单元说明',
             icon: const Icon(Icons.help_outline, size: 18),
             onPressed: _showEarlyDynamicUnitHelp,
+          ),
+        ),
+        const SizedBox(height: 8),
+        // 首分型前合并框：种子框 / 高高 / 低低（只影响首分型前那段框的绘制与 MG/MD）
+        ListTile(
+          contentPadding: EdgeInsets.zero,
+          dense: true,
+          title: const Text('首分型前合并框', style: TextStyle(fontSize: 13)),
+          subtitle: Text(
+            _preFirstFractalMode.shortHint,
+            style: const TextStyle(fontSize: 11),
+          ),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              DropdownButton<PreFirstFractalMode>(
+                value: _preFirstFractalMode,
+                isDense: true,
+                underline: const SizedBox.shrink(),
+                style: const TextStyle(fontSize: 12, color: Colors.black87),
+                items: [
+                  for (final m in PreFirstFractalMode.values)
+                    DropdownMenuItem<PreFirstFractalMode>(
+                      value: m,
+                      child: Text(m.label, style: const TextStyle(fontSize: 12)),
+                    ),
+                ],
+                onChanged: _busy
+                    ? null
+                    : (m) {
+                        if (m == null) return;
+                        _setPreFirstFractalMode(m, sheetSetState: sheetSetState);
+                      },
+              ),
+              IconButton(
+                tooltip: '首分型前合并框说明',
+                icon: const Icon(Icons.help_outline, size: 18),
+                onPressed: _showPreFirstFractalModeHelp,
+              ),
+            ],
           ),
         ),
         const SizedBox(height: 8),
@@ -5792,6 +5857,7 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
       resetViewSerial: _resetViewSerial,
       truncationCheck: _truncationCheck,
       earlyDynamicUnit: _earlyDynamicUnit,
+      preFirstFractalMode: _preFirstFractalMode,
       showBuildingDash: _showBuildingDash,
       chipOnlyMode: _chipOnlyMode,
       // 筹码 / 笔数分布只在主窗生效：其余窗各自可操作，但不需要重复一份浮层。
@@ -6220,6 +6286,44 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
         ],
       ),
     ));
+  }
+
+  void _showPreFirstFractalModeHelp() {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => SelectionArea(child: AlertDialog(
+        title: const Text('首分型前合并框说明'),
+        content: const SingleChildScrollView(
+          child: Text(
+            '作用：控制「首个分型之前」那一段合并框怎么画、tooltip 的 MG/MD 写多少。\n'
+            '只作用于首分型前的框；GG/DD、动态 K 蜡烛、连线、枢、买卖点都不受影响。\n\n'
+            '三个选项\n'
+            '· 种子框：首分型前**不合并**，按引擎原框逐根画（第一根框就是种子框，'
+            '后面的框各自独立，横向范围也只到各自右端）。\n'
+            '· 高高（默认）：把首分型前的各框并成一个框，左端从第一根 K 起、右端到'
+            '最后一个框；高点取各框最高 high，低点也取各框最高 low。\n'
+            '· 低低：同样并成一个框，高点取各框最低 high，低点也取各框最低 low。\n\n'
+            '子窗口（层级分窗）\n'
+            '· 高高 / 低低 下仍走逐对判定：相邻两根双低直接判顶分型、双高判底分型，'
+            '这两种情况**不合并**；只有两根存在包含关系时才并框，并框取值按所选口径。\n'
+            '· 种子框下不跑逐对判定，保持原框不变。\n\n'
+            'tooltip（十字线）\n'
+            '· 合并框那一行的 MG/MD 与画出来的框同源：换口径后十字线上的 MG/MD 一起变。\n'
+            '· 其它数值（GG/DD、原始 K 线高低等）一律不动。\n\n'
+            '操作步骤\n'
+            '1. 打开右上角设置；\n'
+            '2. 在「首分型前合并框」右侧下拉里选 种子框 / 高高 / 低低；\n'
+            '3. 主图与各子窗口立刻按新口径重画，十字线移动一次即可看到新的 MG/MD。',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('知道了'),
+          ),
+        ],
+      )),
+    );
   }
 
   void _showEarlyDynamicUnitHelp() {

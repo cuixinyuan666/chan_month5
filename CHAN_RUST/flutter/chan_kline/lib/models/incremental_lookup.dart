@@ -9,6 +9,7 @@ import '../compute/kn_volume_series_compute.dart';
 import '../compute/line_slope_compute.dart';
 import '../compute/math_classic_compute.dart';
 import '../compute/math_series_freeze_store.dart';
+import '../compute/pre_first_fractal_compute.dart';
 import '../compute/step_rhythm_compute.dart';
 import '../compute/trend_line_compute.dart';
 import '../compute/trend_model_compute.dart';
@@ -26,6 +27,7 @@ import 'kline_combine_bundle.dart';
 import 'kline_combine_frame.dart';
 import 'level_models.dart';
 import 'math_indicator_config.dart';
+import 'pre_first_fractal_mode.dart';
 import 'sell1_frame.dart';
 import 'sell2_frame.dart';
 import 'sell_n_frame.dart';
@@ -62,6 +64,57 @@ class IncrementalBarFeatureLookup {
   /// 回归通道已回写区间（按显示层）：父层端点一动整条换新，
   /// 增量必须「先清旧段再写新段」，否则新旧两条通道的值会混在同一层。
   final Map<int, ({int x1, int x2})> _regressSpan = {};
+
+  /// 首分型前合并框口径（设置项）：tooltip 的 MG/MD 与主图绘制同源。
+  PreFirstFractalMode _preFirstFractalMode = PreFirstFractalMode.defaultMode;
+  bool _preFirstFractalSubWindow = false;
+  bool _preFirstFractalEarly = true;
+
+  /// 当前首分型前口径（供上层判断是否需要重种）。
+  PreFirstFractalMode get preFirstFractalMode => _preFirstFractalMode;
+
+  /// 设置首分型前口径；返回 true 表示口径变了（已写进 lookup 的 MG/MD 作废，
+  /// 调用方需重建/重种）。
+  bool configurePreFirstFractal({
+    required PreFirstFractalMode mode,
+    required bool subWindow,
+    required bool earlyDynamicUnit,
+  }) {
+    if (_preFirstFractalMode == mode &&
+        _preFirstFractalSubWindow == subWindow &&
+        _preFirstFractalEarly == earlyDynamicUnit) {
+      return false;
+    }
+    _preFirstFractalMode = mode;
+    _preFirstFractalSubWindow = subWindow;
+    _preFirstFractalEarly = earlyDynamicUnit;
+    return true;
+  }
+
+  /// 按当前口径把 bundle 的合并框重排（K0 / 各层 / K1），其它字段不动。
+  ({List<KlineCombineFrame> k0, List<LevelBundle> levels, List<KlineCombineFrame> k1})
+      _pfOf(KlineCombineBundle b) {
+    return (
+      k0: applyPreFirstFractalMode(
+        b.frames,
+        mode: _preFirstFractalMode,
+        subWindow: _preFirstFractalSubWindow,
+        earlyDynamicUnit: _preFirstFractalEarly,
+      ),
+      levels: applyPreFirstFractalToLevels(
+        b.levels,
+        mode: _preFirstFractalMode,
+        subWindow: _preFirstFractalSubWindow,
+        earlyDynamicUnit: _preFirstFractalEarly,
+      ),
+      k1: applyPreFirstFractalMode(
+        b.k1CombineFrames,
+        mode: _preFirstFractalMode,
+        subWindow: _preFirstFractalSubWindow,
+        earlyDynamicUnit: _preFirstFractalEarly,
+      ),
+    );
+  }
 
   int get gen => _gen;
   int get step => _step;
@@ -127,15 +180,16 @@ class IncrementalBarFeatureLookup {
     DivergenceFreezeStore? diverFreezeStore,
     int maxBsClass = 9,
   }) {
+    final pf = _pfOf(bundle);
     final full = BarFeatureLookup.build(
       bars: bars,
-      combineFrames: bundle.frames,
+      combineFrames: pf.k0,
       k0Confirms: bundle.k0Confirms,
       barFeatures: bundle.barFeatures,
       k0Lines: bundle.k0Lines,
       k1Analysis: bundle.k1Analysis,
-      levels: bundle.levels,
-      k1CombineFrames: bundle.k1CombineFrames,
+      levels: pf.levels,
+      k1CombineFrames: pf.k1,
       buy1HistoryByKn: buy1HistoryByKn,
       sell1HistoryByKn: sell1HistoryByKn,
       buy2HistoryByKn: buy2HistoryByKn,
@@ -309,9 +363,10 @@ class IncrementalBarFeatureLookup {
       'sub': <String, dynamic>{},
     };
 
+    final pf = _pfOf(bundle);
     final barByIdx = <int, KlineBar>{};
-    if (bundle.frames.isNotEmpty) {
-      final f = bundle.frames.last;
+    if (pf.k0.isNotEmpty) {
+      final f = pf.k0.last;
       final lo = f.x1 < 0 ? 0 : f.x1;
       final hi = f.x2 < x ? f.x2 : x;
       for (var xi = lo; xi <= hi; xi++) {
@@ -323,8 +378,8 @@ class IncrementalBarFeatureLookup {
     if (barByIdx[x] == null && bars.isNotEmpty) {
       barByIdx[x] = bars.last;
     }
-    _patchLastCombine(bundle.frames, barByIdx, x);
-    _patchKnCombineBoxes(bundle, x);
+    _patchLastCombine(pf.k0, barByIdx, x);
+    _patchKnCombineBoxes(x, pf.levels, pf.k1);
     _writeKnCombineRangeAtX(bundle, bars, x);
     _writeK0ConfirmAtX(bundle.k0Confirms, x, subIndicators);
     _writeK1ConfirmAtX(bundle, x);
@@ -436,8 +491,10 @@ class IncrementalBarFeatureLookup {
 
     // 十字只改当前柱结构；禁止把末态合并框写回引擎，也禁止整表覆盖。
     cow(asOf);
+    // 首分型前口径：十字 tooltip 的 MG/MD 与主图绘制同源。
+    final pf = _pfOf(asOfBundle);
     final barByIdx = {for (final b in prefixBars) b.idx: b};
-    for (final f in asOfBundle.frames) {
+    for (final f in pf.k0) {
       if (asOf < f.x1 || asOf > f.x2) continue;
       var rangeHigh = double.negativeInfinity;
       var rangeLow = double.infinity;
@@ -462,14 +519,14 @@ class IncrementalBarFeatureLookup {
         row['combine_range_low'] = rangeLow;
       }
     }
-    for (final lv in asOfBundle.levels) {
+    for (final lv in pf.levels) {
       if (lv.level < 1) continue;
       for (final f in lv.combineFrames) {
         if (asOf < f.x1 || asOf > f.x2) continue;
         cow(asOf)['combine_box_${lv.level}'] = {'high': f.high, 'low': f.low};
       }
     }
-    for (final f in asOfBundle.k1CombineFrames) {
+    for (final f in pf.k1) {
       if (asOf < f.x1 || asOf > f.x2) continue;
       cow(asOf)['combine_box_1'] = {'high': f.high, 'low': f.low};
     }
@@ -555,8 +612,12 @@ class IncrementalBarFeatureLookup {
     }
   }
 
-  void _patchKnCombineBoxes(KlineCombineBundle bundle, int x) {
-    for (final lv in bundle.levels) {
+  void _patchKnCombineBoxes(
+    int x,
+    List<LevelBundle> levels,
+    List<KlineCombineFrame> k1,
+  ) {
+    for (final lv in levels) {
       if (lv.level < 1 || lv.combineFrames.isEmpty) continue;
       final f = lv.combineFrames.last;
       for (var xi = f.x1; xi <= f.x2 && xi <= x; xi++) {
@@ -564,8 +625,8 @@ class IncrementalBarFeatureLookup {
         row['combine_box_${lv.level}'] = {'high': f.high, 'low': f.low};
       }
     }
-    if (bundle.k1CombineFrames.isNotEmpty) {
-      final f = bundle.k1CombineFrames.last;
+    if (k1.isNotEmpty) {
+      final f = k1.last;
       for (var xi = f.x1; xi <= f.x2 && xi <= x; xi++) {
         final row = byIdx.putIfAbsent(xi, () => {'idx': xi, 'sub': <String, dynamic>{}});
         row['combine_box_1'] = {'high': f.high, 'low': f.low};

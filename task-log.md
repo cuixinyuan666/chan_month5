@@ -6130,39 +6130,72 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **测试**：① 对端代理 reload 后 `ping` 回 `agent_version=1.4.0`；② 直接下发 `build`：PCB `pid 14460` 起编，kernel_blob 22:19:49、App 新实例 `pid 11836`（22:19:57，335MB）；③ 本机同脚本重编：kernel_blob 22:22:03、App `pid 117356`（22:22:10）；④ 本机 kernel_blob 内含「按最新方同步」「正在重编并重启」「自动重编那台的 DLL」三条新文案；⑤ **端到端真跑**（本机 `sync_latest.ps1 -Apply -Build`）：判本机最新 → 复制 3 个 → 对端起编 → **36 秒编完并重启**，JSON 回 `buildSide=peer / buildOk=true`，整轮 46 秒、退出码 0。
 - **注意事项 / 待办**：① `chan_ffi.dll` 是编译产物、未入库，试跑时曾被判成「对端更新」并把对端的 DLL 拷回本机 —— 已在清单排除 `*.dll / *.pdb / *.ilk`；② 只改非 Dart 文件时 flutter 复用缓存、`kernel_blob.bin` 不刷新，完成判据不能只看它，已改成「日志出现 `Launch (no flutter run)` 或 kernel 或 dll 任一刷新」；③ 对端代理回的是它自己的盘符路径，本机读不到，已按共享路径重映射后再盯日志（这两条都是实跑时踩出来的）；④ 对端代理必须是 1.4.0（改完要 reload 一次）才认 `build`；⑤ PCB 现存 5 个 32KB 的 chan_kline 空壳进程，提权杀不掉，不影响新实例。
 - **相关文件**：`CHAN_RUST/scripts/remote_app_agent.ps1`、`CHAN_RUST/scripts/remote_ctl.ps1`、`CHAN_RUST/scripts/sync_latest.ps1`、`CHAN_RUST/flutter/chan_kline/lib/sync/peer_sync_service.dart`、`CHAN_RUST/flutter/chan_kline/lib/ui/peer_sync_dialog.dart`。
-### 2026-11-09 · Doubao · 功能 · App 主题做成深色/浅色/护眼三选一（颜色全收进调色板）
-
-- **执行者**：Doubao Agent
-- **任务类型**：功能改造 / 全局配色重构 / 主题持久化
-- **操作**：新增 `lib/theme/app_palette.dart`（三套色板的唯一出入口：具名 token 画布/面板/文字/涨跌/网格/浮层 + 长尾换算 `AppPalette.rgb(0x...)`）、`lib/theme/theme_settings_store.dart`（`.chan_theme_settings.json` 落盘 + `AppThemeController` 切换总线）、`lib/theme/theme_chooser.dart`（设置里的三选一芯片）；把 32 个 dart 文件里 413 处写死色改成走调色板，`ChanKlineApp` 改为跟随主题重建，`MaterialApp` 的 brightness / 底色也从调色板取。
-- **结果**：设置面板高级区第一块是「主题外观」，点深色/浅色/护眼立刻整张图重刷（K 线画布、坐标轴、图例、筹码/笔数柱、十字 tooltip、回测与指标检索面板、分笔上传弹窗一起换），不再只换外壳；重启保留上次选的。
-- **演示**：深色=原来的黑底，与改造前逐像素一致；浅色=白底深字，红 K/绿 K 保留色相只是压明度；护眼=米黄底，中性灰转暖色。太极加载遮罩也跟着变浅、不再是一块黑饼。
-- **测试**：① `flutter analyze --no-pub` → error = 0（warning 34 / info 97 全是存量）；② 新增 `test/theme_chooser_test.dart` 四项全过：点浅色后画布底色变 `0xFFF6F7F9` 且写死字面量不再返回 `0xFF121212`、点护眼变 `0xFFF4EFDF`、点深色回到 `0xFF121212`、写盘后读回同一主题；③ `flutter build windows --debug` 成功（kernel_blob 73,193,288B / 23:15:22）；④ 三套主题各真机截一张图核对（深色/浅色/护眼都出对），浅色与护眼底上 K 线、坐标、K2/K3 空态提示都读得清。
-- **注意事项 / 待办**：① 默认主题仍是深色，切回深色保证与旧版一致，是这次改造的安全底线；② 调色板对长尾色的换算是启发式（中性灰明度取反、彩色保留色相压到明度 0.28~0.52、护眼再压色相 42），观感若有偏差只需改 `app_palette.dart` 一个文件，不用再动业务代码；③ 因为 `AppPalette.rgb()` 不是编译期常量，`ChipConfig` / `TickDistConfig` / `YinYangPainter` 的默认色改成「可空 + 运行时解析」，声明处按需从 `const` 改成 `final`；④ 备份与验证用的 `.chan_theme_settings.json` 已加进 `.gitignore`，不入库；⑤ 设置面板的齿轮按钮本轮自动化点击没打中（坐标偏移），面板内三选一的实际点击效果由 widget 测试兜住，人工点一次即可确认。
-- **相关文件**：`CHAN_RUST/flutter/chan_kline/lib/theme/app_palette.dart`、`lib/theme/theme_settings_store.dart`、`lib/theme/theme_chooser.dart`、`lib/main.dart`、`lib/widgets/kline_chart.dart`、`lib/widgets/chart_level_line_style.dart`、`lib/widgets/kline_chip.dart`、`test/theme_chooser_test.dart`。
-
-### 2026-11-09 · Doubao · 修复 · K0 idx=0 时动态 K1 被画成「小蛇」
-
-- **执行者**：Doubao Agent
-- **任务类型**：主图绘制缺陷修复（纯绘制层，未动任何计算口径）
-- **操作**：`kline_chart.dart` 的单元外框 `_strokeUnitBarFrame` 增加「极扁实体」分支——实体高 < 3 像素（一字线/几乎一字线）时不再按矩形四边描虚线，改为只描一条居中横线，且虚线按该横杠宽度对称排「实-空-实」（定长虚线在一字线上只剩 1.2 像素残段，正是观感锯齿的来源）；`_strokeWickDashFrame` 增加极扁保护——实体 < 3 像素且上下影线合计 < 4 像素时不再画上下两个影线框（两个框会挤在一两个像素里互相错位）。
-- **结果**：K0 只有 idx=0 一根时，K1 那根预锚动态单元（open=high=low=close=11.66，横向 10.2 像素、实体高 1 像素）从「错位锯齿／像一条小蛇」变成一根规整的虚线小横杠（对称两段、3 像素厚），已确认的一字线仍是实线小横杠，虚线=构建中的语义不变。
-- **演示**：App 冷启动停在首根 K（K0 一个红点、K1 一根小横杠），放大 8 倍看边缘平直，无台阶、无残段。
-- **测试**：① 临时在 `_drawK1Candles` 加一次性落盘日志取证，实测 `idx=0 x1=0 x2=0 left=318.8 right=329.0 top=145.2 bottom=146.2 building=true o=h=l=c=11.66`，确认是一字线走虚线框，因 `x1==x2` 无可衔接邻根；取证后调试代码与 `dart:io` 引用已全部删除；② 改后重编（`build=0`、kernel 73,196,624B / 23:35:59、App 新实例 23:36:11）截图逐像素比对：改前 8/5/3 错位三行、改后 5/5/5 对称两段；③ `flutter analyze --no-pub` → error = 0（warning 34 / info 97 均为存量）。
-- **注意事项 / 待办**：① 只改了两个描边函数，判断阈值（3 像素 / 4 像素）是视觉经验值，若日后觉得极扁单元仍偏虚可调阈值；② 已确认一字线不受影响（走的仍是实线分支）；③ 本次只在本机验证，PCB 侧待同步后随编译生效。
-- **相关文件**：`CHAN_RUST/flutter/chan_kline/lib/widgets/kline_chart.dart`。
-
-### 2026-11-09 · Doubao · 改造 · 首分型前 Kn 合并统一「高高」（全层同构）
-
-- **执行者**：Doubao Agent
-- **任务类型**：主图绘制语义对齐（受「层级早生成动态单元」开关门控，关掉逐字段回经典）
-- **操作**：① 新增 `_highHighFrameFromUnits`——把该层预锚单元在首段区间内按 high 取最高、low 取最高的「高高」口径合成一个合并框；② `_drawKlineCombineOnMainChart`（K0 窗口）不再把种子首组直接丢掉，改为用该函数重建成高高首组框再画（其后各组照旧）；③ `_drawK1CombineOnMainChart`（K1 窗口）开关开时不再读永久 `k1CombineFrames`（其首组就是旧种子框、低点取区间真实最低），改走与 Kn≥2 同一套「按当层虚拟单元重算」路径。
-- **结果**：首分型前，K0 窗口是「真实 K0 蜡烛 + 一个高高合并框 + 一条构建中虚线」，K1/Kn 窗口的合并框与连线、K 蜡烛全部同源于预锚单元；逐层同一函数、同一区间，只有最底层原始 K0 蜡烛保持真实 OHLC。
-- **演示**：开关开时首分型前不再出现低点压到区间最低的旧种子框；开关关时外观与改前一致。
-- **测试**：`flutter test test\early_dynamic_unit_test.dart` 10 项全过（含「K1/K2 合并帧跳过种子首组」「首条虚线仍钉高高极值」「首确认当根恢复真实 OHLC」）；`flutter analyze --no-pub` error=0（warning 34 / info 97 存量）；重编 `build=0`、kernel 73,200,728B / 23:51:43、App 新实例 23:51:51。
-- **注意事项 / 待办**：① 只对齐了「合并框 + 连线 + K 蜡烛替身」三件；中枢、相邻比例、买卖点等派生指标尚未逐条改为读预锚单元，需要时另开一条；② 高高会让框体低点抬高、可能不再包住区间最低 K，这是用户确认的字面口径；③ 开关关闭时经典种子框口径完全不变，可随时对照回退。
-- **相关文件**：`CHAN_RUST/flutter/chan_kline/lib/widgets/kline_chart.dart`。
-
+### 2026-11-09 · Doubao · 功能 · App 主题做成深色/浅色/护眼三选一（颜色全收进调色板）
+
+
+
+- **执行者**：Doubao Agent
+
+- **任务类型**：功能改造 / 全局配色重构 / 主题持久化
+
+- **操作**：新增 `lib/theme/app_palette.dart`（三套色板的唯一出入口：具名 token 画布/面板/文字/涨跌/网格/浮层 + 长尾换算 `AppPalette.rgb(0x...)`）、`lib/theme/theme_settings_store.dart`（`.chan_theme_settings.json` 落盘 + `AppThemeController` 切换总线）、`lib/theme/theme_chooser.dart`（设置里的三选一芯片）；把 32 个 dart 文件里 413 处写死色改成走调色板，`ChanKlineApp` 改为跟随主题重建，`MaterialApp` 的 brightness / 底色也从调色板取。
+
+- **结果**：设置面板高级区第一块是「主题外观」，点深色/浅色/护眼立刻整张图重刷（K 线画布、坐标轴、图例、筹码/笔数柱、十字 tooltip、回测与指标检索面板、分笔上传弹窗一起换），不再只换外壳；重启保留上次选的。
+
+- **演示**：深色=原来的黑底，与改造前逐像素一致；浅色=白底深字，红 K/绿 K 保留色相只是压明度；护眼=米黄底，中性灰转暖色。太极加载遮罩也跟着变浅、不再是一块黑饼。
+
+- **测试**：① `flutter analyze --no-pub` → error = 0（warning 34 / info 97 全是存量）；② 新增 `test/theme_chooser_test.dart` 四项全过：点浅色后画布底色变 `0xFFF6F7F9` 且写死字面量不再返回 `0xFF121212`、点护眼变 `0xFFF4EFDF`、点深色回到 `0xFF121212`、写盘后读回同一主题；③ `flutter build windows --debug` 成功（kernel_blob 73,193,288B / 23:15:22）；④ 三套主题各真机截一张图核对（深色/浅色/护眼都出对），浅色与护眼底上 K 线、坐标、K2/K3 空态提示都读得清。
+
+- **注意事项 / 待办**：① 默认主题仍是深色，切回深色保证与旧版一致，是这次改造的安全底线；② 调色板对长尾色的换算是启发式（中性灰明度取反、彩色保留色相压到明度 0.28~0.52、护眼再压色相 42），观感若有偏差只需改 `app_palette.dart` 一个文件，不用再动业务代码；③ 因为 `AppPalette.rgb()` 不是编译期常量，`ChipConfig` / `TickDistConfig` / `YinYangPainter` 的默认色改成「可空 + 运行时解析」，声明处按需从 `const` 改成 `final`；④ 备份与验证用的 `.chan_theme_settings.json` 已加进 `.gitignore`，不入库；⑤ 设置面板的齿轮按钮本轮自动化点击没打中（坐标偏移），面板内三选一的实际点击效果由 widget 测试兜住，人工点一次即可确认。
+
+- **相关文件**：`CHAN_RUST/flutter/chan_kline/lib/theme/app_palette.dart`、`lib/theme/theme_settings_store.dart`、`lib/theme/theme_chooser.dart`、`lib/main.dart`、`lib/widgets/kline_chart.dart`、`lib/widgets/chart_level_line_style.dart`、`lib/widgets/kline_chip.dart`、`test/theme_chooser_test.dart`。
+
+
+
+### 2026-11-09 · Doubao · 修复 · K0 idx=0 时动态 K1 被画成「小蛇」
+
+
+
+- **执行者**：Doubao Agent
+
+- **任务类型**：主图绘制缺陷修复（纯绘制层，未动任何计算口径）
+
+- **操作**：`kline_chart.dart` 的单元外框 `_strokeUnitBarFrame` 增加「极扁实体」分支——实体高 < 3 像素（一字线/几乎一字线）时不再按矩形四边描虚线，改为只描一条居中横线，且虚线按该横杠宽度对称排「实-空-实」（定长虚线在一字线上只剩 1.2 像素残段，正是观感锯齿的来源）；`_strokeWickDashFrame` 增加极扁保护——实体 < 3 像素且上下影线合计 < 4 像素时不再画上下两个影线框（两个框会挤在一两个像素里互相错位）。
+
+- **结果**：K0 只有 idx=0 一根时，K1 那根预锚动态单元（open=high=low=close=11.66，横向 10.2 像素、实体高 1 像素）从「错位锯齿／像一条小蛇」变成一根规整的虚线小横杠（对称两段、3 像素厚），已确认的一字线仍是实线小横杠，虚线=构建中的语义不变。
+
+- **演示**：App 冷启动停在首根 K（K0 一个红点、K1 一根小横杠），放大 8 倍看边缘平直，无台阶、无残段。
+
+- **测试**：① 临时在 `_drawK1Candles` 加一次性落盘日志取证，实测 `idx=0 x1=0 x2=0 left=318.8 right=329.0 top=145.2 bottom=146.2 building=true o=h=l=c=11.66`，确认是一字线走虚线框，因 `x1==x2` 无可衔接邻根；取证后调试代码与 `dart:io` 引用已全部删除；② 改后重编（`build=0`、kernel 73,196,624B / 23:35:59、App 新实例 23:36:11）截图逐像素比对：改前 8/5/3 错位三行、改后 5/5/5 对称两段；③ `flutter analyze --no-pub` → error = 0（warning 34 / info 97 均为存量）。
+
+- **注意事项 / 待办**：① 只改了两个描边函数，判断阈值（3 像素 / 4 像素）是视觉经验值，若日后觉得极扁单元仍偏虚可调阈值；② 已确认一字线不受影响（走的仍是实线分支）；③ 本次只在本机验证，PCB 侧待同步后随编译生效。
+
+- **相关文件**：`CHAN_RUST/flutter/chan_kline/lib/widgets/kline_chart.dart`。
+
+
+
+### 2026-11-09 · Doubao · 改造 · 首分型前 Kn 合并统一「高高」（全层同构）
+
+
+
+- **执行者**：Doubao Agent
+
+- **任务类型**：主图绘制语义对齐（受「层级早生成动态单元」开关门控，关掉逐字段回经典）
+
+- **操作**：① 新增 `_highHighFrameFromUnits`——把该层预锚单元在首段区间内按 high 取最高、low 取最高的「高高」口径合成一个合并框；② `_drawKlineCombineOnMainChart`（K0 窗口）不再把种子首组直接丢掉，改为用该函数重建成高高首组框再画（其后各组照旧）；③ `_drawK1CombineOnMainChart`（K1 窗口）开关开时不再读永久 `k1CombineFrames`（其首组就是旧种子框、低点取区间真实最低），改走与 Kn≥2 同一套「按当层虚拟单元重算」路径。
+
+- **结果**：首分型前，K0 窗口是「真实 K0 蜡烛 + 一个高高合并框 + 一条构建中虚线」，K1/Kn 窗口的合并框与连线、K 蜡烛全部同源于预锚单元；逐层同一函数、同一区间，只有最底层原始 K0 蜡烛保持真实 OHLC。
+
+- **演示**：开关开时首分型前不再出现低点压到区间最低的旧种子框；开关关时外观与改前一致。
+
+- **测试**：`flutter test test\early_dynamic_unit_test.dart` 10 项全过（含「K1/K2 合并帧跳过种子首组」「首条虚线仍钉高高极值」「首确认当根恢复真实 OHLC」）；`flutter analyze --no-pub` error=0（warning 34 / info 97 存量）；重编 `build=0`、kernel 73,200,728B / 23:51:43、App 新实例 23:51:51。
+
+- **注意事项 / 待办**：① 只对齐了「合并框 + 连线 + K 蜡烛替身」三件；中枢、相邻比例、买卖点等派生指标尚未逐条改为读预锚单元，需要时另开一条；② 高高会让框体低点抬高、可能不再包住区间最低 K，这是用户确认的字面口径；③ 开关关闭时经典种子框口径完全不变，可随时对照回退。
+
+- **相关文件**：`CHAN_RUST/flutter/chan_kline/lib/widgets/kline_chart.dart`。
+
+
+
 
 ### 2026-11-10 · Claude · 修复 · 子窗口首框（K1+）按逐根 K 取高高
 
@@ -6581,7 +6614,6 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   5. 色差：指标名称列、图例、十字信息窗、分窗格子底色此前写死深色底浅色字，浅色和护眼主题下整列发暗。统一改走主题色板，底色与主图同一套画布底色，字色随主题变深浅。
 - **结果**：`flutter test` 画板与圆点口径 7 条通过；`flutter analyze` 无新增错误；已用最新代码重新编译并启动软件。
 - **注意事项**：未 push；未改缠论计算口径。圆点是否仍被裁、箭头是否贴住圆心、浅色主题下色差是否消除，需在软件里切到浅色主题打开画板看一眼确认。
-
 ---
 
 ### 2026-11-13 18:57 — 画板每根 K0 都能单独上下拖动
@@ -6605,3 +6637,36 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   3. 垂直方向改为以选中圆点为中心上下展开，并钳制在顶部指标条下沿与底部之间，避免竖排后压到指标条或超出画板。
 - **结果**：SDK `dart analyze lib/widgets/tick_draw_board.dart` 输出 `No issues found!`。
 - **注意事项**：未 push；未改缠论计算口径；仅布局改动，需重启 App（`CHAN_RUST/scripts/build_rust.ps1`）后在画板里选中一根 K0 查看竖排效果与上下边界是否压条。
+
+
+---
+
+### 2026-11-14 10:40 · 首分型前合并框口径（种子框 / 高高 / 低低）设置项
+
+- **执行者**：opencode
+- **任务类型**：功能完成
+- **上下文**：用户要求设置面板新增下拉，选择「首个分型之前」那段合并框的取值口径：种子框（不合并）/ 高高（high、low 都取最大，默认）/ 低低（high、low 都取最小）。明确只改合并框绘制与合并框相关 tooltip 的 MG/MD，不动 GG/DD、动态 K 蜡烛、连线、枢与买卖点。
+- **关键操作**：
+  1. 新增 `models/pre_first_fractal_mode.dart`：枚举 `seedBox`（种子框）/ `highHigh`（高高）/ `lowLow`（低低），默认高高，落盘键 `pre_first_fractal_mode`，缺键或脏值一律回落高高。
+  2. 新增 `compute/pre_first_fractal_compute.dart`：唯一实现 `applyPreFirstFractalMode`（绘制与 tooltip 共用），种子框直接原样返回、不合并；高高/低低把首分型前各框并成一个框，x 从第一根起到最后一个框右端。
+  3. `first_fractal_rule.dart` 新增 `mergePreFractalBox`：包含关系并框的高/低按所选口径取最大或最小；逐对判定本身（双低判顶、双高判底、顶底交替）不变，种子框下不跑逐对判定。
+  4. 主图与各子窗口：`KlineChart` 增加 `preFirstFractalMode`，painter 统一走纯函数，切换后只重画。
+  5. tooltip：`_lookupForPaint` 对 K0 合并框 / 各层合并框 / K1 合并框套同一口径；增量 Lookup 记住口径并重种，十字线上的 MG/MD 与画出来的框同源。
+  6. 设置面板在「层级早生成动态单元」下方新增下拉与说明弹窗；改动只重算当前步进（不 dispose 会话、不清冻结仓）并落盘。
+- **结果**：`flutter analyze` 无 error；新增 `test/pre_first_fractal_mode_test.dart` 14 条全通过；`first_fractal_rule_test.dart` 7 条全通过；`flutter build windows --debug` 编译通过。全量 `flutter test` 剩 8 条失败，已用 `git stash` 做改动前基线对比，确认均为既有失败（筹码 catalog、增量 vs Full 对拍、同价位首分型拉线、斜率子线、寻优用例数、widget 挂载、FFI 环境），与本次无关。
+- **注意事项**：未 push；未改缠论计算口径（不涉及 Rust，无需重编 chan_ffi.dll）。运行态观感（切下拉后框与 MG/MD 是否即时同步）需在软件里点一次确认。
+
+
+---
+
+### 2026-11-14 00:36 · 把主仓库未提交的画板改动接进本 worktree
+
+- **执行者**：opencode
+- **任务类型**：同步 + 重编译
+- **上下文**：用户发现这个 worktree 编出来的 App 缺了一些已有的变化。核实后确认：分支并没有落后，基点就是 ANDROID_RUST 的尖端，领先 4 、落后 0；缺的是主仓库工作区里改了但还没提交的东西，worktree 只能拿到已提交的内容。用户选择把源码三处改动搬过来并重编译。
+- **关键操作**：
+  1. 从主仓库导出未提交差分，先用 git apply --check 确认能干净合上，再应用到本 worktree。三处改动：按住圆点改价时关掉整图平移，让每根 K0 都能单独上下拖动；画板选中 K 线旁边的增加／减少／复制三个按钮由横排改成竖排；配套单测。
+  2. lutter test test/tick_draw_board_test.dart 4 条全通过。
+  3. 本次只改界面、缠论内核没动，跳过两段不必要的 Rust 重编，直接 lutter build windows --debug，日志末尾确认编出新的 chan_kline.exe，并启动。
+- **结果**：新 App 已启动（进程 47044），同时带上首分型前合并框三种口径与这两处画板修复。
+- **注意事项**：未 push；未改缠论计算口径。主仓库那边的未提交改动仍原样留着，本次只是拷贝，没有动它。主仓库的 TEST 自定义股票数据（只剩 5 根 K）未同步，本 worktree 仍是旧的 98 根，是否要一并搬过来待用户决定。

@@ -12,6 +12,7 @@ import '../models/k1_bar_view.dart';
 import '../models/tick_dist_config.dart';
 import '../models/kline_bar.dart';
 import '../models/kline_combine_bundle.dart';
+import '../models/pre_first_fractal_mode.dart';
 import '../theme/app_palette.dart';
 import 'chart_sync_controller.dart';
 import 'crosshair_tooltip_bridge.dart';
@@ -201,6 +202,7 @@ class TickDrawBoard extends StatefulWidget {
     required this.subIndicators,
     required this.truncationCheck,
     required this.earlyDynamicUnit,
+    this.preFirstFractalMode = PreFirstFractalMode.defaultMode,
     required this.showBuildingDash,
     required this.chipConfig,
     required this.tickDistConfig,
@@ -215,6 +217,7 @@ class TickDrawBoard extends StatefulWidget {
   final Set<SubChartIndicator> subIndicators;
   final bool truncationCheck;
   final bool earlyDynamicUnit;
+  final PreFirstFractalMode preFirstFractalMode;
   final bool showBuildingDash;
   final ChipConfig chipConfig;
   final TickDistConfig tickDistConfig;
@@ -347,6 +350,7 @@ class _TickDrawBoardState extends State<TickDrawBoard>
       stepSerial: model.points.length,
       truncationCheck: widget.truncationCheck,
       earlyDynamicUnit: widget.earlyDynamicUnit,
+      preFirstFractalMode: widget.preFirstFractalMode,
       showBuildingDash: widget.showBuildingDash,
       chipConfig: widget.chipConfig,
       tickDistConfig: widget.tickDistConfig,
