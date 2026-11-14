@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../chart/kline_candle_geometry.dart';
 import '../chart/level_window_layout.dart';
 import '../compute/k1_bar_view_compute.dart';
 import '../models/bar_feature_lookup.dart';
@@ -12,11 +13,12 @@ import '../models/kline_bar.dart';
 import '../models/kline_combine_bundle.dart';
 import '../models/tick_dist_config.dart';
 import 'package:chan_kline/theme/app_palette.dart';
+import 'candle_wick.dart';
 import 'chart_sync_controller.dart';
-import 'kline_viewport.dart';
 import 'crosshair_tooltip_bridge.dart';
 import 'crosshair_tooltip_panel.dart';
 import 'kline_chart.dart';
+import 'kline_viewport.dart';
 import 'level_chart_grid.dart';
 
 const Map<String, String> kKlineDrawPeriods = <String, String>{
@@ -68,6 +70,14 @@ class KlineDrawDraft {
   final double high;
   final double low;
   final double close;
+
+  /// 带上拖动路径的极值（帮助文字承诺：路径最高=最高价，路径最低=最低价）。
+  KlineDrawDraft withExtremes(double hi, double lo) => KlineDrawDraft(
+        open: open,
+        close: close,
+        high: math.max(hi, math.max(open, close)),
+        low: math.min(lo, math.min(open, close)),
+      );
 }
 
 class KlineDrawWindowMode {
@@ -156,6 +166,17 @@ class KlineDrawBoardModel {
     return copyWith(candles: next, selected: next.length - 1);
   }
 
+  /// 在 [index] 处插入一根 K 线；index 为 null 或越界时追加到末尾。
+  ///
+  /// 画板的核心口径：新 K 落在光标所在的 K 位置，而不是永远排在最后。
+  KlineDrawBoardModel insertCandleAt(KlineDrawCandle candle, int? index) {
+    final at = (index == null || index < 0 || index > candles.length)
+        ? candles.length
+        : index;
+    final next = [...candles]..insert(at, candle);
+    return copyWith(candles: next, selected: at);
+  }
+
   KlineDrawBoardModel select(int index) {
     if (candles.isEmpty) return this;
     return copyWith(selected: index.clamp(0, candles.length - 1));
@@ -181,16 +202,50 @@ class KlineDrawBoardModel {
 
   KlineDrawBoardModel removeSelected() => deleteSelected();
 
-  KlineDrawBoardModel moveSelectedExtreme(double price) {
+  /// 拖动选中 K 线的某个部位：把该部位的价格改到 [price]。
+  ///
+  /// 四个部位彼此独立：实体中段上/下半分别改开盘/收盘价（按阳线阴线
+  /// 判断哪半是开、哪半是收），上下影线端点分别改最高/最低价。
+  /// 改完仍要满足 K 线不变量：high >= max(open,close)、low <= min(open,close)。
+  KlineDrawBoardModel moveSelectedPart(CandlePart part, double price) {
     if (!hasSelection) return this;
-    final c = candles[selected];
-    final up = c.close >= c.open;
+    return movePartAt(selected, part, price);
+  }
+
+  /// 拖动第 [index] 根 K 的某个部位：把该部位的价格改到 [price]。
+  ///
+  /// 按下瞬间「选中」还没回传到模型（要等父组件重建才生效），若此时只认
+  /// [selected]，第一帧位移会被吞掉。故按**下标**改价，与选中状态解耦。
+  KlineDrawBoardModel movePartAt(int index, CandlePart part, double price) {
+    if (index < 0 || index >= candles.length) return this;
+    final c = candles[index];
+    var open = c.open;
+    var close = c.close;
+    var high = c.high;
+    var low = c.low;
+    switch (part) {
+      case CandlePart.bodyOpen:
+        open = price;
+        break;
+      case CandlePart.bodyClose:
+        close = price;
+        break;
+      case CandlePart.high:
+        high = price;
+        break;
+      case CandlePart.low:
+        low = price;
+        break;
+    }
+    // 守住不变量：影线不得落进实体内部。
+    high = math.max(high, math.max(open, close));
+    low = math.min(low, math.min(open, close));
     final next = [...candles];
-    next[selected] = KlineDrawCandle(
-      open: c.open,
-      close: c.close,
-      high: up ? math.max(price, math.max(c.open, c.close)) : c.high,
-      low: up ? c.low : math.min(price, math.min(c.open, c.close)),
+    next[index] = KlineDrawCandle(
+      open: open,
+      high: high,
+      low: low,
+      close: close,
       volume: c.volume,
     );
     return copyWith(candles: next);
@@ -342,6 +397,19 @@ class _KlineDrawBoardState extends State<KlineDrawBoard> {
 
   KlineDrawBoardModel get model => widget.model;
   KlineCombineBundle get bundle => widget.bundle;
+  /// 草稿 K 落在光标所在的 K 下标（null=落在末尾）。
+  int? _draftBarIdx;
+  /// 画板自己算出来的 K0 视口几何（与图表绘制同源）。
+  KlineDrawGeometry? _geom;
+  /// 最近一次 K0 窗格尺寸（拖动回调里要重算价格区间）。
+  double _lastPaneWidth = 0;
+  /// 本次拖动路径上的价格极值（帮助文字承诺的口径）。
+  double? _pathHigh;
+  double? _pathLow;
+  /// 本次拖动冻结的基准价（部位对应的原始价格）。
+  double? _dragBasePrice;
+  /// 本次拖动冻结的基准几何（拖动期间价格区间会变，不冻结会漂移）。
+  KlineDrawGeometry? _dragBaseGeom;
 
   @override
   void initState() {
@@ -359,21 +427,10 @@ class _KlineDrawBoardState extends State<KlineDrawBoard> {
 
   @override
   Widget build(BuildContext context) {
-    final bars = [
-      ...model.toBars(),
-      if (_draft != null)
-        KlineBar(
-          idx: model.candles.length,
-          timeMs: 0,
-          timeText: '',
-          open: _roundPrice(_draft!.open),
-          high: _roundPrice(_draft!.high),
-          low: _roundPrice(_draft!.low),
-          close: _roundPrice(_draft!.close),
-          volume: 0,
-          amount: 0,
-        ),
-    ];
+    // 草稿 K **不进** chart 的 bars：进了会让价格区间跟着草稿走，
+    // 拖动过程中像素↔价格映射会漂移（拖动自己追自己，还凭空多出影线）。
+    // 草稿改由 _pane 的覆盖层画（与主图同源几何，但不参与区间计算）。
+    final bars = model.toBars();
     final views = buildK1BarViews(bundle.k1Bars);
     return Material(
       color: AppPalette.canvasBg,
@@ -477,9 +534,11 @@ class _KlineDrawBoardState extends State<KlineDrawBoard> {
           tooltipBridge: _tooltipBridge,
           dockTooltipPanel: true,
           onCandleDraw: primary ? _onDraw : null,
-          onTickDotTap: primary ? _selectCandle : null,
-          onTickDotDrag: primary ? _dragSelectedExtreme : null,
-          selectedTickIdx: primary && model.hasSelection ? model.selected : -1,
+          // 部位抓取/拖动：K线画板专用通道（分笔画板不接，互不影响）。
+          onCandlePartGrab: primary ? _grabCandlePart : null,
+          onCandlePartDrag: primary ? _dragCandlePart : null,
+          onCandlePartDragEnd: primary ? _endCandlePartDrag : null,
+          onViewportChanged: primary ? _onViewportChanged : null,
           onMainIndicatorsChanged: widget.onMainIndicatorsChanged,
           onSubIndicatorsChanged: widget.onSubIndicatorsChanged,
         ),
@@ -511,9 +570,12 @@ class _KlineDrawBoardState extends State<KlineDrawBoard> {
               },
             ),
           ),
-        if (primary && model.hasSelection)
+        if (primary)
           LayoutBuilder(builder: (context, constraints) {
+            _lastPaneWidth = constraints.maxWidth;
             _lastPaneHeight = constraints.maxHeight;
+            _geom = _geometry(_lastPaneWidth, _lastPaneHeight);
+            if (!model.hasSelection) return const SizedBox.shrink();
             final box = _selectedBox(constraints.biggest);
             if (box == null) return const SizedBox.shrink();
             return Stack(children: [
@@ -533,42 +595,104 @@ class _KlineDrawBoardState extends State<KlineDrawBoard> {
               ),
             ]);
           }),
+        if (primary && _draft != null)
+          Positioned.fill(
+            child: IgnorePointer(
+              child: CustomPaint(
+                painter: _DraftCandlePainter(
+                  draft: _draft!,
+                  geom: _geom,
+                  barIdx: _draftBarIdx,
+                  barCount: model.candles.length,
+                ),
+              ),
+            ),
+          ),
       ],
+    );
+  }
+
+  /// K0 视口几何：与 KlineChart 的绘制口径逐项对齐。
+  ///
+  /// 关键：**用可见 K 的价格区间**（图表实际画的那一段），不用全量；
+  /// plotTop 走 KlineViewport.padT（桌面布局，KlineChart._resolveMainPlotTop
+  /// 在非 mobile 下就返回 padT）；plotH = mainH - padT - padB，**不用魔数 56**。
+  KlineDrawGeometry? _geometry(double width, double height) {
+    final vp = _sync.viewportFor(0);
+    if (!vp.ready || width <= 0 || height <= 0) return null;
+    final mainH = height * _sync.mainFraction;
+    const plotTop = KlineViewport.padT;
+    final plotH = math.max(1.0, mainH - plotTop - KlineViewport.padB);
+    final visible = vp.visibleBars(model.toBars());
+    if (visible.isEmpty) return null;
+    final range = vp.priceRangeFor(visible);
+    return KlineDrawGeometry(
+      viewport: vp,
+      range: range,
+      plotTop: plotTop,
+      plotH: plotH,
+      canvasWidth: width,
     );
   }
 
   Rect? _selectedBox(Size size) {
     if (!model.hasSelection || size.width <= 0 || size.height <= 0) return null;
+    final g = _geometry(size.width, size.height);
+    if (g == null) return null;
     final bars = model.toBars();
-    final vp = _sync.viewportFor(0);
-    final mainH = size.height * _sync.mainFraction;
-    final plotTop = KlineViewport.padT;
-    final plotH = math.max(1.0, mainH - plotTop - KlineViewport.padB);
-    final range = vp.priceRangeFor(bars);
-    final c = bars[model.selected];
-    final x = vp.barCenterX(model.selected, size.width);
-    final top = range.yOf(c.high, plotTop, plotH);
-    final bottom = range.yOf(c.low, plotTop, plotH);
+    final idx = model.selected;
+    if (idx < 0 || idx >= bars.length) return null;
+    final c = bars[idx];
+    final x = g.viewport.barCenterX(idx, size.width);
+    final top = g.yOf(c.high);
+    final bottom = g.yOf(c.low);
     return Rect.fromLTRB(x - 8, top, x + 8, bottom);
   }
 
-  void _selectCandle(int index) {
-    final next = model.hasSelection && model.selected == index
-        ? model.clearSelection()
-        : model.select(index);
-    widget.onChanged(next);
-  }
-
-  void _dragSelectedExtreme(int index, double dx, double dy) {
+  /// 按住某根 K 线的部位：选中它，并冻结本次拖动的基准价与基准几何。
+  ///
+  /// 基准必须冻结：拖动过程中价格区间会随这根 K 的高低点变，若每帧都拿
+  /// 「当前价 + 本帧位移」重算，会一点点漂移（拖不准）。
+  void _grabCandlePart(int index, CandlePart part) {
+    final bars = model.toBars();
+    if (index < 0 || index >= bars.length) return;
+    final c = bars[index];
+    _dragBasePrice = switch (part) {
+      CandlePart.bodyOpen => c.open,
+      CandlePart.bodyClose => c.close,
+      CandlePart.high => c.high,
+      CandlePart.low => c.low,
+    };
+    _dragBaseGeom = _geom ?? _geometry(_lastPaneWidth, _lastPaneHeight);
     if (!model.hasSelection || model.selected != index) {
       widget.onChanged(model.select(index));
-      return;
     }
-    final vp = _sync.viewportFor(0);
-    final range = vp.priceRangeFor(model.toBars());
-    final plotH = math.max(1.0, _lastPaneHeight * _sync.mainFraction - 56);
-    final price = model.candles[index].high - dy * range.span / plotH;
-    widget.onChanged(model.moveSelectedExtreme(price));
+  }
+
+  /// 拖动部位改价：像素位移 → 价格（与绘制互逆，拖 1 像素就动 1 像素对应价）。
+  ///
+  /// [dy] 是「从按下点到当前点」的累计位移（图表侧固定按下点不重置）。
+  void _dragCandlePart(int index, CandlePart part, double dx, double dy) {
+    final g = _dragBaseGeom;
+    final base = _dragBasePrice;
+    if (g == null || base == null) return;
+    final bars = model.toBars();
+    if (index < 0 || index >= bars.length) return;
+    // 像素位移 → 价格：priceFromY 与 yOf 互逆，dy 为正（向下）= 价格变低。
+    final endPrice = g.priceAt(g.yOf(base) + dy);
+    widget.onChanged(model.movePartAt(index, part, endPrice));
+  }
+
+  /// 拖动结束：清掉冻结的基准（下次拖动重新冻结）。
+  void _endCandlePartDrag() {
+    _dragBasePrice = null;
+    _dragBaseGeom = null;
+  }
+
+  /// 视口（缩放/平移/换数据）变化后重算几何与选中框。
+  void _onViewportChanged() {
+    if (!mounted) return;
+    setState(() => _geom = _geometry(_lastPaneWidth, _lastPaneHeight));
   }
 
   Widget _roundAction(IconData icon, VoidCallback onTap) {
@@ -586,21 +710,137 @@ class _KlineDrawBoardState extends State<KlineDrawBoard> {
       ),
     );
   }
-
-  void _onDraw(double startPrice, double currentPrice, bool finished) {
-    final draft = buildKlineDrawDraft(startPrice, currentPrice);
+  void _onDraw(
+    double startPrice,
+    double currentPrice,
+    bool finished,
+    int? cursorBarIdx,
+  ) {
     if (!finished) {
-      setState(() => _draft = draft);
+      // 累积路径极值：起点与当前点都算路径上的点。
+      _pathHigh = _pathHigh == null
+          ? math.max(startPrice, currentPrice)
+          : math.max(_pathHigh!, math.max(startPrice, currentPrice));
+      _pathLow = _pathLow == null
+          ? math.min(startPrice, currentPrice)
+          : math.min(_pathLow!, math.min(startPrice, currentPrice));
+      setState(() {
+        _draft = buildKlineDrawDraft(startPrice, currentPrice)
+            .withExtremes(_pathHigh!, _pathLow!);
+        _draftBarIdx = cursorBarIdx;
+      });
       return;
     }
-    setState(() => _draft = null);
-    widget.onChanged(model.addCandle(KlineDrawCandle(
+    // 落盘：用整段路径累积的极值（帮助文字承诺：路径最高=最高价，最低=最低价）。
+    final hi = _pathHigh ?? math.max(startPrice, currentPrice);
+    final lo = _pathLow ?? math.min(startPrice, currentPrice);
+    final candle = KlineDrawCandle(
+      open: startPrice,
+      close: currentPrice,
+      high: math.max(hi, math.max(startPrice, currentPrice)),
+      low: math.min(lo, math.min(startPrice, currentPrice)),
+    );
+    setState(() {
+      _draft = null;
+      _draftBarIdx = null;
+      _pathHigh = null;
+      _pathLow = null;
+    });
+    // 新 K 落在光标所在的 K 位置（不是永远排在最后）。
+    widget.onChanged(model.insertCandleAt(candle, cursorBarIdx));
+  }
+
+  static const double _tooltipPanelWidth = 360;
+}
+
+/// 画板草稿 K 的覆盖层绘制：与主图蜡烛同源几何（`kline_candle_geometry.dart`）。
+///
+/// 草稿**不进**主图的 bars（进了会让价格区间跟着草稿变，拖动时映射漂移），
+/// 所以单独画一层；几何仍走同一套 `candleGeometryOf`，故画出来与真 K 一致。
+class _DraftCandlePainter extends CustomPainter {
+  _DraftCandlePainter({
+    required this.draft,
+    required this.geom,
+    required this.barIdx,
+    required this.barCount,
+  });
+
+  final KlineDrawDraft draft;
+  final KlineDrawGeometry? geom;
+  final int? barIdx;
+  final int barCount;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final g = geom;
+    if (g == null) return;
+    final at = (barIdx == null || barIdx! < 0 || barIdx! > barCount)
+        ? barCount
+        : barIdx!;
+    final bar = KlineBar(
+      idx: at,
+      timeMs: 0,
+      timeText: '',
       open: draft.open,
       high: draft.high,
       low: draft.low,
       close: draft.close,
-    )));
+      volume: 0,
+      amount: 0,
+    );
+    final geo = g.geometryOf(bar, at);
+    final color = draft.close >= draft.open
+        ? AppPalette.rgb(0xFFE53935)
+        : AppPalette.rgb(0xFF26A69A);
+    // 影线：只画实体之外的两段（与主图 _drawCandleWick 同语义）。
+    final wickW = candleWickWidth(geo.barW);
+    final wick = Paint()
+      ..color = color
+      ..style = PaintingStyle.fill;
+    if (geo.yHigh < geo.bodyTop - 0.5) {
+      canvas.drawRect(
+        Rect.fromLTRB(
+          geo.cx - wickW / 2,
+          geo.yHigh,
+          geo.cx + wickW / 2,
+          geo.bodyTop,
+        ),
+        wick,
+      );
+    }
+    if (geo.yLow > geo.bodyBottom + 0.5) {
+      canvas.drawRect(
+        Rect.fromLTRB(
+          geo.cx - wickW / 2,
+          geo.bodyBottom,
+          geo.cx + wickW / 2,
+          geo.yLow,
+        ),
+        wick,
+      );
+    }
+    // 实体：半透明填充 + 实边，表示「还没落定」。
+    canvas.drawRect(
+      geo.bodyRect,
+      Paint()..color = color.withValues(alpha: 0.45),
+    );
+    canvas.drawRect(
+      geo.bodyRect,
+      Paint()
+        ..color = color
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.2,
+    );
   }
 
-  static const double _tooltipPanelWidth = 360;
+  @override
+  bool shouldRepaint(covariant _DraftCandlePainter oldDelegate) {
+    return oldDelegate.draft.open != draft.open ||
+        oldDelegate.draft.close != draft.close ||
+        oldDelegate.draft.high != draft.high ||
+        oldDelegate.draft.low != draft.low ||
+        oldDelegate.barIdx != barIdx ||
+        oldDelegate.barCount != barCount ||
+        oldDelegate.geom != geom;
+  }
 }
