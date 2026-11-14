@@ -6706,3 +6706,27 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   - `cargo test -p chan_data` 151 通过、6 失败；失败项为 offline 3 条 + pipeline 3 条，已在 HEAD 版本的独立 worktree 上对拍，同样失败，属仓库既有红，非本次引入。
   - 未改缠论计算口径；未启动 App；未改 `AGENTS.md`。
 - **注意事项**：本轮按要求未重跑 `cargo test`（一次约 7 分钟），沿用上面对拍结论；`cargo test` 的 6 条既有红仍待后续单独处理。推送只走 `origin`，未推 `peer` 远端，未改分支名、未 rebase / reset / checkout。`.chan_sync_settings.json` 与 `build_rust_run.log.prev_001722.bak` 仍在工作区（已被 .gitignore 忽略，未入库）。
+
+---
+
+### 2026-11-15 06:10 — K线画板操作问题修复（缺陷 A–G：落光标处、拖部位改价、几何同源、数据源互斥）
+
+- **执行者**：omp
+- **任务类型**：缺陷修复 / 界面交互
+- **上下文**：用户报「K线画板操作问题」。排查后确认 K线画板从建立起就没有自己的几何/命中层，整块功能是搭在「分笔圆点命中」那条只认识 `close` 价格的旧通道上，由此派生 7 个缺陷（A 新 K 落在序列末尾不在鼠标处；B 按住 K 线实体没反应反而多出一根；C 只能单向拖，阳线只能调高阴线只能调低；D 拖动换算与图表几何不同源，拖不准；E 选中框错位、缩放后不跟随；F 说明文字与实现不符；G 两个画板数据源互相打架）。改动全部在 Flutter 界面/交互层，**不动 Rust 缠论内核**，不改任何缠论计算逻辑，故不触发 AGENTS.md「确认执行」门禁（该门禁覆盖 Rust `chan_data` 内核、步进/冻结/会话合并、主图绘制语义、`chan_bridge` 管道）。
+- **关键操作**：
+  1. **新建共享几何层** `lib/chart/kline_candle_geometry.dart`：把「K 线实体的绘制/命中/聚焦框」几何抽成单一来源（照抄分笔画板 `tick_dot_geometry.dart` 的先例结构）。含 `CandlePart` 枚举（实体开/收、上/下影线端点）、`CandleGeometry`（实体矩形 + 上下影线段）、`candleGeometryOf()`（实体宽 `max(1, slotW*0.65)`，与 `_drawCandles` 同口径）、`candleBodyPart()`（按阳线阴线判哪半是开、哪半是收）、`KlineDrawGeometry`（画板 K0 视口几何）。
+  2. **图表新开一条「实体部位抓取」通道**（`kline_chart.dart`）：`onCandlePartGrab` / `onCandlePartDrag` / `onCandlePartDragEnd` 三参数 + `_hitCandlePart()` 命中判定。**不复用** `onTickDotTap`/`onTickDotDrag`——那条通道语义是「tick 圆点」，只匹配 `b.close` 的 y，抓不到实体。命中优先级写死：影线端点（容差 3 像素，取最近）→ 上下影线段 → 实体上/下半。同时给 `onCandleDraw` 加 `cursorBarIdx` 参数（光标所在 K 下标），新增 `barIndexAtPointer()`。
+  3. **画板改「部位拖动」语义**：模型新增 `moveSelectedPart(part, price)`（四个部位各自独立改一个价，守住 high ≥ max(open,close)、low ≤ min(open,close) 不变量）与 `movePartAt(index, ...)`（按**下标**改价，与选中状态解耦）、`insertCandleAt(candle, index)`（新 K 落在光标位置而非末尾）、`KlineDrawDraft.withExtremes()`（路径极值=最高/最低价，落实帮助文字承诺）。
+  4. **画板几何同源**：新增 `_geometry()` 用**可见 K** 的价格区间（`vp.visibleBars` → `vp.priceRangeFor`），plotTop 走 `KlineViewport.padT`、plotH = mainH − padT − padB，**不再用魔数 56**；`_selectedBox()` 改用同源几何；画板补接 `onViewportChanged`（此前从未接过，缩放后选中框不跟随）。
+  5. **修主副图分割把手抢指针**：把手在 Stack 里盖在图表 Listener **上面**，指针先到它；它那一带（主图底边 28 像素）正好盖住影线端点 → 拖影线变成拖分割条（窗格高度跟着变，K 线在屏幕上滑动）。改为画板模式下把手让位给图表自己的指针通道，并在 `_onPointerDown` 里按「抓到 K 线部位还是空白」分流。
+  6. **修拖动漂移两处根因**：① 拖动期间**冻结价格区间**（`_frozenPriceRange`）——否则被拖的 K 一变形，区间就跟着变，像素↔价格映射在拖动中漂移；② 拖动基准价与基准几何在按下时**冻结**（`_dragBasePrice`/`_dragBaseGeom`），不再每帧拿「当前价 + 本帧位移」重算。
+  7. **草稿 K 改走覆盖层**：草稿**不进** chart 的 bars——进了会让价格区间跟着草稿变，拖动自己追自己，还凭空多出影线。草稿改由画板 `_DraftCandlePainter` 单独画一层，几何仍走同一套 `candleGeometryOf`，故画出来与真 K 一致。
+  8. **修数据源互斥**（`main.dart`，不改 Rust 加载优先级，保持两个文件）：分笔画板打开时若 `custom.1m.csv` 存在 → 按 1 分钟周期加载再转成分笔点并弹提示；分笔画板保存时若 `custom.1m.csv` 在 → 提示「分笔数据暂不生效」；K线画板保存时若 `custom.ohlc.csv` 在 → 反向提示。帮助文字第 4 条与实现对齐，并新增「落在光标位置」「拖实体/影线改价」两条（条号顺延）。
+- **结果**：
+  - `dart analyze lib`：无新增告警（改动前后 `kline_chart.dart`+`kline_draw_board.dart` 均为 7 条既有告警，`main.dart` 均为 15 条既有告警）。
+  - `flutter test test/kline_draw_board_test.dart test/kline_draw_board_widget_test.dart test/tick_draw_board_test.dart test/k0_dot_render_test.dart`：21 条全过。
+  - 全量 `flutter test`：742 通过 / 7 失败；7 条失败全在 `chip_profile_test.dart`、`robot_verify_full_suite_test.dart`、`phase2b3_lookup_profile_test.dart`（筹码分布 catalog 迁移、寻优用例数 41<42、查找性能基准），与画板无关。已用 `git stash` 把本轮改动全部移开、在干净基线上复跑 `chip_profile_test.dart` + `robot_verify_full_suite_test.dart`，**同样失败**，确认属仓库既有红、非本次引入。
+  - 端到端验证覆盖了原先失效的路径：按住实体中段改收盘价、按住实体下半改开盘价、按住上影线端点只改最高价、按住下影线端点只改最低价、拖动不新增 K 线、新 K 落在光标位置而非末尾。
+  - 未改 Rust 代码、未重编 `chan_ffi.dll`、未改缠论计算口径、未改 `AGENTS.md`。
+- **注意事项**：本轮只做界面层修复，**未启动 App 做手工 UI 验收**（验收面是鼠标交互，widget 测试已覆盖等价路径），若要肉眼确认「拖影线端点」「缩放后选中框跟随」等手感项，需再跑一次 `flutter build windows --debug` 并人工过一遍清单。未 push（按 AGENTS.md，push 前须用户确认）。
