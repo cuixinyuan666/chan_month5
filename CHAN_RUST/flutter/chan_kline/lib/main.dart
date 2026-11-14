@@ -238,6 +238,8 @@ Future<void> main() async {
   MsgHistory.instance.appendKnLineSlope();
   // 主图 K{n}三极平行线 / K{n}顶底对弦线
   MsgHistory.instance.appendKnFxExtendLines();
+  // 主图无脑买入线段（相邻两段价格区间完全分开）
+  MsgHistory.instance.appendKnWnmrSegment();
   // 主图 Kn趋势线（段内支撑/压力）
   MsgHistory.instance.appendKnTrendLine();
   // 主图 K{n}底极贴合线 / K{n}顶极贴合线

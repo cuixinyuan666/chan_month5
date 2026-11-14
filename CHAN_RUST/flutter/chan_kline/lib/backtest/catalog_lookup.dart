@@ -1159,6 +1159,7 @@ List<double?>? _extendedPlotSeries({
         // 2026-10-09 补（V4）：这三个在目录里已登记，却没进白名单，
         // 条件求值恒返回空 → 引用它们的策略永远不出信号且不报错。
         head == 'FX_CHORD_TRANSLATED' ||
+        head == 'WNMR_SEGMENT' ||
         head == 'FX_BOTTOM_SNUG' ||
         head == 'FX_TOP_SNUG') {
       return _geometryPriceSeries(
@@ -1250,6 +1251,12 @@ List<double?> _geometryPriceSeries({
             : null;
   } else if (parsed.rest[0] == 'FX_CHORD_TRANSLATED') {
     featureKey = 'fx_chord_translated_price_$kn';
+  } else if (parsed.rest[0] == 'WNMR_SEGMENT' && parsed.rest.length >= 2) {
+    featureKey = parsed.rest[1] == 'BUY'
+        ? 'wnmr_segment_buy_$kn'
+        : parsed.rest[1] == 'SELL'
+            ? 'wnmr_segment_sell_$kn'
+            : null;
   } else if (parsed.rest[0] == 'FX_BOTTOM_SNUG') {
     featureKey = 'fx_bottom_snug_price_$kn';
   } else if (parsed.rest[0] == 'FX_TOP_SNUG') {

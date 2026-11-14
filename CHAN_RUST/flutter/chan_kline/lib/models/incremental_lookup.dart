@@ -5,6 +5,7 @@ import '../compute/divergence_compute.dart';
 import '../compute/divergence_freeze_store.dart';
 import '../compute/fractal_judgment_compute.dart';
 import '../compute/fx_extend_line_compute.dart';
+import '../compute/wnmr_segment_compute.dart';
 import '../compute/kn_volume_series_compute.dart';
 import '../compute/line_slope_compute.dart';
 import '../compute/math_classic_compute.dart';
@@ -1118,6 +1119,28 @@ class IncrementalBarFeatureLookup {
         focusX: x,
       );
       if (cPx != null) sub['fx_chord_translated_price_$dkn'] = cPx;
+    }
+    for (var dkn = 0; dkn <= maxLevel; dkn++) {
+      LevelBundle? level;
+      for (final lv in bundle.levels) {
+        if (lv.level == dkn) {
+          level = lv;
+          break;
+        }
+      }
+      final segments = level?.segments ?? const <LevelSegmentN>[];
+      if (segments.length < 2) continue;
+      final visible = [
+        for (final s in segments)
+          if (s.endConfirmX <= x) s,
+      ];
+      for (final mark in wnmrSegmentMarks(visible)) {
+        if (mark.barIndex != x) continue;
+        final key = mark.side == 'buy'
+            ? 'wnmr_segment_buy_$dkn'
+            : 'wnmr_segment_sell_$dkn';
+        sub[key] = mark.price;
+      }
     }
     final trendMaxD = maxLevel >= 1 ? maxLevel - 1 : -1;
     for (var dkn = 0; dkn <= trendMaxD; dkn++) {

@@ -26,6 +26,7 @@ import '../compute/kn_volume_series_compute.dart';
 import '../compute/adjacent_ratio_compute.dart';
 import '../compute/line_slope_compute.dart';
 import '../compute/fx_extend_line_compute.dart';
+import '../compute/wnmr_segment_compute.dart';
 import '../compute/fx_pole_snug_compute.dart';
 import '../compute/trend_line_compute.dart';
 import '../compute/trend_model_compute.dart';
@@ -3748,6 +3749,15 @@ class _KlineCompositePainter extends CustomPainter {
             slotW,
             ind.kn,
           );
+        } else if (ind.kind == MainIndicatorKind.wnmrSegment) {
+          _drawWnmrSegment(
+            canvas,
+            size.width,
+            plotTop,
+            plotH,
+            slotW,
+            ind.kn,
+          );
         } else if (ind.kind == MainIndicatorKind.trendLine) {
           _drawTrendLine(
             canvas,
@@ -4937,6 +4947,69 @@ class _KlineCompositePainter extends CustomPainter {
         ray: ray,
         displayKn: displayKn,
       );
+    }
+  }
+
+  /// 主图无脑买入线段：相邻两段价格区间完全分开才画标记。
+  void _drawWnmrSegment(
+    Canvas canvas,
+    double w,
+    double plotTop,
+    double plotH,
+    double slotW,
+    int kn,
+  ) {
+    if (kn < 0 || bars.isEmpty) return;
+    final asOf = segAsOf;
+    final source = asOf != null
+        ? (zsAsOfBundle?.levels ?? const <LevelBundle>[])
+        : levels;
+    LevelBundle? bundle;
+    for (final lv in source) {
+      if (lv.level == kn) {
+        bundle = lv;
+        break;
+      }
+    }
+    final segments = bundle?.segments ?? const <LevelSegmentN>[];
+    if (segments.length < 2) return;
+    final visible = asOf == null
+        ? segments
+        : [
+            for (final s in segments)
+              if (s.endConfirmX <= asOf) s,
+          ];
+    final marks = wnmrSegmentMarks(visible);
+    final range = priceRange;
+    for (final mark in marks) {
+      if (mark.barIndex < viewport.viewXMin.floor() ||
+          mark.barIndex > viewport.viewXMax.ceil()) {
+        continue;
+      }
+      final buy = mark.side == 'buy';
+      final color = buy ? const Color(0xFFE53935) : const Color(0xFF26A69A);
+      final center = Offset(
+        _barCenterX(mark.barIndex, w, slotW),
+        range.yOf(mark.price, plotTop, plotH),
+      );
+      final paint = Paint()
+        ..color = color
+        ..style = PaintingStyle.fill;
+      if (buy) {
+        final path = Path()
+          ..moveTo(center.dx, center.dy - 7)
+          ..lineTo(center.dx - 6, center.dy + 5)
+          ..lineTo(center.dx + 6, center.dy + 5)
+          ..close();
+        canvas.drawPath(path, paint);
+      } else {
+        final path = Path()
+          ..moveTo(center.dx, center.dy + 7)
+          ..lineTo(center.dx - 6, center.dy - 5)
+          ..lineTo(center.dx + 6, center.dy - 5)
+          ..close();
+        canvas.drawPath(path, paint);
+      }
     }
   }
 

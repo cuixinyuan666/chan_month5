@@ -255,6 +255,7 @@ List<IndicatorLegendGroup> buildIndicatorLegends({
       case MainIndicatorKind.zs:
       case MainIndicatorKind.fxTripleParallel:
       case MainIndicatorKind.fxChordTranslated:
+      case MainIndicatorKind.wnmrSegment:
       case MainIndicatorKind.fxBottomSnug:
       case MainIndicatorKind.fxTopSnug:
       case MainIndicatorKind.demark:
