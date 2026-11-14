@@ -103,6 +103,7 @@ import 'widgets/kline_axis_format.dart';
 import 'widgets/yin_yang_mark.dart';
 import 'widgets/yin_yang_native_overlay.dart';
 import 'widgets/test_ohlc_editor_dialog.dart';
+import 'widgets/kline_draw_board.dart';
 import 'widgets/tick_draw_board.dart';
 import 'window_work_area.dart';
 import 'robot_verify/robot_verify_app.dart';
@@ -535,6 +536,9 @@ class _KlineHomePageState extends State<KlineHomePage>
   bool _tickDrawBoardOpen = false;
   TickDrawBoardModel? _tickDrawBoard;
   KlineCombineBundle? _tickDrawBundle;
+  bool _klineDrawBoardOpen = false;
+  KlineDrawBoardModel? _klineDrawBoard;
+  KlineCombineBundle _klineDrawBundle = KlineCombineBundle.empty();
   /// 筹码分布配置（落盘 .chan_chip_config.json）
   ChipConfig _chipConfig = const ChipConfig();
   /// 笔数分布配置（主图左侧；同 JSON 嵌套 tickDist）
@@ -2615,7 +2619,7 @@ class _KlineHomePageState extends State<KlineHomePage>
     }
     // test：数据源即分笔（custom.ohlc.csv），周期、起止时间自动对齐分笔配置。
     if (code == 'test') {
-      _period = 'tick';
+      _period = _hasTestMinuteCsv() ? '1m' : 'tick';
       if (_hasTestOhlcCsv()) {
         try {
           final bars = _bridge.loadKlines(
@@ -2653,6 +2657,13 @@ class _KlineHomePageState extends State<KlineHomePage>
     if (_dataRoot.isEmpty) return false;
     final path =
         '$_dataRoot${Platform.pathSeparator}test${Platform.pathSeparator}custom.ohlc.csv';
+    return File(path).existsSync();
+  }
+
+  bool _hasTestMinuteCsv() {
+    if (_dataRoot.isEmpty) return false;
+    final path =
+        '$_dataRoot${Platform.pathSeparator}test${Platform.pathSeparator}custom.1m.csv';
     return File(path).existsSync();
   }
 
@@ -3911,6 +3922,25 @@ class _KlineHomePageState extends State<KlineHomePage>
               ),
             ),
           if (_libHalt) _buildLibHaltOverlay(),
+          if (_klineDrawBoardOpen && _klineDrawBoard != null)
+            Positioned.fill(
+              child: KlineDrawBoard(
+                model: _klineDrawBoard!,
+                bundle: _klineDrawBundle,
+                mainIndicators: _splitMainIndicators,
+                subIndicators: _sessionSplitSubIndicators,
+                truncationCheck: _truncationCheck,
+                earlyDynamicUnit: _earlyDynamicUnit,
+                showBuildingDash: _showBuildingDash,
+                chipConfig: _chipConfig,
+                tickDistConfig: _tickDistConfig,
+                onChanged: _updateKlineDrawBoard,
+                onMainIndicatorsChanged: (v) =>
+                    setState(() => _splitMainIndicators = v),
+                onSubIndicatorsChanged: (v) =>
+                    setState(() => _splitSubIndicators = v),
+              ),
+            ),
           if (_tickDrawBoardOpen &&
               _tickDrawBoard != null &&
               _tickDrawBundle != null)
@@ -4091,6 +4121,33 @@ class _KlineHomePageState extends State<KlineHomePage>
   Widget _buildCaptionBar() {
     // 画板模式：**替换**整组按钮（不是另加一条栏）；切回主图自动恢复原按钮。
     // 左侧放画板名称，窗口数量下拉放在「保存并加载」与「最小化」之间。
+    if (_klineDrawBoardOpen) {
+      return Row(
+        children: [
+          const SizedBox(width: 10),
+          const Text('K线画板'),
+          const Expanded(
+            child: DragToMoveArea(
+              child: SizedBox(
+                height: kDesktopCaptionBarHeight,
+                child: ColoredBox(color: Color(0x00000000)),
+              ),
+            ),
+          ),
+          _CaptionBarButton(
+            tooltip: '保存并加载',
+            onTap: _saveKlineDrawBoard,
+            child: Icon(Icons.save_alt, size: 16, color: AppPalette.controlInk),
+          ),
+          _buildKlineDrawWindowCountDropdown(),
+          _CaptionBarButton(
+            tooltip: '关闭画板',
+            onTap: _closeKlineDrawBoard,
+            child: Icon(Icons.close, size: 16, color: AppPalette.controlInk),
+          ),
+        ],
+      );
+    }
     if (_tickDrawBoardOpen) {
       return Row(
         children: [
@@ -4321,10 +4378,6 @@ class _KlineHomePageState extends State<KlineHomePage>
   Widget _buildPanelBody({    bool forMobileSheet = false,
     StateSetter? sheetSetState,
   }) {
-    final advanced = _buildPanelAdvancedSection(
-      sheetSetState: sheetSetState,
-      forMobileSheet: forMobileSheet,
-    );
     // 设置面板内所有文字（标签、开关标题、按钮文字等）支持鼠标拖选 + Ctrl+C 复制；
     // 由设置面板打开的各子对话框（说明/参数/确认弹窗，含子子UI 参数对话框）同样用
     // SelectionArea 包裹，故设置内所有层级的字符串均可复制。单击仍触发按钮/输入框，
@@ -4333,6 +4386,11 @@ class _KlineHomePageState extends State<KlineHomePage>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+        SettingsCategory(
+          title: '数据与加载',
+          icon: Icons.storage_outlined,
+          initiallyExpanded: true,
+          children: [
         if (forMobileSheet)
           SettingsOutlinedButton(
             label: _selectedCode == null
@@ -4389,6 +4447,14 @@ class _KlineHomePageState extends State<KlineHomePage>
             onPressed: _busy ? null : _openTickDrawBoard,
             onHelp: _showTickDrawBoardHelp,
             helpTooltip: '分笔画板说明',
+          ),
+          const SizedBox(height: 8),
+          SettingsOutlinedButton(
+            label: 'K线画板',
+            icon: Icons.candlestick_chart,
+            onPressed: _busy ? null : _openKlineDrawBoard,
+            onHelp: _showKlineDrawBoardHelp,
+            helpTooltip: 'K线画板说明',
           ),
         ],
         const SizedBox(height: 10),
@@ -4463,7 +4529,13 @@ class _KlineHomePageState extends State<KlineHomePage>
             await TelegramSettingsStore.save(next);
           },
         ),
-        const SizedBox(height: 8),
+          ],
+        ),
+        SettingsCategory(
+          title: '分析与指标',
+          icon: Icons.insights_outlined,
+          initiallyExpanded: true,
+          children: [
         TextFormField(
           key: ValueKey(_chipConfig.bucketStep),
           initialValue: _chipConfig.bucketStep.toStringAsFixed(2),
@@ -4537,95 +4609,90 @@ class _KlineHomePageState extends State<KlineHomePage>
                 : () async {
                     await showKeyPointStatsSettingsSheet(context);
                   },
-            child: const Text('计优参数', style: TextStyle(fontSize: 12)),
+              child: const Text('计优参数', style: TextStyle(fontSize: 12)),
+            ),
           ),
+          ],
         ),
-        const SizedBox(height: SettingsPanelTheme.fieldGap),
-        SwitchListTile(
-          contentPadding: EdgeInsets.zero,
-          dense: true,
-          title: const Text('是否启用安卓操作逻辑', style: TextStyle(fontSize: 13)),
-          subtitle: Text(
-            _interactionManualOverride == null
-                ? '自动：当前为${_useAndroidInteraction ? "安卓" : "Windows"}交互'
-                : (_useAndroidInteraction
-                    ? '手动：安卓手势与布局'
-                    : '手动：Windows手势与布局'),
-            style: const TextStyle(fontSize: 11),
-          ),
-          value: _useAndroidInteraction,
+        SettingsCategory(
+          title: '界面与操作',
+          icon: Icons.tune,
+          children: [
+        SettingsChoiceDropdown<bool?>(
+          label: '交互模式',
+          value: _interactionManualOverride,
+          helper: _interactionManualOverride == null
+              ? '自动：当前为${_useAndroidInteraction ? "安卓" : "Windows"}交互'
+              : (_useAndroidInteraction
+                  ? '手动：安卓手势与布局'
+                  : '手动：Windows手势与布局'),
+          items: const [
+            DropdownMenuItem(value: null, child: Text('跟随系统自动')),
+            DropdownMenuItem(value: true, child: Text('安卓操作逻辑')),
+            DropdownMenuItem(value: false, child: Text('Windows操作逻辑')),
+          ],
           onChanged: _busy
               ? null
               : (v) async {
                   await InteractionModeStore.saveManualOverride(v);
+                  final resolved = v ?? InteractionModeStore.resolveUseAndroidLogic();
                   _panelUi(() {
                     _interactionManualOverride = v;
-                    _useAndroidInteraction = v;
+                    _useAndroidInteraction = resolved;
                   }, sheetSetState: sheetSetState);
                   _msgHistory.append(
-                    '交互模式=${v ? "安卓操作逻辑" : "Windows操作逻辑"}（手动）',
+                    v == null
+                        ? '交互模式=跟随系统自动'
+                        : '交互模式=${v ? "安卓操作逻辑" : "Windows操作逻辑"}（手动）',
                   );
                 },
         ),
-        if (_interactionManualOverride != null)
-          Align(
-            alignment: Alignment.centerRight,
-            child: TextButton(
-              onPressed: _busy
-                  ? null
-                  : () async {
-                      await InteractionModeStore.saveManualOverride(null);
-                      _panelUi(() {
-                        _interactionManualOverride = null;
-                        _useAndroidInteraction =
-                            InteractionModeStore.resolveUseAndroidLogic();
-                      }, sheetSetState: sheetSetState);
-                      _msgHistory.append('交互模式=跟随系统自动');
-                    },
-              child: const Text('恢复跟随系统自动', style: TextStyle(fontSize: 12)),
-            ),
-          ),
-        const SizedBox(height: 8),
+        const ThemeChooser(),
+          ],
+        ),
+        SettingsCategory(
+          title: '主图显示',
+          icon: Icons.candlestick_chart_outlined,
+          initiallyExpanded: true,
+          children: [
         // 截断监察开关：对照「加截断前」旧行为
-        SwitchListTile(
-          contentPadding: EdgeInsets.zero,
-          dense: true,
-          title: const Text('截断机制', style: TextStyle(fontSize: 13)),
-          subtitle: Text(
-            _truncationCheck ? '已开启（当前口径）' : '已关闭（旧吸收行为）',
-            style: const TextStyle(fontSize: 11),
-          ),
+        SettingsChoiceDropdown<bool>(
+          label: '截断机制',
           value: _truncationCheck,
+          helper: _truncationCheck ? '已开启（当前口径）' : '已关闭（旧吸收行为）',
+          helpTooltip: '截断机制说明',
+          onHelp: _showTruncationHelp,
+          items: const [
+            DropdownMenuItem(value: true, child: Text('开启（当前口径）')),
+            DropdownMenuItem(value: false, child: Text('关闭（旧吸收行为）')),
+          ],
           onChanged: _busy
               ? null
-              : (v) => _setTruncationCheck(v, sheetSetState: sheetSetState),
-          secondary: IconButton(
-            tooltip: '截断机制说明',
-            icon: const Icon(Icons.help_outline, size: 18),
-            onPressed: _showTruncationHelp,
-          ),
+              : (v) {
+                  if (v == null) return;
+                  _setTruncationCheck(v, sheetSetState: sheetSetState);
+                },
         ),
         const SizedBox(height: 8),
         // 层级早生成动态单元：每层首个单元在父层首确认当根以动态态出现，默认开
-        SwitchListTile(
-          contentPadding: EdgeInsets.zero,
-          dense: true,
-          title: const Text('层级早生成动态单元', style: TextStyle(fontSize: 13)),
-          subtitle: Text(
-            _earlyDynamicUnit
-                ? '已开启（动态K取高高；种子框不画）'
-                : '已关闭（经典口径：种子框照旧）',
-            style: const TextStyle(fontSize: 11),
-          ),
+        SettingsChoiceDropdown<bool>(
+          label: '层级早生成动态单元',
           value: _earlyDynamicUnit,
+          helper: _earlyDynamicUnit
+              ? '已开启（动态K取高高；种子框不画）'
+              : '已关闭（经典口径：种子框照旧）',
+          helpTooltip: '层级早生成动态单元说明',
+          onHelp: _showEarlyDynamicUnitHelp,
+          items: const [
+            DropdownMenuItem(value: true, child: Text('开启（动态K取高高）')),
+            DropdownMenuItem(value: false, child: Text('关闭（经典口径）')),
+          ],
           onChanged: _busy
               ? null
-              : (v) => _setEarlyDynamicUnit(v, sheetSetState: sheetSetState),
-          secondary: IconButton(
-            tooltip: '层级早生成动态单元说明',
-            icon: const Icon(Icons.help_outline, size: 18),
-            onPressed: _showEarlyDynamicUnitHelp,
-          ),
+              : (v) {
+                  if (v == null) return;
+                  _setEarlyDynamicUnit(v, sheetSetState: sheetSetState);
+                },
         ),
         const SizedBox(height: 8),
         // 首分型前合并框：种子框 / 高高 / 低低（只影响首分型前那段框的绘制与 MG/MD）
@@ -4669,51 +4736,47 @@ class _KlineHomePageState extends State<KlineHomePage>
         ),
         const SizedBox(height: 8),
         // 构建中/未确认虚线开关：末组合并框 + K0/K1/KN 构建中连线统一用虚线区分，默认开
-        SwitchListTile(
-          contentPadding: EdgeInsets.zero,
-          dense: true,
-          title: const Text('构建中/未确认虚线', style: TextStyle(fontSize: 13)),
-          subtitle: Text(
-            _showBuildingDash ? '已开启（构建中元素虚线）' : '已关闭（全部实线）',
-            style: const TextStyle(fontSize: 11),
-          ),
+        SettingsChoiceDropdown<bool>(
+          label: '构建中/未确认虚线',
           value: _showBuildingDash,
+          helper: _showBuildingDash ? '已开启（构建中元素虚线）' : '已关闭（全部实线）',
+          helpTooltip: '构建中/未确认虚线说明',
+          onHelp: _showBuildingDashHelp,
+          items: const [
+            DropdownMenuItem(value: true, child: Text('开启（构建中元素虚线）')),
+            DropdownMenuItem(value: false, child: Text('关闭（全部实线）')),
+          ],
           onChanged: _busy
               ? null
               : (v) {
+                  if (v == null) return;
                   _panelUi(() => _showBuildingDash = v,
                       sheetSetState: sheetSetState);
                   _msgHistory.append('构建中虚线=${v ? "开" : "关"}');
                 },
-          secondary: IconButton(
-            tooltip: '构建中/未确认虚线说明',
-            icon: const Icon(Icons.help_outline, size: 18),
-            onPressed: _showBuildingDashHelp,
-          ),
         ),
         SizedBox(height: 8),
         // 太极图总开关（2026-11-13 用户明确）：**从设置面板隐藏**，默认关闭、
         // 资源保留，后续可按需开启。App 启动直接展示主图，不进太极层。
         // 层级分窗：默认关闭 = 现在这张「各层集成在一张图」的单图；开启后按所选层级切格。
-        SwitchListTile(
-          contentPadding: EdgeInsets.zero,
-          dense: true,
-          title: const Text('层级分窗（每层一个窗口）', style: TextStyle(fontSize: 13)),
-          subtitle: Text(
-            LevelWindowSettingsStore.enabled
-                ? '已开启（${LevelWindowSettingsStore.count} 窗，每窗都能步进/缩放）'
-                : '已关闭（单图集成，与原来完全一致）',
-            style: const TextStyle(fontSize: 11),
-          ),
+        SettingsChoiceDropdown<bool>(
+          label: '层级分窗',
           value: LevelWindowSettingsStore.enabled,
-          onChanged: (v) => unawaited(
-            _setLevelWindowSplitEnabled(v, sheetSetState: sheetSetState),
-          ),
-          secondary: IconButton(
-            tooltip: '层级分窗说明',
-            icon: const Icon(Icons.help_outline, size: 18),
-            onPressed: _showLevelWindowSplitHelp,
-          ),
+          helper: LevelWindowSettingsStore.enabled
+              ? '已开启（${LevelWindowSettingsStore.count} 窗，每窗都能步进/缩放）'
+              : '已关闭（单图集成，与原来完全一致）',
+          helpTooltip: '层级分窗说明',
+          onHelp: _showLevelWindowSplitHelp,
+          items: const [
+            DropdownMenuItem(value: true, child: Text('开启（每层一个窗口）')),
+            DropdownMenuItem(value: false, child: Text('关闭（单图集成）')),
+          ],
+          onChanged: (v) {
+            if (v == null) return;
+            unawaited(
+              _setLevelWindowSplitEnabled(v, sheetSetState: sheetSetState),
+            );
+          },
         ),
         ListTile(
           contentPadding: EdgeInsets.zero,
@@ -4734,29 +4797,26 @@ class _KlineHomePageState extends State<KlineHomePage>
               : null,
         ),
         const SizedBox(height: 8),
-        SwitchListTile(
-          contentPadding: EdgeInsets.zero,
-          dense: true,
-          title: const Text('BSP对错叠加X', style: TextStyle(fontSize: 13)),
-          subtitle: Text(
-            _overlayBsVerdictWrong
-                ? '已开启（错标叠加X，对的不叠加）'
-                : '已关闭（只显示原 Kn类BS 标记）',
-            style: const TextStyle(fontSize: 11),
-          ),
+        SettingsChoiceDropdown<bool>(
+          label: 'BSP对错叠加X',
           value: _overlayBsVerdictWrong,
+          helper: _overlayBsVerdictWrong
+              ? '已开启（错标叠加X，对的不叠加）'
+              : '已关闭（只显示原 Kn类BS 标记）',
+          helpTooltip: 'BSP对错叠加说明',
+          onHelp: _showBsVerdictOverlayHelp,
+          items: const [
+            DropdownMenuItem(value: true, child: Text('开启')),
+            DropdownMenuItem(value: false, child: Text('关闭')),
+          ],
           onChanged: _busy
               ? null
               : (v) {
+                  if (v == null) return;
                   _panelUi(() => _overlayBsVerdictWrong = v,
                       sheetSetState: sheetSetState);
                   _msgHistory.append('BSP对错叠加X=${v ? "开" : "关"}');
                 },
-          secondary: IconButton(
-            tooltip: 'BSP对错叠加说明',
-            icon: const Icon(Icons.help_outline, size: 18),
-            onPressed: _showBsVerdictOverlayHelp,
-          ),
         ),
         const SizedBox(height: 8),
         // 筹码分布：总开关 + 峰线；桶宽/拉伸见说明弹窗（已迁设置·仅K0，不参与主图指标勾选）
@@ -4773,61 +4833,57 @@ class _KlineHomePageState extends State<KlineHomePage>
         ),
         const SizedBox(height: 8),
         // 筹码 / 笔数分布：单一总开关（右侧筹码+左侧笔数同时显隐）；峰延长线合并为共享开关（颜色按 ±档自动区分）
-        SwitchListTile(
-          contentPadding: EdgeInsets.zero,
-          dense: true,
-          title: const Text('筹码 / 笔数分布', style: TextStyle(fontSize: 13)),
-          subtitle: Text(
-            _chipConfig.enabled && _tickDistConfig.enabled
-                ? '已开启（右侧筹码 + 左侧笔数，仅 K0）'
-                : '已关闭',
-            style: const TextStyle(fontSize: 11),
-          ),
+        SettingsChoiceDropdown<bool>(
+          label: '筹码 / 笔数分布',
           value: _chipConfig.enabled && _tickDistConfig.enabled,
+          helper: _chipConfig.enabled && _tickDistConfig.enabled
+              ? '已开启（右侧筹码 + 左侧笔数，仅 K0）'
+              : '已关闭',
+          helpTooltip: '筹码/笔数分布说明',
+          onHelp: _showChipHelp,
+          items: const [
+            DropdownMenuItem(value: true, child: Text('开启')),
+            DropdownMenuItem(value: false, child: Text('关闭')),
+          ],
           onChanged: _busy
               ? null
               : (v) {
+                  if (v == null) return;
                   _updateChipConfig(_chipConfig.copyWith(enabled: v));
                   _updateTickDistConfig(_tickDistConfig.copyWith(enabled: v));
                   _msgHistory.append('筹码/笔数分布总开关=${v ? "开" : "关"}');
                 },
-          secondary: IconButton(
-            tooltip: '筹码/笔数分布说明',
-            icon: const Icon(Icons.help_outline, size: 18),
-            onPressed: _showChipHelp,
-          ),
         ),
-        SwitchListTile(
-          contentPadding: EdgeInsets.zero,
-          dense: true,
-          title: const Text('峰延长线（按 ±档配色）', style: TextStyle(fontSize: 13)),
-          subtitle: Text(
-            _chipConfig.peakLineEnabled && _tickDistConfig.peakLineEnabled
-                ? '已开启（±1同色、±2同色…；框内 INn 另色）'
-                : '已关闭',
-            style: const TextStyle(fontSize: 11),
-          ),
+        SettingsChoiceDropdown<bool>(
+          label: '峰延长线',
           value: _chipConfig.peakLineEnabled && _tickDistConfig.peakLineEnabled,
+          helper: _chipConfig.peakLineEnabled && _tickDistConfig.peakLineEnabled
+              ? '已开启（±1同色、±2同色…；框内 INn 另色）'
+              : '已关闭',
+          items: const [
+            DropdownMenuItem(value: true, child: Text('开启（按 ±档配色）')),
+            DropdownMenuItem(value: false, child: Text('关闭')),
+          ],
           onChanged: (!_chipConfig.enabled && !_tickDistConfig.enabled) || _busy
               ? null
               : (v) {
+                  if (v == null) return;
                   _updateChipConfig(_chipConfig.copyWith(peakLineEnabled: v));
                   _updateTickDistConfig(
                       _tickDistConfig.copyWith(peakLineEnabled: v));
                   _msgHistory.append('峰延长线=${v ? "开" : "关"}');
                 },
         ),
-        if (forMobileSheet)
-          ExpansionTile(
-            tilePadding: EdgeInsets.zero,
-            title: Text(
-              '高级与工具',
-              style: TextStyle(fontSize: 13, color: AppPalette.rgb(0xFFE2E8F0)),
-            ),
-            children: advanced,
-          )
-        else
-          ...advanced,
+          ],
+        ),
+        SettingsCategory(
+          title: '维护与同步',
+          icon: Icons.build_circle_outlined,
+          children: _buildPanelAdvancedSection(
+            sheetSetState: sheetSetState,
+            forMobileSheet: forMobileSheet,
+          ),
+        ),
       ],
       ),
     );
@@ -4840,10 +4896,6 @@ class _KlineHomePageState extends State<KlineHomePage>
   }) {
     final syncCfg = PeerSyncSettingsStore.loadSync();
     return [
-        const SizedBox(height: 12),
-        const ThemeChooser(),
-        const SizedBox(height: SettingsPanelTheme.fieldGap),
-        const SizedBox(height: SettingsPanelTheme.sectionGap),
         SettingsOutlinedButton(
           label: '复制排查信息',
           icon: Icons.summarize,
@@ -5524,6 +5576,8 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
     return ValueListenableBuilder<List<CrosshairTooltipRow>>(
       valueListenable: _tooltipBridge.rows,
       builder: (context, rows, _) {
+        final scrollController = _tooltipBridge.scrollController;
+        if (scrollController == null) return const SizedBox.shrink();
         return Container(
           decoration: BoxDecoration(
             border: Border(
@@ -5535,7 +5589,7 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
           ),
           child: CrosshairTooltipPanel(
             rows: rows,
-            scrollController: _tooltipBridge.scrollController!,
+            scrollController: scrollController,
             maxWidth: _tooltipPanelWidth,
             maxHeight: h,
             // 面板自己先关：各窗注入的关闭回调互相覆盖，点下去可能打到
@@ -6525,6 +6579,107 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
   /// 关闭画板：只关画板，返回主图界面（不动 App 生命周期）。
   void _closeTickDrawBoard() {
     setState(() => _tickDrawBoardOpen = false);
+  }
+
+  void _showKlineDrawBoardHelp() {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => SelectionArea(
+        child: AlertDialog(
+          title: const Text('K线画板说明'),
+          content: const SingleChildScrollView(
+            child: Text(
+              '1. 股票选择 test；\n'
+              '2. 点「K线画板」；\n'
+              '3. 在 K0 窗口按住左键拖动，松手生成一根 1 分钟 K 线；\n'
+              '4. 起点是开盘价，终点是收盘价，拖动路径的最高、最低分别是最高价、最低价；\n'
+              '5. 每个窗口标题同时显示层级和周期，例如 K0 · 1分钟、K1 · 5分钟；\n'
+              '6. K0 固定 1 分钟，其它窗口可选择更大周期；\n'
+              '7. 点「保存并加载」，写入 a_Data/test/custom.1m.csv。',
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('知道了'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildKlineDrawWindowCountDropdown() {
+    final count = normalizeLevelWindowCount(_klineDrawBoard?.windowCount);
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 6),
+      child: DropdownButton<int>(
+        value: count,
+        dropdownColor: AppPalette.surfaceAlt,
+        style: TextStyle(color: AppPalette.textPrimary, fontSize: 12),
+        underline: const SizedBox.shrink(),
+        isDense: true,
+        items: [
+          for (final n in kLevelWindowCountChoices)
+            DropdownMenuItem(value: n, child: Text('$n窗')),
+        ],
+        onChanged: (v) {
+          final board = _klineDrawBoard;
+          if (v == null || board == null) return;
+          _updateKlineDrawBoard(board.withWindowCount(v));
+        },
+      ),
+    );
+  }
+
+  void _openKlineDrawBoard() {
+    final model = _klineDrawBoard ?? KlineDrawBoardModel.initial();
+    setState(() {
+      _tickDrawBoardOpen = false;
+      _klineDrawBoardOpen = true;
+      _klineDrawBoard = model;
+    });
+    _updateKlineDrawBoard(model);
+  }
+
+  void _updateKlineDrawBoard(KlineDrawBoardModel model) {
+    final bars = model.toBars();
+    final bundle = bars.isEmpty
+        ? KlineCombineBundle.empty()
+        : _bridge.buildKlineCombineBundle(
+            bars,
+            truncationCheck: _truncationCheck,
+            earlyDynamicUnit: _earlyDynamicUnit,
+          );
+    setState(() {
+      _klineDrawBoard = model;
+      _klineDrawBundle = bundle;
+    });
+  }
+
+  void _closeKlineDrawBoard() {
+    setState(() => _klineDrawBoardOpen = false);
+  }
+
+  Future<void> _saveKlineDrawBoard() async {
+    final model = _klineDrawBoard;
+    if (model == null || model.candles.isEmpty) return;
+    try {
+      final saved = _bridge.saveTestMinute(
+        dataRoot: _dataRoot,
+        bars: model.toBars(),
+      );
+      _msgHistory.append('K线画板：保存${saved.count}根 → ${saved.path}');
+      setState(() {
+        _selectedCode = 'test';
+        _period = '1m';
+        _klineDrawBoardOpen = false;
+      });
+      await _loadKlines();
+    } catch (e) {
+      setState(() => _error = e.toString());
+      _msgHistory.append('K线画板保存失败：$e');
+    }
   }
 
   Future<void> _saveTickDrawBoard() async {

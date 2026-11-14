@@ -24,27 +24,27 @@ class ThemeChooser extends StatelessWidget {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              '主题外观',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                color: AppPalette.textSecondary,
+            DropdownButtonFormField<AppThemeMode>(
+              isExpanded: true,
+              initialValue: cur,
+              decoration: const InputDecoration(
+                labelText: '主题外观',
+                isDense: true,
+                border: OutlineInputBorder(),
               ),
-            ),
-            const SizedBox(height: 6),
-            Wrap(
-              spacing: 8,
-              runSpacing: 6,
-              children: [
+              items: [
                 for (final m in AppThemeMode.values)
-                  ChoiceChip(
-                    key: ValueKey<String>('theme_chip_${m.id}'),
-                    label: Text(m.label),
-                    selected: cur == m,
-                    onSelected: (_) => AppThemeController.instance.setMode(m),
+                  DropdownMenuItem(
+                    value: m,
+                    child: Text(
+                      m.label,
+                      key: ValueKey<String>('theme_chip_${m.id}'),
+                    ),
                   ),
               ],
+              onChanged: (m) {
+                if (m != null) AppThemeController.instance.setMode(m);
+              },
             ),
             // 暖色强度 + 亮度：三模式全部开放，即时生效并落盘。
             const SizedBox(height: 4),

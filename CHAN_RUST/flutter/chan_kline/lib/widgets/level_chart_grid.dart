@@ -17,6 +17,7 @@ class LevelChartGrid extends StatelessWidget {
     required this.levels,
     required this.maxKn,
     required this.paneBuilder,
+    this.badgeTextBuilder,
   });
 
   /// 窗口数量（会收敛为合法偶数档）。
@@ -39,6 +40,8 @@ class LevelChartGrid extends StatelessWidget {
     bool primary,
   ) paneBuilder;
 
+  final String Function(int level)? badgeTextBuilder;
+
   @override
   Widget build(BuildContext context) {
     final grid = LevelWindowGrid(count);
@@ -58,6 +61,7 @@ class LevelChartGrid extends StatelessWidget {
           Expanded(
             child: _PaneChrome(
               level: level,
+              label: badgeTextBuilder?.call(level),
               primary: primary,
               topRightPane: topRightPane,
               child: available
@@ -114,9 +118,11 @@ class _PaneChrome extends StatelessWidget {
     required this.primary,
     required this.topRightPane,
     required this.child,
+    this.label,
   });
 
   final int level;
+  final String? label;
   final bool primary;
   final bool topRightPane;
   final Widget child;
@@ -153,7 +159,7 @@ class _PaneChrome extends StatelessWidget {
                   padding:
                       const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
                   child: Text(
-                    'K$level',
+                    label ?? 'K$level',
                     style: TextStyle(
                       fontSize: 11,
                       height: 1.2,

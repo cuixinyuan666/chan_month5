@@ -174,6 +174,12 @@ class ChanBridge {
       )
       .asFunction();
 
+  late final Pointer<Utf8> Function(Pointer<Utf8>) _saveTestMinute = _lib
+      .lookup<NativeFunction<Pointer<Utf8> Function(Pointer<Utf8>)>>(
+        'chan_save_test_minute',
+      )
+      .asFunction();
+
   late final Pointer<Utf8> Function(Pointer<Utf8>) _klineCombineFrames = _lib
       .lookup<NativeFunction<Pointer<Utf8> Function(Pointer<Utf8>)>>(
         'chan_kline_combine_frames',
@@ -362,6 +368,29 @@ class ChanBridge {
     final ptr = _toNative(jsonEncode(payload));
     try {
       final data = _decode(_takeJson(_saveTestOhlc(ptr)));
+      final map = Map<String, dynamic>.from(data as Map);
+      return (
+        path: map['path']?.toString() ?? '',
+        count: (map['count'] as num?)?.toInt() ?? bars.length,
+      );
+    } finally {
+      if (ptr != nullptr) calloc.free(ptr);
+    }
+  }
+
+  /// 保存 K 线画板源文件 → `a_Data/test/custom.1m.csv`。
+  ({String path, int count}) saveTestMinute({
+    String? dataRoot,
+    required List<KlineBar> bars,
+  }) {
+    ensureInitialized();
+    final payload = <String, dynamic>{
+      if (dataRoot != null) 'data_root': dataRoot,
+      'bars': bars.map((b) => b.toJson()).toList(),
+    };
+    final ptr = _toNative(jsonEncode(payload));
+    try {
+      final data = _decode(_takeJson(_saveTestMinute(ptr)));
       final map = Map<String, dynamic>.from(data as Map);
       return (
         path: map['path']?.toString() ?? '',

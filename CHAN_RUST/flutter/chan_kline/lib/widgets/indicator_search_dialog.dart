@@ -581,12 +581,24 @@ Future<IndicatorSearchSettings?> showIndicatorSearchSettingsSheet(
                   value: cfg.smartSearch,
                   onChanged: (v) => setLocal(() => cfg = cfg.copyWith(smartSearch: v)),
                 ),
-                SwitchListTile(
-                  title: const Text('优化枚举（推荐）'),
-                  subtitle: const Text('模板 + 事件全量 + 数值/阈值有上限；关闭=全量枚举（极慢）'),
-                  value: cfg.useOptimizedBuild,
-                  onChanged: (v) =>
-                      setLocal(() => cfg = cfg.copyWith(useOptimizedBuild: v)),
+                DropdownButtonFormField<bool>(
+                  isExpanded: true,
+                  initialValue: cfg.useOptimizedBuild,
+                  decoration: const InputDecoration(
+                    labelText: '枚举模式',
+                    helperText: '优化枚举有上限；全量枚举极慢',
+                    helperMaxLines: 2,
+                    isDense: true,
+                    border: OutlineInputBorder(),
+                  ),
+                  items: const [
+                    DropdownMenuItem(value: true, child: Text('优化枚举（推荐）')),
+                    DropdownMenuItem(value: false, child: Text('全量枚举')),
+                  ],
+                  onChanged: (v) {
+                    if (v == null) return;
+                    setLocal(() => cfg = cfg.copyWith(useOptimizedBuild: v));
+                  },
                 ),
                 ListTile(
                   title: Text(

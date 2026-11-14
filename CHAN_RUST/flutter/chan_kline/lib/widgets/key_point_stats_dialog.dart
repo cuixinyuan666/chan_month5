@@ -365,14 +365,24 @@ Future<KeyPointStatSettings?> showKeyPointStatsSettingsSheet(
                 '计优参数',
                 style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
               ),
-              SwitchListTile(
-                title: const Text('按级别 × 顶/底 分组'),
-                subtitle: const Text(
-                  '开启：K1顶/K1底/K2顶… 各一张表；关闭：每级顶底合并成一张表',
+              DropdownButtonFormField<bool>(
+                isExpanded: true,
+                initialValue: cfg.splitTopBottom,
+                decoration: const InputDecoration(
+                  labelText: '计优分组',
+                  helperText: '分开：各级顶、底各一张表；合并：每级一张表',
+                  helperMaxLines: 2,
+                  isDense: true,
+                  border: OutlineInputBorder(),
                 ),
-                value: cfg.splitTopBottom,
-                onChanged: (v) =>
-                    setLocal(() => cfg = cfg.copyWith(splitTopBottom: v)),
+                items: const [
+                  DropdownMenuItem(value: true, child: Text('按级别 × 顶/底 分开')),
+                  DropdownMenuItem(value: false, child: Text('每级顶底合并')),
+                ],
+                onChanged: (v) {
+                  if (v == null) return;
+                  setLocal(() => cfg = cfg.copyWith(splitTopBottom: v));
+                },
               ),
               ListTile(
                 title: Text(

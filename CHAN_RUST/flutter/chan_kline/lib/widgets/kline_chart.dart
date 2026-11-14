@@ -215,6 +215,7 @@ class KlineChart extends StatefulWidget {
     this.onTickDotTap,
     this.onTickDotDrag,
     this.onTickDotDragEnd,
+    this.onCandleDraw,
     this.selectedTickIdx = -1,
     this.displayLevel,
     this.forceSubPane = false,
@@ -376,6 +377,10 @@ class KlineChart extends StatefulWidget {
   /// 分笔圆点拖动结束（松手）。
   final VoidCallback? onTickDotDragEnd;
 
+  /// K线画板：左键拖动空白处，松手生成一根 K 线。
+  final void Function(double startPrice, double currentPrice, bool finished)?
+      onCandleDraw;
+
   /// 当前被选中的分笔圆点下标（-1=无）。画板用它画聚焦标识。
   final int selectedTickIdx;
 
@@ -485,6 +490,9 @@ class _KlineChartState extends State<KlineChart> {
   /// 画板：正在拖动的分笔圆点下标（null=未在拖）。
   int? _tickDragIdx;
   Offset? _tickDragStart;
+  int? _candleDrawPointer;
+  double? _candleDrawStartPrice;
+  double? _candleDrawPrice;
 
   /// 左中右热区：用 Listener 优先吃点击（避免卡顿时被 GestureDetector 拖拽抢走）
   Offset? _zonePointerDown;
@@ -1793,7 +1801,8 @@ class _KlineChartState extends State<KlineChart> {
       _viewport.indexToX(barIdx.toDouble(), w) + slotW / 2;
 
   int? _hitTickDot(Offset p) {
-    if (widget.period != 'tick' || widget.bars.isEmpty) return null;
+    if ((widget.period != 'tick' && widget.onCandleDraw == null) ||
+        widget.bars.isEmpty) return null;
     final w = _chartSize.width;
     final h = _chartSize.height;
     if (w <= 0 || h <= 0) return null;
@@ -1822,10 +1831,30 @@ class _KlineChartState extends State<KlineChart> {
     return best;
   }
 
+  double? _priceAt(Offset local) {
+    final range = _hitPriceRange;
+    if (range == null || _hitMainH <= 1) return null;
+    final plotTop = _zonePlotTop;
+    final plotH = math.max(1.0, _hitMainH - plotTop - KlineViewport.padB);
+    return range.priceFromY(local.dy, plotTop, plotH);
+  }
+
   void _onPointerDown(PointerDownEvent e) {
     // 画板：分笔圆点被按住 → 进入「拖圆点改价」，不再走十字线/平移。
     // 未选中的圆点也允许直接按下拖动：先选中再改价，
     // 否则用户必须先点一下再拖，表现为「按住 K 线无法移动」。
+    if (widget.onCandleDraw != null &&
+        e.buttons & kPrimaryMouseButton != 0 &&
+        _hitTickDot(e.localPosition) == null) {
+      final price = _priceAt(e.localPosition);
+      if (price != null) {
+        _candleDrawPointer = e.pointer;
+        _candleDrawStartPrice = price;
+        _candleDrawPrice = price;
+        widget.onCandleDraw?.call(price, price, false);
+        return;
+      }
+    }
     if (widget.onTickDotDrag != null) {
       final hit = _hitTickDot(e.localPosition);
       if (hit != null) {
@@ -1869,6 +1898,14 @@ class _KlineChartState extends State<KlineChart> {
   }
 
   void _onPointerMove(PointerMoveEvent e, double mainPlotH, double contentBottom) {
+    if (_candleDrawPointer == e.pointer && _candleDrawStartPrice != null) {
+      final price = _priceAt(e.localPosition) ?? _candleDrawPrice;
+      if (price != null) {
+        _candleDrawPrice = price;
+        widget.onCandleDraw?.call(_candleDrawStartPrice!, price, false);
+      }
+      return;
+    }
     // 画板：正在拖分笔圆点 → 交给外部改价（不参与平移/十字）。
     if (_tickDragIdx != null && _tickDragStart != null) {
       final dx = e.localPosition.dx - _tickDragStart!.dx;
@@ -1916,6 +1953,14 @@ class _KlineChartState extends State<KlineChart> {
       _tickDragIdx = null;
       _tickDragStart = null;
       widget.onTickDotDragEnd?.call();
+      return;
+    }
+    if (_candleDrawPointer == e.pointer && _candleDrawStartPrice != null) {
+      final price = _priceAt(e.localPosition) ?? _candleDrawPrice ?? _candleDrawStartPrice!;
+      widget.onCandleDraw?.call(_candleDrawStartPrice!, price, true);
+      _candleDrawPointer = null;
+      _candleDrawStartPrice = null;
+      _candleDrawPrice = null;
       return;
     }
     if (_splitDragging) {
@@ -2191,7 +2236,10 @@ class _KlineChartState extends State<KlineChart> {
   }
 
   void _onPanStart(DragStartDetails d, double mainPlotH) {
-    if (widget.mobileLayout || widget.bars.isEmpty || _splitDragging) return;
+    if (widget.mobileLayout ||
+        (widget.bars.isEmpty && widget.onCandleDraw == null) ||
+        _splitDragging) return;
+    if (_candleDrawPointer != null) return;
     // 画板：按住圆点改价时，整图平移不能同时生效。
     // 否则圆点跟着图一起走，看起来按住的那根没动，只能靠拖别的根
     // 把图挪开，间接改变它的相对位置。
@@ -2207,7 +2255,7 @@ class _KlineChartState extends State<KlineChart> {
   }
 
   void _onPanUpdate(DragUpdateDetails d, double mainPlotH) {
-    if (!_panning || _panStart == null || _splitDragging) return;
+    if (!_panning || _panStart == null || _splitDragging || _candleDrawPointer != null) return;
     final dx = d.localPosition.dx - _panStart!.dx;
     final dy = d.localPosition.dy - _panStart!.dy;
     _viewport.viewXMin = _panStartViewMin;
@@ -2819,7 +2867,7 @@ class _KlineChartState extends State<KlineChart> {
 
   @override
   Widget build(BuildContext context) {
-    if (widget.bars.isEmpty) {
+    if (widget.bars.isEmpty && widget.onCandleDraw == null) {
       return const Center(child: Text('暂无 K 线（请加载后逐K播放）'));
     }
     _scheduleCrosshairBroadcast();
@@ -2852,7 +2900,9 @@ class _KlineChartState extends State<KlineChart> {
         }
 
         final visible = _viewport.visibleBars(widget.bars);
-        var priceRange = _viewport.priceRangeFor(visible);
+        var priceRange = visible.isEmpty
+            ? const PriceRange(9, 11)
+            : _viewport.priceRangeFor(visible);
         // K0（tick）画的是圆点：价格区间正好等于可见 K 极值时，最上/最下的
         // 圆点有一半落在绘图区外被裁掉。这里给区间留出半个圆点的余量，
         // 保证「原点完整渲染、不裁剪」（2026-11-13 用户明确）。
@@ -6416,6 +6466,7 @@ class _KlineCompositePainter extends CustomPainter {
     final down = AppPalette.rgb(0xFF26A69A);
     final drawDots = period == 'tick';
     final dotR = tickDotRadius(slotW);
+    if (bars.isEmpty) return;
 
     // 踩坑：之前 _drawCandles 遍历 bars 全部索引（5 万+），每帧都在空转循环；
     // 改为只扫视口附近 ±2 根，大幅降低滚动/缩放时的 CPU 开销。

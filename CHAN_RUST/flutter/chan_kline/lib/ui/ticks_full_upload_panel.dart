@@ -534,8 +534,12 @@ class _TicksFullUploadPanelState extends State<TicksFullUploadPanel> {
     final initial = configured.isEmpty ? defaultTicksShareDir() : configured;
     _shareCtrl = TextEditingController(text: initial);
     if (configured.isEmpty) {
-      // 之前没填过：把默认目录落到设置里，两台机器从此指向同一个目录
-      unawaited(widget.onShareDir(initial));
+      // 之前没填过：把默认目录落到设置里，两台机器从此指向同一个目录。
+      // 保存会刷新父页面，必须等当前首帧结束，避免打开设置时在构建中途 setState。
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        unawaited(widget.onShareDir(initial));
+      });
     }
     _reload();
     _timer = Timer.periodic(const Duration(seconds: 5), (_) => _reload());

@@ -5,6 +5,18 @@ import 'package:chan_kline/theme/app_palette.dart';
 import 'package:chan_kline/theme/theme_chooser.dart';
 import 'package:chan_kline/theme/theme_settings_store.dart';
 
+Future<void> _selectTheme(WidgetTester tester, AppThemeMode mode) async {
+  await tester.tap(find.byType(DropdownButtonFormField<AppThemeMode>));
+  await tester.pumpAndSettle();
+  final overlayLabel = find.descendant(
+    of: find.byType(Overlay),
+    matching: find.byKey(ValueKey<String>('theme_chip_${mode.id}')),
+  );
+  await tester.ensureVisible(overlayLabel);
+  await tester.tap(overlayLabel);
+  await tester.pumpAndSettle();
+}
+
 /// 主题三选一的验收口径：
 /// 1. 点一下芯片，调色板真的换（不是只有外壳换），K 线画布底色跟着走；
 /// 2. 深色保持旧版原色，逐像素不变；
@@ -18,8 +30,7 @@ void main() {
     );
 
     expect(AppPalette.isDark, isTrue);
-    await tester.tap(find.byKey(const ValueKey<String>('theme_chip_light')));
-    await tester.pumpAndSettle();
+    await _selectTheme(tester, AppThemeMode.light);
 
     expect(AppPalette.isDark, isFalse);
     expect(AppThemeController.instance.mode, AppThemeMode.light);
@@ -33,8 +44,7 @@ void main() {
       const MaterialApp(home: Scaffold(body: ThemeChooser())),
     );
 
-    await tester.tap(find.byKey(const ValueKey<String>('theme_chip_eye')));
-    await tester.pumpAndSettle();
+    await _selectTheme(tester, AppThemeMode.eyeCare);
 
     expect(AppThemeController.instance.mode, AppThemeMode.eyeCare);
     expect(AppPalette.canvasBg, const Color(0xFFF4EFDF));
@@ -46,10 +56,8 @@ void main() {
       const MaterialApp(home: Scaffold(body: ThemeChooser())),
     );
 
-    await tester.tap(find.byKey(const ValueKey<String>('theme_chip_light')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey<String>('theme_chip_dark')));
-    await tester.pumpAndSettle();
+    await _selectTheme(tester, AppThemeMode.light);
+    await _selectTheme(tester, AppThemeMode.dark);
 
     expect(AppPalette.isDark, isTrue);
     expect(AppPalette.rgb(0xFF121212), const Color(0xFF121212));

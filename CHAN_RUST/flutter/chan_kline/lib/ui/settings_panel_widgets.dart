@@ -31,6 +31,115 @@ abstract final class SettingsPanelTheme {
       );
 }
 
+class SettingsCategory extends StatelessWidget {
+  const SettingsCategory({
+    super.key,
+    required this.title,
+    required this.icon,
+    required this.children,
+    this.initiallyExpanded = false,
+  });
+
+  final String title;
+  final IconData icon;
+  final List<Widget> children;
+  final bool initiallyExpanded;
+
+  @override
+  Widget build(BuildContext context) {
+    final border = AppPalette.border.withValues(alpha: 0.72);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: SettingsPanelTheme.fieldGap),
+      child: Material(
+        color: AppPalette.surfaceAlt.withValues(alpha: 0.46),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(8),
+          side: BorderSide(color: border),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: Theme(
+          data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+          child: ExpansionTile(
+            initiallyExpanded: initiallyExpanded,
+            maintainState: true,
+            tilePadding: const EdgeInsets.symmetric(horizontal: 10),
+            childrenPadding: const EdgeInsets.fromLTRB(10, 0, 10, 8),
+            iconColor: AppPalette.textSecondary,
+            collapsedIconColor: AppPalette.textSecondary,
+            leading: Icon(icon, size: 18, color: AppPalette.accent),
+            title: Text(
+              title,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                color: AppPalette.textPrimary,
+              ),
+            ),
+            children: [
+              for (var i = 0; i < children.length; i++) ...[
+                if (i > 0) const SizedBox(height: SettingsPanelTheme.fieldGap),
+                children[i],
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 设置项下拉：开/关或少量互斥项。保存值仍由调用方原函数写入。
+class SettingsChoiceDropdown<T> extends StatelessWidget {
+  const SettingsChoiceDropdown({
+    super.key,
+    required this.label,
+    required this.value,
+    required this.items,
+    required this.onChanged,
+    this.helper,
+    this.onHelp,
+    this.helpTooltip,
+  });
+
+  final String label;
+  final T value;
+  final List<DropdownMenuItem<T>> items;
+  final ValueChanged<T?>? onChanged;
+  final String? helper;
+  final VoidCallback? onHelp;
+  final String? helpTooltip;
+
+  @override
+  Widget build(BuildContext context) {
+    final field = DropdownButtonFormField<T>(
+      isExpanded: true,
+      initialValue: value,
+      decoration: InputDecoration(
+        labelText: label,
+        helperText: helper,
+        helperMaxLines: 2,
+        isDense: true,
+        border: const OutlineInputBorder(),
+      ),
+      items: items,
+      onChanged: onChanged,
+    );
+    if (onHelp == null) return field;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        IconButton(
+          tooltip: helpTooltip ?? '说明',
+          visualDensity: VisualDensity.compact,
+          icon: const Icon(Icons.help_outline, size: 18),
+          onPressed: onHelp,
+        ),
+        Expanded(child: field),
+      ],
+    );
+  }
+}
+
 class SettingsSection extends StatelessWidget {
   const SettingsSection({
     super.key,
