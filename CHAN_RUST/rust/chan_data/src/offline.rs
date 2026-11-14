@@ -32,9 +32,6 @@ pub fn resolve_data_root(raw: Option<&str>) -> PathBuf {
 /// 测试股白名单目录（非六位数字代码）。
 const TEST_STOCK_FOLDER: &str = "test";
 
-/// test 自定义 OHLC 固定文件名（直读，跳过分笔/周期聚合）。
-const TEST_OHLC_CSV: &str = "custom.ohlc.csv";
-
 /// 是否允许作为 a_Data 子目录的证券标识。
 fn is_allowed_stock_key(key: &str) -> bool {
     (key.len() == 6 && key.chars().all(|c| c.is_ascii_digit())) || key == TEST_STOCK_FOLDER
@@ -42,7 +39,11 @@ fn is_allowed_stock_key(key: &str) -> bool {
 
 /// `a_Data/test/custom.ohlc.csv` 路径。
 pub fn test_ohlc_csv_path(data_root: &Path) -> PathBuf {
-    data_root.join(TEST_STOCK_FOLDER).join(TEST_OHLC_CSV)
+    data_root.join(TEST_STOCK_FOLDER).join("custom.ohlc.csv")
+}
+
+pub fn test_minute_csv_path(data_root: &Path) -> PathBuf {
+    data_root.join(TEST_STOCK_FOLDER).join("custom.1m.csv")
 }
 
 /// 证券代码 → 目录名（六位数字或测试白名单 `test`）。
@@ -217,6 +218,47 @@ pub fn load_klines_with_source(
     // - 其它周期：把每行当作一笔分笔，按分笔规则聚合（1m → 目标周期），
     //   与真实分笔数据同构，无需再选模板。
     if code_key == TEST_STOCK_FOLDER {
+        let minute_path = test_minute_csv_path(data_root);
+        if minute_path.is_file() {
+            if period.is_tick() {
+                return Err(ChanDataError::msg(
+                    "自定义 1 分钟文件不能按分笔周期加载，请选 1 分钟或更大周期",
+                ));
+            }
+            let raw = load_test_ohlc_csv(&minute_path)?;
+            let bars_1m = raw
+                .into_iter()
+                .filter_map(|b| {
+                    let dt = parse_datetime_bound(&b.time_text, BoundKind::Begin).ok()?;
+                    Some(Bar1m {
+                        dt,
+                        open: b.open,
+                        high: b.high,
+                        low: b.low,
+                        close: b.close,
+                        volume: b.volume,
+                        amount: b.amount,
+                    })
+                })
+                .collect::<Vec<_>>();
+            if bars_1m.is_empty() {
+                return Err(ChanDataError::msg("自定义 1 分钟文件没有有效 K 线"));
+            }
+            let bars = filter_bars_by_datetime(rows_to_period(bars_1m, period)?, begin_dt, end_dt);
+            if bars.is_empty() {
+                return Err(ChanDataError::msg(format!(
+                    "区间内无 K 线：{begin_date}~{end_date}"
+                )));
+            }
+            return Ok(LoadKlinesOut {
+                bars,
+                quality: TickQuality {
+                    source: "1m".into(),
+                    skip_prompts: true,
+                    ..TickQuality::default()
+                },
+            });
+        }
         let ohlc_path = test_ohlc_csv_path(data_root);
         if ohlc_path.is_file() {
             let bars = load_test_ohlc_csv(&ohlc_path)?;
@@ -484,6 +526,10 @@ pub fn save_test_ohlc_csv(path: &Path, bars: &[KlineBar]) -> Result<()> {
 /// 保存到 `data_root/test/custom.ohlc.csv`。
 pub fn save_test_ohlc(data_root: &Path, bars: &[KlineBar]) -> Result<()> {
     save_test_ohlc_csv(&test_ohlc_csv_path(data_root), bars)
+}
+
+pub fn save_test_minute(data_root: &Path, bars: &[KlineBar]) -> Result<()> {
+    save_test_ohlc_csv(&test_minute_csv_path(data_root), bars)
 }
 
 #[derive(Clone)]
@@ -1070,6 +1116,65 @@ mod tests {
         assert_eq!(out.bars.len(), 1);
         assert!(out.quality.skip_prompts);
         assert_eq!(out.quality.source, "ohlc");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn minute_source_aggregates_without_treating_rows_as_ticks() {
+        let root = std::env::temp_dir().join(format!("chan_minute_src_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("test")).unwrap();
+        let bars = vec![
+            KlineBar {
+                idx: 0,
+                time_ms: 0,
+                time_text: "2026/07/10 09:30:00".into(),
+                open: 10.0,
+                high: 12.0,
+                low: 9.0,
+                close: 11.0,
+                volume: 1.0,
+                amount: 0.0,
+                metrics: Default::default(),
+            },
+            KlineBar {
+                idx: 1,
+                time_ms: 0,
+                time_text: "2026/07/10 09:31:00".into(),
+                open: 11.0,
+                high: 13.0,
+                low: 10.5,
+                close: 12.5,
+                volume: 2.0,
+                amount: 0.0,
+                metrics: Default::default(),
+            },
+        ];
+        save_test_minute(&root, &bars).unwrap();
+        let out = load_klines_with_source(
+            &root,
+            "test",
+            "2026/07/10 09:00:00",
+            "2026/07/10 10:00:00",
+            KlinePeriod::M5,
+            TickSource::File,
+        )
+        .unwrap();
+        assert_eq!(out.bars.len(), 1);
+        assert_eq!(out.bars[0].open, 10.0);
+        assert_eq!(out.bars[0].high, 13.0);
+        assert_eq!(out.bars[0].low, 9.0);
+        assert_eq!(out.bars[0].close, 12.5);
+        assert_eq!(out.quality.source, "1m");
+        let err = load_klines_with_source(
+            &root,
+            "test",
+            "2026/07/10 09:00:00",
+            "2026/07/10 10:00:00",
+            KlinePeriod::Tick,
+            TickSource::File,
+        );
+        assert!(err.is_err());
         let _ = std::fs::remove_dir_all(&root);
     }
 
