@@ -6686,3 +6686,23 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   5. 事后做三重校验：① `git apply --reverse --check` 反向套用原始补丁成功 → 在途改动一行没少；② 「stash 提交 vs 现在工作区」的差分与「合并提交本身的差分」逐字相同（都是 13 文件 / 增 479 / 删 14）→ 说明相对合并前唯一的变化就是这次合并本身；③ 「当前工作区 vs 合并提交」的差分是 14 文件 / 增 739 / 删 212，与合并前在途改动完全一致 → 在途改动已原样归位。5 个未跟踪文件与备份逐字节比对，只有 CRLF 换行被 Git 规范化，内容无差别。全仓 `<<<<<<<` / `>>>>>>>` 冲突标记扫描为零（搜到的 `=====` 全是日志分隔线，非冲突）。
 - **结果**：stash 成功、merge 成功、stash pop 成功，全程零冲突零人工取舍。合并提交 `046e6ba5` 已落在 `ANDROID_RUST` 上；新指标文件 `CHAN_RUST/flutter/chan_kline/lib/compute/wnmr_segment_compute.dart`（55 行，已被 Git 跟踪）与配套单测 `test/wnmr_segment_compute_test.dart` 完好。`git status` 仍是 19 项（14 修改 + 5 未跟踪），与合并前一致，在途工作完整保留。
 - **注意事项**：未 push（按要求，且 push 需用户另行确认）。本次只做版本合并，未动缠论计算口径、未改 Rust 代码、未编译、未启动 App；新指标尚未经过运行态与测试验证，`test/wnmr_segment_compute_test.dart` 未在本轮跑过，需要时可单独跑一次。分支 `claude/ronglide-wnmr` 在另一个 worktree 里占着（`git branch` 显示 `+`），本次未动它。
+
+---
+
+### 2026-11-15 00:02 — 分笔画板、设置面板分组、主题选择与 TEST 自定义分钟线保存接口入库
+
+- **执行者**：opencode
+- **任务类型**：提交 / 推送
+- **上下文**：工作区里攒了一批在途改动（分笔画板、设置面板分组、主题选择、TEST 自定义分钟线 OHLC 保存接口），此前一直没入库。本轮任务只做提交与推送，不改任何源码内容、不改缠论计算口径、不改 `AGENTS.md`，要求按四块粗粒度拆成 4 个 commit 后推到 `origin/ANDROID_RUST`。
+- **关键操作**：
+  1. 块 1「Rust 内核」：`git add` 三个路径（`chan_data/src/lib.rs`、`chan_data/src/offline.rs`、`chan_ffi/src/lib.rs`），提交 `feat(Rust): 新增 TEST 自定义分钟线 OHLC 保存接口`。
+  2. 块 2「Flutter 在途代码与测试」：`git add CHAN_RUST/flutter/chan_kline/lib` 与 `CHAN_RUST/flutter/chan_kline/test` 两个目录（含新增的 `lib/widgets/kline_draw_board.dart` 与两个画板测试），提交 `feat(Flutter): 接入分笔画板、设置面板分组与主题选择`。本机同步配置 `CHAN_RUST/flutter/chan_kline/.chan_sync_settings.json` 位于 `lib` 之外，全程未被 add，保持未跟踪。
+  3. 块 3「.gitignore」：末尾追加两行（`*.log.*` 覆盖 `build_rust_run.log.prev_001722.bak`，以及本机同步配置路径），提交 `chore: 忽略构建日志备份与本机同步配置`。追加时改用不重写整文件的方式，保住了文件里既有的中文注释（此前用整文件改写方式会破坏 UTF-8 中文行）。
+  4. 块 4「task-log.md」：追加本条记录，提交 `docs: 记录分笔画板与设置面板改动入库`。
+  5. 最后 `git push origin ANDROID_RUST`。
+- **结果**：
+  - `dart analyze lib test` 无 error。
+  - Flutter 定向测试 9 条全过。
+  - `cargo test -p chan_data` 151 通过、6 失败；失败项为 offline 3 条 + pipeline 3 条，已在 HEAD 版本的独立 worktree 上对拍，同样失败，属仓库既有红，非本次引入。
+  - 未改缠论计算口径；未启动 App；未改 `AGENTS.md`。
+- **注意事项**：本轮按要求未重跑 `cargo test`（一次约 7 分钟），沿用上面对拍结论；`cargo test` 的 6 条既有红仍待后续单独处理。推送只走 `origin`，未推 `peer` 远端，未改分支名、未 rebase / reset / checkout。`.chan_sync_settings.json` 与 `build_rust_run.log.prev_001722.bak` 仍在工作区（已被 .gitignore 忽略，未入库）。
