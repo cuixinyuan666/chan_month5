@@ -21,6 +21,7 @@ import '../compute/kn_volume_series_compute.dart';
 import '../compute/adjacent_ratio_compute.dart';
 import '../compute/line_slope_compute.dart';
 import '../compute/fx_extend_line_compute.dart';
+import '../compute/wnmr_segment_compute.dart';
 import '../compute/fx_pole_snug_compute.dart';
 import '../compute/trend_line_compute.dart';
 import '../compute/trend_model_compute.dart';
@@ -832,6 +833,34 @@ class BarFeatureLookup {
             focusX: b.idx,
           );
           if (cPx != null) sub['fx_chord_translated_price_$dkn'] = cPx;
+        }
+      }
+      for (var dkn = 0; dkn <= maxD; dkn++) {
+        LevelBundle? bundle;
+        for (final lv in levels) {
+          if (lv.level == dkn) {
+            bundle = lv;
+            break;
+          }
+        }
+        final segments = bundle?.segments ?? const <LevelSegmentN>[];
+        if (segments.length < 2) continue;
+        for (final b in bars) {
+          if (asOf != null && b.idx > asOf) continue;
+          final row = byIdx.putIfAbsent(b.idx, () => {'idx': b.idx});
+          final sub = row.putIfAbsent('sub', () => <String, dynamic>{})
+              as Map<String, dynamic>;
+          final visible = [
+            for (final s in segments)
+              if (s.endConfirmX <= b.idx) s,
+          ];
+          for (final mark in wnmrSegmentMarks(visible)) {
+            if (mark.barIndex != b.idx) continue;
+            final key = mark.side == 'buy'
+                ? 'wnmr_segment_buy_$dkn'
+                : 'wnmr_segment_sell_$dkn';
+            sub[key] = mark.price;
+          }
         }
       }
       // 趋势线：父层=displayKn+1（structure），dkn 最大 structureMax-1
@@ -1988,6 +2017,17 @@ class BarFeatureLookup {
       'K$displayKn对弦平移线',
       CrosshairTooltipRow.boxNum(
           chordTranslated is num ? chordTranslated.toStringAsFixed(2) : 0),
+    ));
+    final wnmrBuy = sub?['wnmr_segment_buy_$displayKn'];
+    final wnmrSell = sub?['wnmr_segment_sell_$displayKn'];
+    final wnmrText = wnmrBuy is num
+        ? '买 ${wnmrBuy.toStringAsFixed(2)}'
+        : wnmrSell is num
+            ? '卖 ${wnmrSell.toStringAsFixed(2)}'
+            : '无';
+    otherMath.add(kv(
+      'K$displayKn无脑买入线段',
+      CrosshairTooltipRow.boxNum(wnmrText),
     ));
     // 趋势线：支撑/压力延长线落到本根 K0 的价格
     final tSup = sub?['trend_support_price_$displayKn'];

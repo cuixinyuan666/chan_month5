@@ -15,6 +15,8 @@ enum MainIndicatorKind {
   fxQuadPair,
   /// K{n}对弦平移线（ab斜率平移至c点）
   fxChordTranslated,
+  /// K{n}无脑买入线段：相邻两段价格区间完全分开才出标记
+  wnmrSegment,
   /// Kn趋势线（父段内子线端点拟合支撑/压力；子线层同号）
   trendLine,
   /// K{n}底极贴合线（父段内底分型极点距离最小拟合）
@@ -66,6 +68,7 @@ extension MainIndicatorKindMeta on MainIndicatorKind {
       case MainIndicatorKind.fxTripleParallel:
       case MainIndicatorKind.fxQuadPair:
       case MainIndicatorKind.fxChordTranslated:
+      case MainIndicatorKind.wnmrSegment:
       case MainIndicatorKind.trendLine:
       case MainIndicatorKind.fxBottomSnug:
       case MainIndicatorKind.fxTopSnug:
@@ -100,6 +103,7 @@ extension MainIndicatorKindMeta on MainIndicatorKind {
       case MainIndicatorKind.fxTripleParallel:
       case MainIndicatorKind.fxQuadPair:
       case MainIndicatorKind.fxChordTranslated:
+      case MainIndicatorKind.wnmrSegment:
       case MainIndicatorKind.trendLine:
       case MainIndicatorKind.fxBottomSnug:
       case MainIndicatorKind.fxTopSnug:
@@ -139,6 +143,8 @@ class MainChartIndicator {
       : kind = MainIndicatorKind.fxQuadPair;
   const MainChartIndicator.fxChordTranslated(this.kn)
       : kind = MainIndicatorKind.fxChordTranslated;
+  const MainChartIndicator.wnmrSegment(this.kn)
+      : kind = MainIndicatorKind.wnmrSegment;
   const MainChartIndicator.trendLine(this.kn)
       : kind = MainIndicatorKind.trendLine;
   const MainChartIndicator.fxBottomSnug(this.kn)
@@ -182,6 +188,8 @@ class MainChartIndicator {
         return 'K$kn顶底对弦线';
       case MainIndicatorKind.fxChordTranslated:
         return 'K$kn对弦平移线';
+      case MainIndicatorKind.wnmrSegment:
+        return 'K$kn无脑买入线段';
       case MainIndicatorKind.trendLine:
         return 'K$kn趋势线';
       case MainIndicatorKind.fxBottomSnug:
@@ -233,32 +241,34 @@ class MainChartIndicator {
         return 5;
       case MainIndicatorKind.fxChordTranslated:
         return 6;
-      case MainIndicatorKind.trendLine:
+      case MainIndicatorKind.wnmrSegment:
         return 7;
-      case MainIndicatorKind.fxBottomSnug:
+      case MainIndicatorKind.trendLine:
         return 8;
-      case MainIndicatorKind.fxTopSnug:
+      case MainIndicatorKind.fxBottomSnug:
         return 9;
-      case MainIndicatorKind.meanLine:
+      case MainIndicatorKind.fxTopSnug:
         return 10;
-      case MainIndicatorKind.trendChannel:
+      case MainIndicatorKind.meanLine:
         return 11;
-      case MainIndicatorKind.boll:
+      case MainIndicatorKind.trendChannel:
         return 12;
-      case MainIndicatorKind.donchian:
+      case MainIndicatorKind.boll:
         return 13;
-      case MainIndicatorKind.regressionChannel:
+      case MainIndicatorKind.donchian:
         return 14;
-      case MainIndicatorKind.demark:
+      case MainIndicatorKind.regressionChannel:
         return 15;
-      case MainIndicatorKind.stepRhythm:
+      case MainIndicatorKind.demark:
         return 16;
-      case MainIndicatorKind.chipPeakSpatial:
+      case MainIndicatorKind.stepRhythm:
         return 17;
-      case MainIndicatorKind.chipPeakVolume:
+      case MainIndicatorKind.chipPeakSpatial:
         return 18;
-      case MainIndicatorKind.chipPeakPure:
+      case MainIndicatorKind.chipPeakVolume:
         return 19;
+      case MainIndicatorKind.chipPeakPure:
+        return 20;
     }
   }
 
@@ -622,6 +632,9 @@ List<MainChartIndicator> buildMainIndicatorCatalog(int maxKn) {
   for (var d = 0; d < maxKn; d++) {
     out.add(MainChartIndicator.fxChordTranslated(d));
   }
+  for (var d = 0; d < maxKn; d++) {
+    out.add(MainChartIndicator.wnmrSegment(d));
+  }
   // 趋势线 / 极贴合线：子=displayKn、父=displayKn+1；maxKn<2 仍挂 K0 占位
   final trendMax = maxKn < 2 ? 0 : maxKn - 2;
   for (var d = 0; d <= trendMax; d++) {
@@ -922,6 +935,7 @@ bool isDefaultDrawnMain(MainChartIndicator e) {
     case MainIndicatorKind.fxTripleParallel:
     case MainIndicatorKind.fxQuadPair:
     case MainIndicatorKind.fxChordTranslated:
+    case MainIndicatorKind.wnmrSegment:
     case MainIndicatorKind.trendLine:
     case MainIndicatorKind.fxBottomSnug:
     case MainIndicatorKind.fxTopSnug:

@@ -211,6 +211,10 @@ class MlFeatureLabel {
     if (key == 'sub.fx_quad_bottom_price_1') return 'K1 顶底对弦底价';
     if (key == 'sub.fx_chord_translated_price_0') return 'K0 对弦平移价';
     if (key == 'sub.fx_chord_translated_price_1') return 'K1 对弦平移价';
+    if (key == 'sub.wnmr_segment_buy_0') return 'K0 无脑买入线段买';
+    if (key == 'sub.wnmr_segment_sell_0') return 'K0 无脑买入线段卖';
+    if (key == 'sub.wnmr_segment_buy_1') return 'K1 无脑买入线段买';
+    if (key == 'sub.wnmr_segment_sell_1') return 'K1 无脑买入线段卖';
     // 趋势线
     if (key == 'sub.trend_support_price_0') return 'K0 趋势支撑';
     if (key == 'sub.trend_resist_price_1') return 'K1 趋势阻力';

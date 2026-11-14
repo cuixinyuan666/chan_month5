@@ -703,7 +703,19 @@ class MsgHistory {
       'tooltip 固定槽「K{n}三极平行线」「K{n}顶底对弦线」「K{n}对弦平移线」=延长线落到该根K0的价格(顶底对弦分顶/底)，与主图筛选同口径。'
       '十字 asOf：只认 asOfBundle 的 confirms/levels（失败空，禁末态）；线型=层色构建虚线；'
       '射线右端截到 asOf 柱心（不向未来画到视口右缘）。'
-      '默认勾选：进 catalog +「Kn指标」层全选 + 启动默认 K0。纯 Flutter，不改 Rust。',
+      '默认：进 catalog +「Kn指标」层全选 + 启动默认 K0。纯 Flutter，不改 Rust。',
+    );
+  }
+
+  /// 主图无脑买入线段（进程内去重）
+  static bool _knWnmrSegmentLogged = false;
+  void appendKnWnmrSegment() {
+    if (_knWnmrSegmentLogged) return;
+    _knWnmrSegmentLogged = true;
+    append(
+      '【K{n}无脑买入线段·主图·v1】'
+      '相邻两段价格区间完全分开才出标记；往上分开标买，往下分开标卖；两段价格碰上或端点相接就不出。'
+      '只使用截至当前已经完成的线段，不看中枢、背驰和 MACD。',
     );
   }
 

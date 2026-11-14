@@ -59,6 +59,8 @@ import 'strategy_config.dart';
             main.add(MainChartIndicator.fxQuadPair(kn));
           case 'FX_CHORD_TRANSLATED':
             main.add(MainChartIndicator.fxChordTranslated(kn));
+          case 'WNMR_SEGMENT':
+            main.add(MainChartIndicator.wnmrSegment(kn));
           case 'FX_BOTTOM_SNUG':
             main.add(MainChartIndicator.fxBottomSnug(kn));
           case 'FX_TOP_SNUG':

@@ -187,6 +187,9 @@ String fxQuadVarId(int kn, String side) =>
 
 String fxChordTranslatedVarId(int kn) => 'MAIN.K$kn.FX_CHORD_TRANSLATED.PRICE';
 
+String wnmrSegmentVarId(int kn, String side) =>
+    'MAIN.K$kn.WNMR_SEGMENT.${side.toUpperCase()}';
+
 String fxBottomSnugVarId(int kn) => 'MAIN.K$kn.FX_BOTTOM_SNUG.PRICE';
 
 String fxTopSnugVarId(int kn) => 'MAIN.K$kn.FX_TOP_SNUG.PRICE';
@@ -1138,6 +1141,44 @@ List<TradeVariableDef> buildRegisteredTradeVariablesUncached(int maxKn) {
       groupLabel: '对弦平移',
       fieldLabel: '价',
       description: 'ab 斜率平移到 c 点后的价投影，可与同层收盘/布林比',
+    ));
+    out.add(TradeVariableDef(
+      variableId: wnmrSegmentVarId(kn, 'BUY'),
+      displayName: 'K$kn无脑买入线段买',
+      panel: TradePanel.main,
+      displayKn: kn,
+      clockFamily: TradeClockFamily.zsMath,
+      evalClock: evalClockForDisplayKn(kn),
+      plotClock: TradePlotClock.k0Bar,
+      valueType: TradeValueType.objectProjection,
+      readiness: TradeReadiness.registered,
+      source: '截至当前已完成线段；相邻两段价格区间完全向上分开时取后段低点',
+      unit: 'price',
+      futureSafe: true,
+      availabilityNote: '这根不是向上缺口交界则为不可用',
+      groupKey: 'wnmrSegment',
+      groupLabel: '无脑买入线段',
+      fieldLabel: '买',
+      description: '相邻两段价格区间完全向上分开才有值，两段碰上或相接为空',
+    ));
+    out.add(TradeVariableDef(
+      variableId: wnmrSegmentVarId(kn, 'SELL'),
+      displayName: 'K$kn无脑买入线段卖',
+      panel: TradePanel.main,
+      displayKn: kn,
+      clockFamily: TradeClockFamily.zsMath,
+      evalClock: evalClockForDisplayKn(kn),
+      plotClock: TradePlotClock.k0Bar,
+      valueType: TradeValueType.objectProjection,
+      readiness: TradeReadiness.registered,
+      source: '截至当前已完成线段；相邻两段价格区间完全向下分开时取后段高点',
+      unit: 'price',
+      futureSafe: true,
+      availabilityNote: '这根不是向下缺口交界则为不可用',
+      groupKey: 'wnmrSegment',
+      groupLabel: '无脑买入线段',
+      fieldLabel: '卖',
+      description: '相邻两段价格区间完全向下分开才有值，两段碰上或相接为空',
     ));
     out.add(TradeVariableDef(
       variableId: trendLineVarId(kn, 'SUPPORT'),
