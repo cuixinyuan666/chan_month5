@@ -6670,3 +6670,19 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   3. 本次只改界面、缠论内核没动，跳过两段不必要的 Rust 重编，直接 lutter build windows --debug，日志末尾确认编出新的 chan_kline.exe，并启动。
 - **结果**：新 App 已启动（进程 47044），同时带上首分型前合并框三种口径与这两处画板修复。
 - **注意事项**：未 push；未改缠论计算口径。主仓库那边的未提交改动仍原样留着，本次只是拷贝，没有动它。主仓库的 TEST 自定义股票数据（只剩 5 根 K）未同步，本 worktree 仍是旧的 98 根，是否要一并搬过来待用户决定。
+
+---
+
+### 2026-11-14 22:22 — 合并分支「无脑买入线段」指标进 ANDROID_RUST
+
+- **执行者**：opencode
+- **任务类型**：合并 / 版本操作
+- **上下文**：分支 `claude/ronglide-wnmr` 上有一个提交 `3d104572 feat(指标): 新增主图「无脑买入线段」指标`，要合进当前分支 `ANDROID_RUST`。当前工作区有 19 项未提交改动（14 个已跟踪修改 + 5 个未跟踪文件），是主仓库自己在途的工作，必须原样保留、不能丢、不能被覆盖。要求：先 stash 再 merge，冲突两边都要保留，合并后立刻 pop 回来，不 push、不改 Rust 代码、不编译、不启动 App、不改 AGENTS.md。
+- **关键操作**：
+  1. 动手前先在临时目录做了一份独立备份（已跟踪改动的补丁 + 5 个未跟踪文件的原样拷贝），作为万一 stash 出问题时的兜底。
+  2. `git stash push -u -m 'pre-merge-opencode'` 把 19 项在途改动整体存起来，并逐项核对：stash 里已跟踪 14 个文件、未跟踪 5 个文件，一个不少；工作区随即干净。
+  3. `git merge claude/ronglide-wnmr --no-ff -m 'merge: 无脑买入线段指标合入 ANDROID_RUST'`。因为工作区已清空，Git 的三方合并**零冲突**直接合上，生成合并提交 `046e6ba5`（双亲 `03077f0f` + `3d104572`）。分支侧带来的新指标内容全部到位：新增主图指标 `wnmrSegment`、`_drawWnmrSegment` 绘制、`wnmrSegmentMarks` 调用、回测变量 `WNMR_SEGMENT`、十字线读数 `wnmr_segment_buy/sell`、msg_history 说明文案、`main.dart` 里的 `appendKnWnmrSegment` 调用，以及新文件 `lib/compute/wnmr_segment_compute.dart`。
+  4. `git stash pop` 把在途改动放回工作区。这次 Git 对 `main.dart` 和 `kline_chart.dart` 两个文件做了自动三方合并，**同样零冲突**，两边改动并存；`ticks_full_upload_panel.dart` 分支侧没动，主仓库那版「保存设置会刷新父页面，改用 addPostFrameCallback 等首帧结束再写，避免构建中途 setState」的修复原样保留。
+  5. 事后做三重校验：① `git apply --reverse --check` 反向套用原始补丁成功 → 在途改动一行没少；② 「stash 提交 vs 现在工作区」的差分与「合并提交本身的差分」逐字相同（都是 13 文件 / 增 479 / 删 14）→ 说明相对合并前唯一的变化就是这次合并本身；③ 「当前工作区 vs 合并提交」的差分是 14 文件 / 增 739 / 删 212，与合并前在途改动完全一致 → 在途改动已原样归位。5 个未跟踪文件与备份逐字节比对，只有 CRLF 换行被 Git 规范化，内容无差别。全仓 `<<<<<<<` / `>>>>>>>` 冲突标记扫描为零（搜到的 `=====` 全是日志分隔线，非冲突）。
+- **结果**：stash 成功、merge 成功、stash pop 成功，全程零冲突零人工取舍。合并提交 `046e6ba5` 已落在 `ANDROID_RUST` 上；新指标文件 `CHAN_RUST/flutter/chan_kline/lib/compute/wnmr_segment_compute.dart`（55 行，已被 Git 跟踪）与配套单测 `test/wnmr_segment_compute_test.dart` 完好。`git status` 仍是 19 项（14 修改 + 5 未跟踪），与合并前一致，在途工作完整保留。
+- **注意事项**：未 push（按要求，且 push 需用户另行确认）。本次只做版本合并，未动缠论计算口径、未改 Rust 代码、未编译、未启动 App；新指标尚未经过运行态与测试验证，`test/wnmr_segment_compute_test.dart` 未在本轮跑过，需要时可单独跑一次。分支 `claude/ronglide-wnmr` 在另一个 worktree 里占着（`git branch` 显示 `+`），本次未动它。
