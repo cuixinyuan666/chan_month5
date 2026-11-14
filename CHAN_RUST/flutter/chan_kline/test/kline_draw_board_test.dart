@@ -1,3 +1,4 @@
+import 'package:chan_kline/chart/kline_candle_geometry.dart';
 import 'package:chan_kline/widgets/kline_draw_board.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -40,7 +41,7 @@ void main() {
     );
   });
 
-  test('增加复制同价，减少删除，上下拖动只改影线', () {
+  test('增加复制同价，减少删除', () {
     final model = KlineDrawBoardModel.initial().addCandle(
       const KlineDrawCandle(open: 10, high: 11, low: 10, close: 11),
     );
@@ -49,12 +50,80 @@ void main() {
     expect(added.selected, 1);
     expect(added.candles[1].close, 11);
 
-    final raised = added.moveSelectedExtreme(12);
-    expect(raised.candles[1].high, 12);
-    expect(raised.candles[1].open, 10);
-    expect(raised.candles[1].close, 11);
-
-    final removed = raised.removeSelected();
+    final removed = added.removeSelected();
     expect(removed.candles, hasLength(1));
+  });
+
+  test('部位拖动：实体改开/收盘，影线改高/低，四价互不干扰', () {
+    final model = KlineDrawBoardModel.initial().addCandle(
+      const KlineDrawCandle(open: 10, high: 12, low: 9, close: 11),
+    );
+    // 拖上影线端点 → 只改最高价
+    final hi = model.moveSelectedPart(CandlePart.high, 13);
+    expect(hi.candles[0].high, 13);
+    expect(hi.candles[0].open, 10);
+    expect(hi.candles[0].close, 11);
+    expect(hi.candles[0].low, 9);
+
+    // 拖下影线端点 → 只改最低价
+    final lo = model.moveSelectedPart(CandlePart.low, 8);
+    expect(lo.candles[0].low, 8);
+    expect(lo.candles[0].high, 12);
+
+    // 拖实体 → 改收盘价（阳线上半是收盘）
+    final body = model.moveSelectedPart(CandlePart.bodyClose, 11.5);
+    expect(body.candles[0].close, 11.5);
+    expect(body.candles[0].open, 10);
+
+    // 拖实体 → 改开盘价
+    final open = model.moveSelectedPart(CandlePart.bodyOpen, 9.5);
+    expect(open.candles[0].open, 9.5);
+    expect(open.candles[0].close, 11);
+
+    // 不变量：影线不得落进实体
+    final bad = model.moveSelectedPart(CandlePart.high, 10.5);
+    expect(bad.candles[0].high, greaterThanOrEqualTo(11)); // max(open,close)=11
+    final badLow = model.moveSelectedPart(CandlePart.low, 10.5);
+    expect(badLow.candles[0].low, lessThanOrEqualTo(10)); // min(open,close)=10
+  });
+
+  test('新 K 落在光标位置而不是末尾', () {
+    final m0 = KlineDrawBoardModel.initial().addCandle(
+      const KlineDrawCandle(open: 10, high: 10, low: 10, close: 10),
+    );
+    final m1 = m0.addCandle(
+      const KlineDrawCandle(open: 20, high: 20, low: 20, close: 20),
+    );
+    final m2 = m1.insertCandleAt(
+      const KlineDrawCandle(open: 15, high: 15, low: 15, close: 15),
+      1,
+    );
+    expect(m2.candles.map((c) => c.open).toList(), [10, 15, 20]);
+    expect(m2.selected, 1);
+
+    // 下标越界/null → 追加到末尾
+    final tail = m1.insertCandleAt(
+      const KlineDrawCandle(open: 15, high: 15, low: 15, close: 15),
+      null,
+    );
+    expect(tail.candles.map((c) => c.open).toList(), [10, 20, 15]);
+    expect(tail.selected, 2);
+  });
+
+  test('草稿带路径极值：路径最高=最高价，路径最低=最低价', () {
+    final bare = buildKlineDrawDraft(10, 11);
+    expect(bare.high, 11);
+    expect(bare.low, 10);
+
+    final withPath = bare.withExtremes(12.5, 9.5);
+    expect(withPath.high, 12.5);
+    expect(withPath.low, 9.5);
+    expect(withPath.open, 10);
+    expect(withPath.close, 11);
+
+    // 极值不得破坏 K 线不变量
+    final clamped = bare.withExtremes(9, 12);
+    expect(clamped.high, 11);
+    expect(clamped.low, 10);
   });
 }
