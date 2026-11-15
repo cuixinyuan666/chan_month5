@@ -7,6 +7,10 @@
 /// - 影线：只画实体之外的两段（见 `candle_wick.dart` 的语义）；
 /// - 像素↔价格：用 `PriceRange.yOf` / `priceFromY` 互为逆运算。
 ///
+/// 2026-11-16 用户明确：画板不再区分抓取部位（不再有 CandlePart 枚举，
+/// 不再按部位改开/收/高/低）。抓 K 线本体=整根平移（形状不变），
+/// 且平移钳制在按下时的可视价格区间内，防其余已画 K 被压成一条线。
+///
 /// 画板（K线画板）以前没有这层几何，只能靠「分笔圆点命中」那条只认识
 /// `close` 价格的旧通道，结果就是「按住实体没反应、反而多出一根 K」。
 library;
@@ -18,19 +22,6 @@ import 'package:flutter/material.dart';
 import '../models/kline_bar.dart';
 import '../widgets/candle_wick.dart';
 import '../widgets/kline_viewport.dart';
-
-/// K 线可被抓取的部位。
-enum CandlePart {
-  /// 实体中段偏上：抓它改开盘价（阳线上半是开盘侧的判据见
-  /// [candleBodyPart]）。
-  bodyOpen,
-  /// 实体中段偏下：抓它改收盘价。
-  bodyClose,
-  /// 上影线端点：抓它改最高价。
-  high,
-  /// 下影线端点：抓它改最低价。
-  low,
-}
 
 /// 单根 K 线的实体/影线屏幕几何。
 class CandleGeometry {
@@ -114,23 +105,6 @@ CandleGeometry candleGeometryOf({
     bodyTop: top,
     bodyBottom: bottom,
   );
-}
-
-/// 命中实体时判定抓到的是开盘侧还是收盘侧。
-///
-/// 阳线（收 ≥ 开）：上半截靠收盘价，下半截靠开盘价；
-/// 阴线（收 < 开）：上半截靠开盘价，下半截靠收盘价。
-CandlePart candleBodyPart({
-  required KlineBar bar,
-  required CandleGeometry geo,
-  required double localDy,
-}) {
-  final up = bar.close >= bar.open;
-  final upperHalf = localDy <= geo.bodyRect.center.dy;
-  if (up) {
-    return upperHalf ? CandlePart.bodyClose : CandlePart.bodyOpen;
-  }
-  return upperHalf ? CandlePart.bodyOpen : CandlePart.bodyClose;
 }
 
 /// K线画板用的 K0 视口几何（与 KlineChart 绘制同源）。

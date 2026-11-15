@@ -202,50 +202,47 @@ class KlineDrawBoardModel {
 
   KlineDrawBoardModel removeSelected() => deleteSelected();
 
-  /// 拖动选中 K 线的某个部位：把该部位的价格改到 [price]。
+  /// 整根平移第 [index] 根 K：四价同移 [delta]（正=价格上移），形状不变。
   ///
-  /// 四个部位彼此独立：实体中段上/下半分别改开盘/收盘价（按阳线阴线
-  /// 判断哪半是开、哪半是收），上下影线端点分别改最高/最低价。
-  /// 改完仍要满足 K 线不变量：high >= max(open,close)、low <= min(open,close)。
-  KlineDrawBoardModel moveSelectedPart(CandlePart part, double price) {
-    if (!hasSelection) return this;
-    return movePartAt(selected, part, price);
-  }
-
-  /// 拖动第 [index] 根 K 的某个部位：把该部位的价格改到 [price]。
+  /// 2026-11-16 用户明确：废弃「按部位改价」（拖影线端点改最高/最低会把
+  /// 价格区间撑爆，其余已画 K 被压成一条线）。改为整根平移。
+  ///
+  /// 钳制（防压缩的核心）：平移后四价必须落在 [clampLo, clampHi]——即按下
+  /// 瞬间**全体可见 K（含自己）**的极值并集。并集只可能缩小、绝不扩大，
+  /// 其余已画 K 的像素高度不会塌缩；区间外的 K 也可自由移进并集内。
+  /// clampLo/Hi 为 null（板上仅这一根 K，没有别人可压）时不钳。
   ///
   /// 按下瞬间「选中」还没回传到模型（要等父组件重建才生效），若此时只认
-  /// [selected]，第一帧位移会被吞掉。故按**下标**改价，与选中状态解耦。
-  KlineDrawBoardModel movePartAt(int index, CandlePart part, double price) {
+  /// [selected]，第一帧位移会被吞掉。故按**下标**平移，与选中状态解耦。
+  KlineDrawBoardModel moveCandleAt(
+    int index,
+    double delta, {
+    required double? clampLo,
+    required double? clampHi,
+  }) {
     if (index < 0 || index >= candles.length) return this;
     final c = candles[index];
-    var open = c.open;
-    var close = c.close;
-    var high = c.high;
-    var low = c.low;
-    switch (part) {
-      case CandlePart.bodyOpen:
-        open = price;
-        break;
-      case CandlePart.bodyClose:
-        close = price;
-        break;
-      case CandlePart.high:
-        high = price;
-        break;
-      case CandlePart.low:
-        low = price;
-        break;
+    final lo = clampLo;
+    final hi = clampHi;
+    if (lo == null || hi == null) {
+      return _moveCandleBy(index, delta);
     }
-    // 守住不变量：影线不得落进实体内部。
-    high = math.max(high, math.max(open, close));
-    low = math.min(low, math.min(open, close));
+    // 价格上移空间（high 到并集上沿）与下移空间（low 到并集下沿）。
+    final maxUp = (hi - c.high).clamp(0.0, double.infinity);
+    final maxDown = (c.low - lo).clamp(0.0, double.infinity);
+    return _moveCandleBy(index, delta.clamp(-maxDown, maxUp));
+  }
+
+  /// 不钳制的整根平移（四价同移 [delta]，形状不变）。
+  KlineDrawBoardModel _moveCandleBy(int index, double delta) {
+    if (index < 0 || index >= candles.length || delta == 0) return this;
+    final c = candles[index];
     final next = [...candles];
     next[index] = KlineDrawCandle(
-      open: open,
-      high: high,
-      low: low,
-      close: close,
+      open: c.open + delta,
+      high: c.high + delta,
+      low: c.low + delta,
+      close: c.close + delta,
       volume: c.volume,
     );
     return copyWith(candles: next);
@@ -406,10 +403,13 @@ class _KlineDrawBoardState extends State<KlineDrawBoard> {
   /// 本次拖动路径上的价格极值（帮助文字承诺的口径）。
   double? _pathHigh;
   double? _pathLow;
-  /// 本次拖动冻结的基准价（部位对应的原始价格）。
-  double? _dragBasePrice;
   /// 本次拖动冻结的基准几何（拖动期间价格区间会变，不冻结会漂移）。
   KlineDrawGeometry? _dragBaseGeom;
+  /// 本次拖动的钳制下沿：按下瞬间除被拖 K 之外其余可见 K 的最低价。
+  /// null = 板上只有这一根（没有别人可压，不钳）。
+  double? _dragClampLo;
+  /// 本次拖动的钳制上沿：按下瞬间除被拖 K 之外其余可见 K 的最高价。
+  double? _dragClampHi;
 
   @override
   void initState() {
@@ -537,10 +537,12 @@ class _KlineDrawBoardState extends State<KlineDrawBoard> {
           // 绘制锚：只有被选中 K 槽位右缘以右的空白才允许开始画新 K。
           candleDrawAnchorIdx:
               primary ? (model.hasSelection ? model.selected : -1) : -1,
-          // 部位抓取/拖动：K线画板专用通道（分笔画板不接，互不影响）。
-          onCandlePartGrab: primary ? _grabCandlePart : null,
-          onCandlePartDrag: primary ? _dragCandlePart : null,
-          onCandlePartDragEnd: primary ? _endCandlePartDrag : null,
+          // 抓取/拖动：K线画板专用通道（分笔画板不接，互不影响）。
+          // 2026-11-16 起为整根平移：抓本体任意处拖动，形状不变，
+          // 钳制在按下时其余可见 K 的极值区间内（防其余 K 被压成一条线）。
+          onCandleGrab: primary ? _grabCandle : null,
+          onCandleDrag: primary ? _dragCandle : null,
+          onCandleDragEnd: primary ? _endCandleDrag : null,
           onViewportChanged: primary ? _onViewportChanged : null,
           onMainIndicatorsChanged: widget.onMainIndicatorsChanged,
           onSubIndicatorsChanged: widget.onSubIndicatorsChanged,
@@ -659,44 +661,64 @@ class _KlineDrawBoardState extends State<KlineDrawBoard> {
     return Rect.fromLTRB(x - 8, top, x + 8, bottom);
   }
 
-  /// 按住某根 K 线的部位：选中它，并冻结本次拖动的基准价与基准几何。
+  /// 按住某根 K 线：选中它，并冻结本次拖动的基准几何与钳制区间。
   ///
-  /// 基准必须冻结：拖动过程中价格区间会随这根 K 的高低点变，若每帧都拿
-  /// 「当前价 + 本帧位移」重算，会一点点漂移（拖不准）。
-  void _grabCandlePart(int index, CandlePart part) {
+  /// 钳制区间 = 按下瞬间**全体可见 K（含被拖 K 自己）**的极值并集
+  /// [min(low), max(high)]。被拖 K 平移时四价被钳在该并集内 → 并集绝不
+  /// 扩大，其余已画 K 的像素高度不会塌缩（不会被压成一条线，
+  /// 2026-11-16 用户明确）；并集内的来回移动不受限（拖过头还能拖回来）。
+  /// 板上**只有这一根**可见 K 时不钳（没有别人可压，随便移）。
+  /// 基准几何必须冻结：拖动中价格区间会随被拖 K 变，不冻结会漂移（拖不准）。
+  void _grabCandle(int index) {
     final bars = model.toBars();
     if (index < 0 || index >= bars.length) return;
-    final c = bars[index];
-    _dragBasePrice = switch (part) {
-      CandlePart.bodyOpen => c.open,
-      CandlePart.bodyClose => c.close,
-      CandlePart.high => c.high,
-      CandlePart.low => c.low,
-    };
     _dragBaseGeom = _geom ?? _geometry(_lastPaneWidth, _lastPaneHeight);
+    final vp = _sync.viewportFor(0);
+    final visible = vp.ready ? vp.visibleBars(bars) : const <KlineBar>[];
+    var lo = double.infinity;
+    var hi = double.negativeInfinity;
+    var otherSeen = false;
+    for (final b in visible) {
+      if (b.idx != index) otherSeen = true;
+      lo = math.min(lo, b.low);
+      hi = math.max(hi, b.high);
+    }
+    final clamp = otherSeen && lo.isFinite && hi.isFinite;
+    _dragClampLo = clamp ? lo : null;
+    _dragClampHi = clamp ? hi : null;
     if (!model.hasSelection || model.selected != index) {
       widget.onChanged(model.select(index));
     }
   }
 
-  /// 拖动部位改价：像素位移 → 价格（与绘制互逆，拖 1 像素就动 1 像素对应价）。
+  /// 拖动整根 K 平移：像素位移 → 价格位移（与绘制互逆，拖 1 像素动 1 像素）。
   ///
   /// [dy] 是「从按下点到当前点」的累计位移（图表侧固定按下点不重置）。
-  void _dragCandlePart(int index, CandlePart part, double dx, double dy) {
+  /// 映射用按下时冻结的几何；线性映射下价格位移 = -dy * span/plotH，
+  /// 与锚定哪一价无关。
+  void _dragCandle(int index, double dx, double dy) {
     final g = _dragBaseGeom;
-    final base = _dragBasePrice;
-    if (g == null || base == null) return;
+    if (g == null) return;
     final bars = model.toBars();
     if (index < 0 || index >= bars.length) return;
-    // 像素位移 → 价格：priceFromY 与 yOf 互逆，dy 为正（向下）= 价格变低。
-    final endPrice = g.priceAt(g.yOf(base) + dy);
-    widget.onChanged(model.movePartAt(index, part, endPrice));
+    final delta = g.priceAt(g.yOf(bars[index].close) + dy) -
+        g.priceAt(g.yOf(bars[index].close));
+    widget.onChanged(
+      // 钳制区间为 null（板上仅这一根 K，没有别人可压）时 moveCandleAt 不钳。
+      model.moveCandleAt(
+        index,
+        delta,
+        clampLo: _dragClampLo,
+        clampHi: _dragClampHi,
+      ),
+    );
   }
 
   /// 拖动结束：清掉冻结的基准（下次拖动重新冻结）。
-  void _endCandlePartDrag() {
-    _dragBasePrice = null;
+  void _endCandleDrag() {
     _dragBaseGeom = null;
+    _dragClampLo = null;
+    _dragClampHi = null;
   }
 
   /// 视口（缩放/平移/换数据）变化后重算几何与选中框。

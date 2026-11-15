@@ -216,9 +216,9 @@ class KlineChart extends StatefulWidget {
     this.onTickDotTap,
     this.onTickDotDrag,
     this.onTickDotDragEnd,
-    this.onCandlePartGrab,
-    this.onCandlePartDrag,
-    this.onCandlePartDragEnd,
+    this.onCandleGrab,
+    this.onCandleDrag,
+    this.onCandleDragEnd,
     this.onCandleDraw,
     this.candleDrawAnchorIdx = -1,
     this.selectedTickIdx = -1,
@@ -399,19 +399,22 @@ class KlineChart extends StatefulWidget {
   /// （否则永远画不出第一根）。闸不过的空白拖动一律归平移/十字线逻辑。
   final int candleDrawAnchorIdx;
 
-  /// K线画板：按住了某根 K 线的哪个部位（实体上/下缘、上下影线端点）。
+  /// K线画板：按住了某根 K 线本体（2026-11-16 起不分部位）。
   ///
   /// 这条通道与分笔圆点命中（[onTickDotTap]）完全独立：圆点通道只认识
   /// `close` 价格，抓不到 K 线实体；本通道走 `kline_candle_geometry.dart`，
   /// 与蜡烛绘制同源，故「画在哪就抓得到哪」。
-  final void Function(int barIdx, CandlePart part)? onCandlePartGrab;
+  /// 语义为整根平移：抓实体/影线任意处都是拖动整根 K（形状不变）。
+  final void Function(int barIdx)? onCandleGrab;
 
-  /// K线画板：拖动被抓住的部位（dx/dy 为像素位移）。
-  final void Function(int barIdx, CandlePart part, double dx, double dy)?
-      onCandlePartDrag;
+  /// K线画板：拖动被抓住的 K 线（dy 为像素位移，dx 保留参数当前恒 0）。
+  ///
+  /// 钳制在画板侧做：被拖 K 的最高/最低不得越过按下时其余可见 K 的
+  /// 极值区间，防止价格区间被撑爆、其余 K 被压成一条线。
+  final void Function(int barIdx, double dx, double dy)? onCandleDrag;
 
-  /// K线画板：拖动部位结束（松手）。
-  final VoidCallback? onCandlePartDragEnd;
+  /// K线画板：拖动结束（松手）。
+  final VoidCallback? onCandleDragEnd;
 
   /// 当前被选中的分笔圆点下标（-1=无）。画板用它画聚焦标识。
   final int selectedTickIdx;
@@ -522,9 +525,8 @@ class _KlineChartState extends State<KlineChart> {
   /// 画板：正在拖动的分笔圆点下标（null=未在拖）。
   int? _tickDragIdx;
   /// 画板：正在拖动的 K 线部位（null=未在拖）。
-  int? _candlePartIdx;
-  CandlePart? _candlePart;
-  Offset? _candlePartStart;
+  int? _candleDragIdx;
+  Offset? _candleDragStart;
   Offset? _tickDragStart;
   int? _candleDrawPointer;
   double? _candleDrawStartPrice;
@@ -1636,13 +1638,44 @@ class _KlineChartState extends State<KlineChart> {
       );
     } else if (ctrl) {
       _viewport.markUserAdjusted();
-      _viewport.zoomY(e.scrollDelta.dy < 0);
+      // 2026-11-16 纵向也锚定鼠标：缩放前后鼠标下的价格不动
+      final factor = e.scrollDelta.dy > 0
+          ? 1 / KlineViewport.zoomFactor
+          : KlineViewport.zoomFactor;
+      _zoomYAnchored(factor, e.localPosition.dy, mainPlotH);
     } else {
       _viewport.markUserAdjusted();
       final factor = e.scrollDelta.dy > 0 ? 1 / KlineViewport.zoomFactor : KlineViewport.zoomFactor;
       _viewport.zoomXAt(factor, e.localPosition.dx, _chartSize.width);
     }
     _scheduleRedraw();
+  }
+
+  /// 纵向锚定缩放（2026-11-16）：缩放围绕 [focalDy] 所在屏幕行，
+  /// 该行价格缩放前后不动。base 取当前可见 K 的未缩放区间
+  /// （与 priceRangeFor / centerLatestVertically 同口径）。
+  void _zoomYAnchored(double factor, double focalDy, double mainPlotH) {
+    if (_chartSize.width <= 0 || widget.bars.isEmpty) return;
+    final plotTop = _zonePlotTop;
+    final plotH = math.max(1.0, mainPlotH);
+    final visible = _viewport.visibleBars(widget.bars);
+    if (visible.isEmpty) return;
+    var yMin = visible.first.low;
+    var yMax = visible.first.high;
+    for (final b in visible) {
+      yMin = math.min(yMin, b.low);
+      yMax = math.max(yMax, b.high);
+    }
+    if ((yMax - yMin).abs() < 1e-9) {
+      yMin -= 0.5;
+      yMax += 0.5;
+    }
+    final baseSpan = math.max(1e-6, yMax - yMin);
+    final baseMid = (yMax + yMin) / 2;
+    final range = _hitPriceRange ?? _viewport.priceRangeFor(visible);
+    final anchorPrice = range.priceFromY(focalDy, plotTop, plotH);
+    final rel = ((focalDy - plotTop) / plotH).clamp(0.0, 1.0);
+    _viewport.zoomYAtPrice(factor, anchorPrice, rel, baseMid, baseSpan);
   }
 
   /// 十字信息实际用的滚动控制器。
@@ -1839,9 +1872,9 @@ class _KlineChartState extends State<KlineChart> {
       _viewport.indexToX(barIdx.toDouble(), w) + slotW / 2;
 
   int? _hitTickDot(Offset p) {
-    // K线画板走部位命中（见 _hitCandlePart），不用圆点命中：
+    // K线画板走 K 线本体命中（见 _hitCandle），不用圆点命中：
     // 圆点只匹配 close 价格，抓不到 K 线实体。
-    if (widget.onCandlePartGrab != null) return null;
+    if (widget.onCandleGrab != null) return null;
     if ((widget.period != 'tick' && widget.onCandleDraw == null) ||
         widget.bars.isEmpty) return null;
     final w = _chartSize.width;
@@ -1909,12 +1942,14 @@ class _KlineChartState extends State<KlineChart> {
     return local.dx > right;
   }
 
-  /// 命中 K 线的哪个部位：按实体矩形 + 上下影线段判定。
+  /// 命中 K 线本体：按「整根 K 的包络矩形（影线外沿 + 实体）」判定。
   ///
+  /// 2026-11-16 起不分部位（废弃原实体上/下半、上下影线端点的四分法）：
+  /// 抓 K 线任意处 = 整根平移，形状不变。
   /// 与 [_drawCandles] 同源（走 `kline_candle_geometry.dart`），
   /// 故「画在哪就抓得到哪」。
-  (int, CandlePart)? _hitCandlePart(Offset p) {
-    if (widget.onCandlePartGrab == null || widget.bars.isEmpty) return null;
+  int? _hitCandle(Offset p) {
+    if (widget.onCandleGrab == null || widget.bars.isEmpty) return null;
     final w = _chartSize.width;
     if (w <= 0 || _hitMainH <= 1) return null;
     final plotTop = _resolveMainPlotTop(context);
@@ -1925,57 +1960,25 @@ class _KlineChartState extends State<KlineChart> {
     final visible = viewport.visibleBars(widget.bars);
     if (visible.isEmpty) return null;
     const grabSlop = 5.0;
-    // 影线端点的命中容差要**小**：端点常落在主/副图分割条附近，
-    // 容差一大就会把「拖分割条」误判成「拖影线端点」，拖动时窗格高度
-    // 跟着变，K 线在屏幕上滑动，用户完全跟不上。
-    const wickSlop = 3.0;
-    final geos = <CandleGeometry>[
-      for (final bar in visible)
-        candleGeometryOf(
-          bar: bar,
-          barIdx: bar.idx,
-          viewport: viewport,
-          canvasWidth: w,
-          range: range,
-          plotTop: plotTop,
-          plotH: plotH,
-        ),
-    ];
-    // ① 影线端点（最高/最低价）：圆点式命中，取所有候选里最近的一个。
-    (int, CandlePart)? best;
-    var bestD = double.infinity;
-    for (var i = 0; i < geos.length; i++) {
-      final g = geos[i];
-      final dHigh = (Offset(g.cx, g.yHigh) - p).distance;
-      if (dHigh <= wickSlop && dHigh < bestD) {
-        bestD = dHigh;
-        best = (visible[i].idx, CandlePart.high);
-      }
-      final dLow = (Offset(g.cx, g.yLow) - p).distance;
-      if (dLow <= wickSlop && dLow < bestD) {
-        bestD = dLow;
-        best = (visible[i].idx, CandlePart.low);
-      }
-    }
-    if (best != null) return best;
-    // ② 上下影线段
-    for (var i = 0; i < geos.length; i++) {
-      final g = geos[i];
-      if (g.upperWickRect.inflate(grabSlop).contains(p)) {
-        return (visible[i].idx, CandlePart.high);
-      }
-      if (g.lowerWickRect.inflate(grabSlop).contains(p)) {
-        return (visible[i].idx, CandlePart.low);
-      }
-    }
-    // ③ 实体：上半/下半决定改开盘价还是收盘价。
-    for (var i = 0; i < geos.length; i++) {
-      final g = geos[i];
-      if (!g.bodyRect.inflate(grabSlop).contains(p)) continue;
-      return (
-        visible[i].idx,
-        candleBodyPart(bar: visible[i], geo: g, localDy: p.dy),
+    for (final bar in visible) {
+      final g = candleGeometryOf(
+        bar: bar,
+        barIdx: bar.idx,
+        viewport: viewport,
+        canvasWidth: w,
+        range: range,
+        plotTop: plotTop,
+        plotH: plotH,
       );
+      // 整根 K 的包络：cx ± barW/2 的窄条 + 上下影线全长。
+      // 实体宽时就是实体矩形；影线比实体长时覆盖影线段。
+      final left = g.cx - g.barW / 2 - grabSlop;
+      final right = g.cx + g.barW / 2 + grabSlop;
+      final top = math.min(g.yHigh, g.bodyTop) - grabSlop;
+      final bottom = math.max(g.yLow, g.bodyBottom) + grabSlop;
+      if (p.dx >= left && p.dx <= right && p.dy >= top && p.dy <= bottom) {
+        return bar.idx;
+      }
     }
     return null;
   }
@@ -1991,11 +1994,11 @@ class _KlineChartState extends State<KlineChart> {
   void _onPointerDown(PointerDownEvent e) {
     // 画板模式：主图底边那条带子是分割把手的位置，正好盖住影线端点。
     // 指针先到图表的 Listener（画板模式下把手让位），这里按
-    // 「抓到的是 K 线部位还是空白」分流：抓到部位 → 改价（下面处理）；
+    // 「抓到的是 K 线本体还是空白」分流：抓到本体 → 整根平移（下面处理）；
     // 抓到空白且落在分割把手带子里 → 拖分割条（调窗格高度）。
-    if (widget.onCandlePartGrab != null &&
+    if (widget.onCandleGrab != null &&
         e.buttons & kPrimaryMouseButton != 0 &&
-        _hitCandlePart(e.localPosition) == null &&
+        _hitCandle(e.localPosition) == null &&
         _isOnSplitHandle(e.localPosition)) {
       _splitDragging = true;
       _clearTickIdleYinYang();
@@ -2005,22 +2008,21 @@ class _KlineChartState extends State<KlineChart> {
       _panStart = null;
       return;
     }
-    // K线画板：先看是不是抓住了某根 K 线的部位（实体/影线）。
-    // 抓住了 → 进入「拖部位改价」，不再走画新 K、十字线、平移。
-    if (widget.onCandlePartGrab != null &&
+    // K线画板：先看是不是抓住了某根 K 线本体（整根平移，不分部位）。
+    // 抓住了 → 进入「拖整根 K」，不再走画新 K、十字线、平移。
+    if (widget.onCandleGrab != null &&
         e.buttons & kPrimaryMouseButton != 0) {
-      final hit = _hitCandlePart(e.localPosition);
+      final hit = _hitCandle(e.localPosition);
       if (hit != null) {
-        _candlePartIdx = hit.$1;
-        // 冻结价格区间：拖动改价期间区间不能跟着被拖的 K 变，
+        _candleDragIdx = hit;
+        // 冻结价格区间：拖动期间区间不能跟着被拖的 K 变，
         // 否则像素↔价格映射漂移（拖不准）。
         _frozenPriceRange = _hitPriceRange;
-        _candlePart = hit.$2;
-        _candlePartStart = e.localPosition;
+        _candleDragStart = e.localPosition;
         _zonePointerDown = null;
         _zonePointerId = null;
         _zoneMoved = true;
-        widget.onCandlePartGrab?.call(hit.$1, hit.$2);
+        widget.onCandleGrab?.call(hit);
         return;
       }
     }
@@ -2089,11 +2091,11 @@ class _KlineChartState extends State<KlineChart> {
   }
 
   void _onPointerMove(PointerMoveEvent e, double mainPlotH, double contentBottom) {
-    // 画板：正在拖 K 线的某个部位 → 交给外部改价（不参与平移/十字）。
-    if (_candlePartIdx != null && _candlePart != null && _candlePartStart != null) {
-      final dx = e.localPosition.dx - _candlePartStart!.dx;
-      final dy = e.localPosition.dy - _candlePartStart!.dy;
-      widget.onCandlePartDrag?.call(_candlePartIdx!, _candlePart!, dx, dy);
+    // 画板：正在拖某根 K 线 → 交给外部整根平移（不参与平移/十字）。
+    if (_candleDragIdx != null && _candleDragStart != null) {
+      final dx = e.localPosition.dx - _candleDragStart!.dx;
+      final dy = e.localPosition.dy - _candleDragStart!.dy;
+      widget.onCandleDrag?.call(_candleDragIdx!, dx, dy);
       return;
     }
     if (_candleDrawPointer == e.pointer && _candleDrawStartPrice != null) {
@@ -2150,13 +2152,12 @@ class _KlineChartState extends State<KlineChart> {
   }
 
   void _onPointerUp(PointerUpEvent e) {
-    // 画板：拖 K 线部位结束。选中已在按下时完成，这里只收尾，
+    // 画板：拖 K 线结束。选中已在按下时完成，这里只收尾，
     // 不再补一次点击（否则「按下即选中」会被这次抬起反选掉）。
-    if (_candlePartIdx != null) {
-      _candlePartIdx = null;
-      _candlePart = null;
-      _candlePartStart = null;
-      widget.onCandlePartDragEnd?.call();
+    if (_candleDragIdx != null) {
+      _candleDragIdx = null;
+      _candleDragStart = null;
+      widget.onCandleDragEnd?.call();
       _frozenPriceRange = null;
       return;
     }
@@ -2463,8 +2464,8 @@ class _KlineChartState extends State<KlineChart> {
     // 否则圆点跟着图一起走，看起来按住的那根没动，只能靠拖别的根
     // 把图挪开，间接改变它的相对位置。
     if (_tickDragIdx != null) return;
-    // 画板：按住 K 线部位改价时，整图平移不能同时生效。
-    if (_candlePartIdx != null) return;
+    // 画板：按住 K 线本体拖动（整根平移）时，整图平移不能同时生效。
+    if (_candleDragIdx != null) return;
     _clearTickIdleYinYang();
     if (_crosshairEnabled) _iAmCrosshairOwner = true;
     _panning = true;
@@ -2479,7 +2480,7 @@ class _KlineChartState extends State<KlineChart> {
         _panStart == null ||
         _splitDragging ||
         _candleDrawPointer != null ||
-        _candlePartIdx != null) {
+        _candleDragIdx != null) {
       return;
     }
     final dx = d.localPosition.dx - _panStart!.dx;
@@ -2522,9 +2523,10 @@ class _KlineChartState extends State<KlineChart> {
     _viewport.zoomXAt(factor, anchorX, _chartSize.width);
   }
 
-  void _applyPinchZoomY(double factor) {
+  void _applyPinchZoomY(double factor, double focalDy, double mainPlotH) {
     if ((factor - 1.0).abs() <= 1e-6) return;
-    _viewport.zoomYBy(factor);
+    // 2026-11-16 纵向锚定缩放：围绕双指焦点行，焦点下价格不动
+    _zoomYAnchored(factor, focalDy, mainPlotH);
   }
 
   void _onPinchScaleUpdate(ScaleUpdateDetails d, double mainPlotH) {
@@ -2582,7 +2584,7 @@ class _KlineChartState extends State<KlineChart> {
       } else if (d.focalPointDelta.dy.abs() > 0.3) {
         factor = math.exp(-d.focalPointDelta.dy * 0.012);
       }
-      _applyPinchZoomY(factor);
+      _applyPinchZoomY(factor, d.localFocalPoint.dy, mainPlotH);
     } else if (pinchActive) {
       // 未锁定轴向时先响应捏合，默认横向
       _applyPinchZoomX(scaleStep, d.localFocalPoint.dx);
@@ -3040,9 +3042,9 @@ class _KlineChartState extends State<KlineChart> {
         e.buttons != kPrimaryMouseButton) {
       return;
     }
-    // 画板模式（onCandlePartGrab != null）下分割把手让位给图表的指针通道，
+    // 画板模式（onCandleGrab != null）下分割把手让位给图表的指针通道，
     // 这里只在非画板模式被调用。
-    if (_candlePartIdx != null || _candleDrawPointer != null) return;
+    if (_candleDragIdx != null || _candleDrawPointer != null) return;
     _splitDragging = true;
     _clearTickIdleYinYang();
     _splitDragStartY = e.localPosition.dy;
@@ -3466,11 +3468,11 @@ class _KlineChartState extends State<KlineChart> {
                 child: Center(
                     // 分割把手在 Stack 里盖在图表 Listener **上面**：指针先到它。
                     // 但它这一带（主图底边 28 像素）正好是影线端点所在，
-                    // 若它先接管，拖影线就变成拖分割条（窗格高度跟着变，
+                    // 若它先接管，拖 K 线就变成拖分割条（窗格高度跟着变，
                     // K 线在屏幕上滑动，完全跟不上）。
                     // 故：画板模式下把手让给图表的指针通道（它有正确的
                     // 图表坐标，且已内建 _splitDragging 处理）。
-                    child: widget.onCandlePartGrab != null
+                    child: widget.onCandleGrab != null
                         ? const SizedBox.shrink()
                         : Opacity(
                             opacity: 0.42,
