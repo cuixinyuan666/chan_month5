@@ -1,4 +1,3 @@
-import 'package:chan_kline/chart/kline_candle_geometry.dart';
 import 'package:chan_kline/widgets/kline_draw_board.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -54,37 +53,55 @@ void main() {
     expect(removed.candles, hasLength(1));
   });
 
-  test('部位拖动：实体改开/收盘，影线改高/低，四价互不干扰', () {
+  test('整根平移：四价同移，形状不变，钳制在全体可见 K 的极值并集内', () {
+    // 两根 K：A（10/12/9/11）、B（20 一字）。全体并集 = [9, 20]。
     final model = KlineDrawBoardModel.initial().addCandle(
       const KlineDrawCandle(open: 10, high: 12, low: 9, close: 11),
+    ).addCandle(
+      const KlineDrawCandle(open: 20, high: 20, low: 20, close: 20),
     );
-    // 拖上影线端点 → 只改最高价
-    final hi = model.moveSelectedPart(CandlePart.high, 13);
-    expect(hi.candles[0].high, 13);
-    expect(hi.candles[0].open, 10);
-    expect(hi.candles[0].close, 11);
-    expect(hi.candles[0].low, 9);
+    // 向上平移 0.5：四价同 +0.5，形状不变；最高 12.5 仍在并集 [9,20] 内。
+    final up = model.moveCandleAt(0, 0.5, clampLo: 9, clampHi: 20);
+    expect(up.candles[0].open, 10.5);
+    expect(up.candles[0].close, 11.5);
+    expect(up.candles[0].high, 12.5);
+    expect(up.candles[0].low, 9.5);
+    // B 不动。
+    expect(up.candles[1].close, 20);
 
-    // 拖下影线端点 → 只改最低价
-    final lo = model.moveSelectedPart(CandlePart.low, 8);
-    expect(lo.candles[0].low, 8);
-    expect(lo.candles[0].high, 12);
+    // 向上拖过头：high 只能到并集上沿 20（B 的顶），不能越过。
+    final upClamped = model.moveCandleAt(0, 100, clampLo: 9, clampHi: 20);
+    expect(upClamped.candles[0].high, 20);
+    expect(upClamped.candles[0].open, 18.0); // 形状仍不变（open=high-2）
 
-    // 拖实体 → 改收盘价（阳线上半是收盘）
-    final body = model.moveSelectedPart(CandlePart.bodyClose, 11.5);
-    expect(body.candles[0].close, 11.5);
-    expect(body.candles[0].open, 10);
+    // 向下拖过头：low 只能到并集下沿 9（自己的旧低，来回可走）。
+    final downClamped = model.moveCandleAt(0, -100, clampLo: 9, clampHi: 20);
+    expect(downClamped.candles[0].low, 9);
+    expect(downClamped.candles[0].high, 12); // 原地不动
 
-    // 拖实体 → 改开盘价
-    final open = model.moveSelectedPart(CandlePart.bodyOpen, 9.5);
-    expect(open.candles[0].open, 9.5);
-    expect(open.candles[0].close, 11);
+    // 拖 B 向下：low 只能降到 A 的最高价 12（并集下沿之上无并集外空间，
+    // 但 12 ≥ clampLo=9？不——B 的 low 到 12 时 high=12，仍在并集内）。
+    final bDown = model.moveCandleAt(1, -100, clampLo: 9, clampHi: 20);
+    expect(bDown.candles[1].low, 9); // 一字 K 一路降到并集下沿
+    expect(bDown.candles[1].high, 9);
 
-    // 不变量：影线不得落进实体
-    final bad = model.moveSelectedPart(CandlePart.high, 10.5);
-    expect(bad.candles[0].high, greaterThanOrEqualTo(11)); // max(open,close)=11
-    final badLow = model.moveSelectedPart(CandlePart.low, 10.5);
-    expect(badLow.candles[0].low, lessThanOrEqualTo(10)); // min(open,close)=10
+    // 平移量恰好在区间内：完整生效。
+    final free = model.moveCandleAt(1, -2, clampLo: 9, clampHi: 20);
+    expect(free.candles[1].close, 18);
+
+    // 越界下标：原样返回。
+    expect(
+      model.moveCandleAt(9, 1, clampLo: 0, clampHi: 100).candles.length,
+      2,
+    );
+
+    // 板上仅一根 K（钳制区间 null）：不钳，自由平移（没有别人可压）。
+    final single = KlineDrawBoardModel.initial().addCandle(
+      const KlineDrawCandle(open: 10, high: 12, low: 9, close: 11),
+    );
+    final moved = single.moveCandleAt(0, 50, clampLo: null, clampHi: null);
+    expect(moved.candles[0].high, 62);
+    expect(moved.candles[0].low, 59);
   });
 
   test('新 K 落在光标位置而不是末尾', () {

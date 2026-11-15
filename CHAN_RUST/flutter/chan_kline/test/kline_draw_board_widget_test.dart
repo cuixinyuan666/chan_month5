@@ -143,7 +143,7 @@ void main() {
     expect(find.text('5\u5206\u949f'), findsWidgets);
   });
 
-  testWidgets('按住实体中段拖动：改收盘价，不新增 K 线', (tester) async {
+  testWidgets('按住实体拖动：整根平移（四价同移），不新增 K 线', (tester) async {
     KlineDrawBoardModel model = KlineDrawBoardModel.initial().addCandle(
       const KlineDrawCandle(open: 10, high: 12, low: 9, close: 11),
     );
@@ -152,20 +152,21 @@ void main() {
     );
     await tester.pump();
 
-    // 实体上半（close=11 一侧）：抓它改收盘价。
+    // 板上仅这一根 K（无钳制区间）：抓实体中段上拖，整根上移。
     final grab = Offset(_cx, _bodyTop + 10);
     await _dragInK0(tester, grab, Offset(_cx, _bodyTop + 10 - 30));
 
     expect(model.candles, hasLength(1), reason: '拖实体不得新增 K 线');
     final c = model.candles.single;
-    expect(c.close, isNot(11), reason: '拖实体上半应改收盘价');
-    expect(c.open, 10, reason: '开盘价不该被上半拖动改掉');
-    // 影线不变量：影线不得落进实体
-    expect(c.high, greaterThanOrEqualTo(c.open > c.close ? c.open : c.close));
-    expect(c.low, lessThanOrEqualTo(c.open < c.close ? c.open : c.close));
+    expect(c.close, isNot(11), reason: '整根平移应改掉收盘价');
+    expect(c.open, isNot(10), reason: '整根平移应改掉开盘价');
+    // 形状不变：四价同移（开收差 1、高开差 2、开低差 1）。
+    expect(c.close - c.open, closeTo(1, 1e-6));
+    expect(c.high - c.close, closeTo(1, 1e-6));
+    expect(c.open - c.low, closeTo(1, 1e-6));
   });
 
-  testWidgets('按住实体下半拖动：改开盘价', (tester) async {
+  testWidgets('按住实体下半拖动：整根平移（形状不变）', (tester) async {
     KlineDrawBoardModel model = KlineDrawBoardModel.initial().addCandle(
       const KlineDrawCandle(open: 10, high: 12, low: 9, close: 11),
     );
@@ -174,17 +175,17 @@ void main() {
     );
     await tester.pump();
 
-    // 实体下半（open=10 一侧）：抓它改开盘价。
     final grab = Offset(_cx, _bodyBottom - 10);
     await _dragInK0(tester, grab, Offset(_cx, _bodyBottom - 10 + 30));
 
     expect(model.candles, hasLength(1));
     final c = model.candles.single;
-    expect(c.open, isNot(10), reason: '拖实体下半应改开盘价');
-    expect(c.close, 11, reason: '收盘价不该被下半拖动改掉');
+    expect(c.open, isNot(10), reason: '整根平移应改掉开盘价');
+    expect(c.close, isNot(11), reason: '整根平移应改掉收盘价');
+    expect(c.close - c.open, closeTo(1, 1e-6), reason: '形状不得变');
   });
 
-  testWidgets('按住上影线端点拖动：只改最高价', (tester) async {
+  testWidgets('按住上影线端点拖动：整根平移（不再单独改最高价）', (tester) async {
     KlineDrawBoardModel model = KlineDrawBoardModel.initial().addCandle(
       const KlineDrawCandle(open: 10, high: 12, low: 9, close: 11),
     );
@@ -201,13 +202,15 @@ void main() {
 
     expect(model.candles, hasLength(1));
     final c = model.candles.single;
-    expect(c.high, isNot(12), reason: '拖上影线端点应改最高价');
-    expect(c.open, 10);
-    expect(c.close, 11);
-    expect(c.low, 9);
+    // 2026-11-16 起无部位语义：抓影线端点=整根上移，四价同动。
+    expect(c.high, isNot(12), reason: '整根上移应改掉最高价');
+    expect(c.open, isNot(10), reason: '开盘价同移（不再是 10）');
+    expect(c.close, isNot(11), reason: '收盘价同移（不再是 11）');
+    expect(c.low, isNot(9), reason: '最低价同移（不再是 9）');
+    expect(c.close - c.open, closeTo(1, 1e-6), reason: '形状不得变');
   });
 
-  testWidgets('按住下影线端点拖动：只改最低价', (tester) async {
+  testWidgets('按住下影线端点拖动：整根平移（不再单独改最低价）', (tester) async {
     KlineDrawBoardModel model = KlineDrawBoardModel.initial().addCandle(
       const KlineDrawCandle(open: 10, high: 12, low: 9, close: 11),
     );
@@ -224,10 +227,11 @@ void main() {
 
     expect(model.candles, hasLength(1));
     final c = model.candles.single;
-    expect(c.low, isNot(9), reason: '拖下影线端点应改最低价');
-    expect(c.open, 10);
-    expect(c.close, 11);
-    expect(c.high, 12);
+    expect(c.low, isNot(9), reason: '整根下移应改掉最低价');
+    expect(c.open, isNot(10), reason: '开盘价同移');
+    expect(c.close, isNot(11), reason: '收盘价同移');
+    expect(c.high, isNot(12), reason: '最高价同移');
+    expect(c.close - c.open, closeTo(1, 1e-6), reason: '形状不得变');
   });
 
   testWidgets('点击已画好的 K 线出现聚焦图形（选中 + 四箭头）', (tester) async {
@@ -303,6 +307,35 @@ void main() {
     expect(m.candles, hasLength(2), reason: '选中 K 右方拖动应新增 K 线');
     expect(m.candles[0].open, 10, reason: '原 K 不该被动到');
     expect(m.selected, 1, reason: '新 K 自动成为选中');
+  });
+
+  testWidgets('防压缩：拖一根 K 越不过按下时全体可见 K 的价格区间', (tester) async {
+    // 两根 K：A(9..12)、B(19..22)。全体并集 [9,22]。
+    // 只有一屏时两根都可见：拖 A 向上 300 像素也到不了并集上沿之上。
+    final model = KlineDrawBoardModel.initial()
+        .addCandle(
+          const KlineDrawCandle(open: 10, high: 12, low: 9, close: 11),
+        )
+        .addCandle(
+          const KlineDrawCandle(open: 20, high: 22, low: 19, close: 21),
+        );
+    await tester.pumpWidget(_host(model));
+    await tester.pump();
+
+    // 按住 A 实体中段向上拖 300 像素（远超并集上沿）。
+    await _dragInK0(
+      tester,
+      const Offset(_cxTwo, _candle0BodyY),
+      const Offset(_cxTwo, _candle0BodyY - 300),
+    );
+
+    final m = _live(tester);
+    expect(m.candles, hasLength(2));
+    // 钳制生效：A 的高点不得越过并集上沿 22（B 的顶），其余 K 不被压扁。
+    expect(m.candles[0].high, lessThanOrEqualTo(22.000001));
+    // B 完全不动。
+    expect(m.candles[1].high, 22);
+    expect(m.candles[1].low, 19);
   });
 
   testWidgets('新 K 落在选中 K 右方的光标位置，不是序列末尾', (tester) async {
