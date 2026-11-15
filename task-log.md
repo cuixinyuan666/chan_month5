@@ -6749,3 +6749,20 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   - 未改 Rust、未重编 dll、未改缠论口径、未改 `AGENTS.md`；**未做手工 UI 验收**（交互面是鼠标手感，widget 测试已覆盖等价路径）。
 - **演示**：空画板随便拖一下出第一根；再点它一下，四角出现蓝色聚焦箭头；从它右边空白按住拖到左边再松手，新 K 还是落在它右边；在它左边空白拖动，图会平移、不会多出 K；按住它实体拖，改它的价。
 - **提交**：4 个独立 commit 已入库（图表锚定闸+落点钳制 / 聚焦箭头 / 帮助文字 / 测试），docs 本条随 Obsidian 同步单独一个 commit；未 push。
+
+### 2026-11-16 06:36 — K线画板：拖拽改整根平移 + 价格区间钳制（防已画 K 被压成一条线）
+
+- **执行者**：WorkBuddy（AutoClaw）
+- **任务类型**：交互修复 / 界面交互
+- **上下文**：用户明确两点：① K线画板防止出现「已画 K 线被压缩成一条线」；② 不再使用 wick（影线部位），拖拽 K 线时只移动 K 线位置即可。
+- **根因**：旧「四部位改价」里抓影线端点（wick）可把最高/最低价拖到任意远，可见 K 的价格区间被撑大几十倍，其余已画 K 的像素高度塌缩成一条线。
+- **关键操作**：
+  1. 删 `CandlePart` 枚举与 `candleBodyPart`（kline_candle_geometry.dart）；`kline_chart.dart` 命中测试改 `_hitCandle`（K 线本体包络矩形，不分部位），回调改名 `onCandleGrab` / `onCandleDrag` / `onCandleDragEnd`。
+  2. 画板模型：`movePartAt` / `moveSelectedPart` 替换为 `moveCandleAt(index, delta, clampLo, clampHi)` —— 整根平移（四价同移、形状不变）。
+  3. 防压缩钳制：按下瞬间冻结基准几何 + 全体可见 K（含自己）的极值并集；被拖 K 四价钳在并集内 → 并集绝不扩大，其余 K 像素高度不变。板上仅一根 K 时不钳（没有别人可压）。拖动中可来回拖（钳制只在按下时定界）。
+  4. 帮助文字第 7 条对齐新口径。
+- **结果**：
+  - `flutter test test/kline_draw_board_test.dart test/kline_draw_board_widget_test.dart test/candle_wick_test.dart test/tick_draw_board_test.dart test/k0_dot_render_test.dart`：24+8 条全过（含新增「防压缩：拖一根 K 越不过按下时全体可见 K 的价格区间」widget 用例）。
+  - `dart analyze` 改动文件无 error。全量 `flutter test` 因本机线程资源不足（Could not start thread DartWorker / OOM）无法完整跑完，环境问题与本次改动无关（历史遗留失败项同 2026-11-15 记录）。
+  - 3 个 commit：3e3b67e4（代码）/ 89f59714（帮助文字）/ 73e43513（测试）。
+- **注意事项**：未 push（按 AGENTS.md，push 前须用户确认）。App 当时正在运行（PID 51548），未重启验证手感；需要肉眼验收时请重启 App 后在画板试「拖远不压扁、拖动可回拖」。工作区另有此前会话遗留的未提交改动（kline_viewport.dart 平移不设限 + 两个视口测试 + .gitignore），未动、未混入本次提交。
