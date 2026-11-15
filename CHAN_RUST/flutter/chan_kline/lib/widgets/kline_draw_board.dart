@@ -534,6 +534,9 @@ class _KlineDrawBoardState extends State<KlineDrawBoard> {
           tooltipBridge: _tooltipBridge,
           dockTooltipPanel: true,
           onCandleDraw: primary ? _onDraw : null,
+          // 绘制锚：只有被选中 K 槽位右缘以右的空白才允许开始画新 K。
+          candleDrawAnchorIdx:
+              primary ? (model.hasSelection ? model.selected : -1) : -1,
           // 部位抓取/拖动：K线画板专用通道（分笔画板不接，互不影响）。
           onCandlePartGrab: primary ? _grabCandlePart : null,
           onCandlePartDrag: primary ? _dragCandlePart : null,
@@ -710,6 +713,14 @@ class _KlineDrawBoardState extends State<KlineDrawBoard> {
       ),
     );
   }
+
+  /// 新 K 落点：必在选中 K 右方（下标 ≥ 选中+1）；无选中（空板）放行。
+  /// cursorBarIdx==null（指针在可见槽位之外）时追加到末尾，天然 ≥ 选中+1。
+  int? _clampDrawIndex(int? cursorBarIdx) {
+    if (!model.hasSelection) return cursorBarIdx;
+    if (cursorBarIdx == null) return null;
+    return math.max(cursorBarIdx, model.selected + 1);
+  }
   void _onDraw(
     double startPrice,
     double currentPrice,
@@ -727,7 +738,7 @@ class _KlineDrawBoardState extends State<KlineDrawBoard> {
       setState(() {
         _draft = buildKlineDrawDraft(startPrice, currentPrice)
             .withExtremes(_pathHigh!, _pathLow!);
-        _draftBarIdx = cursorBarIdx;
+        _draftBarIdx = _clampDrawIndex(cursorBarIdx);
       });
       return;
     }
@@ -746,8 +757,8 @@ class _KlineDrawBoardState extends State<KlineDrawBoard> {
       _pathHigh = null;
       _pathLow = null;
     });
-    // 新 K 落在光标所在的 K 位置（不是永远排在最后）。
-    widget.onChanged(model.insertCandleAt(candle, cursorBarIdx));
+    // 新 K 落在选中 K 右方（钳制后的下标），拖回左方也不会落到选中左侧。
+    widget.onChanged(model.insertCandleAt(candle, _clampDrawIndex(cursorBarIdx)));
   }
 
   static const double _tooltipPanelWidth = 360;

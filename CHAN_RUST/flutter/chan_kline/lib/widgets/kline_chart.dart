@@ -220,6 +220,7 @@ class KlineChart extends StatefulWidget {
     this.onCandlePartDrag,
     this.onCandlePartDragEnd,
     this.onCandleDraw,
+    this.candleDrawAnchorIdx = -1,
     this.selectedTickIdx = -1,
     this.displayLevel,
     this.forceSubPane = false,
@@ -391,6 +392,12 @@ class KlineChart extends StatefulWidget {
     bool finished,
     int? cursorBarIdx,
   )? onCandleDraw;
+
+  /// K线画板：当前被选中 K 的下标（-1=无选中），是「画新 K」的锚点。
+  ///
+  /// 只有指针落在该 K 槽位右缘以右的空白处才允许开始绘制；空 board 例外
+  /// （否则永远画不出第一根）。闸不过的空白拖动一律归平移/十字线逻辑。
+  final int candleDrawAnchorIdx;
 
   /// K线画板：按住了某根 K 线的哪个部位（实体上/下缘、上下影线端点）。
   ///
@@ -1885,6 +1892,23 @@ class _KlineChartState extends State<KlineChart> {
     return idx;
   }
 
+  /// 是否允许从这里开始「画新 K」：仅当「被选中 K 的槽位右缘以右」。
+  ///
+  /// 空 board 任意位置放行（否则空板死锁，永远画不出第一根）。
+  /// 槽位右缘 = `barCenterX(anchor) + 槽宽/2`，指针严格大于它才算「右方」，
+  /// 这样选中 K 自己的槽位空白区是平移区，不是绘制区；闸不过的空白拖动
+  /// 自然落进 zone/pan 路径，由图表自身的平移逻辑接管。
+  bool _canStartCandleDraw(Offset local) {
+    if (widget.bars.isEmpty) return true;
+    final anchor = widget.candleDrawAnchorIdx;
+    if (anchor < 0 || anchor >= widget.bars.length) return false;
+    final w = _chartSize.width;
+    if (w <= 0) return false;
+    final cx = _viewport.barCenterX(anchor, w);
+    final right = cx + _viewport.barSlotWidth(w) / 2;
+    return local.dx > right;
+  }
+
   /// 命中 K 线的哪个部位：按实体矩形 + 上下影线段判定。
   ///
   /// 与 [_drawCandles] 同源（走 `kline_candle_geometry.dart`），
@@ -2005,7 +2029,8 @@ class _KlineChartState extends State<KlineChart> {
     // 否则用户必须先点一下再拖，表现为「按住 K 线无法移动」。
     if (widget.onCandleDraw != null &&
         e.buttons & kPrimaryMouseButton != 0 &&
-        _hitTickDot(e.localPosition) == null) {
+        _hitTickDot(e.localPosition) == null &&
+        _canStartCandleDraw(e.localPosition)) {
       final price = _priceAt(e.localPosition);
       if (price != null) {
         _candleDrawPointer = e.pointer;
