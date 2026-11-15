@@ -6730,3 +6730,22 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   - 端到端验证覆盖了原先失效的路径：按住实体中段改收盘价、按住实体下半改开盘价、按住上影线端点只改最高价、按住下影线端点只改最低价、拖动不新增 K 线、新 K 落在光标位置而非末尾。
   - 未改 Rust 代码、未重编 `chan_ffi.dll`、未改缠论计算口径、未改 `AGENTS.md`。
 - **注意事项**：本轮只做界面层修复，**未启动 App 做手工 UI 验收**（验收面是鼠标交互，widget 测试已覆盖等价路径），若要肉眼确认「拖影线端点」「缩放后选中框跟随」等手感项，需再跑一次 `flutter build windows --debug` 并人工过一遍清单。未 push（按 AGENTS.md，push 前须用户确认）。
+
+### 2026-11-15 23:06 — K线画板：点击 K 聚焦 + 仅在选中 K 右方绘制新 K + 其余平移
+
+- **执行者**：omp
+- **任务类型**：交互修复 / 界面交互
+- **上下文**：用户新需求（拼音转译）：「仿照分笔画板，点击 K 线出现聚焦图形；且只有按住**被点击的那根 K 线右方**拖动才画 K 线（新 K 落在选中 K 右方）；其余时刻鼠标拖动是**平移 K 线图**」。已用 ask 确认关键决策 keep_selected_only：**拖动改价保留，但只对「选中的那根 K」生效**——点它=选中+聚焦，按住它本体拖动=改它的价（与分笔画板「拖住选中竖条改价」同口径）。本轮只改 Flutter 界面交互层，不动 Rust、不重编 `chan_ffi.dll`、不改缠论口径、不改 `AGENTS.md`、不改 `tick_draw_board.dart` 行为。
+- **关键操作**：
+  1. **图表加「绘制起点锚定闸」**（`kline_chart.dart`）：新增构造参数 `candleDrawAnchorIdx`（当前选中 K 下标，-1=无选中）；`onCandleDraw` 绘制分支追加 `_canStartCandleDraw()`——只有指针落在**选中 K 槽位右缘以右**（`barCenterX(anchor)+槽宽/2` 严格 `< dx`）才允许开始画新 K；**空板任意位置放行**（否则空板死锁，永远画不出第一根）；闸不过的空白拖动自然落进既有 zone/pan 路径，由图表自身平移逻辑接管。
+  2. **画板落点右方钳制**（`kline_draw_board.dart`）：新增 `_clampDrawIndex()`——落点下标 = `max(cursorBarIdx, 选中+1)`（无选中放行；`cursorBarIdx==null` 追加末尾，天然 ≥ 选中+1）；`_onDraw` 的草稿槽位与落盘统一走钳制，「拖回左方也不会落到选中左侧」。K0 图表传 `candleDrawAnchorIdx: primary ? (model.hasSelection ? model.selected : -1) : -1`。
+  3. **聚焦图形**（`kline_draw_board.dart`）：新建私有 `_FocusArrowsPainter`——四支三角箭头沿对角线指向选中框中心、尖端停在框角（蓝色 `0xFF42A5F5`，视觉同分笔画板聚焦箭头，但不借用、不改其源文件）；叠加在选中按钮块 `LayoutBuilder` 的 Stack 最底层（`IgnorePointer`），框即 `_selectedBox`，缩放/平移后自动跟随（上轮缺陷 E 已修，本轮复用）。
+  4. **帮助文字对齐**（`main.dart` `_showKlineDrawBoardHelp`）：按新交互契约重写 3–8 条（空板任意画第一根 → 先点击 K 选中出四箭头 → 只有选中 K 右方空白拖动才画新 K → 起点开/终点收/路径高/低 → 按住选中 K 本体可改价 → 其余空白拖动是平移），条号顺延。
+- **结果**：
+  - `dart analyze`：改动后 `kline_chart.dart`+`kline_draw_board.dart` 仍为 7 条既有告警、`main.dart` 15 条，**零新增**。
+  - `flutter test test/kline_draw_board_test.dart test/kline_draw_board_widget_test.dart test/tick_draw_board_test.dart test/k0_dot_render_test.dart`：**25 条全过**（画板 widget 由 7 → 12 条：新增「点击出聚焦箭头」「左方空白拖动不新增（平移）」「未选中非空板不新增」「右方拖动新 K 落其右方」+ 改写「新 K 落在选中 K 右方光标位置」）。
+  - **测试宿主修了一个根因**：旧 `_host` 把 model 当构造参数传进 StatefulBuilder，重建永远读到旧值，「点击选中→图表拿到新锚点」这类靠重建生效的行为测不出来；改为 `_BoardHost`（内部持有 model，onChanged 时 setState 换新），与 App 里「setState 换新 model」同一条链路。
+  - 两 K 槽位几何实测（一次性探针打印后写死、探针已删）：K0 窗格 399.5 宽时槽宽 393.5、candle0 中心 200.75、槽位右缘 397.5（=「选中 K 右方」起点）。
+  - 未改 Rust、未重编 dll、未改缠论口径、未改 `AGENTS.md`；**未做手工 UI 验收**（交互面是鼠标手感，widget 测试已覆盖等价路径）。
+- **演示**：空画板随便拖一下出第一根；再点它一下，四角出现蓝色聚焦箭头；从它右边空白按住拖到左边再松手，新 K 还是落在它右边；在它左边空白拖动，图会平移、不会多出 K；按住它实体拖，改它的价。
+- **提交**：4 个独立 commit 已入库（图表锚定闸+落点钳制 / 聚焦箭头 / 帮助文字 / 测试），docs 本条随 Obsidian 同步单独一个 commit；未 push。
