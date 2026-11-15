@@ -582,6 +582,13 @@ class _KlineDrawBoardState extends State<KlineDrawBoard> {
             final box = _selectedBox(constraints.biggest);
             if (box == null) return const SizedBox.shrink();
             return Stack(children: [
+              // 聚焦标识最底层：四支三角箭头，与分笔画板的聚焦视觉一致。
+              // 框即 `_selectedBox`，已随缩放/平移更新，聚焦自动跟随。
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: CustomPaint(painter: _FocusArrowsPainter(box: box)),
+                ),
+              ),
               Positioned(
                 left: box.center.dx - 12,
                 top: math.max(30, box.top - 28),
@@ -854,4 +861,44 @@ class _DraftCandlePainter extends CustomPainter {
         oldDelegate.barCount != barCount ||
         oldDelegate.geom != geom;
   }
+}
+
+/// 聚焦标识：四支三角箭头沿对角线指向框中心，尖端停在框角。
+///
+/// 视觉与分笔画板的聚焦箭头一致（同色、同三角造型），但本类为
+/// K线画板私有实现，不借用、不改动分笔画板的源文件。
+class _FocusArrowsPainter extends CustomPainter {
+  const _FocusArrowsPainter({required this.box});
+
+  final Rect box;
+  static const double _arm = 3.5; // 箭头半宽（垂直于对角线方向）
+  static const double _len = 8; // 尾端离框角的外伸长度
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = AppPalette.rgb(0xFF42A5F5)
+      ..style = PaintingStyle.fill
+      ..isAntiAlias = true;
+    const dirs = [Offset(-1, -1), Offset(1, -1), Offset(1, 1), Offset(-1, 1)];
+    for (final d in dirs) {
+      // 尖端=框角（沿对角线指向中心），尾=沿对角线往外 8px。
+      final corner = Offset(
+        d.dx > 0 ? box.right : box.left,
+        d.dy > 0 ? box.bottom : box.top,
+      );
+      final tail = corner + d * _len;
+      final perp = Offset(-d.dy, d.dx);
+      final path = Path()
+        ..moveTo(corner.dx, corner.dy)
+        ..lineTo(tail.dx - perp.dx * _arm, tail.dy - perp.dy * _arm)
+        ..lineTo(tail.dx + perp.dx * _arm, tail.dy + perp.dy * _arm)
+        ..close();
+      canvas.drawPath(path, paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _FocusArrowsPainter oldDelegate) =>
+      oldDelegate.box != box;
 }
