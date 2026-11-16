@@ -82,21 +82,60 @@ class KlineDrawDraft {
       );
 }
 
+/// 一个画板子窗的口径 = **周期 + 层级**两个正交维度（2026-11-16 用户确认）。
+///
+/// 旧版是「二选一」：`level(N)` 表示 1m 的 K{N}、`period('5m')` 表示 5m 的 K0；
+/// 现在两级下拉分别选周期与层级，可组合出 `5m-K2` 这种口径：
+/// - [period]：数据周期（'1m' 原样、'5m'/'15m'…由 1m 聚合）；
+/// - [level]：该周期缠论结构里的层级 K{N}（K0 主图、K1/K2… 子层）；
+/// - 周期窗按本窗聚合 bars 重算 bundle，再按 [level] 取该层显示。
 class KlineDrawWindowMode {
-  const KlineDrawWindowMode.level(this.level) : period = null;
+  /// 通用构造：周期 + 层级组合。
+  const KlineDrawWindowMode({this.period = '1m', this.level = 0});
+
+  /// 层级窗便捷构造（1m 的 K{N}）。
+  const KlineDrawWindowMode.level(this.level) : period = '1m';
+
+  /// 周期窗便捷构造（{period} 的 K0）。
   const KlineDrawWindowMode.period(this.period) : level = 0;
 
   final int level;
-  final String? period;
+  final String period;
 
-  bool get isLevel => period == null;
+  /// 是否用原始 1m bundle（否则按本窗周期聚合 bars 重算）。
+  bool get isLevel => period == '1m';
 
-  String get label => isLevel ? 'K$level' : (kKlineDrawPeriods[period] ?? period!);
+  /// 窗口标识：`{周期}-{K层级}`，如 `1min-K0` / `5min-K2` / `15min-K0`。
+  String get label => '${kKlineDrawPeriodAbbr[period] ?? period}-K$level';
 
-  int get displayLevel => isLevel ? level : 0;
+  /// 缠论层级：组合后不再对周期窗强制 0，周期窗也能取 K1/K2…。
+  int get displayLevel => level;
 
-  String get chartPeriod => period ?? '1m';
+  String get chartPeriod => period;
 }
+
+/// 下拉周期缩写：`5m → 5min`、`15m → 15min`、`2h → 2h`…
+/// 仅用于窗口标识与下拉显示，聚合逻辑仍用完整 key。
+const Map<String, String> kKlineDrawPeriodAbbr = <String, String>{
+  '1m': '1min',
+  '5m': '5min',
+  '15m': '15min',
+  '30m': '30min',
+  '60m': '60min',
+  '2h': '2h',
+  '4h': '4h',
+  '1d': '1d',
+  '3d': '3d',
+  '1w': '1w',
+  '1mon': '1mon',
+  '3mon': '3mon',
+  '6mon': '6mon',
+  '9mon': '9mon',
+  '12mon': '12mon',
+  '1y': '1y',
+  '3y': '3y',
+  '6y': '6y',
+};
 
 class KlineDrawBoardModel {
   const KlineDrawBoardModel({
@@ -157,7 +196,8 @@ class KlineDrawBoardModel {
 
   KlineDrawBoardModel withWindowMode(int slot, KlineDrawWindowMode mode) {
     if (slot < 0 || slot >= windowModes.length) return this;
-    if (slot == 0 && (mode.period != null || mode.level != 0)) return this;
+    // 操作窗 slot0 固定 1m-K0：既不能换周期，也不能换层级。
+    if (slot == 0 && (mode.period != '1m' || mode.level != 0)) return this;
     final next = [...windowModes];
     next[slot] = mode;
     return copyWith(windowModes: next);
@@ -273,13 +313,14 @@ class KlineDrawBoardModel {
 }
 
 List<KlineDrawWindowMode> defaultKlineDrawWindowModes(int count) {
-  // 2026-11-16 用户指定画板四窗默认：左上=画板 1分钟 K0、右上=1分钟 K2、
-  // 左下=5分钟 K0、右下=15分钟 K0。操作窗 slot0 固定 K0 不可改周期。
+  // 2026-11-16 用户指定画板四窗默认：左上=画板 1min-K0、右上=1min-K1、
+  // 左下=5min-K0、右下=15min-K0。操作窗 slot0 固定 1m-K0 不可改。
+  // 每窗口径 = 周期 + 层级两个正交维度，由两级下拉分别选择。
   const seeded = <KlineDrawWindowMode>[
-    KlineDrawWindowMode.level(0),
-    KlineDrawWindowMode.level(2),
-    KlineDrawWindowMode.period('5m'),
-    KlineDrawWindowMode.period('15m'),
+    KlineDrawWindowMode(period: '1m', level: 0),
+    KlineDrawWindowMode(period: '1m', level: 1),
+    KlineDrawWindowMode(period: '5m', level: 0),
+    KlineDrawWindowMode(period: '15m', level: 0),
   ];
   return [
     for (var i = 0; i < count; i++)
@@ -510,7 +551,7 @@ class _KlineDrawBoardState extends State<KlineDrawBoard> {
 
   /// 周期窗的缠论结构必须与本窗 bars 同源。
   ///
-  /// 层级窗（含 slot0 操作窗、右上 K2 窗）与 1m 窗沿用共用 bundle；
+  /// 层级窗（含 slot0 操作窗、右上 K1 窗）与 1m 窗沿用共用 bundle；
   /// 只有 5m/15m/… 周期窗在 [bundleForBars] 存在时按本窗聚合 bars 重算。
   /// 同一 model 内按周期缓存，拖动每一帧不会重复跑 FFI。
   KlineCombineBundle _bundleForPane({
@@ -534,16 +575,13 @@ class _KlineDrawBoardState extends State<KlineDrawBoard> {
     required List<K1BarView> k1Views,
   }) {
     final mode = model.modeAt(slot);
-    // 2026-11-16：各窗不再共用同一份 1 分钟数据。
-    // 操作窗（slot0）与层级窗（K1 等）保持原始 1m；周期窗按目标周期
-    // 由 N 根连续 1 分钟 K 聚合（5m=5 根、15m=15 根，其余周期同理）。
-    final paneBars = mode.isLevel || mode.period == '1m'
+    // 各窗口径 = 周期 + 层级两个正交维度。1m 用原始 bars/bundle；
+    // 其余周期按 N 根 1m 聚合（5m=5、15m=15…），并按本窗聚合 bars 重算
+    // bundle——周期窗的 K1/K2 层级取的就是这份重算 bundle 的对应 level。
+    final paneBars = mode.isLevel
         ? bars
-        : aggregateKlineBarsByPeriod(bars, mode.period!);
-    // 2026-11-16：周期窗不能复用 1m 的 bundle（否则中枢/连线/分型全是 K0 的）。
-    // 按本窗聚合 bars 重算一份；层级窗与 1m 窗零回归。
-    final usePeriodBundle =
-        !mode.isLevel && mode.period != null && mode.period != '1m';
+        : aggregateKlineBarsByPeriod(bars, mode.period);
+    final usePeriodBundle = !mode.isLevel;
     final paneBundle = _bundleForPane(
       usePeriod: usePeriodBundle,
       period: mode.chartPeriod,
@@ -636,25 +674,56 @@ class _KlineDrawBoardState extends State<KlineDrawBoard> {
             child: _windowBadge('1min-K0', emphasized: true),
           )
         else
+          // 两级级联下拉：周期 + 层级，中间用 `-` 连接，视觉即 `5min-K2`。
+          // 两个维度正交、各自独立选择；操作窗固定 1min-K0 不参与。
           Positioned(
             left: 8,
             top: 30,
-            child: DropdownButton<String>(
-              value: mode.isLevel ? 'K${mode.level}' : mode.period,
-              items: [
-                for (var level = 1; level <= 9; level++)
-                  DropdownMenuItem(value: 'K$level', child: Text('K$level')),
-                for (final e in kKlineDrawPeriods.entries)
-                  if (e.key != '1m')
-                    DropdownMenuItem(value: e.key, child: Text(e.value)),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                // 第一级：周期（1m/5m/15m/…）。
+                DropdownButton<String>(
+                  value: mode.period,
+                  items: [
+                    for (final e in kKlineDrawPeriods.entries)
+                      DropdownMenuItem(
+                        value: e.key,
+                        child: Text(kKlineDrawPeriodAbbr[e.key] ?? e.value),
+                      ),
+                  ],
+                  onChanged: (v) {
+                    if (v == null) return;
+                    widget.onChanged(model.withWindowMode(
+                      slot,
+                      KlineDrawWindowMode(period: v, level: mode.level),
+                    ));
+                  },
+                ),
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 2),
+                  child: Text('-', style: TextStyle(fontSize: 12)),
+                ),
+                // 第二级：层级（K0~K9），与周期组合成该周期下的对应层。
+                DropdownButton<String>(
+                  value: 'K${mode.level}',
+                  items: [
+                    for (var level = 0; level <= 9; level++)
+                      DropdownMenuItem(value: 'K$level', child: Text('K$level')),
+                  ],
+                  onChanged: (v) {
+                    if (v == null) return;
+                    widget.onChanged(model.withWindowMode(
+                      slot,
+                      KlineDrawWindowMode(
+                        period: mode.period,
+                        level: int.parse(v.substring(1)),
+                      ),
+                    ));
+                  },
+                ),
               ],
-              onChanged: (v) {
-                if (v == null) return;
-                final next = v.startsWith('K')
-                    ? KlineDrawWindowMode.level(int.parse(v.substring(1)))
-                    : KlineDrawWindowMode.period(v);
-                widget.onChanged(model.withWindowMode(slot, next));
-              },
             ),
           ),
         if (primary)

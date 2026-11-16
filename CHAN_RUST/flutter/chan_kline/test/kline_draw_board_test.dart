@@ -23,20 +23,34 @@ void main() {
     expect(bars.single.close, 10.8);
   });
 
-  test('默认四窗，层级与周期分开选择', () {
+  test('默认四窗：周期 + 层级两级组合，右上 1min-K1、左下 5min-K0、右下 15min-K0', () {
     final model = KlineDrawBoardModel.initial()
         .withWindowMode(2, const KlineDrawWindowMode.period('30m'))
         .withWindowCount(6);
     expect(model.windowCount, 6);
-    expect(model.modeAt(0).label, 'K0');
-    expect(model.modeAt(1).label, 'K2');
-    expect(model.modeAt(1).displayLevel, 2);
-    expect(model.modeAt(2).label, '30\u5206\u949f');
+    // 操作窗固定 1min-K0，右上默认 1min-K1（displayLevel=1）。
+    expect(model.modeAt(0).label, '1min-K0');
+    expect(model.modeAt(1).label, '1min-K1');
+    expect(model.modeAt(1).displayLevel, 1);
+    // 周期窗 = 周期 + 层级组合：30m → 30min-K0。
+    expect(model.modeAt(2).label, '30min-K0');
     expect(model.modeAt(2).displayLevel, 0);
     expect(model.modeAt(2).chartPeriod, '30m');
+    // 层级与周期正交：可组合出 30m-K2（周期 30m，层级 2）。
+    final combo = model.withWindowMode(
+      2,
+      const KlineDrawWindowMode(period: '30m', level: 2),
+    );
+    expect(combo.modeAt(2).label, '30min-K2');
+    expect(combo.modeAt(2).displayLevel, 2);
+    // slot0 不可改：换周期/换层级都被守卫拦回 1min-K0。
     expect(
       model.withWindowMode(0, const KlineDrawWindowMode.period('5m')).modeAt(0).label,
-      'K0',
+      '1min-K0',
+    );
+    expect(
+      model.withWindowMode(0, const KlineDrawWindowMode(level: 3)).modeAt(0).label,
+      '1min-K0',
     );
   });
 

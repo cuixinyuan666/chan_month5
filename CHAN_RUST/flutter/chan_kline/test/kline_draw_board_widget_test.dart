@@ -171,8 +171,8 @@ void main() {
     expect(candle.high, candle.open > candle.close ? candle.open : candle.close);
     expect(candle.low, candle.open < candle.close ? candle.open : candle.close);
     expect(model.toBars().single.timeText, '2026/07/10 09:30:00');
-    expect(find.text('K2'), findsWidgets);
-    expect(find.text('5\u5206\u949f'), findsWidgets);
+    expect(find.text('K1'), findsWidgets);
+    expect(find.text('5min'), findsWidgets);
   });
 
   testWidgets('按住实体拖动：整根平移（四价同移），不新增 K 线', (tester) async {
@@ -462,14 +462,16 @@ void main() {
         reason: '右上角角标已删除');
     expect(find.text('1\u5206\u949f K2'), findsNothing,
         reason: '右上角角标已删除');
-    // 其余三窗用下拉显示当前选中值：K2 / 5分钟 / 15分钟，各一处。
-    expect(find.text('K2'), findsOneWidget, reason: '右上层级下拉当前值 K2');
-    expect(find.text('5\u5206\u949f'), findsOneWidget,
-        reason: '左下周期下拉当前值 5分钟');
-    expect(find.text('15\u5206\u949f'), findsOneWidget,
-        reason: '右下周期下拉当前值 15分钟');
-    // 4 窗里只有 3 个非操作窗有下拉；左上角操作窗固定文本、不给下拉。
-    expect(find.byType(DropdownButton<String>), findsNWidgets(3));
+    // 两级级联下拉：周期 + 层级。右上=1min/K1、左下=5min/K0、右下=15min/K0。
+    expect(find.text('1min'), findsOneWidget, reason: '右上周期下拉当前值 1min');
+    expect(find.text('K1'), findsOneWidget, reason: '右上层级下拉当前值 K1');
+    expect(find.text('5min'), findsOneWidget, reason: '左下周期下拉当前值 5min');
+    expect(find.text('15min'), findsOneWidget,
+        reason: '右下周期下拉当前值 15min');
+    // K0 出现两次（左下 + 右下两个层级下拉当前值）。
+    expect(find.text('K0'), findsNWidgets(2));
+    // 4 窗里只有 3 个非操作窗有下拉，每个窗两级（周期、层级）= 6 个。
+    expect(find.byType(DropdownButton<String>), findsNWidgets(6));
   });
 
   testWidgets('各周期窗显示自己的聚合数据，不再与 1 分钟窗相同', (tester) async {
@@ -490,7 +492,7 @@ void main() {
     KlineChart chart(String key) =>
         tester.widget<KlineChart>(find.byKey(ValueKey<String>(key)));
     final k0 = chart('kline-draw-0-0-1m');
-    final k1 = chart('kline-draw-1-2-1m');
+    final k1 = chart('kline-draw-1-1-1m');
     final m5 = chart('kline-draw-2-0-5m');
     final m15 = chart('kline-draw-3-0-15m');
 
@@ -523,11 +525,11 @@ void main() {
     KlineChart chart(String key) =>
         tester.widget<KlineChart>(find.byKey(ValueKey<String>(key)));
     final k0 = chart('kline-draw-0-0-1m');
-    final k1 = chart('kline-draw-1-2-1m');
+    final k1 = chart('kline-draw-1-1-1m');
     final m5 = chart('kline-draw-2-0-5m');
     final m15 = chart('kline-draw-3-0-15m');
 
-    // 键=槽位，四个窗互不相同；不能用 displayLevel（0/2/3 都是 0）。
+    // 键=槽位，四个窗互不相同；不能用 displayLevel（0/1/0/0 有重复）。
     expect([k0, k1, m5, m15].map((c) => c.viewportKey).toList(),
         <int?>[0, 1, 2, 3]);
     final sync = k0.sync!;
@@ -579,11 +581,11 @@ void main() {
     KlineChart chart(String key) =>
         tester.widget<KlineChart>(find.byKey(ValueKey<String>(key)));
     final k0 = chart('kline-draw-0-0-1m');
-    final k2 = chart('kline-draw-1-2-1m');
+    final k2 = chart('kline-draw-1-1-1m');
     final m5 = chart('kline-draw-2-0-5m');
     final m15 = chart('kline-draw-3-0-15m');
 
-    // 层级窗（含操作窗与右上 K2）沿用原 bundle，零回归。
+    // 层级窗（含操作窗与右上 K1）沿用原 bundle，零回归。
     expect(k0.defaultK0Policy, 'orig-1m');
     expect(k2.defaultK0Policy, 'orig-1m');
     // 周期窗用本窗聚合 bars 重算：5m 2 根、15m 1 根。
@@ -613,14 +615,14 @@ void main() {
         tester.widget<KlineChart>(find.byKey(ValueKey<String>(key)));
     final four = [
       chart('kline-draw-0-0-1m'),
-      chart('kline-draw-1-2-1m'),
+      chart('kline-draw-1-1-1m'),
       chart('kline-draw-2-0-5m'),
       chart('kline-draw-3-0-15m'),
     ];
 
-    // 身份用 slot（0/1/2/3），与可重复的 displayLevel（0/2/0/0）解耦。
+    // 身份用 slot（0/1/2/3），与可重复的 displayLevel（0/1/0/0）解耦。
     expect(four.map((c) => c.crosshairOwnerKey).toList(), <int?>[0, 1, 2, 3]);
-    expect(four.map((c) => c.displayLevel).toList(), <int?>[0, 2, 0, 0]);
+    expect(four.map((c) => c.displayLevel).toList(), <int?>[0, 1, 0, 0]);
     expect(
       four.every((c) => c.crosshairMatchMode == CrosshairMatchMode.timeMs),
       isTrue,
@@ -656,7 +658,7 @@ void main() {
         tester.widget<KlineChart>(find.byKey(ValueKey<String>(key)));
     final four = [
       chart('kline-draw-0-0-1m'),
-      chart('kline-draw-1-2-1m'),
+      chart('kline-draw-1-1-1m'),
       chart('kline-draw-2-0-5m'),
       chart('kline-draw-3-0-15m'),
     ];
