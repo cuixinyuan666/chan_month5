@@ -49,12 +49,14 @@ class _BoardHost extends StatefulWidget {
     this.onChanged,
     this.bundle,
     this.bundleForBars,
+    this.preFirstFractalMode = PreFirstFractalMode.defaultMode,
   });
 
   final KlineDrawBoardModel initial;
   final ValueChanged<KlineDrawBoardModel>? onChanged;
   final KlineCombineBundle? bundle;
   final KlineCombineBundle Function(List<KlineBar>)? bundleForBars;
+  final PreFirstFractalMode preFirstFractalMode;
 
   @override
   State<_BoardHost> createState() => _BoardHostState();
@@ -73,6 +75,7 @@ class _BoardHostState extends State<_BoardHost> {
         model: model,
         bundle: widget.bundle ?? KlineCombineBundle.empty(),
         bundleForBars: widget.bundleForBars,
+        preFirstFractalMode: widget.preFirstFractalMode,
         mainIndicators: const <MainChartIndicator>{},
         subIndicators: const <SubChartIndicator>{},
         truncationCheck: true,
@@ -91,17 +94,20 @@ Widget _host(
   ValueChanged<KlineDrawBoardModel>? onChanged,
   KlineCombineBundle? bundle,
   KlineCombineBundle Function(List<KlineBar>)? bundleForBars,
+  PreFirstFractalMode? preFirstFractalMode,
 ]) {
   return MaterialApp(
     home: Scaffold(
       body: SizedBox(
         width: 900,
         height: 700,
-        child: _BoardHost(
+        child:         _BoardHost(
           initial: model,
           onChanged: onChanged,
           bundle: bundle,
           bundleForBars: bundleForBars,
+          preFirstFractalMode:
+              preFirstFractalMode ?? PreFirstFractalMode.defaultMode,
         ),
       ),
     ),
@@ -627,12 +633,14 @@ void main() {
     expect(after, before);
   });
 
-  testWidgets('画板四窗首分型前合并框固定种子框口径（不套主图高高）', (tester) async {
-    // 用户报告「1min K0 第一个合并框错误」：画板此前漏传 preFirstFractalMode，
-    // 落到 KlineChart 默认 highHigh，首框 low 取 max 会漏掉首根 K 的真实低点。
-    // 画板是原始 K 线操作窗，固定 seedBox，按引擎原框画。
+  testWidgets('画板首框口径跟随 App 通用设置透传（不特殊化）', (tester) async {
+    // 用户明确要求：画板第一个合并框遵循设置里的「层级早生成动态单元」
+    // 等通用规则，不做画板专属固定口径。这里验证传入的口径被四窗原样接收，
+    // 且 earlyDynamicUnit 也一并到位——两者共同决定首框行为。
     final model = KlineDrawBoardModel.initial();
-    await tester.pumpWidget(_host(model));
+    await tester.pumpWidget(
+      _host(model, null, null, null, PreFirstFractalMode.lowLow),
+    );
     await tester.pump();
 
     KlineChart chart(String key) =>
@@ -644,8 +652,9 @@ void main() {
       chart('kline-draw-3-0-15m'),
     ];
     expect(
-      four.every((c) => c.preFirstFractalMode == PreFirstFractalMode.seedBox),
+      four.every((c) => c.preFirstFractalMode == PreFirstFractalMode.lowLow),
       isTrue,
     );
+    expect(four.every((c) => c.earlyDynamicUnit), isTrue);
   });
 }

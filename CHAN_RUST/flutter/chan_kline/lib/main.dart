@@ -3934,10 +3934,10 @@ class _KlineHomePageState extends State<KlineHomePage>
                   truncationCheck: _truncationCheck,
                   earlyDynamicUnit: _earlyDynamicUnit,
                 ),
-                // 画板是原始 K 线操作窗，首分型前固定按引擎原框画（种子框），
-                // 不跟随主图「高高」口径——后者 low 取 max 会让首框下沿
-                // 高于首根 K 的真实低点，看起来像合并画错。
-                preFirstFractalMode: PreFirstFractalMode.seedBox,
+                // 首框口径跟随 App 通用设置，与主图/分笔画板同一规则：
+                // earlyDynamicUnit + preFirstFractalMode 共同决定，
+                // 画板不再特殊化（用户明确要求做成全 App 通用设置）。
+                preFirstFractalMode: _preFirstFractalMode,
                 mainIndicators: _splitMainIndicators,
                 subIndicators: _sessionSplitSubIndicators,
                 truncationCheck: _truncationCheck,
@@ -6632,7 +6632,8 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
               '9. 四窗默认：左上固定操作窗「1分钟 K0」（无下拉）、右上「1分钟 K2」、左下「5分钟 K0」、右下「15分钟 K0」；\n'
               '10. 5分钟由 5 根 1分钟聚合、15分钟由 15 根 1分钟聚合；其它周期下拉也按对应根数由 1分钟数据聚合；各周期窗的中枢/连线/指标按本窗周期数据计算，不再显示左上 K0 的指标；\n'
               '11. 十字线联动四个窗，按同一时刻对齐到各自的周期 K；各窗缩放/平移始终独立、互不牵连；\n'
-              '12. 点「保存并加载」，写入 a_Data/test/custom.1m.csv。',
+              '12. 点「保存并加载」，写入 a_Data/test/custom.1m.csv；\n'
+              '13. 各窗（含画板）首个合并框口径遵循设置里的「层级早生成动态单元」与「首分型前合并框」，全 App 通用、画板不另设规则。',
             ),
           ),
           actions: [

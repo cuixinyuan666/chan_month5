@@ -6851,6 +6851,6 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   2. **首合并框错误**：`KlineDrawBoard` 漏传 `preFirstFractalMode`，内部 KlineChart 落到默认 `highHigh`；绘制层 `applyPreFirstFractalMode → applyFirstPairFractalToFrames` 把 Rust 引擎特意分开的首两帧重并，`mergePreFractalBox` 在 highHigh 口径下 `low` 取 max → 首框下沿 10.15 高于首根 K 真实低点 9.95，下影线露在框外。
 - **关键操作**：
   1. `main.dart:_saveKlineDrawBoard`：保存后把 `_beginDate/_endDate` 对齐到 `model.toBars()` 首尾 timeText（解析失败保留原区间）再 `_loadKlines()`。
-  2. `kline_draw_board.dart`：新增 `preFirstFractalMode` 参数（默认 `PreFirstFractalMode.seedBox`），`_pane` 透传给 KlineChart；`main.dart` 画板构造显式传 `seedBox`，固定种子框口径——画板是原始 K 线操作窗，所见即所得，不套主图「高高」重并。
-  3. 测试：widget 测试新增 1 例断言四窗 `preFirstFractalMode == seedBox`；12 个相关文件 **109 条全过**；analyze 无新增 error。
-- **注意事项**：seedBox 只作用于 K线画板，主图/分笔画板口径与行为不变；未 push。
+  2. 首框口径先试过在画板固定 seedBox，用户指出「还是不对」：画板第一个合并框必须遵循 App 通用设置「层级早生成动态单元」（earlyDynamicUnit），不能给画板单开规则。最终 `KlineDrawBoard.preFirstFractalMode` 默认回落 `PreFirstFractalMode.defaultMode`，`main.dart` 画板构造传 `_preFirstFractalMode`；`earlyDynamicUnit` 本就已透传——两者共同决定首框行为，与主图/分笔完全同一规则。帮助文字补第 13 条说明。
+  3. 测试：widget 用例改为验证传入口径（lowLow）被四窗原样接收、且 `earlyDynamicUnit` 到位；12 个相关文件 **109 条全过**；analyze 无新增 error。
+- **注意事项**：画板不再特殊化，首框行为完全由 App 通用设置决定；未 push。
