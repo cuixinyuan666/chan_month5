@@ -18,6 +18,7 @@ class LevelChartGrid extends StatelessWidget {
     required this.maxKn,
     required this.paneBuilder,
     this.badgeTextBuilder,
+    this.showBadge = true,
   });
 
   /// 窗口数量（会收敛为合法偶数档）。
@@ -43,6 +44,11 @@ class LevelChartGrid extends StatelessWidget {
   /// 角标文本。带 [slot] 是因为同一层级可挂不同周期（如 K0 的 1m / 5m）。
   final String Function(int slot, int level)? badgeTextBuilder;
 
+  /// 是否在每格右上角渲染角标。默认 true（主图分窗、分笔画板保持原样）。
+  /// K线画板传 false：它的窗口标识改由各窗左上角自己渲染（操作窗固定文本、
+  /// 其它窗下拉选周期/层级），右上角不再有静态 K 标签。
+  final bool showBadge;
+
   @override
   Widget build(BuildContext context) {
     final grid = LevelWindowGrid(count);
@@ -63,6 +69,7 @@ class LevelChartGrid extends StatelessWidget {
             child: _PaneChrome(
               level: level,
               label: badgeTextBuilder?.call(slot, level),
+              showBadge: showBadge,
               primary: primary,
               topRightPane: topRightPane,
               child: available
@@ -120,10 +127,12 @@ class _PaneChrome extends StatelessWidget {
     required this.topRightPane,
     required this.child,
     this.label,
+    this.showBadge = true,
   });
 
   final int level;
   final String? label;
+  final bool showBadge;
   final bool primary;
   final bool topRightPane;
   final Widget child;
@@ -143,36 +152,39 @@ class _PaneChrome extends StatelessWidget {
         fit: StackFit.expand,
         children: [
           child,
-          Positioned(
-            right: right,
-            top: 3,
-            child: IgnorePointer(
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  // 底色跟主题走，浅色主题下不再是一块纯黑。
-                  color: AppPalette.overlayBg,
-                  borderRadius: BorderRadius.circular(4),
-                  border: Border.all(
-                    color: primary ? AppPalette.accent : AppPalette.border,
+          if (showBadge)
+            Positioned(
+              right: right,
+              top: 3,
+              child: IgnorePointer(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    // 底色跟主题走，浅色主题下不再是一块纯黑。
+                    color: AppPalette.overlayBg,
+                    borderRadius: BorderRadius.circular(4),
+                    border: Border.all(
+                      color: primary ? AppPalette.accent : AppPalette.border,
+                    ),
                   ),
-                ),
-                child: Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                  child: Text(
-                    label ?? 'K$level',
-                    style: TextStyle(
-                      fontSize: 11,
-                      height: 1.2,
-                      color: primary
-                          ? AppPalette.accent
-                          : AppPalette.textSecondary,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 1,
+                    ),
+                    child: Text(
+                      label ?? 'K$level',
+                      style: TextStyle(
+                        fontSize: 11,
+                        height: 1.2,
+                        color: primary
+                            ? AppPalette.accent
+                            : AppPalette.textSecondary,
+                      ),
                     ),
                   ),
                 ),
               ),
             ),
-          ),
         ],
       ),
     );

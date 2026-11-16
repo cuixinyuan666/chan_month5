@@ -446,20 +446,29 @@ void main() {
     expect(after, greaterThan(before));
   });
 
-  testWidgets('左上角操作窗固定显示「1分钟 K0」且无周期下拉', (tester) async {
+  testWidgets('操作窗左上角固定 1min-K0，右上角静态角标已删，其余窗下拉选周期/层级',
+      (tester) async {
     final model = KlineDrawBoardModel.initial().addCandle(
       const KlineDrawCandle(open: 10, high: 12, low: 9, close: 11),
     );
     await tester.pumpWidget(_host(model));
     await tester.pump();
 
-    expect(find.text('1\u5206\u949f K0'), findsOneWidget,
-        reason: '左上角操作窗角标固定为 1分钟 K0');
-    // K1/周期文本在下拉项里也会出现，只要求它们存在即可。
-    expect(find.text('K2'), findsWidgets, reason: '右上窗是 1分钟 K2');
-    expect(find.text('5\u5206\u949f'), findsWidgets);
-    expect(find.text('15\u5206\u949f'), findsWidgets);
-    // 4 窗里只有 3 个非操作窗有下拉；左上角操作窗不给下拉。
+    // 操作窗：左上角固定标识。
+    expect(find.text('1min-K0'), findsOneWidget,
+        reason: '操作窗左上角固定 1min-K0');
+    // 右上角静态角标（旧版「1分钟 K0 / 1分钟 K2」）整批删除。
+    expect(find.text('1\u5206\u949f K0'), findsNothing,
+        reason: '右上角角标已删除');
+    expect(find.text('1\u5206\u949f K2'), findsNothing,
+        reason: '右上角角标已删除');
+    // 其余三窗用下拉显示当前选中值：K2 / 5分钟 / 15分钟，各一处。
+    expect(find.text('K2'), findsOneWidget, reason: '右上层级下拉当前值 K2');
+    expect(find.text('5\u5206\u949f'), findsOneWidget,
+        reason: '左下周期下拉当前值 5分钟');
+    expect(find.text('15\u5206\u949f'), findsOneWidget,
+        reason: '右下周期下拉当前值 15分钟');
+    // 4 窗里只有 3 个非操作窗有下拉；左上角操作窗固定文本、不给下拉。
     expect(find.byType(DropdownButton<String>), findsNWidgets(3));
   });
 

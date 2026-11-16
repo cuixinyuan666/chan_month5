@@ -474,13 +474,11 @@ class _KlineDrawBoardState extends State<KlineDrawBoard> {
                         for (final mode in model.windowModes) mode.displayLevel,
                       ],
                       maxKn: 99,
-                      // 2026-11-16：左上角操作窗固定显示「1分钟 K0」，
-                      // 不给下拉。层级窗统一带「1分钟」前缀（右上=1分钟 K2），
-                      // 周期窗显示自身周期名（左下=5分钟、右下=15分钟）。
-                      badgeTextBuilder: (slot, level) {
-                        final m = model.modeAt(slot);
-                        return m.isLevel ? '1\u5206\u949f ${m.label}' : m.label;
-                      },
+                      // 2026-11-16：画板删除每格右上角的静态 K 角标；窗口标识
+                      // 统一到各窗左上角自己渲染——操作窗固定「1min-K0」文本，
+                      // 其余窗用下拉列表选周期/层级（见 _pane）。主图分窗与
+                      // 分笔画板不传此参，右上角角标保持原样。
+                      showBadge: false,
                       paneBuilder: (context, slot, level, primary) => _pane(
                         slot: slot,
                         primary: slot == 0,
@@ -628,7 +626,16 @@ class _KlineDrawBoardState extends State<KlineDrawBoard> {
               child: Text('\u6309\u4f4f\u5de6\u952e\u62d6\u52a8\uff0c\u677e\u624b\u751f\u6210\u4e00\u6839 1 \u5206\u949f K \u7ebf'),
             ),
           ),
-        if (!primary)
+        // 窗口标识统一在左上角：操作窗固定「1min-K0」文本，其余窗下拉选
+        // 周期/层级。二者同位置、互斥（primary），右上角角标已由
+        // LevelChartGrid(showBadge:false) 删除——逻辑只有这一处来源。
+        if (primary)
+          Positioned(
+            left: 8,
+            top: 30,
+            child: _windowBadge('1min-K0', emphasized: true),
+          )
+        else
           Positioned(
             left: 8,
             top: 30,
@@ -800,6 +807,29 @@ class _KlineDrawBoardState extends State<KlineDrawBoard> {
   void _onViewportChanged() {
     if (!mounted) return;
     setState(() => _geom = _geometry(_lastPaneWidth, _lastPaneHeight));
+  }
+
+  /// 画板左上角窗口标识：操作窗固定文本，与其余窗的下拉同一位置、同一高度。
+  /// 右上角静态角标已由 LevelChartGrid(showBadge:false) 去掉，标识只认这里。
+  Widget _windowBadge(String text, {required bool emphasized}) {
+    return Container(
+      height: 40,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      alignment: Alignment.centerLeft,
+      decoration: BoxDecoration(
+        color: AppPalette.surfaceAlt,
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: AppPalette.accent),
+      ),
+      child: Text(
+        text,
+        style: TextStyle(
+          fontSize: 13,
+          height: 1.2,
+          color: emphasized ? AppPalette.accent : AppPalette.textPrimary,
+        ),
+      ),
+    );
   }
 
   Widget _roundAction(IconData icon, VoidCallback onTap) {

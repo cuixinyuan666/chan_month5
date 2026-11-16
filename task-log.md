@@ -6866,3 +6866,17 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   2. 语义保持：种子框口径不跑此函数（原样）、早生成关闭原样、低低取 min、顶底交替铁律全部不变；仅把「两两相邻并」改为「与生长框迭代并」，分笔画板/K0/K1 全层同构受益。
   3. 测试：`first_fractal_rule_test.dart` 新增 3 例（高高前 4 根 x0..3 high=10.2 low=10.06 / 低低按 min / 含融链三根并一框）；10 文件 **86 条全过**；analyze 改动文件无 issue。
 - **注意事项**：这是全 App 通用口径（非画板特殊化），种子框/低低/早生成开关语义均未变；未 push。
+
+### 2026-11-16 22:1x — K线画板 UI 调整：删右上角角标，标识统一到左上角
+
+- **执行者**：WorkBuddy
+- **任务类型**：UI 调整
+- **用户反馈**：拼音「删掉子窗口右上角的 label；左上角子窗口作为画板显示 1min-K0；其它子窗口也显示下拉列表选择周期和层级，把逻辑理清楚」。
+- **逻辑梳理（改前）**：`LevelChartGrid._PaneChrome` 每格右上角渲染静态角标（画板经 badgeTextBuilder 传「1分钟 K0/K2/5分钟/15分钟」，主图/分笔显示默认 K{n}）；画板非操作窗另有左上角下拉。同一个窗口标识分散在两处、右上角角标与下拉重复。
+- **新逻辑（改后）**：角标只留一处来源——各窗**左上角**：操作窗固定文本「1min-K0」（不可切），其余三窗下拉选 K1~K9 / 周期；右上角静态角标整批删除。主图分窗、分笔画板不传新开关，右上角角标保持原样。
+- **关键操作**：
+  1. `level_chart_grid.dart`：新增 `showBadge`（默认 true），`_PaneChrome` 据此决定是否渲染右上角 `Positioned` 角标；默认 true 保证主图/分笔零回归。
+  2. `kline_draw_board.dart`：画板的 `LevelChartGrid` 传 `showBadge:false` 并去掉 badgeTextBuilder；`_pane` 里 primary 窗左上角放 `_windowBadge('1min-K0')`（高度 40 与下拉对齐），其余窗保留下拉；二者同位置互斥，标识来源唯一。
+  3. `main.dart`：帮助文字第 9~10 条改为「1min-K0 / K2 / 5分钟 / 15分钟、右上角无静态角标、其余窗下拉选周期/层级」。
+- **结果**：widget 测试第 13 例改写（1min-K0 固定、旧角标 findsNothing、三窗下拉各一处、下拉总数 3）；kline_draw_board_widget 19 条 + level_window_layout/tick_draw_board/level_window_sync 全过；改动文件 analyze 无 issue。
+- **注意事项**：showBadge 是通用开关，只画板关；未 push。
