@@ -6880,3 +6880,19 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   3. `main.dart`：帮助文字第 9~10 条改为「1min-K0 / K2 / 5分钟 / 15分钟、右上角无静态角标、其余窗下拉选周期/层级」。
 - **结果**：widget 测试第 13 例改写（1min-K0 固定、旧角标 findsNothing、三窗下拉各一处、下拉总数 3）；kline_draw_board_widget 19 条 + level_window_layout/tick_draw_board/level_window_sync 全过；改动文件 analyze 无 issue。
 - **注意事项**：showBadge 是通用开关，只画板关；未 push。
+
+### 2026-11-16 22:3x — K线画板：周期 + 层级两级级联下拉，右上默认 1min-K1
+
+- **执行者**：WorkBuddy
+- **任务类型**：UI/逻辑调整
+- **用户反馈**：拼音「使用多级下拉列表，例如左下的子窗：5min-K2」，选择确认「两级级联 / 左下保持 5min-K0」；补充「右上角默认为：1min-K1」。
+- **旧口径**：`KlineDrawWindowMode` 是「二选一」——`level(N)`=1m 的 K{N}、`period('5m')`=5m 的 K0，无法表达「5m-K2」这种周期+层级组合；非操作窗只有一个下拉。
+- **新口径**：`KlineDrawWindowMode` 改为周期 + 层级两个正交维度（通用构造 `{period, level}` + `.level(N)` / `.period(p)` 便捷构造）；`label` = `1min-K0` / `5min-K2` / `15min-K0`；`displayLevel` = level（周期窗也能取 K1/K2）；`isLevel = period=='1m'`。
+- **关键操作**：
+  1. `kline_draw_board.dart`：`KlineDrawWindowMode` 重构（顺手修 3 条 analyze info：`this.level`/`this.period` 初始化形参）；新增 `kKlineDrawPeriodAbbr` 映射；`withWindowMode` 的 slot0 守卫改为「周期≠1m 或 层级≠0 都拦回」；默认四窗 = `1m-K0 / 1m-K1 / 5m-K0 / 15m-K0`。
+  2. `_pane()`：`paneBars = mode.isLevel ? bars : aggregateKlineBarsByPeriod(bars, mode.period)`；`usePeriodBundle = !mode.isLevel`——周期窗按本窗聚合 bars 重算 bundle，K1/K2 层级取该重算 bundle 对应层；操作窗与右上层级窗仍共用原 bundle。
+  3. 非操作窗左上角下拉改为两级级联 `Row`：第一级周期（1min/5min/15min…），第二级层级 K0~K9，中间 `-` 连接，视觉即 `5min-K2`；两维独立选择。操作窗仍固定文本 `1min-K0` 无下拉。
+  4. `main.dart` 帮助文字第 9~10 条更新：右上 `1min-K1`、两级级联下拉示例 `5min-K2`。
+  5. 测试：`kline_draw_board_test.dart` 改默认四窗断言（1min-K0/1min-K1/30min-K0、组合 30min-K2、slot0 双重守卫）；widget 测试下拉总数 3→6、`kline-draw-1-2-1m`→`kline-draw-1-1-1m`、`displayLevel` `[0,2,0,0]`→`[0,1,0,0]`、文本期望改 `K1`/`5min`/`15min`、K0 出现两次。
+- **结果**：6 个定向测试文件 **65 条全过**；改动文件 analyze 无新增 issue（main.dart 15 条均为未触及行的既有告警）；commit d2111904（未 push）。
+- **重编重启**：Stop PID 80748 → `flutter build windows --debug`（29.8s 成功，kernel_blob 22:18:35 → 22:32，73674896→73678880）→ explorer 代拉起 PID 84452，22:32:42 启动、Responding=True，6 秒后复查仍存活。Rust 未变无需重编。
