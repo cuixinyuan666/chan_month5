@@ -2,6 +2,7 @@ import 'package:chan_kline/models/chart_indicator.dart';
 import 'package:chan_kline/models/chip_config.dart';
 import 'package:chan_kline/models/kline_combine_bundle.dart';
 import 'package:chan_kline/models/tick_dist_config.dart';
+import 'package:chan_kline/widgets/kline_chart.dart';
 import 'package:chan_kline/widgets/kline_draw_board.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -411,5 +412,55 @@ void main() {
     );
     final after = _live(tester).candles.single.high;
     expect(after, greaterThan(before));
+  });
+
+  testWidgets('左上角操作窗固定显示「1分钟 K0」且无周期下拉', (tester) async {
+    final model = KlineDrawBoardModel.initial().addCandle(
+      const KlineDrawCandle(open: 10, high: 12, low: 9, close: 11),
+    );
+    await tester.pumpWidget(_host(model));
+    await tester.pump();
+
+    expect(find.text('1\u5206\u949f K0'), findsOneWidget,
+        reason: '左上角操作窗角标固定为 1分钟 K0');
+    // K1/周期文本在下拉项里也会出现，只要求它们存在即可。
+    expect(find.text('K1'), findsWidgets, reason: '右上窗是 K1');
+    expect(find.text('5\u5206\u949f'), findsWidgets);
+    expect(find.text('15\u5206\u949f'), findsWidgets);
+    // 4 窗里只有 3 个非操作窗有下拉；左上角操作窗不给下拉。
+    expect(find.byType(DropdownButton<String>), findsNWidgets(3));
+  });
+
+  testWidgets('各周期窗显示自己的聚合数据，不再与 1 分钟窗相同', (tester) async {
+    var model = KlineDrawBoardModel.initial();
+    for (var i = 0; i < 10; i++) {
+      model = model.addCandle(
+        KlineDrawCandle(
+          open: 10.0 + i,
+          high: 11.0 + i,
+          low: 9.0 + i,
+          close: 10.5 + i,
+        ),
+      );
+    }
+    await tester.pumpWidget(_host(model));
+    await tester.pump();
+
+    KlineChart chart(String key) =>
+        tester.widget<KlineChart>(find.byKey(ValueKey<String>(key)));
+    final k0 = chart('kline-draw-0-0-1m');
+    final k1 = chart('kline-draw-1-1-1m');
+    final m5 = chart('kline-draw-2-0-5m');
+    final m15 = chart('kline-draw-3-0-15m');
+
+    expect(k0.bars, hasLength(10), reason: '操作窗保持 10 根 1 分钟');
+    expect(k1.bars, hasLength(10), reason: 'K1 层级窗仍用原始 1m 数据');
+    expect(m5.bars, hasLength(2), reason: '5 分钟窗 = 10/5 = 2 根');
+    expect(m15.bars, hasLength(1), reason: '15 分钟窗 = 10 根聚成 1 根');
+    // 5 分钟的首根开=第 1 根 1m 开，末根收=第 5 根 1m 收。
+    expect(m5.bars.first.open, 10);
+    expect(m5.bars.first.close, 14.5);
+    expect(m5.bars.first.high, 15);
+    expect(m5.bars.first.low, 9);
   });
 }
