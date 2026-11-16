@@ -6786,3 +6786,19 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   - `flutter test`（画板 widget/模型 + 影线 + 分笔画板 + K0 圆点）：**35 条全过**。
   - `flutter analyze` 改动文件无 error（7 条既有告警，非本次引入）。
 - **注意事项**：未 push（按 AGENTS.md，push 前须用户确认）。工作区遗留的 `kline_viewport.dart` 等改动未混入本次提交。
+
+### 2026-11-16 14:3x — K线画板：操作窗固定 1分钟 K0 + 各周期由 1分钟聚合
+
+- **执行者**：WorkBuddy（AutoClaw）
+- **任务类型**：功能修复 / 界面交互
+- **上下文**：用户两点要求：① 左上角操作窗固定显示「1分钟 K0」、不给下拉；② 5分钟应由 5 根 1分钟聚成、15分钟由 15 根 1分钟聚成，其它周期也要对应，不能各窗都显示同一份 1m 数据。
+- **根因**：画板 `_pane` 把所有窗都传同一份 `model.toBars()`（原始 1 分钟）；`mode.period` 只用于标题/标签与 tick 判断，没参与数据换算。角标 `badgeTextBuilder` 又返回空串，窗格没有可读标题。
+- **关键操作**：
+  1. 新增 `lib/compute/kline_period_aggregate.dart`：`kPeriodOneMinuteCounts` 覆盖 1m~6y 全部周期（A股 1 交易日=240 交易分钟）；`aggregateKlineBarsByPeriod` 按**连续根数**分组（首开/终收/组内高低/量额累加，末尾不足一组也出一根）。
+  2. `kline_draw_board.dart`：`_pane` 按 `mode` 取 `paneBars`（操作窗与层级窗保持 1m，周期窗按 N 根聚合），`stepIdx/stepSerial` 同步用聚合后长度；角标改为 slot0 固定「1分钟 K0」、其余显示层级/周期。
+  3. `level_chart_grid.dart`：`badgeTextBuilder` 签名加 `slot`（同一层级可挂不同周期）。
+  4. `main.dart` 帮助文字第 9/10 条对齐。
+- **结果**：
+  - 新增 `kline_period_aggregate_test.dart`（7 例：全周期映射、5m/15m OHLC、尾部残组、1m 原样返回）+ 2 个 widget 用例（角标/下拉数、10 根 1m → 1m 窗 10 根 / 5m 窗 2 根 / 15m 窗 1 根）。
+  - `flutter test`（6 个相关文件）：**44 条全过**；`flutter analyze` 改动文件无 issue。
+- **注意事项**：slot0 不能改周期由 `withWindowMode` 既有守卫保证（测试已覆盖）；未 push。
