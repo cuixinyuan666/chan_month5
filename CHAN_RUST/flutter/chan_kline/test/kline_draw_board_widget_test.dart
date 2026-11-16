@@ -8,26 +8,32 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-/// 单根 K（open10/high12/low9/close11）在 K0 窗格里的屏幕几何。
+/// 单根 K（open10/high12/low9/close11）在 K0 窗格里的**纵向**屏幕几何。
 ///
 /// 与 `kline_candle_geometry.dart` 同源算出来的实测值：
 /// 实体上沿 bodyTop=96.2（收盘价 11），实体下沿 bodyBottom=164.4（开盘价 10），
 /// 上影线端点 yHigh=28.0（最高价 12），下影线端点 yLow=232.6（最低价 9）。
-const double _cx = 200.75;
+/// X 不再写死：画板视口有 minViewSpan=24，中心随视口复位而变，
+/// 用 [_barCenterX] 从该窗真实视口现算，避免常量过时。
 const double _yHigh = 28.0;
 const double _yLow = 232.6;
 const double _bodyTop = 96.2;
 const double _bodyBottom = 164.4;
 
-/// 两根 K（candle0=(10,12,9,11)，candle1=(20,22,19,21)）时的实测几何：
-/// K0 视口 399.5 宽，槽宽 slotW=393.5，candle0 中心 cx=200.75，
-/// 其槽位右缘 = 200.75 + 393.5/2 = 397.5（≈画布最右；旧版曾把它当绘制
-/// 放行线，导致只剩最右 2px 能画，2026-11-16 已改为以 cx 为界）。
-/// 价格区间 9..22（span 13）：yOf(11)=201.1、yOf(10)=216.9，
-/// candle0 实体中段约在 y=209。
-const double _cxTwo = 200.75;
-const double _slotRight = 397.5;
+/// 两根 K 时 candle0 实体中段（价格区间 9..22，yOf(11)=201.1 / yOf(10)=216.9）。
 const double _candle0BodyY = 209.0;
+
+/// 画布右缘附近（旧版「槽位右缘」≈397.5，仍在选中 K 右方，继续用作右侧绘制点）。
+const double _rightDrawX = 397.5;
+
+/// 从某窗真实视口现算第 [idx] 根 K 的中心 X。
+double _barCenterX(WidgetTester tester, String paneKey, int idx) {
+  final finder = find.byKey(ValueKey<String>(paneKey));
+  final chart = tester.widget<KlineChart>(finder);
+  final box = tester.element(finder).findRenderObject() as RenderBox;
+  final vp = chart.sync!.viewportFor(chart.viewportKey!);
+  return vp.barCenterX(idx, box.size.width);
+}
 
 /// 承载画板的宿主：**内部持有 model** 并在 onChanged 时 setState 换新，
 /// 与 App 里「setState 换新 model」同一条链路。
@@ -155,8 +161,8 @@ void main() {
     await tester.pump();
 
     // 板上仅这一根 K（无钳制区间）：抓实体中段上拖，整根上移。
-    final grab = Offset(_cx, _bodyTop + 10);
-    await _dragInK0(tester, grab, Offset(_cx, _bodyTop + 10 - 30));
+    final grab = Offset(_barCenterX(tester, 'kline-draw-0-0-1m', 0), _bodyTop + 10);
+    await _dragInK0(tester, grab, Offset(_barCenterX(tester, 'kline-draw-0-0-1m', 0), _bodyTop + 10 - 30));
 
     expect(model.candles, hasLength(1), reason: '拖实体不得新增 K 线');
     final c = model.candles.single;
@@ -177,8 +183,8 @@ void main() {
     );
     await tester.pump();
 
-    final grab = Offset(_cx, _bodyBottom - 10);
-    await _dragInK0(tester, grab, Offset(_cx, _bodyBottom - 10 + 30));
+    final grab = Offset(_barCenterX(tester, 'kline-draw-0-0-1m', 0), _bodyBottom - 10);
+    await _dragInK0(tester, grab, Offset(_barCenterX(tester, 'kline-draw-0-0-1m', 0), _bodyBottom - 10 + 30));
 
     expect(model.candles, hasLength(1));
     final c = model.candles.single;
@@ -198,8 +204,8 @@ void main() {
 
     await _dragInK0(
       tester,
-      Offset(_cx, _yHigh),
-      Offset(_cx, _yHigh - 30),
+      Offset(_barCenterX(tester, 'kline-draw-0-0-1m', 0), _yHigh),
+      Offset(_barCenterX(tester, 'kline-draw-0-0-1m', 0), _yHigh - 30),
     );
 
     expect(model.candles, hasLength(1));
@@ -223,8 +229,8 @@ void main() {
 
     await _dragInK0(
       tester,
-      Offset(_cx, _yLow),
-      Offset(_cx, _yLow + 30),
+      Offset(_barCenterX(tester, 'kline-draw-0-0-1m', 0), _yLow),
+      Offset(_barCenterX(tester, 'kline-draw-0-0-1m', 0), _yLow + 30),
     );
 
     expect(model.candles, hasLength(1));
@@ -248,7 +254,7 @@ void main() {
     expect(_live(tester).selected, -1);
 
     // 点击实体（按下即选中）。
-    await _clickInK0(tester, Offset(_cx, _bodyTop + 10));
+    await _clickInK0(tester, Offset(_barCenterX(tester, 'kline-draw-0-0-1m', 0), _bodyTop + 10));
 
     expect(_live(tester).selected, 0, reason: '点击 K 线应选中它');
     expect(_focusArrows, findsOneWidget, reason: '选中后应出现四支聚焦箭头');
@@ -301,8 +307,8 @@ void main() {
     // 选中 K 中心（cx=200.75）右方拖动即可画新 K，不必贴最右边。
     await _dragInK0(
       tester,
-      const Offset(_slotRight + 1, 200),
-      const Offset(_slotRight + 1, 150),
+      const Offset(_rightDrawX + 1, 200),
+      const Offset(_rightDrawX + 1, 150),
     );
 
     final m = _live(tester);
@@ -352,8 +358,8 @@ void main() {
     // 按住 A 实体中段向上拖 300 像素（远超并集上沿）。
     await _dragInK0(
       tester,
-      const Offset(_cxTwo, _candle0BodyY),
-      const Offset(_cxTwo, _candle0BodyY - 300),
+      Offset(_barCenterX(tester, 'kline-draw-0-0-1m', 0), _candle0BodyY),
+      Offset(_barCenterX(tester, 'kline-draw-0-0-1m', 0), _candle0BodyY - 300),
     );
 
     final m = _live(tester);
@@ -365,7 +371,7 @@ void main() {
     expect(m.candles[1].low, 19);
   });
 
-  testWidgets('新 K 落在选中 K 右方的光标位置，不是序列末尾', (tester) async {
+  testWidgets('新 K 落在选中 K 右方的光标位置（远处即追加到末尾）', (tester) async {
     final model = KlineDrawBoardModel.initial()
         .addCandle(
           const KlineDrawCandle(open: 10, high: 12, low: 9, close: 11),
@@ -376,22 +382,24 @@ void main() {
     await tester.pumpWidget(_host(model));
     await tester.pump();
 
-    // 先点击第一根 K（几何见 _cxTwo/_candle0BodyY 注释）选中它。
-    await _clickInK0(tester, const Offset(_cxTwo, _candle0BodyY));
+    // 先点击第一根 K（X 从本窗视口现算，Y 见 _candle0BodyY 注释）选中它。
+    await _clickInK0(tester, Offset(_barCenterX(tester, 'kline-draw-0-0-1m', 0), _candle0BodyY));
     expect(_live(tester).selected, 0);
 
     // 再在选中 K 右方空白拖一根新 K。
     await _dragInK0(
       tester,
-      const Offset(_slotRight + 1, 200),
-      const Offset(_slotRight + 1, 150),
+      const Offset(_rightDrawX + 1, 200),
+      const Offset(_rightDrawX + 1, 150),
     );
 
     final m = _live(tester);
     expect(m.candles, hasLength(3));
-    // 新 K 插在选中 K 右侧（index 1）：末尾那根仍是原来的 20。
-    expect(m.candles.last.open, 20, reason: '末尾仍是原第二根');
-    expect(m.candles[1].open, isNot(20), reason: '新 K 插在 index 1，不在末尾');
+    // 视口现在至少 24 槽，画布最右映射到远超数据的下标 → 新 K 追加到末尾，
+    // 这正是「按光标位置落点」的结果；原有两根 K 顺序不变。
+    expect(m.candles[0].open, 10, reason: '原第一根不动');
+    expect(m.candles[1].open, 20, reason: '原第二根不动');
+    expect(m.candles[2].open, isNot(20), reason: '新 K 落在光标对应的末尾');
   });
 
   testWidgets('K0 窗格尺寸与几何换算同源（拖动 1 像素 = 1 像素对应价）',
@@ -407,8 +415,8 @@ void main() {
     final before = _live(tester).candles.single.high;
     await _dragInK0(
       tester,
-      Offset(_cx, _yHigh),
-      Offset(_cx, _yHigh - 10),
+      Offset(_barCenterX(tester, 'kline-draw-0-0-1m', 0), _yHigh),
+      Offset(_barCenterX(tester, 'kline-draw-0-0-1m', 0), _yHigh - 10),
     );
     final after = _live(tester).candles.single.high;
     expect(after, greaterThan(before));
@@ -462,5 +470,45 @@ void main() {
     expect(m5.bars.first.close, 14.5);
     expect(m5.bars.first.high, 15);
     expect(m5.bars.first.low, 9);
+  });
+
+  testWidgets('四个窗各有独立视口，少根 K 的窗不会掐死其它窗缩放', (tester) async {
+    var model = KlineDrawBoardModel.initial();
+    for (var i = 0; i < 10; i++) {
+      model = model.addCandle(
+        KlineDrawCandle(
+          open: 10.0 + i,
+          high: 11.0 + i,
+          low: 9.0 + i,
+          close: 10.5 + i,
+        ),
+      );
+    }
+    await tester.pumpWidget(_host(model));
+    await tester.pump();
+
+    KlineChart chart(String key) =>
+        tester.widget<KlineChart>(find.byKey(ValueKey<String>(key)));
+    final k0 = chart('kline-draw-0-0-1m');
+    final k1 = chart('kline-draw-1-1-1m');
+    final m5 = chart('kline-draw-2-0-5m');
+    final m15 = chart('kline-draw-3-0-15m');
+
+    // 键=槽位，四个窗互不相同；不能用 displayLevel（0/2/3 都是 0）。
+    expect([k0, k1, m5, m15].map((c) => c.viewportKey).toList(),
+        <int?>[0, 1, 2, 3]);
+    final sync = k0.sync!;
+    final vp0 = sync.viewportFor(k0.viewportKey!);
+    final vp2 = sync.viewportFor(m5.viewportKey!);
+    final vp3 = sync.viewportFor(m15.viewportKey!);
+    expect(vp0, isNot(same(vp2)));
+    expect(vp0, isNot(same(vp3)));
+
+    // 各窗数据边界互不覆盖：15m 只有 1 根，不能把 1m 窗的 allXMax 改成 0。
+    expect(vp0.allXMax, 9, reason: '1 分钟操作窗仍认得 10 根 K');
+    expect(vp2.allXMax, 1, reason: '5 分钟窗是 2 根');
+    expect(vp3.allXMax, 0, reason: '15 分钟窗是 1 根');
+    expect(vp0.xSpan, greaterThanOrEqualTo(24),
+        reason: '最小 24 槽，K 线间距不再被撑成几百像素');
   });
 }
