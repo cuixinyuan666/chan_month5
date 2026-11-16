@@ -31,7 +31,9 @@ class KlineViewport {
   static const double minSpan = 5;
   /// 缩小时最多可扩到「全量跨度」的倍数（越大蜡烛越小、空白越多）
   static const double maxZoomOutFactor = 8.0;
-  static const double maxYShift = 3.0;
+  // 2026-11-16 平移不设限后 yShift 可远超旧 ±3：此钳仅防数值发散，
+  // 并保证锚定缩放在 yZoom 下限 0.2 时仍可达（0.5 + 0.5/0.2 = 3 之上留余量）。
+  static const double maxYShift = 30.0;
 
   double allXMin = 0;
   double allXMax = 0;
@@ -42,6 +44,13 @@ class KlineViewport {
   bool ready = false;
   /// 用户手动缩放/平移后为 true，步进时按 ensureLatest 滚动而非整屏复位。
   bool userAdjustedView = false;
+
+  /// 视窗最少可见槽数（bar 索引单位）。默认 1 保持其它图表口径不变。
+  ///
+  /// K线画板设为 24：只画了几根 K 时，若按 `xSpan = 根数-1` 铺满画布，
+  /// 单根 K 的槽宽会达到几百像素，表现为「两根 K 中间距离非常长」、
+  /// 时间轴刻度过疏。给个最小跨度后各根 K 保持正常间距，右侧留白。
+  double minViewSpan = 1;
 
   /// 当前视窗跨度（bar 索引，可为小数）。
   /// 下限 1.0：单根 K 时 viewXMin==viewXMax，若用 1e-6 会让 slotW 变成天文数字，
@@ -61,14 +70,12 @@ class KlineViewport {
   void resetForBarCount(int count) {
     allXMin = 0;
     allXMax = math.max(0, count - 1).toDouble();
-    if (count <= 1) {
-      // 单根：视窗跨度至少 1 个 slot，避免 xSpan 塌成 0
-      viewXMin = 0;
-      viewXMax = 1;
-    } else {
-      viewXMin = allXMin;
-      viewXMax = allXMax;
-    }
+    // 跨度至少 minViewSpan：少根 K 时不让单个 slot 撑满画布。
+    final span = math.max(count <= 1 ? 1.0 : (allXMax - allXMin), minViewSpan);
+    // 画板（minViewSpan>1）左侧留三成空白：第一根 K 不贴左缘，
+    // 左边才有空间做「平移」；否则首根 K 的包络直接顶到绘图区左边界。
+    viewXMin = minViewSpan > 1 ? allXMin - minViewSpan * 0.3 : allXMin;
+    viewXMax = viewXMin + span;
     yZoomRatio = 1.0;
     yShiftRatio = 0.0;
     userAdjustedView = false;
@@ -218,15 +225,24 @@ class KlineViewport {
   }) {
     if (!ready) return;
     final dataSpan = math.max(1.0, allXMax - allXMin);
-    viewXMin = allXMin - dataSpan * leftBlankRatio;
+    // 画板留出至少三成槽位在左侧，保证首根 K 左边仍有可平移的空白。
+    final leftBlank = minViewSpan > 1
+        ? math.max(dataSpan * leftBlankRatio, minViewSpan * 0.3)
+        : dataSpan * leftBlankRatio;
+    viewXMin = allXMin - leftBlank;
     viewXMax = allXMax + dataSpan * rightBlankRatio;
+    // 少根 K 时按数据跨度铺开会得到很宽的 slot；补足到 minViewSpan，
+    // 右侧多出来的空白留给后续绘制，不把已画 K 拉散。
+    if (viewXMax - viewXMin < minViewSpan) {
+      viewXMax = viewXMin + minViewSpan;
+    }
     yZoomRatio = 1.0;
     yShiftRatio = 0.0;
     userAdjustedView = false;
   }
 
-  /// 滚轮横向缩放，锚点为画布内 X（像素）。
-  /// [allowLeftBlank] 为真时左端也可以扩出去，左右一起变，不再只朝右边挤。
+  /// 滚轮横向缩放，锚点为画布内 X（像素）：缩放前后锚点处内容不动。
+  /// 2026-11-16 起不做任何边界钳回；[allowLeftBlank] 保留仅为兼容旧调用点。
   void zoomXAt(
     double factor,
     double anchorCanvasX,
@@ -254,28 +270,13 @@ class KlineViewport {
     var newMin = xAtMouse - rel * newSpan;
     var newMax = newMin + newSpan;
 
-    if (!allowLeftBlank && newMin < allXMin) {
-      newMin = allXMin;
-      newMax = newMin + newSpan;
-    }
-    // 右侧留白：超出时整体左移视窗，避免 span 变小后 rightMax 收紧把视窗硬拽回、缩放失效
-    final rightLimit = allXMax + newSpan * 2;
-    if (newMax > rightLimit) {
-      final shift = newMax - rightLimit;
-      newMin -= shift;
-      newMax -= shift;
-      if (newMin < allXMin) {
-        newMin = allXMin;
-        newMax = newMin + newSpan;
-      }
-    }
+    // 2026-11-16 锚点语义升级：缩放严格围绕鼠标锚点（rel 处内容不动），
+    // 不再把视窗钳回数据边界或拽回右极限——配合「平移不设限」，视窗可停在
+    // 任意位置，空白处继续缩放时锚点下内容同样保持不动。仅 span 有 min/max 钳制。
+    // [allowLeftBlank] 参数保留兼容旧调用：两种口径现在一致，均不做边界钳回。
 
     viewXMin = newMin;
     viewXMax = newMax;
-    if (!allowLeftBlank && viewXMin < allXMin) viewXMin = allXMin;
-    if (viewXMax <= viewXMin) {
-      viewXMax = math.min(allXMax, viewXMin + minSpanFor(barCount));
-    }
   }
 
   /// 纵向缩放后，把 [price] 钉在绘图区从上往下 [relFromTop] 的位置（0 顶，1 底）。
@@ -300,13 +301,36 @@ class KlineViewport {
     final mid = (yMax + yMin) / 2;
     final rel = relFromTop.clamp(0.0, 1.0);
     final shift = (price - mid) / baseSpan + (rel - 0.5) / yZoomRatio;
-    yShiftRatio = shift.clamp(-maxYShift, maxYShift);
+    // 2026-11-16：平移不设限后不再钳回 ±maxYShift——钳回会让锚定缩放与
+    // 自由平移打架（平移拖远后首次缩放跳变）。yZoomRatio ∈ [0.2, 20] 兜底。
+    yShiftRatio = shift;
   }
 
   /// 双指/滚轮纵向缩放：factor>1 放大，<1 缩小。
   void zoomYBy(double factor) {
     if (!ready || factor <= 0) return;
     yZoomRatio = (yZoomRatio * factor).clamp(0.2, 20.0);
+  }
+
+  /// 纵向锚定缩放（2026-11-16）：缩放围绕 [anchorPrice]——缩放前后该价格
+  /// 始终落在 [relFromTop]（0=绘图区顶，1=底）对应的屏幕行上。
+  /// shift 不做 ±maxYShift 钳制（同 pinPriceAtPlotFraction 的放开口径）。
+  /// [baseMid]/[baseSpan] 为本窗未缩放（yZoom/yShift 应用前）的价格中点与全幅，
+  /// 与 priceRangeFor / centerLatestVertically 同口径。
+  void zoomYAtPrice(double factor, double anchorPrice, double relFromTop,
+      double baseMid, double baseSpan) {
+    if (!ready || factor <= 0 || baseSpan <= 0) return;
+    final oldZoom = yZoomRatio;
+    final newZoom = (oldZoom * factor).clamp(0.2, 20.0);
+    if ((newZoom - oldZoom).abs() <= 1e-12) return;
+    // priceRangeFor 口径：zoomed 后屏幕行 rel 对应价格
+    //   price(rel) = mid + baseSpan/2/zoom + shift*baseSpan - rel*baseSpan/zoom
+    // 令 price(rel) == anchorPrice 解出 shift：
+    //   shift = (anchorPrice - mid)/baseSpan + (rel - 0.5)/zoom
+    final shift =
+        (anchorPrice - baseMid) / baseSpan + (relFromTop - 0.5) / newZoom;
+    yZoomRatio = newZoom;
+    yShiftRatio = shift;
   }
 
   /// 滚轮 + Ctrl：纵向缩放。
@@ -322,28 +346,14 @@ class KlineViewport {
     final dxBars = (-dx / usableW) * span;
     var newMin = viewXMin + dxBars;
     var newMax = viewXMax + dxBars;
-    // 边界：缩小到视窗大于数据跨度时，左右会留出空白。
-    // 旧口径把 newMin 硬钳到 allXMin，于是「空白留在左边」的一侧完全拖不动
-    // （缩小到一定程度后拖拽失效）。这里改成按视窗实际跨度留出等量空白，
-    // 视窗仍整体夹在数据左右边界附近，但两侧都能拖。
-    final dataSpan = math.max(1.0, allXMax - allXMin + 1);
-    final slack = math.max(0.0, span - dataSpan);
-    final leftFloor = allXMin - slack;
-    final rightCeil = allXMax + slack;
-    if (newMin < leftFloor) {
-      newMin = leftFloor;
-      newMax = newMin + span;
-    }
-    if (newMax > rightCeil) {
-      newMax = rightCeil;
-      newMin = newMax - span;
-    }
-    if (newMin < leftFloor) newMin = leftFloor;
-    if (newMax <= newMin) newMax = newMin + span;
+    // 2026-11-16 平移不设限：视窗可拖到任意位置（含数据外的全空白区），
+    // X 不再钳回数据边界，Y 不再做 ±maxYShift 钳制。
+    // 旧口径（钳到数据附近）废弃理由：缩小后「空白留在一边」的一侧拖不动。
+    // 回程票：「恢复布局」/换股复位仍走 showAllBars / resetForBarCount。
     viewXMin = newMin;
     viewXMax = newMax;
     yShiftRatio += dy / math.max(1, plotH);
-    yShiftRatio = yShiftRatio.clamp(-maxYShift, maxYShift);
+    // 2026-11-16：Y 平移不设限（旧 ±maxYShift 钳制移除）。
   }
 
   PriceRange priceRangeFor(List<KlineBar> bars) {

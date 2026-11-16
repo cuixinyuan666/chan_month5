@@ -223,6 +223,8 @@ class KlineChart extends StatefulWidget {
     this.candleDrawAnchorIdx = -1,
     this.selectedTickIdx = -1,
     this.displayLevel,
+    this.viewportKey,
+    this.viewportMinSpan = 1,
     this.forceSubPane = false,
     this.subPanePlaceholder = '副图未启用（点副图左上角指标按钮可勾选）',
     /// 步进当步下标（与主界面 `_stepIdx` 同构）：用于末根 K 影线粗细（未确认 vs 已确认）。
@@ -426,6 +428,15 @@ class KlineChart extends StatefulWidget {
   /// （见 `_drawnMains` / `_drawnSubs`）。
   final int? displayLevel;
 
+  /// 视口在 [sync] 里的键。null = 用 displayLevel（主图分窗口径）。
+  ///
+  /// K线画板必须传**槽位号**：左上/左下/右下三窗 displayLevel 都是 0，
+  /// 按层号取会共用同一视口（缩放互相掐死、K 线间距畸变）。
+  final int? viewportKey;
+
+  /// 本窗视口最少可见槽数。画板设 24，避免只有几根 K 时一根占满整屏。
+  final double viewportMinSpan;
+
   /// 强制保留副图带（分窗时用于对齐几何）。
   ///
   /// 分窗要求各窗主/副比例一致：否则同一价格的横线在不同窗会落在不同像素行。
@@ -459,9 +470,12 @@ class _KlineChartState extends State<KlineChart> {
 
   KlineViewport _resolveViewport() {
     final s = widget.sync;
-    final lv = widget.displayLevel;
-    if (s != null && lv != null) return s.viewportFor(lv);
-    return KlineViewport();
+    final key = widget.viewportKey ?? widget.displayLevel;
+    final vp = s != null && key != null
+        ? s.viewportFor(key)
+        : KlineViewport();
+    vp.minViewSpan = widget.viewportMinSpan;
+    return vp;
   }
 
   /// 副图整块是否被「小眼睛」收起（只影响本窗，不落盘）。
@@ -1518,6 +1532,7 @@ class _KlineChartState extends State<KlineChart> {
   }
 
   void _resetViewport() {
+    _viewport.minViewSpan = widget.viewportMinSpan;
     _viewport.resetForBarCount(widget.bars.length);
     // 子窗口一进来就居中，不等用户先缩放一次。
     if (widget.displayLevel != null &&

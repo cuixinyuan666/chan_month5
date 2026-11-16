@@ -74,13 +74,18 @@ class ChartSyncController extends ChangeNotifier {
   /// 主图占「主+副」区域比例的默认值（与单图口径一致）。
   static const double kDefaultMainFraction = 0.79;
 
-  /// 每层一份视口。层级在分窗里不会重复占用，故用层号作键。
-  /// 画板与主图分窗同口径：各子窗口的缩放/平移互不牵连。
+  /// 每窗一份视口，键由调用方给。
+  ///
+  /// 注意：主图分窗里键就是层号（层级不重复）；但**K线画板不能用层号**——
+  /// 左上(K0/1m)、左下(5m)、右下(15m)三个窗的 displayLevel 都是 0，
+  /// 用层号会让它们共用同一个 KlineViewport：15m 窗聚合后只剩 1 根 K，
+  /// 把共享视口的 allXMax 改成 0、xSpan 复位成 1，于是缩放被掐死、
+  /// 其余窗的 K 线间距被撑成几百像素。画板改传 slot 作键（见 KlineChart.viewportKey）。
   final Map<int, KlineViewport> _viewports = <int, KlineViewport>{};
 
-  /// 取某层视口；没有就现建一份（重建同层时沿用原缩放）。
-  KlineViewport viewportFor(int level) =>
-      _viewports.putIfAbsent(level, () => KlineViewport());
+  /// 取某窗视口；没有就现建一份（重建同窗时沿用原缩放）。
+  KlineViewport viewportFor(int key) =>
+      _viewports.putIfAbsent(key, () => KlineViewport());
 
   /// 全窗共享的 as-of 查找缓存。
   final AsOfLookupCache asOfCache = AsOfLookupCache();

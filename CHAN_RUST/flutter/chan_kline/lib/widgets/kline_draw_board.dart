@@ -513,6 +513,10 @@ class _KlineDrawBoardState extends State<KlineDrawBoard> {
           interactive: true,
           ownsKeyboard: primary,
           displayLevel: mode.displayLevel,
+          // 视口按槽位独立：不能按 displayLevel，否则操作窗/5m/15m 共用一份，
+          // 少根 K 的窗会把共享视口复位成 xSpan=1，连带缩放失效、间距畸变。
+          viewportKey: slot,
+          viewportMinSpan: 24,
           forceSubPane: true,
           bars: paneBars,
           period: mode.chartPeriod,
