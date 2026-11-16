@@ -6766,3 +6766,23 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   - `dart analyze` 改动文件无 error。全量 `flutter test` 因本机线程资源不足（Could not start thread DartWorker / OOM）无法完整跑完，环境问题与本次改动无关（历史遗留失败项同 2026-11-15 记录）。
   - 3 个 commit：3e3b67e4（代码）/ 89f59714（帮助文字）/ 73e43513（测试）。
 - **注意事项**：未 push（按 AGENTS.md，push 前须用户确认）。App 当时正在运行（PID 51548），未重启验证手感；需要肉眼验收时请重启 App 后在画板试「拖远不压扁、拖动可回拖」。工作区另有此前会话遗留的未提交改动（kline_viewport.dart 平移不设限 + 两个视口测试 + .gitignore），未动、未混入本次提交。
+
+### 2026-11-16 07:5x — K线画板：选中 K 右侧任意空白都能画新 K（不再只能在最右边）
+
+- **执行者**：WorkBuddy（AutoClaw）
+- **任务类型**：交互修复 / 界面交互
+- **上下文**：用户反馈「点击 K 线后，在它右边画新 K 必须要在最右边才能画；要求只要在被点击 K 线右边的区域都可以画」。
+- **根因（两层，缺一不可）**：
+  1. `_canStartCandleDraw()` 用「选中 K 的**槽位右缘**」`barCenterX + slotW/2` 当唯一放行线。少根 K 时视口 `xSpan` 下限为 1，槽宽≈整屏（单根实测 slotW=393.5 / 画布 399.5），右缘 397.5 已贴画布最右 → 只剩最右约 2px 能起笔。
+  2. 更关键：`candleBodyWidth = slotW*0.65` 未封顶，单根 K 实体宽≈255px，`_hitCandle` 的包络几乎覆盖整个画板；在右侧大片「空白」按下其实被判为抓 K 本体（走整根拖动），根本到不了绘制通道。
+- **关键操作**：
+  1. `kline_chart.dart`：`_canStartCandleDraw()` 放行线改为「被选中 K 的中心」`local.dx > cx`；`_candleBodyW()` 改调共享的 `candleBodyWidth()`。
+  2. `kline_candle_geometry.dart`：新增 `kCandleBodyMaxWidth = 20.0`，`candleBodyWidth = clamp(slotW*0.65, 1, 20)`；绘制/命中/聚焦三处同源，少根 K 仍是正常细蜡烛，右侧空白不再被吞。
+  3. `kline_draw_board.dart`：绘制锚注释对齐新口径。
+  4. `main.dart` 帮助文字第 5 条改为「选中一根 K 后，只要按住它右侧的任意空白处拖动就能画新 K（不必非在最右边）」。
+- **结果**：
+  - 新增 widget 用例「选中 K 右边但非最右边的空白也能画新 K」：x=300（中心 200.75 右方、离最右 398.5 很远）起笔成功，修复前该点被判为 `hit=0`（抓 K 本体）。
+  - 新增 `candle_wick_test.dart` 实体宽度封顶用例（常规 65%、大槽宽封顶 20px）。
+  - `flutter test`（画板 widget/模型 + 影线 + 分笔画板 + K0 圆点）：**35 条全过**。
+  - `flutter analyze` 改动文件无 error（7 条既有告警，非本次引入）。
+- **注意事项**：未 push（按 AGENTS.md，push 前须用户确认）。工作区遗留的 `kline_viewport.dart` 等改动未混入本次提交。
