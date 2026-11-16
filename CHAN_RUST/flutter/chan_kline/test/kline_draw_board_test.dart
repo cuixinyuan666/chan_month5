@@ -29,8 +29,8 @@ void main() {
         .withWindowCount(6);
     expect(model.windowCount, 6);
     expect(model.modeAt(0).label, 'K0');
-    expect(model.modeAt(1).label, 'K1');
-    expect(model.modeAt(1).displayLevel, 1);
+    expect(model.modeAt(1).label, 'K2');
+    expect(model.modeAt(1).displayLevel, 2);
     expect(model.modeAt(2).label, '30\u5206\u949f');
     expect(model.modeAt(2).displayLevel, 0);
     expect(model.modeAt(2).chartPeriod, '30m');

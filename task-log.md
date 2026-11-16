@@ -6818,3 +6818,25 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   - 旧 widget 用例的写死 X 常量改为 `_barCenterX()` 从该窗真实视口现算（画板视口变了，常量会过时）；「新 K 落点」用例按新视口语义改为「远处即追加末尾」。
   - `flutter test`（9 个相关文件）：**49 + 21 条全过**；`flutter analyze` 改动文件仅 7 条既有告警。
 - **注意事项**：`kline_viewport.dart` 含此前会话遗留的未提交改动（平移/Y 不设限等），本次为修 bug 一并提交；未 push。
+
+### 2026-11-16 16:4x — K线画板：四窗默认配置 + 各周期指标隔离 + 十字线全窗联动
+
+- **执行者**：WorkBuddy
+- **任务类型**：交互修复 / 数据逻辑 / 界面交互
+- **上下文**：用户用拼音提出三点：① 四窗默认改为左上画板 1m K0、右上 1m K2、左下 5m K0、右下 15m K0；② 左下/右下仍显示左上 1m K0 的指标，应显示各自周期指标（主图/副图）；③ 十字线未联动所有子窗，参考分笔画板逻辑，不同周期联动与旧联动区分开。
+- **根因**：
+  1. 默认配置 `defaultKlineDrawWindowModes` 的 slot1 是 `level(1)`（K1），角标只显示层级、不显示周期前缀。
+  2. 画板 bundle 只由 1m `model.toBars()` 算一份（`main.dart:_updateKlineDrawBoard`），周期窗只换了 `bars`（聚合）却仍传同一个 bundle；默认勾选的主图/副图指标（中枢/合并/连线/分型确认）全读 bundle 的 1m 缠论结构，画到 N/5、N/15 根 K 的窗上严重错位。数学类指标（均线/MACD/成交量）本就用本窗 bars，没错，但被结构类盖过。
+  3. 十字线：`KlineChart._publishCrosshairNow` 广播 `ownerLevel: displayLevel`，而画板 5m/15m 窗 displayLevel 都是 0 → 被 `syncedCrosshair` 判成「主窗自己」而不落线；视口 key 是 slot 但 owner 是层号 → `_takeOverViewport(0)` 抄错窗；`_applySyncedCrosshair` 用 `barIdx.clamp` 把主窗下标直接套到不同长度的周期 bars → 指到错误时刻。
+- **关键操作**：
+  1. `kline_draw_board.dart`：默认 slot1 改 `level(2)`；角标层级窗统一「1分钟 K{n}」前缀；新增可选 `bundleForBars` 回调 + 按 model 缓存的 `_bundleForPane`，周期窗按本窗聚合 bars 重算 bundle 并替换传给 KlineChart 的全部结构字段，层级窗/1m 窗零回归。
+  2. `main.dart`：画板构造传 `bundleForBars`，复用 `_bridge.buildKlineCombineBundle`；帮助文字第 9~12 条对齐（右上 K2、各周期指标、十字线联动）。
+  3. `chart_sync_controller.dart`：新增 `CrosshairMatchMode {levelIdx, timeMs}` 与 `ownerKey/barTimeMs` 可选参数；timeMs 模式只广播信息、**绝不接管/还原视口**，owner 用 slot；levelIdx 原逻辑逐行保留。
+  4. `kline_chart.dart`：新增 `crosshairOwnerKey`/`crosshairMatchMode` 与 `_effectiveOwnerKey`，替换 owner 比较；三处广播补新字段；`_applySyncedCrosshair` 按 mode 分流，timeMs 用 `barIndexAtTimeMs` 按时刻对位且不做 `ensureBarVisible`。
+  5. `kline_period_aggregate.dart`：新增纯函数 `barIndexAtTimeMs`（第一根 timeMs>=目标的 bar；周期 K 的 timeMs 是组末时间）。
+  6. 画板四窗传 `crosshairOwnerKey: slot` + `crosshairMatchMode: timeMs`。
+- **结果**：
+  - 新增 `crosshair_time_align_test.dart`（4 例：跨周期 timeMs 对位/边界/视口不接管/旧 levelIdx 不回归）；widget 测试新增 2 例（周期窗 bundle 重算、十字线 slot 传参+视口不联动）。
+  - 旧测试基线更新：K1→K2（key `kline-draw-1-2-1m`、角标/断言）。
+  - `flutter test`（10 个相关文件）：**73 条全过**；`flutter analyze` 改动文件仅既有告警，无新增 error。
+- **注意事项**：两套联动口径完全解耦，main.dart 层级窗与分笔画板不传新参数、默认走旧 levelIdx；周期窗 bundle 按 model 缓存，拖动每帧不重复跑 FFI；未 push。

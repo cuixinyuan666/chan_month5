@@ -1,7 +1,9 @@
 import 'package:chan_kline/models/chart_indicator.dart';
 import 'package:chan_kline/models/chip_config.dart';
+import 'package:chan_kline/models/kline_bar.dart';
 import 'package:chan_kline/models/kline_combine_bundle.dart';
 import 'package:chan_kline/models/tick_dist_config.dart';
+import 'package:chan_kline/widgets/chart_sync_controller.dart';
 import 'package:chan_kline/widgets/kline_chart.dart';
 import 'package:chan_kline/widgets/kline_draw_board.dart';
 import 'package:flutter/gestures.dart';
@@ -41,10 +43,17 @@ double _barCenterX(WidgetTester tester, String paneKey, int idx) {
 /// 旧版把 model 当构造参数传进 StatefulBuilder，重建时永远读到旧值，
 /// 「点击选中→图表拿到新锚点」这类靠重建生效的行为根本测不出来。
 class _BoardHost extends StatefulWidget {
-  const _BoardHost({required this.initial, this.onChanged});
+  const _BoardHost({
+    required this.initial,
+    this.onChanged,
+    this.bundle,
+    this.bundleForBars,
+  });
 
   final KlineDrawBoardModel initial;
   final ValueChanged<KlineDrawBoardModel>? onChanged;
+  final KlineCombineBundle? bundle;
+  final KlineCombineBundle Function(List<KlineBar>)? bundleForBars;
 
   @override
   State<_BoardHost> createState() => _BoardHostState();
@@ -61,7 +70,8 @@ class _BoardHostState extends State<_BoardHost> {
   @override
   Widget build(BuildContext context) => KlineDrawBoard(
         model: model,
-        bundle: KlineCombineBundle.empty(),
+        bundle: widget.bundle ?? KlineCombineBundle.empty(),
+        bundleForBars: widget.bundleForBars,
         mainIndicators: const <MainChartIndicator>{},
         subIndicators: const <SubChartIndicator>{},
         truncationCheck: true,
@@ -78,13 +88,20 @@ class _BoardHostState extends State<_BoardHost> {
 Widget _host(
   KlineDrawBoardModel model, [
   ValueChanged<KlineDrawBoardModel>? onChanged,
+  KlineCombineBundle? bundle,
+  KlineCombineBundle Function(List<KlineBar>)? bundleForBars,
 ]) {
   return MaterialApp(
     home: Scaffold(
       body: SizedBox(
         width: 900,
         height: 700,
-        child: _BoardHost(initial: model, onChanged: onChanged),
+        child: _BoardHost(
+          initial: model,
+          onChanged: onChanged,
+          bundle: bundle,
+          bundleForBars: bundleForBars,
+        ),
       ),
     ),
   );
@@ -147,7 +164,7 @@ void main() {
     expect(candle.high, candle.open > candle.close ? candle.open : candle.close);
     expect(candle.low, candle.open < candle.close ? candle.open : candle.close);
     expect(model.toBars().single.timeText, '2026/07/10 09:30:00');
-    expect(find.text('K1'), findsWidgets);
+    expect(find.text('K2'), findsWidgets);
     expect(find.text('5\u5206\u949f'), findsWidgets);
   });
 
@@ -432,7 +449,7 @@ void main() {
     expect(find.text('1\u5206\u949f K0'), findsOneWidget,
         reason: '左上角操作窗角标固定为 1分钟 K0');
     // K1/周期文本在下拉项里也会出现，只要求它们存在即可。
-    expect(find.text('K1'), findsWidgets, reason: '右上窗是 K1');
+    expect(find.text('K2'), findsWidgets, reason: '右上窗是 1分钟 K2');
     expect(find.text('5\u5206\u949f'), findsWidgets);
     expect(find.text('15\u5206\u949f'), findsWidgets);
     // 4 窗里只有 3 个非操作窗有下拉；左上角操作窗不给下拉。
@@ -457,7 +474,7 @@ void main() {
     KlineChart chart(String key) =>
         tester.widget<KlineChart>(find.byKey(ValueKey<String>(key)));
     final k0 = chart('kline-draw-0-0-1m');
-    final k1 = chart('kline-draw-1-1-1m');
+    final k1 = chart('kline-draw-1-2-1m');
     final m5 = chart('kline-draw-2-0-5m');
     final m15 = chart('kline-draw-3-0-15m');
 
@@ -490,7 +507,7 @@ void main() {
     KlineChart chart(String key) =>
         tester.widget<KlineChart>(find.byKey(ValueKey<String>(key)));
     final k0 = chart('kline-draw-0-0-1m');
-    final k1 = chart('kline-draw-1-1-1m');
+    final k1 = chart('kline-draw-1-2-1m');
     final m5 = chart('kline-draw-2-0-5m');
     final m15 = chart('kline-draw-3-0-15m');
 
@@ -510,5 +527,102 @@ void main() {
     expect(vp3.allXMax, 0, reason: '15 分钟窗是 1 根');
     expect(vp0.xSpan, greaterThanOrEqualTo(24),
         reason: '最小 24 槽，K 线间距不再被撑成几百像素');
+  });
+
+  testWidgets('周期窗按本窗聚合 bars 重算 bundle，层级窗仍共用原 bundle',
+      (tester) async {
+    var model = KlineDrawBoardModel.initial();
+    for (var i = 0; i < 10; i++) {
+      model = model.addCandle(
+        KlineDrawCandle(
+          open: 10.0 + i,
+          high: 11.0 + i,
+          low: 9.0 + i,
+          close: 10.5 + i,
+        ),
+      );
+    }
+    final original = KlineCombineBundle(
+      frames: const [],
+      k0Confirms: const [],
+      defaultK0Policy: 'orig-1m',
+    );
+    final rebuiltCalls = <int>[];
+    KlineCombineBundle rebuild(List<KlineBar> bars) {
+      rebuiltCalls.add(bars.length);
+      return KlineCombineBundle(
+        frames: const [],
+        k0Confirms: const [],
+        defaultK0Policy: 'rebuilt-${bars.length}',
+      );
+    }
+
+    await tester.pumpWidget(_host(model, null, original, rebuild));
+    await tester.pump();
+
+    KlineChart chart(String key) =>
+        tester.widget<KlineChart>(find.byKey(ValueKey<String>(key)));
+    final k0 = chart('kline-draw-0-0-1m');
+    final k2 = chart('kline-draw-1-2-1m');
+    final m5 = chart('kline-draw-2-0-5m');
+    final m15 = chart('kline-draw-3-0-15m');
+
+    // 层级窗（含操作窗与右上 K2）沿用原 bundle，零回归。
+    expect(k0.defaultK0Policy, 'orig-1m');
+    expect(k2.defaultK0Policy, 'orig-1m');
+    // 周期窗用本窗聚合 bars 重算：5m 2 根、15m 1 根。
+    expect(m5.defaultK0Policy, 'rebuilt-2');
+    expect(m15.defaultK0Policy, 'rebuilt-1');
+    // 同一 model 按周期缓存：每个周期只重算一次。
+    expect(rebuiltCalls, <int>[2, 1]);
+  });
+
+  testWidgets('十字线按 slot 认主窗，跨周期走 timeMs 且视口不联动',
+      (tester) async {
+    var model = KlineDrawBoardModel.initial();
+    for (var i = 0; i < 10; i++) {
+      model = model.addCandle(
+        KlineDrawCandle(
+          open: 10.0 + i,
+          high: 11.0 + i,
+          low: 9.0 + i,
+          close: 10.5 + i,
+        ),
+      );
+    }
+    await tester.pumpWidget(_host(model));
+    await tester.pump();
+
+    KlineChart chart(String key) =>
+        tester.widget<KlineChart>(find.byKey(ValueKey<String>(key)));
+    final four = [
+      chart('kline-draw-0-0-1m'),
+      chart('kline-draw-1-2-1m'),
+      chart('kline-draw-2-0-5m'),
+      chart('kline-draw-3-0-15m'),
+    ];
+
+    // 身份用 slot（0/1/2/3），与可重复的 displayLevel（0/2/0/0）解耦。
+    expect(four.map((c) => c.crosshairOwnerKey).toList(), <int?>[0, 1, 2, 3]);
+    expect(four.map((c) => c.displayLevel).toList(), <int?>[0, 2, 0, 0]);
+    expect(
+      four.every((c) => c.crosshairMatchMode == CrosshairMatchMode.timeMs),
+      isTrue,
+    );
+
+    // 广播跨周期十字线后，四窗视口纹丝不动（绝不接管）。
+    final sync = four.first.sync!;
+    final before = [for (final c in four) sync.viewportFor(c.viewportKey!).viewXMin];
+    sync.publishCrosshair(
+      on: true,
+      barIdx: 9,
+      price: 11,
+      ownerKey: 2,
+      matchMode: CrosshairMatchMode.timeMs,
+      barTimeMs: four.first.bars[9].timeMs,
+    );
+    await tester.pump();
+    final after = [for (final c in four) sync.viewportFor(c.viewportKey!).viewXMin];
+    expect(after, before);
   });
 }
