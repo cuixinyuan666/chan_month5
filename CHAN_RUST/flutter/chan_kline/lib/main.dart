@@ -3934,6 +3934,10 @@ class _KlineHomePageState extends State<KlineHomePage>
                   truncationCheck: _truncationCheck,
                   earlyDynamicUnit: _earlyDynamicUnit,
                 ),
+                // 画板是原始 K 线操作窗，首分型前固定按引擎原框画（种子框），
+                // 不跟随主图「高高」口径——后者 low 取 max 会让首框下沿
+                // 高于首根 K 的真实低点，看起来像合并画错。
+                preFirstFractalMode: PreFirstFractalMode.seedBox,
                 mainIndicators: _splitMainIndicators,
                 subIndicators: _sessionSplitSubIndicators,
                 truncationCheck: _truncationCheck,
@@ -6698,15 +6702,26 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
     final model = _klineDrawBoard;
     if (model == null || model.candles.isEmpty) return;
     try {
+      final bars = model.toBars();
       final saved = _bridge.saveTestMinute(
         dataRoot: _dataRoot,
-        bars: model.toBars(),
+        bars: bars,
       );
       _msgHistory.append('K线画板：保存${saved.count}根 → ${saved.path}');
+      // 关键：加载区间必须对齐到画板数据本身。默认区间是 2024 全年，
+      // 而画板画的 1m 数据可以是任意日期（如 2026/07/10）；不对齐的话
+      // _loadKlines 用旧区间取数，表现为「主图只有 1 根 K 线」。
+      // 分笔画板保存早已这么做（见 _saveTickDrawBoard），画板此前漏了。
+      final begin = bars.isEmpty ? null : _tryParseBarTime(bars.first.timeText);
+      final end = bars.isEmpty ? null : _tryParseBarTime(bars.last.timeText);
       setState(() {
         _selectedCode = 'test';
         _period = '1m';
         _klineDrawBoardOpen = false;
+        if (begin != null && end != null) {
+          _beginDate = begin;
+          _endDate = end;
+        }
       });
       if (_hasTestOhlcCsv()) {
         _showSnack('已写入 custom.1m.csv；custom.ohlc.csv 仍在，'

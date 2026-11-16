@@ -2,6 +2,7 @@ import 'package:chan_kline/models/chart_indicator.dart';
 import 'package:chan_kline/models/chip_config.dart';
 import 'package:chan_kline/models/kline_bar.dart';
 import 'package:chan_kline/models/kline_combine_bundle.dart';
+import 'package:chan_kline/models/pre_first_fractal_mode.dart';
 import 'package:chan_kline/models/tick_dist_config.dart';
 import 'package:chan_kline/widgets/chart_sync_controller.dart';
 import 'package:chan_kline/widgets/kline_chart.dart';
@@ -624,5 +625,27 @@ void main() {
     await tester.pump();
     final after = [for (final c in four) sync.viewportFor(c.viewportKey!).viewXMin];
     expect(after, before);
+  });
+
+  testWidgets('画板四窗首分型前合并框固定种子框口径（不套主图高高）', (tester) async {
+    // 用户报告「1min K0 第一个合并框错误」：画板此前漏传 preFirstFractalMode，
+    // 落到 KlineChart 默认 highHigh，首框 low 取 max 会漏掉首根 K 的真实低点。
+    // 画板是原始 K 线操作窗，固定 seedBox，按引擎原框画。
+    final model = KlineDrawBoardModel.initial();
+    await tester.pumpWidget(_host(model));
+    await tester.pump();
+
+    KlineChart chart(String key) =>
+        tester.widget<KlineChart>(find.byKey(ValueKey<String>(key)));
+    final four = [
+      chart('kline-draw-0-0-1m'),
+      chart('kline-draw-1-2-1m'),
+      chart('kline-draw-2-0-5m'),
+      chart('kline-draw-3-0-15m'),
+    ];
+    expect(
+      four.every((c) => c.preFirstFractalMode == PreFirstFractalMode.seedBox),
+      isTrue,
+    );
   });
 }

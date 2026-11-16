@@ -12,6 +12,7 @@ import '../models/chip_config.dart';
 import '../models/k1_bar_view.dart';
 import '../models/kline_bar.dart';
 import '../models/kline_combine_bundle.dart';
+import '../models/pre_first_fractal_mode.dart';
 import '../models/tick_dist_config.dart';
 import 'package:chan_kline/theme/app_palette.dart';
 import 'candle_wick.dart';
@@ -360,6 +361,7 @@ class KlineDrawBoard extends StatefulWidget {
     required this.model,
     required this.bundle,
     this.bundleForBars,
+    this.preFirstFractalMode = PreFirstFractalMode.seedBox,
     required this.mainIndicators,
     required this.subIndicators,
     required this.truncationCheck,
@@ -379,6 +381,10 @@ class KlineDrawBoard extends StatefulWidget {
   /// 画到只有 N/5、N/15 根 K 的窗上——用户看到的「显示左上角 1m K0 指标」。
   /// null = 退化为共用 [bundle]（旧行为，测试/零数据场景）。
   final KlineCombineBundle Function(List<KlineBar>)? bundleForBars;
+  /// 画板是原始 K 线操作窗：首分型前按引擎原框画（种子框口径），
+  /// 不套主图默认「高高」重并——高高口径 low 取 max，会让首框下沿
+  /// 高于首根 K 的真实低点，下影线露在框外，被用户判为「合并框错误」。
+  final PreFirstFractalMode preFirstFractalMode;
   final Set<MainChartIndicator> mainIndicators;
   final Set<SubChartIndicator> subIndicators;
   final bool truncationCheck;
@@ -566,6 +572,9 @@ class _KlineDrawBoardState extends State<KlineDrawBoard> {
           crosshairOwnerKey: slot,
           crosshairMatchMode: CrosshairMatchMode.timeMs,
           viewportMinSpan: 24,
+          // 画板固定按引擎原框画首分型前的合并框（种子框），不套用主图
+          // 默认「高高」重并（其 low 取 max 会漏掉首根 K 的真实低点）。
+          preFirstFractalMode: widget.preFirstFractalMode,
           forceSubPane: true,
           bars: paneBars,
           period: mode.chartPeriod,

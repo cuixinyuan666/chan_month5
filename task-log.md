@@ -6840,3 +6840,17 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   - 旧测试基线更新：K1→K2（key `kline-draw-1-2-1m`、角标/断言）。
   - `flutter test`（10 个相关文件）：**73 条全过**；`flutter analyze` 改动文件仅既有告警，无新增 error。
 - **注意事项**：两套联动口径完全解耦，main.dart 层级窗与分笔画板不传新参数、默认走旧 levelIdx；周期窗 bundle 按 model 缓存，拖动每帧不重复跑 FFI；未 push。
+
+### 2026-11-16 18:0x — K线画板：保存加载只剩1根K + 1min K0 首个合并框错误
+
+- **执行者**：WorkBuddy
+- **任务类型**：Bug 修复
+- **用户反馈**：以当前默认画板数据（`a_Data/test/custom.1m.csv`，2026/07/10 09:30~09:40 共 11 根）为例：① 1min K0 合并错误（第一个合并框）；② 保存并加载后主图只有 1 根 K 线。
+- **根因**：
+  1. **只有 1 根 K**：`main.dart:_saveKlineDrawBoard` 只切了 `code='test'`/`period='1m'`，没对齐 `_beginDate/_endDate`；App 默认区间是 2024 全年，而画板数据是 2026/07/10，`_loadKlines` 拿旧区间取数自然取不到。分笔画板 `_saveTickDrawBoard` 早已设置首尾日期，画板漏了。
+  2. **首合并框错误**：`KlineDrawBoard` 漏传 `preFirstFractalMode`，内部 KlineChart 落到默认 `highHigh`；绘制层 `applyPreFirstFractalMode → applyFirstPairFractalToFrames` 把 Rust 引擎特意分开的首两帧重并，`mergePreFractalBox` 在 highHigh 口径下 `low` 取 max → 首框下沿 10.15 高于首根 K 真实低点 9.95，下影线露在框外。
+- **关键操作**：
+  1. `main.dart:_saveKlineDrawBoard`：保存后把 `_beginDate/_endDate` 对齐到 `model.toBars()` 首尾 timeText（解析失败保留原区间）再 `_loadKlines()`。
+  2. `kline_draw_board.dart`：新增 `preFirstFractalMode` 参数（默认 `PreFirstFractalMode.seedBox`），`_pane` 透传给 KlineChart；`main.dart` 画板构造显式传 `seedBox`，固定种子框口径——画板是原始 K 线操作窗，所见即所得，不套主图「高高」重并。
+  3. 测试：widget 测试新增 1 例断言四窗 `preFirstFractalMode == seedBox`；12 个相关文件 **109 条全过**；analyze 无新增 error。
+- **注意事项**：seedBox 只作用于 K线画板，主图/分笔画板口径与行为不变；未 push。
