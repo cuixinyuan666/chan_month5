@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../chart/kline_candle_geometry.dart';
 import '../chart/level_window_layout.dart';
 import '../compute/k1_bar_view_compute.dart';
+import '../compute/kline_period_aggregate.dart';
 import '../models/bar_feature_lookup.dart';
 import '../models/chart_indicator.dart';
 import '../models/chip_config.dart';
@@ -455,7 +456,11 @@ class _KlineDrawBoardState extends State<KlineDrawBoard> {
                         for (final mode in model.windowModes) mode.displayLevel,
                       ],
                       maxKn: 99,
-                      badgeTextBuilder: (level) => '',
+                      // 2026-11-16：左上角操作窗固定显示「1分钟 K0」，
+                      // 不给下拉；其余窗显示各自层级/周期。
+                      badgeTextBuilder: (slot, level) => slot == 0
+                          ? '1\u5206\u949f K0'
+                          : model.modeAt(slot).label,
                       paneBuilder: (context, slot, level, primary) => _pane(
                         slot: slot,
                         primary: slot == 0,
@@ -492,6 +497,12 @@ class _KlineDrawBoardState extends State<KlineDrawBoard> {
     required List<K1BarView> k1Views,
   }) {
     final mode = model.modeAt(slot);
+    // 2026-11-16：各窗不再共用同一份 1 分钟数据。
+    // 操作窗（slot0）与层级窗（K1 等）保持原始 1m；周期窗按目标周期
+    // 由 N 根连续 1 分钟 K 聚合（5m=5 根、15m=15 根，其余周期同理）。
+    final paneBars = mode.isLevel || mode.period == '1m'
+        ? bars
+        : aggregateKlineBarsByPeriod(bars, mode.period!);
     return Stack(
       fit: StackFit.expand,
       children: [
@@ -503,7 +514,7 @@ class _KlineDrawBoardState extends State<KlineDrawBoard> {
           ownsKeyboard: primary,
           displayLevel: mode.displayLevel,
           forceSubPane: true,
-          bars: bars,
+          bars: paneBars,
           period: mode.chartPeriod,
           combineFrames: bundle.frames,
           k0ConfirmSignals: bundle.k0Confirms,
@@ -521,8 +532,8 @@ class _KlineDrawBoardState extends State<KlineDrawBoard> {
           buyNK0Frames: bundle.buyNK0Frames,
           sellNK0Frames: bundle.sellNK0Frames,
           defaultK0Policy: bundle.defaultK0Policy,
-          stepIdx: bars.isEmpty ? 0 : bars.length - 1,
-          stepSerial: model.candles.length,
+          stepIdx: paneBars.isEmpty ? 0 : paneBars.length - 1,
+          stepSerial: paneBars.length,
           mainIndicators: widget.mainIndicators,
           subIndicators: widget.subIndicators,
           truncationCheck: widget.truncationCheck,

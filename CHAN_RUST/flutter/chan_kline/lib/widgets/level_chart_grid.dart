@@ -40,7 +40,8 @@ class LevelChartGrid extends StatelessWidget {
     bool primary,
   ) paneBuilder;
 
-  final String Function(int level)? badgeTextBuilder;
+  /// 角标文本。带 [slot] 是因为同一层级可挂不同周期（如 K0 的 1m / 5m）。
+  final String Function(int slot, int level)? badgeTextBuilder;
 
   @override
   Widget build(BuildContext context) {
@@ -61,7 +62,7 @@ class LevelChartGrid extends StatelessWidget {
           Expanded(
             child: _PaneChrome(
               level: level,
-              label: badgeTextBuilder?.call(level),
+              label: badgeTextBuilder?.call(slot, level),
               primary: primary,
               topRightPane: topRightPane,
               child: available
