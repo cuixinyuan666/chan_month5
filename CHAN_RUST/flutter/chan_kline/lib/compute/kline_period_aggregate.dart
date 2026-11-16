@@ -85,3 +85,17 @@ List<KlineBar> aggregateKlineBarsByPeriod(
   }
   return out;
 }
+
+/// 十字线跨周期对位：返回时刻 [timeMs] 落在哪根 bar 上。
+///
+/// 周期 K 的 timeMs 取的是组内**最后一根** 1m 的 timeMs（见上方聚合函数
+/// `aggregateKlineBarsByPeriod`），所以「第一根 timeMs >= 目标时刻」就是
+/// 覆盖该时刻的那根周期 K。例：1m idx100(t100) → 5m 覆盖 100..104 的那根
+/// （其 timeMs=t104），而不是简单把下标 clamp 到 20。
+int barIndexAtTimeMs(List<KlineBar> bars, int timeMs) {
+  if (bars.isEmpty) return 0;
+  for (var i = 0; i < bars.length; i++) {
+    if (bars[i].timeMs >= timeMs) return i;
+  }
+  return bars.length - 1;
+}

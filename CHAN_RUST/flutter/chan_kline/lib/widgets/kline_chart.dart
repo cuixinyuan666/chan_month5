@@ -15,6 +15,7 @@ import '../chart/kline_candle_geometry.dart';
 import '../compute/k0_combine_compute.dart';
 import '../compute/k1_combine_compute.dart';
 import '../compute/k1_bar_view_compute.dart';
+import '../compute/kline_period_aggregate.dart';
 import '../compute/pre_first_fractal_compute.dart';
 import '../compute/chart_view_compute.dart';
 import '../compute/fractal_judgment_compute.dart';
@@ -224,6 +225,8 @@ class KlineChart extends StatefulWidget {
     this.selectedTickIdx = -1,
     this.displayLevel,
     this.viewportKey,
+    this.crosshairOwnerKey,
+    this.crosshairMatchMode = CrosshairMatchMode.levelIdx,
     this.viewportMinSpan = 1,
     this.forceSubPane = false,
     this.subPanePlaceholder = '副图未启用（点副图左上角指标按钮可勾选）',
@@ -434,6 +437,16 @@ class KlineChart extends StatefulWidget {
   /// 按层号取会共用同一视口（缩放互相掐死、K 线间距畸变）。
   final int? viewportKey;
 
+  /// 十字线联动的真实身份键。
+  ///
+  /// 旧层级窗为 null → 回退 [displayLevel]；K线画板传 slot（0/1/2/3），
+  /// 因为它的 5m/15m 窗 displayLevel 都是 0，用层号会被误判成「主窗自己」。
+  final int? crosshairOwnerKey;
+
+  /// 十字线联动口径。默认 [CrosshairMatchMode.levelIdx] 保持旧行为；
+  /// 画板跨周期传 [CrosshairMatchMode.timeMs]，按 timeMs 对位且不动视口。
+  final CrosshairMatchMode crosshairMatchMode;
+
   /// 本窗视口最少可见槽数。画板设 24，避免只有几根 K 时一根占满整屏。
   final double viewportMinSpan;
 
@@ -477,6 +490,11 @@ class _KlineChartState extends State<KlineChart> {
     vp.minViewSpan = widget.viewportMinSpan;
     return vp;
   }
+
+  /// 本窗在十字线联动里的身份：画板=slot，旧层级窗=displayLevel。
+  /// 三者（视口键、联动键、层号）在画板里必须解耦，否则周期窗互判为主窗。
+  int? get _effectiveOwnerKey =>
+      widget.crosshairOwnerKey ?? widget.viewportKey ?? widget.displayLevel;
 
   /// 副图整块是否被「小眼睛」收起（只影响本窗，不落盘）。
   bool _subPaneHidden = false;
@@ -925,6 +943,9 @@ class _KlineChartState extends State<KlineChart> {
         barIdx: _crosshairBarIdx,
         price: _crosshairPriceNow(),
         ownerLevel: widget.displayLevel,
+        ownerKey: _effectiveOwnerKey,
+        matchMode: widget.crosshairMatchMode,
+        barTimeMs: _crosshairTimeMsNow(),
         tooltip: false,
       );
     }
@@ -997,6 +1018,9 @@ class _KlineChartState extends State<KlineChart> {
       barIdx: _crosshairBarIdx,
       price: _crosshairPriceNow(),
       ownerLevel: widget.displayLevel,
+      ownerKey: _effectiveOwnerKey,
+      matchMode: widget.crosshairMatchMode,
+      barTimeMs: _crosshairTimeMsNow(),
       // 信息开关只升不降：鼠标刚跨进本窗时，本窗本地还停在「只有十字线」，
       // 若按本地状态广播会把共用开关关掉，面板跟着消失。
       // 关掉信息只能走关闭按钮（它直接发 tooltip:false，并在随后一小段时间
@@ -1014,6 +1038,13 @@ class _KlineChartState extends State<KlineChart> {
     final plotH = _zoneContentBottom - _zonePlotTop;
     if (plotH <= 0) return null;
     return pr.priceFromY(y, _zonePlotTop, plotH);
+  }
+
+  /// 主窗十字线所在 K 的时间戳，供跨周期窗按「同一时刻」对位。
+  int? _crosshairTimeMsNow() {
+    final idx = _crosshairBarIdx;
+    if (idx == null || idx < 0 || idx >= widget.bars.length) return null;
+    return widget.bars[idx].timeMs;
   }
 
   /// 被动窗：把联动控制器广播的十字线落到本窗坐标系。
@@ -1043,11 +1074,19 @@ class _KlineChartState extends State<KlineChart> {
     _crosshairMode = s.crosshairTooltip
         ? CrosshairMode.withTooltip
         : CrosshairMode.linesOnly;
-    final idx = barIdx.clamp(0, widget.bars.length - 1);
-    // 十字线那根 K 不在本窗视窗里（用户在本窗缩/拖走了）：只平移把它带进可见区，
-    // 不改缩放 —— 对应「保持它自己的比例，但必须回到该层 K 的位置」。
-    if (idx < _viewport.viewXMin || idx > _viewport.viewXMax) {
-      _viewport.ensureBarVisible(idx);
+    final int idx;
+    if (s.crosshairMatchMode == CrosshairMatchMode.timeMs &&
+        s.crosshairBarTimeMs != null) {
+      // 跨周期口径：按时刻找本窗覆盖该时刻的 K。各窗 bars 数量差 N/5/15 倍，
+      // 直接 clamp 同一个下标会指到错误时刻；同时绝不平移视口，
+      // 保持用户要求的「各窗缩放/平移始终独立」。
+      idx = barIndexAtTimeMs(widget.bars, s.crosshairBarTimeMs!);
+    } else {
+      // 旧层级口径：各窗 bars 同源同长，下标直接套用，越界时带进可见区。
+      idx = barIdx.clamp(0, widget.bars.length - 1);
+      if (idx < _viewport.viewXMin || idx > _viewport.viewXMax) {
+        _viewport.ensureBarVisible(idx);
+      }
     }
     _crosshairBarIdx = idx;
     _crosshairX = _viewport.barCenterX(idx, width);
@@ -1112,10 +1151,11 @@ class _KlineChartState extends State<KlineChart> {
         return;
       }
       // 主窗换到别处：旧主窗必须放手，否则会继续广播、把新主窗又拽回来。
-      final owner = s.crosshairOwnerLevel;
+      // 身份用 slot（画板）或 displayLevel（层级窗），与联动口径解耦。
+      final owner = s.crosshairOwnerKey ?? s.crosshairOwnerLevel;
       if (s.crosshairOn &&
           owner != null &&
-          owner != widget.displayLevel &&
+          owner != _effectiveOwnerKey &&
           _iAmCrosshairOwner) {
         setState(_clearCrosshairState);
         return;
@@ -2315,6 +2355,9 @@ class _KlineChartState extends State<KlineChart> {
           barIdx: _crosshairBarIdx,
           price: _crosshairPriceNow(),
           ownerLevel: widget.displayLevel,
+          ownerKey: _effectiveOwnerKey,
+          matchMode: widget.crosshairMatchMode,
+          barTimeMs: _crosshairTimeMsNow(),
           tooltip: showTip,
         );
       }
@@ -3203,11 +3246,16 @@ class _KlineChartState extends State<KlineChart> {
         // 非主窗：把主窗广播的十字线落到本窗坐标系。
         // 按「bar 下标 + 价格」换算：竖线是同一根 K，横线是同一价格；
         // 十字线开启时各窗视口已被控制器切到同一段，两者落在同一像素。
-        // 主窗自己绝不走这一支：主窗刚开、还没广播时 crosshairOwnerLevel 还是 null，
-        // 若按「层号不相等」判断会把主窗自己的十字线当场清掉。
+        // 主窗自己绝不走这一支：主窗刚开、还没广播时 owner 还是 null，
+        // 若按「身份不相等」判断会把主窗自己的十字线当场清掉。
+        // timeMs 跨周期口径：视口不接管，所有非主窗都要把线落上去；
+        // levelIdx 旧口径：仍按 owner 身份判定，行为与原来一致。
         final syncedCrosshair = widget.sync != null &&
             !_iAmCrosshairOwner &&
-            widget.sync!.crosshairOwnerLevel != widget.displayLevel;
+            (widget.sync!.crosshairMatchMode == CrosshairMatchMode.timeMs ||
+             (widget.sync!.crosshairOwnerKey ??
+                     widget.sync!.crosshairOwnerLevel) !=
+                 _effectiveOwnerKey);
         if (syncedCrosshair) {
           _applySyncedCrosshair(
             width: w,

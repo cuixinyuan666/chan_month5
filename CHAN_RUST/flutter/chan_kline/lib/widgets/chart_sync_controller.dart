@@ -3,6 +3,17 @@ import 'package:flutter/foundation.dart';
 import '../models/kline_combine_bundle.dart';
 import 'kline_viewport.dart';
 
+/// 十字线联动口径。
+///
+/// - [levelIdx]（旧）：层级分窗专用。owner = 层号，各窗 bars 同源同长，
+///   开启时接管其余窗视口，bar 下标直接套用；关闭时还原。
+/// - [timeMs]（新）：K线画板跨周期专用。owner = 槽位（画板四窗 displayLevel
+///   可能相同，不能用层号），广播带时点、**绝不接管视口**，各窗按 timeMs
+///   在自己 bars 上找「同一时刻」的 K。
+///
+/// 两套口径互不干扰：main.dart 层级窗与分笔画板不传新参数，默认走 levelIdx。
+enum CrosshairMatchMode { levelIdx, timeMs }
+
 /// 十字 as-of 查找缓存：同一帧内多窗共用一份。
 ///
 /// 原本每个 [KlineChart] 各存一份 `_incAsOfByIdx`；分窗后 10 个窗会把同一段
@@ -115,6 +126,12 @@ class ChartSyncController extends ChangeNotifier {
   int? _crosshairBarIdx;
   double? _crosshairPrice;
   int? _crosshairOwnerLevel;
+  /// 真实窗口身份：画板传 slot（0/1/2/3），旧层级窗为 null（回退 ownerLevel）。
+  int? _crosshairOwnerKey;
+  /// 联动口径：默认旧层级行为，画板跨周期窗传 timeMs。
+  CrosshairMatchMode _crosshairMatchMode = CrosshairMatchMode.levelIdx;
+  /// 主窗十字线所在 K 的时间戳，供其它周期窗按时刻对位。
+  int? _crosshairBarTimeMs;
 
   /// 十字信息是否打开（第二次滚轮单击）。
   /// 各窗只看这一份：鼠标进到哪个窗，信息就由那个窗算、那个窗显示。
@@ -133,6 +150,9 @@ class ChartSyncController extends ChangeNotifier {
   int? get crosshairBarIdx => _crosshairBarIdx;
   double? get crosshairPrice => _crosshairPrice;
   int? get crosshairOwnerLevel => _crosshairOwnerLevel;
+  int? get crosshairOwnerKey => _crosshairOwnerKey;
+  CrosshairMatchMode get crosshairMatchMode => _crosshairMatchMode;
+  int? get crosshairBarTimeMs => _crosshairBarTimeMs;
   bool get crosshairTooltip => _crosshairTooltip;
   int get crosshairTakeoverSeq => _crosshairTakeoverSeq;
 
@@ -157,8 +177,12 @@ class ChartSyncController extends ChangeNotifier {
   /// 广播十字线。`barIdx` 是 bars 下标（各窗共享同一份 bars），
   /// `price` 是该像素对应的价格（其余窗用自己的价格区间反算 y）。
   ///
-  /// [ownerLevel] 为驱动十字线的窗（鼠标当前所在的那一格）。开启或换主窗时
-  /// 会把其余窗视口切到主窗同一段；关闭时还原各窗各自的视口。
+  /// [ownerLevel] 为层级窗身份（旧口径）；[ownerKey] 为真实窗口身份
+  /// （K线画板传 slot，因为它的多个周期窗 displayLevel 都是 0）。
+  /// [matchMode] 决定用哪套联动语义，默认 [CrosshairMatchMode.levelIdx]：
+  /// 旧口径开启/换主窗时接管其余窗视口、关闭时还原；
+  /// [CrosshairMatchMode.timeMs] 跨周期口径只广播时点，**绝不碰视口**。
+  /// [barTimeMs] 为主窗十字线那根 K 的时间戳，供其它周期窗对位。
   /// [tooltip] 为十字信息是否打开：鼠标跨窗后信息跟着新主窗走。
   void publishCrosshair({
     required bool on,
@@ -166,23 +190,34 @@ class ChartSyncController extends ChangeNotifier {
     double? price,
     int? ownerLevel,
     bool tooltip = false,
+    int? ownerKey,
+    CrosshairMatchMode? matchMode,
+    int? barTimeMs,
   }) {
     if (!on) {
       final changed = _crosshairOn || _crosshairBarIdx != null || _crosshairTooltip;
+      final wasLevelIdx = _crosshairMatchMode == CrosshairMatchMode.levelIdx;
       _crosshairOn = false;
       _crosshairBarIdx = null;
       _crosshairPrice = null;
       _crosshairOwnerLevel = null;
+      _crosshairOwnerKey = null;
       _crosshairTooltip = false;
+      _crosshairBarTimeMs = null;
+      _crosshairMatchMode = CrosshairMatchMode.levelIdx;
       _ownerViewportSig = null;
-      _restoreViewports();
+      // 跨周期口径从不接管视口，关闭时自然无需还原。
+      if (wasLevelIdx) _restoreViewports();
       if (changed) notifyListeners();
       return;
     }
 
-    final owner = ownerLevel;
+    final effectiveOwner = ownerKey ?? ownerLevel;
+    final mode = matchMode ?? CrosshairMatchMode.levelIdx;
     final wasOn = _crosshairOn;
-    final ownerChanged = owner != null && owner != _crosshairOwnerLevel;
+    final ownerChanged = effectiveOwner != null &&
+        effectiveOwner != _crosshairOwnerKey;
+    final modeChanged = mode != _crosshairMatchMode;
     final tooltipChanged = _crosshairTooltip != tooltip;
     final contentChanged =
         !wasOn || _crosshairBarIdx != barIdx || _crosshairPrice != price;
@@ -191,22 +226,30 @@ class ChartSyncController extends ChangeNotifier {
     _crosshairBarIdx = barIdx;
     _crosshairPrice = price;
     _crosshairTooltip = tooltip;
+    _crosshairOwnerKey = effectiveOwner;
+    _crosshairOwnerLevel = effectiveOwner;
+    _crosshairMatchMode = mode;
+    _crosshairBarTimeMs = barTimeMs;
 
     var viewportChanged = false;
-    if (owner != null && (!wasOn || ownerChanged)) {
-      _crosshairOwnerLevel = owner;
-      if (!wasOn) _captureViewports();
-      _takeOverViewport(owner);
-      _ownerViewportSig = _viewportSignature(owner);
-      _crosshairTakeoverSeq++;
-    } else if (owner != null) {
-      _crosshairOwnerLevel = owner;
-      // 十字线开着时主窗又缩放/平移：其余窗继续跟随，否则竖线/横线会错位。
-      final sig = _viewportSignature(owner);
-      if (sig != _ownerViewportSig) {
-        _ownerViewportSig = sig;
-        _takeOverViewport(owner);
-        viewportChanged = true;
+    if (mode == CrosshairMatchMode.timeMs) {
+      // 跨周期联动：只广播信息，绝不接管视口。各窗保持自己的缩放/平移，
+      // 换主窗只自增序号让被动窗重算，不动任何视口。
+      if (ownerChanged) _crosshairTakeoverSeq++;
+    } else {
+      // 旧层级口径：接管/还原/主窗缩放跟随逻辑原样保留。
+      if (effectiveOwner != null && (!wasOn || ownerChanged || modeChanged)) {
+        if (!wasOn) _captureViewports();
+        _takeOverViewport(effectiveOwner);
+        _ownerViewportSig = _viewportSignature(effectiveOwner);
+        _crosshairTakeoverSeq++;
+      } else if (effectiveOwner != null) {
+        final sig = _viewportSignature(effectiveOwner);
+        if (sig != _ownerViewportSig) {
+          _ownerViewportSig = sig;
+          _takeOverViewport(effectiveOwner);
+          viewportChanged = true;
+        }
       }
     }
 
@@ -214,7 +257,8 @@ class ChartSyncController extends ChangeNotifier {
         tooltipChanged ||
         viewportChanged ||
         !wasOn ||
-        ownerChanged) {
+        ownerChanged ||
+        modeChanged) {
       notifyListeners();
     }
   }

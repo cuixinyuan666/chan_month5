@@ -3927,6 +3927,13 @@ class _KlineHomePageState extends State<KlineHomePage>
               child: KlineDrawBoard(
                 model: _klineDrawBoard!,
                 bundle: _klineDrawBundle,
+                // 5m/15m 周期窗按本窗聚合 bars 重算缠论结构，
+                // 不再把左上 1m K0 的中枢/连线/分型画到周期窗上。
+                bundleForBars: (list) => _bridge.buildKlineCombineBundle(
+                  list,
+                  truncationCheck: _truncationCheck,
+                  earlyDynamicUnit: _earlyDynamicUnit,
+                ),
                 mainIndicators: _splitMainIndicators,
                 subIndicators: _sessionSplitSubIndicators,
                 truncationCheck: _truncationCheck,
@@ -6618,9 +6625,10 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
               '6. 起点是开盘价，终点是收盘价，拖动路径的最高、最低分别是最高价、最低价；\n'
               '7. 按住选中的 K 线本体可整根拖动（上下平移，形状不变）；拖动被钳制在其余 K 线的价格范围内，不会把其它 K 线压扁；\n'
               '8. 其余空白处拖动是平移 K 线图；\n'
-              '9. 左上角是固定操作窗「1分钟 K0」（无下拉）；右上角是 K1；下排默认是 5分钟、15分钟；\n'
-              '10. 5分钟由 5 根 1分钟聚合、15分钟由 15 根 1分钟聚合；其它周期下拉也按对应根数由 1分钟数据聚合，不会各窗显示同一份数据；\n'
-              '11. 点「保存并加载」，写入 a_Data/test/custom.1m.csv。',
+              '9. 四窗默认：左上固定操作窗「1分钟 K0」（无下拉）、右上「1分钟 K2」、左下「5分钟 K0」、右下「15分钟 K0」；\n'
+              '10. 5分钟由 5 根 1分钟聚合、15分钟由 15 根 1分钟聚合；其它周期下拉也按对应根数由 1分钟数据聚合；各周期窗的中枢/连线/指标按本窗周期数据计算，不再显示左上 K0 的指标；\n'
+              '11. 十字线联动四个窗，按同一时刻对齐到各自的周期 K；各窗缩放/平移始终独立、互不牵连；\n'
+              '12. 点「保存并加载」，写入 a_Data/test/custom.1m.csv。',
             ),
           ),
           actions: [

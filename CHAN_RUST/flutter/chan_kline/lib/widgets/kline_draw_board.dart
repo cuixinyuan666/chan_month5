@@ -272,9 +272,11 @@ class KlineDrawBoardModel {
 }
 
 List<KlineDrawWindowMode> defaultKlineDrawWindowModes(int count) {
+  // 2026-11-16 用户指定画板四窗默认：左上=画板 1分钟 K0、右上=1分钟 K2、
+  // 左下=5分钟 K0、右下=15分钟 K0。操作窗 slot0 固定 K0 不可改周期。
   const seeded = <KlineDrawWindowMode>[
     KlineDrawWindowMode.level(0),
-    KlineDrawWindowMode.level(1),
+    KlineDrawWindowMode.level(2),
     KlineDrawWindowMode.period('5m'),
     KlineDrawWindowMode.period('15m'),
   ];
@@ -357,6 +359,7 @@ class KlineDrawBoard extends StatefulWidget {
     super.key,
     required this.model,
     required this.bundle,
+    this.bundleForBars,
     required this.mainIndicators,
     required this.subIndicators,
     required this.truncationCheck,
@@ -371,6 +374,11 @@ class KlineDrawBoard extends StatefulWidget {
 
   final KlineDrawBoardModel model;
   final KlineCombineBundle bundle;
+  /// 周期窗按「本窗聚合 bars」重算缠论结构（中枢/连线/分型/合并）。
+  /// 画板的 bundle 原本只由 1m 数据算一份，5m/15m 直接复用会把 K0 结构
+  /// 画到只有 N/5、N/15 根 K 的窗上——用户看到的「显示左上角 1m K0 指标」。
+  /// null = 退化为共用 [bundle]（旧行为，测试/零数据场景）。
+  final KlineCombineBundle Function(List<KlineBar>)? bundleForBars;
   final Set<MainChartIndicator> mainIndicators;
   final Set<SubChartIndicator> subIndicators;
   final bool truncationCheck;
@@ -392,6 +400,10 @@ class _KlineDrawBoardState extends State<KlineDrawBoard> {
   final ScrollController _tooltipScroll = ScrollController();
   KlineDrawDraft? _draft;
   double _lastPaneHeight = 600;
+  /// 周期窗 bundle 缓存：同一 model 同一帧只按周期算一次，避免拖动时每帧跑 FFI。
+  KlineDrawBoardModel? _cachedModel;
+  final Map<String, KlineCombineBundle> _periodBundles =
+      <String, KlineCombineBundle>{};
 
   KlineDrawBoardModel get model => widget.model;
   KlineCombineBundle get bundle => widget.bundle;
@@ -457,10 +469,12 @@ class _KlineDrawBoardState extends State<KlineDrawBoard> {
                       ],
                       maxKn: 99,
                       // 2026-11-16：左上角操作窗固定显示「1分钟 K0」，
-                      // 不给下拉；其余窗显示各自层级/周期。
-                      badgeTextBuilder: (slot, level) => slot == 0
-                          ? '1\u5206\u949f K0'
-                          : model.modeAt(slot).label,
+                      // 不给下拉。层级窗统一带「1分钟」前缀（右上=1分钟 K2），
+                      // 周期窗显示自身周期名（左下=5分钟、右下=15分钟）。
+                      badgeTextBuilder: (slot, level) {
+                        final m = model.modeAt(slot);
+                        return m.isLevel ? '1\u5206\u949f ${m.label}' : m.label;
+                      },
                       paneBuilder: (context, slot, level, primary) => _pane(
                         slot: slot,
                         primary: slot == 0,
@@ -490,6 +504,25 @@ class _KlineDrawBoardState extends State<KlineDrawBoard> {
     );
   }
 
+  /// 周期窗的缠论结构必须与本窗 bars 同源。
+  ///
+  /// 层级窗（含 slot0 操作窗、右上 K2 窗）与 1m 窗沿用共用 bundle；
+  /// 只有 5m/15m/… 周期窗在 [bundleForBars] 存在时按本窗聚合 bars 重算。
+  /// 同一 model 内按周期缓存，拖动每一帧不会重复跑 FFI。
+  KlineCombineBundle _bundleForPane({
+    required bool usePeriod,
+    required String period,
+    required List<KlineBar> paneBars,
+  }) {
+    final cb = widget.bundleForBars;
+    if (!usePeriod || cb == null) return bundle;
+    if (!identical(_cachedModel, model)) {
+      _cachedModel = model;
+      _periodBundles.clear();
+    }
+    return _periodBundles.putIfAbsent(period, () => cb(paneBars));
+  }
+
   Widget _pane({
     required int slot,
     required bool primary,
@@ -503,6 +536,18 @@ class _KlineDrawBoardState extends State<KlineDrawBoard> {
     final paneBars = mode.isLevel || mode.period == '1m'
         ? bars
         : aggregateKlineBarsByPeriod(bars, mode.period!);
+    // 2026-11-16：周期窗不能复用 1m 的 bundle（否则中枢/连线/分型全是 K0 的）。
+    // 按本窗聚合 bars 重算一份；层级窗与 1m 窗零回归。
+    final usePeriodBundle =
+        !mode.isLevel && mode.period != null && mode.period != '1m';
+    final paneBundle = _bundleForPane(
+      usePeriod: usePeriodBundle,
+      period: mode.chartPeriod,
+      paneBars: paneBars,
+    );
+    final paneViews = usePeriodBundle && widget.bundleForBars != null
+        ? buildK1BarViews(paneBundle.k1Bars)
+        : k1Views;
     return Stack(
       fit: StackFit.expand,
       children: [
@@ -516,26 +561,31 @@ class _KlineDrawBoardState extends State<KlineDrawBoard> {
           // 视口按槽位独立：不能按 displayLevel，否则操作窗/5m/15m 共用一份，
           // 少根 K 的窗会把共享视口复位成 xSpan=1，连带缩放失效、间距畸变。
           viewportKey: slot,
+          // 十字线按 slot 认主窗：四窗 displayLevel 可能相同（5m/15m 都是 0），
+          // 用层号会互判为主窗、联动失效；按 timeMs 对位让不同周期落在同一时刻。
+          crosshairOwnerKey: slot,
+          crosshairMatchMode: CrosshairMatchMode.timeMs,
           viewportMinSpan: 24,
           forceSubPane: true,
           bars: paneBars,
           period: mode.chartPeriod,
-          combineFrames: bundle.frames,
-          k0ConfirmSignals: bundle.k0Confirms,
-          barFeatures: bundle.barFeatures,
-          k0Lines: bundle.k0Lines,
-          k1BarViews: k1Views,
-          k1CombineFrames: bundle.k1CombineFrames,
-          k1Analysis: bundle.k1Analysis,
-          levels: bundle.levels,
-          zsK0Frames: bundle.zsK0Frames,
-          buy1K0Frames: bundle.buy1K0Frames,
-          sell1K0Frames: bundle.sell1K0Frames,
-          buy2K0Frames: bundle.buy2K0Frames,
-          sell2K0Frames: bundle.sell2K0Frames,
-          buyNK0Frames: bundle.buyNK0Frames,
-          sellNK0Frames: bundle.sellNK0Frames,
-          defaultK0Policy: bundle.defaultK0Policy,
+          // 下列缠论结构一律取本窗 bundle：周期窗=聚合 bars 重算，层级窗=共用。
+          combineFrames: paneBundle.frames,
+          k0ConfirmSignals: paneBundle.k0Confirms,
+          barFeatures: paneBundle.barFeatures,
+          k0Lines: paneBundle.k0Lines,
+          k1BarViews: paneViews,
+          k1CombineFrames: paneBundle.k1CombineFrames,
+          k1Analysis: paneBundle.k1Analysis,
+          levels: paneBundle.levels,
+          zsK0Frames: paneBundle.zsK0Frames,
+          buy1K0Frames: paneBundle.buy1K0Frames,
+          sell1K0Frames: paneBundle.sell1K0Frames,
+          buy2K0Frames: paneBundle.buy2K0Frames,
+          sell2K0Frames: paneBundle.sell2K0Frames,
+          buyNK0Frames: paneBundle.buyNK0Frames,
+          sellNK0Frames: paneBundle.sellNK0Frames,
+          defaultK0Policy: paneBundle.defaultK0Policy,
           stepIdx: paneBars.isEmpty ? 0 : paneBars.length - 1,
           stepSerial: paneBars.length,
           mainIndicators: widget.mainIndicators,
