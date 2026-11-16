@@ -1925,12 +1925,19 @@ class _KlineChartState extends State<KlineChart> {
     return idx;
   }
 
-  /// 是否允许从这里开始「画新 K」：仅当「被选中 K 的槽位右缘以右」。
+  /// 是否允许从这里开始「画新 K」：被选中 K **中心以右**的空白都放行。
   ///
   /// 空 board 任意位置放行（否则空板死锁，永远画不出第一根）。
-  /// 槽位右缘 = `barCenterX(anchor) + 槽宽/2`，指针严格大于它才算「右方」，
-  /// 这样选中 K 自己的槽位空白区是平移区，不是绘制区；闸不过的空白拖动
-  /// 自然落进 zone/pan 路径，由图表自身的平移逻辑接管。
+  ///
+  /// 2026-11-16 用户明确：点击一根 K 后，它右边的**任意位置**都能画新 K，
+  /// 不要限制在「最右边」或某个狭窄区域。旧版用「选中 K 的槽位右缘」
+  /// (`barCenterX(anchor) + 槽宽/2`) 当放行线：K 少时槽宽≈整屏绘图区
+  /// （单根时 slotW≈393.5px / 画布≈399.5px），右缘几乎贴着画布最右，
+  /// 于是只剩最右几像素能起笔 —— 正是用户说的「必须在最右边才能画」。
+  ///
+  /// 改为以「被点击 K 的中心」为界即可：命中 K 本体走 `_hitCandle` →
+  /// 整根拖动；能走到本闸的指针本就不在任何 K 实体上，不会误吞拖拽。
+  /// 右半侧实体仍由 `_hitCandle` 优先接管，二者不冲突。
   bool _canStartCandleDraw(Offset local) {
     if (widget.bars.isEmpty) return true;
     final anchor = widget.candleDrawAnchorIdx;
@@ -1938,8 +1945,7 @@ class _KlineChartState extends State<KlineChart> {
     final w = _chartSize.width;
     if (w <= 0) return false;
     final cx = _viewport.barCenterX(anchor, w);
-    final right = cx + _viewport.barSlotWidth(w) / 2;
-    return local.dx > right;
+    return local.dx > cx;
   }
 
   /// 命中 K 线本体：按「整根 K 的包络矩形（影线外沿 + 实体）」判定。
@@ -4183,8 +4189,10 @@ class _KlineCompositePainter extends CustomPainter {
 
   double get contentBottom => mainH + volH - KlineViewport.xAxisH;
 
-  /// 主图蜡烛实体宽（与 _drawCandles 一致）。
-  double _candleBodyW(double slotW) => math.max(1.0, slotW * 0.65);
+  /// 主图蜡烛实体宽：与绘制/命中/聚焦共用 `candleBodyWidth`（含 20px 封顶）。
+  /// 少根 K 时不让实体占满画板，否则右侧空白全被判为「抓 K 本体」，
+  /// 用户就只能在最右边画新 K（2026-11-16 用户反馈）。
+  double _candleBodyW(double slotW) => candleBodyWidth(slotW);
 
   /// 合并线框横向：以 x1/x2 对应 K 线中轴为起止基准（非实体左右边）。
   (double left, double right) _combineFrameHSpan(

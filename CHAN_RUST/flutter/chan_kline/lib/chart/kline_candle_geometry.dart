@@ -72,8 +72,18 @@ class CandleGeometry {
       );
 }
 
-/// 实体宽（与 `_drawCandles` 的 `_candleBodyW` 同口径）。
-double candleBodyWidth(double slotW) => math.max(1.0, slotW * 0.65);
+/// K 线实体最大像素宽（绘制 / 命中 / 聚焦共用）。
+///
+/// 2026-11-16：少根 K 时视口 `xSpan` 下限为 1，槽宽可达数百像素
+/// （单根 K 在 399.5px 画布上 slotW=393.5），`slotW*0.65` 会画出 255px 宽的
+/// 「巨无霸」实体，`_hitCandle` 的包络几乎覆盖整屏 —— 在它右边的空白按下
+/// 会被判成抓 K 本体（整根拖动），只剩最右几像素能画新 K。
+/// 封顶后少根 K 仍是正常细蜡烛，右侧空白自然落进绘制通道。
+const double kCandleBodyMaxWidth = 20.0;
+
+/// 实体宽（与 `_drawCandles` 的 `_candleBodyW` 同口径，含封顶）。
+double candleBodyWidth(double slotW) =>
+    math.max(1.0, math.min(slotW * 0.65, kCandleBodyMaxWidth));
 
 /// 由 K 线 + 视口算出该根 K 的屏幕几何。
 CandleGeometry candleGeometryOf({

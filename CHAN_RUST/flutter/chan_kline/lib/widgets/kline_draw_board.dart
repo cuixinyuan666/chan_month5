@@ -534,7 +534,8 @@ class _KlineDrawBoardState extends State<KlineDrawBoard> {
           tooltipBridge: _tooltipBridge,
           dockTooltipPanel: true,
           onCandleDraw: primary ? _onDraw : null,
-          // 绘制锚：只有被选中 K 槽位右缘以右的空白才允许开始画新 K。
+          // 绘制锚：点击选中一根 K 后，它中心以右的空白都允许起笔画新 K
+          // （2026-11-16：不再限制在槽位右缘/最右边）。
           candleDrawAnchorIdx:
               primary ? (model.hasSelection ? model.selected : -1) : -1,
           // 抓取/拖动：K线画板专用通道（分笔画板不接，互不影响）。
