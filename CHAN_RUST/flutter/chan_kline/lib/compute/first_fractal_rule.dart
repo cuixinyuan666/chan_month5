@@ -91,13 +91,18 @@ bool fractalFxOpposite(String? lastFx, String fx) => lastFx != fx;
 
 /// 首分型前的框序列按逐对判定重排（全层同构，子窗口专用）。
 ///
-/// 规则：
-/// - 相邻两根有包含关系 → **合并**（高/低取值按 [mergeMode]：高高=都取最大、
-///   低低=都取最小），合为一个框；
-/// - 相邻两根双低 / 双高 → **不合并**，前一根判分型（顶点=前一根 high/low），
-///   顶底交替，同向丢弃；
-/// - 标准三元素首分型所在框及其后各框原样保留（该框作为跨界配对的伙伴参与判定，
-///   但自身 fx 不改）。
+/// 规则（2026-11-16 用户最终确认：首框按「与前一个合并框比包含」迭代生成，
+/// 与分笔画板 K0 首框同构）：
+/// - 首根 K 先成一个「正在生长的合并框」；后续每根 K 都**与这个已生长的框**
+///   判包含关系（不是与相邻单根逐对比）：
+///   - 包含（内包含 / 外包含 / 高低交叉）→ 并进该框，框的高/低按 [mergeMode]
+///     更新（高高=都取最大、低低=都取最小），框继续生长；
+///   - 双低（h2<h1 且 l2<l1）/ 双高 → 停止生长，前一根判顶/底分型，
+///     顶点=前一根 high(TOP)/low(BOTTOM)，顶底交替，同向丢弃；
+/// - 这样「第一个合并框」会把首分型前所有与它含融的 K 都吃进去（当前 5 根
+///   数据高高口径 = 前 4 根一框），而旧实现只两两相邻比、只并到前 2 根；
+/// - 标准三元素首分型所在框及其后各框原样保留（首框生长可以越过该框把它并
+///   进去，一旦并入则以框为单位，不再为它单独画分型）。
 ///
 /// [standardFirstFx]：标准三元素首分型的方向；候选与它同向时丢弃
 /// （分型必须顶底交替）。
@@ -119,7 +124,7 @@ List<KlineCombineFrame> applyFirstPairFractalToFrames(
       break;
     }
   }
-  // 判定区间 = [0, stdIdx]，stdIdx 框作为跨界配对的伙伴（自身 fx 不改）。
+  // 判定区间 = [0, stdIdx]：首框生长只发生在这段「首分型前」区域。
   final limit = stdIdx;
   if (limit <= 0) return frames;
 
@@ -130,37 +135,69 @@ List<KlineCombineFrame> applyFirstPairFractalToFrames(
 
   var i = 0;
   while (i < limit) {
-    // 配对伙伴 = 下一框：须落在判定区间内（<= limit）且真实存在（< 长度）。
-    // limit == frames.length（尚无标准首分型）时，最后一框没有伙伴。
+    // 以 frames[i] 起一个「生长框」，把后面每一根与**当前框**判包含，
+    // 含融就并进来，直到双高/双低或越过 limit 才停。
+    var boxHigh = frames[i].high;
+    var boxLow = frames[i].low;
+    var boxCount = frames[i].count;
+    final x1 = frames[i].x1;
+    final t1 = frames[i].t1;
+    final startAtRightHalf = frames[i].startAtRightHalf;
+    var x2 = frames[i].x2;
+    var t2 = frames[i].t2;
+    var endAtLeftHalf = frames[i].endAtLeftHalf;
+    var grew = false;
+    var j = i + 1;
+    while (j < frames.length) {
+      final rel = fractalPairRel(boxHigh, boxLow, frames[j].high, frames[j].low);
+      if (rel != FractalPairRel.contained) break;
+      // 与当前生长框含融 → 并进来；高/低按口径更新，框继续生长。
+      final box = mergePreFractalBox(
+        boxHigh,
+        boxLow,
+        frames[j].high,
+        frames[j].low,
+        mergeMode,
+      );
+      boxHigh = box.high;
+      boxLow = box.low;
+      boxCount += frames[j].count;
+      x2 = frames[j].x2;
+      t2 = frames[j].t2;
+      endAtLeftHalf = frames[j].endAtLeftHalf;
+      grew = true;
+      j += 1;
+    }
+
+    if (grew) {
+      // 首框（及后续并出的框）吃进了 j-i 根 K；fx 保留最后并入那根的标记
+      // （若并进了标准首分型框，则 fx 就是那个分型）。
+      out.add(
+        KlineCombineFrame(
+          x1: x1,
+          x2: x2,
+          t1: t1,
+          t2: t2,
+          high: boxHigh,
+          low: boxLow,
+          fx: frames[j - 1].fx,
+          count: boxCount,
+          endAtLeftHalf: endAtLeftHalf,
+          startAtRightHalf: startAtRightHalf,
+        ),
+      );
+      i = j;
+      continue;
+    }
+
+    // 没有含融：与下一根判双高/双低 → 前一根判分型（不合并，顶底交替）。
     final hasPartner = i + 1 <= limit && i + 1 < frames.length;
     if (hasPartner) {
       final a = frames[i];
       final b = frames[i + 1];
       final rel = fractalPairRel(a.high, a.low, b.high, b.low);
-      if (rel == FractalPairRel.contained) {
-        // 仅包含关系才合并；高/低取值按设置口径（高高=都取最大，低低=都取最小）。
-        // 保留右框 fx（标准首分型标记）
-        final box = mergePreFractalBox(a.high, a.low, b.high, b.low, mergeMode);
-        out.add(
-          KlineCombineFrame(
-            x1: a.x1,
-            x2: b.x2,
-            t1: a.t1,
-            t2: b.t2,
-            high: box.high,
-            low: box.low,
-            fx: b.fx,
-            count: a.count + b.count,
-            endAtLeftHalf: b.endAtLeftHalf,
-            startAtRightHalf: a.startAtRightHalf,
-          ),
-        );
-        i += 2;
-        continue;
-      }
       final fx = fractalPairFx(rel);
       if (fx != null && fractalFxOpposite(lastFx, fx)) {
-        // 判分型：不合并，前一根单独成框，顶点=前一根 high(TOP)/low(BOTTOM)
         out.add(
           KlineCombineFrame(
             x1: a.x1,
@@ -183,5 +220,5 @@ List<KlineCombineFrame> applyFirstPairFractalToFrames(
     out.add(frames[i]);
     i += 1;
   }
-  return <KlineCombineFrame>[...out, ...frames.sublist(limit)];
+  return <KlineCombineFrame>[...out, ...frames.sublist(i)];
 }

@@ -6854,3 +6854,15 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   2. 首框口径先试过在画板固定 seedBox，用户指出「还是不对」：画板第一个合并框必须遵循 App 通用设置「层级早生成动态单元」（earlyDynamicUnit），不能给画板单开规则。最终 `KlineDrawBoard.preFirstFractalMode` 默认回落 `PreFirstFractalMode.defaultMode`，`main.dart` 画板构造传 `_preFirstFractalMode`；`earlyDynamicUnit` 本就已透传——两者共同决定首框行为，与主图/分笔完全同一规则。帮助文字补第 13 条说明。
   3. 测试：widget 用例改为验证传入口径（lowLow）被四窗原样接收、且 `earlyDynamicUnit` 到位；12 个相关文件 **109 条全过**；analyze 无新增 error。
 - **注意事项**：画板不再特殊化，首框行为完全由 App 通用设置决定；未 push。
+
+### 2026-11-16 21:5x — 首合并框口径纠正：高高 = 与生长框比包含（前 4 根一框）
+
+- **执行者**：WorkBuddy
+- **任务类型**：Bug 修复（口径纠正）
+- **用户反馈**：拼音纠正「高高逻辑应该前 4 根是一个合并框，参考分笔画板实现」。此前 21:4x 误判「首框前两根正确、勿再改」被推翻。
+- **根因**：`compute/first_fractal_rule.dart:applyFirstPairFractalToFrames`（子窗口口径）旧实现是**相邻两框两两判**：K0 vs K1 含融并成前 2 根，然后直接跳到 K2 vs K3（双高判底不并），于是首框只吃到前 2 根。用户口径是「每根 K 与**前一个合并框**判包含」——首框应作为生长框，后续每根都与它比，含融就并入。当前 5 根数据（K0 10.2/9.73、K1 10.0/9.91、K2 10.1/10.02、K3 10.13/10.06、K4 10.11/10.05）：高高口径下 K1/K2/K3 都与生长框含融 → 首框 = 前 4 根（x=0..3，high=10.2、low=10.06），K4 双低止步独立成框。
+- **关键操作**：
+  1. 重写 `applyFirstPairFractalToFrames`：以 frames[i] 起「生长框」，用 while 循环把后续每根与**当前生长框**判 `fractalPairRel`，含融则 `mergePreFractalBox` 更新框 high/low（高高=都取最大、低低=都取最小）并继续生长，遇双高/双低或越过首分型段才停；无含融时才走原来的双高/双低判分型+顶底交替。判定区间仍限定 `[0, stdIdx]`（首分型前），首框生长可越过 stdIdx 把它并进去，其后框原样。
+  2. 语义保持：种子框口径不跑此函数（原样）、早生成关闭原样、低低取 min、顶底交替铁律全部不变；仅把「两两相邻并」改为「与生长框迭代并」，分笔画板/K0/K1 全层同构受益。
+  3. 测试：`first_fractal_rule_test.dart` 新增 3 例（高高前 4 根 x0..3 high=10.2 low=10.06 / 低低按 min / 含融链三根并一框）；10 文件 **86 条全过**；analyze 改动文件无 issue。
+- **注意事项**：这是全 App 通用口径（非画板特殊化），种子框/低低/早生成开关语义均未变；未 push。

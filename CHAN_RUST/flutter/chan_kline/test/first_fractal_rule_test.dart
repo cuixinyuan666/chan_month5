@@ -1,5 +1,6 @@
 import 'package:chan_kline/compute/first_fractal_rule.dart';
 import 'package:chan_kline/models/kline_combine_frame.dart';
+import 'package:chan_kline/models/pre_first_fractal_mode.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 KlineCombineFrame _f(
@@ -131,6 +132,64 @@ void main() {
       final bottom = out.where((e) => e.fx == 'BOTTOM').toList();
       expect(bottom.length, 1);
       expect(bottom.first.x1, 2);
+    });
+  });
+
+  group('首框与生长框比包含（2026-11-16 用户最终口径）', () {
+    // 用户当前默认画板 5 根 1 分钟 K（a_Data/test/custom.1m.csv）：
+    // K0 10.2/9.73、K1 10.0/9.91、K2 10.1/10.02、K3 10.13/10.06、K4 10.11/10.05。
+    // 高高口径下首框应把与它含融的 K 全吃进去 = 前 4 根一框；K4 双低止步。
+    List<KlineCombineFrame> fiveBars() => [
+          _f(0, 0, 10.2, 9.73),
+          _f(1, 1, 10.0, 9.91),
+          _f(2, 2, 10.1, 10.02),
+          _f(3, 3, 10.13, 10.06, fx: 'TOP'),
+          _f(4, 4, 10.11, 10.05),
+        ];
+
+    test('高高：首框迭代并到前 4 根（x0..3，high=10.2，low=10.06）', () {
+      final out = applyFirstPairFractalToFrames(
+        fiveBars(),
+        mergeMode: PreFirstFractalMode.highHigh,
+      );
+      expect(out.first.x1, 0);
+      expect(out.first.x2, 3);
+      expect(out.first.high, 10.2);
+      expect(out.first.low, 10.06);
+      expect(out.first.count, 4);
+      // K4 双低止步，独立成框
+      expect(out[1].x1, 4);
+      expect(out.length, 2);
+    });
+
+    test('低低：首框按 min 口径生长，仍与相邻逐对语义一致', () {
+      final out = applyFirstPairFractalToFrames(
+        fiveBars(),
+        mergeMode: PreFirstFractalMode.lowLow,
+      );
+      // 低低：框 high/low 都取最小 → 框收窄，K2 双高不再含融，首框仅前 2 根
+      expect(out.first.x1, 0);
+      expect(out.first.x2, 1);
+      expect(out.first.high, 10.0);
+      expect(out.first.low, 9.73);
+    });
+
+    test('含融链：第三根与前框含融时也一并并入（非仅相邻两两）', () {
+      // 单调内缩三根，旧实现只并前两根，新实现应三根一框。
+      final frames = [
+        _f(0, 0, 10.0, 9.0),
+        _f(1, 1, 9.8, 9.2),
+        _f(2, 2, 9.6, 9.4),
+        _f(3, 3, 8.0, 8.0),
+      ];
+      final out = applyFirstPairFractalToFrames(
+        frames,
+        mergeMode: PreFirstFractalMode.highHigh,
+      );
+      expect(out.first.x2, 2);
+      expect(out.first.count, 3);
+      expect(out.first.high, 10.0);
+      expect(out.first.low, 9.4);
     });
   });
 }
