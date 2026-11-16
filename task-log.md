@@ -6802,3 +6802,19 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   - 新增 `kline_period_aggregate_test.dart`（7 例：全周期映射、5m/15m OHLC、尾部残组、1m 原样返回）+ 2 个 widget 用例（角标/下拉数、10 根 1m → 1m 窗 10 根 / 5m 窗 2 根 / 15m 窗 1 根）。
   - `flutter test`（6 个相关文件）：**44 条全过**；`flutter analyze` 改动文件无 issue。
 - **注意事项**：slot0 不能改周期由 `withWindowMode` 既有守卫保证（测试已覆盖）；未 push。
+
+### 2026-11-16 15:1x — K线画板：四窗视口独立 + 缩放恢复 + K线间距正常
+
+- **执行者**：WorkBuddy（AutoClaw）
+- **任务类型**：交互修复 / 界面交互
+- **上下文**：用户反馈：① 缩小到最小仍看不到所有 K；② 时间刻度范围太大、相邻 K 线间距非常长；③ 左上/左下/右下三窗缩放平移联动，要求各窗独立。
+- **根因（同一处）**：上一轮加了周期聚合后，左上(K0/1m)、左下(5m)、右下(15m)三窗的 `displayLevel` 都是 0，而 `ChartSyncController.viewportFor` 按层号做键 → 三窗共用同一个 `KlineViewport`。15m 窗聚合后只有 1 根 K，把共享视口的 `allXMax` 覆盖成 0、`xSpan` 复位成 1：缩放被 `barCount<=1` 直接掐死（缩不到底也看不到全部），同时单槽宽≈393px（K 线间距被拉成几百像素、时间轴过疏）。
+- **关键操作**：
+  1. `KlineChart` 新增 `viewportKey` / `viewportMinSpan`：有 sync 时用 `viewportKey ?? displayLevel` 取视口；画板传 `viewportKey: slot`，四窗各自一份。
+  2. `chart_sync_controller.dart`：`viewportFor` 参数改名 `key`，注释写明画板不能用层号。
+  3. `KlineViewport` 新增 `minViewSpan`（默认 1 不影响其它图表），画板设 24：`resetForBarCount` / `showAllBars` 保证至少 24 槽；左侧留 30% 空白，首根 K 不贴左缘（否则左侧没有可平移空白）。
+- **结果**：
+  - widget 用例验证四窗 `viewportKey` = 0/1/2/3、视口对象互不相同、`allXMax` 分别 9/1/0、`xSpan >= 24`；新增视口单测 4 例。
+  - 旧 widget 用例的写死 X 常量改为 `_barCenterX()` 从该窗真实视口现算（画板视口变了，常量会过时）；「新 K 落点」用例按新视口语义改为「远处即追加末尾」。
+  - `flutter test`（9 个相关文件）：**49 + 21 条全过**；`flutter analyze` 改动文件仅 7 条既有告警。
+- **注意事项**：`kline_viewport.dart` 含此前会话遗留的未提交改动（平移/Y 不设限等），本次为修 bug 一并提交；未 push。
