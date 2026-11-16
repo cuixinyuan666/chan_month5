@@ -121,6 +121,7 @@ import 'indicator_search/indicator_search_job.dart';
 import 'indicator_search/search_core.dart';
 import 'package:chan_kline/theme/app_palette.dart';
 import 'package:chan_kline/theme/theme_settings_store.dart';
+import 'package:chan_kline/theme/theme_rebuild_scope.dart';
 import 'package:chan_kline/theme/theme_chooser.dart';
 
 const _robotVerifyDefine = bool.fromEnvironment('ROBOT_VERIFY');
@@ -3803,10 +3804,17 @@ class _KlineHomePageState extends State<KlineHomePage>
 
   @override
   Widget build(BuildContext context) {
-    if (_useAndroidInteraction) {
-      return _buildAndroidShell(context);
-    }
-    return _buildDesktopShell(context);
+    // 主题实时预览：主图 / 设置面板 / 分笔画板 / K线画板都在这一棵树里，
+    // 颜色全是 build(paint) 时现读 AppPalette，切主题或拖暖色/亮度时
+    // 由 ThemeRebuildScope 整页重建，四个界面同时换色。
+    return ThemeRebuildScope(
+      builder: (context) {
+        if (_useAndroidInteraction) {
+          return _buildAndroidShell(context);
+        }
+        return _buildDesktopShell(context);
+      },
+    );
   }
 
   /// 桌面：图表铺满 + 透明标题条 + 左右设置浮层。
@@ -4400,7 +4408,10 @@ class _KlineHomePageState extends State<KlineHomePage>
         SettingsCategory(
           title: '数据与加载',
           icon: Icons.storage_outlined,
-          initiallyExpanded: true,
+          // 默认收起：面板一开只看到 5 张卡片，点开才展开明细。
+          // 收起态保留一行摘要，避免折叠后完全看不到当前口径。
+          summary:
+              '${_selectedCode ?? "未选股票"} · ${_periods[_period] ?? _period}',
           children: [
         if (forMobileSheet)
           SettingsOutlinedButton(
@@ -4521,14 +4532,15 @@ class _KlineHomePageState extends State<KlineHomePage>
           onTap: _busy ? null : () => _pickDateTime(isBegin: false),
         ),
         const SizedBox(height: 10),
+        // 只有这一个入口：按钮本身就是打开「Telegram 数据源」设置对话框。
+        // 旧版还给了一个问号，点下去走的是同一个函数，等于并列两个完全
+        // 相同的入口（用户点哪个都一样），已去掉重复的问号。
         SettingsOutlinedButton(
           label: _telegramSettings.telegramEnabled
               ? 'Telegram 数据源（已启用日线）'
               : 'Telegram 数据源',
           icon: Icons.cloud_download_outlined,
           onPressed: _busy ? null : () => _openTelegramSettings(),
-          onHelp: () => _openTelegramSettings(),
-          helpTooltip: 'Telegram 取数说明',
         ),
         TicksFullUploadPanel(
           settings: _telegramSettings,
@@ -4545,7 +4557,7 @@ class _KlineHomePageState extends State<KlineHomePage>
         SettingsCategory(
           title: '分析与指标',
           icon: Icons.insights_outlined,
-          initiallyExpanded: true,
+          summary: '寻优 / 计优 / 策略回测',
           children: [
         TextFormField(
           key: ValueKey(_chipConfig.bucketStep),
@@ -4628,6 +4640,8 @@ class _KlineHomePageState extends State<KlineHomePage>
         SettingsCategory(
           title: '界面与操作',
           icon: Icons.tune,
+          summary:
+              '${AppThemeController.instance.mode.label} · ${_useAndroidInteraction ? "安卓" : "Windows"}交互',
           children: [
         SettingsChoiceDropdown<bool?>(
           label: '交互模式',
@@ -4664,7 +4678,8 @@ class _KlineHomePageState extends State<KlineHomePage>
         SettingsCategory(
           title: '主图显示',
           icon: Icons.candlestick_chart_outlined,
-          initiallyExpanded: true,
+          summary: '首框 ${_preFirstFractalMode.shortHint} · '
+              '分窗 ${LevelWindowSettingsStore.enabled ? "${LevelWindowSettingsStore.count} 窗" : "关"}',
           children: [
         // 截断监察开关：对照「加截断前」旧行为
         SettingsChoiceDropdown<bool>(
@@ -4707,43 +4722,61 @@ class _KlineHomePageState extends State<KlineHomePage>
         ),
         const SizedBox(height: 8),
         // 首分型前合并框：种子框 / 高高 / 低低（只影响首分型前那段框的绘制与 MG/MD）
-        ListTile(
-          contentPadding: EdgeInsets.zero,
-          dense: true,
-          title: const Text('首分型前合并框', style: TextStyle(fontSize: 13)),
-          subtitle: Text(
-            _preFirstFractalMode.shortHint,
-            style: const TextStyle(fontSize: 11),
-          ),
-          trailing: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              DropdownButton<PreFirstFractalMode>(
-                value: _preFirstFractalMode,
-                isDense: true,
-                underline: const SizedBox.shrink(),
-                style: const TextStyle(fontSize: 12, color: Colors.black87),
-                items: [
-                  for (final m in PreFirstFractalMode.values)
-                    DropdownMenuItem<PreFirstFractalMode>(
-                      value: m,
-                      child: Text(m.label, style: const TextStyle(fontSize: 12)),
-                    ),
-                ],
-                onChanged: _busy
-                    ? null
-                    : (m) {
-                        if (m == null) return;
-                        _setPreFirstFractalMode(m, sheetSetState: sheetSetState);
-                      },
+        //
+        // 版式：标题行（标题 + 问号）+ 整宽下拉。
+        // 旧版把「下拉 + 问号」塞进 ListTile.trailing：面板只有 300px，
+        // 副标题被压成窄长条、长选项还会横向溢出；且下拉用了写死的
+        // Colors.black87，浅色/护眼主题下等于黑字黑底。
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                '首分型前合并框',
+                style: TextStyle(
+                  fontSize: 13,
+                  height: 1.2,
+                  color: AppPalette.textPrimary,
+                ),
               ),
-              IconButton(
+            ),
+            SizedBox(
+              width: 30,
+              height: 30,
+              child: IconButton(
                 tooltip: '首分型前合并框说明',
-                icon: const Icon(Icons.help_outline, size: 18),
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.zero,
+                iconSize: 16,
+                icon: const Icon(Icons.help_outline),
                 onPressed: _showPreFirstFractalModeHelp,
               ),
-            ],
+            ),
+          ],
+        ),
+        DropdownButtonFormField<PreFirstFractalMode>(
+          isExpanded: true,
+          initialValue: _preFirstFractalMode,
+          decoration: InputDecoration(
+            helperText: _preFirstFractalMode.shortHint,
+            helperMaxLines: 2,
+            isDense: true,
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+            border: const OutlineInputBorder(),
           ),
+          items: [
+            for (final m in PreFirstFractalMode.values)
+              DropdownMenuItem<PreFirstFractalMode>(
+                value: m,
+                child: Text(m.label, style: const TextStyle(fontSize: 12)),
+              ),
+          ],
+          onChanged: _busy
+              ? null
+              : (m) {
+                  if (m == null) return;
+                  _setPreFirstFractalMode(m, sheetSetState: sheetSetState);
+                },
         ),
         const SizedBox(height: 8),
         // 构建中/未确认虚线开关：末组合并框 + K0/K1/KN 构建中连线统一用虚线区分，默认开
@@ -7112,8 +7145,8 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
         text: '${_mathIndicatorConfig.demarkMaxCountdown}');
     final diverRateCtl = TextEditingController(
         text: '${_mathIndicatorConfig.divergenceRate}');
-    final bucketCtl = TextEditingController(
-        text: _chipConfig.bucketStep.toStringAsFixed(2));
+    // 桶宽只剩「设置 → 分析与指标 → 筹码分布桶宽」一个入口：
+    // 本对话框原来也有一个同名输入框，两处同值互不同步，属重复入口，已删。
     final peakRankNctl = TextEditingController(
         text: '${_chipConfig.chipPeakPureRank}');
     var peakLineMode = _chipConfig.peakLineMode;
@@ -7124,13 +7157,6 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
     int parseInt(String s, int fb) => int.tryParse(s.trim()) ?? fb;
     double parseDouble(String s, double fb) =>
         double.tryParse(s.trim()) ?? fb;
-    /// 桶宽：最小 0.01；非法回落当前值
-    double parseBucket(String s) {
-      final v = double.tryParse(s.trim());
-      if (v == null || !v.isFinite) return _chipConfig.bucketStep;
-      if (v < 0.01) return 0.01;
-      return (v * 100).round() / 100.0;
-    }
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => SelectionArea(child: AlertDialog(
@@ -7301,15 +7327,6 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
                       style: TextStyle(fontWeight: FontWeight.w600)),
                 ),
                 TextField(
-                  controller: bucketCtl,
-                  decoration: const InputDecoration(
-                    labelText: '筹码桶宽（元，笔数分布共用）',
-                    hintText: '最小 0.01；如 0.01 / 0.05 / 0.10',
-                  ),
-                  keyboardType:
-                      const TextInputType.numberWithOptions(decimal: true),
-                ),
-                TextField(
                   controller: peakRankNctl,
                   decoration: const InputDecoration(
                     labelText: '筹码峰数量 N（纯量级取前 N 个峰）',
@@ -7374,13 +7391,13 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
         demarkCdCtl,
         demarkMaxCtl,
         diverRateCtl,
-        bucketCtl,
       ]) {
         c.dispose();
       }
       return;
     }
-    final bucketStep = parseBucket(bucketCtl.text);
+    // 桶宽不在本对话框编辑，沿用设置面板里的当前值，不覆盖。
+    final bucketStep = _chipConfig.bucketStep;
     final cfg = MathIndicatorConfig(
       meanPeriods: TrendModelConfig.parsePeriodsText(
         meanCtl.text,
@@ -7422,7 +7439,6 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
       demarkCdCtl,
       demarkMaxCtl,
       diverRateCtl,
-      bucketCtl,
       peakRankNctl,
     ]) {
       c.dispose();

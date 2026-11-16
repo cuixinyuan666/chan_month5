@@ -6896,3 +6896,30 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   5. 测试：`kline_draw_board_test.dart` 改默认四窗断言（1min-K0/1min-K1/30min-K0、组合 30min-K2、slot0 双重守卫）；widget 测试下拉总数 3→6、`kline-draw-1-2-1m`→`kline-draw-1-1-1m`、`displayLevel` `[0,2,0,0]`→`[0,1,0,0]`、文本期望改 `K1`/`5min`/`15min`、K0 出现两次。
 - **结果**：6 个定向测试文件 **65 条全过**；改动文件 analyze 无新增 issue（main.dart 15 条均为未触及行的既有告警）；commit d2111904（未 push）。
 - **重编重启**：Stop PID 80748 → `flutter build windows --debug`（29.8s 成功，kernel_blob 22:18:35 → 22:32，73674896→73678880）→ explorer 代拉起 PID 84452，22:32:42 启动、Responding=True，6 秒后复查仍存活。Rust 未变无需重编。
+
+### 2026-11-16 23:5x — 设置面板：卡片化 / 默认收起 / 去重 / 免遮挡 + 主题实时预览
+
+- **执行者**：WorkBuddy
+- **任务类型**：UI 重构 + 交互修复
+- **用户需求**：设置中可能存在文字遮挡、内容重复、聚合度不高的问题，一并解决；主题在调节时要能在主图/分笔画板/K线画板/设置 UI 中实时查看；设置尽量卡片化、高聚合度、默认收起。
+- **改前问题**：
+  1. 三张分类卡 `initiallyExpanded: true`，面板一开就是几十项平铺；
+  2. `SettingsCategory` 统一插入 10px 项间距，调用方 children 里又各自塞 `SizedBox(height: 8/10)`，实际项间 18~20px，密度极低；
+  3. `SettingsChoiceDropdown` 的帮助问号占左侧 48px 独立一列，300px 面板里输入框只剩 232px，长标签/长说明被压；
+  4. 按钮帮助用 `Stack` + `Positioned` 浮在按钮左端：既遮住按钮左 1/3 可点区域（点左缘触发的是帮助），长标签还会和文字重叠；
+  5. 「首分型前合并框」用 `ListTile.trailing = Row(下拉 + 问号)`，窄面板下副标题被挤成窄条、长选项横向溢出；下拉样式写死 `Colors.black87`，浅色/护眼主题下等于黑字黑底；
+  6. 筹码桶宽有**两个入口**（设置面板输入框 + 数学指标参数对话框），同值互不同步；Telegram 数据源按钮与它的问号绑定同一个函数，并列两个完全相同的入口；
+  7. 主题切换只重建 `MaterialApp`，而 `home` 是同一 const 实例，Element 走「widget 相同」快路径跳过重建；绘制又直接读静态 `AppPalette`、不依赖 `Theme.of`，于是主图/画板停在旧配色。
+- **关键操作**：
+  1. `settings_panel_widgets.dart`：`sectionGap 12→10`、`fieldGap 10→8`、`buttonHeight 42→38`；`SettingsCategory` 新增 `summary`（收起态一行摘要），并**剔除 children 里的 SizedBox 占位**，项间距只由卡片给一层；卡片底色深色用 `surfaceAlt@50%`、浅色/护眼用不透明 `surface`，展开去 Material3 surfaceTint 染色。
+  2. `SettingsChoiceDropdown`：帮助改为 `InputDecoration.suffixIcon`（16px、30px 约束），输入框恢复整宽，问号不再压控件；`helperMaxLines 2→3`。
+  3. `settingsButtonWithLeftHelp` → `settingsButtonWithHelp`：Stack 浮层改 `Row[Expanded(button), 30px 问号]`，不再遮挡按钮可点区。
+  4. `edge_control_panel.dart`：标题改参数化，默认「设置」（原来写死「加载设置」，与面板内容已不符）。
+  5. `theme_chooser.dart`：三段重复说明合成一段；暖色/亮度滑杆改 30px 紧凑行（34px 标签 + 滑杆 + 40px 百分比，`noOverlay`、6px 拇指）。
+  6. `main.dart`：3 张卡去掉 `initiallyExpanded: true`（默认收起）+ 各加 `summary`；删掉数学指标参数对话框里的重复桶宽输入框与 `parseBucket`；Telegram 按钮去掉重复问号；「首分型前合并框」改「标题行 + 整宽 `DropdownButtonFormField`」，顺手去掉 `Colors.black87`。
+  7. 新增 `theme/theme_rebuild_scope.dart`：`ThemeRebuildScope(builder:)` 订阅 `AppThemeController`，换主题/拖暖色亮度时整页重建；`KlineHomePage.build` 用它包住 `_buildDesktopShell/_buildAndroidShell`。
+- **测试**：
+  - 新增 `test/settings_panel_widgets_test.dart`（5 条）：换主题/暖色/亮度后范围内 ColoredBox 颜色确实变化；分类默认收起、点标题展开；children 里的 SizedBox 被剔除（A/B 间距严格等于 fieldGap）；下拉帮助在框内且输入框整宽 300。
+  - 改写 `test/widget_test.dart`：真实 App 挂载后默认只有 5 张卡片、`截断` 不可见，展开「主图显示」后可见；新增用例逐张展开 5 类（先 ensureVisible 再点），断言无布局溢出异常。
+  - 回归：设置/主题/层级分窗/画板 widget 共 7 个文件 **66 条全过**；改动文件 analyze 无 issue（main.dart 15 条均为未触及行的既有告警）。
+- **注意事项**：widget 测试里不能直接 `await AppThemeController.setXxx()`（内部真实写盘会在 fake-async 区挂住），必须走 `tester.runAsync`。

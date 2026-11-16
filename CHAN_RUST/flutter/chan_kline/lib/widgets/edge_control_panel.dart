@@ -9,6 +9,7 @@ class EdgeControlPanel extends StatelessWidget {
     required this.onClose,
     required this.onCycleEdge,
     required this.child,
+    this.title = '设置',
   });
 
   /// 0=左 1=右
@@ -16,6 +17,10 @@ class EdgeControlPanel extends StatelessWidget {
   final VoidCallback onClose;
   final VoidCallback onCycleEdge;
   final Widget child;
+
+  /// 标题条文字。面板里已不只「加载设置」（还有主题、主图口径、维护同步），
+  /// 统一叫「设置」，避免标题与内容对不上。
+  final String title;
 
   static const double panelW = 300;
 
@@ -55,12 +60,13 @@ class EdgeControlPanel extends StatelessWidget {
                       size: 18,
                     ),
                   ),
-                  const Expanded(
+                  Expanded(
                     child: Text(
-                      '加载设置',
+                      title,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                      style: const TextStyle(
+                          fontSize: 13, fontWeight: FontWeight.w600),
                     ),
                   ),
                   IconButton(
