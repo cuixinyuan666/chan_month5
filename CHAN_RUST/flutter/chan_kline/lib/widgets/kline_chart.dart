@@ -1358,13 +1358,16 @@ class _KlineChartState extends State<KlineChart> {
         !_crosshairEnabled &&
         widget.bars.isNotEmpty &&
         _chartSize.width > 0) {
-      _iAmCrosshairOwner = true;
       _crosshairMode = s.crosshairTooltip
           ? CrosshairMode.withTooltip
           : CrosshairMode.linesOnly;
     }
     if (!_crosshairEnabled || widget.bars.isEmpty || _chartSize.width <= 0) return;
     // 鼠标进到本窗：本窗成为主窗，其余窗跟着本窗的位置走。
+    // 记录「是否刚接手」：周期窗 K 数少时，被动落地算出的 barIdx/Y 可能与本次
+    // hover 完全相同而触发下面的 early return；若不同步广播「本窗接管主窗」，
+    // 主窗会卡在旧窗——光标进了本窗却联动不了。
+    final becameOwner = widget.sync != null && !_iAmCrosshairOwner;
     if (widget.sync != null) _iAmCrosshairOwner = true;
     final barIdx = _viewport.barIndexAtCanvasX(
       pos.dx,
@@ -1372,10 +1375,15 @@ class _KlineChartState extends State<KlineChart> {
       widget.bars.length,
     );
     final y = pos.dy.clamp(plotTop, contentBottom);
-    // 同 K 且 Y 几乎不变：跳过 setState，提升跟手
+    // 同 K 且 Y 几乎不变：跳过 setState，提升跟手。
+    // 例外：光标刚从别的窗移进来、本窗第一次接手主窗时，即使位置没变
+    // （周期窗 K 数少时被动落地值与 hover 值可能完全相同）也必须把
+    // 「本窗接管主窗」同步广播出去，否则联动主窗会卡在旧窗、光标进了
+    // 本窗却联动不了。hover 回调不在 build 期间，直接 publish 安全。
     if (barIdx == _crosshairBarIdx &&
         _crosshairY != null &&
         (_crosshairY! - y).abs() < 0.75) {
+      if (becameOwner) _publishCrosshairNow();
       return;
     }
     _crosshairBarIdx = barIdx;
