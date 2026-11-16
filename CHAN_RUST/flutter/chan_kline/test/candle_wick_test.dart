@@ -1,9 +1,23 @@
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:chan_kline/chart/kline_candle_geometry.dart';
 import 'package:chan_kline/widgets/candle_wick.dart';
 
 /// 影线跟随实体宽度，且不穿过实体。
 void main() {
+  group('实体宽度封顶（少根 K 不占满画板）', () {
+    test('常规槽宽仍按 65% 算', () {
+      expect(candleBodyWidth(20), closeTo(13, 1e-9));
+      expect(candleBodyWidth(10), closeTo(6.5, 1e-9));
+    });
+
+    test('槽宽很大时封顶 20px，避免右侧空白全被判为 K 本体', () {
+      expect(candleBodyWidth(393.5), kCandleBodyMaxWidth);
+      expect(candleBodyWidth(100), kCandleBodyMaxWidth);
+      expect(candleBodyWidth(393.5), lessThan(80));
+    });
+  });
+
   group('影线粗细跟随实体宽度', () {
     test('实体越宽影线越粗', () {
       expect(candleWickWidth(20), greaterThan(candleWickWidth(8)));

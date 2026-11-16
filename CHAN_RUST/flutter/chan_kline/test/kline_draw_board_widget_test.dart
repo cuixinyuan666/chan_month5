@@ -20,7 +20,8 @@ const double _bodyBottom = 164.4;
 
 /// 两根 K（candle0=(10,12,9,11)，candle1=(20,22,19,21)）时的实测几何：
 /// K0 视口 399.5 宽，槽宽 slotW=393.5，candle0 中心 cx=200.75，
-/// 其槽位右缘 = 200.75 + 393.5/2 = 397.5（「选中 K 右方」从这以右开始）。
+/// 其槽位右缘 = 200.75 + 393.5/2 = 397.5（≈画布最右；旧版曾把它当绘制
+/// 放行线，导致只剩最右 2px 能画，2026-11-16 已改为以 cx 为界）。
 /// 价格区间 9..22（span 13）：yOf(11)=201.1、yOf(10)=216.9，
 /// candle0 实体中段约在 y=209。
 const double _cxTwo = 200.75;
@@ -260,7 +261,7 @@ void main() {
     await tester.pump();
     expect(_live(tester).selected, 0, reason: 'addCandle 后新 K 即选中');
 
-    // 选中 K 槽位（右缘 397.5）左方的空白：拖动＝平移。
+    // 选中 K 中心（cx=200.75）左方的空白：拖动＝平移。
     await _dragInK0(
       tester,
       const Offset(60, 200),
@@ -296,7 +297,7 @@ void main() {
     await tester.pumpWidget(_host(model));
     await tester.pump();
 
-    // 选中 K 槽位右缘以右（x>397.5）拖动：才画新 K。
+    // 选中 K 中心（cx=200.75）右方拖动即可画新 K，不必贴最右边。
     await _dragInK0(
       tester,
       const Offset(_slotRight + 1, 200),
@@ -307,6 +308,31 @@ void main() {
     expect(m.candles, hasLength(2), reason: '选中 K 右方拖动应新增 K 线');
     expect(m.candles[0].open, 10, reason: '原 K 不该被动到');
     expect(m.selected, 1, reason: '新 K 自动成为选中');
+  });
+
+  testWidgets('选中 K 右边但非最右边的空白也能画新 K（不再限定槽位右缘）',
+      (tester) async {
+    final model = KlineDrawBoardModel.initial().addCandle(
+      const KlineDrawCandle(open: 10, high: 12, low: 9, close: 11),
+    );
+    await tester.pumpWidget(_host(model));
+    await tester.pump();
+
+    // 单根 K：中心 cx=200.75，槽位右缘≈397.5 已贴画布最右。
+    // 旧逻辑要求 x>397.5 才能起笔（只剩最右 2px）——正是用户反馈的
+    // 「必须在最右边才能画」。取 x=300（中心右方、离最右边很远）验证修复。
+    const drawX = 300.0;
+    await _dragInK0(
+      tester,
+      const Offset(drawX, 200),
+      const Offset(drawX, 150),
+    );
+
+    final m = _live(tester);
+    expect(m.candles, hasLength(2),
+        reason: '选中 K 中心右侧的空白应能起笔画新 K，不该只剩最右边能画');
+    expect(m.candles.first.open, 10, reason: '原 K 不动');
+    expect(m.selected, 1, reason: '新 K 自动选中');
   });
 
   testWidgets('防压缩：拖一根 K 越不过按下时全体可见 K 的价格区间', (tester) async {
