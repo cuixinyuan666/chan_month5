@@ -7035,3 +7035,18 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **测试**：`kline_draw_board_widget_test` 的上/下影线拖动起手坐标按新几何更新（`_yHigh 28→96.2`、`_yLow 232.6→164.4`，并在注释里写清推导）；该文件 19 条全过；相关 5 文件 **53 条全过**；analyze 无新增 error。
 - **重编重启**：`flutter build windows --debug`（26.1s 成功）→ explorer 代拉起 PID 78576。
 - **注意事项**：这只是"落笔前后比例接近"，不是把视图锁死在拖拽跨度；若要 1:1 完全一致，需要引入"画板固定 Y 跨度"模式（改动更大，待用户确认）。commit 896e8583（代码）/ bb057b3e（测试），未 push。
+
+### 2026-11-17 11:2x — K线画板：新 K 固定插到选中 K 右侧 + 移动区/绘制区色带
+
+- **执行者**：WorkBuddy
+- **任务类型**：交互口径变更 + 绘制增强（画板专用）
+- **用户需求**：① 点中哪根 K，画的新 K 就插在那根 K 的右侧，不要跑到所有 K 的最右边；② 选中某根 K 时，在该窗口用颜色区分「绘制区」与「移动区」，且随鼠标移动动态变化。
+- **落点改动**：`kline_draw_board.dart:_clampDrawIndex` —— 有选中时直接返回 `selected + 1`（旧口径是 `max(cursorBarIdx, selected+1)`，光标在远处就插到末尾）。插入后新 K 自动成为选中，连画会一路右延；空板仍按光标。
+- **色带改动**：`kline_chart.dart` 新增 `showDrawZones`（画板 primary 窗传 true）。
+  - 移动区 = 选中 K 的槽位（蓝 `#3B82F6`，抓这里 = 整根平移）；
+  - 绘制区 = 槽位右缘到绘图区右边（青绿 `#10B981`，按下拖 = 画新 K）；
+  - 鼠标所在区域加深（alpha 0.20 / 0.16），另一块淡色（0.08 / 0.06），并带 1px 边线；
+  - 画在蜡烛之前，不遮 K 线；State 新增 `_hoverZoneX`，`onPointerHover` 更新并触发重绘；其它窗口与主图不受影响。
+- **测试**：原「新 K 落在选中 K 右方的光标位置（远处即追加到末尾）」改写为「新 K 紧邻选中 K 的右侧（无论光标在多远）」——断言新 K 在 idx=1、原第二根被挤到 idx=2、`selected==1`；`kline_draw_board_widget_test` **19 条全过**，相关 4 文件 34 条全过；改动文件 analyze 无新增 error。
+- **重编重启**：`flutter build windows --debug`（25.9s 成功）→ explorer 代拉起 PID 70076。
+- **注意事项**：色带只在画板 primary 窗出现，主图/分窗/分笔画板不受影响；`showDrawZones` 默认 false，别在非画板场景打开。commit a1d8ac27，未 push。
