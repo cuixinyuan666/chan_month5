@@ -4462,10 +4462,8 @@ class _KlineCompositePainter extends CustomPainter {
   }) {
     if (k1BarViews.isEmpty) return;
 
-    // 全模式、全层同构：该层只有 1 根单元 K 时不描外框（实线虚线都不描），
-    // 实体填充照常保留——一根 K 不该被画成一只合并框。
-    final singleUnit = k1BarViews.length <= 1;
-
+    // 动态 K（构建中 / 未确认）**一律虚线外框**：这是用户明确要的标记，
+    // 不能因为「该层只有一根」就改实线。单根时只由合并框那一侧负责不画跨根框。
     // faint：主图K1合并底层，低不透明度以免压住 1 分钟 K
     final upBody = faint ? AppPalette.rgb(0x38E53935) : AppPalette.rgb(0x88E53935);
     final dnBody = faint ? AppPalette.rgb(0x3826A69A) : AppPalette.rgb(0x8826A69A);
@@ -4497,7 +4495,7 @@ class _KlineCompositePainter extends CustomPainter {
         unitLevelForActive: 0,
       );
       final wickDash = ChartLevelLineStyle.forDisplayKn(1).buildingDashPattern;
-      final frameDashed = building && showBuildingDash && !singleUnit;
+      final frameDashed = building && showBuildingDash;
       // 正在走的这根：影线虚线外框居中，宽度约为柱体四成。确认后的影线仍是实线。
       if (frameDashed) {
         _strokeWickDashFrame(
@@ -4530,15 +4528,13 @@ class _KlineCompositePainter extends CustomPainter {
         _candleBodyFillRect(rect, dashed: frameDashed),
         Paint()..color = isUp ? upBody : dnBody,
       );
-      if (!singleUnit) {
-        _strokeUnitBarFrame(
-          canvas,
-          rect,
-          color: isUp ? upFrame : dnFrame,
-          dashed: frameDashed,
-          dashPattern: wickDash,
-        );
-      }
+      _strokeUnitBarFrame(
+        canvas,
+        rect,
+        color: isUp ? upFrame : dnFrame,
+        dashed: frameDashed,
+        dashPattern: wickDash,
+      );
     }
   }
 
@@ -4669,8 +4665,39 @@ class _KlineCompositePainter extends CustomPainter {
       // 无 levels 单元的旧回退：K1 仍以永久合并帧为准。
       if (frames.isEmpty && displayKn == 1) frames = k1CombineFrames;
     }
+    // 同一段被两只框表示时只留外层那只（典型：预锚/活跃单元与已冻结单元同 x1）。
+    frames = _dropCoveredCombineFrames(frames);
     _displayFramesMemo[displayKn] = frames;
     return frames;
+  }
+
+  /// 丢弃「被后面某只框完全覆盖」的重叠框。
+  ///
+  /// 展示轨上会出现同一起点、不同终点的两只框：冻结单元 `0..0` 与活跃单元 `0..6`
+  /// 同时存在（预锚单元覆盖了已冻结的第一根）。它们是同一段的两种表示，
+  /// 都画出来就是「一只大框套一只小框」，用户 2026-11-17 反馈的
+  /// 「K1 只有一根 K，却出现合并框」正是这种重叠。
+  ///
+  /// 正常相邻框 x 递增、不重叠，这里不会误删；只有后框 `x1 <= 前 x1 && x2 >= 前 x2`
+  /// 才判定为覆盖。全部被覆盖时保留原列表（不动数据）。
+  List<KlineCombineFrame> _dropCoveredCombineFrames(
+    List<KlineCombineFrame> frames,
+  ) {
+    if (frames.length <= 1) return frames;
+    final kept = <KlineCombineFrame>[];
+    for (var i = 0; i < frames.length; i++) {
+      final f = frames[i];
+      var covered = false;
+      for (var j = i + 1; j < frames.length; j++) {
+        final g = frames[j];
+        if (g.x1 <= f.x1 && g.x2 >= f.x2) {
+          covered = true;
+          break;
+        }
+      }
+      if (!covered) kept.add(f);
+    }
+    return kept.isEmpty ? frames : kept;
   }
 
   /// 展示轨合并框（与 [_drawLevelCombineOnMainChart] 同一套虚拟单元，不另立口径）。
@@ -6367,9 +6394,7 @@ class _KlineCompositePainter extends CustomPainter {
     bool faint = false,
   }) {
     if (views.isEmpty) return;
-    // 全模式、全层同构：该层只有 1 根单元 K 时不描外框（实线虚线都不描），
-    // 实体填充照常保留——一根 K 不该被画成一只合并框。
-    final singleUnit = views.length <= 1;
+    // 动态 K（构建中 / 未确认）**一律虚线外框**，与 K1 同一条；单根也照画。
     final upBody = faint ? AppPalette.rgb(0x38E53935) : AppPalette.rgb(0x88E53935);
     final dnBody = faint ? AppPalette.rgb(0x3826A69A) : AppPalette.rgb(0x8826A69A);
     final upFrame = AppPalette.rgb(0xFFE53935);
@@ -6398,7 +6423,7 @@ class _KlineCompositePainter extends CustomPainter {
         unitLevelForActive: displayKn - 1,
       );
       final wickDash = ChartLevelLineStyle.forDisplayKn(displayKn).buildingDashPattern;
-      final frameDashed = building && showBuildingDash && !singleUnit;
+      final frameDashed = building && showBuildingDash;
       if (frameDashed) {
         _strokeWickDashFrame(
           canvas,
@@ -6434,15 +6459,13 @@ class _KlineCompositePainter extends CustomPainter {
         _candleBodyFillRect(rect, dashed: frameDashed),
         Paint()..color = isUp ? upBody : dnBody,
       );
-      if (!singleUnit) {
-        _strokeUnitBarFrame(
-          canvas,
-          rect,
-          color: isUp ? upFrame : dnFrame,
-          dashed: frameDashed,
-          dashPattern: wickDash,
-        );
-      }
+      _strokeUnitBarFrame(
+        canvas,
+        rect,
+        color: isUp ? upFrame : dnFrame,
+        dashed: frameDashed,
+        dashPattern: wickDash,
+      );
     }
   }
 
@@ -6961,49 +6984,24 @@ class _KlineCompositePainter extends CustomPainter {
       final bottom = math.max(yO, yC);
       final bodyH = math.max(1.0, bottom - top);
       final bodyRect = Rect.fromLTWH(x, top, barW, bodyH);
-      final cap0 = _stepAsOfBarIdx;
-      final k0Dashed = cap0 != null && showBuildingDash && idx == cap0;
-      final k0Dash = ChartLevelLineStyle.forDisplayKn(0).buildingDashPattern;
-      // 正在走的这根：影线画成虚线外框。已经确认的仍用实线影线。
-      if (k0Dashed) {
-        _strokeWickDashFrame(
-          canvas,
-          cx: cx,
-          bodyWidth: barW,
-          widthMult: _wickWidthMultForConfirmStep(barIdx: idx),
-          yHigh: yH,
-          yLow: yL,
-          bodyTop: top,
-          bodyBottom: top + bodyH,
-          color: color,
-          fillColor: color,
-          dashPattern: k0Dash,
-        );
-      } else {
-        _drawCandleWick(
-          canvas,
-          cx: cx,
-          yHigh: yH,
-          yLow: yL,
-          bodyTop: top,
-          bodyBottom: top + bodyH,
-          bodyWidth: barW,
-          color: color,
-          widthMult: _wickWidthMultForConfirmStep(barIdx: idx),
-        );
-      }
-
-      canvas.drawRect(
-        _candleBodyFillRect(bodyRect, dashed: k0Dashed),
-        Paint()..color = color,
-      );
-      _strokeUnitBarFrame(
+      // K0 是原始 K：没有「未确认 / 正在生成」这种动态态，**一律实线外框**。
+      // 旧口径把「当步那根」画成虚线外框，视觉上就是给普通 K 套了一只合并框，
+      // 而且它不受「Kn 合并」指标开关控制（取消合并后框还在），已按用户口径废止。
+      // 动态虚线外框只属于 K1+ 的构建中单元（见 _drawK1Candles / _drawLevelUnitCandles）。
+      _drawCandleWick(
         canvas,
-        bodyRect,
+        cx: cx,
+        yHigh: yH,
+        yLow: yL,
+        bodyTop: top,
+        bodyBottom: top + bodyH,
+        bodyWidth: barW,
         color: color,
-        dashed: k0Dashed,
-        dashPattern: k0Dash,
+        widthMult: _wickWidthMultForConfirmStep(barIdx: idx),
       );
+
+      canvas.drawRect(bodyRect, Paint()..color = color);
+      _strokeUnitBarFrame(canvas, bodyRect, color: color, dashed: false);
     }
   }
 
@@ -7325,7 +7323,7 @@ class _KlineCompositePainter extends CustomPainter {
         plotH,
         barW,
         slotW,
-        k1CombineFrames,
+        _displayCombineFrames(1),
         k1Style.color.withValues(alpha: 0.85),
         k1Style.color.withValues(alpha: 0.08),
         alignK1CombineWithViews: true,
