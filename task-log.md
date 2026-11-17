@@ -7249,3 +7249,19 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **测试**：`flutter analyze lib/widgets/kline_chart.dart` error=0（8 条存量）；`early_dynamic_unit_test` / `chart_view_compute_test` / `first_fractal_rule_test` / `kline_draw_board_widget_test` / `tick_draw_board_test` **63 过 2 失败**，失败两条经 `git stash` 在 HEAD 复跑同样失败（存量）。
 - **文档**：`AGENTS.md` 该节改名「单框 / 单根 / 外框虚实」，补规则 3（动态 K 一律虚线外框）与规则 4（K0 永实线）+ 重叠框去重；`lessons_learned.md` 新增第 32 条（别把帧数当 K 根数、去重放绘制层）与第 33 条（EXE exists ≠ 构建成功，看 kernel_blob）。
 - **相关文件**：`CHAN_RUST/flutter/chan_kline/lib/widgets/kline_chart.dart`、`AGENTS.md`、`lessons_learned.md`。
+
+### 2026-11-18 01:3x — 画板三项：点空白取消聚焦、草稿跟鼠标、单根框逐框过滤
+
+- **执行者**：WorkBuddy
+- **任务类型**：画板交互 + 绘制口径修正
+- **用户需求**：① 画板内点击空白区域取消当前聚焦光标；② 绘制 K 线时图形跟随鼠标实时同步；③ 核对默认数据，当前 K 绘制逻辑与 AGENTS 描述不符（修好并补文档/坑点）。
+- **定位与操作**：
+  1. **点空白**：`_onPointerUp` 的绘制分支只看 pointer 是否匹配，点一下也会落一根 open==close 的一字 K，选中也不取消。加 `_candleDrawMoved`（位移 ≤ `_zoneTapSlop` 算点击）+ `KlineChart.onEmptyTap`；K线画板 / 分笔画板都接 `clearSelection()`；左侧空白走热区点击分支，同样调 `onEmptyTap`。
+  2. **草稿不跟鼠标**：三处空集合终点——`resetForBarCount(0)` 把 `ready` 置 false、`xToIndex` 恒 0；画板 `_geometry` 见 `!ready` 返回 null（草稿不画）；`barIndexAtPointer` 见 `bars.isEmpty` 返回 null（草稿钉在 `barCount=0`）。加 `_primeEmptyBoardViewport()`（画板空板 0..23 视口）+ `_geometry` 无 visible 用 `PriceRange(9,11)` + 空板返回光标下标 + 草稿不再按 `barCount` 钳制。
+  3. **单根框漏网（用户第 3 条的真身）**：`totalUnits`（整层总数）放行了 `count=1` 的单根框——6 根数据下 K0 最后一根仍被蓝色小框包住。改为 `_displayCombineFrames` **逐框**过滤 `count <= 1`，画框与连线判定共用。
+- **验收（默认数据 = 用户画板保存的 6 根）**：K0 只剩 1 只覆盖 3 根的框、09:35 的单根小框消失、框数=1 → 无连线；K1/K2 无多余连线。三根内置样本下 K1 单单元仍只有动态虚线外框。
+- **测试**：新增两条 widget 用例（点空白取消聚焦且不生成 K、空板拖动出现草稿）通过；画板相关 26 项全过；`flutter analyze lib/widgets/kline_chart.dart` error=0（8 条存量）。
+- **构建**：`flutter build windows --debug` 成功；`kernel_blob.bin` 时间戳晚于全部源码。
+- **文档**：`AGENTS.md` 新增「画板交互」节 + 默认数据核对基线；规则 1 改为**逐框判定**；`lessons_learned.md` 新增 34（空板视口）/35（点空白被当拖动）/36（单根判框的主语）。
+- **操作失误（如实记录）**：编译前清理进程时，误关了用户 01:09 手动启动的 App 实例（当时无法区分是不是 agent 拉起的）。已当场重编，重新打开即为新版。
+- **相关文件**：`kline_chart.dart`、`kline_draw_board.dart`、`tick_draw_board.dart`、`test/kline_draw_board_widget_test.dart`。
