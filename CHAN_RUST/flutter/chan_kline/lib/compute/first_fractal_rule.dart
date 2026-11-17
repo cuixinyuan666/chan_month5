@@ -89,30 +89,21 @@ bool fractalFxOpposite(String? lastFx, String fx) => lastFx != fx;
   return (high: h1 > h2 ? h1 : h2, low: l1 > l2 ? l1 : l2);
 }
 
-/// 首分型前的框序列按逐对判定重排（全层同构，子窗口专用）。
+/// 首分型前：把「真首分型之前（含它）」的各框并成一个（全层同构）。
 ///
-/// 规则（2026-11-16 用户最终确认：首框按「与前一个合并框比包含」迭代生成，
-/// 与分笔画板 K0 首框同构）：
-/// - 首根 K 先成一个「正在生长的合并框」；后续每根 K 都**与这个已生长的框**
-///   判包含关系（不是与相邻单根逐对比）：
-///   - 包含（内包含 / 外包含 / 高低交叉）→ 并进该框，框的高/低按 [mergeMode]
-///     更新（高高=都取最大、低低=都取最小），框继续生长；
-///   - 双低（h2<h1 且 l2<l1）/ 双高 → 停止生长，前一根判顶/底分型，
-///     顶点=前一根 high(TOP)/low(BOTTOM)，顶底交替，同向丢弃；
-/// - 这样「第一个合并框」会把首分型前所有与它含融的 K 都吃进去（当前 5 根
-///   数据高高口径 = 前 4 根一框），而旧实现只两两相邻比、只并到前 2 根；
-/// - 标准三元素首分型所在框及其后各框原样保留（首框生长可以越过该框把它并
-///   进去，一旦并入则以框为单位，不再为它单独画分型）；
-/// - **该层还没有真首分型时（`stdIdx == frames.length`）只做含融合并，
-///   不判双高/双低分型**——2026-11-17 用户明确的全层同构要求：K1 层曾出现
-///   「第 7 根一出来，首框从虚线直接变确认框」，而该层 confirms=0、
-///   segmentPolicy=seed，等于凭空盖章；K0 层没这问题（它的 fx 来自引擎）。
-///   现在所有层同一条规则：没有真分型 → 框一律保持 UNKNOWN（虚线构建中）。
+/// 规则（2026-11-17 用户最终确认，取代 11-16 的逐对生长版）：
+/// - 找出该层第一个**引擎已给出分型**的帧（`stdIdx`）；
+/// - 有 → 把 `[0, stdIdx]` 全部并成一框（含分型帧），fx 取该帧的引擎分型；
+/// - 没有 → 把整个序列并成一框，fx 保持 UNKNOWN（虚线构建中）；
+/// - 其余帧原样保留。
 ///
-/// [standardFirstFx]：标准三元素首分型的方向；候选与它同向时丢弃
-/// （分型必须顶底交替）。
+/// 为什么不再用「双高/双低提前断开」：那会让未确认的层凭空裂框——
+/// K1 层曾出现「第 8 根一出来，首框从 1 个框裂成 2 个、下沿 10.26→10.10、
+/// 样式由虚线变实线」，而该层 `confirms=0`、`segmentPolicy=seed`。
+/// 用户口径：只有真分型出现才允许定型，K0 / K1 / … / Kn 同一条规则。
 ///
-/// [mergeMode]：包含关系合并时的高/低取值口径（高高 / 低低）。
+/// [standardFirstFx]：保留参数兼容旧调用方，当前未使用（分型一律取引擎）。
+/// [mergeMode]：并框时的高/低取值口径（高高 = 都取最大、低低 = 都取最小）。
 ///
 /// 返回新列表；原列表不变。
 List<KlineCombineFrame> applyFirstPairFractalToFrames(
@@ -121,7 +112,7 @@ List<KlineCombineFrame> applyFirstPairFractalToFrames(
   PreFirstFractalMode mergeMode = PreFirstFractalMode.highHigh,
 }) {
   if (frames.length <= 1) return frames;
-  // 标准首分型所在框下标；frames.length 表示尚无标准首分型。
+  // 首个非 UNKNOWN 帧 = 该层真首分型所在帧；frames.length 表示还没有。
   var stdIdx = frames.length;
   for (var i = 0; i < frames.length; i++) {
     if (!fxIsUnknownCodeUnit(frames[i].fx)) {
@@ -129,111 +120,39 @@ List<KlineCombineFrame> applyFirstPairFractalToFrames(
       break;
     }
   }
-  // 该层有没有**真**首分型（引擎确认过的那种）。
-  //
-  // 全层同构（2026-11-17 用户明确）：没有真分型的层，只许做含融合并，
-  // 不许凭"相邻两根双高/双低"给首框盖分型的章。否则 K1 层会出现
-  // 「第 7 根一出来，首框从虚线直接变确认框」——而该层 confirms 仍为 0、
-  // segmentPolicy 仍是 seed，等于凭空认定，与 K0 层口径不同构。
-  final hasStandardFx = stdIdx < frames.length;
-  // 判定区间 = [0, stdIdx]：首框生长只发生在这段「首分型前」区域。
-  final limit = stdIdx;
-  if (limit <= 0) return frames;
+  // 合并区间 [0, end)：有真分型并到它（含）为止，没有则并到序列末尾。
+  final end = stdIdx < frames.length ? stdIdx + 1 : frames.length;
+  if (end <= 1) return frames;
 
-  final out = <KlineCombineFrame>[];
-  // 交替锚点：先按标准首分型方向起算（候选在时间上更早，方向须与后继相反）。
-  var lastFx = standardFirstFx ??
-      (stdIdx < frames.length ? frames[stdIdx].fx : null);
-
-  var i = 0;
-  while (i < limit) {
-    // 以 frames[i] 起一个「生长框」，把后面每一根与**当前框**判包含，
-    // 含融就并进来，直到双高/双低或越过 limit 才停。
-    var boxHigh = frames[i].high;
-    var boxLow = frames[i].low;
-    var boxCount = frames[i].count;
-    final x1 = frames[i].x1;
-    final t1 = frames[i].t1;
-    final startAtRightHalf = frames[i].startAtRightHalf;
-    var x2 = frames[i].x2;
-    var t2 = frames[i].t2;
-    var endAtLeftHalf = frames[i].endAtLeftHalf;
-    var grew = false;
-    var j = i + 1;
-    while (j < frames.length) {
-      final rel = fractalPairRel(boxHigh, boxLow, frames[j].high, frames[j].low);
-      if (rel != FractalPairRel.contained) break;
-      // 与当前生长框含融 → 并进来；高/低按口径更新，框继续生长。
-      final box = mergePreFractalBox(
-        boxHigh,
-        boxLow,
-        frames[j].high,
-        frames[j].low,
-        mergeMode,
-      );
-      boxHigh = box.high;
-      boxLow = box.low;
-      boxCount += frames[j].count;
-      x2 = frames[j].x2;
-      t2 = frames[j].t2;
-      endAtLeftHalf = frames[j].endAtLeftHalf;
-      grew = true;
-      j += 1;
-    }
-
-    if (grew) {
-      // 首框（及后续并出的框）吃进了 j-i 根 K；fx 保留最后并入那根的标记
-      // （若并进了标准首分型框，则 fx 就是那个分型）。
-      out.add(
-        KlineCombineFrame(
-          x1: x1,
-          x2: x2,
-          t1: t1,
-          t2: t2,
-          high: boxHigh,
-          low: boxLow,
-          fx: frames[j - 1].fx,
-          count: boxCount,
-          endAtLeftHalf: endAtLeftHalf,
-          startAtRightHalf: startAtRightHalf,
-        ),
-      );
-      i = j;
-      continue;
-    }
-
-    // 没有含融：与下一根判双高/双低 → 前一根判分型（不合并，顶底交替）。
-    //
-    // 只在**该层已有真首分型**时才判：无真分型的层原样输出，保持 UNKNOWN
-    // （虚线构建中），绝不凭空认定。
-    final hasPartner = hasStandardFx && i + 1 <= limit && i + 1 < frames.length;
-    if (hasPartner) {
-      final a = frames[i];
-      final b = frames[i + 1];
-      final rel = fractalPairRel(a.high, a.low, b.high, b.low);
-      final fx = fractalPairFx(rel);
-      if (fx != null && fractalFxOpposite(lastFx, fx)) {
-        out.add(
-          KlineCombineFrame(
-            x1: a.x1,
-            x2: a.x2,
-            t1: a.t1,
-            t2: a.t2,
-            high: a.high,
-            low: a.low,
-            fx: fx,
-            count: a.count,
-            endAtLeftHalf: a.endAtLeftHalf,
-            startAtRightHalf: a.startAtRightHalf,
-          ),
-        );
-        lastFx = fx;
-        i += 1;
-        continue;
-      }
-    }
-    out.add(frames[i]);
-    i += 1;
+  var boxHigh = frames.first.high;
+  var boxLow = frames.first.low;
+  var boxCount = 0;
+  for (var i = 0; i < end; i++) {
+    final box = mergePreFractalBox(
+      boxHigh,
+      boxLow,
+      frames[i].high,
+      frames[i].low,
+      mergeMode,
+    );
+    boxHigh = box.high;
+    boxLow = box.low;
+    boxCount += frames[i].count;
   }
-  return <KlineCombineFrame>[...out, ...frames.sublist(i)];
+  final last = frames[end - 1];
+  return <KlineCombineFrame>[
+    KlineCombineFrame(
+      x1: frames.first.x1,
+      x2: last.x2,
+      t1: frames.first.t1,
+      t2: last.t2,
+      high: boxHigh,
+      low: boxLow,
+      fx: last.fx,
+      count: boxCount,
+      endAtLeftHalf: last.endAtLeftHalf,
+      startAtRightHalf: frames.first.startAtRightHalf,
+    ),
+    ...frames.sublist(end),
+  ];
 }
