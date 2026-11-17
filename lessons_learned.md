@@ -330,3 +330,11 @@ moc: "[[chan-month5/index-memory]]"
   1. 说「首框」时必须先指明**子窗口**还是**单图**，否则结论没有意义；
   2. 取值口径（高高/低低）两边共用 `mergePreFractalBox`，不要当成两套独立规则；
   3. 共同前置（经典口径 / 首帧 x1>0 / 种子框档）一律原样返回，改代码前先看这三条短路。
+
+### 31. PS 5.1：`Stop` + 原生命令写 stderr = 满屏 NativeCommandError（桌面启动器的「很多 warning」）
+
+- **现象（2026-11-17）**：双击桌面「缠论K线-智能启动」，窗口刷一大片红色 `CategoryInfo / FullyQualifiedErrorId`，构建在第一条 cargo 就中止，`build_rust_run.log` 只有一行。
+- **根因**：`build_rust.ps1` 用 `$ErrorActionPreference = "Stop"`，而 cargo 把正常进度（`Compiling ...` / `Finished ...`）写到 **stderr**；PS 5.1 把原生命令的 stderr 记成 `ErrorRecord`，Stop 策略下直接抛 `NativeCommandError`。同一个脚本里 flutter 分支早有规避，两条 cargo 命令漏了。
+- **解法**：① 临时放宽错误策略；② **把 `ErrorRecord` 降级成普通字符串**再 `Tee` 写日志（只加 `2>&1` 不够——它只合并流，仍按 ErrorRecord 渲染红块，第二次验证就是这么漏的）；③ 用 `$LASTEXITCODE` 判成败。
+- **附带坑**：脚本里的 `Start-Process` 起的 App 会随外层会话结束被带走（作业对象），**手工验证一律用 `explorer.exe <exe>` 代拉起**。
+- **教训**：看到“很多 warning”先看是不是**错误流渲染**，不是真的告警；判构建成败只看 `LASTEXITCODE` 与产物时间戳，不要看窗口颜色。
