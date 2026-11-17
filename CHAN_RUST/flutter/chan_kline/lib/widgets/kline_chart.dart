@@ -3209,6 +3209,21 @@ class _KlineChartState extends State<KlineChart> {
             (visible.isEmpty
                 ? const PriceRange(9, 11)
                 : _viewport.priceRangeFor(visible));
+        // 画板：可见只有 1 根时，别把视图缩放到「这一根顶天立地」。
+        //
+        // 2026-11-17 用户反馈：画第一根 K，落笔后它突然被拉得异常长，
+        // 与鼠标拖拽的高度对不上。根因：单根时 priceRangeFor 的跨度就等于
+        // 该根 high-low，整根占满绘图区（拖拽时用的是空板的 9~11 跨度）。
+        // 这里把单根视图跨度放大到 3 倍、且不小于 1.6，让落笔前后的像素↔
+        // 价格比例接近，K 的长度就与拖拽范围一致。≥2 根时按真实极值走，
+        // 不受影响。
+        if (widget.onCandleGrab != null &&
+            _frozenPriceRange == null &&
+            visible.length == 1) {
+          final mid = (priceRange.min + priceRange.max) / 2;
+          final half = math.max(priceRange.span * 1.5, 0.8);
+          priceRange = PriceRange(mid - half, mid + half);
+        }
         // K0（tick）画的是圆点：价格区间正好等于可见 K 极值时，最上/最下的
         // 圆点有一半落在绘图区外被裁掉。这里给区间留出半个圆点的余量，
         // 保证「原点完整渲染、不裁剪」（2026-11-13 用户明确）。
