@@ -7007,3 +7007,19 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   4. 怀疑数据丢失先 `ls -l` 数行数；重置样本须用户明确确认并先备份。
 - **验收**：重编（29.9s 成功）→ explorer 代拉起 PID 76380；启动后不再报「区间内无 K 线」，K0 窗正常显示整段 K 线（9.4~10.22 区间），K1 窗也有多根 K 与合并框；数据文件行数未变（42 / 6）。
 - **注意事项**：以后任何"清数据/重置样本"都必须先问用户；重编只用 `flutter build windows --debug`，不要跑 `flutter clean` 或 `git clean`。commit d3942a9e（代码）/ fd94468f（AGENTS.md），未 push。
+
+### 2026-11-17 11:1x — K线画板：打开时从 custom.1m.csv 恢复上次画板（不再空板）
+
+- **执行者**：WorkBuddy
+- **任务类型**：数据恢复逻辑修复（数据加载，非缠论计算）
+- **用户需求**：每次重新打开 K 线画板，过往画板数据就不在了（清零），要求打开时接着上次的画，不要从头开始。
+- **根因**：`_openKlineDrawBoard` 只认内存里的 `_klineDrawBoard`；App 重启后它是 null，于是直接 `KlineDrawBoardModel.initial()` 建空板——而保存的数据一直躺在 `a_Data/test/custom.1m.csv`，**从没被读回**。
+- **改法**：
+  1. `KlineDrawBoardModel.fromBars(bars)`：按 K 线重建 `candles` + `start`（起始时间取首根 `timeText`，与 `toBars` 的「起始 + 交易分钟推进」同源），价格/量原样搬入，窗口布局用默认四窗。
+  2. `main.dart:_openKlineDrawBoard`：优先内存模型（同一次运行内的最新编辑）→ 否则 `_restoreKlineDrawBoardFromSaved()` 读 `custom.1m.csv` → 再否则空板；恢复成功/失败都在消息里留一行。**只读不写**。
+  3. 保存链路不动：`candles.isEmpty` 时仍直接 return，不会用空板覆盖文件。
+- **测试**：新增 `test/kline_draw_board_restore_test.dart` 4 条（四价/量/起始时间还原、toBars 往返时间与 OHLC 一致、空数据回落空板不抛异常、恢复后仍是默认四窗且操作窗 1m-K0）；相关回归 41 条全过；改动文件 analyze 无新增 error。
+- **重编重启**：`flutter build windows --debug`（29.0s 成功）→ explorer 代拉起 PID 78380。
+- **数据事故（如实记录）**：本轮排查中发现 `a_Data/test/custom.1m.csv` 在 **11:14 被覆盖成 1 根**（`09:30 10.02/9.64`，76 字节），而 11:09 核查时还是 42 行（41 根，首根 10.22/9.46）。时间上旧 App（PID 76380）在运行、用户可操作，最可能是「画板打开是空板 → 画了一根 → 点保存」的连锁结果。**无备份、无法还原**（`save_test_minute` 直接覆写，不进回收站；git 里该文件未跟踪）。这也正是本次修复要防的场景。
+- **建议（待用户确认）**：给保存加一道「根数骤减」保护——新模型根数 < 文件现存量的一半时弹确认（或先写 `.bak`），需用户点头再动。
+- commit 71a71648（代码）/ 94c6f814（测试），未 push。
