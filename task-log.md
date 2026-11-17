@@ -7249,3 +7249,11 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **测试**：`flutter analyze lib/widgets/kline_chart.dart` error=0（8 条存量）；`early_dynamic_unit_test` / `chart_view_compute_test` / `first_fractal_rule_test` / `kline_draw_board_widget_test` / `tick_draw_board_test` **63 过 2 失败**，失败两条经 `git stash` 在 HEAD 复跑同样失败（存量）。
 - **文档**：`AGENTS.md` 该节改名「单框 / 单根 / 外框虚实」，补规则 3（动态 K 一律虚线外框）与规则 4（K0 永实线）+ 重叠框去重；`lessons_learned.md` 新增第 32 条（别把帧数当 K 根数、去重放绘制层）与第 33 条（EXE exists ≠ 构建成功，看 kernel_blob）。
 - **相关文件**：`CHAN_RUST/flutter/chan_kline/lib/widgets/kline_chart.dart`、`AGENTS.md`、`lessons_learned.md`。
+
+### 2026-11-18 01:36 — 回退本轮「画板三项」（用户要求）
+
+- **用户反馈**：本轮改动「完全搞砸了」，要求撤销。
+- **操作**：`git revert` 三个提交（`99e534ac` / `c82cf523` / `f5d9c524`），代码与文档回到 `bfc0f7ac`。
+- **撤销内容**：点空白取消聚焦（`onEmptyTap`）、空板草稿视口兜底（`_primeEmptyBoardViewport`）、单根框逐框过滤、AGENTS「画板交互」节、lessons 第 34/35/36 条、两条新 widget 用例。
+- **保留内容**（上一轮 `c26baadc`）：K0 蜡烛实线、动态 K 虚线外框、重叠合并框绘制层去重、单根不画框（整层判定）、单框不画连线。
+- **未完成**：App 实例正占用 `build\windows\x64\runner\Debug`，`flutter build windows --debug` 报 `MSB3073`；需关闭 App 后重编，才能让产物与回退后的源码一致。**本轮不再擅自关闭用户进程。**
