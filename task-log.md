@@ -6943,3 +6943,21 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **全量测试**：`flutter test` **786 过 / 9 失败**。失败的 3 条（`chip_profile_test` 主图 catalog 不含筹码、`k0_building_line_same_price_test` 同价位端点、`line_slope_compute_test` 虚线可算）单独重跑同样失败，且三个文件都不引用 `main.dart` / 设置存储，属**改动前既有失败**；其余失败为机器内存耗尽导致的 `did not complete`（日志里有 `memory allocation failed`）与一条临时目录被占用的环境问题。
 - **重编重启**：`flutter build windows --debug`（42.8s 成功）→ explorer 代拉起 PID 89344，09:04:43 启动、Responding=True。Rust 未变，无需重编 `chan_ffi.dll`。
 - **注意事项**：以后新增「只影响口径、不影响出现时机」的开关，不要再挂在早生成总闸之下做并列控件；四档枚举是唯一来源，`_earlyDynamicUnit` / `_preFirstFractalMode` 在 `main.dart` 里已降级为只读派生，**不要再单独赋值**。commit be039bc4（代码）/ 6c186e01（测试），未 push。
+
+### 2026-11-17 10:0x — 首分型前口径全层同构：无真首分型的层不许凭空判分型（K1 虚线框突变为确认框）
+
+- **执行者**：WorkBuddy
+- **任务类型**：绘制口径修复（首分型前逐对判定），Rust 未动
+- **用户需求**：以默认数据为例，K1 层第一个合并框在 K0 idx≤5 时是虚线框，idx=6（第 7 根出来）后**直接把 K1 第一根 K 变成确认框**；用户判断「显然没有全层同构」，要求核查。
+- **核查结论（逐前缀实跑，数据 2026/07/10 09:30–09:39 共 10 根）**：
+  | K0 前缀 | K1 引擎帧 | 「高高」输出 | 首框 |
+  | --- | --- | --- | --- |
+  | n=5 | x0..2 + x2..4 | 并成生长框 x0..4(9.44/9.36,UNKNOWN) | 虚线 |
+  | n=6 | x0..2 + x2..5 | x0..5(9.44/9.37,UNKNOWN) | 虚线 |
+  | **n=7** | x0..2 + x2..6(9.49/9.37) | **x0..2(9.44/9.21,BOTTOM)** + x2..6 | **突变为确认框** |
+  根因：`first_fractal_rule.dart` 的双高/双低逐对判定**不看该层有没有真分型**。第 7 根使第二帧变 9.49/9.37（双高），生长停止后顺手给首框写 `BOTTOM`；而该层 `confirms=0`、`segmentPolicy=seed`，属凭空认定。K0 层无此问题（fx 来自引擎确认），故确实不同构。
+- **改法**：`applyFirstPairFractalToFrames` 新增 `hasStandardFx = stdIdx < frames.length`；双高/双低判分型分支只在 `hasStandardFx` 为真时执行。无真分型的层**仍做含融合并**（生长框照旧，前六根并一框的行为不变），但框一律保持 `UNKNOWN`（虚线构建中）。全层同一条规则，无层级特例。
+- **修后行为**：n=7→9 首框保持 `x0..2(9.44/9.21,UNKNOWN)` 虚线，第二帧 `x2..6/7/8` 各自独立；不再出现"虚线突变确认框"。
+- **测试**：`pre_first_fractal_mode_test.dart` 改写「双低」用例为两条（无真分型→全 UNKNOWN；有真分型→首框判 TOP 且顶底交替），新增「K1 层第 7 根回归」用例；该文件 16 条全过；相关回归 6 文件 64 条全过；改动文件 analyze 无 issue。
+- **重编重启**：Stop PID 89344 → `flutter build windows --debug`（36.8s 成功）→ explorer 代拉起 PID 73596，10:09:17 启动、Responding=True。Rust 未变，无需重编。
+- **注意事项**：这条只约束「首分型前」区域的**分型盖章**，不改变含融生长；以后若要给某层加提前判分型，必须同时提供"该层已有真分型"的依据，否则又会破同构。commit 7f542683（代码）/ 52531c77（测试），未 push。
