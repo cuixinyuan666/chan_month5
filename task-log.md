@@ -7181,3 +7181,19 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **代码结论**：两套分支都在、逻辑自洽，**无需改动**；本次只落文档。
 - **落点**：`AGENTS.md`「首框口径」新增「两套口径」对照表；`lessons_learned.md` 新增第 30 条（说「首框」必须先指明子窗口/单图；取值口径两边共用 `mergePreFractalBox`）。
 - commit 见下条。
+
+### 2026-11-17 18:1x — 桌面「缠论K线-智能启动」满屏红色 warning：cargo stderr 被判成 NativeCommandError
+
+- **执行者**：WorkBuddy
+- **任务类型**：启动/构建脚本修复 + 死代码清理
+- **用户反馈**：双击桌面「缠论K线-智能启动」，运行时出一大堆 warning，要求修复。
+- **定位**：快捷方式 → `powershell -File CHAN_RUST\scripts\launch_chan_kline_smart.ps1` → 需要重建时调 `build_rust.ps1`。`build_rust_run.log` 只有一行（`>> cargo build -p chan_ffi --release`），说明**在第一条 cargo 就中止**。
+- **根因**：`build_rust.ps1` 开头把 `$ErrorActionPreference` 设为 `Stop`，而 cargo 把正常进度（`Compiling ...` / `Finished ...`）写到 **stderr**；PS 5.1 把原生命令的 stderr 记成 `ErrorRecord`（NativeCommandError），Stop 策略下**直接抛异常中止**，窗口刷一屏红色 `CategoryInfo / FullyQualifiedErrorId`。原有 flutter 分支早已用「临时放宽 + 重定向 + LASTEXITCODE」规避，**两条 cargo 命令漏了这层**。
+- **修法**：新增 `Invoke-Cargo`——
+  1. 临时放宽错误策略（`Continue`）；
+  2. 收流后**把 `ErrorRecord` 降级成普通字符串**再 `Tee` 到 `cargo_build_last.log`（直接 `2>&1 | Tee-Object` 仍会按 ErrorRecord 渲染成红块——第二次验证时踩到，已修）；
+  3. 用 `$LASTEXITCODE` 判成败，失败才 throw 并指向日志。
+- **附带**：禁用截断后 `allow_nonleave_trunc` / `mark_nonleave_trunc_used` / `nonleave_trunc_used` 无人使用，cargo 报 2 条 dead_code warning——已删；`seed_skip_first` 注释同步改成「不再首两单元硬拆两组，包含照常 absorb」。
+- **验证**：连跑三次 `build_rust.ps1`：第一次仍有红块（`2>&1|Tee` 的坑），修 `ErrorRecord` 降级后第三次输出只剩 `>>` 步骤行与 `Finished`；`cargo build -p chan_data --release` **0 warning**；口径相关测试 8 条全过；App 由 explorer 代拉起 PID 78076（脚本内 `Start-Process` 在本工具会话结束时会被带走，手工验证须 explorer 起）。
+- **经验**：PS 5.1 下 `$ErrorActionPreference='Stop'` + 原生命令写 stderr = 必然抛 `NativeCommandError`；要么临时放宽，要么把 stderr 转成字符串。`2>&1` 只是合并流，**不会**消除 ErrorRecord。
+- commit e04aa454（脚本）/ fbceae8b（死代码），未 push。
