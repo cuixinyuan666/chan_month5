@@ -7075,3 +7075,19 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **测试**：原「防压缩：拖一根 K 越不过并集」改为「极值上的 K 也能移动、整体最多扩到 2 倍」；新增「复制出来的同价 K 向下能移动（旧口径纹丝不动）」用例；画板三件套 **30 条全过**；改动文件 analyze 无新增 error。
 - **重编重启**：`flutter build windows --debug`（30.0s 成功）→ explorer 代拉起 PID 84820。
 - **注意事项**：这不是「无限自由拖动」，上限是 2 倍跨度；若用户需要更大范围，得改成「按倍数上限」参数化，别再退回「边界=并集」。commit 778dbae7，未 push。
+
+### 2026-11-17 15:1x — 设置面板：分类标题吸顶（滚轮下滚时一直可见）
+
+- **执行者**：WorkBuddy
+- **任务类型**：UI 优化（交互可见性）
+- **用户需求**：设置面板往下滚时，「数据与加载」这类分类标题要固定在顶部一直可见，不能滚走。
+- **改法**：
+  1. `EdgeControlPanel` 新增两个可选参数——`scrollController`（外部控制/监听滚动）、`stickyHeader`（叠在滚动视口顶部的吸顶条）；内部由 `SingleChildScrollView` 改为 `Stack`（滚动区 + 吸顶槽），不传这两个参数时行为与原来完全一致。
+  2. `main.dart`：5 个 `SettingsCategory` 各挂一个 `GlobalKey`；`_settingsScroll` 监听滚动，用 `RenderAbstractViewport.getOffsetToReveal` 算出「最后一个 top 已滚过视口顶部的分类」，作为当前吸顶分类。
+  3. 只在**分类变化**或**吸顶条显隐切换**时 `setState`（不是每帧重建）；未滚动（offset ≤ 2）时隐藏吸顶条，避免与第一张卡片的标题重影；测量失败/未布局只回落第一个分类，不影响吸顶条出现。
+  4. 吸顶条样式与卡片标题一致（图标 + 标题 + 描边 + 面板底），高度 34。
+  5. `SettingsCategory` 增加 `super.key`，供外部定位。
+- **测试**：`widget_test.dart` 新增「设置面板下滚后，当前分类标题吸顶可见」——展开前两张卡把内容撑高（5 张全收起时面板滚不动）、拖滚动区三次、断言 `settings-sticky-category` 出现且文字是五个分类之一；该文件 8 条全过（含原有「默认收起可展开」「每类展开不溢出」）。
+- **坑**：`find.byType(Scrollable)` 在设置面板里会命中 3 个（SelectionArea 的横向 editable scrollable 混进来），必须 `.first`；滚动区补了 `Key('settings-scroll')` 便于定位。
+- **重编重启**：`flutter build windows --debug`（26.4s 成功）→ explorer 代拉起 PID 89388。
+- commit e18d484f，未 push。
