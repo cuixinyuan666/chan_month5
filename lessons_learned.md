@@ -311,3 +311,9 @@ moc: "[[chan-month5/index-memory]]"
 - **后续（同日 16:2x，第二轮试验）**：改试「首分型前禁截断 + 补两元素分型（中组双高→顶、双低→底，`try_pair_fx_before_first`）」。实测：L0 恢复正常（zigzag 120/240/600 各 40/80/200 个确认），但**L1 从基线的 1 个确认掉到 0**，`pre_anchor_unit_recurses…` 仍失败、`levels` 从 3 掉到 2。
   - 原因：两元素只能判「双高/双低」，**判不了包含形态**；L1 前两个单元恰好是包含关系 → 判不出 → 上层再次断裂。原版 L0/L1 的那 1 个确认正是截断在「包含」时兜出来的。
   - 结论：**两元素分型不是截断的等价替代**，它只覆盖双高/双低。想同时满足「首分型前不乱盖章」和「递归不中断」，只能把隔离放到展示层，别动内核自举。已全部回退（基线 `pre_anchor_unit_recurses…` 复跑通过）。
+- **最终落地（同日 16:4x，用户裁决）**：用户明确「按这条路基改，你说的不合理不要管，改了之后我来决定合不合理」，遂**实施**：种子窗口禁截断 + `try_pair_fx_before_first()` 两元素分型，probe 同步。
+  - 效果（6 根演示数据 `custom.1m.csv`）：改前首框 = 两个框 `x0..0(10.00/9.76,BOTTOM)` + `x1..3(10.11/9.90,TOP)`；改后 = **一个框 `x0..3(10.11/9.90,TOP)`**，第 1 根不再被单独盖章。
+  - **代价清单（12 条既有用例被 `#[ignore]`，均在 `reason` 里写明原因，不是删除）**：
+    `pipeline::pre_anchor_unit_recurses_to_next_level_on_first_confirm`、`down_truncation_mirror_confirms_bottom`、`up_truncation_confirms_top_at_fourth_bar`、`early_dynamic_unit_off_restores_classic`、`pre_anchor_unit_from_bar0_and_first_confirm_handoff`、`seed_leave_dir_d2_before_first_fx_isomorphic`、`seed_skip_first_two_units_two_groups`、`buy1::sell1_x_is_discovery_step_not_begin_pole_002003`、`combine::state_bundle_002003_steps_24_28`、`delta::delta_002003_steps_24_28_and_reset_replay`、`engine::feed_detects_bottom_fractal`、`engine::seed_leave_does_not_trunc`。
+  - **仍在失败的 6 条与本改动无关**（基线即失败）：`upper_confirm…_688687`（缺 `a_Data/688687`）、`load_001312_tick…`、`load_klines_prefers_custom_ohlc_for_test`、`test_stock_forces_file_even_if_protocol`、`kn_body_excludes_begin_pole_bar_002003`、`buy1::sell1_002003_step25…`。
+  - **遗留**：`09:31` 那根 9.70 的下影线**仍露在框外**——那是「包含合并、low 取最高」的必然结果（框下沿 9.90），与本改动无关；要让影线进框只能改「高高」的低点取值口径。
