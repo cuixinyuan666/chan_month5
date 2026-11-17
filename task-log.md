@@ -6923,3 +6923,23 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   - 改写 `test/widget_test.dart`：真实 App 挂载后默认只有 5 张卡片、`截断` 不可见，展开「主图显示」后可见；新增用例逐张展开 5 类（先 ensureVisible 再点），断言无布局溢出异常。
   - 回归：设置/主题/层级分窗/画板 widget 共 7 个文件 **66 条全过**；改动文件 analyze 无 issue（main.dart 15 条均为未触及行的既有告警）。
 - **注意事项**：widget 测试里不能直接 `await AppThemeController.setXxx()`（内部真实写盘会在 fake-async 区挂住），必须走 `tester.runAsync`。
+
+### 2026-11-17 09:0x — 设置口径合并：「层级早生成动态单元」+「首分型前合并框」合成四档一个控件
+
+- **执行者**：WorkBuddy
+- **任务类型**：设置口径合并（UI + 落盘键 + 迁移），计算层未动
+- **用户需求**：先问「这两项是否已经重复了」；核对后确认存在单向门控 + 局部语义重叠，用户选方案 C（合成一个控件）。
+- **改前问题（三处重叠）**：
+  1. **单向门控**：`compute/pre_first_fractal_compute.dart:38` `if (!earlyDynamicUnit) return frames;` —— 早生成关掉后，「首分型前合并框」整项作废，但设置面板下拉仍可点、可落盘，用户看不到任何变化（静默失效）。
+  2. **「种子框」≈「早生成关」的首框效果**：都是「首框不合并、就是第一根」；差别只在种子框档下不画种子框矩形/开口虚线/ABC，且不影响 K1/K2 何时出现。
+  3. **「首框长什么样」被两项同时决定**：`main.dart` 注释早已写「earlyDynamicUnit + preFirstFractalMode 共同决定」，画板此前想自己写死 seedBox 被你否掉，就是这个原因。
+- **关键操作**：
+  1. 新增 `lib/models/pre_first_fractal_unit_mode.dart`：四档枚举（关闭 / 开启·种子框 / 开启·高高 / 开启·低低），`earlyDynamicUnit` 与 `preFirstFractalMode` 两个字段由档位**派生**，`fromLegacy` 负责老设置迁移。计算层（`pre_first_fractal_compute.dart` / `first_fractal_rule.dart`）**一行未改**。
+  2. `LevelWindowSettingsStore`：新增 `pre_first_fractal_unit_mode` 键为权威；读盘时该键缺失则用旧两键（`early_dynamic_unit` + `pre_first_fractal_mode`）推导，旧文件 `early_dynamic_unit=false` 一律落「关闭」档；写盘三键双写，旧版 App 回滚仍可读。对外 getter 保留 `earlyDynamicUnit` / `preFirstFractalMode`（派生）。
+  3. `main.dart`：字段收敛为 `_unitMode` 单一来源 + 两个只读派生 getter，下游 6 处传参（寻优、管道会话、增量 Lookup、K线画板、画板 bundleForBars、卡片摘要）零改动；两个 setter 合并为 `_setPreFirstFractalUnitMode`——**总闸变了**才清冻结仓 + 丢会话 + 记汇总，**仅换并框口径**只 `_rebuildCombine()`（与改前语义逐条对齐）。
+  4. Agent API：键面不变（仍只有布尔 `early_dynamic_unit`），`false`→关闭档，`true`→保留当前开启档（当前是关闭档则回落「开启·高高」）；新增 `_setEarlyDynamicUnitBool` 做这层映射。
+  5. 设置面板：「层级早生成 / 首分型前合并框」一个四档下拉（原先是开关 + 下拉两块，共 275 行改动里含删除的旧 `Row + DropdownButtonFormField` 块）；两个帮助弹窗合成一个，写清四档含义、动态单元走法、子窗口逐对判定、tooltip 同源、影响范围、切换代价、操作步骤；帮助第 13 条与「主图显示」卡片摘要改用四档标签。
+- **测试**：新增 `test/pre_first_fractal_unit_mode_test.dart` 13 条（派生 / round-trip / 脏值回落 / 老文件迁移 / 副标题唯一）；口径与回归定向 7 个文件 **125 条全过**（`pre_first_fractal_*`、`early_dynamic_unit`、`settings_panel_widgets`、`widget_test`、`kline_draw_board_widget`、`chart_view_compute`、`agent_api`）；改动文件 analyze 无新增 issue（main.dart 3 条 warning 为未触及行的既有告警）。
+- **全量测试**：`flutter test` **786 过 / 9 失败**。失败的 3 条（`chip_profile_test` 主图 catalog 不含筹码、`k0_building_line_same_price_test` 同价位端点、`line_slope_compute_test` 虚线可算）单独重跑同样失败，且三个文件都不引用 `main.dart` / 设置存储，属**改动前既有失败**；其余失败为机器内存耗尽导致的 `did not complete`（日志里有 `memory allocation failed`）与一条临时目录被占用的环境问题。
+- **重编重启**：`flutter build windows --debug`（42.8s 成功）→ explorer 代拉起 PID 89344，09:04:43 启动、Responding=True。Rust 未变，无需重编 `chan_ffi.dll`。
+- **注意事项**：以后新增「只影响口径、不影响出现时机」的开关，不要再挂在早生成总闸之下做并列控件；四档枚举是唯一来源，`_earlyDynamicUnit` / `_preFirstFractalMode` 在 `main.dart` 里已降级为只读派生，**不要再单独赋值**。commit be039bc4（代码）/ 6c186e01（测试），未 push。
