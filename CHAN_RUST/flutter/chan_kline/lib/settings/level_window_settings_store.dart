@@ -5,6 +5,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../chart/level_window_layout.dart';
 import '../models/pre_first_fractal_mode.dart';
+import '../models/pre_first_fractal_unit_mode.dart';
 
 /// 层级分窗本机偏好（落盘 `.chan_level_windows.json`）。
 ///
@@ -17,19 +18,21 @@ abstract final class LevelWindowSettingsStore {
   static int _count = kLevelWindowDefaultCount;
   static List<int> _slots = defaultLevelWindowSlots();
 
-  /// 层级早生成动态单元：开=每层首个单元在父层首确认当根以动态态出现。
-  /// 默认开；关闭时回到经典口径。与「层级分窗」总开关相互独立。
-  static bool _earlyDynamicUnit = true;
-
-  /// 首分型前合并框口径：种子框 / 高高 / 低低。
-  /// 缺键（老设置文件）一律按高高，与历史上线口径一致。
-  static PreFirstFractalMode _preFirstFractalMode = PreFirstFractalMode.defaultMode;
+  /// 「层级早生成动态单元 + 首分型前合并框」合并后的四档口径（2026-11-17 起）。
+  /// 默认「开启 · 高高」，与合并前的默认组合一致。
+  static PreFirstFractalUnitMode _unitMode = PreFirstFractalUnitMode.defaultMode;
 
   static bool get enabled => _enabled;
 
-  static bool get earlyDynamicUnit => _earlyDynamicUnit;
+  /// 四档合并口径（设置面板唯一控件读这份）。
+  static PreFirstFractalUnitMode get unitMode => _unitMode;
 
-  static PreFirstFractalMode get preFirstFractalMode => _preFirstFractalMode;
+  /// 总闸：每层首个单元是否提前出现（派生，不再是独立落盘项）。
+  static bool get earlyDynamicUnit => _unitMode.earlyDynamicUnit;
+
+  /// 闸下口径：首分型前合并框（派生）。
+  static PreFirstFractalMode get preFirstFractalMode =>
+      _unitMode.preFirstFractalMode;
 
   static int get count => _count;
 
@@ -47,10 +50,16 @@ abstract final class LevelWindowSettingsStore {
       final obj = jsonDecode(await f.readAsString());
       if (obj is! Map) return;
       _enabled = obj['enabled'] == true;
-      // 缺省 true：旧设置文件没有该键时按新默认口径。
-      _earlyDynamicUnit = obj['early_dynamic_unit'] != false;
-      _preFirstFractalMode =
-          PreFirstFractalMode.fromStorage(obj['pre_first_fractal_mode']);
+      // 新键优先；老设置文件只有旧两键时按它们推导（early_dynamic_unit=false → 关闭档）。
+      final rawUnit = obj['pre_first_fractal_unit_mode'];
+      _unitMode = rawUnit is String
+          ? PreFirstFractalUnitMode.fromStorage(rawUnit)
+          : PreFirstFractalUnitMode.fromLegacy(
+              earlyDynamicUnit: obj['early_dynamic_unit'] != false,
+              mode: PreFirstFractalMode.fromStorage(
+                obj['pre_first_fractal_mode'],
+              ),
+            );
       _count = normalizeLevelWindowCount(
         obj['count'] is int ? obj['count'] as int : null,
       );
@@ -78,14 +87,12 @@ abstract final class LevelWindowSettingsStore {
 
   static Future<void> save({
     bool? enabled,
-    bool? earlyDynamicUnit,
-    PreFirstFractalMode? preFirstFractalMode,
+    PreFirstFractalUnitMode? unitMode,
     int? count,
     List<int>? slots,
   }) async {
     if (enabled != null) _enabled = enabled;
-    if (earlyDynamicUnit != null) _earlyDynamicUnit = earlyDynamicUnit;
-    if (preFirstFractalMode != null) _preFirstFractalMode = preFirstFractalMode;
+    if (unitMode != null) _unitMode = unitMode;
     if (count != null) _count = normalizeLevelWindowCount(count);
     if (slots != null) {
       _slots = fillLevelWindowSlots(
@@ -98,8 +105,10 @@ abstract final class LevelWindowSettingsStore {
       await f.writeAsString(
         const JsonEncoder.withIndent('  ').convert(<String, dynamic>{
           'enabled': _enabled,
-          'early_dynamic_unit': _earlyDynamicUnit,
-          'pre_first_fractal_mode': _preFirstFractalMode.storageValue,
+          // 新键是权威；旧两键继续双写，保证旧版 App / 外部读盘脚本可回滚。
+          'pre_first_fractal_unit_mode': _unitMode.storageValue,
+          'early_dynamic_unit': _unitMode.earlyDynamicUnit,
+          'pre_first_fractal_mode': _unitMode.preFirstFractalMode.storageValue,
           'count': _count,
           'slots': _slots,
         }),

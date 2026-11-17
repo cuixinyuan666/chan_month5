@@ -76,6 +76,7 @@ import 'models/chip_config.dart';
 import 'models/tick_dist_config.dart';
 import 'models/kline_combine_frame.dart';
 import 'models/pre_first_fractal_mode.dart';
+import 'models/pre_first_fractal_unit_mode.dart';
 import 'models/level_models.dart';
 import 'models/k1_analysis.dart';
 import 'models/kline_combine_bundle.dart';
@@ -525,12 +526,16 @@ class _KlineHomePageState extends State<KlineHomePage>
   late final DateTime _startedAt = DateTime.now();
   /// 截断监察：开=当前口径；关=添加截断前旧行为（暴力反转被吸收）
   bool _truncationCheck = true;
-  /// 层级早生成动态单元：开=每层首个单元在父层首确认当根以动态态出现；
-  /// 关=经典口径（等引擎自己攒够输入）。默认开，可在设置里切换。
-  bool _earlyDynamicUnit = true;
-  /// 首分型前合并框口径：种子框=不合并 / 高高（默认）/ 低低。
-  /// 只影响首分型前那段合并框的绘制与 tooltip 的 MG/MD，不动其它结构。
-  PreFirstFractalMode _preFirstFractalMode = PreFirstFractalMode.defaultMode;
+  /// 「层级早生成动态单元 + 首分型前合并框」合并后的四档口径（唯一来源）。
+  /// 2026-11-17 用户确认合并：原先是并列的两个控件，后者被前者硬门控，
+  /// 关掉早生成后下拉静默失效；现合成一个下拉，内部再派生回两个字段。
+  PreFirstFractalUnitMode _unitMode = PreFirstFractalUnitMode.defaultMode;
+
+  /// 总闸：每层首个单元是否提前出现（派生，勿单独赋值）。
+  bool get _earlyDynamicUnit => _unitMode.earlyDynamicUnit;
+
+  /// 闸下口径：首分型前合并框（派生，勿单独赋值）。
+  PreFirstFractalMode get _preFirstFractalMode => _unitMode.preFirstFractalMode;
   /// 构建中合并框（虚线）开关：开=末组合并画虚线；关=全部实线（默认开）
   bool _showBuildingDash = true;
   /// 分笔画板：只在 TEST 股票设置中打开，编辑 K0 后自动生成上层窗口。
@@ -1434,14 +1439,16 @@ class _KlineHomePageState extends State<KlineHomePage>
   Future<void> _loadLevelWindowSettings() async {
     await LevelWindowSettingsStore.load();
     if (!mounted) return;
-    final early = LevelWindowSettingsStore.earlyDynamicUnit;
-    if (early != _earlyDynamicUnit) {
-      _earlyDynamicUnit = early;
+    // 四档合并口径：只有总闸（早生成）变了才丢会话/清冻结仓；
+    // 仅换闸下并框口径（高高↔低低↔种子框）不碰会话，重画即可。
+    final unit = LevelWindowSettingsStore.unitMode;
+    final earlyChanged = unit.earlyDynamicUnit != _unitMode.earlyDynamicUnit;
+    _unitMode = unit;
+    if (earlyChanged) {
       // 开关口径变了：旧会话按旧 opt 建，必须丢弃；冻结仓同步作废。
       _disposePipelineSession();
       _clearSessionFreezeHistory();
     }
-    _preFirstFractalMode = LevelWindowSettingsStore.preFirstFractalMode;
     // 启动时若分窗已开启，按落盘层级铺默认：每窗只有本层 Kn，副图不勾。
     if (LevelWindowSettingsStore.enabled) _resetSplitIndicators();
     setState(() {});
@@ -1905,7 +1912,7 @@ class _KlineHomePageState extends State<KlineHomePage>
         return 'truncation_check=$v';
       case AgentConfigKey.earlyDynamicUnit:
         final v = change.asBool!;
-        _setEarlyDynamicUnit(v);
+        _setEarlyDynamicUnitBool(v);
         return 'early_dynamic_unit=$v';
       case AgentConfigKey.bollN:
         final v = change.asInt!;
@@ -2424,36 +2431,48 @@ class _KlineHomePageState extends State<KlineHomePage>
     _logCombineSummary(prefix: '截断开关后汇总');
   }
 
-  /// 层级早生成动态单元开关落地（设置面板与 Agent API 共用同一条路径）。
+  /// 「层级早生成 / 首分型前合并框」四档口径落地（设置面板与 Agent API 共用）。
   ///
-  /// 该开关改变每层首个单元的可见时点 → 采样钟/冻结仓必须整体作废，
-  /// 只 dispose 会话不清冻结仓会残留旧口径的“第0根”记录。
-  void _setEarlyDynamicUnit(bool v, {StateSetter? sheetSetState}) {
-    _panelUi(() {
-      _earlyDynamicUnit = v;
-    }, sheetSetState: sheetSetState);
-    unawaited(LevelWindowSettingsStore.save(earlyDynamicUnit: v));
-    _clearSessionFreezeHistory();
-    _disposePipelineSession();
-    _msgHistory.append('层级早生成动态单元=${v ? "开" : "关"}，重算当前步进');
-    _rebuildCombine();
-    _logCombineSummary(prefix: '层级早生成开关后汇总');
-  }
-
-  /// 首分型前合并框口径落地（设置面板与 Agent API 共用同一条路径）。
-  ///
-  /// 只改「首个分型之前」那段合并框的绘制与 tooltip 的 MG/MD：
-  /// 不动结构计算、不动会话管道与冻结仓，重算当前步进只为让增量 Lookup
-  /// 把这一口径的行重种一遍（否则十字线上的 MG/MD 还是旧口径）。
-  void _setPreFirstFractalMode(
-    PreFirstFractalMode mode, {
+  /// 两种影响面分开处理：
+  /// - **总闸变了**（开↔关）：每层首个单元的可见时点变化 → 采样钟/冻结仓必须
+  ///   整体作废，只 dispose 会话不清冻结仓会残留旧口径的「第0根」记录。
+  /// - **只换闸下口径**（种子框/高高/低低 三档互转）：不动结构计算、不动会话与
+  ///   冻结仓，重算当前步进只为让增量 Lookup 把这一口径的行重种一遍
+  ///   （否则十字线上的 MG/MD 还是旧口径）。
+  void _setPreFirstFractalUnitMode(
+    PreFirstFractalUnitMode mode, {
     StateSetter? sheetSetState,
   }) {
-    if (_preFirstFractalMode == mode) return;
-    _panelUi(() => _preFirstFractalMode = mode, sheetSetState: sheetSetState);
-    unawaited(LevelWindowSettingsStore.save(preFirstFractalMode: mode));
-    _msgHistory.append('首分型前合并框=${mode.label}');
+    if (_unitMode == mode) return;
+    final earlyChanged = mode.earlyDynamicUnit != _unitMode.earlyDynamicUnit;
+    _panelUi(() => _unitMode = mode, sheetSetState: sheetSetState);
+    unawaited(LevelWindowSettingsStore.save(unitMode: mode));
+    _msgHistory.append('层级早生成/首分型前合并框=${mode.label}');
+    if (earlyChanged) {
+      _clearSessionFreezeHistory();
+      _disposePipelineSession();
+      _rebuildCombine();
+      _logCombineSummary(prefix: '层级早生成开关后汇总');
+      return;
+    }
     _rebuildCombine();
+  }
+
+  /// Agent API 的布尔键 `early_dynamic_unit` → 四档口径。
+  ///
+  /// 旧协议只有总闸，没有「首分型前合并框」这一维；因此：
+  /// - `false` → 关闭档；
+  /// - `true` → 保留当前闸下口径（当前是关闭档则回落「开启 · 高高」）。
+  void _setEarlyDynamicUnitBool(bool v) {
+    if (!v) {
+      _setPreFirstFractalUnitMode(PreFirstFractalUnitMode.off);
+      return;
+    }
+    _setPreFirstFractalUnitMode(
+      _unitMode == PreFirstFractalUnitMode.off
+          ? PreFirstFractalUnitMode.highHigh
+          : _unitMode,
+    );
   }
 
   @override
@@ -4678,7 +4697,7 @@ class _KlineHomePageState extends State<KlineHomePage>
         SettingsCategory(
           title: '主图显示',
           icon: Icons.candlestick_chart_outlined,
-          summary: '首框 ${_preFirstFractalMode.shortHint} · '
+          summary: '首框 ${_unitMode.label} · '
               '分窗 ${LevelWindowSettingsStore.enabled ? "${LevelWindowSettingsStore.count} 窗" : "关"}',
           children: [
         // 截断监察开关：对照「加截断前」旧行为
@@ -4700,82 +4719,26 @@ class _KlineHomePageState extends State<KlineHomePage>
                 },
         ),
         const SizedBox(height: 8),
-        // 层级早生成动态单元：每层首个单元在父层首确认当根以动态态出现，默认开
-        SettingsChoiceDropdown<bool>(
-          label: '层级早生成动态单元',
-          value: _earlyDynamicUnit,
-          helper: _earlyDynamicUnit
-              ? '已开启（动态K取高高；种子框不画）'
-              : '已关闭（经典口径：种子框照旧）',
-          helpTooltip: '层级早生成动态单元说明',
-          onHelp: _showEarlyDynamicUnitHelp,
-          items: const [
-            DropdownMenuItem(value: true, child: Text('开启（动态K取高高）')),
-            DropdownMenuItem(value: false, child: Text('关闭（经典口径）')),
+        // 层级早生成 / 首分型前合并框：四档合一（2026-11-17 用户确认合并）。
+        //
+        // 原先是「层级早生成动态单元」开关 + 「首分型前合并框」下拉两个控件，
+        // 但后者被前者硬门控（关掉早生成后下拉静默失效），且两者都只在回答
+        // 「首框长什么样」→ 合成一个下拉：关 / 开·种子框 / 开·高高 / 开·低低。
+        SettingsChoiceDropdown<PreFirstFractalUnitMode>(
+          label: '层级早生成 / 首分型前合并框',
+          value: _unitMode,
+          helper: _unitMode.shortHint,
+          helpTooltip: '层级早生成 / 首分型前合并框说明',
+          onHelp: _showPreFirstFractalUnitHelp,
+          items: [
+            for (final m in PreFirstFractalUnitMode.values)
+              DropdownMenuItem(value: m, child: Text(m.label)),
           ],
           onChanged: _busy
               ? null
               : (v) {
                   if (v == null) return;
-                  _setEarlyDynamicUnit(v, sheetSetState: sheetSetState);
-                },
-        ),
-        const SizedBox(height: 8),
-        // 首分型前合并框：种子框 / 高高 / 低低（只影响首分型前那段框的绘制与 MG/MD）
-        //
-        // 版式：标题行（标题 + 问号）+ 整宽下拉。
-        // 旧版把「下拉 + 问号」塞进 ListTile.trailing：面板只有 300px，
-        // 副标题被压成窄长条、长选项还会横向溢出；且下拉用了写死的
-        // Colors.black87，浅色/护眼主题下等于黑字黑底。
-        Row(
-          children: [
-            Expanded(
-              child: Text(
-                '首分型前合并框',
-                style: TextStyle(
-                  fontSize: 13,
-                  height: 1.2,
-                  color: AppPalette.textPrimary,
-                ),
-              ),
-            ),
-            SizedBox(
-              width: 30,
-              height: 30,
-              child: IconButton(
-                tooltip: '首分型前合并框说明',
-                visualDensity: VisualDensity.compact,
-                padding: EdgeInsets.zero,
-                iconSize: 16,
-                icon: const Icon(Icons.help_outline),
-                onPressed: _showPreFirstFractalModeHelp,
-              ),
-            ),
-          ],
-        ),
-        DropdownButtonFormField<PreFirstFractalMode>(
-          isExpanded: true,
-          initialValue: _preFirstFractalMode,
-          decoration: InputDecoration(
-            helperText: _preFirstFractalMode.shortHint,
-            helperMaxLines: 2,
-            isDense: true,
-            contentPadding:
-                const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-            border: const OutlineInputBorder(),
-          ),
-          items: [
-            for (final m in PreFirstFractalMode.values)
-              DropdownMenuItem<PreFirstFractalMode>(
-                value: m,
-                child: Text(m.label, style: const TextStyle(fontSize: 12)),
-              ),
-          ],
-          onChanged: _busy
-              ? null
-              : (m) {
-                  if (m == null) return;
-                  _setPreFirstFractalMode(m, sheetSetState: sheetSetState);
+                  _setPreFirstFractalUnitMode(v, sheetSetState: sheetSetState);
                 },
         ),
         const SizedBox(height: 8),
@@ -6388,21 +6351,37 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
     ));
   }
 
-  void _showPreFirstFractalModeHelp() {
+  /// 「层级早生成 / 首分型前合并框」四档合一说明弹窗。
+  ///
+  /// 2026-11-17 用户确认合并：原先是两个并列控件（开关 + 下拉），
+  /// 下拉被开关硬门控，关掉开关后下拉静默失效 → 合成一个四档下拉。
+  void _showPreFirstFractalUnitHelp() {
     showDialog<void>(
       context: context,
       builder: (ctx) => SelectionArea(child: AlertDialog(
-        title: const Text('首分型前合并框说明'),
+        title: const Text('层级早生成 / 首分型前合并框说明'),
         content: const SingleChildScrollView(
           child: Text(
-            '作用：控制「首个分型之前」那一段合并框怎么画、tooltip 的 MG/MD 写多少。\n'
-            '只作用于首分型前的框；GG/DD、动态 K 蜡烛、连线、枢、买卖点都不受影响。\n\n'
-            '三个选项\n'
-            '· 种子框：首分型前**不合并**，按引擎原框逐根画（第一根框就是种子框，'
-            '后面的框各自独立，横向范围也只到各自右端）。\n'
-            '· 高高（默认）：把首分型前的各框并成一个框，左端从第一根 K 起、右端到'
-            '最后一个框；高点取各框最高 high，低点也取各框最高 low。\n'
-            '· 低低：同样并成一个框，高点取各框最低 high，低点也取各框最低 low。\n\n'
+            '作用：一项管两件事——「每层首个单元什么时候出现」和「首个分型前那段合并框怎么画」。\n'
+            '为什么合成一个：后者只在开启时才生效，分成两个控件会让下拉在关闭时静默失效。\n\n'
+            '四个选项\n'
+            '· 关闭（经典口径）：必须等引擎自己攒够输入，才出现该层首个单元；'
+            'K1/K2 窗口相应延后可用。种子框与经典 K0 早退逻辑照旧。\n'
+            '· 开启 · 种子框：每层首个单元提前出现；首分型前**不合并**，按引擎原框逐根画'
+            '（第一根框就是种子框，后面的框各自独立）。\n'
+            '· 开启 · 高高（默认）：提前出现 + 首分型前并成一个框，左端从第一根 K 起、'
+            '右端到最后一个框；高点取各框最高 high，低点也取各框最高 low。\n'
+            '· 开启 · 低低：提前出现 + 同样并成一个框；高点取各框最低 high，低点也取最低 low。\n\n'
+            '开启时动态单元怎么走\n'
+            '· K0 第一根：K1 窗口就有 idx=0 的动态 K（尚未确认，随行情演化）。\n'
+            '· K0 首个分型确认当根：K1 的 idx=0 冻结为确认态、idx=1 动态；'
+            '同时 K2 窗口出现 idx=0 动态 K。递归到 Kn 同理。\n'
+            '· 动态单元只是该层首个自然段的“演化中形态”，不合成确认段、不重编号；'
+            '该层自己首个分型确认时由经典流程转正为同一个 idx=0。\n'
+            '· 动态期高低取真实 OHLC：起点极点→当步 K，high 取最高 high，low 取最低 low；'
+            '「高高 / 低低」只用于合并框。\n'
+            '· 种子框、种子开口虚线、种子 ABC 不画；K0 首确认前保留一条'
+            '预锚动态单元的构建中虚线。\n\n'
             '子窗口（层级分窗）\n'
             '· 高高 / 低低 下仍走逐对判定：相邻两根双低直接判顶分型、双高判底分型，'
             '这两种情况**不合并**；只有两根存在包含关系时才并框，并框取值按所选口径。\n'
@@ -6410,56 +6389,18 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
             'tooltip（十字线）\n'
             '· 合并框那一行的 MG/MD 与画出来的框同源：换口径后十字线上的 MG/MD 一起变。\n'
             '· 其它数值（GG/DD、原始 K 线高低等）一律不动。\n\n'
+            '影响范围\n'
+            '· 主图、各子窗口、分笔画板、K 线画板、回测/寻优、采样钟与冻结仓同一口径；'
+            '画板不另设规则。\n'
+            '· 切换「关闭 ↔ 任一开启档」会清空冻结历史并从当前可见前缀重放，采样钟同步重算；'
+            '仅在三个开启档之间切换（种子框/高高/低低）不动会话与冻结仓，只重画当前步进。\n'
+            '· Agent API 仍只有布尔键 early_dynamic_unit：false=关闭档；'
+            'true=保留当前开启档（当前为关闭档则回落「开启 · 高高」）。\n\n'
             '操作步骤\n'
             '1. 打开右上角设置；\n'
-            '2. 在「首分型前合并框」右侧下拉里选 种子框 / 高高 / 低低；\n'
-            '3. 主图与各子窗口立刻按新口径重画，十字线移动一次即可看到新的 MG/MD。',
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('知道了'),
-          ),
-        ],
-      )),
-    );
-  }
-
-  void _showEarlyDynamicUnitHelp() {
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => SelectionArea(child: AlertDialog(
-        title: const Text('层级早生成动态单元说明'),
-        content: const SingleChildScrollView(
-          child: Text(
-            '作用：控制每层首个单元（K 蜡烛）在什么时候出现。\n\n'
-            '开启（默认）\n'
-            '· K0 第一根：K1 窗口就有 idx=0 的动态 K（尚未确认，随行情演化）。\n'
-            '· K0 首个分型确认当根：K1 的 idx=0 冻结为确认态、idx=1 动态；'
-            '同时 K2 窗口出现 idx=0 动态 K。\n'
-            '· 递归：Kn 的 idx=0 确认当根，K(n+1) 的 idx=0 以动态态出现。\n'
-            '· 动态单元只是该层首个自然段的“演化中形态”，不合成确认段、'
-            '不重编号；该层自己首个分型确认时，由经典流程转正为同一个 idx=0。\n'
-            '· 动态期高低取真实 OHLC：起点极点→当步 K，high 取最高 high，'
-            'low 取最低 low；「高高 / 低低」只用于合并框。\n'
-            '· 种子框、种子开口虚线、种子 ABC 不画；K0 首确认前保留一条'
-            '预锚动态单元的构建中虚线。\n'
-            '· 十字线可跨所有窗口移动：鼠标进到哪个窗口就在那个窗口定位，'
-            '其余窗口跟着联动。滚轮单击第一次只开十字线，第二次才开十字信息；'
-            '十字信息只显示光标所在窗口那一层（K0 窗只出 K0，K1 窗只出 K1）。\n'
-            '· 参与全链路：主/副图、中枢/买卖点、采样钟、冻结仓与回测同一口径。\n\n'
-            '关闭\n'
-            '· 回到经典口径：必须等引擎自己攒够输入，才出现该层首个单元；'
-            'K1/K2 窗口相应延后可用。\n'
-            '· 种子框与经典 K0 早退逻辑照旧。\n\n'
-            '说明\n'
-            '· 动态期方向/高低允许随结构修正；确认当根以实际分型为准。\n'
-            '· 切换开关会清空冻结历史并从当前可见前缀重放，采样钟同步重算。\n\n'
-            '操作步骤\n'
-            '1. 打开右上角设置；\n'
-            '2. 拨动「层级早生成动态单元」开关；\n'
-            '3. 当前步进会立刻按新口径重算并刷新所有窗口。',
+            '2. 在「层级早生成 / 首分型前合并框」下拉里选一档；\n'
+            '3. 当前步进立刻按新口径重算，主图与各子窗口同时刷新；'
+            '十字线移动一次即可看到新的 MG/MD。',
           ),
         ),
         actions: [
@@ -6666,7 +6607,7 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
               '10. 操作窗标识固定为 1min-K0，不可切换；其余三窗左上角是两级级联下拉「周期-K层级」（如左下默认「5min-K0」，可改「5min-K2」）：第一级选周期（1min/5min/15min…由 1 分钟数据聚合，5min=5 根、15min=15 根…），第二级选该周期缠论层级 K0~K9；各周期窗的中枢/连线/指标按本窗周期数据计算，不再显示左上 K0 的指标；\n'
               '11. 十字线联动四个窗，按同一时刻对齐到各自的周期 K；各窗缩放/平移始终独立、互不牵连；\n'
               '12. 点「保存并加载」，写入 a_Data/test/custom.1m.csv；\n'
-              '13. 各窗（含画板）首个合并框口径遵循设置里的「层级早生成动态单元」与「首分型前合并框」，全 App 通用、画板不另设规则。',
+              '13. 各窗（含画板）首个合并框口径遵循设置里合并后的「层级早生成 / 首分型前合并框」四档下拉（关 / 开·种子框 / 开·高高 / 开·低低），全 App 通用、画板不另设规则。',
             ),
           ),
           actions: [
