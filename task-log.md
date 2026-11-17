@@ -7197,3 +7197,26 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **验证**：连跑三次 `build_rust.ps1`：第一次仍有红块（`2>&1|Tee` 的坑），修 `ErrorRecord` 降级后第三次输出只剩 `>>` 步骤行与 `Finished`；`cargo build -p chan_data --release` **0 warning**；口径相关测试 8 条全过；App 由 explorer 代拉起 PID 78076（脚本内 `Start-Process` 在本工具会话结束时会被带走，手工验证须 explorer 起）。
 - **经验**：PS 5.1 下 `$ErrorActionPreference='Stop'` + 原生命令写 stderr = 必然抛 `NativeCommandError`；要么临时放宽，要么把 stderr 转成字符串。`2>&1` 只是合并流，**不会**消除 ErrorRecord。
 - commit e04aa454（脚本）/ fbceae8b（死代码），未 push。
+
+### 2026-11-17 23:0x — 单根 K 不画合并框、单框不画连线（全模式、全层级统一）
+
+- **执行者**：WorkBuddy
+- **任务类型**：主图绘制语义（未动 Rust 计算）
+- **用户要求（原话意译）**：所有模式、所有层级——只有 1 根 K 线不画合并框；只有 1 个合并框不画连线。按此把项目里这两项逻辑统一更新，并写进 `AGENTS.md`。
+- **改动前状态**：「一根 K 不画框」只在 `subWindow && 首分型前` 生效（单图不看这条）；「单框不画线」根本没有守卫；K1/Kn 单元蜡烛的单根外框在历史重构中丢了。
+- **操作（全部落在 `kline_chart.dart`，画板/分笔画板复用同一 painter，因此一处改全覆盖）**：
+  1. `_drawCombineFramesOnMainChart`：删掉 `subWindow` 参数与 `beforeFirstFx` 分支，改成**整层 `totalUnits <= 1` 一律不画框**；顺手删除只服务旧分支的 `_fxIsUnknown`。
+  2. `_drawK1Candles` / `_drawLevelUnitCandles`：恢复「该层单元数 ≤ 1 不描外框（虚实都不描）、实体填充保留」。
+  3. 新增 `_displayCombineFrames(displayKn)` + `_levelDisplayCombineFrames(kn)`（带 memo）：K0 = 合并帧 + 首框并框；K1 经典档 = 永久合并帧；K1/Kn = 虚拟单元重算展示轨。合并框绘制与连线判定**共用这一份列表**，不另算一套口径。
+  4. `_drawK0Lines` / `_drawK1LinesForLevel` 入口加守卫：`_displayCombineFrames(kn).length <= 1` → 整层不画连线（含构建中虚线、种子相开口/ABC 线）。
+  5. 种子框 overlay 的 `count` 由写死 1 改为真实跨度（`x2-x1+1`），只跨一根时同样不画。
+- **口径判定（写进 AGENTS）**：判的是**框列表长度**，不是「画出来几个框」。单根框按规则不画框，但仍占一个框位——两元素分型靠它成立，所以「一根细 K + 一个框 + 一条线」是正常形态，不是漏改。
+- **验收（agent 全程自动：API 启动 App → 逐步进 → `/screenshot` 取图 → 关 App）**：
+  - 层级分窗 + 002003 1m，idx=0：K0/K1 均只有一根，**无框、无线**。
+  - 分窗 idx=6：K1 取证 `raw=2 / merged=2`（框 `0..0`、`0..6`），两个框重叠成一只大框，橙色虚线在，符合「框数 ≥ 2 可画线」。
+  - 分窗 idx=60：K3 只有一只大框 → **无连线**；K1/K2 多框，线按分型正常出现。
+  - 单图模式（临时把 `.chan_level_windows.json` 的 `enabled` 改 false，跑完**已还原**）：idx=0 无框无线；idx=6 呈「细 K + 一框 + 一虚线」；idx=60 多框多线正常。
+  - 未跑画板截图：画板/分笔画板与主图共用同一 painter 同一守卫，逻辑同源，如实标注未单独取图。
+- **测试**：`flutter analyze --no-pub lib/widgets/kline_chart.dart` error=0（8 条存量 warning/info，与 HEAD 一致）；`first_fractal_rule_test` / `chart_view_compute_test` / `early_dynamic_unit_test` 37 过 2 失败（`K1 第 32 根首虚线`、`K2 跳过种子首组`）——已用 `git stash` 在 HEAD 复跑，**两条同样失败**，属存量（本轮只改绘制，测试不 import 本文件）；`kline_draw_board_widget_test` / `kline_draw_board_test` / `tick_draw_board_test` / `k0_combine_compute_test` 33 项全过。
+- **注意**：本工具会话结束时 `Start-Process` 拉起的 App 会被带走（上条日志已记），视觉验收采用「同一命令内启动→截图→关闭」完成；用户若要自己看，双击桌面快捷方式启动即可。
+- **相关文件**：`CHAN_RUST/flutter/chan_kline/lib/widgets/kline_chart.dart`、`AGENTS.md`。
