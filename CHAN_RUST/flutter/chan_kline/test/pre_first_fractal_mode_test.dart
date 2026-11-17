@@ -134,7 +134,7 @@ void main() {
   });
 
   group('子窗口：逐对判定 + 并框口径', () {
-    test('双低：不合并（三种口径都一样，且种子框不跑逐对判定）', () {
+    test('无真首分型：双低只断开生长，不判分型（全层同构·2026-11-17）', () {
       final frames = [
         _f(0, 0, 10.0, 10.0),
         _f(1, 1, 9.5, 9.5),
@@ -148,20 +148,49 @@ void main() {
         );
         expect(out.length, 3, reason: '$mode 不应合并双低两根');
       }
-      // 高高/低低 走逐对判定：第一根判顶分型
+      // 该层 confirms=0 / 无标准分型时，绝不许给首框盖分型的章，
+      // 否则会出现「第 7 根一出来，首框从虚线直接变确认框」。
       final high = applyPreFirstFractalMode(
         frames,
         mode: PreFirstFractalMode.highHigh,
         subWindow: true,
       );
-      expect(high.first.fx, 'TOP');
-      // 种子框不判分型，保持原样
-      final seed = applyPreFirstFractalMode(
+      expect(high.first.fx, 'UNKNOWN');
+      expect(high.every((f) => f.fx == 'UNKNOWN'), isTrue);
+    });
+
+    test('有真首分型：双低给首框判顶分型（顶底交替），不再沿用旧两两判法', () {
+      final frames = [
+        _f(0, 0, 10.0, 10.0),
+        _f(1, 1, 9.5, 9.5),
+        _f(2, 2, 9.1, 9.1, fx: 'BOTTOM'),
+      ];
+      final high = applyPreFirstFractalMode(
         frames,
-        mode: PreFirstFractalMode.seedBox,
+        mode: PreFirstFractalMode.highHigh,
         subWindow: true,
       );
-      expect(seed.first.fx, 'UNKNOWN');
+      expect(high.length, 3);
+      expect(high.first.fx, 'TOP');
+    });
+
+    test('K1 层第 7 根回归：双高断开生长后首框仍 UNKNOWN（不得变确认框）', () {
+      // 复核默认数据 n=7 的现场：引擎两帧 x0..2(9.44/9.21) 与 x2..6(9.49/9.37)，
+      // 双高（9.49>9.44 且 9.37>9.21）→ 停止生长，但该层无真分型 → 不判 BOTTOM。
+      final frames = [
+        _f(0, 2, 9.44, 9.21),
+        _f(2, 6, 9.49, 9.37),
+      ];
+      final out = applyPreFirstFractalMode(
+        frames,
+        mode: PreFirstFractalMode.highHigh,
+        subWindow: true,
+      );
+      expect(out.length, 2);
+      expect(out.first.fx, 'UNKNOWN');
+      expect(out.first.high, 9.44);
+      expect(out.first.low, 9.21);
+      expect(out[1].fx, 'UNKNOWN');
     });
 
     test('包含关系：并框取值按口径（高高=都取最大 / 低低=都取最小）', () {
