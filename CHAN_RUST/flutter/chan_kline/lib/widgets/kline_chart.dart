@@ -3904,7 +3904,8 @@ class _KlineCompositePainter extends CustomPainter {
   /// 层级早生成动态单元：开=隐藏种子框/种子相虚线，K0 首确认前由预锚单元画构建中虚线
   final bool earlyDynamicUnit;
 
-  /// 子窗口模式：「只有一根 K 不画合并框」只在这里、且首个分型出现前生效。
+  /// 子窗口模式（层级分窗 / K线画板）：只影响首框并框口径，
+  /// **不再**决定「只有一根 K 不画合并框」——那条已全模式统一。
   final bool subWindow;
 
   /// 画「移动区 / 绘制区」色块（K线画板专用）。
@@ -4461,6 +4462,10 @@ class _KlineCompositePainter extends CustomPainter {
   }) {
     if (k1BarViews.isEmpty) return;
 
+    // 全模式、全层同构：该层只有 1 根单元 K 时不描外框（实线虚线都不描），
+    // 实体填充照常保留——一根 K 不该被画成一只合并框。
+    final singleUnit = k1BarViews.length <= 1;
+
     // faint：主图K1合并底层，低不透明度以免压住 1 分钟 K
     final upBody = faint ? AppPalette.rgb(0x38E53935) : AppPalette.rgb(0x88E53935);
     final dnBody = faint ? AppPalette.rgb(0x3826A69A) : AppPalette.rgb(0x8826A69A);
@@ -4492,7 +4497,7 @@ class _KlineCompositePainter extends CustomPainter {
         unitLevelForActive: 0,
       );
       final wickDash = ChartLevelLineStyle.forDisplayKn(1).buildingDashPattern;
-      final frameDashed = building && showBuildingDash;
+      final frameDashed = building && showBuildingDash && !singleUnit;
       // 正在走的这根：影线虚线外框居中，宽度约为柱体四成。确认后的影线仍是实线。
       if (frameDashed) {
         _strokeWickDashFrame(
@@ -4525,13 +4530,15 @@ class _KlineCompositePainter extends CustomPainter {
         _candleBodyFillRect(rect, dashed: frameDashed),
         Paint()..color = isUp ? upBody : dnBody,
       );
-      _strokeUnitBarFrame(
-        canvas,
-        rect,
-        color: isUp ? upFrame : dnFrame,
-        dashed: frameDashed,
-        dashPattern: wickDash,
-      );
+      if (!singleUnit) {
+        _strokeUnitBarFrame(
+          canvas,
+          rect,
+          color: isUp ? upFrame : dnFrame,
+          dashed: frameDashed,
+          dashPattern: wickDash,
+        );
+      }
     }
   }
 
@@ -4542,6 +4549,10 @@ class _KlineCompositePainter extends CustomPainter {
     double plotH,
     double slotW,
   ) {
+    // 全模式、全层同构：该层视觉上只有 1 个合并框时不画连线（含构建中虚线 / 种子线）。
+    // 连线的两端是分型，分型至少要有两个合并框才成立，单框画出去的那条是凭空指路。
+    if (_displayCombineFrames(0).length <= 1) return;
+
     // 层级早生成开启时，首确认前也要用预锚动态单元画构建中虚线；
     // 种子线已由 _drawSeedPhaseLines 隐藏，因此只剩这一条。
     if (!earlyDynamicUnit && k0Lines.isEmpty && k0ConfirmSignals.isEmpty) return;
@@ -4632,6 +4643,69 @@ class _KlineCompositePainter extends CustomPainter {
       subWindow: subWindow,
       earlyDynamicUnit: earlyDynamicUnit,
     );
+  }
+
+  /// 该层「视觉合并框」缓存：合并框绘制与「只有 1 个合并框不画连线」共用一份结果。
+  final Map<int, List<KlineCombineFrame>> _displayFramesMemo = {};
+
+  /// 取 displayKn 层**实际画出来**的合并框列表（全模式、全层同构）。
+  ///
+  /// 连线端点的前提是至少两个合并框（成笔/成段靠分型），所以
+  /// 「只有 1 个合并框不画连线」必须按这一份列表判长度，不能另算一套。
+  ///
+  /// - `displayKn == 0`：K0 合并帧（含首分型前并框）；
+  /// - `displayKn == 1` 且未开层级早生成：沿用永久 K1 合并帧（经典口径不并框）；
+  /// - 其余：按该层虚拟单元重算展示轨合并框（窗口 Kn 用结构层 `kn-1` 的单元）。
+  List<KlineCombineFrame> _displayCombineFrames(int displayKn) {
+    final cached = _displayFramesMemo[displayKn];
+    if (cached != null) return cached;
+    List<KlineCombineFrame> frames;
+    if (displayKn <= 0) {
+      frames = _mergePreFractalFrames(combineFrames);
+    } else if (displayKn == 1 && !earlyDynamicUnit) {
+      frames = k1CombineFrames;
+    } else {
+      frames = _levelDisplayCombineFrames(displayKn);
+      // 无 levels 单元的旧回退：K1 仍以永久合并帧为准。
+      if (frames.isEmpty && displayKn == 1) frames = k1CombineFrames;
+    }
+    _displayFramesMemo[displayKn] = frames;
+    return frames;
+  }
+
+  /// 展示轨合并框（与 [_drawLevelCombineOnMainChart] 同一套虚拟单元，不另立口径）。
+  List<KlineCombineFrame> _levelDisplayCombineFrames(int kn) {
+    final unitLevel = kn - 1;
+    LevelBundle? bundle;
+    for (final b in levels) {
+      if (b.level == unitLevel) {
+        bundle = b;
+        break;
+      }
+    }
+    if (bundle == null) return const [];
+
+    final asOf = segAsOf;
+    final barsForCombine =
+        asOf != null ? bars.where((b) => b.idx <= asOf).toList() : bars;
+    final virtualUnits = asOf != null
+        ? asOfLevelVirtualK1Bars(
+            levels: levels,
+            barFeatures: barFeatures,
+            level: unitLevel,
+            asOf: asOf,
+            includeBuilding: true,
+          )
+        : levelBundleVirtualK1Bars(bundle);
+    if (virtualUnits.isEmpty || barsForCombine.isEmpty) return const [];
+
+    final displayFrames = computeK1CombineFrames(
+      barsForCombine,
+      virtualUnits,
+      truncationCheck: truncationCheck,
+    );
+    if (displayFrames.isEmpty) return const [];
+    return _mergePreFractalFrames(displayFrames);
   }
 
   /// 种子框画线全层同构入口：UNKNOWN→开口虚线；JUDGE/CONFIRM→ABC（互斥）。
@@ -4802,7 +4876,8 @@ class _KlineCompositePainter extends CustomPainter {
       high: snap.seedBoxHigh,
       low: snap.seedBoxLow,
       fx: snap.seedFx == 'UNKNOWN' ? 'UNKNOWN' : snap.seedFx,
-      count: 1,
+      // 种子框按真实跨度记根数：「只有 1 根 K 不画合并框」对它同样成立。
+      count: math.max(1, snap.seedBoxX2 - snap.seedBoxX1 + 1),
     );
     // 种子框跟该层合并同色（方案B：level=displayKn）
     final seedColor = ChartLevelLineStyle.forDisplayKn(level).color;
@@ -5013,6 +5088,8 @@ class _KlineCompositePainter extends CustomPainter {
     int kn,
   ) {
     if (kn < 1) return;
+    // 全模式、全层同构：该层视觉上只有 1 个合并框时不画连线（含构建中虚线 / 种子线）。
+    if (_displayCombineFrames(kn).length <= 1) return;
     final tailIdx = segAsOf ?? (bars.isEmpty ? -1 : bars.last.idx);
     if (tailIdx < 0) return;
 
@@ -5116,41 +5193,13 @@ class _KlineCompositePainter extends CustomPainter {
     }
     if (bundle == null) return;
 
-    final asOf = segAsOf;
-    final barsForCombine =
-        asOf != null ? bars.where((b) => b.idx <= asOf).toList() : bars;
-    final virtualUnits = asOf != null
-        ? asOfLevelVirtualK1Bars(
-            levels: levels,
-            barFeatures: barFeatures,
-            level: unitLevel,
-            asOf: asOf,
-            includeBuilding: true,
-          )
-        : levelBundleVirtualK1Bars(bundle);
-
-    if (virtualUnits.isEmpty &&
-        bundle.unitBars.isEmpty &&
-        bundle.activeUnit == null &&
-        bundle.pendingUnit == null) {
-      return;
-    }
-
     // 单元 view 仅用于合并框横向对齐（不再在此画淡实体；淡实体由 KN 指标统一控制）
     final views = _levelUnitViewsForLevel(unitLevel);
 
-    // 展示轨合并框：不画永久 combineFrames，改由虚拟单元重算
-    if (virtualUnits.isEmpty || barsForCombine.isEmpty) return;
-    final displayFrames = computeK1CombineFrames(
-      barsForCombine,
-      virtualUnits,
-      truncationCheck: truncationCheck,
-    );
-    if (displayFrames.isEmpty) return;
-
-    // 全层：首分型前两根及以上合成一个框，左端含第一根 K。
-    // 只有一根时不画框（在绘制处按总根数跳过）。
-    final frames = _mergePreFractalFrames(displayFrames);
+    // 展示轨合并框：不画永久 combineFrames，改由虚拟单元重算。
+    // 与连线的「只有 1 个合并框不画」判定共用 [_displayCombineFrames] 缓存，同源同一次计算。
+    final frames = _displayCombineFrames(kn);
+    if (frames.isEmpty) return;
 
     final style = ChartLevelLineStyle.forDisplayKn(kn);
     _drawCombineFramesOnMainChart(
@@ -5166,7 +5215,6 @@ class _KlineCompositePainter extends CustomPainter {
       levelUnitViews: views.isNotEmpty ? views : null,
       lastAsBuilding: showBuildingDash,
       buildingDashPattern: style.buildingDashPattern,
-      subWindow: subWindow,
     );
     // 种子合并框：用 LevelSnap.seed_box_*（全层同构，不限 displayFrames.first）
     _drawSeedBoxOverlay(
@@ -6319,6 +6367,9 @@ class _KlineCompositePainter extends CustomPainter {
     bool faint = false,
   }) {
     if (views.isEmpty) return;
+    // 全模式、全层同构：该层只有 1 根单元 K 时不描外框（实线虚线都不描），
+    // 实体填充照常保留——一根 K 不该被画成一只合并框。
+    final singleUnit = views.length <= 1;
     final upBody = faint ? AppPalette.rgb(0x38E53935) : AppPalette.rgb(0x88E53935);
     final dnBody = faint ? AppPalette.rgb(0x3826A69A) : AppPalette.rgb(0x8826A69A);
     final upFrame = AppPalette.rgb(0xFFE53935);
@@ -6347,7 +6398,7 @@ class _KlineCompositePainter extends CustomPainter {
         unitLevelForActive: displayKn - 1,
       );
       final wickDash = ChartLevelLineStyle.forDisplayKn(displayKn).buildingDashPattern;
-      final frameDashed = building && showBuildingDash;
+      final frameDashed = building && showBuildingDash && !singleUnit;
       if (frameDashed) {
         _strokeWickDashFrame(
           canvas,
@@ -6383,13 +6434,15 @@ class _KlineCompositePainter extends CustomPainter {
         _candleBodyFillRect(rect, dashed: frameDashed),
         Paint()..color = isUp ? upBody : dnBody,
       );
-      _strokeUnitBarFrame(
-        canvas,
-        rect,
-        color: isUp ? upFrame : dnFrame,
-        dashed: frameDashed,
-        dashPattern: wickDash,
-      );
+      if (!singleUnit) {
+        _strokeUnitBarFrame(
+          canvas,
+          rect,
+          color: isUp ? upFrame : dnFrame,
+          dashed: frameDashed,
+          dashPattern: wickDash,
+        );
+      }
     }
   }
 
@@ -7133,7 +7186,8 @@ class _KlineCompositePainter extends CustomPainter {
     // 改为用该层预锚单元重建成「高高」首组框（high 取最高、low 也取最高），
     // 与动态 K 蜡烛/连线同一输入，全层同构。
     // 开关开（全层同构）：首分型前从第一根 K 起合成一个框（高高）。
-    final frames = _mergePreFractalFrames(combineFrames);
+    // 与「只有 1 个合并框不画连线」共用同一份缓存，口径不会分叉。
+    final frames = _displayCombineFrames(0);
     if (frames.isEmpty) return;
     // 末组=构建中合并（虚线）；前组=已冻结合并（实线）。
     // 信号取 CombineEngine.groups 末项（已在 combineFrames 末尾），不是 activeUnit（那是进行中段）。
@@ -7151,7 +7205,6 @@ class _KlineCompositePainter extends CustomPainter {
       k0Style.color.withValues(alpha: 0.13),
       lastAsBuilding: showBuildingDash,
       buildingDashPattern: k0Style.buildingDashPattern,
-      subWindow: subWindow,
     );
     // 种子框（K0合并层=structure 0）
     _drawSeedBoxOverlay(
@@ -7166,20 +7219,10 @@ class _KlineCompositePainter extends CustomPainter {
     );
   }
 
-  /// UNKNOWN 按码位判断。调试内核里字符串相等会把别的分型也判成相等。
-  bool _fxIsUnknown(String fx) {
-    const units = <int>[85, 78, 75, 78, 79, 87, 78];
-    final u = fx.codeUnits;
-    if (u.length != units.length) return false;
-    for (var i = 0; i < u.length; i++) {
-      if (u[i] != units[i]) return false;
-    }
-    return true;
-  }
-
   /// 主图 K线合并 / K1合并线框：按真实价格坐标叠加。
   /// [lastAsBuilding]=true 时：末框虚线（构建中合并），前框实线（已冻结）；只画框不标「顶/底」。
   /// 口径：CombineEngine 末组仍可继续 absorb，即「构建中合并框」；与构建中连线同「虚线=未确认」。
+  /// **整层只有 1 根 K（1 个单元）时不画框**——所有模式、所有层级同一条，不再看 subWindow。
   void _drawCombineFramesOnMainChart(
     Canvas canvas,
     double w,
@@ -7194,7 +7237,6 @@ class _KlineCompositePainter extends CustomPainter {
     List<LevelUnitBarView>? levelUnitViews,
     bool lastAsBuilding = false,
     List<double> buildingDashPattern = const <double>[5, 4],
-    bool subWindow = false,
   }) {
     if (frames.isEmpty) return;
 
@@ -7209,23 +7251,20 @@ class _KlineCompositePainter extends CustomPainter {
 
     final last = frames.length - 1;
     var totalUnits = 0;
-    var beforeFirstFx = true;
     for (final f in frames) {
       totalUnits += f.count;
-      if (!_fxIsUnknown(f.fx)) beforeFirstFx = false;
     }
+    // 全模式（单图 / 子窗口 / K线画板 / 分笔画板）、全层级同一条规则：
+    // 整层只有 1 根 K（1 个单元）时不画合并框——一根 K 谈不上「合并」，
+    // 画出来只是给蜡烛套一只四边虚线的壳。
+    // 两根及以上才画；首分型前后同一口径，不再按 subWindow / beforeFirstFx 分支。
+    if (totalUnits <= 1) return;
     for (var i = 0; i < frames.length; i++) {
       final f = frames[i];
       if (f.x2 < viewport.viewXMin - 1 || f.x1 > viewport.viewXMax + 1) {
         continue;
       }
 
-      // 全层、子窗口、首分型前：整层只有一根时不画合并框。
-      // 两根及以上的框左端含第一根，顶分型出现后也不把第一根拆出去。
-      // 动态 K 的虚线外框在蜡烛绘制里，这里不碰。
-      if (subWindow && beforeFirstFx && totalUnits <= 1) {
-        continue;
-      }
       final (xLeft, xRight) = alignK1CombineWithViews
           ? _k1CombineFrameSpan(f, w, slotW, barW)
           : (levelUnitViews != null && levelUnitViews.isNotEmpty)
@@ -7290,7 +7329,6 @@ class _KlineCompositePainter extends CustomPainter {
         k1Style.color.withValues(alpha: 0.85),
         k1Style.color.withValues(alpha: 0.08),
         alignK1CombineWithViews: true,
-        subWindow: subWindow,
         // 末组=构建中合并（虚线）；前组=已冻结合并（实线）；showBuildingDash 关则全实线
         lastAsBuilding: showBuildingDash,
         buildingDashPattern: k1Style.buildingDashPattern,
