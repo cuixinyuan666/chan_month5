@@ -379,14 +379,14 @@ impl MergedGroup {
 #[derive(Debug, Clone)]
 pub struct CombineEngine {
     groups: Vec<MergedGroup>,
-    /// 种子框模式（口径 A）：首两单元不做包含合并（group0=种子框单元素，永不吸收第二根；
-    /// group1 强制自成新组）。确认前种子框高低可由下层进行中单元 probe 刷新（见 pipeline 快照）。
-    /// 全层同构启用；仅首两单元例外，其余包含合并与三元素分型全层一致。
+    /// 种子框模式开关（历史开关，保留兼容）：
+    ///
+    /// 2026-11-17 起，进入该分支**不再「首两单元硬拆两组」**——包含关系照常
+    /// `absorb`（分型三元素比的是合并框，不是原始 K），随后用两元素分型判首分型。
+    /// 关掉它则直接走普通路径（同样是先合并、再三元素 + 两元素）。
     pub seed_skip_first: bool,
-    /// 相对种子已出现 sit1/sit2 → 之后不再触发截断（第一条虚线口径）
+    /// 相对种子已出现 sit1/sit2（首分型前第一条虚线口径）
     seed_leave_seen: bool,
-    /// 非 leave 截断已用过一次（种子非 leave / TruncGuard 共用额度）
-    nonleave_trunc_used: bool,
 }
 
 impl Default for CombineEngine {
@@ -395,7 +395,6 @@ impl Default for CombineEngine {
             groups: Vec::new(),
             seed_skip_first: true,
             seed_leave_seen: false,
-            nonleave_trunc_used: false,
         }
     }
 }
@@ -406,7 +405,6 @@ impl CombineEngine {
             groups: Vec::new(),
             seed_skip_first: true,
             seed_leave_seen: false,
-            nonleave_trunc_used: false,
         }
     }
 
@@ -418,33 +416,6 @@ impl CombineEngine {
         self.groups.is_empty()
     }
 
-    /// 对照种子更新 leave 锁；返回当前是否允许再做一次非 leave 截断。
-    /// `seed_skip_first=false` 时不做第一条虚线门控（TruncGuard 单测等）。
-    fn allow_nonleave_trunc(&mut self, hn: f64, ln: f64) -> bool {
-        if !self.seed_skip_first {
-            return true;
-        }
-        let (h1, l1) = match self.groups.first() {
-            Some(g) => (g.high, g.low),
-            None => return false,
-        };
-        if seed_is_leave(h1, l1, hn, ln) {
-            self.seed_leave_seen = true;
-            return false;
-        }
-        seed_nonleave_may_trunc(
-            self.seed_leave_seen,
-            self.nonleave_trunc_used,
-            h1,
-            l1,
-            hn,
-            ln,
-        )
-    }
-
-    fn mark_nonleave_trunc_used(&mut self) {
-        self.nonleave_trunc_used = true;
-    }
 
     /// 首分型前的「两元素分型」（2026-11-17 用户口径，已实施）。
     ///
