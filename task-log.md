@@ -7108,3 +7108,21 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **另发现**：`cargo test -p chan_data` 全量有 6 条**既有失败**与本改动无关（`upper_confirm…_688687` 缺 `a_Data/688687`；`load_001312_tick…`、`load_klines_prefers_custom_ohlc_for_test`、`test_stock_forces_file_even_if_protocol`、`kn_body_excludes_begin_pole_bar_002003`、`buy1::sell1_002003_step25…` 均依赖 002003/001312 离线数据形态）。
 - **下一步（等用户选）**：① 展示层隔离（预锚动态单元与合并框只认原始 OHLC，不认截断改写价）；② 只禁用截断里的「改价」（保留盖章），可消掉 9.760022 尾差；③ 维持现状。
 - commit：AGENTS/lessons/task-log 三条分开提交，未 push。
+
+### 2026-11-17 16:2x — 第二轮试验：首分型前禁截断 + 两元素分型（仍不可行，已回退）
+
+- **执行者**：WorkBuddy
+- **任务类型**：Rust 合并口径试验（未落地）
+- **用户方案（细化版）**：层级早生成单元 / 首分型前合并框阶段「允许两元素分型」（中组高低都高于右组→顶；都低于右组→底），且此阶段禁用截断。
+- **我做的**：`engine.rs` 去掉种子窗口截断块；新增 `try_pair_fx_before_first()`（该层尚无任何分型时，用最后两组判顶/底；判不出返回 None 继续攒组），seed 分支与普通建组路径都接上。
+- **实测（zigzag 120/240/600）**：
+  | | L0 confirms | L1 confirms | levels |
+  | --- | --- | --- | --- |
+  | 基线（原版） | 39 / 79 / 199 | **1** | 3 |
+  | 本轮改动 | 40 / 80 / 200 | **0** | 2 |
+  → `pre_anchor_unit_recurses_to_next_level_on_first_confirm` 仍失败（结构层 1 无首个确认）。
+- **根因**：两元素分型只覆盖「双高/双低」，**判不了包含形态**。L1 的前两个单元恰好是包含关系 → 判不出分型 → 上层再次断裂。原版那 1 个 L1 确认正是截断在包含时兜出来的。
+- **结论**：**两元素分型不是截断的等价替代**。首分型前既不盖章、又要递归不断，只能把隔离放到**展示层**（预锚动态单元/合并框用原始 OHLC 重算），不能动内核自举。
+- **处置**：`git checkout -- engine.rs pipeline.rs` + `git stash drop`，回到基线；复跑 `pre_anchor_unit_recurses…` 通过。**Rust 未落任何改动，DLL 未重编。**
+- **记录**：`lessons_learned.md` 第 29 条追加「第二轮试验」段（含两组数字对比）。
+- commit 见下一条。
