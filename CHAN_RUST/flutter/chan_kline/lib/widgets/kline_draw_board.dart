@@ -280,9 +280,12 @@ class KlineDrawBoardModel {
   /// 2026-11-16 用户明确：废弃「按部位改价」（拖影线端点改最高/最低会把
   /// 价格区间撑爆，其余已画 K 被压成一条线）。改为整根平移。
   ///
-  /// 钳制（防压缩的核心）：平移后四价必须落在 [clampLo, clampHi]——即按下
-  /// 瞬间**全体可见 K（含自己）**的极值并集。并集只可能缩小、绝不扩大，
-  /// 其余已画 K 的像素高度不会塌缩；区间外的 K 也可自由移进并集内。
+  /// 钳制（防压缩）：平移后四价必须落在 [clampLo, clampHi]，由调用方给边界。
+  ///
+  /// 画板传的是「可见 K 极值并集向两侧各放开一个跨度」（2026-11-17 起）：
+  /// 旧口径边界就是并集本身，导致位于极值上的 K（尤其复制出来的同价 K）
+  /// 那个方向完全动不了。放开 1×span 后任何 K 都移得动，而整体区间最多
+  /// 扩到 2 倍——其余 K 的像素高度最坏减半，仍不会塌成一条线。
   /// clampLo/Hi 为 null（板上仅这一根 K，没有别人可压）时不钳。
   ///
   /// 按下瞬间「选中」还没回传到模型（要等父组件重建才生效），若此时只认
@@ -869,8 +872,18 @@ class _KlineDrawBoardState extends State<KlineDrawBoard> {
       hi = math.max(hi, b.high);
     }
     final clamp = otherSeen && lo.isFinite && hi.isFinite;
-    _dragClampLo = clamp ? lo : null;
-    _dragClampHi = clamp ? hi : null;
+    // 钳制边界 = 并集向两侧各放开「一个跨度」（2026-11-17 用户反馈）。
+    //
+    // 原来的边界就是并集本身，导致**位于极值上的 K 完全动不了那个方向**：
+    // 复制出来的 K 与源 K 同价，常常正好是最低价或最高价，于是「向下完全
+    // 不能动、向上只有几像素」。现在两侧各留 1×span 的活动空间：
+    //   - 任何 K 都能切实移动（不再贴着边界卡死）；
+    //   - 整体区间最多扩到 2 倍，其余 K 的像素高度最坏减半，不会被压成一条线
+    //     （这才是 2026-11-16「防压缩」要保护的东西）。
+    final span = hi - lo;
+    final pad = span > 1e-9 ? span : math.max(1e-6, hi.abs() * 0.01);
+    _dragClampLo = clamp ? lo - pad : null;
+    _dragClampHi = clamp ? hi + pad : null;
     if (!model.hasSelection || model.selected != index) {
       widget.onChanged(model.select(index));
     }

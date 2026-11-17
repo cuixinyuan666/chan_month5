@@ -369,9 +369,38 @@ void main() {
     expect(m.selected, 1, reason: '新 K 自动选中');
   });
 
-  testWidgets('防压缩：拖一根 K 越不过按下时全体可见 K 的价格区间', (tester) async {
-    // 两根 K：A(9..12)、B(19..22)。全体并集 [9,22]。
-    // 只有一屏时两根都可见：拖 A 向上 300 像素也到不了并集上沿之上。
+  testWidgets('复制出来的 K（与源同价、正处在极值上）向下也能移动', (tester) async {
+    // 用户现场：复制一根 K 后，它和源 K 同价，正好压在最低/最高上，
+    // 旧口径（边界=并集本身）下 maxDown/maxUp 都是 0 → 完全拖不动。
+    final model = KlineDrawBoardModel.initial()
+        .addCandle(
+          const KlineDrawCandle(open: 10, high: 12, low: 9, close: 11),
+        )
+        .addSameAfterSelected();
+    expect(model.candles.length, 2, reason: '复制出一根同价 K');
+
+    await tester.pumpWidget(_host(model));
+    await tester.pump();
+
+    await _dragInK0(
+      tester,
+      Offset(_barCenterX(tester, 'kline-draw-0-0-1m', 0), _candle0BodyY),
+      Offset(_barCenterX(tester, 'kline-draw-0-0-1m', 0), _candle0BodyY + 200),
+    );
+
+    final m = _live(tester);
+    expect(m.candles, hasLength(2));
+    // 能向下移动（旧口径纹丝不动），最多放开一个跨度 3 → low ≥ 6。
+    expect(m.candles[0].low, lessThan(9));
+    expect(m.candles[0].low, greaterThanOrEqualTo(6 - 1e-6));
+    // 副本（idx=1）不动。
+    expect(m.candles[1].low, 9);
+    expect(m.candles[1].high, 12);
+  });
+
+  testWidgets('拖动钳制：极值上的 K 也能移动，整体区间最多扩到 2 倍', (tester) async {
+    // 两根 K：A(9..12)、B(19..22)，并集 [9,22]、跨度 13。
+    // 2026-11-17 起边界向两侧各放开 1×span（防压缩仍有效：最多扩到 2 倍）。
     final model = KlineDrawBoardModel.initial()
         .addCandle(
           const KlineDrawCandle(open: 10, high: 12, low: 9, close: 11),
@@ -382,7 +411,7 @@ void main() {
     await tester.pumpWidget(_host(model));
     await tester.pump();
 
-    // 按住 A 实体中段向上拖 300 像素（远超并集上沿）。
+    // 按住 A 实体中段向上拖 300 像素（远超区间）。
     await _dragInK0(
       tester,
       Offset(_barCenterX(tester, 'kline-draw-0-0-1m', 0), _candle0BodyY),
@@ -391,8 +420,10 @@ void main() {
 
     final m = _live(tester);
     expect(m.candles, hasLength(2));
-    // 钳制生效：A 的高点不得越过并集上沿 22（B 的顶），其余 K 不被压扁。
-    expect(m.candles[0].high, lessThanOrEqualTo(22.000001));
+    // 能移动（旧口径会卡在 22 动不了）。
+    expect(m.candles[0].high, greaterThan(12.5));
+    // 但不会无限拖：最多到并集上沿 + 一个跨度 = 35。
+    expect(m.candles[0].high, lessThanOrEqualTo(35.000001));
     // B 完全不动。
     expect(m.candles[1].high, 22);
     expect(m.candles[1].low, 19);
