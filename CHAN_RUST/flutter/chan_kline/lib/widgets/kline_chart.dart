@@ -5167,6 +5167,30 @@ class _KlineCompositePainter extends CustomPainter {
             s.idx,
         },
       );
+    } else if (subWindow && !bars.isEmpty) {
+      // 子窗口展示轨：蜡烛必须与合并框同源。
+      //
+      // 合并框始终取引擎分组（基于「含构建中」的虚拟单元），而原先这里只画
+      // `unitBars + activeUnit`（仅已冻结段）→ K1 层出现「3 个合并框 vs 1 根
+      // K」。子窗口改用 as-of 末根的虚拟单元（含构建中），与合并框一致。
+      final tail = bars.last.idx;
+      return _levelUnitViewsFromVirtualK1Bars(
+        asOfLevelVirtualK1Bars(
+          levels: levels,
+          barFeatures: barFeatures,
+          level: unitLevel,
+          asOf: tail,
+          includeBuilding: true,
+        ),
+        frozenIdx: {
+          for (final s in asOfLevelSegments(
+            levels: levels,
+            level: unitLevel,
+            asOf: tail,
+          ))
+            s.idx,
+        },
+      );
     } else {
       return buildLevelUnitBarViews(
         bundle.unitBars,
