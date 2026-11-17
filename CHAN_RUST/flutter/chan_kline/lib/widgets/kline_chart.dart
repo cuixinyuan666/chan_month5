@@ -222,6 +222,7 @@ class KlineChart extends StatefulWidget {
     this.onCandleDragEnd,
     this.onCandleDraw,
     this.candleDrawAnchorIdx = -1,
+    this.showDrawZones = false,
     this.selectedTickIdx = -1,
     this.displayLevel,
     this.viewportKey,
@@ -404,6 +405,13 @@ class KlineChart extends StatefulWidget {
   /// （否则永远画不出第一根）。闸不过的空白拖动一律归平移/十字线逻辑。
   final int candleDrawAnchorIdx;
 
+  /// K线画板：是否绘制「移动区 / 绘制区」色块（2026-11-17 用户要求）。
+  ///
+  /// 选中一根 K 后：该 K 的槽位 = 移动区（抓着拖=整根平移），
+  /// 槽位右缘到绘图区右边 = 绘制区（按下拖=画新 K）。
+  /// 颜色随鼠标所在区域加深，让用户一眼看出当前能干什么。
+  final bool showDrawZones;
+
   /// K线画板：按住了某根 K 线本体（2026-11-16 起不分部位）。
   ///
   /// 这条通道与分笔圆点命中（[onTickDotTap]）完全独立：圆点通道只认识
@@ -575,6 +583,9 @@ class _KlineChartState extends State<KlineChart> {
   double _zonePlotTop = KlineViewport.padT;
   double _zoneContentBottom = 0;
   PriceRange? _hitPriceRange;
+  /// K线画板：最近一次鼠标悬停的 X（画「移动区/绘制区」高亮用）。
+  /// 只在 showDrawZones 时更新；离开/无悬停时保持上次值即可。
+  double? _hoverZoneX;
   double _hitMainH = 1;
 
   /// 中间区自管双击：避免左/右连点被系统双击手势吞掉
@@ -3350,6 +3361,9 @@ class _KlineChartState extends State<KlineChart> {
               showBuildingDash: widget.showBuildingDash,
               earlyDynamicUnit: widget.earlyDynamicUnit,
               subWindow: widget.displayLevel != null,
+              drawZones: widget.showDrawZones,
+              hoverZoneX: _hoverZoneX,
+              candleDrawAnchorIdx: widget.candleDrawAnchorIdx,
               preFirstFractalMode: widget.preFirstFractalMode,
               // 分窗：全窗照抄同一个胶囊条占位，副图内区才同高。
               subChipBarHeight:
@@ -3441,6 +3455,11 @@ class _KlineChartState extends State<KlineChart> {
                   : Listener(
                       behavior: HitTestBehavior.opaque,
                       onPointerHover: (e) {
+                        if (widget.showDrawZones &&
+                            _hoverZoneX != e.localPosition.dx) {
+                          _hoverZoneX = e.localPosition.dx;
+                          _scheduleRedraw();
+                        }
                         if (!_panning) {
                           _updateCrosshairAt(
                             e.localPosition,
@@ -3801,6 +3820,9 @@ class _KlineCompositePainter extends CustomPainter {
     this.showBuildingDash = true,
     this.earlyDynamicUnit = true,
     this.subWindow = false,
+    this.drawZones = false,
+    this.hoverZoneX,
+    this.candleDrawAnchorIdx = -1,
     this.preFirstFractalMode = PreFirstFractalMode.defaultMode,
     this.subChipBarHeight = KlineViewport.subIndicatorChipBand,
     this.defaultK0Policy = 'pending',
@@ -3884,6 +3906,15 @@ class _KlineCompositePainter extends CustomPainter {
 
   /// 子窗口模式：「只有一根 K 不画合并框」只在这里、且首个分型出现前生效。
   final bool subWindow;
+
+  /// 画「移动区 / 绘制区」色块（K线画板专用）。
+  final bool drawZones;
+
+  /// 鼠标当前 X（用于高亮所在区域）；null = 不知道，按常态淡色。
+  final double? hoverZoneX;
+
+  /// 被选中的 K（绘制区锚点）；-1 = 无选中，不画色块。
+  final int candleDrawAnchorIdx;
   /// 首分型前合并框口径：种子框=不合并 / 高高 / 低低（绘制与 tooltip 同源）。
   final PreFirstFractalMode preFirstFractalMode;
   /// 副图左上指标开关按钮实际高度（自 px 落点下方 2px 起算；动态测量防覆盖）
@@ -4066,6 +4097,15 @@ class _KlineCompositePainter extends CustomPainter {
         ? mainIndicators.contains(const MainChartIndicator.kn(0))
         : true;
     if (showK0) {
+      _drawCandleZones(
+        canvas,
+        size,
+        plotTop,
+        plotH,
+        plotLeft,
+        plotRight,
+        slotW,
+      );
       _drawCandles(canvas, size.width, plotTop, plotH, barW, slotW);
     }
     if (chanDraw && mainIndicators.isNotEmpty) {
@@ -7020,6 +7060,62 @@ class _KlineCompositePainter extends CustomPainter {
       final yStart = bodyBottom + gap;
       final yStop = math.max(yLow, yStart);
       strokeVertical(yStart, yStop);
+    }
+  }
+
+  /// 画板：「移动区 / 绘制区」两块色带（2026-11-17 用户要求）。
+  ///
+  /// - 移动区 = 被选中 K 的槽位：抓这里拖动 = 整根平移，形状不变；
+  /// - 绘制区 = 槽位右缘到绘图区右边：在这里按下拖动 = 新 K 插到选中 K 右侧。
+  /// 鼠标所在的那块加深、另一块保持很淡，随移动实时切换（智能辨识当前能干什么）。
+  void _drawCandleZones(
+    Canvas canvas,
+    Size size,
+    double plotTop,
+    double plotH,
+    double plotLeft,
+    double plotRight,
+    double slotW,
+  ) {
+    if (!drawZones) return;
+    final anchor = candleDrawAnchorIdx;
+    if (anchor < 0 || anchor >= bars.length) return;
+    final w = size.width;
+    if (w <= 0) return;
+    final cx = viewport.barCenterX(anchor, w);
+    final half = math.max(slotW / 2, 6.0);
+    final moveL = math.max(plotLeft, cx - half);
+    final moveR = math.min(plotRight, cx + half);
+    if (moveR <= moveL) return;
+    final drawL = moveR;
+    final drawR = plotRight;
+    final hover = hoverZoneX;
+    final inMove = hover != null && hover >= moveL && hover <= moveR;
+    final inDraw = hover != null && hover >= drawL && hover <= drawR;
+    final top = plotTop;
+    final bottom = plotTop + plotH;
+    const moveColor = Color(0xFF3B82F6); // 蓝：移动区
+    const drawColor = Color(0xFF10B981); // 青绿：绘制区
+    canvas.drawRect(
+      Rect.fromLTRB(moveL, top, moveR, bottom),
+      Paint()..color = moveColor.withValues(alpha: inMove ? 0.20 : 0.08),
+    );
+    canvas.drawRect(
+      Rect.fromLTRB(moveL, top, moveR, bottom),
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1
+        ..color = moveColor.withValues(alpha: inMove ? 0.85 : 0.45),
+    );
+    if (drawR > drawL) {
+      canvas.drawRect(
+        Rect.fromLTRB(drawL, top, drawR, bottom),
+        Paint()..color = drawColor.withValues(alpha: inDraw ? 0.16 : 0.06),
+      );
+      canvas.drawRect(
+        Rect.fromLTRB(drawL, top, drawL + 1, bottom),
+        Paint()..color = drawColor.withValues(alpha: inDraw ? 0.85 : 0.4),
+      );
     }
   }
 

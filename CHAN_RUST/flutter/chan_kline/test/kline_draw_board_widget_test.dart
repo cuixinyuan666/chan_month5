@@ -398,7 +398,7 @@ void main() {
     expect(m.candles[1].low, 19);
   });
 
-  testWidgets('新 K 落在选中 K 右方的光标位置（远处即追加到末尾）', (tester) async {
+  testWidgets('新 K 紧邻选中 K 的右侧（无论光标在多远的空白处）', (tester) async {
     final model = KlineDrawBoardModel.initial()
         .addCandle(
           const KlineDrawCandle(open: 10, high: 12, low: 9, close: 11),
@@ -413,7 +413,7 @@ void main() {
     await _clickInK0(tester, Offset(_barCenterX(tester, 'kline-draw-0-0-1m', 0), _candle0BodyY));
     expect(_live(tester).selected, 0);
 
-    // 再在选中 K 右方空白拖一根新 K。
+    // 在很远的右侧空白拖一根新 K（旧口径会追加到最末尾）。
     await _dragInK0(
       tester,
       const Offset(_rightDrawX + 1, 200),
@@ -422,11 +422,11 @@ void main() {
 
     final m = _live(tester);
     expect(m.candles, hasLength(3));
-    // 视口现在至少 24 槽，画布最右映射到远超数据的下标 → 新 K 追加到末尾，
-    // 这正是「按光标位置落点」的结果；原有两根 K 顺序不变。
+    // 2026-11-17 用户明确：落点固定插到「被选中那根」的右侧，不再跟光标跑。
     expect(m.candles[0].open, 10, reason: '原第一根不动');
-    expect(m.candles[1].open, 20, reason: '原第二根不动');
-    expect(m.candles[2].open, isNot(20), reason: '新 K 落在光标对应的末尾');
+    expect(m.candles[2].open, 20, reason: '原第二根被挤到后面');
+    expect(m.candles[1].open, isNot(20), reason: '新 K 插在 idx=1（选中 0 的右侧）');
+    expect(m.selected, 1, reason: '新 K 成为新的选中，连续画会继续向右延伸');
   });
 
   testWidgets('K0 窗格尺寸与几何换算同源（拖动 1 像素 = 1 像素对应价）',

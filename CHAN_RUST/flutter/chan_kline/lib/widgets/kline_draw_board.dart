@@ -679,6 +679,9 @@ class _KlineDrawBoardState extends State<KlineDrawBoard> {
           // （2026-11-16：不再限制在槽位右缘/最右边）。
           candleDrawAnchorIdx:
               primary ? (model.hasSelection ? model.selected : -1) : -1,
+          // 选中 K 后画两块色带：槽位=移动区（整根平移）、其右侧=绘制区
+          // （画新 K 插到选中 K 右侧），颜色随鼠标所在区域加深。
+          showDrawZones: primary,
           // 抓取/拖动：K线画板专用通道（分笔画板不接，互不影响）。
           // 2026-11-16 起为整根平移：抓本体任意处拖动，形状不变，
           // 钳制在按下时其余可见 K 的极值区间内（防其余 K 被压成一条线）。
@@ -948,12 +951,17 @@ class _KlineDrawBoardState extends State<KlineDrawBoard> {
     );
   }
 
-  /// 新 K 落点：必在选中 K 右方（下标 ≥ 选中+1）；无选中（空板）放行。
-  /// cursorBarIdx==null（指针在可见槽位之外）时追加到末尾，天然 ≥ 选中+1。
+  /// 新 K 落点：**紧邻被选中 K 的右侧**（2026-11-17 用户明确）。
+  ///
+  /// 旧口径是「光标在选中 K 右方的哪个槽位就插哪里，远处追加到末尾」——
+  /// 用户反馈：明明点中的是第 3 根，却在最右边冒出一根，落点跑掉了。
+  /// 现改为固定插在 `selected + 1`；插入后新 K 自动成为新的选中，
+  /// 于是连续画会一路向右延伸，不会跳回最右侧。
+  ///
+  /// 空板（无选中）仍按光标位置，`cursorBarIdx == null` 时追加到末尾。
   int? _clampDrawIndex(int? cursorBarIdx) {
-    if (!model.hasSelection) return cursorBarIdx;
-    if (cursorBarIdx == null) return null;
-    return math.max(cursorBarIdx, model.selected + 1);
+    if (model.hasSelection) return model.selected + 1;
+    return cursorBarIdx;
   }
   void _onDraw(
     double startPrice,
