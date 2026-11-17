@@ -702,4 +702,61 @@ void main() {
     );
     expect(four.every((c) => c.earlyDynamicUnit), isTrue);
   });
+
+  testWidgets('点空白不拖动：取消聚焦且不生成 K（2026-11-18 用户口径）', (tester) async {
+    KlineDrawBoardModel model = KlineDrawBoardModel.initial().addCandle(
+      const KlineDrawCandle(open: 10, high: 12, low: 9, close: 11),
+    );
+    await tester.pumpWidget(
+      _host(model, (next) => model = next),
+    );
+    await tester.pump();
+
+    // 先点中 K 本体 → 选中（出现聚焦箭头）
+    final cx = _barCenterX(tester, 'kline-draw-0-0-1m', 0);
+    await _clickInK0(tester, Offset(cx, _bodyTop + 10));
+    expect(_live(tester).hasSelection, isTrue, reason: '点 K 本体应选中');
+    expect(_focusArrows, findsOneWidget);
+
+    // 再点右侧空白（不拖动）→ 取消选中，且不新增 K
+    await _clickInK0(tester, Offset(cx + 140, _bodyTop + 20));
+    final rightTap = _live(tester);
+    expect(rightTap.hasSelection, isFalse, reason: '点空白应取消聚焦');
+    expect(rightTap.candles, hasLength(1), reason: '点空白不得生成 K');
+    expect(_focusArrows, findsNothing);
+
+    // 左侧空白同样取消（走热区点击分支，不是绘制分支）
+    await _clickInK0(tester, Offset(cx, _bodyTop + 10));
+    expect(_live(tester).hasSelection, isTrue);
+    await _clickInK0(tester, Offset(cx - 60, _bodyTop + 20));
+    expect(_live(tester).hasSelection, isFalse, reason: '左侧空白也要取消聚焦');
+  });
+
+  testWidgets('空板拖动时草稿 K 随鼠标出现（2026-11-18 用户口径）', (tester) async {
+    KlineDrawBoardModel model = KlineDrawBoardModel.initial();
+    await tester.pumpWidget(
+      _host(model, (next) => model = next),
+    );
+    await tester.pump();
+
+    final draftPainter = find.byWidgetPredicate(
+      (w) =>
+          w is CustomPaint &&
+          w.painter.runtimeType.toString().contains('DraftCandle'),
+    );
+    expect(draftPainter, findsNothing, reason: '未拖动时不应有草稿');
+
+    final gesture = await tester.startGesture(
+      const Offset(200, 200),
+      kind: PointerDeviceKind.mouse,
+    );
+    await gesture.moveTo(const Offset(260, 170));
+    await tester.pump();
+    expect(draftPainter, findsWidgets, reason: '拖动中空板也要画出草稿 K');
+
+    await gesture.up();
+    await tester.pump();
+    expect(draftPainter, findsNothing, reason: '松手后草稿收起、真 K 入库');
+    expect(_live(tester).candles, hasLength(1));
+  });
 }

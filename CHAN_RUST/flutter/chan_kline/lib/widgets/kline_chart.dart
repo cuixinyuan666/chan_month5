@@ -221,6 +221,7 @@ class KlineChart extends StatefulWidget {
     this.onCandleDrag,
     this.onCandleDragEnd,
     this.onCandleDraw,
+    this.onEmptyTap,
     this.candleDrawAnchorIdx = -1,
     this.showDrawZones = false,
     this.selectedTickIdx = -1,
@@ -391,13 +392,22 @@ class KlineChart extends StatefulWidget {
   /// K线画板：左键拖动空白处，松手生成一根 K 线。
   ///
   /// [cursorBarIdx] 为光标所在的 K 下标（画板据此把新 K 落在光标处，
-  /// 而不是永远排在序列末尾）。
+  /// 而不是永远排在序列末尾）。空板时也返回光标下标（见
+  /// [barIndexAtPointer] 的空板分支），草稿 K 才能跟着鼠标走。
   final void Function(
     double startPrice,
     double currentPrice,
     bool finished,
     int? cursorBarIdx,
   )? onCandleDraw;
+
+  /// K线画板：左键点空白（按下后没拖动就松手）时回调。
+  ///
+  /// 用途：取消当前聚焦的 K（清选中）。2026-11-18 用户明确
+  /// 「点击空白区域时取消当前聚焦光标」。
+  ///
+  /// 只有 `onCandleGrab` 的画板才需要它；分笔画板不传，行为不变。
+  final VoidCallback? onEmptyTap;
 
   /// K线画板：当前被选中 K 的下标（-1=无选中），是「画新 K」的锚点。
   ///
@@ -571,6 +581,13 @@ class _KlineChartState extends State<KlineChart> {
   int? _candleDrawPointer;
   double? _candleDrawStartPrice;
   double? _candleDrawPrice;
+  /// 本次「画新 K」是否真的拖动过（超过点击容差）。
+  ///
+  /// false = 只是点了一下空白：按 2026-11-18 用户口径，这属于「取消聚焦」，
+  /// **不生成** K（旧行为是点一下也落一根 open==close 的一字 K）。
+  bool _candleDrawMoved = false;
+  /// 画新 K 的光标起点（像素），用于判定是否拖动过。
+  Offset? _candleDrawDownAt;
   /// 画板：拖动期间冻结的价格区间（避免区间随被拖 K 变形导致映射漂移）。
   PriceRange? _frozenPriceRange;
 
@@ -1590,9 +1607,31 @@ class _KlineChartState extends State<KlineChart> {
     );
   }
 
+  /// 空板（K 线画板还没有任何 K）：给视口一个可用的横向区间。
+  ///
+  /// `resetForBarCount(0)` 会把 `ready` 置 false、`viewXMin/Max` 归零，
+  /// 于是 `xToIndex` 恒返回 0、画板草稿钉死在原点不跟鼠标
+  /// （2026-11-18 用户反馈「绘制 K 线时图形不跟鼠标」）。
+  /// 这里只对「有 onCandleDraw 且 bars 空」的画板生效，临时给 0..23
+  /// （画板默认 24 槽视野），让光标 x 能换算出真实下标。
+  /// 主图真正没数据时（无 onCandleDraw）保持 `ready=false` 不变。
+  void _primeEmptyBoardViewport() {
+    if (widget.onCandleDraw == null || widget.bars.isNotEmpty) return;
+    final vp = _viewport;
+    if (vp.ready) return;
+    vp.allXMin = 0;
+    vp.allXMax = 0;
+    vp.viewXMin = 0;
+    vp.viewXMax = 23;
+    vp.yZoomRatio = 1;
+    vp.yShiftRatio = 0;
+    vp.ready = true;
+  }
+
   void _resetViewport() {
     _viewport.minViewSpan = widget.viewportMinSpan;
     _viewport.resetForBarCount(widget.bars.length);
+    _primeEmptyBoardViewport();
     // 子窗口一进来就居中，不等用户先缩放一次。
     if (widget.displayLevel != null &&
         widget.autoFollowLatest &&
@@ -1991,10 +2030,13 @@ class _KlineChartState extends State<KlineChart> {
   ///
   /// 用视口的 xToIndex 换算，与蜡烛绘制同一套 x 映射（`barCenterX`）。
   int? barIndexAtPointer(Offset local) {
-    if (widget.bars.isEmpty) return null;
     final w = _chartSize.width;
     if (w <= 0) return null;
     final idx = _viewport.xToIndex(local.dx, w).round();
+    // 空板（画板还没有任何 K）：视口没 reset 过（ready=false），但画板侧
+    // 用 0..23 的兜底区间画草稿。这里直接给光标下标，
+    // 草稿 K 才能跟着鼠标走（2026-11-18 用户反馈「图形不跟鼠标」）。
+    if (widget.bars.isEmpty) return idx.clamp(0, 23);
     if (idx < 0 || idx >= widget.bars.length) return null;
     return idx;
   }
@@ -2119,6 +2161,8 @@ class _KlineChartState extends State<KlineChart> {
         _candleDrawStartPrice = price;
         _frozenPriceRange = _hitPriceRange;
         _candleDrawPrice = price;
+        _candleDrawMoved = false;
+        _candleDrawDownAt = e.localPosition;
         widget.onCandleDraw?.call(
           price,
           price,
@@ -2179,6 +2223,11 @@ class _KlineChartState extends State<KlineChart> {
       return;
     }
     if (_candleDrawPointer == e.pointer && _candleDrawStartPrice != null) {
+      if (!_candleDrawMoved &&
+          _candleDrawDownAt != null &&
+          (e.localPosition - _candleDrawDownAt!).distance > _zoneTapSlop) {
+        _candleDrawMoved = true;
+      }
       final price = _priceAt(e.localPosition) ?? _candleDrawPrice;
       if (price != null) {
         _candleDrawPrice = price;
@@ -2250,17 +2299,28 @@ class _KlineChartState extends State<KlineChart> {
       return;
     }
     if (_candleDrawPointer == e.pointer && _candleDrawStartPrice != null) {
-      final price = _priceAt(e.localPosition) ?? _candleDrawPrice ?? _candleDrawStartPrice!;
-      widget.onCandleDraw?.call(
-        _candleDrawStartPrice!,
-        price,
-        true,
-        barIndexAtPointer(e.localPosition),
-      );
+      // 按下后没拖动就松手 = 点了空白：按 2026-11-18 用户口径，
+      // 这是「取消当前聚焦光标」，**不生成** K 线。
+      // 旧行为会落一根 open==close 的一字 K，用户点空白想取消选中却多出一根 K。
+      final tapped = !_candleDrawMoved;
+      if (!tapped) {
+        final price =
+            _priceAt(e.localPosition) ?? _candleDrawPrice ?? _candleDrawStartPrice!;
+        widget.onCandleDraw?.call(
+          _candleDrawStartPrice!,
+          price,
+          true,
+          barIndexAtPointer(e.localPosition),
+        );
+      } else {
+        widget.onEmptyTap?.call();
+      }
       _candleDrawPointer = null;
       _frozenPriceRange = null;
       _candleDrawStartPrice = null;
       _candleDrawPrice = null;
+      _candleDrawMoved = false;
+      _candleDrawDownAt = null;
       return;
     }
     if (_splitDragging) {
@@ -2281,6 +2341,10 @@ class _KlineChartState extends State<KlineChart> {
     _zonePointerDown = null;
     _zonePointerId = null;
     if (isZoneTap) {
+      // 画板：点空白 = 取消当前聚焦光标（2026-11-18 用户明确）。
+      // 能走到这里的点击，按下点都不在任何 K 本体上（命中本体的是 grab 分支），
+      // 所以必是空白点击；清掉选中后继续走原热区逻辑（十字线照常跟随）。
+      if (widget.onEmptyTap != null) widget.onEmptyTap!.call();
       _onZoneTapAt(e.localPosition, _zonePlotTop, _zoneContentBottom);
     }
   }
@@ -4667,6 +4731,16 @@ class _KlineCompositePainter extends CustomPainter {
     }
     // 同一段被两只框表示时只留外层那只（典型：预锚/活跃单元与已冻结单元同 x1）。
     frames = _dropCoveredCombineFrames(frames);
+    // 逐框剔掉「只含 1 根 K」的框：一根 K 谈不上合并。
+    //
+    // 2026-11-18 用户核对默认数据时指出：K0 最后一根被一只蓝色虚线小框包住，
+    // 与「只有 1 根 K 线不画合并框」不符。根因是上一版按**整层总根数**
+    // （`totalUnits`）判定——整层 6 根就放行，单根框照样画出来。
+    // 正确口径是**逐框**判 `count`，画框与连线判定都吃这份过滤后的列表。
+    frames = <KlineCombineFrame>[
+      for (final f in frames)
+        if (f.count > 1) f,
+    ];
     _displayFramesMemo[displayKn] = frames;
     return frames;
   }
