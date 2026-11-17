@@ -652,6 +652,90 @@ class _KlineHomePageState extends State<KlineHomePage>
 
   bool _closePromptOpen = false;
 
+  // ---- 设置面板：分类标题吸顶（2026-11-17 用户明确）----
+  // 滚轮下滚时，当前分类的标题要一直钉在面板顶部，不能跟着滚走。
+  final _settingsScroll = ScrollController();
+  static const _settingsCategoryMeta = <(String, IconData)>[
+    ('数据与加载', Icons.storage_outlined),
+    ('分析与指标', Icons.insights_outlined),
+    ('界面与操作', Icons.tune),
+    ('主图显示', Icons.candlestick_chart_outlined),
+    ('维护与同步', Icons.build_circle_outlined),
+  ];
+  final List<GlobalKey> _settingsCategoryKeys =
+      List<GlobalKey>.generate(5, (_) => GlobalKey());
+  int _settingsStickyIndex = 0;
+
+  /// 吸顶条是否显示：从「没滚」变「滚了」时要 setState 一次，
+  /// 否则 build 不会再跑、stickyHeader 永远停在 null。
+  bool _settingsStickyVisible = false;
+
+  /// 滚动时重算「当前该吸顶哪个分类」：最后一个 top 已经滚过顶部的分类。
+  void _updateSettingsSticky() {
+    if (!mounted || !_settingsScroll.hasClients) return;
+    final offset = _settingsScroll.offset;
+    var idx = 0;
+    // 测量失败（还没布局 / 不在 viewport 内）不影响吸顶条显示，只是停在第一个分类。
+    try {
+      for (var i = 0; i < _settingsCategoryKeys.length; i++) {
+        final ctx = _settingsCategoryKeys[i].currentContext;
+        final ro = ctx?.findRenderObject();
+        if (ro == null) continue;
+        final vp = RenderAbstractViewport.of(ro);
+        final top = vp.getOffsetToReveal(ro, 0).offset;
+        if (offset + 1 >= top) idx = i;
+      }
+    } catch (_) {}
+    final visible = offset > 2;
+    if (idx != _settingsStickyIndex || visible != _settingsStickyVisible) {
+      setState(() {
+        _settingsStickyIndex = idx;
+        _settingsStickyVisible = visible;
+      });
+    }
+  }
+
+  /// 吸顶条本身：面板没滚动时隐藏（第一张卡片的标题就在顶上，避免重影）。
+  Widget? _buildSettingsStickyBar() {
+    if (!_settingsStickyVisible) return null;
+    final (title, icon) =
+        _settingsCategoryMeta[_settingsStickyIndex.clamp(
+      0,
+      _settingsCategoryMeta.length - 1,
+    )];
+    return Container(
+      key: const Key('settings-sticky-category'),
+      height: 34,
+      margin: const EdgeInsets.fromLTRB(10, 0, 10, 4),
+      decoration: BoxDecoration(
+        color: AppPalette.surfaceAlt,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: AppPalette.border.withValues(alpha: 0.85)),
+      ),
+      child: Row(
+        children: [
+          const SizedBox(width: 8),
+          Icon(icon, size: 15, color: AppPalette.accent),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 12.5,
+                fontWeight: FontWeight.w700,
+                color: AppPalette.textPrimary,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+        ],
+      ),
+    );
+  }
+
+
   /// 关主图：先弹「确认退出 / 取消」；下载还在时改为三选一（含托盘继续）。
   ///
   /// 2026-11-17 用户明确：退出 APP 必须先确认，不能点一下 X 就没了。
@@ -1451,6 +1535,7 @@ class _KlineHomePageState extends State<KlineHomePage>
       unawaited(windowManager.setPreventClose(true));
     }
     _keepAlive.attach();
+    _settingsScroll.addListener(_updateSettingsSticky);
     _loadInteractionMode();
     _loadMathIndicatorConfig();
     _loadLevelWindowSettings();
@@ -1652,6 +1737,7 @@ class _KlineHomePageState extends State<KlineHomePage>
       windowManager.removeListener(this);
     }
     _keepAlive.detach();
+    _settingsScroll.dispose();
     _playTimer?.cancel();
     _stepBackTimer?.cancel();
     _longOpHint.dispose();
@@ -3969,6 +4055,8 @@ class _KlineHomePageState extends State<KlineHomePage>
               edge: _panelEdge,
               onClose: () => setState(() => _panelExpanded = false),
               onCycleEdge: () => setState(() => _panelEdge = 1 - _panelEdge),
+              scrollController: _settingsScroll,
+              stickyHeader: _buildSettingsStickyBar(),
               child: _buildPanelBody(),
             ),
           if (_period == 'tick' &&
@@ -4461,6 +4549,7 @@ class _KlineHomePageState extends State<KlineHomePage>
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
         SettingsCategory(
+          key: _settingsCategoryKeys[0],
           title: '数据与加载',
           icon: Icons.storage_outlined,
           // 默认收起：面板一开只看到 5 张卡片，点开才展开明细。
@@ -4610,6 +4699,7 @@ class _KlineHomePageState extends State<KlineHomePage>
           ],
         ),
         SettingsCategory(
+          key: _settingsCategoryKeys[1],
           title: '分析与指标',
           icon: Icons.insights_outlined,
           summary: '寻优 / 计优 / 策略回测',
@@ -4693,6 +4783,7 @@ class _KlineHomePageState extends State<KlineHomePage>
           ],
         ),
         SettingsCategory(
+          key: _settingsCategoryKeys[2],
           title: '界面与操作',
           icon: Icons.tune,
           summary:
@@ -4731,6 +4822,7 @@ class _KlineHomePageState extends State<KlineHomePage>
           ],
         ),
         SettingsCategory(
+          key: _settingsCategoryKeys[3],
           title: '主图显示',
           icon: Icons.candlestick_chart_outlined,
           summary: '首框 ${_unitMode.label} · '
@@ -4920,6 +5012,7 @@ class _KlineHomePageState extends State<KlineHomePage>
           ],
         ),
         SettingsCategory(
+          key: _settingsCategoryKeys[4],
           title: '维护与同步',
           icon: Icons.build_circle_outlined,
           children: _buildPanelAdvancedSection(

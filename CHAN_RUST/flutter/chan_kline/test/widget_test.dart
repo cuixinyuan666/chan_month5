@@ -1,3 +1,4 @@
+import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:chan_kline/main.dart';
@@ -53,5 +54,45 @@ void main() {
     }
 
     await tester.pump(const Duration(seconds: 5));
+  });
+
+  testWidgets('设置面板下滚后，当前分类标题吸顶可见', (WidgetTester tester) async {
+    await tester.pumpWidget(const ChanKlineApp());
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(find.byTooltip('设置'));
+    await tester.pump(const Duration(milliseconds: 200));
+
+    // 展开前两张卡，把内容撑到能滚（5 张全收起时总高小于面板，滚不动）。
+    await tester.tap(find.text('数据与加载'));
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.ensureVisible(find.text('分析与指标'));
+    await tester.tap(find.text('分析与指标'));
+    await tester.pump(const Duration(milliseconds: 300));
+
+    // 向下滚（拖三次，确保越过第一张卡）。
+    // 设置滚动区里还嵌着 SelectionArea 的横向 scrollable，取第一个（纵向）。
+    final scrollable = find.descendant(
+      of: find.byKey(const Key('settings-scroll')),
+      matching: find.byType(Scrollable),
+    ).first;
+    for (var i = 0; i < 3; i++) {
+      await tester.drag(scrollable, const Offset(0, -200));
+      await tester.pump(const Duration(milliseconds: 150));
+    }
+
+    // 吸顶条出现，且文字是五个分类之一（不是空、不是别的）。
+    final sticky = find.byKey(const Key('settings-sticky-category'));
+    expect(sticky, findsOneWidget, reason: '滚动后应有吸顶条');
+    final texts = <String>[
+      '数据与加载',
+      '分析与指标',
+      '界面与操作',
+      '主图显示',
+      '维护与同步',
+    ];
+    final hit = texts.any(
+      (t) => find.descendant(of: sticky, matching: find.text(t)).evaluate().isNotEmpty,
+    );
+    expect(hit, isTrue, reason: '吸顶条要显示当前分类名');
   });
 }
