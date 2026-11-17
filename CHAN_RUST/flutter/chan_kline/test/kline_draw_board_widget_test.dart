@@ -18,8 +18,11 @@ import 'package:flutter_test/flutter_test.dart';
 /// 上影线端点 yHigh=28.0（最高价 12），下影线端点 yLow=232.6（最低价 9）。
 /// X 不再写死：画板视口有 minViewSpan=24，中心随视口复位而变，
 /// 用 [_barCenterX] 从该窗真实视口现算，避免常量过时。
-const double _yHigh = 28.0;
-const double _yLow = 232.6;
+// 单根画板下视图跨度 = 该根跨度 ×3（且 ≥1.6，见 kline_chart 的单根扩张口径）：
+// 模型 (10,12,9,11) → span 3 → 视图 6.0..15.0，plotTop=28 / plotH≈204.6。
+// y(high=12)=96.2，y(low=9)=164.4。
+const double _yHigh = 96.2;
+const double _yLow = 164.4;
 const double _bodyTop = 96.2;
 const double _bodyBottom = 164.4;
 
