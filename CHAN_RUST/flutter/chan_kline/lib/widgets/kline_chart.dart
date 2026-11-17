@@ -4124,8 +4124,17 @@ class _KlineCompositePainter extends CustomPainter {
           }
         } else if (ind.kind == MainIndicatorKind.kn) {
           if (ind.kn == 1) {
-            _drawK1Candles(
-                canvas, size.width, plotTop, plotH, barW, slotW, faint: true);
+            // 子窗口 + 层级早生成：K1 蜡烛必须与「K1合并框」同源。
+            // 框走 `_displayCombineFrames(1)` → `_levelDisplayCombineFrames(1)`
+            // （level-0 虚拟单元重算），蜡烛若仍吃会话永久 `k1BarViews`，
+            // 两边根数/边界一差一根，框就短一截（用户 2026-11-18 的「框不完整」）。
+            if (subWindow && earlyDynamicUnit) {
+              _drawK1CandlesFromLevelUnits(
+                  canvas, size.width, plotTop, plotH, barW, slotW);
+            } else {
+              _drawK1Candles(
+                  canvas, size.width, plotTop, plotH, barW, slotW, faint: true);
+            }
           } else if (ind.kn >= 2) {
             _drawLevelUnitCandlesOnMainChart(
                 canvas, size.width, plotTop, plotH, barW, slotW, ind.kn);
@@ -4545,9 +4554,9 @@ class _KlineCompositePainter extends CustomPainter {
     double plotH,
     double slotW,
   ) {
-    // 全模式、全层同构：该层视觉上只有 1 个合并框时不画连线（含构建中虚线 / 种子线）。
+    // 全模式、全层同构：该层**本窗可见**的合并框只剩 1 个时不画连线（含构建中虚线 / 种子线）。
     // 连线的两端是分型，分型至少要有两个合并框才成立，单框画出去的那条是凭空指路。
-    if (_displayCombineFrames(0).length <= 1) return;
+    if (_visibleCombineFrames(0).length <= 1) return;
 
     // 层级早生成开启时，首确认前也要用预锚动态单元画构建中虚线；
     // 种子线已由 _drawSeedPhaseLines 隐藏，因此只剩这一条。
@@ -4671,15 +4680,32 @@ class _KlineCompositePainter extends CustomPainter {
     return frames;
   }
 
-  /// 丢弃「被后面某只框完全覆盖」的重叠框。
+  /// 本窗**看得见**的合并框（连线守卫用）。
+  ///
+  /// 画框时 `_drawCombineFramesOnMainChart` 会跳过视口外的框，但
+  /// 「只有 1 个合并框不画连线」若按整份列表判，就会出现「框在列表里、
+  /// 画在窗外」→ 框数算 2、放行连线，眼睛只看到 1 个框（用户 2026-11-18
+  /// 确认的症状）。这里与画框用**同一句**可见性判据，保证「判的就是眼前看到的」。
+  List<KlineCombineFrame> _visibleCombineFrames(int displayKn) {
+    final frames = _displayCombineFrames(displayKn);
+    if (frames.isEmpty) return frames;
+    return frames
+        .where((f) =>
+            f.x2 >= viewport.viewXMin - 1 && f.x1 <= viewport.viewXMax + 1)
+        .toList();
+  }
+
+  /// 丢弃「被另一只框完全覆盖」的重叠框（**双向**）。
   ///
   /// 展示轨上会出现同一起点、不同终点的两只框：冻结单元 `0..0` 与活跃单元 `0..6`
   /// 同时存在（预锚单元覆盖了已冻结的第一根）。它们是同一段的两种表示，
   /// 都画出来就是「一只大框套一只小框」，用户 2026-11-17 反馈的
   /// 「K1 只有一根 K，却出现合并框」正是这种重叠。
   ///
-  /// 正常相邻框 x 递增、不重叠，这里不会误删；只有后框 `x1 <= 前 x1 && x2 >= 前 x2`
-  /// 才判定为覆盖。全部被覆盖时保留原列表（不动数据）。
+  /// 2026-11-18 修正：旧实现只查「后框包住前框」，顺序反过来
+  /// （大框在前、小框在后）两只都留 → 框数虚高、连线被放行。
+  /// 现改为谁包住谁就丢被包的；跨度完全相同则只留靠前那只。
+  /// 全部被判为被覆盖时保留原列表（不动数据）。
   List<KlineCombineFrame> _dropCoveredCombineFrames(
     List<KlineCombineFrame> frames,
   ) {
@@ -4688,9 +4714,14 @@ class _KlineCompositePainter extends CustomPainter {
     for (var i = 0; i < frames.length; i++) {
       final f = frames[i];
       var covered = false;
-      for (var j = i + 1; j < frames.length; j++) {
+      for (var j = 0; j < frames.length; j++) {
+        if (i == j) continue;
         final g = frames[j];
-        if (g.x1 <= f.x1 && g.x2 >= f.x2) {
+        // 严格更大才算覆盖；跨度完全相同按「留靠前那只」去重。
+        final covers = g.x1 <= f.x1 &&
+            g.x2 >= f.x2 &&
+            (g.x1 < f.x1 || g.x2 > f.x2 || j < i);
+        if (covers) {
           covered = true;
           break;
         }
@@ -5115,8 +5146,8 @@ class _KlineCompositePainter extends CustomPainter {
     int kn,
   ) {
     if (kn < 1) return;
-    // 全模式、全层同构：该层视觉上只有 1 个合并框时不画连线（含构建中虚线 / 种子线）。
-    if (_displayCombineFrames(kn).length <= 1) return;
+    // 全模式、全层同构：该层**本窗可见**的合并框只剩 1 个时不画连线（含构建中虚线 / 种子线）。
+    if (_visibleCombineFrames(kn).length <= 1) return;
     final tailIdx = segAsOf ?? (bars.isEmpty ? -1 : bars.last.idx);
     if (tailIdx < 0) return;
 
@@ -5285,18 +5316,7 @@ class _KlineCompositePainter extends CustomPainter {
       return const [];
     }
     if (asOf != null) {
-      return _levelUnitViewsFromVirtualK1Bars(
-        virtualUnits,
-        frozenIdx: {
-          // 与 virtualUnits 同层：该层已冻结段 idx（段 idx 与单元 idx 一对一）
-          for (final s in asOfLevelSegments(
-            levels: levels,
-            level: unitLevel,
-            asOf: asOf,
-          ))
-            s.idx,
-        },
-      );
+      return _levelUnitViewsFromVirtualK1Bars(virtualUnits);
     } else if (subWindow && !bars.isEmpty) {
       // 子窗口展示轨：蜡烛必须与合并框同源。
       //
@@ -5312,14 +5332,6 @@ class _KlineCompositePainter extends CustomPainter {
           asOf: tail,
           includeBuilding: true,
         ),
-        frozenIdx: {
-          for (final s in asOfLevelSegments(
-            levels: levels,
-            level: unitLevel,
-            asOf: tail,
-          ))
-            s.idx,
-        },
       );
     } else {
       return buildLevelUnitBarViews(
@@ -5358,16 +5370,42 @@ class _KlineCompositePainter extends CustomPainter {
     }
   }
 
-  /// 虚拟 K1 bar → LevelUnitBarView（冻在 unitBars，未冻当 active）。
-  List<LevelUnitBarView> _levelUnitViewsFromVirtualK1Bars(
-    List<K1Bar> units, {
-    required Set<int> frozenIdx,
-  }) {
+  /// K1 蜡烛（子窗口同源版）：视图直接取 level-0 虚拟单元，
+  /// 与 K1 合并框 [_levelDisplayCombineFrames] 吃的是同一份 `asOfLevelVirtualK1Bars`。
+  void _drawK1CandlesFromLevelUnits(
+    Canvas canvas,
+    double w,
+    double plotTop,
+    double plotH,
+    double barW,
+    double slotW,
+  ) {
+    final views = _levelUnitViewsForLevel(0);
+    if (views.isEmpty) return;
+    _drawLevelUnitCandles(
+      canvas,
+      w,
+      plotTop,
+      plotH,
+      barW,
+      slotW,
+      views,
+      displayKn: 1,
+      faint: true,
+    );
+  }
+
+  /// 虚拟 K1 bar → LevelUnitBarView（**全量保留**：冻 + 构建中一并建 view）。
+  ///
+  /// 旧实现只把「最后一根非冻结单元」记成 active，前面若有 pending 单元，
+  /// 它的 view 直接被丢掉，蜡烛与合并框就会一边少一根（用户 2026-11-18
+  /// 「1min-K1 合并框显示不完整」的一环）。
+  /// 虚实本就不靠这里的冻/动分组：绘制时由 `bar.confirmX` 判 [_unitBarIsBuilding]。
+  List<LevelUnitBarView> _levelUnitViewsFromVirtualK1Bars(List<K1Bar> units) {
     if (units.isEmpty) return const [];
-    final frozenBars = <LevelUnitBar>[];
-    LevelUnitBar? active;
+    final bars = <LevelUnitBar>[];
     for (final u in units) {
-      final bar = LevelUnitBar(
+      bars.add(LevelUnitBar(
         idx: u.idx,
         dir: u.dir,
         x1: u.x1,
@@ -5377,14 +5415,9 @@ class _KlineCompositePainter extends CustomPainter {
         low: u.low,
         close: u.close,
         confirmX: u.confirmX,
-      );
-      if (frozenIdx.contains(u.idx)) {
-        frozenBars.add(bar);
-      } else {
-        active = bar;
-      }
+      ));
     }
-    return buildLevelUnitBarViews(frozenBars, activeUnit: active);
+    return buildLevelUnitBarViews(bars);
   }
 
   /// 主图 K{n}三极平行线（方案B：kn==displayKn）。
@@ -6491,19 +6524,12 @@ class _KlineCompositePainter extends CustomPainter {
     return (left, right);
   }
 
-  /// 按 frame.x1 + count 取层内单元 view（仿 [_k1ViewsForCombineFrame]）。
-  List<LevelUnitBarView> _levelViewsForCombineFrame(
-    KlineCombineFrame f,
-    List<LevelUnitBarView> views,
-  ) {
-    final startIdx = views.indexWhere((v) => v.viewX1 == f.x1);
-    if (startIdx < 0) return const [];
-    final end = math.min(startIdx + f.count, views.length);
-    if (end <= startIdx) return const [];
-    return views.sublist(startIdx, end);
-  }
-
-  /// Kn 合并框横向：有单元 view 时对齐半侧衔接（同 [_k1CombineFrameSpan]）。
+  /// Kn 合并框横向：合并框的 `x1` / `x2` 就是**条序号**（跨哪几根 K），
+  /// 直接用条序号算像素最稳，和连线/蜡烛同一套坐标。
+  ///
+  /// 旧实现绕 `views` 找「`viewX1 == f.x1`」的单元再取首尾，虚拟单元表里只要有
+  /// 一条零宽单元（典型的 `0..0` 种子）或某单元跨多根 K，就会与条序号错位 →
+  /// 框被压成一条窄条、或整体偏到别的 K 上（用户 2026-11-18 的「框不完整」）。
   (double left, double right) _levelCombineFrameSpan(
     KlineCombineFrame f,
     double w,
@@ -6511,36 +6537,7 @@ class _KlineCompositePainter extends CustomPainter {
     double barW,
     List<LevelUnitBarView> views,
   ) {
-    final related = _levelViewsForCombineFrame(f, views);
-    if (related.isEmpty) {
-      return _combineFrameSpan(f, w, slotW, barW);
-    }
-    final first = related.first;
-    final last = related.last;
-    var (left, right) = _combineFrameHSpan(
-      first.viewX1,
-      last.viewX2,
-      w,
-      slotW,
-      barW,
-    );
-    if (f.count <= 1) {
-      final v = first;
-      if (v.endAtLeftHalf) {
-        right = math.min(right, _barCenterX(v.viewX2, w, slotW));
-      }
-      if (v.startAtRightHalf) {
-        left = math.max(left, _barCenterX(v.viewX1, w, slotW));
-      }
-      if (v.endAtLeftHalf || v.startAtRightHalf) {
-        if (right - left < 2.0) {
-          final mid = (left + right) / 2;
-          left = mid - 1.0;
-          right = mid + 1.0;
-        }
-      }
-    }
-    return (left, right);
+    return _combineFrameSpan(f, w, slotW, barW);
   }
 
   /// 单层 N 段（方案B：level≥1）已冻结段 + 构建中段。
