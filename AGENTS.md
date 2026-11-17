@@ -41,6 +41,19 @@
 - Agent API 键面不变，只有布尔 `early_dynamic_unit`：`false` → 关闭档；`true` → 保留当前开启档（当前是关闭档则回落「开启·高高」）。
 - 切换代价：**总闸变**（关闭 ↔ 任一开启档）→ 清冻结仓 + 丢会话 + 从前缀重放；**仅在三个开启档之间换**（种子框/高高/低低）→ 不动会话与冻结仓，只重算当前步进。这条口径不许合并成一种。
 
+**两套口径（2026-11-17 用户明确 · 别互相套用）**：
+
+同一份设置、同一个 `mode`，**子窗口**与**单图**走两条不同的分支，产出的框可能不一样。两者都按 `preFirstFractalMode` 取高/低（`mergePreFractalBox`：高高=high/low 都取最大；低低=都取最小），**差异只在“并哪些帧 + 特例”**：
+
+| | 子窗口（`subWindow=true`：层级分窗、K 线画板） | 单图（`subWindow=false`：主图单图） |
+| --- | --- | --- |
+| 实现 | `applyFirstPairFractalToFrames` | `applyPreFirstFractalMode` 的 else 分支 |
+| 首框范围 | 找该层第一个**引擎已给分型**的帧 `stdIdx`：有 → 并 `[0, stdIdx]`（含该帧）；无 → 整个序列并一框 | ① `end==1` 且首框仅一根 → 只并入前两根；② `end<=1` → 原样；③ 否则 `[0, end)` 全并 |
+| 首框 fx | 有真分型取该帧引擎分型；无则 `UNKNOWN` | 恒 `UNKNOWN`（特例分支取 `frames[1].fx`） |
+| 典型差异 | 首分型落在第二帧时，首帧也会被并进来 | 同样情形只并前两根，不整段并 |
+
+共同前置（两套都适用）：`earlyDynamicUnit=false`（经典口径）、`frames.first.x1 > 0`（不是序列开头）、`mode == 种子框` —— 一律**原样返回**，不并框。
+
 **首框并框口径（`compute/first_fractal_rule.dart` · `compute/pre_first_fractal_compute.dart`）**：
 
 - **各层统一**：找该层第一个**引擎已给分型**的帧 `stdIdx`；
