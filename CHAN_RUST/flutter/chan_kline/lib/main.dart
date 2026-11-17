@@ -652,13 +652,38 @@ class _KlineHomePageState extends State<KlineHomePage>
 
   bool _closePromptOpen = false;
 
-  /// 关主图：下载还在时，问要不要留在托盘里继续。
+  /// 关主图：先弹「确认退出 / 取消」；下载还在时改为三选一（含托盘继续）。
+  ///
+  /// 2026-11-17 用户明确：退出 APP 必须先确认，不能点一下 X 就没了。
   Future<void> _requestCloseApp() async {
     if (_closePromptOpen) return;
     final running = (Platform.isWindows || Platform.isLinux || Platform.isMacOS) &&
         await ticksUploadSupervisorAlive(_fullUploadDataRoot());
     if (!mounted) return;
     if (!running) {
+      _closePromptOpen = true;
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('确认退出'),
+          content: const Text(
+            '确定要退出吗？',
+            style: TextStyle(fontSize: 14, height: 1.4),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('确认退出'),
+            ),
+          ],
+        ),
+      );
+      _closePromptOpen = false;
+      if (!mounted || ok != true) return;
       await windowManager.destroy();
       return;
     }
