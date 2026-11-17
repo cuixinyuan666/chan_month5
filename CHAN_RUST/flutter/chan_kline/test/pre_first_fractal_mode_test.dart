@@ -133,8 +133,8 @@ void main() {
     });
   });
 
-  group('子窗口：逐对判定 + 并框口径', () {
-    test('无真首分型：双低只断开生长，不判分型（全层同构·2026-11-17）', () {
+  group('子窗口：真分型前全并一框（2026-11-17 用户确认）', () {
+    test('无真首分型：整个序列并一框，fx 保持 UNKNOWN（不再提前裂框）', () {
       final frames = [
         _f(0, 0, 10.0, 10.0),
         _f(1, 1, 9.5, 9.5),
@@ -146,20 +146,21 @@ void main() {
           mode: mode,
           subWindow: true,
         );
-        expect(out.length, 3, reason: '$mode 不应合并双低两根');
+        // 种子框：不合并，原样三帧；高高/低低：并成一框
+        expect(out.length, mode == PreFirstFractalMode.seedBox ? 3 : 1);
       }
-      // 该层 confirms=0 / 无标准分型时，绝不许给首框盖分型的章，
-      // 否则会出现「第 7 根一出来，首框从虚线直接变确认框」。
       final high = applyPreFirstFractalMode(
         frames,
         mode: PreFirstFractalMode.highHigh,
         subWindow: true,
       );
       expect(high.first.fx, 'UNKNOWN');
-      expect(high.every((f) => f.fx == 'UNKNOWN'), isTrue);
+      expect(high.first.count, 3);
+      expect(high.first.high, 10.0);
+      expect(high.first.low, 10.0);
     });
 
-    test('有真首分型：双低给首框判顶分型（顶底交替），不再沿用旧两两判法', () {
+    test('有真首分型：并到分型帧（含），fx 取引擎分型，不再顶底交替推断', () {
       final frames = [
         _f(0, 0, 10.0, 10.0),
         _f(1, 1, 9.5, 9.5),
@@ -170,27 +171,28 @@ void main() {
         mode: PreFirstFractalMode.highHigh,
         subWindow: true,
       );
-      expect(high.length, 3);
-      expect(high.first.fx, 'TOP');
+      expect(high.length, 1);
+      expect(high.first.x1, 0);
+      expect(high.first.x2, 2);
+      expect(high.first.fx, 'BOTTOM');
     });
 
-    test('K1 层第 7 根回归：双高断开生长后首框仍 UNKNOWN（不得变确认框）', () {
-      // 复核默认数据 n=7 的现场：引擎两帧 x0..2(9.44/9.21) 与 x2..6(9.49/9.37)，
-      // 双高（9.49>9.44 且 9.37>9.21）→ 停止生长，但该层无真分型 → 不判 BOTTOM。
+    test('K1 第 8 根现场：新高不再把首框裂成两个、下沿不再塌回', () {
+      // 改前：两帧双高 → 裂成 x0..2 与 x3..6，首框 low 由 10.26 塌回 10.10。
       final frames = [
-        _f(0, 2, 9.44, 9.21),
-        _f(2, 6, 9.49, 9.37),
+        _f(0, 3, 10.33, 10.10),
+        _f(3, 7, 10.38, 10.26),
       ];
       final out = applyPreFirstFractalMode(
         frames,
         mode: PreFirstFractalMode.highHigh,
         subWindow: true,
       );
-      expect(out.length, 2);
+      expect(out.length, 1);
+      expect(out.first.x2, 7);
+      expect(out.first.high, 10.38);
+      expect(out.first.low, 10.26);
       expect(out.first.fx, 'UNKNOWN');
-      expect(out.first.high, 9.44);
-      expect(out.first.low, 9.21);
-      expect(out[1].fx, 'UNKNOWN');
     });
 
     test('包含关系：并框取值按口径（高高=都取最大 / 低低=都取最小）', () {

@@ -40,156 +40,118 @@ void main() {
     });
   });
 
-  group('子窗口首分型逐对判定', () {
-    test('双低 → 前一根判顶分型，不合并（顶点=前一根 high）', () {
+  group('首框口径：真分型前全并一框（2026-11-17 用户确认，取代逐对判定）', () {
+    test('无真首分型：整个序列并一框，fx 保持 UNKNOWN（不提前裂框）', () {
       final frames = [
         _f(0, 0, 10.0, 10.0),
         _f(1, 1, 9.5, 9.5),
         _f(2, 2, 9.1, 9.1),
-      ];
-      final out = applyFirstPairFractalToFrames(frames);
-      expect(out.length, 3);
-      expect(out[0].fx, 'TOP');
-      expect(out[0].high, 10.0);
-      expect(out[0].x1, 0);
-      expect(out[0].x2, 0);
-      expect(out[0].count, 1);
-      // 第二根不并入首框
-      expect(out[1].x1, 1);
-    });
-
-    test('双高 → 前一根判底分型，不合并（顶点=前一根 low）', () {
-      final frames = [
-        _f(0, 0, 8.8, 8.8),
-        _f(1, 1, 8.9, 8.9),
-        _f(2, 2, 9.5, 9.5),
-      ];
-      final out = applyFirstPairFractalToFrames(frames);
-      expect(out[0].fx, 'BOTTOM');
-      expect(out[0].low, 8.8);
-      expect(out[0].count, 1);
-    });
-
-    test('包含关系 → 取高合并（high/low 各取 max）', () {
-      final frames = [
-        _f(0, 0, 10.0, 9.0),
-        _f(1, 1, 9.5, 9.5),
       ];
       final out = applyFirstPairFractalToFrames(frames);
       expect(out.length, 1);
-      expect(out[0].high, 10.0);
-      expect(out[0].low, 9.5);
-      expect(out[0].count, 2);
-      expect(out[0].x1, 0);
-      expect(out[0].x2, 1);
+      expect(out.first.x1, 0);
+      expect(out.first.x2, 2);
+      expect(out.first.count, 3);
+      // 高高：high / low 都取最大
+      expect(out.first.high, 10.0);
+      expect(out.first.low, 10.0);
+      expect(out.first.fx, 'UNKNOWN');
     });
 
-    test('顶底交替：idx=0 顶分型后，idx=1、idx=2 不再判分型', () {
-      // 扁平分笔：10.0 9.5 9.1 8.8 8.9 9.5
-      final frames = [
-        _f(0, 0, 10.0, 10.0),
-        _f(1, 1, 9.5, 9.5),
-        _f(2, 2, 9.1, 9.1),
-        _f(3, 3, 8.8, 8.8),
-        _f(4, 4, 8.9, 8.9),
-      ];
-      final out = applyFirstPairFractalToFrames(frames);
-      // idx0 → TOP；idx1 双低但同向丢弃；idx2 双低同向丢弃；
-      // idx3 双高 → BOTTOM（与 TOP 交替）
-      final tops = out.where((e) => e.fx == 'TOP').toList();
-      final bottoms = out.where((e) => e.fx == 'BOTTOM').toList();
-      expect(tops.length, 1);
-      expect(bottoms.length, 1);
-      expect(tops.first.x1, 0);
-      expect(bottoms.first.x1, 3);
-    });
-
-    test('与标准首分型同向的候选被丢弃（交替铁律）', () {
-      // 标准首分型已是 TOP（frames[1]），候选 idx0 也是 TOP → 丢弃
+    test('有真首分型：并到分型帧（含）为止，fx 取引擎分型', () {
       final frames = [
         _f(0, 0, 10.0, 10.0),
         _f(1, 1, 9.5, 9.5, fx: 'TOP'),
         _f(2, 2, 9.1, 9.1),
-      ];
-      final out = applyFirstPairFractalToFrames(
-        frames,
-        standardFirstFx: 'TOP',
-      );
-      expect(out.where((e) => e.fx == 'TOP').length, 1);
-      expect(out[0].fx, 'UNKNOWN');
-    });
-
-    test('标准首分型之后的框原样保留', () {
-      final frames = [
-        _f(0, 0, 10.0, 10.0),
-        _f(1, 1, 9.5, 9.5),
-        _f(2, 2, 9.1, 9.1, fx: 'BOTTOM'),
         _f(3, 3, 9.6, 9.6),
       ];
       final out = applyFirstPairFractalToFrames(frames);
-      // idx0 判 TOP；idx1 与 TOP 同向丢弃；idx2 起为标准首分型段，原样
-      expect(out[0].fx, 'TOP');
-      final bottom = out.where((e) => e.fx == 'BOTTOM').toList();
-      expect(bottom.length, 1);
-      expect(bottom.first.x1, 2);
+      expect(out.length, 3);
+      expect(out.first.x2, 1);
+      expect(out.first.count, 2);
+      expect(out.first.high, 10.0);
+      expect(out.first.low, 10.0);
+      expect(out.first.fx, 'TOP');
+      // 分型帧之后原样保留
+      expect(out[1].x1, 2);
+      expect(out[2].x1, 3);
     });
-  });
 
-  group('首框与生长框比包含（2026-11-16 用户最终口径）', () {
-    // 用户当前默认画板 5 根 1 分钟 K（a_Data/test/custom.1m.csv）：
-    // K0 10.2/9.73、K1 10.0/9.91、K2 10.1/10.02、K3 10.13/10.06、K4 10.11/10.05。
-    // 高高口径下首框应把与它含融的 K 全吃进去 = 前 4 根一框；K4 双低止步。
-    List<KlineCombineFrame> fiveBars() => [
-          _f(0, 0, 10.2, 9.73),
-          _f(1, 1, 10.0, 9.91),
-          _f(2, 2, 10.1, 10.02),
-          _f(3, 3, 10.13, 10.06, fx: 'TOP'),
-          _f(4, 4, 10.11, 10.05),
-        ];
-
-    test('高高：首框迭代并到前 4 根（x0..3，high=10.2，low=10.06）', () {
+    test('低低：并框 high / low 都取最小', () {
+      final frames = [
+        _f(0, 0, 10.0, 10.0),
+        _f(1, 1, 9.5, 9.5),
+        _f(2, 2, 9.1, 9.1),
+      ];
       final out = applyFirstPairFractalToFrames(
-        fiveBars(),
+        frames,
+        mergeMode: PreFirstFractalMode.lowLow,
+      );
+      expect(out.length, 1);
+      expect(out.first.high, 9.1);
+      expect(out.first.low, 9.1);
+    });
+
+    test('只有一帧 / 首帧即分型：原样返回（无可并）', () {
+      final one = [_f(0, 0, 10.0, 9.0)];
+      expect(identical(applyFirstPairFractalToFrames(one), one), isTrue);
+      final head = [
+        _f(0, 0, 10.0, 9.0, fx: 'TOP'),
+        _f(1, 1, 9.5, 9.5),
+      ];
+      expect(identical(applyFirstPairFractalToFrames(head), head), isTrue);
+    });
+
+    test('2026-11-17 现场：K1 第 8 根（新高）不再把首框裂成两个', () {
+      // 改前：x0..3(10.33/10.10) 与 x3..7(10.38/10.26) 双高 → 裂成两框，
+      // 首框下沿 10.26→10.10 塌回、样式由虚线变实线。改后：继续并成一框。
+      final frames = [
+        _f(0, 3, 10.33, 10.10),
+        _f(3, 7, 10.38, 10.26),
+      ];
+      final out = applyFirstPairFractalToFrames(frames);
+      expect(out.length, 1);
+      expect(out.first.x1, 0);
+      expect(out.first.x2, 7);
+      expect(out.first.high, 10.38);
+      expect(out.first.low, 10.26);
+      expect(out.first.fx, 'UNKNOWN');
+    });
+
+    test('2026-11-17 现场：真分型出现后才定型（并到分型帧）', () {
+      final frames = [
+        _f(0, 3, 10.33, 10.10),
+        _f(3, 8, 10.38, 10.26, fx: 'TOP'),
+        _f(8, 11, 10.32, 10.24),
+      ];
+      final out = applyFirstPairFractalToFrames(frames);
+      expect(out.length, 2);
+      expect(out.first.x2, 8);
+      expect(out.first.high, 10.38);
+      expect(out.first.low, 10.26);
+      expect(out.first.fx, 'TOP');
+      expect(out[1].x1, 8);
+    });
+
+    test('用户画板 5 根：高高并到分型帧 = 前 4 根一框', () {
+      final frames = [
+        _f(0, 0, 10.2, 9.73),
+        _f(1, 1, 10.0, 9.91),
+        _f(2, 2, 10.1, 10.02),
+        _f(3, 3, 10.13, 10.06, fx: 'TOP'),
+        _f(4, 4, 10.11, 10.05),
+      ];
+      final out = applyFirstPairFractalToFrames(
+        frames,
         mergeMode: PreFirstFractalMode.highHigh,
       );
-      expect(out.first.x1, 0);
+      expect(out.length, 2);
       expect(out.first.x2, 3);
       expect(out.first.high, 10.2);
       expect(out.first.low, 10.06);
       expect(out.first.count, 4);
-      // K4 双低止步，独立成框
+      expect(out.first.fx, 'TOP');
       expect(out[1].x1, 4);
-      expect(out.length, 2);
-    });
-
-    test('低低：首框按 min 口径生长，仍与相邻逐对语义一致', () {
-      final out = applyFirstPairFractalToFrames(
-        fiveBars(),
-        mergeMode: PreFirstFractalMode.lowLow,
-      );
-      // 低低：框 high/low 都取最小 → 框收窄，K2 双高不再含融，首框仅前 2 根
-      expect(out.first.x1, 0);
-      expect(out.first.x2, 1);
-      expect(out.first.high, 10.0);
-      expect(out.first.low, 9.73);
-    });
-
-    test('含融链：第三根与前框含融时也一并并入（非仅相邻两两）', () {
-      // 单调内缩三根，旧实现只并前两根，新实现应三根一框。
-      final frames = [
-        _f(0, 0, 10.0, 9.0),
-        _f(1, 1, 9.8, 9.2),
-        _f(2, 2, 9.6, 9.4),
-        _f(3, 3, 8.0, 8.0),
-      ];
-      final out = applyFirstPairFractalToFrames(
-        frames,
-        mergeMode: PreFirstFractalMode.highHigh,
-      );
-      expect(out.first.x2, 2);
-      expect(out.first.count, 3);
-      expect(out.first.high, 10.0);
-      expect(out.first.low, 9.4);
     });
   });
 }
