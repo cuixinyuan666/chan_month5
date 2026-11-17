@@ -508,10 +508,18 @@ impl CombineEngine {
             //
             // 已知代价（用户已知悉并接受）：只靠两元素（双高/双低）覆盖不了「包含」
             // 形态，结构层 1 的首确认可能因此消失（见 lessons_learned.md 第 29 条）。
-            let dir = match test_combine_range(h1, l1, u.high, u.low) {
-                MergeDir::Combine => MergeDir::Up, // 第一框含第二/互含：组方向占位，leave_dir 另行判定
-                other => other,
-            };
+            let dir = test_combine_range(h1, l1, u.high, u.low);
+            // **包含关系先合并**，与首分型之后的逻辑一致（2026-11-17 用户纠正：
+            // 分型的三元素从来都是「合并框」之间的比较，不是单根 K 之间的比较）。
+            // 旧实现把首两单元硬拆成两组（种子框单元素），导致包含关系没并，
+            // 后续拿两根原始 K 去比，永远比不出分型。
+            if dir == MergeDir::Combine {
+                self.groups[0].absorb(u);
+                if is_leave {
+                    self.seed_leave_seen = true;
+                }
+                return self.try_pair_fx_before_first();
+            }
             self.groups.push(MergedGroup::new_first(u, dir));
             // 仅种子第二单元成组时锁 leave（首分型前第一条虚线口径）
             if is_leave {
@@ -713,14 +721,14 @@ mod tests {
     fn combine_absorbs_and_counts() {
         let mut eng = CombineEngine::new();
         eng.feed(&unit(0, 10.0, 9.0));
-        // 种子模式：首两单元不合并（group0=种子框单元素；group1 强制自成新组）
-        eng.feed(&unit(1, 9.5, 9.2)); // 与首组互含，但不再吸收
-        assert_eq!(eng.groups().len(), 2);
-        assert_eq!(eng.groups()[0].unit_count, 1);
-        assert_eq!(eng.groups()[1].unit_count, 1);
-        let snap = eng.snapshot_for(1).unwrap();
-        assert_eq!(snap.inner_seq, 0);
-        assert_eq!(snap.group_count, 1);
+        // 2026-11-17 起：首分型前**也先按包含合并**（不再"首两单元不合并"）。
+        // 分型的三元素是「合并框」之间的比较，包含必须先并。
+        eng.feed(&unit(1, 9.5, 9.2)); // 与首组互含 → 吸收
+        assert_eq!(eng.groups().len(), 1);
+        assert_eq!(eng.groups()[0].unit_count, 2);
+        // Up 组：high / low 都取 max
+        assert_eq!(eng.groups()[0].high, 10.0);
+        assert_eq!(eng.groups()[0].low, 9.2);
     }
 
     /// Up 组合并同高一字线：应按高低=max 抬低点（不再跳过一字线）
@@ -921,14 +929,17 @@ mod tests {
     /// 第一条虚线期：严格包含截断一次后，种子路径不再二次截（groups 已>=2）
     #[test]
     fn seed_contain_no_trunc_before_first_fractal() {
-        // 2026-11-17 用户口径：首分型前禁用截断（含层级早生成动态单元阶段）。
+        // 2026-11-17 用户口径：首分型前禁用截断 + 包含先合并。
         let mut eng = CombineEngine::new();
         eng.feed(&unit(0, 10.0, 9.0));
         let ev = eng.feed(&unit(1, 12.0, 8.5));
-        assert!(ev.is_none(), "包含形态判不出两元素分型，不产生事件");
-        assert_eq!(eng.groups().len(), 2);
-        assert_eq!(eng.groups()[0].fx, FxKind::Unknown, "左框不得被凭空盖章");
-        assert_eq!(eng.groups()[1].low, 8.5, "第二框保持原低点，不被抬 step");
+        assert!(ev.is_none(), "两组时才判两元素；单组不产生事件");
+        assert_eq!(eng.groups().len(), 1, "包含关系先合并成一组");
+        // Up 组：high / low 都取 max → 12 / 9.0
+        assert_eq!(eng.groups()[0].high, 12.0);
+        assert_eq!(eng.groups()[0].low, 9.0);
+        assert_eq!(eng.groups()[0].fx, FxKind::Unknown, "首分型前不盖章");
+        assert_eq!(eng.groups()[0].unit_count, 2);
     }
 
     /// 两元素分型：中组高低都高于右组 → 顶分型（只盖章、不改价）
