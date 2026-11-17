@@ -2637,29 +2637,40 @@ class _KlineHomePageState extends State<KlineHomePage>
       _endDate = MobileDataRoot.bundledEndDate;
       return;
     }
-    // test：数据源即分笔（custom.ohlc.csv），周期、起止时间自动对齐分笔配置。
+    // test：周期与区间都按**实际存在的数据文件**对齐。
+    //
+    // 2026-11-17 修（用户反馈「每次重编后画板数据像被清空」）：
+    // 旧实现固定拿 tick（custom.ohlc.csv）的首尾当区间，而那份分笔样本只有
+    // 09:30:00~09:30:12；1m 画板源文件是 09:30~10:10，大半被区间截掉，
+    // 重启后只剩一根 K，看起来像数据被清。**文件从未被删**。
+    // 现按 probe 顺序（先 1m、后 tick）用对应周期的数据首尾定区间。
     if (code == 'test') {
-      _period = _hasTestMinuteCsv() ? '1m' : 'tick';
-      if (_hasTestOhlcCsv()) {
+      final hasMinute = _hasTestMinuteCsv();
+      final hasTick = _hasTestOhlcCsv();
+      _period = hasMinute ? '1m' : 'tick';
+      final probes = <String>[
+        if (hasMinute) '1m',
+        if (hasTick) 'tick',
+      ];
+      for (final probe in probes) {
         try {
           final bars = _bridge.loadKlines(
             dataRoot: _dataRoot,
             code: 'test',
             beginDate: '1990/01/01 00:00:00',
             endDate: '2100/12/31 23:59:59',
-            period: 'tick',
+            period: probe,
           );
-          if (bars.isNotEmpty) {
-            final b0 = _tryParseBarTime(bars.first.timeText);
-            final b1 = _tryParseBarTime(bars.last.timeText);
-            if (b0 != null && b1 != null) {
-              _beginDate = b0;
-              _endDate = b1;
-              return;
-            }
+          if (bars.isEmpty) continue;
+          final b0 = _tryParseBarTime(bars.first.timeText);
+          final b1 = _tryParseBarTime(bars.last.timeText);
+          if (b0 != null && b1 != null) {
+            _beginDate = b0;
+            _endDate = b1;
+            return;
           }
         } catch (_) {
-          // 回落标准区间
+          // 该周期读不出就试下一个探针；都不行再回落标准区间
         }
       }
     }
