@@ -338,3 +338,18 @@ moc: "[[chan-month5/index-memory]]"
 - **解法**：① 临时放宽错误策略；② **把 `ErrorRecord` 降级成普通字符串**再 `Tee` 写日志（只加 `2>&1` 不够——它只合并流，仍按 ErrorRecord 渲染红块，第二次验证就是这么漏的）；③ 用 `$LASTEXITCODE` 判成败。
 - **附带坑**：脚本里的 `Start-Process` 起的 App 会随外层会话结束被带走（作业对象），**手工验证一律用 `explorer.exe <exe>` 代拉起**。
 - **教训**：看到“很多 warning”先看是不是**错误流渲染**，不是真的告警；判构建成败只看 `LASTEXITCODE` 与产物时间戳，不要看窗口颜色。
+
+### 32. 「一只框」不等于「一根 K」：重叠框要在绘制层去重，别去改计算层的「首两单元独立」
+
+- **现象（2026-11-17）**：默认 TEST 股 idx=2，K1 明明只有一根 K，却画出一只大合并框 + 一条虚线连线；框还和 K 对不上（用户原话「这个合并框也明显不对应」）。
+- **根因**：展示轨 `computeK1CombineFrames` 里残留「**首两单元强制独立**」（种子框单元素）。002003/TEST 里冻结单元 `0..0` 与活跃单元 `0..6` 同起点，于是产出两只 `x1` 相同、互相覆盖的框：`totalUnits=2` 骗过了「单根不画框」，`frames.length=2` 骗过了「单框不画线」。
+- **走过的弯路**：把 `computeK1CombineFrames` 的「首两单元独立」删掉、改成包含照常合并 —— 框是并成一个了，但**分型判断事件**（依赖旧截断/强制独立）跟着消失，`early_dynamic_unit_test` 的「首个分型判断 → 首线收实线」当场红。计算层这一改会连带动分型、连线端点、既有用例，代价远大于收益。
+- **正解**：计算层不动，**绘制层去重** —— `_dropCoveredCombineFrames` 丢掉「被后面某只框完全覆盖」的框，画框与连线判定都用去重后的列表。TEST/002003 两处现场一次修好，测试全绿。
+- **教训**：展示轨的 `frames.length` / `sum(count)` 都不是「K 根数」，**同起点重叠 = 同一段的两种表示**；先怀疑表示重复，再动结构。
+
+### 33. `flutter build` 失败但 EXE 还在：脚本判成功、exe 时间戳也不可信
+
+- **现象（2026-11-17）**：`build_rust.ps1` 打印 `flutter exit 1 but EXE exists (often stderr warning); continue`，随后拉起 App，界面还是旧逻辑。
+- **根因**：① 上一轮 App 进程（build 脚本自己拉起的）占着 `build\windows\x64\runner\Debug` 下的 dll/exe，MSBuild `INSTALL.vcxproj` 报 `MSB3073`，整次构建失败；② 脚本把「EXE 存在」当成功证据；③ **Flutter Windows 的 Dart 代码不在 exe 里**，exe 时间戳可能永远停在首次构建日（本机是 2026-11-10），真正产物是 `data/flutter_assets/kernel_blob.bin`。
+- **解法**：`Stop-Process chan_kline` 后再 `flutter build windows --debug`；判成败看 `build_windows_last.log` 是否出现 `Built ...`，判产物新旧看 **`kernel_blob.bin` 时间戳**（不是 exe）。
+- **教训**：`EXE exists` 不是构建成功的证据；debug 版看 kernel_blob、release 版看 `app.so`。
