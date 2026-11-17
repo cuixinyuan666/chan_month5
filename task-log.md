@@ -7050,3 +7050,14 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **测试**：原「新 K 落在选中 K 右方的光标位置（远处即追加到末尾）」改写为「新 K 紧邻选中 K 的右侧（无论光标在多远）」——断言新 K 在 idx=1、原第二根被挤到 idx=2、`selected==1`；`kline_draw_board_widget_test` **19 条全过**，相关 4 文件 34 条全过；改动文件 analyze 无新增 error。
 - **重编重启**：`flutter build windows --debug`（25.9s 成功）→ explorer 代拉起 PID 70076。
 - **注意事项**：色带只在画板 primary 窗出现，主图/分窗/分笔画板不受影响；`showDrawZones` 默认 false，别在非画板场景打开。commit a1d8ac27，未 push。
+
+### 2026-11-17 11:3x — 退出 APP 增加确认弹窗（确认退出 / 取消）
+
+- **执行者**：WorkBuddy
+- **任务类型**：交互流程（退出确认），纯 Dart，未动 C++/Rust
+- **用户需求**：退出 APP 时先弹一个「是否确认」的弹窗，可以确认或取消。
+- **现状**：`window_manager` 已开 `setPreventClose(true)`，点 X 走 `onWindowClose → _requestCloseApp`；但无下载任务时**直接 destroy**，没有确认。
+- **改法**：`_requestCloseApp` 在「无下载」分支先弹 `AlertDialog`——标题「确认退出」、正文「确定要退出吗？」、按钮「取消 / 确认退出」；取消 → 关弹窗、App 继续；确认 → `windowManager.destroy()`。有下载任务时保留原三选一（取消 / 停止并关闭 / 托盘继续）。`_closePromptOpen` 防连点叠窗。
+- **实测验证**：向主窗口 `PostMessage(WM_CLOSE)` → 弹出「确认退出」；用鼠标点「取消」→ 窗口仍在（`IsWindow=1`）、弹窗消失、主图正常。确认按钮未点（避免退出正在使用的 App）。
+- **重编重启**：`flutter build windows --debug`（26.0s 成功）→ explorer 代拉起 PID 89872。
+- **注意事项**：机器人验证/脚本用 `Stop-Process` 强杀不受影响（不走 WM_CLOSE）；只有用户点 X 才弹确认。commit 6dd84d99，未 push。
