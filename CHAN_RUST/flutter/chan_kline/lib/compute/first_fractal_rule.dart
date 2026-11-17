@@ -102,7 +102,12 @@ bool fractalFxOpposite(String? lastFx, String fx) => lastFx != fx;
 /// - 这样「第一个合并框」会把首分型前所有与它含融的 K 都吃进去（当前 5 根
 ///   数据高高口径 = 前 4 根一框），而旧实现只两两相邻比、只并到前 2 根；
 /// - 标准三元素首分型所在框及其后各框原样保留（首框生长可以越过该框把它并
-///   进去，一旦并入则以框为单位，不再为它单独画分型）。
+///   进去，一旦并入则以框为单位，不再为它单独画分型）；
+/// - **该层还没有真首分型时（`stdIdx == frames.length`）只做含融合并，
+///   不判双高/双低分型**——2026-11-17 用户明确的全层同构要求：K1 层曾出现
+///   「第 7 根一出来，首框从虚线直接变确认框」，而该层 confirms=0、
+///   segmentPolicy=seed，等于凭空盖章；K0 层没这问题（它的 fx 来自引擎）。
+///   现在所有层同一条规则：没有真分型 → 框一律保持 UNKNOWN（虚线构建中）。
 ///
 /// [standardFirstFx]：标准三元素首分型的方向；候选与它同向时丢弃
 /// （分型必须顶底交替）。
@@ -124,6 +129,13 @@ List<KlineCombineFrame> applyFirstPairFractalToFrames(
       break;
     }
   }
+  // 该层有没有**真**首分型（引擎确认过的那种）。
+  //
+  // 全层同构（2026-11-17 用户明确）：没有真分型的层，只许做含融合并，
+  // 不许凭"相邻两根双高/双低"给首框盖分型的章。否则 K1 层会出现
+  // 「第 7 根一出来，首框从虚线直接变确认框」——而该层 confirms 仍为 0、
+  // segmentPolicy 仍是 seed，等于凭空认定，与 K0 层口径不同构。
+  final hasStandardFx = stdIdx < frames.length;
   // 判定区间 = [0, stdIdx]：首框生长只发生在这段「首分型前」区域。
   final limit = stdIdx;
   if (limit <= 0) return frames;
@@ -191,7 +203,10 @@ List<KlineCombineFrame> applyFirstPairFractalToFrames(
     }
 
     // 没有含融：与下一根判双高/双低 → 前一根判分型（不合并，顶底交替）。
-    final hasPartner = i + 1 <= limit && i + 1 < frames.length;
+    //
+    // 只在**该层已有真首分型**时才判：无真分型的层原样输出，保持 UNKNOWN
+    // （虚线构建中），绝不凭空认定。
+    final hasPartner = hasStandardFx && i + 1 <= limit && i + 1 < frames.length;
     if (hasPartner) {
       final a = frames[i];
       final b = frames[i + 1];
