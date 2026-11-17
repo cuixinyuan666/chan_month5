@@ -7091,3 +7091,20 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **坑**：`find.byType(Scrollable)` 在设置面板里会命中 3 个（SelectionArea 的横向 editable scrollable 混进来），必须 `.first`；滚动区补了 `Key('settings-scroll')` 便于定位。
 - **重编重启**：`flutter build windows --debug`（26.4s 成功）→ explorer 代拉起 PID 89388。
 - commit e18d484f，未 push。
+
+### 2026-11-17 15:4x — 按用户设想试「首分型前禁用截断」：实测不可行，已回退并记录
+
+- **执行者**：WorkBuddy
+- **任务类型**：Rust 合并口径试验（未落地）+ 踩坑记录
+- **用户方案**：首分型成立之前截断机制不生效（含层级早生成动态 K 阶段），首个分型之后才生效；同意就直接执行，并把结论写进 `AGENTS.md` 与踩坑文档。
+- **我做的**：
+  1. `engine.rs`：去掉种子窗口（`groups.len()==1 && seed_skip_first`）里「第二框严格包含种子 → 截断」整块，feed 与 probe 同步（否则预览与实际不一致）；
+  2. 按新口径改写 4 条引擎测试（不截断、不改价、左框不盖章）+ 1 条 pipeline 测试；
+  3. 跑 `cargo test -p chan_data`。
+- **实测结果（关键）**：引擎单测全绿，但 `pipeline::tests::pre_anchor_unit_recurses_to_next_level_on_first_confirm` 在 `zigzag(120)`、`(240)`、`(600)` 三档数据下**全部失败**——`结构层 1 应有首个确认`：层 0 首确认产不出来，上层永远没有输入。不是变慢，是**自举断裂**。
+- **根因**：首分型前的截断不是「提前盖章」，而是把本会被包含吸收掉的暴力反转**救出来**的机制；没有它，序列一路含融到底，三元素分型永远凑不齐。
+- **处置**：`git checkout -- engine.rs pipeline.rs` 回退（回退后 `cargo test -p chan_data seed_contain` 6 条全过，确认干净）。**未落地任何 Rust 改动，DLL 未重编。**
+- **记录**：`lessons_learned.md` 新增第 29 条（现象/根因/解法，含 `trunc_price_step = span*1e-4` 导致 `9.760022` 尾差的说明）；`AGENTS.md`「首框口径」禁止项加第 4 条：**禁止用「首分型前禁用截断」净化动态 K/合并框，要隔离只在展示层做**。
+- **另发现**：`cargo test -p chan_data` 全量有 6 条**既有失败**与本改动无关（`upper_confirm…_688687` 缺 `a_Data/688687`；`load_001312_tick…`、`load_klines_prefers_custom_ohlc_for_test`、`test_stock_forces_file_even_if_protocol`、`kn_body_excludes_begin_pole_bar_002003`、`buy1::sell1_002003_step25…` 均依赖 002003/001312 离线数据形态）。
+- **下一步（等用户选）**：① 展示层隔离（预锚动态单元与合并框只认原始 OHLC，不认截断改写价）；② 只禁用截断里的「改价」（保留盖章），可消掉 9.760022 尾差；③ 维持现状。
+- commit：AGENTS/lessons/task-log 三条分开提交，未 push。
