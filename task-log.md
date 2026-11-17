@@ -7220,3 +7220,32 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **测试**：`flutter analyze --no-pub lib/widgets/kline_chart.dart` error=0（8 条存量 warning/info，与 HEAD 一致）；`first_fractal_rule_test` / `chart_view_compute_test` / `early_dynamic_unit_test` 37 过 2 失败（`K1 第 32 根首虚线`、`K2 跳过种子首组`）——已用 `git stash` 在 HEAD 复跑，**两条同样失败**，属存量（本轮只改绘制，测试不 import 本文件）；`kline_draw_board_widget_test` / `kline_draw_board_test` / `tick_draw_board_test` / `k0_combine_compute_test` 33 项全过。
 - **注意**：本工具会话结束时 `Start-Process` 拉起的 App 会被带走（上条日志已记），视觉验收采用「同一命令内启动→截图→关闭」完成；用户若要自己看，双击桌面快捷方式启动即可。
 - **相关文件**：`CHAN_RUST/flutter/chan_kline/lib/widgets/kline_chart.dart`、`AGENTS.md`。
+
+### 2026-11-17 23:5x — 返工：K0 蜡烛实线、动态 K 虚线、重叠合并框去重（用户三条投诉）
+
+- **执行者**：WorkBuddy
+- **任务类型**：主图绘制语义返工 + 口径文档补录
+- **用户投诉（逐条）**：
+  1. 1min-K0 idx=0 的 K 线外框是虚线外框，但它不属于动态 K；取消「Kn 合并」后框也没消失 —— 看着像合并框，实则不受合并开关控制。
+  2. 1min-K0 idx=1 时，K1 明明是动态 K，显示却不是（实线）。
+  3. 1min-K0 idx=2 时，K1 只有一根 K，却出现合并框和虚线连线，且框「明显不对应」。
+  4. 要求把「动态 K 一律虚线外框」补进 `AGENTS.md`，并把坑点写进相关 md。
+- **根因**：
+  - ① K0 蜡烛有「当步那根画虚线外框」（`_drawCandles` 的 `k0Dashed`），它属于蜡烛描边、不归合并指标管 → 用户误认成合并框。
+  - ② 上一版我加的 `singleUnit` 把「该层只有一根」的动态 K 虚实一起关了 → 动态 K 被画成实线。
+  - ③ 展示轨 `computeK1CombineFrames` 残留「首两单元强制独立」：冻结单元 `0..0` 与活跃单元 `0..6` 同起点、互相覆盖 → 两只框骗过「单根不画框」，`frames.length=2` 骗过「单框不画线」。
+- **操作**：
+  1. `_drawCandles`：删掉 `k0Dashed` 分支，K0 蜡烛一律实线外框（K0 没有动态态）。
+  2. `_drawK1Candles` / `_drawLevelUnitCandles`：恢复 `building` 决定虚实，动态 K 影线框 + 实体框都虚线；删掉 `singleUnit` 抑制。
+  3. 新增 `_dropCoveredCombineFrames`：丢掉「被后面某只框完全覆盖」的重叠框，`_displayCombineFrames` 统一走它（画框、判连线同源）。
+  4. `_drawK1CombineOnMainChart` 经典路径也改吃 `_displayCombineFrames(1)`。
+- **走过的弯路（重要）**：先把 `computeK1CombineFrames` 的「首两单元独立」删掉、改包含合并 —— 框是并成一个了，但**分型判断事件**跟着消失，`early_dynamic_unit_test`「首个分型判断 → 首线收实线」当场红。计算层会连带动分型/连线端点/既有用例，已 `git checkout` 回退，改为绘制层去重。
+- **验收（agent API：启动→步进→截图→关闭，同一命令内完成）**：
+  - TEST idx=0：K0 实线外框、K1 淡色柱**虚线外框**、无框无线。
+  - TEST idx=1：K0 出现 2 根合并框（正常），K1 构建中柱子虚线外框。
+  - TEST idx=2：K1 大框仍在（该层 2 个单元合并为一框，符合「≥2 根才画」），**虚线连线已消失**；K2 同理。
+  - 002003 idx=1/2/6：K1/K2 均无多余斜线；idx=6 原先的橙斜线已消失，重叠小框已去重。
+- **构建坑**：`build_rust.ps1` 报 `flutter exit 1 but EXE exists; continue`，实为 App 进程占用产物导致 `INSTALL.vcxproj MSB3073`；且 Flutter Windows 的 Dart 代码在 `data/flutter_assets/kernel_blob.bin`，**exe 时间戳不代表新代码**（本机 exe 仍是 11-10）。杀进程后重跑 `flutter build windows --debug` 成功（kernel_blob 23:50:05）。
+- **测试**：`flutter analyze lib/widgets/kline_chart.dart` error=0（8 条存量）；`early_dynamic_unit_test` / `chart_view_compute_test` / `first_fractal_rule_test` / `kline_draw_board_widget_test` / `tick_draw_board_test` **63 过 2 失败**，失败两条经 `git stash` 在 HEAD 复跑同样失败（存量）。
+- **文档**：`AGENTS.md` 该节改名「单框 / 单根 / 外框虚实」，补规则 3（动态 K 一律虚线外框）与规则 4（K0 永实线）+ 重叠框去重；`lessons_learned.md` 新增第 32 条（别把帧数当 K 根数、去重放绘制层）与第 33 条（EXE exists ≠ 构建成功，看 kernel_blob）。
+- **相关文件**：`CHAN_RUST/flutter/chan_kline/lib/widgets/kline_chart.dart`、`AGENTS.md`、`lessons_learned.md`。
