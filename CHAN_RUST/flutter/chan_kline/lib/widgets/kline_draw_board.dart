@@ -163,6 +163,37 @@ class KlineDrawBoardModel {
     );
   }
 
+  /// 从已保存的 K 线还原画板（打开画板时恢复上次的数据）。
+  ///
+  /// 2026-11-17 用户明确：重开画板不许从空板开始，要接着上次画的继续。
+  /// - [start] 用第一根的 `timeText`，与 `toBars` 的「起始时间 + 交易分钟推进」同源；
+  /// - 价格/量原样搬入，`toBars` 再统一 `_roundPrice`；
+  /// - 窗口布局不落盘，按默认四窗铺开（同一次运行内仍沿用内存里的布局）。
+  factory KlineDrawBoardModel.fromBars(
+    List<KlineBar> bars, {
+    int windowCount = 4,
+  }) {
+    if (bars.isEmpty) {
+      return KlineDrawBoardModel.initial(windowCount: windowCount);
+    }
+    final count = normalizeLevelWindowCount(windowCount);
+    return KlineDrawBoardModel(
+      candles: [
+        for (final b in bars)
+          KlineDrawCandle(
+            open: b.open,
+            high: b.high,
+            low: b.low,
+            close: b.close,
+            volume: b.volume,
+          ),
+      ],
+      windowCount: count,
+      windowModes: defaultKlineDrawWindowModes(count),
+      start: bars.first.timeText,
+    );
+  }
+
   bool get hasSelection =>
       candles.isNotEmpty && selected >= 0 && selected < candles.length;
 

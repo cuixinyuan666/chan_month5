@@ -6656,13 +6656,43 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
   }
 
   void _openKlineDrawBoard() {
-    final model = _klineDrawBoard ?? KlineDrawBoardModel.initial();
+    // 2026-11-17 用户明确：重开画板要接着上次画，不许每次从空板开始。
+    // 内存里有（同一次运行内改过）优先用之；否则从保存的 custom.1m.csv 还原。
+    final model = _klineDrawBoard ??
+        _restoreKlineDrawBoardFromSaved() ??
+        KlineDrawBoardModel.initial();
     setState(() {
       _tickDrawBoardOpen = false;
       _klineDrawBoardOpen = true;
       _klineDrawBoard = model;
     });
     _updateKlineDrawBoard(model);
+  }
+
+  /// 打开画板时从 `a_Data/test/custom.1m.csv` 还原上次保存的画板。
+  ///
+  /// 只读文件、绝不写盘；读不到（文件不存在/为空/解析失败）返回 null，
+  /// 由调用方回落到空板。不改变任何数据。
+  KlineDrawBoardModel? _restoreKlineDrawBoardFromSaved() {
+    if (_dataRoot.isEmpty || !_hasTestMinuteCsv()) return null;
+    try {
+      final bars = _bridge.loadKlines(
+        dataRoot: _dataRoot,
+        code: 'test',
+        beginDate: '1990/01/01 00:00:00',
+        endDate: '2100/12/31 23:59:59',
+        period: '1m',
+      );
+      if (bars.isEmpty) return null;
+      final model = KlineDrawBoardModel.fromBars(bars);
+      _msgHistory.append(
+        'K线画板：已恢复上次画板 ${bars.length} 根（读 custom.1m.csv）',
+      );
+      return model;
+    } catch (e) {
+      _msgHistory.append('K线画板：恢复上次画板失败（$e），本次从空板开始');
+      return null;
+    }
   }
 
   void _updateKlineDrawBoard(KlineDrawBoardModel model) {
