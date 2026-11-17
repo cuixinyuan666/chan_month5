@@ -317,3 +317,7 @@ moc: "[[chan-month5/index-memory]]"
     `pipeline::pre_anchor_unit_recurses_to_next_level_on_first_confirm`、`down_truncation_mirror_confirms_bottom`、`up_truncation_confirms_top_at_fourth_bar`、`early_dynamic_unit_off_restores_classic`、`pre_anchor_unit_from_bar0_and_first_confirm_handoff`、`seed_leave_dir_d2_before_first_fx_isomorphic`、`seed_skip_first_two_units_two_groups`、`buy1::sell1_x_is_discovery_step_not_begin_pole_002003`、`combine::state_bundle_002003_steps_24_28`、`delta::delta_002003_steps_24_28_and_reset_replay`、`engine::feed_detects_bottom_fractal`、`engine::seed_leave_does_not_trunc`。
   - **仍在失败的 6 条与本改动无关**（基线即失败）：`upper_confirm…_688687`（缺 `a_Data/688687`）、`load_001312_tick…`、`load_klines_prefers_custom_ohlc_for_test`、`test_stock_forces_file_even_if_protocol`、`kn_body_excludes_begin_pole_bar_002003`、`buy1::sell1_002003_step25…`。
   - **遗留**：`09:31` 那根 9.70 的下影线**仍露在框外**——那是「包含合并、low 取最高」的必然结果（框下沿 9.90），与本改动无关；要让影线进框只能改「高高」的低点取值口径。
+- **再纠正（同日 17:2x，用户指出我判错）**：我先前说「三根都不判分型」是**错的**——我拿单根 K 的 high/low 去比，而分型的三元素永远是**合并框之间**比。根因不在两元素，而在**种子窗口仍保留「首两单元不合并」**：包含关系没并，导致拿原 K 去比。
+  - 修法：seed 分支里 `test_combine_range == Combine` 时改为 `groups[0].absorb(u)`（与首分型后同一条路），再判两元素。
+  - 验证（3 根 `10.00/9.76`、`10.25/9.47`、`9.85/9.70`）：改前 = `x0..0(10.00/9.76,UNKNOWN)` + `x1..2(10.25/9.70,UNKNOWN)`（两组都不判）；改后 = **`x0..1(10.25/9.76,TOP)`** + `x2..2(9.85/9.70,UNKNOWN)` —— 09:30 与 09:31 先按包含合并，再与 09:32 比 → 中组双高 → 顶分型。
+  - 教训：**讨论“分型判不出来”之前，先确认比较对象是合并框还是原始 K**。`seed_skip_first`（首两单元不合并）是可视化口径，不该影响分型判定。
