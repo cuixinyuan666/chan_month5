@@ -365,9 +365,6 @@ class _TickDrawBoardState extends State<TickDrawBoard>
       // 画板：点圆点选中 / 拖圆点改价，都在 KlineChart 内部判定，
       // 不用覆盖层，避免抢掉图表自身的平移/十字/滚轮手势。
       onTickDotTap: level == 0 ? _onTickDotTap : null,
-      // 点空白（不拖）= 取消聚焦：分笔画板里把选中圆点清掉。
-      // 与点已选中的圆点再点一次的 toggle 行为并存（2026-11-18 用户明确）。
-      onEmptyTap: level == 0 ? () => widget.onChanged(model.clearSelection()) : null,
       onTickDotDrag: level == 0 ? _onTickDotDrag : null,
       onTickDotDragEnd: level == 0 ? _endDrag : null,
       selectedTickIdx: level == 0 && model.hasSelection ? model.safeSelected : -1,

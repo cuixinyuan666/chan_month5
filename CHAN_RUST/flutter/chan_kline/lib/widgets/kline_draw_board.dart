@@ -678,10 +678,6 @@ class _KlineDrawBoardState extends State<KlineDrawBoard> {
           tooltipBridge: _tooltipBridge,
           dockTooltipPanel: true,
           onCandleDraw: primary ? _onDraw : null,
-          // 点空白（按下后没拖动就松手）= 取消当前聚焦光标：
-          // 清掉选中，四个聚焦箭头随之消失（2026-11-18 用户明确）。
-          onEmptyTap:
-              primary ? () => widget.onChanged(model.clearSelection()) : null,
           // 绘制锚：点击选中一根 K 后，它中心以右的空白都允许起笔画新 K
           // （2026-11-16：不再限制在槽位右缘/最右边）。
           candleDrawAnchorIdx:
@@ -828,12 +824,8 @@ class _KlineDrawBoardState extends State<KlineDrawBoard> {
     const plotTop = KlineViewport.padT;
     final plotH = math.max(1.0, mainH - plotTop - KlineViewport.padB);
     final visible = vp.visibleBars(model.toBars());
-    // 空板：与 KlineChart 的兜底区间一致（visible 空时它用 9..11）。
-    // 原来是直接 return null，导致空板拖动画第一根时草稿根本不画
-    // （2026-11-18 用户反馈「绘制 K 线时图形不跟鼠标」的另一半原因）。
-    final range = visible.isEmpty
-        ? const PriceRange(9, 11)
-        : vp.priceRangeFor(visible);
+    if (visible.isEmpty) return null;
+    final range = vp.priceRangeFor(visible);
     return KlineDrawGeometry(
       viewport: vp,
       range: range,
@@ -1048,10 +1040,9 @@ class _DraftCandlePainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final g = geom;
     if (g == null) return;
-    // 空板时 barCount=0，而光标下标可能是 0..23 中的任意值
-    // （画板空板视口就是 0..23）；不能因为超过 barCount 就压回 0，
-    // 否则草稿又钉在原点（2026-11-18）。
-    final at = (barIdx == null || barIdx! < 0) ? barCount : barIdx!;
+    final at = (barIdx == null || barIdx! < 0 || barIdx! > barCount)
+        ? barCount
+        : barIdx!;
     final bar = KlineBar(
       idx: at,
       timeMs: 0,
