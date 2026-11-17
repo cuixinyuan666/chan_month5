@@ -298,3 +298,13 @@ moc: "[[chan-month5/index-memory]]"
 - **现象（2026-11-04 亲历）**：`cd` 到 worktree 后用 `[IO.File]::ReadAllBytes("task-log.md")` 校验追加结果，读到的是**主仓库**的旧 `task-log.md`（比 worktree 少最后两天条目），差点把任务日志追加错地方；同一路径用 `Get-Content task-log.md` 却是对的。
 - **根因**：PowerShell 的 `Set-Location` / `cd` 只改 PowerShell 当前位置，**不改进程 CWD**；`Get-Content` 走 PowerShell 提供程序，`[IO.File]` / `System.IO` 走进程 CWD，于是同一个相对路径指向两个仓库。
 - **解法**：脚本或校验里一律用**绝对路径**（`Join-Path $wt 'task-log.md'`），不要依赖 `cd` 之后的相对路径；`git` 命令同理，尽量显式 `-C <worktree>`。
+
+### 29. 「首分型前禁用截断」试过、不可行 —— 会让首分型永远出不来
+
+- **现象（2026-11-17 亲历）**：为解决「K 线画板两根 K 被截断成两组、拿不到高高合并框」，按设想去掉 `CombineEngine` 种子窗口里的截断（feed 与 probe 都改），并把 4 条 `seed_contain_trunc_*` 测试改写为「不截断、不改价」。引擎单测全绿，但 `pipeline::tests::pre_anchor_unit_recurses_to_next_level_on_first_confirm` 在 `zigzag(120)` / `(240)` / `(600)` 三档数据下**全部失败**：`结构层 1 应有首个确认` —— 不是「更慢」，是**层 0 永远产不出首确认**，上层于是永远没有输入。
+- **根因**：首分型前的截断不是「提前盖章」，而是把**本会被包含吸收掉的暴力反转救出来**的机制。首分型前如果没有它，反转单元会直接被子框吸收，序列一路「含融」到底，三元素分型永远凑不齐 —— 自举失败。
+- **解法**：
+  1. **不要全局禁用**首分型前的截断；已回退（`git checkout -- engine.rs pipeline.rs`）。
+  2. 若只想消除「动态 K / 合并框被截断结果污染」，应在**展示层隔离**（预锚动态单元与合并框只认原始 OHLC，不认截断改写后的价格），或只禁用截断里的**改价**（抬 step）而保留盖章，二者都比关掉整条链安全。
+  3. 判据：改 Rust 合并内核**必须跑 `cargo test -p chan_data` 全量**（含 pipeline 递归/上层确认用例），只跑 `engine::tests` 会漏掉上面这条 —— 它是唯一能暴露「自举断裂」的用例。
+  4. 另：截断里 `trunc_price_step = span*1e-4`（`9.76 → 9.760022`）不是脏数据，是故意抬价让触发单元能当「分型右元素」；看到这类尾差先查这里，别当浮点 bug 修。
