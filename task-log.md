@@ -7257,3 +7257,34 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **撤销内容**：点空白取消聚焦（`onEmptyTap`）、空板草稿视口兜底（`_primeEmptyBoardViewport`）、单根框逐框过滤、AGENTS「画板交互」节、lessons 第 34/35/36 条、两条新 widget 用例。
 - **保留内容**（上一轮 `c26baadc`）：K0 蜡烛实线、动态 K 虚线外框、重叠合并框绘制层去重、单根不画框（整层判定）、单框不画连线。
 - **未完成**：App 实例正占用 `build\windows\x64\runner\Debug`，`flutter build windows --debug` 报 `MSB3073`；需关闭 App 后重编，才能让产物与回退后的源码一致。**本轮不再擅自关闭用户进程。**
+
+---
+
+### 2026-11-18 12:41 — 修复默认 TEST 股 1 分钟数据下 K1 层显示异常并新增连线规则
+
+- **执行者**：OpenCode Agent
+- **任务类型**：Bug修复 / 显示逻辑优化
+- **上下文**：
+  - 问题1：K0 idx=4 时 K1 蜡烛消失（仅显示一根细影线）
+  - 问题2：K0 idx=5 时 K1 合并框下沿错误（首分型框下沿应为 10.17，原显示 10.1699999）
+  - 新增规则：基础生成单元内只有单个合并框时，不绘制连线，且连线两端不得同时落在同一个合并框内
+- **关键操作**：
+  1. **F1**：合并框横向改用框自身 `x1`、`x2` 加半侧标志，删除按 count 反查单元 view 的旧函数
+  2. **F2**：K1 合并帧首分型前与 Rust `feed_guarded` 同构——包含则并入首组，不包含则开新组，两种情况都先跑两元素分型；首分型前禁用截断
+  3. **F3**：K1/Kn 蜡烛实体最小高 3px，影线端点兜住实体，退化单元不再消失
+  4. **F4**：子窗口 K1 蜡烛与合并框同源（取 level 0 虚拟单元），无 level 0 单元时退回 K1 bar view
+  5. **F5**：K1 蜡烛首分型框优化——首根退化单元替换为首分型框整体，第二根从框右端随 asOf 右移（仅蜡烛展示轨，合并框保持原口径）
+  6. **连线规则**：新增 `_lineEndpointsInSameCombineFrame` 辅助函数，禁止连线两端落在同一个合并框内，并在 `_drawK0Lines`、`_drawOneLevelLines`、`_paintDisplayBuildingLines`、`_drawSeedAbcLines` 四处生效
+  7. **补动态 K**：K1 蜡烛补出首分型确认当步的进行中动态 K（框右端→asOf）
+- **结果**：
+  - K0 idx=4 时 K1 出现两根大蜡烛（首分型框极值 10.22/9.98 + 右侧动态 K）
+  - K0 idx=5 时 K1 合并框下沿稳定在 10.17（原 10.1699999 消失）
+  - 端点同框连线已禁止（K0 idx=4 时 K1 无伪连线）
+  - 相关测试通过（k1_combine_seed_pair_test、chart_view_compute_test、k1_boxed_candle_test、kline_draw_board_widget_test、kline_draw_board_test、indicator_draw_sync_test）
+  - 重编成功，Agent API 连续单步 0→10 验证正常
+  - 规则已写入 AGENTS.md「连线两端同框禁止规则」章节
+- **注意事项**：
+  - 合并框与蜡烛分开取源：合并框保持 Rust 口径（下沿 10.17），蜡烛展示轨用首分型框优化
+  - 子窗口与单图分支保持独立，仅子窗口应用虚拟单元变换
+  - 已有 9 个 commit 待推（F1~F5 + 连线规则），全为未修改核心计算的展示轨优化
+  - 全量 `flutter test` 仍有 7 个失败，其中 chip_profile_test / incremental_lookup_session_test / early_dynamic_unit_test 为既有失败，非本次引入
