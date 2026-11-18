@@ -5302,6 +5302,7 @@ class _KlineCompositePainter extends CustomPainter {
       bars: bars,
       firstFractalX1: firstFxX1,
       firstFractalX2: firstFxX2,
+      asOf: asOf,
     );
   }
 

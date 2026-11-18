@@ -564,6 +564,7 @@ List<K1Bar> boxedFirstFractalCandleBars({
   required List<KlineBar> bars,
   required int firstFractalX1,
   required int firstFractalX2,
+  required int asOf,
 }) {
   if (units.isEmpty || bars.isEmpty) return units;
   if (firstFractalX2 < firstFractalX1 || firstFractalX1 < 0) return units;
@@ -593,6 +594,23 @@ List<K1Bar> boxedFirstFractalCandleBars({
       dir: u.dir,
     );
     if (reb != null) out.add(reb);
+  }
+
+  // 当步仍在首分型框右侧延伸时补一根进行中动态单元（「K1 idx=1 动态 K」）。
+  // 场景：首分型刚确认那一步，引擎快照的当步单元还是「刚冻结的退化 0..0」，
+  // `asOfLevelVirtualK1Bars` 会认为已包含而不再追加进行中单元 → 若不补，
+  // 该步只有首分型框一根 K，右侧这一段就凭空消失了。
+  final lastX2 = out.last.x2;
+  if (asOf > lastX2) {
+    final tailX1 = lastX2 < firstFractalX2 ? firstFractalX2 : lastX2;
+    final tail = _rangeK1Bar(
+      bars,
+      x1: tailX1,
+      x2: asOf,
+      idx: out.last.idx + 1,
+      dir: out.last.dir,
+    );
+    if (tail != null) out.add(tail);
   }
   return out;
 }
