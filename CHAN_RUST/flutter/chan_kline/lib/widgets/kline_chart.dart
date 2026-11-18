@@ -4391,66 +4391,18 @@ class _KlineCompositePainter extends CustomPainter {
     return (left, right);
   }
 
-  /// 按 frame.x1 + count 精确取合并框内含的K1 bar view（避免衔接 K 误入下一框）。
-  List<K1BarView> _k1ViewsForCombineFrame(KlineCombineFrame f) {
-    final startIdx = k1BarViews.indexWhere((v) => v.viewX1 == f.x1);
-    if (startIdx >= 0 && f.count > 0) {
-      final endIdx = math.min(startIdx + f.count, k1BarViews.length);
-      if (endIdx > startIdx) {
-        return k1BarViews.sublist(startIdx, endIdx);
-      }
-    }
-    return k1BarViews
-        .where((v) => v.viewX1 >= f.x1 && v.viewX2 <= f.x2)
-        .toList();
-  }
-
-  /// 合并框外线框横向：与 [_combineFrameSpan] 同构——单元换K1 bar view，首尾 view 中轴起止。
-  /// count>1：纯中轴（同合并 K 对 1 分钟 K）；count==1：半侧与 [_k1BarHSpan] 一致。
-  (double left, double right) _k1CombineFrameSpan(
-    KlineCombineFrame f,
-    double w,
-    double slotW,
-    double barW,
-  ) {
-    final related = _k1ViewsForCombineFrame(f);
-    if (related.isEmpty) {
-      return _combineFrameSpan(f, w, slotW, barW);
-    }
-    final first = related.first;
-    final last = related.last;
-    var (left, right) = _combineFrameHSpan(
-      first.viewX1,
-      last.viewX2,
-      w,
-      slotW,
-      barW,
-    );
-    if (f.count <= 1) {
-      final v = first;
-      if (v.endAtLeftHalf) {
-        right = math.min(right, _barCenterX(v.viewX2, w, slotW));
-      }
-      if (v.startAtRightHalf) {
-        left = math.max(left, _barCenterX(v.viewX1, w, slotW));
-      }
-      if (v.endAtLeftHalf || v.startAtRightHalf) {
-        if (right - left < 2.0) {
-          final mid = (left + right) / 2;
-          left = mid - 1.0;
-          right = mid + 1.0;
-        }
-      }
-    }
-    return (left, right);
-  }
+  // 合并框横向：**只用框自身 x1/x2 + 半侧标志**（[_combineFrameSpan]），
+  // K0 / K1 / Kn 同一条，不做层级特例。
+  //
+  // 旧实现按 `count` 反查 k1BarViews（`viewX1 == f.x1`）：框起始与某个零宽单元
+  // 同起点时会取错跨度，框被压成 `barW/2` 宽的竖条（2026-11-18 修复）。
 
   double _barCenterX(int barIdx, double w, double slotW) =>
       viewport.indexToX(barIdx.toDouble(), w) + slotW / 2;
 
   // 主/副图不再绘制网格横线与右侧封口竖线（价格标签仍保留）
 
-  /// K1 bar（展示层 view 区间）：横向 [_k1BarHSpan]，与K1合并框 [_k1CombineFrameSpan] 同口径。
+  /// K1 bar（展示层 view 区间）：横向 [_k1BarHSpan]，与K1合并框 [_combineFrameSpan] 同口径。
   void _drawK1Candles(
     Canvas canvas,
     double w,
@@ -5220,9 +5172,6 @@ class _KlineCompositePainter extends CustomPainter {
     }
     if (bundle == null) return;
 
-    // 单元 view 仅用于合并框横向对齐（不再在此画淡实体；淡实体由 KN 指标统一控制）
-    final views = _levelUnitViewsForLevel(unitLevel);
-
     // 展示轨合并框：不画永久 combineFrames，改由虚拟单元重算。
     // 与连线的「只有 1 个合并框不画」判定共用 [_displayCombineFrames] 缓存，同源同一次计算。
     final frames = _displayCombineFrames(kn);
@@ -5239,7 +5188,6 @@ class _KlineCompositePainter extends CustomPainter {
       frames,
       style.color.withValues(alpha: 0.85),
       style.color.withValues(alpha: 0.08),
-      levelUnitViews: views.isNotEmpty ? views : null,
       lastAsBuilding: showBuildingDash,
       buildingDashPattern: style.buildingDashPattern,
     );
@@ -6491,57 +6439,8 @@ class _KlineCompositePainter extends CustomPainter {
     return (left, right);
   }
 
-  /// 按 frame.x1 + count 取层内单元 view（仿 [_k1ViewsForCombineFrame]）。
-  List<LevelUnitBarView> _levelViewsForCombineFrame(
-    KlineCombineFrame f,
-    List<LevelUnitBarView> views,
-  ) {
-    final startIdx = views.indexWhere((v) => v.viewX1 == f.x1);
-    if (startIdx < 0) return const [];
-    final end = math.min(startIdx + f.count, views.length);
-    if (end <= startIdx) return const [];
-    return views.sublist(startIdx, end);
-  }
-
-  /// Kn 合并框横向：有单元 view 时对齐半侧衔接（同 [_k1CombineFrameSpan]）。
-  (double left, double right) _levelCombineFrameSpan(
-    KlineCombineFrame f,
-    double w,
-    double slotW,
-    double barW,
-    List<LevelUnitBarView> views,
-  ) {
-    final related = _levelViewsForCombineFrame(f, views);
-    if (related.isEmpty) {
-      return _combineFrameSpan(f, w, slotW, barW);
-    }
-    final first = related.first;
-    final last = related.last;
-    var (left, right) = _combineFrameHSpan(
-      first.viewX1,
-      last.viewX2,
-      w,
-      slotW,
-      barW,
-    );
-    if (f.count <= 1) {
-      final v = first;
-      if (v.endAtLeftHalf) {
-        right = math.min(right, _barCenterX(v.viewX2, w, slotW));
-      }
-      if (v.startAtRightHalf) {
-        left = math.max(left, _barCenterX(v.viewX1, w, slotW));
-      }
-      if (v.endAtLeftHalf || v.startAtRightHalf) {
-        if (right - left < 2.0) {
-          final mid = (left + right) / 2;
-          left = mid - 1.0;
-          right = mid + 1.0;
-        }
-      }
-    }
-    return (left, right);
-  }
+  // Kn 合并框横向与 K0 / K1 同一条：直接走 [_combineFrameSpan]（框自身 x1/x2 +
+  // 半侧标志），不再按 count 反查单元 view。
 
   /// 单层 N 段（方案B：level≥1）已冻结段 + 构建中段。
   void _drawOneLevelLines(
@@ -7231,8 +7130,6 @@ class _KlineCompositePainter extends CustomPainter {
     List<KlineCombineFrame> frames,
     Color strokeColor,
     Color fillColor, {
-    bool alignK1CombineWithViews = false,
-    List<LevelUnitBarView>? levelUnitViews,
     bool lastAsBuilding = false,
     List<double> buildingDashPattern = const <double>[5, 4],
   }) {
@@ -7263,11 +7160,8 @@ class _KlineCompositePainter extends CustomPainter {
         continue;
       }
 
-      final (xLeft, xRight) = alignK1CombineWithViews
-          ? _k1CombineFrameSpan(f, w, slotW, barW)
-          : (levelUnitViews != null && levelUnitViews.isNotEmpty)
-              ? _levelCombineFrameSpan(f, w, slotW, barW, levelUnitViews)
-              : _combineFrameSpan(f, w, slotW, barW);
+      // 合并框横向：框自身 x1/x2 + 半侧标志，K0 / K1 / Kn 同一条。
+      final (xLeft, xRight) = _combineFrameSpan(f, w, slotW, barW);
       var yTop = priceRange.yOf(f.high, plotTop, plotH);
       var yBottom = priceRange.yOf(f.low, plotTop, plotH);
       var height = (yBottom - yTop).abs();
@@ -7326,7 +7220,6 @@ class _KlineCompositePainter extends CustomPainter {
         _displayCombineFrames(1),
         k1Style.color.withValues(alpha: 0.85),
         k1Style.color.withValues(alpha: 0.08),
-        alignK1CombineWithViews: true,
         // 末组=构建中合并（虚线）；前组=已冻结合并（实线）；showBuildingDash 关则全实线
         lastAsBuilding: showBuildingDash,
         buildingDashPattern: k1Style.buildingDashPattern,
