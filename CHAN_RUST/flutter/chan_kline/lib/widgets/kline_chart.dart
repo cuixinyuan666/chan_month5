@@ -4538,6 +4538,19 @@ class _KlineCompositePainter extends CustomPainter {
     }
   }
 
+  /// 连线端点归属检查：两个 x 坐标是否落在同一个合并框内（含首分型前并框口径）。
+  bool _lineEndpointsInSameCombineFrame(int x1, int x2, int displayKn) {
+    final frames = _displayCombineFrames(displayKn);
+    int? frameIdx1;
+    int? frameIdx2;
+    for (var i = 0; i < frames.length; i++) {
+      final f = frames[i];
+      if (x1 >= f.x1 && x1 <= f.x2) frameIdx1 = i;
+      if (x2 >= f.x1 && x2 <= f.x2) frameIdx2 = i;
+    }
+    return frameIdx1 != null && frameIdx1 == frameIdx2;
+  }
+
   void _drawK0Lines(
     Canvas canvas,
     double w,
@@ -4578,6 +4591,14 @@ class _KlineCompositePainter extends CustomPainter {
       ].reduce(math.max);
       if (xMax < viewport.viewXMin - 1 || xMin > viewport.viewXMax + 1) {
         continue;
+      }
+      // 基础生成单元内只有单个合并框时，连线的两个端点不得同时落在同一个合并框内
+      // （单个合并框内最多只允许一个端点，另一端点必须落在其他合并框里）
+      // 检查两端所在合并框：用分型框 x1 作为端点 x 坐标
+      final beginX1 = seg.beginFractalX1;
+      final endX1 = seg.endFractalX1;
+      if (_lineEndpointsInSameCombineFrame(beginX1, endX1, 0)) {
+        continue; // 两端同框，禁止画这条线
       }
       final (beginX, beginPrice) =
           _k0LineEndpoint(seg, isBegin: true, w: w, slotW: slotW);
@@ -4799,6 +4820,7 @@ class _KlineCompositePainter extends CustomPainter {
       slotW,
       lines: [line],
       style: style,
+      displayKn: level,
     );
   }
 
@@ -4829,6 +4851,8 @@ class _KlineCompositePainter extends CustomPainter {
       if (geomMax < viewport.viewXMin - 1 || geomMin > viewport.viewXMax + 1) {
         return;
       }
+      // 基础生成单元内只有单个合并框时，连线两端不得同时落在同一个合并框内。
+      if (_lineEndpointsInSameCombineFrame(x0, x1, level)) return;
       final a = Offset(
         _barCenterX(x0, w, slotW),
         priceRange.yOf(p0, plotTop, plotH),
@@ -4987,6 +5011,7 @@ class _KlineCompositePainter extends CustomPainter {
       slotW,
       lines: lines,
       style: null,
+      displayKn: 0,
     );
   }
 
@@ -5172,6 +5197,8 @@ class _KlineCompositePainter extends CustomPainter {
       if (endIdx < viewport.viewXMin - 1 || beginIdx > viewport.viewXMax + 1) {
         continue;
       }
+      // 基础生成单元内只有单个合并框时，连线两端不得同时落在同一个合并框内。
+      if (_lineEndpointsInSameCombineFrame(beginIdx, endIdx, 1)) continue;
       final beginFx = seg.dir < 0 ? 'TOP' : 'BOTTOM';
       final endFx = seg.dir > 0 ? 'TOP' : 'BOTTOM';
       final beginPrice = poleBarPrice(bars, beginIdx, beginFx);
@@ -6528,6 +6555,11 @@ class _KlineCompositePainter extends CustomPainter {
         isBegin: false,
       );
       if (begin == null || end == null) continue;
+      // 基础生成单元内只有单个合并框时，连线的两个端点不得同时落在同一个合并框内
+      // （单个合并框内最多只允许一个端点，另一端点必须落在其他合并框里）
+      if (_lineEndpointsInSameCombineFrame(begin.barIdx, end.barIdx, level)) {
+        continue; // 两端同框，禁止画这条线
+      }
       final xMin = math.min(begin.barIdx, end.barIdx);
       final xMax = math.max(begin.barIdx, end.barIdx);
       if (xMax < viewport.viewXMin - 1 || xMin > viewport.viewXMax + 1) {
@@ -6696,10 +6728,14 @@ class _KlineCompositePainter extends CustomPainter {
       slotW,
       lines: lines,
       style: style,
+      displayKn: level,
     );
   }
 
   /// 绘制展示轨构建中虚线列表（style=null 时用 K0 连线色）。
+  ///
+  /// [displayKn]：用于连线端点归属判定（基础生成单元内只有单个合并框时，
+  /// 两端不得同时落在同一只框内）。
   void _paintDisplayBuildingLines(
     Canvas canvas,
     double w,
@@ -6708,11 +6744,20 @@ class _KlineCompositePainter extends CustomPainter {
     double slotW, {
     required List<DisplayBuildingLine> lines,
     required ChartLevelLineStyle? style,
+    required int displayKn,
   }) {
     for (final line in lines) {
       final geomMin = math.min(line.begin.barIdx, line.end.barIdx);
       final geomMax = math.max(line.begin.barIdx, line.end.barIdx);
       if (geomMax < viewport.viewXMin - 1 || geomMin > viewport.viewXMax + 1) {
+        continue;
+      }
+      // 基础生成单元内只有单个合并框时，连线两端不得同时落在同一个合并框内。
+      if (_lineEndpointsInSameCombineFrame(
+        line.begin.barIdx,
+        line.end.barIdx,
+        displayKn,
+      )) {
         continue;
       }
       final a = Offset(
