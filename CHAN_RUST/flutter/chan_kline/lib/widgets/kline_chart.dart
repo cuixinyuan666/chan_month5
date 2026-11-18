@@ -4124,8 +4124,28 @@ class _KlineCompositePainter extends CustomPainter {
           }
         } else if (ind.kind == MainIndicatorKind.kn) {
           if (ind.kn == 1) {
-            _drawK1Candles(
-                canvas, size.width, plotTop, plotH, barW, slotW, faint: true);
+            // 子窗口（层级分窗 / K 线画板）：K1 蜡烛必须与合并框同源——
+            // 合并框取「含构建中」的 level 0 虚拟单元，蜡烛也取同一份 view，
+            // 否则会出现「框 2 个 vs 蜡烛 1 根」。单图保持原路径。
+            if (subWindow) {
+              final views = _levelUnitViewsForLevel(0);
+              if (views.isNotEmpty) {
+                _drawLevelUnitCandles(
+                  canvas,
+                  size.width,
+                  plotTop,
+                  plotH,
+                  barW,
+                  slotW,
+                  views,
+                  displayKn: 1,
+                  faint: true,
+                );
+              }
+            } else {
+              _drawK1Candles(
+                  canvas, size.width, plotTop, plotH, barW, slotW, faint: true);
+            }
           } else if (ind.kn >= 2) {
             _drawLevelUnitCandlesOnMainChart(
                 canvas, size.width, plotTop, plotH, barW, slotW, ind.kn);
