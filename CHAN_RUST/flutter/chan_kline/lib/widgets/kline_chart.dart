@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:collection/collection.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -5279,6 +5280,31 @@ class _KlineCompositePainter extends CustomPainter {
     );
   }
 
+  /// 蜡烛展示轨首分型框优化：将退化的种子单元替换为首分型框，后续单元左端夹到框右端。
+  /// **仅用于 K 蜡烛**，合并框与连线保持原单元列表口径。
+  List<K1Bar> _boxedCandleUnits(
+    List<K1Bar> units,
+    LevelBundle bundle,
+    int asOf,
+  ) {
+    if (units.isEmpty || bars.isEmpty) return units;
+    // 查找该层的首分型确认
+    final firstFx = bundle.confirms.firstWhereOrNull((c) => c.used);
+    if (firstFx == null) return units;
+    
+    final firstFxX1 = firstFx.fractalX1;
+    final firstFxX2 = firstFx.fractalX2;
+    if (firstFxX2 < firstFxX1 || firstFxX1 < 0) return units;
+    
+    // 导入 chart_view_compute 的函数
+    return boxedFirstFractalCandleBars(
+      units: units,
+      bars: bars,
+      firstFractalX1: firstFxX1,
+      firstFractalX2: firstFxX2,
+    );
+  }
+
   /// 取某结构层 `unitLevel` 的单元 view（用于合并框横向对齐 / KN 指标画淡实体），
   /// 含十字线 as-of 重算。**参数是结构层（单元所在层），不是窗口号**：
   /// 窗口 Kn 的 K 蜡烛传 `kn-1`，K1 窗口的 level 0 同口径。
@@ -5309,7 +5335,7 @@ class _KlineCompositePainter extends CustomPainter {
     }
     if (asOf != null) {
       return _levelUnitViewsFromVirtualK1Bars(
-        virtualUnits,
+        _boxedCandleUnits(virtualUnits, bundle, asOf),
         frozenIdx: {
           // 与 virtualUnits 同层：该层已冻结段 idx（段 idx 与单元 idx 一对一）
           for (final s in asOfLevelSegments(
@@ -5328,12 +5354,16 @@ class _KlineCompositePainter extends CustomPainter {
       // K」。子窗口改用 as-of 末根的虚拟单元（含构建中），与合并框一致。
       final tail = bars.last.idx;
       return _levelUnitViewsFromVirtualK1Bars(
-        asOfLevelVirtualK1Bars(
-          levels: levels,
-          barFeatures: barFeatures,
-          level: unitLevel,
-          asOf: tail,
-          includeBuilding: true,
+        _boxedCandleUnits(
+          asOfLevelVirtualK1Bars(
+            levels: levels,
+            barFeatures: barFeatures,
+            level: unitLevel,
+            asOf: tail,
+            includeBuilding: true,
+          ),
+          bundle,
+          tail,
         ),
         frozenIdx: {
           for (final s in asOfLevelSegments(
@@ -5345,10 +5375,12 @@ class _KlineCompositePainter extends CustomPainter {
         },
       );
     } else {
-      return buildLevelUnitBarViews(
-        bundle.unitBars,
-        activeUnit: bundle.activeUnit ??
-            (bundle.segmentPolicy == 'pending' ? bundle.pendingUnit : null),
+      final tail = bars.isNotEmpty ? bars.last.idx : 0;
+      final baseUnits = levelBundleVirtualK1Bars(bundle);
+      final boxedUnits = _boxedCandleUnits(baseUnits, bundle, tail);
+      return _levelUnitViewsFromVirtualK1Bars(
+        boxedUnits,
+        frozenIdx: const {},
       );
     }
   }

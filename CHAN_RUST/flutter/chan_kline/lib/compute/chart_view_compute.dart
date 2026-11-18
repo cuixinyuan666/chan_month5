@@ -546,6 +546,91 @@ List<K1Bar> levelBundleVirtualK1Bars(LevelBundle bundle) {
   return v;
 }
 
+/// Kn 窗口「K 蜡烛展示轨」的首分型框口径（**仅蜡烛**，不动合并框、不动连线）。
+///
+/// 首分型确认后，引擎会把首分型前的种子组冻结成一颗**单根等值单元**
+/// （`x1 == x2`、OHLC 全等），画出来只是一根 1px 针，看起来「K1 蜡烛消失了」。
+/// 而该层真正有形的第一段其实是**首分型框** `[fx1..fx2]`。
+///
+/// 这里把开头那颗退化单元换成首分型框整体（高/低取区间极值），紧随其后的单元
+/// 左端夹到 `fx2`、高/低按夹后区间重算——结果就是：
+/// 首根 = 首分型框，第二根 = 框右端起到当步，随 asOf 右移。
+///
+/// 合并框与连线仍用**未变换**的单元列表（保持已确认的下沿口径不变）。
+///
+/// 全层同构：K1 / K2 / … / Kn 的窗口蜡烛都走这一条，禁止层级特例。
+List<K1Bar> boxedFirstFractalCandleBars({
+  required List<K1Bar> units,
+  required List<KlineBar> bars,
+  required int firstFractalX1,
+  required int firstFractalX2,
+}) {
+  if (units.isEmpty || bars.isEmpty) return units;
+  if (firstFractalX2 < firstFractalX1 || firstFractalX1 < 0) return units;
+  final head = units.first;
+  // 只处理「退化种子单元」：单根、跨度 0，且落在首分型框内。
+  if (head.x1 != head.x2) return units;
+  if (head.x2 < firstFractalX1 || head.x2 > firstFractalX2) return units;
+
+  final out = <K1Bar>[];
+  final box = _rangeK1Bar(
+    bars,
+    x1: firstFractalX1,
+    x2: firstFractalX2,
+    idx: head.idx,
+    dir: head.dir,
+  );
+  if (box == null) return units;
+  out.add(box);
+  for (final u in units.skip(1)) {
+    final nx1 = u.x1 < firstFractalX2 ? firstFractalX2 : u.x1;
+    final nx2 = u.x2 < nx1 ? nx1 : u.x2;
+    final reb = _rangeK1Bar(
+      bars,
+      x1: nx1,
+      x2: nx2,
+      idx: u.idx,
+      dir: u.dir,
+    );
+    if (reb != null) out.add(reb);
+  }
+  return out;
+}
+
+/// 区间 [x1..x2] 的展示用 K1 bar：高/低取区间极值，开=首根开、收=末根收
+/// （与 Rust `range_ohlcv` 同口径，不套合并框的「高高/低低」）。
+K1Bar? _rangeK1Bar(
+  List<KlineBar> bars, {
+  required int x1,
+  required int x2,
+  required int idx,
+  required int dir,
+}) {
+  KlineBar? first;
+  KlineBar? last;
+  var hi = double.negativeInfinity;
+  var lo = double.infinity;
+  for (final b in bars) {
+    if (b.idx < x1 || b.idx > x2) continue;
+    first ??= b;
+    last = b;
+    if (b.high > hi) hi = b.high;
+    if (b.low < lo) lo = b.low;
+  }
+  if (first == null || last == null) return null;
+  return K1Bar(
+    idx: idx,
+    dir: dir,
+    x1: x1,
+    x2: x2,
+    open: first.open,
+    high: hi,
+    low: lo,
+    close: last.close,
+    confirmX: x2,
+  );
+}
+
 /// as-of 展示轨虚拟单元（全层同构）：冻结段 + 可选当步进行中（LevelSnap）。
 ///
 /// [includePreAnchor]：是否把「预锚动态单元」计入。预锚单元主要服务下一窗口的
