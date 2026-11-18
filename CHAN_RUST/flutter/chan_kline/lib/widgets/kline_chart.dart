@@ -4141,6 +4141,10 @@ class _KlineCompositePainter extends CustomPainter {
                   displayKn: 1,
                   faint: true,
                 );
+              } else {
+                // 该层还没有 bundle / 单元：退回 K1 bar view，别把蜡烛整层画没
+                _drawK1Candles(
+                    canvas, size.width, plotTop, plotH, barW, slotW, faint: true);
               }
             } else {
               _drawK1Candles(
