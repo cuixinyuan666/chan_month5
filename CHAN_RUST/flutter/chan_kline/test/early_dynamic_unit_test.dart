@@ -466,7 +466,7 @@ void main() {
     expect(line.asSolid, isFalse);
   });
 
-  test('层级早生成：首个分型判断出现时第一条虚线收成实线', () {
+  test('层级早生成：首个分型判断不再带截断伪点（2004 数据）', () {
     final bridge = ChanBridge.instance;
     final wide = bridge
         .loadKlinesEx(
@@ -498,6 +498,13 @@ void main() {
       truncationCheck: true,
     );
     expect(js, isNotEmpty, reason: '第 58 根应出现首个分型判断');
+    // 2026-11-18（与 Rust `feed_guarded` 对齐）：首分型前禁用截断。
+    // 旧实现在首两单元会盖一个 `truncated BOTTOM`（x=6），并据此画出
+    // 「判断→判断」0→44 的实线；该伪分型已删除，首个真实判断在 x58。
+    expect(js.any((e) => e.truncated), isFalse, reason: '首分型前不再有截断伪分型');
+    expect(js, hasLength(1));
+    expect(js.first.x, 58);
+    expect(js.first.fx, 'TOP');
     final lines = computeDisplayBuildingLines(
       bars: wide,
       asOf: asOf,
@@ -508,14 +515,12 @@ void main() {
     );
     final solid = lines.where((l) => l.asSolid).toList();
     final dash = lines.where((l) => !l.asSolid).toList();
-    expect(solid, hasLength(1), reason: '第一条应收成实线，不得消失');
-    expect(solid.single.begin.barIdx, 0);
-    expect(solid.single.begin.price, closeTo(11.66, 1e-9));
-    expect(solid.single.end.barIdx, 44);
-    expect(solid.single.end.price, closeTo(11.97, 1e-9));
-    expect(dash, hasLength(1), reason: '开口仍是第二条虚线');
+    expect(solid, isEmpty, reason: '只有一个真实判断（当步开尖），还不是判断→判断实线');
+    expect(dash, hasLength(1), reason: '开口仍是虚线');
     expect(dash.single.begin.barIdx, 44);
+    expect(dash.single.begin.price, closeTo(11.97, 1e-9));
     expect(dash.single.end.barIdx, 55);
+    expect(dash.single.end.price, closeTo(11.94, 1e-9));
   });
 
   test('层级早生成：K1 合并帧跳过本层种子框首组', () {

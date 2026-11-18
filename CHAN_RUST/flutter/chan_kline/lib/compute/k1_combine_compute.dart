@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import '../models/fractal_judgment_event.dart';
 import '../models/k1_bar.dart';
+import '../models/k1_bar_view.dart';
 import '../models/kline_bar.dart';
 import '../models/kline_combine_frame.dart';
 import 'k1_bar_view_compute.dart';
@@ -154,23 +155,52 @@ List<KlineCombineFrame> computeK1CombineFrames(
   final endAtLeftHalf = <bool>[];
   final startAtRightHalf = <bool>[];
 
-  // 第一条虚线口径（与 Rust CombineEngine 同构）：leave 后不截；非 leave 至多一次
-  var seedLeaveSeen = false;
-  var nonleaveTruncUsed = false;
-
-  int seedLeaveDir(double h1, double l1, double hn, double ln) {
-    if (hn > h1 && ln > l1) return 1;
-    if (hn < h1 && ln < l1) return -1;
-    return 0;
+  /// 开新组（同 Rust `MergedGroup::new_first`）。
+  void pushGroup(K1BarView v, K1Bar b, String t1, String t2, String dir) {
+    highs.add(b.high);
+    lows.add(b.low);
+    dirs.add(dir);
+    x1s.add(v.viewX1);
+    x2s.add(v.viewX2);
+    t1s.add(t1);
+    t2s.add(t2);
+    unitCounts.add(1);
+    fxAt.add('UNKNOWN');
+    endAtLeftHalf.add(v.endAtLeftHalf);
+    startAtRightHalf.add(v.startAtRightHalf);
   }
 
-  bool seedNonleaveMayTrunc(double h1, double l1, double hn, double ln) {
-    if (seedLeaveSeen || nonleaveTruncUsed) return false;
-    final leave = seedLeaveDir(h1, l1, hn, ln);
-    if (leave != 0) {
-      seedLeaveSeen = true;
+  /// 首分型前的「两元素分型」（与 Rust `try_pair_fx_before_first` 同构）：
+  /// 该层还没有任何分型时，中组（倒数第二组）high、low 都高于右组 → 顶；
+  /// 都低于右组 → 底；其余（含包含/交叉）不判。**只盖章、不改价、不拆组**。
+  /// 返回本次是否盖上分型（盖上则当步不再走三元素，与 Rust 返回顺序一致）。
+  bool pairFxBeforeFirst(int judgeX) {
+    if (fxAt.any((f) => f != 'UNKNOWN')) return false;
+    final n = highs.length;
+    if (n < 2) return false;
+    final m = n - 2;
+    final mh = highs[m];
+    final ml = lows[m];
+    final nh = highs[m + 1];
+    final nl = lows[m + 1];
+    final String fx;
+    if (mh > nh && ml > nl) {
+      fx = 'TOP';
+    } else if (mh < nh && ml < nl) {
+      fx = 'BOTTOM';
+    } else {
       return false;
     }
+    fxAt[m] = fx;
+    onFxEvent(fx, mh, ml);
+    judgmentEvents?.add(FractalJudgmentEvent(
+      x: judgeX,
+      fx: fx,
+      fractalX1: x1s[m],
+      fractalX2: x2s[m],
+      rightX1: x1s[n - 1],
+      rightX2: x2s[n - 1],
+    ));
     return true;
   }
 
@@ -201,65 +231,23 @@ List<KlineCombineFrame> computeK1CombineFrames(
     final last = highs.length - 1;
     final dir = combineDir(highs[last], lows[last], b.high, b.low);
 
-    // 种子框口径 A：首两单元强制独立；非 leave 且第二框严格包含种子 → 至多截断一次
+    // 首分型前口径（与 Rust `CombineEngine::feed_guarded` 种子分支同构，2026-11-17）：
+    // **禁用截断**——包含关系先并入首组（首组方向恒 Up：高高低高；分型比的是
+    // 合并框，不是原始 K），不包含则开新组；两种情况都跑两元素分型。
     if (highs.length == 1) {
-      final h1 = highs[0];
-      final l1 = lows[0];
-      final contains =
-          b.high >= h1 && b.low <= l1 && !(b.high == h1 && b.low == l1);
-      if (contains && seedNonleaveMayTrunc(h1, l1, b.high, b.low)) {
-        final dh = (b.high - h1).abs();
-        final dl = (b.low - l1).abs();
-        final upLeg = dl > dh;
-        final truncFx = upLeg ? 'TOP' : 'BOTTOM';
-        fxAt[0] = truncFx;
-        onFxEvent(truncFx, h1, l1);
-        judgmentEvents?.add(FractalJudgmentEvent(
-          x: v.viewX2,
-          fx: truncFx,
-          truncated: true,
-          fractalX1: x1s[0],
-          fractalX2: x2s[0],
-          rightX1: v.viewX1,
-          rightX2: v.viewX2,
-        ));
-        final forced = upLeg ? 'DOWN' : 'UP';
-        final rw = truncRewriteTrigger(
-          upLeg: upLeg,
-          lastH: h1,
-          lastL: l1,
-          uh: b.high,
-          ul: b.low,
-        );
-        highs.add(rw.high);
-        lows.add(rw.low);
-        dirs.add(forced);
-        x1s.add(v.viewX1);
-        x2s.add(v.viewX2);
-        t1s.add(t1);
-        t2s.add(t2);
-        unitCounts.add(1);
-        fxAt.add('UNKNOWN');
-        endAtLeftHalf.add(v.endAtLeftHalf);
-        startAtRightHalf.add(v.startAtRightHalf);
-        nonleaveTruncUsed = true;
-        continue;
+      if (dir == 'COMBINE') {
+        // 首组方向恒 Up（同 Rust `MergedGroup::new_first(u, MergeDir::Up)`）
+        highs[0] = math.max(highs[0], b.high);
+        lows[0] = math.max(lows[0], b.low);
+        x2s[0] = v.viewX2;
+        t2s[0] = t2;
+        unitCounts[0] += 1;
+        endAtLeftHalf[0] = v.endAtLeftHalf;
+        continue; // 只剩一组，两元素分型不成立
       }
-      final forcedDir = dir == 'COMBINE' ? 'UP' : dir;
-      highs.add(b.high);
-      lows.add(b.low);
-      dirs.add(forcedDir);
-      x1s.add(v.viewX1);
-      x2s.add(v.viewX2);
-      t1s.add(t1);
-      t2s.add(t2);
-      unitCounts.add(1);
-      fxAt.add('UNKNOWN');
-      endAtLeftHalf.add(v.endAtLeftHalf);
-      startAtRightHalf.add(v.startAtRightHalf);
-      if (seedLeaveDir(h1, l1, b.high, b.low) != 0) {
-        seedLeaveSeen = true;
-      }
+      pushGroup(v, b, t1, t2, dir);
+      // 两元素分型：中组（倒数第二组）vs 右组
+      pairFxBeforeFirst(v.viewX2);
       continue;
     }
 
@@ -324,17 +312,9 @@ List<KlineCombineFrame> computeK1CombineFrames(
       unitCounts[last] += 1;
       endAtLeftHalf[last] = v.endAtLeftHalf;
     } else {
-      highs.add(b.high);
-      lows.add(b.low);
-      dirs.add(dir);
-      x1s.add(v.viewX1);
-      x2s.add(v.viewX2);
-      t1s.add(t1);
-      t2s.add(t2);
-      unitCounts.add(1);
-      fxAt.add('UNKNOWN');
-      endAtLeftHalf.add(v.endAtLeftHalf);
-      startAtRightHalf.add(v.startAtRightHalf);
+      pushGroup(v, b, t1, t2, dir);
+      // 首分型前先判两元素（Rust 同序：pair 判出即返回，当步不再走三元素）
+      if (pairFxBeforeFirst(v.viewX2)) continue;
       if (highs.length >= 3) {
         final mid = highs.length - 2;
         updateFx(highs, lows, fxAt, mid);
