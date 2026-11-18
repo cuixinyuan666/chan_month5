@@ -4321,6 +4321,29 @@ class _KlineCompositePainter extends CustomPainter {
   /// 用户就只能在最右边画新 K（2026-11-16 用户反馈）。
   double _candleBodyW(double slotW) => candleBodyWidth(slotW);
 
+  /// Kn（K1 及以上）实体最小高：一段退化成「四价全等」时只有 1px，
+  /// 会被当成没画出来。K1 / Kn 同一条；K0 原始 K 不走这里（保持真实价差）。
+  static const double _minKnBodyPx = 3.0;
+
+  /// Kn 蜡烛实体矩形：实体不足 [_minKnBodyPx] 时以中轴为心撑到最小高；
+  /// 影线端另用 [Rect.top] / [Rect.bottom] 兜住，不会比实体短。
+  Rect _knCandleBodyRect(
+    double left,
+    double spanW,
+    double yOpen,
+    double yClose,
+  ) {
+    var top = math.min(yOpen, yClose);
+    var bottom = math.max(yOpen, yClose);
+    if (bottom - top < _minKnBodyPx) {
+      final mid = (top + bottom) / 2;
+      top = mid - _minKnBodyPx / 2;
+      bottom = mid + _minKnBodyPx / 2;
+    }
+    return Rect.fromLTWH(left, top, spanW, bottom - top);
+  }
+
+
   /// 合并线框横向：以 x1/x2 对应 K 线中轴为起止基准（非实体左右边）。
   (double left, double right) _combineFrameHSpan(
     int x1,
@@ -4437,9 +4460,10 @@ class _KlineCompositePainter extends CustomPainter {
       final yL = priceRange.yOf(v.low, plotTop, plotH);
       final yO = priceRange.yOf(v.open, plotTop, plotH);
       final yC = priceRange.yOf(v.close, plotTop, plotH);
-      final top = math.min(yO, yC);
-      final bottom = math.max(yO, yC);
-      final rect = Rect.fromLTWH(left, top, spanW, math.max(1.0, bottom - top));
+      final rect = _knCandleBodyRect(left, spanW, yO, yC);
+      // 四价全等（一段=一根 K）时影线与实体等高，兜一下避免影线倒挂
+      final yWickHigh = math.min(yH, rect.top);
+      final yWickLow = math.max(yL, rect.bottom);
       final building = _unitBarIsBuilding(
         confirmX: v.confirmX,
         viewX2: v.viewX2,
@@ -4455,8 +4479,8 @@ class _KlineCompositePainter extends CustomPainter {
           cx: cx,
           bodyWidth: spanW,
           widthMult: _wickWidthMultForConfirmStep(confirmX: v.confirmX, barIdx: v.viewX2),
-          yHigh: yH,
-          yLow: yL,
+          yHigh: yWickHigh,
+          yLow: yWickLow,
           bodyTop: rect.top,
           bodyBottom: rect.bottom,
           color: isUp ? upFrame : dnFrame,
@@ -4467,8 +4491,8 @@ class _KlineCompositePainter extends CustomPainter {
         _drawCandleWick(
           canvas,
           cx: cx,
-          yHigh: yH,
-          yLow: yL,
+          yHigh: yWickHigh,
+          yLow: yWickLow,
           bodyTop: rect.top,
           bodyBottom: rect.bottom,
           bodyWidth: spanW,
@@ -6361,9 +6385,10 @@ class _KlineCompositePainter extends CustomPainter {
       final yL = priceRange.yOf(v.low, plotTop, plotH);
       final yO = priceRange.yOf(v.open, plotTop, plotH);
       final yC = priceRange.yOf(v.close, plotTop, plotH);
-      final top = math.min(yO, yC);
-      final bottom = math.max(yO, yC);
-      final rect = Rect.fromLTWH(left, top, spanW, math.max(1.0, bottom - top));
+      final rect = _knCandleBodyRect(left, spanW, yO, yC);
+      // 四价全等（一段=一根 K）时影线与实体等高，兜一下避免影线倒挂
+      final yWickHigh = math.min(yH, rect.top);
+      final yWickLow = math.max(yL, rect.bottom);
       final building = _unitBarIsBuilding(
         confirmX: v.bar.confirmX,
         viewX2: v.viewX2,
@@ -6381,8 +6406,8 @@ class _KlineCompositePainter extends CustomPainter {
             confirmX: v.bar.confirmX,
             barIdx: v.viewX2,
           ),
-          yHigh: yH,
-          yLow: yL,
+          yHigh: yWickHigh,
+          yLow: yWickLow,
           bodyTop: rect.top,
           bodyBottom: rect.bottom,
           color: isUp ? upFrame : dnFrame,
@@ -6393,8 +6418,8 @@ class _KlineCompositePainter extends CustomPainter {
         _drawCandleWick(
           canvas,
           cx: cx,
-          yHigh: yH,
-          yLow: yL,
+          yHigh: yWickHigh,
+          yLow: yWickLow,
           bodyTop: rect.top,
           bodyBottom: rect.bottom,
           bodyWidth: spanW,
