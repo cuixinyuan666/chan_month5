@@ -585,17 +585,19 @@ void main() {
     );
     final frames = computeK1CombineFrames(sub, vu);
     expect(frames, isNotEmpty);
-    expect(frames.first.x1, snap.seedBoxX1);
-    expect(frames.first.x2, snap.seedBoxX2);
-    expect(frames.first.high, closeTo(snap.seedBoxHigh, 1e-9));
-    expect(frames.first.low, closeTo(snap.seedBoxLow, 1e-9));
+    // 2026-11-19 新口径：首分型前先做包含合并，首组按高高扩框，
+    // 不再与种子框同矩形，因此 combineFramesWithoutSeed 不再跳过它。
+    expect(frames.first.x1, 0);
+    expect(frames.first.x2, greaterThanOrEqualTo(snap.seedBoxX2));
+    expect(frames.first.high, greaterThanOrEqualTo(snap.seedBoxHigh));
+    expect(frames.first.low, greaterThanOrEqualTo(snap.seedBoxLow));
 
     final kept = combineFramesWithoutSeed(
       frames: frames,
       snap: snap,
       earlyDynamicUnit: true,
     );
-    expect(kept.length, frames.length - 1,
-        reason: 'K2 种子框首组同样跳过（全层同构）');
+    expect(kept.length, frames.length,
+        reason: '首组已按高高扩框，与种子框不同矩形，不再跳过');
   });
 }

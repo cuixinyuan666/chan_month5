@@ -3,6 +3,7 @@ import 'package:chan_kline/models/fractal_judgment_event.dart';
 import 'package:chan_kline/models/k1_bar.dart';
 import 'package:chan_kline/models/kline_bar.dart';
 import 'package:chan_kline/models/kline_combine_frame.dart';
+import 'package:chan_kline/models/pre_first_fractal_mode.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// 默认 TEST 股（`a_Data/test/custom.1m.csv` 11 根）K1 合并框回归。
@@ -104,8 +105,45 @@ void main() {
     final f1 = frames.last;
     expect([f1.x1, f1.x2, f1.count], [4, 6, 2]);
     expect(f1.high, closeTo(10.19, 1e-9));
-    expect(f1.low, closeTo(10.07, 1e-9));
+    // 2026-11-19 高高口径全层同构：首分型前包含吸收 high/low 都取最大，
+    // 故 10.07 与 10.13 取 10.13（旧口径按 Down 取最小=10.07）。
+    expect(f1.low, closeTo(10.13, 1e-9));
 
     expectNoTruncationArtifacts(frames);
+  });
+
+  test('低低口径：首分型前首组包含吸收 high/low 都取最小', () {
+    final b = bars(6);
+    final units = [
+      unit(0, 0, 0, 10.17, 10.17),
+      unit(1, 0, 4, 10.22, 10.02), // 严格包含首组 → 低低并成首框
+      unit(2, 4, 5, 10.19, 10.07),
+    ];
+    final frames = computeK1CombineFrames(
+      b,
+      units,
+      mode: PreFirstFractalMode.lowLow,
+    );
+    final f0 = frames.first;
+    expect(f0.x1, 0);
+    expect(f0.x2, 4);
+    expect(f0.high, closeTo(10.17, 1e-9));
+    expect(f0.low, closeTo(10.02, 1e-9));
+    expect(f0.count, 2);
+    expect(f0.beforeFirstStandardFx, isTrue,
+        reason: '两元素章不算正式，仍标首分型前（单根也画框）');
+  });
+
+  test('两元素章不解除首分型前：beforeFirstStandardFx 保持 true', () {
+    final b = bars(11);
+    final units = [
+      unit(0, 0, 0, 10.17, 10.17),
+      unit(1, 0, 4, 10.22, 10.02),
+      unit(2, 4, 5, 10.19, 10.07),
+      unit(3, 5, 6, 10.19, 10.13),
+    ];
+    final frames = computeK1CombineFrames(b, units);
+    expect(frames.first.fx, 'TOP');
+    expect(frames.first.beforeFirstStandardFx, isTrue);
   });
 }
