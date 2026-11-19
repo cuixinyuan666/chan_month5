@@ -5,6 +5,7 @@ import '../models/k1_bar.dart';
 import '../models/k1_bar_view.dart';
 import '../models/kline_bar.dart';
 import '../models/kline_combine_frame.dart';
+import '../models/pre_first_fractal_mode.dart';
 import 'k1_bar_view_compute.dart';
 
 /// 十字线 as-of / 主图展示轨：与 Rust `build_k1_combine_frames_with` 同口径
@@ -17,6 +18,11 @@ List<KlineCombineFrame> computeK1CombineFrames(
   List<K1Bar> k1Bars, {
   bool truncationCheck = true,
   bool validityCheck = true,
+  /// 首分型前的高高/低低口径（2026-11-19 全层同构）：
+  /// - `highHigh`：首分型前包含吸收 high/low 都取最大；
+  /// - `lowLow`：都取最小；
+  /// - `seedBox` / `classic`：保持引擎原有方向吸收（不并框）。
+  PreFirstFractalMode mode = PreFirstFractalMode.defaultMode,
   /// 非空时：分型判断成立当步写入（x=触发单元 viewX2，无整框回填）
   List<FractalJudgmentEvent>? judgmentEvents,
 }) {
@@ -31,6 +37,11 @@ List<KlineCombineFrame> computeK1CombineFrames(
     if (ha < hb && la < lb) return 'UP';
     return 'COMBINE';
   }
+
+  /// 首个「正式」分型是否已成立（三元素或截断确认）。
+  /// 两元素章（`pairFxBeforeFirst`）不算正式：它只是首分型前的临时盖章，
+  /// 不能解锁截断，也不能解锁「首分型后」口径。
+  var firstStandardFxSeen = false;
 
   void updateFx(
     List<double> highs,
@@ -52,6 +63,7 @@ List<KlineCombineFrame> computeK1CombineFrames(
       fx = 'BOTTOM';
     }
     fxAt[mid] = fx;
+    if (fx == 'TOP' || fx == 'BOTTOM') firstStandardFxSeen = true;
   }
 
   // 截断状态机（与 Rust TruncReplayState / LevelState 同构）
@@ -231,14 +243,20 @@ List<KlineCombineFrame> computeK1CombineFrames(
     final last = highs.length - 1;
     final dir = combineDir(highs[last], lows[last], b.high, b.low);
 
-    // 首分型前口径（与 Rust `CombineEngine::feed_guarded` 种子分支同构，2026-11-17）：
+    // 首分型前口径（与 Rust `CombineEngine::feed_guarded` 种子分支同构，2026-11-19）：
     // **禁用截断**——包含关系先并入首组（首组方向恒 Up：高高低高；分型比的是
     // 合并框，不是原始 K），不包含则开新组；两种情况都跑两元素分型。
     if (highs.length == 1) {
       if (dir == 'COMBINE') {
-        // 首组方向恒 Up（同 Rust `MergedGroup::new_first(u, MergeDir::Up)`）
-        highs[0] = math.max(highs[0], b.high);
-        lows[0] = math.max(lows[0], b.low);
+        // 首组方向恒 Up（同 Rust `MergedGroup::new_first(u, MergeDir::Up`）。
+        // 首分型前按设置的高高/低低（2026-11-19 全层同构）：低低=都取最小。
+        if (!firstStandardFxSeen && mode == PreFirstFractalMode.lowLow) {
+          highs[0] = math.min(highs[0], b.high);
+          lows[0] = math.min(lows[0], b.low);
+        } else {
+          highs[0] = math.max(highs[0], b.high);
+          lows[0] = math.max(lows[0], b.low);
+        }
         x2s[0] = v.viewX2;
         t2s[0] = t2;
         unitCounts[0] += 1;
@@ -252,6 +270,28 @@ List<KlineCombineFrame> computeK1CombineFrames(
     }
 
     if (dir == 'COMBINE') {
+      // 首分型前禁用截断（2026-11-19 全层同构）：直接按设置的高高/低低吸收，
+      // 不走 TruncGuard；两元素章不算「正式」，所以这里仍算首分型前。
+      if (!firstStandardFxSeen) {
+        if (mode == PreFirstFractalMode.lowLow) {
+          highs[last] = math.min(highs[last], b.high);
+          lows[last] = math.min(lows[last], b.low);
+        } else if (mode == PreFirstFractalMode.highHigh) {
+          highs[last] = math.max(highs[last], b.high);
+          lows[last] = math.max(lows[last], b.low);
+        } else if (dirs[last] == 'DOWN') {
+          highs[last] = math.min(highs[last], b.high);
+          lows[last] = math.min(lows[last], b.low);
+        } else {
+          highs[last] = math.max(highs[last], b.high);
+          lows[last] = math.max(lows[last], b.low);
+        }
+        x2s[last] = v.viewX2;
+        t2s[last] = t2;
+        unitCounts[last] += 1;
+        endAtLeftHalf[last] = v.endAtLeftHalf;
+        continue;
+      }
       final g = truncGuard();
       // 首个分型确认后 TruncGuard：原实现，不受第一条虚线 leave/一次额度约束
       if (g != null &&
@@ -266,6 +306,7 @@ List<KlineCombineFrame> computeK1CombineFrames(
         // 截断：左框当场分型，本单元改写为第三元素形态后强制断开成新组
         final truncFx = g.upLeg ? 'TOP' : 'BOTTOM';
         fxAt[last] = truncFx;
+        firstStandardFxSeen = true;
         onFxEvent(truncFx, highs[last], lows[last]);
         // 截断：分型框=被标分型的左组（与确认 fractal_x1/x2 同口径）
         judgmentEvents?.add(FractalJudgmentEvent(
@@ -353,6 +394,7 @@ List<KlineCombineFrame> computeK1CombineFrames(
       count: cnt,
       endAtLeftHalf: frameEnd,
       startAtRightHalf: frameStart,
+      beforeFirstStandardFx: !firstStandardFxSeen,
     );
   });
 }

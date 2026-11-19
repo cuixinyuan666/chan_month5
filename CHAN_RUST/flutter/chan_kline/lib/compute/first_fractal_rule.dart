@@ -140,6 +140,8 @@ List<KlineCombineFrame> applyFirstPairFractalToFrames(
     boxCount += frames[i].count;
   }
   final last = frames[end - 1];
+  // 找到真分型（stdIdx < length）→ 已进入「首分型后」；没找到 → 仍首分型前。
+  final bool beforeFirstStandardFx = stdIdx >= frames.length;
   return <KlineCombineFrame>[
     KlineCombineFrame(
       x1: frames.first.x1,
@@ -152,6 +154,7 @@ List<KlineCombineFrame> applyFirstPairFractalToFrames(
       count: boxCount,
       endAtLeftHalf: last.endAtLeftHalf,
       startAtRightHalf: frames.first.startAtRightHalf,
+      beforeFirstStandardFx: beforeFirstStandardFx,
     ),
     ...frames.sublist(end),
   ];

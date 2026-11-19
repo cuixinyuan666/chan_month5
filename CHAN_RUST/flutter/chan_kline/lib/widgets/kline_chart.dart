@@ -19,6 +19,7 @@ import '../compute/k1_bar_view_compute.dart';
 import '../compute/kline_period_aggregate.dart';
 import '../compute/pre_first_fractal_compute.dart';
 import '../compute/chart_view_compute.dart';
+import '../compute/first_fractal_rule.dart';
 import '../compute/fractal_judgment_compute.dart';
 import '../compute/zs_signal_compute.dart';
 import '../compute/class1_bs_compute.dart';
@@ -4616,6 +4617,52 @@ class _KlineCompositePainter extends CustomPainter {
     _drawBuildingK0Line(canvas, w, plotTop, plotH, slotW);
     // 方案B：种子框首段 structure level==0
     _drawSeedPhaseLines(canvas, w, plotTop, plotH, slotW, level: 0, style: null);
+    // 首分型前二元素章预告线（独立通道，不受正式连线三条禁令限制）
+    _drawPreFirstFractalTipLines(canvas, w, plotTop, plotH, slotW, displayKn: 0);
+  }
+
+  /// 首分型前二元素章预告线（构建中虚线通道，2026-11-19 全层同构）。
+  ///
+  /// 顶分型连「首框最高 ↔ 当前最低」，底分型连「首框最低 ↔ 当前最高」。
+  /// 与正式连线隔离：**不走** `_lineEndpointsInSameCombineFrame`，
+  /// 也不参与「单框不画 / 两端同框不画 / 首框同根极值不画内线」三条禁令。
+  void _drawPreFirstFractalTipLines(
+    Canvas canvas,
+    double w,
+    double plotTop,
+    double plotH,
+    double slotW, {
+    required int displayKn,
+  }) {
+    if (!earlyDynamicUnit) return;
+    final frames = _displayCombineFrames(displayKn);
+    if (frames.length < 2) return;
+    final first = frames.first;
+    if (first.fx != 'TOP' && first.fx != 'BOTTOM') return;
+    if (bars.isEmpty) return;
+    final asOf = segAsOf ?? bars.last.idx;
+    if (asOf < 0) return;
+    final tip = computePreFirstFractalTipLine(
+      bars: bars,
+      first: first,
+      asOf: asOf,
+    );
+    if (tip == null) return;
+
+    final x1 = _barCenterX(tip.begin.barIdx, w, slotW);
+    final x2 = _barCenterX(tip.end.barIdx, w, slotW);
+    final y1 = priceRange.yOf(tip.begin.price, plotTop, plotH);
+    final y2 = priceRange.yOf(tip.end.price, plotTop, plotH);
+    if (math.min(x1, x2) > viewport.viewXMax + 1 ||
+        math.max(x1, x2) < viewport.viewXMin - 1) {
+      return;
+    }
+    final style = ChartLevelLineStyle.forDisplayKn(displayKn);
+    final paint = Paint()
+      ..color = style.color.withValues(alpha: 0.55)
+      ..strokeWidth = 1.2
+      ..style = PaintingStyle.stroke;
+    _drawDashedLine(canvas, Offset(x1, y1), Offset(x2, y2), paint);
   }
 
   /// 取 as-of 当下该层种子框快照（逐K冻结，与 tooltip/ML 同源）
@@ -4752,6 +4799,7 @@ class _KlineCompositePainter extends CustomPainter {
       barsForCombine,
       virtualUnits,
       truncationCheck: truncationCheck,
+      mode: preFirstFractalMode,
     );
     if (displayFrames.isEmpty) return const [];
     return _mergePreFractalFrames(displayFrames);
@@ -4945,6 +4993,8 @@ class _KlineCompositePainter extends CustomPainter {
       seedColor.withValues(alpha: 0.12),
       lastAsBuilding: !snap.seedConfirmed && showBuildingDash,
       buildingDashPattern: buildingDashPattern,
+      // 首分型前的首框：一根也算框（2026-11-19 用户明确）
+      beforeFirstStandardFx: true,
     );
   }
 
@@ -5182,6 +5232,8 @@ class _KlineCompositePainter extends CustomPainter {
         level: kn,
         style: ChartLevelLineStyle.forDisplayKn(kn),
       );
+      // 首分型前二元素章预告线（独立通道）
+      _drawPreFirstFractalTipLines(canvas, w, plotTop, plotH, slotW, displayKn: kn);
       return;
     }
     // 回退：仅 K1 且无 levels 时用旧 k1Analysis
@@ -5319,7 +5371,7 @@ class _KlineCompositePainter extends CustomPainter {
     }
     if (bundle == null) return const [];
     final asOf = segAsOf;
-    final virtualUnits = asOf != null
+    var virtualUnits = asOf != null
         ? asOfLevelVirtualK1Bars(
             levels: levels,
             barFeatures: barFeatures,
@@ -5328,6 +5380,30 @@ class _KlineCompositePainter extends CustomPainter {
             includeBuilding: true,
           )
         : levelBundleVirtualK1Bars(bundle);
+    // 首分型前「父层首框 → 本层动态 K」（2026-11-19 全层同构）：
+    // - 本层还没有任何单元 → 用父层首框生成首根（固定映射）；
+    // - 本层只有首根且父层已出两元素章 → 追加第二根（极值区间）。
+    // 动态 K 不下传：父层只取 `_displayCombineFrames(unitLevel-1)`，不再往上递归。
+    if (earlyDynamicUnit && unitLevel >= 1) {
+      final parentFrames = _displayCombineFrames(unitLevel - 1);
+      final asOfX = asOf ?? (bars.isEmpty ? -1 : bars.last.idx);
+      if (parentFrames.isNotEmpty && asOfX >= 0) {
+        final dyn = buildPreFirstDynamicK1Bars(
+          bars: bars,
+          parentFrames: parentFrames,
+          asOf: asOfX,
+        );
+        if (dyn.isNotEmpty) {
+          if (virtualUnits.isEmpty) {
+            virtualUnits = dyn;
+          } else if (virtualUnits.length == 1 &&
+              dyn.length == 2 &&
+              !fxIsUnknownCodeUnit(parentFrames.first.fx)) {
+            virtualUnits = <K1Bar>[...virtualUnits, dyn[1]];
+          }
+        }
+      }
+    }
     if (virtualUnits.isEmpty &&
         bundle.unitBars.isEmpty &&
         bundle.activeUnit == null &&
@@ -7229,6 +7305,8 @@ class _KlineCompositePainter extends CustomPainter {
       k0Style.color.withValues(alpha: 0.13),
       lastAsBuilding: showBuildingDash,
       buildingDashPattern: k0Style.buildingDashPattern,
+      // 首分型前（K0 还没有任何确认信号）一根也算框（2026-11-19 用户明确）
+      beforeFirstStandardFx: earlyDynamicUnit && k0ConfirmSignals.isEmpty,
     );
     // 种子框（K0合并层=structure 0）
     _drawSeedBoxOverlay(
@@ -7259,6 +7337,7 @@ class _KlineCompositePainter extends CustomPainter {
     Color fillColor, {
     bool lastAsBuilding = false,
     List<double> buildingDashPattern = const <double>[5, 4],
+    bool beforeFirstStandardFx = false,
   }) {
     if (frames.isEmpty) return;
 
@@ -7279,8 +7358,11 @@ class _KlineCompositePainter extends CustomPainter {
     // 全模式（单图 / 子窗口 / K线画板 / 分笔画板）、全层级同一条规则：
     // 整层只有 1 根 K（1 个单元）时不画合并框——一根 K 谈不上「合并」，
     // 画出来只是给蜡烛套一只四边虚线的壳。
-    // 两根及以上才画；首分型前后同一口径，不再按 subWindow / beforeFirstFx 分支。
-    if (totalUnits <= 1) return;
+    // **首分型前例外**（2026-11-19 用户明确）：一根也算框；
+    // 首分型正式成立后恢复「单根不画」。
+    final bool allowSingleBar = beforeFirstStandardFx ||
+        (frames.isNotEmpty && frames.first.beforeFirstStandardFx);
+    if (totalUnits <= 1 && !allowSingleBar) return;
     for (var i = 0; i < frames.length; i++) {
       final f = frames[i];
       if (f.x2 < viewport.viewXMin - 1 || f.x1 > viewport.viewXMax + 1) {

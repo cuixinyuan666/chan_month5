@@ -13,6 +13,10 @@ class KlineCombineFrame {
   /// 起始落在 x1 分钟 K 右半侧（左边界=该 K 中轴）
   final bool startAtRightHalf;
 
+  /// 该帧所在层是否仍处于「首分型正式成立前」（两元素章也算首分型前）。
+  /// 绘制层用它决定「单根框是否也画」；Rust 回传帧默认 false（由调用方另行判定）。
+  final bool beforeFirstStandardFx;
+
   const KlineCombineFrame({
     required this.x1,
     required this.x2,
@@ -24,6 +28,7 @@ class KlineCombineFrame {
     required this.count,
     this.endAtLeftHalf = false,
     this.startAtRightHalf = false,
+    this.beforeFirstStandardFx = false,
   });
 
   factory KlineCombineFrame.fromJson(Map<String, dynamic> json) {
@@ -38,6 +43,8 @@ class KlineCombineFrame {
       count: (json['count'] as num?)?.toInt() ?? 1,
       endAtLeftHalf: json['end_at_left_half'] as bool? ?? false,
       startAtRightHalf: json['start_at_right_half'] as bool? ?? false,
+      beforeFirstStandardFx:
+          json['before_first_standard_fx'] as bool? ?? false,
     );
   }
 }

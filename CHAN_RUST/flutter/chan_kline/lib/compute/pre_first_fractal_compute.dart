@@ -72,6 +72,8 @@ List<KlineCombineFrame> applyPreFirstFractalMode(
         fx: b.fx,
         count: a.count + b.count,
         endAtLeftHalf: b.endAtLeftHalf,
+        // 顶分型已落在第二组：该层已进入「首分型后」
+        beforeFirstStandardFx: false,
       ),
       ...frames.sublist(2),
     ];
@@ -99,6 +101,8 @@ List<KlineCombineFrame> applyPreFirstFractalMode(
       fx: 'UNKNOWN',
       count: count,
       endAtLeftHalf: last.endAtLeftHalf,
+      // 全并成一框且 fx 仍 UNKNOWN：仍处首分型前，一根也算框
+      beforeFirstStandardFx: true,
     ),
     ...frames.sublist(end),
   ];

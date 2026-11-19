@@ -584,7 +584,8 @@ List<K1Bar> boxedFirstFractalCandleBars({
   if (box == null) return units;
   out.add(box);
   for (final u in units.skip(1)) {
-    final nx1 = u.x1 < firstFractalX2 ? firstFractalX2 : u.x1;
+    final trimmed = u.x1 < firstFractalX2;
+    final nx1 = trimmed ? firstFractalX2 : u.x1;
     final nx2 = u.x2 < nx1 ? nx1 : u.x2;
     final reb = _rangeK1Bar(
       bars,
@@ -593,7 +594,28 @@ List<K1Bar> boxedFirstFractalCandleBars({
       idx: u.idx,
       dir: u.dir,
     );
-    if (reb != null) out.add(reb);
+    if (reb == null) continue;
+    if (!trimmed || u.x1 == nx1) {
+      out.add(reb);
+      continue;
+    }
+    // 被首分型框裁掉左段的单元：只裁 x 跨度，开价必须保留原单元的开价
+    // （= 上一层首分型的极值：下降段取顶分型最高、上升段取底分型最低）。
+    // 否则 x3..4 重算会把开价顶成 10.19，第二根动态 K 就丢了 10.22 的顶。
+    // 上下沿同时把开价包进来，保证 OHLC 自洽；全层同构，Kn 同走这一条。
+    final hi = reb.high > u.open ? reb.high : u.open;
+    final lo = reb.low < u.open ? reb.low : u.open;
+    out.add(K1Bar(
+      idx: reb.idx,
+      dir: reb.dir,
+      x1: reb.x1,
+      x2: reb.x2,
+      open: u.open,
+      high: hi,
+      low: lo,
+      close: reb.close,
+      confirmX: reb.confirmX,
+    ));
   }
 
   // 当步仍在首分型框右侧延伸时补一根进行中动态单元（「K1 idx=1 动态 K」）。
@@ -610,7 +632,28 @@ List<K1Bar> boxedFirstFractalCandleBars({
       idx: out.last.idx + 1,
       dir: out.last.dir,
     );
-    if (tail != null) out.add(tail);
+    if (tail != null) {
+      if (tailX1 == firstFractalX2) {
+        // 紧接首分型框之后的第一根动态 K：开价取框的极值（下降框取最高、上升框取最低），
+        // 不能取 tailX1 那根 K 的开价 —— 否则 10.22 的顶被 10.19 顶掉。
+        final startPrice = box.close >= box.open ? box.low : box.high;
+        final hi = tail.high > startPrice ? tail.high : startPrice;
+        final lo = tail.low < startPrice ? tail.low : startPrice;
+        out.add(K1Bar(
+          idx: tail.idx,
+          dir: tail.dir,
+          x1: tail.x1,
+          x2: tail.x2,
+          open: startPrice,
+          high: hi,
+          low: lo,
+          close: tail.close,
+          confirmX: tail.confirmX,
+        ));
+      } else {
+        out.add(tail);
+      }
+    }
   }
   return out;
 }
@@ -726,8 +769,168 @@ List<K1Bar> asOfLevelVirtualK1Bars({
   return frozen;
 }
 
+/// 首分型前：由父层（Kn-1）首框生成子层（Kn）动态 K（全层同构，2026-11-19）。
+///
+/// 规则：
+/// - 父层首框存在 → 子层首根动态 K = 首框固定映射：
+///   `open=框内首根 open`、`close=框内末根 close`、`high/low=框沿`；
+/// - 父层首框 `fx` 为 `TOP` / `BOTTOM`（两元素章）→ 子层再生成第二根：
+///   顶「首框最高 → 当前最低」/ 底「首框最低 → 当前最高」；
+/// - 第二根只给当前区间，极值端点每步按 `asOf` 更新（不回写历史）。
+///
+/// 动态 K 不下传：本函数只算「父→子」一层，调用方不得拿它的结果再当父层。
+List<K1Bar> buildPreFirstDynamicK1Bars({
+  required List<KlineBar> bars,
+  required List<KlineCombineFrame> parentFrames,
+  required int asOf,
+}) {
+  if (parentFrames.isEmpty || bars.isEmpty) return const [];
+  final first = parentFrames.first;
+  final x1 = first.x1 < 0 ? 0 : first.x1;
+  final x2 = first.x2 < 0
+      ? 0
+      : (first.x2 >= bars.length ? bars.length - 1 : first.x2);
+  if (x1 > x2 || x1 >= bars.length) return const [];
 
-/// 种子框内「出发极值」端点：升=框内首次最低 low；降=框内首次最高 high。
+  final head = K1Bar(
+    idx: 0,
+    dir: 1,
+    x1: x1,
+    x2: x2,
+    open: bars[x1].open,
+    high: first.high,
+    low: first.low,
+    close: bars[x2].close,
+    confirmX: asOf,
+  );
+
+  final fx = first.fx;
+  if (fx != 'TOP' && fx != 'BOTTOM') return [head];
+
+  // 第二根：顶分型向下找当前最低；底分型向上找当前最高。
+  int? extremeIdx;
+  double? extremePrice;
+  if (fx == 'TOP') {
+    var low = double.infinity;
+    for (var i = x2; i <= asOf && i < bars.length; i++) {
+      if (bars[i].low < low) {
+        low = bars[i].low;
+        extremeIdx = i;
+      }
+    }
+    if (low.isFinite) extremePrice = low;
+  } else {
+    var high = double.negativeInfinity;
+    for (var i = x2; i <= asOf && i < bars.length; i++) {
+      if (bars[i].high > high) {
+        high = bars[i].high;
+        extremeIdx = i;
+      }
+    }
+    if (high.isFinite) extremePrice = high;
+  }
+  if (extremeIdx == null || extremePrice == null) return [head];
+
+  return [
+    head,
+    K1Bar(
+      idx: 1,
+      dir: fx == 'TOP' ? -1 : 1,
+      x1: x2,
+      x2: extremeIdx,
+      open: fx == 'TOP' ? first.high : first.low,
+      high: fx == 'TOP' ? first.high : extremePrice,
+      low: fx == 'TOP' ? extremePrice : first.low,
+      close: extremePrice,
+      confirmX: asOf,
+    ),
+  ];
+}
+
+/// 首分型前二元素章的预告线（构建中虚线通道，2026-11-19 全层同构）。
+///
+/// - 顶分型：首框最高价 ↔ 当前最低；
+/// - 底分型：首框最低价 ↔ 当前最高；
+/// - 端点每步按 `asOf` 跟当前极值更新；返回 null 表示无预告线
+///   （无两元素章 / 首框越界 / 两端点重合）。
+///
+/// 正式连线仍守「单框不画 / 两端同框不画 / 首框同根极值不画内线」三条禁令；
+/// 本函数只负责「预告线」这一独立通道。
+DisplayBuildingLine? computePreFirstFractalTipLine({
+  required List<KlineBar> bars,
+  required KlineCombineFrame first,
+  required int asOf,
+}) {
+  if (bars.isEmpty) return null;
+  final fx = first.fx;
+  if (fx != 'TOP' && fx != 'BOTTOM') return null;
+  final x1 = first.x1 < 0 ? 0 : first.x1;
+  final x2 = first.x2 < 0
+      ? 0
+      : (first.x2 >= bars.length ? bars.length - 1 : first.x2);
+  if (x1 > x2 || x1 >= bars.length) return null;
+  final asOfX = asOf < 0 ? 0 : (asOf >= bars.length ? bars.length - 1 : asOf);
+
+  // 起点：框内极值所在根（同价取首根）。
+  var beginIdx = x1;
+  if (fx == 'TOP') {
+    for (var i = x1; i <= x2; i++) {
+      if ((bars[i].high - first.high).abs() < 1e-12) {
+        beginIdx = i;
+        break;
+      }
+    }
+  } else {
+    for (var i = x1; i <= x2; i++) {
+      if ((bars[i].low - first.low).abs() < 1e-12) {
+        beginIdx = i;
+        break;
+      }
+    }
+  }
+  final beginPrice = fx == 'TOP' ? first.high : first.low;
+
+  // 终点：首框末根之后到 asOf 的同向极值（首次）。
+  int? endIdx;
+  double? endPrice;
+  if (fx == 'TOP') {
+    var low = double.infinity;
+    for (var i = x2; i <= asOfX; i++) {
+      if (bars[i].low < low) {
+        low = bars[i].low;
+        endIdx = i;
+      }
+    }
+    if (low.isFinite) endPrice = low;
+  } else {
+    var high = double.negativeInfinity;
+    for (var i = x2; i <= asOfX; i++) {
+      if (bars[i].high > high) {
+        high = bars[i].high;
+        endIdx = i;
+      }
+    }
+    if (high.isFinite) endPrice = high;
+  }
+  if (endIdx == null || endPrice == null) return null;
+  if (beginIdx == endIdx && (beginPrice - endPrice).abs() < 1e-12) {
+    return null;
+  }
+
+  return DisplayBuildingLine(
+    begin: LevelLineEndpoint(barIdx: beginIdx, price: beginPrice),
+    end: LevelLineEndpoint(barIdx: endIdx, price: endPrice),
+    dir: fx == 'TOP' ? -1 : 1,
+    unitIdx: -1,
+    anchorX: beginIdx,
+    beginSrc: 'judgment',
+    endSrc: 'open',
+    asSolid: false,
+    isOpenTip: true,
+  );
+}
+
+
 LevelLineEndpoint? seedBoxDepartEndpoint({
   required List<KlineBar> bars,
   required int seedBoxX1,
