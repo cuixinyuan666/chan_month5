@@ -792,15 +792,19 @@ List<K1Bar> buildPreFirstDynamicK1Bars({
       : (first.x2 >= bars.length ? bars.length - 1 : first.x2);
   if (x1 > x2 || x1 >= bars.length) return const [];
 
+  // 首根开收仍取框内首/末根，但必须夹进框沿：低低档首框 high 可能低于首根开盘，
+  // 不夹会让蜡烛实体冒出框外（方案 A 展示口径，2026-11-19 用户确认）。
+  final headOpen = bars[x1].open;
+  final headClose = bars[x2].close;
   final head = K1Bar(
     idx: 0,
     dir: 1,
     x1: x1,
     x2: x2,
-    open: bars[x1].open,
+    open: headOpen.clamp(first.low, first.high).toDouble(),
     high: first.high,
     low: first.low,
-    close: bars[x2].close,
+    close: headClose.clamp(first.low, first.high).toDouble(),
     confirmX: asOf,
   );
 
