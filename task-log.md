@@ -7338,3 +7338,21 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   - `flutter test pipeline_delta_session_test incremental_lookup_session_test pre_first_dynamic_k_test k1_combine_seed_pair_test`：22 过 / 2 败，2 败均为 `incremental_lookup_session_test` 既有（gray_tick_count_2 7 vs 10）；
   - 未重编 DLL/App，未跑机器人套件。
 - **相关文件**：`AGENTS.md`、`CHAN_RUST/rust/chan_data/src/engine.rs`、`pipeline.rs`、`CHAN_RUST/rust/chan_ffi/src/lib.rs`、`CHAN_RUST/flutter/chan_kline/lib/bridge/chan_bridge.dart`、`lib/main.dart`、`lib/widgets/kline_chart.dart`。
+
+## 2026-11-19 · Doubao · 代码 · K1 首框按父层首框重建（方案 A）
+
+- **背景**：低低档 `lowLow` 下 K0 首框 `10.11/9.98` 正确，K1 首个合并框仍 `10.22/9.98`（K1 首单元在 K0 首组吸收前已冻结、不回写）；用户确认方案 A：展示层先修。
+- **操作**：
+  - `kline_chart.dart` `_effectiveK1CombineFrames` 增加 `_k1FirstFrameFromParent`：首分型前 K1 首框以 `_displayCombineFrames(0)` 首框为唯一权威，只换 high/low，不动结构层；
+  - `_levelDisplayCombineFrames` 首分型前用父层首框生成的 `dyn.first` 重建 K1 展示虚拟单元，并按 `x1 > dyn.first.x2` 过滤旧首单元残留；
+  - `_drawLevelCombineOnMainChart` 画框前再校一次首框，防缓存旧值；
+  - `_drawSeedBoxOverlay` 首分型前 K1 种子框同样取父层首框，避免与合并框叠成双层假象；
+  - `_displayFramesMemo` 增加 key（步进 / as-of / 层数 / 模式变化即清缓存）；
+  - `chart_view_compute.dart` `buildPreFirstDynamicK1Bars` 首根 open/close 夹进框沿，避免低低档实体冒出框外。
+- **结果**：
+  - `flutter analyze` 0 error（10 条既有 warning/info）；
+  - `flutter test pre_first_dynamic_k_test k1_combine_seed_pair_test` 11 条全过；
+  - `flutter build windows --debug` 成功；
+  - 低低档实测（默认 TEST 股 1m、10 根）：绘制日志最终 `K1 frames = 0-1:10.11/9.98`，与 K0 首框同源；`K1中枢#0` tooltip 仍 `10.22/9.98`（方案 A 明确接受：结构层不回写）；
+  - 截图接口因 App 窗口被 Chatwork 的 cmd 窗口遮挡而返回旧帧，以画框日志为准，未做界面肉眼验收。
+- **相关文件**：`CHAN_RUST/flutter/chan_kline/lib/widgets/kline_chart.dart`、`lib/compute/chart_view_compute.dart`。
