@@ -7288,3 +7288,36 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   - 子窗口与单图分支保持独立，仅子窗口应用虚拟单元变换
   - 已有 9 个 commit 待推（F1~F5 + 连线规则），全为未修改核心计算的展示轨优化
   - 全量 `flutter test` 仍有 7 个失败，其中 chip_profile_test / incremental_lookup_session_test / early_dynamic_unit_test 为既有失败，非本次引入
+
+---
+
+### 2026-11-19 — 层级早生成：首框同根极值不画内线
+
+- **执行者**：OpenCode Agent
+- **任务类型**：显示口径 / 规则补充
+- **上下文**：默认 TEST 股走到第 4 根时，第一只合并框的最高价和最低价都在第 0 根，框内没有可连的两端。
+- **操作**：补「层级早生成·首框同根极值不画内线」规则；首框同根时不再画框内线，虚线终点直接落到后面的合并框。默认数据第 4 根的线从第 0 根的 10.22 连到第 4 根的 10.07。
+- **结果**：画线测试 24 条全部通过。未重编，未重启 App。
+- **相关文件**：`AGENTS.md`、`CHAN_RUST/flutter/chan_kline/lib/compute/chart_view_compute.dart`、`CHAN_RUST/flutter/chan_kline/test/chart_view_compute_test.dart`。
+
+
+---
+
+### 2026-11-19 — 首分型前全层同构（批一：Flutter 展示层）
+
+- **执行者**：Doubao Agent
+- **任务类型**：规则落地 / 计算与绘制
+- **上下文**：用户确认「二元素分型前、第一合并框阶段」七条规则：一根 K 也算框、本层冻结才触发下层动态 K、包含按高高/低低并首框、Kn 二元素成立生 Kn+1 首根确认与第二根、二元素成立即画预告线、该阶段禁用截断、全层同构；当前高高/低低尚未全层同构。
+- **操作**：
+  - `AGENTS.md` 写入七条口径（上一轮已完成，本轮未再改）；
+  - 计算层：`computeK1CombineFrames` 增加 `mode`，首分型前包含吸收按高高/低低；首分型前 `dir==COMBINE` 直接吸收、跳过 TruncGuard；两元素章不置 `firstStandardFxSeen`；返回帧带 `beforeFirstStandardFx`；
+  - 并框层：`first_fractal_rule.dart` / `pre_first_fractal_compute.dart` 生成的新帧保留 `beforeFirstStandardFx`；
+  - 绘制层：首分型前单根也画框（K0/K1/Kn）；`_levelUnitViewsForLevel` 接入父层首框→本层动态 K（无单元补首根、仅一根且父层有两元素章补第二根）；新增 `_drawPreFirstFractalTipLines`，K0/K1 入口画二元素预告线，独立于正式连线三条禁令；
+  - 纯函数：`buildPreFirstDynamicK1Bars`、`computePreFirstFractalTipLine`。
+- **结果**：
+  - `flutter analyze` 无 error（仅既有 warning/info）；
+  - 受影响测试 38 条全过（k1_combine_seed_pair、pre_first_fractal_mode、first_fractal_rule、pre_first_dynamic_k、k0_combine_compute）；
+  - 全量 `flutter test`：812 过 / 10 败；既有失败 7 条（chip_profile、incremental_lookup 2 条、early_dynamic_unit 2 条、run_to_end_vs_step_freeze、robot_verify_full_suite），另 3 条为上一轮「首框同根极值」未提交测试（chart_view_compute、k0_building_line_same_price、line_slope_compute），非本轮新增；
+  - 随后按新口径修正 `early_dynamic_unit_test` 两条期望（首组 x1=0、首组按高高扩框后不再被 `combineFramesWithoutSeed` 跳过），该文件现只剩 1 条既有失败（begin=21 vs 0）；
+  - 未重编 App，未做机器人连续单步验收；Rust 侧（K0 框沿读设置、mode 透传）未启动，需单独确认。
+- **相关文件**：`AGENTS.md`、`CHAN_RUST/flutter/chan_kline/lib/compute/k1_combine_compute.dart`、`lib/models/kline_combine_frame.dart`、`lib/compute/first_fractal_rule.dart`、`lib/compute/pre_first_fractal_compute.dart`、`lib/compute/chart_view_compute.dart`、`lib/widgets/kline_chart.dart`、`test/pre_first_dynamic_k_test.dart`、`test/k1_combine_seed_pair_test.dart`。
