@@ -7321,3 +7321,20 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   - 随后按新口径修正 `early_dynamic_unit_test` 两条期望（首组 x1=0、首组按高高扩框后不再被 `combineFramesWithoutSeed` 跳过），该文件现只剩 1 条既有失败（begin=21 vs 0）；
   - 未重编 App，未做机器人连续单步验收；Rust 侧（K0 框沿读设置、mode 透传）未启动，需单独确认。
 - **相关文件**：`AGENTS.md`、`CHAN_RUST/flutter/chan_kline/lib/compute/k1_combine_compute.dart`、`lib/models/kline_combine_frame.dart`、`lib/compute/first_fractal_rule.dart`、`lib/compute/pre_first_fractal_compute.dart`、`lib/compute/chart_view_compute.dart`、`lib/widgets/kline_chart.dart`、`test/pre_first_dynamic_k_test.dart`、`test/k1_combine_seed_pair_test.dart`。
+
+## 2026-11-19 · Doubao · 代码 · 首分型前高高/低低全层同构（Rust 批二）
+
+- **背景**：`AGENTS.md` 第 93 条「待修缺口」——K0 框沿不读设置、K1/Kn 固定按方向；用户回「确认」启动批二。
+- **操作**：
+  - `engine.rs`：新增 `PreFirstMergeMode::{HighHigh,LowLow}`；`CombineEngine.pre_first_mode` 默认 HighHigh；首组包含吸收改 `MergedGroup::absorb_pre_first`（高高 max/max、低低 min/min），不再跟随组方向；补 2 条单测；
+  - `pipeline.rs`：`PipelineOptions.pre_first_high_high`（默认 true）→ `LevelState::new` 设 `engine.pre_first_mode`；
+  - `chan_ffi`：`CombineRequest` / pipeline `OptReq` 增加 `pre_first_high_high` 并落到 `PipelineOptions`；
+  - Flutter：`chan_bridge.dart` 的 `buildKlineCombineBundle` / `pipelineCreate` / `ChanPipelineSession.create` 增加 `preFirstHighHigh`；`main.dart` 主步进、分笔板、K 线画板按 `_preFirstFractalMode == PreFirstFractalMode.highHigh` 透传；`kline_chart.dart` asOf 对照同步；
+  - `AGENTS.md` 第 93 条改为「已实施」，写明三层落点。
+- **结果**：
+  - `cargo check -p chan_data -p chan_ffi` 通过；新增 2 条 Rust 单测通过；
+  - `cargo test -p chan_data`：142 过 / 6 败 / 13 ignored；6 败中 5 条为离线数据缺失（688687、offline load 等），1 条 `kn_body_excludes_begin_pole_bar_002003` 已用「撤销本轮改动」对照确认既有失败（idx 4 vs 3）；
+  - `flutter analyze`：0 error / 139 既有 warning+info；
+  - `flutter test pipeline_delta_session_test incremental_lookup_session_test pre_first_dynamic_k_test k1_combine_seed_pair_test`：22 过 / 2 败，2 败均为 `incremental_lookup_session_test` 既有（gray_tick_count_2 7 vs 10）；
+  - 未重编 DLL/App，未跑机器人套件。
+- **相关文件**：`AGENTS.md`、`CHAN_RUST/rust/chan_data/src/engine.rs`、`pipeline.rs`、`CHAN_RUST/rust/chan_ffi/src/lib.rs`、`CHAN_RUST/flutter/chan_kline/lib/bridge/chan_bridge.dart`、`lib/main.dart`、`lib/widgets/kline_chart.dart`。
