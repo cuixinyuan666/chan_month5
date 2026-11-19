@@ -404,18 +404,21 @@ class ChanBridge {
   /// 对当前已喂入 K 线跑 Rust Kn 流水线（逐K：传入前缀 bars 即可）。
   /// [truncationCheck]：截断监察开关；关=添加截断机制前的旧吸收行为。
   /// [earlyDynamicUnit]：层级预锚动态单元开关；开=每层首个单元在父层首确认当根以动态态出现。
+  /// [preFirstHighHigh]：首分型前首框包含取价口径；true=高高（默认），false=低低。
   /// 纯 FFI：旧 DLL 只返回 frames 数组时直接报错，提示重新构建。
   /// 保留为黄金对照 / 十字 asOf 无状态路径；主步进请用 [ChanPipelineSession]。
   KlineCombineBundle buildKlineCombineBundle(
     List<KlineBar> bars, {
     bool truncationCheck = true,
     bool earlyDynamicUnit = true,
+    bool preFirstHighHigh = true,
   }) {
     ensureInitialized();
     final payload = <String, dynamic>{
       'bars': bars.map((b) => b.toJson()).toList(),
       'truncation_check': truncationCheck,
       'early_dynamic_unit': earlyDynamicUnit,
+      'pre_first_high_high': preFirstHighHigh,
     };
     final ptr = _toNative(jsonEncode(payload));
     try {
@@ -435,11 +438,13 @@ class ChanBridge {
   int pipelineCreate({
     bool truncationCheck = true,
     bool earlyDynamicUnit = true,
+    bool preFirstHighHigh = true,
   }) {
     ensureInitialized();
     final payload = <String, dynamic>{
       'truncation_check': truncationCheck,
       'early_dynamic_unit': earlyDynamicUnit,
+      'pre_first_high_high': preFirstHighHigh,
     };
     final ptr = _toNative(jsonEncode(payload));
     try {
@@ -582,6 +587,7 @@ class ChanPipelineSession {
     this.handle,
     this.truncationCheck,
     this.earlyDynamicUnit, {
+    this.preFirstHighHigh = true,
     this.preferDelta = true,
   });
 
@@ -589,6 +595,8 @@ class ChanPipelineSession {
   final int handle;
   final bool truncationCheck;
   final bool earlyDynamicUnit;
+  /// 首分型前首框包含口径：true=高高（默认），false=低低；全层同构。
+  final bool preFirstHighHigh;
 
   /// false=全程 Full Snapshot（对照路径）；true=首包 Full + 后续 Delta。
   final bool preferDelta;
@@ -603,6 +611,7 @@ class ChanPipelineSession {
   factory ChanPipelineSession.create({
     bool truncationCheck = true,
     bool earlyDynamicUnit = true,
+    bool preFirstHighHigh = true,
     bool preferDelta = true,
     ChanBridge? bridge,
   }) {
@@ -610,12 +619,14 @@ class ChanPipelineSession {
     final h = b.pipelineCreate(
       truncationCheck: truncationCheck,
       earlyDynamicUnit: earlyDynamicUnit,
+      preFirstHighHigh: preFirstHighHigh,
     );
     return ChanPipelineSession._(
       b,
       h,
       truncationCheck,
       earlyDynamicUnit,
+      preFirstHighHigh: preFirstHighHigh,
       preferDelta: preferDelta,
     );
   }

@@ -664,6 +664,8 @@ class _KlineChartState extends State<KlineChart> {
         slice,
         truncationCheck: widget.truncationCheck,
         earlyDynamicUnit: widget.earlyDynamicUnit,
+        preFirstHighHigh:
+            widget.preFirstFractalMode == PreFirstFractalMode.highHigh,
       );
       _zsAsOfCacheKey = asOf;
       _zsAsOfBundle = bundle;

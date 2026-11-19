@@ -2694,11 +2694,15 @@ class _KlineHomePageState extends State<KlineHomePage>
     if (_pipelineSession == null ||
         !_pipelineSession!.isAlive ||
         _pipelineSession!.truncationCheck != _truncationCheck ||
-        _pipelineSession!.earlyDynamicUnit != _earlyDynamicUnit) {
+        _pipelineSession!.earlyDynamicUnit != _earlyDynamicUnit ||
+        _pipelineSession!.preFirstHighHigh !=
+            (_preFirstFractalMode == PreFirstFractalMode.highHigh)) {
       _disposePipelineSession();
       _pipelineSession = ChanPipelineSession.create(
         truncationCheck: _truncationCheck,
         earlyDynamicUnit: _earlyDynamicUnit,
+        preFirstHighHigh:
+            _preFirstFractalMode == PreFirstFractalMode.highHigh,
         bridge: _bridge,
       );
     }
@@ -4084,6 +4088,8 @@ class _KlineHomePageState extends State<KlineHomePage>
                   list,
                   truncationCheck: _truncationCheck,
                   earlyDynamicUnit: _earlyDynamicUnit,
+                  preFirstHighHigh:
+                      _preFirstFractalMode == PreFirstFractalMode.highHigh,
                 ),
                 // 首框口径跟随 App 通用设置，与主图/分笔画板同一规则：
                 // earlyDynamicUnit + preFirstFractalMode 共同决定，
@@ -6672,6 +6678,7 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
       model.toTickBars(),
       earlyDynamicUnit: _earlyDynamicUnit,
       truncationCheck: _truncationCheck,
+      preFirstHighHigh: _preFirstFractalMode == PreFirstFractalMode.highHigh,
     );
     // 画板子窗沿用分窗指标集合：首次进入补默认 Kn/Kn连线，已选过的保留。
     _splitIndicatorsReady = true;
@@ -6696,6 +6703,7 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
       model.toTickBars(),
       earlyDynamicUnit: _earlyDynamicUnit,
       truncationCheck: _truncationCheck,
+      preFirstHighHigh: _preFirstFractalMode == PreFirstFractalMode.highHigh,
     );
     // 窗口数量变化时补新层的默认 K 线/连线指标，避免子窗口空白。
     _splitIndicatorsReady = true;
@@ -6821,6 +6829,8 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
             bars,
             truncationCheck: _truncationCheck,
             earlyDynamicUnit: _earlyDynamicUnit,
+            preFirstHighHigh:
+                _preFirstFractalMode == PreFirstFractalMode.highHigh,
           );
     setState(() {
       _klineDrawBoard = model;
