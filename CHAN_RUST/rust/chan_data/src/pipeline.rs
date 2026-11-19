@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::combine::{K0ConfirmSignal, KlineCombineFrame};
 use crate::engine::{
-    seed_leave_dir, CombineEngine, FxEvent, FxKind, MergeUnit, TruncGuard,
+    seed_leave_dir, CombineEngine, FxEvent, FxKind, MergeUnit, PreFirstMergeMode, TruncGuard,
 };
 use crate::feature::{
     build_bar_crosshair_feature, fractal_peak_dist_at, BarBs1Hit, BarCrosshairFeature, BarZsHit,
@@ -42,6 +42,9 @@ pub struct PipelineOptions {
     /// 每层首个单元在父层首个单元确认当根以动态态出现；
     /// 关闭时回到经典口径（必须等引擎自己攒够输入）。
     pub early_dynamic_unit: bool,
+    /// 首分型前首框包含吸收口径（默认高高）：true=高高（high/low 都取最大），
+    /// false=低低（都取最小）。全层同构，K0/K1/…/Kn 同一套。
+    pub pre_first_high_high: bool,
 }
 
 impl Default for PipelineOptions {
@@ -52,6 +55,7 @@ impl Default for PipelineOptions {
             truncation_check: true,
             zs_config: ZSConfig::default(),
             early_dynamic_unit: true,
+            pre_first_high_high: true,
         }
     }
 }
@@ -586,6 +590,12 @@ fn validity_ok(anchor: &Anchor, fx: FxKind, ev_high: f64, ev_low: f64) -> bool {
 
 impl LevelState {
     fn new(level: i32, opt: &PipelineOptions) -> Self {
+        let mut engine = CombineEngine::new();
+        engine.pre_first_mode = if opt.pre_first_high_high {
+            PreFirstMergeMode::HighHigh
+        } else {
+            PreFirstMergeMode::LowLow
+        };
         Self {
             level,
             validity_check: opt.validity_check,
@@ -594,7 +604,7 @@ impl LevelState {
             first_input_dir: 0,
             zs_config: opt.zs_config,
             zs_inc: ZSIncEngine::new(level, opt.zs_config),
-            engine: CombineEngine::new(),
+            engine,
             seed_phase: 0,
             seed_fx: FxKind::Unknown,
             seed_a_x: -1,

@@ -270,6 +270,9 @@ struct CombineRequest {
     /// 缺省=开启层级预锚动态单元（与 PipelineOptions::default 一致）
     #[serde(default)]
     early_dynamic_unit: Option<bool>,
+    /// 缺省=高高（与 PipelineOptions::default 一致）；false=低低
+    #[serde(default)]
+    pre_first_high_high: Option<bool>,
     /// 缺省=中枢共用配置（need_combine/combine_mode）
     #[serde(default)]
     zs_config: Option<ZSConfig>,
@@ -290,6 +293,9 @@ fn parse_combine_request(raw: &str) -> Result<(Vec<KlineBar>, PipelineOptions), 
     }
     if let Some(v) = req.early_dynamic_unit {
         opt.early_dynamic_unit = v;
+    }
+    if let Some(v) = req.pre_first_high_high {
+        opt.pre_first_high_high = v;
     }
     if let Some(z) = req.zs_config {
         opt.zs_config = z;
@@ -325,6 +331,8 @@ fn parse_pipeline_opt(raw: &str) -> Result<PipelineOptions, String> {
         #[serde(default)]
         early_dynamic_unit: Option<bool>,
         #[serde(default)]
+        pre_first_high_high: Option<bool>,
+        #[serde(default)]
         zs_config: Option<ZSConfig>,
     }
     let req: OptReq =
@@ -335,6 +343,9 @@ fn parse_pipeline_opt(raw: &str) -> Result<PipelineOptions, String> {
     }
     if let Some(v) = req.early_dynamic_unit {
         opt.early_dynamic_unit = v;
+    }
+    if let Some(v) = req.pre_first_high_high {
+        opt.pre_first_high_high = v;
     }
     if let Some(z) = req.zs_config {
         opt.zs_config = z;

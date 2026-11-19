@@ -345,6 +345,23 @@ impl MergedGroup {
         self.unit_count += 1;
     }
 
+    /// 首分型前首框包含吸收：按用户设置的高高/低低取框沿（不跟随组方向）。
+    fn absorb_pre_first(&mut self, u: &MergeUnit, mode: PreFirstMergeMode) {
+        match mode {
+            PreFirstMergeMode::HighHigh => {
+                self.high = self.high.max(u.high);
+                self.low = self.low.max(u.low);
+            }
+            PreFirstMergeMode::LowLow => {
+                self.high = self.high.min(u.high);
+                self.low = self.low.min(u.low);
+            }
+        }
+        self.x2 = u.x2;
+        self.last_uid = u.uid;
+        self.unit_count += 1;
+    }
+
     fn to_event(&self) -> FxEvent {
         FxEvent {
             fx: self.fx,
@@ -375,6 +392,21 @@ impl MergedGroup {
     }
 }
 
+/// 首分型前首框包含吸收的取价口径（2026-11-19 用户口径，全层同构）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreFirstMergeMode {
+    /// 高高：high/low 都取最大（历史默认）。
+    HighHigh,
+    /// 低低：high/low 都取最小。
+    LowLow,
+}
+
+impl Default for PreFirstMergeMode {
+    fn default() -> Self {
+        Self::HighHigh
+    }
+}
+
 /// 包含合并引擎：增量喂入单元，产出合并组与三元素分型事件
 #[derive(Debug, Clone)]
 pub struct CombineEngine {
@@ -387,6 +419,8 @@ pub struct CombineEngine {
     pub seed_skip_first: bool,
     /// 相对种子已出现 sit1/sit2（首分型前第一条虚线口径）
     seed_leave_seen: bool,
+    /// 首分型前首框包含吸收口径（从 PipelineOptions 拷入；全层同构）
+    pub pre_first_mode: PreFirstMergeMode,
 }
 
 impl Default for CombineEngine {
@@ -395,6 +429,7 @@ impl Default for CombineEngine {
             groups: Vec::new(),
             seed_skip_first: true,
             seed_leave_seen: false,
+            pre_first_mode: PreFirstMergeMode::HighHigh,
         }
     }
 }
@@ -405,6 +440,7 @@ impl CombineEngine {
             groups: Vec::new(),
             seed_skip_first: true,
             seed_leave_seen: false,
+            pre_first_mode: PreFirstMergeMode::HighHigh,
         }
     }
 
@@ -485,7 +521,7 @@ impl CombineEngine {
             // 旧实现把首两单元硬拆成两组（种子框单元素），导致包含关系没并，
             // 后续拿两根原始 K 去比，永远比不出分型。
             if dir == MergeDir::Combine {
-                self.groups[0].absorb(u);
+                self.groups[0].absorb_pre_first(u, self.pre_first_mode);
                 if is_leave {
                     self.seed_leave_seen = true;
                 }
@@ -700,6 +736,30 @@ mod tests {
         // Up 组：high / low 都取 max
         assert_eq!(eng.groups()[0].high, 10.0);
         assert_eq!(eng.groups()[0].low, 9.2);
+    }
+
+    /// 首分型前首框包含：高高口径 high/low 都取 max
+    #[test]
+    fn pre_first_high_high_absorbs_max() {
+        let mut eng = CombineEngine::new();
+        eng.pre_first_mode = PreFirstMergeMode::HighHigh;
+        eng.feed(&unit(0, 10.0, 9.0));
+        eng.feed(&unit(1, 11.0, 8.0));
+        assert_eq!(eng.groups().len(), 1);
+        assert_eq!(eng.groups()[0].high, 11.0);
+        assert_eq!(eng.groups()[0].low, 9.0);
+    }
+
+    /// 首分型前首框包含：低低口径 high/low 都取 min
+    #[test]
+    fn pre_first_low_low_absorbs_min() {
+        let mut eng = CombineEngine::new();
+        eng.pre_first_mode = PreFirstMergeMode::LowLow;
+        eng.feed(&unit(0, 10.0, 9.0));
+        eng.feed(&unit(1, 11.0, 8.0));
+        assert_eq!(eng.groups().len(), 1);
+        assert_eq!(eng.groups()[0].high, 10.0);
+        assert_eq!(eng.groups()[0].low, 8.0);
     }
 
     /// Up 组合并同高一字线：应按高低=max 抬低点（不再跳过一字线）
