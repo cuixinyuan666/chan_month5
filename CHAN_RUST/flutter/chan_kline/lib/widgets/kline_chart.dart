@@ -130,6 +130,15 @@ enum _IndicatorPickerPane { none, main, sub }
 /// 双指缩放主方向：手势开始时锁定，避免斜向抖动抢轴。
 enum _PinchZoomAxis { undecided, horizontal, vertical }
 
+/// 退化种子（单根、高低相等）会把下沿抬成实体价，挡住后面的取高。
+/// 旁边已有跨多根的动态 K 时丢掉这颗针，让最低价留在那根 K 上。
+List<K1Bar> _dropDegenerateSeed(List<K1Bar> units) {
+  final hasSpan = units.any((u) => u.x2 > u.x1);
+  if (!hasSpan) return units;
+  final kept = units.where((u) => u.x2 > u.x1 || u.high != u.low).toList();
+  return kept.isEmpty ? units : kept;
+}
+
 /// 主图同级别连线配色（与 [ChartLevelLineStyle] 同层同色）。
 abstract final class ChartLineColors {
   /// K0连线 = 展示层 K0 蓝
@@ -1577,48 +1586,7 @@ class _KlineChartState extends State<KlineChart> {
         truncationCheck: widget.truncationCheck,
       );
     }
-    return _k1FirstFrameFromParent(base);
-  }
-
-  /// 方案 A（2026-11-19 用户确认）：首分型前，K1 首框以父层（K0）首框为唯一权威。
-  ///
-  /// K1 的首单元可能在 K0 首组吸收前就已生成并冻结（原始首根 10.22/9.98）；
-  /// 低低档 K0 吸收后首框是 10.11/9.98，K1 若继续用旧冻结值就会与 K0 分叉。
-  /// 这里只替换展示框的高/低，不动结构层（K1 中枢仍读 Rust 旧值）。
-  List<KlineCombineFrame> _k1FirstFrameFromParent(
-    List<KlineCombineFrame> base,
-  ) {
-    if (!widget.earlyDynamicUnit || base.isEmpty) return base;
-    final first = base.first;
-    if (first.x1 != 0) return base;
-    final parent = applyPreFirstFractalMode(
-      _effectiveK0CombineFrames,
-      mode: widget.preFirstFractalMode,
-      subWindow: widget.displayLevel != null,
-      earlyDynamicUnit: widget.earlyDynamicUnit,
-    );
-    if (parent.isEmpty) return base;
-    final head = parent.first;
-    if (!(head.beforeFirstStandardFx || fxIsUnknownCodeUnit(head.fx))) {
-      return base;
-    }
-    if (first.high == head.high && first.low == head.low) return base;
-    return <KlineCombineFrame>[
-      KlineCombineFrame(
-        x1: first.x1,
-        x2: first.x2,
-        t1: first.t1,
-        t2: first.t2,
-        high: head.high,
-        low: head.low,
-        fx: first.fx,
-        count: first.count,
-        endAtLeftHalf: first.endAtLeftHalf,
-        startAtRightHalf: first.startAtRightHalf,
-        beforeFirstStandardFx: true,
-      ),
-      ...base.skip(1),
-    ];
+    return base;
   }
 
   int _crosshairAsOfIdx() =>
@@ -4667,11 +4635,8 @@ class _KlineCompositePainter extends CustomPainter {
     _drawPreFirstFractalTipLines(canvas, w, plotTop, plotH, slotW, displayKn: 0);
   }
 
-  /// 首分型前二元素章预告线（构建中虚线通道，2026-11-19 全层同构）。
-  ///
-  /// 顶分型连「首框最高 ↔ 当前最低」，底分型连「首框最低 ↔ 当前最高」。
-  /// 与正式连线隔离：**不走** `_lineEndpointsInSameCombineFrame`，
-  /// 也不参与「单框不画 / 两端同框不画 / 首框同根极值不画内线」三条禁令。
+  /// 二元素出现后的第一根连线：连接这两个元素各自的极点。
+  /// 二元素出现之前不画。
   void _drawPreFirstFractalTipLines(
     Canvas canvas,
     double w,
@@ -4684,21 +4649,20 @@ class _KlineCompositePainter extends CustomPainter {
     final frames = _displayCombineFrames(displayKn);
     if (frames.length < 2) return;
     final first = frames.first;
+    final second = frames[1];
     if (first.fx != 'TOP' && first.fx != 'BOTTOM') return;
     if (bars.isEmpty) return;
-    final asOf = segAsOf ?? bars.last.idx;
-    if (asOf < 0) return;
-    final tip = computePreFirstFractalTipLine(
-      bars: bars,
-      first: first,
-      asOf: asOf,
-    );
-    if (tip == null) return;
+    final top = first.fx == 'TOP';
+    final beginIdx = _poleBarInSpan(first.x1, first.x2, useHigh: top);
+    final endIdx = _poleBarInSpan(second.x1, second.x2, useHigh: !top);
+    if (beginIdx < 0 || endIdx < 0) return;
+    final beginPrice = top ? first.high : first.low;
+    final endPrice = top ? second.low : second.high;
 
-    final x1 = _barCenterX(tip.begin.barIdx, w, slotW);
-    final x2 = _barCenterX(tip.end.barIdx, w, slotW);
-    final y1 = priceRange.yOf(tip.begin.price, plotTop, plotH);
-    final y2 = priceRange.yOf(tip.end.price, plotTop, plotH);
+    final x1 = _barCenterX(beginIdx, w, slotW);
+    final x2 = _barCenterX(endIdx, w, slotW);
+    final y1 = priceRange.yOf(beginPrice, plotTop, plotH);
+    final y2 = priceRange.yOf(endPrice, plotTop, plotH);
     if (math.min(x1, x2) > viewport.viewXMax + 1 ||
         math.max(x1, x2) < viewport.viewXMin - 1) {
       return;
@@ -4730,6 +4694,26 @@ class _KlineCompositePainter extends CustomPainter {
     return useHigh ? bars[x].high : bars[x].low;
   }
 
+  /// 一段 K 里的极点落在哪一根。同价取先出现的那根。
+  int _poleBarInSpan(int x1, int x2, {required bool useHigh}) {
+    if (bars.isEmpty) return -1;
+    final a = x1 < 0 ? 0 : x1;
+    var b = x2;
+    if (b >= bars.length) b = bars.length - 1;
+    if (a > b || a >= bars.length) return -1;
+    var best = a;
+    var price = useHigh ? bars[a].high : bars[a].low;
+    for (var i = a + 1; i <= b; i++) {
+      final p = useHigh ? bars[i].high : bars[i].low;
+      final better = useHigh ? p > price : p < price;
+      if (better) {
+        price = p;
+        best = i;
+      }
+    }
+    return best;
+  }
+
   /// 首分型前的合并框（全层同构）：只有一根时不画框；
   /// 两根及以上时合成一个框，左端含第一根 K，而不是把第一根单独包成一个。
   ///
@@ -4758,6 +4742,64 @@ class _KlineCompositePainter extends CustomPainter {
 
   /// 该层「视觉合并框」缓存：合并框绘制与「只有 1 个合并框不画连线」共用一份结果。
   final Map<int, List<KlineCombineFrame>> _displayFramesMemo = {};
+
+  /// 这一层首框是否已经盖上二元素分型。下一层的确认 K、再下一层的动态 K 都等这个章。
+  bool _pairFxStamped(int displayKn) {
+    if (displayKn < 0) return false;
+    final frames = _displayCombineFrames(displayKn);
+    if (frames.isEmpty) return false;
+    final fx = frames.first.fx;
+    return fx == 'TOP' || fx == 'BOTTOM';
+  }
+
+  /// 上一层画面上的确认 K 和动态 K，合成下一层那一根首动态 K。
+  /// 时间从第一根的左端盖到最后一根的右端，高低取这两根的外沿，把两根都包进去。
+  List<K1Bar>? _openingSpanOfParent(int parentKn, int asOf) {
+    final parentLevel = parentKn - 1;
+    if (parentLevel < 0 || asOf < 0) return null;
+    LevelBundle? bundle;
+    for (final b in levels) {
+      if (b.level == parentLevel) {
+        bundle = b;
+        break;
+      }
+    }
+    if (bundle == null) return null;
+    final raw = asOfLevelVirtualK1Bars(
+      levels: levels,
+      barFeatures: barFeatures,
+      level: parentLevel,
+      asOf: asOf,
+      includeBuilding: true,
+    );
+    final shown = _boxedCandleUnits(raw, bundle, asOf);
+    if (shown.isEmpty) return null;
+    var x1 = shown.first.x1;
+    var x2 = shown.first.x2;
+    var high = shown.first.high;
+    var low = shown.first.low;
+    for (final u in shown) {
+      if (u.x1 < x1) x1 = u.x1;
+      if (u.x2 > x2) x2 = u.x2;
+      if (u.high > high) high = u.high;
+      if (u.low < low) low = u.low;
+    }
+    final open = shown.first.open.clamp(low, high).toDouble();
+    final close = shown.last.close.clamp(low, high).toDouble();
+    return <K1Bar>[
+      K1Bar(
+        idx: 0,
+        dir: 1,
+        x1: x1,
+        x2: x2,
+        open: open,
+        high: high,
+        low: low,
+        close: close,
+        confirmX: asOf,
+      ),
+    ];
+  }
 
   /// 缓存键：步进/十字线/as-of/层数/模式任一变化都必须重算，
   /// 否则 K1 首帧按旧首单元算出的框会跨步沿用（方案 A 修复后仍显示 10.22 的真因）。
@@ -4852,9 +4894,8 @@ class _KlineCompositePainter extends CustomPainter {
         : levelBundleVirtualK1Bars(bundle);
     if (virtualUnits.isEmpty || barsForCombine.isEmpty) return const [];
 
-    // 方案 A（2026-11-19 用户确认）：K1 合并框与 K1 蜡烛必须同一份虚拟单元。
-    // 首分型前父层首框是唯一权威；旧冻结首单元（K0 首组吸收前的原始首根）
-    // 不得继续决定 K1 首框的高/低，否则会出现「K0 低低 10.11/9.98、K1 仍 10.22/9.98」。
+    // 开口动态 K 保留自己的最低价，不把父层框沿（实体下沿）盖上来。
+    // 第二根动态 K 与前一根有包含时，交给本层高高/低低取高合并。
     if (earlyDynamicUnit && kn >= 1) {
       final parentFrames = _displayCombineFrames(kn - 1);
       final asOfX = asOf ?? (bars.isEmpty ? -1 : bars.last.idx);
@@ -4866,22 +4907,46 @@ class _KlineCompositePainter extends CustomPainter {
         );
         if (dyn.isNotEmpty) {
           final parentHead = parentFrames.first;
-          final parentPreFirst = parentHead.beforeFirstStandardFx ||
-              fxIsUnknownCodeUnit(parentHead.fx);
-          if (parentPreFirst) {
-            final rebuilt = <K1Bar>[
-              dyn.first,
-              ...virtualUnits.where((u) => u.x1 > dyn.first.x2),
-            ];
-            virtualUnits =
-                (dyn.length == 2 && rebuilt.length <= 1) ? dyn : rebuilt;
-          } else if (virtualUnits.length == 1 &&
-              dyn.length == 2 &&
-              !fxIsUnknownCodeUnit(parentHead.fx)) {
-            virtualUnits = <K1Bar>[...virtualUnits, dyn[1]];
+          if (preFirstFractalMode == PreFirstFractalMode.highHigh ||
+              preFirstFractalMode == PreFirstFractalMode.lowLow) {
+            virtualUnits = _dropDegenerateSeed(virtualUnits);
+            if (dyn.length == 2 && !fxIsUnknownCodeUnit(parentHead.fx)) {
+              final end = parentHead.x2;
+              virtualUnits = [
+                for (final u in virtualUnits)
+                  if (u.x1 <= end && u.x2 > end)
+                    K1Bar(
+                      idx: u.idx,
+                      dir: u.dir,
+                      x1: u.x1,
+                      x2: end,
+                      open: u.open,
+                      high: u.high,
+                      low: u.low,
+                      close: u.close,
+                      confirmX: u.confirmX,
+                    )
+                  else
+                    u,
+              ];
+              final hasSecond = virtualUnits.any((u) => u.x1 >= end);
+              if (!hasSecond) {
+                virtualUnits = <K1Bar>[...virtualUnits, dyn[1]];
+              }
+            }
           }
         }
       }
+    }
+
+    // K2 及以上：上一层出现确认 K 的当根才生首根动态 K。确认看再上一层的二元素章。
+    // 默认数据：K0 第 2 根盖上二元素 → K1 确认 → K2 当根出生。出生前不画这层。
+    if (kn >= 2 && earlyDynamicUnit) {
+      final ready = _pairFxStamped(kn - 2);
+      final asOfX = asOf ?? (bars.isEmpty ? -1 : bars.last.idx);
+      final spanned = _openingSpanOfParent(kn - 1, asOfX);
+      if (!ready || spanned == null) return const [];
+      virtualUnits = spanned;
     }
 
     final displayFrames = computeK1CombineFrames(
@@ -4935,6 +5000,8 @@ class _KlineCompositePainter extends CustomPainter {
     required int level,
     required ChartLevelLineStyle? style,
   }) {
+    // 首分型前合并框内不画开口虚线。第一根连线等二元素分型，改走预告线。
+    if (earlyDynamicUnit) return;
     final snap = _asOfSeedSnap(level);
     if (snap == null) return;
     final asOf = segAsOf ?? (bars.isEmpty ? -1 : bars.last.idx);
@@ -5409,36 +5476,6 @@ class _KlineCompositePainter extends CustomPainter {
     var frames = _displayCombineFrames(kn);
     if (frames.isEmpty) return;
 
-    // 方案 A 绘制兜底（2026-11-19 用户确认）：首分型前 K1 首框以 K0 首框为唯一权威。
-    // 不依赖结构层首单元是否已冻结成旧值，这里在真正画框前再校一次。
-    if (kn == 1 && earlyDynamicUnit && frames.first.x1 == 0) {
-      final parentFrames = _displayCombineFrames(0);
-      if (parentFrames.isNotEmpty) {
-        final head = parentFrames.first;
-        if (head.beforeFirstStandardFx || fxIsUnknownCodeUnit(head.fx)) {
-          final f = frames.first;
-          if (f.high != head.high || f.low != head.low) {
-            frames = <KlineCombineFrame>[
-              KlineCombineFrame(
-                x1: f.x1,
-                x2: f.x2,
-                t1: f.t1,
-                t2: f.t2,
-                high: head.high,
-                low: head.low,
-                fx: f.fx,
-                count: f.count,
-                endAtLeftHalf: f.endAtLeftHalf,
-                startAtRightHalf: f.startAtRightHalf,
-                beforeFirstStandardFx: true,
-              ),
-              ...frames.skip(1),
-            ];
-          }
-        }
-      }
-    }
-
     final style = ChartLevelLineStyle.forDisplayKn(kn);
     _drawCombineFramesOnMainChart(
       canvas,
@@ -5517,9 +5554,12 @@ class _KlineCompositePainter extends CustomPainter {
     // 首分型前「父层首框 → 本层动态 K」（2026-11-19 全层同构）：
     // - 本层还没有任何单元 → 用父层首框生成首根（固定映射）；
     // - 本层只有首根且父层已出两元素章 → 追加第二根（极值区间）。
-    // 动态 K 不下传：父层只取 `_displayCombineFrames(unitLevel-1)`，不再往上递归。
+    // 动态 K 不下传：父层只取 `_displayCombineFrames(unitLevel)`，不再往上递归。
+    List<K1Bar>? candleDyn;
+    var waitConfirm = false;
     if (earlyDynamicUnit && unitLevel >= 1) {
-      final parentFrames = _displayCombineFrames(unitLevel - 1);
+      // 窗口 Kn 的 K 在结构层 kn-1。它的上一层是窗口 K(n-1)，也就是 displayKn=unitLevel。
+      final parentFrames = _displayCombineFrames(unitLevel);
       final asOfX = asOf ?? (bars.isEmpty ? -1 : bars.last.idx);
       if (parentFrames.isNotEmpty && asOfX >= 0) {
         final dyn = buildPreFirstDynamicK1Bars(
@@ -5528,22 +5568,15 @@ class _KlineCompositePainter extends CustomPainter {
           asOf: asOfX,
         );
         if (dyn.isNotEmpty) {
+          candleDyn = dyn;
           final parentHead = parentFrames.first;
-          // 首分型前：父层首框是唯一权威（方案 A，2026-11-19 用户确认）。
-          // K1 可能在 K0 首组吸收前就生成了旧首单元（原始首根 10.22/9.98），
-          // 该单元已冻结、不回写；展示轨必须用父层当前首框重建，不能继续沿用它。
+          // 开口跨度改成上一层首框的固定映射；本层已有的其它 K 不动。
           final parentPreFirst = parentHead.beforeFirstStandardFx ||
               fxIsUnknownCodeUnit(parentHead.fx);
           if (virtualUnits.isEmpty) {
             virtualUnits = dyn;
-          } else if (parentPreFirst) {
-            final rebuilt = <K1Bar>[
-              dyn.first,
-              ...virtualUnits.where((u) => u.x1 > dyn.first.x2),
-            ];
-            virtualUnits =
-                (dyn.length == 2 && rebuilt.length <= 1) ? dyn : rebuilt;
-          } else if (virtualUnits.length == 1 &&
+          } else if (!parentPreFirst &&
+              virtualUnits.length == 1 &&
               dyn.length == 2 &&
               !fxIsUnknownCodeUnit(parentHead.fx)) {
             virtualUnits = <K1Bar>[...virtualUnits, dyn[1]];
@@ -5551,6 +5584,23 @@ class _KlineCompositePainter extends CustomPainter {
         }
       }
     }
+    // K2 及以上：再上一层还没有二元素章，说明上一层还没有确认 K，本层动态 K 不出生。
+    if (earlyDynamicUnit && unitLevel >= 1) {
+      final ready = _pairFxStamped(unitLevel - 1);
+      if (!ready) {
+        waitConfirm = true;
+        virtualUnits = const [];
+      } else {
+        final asOfX = asOf ?? (bars.isEmpty ? -1 : bars.last.idx);
+        final spanned = _openingSpanOfParent(unitLevel, asOfX);
+        if (spanned != null) {
+          virtualUnits = spanned;
+        } else if (candleDyn != null && candleDyn.isNotEmpty) {
+          virtualUnits = candleDyn;
+        }
+      }
+    }
+    if (waitConfirm) return const [];
     if (virtualUnits.isEmpty &&
         bundle.unitBars.isEmpty &&
         bundle.activeUnit == null &&
@@ -5577,15 +5627,18 @@ class _KlineCompositePainter extends CustomPainter {
       // `unitBars + activeUnit`（仅已冻结段）→ K1 层出现「3 个合并框 vs 1 根
       // K」。子窗口改用 as-of 末根的虚拟单元（含构建中），与合并框一致。
       final tail = bars.last.idx;
+      final candleUnits = virtualUnits.isNotEmpty
+          ? virtualUnits
+          : asOfLevelVirtualK1Bars(
+              levels: levels,
+              barFeatures: barFeatures,
+              level: unitLevel,
+              asOf: tail,
+              includeBuilding: true,
+            );
       return _levelUnitViewsFromVirtualK1Bars(
         _boxedCandleUnits(
-          asOfLevelVirtualK1Bars(
-            levels: levels,
-            barFeatures: barFeatures,
-            level: unitLevel,
-            asOf: tail,
-            includeBuilding: true,
-          ),
+          candleUnits,
           bundle,
           tail,
         ),
@@ -7007,6 +7060,19 @@ class _KlineCompositePainter extends CustomPainter {
       final geomMax = math.max(line.begin.barIdx, line.end.barIdx);
       if (geomMax < viewport.viewXMin - 1 || geomMin > viewport.viewXMax + 1) {
         continue;
+      }
+      // 二元素出现前，首框内不画虚线。第一根连线改由二元素极点那条负责。
+      if (earlyDynamicUnit) {
+        final headFrames = _displayCombineFrames(displayKn);
+        if (headFrames.isNotEmpty) {
+          final head = headFrames.first;
+          final pair = head.fx == 'TOP' || head.fx == 'BOTTOM';
+          final inside = line.begin.barIdx >= head.x1 &&
+              line.begin.barIdx <= head.x2 &&
+              line.end.barIdx >= head.x1 &&
+              line.end.barIdx <= head.x2;
+          if (!pair || inside) continue;
+        }
       }
       // 基础生成单元内只有单个合并框时，连线两端不得同时落在同一个合并框内。
       if (_lineEndpointsInSameCombineFrame(
