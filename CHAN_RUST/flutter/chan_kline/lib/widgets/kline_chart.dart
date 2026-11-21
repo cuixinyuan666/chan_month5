@@ -4659,14 +4659,16 @@ class _KlineCompositePainter extends CustomPainter {
     final beginPrice = top ? first.high : first.low;
     final endPrice = top ? second.low : second.high;
 
+    // 视口是 K 线序号，不是屏幕像素。拿像素和序号比会把整条线判到画面外。
+    final geomMin = math.min(beginIdx, endIdx);
+    final geomMax = math.max(beginIdx, endIdx);
+    if (geomMax < viewport.viewXMin - 1 || geomMin > viewport.viewXMax + 1) {
+      return;
+    }
     final x1 = _barCenterX(beginIdx, w, slotW);
     final x2 = _barCenterX(endIdx, w, slotW);
     final y1 = priceRange.yOf(beginPrice, plotTop, plotH);
     final y2 = priceRange.yOf(endPrice, plotTop, plotH);
-    if (math.min(x1, x2) > viewport.viewXMax + 1 ||
-        math.max(x1, x2) < viewport.viewXMin - 1) {
-      return;
-    }
     final style = ChartLevelLineStyle.forDisplayKn(displayKn);
     final paint = Paint()
       ..color = style.color.withValues(alpha: 0.55)
@@ -5363,7 +5365,8 @@ class _KlineCompositePainter extends CustomPainter {
   ) {
     if (kn < 1) return;
     // 全模式、全层同构：该层视觉上只有 1 个合并框时不画连线（含构建中虚线 / 种子线）。
-    if (_displayCombineFrames(kn).length <= 1) return;
+    final displayFrames = _displayCombineFrames(kn);
+    if (displayFrames.length <= 1) return;
     final tailIdx = segAsOf ?? (bars.isEmpty ? -1 : bars.last.idx);
     if (tailIdx < 0) return;
 
