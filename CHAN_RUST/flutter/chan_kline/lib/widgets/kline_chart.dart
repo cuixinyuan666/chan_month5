@@ -5611,17 +5611,21 @@ class _KlineCompositePainter extends CustomPainter {
       return const [];
     }
     if (asOf != null) {
-      return _levelUnitViewsFromVirtualK1Bars(
-        _boxedCandleUnits(virtualUnits, bundle, asOf),
-        frozenIdx: {
-          // 与 virtualUnits 同层：该层已冻结段 idx（段 idx 与单元 idx 一对一）
-          for (final s in asOfLevelSegments(
-            levels: levels,
-            level: unitLevel,
-            asOf: asOf,
-          ))
-            s.idx,
-        },
+      return _withK2Dynamic(
+        unitLevel,
+        _levelUnitViewsFromVirtualK1Bars(
+          _boxedCandleUnits(virtualUnits, bundle, asOf),
+          frozenIdx: {
+            // 与 virtualUnits 同层：该层已冻结段 idx（段 idx 与单元 idx 一对一）
+            for (final s in asOfLevelSegments(
+              levels: levels,
+              level: unitLevel,
+              asOf: asOf,
+            ))
+              s.idx,
+          },
+        ),
+        asOf,
       );
     } else if (subWindow && !bars.isEmpty) {
       // 子窗口展示轨：蜡烛必须与合并框同源。
@@ -5639,30 +5643,108 @@ class _KlineCompositePainter extends CustomPainter {
               asOf: tail,
               includeBuilding: true,
             );
-      return _levelUnitViewsFromVirtualK1Bars(
-        _boxedCandleUnits(
-          candleUnits,
-          bundle,
-          tail,
+      return _withK2Dynamic(
+        unitLevel,
+        _levelUnitViewsFromVirtualK1Bars(
+          _boxedCandleUnits(
+            candleUnits,
+            bundle,
+            tail,
+          ),
+          frozenIdx: {
+            for (final s in asOfLevelSegments(
+              levels: levels,
+              level: unitLevel,
+              asOf: tail,
+            ))
+              s.idx,
+          },
         ),
-        frozenIdx: {
-          for (final s in asOfLevelSegments(
-            levels: levels,
-            level: unitLevel,
-            asOf: tail,
-          ))
-            s.idx,
-        },
+        tail,
       );
     } else {
       final tail = bars.isNotEmpty ? bars.last.idx : 0;
       final baseUnits = levelBundleVirtualK1Bars(bundle);
       final boxedUnits = _boxedCandleUnits(baseUnits, bundle, tail);
-      return _levelUnitViewsFromVirtualK1Bars(
-        boxedUnits,
-        frozenIdx: const {},
+      return _withK2Dynamic(
+        unitLevel,
+        _levelUnitViewsFromVirtualK1Bars(
+          boxedUnits,
+          frozenIdx: const {},
+        ),
+        tail,
       );
     }
+  }
+
+  /// 只给 K2 补第 1 根动态 K。第 0 根仍走改动前的那条，单独成视图，避免两根时间重叠时被接成一根。
+  List<LevelUnitBarView> _withK2Dynamic(
+    int unitLevel,
+    List<LevelUnitBarView> views,
+    int asOf,
+  ) {
+    if (unitLevel != 1) return views;
+    final second = _k2SecondDynamicBar(asOf);
+    if (second == null) return views;
+    return [
+      ...views,
+      ..._levelUnitViewsFromVirtualK1Bars(
+        [second],
+        frozenIdx: const {},
+      ),
+    ];
+  }
+
+  /// K2 第 1 根：上一层首框多于 1 根且已有二元素时，从分型极点到右组极点。动态，外框虚线。
+  K1Bar? _k2SecondDynamicBar(int asOf) {
+    if (asOf < 0 || bars.isEmpty) return null;
+    final frames = _displayCombineFrames(1);
+    if (frames.length < 2) return null;
+    final first = frames.first;
+    final right = frames[1];
+    if (first.x2 <= first.x1) return null;
+    final fx = first.fx;
+    if (fx != 'TOP' && fx != 'BOTTOM') return null;
+    final top = fx == 'TOP';
+    final polePrice = top ? first.high : first.low;
+    final endPrice = top ? right.low : right.high;
+    final poleIdx = _barWithPrice(
+      first.x1,
+      first.x2,
+      polePrice,
+      useHigh: top,
+    );
+    final endIdx = _barWithPrice(
+      right.x1,
+      right.x2,
+      endPrice,
+      useHigh: !top,
+    );
+    if (poleIdx < 0 || endIdx < 0) return null;
+    return K1Bar(
+      idx: 1,
+      dir: top ? -1 : 1,
+      x1: math.min(poleIdx, endIdx),
+      x2: math.max(poleIdx, endIdx),
+      open: polePrice,
+      high: math.max(polePrice, endPrice),
+      low: math.min(polePrice, endPrice),
+      close: endPrice,
+      confirmX: asOf + 1,
+    );
+  }
+
+  int _barWithPrice(int x1, int x2, double price, {required bool useHigh}) {
+    if (bars.isEmpty) return -1;
+    final a = x1 < 0 ? 0 : x1;
+    var b = x2;
+    if (b >= bars.length) b = bars.length - 1;
+    if (a > b || a >= bars.length) return -1;
+    for (var i = a; i <= b; i++) {
+      final p = useHigh ? bars[i].high : bars[i].low;
+      if ((p - price).abs() < 1e-9) return i;
+    }
+    return -1;
   }
 
   /// KN 指标用的单层淡实体蜡烛（原内嵌于 KN合并；拆出后由 KN 指标统一控制）。

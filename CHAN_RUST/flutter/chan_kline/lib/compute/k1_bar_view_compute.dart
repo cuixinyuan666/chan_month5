@@ -15,7 +15,7 @@ List<K1BarView> buildK1BarViews(List<K1Bar> bars) {
     final cur = bars[i];
     final next = bars[i + 1];
     // 相邻 K0连线 x 区间交叠：衔接 K = 上一根末端分钟 K，两端同索引、半侧锚定
-    if (next.x1 <= cur.x2) {
+    if (next.x1 <= cur.x2 && cur.x1 <= next.x2) {
       final junction = cur.x2.clamp(cur.x1, next.x2);
       viewX2[i] = junction;
       viewX1[i + 1] = junction;
