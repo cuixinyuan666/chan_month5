@@ -5677,28 +5677,41 @@ class _KlineCompositePainter extends CustomPainter {
     }
   }
 
-  /// 只给 K2 补第 1 根动态 K。第 0 根仍走改动前的那条，单独成视图，避免两根时间重叠时被接成一根。
+  /// 开口那根后面补第 1 根动态 K。价位不动，时间收到互不覆盖：
+  /// 前一根的右端收到后一根的左端，交界那根 K 左右各一半。K1、K2、K3 同一条。
   List<LevelUnitBarView> _withK2Dynamic(
     int unitLevel,
     List<LevelUnitBarView> views,
     int asOf,
   ) {
-    if (unitLevel != 1) return views;
-    final second = _k2SecondDynamicBar(asOf);
+    if (views.length != 1 || asOf < 0) return views;
+    final second = _k2SecondDynamicBar(unitLevel, asOf);
     if (second == null) return views;
-    return [
-      ...views,
-      ..._levelUnitViewsFromVirtualK1Bars(
-        [second],
-        frozenIdx: const {},
-      ),
-    ];
+    final head = views.single.bar;
+    final cut = second.x1;
+    final headEnd = head.x2 > cut && head.x1 <= cut ? cut : head.x2;
+    final headBar = K1Bar(
+      idx: head.idx,
+      dir: head.dir,
+      x1: head.x1,
+      x2: headEnd,
+      open: head.open,
+      high: head.high,
+      low: head.low,
+      close: head.close,
+      confirmX: head.confirmX,
+    );
+    return _levelUnitViewsFromVirtualK1Bars(
+      [headBar, second],
+      frozenIdx: {head.idx},
+    );
   }
 
-  /// K2 第 1 根：上一层首框多于 1 根且已有二元素时，从分型极点到右组极点。动态，外框虚线。
-  K1Bar? _k2SecondDynamicBar(int asOf) {
-    if (asOf < 0 || bars.isEmpty) return null;
-    final frames = _displayCombineFrames(1);
+  /// 第 1 根动态 K：上一层首框多于 1 根且已有二元素时，从分型极点到右组极点。
+  /// [parentDisplayKn] 是上一层窗口号，K2 看 K1，K3 看 K2，全层同一条。
+  K1Bar? _k2SecondDynamicBar(int parentDisplayKn, int asOf) {
+    if (parentDisplayKn < 0 || asOf < 0 || bars.isEmpty) return null;
+    final frames = _displayCombineFrames(parentDisplayKn);
     if (frames.length < 2) return null;
     final first = frames.first;
     final right = frames[1];
