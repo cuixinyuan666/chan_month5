@@ -4948,7 +4948,7 @@ class _KlineCompositePainter extends CustomPainter {
       final asOfX = asOf ?? (bars.isEmpty ? -1 : bars.last.idx);
       final spanned = _openingSpanOfParent(kn - 1, asOfX);
       if (!ready || spanned == null) return const [];
-      virtualUnits = spanned;
+      // 合并框按本层自己的单元做高高/低低。整段外沿（含原始最低价）只留给 K 线。
     }
 
     final displayFrames = computeK1CombineFrames(
