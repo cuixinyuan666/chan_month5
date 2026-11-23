@@ -5734,6 +5734,9 @@ class _KlineCompositePainter extends CustomPainter {
       useHigh: !top,
     );
     if (poleIdx < 0 || endIdx < 0) return null;
+    // 右组还没有分型：终点仍可能改，外框虚线。
+    // 右组已经是顶或底：终点定住，外框改实线。
+    final rightFixed = right.fx == 'TOP' || right.fx == 'BOTTOM';
     return K1Bar(
       idx: 1,
       dir: top ? -1 : 1,
@@ -5743,7 +5746,7 @@ class _KlineCompositePainter extends CustomPainter {
       high: math.max(polePrice, endPrice),
       low: math.min(polePrice, endPrice),
       close: endPrice,
-      confirmX: asOf + 1,
+      confirmX: rightFixed ? endIdx : asOf + 1,
     );
   }
 
