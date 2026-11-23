@@ -248,8 +248,7 @@ List<KlineCombineFrame> computeK1CombineFrames(
     // 合并框，不是原始 K），不包含则开新组；两种情况都跑两元素分型。
     if (highs.length == 1) {
       if (dir == 'COMBINE') {
-        // 首组方向恒 Up（同 Rust `MergedGroup::new_first(u, MergeDir::Up`）。
-        // 首分型前按设置的高高/低低（2026-11-19 全层同构）：低低=都取最小。
+        // 首组方向恒 Up。首分型前按设置的高高/低低：低低=都取最小。
         if (!firstStandardFxSeen && mode == PreFirstFractalMode.lowLow) {
           highs[0] = math.min(highs[0], b.high);
           lows[0] = math.min(lows[0], b.low);
@@ -382,6 +381,22 @@ List<KlineCombineFrame> computeK1CombineFrames(
     final cnt = unitCounts[i];
     final frameStart = cnt > 1 ? false : views[viewCursor].startAtRightHalf;
     final frameEnd = cnt > 1 ? false : views[viewCursor].endAtLeftHalf;
+    var low = lows[i];
+    // 向下那根把新低留在高高框外面时，框下沿放到这根的低点。
+    // 只认走在当前下沿之后、并且真的更低的向下 K，避免把已经抬上去的下沿拉回来。
+    if (!firstStandardFxSeen &&
+        mode == PreFirstFractalMode.highHigh &&
+        fxAt[i] == 'UNKNOWN' &&
+        cnt > 1) {
+      var floor = views[viewCursor].bar.low;
+      for (var k = 1; k < cnt; k++) {
+        final bar = views[viewCursor + k].bar;
+        if (bar.dir < 0 && bar.low < floor && bar.low < low) {
+          low = bar.low;
+        }
+        if (bar.low >= floor) floor = bar.low;
+      }
+    }
     viewCursor += cnt;
     return KlineCombineFrame(
       x1: x1s[i],
@@ -389,7 +404,7 @@ List<KlineCombineFrame> computeK1CombineFrames(
       t1: t1s[i],
       t2: t2s[i],
       high: highs[i],
-      low: lows[i],
+      low: low,
       fx: fxAt[i],
       count: cnt,
       endAtLeftHalf: frameEnd,
