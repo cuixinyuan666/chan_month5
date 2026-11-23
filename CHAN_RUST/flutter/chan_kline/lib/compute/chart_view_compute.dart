@@ -1287,7 +1287,7 @@ void _appendJudgmentPoles({
   }
 }
 
-/// 极点链 → 闭段 + 开口尖端（确认↔确认/判断↔判断实；确认↔判断虚；开口虚）。
+/// 极点链 → 闭段 + 开口尖端（收束的分型连线实；开口虚）。
 List<DisplayBuildingLine> _linesFromPoles({
   required List<KlineBar> bars,
   required int asOf,
@@ -1315,8 +1315,11 @@ List<DisplayBuildingLine> _linesFromPoles({
       continue; // 冻结实线已画
     }
 
-    final bothJudgment = a.src == 'judgment' && b.src == 'judgment';
-    final asSolid = bothConfirm || bothJudgment;
+    // 收束段：两端都是分型（确认或已钉死的判断）→ 实线。
+    // 开口尖端另画，继续虚线。
+    final bothFractal = (a.src == 'confirm' || a.src == 'judgment') &&
+        (b.src == 'confirm' || b.src == 'judgment');
+    final asSolid = bothFractal;
     final dir = b.fx == 'TOP' ? 1 : -1;
     out.add(DisplayBuildingLine(
       begin: a.endpoint,
@@ -1493,7 +1496,7 @@ DisplayBuildingLine? _seedLineBeforeFirstPole({
 ///   （扫 (rightX1-1, min(asOf,rightX2)]；禁止扫进中组如 44→47）；
 /// - 确认开口（含刚成立当步）：一律从确认极点扫到 asOf，取方向极值首次出现根
 ///   （取消右组=[confirm.x,confirm.x] 特例，避免确认当步终点跳到本根）；
-/// - 确认↔确认(未冻覆盖)实线；判断↔判断实线定格；确认↔判断虚线。
+/// - 收束段（确认或已钉死的判断，两端都是分型）画实线；开口尖端虚线。
 List<DisplayBuildingLine> computeDisplayBuildingLines({
   required List<KlineBar> bars,
   required int asOf,

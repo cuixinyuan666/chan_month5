@@ -672,7 +672,7 @@ void main() {
     expect(open.first.end.barIdx, 26);
   });
 
-  test('computeDisplayBuildingLines：判断钉死端点不随 asOf 拉长；确认↔判断虚线', () {
+  test('computeDisplayBuildingLines：判断钉死端点不随 asOf 拉长；收束段实线，开口虚线', () {
     final bars = _bars(20);
     bars[5] = KlineBar(
       idx: 5,
@@ -726,12 +726,13 @@ void main() {
       liveJudgments: const [topJudgment],
     );
     expect(at8, isNotEmpty);
-    // 确认→判断虚线；开口 tip（triggerX==asOf）→ 右组首根 8
+    // 确认→判断的收束段改实线；开口 tip（triggerX==asOf）仍虚线
     final closed = at8.where((l) => !l.isOpenTip).toList();
     expect(closed.length, 1);
     expect(closed.first.beginSrc, 'confirm');
     expect(closed.first.endSrc, 'judgment');
-    expect(closed.first.asSolid, isFalse);
+    expect(closed.first.asSolid, isTrue,
+        reason: '两端都是分型，收束段改实线');
     expect(closed.first.end.barIdx, 5); // 钉在扫价首极值 5，不是 8
     final open = at8.where((l) => l.isOpenTip).toList();
     expect(open.length, 1);
