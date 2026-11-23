@@ -105,9 +105,8 @@ void main() {
     final f1 = frames.last;
     expect([f1.x1, f1.x2, f1.count], [4, 6, 2]);
     expect(f1.high, closeTo(10.19, 1e-9));
-    // 2026-11-19 高高口径全层同构：首分型前包含吸收 high/low 都取最大，
-    // 故 10.07 与 10.13 取 10.13（旧口径按 Down 取最小=10.07）。
-    expect(f1.low, closeTo(10.13, 1e-9));
+    // 二元素顶分型之后，右组向下，包含按低低取最小：10.07 与 10.13 取 10.07。
+    expect(f1.low, closeTo(10.07, 1e-9));
 
     expectNoTruncationArtifacts(frames);
   });

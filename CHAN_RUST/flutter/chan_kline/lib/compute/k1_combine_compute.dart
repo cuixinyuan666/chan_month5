@@ -39,8 +39,8 @@ List<KlineCombineFrame> computeK1CombineFrames(
   }
 
   /// 首个「正式」分型是否已成立（三元素或截断确认）。
-  /// 两元素章（`pairFxBeforeFirst`）不算正式：它只是首分型前的临时盖章，
-  /// 不能解锁截断，也不能解锁「首分型后」口径。
+  /// 两元素章不算正式，不能解锁截断。
+  /// 两元素盖章之后，后续包含改按组方向正常合并，不再用设置里的高高/低低。
   var firstStandardFxSeen = false;
 
   void updateFx(
@@ -270,16 +270,16 @@ List<KlineCombineFrame> computeK1CombineFrames(
     }
 
     if (dir == 'COMBINE') {
-      // 首分型前禁用截断（2026-11-19 全层同构）：直接按设置的高高/低低吸收，
-      // 不走 TruncGuard；两元素章不算「正式」，所以这里仍算首分型前。
+      // 二元素盖章前：按设置的高高/低低吸收，禁用截断。
+      // 二元素盖章后：包含按该组方向走正常合并（向上高高，向下低低），截断仍等正式分型。
       if (!firstStandardFxSeen) {
-        if (mode == PreFirstFractalMode.lowLow) {
-          highs[last] = math.min(highs[last], b.high);
-          lows[last] = math.min(lows[last], b.low);
-        } else if (mode == PreFirstFractalMode.highHigh) {
-          highs[last] = math.max(highs[last], b.high);
-          lows[last] = math.max(lows[last], b.low);
-        } else if (dirs[last] == 'DOWN') {
+        final pairStamped = fxAt.any((f) => f == 'TOP' || f == 'BOTTOM');
+        final takeMin = pairStamped
+            ? dirs[last] == 'DOWN'
+            : mode == PreFirstFractalMode.lowLow ||
+                (mode != PreFirstFractalMode.highHigh &&
+                    dirs[last] == 'DOWN');
+        if (takeMin) {
           highs[last] = math.min(highs[last], b.high);
           lows[last] = math.min(lows[last], b.low);
         } else {
