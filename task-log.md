@@ -7624,3 +7624,16 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **连带解释**：截断把 frame4 的 BOTTOM 从临时判断升级为引擎盖章正式分型；叠加 TOP@29 临时判断被 bar30 高点 10.41 否定消失，构成「实线段并入一条虚线」的完整原因。
 - **测试**：新增探针测试「K0 idx=30 截断核查探针」（test/k2_idx17_probe_test.dart）dump 各层 confirms 截断标记与 level0/1 unitBars，全部通过。
 - **注意事项 / 待办**：无代码改动；open decision 仍在——liveJudgment 是否应允许锚定实线段（用户未答复，已另行提问）。
+
+### 2026-11-24 — Devin · 口径实施 · 构建中连线顶点只增不减（累积判定历史 ∪ 展示轨重放）
+
+- **执行者**：Devin
+- **任务类型**：口径实施（主图连线，核心逻辑——用户已确认执行）
+- **上下文**：K0 idx=30 时 K2 连线把 idx=29 已画出的顶点塌成一条虚线。根因：极点来源用 as-of 重放的 liveJudgments，重放随进行中单元区间变化改写历史盖章（TOP@29 被 bar30 高点否定消失）。用户口径：「不想要临时分型判断的逻辑，截断机制保留，三元素分型成立就是成立，不因后来而改过去」；预期：保留 idx=29 连线端点，截断触发后最后端点续画到最新 K 最早极值。先写 AGENTS.md「构建中连线顶点只增不减」一节再动代码。
+- **关键操作**：
+  1. `AGENTS.md` 新增该节：极点 = 确认段端点 + `judgmentHistoryByKn` 累积历史 ∪ `_displayJudgmentEvents` 展示轨重放事件；开口端点扫到 asOf 取方向极值首次出现根；兜底=历史与展示重放皆空退回 `liveJudgments`。
+  2. `chart_view_compute.dart`：`computeDisplayBuildingLines` 加 `_dedupeJudgmentEvents`（按 fx|fx1|fx2 去重留 rightX2 最大者）；`_linesFromPoles` 开口尖端改为最后极点方向腿一律画到 asOf，判断极点扫价起点=右组左沿前一根（不扫进中组）、确认极点=极点本根。
+  3. `kline_chart.dart`：`_levelDisplayCombineFrames` 算帧时经 `computeK1CombineFrames(judgmentEvents:)` 收集展示同源事件存 `_displayJudgmentEvents[kn]`（与画框同单元源——动态链/开口跨度，覆盖历史收集器看不到的截断盖章）；新增 `_poleJudgmentEvents`（历史 ∪ 展示重放，皆空走 liveFallback 懒求值）；K0 连线、各层构建中连线、K{n}回归通道基准三处调用点统一切换。
+- **结果**（探针实测，默认数据 K0 idx=30，K2 连线）：`(15,10.03)→(18,10.34)` 实线 + `(18,10.34)→(27,10.13)` 实线（截断 BOTTOM 章使原虚线段转实）+ `(27,10.13)→(30,10.41)` 虚线开口（10.41 首次出现根 bar30）——与用户预期一致；asOf=28/29 输出与之前逐端点一致（只增不减验证通过）。
+- **测试**：`k2_idx17_probe_test.dart` 4 项全过（含新增「顶点只增不减连线探针」镜像历史累积+展示并集）；`early_dynamic_unit_test`+`k1_boxed_candle_test` 3 个失败经 stash 基线对照为既有失败，无回归（曾出现 1 个新回归「截断伪点」——开口扫价误从极点起扫扫进中组，已改为右组左沿前一根起扫修复）。`dart analyze` 无新增告警。
+- **注意事项 / 待办**：`judgmentHistoryByKn`（freeze 会话累积）仍走 bundle 原始单元重放，与展示轨单元流不同——并集设计已兜住连线极点，但副图/回测消费的历史事件与展示帧盖章在个别情形可能不一致，属已知边界；App 需重新编译生效。
