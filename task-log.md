@@ -7612,3 +7612,15 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **结果**：K0 idx=2 时 frame0 已盖 BOTTOM 两元素章 → pending=false → 只画既有构建中虚线一条，首连线不再叠加；二元素未盖章且两元素比较不出方向时该层无虚线（都不画）。
 - **测试**：`dart analyze` 无新增告警；`early_dynamic_unit_test` + `k1_boxed_candle_test` + 探针测试失败数与基线一致（3 个既有失败），无回归。
 - **注意事项 / 待办**：二元素被否定回退 UNKNOWN 时两段口径同步回退；App 需重新编译生效。
+
+### 2026-11-24 — Devin · 调查 · K0 idx=30 时 K2 末两根 K 的截断核查
+
+- **执行者**：Devin
+- **任务类型**：机制核查（只读分析，未改代码）
+- **上下文**：用户问 K0 idx=30 时 K2 层级最后两根 K 线（idx7 x24..27 h10.28/l10.13、idx8 x27..30 h10.41/l10.13）是否符合截断机制。此前同位置实线段并入虚线的现象与本次截断相关。
+- **结论**：符合，且正是截断机制在起作用——发生在展示轨 computeK1CombineFrames（Dart 重放，与 Rust build_k1_combine_frames_with 同口径）。
+- **机制回放**：idx8 到达时末组 frame4 x24..27(10.28/10.13)，combineDir 判 COMBINE（低点相等走包含）；首正式分型已成立、锚点 TOP（frame2 x18..24 高10.34）→ 下行腿 guard ref=10.34；truncHit 下行支 u.low<=last.low(10.13<=10.13) 且 u.high>ref(10.41>10.34) 命中 → frame4 当场盖 BOTTOM 章（asOf=29 时仍 UNKNOWN，证明是 idx8 当步所盖而非三元素），触发单元改写低点抬至 last.low+step=10.130015、高点保留 10.41，按 UP 强制断成新组 frame5。
+- **证据**：frame5 x27..30 的 low=10.130015 = 10.13 + span*1e-4（截断改写标记价）；若无截断 idx8 会被常规吸收进 frame4（变 x24..30 且不盖章）。level=1 confirms 无 truncated=true——该次截断在展示轨 Dart 路径，永久结构走 Rust 路径，事件记录路径不同。
+- **连带解释**：截断把 frame4 的 BOTTOM 从临时判断升级为引擎盖章正式分型；叠加 TOP@29 临时判断被 bar30 高点 10.41 否定消失，构成「实线段并入一条虚线」的完整原因。
+- **测试**：新增探针测试「K0 idx=30 截断核查探针」（test/k2_idx17_probe_test.dart）dump 各层 confirms 截断标记与 level0/1 unitBars，全部通过。
+- **注意事项 / 待办**：无代码改动；open decision 仍在——liveJudgment 是否应允许锚定实线段（用户未答复，已另行提问）。
