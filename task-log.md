@@ -7598,3 +7598,17 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **结果**：AGENTS.md 313→280 行（-130/+97）；确认执行门禁、提交推送、数据保护、当下性、任务总结格式、Obsidian 同步等硬规则原样保留。提交 `bd47b443`。
 - **测试 / 验收**：`git diff --check` 无空白错误；文档类改动不触发编译。逐节与代码对照：`pre_first_fractal_unit_mode.dart`、`main.dart` 四档与切换代价、`_openingSpanOfParent` / `_k2SecondDynamicBar` / `_knDynamicLegs`、`_drawCombineFramesOnMainChart`、`_displayCombineFrames`、`_lineEndpointsInSameCombineFrame`、`build_rust.ps1`、启动默认股顺序。
 - **注意事项 / 待办**：本次只动 AGENTS.md，未改代码；AGENTS.md 改动已本地提交，未推送。
+
+### 2026-11-24 — Devin · 口径实施 · 构建中虚线与首连线分段口径
+
+- **执行者**：Devin
+- **任务类型**：口径实施（主图连线）
+- **上下文**：默认数据 K0 idx=2 时 K0 层同时画出两条虚线——首连线（frame0 底极点→frame1 顶极点）和既有构建中虚线（bar0,9.98→bar2,10.29）。用户定口径：二元素分型盖章前构建中虚线用首连线逻辑，盖章后用既有构建中虚线逻辑，同一时刻只画一条。先写 AGENTS.md 第 5 条再改代码。
+- **关键操作**：
+  1. `AGENTS.md` 第 5 条改写为「首连线 / 构建中虚线分段口径」：盖章前按首连线逻辑连两元素极点（比较不出方向不画），盖章后切既有构建中虚线逻辑；同一时刻只画一条。
+  2. `kline_chart.dart` 新增 `_preFirstTwoElementPending(displayKn)`：earlyDynamicUnit 开启 + 首框未盖两元素章 + 仍处首分型前（K0 无 beforeFirstStandardFx 标记，要求全帧未盖章）。
+  3. `_drawPreFirstFractalTipLines` 反转门控：仅二元素未盖章阶段绘制，方向由 `_tipPairDirection` 按两元素当前比较现算（中组高低同高于右组→顶、同低于→底、否则不画）；盖章后退出，由构建中虚线接管。
+  4. `_drawK0Lines` 与 `_drawBuildingLevelLine` 在 pending 阶段跳过既有构建中虚线——K0/K1/Kn 全层同构，单图/子窗口/画板同路径。
+- **结果**：K0 idx=2 时 frame0 已盖 BOTTOM 两元素章 → pending=false → 只画既有构建中虚线一条，首连线不再叠加；二元素未盖章且两元素比较不出方向时该层无虚线（都不画）。
+- **测试**：`dart analyze` 无新增告警；`early_dynamic_unit_test` + `k1_boxed_candle_test` + 探针测试失败数与基线一致（3 个既有失败），无回归。
+- **注意事项 / 待办**：二元素被否定回退 UNKNOWN 时两段口径同步回退；App 需重新编译生效。
