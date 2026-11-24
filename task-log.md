@@ -7662,3 +7662,18 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **结果**：ok=false，3 阶段失败但均与本次连线改动无关——flutter_test 3 败=既有基线失败（stash 对照过）；inprocess 败在 first_confirm_seed_frame_skipped_level1 与 pre_anchor_no_future_snapshot（预锚/合并框区域，未触碰）；continuous_step_freeze 败在 tick 用例 T1_rhythm_hold（节奏统计，未触碰）。连线相关检查（line_units_with/without_pre_anchor、level2 建线）全部 ok。上次 11-10 运行同样 FAILED，判定为既有红项，如实上报未放宽。
 - **测试**：无代码改动（仅文档）；验证结论如上。
 - **注意事项 / 待办**：inprocess 两项与 freeze T1_rhythm_hold 需另行排查（非本任务范围）；App 已由脚本自动关闭。
+
+### 2026-11-24 — Devin · 缺陷修复 · early_dynamic_20261105 套件转绿（3 阶段全过）
+
+- **执行者**：Devin
+- **任务类型**：缺陷修复（机器人验证套件修复，用户明确「继续且修复机器人验证」）
+- **上下文**：套件 3 阶段失败——flutter_test 3 败、inprocess 2 项检查、freeze tick T1_rhythm_hold。逐项定位后均为「测试/断言口径滞后于 11-17~11-24 口径演进」，引擎行为核对均合规。
+- **关键操作**：
+  1. `suites/early_dynamic_20261105.dart`：`first_confirm_seed_frame_skipped_level1` 改用 `applyPreFirstFractalMode`+`computeK1CombineFrames`（PreFirstFractalMode.highHigh）重建展示轨帧再与种子框比较——此前拿原始帧比，被高高扩框（x0..1）绕过；inprocess 阶段 35/35 全绿。
+  2. `test/k0_building_line_same_price_test.dart`：11.7 实际首现根为 idx=3（原期望 4 过期）；idx=7 结构翻转后虚线换向断言更新。
+  3. `test/early_dynamic_unit_test.dart`：K1@32 口径更新为「首框 x0..21+建造单元 x21..32、虚线 21@11.89→32@11.8」；K2 种子框跳过改为 `combineFramesWithoutSeed` 纯函数断言（同矩形跳过/扩框保留/开关关原样）。
+  4. `step_rhythm_compute.dart`：`StepRhythmLinePoint` 增 `held` 字段（holdLines 原值续写=true，开窗实时算=false；签名/序列化不受影响）。
+  5. `audit_probe_assertions.dart` `_t1HoldContinuity` 重写：存活段=从 holdFromX 起的**连续**段（跨组同名 0-0 不算同段——修 aliveTo+1 落在存活期内致 superseded 恒 false）；mismatch 只计 held 点对前一根同标签点的漂移（开窗实时值随进行中腿端点更新属既定口径，实测 x=87 11.41→11.506、x=110 子底分型关窗后持值不变）；`audit_probe_snapshot.dart` T1 段同步同口径。
+- **结果**：`robot_verify_auto.ps1 -SuiteId early_dynamic_20261105 -Force` → **ok=true，3 阶段全绿**（flutter_test_early_dynamic / inprocess_early_dynamic_unit / continuous_step_freeze）。
+- **测试**：节奏相关 3 测试文件（adjacent_ratio_step_rhythm / kn_clock_causality / bar_feature_lookup）全过；`dart analyze` 无新增告警。
+- **注意事项 / 待办**：zz_* 调试探针已清理；App 已由脚本关闭；仓库存在全仓 CRLF 噪声（数百文件显示 M，HEAD 为 LF），提交前已对改动文件 sed 去 CR。
