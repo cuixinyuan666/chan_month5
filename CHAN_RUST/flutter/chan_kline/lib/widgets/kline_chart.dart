@@ -4508,6 +4508,8 @@ class _KlineCompositePainter extends CustomPainter {
         confirmX: v.confirmX,
         viewX2: v.viewX2,
         barIdx: v.idx,
+        barX1: v.bar.x1,
+        barX2: v.bar.x2,
         unitLevelForActive: 0,
       );
       final wickDash = ChartLevelLineStyle.forDisplayKn(1).buildingDashPattern;
@@ -4788,6 +4790,10 @@ class _KlineCompositePainter extends CustomPainter {
     }
     final open = shown.first.open.clamp(low, high).toDouble();
     final close = shown.last.close.clamp(low, high).toDouble();
+    // idx=0 的确认时机（AGENTS「首分型前动态 K」第 4 条）：上一层首框多于 1 根
+    // 且已有二元素章时转确认。与 idx=1 的生成条件同源——能产出 idx=1 即已确认，
+    // 否则保持动态（confirmX=asOf+1 → 外框虚线），不再依赖 activeUnit 撞号。
+    final confirmed = _k2SecondDynamicBar(parentKn, asOf) != null;
     return <K1Bar>[
       K1Bar(
         idx: 0,
@@ -4798,7 +4804,7 @@ class _KlineCompositePainter extends CustomPainter {
         high: high,
         low: low,
         close: close,
-        confirmX: asOf,
+        confirmX: confirmed ? asOf : asOf + 1,
       ),
     ];
   }
@@ -4912,7 +4918,18 @@ class _KlineCompositePainter extends CustomPainter {
           if (preFirstFractalMode == PreFirstFractalMode.highHigh ||
               preFirstFractalMode == PreFirstFractalMode.lowLow) {
             virtualUnits = _dropDegenerateSeed(virtualUnits);
-            if (dyn.length == 2 && !fxIsUnknownCodeUnit(parentHead.fx)) {
+            if (unitLevel >= 1) {
+              // Kn>=2：本层 K 线就是动态链/开口跨度（动态、确认态都算），
+              // 合并框与蜡烛轨同源取值——整链 > 开口跨度 > dyn 本体。
+              final chain = _preFirstDynChain(unitLevel, bundle, asOfX);
+              if (chain != null) {
+                virtualUnits = chain;
+              } else {
+                final spanned = _openingSpanOfParent(unitLevel, asOfX);
+                virtualUnits =
+                    (spanned != null && spanned.isNotEmpty) ? spanned : dyn;
+              }
+            } else if (dyn.length == 2 && !fxIsUnknownCodeUnit(parentHead.fx)) {
               final end = parentHead.x2;
               virtualUnits = [
                 for (final u in virtualUnits)
@@ -5677,8 +5694,10 @@ class _KlineCompositePainter extends CustomPainter {
     }
   }
 
-  /// 开口那根后面补第 1 根动态 K。价位不动，时间收到互不覆盖：
-  /// 前一根的右端收到后一根的左端，交界那根 K 左右各一半。K1、K2、K3 同一条。
+  /// 开口那根后面补动态 K 链：第 1 根（上一层首框极点 → 右组极点），
+  /// 右组盖章转确认后由 [_knDynamicLegs] 续接 idx=2、3…。
+  /// 价位不动，时间收到互不覆盖：前一根的右端收到后一根的左端，交界那根 K 左右各一半。
+  /// K1、K2、K3 同一条。
   List<LevelUnitBarView> _withK2Dynamic(
     int unitLevel,
     List<LevelUnitBarView> views,
@@ -5687,7 +5706,48 @@ class _KlineCompositePainter extends CustomPainter {
     if (views.length != 1 || asOf < 0) return views;
     final second = _k2SecondDynamicBar(unitLevel, asOf);
     if (second == null) return views;
+    final legs = _knDynamicLegs(unitLevel, asOf);
+    final chain = <K1Bar>[second, ...legs];
     final head = views.single.bar;
+    final cut = chain.first.x1;
+    final headEnd = head.x2 > cut && head.x1 <= cut ? cut : head.x2;
+    final headBar = K1Bar(
+      idx: head.idx,
+      dir: head.dir,
+      x1: head.x1,
+      x2: headEnd,
+      open: head.open,
+      high: head.high,
+      low: head.low,
+      close: head.close,
+      confirmX: head.confirmX,
+    );
+    // 已确认的链上各根进冻结侧（confirmX<=asOf），只有末根动态 K 留进行中。
+    final frozenIdx = <int>{head.idx};
+    for (final u in chain) {
+      if (u.confirmX <= asOf) frozenIdx.add(u.idx);
+    }
+    return _levelUnitViewsFromVirtualK1Bars(
+      <K1Bar>[headBar, ...chain],
+      frozenIdx: frozenIdx,
+    );
+  }
+
+  /// 首分型前本层动态链（蜡烛轨与合并框轨同源，2026-11-24）：
+  /// 开口跨度（已 boxed）+ idx=1 + `_knDynamicLegs` 续接腿（idx=2 起）。
+  /// 返回 null 表示当前步不走动态链，调用方退回旧并框口径。
+  List<K1Bar>? _preFirstDynChain(
+    int unitLevel,
+    LevelBundle bundle,
+    int asOfX,
+  ) {
+    if (unitLevel < 1 || asOfX < 0) return null;
+    final spanned = _openingSpanOfParent(unitLevel, asOfX);
+    if (spanned == null || spanned.isEmpty) return null;
+    final second = _k2SecondDynamicBar(unitLevel, asOfX);
+    if (second == null) return null;
+    final legs = _knDynamicLegs(unitLevel, asOfX);
+    final head = spanned.first;
     final cut = second.x1;
     final headEnd = head.x2 > cut && head.x1 <= cut ? cut : head.x2;
     final headBar = K1Bar(
@@ -5701,10 +5761,7 @@ class _KlineCompositePainter extends CustomPainter {
       close: head.close,
       confirmX: head.confirmX,
     );
-    return _levelUnitViewsFromVirtualK1Bars(
-      [headBar, second],
-      frozenIdx: {head.idx},
-    );
+    return <K1Bar>[headBar, second, ...legs];
   }
 
   /// 第 1 根动态 K：上一层首框多于 1 根且已有二元素时，从分型极点到右组极点。
@@ -5747,6 +5804,114 @@ class _KlineCompositePainter extends CustomPainter {
       low: math.min(polePrice, endPrice),
       close: endPrice,
       confirmX: rightFixed ? endIdx : asOf + 1,
+    );
+  }
+
+  /// idx>=2 的续接动态 K（2026-11-24 口径，全层同构）：
+  /// 第 j 根（j>=2）锚定上一只盖章框 frames[j-1] 的分型极点——引擎正式分型是永久章，
+  /// 不做「顶后创新高/底后创新低」否定撤销（2026-11-24 用户确认：否定只适用于
+  /// 首框两元素章，不适用于 j>=2 的正式分型锚）；
+  /// 终点 = 下一只盖章框 frames[j] 的方向极点；frames[j] 未盖章/不存在时追踪当前极值。
+  List<K1Bar> _knDynamicLegs(int parentDisplayKn, int asOf) {
+    if (parentDisplayKn < 0 || asOf < 0 || bars.isEmpty) return const [];
+    final frames = _displayCombineFrames(parentDisplayKn);
+    if (frames.length < 2) return const [];
+    final legs = <K1Bar>[];
+    for (var j = 2; j <= frames.length; j++) {
+      final anchor = frames[j - 1];
+      final afx = anchor.fx;
+      if ((afx != 'TOP' && afx != 'BOTTOM') || anchor.x2 <= anchor.x1) break;
+      final anchorTop = afx == 'TOP';
+      final polePrice = anchorTop ? anchor.high : anchor.low;
+      final poleIdx = _barWithPrice(
+        anchor.x1,
+        anchor.x2,
+        polePrice,
+        useHigh: anchorTop,
+      );
+      if (poleIdx < 0) break;
+      final dirUp = !anchorTop;
+      K1Bar? leg;
+      if (j < frames.length) {
+        final endFrame = frames[j];
+        final efx = endFrame.fx;
+        if ((efx == 'TOP' || efx == 'BOTTOM') && endFrame.x2 > endFrame.x1) {
+          final endPrice = dirUp ? endFrame.high : endFrame.low;
+          final endIdx = _barWithPrice(
+            endFrame.x1,
+            endFrame.x2,
+            endPrice,
+            useHigh: dirUp,
+          );
+          if (endIdx < 0) break;
+          leg = K1Bar(
+            idx: j,
+            dir: dirUp ? 1 : -1,
+            x1: poleIdx < endIdx ? poleIdx : endIdx,
+            x2: poleIdx > endIdx ? poleIdx : endIdx,
+            open: polePrice,
+            high: polePrice > endPrice ? polePrice : endPrice,
+            low: polePrice < endPrice ? polePrice : endPrice,
+            close: endPrice,
+            confirmX: endIdx,
+          );
+        }
+      }
+      leg ??= _openEndedDynamicLeg(
+        idx: j,
+        dir: dirUp ? 1 : -1,
+        poleIdx: poleIdx,
+        polePrice: polePrice,
+        asOf: asOf,
+      );
+      if (leg == null) break;
+      legs.add(leg);
+    }
+    return legs;
+  }
+
+  /// 未盖章腿的开口动态 K：锚定极点 → [poleIdx..asOf] 内方向极值（首次）。
+  K1Bar? _openEndedDynamicLeg({
+    required int idx,
+    required int dir,
+    required int poleIdx,
+    required double polePrice,
+    required int asOf,
+  }) {
+    int? extremeIdx;
+    double? extremePrice;
+    if (dir > 0) {
+      var hi = double.negativeInfinity;
+      for (var i = poleIdx; i <= asOf && i < bars.length; i++) {
+        if (bars[i].high > hi) {
+          hi = bars[i].high;
+          extremeIdx = i;
+          extremePrice = hi;
+        }
+      }
+    } else {
+      var lo = double.infinity;
+      for (var i = poleIdx; i <= asOf && i < bars.length; i++) {
+        if (bars[i].low < lo) {
+          lo = bars[i].low;
+          extremeIdx = i;
+          extremePrice = lo;
+        }
+      }
+    }
+    if (extremeIdx == null || extremePrice == null || extremeIdx <= poleIdx) {
+      return null;
+    }
+    return K1Bar(
+      idx: idx,
+      dir: dir,
+      x1: poleIdx,
+      x2: extremeIdx,
+      open: polePrice,
+      high: polePrice > extremePrice ? polePrice : extremePrice,
+      low: polePrice < extremePrice ? polePrice : extremePrice,
+      close: extremePrice,
+      confirmX: asOf + 1,
     );
   }
 
@@ -6854,6 +7019,8 @@ class _KlineCompositePainter extends CustomPainter {
         confirmX: v.bar.confirmX,
         viewX2: v.viewX2,
         barIdx: v.bar.idx,
+        barX1: v.bar.x1,
+        barX2: v.bar.x2,
         unitLevelForActive: displayKn - 1,
       );
       final wickDash = ChartLevelLineStyle.forDisplayKn(displayKn).buildingDashPattern;
@@ -7252,18 +7419,27 @@ class _KlineCompositePainter extends CustomPainter {
     return cap < cx ? 0.88 : 1.15;
   }
 
-  /// 某结构层 [unitLevel] 的 [activeUnit] 是否与 [barIdx] 为同一根单元 K。
+  /// 某结构层 [unitLevel] 的 [activeUnit] 是否与展示柱 [barIdx]/[barX1]..[barX2]
+  /// 为同一根单元 K。
   ///
   /// 用于确认当步 `cap == confirmX`：分型已在当步确认，但单元仍在
   /// `LevelBundle.activeUnit` 中延伸时，外框应继续虚线。
+  /// idx/x1/x2 三者都要一致：首分型前动态链（idx=0 开口那根）的 idx 会与
+  /// 引擎 activeUnit 的 idx 撞号，但二元素盖章后它已被裁成历史 K，
+  /// 不能再按「仍是活跃单元」判虚线。
   bool _levelActiveUnitMatchesBar({
     required int unitLevel,
     required int barIdx,
+    required int barX1,
+    required int barX2,
   }) {
     for (final b in levels) {
       if (b.level != unitLevel) continue;
       final a = b.activeUnit;
-      return a != null && a.idx == barIdx;
+      return a != null &&
+          a.idx == barIdx &&
+          a.x1 == barX1 &&
+          a.x2 == barX2;
     }
     return false;
   }
@@ -7279,14 +7455,20 @@ class _KlineCompositePainter extends CustomPainter {
     required int confirmX,
     required int viewX2,
     int? barIdx,
+    int? barX1,
+    int? barX2,
     int? unitLevelForActive,
   }) {
     final cap = _stepAsOfBarIdx;
     final active = barIdx != null &&
+        barX1 != null &&
+        barX2 != null &&
         unitLevelForActive != null &&
         _levelActiveUnitMatchesBar(
           unitLevel: unitLevelForActive,
           barIdx: barIdx,
+          barX1: barX1,
+          barX2: barX2,
         );
     final bool building;
     if (cap == null || active) {
