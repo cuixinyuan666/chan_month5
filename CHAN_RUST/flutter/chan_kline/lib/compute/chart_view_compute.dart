@@ -1335,56 +1335,35 @@ List<DisplayBuildingLine> _linesFromPoles({
     ));
   }
 
-  // 开口尖端
+  // 开口尖端：最后分型极点的方向腿仍开口——一律画，扫到 asOf 取方向极值首次出现根。
+  // （顶点只增不减后，判定极点不是「当步刚成立」才有效，旧极点的开口段继续跟最新 K。）
+  // 扫价起点：判断极点从右组左沿前一根起扫（不扫进中组）；确认极点从极点起扫。
   final last = poles.last;
-  final bool allowOpen;
-  if (last.src == 'confirm') {
-    allowOpen = poles.length == 1 || js.isEmpty;
-  } else {
-    // 末判断仅在「本步刚成立」时画开口（triggerX==asOf）；否则钉死不拉长
-    allowOpen = last.triggerX == asOf;
-  }
-  if (allowOpen) {
-    final openDir = last.fx == 'BOTTOM' ? 1 : -1;
-    LevelLineEndpoint? tip;
-    final beginEp = last.endpoint;
+  final openDir = last.fx == 'BOTTOM' ? 1 : -1;
+  final beginEp = last.endpoint;
+  final scanAfter = last.src == 'judgment' && last.rightX1 >= 0
+      ? last.rightX1 - 1
+      : last.poleX;
+  final tip = buildingTailEndpoint(
+    bars: bars,
+    afterConfirmX: scanAfter,
+    asOfX: asOf,
+    buildingDir: openDir,
+  );
 
-    if (last.src == 'judgment' && last.rightX1 >= 0) {
-      // 判断开口：右组 [rightX1,rightX2] 内方向首极值
-      final rightEnd =
-          last.rightX2 >= last.rightX1 ? last.rightX2 : last.rightX1;
-      final asOfCap = asOf < rightEnd ? asOf : rightEnd;
-      tip = buildingTailEndpoint(
-        bars: bars,
-        afterConfirmX: last.rightX1 - 1,
-        asOfX: asOfCap,
-        buildingDir: openDir,
-      );
-    } else {
-      // 确认开口（含刚成立当步）：一律从极点扫到 asOf，取方向极值首次出现根
-      // （取消确认刚成立右组=[x,x] 特例，避免终点跳到确认本根）
-      tip = buildingTailEndpoint(
-        bars: bars,
-        afterConfirmX: last.poleX,
-        asOfX: asOf,
-        buildingDir: openDir,
-      );
-    }
-
-    if (tip != null && tip.barIdx != beginEp.barIdx) {
-      out.add(DisplayBuildingLine(
-        begin: beginEp,
-        end: tip,
-        dir: openDir,
-        unitIdx: -1,
-        anchorX: beginEp.barIdx,
-        corrected: last.src == 'confirm',
-        beginSrc: last.src,
-        endSrc: 'open',
-        asSolid: false,
-        isOpenTip: true,
-      ));
-    }
+  if (tip != null && tip.barIdx != beginEp.barIdx) {
+    out.add(DisplayBuildingLine(
+      begin: beginEp,
+      end: tip,
+      dir: openDir,
+      unitIdx: -1,
+      anchorX: beginEp.barIdx,
+      corrected: last.src == 'confirm',
+      beginSrc: last.src,
+      endSrc: 'open',
+      asSolid: false,
+      isOpenTip: true,
+    ));
   }
 
   return out;
@@ -1484,19 +1463,35 @@ DisplayBuildingLine? _seedLineBeforeFirstPole({
   );
 }
 
+/// 判定事件去重：同一分型在活动单元生长期可能以不同 rightX 跨度重复进历史，
+/// 按 (fx, fractalX1, fractalX2) 合并、保留 rightX2 最大者（最完整的右组）。
+List<FractalJudgmentEvent> _dedupeJudgmentEvents(
+  List<FractalJudgmentEvent> js,
+) {
+  if (js.length <= 1) return js;
+  final best = <String, FractalJudgmentEvent>{};
+  for (final j in js) {
+    final k = '${j.fx}|${j.fractalX1}|${j.fractalX2}';
+    final cur = best[k];
+    if (cur == null || j.rightX2 > cur.rightX2) best[k] = j;
+  }
+  final out = best.values.toList()
+    ..sort((a, b) => a.x.compareTo(b.x));
+  return out;
+}
+
 /// 动态KN + 当下分型判断拆段的构建中连线（全层同构）。
 ///
-/// [liveJudgments]：as-of 当下重算的有效判断（禁止用会话历史，否则失效判断自动回退）。
-/// 口径（全层同构）：
+/// [liveJudgments]：分型极点来源。绘制路径喂累积判定历史（judgmentHistoryByKn，
+/// 只增不删，顶点不回撤）；无会话历史的入口退回 as-of 重放（健壮兜底）。
+/// 口径（全层同构 · 2026-11-24 顶点只增不减）：
 /// - 判断极点钉在 (上一极点, judgment.x] 扫价（buildingTailEndpoint），不随 asOf 拉长；
 /// - 尚无确认时：首判断用中组极点起链，画判断↔判断实 / 判断开口虚（与有确认同构）；
 /// - 右组=分型第三元素的 K0 跨度 [rightX1,rightX2]
 ///   （K0 例确认@8 → [8,8]；K1 例判断@58 → [55,58]）；
-/// - 判断刚成立开口：起点=判断极点；终点=右组内方向首极值
-///   （扫 (rightX1-1, min(asOf,rightX2)]；禁止扫进中组如 44→47）；
-/// - 确认开口（含刚成立当步）：一律从确认极点扫到 asOf，取方向极值首次出现根
-///   （取消右组=[confirm.x,confirm.x] 特例，避免确认当步终点跳到本根）；
-/// - 收束段（确认或已钉死的判断，两端都是分型）画实线；开口尖端虚线。
+/// - 开口尖端一律从最后分型极点扫到 asOf、取方向极值首次出现根
+///   （顶点只增不减后，开口段持续跟到最新 K，不再按 rightX 封顶）；
+/// - 收束段（确认或判定极点，两端都是分型）画实线；开口尖端虚线。
 List<DisplayBuildingLine> computeDisplayBuildingLines({
   required List<KlineBar> bars,
   required int asOf,
@@ -1520,11 +1515,11 @@ List<DisplayBuildingLine> computeDisplayBuildingLines({
   final List<_DashPole> poles;
 
   if (confirmPoles.isEmpty) {
-    // 尚无确认：仍消费 live 判断（全层同构）；无判断才退化到未冻虚拟单元
-    js = [
+    // 尚无确认：仍消费判断极点（全层同构）；无判断才退化到未冻虚拟单元
+    js = _dedupeJudgmentEvents([
       for (final j in liveJudgments)
         if (j.x <= asOf && (j.fx == 'TOP' || j.fx == 'BOTTOM')) j,
-    ]..sort((a, b) => a.x.compareTo(b.x));
+    ]);
     poles = <_DashPole>[];
     _appendJudgmentPoles(
       bars: bars,
@@ -1557,7 +1552,7 @@ List<DisplayBuildingLine> computeDisplayBuildingLines({
       asSolid: seedBeforeFirstPoleSolid,
     );
     return [
-      if (seeded != null) seeded,
+      ?seeded,
       ..._linesFromPoles(
         bars: bars,
         asOf: asOf,
@@ -1570,13 +1565,13 @@ List<DisplayBuildingLine> computeDisplayBuildingLines({
   } else {
     poles = <_DashPole>[...confirmPoles];
     final lastConfirmTrig = confirmPoles.last.triggerX;
-    js = [
+    js = _dedupeJudgmentEvents([
       for (final j in liveJudgments)
         if (j.x <= asOf &&
             j.x > lastConfirmTrig &&
             (j.fx == 'TOP' || j.fx == 'BOTTOM'))
           j,
-    ]..sort((a, b) => a.x.compareTo(b.x));
+    ]);
     _appendJudgmentPoles(
       bars: bars,
       poles: poles,

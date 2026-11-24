@@ -28,6 +28,9 @@ class _Probe {
 
   final memo = <int, List<KlineCombineFrame>>{};
 
+  /// 镜像 painter `_displayJudgmentEvents`：展示轨重放发射的判断事件。
+  final displayJudgmentEvents = <int, List<FractalJudgmentEvent>>{};
+
   List<KlineCombineFrame> dropCovered(List<KlineCombineFrame> frames) {
     if (frames.length <= 1) return frames;
     final kept = <KlineCombineFrame>[];
@@ -366,13 +369,20 @@ class _Probe {
         print('   unit ${fmtUnit(u)}');
       }
     }
+    final jEvents = <FractalJudgmentEvent>[];
     final displayFrames = computeK1CombineFrames(
       barsForCombine,
       virtualUnits,
       truncationCheck: truncationCheck,
       mode: mode,
+      judgmentEvents: jEvents,
     );
+    if (kn == 2) {
+      // ignore: avoid_print
+      print('kn=2 jEvents=${jEvents.map((e) => '${e.fx}@${e.x}${e.truncated ? '(T)' : ''}').join(',')}');
+    }
     if (displayFrames.isEmpty) return const [];
+    displayJudgmentEvents[kn] = jEvents;
     return applyPreFirstFractalMode(
       displayFrames,
       mode: mode,
@@ -484,7 +494,9 @@ class _Probe {
   }
 
   /// 镜像 `_drawOneLevelLines` + `_drawBuildingLevelLine`（level=displayKn）。
-  void dumpLevelLines(int level, int asOfX) {
+  /// [poleJs] 非空时作为极点来源（模拟 judgmentHistoryByKn 累积历史）。
+  void dumpLevelLines(int level, int asOfX,
+      {List<FractalJudgmentEvent>? poleJs}) {
     final b = bundleAt(level);
     if (b == null) {
       // ignore: avoid_print
@@ -498,7 +510,8 @@ class _Probe {
     );
     // ignore: avoid_print
     print('asOf=$asOfX level=$level segments=${segments.length} '
-        'confirms=${b.confirms.where((c) => c.used).length}');
+        'confirms=${b.confirms.where((c) => c.used).length} '
+        'usedFx=${b.confirms.where((c) => c.used).map((c) => '${c.fx}@${c.x}').join(',')}');
     for (final s in segments) {
       // ignore: avoid_print
       print('   seg idx=${s.idx} pole=${s.beginPoleX}..${s.endPoleX} '
@@ -514,14 +527,15 @@ class _Probe {
       includePreAnchor: true,
     );
     final frozenIdx = <int>{for (final s in segments) s.idx};
-    final liveJudgments = collectFractalJudgmentEvents(
-      kn: level,
-      bars: bars,
-      levels: bundle.levels,
-      barFeatures: bundle.barFeatures,
-      asOf: asOfX,
-      truncationCheck: true,
-    );
+    final liveJudgments = poleJs ??
+        collectFractalJudgmentEvents(
+          kn: level,
+          bars: bars,
+          levels: bundle.levels,
+          barFeatures: bundle.barFeatures,
+          asOf: asOfX,
+          truncationCheck: true,
+        );
     final lines = computeDisplayBuildingLines(
       bars: bars,
       asOf: asOfX,
@@ -539,6 +553,22 @@ class _Probe {
       print('   dir=${l.dir} solid=${l.asSolid} '
           'begin=(${l.begin.barIdx},${l.begin.price}) end=(${l.end.barIdx},${l.end.price}) '
           'src=${l.beginSrc}->${l.endSrc} unitIdx=${l.unitIdx}');
+    }
+    // collect 同源单元对照（kn=level → unitLevel=level-1）
+    if (level == 2) {
+      final rawUnits = asOfLevelVirtualK1Bars(
+        levels: bundle.levels,
+        barFeatures: bundle.barFeatures,
+        level: level - 1,
+        asOf: asOfX,
+        includeBuilding: true,
+      );
+      // ignore: avoid_print
+      print('   collect-path units=${rawUnits.length}');
+      for (final u in rawUnits) {
+        // ignore: avoid_print
+        print('      ${fmtUnit(u)}');
+      }
     }
     final candles = knCandleUnits(level - 1);
     // ignore: avoid_print
@@ -711,8 +741,54 @@ void main() {
   });
 
   test('K0 idx=29/30 K2 连线探针', () {
-    for (final a in [28, 29, 30, 31]) {
+    for (final a in [28, 29, 30]) {
       probeAt(a).dumpLevelLines(2, a);
+    }
+  });
+
+  test('K0 idx=29/30 顶点只增不减连线探针（累积判定历史）', () {
+    // 镜像 step_freeze_merger.mergeJudgmentHistory：每步 prefix 全量收集、
+    // 按事件键去重累积（只增不删）。
+    final seen = <String>{};
+    final hist = <FractalJudgmentEvent>[];
+    for (var s = 0; s < bars.length; s++) {
+      final p = probeAt(s);
+      final prefix = p.bars.where((b) => b.idx <= s).toList();
+      final evs = collectFractalJudgmentEvents(
+        kn: 2,
+        bars: prefix,
+        levels: p.bundle.levels,
+        barFeatures: p.bundle.barFeatures,
+        truncationCheck: true,
+      );
+      for (final e in evs) {
+        if (e.fx != 'TOP' && e.fx != 'BOTTOM') continue;
+        final k =
+            '${e.x}|${e.fx}|${e.truncated ? 1 : 0}|${e.fractalX1}|${e.fractalX2}|${e.rightX1}|${e.rightX2}';
+        if (seen.add(k)) hist.add(e);
+      }
+    }
+    // ignore: avoid_print
+    print('history events=${hist.length}');
+    for (final e in hist) {
+      // ignore: avoid_print
+      print('   ev x=${e.x} fx=${e.fx} trunc=${e.truncated} '
+          'fx=${e.fractalX1}..${e.fractalX2} right=${e.rightX1}..${e.rightX2}');
+    }
+    for (final a in [28, 29, 30, 31, 32, 33, 34, 35, 36]) {
+      final p = probeAt(a);
+      // 镜像 widget：连线绘制前先算展示轨合并框（填充 displayJudgmentEvents）。
+      p.displayCombineFrames(2);
+      final disp = p.displayJudgmentEvents[2] ?? const <FractalJudgmentEvent>[];
+      // 并集：历史 ∪ 展示重放（与 _poleJudgmentEvents 同口径）。
+      final seen = <String>{};
+      final merged = <FractalJudgmentEvent>[];
+      for (final j in [...hist, ...disp]) {
+        final k =
+            '${j.x}|${j.fx}|${j.truncated ? 1 : 0}|${j.fractalX1}|${j.fractalX2}|${j.rightX1}|${j.rightX2}';
+        if (seen.add(k)) merged.add(j);
+      }
+      p.dumpLevelLines(2, a, poleJs: merged);
     }
   });
 

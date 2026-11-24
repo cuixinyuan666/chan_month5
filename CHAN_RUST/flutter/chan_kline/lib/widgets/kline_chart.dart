@@ -4778,6 +4778,37 @@ class _KlineCompositePainter extends CustomPainter {
   /// 该层「视觉合并框」缓存：合并框绘制与「只有 1 个合并框不画连线」共用一份结果。
   final Map<int, List<KlineCombineFrame>> _displayFramesMemo = {};
 
+  /// 展示轨合并框重放发射的分型判断事件（displayKn → 事件列表）。
+  ///
+  /// 与画框完全同单元源（动态链/开口跨度），覆盖 judgmentHistoryByKn 收集器
+  /// （bundle 原始单元重放）看不到的截断盖章与动态链分型——顶点只增不减的
+  /// 连线极点来源之一。随本 painter 实例生命周期存在，天然不含未来数据。
+  final Map<int, List<FractalJudgmentEvent>> _displayJudgmentEvents = {};
+
+  /// 顶点只增不减的极点来源：累积判定历史 ∪ 展示轨重放事件。
+  ///
+  /// - 历史非空：并集（历史保过去顶点、展示重放补当步新章如截断）；
+  /// - 历史为空：展示重放优先（与画框同源，比 collect 兜底更稳），再退回当步重放。
+  List<FractalJudgmentEvent> _poleJudgmentEvents(
+    int displayKn, {
+    required List<FractalJudgmentEvent> Function() liveFallback,
+  }) {
+    final hist =
+        judgmentHistoryByKn[displayKn] ?? const <FractalJudgmentEvent>[];
+    final disp =
+        _displayJudgmentEvents[displayKn] ?? const <FractalJudgmentEvent>[];
+    if (hist.isEmpty) return disp.isNotEmpty ? disp : liveFallback();
+    if (disp.isEmpty) return hist;
+    final seen = <String>{};
+    final out = <FractalJudgmentEvent>[];
+    for (final j in [...hist, ...disp]) {
+      final k =
+          '${j.x}|${j.fx}|${j.truncated ? 1 : 0}|${j.fractalX1}|${j.fractalX2}|${j.rightX1}|${j.rightX2}';
+      if (seen.add(k)) out.add(j);
+    }
+    return out;
+  }
+
   /// 这一层首框是否已经盖上二元素分型。下一层的确认 K、再下一层的动态 K 都等这个章。
   bool _pairFxStamped(int displayKn) {
     if (displayKn < 0) return false;
@@ -4999,13 +5030,16 @@ class _KlineCompositePainter extends CustomPainter {
       // 合并框按本层自己的单元做高高/低低。整段外沿（含原始最低价）只留给 K 线。
     }
 
+    final judgmentEvents = <FractalJudgmentEvent>[];
     final displayFrames = computeK1CombineFrames(
       barsForCombine,
       virtualUnits,
       truncationCheck: truncationCheck,
       mode: preFirstFractalMode,
+      judgmentEvents: judgmentEvents,
     );
     if (displayFrames.isEmpty) return const [];
+    _displayJudgmentEvents[kn] = judgmentEvents;
     return _mergePreFractalFrames(displayFrames);
   }
 
@@ -5258,13 +5292,16 @@ class _KlineCompositePainter extends CustomPainter {
       asOf: tailIdx,
       truncationCheck: truncationCheck,
     );
+    // 顶点只增不减：极点来源 = 累积判定历史 ∪ 展示轨重放事件；皆空退回当步重放。
+    final poleJudgments =
+        _poleJudgmentEvents(0, liveFallback: () => liveJudgments);
     final lines = computeDisplayBuildingLines(
       bars: bars,
       asOf: tailIdx,
       virtualUnits: virtualUnits,
       frozenIdx: frozenIdx,
       k0Confirms: k0ConfirmSignals,
-      liveJudgments: liveJudgments,
+      liveJudgments: poleJudgments,
     );
     // 历史记录调试摘要（内容变才追加，便于复制排查）
     MsgHistory.instance.appendDisplayBuildingLinesRuntime(
@@ -5273,7 +5310,7 @@ class _KlineCompositePainter extends CustomPainter {
       virtualUnits: virtualUnits,
       frozenIdx: frozenIdx,
       lines: lines,
-      liveJudgments: liveJudgments,
+      liveJudgments: poleJudgments,
     );
     _paintDisplayBuildingLines(
       canvas,
@@ -6574,12 +6611,10 @@ class _KlineCompositePainter extends CustomPainter {
         : levels;
     final rcAsOfEff = asOf ?? bars.last.idx;
     // 回归通道不进冻结仓：父层端点一动整条通道跟着动（纯绘制）
-    final RegressionChannelK0Series rc = computeRegressionChannelForLevel(
-      displayKn: kn,
-      bars: bars,
-      levels: rcLevels,
-      barFeatures: barFeatures,
-      liveJudgments: rcAsOfEff < 0
+    // 顶点只增不减：与图上连线同源——累积判定历史 ∪ 展示轨重放事件，皆空退回当步重放。
+    final rcJudgments = _poleJudgmentEvents(
+      kn + 1,
+      liveFallback: () => rcAsOfEff < 0
           ? const <FractalJudgmentEvent>[]
           : collectFractalJudgmentEvents(
               kn: kn + 1,
@@ -6589,6 +6624,13 @@ class _KlineCompositePainter extends CustomPainter {
               asOf: rcAsOfEff,
               truncationCheck: truncationCheck,
             ),
+    );
+    final RegressionChannelK0Series rc = computeRegressionChannelForLevel(
+      displayKn: kn,
+      bars: bars,
+      levels: rcLevels,
+      barFeatures: barFeatures,
+      liveJudgments: rcJudgments,
       k: mathIndicatorConfig.regressK,
       asOf: asOf,
     );
@@ -7312,13 +7354,16 @@ class _KlineCompositePainter extends CustomPainter {
       asOf: tailIdx,
       truncationCheck: truncationCheck,
     );
+    // 顶点只增不减：极点来源 = 累积判定历史 ∪ 展示轨重放事件；皆空退回当步重放。
+    final poleJudgments =
+        _poleJudgmentEvents(level, liveFallback: () => liveJudgments);
     final lines = computeDisplayBuildingLines(
       bars: bars,
       asOf: tailIdx,
       virtualUnits: virtualUnits,
       frozenIdx: frozenIdx,
       levelConfirms: levelConfirms,
-      liveJudgments: liveJudgments,
+      liveJudgments: poleJudgments,
       // K1：第一段（顶分型前最低点 → 顶分型最高点）保持虚线。
       seedBeforeFirstPoleSolid: level != 1,
     );
@@ -7328,7 +7373,7 @@ class _KlineCompositePainter extends CustomPainter {
       virtualUnits: virtualUnits,
       frozenIdx: frozenIdx,
       lines: lines,
-      liveJudgments: liveJudgments,
+      liveJudgments: poleJudgments,
     );
     _paintDisplayBuildingLines(
       canvas,
