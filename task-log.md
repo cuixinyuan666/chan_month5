@@ -7547,3 +7547,41 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 
 
 
+
+### 2026-11-24 09:50 — Devin · 口径实施 · idx=1 转确认后续接动态 K（idx=2 起）
+
+- **执行者**：Devin
+- **任务类型**：口径实施（主图绘制）
+- **上下文**：子窗口模式 K0 idx=17 时，K2 窗口 idx=1 已转确认（上一层首框右组盖上底分型、终点定住），但价格回升段没有最新动态 K 跟踪——用户确认补口径后实施。
+- **关键操作**：
+  1. `kline_chart.dart` 新增 `_knDynamicLegs`：锚定上一层展示层 frames[j-1] 的分型极点，终点取下一只盖章框 frames[j] 的方向极点；末框未盖章时开口追踪当前极值。全层同构，K2/K3… 同一条。
+  2. 对称撤销（已于 10:30 条修正：j>=2 锚定的是正式分型、不做否定撤销；仅首框两元素章的 idx=1 撤销规则保留）：锚定分型被后续价格否定（顶后创新高/底后创新低）时，末腿回动态（confirmX 推到 asOf 之后）；无续接腿时 idx=1 一并回动态（`_asDynamicK1Bar`）。
+  3. 蜡烛轨 `_withK2Dynamic` 把续接腿并入链，confirmX<=asOf 的进冻结侧实线、末根留动态虚线；合并框轨 `_levelDisplayCombineFrames` 对 Kn>=2 与蜡烛轨完全同源：`_preFirstDynChain` 整链 > `_openingSpanOfParent` 开口跨度 > dyn 本体，取代旧「真实单元 + dyn[1]」并框——合并框只取本层 K 线（动态、确认态都算）的极值，全层同构。K0 idx=4 时 K2 首框由错误的 x0..0(10.17/10.17) 修正为 x0..4(10.22/9.98)，与蜡烛一致。
+- **结果**：K0 idx=17 实测 K2 蜡烛 3 根——idx=0 x0..5、idx=1 x5..14（确认）、idx=2 x14..17 open=9.93 high=10.03 low=9.93（动态虚线）；合并框一只首框 x0..17 h10.29 l9.93（高高取值即本层 K 线极值，右沿跟到最新动态 K）。K0 idx=4 时 K2 首框 x0..4 h10.22 l9.98 与蜡烛同源。新增 `test/k2_idx17_probe_test.dart` 固化 idx=4/idx=17 断言。
+- **测试**：`dart analyze` 无新增告警；全量 `flutter test` 10 个失败经 stash 基线对照均为既有失败，与本次无关。
+- **注意事项 / 待办**：单图模式同函数同路径已覆盖；分笔画板走同一 widget 口径。撤销分支（创新高/低回退）暂无步进用例覆盖，后续可补。
+
+### 2026-11-24 10:30 — Devin · 口径修正 · 续接动态 K 不做锚定分型否定撤销
+
+- **执行者**：Devin
+- **任务类型**：口径修正（主图绘制）
+- **上下文**：默认数据更新后 K0 idx=14，K2 由「2确认+1动态」退成「1确认+1动态」——bar14 low=10.03 跌破 K1 第二框底分型极点 10.05，触发了续接腿的否定撤销。
+- **关键操作**：
+  1. 确认口径：j>=2 续接腿的锚定框都是引擎正式分型（永久章），不适用「顶后创新高/底后创新低」否定；否定只属于首框两元素章（idx=1 自身规则，不动）。
+  2. `kline_chart.dart` 删除 `_dynamicAnchorNegated`、`_asDynamicK1Bar`、`revertIdx1`；`_knDynamicLegs` 改为纯机械投影：锚定盖章框极点 → 下一盖章框方向极点，末框未盖章开口追踪当前极值。
+- **结果**：K0 idx=14 实测 K2 蜡烛 4 根——idx=0/idx=1/leg2(x8..11) 确认 + leg3(x11..14, open10.21 low10.03) 动态虚线；idx=12/13 的 3 根状态不变。合并框 displayKn=2 为 2 只（链式单元自然分组）。
+- **测试**：探针  复跑通过； 无新增告警。
+- **注意事项 / 待办**：续接腿数量随父层盖章框数增长，属预期；单图/画板同路径。
+
+### 2026-11-24 — Devin · 缺陷修复 · Kn 首根 idx=0 动态转确认的虚实判定
+
+- **执行者**：Devin
+- **任务类型**：缺陷修复（主图绘制）
+- **上下文**：用户问 AGENTS.md 是否规定各层级首根 K 由动态转确认的时机（有，第 4 条：上一层首框多于 1 根且已有二元素章时 idx=0 转确认）。默认数据 K0 idx=14 时 K2 首框刚盖上 TOP 两元素章、K3 idx=1 已出生，但 App 里 K3 idx=0 外框仍是虚线。
+- **根因**：`_unitBarIsBuilding` 的「仍是活跃单元」判定 `_levelActiveUnitMatchesBar` 只比 `activeUnit.idx == barIdx`——首分型前动态链 idx=0 的序号与引擎 level-2 `activeUnit.idx=0` 撞号，idx=0 被永久判成 building；二元素盖章、idx=1 出生后它已是历史 K，却仍被 activeUnit 规则压成虚线。
+- **关键操作**：
+  1. `kline_chart.dart`：`_levelActiveUnitMatchesBar` / `_unitBarIsBuilding` 改为 idx + x1 + x2 三者一致才算「仍是活跃单元」（两处绘制调用点同步传 `v.bar.x1/x2`）。盖章后 idx=0 被裁到 idx=1 左端（x0..5），与 activeUnit（x0..14）区间不同 → 不再误判；盖章前两者区间本来就重合 → 仍正确判动态。
+  2. `_openingSpanOfParent`：idx=0 的 confirmX 改为与 idx=1 生成条件同源——`_k2SecondDynamicBar(parentKn, asOf) != null`（即上一层首框已有二元素章）→ confirmX=asOf（确认），否则 confirmX=asOf+1（动态虚线）。不再依赖 activeUnit 撞号维持虚线。
+- **结果**：探针实测 asOf=14：K3 idx=0 cx=14（确认·实线）、idx=1 cx=15（动态·虚线）；asOf=12/13 K3 idx=0 cx=asOf+1（动态）；asOf=4 K2 idx=0 cx=5（动态，K1 未盖章）。K2 各态不变。
+- **测试**：`dart analyze` 无新增告警；探针测试通过；`early_dynamic_unit_test` + `k1_boxed_candle_test` 失败数与基线一致（3 个既有失败），无回归。
+- **注意事项 / 待办**：idx=0 转确认与 idx=1 生成共用同一判定（`_k2SecondDynamicBar` 非空），二元素被否定时两者同步回退；单图/画板同路径。App 需重新编译后生效。
