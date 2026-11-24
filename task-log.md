@@ -7650,3 +7650,15 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **结果**（探针实测）：asOf=31 由 1 条向下虚线恢复为 `(18,10.34)→(27,10.13)`实 + `(27,10.13)→(30,10.41)`虚，与 idx=30 端点连续不再塌缩；asOf=32-36 输出合理（idx=34 新 BOTTOM@34 确认后极点链正常换手）。开口端点钉在 (30,10.41) 为「最早极值首次出现根」既定口径，非缺陷。
 - **测试**：`k2_idx17_probe_test.dart` 全过；`early_dynamic_unit_test`+`k1_boxed_candle_test` 仍 3 个既有失败无回归；`dart analyze` 无告警。
 - **注意事项 / 待办**：同 fx 后到确认与在先截断章并存时（如 BOTTOM@30(T) vs BOTTOM@34 确认）由 poleX 位置检查兜底，已实测 asOf=34 输出正常；App 需重新编译生效。
+
+### 2026-11-24 — Devin · 规则修订+机器人验证 · agent 获得关闭编译权限，early_dynamic 套件验收
+
+- **执行者**：Devin
+- **任务类型**：规则修订 + 机器人验证
+- **上下文**：用户明确「agent 拥有权限关掉且编译」——修订 AGENTS.md / ROBOT_VERIFY.md 中「不得关闭用户手动使用的 App」的硬约束；随后按要求跑 robot_verify_auto.ps1（suiteId=early_dynamic_20261105，-Force 接管 PID 2472）。
+- **关键操作**：
+  1. AGENTS.md 机器人验证节 + ROBOT_VERIFY.md 权限段改写：agent 可直接结束运行中的 chan_kline 再编译启动，无需逐次确认（建议记录 PID/启动时间备查）。
+  2. robot_verify_auto.ps1 -SuiteId early_dynamic_20261105 -Force：编译→启动→跑完→自动关闭→读报告。
+- **结果**：ok=false，3 阶段失败但均与本次连线改动无关——flutter_test 3 败=既有基线失败（stash 对照过）；inprocess 败在 first_confirm_seed_frame_skipped_level1 与 pre_anchor_no_future_snapshot（预锚/合并框区域，未触碰）；continuous_step_freeze 败在 tick 用例 T1_rhythm_hold（节奏统计，未触碰）。连线相关检查（line_units_with/without_pre_anchor、level2 建线）全部 ok。上次 11-10 运行同样 FAILED，判定为既有红项，如实上报未放宽。
+- **测试**：无代码改动（仅文档）；验证结论如上。
+- **注意事项 / 待办**：inprocess 两项与 freeze T1_rhythm_hold 需另行排查（非本任务范围）；App 已由脚本自动关闭。
