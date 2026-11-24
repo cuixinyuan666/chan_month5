@@ -7585,3 +7585,16 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **结果**：探针实测 asOf=14：K3 idx=0 cx=14（确认·实线）、idx=1 cx=15（动态·虚线）；asOf=12/13 K3 idx=0 cx=asOf+1（动态）；asOf=4 K2 idx=0 cx=5（动态，K1 未盖章）。K2 各态不变。
 - **测试**：`dart analyze` 无新增告警；探针测试通过；`early_dynamic_unit_test` + `k1_boxed_candle_test` 失败数与基线一致（3 个既有失败），无回归。
 - **注意事项 / 待办**：idx=0 转确认与 idx=1 生成共用同一判定（`_k2SecondDynamicBar` 非空），二元素被否定时两者同步回退；单图/画板同路径。App 需重新编译后生效。
+
+### 2026-11-24 13:10 — 豆包 · 规则文档 · AGENTS.md 删旧口径并精简
+
+- **执行者**：豆包
+- **任务类型**：规则文档（AGENTS.md 删旧口径 + 精简）
+- **上下文**：AGENTS.md 还留着被 2026-11-17 裁决自我推翻的「禁止首分型前禁截断」第 4 条、重复的首框并框小节和旧虚实/历史批注；与当前代码（Kn 首根确认、idx=1 右组定住转实线、idx>=2 续接动态腿）不一致。
+- **关键操作**：
+  1. 删掉禁止项第 4 条与重复的「首框并框口径」小节；删掉「旧口径…已废」「用户投诉」等历史注释与旧样本例子。
+  2. 按现行代码改写：idx=1 在右组分型定住后转确认实线；idx>=2 按父层盖章框逐段续接动态 K，已定住段实线、末段虚线，续接腿不做否定撤销。
+  3. 修正口径落点（`main.dart` + `LevelWindowSettingsStore` 的 `_unitMode`）、指标文件路径（`lib/models/chart_indicator.dart`、`lib/models/bar_feature_lookup.dart`）与 `_unitBarIsBuilding` 的 idx+x1+x2 三方匹配。
+- **结果**：AGENTS.md 313→280 行（-130/+97）；确认执行门禁、提交推送、数据保护、当下性、任务总结格式、Obsidian 同步等硬规则原样保留。提交 `bd47b443`。
+- **测试 / 验收**：`git diff --check` 无空白错误；文档类改动不触发编译。逐节与代码对照：`pre_first_fractal_unit_mode.dart`、`main.dart` 四档与切换代价、`_openingSpanOfParent` / `_k2SecondDynamicBar` / `_knDynamicLegs`、`_drawCombineFramesOnMainChart`、`_displayCombineFrames`、`_lineEndpointsInSameCombineFrame`、`build_rust.ps1`、启动默认股顺序。
+- **注意事项 / 待办**：本次只动 AGENTS.md，未改代码；AGENTS.md 改动已本地提交，未推送。
