@@ -1565,10 +1565,16 @@ List<DisplayBuildingLine> computeDisplayBuildingLines({
   } else {
     poles = <_DashPole>[...confirmPoles];
     final lastConfirmTrig = confirmPoles.last.triggerX;
+    // 截断章与三元素章/确认同级永久：盖章步早于末确认触发步、但结构位置在其后
+    // 的截断事件不得被 triggerX 过滤（例：K0 idx=31 顶确认触发后，idx=30 截断
+    // 底章会被误滤导致实线段+上行虚线整条塌缩）。仍要求盖章步在末确认极点之后，
+    // 由 _judgmentPole 的 j.x>prev.poleX 与同 fx 替换兜底结构顺序。
+    final lastConfirmPoleX = confirmPoles.last.poleX;
     js = _dedupeJudgmentEvents([
       for (final j in liveJudgments)
         if (j.x <= asOf &&
-            j.x > lastConfirmTrig &&
+            (j.x > lastConfirmTrig ||
+                (j.truncated && j.x > lastConfirmPoleX)) &&
             (j.fx == 'TOP' || j.fx == 'BOTTOM'))
           j,
     ]);
