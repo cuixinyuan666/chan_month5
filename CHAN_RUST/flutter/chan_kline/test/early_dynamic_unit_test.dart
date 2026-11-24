@@ -4,11 +4,11 @@ import 'package:chan_kline/bridge/chan_bridge.dart';
 import 'package:chan_kline/compute/adjacent_ratio_compute.dart';
 import 'package:chan_kline/compute/chart_view_compute.dart';
 import 'package:chan_kline/compute/fractal_judgment_compute.dart';
-import 'package:chan_kline/compute/k1_combine_compute.dart';
 import 'package:chan_kline/models/chart_indicator.dart';
 import 'package:chan_kline/models/k1_bar.dart';
 import 'package:chan_kline/models/kline_bar.dart';
 import 'package:chan_kline/models/kline_combine_bundle.dart';
+import 'package:chan_kline/models/kline_combine_frame.dart';
 import 'package:chan_kline/models/level_models.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -424,7 +424,7 @@ void main() {
     expect(linesOff, isEmpty, reason: '开关关：经典口径不补首分型前虚线');
   });
 
-  test('层级早生成：K1 步进到第 32 根时首条虚线仍钉在高高极值', () {
+  test('层级早生成：K1 步进到第 32 根为「首框+建造单元」，虚线按建造单元扫价', () {
     final bridge = ChanBridge.instance;
     final wide = bridge
         .loadKlinesEx(
@@ -439,6 +439,16 @@ void main() {
     const asOf = 32;
     final sub = wide.sublist(0, asOf + 1);
     final b = bridge.buildKlineCombineBundle(sub, earlyDynamicUnit: true);
+    // 2026-11-19 起口径：K1 已有第一只合并框（x0..21，高高并入 K0 各帧），
+    // 建造单元从框右沿 x21 续到 asOf，不再是横跨全程的单根预锚单元。
+    final lv1 = b.levels.firstWhere((l) => l.level == 1);
+    expect(lv1.combineFrames, hasLength(1));
+    expect(lv1.combineFrames.first.x1, 0);
+    expect(lv1.combineFrames.first.x2, 21);
+    expect(lv1.combineFrames.first.fx, 'UNKNOWN');
+    expect(lv1.segments, isEmpty);
+    expect(lv1.confirms, isEmpty);
+
     final units = asOfLevelVirtualK1Bars(
       levels: b.levels,
       barFeatures: b.barFeatures,
@@ -448,21 +458,26 @@ void main() {
       includePreAnchor: true,
     );
     expect(units, hasLength(1));
+    expect(units.single.idx, 0);
+    expect(units.single.x1, 21);
+    expect(units.single.x2, 32);
+    expect(units.single.dir, -1);
+
     final lines = computeDisplayBuildingLines(
       bars: wide,
       asOf: asOf,
       virtualUnits: units,
       frozenIdx: const {},
-      levelConfirms: b.levels[1].confirms,
+      levelConfirms: lv1.confirms,
     );
-    expect(lines, hasLength(1), reason: '第 32 根时首条虚线不得消失');
+    expect(lines, hasLength(1), reason: '建造单元应有一条构建中虚线');
     final line = lines.single;
-    expect(line.begin.barIdx, 0);
-    expect(line.begin.price, closeTo(11.66, 1e-9));
-    expect(line.end.barIdx, 21, reason: '终点钉在区间内首次最高 high 那根');
-    expect(line.end.price, closeTo(11.89, 1e-9));
-    expect(line.end.price, isNot(closeTo(wide[asOf].low, 1e-9)),
-        reason: '不得落到当根最低价');
+    // 降段：起点=区间内首次最高 high（11.89@21），终点=首次最低 low。
+    expect(line.begin.barIdx, 21);
+    expect(line.begin.price, closeTo(11.89, 1e-9));
+    expect(line.end.barIdx, 32);
+    expect(line.end.price, closeTo(11.8, 1e-9));
+    expect(line.dir, -1);
     expect(line.asSolid, isFalse);
   });
 
@@ -556,48 +571,60 @@ void main() {
     );
   });
 
-  test('层级早生成：K2 合并帧同样跳过二级种子框首组', () async {
-    final bridge = ChanBridge.instance;
-    final wide = bridge
-        .loadKlinesEx(
-          dataRoot: bridge.defaultDataRoot(),
-          code: code,
-          beginDate: begin,
-          endDate: '2025/09/30 15:00:00',
-          period: period,
-          tickSource: 'protocol',
-        )
-        .bars;
-    const n = 136;
-    const asOf = n - 1;
-    final sub = wide.sublist(0, n);
-    final b = bridge.buildKlineCombineBundle(sub, earlyDynamicUnit: true);
-    final snap = levelSnapAt(b.barFeatures, level: 2, asOf: asOf);
-    expect(snap, isNotNull, reason: 'K2 种子快照应已出现');
-    expect(snap!.seedBoxSeq, 0);
-
-    final vu = asOfLevelVirtualK1Bars(
-      levels: b.levels,
-      barFeatures: b.barFeatures,
-      level: 1,
-      asOf: asOf,
-      includeBuilding: true,
+  test('层级早生成：K2 合并帧同样跳过二级种子框首组', () {
+    // combineFramesWithoutSeed 全层同构：首帧与种子框同矩形 → 开关开跳过；
+    // 高高扩框后不同矩形 → 保留；开关关 → 原样。
+    // 展示轨首帧由 widget 内动态链/开口跨度单元管线生成，单测无法复刻，
+    // 端到端覆盖由 inprocess_early_dynamic_unit 的 level2_seed_frame_skipped 承担。
+    const snap = LevelSnap(
+      level: 2,
+      seedBoxSeq: 0,
+      seedBoxX1: 10,
+      seedBoxX2: 20,
+      seedBoxHigh: 9.97,
+      seedBoxLow: 9.50,
     );
-    final frames = computeK1CombineFrames(sub, vu);
-    expect(frames, isNotEmpty);
-    // 2026-11-19 新口径：首分型前先做包含合并，首组按高高扩框，
-    // 不再与种子框同矩形，因此 combineFramesWithoutSeed 不再跳过它。
-    expect(frames.first.x1, 0);
-    expect(frames.first.x2, greaterThanOrEqualTo(snap.seedBoxX2));
-    expect(frames.first.high, greaterThanOrEqualTo(snap.seedBoxHigh));
-    expect(frames.first.low, greaterThanOrEqualTo(snap.seedBoxLow));
+    KlineCombineFrame frame(int x1, int x2, double h, double l) =>
+        KlineCombineFrame(
+          x1: x1,
+          x2: x2,
+          t1: '',
+          t2: '',
+          high: h,
+          low: l,
+          fx: 'UNKNOWN',
+          count: x2 - x1 + 1,
+        );
 
-    final kept = combineFramesWithoutSeed(
-      frames: frames,
+    final seedFirst =
+        frame(snap.seedBoxX1, snap.seedBoxX2, snap.seedBoxHigh, snap.seedBoxLow);
+    final next = frame(21, 24, 10.1, 9.4);
+
+    // 同矩形 → 跳过首组
+    final keptSame = combineFramesWithoutSeed(
+      frames: [seedFirst, next],
       snap: snap,
       earlyDynamicUnit: true,
     );
-    expect(kept.length, frames.length,
-        reason: '首组已按高高扩框，与种子框不同矩形，不再跳过');
+    expect(keptSame, hasLength(1), reason: '同矩形种子首组应被跳过');
+    expect(keptSame.single.x1, next.x1);
+
+    // 高高扩框后与种子框不同矩形 → 保留（2026-11-19 新口径）
+    final expanded = frame(0, 22, 10.2, 9.6);
+    final keptDiff = combineFramesWithoutSeed(
+      frames: [expanded, next],
+      snap: snap,
+      earlyDynamicUnit: true,
+    );
+    expect(keptDiff, hasLength(2), reason: '扩框后不同矩形，不再跳过');
+    expect(keptDiff.first.x1, 0);
+
+    // 开关关 → 原样保留
+    final keptOff = combineFramesWithoutSeed(
+      frames: [seedFirst, next],
+      snap: snap,
+      earlyDynamicUnit: false,
+    );
+    expect(keptOff, hasLength(2), reason: '开关关：经典种子口径保留原合并帧');
   });
 }

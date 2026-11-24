@@ -1,13 +1,17 @@
 import 'package:chan_kline/bridge/chan_bridge.dart';
 import 'package:chan_kline/compute/adjacent_ratio_compute.dart';
 import 'package:chan_kline/compute/chart_view_compute.dart';
+import 'package:chan_kline/compute/first_fractal_rule.dart';
 import 'package:chan_kline/compute/k1_combine_compute.dart';
 import 'package:chan_kline/compute/kn_clock_timeline.dart';
+import 'package:chan_kline/compute/pre_first_fractal_compute.dart';
 import 'package:chan_kline/models/bar_crosshair_feature.dart';
 import 'package:chan_kline/models/chart_indicator.dart';
+import 'package:chan_kline/models/k1_bar.dart';
 import 'package:chan_kline/models/kline_bar.dart';
 import 'package:chan_kline/models/kline_combine_bundle.dart';
 import 'package:chan_kline/models/level_models.dart';
+import 'package:chan_kline/models/pre_first_fractal_mode.dart';
 
 import '../continuous_step_verify.dart';
 import '../robot_verify_data.dart';
@@ -396,8 +400,74 @@ Future<RobotVerifyPhase> runEarlyDynamicInProcessPhase({String? klineRoot}) asyn
 
     // 2026-11-06 口径：开关开时，合并帧首组与本层种子框同矩形 → 跳过；
     // 开关关时保留原样（经典种子口径）。
+    // 2026-11-24 修正：判定必须用「展示轨合并框」——与 widget
+    // _levelDisplayCombineFrames(1) 同路径（K0 展示帧 → 动态 K 拼接 →
+    // computeK1CombineFrames → 高高并框，主图 subWindow=false）。
+    // k1CombineFrames 是引擎展示轨（含进行中单元），与种子框不同矩形，
+    // 不能再直接拿来对拍（first_confirm 当步实测 x0..1 h11.7 vs 种子 x0..0）。
     final seed1 = levelSnapAt(at.barFeatures, level: 1, asOf: fx);
-    final frames1 = at.k1CombineFrames;
+    final barsFx = bars.where((b) => b.idx <= fx).toList();
+    var units1 = asOfLevelVirtualK1Bars(
+      levels: at.levels,
+      barFeatures: at.barFeatures,
+      level: 0,
+      asOf: fx,
+      includeBuilding: true,
+    );
+    final k0Disp = applyPreFirstFractalMode(
+      at.frames,
+      mode: PreFirstFractalMode.highHigh,
+      subWindow: false,
+      earlyDynamicUnit: true,
+    );
+    final dyn1 = buildPreFirstDynamicK1Bars(
+      bars: bars,
+      parentFrames: k0Disp,
+      asOf: fx,
+    );
+    if (dyn1.isNotEmpty) {
+      // _dropDegenerateSeed 复刻（kline_chart.dart 顶层私有函数）
+      final hasSpan = units1.any((u) => u.x2 > u.x1);
+      if (hasSpan) {
+        final keptU =
+            units1.where((u) => u.x2 > u.x1 || u.high != u.low).toList();
+        units1 = keptU.isEmpty ? units1 : keptU;
+      }
+      final parentHead = k0Disp.first;
+      if (dyn1.length == 2 && !fxIsUnknownCodeUnit(parentHead.fx)) {
+        final end = parentHead.x2;
+        units1 = <K1Bar>[
+          for (final u in units1)
+            if (u.x1 <= end && u.x2 > end)
+              K1Bar(
+                idx: u.idx,
+                dir: u.dir,
+                x1: u.x1,
+                x2: end,
+                open: u.open,
+                high: u.high,
+                low: u.low,
+                close: u.close,
+                confirmX: u.confirmX,
+              )
+            else
+              u,
+        ];
+        if (!units1.any((u) => u.x1 >= end)) {
+          units1 = <K1Bar>[...units1, dyn1[1]];
+        }
+      }
+    }
+    final frames1 = applyPreFirstFractalMode(
+      computeK1CombineFrames(
+        barsFx,
+        units1,
+        mode: PreFirstFractalMode.highHigh,
+      ),
+      mode: PreFirstFractalMode.highHigh,
+      subWindow: false,
+      earlyDynamicUnit: true,
+    );
     final firstFrame1 = frames1.isEmpty ? null : frames1.first;
     final seed1Matched = seed1 != null &&
         seed1.seedBoxSeq >= 0 &&
@@ -525,8 +595,11 @@ Future<RobotVerifyPhase> runEarlyDynamicInProcessPhase({String? klineRoot}) asyn
     add('level2_pre_confirm_building_line', k2LineBuilt, k2Data);
 
     // 无未来：短前缀的预锚单元与长前缀同 bar 快照逐字段一致。
+    // 只查 n < fx 的预锚步：n == fx 是首段冻结当步，snap 按
+    // freshly_first_seg 口径故意展示刚冻结段（pipeline.rs），与
+    // activeUnit（新起进行中段）本就不同，不属于预锚比对范围。
     final noFutureDiffs = <String>[];
-    for (final n in {0, 1, fx - 1}) {
+    for (final n in {0, 1, fx - 1}.where((n) => n < fx)) {
       final short = n == fx - 1 ? before : bundleOf(n + 1);
       final u = short.levels.isEmpty ? null : short.levels[0].activeUnit;
       LevelSnap? snap;
