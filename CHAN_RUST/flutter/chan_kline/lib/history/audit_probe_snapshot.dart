@@ -107,52 +107,86 @@ class AuditProbeSnapshot {
       buf.writeln('判定=BUG_HOLD_无参照（$_holdFromX 前无 $_holdLabel）');
       return;
     }
+    final anchor = ref;
     buf.writeln(
       '参照 x=${ref.x} label=${ref.label} value=${ref.value.toStringAsFixed(6)} '
       'key=${ref.key}',
     );
+
+    // 2026-11-24 与 audit_probe_assertions._t1HoldContinuity 同口径：
+    // 存活段=从 _holdFromX 起的连续段（跨组同名标签不算同段）；
+    // mismatch 只计 held（关窗持值）点对前一根同标签点的漂移，
+    // 开窗实时点允许值更新；段尾下一根须有结构性推进（superseded）。
+    final byLabelX = <int, StepRhythmLinePoint>{};
+    for (final p in hist) {
+      if (p.label == _holdLabel && !byLabelX.containsKey(p.x)) {
+        byLabelX[p.x] = p;
+      }
+    }
+    if (!byLabelX.containsKey(_holdFromX)) {
+      buf.writeln('判定=BUG_HOLD_锚点缺（$_holdFromX 无 $_holdLabel）');
+      return;
+    }
+    var aliveTo = _holdFromX;
+    while (byLabelX.containsKey(aliveTo + 1)) {
+      aliveTo++;
+    }
+    final span = aliveTo - _holdFromX + 1;
 
     var miss = 0;
     var mismatch = 0;
     var okN = 0;
     final missXs = <int>[];
     final badXs = <int>[];
-    for (var x = _holdFromX; x <= toX; x++) {
-      final at = hist.where((e) => e.x == x && e.label == _holdLabel).toList();
-      if (at.isEmpty) {
+    StepRhythmLinePoint? prev;
+    for (var x = _holdFromX; x <= aliveTo; x++) {
+      final p = byLabelX[x];
+      if (p == null) {
         miss++;
         if (missXs.length < 8) missXs.add(x);
         continue;
       }
-      final p = at.first;
-      final sameKey = p.key == ref.key;
-      final sameVal = (p.value - ref.value).abs() <= 1e-9;
-      if (!sameKey || !sameVal) {
+      if (p.held &&
+          prev != null &&
+          (p.key != prev.key || (p.value - prev.value).abs() > 1e-9)) {
         mismatch++;
         if (badXs.length < 8) badXs.add(x);
         continue;
       }
       okN++;
+      prev = p;
     }
-    final span = toX - _holdFromX + 1;
     buf.writeln(
-      '扫 x=$_holdFromX..$toX span=$span ok=$okN miss=$miss mismatch=$mismatch',
+      '扫 x=$_holdFromX..$aliveTo span=$span ok=$okN miss=$miss mismatch=$mismatch',
     );
     if (missXs.isNotEmpty) {
       buf.writeln('缺点样例 x=$missXs');
     }
     if (badXs.isNotEmpty) {
-      buf.writeln('异值样例 x=$badXs');
+      buf.writeln('持值漂移样例 x=$badXs');
     }
     if (toX < _holdToX) {
       buf.writeln('注意：数据仅到 $toX，未满 $_holdToX（部分验收）');
     }
-    if (miss == 0 && mismatch == 0 && okN == span) {
+
+    // 消失必须由结构推进解释
+    final after = hist.where((e) => e.x == aliveTo + 1).toList();
+    final superseded = after.isNotEmpty &&
+        after.any((e) =>
+            e.roundCurrent != anchor.roundCurrent || e.groupId != anchor.groupId);
+    buf.writeln(
+      'aliveTo=$aliveTo superseded=$superseded '
+      'next=${after.isEmpty ? '无' : '${after.first.roundCurrent}/g${after.first.groupId}'}',
+    );
+
+    if (miss == 0 && mismatch == 0 && superseded) {
       buf.writeln('判定=OK_FIXED K$_displayKn节奏关窗持值');
     } else if (miss > 0) {
       buf.writeln('判定=BUG_HOLD_缺续写（关窗区间应持上个 $_holdLabel）');
+    } else if (mismatch > 0) {
+      buf.writeln('判定=BUG_HOLD_持值点漂移');
     } else {
-      buf.writeln('判定=BUG_HOLD_值或key漂移');
+      buf.writeln('判定=BUG_HOLD_消失无结构性理由');
     }
   }
 

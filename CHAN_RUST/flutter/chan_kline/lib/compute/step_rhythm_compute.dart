@@ -37,6 +37,10 @@ class StepRhythmLinePoint {
   final int retraceBiIdx;
   final int groupId;
 
+  /// true=关窗持值复制（holdLines 原值续写）；false=开窗实时算。
+  /// 验收断言据此区分「持值不得漂移」与「开窗实时值允许逐步更新」。
+  final bool held;
+
   const StepRhythmLinePoint({
     required this.x,
     required this.displayKn,
@@ -52,6 +56,7 @@ class StepRhythmLinePoint {
     required this.refBiIdx,
     required this.retraceBiIdx,
     this.groupId = 0,
+    this.held = false,
   });
 }
 
@@ -235,6 +240,7 @@ StepRhythmStepResult? holdStepRhythmFromCache({
         refBiIdx: p.refBiIdx,
         retraceBiIdx: p.retraceBiIdx,
         groupId: p.groupId,
+        held: true,
       ),
   ];
   return StepRhythmStepResult(

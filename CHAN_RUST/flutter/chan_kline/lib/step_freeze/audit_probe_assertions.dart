@@ -63,7 +63,7 @@ class AuditProbeAssertions {
     // ref 在循环里被赋值，Dart 不会对其做空值提升；取一份非空局部变量再往下用
     final anchor = ref;
 
-    // 锚点区间取「该标签的实际存活段」，而不是硬写死 [holdFromX, holdToX]。
+    // 锚点区间取「该标签的实际连续存活段」，而不是硬写死 [holdFromX, holdToX]。
     //
     // 2026-10-10 修：原来写死「77~114 每根都必须是 0-0」，于是本条从建起来
     // 就一直红。查实原因 —— 标签规则是 `'$roundRef-${roundCurrent - roundRef}'`，
@@ -72,13 +72,23 @@ class AuditProbeAssertions {
     // 「拿上一轮的结构继续冒充当下」，与当下性相悖。
     // 同时下面新增 `superseded` 断言：**消失必须有结构性理由**，
     // 不是「比放宽判据」——是比原来多验了一条。
-    var aliveTo = holdFromX - 1;
+    //
+    // 2026-11-24 再修（T1_rhythm_hold 实测 mismatch=28/superseded=false）：
+    //  - 存活段必须从 holdFromX 起**连续**——`0-0` 在 roundCurrent 推进后会
+    //    在新组重新出现，跨组的同名标签不是同一段；旧实现取「≤toX 的最后
+    //    一个」会把中间断档也算进存活段，且 toX=114 的硬上限会让
+    //    aliveTo+1 仍落在标签存活期内 → superseded 恒 false。
+    //  - 值漂移只在**关窗持值段**（held=true）内算 mismatch：开窗期间
+    //    「按 K0 步实时算」是既定口径，进行中腿的端点值随新 K 更新属正常
+    //    （实测 x=87 由 11.41→11.506，x=110 子底分型关窗后持值不变）。
+    //    持值点必须与前一根同标签点 key/value 完全一致（holdLines 原值续写）。
+    final byLabelX = <int, StepRhythmLinePoint>{};
     for (final p in hist) {
-      if (p.label != holdLabel) continue;
-      if (p.x < holdFromX || p.x > toX) continue;
-      if (p.x > aliveTo) aliveTo = p.x;
+      if (p.label == holdLabel && !byLabelX.containsKey(p.x)) {
+        byLabelX[p.x] = p;
+      }
     }
-    if (aliveTo < holdFromX) {
+    if (!byLabelX.containsKey(holdFromX)) {
       return {
         'ok': false,
         'reason': 'anchor_label_absent_in_hold_window',
@@ -86,22 +96,30 @@ class AuditProbeAssertions {
         'holdToX': toX,
       };
     }
+    var aliveTo = holdFromX;
+    while (byLabelX.containsKey(aliveTo + 1)) {
+      aliveTo++;
+    }
 
     var miss = 0;
     var mismatch = 0;
+    StepRhythmLinePoint? prev;
     for (var x = holdFromX; x <= aliveTo; x++) {
-      final at = hist.where((e) => e.x == x && e.label == holdLabel).toList();
-      if (at.isEmpty) {
-        miss++; // 存活段中间断档 —— 这才是真正的「持值断了」
+      final p = byLabelX[x];
+      if (p == null) {
+        miss++; // 连续段内断档 —— 这才是真正的「持值断了」
         continue;
       }
-      final p = at.first;
-      if (p.key != anchor.key || (p.value - anchor.value).abs() > 1e-9) {
-        mismatch++; // 持值期间 key/值漂移
+      // 仅持值点要求与上一根同标签点一致；开窗实时点允许值更新。
+      if (p.held &&
+          prev != null &&
+          (p.key != prev.key || (p.value - prev.value).abs() > 1e-9)) {
+        mismatch++;
       }
+      prev = p;
     }
 
-    // 消失必须由「结构推进」解释：下一根上该组已切到新一轮/新组。
+    // 消失必须由「结构推进」解释：存活段结束的下一根上该组已切到新一轮/新组。
     var superseded = true;
     final after = hist.where((e) => e.x == aliveTo + 1).toList();
     if (after.isEmpty) {
