@@ -4630,15 +4630,44 @@ class _KlineCompositePainter extends CustomPainter {
       canvas.drawLine(Offset(beginX, y1), Offset(endX, y2), paint);
     }
 
-    _drawBuildingK0Line(canvas, w, plotTop, plotH, slotW);
+    // 二元素未盖章阶段：构建中虚线让位给首连线逻辑（2026-11-24 口径）。
+    if (!_preFirstTwoElementPending(0)) {
+      _drawBuildingK0Line(canvas, w, plotTop, plotH, slotW);
+    }
     // 方案B：种子框首段 structure level==0
     _drawSeedPhaseLines(canvas, w, plotTop, plotH, slotW, level: 0, style: null);
     // 首分型前二元素章预告线（独立通道，不受正式连线三条禁令限制）
     _drawPreFirstFractalTipLines(canvas, w, plotTop, plotH, slotW, displayKn: 0);
   }
 
-  /// 二元素出现后的第一根连线：连接这两个元素各自的极点。
-  /// 二元素出现之前不画。
+  /// 首分型前「二元素未盖章」阶段判定（2026-11-24 口径，全层同构）：
+  /// earlyDynamicUnit 开启档 + 该层首框未盖两元素章 + 仍处首分型前。
+  /// K0 帧不带 beforeFirstStandardFx 标记，按 displayKn==0 放行。
+  /// 此阶段构建中虚线让位给首连线逻辑（见 AGENTS「首连线 / 构建中虚线分段口径」）。
+  bool _preFirstTwoElementPending(int displayKn) {
+    if (!earlyDynamicUnit) return false;
+    final frames = _displayCombineFrames(displayKn);
+    if (frames.isEmpty) return false;
+    final f = frames.first;
+    if (f.fx == 'TOP' || f.fx == 'BOTTOM') return false;
+    if (displayKn == 0) {
+      // K0 帧不带 beforeFirstStandardFx：要求全帧未盖章才算前段，
+      // 避免首框比较不出方向但后续已有正式分型时误压构建中虚线。
+      return frames.every((x) => x.fx != 'TOP' && x.fx != 'BOTTOM');
+    }
+    return f.beforeFirstStandardFx;
+  }
+
+  /// 二元素比较定方向（首连线逻辑前置）：中组高低同高于右组→顶，
+  /// 同低于右组→底，比较不出方向返回 null（不画线）。
+  bool? _tipPairDirection(KlineCombineFrame first, KlineCombineFrame second) {
+    if (first.high > second.high && first.low > second.low) return true;
+    if (first.high < second.high && first.low < second.low) return false;
+    return null;
+  }
+
+  /// 二元素分型盖章前的第一根连线：连接当前两个元素各自的极点。
+  /// 二元素盖章后由既有构建中虚线逻辑接管，本函数退出（2026-11-24 口径）。
   void _drawPreFirstFractalTipLines(
     Canvas canvas,
     double w,
@@ -4648,13 +4677,15 @@ class _KlineCompositePainter extends CustomPainter {
     required int displayKn,
   }) {
     if (!earlyDynamicUnit) return;
+    if (!_preFirstTwoElementPending(displayKn)) return;
     final frames = _displayCombineFrames(displayKn);
     if (frames.length < 2) return;
     final first = frames.first;
     final second = frames[1];
-    if (first.fx != 'TOP' && first.fx != 'BOTTOM') return;
+    if (first.x2 <= first.x1 || second.x2 <= second.x1) return;
+    final top = _tipPairDirection(first, second);
+    if (top == null) return;
     if (bars.isEmpty) return;
-    final top = first.fx == 'TOP';
     final beginIdx = _poleBarInSpan(first.x1, first.x2, useHigh: top);
     final endIdx = _poleBarInSpan(second.x1, second.x2, useHigh: !top);
     if (beginIdx < 0 || endIdx < 0) return;
@@ -7208,6 +7239,8 @@ class _KlineCompositePainter extends CustomPainter {
     required bool useLegacyK1Analysis,
   }) {
     if (bars.isEmpty || tailIdx < 0 || tailIdx >= bars.length) return;
+    // 二元素未盖章阶段：构建中虚线让位给首连线逻辑（2026-11-24 口径，全层同构）。
+    if (_preFirstTwoElementPending(level)) return;
 
     List<LevelConfirm> levelConfirms = confirms;
     if (useLegacyK1Analysis && confirms.isEmpty) {
