@@ -7704,3 +7704,20 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **结果**（探针实测）：asOf=34..36 `29@10.16→30@10.41` 虚线恢复 DRAW（tip=true exempt）；asOf=30..33 输出不变；单图/子窗口同路径。
 - **测试**：`k2_idx17_probe_test.dart`+`k0_building_line_same_price_test.dart` 全过；`dart analyze` 无新增告警。
 - **注意事项 / 待办**：按「演示与核验」新规已跑 build_rust.ps1 编译并启动 App（PID 13804）供用户核验；commit `da41bf3f`（代码）+ `9034fe8d`（文档）。
+
+### 2026-11-25 — AWS Quick · 缺陷修复 · Kn 首分型前已盖二元素章时连线极点与合并框同源（K3 首连线首端点错位）
+
+- **执行者**：AWS Quick
+- **任务类型**：缺陷修复（主图绘制语义，用户已回复「确认」）
+- **上下文**：默认数据 48 根，步进到最后一根（asOf=47），多子窗口、开启·高高。K3 首合并框 x0..30（极值 bar4@10.47）已盖二元素顶章但仍处首分型前（pre=true），首连线却从 (30,10.41) 出发。用户问「是否没有全层同构」。
+- **根因**（探针实测）：`_drawBuildingLevelLine` 极点链 = 引擎确认 `levelConfirms` + 累积历史/展示重放并集。K3 引擎（Rust 原始单元）已有 TOP(4)/BOTTOM(15) 确认，再接 TOP@47(T)[27..30] 判定 → 极点链 4→15→30，前两段两端都在首框内被门控跳过，只剩 (30,10.41)→(47,9.85)。展示轨重放 TOP@47[0..30] 单独算是 (4,10.47)→(47,9.85)，与合并框同源。函数本身全层同一套，问题是 Kn≥1 首分型前「框来自展示轨、极点来自引擎」不同源；K0 框线同源、此步 K2 已过首分型（pre=false），所以只在 K3 暴露。
+- **关键操作**：
+  1. `kline_chart.dart` 新增 `_displayPreFirstPairStamped(displayKn)`：earlyDynamicUnit 开 + displayKn>0 + 展示轨首框 fx=TOP/BOTTOM + beforeFirstStandardFx。
+  2. `_drawBuildingLevelLine`：上述为真且当步 `_displayJudgmentEvents[level]` 非空时，极点只用展示轨重放事件、`levelConfirms` 置空；否则原口径不变。全层同构，无层级特例；legacy K1Analysis 路径不走。
+- **结果**（逐步验证探针 asOf=0..47，K1/K2/K3 × subWindow=true/false）：FAILURES=0；K3@47 新线 (4,10.47)→(47,9.85)虚开；K3 asOf=39..47 全部变更（旧口径另有倒向线 (39)->(30) 与 asOf=45/46 无线，新口径消除）；K1、K2 在各自首分型前阶段新旧输出一致、无变更。
+- **测试**：`k2_idx17_probe_test.dart` 全过（All tests passed，+8）；`flutter analyze lib/widgets/kline_chart.dart` 9 issues 均为既有（行 4/16/43/1969/2560/4033/5734/9160/9455），改动行无新增。`k0_building_line_same_price_test.dart` 在本次日志中未见用例行，未确认是否执行。
+- **注意事项 / 待办**：
+  - 动代码前未能 commit+push（本执行环境无 git），回滚：`git checkout -- lib/widgets/kline_chart.dart`；需人工补提交。
+  - 默认数据内 K3 至 asOf=47 仍 pre=true，「首分型前→正式」切换步的顶点只增不减本数据未覆盖，待有切换样本时复验。
+  - 验证探针中的「顶点消失」提示出现在 K1/K2 旧口径（未改动）路径，系探针未计入冻结实线段所致，非本次回归。
+  - 临时探针 zz_k3_first_line_probe_test / zz_k3_fix_verify_test 已删除；输出留在 build/zz_k3_probe_out.txt、build/zz_k3_fix_verify_out.txt、build/zz_k3_fix_run_log.txt。App 需重新编译生效。
