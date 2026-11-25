@@ -656,15 +656,18 @@ class _Probe {
       } else if (inside) {
         verdict = 'SKIP headGate(inside head frame)';
       } else {
-        // 同框检查
-        int? fi1, fi2;
+        // 同框检查（镜像新口径：命中框集合相等才算同框）
+        final h1 = <int>{};
+        final h2 = <int>{};
         for (var i = 0; i < frames.length; i++) {
           final f = frames[i];
-          if (l.begin.barIdx >= f.x1 && l.begin.barIdx <= f.x2) fi1 = i;
-          if (l.end.barIdx >= f.x1 && l.end.barIdx <= f.x2) fi2 = i;
+          if (l.begin.barIdx >= f.x1 && l.begin.barIdx <= f.x2) h1.add(i);
+          if (l.end.barIdx >= f.x1 && l.end.barIdx <= f.x2) h2.add(i);
         }
-        if (fi1 != null && fi1 == fi2) {
-          verdict = 'SKIP sameFrame#$fi1';
+        if (h1.isNotEmpty &&
+            h1.length == h2.length &&
+            h1.containsAll(h2)) {
+          verdict = 'SKIP sameFrame';
         }
       }
       // ignore: avoid_print

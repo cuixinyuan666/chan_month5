@@ -4559,14 +4559,19 @@ class _KlineCompositePainter extends CustomPainter {
   /// 连线端点归属检查：两个 x 坐标是否落在同一个合并框内（含首分型前并框口径）。
   bool _lineEndpointsInSameCombineFrame(int x1, int x2, int displayKn) {
     final frames = _displayCombineFrames(displayKn);
-    int? frameIdx1;
-    int? frameIdx2;
+    // 相邻合并框共享边界 bar（左框 x2 == 右框 x1），端点可能同时命中两框。
+    // 只有两端点命中的框集合完全相同（即都严格落在同一框内部）才算同框；
+    // 任一端点落在共享边界上（集合大小为 2）视为可分离，不误杀跨框连线。
+    final hits1 = <int>{};
+    final hits2 = <int>{};
     for (var i = 0; i < frames.length; i++) {
       final f = frames[i];
-      if (x1 >= f.x1 && x1 <= f.x2) frameIdx1 = i;
-      if (x2 >= f.x1 && x2 <= f.x2) frameIdx2 = i;
+      if (x1 >= f.x1 && x1 <= f.x2) hits1.add(i);
+      if (x2 >= f.x1 && x2 <= f.x2) hits2.add(i);
     }
-    return frameIdx1 != null && frameIdx1 == frameIdx2;
+    return hits1.isNotEmpty &&
+        hits1.length == hits2.length &&
+        hits1.containsAll(hits2);
   }
 
   void _drawK0Lines(
