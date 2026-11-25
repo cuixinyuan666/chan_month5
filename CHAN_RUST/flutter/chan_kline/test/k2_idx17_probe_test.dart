@@ -15,14 +15,14 @@ import 'package:chan_kline/models/pre_first_fractal_mode.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 class _Probe {
-  _Probe(this.bars, this.bundle, {required this.asOf});
+  _Probe(this.bars, this.bundle, {required this.asOf, this.subWindow = true});
 
   final List<KlineBar> bars;
   final KlineCombineBundle bundle;
   final int asOf;
+  final bool subWindow;
 
   static const mode = PreFirstFractalMode.highHigh;
-  static const subWindow = true;
   static const earlyDynamicUnit = true;
   static const truncationCheck = true;
 
@@ -379,7 +379,7 @@ class _Probe {
     );
     if (kn == 2) {
       // ignore: avoid_print
-      print('kn=2 jEvents=${jEvents.map((e) => '${e.fx}@${e.x}${e.truncated ? '(T)' : ''}').join(',')}');
+      print('kn=2 jEvents=${jEvents.map((e) => '${e.fx}@${e.x}${e.truncated ? '(T)' : ''}[${e.fractalX1}..${e.fractalX2}]').join(',')}');
     }
     if (displayFrames.isEmpty) return const [];
     displayJudgmentEvents[kn] = jEvents;
@@ -587,6 +587,92 @@ class _Probe {
     }
   }
 
+  /// 镜像 `_preFirstTwoElementPending` + `_paintDisplayBuildingLines` 门控。
+  void dumpPaintGates(int level, int asOfX,
+      {List<FractalJudgmentEvent>? poleJs}) {
+    final frames = displayCombineFrames(level);
+    // ignore: avoid_print
+    print('GATE asOf=$asOfX level=$level frames=${frames.length}');
+    if (frames.length <= 1) {
+      // ignore: avoid_print
+      print('   BLOCKED: displayFrames<=1 → _drawK1LinesForLevel 早退');
+      return;
+    }
+    final head = frames.first;
+    final pending = head.fx != 'TOP' &&
+        head.fx != 'BOTTOM' &&
+        head.beforeFirstStandardFx;
+    // ignore: avoid_print
+    print('   head.fx=${head.fx} pre=${head.beforeFirstStandardFx} '
+        'pending=$pending pairFxStamped=${pairFxStamped(level)}');
+    if (pending) {
+      // ignore: avoid_print
+      print('   BLOCKED: _preFirstTwoElementPending → _drawBuildingLevelLine 早退');
+      return;
+    }
+    // building lines（与 dumpLevelLines 同输入）
+    final b = bundleAt(level);
+    if (b == null) return;
+    final segments = asOfLevelSegments(
+        levels: bundle.levels, level: level, asOf: asOfX);
+    final virtualUnits = asOfLevelVirtualK1Bars(
+      levels: bundle.levels,
+      barFeatures: bundle.barFeatures,
+      level: level,
+      asOf: asOfX,
+      includeBuilding: true,
+      includePreAnchor: true,
+    );
+    final frozenIdx = <int>{for (final s in segments) s.idx};
+    final liveJudgments = poleJs ??
+        collectFractalJudgmentEvents(
+          kn: level,
+          bars: bars,
+          levels: bundle.levels,
+          barFeatures: bundle.barFeatures,
+          asOf: asOfX,
+          truncationCheck: true,
+        );
+    final lines = computeDisplayBuildingLines(
+      bars: bars,
+      asOf: asOfX,
+      virtualUnits: virtualUnits,
+      frozenIdx: frozenIdx,
+      levelConfirms: b.confirms,
+      liveJudgments: liveJudgments,
+      seedBeforeFirstPoleSolid: level != 1,
+    );
+    // ignore: avoid_print
+    print('   buildingLines=${lines.length}');
+    final pair = head.fx == 'TOP' || head.fx == 'BOTTOM';
+    for (final l in lines) {
+      final inside = l.begin.barIdx >= head.x1 &&
+          l.begin.barIdx <= head.x2 &&
+          l.end.barIdx >= head.x1 &&
+          l.end.barIdx <= head.x2;
+      var verdict = 'DRAW';
+      if (!pair) {
+        verdict = 'SKIP headGate(!pair fx=${head.fx})';
+      } else if (inside) {
+        verdict = 'SKIP headGate(inside head frame)';
+      } else {
+        // 同框检查
+        int? fi1, fi2;
+        for (var i = 0; i < frames.length; i++) {
+          final f = frames[i];
+          if (l.begin.barIdx >= f.x1 && l.begin.barIdx <= f.x2) fi1 = i;
+          if (l.end.barIdx >= f.x1 && l.end.barIdx <= f.x2) fi2 = i;
+        }
+        if (fi1 != null && fi1 == fi2) {
+          verdict = 'SKIP sameFrame#$fi1';
+        }
+      }
+      // ignore: avoid_print
+      print('   ${l.begin.barIdx}@${l.begin.price}->${l.end.barIdx}@${l.end.price} '
+          'dir=${l.dir} solid=${l.asSolid} => $verdict');
+    }
+  }
+
   /// 镜像 `_drawBuildingK0Line` + `_drawPreFirstFractalTipLines`（displayKn=0）。
   void dumpK0Lines(int asOfX) {
     final virtualUnits = asOfK1Bars(
@@ -695,14 +781,14 @@ void main() {
     expect(bars.length, greaterThan(14));
   });
 
-  _Probe probeAt(int asOf) {
+  _Probe probeAt(int asOf, {bool subWindow = true}) {
     final bundle = ChanBridge.instance.buildKlineCombineBundle(
       bars.sublist(0, asOf + 1),
       truncationCheck: true,
       earlyDynamicUnit: true,
       preFirstHighHigh: true,
     );
-    return _Probe(bars, bundle, asOf: asOf);
+    return _Probe(bars, bundle, asOf: asOf, subWindow: subWindow);
   }
 
   void dump(String tag, _Probe probe, {int maxKn = 2}) {
@@ -789,6 +875,44 @@ void main() {
         if (seen.add(k)) merged.add(j);
       }
       p.dumpLevelLines(2, a, poleJs: merged);
+    }
+  });
+
+  test('K0 idx=30 K2 画线门控探针（subWindow=true/false）', () {
+    // 累积判定历史（与「顶点只增不减」探针同口径）
+    final seen = <String>{};
+    final hist = <FractalJudgmentEvent>[];
+    for (var s = 0; s <= 30; s++) {
+      final p = probeAt(s);
+      final prefix = p.bars.where((b) => b.idx <= s).toList();
+      final evs = collectFractalJudgmentEvents(
+        kn: 2,
+        bars: prefix,
+        levels: p.bundle.levels,
+        barFeatures: p.bundle.barFeatures,
+        truncationCheck: true,
+      );
+      for (final e in evs) {
+        if (e.fx != 'TOP' && e.fx != 'BOTTOM') continue;
+        final k =
+            '${e.x}|${e.fx}|${e.truncated ? 1 : 0}|${e.fractalX1}|${e.fractalX2}|${e.rightX1}|${e.rightX2}';
+        if (seen.add(k)) hist.add(e);
+      }
+    }
+    for (final sw in [true, false]) {
+      // ignore: avoid_print
+      print('======== subWindow=$sw ========');
+      final p = probeAt(30, subWindow: sw);
+      p.displayCombineFrames(2);
+      final disp = p.displayJudgmentEvents[2] ?? const <FractalJudgmentEvent>[];
+      final seen2 = <String>{};
+      final merged = <FractalJudgmentEvent>[];
+      for (final j in [...hist, ...disp]) {
+        final k =
+            '${j.x}|${j.fx}|${j.truncated ? 1 : 0}|${j.fractalX1}|${j.fractalX2}|${j.rightX1}|${j.rightX2}';
+        if (seen2.add(k)) merged.add(j);
+      }
+      p.dumpPaintGates(2, 30, poleJs: merged);
     }
   });
 
