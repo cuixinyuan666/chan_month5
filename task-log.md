@@ -7752,3 +7752,21 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **测试**：设置分区、主题色样、整页挂载共 24 条组件测试通过。没有编译进正在使用的窗口，所以当前打开的软件还是旧设置。
 - **注意事项 / 待办**：全市场分笔上传默认收着，点开才读共享目录。回测工作台和上传面板内部版式没重画。代码在分支 UIshezhi，尚未提交。
 
+### 2026-11-25 · AWS Quick · 合并 · 三个 worktree 并入 ANDROID_RUST
+
+- **执行者**：AWS Quick
+- **任务类型**：合并（用户已回复「确认」）
+- **背景**：chenhao / qingsao / UIshezhi 三个 worktree 的分支都停在 `148c7523`，而这个提交已经在 ANDROID_RUST 里；分支层面没有可合的新提交，真正要合的是三个工作区的未提交改动（约 3600 行）。
+- **操作**：
+  1. 各自先提交到自己的分支：`1a842cf0` 筹码指标体系（2205 行）、`8d0e7865` 首框口径注释清理（43/93 行）、`ec614a0f` 设置分区台（2052/860 行）；三份 task-log 各单独一个 commit（`1f34f3f3`、`e8064138`，qingsao 无 task-log）。
+  2. 按 chenhao → qingsao → UIshezhi 顺序 merge 进 ANDROID_RUST，各产生一个合并提交（`b394b5a1`、`b06fe952`、`65bfe15a`）。
+  3. 冲突只有两处：`task-log.md`（chenhao、UIshezhi 两轮，保留双方条目）；`chart_view_compute.dart`（qingsao，整文件冲突系行尾差异，取当前分支版本后手工套回两处注释）。
+  4. `flutter pub get` 把 `pubspec.lock` 改了 80 行（解析差异），已回退，不入库。
+- **结果**：ANDROID_RUST 比 origin 领先 10 个提交；主工作区 tracked 干净，只剩用户数据与配置的未跟踪文件。
+- **演示**：已编译并启动 App（PID 26312，窗口 1280x689，`kernel_blob.bin` 21:42:42、`chan_ffi.dll` 21:37:25）。看设置右侧五页（行情 / 结构 / 分布 / 研究 / 工作台），结构页能点首框四档；指标里能勾「成本均线」和筹码副图，默认不画。
+- **测试**：`flutter analyze lib` 0 个 error（100 条全是既有 warning/info，新增文件 0 issue）；`flutter test` 筹码 + 设置 + 主题 + 挂载 19 条全过；Rust `cargo build --release -p chan_ffi` 19.88 秒成功；`flutter build windows --debug` 44.9 秒成功。
+- **注意事项 / 待办**：
+  - 三个 worktree 与分支按「先保留、验证后再清」处理，未删。
+  - 构建时插件符号链接在本机建不出来（Dart 建链接报 OS Error 2），改用 `mklink /J` 给 windows / linux / macos / ios 四个 ephemeral 目录各预建 12 个插件联接后构建通过；这是本机环境问题，不是代码问题，下次遇到同样报错可照此处理。
+  - 尚未 push：ahead 10，等用户点头再推。
+
