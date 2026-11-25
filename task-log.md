@@ -7677,3 +7677,17 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **结果**：`robot_verify_auto.ps1 -SuiteId early_dynamic_20261105 -Force` → **ok=true，3 阶段全绿**（flutter_test_early_dynamic / inprocess_early_dynamic_unit / continuous_step_freeze）。
 - **测试**：节奏相关 3 测试文件（adjacent_ratio_step_rhythm / kn_clock_causality / bar_feature_lookup）全过；`dart analyze` 无新增告警。
 - **注意事项 / 待办**：zz_* 调试探针已清理；App 已由脚本关闭；仓库存在全仓 CRLF 噪声（数百文件显示 M，HEAD 为 LF），提交前已对改动文件 sed 去 CR。
+
+### 2026-11-25 — Devin · 缺陷修复 · 同框判定边界 bar 共享误杀（K2 截断后上行虚线消失）
+
+- **执行者**：Devin
+- **任务类型**：缺陷修复（主图连线，用户已确认修法）
+- **上下文**：默认数据 K0 idx=30 K2 触发截断后，上行构建中虚线 `(27,10.13)→(30,10.41)` 不显示。门控探针（`k2_idx17_probe_test.dart` 新增 subWindow 参数化 + `dumpPaintGates`）逐层复现 widget 绘制路径：buildingLines=3 中该虚线被 `_lineEndpointsInSameCombineFrame` 判同框跳过。
+- **根因**：相邻合并框共享边界 bar（frame#3 x24..27 与 frame#4 x27..30 都含 bar27）。截断事件 `BOTTOM@30(T)` 分型跨度 [24..27]，极点 27@10.13 语义属左框；旧实现对每端点取「最后命中框」，bar27 被归到 frame#4，终点 bar30 也在 frame#4 → 误判两端同框。单图/子窗口同病。
+- **关键操作**：
+  1. `kline_chart.dart` `_lineEndpointsInSameCombineFrame`：改为收集两端点命中的框下标**集合**，集合完全相等（=都严格落在同一框内部）才算同框；边界 bar 命中集合大小为 2 视为可分离照常画。全层同构生效（K0/各层连线、种子 ABC 线同一函数）。
+  2. `AGENTS.md`「连线两端同框禁止规则」补边界 bar 归属口径（2026-11-25 用户确认）。
+  3. 探针 `dumpPaintGates` 同框判定同步新口径。
+- **结果**（探针实测）：asOf=30 level=2 三条线全部 DRAW——`(15,10.03)→(18,10.34)`实 + `(18,10.34)→(27,10.13)`实 + `(27,10.13)→(30,10.41)`**虚**，subWindow=true/false 一致。
+- **测试**：`k2_idx17_probe_test.dart`+`k0_building_line_same_price_test.dart` 全过；`early_dynamic_unit_test`+`k1_boxed_candle_test` 仅余 1 个既有失败（k1_boxed asOf=4 纯 compute 断言，与 widget 改动无关）。`dart analyze` 无新增告警。
+- **注意事项 / 待办**：边界端点从「偏保守不画」变「偏放行画」，可能让少数此前被压制的边界线显示——方向与用户诉求一致，已在 AGENTS.md 记录口径；App 需重新编译生效。commit `4381d3b9`（探针 `6df5038f`）。
