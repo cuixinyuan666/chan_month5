@@ -7691,3 +7691,16 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **结果**（探针实测）：asOf=30 level=2 三条线全部 DRAW——`(15,10.03)→(18,10.34)`实 + `(18,10.34)→(27,10.13)`实 + `(27,10.13)→(30,10.41)`**虚**，subWindow=true/false 一致。
 - **测试**：`k2_idx17_probe_test.dart`+`k0_building_line_same_price_test.dart` 全过；`early_dynamic_unit_test`+`k1_boxed_candle_test` 仅余 1 个既有失败（k1_boxed asOf=4 纯 compute 断言，与 widget 改动无关）。`dart analyze` 无新增告警。
 - **注意事项 / 待办**：边界端点从「偏保守不画」变「偏放行画」，可能让少数此前被压制的边界线显示——方向与用户诉求一致，已在 AGENTS.md 记录口径；App 需重新编译生效。commit `4381d3b9`（探针 `6df5038f`）。
+
+### 2026-11-25 — Devin · 缺陷修复 · 开口尾巴段豁免同框检查（K2 确认后虚线消失）
+
+- **执行者**：Devin
+- **任务类型**：缺陷修复（主图连线，用户已确认修法）
+- **上下文**：接上条边界 bar 修复后，用户反馈 K0 idx=33 之后 K2 构建中虚线消失且末端点改变。门控探针（idx=30..36 逐 asOf）查明：idx=34 引擎盖 `BOTTOM@34` 确认（截断章三元素转正，fxRange=24..27）——实线段换手属设计内；但新极点 29@10.16 与开口极值 30@10.41 同处末框（x27..33/36），同框规则把 `29→30` 开口虚线整条拦掉。
+- **关键操作**：
+  1. `kline_chart.dart` `_paintDisplayBuildingLines`：同框检查对 `isOpenTip` 尾巴段豁免（`!line.isOpenTip && _lineEndpointsInSameCombineFrame(...)`），头框 inside/pair 门控不变；全层同构生效。
+  2. `AGENTS.md` 同框规则补「开口尾巴段豁免」口径（2026-11-25 用户确认）。
+  3. 探针 `dumpPaintGates` 同步豁免口径并打印 isOpenTip。
+- **结果**（探针实测）：asOf=34..36 `29@10.16→30@10.41` 虚线恢复 DRAW（tip=true exempt）；asOf=30..33 输出不变；单图/子窗口同路径。
+- **测试**：`k2_idx17_probe_test.dart`+`k0_building_line_same_price_test.dart` 全过；`dart analyze` 无新增告警。
+- **注意事项 / 待办**：按「演示与核验」新规已跑 build_rust.ps1 编译并启动 App（PID 13804）供用户核验；commit `da41bf3f`（代码）+ `9034fe8d`（文档）。
