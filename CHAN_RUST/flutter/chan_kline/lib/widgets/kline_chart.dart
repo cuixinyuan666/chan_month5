@@ -4663,6 +4663,20 @@ class _KlineCompositePainter extends CustomPainter {
     return f.beforeFirstStandardFx;
   }
 
+  /// 展示轨首框已盖二元素章（TOP/BOTTOM）但仍处首分型前（2026-11-25 口径，全层同构）。
+  ///
+  /// 此阶段构建中连线极点只取展示轨重放事件（与合并框同源），不混入引擎确认 /
+  /// 累积判定历史；展示轨首分型正式成立（beforeFirstStandardFx=false）后恢复原口径。
+  /// K0 帧不带 beforeFirstStandardFx，且框与线同为原始 K，不走本分支。
+  bool _displayPreFirstPairStamped(int displayKn) {
+    if (!earlyDynamicUnit || displayKn <= 0) return false;
+    final frames = _displayCombineFrames(displayKn);
+    if (frames.isEmpty) return false;
+    final f = frames.first;
+    if (f.fx != 'TOP' && f.fx != 'BOTTOM') return false;
+    return f.beforeFirstStandardFx;
+  }
+
   /// 二元素比较定方向（首连线逻辑前置）：中组高低同高于右组→顶，
   /// 同低于右组→底，比较不出方向返回 null（不画线）。
   bool? _tipPairDirection(KlineCombineFrame first, KlineCombineFrame second) {
@@ -7351,17 +7365,34 @@ class _KlineCompositePainter extends CustomPainter {
       };
     }
 
-    final liveJudgments = collectFractalJudgmentEvents(
-      kn: level,
-      bars: bars,
-      levels: levels,
-      barFeatures: barFeatures,
-      asOf: tailIdx,
-      truncationCheck: truncationCheck,
-    );
-    // 顶点只增不减：极点来源 = 累积判定历史 ∪ 展示轨重放事件；皆空退回当步重放。
-    final poleJudgments =
-        _poleJudgmentEvents(level, liveFallback: () => liveJudgments);
+    // 展示轨首框已盖二元素章、但仍处首分型前（beforeFirstStandardFx）时，
+    // 连线极点必须与合并框同源：只用展示轨重放事件，不混入引擎确认 /
+    // 累积历史（二者走 Rust 原始单元，首框经高高/低低合并后与展示轨不一致，
+    // 例：默认数据 asOf=47 K3 首框 0..30 极值 (4,10.47)，引擎确认链却把
+    // 起点推到 (30,10.41)）。展示轨首分型正式成立后恢复原口径。全层同构。
+    final displayPreFirstPair =
+        !useLegacyK1Analysis && _displayPreFirstPairStamped(level);
+    final dispEvents = displayPreFirstPair
+        ? (_displayJudgmentEvents[level] ?? const <FractalJudgmentEvent>[])
+        : const <FractalJudgmentEvent>[];
+    final useDisplayPoles = displayPreFirstPair && dispEvents.isNotEmpty;
+    final List<FractalJudgmentEvent> poleJudgments;
+    if (useDisplayPoles) {
+      poleJudgments = dispEvents;
+      levelConfirms = const <LevelConfirm>[];
+    } else {
+      final liveJudgments = collectFractalJudgmentEvents(
+        kn: level,
+        bars: bars,
+        levels: levels,
+        barFeatures: barFeatures,
+        asOf: tailIdx,
+        truncationCheck: truncationCheck,
+      );
+      // 顶点只增不减：极点来源 = 累积判定历史 ∪ 展示轨重放事件；皆空退回当步重放。
+      poleJudgments =
+          _poleJudgmentEvents(level, liveFallback: () => liveJudgments);
+    }
     final lines = computeDisplayBuildingLines(
       bars: bars,
       asOf: tailIdx,
