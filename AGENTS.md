@@ -115,6 +115,7 @@
 - 实现：`_lineEndpointsInSameCombineFrame`，用在 `_drawK0Lines`（分型框 `x1`）、`_drawOneLevelLines`（线段端点 `barIdx`）、`_paintDisplayBuildingLines`、`_drawSeedAbcLines`、`_drawK1LinesForLevel` 的单根 K1 段。
 - 判定与合并框绘制同源：用 `_displayCombineFrames(displayKn)` 作为合并框列表源（含首分型前并框、去重），禁止另算一套框数。
 - **边界 bar 归属（2026-11-25 用户确认）**：相邻合并框共享边界 bar（左框 `x2` == 右框 `x1`），端点可能同时命中两框。同框判定为「两端点命中的框下标集合完全相等」才算同框；任一端点落在共享边界上（命中集合大小为 2）视为可分离、照常画线——禁止按「最后命中框」单值归属造成跨框连线被误杀（K0 idx=30 K2 截断后上行虚线曾因此消失）。
+- **开口尾巴段豁免（2026-11-25 用户确认）**：`_paintDisplayBuildingLines` 的同框检查对 `isOpenTip` 尾巴段（最后极点→当前方向极值的开口虚线）豁免——极点与极值同处末框时仍要画出开口虚线；豁免只作用于该函数的同框检查，头框 inside / pair 门控不变。
 - 与「只有一个框不画连线」叠加生效：先判框数 ≤1 → 全层无连线；框数 ≥2 再逐个判端点是否同框。
 - 语义：连线两端是分型，至少要有两个合并框才成立；端点同框的「线」只是在该框内部指路，不画。
 
