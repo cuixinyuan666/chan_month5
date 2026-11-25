@@ -35,6 +35,7 @@ import '../compute/fx_pole_snug_compute.dart';
 import '../compute/trend_line_compute.dart';
 import '../compute/trend_model_compute.dart';
 import '../compute/math_classic_compute.dart';
+import '../compute/chenhao_chip_compute.dart';
 import '../compute/demark_compute.dart';
 import '../compute/divergence_compute.dart';
 import '../compute/divergence_freeze_store.dart';
@@ -4259,6 +4260,8 @@ class _KlineCompositePainter extends CustomPainter {
             slotW,
             ind.kn,
           );
+        } else if (ind.kind == MainIndicatorKind.costMa) {
+          _drawCostMa(canvas, size.width, plotTop, plotH, slotW);
         } else if (ind.kind == MainIndicatorKind.trendChannel) {
           _drawTrendChannel(
             canvas,
@@ -6336,6 +6339,42 @@ class _KlineCompositePainter extends CustomPainter {
     return out;
   }
 
+  /// 主图成本均线（只画在 K0 价格坐标上：5 / 13 / 34 / 无穷）。
+  void _drawCostMa(
+    Canvas canvas,
+    double w,
+    double plotTop,
+    double plotH,
+    double slotW,
+  ) {
+    if (bars.isEmpty) return;
+    final series = ChenhaoSeriesCache.of(bars);
+    const colors = <Color>[
+      Color(0xFFEAB308),
+      Color(0xFF22C55E),
+      Color(0xFF38BDF8),
+      Color(0xFFF97316),
+    ];
+    const fields = <ChenhaoField>[
+      ChenhaoField.cyc5,
+      ChenhaoField.cyc13,
+      ChenhaoField.cyc34,
+      ChenhaoField.cycInf,
+    ];
+    for (var i = 0; i < fields.length; i++) {
+      _paintPriceSeries(
+        canvas,
+        w,
+        plotTop,
+        plotH,
+        slotW,
+        series: series.column(bars, fields[i]),
+        color: colors[i],
+        strokeWidth: i == 3 ? 1.6 : 1.2,
+      );
+    }
+  }
+
   /// 主图 Kn均线（kn=显示层；收盘价滑窗 MEAN）。
   void _drawMeanLine(
     Canvas canvas,
@@ -8333,6 +8372,7 @@ class _KlineCompositePainter extends CustomPainter {
     for (final kn in kdjKns) {
       _drawKdjSubChart(canvas, w, innerTop, innerH, barW, slotW, kn);
     }
+    _drawChenhaoSubs(canvas, w, innerTop, innerH, slotW);
     // Kn Demark 已迁主图
     // Kn背驰：ratio 折线 + diver 柱（1/-1/0）
     final diverItems = subIndicators
@@ -8839,6 +8879,261 @@ class _KlineCompositePainter extends CustomPainter {
         prevDea = pt;
       } else {
         prevDea = null;
+      }
+    }
+  }
+
+  /// 副图陈浩筹码。比例类用 0～1，盈亏和带宽按自己的数撑开。不改 K 线画法。
+  void _drawChenhaoSubs(
+    Canvas canvas,
+    double w,
+    double innerTop,
+    double innerH,
+    double slotW,
+  ) {
+    if (bars.isEmpty) return;
+    final picked = subIndicators.where((e) => e.kn == 0).toList();
+    if (picked.isEmpty) return;
+    final series = ChenhaoSeriesCache.of(bars);
+    const gold = Color(0xFFEAB308);
+    const green = Color(0xFF22C55E);
+    const blue = Color(0xFF38BDF8);
+    const orange = Color(0xFFF97316);
+    const rose = Color(0xFFF43F5E);
+    for (final ind in picked) {
+      switch (ind.kind) {
+        case SubIndicatorKind.chipDist:
+          _paintChenhaoLines(
+            canvas, w, innerTop, innerH, slotW, series,
+            fields: const [ChenhaoField.concentration],
+            colors: const [blue],
+            fixedMin: 0,
+            fixedMax: 1,
+          );
+        case SubIndicatorKind.winner:
+          _paintChenhaoLines(
+            canvas, w, innerTop, innerH, slotW, series,
+            fields: const [ChenhaoField.winner],
+            colors: const [green],
+            fixedMin: 0,
+            fixedMax: 1,
+            refs: const [0.9],
+          );
+        case SubIndicatorKind.trapped:
+          _paintChenhaoLines(
+            canvas, w, innerTop, innerH, slotW, series,
+            fields: const [ChenhaoField.trapped],
+            colors: const [rose],
+            fixedMin: 0,
+            fixedMax: 1,
+          );
+        case SubIndicatorKind.cys:
+          _paintChenhaoLines(
+            canvas, w, innerTop, innerH, slotW, series,
+            fields: const [
+              ChenhaoField.cys5,
+              ChenhaoField.cys13,
+              ChenhaoField.cys34,
+              ChenhaoField.cysInf,
+            ],
+            colors: const [gold, green, blue, orange],
+            zeroLine: true,
+          );
+        case SubIndicatorKind.cyqk:
+          _paintChenhaoLines(
+            canvas, w, innerTop, innerH, slotW, series,
+            fields: const [ChenhaoField.cyqkLen],
+            colors: const [orange],
+            fixedMin: 0,
+            fixedMax: 1,
+          );
+        case SubIndicatorKind.asr:
+          _paintChenhaoLines(
+            canvas, w, innerTop, innerH, slotW, series,
+            fields: const [ChenhaoField.asr],
+            colors: const [blue],
+            fixedMin: 0,
+            fixedMax: 1,
+          );
+        case SubIndicatorKind.ckdp:
+          _paintChenhaoLines(
+            canvas, w, innerTop, innerH, slotW, series,
+            fields: const [ChenhaoField.ckdp],
+            colors: const [gold],
+            fixedMin: 0,
+            fixedMax: 1,
+          );
+        case SubIndicatorKind.ckdw:
+          _paintChenhaoLines(
+            canvas, w, innerTop, innerH, slotW, series,
+            fields: const [ChenhaoField.ckdw],
+            colors: const [green],
+            fixedMin: 0,
+            fixedMax: 1,
+          );
+        case SubIndicatorKind.cbw:
+          _paintChenhaoLines(
+            canvas, w, innerTop, innerH, slotW, series,
+            fields: const [ChenhaoField.cbw],
+            colors: const [rose],
+          );
+        case SubIndicatorKind.rpy:
+          _paintChenhaoLines(
+            canvas, w, innerTop, innerH, slotW, series,
+            fields: const [ChenhaoField.rpy],
+            colors: const [blue],
+            fixedMin: 0,
+            fixedMax: 1,
+          );
+        case SubIndicatorKind.myp:
+          _paintChenhaoLines(
+            canvas, w, innerTop, innerH, slotW, series,
+            fields: const [ChenhaoField.myp],
+            colors: const [gold],
+          );
+        case SubIndicatorKind.shiftDown:
+          _paintChenhaoLines(
+            canvas, w, innerTop, innerH, slotW, series,
+            fields: const [ChenhaoField.shiftDown],
+            colors: const [green],
+            fixedMin: 0,
+            fixedMax: 1,
+          );
+        case SubIndicatorKind.sideways:
+          _paintChenhaoLines(
+            canvas, w, innerTop, innerH, slotW, series,
+            fields: const [ChenhaoField.sideways],
+            colors: const [blue],
+            fixedMin: 0,
+            fixedMax: 1,
+          );
+        case SubIndicatorKind.ninetyThree:
+          _paintChenhaoLines(
+            canvas, w, innerTop, innerH, slotW, series,
+            fields: const [ChenhaoField.ninety3],
+            colors: const [rose],
+            fixedMin: 0,
+            fixedMax: 1,
+            stems: true,
+          );
+        case SubIndicatorKind.volume:
+        case SubIndicatorKind.tickCount:
+        case SubIndicatorKind.fractalConfirm:
+        case SubIndicatorKind.fractalJudgment:
+        case SubIndicatorKind.fractalPeakDist:
+        case SubIndicatorKind.truncation:
+        case SubIndicatorKind.zsConfirm:
+        case SubIndicatorKind.zsJudgment:
+        case SubIndicatorKind.buy1:
+        case SubIndicatorKind.buy2:
+        case SubIndicatorKind.buyN:
+        case SubIndicatorKind.adjacentRatio:
+        case SubIndicatorKind.lineSlope:
+        case SubIndicatorKind.macd:
+        case SubIndicatorKind.rsi:
+        case SubIndicatorKind.kdj:
+        case SubIndicatorKind.divergence:
+          break;
+      }
+    }
+  }
+
+  void _paintChenhaoLines(
+    Canvas canvas,
+    double w,
+    double innerTop,
+    double innerH,
+    double slotW,
+    ChenhaoSeries series, {
+    required List<ChenhaoField> fields,
+    required List<Color> colors,
+    double? fixedMin,
+    double? fixedMax,
+    List<double> refs = const [],
+    bool zeroLine = false,
+    bool stems = false,
+  }) {
+    final columns = [for (final f in fields) series.column(bars, f)];
+    final maxX = segAsOf ?? bars.last.idx;
+    double? lo = fixedMin;
+    double? hi = fixedMax;
+    if (lo == null || hi == null) {
+      var minV = double.infinity;
+      var maxV = double.negativeInfinity;
+      for (final col in columns) {
+        for (var i = 0; i < bars.length && i < col.length; i++) {
+          if (bars[i].idx > maxX) continue;
+          final v = col[i];
+          if (v == null || !v.isFinite) continue;
+          if (v < minV) minV = v;
+          if (v > maxV) maxV = v;
+        }
+      }
+      if (minV == double.infinity) return;
+      if (zeroLine) {
+        if (minV > 0) minV = 0;
+        if (maxV < 0) maxV = 0;
+      }
+      final pad = (maxV - minV).abs() < 1e-9 ? 1.0 : (maxV - minV) * 0.08;
+      lo = minV - pad;
+      hi = maxV + pad;
+    }
+    final span = (hi! - lo!).abs() < 1e-12 ? 1.0 : (hi - lo);
+    double subY(double v) {
+      final c = v.clamp(lo!, hi!);
+      return innerTop + (hi - c) / span * innerH;
+    }
+
+    final refPaint = Paint()
+      ..color = AppPalette.rgb(0x6694A3B8)
+      ..strokeWidth = 1
+      ..style = PaintingStyle.stroke;
+    final marks = <double>[...refs, if (zeroLine) 0];
+    for (final ref in marks) {
+      if (ref < lo || ref > hi) continue;
+      final y = subY(ref);
+      _drawDashedLine(
+        canvas,
+        Offset(KlineViewport.padL, y),
+        Offset(w - KlineViewport.padR, y),
+        refPaint,
+      );
+    }
+    for (var si = 0; si < columns.length; si++) {
+      final col = columns[si];
+      final paint = Paint()
+        ..color = colors[si]
+        ..strokeWidth = stems ? 2.2 : 1.3
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round;
+      Offset? prev;
+      for (var i = 0; i < bars.length && i < col.length; i++) {
+        final x = bars[i].idx;
+        if (x > maxX) {
+          prev = null;
+          continue;
+        }
+        if (x < viewport.viewXMin - 1 || x > viewport.viewXMax + 1) {
+          prev = null;
+          continue;
+        }
+        final v = col[i];
+        if (v == null || !v.isFinite) {
+          prev = null;
+          continue;
+        }
+        final cx = _barCenterX(x, w, slotW);
+        final pt = Offset(cx, subY(v));
+        if (stems) {
+          if (v.abs() < 1e-9) {
+            prev = null;
+            continue;
+          }
+          canvas.drawLine(Offset(cx, subY(0)), pt, paint);
+          continue;
+        }
+        if (prev != null) canvas.drawLine(prev, pt, paint);
+        prev = pt;
       }
     }
   }

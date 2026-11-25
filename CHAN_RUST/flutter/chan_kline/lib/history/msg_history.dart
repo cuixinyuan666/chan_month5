@@ -843,6 +843,31 @@ class MsgHistory {
     );
   }
 
+  /// 陈浩筹码指标（只挂 K0；主图成本均线，其余副图）
+  static bool _chenhaoChipLogged = false;
+  void appendChenhaoChipIndicators() {
+    if (_chenhaoChipLogged) return;
+    _chenhaoChipLogged = true;
+    append(
+      '【陈浩筹码·只挂 K0·主图成本均线·其余副图】'
+      '主图：成本均线 5/13/34/无穷。按成交量加权，不是收盘价均线。'
+      '有成交额并且有量时，这一根的价格用额/量，否则用 (高+低+收)/3。'
+      '无穷成本按换手替身递推，只用当根及以前。'
+      '副图：筹码分布（密集度+形态）、获利盘、套牢盘、市场盈亏、博弈K线长、'
+      '活动筹码、相对价位、成本重心、成本带宽、年相对价位、最大年收益、下移法、横盘法、90比3。'
+      '获利盘到 90比3 共用 96 档价格直方图。没有流通股本，衰减用近一个自然年成交量之和当流通量替身。'
+      '主图不画横向筹码直方图，也不改 K 线画法。'
+      '最大年收益是近似：(近一年最高-收盘)/收盘，不是书中原文。'
+      '90比3 是近似：获利盘大于 90%，并且当根成交量占近 20 根成交量之和的比例小于 3%，不是真换手率。'
+      '横盘：近 20 根最高减最低小于收盘的 6%。不满 20 根不算横盘。'
+      '一年按时间戳往回 365 天，不写死 250 根。'
+      '默认不勾。不套到 K1 及以上。'
+      '回测变量：MAIN.K0.CYC.5/13/34/INF，SUB.K0.CYS.*、CYQ.CONC/SHAPE、CYQK.LEN/ZONE、'
+      'WINNER、TRAPPED、ASR、CKDP、CKDW、CBW、RPY、MYP、SHIFT、FLAT、NINETY3。'
+      '与图上同一套现算，不进冻结仓。纯 Flutter，不改 Rust。',
+    );
+  }
+
   /// Kn背驰 12 算法分项（进程内去重；非买卖点；已删 turnrate）
   static bool _knDivergenceLoggedV12 = false;
   void appendKnDivergenceIndicators() {

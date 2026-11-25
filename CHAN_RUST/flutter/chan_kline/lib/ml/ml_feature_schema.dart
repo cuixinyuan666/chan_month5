@@ -50,6 +50,11 @@ class MlFeatureSchema {
     RegExp(r'^mean_text_'),
     RegExp(r'^channel_text_'),
     RegExp(r'^demark_text_'),
+    // 陈浩筹码的中文汇总，数值已在 cyc_/cys_/chip_/cyqk_ 里
+    RegExp(r'^cyc_text$'),
+    RegExp(r'^cys_text$'),
+    RegExp(r'^chip_shape_name$'),
+    RegExp(r'^cyqk_zone_name$'),
     // BS 展示字符串（ML 用 *_code；禁 __has）
     RegExp(r'^buy1_\d+$'),
     RegExp(r'^sell1_\d+$'),
