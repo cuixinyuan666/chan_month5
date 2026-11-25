@@ -1,44 +1,29 @@
-/// 子窗口模式 · 首分型逐对判定（全层同构：K0 / K1..Kn 共用同一套口径）。
+/// 首分型前合并框（子窗口路径）与相邻框的几何关系。
 ///
-/// 口径（2026-11-12 用户确认）：
-/// - 第二根的最高价、最低价**均低于**第一根 → 第一根直接判**顶分型**，
-///   顶点取第一根的 high，且**不再执行取高策略**（该框单独成框，不并入合框）；
-/// - 镜像规则：第二根的最高价、最低价**均高于**第一根 → 第一根直接判**底分型**，
-///   顶点取第一根的 low，同样不合并；
-/// - **仅当**两根存在包含关系（内包含 / 外包含）时，才执行取高策略（合并）；
-/// - 顶底**交替**：连续同向的分型判定丢弃
-///   （idx=0 已是顶分型后，下一个分型必须是底分型，故 idx=1、idx=2 都不算分型）。
+/// 子窗口现行并框在 [applyFirstPairFractalToFrames]：找到该层第一个引擎已给分型的帧，
+/// 把该帧及之前并成一框，分型取该帧；还没有分型就把整段并成一框，分型保持未知。
+/// K0 / K1 / … / Kn 同一条。不再按双高、双低把生长框提前拆开。
 ///
-/// 判定只需相邻两根：第二根到来时第一根即成立，故首分型可早于标准三元素
-/// 分型出现 —— 这正是本规则的全部作用（只作用于「首分型前」）。
-///
-/// 判定输入为「该层画出来的框」（K0 层 = 引擎分组；K1..Kn 层 = 该层虚拟单元分组），
-/// 与引擎自身的包含合并口径一致，故全层同构。
+/// [fractalPairRel] 只区分相邻两框是双低、双高还是其余（包含或交叉）。
+/// 现行并框不调用它，测试仍覆盖这组分类。
 library;
 
 import '../models/kline_combine_frame.dart';
 import '../models/pre_first_fractal_mode.dart';
 
-/// 相邻两根框 / 单元的关系。
+/// 相邻两框的几何关系。只分类，不在这里判分型、也不并框。
 enum FractalPairRel {
-  /// 第二根双低（最高、最低均低于第一根）→ 顶分型
+  /// 第二框的最高价、最低价都低于第一框。
   bothLower,
 
-  /// 第二根双高（最高、最低均高于第一根）→ 底分型
+  /// 第二框的最高价、最低价都高于第一框。
   bothHigher,
 
-  /// 存在包含关系（内包含 / 外包含 / 高低交叉）→ 才执行取高合并
-  ///
-  /// 判定顺序与引擎 `test_combine_range`（engine.rs:242）一致：先判包含，
-  /// 再判双高 / 双低，兜底 Combine。故「高低交叉」在本口径下也归入包含，
-  /// 不存在独立的交叉分支。
+  /// 其余情况：内包含、外包含，以及高低一高一低的交叉。
   contained,
 }
 
-/// UNKNOWN 按码位判断（与 painter 的 `_fxIsUnknown` 同款）。
-///
-/// debug 内核里字符串相等会把别的分型也判成相等（已用逐码位日志核实），
-/// 故此处不使用 `== 'UNKNOWN'`。
+/// 分型文字的码位是否恰好是 UNKNOWN。
 bool fxIsUnknownCodeUnit(String fx) {
   const units = <int>[85, 78, 75, 78, 79, 87, 78];
   final u = fx.codeUnits;
@@ -55,21 +40,6 @@ FractalPairRel fractalPairRel(double h1, double l1, double h2, double l2) {
   if (h2 > h1 && l2 > l1) return FractalPairRel.bothHigher;
   return FractalPairRel.contained;
 }
-
-/// 该关系应判的分型方向；null = 不判分型（走取高合并）。
-String? fractalPairFx(FractalPairRel rel) {
-  switch (rel) {
-    case FractalPairRel.bothLower:
-      return 'TOP';
-    case FractalPairRel.bothHigher:
-      return 'BOTTOM';
-    case FractalPairRel.contained:
-      return null;
-  }
-}
-
-/// 顶底交替：同向丢弃。
-bool fractalFxOpposite(String? lastFx, String fx) => lastFx != fx;
 
 /// 首分型前合并框的高/低取值（绘制与 tooltip 共用，避免两处各写一套）。
 ///

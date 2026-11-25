@@ -363,26 +363,6 @@ fn fx_pole_x(bars: &[KlineBar], x1: i32, x2: i32, fx: FxKind) -> i32 {
     }
 }
 
-/// 区间高低收量（调试/兼容；Kn 单元请用 kn_unit_ohlcv）
-#[allow(dead_code)]
-fn range_ohlcv(bars: &[KlineBar], x1: i32, x2: i32) -> (f64, f64, f64, f64, f64) {
-    if bars.is_empty() {
-        return (0.0, 0.0, 0.0, 0.0, 0.0);
-    }
-    let a = (x1.max(0) as usize).min(bars.len() - 1);
-    let b = (x2.max(0) as usize).min(bars.len() - 1);
-    let (a, b) = (a.min(b), a.max(b));
-    let mut hi = f64::NEG_INFINITY;
-    let mut lo = f64::INFINITY;
-    let mut vol = 0.0;
-    for x in a..=b {
-        hi = hi.max(bars[x].high);
-        lo = lo.min(bars[x].low);
-        vol += bars[x].volume;
-    }
-    (bars[a].open, hi, lo, bars[b].close, vol)
-}
-
 /// Kn 段开盘价（全层同构）：上升取起点底分型最低价，下降取起点顶分型最高价
 /// （与连线 begin_price 同口径；禁止用极点 K 的 open/low 冒充）
 fn kn_segment_open(dir: i32, begin_fx_high: f64, begin_fx_low: f64) -> f64 {
@@ -564,7 +544,6 @@ struct LevelState {
     /// 最近一次顶分型确认中组最高价（含同向丢弃/校验失败的；下降截断破坏参照价）
     last_top_high: Option<f64>,
     /// 原生缠论中枢（ZS）配置（从 opt 拷贝；增量引擎初始化用）
-    #[allow(dead_code)]
     zs_config: ZSConfig,
     /// 增量中枢引擎（逐段 feed，对齐动态 Kn 的 CombineEngine 模式）
     zs_inc: ZSIncEngine,

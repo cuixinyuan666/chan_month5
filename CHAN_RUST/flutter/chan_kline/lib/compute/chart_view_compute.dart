@@ -658,8 +658,8 @@ List<K1Bar> boxedFirstFractalCandleBars({
   return out;
 }
 
-/// 区间 [x1..x2] 的展示用 K1 bar：高/低取区间极值，开=首根开、收=末根收
-/// （与 Rust `range_ohlcv` 同口径，不套合并框的「高高/低低」）。
+/// 区间 [x1..x2] 的展示用 K1 bar：高/低取区间极值，开=首根开、收=末根收。
+/// 不套合并框的「高高/低低」。
 K1Bar? _rangeK1Bar(
   List<KlineBar> bars, {
   required int x1,
@@ -1055,7 +1055,7 @@ class DisplayBuildingLine {
   final LevelLineEndpoint end;
   /// 升=+1，降=-1
   final int dir;
-  /// 调试用：关联虚拟单元 idx（无则 -1）
+  /// 关联的虚拟单元序号；没有对应单元时为 -1。
   final int unitIdx;
   /// 起点锚点 x
   final int anchorX;

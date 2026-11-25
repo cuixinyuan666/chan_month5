@@ -11,7 +11,8 @@ class K0Line {
   final int endFractalX2;
   final int? prevIdx;
   final int? nextIdx;
-  /// 首K0连线确认引导：虚拟起点=区间极值法，第二次K0连线确认后丢弃
+  /// 已废弃：计算侧固定写出 false（字段仍从 JSON 读入）。
+  /// 为 true 时，连线起点改走分型框极值。
   final bool isBootstrap;
   /// 已废弃：首段改为种子框 A→B，固定 false
   final bool isPromotedDefault;

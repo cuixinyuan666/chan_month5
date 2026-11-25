@@ -73,7 +73,7 @@ class RobotVerifyPaths {
     );
   }
 
-  /// 会话 active 时，用户手动打开 App 也可进入机器人验证（见 agent.md）。
+  /// 会话 active 时，用户手动打开 App 也可进入机器人验证（见 ROBOT_VERIFY.md）。
   static bool sessionAuthorized({String? klineRoot}) {
     final dir = verifyDir(klineRoot: klineRoot);
     if (dir == null) return false;

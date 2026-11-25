@@ -13,7 +13,6 @@ import '../backtest/order_models.dart';
 import '../backtest/signal_event.dart';
 import '../backtest/strategy_signal_painter.dart';
 import '../chart/kline_candle_geometry.dart';
-import '../compute/k0_combine_compute.dart';
 import '../compute/k1_combine_compute.dart';
 import '../compute/k1_bar_view_compute.dart';
 import '../compute/kline_period_aggregate.dart';
@@ -4771,19 +4770,18 @@ class _KlineCompositePainter extends CustomPainter {
     return best;
   }
 
-  /// 首分型前的合并框（全层同构）：只有一根时不画框；
-  /// 两根及以上时合成一个框，左端含第一根 K，而不是把第一根单独包成一个。
+  /// 首分型前的合并框重排（全层同构）。
+  /// 单根画不画框不在这里决定：首分型前一根也算框，正式成立后整层只剩一根才不画。
   ///
   /// 口径由设置项「首分型前合并框」决定（见 [PreFirstFractalMode]）：
   /// - 种子框：**不合并**，按引擎原框画（第一根框即种子框，后续框各自独立）；
   /// - 高高：并成一个框，high / low 都取各框最大（历史口径）；
   /// - 低低：并成一个框，high / low 都取各框最小。
   ///
-  /// **子窗口模式**（[subWindow] = true，层级分窗总开关打开时）在高高/低低 下
-  /// 还走逐对判定（见 first_fractal_rule.dart 的逐对判定，全层同构）：相邻两根双低 →
-  /// 前一根直接判顶分型（顶点=前一根 high）、双高 → 判底分型（顶点=前一根 low），
-  /// **都不再合并**；仅当存在包含关系时才并框。顶底交替，同向丢弃。
-  /// 种子框口径下不跑逐对判定（保持原框）。
+  /// 子窗口（[subWindow] 为真：层级分窗、画板）在高高/低低下走
+  /// [applyFirstPairFractalToFrames]：有引擎分型则把该帧及它之前的框并成一框，
+  /// 分型取该帧；还没有分型则整段并成一框，分型保持未知。
+  /// 不再按相邻两根双高、双低提前拆框。种子框不并框。
   ///
   /// 实现集中在 [applyPreFirstFractalMode]，绘制与 tooltip 同源。
   List<KlineCombineFrame> _mergePreFractalFrames(
