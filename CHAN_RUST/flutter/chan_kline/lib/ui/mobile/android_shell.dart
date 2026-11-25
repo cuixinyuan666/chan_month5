@@ -11,7 +11,7 @@ Future<void> showAndroidSettingsSheet({
   return showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
-    backgroundColor: AppPalette.rgb(0xFF1A1A1A),
+    backgroundColor: AppPalette.surface,
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(12)),
     ),
@@ -32,17 +32,17 @@ Future<void> showAndroidSettingsSheet({
                         const SizedBox(width: 12),
                         Expanded(
                           child: Text(
-                            '加载与显示设置',
+                            '设置',
                             style: TextStyle(
                               fontSize: 15,
                               fontWeight: FontWeight.w600,
-                              color: AppPalette.rgb(0xFFE2E8F0),
+                              color: AppPalette.textPrimary,
                             ),
                           ),
                         ),
                         IconButton(
                           onPressed: () => Navigator.pop(sheetCtx),
-                          icon: Icon(Icons.close, color: AppPalette.rgb(0xFF94A3B8)),
+                          icon: Icon(Icons.close, color: AppPalette.textSecondary),
                         ),
                       ],
                     ),
@@ -73,7 +73,7 @@ Future<void> showAndroidStockPicker({
 }) {
   return showModalBottomSheet<void>(
     context: context,
-    backgroundColor: AppPalette.rgb(0xFF1A1A1A),
+    backgroundColor: AppPalette.surface,
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(12)),
     ),
@@ -89,7 +89,7 @@ Future<void> showAndroidStockPicker({
                 style: TextStyle(
                   fontSize: 15,
                   fontWeight: FontWeight.w600,
-                  color: AppPalette.rgb(0xFFE2E8F0),
+                  color: AppPalette.textPrimary,
                 ),
               ),
             ),
@@ -105,12 +105,12 @@ Future<void> showAndroidStockPicker({
                     title: Text(
                       c,
                       style: TextStyle(
-                        color: sel ? AppPalette.rgb(0xFF42A5F5) : AppPalette.rgb(0xFFE2E8F0),
+                        color: sel ? AppPalette.accent : AppPalette.textPrimary,
                         fontWeight: sel ? FontWeight.w600 : FontWeight.normal,
                       ),
                     ),
                     trailing: sel
-                        ? Icon(Icons.check, color: AppPalette.rgb(0xFF42A5F5), size: 20)
+                        ? Icon(Icons.check, color: AppPalette.accent, size: 20)
                         : null,
                     onTap: () {
                       Navigator.pop(ctx);

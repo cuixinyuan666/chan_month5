@@ -178,4 +178,106 @@ void main() {
       expect(helped, 1);
     });
   });
+
+  group('设置分区台', () {
+    testWidgets('只显示当前页，搜索能跳到匹配分区，标题一直在', (tester) async {
+      await tester.pumpWidget(const MaterialApp(home: _DeskHost()));
+      expect(find.text('股票下拉'), findsOneWidget);
+      expect(find.text('截断机制'), findsNothing);
+      expect(find.byKey(const Key('settings-sticky-category')), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('settings-rail-结构')));
+      await tester.pump();
+      expect(find.text('截断机制'), findsOneWidget);
+
+      await tester.enterText(find.byKey(const Key('settings-desk-search')), '股票');
+      await tester.pump();
+      expect(find.text('股票下拉'), findsOneWidget);
+      expect(find.text('截断机制'), findsNothing);
+    });
+
+    testWidgets('开关和四档点选把新值交回去', (tester) async {
+      var on = false;
+      String? picked;
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 360,
+            child: Column(
+              children: [
+                SettingsSwitchRow(
+                  label: '截断机制',
+                  value: on,
+                  onChanged: (v) => on = v,
+                ),
+                SettingsChoiceCards<String>(
+                  label: '首框',
+                  value: picked ?? '高高',
+                  layout: SettingsChoiceLayout.grid,
+                  onChanged: (v) => picked = v,
+                  options: const [
+                    SettingsChoiceOption(value: '经典', title: '经典'),
+                    SettingsChoiceOption(value: '种子框', title: '种子框'),
+                    SettingsChoiceOption(value: '高高', title: '高高'),
+                    SettingsChoiceOption(value: '低低', title: '低低'),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ));
+
+      await tester.tap(find.byType(Switch));
+      await tester.pump();
+      expect(on, isTrue);
+
+      await tester.tap(find.text('低低'));
+      await tester.pump();
+      expect(picked, '低低');
+    });
+  });
+}
+
+class _DeskHost extends StatefulWidget {
+  const _DeskHost();
+
+  @override
+  State<_DeskHost> createState() => _DeskHostState();
+}
+
+class _DeskHostState extends State<_DeskHost> {
+  int index = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: SizedBox(
+        width: 432,
+        height: 640,
+        child: SettingsDesk(
+          index: index,
+          onChanged: (i) => setState(() => index = i),
+          sections: const [
+            SettingsDeskSection(
+              title: '行情',
+              railLabel: '行情',
+              icon: Icons.show_chart,
+              summary: 'test · 1分钟',
+              searchTerms: '股票 周期',
+              children: [Text('股票下拉')],
+            ),
+            SettingsDeskSection(
+              title: '结构',
+              railLabel: '结构',
+              icon: Icons.account_tree_outlined,
+              summary: '高高',
+              searchTerms: '截断 首框',
+              children: [Text('截断机制')],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
