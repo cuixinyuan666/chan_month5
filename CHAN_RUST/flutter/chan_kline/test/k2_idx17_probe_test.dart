@@ -593,6 +593,10 @@ class _Probe {
     final frames = displayCombineFrames(level);
     // ignore: avoid_print
     print('GATE asOf=$asOfX level=$level frames=${frames.length}');
+    for (final f in frames) {
+      // ignore: avoid_print
+      print('   frame ${fmtFrame(f)}');
+    }
     if (frames.length <= 1) {
       // ignore: avoid_print
       print('   BLOCKED: displayFrames<=1 → _drawK1LinesForLevel 早退');
@@ -643,7 +647,12 @@ class _Probe {
       seedBeforeFirstPoleSolid: level != 1,
     );
     // ignore: avoid_print
-    print('   buildingLines=${lines.length}');
+    print('   buildingLines=${lines.length} '
+        'liveJs=${liveJudgments.map((j) => '${j.fx}@${j.x}${j.truncated ? '(T)' : ''}[${j.fractalX1}..${j.fractalX2}]').join(',')}');
+    for (final c in b.confirms.where((c) => c.used)) {
+      // ignore: avoid_print
+      print('   confirm ${c.fx}@${c.x} used fxRange=${c.fractalX1}..${c.fractalX2}');
+    }
     final pair = head.fx == 'TOP' || head.fx == 'BOTTOM';
     for (final l in lines) {
       final inside = l.begin.barIdx >= head.x1 &&
@@ -916,6 +925,44 @@ void main() {
         if (seen2.add(k)) merged.add(j);
       }
       p.dumpPaintGates(2, 30, poleJs: merged);
+    }
+  });
+
+  test('K2 idx=31..36 连线状态探针（subWindow=false 单图）', () {
+    // 累积判定历史（全量前缀收集，x<=asOf 由 computeDisplayBuildingLines 过滤）
+    final seen = <String>{};
+    final hist = <FractalJudgmentEvent>[];
+    for (var s = 0; s < bars.length; s++) {
+      final p = probeAt(s);
+      final prefix = p.bars.where((b) => b.idx <= s).toList();
+      final evs = collectFractalJudgmentEvents(
+        kn: 2,
+        bars: prefix,
+        levels: p.bundle.levels,
+        barFeatures: p.bundle.barFeatures,
+        truncationCheck: true,
+      );
+      for (final e in evs) {
+        if (e.fx != 'TOP' && e.fx != 'BOTTOM') continue;
+        final k =
+            '${e.x}|${e.fx}|${e.truncated ? 1 : 0}|${e.fractalX1}|${e.fractalX2}|${e.rightX1}|${e.rightX2}';
+        if (seen.add(k)) hist.add(e);
+      }
+    }
+    for (final a in [30, 31, 32, 33, 34, 35, 36]) {
+      // ignore: avoid_print
+      print('======== asOf=$a ========');
+      final p = probeAt(a, subWindow: false);
+      p.displayCombineFrames(2);
+      final disp = p.displayJudgmentEvents[2] ?? const <FractalJudgmentEvent>[];
+      final seen2 = <String>{};
+      final merged = <FractalJudgmentEvent>[];
+      for (final j in [...hist, ...disp]) {
+        final k =
+            '${j.x}|${j.fx}|${j.truncated ? 1 : 0}|${j.fractalX1}|${j.fractalX2}|${j.rightX1}|${j.rightX2}';
+        if (seen2.add(k)) merged.add(j);
+      }
+      p.dumpPaintGates(2, a, poleJs: merged);
     }
   });
 
