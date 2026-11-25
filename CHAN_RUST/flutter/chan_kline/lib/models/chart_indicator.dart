@@ -43,6 +43,8 @@ enum MainIndicatorKind {
   chipPeakVolume,
   /// K0纯量级筹码峰（仅 kn=0；忽略 OHLC 区间，全局按峰位 total 取前 N；读 ChipPeakFreezeStore）
   chipPeakPure,
+  /// 成本均线（陈浩 CYC；仅 K0；5/13/34/无穷，量价加权，不是收盘价均线）
+  costMa,
 }
 
 /// 是否筹码峰类主图指标（三种编号模式同属一组，UI 与冻结仓按方案区分）。
@@ -87,6 +89,8 @@ extension MainIndicatorKindMeta on MainIndicatorKind {
       case MainIndicatorKind.chipPeakVolume:
       case MainIndicatorKind.chipPeakPure:
         return '筹码峰';
+      case MainIndicatorKind.costMa:
+        return '筹码';
     }
   }
 
@@ -122,6 +126,8 @@ extension MainIndicatorKindMeta on MainIndicatorKind {
       case MainIndicatorKind.chipPeakVolume:
       case MainIndicatorKind.chipPeakPure:
         return 5;
+      case MainIndicatorKind.costMa:
+        return 8;
     }
   }
 }
@@ -170,6 +176,8 @@ class MainChartIndicator {
       : kind = MainIndicatorKind.chipPeakVolume;
   const MainChartIndicator.chipPeakPure(this.kn)
       : kind = MainIndicatorKind.chipPeakPure;
+  /// 仅 K0。四条成本：5 日、13 日、34 日、无穷。
+  const MainChartIndicator.costMa(this.kn) : kind = MainIndicatorKind.costMa;
 
   String get label {
     switch (kind) {
@@ -216,6 +224,8 @@ class MainChartIndicator {
         return 'K$kn筹码峰·量级序';
       case MainIndicatorKind.chipPeakPure:
         return 'K$kn筹码峰·纯量级';
+      case MainIndicatorKind.costMa:
+        return '成本均线';
     }
   }
 
@@ -269,6 +279,8 @@ class MainChartIndicator {
         return 19;
       case MainIndicatorKind.chipPeakPure:
         return 20;
+      case MainIndicatorKind.costMa:
+        return 21;
     }
   }
 
@@ -309,6 +321,34 @@ enum SubIndicatorKind {
   kdj,
   /// Kn背驰（分算法；kn 同中枢；输出 in/out/ratio/diver）
   divergence,
+  /// 筹码分布：密集度 + 形态（单峰低位/单峰高位/低位锁定/双峰/发散）。仅 K0。
+  chipDist,
+  /// 获利盘。现价以下的筹码占比。仅 K0。
+  winner,
+  /// 套牢盘。现价以上的筹码占比。与获利盘加起来为 1。仅 K0。
+  trapped,
+  /// 市场盈亏。 (收盘-成本均线)/成本均线，含 5/13/34/无穷。仅 K0。
+  cys,
+  /// 博弈K线长。这一根价格区间穿过的筹码比例，附带穿过密区/走在稀区。仅 K0。
+  cyqk,
+  /// 活动筹码。收盘价上下各 10% 里的筹码占比。仅 K0。
+  asr,
+  /// 相对价位。现价在最低、最高持仓成本之间的位置。仅 K0。
+  ckdp,
+  /// 成本重心。平均成本在最低、最高持仓成本之间的位置。仅 K0。
+  ckdw,
+  /// 成本带宽。最高持仓成本比最低持仓成本高出多少。仅 K0。
+  cbw,
+  /// 年相对价位。现价在近一年最高、最低价之间的位置。仅 K0。
+  rpy,
+  /// 最大年收益。近一年最高价相对现价还能赚多少。近似，非书中原文。仅 K0。
+  myp,
+  /// 下移法。涨上去以后仍停在低价的获利筹码比例。仅 K0。
+  shiftDown,
+  /// 横盘法。横盘段内换手仍留在该区间的筹码比例。仅 K0。
+  sideways,
+  /// 90比3。获利盘很高、同时量能很安静。近似，不是真换手率。仅 K0。
+  ninetyThree,
 }
 
 /// 副图指标类别元数据。
@@ -347,6 +387,21 @@ extension SubIndicatorKindMeta on SubIndicatorKind {
         return 'KDJ';
       case SubIndicatorKind.divergence:
         return '背驰';
+      case SubIndicatorKind.chipDist:
+      case SubIndicatorKind.winner:
+      case SubIndicatorKind.trapped:
+      case SubIndicatorKind.cys:
+      case SubIndicatorKind.cyqk:
+      case SubIndicatorKind.asr:
+      case SubIndicatorKind.ckdp:
+      case SubIndicatorKind.ckdw:
+      case SubIndicatorKind.cbw:
+      case SubIndicatorKind.rpy:
+      case SubIndicatorKind.myp:
+      case SubIndicatorKind.shiftDown:
+      case SubIndicatorKind.sideways:
+      case SubIndicatorKind.ninetyThree:
+        return '筹码';
     }
   }
 
@@ -384,6 +439,34 @@ extension SubIndicatorKindMeta on SubIndicatorKind {
         return 15;
       case SubIndicatorKind.divergence:
         return 16;
+      case SubIndicatorKind.chipDist:
+        return 17;
+      case SubIndicatorKind.winner:
+        return 18;
+      case SubIndicatorKind.trapped:
+        return 19;
+      case SubIndicatorKind.cys:
+        return 20;
+      case SubIndicatorKind.cyqk:
+        return 21;
+      case SubIndicatorKind.asr:
+        return 22;
+      case SubIndicatorKind.ckdp:
+        return 23;
+      case SubIndicatorKind.ckdw:
+        return 24;
+      case SubIndicatorKind.cbw:
+        return 25;
+      case SubIndicatorKind.rpy:
+        return 26;
+      case SubIndicatorKind.myp:
+        return 27;
+      case SubIndicatorKind.shiftDown:
+        return 28;
+      case SubIndicatorKind.sideways:
+        return 29;
+      case SubIndicatorKind.ninetyThree:
+        return 30;
     }
   }
 }
@@ -502,6 +585,62 @@ class SubChartIndicator {
       : kind = SubIndicatorKind.divergence,
         bsClass = null,
         diverAlgo = algo;
+  const SubChartIndicator.chipDist(this.kn)
+      : kind = SubIndicatorKind.chipDist,
+        bsClass = null,
+        diverAlgo = null;
+  const SubChartIndicator.winner(this.kn)
+      : kind = SubIndicatorKind.winner,
+        bsClass = null,
+        diverAlgo = null;
+  const SubChartIndicator.trapped(this.kn)
+      : kind = SubIndicatorKind.trapped,
+        bsClass = null,
+        diverAlgo = null;
+  const SubChartIndicator.cys(this.kn)
+      : kind = SubIndicatorKind.cys,
+        bsClass = null,
+        diverAlgo = null;
+  const SubChartIndicator.cyqk(this.kn)
+      : kind = SubIndicatorKind.cyqk,
+        bsClass = null,
+        diverAlgo = null;
+  const SubChartIndicator.asr(this.kn)
+      : kind = SubIndicatorKind.asr,
+        bsClass = null,
+        diverAlgo = null;
+  const SubChartIndicator.ckdp(this.kn)
+      : kind = SubIndicatorKind.ckdp,
+        bsClass = null,
+        diverAlgo = null;
+  const SubChartIndicator.ckdw(this.kn)
+      : kind = SubIndicatorKind.ckdw,
+        bsClass = null,
+        diverAlgo = null;
+  const SubChartIndicator.cbw(this.kn)
+      : kind = SubIndicatorKind.cbw,
+        bsClass = null,
+        diverAlgo = null;
+  const SubChartIndicator.rpy(this.kn)
+      : kind = SubIndicatorKind.rpy,
+        bsClass = null,
+        diverAlgo = null;
+  const SubChartIndicator.myp(this.kn)
+      : kind = SubIndicatorKind.myp,
+        bsClass = null,
+        diverAlgo = null;
+  const SubChartIndicator.shiftDown(this.kn)
+      : kind = SubIndicatorKind.shiftDown,
+        bsClass = null,
+        diverAlgo = null;
+  const SubChartIndicator.sideways(this.kn)
+      : kind = SubIndicatorKind.sideways,
+        bsClass = null,
+        diverAlgo = null;
+  const SubChartIndicator.ninetyThree(this.kn)
+      : kind = SubIndicatorKind.ninetyThree,
+        bsClass = null,
+        diverAlgo = null;
 
   String get label {
     switch (kind) {
@@ -540,6 +679,34 @@ class SubChartIndicator {
         return 'K${kn}KDJ';
       case SubIndicatorKind.divergence:
         return 'K$kn背驰_${diverAlgo?.labelSuffix ?? "?"}';
+      case SubIndicatorKind.chipDist:
+        return '筹码分布';
+      case SubIndicatorKind.winner:
+        return '获利盘';
+      case SubIndicatorKind.trapped:
+        return '套牢盘';
+      case SubIndicatorKind.cys:
+        return '市场盈亏';
+      case SubIndicatorKind.cyqk:
+        return '博弈K线长';
+      case SubIndicatorKind.asr:
+        return '活动筹码';
+      case SubIndicatorKind.ckdp:
+        return '相对价位';
+      case SubIndicatorKind.ckdw:
+        return '成本重心';
+      case SubIndicatorKind.cbw:
+        return '成本带宽';
+      case SubIndicatorKind.rpy:
+        return '年相对价位';
+      case SubIndicatorKind.myp:
+        return '最大年收益';
+      case SubIndicatorKind.shiftDown:
+        return '下移法';
+      case SubIndicatorKind.sideways:
+        return '横盘法';
+      case SubIndicatorKind.ninetyThree:
+        return '90比3';
     }
   }
 
@@ -660,6 +827,8 @@ List<MainChartIndicator> buildMainIndicatorCatalog(int maxKn) {
   out.add(MainChartIndicator.chipPeakSpatial(0));
   out.add(MainChartIndicator.chipPeakVolume(0));
   out.add(MainChartIndicator.chipPeakPure(0));
+  // 成本均线：只挂 K0。四条线 5/13/34/无穷，默认不勾。
+  out.add(const MainChartIndicator.costMa(0));
   // 回归通道（父层连线绑定：只画最新一段并外推到 asOf；归「延伸」组，与中枢同号 d=0→K0）
   for (var d = 0; d <= maxKn; d++) {
     out.add(MainChartIndicator.regressionChannel(d));
@@ -754,6 +923,21 @@ List<SubChartIndicator> buildSubIndicatorCatalog(
       out.add(SubChartIndicator.divergence(d, algo));
     }
   }
+  // 陈浩筹码：只挂 K0，默认不勾。比例和信号不进主图价格坐标。
+  out.add(const SubChartIndicator.chipDist(0));
+  out.add(const SubChartIndicator.winner(0));
+  out.add(const SubChartIndicator.trapped(0));
+  out.add(const SubChartIndicator.cys(0));
+  out.add(const SubChartIndicator.cyqk(0));
+  out.add(const SubChartIndicator.asr(0));
+  out.add(const SubChartIndicator.ckdp(0));
+  out.add(const SubChartIndicator.ckdw(0));
+  out.add(const SubChartIndicator.cbw(0));
+  out.add(const SubChartIndicator.rpy(0));
+  out.add(const SubChartIndicator.myp(0));
+  out.add(const SubChartIndicator.shiftDown(0));
+  out.add(const SubChartIndicator.sideways(0));
+  out.add(const SubChartIndicator.ninetyThree(0));
   return out;
 }
 
@@ -788,6 +972,7 @@ List<MainChartIndicator> mainIndicatorsForLevel(
       MainChartIndicator.chipPeakSpatial(0),
       MainChartIndicator.chipPeakVolume(0),
       MainChartIndicator.chipPeakPure(0),
+      const MainChartIndicator.costMa(0),
     ],
   ];
   return candidates.where(allow.contains).toList();
@@ -827,6 +1012,22 @@ List<SubChartIndicator> subIndicatorsForLevel(
   // 背驰 12 算法：进「Kn指标」层全选（默认启动仍不勾，见 defaultSubIndicatorsK0）
   for (final algo in DivergenceAlgoMeta.all) {
     candidates.add(SubChartIndicator.divergence(displayLevel, algo));
+  }
+  if (displayLevel == 0) {
+    candidates.add(const SubChartIndicator.chipDist(0));
+    candidates.add(const SubChartIndicator.winner(0));
+    candidates.add(const SubChartIndicator.trapped(0));
+    candidates.add(const SubChartIndicator.cys(0));
+    candidates.add(const SubChartIndicator.cyqk(0));
+    candidates.add(const SubChartIndicator.asr(0));
+    candidates.add(const SubChartIndicator.ckdp(0));
+    candidates.add(const SubChartIndicator.ckdw(0));
+    candidates.add(const SubChartIndicator.cbw(0));
+    candidates.add(const SubChartIndicator.rpy(0));
+    candidates.add(const SubChartIndicator.myp(0));
+    candidates.add(const SubChartIndicator.shiftDown(0));
+    candidates.add(const SubChartIndicator.sideways(0));
+    candidates.add(const SubChartIndicator.ninetyThree(0));
   }
   return candidates.where(allow.contains).toList();
 }
@@ -949,6 +1150,7 @@ bool isDefaultDrawnMain(MainChartIndicator e) {
     case MainIndicatorKind.chipPeakSpatial:
     case MainIndicatorKind.chipPeakVolume:
     case MainIndicatorKind.chipPeakPure:
+    case MainIndicatorKind.costMa:
       return false;
   }
 }
@@ -974,6 +1176,20 @@ bool isDefaultDrawnSub(SubChartIndicator e) {
     case SubIndicatorKind.rsi:
     case SubIndicatorKind.kdj:
     case SubIndicatorKind.divergence:
+    case SubIndicatorKind.chipDist:
+    case SubIndicatorKind.winner:
+    case SubIndicatorKind.trapped:
+    case SubIndicatorKind.cys:
+    case SubIndicatorKind.cyqk:
+    case SubIndicatorKind.asr:
+    case SubIndicatorKind.ckdp:
+    case SubIndicatorKind.ckdw:
+    case SubIndicatorKind.cbw:
+    case SubIndicatorKind.rpy:
+    case SubIndicatorKind.myp:
+    case SubIndicatorKind.shiftDown:
+    case SubIndicatorKind.sideways:
+    case SubIndicatorKind.ninetyThree:
       return false;
   }
 }

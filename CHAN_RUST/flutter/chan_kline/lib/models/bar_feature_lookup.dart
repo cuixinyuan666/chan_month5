@@ -26,6 +26,7 @@ import '../compute/fx_pole_snug_compute.dart';
 import '../compute/trend_line_compute.dart';
 import '../compute/trend_model_compute.dart';
 import '../compute/math_classic_compute.dart';
+import '../compute/chenhao_chip_compute.dart';
 import '../compute/demark_compute.dart';
 import '../compute/divergence_compute.dart';
 import '../compute/divergence_freeze_store.dart';
@@ -266,6 +267,8 @@ class BarFeatureLookup {
         'sub': <String, dynamic>{},
       };
     }
+
+    writeChenhaoFeatures(bars: bars, byIdx: byIdx, asOf: asOf);
 
     // 合并线框仅结构展示；十字线/ML 的 fx、count 取自 barFeatures 逐步口径
     // GG/DD=组内原始区间极值（原始K高低，逐K当下、无未来函数）；MG/MD=合并框框体高低点
@@ -1653,6 +1656,10 @@ class BarFeatureLookup {
           add(ind.label, '0');
         }
       }
+      final chipKind = _chenhaoReadoutKind(ind.kind);
+      if (chipKind != null) {
+        add(ind.label, chenhaoReadout(chipKind, sub) ?? '无');
+      }
     }
     return lines;
   }
@@ -2145,6 +2152,11 @@ class BarFeatureLookup {
       'K$displayKn Demark',
       CrosshairTooltipRow.boxNum(demarkText is String ? demarkText : 0),
     ));
+    if (displayKn == 0) {
+      for (final line in chenhaoTooltipLines(sub)) {
+        otherMath.add(kv(line.label, CrosshairTooltipRow.boxNum(line.value)));
+      }
+    }
 
     return (
       fxExtra: fxExtra,
@@ -2198,5 +2210,57 @@ class BarFeatureLookup {
       out[i] = extreme == null ? 0 : i - extreme;
     }
     return out;
+  }
+}
+
+/// 副图筹码指标对应十字读数的种类。不是这套指标时返回 null。
+String? _chenhaoReadoutKind(SubIndicatorKind kind) {
+  switch (kind) {
+    case SubIndicatorKind.chipDist:
+      return 'chipDist';
+    case SubIndicatorKind.winner:
+      return 'winner';
+    case SubIndicatorKind.trapped:
+      return 'trapped';
+    case SubIndicatorKind.cys:
+      return 'cys';
+    case SubIndicatorKind.cyqk:
+      return 'cyqk';
+    case SubIndicatorKind.asr:
+      return 'asr';
+    case SubIndicatorKind.ckdp:
+      return 'ckdp';
+    case SubIndicatorKind.ckdw:
+      return 'ckdw';
+    case SubIndicatorKind.cbw:
+      return 'cbw';
+    case SubIndicatorKind.rpy:
+      return 'rpy';
+    case SubIndicatorKind.myp:
+      return 'myp';
+    case SubIndicatorKind.shiftDown:
+      return 'shiftDown';
+    case SubIndicatorKind.sideways:
+      return 'sideways';
+    case SubIndicatorKind.ninetyThree:
+      return 'ninetyThree';
+    case SubIndicatorKind.volume:
+    case SubIndicatorKind.tickCount:
+    case SubIndicatorKind.fractalConfirm:
+    case SubIndicatorKind.fractalJudgment:
+    case SubIndicatorKind.fractalPeakDist:
+    case SubIndicatorKind.truncation:
+    case SubIndicatorKind.zsConfirm:
+    case SubIndicatorKind.zsJudgment:
+    case SubIndicatorKind.buy1:
+    case SubIndicatorKind.buy2:
+    case SubIndicatorKind.buyN:
+    case SubIndicatorKind.adjacentRatio:
+    case SubIndicatorKind.lineSlope:
+    case SubIndicatorKind.macd:
+    case SubIndicatorKind.rsi:
+    case SubIndicatorKind.kdj:
+    case SubIndicatorKind.divergence:
+      return null;
   }
 }

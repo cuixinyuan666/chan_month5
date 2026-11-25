@@ -531,6 +531,25 @@ class MlRuleScore {
         hits++;
         signals.add('K$kn通道 ${sub['channel_text_$kn']}');
       }
+      if (kn == 0) {
+        final winner = sub['chip_winner'];
+        if (winner is num) {
+          hits++;
+          bias += winner >= 0.9 ? -20 : winner <= 0.1 ? 20 : 0;
+          signals.add('获利盘=${(winner * 100).toStringAsFixed(0)}%');
+        }
+        final cys = sub['cys_13'];
+        if (cys is num) {
+          hits++;
+          bias += cys < 0 ? 15 : cys > 0 ? -15 : 0;
+          signals.add('市场盈亏13=${(cys * 100).toStringAsFixed(1)}%');
+        }
+        if (sub['chip_ninety3'] == 1) {
+          hits++;
+          bias -= 25;
+          signals.add('90比3');
+        }
+      }
     }
     final score = hits == 0 ? 0.0 : (bias / hits).clamp(-100.0, 100.0);
     return MlCategoryScore(
@@ -539,7 +558,7 @@ class MlRuleScore {
       score: _r1(score),
       weight: 0.08,
       explain: hits == 0
-          ? '末根无 MACD/RSI/KDJ/布林/唐奇安/斜率/Demark/趋势线等读数。'
+          ? '末根无 MACD/RSI/KDJ/布林/唐奇安/斜率/Demark/趋势线/筹码等读数。'
           : 'Math 权重低于结构信号；多指标净向合成。',
       signals: signals.take(5).toList(),
     );

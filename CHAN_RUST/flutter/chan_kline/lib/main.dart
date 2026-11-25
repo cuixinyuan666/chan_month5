@@ -254,6 +254,7 @@ Future<void> main() async {
   MsgHistory.instance.appendKnRegressionChannel();
   // 主图 Kn唐奇安通道（经典海龟口径；已接入冻结仓/回测 MAIN.Kn.DONCHIAN.* / 十字读数）
   MsgHistory.instance.appendKnDonchianChannel();
+  MsgHistory.instance.appendChenhaoChipIndicators();
   MsgHistory.instance.appendKnDivergenceIndicators();
   MsgHistory.instance.appendDiverLineSlopeAsciiKey();
   MsgHistory.instance.appendTickK0NativePeriod();

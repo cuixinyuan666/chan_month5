@@ -1,3 +1,4 @@
+import '../compute/chenhao_chip_compute.dart';
 import '../compute/fractal_judgment_compute.dart';
 import '../compute/fx_extend_line_compute.dart';
 import '../compute/fx_pole_snug_compute.dart';
@@ -1080,6 +1081,14 @@ List<double?>? _extendedPlotSeries({
   required List<K0ConfirmSignal> k0Confirms,
 }) {
   if (bars.isEmpty) return null;
+  final chenhao = chenhaoPlotSeries(
+    panel: parsed.panel,
+    kn: parsed.kn,
+    rest: parsed.rest,
+    bars: bars,
+    asOf: asOf,
+  );
+  if (chenhao != null) return chenhao;
   final n = bars.last.idx + 1;
   if (n <= 0) return null;
 

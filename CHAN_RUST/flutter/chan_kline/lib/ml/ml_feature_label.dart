@@ -225,8 +225,39 @@ class MlFeatureLabel {
     // K0 确认
     if (key == 'sub.k0_confirm_value') return 'K0 确认值';
     if (key == 'sub.k0_confirm_truncated') return 'K0 截断确认';
+    final chenhao = _chenhaoName(key);
+    if (chenhao != null) return chenhao;
     // 默认：返回原键
     return key;
+  }
+
+  static String? _chenhaoName(String key) {
+    const names = {
+      'sub.cyc_5': '成本均线5',
+      'sub.cyc_13': '成本均线13',
+      'sub.cyc_34': '成本均线34',
+      'sub.cyc_inf': '成本均线无穷',
+      'sub.cys_5': '市场盈亏5',
+      'sub.cys_13': '市场盈亏13',
+      'sub.cys_34': '市场盈亏34',
+      'sub.cys_inf': '市场盈亏无穷',
+      'sub.chip_winner': '获利盘',
+      'sub.chip_trapped': '套牢盘',
+      'sub.chip_conc': '筹码密集度',
+      'sub.chip_shape': '筹码形态',
+      'sub.cyqk_len': '博弈K线长',
+      'sub.cyqk_zone': '博弈K线区间',
+      'sub.chip_asr': '活动筹码',
+      'sub.chip_ckdp': '相对价位',
+      'sub.chip_ckdw': '成本重心',
+      'sub.chip_cbw': '成本带宽',
+      'sub.chip_rpy': '年相对价位',
+      'sub.chip_myp': '最大年收益',
+      'sub.chip_shift': '下移法',
+      'sub.chip_flat': '横盘法',
+      'sub.chip_ninety3': '90比3',
+    };
+    return names[key];
   }
 
   static String _algoName(String algo) {

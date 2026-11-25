@@ -183,6 +183,13 @@ List<IndicatorLegendGroup> buildIndicatorLegends({
                   color: IndicatorLinePalette.meanLine(i)),
           ],
         ));
+      case MainIndicatorKind.costMa:
+        out.add(IndicatorLegendGroup(m.label, const [
+          LegendLine('5日', color: Color(0xFFEAB308)),
+          LegendLine('13日', color: Color(0xFF22C55E)),
+          LegendLine('34日', color: Color(0xFF38BDF8)),
+          LegendLine('无穷', color: Color(0xFFF97316)),
+        ]));
       case MainIndicatorKind.trendChannel:
         if (channelPeriods.isEmpty) break;
         out.add(IndicatorLegendGroup(m.label, [
@@ -297,6 +304,13 @@ List<IndicatorLegendGroup> buildIndicatorLegends({
               LegendLine('D', color: IndicatorLinePalette.kdjD),
               LegendLine('J', color: IndicatorLinePalette.kdjJ),
             ]));
+      case SubIndicatorKind.cys:
+        out.add(IndicatorLegendGroup(s.label, const [
+          LegendLine('5日', color: Color(0xFFEAB308)),
+          LegendLine('13日', color: Color(0xFF22C55E)),
+          LegendLine('34日', color: Color(0xFF38BDF8)),
+          LegendLine('无穷', color: Color(0xFFF97316)),
+        ]));
       case SubIndicatorKind.divergence:
         final c = ChartLevelLineStyle.colorForDisplayKn(s.kn);
         out.add(IndicatorLegendGroup(s.label, [
@@ -321,6 +335,19 @@ List<IndicatorLegendGroup> buildIndicatorLegends({
       case SubIndicatorKind.adjacentRatio:
       case SubIndicatorKind.lineSlope:
       case SubIndicatorKind.rsi:
+      case SubIndicatorKind.chipDist:
+      case SubIndicatorKind.winner:
+      case SubIndicatorKind.trapped:
+      case SubIndicatorKind.cyqk:
+      case SubIndicatorKind.asr:
+      case SubIndicatorKind.ckdp:
+      case SubIndicatorKind.ckdw:
+      case SubIndicatorKind.cbw:
+      case SubIndicatorKind.rpy:
+      case SubIndicatorKind.myp:
+      case SubIndicatorKind.shiftDown:
+      case SubIndicatorKind.sideways:
+      case SubIndicatorKind.ninetyThree:
         break;
     }
   }
