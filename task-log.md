@@ -7770,3 +7770,16 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   - 构建时插件符号链接在本机建不出来（Dart 建链接报 OS Error 2），改用 `mklink /J` 给 windows / linux / macos / ios 四个 ephemeral 目录各预建 12 个插件联接后构建通过；这是本机环境问题，不是代码问题，下次遇到同样报错可照此处理。
   - 尚未 push：ahead 10，等用户点头再推。
 
+### 2026-11-26 · AWS Quick · 合并 · 收尾：三个 worktree 与分支已清理
+
+- **执行者**：AWS Quick
+- **任务类型**：收尾（用户回复「确认执行」）
+- **操作**：
+  1. 删除前逐个核对：三个目录的 `a_Data` 与 HEAD 一致（`custom.ohlc.csv` 仅行尾差异），`custom.1m.csv` 只在主工作区、未随目录删除；chenhao 只剩 10 个生成产物的换行差异。
+  2. `git worktree remove --force` 删除 `D:\2\chenhao`、`D:\2\qingsao`、`D:\2\UIshezhi`。
+  3. `git branch -d` 删除 chenhao / qingsao / UIshezhi 三个已合并分支。
+- **结果**：worktree 只剩主目录 `D:\2\chan_month5` 与 opencode 的临时 detached 目录；分支列表已无三个分支；ANDROID_RUST 与 origin 同步（HEAD `213d35e2` 已推送）。
+- **演示**：纯 git 收尾，不看界面。
+- **测试**：未跑，无代码改动。
+- **注意事项 / 待办**：无。
+
