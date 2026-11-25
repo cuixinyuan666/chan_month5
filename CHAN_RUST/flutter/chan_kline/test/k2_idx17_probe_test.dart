@@ -664,6 +664,8 @@ class _Probe {
         verdict = 'SKIP headGate(!pair fx=${head.fx})';
       } else if (inside) {
         verdict = 'SKIP headGate(inside head frame)';
+      } else if (l.isOpenTip) {
+        verdict = 'DRAW(openTip exempt)';
       } else {
         // 同框检查（镜像新口径：命中框集合相等才算同框）
         final h1 = <int>{};
@@ -681,7 +683,7 @@ class _Probe {
       }
       // ignore: avoid_print
       print('   ${l.begin.barIdx}@${l.begin.price}->${l.end.barIdx}@${l.end.price} '
-          'dir=${l.dir} solid=${l.asSolid} => $verdict');
+          'dir=${l.dir} solid=${l.asSolid} tip=${l.isOpenTip} => $verdict');
     }
   }
 

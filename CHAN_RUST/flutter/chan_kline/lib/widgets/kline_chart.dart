@@ -7426,11 +7426,14 @@ class _KlineCompositePainter extends CustomPainter {
         }
       }
       // 基础生成单元内只有单个合并框时，连线两端不得同时落在同一个合并框内。
-      if (_lineEndpointsInSameCombineFrame(
-        line.begin.barIdx,
-        line.end.barIdx,
-        displayKn,
-      )) {
+      // 开口尾巴段（isOpenTip：最后极点→当前方向极值）豁免同框检查——
+      // 极点与极值同处末框时仍要画出开口虚线（2026-11-25 用户确认）。
+      if (!line.isOpenTip &&
+          _lineEndpointsInSameCombineFrame(
+            line.begin.barIdx,
+            line.end.barIdx,
+            displayKn,
+          )) {
         continue;
       }
       final a = Offset(
