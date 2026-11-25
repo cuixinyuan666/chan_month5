@@ -4,12 +4,10 @@
 /// 保证「画出来的框」和「十字线上写的数」永远同一份。
 ///
 /// 口径见 [PreFirstFractalMode]：
-/// - 种子框：不合并，原样返回（种子框仍是第一根框，后续框各自独立）；
-/// - 高高 / 低低：把「首个分型所在框之前」的全部框并成一个框。
-///
-/// 子窗口模式（层级分窗，全层同构）在并框前还走「逐对判定」
-/// （见 `first_fractal_rule.dart`）：双低/双高直接判分型且不合并，
-/// 仅包含关系才并框。**种子框口径下不跑逐对判定**（保持原框）。
+/// - 经典口径、种子框，或第一框不是从序列开头起：不合并，原样返回；
+/// - 高高 / 低低：单图与子窗口并进去的范围不同，见 [applyPreFirstFractalMode]。
+///   子窗口走 [applyFirstPairFractalToFrames]：有引擎分型则把该帧及之前并成一框，
+///   分型取该帧；没有分型则整段并成一框，分型保持未知。不再按双高、双低提前拆框。
 library;
 
 import '../models/kline_combine_frame.dart';
@@ -42,8 +40,8 @@ List<KlineCombineFrame> applyPreFirstFractalMode(
 
   final end = _standardFirstFxIndex(frames);
 
-  // 子窗口模式：逐对判定（全层同构）。双低/双高 → 前一根直接判分型且不合并；
-  // 仅包含关系才并框，高/低取值按 [mode]。顶底交替。
+  // 子窗口：有引擎分型则并到该帧（含），分型取该帧；没有则整段并一框。
+  // 高高/低低只决定框沿，不再按双高、双低拆框。
   if (subWindow) {
     return applyFirstPairFractalToFrames(
       frames,
@@ -80,7 +78,7 @@ List<KlineCombineFrame> applyPreFirstFractalMode(
   }
   if (end <= 1) return frames;
 
-  // 首分型前的全部框并成一个：x 从 0 收到最后一组右端。
+  // 单图：并 [0, end)，不含首个已给分型的那一帧。右端是这段最后一帧的 x2，分型保持未知。
   final head = frames.sublist(0, end);
   final last = head.last;
   var box = (high: head.first.high, low: head.first.low);

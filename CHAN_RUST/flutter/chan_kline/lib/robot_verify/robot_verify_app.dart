@@ -9,7 +9,7 @@ import 'robot_verify_paths.dart';
 import 'robot_verify_runner.dart';
 import 'package:chan_kline/theme/app_palette.dart';
 
-/// 机器人验证 UI：全程可见进度；结束后仅简短提示，详情进剪贴板（见 agent.md）。
+/// 机器人验证 UI：全程可见进度；结束后仅简短提示，详情进剪贴板（见 ROBOT_VERIFY.md）。
 class RobotVerifyApp extends StatefulWidget {
   const RobotVerifyApp({
     super.key,
