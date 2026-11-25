@@ -6,14 +6,7 @@ import 'package:chan_kline/theme/theme_chooser.dart';
 import 'package:chan_kline/theme/theme_settings_store.dart';
 
 Future<void> _selectTheme(WidgetTester tester, AppThemeMode mode) async {
-  await tester.tap(find.byType(DropdownButtonFormField<AppThemeMode>));
-  await tester.pumpAndSettle();
-  final overlayLabel = find.descendant(
-    of: find.byType(Overlay),
-    matching: find.byKey(ValueKey<String>('theme_chip_${mode.id}')),
-  );
-  await tester.ensureVisible(overlayLabel);
-  await tester.tap(overlayLabel);
+  await tester.tap(find.byKey(ValueKey<String>('theme_chip_${mode.id}')));
   await tester.pumpAndSettle();
 }
 

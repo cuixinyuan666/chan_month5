@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:chan_kline/theme/app_palette.dart';
 
-/// 加载设置浮层（由标题栏「设置」按钮打开，可贴左/右）。
+/// 设置浮层（由标题栏「设置」按钮打开，可贴左/右）。
+///
+/// 外壳只负责吸附、关闭和换边。分区、搜索和滚动都在里面的分区台，
+/// 当前分区标题钉在内容区顶部，不随页内滚动离开。
 class EdgeControlPanel extends StatelessWidget {
   const EdgeControlPanel({
     super.key,
@@ -10,8 +13,6 @@ class EdgeControlPanel extends StatelessWidget {
     required this.onCycleEdge,
     required this.child,
     this.title = '设置',
-    this.scrollController,
-    this.stickyHeader,
   });
 
   /// 0=左 1=右
@@ -19,26 +20,15 @@ class EdgeControlPanel extends StatelessWidget {
   final VoidCallback onClose;
   final VoidCallback onCycleEdge;
   final Widget child;
-
-  /// 标题条文字。面板里已不只「加载设置」（还有主题、主图口径、维护同步），
-  /// 统一叫「设置」，避免标题与内容对不上。
   final String title;
 
-  /// 滚动控制器（可选）：调用方用它监听偏移，算「当前该吸顶哪个分类」。
-  final ScrollController? scrollController;
-
-  /// 吸顶条（可选）：叠在滚动区顶部、不随内容滚走。
-  ///
-  /// 2026-11-17 用户明确：滚轮下滚时分类标题（如「数据与加载」）要一直可见。
-  /// 由调用方按滚动偏移算出当前分类后传进来，这里只负责叠放，不猜语义。
-  final Widget? stickyHeader;
-
-  static const double panelW = 300;
+  static const double panelW = 432;
 
   bool get _left => edge == 0;
 
   @override
   Widget build(BuildContext context) {
+    final radius = const Radius.circular(18);
     return Positioned(
       left: _left ? 0 : null,
       right: _left ? null : 0,
@@ -46,76 +36,87 @@ class EdgeControlPanel extends StatelessWidget {
       bottom: 8,
       width: panelW,
       child: Material(
-        elevation: 8,
-        color: AppPalette.rgb(0xF01A1A1A),
-        clipBehavior: Clip.hardEdge,
-        borderRadius: BorderRadius.horizontal(
-          left: _left ? Radius.zero : const Radius.circular(8),
-          right: _left ? const Radius.circular(8) : Radius.zero,
+        elevation: 12,
+        shadowColor: const Color(0x66000000),
+        surfaceTintColor: Colors.transparent,
+        color: AppPalette.surface,
+        clipBehavior: Clip.antiAlias,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.horizontal(
+            left: _left ? Radius.zero : radius,
+            right: _left ? radius : Radius.zero,
+          ),
+          side: BorderSide(color: AppPalette.border),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             SizedBox(
-              height: 40,
-              child: Row(
-                children: [
-                  IconButton(
-                    tooltip: '关闭',
-                    onPressed: onClose,
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints.tightFor(width: 36, height: 36),
-                    icon: Icon(
-                      Icons.close,
-                      color: AppPalette.controlInk,
-                      size: 18,
+              height: 52,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  border: Border(
+                    bottom: BorderSide(color: AppPalette.accent, width: 2),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    IconButton(
+                      tooltip: '关闭',
+                      onPressed: onClose,
+                      padding: EdgeInsets.zero,
+                      constraints:
+                          const BoxConstraints.tightFor(width: 36, height: 36),
+                      icon: Icon(
+                        Icons.close,
+                        color: AppPalette.controlInk,
+                        size: 18,
+                      ),
                     ),
-                  ),
-                  Expanded(
-                    child: Text(
-                      title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                          fontSize: 13, fontWeight: FontWeight.w600),
+                    Expanded(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '工作台',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w700,
+                              color: AppPalette.accent,
+                            ),
+                          ),
+                          Text(
+                            title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 16,
+                              height: 1.1,
+                              fontWeight: FontWeight.w700,
+                              color: AppPalette.textPrimary,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                  IconButton(
-                    tooltip: '换边吸附',
-                    onPressed: onCycleEdge,
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints.tightFor(width: 36, height: 36),
-                     icon: Icon(
-                       Icons.swap_horiz,
-                       color: AppPalette.controlInk,
-                       size: 18,
-                     ),
-                  ),
-                ],
+                    IconButton(
+                      tooltip: '换边吸附',
+                      onPressed: onCycleEdge,
+                      padding: EdgeInsets.zero,
+                      constraints:
+                          const BoxConstraints.tightFor(width: 36, height: 36),
+                      icon: Icon(
+                        Icons.swap_horiz,
+                        color: AppPalette.controlInk,
+                        size: 18,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
-            const Divider(height: 1),
-            Expanded(
-              child: Stack(
-                children: [
-                  Positioned.fill(
-                    child: SingleChildScrollView(
-                      key: const Key('settings-scroll'),
-                      controller: scrollController,
-                      padding: const EdgeInsets.fromLTRB(10, 8, 10, 12),
-                      child: child,
-                    ),
-                  ),
-                  if (stickyHeader != null)
-                    Positioned(
-                      left: 0,
-                      right: 0,
-                      top: 0,
-                      child: stickyHeader!,
-                    ),
-                ],
-              ),
-            ),
+            Expanded(child: child),
           ],
         ),
       ),
