@@ -1122,13 +1122,14 @@ LevelLineEndpoint? _k0ConfirmEndpoint(
 }
 
 /// as-of 内全部确认极点（按确认步排序；同 fx 后者覆盖）。
-List<_DashPole> _collectConfirmPoles({
+({List<_DashPole> poles, Set<String> spans}) _collectConfirmPoles({
   required List<KlineBar> bars,
   required int asOf,
   required List<LevelConfirm> levelConfirms,
   required List<K0ConfirmSignal> k0Confirms,
 }) {
   final raw = <_DashPole>[];
+  final spans = <String>{};
   for (final c in levelConfirms) {
     if (c.x > asOf) continue;
     if (c.fx != 'TOP' && c.fx != 'BOTTOM') continue;
@@ -1141,6 +1142,7 @@ List<_DashPole> _collectConfirmPoles({
       src: 'confirm',
       triggerX: c.x,
     ));
+    spans.add('${c.fx}|${c.fractalX1}|${c.fractalX2}');
   }
   if (raw.isEmpty) {
     for (final c in k0Confirms) {
@@ -1155,6 +1157,7 @@ List<_DashPole> _collectConfirmPoles({
         src: 'confirm',
         triggerX: c.x,
       ));
+      spans.add('${c.fx}|${c.fractalX1}|${c.fractalX2}');
     }
   }
   raw.sort((a, b) => a.triggerX.compareTo(b.triggerX));
@@ -1167,7 +1170,7 @@ List<_DashPole> _collectConfirmPoles({
       out.add(p);
     }
   }
-  return out;
+  return (poles: out, spans: spans);
 }
 
 /// 判断极点：扫 (prevPole, judgment.x] 内方向首极值（钉在判断触发步，不随 asOf 拉长）。
@@ -1504,12 +1507,17 @@ List<DisplayBuildingLine> computeDisplayBuildingLines({
 }) {
   if (bars.isEmpty || asOf < 0 || asOf >= bars.length) return const [];
 
-  final confirmPoles = _collectConfirmPoles(
+  final confirmResult = _collectConfirmPoles(
     bars: bars,
     asOf: asOf,
     levelConfirms: levelConfirms,
     k0Confirms: k0Confirms,
   );
+  final confirmPoles = confirmResult.poles;
+  // 已被确认覆盖的分型跨度：同 fx+同跨度的判定事件是同一枚分型的
+  // 确认前重发，不得再生成判定极点（否则确认极点后会叠出幻影同向极点，
+  // 例：K0 idx=34 BOTTOM@34 确认后 BOTTOM@30..33(T) 仍放行 → 假实线段）。
+  final confirmedSpans = confirmResult.spans;
 
   final List<FractalJudgmentEvent> js;
   final List<_DashPole> poles;
@@ -1575,7 +1583,10 @@ List<DisplayBuildingLine> computeDisplayBuildingLines({
         if (j.x <= asOf &&
             (j.x > lastConfirmTrig ||
                 (j.truncated && j.x > lastConfirmPoleX)) &&
-            (j.fx == 'TOP' || j.fx == 'BOTTOM'))
+            (j.fx == 'TOP' || j.fx == 'BOTTOM') &&
+            !(j.fractalX1 >= 0 &&
+                j.fractalX2 >= j.fractalX1 &&
+                confirmedSpans.contains('${j.fx}|${j.fractalX1}|${j.fractalX2}')))
           j,
     ]);
     _appendJudgmentPoles(
