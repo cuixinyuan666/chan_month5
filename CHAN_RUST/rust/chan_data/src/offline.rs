@@ -46,6 +46,59 @@ pub fn test_minute_csv_path(data_root: &Path) -> PathBuf {
     data_root.join(TEST_STOCK_FOLDER).join("custom.1m.csv")
 }
 
+/// `a_Data/test/default_data.txt`：test 股「默认数据」标记（内容 `minute` / `tick`）。
+pub fn test_default_data_path(data_root: &Path) -> PathBuf {
+    data_root.join(TEST_STOCK_FOLDER).join("default_data.txt")
+}
+
+/// test 股默认数据：K 线画板的 1 分钟文件 / 分笔画板的 tick 文件 / 未设置（沿用旧规则：有 1m 就用 1m）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TestDefaultData {
+    Unset,
+    Minute,
+    Tick,
+}
+
+pub fn read_test_default_data(data_root: &Path) -> TestDefaultData {
+    match std::fs::read_to_string(test_default_data_path(data_root)) {
+        Ok(s) => match s.trim().to_ascii_lowercase().as_str() {
+            "minute" => TestDefaultData::Minute,
+            "tick" => TestDefaultData::Tick,
+            _ => TestDefaultData::Unset,
+        },
+        Err(_) => TestDefaultData::Unset,
+    }
+}
+
+pub fn write_test_default_data(data_root: &Path, value: TestDefaultData) -> Result<()> {
+    let path = test_default_data_path(data_root);
+    match value {
+        TestDefaultData::Unset => {
+            if path.is_file() {
+                std::fs::remove_file(&path).map_err(|e| {
+                    ChanDataError::msg(format!("删除默认数据标记失败 {}: {e}", path.display()))
+                })?;
+            }
+            Ok(())
+        }
+        TestDefaultData::Minute | TestDefaultData::Tick => {
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| {
+                    ChanDataError::msg(format!("创建目录失败 {}: {e}", parent.display()))
+                })?;
+            }
+            let text = if value == TestDefaultData::Minute {
+                "minute\n"
+            } else {
+                "tick\n"
+            };
+            std::fs::write(&path, text).map_err(|e| {
+                ChanDataError::msg(format!("写入默认数据标记失败 {}: {e}", path.display()))
+            })
+        }
+    }
+}
+
 /// 证券代码 → 目录名（六位数字或测试白名单 `test`）。
 pub fn folder_from_code(code: &str) -> String {
     let trimmed = code.trim();
@@ -219,7 +272,11 @@ pub fn load_klines_with_source(
     //   与真实分笔数据同构，无需再选模板。
     if code_key == TEST_STOCK_FOLDER {
         let minute_path = test_minute_csv_path(data_root);
-        if minute_path.is_file() {
+        // 默认数据 = tick 且分笔文件在时，跳过 1 分钟文件：两份数据可同时存在，
+        // 由 `default_data.txt` 决定主图加载哪一份；未设置时仍是旧规则（有 1m 就用 1m）。
+        let prefer_tick = read_test_default_data(data_root) == TestDefaultData::Tick
+            && test_ohlc_csv_path(data_root).is_file();
+        if minute_path.is_file() && !prefer_tick {
             if period.is_tick() {
                 return Err(ChanDataError::msg(
                     "自定义 1 分钟文件不能按分笔周期加载，请选 1 分钟或更大周期",
@@ -1175,6 +1232,71 @@ mod tests {
             TickSource::File,
         );
         assert!(err.is_err());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 2026-11-26：1 分钟文件与分笔文件可同时存在，由 `default_data.txt` 决定 test 股加载哪一份。
+    #[test]
+    fn test_default_data_decides_which_file_when_both_exist() {
+        let root = std::env::temp_dir().join(format!("chan_default_data_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("test")).unwrap();
+        let mk = |idx: i32, text: &str, price: f64| KlineBar {
+            idx,
+            time_ms: 0,
+            time_text: text.into(),
+            open: price,
+            high: price,
+            low: price,
+            close: price,
+            volume: 1.0,
+            amount: 0.0,
+            metrics: Default::default(),
+        };
+        // 1 分钟文件收盘 11.0，分笔文件收盘 20.0，便于区分读了哪份
+        save_test_minute(&root, &[mk(0, "2026/07/10 09:30:00", 11.0)]).unwrap();
+        save_test_ohlc(
+            &root,
+            &[
+                mk(0, "2026/07/10 09:30:00", 20.0),
+                mk(1, "2026/07/10 09:30:03", 20.5),
+            ],
+        )
+        .unwrap();
+        let load = |p: KlinePeriod| {
+            load_klines_with_source(
+                &root,
+                "test",
+                "2026/07/10 09:00:00",
+                "2026/07/10 10:00:00",
+                p,
+                TickSource::File,
+            )
+        };
+        // 未设置：旧规则，有 1 分钟文件就用 1 分钟，分笔周期被拒
+        assert_eq!(read_test_default_data(&root), TestDefaultData::Unset);
+        assert_eq!(load(KlinePeriod::M1).unwrap().bars[0].close, 11.0);
+        assert!(load(KlinePeriod::Tick).is_err());
+        // 默认 = minute：与未设置一致
+        write_test_default_data(&root, TestDefaultData::Minute).unwrap();
+        assert_eq!(read_test_default_data(&root), TestDefaultData::Minute);
+        assert_eq!(load(KlinePeriod::M1).unwrap().bars[0].close, 11.0);
+        // 默认 = tick：分笔周期读分笔文件，1m 周期由分笔文件聚合
+        write_test_default_data(&root, TestDefaultData::Tick).unwrap();
+        assert_eq!(read_test_default_data(&root), TestDefaultData::Tick);
+        let tick = load(KlinePeriod::Tick).unwrap();
+        assert_eq!(tick.bars.len(), 2);
+        assert_eq!(tick.bars[0].close, 20.0);
+        assert_eq!(tick.quality.source, "ohlc");
+        // 1m 周期来自分笔文件（价位都在 20 附近），而不是 1 分钟文件（11.0）
+        assert!(load(KlinePeriod::M1).unwrap().bars[0].high > 15.0);
+        // 默认 = tick 但分笔文件不存在：回落到 1 分钟文件
+        std::fs::remove_file(test_ohlc_csv_path(&root)).unwrap();
+        assert_eq!(load(KlinePeriod::M1).unwrap().bars[0].close, 11.0);
+        // 清除标记
+        write_test_default_data(&root, TestDefaultData::Unset).unwrap();
+        assert_eq!(read_test_default_data(&root), TestDefaultData::Unset);
+        assert!(!test_default_data_path(&root).exists());
         let _ = std::fs::remove_dir_all(&root);
     }
 

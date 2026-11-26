@@ -65,8 +65,9 @@ pub use kline::{KlineBar, KlinePeriod};
 pub use ml_predict::{predict_dense as ml_predict_dense, MISSING as ML_MISSING};
 pub use offline::{
     default_data_root, list_stock_codes, load_klines, load_klines_with_source, load_test_ohlc_csv,
-    resolve_data_root, save_test_minute, save_test_ohlc, save_test_ohlc_csv, test_minute_csv_path,
-    test_ohlc_csv_path, LoadKlinesOut,
+    read_test_default_data, resolve_data_root, save_test_minute, save_test_ohlc, save_test_ohlc_csv,
+    test_default_data_path, test_minute_csv_path, test_ohlc_csv_path, write_test_default_data,
+    LoadKlinesOut, TestDefaultData,
     TickSource,
 };
 pub use pipeline::{
