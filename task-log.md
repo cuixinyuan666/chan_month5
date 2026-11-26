@@ -7783,3 +7783,26 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
 - **测试**：未跑，无代码改动。
 - **注意事项 / 待办**：无。
 
+
+### 2026-11-26 · Doubao · 数据源 · test 股默认数据：K线画板与分笔画板各用各的文件
+
+- **执行者**：Doubao（本次只补测试记录，代码改动沿用本会话前一轮）
+- **任务类型**：数据源 / 画板入口（用户已明确「各用各的文件」）
+- **操作**：
+  1. test 股新增「默认数据」标记 `a_Data/test/default_data.txt`（内容 `minute` / `tick`，文件不存在 = 未设置）。Rust `chan_data::offline` 增 `test_default_data_path` / `read_test_default_data` / `write_test_default_data` / `TestDefaultData`。
+  2. `load_klines_with_source` 在 test 股上先读这个标记：标记是分笔且 `custom.ohlc.csv` 在，就跳过 1 分钟文件；否则仍是旧规则（有 1 分钟文件就用 1 分钟）。两份文件从此可以在 `a_Data/test/` 里同时存在。
+  3. FFI 新增两个导出：`chan_load_test_csv`（按 `minute` / `tick` 直读某一份自定义文件，不经周期聚合、不受默认数据影响）和 `chan_test_default_data`（读 / 写 / 清除标记）。Dart 侧 `ChanBridge` 接 `loadTestCsv` / `testDefaultData`，旧 DLL 没有这两个接口时返回空，不炸。
+  4. 主图加载 test 股改成按「实际有效来源」走：默认数据=分笔且分笔文件在 → 分笔；否则有 1 分钟文件 → 1 分钟；否则分笔。直读 `custom.ohlc.csv` 的判定从「有没有 ohlc 文件」改成「有效来源是不是分笔」。
+  5. 两个画板顶栏各加一枚星标「设为默认数据」：亮 = 主图当前加载这一份；点了就写标记并重载主图。分笔画板另加「从 K线画板导入」，按收盘价转成分笔点，只改内存，点「保存并加载」才写 `custom.ohlc.csv`。
+  6. 分笔画板打开时只读 `custom.ohlc.csv`（不再偷偷拿 1 分钟文件顶替），空板给提示；K线画板恢复也改成直读 `custom.1m.csv`。
+  7. 保存行为改成「是默认数据才加载主图」：不是默认数据只写文件 + 提示，主图不动，避免刚存的分笔被 1 分钟文件顶掉。
+- **结果**：两份数据可以同时在 test 目录里，主图加载哪一份由星标决定；未设置时行为与旧版完全一致（有 1 分钟文件就用 1 分钟）。画板不再「一个文件顶两个」。
+- **演示**：默认 TEST 股。①分笔画板点星标 → 主图切成按分笔走；②K线画板点星标 → 主图切成 1 分钟；③两份都存过时反复切换，主图根数与周期跟着变；④分笔画板空板点「从 K线画板导入」，能带出 1 分钟收盘价序列，点「保存并加载」后才落盘。
+- **测试**：
+  1. Rust 单测 `offline::tests::test_default_data_decides_which_file_when_both_exist` 通过（1 passed，0 failed）。1 分钟收盘 11.0 / 分笔收盘 20.0 足以区分读了哪份；覆盖未设置、=minute、=tick、tick 但分笔文件缺失回落 1 分钟、清除标记五种。
+  2. `flutter analyze lib/bridge/chan_bridge.dart lib/main.dart` → 0 个 error；19 条全是既有 warning / info（`use_null_aware_elements`、`deprecated_member_use` 等），改动行没有引入新问题。
+  3. `cargo build --release -p chan_ffi` 成功；`chan_ffi.dll` 已替换到 `windows/native` 与调试运行目录（02:56:34），App 02:59:57 冷启动。
+- **注意事项 / 待办**：
+  - 只做到「编译 + 启动」，**未做机器人连续单步验收**；补验时按 `ROBOT_VERIFY.md` 连续单步走一遍主图与两个画板，不要用一键跳末。
+  - 改动已分 4 个 commit 提交：`4ced3a27`（chan_data 默认数据标记）、`4799c4ff`（chan_ffi 两个导出）、`f420bbfc`（flutter 星标与数据套下拉）、本条 task-log。`a_Data/test/custom.1m.csv(.bak)` 与 `custom.ohlc.csv` 属用户数据，未提交。
+  - `default_data.txt` 还没生成（用户尚未点星标），删掉它即回到旧规则；这也是回滚口径。
