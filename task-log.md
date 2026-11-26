@@ -7825,3 +7825,25 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   - 剩余 11 条失败与本次改动无关（视窗独立拖动、筹码 catalog、增量 lookup、k1_boxed_candle、k2_idx17_probe、line_slope、robot_verify 用例计数 41<42）。
   - `chart_view_compute.dart` 被外部工具改写成 LF，与仓库 CRLF 不一致；提交时已还原 CRLF，否则会多出约 1600 行行尾噪声。
   - `a_Data/test/custom.1m.csv(.bak)`、`custom.ohlc.csv`、`default_data.txt`、`sets/` 属用户数据，未提交。
+
+### 2026-11-26 · Doubao · 代码修复 · K1 窗口左侧幽灵「一字单元」
+
+- **执行者**：Doubao（用户报 bug + 回复「确认执行」）
+- **任务类型**：显示轨（主图 K1 蜡烛与合并框同源 · 全层同构）
+- **操作**：
+  1. 定位双因：Rust `LevelState::on_confirm` 的 `Action::First` 在首段起点极点 A 与终点极点 B 落在同一根 K 时，段长 0，`kn_unit_ohlcv` 因 `start > end` 退化成 `(open, open, open, open)`，产出一根「已确认、OHLC 全等于开盘价」的一字单元；Flutter K1 窗口又被 `earlyDynamicUnit && unitLevel >= 1` 挡住，直接画引擎单元，于是这颗一字单元被当成 K 画出来。
+  2. 引擎侧两条改法实测都有连带损伤，已 `git checkout` 回退到基线（`pipeline.rs` 无改动，DLL 已重建替换）：「全口径不冻结零长度首段」→ 002003 2004 切片首框跨度 32→60、多出「判断→判断」实线、3 条 gated 用例失败；「保留段只跳过单元输出」→ 段 idx 与单元 idx 不再一对一。
+  3. 显示层修法：去掉 `unitLevel >= 1` 层级特例（K1 与其他层同构）；`unitLevel == 0` 分支先 `_dropDegenerateSeed` 丢退化种子，再判「父层首框只有 1 根（`parentHead.x2 <= parentHead.x1`）」且本层单元 ≤1 时，整轨回到 `buildPreFirstDynamicK1Bars` 的动态 K。两种取轨路径（asOf 重算 / bundle）都收敛到同一根，不再出现一字单元。
+- **结果**：TEST 股 K0 单步到 idx=1 时 K1 只剩一根动态 K（10.01→9.12），左侧那颗类 K 线图形消失；idx=0 / 2 / 3 形态正常（1 根 / 实+虚 2 根 / 3 根）。
+- **演示**：默认 TEST 股，K0 连续单步到第 2 根（idx=1），看 K1 子窗口左端。
+- **测试**：
+  1. `flutter test test/early_dynamic_unit_test.dart test/k0_building_line_same_price_test.dart` → 只有 k0_building_line「同价位首分型前不拉线」1 条失败（既有：期望 3 实 4）。
+  2. `flutter test test/crosshair_board_hover_test.dart test/indicator_legend_test.dart test/kline_draw_board_widget_test.dart` → 29 passed。
+  3. 全量 `flutter test`：跑到 714 passed / 12 failed 后卡在 `phase2b3_lookup_profile_test`（本机既有极慢/卡住）。12 条失败逐条核对均为既有：视窗独立拖动 2、筹码 catalog 2、增量 lookup 2、k0_building_line、k1_boxed_candle、k2_idx17_probe、line_slope、chart_view_compute 判断钉死端点、jiyou e2e——后两条所在文件都不 import `kline_chart.dart`。
+  4. `flutter analyze lib/widgets/kline_chart.dart` → 0 error（10 条既有 warning / info）。
+  5. 页面实测：TEST idx=0/1/2/3 截图；002003 idx=12/32/60 冒烟，无异常形态。
+- **提交**：`422be019`（1 个 lib 文件）。
+- **注意事项 / 待办**：
+  - 引擎数据层那条「零长度首段 + 零长度单元」仍在（Agent API / 副图仍看得到 `seg0[0..0]` + `u0[0..0]`），本轮只做到「不再画出来」。要不要连记录一起取消属口径变更（会改 002003 首框跨度与 K2 出生时机、多出判断实线），需单独拍板。
+  - 机器人验证套件 `early_dynamic_20261105` 本轮卡在 `phase: running / started`、未产出 `last_report.json`，改用 API 数据 + 截图 + 等价用例取证，**未按套件判通过**。
+  - 临时诊断用例已删；`a_Data/robot_verify/session.json` 已置 `active: false`。
