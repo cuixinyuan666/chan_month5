@@ -17,6 +17,12 @@ class KlineCombineFrame {
   /// 绘制层用它决定「单根框是否也画」；Rust 回传帧默认 false（由调用方另行判定）。
   final bool beforeFirstStandardFx;
 
+  /// 首分型前并框时，被并进来的「第一个框」是否只有 1 根 K（首合并框仅单个）。
+  /// 由 [applyPreFirstFractalMode] 并框时写入，其它来源一律 false。
+  /// 首分型前动态 K 靠它判断「首框只有 1 根」：并框后 count=2 与真正的包含合并长得一样，
+  /// 不能靠 count 区分（全层同构）。
+  final bool firstBoxWasSingle;
+
   const KlineCombineFrame({
     required this.x1,
     required this.x2,
@@ -29,6 +35,7 @@ class KlineCombineFrame {
     this.endAtLeftHalf = false,
     this.startAtRightHalf = false,
     this.beforeFirstStandardFx = false,
+    this.firstBoxWasSingle = false,
   });
 
   factory KlineCombineFrame.fromJson(Map<String, dynamic> json) {

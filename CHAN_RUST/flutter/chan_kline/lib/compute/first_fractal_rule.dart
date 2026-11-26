@@ -125,6 +125,9 @@ List<KlineCombineFrame> applyFirstPairFractalToFrames(
       endAtLeftHalf: last.endAtLeftHalf,
       startAtRightHalf: frames.first.startAtRightHalf,
       beforeFirstStandardFx: beforeFirstStandardFx,
+      // 真分型落在第 2 个框、且第 1 个框只有 1 根 K：首合并框仅单个。
+      firstBoxWasSingle:
+          end == 2 && stdIdx == 1 && frames.first.count <= 1,
     ),
     ...frames.sublist(end),
   ];

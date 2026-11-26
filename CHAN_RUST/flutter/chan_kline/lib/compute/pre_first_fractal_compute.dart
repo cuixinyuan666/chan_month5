@@ -72,6 +72,8 @@ List<KlineCombineFrame> applyPreFirstFractalMode(
         endAtLeftHalf: b.endAtLeftHalf,
         // 顶分型已落在第二组：该层已进入「首分型后」
         beforeFirstStandardFx: false,
+        // 首合并框仅单个：动态 K 据此只生成 idx=0。
+        firstBoxWasSingle: true,
       ),
       ...frames.sublist(2),
     ];

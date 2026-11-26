@@ -792,6 +792,41 @@ List<K1Bar> buildPreFirstDynamicK1Bars({
       : (first.x2 >= bars.length ? bars.length - 1 : first.x2);
   if (x1 > x2 || x1 >= bars.length) return const [];
 
+  // 首合并框仅单个（AGENTS「首分型前动态 K」第 2 条 · 全层同构）：
+  // 首框里只有 1 根 K（真单根，或并框时标记 firstBoxWasSingle）且已出二元素章时，
+  // 只生成 idx=0 且保持动态，不生成 idx=1；价格取第一条构建虚线的两个端点：
+  // 顶 = 首根最高 → 其后到 asOf 的最低；底 = 首根最低 → 其后到 asOf 的最高。
+  // 开=起点价、收=终点价，高/低=两端价的高与低。虚线还没出现时先不生成。
+  final singleFx = first.fx == 'TOP' || first.fx == 'BOTTOM';
+  if (singleFx && (x1 == x2 || first.firstBoxWasSingle)) {
+    final top = first.fx == 'TOP';
+    final from = x2 > x1 ? x2 : x1 + 1;
+    int? endIdx;
+    var endPrice = top ? double.infinity : double.negativeInfinity;
+    for (var i = from; i <= asOf && i < bars.length; i++) {
+      final v = top ? bars[i].low : bars[i].high;
+      if (top ? v < endPrice : v > endPrice) {
+        endPrice = v;
+        endIdx = i;
+      }
+    }
+    if (endIdx == null) return const [];
+    final beginPrice = top ? bars[x1].high : bars[x1].low;
+    return [
+      K1Bar(
+        idx: 0,
+        dir: top ? -1 : 1,
+        x1: x1,
+        x2: endIdx,
+        open: beginPrice,
+        high: beginPrice > endPrice ? beginPrice : endPrice,
+        low: beginPrice < endPrice ? beginPrice : endPrice,
+        close: endPrice,
+        confirmX: asOf + 1,
+      ),
+    ];
+  }
+
   // 首根开收仍取框内首/末根，但必须夹进框沿：低低档首框 high 可能低于首根开盘，
   // 不夹会让蜡烛实体冒出框外（方案 A 展示口径，2026-11-19 用户确认）。
   final headOpen = bars[x1].open;
