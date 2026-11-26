@@ -5663,9 +5663,13 @@ class _KlineCompositePainter extends CustomPainter {
     // - 本层还没有任何单元 → 用父层首框生成首根（固定映射）；
     // - 本层只有首根且父层已出两元素章 → 追加第二根（极值区间）。
     // 动态 K 不下传：父层只取 `_displayCombineFrames(unitLevel)`，不再往上递归。
+    //
+    // K1 窗口（unitLevel == 0，本层 K 在结构层 0）同样适用（2026-11-26 用户确认）：
+    // 原先 `unitLevel >= 1` 的层级特例让 K1 直接画引擎单元——父层首框只有 1 根时，
+    // 引擎若冻结了零长度首段，K1 左侧就多出一根「一字单元」。层级特例违反全层同构，去掉。
     List<K1Bar>? candleDyn;
     var waitConfirm = false;
-    if (earlyDynamicUnit && unitLevel >= 1) {
+    if (earlyDynamicUnit) {
       // 窗口 Kn 的 K 在结构层 kn-1。它的上一层是窗口 K(n-1)，也就是 displayKn=unitLevel。
       final parentFrames = _displayCombineFrames(unitLevel);
       final asOfX = asOf ?? (bars.isEmpty ? -1 : bars.last.idx);
@@ -5675,12 +5679,52 @@ class _KlineCompositePainter extends CustomPainter {
           parentFrames: parentFrames,
           asOf: asOfX,
         );
-        if (dyn.isNotEmpty) {
+        final parentHead = parentFrames.first;
+        final parentPreFirst = parentHead.beforeFirstStandardFx ||
+            fxIsUnknownCodeUnit(parentHead.fx);
+        if (unitLevel == 0) {
+          // K1 窗口：与合并框轨同源。
+          // 1) 退化种子（单根、高低相等的一字单元）旁边已有跨多根的 K 时丢掉；
+          // 2) 父层首框只有 1 根 → 本层只有 idx=0 这一根动态 K（AGENTS「首分型前
+          //    动态 K」第 4 条）；引擎若冻结了零长度首段，该一字单元一律不画，
+          //    两种取轨路径（asOf 重算 / bundle）都回到 dyn；
+          // 3) 首框多于 1 根且已出二元素章 → 末根夹到框右端并补第二根。
+          virtualUnits = _dropDegenerateSeed(virtualUnits);
+          final parentSingleBar = parentHead.x2 <= parentHead.x1;
+          if (dyn.isNotEmpty && parentSingleBar && virtualUnits.length <= 1) {
+            candleDyn = dyn;
+            virtualUnits = dyn;
+          } else if (dyn.isNotEmpty &&
+              !parentPreFirst &&
+              virtualUnits.length == 1 &&
+              dyn.length >= 2 &&
+              !fxIsUnknownCodeUnit(parentHead.fx)) {
+            final end = parentHead.x2;
+            virtualUnits = [
+              for (final u in virtualUnits)
+                if (u.x1 <= end && u.x2 > end)
+                  K1Bar(
+                    idx: u.idx,
+                    dir: u.dir,
+                    x1: u.x1,
+                    x2: end,
+                    open: u.open,
+                    high: u.high,
+                    low: u.low,
+                    close: u.close,
+                    confirmX: u.confirmX,
+                  )
+                else
+                  u,
+            ];
+            final hasSecond = virtualUnits.any((u) => u.x1 >= end);
+            if (!hasSecond) {
+              virtualUnits = <K1Bar>[...virtualUnits, dyn[1]];
+            }
+          }
+        } else if (dyn.isNotEmpty) {
           candleDyn = dyn;
-          final parentHead = parentFrames.first;
           // 开口跨度改成上一层首框的固定映射；本层已有的其它 K 不动。
-          final parentPreFirst = parentHead.beforeFirstStandardFx ||
-              fxIsUnknownCodeUnit(parentHead.fx);
           if (virtualUnits.isEmpty) {
             virtualUnits = dyn;
           } else if (!parentPreFirst &&
