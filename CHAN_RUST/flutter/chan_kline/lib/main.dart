@@ -446,6 +446,17 @@ class _KlineHomePageState extends State<KlineHomePage>
   String? _selectedCode;
   String _period = 'tick';
   String _dataRoot = '';
+
+  /// test 股「默认数据」（2026-11-26 用户明确）：K线画板与分笔画板各用各的文件，
+  /// 主图 test 股加载哪一份由它决定。`minute`=custom.1m.csv / `tick`=custom.ohlc.csv /
+  /// 空串=未设置（旧规则：有 1 分钟文件就用 1 分钟）。落盘在 `a_Data/test/default_data.txt`，
+  /// Rust 加载 test 股时直接读它，与 Dart 不会各存一份。
+  String _testDefaultData = '';
+
+  /// 多套数据：每个画板（tick/minute）可存多套命名数据，
+  /// 落盘在 `a_Data/test/sets/<kind>/<名称>.csv`；`_default.txt` 记默认套名。
+  /// 主图仍只读 custom.ohlc.csv / custom.1m.csv：设为默认时把该套复制过去。
+  final Map<String, String> _curSet = {'tick': '', 'minute': ''};
   List<KlineBar> _allBars = [];
   List<KlineCombineFrame> _combineFrames = [];
   List<K0ConfirmSignal> _k0ConfirmSignals = [];
@@ -2679,13 +2690,17 @@ class _KlineHomePageState extends State<KlineHomePage>
     // 重启后只剩一根 K，看起来像数据被清。**文件从未被删**。
     // 现按 probe 顺序（先 1m、后 tick）用对应周期的数据首尾定区间。
     if (code == 'test') {
+      _refreshTestDefaultData();
       final hasMinute = _hasTestMinuteCsv();
       final hasTick = _hasTestOhlcCsv();
-      _period = hasMinute ? '1m' : 'tick';
-      final probes = <String>[
-        if (hasMinute) '1m',
-        if (hasTick) 'tick',
-      ];
+      final src = _effectiveTestSource();
+      _period = src == 'minute' ? '1m' : 'tick';
+      final probes = src == 'tick'
+          ? <String>['tick']
+          : <String>[
+              if (hasMinute) '1m',
+              if (hasTick) 'tick',
+            ];
       for (final probe in probes) {
         try {
           final bars = _bridge.loadKlines(
@@ -2730,6 +2745,299 @@ class _KlineHomePageState extends State<KlineHomePage>
     final path =
         '$_dataRoot${Platform.pathSeparator}test${Platform.pathSeparator}custom.1m.csv';
     return File(path).existsSync();
+  }
+
+  /// 从磁盘刷新 test 股默认数据标记；旧 DLL 没有该接口时按「未设置」处理。
+  void _refreshTestDefaultData() {
+    if (_dataRoot.isEmpty) {
+      _testDefaultData = '';
+      return;
+    }
+    try {
+      _testDefaultData = _bridge.testDefaultData(dataRoot: _dataRoot);
+    } catch (_) {
+      _testDefaultData = '';
+    }
+  }
+
+  /// 主图 test 股实际加载哪一份：`tick` / `minute` / 空串（两份都没有）。
+  /// 与 Rust 加载规则一致：默认数据=分笔且分笔文件在 → 分笔；否则有 1 分钟文件 → 1 分钟；否则分笔。
+  String _effectiveTestSource() {
+    final hasMinute = _hasTestMinuteCsv();
+    final hasTick = _hasTestOhlcCsv();
+    if (_testDefaultData == 'tick' && hasTick) return 'tick';
+    if (hasMinute) return 'minute';
+    if (hasTick) return 'tick';
+    return '';
+  }
+
+  /// 画板工具栏的「设为默认数据」按钮：亮 = 主图 test 股当前加载这一份。
+  Widget _buildDefaultDataButton(String kind) {
+    final isDefSet = (_curSet[kind] ?? '') == _defaultSetName(kind);
+    final lit = isDefSet &&
+        (_testDefaultData == kind ||
+            (_testDefaultData.isEmpty && _effectiveTestSource() == kind));
+    final name = kind == 'tick' ? '分笔画板（custom.ohlc.csv）' : 'K线画板（custom.1m.csv）';
+    return _CaptionBarButton(
+      tooltip: lit ? '当前默认数据：$name' : '设为默认数据（主图加载$name）',
+      onTap: () => _setTestDefaultData(kind),
+      child: Icon(
+        lit ? Icons.star : Icons.star_border,
+        size: 16,
+        color: lit ? const Color(0xFFFFB300) : AppPalette.controlInk,
+      ),
+    );
+  }
+
+  // ───────── 多套数据存储 ─────────
+  String get _ps => Platform.pathSeparator;
+  String _kindFileName(String kind) =>
+      kind == 'tick' ? 'custom.ohlc.csv' : 'custom.1m.csv';
+  File _activeFile(String kind) =>
+      File('$_dataRoot${_ps}test$_ps${_kindFileName(kind)}');
+  Directory _setsDir(String kind) =>
+      Directory('$_dataRoot${_ps}test${_ps}sets$_ps$kind');
+  File _setFile(String kind, String name) =>
+      File('${_setsDir(kind).path}$_ps$name.csv');
+  File _defaultMarkFile(String kind) =>
+      File('${_setsDir(kind).path}${_ps}_default.txt');
+
+  String _sanitizeSetName(String raw) =>
+      raw.trim().replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
+
+  List<String> _listSets(String kind) {
+    if (_dataRoot.isEmpty) return const [];
+    final dir = _setsDir(kind);
+    if (!dir.existsSync()) return const [];
+    final names = <String>[
+      for (final e in dir.listSync())
+        if (e is File && e.path.toLowerCase().endsWith('.csv'))
+          e.uri.pathSegments.last.substring(
+            0,
+            e.uri.pathSegments.last.length - 4,
+          ),
+    ]..sort();
+    return names;
+  }
+
+  String _defaultSetName(String kind) {
+    try {
+      final f = _defaultMarkFile(kind);
+      if (f.existsSync()) return f.readAsStringSync().trim();
+    } catch (_) {}
+    return '';
+  }
+
+  bool _fileHasData(File f) => f.existsSync() && f.lengthSync() > 0;
+
+  /// 保证至少有一套数据；首次把现有 custom 文件迁移成「默认」套。
+  void _ensureSets(String kind, {bool reset = false}) {
+    if (_dataRoot.isEmpty) return;
+    try {
+      final dir = _setsDir(kind);
+      if (!dir.existsSync()) dir.createSync(recursive: true);
+      var names = _listSets(kind);
+      if (names.isEmpty) {
+        final f = _setFile(kind, '默认');
+        final active = _activeFile(kind);
+        if (_fileHasData(active)) {
+          active.copySync(f.path);
+        } else {
+          f.writeAsStringSync('');
+        }
+        names = _listSets(kind);
+      }
+      var def = _defaultSetName(kind);
+      if (!names.contains(def)) {
+        def = names.first;
+        _defaultMarkFile(kind).writeAsStringSync(def);
+      }
+      final cur = _curSet[kind] ?? '';
+      if (reset || !names.contains(cur)) _curSet[kind] = def;
+    } catch (e) {
+      _msgHistory.append('多套数据初始化失败：$e');
+    }
+  }
+
+  /// 读某套数据：借 custom 文件让 Rust 解析，读完立刻还原。
+  List<KlineBar> _readSetBars(String kind, String name) {
+    final sf = _setFile(kind, name);
+    if (!_fileHasData(sf)) return const <KlineBar>[];
+    final active = _activeFile(kind);
+    final backup = active.existsSync() ? active.readAsBytesSync() : null;
+    try {
+      sf.copySync(active.path);
+      return _bridge.loadTestCsv(dataRoot: _dataRoot, kind: kind);
+    } catch (e) {
+      _msgHistory.append('读取数据套「$name」失败：$e');
+      return const <KlineBar>[];
+    } finally {
+      if (backup != null) {
+        active.writeAsBytesSync(backup);
+      } else if (active.existsSync()) {
+        active.deleteSync();
+      }
+    }
+  }
+
+  List<int>? _snapshotActive(String kind) {
+    final f = _activeFile(kind);
+    return f.existsSync() ? f.readAsBytesSync() : null;
+  }
+
+  /// 保存后：把刚写入的 custom 内容存进当前套；当前套不是默认套时还原 custom。
+  bool _commitSetAfterSave(String kind, List<int>? before) {
+    _ensureSets(kind);
+    final cur = _curSet[kind] ?? '';
+    final active = _activeFile(kind);
+    if (cur.isNotEmpty && active.existsSync()) {
+      active.copySync(_setFile(kind, cur).path);
+    }
+    final isDefault = cur == _defaultSetName(kind);
+    if (!isDefault) {
+      if (before != null) {
+        active.writeAsBytesSync(before);
+      } else if (active.existsSync()) {
+        active.deleteSync();
+      }
+    }
+    return isDefault;
+  }
+
+  void _loadSetIntoBoard(String kind, String name) {
+    final bars = _readSetBars(kind, name);
+    _curSet[kind] = name;
+    if (kind == 'tick') {
+      final cur = _tickDrawBoard;
+      var m = TickDrawBoardModel.fromBars(bars);
+      if (cur != null) m = m.copyWith(windowCount: cur.windowCount);
+      _updateTickDrawBoard(m);
+    } else {
+      final cur = _klineDrawBoard;
+      var m = bars.isEmpty
+          ? KlineDrawBoardModel.initial()
+          : KlineDrawBoardModel.fromBars(bars);
+      if (cur != null) m = m.withWindowCount(cur.windowCount);
+      _updateKlineDrawBoard(m);
+    }
+  }
+
+  Future<String?> _askSetName(String title) async {
+    final c = TextEditingController();
+    final r = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(title),
+        content: TextField(
+          controller: c,
+          autofocus: true,
+          decoration: const InputDecoration(hintText: '数据套名称'),
+          onSubmitted: (v) => Navigator.pop(ctx, v),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, c.text),
+            child: const Text('确定'),
+          ),
+        ],
+      ),
+    );
+    final name = _sanitizeSetName(r ?? '');
+    return name.isEmpty ? null : name;
+  }
+
+  Future<void> _onDataSetMenu(String kind, String value) async {
+    if (_dataRoot.isEmpty) return;
+    if (value == '__new__') {
+      final name = await _askSetName('新建数据套');
+      if (name == null || !mounted) return;
+      if (_listSets(kind).contains(name)) {
+        _showSnack('已有同名数据套「$name」');
+        return;
+      }
+      _setFile(kind, name).writeAsStringSync('');
+      _loadSetIntoBoard(kind, name);
+      _showSnack('已新建空数据套「$name」；画好后点「保存并加载」');
+      return;
+    }
+    if (value == '__del__') {
+      final cur = _curSet[kind] ?? '';
+      if (cur == _defaultSetName(kind)) {
+        _showSnack('默认数据套不能删除；请先把别的数据套设为默认');
+        return;
+      }
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text('删除数据套「$cur」？'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+            TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('删除')),
+          ],
+        ),
+      );
+      if (ok != true || !mounted) return;
+      _setFile(kind, cur).deleteSync();
+      _loadSetIntoBoard(kind, _defaultSetName(kind));
+      return;
+    }
+    _loadSetIntoBoard(kind, value);
+  }
+
+  /// 画板顶栏：放在「设为默认数据」星标右侧的数据套下拉。
+  Widget _buildDataSetDropdown(String kind) {
+    final names = _listSets(kind);
+    final def = _defaultSetName(kind);
+    final cur = names.contains(_curSet[kind]) ? _curSet[kind] : null;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 6),
+      child: DropdownButton<String>(
+        value: cur,
+        hint: const Text('数据套'),
+        dropdownColor: AppPalette.surfaceAlt,
+        style: TextStyle(color: AppPalette.textPrimary, fontSize: 12),
+        underline: const SizedBox.shrink(),
+        isDense: true,
+        items: [
+          for (final n in names)
+            DropdownMenuItem(value: n, child: Text(n == def ? '★ $n（默认）' : n)),
+          const DropdownMenuItem(value: '__new__', child: Text('＋ 新建数据套…')),
+          const DropdownMenuItem(value: '__del__', child: Text('－ 删除当前数据套')),
+        ],
+        onChanged: (v) {
+          if (v != null) _onDataSetMenu(kind, v);
+        },
+      ),
+    );
+  }
+
+  Future<void> _setTestDefaultData(String kind) async {
+    if (_dataRoot.isEmpty) return;
+    _ensureSets(kind);
+    final curSet = _curSet[kind] ?? '';
+    if (curSet.isNotEmpty && _fileHasData(_setFile(kind, curSet))) {
+      _setFile(kind, curSet).copySync(_activeFile(kind).path);
+      _defaultMarkFile(kind).writeAsStringSync(curSet);
+    }
+    final name = kind == 'tick' ? '分笔画板数据（custom.ohlc.csv）' : 'K线画板数据（custom.1m.csv）';
+    try {
+      final v = _bridge.testDefaultData(dataRoot: _dataRoot, set: kind);
+      setState(() => _testDefaultData = v);
+      _msgHistory.append('test 默认数据：$name');
+      final missing = kind == 'tick' ? !_hasTestOhlcCsv() : !_hasTestMinuteCsv();
+      if (missing) {
+        _showSnack('已设为默认数据；但这份数据还没保存过，主图暂时仍用另一份');
+        return;
+      }
+      _showSnack('已设为默认数据：主图 test 股加载$name');
+      if (_selectedCode == 'test') {
+        setState(() => _syncDateRangeForCode('test'));
+        await _loadKlines();
+      }
+    } catch (e) {
+      _showSnack('设置默认数据失败：$e（可能需要重新编译 Rust 库）');
+    }
   }
 
   DateTime? _tryParseBarTime(String raw) {
@@ -2901,7 +3209,7 @@ class _KlineHomePageState extends State<KlineHomePage>
         );
         quality = loaded.quality;
         bars = loaded.bars;
-        final directOhlc = code == 'test' && _hasTestOhlcCsv();
+        final directOhlc = code == 'test' && _effectiveTestSource() == 'tick';
         srcHint = directOhlc
             ? '（直读custom.ohlc.csv，忽略周期聚合）'
             : tgTicks
@@ -2944,7 +3252,7 @@ class _KlineHomePageState extends State<KlineHomePage>
         _stepFreeze.knClockSeenUnits.clear();
         _clearBacktestSession();
       });
-      final directOhlc = code == 'test' && _hasTestOhlcCsv();
+      final directOhlc = code == 'test' && _effectiveTestSource() == 'tick';
       if (srcHint.isEmpty) {
         srcHint = directOhlc
             ? '（直读custom.ohlc.csv，忽略周期聚合）'
@@ -4219,6 +4527,8 @@ class _KlineHomePageState extends State<KlineHomePage>
               ),
             ),
           ),
+          _buildDefaultDataButton('minute'),
+          _buildDataSetDropdown('minute'),
           _CaptionBarButton(
             tooltip: '保存并加载',
             onTap: _saveKlineDrawBoard,
@@ -4401,6 +4711,17 @@ class _KlineHomePageState extends State<KlineHomePage>
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
+        _buildDefaultDataButton('tick'),
+        _buildDataSetDropdown('tick'),
+        _CaptionBarButton(
+          tooltip: '从 K线画板导入（按收盘价转成分笔点）',
+          onTap: _importKlineBoardToTickBoard,
+          child: Icon(
+            Icons.download,
+            size: 16,
+            color: AppPalette.controlInk,
+          ),
+        ),
         _CaptionBarButton(
           tooltip: '保存并加载',
           onTap: _saveTickDrawBoard,
@@ -6193,35 +6514,17 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
   }
 
   Future<void> _openTickDrawBoard() async {
-    List<KlineBar> seed = _allBars;
-    var loadedFromMinute = false;
-    if (_hasTestMinuteCsv()) {
-      // custom.1m.csv 存在时，Rust 的 tick 加载会报错（它优先读 1 分钟文件）。
-      // 这里直接按 1 分钟周期加载，再转成分笔点喂给画板，
-      // 保证「打开分笔画板就能看到 K线画板画的东西」。
+    // 2026-11-26 用户明确：分笔画板与 K线画板各用各的数据文件。
+    // 分笔画板只读 custom.ohlc.csv；没有就是空板，要 K线画板的数据请点「从 K线画板导入」。
+    _refreshTestDefaultData();
+    List<KlineBar> seed = const <KlineBar>[];
+    if (_dataRoot.isNotEmpty) {
       try {
-        final minuteBars = _bridge.loadKlines(
-          dataRoot: _dataRoot,
-          code: 'test',
-          beginDate: '1990/01/01 00:00:00',
-          endDate: '2100/12/31 23:59:59',
-          period: '1m',
-        );
-        if (minuteBars.isNotEmpty) {
-          seed = minuteBars;
-          loadedFromMinute = true;
-        }
-      } catch (_) {}
-    } else if (_hasTestOhlcCsv()) {
-      try {
-        seed = _bridge.loadKlines(
-          dataRoot: _dataRoot,
-          code: 'test',
-          beginDate: '1990/01/01 00:00:00',
-          endDate: '2100/12/31 23:59:59',
-          period: 'tick',
-        );
-      } catch (_) {}
+        _ensureSets('tick', reset: true);
+        seed = _readSetBars('tick', _curSet['tick'] ?? '');
+      } catch (e) {
+        _msgHistory.append('分笔画板：读取 custom.ohlc.csv 失败（$e），本次从空板开始');
+      }
     }
     final model = TickDrawBoardModel.fromBars(seed);
     final bundle = _bridge.buildKlineCombineBundle(
@@ -6243,9 +6546,32 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
       _tickDrawBundle = bundle;
       _tickDrawBoardOpen = true;
     });
-    if (loadedFromMinute) {
-      _showSnack('已载入 K线画板的自定义 1 分钟数据（custom.1m.csv），按收盘价转成分笔点');
+    if (seed.isEmpty) {
+      _showSnack('分笔画板还没有保存过数据，已从空板开始；可点「从 K线画板导入」');
+    } else {
+      _msgHistory.append('分笔画板：已恢复上次分笔数据 ${seed.length} 个点（读 custom.ohlc.csv）');
     }
+  }
+
+  /// 把 K线画板保存的 1 分钟数据（custom.1m.csv）按收盘价导入分笔画板。
+  /// 只改画板内存里的内容；点「保存并加载」才写 custom.ohlc.csv，绝不碰 custom.1m.csv。
+  void _importKlineBoardToTickBoard() {
+    List<KlineBar> minuteBars = const <KlineBar>[];
+    try {
+      minuteBars = _bridge.loadTestCsv(dataRoot: _dataRoot, kind: 'minute');
+    } catch (e) {
+      _showSnack('读取 K线画板数据失败：$e');
+      return;
+    }
+    if (minuteBars.isEmpty) {
+      _showSnack('K线画板还没有保存过数据（custom.1m.csv 不存在或为空）');
+      return;
+    }
+    final cur = _tickDrawBoard;
+    var next = TickDrawBoardModel.fromBars(minuteBars);
+    if (cur != null) next = next.copyWith(windowCount: cur.windowCount);
+    _updateTickDrawBoard(next);
+    _showSnack('已从 K线画板导入 ${minuteBars.length} 个点（按收盘价）；点「保存并加载」才写入分笔数据');
   }
 
   void _updateTickDrawBoard(TickDrawBoardModel model) {
@@ -6332,6 +6658,7 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
   }
 
   void _openKlineDrawBoard() {
+    _refreshTestDefaultData();
     // 2026-11-17 用户明确：重开画板要接着上次画，不许每次从空板开始。
     // 内存里有（同一次运行内改过）优先用之；否则从保存的 custom.1m.csv 还原。
     final model = _klineDrawBoard ??
@@ -6350,15 +6677,10 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
   /// 只读文件、绝不写盘；读不到（文件不存在/为空/解析失败）返回 null，
   /// 由调用方回落到空板。不改变任何数据。
   KlineDrawBoardModel? _restoreKlineDrawBoardFromSaved() {
-    if (_dataRoot.isEmpty || !_hasTestMinuteCsv()) return null;
+    if (_dataRoot.isEmpty) return null;
     try {
-      final bars = _bridge.loadKlines(
-        dataRoot: _dataRoot,
-        code: 'test',
-        beginDate: '1990/01/01 00:00:00',
-        endDate: '2100/12/31 23:59:59',
-        period: '1m',
-      );
+      _ensureSets('minute', reset: true);
+      final bars = _readSetBars('minute', _curSet['minute'] ?? '');
       if (bars.isEmpty) return null;
       final model = KlineDrawBoardModel.fromBars(bars);
       _msgHistory.append(
@@ -6397,15 +6719,31 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
     if (model == null || model.candles.isEmpty) return;
     try {
       final bars = model.toBars();
+      _ensureSets('minute');
+      final before = _snapshotActive('minute');
       final saved = _bridge.saveTestMinute(
         dataRoot: _dataRoot,
         bars: bars,
       );
       _msgHistory.append('K线画板：保存${saved.count}根 → ${saved.path}');
+      final isDefSet = _commitSetAfterSave('minute', before);
+      if (!isDefSet) {
+        setState(() {});
+        _showSnack('已保存到数据套「${_curSet['minute']}」；当前默认是「${_defaultSetName('minute')}」，主图没变');
+        return;
+      }
       // 关键：加载区间必须对齐到画板数据本身。默认区间是 2024 全年，
       // 而画板画的 1m 数据可以是任意日期（如 2026/07/10）；不对齐的话
       // _loadKlines 用旧区间取数，表现为「主图只有 1 根 K 线」。
       // 分笔画板保存早已这么做（见 _saveTickDrawBoard），画板此前漏了。
+      // 2026-11-26：保存的是默认数据才加载到主图；不是默认数据只写文件，主图不动。
+      _refreshTestDefaultData();
+      if (_effectiveTestSource() != 'minute') {
+        setState(() {});
+        _showSnack('已写入 custom.1m.csv；当前默认数据是分笔，主图没变。'
+            '要让主图用这份，请点画板顶栏的星标「设为默认数据」');
+        return;
+      }
       final begin = bars.isEmpty ? null : _tryParseBarTime(bars.first.timeText);
       final end = bars.isEmpty ? null : _tryParseBarTime(bars.last.timeText);
       setState(() {
@@ -6417,10 +6755,6 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
           _endDate = end;
         }
       });
-      if (_hasTestOhlcCsv()) {
-        _showSnack('已写入 custom.1m.csv；custom.ohlc.csv 仍在，'
-            '分笔周期加载会优先读 1 分钟文件');
-      }
       await _loadKlines();
     } catch (e) {
       setState(() => _error = e.toString());
@@ -6433,22 +6767,36 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
     if (model == null) return;
     final bars = model.toTickBars();
     try {
+      _ensureSets('tick');
+      final before = _snapshotActive('tick');
       final saved = _bridge.saveTestOhlc(dataRoot: _dataRoot, bars: bars);
       _msgHistory.append('分笔画板：保存${saved.count}根 → ${saved.path}');
+      final isDefSet = _commitSetAfterSave('tick', before);
+      if (!isDefSet) {
+        setState(() {});
+        _showSnack('已保存到数据套「${_curSet['tick']}」；当前默认是「${_defaultSetName('tick')}」，主图没变');
+        return;
+      }
+      // 2026-11-26：保存的是默认数据才加载到主图；不是默认数据只写文件，主图不动。
+      _refreshTestDefaultData();
+      if (_effectiveTestSource() != 'tick') {
+        setState(() {});
+        _showSnack('已写入 custom.ohlc.csv；当前默认数据是 K线，主图没变。'
+            '要让主图用这份，请点画板顶栏的星标「设为默认数据」');
+        return;
+      }
       if (bars.isNotEmpty) {
         final begin = _tryParseBarTime(bars.first.timeText);
         final end = _tryParseBarTime(bars.last.timeText);
         if (begin != null && end != null) {
           setState(() {
+            _selectedCode = 'test';
+            _period = 'tick';
             _beginDate = begin;
             _endDate = end;
             _tickDrawBoardOpen = false;
           });
         }
-      }
-      if (_hasTestMinuteCsv()) {
-        _showSnack('已写入 custom.ohlc.csv，但 custom.1m.csv 仍在，'
-            '加载时优先读 1 分钟文件，分笔数据暂不生效');
       }
       await _loadKlines();
     } catch (e) {
@@ -6463,13 +6811,9 @@ Future<void> _openKeyPointStats({bool closeSettingsSheet = false}) async {
     List<KlineBar> seed = _allBars;
     if (_hasTestOhlcCsv()) {
       try {
-        seed = _bridge.loadKlines(
-          dataRoot: _dataRoot,
-          code: 'test',
-          beginDate: '1990/01/01 00:00:00',
-          endDate: '2100/12/31 23:59:59',
-          period: 'tick',
-        );
+        // 直读 custom.ohlc.csv（有 1 分钟文件时按 tick 周期加载会被 Rust 拒绝）。
+        final tick = _bridge.loadTestCsv(dataRoot: _dataRoot, kind: 'tick');
+        if (tick.isNotEmpty) seed = tick;
       } catch (_) {
         // 保持 seed=_allBars
       }

@@ -180,6 +180,18 @@ class ChanBridge {
       )
       .asFunction();
 
+  late final Pointer<Utf8> Function(Pointer<Utf8>) _loadTestCsv = _lib
+      .lookup<NativeFunction<Pointer<Utf8> Function(Pointer<Utf8>)>>(
+        'chan_load_test_csv',
+      )
+      .asFunction();
+
+  late final Pointer<Utf8> Function(Pointer<Utf8>) _testDefaultData = _lib
+      .lookup<NativeFunction<Pointer<Utf8> Function(Pointer<Utf8>)>>(
+        'chan_test_default_data',
+      )
+      .asFunction();
+
   late final Pointer<Utf8> Function(Pointer<Utf8>) _klineCombineFrames = _lib
       .lookup<NativeFunction<Pointer<Utf8> Function(Pointer<Utf8>)>>(
         'chan_kline_combine_frames',
@@ -396,6 +408,47 @@ class ChanBridge {
         path: map['path']?.toString() ?? '',
         count: (map['count'] as num?)?.toInt() ?? bars.length,
       );
+    } finally {
+      if (ptr != nullptr) calloc.free(ptr);
+    }
+  }
+
+  /// 读 test 股某一份自定义数据文件（不聚合、不受默认数据影响）。
+  /// [kind]：`minute`=custom.1m.csv（K线画板）；`tick`=custom.ohlc.csv（分笔画板）。
+  /// 文件不存在返回空列表；旧 DLL 没有该接口时也返回空列表。
+  List<KlineBar> loadTestCsv({String? dataRoot, required String kind}) {
+    ensureInitialized();
+    final payload = <String, dynamic>{
+      if (dataRoot != null) 'data_root': dataRoot,
+      'kind': kind,
+    };
+    final ptr = _toNative(jsonEncode(payload));
+    try {
+      final data = _decode(_takeJson(_loadTestCsv(ptr)));
+      return (data as List)
+          .map((e) => KlineBar.fromJson(Map<String, dynamic>.from(e as Map)))
+          .toList();
+    } on ArgumentError {
+      return <KlineBar>[];
+    } finally {
+      if (ptr != nullptr) calloc.free(ptr);
+    }
+  }
+
+  /// 读 / 写 test 股「默认数据」：返回 `minute` / `tick` / 空串（未设置=旧规则）。
+  /// [set] 为 null 只读；传 `minute` / `tick` 写入；传空串清除。旧 DLL 没有该接口时返回空串。
+  String testDefaultData({String? dataRoot, String? set}) {
+    ensureInitialized();
+    final payload = <String, dynamic>{
+      if (dataRoot != null) 'data_root': dataRoot,
+      if (set != null) 'set': set,
+    };
+    final ptr = _toNative(jsonEncode(payload));
+    try {
+      final data = _decode(_takeJson(_testDefaultData(ptr)));
+      return (data as Map)['value']?.toString() ?? '';
+    } on ArgumentError {
+      return '';
     } finally {
       if (ptr != nullptr) calloc.free(ptr);
     }
