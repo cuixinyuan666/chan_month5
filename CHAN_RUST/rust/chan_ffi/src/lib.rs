@@ -7,10 +7,11 @@ use std::sync::{Mutex, OnceLock};
 
 use chan_data::{
     build_kline_combine_bundle_from_state, build_kline_combine_bundle_with, chip_profile,
-    default_data_root, list_stock_codes, load_klines, load_klines_with_source, ml_predict_dense,
-    resolve_data_root, save_test_minute, save_test_ohlc, KlineBar, KlinePeriod, LoadKlinesOut,
-    PipelineOptions,
-    PipelineState, TickSource, ZSConfig,
+    default_data_root, list_stock_codes, load_klines, load_klines_with_source, load_test_ohlc_csv,
+    ml_predict_dense, read_test_default_data, resolve_data_root, save_test_minute, save_test_ohlc,
+    test_minute_csv_path, test_ohlc_csv_path, write_test_default_data, KlineBar, KlinePeriod,
+    LoadKlinesOut, PipelineOptions,
+    PipelineState, TestDefaultData, TickSource, ZSConfig,
 };
 use serde::{Deserialize, Serialize};
 
@@ -244,6 +245,77 @@ pub extern "C" fn chan_save_test_minute(req_json: *const c_char) -> *mut c_char 
         }
         Err(e) => to_json_err(&e.to_string()),
     }
+}
+
+/// 读取 test 股某一份自定义数据文件（不经周期聚合、不受默认数据影响）。
+/// 入参 JSON：`{ "data_root": "...?", "kind": "minute" | "tick" }`；文件不存在返回空数组。
+#[no_mangle]
+pub extern "C" fn chan_load_test_csv(req_json: *const c_char) -> *mut c_char {
+    let Some(raw) = cstr_to_str(req_json) else {
+        return to_json_err("req_json 不能为空");
+    };
+    #[derive(Deserialize)]
+    struct Req {
+        #[serde(default)]
+        data_root: Option<String>,
+        kind: String,
+    }
+    let req: Req = match serde_json::from_str(raw) {
+        Ok(v) => v,
+        Err(e) => return to_json_err(&format!("load_test_csv 解析失败: {e}")),
+    };
+    let root = resolve_data_root(req.data_root.as_deref());
+    let path = match req.kind.as_str() {
+        "minute" => test_minute_csv_path(&root),
+        "tick" => test_ohlc_csv_path(&root),
+        other => return to_json_err(&format!("kind 非法: {other}")),
+    };
+    if !path.is_file() {
+        return to_json_ok(Vec::<KlineBar>::new());
+    }
+    match load_test_ohlc_csv(&path) {
+        Ok(bars) => to_json_ok(bars),
+        Err(e) => to_json_err(&e.to_string()),
+    }
+}
+
+/// 读 / 写 test 股「默认数据」标记。
+/// 入参 JSON：`{ "data_root": "...?", "set": "minute" | "tick" | "" }`（`set` 可省=只读；"" 清除标记）。
+/// 返回 `{ "value": "minute" | "tick" | "" }`。
+#[no_mangle]
+pub extern "C" fn chan_test_default_data(req_json: *const c_char) -> *mut c_char {
+    let Some(raw) = cstr_to_str(req_json) else {
+        return to_json_err("req_json 不能为空");
+    };
+    #[derive(Deserialize)]
+    struct Req {
+        #[serde(default)]
+        data_root: Option<String>,
+        #[serde(default)]
+        set: Option<String>,
+    }
+    let req: Req = match serde_json::from_str(raw) {
+        Ok(v) => v,
+        Err(e) => return to_json_err(&format!("test_default_data 解析失败: {e}")),
+    };
+    let root = resolve_data_root(req.data_root.as_deref());
+    if let Some(s) = req.set.as_deref() {
+        let v = match s {
+            "minute" => TestDefaultData::Minute,
+            "tick" => TestDefaultData::Tick,
+            "" => TestDefaultData::Unset,
+            other => return to_json_err(&format!("set 非法: {other}")),
+        };
+        if let Err(e) = write_test_default_data(&root, v) {
+            return to_json_err(&e.to_string());
+        }
+    }
+    let value = match read_test_default_data(&root) {
+        TestDefaultData::Minute => "minute",
+        TestDefaultData::Tick => "tick",
+        TestDefaultData::Unset => "",
+    };
+    to_json_ok(serde_json::json!({ "value": value }))
 }
 
 /// 对已加载 K 线做 Kn 流水线。
