@@ -7806,3 +7806,22 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   - 只做到「编译 + 启动」，**未做机器人连续单步验收**；补验时按 `ROBOT_VERIFY.md` 连续单步走一遍主图与两个画板，不要用一键跳末。
   - 改动已分 4 个 commit 提交：`4ced3a27`（chan_data 默认数据标记）、`4799c4ff`（chan_ffi 两个导出）、`f420bbfc`（flutter 星标与数据套下拉）、本条 task-log。`a_Data/test/custom.1m.csv(.bak)` 与 `custom.ohlc.csv` 属用户数据，未提交。
   - `default_data.txt` 还没生成（用户尚未点星标），删掉它即回到旧规则；这也是回滚口径。
+
+### 2026-11-26 · Doubao · 代码修复 · 首分型前动态 K：首框仅单根时不再补 idx=1
+
+- **执行者**：Doubao（代码由用户 11:12 改动，本轮复核、跑测并提交）
+- **任务类型**：首分型前动态 K（全层同构 · 单框口径）
+- **操作**：
+  1. `KlineCombineFrame` 新增 `firstBoxWasSingle`：并框时（`applyPreFirstFractalMode` / `applyFirstPairFractalToFrames`）标记「被并进来的第一个框只有 1 根」，其它来源一律 false。并框后 `count=2` 与真包含合并外形一致，不能靠 count 区分。
+  2. `buildPreFirstDynamicK1Bars` 在该情形只生成 `idx=0`：顶取首根最高 → 其后到 asOf 的最低，底反之；开=起点价、收=终点价，高/低=两端价的高与低；首条构建虚线还没出现时先不生成，不再补 `idx=1`。
+- **结果**：`test/pre_first_dynamic_k_test.dart` 8 条全过（上一轮 7/8，「首框只有 1 根且虚线未出现：不生成」转绿）。
+- **演示**：默认 TEST 股，首分型前阶段 K1 首框只有 1 根且已出二元素章时，画面上只出现一根动态 K；虚线未出现时该层不生成 K1。
+- **测试**：
+  1. 单文件 `flutter test test/pre_first_dynamic_k_test.dart` → 8 passed。
+  2. 全量 `flutter test` → 817 passed / 11 failed（上一轮 815 / 12，本次修复的那条已绿，其余 11 条同批）。
+  3. `flutter analyze` → 142 issues，**0 error**、37 warning、105 info。
+- **提交**：`b80cc85e`（4 个 lib 文件）、`a151393b`（测试用例）。
+- **注意事项 / 待办**：
+  - 剩余 11 条失败与本次改动无关（视窗独立拖动、筹码 catalog、增量 lookup、k1_boxed_candle、k2_idx17_probe、line_slope、robot_verify 用例计数 41<42）。
+  - `chart_view_compute.dart` 被外部工具改写成 LF，与仓库 CRLF 不一致；提交时已还原 CRLF，否则会多出约 1600 行行尾噪声。
+  - `a_Data/test/custom.1m.csv(.bak)`、`custom.ohlc.csv`、`default_data.txt`、`sets/` 属用户数据，未提交。
