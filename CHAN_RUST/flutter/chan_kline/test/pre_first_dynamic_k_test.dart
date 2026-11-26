@@ -114,6 +114,71 @@ void main() {
     expect(out, isEmpty);
   });
 
+  test('首框只有 1 根：只生成 idx=0，取第一条构建虚线端点，不生成 idx=1', () {
+    final b = bars([
+      [10.11, 10.11, 9.78, 9.78],
+      [9.84, 9.84, 9.68, 9.68],
+    ]);
+    final out = buildPreFirstDynamicK1Bars(
+      bars: b,
+      parentFrames: [frame(0, 0, 10.11, 9.78, fx: 'TOP')],
+      asOf: 1,
+    );
+    expect(out.length, 1, reason: '单根首框不生成 idx=1');
+    expect(out.first.idx, 0);
+    expect(out.first.x1, 0);
+    expect(out.first.x2, 1);
+    expect(out.first.open, closeTo(10.11, 1e-9));
+    expect(out.first.high, closeTo(10.11, 1e-9));
+    expect(out.first.low, closeTo(9.68, 1e-9));
+    expect(out.first.close, closeTo(9.68, 1e-9));
+    expect(out.first.confirmX, greaterThan(1), reason: '保持动态');
+  });
+
+  test('首框只有 1 根且虚线未出现：不生成', () {
+    final b = bars([
+      [10.11, 10.11, 9.78, 9.78],
+    ]);
+    final out = buildPreFirstDynamicK1Bars(
+      bars: b,
+      parentFrames: [frame(0, 0, 10.11, 9.78, fx: 'TOP')],
+      asOf: 0,
+    );
+    expect(out, isEmpty);
+  });
+
+  test('首合并框仅单个（并框后 0..1、标记 firstBoxWasSingle）：只生成 idx=0', () {
+    final b = bars([
+      [10.11, 10.11, 9.78, 9.78],
+      [9.84, 9.84, 9.68, 9.68],
+    ]);
+    final out = buildPreFirstDynamicK1Bars(
+      bars: b,
+      parentFrames: [
+        const KlineCombineFrame(
+          x1: 0,
+          x2: 1,
+          t1: 't0',
+          t2: 't1',
+          high: 10.11,
+          low: 9.78,
+          fx: 'TOP',
+          count: 2,
+          firstBoxWasSingle: true,
+        ),
+      ],
+      asOf: 1,
+    );
+    expect(out.length, 1, reason: '首合并框仅单个不生成 idx=1');
+    expect(out.first.open, closeTo(10.11, 1e-9));
+    expect(out.first.high, closeTo(10.11, 1e-9));
+    expect(out.first.low, closeTo(9.68, 1e-9));
+    expect(out.first.close, closeTo(9.68, 1e-9));
+    expect(out.first.x1, 0);
+    expect(out.first.x2, 1);
+    expect(out.first.confirmX, greaterThan(1));
+  });
+
   group('二元素章预告线', () {
     test('顶分型：首框最高 ↔ 当前最低（构建中虚线）', () {
       final b = bars([
