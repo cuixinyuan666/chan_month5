@@ -6,9 +6,10 @@ import 'package:flutter_test/flutter_test.dart';
 /// K0 构建中虚线：同价位属于合并框，端点固定在该价位首次出现那根。
 ///
 /// 默认数据（002003 tick，2004/07/19 10:47 ~ 2004/07/20 13:09）：
+/// （2026-11-28 按实际数据改：0/1=11.66、2=11.67、3=11.68、4/5/6=11.7、7=11.71）
 /// - idx=0/1 同为 11.66：首分型前不画线（第二根生成时不得输出虚线）；
-/// - idx=3/4/5 同为 11.7：端点固定在 idx=3（11.7 首次出现根），不随合并框内新 K 拉长；
-/// - idx=6 新价 11.71：端点正常跟到 6；idx=7 结构翻转后由新方向接管。
+/// - idx=4/5/6 同为 11.7：端点固定在 idx=4（11.7 首次出现根），不随合并框内新 K 拉长；
+/// - idx=7 新价 11.71：端点正常跟到 7。
 void main() {
   late List<KlineBar> bars;
 
@@ -58,29 +59,25 @@ void main() {
     expect(linesAt(0), isEmpty, reason: '首根同价不应画线');
     expect(linesAt(1), isEmpty, reason: '第二根同价不应输出虚线');
 
-    // idx=3 首次出现 11.7：端点 3。
+    // idx=3 新价 11.68：起点钉在 K0 idx=0（首框内 11.66 首次出现根），终点 3。
     final at3 = linesAt(3);
     expect(at3.length, 1);
     expect(at3.single.begin.barIdx, 0);
     expect(at3.single.end.barIdx, 3);
 
-    // idx=4/5 与 idx=3 同价：端点仍固定 3，不随合并框拉长。
-    for (final n in [4, 5]) {
+    // idx=4 首次出现 11.7；idx=5/6 同价：端点固定 4，不随合并框拉长。
+    for (final n in [4, 5, 6]) {
       final l = linesAt(n);
       expect(l.length, 1, reason: 'idx=$n 应仍只有一条构建中虚线');
-      expect(l.single.end.barIdx, 3, reason: 'idx=$n 同价端点应固定在首次出现根 idx=3');
+      expect(l.single.begin.barIdx, 0);
+      expect(l.single.end.barIdx, 4, reason: 'idx=$n 同价端点应固定在首次出现根 idx=4');
     }
 
-    // idx=6 新价 11.71：端点正常跟到 6。
-    final at6 = linesAt(6);
-    expect(at6.length, 1);
-    expect(at6.single.end.barIdx, 6);
-
-    // idx=7：idx1 收束、idx2 动态接管，虚线换成新方向（6@11.71 → 7@11.7）。
+    // idx=7 新价 11.71：端点正常跟到 7。
     final at7 = linesAt(7);
     expect(at7.length, 1);
-    expect(at7.single.begin.barIdx, 6);
+    expect(at7.single.begin.barIdx, 0);
     expect(at7.single.end.barIdx, 7);
-    expect(at7.single.dir, -1);
+    expect(at7.single.dir, 1);
   });
 }

@@ -363,69 +363,33 @@ void main() {
   /// 本轮口径（2026-11-06）：首个分型确认前，本层构建中虚线由预锚动态单元接管。
   /// 升段两端取区间内首次最低 low → 首次最高 high，与首个分型之后的开口虚线同一套扫价；
   /// 开关关时保持经典口径（不补线）。
-  test('层级早生成：K1 首分型前用预锚单元补一条构建中虚线', () {
+  test('层级早生成：K0 首确认当根 K2 不出生，K1 首分型前无构建中虚线（2026-11-28）', () {
     final full = bundleOfPrefix(bars.length);
     final fx = full.levels[0].segments.first.endConfirmX;
     final on = bundleOfPrefix(fx + 1);
-    expect(on.levels[1].confirms, isEmpty, reason: '此刻 K1 尚未有确认段');
-
-    List<K1Bar> unitsOf({required bool preAnchor}) => asOfLevelVirtualK1Bars(
-          levels: on.levels,
-          barFeatures: on.barFeatures,
-          level: 1,
-          asOf: fx,
-          includeBuilding: true,
-          includePreAnchor: preAnchor,
-        );
-
-    final unitsOn = unitsOf(preAnchor: true);
-    expect(unitsOn, hasLength(1), reason: 'K1 此刻只有预锚动态单元');
-    final linesOn = computeDisplayBuildingLines(
-      bars: bars.sublist(0, fx + 1),
-      asOf: fx,
-      virtualUnits: unitsOn,
-      frozenIdx: const {},
-      levelConfirms: on.levels[1].confirms,
-    );
-    expect(linesOn, hasLength(1), reason: '开关开：首分型前应有一条构建中虚线');
-    final line = linesOn.single;
-    final pre = unitsOn.single;
-    final lo = pre.x1.clamp(0, bars.length - 1);
-    final hi = pre.x2.clamp(0, bars.length - 1);
-    var trough = double.infinity;
-    var peak = double.negativeInfinity;
-    var troughX = lo;
-    var peakX = lo;
-    for (var i = lo; i <= hi; i++) {
-      if (bars[i].low < trough) {
-        trough = bars[i].low;
-        troughX = i;
-      }
-      if (bars[i].high > peak) {
-        peak = bars[i].high;
-        peakX = i;
-      }
+    expect(on.levels[1].confirms, isEmpty);
+    for (final pre in [true, false]) {
+      final units = asOfLevelVirtualK1Bars(
+        levels: on.levels,
+        barFeatures: on.barFeatures,
+        level: 1,
+        asOf: fx,
+        includeBuilding: true,
+        includePreAnchor: pre,
+      );
+      expect(units, isEmpty, reason: 'K1 合并框 idx=0 只有 1 个单元、未盖章 → K2 不出生');
+      final lines = computeDisplayBuildingLines(
+        bars: bars.sublist(0, fx + 1),
+        asOf: fx,
+        virtualUnits: units,
+        frozenIdx: const {},
+        levelConfirms: on.levels[1].confirms,
+      );
+      expect(lines, isEmpty);
     }
-    final up = pre.dir > 0;
-    expect(line.begin.barIdx, up ? troughX : peakX,
-        reason: '起点钉在区间内方向出发极值（升=首次最低 low，降=首次最高 high）');
-    expect(line.begin.price, closeTo(up ? trough : peak, 1e-9));
-    expect(line.end.barIdx, up ? peakX : troughX,
-        reason: '终点钉在区间内方向到达极值，不跟当根收盘');
-    expect(line.end.price, closeTo(up ? peak : trough, 1e-9));
-    expect(line.asSolid, isFalse, reason: '未确认段必须是虚线');
+  });
 
-    final linesOff = computeDisplayBuildingLines(
-      bars: bars.sublist(0, fx + 1),
-      asOf: fx,
-      virtualUnits: unitsOf(preAnchor: false),
-      frozenIdx: const {},
-      levelConfirms: on.levels[1].confirms,
-    );
-    expect(linesOff, isEmpty, reason: '开关关：经典口径不补首分型前虚线');
-  }, skip: '待 K2 首框多于 1 个单元的内核对齐方案（2026-11-28），新预期随该方案一起定');
-
-  test('层级早生成：K1 步进到第 32 根为「首框+建造单元」，虚线按建造单元扫价', () {
+  test('层级早生成：K0 idx=32 时 K2 单元 idx=0 = K1 合并框 idx=0 合成（2026-11-28）', () {
     final bridge = ChanBridge.instance;
     final wide = bridge
         .loadKlinesEx(
@@ -438,18 +402,14 @@ void main() {
         )
         .bars;
     const asOf = 32;
-    final sub = wide.sublist(0, asOf + 1);
-    final b = bridge.buildKlineCombineBundle(sub, earlyDynamicUnit: true);
-    // 2026-11-19 起口径：K1 已有第一只合并框（x0..21，高高并入 K0 各帧），
-    // 建造单元从框右沿 x21 续到 asOf，不再是横跨全程的单根预锚单元。
+    final b = bridge.buildKlineCombineBundle(wide.sublist(0, asOf + 1),
+        earlyDynamicUnit: true);
     final lv1 = b.levels.firstWhere((l) => l.level == 1);
     expect(lv1.combineFrames, hasLength(1));
-    expect(lv1.combineFrames.first.x1, 0);
-    expect(lv1.combineFrames.first.x2, 21);
+    expect([lv1.combineFrames.first.x1, lv1.combineFrames.first.x2], [0, 21]);
     expect(lv1.combineFrames.first.fx, 'UNKNOWN');
     expect(lv1.segments, isEmpty);
     expect(lv1.confirms, isEmpty);
-
     final units = asOfLevelVirtualK1Bars(
       levels: b.levels,
       barFeatures: b.barFeatures,
@@ -459,11 +419,9 @@ void main() {
       includePreAnchor: true,
     );
     expect(units, hasLength(1));
-    expect(units.single.idx, 0);
-    expect(units.single.x1, 21);
-    expect(units.single.x2, 32);
-    expect(units.single.dir, -1);
-
+    final u = units.single;
+    expect([u.idx, u.dir, u.x1, u.x2], [0, 1, 0, 21], reason: '首框合成：时间 = 框左端到右端');
+    expect([u.open, u.high, u.low, u.close], [11.66, 11.89, 11.66, 11.89]);
     final lines = computeDisplayBuildingLines(
       bars: wide,
       asOf: asOf,
@@ -471,16 +429,12 @@ void main() {
       frozenIdx: const {},
       levelConfirms: lv1.confirms,
     );
-    expect(lines, hasLength(1), reason: '建造单元应有一条构建中虚线');
-    final line = lines.single;
-    // 降段：起点=区间内首次最高 high（11.89@21），终点=首次最低 low。
-    expect(line.begin.barIdx, 21);
-    expect(line.begin.price, closeTo(11.89, 1e-9));
-    expect(line.end.barIdx, 32);
-    expect(line.end.price, closeTo(11.8, 1e-9));
-    expect(line.dir, -1);
-    expect(line.asSolid, isFalse);
-  }, skip: '待 K2 首框多于 1 个单元的内核对齐方案（2026-11-28），新预期随该方案一起定');
+    expect(lines, hasLength(1));
+    expect([lines.single.begin.barIdx, lines.single.end.barIdx], [0, 21]);
+    expect(lines.single.begin.price, closeTo(11.66, 1e-9));
+    expect(lines.single.end.price, closeTo(11.89, 1e-9));
+    expect(lines.single.asSolid, isFalse);
+  });
 
   test('层级早生成：首个分型判断不再带截断伪点（2004 数据）', () {
     final bridge = ChanBridge.instance;
@@ -514,6 +468,9 @@ void main() {
       truncationCheck: true,
     );
     expect(js, isNotEmpty, reason: '第 58 根应出现首个分型判断');
+    // 2026-11-28：动态单元给 K1 合并框 idx=0（K0 idx 0..55）盖顶章即冻结 → K1 连线 idx=0 = 0→44。
+    final seg0 = asOfLevelSegments(levels: b.levels, level: 1, asOf: asOf);
+    expect(seg0.map((x) => [x.beginPoleX, x.endPoleX]).toList(), [[0, 44]]);
     // 2026-11-18（与 Rust `feed_guarded` 对齐）：首分型前禁用截断。
     // 旧实现在首两单元会盖一个 `truncated BOTTOM`（x=6），并据此画出
     // 「判断→判断」0→44 的实线；该伪分型已删除，首个真实判断在 x58。
@@ -525,7 +482,7 @@ void main() {
       bars: wide,
       asOf: asOf,
       virtualUnits: units,
-      frozenIdx: const {},
+      frozenIdx: {for (final x in seg0) x.idx},
       levelConfirms: b.levels[1].confirms,
       liveJudgments: js,
     );
@@ -535,9 +492,10 @@ void main() {
     expect(dash, hasLength(1), reason: '开口仍是虚线');
     expect(dash.single.begin.barIdx, 44);
     expect(dash.single.begin.price, closeTo(11.97, 1e-9));
-    expect(dash.single.end.barIdx, 55);
-    expect(dash.single.end.price, closeTo(11.94, 1e-9));
-  }, skip: '待 K2 首框多于 1 个单元的内核对齐方案（2026-11-28），新预期随该方案一起定');
+    // 开口端点：从末极点 K0 idx=44 扫到 asOf，取方向极值首次出现根（11.92@46）。
+    expect(dash.single.end.barIdx, 46);
+    expect(dash.single.end.price, closeTo(11.92, 1e-9));
+  });
 
   test('层级早生成：K1 合并帧跳过本层种子框首组', () {
     final on = bundleOfPrefix(bars.length);
@@ -550,15 +508,17 @@ void main() {
     expect(frames, isNotEmpty);
     final first = frames.first;
     expect(first.x1, snap.seedBoxX1);
-    // 2026-11-28：首分型前高高并框后首框跨过种子框（实测 0..60 vs 种子框 0..32），
-    // 矩形不同 → 不再跳过（与「K2 合并帧」用例 2026-11-19 口径一致）。
-    expect(first.x2, greaterThan(snap.seedBoxX2));
+    expect(first.x2, snap.seedBoxX2);
+    expect(first.high, closeTo(snap.seedBoxHigh, 1e-9));
+    expect(first.low, closeTo(snap.seedBoxLow, 1e-9));
+
     final kept = combineFramesWithoutSeed(
       frames: frames,
       snap: snap,
       earlyDynamicUnit: true,
     );
-    expect(kept, same(frames), reason: '扩框后不同矩形，不跳过');
+    expect(kept.length, frames.length - 1, reason: '开关开：种子框首组被跳过');
+    expect(kept.first.x1, frames[1].x1);
     expect(
       combineFramesWithoutSeed(
         frames: frames,
