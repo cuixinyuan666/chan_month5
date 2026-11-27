@@ -10,8 +10,27 @@ import 'metric_format.dart';
 import 'order_models.dart';
 import 'signal_event.dart';
 import 'strategy_signal_painter.dart';
+import 'package:chan_kline/theme/app_palette.dart';
 
 enum BacktestReportTab { metrics, equity, trades, chain, attribution }
+
+/// 工作台顶栏标签：条件/资金 + 报告各页，一次只开一页。
+/// 绩效 = 指标 + 净值 合并同屏（上下堆叠）。
+enum BacktestWorkbenchTab {
+  conditions,
+  capital,
+  performance,
+  trades,
+  chain,
+  attribution,
+}
+
+BacktestReportTab? reportTabOf(BacktestWorkbenchTab t) => switch (t) {
+      BacktestWorkbenchTab.trades => BacktestReportTab.trades,
+      BacktestWorkbenchTab.chain => BacktestReportTab.chain,
+      BacktestWorkbenchTab.attribution => BacktestReportTab.attribution,
+      _ => null,
+    };
 
 /// 把 BacktestResult 端出来：指标卡 / 净值 / 交易 / 信号订单链路。不重算。
 class BacktestReportPanel extends StatelessWidget {
@@ -19,6 +38,8 @@ class BacktestReportPanel extends StatelessWidget {
   final List<KlineBar> bars;
   final BacktestReportTab tab;
   final ValueChanged<BacktestReportTab> onTab;
+  /// false：外层工作台已有标签，这里不再画一排 chip。
+  final bool showTabBar;
   final String? selectedSignalId;
   final String? selectedTradeId;
   final ValueChanged<TradeRecord> onSelectTrade;
@@ -38,6 +59,7 @@ class BacktestReportPanel extends StatelessWidget {
     required this.onSelectSignal,
     required this.onJumpX,
     this.focusX,
+    this.showTabBar = true,
   });
 
   @override
@@ -48,14 +70,14 @@ class BacktestReportPanel extends StatelessWidget {
         padding: const EdgeInsets.all(12),
         child: Text(
           run.error ?? '还没有回测结果',
-          style: const TextStyle(color: Color(0xFFFFB74D), fontSize: 13),
+          style: TextStyle(color: AppPalette.rgb(0xFFFFB74D), fontSize: 13),
         ),
       );
     }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _tabBar(),
+        if (showTabBar) _tabBar(),
         Expanded(child: _body(result)),
       ],
     );
@@ -132,12 +154,12 @@ class BacktestReportPanel extends StatelessWidget {
         Text(
           '回撤区间 $ddRange · 已平仓 ${m.totalTrades} 笔'
           '${result.openPosition == null ? '' : ' · 期末仍持仓（浮盈已计入净值）'}',
-          style: const TextStyle(fontSize: 11, color: Color(0xFF94A3B8)),
+          style: TextStyle(fontSize: 11, color: AppPalette.rgb(0xFF94A3B8)),
         ),
         Text(
           '引擎 ${run.engineVersion} · ${run.runId}'
           '${run.context == null ? '' : ' · 策略${run.context!.strategyVersion} · 契约${run.context!.dataContractVersion} · 结构${run.context!.structureSemanticVersion}'}',
-          style: const TextStyle(fontSize: 10, color: Color(0xFF64748B)),
+          style: TextStyle(fontSize: 10, color: AppPalette.rgb(0xFF64748B)),
         ),
       ],
     );
@@ -148,20 +170,20 @@ class BacktestReportPanel extends StatelessWidget {
       width: 148,
       padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
       decoration: BoxDecoration(
-        color: const Color(0xFF1E293B),
+        color: AppPalette.rgb(0xFF1E293B),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(title, style: const TextStyle(fontSize: 11, color: Color(0xFF94A3B8))),
+          Text(title, style: TextStyle(fontSize: 11, color: AppPalette.rgb(0xFF94A3B8))),
           const SizedBox(height: 4),
           Text(
             value,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 16,
               fontWeight: FontWeight.w700,
-              color: Color(0xFFF8FAFC),
+              color: AppPalette.rgb(0xFFF8FAFC),
             ),
           ),
         ],
@@ -174,9 +196,9 @@ class BacktestReportPanel extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
       child: Column(
         children: [
-          const Align(
+          Align(
             alignment: Alignment.centerLeft,
-            child: Text('净值（直接用回测曲线）', style: TextStyle(fontSize: 11, color: Color(0xFF94A3B8))),
+            child: Text('净值（直接用回测曲线）', style: TextStyle(fontSize: 11, color: AppPalette.rgb(0xFF94A3B8))),
           ),
           Expanded(
             child: EquityCurveChart(
@@ -186,9 +208,9 @@ class BacktestReportPanel extends StatelessWidget {
               onTapX: onJumpX,
             ),
           ),
-          const Align(
+          Align(
             alignment: Alignment.centerLeft,
-            child: Text('回撤（同一条净值上的峰-当前）', style: TextStyle(fontSize: 11, color: Color(0xFF94A3B8))),
+            child: Text('回撤（同一条净值上的峰-当前）', style: TextStyle(fontSize: 11, color: AppPalette.rgb(0xFF94A3B8))),
           ),
           Expanded(
             child: DrawdownCurveChart(
@@ -205,22 +227,22 @@ class BacktestReportPanel extends StatelessWidget {
     if (result.trades.isEmpty) {
       final open = result.openPosition;
       return Padding(
-        padding: const EdgeInsets.all(12),
+        padding: EdgeInsets.all(12),
         child: Text(
           open == null
               ? '没有闭合交易'
               : '没有闭合交易，期末仍持仓 数量${open.quantity} 浮盈 ${formatMoney(open.unrealizedPnL)}',
-          style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 13),
+          style: TextStyle(color: AppPalette.rgb(0xFF94A3B8), fontSize: 13),
         ),
       );
     }
     final link = BacktestLinkIndex(result);
-    const headerStyle = TextStyle(
+    final headerStyle = TextStyle(
       fontSize: 11,
       fontWeight: FontWeight.w600,
-      color: Color(0xFF94A3B8),
+      color: AppPalette.rgb(0xFF94A3B8),
     );
-    const cellStyle = TextStyle(fontSize: 11, color: Color(0xFFE2E8F0));
+    final cellStyle = TextStyle(fontSize: 11, color: AppPalette.rgb(0xFFE2E8F0));
     return LayoutBuilder(
       builder: (context, constraints) {
         return SingleChildScrollView(
@@ -246,15 +268,15 @@ class BacktestReportPanel extends StatelessWidget {
                 defaultVerticalAlignment: TableCellVerticalAlignment.middle,
                 border: TableBorder(
                   horizontalInside: BorderSide(
-                    color: Colors.white.withValues(alpha: 0.08),
+                    color: AppPalette.rgb(0xFFFFFFFF).withValues(alpha: 0.08),
                   ),
                   verticalInside: BorderSide(
-                    color: Colors.white.withValues(alpha: 0.05),
+                    color: AppPalette.rgb(0xFFFFFFFF).withValues(alpha: 0.05),
                   ),
                 ),
                 children: [
                   TableRow(
-                    decoration: const BoxDecoration(color: Color(0xFF1E293B)),
+                    decoration: BoxDecoration(color: AppPalette.rgb(0xFF1E293B)),
                     children: [
                       _th('组', headerStyle),
                       _th('净利', headerStyle),
@@ -299,10 +321,10 @@ class BacktestReportPanel extends StatelessWidget {
     final exitSig = link.exitSignalOf(t);
     final groupLabel = link.rounds.tradeGroupLabel(t);
     final pnlColor =
-        t.netPnL >= 0 ? kStrategyBuyColor : const Color(0xFFFF8A65);
+        t.netPnL >= 0 ? kStrategyBuyColor : AppPalette.rgb(0xFFFF8A65);
     return TableRow(
       decoration: BoxDecoration(
-        color: selected ? const Color(0x334FC3F7) : null,
+        color: selected ? AppPalette.rgb(0x334FC3F7) : null,
       ),
       children: [
         _tdTap(
@@ -342,20 +364,20 @@ class BacktestReportPanel extends StatelessWidget {
     final link = BacktestLinkIndex(result);
     final sigs = result.signals;
     if (sigs.isEmpty) {
-      return const Padding(
+      return Padding(
         padding: EdgeInsets.all(12),
-        child: Text('没有策略信号', style: TextStyle(color: Color(0xFF94A3B8))),
+        child: Text('没有策略信号', style: TextStyle(color: AppPalette.rgb(0xFF94A3B8))),
       );
     }
-    const headerStyle = TextStyle(
+    final headerStyle = TextStyle(
       fontSize: 11,
       fontWeight: FontWeight.w600,
-      color: Color(0xFF94A3B8),
+      color: AppPalette.rgb(0xFF94A3B8),
     );
-    const cellStyle = TextStyle(fontSize: 11, color: Color(0xFFE2E8F0));
-    const condStyle = TextStyle(
+    final cellStyle = TextStyle(fontSize: 11, color: AppPalette.rgb(0xFFE2E8F0));
+    final condStyle = TextStyle(
       fontSize: 10,
-      color: Color(0xFFCBD5E1),
+      color: AppPalette.rgb(0xFFCBD5E1),
       height: 1.3,
     );
     return LayoutBuilder(
@@ -381,15 +403,15 @@ class BacktestReportPanel extends StatelessWidget {
                 defaultVerticalAlignment: TableCellVerticalAlignment.middle,
                 border: TableBorder(
                   horizontalInside: BorderSide(
-                    color: Colors.white.withValues(alpha: 0.08),
+                    color: AppPalette.rgb(0xFFFFFFFF).withValues(alpha: 0.08),
                   ),
                   verticalInside: BorderSide(
-                    color: Colors.white.withValues(alpha: 0.05),
+                    color: AppPalette.rgb(0xFFFFFFFF).withValues(alpha: 0.05),
                   ),
                 ),
                 children: [
                   TableRow(
-                    decoration: const BoxDecoration(color: Color(0xFF1E293B)),
+                    decoration: BoxDecoration(color: AppPalette.rgb(0xFF1E293B)),
                     children: [
                       _th('方向', headerStyle),
                       _th('信号K', headerStyle),
@@ -434,10 +456,10 @@ class BacktestReportPanel extends StatelessWidget {
     final t = link.tradeForSignal(s.signalId);
     final sideLabel = link.rounds.sideLabel(s);
     final sideColor =
-        side == null ? const Color(0xFF94A3B8) : strategySideColor(side);
+        side == null ? AppPalette.rgb(0xFF94A3B8) : strategySideColor(side);
     return TableRow(
       decoration: BoxDecoration(
-        color: selected ? const Color(0x33D500F9) : null,
+        color: selected ? AppPalette.rgb(0x33D500F9) : null,
       ),
       children: [
         _tdTap(
@@ -477,10 +499,10 @@ class BacktestReportPanel extends StatelessWidget {
             t == null ? '-' : formatMoney(t.netPnL),
             style: cellStyle.copyWith(
               color: t == null
-                  ? const Color(0xFF94A3B8)
+                  ? AppPalette.rgb(0xFF94A3B8)
                   : (t.netPnL >= 0
                       ? kStrategyBuyColor
-                      : const Color(0xFFFF8A65)),
+                      : AppPalette.rgb(0xFFFF8A65)),
             ),
           ),
         ),
@@ -512,11 +534,11 @@ class BacktestReportPanel extends StatelessWidget {
   Widget _attribution(BacktestResult result) {
     final rows = result.rulePerformances;
     if (rows.isEmpty) {
-      return const Padding(
+      return Padding(
         padding: EdgeInsets.all(12),
         child: Text(
           '没有规则归因。先跑出信号后，这里会按买/卖条件分别统计。',
-          style: TextStyle(color: Color(0xFF94A3B8)),
+          style: TextStyle(color: AppPalette.rgb(0xFF94A3B8)),
         ),
       );
     }
@@ -527,7 +549,7 @@ class BacktestReportPanel extends StatelessWidget {
         final p = rows[i];
         final side = p.side == TradeSide.buy ? '买规则' : '卖规则';
         return Card(
-          color: const Color(0xFF1E293B),
+          color: AppPalette.rgb(0xFF1E293B),
           margin: const EdgeInsets.only(bottom: 8),
           child: Padding(
             padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
@@ -536,7 +558,7 @@ class BacktestReportPanel extends StatelessWidget {
               children: [
                 Text(
                   '$side  ${p.ruleId}',
-                  style: const TextStyle(fontSize: 12, color: Color(0xFF94A3B8)),
+                  style: TextStyle(fontSize: 12, color: AppPalette.rgb(0xFF94A3B8)),
                 ),
                 const SizedBox(height: 4),
                 Text(
@@ -547,7 +569,7 @@ class BacktestReportPanel extends StatelessWidget {
                 Text(
                   '信号 ${p.signalCount}  · 接单 ${p.acceptedOrderCount}  · 成交 ${p.filledCount}  · 闭合 ${p.tradeCount}\n'
                   '胜率 ${formatPctFraction(p.winRate)}  · 净 ${formatMoney(p.netProfit)}  · 笔均 ${formatMetricNum(p.avgTrade)}  · PF ${formatMetricNum(p.profitFactor)}',
-                  style: const TextStyle(fontSize: 11, color: Color(0xFFCBD5E1), height: 1.4),
+                  style: TextStyle(fontSize: 11, color: AppPalette.rgb(0xFFCBD5E1), height: 1.4),
                 ),
               ],
             ),

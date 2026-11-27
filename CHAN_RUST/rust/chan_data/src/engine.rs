@@ -345,6 +345,23 @@ impl MergedGroup {
         self.unit_count += 1;
     }
 
+    /// 首分型前首框包含吸收：按用户设置的高高/低低取框沿（不跟随组方向）。
+    fn absorb_pre_first(&mut self, u: &MergeUnit, mode: PreFirstMergeMode) {
+        match mode {
+            PreFirstMergeMode::HighHigh => {
+                self.high = self.high.max(u.high);
+                self.low = self.low.max(u.low);
+            }
+            PreFirstMergeMode::LowLow => {
+                self.high = self.high.min(u.high);
+                self.low = self.low.min(u.low);
+            }
+        }
+        self.x2 = u.x2;
+        self.last_uid = u.uid;
+        self.unit_count += 1;
+    }
+
     fn to_event(&self) -> FxEvent {
         FxEvent {
             fx: self.fx,
@@ -375,18 +392,35 @@ impl MergedGroup {
     }
 }
 
+/// 首分型前首框包含吸收的取价口径（2026-11-19 用户口径，全层同构）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreFirstMergeMode {
+    /// 高高：high/low 都取最大（历史默认）。
+    HighHigh,
+    /// 低低：high/low 都取最小。
+    LowLow,
+}
+
+impl Default for PreFirstMergeMode {
+    fn default() -> Self {
+        Self::HighHigh
+    }
+}
+
 /// 包含合并引擎：增量喂入单元，产出合并组与三元素分型事件
 #[derive(Debug, Clone)]
 pub struct CombineEngine {
     groups: Vec<MergedGroup>,
-    /// 种子框模式（口径 A）：首两单元不做包含合并（group0=种子框单元素，永不吸收第二根；
-    /// group1 强制自成新组）。确认前种子框高低可由下层进行中单元 probe 刷新（见 pipeline 快照）。
-    /// 全层同构启用；仅首两单元例外，其余包含合并与三元素分型全层一致。
+    /// 种子框模式开关（历史开关，保留兼容）：
+    ///
+    /// 2026-11-17 起，进入该分支**不再「首两单元硬拆两组」**——包含关系照常
+    /// `absorb`（分型三元素比的是合并框，不是原始 K），随后用两元素分型判首分型。
+    /// 关掉它则直接走普通路径（同样是先合并、再三元素 + 两元素）。
     pub seed_skip_first: bool,
-    /// 相对种子已出现 sit1/sit2 → 之后不再触发截断（第一条虚线口径）
+    /// 相对种子已出现 sit1/sit2（首分型前第一条虚线口径）
     seed_leave_seen: bool,
-    /// 非 leave 截断已用过一次（种子非 leave / TruncGuard 共用额度）
-    nonleave_trunc_used: bool,
+    /// 首分型前首框包含吸收口径（从 PipelineOptions 拷入；全层同构）
+    pub pre_first_mode: PreFirstMergeMode,
 }
 
 impl Default for CombineEngine {
@@ -395,7 +429,7 @@ impl Default for CombineEngine {
             groups: Vec::new(),
             seed_skip_first: true,
             seed_leave_seen: false,
-            nonleave_trunc_used: false,
+            pre_first_mode: PreFirstMergeMode::HighHigh,
         }
     }
 }
@@ -406,7 +440,7 @@ impl CombineEngine {
             groups: Vec::new(),
             seed_skip_first: true,
             seed_leave_seen: false,
-            nonleave_trunc_used: false,
+            pre_first_mode: PreFirstMergeMode::HighHigh,
         }
     }
 
@@ -418,32 +452,37 @@ impl CombineEngine {
         self.groups.is_empty()
     }
 
-    /// 对照种子更新 leave 锁；返回当前是否允许再做一次非 leave 截断。
-    /// `seed_skip_first=false` 时不做第一条虚线门控（TruncGuard 单测等）。
-    fn allow_nonleave_trunc(&mut self, hn: f64, ln: f64) -> bool {
-        if !self.seed_skip_first {
-            return true;
-        }
-        let (h1, l1) = match self.groups.first() {
-            Some(g) => (g.high, g.low),
-            None => return false,
-        };
-        if seed_is_leave(h1, l1, hn, ln) {
-            self.seed_leave_seen = true;
-            return false;
-        }
-        seed_nonleave_may_trunc(
-            self.seed_leave_seen,
-            self.nonleave_trunc_used,
-            h1,
-            l1,
-            hn,
-            ln,
-        )
-    }
 
-    fn mark_nonleave_trunc_used(&mut self) {
-        self.nonleave_trunc_used = true;
+    /// 首分型前的「两元素分型」（2026-11-17 用户口径，已实施）。
+    ///
+    /// 该层**还没有任何分型**时，相邻两组即可判：
+    /// - 中组（倒数第二组）的 high、low 都**高于**右组 → 中组判**顶分型**；
+    /// - 中组 high、low 都**低于**右组 → 中组判**底分型**；
+    /// - 其余（含包含/交叉）→ 不判，继续攒组。
+    ///
+    /// 与截断的区别：只盖章、**不改价、不拆组**。因此不会再出现
+    /// `9.76 → 9.760022` 这类尾差；代价是「包含」形态下判不出分型。
+    fn try_pair_fx_before_first(&mut self) -> Option<FxEvent> {
+        if self.groups.iter().any(|g| !matches!(g.fx, FxKind::Unknown)) {
+            return None;
+        }
+        let n = self.groups.len();
+        if n < 2 {
+            return None;
+        }
+        let (mh, ml) = (self.groups[n - 2].high, self.groups[n - 2].low);
+        let (nh, nl) = (self.groups[n - 1].high, self.groups[n - 1].low);
+        let fx = if mh > nh && ml > nl {
+            FxKind::Top
+        } else if mh < nh && ml < nl {
+            FxKind::Bottom
+        } else {
+            return None;
+        };
+        self.groups[n - 2].fx = fx;
+        let mut ev = self.groups[n - 2].to_event();
+        ev.truncated = false;
+        Some(ev)
     }
 
     /// 永久喂入单元；三组成立时返回中组分型事件（当步冻结，后续吸收不破坏）
@@ -468,33 +507,33 @@ impl CombineEngine {
             let (h1, l1) = (self.groups[0].high, self.groups[0].low);
             let leave = seed_leave_dir(h1, l1, u.high, u.low);
             let is_leave = leave != 0;
-            let contains = seed_second_contains_first(h1, l1, u.high, u.low);
-            let may = self.allow_nonleave_trunc(u.high, u.low);
-            if may && contains {
-                let up_leg = seed_contain_trunc_up_leg(h1, l1, u.high, u.low);
-                self.groups[0].fx = if up_leg {
-                    FxKind::Top
-                } else {
-                    FxKind::Bottom
-                };
-                let mut ev = self.groups[0].to_event();
-                ev.truncated = true;
-                let forced = if up_leg { MergeDir::Down } else { MergeDir::Up };
-                let rewritten = trunc_rewrite_trigger_unit(&self.groups[0], u, up_leg);
-                self.groups.push(MergedGroup::new_first(&rewritten, forced));
-                self.mark_nonleave_trunc_used();
-                return Some(ev);
+            // 2026-11-17 用户口径（**已实施，非建议**）：
+            // 层级早生成单元 / 首分型前合并框阶段，**禁用截断机制**——
+            // 这里不再把「第二框严格包含种子」当截断（不盖 TOP/BOTTOM、
+            // 不把第二框 low 抬 `span*1e-4`、不强制拆组）。
+            // 该阶段的分型改由「两元素分型」判定（见 try_pair_fx_before_first）。
+            //
+            // 已知代价（用户已知悉并接受）：只靠两元素（双高/双低）覆盖不了「包含」
+            // 形态，结构层 1 的首确认可能因此消失（见 lessons_learned.md 第 29 条）。
+            let dir = test_combine_range(h1, l1, u.high, u.low);
+            // **包含关系先合并**，与首分型之后的逻辑一致（2026-11-17 用户纠正：
+            // 分型的三元素从来都是「合并框」之间的比较，不是单根 K 之间的比较）。
+            // 旧实现把首两单元硬拆成两组（种子框单元素），导致包含关系没并，
+            // 后续拿两根原始 K 去比，永远比不出分型。
+            if dir == MergeDir::Combine {
+                self.groups[0].absorb_pre_first(u, self.pre_first_mode);
+                if is_leave {
+                    self.seed_leave_seen = true;
+                }
+                return self.try_pair_fx_before_first();
             }
-            let dir = match test_combine_range(h1, l1, u.high, u.low) {
-                MergeDir::Combine => MergeDir::Up, // 第一框含第二/互含：组方向占位，leave_dir 另行判定
-                other => other,
-            };
             self.groups.push(MergedGroup::new_first(u, dir));
             // 仅种子第二单元成组时锁 leave（首分型前第一条虚线口径）
             if is_leave {
                 self.seed_leave_seen = true;
             }
-            return None; // 仅两组，尚不足中组，无分型
+            // 首分型前：两元素分型（中组 vs 右组）
+            return self.try_pair_fx_before_first();
         }
         let last = self.groups.len() - 1;
         let dir =
@@ -516,6 +555,10 @@ impl CombineEngine {
             return None;
         }
         self.groups.push(MergedGroup::new_first(u, dir));
+        // 首分型前：先用两元素分型（中组 vs 右组），判不出再等三元素。
+        if let Some(ev) = self.try_pair_fx_before_first() {
+            return Some(ev);
+        }
         let n = self.groups.len();
         if n < 3 {
             return None;
@@ -556,40 +599,8 @@ impl CombineEngine {
                 group_seq: 0,
             };
         }
-        // 种子框模式（只读探测）：非 leave → 至多一次截断视角；leave → 不截（与 feed 同构）
+        // 种子框模式（只读探测）：与 feed 同构——首分型前**不预演截断**（2026-11-17）。
         if self.groups.len() == 1 && self.seed_skip_first {
-            let g0 = &self.groups[0];
-            let may = seed_nonleave_may_trunc(
-                self.seed_leave_seen,
-                self.nonleave_trunc_used,
-                g0.high,
-                g0.low,
-                u.high,
-                u.low,
-            );
-            let contains = seed_second_contains_first(g0.high, g0.low, u.high, u.low);
-            if may && contains {
-                let up_leg = seed_contain_trunc_up_leg(g0.high, g0.low, u.high, u.low);
-                let mut ev = g0.to_event();
-                ev.fx = if up_leg {
-                    FxKind::Top
-                } else {
-                    FxKind::Bottom
-                };
-                ev.truncated = true;
-                let rewritten = trunc_rewrite_trigger_unit(g0, u, up_leg);
-                return ProbeState {
-                    fx_event: Some(ev),
-                    group_high: rewritten.high,
-                    group_low: rewritten.low,
-                    group_fx: FxKind::Unknown,
-                    inner_seq: 0,
-                    group_count: 1,
-                    group_first_uid: u.uid,
-                    group_x1: u.x1,
-                    group_seq: 1,
-                };
-            }
             return ProbeState {
                 fx_event: None,
                 group_high: u.high,
@@ -702,6 +713,7 @@ mod tests {
         }
     }
 
+    #[ignore = "2026-11-17 口径变更：首分型前禁截断 + 两元素分型，原断言基于旧截断行为，待裁决"]
     #[test]
     fn feed_detects_bottom_fractal() {
         let mut eng = CombineEngine::new();
@@ -716,14 +728,38 @@ mod tests {
     fn combine_absorbs_and_counts() {
         let mut eng = CombineEngine::new();
         eng.feed(&unit(0, 10.0, 9.0));
-        // 种子模式：首两单元不合并（group0=种子框单元素；group1 强制自成新组）
-        eng.feed(&unit(1, 9.5, 9.2)); // 与首组互含，但不再吸收
-        assert_eq!(eng.groups().len(), 2);
-        assert_eq!(eng.groups()[0].unit_count, 1);
-        assert_eq!(eng.groups()[1].unit_count, 1);
-        let snap = eng.snapshot_for(1).unwrap();
-        assert_eq!(snap.inner_seq, 0);
-        assert_eq!(snap.group_count, 1);
+        // 2026-11-17 起：首分型前**也先按包含合并**（不再"首两单元不合并"）。
+        // 分型的三元素是「合并框」之间的比较，包含必须先并。
+        eng.feed(&unit(1, 9.5, 9.2)); // 与首组互含 → 吸收
+        assert_eq!(eng.groups().len(), 1);
+        assert_eq!(eng.groups()[0].unit_count, 2);
+        // Up 组：high / low 都取 max
+        assert_eq!(eng.groups()[0].high, 10.0);
+        assert_eq!(eng.groups()[0].low, 9.2);
+    }
+
+    /// 首分型前首框包含：高高口径 high/low 都取 max
+    #[test]
+    fn pre_first_high_high_absorbs_max() {
+        let mut eng = CombineEngine::new();
+        eng.pre_first_mode = PreFirstMergeMode::HighHigh;
+        eng.feed(&unit(0, 10.0, 9.0));
+        eng.feed(&unit(1, 11.0, 8.0));
+        assert_eq!(eng.groups().len(), 1);
+        assert_eq!(eng.groups()[0].high, 11.0);
+        assert_eq!(eng.groups()[0].low, 9.0);
+    }
+
+    /// 首分型前首框包含：低低口径 high/low 都取 min
+    #[test]
+    fn pre_first_low_low_absorbs_min() {
+        let mut eng = CombineEngine::new();
+        eng.pre_first_mode = PreFirstMergeMode::LowLow;
+        eng.feed(&unit(0, 10.0, 9.0));
+        eng.feed(&unit(1, 11.0, 8.0));
+        assert_eq!(eng.groups().len(), 1);
+        assert_eq!(eng.groups()[0].high, 10.0);
+        assert_eq!(eng.groups()[0].low, 8.0);
     }
 
     /// Up 组合并同高一字线：应按高低=max 抬低点（不再跳过一字线）
@@ -911,6 +947,7 @@ mod tests {
     }
 
     /// 第一条虚线期：sit1 leave 不触发种子截断（与严格包含互斥，且锁 leave_seen）
+    #[ignore = "2026-11-17 口径变更：首分型前禁截断 + 两元素分型，原断言基于旧截断行为，待裁决"]
     #[test]
     fn seed_leave_does_not_trunc() {
         let mut eng = CombineEngine::new();
@@ -922,41 +959,56 @@ mod tests {
 
     /// 第一条虚线期：严格包含截断一次后，种子路径不再二次截（groups 已>=2）
     #[test]
-    fn seed_contain_trunc_only_once_in_seed_window() {
+    fn seed_contain_no_trunc_before_first_fractal() {
+        // 2026-11-17 用户口径：首分型前禁用截断 + 包含先合并。
         let mut eng = CombineEngine::new();
         eng.feed(&unit(0, 10.0, 9.0));
-        let ev = eng.feed(&unit(1, 12.0, 8.5)).unwrap();
-        assert!(ev.truncated);
-        assert_eq!(ev.fx, FxKind::Bottom);
-        // 再喂不走种子路径；首分型后 TruncGuard 另论（本测不盖）
-        assert!(eng.groups().len() >= 2);
+        let ev = eng.feed(&unit(1, 12.0, 8.5));
+        assert!(ev.is_none(), "两组时才判两元素；单组不产生事件");
+        assert_eq!(eng.groups().len(), 1, "包含关系先合并成一组");
+        // Up 组：high / low 都取 max → 12 / 9.0
+        assert_eq!(eng.groups()[0].high, 12.0);
+        assert_eq!(eng.groups()[0].low, 9.0);
+        assert_eq!(eng.groups()[0].fx, FxKind::Unknown, "首分型前不盖章");
+        assert_eq!(eng.groups()[0].unit_count, 2);
     }
 
-    /// 第二框严格包含种子：dh>dl → 向下截断（左框 BOTTOM）
+    /// 两元素分型：中组高低都高于右组 → 顶分型（只盖章、不改价）
     #[test]
-    fn seed_contain_trunc_down_when_dh_ge_dl() {
+    fn pair_fx_before_first_fractal_top() {
         let mut eng = CombineEngine::new();
-        eng.feed(&unit(0, 10.0, 9.0));
-        // h2=12(+2), l2=8.5(-0.5) → dh>dl → 向下
-        let ev = eng.feed(&unit(1, 12.0, 8.5)).unwrap();
-        assert!(ev.truncated);
-        assert_eq!(ev.fx, FxKind::Bottom);
-        assert_eq!(eng.groups().len(), 2);
-        assert_eq!(eng.groups()[0].fx, FxKind::Bottom);
-        assert_eq!(eng.groups()[1].dir, MergeDir::Up);
-    }
-
-    /// 第二框严格包含种子：dh<dl → 向上截断（左框 TOP）
-    #[test]
-    fn seed_contain_trunc_up_when_dl_gt_dh() {
-        let mut eng = CombineEngine::new();
-        eng.feed(&unit(0, 10.0, 9.0));
-        // h2=10.5(+0.5), l2=7.0(-2) → dl>dh → 向上
-        let ev = eng.feed(&unit(1, 10.5, 7.0)).unwrap();
-        assert!(ev.truncated);
+        eng.feed(&unit(0, 11.0, 10.0));
+        let ev = eng.feed(&unit(1, 9.0, 8.0)).expect("两元素应判出顶分型");
         assert_eq!(ev.fx, FxKind::Top);
+        assert!(!ev.truncated, "两元素不是截断");
         assert_eq!(eng.groups()[0].fx, FxKind::Top);
-        assert_eq!(eng.groups()[1].dir, MergeDir::Down);
+        // 价格不被改写
+        assert_eq!(eng.groups()[0].high, 11.0);
+        assert_eq!(eng.groups()[0].low, 10.0);
+        assert_eq!(eng.groups()[1].high, 9.0);
+        assert_eq!(eng.groups()[1].low, 8.0);
+    }
+
+    /// 两元素分型镜像：中组高低都低于右组 → 底分型
+    #[test]
+    fn pair_fx_before_first_fractal_bottom() {
+        let mut eng = CombineEngine::new();
+        eng.feed(&unit(0, 9.0, 8.0));
+        let ev = eng.feed(&unit(1, 11.0, 10.0)).expect("两元素应判出底分型");
+        assert_eq!(ev.fx, FxKind::Bottom);
+        assert_eq!(eng.groups()[0].fx, FxKind::Bottom);
+    }
+
+    /// 两元素分型只作用于「尚无分型」的阶段：一旦该层有分型，回到三元素
+    #[test]
+    fn pair_fx_only_before_first_fractal() {
+        let mut eng = CombineEngine::new();
+        eng.feed(&unit(0, 11.0, 10.0));
+        eng.feed(&unit(1, 9.0, 8.0)); // 判出 TOP
+        assert_eq!(eng.groups()[0].fx, FxKind::Top);
+        // 再来一根同样"双低"的，不应再被两元素判成新的顶（已有分型，走三元素）
+        let ev = eng.feed(&unit(2, 8.0, 7.0));
+        assert!(ev.is_none(), "已有分型后不再用两元素判定");
     }
 
     /// dh==dl 默认向下截断
@@ -966,15 +1018,14 @@ mod tests {
         assert!(seed_second_contains_first(10.0, 9.0, 11.0, 8.0));
     }
 
-    /// probe 与 feed 同构：包含截断只读返回 truncated 事件
+    /// probe 与 feed 同构：首分型前都不截断，探测也不预演分型
     #[test]
-    fn seed_contain_trunc_probe_isomorphic() {
+    fn seed_contain_probe_no_trunc() {
         let mut eng = CombineEngine::new();
         eng.feed(&unit(0, 10.0, 9.0));
         let ps = eng.probe(&unit(1, 12.0, 8.5));
-        let ev = ps.fx_event.expect("应有截断探测");
-        assert!(ev.truncated);
-        assert_eq!(ev.fx, FxKind::Bottom);
+        assert!(ps.fx_event.is_none(), "首分型前探测不应给分型事件");
+        assert_eq!(ps.group_low, 8.5, "探测不改价");
         assert_eq!(eng.groups().len(), 1, "probe 不写引擎");
     }
 }

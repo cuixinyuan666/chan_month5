@@ -10,10 +10,11 @@ import 'bs_verdict_frame.dart';
 
 /// 每根 K0 × 每层 Kn 十字线快照（Rust `LevelSnap`，逐K当下冻结）。
 class LevelSnap {
-  /// 层级：1=K1(K0连线)，2=K2(K1连线)，…（旧称 n段）
+  /// 结构层号（0 起）：0=K0连线/笔，1=K1连线/线段，…（与 Rust `LevelSnap.level` 一致）
   final int level;
 
-  /// 当步所属 Kn 序号（进行中或刚冻结；首段确认前=null）
+  /// 当步所属该层单元序号（进行中或刚冻结；首确认前=Some(0) 预锚动态单元，
+  /// 关闭「层级早生成动态单元」时仍为 null）
   final int? unitIdx;
   final int unitDir;
 
@@ -355,12 +356,38 @@ class LevelBundle {
     this.pendingUnit,
   });
 
+  /// 只换合并框（首分型前口径重排用），其余字段原样带过去。
+  LevelBundle withCombineFrames(List<KlineCombineFrame> frames) {
+    return LevelBundle(
+      level: level,
+      confirms: confirms,
+      segments: segments,
+      unitBars: unitBars,
+      combineFrames: frames,
+      zsFrames: zsFrames,
+      buy1Frames: buy1Frames,
+      sell1Frames: sell1Frames,
+      buy2Frames: buy2Frames,
+      sell2Frames: sell2Frames,
+      buyNFrames: buyNFrames,
+      sellNFrames: sellNFrames,
+      bsVerdictFrames: bsVerdictFrames,
+      firstDir: firstDir,
+      firstDirX: firstDirX,
+      activeUnit: activeUnit,
+      segmentPolicy: segmentPolicy,
+      pendingUnit: pendingUnit,
+    );
+  }
+
   factory LevelBundle.fromJson(Map<String, dynamic> json) {
     return LevelBundle(
       level: (json['level'] as num?)?.toInt() ?? 1,
       confirms: (json['confirms'] as List? ?? const [])
           .map((e) => LevelConfirm.fromJson(Map<String, dynamic>.from(e as Map)))
           .toList(),
+      // 冻段/合并框：走完瘦包也必须解析。比例/斜率/节奏按冻段出现链算，
+      // 跳过会把中间步冻成「只有虚线」，和单步对不上。
       segments: (json['segments'] as List? ?? const [])
           .map((e) => LevelSegmentN.fromJson(Map<String, dynamic>.from(e as Map)))
           .toList(),
@@ -368,8 +395,10 @@ class LevelBundle {
           .map((e) => LevelUnitBar.fromJson(Map<String, dynamic>.from(e as Map)))
           .toList(),
       combineFrames: (json['combine_frames'] as List? ?? const [])
-          .map((e) =>
-              KlineCombineFrame.fromJson(Map<String, dynamic>.from(e as Map)))
+          .map(
+            (e) =>
+                KlineCombineFrame.fromJson(Map<String, dynamic>.from(e as Map)),
+          )
           .toList(),
       zsFrames: (json['zs_frames'] as List? ?? const [])
           .map((e) => ZSFrame.fromJson(Map<String, dynamic>.from(e as Map)))

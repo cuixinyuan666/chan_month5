@@ -7,6 +7,7 @@ import 'ml_feature_schema.dart';
 import 'ml_label_config.dart';
 import 'ml_split_config.dart';
 import 'ml_xgb_trainer.dart';
+import 'package:chan_kline/theme/app_palette.dart';
 
 /// ML 阶段：先设三截切分 → 加载 → 验证调参 → 测试只报一次并锁定。
 enum MlPreparePhase {
@@ -96,13 +97,14 @@ class _MlWorkbenchState extends State<MlWorkbench> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        const SizedBox(height: 36),
         _topBar(),
         if (widget.statusLine.isNotEmpty)
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
             child: Text(
               widget.statusLine,
-              style: TextStyle(fontSize: 11, color: Colors.grey.shade400),
+              style: TextStyle(fontSize: 11, color: AppPalette.rgb(0xFFBDBDBD)),
             ),
           ),
         Expanded(
@@ -127,9 +129,9 @@ class _MlWorkbenchState extends State<MlWorkbench> {
       _ => '加载中 · ${widget.code}',
     };
     return Material(
-      color: const Color(0xFF1E3A5F),
+      color: AppPalette.rgb(0xFF1E3A5F),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
         child: Row(
           children: [
             const Icon(Icons.psychology, color: Colors.white70, size: 18),
@@ -138,7 +140,7 @@ class _MlWorkbenchState extends State<MlWorkbench> {
               child: Text(
                 '$title · schema v${MlFeatureSchema.schemaVersion}'
                 '${widget.isXgbMode ? " · XGB" : " · LR"}',
-                style: const TextStyle(
+                style: TextStyle(
                   color: Colors.white,
                   fontSize: 13,
                   fontWeight: FontWeight.w600,
@@ -147,7 +149,7 @@ class _MlWorkbenchState extends State<MlWorkbench> {
             ),
             TextButton(
               onPressed: _busy ? null : widget.onExit,
-              style: TextButton.styleFrom(foregroundColor: Colors.orangeAccent),
+              style: TextButton.styleFrom(foregroundColor: AppPalette.rgb(0xFFFFAB40)),
               child: const Text('退出'),
             ),
           ],
@@ -166,7 +168,7 @@ class _MlWorkbenchState extends State<MlWorkbench> {
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 560),
         child: Card(
-          color: const Color(0xFF1A1A1A),
+          color: AppPalette.rgb(0xFF1A1A1A),
           child: Padding(
             padding: const EdgeInsets.all(20),
             child: SingleChildScrollView(
@@ -176,8 +178,8 @@ class _MlWorkbenchState extends State<MlWorkbench> {
                 children: [
                   Text(
                     '当前股票：${widget.code} · ${widget.period}',
-                    style: const TextStyle(
-                      color: Colors.white,
+                    style: TextStyle(
+                      color: AppPalette.rgb(0xFFFFFFFF),
                       fontSize: 16,
                       fontWeight: FontWeight.bold,
                     ),
@@ -190,12 +192,12 @@ class _MlWorkbenchState extends State<MlWorkbench> {
                             '特征 0-based；缺失=-9999999；模型带 code/period/schema。'
                         : 'α=发现后固定展望窗（非跳末）；时序三截；验证调参；测试只评估一次并锁定。\n'
                             '本阶段逻辑回归在内存拟合；不展示K线图。',
-                    style: TextStyle(color: Colors.grey.shade300, height: 1.4),
+                    style: TextStyle(color: AppPalette.rgb(0xFFE0E0E0), height: 1.4),
                   ),
                   const SizedBox(height: 12),
                   Text(
                     '训练器',
-                    style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
+                    style: TextStyle(color: AppPalette.rgb(0xFFBDBDBD), fontSize: 12),
                   ),
                   const SizedBox(height: 6),
                   SegmentedButton<MlTrainerKind>(
@@ -222,21 +224,21 @@ class _MlWorkbenchState extends State<MlWorkbench> {
                     const SizedBox(height: 10),
                     Text(
                       widget.errorText ?? '加载失败',
-                      style: const TextStyle(color: Colors.orangeAccent),
+                      style: TextStyle(color: AppPalette.rgb(0xFFFFAB40)),
                     ),
                   ],
                   if (widget.testLocked) ...[
                     const SizedBox(height: 8),
-                    const Text(
+                    Text(
                       '测试已锁定：不可改切分/展望窗/训练器后重跑。请点「退出」再重新进入。',
                       style:
-                          TextStyle(color: Colors.orangeAccent, fontSize: 12),
+                          TextStyle(color: AppPalette.rgb(0xFFFFAB40), fontSize: 12),
                     ),
                   ],
                   const SizedBox(height: 14),
                   Text(
                     '切分：${widget.splitConfig.summary}',
-                    style: const TextStyle(color: Colors.lightBlueAccent),
+                    style: TextStyle(color: AppPalette.rgb(0xFF40C4FF)),
                   ),
                   _ratioSlider(
                     label: '训练',
@@ -266,12 +268,12 @@ class _MlWorkbenchState extends State<MlWorkbench> {
                   ),
                   Text(
                     '测试（自动余量）$te% · 时序最末段',
-                    style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
+                    style: TextStyle(color: AppPalette.rgb(0xFFBDBDBD), fontSize: 12),
                   ),
                   const SizedBox(height: 8),
                   Text(
                     '展望窗：${widget.labelConfig.summary}',
-                    style: const TextStyle(color: Colors.lightBlueAccent),
+                    style: TextStyle(color: AppPalette.rgb(0xFF40C4FF)),
                   ),
                   _ratioSlider(
                     label: '窗K',
@@ -290,9 +292,9 @@ class _MlWorkbenchState extends State<MlWorkbench> {
                   ),
                   if (widget.isXgbMode) ...[
                     const SizedBox(height: 12),
-                    const Text(
+                    Text(
                       'XGB 超参',
-                      style: TextStyle(color: Colors.lightBlueAccent),
+                      style: TextStyle(color: AppPalette.rgb(0xFF40C4FF)),
                     ),
                     _ratioSlider(
                       label: '深度',
@@ -337,9 +339,9 @@ class _MlWorkbenchState extends State<MlWorkbench> {
                     SwitchListTile(
                       contentPadding: EdgeInsets.zero,
                       dense: true,
-                      title: const Text(
+                      title: Text(
                         '强制重训（关闭则指纹一致时可复用 model）',
-                        style: TextStyle(color: Colors.white70, fontSize: 12),
+                        style: TextStyle(color: AppPalette.rgb(0xB3FFFFFF), fontSize: 12),
                       ),
                       value: widget.forceXgbRetrain,
                       onChanged:
@@ -348,7 +350,7 @@ class _MlWorkbenchState extends State<MlWorkbench> {
                     Text(
                       '数据根：${widget.dataRoot.isEmpty ? "(未就绪)" : widget.dataRoot}',
                       style: TextStyle(
-                        color: Colors.grey.shade500,
+                        color: AppPalette.rgb(0xFF9E9E9E),
                         fontSize: 11,
                       ),
                     ),
@@ -389,7 +391,7 @@ class _MlWorkbenchState extends State<MlWorkbench> {
       children: [
         SizedBox(
           width: 36,
-          child: Text(label, style: const TextStyle(color: Colors.white70)),
+          child: Text(label, style: TextStyle(color: AppPalette.rgb(0xB3FFFFFF))),
         ),
         Expanded(
           child: Slider(
@@ -401,7 +403,7 @@ class _MlWorkbenchState extends State<MlWorkbench> {
             onChanged: onChanged,
           ),
         ),
-        Text(display, style: const TextStyle(color: Colors.white)),
+        Text(display, style: TextStyle(color: AppPalette.rgb(0xFFFFFFFF))),
       ],
     );
   }
@@ -425,7 +427,7 @@ class _MlWorkbenchState extends State<MlWorkbench> {
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 560),
         child: Card(
-          color: const Color(0xFF1A1A1A),
+          color: AppPalette.rgb(0xFF1A1A1A),
           child: Padding(
             padding: const EdgeInsets.all(20),
             child: Column(
@@ -434,8 +436,8 @@ class _MlWorkbenchState extends State<MlWorkbench> {
               children: [
                 Text(
                   '加载进度 · ${widget.code}',
-                  style: const TextStyle(
-                    color: Colors.white,
+                  style: TextStyle(
+                    color: AppPalette.rgb(0xFFFFFFFF),
                     fontSize: 16,
                     fontWeight: FontWeight.bold,
                   ),
@@ -444,7 +446,7 @@ class _MlWorkbenchState extends State<MlWorkbench> {
                   const SizedBox(height: 6),
                   Text(
                     widget.progressHint,
-                    style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
+                    style: TextStyle(color: AppPalette.rgb(0xFFBDBDBD), fontSize: 12),
                   ),
                 ],
                 const SizedBox(height: 12),
@@ -473,10 +475,10 @@ class _MlWorkbenchState extends State<MlWorkbench> {
     final done = cur > mine || widget.phase == MlPreparePhase.ready;
     final active = widget.phase == step;
     final color = done
-        ? Colors.lightGreenAccent
+        ? AppPalette.rgb(0xFFB2FF59)
         : active
-            ? Colors.lightBlueAccent
-            : Colors.grey;
+            ? AppPalette.rgb(0xFF40C4FF)
+            : AppPalette.rgb(0xFF9E9E9E);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
@@ -516,7 +518,7 @@ class _MlWorkbenchState extends State<MlWorkbench> {
     final r = widget.report;
     final shown = _visibleSamples;
     return ListView(
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+      padding: EdgeInsets.fromLTRB(12, 8, 12, 12),
       children: [
         if (r != null) _reportCard(r),
         const SizedBox(height: 8),
@@ -532,7 +534,7 @@ class _MlWorkbenchState extends State<MlWorkbench> {
         ),
         const SizedBox(height: 8),
         if (shown.isEmpty)
-          Text('无样本', style: TextStyle(color: Colors.grey.shade500))
+          Text('无样本', style: TextStyle(color: AppPalette.rgb(0xFF9E9E9E)))
         else
           for (final s in shown) _sampleCard(s),
       ],
@@ -548,7 +550,7 @@ class _MlWorkbenchState extends State<MlWorkbench> {
     final x = r.xgb;
 
     return Card(
-      color: const Color(0xFF1A2433),
+      color: AppPalette.rgb(0xFF1A2433),
       child: Padding(
         padding: const EdgeInsets.all(14),
         child: Column(
@@ -556,8 +558,8 @@ class _MlWorkbenchState extends State<MlWorkbench> {
           children: [
             Text(
               r.headline,
-              style: const TextStyle(
-                color: Colors.lightGreenAccent,
+              style: TextStyle(
+                color: AppPalette.rgb(0xFFB2FF59),
                 fontSize: 15,
                 fontWeight: FontWeight.w700,
               ),
@@ -565,39 +567,39 @@ class _MlWorkbenchState extends State<MlWorkbench> {
             const SizedBox(height: 6),
             Text(
               r.tuneSummary,
-              style: TextStyle(color: Colors.grey.shade300, fontSize: 12),
+              style: TextStyle(color: AppPalette.rgb(0xFFE0E0E0), fontSize: 12),
             ),
             Text(
               '股票 ${widget.code} · ${widget.period} · ${widget.splitConfig.summary}'
               ' · ${widget.labelConfig.summary}',
-              style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
+              style: TextStyle(color: AppPalette.rgb(0xFFBDBDBD), fontSize: 12),
             ),
             if (x != null) ...[
               const SizedBox(height: 4),
               Text(
                 '模型 ${x.modelPath}',
-                style: TextStyle(color: Colors.grey.shade500, fontSize: 11),
+                style: TextStyle(color: AppPalette.rgb(0xFF9E9E9E), fontSize: 11),
               ),
             ],
             const SizedBox(height: 6),
             Text(
               r.drift.labelRateSummary,
-              style: TextStyle(color: Colors.grey.shade300, fontSize: 12),
+              style: TextStyle(color: AppPalette.rgb(0xFFE0E0E0), fontSize: 12),
             ),
             Text(
               r.drift.driftSummary,
               style: TextStyle(
                 color:
-                    r.drift.alert ? Colors.orangeAccent : Colors.grey.shade300,
+                    r.drift.alert ? AppPalette.rgb(0xFFFFAB40) : AppPalette.rgb(0xFFE0E0E0),
                 fontSize: 12,
               ),
             ),
             if (widget.testLocked)
-              const Padding(
+              Padding(
                 padding: EdgeInsets.only(top: 6),
                 child: Text(
                   '🔒 测试已锁定一次评估：不可改比例重跑（退出 ML 后解锁）',
-                  style: TextStyle(color: Colors.orangeAccent, fontSize: 12),
+                  style: TextStyle(color: AppPalette.rgb(0xFFFFAB40), fontSize: 12),
                 ),
               ),
             const SizedBox(height: 10),
@@ -637,7 +639,7 @@ class _MlWorkbenchState extends State<MlWorkbench> {
                   : '说明：α用展望窗内live帧+asOf极值；超参只在验证集选；'
                       '测试锁定防窥探。仅供学习，不构成投资建议。',
               style: TextStyle(
-                color: Colors.grey.shade500,
+                color: AppPalette.rgb(0xFF9E9E9E),
                 fontSize: 11,
                 height: 1.35,
               ),
@@ -658,13 +660,13 @@ class _MlWorkbenchState extends State<MlWorkbench> {
             width: 100,
             child: Text(
               k,
-              style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
+              style: TextStyle(color: AppPalette.rgb(0xFFBDBDBD), fontSize: 12),
             ),
           ),
           Expanded(
             child: Text(
               v,
-              style: const TextStyle(color: Colors.white, fontSize: 13),
+              style: TextStyle(color: AppPalette.rgb(0xFFFFFFFF), fontSize: 13),
             ),
           ),
         ],
@@ -676,10 +678,10 @@ class _MlWorkbenchState extends State<MlWorkbench> {
     final ok = s.isCorrect == true;
     final mark = s.isCorrect == null ? '?' : (ok ? '√' : '×');
     final markColor = s.isCorrect == null
-        ? Colors.grey
+        ? AppPalette.rgb(0xFF9E9E9E)
         : ok
-            ? Colors.lightGreenAccent
-            : Colors.redAccent;
+            ? AppPalette.rgb(0xFFB2FF59)
+            : AppPalette.rgb(0xFFFF5252);
     final splitTag = switch (s.split) {
       MlSampleSplit.train => '训练',
       MlSampleSplit.valid => '验证',
@@ -689,7 +691,7 @@ class _MlWorkbenchState extends State<MlWorkbench> {
     final pred = s.predictScore;
     final adopted = pred != null && pred >= thr;
     return Card(
-      color: const Color(0xFF1A1A1A),
+      color: AppPalette.rgb(0xFF1A1A1A),
       margin: const EdgeInsets.only(bottom: 6),
       child: ListTile(
         dense: true,
@@ -704,12 +706,12 @@ class _MlWorkbenchState extends State<MlWorkbench> {
         title: Text(
           '[$splitTag${adopted ? "·采纳" : ""}] '
           '${s.side == 'B' ? '买' : '卖'} ${s.label} @x=${s.x}',
-          style: const TextStyle(color: Colors.white, fontSize: 13),
+          style: TextStyle(color: AppPalette.rgb(0xFFFFFFFF), fontSize: 13),
         ),
         subtitle: Text(
           '${s.openTime} · ${s.labelReason}'
           '${pred != null ? " · 经验分=${pred.toStringAsFixed(3)}" : ""}',
-          style: TextStyle(color: Colors.grey.shade500, fontSize: 11),
+          style: TextStyle(color: AppPalette.rgb(0xFF9E9E9E), fontSize: 11),
         ),
       ),
     );

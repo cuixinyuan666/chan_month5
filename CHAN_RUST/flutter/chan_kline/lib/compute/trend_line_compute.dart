@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import '../models/level_models.dart';
 import 'fx_extend_line_compute.dart';
+import 'parent_span_collect.dart';
 
 /// Kn趋势线：段内子线端点拟合支撑/压力（移植旧 `Math/TrendLine.py`）。
 ///
@@ -11,27 +12,26 @@ import 'fx_extend_line_compute.dart';
 
 enum TrendLineSide { inside, outside }
 
-class _TlPoint {
+/// 拟合用平面点。
+class FitPoint {
   final int x;
   final double y;
-  const _TlPoint(this.x, this.y);
-
-  double slopeTo(_TlPoint p) {
-    if (x == p.x) return double.infinity;
-    return (y - p.y) / (x - p.x);
-  }
+  const FitPoint(this.x, this.y);
 }
 
-class _TlLine {
-  final _TlPoint p;
+/// 拟合直线：过 anchor 点、给定斜率。
+class FitLine {
+  final FitPoint anchor;
   final double slope;
-  const _TlLine(this.p, this.slope);
+  const FitLine(this.anchor, this.slope);
 
-  double disTo(_TlPoint q) {
+  double yAt(double x) => anchor.y + slope * (x - anchor.x);
+
+  double disTo(FitPoint q) {
     if (slope.isInfinite || slope.isNaN) {
-      return (q.x - p.x).abs().toDouble();
+      return (q.x - anchor.x).abs().toDouble();
     }
-    return (slope * q.x - q.y + p.y - slope * p.x).abs() /
+    return (slope * q.x - q.y + anchor.y - slope * anchor.x).abs() /
         math.sqrt(slope * slope + 1);
   }
 }
@@ -51,13 +51,6 @@ class TrendLineBi {
     required this.endVal,
     required this.dir,
   });
-}
-
-LevelBundle? _bundleAtLevel(List<LevelBundle> levels, int level) {
-  for (final lv in levels) {
-    if (lv.level == level) return lv;
-  }
-  return null;
 }
 
 double _segBeginVal(LevelSegmentN s) {
@@ -116,9 +109,20 @@ double _initPeakSlope(int dir, TrendLineSide side) {
   return double.negativeInfinity;
 }
 
+double _slopeBetween(FitPoint a, FitPoint b) {
+  if (a.x == b.x) return double.infinity;
+  return (b.y - a.y) / (b.x - a.x);
+}
+
+bool _slopeOk(int dir, double slope) {
+  if (slope.isNaN) return false;
+  if ((dir > 0 && slope < 0) || (dir < 0 && slope > 0)) return false;
+  return true;
+}
+
 /// 旧 `cal_tl`：从首点扫峰值斜率。
-({_TlLine line, int idx}) _calTl(
-  List<_TlPoint> cP,
+(FitLine line, int idx) _calTl(
+  List<FitPoint> cP,
   int dir,
   TrendLineSide side,
 ) {
@@ -127,8 +131,8 @@ double _initPeakSlope(int dir, TrendLineSide side) {
   var idx = 1;
   for (var pointIdx = 0; pointIdx < cP.length - 1; pointIdx++) {
     final p2 = cP[pointIdx + 1];
-    final slope = p.slopeTo(p2);
-    if ((dir > 0 && slope < 0) || (dir < 0 && slope > 0)) continue;
+    final slope = _slopeBetween(p, p2);
+    if (!_slopeOk(dir, slope)) continue;
     if (side == TrendLineSide.inside) {
       if ((dir > 0 && slope > peakSlope) || (dir < 0 && slope < peakSlope)) {
         peakSlope = slope;
@@ -141,11 +145,44 @@ double _initPeakSlope(int dir, TrendLineSide side) {
       }
     }
   }
-  return (line: _TlLine(p, peakSlope), idx: idx);
+  return (FitLine(p, peakSlope), idx);
+}
+
+/// 点到线距离和最小拟合（≥2 点）；供极贴合线与趋势线共用。
+FitLine? calcMinDistFitLine(
+  List<FitPoint> points, {
+  required int dir,
+  required TrendLineSide side,
+}) {
+  if (points.length < 2) return null;
+  if (dir != 1 && dir != -1) return null;
+
+  if (points.length == 2) {
+    final a = points[0];
+    final b = points[1];
+    final slope = _slopeBetween(a, b);
+    if (!_slopeOk(dir, slope)) return null;
+    return FitLine(a, slope);
+  }
+
+  var cP = List<FitPoint>.from(points);
+  var bench = double.infinity;
+  FitLine? best;
+  while (true) {
+    final r = _calTl(cP, dir, side);
+    final dis = points.fold<double>(0, (s, p) => s + r.$1.disTo(p));
+    if (dis < bench) {
+      bench = dis;
+      best = r.$1;
+    }
+    cP = cP.sublist(r.$2);
+    if (cP.length <= 1) break;
+  }
+  return best;
 }
 
 /// 旧 `CTrendLine.cal`：隔笔取样 + 距离和最小。
-_TlLine? calcTrendLine(List<TrendLineBi> lst, TrendLineSide side) {
+FitLine? calcTrendLine(List<TrendLineBi> lst, TrendLineSide side) {
   if (lst.length < 3) return null;
   final lastDir = lst.last.dir;
   if (lastDir != 1 && lastDir != -1) return null;
@@ -155,89 +192,19 @@ _TlLine? calcTrendLine(List<TrendLineBi> lst, TrendLineSide side) {
   for (var i = lst.length - 1; i >= 0; i -= 2) {
     sampled.add(lst[i]);
   }
-  final allP = <_TlPoint>[
+  final allP = <FitPoint>[
     for (final bi in sampled)
       side == TrendLineSide.inside
-          ? _TlPoint(bi.beginX, bi.beginVal)
-          : _TlPoint(bi.endX, bi.endVal),
+          ? FitPoint(bi.beginX, bi.beginVal)
+          : FitPoint(bi.endX, bi.endVal),
   ];
   if (allP.isEmpty) return null;
-
-  var cP = List<_TlPoint>.from(allP);
-  var bench = double.infinity;
-  _TlLine? best;
-  while (true) {
-    final r = _calTl(cP, lastDir, side);
-    final dis = allP.fold<double>(0, (s, p) => s + r.line.disTo(p));
-    if (dis < bench) {
-      bench = dis;
-      best = r.line;
-    }
-    cP = cP.sublist(r.idx);
-    if (cP.length <= 1) break;
-  }
-  return best;
-}
-
-/// 父段区间（冻段或 active）。
-class _ParentSpan {
-  final int beginX;
-  final int endX;
-  final int confirmMax;
-  final int idx;
-
-  const _ParentSpan({
-    required this.beginX,
-    required this.endX,
-    required this.confirmMax,
-    required this.idx,
-  });
-}
-
-List<_ParentSpan> _collectParents(LevelBundle parentLv, int? asOf) {
-  final out = <_ParentSpan>[];
-  for (final s in parentLv.segments) {
-    if (s.dir != 1 && s.dir != -1) continue;
-    if (asOf != null && s.endConfirmX > asOf) continue;
-    if (s.beginPoleX < 0 || s.endPoleX < 0) continue;
-    out.add(_ParentSpan(
-      beginX: math.min(s.beginPoleX, s.endPoleX),
-      endX: math.max(s.beginPoleX, s.endPoleX),
-      confirmMax: s.endConfirmX,
-      idx: s.idx,
-    ));
-  }
-  final act = parentLv.activeUnit;
-  if (act != null && (act.dir == 1 || act.dir == -1)) {
-    if (asOf == null || act.x1 <= asOf) {
-      final lo = math.min(act.x1, act.x2);
-      final hi = asOf != null ? math.min(math.max(act.x1, act.x2), asOf) : math.max(act.x1, act.x2);
-      if (lo >= 0 && hi >= lo) {
-        final i = out.indexWhere((e) => e.idx == act.idx);
-        final span = _ParentSpan(
-          beginX: lo,
-          endX: hi,
-          confirmMax: asOf ?? act.x2,
-          idx: act.idx,
-        );
-        if (i >= 0) {
-          out[i] = span;
-        } else {
-          out.add(span);
-        }
-      }
-    }
-  }
-  out.sort((a, b) {
-    final c = a.beginX.compareTo(b.beginX);
-    return c != 0 ? c : a.idx.compareTo(b.idx);
-  });
-  return out;
+  return calcMinDistFitLine(allP, dir: lastDir, side: side);
 }
 
 List<TrendLineBi> _collectChildren(
   LevelBundle childLv,
-  _ParentSpan parent,
+  ParentSpan parent,
   int? asOf,
 ) {
   final raw = <TrendLineBi>[];
@@ -277,18 +244,17 @@ List<TrendLineBi> _collectChildren(
   return raw;
 }
 
-FxExtendRay? _lineToRay(_TlLine line, _ParentSpan parent, String kind) {
+FxExtendRay? _lineToRay(FitLine line, ParentSpan parent, String kind) {
   if (line.slope.isNaN || line.slope.isInfinite) return null;
-  double yAt(double x) => line.p.y + line.slope * (x - line.p.x);
   final x0 = parent.endX.toDouble();
   final x1 = parent.beginX.toDouble();
   return FxExtendRay(
     x0: x0,
-    y0: yAt(x0),
+    y0: line.yAt(x0),
     slope: line.slope,
     kind: kind,
     x1: x1,
-    y1: yAt(x1),
+    y1: line.yAt(x1),
   );
 }
 
@@ -299,12 +265,12 @@ List<FxExtendGroup> calcTrendLineGroupsForLevel({
   int? asOf,
 }) {
   // 方案B：子=displayKn，父=displayKn+1
-  final childLv = _bundleAtLevel(levels, displayKn);
-  final parentLv = _bundleAtLevel(levels, displayKn + 1);
+  final childLv = bundleAtLevel(levels, displayKn);
+  final parentLv = bundleAtLevel(levels, displayKn + 1);
   if (childLv == null || parentLv == null) return const [];
 
   final out = <FxExtendGroup>[];
-  for (final parent in _collectParents(parentLv, asOf)) {
+  for (final parent in collectParentSpans(parentLv, asOf)) {
     final children = _collectChildren(childLv, parent, asOf);
     if (children.length < 3) continue;
     final support = calcTrendLine(children, TrendLineSide.inside);

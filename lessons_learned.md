@@ -1,0 +1,373 @@
+---
+tags:
+  - chan/记忆
+  - chan-month5
+created: 2026-10-02
+date: 2026-10-02
+moc: "[[chan-month5/index-memory]]"
+---
+
+# lessons_learned（智能体常见错误与解法）
+
+> [!info] 定位
+> 记录智能体在本工程**反复犯的错**、**踩过的坑**及其**解法**，并收录用户转述词汇与「记录纪律」。
+> 本文件同时是「出错 → 怎么改」的落地清单与记录规范；AGENTS.md 仅保留一句话指针。
+
+## 记录纪律（开工前必读 · 原 AGENTS.md 迁移）
+
+> **⚠️ 重要性，不许当成「有空再看」**：
+> `lessons_learned.md` 记的是**本工程历史上真实踩过的坑**（PowerShell 吞反引号、GBK/UTF-8
+> 静默腐蚀、here-string 粘连、采样钟偷用最终态结构……）。
+> 这些坑**不会在报错里提示你**，只会让你默默写出一份「看起来对」的错误产物。
+> **读 AGENTS.md 而不读它，等于明知有雷还往里踩 —— 那是本工程最贵的浪费。**
+> 同理，`knowledge.md`（解释性概念）、`ROBOT_VERIFY.md`（验收流程）也都是**必读前置**。
+
+**① 开工前必读**：动本工程任何代码/脚本前，先读 `lessons_learned.md` 相应条目；
+命中的坑**直接按解法做**，不要重新踩一遍再自己总结。
+
+**② 必须记下来的（自动沉淀，不必等用户提醒）** —— 满足任一条，收尾时**当场追加到本文件**：
+
+- 自己**踩了坑**，或按现有文档做**结果不对**（含「照文档做却失败」）；
+- 发现了**新的、单看代码看不出来**的约束 / 隐性契约 / 环境事实（如编码、路径、性能量级）；
+- 找到**更优解法**，或推翻了自己先前的判断（连同推翻的理由）；
+- 某条**验收方法**有效且可复用（怎么证明自己对、怎么证明自己没做错）。
+
+**③ 不要记的**（防止表大失维护）：靠上下文就能猜准的常识；只属于本次改动的实现细节；
+能从代码直接读出来的东西；用户口述词汇表只收「映射到具体文件/脚本」或「不看一定会误解」的。
+
+**④ 写法**：追加到本文件对应小节末尾（格式：**现象 / 根因 / 解法**，能带复发日期更好）；
+同一坑**只记一次**，之后再犯说明没读表，要补「复发」一行。
+**同时**在 [`task-log.md`](task-log.md) 记本次任务 —— 两者分工：**task-log 记「做了什么」，lessons_learned 记「为什么不能那样做」**。
+
+**⑤ 含中文的 `.ps1` 一律加 UTF-8 BOM**（第 12 条），否则 PowerShell 5.1 会按 GBK 读并静默毁掉中文；
+中文正文优先用 `write` 工具落文件再字节拼接，**不要塞进 PowerShell 双引号命令行**（第 4/5/12 条）。
+
+## 一、用户转述词汇（只记两类）
+
+只收：**① 映射到本工程具体文件 / 脚本，检索时用得上；② 不看表就一定会误解的**。
+像 `wancheng`（完成）、`tianjia`（添加）这类靠上下文就能猜准的**一律不记** —— 表一大就没人维护，必然失效。
+
+| 用户写法 | 标准中文 | 本工程落点 |
+| --- | --- | --- |
+| `bianyi` / `compile` | 编译 | 跑 `CHAN_RUST/scripts/build_rust.ps1`；会杀旧 App 并自动启动新 App |
+| `chongqi` | 重启 | 同上：走 `build_rust.ps1`，不手动单独重启 |
+| `yanzheng` | 验证 | 机器人验证模式（`session.json active=true`）或冷启动连续单步验收 |
+| `queren` / `ok` | 确认 | 等同「确认执行」门禁里的「确认」，有授权效力 |
+| `ceshi` / `run test` | 测试 | 实跑一次验证，不是「写测试代码」 |
+
+## 二、常犯的错与解法
+
+### 1. 把 bianyi 当成「变异」
+- **现象**：用户说需要 bianyi，我理解成「变异」，先提了 App 内快捷键方案，绕了三个来回才对上「编译」。
+- **根因**：拼音多音同形，靠猜。
+- **解法**：拼音有歧义就停下来问、并复述「我听到的是 X，指的是 Y 吗」；本工程 bianyi 一律指**编译**。
+
+### 2. 把编译输出重定向到 build_windows_last.log
+- **现象**：脚本第 70 行报 out-file 文件正被另一进程使用，flutter build 没跑起来就退出。
+- **根因**：该文件是脚本自己的 buildLog（第 13 行）要写的，重定向抢占了句柄。
+- **解法**：智能体输出重定向到 **build_rust_run.log**；build_windows_last.log 是 flutter 构建日志（UTF-16），**只看不改**。
+
+### 3. 前台跑 build_rust.ps1
+- **现象**：工具调用一直不返回。
+- **根因**：脚本末尾以前台方式执行 exe，会阻塞到用户手动关掉 App。
+- **解法**：一律用 Start-Process 后台跑，再轮询 build_rust_run.log 判成败。
+
+### 4. PowerShell 吞掉反引号
+- **现象**：python -c 里的反引号被当转义符，字符串悄悄变形，assert 莫名失败或写出残缺内容。
+- **解法**：Python 里用 chr(96) 代替反引号；中文内容走 PowerShell 单引号数组或 JSON 文件中转，**别塞进双引号命令行**。
+
+### 5. here-string 终止符粘连
+- **现象**：写成 @Set-Content 被解析成一句，报「表达式或语句中包含意外的标记」。
+- **解法**：here-string 的收尾 @ 必须**独占一行**，后面换行再写下一条命令；不稳定时改用数组逐行写文件。
+
+### 6. App 正在运行时编译
+- **现象**：DLL / exe 被占用，复制或覆盖失败。
+- **根因**：Windows 不允许覆盖正在运行的 exe。
+- **解法**：让脚本先杀旧 App（它第 22-25 行已内置 Stop-Process），不要在 App 运行时手工编。
+
+
+### 7. shell 中写 Dart 源码（本轮特殊严重）
+- **现象**：写 lib/agent_handoff/ 时连续不上十几次：反引号被吞、$ 被吞、内层引号提前闭合、大量中文触发 PSReadLine 渲染崩溃。analyze 从 39 个 issue 挤到 0。
+- **根因**：中文 + $ + 引号混在 PowerShell 命令行里，多层转义后已经不是原文了。
+- **解法**：**写含中文或 $ 的源码文件，统一走 base64 中转**：用 Python 在本地拼行并 base64 编码→ 写入 .b64 文件 → 另一次 Python 解码追加。已实测可行（${dir.path} / $filePath 都完整保留）。
+- **降级手法**：若必须直接写，用 chr(36) 代 $、chr(39) 代引号、chr(10) 换行，**不用字面字符**。
+- **额外提醒**：PowerShell 命令行容易超长时，终端会报 PSReadLine 渲染崩溃且命令不执行 —— 此时**不能假设已写入**，必须回读文件核对。
+- **复发（2026-10-09）**：往 `task-log.md` 追加长条目时用了 **双引号 here-string**，反引号被当转义符吞掉 —— `` `b `` 变退格、`` `f `` 变换页、其余直接消失，把 `backtest_result`/`flutter`/`befdc42f`/`build_rust.ps1` 的首字母吃掉，中文与代码块完好所以**肉眼看不出来**。修法：用 write 工具把整段落到临时 `.md`，再用 `ReadAllLines`/`WriteAllLines` 字节拼接，**全程不经过 PowerShell 字符串字面量**。同批次还踩了第二个坑：`$s.Replace('中文A','中文B')` 在命令行里因代码页问题匹配不上（报 MISS），**命令里带中文做替换不可靠**，同样改走文件拼接。
+- **一句话**：**凡是「要写进文件的长文本」或「含中文的替换」，都不许走 PowerShell 字符串字面量**——先 write 落盘，再字节搬运。
+## 三、怎么用
+
+- 自己犯过错就顺手追加一条「现象 / 根因 / 解法」。
+- 只记**复发代价高**的错；一次性的手滑不记。
+- 与 AGENTS.md 冲突时，以 AGENTS.md 为准。
+
+### 8. K1+ 采样钟取最终态结构 → 信号被推到段尾（动态段口径红线）
+
+- **红线**：本工程回测核心口径**始终使用动态段**（当下性）。凡涉及「是否仅使用冻段」「要不要等段定型再判定」「采样钟用最终态还是 asOf 当时」的决策，**必须先文字问清楚用户**，不得默认按冻段实现。见 AGENTS.md「动态段 / 冻段专项门禁」。
+- **现象**：K1 及以上的穿越条件按「一段一个采样点」采样、且采样点集合取自**最终态**结构，于是「当时正在生长、还没定型」的那一段在事后重放时被划走 → asOf 那一刻**根本没有 K1 采样点** → 穿越信号凭空消失或被推到段尾。不崩、不报错，`flutter analyze` 与测试全过。
+- **真实案例（2026-10-06，002003 / 1m）**：条件「K1均线5 下穿 K1未确认中枢中轴」。实测 21/21 条买信号**全部落在段尾**；而真实当时本可在第 530/710/890 根出场，寻优却记成 536/723/891（晚 6~13 根）。变量取值是对的（两仓同根同为 10.152 / 10.155，冻结仓不回写成立），**错的是采样时刻**。
+- **两轮修法（关键教训）**：第一轮「把 asOf 当时的段划分喂回采样」**实测零变化**——回测是**一次性判全区间**的，而「第 x 根有采样点」只有走到 x 才知道，单点求值永远拿不到。真正修法必须把采样点改成**逐 bar**：每一个「那一刻存在正在生长段」的 bar 都是采样点，段定型那根也算。
+- **规则**：①写/改任何 `evalClock == knSample` 的求值路径，不得把最终态 `levels` 当采样钟；②「仅用冻段」= 引入未来函数口径，必须先问用户；③**K0 变量无此问题**（每根 K 都是采样点），只有 K1+ 穿越/事件受影响。
+- **通用排查手法 · 前缀重放对拍**：「只喂 `bars[0..asOf]` 重建冻结仓」与「全量冻结仓取 `discoveryX <= asOf`」逐条比信号。
+  - 变量值一致、信号一致 → 因果干净；
+  - 变量值一致、信号**不一致** → 问题在采样钟/求值路径，不在取值；
+  - 变量值就不一致 → 冻结仓被回写，是硬性未来函数。
+  - **取样注意**：探针要选**远离末根**的 asOf。拿末根当基准会被边界效应误导（最后一根没有下一根可撮合）；正确做法是全量跑到底再按 `discoveryX <= a` 过滤当基准。
+- **修后的实测代价（数字变差是真实水平）**：同一条策略 K1 采样点 100 → 983，买信号 21（全段尾）→ 37（段尾 12 / 段内 25），全区间 21 笔 / 胜率 85.7% / PF 41 → 31 笔 / 胜率 51.6% / PF 6.0 / 回撤 2→13。原来那 85% 有一半是靠「只在段尾触发」这个实盘做不到的筛选撑起来的。
+
+### 9. 未确认中枢空档导致「跨空档比较」（实测属高层偶发）
+
+- **现象**：未确认中枢是「盖住才有数」，框外的格会被丢；穿越判定用 `aligned[i-1]`，于是会拿「上一次有值的点」比较，中间可能隔着若干空档 → 信号迟到、形态与图上对不上。
+- **实测严重程度（002003 / 1m / 988 根）**：K0 空档 **0** 个（988 根全部有值）、K1 空档 **0** 个（983 个采样点全有值）、**K2 空档 128 个（13%）**。K0/K1 结构在 1 分钟图上极密集，几乎每根都被某个框盖住。
+- **结论**：主力层 K0/K1 **免疫**，用它们的穿越条件时可忽略；只有 K2/K3 这类中枢稀疏的层才会出现。写文档时不要把它说成普遍问题（我第一版就写重了，被实测推翻）。
+- **规则**：若将来在 K2+ 出现「图上跌破那根没信号、信号落在后面几根」，先查是不是它。修法方向：空档之后的第一格判 false、切断比较链（相邻两点必须真的相邻）。
+
+### 10. 「漂亮数字」先怀疑默认成本，不是策略神
+
+- **现象**：回测/寻优结果胜率 90%、盈利因子 40+，实测加一次真实成本就由盈转亏。
+- **真实案例（2026-10-06，002003 / 1m）**：默认「手续费 0、滑点 0、数量 100 股」下，21 笔净利只有 **+40.00 元**——末根收盘 10.6 元，100 股名义仅 1060 元，一次来回滑点 0.02 元/股 = 2 元/手，21 笔就把利润吃光。加万3 + 0.01 后：胜率 85.7%→**19.0%**、净利 -14.88、PF 41→0.41；满仓 9400 股同费率：胜率 20%、净利 -1151。
+- **规则**：看到异常好的数字，先核两件事——**是不是零手续费/小仓位造出来的**、**是不是信号被推到了段尾才出现**。评估时也确认成交价假设（该例中同根收盘 vs 次周期开盘反而是次周期开盘更好，**不要先入为主**）。
+
+### 11. 修复只落在「测试/机器人那条路」，主图合并链漏了一步（回归测不到）
+
+- **现象**：功能明明已实现、测试全绿、真机却不生效。默认数据上「K1均线5 下穿 K1未确认中枢中轴」该在 K0#71 出信号，寻优却记在 K0#74（段尾）；`analyze` 0 error、`kn_clock_causality_test` 6 条全过。
+- **根因**：**同一份能力有两条实现路径**——`StepFreezeMerger.mergeRebuildCombineFreeze`（独立 harness / 机器人验证）与主图 `main.dart` 里逐个 statics 手写的合并链（`_rebuildCombine` + 「一次性走完」循环）。采样钟那一步只加在前者；主图那条 `knClockTimeline` 恒空，`_knSamples` 的 `!knClock.isEmpty` 守卫不成立 → 静默退回冻段口径，**不报错、不崩**。
+- **规则**：①改「两条路径共有能力」时，先 `grep` 出**全部**调用方，别只改被测到的那条；②widget 私有方法测不到时，加**源码守卫测试**（读 `main.dart` 断言该调用点存在）；③加「拿掉关键参数结果必须变」的**敏感性断言**，否则测试可能在测空气。
+- **附带坑**：手工逐字段清会话冻结仓时容易漏新字段（本次漏 `knClockTimeline`）。而记录函数遇到 `lastAsOf >= stepIdx` 会直接跳过 → 换股后旧时间线把新数据**钉死**。新字段一律加进 `StepFreezeSessionState.clear()` 并同步各清空点。
+- **判别手法**：口径类静默退化最省事的探针 = **同一条件两条路径各跑一遍比信号落点**（本次 71 vs 74，一眼定位）。
+
+
+### 12. 非 UTF-8 字节被当 UTF-8 解码 → U+FFFD 静默腐蚀 md
+- **现象**：`task-log.md` 里 8 行出现 54 个 `U+FFFD`，编辑器里部分地方显示成 `?` 或 U+FFFD 替换符，**肉眼看不出少了字**。
+- **识别特征（据实对撞反推，不是猜的）**：行内混着 `֤` / `ĸ` / `ȷ` 这类怪字符 —— 那是**恰好构成合法 UTF-8 的字节对被侥幸解出来**；解不出来的字节对才变 `U+FFFD`。一个汉字（GBK 2 字节）对应 **2 个 U+FFFD**。
+- **坑点：字节流本身是合法 UTF-8**，`U+FFFD` 是被**当作正常字符写进文件**的。所以「严格模式解码校验」查不出来，只能扫码点：
+  `([regex]::Matches($s,[regex]::Escape([string][char]0xFFFD))).Count`
+- **根因链**：写文件的工具产出**无 BOM 的 UTF-8**，PowerShell 5.1 按系统 ANSI（中文机 = GBK）读 `.ps1` → 中文全毁。
+- **解法**：
+  1. **含中文的 `.ps1` 一律加 BOM**：`[IO.File]::WriteAllText($p,$t,(New-Object Text.UTF8Encoding($true)))`（加完头三字节应是 `239,187,191`）。
+  2. 或干脆别让 PowerShell 碰中文：正文走 `write` 工具落到临时 `.md`，脚本只做 `[IO.File]::ReadAllLines/WriteAllLines` 字节拼接（与第 5 条同源思路）。
+- **复发（2026-10-09 亲手再踩）**：本轮修 task-log 时，用 `write` 工具生成的中文 `.ps1` 没加 BOM → 解析器直接报「字符串缺少引号」才发现。**这就是同一个坑**，说明光记「写 task-log 要小心」不够，得记「中文脚本一律加 BOM」。
+- **教训**：修复时**只能从 git 历史恢复**。先 `git log --follow` 逐 commit 扫 U+FFFD 计数找引入点，再看父提交是否干净；本次 `f830df35` 的父提交里**根本没有**这些行（是新增时就已损坏），故**原文永久不可恢复** → 立碑标注「不可恢复」，**不要用推测去填补历史记录**。
+
+### 13. 前缀重放对拍时，基线侧漏传时钟 → 假失败
+- **现象**：验证 S3（K1+ 量/笔改用 asOf 当时的段）时，逐 asOf 对拍「新口径 vs 只喂 `bars[0..asOf]` 的前缀重放」，结果**新旧口径全部不符**，一度以为修复无效。
+- **根因**：前缀那一侧我传了 `knClock: null`，于是 `_knSamples` 退回**一段一样本**的采样格点（36 点 vs 7 点），比的是**采样密度**不是数值因果性。
+- **解法**：前缀重放侧**必须也传它自己的 `hp.knClock`**。两侧都用各自的时钟、同样式采样，才是对拍。
+- **判据**：`len` 不等时先怀疑采样格点，别急着怀疑数值。
+- **顺带**：一次修完要用**两条独立度量**说清楚，别混着报 ——
+  - 底层累计序列逐根 K 比对：`K2 129/988 个 asOf 有差异`
+  - 信号路径（`readEvalClockSeries`）采样序列比对：`K2 21/21 探针全部不符`
+  两个数都是真的，量的是不同东西；只报小的那个会让人以为影响很小。
+
+### 14. 验证「信号路径」别只验证「取值路径」
+- **现象**：`lookupTradeNumeric`（取值 / tooltip）已改对，但回测**出信号**走的是 `readEvalClockSeries` → `_plotEvalSeries`，是另一条链。
+- **解法**：改采样钟类逻辑后，用 `rg` 把该计算函数的**全部调用点**列出来，逐个判「在不在回测求值链上」。本工程里 `SUB.K{n}.VOLUME / TICK_COUNT` 的回测侧调用点**只有** `catalog_lookup.dart` 一处（`RAW.K{n}.VOLUME` 在 K1+ 本就返回空，目录规定 K1+ 只能走 `SUB.K{n}`）。
+- **画布 / tooltip 路径（`kline_chart.dart`、`bar_feature_lookup.dart`、`incremental_lookup.dart`）不必接采样钟** —— 那是冻结展示，允许用最终态，别顺手一起改。
+
+### 15. 已有权威实现就别再写一份「等价截断」
+- **现象**：S3 我第一反应是照用户描述，在 `catalog_lookup.dart` 里自己造一个 asOf 截断版 bundle。
+- **根因**：`KnClockTimeline.at(level, asOf)` 早就是按层分轨的**权威快照**（已确认段 + 当时动态段），且自带缓存 —— 再写一份就是**同口径两份实现**，将来必然漂移（第 11 条的病根）。
+- **解法**：接到既有权威源上。配套技巧：**把新 typedef 的字段名与既有 record 对齐**（`{List<LevelUnitBar> unitBars, LevelUnitBar? activeUnit}`），两边可直接互换，省掉一层搬运代码。
+- **推广**：动手前先问「这个口径是否已有单一出处」，尤其本工程刚重构过的那批模块。
+
+### 16. 图例/绘制类改动：图例小样必须复用画布的真实线型
+- **现象**：画布上区分开了「长虚线」和「点虚线」，图例小样却一律画三个圆点 —— **图例等于没改**。
+- **解法**：`dashPattern` 走同一套「按节距累加走线」算法（`CustomPaint` + 与画布同算法），不要在图例里另画一套近似。线型常量（如 `LegendDash`）集中到共享文件，画布与图例引用同一份，杜绝「各写各的字面量」。
+- **推广**：凡是「同一个语义在两处呈现」的地方（主线/副图、图例/tooltip、主图/ML 文案），都要有一条「同源」测试钉住。
+
+
+### 17. 改完 Dart 源码只看 analyze「条数」不看 error 行 → 编译错误伪装成「环境卡死」
+- **现象（2026-10-10 亲历，代价 = 一次 30 分钟的假故障排查）**：
+  机器人验证在阶段 1（App 内 spawn 的 `flutter test`）静默挂住 —— `status.json`
+  永远停在 `phase=running`、`flutter_tester.exe` CPU 零增长、App 主进程几乎不耗 CPU。
+  一度判成「App 与测试子进程抢 `.dart_tool` 死锁」「`flutter build` 退出 1 污染了产物」
+  「`-SkipBuild` 也挂所以不是构建问题」……全是**误判方向**。
+- **真因**：前一条 commit 在 `msg_history.dart` 的**单引号**字符串里写了
+  `'label=$roundRef-${roundCurrent-roundRef}'` —— **Dart 单引号字符串同样做插值**，
+  被解析成对 `MsgHistory.roundRef` 的引用，而该 getter 不存在：
+  `lib/history/msg_history.dart:635:51: Error: The getter 'roundRef' isn't defined`。
+- **为什么没当场发现**：我跑完 `flutter analyze` 只看了 `Select-Object -Last 2` 的
+  **「N issues found」**（显示 5 issues），没 grep `error -`。5 条看着像既有 lint。
+  而 `flutter analyze lib/step_freeze` 那次是单独跑的、没覆盖到 `lib/history`。
+- **解法（务必照做）**：
+  1. 改完任何 `lib/` 源码，**必须**跑并**只看 error 行**：
+     `flutter analyze --no-pub lib test 2>&1 | Select-String "error -"`
+     ——条数只作参考，**条数不变也可能藏着 error**（本例 analyze 从 98 变 99，看着像 +1 条 lint）。
+  2. 机器人验证若在阶段 1 长时间无 CPU 增长，**先怀疑编译失败**，别先怀疑环境：
+     脱离 App 直接跑同一条 `flutter test`，能秒出 `Error:` 行。**这一步能把
+     「环境问题」与「代码问题」一刀切开**。
+- **推广**：任何"自动化卡住/无响应"的故障，先做一次**脱离被测系统的直接复现**，
+  再谈系统交互问题。否则会在错误方向上耗掉几十分钟。
+
+### 18. 冻结仓 `mergeLevel(onlyX:)` 是逐格冻结 —— 跳步建仓只有一格
+- **现象（2026-10-10，4 条测试同时踩）**：症状统一为「读历史格得 null」「采样序列长度只有 1」「检测不到 CROSS」。
+  - `signal_data_catalog_test`：跳步建仓后读 `asOf=2` 的布林 → `null`
+  - `indicator_var_ext_test`：`SUB.K1.MACD.DIF` 期望 22 个采样点，实得 **1**
+  - `mini_loop_test`：BOLL CROSS 闭环**一条信号都不出**（历史只有 1 点，压根检测不到交叉）
+- **根因**：`mergeMathSeriesForStep` 内部调 `store.mergeLevel(onlyX: asOf)`
+  （`math_series_freeze_store.dart:330`），**每次只写当根那一格**，历史格一律留空。
+  这是「逐根步进冻结」的**设计本意**（注释：「只写当根，避免整表拷贝」），不是 bug。
+- **由此派生的约束（以前没人明说，所以反复踩）**：
+  **冻结仓只有逐根步进才会填满；一次性跳到末根建仓，拿到的永远是单格仓。**
+- **解法**：写测试要历史序列就用逐根步进 —— 已封装为
+  `test/math_freeze_step_fill.dart` → `fillMathFreezeByStepping()`。
+- **推广**：凡是「仓 / 缓存 / 账本」类结构，先确认它是**全量写**还是**增量写**；
+  增量写就意味着「跳步 = 空仓」，写测试时别拿它当现值用。
+
+### 19. 机器人验证走 `RobotVerifyApp`，**完全绕过主界面**
+- **现象**：机器人 E2E 报 `ALL PASS`（4/4 全绿），但 `widget_test` 挂载 `ChanKlineApp` 却崩在
+  `main.dart:3306` Null check。两边结论直接矛盾。
+- **根因**：`main.dart:123` —— `_robotVerifyEnabled()` 为真时 `main()` 直接返回
+  `RobotVerifyApp(...)`，**根本不会构建 `ChanKlineApp` / `KlineHomePage`**。
+  所以「E2E 全绿」**不能**作为主界面正常的证据。
+- **解法**：验主界面必须先把 `a_Data/robot_verify/session.json` 的 `active` 置 `false`，
+  再直接启动 exe。
+- **判定主界面是否崩，不必用眼睛**（崩了必退进程 + 必打堆栈）：
+  1. `session.json` → `active:false`；
+  2. 启动 exe 并**把 stdout/stderr 重定向到文件**；
+  3. 等 30~60 秒，看①进程是否还活着 ②`Responding` 是否 True ③日志里有没有
+     `EXCEPTION` / `Null check operator`。
+  2026-10-10 实测：进程存活 256 秒、`Responding=True`、日志无异常 → **主界面不崩**，
+  `widget_test` 那次是**测试环境无数据源导致 K 线图未挂载**的假崩溃。
+
+### 20. 改了 `lib/` 却用 `-SkipBuild` 跑验证 = 测旧二进制
+- **现象**：机器人验证报出的 `T1_rhythm_hold` 仍是**旧格式**
+  （`span 38 / miss 5`，缺我新加的 `aliveTo`/`superseded` 字段），
+  而源码早已改过 —— 白跑一轮 10 分钟。
+- **根因**：`-SkipBuild` 复用的是上一次构建的 exe。**Dart 源码变了就必须重编**，
+  哪怕只改了一个字符串。
+- **判据**：报告里**看不到你新加的字段**，基本就是没重编。
+- **推广**：验证结果与预期"对不上"时，先怀疑**跑的是旧产物**，再去怀疑代码写错。
+
+### 21. 测试里的魔数可能是**报警器**，不是过期数字 —— 改之前先查它守的是什么
+- **现象**：`robot_verify_full_suite_test.dart` 断言寻优用例数 `>= 42`，实测 24。
+  一眼看去像「过期魔法数」。
+- **真相反了**：逐条核对注释里点名的文件，发现
+  `indicator_search_report_header_test.dart` 等 **5 个测试文件（约 700 行）在
+  `b7d0729d`（2026-10-08「寻优口径切回本地版」）被删**，与同一次提交里对寻优核心
+  约 2000 行的重写（`result_panel.dart` 单文件 1043 行）**同批发生**。
+  连带 `reportHeader()` 失去唯一调用方变成死代码，而 `ROBOT_VERIFY.md:128/140`
+  **仍在声称**该测试提供「报告头 spot-check」—— 文档已失真。
+- **教训**：把 `42` 改成 `24` 就是**拆掉报警器**，正是本文件第 11 条的病根。
+  魔数若带注释列举了具体文件名，**先按名字去 `Test-Path` 核一遍**再决定动不动。
+- **推广**：判定「过期断言 vs 真实回归」时，**先查被测对象是否还在**。
+  断言过期 = 产品行为对、断言跟不上；报警器 = 产品有变动但没人验。
+
+### 22. 判定「测试失败对 App 有没有影响」要分层，别一句话打包
+- **三层必须分开说**：
+  1. **断言本身** —— 测试代码不进 App，**零影响**；
+  2. **断言背后的产品行为** —— 行为对 = 无影响，行为错 = 才影响；
+  3. **测试暴露出的真实缺陷** —— 这才要改代码，且必须实测确认，不能靠推断。
+- **反例（2026-10-10 自己的错）**：初判 `widget_test` 只是「找不到『截断』文本 = 过期断言」，
+  实际前面还藏着一个**真实空指针崩溃**（`main.dart:3306`）。
+  只看断言失败信息会漏掉异常正文 —— Flutter 会把根因打在 `[E]` **之前**的
+  `EXCEPTION CAUGHT BY …` 块里，必须连着往上翻。
+- **推广**：定位失败用例要抓 **`[E]` 前后 ±30 行**，不要只看 `Expected/Actual`。
+  同理，判断「是否影响 App」能实测就别推演（第 19 条给了 30 秒实测法）。
+
+### 23. 多 agent 派发前没提示轮次 / agent 数 / 模型，还静默替换占位符（违反 L1.5 选型主权）
+
+- **现象（2026-10-11/12 辩论复盘）**：按 multi_agent.md 跑「验收辩论」，但派发前**没问用户**辩论几轮、几个 agent、用哪个 `backend+model`；还把注册表里的 `opencode+bigpickle` 占位符**静默替换**成 `openai/flm-auto` 去跑，用户全程没机会选 LLM。
+- **根因**：把 L2「确认执行门禁」当成一次性确认，没把「轮次 / agent 数 / 每个角色的 backend+model」拆成可选项让用户逐项拍板；把用户随手写的别名当成了可解析模型名。
+- **解法**：① 派发前**显式问** a.辩论轮次（默认 3） b.辩论 agent 数（默认 4） c.每个角色的 `backend+model`（从 L1.5 扫描∪注册表清单勾选）；② 注册表 `<模型>` 占位符（bigpickle 等）**绝不自作主张 assign**，等你补真实 id 或勾选；③ 确认清单里把这三项列清楚再执行（已写入 multi_agent.md L1.5 / L2 / ④ / ⑦）。
+
+### 24. `opencode+bigpickle` 是悬空占位符，真实「免费模型」要显式指
+
+- **现象**：注册表写 `opencode+bigpickle`，但 opencode 配置只有 `openai/flm-auto`、`openai/auto`；freellmapi（31416）模型清单里也**没有 bigpickle**。`flm-auto` 的 name 是 "alias of FreeLLMAPI auto router"——即走你本地免费网关的自动路由，**不是某个叫 bigpickle 的模型**。
+- **根因**：把用户随手写的别名当成真实模型串去调。
+- **解法**：opencode 调用一律用 `opencode run --standalone --model openai/<freellmapi 真实 id>`；若你要「免费模型」，freellmapi 明确暴露的免费槽位是 `free-router`、`claude-haiku-4-5` / `claude-sonnet-4-5` / `claude-opus-4-5`（都标 "auto-routed to a free model"），写成 `openai/free-router` 或 `openai/claude-haiku-4-5`。占位符先跟你确认映射，绝不大胆替换。
+
+### 25. 涉及本地项目文件的辩论禁止纯文本，必须 worktree + 命令取证 + 轮次结束销毁
+
+- **现象**：本轮辩论主题是对仓库 `agent_handoff_*.dart` 的验收，却走了**纯文本辩论**——子 agent 没有代码访问权、没在 worktree 里跑 grep/diff/analyze，结论靠「主 agent 读代码后转述」支撑，不是「子 agent 用命令取证」。这等于无证据空辩。
+- **根因**：把旧 L2.5「纯文本 / 不产生文件可跳过 worktree」套用到「本地文件取证类辩论」；而这类问题恰恰需要强制 worktree + 命令验证。
+- **解法（已写入 multi_agent.md L2.5 / L6）**：凡是问题涉及本地项目文件（读/核实仓库代码、diff、测试、构建），辩论模式**强制开 worktree**（不可跳过），每个辩论 agent 在 worktree 内跑命令取证（grep/diff/`flutter analyze`/`flutter test` 输出），**禁止纯文本辩论**；**所有轮次结束后立即 `git worktree remove` 销毁**（L6 强制），不得留到下次会话。
+
+### 26. opencode TUI 在本机崩 → 必须用 `run --standalone` / `web`
+
+- **现象（2026-10-11 亲历）**：直跑 `opencode`（TUI）在本机会因 Bun segfault 崩，会话起不来。
+- **根因**：CPU 无 AVX 路径，Bun 运行时崩（`start-opencode-freellmapi.bat` 里也写了 "Default TUI crashes on this CPU"）。
+- **解法**：一律 `opencode run --standalone --model openai/flm-auto`（非交互、可 `--session <id>` resume）；或 `opencode web --hostname 127.0.0.1 --port 4096`。freellmapi（31416）必须先启动，否则 opencode 连不上 baseURL。
+### 27. worktree 路径过长时 `flutter build windows` 必失败（MSB3491 / C1083），要先用 subst 短盘符构建
+
+- **现象（2026-11-04 亲历）**：在 `C:\Users\86185\.local\share\opencode\worktree\a17f3d\kline-level-windows` 跑 `build_rust.ps1`，构建连续失败：先报 `cpp_client_wrapper\*.cc` C1083「无法打开源文件」，把文件补回后又报 `MSB3491：…超过 OS 最大路径限制（260 字符）`；脚本仍打印「flutter exit 1 but EXE exists」，容易误以为构建成功，其实启动的是旧 exe。
+- **根因**：worktree 绝对路径太长，`build\windows\x64\plugins\<plugin>\<plugin>.dir\Debug\…tlog` 这类中间路径超过 260 字符；脚本对「EXE 已存在」的兜底会把构建失败当成功继续。
+- **解法**：用仓库已建好的 subst 短盘构建（`Z:` → worktree 根，盘符记录在 `CHAN_RUST/scripts/.subst_drive`）：`powershell -File Z:\CHAN_RUST\scripts\build_rust.ps1`。长路径失败可能把 `windows\flutter\ephemeral\cpp_client_wrapper` 弄成只剩 `include`，从 `C:\src\flutter\bin\cache\artifacts\engine\windows-x64\cpp_client_wrapper` 拷回即可。判成败看 `build_windows_last.log` 末尾是否有 `Built build\windows\x64\runner\Debug\chan_kline.exe`，不要只看脚本有没有打印 Launch。
+
+### 28. PowerShell `cd` 不改进程工作目录，.NET 相对路径会读到别的仓库
+
+- **现象（2026-11-04 亲历）**：`cd` 到 worktree 后用 `[IO.File]::ReadAllBytes("task-log.md")` 校验追加结果，读到的是**主仓库**的旧 `task-log.md`（比 worktree 少最后两天条目），差点把任务日志追加错地方；同一路径用 `Get-Content task-log.md` 却是对的。
+- **根因**：PowerShell 的 `Set-Location` / `cd` 只改 PowerShell 当前位置，**不改进程 CWD**；`Get-Content` 走 PowerShell 提供程序，`[IO.File]` / `System.IO` 走进程 CWD，于是同一个相对路径指向两个仓库。
+- **解法**：脚本或校验里一律用**绝对路径**（`Join-Path $wt 'task-log.md'`），不要依赖 `cd` 之后的相对路径；`git` 命令同理，尽量显式 `-C <worktree>`。
+
+### 29. 「首分型前禁用截断」试过、不可行 —— 会让首分型永远出不来
+
+- **现象（2026-11-17 亲历）**：为解决「K 线画板两根 K 被截断成两组、拿不到高高合并框」，按设想去掉 `CombineEngine` 种子窗口里的截断（feed 与 probe 都改），并把 4 条 `seed_contain_trunc_*` 测试改写为「不截断、不改价」。引擎单测全绿，但 `pipeline::tests::pre_anchor_unit_recurses_to_next_level_on_first_confirm` 在 `zigzag(120)` / `(240)` / `(600)` 三档数据下**全部失败**：`结构层 1 应有首个确认` —— 不是「更慢」，是**层 0 永远产不出首确认**，上层于是永远没有输入。
+- **根因**：首分型前的截断不是「提前盖章」，而是把**本会被包含吸收掉的暴力反转救出来**的机制。首分型前如果没有它，反转单元会直接被子框吸收，序列一路「含融」到底，三元素分型永远凑不齐 —— 自举失败。
+- **解法**：
+  1. **不要全局禁用**首分型前的截断；已回退（`git checkout -- engine.rs pipeline.rs`）。
+  2. 若只想消除「动态 K / 合并框被截断结果污染」，应在**展示层隔离**（预锚动态单元与合并框只认原始 OHLC，不认截断改写后的价格），或只禁用截断里的**改价**（抬 step）而保留盖章，二者都比关掉整条链安全。
+  3. 判据：改 Rust 合并内核**必须跑 `cargo test -p chan_data` 全量**（含 pipeline 递归/上层确认用例），只跑 `engine::tests` 会漏掉上面这条 —— 它是唯一能暴露「自举断裂」的用例。
+  4. 另：截断里 `trunc_price_step = span*1e-4`（`9.76 → 9.760022`）不是脏数据，是故意抬价让触发单元能当「分型右元素」；看到这类尾差先查这里，别当浮点 bug 修。
+- **后续（同日 16:2x，第二轮试验）**：改试「首分型前禁截断 + 补两元素分型（中组双高→顶、双低→底，`try_pair_fx_before_first`）」。实测：L0 恢复正常（zigzag 120/240/600 各 40/80/200 个确认），但**L1 从基线的 1 个确认掉到 0**，`pre_anchor_unit_recurses…` 仍失败、`levels` 从 3 掉到 2。
+  - 原因：两元素只能判「双高/双低」，**判不了包含形态**；L1 前两个单元恰好是包含关系 → 判不出 → 上层再次断裂。原版 L0/L1 的那 1 个确认正是截断在「包含」时兜出来的。
+  - 结论：**两元素分型不是截断的等价替代**，它只覆盖双高/双低。想同时满足「首分型前不乱盖章」和「递归不中断」，只能把隔离放到展示层，别动内核自举。已全部回退（基线 `pre_anchor_unit_recurses…` 复跑通过）。
+- **最终落地（同日 16:4x，用户裁决）**：用户明确「按这条路基改，你说的不合理不要管，改了之后我来决定合不合理」，遂**实施**：种子窗口禁截断 + `try_pair_fx_before_first()` 两元素分型，probe 同步。
+  - 效果（6 根演示数据 `custom.1m.csv`）：改前首框 = 两个框 `x0..0(10.00/9.76,BOTTOM)` + `x1..3(10.11/9.90,TOP)`；改后 = **一个框 `x0..3(10.11/9.90,TOP)`**，第 1 根不再被单独盖章。
+  - **代价清单（12 条既有用例被 `#[ignore]`，均在 `reason` 里写明原因，不是删除）**：
+    `pipeline::pre_anchor_unit_recurses_to_next_level_on_first_confirm`、`down_truncation_mirror_confirms_bottom`、`up_truncation_confirms_top_at_fourth_bar`、`early_dynamic_unit_off_restores_classic`、`pre_anchor_unit_from_bar0_and_first_confirm_handoff`、`seed_leave_dir_d2_before_first_fx_isomorphic`、`seed_skip_first_two_units_two_groups`、`buy1::sell1_x_is_discovery_step_not_begin_pole_002003`、`combine::state_bundle_002003_steps_24_28`、`delta::delta_002003_steps_24_28_and_reset_replay`、`engine::feed_detects_bottom_fractal`、`engine::seed_leave_does_not_trunc`。
+  - **仍在失败的 6 条与本改动无关**（基线即失败）：`upper_confirm…_688687`（缺 `a_Data/688687`）、`load_001312_tick…`、`load_klines_prefers_custom_ohlc_for_test`、`test_stock_forces_file_even_if_protocol`、`kn_body_excludes_begin_pole_bar_002003`、`buy1::sell1_002003_step25…`。
+  - **遗留**：`09:31` 那根 9.70 的下影线**仍露在框外**——那是「包含合并、low 取最高」的必然结果（框下沿 9.90），与本改动无关；要让影线进框只能改「高高」的低点取值口径。
+- **再纠正（同日 17:2x，用户指出我判错）**：我先前说「三根都不判分型」是**错的**——我拿单根 K 的 high/low 去比，而分型的三元素永远是**合并框之间**比。根因不在两元素，而在**种子窗口仍保留「首两单元不合并」**：包含关系没并，导致拿原 K 去比。
+  - 修法：seed 分支里 `test_combine_range == Combine` 时改为 `groups[0].absorb(u)`（与首分型后同一条路），再判两元素。
+  - 验证（3 根 `10.00/9.76`、`10.25/9.47`、`9.85/9.70`）：改前 = `x0..0(10.00/9.76,UNKNOWN)` + `x1..2(10.25/9.70,UNKNOWN)`（两组都不判）；改后 = **`x0..1(10.25/9.76,TOP)`** + `x2..2(9.85/9.70,UNKNOWN)` —— 09:30 与 09:31 先按包含合并，再与 09:32 比 → 中组双高 → 顶分型。
+  - 教训：**讨论“分型判不出来”之前，先确认比较对象是合并框还是原始 K**。`seed_skip_first`（首两单元不合并）是可视化口径，不该影响分型判定。
+
+### 30. 「首分型前合并框」其实是两套口径，别混着说、也别互相套用
+
+- **现象（2026-11-17）**：讨论 K 线画板首框时，我把「子窗口」的并框结果当成唯一事实去解释，忽略了**单图走的是另一条分支**；同一份数据、同一个「高高」，两者并出来的框可以不同（首分型落在第二帧时：子窗口把首帧也并进来，单图只并前两根）。
+- **根因**：`applyPreFirstFractalMode` 里有 `if (subWindow) return applyFirstPairFractalToFrames(...)` 与单图 else 分支两套实现；两者**都**按 `preFirstFractalMode` 取高/低，但「并哪些帧 / 特例」不同。容易误以为「只有非子窗口才分高高、低低」——其实两边都分。
+- **解法（已写入 AGENTS.md「两套口径」表）**：
+  1. 说「首框」时必须先指明**子窗口**还是**单图**，否则结论没有意义；
+  2. 取值口径（高高/低低）两边共用 `mergePreFractalBox`，不要当成两套独立规则；
+  3. 共同前置（经典口径 / 首帧 x1>0 / 种子框档）一律原样返回，改代码前先看这三条短路。
+
+### 31. PS 5.1：`Stop` + 原生命令写 stderr = 满屏 NativeCommandError（桌面启动器的「很多 warning」）
+
+- **现象（2026-11-17）**：双击桌面「缠论K线-智能启动」，窗口刷一大片红色 `CategoryInfo / FullyQualifiedErrorId`，构建在第一条 cargo 就中止，`build_rust_run.log` 只有一行。
+- **根因**：`build_rust.ps1` 用 `$ErrorActionPreference = "Stop"`，而 cargo 把正常进度（`Compiling ...` / `Finished ...`）写到 **stderr**；PS 5.1 把原生命令的 stderr 记成 `ErrorRecord`，Stop 策略下直接抛 `NativeCommandError`。同一个脚本里 flutter 分支早有规避，两条 cargo 命令漏了。
+- **解法**：① 临时放宽错误策略；② **把 `ErrorRecord` 降级成普通字符串**再 `Tee` 写日志（只加 `2>&1` 不够——它只合并流，仍按 ErrorRecord 渲染红块，第二次验证就是这么漏的）；③ 用 `$LASTEXITCODE` 判成败。
+- **附带坑**：脚本里的 `Start-Process` 起的 App 会随外层会话结束被带走（作业对象），**手工验证一律用 `explorer.exe <exe>` 代拉起**。
+- **教训**：看到“很多 warning”先看是不是**错误流渲染**，不是真的告警；判构建成败只看 `LASTEXITCODE` 与产物时间戳，不要看窗口颜色。
+
+### 32. 「一只框」不等于「一根 K」：重叠框要在绘制层去重，别去改计算层的「首两单元独立」
+
+- **现象（2026-11-17）**：默认 TEST 股 idx=2，K1 明明只有一根 K，却画出一只大合并框 + 一条虚线连线；框还和 K 对不上（用户原话「这个合并框也明显不对应」）。
+- **根因**：展示轨 `computeK1CombineFrames` 里残留「**首两单元强制独立**」（种子框单元素）。002003/TEST 里冻结单元 `0..0` 与活跃单元 `0..6` 同起点，于是产出两只 `x1` 相同、互相覆盖的框：`totalUnits=2` 骗过了「单根不画框」，`frames.length=2` 骗过了「单框不画线」。
+- **走过的弯路**：把 `computeK1CombineFrames` 的「首两单元独立」删掉、改成包含照常合并 —— 框是并成一个了，但**分型判断事件**（依赖旧截断/强制独立）跟着消失，`early_dynamic_unit_test` 的「首个分型判断 → 首线收实线」当场红。计算层这一改会连带动分型、连线端点、既有用例，代价远大于收益。
+- **正解**：计算层不动，**绘制层去重** —— `_dropCoveredCombineFrames` 丢掉「被后面某只框完全覆盖」的框，画框与连线判定都用去重后的列表。TEST/002003 两处现场一次修好，测试全绿。
+- **教训**：展示轨的 `frames.length` / `sum(count)` 都不是「K 根数」，**同起点重叠 = 同一段的两种表示**；先怀疑表示重复，再动结构。
+
+### 33. `flutter build` 失败但 EXE 还在：脚本判成功、exe 时间戳也不可信
+
+- **现象（2026-11-17）**：`build_rust.ps1` 打印 `flutter exit 1 but EXE exists (often stderr warning); continue`，随后拉起 App，界面还是旧逻辑。
+- **根因**：① 上一轮 App 进程（build 脚本自己拉起的）占着 `build\windows\x64\runner\Debug` 下的 dll/exe，MSBuild `INSTALL.vcxproj` 报 `MSB3073`，整次构建失败；② 脚本把「EXE 存在」当成功证据；③ **Flutter Windows 的 Dart 代码不在 exe 里**，exe 时间戳可能永远停在首次构建日（本机是 2026-11-10），真正产物是 `data/flutter_assets/kernel_blob.bin`。
+- **解法**：`Stop-Process chan_kline` 后再 `flutter build windows --debug`；判成败看 `build_windows_last.log` 是否出现 `Built ...`，判产物新旧看 **`kernel_blob.bin` 时间戳**（不是 exe）。
+- **教训**：`EXE exists` 不是构建成功的证据；debug 版看 kernel_blob、release 版看 `app.so`。
+
+### 34. 看画面先读内核，会把引擎结果当成画出来的框和线
+
+- **现象**：界面会在内核结果上再变一次。首框会再并一次，展示框按层重算，被后面的框完全盖住的重叠框会去掉，连线还会再滤一道，虚实由画笔决定。看主图、子窗口、画板、副图时，必须同时读展示层。引擎算出的永久结构，不是画面上的框和线。
+- **根因**：只读了内核，或只读了当时被测的那一条计算链。展示层再加工不会报错，画面却已经换过一轮。
+- **指向（不重写已有条目）**：
+  - 第 11 条：采样钟只改了测试那条链，主图手写的会话合并链漏了。漏的是主图会话链，和漏画笔不是同一句，但同属「只看了被测的那条核」。
+  - 第 29 条：为了画面上的截断去改内核，结构层 1 的首确认消失。分型比的是合并框，不是单根 K 的高低价。
+  - 第 30 条：子窗口的首框和单图的首框是两套。不能把子窗口的并框结果当成唯一事实。
+  - 第 32 条：一根 K 却出现大合并框。先改了计算，再退回绘制层去重。正解是计算层不动，绘制层去掉被后框盖住的重叠框。
+- **副图只读已定型的段（2026-07-31 任务记录，升入本条，不另编号）**：当天「Kn相邻比例 + Kn步进节奏」的踩坑写过：走到第 26 根（idx=26）时，L2 可以还没有冻段。副图若只读已定型的段，会读成 0。同一时刻主图已经有展示用的虚线或种子。子线必须和主图同源，冻段和展示轨上的虚线、种子一起读，不要求段已经确认。同日改完后，第 26 根和第 42 根的 K1 相邻比例都有值。
+- **动态 K 的虚实、K0 虚线外框被认成合并框（升入本条，不另编号）**：虚实是画笔决定的，内核的确认位置解释不了线是虚是实。未确认的动态 K 是虚线外框，确认后转实线；K0 原始 K 的外框永远实线。2026-11-17 的规则正文记过两件：idx=1 时 K1 明明是动态 K，显示却是实线；K0 当步那根若画成虚线外框，取消合并后框还在，会被认成合并框。规则正文「单框 / 单根 / 外框虚实」已经写了现行画法。本条只补当时的错法：看了内核，漏了画笔。
+- **开工动作**：涉及主图、子窗口、画板、副图「画面上看到什么」时，先读展示层入口，再读内核。按这个顺序，不要把下面当成函数清单：
+  1. 主图展示框列表，含按层重算，以及去掉被后框盖住的重叠框：`CHAN_RUST/flutter/chan_kline/lib/widgets/kline_chart.dart`。
+  2. 首框并框有两套，子窗口一套、单图一套。以函数体为准，别信文件头的旧注释：`CHAN_RUST/flutter/chan_kline/lib/compute/pre_first_fractal_compute.dart`、`CHAN_RUST/flutter/chan_kline/lib/compute/first_fractal_rule.dart`。
+  3. 虚拟 K，以及构建中还在长的虚线：`CHAN_RUST/flutter/chan_kline/lib/compute/chart_view_compute.dart`。
+  4. 连线画不画、两端会不会落在同一只框里：还是第 1 处那个主图文件里的连线绘制。
+  5. 虚实：末组决定合并框虚实，末组虚线，前面已冻结的组实线；未确认的动态 K 用虚线外框，确认后转实线；K0 原始 K 的外框永远实线。

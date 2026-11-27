@@ -50,6 +50,38 @@ class MlFeatureLabel {
       final kn = key.split('_').last;
       return 'K$kn RSI';
     }
+    // MACD
+    if (key.startsWith('sub.macd_')) {
+      final parts = key.split('_');
+      if (parts.length >= 3) {
+        final kn = parts[2];
+        switch (parts[1]) {
+          case 'dif':
+            return 'K$kn MACD-DIF';
+          case 'dea':
+            return 'K$kn MACD-DEA';
+          case 'hist':
+            return 'K$kn MACD-柱';
+        }
+      }
+      return key;
+    }
+    // BOLL
+    if (key.startsWith('sub.boll_')) {
+      final parts = key.split('_');
+      if (parts.length >= 3) {
+        final kn = parts[2];
+        switch (parts[1]) {
+          case 'mid':
+            return 'K$kn BOLL中轨';
+          case 'up':
+            return 'K$kn BOLL上轨';
+          case 'down':
+            return 'K$kn BOLL下轨';
+        }
+      }
+      return key;
+    }
     // 分型极点距
     if (key.startsWith('sub.fractal_peak_dist')) {
       if (key == 'sub.fractal_peak_dist') return '分型极点距(通用)';
@@ -172,10 +204,17 @@ class MlFeatureLabel {
     if (key == 'combine.in_merge') return '合并框内合并';
     if (key == 'combine_range_high_2') return 'K2 合并区间高';
     if (key == 'combine_range_low_2') return 'K2 合并区间低';
-    // 三型/四型价
-    if (key == 'sub.fx_triple_price_0') return 'K0 三型价';
-    if (key == 'sub.fx_triple_price_1') return 'K1 三型价';
-    if (key == 'sub.fx_quad_top_price_1') return 'K1 四型顶价';
+    // 三极平行/顶底对弦/对弦平移价
+    if (key == 'sub.fx_triple_price_0') return 'K0 三极平行价';
+    if (key == 'sub.fx_triple_price_1') return 'K1 三极平行价';
+    if (key == 'sub.fx_quad_top_price_1') return 'K1 顶底对弦顶价';
+    if (key == 'sub.fx_quad_bottom_price_1') return 'K1 顶底对弦底价';
+    if (key == 'sub.fx_chord_translated_price_0') return 'K0 对弦平移价';
+    if (key == 'sub.fx_chord_translated_price_1') return 'K1 对弦平移价';
+    if (key == 'sub.wnmr_segment_buy_0') return 'K0 无脑买入线段买';
+    if (key == 'sub.wnmr_segment_sell_0') return 'K0 无脑买入线段卖';
+    if (key == 'sub.wnmr_segment_buy_1') return 'K1 无脑买入线段买';
+    if (key == 'sub.wnmr_segment_sell_1') return 'K1 无脑买入线段卖';
     // 趋势线
     if (key == 'sub.trend_support_price_0') return 'K0 趋势支撑';
     if (key == 'sub.trend_resist_price_1') return 'K1 趋势阻力';
@@ -186,8 +225,39 @@ class MlFeatureLabel {
     // K0 确认
     if (key == 'sub.k0_confirm_value') return 'K0 确认值';
     if (key == 'sub.k0_confirm_truncated') return 'K0 截断确认';
+    final chenhao = _chenhaoName(key);
+    if (chenhao != null) return chenhao;
     // 默认：返回原键
     return key;
+  }
+
+  static String? _chenhaoName(String key) {
+    const names = {
+      'sub.cyc_5': '成本均线5',
+      'sub.cyc_13': '成本均线13',
+      'sub.cyc_34': '成本均线34',
+      'sub.cyc_inf': '成本均线无穷',
+      'sub.cys_5': '市场盈亏5',
+      'sub.cys_13': '市场盈亏13',
+      'sub.cys_34': '市场盈亏34',
+      'sub.cys_inf': '市场盈亏无穷',
+      'sub.chip_winner': '获利盘',
+      'sub.chip_trapped': '套牢盘',
+      'sub.chip_conc': '筹码密集度',
+      'sub.chip_shape': '筹码形态',
+      'sub.cyqk_len': '博弈K线长',
+      'sub.cyqk_zone': '博弈K线区间',
+      'sub.chip_asr': '活动筹码',
+      'sub.chip_ckdp': '相对价位',
+      'sub.chip_ckdw': '成本重心',
+      'sub.chip_cbw': '成本带宽',
+      'sub.chip_rpy': '年相对价位',
+      'sub.chip_myp': '最大年收益',
+      'sub.chip_shift': '下移法',
+      'sub.chip_flat': '横盘法',
+      'sub.chip_ninety3': '90比3',
+    };
+    return names[key];
   }
 
   static String _algoName(String algo) {

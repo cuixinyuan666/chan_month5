@@ -1,0 +1,21 @@
+# =====================================================================
+# multi_agent.agents — chan_month5 项目级注册表
+# 作用：覆盖 / 追加用户级底座。仅列本项目专用或需约束的后端。
+# 合并规则：用户级为底座，本项目在此追加/覆盖；未列出的回退用户级。
+# 模型名填 <模型> 占位待补；本文件随 git 版本化、团队可复现。
+# =====================================================================
+
+# 辩论/评审模式偏好 opencode（走 FreeLLMAPI 免费网关）
+# ⚠ bigpickle 是悬空占位符，无真实模型！opencode 配置只有 openai/flm-auto / openai/auto。
+#   免费槽位请用 freellmapi 真实 id：free-router / claude-haiku-4-5 / claude-sonnet-4-5 / claude-opus-4-5
+#   （写法 opencode+free-router 等，见 multi_agent.md ⑥-a）
+opencode+flm-auto
+# opencode+free-router
+# opencode+claude-haiku-4-5
+
+# 如需限定本项目可用后端，继续追加，例如：
+# freellmapi+glm-5.2
+# deepseek+<模型>
+
+# 项目级全局兜底（可选；不写则用用户级 global_fallback）
+# global_fallback=opencode+bigpickle,builtin_subagent+general-purpose

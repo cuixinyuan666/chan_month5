@@ -50,7 +50,10 @@ List<FractalJudgmentEvent> collectFractalJudgmentEvents({
   // 方案B：kn==displayKn；K0 分型 kn=0；Kn≥1 用下层 structure kn-1 单元
   if (bars.isEmpty || kn < 0) return const [];
   final end = asOf ?? bars.last.idx;
-  final barsSlice = bars.where((b) => b.idx <= end).toList();
+  // 走完/步进前缀已经是 0..end：禁止再 where+toList 拷一整段
+  final barsSlice = (bars.last.idx <= end)
+      ? bars
+      : bars.where((b) => b.idx <= end).toList();
   if (barsSlice.isEmpty) return const [];
 
   final events = <FractalJudgmentEvent>[];

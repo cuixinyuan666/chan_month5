@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import 'backtest_metrics.dart';
 import 'equity_curve.dart';
+import 'package:chan_kline/theme/app_palette.dart';
 
 /// 净值曲线：只画 equityCurve，区间用 metrics 里已算好的回撤起止。
 class EquityCurveChart extends StatelessWidget {
@@ -96,7 +97,7 @@ class _EquityPainter extends CustomPainter {
       final right = xToPx(end);
       canvas.drawRect(
         Rect.fromLTRB(left, pad, math.max(left + 1, right), size.height - pad),
-        Paint()..color = const Color(0x55E53935),
+        Paint()..color = AppPalette.rgb(0x55E53935),
       );
     }
     if (metrics.recoveryX != null) {
@@ -105,7 +106,7 @@ class _EquityPainter extends CustomPainter {
         Offset(rx, pad),
         Offset(rx, size.height - pad),
         Paint()
-          ..color = const Color(0xAA66BB6A)
+          ..color = AppPalette.rgb(0xAA66BB6A)
           ..strokeWidth = 1,
       );
     }
@@ -118,7 +119,7 @@ class _EquityPainter extends CustomPainter {
     canvas.drawPath(
       path,
       Paint()
-        ..color = const Color(0xFF4FC3F7)
+        ..color = AppPalette.rgb(0xFF4FC3F7)
         ..style = PaintingStyle.stroke
         ..strokeWidth = 1.4,
     );
@@ -129,7 +130,7 @@ class _EquityPainter extends CustomPainter {
         Offset(fx, pad),
         Offset(fx, size.height - pad),
         Paint()
-          ..color = const Color(0xFFFFD54F)
+          ..color = AppPalette.rgb(0xFFFFD54F)
           ..strokeWidth = 1.2,
       );
     }
@@ -197,7 +198,7 @@ class _DdPainter extends CustomPainter {
     canvas.drawPath(
       path,
       Paint()
-        ..color = const Color(0xFFFF8A65)
+        ..color = AppPalette.rgb(0xFFFF8A65)
         ..style = PaintingStyle.stroke
         ..strokeWidth = 1.3,
     );

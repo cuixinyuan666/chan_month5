@@ -57,7 +57,7 @@ List<LevelUnitBarView> buildLevelUnitBarViews(
   for (var i = 0; i < n - 1; i++) {
     final cur = bars[i];
     final next = bars[i + 1];
-    if (next.x1 <= cur.x2) {
+    if (next.x1 <= cur.x2 && cur.x1 <= next.x2) {
       final junction = cur.x2.clamp(cur.x1, next.x2);
       viewX2[i] = junction;
       viewX1[i + 1] = junction;

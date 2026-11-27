@@ -76,12 +76,12 @@ double _sumBins(dynamic binData) {
 }
 
 /// K0 tick count: 优先 Rust 真实笔数 metrics.tick_count（分笔第4列；显式0即为0）；
-/// 旧数据回退 chip_tick_bins 数组长度；再无 tick 数据时回退到 tick_side。
+/// 旧数据回退 chip_tick_bins 数组长度；无键则 0（不再用 tick_side 充 1 笔）。
 /// 含 w（灰度）笔，与 _tickSideColor 三态一致。
 List<double> computeK0TickCountSeries(List<KlineBar> bars) {
   double tickCount(KlineBar b) {
     final m = b.metrics['tick_count'];
-    // 键存在即用（含 0）；勿用 >0 判断，否则显式0会误回退成 bins 长度/1
+    // 键存在即用（含 0）；勿用 >0 判断，否则显式0会误回退成 bins 长度
     if (m is num) return m.toDouble();
     final bins = b.metrics['chip_tick_bins'];
     if (bins is Map) {
@@ -90,16 +90,13 @@ List<double> computeK0TickCountSeries(List<KlineBar> bars) {
       final wLen = _listLen(bins['w']);
       if (bLen + sLen + wLen > 0) return (bLen + sLen + wLen).toDouble();
     }
-    // 无逐笔数据时回退到 tick_side 方向（B/S 各算 1 笔）
-    final side = b.metrics['tick_side'];
-    if (side == 'B' || side == 'S') return 1;
     return 0;
   }
   return [for (final b in bars) tickCount(b)];
 }
 
 /// K0 buy tick count: 优先 Rust 真实买入笔数 metrics.buy_tick_count（含显式 0）；
-/// 旧数据回退 chip_tick_bins 数组长度；再无 tick 数据时回退到 tick_side。
+/// 旧数据回退 chip_tick_bins 数组长度；无键则 0（不再用 tick_side 充 1 笔）。
 /// 灰笔 (w) 不计入买入笔数。
 List<double> computeK0BuyTickCountSeries(List<KlineBar> bars) {
   double buyTick(KlineBar b) {
@@ -110,15 +107,12 @@ List<double> computeK0BuyTickCountSeries(List<KlineBar> bars) {
       final bLen = _listLen(bins['b']);
       if (bLen > 0) return bLen.toDouble();
     }
-    // 无逐笔数据时回退到 tick_side 方向
-    final side = b.metrics['tick_side'];
-    if (side == 'B') return 1;
     return 0;
   }
   return [for (final b in bars) buyTick(b)];
 }
 
-/// K0 卖出笔数：优先 metrics.sell_tick_count；回退 bins['s'] 长度 / tick_side。
+/// K0 卖出笔数：优先 metrics.sell_tick_count；回退 bins['s'] 长度；无键则 0。
 List<double> computeK0SellTickCountSeries(List<KlineBar> bars) {
   double sellTick(KlineBar b) {
     final m = b.metrics['sell_tick_count'];
@@ -128,8 +122,6 @@ List<double> computeK0SellTickCountSeries(List<KlineBar> bars) {
       final sLen = _listLen(bins['s']);
       if (sLen > 0) return sLen.toDouble();
     }
-    final side = b.metrics['tick_side'];
-    if (side == 'S') return 1;
     return 0;
   }
   return [for (final b in bars) sellTick(b)];
@@ -163,10 +155,43 @@ int _listLen(dynamic binData) {
 }
 
 /// 内部复用：从 K0 系列出发，逐一累积各层确认门控系列。
+Map<int, List<double>> computeAllKnFromK0Series({
+  required List<double> k0Series,
+  required List<LevelBundle> levels,
+  required List<KlineBar> bars,
+}) {
+  return _computeAllKnFromK0(
+    k0Series: k0Series,
+    levels: levels,
+    bars: bars,
+    accumulate: _accumulateConfirmGated,
+  );
+}
+
+/// **asOf 当时**该层的段划分：已确认的段 + 当时的动态段。
+///
+/// 由调用方从 `KnClockTimeline.at(level, asOf)` 整体取回（字段名与
+/// `KnClockState` 一致，两者可直接互换，省掉一层搬运代码）。
+/// 传进来则区间划分完全受限于当前时刻；不传则退回 `levels` 里的**最终态**
+/// 段划分（绘图 / 诊断路径，属既有行为）。
+typedef KnUnitsAsOf = ({List<LevelUnitBar> unitBars, LevelUnitBar? activeUnit});
+
+typedef _KnAccumulateFn = List<double> Function({
+  required List<double> lowerIncrements,
+  required LevelBundle bundle,
+  required List<KlineBar> bars,
+  KnUnitsAsOf? asOfUnits,
+  int? asOf,
+});
+
+/// 内部复用：从 K0 系列出发，逐一累积各层系列。
 Map<int, List<double>> _computeAllKnFromK0({
   required List<double> k0Series,
   required List<LevelBundle> levels,
   required List<KlineBar> bars,
+  required _KnAccumulateFn accumulate,
+  Map<int, KnUnitsAsOf>? unitsAsOf,
+  int? asOf,
 }) {
   final n = bars.length;
   final out = <int, List<double>>{};
@@ -180,10 +205,12 @@ Map<int, List<double>> _computeAllKnFromK0({
   for (final bundle in sorted) {
     final displayKn = bundle.level + 1;
     if (displayKn < 1) continue;
-    final series = _accumulateConfirmGated(
+    final series = accumulate(
       lowerIncrements: increments,
       bundle: bundle,
       bars: bars,
+      asOfUnits: unitsAsOf?[bundle.level],
+      asOf: asOf,
     );
     out[displayKn] = series;
     increments = _cumulativeToIncrements(series);
@@ -196,11 +223,18 @@ Map<int, List<double>> computeAllKnVolumeSeries({
   required List<KlineBar> bars,
   required List<LevelBundle> levels,
   List<BarCrosshairFeature> barFeatures = const [],
+  /// S3：传 asOf 当时的段划分（`KnClockTimeline.at(level, asOf)`），
+  /// 使 K1+ 的区间划分完全受限于当前时刻，不被后来的段合并/延伸回改。
+  Map<int, KnUnitsAsOf>? unitsAsOf,
+  int? asOf,
 }) {
   return _computeAllKnFromK0(
     k0Series: computeK0VolumeSeries(bars),
     levels: levels,
     bars: bars,
+    accumulate: _accumulateConfirmGated,
+    unitsAsOf: unitsAsOf,
+    asOf: asOf,
   );
 }
 
@@ -215,6 +249,7 @@ Map<int, List<double>> computeAllKnBuyVolumeSeries({
     k0Series: computeK0BuyVolumeSeries(bars),
     levels: levels,
     bars: bars,
+    accumulate: _accumulateConfirmGated,
   );
 }
 
@@ -228,6 +263,7 @@ Map<int, List<double>> computeAllKnBuyVolumeBsgSeries({
     k0Series: computeK0BuyVolumeBsgSeries(bars),
     levels: levels,
     bars: bars,
+    accumulate: _accumulateConfirmGated,
   );
 }
 
@@ -241,6 +277,7 @@ Map<int, List<double>> computeAllKnSellVolumeSeries({
     k0Series: computeK0SellVolumeSeries(bars),
     levels: levels,
     bars: bars,
+    accumulate: _accumulateConfirmGated,
   );
 }
 
@@ -254,19 +291,27 @@ Map<int, List<double>> computeAllKnGrayVolumeSeries({
     k0Series: computeK0GrayVolumeSeries(bars),
     levels: levels,
     bars: bars,
+    accumulate: _accumulateConfirmGated,
   );
 }
 
 /// All Kn 总笔数系列（key = display kn: 0=K0, 1=K1, ...）。
+/// Kn≥1：区间内 K0 笔数累加（不等确认门控；与成交量确认门控口径不同）。
 Map<int, List<double>> computeAllKnTickCountSeries({
   required List<KlineBar> bars,
   required List<LevelBundle> levels,
   List<BarCrosshairFeature> barFeatures = const [],
+  /// S3：同上，asOf 当时的段划分。
+  Map<int, KnUnitsAsOf>? unitsAsOf,
+  int? asOf,
 }) {
   return _computeAllKnFromK0(
     k0Series: computeK0TickCountSeries(bars),
     levels: levels,
     bars: bars,
+    accumulate: _accumulateIntervalRunning,
+    unitsAsOf: unitsAsOf,
+    asOf: asOf,
   );
 }
 
@@ -280,6 +325,7 @@ Map<int, List<double>> computeAllKnBuyTickCountSeries({
     k0Series: computeK0BuyTickCountSeries(bars),
     levels: levels,
     bars: bars,
+    accumulate: _accumulateIntervalRunning,
   );
 }
 
@@ -293,6 +339,7 @@ Map<int, List<double>> computeAllKnSellTickCountSeries({
     k0Series: computeK0SellTickCountSeries(bars),
     levels: levels,
     bars: bars,
+    accumulate: _accumulateIntervalRunning,
   );
 }
 
@@ -306,6 +353,7 @@ Map<int, List<double>> computeAllKnGrayTickCountSeries({
     k0Series: computeK0GrayTickCountSeries(bars),
     levels: levels,
     bars: bars,
+    accumulate: _accumulateIntervalRunning,
   );
 }
 
@@ -325,23 +373,29 @@ List<double> _accumulateConfirmGated({
   required List<double> lowerIncrements,
   required LevelBundle bundle,
   required List<KlineBar> bars,
+  KnUnitsAsOf? asOfUnits,
+  int? asOf,
 }) {
   final n = bars.length;
   final out = List<double>.filled(n, 0.0);
   if (n == 0) return out;
   final idxToI = <int, int>{for (var i = 0; i < n; i++) bars[i].idx: i};
   final lastIdx = bars.last.idx;
+  // 动态段尾只到当前时刻：asOf 之前不该被后来的 K 线撑开
+  final capIdx = (asOf != null && asOf < lastIdx) ? asOf : lastIdx;
 
+  // S3：asOf 当时的段划分（已确认段 + 当时动态段）；null 则用最终态。
+  final confirmed = asOfUnits?.unitBars ?? bundle.unitBars;
+  final active = asOfUnits != null ? asOfUnits.activeUnit : bundle.activeUnit;
   final units = <LevelUnitBar>[
-    ...bundle.unitBars,
-    if (bundle.activeUnit != null) bundle.activeUnit!,
+    ...confirmed,
+    if (active != null) active,
   ];
   if (units.isEmpty) return out;
 
   LevelUnitBar? prev;
   for (final u in units) {
-    final isActiveTail =
-        bundle.activeUnit != null && identical(u, bundle.activeUnit);
+    final isActiveTail = active != null && identical(u, active);
 
     late final int sumStart;
     late final int displayStart;
@@ -356,11 +410,75 @@ List<double> _accumulateConfirmGated({
 
     final int endX;
     if (isActiveTail) {
-      endX = lastIdx;
+      endX = capIdx;
     } else if (u.confirmX >= 0) {
       endX = u.confirmX - 1;
     } else {
-      endX = u.x2;
+      endX = u.x2 < capIdx ? u.x2 : capIdx;
+    }
+    if (endX < sumStart) {
+      prev = u;
+      continue;
+    }
+
+    var run = 0.0;
+    for (var x = sumStart; x <= endX; x++) {
+      final i = idxToI[x];
+      if (i == null) continue;
+      run += lowerIncrements[i];
+      if (x >= displayStart) {
+        out[i] = run;
+      }
+    }
+    prev = u;
+  }
+  return out;
+}
+
+/// Kn 笔数：虚拟 K 区间内从 sumStart 起即累加 K0 增量（不等上层确认）。
+List<double> _accumulateIntervalRunning({
+  required List<double> lowerIncrements,
+  required LevelBundle bundle,
+  required List<KlineBar> bars,
+  KnUnitsAsOf? asOfUnits,
+  int? asOf,
+}) {
+  final n = bars.length;
+  final out = List<double>.filled(n, 0.0);
+  if (n == 0) return out;
+  final idxToI = <int, int>{for (var i = 0; i < n; i++) bars[i].idx: i};
+  final lastIdx = bars.last.idx;
+  // 动态段尾只到当前时刻：asOf 之前不该被后来的 K 线撑开
+  final capIdx = (asOf != null && asOf < lastIdx) ? asOf : lastIdx;
+
+  // S3：asOf 当时的段划分（已确认段 + 当时动态段）；null 则用最终态。
+  final confirmed = asOfUnits?.unitBars ?? bundle.unitBars;
+  final active = asOfUnits != null ? asOfUnits.activeUnit : bundle.activeUnit;
+  final units = <LevelUnitBar>[
+    ...confirmed,
+    if (active != null) active,
+  ];
+  if (units.isEmpty) return out;
+
+  LevelUnitBar? prev;
+  for (final u in units) {
+    final isActiveTail = active != null && identical(u, active);
+
+    late final int sumStart;
+    if (prev == null) {
+      sumStart = u.x1 >= 0 ? u.x1 : 0;
+    } else {
+      sumStart = prev.x2 + 1;
+    }
+    final displayStart = sumStart;
+
+    final int endX;
+    if (isActiveTail) {
+      endX = capIdx;
+    } else if (u.confirmX >= 0) {
+      endX = u.confirmX - 1;
+    } else {
+      endX = u.x2 < capIdx ? u.x2 : capIdx;
     }
     if (endX < sumStart) {
       prev = u;

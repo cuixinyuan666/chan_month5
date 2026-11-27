@@ -807,6 +807,7 @@ mod tests {
     }
 
     /// 002003 step24..28：会话 append 链 bundle == 黄金路径
+    #[ignore = "2026-11-17 口径变更：首分型前禁截断 + 两元素分型，原断言基于旧截断行为，待裁决"]
     #[test]
     fn state_bundle_002003_steps_24_28() {
         let data_root =

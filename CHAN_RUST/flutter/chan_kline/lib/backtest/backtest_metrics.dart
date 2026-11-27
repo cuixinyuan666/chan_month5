@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'equity_curve.dart';
 import 'order_models.dart';
 
@@ -263,5 +265,292 @@ BacktestMetrics computeBacktestMetrics({
     startX: startX,
     endX: endX,
     recoveryX: recoveryX,
+  );
+}
+
+/// 单段（样本内 / 样本外）完整绩效指标。
+///
+/// 分母为 0 / 无亏损 / 期末未平仓 / 样本不足 一律走 [MetricNum.unavailable()]
+///（UI 显示「—」，不合成曲线、不出现 NaN）。年化按 252 交易日、无风险利率 0。
+class SegmentMetrics {
+  /// 已平仓笔数。
+  final int trades;
+  final int winning;
+  final int losing;
+  final int flat;
+
+  final MetricNum winRate;
+  final double grossProfit;
+  final double grossLoss;
+  final double netProfit;
+  final MetricNum returnPct;
+
+  final MetricNum payoffRatio;
+  final MetricNum profitFactor;
+  final MetricNum expectancy;
+  final MetricNum averageWin;
+  final MetricNum averageLoss;
+  final MetricNum largestWin;
+  final MetricNum largestLoss;
+
+  final int maxConsecutiveWins;
+  final int maxConsecutiveLosses;
+
+  /// 最大回撤金额（峰−谷，≥0）。
+  final double maxDrawdown;
+  /// 最大回撤比例（金额/峰，≥0）。
+  final double maxDrawdownPct;
+  final int? maxDrawdownStartX;
+  final int? maxDrawdownEndX;
+  final int? recoveryX;
+
+  /// 平均 / 中位 / 最长持仓 K 数（exitX − entryX）。
+  final MetricNum avgHoldBars;
+  final MetricNum medianHoldBars;
+  final MetricNum maxHoldBars;
+  /// 持仓时间占比 = Σ持仓K / 覆盖K数。
+  final MetricNum holdTimeRatio;
+
+  /// 年化收益率（CAGR）。
+  final MetricNum annualReturn;
+  /// 年化波动率。
+  final MetricNum annualVol;
+  final MetricNum sharpe;
+  final MetricNum sortino;
+  final MetricNum calmar;
+
+  const SegmentMetrics({
+    required this.trades,
+    required this.winning,
+    required this.losing,
+    required this.flat,
+    required this.winRate,
+    required this.grossProfit,
+    required this.grossLoss,
+    required this.netProfit,
+    required this.returnPct,
+    required this.payoffRatio,
+    required this.profitFactor,
+    required this.expectancy,
+    required this.averageWin,
+    required this.averageLoss,
+    required this.largestWin,
+    required this.largestLoss,
+    required this.maxConsecutiveWins,
+    required this.maxConsecutiveLosses,
+    required this.maxDrawdown,
+    required this.maxDrawdownPct,
+    required this.maxDrawdownStartX,
+    required this.maxDrawdownEndX,
+    required this.recoveryX,
+    required this.avgHoldBars,
+    required this.medianHoldBars,
+    required this.maxHoldBars,
+    required this.holdTimeRatio,
+    required this.annualReturn,
+    required this.annualVol,
+    required this.sharpe,
+    required this.sortino,
+    required this.calmar,
+  });
+
+  static const empty = SegmentMetrics(
+    trades: 0,
+    winning: 0,
+    losing: 0,
+    flat: 0,
+    winRate: MetricNum.unavailable(),
+    grossProfit: 0,
+    grossLoss: 0,
+    netProfit: 0,
+    returnPct: MetricNum.unavailable(),
+    payoffRatio: MetricNum.unavailable(),
+    profitFactor: MetricNum.unavailable(),
+    expectancy: MetricNum.unavailable(),
+    averageWin: MetricNum.unavailable(),
+    averageLoss: MetricNum.unavailable(),
+    largestWin: MetricNum.unavailable(),
+    largestLoss: MetricNum.unavailable(),
+    maxConsecutiveWins: 0,
+    maxConsecutiveLosses: 0,
+    maxDrawdown: 0,
+    maxDrawdownPct: 0,
+    maxDrawdownStartX: null,
+    maxDrawdownEndX: null,
+    recoveryX: null,
+    avgHoldBars: MetricNum.unavailable(),
+    medianHoldBars: MetricNum.unavailable(),
+    maxHoldBars: MetricNum.unavailable(),
+    holdTimeRatio: MetricNum.unavailable(),
+    annualReturn: MetricNum.unavailable(),
+    annualVol: MetricNum.unavailable(),
+    sharpe: MetricNum.unavailable(),
+    sortino: MetricNum.unavailable(),
+    calmar: MetricNum.unavailable(),
+  );
+}
+
+double _meanDouble(Iterable<double> xs) {
+  final l = xs.toList();
+  if (l.isEmpty) return 0;
+  return l.fold(0.0, (a, b) => a + b) / l.length;
+}
+
+double _medianInt(List<int> xs) {
+  if (xs.isEmpty) return 0;
+  final s = [...xs]..sort();
+  final n = s.length;
+  return n.isOdd
+      ? s[n ~/ 2].toDouble()
+      : (s[n ~/ 2 - 1] + s[n ~/ 2]) / 2.0;
+}
+
+double _std(List<double> xs) {
+  if (xs.length < 2) return 0;
+  final m = _meanDouble(xs);
+  return math.sqrt(
+    xs.map((x) => (x - m) * (x - m)).fold(0.0, (a, b) => a + b) /
+        (xs.length - 1),
+  );
+}
+
+({
+  MetricNum annualReturn,
+  MetricNum annualVol,
+  MetricNum sharpe,
+  MetricNum sortino,
+  MetricNum calmar,
+}) _annualized(
+  List<double> rets,
+  List<EquityPoint> curve,
+  double initialCapital,
+  double maxDrawdownPct,
+) {
+  if (curve.length < 2 || rets.isEmpty || initialCapital == 0) {
+    return (
+      annualReturn: const MetricNum.unavailable(),
+      annualVol: const MetricNum.unavailable(),
+      sharpe: const MetricNum.unavailable(),
+      sortino: const MetricNum.unavailable(),
+      calmar: const MetricNum.unavailable(),
+    );
+  }
+  final n = curve.length - 1;
+  final ratio = curve.last.equity / initialCapital;
+  if (ratio <= 0) {
+    return (
+      annualReturn: const MetricNum.unavailable(),
+      annualVol: const MetricNum.unavailable(),
+      sharpe: const MetricNum.unavailable(),
+      sortino: const MetricNum.unavailable(),
+      calmar: const MetricNum.unavailable(),
+    );
+  }
+  final cagr = math.pow(ratio, 252 / n).toDouble() - 1;
+  final annualReturn = MetricNum.finite(cagr);
+  final sd = _std(rets);
+  final annualVol = MetricNum.finite(sd * math.sqrt(252));
+  final mean = _meanDouble(rets);
+  final sharpe = sd == 0
+      ? const MetricNum.unavailable()
+      : MetricNum.finite(mean / sd * math.sqrt(252));
+  final downs =
+      rets.where((r) => r < 0).map((r) => r * r).toList();
+  final dStd = downs.isEmpty
+      ? 0.0
+      : math.sqrt(downs.fold(0.0, (a, b) => a + b) / downs.length);
+  final sortino = dStd == 0
+      ? const MetricNum.unavailable()
+      : MetricNum.finite(mean / dStd * math.sqrt(252));
+  final calmar = maxDrawdownPct == 0
+      ? const MetricNum.unavailable()
+      : MetricNum.finite(cagr / maxDrawdownPct);
+  return (
+    annualReturn: annualReturn,
+    annualVol: annualVol,
+    sharpe: sharpe,
+    sortino: sortino,
+    calmar: calmar,
+  );
+}
+
+/// 由真实闭合交易 + 净值曲线算单段完整指标。
+///
+/// [cutX] 非空时把净值曲线裁剪到 `x >= cutX` 再算（外段去掉切点前的平台期，
+/// 避免污染年化波动率 / Sharpe）。持仓 K 数只来自闭合交易。
+SegmentMetrics computeSegmentMetrics(
+  List<TradeRecord> trades,
+  List<EquityPoint> equityCurve,
+  double initialCapital, {
+  int? cutX,
+}) {
+  final curve = cutX == null
+      ? equityCurve
+      : equityCurve.where((p) => p.x >= cutX).toList();
+  final m = computeBacktestMetrics(
+    initialCapital: initialCapital,
+    equityCurve: curve,
+    closedTrades: trades,
+  );
+
+  final hold = trades.map((t) => t.exitX - t.entryX).toList();
+  final avgHold = hold.isEmpty
+      ? const MetricNum.unavailable()
+      : MetricNum.finite(_meanDouble(hold.map((e) => e.toDouble())));
+  final medianHold = hold.isEmpty
+      ? const MetricNum.unavailable()
+      : MetricNum.finite(_medianInt(hold));
+  final maxHold = hold.isEmpty
+      ? const MetricNum.unavailable()
+      : MetricNum.finite(
+          hold.fold(0, (a, b) => a > b ? a : b).toDouble(),
+        );
+  final holdTimeRatio = hold.isEmpty || curve.isEmpty
+      ? const MetricNum.unavailable()
+      : MetricNum.finite(
+          hold.fold(0, (a, b) => a + b).toDouble() /
+              (curve.last.x - curve.first.x + 1).toDouble(),
+        );
+
+  final rets = <double>[];
+  for (var i = 1; i < curve.length; i++) {
+    final prev = curve[i - 1].equity;
+    if (prev != 0) rets.add(curve[i].equity / prev - 1);
+  }
+  final annual = _annualized(rets, curve, initialCapital, m.maxDrawdownPct);
+
+  return SegmentMetrics(
+    trades: m.totalTrades,
+    winning: m.winningTrades,
+    losing: m.losingTrades,
+    flat: m.totalTrades - m.winningTrades - m.losingTrades,
+    winRate: m.winRate,
+    grossProfit: m.grossProfit,
+    grossLoss: m.grossLoss,
+    netProfit: m.netProfit,
+    returnPct: m.returnPct,
+    payoffRatio: m.payoffRatio,
+    profitFactor: m.profitFactor,
+    expectancy: m.expectancy,
+    averageWin: m.averageWin,
+    averageLoss: m.averageLoss,
+    largestWin: m.largestWin,
+    largestLoss: m.largestLoss,
+    maxConsecutiveWins: m.maxConsecutiveWins,
+    maxConsecutiveLosses: m.maxConsecutiveLosses,
+    maxDrawdown: m.maxDrawdown,
+    maxDrawdownPct: m.maxDrawdownPct,
+    maxDrawdownStartX: m.maxDrawdownStartX,
+    maxDrawdownEndX: m.maxDrawdownEndX,
+    recoveryX: m.recoveryX,
+    avgHoldBars: avgHold,
+    medianHoldBars: medianHold,
+    maxHoldBars: maxHold,
+    holdTimeRatio: holdTimeRatio,
+    annualReturn: annual.annualReturn,
+    annualVol: annual.annualVol,
+    sharpe: annual.sharpe,
+    sortino: annual.sortino,
+    calmar: annual.calmar,
   );
 }

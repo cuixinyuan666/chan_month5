@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../models/chip_config.dart';
+import 'package:chan_kline/theme/app_palette.dart';
 
 /// Rust/Dart 共用的筹码分桶结果。
 class ChipProfileData {
@@ -87,6 +88,7 @@ abstract final class ChipProfilePainter {
     // 十字悬停的单根 B/S/灰度 量（区别于累计角标）
     ({double b, double s, double w})? hoverBar,
     bool alignLeft = false,
+    List<({double price, String label, Color color})>? peakMarks,
   }) {
     if (!config.enabled || profile.isEmpty) return;
     final paneW = math.max(24.0, config.paneWidth);
@@ -99,9 +101,9 @@ abstract final class ChipProfilePainter {
     final gamma = 1.0 / (1.0 + stretch * 0.08);
     final maxT = profile.maxTotal;
 
-    final sPaint = Paint()..color = config.sColor;
-    final bPaint = Paint()..color = config.bColor;
-    final wPaint = Paint()..color = config.wColor;
+    final sPaint = Paint()..color = config.sColorResolved;
+    final bPaint = Paint()..color = config.bColorResolved;
+    final wPaint = Paint()..color = config.wColorResolved;
 
     for (var i = 0; i < profile.prices.length; i++) {
       final price = profile.prices[i];
@@ -167,22 +169,18 @@ abstract final class ChipProfilePainter {
       Offset(edgeX, plotTop),
       Offset(edgeX, plotBottom),
       Paint()
-        ..color = const Color(0x33FFFFFF)
+        ..color = AppPalette.rgb(0x33FFFFFF)
         ..strokeWidth = 0.8,
     );
 
     _drawCornerSums(canvas, profile, chipLeft, chipRight, plotTop,
         config: config, hoverBar: hoverBar);
 
-    if (!config.peakLineEnabled) return;
-    final peaks = profile.peakIndices();
-    final linePaint = Paint()
-      ..color = config.peakLineColor
-      ..strokeWidth = config.peakLineWidth
-      ..style = PaintingStyle.stroke;
-    final dotPaint = Paint()..color = config.peakDotColor;
-    for (final i in peaks) {
-      final price = profile.prices[i];
+    if (!config.peakLineEnabled || peakMarks == null || peakMarks.isEmpty) {
+      return;
+    }
+    for (final mark in peakMarks) {
+      final price = mark.price;
       final y = yOfPrice(price);
       if (y < plotTop || y > plotBottom) continue;
       final Offset from;
@@ -197,21 +195,46 @@ abstract final class ChipProfilePainter {
         to = Offset(chipLeft, y);
         dot = Offset(chipLeft + 3, y);
       }
-      if (config.peakLineDashed) {
-        _drawDashed(canvas, from, to, linePaint);
+      final paint = Paint()
+        ..color = mark.color
+        ..strokeWidth = config.peakLineWidth
+        ..style = PaintingStyle.stroke;
+      // 线型：bySign 时 + 档虚线 / −档与 IN 档实线；solid 全实、dashed 全虚
+      final useDashed = switch (config.peakLineMode) {
+        PeakLineMode.solid => false,
+        PeakLineMode.dashed => true,
+        PeakLineMode.bySign => mark.label.startsWith('+'),
+      };
+      if (useDashed) {
+        _drawDashed(canvas, from, to, paint);
       } else {
-        canvas.drawLine(from, to, linePaint);
+        canvas.drawLine(from, to, paint);
       }
-      canvas.drawCircle(dot, config.peakDotRadius, dotPaint);
+      canvas.drawCircle(dot, config.peakDotRadius, Paint()..color = mark.color);
+      // 线段左端标注档号（-1/+1/IN1…），与峰线同档色；贴顶时改画线下方
+      final tp = TextPainter(
+        text: TextSpan(
+          text: mark.label,
+          style: TextStyle(
+            color: mark.color,
+            fontSize: 9,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      final leftX = from.dx <= to.dx ? from.dx : to.dx;
+      final labelY = y - tp.height - 2 < plotTop ? y + 2 : y - tp.height - 2;
+      tp.paint(canvas, Offset(leftX + 2, labelY));
     }
 
     if (highlightKn != null) {
       final tp = TextPainter(
         text: TextSpan(
           text: 'K$highlightKn',
-          style: const TextStyle(
-            color: Color(0xAAE5E7EB),
-            fontSize: 9,
+          style: TextStyle(
+            color: AppPalette.rgb(0xAAE5E7EB),
+            fontSize: 12,
             fontWeight: FontWeight.w600,
           ),
         ),
@@ -256,7 +279,7 @@ abstract final class ChipProfilePainter {
     final sumS = sumOf(profile.s);
     final sumW = sumOf(profile.w);
     final full = 'B:${fmt(sumB)}, S:${fmt(sumS)}, 灰度:${fmt(sumW)}';
-    final style = const TextStyle(color: Color(0x99FFFFFF), fontSize: 8);
+    final style = TextStyle(color: AppPalette.rgb(0x99FFFFFF), fontSize: 12);
     final avail = math.max(10.0, chipRight - chipLeft - 6);
     final xRight = chipRight - 3;
     var y = plotTop + 3;
@@ -285,23 +308,23 @@ abstract final class ChipProfilePainter {
 
     if (hoverBar == null) return;
     // 悬停单根：分色高亮，区别于累计角标
-    final dim = const TextStyle(color: Color(0x66FFFFFF), fontSize: 8);
-    final valStyle = const TextStyle(fontSize: 8, fontWeight: FontWeight.w700);
+    final dim = TextStyle(color: AppPalette.rgb(0x66FFFFFF), fontSize: 12);
+    final valStyle = const TextStyle(fontSize: 12, fontWeight: FontWeight.w700);
     final hSpan = TextSpan(children: [
       TextSpan(text: '当前 ', style: dim),
       TextSpan(
         text: 'B:${fmt(hoverBar.b)}',
-        style: valStyle.copyWith(color: config.bColor),
+        style: valStyle.copyWith(color: config.bColorResolved),
       ),
       TextSpan(text: ' ', style: dim),
       TextSpan(
         text: 'S:${fmt(hoverBar.s)}',
-        style: valStyle.copyWith(color: config.sColor),
+        style: valStyle.copyWith(color: config.sColorResolved),
       ),
       TextSpan(text: ' ', style: dim),
       TextSpan(
         text: '灰:${fmt(hoverBar.w)}',
-        style: valStyle.copyWith(color: config.wColor),
+        style: valStyle.copyWith(color: config.wColorResolved),
       ),
     ]);
     final ht = TextPainter(text: hSpan, textDirection: TextDirection.ltr)
@@ -337,5 +360,52 @@ abstract final class ChipProfilePainter {
       );
       t += dash + gap;
     }
+  }
+
+  /// 峰延长线按档配色：外侧 ±n 取绝对值同色（+1 与 -1 同色、+2 与 -2 同色…）；
+  /// 框内 INn 另给一组中性色，便于与对称档区分。
+  static List<Color> get _outerRingPalette => <Color>[
+    AppPalette.rgb(0xFF22D3EE), // 1 青
+    AppPalette.rgb(0xFF34D399), // 2 翠绿
+    AppPalette.rgb(0xFFFBBF24), // 3 琥珀
+    AppPalette.rgb(0xFFFB923C), // 4 橙
+    AppPalette.rgb(0xFFF472B6), // 5 粉
+    AppPalette.rgb(0xFFA78BFA), // 6 紫
+    AppPalette.rgb(0xFF38BDF8), // 7 天蓝
+  ];
+  static List<Color> get _inBoxPalette => <Color>[
+    AppPalette.rgb(0xFFCBD5E1), // IN1 浅岩灰
+    AppPalette.rgb(0xFF94A3B8), // IN2 岩灰
+    AppPalette.rgb(0xFF64748B), // IN3 深岩灰
+  ];
+  /// 纯量级筹码峰（PURE1..PUREn）配色：暖色系按量降序，避免与 ±档/框内混淆。
+  static List<Color> get _purePalette => <Color>[
+    AppPalette.rgb(0xFFEF4444), // 1 红
+    AppPalette.rgb(0xFFF97316), // 2 橙
+    AppPalette.rgb(0xFFEAB308), // 3 黄
+    AppPalette.rgb(0xFF84CC16), // 4 黄绿
+    AppPalette.rgb(0xFF14B8A6), // 5 青绿
+    AppPalette.rgb(0xFF3B82F6), // 6 蓝
+    AppPalette.rgb(0xFF8B5CF6), // 7 紫
+    AppPalette.rgb(0xFFEC4899), // 8 玫红
+  ];
+
+  /// 由峰后缀（-1/+2/IN3/PURE3）解析配色。
+  static Color peakRingColor(String suffix) {
+    if (suffix.startsWith('PURE')) {
+      final n = int.tryParse(suffix.substring(4)) ?? 1;
+      final idx = (n - 1).clamp(0, _purePalette.length - 1);
+      return _purePalette[idx];
+    }
+    if (suffix.startsWith('IN')) {
+      final n = int.tryParse(suffix.substring(2)) ?? 1;
+      final idx = (n - 1).clamp(0, _inBoxPalette.length - 1);
+      return _inBoxPalette[idx];
+    }
+    final signChar = suffix.startsWith('-') ? '-' : '+';
+    final n = int.tryParse(suffix.replaceFirst(signChar, '')) ?? 1;
+    final ring = n.abs();
+    final idx = (ring - 1).clamp(0, _outerRingPalette.length - 1);
+    return _outerRingPalette[idx];
   }
 }

@@ -1,0 +1,294 @@
+import '../backtest/condition_ast.dart';
+
+import 'search_core.dart';
+import 'search_scoring.dart';
+
+/// 组合搜索：把单条买卖条件用「并且」拼成组合，而不是全交叉。
+///
+/// 全交叉是平方级的，绝大多数组合毫无意义。这里用前向贪心：从最好的单条出发，
+/// 每次只尝试「再加一条」，留下样本外分数提升最大的若干条（束宽），
+/// 直到组合长度到上限或再加不再变好。结果可解释：每条组合都列得出由哪些基元拼成。
+///
+/// 评分由调用方注入（[scoreOf]），本文件不跑回测。这样单测可以用假分数验证搜索逻辑，
+/// 真实寻优时再接上样本外回测。
+
+/// 一条基元条件：买或卖的一侧，带一个稳定的键用于去重。
+class ComboAtom {
+  final String key;
+  final TradeAst ast;
+
+  /// 中文短名，拼进组合名称里让人读得懂。
+  final String label;
+
+  /// 该基元实际读的那个变量（如 `SUB.K0.KDJ.D`）。
+  ///
+  /// 同一个变量只允许在组合里出现一次：`KDJ.D > 50 且 KDJ.D > 20` 里宽的那条
+  /// 被窄的完全覆盖，等于白加一条，会让组合数虚高、结果看起来像「找到了很多组合」。
+  /// null = 提取不出单一变量（组合式基元），退化为按 [key] 去重。
+  final String? variableKey;
+
+  const ComboAtom({
+    required this.key,
+    required this.ast,
+    required this.label,
+    this.variableKey,
+  });
+}
+
+/// 搜索产出的一个组合。
+class ComboCandidate {
+  /// 买侧基元（按加入顺序）。
+  final List<ComboAtom> buys;
+
+  /// 卖侧基元（按加入顺序）。
+  final List<ComboAtom> sells;
+
+  /// 该组合的样本外分数。
+  final double score;
+
+  const ComboCandidate({
+    required this.buys,
+    required this.sells,
+    required this.score,
+  });
+
+  /// 组合长度 = 买卖两侧基元数之和。
+  int get size => buys.length + sells.length;
+
+  /// 可读名称：`组合｜买A 且 买B｜卖C`。
+  String get name {
+    String side(List<ComboAtom> atoms) =>
+        atoms.map((a) => a.label).join(' 且 ');
+    return '组合｜${side(buys)}｜${side(sells)}';
+  }
+
+  TradeAst get buyAst => _fold(buys);
+  TradeAst get sellAst => _fold(sells);
+
+  /// 转成寻优候选，可直接进现有的编译与回测链路。
+  ComboCand toComboCand() => ComboCand(name, buyAst, sellAst);
+
+  static TradeAst _fold(List<ComboAtom> atoms) {
+    var ast = atoms.first.ast;
+    for (var i = 1; i < atoms.length; i++) {
+      ast = TradeAndAst(ast, atoms[i].ast);
+    }
+    return ast;
+  }
+}
+
+/// 前向贪心 + 束搜索。
+///
+/// [scoreOf] 给出一个组合的样本外分数；返回 null 表示该组合不可用（编译失败等），
+/// 搜索会跳过它。
+///
+/// [beamWidth] 每轮保留的组合数，[maxSize] 组合长度上限（买卖两侧基元数之和）。
+/// [minGain] 再加一条至少要提升这么多分才算有效，防止为了加而加。
+List<ComboCandidate> beamComboSearch({
+  required List<ComboAtom> buyAtoms,
+  required List<ComboAtom> sellAtoms,
+  required double? Function(List<ComboAtom> buys, List<ComboAtom> sells) scoreOf,
+  int beamWidth = 8,
+  int maxSize = 3,
+  double minGain = 0.0,
+}) {
+  final seeds = <ComboCandidate>[];
+  for (final b in buyAtoms) {
+    for (final s in sellAtoms) {
+      final score = scoreOf([b], [s]);
+      if (score == null || score <= 0) continue;
+      seeds.add(ComboCandidate(buys: [b], sells: [s], score: score));
+    }
+  }
+  seeds.sort((a, b) => b.score.compareTo(a.score));
+  var beam = seeds.take(beamWidth).toList();
+  if (beam.isEmpty) return const [];
+
+  final best = <String, ComboCandidate>{
+    for (final c in beam) c.name: c,
+  };
+
+  while (beam.isNotEmpty && beam.first.size < maxSize) {
+    final next = <ComboCandidate>[];
+    for (final cur in beam) {
+      void tryAdd(List<ComboAtom> buys, List<ComboAtom> sells) {
+        if (buys.length + sells.length > maxSize) return;
+        final score = scoreOf(buys, sells);
+        if (score == null) return;
+        if (score - cur.score < minGain) return;
+        next.add(ComboCandidate(buys: buys, sells: sells, score: score));
+      }
+
+      // 同一变量在同一侧只允许出现一次（阈值宽的那条会被窄的完全覆盖）。
+      final haveBuy = cur.buys.map(_identity).toSet();
+      for (final b in buyAtoms) {
+        if (haveBuy.contains(_identity(b))) continue;
+        tryAdd([...cur.buys, b], cur.sells);
+      }
+      final haveSell = cur.sells.map(_identity).toSet();
+      for (final s in sellAtoms) {
+        if (haveSell.contains(_identity(s))) continue;
+        tryAdd(cur.buys, [...cur.sells, s]);
+      }
+    }
+    if (next.isEmpty) break;
+    next.sort((a, b) => b.score.compareTo(a.score));
+    beam = _dedup(next).take(beamWidth).toList();
+    for (final c in beam) {
+      final prev = best[c.name];
+      if (prev == null || c.score > prev.score) best[c.name] = c;
+    }
+  }
+
+  final out = best.values.toList()
+    ..sort((a, b) {
+      final c = b.score.compareTo(a.score);
+      if (c != 0) return c;
+      return a.name.compareTo(b.name);
+    });
+  return out;
+}
+
+/// [beamComboSearch] 的异步版：每轮的候选先攒成一批，由 [scoreBatch] 一次算完。
+///
+/// 用于把回测丢进多个隔离区并行。评分顺序变了，但每条组合的分数不变、
+/// 候选构造顺序不变，所以选出的组合与同步版完全一致（有对拍测试钉住）。
+Future<List<ComboCandidate>> beamComboSearchAsync({
+  required List<ComboAtom> buyAtoms,
+  required List<ComboAtom> sellAtoms,
+  required Future<List<double?>> Function(List<ComboCandidate> batch) scoreBatch,
+  int beamWidth = 8,
+  int maxSize = 3,
+  double minGain = 0.0,
+}) async {
+  // 种子：买卖两侧各取一条，全交叉。
+  final seedPairs = <ComboCandidate>[
+    for (final b in buyAtoms)
+      for (final s in sellAtoms)
+        ComboCandidate(buys: [b], sells: [s], score: 0),
+  ];
+  final seedScores = await _scoreDeduped(seedPairs, scoreBatch);
+  final seeds = <ComboCandidate>[];
+  for (var i = 0; i < seedPairs.length; i++) {
+    final sc = seedScores[i];
+    if (sc == null || sc <= 0) continue;
+    seeds.add(ComboCandidate(
+      buys: seedPairs[i].buys,
+      sells: seedPairs[i].sells,
+      score: sc,
+    ));
+  }
+  seeds.sort((a, b) => b.score.compareTo(a.score));
+  var beam = seeds.take(beamWidth).toList();
+  if (beam.isEmpty) return const [];
+
+  final best = <String, ComboCandidate>{
+    for (final c in beam) c.name: c,
+  };
+
+  while (beam.isNotEmpty && beam.first.size < maxSize) {
+    final pending = <ComboCandidate>[];
+    // 与 pending 一一对应的基准分：同一个子组合可能从不同父组合生成，
+    // 基准分不同，门槛必须逐条判断（不能按名字合并）。
+    final baseScores = <double>[];
+    for (final cur in beam) {
+      void add(List<ComboAtom> buys, List<ComboAtom> sells) {
+        if (buys.length + sells.length > maxSize) return;
+        pending.add(ComboCandidate(buys: buys, sells: sells, score: 0));
+        baseScores.add(cur.score);
+      }
+
+      final haveBuy = cur.buys.map(_identity).toSet();
+      for (final b in buyAtoms) {
+        if (haveBuy.contains(_identity(b))) continue;
+        add([...cur.buys, b], cur.sells);
+      }
+      final haveSell = cur.sells.map(_identity).toSet();
+      for (final s in sellAtoms) {
+        if (haveSell.contains(_identity(s))) continue;
+        add(cur.buys, [...cur.sells, s]);
+      }
+    }
+    if (pending.isEmpty) break;
+
+    final scores = await _scoreDeduped(pending, scoreBatch);
+    final next = <ComboCandidate>[];
+    for (var i = 0; i < pending.length; i++) {
+      final sc = scores[i];
+      if (sc == null) continue;
+      if (sc - baseScores[i] < minGain) continue;
+      next.add(ComboCandidate(
+        buys: pending[i].buys,
+        sells: pending[i].sells,
+        score: sc,
+      ));
+    }
+    if (next.isEmpty) break;
+    next.sort((a, b) => b.score.compareTo(a.score));
+    beam = _dedup(next).take(beamWidth).toList();
+    for (final c in beam) {
+      final prev = best[c.name];
+      if (prev == null || c.score > prev.score) best[c.name] = c;
+    }
+  }
+
+  final out = best.values.toList()
+    ..sort((a, b) {
+      final c = b.score.compareTo(a.score);
+      if (c != 0) return c;
+      return a.name.compareTo(b.name);
+    });
+  return out;
+}
+
+/// 先按名称去重再批量打分，最后展开回原顺序。同名组合只算一次。
+Future<List<double?>> _scoreDeduped(
+  List<ComboCandidate> pending,
+  Future<List<double?>> Function(List<ComboCandidate> batch) scoreBatch,
+) async {
+  final unique = <String, ComboCandidate>{};
+  for (final c in pending) {
+    unique.putIfAbsent(c.name, () => c);
+  }
+  final names = unique.keys.toList();
+  final scores = await scoreBatch([for (final n in names) unique[n]!]);
+  final byName = <String, double?>{
+    for (var i = 0; i < names.length; i++)
+      names[i]: i < scores.length ? scores[i] : null,
+  };
+  return [for (final c in pending) byName[c.name]];
+}
+
+/// 基元的去重身份：能提取出变量就按变量，否则按基元键。
+String _identity(ComboAtom a) => a.variableKey ?? a.key;
+
+List<ComboCandidate> _dedup(List<ComboCandidate> xs) {
+  final seen = <String>{};
+  final out = <ComboCandidate>[];
+  for (final c in xs) {
+    if (seen.add(c.name)) out.add(c);
+  }
+  return out;
+}
+
+/// 粗筛：只留样本内笔数达到门槛、且样本内净利为正的候选。
+///
+/// 这是寻优提速的第一关。样本内都赚不到钱或成交太少的组合，没有必要再花
+/// 完整的样本外回测去验证。返回的是原列表的子集，顺序不变。
+List<ComboCand> screenByInSample({
+  required List<ComboCand> cands,
+  required int? Function(ComboCand) inSampleTrades,
+  required double? Function(ComboCand) inSampleNetProfit,
+  int minTrades = kMinTradesForScore,
+}) {
+  final out = <ComboCand>[];
+  for (final c in cands) {
+    final trades = inSampleTrades(c);
+    final net = inSampleNetProfit(c);
+    if (trades == null || net == null) continue;
+    if (trades < minTrades) continue;
+    if (net <= 0) continue;
+    out.add(c);
+  }
+  return out;
+}
