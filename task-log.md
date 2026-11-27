@@ -7904,3 +7904,16 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   - 未做机器人验证套件；未 commit / push（本轮约定 Claude Code 不执行 git 写操作），改前备份在 `CHAN_RUST/flutter/chan_kline/build/zz_backup_20261127/`。建议分 3 个 commit：代码、测试、AGENTS.md+task-log。
   - 内核数据（副图 / tooltip 中枢 / Agent API 快照）仍是旧口径：K1 动态单元收 9.55 但已确认单元为第 0 根 9.85 一字；K2 在 idx=1 已出生（画面不画）。属 Rust 内核问题，未改。
   - Obsidian 副本未同步。
+
+### 2026-11-28 · AWS Quick · 内核修复 · 首分型前分型盖在 Kn 合并框 idx=0 上不确认连线 idx=0 + 出生门槛
+
+- **执行者**：AWS Quick（Claude Code 代跑命令）；用户点选「确认，两项都改」「接受新规则，重写测试」。
+- **问题定位**（内核侧）：默认 test4 K0 idx=1 时，K0 连线 idx=0 起点 K0 idx=0、终点 K0 idx=0，两端同在 K0 合并框 idx=0 内，产出 K1 单元 idx=0 四价 9.85；该单元上传使 K2 单元 idx=0、K2 中枢 idx=0（10.12/9.37）提前出现。002003、数据套「默认」等各层连线 idx=0 同样两端同框（含左右颠倒，如低低档 K1 连线 idx=0 起点 K0 idx=6、终点 K0 idx=0）。展示侧无误。
+- **改动**：`CHAN_RUST/rust/chan_data/src/pipeline.rs`（全层共用）
+  1. `on_confirm`：层级早生成开启、首次确认分型盖在本层合并框 idx=0 上时，不记连线 idx=0、不产出单元，只设起点锚；下一枚反向分型正常配对。
+  2. `pre_anchor_unit`：本层只有合并框 idx=0、框内只有 1 个单元、未盖章 → 上一层不出动态单元。
+  3. 新增 Rust 用例 4 条（test4 K0 idx=0/1/3 + 逐根追加与整段重算一致）。
+  4. `early_dynamic_unit_test.dart`：4 条按新规则改预期，3 条标 skip（等「Kn 合并框 idx=0 多于 1 个单元」内核对齐方案）。
+- **测试**：Rust 新增 4 条全过；全量 147 过 / 6 败 / 13 忽略，6 条失败用基线内核复跑同样失败（4 条缺离线数据、2 条 002003 旧断言）。Flutter `early_dynamic_unit_test` 5 过 / 3 跳过。内核已编译替换 DLL，数据套 5 与 002003 经本地接口逐步对照：K0 idx=0..2 两侧一致；K0 idx=3 时 K2 内核 1 根、展示 2 根不一致（待下一项）。
+- **当下性核查**：002003 2025 样本前 6 步 K1 单元 idx=0 右端均等于当步 K0 idx，无未来数据。
+- **注意事项 / 待办**：Kn 合并框 idx=0 多于 1 个单元时，内核 K(n+1) 单元 idx=0 为「锚点 → 当前」一根动态单元，展示侧为「首框合成 idx=0 + idx=1」，两侧编号与价格不一致，方案待用户确认。改前备份 `CHAN_RUST/flutter/chan_kline/build/zz_backup_20261127/`。
