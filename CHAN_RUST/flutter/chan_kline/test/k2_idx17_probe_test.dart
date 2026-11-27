@@ -263,30 +263,11 @@ class _Probe {
 
   K1Bar? k2SecondDynamicBar(int parentDisplayKn, int asOfX) {
     if (parentDisplayKn < 0 || asOfX < 0 || bars.isEmpty) return null;
-    final frames = displayCombineFrames(parentDisplayKn);
-    if (frames.length < 2) return null;
-    final first = frames.first;
-    final right = frames[1];
-    if (first.x2 <= first.x1) return null;
-    final fx = first.fx;
-    if (fx != 'TOP' && fx != 'BOTTOM') return null;
-    final top = fx == 'TOP';
-    final polePrice = top ? first.high : first.low;
-    final endPrice = top ? right.low : right.high;
-    final poleIdx = barWithPrice(first.x1, first.x2, polePrice, useHigh: top);
-    final endIdx = barWithPrice(right.x1, right.x2, endPrice, useHigh: !top);
-    if (poleIdx < 0 || endIdx < 0) return null;
-    final rightFixed = right.fx == 'TOP' || right.fx == 'BOTTOM';
-    return K1Bar(
-      idx: 1,
-      dir: top ? -1 : 1,
-      x1: poleIdx < endIdx ? poleIdx : endIdx,
-      x2: poleIdx > endIdx ? poleIdx : endIdx,
-      open: polePrice,
-      high: polePrice > endPrice ? polePrice : endPrice,
-      low: polePrice < endPrice ? polePrice : endPrice,
-      close: endPrice,
-      confirmX: rightFixed ? endIdx : asOfX + 1,
+    // 镜像 widget：与首分型前统一取轨同一个 idx=1 口径（2026-11-26 全层同构）。
+    return buildPreFirstSecondBar(
+      bars: bars,
+      parentFrames: displayCombineFrames(parentDisplayKn),
+      asOf: asOfX,
     );
   }
 
