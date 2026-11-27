@@ -181,7 +181,7 @@
 - **动代码前先落盘（2026-11-24 用户明确）**：每次动代码之前，若工作区有未提交改动，**先执行 commit + push**，再开始改代码——保证每次改动都落在一个干净、已推送的基线上，出问题可回退。
 - **commit 由智能体自行执行**：任务已按上文完成验证（机器人验证报告 `ok:true`、单测 / analyze 全绿）后，**无需再向用户确认即可 commit**。
 - **必须拆成多个小粒度 commit**：一个需求若包含多个独立子项，按子项分次提交，每个 commit 只干一件事；**不得把「代码 + 规则文档 + 日志」混进同一个 commit**。
-- **push 之前必须向用户确认**：**任何情况下不得擅自 push**。推送前先把待推内容（分支、提交列表、文件数）列给用户，得到明确同意再执行。
+- **commit 后直接 push，无需再向用户确认（2026-11-27 用户明确）**：commit 完成即可推送，不必逐次列举待推内容等用户同意；push 与 commit 同一条链路，agent 自行执行。
 - **提交前自查**：`git status` 只应剩有意提交的内容；临时脚本与构建日志（如 `build_rust_run.log` / `*.log.err`）**不得入库**，必要时先清理或写进 `.gitignore`。
 
 ### 当下性，无未来数据
@@ -206,7 +206,6 @@
 
 #### 记录与验收
 
-- **每次**完成修改类任务，在 [`task-log.md`](task-log.md) 末尾追加一条（执行者、类型、操作、结果、演示）。
 - 你对任务执行的过程和结果的总结用**白话 + 缠论术语**（K0、一类买点、中枢、步进、副图）；禁止大段贴代码、函数名当说明。例：✅「走到第 12 根 K，副图应出现一颗 1Ba，下一步这颗点还在」。
 - Rust 改动：重编 `chan_ffi.dll`，冷启动**连续单步**验收（一键跳末 ≠ 步进验收）。
 - 任务完成必须验收，不得用「一键跳末」代替连续单步验收。
@@ -215,12 +214,6 @@
   - 跑完**读 `build_rust_run.log` 判定成败**（`build_windows_last.log` 是 flutter 自己的构建日志，UTF-16，只看不用改）；失败必须如实报告并贴日志尾部，**禁止静默通过、禁止假装编过**。
   - 纯文档 / 记忆类 / 规则类改动**不触发**编译。
   - 「打开 App」仍以用户在场为准；脚本自动拉起的那次启动不等同于替用户操作验证。**任务完成后的打开 App 核验由上方「演示与核验」节规定：agent 编译后直接打开**。
-- **Obsidian 同步（必做）**：每次追加 `task-log` 条目后，同步写入 Obsidian 副本（遵循 `.trae/skills/obsidian`：frontmatter 置顶、`[[wikilinks]]`、UTF-8、LF）：
-  1. 在 Vault `chan-month5/` 下，于**当日**笔记 `YYYY-MM-DD.md` 末尾追加同一条目（保真，不摘要）；当日笔记不存在则新建（套日期笔记模板，含 frontmatter 与相邻日导航）。
-  2. 若次日笔记已存在，确保本篇 `next` 指向次日、次日篇 `prev` 指回本篇。
-  3. 更新 `chan-month5/MOC.md` 时间线索引表当日行（日期 / 条目数 / 链接）。
-  4. 涉及记忆 / 方案 / demos 的，同步更新 `index-memory.md` / `index-plans.md` / `index-demos.md`。
-  - **源权威**：`task-log.md` 是唯一源，Obsidian 为副本；禁止在 Obsidian 手改任务原文，修订须先回写 `task-log.md` 再同步。
 
 ### 代码设计规范
 - 代码生成和阅读都为AI编码机器人，所以代码设计为AI编码机器人友好协作的代码风格，方便AI编码机器人索引等各种操作：
@@ -260,7 +253,6 @@
 | Skill | 何时必须先读 |
 | --- | --- |
 | [`grill-me`](.trae/skills/grill-me/SKILL.md) | **手动触发**：用户说「grill me」「质询」；**自动触发**：计划任务执行、意图存在歧义时（见「与提问者的交流」节判定标准） |
-| [`obsidian`](.trae/skills/obsidian/SKILL.md) | 任务收尾同步 Obsidian（task-log → 日笔记 → MOC） |
 
 > **`.trae/skills/` 下的 10 个 `chan-*` 目录与 `skill-auto-update` 一律不要读**：它们指向另一个老工程（Python 的 `a_replay_trainer.py` / `ZS/ZSList.py` / `a_rust_core/chan-core/src/zs.rs`），与本工程（Flutter + Rust `CHAN_RUST`）没有对应文件，路径全失效。本工程规则一律以本文件 / `knowledge.md` / `lessons_learned.md` / `ROBOT_VERIFY.md` 为准。
 
