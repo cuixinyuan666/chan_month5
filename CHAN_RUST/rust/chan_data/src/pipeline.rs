@@ -1666,7 +1666,9 @@ fn dynamic_head_stamp_pass(
     bar_i: usize,
     opt: &PipelineOptions,
 ) {
-    if !opt.early_dynamic_unit {
+    // 只在截断开启时生效：用户确认的「章不会被撤回」以截断开启为前提（2026-11-28）。
+    // 截断关闭时包含吸收可能把后续高点并进动态单元，章有被撤回的可能，故保持「只认已冻结下层单元」。
+    if !opt.early_dynamic_unit || !opt.truncation_check {
         return;
     }
     let bar_x = bar_i as i32;
@@ -3005,8 +3007,18 @@ mod tests {
             b.open = 1.23; // 与分型高低无关
         }
         let pr = run_pipeline(&bars, &PipelineOptions::default());
+        // 首框合成段（2026-11-28 用户确认）：开盘 = 首框内第一个输入单元的开，不是起点分型极值。
+        // 识别：idx=0 且起止分型框相同（分型就盖在合并框 idx=0 上）。
+        let is_head = |s: &LevelSegment| {
+            s.idx == 0
+                && s.begin_fractal_x1 == s.end_fractal_x1
+                && s.begin_fractal_x2 == s.end_fractal_x2
+        };
         for lv in &pr.levels {
             for s in &lv.segments {
+                if is_head(s) {
+                    continue;
+                }
                 let expect = if s.dir > 0 {
                     s.begin_fractal_low
                 } else {
@@ -3028,6 +3040,9 @@ mod tests {
                     .iter()
                     .find(|s| s.idx == u.idx)
                     .expect("unit_bar 应对齐已冻结段");
+                if is_head(seg) {
+                    continue;
+                }
                 let expect = if seg.dir > 0 {
                     seg.begin_fractal_low
                 } else {
