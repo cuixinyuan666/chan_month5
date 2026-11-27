@@ -619,6 +619,11 @@ impl LevelState {
             return None;
         }
         let g0 = self.engine.groups().first()?;
+        // 出生门槛（2026-11-27 用户确认 · 全层同构，与展示侧「上一层首框只有 1 根且未盖章 → 本层不出生」同一条）：
+        // 本层只有合并框 idx=0、框内只有 1 个单元、尚未盖二元素章 → 上一层不出动态单元。
+        if self.engine.groups().len() == 1 && g0.unit_count <= 1 && g0.fx == FxKind::Unknown {
+            return None;
+        }
         let end_x = bar_x.min(bars.len().checked_sub(1)? as i32);
         if end_x < 0 {
             return None;
@@ -894,7 +899,33 @@ impl LevelState {
             }
         };
 
+        // 首分型前二元素章盖在本层合并框 idx=0 上（2026-11-27 用户确认 · 全层同构）：
+        // 起点与终点会同落在这一只框内（同根 → 四价相同；反向极值在后 → 左右颠倒），
+        // 不确认连线 idx=0、不产出单元、不往上传；该分型只作起点锚，等下一枚反向分型正常配对。
+        let first_on_head = matches!(action, Action::First)
+            && self.early_dynamic_unit
+            && self
+                .engine
+                .groups()
+                .first()
+                .map(|g0| g0.first_uid == ev.first_uid)
+                .unwrap_or(false);
+
         match action {
+            Action::First if first_on_head => {
+                used = true;
+                let seed_fx = if fx == FxKind::Top {
+                    FxKind::Bottom
+                } else {
+                    FxKind::Top
+                };
+                self.seed_phase = 1;
+                self.seed_fx = seed_fx;
+                self.seed_a_x = pole_x;
+                self.seed_b_x = pole_x;
+                self.seed_confirmed = true;
+                self.set_anchor(fx, ev_x1, ev_x2, ev_high, ev_low, pole_x, bar_x);
+            }
             Action::First => {
                 used = true;
                 // 种子框首段 A→B：A=首合并组(种子框)极值首K，B=首个真实分型极点
@@ -2063,6 +2094,103 @@ pub fn run_pipeline(bars: &[KlineBar], opt: &PipelineOptions) -> PipelineResult 
 mod tests {
     use super::*;
     use crate::engine::{CombineEngine, MergeUnit};
+
+    /// 默认数据 test4（a_Data/test/sets/minute/4.csv）的 4 根 1 分钟 K。
+    fn test4_bars() -> Vec<KlineBar> {
+        let ohlc = [
+            (10.12, 10.12, 9.85, 9.85),
+            (9.37, 9.55, 9.37, 9.55),
+            (9.31, 9.31, 9.25, 9.25),
+            (9.69, 9.69, 9.65, 9.65),
+        ];
+        ohlc.iter()
+            .enumerate()
+            .map(|(i, &(o, h, l, c))| KlineBar {
+                idx: i as i32,
+                time_ms: i as i64 * 60_000,
+                time_text: format!("2026/07/10 09:{:02}", 30 + i),
+                open: o,
+                high: h,
+                low: l,
+                close: c,
+                volume: 1.0,
+                amount: 0.0,
+                metrics: serde_json::Map::new(),
+            })
+            .collect()
+    }
+
+    fn ohlc(u: &LevelUnitBar) -> (i32, i32, f64, f64, f64, f64) {
+        (u.x1, u.x2, u.open, u.high, u.low, u.close)
+    }
+
+    /// 2026-11-27 用户确认：K0 idx=0 时 K1 单元 idx=0 不出生（K0 合并框 idx=0 只有 1 根、未盖章）。
+    #[test]
+    fn test4_k0_idx0_k1_not_born() {
+        let bars = test4_bars();
+        let pr = run_pipeline(&bars[..1], &PipelineOptions::default());
+        let l0 = &pr.levels[0];
+        assert!(l0.unit_bars.is_empty());
+        assert!(l0.active_unit.is_none(), "K1 单元 idx=0 不应出生");
+        assert!(l0.zs_frames.is_empty(), "K1 中枢 idx=0 不应出现");
+    }
+
+    /// K0 idx=1：K0 合并框 idx=0 盖二元素顶章 → K0 连线 idx=0 不确认；
+    /// K1 单元 idx=0 = K0 idx 0..1，10.12/10.12/9.37/9.55，动态；K2 不出生。
+    #[test]
+    fn test4_k0_idx1_no_zero_line_k1_dynamic() {
+        let bars = test4_bars();
+        let pr = run_pipeline(&bars[..2], &PipelineOptions::default());
+        let l0 = &pr.levels[0];
+        assert!(l0.segments.is_empty(), "K0 连线 idx=0 不应确认");
+        assert!(l0.unit_bars.is_empty(), "不得产出已确认 K1 单元");
+        let a = l0.active_unit.as_ref().expect("K1 单元 idx=0 动态");
+        assert_eq!(a.idx, 0);
+        assert_eq!(ohlc(a), (0, 1, 10.12, 10.12, 9.37, 9.55));
+        assert!(pr.levels.len() <= 1 || pr.levels[1].active_unit.is_none(), "K2 不应出生");
+        for lv in pr.levels.iter().skip(1) {
+            assert!(lv.zs_frames.is_empty(), "K2 中枢 idx=0 不应出现");
+        }
+    }
+
+    /// K0 idx=3：K0 连线 idx=0 = K0 idx 0→2 确认；K1 单元 idx=0 确认、idx=1 动态。
+    #[test]
+    fn test4_k0_idx3_first_line_pairs_normally() {
+        let bars = test4_bars();
+        let pr = run_pipeline(&bars, &PipelineOptions::default());
+        let l0 = &pr.levels[0];
+        assert_eq!(l0.segments.len(), 1);
+        let s = &l0.segments[0];
+        assert_eq!((s.begin_pole_x, s.end_pole_x), (0, 2));
+        assert_eq!(l0.unit_bars.len(), 1);
+        assert_eq!(ohlc(&l0.unit_bars[0]), (0, 2, 10.12, 10.12, 9.25, 9.25));
+        let a = l0.active_unit.as_ref().expect("K1 单元 idx=1 动态");
+        assert_eq!(a.idx, 1);
+        assert_eq!(ohlc(a), (2, 3, 9.25, 9.69, 9.25, 9.65));
+    }
+
+    /// 逐根追加与整段重算一致（双路径），test4 每一步。
+    #[test]
+    fn test4_append_matches_run_pipeline() {
+        let bars = test4_bars();
+        let opt = PipelineOptions::default();
+        let mut st = PipelineState::new(opt.clone());
+        for n in 1..=bars.len() {
+            st.append(bars[n - 1].clone());
+            let a = st.snapshot();
+            let b = run_pipeline(&bars[..n], &opt);
+            assert_eq!(a.levels.len(), b.levels.len(), "step {n} 层数");
+            for (x, y) in a.levels.iter().zip(&b.levels) {
+                assert_eq!(x.segments.len(), y.segments.len(), "step {n}");
+                assert_eq!(x.unit_bars.len(), y.unit_bars.len(), "step {n}");
+                assert_eq!(
+                    x.active_unit.as_ref().map(ohlc),
+                    y.active_unit.as_ref().map(ohlc),
+                    "step {n}"
+                );
+            }
+        }
+    }
 
     fn bar(i: usize, h: f64, l: f64) -> KlineBar {
         KlineBar {
