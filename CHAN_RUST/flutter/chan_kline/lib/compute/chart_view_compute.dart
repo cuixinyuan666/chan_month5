@@ -1766,7 +1766,29 @@ List<DisplayBuildingLine> computeDisplayBuildingLines({
         // 首分型前没有极点可钉：按本层单元方向扫区间首次极值。
         // 升段 low→high，降段 high→low；与首个分型之后的开口虚线同一套扫价。
         // 两端同点（还没走出第二根极值）不画线。
-        final line = _preConfirmExtremeLine(bars, u, asOf);
+        // 首框多于 1 个单元时，内核单元 idx=1 的时间从首框右端起（2026-11-28），
+        // 但连线端点仍钉在首框内真实极值首次出现那根：扫价起点回退到首框左端（全层同构）。
+        var scan = u;
+        if (u.idx == 1) {
+          for (final v in virtualUnits) {
+            // 首框合成段：连线 idx=0 终点（首框内真实极值根）早于单元 idx=1 起点（首框右端）。
+            if (v.idx == 0 && frozenIdx.contains(0) && v.x2 < u.x1) {
+              scan = K1Bar(
+                idx: u.idx,
+                dir: u.dir,
+                x1: v.x2,
+                x2: u.x2,
+                open: u.open,
+                high: u.high,
+                low: u.low,
+                close: u.close,
+                confirmX: u.confirmX,
+              );
+              break;
+            }
+          }
+        }
+        final line = _preConfirmExtremeLine(bars, scan, asOf);
         if (line != null) out.add(line);
       }
       return out;
