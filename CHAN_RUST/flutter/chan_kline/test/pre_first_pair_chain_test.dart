@@ -138,4 +138,35 @@ void main() {
     expect([out.single.open, out.single.close], [9.88, 9.72]);
     expect(out.single.confirmX > 2, isTrue);
   });
+
+  test('默认数据 test4 K0 idx=1：首框单根已盖顶章 → 收盘取 K0 最新一根收盘 9.55（2026-11-27）', () {
+    final b = mk([
+      [10.12, 10.12, 9.85, 9.85],
+      [9.37, 9.55, 9.37, 9.55],
+    ]);
+    final out = buildPreFirstUnifiedUnits(
+      bars: b,
+      parentFrames: [f(0, 0, 10.12, 9.85, fx: 'TOP'), f(1, 1, 9.55, 9.37)],
+      asOf: 1,
+    );
+    expect(out.length, 1);
+    final u = out.single;
+    expect([u.idx, u.x1, u.x2], [0, 0, 1]);
+    expect([u.open, u.high, u.low, u.close], [10.12, 10.12, 9.37, 9.55]);
+    expect(u.confirmX > 1, isTrue, reason: '动态虚线');
+  });
+
+  test('Kn≥2：首框单根时收盘取调用方传入的上一层最新一根 K 收盘，并夹在高低内', () {
+    final b = mk([
+      [10.12, 10.12, 9.85, 9.85],
+      [9.37, 9.55, 9.37, 9.55],
+    ]);
+    final head = [f(0, 0, 10.12, 9.85, fx: 'TOP'), f(1, 1, 9.55, 9.37)];
+    final a = buildPreFirstUnifiedUnits(
+        bars: b, parentFrames: head, asOf: 1, tailClose: 9.60);
+    expect(a.single.close, 9.60);
+    final c = buildPreFirstUnifiedUnits(
+        bars: b, parentFrames: head, asOf: 1, tailClose: 11.0);
+    expect(c.single.close, 10.12, reason: '夹在高低内');
+  });
 }

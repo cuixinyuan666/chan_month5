@@ -135,6 +135,21 @@ void main() {
     expect(out.first.confirmX, greaterThan(1), reason: '保持动态');
   });
 
+  test('首框只有 1 根：收盘取 K0 最新一根收盘（test4：9.55，不是终点价 9.37）', () {
+    final b = bars([
+      [10.12, 10.12, 9.85, 9.85],
+      [9.37, 9.55, 9.37, 9.55],
+    ]);
+    final out = buildPreFirstDynamicK1Bars(
+      bars: b,
+      parentFrames: [frame(0, 0, 10.12, 9.85, fx: 'TOP')],
+      asOf: 1,
+    );
+    expect(out.length, 1);
+    expect([out.first.open, out.first.high, out.first.low, out.first.close],
+        [10.12, 10.12, 9.37, 9.55]);
+  });
+
   test('首框只有 1 根且虚线未出现：不生成', () {
     final b = bars([
       [10.11, 10.11, 9.78, 9.78],
