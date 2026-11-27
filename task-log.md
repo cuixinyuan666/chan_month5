@@ -7847,3 +7847,40 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
   - 引擎数据层那条「零长度首段 + 零长度单元」仍在（Agent API / 副图仍看得到 `seg0[0..0]` + `u0[0..0]`），本轮只做到「不再画出来」。要不要连记录一起取消属口径变更（会改 002003 首框跨度与 K2 出生时机、多出判断实线），需单独拍板。
   - 机器人验证套件 `early_dynamic_20261105` 本轮卡在 `phase: running / started`、未产出 `last_report.json`，改用 API 数据 + 截图 + 等价用例取证，**未按套件判通过**。
   - 临时诊断用例已删；`a_Data/robot_verify/session.json` 已置 `active: false`。
+### 2026-11-26 · AWS Quick · 缺陷修复 · K0 idx=2 时 K1 首根 / idx=1 / 合并框同源
+
+- **执行者**：AWS Quick
+- **任务类型**：缺陷修复（首分型前动态 K · 主图绘制语义，用户已点选口径，视为「确认」）
+- **上下文**：默认 TEST 股 1 分钟 3 根，K0 走到 idx=2：K0 首框 0..1（高高 10.16/9.86）盖二元素底章。K1 首根被画成只占第 1 根（开 9.84 高 10.24 低 9.84 收 10.21），idx=1 动态 K 画成 0..2 把首根罩住，K1 合并框只框第 1 根。
+- **根因**：K1 窗口（结构层 0）首根用的是内核预锚单元（起点取首框真实最低价第 1 根、高低扫到当前），只把右端截到首框末根；之后「是否已有第二根」按位置判断，被这根错首根误判为已有，K 线轨与合并框轨都没按规则补 idx=1；蜡烛侧又由另一处另算一根 idx=1（从分型极点第 0 根起），两轨不同源。
+- **关键操作**：
+  1. `chart_view_compute.dart` 新增纯函数 `buildPreFirstPairChain`：idx=0 取首框固定映射（10.06/10.16/9.86/9.86，已确认）并把右端收到 idx=1 左端（用户选「首根收到第 0 根，idx=1 从第 0 根起」，价位不动）；idx=1 取统一的「分型极点 → 右组反向极点」；后接续接腿。与 Kn≥2 的动态链同一做法。
+  2. `kline_chart.dart`：K1 窗口合并框轨（`_levelDisplayCombineFrames`）与蜡烛轨（`_levelUnitViewsForLevel`）在「父层首框多于 1 根、已盖二元素章、本层引擎单元至多 1 根」时都改取上面这条链；其余情形走原口径不变。
+  3. 新增 `test/pre_first_pair_chain_test.dart`（3 条）。
+- **预期结果**（K0 idx=2）：K1 首根第 0 根、实线；idx=1 第 0～2 根、开 9.86 收 10.24、虚线；外面一只合并框 0～2、高 10.24、低 9.86、虚线；只有一个框，不画连线。idx=0/1 两步不受影响（首框未盖章，不走新分支）。
+- **测试**：本执行环境不能运行命令，**未跑 flutter test / analyze、未编译、未启动 App、未做连续单步验收**。只做了静态核对（括号配平、变量作用域、换行保持 CRLF）。
+- **注意事项 / 待办**：
+  - 需人工：`flutter analyze` + `flutter test test/pre_first_pair_chain_test.dart test/pre_first_dynamic_k_test.dart`，再跑 `build_rust.ps1`（只改 Flutter，可直接 `flutter build windows --debug`），TEST 股连续单步 idx=0→2 看 K1 子窗口。
+  - 未 commit / push（本环境无 git）；改前备份在 `CHAN_RUST/flutter/chan_kline/build/zz_backup_20261126/`，回滚：`git checkout -- lib/widgets/kline_chart.dart lib/compute/chart_view_compute.dart` 并删新测试。
+  - 只覆盖子窗口（层级分窗 / 画板）K1 蜡烛；单图 K1 蜡烛走另一条（k1BarViews）路径，未改。K2 的首根仍取 K1 引擎单元外沿（1..2、低 9.84），与新 K1 展示轨不同源，属另一处遗留，未改。
+  - `k2_idx17_probe_test.dart` 与机器人套件里对 K1 窗口的镜像代码仍是旧口径（前者此前已过时），未同步。
+  - Obsidian 副本未同步（本环境找不到 Vault 路径）。
+
+- **2026-11-26 21:17 修订（用户改选口径）**：上面那版「idx=0 取首框框沿 10.16/9.86」用户不认同，改为与 K2 首根同一取法，且只合成 K0 首框内的 K：idx=0 = 第 0～1 根合成，开 10.06、高 10.16、低 9.84（真实最低）、收 9.84，idx=1 出现即确认（实线），时间收到第 0 根；idx=1 不变（0～2 根，9.86→10.24，虚线）。两根无包含 → K1 合并框分成两框（不再是一框 0～2）。`buildPreFirstPairChain` 改为按首框内 K 现算，两处调用同步换参；`pre_first_pair_chain_test.dart` 同步改预期。仍未编译、未跑测试、未 commit。
+
+- **2026-11-26 21:26 再修订（用户确认「全层同构：起点和终点都取上一层框内的真实极值」）**：用户反馈 K1 合并框不显示、idx=1 的 low 不对。根因：idx=1 起点取 K0 首框高高框沿 9.86@第 0 根，与首根真实最低 9.84 不同口径；且 idx=1 从第 0 根起把首根（收成第 0 根）完全覆盖，去重后剩下的框与 idx=1 外框重合，看起来像没有合并框。改法：`kline_chart.dart` `_k2SecondDynamicBar` 起点/终点改取上一层首框 / 右组内的真实极值（新增 `_trueExtremeIn`，同价取首次），K1/K2/K3 同一条；`k2_idx17_probe_test.dart` 镜像同步；`pre_first_pair_chain_test.dart` 预期改为：idx=0 第 0～1 根 10.06/10.16/9.84/9.84 实线；idx=1 第 1～2 根 9.84→10.24 虚线；合并框一框 0～2、高 10.24、低 9.84。影响：上一层首框真实极值与框沿不同时（如 002003），K2 及以上 idx=1 的位置/价格会变。续接腿（idx≥2）仍取框沿，未改。仍未编译、未跑测试、未 commit。
+
+- **2026-11-26 22:03 三修订（用户回复「按上表改」）**：用户指出 K0 idx=0、idx=1 两步 K1 idx=0 看起来没变化。根因：K1 在 K0 首框盖二元素章之前直接画内核预锚单元（从首框最高价那根起），idx=0 时占第 0 根、idx=1 时占第 1 根，宽度都是 1 根；没有像 K2 及以上那样看上一层首框，属层级特例。改法（只改显示层）：
+  1. `chart_view_compute.dart` 抽出 `buildPreFirstHeadComposite`（上一层首框内 K 合成、真实高低，可选动态/确认），`buildPreFirstPairChain` 改用它。
+  2. `kline_chart.dart` 新增 `_preFirstNotBorn`：上一层只剩一只首框、只有 1 根、未盖章 → 本层合并框与 K 线都不画（各层通用，含 K1 永久帧回退也拦住）；新增 `_preFirstHeadOnly`：上一层只剩一只首框、多于 1 根、未盖章、本层引擎单元至多 1 根 → idx=0 = 首框合成、动态虚线。K1 窗口的合并框轨与蜡烛轨同时接入。
+  3. 预期（默认数据）：K0 idx=0 → K1 不出现；idx=1 → K1 首根第 0～1 根 10.06/10.16/9.84/9.84、虚线、一只单根框（首分型前一根也算框）；idx=2 → 首根价位与宽度不变、转实线，接 idx=1（第 1～2 根 9.84→10.24 虚线），一只合并框 0～2 / 10.24 / 9.84。
+  4. `pre_first_pair_chain_test.dart` 加 2 条（idx=1 合成、idx=0 不合成）。
+  - 仍未编译、未跑测试、未 commit；单图模式 K1 K 线（k1BarViews 路径）、机器人套件镜像未改；仅「开启·高高 / 低低」两档生效。
+
+- **2026-11-26 23:29 第四次修订 · 各层合成同一个函数（用户确认「各层合成同一个函数」+「首根不压缩，idx=1 从首框右端起」）**：用户用新默认数据（9.88/9.69、9.82/9.78、9.76/9.72）指出 K1 合并框等问题复现，并质疑全层同构只是表面。核查属实：idx=1 与续接腿共用，但「出生 / 首根取价 / 单图 K 线来源 / 无单元回退」K1 与 K2+ 各写一套，前几轮修补全在 K1 分支上叠加。
+  - 改法：显示文件先还原到今天改动前的备份（第三轮版本另存 `build/zz_backup_20261126/*.round3.dart`），再统一：
+    1. `chart_view_compute.dart` 新增纯函数 `buildPreFirstUnifiedUnits`（及 `preFirstTrueExtreme` / `preFirstHeadIsSingle` / `buildPreFirstSingleHeadBar` / `buildPreFirstSecondBar`，`buildPreFirstHeadComposite` 加开收参数，删 `buildPreFirstPairChain`）：窗口 Kn 只看上一层画面合并框；首框单根按**单元数**判（不按 K0 跨度）；idx=1 价位取真实极值、时间从首框右端起（首根不压缩）。
+    2. `kline_chart.dart` 新增唯一入口 `_preFirstUnits(kn)`：合并框轨、子窗口蜡烛轨、**单图 K1 蜡烛**三处都走它；本层引擎单元至多 1 根（首分型前阶段）时适用，否则走原口径；`_k2SecondDynamicBar` 改调同一纯函数；判「不出生」的层不再回退画永久合并帧。K1/K2 分开写的出生门槛（单根判断 / `_pairFxStamped`）在首分型前阶段不再生效。
+    3. 测试：`pre_first_pair_chain_test.dart` 重写为 6 条（新数据 idx=0/1/2、旧数据 idx=2、K2 看 K1 单元数判单根、单根已盖章）；`k2_idx17_probe_test.dart` 的 idx=1 镜像改调同一函数。
+  - 预期（新数据）：idx=0 K1 无；idx=1 K1 首根 0～1，9.88/9.88/9.69/9.78 虚线 + 单根框；idx=2 首根不变转实线 + idx=1（1～2，9.88→9.72，虚线），一框 0～2，高 9.88、低 9.72（高高口径，首根最低 9.69 落框外，与 K0 首框同理）；K2 在 idx=2 出生（首根 = K1 首框 0～2 合成，动态）。
+  - 已知影响：K2 及以上首根改看 K1 画面合并框，出生时机与取价会变；idx=1 起点改到首框右端，各层都变；探针测试其余镜像、机器人套件镜像、`buildPreFirstDynamicK1Bars` 老测试仍是旧口径，可能有失败。仍未编译、未跑测试、未 commit。
