@@ -7884,3 +7884,23 @@ tooltip 槽位内容；不触发 AGENTS.md 关键计算逻辑确认门禁。
     3. 测试：`pre_first_pair_chain_test.dart` 重写为 6 条（新数据 idx=0/1/2、旧数据 idx=2、K2 看 K1 单元数判单根、单根已盖章）；`k2_idx17_probe_test.dart` 的 idx=1 镜像改调同一函数。
   - 预期（新数据）：idx=0 K1 无；idx=1 K1 首根 0～1，9.88/9.88/9.69/9.78 虚线 + 单根框；idx=2 首根不变转实线 + idx=1（1～2，9.88→9.72，虚线），一框 0～2，高 9.88、低 9.72（高高口径，首根最低 9.69 落框外，与 K0 首框同理）；K2 在 idx=2 出生（首根 = K1 首框 0～2 合成，动态）。
   - 已知影响：K2 及以上首根改看 K1 画面合并框，出生时机与取价会变；idx=1 起点改到首框右端，各层都变；探针测试其余镜像、机器人套件镜像、`buildPreFirstDynamicK1Bars` 老测试仍是旧口径，可能有失败。仍未编译、未跑测试、未 commit。
+
+### 2026-11-27 · AWS Quick · 口径变更 · 首分型前首框单根时本层首根收盘取上一层最新一根 K 收盘
+
+- **执行者**：AWS Quick（Claude Code 只代跑终端命令）；用户点选「确认，按方案改，并改 AGENTS.md」。
+- **任务类型**：首分型前动态 K（全层同构 · 取价口径）
+- **上下文**：默认数据 test4（`sets/minute/4.csv`），K0 走到 idx=1：K0 首框只有第 0 根、已盖二元素顶章。K1 首根原按「收盘取首连线终点价」显示收 9.37；用户要求收盘等于 K0 idx=1 的收盘 9.55。
+- **关键操作**：
+  1. `chart_view_compute.dart`：`buildPreFirstSingleHeadBar` 新增 `close` 参数，收盘 = 上一层最新一根 K 的收盘（不传则取 K0 第 asOf 根收盘），夹在两端价高低内；`buildPreFirstUnifiedUnits` 新增 `tailClose` 透传；旧 `buildPreFirstDynamicK1Bars` 单根分支同口径。开、高、低、时间跨度不变。
+  2. `kline_chart.dart` `_preFirstUnits`：Kn≥2 时 `tailClose` = Kn-1 画面上 x1≤asOf 的最后一根单元（含动态）的收盘；K1 走纯函数默认取 K0。
+  3. 测试：`pre_first_pair_chain_test.dart` +2 条（test4 idx=1 收 9.55；Kn≥2 传入收盘并夹高低），`pre_first_dynamic_k_test.dart` +1 条。
+  4. `AGENTS.md`「首分型前动态 K」第 2 条「首框只有 1 根」一句改为新口径（用户明确要求）。
+- **测试**：
+  1. `flutter analyze` 两个 lib 文件 → 0 error（3 warning、7 info，均既有类型）。
+  2. `flutter test` 4 个文件 → 29 passed / 1 failed；失败为 `k2_idx17_probe_test.dart` setUpAll 断言「默认数据根数 > 14」（实际 4 根），既有问题，与本次无关。
+  3. `flutter build windows --debug` 成功（49.1s），以 `CHAN_AGENT_API=1` 启动，Agent API 连续单步 idx=0→3 截图：idx=1 时 K1 一根动态 K，开 10.12、高 10.12、低 9.37、收 9.55（实体下沿 9.55、下影到 9.37，虚线外框）；idx=2 收 9.25（=K0 第 2 根收盘）。
+- **演示**：默认 TEST 股（数据套 4），K0 单步到第 2 根，看 K1 子窗口。
+- **注意事项 / 待办**：
+  - 未做机器人验证套件；未 commit / push（本轮约定 Claude Code 不执行 git 写操作），改前备份在 `CHAN_RUST/flutter/chan_kline/build/zz_backup_20261127/`。建议分 3 个 commit：代码、测试、AGENTS.md+task-log。
+  - 内核数据（副图 / tooltip 中枢 / Agent API 快照）仍是旧口径：K1 动态单元收 9.55 但已确认单元为第 0 根 9.85 一字；K2 在 idx=1 已出生（画面不画）。属 Rust 内核问题，未改。
+  - Obsidian 副本未同步。
