@@ -796,7 +796,8 @@ List<K1Bar> buildPreFirstDynamicK1Bars({
   // 首框里只有 1 根 K（真单根，或并框时标记 firstBoxWasSingle）且已出二元素章时，
   // 只生成 idx=0 且保持动态，不生成 idx=1；价格取第一条构建虚线的两个端点：
   // 顶 = 首根最高 → 其后到 asOf 的最低；底 = 首根最低 → 其后到 asOf 的最高。
-  // 开=起点价、收=终点价，高/低=两端价的高与低。虚线还没出现时先不生成。
+  // 开=起点价、高/低=两端价的高与低；收=上一层最新一根 K 的收盘（2026-11-27 用户确认，
+  // 夹在高低内）。虚线还没出现时先不生成。
   final singleFx = first.fx == 'TOP' || first.fx == 'BOTTOM';
   if (singleFx && (x1 == x2 || first.firstBoxWasSingle)) {
     final top = first.fx == 'TOP';
@@ -812,6 +813,9 @@ List<K1Bar> buildPreFirstDynamicK1Bars({
     }
     if (endIdx == null) return const [];
     final beginPrice = top ? bars[x1].high : bars[x1].low;
+    final hi = beginPrice > endPrice ? beginPrice : endPrice;
+    final lo = beginPrice < endPrice ? beginPrice : endPrice;
+    final tail = bars[asOf < bars.length ? asOf : bars.length - 1].close;
     return [
       K1Bar(
         idx: 0,
@@ -819,9 +823,9 @@ List<K1Bar> buildPreFirstDynamicK1Bars({
         x1: x1,
         x2: endIdx,
         open: beginPrice,
-        high: beginPrice > endPrice ? beginPrice : endPrice,
-        low: beginPrice < endPrice ? beginPrice : endPrice,
-        close: endPrice,
+        high: hi,
+        low: lo,
+        close: tail.clamp(lo, hi).toDouble(),
         confirmX: asOf + 1,
       ),
     ];
@@ -956,25 +960,31 @@ K1Bar? buildPreFirstHeadComposite({
 
 /// 首框只有 1 根且已盖二元素章：idx=0 = 第一条构建中虚线（首连线）的两端——
 /// 首框内分型极点 → 其后到 asOf 的反向极值（首次）。虚线还没出现返回 null。
+/// 开 = 起点价，高/低 = 两端价的高与低；收 = 上一层最新一根 K 的收盘 [close]
+/// （2026-11-27 用户确认 · 全层同构；不传则取 K0 第 asOf 根收盘，夹在高低内）。
 K1Bar? buildPreFirstSingleHeadBar({
   required List<KlineBar> bars,
   required KlineCombineFrame head,
   required int asOf,
+  double? close,
 }) {
   if (!_preFirstFxStamped(head.fx)) return null;
   final top = head.fx == 'TOP';
   final begin = preFirstTrueExtreme(bars, head.x1, head.x2, high: top);
   final end = preFirstTrueExtreme(bars, head.x2 + 1, asOf, high: !top);
   if (begin == null || end == null) return null;
+  final hi = begin.price > end.price ? begin.price : end.price;
+  final lo = begin.price < end.price ? begin.price : end.price;
+  final tail = close ?? bars[asOf < bars.length ? asOf : bars.length - 1].close;
   return K1Bar(
     idx: 0,
     dir: top ? -1 : 1,
     x1: begin.idx,
     x2: end.idx,
     open: begin.price,
-    high: begin.price > end.price ? begin.price : end.price,
-    low: begin.price < end.price ? begin.price : end.price,
-    close: end.price,
+    high: hi,
+    low: lo,
+    close: tail.clamp(lo, hi).toDouble(),
     confirmX: asOf + 1,
   );
 }
@@ -1023,7 +1033,7 @@ K1Bar? buildPreFirstSecondBar({
 /// 窗口 Kn 只看上一层**画面上的合并框** [parentFrames]；K1/K2/…/Kn、单图/子窗口、
 /// K 线与合并框都从这里取，不再分层各写一套。
 /// - 上一层没有框，或首框只有 1 根且未盖章 → `[]`（本层不出生）；
-/// - 首框只有 1 根且已盖章 → 只有 idx=0（首连线两端，动态）；
+/// - 首框只有 1 根且已盖章 → 只有 idx=0（首连线两端，动态；收 = 上一层最新一根 K 的收盘 [tailClose]）；
 /// - 首框多于 1 根、未盖章 → idx=0 = 首框合成（真实高低），动态；
 /// - 首框多于 1 根、已盖章 → idx=0 转确认 + idx=1 + [legs]（续接腿 idx≥2）。
 List<K1Bar> buildPreFirstUnifiedUnits({
@@ -1032,12 +1042,18 @@ List<K1Bar> buildPreFirstUnifiedUnits({
   required int asOf,
   double? headOpen,
   double? headClose,
+  double? tailClose,
   List<K1Bar> legs = const [],
 }) {
   if (parentFrames.isEmpty || bars.isEmpty || asOf < 0) return const [];
   final head = parentFrames.first;
   if (preFirstHeadIsSingle(head)) {
-    final b = buildPreFirstSingleHeadBar(bars: bars, head: head, asOf: asOf);
+    final b = buildPreFirstSingleHeadBar(
+      bars: bars,
+      head: head,
+      asOf: asOf,
+      close: tailClose,
+    );
     return b == null ? const [] : <K1Bar>[b];
   }
   final second = buildPreFirstSecondBar(

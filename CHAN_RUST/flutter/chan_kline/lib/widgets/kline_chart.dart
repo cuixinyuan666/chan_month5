@@ -4870,18 +4870,24 @@ class _KlineCompositePainter extends CustomPainter {
     // 首根开/收：上一层框内第一根 K 的开、最后一根 K 的收（K1 的上一层是 K0 原始 K，不必另取）。
     double? headOpen;
     double? headClose;
+    // 首框单根时的收盘：上一层最新一根 K 的收盘（2026-11-27 用户确认 · 全层同构）。
+    // K1 的上一层是 K0 原始 K（纯函数内取第 asOf 根），Kn≥2 取 Kn-1 画面上最后一根（含动态）。
+    double? tailClose;
     if (kn >= 2 && parent.isNotEmpty) {
       final h = parent.first;
       LevelUnitBar? fu;
       LevelUnitBar? lu;
+      LevelUnitBar? last;
       for (final v in _levelUnitViewsForLevel(kn - 2)) {
         final u = v.bar;
+        if (u.x1 <= asOfX) last = u;
         if (u.x1 < h.x1 || u.x2 > h.x2) continue;
         fu ??= u;
         lu = u;
       }
       headOpen = fu?.open;
       headClose = lu?.close;
+      tailClose = last?.close;
     }
     return buildPreFirstUnifiedUnits(
       bars: bars,
@@ -4889,6 +4895,7 @@ class _KlineCompositePainter extends CustomPainter {
       asOf: asOfX,
       headOpen: headOpen,
       headClose: headClose,
+      tailClose: tailClose,
       legs: _knDynamicLegs(kn - 1, asOfX),
     );
   }
