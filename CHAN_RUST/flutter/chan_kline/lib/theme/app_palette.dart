@@ -43,8 +43,9 @@ enum AppThemeMode {
 ///
 /// 深色模式下 `rgb()` 原样返回传入值，保证老界面零变化。
 abstract final class AppPalette {
-  static AppThemeMode _mode = AppThemeMode.dark;
-  /// 暖色强度 0~1：0=纯中性，1=满暖调。三模式通用；深色默认 0（与旧版逐像素一致）。
+  /// 首次启动默认浅色（2026-11-27 用户明确）；读到设置文件后由 `setMode` 覆盖。
+  static AppThemeMode _mode = AppThemeMode.light;
+  /// 暖色强度 0~1：0=纯中性，1=满暖调。三模式通用；默认 0。
   static double _warmth = 0.0;
   /// 亮度 0~1：0.5=各主题基准明度（与旧版一致），<0.5 压暗，>0.5 提亮。三模式通用。
   static double _brightness = 0.5;

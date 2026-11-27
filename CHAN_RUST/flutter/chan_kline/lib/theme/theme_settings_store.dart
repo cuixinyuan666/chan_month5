@@ -7,11 +7,11 @@ import 'app_palette.dart';
 
 /// 主题偏好（落盘 `.chan_theme_settings.json`，重启保留）。
 ///
-/// 默认值保证深色逐像素与旧版一致：warmth=0（深色不注入暖色）、brightness=0.5（基准明度）。
-/// 三模式均开放 warmth 与 brightness 调节。
+/// 默认外观=浅色（2026-11-27 用户明确）：首次启动或无设置文件时直接进浅色，
+/// warmth=0（不注入暖色）、brightness=0.5（基准明度）。三模式均开放 warmth 与 brightness 调节。
 class ThemeSettings {
   const ThemeSettings({
-    this.mode = AppThemeMode.dark,
+    this.mode = AppThemeMode.light,
     this.warmth = 0.0,
     this.brightness = 0.5,
   });

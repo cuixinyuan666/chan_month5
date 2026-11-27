@@ -64,6 +64,7 @@ void main() {
     expect(ThemeSettingsStore.loadSync().mode, AppThemeMode.eyeCare);
 
     await ThemeSettingsStore.save(const ThemeSettings());
-    expect(ThemeSettingsStore.loadSync().mode, AppThemeMode.dark);
+    // 默认外观=浅色（2026-11-27 用户明确）。
+    expect(ThemeSettingsStore.loadSync().mode, AppThemeMode.light);
   });
 }
